@@ -534,8 +534,11 @@ typedef struct PartitionSchemeData *PartitionScheme;
  * populate these fields, for base rels; but someday they might be used for
  * join rels too:
  *
- *		unique_for_rels - list of Relid sets, each one being a set of other
- *					rels for which this one has been proven unique
+ *		unique_for_rels - list of UniqueRelInfos, each of them recording
+ * 					a set of other rels for which this one has been proven
+ *					unique. If this is a baserel that is made unique by an
+ * 					index, UniqueRelInfo also stores the information about
+ * 					that index.
  *		non_unique_for_rels - list of Relid sets, each one being a set of
  *					other rels for which we have tried and failed to prove
  *					this one unique
@@ -2501,5 +2504,20 @@ typedef struct JoinCostWorkspace
 	int			numbatches;
 	double		inner_rows_total;
 } JoinCostWorkspace;
+
+/*
+ * UniqueRelInfo records a fact that a relation is unique when being joined
+ * to other relation(s) specified by outerrelids. If the uniqueness is
+ * guaranteed by a unique index, this index is also saved. The values that
+ * constrain index columns, be it Vars of outer relations or Consts, are saved
+ * to column_values list.
+ */
+typedef struct UniqueRelInfo
+{
+	NodeTag		tag;
+	Relids		outerrelids;
+	IndexOptInfo *index;
+	List	   *column_values;
+} UniqueRelInfo;
 
 #endif							/* PATHNODES_H */

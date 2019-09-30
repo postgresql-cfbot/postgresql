@@ -4648,6 +4648,270 @@ select * from
 (0 rows)
 
 --
+-- test that semi- or inner self-joins on a unique column are removed
+--
+-- enable only nestloop to get more predictable plans
+set enable_hashjoin to off;
+set enable_mergejoin to off;
+create table sj (a int unique, b int);
+insert into sj values (1, null), (null, 2), (2, 1);
+analyze sj;
+select p.* from sj p, sj q where q.a = p.a and q.b = q.a - 1;
+ a | b 
+---+---
+ 2 | 1
+(1 row)
+
+explain (costs off)
+select p.* from sj p, sj q where q.a = p.a and q.b = q.a - 1;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Seq Scan on sj q
+   Filter: ((a IS NOT NULL) AND (b = (a - 1)))
+(2 rows)
+
+explain (costs off)
+select * from sj p
+where exists (select * from sj q
+				where q.a = p.a and q.b < 10);
+                QUERY PLAN                
+------------------------------------------
+ Seq Scan on sj q
+   Filter: ((a IS NOT NULL) AND (b < 10))
+(2 rows)
+
+-- Double self-join removal.
+-- Use a condition on "b + 1", not on "b", for the second join, so that
+-- the equivalence class is different from the first one, and we can
+-- test the non-ec code path.
+explain (costs off)
+select * from sj t1 join sj t2 on t1.a = t2.a and t1.b = t2.b
+	join sj t3 on t2.a = t3.a and t2.b + 1 = t3.b + 1;
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
+ Seq Scan on sj t3
+   Filter: ((a IS NOT NULL) AND (b IS NOT NULL) AND ((b + 1) IS NOT NULL))
+(2 rows)
+
+-- subselect that references the removed relation
+explain (costs off)
+select t1.a, (select a from sj where a = t2.a and a = t1.a)
+from sj t1, sj t2
+where t1.a = t2.a;
+                QUERY PLAN                
+------------------------------------------
+ Seq Scan on sj t2
+   Filter: (a IS NOT NULL)
+   SubPlan 1
+     ->  Result
+           One-Time Filter: (t2.a = t2.a)
+           ->  Seq Scan on sj
+                 Filter: (a = t2.a)
+(7 rows)
+
+-- self-join under outer join
+explain (costs off)
+select * from sj x join sj y on x.a = y.a
+left join int8_tbl z on x.a = z.q1;
+             QUERY PLAN             
+------------------------------------
+ Nested Loop Left Join
+   Join Filter: (y.a = z.q1)
+   ->  Seq Scan on sj y
+         Filter: (a IS NOT NULL)
+   ->  Materialize
+         ->  Seq Scan on int8_tbl z
+(6 rows)
+
+explain (costs off)
+select * from sj x join sj y on x.a = y.a
+left join int8_tbl z on y.a = z.q1;
+             QUERY PLAN             
+------------------------------------
+ Nested Loop Left Join
+   Join Filter: (y.a = z.q1)
+   ->  Seq Scan on sj y
+         Filter: (a IS NOT NULL)
+   ->  Materialize
+         ->  Seq Scan on int8_tbl z
+(6 rows)
+
+-- Test that placeholders are updated correctly after join removal
+explain (costs off)
+select * from (values (1)) x
+left join (select coalesce(y.q1, 1) from int8_tbl y
+	right join sj j1 inner join sj j2 on j1.a = j2.a
+	on true) z
+on true;
+                QUERY PLAN                
+------------------------------------------
+ Nested Loop Left Join
+   ->  Result
+   ->  Nested Loop Left Join
+         ->  Seq Scan on sj j2
+               Filter: (a IS NOT NULL)
+         ->  Materialize
+               ->  Seq Scan on int8_tbl y
+(7 rows)
+
+-- Test that OR predicated are updated correctly after join removal
+CREATE TABLE tab_with_flag ( id INT PRIMARY KEY, is_flag SMALLINT);
+CREATE INDEX idx_test_is_flag ON tab_with_flag (is_flag);
+explain (costs off)
+SELECT COUNT(*) FROM tab_with_flag WHERE (is_flag IS NULL OR is_flag = 0) AND id IN (SELECT id FROM tab_with_flag WHERE id IN (2, 3));
+                                    QUERY PLAN                                    
+----------------------------------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on tab_with_flag
+         Recheck Cond: ((id = ANY ('{2,3}'::integer[])) AND (id IS NOT NULL))
+         Filter: ((is_flag IS NULL) OR (is_flag = 0))
+         ->  Bitmap Index Scan on tab_with_flag_pkey
+               Index Cond: ((id = ANY ('{2,3}'::integer[])) AND (id IS NOT NULL))
+(6 rows)
+
+DROP TABLE tab_with_flag;
+-- HAVING clause
+explain (costs off)
+select p.b from sj p join sj q on p.a = q.a group by p.b having sum(p.a) = 1;
+           QUERY PLAN            
+---------------------------------
+ HashAggregate
+   Group Key: q.b
+   Filter: (sum(q.a) = 1)
+   ->  Seq Scan on sj q
+         Filter: (a IS NOT NULL)
+(5 rows)
+
+-- update lateral references and range table entry reference
+explain (verbose, costs off)
+select 1 from (select x.* from sj x, sj y where x.a = y.a) q,
+  lateral generate_series(1, q.a) gs(i);
+                      QUERY PLAN                      
+------------------------------------------------------
+ Nested Loop
+   Output: 1
+   ->  Seq Scan on public.sj y
+         Output: y.a, y.b
+         Filter: (y.a IS NOT NULL)
+   ->  Function Scan on pg_catalog.generate_series gs
+         Output: gs.i
+         Function Call: generate_series(1, y.a)
+(8 rows)
+
+explain (verbose, costs off)
+select 1 from (select y.* from sj x, sj y where x.a = y.a) q,
+  lateral generate_series(1, q.a) gs(i);
+                      QUERY PLAN                      
+------------------------------------------------------
+ Nested Loop
+   Output: 1
+   ->  Seq Scan on public.sj y
+         Output: y.a, y.b
+         Filter: (y.a IS NOT NULL)
+   ->  Function Scan on pg_catalog.generate_series gs
+         Output: gs.i
+         Function Call: generate_series(1, y.a)
+(8 rows)
+
+-- Test that a non-EC-derived join clause is processed correctly. Use an
+-- outer join so that we can't form an EC.
+explain (costs off) select * from sj p join sj q on p.a = q.a
+  left join sj r on p.a + q.a = r.a;
+             QUERY PLAN             
+------------------------------------
+ Nested Loop Left Join
+   Join Filter: ((q.a + q.a) = r.a)
+   ->  Seq Scan on sj q
+         Filter: (a IS NOT NULL)
+   ->  Materialize
+         ->  Seq Scan on sj r
+(6 rows)
+
+-- FIXME this constant false filter doesn't look good. Should we merge
+-- equivalence classes?
+explain (costs off)
+select * from sj p, sj q where p.a = q.a and p.b = 1 and q.b = 2;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Seq Scan on sj q
+   Filter: ((a IS NOT NULL) AND (b = 2) AND (b = 1))
+(2 rows)
+
+-- Check that attr_needed is updated correctly after self-join removal. In this
+-- test, the join of j1 with j2 is removed. k1.b is required at either j1 or j2.
+-- If this info is lost, join targetlist for (k1, k2) will not contain k1.b.
+-- Use index scan for k1 so that we don't get 'b' from physical tlist used for
+-- seqscan. Also disable reordering of joins because this test depends on a
+-- particular join tree.
+create table sk (a int, b int);
+create index on sk(a);
+set join_collapse_limit to 1;
+set enable_seqscan to off;
+explain (costs off) select 1 from
+	(sk k1 join sk k2 on k1.a = k2.a)
+	join (sj j1 join sj j2 on j1.a = j2.a) on j1.b = k1.b;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Nested Loop
+   Join Filter: (k1.b = j2.b)
+   ->  Nested Loop
+         ->  Index Scan using sk_a_idx on sk k1
+         ->  Index Only Scan using sk_a_idx on sk k2
+               Index Cond: (a = k1.a)
+   ->  Materialize
+         ->  Index Scan using sj_a_key on sj j2
+               Index Cond: (a IS NOT NULL)
+(9 rows)
+
+explain (costs off) select 1 from
+	(sk k1 join sk k2 on k1.a = k2.a)
+	join (sj j1 join sj j2 on j1.a = j2.a) on j2.b = k1.b;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Nested Loop
+   Join Filter: (k1.b = j2.b)
+   ->  Nested Loop
+         ->  Index Scan using sk_a_idx on sk k1
+         ->  Index Only Scan using sk_a_idx on sk k2
+               Index Cond: (a = k1.a)
+   ->  Materialize
+         ->  Index Scan using sj_a_key on sj j2
+               Index Cond: (a IS NOT NULL)
+(9 rows)
+
+reset join_collapse_limit;
+reset enable_seqscan;
+--
+---- It's not clear yet what to do in some of the cases we discussed
+---- on the list, so they are disabled for now.
+--
+---- We need an index on two columns for the next couple of tests.
+--create table sl(a int, b int);
+--insert into sl values (1, 1), (1, 2), (2, 1);
+--create unique index on sl(a, b);
+--vacuum analyze sl;
+--
+---- Both sides are unique, but base quals are different
+--explain (costs off)
+--select * from sl t1, sl t2
+--where t1.a = t2.a and t1.b = 1 and t2.b = 2;
+--
+---- Only one side is unqiue
+--select * from sl t1, sl t2 where t1.a = t2.a and t1.b = 1;
+--select * from sl t1, sl t2 where t1.a = t2.a and t2.b = 1;
+--
+---- Several uniques indexes match, and we select a different one
+---- for each side, so the join is not removed
+--create table sm(a int unique, b int unique, c int unique);
+--explain (costs off)
+--select * from sm m, sm n where m.a = n.b and m.c = n.c;
+--explain (costs off)
+--select * from sm m, sm n where m.a = n.c and m.b = n.b;
+--explain (costs off)
+--select * from sm m, sm n where m.c = n.b and m.a = n.a;
+reset enable_hashjoin;
+reset enable_mergejoin;
+--
 -- Test hints given on incorrect column references are useful
 --
 select t1.uunique1 from

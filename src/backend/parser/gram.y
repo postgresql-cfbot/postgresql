@@ -310,6 +310,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <defelt>	vac_analyze_option_elem
 %type <list>	vac_analyze_option_list
 %type <node>	vac_analyze_option_arg
+%type <defelt>	drop_option
 %type <boolean>	opt_or_replace
 				opt_grant_grant_option opt_grant_admin_option
 				opt_nowait opt_if_exists opt_with_data
@@ -406,6 +407,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				TriggerTransitions TriggerReferencing
 				publication_name_list
 				vacuum_relation_list opt_vacuum_relation_list
+				drop_option_list opt_drop_option_list
 
 %type <list>	group_by_list
 %type <node>	group_by_item empty_grouping_set rollup_clause cube_clause
@@ -10213,27 +10215,54 @@ AlterDatabaseSetStmt:
 
 /*****************************************************************************
  *
- *		DROP DATABASE [ IF EXISTS ]
+ *		DROP DATABASE [ ( options ) ] [ IF EXISTS ]
  *
  * This is implicitly CASCADE, no need for drop behavior
  *****************************************************************************/
 
-DropdbStmt: DROP DATABASE database_name
+DropdbStmt: DROP DATABASE database_name opt_drop_option_list
 				{
 					DropdbStmt *n = makeNode(DropdbStmt);
 					n->dbname = $3;
 					n->missing_ok = false;
+					n->options = $4;
 					$$ = (Node *)n;
 				}
-			| DROP DATABASE IF_P EXISTS database_name
+			| DROP DATABASE IF_P EXISTS database_name opt_drop_option_list
 				{
 					DropdbStmt *n = makeNode(DropdbStmt);
 					n->dbname = $5;
 					n->missing_ok = true;
+					n->options = $6;
 					$$ = (Node *)n;
 				}
 		;
 
+opt_drop_option_list:
+			WITH '(' drop_option_list ')'			{ $$ = $3; }
+			| /* EMPTY */							{ $$ = NIL; }
+		;
+
+drop_option_list:
+			drop_option
+				{
+					$$ = list_make1((Node *) $1);
+				}
+			| drop_option_list ',' drop_option
+				{
+					$$ = lappend($1, (Node *) $3);
+				}
+		;
+
+/*
+ * Currently only the FORCE option is supported, but syntax is designed
+ * to be extensible, and then we use same patterns like on other places.
+ */
+drop_option:	FORCE
+				{
+					$$ = makeDefElem("force", NULL, @1);
+				}
+		;
 
 /*****************************************************************************
  *

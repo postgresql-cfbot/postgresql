@@ -52,6 +52,7 @@
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/catalog.h"
+#include "catalog/pg_authid.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/proc.h"
@@ -2968,6 +2969,92 @@ CountOtherDBBackends(Oid databaseId, int *nbackends, int *nprepared)
 	}
 
 	return true;				/* timed out, still conflicts */
+}
+
+/*
+ * Terminate other db connections. This routine is used by
+ * DROP DATABASE FORCE to eliminate all others clients from
+ * database.
+ */
+void
+TerminateOtherDBBackends(Oid databaseId)
+{
+	ProcArrayStruct *arrayP = procArray;
+	List   *pids = NIL;
+	int		i;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+
+	for (i = 0; i < procArray->numProcs; i++)
+	{
+		int			pgprocno = arrayP->pgprocnos[i];
+		PGPROC	   *proc = &allProcs[pgprocno];
+
+		if (proc->databaseId != databaseId)
+			continue;
+		if (proc == MyProc)
+			continue;
+
+		if (proc->pid != 0)
+			pids = lappend_int(pids, proc->pid);
+	}
+
+	LWLockRelease(ProcArrayLock);
+
+	if (pids)
+	{
+		ListCell   *lc;
+
+		/*
+		 * Similar code to pg_terminate_backend, but we check rights first
+		 * here, and only when we have all necessary rights we start to
+		 * terminate other clients. In this case we should not raise
+		 * some warnings - like "PID %d is not a PostgreSQL server process",
+		 * because for this purpose - already finished session is not
+		 * problem.
+		 */
+		foreach (lc, pids)
+		{
+			int			pid = lfirst_int(lc);
+			PGPROC	   *proc = BackendPidGetProc(pid);
+
+			if (proc != NULL)
+			{
+				/* Only allow superusers to signal superuser-owned backends. */
+				if (superuser_arg(proc->roleId) && !superuser())
+					ereport(ERROR,
+							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+							 (errmsg("must be a superuser to terminate superuser process"))));
+
+				/* Users can signal backends they have role membership in. */
+				if (!has_privs_of_role(GetUserId(), proc->roleId) &&
+					!has_privs_of_role(GetUserId(), DEFAULT_ROLE_SIGNAL_BACKENDID))
+					ereport(ERROR,
+							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+							 (errmsg("must be a member of the role whose process is being terminated or member of pg_signal_backend"))));
+			}
+		}
+
+		/* We know so we have all necessary rights now */
+		foreach (lc, pids)
+		{
+			int			pid = lfirst_int(lc);
+			PGPROC	   *proc = BackendPidGetProc(pid);
+
+			if (proc != NULL)
+			{
+				/* If we have setsid(), signal the backend's whole process group */
+#ifdef HAVE_SETSID
+				(void) kill(-pid, SIGTERM);
+#else
+				(void) kill(pid, SIGTERM);
+#endif
+			}
+		}
+
+		/* sleep 100ms */
+		pg_usleep(100 * 1000L);
+	}
 }
 
 /*

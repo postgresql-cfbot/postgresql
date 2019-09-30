@@ -41,6 +41,17 @@ struct TupleTableSlot;
 #define MaxLockTupleMode	LockTupleExclusive
 
 /*
+ * No more than this many tuples per MultiInsertBuffer
+ *
+ * Caution: Don't make this too big. For COPY, we could end up with this many
+ * CopyMultiInsertBuffer items stored in CopyMultiInsertInfo's
+ * multiInsertBuffers list.  Increasing this can cause quadratic growth in
+ * memory requirements during copies into partitioned tables with a large
+ * number of partitions. For CTAS/MatView, the impact is similar.
+ */
+#define MAX_MULTI_INSERT_TUPLES	1000
+
+/*
  * Descriptor for heap table scans.
  */
 typedef struct HeapScanDescData

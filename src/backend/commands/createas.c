@@ -62,6 +62,10 @@ typedef struct
 	CommandId	output_cid;		/* cmin to insert in output tuples */
 	int			ti_options;		/* table_tuple_insert performance options */
 	BulkInsertState bistate;	/* bulk insert state */
+	MemoryContext	mi_context;	/* A temporary memory context for multi insert */
+	TupleTableSlot *mi_slots[MAX_MULTI_INSERT_TUPLES]; /* buffered slots for a multi insert batch. */
+	int				mi_slots_num;	/* How many buffered slots for a multi insert batch. */
+	int				mi_slots_size;	/* Total tuple size for a multi insert batch. */
 } DR_intorel;
 
 /* utility functions for CTAS definition creation */
@@ -561,9 +565,42 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	myState->ti_options = TABLE_INSERT_SKIP_FSM |
 		(XLogIsNeeded() ? 0 : TABLE_INSERT_SKIP_WAL);
 	myState->bistate = GetBulkInsertState();
+	memset(myState->mi_slots, 0, sizeof(TupleTableSlot *) * MAX_MULTI_INSERT_TUPLES);
+	myState->mi_slots_num = 0;
+	myState->mi_slots_size = 0;
+
+	/*
+	 * Create a temporary memory context so that we can reset once per
+	 * multi insert batch.
+	 */
+	myState->mi_context = AllocSetContextCreate(CurrentMemoryContext,
+												"intorel_multi_insert",
+												ALLOCSET_DEFAULT_SIZES);
 
 	/* Not using WAL requires smgr_targblock be initially invalid */
 	Assert(RelationGetTargetBlock(intoRelationDesc) == InvalidBlockNumber);
+}
+
+static void
+intorel_flush_multi_insert(DR_intorel *myState)
+{
+	MemoryContext oldcontext;
+	int			  i;
+
+	oldcontext = MemoryContextSwitchTo(myState->mi_context);
+
+	table_multi_insert(myState->rel, myState->mi_slots,
+					   myState->mi_slots_num, myState->output_cid,
+					   myState->ti_options, myState->bistate);
+
+	MemoryContextReset(myState->mi_context);
+	MemoryContextSwitchTo(oldcontext);
+
+	for (i = 0; i < myState->mi_slots_num; i++)
+		ExecClearTuple(myState->mi_slots[i]);
+
+	myState->mi_slots_num = 0;
+	myState->mi_slots_size = 0;
 }
 
 /*
@@ -572,22 +609,27 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 static bool
 intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 {
-	DR_intorel *myState = (DR_intorel *) self;
+	DR_intorel		*myState = (DR_intorel *) self;
+	TupleTableSlot  *batchslot;
+	HeapTuple		 tuple;
 
-	/*
-	 * Note that the input slot might not be of the type of the target
-	 * relation. That's supported by table_tuple_insert(), but slightly less
-	 * efficient than inserting with the right slot - but the alternative
-	 * would be to copy into a slot of the right type, which would not be
-	 * cheap either. This also doesn't allow accessing per-AM data (say a
-	 * tuple's xmin), but since we don't do that here...
-	 */
+	if (myState->mi_slots[myState->mi_slots_num] == NULL)
+	{
+		batchslot = table_slot_create(myState->rel, NULL);
+		myState->mi_slots[myState->mi_slots_num] = batchslot;
+	}
+	else
+		batchslot = myState->mi_slots[myState->mi_slots_num];
 
-	table_tuple_insert(myState->rel,
-					   slot,
-					   myState->output_cid,
-					   myState->ti_options,
-					   myState->bistate);
+	ExecCopySlot(batchslot, slot);
+	tuple = ExecFetchSlotHeapTuple(batchslot, true, NULL);
+
+	myState->mi_slots_num++;
+	myState->mi_slots_size += tuple->t_len;
+
+	if (myState->mi_slots_num >= MAX_MULTI_INSERT_TUPLES ||
+		myState->mi_slots_size >= 65535)
+		intorel_flush_multi_insert(myState);
 
 	/* We know this is a newly created relation, so there are no indexes */
 
@@ -601,10 +643,21 @@ static void
 intorel_shutdown(DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
+	int			i;
+
+	if (myState->mi_slots_num != 0)
+		intorel_flush_multi_insert(myState);
+
+	for (i = 0; i < MAX_MULTI_INSERT_TUPLES && myState->mi_slots[i] != NULL; i++)
+		ExecDropSingleTupleTableSlot(myState->mi_slots[i]);
 
 	FreeBulkInsertState(myState->bistate);
 
 	table_finish_bulk_insert(myState->rel, myState->ti_options);
+
+	if (myState->mi_context)
+		MemoryContextDelete(myState->mi_context);
+	myState->mi_context = NULL;
 
 	/* close rel, but keep lock until commit */
 	table_close(myState->rel, NoLock);

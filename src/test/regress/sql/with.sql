@@ -406,6 +406,16 @@ SELECT * FROM y;
 
 DROP TABLE y;
 
+CREATE TEMPORARY TABLE y (a INTEGER);
+WITH t AS (
+    SELECT generate_series(1, 10) AS a
+)
+INSERT INTO y SET a = t.a+20 FROM t;
+
+SELECT * FROM y;
+
+DROP TABLE y;
+
 --
 -- error cases
 --

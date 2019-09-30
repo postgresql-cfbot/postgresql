@@ -82,6 +82,44 @@ select col1, col2, char_length(col3) from inserttest;
 
 drop table inserttest;
 --
+-- SET test
+--
+create table inserttest (col1 int4, col2 text default 'bar');
+insert into inserttest set col1 = 1, col2 = 'foo';
+insert into inserttest set col1 = 2, col2 = DEFAULT;
+insert into inserttest set (col1, col2) = (3, 'baz');
+select * from inserttest;
+ col1 | col2 
+------+------
+    1 | foo
+    2 | bar
+    3 | baz
+(3 rows)
+
+truncate inserttest;
+create table inserttest2 (col1 int4, col2 text default 'f');
+insert into inserttest2 values (10, 't'), (20, 'f'), (50, 't');
+insert into inserttest set col1 = inserttest2.col1 from inserttest2
+  where inserttest2.col1 > 10 order by inserttest2.col1 desc limit 1;
+select * from inserttest;
+ col1 | col2 
+------+------
+   50 | bar
+(1 row)
+
+truncate inserttest;
+insert into inserttest set col1 = sum(inserttest2.col1) from inserttest2
+  group by inserttest2.col2;
+select * from inserttest;
+ col1 | col2 
+------+------
+   60 | bar
+   20 | bar
+(2 rows)
+
+drop table inserttest;
+drop table inserttest2;
+--
 -- check indirection (field/array assignment), cf bug #14265
 --
 -- these tests are aware that transformInsertStmt has 3 separate code paths

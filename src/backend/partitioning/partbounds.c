@@ -1865,7 +1865,7 @@ get_partition_operator(PartitionKey key, int col, StrategyNumber strategy,
 	 */
 	*need_relabel = (key->parttypid[col] != key->partopcintype[col] &&
 					 key->partopcintype[col] != RECORDOID &&
-					 !IsPolymorphicType(key->partopcintype[col]));
+					 !IsPolymorphicTypeAny(key->partopcintype[col]));
 
 	return operoid;
 }

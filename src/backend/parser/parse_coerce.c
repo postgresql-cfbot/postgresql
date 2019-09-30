@@ -169,7 +169,9 @@ coerce_type(ParseState *pstate, Node *node,
 	}
 	if (targetTypeId == ANYOID ||
 		targetTypeId == ANYELEMENTOID ||
-		targetTypeId == ANYNONARRAYOID)
+		targetTypeId == ANYNONARRAYOID ||
+		targetTypeId == ANYCOMPATIBLEOID ||
+		targetTypeId == ANYCOMPATIBLENONARRAYOID)
 	{
 		/*
 		 * Assume can_coerce_type verified that implicit coercion is okay.
@@ -187,7 +189,9 @@ coerce_type(ParseState *pstate, Node *node,
 	}
 	if (targetTypeId == ANYARRAYOID ||
 		targetTypeId == ANYENUMOID ||
-		targetTypeId == ANYRANGEOID)
+		targetTypeId == ANYRANGEOID ||
+		targetTypeId == ANYCOMPATIBLEARRAYOID ||
+		targetTypeId == ANYCOMPATIBLERANGEOID)
 	{
 		/*
 		 * Assume can_coerce_type verified that implicit coercion is okay.
@@ -1390,6 +1394,100 @@ select_common_type(ParseState *pstate, List *exprs, const char *context,
 }
 
 /*
+ * select_common_type_from_vector()
+ *		Determine the common supertype of vector of Oids.
+ *
+ * Similar to select_common_type() but simplified for polymorphics
+ * type processing. When there are no supertype, then returns InvalidOid,
+ * when noerror is true, or raise exception when noerror is false.
+ */
+static Oid
+select_common_type_from_vector(int nargs, Oid *typeids, bool noerror)
+{
+	int			i = 0;
+	Oid			ptype;
+	TYPCATEGORY pcategory;
+	bool		pispreferred;
+
+	Assert(nargs > 0);
+	ptype = typeids[0];
+
+	/* fast leave when all types are same */
+	if (ptype != UNKNOWNOID)
+	{
+		for (i = 1; i < nargs; i++)
+		{
+			if (ptype != typeids[i])
+				break;
+		}
+
+		if (i == nargs)
+			return ptype;
+	}
+
+	/*
+	 * Nope, so set up for the full algorithm.  Note that at this point, lc
+	 * points to the first list item with type different from pexpr's; we need
+	 * not re-examine any items the previous loop advanced over.
+	 */
+	ptype = getBaseType(ptype);
+	get_type_category_preferred(ptype, &pcategory, &pispreferred);
+
+	for (; i < nargs; i++)
+	{
+		Oid			ntype = getBaseType(typeids[i]);
+
+		/* move on to next one if no new information... */
+		if (ntype != UNKNOWNOID && ntype != ptype)
+		{
+			TYPCATEGORY ncategory;
+			bool		nispreferred;
+
+			get_type_category_preferred(ntype, &ncategory, &nispreferred);
+
+			if (ptype == UNKNOWNOID)
+			{
+				/* so far, only unknowns so take anything... */
+				ptype = ntype;
+				pcategory = ncategory;
+				pispreferred = nispreferred;
+			}
+			else if (ncategory != pcategory)
+			{
+				if (noerror)
+					return InvalidOid;
+
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("types %s and %s cannot be matched",
+								format_type_be(ptype),
+								format_type_be(ntype))));
+			}
+			else if (!pispreferred &&
+					 can_coerce_type(1, &ptype, &ntype, COERCION_IMPLICIT) &&
+					 !can_coerce_type(1, &ntype, &ptype, COERCION_IMPLICIT))
+			{
+				/*
+				 * take new type if can coerce to it implicitly but not the
+				 * other way; but if we have a preferred type, stay on it.
+				 */
+				ptype = ntype;
+				pcategory = ncategory;
+				pispreferred = nispreferred;
+			}
+		}
+	}
+
+	/*
+	 * Be consistent with select_common_type()
+	 */
+	if (ptype == UNKNOWNOID)
+		ptype = TEXTOID;
+
+	return ptype;
+}
+
+/*
  * coerce_to_common_type()
  *		Coerce an expression to the given type.
  *
@@ -1485,6 +1583,12 @@ check_generic_type_consistency(const Oid *actual_arg_types,
 	bool		have_anyelement = false;
 	bool		have_anynonarray = false;
 	bool		have_anyenum = false;
+	bool		have_anycompatible_nonarray = false;
+	bool		have_anycompatible_range = false;
+	bool		have_generic_anycompatible = false;
+	Oid			anycompatible_range_typeid = InvalidOid;
+	Oid			anycompatible_actual_types[FUNC_MAX_ARGS];
+	int			n_anycompatible_args = 0;
 
 	/*
 	 * Loop through the arguments to see if we have any that are polymorphic.
@@ -1527,6 +1631,72 @@ check_generic_type_consistency(const Oid *actual_arg_types,
 			if (OidIsValid(range_typeid) && actual_type != range_typeid)
 				return false;
 			range_typeid = actual_type;
+		}
+		else if (decl_type == ANYCOMPATIBLEOID ||
+				 decl_type == ANYCOMPATIBLENONARRAYOID)
+		{
+			have_generic_anycompatible = true;
+			if (decl_type == ANYCOMPATIBLENONARRAYOID)
+				have_anycompatible_nonarray = true;
+			if (actual_type == UNKNOWNOID)
+				continue;
+
+			/* collect used type, reduce repeated values * */
+			if (n_anycompatible_args == 0 ||
+				anycompatible_actual_types[n_anycompatible_args - 1] != actual_type)
+				anycompatible_actual_types[n_anycompatible_args++] = actual_type;
+		}
+		else if (decl_type == ANYCOMPATIBLEARRAYOID)
+		{
+			Oid			anycompatible_elem_type;
+
+			have_generic_anycompatible = true;
+
+			if (actual_type == UNKNOWNOID)
+				continue;
+
+			actual_type = getBaseType(actual_type); /* flatten domains */
+			anycompatible_elem_type = get_element_type(actual_type);
+
+			if (!OidIsValid(anycompatible_elem_type))
+				return false;
+
+			/* collect used type, reduce repeated values * */
+			if (n_anycompatible_args == 0 ||
+				anycompatible_actual_types[n_anycompatible_args - 1] != anycompatible_elem_type)
+				anycompatible_actual_types[n_anycompatible_args++] = anycompatible_elem_type;
+		}
+		else if (decl_type == ANYCOMPATIBLERANGEOID)
+		{
+			Oid			anycompatible_range_typelem;
+
+			have_generic_anycompatible = true;
+			have_anycompatible_range = true;
+
+			if (actual_type == UNKNOWNOID)
+				continue;
+			actual_type = getBaseType(actual_type); /* flatten domains */
+
+			/*
+			 * range type is used just for derivation of common type, but
+			 * range types should be same. Same behave like anyrange - cast
+			 * between ranges are not supported.
+			 */
+			if (OidIsValid(anycompatible_range_typeid) &&
+				anycompatible_range_typeid != actual_type)
+				return false;
+
+			anycompatible_range_typelem = get_range_subtype(actual_type);
+			if (!OidIsValid(anycompatible_range_typelem))
+				return false;
+
+			if (!OidIsValid(anycompatible_range_typeid))
+				anycompatible_range_typeid = actual_type;
+
+			/* collect used type, reduce repeated values * */
+			if (n_anycompatible_args == 0 ||
+				anycompatible_actual_types[n_anycompatible_args - 1] != anycompatible_range_typelem)
+				anycompatible_actual_types[n_anycompatible_args++] = anycompatible_range_typelem;
 		}
 	}
 
@@ -1592,6 +1762,40 @@ check_generic_type_consistency(const Oid *actual_arg_types,
 		/* require the element type to be an enum */
 		if (!type_is_enum(elem_typeid))
 			return false;
+	}
+
+	/* check anycompatible collected data */
+	if (have_generic_anycompatible)
+	{
+		if (n_anycompatible_args > 0)
+		{
+			Oid			anycompatible_typeid;
+
+			anycompatible_typeid = select_common_type_from_vector(n_anycompatible_args,
+															   anycompatible_actual_types,
+															   true);
+
+			if (!OidIsValid(anycompatible_typeid))
+				return false;
+
+			if (have_anycompatible_nonarray)
+			{
+				/*
+				 * require the anycompatible type to not be an array or domain
+				 * over array
+				 */
+				if (type_is_array_domain(anycompatible_typeid))
+					return false;
+			}
+
+			if (have_anycompatible_range && !OidIsValid(anycompatible_range_typeid))
+				return false;
+
+			return true;
+		}
+
+		/* is not possible derive common type */
+		return false;
 	}
 
 	/* Looks valid */
@@ -1676,11 +1880,15 @@ enforce_generic_type_consistency(const Oid *actual_arg_types,
 								 bool allow_poly)
 {
 	int			j;
-	bool		have_generics = false;
+	bool		have_generics_any = false;
+	bool		have_generics_anycompatible = false;
 	bool		have_unknowns = false;
 	Oid			elem_typeid = InvalidOid;
 	Oid			array_typeid = InvalidOid;
 	Oid			range_typeid = InvalidOid;
+	Oid			anycompatible_typeid = InvalidOid;
+	Oid			anycompatible_array_typeid = InvalidOid;
+	Oid			anycompatible_range_typeid = InvalidOid;
 	Oid			array_typelem;
 	Oid			range_typelem;
 	bool		have_anyelement = (rettype == ANYELEMENTOID ||
@@ -1688,6 +1896,11 @@ enforce_generic_type_consistency(const Oid *actual_arg_types,
 								   rettype == ANYENUMOID);
 	bool		have_anynonarray = (rettype == ANYNONARRAYOID);
 	bool		have_anyenum = (rettype == ANYENUMOID);
+	bool		have_anycompatible_nonarray = (rettype == ANYCOMPATIBLENONARRAYOID);
+	bool		have_anycompatible_array = (rettype == ANYCOMPATIBLEARRAYOID);
+	bool		have_anycompatible_range = (rettype == ANYCOMPATIBLERANGEOID);
+	Oid			anycompatible_actual_types[FUNC_MAX_ARGS];
+	int			n_anycompatible_args = 0;
 
 	/*
 	 * Loop through the arguments to see if we have any that are polymorphic.
@@ -1702,7 +1915,7 @@ enforce_generic_type_consistency(const Oid *actual_arg_types,
 			decl_type == ANYNONARRAYOID ||
 			decl_type == ANYENUMOID)
 		{
-			have_generics = have_anyelement = true;
+			have_generics_any = have_anyelement = true;
 			if (decl_type == ANYNONARRAYOID)
 				have_anynonarray = true;
 			else if (decl_type == ANYENUMOID)
@@ -1725,14 +1938,18 @@ enforce_generic_type_consistency(const Oid *actual_arg_types,
 		}
 		else if (decl_type == ANYARRAYOID)
 		{
-			have_generics = true;
+			have_generics_any = true;
+			have_anycompatible_array = true;
+
 			if (actual_type == UNKNOWNOID)
 			{
 				have_unknowns = true;
 				continue;
 			}
+
 			if (allow_poly && decl_type == actual_type)
 				continue;		/* no new information here */
+
 			actual_type = getBaseType(actual_type); /* flatten domains */
 			if (OidIsValid(array_typeid) && actual_type != array_typeid)
 				ereport(ERROR,
@@ -1745,7 +1962,7 @@ enforce_generic_type_consistency(const Oid *actual_arg_types,
 		}
 		else if (decl_type == ANYRANGEOID)
 		{
-			have_generics = true;
+			have_generics_any = true;
 			if (actual_type == UNKNOWNOID)
 			{
 				have_unknowns = true;
@@ -1763,128 +1980,298 @@ enforce_generic_type_consistency(const Oid *actual_arg_types,
 								   format_type_be(actual_type))));
 			range_typeid = actual_type;
 		}
+		else if (decl_type == ANYCOMPATIBLEOID ||
+				 decl_type == ANYCOMPATIBLENONARRAYOID)
+		{
+			have_generics_anycompatible = true;
+
+			if (decl_type == ANYCOMPATIBLENONARRAYOID)
+				have_anycompatible_nonarray = true;
+
+			/*
+			 * because declared type will be replaced every time, we don't
+			 * need some special work for unknown types.
+			 */
+			if (actual_type == UNKNOWNOID)
+				continue;
+
+			if (allow_poly && decl_type == actual_type)
+				continue;
+
+			/* collect used type, reduce repeated values * */
+			if (n_anycompatible_args == 0 ||
+				anycompatible_actual_types[n_anycompatible_args - 1] != actual_type)
+				anycompatible_actual_types[n_anycompatible_args++] = actual_type;
+		}
+		else if (decl_type == ANYCOMPATIBLEARRAYOID)
+		{
+			Oid			anycompatible_elem_type;
+
+			have_generics_anycompatible = true;
+			have_anycompatible_array = true;
+
+			if (actual_type == UNKNOWNOID)
+				continue;
+
+			if (allow_poly && decl_type == actual_type)
+				continue;
+
+			actual_type = getBaseType(actual_type); /* flatten domains */
+			anycompatible_elem_type = get_element_type(actual_type);
+
+			if (!OidIsValid(anycompatible_elem_type))
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("argument declared %s is not an array but type %s",
+								"anyarray", format_type_be(actual_type))));
+
+			/* collect used type, reduce repeated values * */
+			if (n_anycompatible_args == 0 ||
+				anycompatible_actual_types[n_anycompatible_args - 1] != anycompatible_elem_type)
+				anycompatible_actual_types[n_anycompatible_args++] = anycompatible_elem_type;
+		}
+		else if (decl_type == ANYCOMPATIBLERANGEOID)
+		{
+			Oid			anycompatible_range_typelem;
+
+			have_generics_anycompatible = true;
+			have_anycompatible_range = true;
+
+			if (actual_type == UNKNOWNOID)
+			{
+				have_unknowns = true;
+				continue;
+			}
+			if (allow_poly && decl_type == actual_type)
+				continue;		/* no new information here */
+			actual_type = getBaseType(actual_type); /* flatten domains */
+
+			if (OidIsValid(anycompatible_range_typeid) &&
+				actual_type != anycompatible_range_typeid)
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("arguments declared \"anyrange\" are not all alike"),
+						 errdetail("%s versus %s",
+								   format_type_be(anycompatible_range_typeid),
+								   format_type_be(actual_type))));
+
+			anycompatible_range_typeid = actual_type;
+			anycompatible_range_typelem = get_range_subtype(anycompatible_range_typeid);
+
+			if (!OidIsValid(anycompatible_range_typelem))
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("argument declared %s is not a range type but type %s",
+								"anyrange",
+								format_type_be(anycompatible_range_typeid))));
+
+			/* collect used type, reduce repeated values * */
+			if (n_anycompatible_args == 0 ||
+				anycompatible_actual_types[n_anycompatible_args - 1] != anycompatible_range_typelem)
+				anycompatible_actual_types[n_anycompatible_args++] = anycompatible_range_typelem;
+		}
 	}
 
 	/*
 	 * Fast Track: if none of the arguments are polymorphic, return the
 	 * unmodified rettype.  We assume it can't be polymorphic either.
 	 */
-	if (!have_generics)
+	if (!have_generics_any && !have_generics_anycompatible)
 		return rettype;
 
-	/* Get the element type based on the array type, if we have one */
-	if (OidIsValid(array_typeid))
+	if (have_generics_any)
 	{
-		if (array_typeid == ANYARRAYOID && !have_anyelement)
+		/* Get the element type based on the array type, if we have one */
+		if (OidIsValid(array_typeid))
 		{
-			/* Special case for ANYARRAY input: okay iff no ANYELEMENT */
-			array_typelem = ANYELEMENTOID;
-		}
-		else
-		{
-			array_typelem = get_element_type(array_typeid);
-			if (!OidIsValid(array_typelem))
+			if (array_typeid == ANYARRAYOID && !have_anyelement)
+			{
+				/* Special case for ANYARRAY input: okay iff no ANYELEMENT */
+				array_typelem = ANYELEMENTOID;
+			}
+			else
+			{
+				array_typelem = get_element_type(array_typeid);
+				if (!OidIsValid(array_typelem))
+					ereport(ERROR,
+							(errcode(ERRCODE_DATATYPE_MISMATCH),
+							 errmsg("argument declared %s is not an array but type %s",
+									"anyarray", format_type_be(array_typeid))));
+			}
+
+			if (!OidIsValid(elem_typeid))
+			{
+				/*
+				 * if we don't have an element type yet, use the one we just
+				 * got
+				 */
+				elem_typeid = array_typelem;
+			}
+			else if (array_typelem != elem_typeid)
+			{
+				/* otherwise, they better match */
 				ereport(ERROR,
 						(errcode(ERRCODE_DATATYPE_MISMATCH),
-						 errmsg("argument declared %s is not an array but type %s",
-								"anyarray", format_type_be(array_typeid))));
+						 errmsg("argument declared %s is not consistent with argument declared %s",
+								"anyarray", "anyelement"),
+						 errdetail("%s versus %s",
+								   format_type_be(array_typeid),
+								   format_type_be(elem_typeid))));
+			}
+		}
+
+		/* Get the element type based on the range type, if we have one */
+		if (OidIsValid(range_typeid))
+		{
+			if (range_typeid == ANYRANGEOID && !have_anyelement)
+			{
+				/* Special case for ANYRANGE input: okay iff no ANYELEMENT */
+				range_typelem = ANYELEMENTOID;
+			}
+			else
+			{
+				range_typelem = get_range_subtype(range_typeid);
+				if (!OidIsValid(range_typelem))
+					ereport(ERROR,
+							(errcode(ERRCODE_DATATYPE_MISMATCH),
+							 errmsg("argument declared %s is not a range type but type %s",
+									"anyrange",
+									format_type_be(range_typeid))));
+			}
+
+			if (!OidIsValid(elem_typeid))
+			{
+				/*
+				 * if we don't have an element type yet, use the one we just
+				 * got
+				 */
+				elem_typeid = range_typelem;
+			}
+			else if (range_typelem != elem_typeid)
+			{
+				/* otherwise, they better match */
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("argument declared %s is not consistent with argument declared %s",
+								"anyrange", "anyelement"),
+						 errdetail("%s versus %s",
+								   format_type_be(range_typeid),
+								   format_type_be(elem_typeid))));
+			}
 		}
 
 		if (!OidIsValid(elem_typeid))
 		{
-			/*
-			 * if we don't have an element type yet, use the one we just got
-			 */
-			elem_typeid = array_typelem;
-		}
-		else if (array_typelem != elem_typeid)
-		{
-			/* otherwise, they better match */
-			ereport(ERROR,
-					(errcode(ERRCODE_DATATYPE_MISMATCH),
-					 errmsg("argument declared %s is not consistent with argument declared %s",
-							"anyarray", "anyelement"),
-					 errdetail("%s versus %s",
-							   format_type_be(array_typeid),
-							   format_type_be(elem_typeid))));
-		}
-	}
-
-	/* Get the element type based on the range type, if we have one */
-	if (OidIsValid(range_typeid))
-	{
-		if (range_typeid == ANYRANGEOID && !have_anyelement)
-		{
-			/* Special case for ANYRANGE input: okay iff no ANYELEMENT */
-			range_typelem = ANYELEMENTOID;
-		}
-		else
-		{
-			range_typelem = get_range_subtype(range_typeid);
-			if (!OidIsValid(range_typelem))
+			if (allow_poly)
+			{
+				elem_typeid = ANYELEMENTOID;
+				array_typeid = ANYARRAYOID;
+				range_typeid = ANYRANGEOID;
+			}
+			else
+			{
+				/* Only way to get here is if all the generic args are UNKNOWN */
 				ereport(ERROR,
 						(errcode(ERRCODE_DATATYPE_MISMATCH),
-						 errmsg("argument declared %s is not a range type but type %s",
-								"anyrange",
-								format_type_be(range_typeid))));
+						 errmsg("could not determine polymorphic type because input has type %s",
+								"unknown")));
+			}
 		}
 
-		if (!OidIsValid(elem_typeid))
+		if (have_anynonarray && elem_typeid != ANYELEMENTOID)
 		{
 			/*
-			 * if we don't have an element type yet, use the one we just got
+			 * require the element type to not be an array or domain over
+			 * array
 			 */
-			elem_typeid = range_typelem;
+			if (type_is_array_domain(elem_typeid))
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("type matched to anynonarray is an array type: %s",
+								format_type_be(elem_typeid))));
 		}
-		else if (range_typelem != elem_typeid)
+
+		if (have_anyenum && elem_typeid != ANYELEMENTOID)
 		{
-			/* otherwise, they better match */
-			ereport(ERROR,
-					(errcode(ERRCODE_DATATYPE_MISMATCH),
-					 errmsg("argument declared %s is not consistent with argument declared %s",
-							"anyrange", "anyelement"),
-					 errdetail("%s versus %s",
-							   format_type_be(range_typeid),
-							   format_type_be(elem_typeid))));
+			/* require the element type to be an enum */
+			if (!type_is_enum(elem_typeid))
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("type matched to anyenum is not an enum type: %s",
+								format_type_be(elem_typeid))));
 		}
 	}
 
-	if (!OidIsValid(elem_typeid))
+	if (have_generics_anycompatible)
 	{
-		if (allow_poly)
+		if (n_anycompatible_args > 0)
 		{
-			elem_typeid = ANYELEMENTOID;
-			array_typeid = ANYARRAYOID;
-			range_typeid = ANYRANGEOID;
+			anycompatible_typeid = select_common_type_from_vector(n_anycompatible_args,
+															   anycompatible_actual_types,
+															   false);
+
+			if (have_anycompatible_array)
+			{
+				anycompatible_array_typeid = get_array_type(anycompatible_typeid);
+
+				if (!OidIsValid(anycompatible_array_typeid))
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_OBJECT),
+							 errmsg("could not find array type for data type %s",
+									format_type_be(anycompatible_typeid))));
+			}
+
+			/* anycompatibke_range_typid should be defined already */
+			if (have_anycompatible_range && !OidIsValid(anycompatible_range_typeid))
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_OBJECT),
+						 errmsg("could not find range type for data type %s",
+								"anycompatiblerange")));
+
+			if (have_anycompatible_nonarray)
+			{
+				/*
+				 * require the element type to not be an array or domain over
+				 * array
+				 */
+				if (type_is_array_domain(anycompatible_typeid))
+					ereport(ERROR,
+							(errcode(ERRCODE_DATATYPE_MISMATCH),
+							 errmsg("type matched to anynonarray is an array type: %s",
+									format_type_be(anycompatible_typeid))));
+			}
 		}
 		else
 		{
-			/* Only way to get here is if all the generic args are UNKNOWN */
-			ereport(ERROR,
-					(errcode(ERRCODE_DATATYPE_MISMATCH),
-					 errmsg("could not determine polymorphic type because input has type %s",
-							"unknown")));
+			if (allow_poly)
+			{
+				anycompatible_typeid = ANYCOMPATIBLEOID;
+				anycompatible_array_typeid = ANYCOMPATIBLEARRAYOID;
+				anycompatible_range_typeid = ANYCOMPATIBLERANGEOID;
+			}
+			else
+			{
+				/* Only way to get here is if all the generic args are UNKNOWN */
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("could not determine polymorphic common type because input has type %s",
+								"unknown")));
+			}
 		}
-	}
 
-	if (have_anynonarray && elem_typeid != ANYELEMENTOID)
-	{
-		/* require the element type to not be an array or domain over array */
-		if (type_is_array_domain(elem_typeid))
-			ereport(ERROR,
-					(errcode(ERRCODE_DATATYPE_MISMATCH),
-					 errmsg("type matched to anynonarray is an array type: %s",
-							format_type_be(elem_typeid))));
-	}
+		/* replace polymorphic common types by selected common types */
+		for (j = 0; j < nargs; j++)
+		{
+			Oid			decl_type = declared_arg_types[j];
 
-	if (have_anyenum && elem_typeid != ANYELEMENTOID)
-	{
-		/* require the element type to be an enum */
-		if (!type_is_enum(elem_typeid))
-			ereport(ERROR,
-					(errcode(ERRCODE_DATATYPE_MISMATCH),
-					 errmsg("type matched to anyenum is not an enum type: %s",
-							format_type_be(elem_typeid))));
+			if (decl_type == ANYCOMPATIBLEOID ||
+				decl_type == ANYCOMPATIBLENONARRAYOID)
+				declared_arg_types[j] = anycompatible_typeid;
+			else if (decl_type == ANYCOMPATIBLEARRAYOID)
+				declared_arg_types[j] = anycompatible_array_typeid;
+			else if (decl_type == ANYCOMPATIBLERANGEOID)
+				declared_arg_types[j] = anycompatible_range_typeid;
+		}
 	}
 
 	/*
@@ -1964,6 +2351,41 @@ enforce_generic_type_consistency(const Oid *actual_arg_types,
 		rettype == ANYNONARRAYOID ||
 		rettype == ANYENUMOID)
 		return elem_typeid;
+
+	if (rettype == ANYCOMPATIBLEOID)
+	{
+		if (!OidIsValid(anycompatible_typeid))
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("could not find common type")));
+		}
+		return anycompatible_typeid;
+	}
+
+	if (rettype == ANYCOMPATIBLEARRAYOID)
+	{
+		if (!OidIsValid(anycompatible_array_typeid))
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("could not find common array type")));
+		}
+		return anycompatible_array_typeid;
+	}
+
+	/* if we return ANYRANGE use the appropriate argument type */
+	if (rettype == ANYCOMPATIBLERANGEOID)
+	{
+		if (!OidIsValid(anycompatible_range_typeid))
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("could not find range type for data type %s",
+							"anycompatiblerange")));
+		}
+		return anycompatible_range_typeid;
+	}
 
 	/* we don't return a generic type; send back the original return type */
 	return rettype;
@@ -2060,6 +2482,75 @@ resolve_generic_type(Oid declared_type,
 			return context_actual_type;
 		}
 	}
+	else if (declared_type == ANYCOMPATIBLEARRAYOID)
+	{
+		if (context_declared_type == ANYCOMPATIBLEARRAYOID)
+		{
+			/*
+			 * Use actual type, but it must be an array; or if it's a domain
+			 * over array, use the base array type.
+			 */
+			Oid			context_base_type = getBaseType(context_actual_type);
+			Oid			array_typelem = get_element_type(context_base_type);
+
+			if (!OidIsValid(array_typelem))
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("argument declared %s is not an array but type %s",
+								"anyarray", format_type_be(context_base_type))));
+			return context_base_type;
+		}
+		else if (context_declared_type == ANYCOMPATIBLEOID ||
+				 context_declared_type == ANYCOMPATIBLENONARRAYOID ||
+				 context_declared_type == ANYCOMPATIBLERANGEOID)
+		{
+			/* Use the array type corresponding to actual type */
+			Oid			array_typeid = get_array_type(context_actual_type);
+
+			if (!OidIsValid(array_typeid))
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_OBJECT),
+						 errmsg("could not find array type for data type %s",
+								format_type_be(context_actual_type))));
+			return array_typeid;
+		}
+	}
+	else if (declared_type == ANYCOMPATIBLEOID ||
+			 declared_type == ANYCOMPATIBLENONARRAYOID)
+	{
+		if (context_declared_type == ANYCOMPATIBLEARRAYOID)
+		{
+			/* Use the element type corresponding to actual type */
+			Oid			context_base_type = getBaseType(context_actual_type);
+			Oid			array_typelem = get_element_type(context_base_type);
+
+			if (!OidIsValid(array_typelem))
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("argument declared %s is not an array but type %s",
+								"anycompatiblearray", format_type_be(context_base_type))));
+			return array_typelem;
+		}
+		else if (context_declared_type == ANYCOMPATIBLERANGEOID)
+		{
+			/* Use the element type corresponding to actual type */
+			Oid			context_base_type = getBaseType(context_actual_type);
+			Oid			range_typelem = get_range_subtype(context_base_type);
+
+			if (!OidIsValid(range_typelem))
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("argument declared %s is not a range type but type %s",
+								"anyrange", format_type_be(context_base_type))));
+			return range_typelem;
+		}
+		else if (context_declared_type == ANYCOMPATIBLEOID ||
+				 context_declared_type == ANYCOMPATIBLENONARRAYOID)
+		{
+			/* Use the actual type; it doesn't matter if array or not */
+			return context_actual_type;
+		}
+	}
 	else
 	{
 		/* declared_type isn't polymorphic, so return it as-is */
@@ -2142,8 +2633,9 @@ IsBinaryCoercible(Oid srctype, Oid targettype)
 	if (srctype == targettype)
 		return true;
 
-	/* Anything is coercible to ANY or ANYELEMENT */
-	if (targettype == ANYOID || targettype == ANYELEMENTOID)
+	/* Anything is coercible to ANY or ANYELEMENT or COMMONTYPE */
+	if (targettype == ANYOID || targettype == ANYELEMENTOID ||
+		targettype == ANYCOMPATIBLEARRAYOID)
 		return true;
 
 	/* If srctype is a domain, reduce to its base type */
@@ -2155,7 +2647,7 @@ IsBinaryCoercible(Oid srctype, Oid targettype)
 		return true;
 
 	/* Also accept any array type as coercible to ANYARRAY */
-	if (targettype == ANYARRAYOID)
+	if (targettype == ANYARRAYOID || targettype == ANYCOMPATIBLEARRAYOID)
 		if (type_is_array(srctype))
 			return true;
 

@@ -1542,9 +1542,12 @@ include_dir 'conf.d'
        </para>
 
        <para>
-        At present, this setting is supported only on Linux and Windows. The
+        At present, this setting is supported only on Linux, AIX and Windows. The
         setting is ignored on other systems when set to
-        <literal>try</literal>.
+        <literal>try</literal>.  On Linux, huge pages are only available when
+        <varname>shared_memory_type</varname> is set to <literal>mmap</literal>
+        (the default).  On AIX, they are only available when
+        <varname>shared_memory_type</varname> is set to <literal>sysv</literal>.
        </para>
 
        <para>
@@ -1563,6 +1566,13 @@ include_dir 'conf.d'
         not as a Windows service, the command prompt must be run as an administrator or
         User Access Control (UAC) must be disabled. When the UAC is enabled, the normal
         command prompt revokes the user right Lock Pages in Memory when started.
+       </para>
+
+       <para>
+        Huge pages are known as large page on AIX.  To use them, the user account
+        that runs <productname>PostgreSQL</productname> must have the
+        <literal>CAP_BYPASS_RAC_VMM</literal> and <literal>CAP_PROPAGATE</literal>
+        capabilities.
        </para>
 
        <para>

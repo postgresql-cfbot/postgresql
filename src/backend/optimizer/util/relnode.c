@@ -263,6 +263,16 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 			rel->top_parent_relids = bms_copy(parent->relids);
 
 		/*
+		 * For inheritance child relations, we also need to remember
+		 * the root parent.
+		 */
+		if (parent->rtekind == RTE_RELATION)
+			rel->inh_root_relid = parent->inh_root_relid;
+		else
+			/* Child relation of flattened UNION ALL subquery. */
+			rel->inh_root_relid = relid;
+
+		/*
 		 * Also propagate lateral-reference information from appendrel parent
 		 * rels to their child rels.  We intentionally give each child rel the
 		 * same minimum parameterization, even though it's quite possible that
@@ -283,6 +293,11 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	else
 	{
 		rel->top_parent_relids = NULL;
+		/*
+		 * For baserels, we set ourselves as the root, because it simplifies
+		 * code elsewhere.
+		 */
+		rel->inh_root_relid = relid;
 		rel->direct_lateral_relids = NULL;
 		rel->lateral_relids = NULL;
 		rel->lateral_referencers = NULL;

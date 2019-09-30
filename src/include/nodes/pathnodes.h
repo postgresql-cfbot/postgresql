@@ -489,6 +489,9 @@ typedef struct PartitionSchemeData *PartitionScheme;
  *
  *		relid - RTE index (this is redundant with the relids field, but
  *				is provided for convenience of access)
+ *		inh_root_relid - For otherrels, this is the RT index of inheritance
+ *				root table that is mentioned in the query from which this
+ *				relation originated.  For baserels, it's same as relid.
  *		rtekind - copy of RTE's rtekind field
  *		min_attr, max_attr - range of valid AttrNumbers for rel
  *		attr_needed - array of bitmapsets indicating the highest joinrel
@@ -667,6 +670,7 @@ typedef struct RelOptInfo
 
 	/* information about a base rel (not set for join rels!) */
 	Index		relid;
+	Index		inh_root_relid;
 	Oid			reltablespace;	/* containing tablespace */
 	RTEKind		rtekind;		/* RELATION, SUBQUERY, FUNCTION, etc */
 	AttrNumber	min_attr;		/* smallest attrno of rel (often <0) */

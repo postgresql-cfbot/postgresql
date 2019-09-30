@@ -845,3 +845,24 @@ explain (costs off) select * from range_parted order by a,b,c;
 explain (costs off) select * from range_parted order by a desc,b desc,c desc;
 
 drop table range_parted;
+
+-- Test for checking that lack of access permissions for a child table and
+-- hence its statistics doesn't affect plan shapes when the query is on the
+-- parent table
+create table permtest_parent (a int, b text, c text) partition by list (a);
+create table permtest_child (b text, a int, c text) partition by list (b);
+create table permtest_grandchild (c text, b text, a int);
+alter table permtest_child attach partition permtest_grandchild for values in ('a');
+alter table permtest_parent attach partition permtest_child for values in (1);
+insert into permtest_parent select 1, 'a', i || 'x' || i * 10 from generate_series(1, 1000) i;
+analyze permtest_parent;
+explain (costs off) select * from permtest_parent p1 inner join permtest_parent p2 on p1.a = p2.a and p1.c like '4x5%';
+create role regress_no_child_access;
+revoke all on permtest_grandchild from regress_no_child_access;
+grant all on permtest_parent to regress_no_child_access;
+set session authorization regress_no_child_access;
+explain (costs off) select * from permtest_parent p1 inner join permtest_parent p2 on p1.a = p2.a and p1.c like '4x5%';
+reset session authorization;
+revoke all on permtest_parent from regress_no_child_access;
+drop role regress_no_child_access;
+drop table permtest_parent;

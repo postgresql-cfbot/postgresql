@@ -612,6 +612,10 @@ ProcessClientWriteInterrupt(bool blocked)
 			SetLatch(MyLatch);
 	}
 
+	/* safe to handle during client communication */
+	if (GlobalBarrierInterruptPending)
+		ProcessGlobalBarrierIntterupt();
+
 	errno = save_errno;
 }
 
@@ -3159,6 +3163,9 @@ ProcessInterrupts(void)
 
 	if (ParallelMessagePending)
 		HandleParallelMessages();
+
+	if (GlobalBarrierInterruptPending)
+		ProcessGlobalBarrierIntterupt();
 }
 
 

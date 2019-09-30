@@ -1885,6 +1885,10 @@ BufferSync(int flags)
 
 		cur_tsid = CkptBufferIds[i].tsId;
 
+		/* XXX: need a more principled approach here */
+		if (GlobalBarrierInterruptPending)
+			ProcessGlobalBarrierIntterupt();
+
 		/*
 		 * Grow array of per-tablespace status structs, every time a new
 		 * tablespace is found.

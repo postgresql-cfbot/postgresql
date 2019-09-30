@@ -14,8 +14,9 @@
 #ifndef PROCSIGNAL_H
 #define PROCSIGNAL_H
 
-#include "storage/backendid.h"
+#include <signal.h>
 
+#include "storage/backendid.h"
 
 /*
  * Reasons for signalling a Postgres child process (a backend or an auxiliary
@@ -42,6 +43,8 @@ typedef enum
 	PROCSIG_RECOVERY_CONFLICT_BUFFERPIN,
 	PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK,
 
+	PROCSIG_GLOBAL_BARRIER,
+
 	NUM_PROCSIGNALS				/* Must be last! */
 } ProcSignalReason;
 
@@ -56,5 +59,23 @@ extern int	SendProcSignal(pid_t pid, ProcSignalReason reason,
 						   BackendId backendId);
 
 extern void procsignal_sigusr1_handler(SIGNAL_ARGS);
+
+/*
+ * These collapse. The flag values better be distinct bits.
+ */
+typedef enum GlobalBarrierKind
+{
+	/*
+	 * Guarantee that all processes have the correct view of whether checksums
+	 * enabled/disabled, and no writes are in-progress with previous value(s).
+	 */
+	GLOBBAR_CHECKSUM = 1 << 0
+} GlobalBarrierKind;
+
+extern uint64 EmitGlobalBarrier(GlobalBarrierKind kind);
+extern void WaitForGlobalBarrier(uint64 generation);
+extern void ProcessGlobalBarrierIntterupt(void);
+
+extern PGDLLIMPORT volatile sig_atomic_t GlobalBarrierInterruptPending;
 
 #endif							/* PROCSIGNAL_H */

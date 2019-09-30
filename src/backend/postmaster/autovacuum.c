@@ -649,8 +649,9 @@ AutoVacLauncherMain(int argc, char *argv[])
 
 		ResetLatch(MyLatch);
 
-		/* Process sinval catchup interrupts that happened while sleeping */
+		/* Process pending interrupts. */
 		ProcessCatchupInterrupt();
+		ProcessGlobalBarrierIntterupt();
 
 		/* the normal shutdown case */
 		if (got_SIGTERM)

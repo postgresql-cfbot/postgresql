@@ -20,6 +20,7 @@
 #include "pgstat.h"
 #include "port/atomics.h"
 #include "postmaster/bgworker_internals.h"
+#include "postmaster/checksumhelper.h"
 #include "postmaster/postmaster.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalworker.h"
@@ -129,6 +130,12 @@ static const struct
 	},
 	{
 		"ApplyWorkerMain", ApplyWorkerMain
+	},
+	{
+		"ChecksumHelperLauncherMain", ChecksumHelperLauncherMain
+	},
+	{
+		"ChecksumHelperWorkerMain", ChecksumHelperWorkerMain
 	}
 };
 
@@ -734,23 +741,32 @@ StartBackgroundWorker(void)
 	/*
 	 * Set up signal handlers.
 	 */
-	if (worker->bgw_flags & BGWORKER_BACKEND_DATABASE_CONNECTION)
-	{
-		/*
-		 * SIGINT is used to signal canceling the current action
-		 */
-		pqsignal(SIGINT, StatementCancelHandler);
-		pqsignal(SIGUSR1, procsignal_sigusr1_handler);
-		pqsignal(SIGFPE, FloatExceptionHandler);
 
-		/* XXX Any other handlers needed here? */
-	}
+
+	/*
+	 * SIGINT is used to signal canceling the current action for processes
+	 * able to run queries.
+	 */
+	if (worker->bgw_flags & BGWORKER_BACKEND_DATABASE_CONNECTION)
+		pqsignal(SIGINT, StatementCancelHandler);
 	else
-	{
 		pqsignal(SIGINT, SIG_IGN);
+
+	/*
+	 * Everything with a PGPROC should be able to receive procsignal.h style
+	 * signals.
+	 */
+	if (worker->bgw_flags & (BGWORKER_BACKEND_DATABASE_CONNECTION |
+							 BGWORKER_SHMEM_ACCESS))
+		pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	else
 		pqsignal(SIGUSR1, bgworker_sigusr1_handler);
+
+	if (worker->bgw_flags & BGWORKER_BACKEND_DATABASE_CONNECTION)
+		pqsignal(SIGFPE, FloatExceptionHandler);
+	else
 		pqsignal(SIGFPE, SIG_IGN);
-	}
+
 	pqsignal(SIGTERM, bgworker_die);
 	pqsignal(SIGHUP, SIG_IGN);
 

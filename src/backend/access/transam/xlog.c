@@ -11769,12 +11769,15 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 	for (;;)
 	{
 		int			oldSource = currentSource;
+		bool		start_wal_receiver = false;
 
 		/*
-		 * First check if we failed to read from the current source, and
+		 * First check if we failed to read from the current source or if
+		 * we want to restart wal receiver, and
 		 * advance the state machine if so. The failure to read might've
 		 * happened outside this function, e.g when a CRC check fails on a
 		 * record, or within this loop.
+		 * Restart wal receiver if explicitly requested, too.
 		 */
 		if (lastSourceFailed)
 		{
@@ -11803,52 +11806,11 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						return false;
 
 					/*
-					 * If primary_conninfo is set, launch walreceiver to try
-					 * to stream the missing WAL.
-					 *
-					 * If fetching_ckpt is true, RecPtr points to the initial
-					 * checkpoint location. In that case, we use RedoStartLSN
-					 * as the streaming start position instead of RecPtr, so
-					 * that when we later jump backwards to start redo at
-					 * RedoStartLSN, we will have the logs streamed already.
-					 */
-					if (PrimaryConnInfo && strcmp(PrimaryConnInfo, "") != 0)
-					{
-						XLogRecPtr	ptr;
-						TimeLineID	tli;
-
-						if (fetching_ckpt)
-						{
-							ptr = RedoStartLSN;
-							tli = ControlFile->checkPointCopy.ThisTimeLineID;
-						}
-						else
-						{
-							ptr = RecPtr;
-
-							/*
-							 * Use the record begin position to determine the
-							 * TLI, rather than the position we're reading.
-							 */
-							tli = tliOfPointInHistory(tliRecPtr, expectedTLEs);
-
-							if (curFileTLI > 0 && tli < curFileTLI)
-								elog(ERROR, "according to history file, WAL location %X/%X belongs to timeline %u, but previous recovered WAL file came from timeline %u",
-									 (uint32) (tliRecPtr >> 32),
-									 (uint32) tliRecPtr,
-									 tli, curFileTLI);
-						}
-						curFileTLI = tli;
-						RequestXLogStreaming(tli, ptr, PrimaryConnInfo,
-											 PrimarySlotName);
-						receivedUpto = 0;
-					}
-
-					/*
 					 * Move to XLOG_FROM_STREAM state in either case. We'll
 					 * get immediate failure if we didn't launch walreceiver,
 					 * and move on to the next state.
 					 */
+					start_wal_receiver = true;
 					currentSource = XLOG_FROM_STREAM;
 					break;
 
@@ -11878,8 +11840,8 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						ShutdownWalRcv();
 
 					/*
-					 * Before we sleep, re-scan for possible new timelines if
-					 * we were requested to recover to the latest timeline.
+					 * Re-scan for possible new timelines if we were requested
+					 * to recover to the latest timeline.
 					 */
 					if (recoveryTargetTimeLineGoal == RECOVERY_TARGET_TIMELINE_LATEST)
 					{
@@ -11943,8 +11905,8 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 				 lastSourceFailed ? "failure" : "success");
 
 		/*
-		 * We've now handled possible failure. Try to read from the chosen
-		 * source.
+		 * We've now handled possible failure and configuration change. Try to
+		 * read from the chosen source.
 		 */
 		lastSourceFailed = false;
 
@@ -11983,9 +11945,71 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					bool		havedata;
 
 					/*
-					 * Check if WAL receiver is still active.
+					 * shutdown wal receiver if restart is requested.
 					 */
-					if (!WalRcvStreaming())
+					if (!start_wal_receiver && pendingWalRcvRestart)
+					{
+						if (WalRcvRunning())
+							ShutdownWalRcv();
+
+						/*
+						 * Re-scan for possible new timelines if we were
+						 * requested to recover to the latest timeline.
+						 */
+						if (recoveryTargetTimeLineGoal ==
+							RECOVERY_TARGET_TIMELINE_LATEST)
+							rescanLatestTimeLine();
+						
+						start_wal_receiver = true;
+					}
+					pendingWalRcvRestart = false;
+
+					/*
+					 * Launch walreceiver if needed.
+					 *
+					 * If fetching_ckpt is true, RecPtr points to the initial
+					 * checkpoint location. In that case, we use RedoStartLSN
+					 * as the streaming start position instead of RecPtr, so
+					 * that when we later jump backwards to start redo at
+					 * RedoStartLSN, we will have the logs streamed already.
+					 */
+					if (start_wal_receiver &&
+						PrimaryConnInfo && strcmp(PrimaryConnInfo, "") != 0)
+					{
+						XLogRecPtr	ptr;
+						TimeLineID	tli;
+
+						if (fetching_ckpt)
+						{
+							ptr = RedoStartLSN;
+							tli = ControlFile->checkPointCopy.ThisTimeLineID;
+						}
+						else
+						{
+							ptr = RecPtr;
+
+							/*
+							 * Use the record begin position to determine the
+							 * TLI, rather than the position we're reading.
+							 */
+							tli = tliOfPointInHistory(tliRecPtr, expectedTLEs);
+
+							if (curFileTLI > 0 && tli < curFileTLI)
+								elog(ERROR, "according to history file, WAL location %X/%X belongs to timeline %u, but previous recovered WAL file came from timeline %u",
+									 (uint32) (tliRecPtr >> 32),
+									 (uint32) tliRecPtr,
+									 tli, curFileTLI);
+						}
+						curFileTLI = tli;
+						RequestXLogStreaming(tli, ptr, PrimaryConnInfo,
+											 PrimarySlotName);
+						receivedUpto = 0;
+					}
+
+					/*
+					 * Else, check if WAL receiver is still active.
+					 */
+					else if (!WalRcvStreaming())
 					{
 						lastSourceFailed = true;
 						break;

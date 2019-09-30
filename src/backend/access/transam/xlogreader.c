@@ -17,6 +17,8 @@
  */
 #include "postgres.h"
 
+#include <unistd.h>
+
 #include "access/transam.h"
 #include "access/xlogrecord.h"
 #include "access/xlog_internal.h"
@@ -27,6 +29,7 @@
 
 #ifndef FRONTEND
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "utils/memutils.h"
 #endif
 
@@ -1015,6 +1018,156 @@ out:
 }
 
 #endif							/* FRONTEND */
+
+/*
+ * Read 'count' bytes from WAL into 'buf', starting at location 'startptr'. If
+ * tli_p is passed, get the data from timeline *tli_p. 'pos' is the current
+ * position in the XLOG file and openSegment is a callback that opens the next
+ * segment for reading.
+ *
+ * Returns error information if the data could not be read or NULL if
+ * succeeded.
+ *
+ * XXX probably this should be improved to suck data directly from the
+ * WAL buffers when possible.
+ */
+XLogReadError *
+XLogRead(char *buf, XLogRecPtr startptr, Size count, TimeLineID *tli_p,
+		 WALOpenSegment *seg, WALSegmentContext *segcxt,
+		 WALSegmentOpen openSegment)
+{
+	char	   *p;
+	XLogRecPtr	recptr;
+	Size		nbytes;
+	static XLogReadError errinfo;
+
+	p = buf;
+	recptr = startptr;
+	nbytes = count;
+
+	while (nbytes > 0)
+	{
+		int			segbytes;
+		int			readbytes;
+
+		seg->ws_off = XLogSegmentOffset(recptr, segcxt->ws_segsize);
+
+		if (seg->ws_file < 0 ||
+			!XLByteInSeg(recptr, seg->ws_segno, segcxt->ws_segsize) ||
+			(tli_p != NULL && *tli_p != seg->ws_tli))
+		{
+			XLogSegNo	nextSegNo;
+			TimeLineID	tli;
+			int			file;
+
+			/* Switch to another logfile segment */
+			if (seg->ws_file >= 0)
+				close(seg->ws_file);
+
+			XLByteToSeg(recptr, nextSegNo, segcxt->ws_segsize);
+
+			/*
+			 * If we have the TLI, let's pass it to the callback. If NULL is
+			 * passed, the callback has to find the TLI itself.
+			 */
+			if (tli_p != NULL)
+				tli = *tli_p;
+
+			/* Open the next segment in the caller's way. */
+			openSegment(nextSegNo, &tli, &file, seg, segcxt);
+
+			/* Update the open segment info. */
+			seg->ws_tli = tli;
+			seg->ws_file = file;
+
+			/*
+			 * If the function is called by the XLOG reader, the reader will
+			 * eventually set both "ws_segno" and "ws_off", however the XLOG
+			 * reader is not necessarily involved. Furthermore, we need to set
+			 * the current values for this function to work.
+			 */
+			seg->ws_segno = nextSegNo;
+			seg->ws_off = 0;
+		}
+
+		/* How many bytes are within this segment? */
+		if (nbytes > (segcxt->ws_segsize - seg->ws_off))
+			segbytes = segcxt->ws_segsize - seg->ws_off;
+		else
+			segbytes = nbytes;
+
+#ifndef FRONTEND
+		pgstat_report_wait_start(WAIT_EVENT_WAL_READ);
+#endif
+
+		/*
+		 * Failure to read the data does not necessarily imply non-zero errno.
+		 * Set it to zero so that caller can distinguish the failure that does
+		 * not affect errno.
+		 */
+		errno = 0;
+
+		readbytes = pg_pread(seg->ws_file, p, segbytes, seg->ws_off);
+
+#ifndef FRONTEND
+		pgstat_report_wait_end();
+#endif
+
+		if (readbytes <= 0)
+		{
+			errinfo.read_errno = errno;
+			errinfo.readbytes = readbytes;
+			errinfo.reqbytes = segbytes;
+			errinfo.seg = seg;
+			return &errinfo;
+		}
+
+		/* Update state for read */
+		recptr += readbytes;
+		nbytes -= readbytes;
+		p += readbytes;
+
+		/*
+		 * If the function is called by the XLOG reader, the reader will
+		 * eventually set this field. However we need to care about it too
+		 * because the function can also be used directly (see walsender.c).
+		 */
+		seg->ws_off += readbytes;
+	}
+
+	return NULL;
+}
+
+#ifndef FRONTEND
+/*
+ * Backend-specific convenience code to handle read errors encountered by
+ * XLogRead().
+ */
+void
+XLogReadProcessError(XLogReadError *errinfo)
+{
+	WALOpenSegment *seg = errinfo->seg;
+
+	if (errinfo->readbytes < 0)
+	{
+		errno = errinfo->read_errno;
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not read from log segment %s, offset %u, length %zu: %m",
+						XLogFileNameP(seg->ws_tli, seg->ws_segno),
+						seg->ws_off, (Size) errinfo->reqbytes)));
+	}
+	else
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("could not read from log segment %s, offset %u: length %zu",
+						XLogFileNameP(seg->ws_tli, seg->ws_segno),
+						seg->ws_off,
+						(Size) errinfo->reqbytes)));
+	}
+}
+#endif
 
 /* ----------------------------------------
  * Functions for decoding the data and block references in a record.

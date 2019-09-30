@@ -218,6 +218,31 @@ extern XLogReaderState *XLogReaderAllocate(int wal_segment_size,
 extern void XLogReaderFree(XLogReaderState *state);
 
 /* Initialize supporting structures */
+/*
+ * Callback to open the specified WAL segment for reading.
+ *
+ * "nextSegNo" is the number of the segment to be opened.
+ *
+ * "tli_p" is an input/output argument. If *tli_p is valid, it's the timeline
+ * the new segment should be in. If *tli_p==InvalidTimeLineID, the callback
+ * needs to determine the timeline itself and put the result into *tli_p.
+ *
+ * "file_p" points to an address the segment file descriptor should be stored
+ * at.
+ *
+ * "seg" provides information on the currently open segment. The callback is
+ * not supposed to change this info.
+ *
+ * "segcxt" is additional information about the segment, which logically does
+ * not fit into "seg".
+ *
+ * BasicOpenFile() is the preferred way to open the segment file in backend
+ * code, whereas open(2) should be used in frontend.
+ */
+typedef void (*WALSegmentOpen) (XLogSegNo nextSegNo, TimeLineID *tli_p,
+								int *file_p, WALOpenSegment *seg,
+								WALSegmentContext *segcxt);
+
 extern void WALOpenSegmentInit(WALOpenSegment *seg, WALSegmentContext *segcxt,
 							   int segsize, const char *waldir);
 
@@ -232,6 +257,28 @@ extern bool XLogReaderValidatePageHeader(XLogReaderState *state,
 #ifdef FRONTEND
 extern XLogRecPtr XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr);
 #endif							/* FRONTEND */
+/*
+ * Error information that both backend and frontend caller can process.
+ *
+ * XXX Should the name be WALReadError? If so, we probably need to rename
+ * XLogRead() and XLogReadProcessError() too.
+ */
+typedef struct XLogReadError
+{
+	int			read_errno;		/* errno set by the last read(). */
+	int			readbytes;		/* Bytes read by the last read(). */
+	int			reqbytes;		/* Bytes requested to be read. */
+	WALOpenSegment *seg;		/* Segment we tried to read from. */
+} XLogReadError;
+
+extern XLogReadError *XLogRead(char *buf, XLogRecPtr startptr,
+							   Size count, TimeLineID *tli_p,
+							   WALOpenSegment *seg, WALSegmentContext *segcxt,
+							   WALSegmentOpen openSegment);
+#ifndef FRONTEND
+void		XLogReadProcessError(XLogReadError *errinfo);
+#endif
+
 /* Functions for decoding an XLogRecord */
 
 extern bool DecodeXLogRecord(XLogReaderState *state, XLogRecord *record,

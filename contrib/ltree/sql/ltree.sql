@@ -90,6 +90,11 @@ SELECT '1.*.4|3|2.*{1}'::lquery;
 SELECT 'qwerty%@*.tu'::lquery;
 
 SELECT nlevel('1.2.3.4');
+SELECT nlevel(('1' || repeat('.1', 65534))::ltree);
+SELECT nlevel(('1' || repeat('.1', 65535))::ltree);
+SELECT ('1' || repeat('.1', 65534))::lquery IS NULL;
+SELECT ('1' || repeat('.1', 65535))::lquery IS NULL;
+
 SELECT '1.2'::ltree  < '2.2'::ltree;
 SELECT '1.2'::ltree  <= '2.2'::ltree;
 SELECT '2.2'::ltree  = '2.2'::ltree;
@@ -168,7 +173,10 @@ SELECT 'a.b.c.d.e'::ltree ~ 'a.!b.*{1}.!c.*';
 SELECT 'a.b.c.d.e'::ltree ~ '!b.*{1}.!c.*';
 SELECT 'a.b.c.d.e'::ltree ~ '*.!b.*{1}.!c.*';
 SELECT 'a.b.c.d.e'::ltree ~ '*.!b.*.!c.*';
-
+SELECT 'a.b.c.d.e'::ltree ~ 'a.*{2}.*{2}';
+SELECT 'a.b.c.d.e'::ltree ~ 'a.*{1}.*{2}.e';
+SELECT 'a.b.c.d.e'::ltree ~ 'a.*{1}.*{4}';
+SELECT 'a.b.c.d.e'::ltree ~ 'a.*{5}.*';
 
 SELECT 'QWER_TY'::ltree ~ 'q%@*';
 SELECT 'QWER_TY'::ltree ~ 'Q_t%@*';

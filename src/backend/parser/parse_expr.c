@@ -2375,6 +2375,15 @@ static Node *
 transformSQLValueFunction(ParseState *pstate, SQLValueFunction *svf)
 {
 	/*
+	 * All SQL value functions are stable so we reject them in check
+	 * constraint expressions.
+	 */
+	if (pstate->p_expr_kind == EXPR_KIND_CHECK_CONSTRAINT)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("mutable functions are not allowed in check constraints")));
+
+	/*
 	 * All we need to do is insert the correct result type and (where needed)
 	 * validate the typmod, so we just modify the node in-place.
 	 */

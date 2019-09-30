@@ -267,6 +267,13 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 							   &nvargs, &vatype,
 							   &declared_arg_types, &argdefaults);
 
+	/* mutable functions are not allowed in constraint expressions */
+	if (pstate->p_expr_kind == EXPR_KIND_CHECK_CONSTRAINT &&
+		func_volatile(funcid) != PROVOLATILE_IMMUTABLE)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("mutable functions are not allowed in constraint expression")));
+
 	cancel_parser_errposition_callback(&pcbstate);
 
 	/*

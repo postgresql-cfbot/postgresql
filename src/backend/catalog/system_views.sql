@@ -964,6 +964,22 @@ CREATE VIEW pg_stat_progress_vacuum AS
     FROM pg_stat_get_progress_info('VACUUM') AS S
         LEFT JOIN pg_database D ON S.datid = D.oid;
 
+CREATE VIEW pg_stat_progress_analyze AS
+    SELECT
+        S.pid AS pid, S.datid AS datid, D.datname AS datname,
+        CAST(S.relid AS oid) AS relid,
+        CAST(CAST(S.param2 AS int) AS boolean) AS include_children,
+        CAST(S.param3 AS oid) AS current_relid,
+        CASE S.param1 WHEN 0 THEN 'initializing'
+                      WHEN 1 THEN 'acquiring sample rows'
+                      WHEN 2 THEN 'computing stats'
+                      WHEN 3 THEN 'computing extended stats'
+                      WHEN 4 THEN 'finalizing analyze'
+                      END AS phase,
+        S.param4 AS sample_blks_total, S.param5 AS heap_blks_scanned
+    FROM pg_stat_get_progress_info('ANALYZE') AS S
+        LEFT JOIN pg_database D ON S.datid = D.oid;
+
 CREATE VIEW pg_stat_progress_cluster AS
     SELECT
         S.pid AS pid,

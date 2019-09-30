@@ -35,6 +35,7 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_statistic_ext.h"
 #include "commands/dbcommands.h"
+#include "commands/progress.h"
 #include "commands/tablecmds.h"
 #include "commands/vacuum.h"
 #include "executor/executor.h"
@@ -251,6 +252,8 @@ analyze_rel(Oid relid, RangeVar *relation,
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 	MyPgXact->vacuumFlags |= PROC_IN_ANALYZE;
 	LWLockRelease(ProcArrayLock);
+	pgstat_progress_start_command(PROGRESS_COMMAND_ANALYZE,
+								  RelationGetRelid(onerel));
 
 	/*
 	 * Do the normal non-recursive ANALYZE.  We can skip this for partitioned
@@ -274,6 +277,8 @@ analyze_rel(Oid relid, RangeVar *relation,
 	 * expose us to concurrent-update failures in update_attstats.)
 	 */
 	relation_close(onerel, NoLock);
+
+	pgstat_progress_end_command();
 
 	/*
 	 * Reset my PGXACT flag.  Note: we need this here, and not in vacuum_rel,
@@ -318,6 +323,11 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 	Oid			save_userid;
 	int			save_sec_context;
 	int			save_nestlevel;
+	const int   st_index[] = {
+		PROGRESS_ANALYZE_PHASE,
+		PROGRESS_ANALYZE_INCLUDE_CHILDREN
+	};
+	int64 st_val[2];
 
 	if (inh)
 		ereport(elevel,
@@ -505,6 +515,10 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 	/*
 	 * Acquire the sample rows
 	 */
+	st_val[0] =	PROGRESS_ANALYZE_PHASE_ACQUIRE_SAMPLE_ROWS;
+	st_val[1] =	inh;
+	pgstat_progress_update_multi_param(2, st_index, st_val);
+
 	rows = (HeapTuple *) palloc(targrows * sizeof(HeapTuple));
 	if (inh)
 		numrows = acquire_inherited_sample_rows(onerel, elevel,
@@ -524,7 +538,10 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 	if (numrows > 0)
 	{
 		MemoryContext col_context,
-					old_context;
+					  old_context;
+
+		pgstat_progress_update_param(PROGRESS_ANALYZE_PHASE,
+									 PROGRESS_ANALYZE_PHASE_COMPUTE_STATS);
 
 		col_context = AllocSetContextCreate(anl_context,
 											"Analyze Column",
@@ -592,9 +609,16 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 		 * not for relations representing inheritance trees.
 		 */
 		if (!inh)
+		{
+			pgstat_progress_update_param(PROGRESS_ANALYZE_PHASE,
+										 PROGRESS_ANALYZE_PHASE_COMPUTE_EXT_STATS);
 			BuildRelationExtStatistics(onerel, totalrows, numrows, rows,
 									   attr_cnt, vacattrstats);
+		}
 	}
+
+	pgstat_progress_update_param(PROGRESS_ANALYZE_PHASE,
+								 PROGRESS_ANALYZE_PHASE_FINALIZE_ANALYZE);
 
 	/*
 	 * Update pages/tuples stats in pg_class ... but not if we're doing
@@ -1034,6 +1058,13 @@ acquire_sample_rows(Relation onerel, int elevel,
 	ReservoirStateData rstate;
 	TupleTableSlot *slot;
 	TableScanDesc scan;
+	BlockNumber	nblocks;
+	BlockNumber	blksdone = 0;
+	const int   sb_index[] = {
+		PROGRESS_ANALYZE_TOTAL_BLOCKS,
+		PROGRESS_ANALYZE_SCANREL
+	};
+	int64 sb_val[2];
 
 	Assert(targrows > 0);
 
@@ -1043,7 +1074,13 @@ acquire_sample_rows(Relation onerel, int elevel,
 	OldestXmin = GetOldestXmin(onerel, PROCARRAY_FLAGS_VACUUM);
 
 	/* Prepare for sampling block numbers */
-	BlockSampler_Init(&bs, totalblocks, targrows, random());
+	nblocks = BlockSampler_Init(&bs, totalblocks, targrows, random());
+
+	/* Report sampling block numbers */
+	sb_val[0] = nblocks;
+	sb_val[1] = RelationGetRelid(onerel);
+	pgstat_progress_update_multi_param(2, sb_index, sb_val);
+
 	/* Prepare for sampling rows */
 	reservoir_init_selection_state(&rstate, targrows);
 
@@ -1104,6 +1141,9 @@ acquire_sample_rows(Relation onerel, int elevel,
 
 			samplerows += 1;
 		}
+
+		pgstat_progress_update_param(PROGRESS_ANALYZE_BLOCKS_DONE,
+									 ++blksdone);
 	}
 
 	ExecDropSingleTupleTableSlot(slot);

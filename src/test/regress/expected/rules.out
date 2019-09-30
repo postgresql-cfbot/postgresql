@@ -1846,6 +1846,24 @@ pg_stat_gssapi| SELECT s.pid,
     s.gss_princ AS principal,
     s.gss_enc AS encrypted
    FROM pg_stat_get_activity(NULL::integer) s(datid, pid, usesysid, application_name, state, query, wait_event_type, wait_event, xact_start, query_start, backend_start, state_change, client_addr, client_hostname, client_port, backend_xid, backend_xmin, backend_type, ssl, sslversion, sslcipher, sslbits, sslcompression, ssl_client_dn, ssl_client_serial, ssl_issuer_dn, gss_auth, gss_princ, gss_enc);
+pg_stat_progress_analyze| SELECT s.pid,
+    s.datid,
+    d.datname,
+    s.relid,
+    ((s.param2)::integer)::boolean AS include_children,
+    (s.param3)::oid AS current_relid,
+        CASE s.param1
+            WHEN 0 THEN 'initializing'::text
+            WHEN 1 THEN 'acquiring sample rows'::text
+            WHEN 2 THEN 'computing stats'::text
+            WHEN 3 THEN 'computing extended stats'::text
+            WHEN 4 THEN 'finalizing analyze'::text
+            ELSE NULL::text
+        END AS phase,
+    s.param4 AS sample_blks_total,
+    s.param5 AS heap_blks_scanned
+   FROM (pg_stat_get_progress_info('ANALYZE'::text) s(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16, param17, param18, param19, param20)
+     LEFT JOIN pg_database d ON ((s.datid = d.oid)));
 pg_stat_progress_cluster| SELECT s.pid,
     s.datid,
     d.datname,

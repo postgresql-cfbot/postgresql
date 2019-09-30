@@ -109,7 +109,12 @@ extern void mark_dummy_rel(RelOptInfo *rel);
 extern bool have_partkey_equi_join(RelOptInfo *joinrel,
 								   RelOptInfo *rel1, RelOptInfo *rel2,
 								   JoinType jointype, List *restrictlist);
-
+extern void try_asymmetric_partitionwise_join(PlannerInfo *root,
+											  RelOptInfo *joinrel,
+											  RelOptInfo *outer_rel,
+											  RelOptInfo *inner_rel,
+											  JoinType jointype,
+											  JoinPathExtraData *extra);
 /*
  * equivclass.c
  *	  routines for managing EquivalenceClasses
@@ -233,6 +238,7 @@ extern PathKey *make_canonical_pathkey(PlannerInfo *root,
 									   EquivalenceClass *eclass, Oid opfamily,
 									   int strategy, bool nulls_first);
 extern void add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
-									List *live_childrels);
+									List *live_childrels,
+									List *original_partitioned_rels);
 
 #endif							/* PATHS_H */

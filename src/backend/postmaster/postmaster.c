@@ -114,6 +114,7 @@
 #include "postmaster/fork_process.h"
 #include "postmaster/pgarch.h"
 #include "postmaster/postmaster.h"
+#include "postmaster/proxy.h"
 #include "postmaster/syslogger.h"
 #include "replication/logicallauncher.h"
 #include "replication/walsender.h"
@@ -196,6 +197,9 @@ BackgroundWorker *MyBgworkerEntry = NULL;
 /* The socket number we are listening for connections on */
 int			PostPortNumber;
 
+/* The socket number we are listening for pooled connections on */
+int			ProxyPortNumber;
+
 /* The directory names for Unix socket(s) */
 char	   *Unix_socket_directories;
 
@@ -216,6 +220,7 @@ int			ReservedBackends;
 /* The socket(s) we're listening to. */
 #define MAXLISTEN	64
 static pgsocket ListenSocket[MAXLISTEN];
+static int      ListenPort[MAXLISTEN];
 
 /*
  * Set by the -o option
@@ -245,6 +250,18 @@ bool		Db_user_namespace = false;
 bool		enable_bonjour = false;
 char	   *bonjour_name;
 bool		restart_after_crash = true;
+
+typedef struct ConnectionProxy
+{
+	int pid;
+	pgsocket socks[2];
+} ConnectionProxy;
+
+ConnectionProxy* ConnectionProxies;
+static bool ConnectionProxiesStarted;
+static int CurrentConnectionProxy; /* index used for round-robin distribution of connections between proxies */
+
+void* (*LibpqConnectdbParams)(char const* keywords[], char const* values[], char** error);
 
 /* PIDs of special child processes; 0 when not running */
 static pid_t StartupPID = 0,
@@ -403,7 +420,6 @@ static void BackendInitialize(Port *port);
 static void BackendRun(Port *port) pg_attribute_noreturn();
 static void ExitPostmaster(int status) pg_attribute_noreturn();
 static int	ServerLoop(void);
-static int	BackendStartup(Port *port);
 static int	ProcessStartupPacket(Port *port, bool secure_done);
 static void SendNegotiateProtocolVersion(List *unrecognized_protocol_options);
 static void processCancelRequest(Port *port, void *pkt);
@@ -425,6 +441,7 @@ static pid_t StartChildProcess(AuxProcType type);
 static void StartAutovacuumWorker(void);
 static void MaybeStartWalReceiver(void);
 static void InitPostmasterDeathWatchHandle(void);
+static void StartProxyWorker(int id);
 
 /*
  * Archiver is allowed to start up at the current postmaster state?
@@ -477,6 +494,8 @@ typedef struct
 {
 	Port		port;
 	InheritableSocket portsocket;
+	InheritableSocket proxySocket;
+	int         proxyId;
 	char		DataDir[MAXPGPATH];
 	pgsocket	ListenSocket[MAXLISTEN];
 	int32		MyCancelKey;
@@ -560,6 +579,48 @@ int			postmaster_alive_fds[2] = {-1, -1};
 HANDLE		PostmasterHandle;
 #endif
 
+static void
+StartConnectionProxies(void)
+{
+	if (SessionPoolSize > 0 && ConnectionProxiesNumber > 0 && !ConnectionProxiesStarted)
+	{
+		int i;
+		if (ConnectionProxies == NULL)
+		{
+			ConnectionProxies = malloc(sizeof(ConnectionProxy)*ConnectionProxiesNumber);
+			for (i = 0; i < ConnectionProxiesNumber; i++)
+			{
+				if (socketpair(AF_UNIX, SOCK_STREAM, 0, ConnectionProxies[i].socks) < 0)
+					ereport(FATAL,
+							(errcode_for_file_access(),
+							 errmsg_internal("could not create socket pair for launching sessions: %m")));
+			}
+		}
+		for (i = 0; i < ConnectionProxiesNumber; i++)
+		{
+			StartProxyWorker(i);
+		}
+		ConnectionProxiesStarted = true;
+	}
+}
+
+/*
+ * Send signal to connection proxies
+ */
+static void
+StopConnectionProxies(int signal)
+{
+	if (ConnectionProxiesStarted)
+	{
+		int i;
+		for (i = 0; i < ConnectionProxiesNumber; i++)
+		{
+			signal_child(ConnectionProxies[i].pid, signal);
+		}
+		ConnectionProxiesStarted = false;
+	}
+}
+
 /*
  * Postmaster main entry point
  */
@@ -572,6 +633,9 @@ PostmasterMain(int argc, char *argv[])
 	bool		listen_addr_saved = false;
 	int			i;
 	char	   *output_config_variable = NULL;
+	bool        contains_localhost = false;
+	int         ports[2];
+	int         n_ports = 0;
 
 	InitProcessGlobals();
 
@@ -1114,6 +1178,11 @@ PostmasterMain(int argc, char *argv[])
 
 	on_proc_exit(CloseServerPorts, 0);
 
+	/* Listen on proxy socket only if session pooling is enabled */
+	if (ProxyPortNumber > 0 && ConnectionProxiesNumber > 0 && SessionPoolSize > 0)
+		ports[n_ports++] = ProxyPortNumber;
+	ports[n_ports++] = PostPortNumber;
+
 	if (ListenAddresses)
 	{
 		char	   *rawstring;
@@ -1137,32 +1206,36 @@ PostmasterMain(int argc, char *argv[])
 		foreach(l, elemlist)
 		{
 			char	   *curhost = (char *) lfirst(l);
-
-			if (strcmp(curhost, "*") == 0)
-				status = StreamServerPort(AF_UNSPEC, NULL,
-										  (unsigned short) PostPortNumber,
-										  NULL,
-										  ListenSocket, MAXLISTEN);
-			else
-				status = StreamServerPort(AF_UNSPEC, curhost,
-										  (unsigned short) PostPortNumber,
-										  NULL,
-										  ListenSocket, MAXLISTEN);
-
-			if (status == STATUS_OK)
+			for (i = 0; i < n_ports; i++)
 			{
-				success++;
-				/* record the first successful host addr in lockfile */
-				if (!listen_addr_saved)
+				int port = ports[i];
+				if (strcmp(curhost, "*") == 0)
+					status = StreamServerPort(AF_UNSPEC, NULL,
+											  (unsigned short) port,
+											  NULL,
+											  ListenSocket, ListenPort, MAXLISTEN);
+				else
+					status = StreamServerPort(AF_UNSPEC, curhost,
+											  (unsigned short) port,
+											  NULL,
+											  ListenSocket, ListenPort, MAXLISTEN);
+				contains_localhost |= strcmp(curhost, "localhost") == 0;
+
+				if (status == STATUS_OK)
 				{
-					AddToDataDirLockFile(LOCK_FILE_LINE_LISTEN_ADDR, curhost);
-					listen_addr_saved = true;
+					success++;
+					/* record the first successful host addr in lockfile */
+					if (!listen_addr_saved)
+					{
+						AddToDataDirLockFile(LOCK_FILE_LINE_LISTEN_ADDR, curhost);
+						listen_addr_saved = true;
+					}
 				}
+				else
+					ereport(WARNING,
+							(errmsg("could not create listen socket for \"%s\"",
+									curhost)));
 			}
-			else
-				ereport(WARNING,
-						(errmsg("could not create listen socket for \"%s\"",
-								curhost)));
 		}
 
 		if (!success && elemlist != NIL)
@@ -1231,29 +1304,32 @@ PostmasterMain(int argc, char *argv[])
 					 errmsg("invalid list syntax in parameter \"%s\"",
 							"unix_socket_directories")));
 		}
-
+		contains_localhost = true;
 		foreach(l, elemlist)
 		{
 			char	   *socketdir = (char *) lfirst(l);
-
-			status = StreamServerPort(AF_UNIX, NULL,
-									  (unsigned short) PostPortNumber,
-									  socketdir,
-									  ListenSocket, MAXLISTEN);
-
-			if (status == STATUS_OK)
+			for (i = 0; i < n_ports; i++)
 			{
-				success++;
-				/* record the first successful Unix socket in lockfile */
-				if (success == 1)
-					AddToDataDirLockFile(LOCK_FILE_LINE_SOCKET_DIR, socketdir);
-			}
-			else
-				ereport(WARNING,
-						(errmsg("could not create Unix-domain socket in directory \"%s\"",
-								socketdir)));
-		}
+				int port = ports[i];
 
+				status = StreamServerPort(AF_UNIX, NULL,
+										  (unsigned short) port,
+										  socketdir,
+										  ListenSocket, ListenPort, MAXLISTEN);
+
+				if (status == STATUS_OK)
+				{
+					success++;
+					/* record the first successful Unix socket in lockfile */
+					if (success == 1)
+						AddToDataDirLockFile(LOCK_FILE_LINE_SOCKET_DIR, socketdir);
+				}
+				else
+					ereport(WARNING,
+							(errmsg("could not create Unix-domain socket in directory \"%s\"",
+									socketdir)));
+			}
+		}
 		if (!success && elemlist != NIL)
 			ereport(FATAL,
 					(errmsg("could not create any Unix-domain sockets")));
@@ -1262,6 +1338,20 @@ PostmasterMain(int argc, char *argv[])
 		pfree(rawstring);
 	}
 #endif
+
+	if (!contains_localhost && ProxyPortNumber > 0)
+	{
+		/* we need to accept local connections from proxy */
+		status = StreamServerPort(AF_UNSPEC, "localhost",
+								  (unsigned short) PostPortNumber,
+								  NULL,
+								  ListenSocket, ListenPort, MAXLISTEN);
+		if (status != STATUS_OK)
+		{
+			ereport(WARNING,
+					(errmsg("could not create listen socket for localhost")));
+		}
+	}
 
 	/*
 	 * check that we have some socket to listen on
@@ -1387,6 +1477,8 @@ PostmasterMain(int argc, char *argv[])
 
 	/* Some workers may be scheduled to start now */
 	maybe_start_bgworkers();
+
+	StartConnectionProxies();
 
 	status = ServerLoop();
 
@@ -1625,6 +1717,57 @@ DetermineSleepTime(struct timeval *timeout)
 	}
 }
 
+/**
+ * This function tries to estimate workload of proxy.
+ * We have a lot of information about proxy state in ProxyState array:
+ * total number of clients, SSL clients, backends, traffic, number of transactions,...
+ * So in principle it is possible to implement much more sophisticated evaluation function,
+ * but right now we take in account only number of clients and SSL connections (which requires much more CPU)
+ */
+static uint64
+GetConnectionProxyWorkload(int id)
+{
+	return ProxyState[id].n_clients + ProxyState[id].n_ssl_clients*3;
+}
+
+/**
+ * Choose connection pool for this session.
+ * Right now sessions can not be moved between pools (in principle it is not so difficult to implement it),
+ * so to support order balancing we should do some smart work here.
+ */
+static ConnectionProxy*
+SelectConnectionProxy(void)
+{
+	int i;
+	uint64 min_workload;
+	int least_loaded_proxy;
+
+	switch (SessionSchedule)
+	{
+	  case SESSION_SCHED_ROUND_ROBIN:
+		return &ConnectionProxies[CurrentConnectionProxy++ % ConnectionProxiesNumber];
+	  case SESSION_SCHED_RANDOM:
+		return &ConnectionProxies[random() % ConnectionProxiesNumber];
+	  case SESSION_SCHED_LOAD_BALANCING:
+		min_workload = GetConnectionProxyWorkload(0);
+		least_loaded_proxy = 0;
+		for (i = 1; i < ConnectionProxiesNumber; i++)
+		{
+			int workload = GetConnectionProxyWorkload(i);
+			if (workload < min_workload)
+			{
+				min_workload = workload;
+				least_loaded_proxy = i;
+			}
+		}
+		return &ConnectionProxies[least_loaded_proxy];
+	  default:
+		Assert(false);
+	}
+	return NULL;
+}
+
+
 /*
  * Main idle loop of postmaster
  *
@@ -1715,8 +1858,18 @@ ServerLoop(void)
 					port = ConnCreate(ListenSocket[i]);
 					if (port)
 					{
-						BackendStartup(port);
-
+						if (ConnectionProxies && ListenPort[i] == ProxyPortNumber)
+						{
+							ConnectionProxy* proxy = SelectConnectionProxy();
+							if (pg_send_sock(proxy->socks[0], port->sock, proxy->pid) < 0)
+							{
+								elog(LOG, "could not send socket to connection pool: %m");
+							}
+						}
+						else
+						{
+							BackendStartup(port, NULL);
+						}
 						/*
 						 * We no longer need the open socket or port structure
 						 * in this process
@@ -1913,8 +2066,6 @@ ProcessStartupPacket(Port *port, bool secure_done)
 {
 	int32		len;
 	void	   *buf;
-	ProtocolVersion proto;
-	MemoryContext oldcontext;
 
 	pq_startmsgread();
 
@@ -1980,6 +2131,18 @@ ProcessStartupPacket(Port *port, bool secure_done)
 		return STATUS_ERROR;
 	}
 	pq_endmsgread();
+
+	return ParseStartupPacket(port, TopMemoryContext, buf, len, secure_done);
+}
+
+int
+ParseStartupPacket(Port *port, MemoryContext memctx, void* buf, int len, bool secure_done)
+{
+	ProtocolVersion proto;
+	MemoryContext oldcontext;
+
+	am_walsender = false;
+	am_db_walsender = false;
 
 	/*
 	 * The first field is either a protocol version number or a special
@@ -2081,7 +2244,7 @@ retry1:
 	 * not worry about leaking this storage on failure, since we aren't in the
 	 * postmaster process anymore.
 	 */
-	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+	oldcontext = MemoryContextSwitchTo(memctx);
 
 	if (PG_PROTOCOL_MAJOR(proto) >= 3)
 	{
@@ -2752,6 +2915,8 @@ pmdie(SIGNAL_ARGS)
 				if (WalWriterPID != 0)
 					signal_child(WalWriterPID, SIGTERM);
 
+				StopConnectionProxies(SIGTERM);
+
 				/*
 				 * If we're in recovery, we can't kill the startup process
 				 * right away, because at present doing so does not release
@@ -2829,6 +2994,9 @@ pmdie(SIGNAL_ARGS)
 				/* and the walwriter too */
 				if (WalWriterPID != 0)
 					signal_child(WalWriterPID, SIGTERM);
+
+				StopConnectionProxies(SIGTERM);
+
 				pmState = PM_WAIT_BACKENDS;
 			}
 
@@ -4069,6 +4237,7 @@ TerminateChildren(int signal)
 		signal_child(PgArchPID, signal);
 	if (PgStatPID != 0)
 		signal_child(PgStatPID, signal);
+	StopConnectionProxies(signal);
 }
 
 /*
@@ -4078,8 +4247,8 @@ TerminateChildren(int signal)
  *
  * Note: if you change this code, also consider StartAutovacuumWorker.
  */
-static int
-BackendStartup(Port *port)
+int
+BackendStartup(Port *port, int* backend_pid)
 {
 	Backend    *bn;				/* for backend cleanup */
 	pid_t		pid;
@@ -4183,6 +4352,8 @@ BackendStartup(Port *port)
 	if (!bn->dead_end)
 		ShmemBackendArrayAdd(bn);
 #endif
+	if (backend_pid)
+		*backend_pid = pid;
 
 	return STATUS_OK;
 }
@@ -4879,6 +5050,7 @@ SubPostmasterMain(int argc, char *argv[])
 	if (strcmp(argv[1], "--forkbackend") == 0 ||
 		strcmp(argv[1], "--forkavlauncher") == 0 ||
 		strcmp(argv[1], "--forkavworker") == 0 ||
+		strcmp(argv[1], "--forkproxy") == 0 ||
 		strcmp(argv[1], "--forkboot") == 0 ||
 		strncmp(argv[1], "--forkbgworker=", 15) == 0)
 		PGSharedMemoryReAttach();
@@ -5018,6 +5190,19 @@ SubPostmasterMain(int argc, char *argv[])
 		CreateSharedMemoryAndSemaphores();
 
 		AutoVacWorkerMain(argc - 2, argv + 2);	/* does not return */
+	}
+	if (strcmp(argv[1], "--forkproxy") == 0)
+	{
+		/* Restore basic shared memory pointers */
+		InitShmemAccess(UsedShmemSegAddr);
+
+		/* Need a PGPROC to run CreateSharedMemoryAndSemaphores */
+		InitProcess();
+
+		/* Attach process to shared data structures */
+		CreateSharedMemoryAndSemaphores(0);
+
+		ConnectionProxyMain(argc - 2, argv + 2);	/* does not return */
 	}
 	if (strncmp(argv[1], "--forkbgworker=", 15) == 0)
 	{
@@ -5551,6 +5736,74 @@ StartAutovacuumWorker(void)
 		AutoVacWorkerFailed();
 		avlauncher_needs_signal = true;
 	}
+}
+
+/*
+ * StartProxyWorker
+ *		Start an proxy worker process.
+ *
+ * This function is here because it enters the resulting PID into the
+ * postmaster's private backends list.
+ *
+ * NB -- this code very roughly matches BackendStartup.
+ */
+static void
+StartProxyWorker(int id)
+{
+	Backend    *bn;
+	int         pid;
+
+	/*
+	 * Compute the cancel key that will be assigned to this session. We
+	 * probably don't need cancel keys for autovac workers, but we'd
+	 * better have something random in the field to prevent unfriendly
+	 * people from sending cancels to them.
+	 */
+	if (!RandomCancelKey(&MyCancelKey))
+	{
+		ereport(LOG,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("could not generate random cancel key")));
+		return   ;
+	}
+	bn = (Backend *) malloc(sizeof(Backend));
+	if (bn)
+	{
+		bn->cancel_key = MyCancelKey;
+
+		/* Autovac workers are not dead_end and need a child slot */
+		bn->dead_end = false;
+		bn->child_slot = MyPMChildSlot = AssignPostmasterChildSlot();
+		bn->bgworker_notify = false;
+
+		MyProxyId = id;
+		MyProxySocket = ConnectionProxies[id].socks[1];
+		pid = ConnectionProxyStart();
+		if (pid > 0)
+		{
+			bn->pid = pid;
+			bn->bkend_type = BACKEND_TYPE_BGWORKER;
+			dlist_push_head(&BackendList, &bn->elem);
+#ifdef EXEC_BACKEND
+			ShmemBackendArrayAdd(bn);
+#endif
+			/* all OK */
+			ConnectionProxies[id].pid = pid;
+			ProxyState[id].pid = pid;
+			return;
+		}
+
+		/*
+		 * fork failed, fall through to report -- actual error message was
+		 * logged by ConnectionProxyStart
+		 */
+		(void) ReleasePostmasterChildSlot(bn->child_slot);
+		free(bn);
+	}
+	else
+		ereport(LOG,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory")));
 }
 
 /*
@@ -6144,6 +6397,10 @@ save_backend_variables(BackendParameters *param, Port *port,
 
 	strlcpy(param->ExtraOptions, ExtraOptions, MAXPGPATH);
 
+	if (!write_inheritable_socket(&param->proxySocket, MyProxySocket, childPid))
+		return false;
+	param->proxyId = MyProxyId;
+
 	return true;
 }
 
@@ -6375,6 +6632,9 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	strlcpy(pkglib_path, param->pkglib_path, MAXPGPATH);
 
 	strlcpy(ExtraOptions, param->ExtraOptions, MAXPGPATH);
+
+	read_inheritable_socket(&MyProxySocket, &param->proxySocket);
+	MyProxyId = param->proxyId;
 }
 
 

@@ -158,6 +158,7 @@
   &maintenance;
   &backup;
   &high-availability;
+  &connpool;
   &monitoring;
   &diskusage;
   &wal;

@@ -505,13 +505,29 @@ AppendAttributeTuples(Relation indexRelation, int numatts)
 	 */
 	indexTupDesc = RelationGetDescr(indexRelation);
 
-	for (i = 0; i < numatts; i++)
+	/*
+	 * If we only have a single attribute we can use the single tuple insert
+	 * function which avoids multi_insert scaffolding costs.
+	 */
+	if (numatts == 1)
 	{
-		Form_pg_attribute attr = TupleDescAttr(indexTupDesc, i);
-
-		Assert(attr->attnum == i + 1);
+		Form_pg_attribute attr = TupleDescAttr(indexTupDesc, 0);
 
 		InsertPgAttributeTuple(pg_attribute, attr, indstate);
+	}
+	else
+	{
+		Form_pg_attribute *attrs = palloc(sizeof(Form_pg_attribute) * numatts);
+
+		for (i = 0; i < numatts; i++)
+		{
+			attrs[i] = TupleDescAttr(indexTupDesc, i);
+
+			Assert(attrs[i]->attnum == i + 1);
+		}
+
+		InsertPgAttributeTuples(pg_attribute, *attrs, numatts, indstate);
+		pfree(attrs);
 	}
 
 	CatalogCloseIndexes(indstate);
@@ -1027,10 +1043,13 @@ index_create(Relation heapRelation,
 	{
 		ObjectAddress myself,
 					referenced;
+		ObjectAddresses *refobjs;
 
 		myself.classId = RelationRelationId;
 		myself.objectId = indexRelationId;
 		myself.objectSubId = 0;
+
+		refobjs = new_object_addresses();
 
 		if ((flags & INDEX_CREATE_ADD_CONSTRAINT) != 0)
 		{
@@ -1070,12 +1089,9 @@ index_create(Relation heapRelation,
 			{
 				if (indexInfo->ii_IndexAttrNumbers[i] != 0)
 				{
-					referenced.classId = RelationRelationId;
-					referenced.objectId = heapRelationId;
-					referenced.objectSubId = indexInfo->ii_IndexAttrNumbers[i];
-
-					recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
-
+					add_object_address(OCLASS_CLASS, heapRelationId,
+									   indexInfo->ii_IndexAttrNumbers[i],
+									   refobjs);
 					have_simple_col = true;
 				}
 			}
@@ -1093,6 +1109,11 @@ index_create(Relation heapRelation,
 				referenced.objectSubId = 0;
 
 				recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+			}
+			else
+			{
+				record_object_address_dependencies(&myself, refobjs, DEPENDENCY_AUTO);
+				reset_object_addresses(refobjs);
 			}
 		}
 
@@ -1124,23 +1145,16 @@ index_create(Relation heapRelation,
 			if (OidIsValid(collationObjectId[i]) &&
 				collationObjectId[i] != DEFAULT_COLLATION_OID)
 			{
-				referenced.classId = CollationRelationId;
-				referenced.objectId = collationObjectId[i];
-				referenced.objectSubId = 0;
-
-				recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+				add_object_address(OCLASS_COLLATION, collationObjectId[i], 0,
+								   refobjs);
 			}
 		}
 
 		/* Store dependency on operator classes */
 		for (i = 0; i < indexInfo->ii_NumIndexKeyAttrs; i++)
-		{
-			referenced.classId = OperatorClassRelationId;
-			referenced.objectId = classObjectId[i];
-			referenced.objectSubId = 0;
+			add_object_address(OCLASS_OPCLASS, classObjectId[i], 0, refobjs);
 
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-		}
+		record_object_address_dependencies(&myself, refobjs, DEPENDENCY_NORMAL);
 
 		/* Store dependencies on anything mentioned in index expressions */
 		if (indexInfo->ii_Expressions)
@@ -1161,6 +1175,8 @@ index_create(Relation heapRelation,
 											DEPENDENCY_NORMAL,
 											DEPENDENCY_AUTO, false);
 		}
+
+		free_object_addresses(refobjs);
 	}
 	else
 	{

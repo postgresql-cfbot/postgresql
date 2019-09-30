@@ -983,7 +983,8 @@ DecodeMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 		/* move to the next xl_multi_insert_tuple entry */
 		data += datalen;
 	}
-	Assert(data == tupledata + tuplelen);
+	Assert(xlrec->flags & XLH_INSERT_CONTAINS_NEW_TUPLE &&
+		   data == tupledata + tuplelen);
 }
 
 /*

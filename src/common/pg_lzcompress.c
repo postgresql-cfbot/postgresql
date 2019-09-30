@@ -771,3 +771,30 @@ pglz_decompress(const char *source, int32 slen, char *dest,
 	 */
 	return (char *) dp - dest;
 }
+
+
+/* ----------
+ * pglz_max_compressed_size -
+ *
+ *		Calculate the maximum compressed size for a given amount of raw data.
+ *		Return the maximum size, or total compressed size if maximum size is
+ *		larger than total compressed size.
+ * ----------
+ */
+int32
+pglz_maximum_compressed_size(int32 rawsize, int32 total_compressed_size)
+{
+	int32 compressed_size;
+
+	/*
+	 * Use int64 to prevent overflow during calculation.
+	 */
+	compressed_size = (int32) ((int64) rawsize * 9 + 8) / 8;
+
+	/*
+	 * Maximum compressed size can't be larger than total compressed size.
+	 */
+	compressed_size = Min(compressed_size, total_compressed_size);
+
+	return compressed_size;
+}

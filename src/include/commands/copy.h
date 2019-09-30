@@ -41,4 +41,8 @@ extern uint64 CopyFrom(CopyState cstate);
 
 extern DestReceiver *CreateCopyDestReceiver(void);
 
+extern void EnableParallelCopy(CopyState cstate,
+							   uint64 parallel_step_size,
+							   pg_atomic_uint64 *next_parallel_step_offset);
+
 #endif							/* COPY_H */

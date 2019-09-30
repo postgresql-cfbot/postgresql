@@ -29,8 +29,10 @@
 #include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
+#include "optimizer/paths.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
 #include "utils/memutils.h"
@@ -38,6 +40,9 @@
 #include "utils/sampling.h"
 
 PG_MODULE_MAGIC;
+
+/* The size of the chunks used for parallel scans, in bytes. */
+#define PARALLEL_STEP_SIZE 8192
 
 /*
  * Describes the valid options for objects that use this wrapper.
@@ -105,6 +110,8 @@ typedef struct FileFdwExecutionState
 	List	   *options;		/* merged COPY options, excluding filename and
 								 * is_program */
 	CopyState	cstate;			/* COPY execution state */
+
+	pg_atomic_uint64 *next_parallel_step_offset;
 } FileFdwExecutionState;
 
 /*
@@ -139,6 +146,17 @@ static bool fileAnalyzeForeignTable(Relation relation,
 									BlockNumber *totalpages);
 static bool fileIsForeignScanParallelSafe(PlannerInfo *root, RelOptInfo *rel,
 										  RangeTblEntry *rte);
+static Size fileEstimateDSMForeignScan(ForeignScanState *node,
+									   ParallelContext *pcxt);
+static void fileInitializeDSMForeignScan(ForeignScanState *node,
+										 ParallelContext *pcxt,
+										 void *coordinate);
+static void fileReInitializeDSMForeignScan(ForeignScanState *node,
+										   ParallelContext *pcxt,
+										   void *coordinate);
+static void fileInitializeWorkerForeignScan(ForeignScanState *node,
+											shm_toc *toc,
+											void *coordinate);
 
 /*
  * Helper functions
@@ -181,6 +199,10 @@ file_fdw_handler(PG_FUNCTION_ARGS)
 	fdwroutine->EndForeignScan = fileEndForeignScan;
 	fdwroutine->AnalyzeForeignTable = fileAnalyzeForeignTable;
 	fdwroutine->IsForeignScanParallelSafe = fileIsForeignScanParallelSafe;
+	fdwroutine->EstimateDSMForeignScan = fileEstimateDSMForeignScan;
+	fdwroutine->InitializeDSMForeignScan = fileInitializeDSMForeignScan;
+	fdwroutine->ReInitializeDSMForeignScan = fileReInitializeDSMForeignScan;
+	fdwroutine->InitializeWorkerForeignScan = fileInitializeWorkerForeignScan;
 
 	PG_RETURN_POINTER(fdwroutine);
 }
@@ -537,6 +559,9 @@ fileGetForeignPaths(PlannerInfo *root,
 	Cost		total_cost;
 	List	   *columns;
 	List	   *coptions = NIL;
+	ForeignPath *partial_path;
+	double		parallel_divisor;
+	int			parallel_workers;
 
 	/* Decide whether to selectively perform binary conversion */
 	if (check_selective_binary_conversion(baserel,
@@ -574,6 +599,29 @@ fileGetForeignPaths(PlannerInfo *root,
 	 * appropriate pathkeys into the ForeignPath node to tell the planner
 	 * that.
 	 */
+
+	/* Should we add a partial path to enable a parallel scan? */
+	if (baserel->consider_parallel && !fdw_private->is_program)
+	{
+		partial_path = create_foreignscan_path(root, baserel, NULL,
+											   baserel->rows,
+											   startup_cost,
+											   total_cost,
+											   NIL, NULL, NULL, coptions);
+
+		parallel_workers = compute_parallel_worker(baserel,
+												   fdw_private->pages, -1,
+												   max_parallel_workers_per_gather);
+		partial_path->path.parallel_workers = parallel_workers;
+		partial_path->path.parallel_aware = true;
+		partial_path->path.parallel_safe = true;
+		parallel_divisor = get_parallel_divisor(&partial_path->path);
+		partial_path->path.rows /= parallel_divisor;
+		partial_path->path.total_cost = startup_cost +
+			((total_cost - startup_cost) / parallel_divisor);
+		if (parallel_workers > 0)
+			add_partial_path(baserel, (Path *) partial_path);
+	}
 }
 
 /*
@@ -686,7 +734,7 @@ fileBeginForeignScan(ForeignScanState *node, int eflags)
 	 * Save state in node->fdw_state.  We must save enough information to call
 	 * BeginCopyFrom() again.
 	 */
-	festate = (FileFdwExecutionState *) palloc(sizeof(FileFdwExecutionState));
+	festate = (FileFdwExecutionState *) palloc0(sizeof(FileFdwExecutionState));
 	festate->filename = filename;
 	festate->is_program = is_program;
 	festate->options = options;
@@ -1222,4 +1270,40 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 					*totalrows, numrows)));
 
 	return numrows;
+}
+
+static Size
+fileEstimateDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt)
+{
+	return sizeof(pg_atomic_uint64);
+}
+
+static void
+fileInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt,
+							 void *coordinate)
+{
+	FileFdwExecutionState *festate = (FileFdwExecutionState *) node->fdw_state;
+
+	EnableParallelCopy(festate->cstate, PARALLEL_STEP_SIZE,
+					   (pg_atomic_uint64 *) coordinate);
+}
+
+static void
+fileReInitializeDSMForeignScan(ForeignScanState *node, ParallelContext *pcxt,
+							   void *coordinate)
+{
+	pg_atomic_uint64 *next_parallel_step_offset =
+		(pg_atomic_uint64 *) coordinate;
+
+	pg_atomic_write_u64(next_parallel_step_offset, 0);
+}
+
+static void
+fileInitializeWorkerForeignScan(ForeignScanState *node, shm_toc *toc,
+								void *coordinate)
+{
+	FileFdwExecutionState *festate = (FileFdwExecutionState *) node->fdw_state;
+
+	EnableParallelCopy(festate->cstate, PARALLEL_STEP_SIZE,
+					   (pg_atomic_uint64 *) coordinate);
 }

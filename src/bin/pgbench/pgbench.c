@@ -231,6 +231,9 @@ const char *progname;
 
 volatile bool timer_exceeded = false;	/* flag from signal handler */
 
+int	maintenance_work_mem = 0; 	/* maintenance_work_mem for initialization */
+bool copy_freeze = false; 		/* do copy freeze */
+
 /*
  * Variable definitions.
  *
@@ -652,6 +655,8 @@ usage(void)
 		   "  --random-seed=SEED       set random seed (\"time\", \"rand\", integer)\n"
 		   "  --sampling-rate=NUM      fraction of transactions to log (e.g., 0.01 for 1%%)\n"
 		   "  --show-script=NAME       show builtin script code, then exit\n"
+		   "  --maintenance-work-mem   maintenance_work_mem in MB for init\n"
+		   "  --copy-freeze   		   perform copy freeze\n"
 		   "\nCommon options:\n"
 		   "  -d, --debug              print debugging output\n"
 		   "  -h, --host=HOSTNAME      database server host or socket directory\n"
@@ -690,6 +695,19 @@ is_an_int(const char *str)
 	return *ptr == '\0';
 }
 
+static const char *
+appendMemory(const char *sql)
+{
+	char *memory;
+
+	if (maintenance_work_mem == 0)
+		return sql;
+
+	memory = psprintf("set maintenance_work_mem to '%dMB'",
+					  maintenance_work_mem);
+
+	return psprintf("%s; %s;", memory, sql);
+}
 
 /*
  * strtoint64 -- convert a string to 64-bit integer
@@ -3705,6 +3723,8 @@ initGenerateData(PGconn *con)
 	double		elapsed_sec,
 				remaining_sec;
 	int			log_interval = 1;
+	const char 	*copy_sql = "copy pgbench_accounts from stdin";
+	const char 	*copy_freeze_sql = "copy pgbench_accounts from stdin freeze";
 
 	fprintf(stderr, "generating data...\n");
 
@@ -3749,7 +3769,7 @@ initGenerateData(PGconn *con)
 	/*
 	 * accounts is big enough to be worth using COPY and tracking runtime
 	 */
-	res = PQexec(con, "copy pgbench_accounts from stdin");
+	res = PQexec(con, appendMemory(copy_freeze ? copy_freeze_sql : copy_sql));
 	if (PQresultStatus(res) != PGRES_COPY_IN)
 	{
 		fprintf(stderr, "%s", PQerrorMessage(con));
@@ -3857,7 +3877,7 @@ initCreatePKeys(PGconn *con)
 	{
 		char		buffer[256];
 
-		strlcpy(buffer, DDLINDEXes[i], sizeof(buffer));
+		strlcpy(buffer, appendMemory(DDLINDEXes[i]), sizeof(buffer));
 
 		if (index_tablespace != NULL)
 		{
@@ -5126,6 +5146,8 @@ main(int argc, char **argv)
 		{"foreign-keys", no_argument, NULL, 8},
 		{"random-seed", required_argument, NULL, 9},
 		{"show-script", required_argument, NULL, 10},
+		{"maintenance-work-mem", required_argument, NULL, 11},
+		{"copy-freeze", no_argument, NULL, 12},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -5485,6 +5507,18 @@ main(int argc, char **argv)
 					fprintf(stderr, "-- %s: %s\n%s\n", s->name, s->desc, s->script);
 					exit(0);
 				}
+				break;
+			case 11:			/* maintenance-work-mem */
+				maintenance_work_mem = atoi(optarg);
+				if (maintenance_work_mem <= 0)
+				{
+					fprintf(stderr, "invalid maintenance_work_mem: \"%s\"\n",
+							optarg);
+					exit(1);
+				}
+				break;
+			case 12:			/* copy-freeze */
+				copy_freeze = true;
 				break;
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);

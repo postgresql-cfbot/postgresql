@@ -158,6 +158,15 @@ static relopt_bool boolRelOpts[] =
 		},
 		true
 	},
+	{
+		{
+			"vacuum_resume",
+			"Enables vacuum to resume vacuuming from the last vacuumed block",
+			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		},
+		false
+	},
 	/* list terminator */
 	{{NULL}}
 };
@@ -1518,7 +1527,9 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"vacuum_index_cleanup", RELOPT_TYPE_BOOL,
 		offsetof(StdRdOptions, vacuum_index_cleanup)},
 		{"vacuum_truncate", RELOPT_TYPE_BOOL,
-		offsetof(StdRdOptions, vacuum_truncate)}
+		offsetof(StdRdOptions, vacuum_truncate)},
+		{"vacuum_resume", RELOPT_TYPE_BOOL,
+		offsetof(StdRdOptions, vacuum_resume)}
 	};
 
 	options = parseRelOptions(reloptions, validate, kind, &numoptions);

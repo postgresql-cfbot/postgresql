@@ -65,7 +65,7 @@ static void ExecInitFunc(ExprEvalStep *scratch, Expr *node, List *args,
 static void ExecInitExprSlots(ExprState *state, Node *node);
 static void ExecPushExprSlots(ExprState *state, LastAttnumInfo *info);
 static bool get_last_attnums_walker(Node *node, LastAttnumInfo *info);
-static void ExecComputeSlotInfo(ExprState *state, ExprEvalStep *op);
+static bool ExecComputeFetchOpInfo(ExprState *state, ExprEvalStep *op);
 static void ExecInitWholeRowVar(ExprEvalStep *scratch, Var *variable,
 								ExprState *state);
 static void ExecInitSubscriptingRef(ExprEvalStep *scratch,
@@ -2273,6 +2273,7 @@ static void
 ExecPushExprSlots(ExprState *state, LastAttnumInfo *info)
 {
 	ExprEvalStep scratch = {0};
+	bool		 deform_step_required;
 
 	scratch.resvalue = NULL;
 	scratch.resnull = NULL;
@@ -2285,8 +2286,9 @@ ExecPushExprSlots(ExprState *state, LastAttnumInfo *info)
 		scratch.d.fetch.fixed = false;
 		scratch.d.fetch.kind = NULL;
 		scratch.d.fetch.known_desc = NULL;
-		ExecComputeSlotInfo(state, &scratch);
-		ExprEvalPushStep(state, &scratch);
+		deform_step_required = ExecComputeFetchOpInfo(state, &scratch);
+		if (deform_step_required)
+			ExprEvalPushStep(state, &scratch);
 	}
 	if (info->last_outer > 0)
 	{
@@ -2295,8 +2297,9 @@ ExecPushExprSlots(ExprState *state, LastAttnumInfo *info)
 		scratch.d.fetch.fixed = false;
 		scratch.d.fetch.kind = NULL;
 		scratch.d.fetch.known_desc = NULL;
-		ExecComputeSlotInfo(state, &scratch);
-		ExprEvalPushStep(state, &scratch);
+		deform_step_required = ExecComputeFetchOpInfo(state, &scratch);
+		if (deform_step_required)
+			ExprEvalPushStep(state, &scratch);
 	}
 	if (info->last_scan > 0)
 	{
@@ -2305,8 +2308,9 @@ ExecPushExprSlots(ExprState *state, LastAttnumInfo *info)
 		scratch.d.fetch.fixed = false;
 		scratch.d.fetch.kind = NULL;
 		scratch.d.fetch.known_desc = NULL;
-		ExecComputeSlotInfo(state, &scratch);
-		ExprEvalPushStep(state, &scratch);
+		deform_step_required = ExecComputeFetchOpInfo(state, &scratch);
+		if (deform_step_required)
+			ExprEvalPushStep(state, &scratch);
 	}
 }
 
@@ -2364,14 +2368,17 @@ get_last_attnums_walker(Node *node, LastAttnumInfo *info)
  * The goal is to determine whether a slot is 'fixed', that is, every
  * evaluation of the expression will have the same type of slot, with an
  * equivalent descriptor.
+ *
+ * Returns true if the the deforming step is required, false otherwise.
  */
-static void
-ExecComputeSlotInfo(ExprState *state, ExprEvalStep *op)
+static bool
+ExecComputeFetchOpInfo(ExprState *state, ExprEvalStep *op)
 {
 	PlanState  *parent = state->parent;
 	TupleDesc	desc = NULL;
 	const TupleTableSlotOps *tts_ops = NULL;
 	bool		isfixed = false;
+	ExprEvalOp	opcode = op->opcode;
 
 	if (op->d.fetch.known_desc != NULL)
 	{
@@ -2383,7 +2390,7 @@ ExecComputeSlotInfo(ExprState *state, ExprEvalStep *op)
 	{
 		isfixed = false;
 	}
-	else if (op->opcode == EEOP_INNER_FETCHSOME)
+	else if (opcode == EEOP_INNER_FETCHSOME)
 	{
 		PlanState  *is = innerPlanState(parent);
 
@@ -2403,7 +2410,7 @@ ExecComputeSlotInfo(ExprState *state, ExprEvalStep *op)
 			desc = ExecGetResultType(is);
 		}
 	}
-	else if (op->opcode == EEOP_OUTER_FETCHSOME)
+	else if (opcode == EEOP_OUTER_FETCHSOME)
 	{
 		PlanState  *os = outerPlanState(parent);
 
@@ -2423,7 +2430,7 @@ ExecComputeSlotInfo(ExprState *state, ExprEvalStep *op)
 			desc = ExecGetResultType(os);
 		}
 	}
-	else if (op->opcode == EEOP_SCAN_FETCHSOME)
+	else if (opcode == EEOP_SCAN_FETCHSOME)
 	{
 		desc = parent->scandesc;
 
@@ -2446,6 +2453,12 @@ ExecComputeSlotInfo(ExprState *state, ExprEvalStep *op)
 		op->d.fetch.kind = NULL;
 		op->d.fetch.known_desc = NULL;
 	}
+
+	/* if the slot is known to always virtual we never need to deform */
+	if (op->d.fetch.fixed && op->d.fetch.kind == &TTSOpsVirtual)
+		return false;
+
+	return true;
 }
 
 /*
@@ -3329,6 +3342,7 @@ ExecBuildGroupingEqual(TupleDesc ldesc, TupleDesc rdesc,
 	int			maxatt = -1;
 	List	   *adjust_jumps = NIL;
 	ListCell   *lc;
+	bool		deform_step_required;
 
 	/*
 	 * When no columns are actually compared, the result's always true. See
@@ -3360,16 +3374,18 @@ ExecBuildGroupingEqual(TupleDesc ldesc, TupleDesc rdesc,
 	scratch.d.fetch.fixed = false;
 	scratch.d.fetch.known_desc = ldesc;
 	scratch.d.fetch.kind = lops;
-	ExecComputeSlotInfo(state, &scratch);
-	ExprEvalPushStep(state, &scratch);
+	deform_step_required = ExecComputeFetchOpInfo(state, &scratch);
+	if (deform_step_required)
+		ExprEvalPushStep(state, &scratch);
 
 	scratch.opcode = EEOP_OUTER_FETCHSOME;
 	scratch.d.fetch.last_var = maxatt;
 	scratch.d.fetch.fixed = false;
 	scratch.d.fetch.known_desc = rdesc;
 	scratch.d.fetch.kind = rops;
-	ExecComputeSlotInfo(state, &scratch);
-	ExprEvalPushStep(state, &scratch);
+	deform_step_required = ExecComputeFetchOpInfo(state, &scratch);
+	if (deform_step_required)
+		ExprEvalPushStep(state, &scratch);
 
 	/*
 	 * Start comparing at the last field (least significant sort key). That's

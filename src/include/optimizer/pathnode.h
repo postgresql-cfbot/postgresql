@@ -17,6 +17,15 @@
 #include "nodes/bitmapset.h"
 #include "nodes/pathnodes.h"
 
+/*
+ * Plugins can provide extra decision whether (partial_)pathlist retain
+ * a path dominated by other new paths.
+ */
+typedef bool (*path_removal_decision_hook_type)(RelOptInfo *parent_rel,
+												Path *new_path,
+												Path *old_path,
+												bool is_partial_pathlist);
+extern PGDLLIMPORT path_removal_decision_hook_type path_removal_decision_hook;
 
 /*
  * prototypes for pathnode.c

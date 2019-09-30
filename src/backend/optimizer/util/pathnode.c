@@ -58,6 +58,7 @@ static List *reparameterize_pathlist_by_child(PlannerInfo *root,
 											  List *pathlist,
 											  RelOptInfo *child_rel);
 
+path_removal_decision_hook_type path_removal_decision_hook = NULL;
 
 /*****************************************************************************
  *		MISC. PATH UTILITIES
@@ -581,6 +582,22 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
 		}
 
 		/*
+		 * This hook allows extension to provide an extra decision
+		 * whether add_path() retains the dominated path by other new
+		 * path, from different dimensions.
+		 * Even if the old_path is not cheapest at this level, we can
+		 * assume a combination with an expected upper path may have
+		 * cheaper cost on the upper level.
+		 */
+		if (remove_old && path_removal_decision_hook)
+		{
+			remove_old = path_removal_decision_hook(parent_rel,
+													new_path,
+													old_path,
+													false);
+		}
+
+		/*
 		 * Remove current element from pathlist if dominated by new.
 		 */
 		if (remove_old)
@@ -814,6 +831,15 @@ add_partial_path(RelOptInfo *parent_rel, Path *new_path)
 				 */
 				accept_new = false;
 			}
+		}
+
+		if (remove_old && path_removal_decision_hook)
+		{
+			/* see comments at add_path() */
+			remove_old = path_removal_decision_hook(parent_rel,
+													new_path,
+													old_path,
+													true);
 		}
 
 		/*

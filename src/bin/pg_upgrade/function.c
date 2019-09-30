@@ -275,3 +275,157 @@ check_loadable_libraries(void)
 	else
 		check_ok();
 }
+
+/*
+ * qsort comparator for procedure signatures
+ */
+static int
+proc_compare_sig(const void *p1, const void *p2)
+{
+	ProcInfo *proc1 = (ProcInfo *) p1;
+	ProcInfo *proc2 = (ProcInfo *) p2;
+
+	return strcmp(proc1->procsig, proc2->procsig);
+}
+
+/*
+ * get_catalog_procedures()
+ *
+ *	Fetch the signatures and ACL of cluster's system procedures.
+ *
+ *	TODO We will later check that funciton's APIs are compatible
+ *	and suppress dumping of removed functions where needed.
+ */
+void
+get_catalog_procedures(ClusterInfo *cluster)
+{
+	int			dbnum;
+
+	/*
+	 * Fetch all procedure signatures and ACL.
+	 * Each procedure may have different ACL in different database.
+	 */
+	for (dbnum = 0; dbnum < cluster->dbarr.ndbs; dbnum++)
+	{
+		DbInfo	   *dbinfo = &cluster->dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(cluster, dbinfo->db_name);
+		PGresult   *res;
+		int			num_procs;
+		int			rowno;
+
+		/*
+		 * Fetch procedure signatures and ACL of functions that have
+		 * some non default ACL.
+		 *
+		 * TODO Is it necessary to handle aggregate functions?
+		 * TODO Should we handle functions with default (null) ACL?
+		 */
+		if (cluster->major_version >= 110000)
+		{
+			res = executeQueryOrDie(conn,
+						"select proname::text || '('"
+						" || pg_get_function_arguments(oid)::text"
+						" || ')' as funsig,"
+						" proacl from pg_proc where prokind='f'"
+						"  and proacl is not null;");
+		}
+		else
+		{
+			res = executeQueryOrDie(conn,
+					"select proname::text || '('"
+					" || pg_get_function_arguments(oid)::text"
+					" || ')' as funsig,"
+							" proacl from pg_proc where proisagg = false"
+							"  and proacl is not null;");
+		}
+
+		num_procs = PQntuples(res);
+		dbinfo->proc_arr.nprocs = num_procs;
+		dbinfo->proc_arr.procs = (ProcInfo *) pg_malloc(sizeof(ProcInfo) * num_procs);
+
+		for (rowno = 0; rowno < num_procs; rowno++)
+		{
+			ProcInfo    *curr = &dbinfo->proc_arr.procs[rowno];
+			char	   *procsig = PQgetvalue(res, rowno, 0);
+			char	   *procacl = PQgetvalue(res, rowno, 1);
+
+			curr->procsig = pg_strdup(procsig);
+			curr->procacl = pg_strdup(procacl);
+		}
+
+		qsort((void *) dbinfo->proc_arr.procs, dbinfo->proc_arr.nprocs, sizeof(ProcInfo),
+			  proc_compare_sig);
+
+		PQclear(res);
+		PQfinish(conn);
+	}
+}
+
+/*
+ * Check API changes in pg_proc between old_cluster and new_cluster.
+ * Report functions that only exist in old_cluster
+ *
+ * TODO save such functions in some list or file to show useful ereport
+ * and/or generate script to help user to revoke non-standard ACL from
+ * these functions.
+ *
+ * NOTE it's vital to call it after check_databases_are_compatible(),
+ * because we rely on correct database order
+ */
+void
+check_catalog_procedures(ClusterInfo *old_cluster, ClusterInfo *new_cluster)
+{
+	int			dbnum;
+
+	prep_status("Checking for system functions API compatibility\n");
+
+	for (dbnum = 0; dbnum < old_cluster->dbarr.ndbs; dbnum++)
+	{
+		DbInfo	   *olddbinfo = &old_cluster->dbarr.dbs[dbnum];
+		DbInfo	   *newdbinfo = &new_cluster->dbarr.dbs[dbnum];
+		int i, j;
+
+		if (strcmp(olddbinfo->db_name, newdbinfo->db_name) != 0)
+			pg_log(PG_FATAL, "check_catalog_procedures failed \n");
+
+		i = j = 0;
+		while (i < olddbinfo->proc_arr.nprocs && j < newdbinfo->proc_arr.nprocs)
+		{
+			ProcInfo    *oldcurr = &olddbinfo->proc_arr.procs[i];
+			ProcInfo    *newcurr = &newdbinfo->proc_arr.procs[j];
+			int			result = strcmp(oldcurr->procsig, newcurr->procsig);
+
+			if (result == 0)
+			{
+				/* If system function has non defaule ACL? */
+				if (strcmp(oldcurr->procacl, newcurr->procacl) != 0)
+					pg_log(PG_WARNING, "dbname %s : check procsig is equal %s, procacl not equal %s vs %s\n",
+						   olddbinfo->db_name, oldcurr->procsig, oldcurr->procacl, newcurr->procacl);
+				i++;
+				j++;
+			}
+			else if (result > 0)
+			{
+// 				pg_log(PG_WARNING, "dbname %s : procedure %s only exist in new_cluster\n",
+// 						   olddbinfo->db_name, newcurr->procsig );
+				j++;
+			}
+			else
+			{
+				pg_log(PG_WARNING, "dbname %s : procedure %s doesn't exist in new_cluster\n",
+					   olddbinfo->db_name, oldcurr->procsig);
+				i++;
+			}
+		}
+
+		/* handle tail of old_cluster proc list */
+		while (i < olddbinfo->proc_arr.nprocs)
+		{
+			ProcInfo    *oldcurr = &olddbinfo->proc_arr.procs[i];
+
+			pg_log(PG_WARNING, "dbname %s : procedure %s doesn't exist in new_cluster\n",
+						   olddbinfo->db_name, oldcurr->procsig);
+			i++;
+		}
+	}
+}

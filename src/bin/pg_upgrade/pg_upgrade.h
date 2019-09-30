@@ -149,6 +149,19 @@ typedef struct
 	int			nrels;
 } RelInfoArr;
 
+typedef struct
+{
+	char	   *procsig;		/* procedure signature */
+	char	   *procacl;		/* ACL */
+} ProcInfo;
+
+typedef struct
+{
+	ProcInfo    *procs;
+	int			nprocs;
+} ProcInfoArr;
+
+
 /*
  * The following structure represents a relation mapping.
  */
@@ -185,6 +198,7 @@ typedef struct
 	char	   *db_ctype;
 	int			db_encoding;
 	RelInfoArr	rel_arr;		/* array of all user relinfos */
+	ProcInfoArr proc_arr;	/* array of system procedures */
 } DbInfo;
 
 typedef struct
@@ -385,6 +399,9 @@ void		check_hard_link(void);
 
 void		get_loadable_libraries(void);
 void		check_loadable_libraries(void);
+void		get_catalog_procedures(ClusterInfo *cluster);
+void		check_catalog_procedures(ClusterInfo *old_cluster,
+									 ClusterInfo *new_cluster);
 
 /* info.c */
 

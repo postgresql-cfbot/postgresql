@@ -25,16 +25,14 @@
 
 #include "access/htup_details.h"
 #include "access/nbtree.h"
-#include "access/table.h"
 #include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
+#include "amcheck.h"
 #include "catalog/index.h"
 #include "catalog/pg_am.h"
-#include "commands/tablecmds.h"
 #include "lib/bloomfilter.h"
 #include "miscadmin.h"
-#include "storage/lmgr.h"
 #include "storage/smgr.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
@@ -129,7 +127,6 @@ PG_FUNCTION_INFO_V1(bt_index_parent_check);
 static void bt_index_check_internal(Oid indrelid, bool parentcheck,
 									bool heapallindexed, bool rootdescend);
 static inline void btree_index_checkable(Relation rel);
-static inline bool btree_index_mainfork_expected(Relation rel);
 static void bt_check_every_level(Relation rel, Relation heaprel,
 								 bool heapkeyspace, bool readonly, bool heapallindexed,
 								 bool rootdescend);
@@ -163,8 +160,6 @@ static inline bool invariant_l_nontarget_offset(BtreeCheckState *state,
 static Page palloc_btree_page(BtreeCheckState *state, BlockNumber blocknum);
 static inline BTScanInsert bt_mkscankey_pivotsearch(Relation rel,
 													IndexTuple itup);
-static ItemId PageGetItemIdCareful(BtreeCheckState *state, BlockNumber block,
-								   Page page, OffsetNumber offset);
 static inline ItemPointer BTreeTupleGetHeapTIDCareful(BtreeCheckState *state,
 													  IndexTuple itup, bool nonpivot);
 
@@ -224,7 +219,6 @@ static void
 bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
 						bool rootdescend)
 {
-	Oid			heapid;
 	Relation	indrel;
 	Relation	heaprel;
 	LOCKMODE	lockmode;
@@ -234,51 +228,15 @@ bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
 	else
 		lockmode = AccessShareLock;
 
-	/*
-	 * We must lock table before index to avoid deadlocks.  However, if the
-	 * passed indrelid isn't an index then IndexGetRelation() will fail.
-	 * Rather than emitting a not-very-helpful error message, postpone
-	 * complaining, expecting that the is-it-an-index test below will fail.
-	 *
-	 * In hot standby mode this will raise an error when parentcheck is true.
-	 */
-	heapid = IndexGetRelation(indrelid, true);
-	if (OidIsValid(heapid))
-		heaprel = table_open(heapid, lockmode);
-	else
-		heaprel = NULL;
-
-	/*
-	 * Open the target index relations separately (like relation_openrv(), but
-	 * with heap relation locked first to prevent deadlocking).  In hot
-	 * standby mode this will raise an error when parentcheck is true.
-	 *
-	 * There is no need for the usual indcheckxmin usability horizon test
-	 * here, even in the heapallindexed case, because index undergoing
-	 * verification only needs to have entries for a new transaction snapshot.
-	 * (If this is a parentcheck verification, there is no question about
-	 * committed or recently dead heap tuples lacking index entries due to
-	 * concurrent activity.)
-	 */
-	indrel = index_open(indrelid, lockmode);
-
-	/*
-	 * Since we did the IndexGetRelation call above without any lock, it's
-	 * barely possible that a race against an index drop/recreation could have
-	 * netted us the wrong table.
-	 */
-	if (heaprel == NULL || heapid != IndexGetRelation(indrelid, false))
-		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_TABLE),
-				 errmsg("could not open parent table of index %s",
-						RelationGetRelationName(indrel))));
+	/* lock table and index with neccesary level */
+	amcheck_lock_relation(indrelid, &indrel, &heaprel, lockmode);
 
 	/* Relation suitable for checking as B-Tree? */
 	btree_index_checkable(indrel);
 
-	if (btree_index_mainfork_expected(indrel))
+	if (amcheck_index_mainfork_expected(indrel))
 	{
-		bool	heapkeyspace;
+		bool		heapkeyspace;
 
 		RelationOpenSmgr(indrel);
 		if (!smgrexists(indrel->rd_smgr, MAIN_FORKNUM))
@@ -293,14 +251,8 @@ bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
 							 heapallindexed, rootdescend);
 	}
 
-	/*
-	 * Release locks early. That's ok here because nothing in the called
-	 * routines will trigger shared cache invalidations to be sent, so we can
-	 * relax the usual pattern of only releasing locks after commit.
-	 */
-	index_close(indrel, lockmode);
-	if (heaprel)
-		table_close(heaprel, lockmode);
+	/* Unlock index and table */
+	amcheck_unlock_relation(indrelid, indrel, heaprel, lockmode);
 }
 
 /*
@@ -335,28 +287,6 @@ btree_index_checkable(Relation rel)
 				 errmsg("cannot check index \"%s\"",
 						RelationGetRelationName(rel)),
 				 errdetail("Index is not valid.")));
-}
-
-/*
- * Check if B-Tree index relation should have a file for its main relation
- * fork.  Verification uses this to skip unlogged indexes when in hot standby
- * mode, where there is simply nothing to verify.
- *
- * NB: Caller should call btree_index_checkable() before calling here.
- */
-static inline bool
-btree_index_mainfork_expected(Relation rel)
-{
-	if (rel->rd_rel->relpersistence != RELPERSISTENCE_UNLOGGED ||
-		!RecoveryInProgress())
-		return true;
-
-	ereport(NOTICE,
-			(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
-			 errmsg("cannot verify unlogged index \"%s\" during recovery, skipping",
-					RelationGetRelationName(rel))));
-
-	return false;
 }
 
 /*
@@ -754,9 +684,9 @@ bt_check_level_from_leftmost(BtreeCheckState *state, BtreeLevel level)
 				ItemId		itemid;
 
 				/* Internal page -- downlink gets leftmost on next level */
-				itemid = PageGetItemIdCareful(state, state->targetblock,
+				itemid = PageGetItemIdCareful(state->rel, state->targetblock,
 											  state->target,
-											  P_FIRSTDATAKEY(opaque));
+											  P_FIRSTDATAKEY(opaque), sizeof(BTPageOpaqueData));
 				itup = (IndexTuple) PageGetItem(state->target, itemid);
 				nextleveldown.leftmost = BTreeInnerTupleGetDownLink(itup);
 				nextleveldown.level = opaque->btpo.level - 1;
@@ -891,8 +821,8 @@ bt_target_page_check(BtreeCheckState *state)
 		IndexTuple	itup;
 
 		/* Verify line pointer before checking tuple */
-		itemid = PageGetItemIdCareful(state, state->targetblock,
-									  state->target, P_HIKEY);
+		itemid = PageGetItemIdCareful(state->rel, state->targetblock,
+									  state->target, P_HIKEY, sizeof(BTPageOpaqueData));
 		if (!_bt_check_natts(state->rel, state->heapkeyspace, state->target,
 							 P_HIKEY))
 		{
@@ -927,8 +857,8 @@ bt_target_page_check(BtreeCheckState *state)
 
 		CHECK_FOR_INTERRUPTS();
 
-		itemid = PageGetItemIdCareful(state, state->targetblock,
-									  state->target, offset);
+		itemid = PageGetItemIdCareful(state->rel, state->targetblock,
+									  state->target, offset, sizeof(BTPageOpaqueData));
 		itup = (IndexTuple) PageGetItem(state->target, itemid);
 		tupsize = IndexTupleSize(itup);
 
@@ -1173,9 +1103,9 @@ bt_target_page_check(BtreeCheckState *state)
 							 OffsetNumberNext(offset));
 
 			/* Reuse itup to get pointed-to heap location of second item */
-			itemid = PageGetItemIdCareful(state, state->targetblock,
+			itemid = PageGetItemIdCareful(state->rel, state->targetblock,
 										  state->target,
-										  OffsetNumberNext(offset));
+										  OffsetNumberNext(offset), sizeof(BTPageOpaqueData));
 			itup = (IndexTuple) PageGetItem(state->target, itemid);
 			nhtid = psprintf("(%u,%u)",
 							 ItemPointerGetBlockNumberNoCheck(&(itup->t_tid)),
@@ -1460,8 +1390,8 @@ bt_right_page_check_scankey(BtreeCheckState *state)
 	if (P_ISLEAF(opaque) && nline >= P_FIRSTDATAKEY(opaque))
 	{
 		/* Return first data item (if any) */
-		rightitem = PageGetItemIdCareful(state, targetnext, rightpage,
-										 P_FIRSTDATAKEY(opaque));
+		rightitem = PageGetItemIdCareful(state->rel, targetnext, rightpage,
+										 P_FIRSTDATAKEY(opaque), sizeof(BTPageOpaqueData));
 	}
 	else if (!P_ISLEAF(opaque) &&
 			 nline >= OffsetNumberNext(P_FIRSTDATAKEY(opaque)))
@@ -1470,8 +1400,9 @@ bt_right_page_check_scankey(BtreeCheckState *state)
 		 * Return first item after the internal page's "negative infinity"
 		 * item
 		 */
-		rightitem = PageGetItemIdCareful(state, targetnext, rightpage,
-										 OffsetNumberNext(P_FIRSTDATAKEY(opaque)));
+		rightitem = PageGetItemIdCareful(state->rel, targetnext, rightpage,
+										 OffsetNumberNext(P_FIRSTDATAKEY(opaque)),
+										 sizeof(BTPageOpaqueData));
 	}
 	else
 	{
@@ -1743,8 +1674,8 @@ bt_downlink_missing_check(BtreeCheckState *state)
 		 RelationGetRelationName(state->rel));
 
 	level = topaque->btpo.level;
-	itemid = PageGetItemIdCareful(state, state->targetblock, state->target,
-								  P_FIRSTDATAKEY(topaque));
+	itemid = PageGetItemIdCareful(state->rel, state->targetblock, state->target,
+								  P_FIRSTDATAKEY(topaque), sizeof(BTPageOpaqueData));
 	itup = (IndexTuple) PageGetItem(state->target, itemid);
 	childblk = BTreeInnerTupleGetDownLink(itup);
 	for (;;)
@@ -1768,8 +1699,8 @@ bt_downlink_missing_check(BtreeCheckState *state)
 										level - 1, copaque->btpo.level)));
 
 		level = copaque->btpo.level;
-		itemid = PageGetItemIdCareful(state, childblk, child,
-									  P_FIRSTDATAKEY(copaque));
+		itemid = PageGetItemIdCareful(state->rel, childblk, child,
+									  P_FIRSTDATAKEY(copaque), sizeof(BTPageOpaqueData));
 		itup = (IndexTuple) PageGetItem(child, itemid);
 		childblk = BTreeInnerTupleGetDownLink(itup);
 		/* Be slightly more pro-active in freeing this memory, just in case */
@@ -1818,7 +1749,7 @@ bt_downlink_missing_check(BtreeCheckState *state)
 	 */
 	if (P_ISHALFDEAD(copaque) && !P_RIGHTMOST(copaque))
 	{
-		itemid = PageGetItemIdCareful(state, childblk, child, P_HIKEY);
+		itemid = PageGetItemIdCareful(state->rel, childblk, child, P_HIKEY, sizeof(BTPageOpaqueData));
 		itup = (IndexTuple) PageGetItem(child, itemid);
 		if (BTreeTupleGetTopParent(itup) == state->targetblock)
 			return;
@@ -2161,8 +2092,8 @@ invariant_l_offset(BtreeCheckState *state, BTScanInsert key,
 	Assert(key->pivotsearch);
 
 	/* Verify line pointer before checking tuple */
-	itemid = PageGetItemIdCareful(state, state->targetblock, state->target,
-								  upperbound);
+	itemid = PageGetItemIdCareful(state->rel, state->targetblock, state->target,
+								  upperbound, sizeof(BTPageOpaqueData));
 	/* pg_upgrade'd indexes may legally have equal sibling tuples */
 	if (!key->heapkeyspace)
 		return invariant_leq_offset(state, key, upperbound);
@@ -2284,8 +2215,8 @@ invariant_l_nontarget_offset(BtreeCheckState *state, BTScanInsert key,
 	Assert(key->pivotsearch);
 
 	/* Verify line pointer before checking tuple */
-	itemid = PageGetItemIdCareful(state, nontargetblock, nontarget,
-								  upperbound);
+	itemid = PageGetItemIdCareful(state->rel, nontargetblock, nontarget,
+								  upperbound, sizeof(BTPageOpaqueData));
 	cmp = _bt_compare(state->rel, key, nontarget, upperbound);
 
 	/* pg_upgrade'd indexes may legally have equal sibling tuples */
@@ -2496,55 +2427,6 @@ bt_mkscankey_pivotsearch(Relation rel, IndexTuple itup)
 	skey->pivotsearch = true;
 
 	return skey;
-}
-
-/*
- * PageGetItemId() wrapper that validates returned line pointer.
- *
- * Buffer page/page item access macros generally trust that line pointers are
- * not corrupt, which might cause problems for verification itself.  For
- * example, there is no bounds checking in PageGetItem().  Passing it a
- * corrupt line pointer can cause it to return a tuple/pointer that is unsafe
- * to dereference.
- *
- * Validating line pointers before tuples avoids undefined behavior and
- * assertion failures with corrupt indexes, making the verification process
- * more robust and predictable.
- */
-static ItemId
-PageGetItemIdCareful(BtreeCheckState *state, BlockNumber block, Page page,
-					 OffsetNumber offset)
-{
-	ItemId		itemid = PageGetItemId(page, offset);
-
-	if (ItemIdGetOffset(itemid) + ItemIdGetLength(itemid) >
-		BLCKSZ - sizeof(BTPageOpaqueData))
-		ereport(ERROR,
-				(errcode(ERRCODE_INDEX_CORRUPTED),
-				 errmsg("line pointer points past end of tuple space in index \"%s\"",
-						RelationGetRelationName(state->rel)),
-				 errdetail_internal("Index tid=(%u,%u) lp_off=%u, lp_len=%u lp_flags=%u.",
-									block, offset, ItemIdGetOffset(itemid),
-									ItemIdGetLength(itemid),
-									ItemIdGetFlags(itemid))));
-
-	/*
-	 * Verify that line pointer isn't LP_REDIRECT or LP_UNUSED, since nbtree
-	 * never uses either.  Verify that line pointer has storage, too, since
-	 * even LP_DEAD items should within nbtree.
-	 */
-	if (ItemIdIsRedirected(itemid) || !ItemIdIsUsed(itemid) ||
-		ItemIdGetLength(itemid) == 0)
-		ereport(ERROR,
-				(errcode(ERRCODE_INDEX_CORRUPTED),
-				 errmsg("invalid line pointer storage in index \"%s\"",
-						RelationGetRelationName(state->rel)),
-				 errdetail_internal("Index tid=(%u,%u) lp_off=%u, lp_len=%u lp_flags=%u.",
-									block, offset, ItemIdGetOffset(itemid),
-									ItemIdGetLength(itemid),
-									ItemIdGetFlags(itemid))));
-
-	return itemid;
 }
 
 /*

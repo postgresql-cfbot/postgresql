@@ -1715,6 +1715,24 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-prepared-statement-limit" xreflabel="prepared_statement_limit">
+      <term><varname>prepared_statement_limit</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>prepared_statement_limit</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the maximum amount of memory used in each session to cache 
+        parsed-and-rewritten queries and execution plans. This affects the maximum memory
+        a backend threads will reserve when many prepared statements are used.
+        The default value of 0 disables this setting, but it is recommended to set this
+        value to a bit lower than the maximum memory a backend worker thread should reserve
+        permanently. 
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-max-stack-depth" xreflabel="max_stack_depth">
       <term><varname>max_stack_depth</varname> (<type>integer</type>)
       <indexterm>

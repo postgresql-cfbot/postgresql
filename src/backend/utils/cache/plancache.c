@@ -88,6 +88,9 @@
  * those that are in long-lived storage and are examined for sinval events).
  * We use a dlist instead of separate List cells so that we can guarantee
  * to save a CachedPlanSource without error.
+ *
+ * This list is used as a LRU list for prepared statements when a
+ * prepared_statement_limit is configured.
  */
 static dlist_head saved_plan_list = DLIST_STATIC_INIT(saved_plan_list);
 
@@ -97,6 +100,7 @@ static dlist_head saved_plan_list = DLIST_STATIC_INIT(saved_plan_list);
 static dlist_head cached_expression_list = DLIST_STATIC_INIT(cached_expression_list);
 
 static void ReleaseGenericPlan(CachedPlanSource *plansource);
+static void ReleaseQueryList(CachedPlanSource *plansource);
 static List *RevalidateCachedQuery(CachedPlanSource *plansource,
 								   QueryEnvironment *queryEnv);
 static bool CheckCachedPlan(CachedPlanSource *plansource);
@@ -114,6 +118,7 @@ static TupleDesc PlanCacheComputeResultDesc(List *stmt_list);
 static void PlanCacheRelCallback(Datum arg, Oid relid);
 static void PlanCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue);
 static void PlanCacheSysCallback(Datum arg, int cacheid, uint32 hashvalue);
+static void EnforcePreparedStatementLimit(CachedPlanSource* ignoreThis);
 
 /* GUC parameter */
 int			plan_cache_mode;
@@ -482,6 +487,11 @@ SaveCachedPlan(CachedPlanSource *plansource)
 	dlist_push_tail(&saved_plan_list, &plansource->node);
 
 	plansource->is_saved = true;
+
+	if( prep_statement_limit > 0 ) {
+		/* Clean up statements when mem limit is hit */
+		EnforcePreparedStatementLimit(plansource);
+	}
 }
 
 /*
@@ -532,6 +542,31 @@ ReleaseGenericPlan(CachedPlanSource *plansource)
 		Assert(plan->magic == CACHEDPLAN_MAGIC);
 		plansource->gplan = NULL;
 		ReleaseCachedPlan(plan, false);
+	}
+}
+
+/*
+ * ReleaseQueryList: release a CachedPlanSource's query list, relationOids,
+ * invalItems and search_path.
+ */
+static void
+ReleaseQueryList(CachedPlanSource *plansource)
+{
+	if (plansource->query_list)
+	{
+		plansource->is_valid = false;
+		plansource->query_list = NIL;
+		plansource->relationOids = NIL;
+		plansource->invalItems = NIL;
+		plansource->search_path = NULL;
+
+		if (plansource->query_context)
+		{
+			MemoryContext qcxt = plansource->query_context;
+
+			plansource->query_context = NULL;
+			MemoryContextDelete(qcxt);
+		}
 	}
 }
 
@@ -626,27 +661,9 @@ RevalidateCachedQuery(CachedPlanSource *plansource,
 	/*
 	 * Discard the no-longer-useful query tree.  (Note: we don't want to do
 	 * this any earlier, else we'd not have been able to release locks
-	 * correctly in the race condition case.)
+	 * correctly in the race condition case.) Also discard query_context
 	 */
-	plansource->is_valid = false;
-	plansource->query_list = NIL;
-	plansource->relationOids = NIL;
-	plansource->invalItems = NIL;
-	plansource->search_path = NULL;
-
-	/*
-	 * Free the query_context.  We don't really expect MemoryContextDelete to
-	 * fail, but just in case, make sure the CachedPlanSource is left in a
-	 * reasonably sane state.  (The generic plan won't get unlinked yet, but
-	 * that's acceptable.)
-	 */
-	if (plansource->query_context)
-	{
-		MemoryContext qcxt = plansource->query_context;
-
-		plansource->query_context = NULL;
-		MemoryContextDelete(qcxt);
-	}
+	ReleaseQueryList(plansource);
 
 	/* Drop the generic plan reference if any */
 	ReleaseGenericPlan(plansource);
@@ -1141,6 +1158,7 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 	CachedPlan *plan = NULL;
 	List	   *qlist;
 	bool		customplan;
+	bool        newplan = false;
 
 	/* Assert caller is doing things in a sane order */
 	Assert(plansource->magic == CACHEDPLANSOURCE_MAGIC);
@@ -1172,6 +1190,7 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 			/* Link the new generic plan into the plansource */
 			plansource->gplan = plan;
 			plan->refcount++;
+			newplan = true;
 			/* Immediately reparent into appropriate context */
 			if (plansource->is_saved)
 			{
@@ -1239,6 +1258,18 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 	{
 		MemoryContextSetParent(plan->context, CacheMemoryContext);
 		plan->is_saved = true;
+	}
+
+	if( plansource->is_saved && prep_statement_limit > 0 ) {
+		/* move CachedPlanSource to tail of list (use it like a LRU list).
+		* Todo: Make this more efficient / a single op */
+		dlist_delete(&plansource->node);
+		dlist_push_tail(&saved_plan_list, &plansource->node);
+
+		if( newplan ) {
+			/* Clean up statements when mem limit is hit */
+			EnforcePreparedStatementLimit(plansource);
+		}
 	}
 
 	return plan;
@@ -1530,6 +1561,181 @@ FreeCachedExpression(CachedExpression *cexpr)
 }
 
 /*
+ * CachedPlanMemUsage: Return memory used by the CachedPlanSource
+ *
+ * Returns the malloced memory used by the two MemoryContexts in
+ * CachedPlanSource and (if available) the MemoryContext in the generic plan.
+ * Does not care for the free memory in those MemoryContexts because it is very
+ * unlikely that it is reused for anythink else anymore and can be considered
+ * dead memory anyway. Also the size of the CachedPlanSource struct is added.
+ *
+ * This function is used only for the pg_prepared_statements view to allow
+ * client applications to monitor memory used by prepared statements and to
+ * selects candidates for eviction in memory contraint environments with
+ * automatic preparation of often called queries.
+ */
+Size
+CachedPlanMemoryUsage(CachedPlanSource *plan)
+{
+	MemoryContextCounters counters;
+	MemoryContext context;
+	counters.totalspace = 0;
+
+	context = plan->context;
+	context->methods->stats(context,NULL,NULL,&counters);
+
+	if( plan->query_context )
+	{
+		context = plan->query_context;
+		context->methods->stats(context,NULL,NULL,&counters);
+	}
+
+	if( plan->gplan )
+	{
+		context = plan->gplan->context;
+		context->methods->stats(context,NULL,NULL,&counters);
+	}
+
+	return counters.totalspace;
+}
+
+/*
+ * AllCachedPlansMemUsage: Return memory used by the saved CachedPlanSources
+ *
+ * If this exceeds a configurable treshhold, Other CachedPlans are invalidated
+ * until enought memory has been freed.
+ */
+static Size
+AllCachedPlansMemUsage()
+{
+
+	dlist_iter	iter;
+	Size        size = 0;
+
+	dlist_foreach(iter, &saved_plan_list)
+	{
+		CachedPlanSource *plansource = dlist_container(CachedPlanSource,
+													   node, iter.cur);
+		Assert(plansource->magic == CACHEDPLANSOURCE_MAGIC);
+		size += CachedPlanMemoryUsage(plansource);
+	}
+
+	return size;
+}
+
+/*
+ * CachedPlanFreeableMemory: Return memory freed when query_list and gplan
+ * would be released.
+ */
+static Size
+CachedPlanFreeableMemory(CachedPlanSource *plan)
+{
+	MemoryContextCounters counters;
+	MemoryContext context;
+	counters.totalspace = 0;
+
+	if( plan->query_context )
+	{
+		context = plan->query_context;
+		context->methods->stats(plan->query_context,NULL,NULL,&counters);
+	}
+
+	if( plan->gplan )
+	{
+		context = plan->gplan->context;
+		context->methods->stats(context,NULL,NULL,&counters);
+	}
+
+	return counters.totalspace;
+}
+
+/*
+ * Tries to enforce the preparedStatementLimit. Does nothing when there is
+ *
+ */
+static void
+EnforcePreparedStatementLimit(CachedPlanSource* ignoreThis)
+{
+	Size currSize;
+	Size limit = prep_statement_limit<<10;
+	dlist_iter	iter;
+
+	// If GUC prepared_statement_limit is not set, there is nothing to do here.
+	if( prep_statement_limit <= 0 )
+		return;
+
+	// Check the current memory usage
+	currSize = AllCachedPlansMemUsage();
+
+	// If we use less than that we can exit
+	if( currSize <= limit )
+		return;
+
+	// Iterate over all cached plans and invalidate them until the limit is
+	// reached but skip an eventually plan that we want to use NOW.
+	dlist_foreach(iter, &saved_plan_list)
+	{
+		CachedPlanSource *plansource = dlist_container(CachedPlanSource,
+													   node, iter.cur);
+		ListCell   *lc;
+		Size       freeable;
+
+		Assert(plansource->magic == CACHEDPLANSOURCE_MAGIC);
+
+		/* Skip one we might want to ignore */
+		if( ignoreThis == plansource )
+			continue;
+
+		/* No work if it's already invalidated */
+		if (!plansource->is_valid)
+			continue;
+
+		/*
+		 * We *must not* mark transaction control statements as invalid,
+		 * particularly not ROLLBACK, because they may need to be executed in
+		 * aborted transactions when we can't revalidate them (cf bug #5269).
+		 */
+		if (IsTransactionStmtPlan(plansource))
+			continue;
+
+		/* No work if we can't do anything about it */
+		freeable = CachedPlanFreeableMemory(plansource);
+		if (freeable == 0)
+			continue;
+
+		/*
+		 * In general there is no point in invalidating utility statements
+		 * since they have no plans anyway.  So invalidate it only if it
+		 * contains at least one non-utility statement, or contains a utility
+		 * statement that contains a pre-analyzed query (which could have
+		 * dependencies.)
+		 */
+		foreach(lc, plansource->query_list)
+		{
+			Query	   *query = lfirst_node(Query, lc);
+
+			if (query->commandType != CMD_UTILITY ||
+				UtilityContainsQuery(query->utilityStmt))
+			{
+				/* non-utility statement, so invalidate */
+				ReleaseQueryList(plansource);
+				/* no need to look further */
+				break;
+			}
+		}
+
+		/* Release generic plan if any */
+		ReleaseGenericPlan(plansource);
+
+		/* Stop when enough it released */
+		currSize -= freeable;
+		if( currSize <= limit )
+			break;
+	}
+}
+
+
+/*
  * QueryListGetPrimaryStmt
  *		Get the "primary" stmt within a list, ie, the one marked canSetTag.
  *
@@ -1787,9 +1993,9 @@ PlanCacheRelCallback(Datum arg, Oid relid)
 			list_member_oid(plansource->relationOids, relid))
 		{
 			/* Invalidate the querytree and generic plan */
-			plansource->is_valid = false;
-			if (plansource->gplan)
-				plansource->gplan->is_valid = false;
+			ReleaseQueryList(plansource);
+			/* Release generic plan if any */
+			ReleaseGenericPlan(plansource);
 		}
 
 		/*
@@ -1810,7 +2016,7 @@ PlanCacheRelCallback(Datum arg, Oid relid)
 					list_member_oid(plannedstmt->relationOids, relid))
 				{
 					/* Invalidate the generic plan only */
-					plansource->gplan->is_valid = false;
+					ReleaseGenericPlan(plansource);
 					break;		/* out of stmt_list scan */
 				}
 			}
@@ -1878,9 +2084,9 @@ PlanCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue)
 				item->hashValue == hashvalue)
 			{
 				/* Invalidate the querytree and generic plan */
-				plansource->is_valid = false;
-				if (plansource->gplan)
-					plansource->gplan->is_valid = false;
+				ReleaseQueryList(plansource);
+				/* Release generic plan if any */
+				ReleaseGenericPlan(plansource);
 				break;
 			}
 		}
@@ -1908,11 +2114,11 @@ PlanCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue)
 						item->hashValue == hashvalue)
 					{
 						/* Invalidate the generic plan only */
-						plansource->gplan->is_valid = false;
+						ReleaseGenericPlan(plansource);
 						break;	/* out of invalItems scan */
 					}
 				}
-				if (!plansource->gplan->is_valid)
+				if (!plansource->gplan)
 					break;		/* out of stmt_list scan */
 			}
 		}
@@ -2002,9 +2208,9 @@ ResetPlanCache(void)
 				UtilityContainsQuery(query->utilityStmt))
 			{
 				/* non-utility statement, so invalidate */
-				plansource->is_valid = false;
-				if (plansource->gplan)
-					plansource->gplan->is_valid = false;
+				ReleaseQueryList(plansource);
+				/* Release generic plan if any */
+				ReleaseGenericPlan(plansource);
 				/* no need to look further */
 				break;
 			}

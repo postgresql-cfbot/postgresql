@@ -2351,6 +2351,19 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"prepared_statement_limit", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Limits the memory used to cache plans of prepared statements, per backend."),
+			gettext_noop("This much memory can be used by prepared statements to cache "
+						 "parsed-and-rewritten queries and execution plans. If the limit is reached "
+						 "unused prepared statements loose their plans until they are executed again."),
+			GUC_UNIT_KB
+		},
+		&prep_statement_limit,
+		0, 0, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},
+
 #ifdef LOCK_DEBUG
 	{
 		{"trace_lock_oidmin", PGC_SUSET, DEVELOPER_OPTIONS,

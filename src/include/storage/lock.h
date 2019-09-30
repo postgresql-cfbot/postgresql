@@ -18,6 +18,7 @@
 #error "lock.h may not be included from frontend code"
 #endif
 
+#include "lib/ilist.h"
 #include "storage/lockdefs.h"
 #include "storage/backendid.h"
 #include "storage/lwlock.h"
@@ -411,6 +412,7 @@ typedef struct LOCALLOCK
 	uint32		hashcode;		/* copy of LOCKTAG's hash value */
 	LOCK	   *lock;			/* associated LOCK object, if any */
 	PROCLOCK   *proclock;		/* associated PROCLOCK object, if any */
+	dlist_node  procLink;		/* list link in a backend's list of LOCALLOCKs */
 	int64		nLocks;			/* total number of times lock is held */
 	int			numLockOwners;	/* # of relevant ResourceOwners */
 	int			maxLockOwners;	/* allocated size of array */

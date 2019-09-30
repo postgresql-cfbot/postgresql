@@ -136,6 +136,7 @@ static char *pwfilename = NULL;
 static char *superuser_password = NULL;
 static const char *authmethodhost = NULL;
 static const char *authmethodlocal = NULL;
+static bool replica = false;
 static bool debug = false;
 static bool noclean = false;
 static bool do_sync = true;
@@ -2938,6 +2939,22 @@ initialize_data_directory(void)
 	/* Now create all the text config files */
 	setup_config();
 
+	/*
+	 * If data directory for replica requested, write basebackup.signal, and
+	 * then we are done here.
+	 */
+	if (replica)
+	{
+		char	   *path;
+		char	   *lines[1] = {NULL};
+
+		path = psprintf("%s/basebackup.signal", pg_data);
+		writefile(path, lines);
+		free(path);
+
+		return;
+	}
+
 	/* Bootstrap template1 */
 	bootstrap_template1();
 
@@ -3029,6 +3046,7 @@ main(int argc, char *argv[])
 		{"wal-segsize", required_argument, NULL, 12},
 		{"data-checksums", no_argument, NULL, 'k'},
 		{"allow-group-access", no_argument, NULL, 'g'},
+		{"replica", no_argument, NULL, 'r'},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3070,7 +3088,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "dD:E:kL:nNU:WA:sST:X:g", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "dD:E:kL:nNrU:WA:sST:X:g", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -3115,6 +3133,9 @@ main(int argc, char *argv[])
 				break;
 			case 'N':
 				do_sync = false;
+				break;
+			case 'r':
+				replica = true;
 				break;
 			case 'S':
 				sync_only = true;
@@ -3337,9 +3358,19 @@ main(int argc, char *argv[])
 	/* translator: This is a placeholder in a shell command. */
 	appendPQExpBuffer(start_db_cmd, " -l %s start", _("logfile"));
 
-	printf(_("\nSuccess. You can now start the database server using:\n\n"
-			 "    %s\n\n"),
-		   start_db_cmd->data);
+	if (!replica)
+	{
+		printf(_("\nSuccess. You can now start the database server using:\n\n"
+				 "    %s\n\n"),
+			   start_db_cmd->data);
+	}
+	else
+	{
+		printf(_("\nSo far so good. Now configure the replication connection in\n"
+				 "postgresql.conf, and then start the database server using:\n\n"
+				 "    %s\n\n"),
+			   start_db_cmd->data);
+	}
 
 	destroyPQExpBuffer(start_db_cmd);
 

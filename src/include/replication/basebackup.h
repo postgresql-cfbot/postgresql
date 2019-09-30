@@ -33,4 +33,6 @@ extern void SendBaseBackup(BaseBackupCmd *cmd);
 
 extern int64 sendTablespace(char *path, bool sizeonly);
 
+extern void BaseBackupMain(void);
+
 #endif							/* _BASEBACKUP_H */

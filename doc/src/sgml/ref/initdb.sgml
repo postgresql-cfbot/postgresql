@@ -287,6 +287,23 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>-r</option></term>
+      <term><option>--replica</option></term>
+      <listitem>
+       <para>
+        Initialize a data directory for a physical replication replica.  The
+        data directory will not be initialized with a full database system,
+        but will instead only contain a minimal set of files.  A server that
+        is started on this data directory will first fetch a base backup and
+        then switch to standby mode.  The connection information for the base
+        backup has to be configured by setting <xref
+        linkend="guc-primary-conninfo"/>, and other parameters as desired,
+        before the server is started.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-S</option></term>
       <term><option>--sync-only</option></term>
       <listitem>

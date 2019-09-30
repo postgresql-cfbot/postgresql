@@ -7784,6 +7784,9 @@ StartupXLOG(void)
 	XLogCtl->SharedRecoveryInProgress = false;
 	SpinLockRelease(&XLogCtl->info_lck);
 
+	if (standbyState != STANDBY_DISABLED)
+		SendRecoveryExitSignal();
+
 	UpdateControlFile();
 	LWLockRelease(ControlFileLock);
 

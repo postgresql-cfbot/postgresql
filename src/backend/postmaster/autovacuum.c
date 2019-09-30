@@ -3057,7 +3057,7 @@ relation_needs_vacanalyze(Oid relid,
 	if (PointerIsValid(tabentry) && AutoVacuumingActive())
 	{
 		reltuples = classForm->reltuples;
-		vactuples = tabentry->n_dead_tuples;
+		vactuples = tabentry->changes_since_vacuum;
 		anltuples = tabentry->changes_since_analyze;
 
 		vacthresh = (float4) vac_base_thresh + vac_scale_factor * reltuples;

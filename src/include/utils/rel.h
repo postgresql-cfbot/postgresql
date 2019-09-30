@@ -327,6 +327,18 @@ typedef struct StdRdOptions
 	((relation)->rd_options ? \
 	 ((StdRdOptions *) (relation)->rd_options)->parallel_workers : (defaultpw))
 
+/*
+ * Relation persistence is either TEMP either SESSION
+ */
+#define IsLocalRelpersistence(relpersistence) \
+	((relpersistence) == RELPERSISTENCE_TEMP || (relpersistence) == RELPERSISTENCE_SESSION)
+
+/*
+ * Relation is either global either local temp table
+ */
+#define RelationHasSessionScope(relation) \
+	IsLocalRelpersistence(((relation)->rd_rel->relpersistence))
+
 /* ViewOptions->check_option values */
 typedef enum ViewOptCheckOption
 {

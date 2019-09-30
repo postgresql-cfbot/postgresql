@@ -192,6 +192,7 @@ typedef struct TransactionStateData
 	int			parallelModeLevel;	/* Enter/ExitParallelMode counter */
 	bool		chain;			/* start a new block after this one */
 	struct TransactionStateData *parent;	/* back link to parent */
+	TransactionId replicaTransactionId;    /* pseudo XID for inserting data in global temp tables at replica */
 } TransactionStateData;
 
 typedef TransactionStateData *TransactionState;
@@ -285,6 +286,12 @@ typedef struct XactCallbackItem
 } XactCallbackItem;
 
 static XactCallbackItem *Xact_callbacks = NULL;
+
+static TransactionId replicaTransIdCount = FirstNormalTransactionId;
+static TransactionId replicaTopTransId;
+static Bitmapset*    replicaAbortedXids;
+
+bool AccessTempRelationAtReplica;
 
 /*
  * List of add-on start- and end-of-subxact callbacks
@@ -440,6 +447,48 @@ TransactionId
 GetCurrentTransactionIdIfAny(void)
 {
 	return XidFromFullTransactionId(CurrentTransactionState->fullTransactionId);
+}
+
+/*
+ * Transactions at replica can update only global temporary tables.
+ * Them are assigned backend-local XIDs which are independent from normal XIDs received from primary node.
+ * So tuples of temporary tables at replica requires special visibility rules.
+ *
+ * XIDs for such transactions at replica are created on demand (when tuple of temp table is updated).
+ * XID wrap-around and adjusting XID horizon is not supported. So number of such transactions at replica is
+ * limited by 2^32 and require up to 2^29 in-memory bitmap for marking aborted transactions.
+  */
+TransactionId
+GetReplicaTransactionId(void)
+{
+	TransactionState s = CurrentTransactionState;
+	if (!TransactionIdIsValid(s->replicaTransactionId))
+		s->replicaTransactionId = ++replicaTransIdCount;
+	return s->replicaTransactionId;
+}
+
+/*
+ * At replica transaction can update only temporary tables
+ * and them are assigned special XIDs (not related with normal XIDs received from primary node).
+ * As far as we see only own transaction it is not necessary to mark committed transactions.
+ * Only marking aborted ones is enough. All transactions which are not marked as aborted are treated as
+ * committed or self in-progress transactions.
+ */
+bool
+IsReplicaTransactionAborted(TransactionId xid)
+{
+	return bms_is_member(xid, replicaAbortedXids);
+}
+
+/*
+ * As far as XIDs for transactions at replica are generated individually for each backends,
+ * we can check that XID belongs to the current transaction or any of its subtransactions by
+ * just comparing it with XID of top transaction.
+ */
+bool
+IsReplicaCurrentTransactionId(TransactionId xid)
+{
+	return xid > replicaTopTransId;
 }
 
 /*
@@ -855,6 +904,9 @@ TransactionIdIsCurrentTransactionId(TransactionId xid)
 {
 	TransactionState s;
 
+	if (AccessTempRelationAtReplica)
+		return IsReplicaCurrentTransactionId(xid);
+
 	/*
 	 * We always say that BootstrapTransactionId is "not my transaction ID"
 	 * even when it is (ie, during bootstrap).  Along with the fact that
@@ -1206,7 +1258,7 @@ static TransactionId
 RecordTransactionCommit(void)
 {
 	TransactionId xid = GetTopTransactionIdIfAny();
-	bool		markXidCommitted = TransactionIdIsValid(xid);
+	bool		markXidCommitted = TransactionIdIsNormal(xid);
 	TransactionId latestXid = InvalidTransactionId;
 	int			nrels;
 	RelFileNode *rels;
@@ -1624,7 +1676,7 @@ RecordTransactionAbort(bool isSubXact)
 	 * rels to delete (note that this routine is not responsible for actually
 	 * deleting 'em).  We cannot have any child XIDs, either.
 	 */
-	if (!TransactionIdIsValid(xid))
+	if (!TransactionIdIsNormal(xid))
 	{
 		/* Reset XactLastRecEnd until the next transaction writes something */
 		if (!isSubXact)
@@ -1892,6 +1944,8 @@ StartTransaction(void)
 	s = &TopTransactionStateData;
 	CurrentTransactionState = s;
 
+	replicaTopTransId = replicaTransIdCount;
+
 	Assert(!FullTransactionIdIsValid(XactTopFullTransactionId));
 
 	/* check the current transaction state */
@@ -1905,6 +1959,7 @@ StartTransaction(void)
 	 */
 	s->state = TRANS_START;
 	s->fullTransactionId = InvalidFullTransactionId;	/* until assigned */
+	s->replicaTransactionId = InvalidTransactionId;	/* until assigned */
 
 	/* Determine if statements are logged in this transaction */
 	xact_is_sampled = log_xact_sample_rate != 0 &&
@@ -2570,6 +2625,14 @@ AbortTransaction(void)
 	/* Prevent cancel/die interrupt while cleaning up */
 	HOLD_INTERRUPTS();
 
+	/* Mark transactions involved global temp table at replica as aborted */
+	if (TransactionIdIsValid(s->replicaTransactionId))
+	{
+		MemoryContext ctx = MemoryContextSwitchTo(TopMemoryContext);
+		replicaAbortedXids = bms_add_member(replicaAbortedXids, s->replicaTransactionId);
+		MemoryContextSwitchTo(ctx);
+	}
+
 	/* Make sure we have a valid memory context and resource owner */
 	AtAbort_Memory();
 	AtAbort_ResourceOwner();
@@ -2991,6 +3054,9 @@ CommitTransactionCommand(void)
 			 * and then clean up.
 			 */
 		case TBLOCK_ABORT_PENDING:
+			if (GetCurrentTransactionIdIfAny() == FrozenTransactionId)
+				elog(FATAL, "Transaction is aborted at standby");
+
 			AbortTransaction();
 			CleanupTransaction();
 			s->blockState = TBLOCK_DEFAULT;
@@ -4879,6 +4945,14 @@ AbortSubTransaction(void)
 
 	/* Prevent cancel/die interrupt while cleaning up */
 	HOLD_INTERRUPTS();
+
+	/* Mark transactions involved global temp table at replica as aborted */
+	if (TransactionIdIsValid(s->replicaTransactionId))
+	{
+		MemoryContext ctx = MemoryContextSwitchTo(TopMemoryContext);
+		replicaAbortedXids = bms_add_member(replicaAbortedXids, s->replicaTransactionId);
+		MemoryContextSwitchTo(ctx);
+	}
 
 	/* Make sure we have a valid memory context and resource owner */
 	AtSubAbort_Memory();

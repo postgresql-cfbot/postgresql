@@ -3487,6 +3487,7 @@ ResolveCminCmaxDuringDecoding(HTAB *tuplecid_data,
 {
 	ReorderBufferTupleCidKey key;
 	ReorderBufferTupleCidEnt *ent;
+	RelFileNodeBackend rnode;
 	ForkNumber	forkno;
 	BlockNumber blockno;
 	bool		updated_mapping = false;
@@ -3500,7 +3501,8 @@ ResolveCminCmaxDuringDecoding(HTAB *tuplecid_data,
 	 * get relfilenode from the buffer, no convenient way to access it other
 	 * than that.
 	 */
-	BufferGetTag(buffer, &key.relnode, &forkno, &blockno);
+	BufferGetTag(buffer, &rnode, &forkno, &blockno);
+	key.relnode = rnode.node;
 
 	/* tuples can only be in the main fork */
 	Assert(forkno == MAIN_FORKNUM);

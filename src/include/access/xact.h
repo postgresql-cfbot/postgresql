@@ -41,6 +41,9 @@
 extern int	DefaultXactIsoLevel;
 extern PGDLLIMPORT int XactIsoLevel;
 
+extern bool AccessTempRelationAtReplica;
+
+
 /*
  * We implement three isolation levels internally.
  * The two stronger ones use one snapshot per database transaction;
@@ -439,5 +442,9 @@ extern void ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_ab
 extern void EnterParallelMode(void);
 extern void ExitParallelMode(void);
 extern bool IsInParallelMode(void);
+
+extern TransactionId GetReplicaTransactionId(void);
+extern bool IsReplicaTransactionAborted(TransactionId xid);
+extern bool IsReplicaCurrentTransactionId(TransactionId xid);
 
 #endif							/* XACT_H */

@@ -71,7 +71,7 @@ GetNewTransactionId(bool isSubXact)
 
 	/* safety check, we should never get this far in a HS standby */
 	if (RecoveryInProgress())
-		elog(ERROR, "cannot assign TransactionIds during recovery");
+   	    elog(ERROR, "cannot assign TransactionIds during recovery");
 
 	LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
 

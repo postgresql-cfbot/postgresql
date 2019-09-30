@@ -195,9 +195,9 @@ extern void heap_vacuum_rel(Relation onerel,
 							struct VacuumParams *params, BufferAccessStrategy bstrategy);
 
 /* in heap/heapam_visibility.c */
-extern bool HeapTupleSatisfiesVisibility(HeapTuple stup, Snapshot snapshot,
+extern bool HeapTupleSatisfiesVisibility(Relation relation, HeapTuple stup, Snapshot snapshot,
 										 Buffer buffer);
-extern TM_Result HeapTupleSatisfiesUpdate(HeapTuple stup, CommandId curcid,
+extern TM_Result HeapTupleSatisfiesUpdate(Relation relation, HeapTuple stup, CommandId curcid,
 										  Buffer buffer);
 extern HTSV_Result HeapTupleSatisfiesVacuum(HeapTuple stup, TransactionId OldestXmin,
 											Buffer buffer);

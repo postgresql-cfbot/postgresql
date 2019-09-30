@@ -51,6 +51,19 @@
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 
+#include "catalog/pg_trigger.h"
+#include "catalog/pg_type.h"
+#include "commands/trigger.h"
+#include "parser/parser.h"
+#include "parser/parsetree.h"
+#include "parser/parse_func.h"
+#include "parser/parse_type.h"
+#include "nodes/print.h"
+#include "nodes/primnodes.h"
+#include "optimizer/optimizer.h"
+#include "commands/defrem.h"
+#include "utils/syscache.h"
+
 
 typedef struct
 {
@@ -74,6 +87,9 @@ static bool intorel_receive(TupleTableSlot *slot, DestReceiver *self);
 static void intorel_shutdown(DestReceiver *self);
 static void intorel_destroy(DestReceiver *self);
 
+static void CreateIvmTrigger(Oid relOid, Oid viewOid, char *matviewname, int16 type, int16 timing);
+static void CreateIvmTriggersOnBaseTables(Query *qry, Node *jtnode, Oid matviewOid, char* matviewname, Bitmapset **relid_map);
+static void check_ivm_restriction_walker(Node *node);
 
 /*
  * create_ctas_internal
@@ -109,6 +125,8 @@ create_ctas_internal(List *attrList, IntoClause *into)
 	create->oncommit = into->onCommit;
 	create->tablespacename = into->tableSpaceName;
 	create->if_not_exists = false;
+	/* Using Materialized view only */
+	create->ivm = into->ivm;
 	create->accessMethod = into->accessMethod;
 
 	/*
@@ -239,6 +257,7 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 	List	   *rewritten;
 	PlannedStmt *plan;
 	QueryDesc  *queryDesc;
+	Query	   *copied_query;
 
 	if (stmt->if_not_exists)
 	{
@@ -255,6 +274,9 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 			return InvalidObjectAddress;
 		}
 	}
+
+	if (is_matview && into->ivm)
+		check_ivm_restriction_walker((Node *) query);
 
 	/*
 	 * Create the tuple receiver object and insert info it will need
@@ -319,7 +341,148 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 		 * and is executed repeatedly.  (See also the same hack in EXPLAIN and
 		 * PREPARE.)
 		 */
-		rewritten = QueryRewrite(copyObject(query));
+
+		copied_query = copyObject(query);
+		if (is_matview && into->ivm)
+		{
+			TargetEntry *tle;
+			Node *node;
+			ParseState *pstate = make_parsestate(NULL);
+			FuncCall *fn;
+
+			pstate->p_expr_kind = EXPR_KIND_SELECT_TARGET;
+
+			/* group keys must be in targetlist */
+			if (copied_query->groupClause)
+			{
+				ListCell *lc;
+				foreach(lc, copied_query->groupClause)
+				{
+					SortGroupClause *scl = (SortGroupClause *) lfirst(lc);
+					TargetEntry *tle = get_sortgroupclause_tle(scl, copied_query->targetList);
+
+					if (tle->resjunk)
+						elog(ERROR, "GROUP BY expression must appear in select list for incremental materialized views");
+				}
+			}
+			else if (!copied_query->hasAggs)
+				copied_query->groupClause = transformDistinctClause(NULL, &copied_query->targetList, copied_query->sortClause, false);
+
+			if (copied_query->hasAggs)
+			{
+				ListCell *lc;
+				List *agg_counts = NIL;
+				AttrNumber next_resno = list_length(copied_query->targetList) + 1;
+				Const	*dmy_arg = makeConst(INT4OID,
+											 -1,
+											 InvalidOid,
+											 sizeof(int32),
+											 Int32GetDatum(1),
+											 false,
+											 true); /* pass by value */
+
+				foreach(lc, copied_query->targetList)
+				{
+					TargetEntry *tle = (TargetEntry *) lfirst(lc);
+					TargetEntry *tle_count;
+					char *resname = (into->colNames == NIL ? tle->resname : strVal(list_nth(into->colNames, tle->resno-1)));
+
+
+					if (IsA(tle->expr, Aggref))
+					{
+						Aggref *aggref = (Aggref *) tle->expr;
+						const char *aggname = get_func_name(aggref->aggfnoid);
+
+						/* XXX: need some generalization
+						 *
+						 * Specifically, Using func names is not robust.  We can use oids instead
+						 * of names, but it would be nice to add some information to pg_aggregate.
+						 */
+						if (strcmp(aggname, "sum") !=0
+							&& strcmp(aggname, "count") != 0
+							&& strcmp(aggname, "avg") != 0
+							&& strcmp(aggname, "min") != 0
+							&& strcmp(aggname, "max") != 0
+						)
+							elog(ERROR, "aggregate function %s is not supported", aggname);
+
+						/*
+						 * For aggregate functions except to count, add count func with the same arg parameters.
+						 * Also, add sum func for agv.
+						 *
+						 * XXX: If there are same expressions explicitly in the target list, we can use this instead
+						 * of adding new duplicated one.
+						 */
+						if (strcmp(aggname, "count") != 0)
+						{
+							fn = makeFuncCall(list_make1(makeString("count")), NIL, -1);
+
+							/* Make a Func with a dummy arg, and then override this by the original agg's args. */
+							node = ParseFuncOrColumn(pstate, fn->funcname, list_make1(dmy_arg), NULL, fn, false, -1);
+							((Aggref *)node)->args = aggref->args;
+
+							tle_count = makeTargetEntry((Expr *) node,
+														next_resno,
+														pstrdup(makeObjectName("__ivm_count",resname, "_")),
+														false);
+							agg_counts = lappend(agg_counts, tle_count);
+							next_resno++;
+						}
+						if (strcmp(aggname, "avg") == 0)
+						{
+							List *dmy_args = NIL;
+							ListCell *lc;
+							foreach(lc, aggref->aggargtypes)
+							{
+								Oid		typeid = lfirst_oid(lc);
+								Type 	type = typeidType(typeid);
+
+								Const *con = makeConst(typeid,
+													   -1,
+													   typeTypeCollation(type),
+													   typeLen(type),
+													   (Datum) 0,
+													   true,
+													   typeByVal(type));
+								dmy_args = lappend(dmy_args, con);
+								ReleaseSysCache(type);
+
+							}
+							fn = makeFuncCall(list_make1(makeString("sum")), NIL, -1);
+
+							/* Make a Func with a dummy arg, and then override this by the original agg's args. */
+							node = ParseFuncOrColumn(pstate, fn->funcname, dmy_args, NULL, fn, false, -1);
+							((Aggref *)node)->args = aggref->args;
+
+							tle_count = makeTargetEntry((Expr *) node,
+														next_resno,
+														pstrdup(makeObjectName("__ivm_sum",resname, "_")),
+														false);
+							agg_counts = lappend(agg_counts, tle_count);
+							next_resno++;
+						}
+
+					}
+				}
+				copied_query->targetList = list_concat(copied_query->targetList, agg_counts);
+
+			}
+
+			/* Add count(*) for counting algorithm */
+			fn = makeFuncCall(list_make1(makeString("count")), NIL, -1);
+			fn->agg_star = true;
+
+			node = ParseFuncOrColumn(pstate, fn->funcname, NIL, NULL, fn, false, -1);
+
+			tle = makeTargetEntry((Expr *) node,
+								  	list_length(copied_query->targetList) + 1,
+								  	pstrdup("__ivm_count__"),
+								  	false);
+			copied_query->targetList = lappend(copied_query->targetList, tle);
+			copied_query->hasAggs = true;
+		}
+
+		rewritten = QueryRewrite(copied_query);
 
 		/* SELECT should never rewrite to more or less than one SELECT query */
 		if (list_length(rewritten) != 1)
@@ -378,9 +541,75 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 
 		/* Restore userid and security context */
 		SetUserIdAndSecContext(save_userid, save_sec_context);
+
+
+		if (into->ivm)
+		{
+
+			Oid matviewOid = address.objectId;
+			Relation matviewRel = table_open(matviewOid, NoLock);
+			char	*matviewname = quote_qualified_identifier(get_namespace_name(RelationGetNamespace(matviewRel)),
+													 RelationGetRelationName(matviewRel));
+			Bitmapset  *relid_map = NULL;
+
+			copied_query = copyObject(query);
+			AcquireRewriteLocks(copied_query, true, false);
+
+			CreateIvmTriggersOnBaseTables(copied_query, (Node *)copied_query->jointree, matviewOid, matviewname, &relid_map);
+
+			table_close(matviewRel, NoLock);
+
+			bms_free(relid_map);
+		}
 	}
 
 	return address;
+}
+
+static void CreateIvmTriggersOnBaseTables(Query *qry, Node *jtnode, Oid matviewOid, char* matviewname, Bitmapset **relid_map)
+{
+
+	if (jtnode == NULL)
+		return;
+	if (IsA(jtnode, RangeTblRef))
+	{
+		int			rti = ((RangeTblRef *) jtnode)->rtindex;
+		RangeTblEntry *rte = rt_fetch(rti, qry->rtable);
+
+		if (rte->rtekind == RTE_RELATION)
+		{
+			if (!bms_is_member(rte->relid, *relid_map))
+			{
+				CreateIvmTrigger(rte->relid, matviewOid, matviewname, TRIGGER_TYPE_INSERT, TRIGGER_TYPE_BEFORE);
+				CreateIvmTrigger(rte->relid, matviewOid, matviewname, TRIGGER_TYPE_DELETE, TRIGGER_TYPE_BEFORE);
+				CreateIvmTrigger(rte->relid, matviewOid, matviewname, TRIGGER_TYPE_UPDATE, TRIGGER_TYPE_BEFORE);
+				CreateIvmTrigger(rte->relid, matviewOid, matviewname, TRIGGER_TYPE_INSERT, TRIGGER_TYPE_AFTER);
+				CreateIvmTrigger(rte->relid, matviewOid, matviewname, TRIGGER_TYPE_DELETE, TRIGGER_TYPE_AFTER);
+				CreateIvmTrigger(rte->relid, matviewOid, matviewname, TRIGGER_TYPE_UPDATE, TRIGGER_TYPE_AFTER);
+
+				*relid_map = bms_add_member(*relid_map, rte->relid);
+			}
+		}
+		else
+			elog(ERROR, "unsupported RTE kind: %d", (int) rte->rtekind);
+	}
+	else if (IsA(jtnode, FromExpr))
+	{
+		FromExpr   *f = (FromExpr *) jtnode;
+		ListCell   *l;
+
+		foreach(l, f->fromlist)
+			CreateIvmTriggersOnBaseTables(qry, lfirst(l), matviewOid, matviewname, relid_map);
+	}
+	else if (IsA(jtnode, JoinExpr))
+	{
+		JoinExpr   *j = (JoinExpr *) jtnode;
+
+		CreateIvmTriggersOnBaseTables(qry, j->larg, matviewOid, matviewname, relid_map);
+		CreateIvmTriggersOnBaseTables(qry, j->rarg, matviewOid, matviewname, relid_map);
+	}
+	else
+		elog(ERROR, "unrecognized node type: %d", (int) nodeTag(jtnode));
 }
 
 /*
@@ -548,6 +777,11 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 		SetMatViewPopulatedState(intoRelationDesc, true);
 
 	/*
+	 * Mark relisivm field, if it's a matview and into->ivm is true.
+	 */
+	if (is_matview && into->ivm)
+		SetMatViewIVMState(intoRelationDesc, true);
+	/*
 	 * Fill private fields of myState for use by later routines
 	 */
 	myState->rel = intoRelationDesc;
@@ -618,4 +852,238 @@ static void
 intorel_destroy(DestReceiver *self)
 {
 	pfree(self);
+}
+
+
+static void
+CreateIvmTrigger(Oid relOid, Oid viewOid, char *matviewname, int16 type, int16 timing)
+{
+	CreateTrigStmt *ivm_trigger;
+	List *transitionRels = NIL;
+	ObjectAddress address, refaddr;
+
+	Assert(timing == TRIGGER_TYPE_BEFORE || timing == TRIGGER_TYPE_AFTER);
+
+	refaddr.classId = RelationRelationId;
+	refaddr.objectId = viewOid;
+	refaddr.objectSubId = 0;
+
+	ivm_trigger = makeNode(CreateTrigStmt);
+	ivm_trigger->relation = NULL;
+	ivm_trigger->row = false;
+
+	ivm_trigger->timing = timing;
+	ivm_trigger->events = type;
+
+	switch (type)
+	{
+		case TRIGGER_TYPE_INSERT:
+			ivm_trigger->trigname = (timing == TRIGGER_TYPE_BEFORE ? "IVM_trigger_ins_before" : "IVM_trigger_ins_after");
+			break;
+		case TRIGGER_TYPE_DELETE:
+			ivm_trigger->trigname = (timing == TRIGGER_TYPE_BEFORE ? "IVM_trigger_del_before" : "IVM_trigger_del_after");
+			break;
+		case TRIGGER_TYPE_UPDATE:
+			ivm_trigger->trigname = (timing == TRIGGER_TYPE_BEFORE ? "IVM_trigger_upd_before" : "IVM_trigger_upd_after");
+			break;
+		default:
+			elog(ERROR, "unsupported trigger type");
+	}
+
+	if (timing == TRIGGER_TYPE_AFTER)
+	{
+		if (type == TRIGGER_TYPE_INSERT || type == TRIGGER_TYPE_UPDATE)
+		{
+			TriggerTransition *n = makeNode(TriggerTransition);
+			n->name = "ivm_newtable";
+			n->isNew = true;
+			n->isTable = true;
+
+			transitionRels = lappend(transitionRels, n);
+		}
+		if (type == TRIGGER_TYPE_DELETE || type == TRIGGER_TYPE_UPDATE)
+		{
+			TriggerTransition *n = makeNode(TriggerTransition);
+			n->name = "ivm_oldtable";
+			n->isNew = false;
+			n->isTable = true;
+
+			transitionRels = lappend(transitionRels, n);
+		}
+	}
+
+	ivm_trigger->funcname =
+		(timing == TRIGGER_TYPE_BEFORE ? SystemFuncName("IVM_immediate_before") : SystemFuncName("IVM_immediate_maintenance"));
+
+	ivm_trigger->columns = NIL;
+	ivm_trigger->transitionRels = transitionRels;
+	ivm_trigger->whenClause = NULL;
+	ivm_trigger->isconstraint = false;
+	ivm_trigger->deferrable = false;
+	ivm_trigger->initdeferred = false;
+	ivm_trigger->constrrel = NULL;
+	ivm_trigger->args = list_make1(makeString(matviewname));
+
+	address = CreateTrigger(ivm_trigger, NULL, relOid, InvalidOid, InvalidOid,
+						 InvalidOid, InvalidOid, InvalidOid, NULL, true, false);
+
+	recordDependencyOn(&address, &refaddr, DEPENDENCY_AUTO);
+
+	/* Make changes-so-far visible */
+	CommandCounterIncrement();
+}
+
+/*
+ * check_ivm_restriction_walker --- look for specify nodes in the query tree
+ */
+static void
+check_ivm_restriction_walker(Node *node)
+{
+	/* This can recurse, so check for excessive recursion */
+	check_stack_depth();
+
+	if (node == NULL)
+		return;
+	/*
+	 * We currently don't support Sub-Query.
+	 */
+	if (IsA(node, SubPlan) || IsA(node, SubLink))
+		ereport(ERROR, (errmsg("subquery is not supported with IVM")));
+
+	switch (nodeTag(node))
+	{
+		case T_Query:
+			{
+				Query *qry = (Query *)node;
+				ListCell   *lc;
+				/* if contained CTE, return error */
+				if (qry->cteList != NIL)
+					ereport(ERROR, (errmsg("CTE is not supported with IVM")));
+
+				/* if contained VIEW or subquery into RTE, return error */
+				foreach(lc, qry->rtable)
+				{
+					RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+					if (rte->relkind == RELKIND_VIEW ||
+							rte->relkind == RELKIND_MATVIEW)
+						ereport(ERROR, (errmsg("VIEW or MATERIALIZED VIEW is not supported with IVM")));
+					if (rte->rtekind ==  RTE_SUBQUERY)
+						ereport(ERROR, (errmsg("subquery is not supported with IVM")));
+				}
+
+				/* search in jointree */
+				check_ivm_restriction_walker((Node *) qry->jointree);
+
+				/* search in target lists */
+				foreach(lc, qry->targetList)
+				{
+					TargetEntry *tle = (TargetEntry *) lfirst(lc);
+					check_ivm_restriction_walker((Node *) tle->expr);
+				}
+
+				break;
+			}
+		case T_JoinExpr:
+			{
+				JoinExpr *joinexpr = (JoinExpr *)node;
+				if (joinexpr->jointype > JOIN_INNER)
+					ereport(ERROR, (errmsg("OUTER JOIN is not supported with IVM")));
+				/* left side */
+				check_ivm_restriction_walker((Node *) joinexpr->larg);
+				/* right side */
+				check_ivm_restriction_walker((Node *) joinexpr->rarg);
+				check_ivm_restriction_walker((Node *) joinexpr->quals);
+			}
+			break;
+		case T_FromExpr:
+			{
+				ListCell *lc;
+				FromExpr *fromexpr = (FromExpr *)node;
+				foreach(lc, fromexpr->fromlist)
+				{
+					check_ivm_restriction_walker((Node *) lfirst(lc));
+				}
+				check_ivm_restriction_walker((Node *) fromexpr->quals);
+			}
+			break;
+		case T_Var:
+			{
+				/* if system column, return error */
+				Var	*variable = (Var *) node;
+				if (variable->varattno < 0)
+					ereport(ERROR, (errmsg("system column is not supported with IVM")));
+			}
+			break;
+		case T_BoolExpr:
+			{
+				BoolExpr   *boolexpr = (BoolExpr *) node;
+				ListCell   *lc;
+
+				foreach(lc, boolexpr->args)
+				{
+					Node	   *arg = (Node *) lfirst(lc);
+					check_ivm_restriction_walker(arg);
+				}
+				break;
+			}
+		case T_NullIfExpr: /* same as OpExpr */
+		case T_DistinctExpr: /* same as OpExpr */
+		case T_OpExpr:
+			{
+				OpExpr	   *op = (OpExpr *) node;
+				ListCell   *lc;
+				foreach(lc, op->args)
+				{
+					Node	   *arg = (Node *) lfirst(lc);
+					check_ivm_restriction_walker(arg);
+				}
+				break;
+			}
+		case T_CaseExpr:
+			{
+				CaseExpr *caseexpr = (CaseExpr *) node;
+				ListCell *lc;
+				/* result for ELSE clause */
+				check_ivm_restriction_walker((Node *) caseexpr->defresult);
+				/* expr for WHEN clauses */
+				foreach(lc, caseexpr->args)
+				{
+					CaseWhen *when = (CaseWhen *) lfirst(lc);
+					Node *w_expr = (Node *) when->expr;
+					/* result for WHEN clause */
+					check_ivm_restriction_walker((Node *) when->result);
+					/* expr clause*/
+					check_ivm_restriction_walker((Node *) w_expr);
+				}
+				break;
+			}
+		case T_SubLink:
+			{
+				/* Now, not supported */
+/*
+				SubLink	*sublink = (SubLink *) node;
+				Query	*qry =(Query *) sublink->subselect;
+				if (qry != NULL && qry->jointree != NULL)
+					check_ivm_restriction_walker((Node *) qry->jointree->quals);
+*/
+				break;
+			}
+		case T_SubPlan:
+			{
+				/* Now, not supported */
+				break;
+			}
+		case T_Aggref:
+		case T_GroupingFunc:
+		case T_WindowFunc:
+		case T_FuncExpr:
+		case T_SQLValueFunction:
+		case T_Const:
+		case T_Param:
+		default:
+			/* do nothing */
+			break;
+	}
+
+	return;
 }

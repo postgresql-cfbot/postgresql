@@ -23,11 +23,17 @@
 
 extern void SetMatViewPopulatedState(Relation relation, bool newstate);
 
+extern void SetMatViewIVMState(Relation relation, bool newstate);
+
 extern ObjectAddress ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 										ParamListInfo params, char *completionTag);
 
 extern DestReceiver *CreateTransientRelDestReceiver(Oid oid);
 
 extern bool MatViewIncrementalMaintenanceIsEnabled(void);
+
+extern Datum IVM_immediate_before(PG_FUNCTION_ARGS);
+extern Datum IVM_immediate_maintenance(PG_FUNCTION_ARGS);
+extern void AtAbort_IVM(void);
 
 #endif							/* MATVIEW_H */

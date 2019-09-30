@@ -1492,6 +1492,7 @@ describeOneTableDetails(const char *schemaname,
 		char		relpersistence;
 		char		relreplident;
 		char	   *relam;
+		bool		isivm;
 	}			tableinfo;
 	bool		show_column_details = false;
 
@@ -1512,6 +1513,7 @@ describeOneTableDetails(const char *schemaname,
 						  "false AS relhasoids, c.relispartition, %s, c.reltablespace, "
 						  "CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::pg_catalog.regtype::pg_catalog.text END, "
 						  "c.relpersistence, c.relreplident, am.amname\n"
+						  ",c.relisivm\n"
 						  "FROM pg_catalog.pg_class c\n "
 						  "LEFT JOIN pg_catalog.pg_class tc ON (c.reltoastrelid = tc.oid)\n"
 						  "LEFT JOIN pg_catalog.pg_am am ON (c.relam = am.oid)\n"
@@ -1688,6 +1690,10 @@ describeOneTableDetails(const char *schemaname,
 			(char *) NULL : pg_strdup(PQgetvalue(res, 0, 14));
 	else
 		tableinfo.relam = NULL;
+	if (pset.sversion >= 130000)
+		tableinfo.isivm = strcmp(PQgetvalue(res, 0, 15), "t") == 0;
+	else
+		tableinfo.isivm = false;
 	PQclear(res);
 	res = NULL;
 
@@ -3291,6 +3297,12 @@ describeOneTableDetails(const char *schemaname,
 		{
 			printfPQExpBuffer(&buf, _("Access method: %s"), tableinfo.relam);
 			printTableAddFooter(&cont, buf.data);
+		}
+
+		/* Incremental view maintance info */
+		if (verbose && tableinfo.relkind == RELKIND_MATVIEW && tableinfo.isivm)
+		{
+			printTableAddFooter(&cont, _("Incremental view maintenance: yes"));
 		}
 	}
 

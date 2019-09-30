@@ -65,6 +65,22 @@ RunObjectDropHook(Oid classId, Oid objectId, int subId,
 }
 
 /*
+ * RunObjectTruncateHook
+ *
+ * It is the entrypoint of a TRUNCATE event
+ */
+void
+RunObjectTruncateHook(Oid classId, Oid objectId, int subId)
+{
+	/* caller should check, but just in case... */
+	Assert(object_access_hook != NULL);
+
+	(*object_access_hook) (OAT_TRUNCATE,
+						   classId, objectId, 0,
+						   NULL);
+}
+
+/*
  * RunObjectPostAlterHook
  *
  * It is entrypoint of OAT_POST_ALTER event

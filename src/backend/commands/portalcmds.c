@@ -89,7 +89,7 @@ PerformCursorOpen(DeclareCursorStmt *cstmt, ParamListInfo params,
 		elog(ERROR, "non-SELECT statement in DECLARE CURSOR");
 
 	/* Plan the query, applying the specified options */
-	plan = pg_plan_query(query, cstmt->options, params);
+	plan = pg_plan_query(query, queryString, cstmt->options, params);
 
 	/*
 	 * Create a portal and copy the plan and queryString into its memory.

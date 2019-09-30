@@ -842,6 +842,15 @@ AC_MSG_RESULT([$with_openssl])
 AC_SUBST(with_openssl)
 
 #
+# Seccomp
+#
+AC_MSG_CHECKING([whether to build with seccomp support])
+PGAC_ARG_BOOL(with, seccomp, no, [build with seccomp support],
+              [AC_DEFINE([USE_SECCOMP], 1, [Define to 1 to build with seccomp support. (--with-seccomp)])])
+AC_MSG_RESULT([$with_seccomp])
+AC_SUBST(with_seccomp)
+
+#
 # SELinux
 #
 AC_MSG_CHECKING([whether to build with SELinux support])
@@ -1234,6 +1243,10 @@ fi
 AC_SUBST(LDAP_LIBS_FE)
 AC_SUBST(LDAP_LIBS_BE)
 
+if test "$with_seccomp" = yes; then
+  AC_CHECK_LIB(seccomp, seccomp_init, [], [AC_MSG_ERROR([library 'libseccomp' is required for seccomp support])])
+fi
+
 # for contrib/sepgsql
 if test "$with_selinux" = yes; then
   AC_CHECK_LIB(selinux, security_compute_create_name, [],
@@ -1387,6 +1400,10 @@ fi
 
 if test "$with_libxml" = yes ; then
   AC_CHECK_HEADER(libxml/parser.h, [], [AC_MSG_ERROR([header file <libxml/parser.h> is required for XML support])])
+fi
+
+if test "$with_seccomp" = yes ; then
+  AC_CHECK_HEADER(seccomp.h, [], [AC_MSG_ERROR([header file <seccomp.h> is required for seccomp support])])
 fi
 
 if test "$with_libxslt" = yes ; then

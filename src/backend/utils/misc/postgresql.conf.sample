@@ -154,6 +154,24 @@
 
 #max_files_per_process = 1000		# min 25
 					# (change requires restart)
+#seccomp = off				# use seccomp
+					# (change requires restart)
+
+#global_syscall_default = allow		# postmaster default syscall action:
+					# allow, log, error, kill
+#global_syscall_allow = ''			# postmaster syscall allow list
+#global_syscall_log = ''			# postmaster syscall log list
+#global_syscall_error = ''			# postmaster syscall error list
+#global_syscall_kill = ''			# postmaster syscall kill list
+					# (global_syscall* change requires restart)
+
+#session_syscall_default = allow	# session default syscall action:
+					# allow, log, error, kill
+#session_syscall_allow = '*'		# backend session syscall allow list
+#session_syscall_log = '*'			# backend session syscall log list
+#session_syscall_error = '*'		# backend session syscall error list
+#session_syscall_kill = '*'		# backend session syscall kill list
+					# session_syscall* default '*' = use global list
 
 # - Cost-Based Vacuum Delay -
 

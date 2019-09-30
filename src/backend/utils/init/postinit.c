@@ -1054,6 +1054,21 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 	/* Process pg_db_role_setting options */
 	process_settings(MyDatabaseId, GetSessionUserId());
 
+#ifdef USE_SECCOMP
+	/* If seccomp filtering is requested, do the backend lockdown */
+	if (!bootstrap &&
+		!IsAutoVacuumWorkerProcess() &&
+		 IsUnderPostmaster)
+	{
+		if(!load_seccomp_filter("session"))
+		{
+			ereport(FATAL,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("failed to load session seccomp filter")));
+		}
+	}
+#endif
+
 	/* Apply PostAuthDelay as soon as we've read all options */
 	if (PostAuthDelay > 0)
 		pg_usleep(PostAuthDelay * 1000000L);

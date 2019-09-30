@@ -20031,6 +20031,90 @@ SELECT collation for ('foo' COLLATE "de_DE");
     </tgroup>
    </table>
 
+   <para>
+    The functions shown in <xref linkend="functions-seccomp"/>
+    print information about active seccomp filters, both at the
+    global (postmaster) level and session (client backend) level.
+    In particular they calculate the the session level based
+    on the kernel's rules for overlaying the session filter
+    on top of the global filter. Essentially, for any given syscall
+    the most restrictive (highest precedence) rule will govern
+    the action taken.
+   </para>
+
+   <para>
+    These functions return no rows unless the <option>--with-seccomp</option>
+    was used during <command>configure</command>.
+   </para>
+
+   <table id="functions-seccomp">
+    <title>Seccomp Functions</title>
+    <tgroup cols="3">
+     <thead>
+      <row><entry>Name</entry> <entry>Return Type</entry> <entry>Description</entry></row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry>
+        <indexterm><primary>pg_get_seccomp_filter</primary></indexterm>
+        <literal><function>pg_get_seccomp_filter()</function></literal>
+       </entry>
+       <entry><type>record</type></entry>
+       <entry>
+        Returns information about active seccomp filters.
+       </entry>
+      </row>
+
+     </tbody>
+    </tgroup>
+   </table>
+
+   <para>
+    <function>pg_get_seccomp_filter</function> returns a record, shown in
+    <xref linkend="functions-pg-get-seccomp-filter"/>
+   </para>
+
+   <table id="functions-pg-get-seccomp-filter">
+    <title><function>pg_get_seccomp_filter</function> Columns</title>
+    <tgroup cols="3">
+     <thead>
+      <row>
+       <entry>Column Name</entry>
+       <entry>Data Type</entry>
+       <entry>Description</entry>
+      </row>
+     </thead>
+
+     <tbody>
+
+      <row>
+       <entry><literal>syscall</literal></entry>
+       <entry><type>text</type></entry>
+       <entry>Name of the kernel syscall</entry>
+      </row>
+
+      <row>
+       <entry><literal>syscallnum</literal></entry>
+       <entry><type>int</type></entry>
+       <entry>Kernel syscall number, or -1 for a default rule</entry>
+      </row>
+
+      <row>
+       <entry><literal>filter_action</literal></entry>
+       <entry><type>text</type></entry>
+       <entry>Source context -> rule action</entry>
+      </row>
+
+      <row>
+       <entry><literal>context</literal></entry>
+       <entry><type>text</type></entry>
+       <entry>Context in which rule is applied</entry>
+      </row>
+
+     </tbody>
+    </tgroup>
+   </table>
   </sect1>
 
   <sect1 id="functions-admin">

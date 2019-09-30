@@ -260,6 +260,13 @@ su - postgres
 
     <listitem>
      <para>
+      You need <productname>seccomp</productname>, if you want to support
+      kernel syscall filtering.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
       You need <application>Kerberos</application>, <productname>OpenLDAP</productname>,
       and/or <application>PAM</application>, if you want to support authentication
       using those services.
@@ -983,6 +990,20 @@ build-postgresql:
          package to be installed.  <filename>configure</filename> will check
          for the required header files and libraries to make sure that
          your <productname>OpenSSL</productname> installation is sufficient
+         before proceeding.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><option>--with-seccomp</option></term>
+       <listitem>
+        <para>
+         Build with support for <indexterm><primary>seccomp</primary></indexterm>
+         kernel syscall filtering. This requires <productname>seccomp</productname>
+         packages to be installed. <filename>configure</filename> will check
+         for the required header files and libraries to make sure that
+         your <productname>seccomp</productname> installation is sufficient
          before proceeding.
         </para>
        </listitem>

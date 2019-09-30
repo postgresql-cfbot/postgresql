@@ -167,7 +167,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
         <replaceable>init_steps</replaceable> specifies the
         initialization steps to be performed, using one character per step.
         Each step is invoked in the specified order.
-        The default is <literal>dtgvp</literal>.
+        The default is <literal>dt(g)vp</literal>.
         The available steps are:
 
         <variablelist>
@@ -193,11 +193,30 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
           </listitem>
          </varlistentry>
          <varlistentry>
-          <term><literal>g</literal> (Generate data)</term>
+          <term><literal>(</literal> (begin transaction)</term>
+          <listitem>
+           <para>
+            Emit a <command>BEGIN</command>.
+           </para>
+          </listitem>
+         </varlistentry>
+         <varlistentry>
+          <term><literal>g</literal> or <literal>G</literal> (Generate data, client or server side)</term>
           <listitem>
            <para>
             Generate data and load it into the standard tables,
             replacing any data already present.
+           </para>
+           <para>
+            When data is generated server side, there is no progress output.
+           </para>
+          </listitem>
+         </varlistentry>
+         <varlistentry>
+          <term><literal>)</literal> (commit transaction)</term>
+          <listitem>
+           <para>
+            Emit a <command>COMMIT</command>.
            </para>
           </listitem>
          </varlistentry>

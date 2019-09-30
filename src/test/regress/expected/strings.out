@@ -48,17 +48,40 @@ SELECT 'tricky' AS U&"\" UESCAPE '!';
 (1 row)
 
 SELECT U&'wrong: \061';
-ERROR:  invalid Unicode escape value at or near "\061'"
+ERROR:  invalid Unicode escape value
 LINE 1: SELECT U&'wrong: \061';
                          ^
 SELECT U&'wrong: \+0061';
-ERROR:  invalid Unicode escape value at or near "\+0061'"
+ERROR:  invalid Unicode escape value
 LINE 1: SELECT U&'wrong: \+0061';
                          ^
 SELECT U&'wrong: +0061' UESCAPE '+';
-ERROR:  invalid Unicode escape character at or near "+'"
+ERROR:  invalid Unicode escape character "+"
 LINE 1: SELECT U&'wrong: +0061' UESCAPE '+';
                                          ^
+-- handling of Unicode surrogate pairs
+SELECT U&'\d83d\de04\d83d\dc36' as correct_in_utf8;
+ correct_in_utf8 
+-----------------
+ 😄🐶
+(1 row)
+
+SELECT U&'\d83d\d83d'; -- 2 high surrogates in a row
+ERROR:  invalid Unicode surrogate pair
+LINE 1: SELECT U&'\d83d\d83d';
+                       ^
+SELECT U&'\de04\d83d'; -- surrogates in wrong order
+ERROR:  invalid Unicode surrogate pair
+LINE 1: SELECT U&'\de04\d83d';
+                  ^
+SELECT U&'\d83dX'; -- orphan high surrogate
+ERROR:  invalid Unicode surrogate pair
+LINE 1: SELECT U&'\d83dX';
+                       ^
+SELECT U&'\de04X'; -- orphan low surrogate
+ERROR:  invalid Unicode surrogate pair
+LINE 1: SELECT U&'\de04X';
+                  ^
 SET standard_conforming_strings TO off;
 SELECT U&'d\0061t\+000061' AS U&"d\0061t\+000061";
 ERROR:  unsafe use of string constant with Unicode escapes

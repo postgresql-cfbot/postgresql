@@ -175,6 +175,12 @@ typedef struct IndexAmRoutine
 	bool		amcanorder;
 	/* does AM support ORDER BY result of an operator on indexed column? */
 	bool		amcanorderbyop;
+
+	/*
+	 * Does AM support only the one ORDER BY operator on first indexed column?
+	 * amcanorderbyop is implied.
+	 */
+	bool		amorderbyopfirstcol;
 	/* does AM support backward scanning? */
 	bool		amcanbackward;
 	/* does AM support UNIQUE indexes? */

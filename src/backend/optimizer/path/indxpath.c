@@ -988,6 +988,10 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * if we are only trying to build bitmap indexscans, nor if we have to
 	 * assume the scan is unordered.
 	 */
+	useful_pathkeys = NIL;
+	orderbyclauses = NIL;
+	orderbyclausecols = NIL;
+
 	pathkeys_possibly_useful = (scantype != ST_BITMAPSCAN &&
 								!found_lower_saop_clause &&
 								has_useful_pathkeys(root, rel));
@@ -998,10 +1002,10 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 											  ForwardScanDirection);
 		useful_pathkeys = truncate_useless_pathkeys(root, rel,
 													index_pathkeys);
-		orderbyclauses = NIL;
-		orderbyclausecols = NIL;
 	}
-	else if (index->amcanorderbyop && pathkeys_possibly_useful)
+
+	if (useful_pathkeys == NIL &&
+		index->amcanorderbyop && pathkeys_possibly_useful)
 	{
 		/* see if we can generate ordering operators for query_pathkeys */
 		match_pathkeys_to_index(index, root->query_pathkeys,
@@ -1011,12 +1015,6 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 			useful_pathkeys = root->query_pathkeys;
 		else
 			useful_pathkeys = NIL;
-	}
-	else
-	{
-		useful_pathkeys = NIL;
-		orderbyclauses = NIL;
-		orderbyclausecols = NIL;
 	}
 
 	/*
@@ -3178,6 +3176,10 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 	if (!index->amcanorderbyop)
 		return;
 
+	/* Only the one pathkey is supported when amorderbyopfirstcol is true */
+	if (index->amorderbyopfirstcol && list_length(pathkeys) != 1)
+		return;
+
 	foreach(lc1, pathkeys)
 	{
 		PathKey    *pathkey = (PathKey *) lfirst(lc1);
@@ -3210,20 +3212,24 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 		{
 			EquivalenceMember *member = (EquivalenceMember *) lfirst(lc2);
 			int			indexcol;
+			int			ncolumns;
 
 			/* No possibility of match if it references other relations */
 			if (!bms_equal(member->em_relids, index->rel->relids))
 				continue;
 
 			/*
-			 * We allow any column of the index to match each pathkey; they
-			 * don't have to match left-to-right as you might expect.  This is
-			 * correct for GiST, and it doesn't matter for SP-GiST because
-			 * that doesn't handle multiple columns anyway, and no other
-			 * existing AMs support amcanorderbyop.  We might need different
-			 * logic in future for other implementations.
+			 * We allow any column or only the first of the index to match
+			 * each pathkey; they don't have to match left-to-right as you
+			 * might expect.  This is correct for GiST, and it doesn't matter
+			 * for SP-GiST and B-Tree because they do not handle multiple
+			 * columns anyway, and no other existing AMs support
+			 * amcanorderbyop.  We might need different logic in future for
+			 * other implementations.
 			 */
-			for (indexcol = 0; indexcol < index->nkeycolumns; indexcol++)
+			ncolumns = index->amorderbyopfirstcol ? 1 : index->nkeycolumns;
+
+			for (indexcol = 0; indexcol < ncolumns; indexcol++)
 			{
 				Expr	   *expr;
 

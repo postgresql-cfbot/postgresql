@@ -86,3 +86,19 @@ ERROR:  operator is not unique: time without time zone + time without time zone
 LINE 1: SELECT f1 + time '00:01' AS "Illegal" FROM TIME_TBL;
                   ^
 HINT:  Could not choose a best candidate operator. You might need to add explicit type casts.
+-- distance
+SELECT f1 AS "Ten", f1 <-> time '01:23:45' AS "Distance" FROM TIME_TBL;
+     Ten     |           Distance            
+-------------+-------------------------------
+ 00:00:00    | @ 1 hour 23 mins 45 secs
+ 01:00:00    | @ 23 mins 45 secs
+ 02:03:00    | @ 39 mins 15 secs
+ 11:59:00    | @ 10 hours 35 mins 15 secs
+ 12:00:00    | @ 10 hours 36 mins 15 secs
+ 12:01:00    | @ 10 hours 37 mins 15 secs
+ 23:59:00    | @ 22 hours 35 mins 15 secs
+ 23:59:59.99 | @ 22 hours 36 mins 14.99 secs
+ 15:36:39    | @ 14 hours 12 mins 54 secs
+ 15:36:39    | @ 14 hours 12 mins 54 secs
+(10 rows)
+

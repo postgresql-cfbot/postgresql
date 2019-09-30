@@ -90,6 +90,7 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->amsupport = BRIN_LAST_OPTIONAL_PROCNUM;
 	amroutine->amcanorder = false;
 	amroutine->amcanorderbyop = false;
+	amroutine->amorderbyopfirstcol = false;
 	amroutine->amcanbackward = false;
 	amroutine->amcanunique = false;
 	amroutine->amcanmulticol = true;

@@ -1446,3 +1446,47 @@ generate_series_int8_support(PG_FUNCTION_ARGS)
 
 	PG_RETURN_POINTER(ret);
 }
+
+static int64
+int88_dist(int64 a, int64 b)
+{
+	int64		r;
+
+	if (pg_sub_s64_overflow(a, b, &r) ||
+		r == PG_INT64_MIN)
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("bigint out of range")));
+
+	return Abs(r);
+}
+
+Datum
+int8dist(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(int88_dist(PG_GETARG_INT64(0), PG_GETARG_INT64(1)));
+}
+
+Datum
+int82dist(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(int88_dist(PG_GETARG_INT64(0), (int64) PG_GETARG_INT16(1)));
+}
+
+Datum
+int84dist(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(int88_dist(PG_GETARG_INT64(0), (int64) PG_GETARG_INT32(1)));
+}
+
+Datum
+int28dist(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(int88_dist((int64) PG_GETARG_INT16(0), PG_GETARG_INT64(1)));
+}
+
+Datum
+int48dist(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(int88_dist((int64) PG_GETARG_INT32(0), PG_GETARG_INT64(1)));
+}

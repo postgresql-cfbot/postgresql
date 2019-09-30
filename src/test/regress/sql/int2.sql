@@ -84,6 +84,16 @@ SELECT '' AS five, i.f1, i.f1 / int2 '2' AS x FROM INT2_TBL i;
 
 SELECT '' AS five, i.f1, i.f1 / int4 '2' AS x FROM INT2_TBL i;
 
+-- distance
+SELECT '' AS five, i.f1, i.f1 <-> int2 '2' AS x FROM INT2_TBL i;
+
+SELECT '' AS four, i.f1, i.f1 <-> int2 '2' AS x FROM INT2_TBL i
+WHERE f1 > -32767;
+
+SELECT '' AS five, i.f1, i.f1 <-> int4 '2' AS x FROM INT2_TBL i;
+
+SELECT '' AS five, i.f1, i.f1 <-> int8 '2' AS x FROM INT2_TBL i;
+
 -- corner cases
 SELECT (-1::int2<<15)::text;
 SELECT ((-1::int2<<15)+1::int2)::text;

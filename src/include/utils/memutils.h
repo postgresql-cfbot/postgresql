@@ -18,7 +18,7 @@
 #define MEMUTILS_H
 
 #include "nodes/memnodes.h"
-
+#include "utils/dsa.h"
 
 /*
  * MaxAllocSize, MaxAllocHugeSize
@@ -180,6 +180,17 @@ extern MemoryContext SlabContextCreate(MemoryContext parent,
 extern MemoryContext GenerationContextCreate(MemoryContext parent,
 											 const char *name,
 											 Size blockSize);
+
+/* shm_mcxt.c */
+extern MemoryContext CreatePermShmContext(MemoryContext parent,
+										  const char *name,
+										  dsa_area *area, 
+										  void *base);
+extern MemoryContext CreateTempShmContext(MemoryContext parent,
+										  const char *name,
+										  MemoryContext perm_context);
+extern void ChangeToPermShmContext(MemoryContext temp_context,
+								   MemoryContext perm_context);
 
 /*
  * Recommended default alloc parameters, suitable for "ordinary" contexts

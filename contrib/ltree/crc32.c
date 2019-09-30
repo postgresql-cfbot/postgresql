@@ -20,7 +20,7 @@
 #include "crc32.h"
 
 unsigned int
-ltree_crc32_sz(char *buf, int size)
+ltree_crc32_sz(const char *buf, int size)
 {
 	pg_crc32	crc;
 	char	   *p = buf;

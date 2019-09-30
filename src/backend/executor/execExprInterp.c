@@ -3059,8 +3059,8 @@ bool
 ExecEvalSubscriptingRef(ExprState *state, ExprEvalStep *op)
 {
 	SubscriptingRefState *sbsrefstate = op->d.sbsref_subscript.state;
-	int		   *indexes;
-	int			off;
+	Datum				 *indexes;
+	int					 off;
 
 	/* If any index expr yields NULL, result is NULL or error */
 	if (sbsrefstate->subscriptnull)
@@ -3068,7 +3068,7 @@ ExecEvalSubscriptingRef(ExprState *state, ExprEvalStep *op)
 		if (sbsrefstate->isassignment)
 			ereport(ERROR,
 					(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
-					 errmsg("array subscript in assignment must not be null")));
+					 errmsg("subscript in assignment must not be null")));
 		*op->resnull = true;
 		return false;
 	}
@@ -3080,7 +3080,7 @@ ExecEvalSubscriptingRef(ExprState *state, ExprEvalStep *op)
 		indexes = sbsrefstate->lowerindex;
 	off = op->d.sbsref_subscript.off;
 
-	indexes[off] = DatumGetInt32(sbsrefstate->subscriptvalue);
+	indexes[off] = sbsrefstate->subscriptvalue;
 
 	return true;
 }
@@ -3094,36 +3094,14 @@ void
 ExecEvalSubscriptingRefFetch(ExprState *state, ExprEvalStep *op)
 {
 	SubscriptingRefState *sbsrefstate = op->d.sbsref.state;
+	SubscriptRoutines	 *sbsroutines = sbsrefstate->sbsroutines;
 
 	/* Should not get here if source container (or any subscript) is null */
 	Assert(!(*op->resnull));
 
-	if (sbsrefstate->numlower == 0)
-	{
-		/* Scalar case */
-		*op->resvalue = array_get_element(*op->resvalue,
-										  sbsrefstate->numupper,
-										  sbsrefstate->upperindex,
-										  sbsrefstate->refattrlength,
-										  sbsrefstate->refelemlength,
-										  sbsrefstate->refelembyval,
-										  sbsrefstate->refelemalign,
-										  op->resnull);
-	}
-	else
-	{
-		/* Slice case */
-		*op->resvalue = array_get_slice(*op->resvalue,
-										sbsrefstate->numupper,
-										sbsrefstate->upperindex,
-										sbsrefstate->lowerindex,
-										sbsrefstate->upperprovided,
-										sbsrefstate->lowerprovided,
-										sbsrefstate->refattrlength,
-										sbsrefstate->refelemlength,
-										sbsrefstate->refelembyval,
-										sbsrefstate->refelemalign);
-	}
+
+	*op->resvalue = sbsroutines->fetch(*op->resvalue, sbsrefstate);
+	*op->resnull = sbsrefstate->resnull;
 }
 
 /*
@@ -3136,40 +3114,20 @@ void
 ExecEvalSubscriptingRefOld(ExprState *state, ExprEvalStep *op)
 {
 	SubscriptingRefState *sbsrefstate = op->d.sbsref.state;
+	SubscriptRoutines	 *sbsroutines = sbsrefstate->sbsroutines;
 
 	if (*op->resnull)
 	{
-		/* whole array is null, so any element or slice is too */
+		/* whole container is null, so any element or slice is too */
 		sbsrefstate->prevvalue = (Datum) 0;
 		sbsrefstate->prevnull = true;
 	}
-	else if (sbsrefstate->numlower == 0)
-	{
-		/* Scalar case */
-		sbsrefstate->prevvalue = array_get_element(*op->resvalue,
-												   sbsrefstate->numupper,
-												   sbsrefstate->upperindex,
-												   sbsrefstate->refattrlength,
-												   sbsrefstate->refelemlength,
-												   sbsrefstate->refelembyval,
-												   sbsrefstate->refelemalign,
-												   &sbsrefstate->prevnull);
-	}
 	else
 	{
-		/* Slice case */
-		/* this is currently unreachable */
-		sbsrefstate->prevvalue = array_get_slice(*op->resvalue,
-												 sbsrefstate->numupper,
-												 sbsrefstate->upperindex,
-												 sbsrefstate->lowerindex,
-												 sbsrefstate->upperprovided,
-												 sbsrefstate->lowerprovided,
-												 sbsrefstate->refattrlength,
-												 sbsrefstate->refelemlength,
-												 sbsrefstate->refelembyval,
-												 sbsrefstate->refelemalign);
-		sbsrefstate->prevnull = false;
+		sbsrefstate->prevvalue = sbsroutines->fetch(*op->resvalue, sbsrefstate);
+
+		if (sbsrefstate->numlower != 0)
+			sbsrefstate->prevnull = false;
 	}
 }
 
@@ -3182,12 +3140,13 @@ ExecEvalSubscriptingRefOld(ExprState *state, ExprEvalStep *op)
 void
 ExecEvalSubscriptingRefAssign(ExprState *state, ExprEvalStep *op)
 {
-	SubscriptingRefState *sbsrefstate = op->d.sbsref_subscript.state;
+	SubscriptingRefState *sbsrefstate = op->d.sbsref.state;
+	SubscriptRoutines	 *sbsroutines = sbsrefstate->sbsroutines;
 
 	/*
 	 * For an assignment to a fixed-length container type, both the original
-	 * container and the value to be assigned into it must be non-NULL, else
-	 * we punt and return the original container.
+	 * container and the value to be assigned into it must be non-NULL, else we
+	 * punt and return the original container.
 	 */
 	if (sbsrefstate->refattrlength > 0)
 	{
@@ -3195,47 +3154,9 @@ ExecEvalSubscriptingRefAssign(ExprState *state, ExprEvalStep *op)
 			return;
 	}
 
-	/*
-	 * For assignment to varlena arrays, we handle a NULL original array by
-	 * substituting an empty (zero-dimensional) array; insertion of the new
-	 * element will result in a singleton array value.  It does not matter
-	 * whether the new element is NULL.
-	 */
-	if (*op->resnull)
-	{
-		*op->resvalue = PointerGetDatum(construct_empty_array(sbsrefstate->refelemtype));
-		*op->resnull = false;
-	}
-
-	if (sbsrefstate->numlower == 0)
-	{
-		/* Scalar case */
-		*op->resvalue = array_set_element(*op->resvalue,
-										  sbsrefstate->numupper,
-										  sbsrefstate->upperindex,
-										  sbsrefstate->replacevalue,
-										  sbsrefstate->replacenull,
-										  sbsrefstate->refattrlength,
-										  sbsrefstate->refelemlength,
-										  sbsrefstate->refelembyval,
-										  sbsrefstate->refelemalign);
-	}
-	else
-	{
-		/* Slice case */
-		*op->resvalue = array_set_slice(*op->resvalue,
-										sbsrefstate->numupper,
-										sbsrefstate->upperindex,
-										sbsrefstate->lowerindex,
-										sbsrefstate->upperprovided,
-										sbsrefstate->lowerprovided,
-										sbsrefstate->replacevalue,
-										sbsrefstate->replacenull,
-										sbsrefstate->refattrlength,
-										sbsrefstate->refelemlength,
-										sbsrefstate->refelembyval,
-										sbsrefstate->refelemalign);
-	}
+	sbsrefstate->resnull = *op->resnull;
+	*op->resvalue = sbsroutines->assign(*op->resvalue, sbsrefstate);
+	*op->resnull = sbsrefstate->resnull;
 }
 
 /*

@@ -19,7 +19,7 @@
 
 /* forward references to avoid circularity */
 struct ExprEvalStep;
-struct SubscriptingRefState;
+struct SubscriptRoutines;
 
 /* Bits in ExprState->flags (see also execnodes.h for public flag bits): */
 /* expression's interpreter has been initialized */
@@ -672,13 +672,13 @@ typedef struct SubscriptingRefState
 	/* numupper and upperprovided[] are filled at compile time */
 	/* at runtime, extracted subscript datums get stored in upperindex[] */
 	int			numupper;
-	bool		upperprovided[MAXDIM];
-	int			upperindex[MAXDIM];
+	bool		upperprovided[MAX_SUBSCRIPT_DEPTH];
+	Datum		upperindex[MAX_SUBSCRIPT_DEPTH];
 
 	/* similarly for lower indexes, if any */
 	int			numlower;
-	bool		lowerprovided[MAXDIM];
-	int			lowerindex[MAXDIM];
+	bool		lowerprovided[MAX_SUBSCRIPT_DEPTH];
+	Datum		lowerindex[MAX_SUBSCRIPT_DEPTH];
 
 	/* subscript expressions get evaluated into here */
 	Datum		subscriptvalue;
@@ -691,6 +691,9 @@ typedef struct SubscriptingRefState
 	/* if we have a nested assignment, SBSREF_OLD puts old value here */
 	Datum		prevvalue;
 	bool		prevnull;
+
+	bool		resnull;
+	struct SubscriptRoutines *sbsroutines;
 } SubscriptingRefState;
 
 

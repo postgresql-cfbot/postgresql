@@ -54,6 +54,7 @@ CREATE TYPE <replaceable class="parameter">name</replaceable> (
     [ , ELEMENT = <replaceable class="parameter">element</replaceable> ]
     [ , DELIMITER = <replaceable class="parameter">delimiter</replaceable> ]
     [ , COLLATABLE = <replaceable class="parameter">collatable</replaceable> ]
+    [ , SUBSCRIPTING_HANDLER = <replaceable class="parameter">subscripting_handler_function</replaceable> ]
 )
 
 CREATE TYPE <replaceable class="parameter">name</replaceable>
@@ -196,8 +197,9 @@ CREATE TYPE <replaceable class="parameter">name</replaceable>
    <replaceable class="parameter">receive_function</replaceable>,
    <replaceable class="parameter">send_function</replaceable>,
    <replaceable class="parameter">type_modifier_input_function</replaceable>,
-   <replaceable class="parameter">type_modifier_output_function</replaceable> and
-   <replaceable class="parameter">analyze_function</replaceable>
+   <replaceable class="parameter">type_modifier_output_function</replaceable>,
+   <replaceable class="parameter">analyze_function</replaceable>,
+   <replaceable class="parameter">subscripting_handler_function</replaceable>
    are optional.  Generally these functions have to be coded in C
    or another low-level language.
   </para>
@@ -453,6 +455,22 @@ CREATE TYPE <replaceable class="parameter">name</replaceable>
    implementations of the functions operating on the type to actually
    make use of the collation information; this does not happen
    automatically merely by marking the type collatable.
+  </para>
+
+  <para>
+   The optional
+   <replaceable class="parameter">subscripting_handler_function</replaceable>
+   contains type-specific logic for subscripting of the data type.
+   By default, there is no such function provided, which means that the data
+   type doesn't support subscripting. The subscripting function must be
+   declared to take a single argument of type <type>internal</type>, and return
+   a <type>internal</type> result. There are two examples of implementation for
+   subscripting functions in case of array
+   (<replaceable class="parameter">array_subscripting_handler</replaceable>)
+   and jsonb
+   (<replaceable class="parameter">jsonb_subscripting_handler</replaceable>)
+   types in <filename>src/backend/utils/adt/arrayfuncs.c</filename> and
+   <filename>src/backend/utils/adt/jsonfuncs.c</filename> corresponding.
   </para>
   </refsect2>
 
@@ -769,6 +787,17 @@ CREATE TYPE <replaceable class="parameter">name</replaceable>
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">subscripting_handler_function</replaceable></term>
+    <listitem>
+     <para>
+      The name of a function that returns list of type-specific callback functions to
+      support subscripting logic for the data type.
+     </para>
+    </listitem>
+   </varlistentry>
+
   </variablelist>
  </refsect1>
 

@@ -2298,7 +2298,7 @@ compareItems(int32 op, JsonbValue *jb1, JsonbValue *jb2, bool useTz)
 			break;
 		case jbvDatetime:
 			{
-				bool		have_error = false;
+				bool		have_error;
 
 				cmp = compareDatetime(jb1->val.datetime.value,
 									  jb1->val.datetime.typid,
@@ -2571,15 +2571,72 @@ wrapItemsInArray(const JsonValueList *items)
 	return pushJsonbValue(&ps, WJB_END_ARRAY, NULL);
 }
 
+/* Check if the timezone required for casting from type1 to type2 is used */
+static void
+checkTimezoneIsUsedForCast(bool useTz, const char *type1, const char *type2)
+{
+	if (!useTz)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot convert value from %s to %s without timezone usage",
+						type1, type2),
+				 errhint("Use *_tz() function for timezone support.")));
+}
+
+/* Convert date datum to timestamp datum */
+static Datum
+castDateToTimestamp(Datum dt, bool *have_error)
+{
+	Timestamp	ts = date2timestamp_opt_error(DatumGetDateADT(dt), have_error);
+
+	return TimestampGetDatum(ts);
+}
+
+/* Convert date datum to timestamptz datum */
+static Datum
+castDateToTimestampTz(Datum date, bool useTz, bool *have_error)
+{
+	TimestampTz tstz;
+
+	checkTimezoneIsUsedForCast(useTz, "date", "timestamptz");
+	tstz = date2timestamptz_opt_error(DatumGetDateADT(date), have_error);
+
+	return TimestampTzGetDatum(tstz);
+}
+
+/* Convert time datum to timetz datum */
+static Datum
+castTimeToTimeTz(Datum time, bool useTz)
+{
+	checkTimezoneIsUsedForCast(useTz, "time", "timetz");
+
+	return DirectFunctionCall1(time_timetz, time);
+}
+
+/* Convert timestamp datum to timestamptz datum */
+static Datum
+castTimestampToTimestampTz(Timestamp ts, bool useTz, bool *have_error)
+{
+	TimestampTz tstz;
+
+	checkTimezoneIsUsedForCast(useTz, "timestamp", "timestamptz");
+	tstz = timestamp2timestamptz_opt_error(DatumGetTimestamp(ts), have_error);
+
+	return TimestampTzGetDatum(tstz);
+}
+
 /*
  * Cross-type comparison of two datetime SQL/JSON items.  If items are
- * uncomparable, 'error' flag is set.
+ * uncomparable or there is an error during casting, 'have_error' flag is set.
+ * If the cast requires timezone and it is not used, then hard error is thrown.
  */
 static int
 compareDatetime(Datum val1, Oid typid1, Datum val2, Oid typid2,
 				bool useTz, bool *have_error)
 {
-	PGFunction cmpfunc = NULL;
+	PGFunction cmpfunc;
+
+	*have_error = false;
 
 	switch (typid1)
 	{
@@ -2588,35 +2645,26 @@ compareDatetime(Datum val1, Oid typid1, Datum val2, Oid typid2,
 			{
 				case DATEOID:
 					cmpfunc = date_cmp;
-
 					break;
 
 				case TIMESTAMPOID:
-					val1 = TimestampGetDatum(date2timestamp_opt_error(DatumGetDateADT(val1), have_error));
-					if (have_error && *have_error)
-						return 0;
+					val1 = castDateToTimestamp(val1, have_error);
 					cmpfunc = timestamp_cmp;
-
 					break;
 
 				case TIMESTAMPTZOID:
-					if (!useTz)
-						ereport(ERROR,
-								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("cannot convert value from %s to %s without timezone usage",
-										"date", "timestamptz"),
-								 errhint("use *_tz() function for timezone support")));
-					val1 = TimestampTzGetDatum(date2timestamptz_opt_error(DatumGetDateADT(val1), have_error));
-					if (have_error && *have_error)
-						return 0;
+					val1 = castDateToTimestampTz(val1, useTz, have_error);
 					cmpfunc = timestamp_cmp;
-
 					break;
 
 				case TIMEOID:
 				case TIMETZOID:
-					*have_error = true;
+					*have_error = true;		/* uncomparable types */
 					return 0;
+
+				default:
+					elog(ERROR, "unrecognized SQL/JSON datetime type oid: %u",
+						 typid2);
 			}
 			break;
 
@@ -2625,26 +2673,22 @@ compareDatetime(Datum val1, Oid typid1, Datum val2, Oid typid2,
 			{
 				case TIMEOID:
 					cmpfunc = time_cmp;
-
 					break;
 
 				case TIMETZOID:
-					if (!useTz)
-						ereport(ERROR,
-								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("cannot convert value from %s to %s without timezone usage",
-										"time", "timetz"),
-								 errhint("use *_tz() function for timezone support")));
-					val1 = DirectFunctionCall1(time_timetz, val1);
+					val1 = castTimeToTimeTz(val1, useTz);
 					cmpfunc = timetz_cmp;
-
 					break;
 
 				case DATEOID:
 				case TIMESTAMPOID:
 				case TIMESTAMPTZOID:
-					*have_error = true;
+					*have_error = true;		/* uncomparable types */
 					return 0;
+
+				default:
+					elog(ERROR, "unrecognized SQL/JSON datetime type oid: %u",
+						 typid2);
 			}
 			break;
 
@@ -2652,27 +2696,23 @@ compareDatetime(Datum val1, Oid typid1, Datum val2, Oid typid2,
 			switch (typid2)
 			{
 				case TIMEOID:
-					if (!useTz)
-						ereport(ERROR,
-								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("cannot convert value from %s to %s without timezone usage",
-										"time", "timetz"),
-								 errhint("use *_tz() function for timezone support")));
-					val2 = DirectFunctionCall1(time_timetz, val2);
+					val2 = castTimeToTimeTz(val2, useTz);
 					cmpfunc = timetz_cmp;
-
 					break;
 
 				case TIMETZOID:
 					cmpfunc = timetz_cmp;
-
 					break;
 
 				case DATEOID:
 				case TIMESTAMPOID:
 				case TIMESTAMPTZOID:
-					*have_error = true;
+					*have_error = true;		/* uncomparable types */
 					return 0;
+
+				default:
+					elog(ERROR, "unrecognized SQL/JSON datetime type oid: %u",
+						 typid2);
 			}
 			break;
 
@@ -2680,36 +2720,27 @@ compareDatetime(Datum val1, Oid typid1, Datum val2, Oid typid2,
 			switch (typid2)
 			{
 				case DATEOID:
-					val2 = TimestampGetDatum(date2timestamp_opt_error(DatumGetDateADT(val2), have_error));
-					if (have_error && *have_error)
-						return 0;
+					val2 = castDateToTimestamp(val2, have_error);
 					cmpfunc = timestamp_cmp;
-
 					break;
 
 				case TIMESTAMPOID:
 					cmpfunc = timestamp_cmp;
-
 					break;
 
 				case TIMESTAMPTZOID:
-					if (!useTz)
-						ereport(ERROR,
-								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("cannot convert value from %s to %s without timezone usage",
-										"timestamp", "timestamptz"),
-								 errhint("use *_tz() function for timezone support")));
-					val1 = TimestampTzGetDatum(timestamp2timestamptz_opt_error(DatumGetTimestamp(val1), have_error));
-					if (have_error && *have_error)
-						return 0;
+					val1 = castTimestampToTimestampTz(val1, useTz, have_error);
 					cmpfunc = timestamp_cmp;
-
 					break;
 
 				case TIMEOID:
 				case TIMETZOID:
-					*have_error = true;
+					*have_error = true;		/* uncomparable types */
 					return 0;
+
+				default:
+					elog(ERROR, "unrecognized SQL/JSON datetime type oid: %u",
+						 typid2);
 			}
 			break;
 
@@ -2717,58 +2748,36 @@ compareDatetime(Datum val1, Oid typid1, Datum val2, Oid typid2,
 			switch (typid2)
 			{
 				case DATEOID:
-					if (!useTz)
-						ereport(ERROR,
-								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("cannot convert value from %s to %s without timezone usage",
-										"date", "timestamptz"),
-								 errhint("use *_tz() function for timezone support")));
-					val2 = TimestampTzGetDatum(date2timestamptz_opt_error(DatumGetDateADT(val2), have_error));
-					if (have_error && *have_error)
-						return 0;
+					val2 = castDateToTimestampTz(val2, useTz, have_error);
 					cmpfunc = timestamp_cmp;
-
 					break;
 
 				case TIMESTAMPOID:
-					if (!useTz)
-						ereport(ERROR,
-								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("cannot convert value from %s to %s without timezone usage",
-										"timestamp", "timestamptz"),
-								 errhint("use *_tz() function for timezone support")));
-					val2 = TimestampTzGetDatum(timestamp2timestamptz_opt_error(DatumGetTimestamp(val2), have_error));
-					if (have_error && *have_error)
-						return 0;
+					val2 = castTimestampToTimestampTz(val2, useTz, have_error);
 					cmpfunc = timestamp_cmp;
-
 					break;
 
 				case TIMESTAMPTZOID:
 					cmpfunc = timestamp_cmp;
-
 					break;
 
 				case TIMEOID:
 				case TIMETZOID:
-					*have_error = true;
+					*have_error = true;		/* uncomparable types */
 					return 0;
+
+				default:
+					elog(ERROR, "unrecognized SQL/JSON datetime type oid: %u",
+						 typid2);
 			}
 			break;
 
 		default:
-			elog(ERROR, "unrecognized SQL/JSON datetime type oid: %d",
-				 typid1);
+			elog(ERROR, "unrecognized SQL/JSON datetime type oid: %u", typid1);
 	}
 
 	if (*have_error)
-		return 0;
-
-	if (!cmpfunc)
-		elog(ERROR, "unrecognized SQL/JSON datetime type oid: %d",
-			 typid2);
-
-	*have_error = false;
+		return 0;		/* cast error */
 
 	return DatumGetInt32(DirectFunctionCall2(cmpfunc, val1, val2));
 }

@@ -99,6 +99,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	/* Set default value */
 	params.index_cleanup = VACOPT_TERNARY_DEFAULT;
 	params.truncate = VACOPT_TERNARY_DEFAULT;
+	params.nworkers = -1;
 
 	/* Parse options list */
 	foreach(lc, vacstmt->options)
@@ -129,6 +130,27 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 			params.index_cleanup = get_vacopt_ternary_value(opt);
 		else if (strcmp(opt->defname, "truncate") == 0)
 			params.truncate = get_vacopt_ternary_value(opt);
+		else if (strcmp(opt->defname, "parallel") == 0)
+		{
+			if (opt->arg == NULL)
+			{
+				/*
+				 * Parallel lazy vacuum is requested but user didn't specify
+				 * the parallel degree. The parallel degree will be determined
+				 * at the start of lazy vacuum.
+				 */
+				params.nworkers = 0;
+			}
+			else
+			{
+				params.nworkers = defGetInt32(opt);
+				if (params.nworkers < 1)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("parallel vacuum degree must be at least 1"),
+							 parser_errposition(pstate, opt->location)));
+			}
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -169,6 +191,11 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 						 errmsg("ANALYZE option must be specified when a column list is provided")));
 		}
 	}
+
+	if ((params.options & VACOPT_FULL) && params.nworkers >= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot specify FULL option with PARALLEL option")));
 
 	/*
 	 * All freeze ages are zero if the FREEZE option is given; otherwise pass

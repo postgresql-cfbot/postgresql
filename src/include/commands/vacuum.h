@@ -184,6 +184,11 @@ typedef struct VacuumParams
 										 * default value depends on reloptions */
 	VacOptTernaryValue truncate;	/* Truncate empty pages at the end,
 									 * default value depends on reloptions */
+	/*
+	 * The number of parallel vacuum workers. -1 by default for no workers
+	 * and 0 for choosing based on the number of indexes.
+	 */
+	int			nworkers;
 } VacuumParams;
 
 /* GUC parameters */

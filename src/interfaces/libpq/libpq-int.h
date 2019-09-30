@@ -155,6 +155,51 @@ typedef struct
 	void	   *noticeProcArg;
 } PGNoticeHooks;
 
+/*
+ * Logging
+ */
+
+/* Log message source */
+typedef enum
+{
+	FROM_BACKEND,
+	FROM_FRONTEND
+} PGCommSource;
+
+/* PGLogState defines the state of the Logging message state machine */
+typedef enum
+{
+	LOG_FIRST_BYTE,	/* logging the first byte identifing the protocol message type */
+	LOG_LENGTH,	/* logging protocol message length */
+	LOG_CONTENTS	/* logging protocol message contents */
+} PGLogState;
+
+/* Protocol message */
+typedef struct PGLogMsg
+{
+	PGLogState state;	/* state of logging message state machine */
+	int length;	/* protocol message length */
+	char command;	/* first one byte of protocol message */
+} PGLogMsg;
+
+/* Frontend message data type */
+typedef enum
+{
+	LOG_BYTE1,
+	LOG_STRING,
+	LOG_NCHAR,
+	LOG_INT16,
+	LOG_INT32
+} PGLogMsgDataType;
+
+/* Store frontend message address */
+typedef struct PGFrontendLogMsgEntry
+{
+	PGLogMsgDataType type;
+	int message_addr;
+	int message_length;
+} PGFrontendLogMsgEntry;
+
 typedef struct PGEvent
 {
 	PGEventProc proc;			/* the function to call on events */
@@ -372,6 +417,11 @@ struct pg_conn
 
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
+
+	/* Trace log info to output one line */
+	PGLogMsg logging_message;
+	PGFrontendLogMsgEntry frontend_entry[MAXPGPATH];
+	int		nMsgEntrys;
 
 	/* Callback procedures for notice message processing */
 	PGNoticeHooks noticeHooks;
@@ -659,6 +709,7 @@ extern int	pqWaitTimed(int forRead, int forWrite, PGconn *conn,
 						time_t finish_time);
 extern int	pqReadReady(PGconn *conn);
 extern int	pqWriteReady(PGconn *conn);
+extern void	pqLogLineBreak(int size, PGconn *conn);
 
 /* === in fe-secure.c === */
 

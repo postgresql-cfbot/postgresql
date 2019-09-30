@@ -35,6 +35,7 @@
 
 #ifdef WIN32
 #include "win32.h"
+#include <windows.h>
 #else
 #include <unistd.h>
 #include <sys/time.h>
@@ -45,6 +46,7 @@
 #endif
 #ifdef HAVE_SYS_SELECT_H
 #include <sys/select.h>
+#include <sys/timeb.h>
 #endif
 
 #include "libpq-fe.h"
@@ -53,12 +55,327 @@
 #include "port/pg_bswap.h"
 #include "pg_config_paths.h"
 
+/*
+ * protocol types:
+ *
+ * protocol_message_type_b[]: message types sent by a backend
+ * protocol_message_type_f[]: message types sent by a frontend
+ * protocol_message_type_bf[]: messages types sent by both backend and frontend
+ *
+ */
+static char *protocol_message_type_b[] = {
+	/* 0 */ 0,
+	/* 1 */ "ParseComplete",
+	/* 2 */ "BindComplete",
+	/* 3 */ "CloseComplete",
+	/* \x04 - \x0f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x10 - \x1f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x20 - \x2f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x30 - \x3f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* @ */ 0,
+	/* A */ "NotificationResponse",
+	/* B */ 0,
+	/* C */ "CommandComplete",
+	/* D */ "DataRow",
+	/* E */ "ErrorResponse",
+	/* F */ 0,
+	/* G */ "CopyInResponse",
+	/* H */ "CopyOutResponse",
+	/* I */ "EmptyQueryResponse",
+	/* J */ 0,
+	/* K */ "BackendKeyData",
+	/* L */ 0,
+	/* M */ 0,
+	/* N */ "NoticeResponse",
+	/* O */ 0,
+	/* P */ 0,
+	/* Q */ 0,
+	/* R */ "Authentication",
+	/* S */ "ParameterStatus",
+	/* T */ "RowDescription",
+	/* U */ 0,
+	/* V */ "FunctionCallResponse",
+	/* W */ "CopyBothResponse",
+	/* X */ 0,
+	/* Y */ 0,
+	/* Z */ "ReadyForQuery",
+	/* \x5b - \x5f*/ 0, 0, 0, 0, 0,
+	/* \x60 - \x6d*/ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* n */ "NoData",
+	/* o */ 0,
+	/* p */ 0,
+	/* q */ 0,
+	/* r */ 0,
+	/* s */ "PortalSuspended",
+	/* t */ "ParameterDescription",
+	/* u */ 0,
+	/* v */ "NegotiateProtocolVersion",
+};
+#define COMMAND_B_MAX (sizeof(protocol_message_type_b) / sizeof(*protocol_message_type_b))
+
+static char *protocol_message_type_f[] = {
+	/* \0   - \x0f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x10 - \x1f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x20 - \x2f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x30 - \x3f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* @ */ 0,
+	/* A */ 0,
+	/* B */ "Bind",
+	/* C */ "Close",
+	/* D */ "Describe",
+	/* E */ "Execute",
+	/* F */ "FunctionCall",
+	/* G */ 0,
+	/* H */ "Flush",
+	/* I - O       */ 0, 0, 0, 0, 0, 0, 0,
+	/* P */ "Parse",
+	/* Q */ "Query",
+	/* R */ 0,
+	/* S */ "Sync",
+	/* T - W       */ 0, 0, 0, 0,
+	/* X */ "Terminate",
+	/* Y */ 0,
+	/* Z */ 0,
+	/* \x5b - \x65 */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* f */ "CopyFail",
+	/* g - o       */ 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* p */ "AuthnenticationResponse",
+};
+#define COMMAND_F_MAX (sizeof(protocol_message_type_f) / sizeof(*protocol_message_type_f))
+
+static char *protocol_message_type_bf[] = {
+	/* \0   - \x0f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x10 - \x1f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x20 - \x2f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x30 - \x3f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x40 - \x4f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* \x50 - \x5f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	/* ` */ 0,
+	/* a */ 0,
+	/* b */ 0,
+	/* c */ "CopyDone",
+	/* d */ "CopyData",
+};
+#define COMMAND_BF_MAX (sizeof(protocol_message_type_bf) / sizeof(*protocol_message_type_bf))
+
 
 static int	pqPutMsgBytes(const void *buf, size_t len, PGconn *conn);
 static int	pqSendSome(PGconn *conn, int len);
 static int	pqSocketCheck(PGconn *conn, int forRead, int forWrite,
 						  time_t end_time);
 static int	pqSocketPoll(int sock, int forRead, int forWrite, time_t end_time);
+static void	fputnbytes(FILE *f, const char *str, size_t n);
+static void 	pqLogMsgByte1(PGconn *conn, char v, PGCommSource commsource);
+static void 	pqLogMsgString(PGconn *conn, const char *v, int length,
+				PGCommSource commsource);
+static void 	pqLogMsgnchar(PGconn *conn, const char *v, int length,
+				PGCommSource commsource);
+static void 	pqLogMsgInt(PGconn *conn, int v, int length, PGCommSource commsource);
+static void 	pqGetCurrentTime(char* currenttime);
+#define	TRACELOG_TIME_SIZE	33
+
+/*
+ * pqGetProtocolMsgType:
+ * 	Get a protocol type from first byte identifier
+ */
+static char *
+pqGetProtocolMsgType(unsigned char c, PGCommSource commsource)
+{
+	char *message_type = 0;
+
+	if (c >= 0 && c < COMMAND_BF_MAX)
+	{
+		message_type = protocol_message_type_bf[c];
+		if (message_type)
+			return message_type;
+	}
+
+	if (commsource == FROM_BACKEND && c >= 0 && c < COMMAND_B_MAX)
+	{
+		message_type = protocol_message_type_b[c];
+		if (message_type)
+			return message_type;
+	}
+
+	if (commsource == FROM_FRONTEND && c >= 0 && c < COMMAND_F_MAX)
+	{
+		message_type = protocol_message_type_f[c];
+		if (message_type)
+			return message_type;
+	}
+
+	return "UnknownCommand";
+}
+
+/* pqInitMsgLog: Initializing logging message */
+static void
+pqInitMsgLog(PGconn *conn) {
+	conn->logging_message.state = LOG_FIRST_BYTE;
+	conn->logging_message.length = 0;
+}
+
+/* pqLogInvalidProtocol: Output a message the protocol is invalid */
+static void
+pqLogInvalidProtocol(PGconn *conn)
+{
+	fprintf(conn->Pfdebug, ":::Invalid Protocol\n");
+	conn->logging_message.state = LOG_FIRST_BYTE;
+}
+
+/*
+ * pqLogLineBreak:
+ * 	Check whether message formats is complete. If so,
+ * 	break the line.
+ */
+void
+pqLogLineBreak(int size, PGconn *conn)
+{
+	conn->logging_message.length -= size;
+	if (conn->logging_message.length <= 0)
+	{
+		fprintf(conn->Pfdebug, "\n");
+		pqInitMsgLog(conn);
+	}
+}
+
+/*
+ * pqStoreFrontendMsg: Store message addresses that frontend sends.
+ *
+ * 	Message length is added at the last if message is sent by the frontend.
+ * 	To arrange the log output format, frontend message contents are stored in the list.
+ */
+static void pqStoreFrontendMsg(PGconn *conn ,PGLogMsgDataType type, int length)
+{
+	char 		message;
+	uint16		result16 = 0;
+	uint32		result32 = 0;
+	int		result = 0;
+
+	if (PG_PROTOCOL_MAJOR(conn->pversion) >= 3)
+	{
+		conn->frontend_entry[conn->nMsgEntrys].type  = type;
+		conn->frontend_entry[conn->nMsgEntrys].message_addr  = conn->outMsgEnd - length;
+		conn->frontend_entry[conn->nMsgEntrys].message_length  = length;
+		conn->nMsgEntrys++;
+	}
+	else
+	{
+		/* Output one content per one line in older protocol version */
+		switch (type)
+		{
+			case LOG_BYTE1:
+				memcpy(&message, conn->outBuffer + conn->outMsgEnd - length, length);
+				fprintf(conn->Pfdebug, "To backend> %c\n", message);
+				break;
+
+			case LOG_STRING:
+				memcpy(&message, conn->outBuffer + conn->outMsgEnd - length, length);
+				fprintf(conn->Pfdebug, "To backend> \"%c\"\n", message);
+				break;
+
+			case LOG_NCHAR:
+				fprintf(conn->Pfdebug, "To backend (%d)> ", length);
+				fputnbytes(conn->Pfdebug, conn->outBuffer + conn->outMsgEnd - length, length);
+				fprintf(conn->Pfdebug, "\n");
+				break;
+
+			case LOG_INT16:
+				memcpy(&result16, conn->outBuffer + conn->outMsgEnd - length, length);
+				result = (int) pg_ntoh16(result16);
+				fprintf(conn->Pfdebug, "To backend (#%d)> %c\n", length, result);
+				break;
+
+			case LOG_INT32:
+				memcpy(&result32, conn->outBuffer + conn->outMsgEnd - length, length);
+				result = (int) pg_ntoh32(result32);
+				fprintf(conn->Pfdebug, "To backend (#%d)> %c\n", length, result);
+				break;
+		}
+	}
+}
+
+/*
+ * pqLogFrontendMsg:
+ * 	Output frontend message contents after the message length.
+ */
+static void pqLogFrontendMsg(PGconn *conn)
+{
+	int 		i;
+	int 		message_addr;
+	int 		length;
+
+	char 		message;
+	uint16		result16 = 0;
+	uint32		result32 = 0;
+	int		result = 0;
+
+	for (i = 0; i < conn->nMsgEntrys; i++)
+	{
+		message_addr = conn->frontend_entry[i].message_addr;
+		length = conn->frontend_entry[i].message_length;
+
+		switch (conn->frontend_entry[i].type)
+		{
+			case LOG_BYTE1:
+				memcpy(&message, conn->outBuffer + message_addr, length);
+				pqLogMsgByte1(conn, message, FROM_FRONTEND);
+				break;
+
+			case LOG_STRING:
+				pqLogMsgString(conn, conn->outBuffer + message_addr,
+								length, FROM_FRONTEND);
+				break;
+
+			case LOG_NCHAR:
+				pqLogMsgnchar(conn, conn->outBuffer + message_addr,
+								length, FROM_FRONTEND);
+				break;
+
+			case LOG_INT16:
+				memcpy(&result16, conn->outBuffer + message_addr, length);
+				result = (int) pg_ntoh16(result16);
+				pqLogMsgInt(conn, result, length, FROM_FRONTEND);
+				break;
+
+			case LOG_INT32:
+				memcpy(&result32, conn->outBuffer + message_addr, length);
+				result = (int) pg_ntoh32(result32);
+				pqLogMsgInt(conn, result, length, FROM_FRONTEND);
+				break;
+		}
+	}
+	pqInitMsgLog(conn);
+}
+
+/*
+ * pqGetCurrentTime: get current time for trace log output
+ */
+static void
+pqGetCurrentTime(char* currenttime)
+{
+#ifdef WIN32
+	SYSTEMTIME localTime;
+	TIME_ZONE_INFORMATION TimezoneInfo;
+	GetLocalTime(&localTime);
+
+	GetTimeZoneInformation(&TimezoneInfo);
+	snprintf(currenttime, TRACELOG_TIME_SIZE, "%4d-%02d-%02d %02d:%02d:%02d.%03d %s ",
+				localTime.wYear, localTime.wMonth, localTime.wDay,
+				localTime.wHour, localTime.wMinute, localTime.wSecond,
+				localTime.wMilliseconds, TimezoneInfo.Bias);
+#else
+	struct timeb localTime;
+	struct tm *tm;
+	char timezone[100];
+	ftime(&localTime);
+	tm = localtime(&localTime.time);
+
+	strftime(timezone, sizeof(timezone), "%Z", tm);
+	snprintf(currenttime, TRACELOG_TIME_SIZE, "%4d-%02d-%02d %02d:%02d:%02d.%03d %s ",
+			1900+ tm->tm_year, 1 + tm->tm_mon, tm->tm_mday,
+			tm->tm_hour, tm->tm_min, tm->tm_sec, localTime.millitm, timezone);
+#endif
+}
 
 /*
  * PQlibVersion: return the libpq version number
@@ -99,11 +416,10 @@ pqGetc(char *result, PGconn *conn)
 	*result = conn->inBuffer[conn->inCursor++];
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "From backend> %c\n", *result);
+		pqLogMsgByte1(conn, *result, FROM_BACKEND);
 
 	return 0;
 }
-
 
 /*
  * pqPutc: write 1 char to the current message
@@ -115,9 +431,54 @@ pqPutc(char c, PGconn *conn)
 		return EOF;
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> %c\n", c);
+		pqStoreFrontendMsg(conn, LOG_BYTE1, 1);
 
 	return 0;
+}
+
+/*
+ * pqLogMsgByte1: output 1 char message to the log
+ */
+static void
+pqLogMsgByte1(PGconn *conn, char v, PGCommSource commsource)
+{
+	char *protocol_message_type;
+	char *message_source = commsource == FROM_BACKEND ? "<" : ">";
+	char current_time[TRACELOG_TIME_SIZE];
+
+	if (PG_PROTOCOL_MAJOR(conn->pversion) >= 3)
+	{
+		switch (conn->logging_message.state)
+		{
+			case LOG_FIRST_BYTE:
+				pqGetCurrentTime(current_time);
+				fprintf(conn->Pfdebug, "%s %s " , current_time, message_source);
+				/* If there is no first 1 byte protocol message, */
+				if (v == ' ')
+					return;
+
+				protocol_message_type = pqGetProtocolMsgType((unsigned char) v, commsource);
+				fprintf(conn->Pfdebug, "%s ", protocol_message_type);
+				/* Change the state to get protocol message length */
+				conn->logging_message.state = LOG_LENGTH;
+				conn->logging_message.command = v;
+				conn->nMsgEntrys = 0;
+				break;
+
+			case LOG_CONTENTS:
+				fprintf(conn->Pfdebug, "%c ", v);
+				pqLogLineBreak(sizeof(v), conn);
+				break;
+
+			default:
+				pqLogInvalidProtocol(conn);
+				break;
+		}
+	}
+	else
+		fprintf(conn->Pfdebug, "FROM backend> %c\n", v);
+
+	return;
 }
 
 
@@ -153,8 +514,7 @@ pqGets_internal(PQExpBuffer buf, PGconn *conn, bool resetbuffer)
 	conn->inCursor = ++inCursor;
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "From backend> \"%s\"\n",
-				buf->data);
+		pqLogMsgString(conn, buf->data, buf->len + 1, FROM_BACKEND);
 
 	return 0;
 }
@@ -182,9 +542,36 @@ pqPuts(const char *s, PGconn *conn)
 		return EOF;
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> \"%s\"\n", s);
+		pqStoreFrontendMsg(conn, LOG_STRING, strlen(s) + 1);
 
 	return 0;
+}
+
+/*
+ * pqLogMsgString: output a a null-terminated string to the log
+ */
+static void
+pqLogMsgString(PGconn *conn, const char *v, int length, PGCommSource commsource)
+{
+	if(length < 0)
+		length = strlen(v) + 1;
+
+	if (PG_PROTOCOL_MAJOR(conn->pversion) >= 3)
+	{
+		switch (conn->logging_message.state)
+		{
+			case LOG_CONTENTS:
+				fprintf(conn->Pfdebug, "\"%s\" ", v);
+				pqLogLineBreak(length, conn);
+				break;
+
+			default:
+				pqLogInvalidProtocol(conn);
+				break;
+		}
+	}
+	else
+		fprintf(conn->Pfdebug, "To backend> \"%s\"\n", v);
 }
 
 /*
@@ -203,11 +590,7 @@ pqGetnchar(char *s, size_t len, PGconn *conn)
 	conn->inCursor += len;
 
 	if (conn->Pfdebug)
-	{
-		fprintf(conn->Pfdebug, "From backend (%lu)> ", (unsigned long) len);
-		fputnbytes(conn->Pfdebug, s, len);
-		fprintf(conn->Pfdebug, "\n");
-	}
+		pqLogMsgnchar(conn, s, len, FROM_BACKEND);
 
 	return 0;
 }
@@ -227,11 +610,7 @@ pqSkipnchar(size_t len, PGconn *conn)
 		return EOF;
 
 	if (conn->Pfdebug)
-	{
-		fprintf(conn->Pfdebug, "From backend (%lu)> ", (unsigned long) len);
-		fputnbytes(conn->Pfdebug, conn->inBuffer + conn->inCursor, len);
-		fprintf(conn->Pfdebug, "\n");
-	}
+		pqLogMsgnchar(conn, conn->inBuffer + conn->inCursor, len, FROM_BACKEND);
 
 	conn->inCursor += len;
 
@@ -249,13 +628,39 @@ pqPutnchar(const char *s, size_t len, PGconn *conn)
 		return EOF;
 
 	if (conn->Pfdebug)
-	{
-		fprintf(conn->Pfdebug, "To backend> ");
-		fputnbytes(conn->Pfdebug, s, len);
-		fprintf(conn->Pfdebug, "\n");
-	}
+		pqStoreFrontendMsg(conn, LOG_NCHAR, len);
 
 	return 0;
+}
+
+/*
+ * pqLogMsgnchar: output a string of exactly len bytes message to the log
+ */
+static void
+pqLogMsgnchar(PGconn *conn, const char *v, int length, PGCommSource commsource)
+{
+	if (PG_PROTOCOL_MAJOR(conn->pversion) >= 3)
+	{
+		switch (conn->logging_message.state)
+		{
+			case LOG_CONTENTS:
+				fprintf(conn->Pfdebug, "\'");
+				fputnbytes(conn->Pfdebug, v, length);
+				fprintf(conn->Pfdebug, "\' ");
+				pqLogLineBreak(length, conn);
+				break;
+
+			default:
+				pqLogInvalidProtocol(conn);
+				break;
+		}
+	}
+	else
+	{
+		fprintf(conn->Pfdebug, "From backend (%d)> ", length);
+		fputnbytes(conn->Pfdebug, v, length);
+		fprintf(conn->Pfdebug, "\n");
+	}
 }
 
 /*
@@ -293,7 +698,7 @@ pqGetInt(int *result, size_t bytes, PGconn *conn)
 	}
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "From backend (#%lu)> %d\n", (unsigned long) bytes, *result);
+		pqLogMsgInt(conn, *result, (unsigned int) bytes, FROM_BACKEND);
 
 	return 0;
 }
@@ -315,11 +720,15 @@ pqPutInt(int value, size_t bytes, PGconn *conn)
 			tmp2 = pg_hton16((uint16) value);
 			if (pqPutMsgBytes((const char *) &tmp2, 2, conn))
 				return EOF;
+			if (conn->Pfdebug)
+				pqStoreFrontendMsg(conn, LOG_INT16, 2);
 			break;
 		case 4:
 			tmp4 = pg_hton32((uint32) value);
 			if (pqPutMsgBytes((const char *) &tmp4, 4, conn))
 				return EOF;
+			if (conn->Pfdebug)
+				pqStoreFrontendMsg(conn, LOG_INT32, 4);
 			break;
 		default:
 			pqInternalNotice(&conn->noticeHooks,
@@ -327,11 +736,64 @@ pqPutInt(int value, size_t bytes, PGconn *conn)
 							 (unsigned long) bytes);
 			return EOF;
 	}
-
-	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend (%lu#)> %d\n", (unsigned long) bytes, value);
-
 	return 0;
+}
+
+/*
+ * pqLogMsgInt: output a 2 or 4 bytes integer message to the log
+ */
+static void
+pqLogMsgInt(PGconn *conn, int v, int length, PGCommSource commsource)
+{
+	char *prefix = length == 4 ? "" : "#";
+	char *message_type = 0;
+	uint32		result32 = 0;
+	int		result = 0;
+	int 		message_addr;
+
+	if (PG_PROTOCOL_MAJOR(conn->pversion) >= 3)
+	{
+		switch (conn->logging_message.state)
+		{
+			/* Output message type here
+			 * for protocol messages that do not have the first byte. */
+			case LOG_FIRST_BYTE:
+				if (conn->nMsgEntrys > 0)
+				{
+					message_addr = conn->frontend_entry[0].message_addr;
+					memcpy(&result32, conn->outBuffer + message_addr, 4);
+					result = (int) pg_ntoh32(result32);
+
+					if (result == NEGOTIATE_SSL_CODE)
+						message_type = "SSLRequest";
+					else
+						message_type = "StartupMessage";
+				}
+				else
+					message_type = "UnknownCommand";
+				fprintf(conn->Pfdebug, "%s ", message_type);
+				conn->logging_message.state = LOG_LENGTH;
+
+			case LOG_LENGTH:
+				fprintf(conn->Pfdebug, "%d ", v);
+				conn->logging_message.length = v - length;
+				/* Change the state to log protocol message contents */
+				conn->logging_message.state = LOG_CONTENTS;
+				pqLogLineBreak(0, conn);
+				break;
+
+			case LOG_CONTENTS:
+				fprintf(conn->Pfdebug, "%s%d ", prefix, v);
+				pqLogLineBreak(length, conn);
+				break;
+
+			default:
+				pqLogInvalidProtocol(conn);
+				break;
+		}
+	}
+	else
+		fprintf(conn->Pfdebug, "To backend (#%d)> %d\n", length, v);
 }
 
 /*
@@ -549,8 +1011,7 @@ pqPutMsgStart(char msg_type, bool force_len, PGconn *conn)
 	/* length word, if needed, will be filled in by pqPutMsgEnd */
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> Msg %c\n",
-				msg_type ? msg_type : ' ');
+		pqLogMsgByte1(conn, msg_type ? msg_type : ' ', FROM_FRONTEND);
 
 	return 0;
 }
@@ -586,14 +1047,22 @@ pqPutMsgBytes(const void *buf, size_t len, PGconn *conn)
 int
 pqPutMsgEnd(PGconn *conn)
 {
-	if (conn->Pfdebug)
+	if (conn->Pfdebug && PG_PROTOCOL_MAJOR(conn->pversion) < 3)
+	{
 		fprintf(conn->Pfdebug, "To backend> Msg complete, length %u\n",
 				conn->outMsgEnd - conn->outCount);
+	}
 
 	/* Fill in length word if needed */
 	if (conn->outMsgStart >= 0)
 	{
 		uint32		msgLen = conn->outMsgEnd - conn->outMsgStart;
+
+		if (conn->Pfdebug)
+		{
+			pqLogMsgInt(conn, (int) msgLen, 4, FROM_FRONTEND);
+			pqLogFrontendMsg(conn);
+		}
 
 		msgLen = pg_hton32(msgLen);
 		memcpy(conn->outBuffer + conn->outMsgStart, &msgLen, 4);

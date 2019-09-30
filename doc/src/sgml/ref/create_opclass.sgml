@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE OPERATOR CLASS <replaceable class="parameter">name</replaceable> [ DEFAULT ] FOR TYPE <replaceable class="parameter">data_type</replaceable>
+CREATE OPERATOR CLASS <replaceable class="parameter">name</replaceable> [ DEFAULT | NOT BITWISE ] FOR TYPE <replaceable class="parameter">data_type</replaceable>
   USING <replaceable class="parameter">index_method</replaceable> [ FAMILY <replaceable class="parameter">family_name</replaceable> ] AS
   {  OPERATOR <replaceable class="parameter">strategy_number</replaceable> <replaceable class="parameter">operator_name</replaceable> [ ( <replaceable class="parameter">op_type</replaceable>, <replaceable class="parameter">op_type</replaceable> ) ] [ FOR SEARCH | FOR ORDER BY <replaceable class="parameter">sort_family_name</replaceable> ]
    | FUNCTION <replaceable class="parameter">support_number</replaceable> [ ( <replaceable class="parameter">op_type</replaceable> [ , <replaceable class="parameter">op_type</replaceable> ] ) ] <replaceable class="parameter">function_name</replaceable> ( <replaceable class="parameter">argument_type</replaceable> [, ...] )
@@ -102,6 +102,18 @@ CREATE OPERATOR CLASS <replaceable class="parameter">name</replaceable> [ DEFAUL
       If present, the operator class will become the default
       operator class for its data type.  At most one operator class
       can be the default for a specific data type and index method.
+     </para>
+    </listitem>
+   </varlistentry>
+
+    <varlistentry>
+    <term><literal>NOT BITWISE</literal></term>
+    <listitem>
+     <para>
+      If present, the operator class equality is not the same as equivalence.
+      For example, two numerics can compare equal but have different scales.
+      Most opclasses implement bitwise equal comparison, alternative behaviour
+      must be set explicitly.
      </para>
     </listitem>
    </varlistentry>

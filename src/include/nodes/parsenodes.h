@@ -2577,6 +2577,7 @@ typedef struct CreateOpClassStmt
 	TypeName   *datatype;		/* datatype of indexed column */
 	List	   *items;			/* List of CreateOpClassItem nodes */
 	bool		isDefault;		/* Should be marked as default for type? */
+	bool		isNotBitwise;		/* Is opclass equality bitwise? */
 } CreateOpClassStmt;
 
 #define OPCLASS_ITEM_OPERATOR		1

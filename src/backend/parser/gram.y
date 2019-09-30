@@ -590,6 +590,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
 
+%type <boolean>		opt_not_bitwise
+
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
  * They must be listed first so that their numeric codes do not depend on
@@ -616,7 +618,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	AGGREGATE ALL ALSO ALTER ALWAYS ANALYSE ANALYZE AND ANY ARRAY AS ASC
 	ASSERTION ASSIGNMENT ASYMMETRIC AT ATTACH ATTRIBUTE AUTHORIZATION
 
-	BACKWARD BEFORE BEGIN_P BETWEEN BIGINT BINARY BIT
+	BACKWARD BEFORE BEGIN_P BETWEEN BIGINT BINARY BIT BITWISE
 	BOOLEAN_P BOTH BY
 
 	CACHE CALL CALLED CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
@@ -5951,16 +5953,17 @@ opt_if_not_exists: IF_P NOT EXISTS              { $$ = true; }
  *****************************************************************************/
 
 CreateOpClassStmt:
-			CREATE OPERATOR CLASS any_name opt_default FOR TYPE_P Typename
+			CREATE OPERATOR CLASS any_name opt_default opt_not_bitwise FOR TYPE_P Typename
 			USING access_method opt_opfamily AS opclass_item_list
 				{
 					CreateOpClassStmt *n = makeNode(CreateOpClassStmt);
 					n->opclassname = $4;
 					n->isDefault = $5;
-					n->datatype = $8;
-					n->amname = $10;
-					n->opfamilyname = $11;
-					n->items = $13;
+					n->isNotBitwise = $6;
+					n->datatype = $9;
+					n->amname = $11;
+					n->opfamilyname = $12;
+					n->items = $14;
 					$$ = (Node *) n;
 				}
 		;
@@ -6020,6 +6023,10 @@ opclass_item:
 		;
 
 opt_default:	DEFAULT						{ $$ = true; }
+			| /*EMPTY*/						{ $$ = false; }
+		;
+
+opt_not_bitwise: NOT BITWISE				{ $$ = true; }
 			| /*EMPTY*/						{ $$ = false; }
 		;
 

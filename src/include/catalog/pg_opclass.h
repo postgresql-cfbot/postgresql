@@ -73,6 +73,9 @@ CATALOG(pg_opclass,2616,OperatorClassRelationId)
 
 	/* type of data in index, or InvalidOid */
 	Oid			opckeytype BKI_DEFAULT(0) BKI_LOOKUP(pg_type);
+
+	/* T if opclass equality also means "bitwise equality" */
+	bool			opcisbitwise BKI_DEFAULT(t);
 } FormData_pg_opclass;
 
 /* ----------------

@@ -3785,6 +3785,7 @@ _copyCreateOpClassStmt(const CreateOpClassStmt *from)
 	COPY_NODE_FIELD(datatype);
 	COPY_NODE_FIELD(items);
 	COPY_SCALAR_FIELD(isDefault);
+	COPY_SCALAR_FIELD(isNotBitwise);
 
 	return newnode;
 }

@@ -654,6 +654,7 @@ DefineOpClass(CreateOpClassStmt *stmt)
 	values[Anum_pg_opclass_opcintype - 1] = ObjectIdGetDatum(typeoid);
 	values[Anum_pg_opclass_opcdefault - 1] = BoolGetDatum(stmt->isDefault);
 	values[Anum_pg_opclass_opckeytype - 1] = ObjectIdGetDatum(storageoid);
+	values[Anum_pg_opclass_opcisbitwise - 1] = BoolGetDatum(!stmt->isNotBitwise);
 
 	tup = heap_form_tuple(rel->rd_att, values, nulls);
 

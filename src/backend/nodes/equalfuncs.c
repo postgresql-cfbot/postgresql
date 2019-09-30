@@ -1607,6 +1607,7 @@ _equalCreateOpClassStmt(const CreateOpClassStmt *a, const CreateOpClassStmt *b)
 	COMPARE_NODE_FIELD(datatype);
 	COMPARE_NODE_FIELD(items);
 	COMPARE_SCALAR_FIELD(isDefault);
+	COMPARE_SCALAR_FIELD(isNotBitwise);
 
 	return true;
 }

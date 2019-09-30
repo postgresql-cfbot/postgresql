@@ -13158,6 +13158,22 @@ table2-mapping
 
    </sect3>
 
+   <sect3 id="pg-extensions">
+    <title>Extensions</title>
+    <para>
+     <productname>PostgreSQL</productname> has some extensions to the SQL/JSON
+     Path standard.  These syntax extensions that can enabled by the specifying
+     additional <literal>pg</literal> modifier before the
+     <literal>strict</literal>/<literal>lax</literal> flags.
+     For example, recursive wildcard member accessor is enabled by
+     <literal>pg</literal> modifier:
+<programlisting>
+'pg strict $.track.** ? (@ == 73)'
+'pg $.track.** ? (@ == 73)'
+</programlisting>     
+    </para>
+   </sect3>
+
    <sect3 id="jsonpath-regular-expressions">
     <title>Regular Expressions</title>
 

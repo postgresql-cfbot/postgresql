@@ -158,8 +158,7 @@ get_first_col_type(Plan *plan, Oid *coltype, int32 *coltypmod,
  * subquery itself is in a resjunk tlist entry whose value is uninteresting).
  */
 static Node *
-make_subplan(PlannerInfo *root, Query *orig_subquery,
-			 SubLinkType subLinkType, int subLinkId,
+make_subplan(PlannerInfo *root, SubLink *sublink,
 			 Node *testexpr, bool isTopQual)
 {
 	Query	   *subquery;
@@ -171,6 +170,9 @@ make_subplan(PlannerInfo *root, Query *orig_subquery,
 	Plan	   *plan;
 	List	   *plan_params;
 	Node	   *result;
+	Query      *orig_subquery = (Query *) sublink->subselect;
+	SubLinkType subLinkType = sublink->subLinkType;
+	int         subLinkId = sublink->subLinkId;
 
 	/*
 	 * Copy the source Query node.  This is a quick and dirty kluge to resolve
@@ -216,23 +218,32 @@ make_subplan(PlannerInfo *root, Query *orig_subquery,
 	/* plan_params should not be in use in current query level */
 	Assert(root->plan_params == NIL);
 
-	/* Generate Paths for the subquery */
-	subroot = subquery_planner(root->glob, subquery,
-							   root,
-							   false, tuple_fraction);
+	if(sublink->subroot != NULL &&
+		sublink->subplan != NULL)
+	{
+		subroot = (PlannerInfo *) sublink->subroot;
+		plan = (Plan *) sublink->subplan;
+	}
+	else
+	{
+		/* Generate Paths for the subquery */
+		subroot = subquery_planner(root->glob, subquery,
+								   root,
+								   false, tuple_fraction);
+
+		/*
+		 * Select best Path and turn it into a Plan.  At least for now, there
+		 * seems no reason to postpone doing that.
+		 */
+		final_rel = fetch_upper_rel(subroot, UPPERREL_FINAL, NULL);
+		best_path = get_cheapest_fractional_path(final_rel, tuple_fraction);
+
+		plan = create_plan(subroot, best_path);
+	}
 
 	/* Isolate the params needed by this specific subplan */
 	plan_params = root->plan_params;
 	root->plan_params = NIL;
-
-	/*
-	 * Select best Path and turn it into a Plan.  At least for now, there
-	 * seems no reason to postpone doing that.
-	 */
-	final_rel = fetch_upper_rel(subroot, UPPERREL_FINAL, NULL);
-	best_path = get_cheapest_fractional_path(final_rel, tuple_fraction);
-
-	plan = create_plan(subroot, best_path);
 
 	/* And convert to SubPlan or InitPlan format. */
 	result = build_subplan(root, plan, subroot, plan_params,
@@ -1173,6 +1184,371 @@ inline_cte_walker(Node *node, inline_cte_walker_context *context)
 	return expression_tree_walker(node, inline_cte_walker, context);
 }
 
+/* Returns a List of Nodes from the testexpr of an Any SubLink */
+static List *
+getTestExpr(SubLink *sublink)
+{
+	Node * testexpr = sublink->testexpr;
+	Assert(testexpr);
+
+	/* single expression */
+	if(IsA(testexpr, OpExpr))
+	{
+		OpExpr	*opexpr = (OpExpr *) testexpr;
+		Node	*testnode = linitial(opexpr->args);
+
+		return list_make1(testnode);
+	}
+	/* multi-expression */
+	else if(IsA(testexpr, BoolExpr))
+	{
+		BoolExpr	*bexpr = (BoolExpr *) testexpr;
+		ListCell		*lc;
+		Node		*node;
+		List			*result = NULL;
+
+		foreach(lc, bexpr->args)
+		{
+			node = lfirst(lc);
+			if(IsA(node, OpExpr))
+			{
+				OpExpr *expr = (OpExpr *) node;
+				result = lappend(result, linitial(expr->args));
+			}
+			else
+			{
+				elog(ERROR, "unrecognized node type for testexpr: %d",
+						(int) nodeTag(node));
+			}
+		}
+		return result;
+	}
+	else
+	{
+		elog(ERROR, "unrecognized node type for testexpr: %d",
+				(int) nodeTag(testexpr));
+	}
+}
+
+/* Try to reduce outer joins if there is one in the Query */
+static void
+reduce_outer_joins_NOT_IN(Query *parse)
+{
+	ListCell				*lc;
+	RangeTblEntry	*rte;
+
+	foreach(lc, parse->rtable)
+	{
+		rte = (RangeTblEntry *) lfirst(lc);
+		/* try to reduce outer joins if there is one */
+		if (rte->rtekind == RTE_JOIN &&
+				IS_OUTER_JOIN(rte->jointype))
+		{
+			reduce_outer_joins(parse);
+			return;
+		}
+	}
+}
+
+/*
+ * Make clause NOT EXISTS
+ * (select 1 from t2 where p) for the NOT IN to ANTI JOIN
+ * transformation.
+ */
+static
+Node *
+makeExistsTest_NOT_IN(Query *subselect)
+{
+	BoolExpr *notExpr = makeNode(BoolExpr);
+	SubLink *exists = makeNode(SubLink);
+	Query *selectOne =  copyObject(subselect);
+	Const *oneconst;
+	TargetEntry *dummyte;
+
+	/* modify subselect target list to contain a dummy const 1 */
+	oneconst = makeConst(INT4OID,
+						 -1,
+						 InvalidOid,
+						 sizeof(int32),
+						 Int32GetDatum(1),
+						 false, /* isnull */
+						 true); /* pass by value */
+	dummyte = makeTargetEntry((Expr *) oneconst,
+							  1,
+							  "one",
+							  false /* resjunk */ );
+	selectOne->targetList = list_make1(dummyte);
+
+	/* make EXISTS(select 1 from t2 where p) */
+	exists->subLinkType = EXISTS_SUBLINK;
+	exists->subLinkId = 0;
+	exists->subselect = (Node *) selectOne;
+	exists->location = -1;
+	exists->subroot = NULL;
+	exists->subplan = NULL;
+
+	/* make NOT EXISTS(select 1 from t2 where p) */
+	notExpr->boolop = NOT_EXPR;
+	notExpr->args = list_make1(exists);
+	notExpr->location = -1;
+
+	return (Node *) notExpr;
+}
+
+/*
+ * If the NOT IN subquery is not eligible for hashed subplan as
+ * decided by subplan_is_hashable(),
+ * do the following NOT IN to ANTI JOIN conversions:
+ *
+ * When x is non-nullable:
+ * t1.x not in (t2.y where p) => ANTI JOIN
+ * t1, t2 on join condition (t1.x=t2.y or t2.y IS NULL) and p.
+ * the above predicate "t2.y IS NULL" can be removed if y
+ * is also non-nullable.
+ *
+ * When x is nullable:
+ * t1.x not in (t2.y where p) => ANTI JOIN
+ * t1 (Filter: t1.x is not null or not exists (select 1 from t2 where p)),
+ * t2 on join condition (t1.x=t2.y or t2.y is null) and p.
+ * the above predicate "t2.y IS NULL" can be removed if y
+ * is also non-nullable.
+ *
+ * The multi-expression case is just ANDs of the single-
+ * expression case.
+ */
+static bool
+convert_NOT_IN_to_join(PlannerInfo *root, Node **quals,
+									SubLink *sublink, List *subquery_vars,
+									Node **pullout)
+{
+	Query			*parse = root->parse;
+	Query			*subselect = (Query *) sublink->subselect;
+	List			*testnodes = getTestExpr(sublink);
+	bool			 outerNonNull;
+	bool			 innerNonNull;
+	PlannerInfo 	*subroot;
+	double			 tuple_fraction;
+	RelOptInfo		*final_rel;
+	Path			*best_path;
+	Plan			*plan;
+	NullTest 		*nt;
+
+	/*
+	 * Can't flatten if it contains WITH.  (We could arrange to pull up the
+	 * WITH into the parent query's cteList, but that risks changing the
+	 * semantics, since a WITH ought to be executed once per associated query
+	 * call.)  Note that convert_ANY_sublink_to_join doesn't have to reject
+	 * this case, since it just produces a subquery RTE that doesn't have to
+	 * get flattened into the parent query.
+	 */
+	if(subselect->cteList)
+		return false;
+
+	/* For ALL and ANY subplans, we will be
+	 * able to stop evaluating if the test condition fails or matches, so very
+	 * often not all the tuples will be retrieved; for lack of a better idea,
+	 * specify 50% retrieval.
+	 */
+	tuple_fraction = 0.5;
+	/*
+	 * Generate Paths for the subquery, use a copied version of the subquery
+	 * so that the existing one doesn't get modified.
+	 */
+	subroot = subquery_planner(root->glob, copyObject(subselect),
+													root, false, tuple_fraction);
+
+	/* Select best Path and turn it into a Plan. */
+	final_rel = fetch_upper_rel(subroot, UPPERREL_FINAL, NULL);
+	best_path = get_cheapest_fractional_path(final_rel, tuple_fraction);
+
+	plan = create_plan(subroot, best_path);
+
+	sublink->subroot = (Node *) subroot;
+	sublink->subplan = (Node *) plan;
+	/*
+	 * Punt if subplan is hashable since using hashed subplan is almost like
+	 * doing a Hash Anti Join, we probably can't do better than that.
+	 */
+	if(subplan_is_hashable(plan))
+	{
+		return false;
+	}
+
+	/*
+	 * Try reduce_outer_joins since outer join affects the nullability test that's coming up next.
+	 * We have to call reduce_outer_joins for outer and inner query separately because we
+	 * don't have a global range table yet.
+	 */
+	reduce_outer_joins_NOT_IN(parse);
+
+	reduce_outer_joins_NOT_IN(subselect);
+
+	Assert(testnodes);
+	outerNonNull =
+					list_hasnonnullable(testnodes, parse);
+	innerNonNull =
+					list_hasnonnullable(subselect->targetList, subselect);
+
+	/* Single-expression case, do the following:
+	 * When x is non-nullable:
+	 * t1.x not in (t2.y where p) => ANTI JOIN
+	 * t1, t2 on join condition (t1.x=t2.y or t2.y IS NULL) and p.
+	 * the above predicate "t2.y IS NULL" can be removed if y
+	 * is also non-nullable.
+	 *
+	 * When x is nullable:
+	 * t1.x not in (t2.y where p) => ANTI JOIN
+	 * t1 (Filter: t1.x is not null or not exists (select 1 from t2 where p)),
+	 * t2 on join condition (t1.x=t2.y or t2.y is null) and p.
+	 * the above predicate "t2.y IS NULL" can be removed if y
+	 * is also non-nullable.
+	 */
+	if(IsA(*quals, OpExpr))
+	{
+		/*  Add "OR y IS NULL" if y is nullable */
+		if(!innerNonNull)
+		{
+			/* make expr y IS NULL */
+			nt = makeNode(NullTest);
+			nt->arg = (Expr *)linitial(subquery_vars);
+			nt->nulltesttype = IS_NULL;
+			nt->argisrow = false;
+			nt->location = -1;
+
+			/* make orclause (x = y OR y IS NULL) */
+			*quals = (Node *)make_orclause(list_make2(*quals,
+								(Node *)nt));
+		}
+
+		/*
+		 * if x is nullable, make the following filter for t1 :
+		 * x IS NOT NULL or NOT EXISTS (select 1 from t2 where p)
+		 */
+		if(!outerNonNull)
+		{
+			Node * existsTest = NULL;
+
+			/* make expr x IS NOT NULL */
+			nt = makeNode(NullTest);
+			nt->arg = (Expr *) linitial(testnodes);
+			nt->nulltesttype = IS_NOT_NULL;
+			nt->argisrow = false;
+			nt->location = -1;
+
+			existsTest = makeExistsTest_NOT_IN(subselect);
+			/* make x IS NOT NULL OR NOT EXISTS (select 1 from t2 where p) */
+			*pullout = (Node *)make_orclause(list_make2(
+									(Node *) nt, existsTest));
+		}
+	}
+	/*
+	 * Multi-expression case:
+	 * If all xi's are nullable:
+	 * (x1, x2, ... xn) not in (y1, y2, ... yn ) =>
+	 * ANTI JOIN t1,
+	 * t2 on join condition:
+	 * ((t1.x1 = t2.y1) and ... (t1.xi = t2.yi) ... and
+	 * (t1.xn = t2.yn)) is NOT FALSE.
+	 *
+	 * If at least one xi is non-nuallable:
+	 * (x1, x2, ... xn) not in (y1, y2, ... yn ) =>
+	 * ANTI JOIN t1,
+	 * t2 on join condition:
+	 * (t1.x1 = t2.y1 or t2.y1 is NULL) and ...
+	 * (t1.xi = t2.yi or t2.yi is NULL or t1.xi is NULL) ... and
+	 * (t1.xn = t2.yn or t2.yn is NULL).
+	 */
+	else if(IsA(*quals, BoolExpr))
+	{
+		/*
+		 * Add IS NOT FALSE on top of the join condition if ALL x_i's are nullable
+		 */
+		if(!outerNonNull)
+		{
+			BooleanTest *btest;
+
+			btest = makeNode(BooleanTest);
+			btest->arg = (Expr *) *quals;
+			btest->booltesttype = IS_NOT_FALSE;
+			*quals = (Node *) btest;
+		}
+		else
+		{
+			ListCell			*qualc;
+			TargetEntry	*te;
+			ListCell			*xc = list_head(testnodes);
+			ListCell			*yc = list_head(subquery_vars);
+			ListCell			*ytlc = list_head(subselect->targetList);
+			List				*quallist = ((BoolExpr *)*quals)->args;
+			Node				*joinCondition = NULL;
+			bool				 xnonNull;
+			bool				 ynonNull;
+
+			/* Reconstruct quals in the loop */
+			*quals = NULL;
+			foreach(qualc, quallist)
+			{
+				te = (TargetEntry *)lfirst(ytlc);
+				/* x_i = y_i */
+				joinCondition = lfirst(qualc);
+				ynonNull = is_node_nonnullable((Node*)te, subselect);
+
+				/* append y_i IS NULL to x_i = y_i if y_i is non-nullable */
+				if(!ynonNull)
+				{
+					/* make expr y_i IS NULL */
+					nt = makeNode(NullTest);
+					nt->arg = (Expr *)lfirst(yc);
+					nt->nulltesttype = IS_NULL;
+					nt->argisrow = false;
+					nt->location = -1;
+
+					/* make orclause (x_i = y_i OR y_i IS NULL) */
+					joinCondition = (Node *)make_orclause(list_make2(joinCondition,
+											(Node *)nt));
+				}
+
+				/*
+				 * Append "OR x_i is null" to the join condition if x_i is nullable.
+				 * Notice at least one x_i should be non-nullable because the all
+				 * x_i's nullable case is handled earlier by adding "IS NOT FALSE"
+				 * on top of the join condition.
+				 */
+				xnonNull = is_node_nonnullable(lfirst(xc), parse);
+				if(!xnonNull)
+				{
+					/* make expr x_i IS NULL */
+					nt = makeNode(NullTest);
+					nt->arg = (Expr *)lfirst(xc);
+					nt->nulltesttype = IS_NULL;
+					nt->argisrow = false;
+					nt->location = -1;
+
+					/* make orclause (x_i = y_i OR y_i IS NULL OR x_i IS NULL) */
+					joinCondition = (Node *)make_orclause(list_make2(joinCondition,
+											(Node *)nt));
+				}
+
+				/*
+				 * Now append joinCondition to quals as one andclause.
+				 * (x_i = y_i OR y_i IS NULL OR x_i IS NULL) AND
+				 * (x_j = y_j OR y_j IS NULL OR x_j IS NULL)...
+				 */
+				*quals = (Node *)make_andclause(list_make2(*quals, joinCondition));
+				xc = lnext(xc);
+				yc = lnext(yc);
+				ytlc = lnext(ytlc);
+			}
+		}
+	}
+	/* quals should be either OpExpr or BoolExpr, otherwise don't convert */
+	else
+	{
+		return false;
+	}
+
+	return true;
+}
 
 /*
  * convert_ANY_sublink_to_join: try to convert an ANY SubLink to a join
@@ -1210,7 +1586,8 @@ inline_cte_walker(Node *node, inline_cte_walker_context *context)
  */
 JoinExpr *
 convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
-							Relids available_rels)
+											bool under_not, Node **pullout,
+											Relids available_rels)
 {
 	JoinExpr   *result;
 	Query	   *parse = root->parse;
@@ -1291,10 +1668,21 @@ convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	quals = convert_testexpr(root, sublink->testexpr, subquery_vars);
 
 	/*
+	 * Try converting x NOT IN (y) to ANTI JOIN.
+	 */
+	if(under_not &&
+			!convert_NOT_IN_to_join(root, &quals,
+								sublink, subquery_vars, pullout))
+	{
+		return NULL;
+	}
+
+	/*
 	 * And finally, build the JoinExpr node.
 	 */
 	result = makeNode(JoinExpr);
-	result->jointype = JOIN_SEMI;
+	/* NOT IN will be converted to ANTI JOIN */
+	result->jointype = under_not ? JOIN_ANTI : JOIN_SEMI;
 	result->isNatural = false;
 	result->larg = NULL;		/* caller must fill this in */
 	result->rarg = (Node *) rtr;
@@ -1883,9 +2271,7 @@ process_sublinks_mutator(Node *node, process_sublinks_context *context)
 		 * Now build the SubPlan node and make the expr to return.
 		 */
 		return make_subplan(context->root,
-							(Query *) sublink->subselect,
-							sublink->subLinkType,
-							sublink->subLinkId,
+							sublink,
 							testexpr,
 							context->isTopQual);
 	}

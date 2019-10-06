@@ -15,6 +15,7 @@
 #include "libpq/pqcomm.h"
 #include "port/atomics.h"
 #include "portability/instr_time.h"
+#include "postmaster/fork_process.h"
 #include "postmaster/pgarch.h"
 #include "storage/proc.h"
 #include "utils/hsearch.h"
@@ -1235,9 +1236,10 @@ extern Size BackendStatusShmemSize(void);
 extern void CreateSharedBackendStatus(void);
 
 extern void pgstat_init(void);
-extern int	pgstat_start(void);
 extern void pgstat_reset_all(void);
 extern void allow_immediate_pgstat_restart(void);
+
+extern void PrepPgstatCollectorFork(ForkProcData *pgstat_fork);
 
 #ifdef EXEC_BACKEND
 extern void PgstatCollectorMain(int argc, char *argv[]) pg_attribute_noreturn();

@@ -13,6 +13,8 @@
 #ifndef _PGARCH_H
 #define _PGARCH_H
 
+#include "postmaster/fork_process.h"
+
 /* ----------
  * Archiver control info.
  *
@@ -30,10 +32,9 @@
  * Functions called from postmaster
  * ----------
  */
-extern int	pgarch_start(void);
-
 #ifdef EXEC_BACKEND
 extern void PgArchiverMain(int argc, char *argv[]) pg_attribute_noreturn();
 #endif
 
+extern void PrepPgArchiverFork(ForkProcData *pgarch_fork);
 #endif							/* _PGARCH_H */

@@ -36,6 +36,7 @@
 #include "utils/ascii.h"
 #include "utils/ps_status.h"
 #include "utils/timeout.h"
+#include "utils/timestamp.h"
 
 /*
  * The postmaster's list of registered background workers, in private memory.
@@ -134,7 +135,110 @@ static const struct
 
 /* Private functions. */
 static bgworker_main_type LookupBackgroundWorkerFunction(const char *libraryname, const char *funcname);
+static bool assign_backendlist_entry(RegisteredBgWorker *rw);
+NON_EXEC_STATIC void BackgroundWorkerFailFork(int argc, char *argv[]);
+NON_EXEC_STATIC void BackgroundWorkerPostmasterMain(int argc, char *argv[]);
 
+/*
+ * Allocate the Backend struct for a connected background worker, but don't
+ * add it to the list of backends just yet.
+ *
+ * On failure, return false without changing any worker state.
+ *
+ * Some info from the Backend is copied into the passed rw.
+ */
+static bool
+assign_backendlist_entry(RegisteredBgWorker *rw)
+{
+	Backend    *bn;
+
+	/*
+	 * Compute the cancel key that will be assigned to this session. We
+	 * probably don't need cancel keys for background workers, but we'd better
+	 * have something random in the field to prevent unfriendly people from
+	 * sending cancels to them.
+	 */
+	if (!RandomCancelKey(&MyCancelKey))
+	{
+		ereport(LOG,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("could not generate random cancel key")));
+		return false;
+	}
+
+	bn = malloc(sizeof(Backend));
+	if (bn == NULL)
+	{
+		ereport(LOG,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory")));
+		return false;
+	}
+
+	bn->cancel_key = MyCancelKey;
+	bn->child_slot = MyPMChildSlot = AssignPostmasterChildSlot();
+	bn->bkend_type = BACKEND_TYPE_BGWORKER;
+	bn->dead_end = false;
+	bn->bgworker_notify = false;
+
+	rw->rw_backend = bn;
+	rw->rw_child_slot = bn->child_slot;
+
+	return true;
+}
+
+/*
+ * PrepBgWorkerFork
+ *
+ *  Postmaster subroutine to prepare a bgworker subprocess.
+ *
+ *	Returns 0 on success or -1 on failure.
+ *
+ *	Note: if fail, we will be called again from the postmaster main loop.
+ */
+int
+PrepBgWorkerFork(ForkProcData *bgworker_fork)
+{
+	int				ac = 0;
+	RegisteredBgWorker *rw = CurrentBgWorker;
+
+	Assert(CurrentBgWorker);
+	Assert(rw->rw_pid == 0);
+
+	/*
+	 * Allocate and assign the Backend element.  Note we must do this before
+	 * forking, so that we can handle out of memory properly.
+	 *
+	 * Treat failure as though the worker had crashed.  That way, the
+	 * postmaster will wait a bit before attempting to start it again; if it
+	 * tried again right away, most likely it'd find itself repeating the
+	 * out-of-memory or fork failure condition.
+	 */
+	if (!assign_backendlist_entry(rw))
+	{
+		rw->rw_crashed_at = GetCurrentTimestamp();
+		return -1;
+	}
+
+	ereport(DEBUG1,
+			(errmsg("starting background worker process \"%s\"",
+					rw->rw_worker.bgw_name)));
+
+#ifdef EXEC_BACKEND
+	bgworker_fork->av[ac++] = pstrdup("postgres");
+	bgworker_fork->av[ac++] = psprintf("--forkbgworker=%d", rw->rw_shmem_slot);
+	bgworker_fork->av[ac++] = NULL;			/* filled in by postmaster_forkexec */
+	bgworker_fork->av[ac] = NULL;
+#endif
+	Assert(bgworker_fork->ac < lengthof(*bgworker_fork->av));
+	bgworker_fork->ac = ac;
+	bgworker_fork->type_desc = pstrdup("background worker");
+	bgworker_fork->child_main = BackgroundWorkerMain;
+	bgworker_fork->fail_main = BackgroundWorkerFailFork;
+	bgworker_fork->postmaster_main = BackgroundWorkerPostmasterMain;
+
+	return 0;
+}
 
 /*
  * Calculate shared memory needed.
@@ -698,7 +802,7 @@ bgworker_sigusr1_handler(SIGNAL_ARGS)
  * postmaster.
  */
 void
-StartBackgroundWorker(void)
+BackgroundWorkerMain(pg_attribute_unused() int argc, pg_attribute_unused() char *argv[])
 {
 	sigjmp_buf	local_sigjmp_buf;
 	BackgroundWorker *worker = MyBgworkerEntry;
@@ -837,6 +941,38 @@ StartBackgroundWorker(void)
 	proc_exit(0);
 }
 
+NON_EXEC_STATIC void
+BackgroundWorkerFailFork(pg_attribute_unused() int argc, pg_attribute_unused() char *argv[])
+{
+	RegisteredBgWorker *rw = CurrentBgWorker;
+
+	/* in postmaster, fork failed ... */
+	ereport(LOG,
+			(errmsg("could not fork worker process: %m")));
+
+	/* undo what assign_backendlist_entry did */
+	ReleasePostmasterChildSlot(rw->rw_child_slot);
+	rw->rw_child_slot = 0;
+	free(rw->rw_backend);
+	rw->rw_backend = NULL;
+	/* mark entry as crashed, so we'll try again later */
+	rw->rw_crashed_at = GetCurrentTimestamp();
+}
+
+NON_EXEC_STATIC void
+BackgroundWorkerPostmasterMain(pg_attribute_unused() int argc, pg_attribute_unused() char *argv[])
+{
+	RegisteredBgWorker *rw = CurrentBgWorker;
+
+	rw->rw_pid = MyChildProcPid;
+	rw->rw_backend->pid = rw->rw_pid;
+	ReportBackgroundWorkerPID(rw);
+	/* add new worker to lists of backends */
+	dlist_push_head(&BackendList, &(rw->rw_backend->elem));
+#ifdef EXEC_BACKEND
+	ShmemBackendArrayAdd(rw->rw_backend);
+#endif
+}
 /*
  * Register a new static background worker.
  *

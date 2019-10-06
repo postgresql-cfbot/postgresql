@@ -199,7 +199,14 @@ main(int argc, char *argv[])
 #endif
 
 	if (argc > 1 && strcmp(argv[1], "--boot") == 0)
+	{
+		MemoryContext		old_ctx;
+
+		old_ctx = MemoryContextSwitchTo(TopMemoryContext);
+
 		AuxiliaryProcessMain(argc, argv);	/* does not return */
+		MemoryContextSwitchTo(old_ctx);
+	}
 	else if (argc > 1 && strcmp(argv[1], "--describe-config") == 0)
 		GucInfoMain();			/* does not return */
 	else if (argc > 1 && strcmp(argv[1], "--single") == 0)

@@ -48,6 +48,7 @@
 #include "storage/pg_shmem.h"
 #include "tcop/tcopprot.h"
 #include "utils/guc.h"
+#include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/timestamp.h"
 
@@ -134,10 +135,12 @@ static volatile sig_atomic_t rotation_requested = false;
 
 /* Local subroutines */
 #ifdef EXEC_BACKEND
-static pid_t syslogger_forkexec(void);
 static void syslogger_parseArgs(int argc, char *argv[]);
 #endif
+
 NON_EXEC_STATIC void SysLoggerMain(int argc, char *argv[]) pg_attribute_noreturn();
+NON_EXEC_STATIC void SysLoggerPostmasterMain(int argc, char *argv[]);
+
 static void process_pipe_input(char *logbuffer, int *bytes_in_logbuffer);
 static void flush_pipe_input(char *logbuffer, int *bytes_in_logbuffer);
 static FILE *logfile_open(const char *filename, const char *mode,
@@ -171,11 +174,15 @@ SysLoggerMain(int argc, char *argv[])
 	pg_time_t	now;
 	WaitEventSet *wes;
 
-	now = MyStartTime;
-
 #ifdef EXEC_BACKEND
 	syslogger_parseArgs(argc, argv);
+#else
+	/* Drop our connection to postmaster's shared memory, as well */
+	dsm_detach_all();
+	PGSharedMemoryDetach();
 #endif							/* EXEC_BACKEND */
+
+	now = MyStartTime;
 
 	am_syslogger = true;
 
@@ -540,16 +547,42 @@ SysLoggerMain(int argc, char *argv[])
 }
 
 /*
- * Postmaster subroutine to start a syslogger subprocess.
+ * Helper function for setting up a file number buffer
  */
-int
-SysLogger_Start(void)
+static char *
+setup_file_buff(FILE *file)
 {
-	pid_t		sysloggerPid;
-	char	   *filename;
+	char	*filenobuf;
 
-	if (!Logging_collector)
-		return 0;
+	/* static variables (those not passed by write_backend_variables) */
+#ifndef WIN32
+	if (file != NULL)
+		filenobuf = psprintf("%d", fileno(file));
+	else
+		filenobuf = pstrdup("-1");
+#else							/* WIN32 */
+	if (file != NULL)
+		filenobuf = psprintf("%ld", (long) _get_osfhandle(_fileno(file)));
+	else
+		filenobuf = pstrdup("0");
+#endif							/* WIN32 */
+
+	return filenobuf;
+}
+
+/*
+ * PrepSysLoggerFork
+ *
+ * Postmaster subroutine to prepare a syslogger subprocess.
+ */
+void
+PrepSysLoggerFork(ForkProcData *logger_fork)
+{
+	int				ac = 0;
+	char	   *filename;
+	MemoryContext	cxt;
+
+	cxt = MemoryContextSwitchTo(PostmasterContext);
 
 	/*
 	 * If first time through, create the pipe which will receive stderr
@@ -626,37 +659,29 @@ SysLogger_Start(void)
 		pfree(filename);
 	}
 
-#ifdef EXEC_BACKEND
-	switch ((sysloggerPid = syslogger_forkexec()))
-#else
-	switch ((sysloggerPid = fork_process()))
-#endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork system logger: %m")));
-			return 0;
+	MemoryContextSwitchTo(cxt);
 
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
+	logger_fork->av[ac++] = pstrdup("postgres");
+	logger_fork->av[ac++] = pstrdup("--forklog");
+	logger_fork->av[ac++] = NULL;			/* filled in by postmaster_forkexec */
 
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(true);
+	logger_fork->av[ac++] = setup_file_buff(syslogFile);
+	logger_fork->av[ac++] = setup_file_buff(csvlogFile);
 
-			/* Drop our connection to postmaster's shared memory, as well */
-			dsm_detach_all();
-			PGSharedMemoryDetach();
+	logger_fork->av[ac] = NULL;
 
-			/* do the work */
-			SysLoggerMain(0, NULL);
-			break;
-#endif
+	logger_fork->ac = ac;
+	Assert(logger_fork->ac < lengthof(*logger_fork->av));
 
-		default:
-			/* success, in postmaster */
+	logger_fork->child_main = SysLoggerMain;
+	logger_fork->postmaster_main = SysLoggerPostmasterMain;
+	logger_fork->type_desc = pstrdup("system logger");
+}
 
+
+NON_EXEC_STATIC void
+SysLoggerPostmasterMain(int argc, char *argv[])
+{
 			/* now we redirect stderr, if not done already */
 			if (!redirection_done)
 			{
@@ -723,69 +748,10 @@ SysLogger_Start(void)
 				fclose(csvlogFile);
 				csvlogFile = NULL;
 			}
-			return (int) sysloggerPid;
-	}
-
-	/* we should never reach here */
-	return 0;
 }
 
 
 #ifdef EXEC_BACKEND
-
-/*
- * syslogger_forkexec() -
- *
- * Format up the arglist for, then fork and exec, a syslogger process
- */
-static pid_t
-syslogger_forkexec(void)
-{
-	char	   *av[10];
-	int			ac = 0;
-	char		filenobuf[32];
-	char		csvfilenobuf[32];
-
-	av[ac++] = "postgres";
-	av[ac++] = "--forklog";
-	av[ac++] = NULL;			/* filled in by postmaster_forkexec */
-
-	/* static variables (those not passed by write_backend_variables) */
-#ifndef WIN32
-	if (syslogFile != NULL)
-		snprintf(filenobuf, sizeof(filenobuf), "%d",
-				 fileno(syslogFile));
-	else
-		strcpy(filenobuf, "-1");
-#else							/* WIN32 */
-	if (syslogFile != NULL)
-		snprintf(filenobuf, sizeof(filenobuf), "%ld",
-				 (long) _get_osfhandle(_fileno(syslogFile)));
-	else
-		strcpy(filenobuf, "0");
-#endif							/* WIN32 */
-	av[ac++] = filenobuf;
-
-#ifndef WIN32
-	if (csvlogFile != NULL)
-		snprintf(csvfilenobuf, sizeof(csvfilenobuf), "%d",
-				 fileno(csvlogFile));
-	else
-		strcpy(csvfilenobuf, "-1");
-#else							/* WIN32 */
-	if (csvlogFile != NULL)
-		snprintf(csvfilenobuf, sizeof(csvfilenobuf), "%ld",
-				 (long) _get_osfhandle(_fileno(csvlogFile)));
-	else
-		strcpy(csvfilenobuf, "0");
-#endif							/* WIN32 */
-	av[ac++] = csvfilenobuf;
-
-	av[ac] = NULL;
-	Assert(ac < lengthof(av));
-
-	return postmaster_forkexec(ac, av);
-}
 
 /*
  * syslogger_parseArgs() -

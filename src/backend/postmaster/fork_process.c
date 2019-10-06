@@ -21,6 +21,14 @@
 #include <openssl/rand.h>
 #endif
 
+/*
+ * This hook allows plugins to get control of the child process following
+ * a successful fork_process(). It can be used to perform some action in
+ * extensions to set metadata in backends (including special backends) upon
+ * setting of the session user.
+ */
+ForkProcess_post_hook_type ForkProcess_post_hook = NULL;
+
 #ifndef WIN32
 /*
  * Wrapper for fork(). Return values are the same as those for fork():
@@ -113,6 +121,9 @@ fork_process(void)
 #ifdef USE_OPENSSL
 		RAND_cleanup();
 #endif
+
+		if (ForkProcess_post_hook)
+			(*ForkProcess_post_hook) ();
 	}
 
 	return result;

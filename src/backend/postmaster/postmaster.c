@@ -136,62 +136,16 @@
 #include "storage/spin.h"
 #endif
 
-
-/*
- * Possible types of a backend. Beyond being the possible bkend_type values in
- * struct bkend, these are OR-able request flag bits for SignalSomeChildren()
- * and CountChildren().
- */
-#define BACKEND_TYPE_NORMAL		0x0001	/* normal backend */
-#define BACKEND_TYPE_AUTOVAC	0x0002	/* autovacuum worker process */
-#define BACKEND_TYPE_WALSND		0x0004	/* walsender process */
-#define BACKEND_TYPE_BGWORKER	0x0008	/* bgworker process */
-#define BACKEND_TYPE_ALL		0x000F	/* OR of all the above */
-
-#define BACKEND_TYPE_WORKER		(BACKEND_TYPE_AUTOVAC | BACKEND_TYPE_BGWORKER)
-
-/*
- * List of active backends (or child processes anyway; we don't actually
- * know whether a given child has become a backend or is still in the
- * authorization phase).  This is used mainly to keep track of how many
- * children we have and send them appropriate signals when necessary.
- *
- * "Special" children such as the startup, bgwriter and autovacuum launcher
- * tasks are not in this list.  Autovacuum worker and walsender are in it.
- * Also, "dead_end" children are in it: these are children launched just for
- * the purpose of sending a friendly rejection message to a would-be client.
- * We must track them because they are attached to shared memory, but we know
- * they will never become live backends.  dead_end children are not assigned a
- * PMChildSlot.
- *
- * Background workers are in this list, too.
- */
-typedef struct bkend
-{
-	pid_t		pid;			/* process id of backend */
-	int32		cancel_key;		/* cancel key for cancels for this backend */
-	int			child_slot;		/* PMChildSlot for this backend, if any */
-
-	/*
-	 * Flavor of backend or auxiliary process.  Note that BACKEND_TYPE_WALSND
-	 * backends initially announce themselves as BACKEND_TYPE_NORMAL, so if
-	 * bkend_type is normal, you should check for a recent transition.
-	 */
-	int			bkend_type;
-	bool		dead_end;		/* is it going to send an error and quit? */
-	bool		bgworker_notify;	/* gets bgworker start/stop notifications */
-	dlist_node	elem;			/* list link in BackendList */
-} Backend;
-
-static dlist_head BackendList = DLIST_STATIC_INIT(BackendList);
+dlist_head BackendList = DLIST_STATIC_INIT(BackendList);
 
 #ifdef EXEC_BACKEND
 static Backend *ShmemBackendArray;
 #endif
 
 BackgroundWorker *MyBgworkerEntry = NULL;
-
-
+RegisteredBgWorker *CurrentBgWorker = NULL;
+static Backend	   *MyBackend;
+static int			child_errno;
 
 /* The socket number we are listening for connections on */
 int			PostPortNumber;
@@ -403,25 +357,25 @@ static void BackendInitialize(Port *port);
 static void BackendRun(Port *port) pg_attribute_noreturn();
 static void ExitPostmaster(int status) pg_attribute_noreturn();
 static int	ServerLoop(void);
-static int	BackendStartup(Port *port);
 static int	ProcessStartupPacket(Port *port, bool secure_done);
 static void SendNegotiateProtocolVersion(List *unrecognized_protocol_options);
 static void processCancelRequest(Port *port, void *pkt);
 static int	initMasks(fd_set *rmask);
 static void report_fork_failure_to_client(Port *port, int errnum);
 static CAC_state canAcceptConnections(void);
-static bool RandomCancelKey(int32 *cancel_key);
 static void signal_child(pid_t pid, int signal);
 static bool SignalSomeChildren(int signal, int targets);
 static void TerminateChildren(int signal);
+#ifdef EXEC_BACKEND
+static void shmemSetup(bool aux_process);
+#endif
 
 #define SignalChildren(sig)			   SignalSomeChildren(sig, BACKEND_TYPE_ALL)
 
 static int	CountChildren(int target);
-static bool assign_backendlist_entry(RegisteredBgWorker *rw);
 static void maybe_start_bgworkers(void);
 static bool CreateOptsFile(int argc, char *argv[], char *fullprogname);
-static pid_t StartChildProcess(AuxProcType type);
+static pid_t StartChildProcess(ForkProcType type);
 static void StartAutovacuumWorker(void);
 static void MaybeStartWalReceiver(void);
 static void InitPostmasterDeathWatchHandle(void);
@@ -455,8 +409,7 @@ typedef struct
 } win32_deadchild_waitinfo;
 #endif							/* WIN32 */
 
-static pid_t backend_forkexec(Port *port);
-static pid_t internal_forkexec(int argc, char *argv[], Port *port);
+static pid_t internal_forkexec(int argc, char *argv[]);
 
 /* Type for a socket that can be inherited to a client process */
 #ifdef WIN32
@@ -522,6 +475,7 @@ typedef struct
 	char		my_exec_path[MAXPGPATH];
 	char		pkglib_path[MAXPGPATH];
 	char		ExtraOptions[MAXPGPATH];
+	ForkProcType	proc_type;
 } BackendParameters;
 
 static void read_backend_variables(char *id, Port *port);
@@ -534,15 +488,23 @@ static bool save_backend_variables(BackendParameters *param, Port *port,
 								   HANDLE childProcess, pid_t childPid);
 #endif
 
-static void ShmemBackendArrayAdd(Backend *bn);
 static void ShmemBackendArrayRemove(Backend *bn);
 #endif							/* EXEC_BACKEND */
 
-#define StartupDataBase()		StartChildProcess(StartupProcess)
-#define StartBackgroundWriter() StartChildProcess(BgWriterProcess)
-#define StartCheckpointer()		StartChildProcess(CheckpointerProcess)
-#define StartWalWriter()		StartChildProcess(WalWriterProcess)
-#define StartWalReceiver()		StartChildProcess(WalReceiverProcess)
+#define BGWORKER_LEN			15
+
+#define StartupDataBase()		StartChildProcess(StartupFork)
+#define StartBackgroundWriter() StartChildProcess(BgWriterFork)
+#define StartCheckpointer()		StartChildProcess(CheckpointerFork)
+#define StartWalWriter()		StartChildProcess(WalWriterFork)
+#define StartWalReceiver()		StartChildProcess(WalReceiverFork)
+#define StartAutoVacLauncher()		StartChildProcess(AutoVacLauncherFork)
+#define StartAutoVacWorker()		StartChildProcess(AutoVacWorkerFork)
+#define pgstat_start()			StartChildProcess(PgstatCollectorFork)
+#define pgarch_start()			StartChildProcess(PgArchiverFork)
+#define SysLogger_Start()		StartChildProcess(SysLoggerFork)
+#define do_start_bgworker()		StartChildProcess(BgWorkerFork)
+#define BackendStartup()		StartChildProcess(BackendFork)
 
 /* Macros to check exit status of a child process */
 #define EXIT_STATUS_0(st)  ((st) == 0)
@@ -559,6 +521,195 @@ int			postmaster_alive_fds[2] = {-1, -1};
 /* Process handle of postmaster used for the same purpose on Windows */
 HANDLE		PostmasterHandle;
 #endif
+
+static Port *ConnProcPort = NULL;
+
+/*
+ *	 BackendMain
+ *
+ *	 Child code when forking a Backend.
+ */
+static void BackendMain(pg_attribute_unused() int argc, pg_attribute_unused() char *argv[])
+{
+	/*
+	 * Perform additional initialization and collect startup packet.
+	 *
+	 * We want to do this before InitProcess() for a couple of reasons: 1.
+	 * so that we aren't eating up a PGPROC slot while waiting on the
+	 * client. 2. so that if InitProcess() fails due to being out of
+	 * PGPROC slots, we have already initialized libpq and are able to
+	 * report the error to the client.
+	 */
+	BackendInitialize(ConnProcPort);
+
+#ifdef EXEC_BACKEND
+	shmemSetup(false);
+#endif
+
+	/* And run the backend */
+	BackendRun(ConnProcPort);		/* does not return */
+}
+
+/*
+ *	 BackendPostmasterMain
+ *
+ *	 Parent code when forking a Backend.
+ */
+static void BackendPostmasterMain(pg_attribute_unused() int argc, pg_attribute_unused() char *argv[])
+{
+	/* in parent, successful fork */
+	ereport(DEBUG2,
+			(errmsg_internal("forked new backend, pid=%d socket=%d",
+							 (int) MyChildProcPid, (int) MyProcPort->sock)));
+
+	/*
+	 * Everything's been successful, it's safe to add this backend to our list
+	 * of backends.
+	 */
+	MyBackend->pid = MyChildProcPid;
+	MyBackend->bkend_type = BACKEND_TYPE_NORMAL;	/* Can change later to WALSND */
+	dlist_push_head(&BackendList, &MyBackend->elem);
+
+#ifdef EXEC_BACKEND
+	if (!MyBackend->dead_end)
+		ShmemBackendArrayAdd(MyBackend);
+#endif
+}
+
+/*
+ *	 BackendFailFork
+ *
+ *	 Backend cleanup in case a failure occurs forking a new Backend.
+ */
+static void BackendFailFork(pg_attribute_unused() int argc, pg_attribute_unused() char *argv[])
+{
+	if (!MyBackend->dead_end)
+		(void) ReleasePostmasterChildSlot(MyBackend->child_slot);
+	free(MyBackend);
+
+	report_fork_failure_to_client(MyProcPort, child_errno);
+}
+
+/*
+ * PrepBackendFork
+ *
+ * Prepare a ForkProcType struct for starting a Backend.
+ * This does all prep related to av parameters and error messages.
+*/
+static void
+PrepBackendFork(ForkProcData *backend_fork)
+{
+	int			ac = 0;
+
+	/*
+	 * Create backend data structure.  Better before the fork() so we can
+	 * handle failure cleanly.
+	 */
+	MyBackend = (Backend *) malloc(sizeof(Backend));
+	if (!MyBackend)
+	{
+		ereport(LOG,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory")));
+	}
+
+#ifdef EXEC_BACKEND
+	backend_fork->av[ac++] = pstrdup("postgres");
+	backend_fork->av[ac++] = pstrdup("--forkbackend");
+	backend_fork->av[ac++] = NULL;
+#endif
+	backend_fork->av[ac] = NULL;
+	backend_fork->ac = ac;
+
+	Assert(ac < lengthof(*backend_fork->av));
+
+	/*
+	 * Compute the cancel key that will be assigned to this backend. The
+	 * backend will have its own copy in the forked-off process' value of
+	 * MyCancelKey, so that it can transmit the key to the frontend.
+	 */
+	if (!RandomCancelKey(&MyCancelKey))
+	{
+		free(MyBackend);
+		ereport(LOG,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("could not generate random cancel key")));
+	}
+
+	MyBackend->cancel_key = MyCancelKey;
+
+	/* Pass down canAcceptConnections state */
+	ConnProcPort->canAcceptConnections = canAcceptConnections();
+	MyBackend->dead_end = (ConnProcPort->canAcceptConnections != CAC_OK &&
+						   ConnProcPort->canAcceptConnections != CAC_WAITBACKUP);
+
+	/*
+	 * Unless it's a dead_end child, assign it a child slot number
+	 */
+	if (!MyBackend->dead_end)
+		MyBackend->child_slot = MyPMChildSlot = AssignPostmasterChildSlot();
+	else
+		MyBackend->child_slot = 0;
+
+	/* Hasn't asked to be notified about any bgworkers yet */
+	MyBackend->bgworker_notify = false;
+
+	backend_fork->postmaster_main = BackendPostmasterMain;
+	backend_fork->child_main = BackendMain;
+	backend_fork->fail_main = BackendFailFork;
+}
+
+/*
+ * PrepAuxProcessFork
+ *
+ * Prepare a ForkProcType struct for the auxiliary process specified by
+ * AuxProcType. This does all prep related to av parameters and error messages.
+ */
+static void
+PrepAuxProcessFork(ForkProcData *aux_fork)
+{
+	int			ac = 0;
+
+	/*
+	 * Set up command-line arguments for subprocess
+	 */
+	aux_fork->av[ac++] = pstrdup("postgres");
+
+#ifdef EXEC_BACKEND
+	aux_fork->av[ac++] = pstrdup("--forkboot");
+	aux_fork->av[ac++] = NULL;			/* filled in by postmaster_forkexec */
+#endif
+
+	aux_fork->av[ac++] = psprintf("-x%d", MyForkProcType);
+
+	aux_fork->av[ac] = NULL;
+	Assert(ac < lengthof(*aux_fork->av));
+
+	aux_fork->ac = ac;
+	switch (MyForkProcType)
+	{
+		case StartupProcess:
+			aux_fork->type_desc = pstrdup("startup");
+			break;
+		case BgWriterProcess:
+			aux_fork->type_desc = pstrdup("background writer");
+			break;
+		case CheckpointerProcess:
+			aux_fork->type_desc = pstrdup("checkpointer");
+			break;
+		case WalWriterProcess:
+			aux_fork->type_desc = pstrdup("WAL writer");
+			break;
+		case WalReceiverProcess:
+			aux_fork->type_desc = pstrdup("WAL receiver");
+			break;
+		default:
+			aux_fork->type_desc = pstrdup("child");
+			break;
+	}
+
+	aux_fork->child_main = AuxiliaryProcessMain;
+}
 
 /*
  * Postmaster main entry point
@@ -1710,19 +1861,17 @@ ServerLoop(void)
 					break;
 				if (FD_ISSET(ListenSocket[i], &rmask))
 				{
-					Port	   *port;
-
-					port = ConnCreate(ListenSocket[i]);
-					if (port)
+					ConnProcPort = ConnCreate(ListenSocket[i]);
+					if (ConnProcPort)
 					{
-						BackendStartup(port);
+						BackendStartup();
 
 						/*
 						 * We no longer need the open socket or port structure
 						 * in this process
 						 */
-						StreamClose(port->sock);
-						ConnFree(port);
+						StreamClose(ConnProcPort->sock);
+						ConnFree(ConnProcPort);
 					}
 				}
 			}
@@ -4072,122 +4221,6 @@ TerminateChildren(int signal)
 }
 
 /*
- * BackendStartup -- start backend process
- *
- * returns: STATUS_ERROR if the fork failed, STATUS_OK otherwise.
- *
- * Note: if you change this code, also consider StartAutovacuumWorker.
- */
-static int
-BackendStartup(Port *port)
-{
-	Backend    *bn;				/* for backend cleanup */
-	pid_t		pid;
-
-	/*
-	 * Create backend data structure.  Better before the fork() so we can
-	 * handle failure cleanly.
-	 */
-	bn = (Backend *) malloc(sizeof(Backend));
-	if (!bn)
-	{
-		ereport(LOG,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory")));
-		return STATUS_ERROR;
-	}
-
-	/*
-	 * Compute the cancel key that will be assigned to this backend. The
-	 * backend will have its own copy in the forked-off process' value of
-	 * MyCancelKey, so that it can transmit the key to the frontend.
-	 */
-	if (!RandomCancelKey(&MyCancelKey))
-	{
-		free(bn);
-		ereport(LOG,
-				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("could not generate random cancel key")));
-		return STATUS_ERROR;
-	}
-
-	bn->cancel_key = MyCancelKey;
-
-	/* Pass down canAcceptConnections state */
-	port->canAcceptConnections = canAcceptConnections();
-	bn->dead_end = (port->canAcceptConnections != CAC_OK &&
-					port->canAcceptConnections != CAC_WAITBACKUP);
-
-	/*
-	 * Unless it's a dead_end child, assign it a child slot number
-	 */
-	if (!bn->dead_end)
-		bn->child_slot = MyPMChildSlot = AssignPostmasterChildSlot();
-	else
-		bn->child_slot = 0;
-
-	/* Hasn't asked to be notified about any bgworkers yet */
-	bn->bgworker_notify = false;
-
-#ifdef EXEC_BACKEND
-	pid = backend_forkexec(port);
-#else							/* !EXEC_BACKEND */
-	pid = fork_process();
-	if (pid == 0)				/* child */
-	{
-		free(bn);
-
-		/* Detangle from postmaster */
-		InitPostmasterChild();
-
-		/* Close the postmaster's sockets */
-		ClosePostmasterPorts(false);
-
-		/* Perform additional initialization and collect startup packet */
-		BackendInitialize(port);
-
-		/* And run the backend */
-		BackendRun(port);
-	}
-#endif							/* EXEC_BACKEND */
-
-	if (pid < 0)
-	{
-		/* in parent, fork failed */
-		int			save_errno = errno;
-
-		if (!bn->dead_end)
-			(void) ReleasePostmasterChildSlot(bn->child_slot);
-		free(bn);
-		errno = save_errno;
-		ereport(LOG,
-				(errmsg("could not fork new process for connection: %m")));
-		report_fork_failure_to_client(port, save_errno);
-		return STATUS_ERROR;
-	}
-
-	/* in parent, successful fork */
-	ereport(DEBUG2,
-			(errmsg_internal("forked new backend, pid=%d socket=%d",
-							 (int) pid, (int) port->sock)));
-
-	/*
-	 * Everything's been successful, it's safe to add this backend to our list
-	 * of backends.
-	 */
-	bn->pid = pid;
-	bn->bkend_type = BACKEND_TYPE_NORMAL;	/* Can change later to WALSND */
-	dlist_push_head(&BackendList, &bn->elem);
-
-#ifdef EXEC_BACKEND
-	if (!bn->dead_end)
-		ShmemBackendArrayAdd(bn);
-#endif
-
-	return STATUS_OK;
-}
-
-/*
  * Try to report backend fork() failure to client before we close the
  * connection.  Since we do not care to risk blocking the postmaster on
  * this connection, we set the connection to non-blocking and try only once.
@@ -4426,7 +4459,7 @@ BackendRun(Port *port)
 									  maxac * sizeof(char *));
 	ac = 0;
 
-	av[ac++] = "postgres";
+	av[ac++] = pstrdup("postgres");
 
 	/*
 	 * Pass any backend switches specified with -o on the postmaster's own
@@ -4475,38 +4508,13 @@ BackendRun(Port *port)
  * child process.
  */
 pid_t
-postmaster_forkexec(int argc, char *argv[])
+postmaster_forkexec(ForkProcData *fork_data)
 {
-	Port		port;
-
 	/* This entry point passes dummy values for the Port variables */
-	memset(&port, 0, sizeof(port));
-	return internal_forkexec(argc, argv, &port);
-}
+	if (!ConnProcPort)
+		ConnProcPort = palloc0(sizeof(*ConnProcPort));
 
-/*
- * backend_forkexec -- fork/exec off a backend process
- *
- * Some operating systems (WIN32) don't have fork() so we have to simulate
- * it by storing parameters that need to be passed to the child and
- * then create a new child process.
- *
- * returns the pid of the fork/exec'd process, or -1 on failure
- */
-static pid_t
-backend_forkexec(Port *port)
-{
-	char	   *av[4];
-	int			ac = 0;
-
-	av[ac++] = "postgres";
-	av[ac++] = "--forkbackend";
-	av[ac++] = NULL;			/* filled in by internal_forkexec */
-
-	av[ac] = NULL;
-	Assert(ac < lengthof(av));
-
-	return internal_forkexec(ac, av, port);
+	return internal_forkexec(fork_data->ac, fork_data->av);
 }
 
 #ifndef WIN32
@@ -4518,7 +4526,7 @@ backend_forkexec(Port *port)
  * - fork():s, and then exec():s the child process
  */
 static pid_t
-internal_forkexec(int argc, char *argv[], Port *port)
+internal_forkexec(int argc, char *argv[])
 {
 	static unsigned long tmpBackendFileNum = 0;
 	pid_t		pid;
@@ -4526,7 +4534,7 @@ internal_forkexec(int argc, char *argv[], Port *port)
 	BackendParameters param;
 	FILE	   *fp;
 
-	if (!save_backend_variables(&param, port))
+	if (!save_backend_variables(&param, ConnProcPort))
 		return -1;				/* log made by save_backend_variables */
 
 	/* Calculate name for temp file */
@@ -4805,6 +4813,29 @@ retry:
 }
 #endif							/* WIN32 */
 
+/*
+ * shmemSetup
+ *
+ * Helper function for a child to set up shmem before
+ * executing.
+ *
+ * aux_process - set to true if an auxiliary process.
+ */
+static void
+shmemSetup(bool aux_process)
+{
+	/* Restore basic shared memory pointers */
+	InitShmemAccess(UsedShmemSegAddr);
+
+	/* Need a PGPROC to run CreateSharedMemoryAndSemaphores */
+	if (aux_process)
+		InitAuxiliaryProcess();
+	else
+		InitProcess();
+
+	/* Attach process to shared data structures */
+	CreateSharedMemoryAndSemaphores();
+}
 
 /*
  * SubPostmasterMain -- Get the fork/exec'd process into a state equivalent
@@ -4836,9 +4867,12 @@ SubPostmasterMain(int argc, char *argv[])
 	if (argc < 3)
 		elog(FATAL, "invalid subpostmaster invocation");
 
+	Assert(!ConnProcPort);
+
 	/* Read in the variables file */
 	memset(&port, 0, sizeof(Port));
 	read_backend_variables(argv[2], &port);
+	ConnProcPort = &port;
 
 	/* Close the postmaster's sockets (as soon as we know them) */
 	ClosePostmasterPorts(strcmp(argv[1], "--forklog") == 0);
@@ -4880,16 +4914,16 @@ SubPostmasterMain(int argc, char *argv[])
 		strcmp(argv[1], "--forkavlauncher") == 0 ||
 		strcmp(argv[1], "--forkavworker") == 0 ||
 		strcmp(argv[1], "--forkboot") == 0 ||
-		strncmp(argv[1], "--forkbgworker=", 15) == 0)
+		strncmp(argv[1], "--forkbgworker=", BGWORKER_LEN) == 0)
 		PGSharedMemoryReAttach();
 	else
 		PGSharedMemoryNoReAttach();
 
 	/* autovacuum needs this set before calling InitProcess */
 	if (strcmp(argv[1], "--forkavlauncher") == 0)
-		AutovacuumLauncherIAm();
+		am_autovacuum_launcher = true;
 	if (strcmp(argv[1], "--forkavworker") == 0)
-		AutovacuumWorkerIAm();
+		am_autovacuum_worker = true;
 
 	/*
 	 * Start our win32 signal implementation. This has to be done after we
@@ -4982,64 +5016,33 @@ SubPostmasterMain(int argc, char *argv[])
 	}
 	if (strcmp(argv[1], "--forkboot") == 0)
 	{
-		/* Restore basic shared memory pointers */
-		InitShmemAccess(UsedShmemSegAddr);
-
-		/* Need a PGPROC to run CreateSharedMemoryAndSemaphores */
-		InitAuxiliaryProcess();
-
-		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
-
+		shmemSetup(true);
 		AuxiliaryProcessMain(argc - 2, argv + 2);	/* does not return */
 	}
 	if (strcmp(argv[1], "--forkavlauncher") == 0)
 	{
-		/* Restore basic shared memory pointers */
-		InitShmemAccess(UsedShmemSegAddr);
-
-		/* Need a PGPROC to run CreateSharedMemoryAndSemaphores */
-		InitProcess();
-
-		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
-
+		shmemSetup(true);
 		AutoVacLauncherMain(argc - 2, argv + 2);	/* does not return */
 	}
 	if (strcmp(argv[1], "--forkavworker") == 0)
 	{
-		/* Restore basic shared memory pointers */
-		InitShmemAccess(UsedShmemSegAddr);
-
-		/* Need a PGPROC to run CreateSharedMemoryAndSemaphores */
-		InitProcess();
-
-		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
-
+		shmemSetup(true);
 		AutoVacWorkerMain(argc - 2, argv + 2);	/* does not return */
 	}
-	if (strncmp(argv[1], "--forkbgworker=", 15) == 0)
+	if (strncmp(argv[1], "--forkbgworker=", BGWORKER_LEN) == 0)
 	{
 		int			shmem_slot;
 
 		/* do this as early as possible; in particular, before InitProcess() */
 		IsBackgroundWorker = true;
 
-		/* Restore basic shared memory pointers */
-		InitShmemAccess(UsedShmemSegAddr);
-
-		/* Need a PGPROC to run CreateSharedMemoryAndSemaphores */
-		InitProcess();
-
-		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
+		shmemSetup(false);
 
 		/* Fetch MyBgworkerEntry from shared memory */
-		shmem_slot = atoi(argv[1] + 15);
+		shmem_slot = atoi(argv[1] + BGWORKER_LEN);
 		MyBgworkerEntry = BackgroundWorkerEntry(shmem_slot);
 
-		StartBackgroundWorker();
+		BackgroundWorkerMain(argc, argv);
 	}
 	if (strcmp(argv[1], "--forkarch") == 0)
 	{
@@ -5314,7 +5317,7 @@ StartupPacketTimeoutHandler(void)
 /*
  * Generate a random cancel key.
  */
-static bool
+bool
 RandomCancelKey(int32 *cancel_key)
 {
 	return pg_strong_random(cancel_key, sizeof(int32));
@@ -5360,7 +5363,6 @@ CountChildren(int target)
 	return cnt;
 }
 
-
 /*
  * StartChildProcess -- start an auxiliary process for the postmaster
  *
@@ -5371,92 +5373,157 @@ CountChildren(int target)
  * to start subprocess.
  */
 static pid_t
-StartChildProcess(AuxProcType type)
+StartChildProcess(ForkProcType type)
 {
 	pid_t		pid;
-	char	   *av[10];
-	int			ac = 0;
-	char		typebuf[32];
+	ForkProcData	   *fork_data;
+	MemoryContext		old_ctx;
 
-	/*
-	 * Set up command-line arguments for subprocess
-	 */
-	av[ac++] = "postgres";
+	/* Keep fork data after splitting from postmaster */
+	old_ctx = MemoryContextSwitchTo(TopMemoryContext);
+	fork_data = (ForkProcData *) palloc0(sizeof(ForkProcData));
+	fork_data->av = palloc0(sizeof(char *) * 10);
+	MyForkProcType = type;
+
+	switch(type)
+	{
+		/* Auxiliary Processes */
+		case CheckerFork:
+		case BootstrapFork:
+		case StartupFork:
+		case BgWriterFork:
+		case CheckpointerFork:
+		case WalWriterFork:
+		case WalReceiverFork:
+			PrepAuxProcessFork(fork_data);
+			break;
+		/* Non-Auxiliary Processes */
+		case AutoVacLauncherFork:
+		case AutoVacWorkerFork:
+			PrepAutoVacProcessFork(fork_data);
+			break;
+		case PgstatCollectorFork:
+			PrepPgstatCollectorFork(fork_data);
+			break;
+		case PgArchiverFork:
+			PrepPgArchiverFork(fork_data);
+			break;
+		case SysLoggerFork:
+			if (!Logging_collector)
+				return 0;
+
+			PrepSysLoggerFork(fork_data);
+			break;
+		case BgWorkerFork:
+			if (PrepBgWorkerFork(fork_data))
+			{
+				/* We failed to assign a backendlist entry
+				 * so tell postmaster to try again later.
+				 */
+				return -1;
+			}
+			break;
+		case BackendFork:
+			PrepBackendFork(fork_data);
+			break;
+		default:
+			break;
+	}
+
+	MemoryContextSwitchTo(old_ctx);
+
+	/* Bail out if pre-conditions are not met */
+	if (fork_data == NULL)
+		return 0;
 
 #ifdef EXEC_BACKEND
-	av[ac++] = "--forkboot";
-	av[ac++] = NULL;			/* filled in by postmaster_forkexec */
+	pid = postmaster_forkexec(fork_data);
+#else
+	pid = fork_process();
 #endif
 
-	snprintf(typebuf, sizeof(typebuf), "-x%d", type);
-	av[ac++] = typebuf;
-
-	av[ac] = NULL;
-	Assert(ac < lengthof(av));
-
-#ifdef EXEC_BACKEND
-	pid = postmaster_forkexec(ac, av);
-#else							/* !EXEC_BACKEND */
-	pid = fork_process();
+	/* some processes like backends and bgworkers need the pid */
+	MyChildProcPid = pid;
 
 	if (pid == 0)				/* child */
 	{
+#ifndef EXEC_BACKEND
 		InitPostmasterChild();
 
-		/* Close the postmaster's sockets */
-		ClosePostmasterPorts(false);
-
 		/* Release postmaster's working memory context */
+		if (type != SysLoggerFork && type != BackendFork)
+		{
+			/* Close the postmaster's sockets */
+			ClosePostmasterPorts(false);
+
+			if (type == BgWorkerFork)
+			{
+				/*
+				 * Before blowing away PostmasterContext, save this bgworker's
+				 * data where it can find it.
+				 */
+				MyBgworkerEntry = (BackgroundWorker *)
+					MemoryContextAlloc(TopMemoryContext, sizeof(BackgroundWorker));
+				memcpy(MyBgworkerEntry, &(CurrentBgWorker->rw_worker), sizeof(BackgroundWorker));
+
+			}
+
 		MemoryContextSwitchTo(TopMemoryContext);
 		MemoryContextDelete(PostmasterContext);
+
 		PostmasterContext = NULL;
+		}
+		else
+		{
+			ClosePostmasterPorts(true);
+		}
+#endif
+		/* Call the process's main subroutine */
+		fork_data->child_main (fork_data->ac, fork_data->av);
 
-		AuxiliaryProcessMain(ac, av);
+#ifndef EXEC_BACKEND
 		ExitPostmaster(0);
+#endif
 	}
-#endif							/* EXEC_BACKEND */
-
-	if (pid < 0)
+	else if (pid < 0)
 	{
 		/* in parent, fork failed */
-		int			save_errno = errno;
+		child_errno = errno;
 
-		errno = save_errno;
-		switch (type)
+				ereport(LOG,
+				(errmsg("could not fork %s process: %m", fork_data->type_desc)));
+
+		switch (MyForkProcType)
 		{
-			case StartupProcess:
-				ereport(LOG,
-						(errmsg("could not fork startup process: %m")));
+			/*
+			 * fork failure is fatal during startup, but there's no need to choke
+			 * immediately if starting other child types fails.
+			 */
+			case StartupFork:
+				ExitPostmaster(1);
 				break;
-			case BgWriterProcess:
-				ereport(LOG,
-						(errmsg("could not fork background writer process: %m")));
-				break;
-			case CheckpointerProcess:
-				ereport(LOG,
-						(errmsg("could not fork checkpointer process: %m")));
-				break;
-			case WalWriterProcess:
-				ereport(LOG,
-						(errmsg("could not fork WAL writer process: %m")));
-				break;
-			case WalReceiverProcess:
-				ereport(LOG,
-						(errmsg("could not fork WAL receiver process: %m")));
-				break;
+			case BgWorkerFork:
+			case BackendFork:
+				fork_data->fail_main(fork_data->ac, fork_data->av);
+				return -1;
 			default:
-				ereport(LOG,
-						(errmsg("could not fork process: %m")));
 				break;
 		}
 
-		/*
-		 * fork failure is fatal during startup, but there's no need to choke
-		 * immediately if starting other child types fails.
-		 */
-		if (type == StartupProcess)
-			ExitPostmaster(1);
 		return 0;
+	}
+	else /* parent */
+	{
+		switch (MyForkProcType)
+		{
+			case SysLoggerFork:
+			case BgWorkerFork:
+			case BackendFork:
+				fork_data->postmaster_main(fork_data->ac, fork_data->av);
+				break;
+			default:
+				break;
+		}
 	}
 
 	/*
@@ -5692,123 +5759,6 @@ BackgroundWorkerUnblockSignals(void)
 	PG_SETMASK(&UnBlockSig);
 }
 
-#ifdef EXEC_BACKEND
-static pid_t
-bgworker_forkexec(int shmem_slot)
-{
-	char	   *av[10];
-	int			ac = 0;
-	char		forkav[MAXPGPATH];
-
-	snprintf(forkav, MAXPGPATH, "--forkbgworker=%d", shmem_slot);
-
-	av[ac++] = "postgres";
-	av[ac++] = forkav;
-	av[ac++] = NULL;			/* filled in by postmaster_forkexec */
-	av[ac] = NULL;
-
-	Assert(ac < lengthof(av));
-
-	return postmaster_forkexec(ac, av);
-}
-#endif
-
-/*
- * Start a new bgworker.
- * Starting time conditions must have been checked already.
- *
- * Returns true on success, false on failure.
- * In either case, update the RegisteredBgWorker's state appropriately.
- *
- * This code is heavily based on autovacuum.c, q.v.
- */
-static bool
-do_start_bgworker(RegisteredBgWorker *rw)
-{
-	pid_t		worker_pid;
-
-	Assert(rw->rw_pid == 0);
-
-	/*
-	 * Allocate and assign the Backend element.  Note we must do this before
-	 * forking, so that we can handle out of memory properly.
-	 *
-	 * Treat failure as though the worker had crashed.  That way, the
-	 * postmaster will wait a bit before attempting to start it again; if it
-	 * tried again right away, most likely it'd find itself repeating the
-	 * out-of-memory or fork failure condition.
-	 */
-	if (!assign_backendlist_entry(rw))
-	{
-		rw->rw_crashed_at = GetCurrentTimestamp();
-		return false;
-	}
-
-	ereport(DEBUG1,
-			(errmsg("starting background worker process \"%s\"",
-					rw->rw_worker.bgw_name)));
-
-#ifdef EXEC_BACKEND
-	switch ((worker_pid = bgworker_forkexec(rw->rw_shmem_slot)))
-#else
-	switch ((worker_pid = fork_process()))
-#endif
-	{
-		case -1:
-			/* in postmaster, fork failed ... */
-			ereport(LOG,
-					(errmsg("could not fork worker process: %m")));
-			/* undo what assign_backendlist_entry did */
-			ReleasePostmasterChildSlot(rw->rw_child_slot);
-			rw->rw_child_slot = 0;
-			free(rw->rw_backend);
-			rw->rw_backend = NULL;
-			/* mark entry as crashed, so we'll try again later */
-			rw->rw_crashed_at = GetCurrentTimestamp();
-			break;
-
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
-
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
-
-			/*
-			 * Before blowing away PostmasterContext, save this bgworker's
-			 * data where it can find it.
-			 */
-			MyBgworkerEntry = (BackgroundWorker *)
-				MemoryContextAlloc(TopMemoryContext, sizeof(BackgroundWorker));
-			memcpy(MyBgworkerEntry, &rw->rw_worker, sizeof(BackgroundWorker));
-
-			/* Release postmaster's working memory context */
-			MemoryContextSwitchTo(TopMemoryContext);
-			MemoryContextDelete(PostmasterContext);
-			PostmasterContext = NULL;
-
-			StartBackgroundWorker();
-
-			exit(1);			/* should not get here */
-			break;
-#endif
-		default:
-			/* in postmaster, fork successful ... */
-			rw->rw_pid = worker_pid;
-			rw->rw_backend->pid = rw->rw_pid;
-			ReportBackgroundWorkerPID(rw);
-			/* add new worker to lists of backends */
-			dlist_push_head(&BackendList, &rw->rw_backend->elem);
-#ifdef EXEC_BACKEND
-			ShmemBackendArrayAdd(rw->rw_backend);
-#endif
-			return true;
-	}
-
-	return false;
-}
-
 /*
  * Does the current postmaster state require starting a worker with the
  * specified start_time?
@@ -5847,54 +5797,6 @@ bgworker_should_start_now(BgWorkerStartTime start_time)
 	}
 
 	return false;
-}
-
-/*
- * Allocate the Backend struct for a connected background worker, but don't
- * add it to the list of backends just yet.
- *
- * On failure, return false without changing any worker state.
- *
- * Some info from the Backend is copied into the passed rw.
- */
-static bool
-assign_backendlist_entry(RegisteredBgWorker *rw)
-{
-	Backend    *bn;
-
-	/*
-	 * Compute the cancel key that will be assigned to this session. We
-	 * probably don't need cancel keys for background workers, but we'd better
-	 * have something random in the field to prevent unfriendly people from
-	 * sending cancels to them.
-	 */
-	if (!RandomCancelKey(&MyCancelKey))
-	{
-		ereport(LOG,
-				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("could not generate random cancel key")));
-		return false;
-	}
-
-	bn = malloc(sizeof(Backend));
-	if (bn == NULL)
-	{
-		ereport(LOG,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory")));
-		return false;
-	}
-
-	bn->cancel_key = MyCancelKey;
-	bn->child_slot = MyPMChildSlot = AssignPostmasterChildSlot();
-	bn->bkend_type = BACKEND_TYPE_BGWORKER;
-	bn->dead_end = false;
-	bn->bgworker_notify = false;
-
-	rw->rw_backend = bn;
-	rw->rw_child_slot = bn->child_slot;
-
-	return true;
 }
 
 /*
@@ -6001,7 +5903,8 @@ maybe_start_bgworkers(void)
 			 * crashed, but there's no need because the next run of this
 			 * function will do that.
 			 */
-			if (!do_start_bgworker(rw))
+			CurrentBgWorker = rw;
+			if (do_start_bgworker() <= 0)
 			{
 				StartWorkerNeeded = true;
 				return;
@@ -6124,6 +6027,7 @@ save_backend_variables(BackendParameters *param, Port *port,
 	param->max_safe_fds = max_safe_fds;
 
 	param->MaxBackends = MaxBackends;
+	param->proc_type = MyForkProcType;
 
 #ifdef WIN32
 	param->PostmasterHandle = PostmasterHandle;
@@ -6359,6 +6263,7 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	max_safe_fds = param->max_safe_fds;
 
 	MaxBackends = param->MaxBackends;
+	MyForkProcType = param->proc_type;
 
 #ifdef WIN32
 	PostmasterHandle = param->PostmasterHandle;
@@ -6394,7 +6299,7 @@ ShmemBackendArrayAllocation(void)
 	memset(ShmemBackendArray, 0, size);
 }
 
-static void
+void
 ShmemBackendArrayAdd(Backend *bn)
 {
 	/* The array slot corresponding to my PMChildSlot should be free */

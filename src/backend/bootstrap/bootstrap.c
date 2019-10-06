@@ -70,6 +70,7 @@ static void cleanup(void);
  */
 
 AuxProcType MyAuxProcType = NotAnAuxProcess;	/* declared in miscadmin.h */
+ForkProcType MyForkProcType = NoForkProcess;	/* declared in fork_process.h */
 
 Relation	boot_reldesc;		/* current relation descriptor */
 

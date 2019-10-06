@@ -1113,7 +1113,7 @@ process_startup_options(Port *port, bool am_superuser)
 		av = (char **) palloc(maxac * sizeof(char *));
 		ac = 0;
 
-		av[ac++] = "postgres";
+		av[ac++] = pstrdup("postgres");
 
 		pg_split_opts(av, &ac, port->cmdline_options);
 

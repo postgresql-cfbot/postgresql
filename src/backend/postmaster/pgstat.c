@@ -280,10 +280,6 @@ static instr_time total_func_time;
  * Local function forward declarations
  * ----------
  */
-#ifdef EXEC_BACKEND
-static pid_t pgstat_forkexec(void);
-#endif
-
 NON_EXEC_STATIC void PgstatCollectorMain(int argc, char *argv[]) pg_attribute_noreturn();
 static void pgstat_exit(SIGNAL_ARGS);
 static void pgstat_beshutdown_hook(int code, Datum arg);
@@ -689,53 +685,26 @@ pgstat_reset_all(void)
 	pgstat_reset_remove_files(PGSTAT_STAT_PERMANENT_DIRECTORY);
 }
 
-#ifdef EXEC_BACKEND
 
 /*
- * pgstat_forkexec() -
- *
- * Format up the arglist for, then fork and exec, statistics collector process
- */
-static pid_t
-pgstat_forkexec(void)
-{
-	char	   *av[10];
-	int			ac = 0;
-
-	av[ac++] = "postgres";
-	av[ac++] = "--forkcol";
-	av[ac++] = NULL;			/* filled in by postmaster_forkexec */
-
-	av[ac] = NULL;
-	Assert(ac < lengthof(av));
-
-	return postmaster_forkexec(ac, av);
-}
-#endif							/* EXEC_BACKEND */
-
-
-/*
- * pgstat_start() -
+ * PrepPgstatCollectorFork
  *
  *	Called from postmaster at startup or after an existing collector
  *	died.  Attempt to fire up a fresh statistics collector.
  *
- *	Returns PID of child process, or 0 if fail.
- *
- *	Note: if fail, we will be called again from the postmaster main loop.
  */
-int
-pgstat_start(void)
+void
+PrepPgstatCollectorFork(ForkProcData *pgstat_fork)
 {
+	int				ac = 0;
 	time_t		curtime;
-	pid_t		pgStatPid;
 
 	/*
 	 * Check that the socket is there, else pgstat_init failed and we can do
 	 * nothing useful.
 	 */
 	if (pgStatSock == PGINVALID_SOCKET)
-		return 0;
+		return;
 
 	/*
 	 * Do nothing if too soon since last collector start.  This is a safety
@@ -746,45 +715,20 @@ pgstat_start(void)
 	curtime = time(NULL);
 	if ((unsigned int) (curtime - last_pgstat_start_time) <
 		(unsigned int) PGSTAT_RESTART_INTERVAL)
-		return 0;
+		return;
 	last_pgstat_start_time = curtime;
 
-	/*
-	 * Okay, fork off the collector.
-	 */
 #ifdef EXEC_BACKEND
-	switch ((pgStatPid = pgstat_forkexec()))
-#else
-	switch ((pgStatPid = fork_process()))
-#endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork statistics collector: %m")));
-			return 0;
-
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
-
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
-
-			/* Drop our connection to postmaster's shared memory, as well */
-			dsm_detach_all();
-			PGSharedMemoryDetach();
-
-			PgstatCollectorMain(0, NULL);
-			break;
+	pgstat_fork->av[ac++] = pstrdup("postgres");
+	pgstat_fork->av[ac++] = pstrdup("--forkcol");
+	pgstat_fork->av[ac++] = NULL;			/* filled in by postmaster_forkexec */
 #endif
 
-		default:
-			return (int) pgStatPid;
-	}
+	pgstat_fork->ac = ac;
+	Assert(pgstat_fork->ac < lengthof(*pgstat_fork->av));
 
-	/* shouldn't get here */
-	return 0;
+	pgstat_fork->type_desc = pstrdup("statistics collector");
+	pgstat_fork->child_main = PgstatCollectorMain;
 }
 
 void
@@ -4425,11 +4369,15 @@ pgstat_send_bgwriter(void)
  * ----------
  */
 NON_EXEC_STATIC void
-PgstatCollectorMain(int argc, char *argv[])
+PgstatCollectorMain(pg_attribute_unused() int argc, pg_attribute_unused() char *argv[])
 {
 	int			len;
 	PgStat_Msg	msg;
 	int			wr;
+
+	/* Drop our connection to postmaster's shared memory, as well */
+	dsm_detach_all();
+	PGSharedMemoryDetach();
 
 	/*
 	 * Ignore all signals usually bound to some action in the postmaster,

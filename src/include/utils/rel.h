@@ -351,9 +351,10 @@ typedef struct ViewOptions
  *		Returns whether the relation is security view, or not.  Note multiple
  *		eval of argument!
  */
-#define RelationIsSecurityView(relation)	\
-	((relation)->rd_options ?				\
-	 ((ViewOptions *) (relation)->rd_options)->security_barrier : false)
+#define RelationIsSecurityView(relation)									\
+	(AssertMacro(relation->rd_rel->relkind == RELKIND_VIEW),				\
+	 ((relation)->rd_options ?												\
+	  ((ViewOptions *) (relation)->rd_options)->security_barrier : false))
 
 /*
  * RelationHasCheckOption
@@ -361,9 +362,10 @@ typedef struct ViewOptions
  *		or the cascaded check option.  Note multiple eval of argument!
  */
 #define RelationHasCheckOption(relation)									\
+	(AssertMacro(relation->rd_rel->relkind == RELKIND_VIEW),				\
 	((relation)->rd_options &&												\
 	 ((ViewOptions *) (relation)->rd_options)->check_option !=				\
-	 VIEW_OPTION_CHECK_OPTION_NOT_SET)
+	 VIEW_OPTION_CHECK_OPTION_NOT_SET))
 
 /*
  * RelationHasLocalCheckOption
@@ -371,9 +373,10 @@ typedef struct ViewOptions
  *		option.  Note multiple eval of argument!
  */
 #define RelationHasLocalCheckOption(relation)								\
+	(AssertMacro(relation->rd_rel->relkind == RELKIND_VIEW),				\
 	((relation)->rd_options &&												\
 	 ((ViewOptions *) (relation)->rd_options)->check_option ==				\
-	 VIEW_OPTION_CHECK_OPTION_LOCAL)
+	 VIEW_OPTION_CHECK_OPTION_LOCAL))
 
 /*
  * RelationHasCascadedCheckOption
@@ -381,9 +384,10 @@ typedef struct ViewOptions
  *		option.  Note multiple eval of argument!
  */
 #define RelationHasCascadedCheckOption(relation)							\
+	(AssertMacro(relation->rd_rel->relkind == RELKIND_VIEW),				\
 	((relation)->rd_options &&												\
 	 ((ViewOptions *) (relation)->rd_options)->check_option ==				\
-	  VIEW_OPTION_CHECK_OPTION_CASCADED)
+	  VIEW_OPTION_CHECK_OPTION_CASCADED))
 
 /*
  * RelationIsValid

@@ -37,6 +37,7 @@ main(int argc, char *argv[])
 		{"lc-ctype", required_argument, NULL, 2},
 		{"locale", required_argument, NULL, 'l'},
 		{"maintenance-db", required_argument, NULL, 3},
+		{"collation-provider", required_argument, NULL, 4},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -59,6 +60,7 @@ main(int argc, char *argv[])
 	char	   *lc_collate = NULL;
 	char	   *lc_ctype = NULL;
 	char	   *locale = NULL;
+	char	   *collation_provider = NULL;
 
 	PQExpBufferData sql;
 
@@ -116,6 +118,9 @@ main(int argc, char *argv[])
 				break;
 			case 3:
 				maintenance_db = pg_strdup(optarg);
+				break;
+			case 4:
+				collation_provider = pg_strdup(optarg);
 				break;
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
@@ -193,6 +198,8 @@ main(int argc, char *argv[])
 		appendPQExpBuffer(&sql, " LC_COLLATE '%s'", lc_collate);
 	if (lc_ctype)
 		appendPQExpBuffer(&sql, " LC_CTYPE '%s'", lc_ctype);
+	if (collation_provider)
+		appendPQExpBuffer(&sql, " COLLATION_PROVIDER %s", collation_provider);
 
 	appendPQExpBufferChar(&sql, ';');
 
@@ -250,6 +257,8 @@ help(const char *progname)
 	printf(_("Usage:\n"));
 	printf(_("  %s [OPTION]... [DBNAME] [DESCRIPTION]\n"), progname);
 	printf(_("\nOptions:\n"));
+	printf(_("      --collation-provider={libc|icu}\n"
+			 "                               collation provider for the database\n"));
 	printf(_("  -D, --tablespace=TABLESPACE  default tablespace for the database\n"));
 	printf(_("  -e, --echo                   show the commands being sent to the server\n"));
 	printf(_("  -E, --encoding=ENCODING      encoding for the database\n"));

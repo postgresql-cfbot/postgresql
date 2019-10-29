@@ -101,6 +101,12 @@ struct pg_locale_struct
 
 typedef struct pg_locale_struct *pg_locale_t;
 
+extern struct pg_locale_struct global_locale;
+
+extern void make_icu_collator(const char *collcollate, const char *collctype,
+							  struct pg_locale_struct *resultp);
+extern void check_collation_version(HeapTuple colltuple);
+
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);
 
 extern char *get_collation_actual_version(char collprovider, const char *collcollate);

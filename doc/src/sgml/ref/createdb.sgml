@@ -86,6 +86,15 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--collation-provider={<literal>libc</literal>|<literal>icu</literal>}</option></term>
+      <listitem>
+       <para>
+        Specifies the collation provider for the database.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-D <replaceable class="parameter">tablespace</replaceable></option></term>
       <term><option>--tablespace=<replaceable class="parameter">tablespace</replaceable></option></term>
       <listitem>

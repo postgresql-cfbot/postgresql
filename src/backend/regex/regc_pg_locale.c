@@ -241,7 +241,12 @@ pg_set_regex_collation(Oid collation)
 	else
 	{
 		if (collation == DEFAULT_COLLATION_OID)
-			pg_regex_locale = 0;
+		{
+			if (global_locale.provider == COLLPROVIDER_ICU)
+				pg_regex_locale = &global_locale;
+			else
+				pg_regex_locale = 0;
+		}
 		else if (OidIsValid(collation))
 		{
 			/*

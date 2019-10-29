@@ -877,6 +877,14 @@ listAllDbs(const char *pattern, bool verbose)
 						  "       d.datctype as \"%s\",\n",
 						  gettext_noop("Collate"),
 						  gettext_noop("Ctype"));
+	if (pset.sversion >= 130000)
+		appendPQExpBuffer(&buf,
+						  "       CASE d.datcollprovider WHEN 'c' THEN 'libc' WHEN 'i' THEN 'icu' END AS \"%s\",\n",
+						  gettext_noop("Provider"));
+	else
+		appendPQExpBuffer(&buf,
+						  "       'libc' AS \"%s\",\n",
+						  gettext_noop("Provider"));
 	appendPQExpBufferStr(&buf, "       ");
 	printACLColumn(&buf, "d.datacl");
 	if (verbose && pset.sversion >= 80200)

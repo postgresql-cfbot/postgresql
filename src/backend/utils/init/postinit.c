@@ -31,6 +31,7 @@
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_collation.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_db_role_setting.h"
 #include "catalog/pg_tablespace.h"
@@ -404,6 +405,8 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	collate = NameStr(dbform->datcollate);
 	ctype = NameStr(dbform->datctype);
 
+	if (dbform->datcollprovider == COLLPROVIDER_LIBC)
+	{
 	if (pg_perm_setlocale(LC_COLLATE, collate) == NULL)
 		ereport(FATAL,
 				(errmsg("database locale is incompatible with operating system"),
@@ -417,6 +420,24 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 				 errdetail("The database was initialized with LC_CTYPE \"%s\", "
 						   " which is not recognized by setlocale().", ctype),
 				 errhint("Recreate the database with another locale or install the missing locale.")));
+	}
+	else if (dbform->datcollprovider == COLLPROVIDER_ICU)
+	{
+		make_icu_collator(collate, ctype, &global_locale);
+	}
+
+	global_locale.provider = dbform->datcollprovider;
+	global_locale.deterministic = true;	// TODO
+
+	{
+		HeapTuple	tp;
+
+		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(DEFAULT_COLLATION_OID));
+		if (!HeapTupleIsValid(tp))
+			elog(ERROR, "cache lookup failed for collation %u", DEFAULT_COLLATION_OID);
+		check_collation_version(tp);
+		ReleaseSysCache(tp);
+	}
 
 	/* Make the locale settings visible as GUC variables, too */
 	SetConfigOption("lc_collate", collate, PGC_INTERNAL, PGC_S_OVERRIDE);

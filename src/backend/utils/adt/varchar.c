@@ -751,7 +751,7 @@ bpchareq(PG_FUNCTION_ARGS)
 	len2 = bcTruelen(arg2);
 
 	if (lc_collate_is_c(collid) ||
-		collid == DEFAULT_COLLATION_OID ||
+		(collid == DEFAULT_COLLATION_OID && global_locale.deterministic) ||
 		pg_newlocale_from_collation(collid)->deterministic)
 	{
 		/*
@@ -789,7 +789,7 @@ bpcharne(PG_FUNCTION_ARGS)
 	len2 = bcTruelen(arg2);
 
 	if (lc_collate_is_c(collid) ||
-		collid == DEFAULT_COLLATION_OID ||
+		(collid == DEFAULT_COLLATION_OID && global_locale.deterministic) ||
 		pg_newlocale_from_collation(collid)->deterministic)
 	{
 		/*
@@ -995,8 +995,13 @@ hashbpchar(PG_FUNCTION_ARGS)
 	keydata = VARDATA_ANY(key);
 	keylen = bcTruelen(key);
 
-	if (!lc_collate_is_c(collid) && collid != DEFAULT_COLLATION_OID)
-		mylocale = pg_newlocale_from_collation(collid);
+	if (!lc_collate_is_c(collid))
+	{
+		if (collid != DEFAULT_COLLATION_OID)
+			mylocale = pg_newlocale_from_collation(collid);
+		else if (global_locale.provider == COLLPROVIDER_ICU)
+			mylocale = &global_locale;
+	}
 
 	if (!mylocale || mylocale->deterministic)
 	{
@@ -1055,8 +1060,13 @@ hashbpcharextended(PG_FUNCTION_ARGS)
 	keydata = VARDATA_ANY(key);
 	keylen = bcTruelen(key);
 
-	if (!lc_collate_is_c(collid) && collid != DEFAULT_COLLATION_OID)
-		mylocale = pg_newlocale_from_collation(collid);
+	if (!lc_collate_is_c(collid))
+	{
+		if (collid != DEFAULT_COLLATION_OID)
+			mylocale = pg_newlocale_from_collation(collid);
+		else if (global_locale.provider == COLLPROVIDER_ICU)
+			mylocale = &global_locale;
+	}
 
 	if (!mylocale || mylocale->deterministic)
 	{

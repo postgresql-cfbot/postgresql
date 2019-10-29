@@ -255,8 +255,13 @@ hashtext(PG_FUNCTION_ARGS)
 				 errmsg("could not determine which collation to use for string hashing"),
 				 errhint("Use the COLLATE clause to set the collation explicitly.")));
 
-	if (!lc_collate_is_c(collid) && collid != DEFAULT_COLLATION_OID)
-		mylocale = pg_newlocale_from_collation(collid);
+	if (!lc_collate_is_c(collid))
+	{
+		if (collid != DEFAULT_COLLATION_OID)
+			mylocale = pg_newlocale_from_collation(collid);
+		else if (global_locale.provider == COLLPROVIDER_ICU)
+			mylocale = &global_locale;
+	}
 
 	if (!mylocale || mylocale->deterministic)
 	{
@@ -311,8 +316,13 @@ hashtextextended(PG_FUNCTION_ARGS)
 				 errmsg("could not determine which collation to use for string hashing"),
 				 errhint("Use the COLLATE clause to set the collation explicitly.")));
 
-	if (!lc_collate_is_c(collid) && collid != DEFAULT_COLLATION_OID)
-		mylocale = pg_newlocale_from_collation(collid);
+	if (!lc_collate_is_c(collid))
+	{
+		if (collid != DEFAULT_COLLATION_OID)
+			mylocale = pg_newlocale_from_collation(collid);
+		else if (global_locale.provider == COLLPROVIDER_ICU)
+			mylocale = &global_locale;
+	}
 
 	if (!mylocale || mylocale->deterministic)
 	{

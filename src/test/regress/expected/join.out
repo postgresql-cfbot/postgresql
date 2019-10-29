@@ -1621,6 +1621,30 @@ SELECT '' AS "xxx", *
      | 4 | 1 | one   | 2
 (4 rows)
 
+-- Test naming the join result, first with postgres syntax...
+SELECT '' AS "xxx", *
+  FROM (J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (d, b) USING (b)) AS j
+  ORDER BY j.b, j.c, j.d;
+ xxx | b | a |   c   | d 
+-----+---+---+-------+---
+     | 0 | 5 | five  |  
+     | 0 |   | zero  |  
+     | 2 | 3 | three | 2
+     | 4 | 1 | one   | 2
+(4 rows)
+
+-- ...then with standard SQL syntax.
+SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (d, b) USING (b) AS j
+  ORDER BY j.b, j.c, j.d;
+ xxx | b | a |   c   | d 
+-----+---+---+-------+---
+     | 0 | 5 | five  |  
+     | 0 |   | zero  |  
+     | 2 | 3 | three | 2
+     | 4 | 1 | one   | 2
+(4 rows)
+
 --
 -- NATURAL JOIN
 -- Inner equi-join on all columns with the same name

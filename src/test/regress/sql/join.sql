@@ -126,6 +126,16 @@ SELECT '' AS "xxx", *
   FROM J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (a, b) USING (b)
   ORDER BY b, t1.a;
 
+-- Test naming the join result, first with postgres syntax...
+SELECT '' AS "xxx", *
+  FROM (J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (d, b) USING (b)) AS j
+  ORDER BY j.b, j.c, j.d;
+
+-- ...then with standard SQL syntax.
+SELECT '' AS "xxx", *
+  FROM J1_TBL t1 (a, b, c) JOIN J2_TBL t2 (d, b) USING (b) AS j
+  ORDER BY j.b, j.c, j.d;
+
 
 --
 -- NATURAL JOIN

@@ -12004,7 +12004,11 @@ joined_table:
 					n->larg = $1;
 					n->rarg = $4;
 					if ($5 != NULL && IsA($5, List))
-						n->usingClause = (List *) $5; /* USING clause */
+					{
+						/* USING clause */
+						n->usingClause = linitial_node(List, castNode(List, $5));
+						n->alias = lsecond_node(Alias, castNode(List, $5));
+					}
 					else
 						n->quals = $5; /* ON clause */
 					$$ = n;
@@ -12018,7 +12022,11 @@ joined_table:
 					n->larg = $1;
 					n->rarg = $3;
 					if ($4 != NULL && IsA($4, List))
-						n->usingClause = (List *) $4; /* USING clause */
+					{
+						/* USING clause */
+						n->usingClause = linitial_node(List, castNode(List, $4));
+						n->alias = lsecond_node(Alias, castNode(List, $4));
+					}
 					else
 						n->quals = $4; /* ON clause */
 					$$ = n;
@@ -12126,9 +12134,14 @@ join_outer: OUTER_P									{ $$ = NULL; }
  *	ON expr allows more general qualifications.
  *
  * We return USING as a List node, while an ON-expr will not be a List.
+ *
+ * Since the USING clause merges the columns, they no longer belong to either
+ * the left or the right table.  SQL allows an alias to be assigned to the JOIN
+ * so that the columns can be qualified.
  */
 
-join_qual:	USING '(' name_list ')'					{ $$ = (Node *) $3; }
+join_qual:	USING '(' name_list ')'					{ $$ = (Node *) (list_make2($3, NULL)); }
+			| USING '(' name_list ')' AS ColId		{ $$ = (Node *) (list_make2($3, makeAlias($6, NIL))); }
 			| ON a_expr								{ $$ = $2; }
 		;
 

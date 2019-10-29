@@ -620,7 +620,7 @@ TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
      </varlistentry>
 
      <varlistentry>
-      <term><literal>USING ( <replaceable class="parameter">join_column</replaceable> [, ...] )</literal></term>
+      <term><literal>USING ( <replaceable class="parameter">join_column</replaceable> [, ...] ) [ AS <replaceable>alias</replaceable> ]</literal></term>
       <listitem>
        <para>
         A clause of the form <literal>USING ( a, b, ... )</literal> is
@@ -629,6 +629,8 @@ TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
         <literal>USING</literal> implies that only one of each pair of
         equivalent columns will be included in the join output, not
         both.
+        An alias may be provided to reference these columns.  In this
+        case, the <literal>AS</literal> keyword is required.
        </para>
       </listitem>
      </varlistentry>

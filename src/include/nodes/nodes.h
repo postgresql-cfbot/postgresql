@@ -280,6 +280,8 @@ typedef enum NodeTag
 	T_AllocSetContext,
 	T_SlabContext,
 	T_GenerationContext,
+	T_ShmRetailContext,
+	T_ShmZoneContext,
 
 	/*
 	 * TAGS FOR VALUE NODES (value.h)

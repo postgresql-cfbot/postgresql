@@ -22,6 +22,7 @@ SUBDIRS = \
 		  test_rbtree \
 		  test_rls_hooks \
 		  test_shm_mq \
+		  test_shm_retail \
 		  unsafe_tests \
 		  worker_spi
 

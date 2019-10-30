@@ -1,0 +1,4 @@
+comment = 'Test code for shared retail memory context'
+default_version = '1.0'
+module_pathname = '$libdir/test_shm_retail'
+relocatable = true

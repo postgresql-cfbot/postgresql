@@ -190,10 +190,6 @@ ginEntryInsert(GinState *ginstate,
 
 	insertdata.isDelete = false;
 
-	/* During index build, count the to-be-inserted entry */
-	if (buildStats)
-		buildStats->nEntries++;
-
 	ginPrepareEntryScan(&btree, attnum, key, category, ginstate);
 	btree.isBuild = (buildStats != NULL);
 
@@ -234,6 +230,10 @@ ginEntryInsert(GinState *ginstate,
 		/* no match, so construct a new leaf entry */
 		itup = buildFreshLeafTuple(ginstate, attnum, key, category,
 								   items, nitem, buildStats, stack->buffer);
+
+		/* When created a new leaf node, increment the nEntries value */
+		if (buildStats)
+			buildStats->nEntries++;
 	}
 
 	/* Insert the new or modified leaf tuple */

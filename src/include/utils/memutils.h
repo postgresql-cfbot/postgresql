@@ -18,7 +18,8 @@
 #define MEMUTILS_H
 
 #include "nodes/memnodes.h"
-
+#include "utils/dsa.h"
+#include "storage/lwlock.h"
 
 /*
  * MaxAllocSize, MaxAllocHugeSize
@@ -79,6 +80,8 @@ extern void MemoryContextDeleteChildren(MemoryContext context);
 extern void MemoryContextSetIdentifier(MemoryContext context, const char *id);
 extern void MemoryContextSetParent(MemoryContext context,
 								   MemoryContext new_parent);
+extern MemoryContext MemoryContextClone(MemoryContext template,
+										MemoryContext parent);
 extern Size GetMemoryChunkSpace(void *pointer);
 extern MemoryContext MemoryContextGetParent(MemoryContext context);
 extern bool MemoryContextIsEmpty(MemoryContext context);
@@ -182,6 +185,35 @@ extern MemoryContext GenerationContextCreate(MemoryContext parent,
 											 const char *name,
 											 Size blockSize);
 
+/* shm_mcxt.c */
+extern MemoryContext ShmRetailContextCreateGlobal(MemoryContext parent,
+										  const char *name,
+										  dsa_area *area,
+										  void *base);
+extern MemoryContext ShmRetailContextCreateLocal(MemoryContext parent,
+												  const char *name,
+												  MemoryContext global_context);
+
+extern void ShmRetailContextMoveChunk(MemoryContext local_context,
+									  MemoryContext global_context);
+
+extern Size ShmRetailContextSize(void);
+
+/* shm_zone.c */
+extern MemoryContext ShmZoneContextCreateOrigin(MemoryContext parent,
+												const char *name,
+												dsa_area *area,
+												void *base,
+												LWLock *lock);
+
+extern MemoryContext ShmZoneContextCreateClone(MemoryContext parent,
+											   const char *name,
+											   MemoryContext origin);
+
+extern Size ShmZoneContextSize(void);
+
+extern LWLock* ShmZoneContextGetLock(MemoryContext context);
+
 /*
  * Recommended default alloc parameters, suitable for "ordinary" contexts
  * that might hold quite a lot of data.
@@ -220,5 +252,7 @@ extern MemoryContext GenerationContextCreate(MemoryContext parent,
 
 #define SLAB_DEFAULT_BLOCK_SIZE		(8 * 1024)
 #define SLAB_LARGE_BLOCK_SIZE		(8 * 1024 * 1024)
+
+#define ShmZone_DEFAULT_BLOCK_SIZE (1 * 1024)
 
 #endif							/* MEMUTILS_H */

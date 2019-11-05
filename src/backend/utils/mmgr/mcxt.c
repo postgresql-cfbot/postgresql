@@ -397,6 +397,53 @@ MemoryContextSetParent(MemoryContext context, MemoryContext new_parent)
 }
 
 /*
+ * MemoryContextClone
+ *  	Create a new MemoryContext of the same type as template context
+ * 		and set its parent to specified one.
+ */
+MemoryContext
+MemoryContextClone(MemoryContext template, MemoryContext parent)
+{
+	MemoryContext context;
+
+	AssertArg(MemoryContextIsValid(template));
+	AssertArg(MemoryContextIsValid(parent));
+
+
+	switch (nodeTag(template))
+	{
+		case T_AllocSetContext:
+		case T_SlabContext:
+		case T_GenerationContext:
+			elog(FATAL, " MemoryContextClone doesn't support cloning"
+				 "memory context (%s)", template->name);
+			break;
+		case T_ShmRetailContext:
+			context = ShmRetailContextCreateLocal(parent,
+												  "clone",
+												  template);
+			break;
+		case T_ShmZoneContext:
+			{
+				MemoryContext old_context;
+
+				/* cloned context is created in shared memory */
+				old_context = MemoryContextSwitchTo(template);
+				context = ShmZoneContextCreateClone(parent,
+													"clone",template);
+				MemoryContextSwitchTo(old_context);
+				break;
+			}
+		default:
+			elog(FATAL, "unrecognized node type: %d",
+				 (int) nodeTag(template));
+	}
+	return context;
+}
+
+
+
+/*
  * MemoryContextAllowInCriticalSection
  *		Allow/disallow allocations in this memory context within a critical
  *		section.

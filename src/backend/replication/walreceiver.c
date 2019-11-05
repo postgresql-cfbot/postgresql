@@ -63,6 +63,7 @@
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
 #include "storage/procarray.h"
+#include "storage/procsignal.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/pg_lsn.h"
@@ -125,7 +126,6 @@ static void ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime);
 
 /* Signal handlers */
 static void WalRcvSigHupHandler(SIGNAL_ARGS);
-static void WalRcvSigUsr1Handler(SIGNAL_ARGS);
 static void WalRcvShutdownHandler(SIGNAL_ARGS);
 static void WalRcvQuickDieHandler(SIGNAL_ARGS);
 
@@ -147,9 +147,8 @@ void
 ProcessWalRcvInterrupts(void)
 {
 	/*
-	 * Although walreceiver interrupt handling doesn't use the same scheme as
-	 * regular backends, call CHECK_FOR_INTERRUPTS() to make sure we receive
-	 * any incoming signals on Win32.
+	 * The CHECK_FOR_INTERRUPTS() call ensures global barriers are handled,
+	 * and incoming signals on Win32 are received.
 	 */
 	CHECK_FOR_INTERRUPTS();
 
@@ -252,7 +251,7 @@ WalReceiverMain(void)
 	pqsignal(SIGQUIT, WalRcvQuickDieHandler);	/* hard crash time */
 	pqsignal(SIGALRM, SIG_IGN);
 	pqsignal(SIGPIPE, SIG_IGN);
-	pqsignal(SIGUSR1, WalRcvSigUsr1Handler);
+	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
 	pqsignal(SIGUSR2, SIG_IGN);
 
 	/* Reset some signals that are accepted by postmaster but not here */
@@ -765,17 +764,6 @@ WalRcvSigHupHandler(SIGNAL_ARGS)
 	got_SIGHUP = true;
 }
 
-
-/* SIGUSR1: used by latch mechanism */
-static void
-WalRcvSigUsr1Handler(SIGNAL_ARGS)
-{
-	int			save_errno = errno;
-
-	latch_sigusr1_handler();
-
-	errno = save_errno;
-}
 
 /* SIGTERM: set flag for ProcessWalRcvInterrupts */
 static void

@@ -190,6 +190,7 @@ InitProcGlobal(void)
 	ProcGlobal->checkpointerLatch = NULL;
 	pg_atomic_init_u32(&ProcGlobal->procArrayGroupFirst, INVALID_PGPROCNO);
 	pg_atomic_init_u32(&ProcGlobal->clogGroupFirst, INVALID_PGPROCNO);
+	pg_atomic_init_u64(&ProcGlobal->globalBarrierGen, 1);
 
 	/*
 	 * Create and initialize all the PGPROC structures we'll need.  There are
@@ -284,6 +285,9 @@ InitProcGlobal(void)
 		 */
 		pg_atomic_init_u32(&(procs[i].procArrayGroupNext), INVALID_PGPROCNO);
 		pg_atomic_init_u32(&(procs[i].clogGroupNext), INVALID_PGPROCNO);
+
+		pg_atomic_init_u32(&procs[i].barrierFlags, 0);
+		pg_atomic_init_u64(&procs[i].barrierGen, PG_UINT64_MAX);
 	}
 
 	/*
@@ -442,6 +446,12 @@ InitProcess(void)
 	MyProc->clogGroupMemberLsn = InvalidXLogRecPtr;
 	Assert(pg_atomic_read_u32(&MyProc->clogGroupNext) == INVALID_PGPROCNO);
 
+	/* pairs with globalBarrierGen increase */
+	pg_memory_barrier();
+	pg_atomic_write_u32(&MyProc->barrierFlags, 0);
+	pg_atomic_write_u64(&MyProc->barrierGen,
+						pg_atomic_read_u64(&ProcGlobal->globalBarrierGen));
+
 	/*
 	 * Acquire ownership of the PGPROC's latch, so that we can use WaitLatch
 	 * on it.  That allows us to repoint the process latch, which so far
@@ -585,6 +595,13 @@ InitAuxiliaryProcess(void)
 	MyProc->lwWaitMode = 0;
 	MyProc->waitLock = NULL;
 	MyProc->waitProcLock = NULL;
+
+	/* pairs with globalBarrierGen increase */
+	pg_memory_barrier();
+	pg_atomic_write_u32(&MyProc->barrierFlags, 0);
+	pg_atomic_write_u64(&MyProc->barrierGen,
+						pg_atomic_read_u64(&ProcGlobal->globalBarrierGen));
+
 #ifdef USE_ASSERT_CHECKING
 	{
 		int			i;
@@ -882,6 +899,9 @@ ProcKill(int code, Datum arg)
 			MyProc->lockGroupLeader = NULL;
 		LWLockRelease(leader_lwlock);
 	}
+
+	pg_atomic_write_u32(&MyProc->barrierFlags, 0);
+	pg_atomic_write_u64(&MyProc->barrierGen, PG_UINT64_MAX);
 
 	/*
 	 * Reset MyLatch to the process local one.  This is so that signal

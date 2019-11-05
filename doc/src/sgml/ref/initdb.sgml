@@ -217,9 +217,10 @@ PostgreSQL documentation
         Use checksums on data pages to help detect corruption by the
         I/O system that would otherwise be silent. Enabling checksums
         may incur a noticeable performance penalty. If set, checksums
-        are calculated for all objects, in all databases. All checksum
-        failures will be reported in the
-        <xref linkend="pg-stat-database-view"/> view.
+        are calculated for all objects, in all databases. All
+        checksum failures will be reported in the <xref
+        linkend="pg-stat-database-view"/> view.
+        See <xref linkend="checksums" /> for details.
        </para>
       </listitem>
      </varlistentry>

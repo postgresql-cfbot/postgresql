@@ -3765,6 +3765,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_EXECUTE_GATHER:
 			event_name = "ExecuteGather";
 			break;
+		case WAIT_EVENT_GLOBAL_BARRIER:
+			event_name = "GlobalBarrier";
+			break;
 		case WAIT_EVENT_HASH_BATCH_ALLOCATING:
 			event_name = "Hash/Batch/Allocating";
 			break;
@@ -4306,6 +4309,12 @@ pgstat_get_backend_desc(BackendType backendType)
 			break;
 		case B_WAL_WRITER:
 			backendDesc = "walwriter";
+			break;
+		case B_CHECKSUMHELPER_LAUNCHER:
+			backendDesc = "checksumhelper launcher";
+			break;
+		case B_CHECKSUMHELPER_WORKER:
+			backendDesc = "checksumhelper worker";
 			break;
 	}
 

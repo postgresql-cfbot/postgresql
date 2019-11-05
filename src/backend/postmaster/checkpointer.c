@@ -54,6 +54,7 @@
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
 #include "storage/proc.h"
+#include "storage/procsignal.h"
 #include "storage/shmem.h"
 #include "storage/smgr.h"
 #include "storage/spin.h"
@@ -179,7 +180,6 @@ static void UpdateSharedMemoryConfig(void);
 static void chkpt_quickdie(SIGNAL_ARGS);
 static void ChkptSigHupHandler(SIGNAL_ARGS);
 static void ReqCheckpointHandler(SIGNAL_ARGS);
-static void chkpt_sigusr1_handler(SIGNAL_ARGS);
 static void ReqShutdownHandler(SIGNAL_ARGS);
 
 
@@ -211,7 +211,7 @@ CheckpointerMain(void)
 	pqsignal(SIGQUIT, chkpt_quickdie);	/* hard crash time */
 	pqsignal(SIGALRM, SIG_IGN);
 	pqsignal(SIGPIPE, SIG_IGN);
-	pqsignal(SIGUSR1, chkpt_sigusr1_handler);
+	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
 	pqsignal(SIGUSR2, ReqShutdownHandler);	/* request shutdown */
 
 	/*
@@ -345,6 +345,10 @@ CheckpointerMain(void)
 
 		/* Clear any already-pending wakeups */
 		ResetLatch(MyLatch);
+
+		/* Process all pending interrupts. */
+		if (GlobalBarrierInterruptPending)
+			ProcessGlobalBarrierIntterupt();
 
 		/*
 		 * Process any requests or signals received recently.
@@ -849,17 +853,6 @@ ReqCheckpointHandler(SIGNAL_ARGS)
 	 * need do is ensure that our main loop gets kicked out of any wait.
 	 */
 	SetLatch(MyLatch);
-
-	errno = save_errno;
-}
-
-/* SIGUSR1: used for latch wakeups */
-static void
-chkpt_sigusr1_handler(SIGNAL_ARGS)
-{
-	int			save_errno = errno;
-
-	latch_sigusr1_handler();
 
 	errno = save_errno;
 }

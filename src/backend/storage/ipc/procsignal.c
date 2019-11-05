@@ -18,8 +18,10 @@
 #include <unistd.h>
 
 #include "access/parallel.h"
+#include "access/twophase.h"
 #include "commands/async.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "replication/walsender.h"
 #include "storage/latch.h"
 #include "storage/ipc.h"
@@ -62,9 +64,11 @@ typedef struct
 
 static ProcSignalSlot *ProcSignalSlots = NULL;
 static volatile ProcSignalSlot *MyProcSignalSlot = NULL;
+volatile sig_atomic_t GlobalBarrierInterruptPending = false;
 
 static bool CheckProcSignal(ProcSignalReason reason);
 static void CleanupProcSignalState(int status, Datum arg);
+static void HandleGlobalBarrierSignal(void);
 
 /*
  * ProcSignalShmemSize
@@ -262,6 +266,8 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 {
 	int			save_errno = errno;
 
+	pg_read_barrier();
+
 	if (CheckProcSignal(PROCSIG_CATCHUP_INTERRUPT))
 		HandleCatchupInterrupt();
 
@@ -292,9 +298,144 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN))
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN);
 
+	if (CheckProcSignal(PROCSIG_GLOBAL_BARRIER))
+		HandleGlobalBarrierSignal();
+
 	SetLatch(MyLatch);
 
 	latch_sigusr1_handler();
 
 	errno = save_errno;
+}
+
+/*
+ *
+ */
+uint64
+EmitGlobalBarrier(GlobalBarrierKind kind)
+{
+	uint64 generation;
+
+	/*
+	 * Broadcast flag, without incrementing generation. This ensures that all
+	 * backends could know about this.
+	 *
+	 * It's OK if the to-be-signalled backend enters after our check here. A
+	 * new backend should have current settings.
+	 */
+	for (int i = 0; i < (MaxBackends + max_prepared_xacts); i++)
+	{
+		PGPROC *proc = &ProcGlobal->allProcs[i];
+
+		if (proc->pid == 0)
+			continue;
+
+		pg_atomic_fetch_or_u32(&proc->barrierFlags, (uint32) kind);
+
+		elog(LOG, "setting flags for %u", proc->pid);
+	}
+
+	/*
+	 * Broadcast flag generation. If any backend joins after this, it's either
+	 * going to be signalled below, or has read a new enough generation that
+	 * WaitForGlobalBarrier() will not wait for it.
+	 */
+	generation = pg_atomic_add_fetch_u64(&ProcGlobal->globalBarrierGen, 1);
+
+	/* Wake up each backend (including ours) */
+	for (int i = 0; i < NumProcSignalSlots; i++)
+	{
+		ProcSignalSlot *slot = &ProcSignalSlots[i];
+
+		if (slot->pss_pid == 0)
+			continue;
+
+		/* Atomically set the proper flag */
+		slot->pss_signalFlags[PROCSIG_GLOBAL_BARRIER] = true;
+
+		pg_write_barrier();
+
+		/* Send signal */
+		kill(slot->pss_pid, SIGUSR1);
+	}
+
+	return generation;
+}
+
+/*
+ * Wait for all barriers to be absorbed.  This guarantees that all changes
+ * requested by a specific EmitGlobalBarrier() have taken effect.
+ */
+void
+WaitForGlobalBarrier(uint64 generation)
+{
+	pgstat_report_wait_start(WAIT_EVENT_GLOBAL_BARRIER);
+	for (int i = 0; i < (MaxBackends + max_prepared_xacts); i++)
+	{
+		PGPROC *proc = &ProcGlobal->allProcs[i];
+		uint64 oldval;
+
+		pg_memory_barrier();
+		oldval = pg_atomic_read_u64(&proc->barrierGen);
+
+		/*
+		 * Unused proc slots get their barrierGen set to UINT64_MAX, so we
+		 * need not care about that.
+		 */
+		while (oldval < generation)
+		{
+			CHECK_FOR_INTERRUPTS();
+			pg_usleep(10000);
+
+			pg_memory_barrier();
+			oldval = pg_atomic_read_u64(&proc->barrierGen);
+		}
+	}
+	pgstat_report_wait_end();
+}
+
+/*
+ * Absorb the global barrier procsignal.
+ */
+static void
+HandleGlobalBarrierSignal(void)
+{
+	InterruptPending = true;
+	GlobalBarrierInterruptPending = true;
+	SetLatch(MyLatch);
+}
+
+/*
+ * Perform global barrier related interrupt checking. If CHECK_FOR_INTERRUPTS
+ * is used, it'll be called by that, if a backend type doesn't do so, it has
+ * to be called explicitly.
+ */
+void
+ProcessGlobalBarrierIntterupt(void)
+{
+	if (GlobalBarrierInterruptPending)
+	{
+		uint64 generation;
+		uint32 flags;
+
+		GlobalBarrierInterruptPending = false;
+
+		generation = pg_atomic_read_u64(&ProcGlobal->globalBarrierGen);
+		pg_memory_barrier();
+		flags = pg_atomic_exchange_u32(&MyProc->barrierFlags, 0);
+		pg_memory_barrier();
+
+		if (flags & GLOBBAR_CHECKSUM)
+		{
+			/*
+			 * By virtue of getting here (i.e. interrupts being processed), we
+			 * know that this backend won't have any in-progress writes (which
+			 * might have missed the checksum change).
+			 */
+		}
+
+		pg_atomic_write_u64(&MyProc->barrierGen, generation);
+
+		elog(LOG, "processed interrupts for %u", MyProcPid);
+	}
 }

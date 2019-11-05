@@ -141,6 +141,7 @@ typedef struct Port
 	char	   *user_name;
 	char	   *cmdline_options;
 	List	   *guc_options;
+	List	   *guc_report;
 
 	/*
 	 * The startup packet application name, only used here for the "connection

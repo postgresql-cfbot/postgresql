@@ -7630,7 +7630,29 @@ GetConfigOptionFlags(const char *name, bool missing_ok)
 	return record->flags;
 }
 
+/*
+ * Set the option to be GUC_REPORT
+ */
 
+bool
+SetConfigReport(const char *name, bool missing_ok)
+{
+	struct config_generic *record;
+
+	record = find_option(name, false, WARNING);
+	if (record == NULL)
+	{
+		if (missing_ok)
+			return 0;
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("unrecognized configuration parameter \"%s\"",
+						name)));
+	}
+	record->flags |= GUC_REPORT;
+
+	return 0;
+}
 /*
  * flatten_set_variable_args
  *		Given a parsenode List as emitted by the grammar for SET,

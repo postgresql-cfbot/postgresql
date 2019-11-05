@@ -2182,6 +2182,9 @@ build_startup_packet(const PGconn *conn, char *packet,
 		ADD_STARTUP_OPTION("replication", conn->replication);
 	if (conn->pgoptions && conn->pgoptions[0])
 		ADD_STARTUP_OPTION("options", conn->pgoptions);
+	if (conn->guc_report && conn->guc_report[0])
+		ADD_STARTUP_OPTION("_pq_.report", conn->guc_report);
+
 	if (conn->send_appname)
 	{
 		/* Use appname if present, otherwise use fallback */

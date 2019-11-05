@@ -370,6 +370,8 @@ struct pg_conn
 	/* Type of connection to make.  Possible values: any, read-write. */
 	char	   *target_session_attrs;
 
+	char	   *guc_report;
+
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
 

@@ -1090,6 +1090,9 @@ process_startup_options(Port *port, bool am_superuser)
 {
 	GucContext	gucctx;
 	ListCell   *gucopts;
+	ListCell   *gucreport;
+	List 	   *gucReports;
+
 
 	gucctx = am_superuser ? PGC_SU_BACKEND : PGC_BACKEND;
 
@@ -1122,6 +1125,16 @@ process_startup_options(Port *port, bool am_superuser)
 		Assert(ac < maxac);
 
 		(void) process_postgres_switches(ac, av, gucctx, NULL);
+	}
+
+	/* Loop through the user requested GUC_REPORT and set them */
+	gucReports = port->guc_report;
+	foreach(gucreport,gucReports)
+	{
+		char		*name;
+
+		name = lfirst(gucreport);
+		SetConfigReport(name, true);
 	}
 
 	/*

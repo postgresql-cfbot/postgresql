@@ -2103,6 +2103,7 @@ retry1:
 		 * zeroing extra byte above.
 		 */
 		port->guc_options = NIL;
+		port->guc_report = NIL;
 
 		while (offset < len)
 		{
@@ -2149,11 +2150,36 @@ retry1:
 			{
 				/*
 				 * Any option beginning with _pq_. is reserved for use as a
-				 * protocol-level option, but at present no such options are
-				 * defined.
+				 * protocol-level option.
 				 */
-				unrecognized_protocol_options =
-					lappend(unrecognized_protocol_options, pstrdup(nameptr));
+
+				if (strncasecmp(nameptr + 5, "report", 6) == 0)
+				{
+					List	   *reportlist;
+					ListCell   *lc;
+
+					/* avoid scribbling on valptr */
+					char 		*tempval = pstrdup(valptr);
+
+					/* Parse string into list of identifiers */
+					if (!SplitGUCList(tempval, ',', &reportlist))
+					{
+						/* this shouldn't fail really */
+						elog(ERROR, "invalid list syntax in guc_report list");
+					}
+					foreach(lc, reportlist)
+					{
+						char	   *guc = (char *) lfirst(lc);
+						port->guc_report = lappend(port->guc_report,
+												   pstrdup(guc));
+					}
+					pfree(tempval);
+				}
+				else
+				{
+					unrecognized_protocol_options =
+							lappend(unrecognized_protocol_options, pstrdup(nameptr));
+				}
 			}
 			else
 			{

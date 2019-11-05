@@ -351,6 +351,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 11, /* sizeof("read-write") = 11 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+	{"_pq_.report",NULL, NULL, NULL,
+		"Report", "D", 5,
+		offsetof(struct pg_conn, guc_report)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -5581,7 +5585,6 @@ conninfo_array_parse(const char *const *keywords, const char *const *values,
 				PQconninfoFree(dbname_options);
 				return NULL;
 			}
-
 			/*
 			 * If we are on the first dbname parameter, and we have a parsed
 			 * connection string, copy those parameters across, overriding any

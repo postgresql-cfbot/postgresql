@@ -44,6 +44,7 @@
 #include "storage/procsignal.h"
 #include "storage/sinvaladt.h"
 #include "storage/spin.h"
+#include "utils/catcache.h"
 #include "utils/snapmgr.h"
 
 /* GUCs */
@@ -147,6 +148,8 @@ CreateSharedMemoryAndSemaphores(void)
 		size = add_size(size, BTreeShmemSize());
 		size = add_size(size, SyncScanShmemSize());
 		size = add_size(size, AsyncShmemSize());
+		/* if catalog cache is not shrared, do nothing (adding zero) */
+		size = add_size(size, CatCacheShmemSize());
 #ifdef EXEC_BACKEND
 		size = add_size(size, ShmemBackendArraySize());
 #endif
@@ -263,6 +266,8 @@ CreateSharedMemoryAndSemaphores(void)
 	BTreeShmemInit();
 	SyncScanShmemInit();
 	AsyncShmemInit();
+	/* if catalog cache is not shrared, do nothing */
+	CatCacheShmemInit();
 
 #ifdef EXEC_BACKEND
 

@@ -1466,6 +1466,29 @@ SysCacheInvalidate(int cacheId, uint32 hashValue)
 	CatCacheInvalidate(SysCache[cacheId], hashValue);
 }
 
+void
+GlobalSysCacheInvalidate(int cacheId, uint32 hashValue)
+{
+	if (cacheId < 0 || cacheId >= SysCacheSize)
+		elog(ERROR, "invalid cache ID: %d", cacheId);
+
+	/* if this cache isn't initialized yet, no need to do anything */
+	if (!PointerIsValid(SysCache[cacheId]))
+		return;
+
+	GlobalCatCacheInvalidate(SysCache[cacheId], hashValue);
+}
+
+/*
+ * This function is used in ReleaseCatCache() to get Local CatCache
+ * from Global CatCache id. Prototype declaration is held at catcache.h
+ */
+CatCache *
+GetLocalSysCache(int cacheId)
+{
+	return SysCache[cacheId];
+}
+
 /*
  * Certain relations that do not have system caches send snapshot invalidation
  * messages in lieu of catcache messages.  This is for the benefit of

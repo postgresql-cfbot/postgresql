@@ -166,6 +166,9 @@ extern bool RelationInvalidatesSnapshotsOnly(Oid relid);
 extern bool RelationHasSysCache(Oid relid);
 extern bool RelationSupportsSysCache(Oid relid);
 
+/* For GlobalCatCache */
+void GlobalSysCacheInvalidate(int cacheId, uint32 hashValue);
+
 /*
  * The use of the macros below rather than direct calls to the corresponding
  * functions is encouraged, as it insulates the caller from changes in the

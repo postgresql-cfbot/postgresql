@@ -5191,7 +5191,6 @@ Oid
 get_role_oid(const char *rolname, bool missing_ok)
 {
 	Oid			oid;
-
 	oid = GetSysCacheOid1(AUTHNAME, Anum_pg_authid_oid,
 						  CStringGetDatum(rolname));
 	if (!OidIsValid(oid) && !missing_ok)

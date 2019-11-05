@@ -82,6 +82,7 @@
 #include "tsearch/ts_cache.h"
 #include "utils/builtins.h"
 #include "utils/bytea.h"
+#include "utils/catcache.h"
 #include "utils/guc_tables.h"
 #include "utils/float.h"
 #include "utils/memutils.h"
@@ -2248,6 +2249,17 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&maintenance_work_mem,
 		65536, 1024, MAX_KILOBYTES,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"shared_catcache_mem", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared catlog cache memory."),
+			gettext_noop("A value of 0 disables this feature and catalog cache is built per backend."),
+			GUC_UNIT_MB
+		},
+		&shared_catcache_mem,
+		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 

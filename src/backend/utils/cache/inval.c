@@ -629,6 +629,37 @@ LocalExecuteInvalidationMessage(SharedInvalidationMessage *msg)
 }
 
 /*
+ * GlobalExecuteInvalidationMessage
+ *
+ * Process a single invalidation message (which could be of any type).
+ * Only the global caches entires are flushed if other process does not
+ * reference it.
+ * This does not flush local caches nor send messages to other backends.
+ */
+void
+GlobalExecuteInvalidationMessage(SharedInvalidationMessage *msg)
+{
+	if (msg->id >= 0)
+	{
+		if (msg->cc.dbId == MyDatabaseId || msg->cc.dbId == InvalidOid)
+			GlobalSysCacheInvalidate(msg->cc.id, msg->cc.hashValue);
+	}
+	else if (msg->id == SHAREDINVALCATALOG_ID)
+	{
+		if (msg->cat.dbId == MyDatabaseId || msg->cat.dbId == InvalidOid)
+		{
+			InvalidateCatalogSnapshot();
+
+			CatalogCacheFlushCatalog(msg->cat.catId);
+
+			/* CatalogCacheFlushCatalog calls CallSyscacheCallbacks as needed */
+		}
+	}
+	/* currently only catcache is supported in global mode */
+}
+
+
+/*
  *		InvalidateSystemCaches
  *
  *		This blows away all tuples in the system catalog caches and
@@ -970,6 +1001,20 @@ AtEOXact_Inval(bool isCommit)
 
 		ProcessInvalidationMessagesMulti(&transInvalInfo->PriorCmdInvalidMsgs,
 										 SendSharedInvalidMessages);
+
+		/*
+		 * If catcache is global mode, try to remove global catcache entry.
+		 * And also local catcaches are removed since  cache tuples added
+		 * in this transaction are lcoated in local CatCache rather than
+		 * global CatCache. We don't want to hold entries locally after commit.
+		 */
+		if (CatCacheIsGlobal)
+		{
+			ProcessInvalidationMessages(&transInvalInfo->PriorCmdInvalidMsgs,
+									GlobalExecuteInvalidationMessage);
+			ProcessInvalidationMessages(&transInvalInfo->PriorCmdInvalidMsgs,
+									LocalExecuteInvalidationMessage);
+		}
 
 		if (transInvalInfo->RelcacheInitFileInval)
 			RelationCacheInitFilePostInvalidate();

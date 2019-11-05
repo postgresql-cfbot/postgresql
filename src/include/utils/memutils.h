@@ -18,7 +18,7 @@
 #define MEMUTILS_H
 
 #include "nodes/memnodes.h"
-
+#include "utils/dsa.h"
 
 /*
  * MaxAllocSize, MaxAllocHugeSize
@@ -59,6 +59,7 @@ extern PGDLLIMPORT MemoryContext CacheMemoryContext;
 extern PGDLLIMPORT MemoryContext MessageContext;
 extern PGDLLIMPORT MemoryContext TopTransactionContext;
 extern PGDLLIMPORT MemoryContext CurTransactionContext;
+extern PGDLLIMPORT MemoryContext GlobalCacheContext;
 
 /* This is a transient link to the active portal's memory context: */
 extern PGDLLIMPORT MemoryContext PortalContext;
@@ -181,6 +182,13 @@ extern MemoryContext SlabContextCreate(MemoryContext parent,
 extern MemoryContext GenerationContextCreate(MemoryContext parent,
 											 const char *name,
 											 Size blockSize);
+
+/* shm_mcxt.c */
+extern MemoryContext CreatePermShmContext(MemoryContext parent,
+										  const char *name,
+										  dsa_area *area,
+										  void *base);
+extern Size ShmContextSize(void);
 
 /*
  * Recommended default alloc parameters, suitable for "ordinary" contexts

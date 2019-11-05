@@ -24,6 +24,7 @@
 #include "access/skey.h"
 #include "lib/ilist.h"
 #include "utils/relcache.h"
+#include "storage/lwlock.h"
 
 /*
  *		struct catctup:			individual tuple in the cache.
@@ -34,6 +35,7 @@
 
 #define CATCACHE_MAXKEYS		4
 
+#define GET_CACHEID(catcache) (catcache->id)
 
 /* function computing a datum's hash */
 typedef uint32 (*CCHashFN) (Datum datum);
@@ -41,9 +43,37 @@ typedef uint32 (*CCHashFN) (Datum datum);
 /* function computing equality of two datums */
 typedef bool (*CCFastEqualFN) (Datum a, Datum b);
 
+/* Forward declarations */
+typedef struct GlobalCatCache GlobalCatCache;
+typedef struct LocalCatCTup LocalCatCTup;
+typedef struct GlobalCatCTup GlobalCatCTup;
+
+/*
+ * CatCache type
+ * CC_REGULAR: CatCache and its entry are located in CacheMemoryContext
+ *
+ * CC_SHAREDLOCAL: CatCache and its entry are located in CacheMemoryContext
+ *  but its entry doesn't have actual tuple locally but points to handle
+ *  for global cache entry located in shared memory. When cache tuple
+ *  is uncommitted, the entry has the tuple locally and doesn't point to
+ *  its handle. Negative entry is storaed locally and doesn't use its
+ *  handle either.
+ *
+ * CC_SHAREDGLOBAL: CatCache and its entry are located in shared memory.
+ *   Negative entry is not stored. Each cache entry has corresponding
+ *   handle and can be accessed via handle.
+ */
+typedef enum
+{
+	CC_REGULAR,
+	CC_SHAREDLOCAL,
+	CC_SHAREDGLOBAL
+} CatCacheType;
+
 typedef struct catcache
 {
 	int			id;				/* cache identifier --- see syscache.h */
+	CatCacheType cc_type;		/* type of catcache --- see CatCacheType */
 	int			cc_nbuckets;	/* # of hash buckets in this cache */
 	TupleDesc	cc_tupdesc;		/* tuple descriptor (copied from reldesc) */
 	dlist_head *cc_bucket;		/* hash buckets */
@@ -61,6 +91,9 @@ typedef struct catcache
 	slist_node	cc_next;		/* list link */
 	ScanKeyData cc_skey[CATCACHE_MAXKEYS];	/* precomputed key info for heap
 											 * scans */
+
+	/* materials for global catcache */
+	GlobalCatCache *gcp; 		/* Global CatCache */
 
 	/*
 	 * Keep these at the end, so that compiling catcache.c with CATCACHE_STATS
@@ -89,7 +122,6 @@ typedef struct catctup
 #define CT_MAGIC   0x57261502
 
 	uint32		hash_value;		/* hash value for this tuple's keys */
-
 	/*
 	 * Lookup keys for the entry. By-reference datums point into the tuple for
 	 * positive cache entries, and are separately allocated for negative ones.
@@ -175,6 +207,7 @@ typedef struct catclist
 	short		nkeys;			/* number of lookup keys specified */
 	int			n_members;		/* number of member tuples */
 	CatCache   *my_cache;		/* link to owning catcache */
+	LocalCatCTup  **shared_local_members; /* used when catcache is global */
 	CatCTup    *members[FLEXIBLE_ARRAY_MEMBER]; /* members */
 } CatCList;
 
@@ -188,6 +221,7 @@ typedef struct catcacheheader
 
 /* this extern duplicates utils/memutils.h... */
 extern PGDLLIMPORT MemoryContext CacheMemoryContext;
+extern PGDLLIMPORT MemoryContext GlobalCacheContext;
 
 extern void CreateCacheMemoryContext(void);
 
@@ -220,6 +254,7 @@ extern void ReleaseCatCacheList(CatCList *list);
 extern void ResetCatalogCaches(void);
 extern void CatalogCacheFlushCatalog(Oid catId);
 extern void CatCacheInvalidate(CatCache *cache, uint32 hashValue);
+extern void GlobalCatCacheInvalidate(CatCache *cache, uint32 hashValue);
 extern void PrepareToInvalidateCacheTuple(Relation relation,
 										  HeapTuple tuple,
 										  HeapTuple newtuple,
@@ -227,5 +262,19 @@ extern void PrepareToInvalidateCacheTuple(Relation relation,
 
 extern void PrintCatCacheLeakWarning(HeapTuple tuple);
 extern void PrintCatCacheListLeakWarning(CatCList *list);
+
+/*
+ * stuffs for shared catcache
+ */
+/* GUC parameter: A value of 0 means catalog cache is built per backend */
+extern int shared_catcache_mem;
+
+extern void CatCacheShmemInit(void);
+extern Size CatCacheShmemSize(void);
+
+/* defenition is at syscache.c */
+extern CatCache *GetLocalSysCache(int cacheId);
+
+#define CatCacheIsGlobal (shared_catcache_mem != 0)
 
 #endif							/* CATCACHE_H */

@@ -18,6 +18,7 @@
 #include "datatype/timestamp.h"
 
 extern const char *progname;
+extern char *application_name;
 extern char *connection_string;
 extern char *dbhost;
 extern char *dbuser;

@@ -351,6 +351,7 @@ usage(void)
 			 "                         do not verify checksums\n"));
 	printf(_("  -?, --help             show this help, then exit\n"));
 	printf(_("\nConnection options:\n"));
+	printf(_("  -a, --appname=NAME     application name\n"));
 	printf(_("  -d, --dbname=CONNSTR   connection string\n"));
 	printf(_("  -h, --host=HOSTNAME    database server host or socket directory\n"));
 	printf(_("  -p, --port=PORT        database server port number\n"));
@@ -2031,6 +2032,7 @@ main(int argc, char **argv)
 		{"label", required_argument, NULL, 'l'},
 		{"no-clean", no_argument, NULL, 'n'},
 		{"no-sync", no_argument, NULL, 'N'},
+		{"appname", required_argument, NULL, 'a'},
 		{"dbname", required_argument, NULL, 'd'},
 		{"host", required_argument, NULL, 'h'},
 		{"port", required_argument, NULL, 'p'},
@@ -2070,7 +2072,7 @@ main(int argc, char **argv)
 
 	atexit(cleanup_directories_atexit);
 
-	while ((c = getopt_long(argc, argv, "CD:F:r:RS:T:X:l:nNzZ:d:c:h:p:U:s:wWkvP",
+	while ((c = getopt_long(argc, argv, "CD:F:r:RS:T:X:l:nNzZ:a:d:c:h:p:U:s:wWkvP",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -2175,6 +2177,9 @@ main(int argc, char **argv)
 								 optarg);
 					exit(1);
 				}
+				break;
+			case 'a':
+				application_name = pg_strdup(optarg);
 				break;
 			case 'd':
 				connection_string = pg_strdup(optarg);

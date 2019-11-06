@@ -97,6 +97,7 @@ usage(void)
 	printf(_("  -V, --version          output version information, then exit\n"));
 	printf(_("  -?, --help             show this help, then exit\n"));
 	printf(_("\nConnection options:\n"));
+	printf(_("  -a, --appname=NAME     application name\n"));
 	printf(_("  -d, --dbname=DBNAME    database to connect to\n"));
 	printf(_("  -h, --host=HOSTNAME    database server host or socket directory\n"));
 	printf(_("  -p, --port=PORT        database server port number\n"));
@@ -654,6 +655,7 @@ main(int argc, char **argv)
 		{"version", no_argument, NULL, 'V'},
 		{"help", no_argument, NULL, '?'},
 /* connection options */
+		{"appname", required_argument, NULL, 'a'},
 		{"dbname", required_argument, NULL, 'd'},
 		{"host", required_argument, NULL, 'h'},
 		{"port", required_argument, NULL, 'p'},
@@ -699,7 +701,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "E:f:F:nvd:h:p:U:wWI:o:P:s:S:",
+	while ((c = getopt_long(argc, argv, "E:f:F:nva:d:h:p:U:wWI:o:P:s:S:",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -723,6 +725,9 @@ main(int argc, char **argv)
 				verbose++;
 				break;
 /* connection options */
+			case 'a':
+				application_name = pg_strdup(optarg);
+				break;
 			case 'd':
 				dbname = pg_strdup(optarg);
 				break;

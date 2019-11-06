@@ -43,6 +43,7 @@ static bool RetrieveDataDirCreatePerm(PGconn *conn);
 #define MINIMUM_VERSION_FOR_GROUP_ACCESS 110000
 
 const char *progname;
+char	   *application_name = NULL;
 char	   *connection_string = NULL;
 char	   *dbhost = NULL;
 char	   *dbuser = NULL;
@@ -130,6 +131,12 @@ GetConnection(void)
 	values[i] = progname;
 	i++;
 
+	if (application_name)
+	{
+		keywords[i] = "application_name";
+		values[i] = application_name;
+		i++;
+	}
 	if (dbhost)
 	{
 		keywords[i] = "host";

@@ -544,6 +544,17 @@ PostgreSQL documentation
 
     <variablelist>
      <varlistentry>
+      <term><option>-a <replaceable class="parameter">application_name</replaceable></option></term>
+      <term><option>--appname=<replaceable class="parameter">application_name</replaceable></option></term>
+      <listitem>
+       <para>
+        Specifies the application name used to connect to the server.
+        See <xref linkend="libpq-paramkeywords"/> for more information.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-d <replaceable class="parameter">connstr</replaceable></option></term>
       <term><option>--dbname=<replaceable class="parameter">connstr</replaceable></option></term>
       <listitem>

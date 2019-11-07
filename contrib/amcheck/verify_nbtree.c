@@ -95,15 +95,18 @@ typedef struct BtreeCheckState
 	XLogRecPtr	targetlsn;
 
 	/*
+	 * Rightlink and incomplete split flag of previous block referenced by
+	 * downlink.
+	 */
+	BlockNumber prevrightlink;
+	bool		previncompletesplit;
+
+	/*
 	 * Mutable state, for optional heapallindexed verification:
 	 */
 
 	/* Bloom filter fingerprints B-Tree index */
 	bloom_filter *filter;
-	/* Bloom filter fingerprints downlink blocks within tree */
-	bloom_filter *downlinkfilter;
-	/* Right half of incomplete split marker */
-	bool		rightsplit;
 	/* Debug counter */
 	int64		heaptuplespresent;
 } BtreeCheckState;
@@ -138,8 +141,13 @@ static BtreeLevel bt_check_level_from_leftmost(BtreeCheckState *state,
 static void bt_target_page_check(BtreeCheckState *state);
 static BTScanInsert bt_right_page_check_scankey(BtreeCheckState *state);
 static void bt_downlink_check(BtreeCheckState *state, BTScanInsert targetkey,
-							  BlockNumber childblock);
-static void bt_downlink_missing_check(BtreeCheckState *state);
+							  OffsetNumber downlinkoffnum);
+static void bt_downlink_connectivity_check(BtreeCheckState *state,
+										   OffsetNumber downlinkoffnum,
+										   Page loaded_page,
+										   uint32 parent_level);
+static void bt_downlink_missing_check(BtreeCheckState *state, bool rightsplit,
+									  BlockNumber targetblock, Page target);
 static void bt_tuple_present_callback(Relation index, HeapTuple htup,
 									  Datum *values, bool *isnull,
 									  bool tupleIsAlive, void *checkstate);
@@ -278,7 +286,7 @@ bt_index_check_internal(Oid indrelid, bool parentcheck, bool heapallindexed,
 
 	if (btree_index_mainfork_expected(indrel))
 	{
-		bool	heapkeyspace;
+		bool		heapkeyspace;
 
 		RelationOpenSmgr(indrel);
 		if (!smgrexists(indrel->rd_smgr, MAIN_FORKNUM))
@@ -467,20 +475,6 @@ bt_check_every_level(Relation rel, Relation heaprel, bool heapkeyspace,
 						 errmsg("index \"%s\" cannot be verified using transaction snapshot",
 								RelationGetRelationName(rel))));
 		}
-		else
-		{
-			/*
-			 * Extra readonly downlink check.
-			 *
-			 * In readonly case, we know that there cannot be a concurrent
-			 * page split or a concurrent page deletion, which gives us the
-			 * opportunity to verify that every non-ignorable page had a
-			 * downlink one level up.  We must be tolerant of interrupted page
-			 * splits and page deletions, though.  This is taken care of in
-			 * bt_downlink_missing_check().
-			 */
-			state->downlinkfilter = bloom_create(total_pages, work_mem, seed);
-		}
 	}
 
 	Assert(!state->rootdescend || state->readonly);
@@ -530,12 +524,6 @@ bt_check_every_level(Relation rel, Relation heaprel, bool heapkeyspace,
 	while (current.leftmost != P_NONE)
 	{
 		/*
-		 * Leftmost page on level cannot be right half of incomplete split.
-		 * This can go stale immediately in !readonly case.
-		 */
-		state->rightsplit = false;
-
-		/*
 		 * Verify this level, and get left most page for next level down, if
 		 * not at leaf level
 		 */
@@ -557,16 +545,6 @@ bt_check_every_level(Relation rel, Relation heaprel, bool heapkeyspace,
 	{
 		IndexInfo  *indexinfo = BuildIndexInfo(state->rel);
 		TableScanDesc scan;
-
-		/* Report on extra downlink checks performed in readonly case */
-		if (state->readonly)
-		{
-			ereport(DEBUG1,
-					(errmsg_internal("finished verifying presence of downlink blocks within index \"%s\" with bitset %.2f%% set",
-									 RelationGetRelationName(rel),
-									 100.0 * bloom_prop_bits_set(state->downlinkfilter))));
-			bloom_free(state->downlinkfilter);
-		}
 
 		/*
 		 * Create our own scan for table_index_build_scan(), rather than
@@ -669,6 +647,9 @@ bt_check_level_from_leftmost(BtreeCheckState *state, BtreeLevel level)
 	elog(DEBUG2, "verifying level %u%s", level.level,
 		 level.istruerootlevel ?
 		 " (true root level)" : level.level == 0 ? " (leaf level)" : "");
+
+	state->prevrightlink = InvalidBlockNumber;
+	state->previncompletesplit = false;
 
 	do
 	{
@@ -812,13 +793,6 @@ nextpage:
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg("circular link chain found in block %u of index \"%s\"",
 							current, RelationGetRelationName(state->rel))));
-
-		/*
-		 * Record if page that is about to become target is the right half of
-		 * an incomplete page split.  This can go stale immediately in
-		 * !readonly case.
-		 */
-		state->rightsplit = P_INCOMPLETE_SPLIT(opaque);
 
 		leftcurrent = current;
 		current = opaque->btpo_next;
@@ -975,22 +949,24 @@ bt_target_page_check(BtreeCheckState *state)
 										(uint32) state->targetlsn)));
 		}
 
-		/* Fingerprint downlink blocks in heapallindexed + readonly case */
-		if (state->heapallindexed && state->readonly && !P_ISLEAF(topaque))
-		{
-			BlockNumber childblock = BTreeInnerTupleGetDownLink(itup);
-
-			bloom_add_element(state->downlinkfilter,
-							  (unsigned char *) &childblock,
-							  sizeof(BlockNumber));
-		}
-
 		/*
 		 * Don't try to generate scankey using "negative infinity" item on
 		 * internal pages. They are always truncated to zero attributes.
 		 */
 		if (offset_is_negative_infinity(topaque, offset))
+		{
+			/*
+			 * Initialize downlink connectivity check if needed.
+			 */
+			if (!P_ISLEAF(topaque) && state->readonly)
+			{
+				bt_downlink_connectivity_check(state,
+											   offset,
+											   NULL,
+											   topaque->btpo.level);
+			}
 			continue;
+		}
 
 		/*
 		 * Readonly callers may optionally verify that non-pivot tuples can
@@ -1266,20 +1242,19 @@ bt_target_page_check(BtreeCheckState *state)
 		 * because it has no useful value to compare).
 		 */
 		if (!P_ISLEAF(topaque) && state->readonly)
-		{
-			BlockNumber childblock = BTreeInnerTupleGetDownLink(itup);
-
-			bt_downlink_check(state, skey, childblock);
-		}
+			bt_downlink_check(state, skey, offset);
 	}
 
 	/*
-	 * * Check if page has a downlink in parent *
-	 *
-	 * This can only be checked in heapallindexed + readonly case.
+	 * If we traversed the whole level to the rightmost page, there might be
+	 * missing downlinks for the pages to the right of rightmost downlink.
+	 * Check for them.
 	 */
-	if (state->heapallindexed && state->readonly)
-		bt_downlink_missing_check(state);
+	if (!P_ISLEAF(topaque) && P_RIGHTMOST(topaque) && state->readonly)
+	{
+		bt_downlink_connectivity_check(state, InvalidOffsetNumber,
+									   NULL, topaque->btpo.level);
+	}
 }
 
 /*
@@ -1497,6 +1472,183 @@ bt_right_page_check_scankey(BtreeCheckState *state)
 }
 
 /*
+ * Check connectivity of downlinks.  Traverse rightlinks from previous downlink
+ * to the current one.  Check that there are no intermediate pages with missing
+ * downlinks.
+ *
+ * If 'loaded_page' is given, it's assumed to be contents of downlink
+ * referenced by 'downlinkoffnum'.
+ */
+static void
+bt_downlink_connectivity_check(BtreeCheckState *state,
+							   OffsetNumber downlinkoffnum,
+							   Page loaded_page,
+							   uint32 parent_level)
+{
+	BlockNumber blkno = state->prevrightlink;
+	Page		page;
+	BTPageOpaque opaque;
+	bool		rightsplit = state->previncompletesplit;
+	bool		first = true;
+	ItemId		itemid;
+	IndexTuple	itup;
+	BlockNumber downlink;
+
+	if (OffsetNumberIsValid(downlinkoffnum))
+	{
+		itemid = PageGetItemIdCareful(state, state->targetblock,
+									  state->target, downlinkoffnum);
+		itup = (IndexTuple) PageGetItem(state->target, itemid);
+		downlink = BTreeInnerTupleGetDownLink(itup);
+	}
+	else
+	{
+		downlink = P_NONE;
+	}
+
+	/*
+	 * If no previos rightlink is memorized, get it from current downlink for
+	 * future usage.
+	 */
+	if (!BlockNumberIsValid(blkno))
+	{
+		Assert(BlockNumberIsValid(downlink) && downlink != P_NONE);
+
+		if (loaded_page)
+			page = loaded_page;
+		else
+			page = palloc_btree_page(state, downlink);
+
+		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+		state->prevrightlink = opaque->btpo_next;
+		state->previncompletesplit = P_INCOMPLETE_SPLIT(opaque);
+		return;
+	}
+
+	while (true)
+	{
+		/*
+		 * Did we traverse the whole tree level and this is check for pages to
+		 * the right of rightmost downlink?
+		 */
+		if (blkno == P_NONE && downlink == P_NONE)
+		{
+			state->prevrightlink = InvalidBlockNumber;
+			state->previncompletesplit = false;
+			return;
+		}
+
+		/* Did we traverse the whole tree level and don't find next downlink? */
+		if (blkno == P_NONE)
+			ereport(ERROR,
+					(errcode(ERRCODE_INDEX_CORRUPTED),
+					 errmsg("can't traverse from downlink %u to downlink %u of index \"%s\"",
+							state->prevrightlink, downlink,
+							RelationGetRelationName(state->rel))));
+
+		/* Load page contents */
+		if (blkno == downlink && loaded_page)
+			page = loaded_page;
+		else
+			page = palloc_btree_page(state, blkno);
+
+		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
+		/* Check level for non-ignorable page */
+		if (!P_IGNORE(opaque) && opaque->btpo.level != parent_level - 1)
+			ereport(ERROR,
+					(errcode(ERRCODE_INDEX_CORRUPTED),
+					 errmsg("block found while traversing rightlinks from downlink of index \"%s\" has invalid level",
+							RelationGetRelationName(state->rel)),
+					 errdetail_internal("Block pointed to=%u expected level=%u level in pointed to block=%u.",
+										blkno, parent_level - 1, opaque->btpo.level)));
+
+		/* Try to detect circular links */
+		if ((!first && blkno == state->prevrightlink) || blkno == opaque->btpo_prev)
+			ereport(ERROR,
+					(errcode(ERRCODE_INDEX_CORRUPTED),
+					 errmsg("circular link chain found in block %u of index \"%s\"",
+							blkno, RelationGetRelationName(state->rel))));
+
+		if (!first && !P_IGNORE(opaque))
+		{
+			/* blkno probably has missing parent downlink */
+			bt_downlink_missing_check(state, rightsplit, blkno, page);
+		}
+
+		rightsplit = P_INCOMPLETE_SPLIT(opaque);
+
+		/*
+		 * If we visit page with high key, check that it should be equal to
+		 * the target key next to corresponding downlink.
+		 */
+		if (!rightsplit && !P_RIGHTMOST(opaque))
+		{
+			BTPageOpaque topaque;
+			BTScanInsert skey;
+			OffsetNumber pivotkey_offset;
+
+			/* Get high key */
+			itemid = PageGetItemIdCareful(state, blkno, page, P_HIKEY);
+			itup = (IndexTuple) PageGetItem(page, itemid);
+			skey = bt_mkscankey_pivotsearch(state->rel, itup);
+
+			/*
+			 * There might be two situations when we examine high key.  If
+			 * current child page is referenced by given downlink, we should
+			 * look to the next offset number for matching key.  Alternatively
+			 * we might find child with high key while traversing from
+			 * previous downlink to current one.  Then matching key resides
+			 * the same offset number as current downlink.
+			 */
+			if (blkno == downlink)
+				pivotkey_offset = OffsetNumberNext(downlinkoffnum);
+			else
+				pivotkey_offset = downlinkoffnum;
+
+			topaque = (BTPageOpaque) PageGetSpecialPointer(state->target);
+
+			if (!offset_is_negative_infinity(topaque, pivotkey_offset) &&
+				pivotkey_offset <= PageGetMaxOffsetNumber(state->target))
+			{
+				uint32		cmp = _bt_compare(state->rel,
+											  skey,
+											  state->target,
+											  pivotkey_offset);
+
+				if (cmp != 0)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_INDEX_CORRUPTED),
+							 errmsg("mismatch between parent key and child high key index \"%s\"",
+									RelationGetRelationName(state->rel)),
+							 errdetail_internal("Parent block=%u child block=%u parent page lsn=%X/%X.",
+												state->targetblock, blkno,
+												(uint32) (state->targetlsn >> 32),
+												(uint32) state->targetlsn)));
+				}
+			}
+		}
+
+		/* Exit if we already found next downlink */
+		if (blkno == downlink)
+		{
+			state->prevrightlink = opaque->btpo_next;
+			state->previncompletesplit = rightsplit;
+			return;
+		}
+
+		/* Traverse to the next page using rightlink */
+		blkno = opaque->btpo_next;
+
+		/* Free page contents if it's allocated by us */
+		if (page != loaded_page)
+			pfree(page);
+		first = false;
+	}
+}
+
+/*
  * Checks one of target's downlink against its child page.
  *
  * Conceptually, the target page continues to be what is checked here.  The
@@ -1504,15 +1656,28 @@ bt_right_page_check_scankey(BtreeCheckState *state)
  * The downlink insertion into the target is probably where any problem raised
  * here arises, and there is no such thing as a parent link, so doing the
  * verification this way around is much more practical.
+ *
+ * This function visits child page and it's sequentially called for each
+ * downlink of target page.  Assuming this we also check downlink connectivity
+ * here in order to save child page visits.
  */
 static void
 bt_downlink_check(BtreeCheckState *state, BTScanInsert targetkey,
-				  BlockNumber childblock)
+				  OffsetNumber downlinkoffnum)
 {
+	ItemId		itemid;
+	IndexTuple	itup;
+	BlockNumber childblock;
 	OffsetNumber offset;
 	OffsetNumber maxoffset;
 	Page		child;
 	BTPageOpaque copaque;
+	BTPageOpaque topaque;
+
+	itemid = PageGetItemIdCareful(state, state->targetblock,
+								  state->target, downlinkoffnum);
+	itup = (IndexTuple) PageGetItem(state->target, itemid);
+	childblock = BTreeInnerTupleGetDownLink(itup);
 
 	/*
 	 * Caller must have ShareLock on target relation, because of
@@ -1562,9 +1727,17 @@ bt_downlink_check(BtreeCheckState *state, BTScanInsert targetkey,
 	 * Check all items, rather than checking just the first and trusting that
 	 * the operator class obeys the transitive law.
 	 */
+	topaque = (BTPageOpaque) PageGetSpecialPointer(state->target);
 	child = palloc_btree_page(state, childblock);
 	copaque = (BTPageOpaque) PageGetSpecialPointer(child);
 	maxoffset = PageGetMaxOffsetNumber(child);
+
+	/*
+	 * Since we've already loaded the child block, combine this check with
+	 * check for downlink connectivity.
+	 */
+	bt_downlink_connectivity_check(state, downlinkoffnum,
+								   child, topaque->btpo.level);
 
 	/*
 	 * Since there cannot be a concurrent VACUUM operation in readonly mode,
@@ -1660,22 +1833,26 @@ bt_downlink_check(BtreeCheckState *state, BTScanInsert targetkey,
  * be concerned about concurrent page splits or page deletions.
  */
 static void
-bt_downlink_missing_check(BtreeCheckState *state)
+bt_downlink_missing_check(BtreeCheckState *state, bool rightsplit,
+						  BlockNumber blkno, Page page)
 {
-	BTPageOpaque topaque = (BTPageOpaque) PageGetSpecialPointer(state->target);
+	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	ItemId		itemid;
 	IndexTuple	itup;
 	Page		child;
 	BTPageOpaque copaque;
 	uint32		level;
 	BlockNumber childblk;
+	XLogRecPtr	pagelsn;
 
-	Assert(state->heapallindexed && state->readonly);
-	Assert(!P_IGNORE(topaque));
+	Assert(state->readonly);
+	Assert(!P_IGNORE(opaque));
 
 	/* No next level up with downlinks to fingerprint from the true root */
-	if (P_ISROOT(topaque))
+	if (P_ISROOT(opaque))
 		return;
+
+	pagelsn = PageGetLSN(page);
 
 	/*
 	 * Incomplete (interrupted) page splits can account for the lack of a
@@ -1698,54 +1875,47 @@ bt_downlink_missing_check(BtreeCheckState *state)
 	 * by design, so it shouldn't be taken to indicate corruption.  See
 	 * _bt_pagedel() for full details.
 	 */
-	if (state->rightsplit)
+	if (rightsplit)
 	{
 		ereport(DEBUG1,
 				(errcode(ERRCODE_NO_DATA),
 				 errmsg("harmless interrupted page split detected in index %s",
 						RelationGetRelationName(state->rel)),
 				 errdetail_internal("Block=%u level=%u left sibling=%u page lsn=%X/%X.",
-									state->targetblock, topaque->btpo.level,
-									topaque->btpo_prev,
-									(uint32) (state->targetlsn >> 32),
-									(uint32) state->targetlsn)));
+									blkno, opaque->btpo.level,
+									opaque->btpo_prev,
+									(uint32) (pagelsn >> 32),
+									(uint32) pagelsn)));
 		return;
 	}
 
-	/* Target's downlink is typically present in parent/fingerprinted */
-	if (!bloom_lacks_element(state->downlinkfilter,
-							 (unsigned char *) &state->targetblock,
-							 sizeof(BlockNumber)))
-		return;
-
 	/*
-	 * Target is probably the "top parent" of a multi-level page deletion.
-	 * We'll need to descend the subtree to make sure that descendant pages
-	 * are consistent with that, though.
+	 * Page under check is probably the "top parent" of a multi-level page
+	 * deletion.  We'll need to descend the subtree to make sure that
+	 * descendant pages are consistent with that, though.
 	 *
-	 * If the target page (which must be non-ignorable) is a leaf page, then
-	 * clearly it can't be the top parent.  The lack of a downlink is probably
-	 * a symptom of a broad problem that could just as easily cause
+	 * If the page (which must be non-ignorable) is a leaf page, then clearly
+	 * it can't be the top parent.  The lack of a downlink is probably a
+	 * symptom of a broad problem that could just as easily cause
 	 * inconsistencies anywhere else.
 	 */
-	if (P_ISLEAF(topaque))
+	if (P_ISLEAF(opaque))
 		ereport(ERROR,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
 				 errmsg("leaf index block lacks downlink in index \"%s\"",
 						RelationGetRelationName(state->rel)),
 				 errdetail_internal("Block=%u page lsn=%X/%X.",
-									state->targetblock,
-									(uint32) (state->targetlsn >> 32),
-									(uint32) state->targetlsn)));
+									blkno,
+									(uint32) (pagelsn >> 32),
+									(uint32) pagelsn)));
 
-	/* Descend from the target page, which is an internal page */
+	/* Descend from the given page, which is an internal page */
 	elog(DEBUG1, "checking for interrupted multi-level deletion due to missing downlink in index \"%s\"",
 		 RelationGetRelationName(state->rel));
 
-	level = topaque->btpo.level;
-	itemid = PageGetItemIdCareful(state, state->targetblock, state->target,
-								  P_FIRSTDATAKEY(topaque));
-	itup = (IndexTuple) PageGetItem(state->target, itemid);
+	level = opaque->btpo.level;
+	itemid = PageGetItemIdCareful(state, blkno, page, P_FIRSTDATAKEY(opaque));
+	itup = (IndexTuple) PageGetItem(page, itemid);
 	childblk = BTreeInnerTupleGetDownLink(itup);
 	for (;;)
 	{
@@ -1763,8 +1933,8 @@ bt_downlink_missing_check(BtreeCheckState *state)
 					(errcode(ERRCODE_INDEX_CORRUPTED),
 					 errmsg_internal("downlink points to block in index \"%s\" whose level is not one level down",
 									 RelationGetRelationName(state->rel)),
-					 errdetail_internal("Top parent/target block=%u block pointed to=%u expected level=%u level in pointed to block=%u.",
-										state->targetblock, childblk,
+					 errdetail_internal("Top parent/under check block=%u block pointed to=%u expected level=%u level in pointed to block=%u.",
+										blkno, childblk,
 										level - 1, copaque->btpo.level)));
 
 		level = copaque->btpo.level;
@@ -1788,7 +1958,7 @@ bt_downlink_missing_check(BtreeCheckState *state)
 	 * multiple levels.  (The similar bt_downlink_check() P_ISDELETED() check
 	 * within bt_check_level_from_leftmost() won't reach the page either,
 	 * since the leaf's live siblings should have their sibling links updated
-	 * to bypass the deletion target page when it is marked fully dead.)
+	 * to bypass the deletion page under check when it is marked fully dead.)
 	 *
 	 * If this error is raised, it might be due to a previous multi-level page
 	 * deletion that failed to realize that it wasn't yet safe to mark the
@@ -1801,26 +1971,26 @@ bt_downlink_missing_check(BtreeCheckState *state)
 				(errcode(ERRCODE_INDEX_CORRUPTED),
 				 errmsg_internal("downlink to deleted leaf page found in index \"%s\"",
 								 RelationGetRelationName(state->rel)),
-				 errdetail_internal("Top parent/target block=%u leaf block=%u top parent/target lsn=%X/%X.",
-									state->targetblock, childblk,
-									(uint32) (state->targetlsn >> 32),
-									(uint32) state->targetlsn)));
+				 errdetail_internal("Top parent/target block=%u leaf block=%u top parent/under check lsn=%X/%X.",
+									blkno, childblk,
+									(uint32) (pagelsn >> 32),
+									(uint32) pagelsn)));
 
 	/*
 	 * Iff leaf page is half-dead, its high key top parent link should point
 	 * to what VACUUM considered to be the top parent page at the instant it
 	 * was interrupted.  Provided the high key link actually points to the
-	 * target page, the missing downlink we detected is consistent with there
-	 * having been an interrupted multi-level page deletion.  This means that
-	 * the subtree with the target page at its root (a page deletion chain) is
-	 * in a consistent state, enabling VACUUM to resume deleting the entire
-	 * chain the next time it encounters the half-dead leaf page.
+	 * page under check, the missing downlink we detected is consistent with
+	 * there having been an interrupted multi-level page deletion.  This means
+	 * that the subtree with the page under check at its root (a page deletion
+	 * chain) is in a consistent state, enabling VACUUM to resume deleting the
+	 * entire chain the next time it encounters the half-dead leaf page.
 	 */
 	if (P_ISHALFDEAD(copaque) && !P_RIGHTMOST(copaque))
 	{
 		itemid = PageGetItemIdCareful(state, childblk, child, P_HIKEY);
 		itup = (IndexTuple) PageGetItem(child, itemid);
-		if (BTreeTupleGetTopParent(itup) == state->targetblock)
+		if (BTreeTupleGetTopParent(itup) == blkno)
 			return;
 	}
 
@@ -1829,9 +1999,9 @@ bt_downlink_missing_check(BtreeCheckState *state)
 			 errmsg("internal index block lacks downlink in index \"%s\"",
 					RelationGetRelationName(state->rel)),
 			 errdetail_internal("Block=%u level=%u page lsn=%X/%X.",
-								state->targetblock, topaque->btpo.level,
-								(uint32) (state->targetlsn >> 32),
-								(uint32) state->targetlsn)));
+								blkno, opaque->btpo.level,
+								(uint32) (pagelsn >> 32),
+								(uint32) pagelsn)));
 }
 
 /*

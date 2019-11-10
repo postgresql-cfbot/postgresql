@@ -55,8 +55,10 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/kmgr.h"
 #include "storage/large_object.h"
 #include "storage/latch.h"
 #include "storage/pmsignal.h"
@@ -77,6 +79,7 @@
 #include "pg_trace.h"
 
 extern uint32 bootstrap_data_checksum_version;
+extern uint32 bootstrap_data_encryption_cipher;
 
 /* Unsupported old recovery command file names (relative to $PGDATA) */
 #define RECOVERY_COMMAND_FILE	"recovery.conf"
@@ -908,6 +911,7 @@ static void WriteControlFile(void);
 static void ReadControlFile(void);
 static char *str_time(pg_time_t tnow);
 static bool CheckForStandbyTrigger(void);
+static void XLogWritePages(char *from, Size nbytes, uint32 startoffset);
 
 #ifdef WAL_DEBUG
 static void xlog_outrec(StringInfo buf, XLogReaderState *record);
@@ -2484,34 +2488,33 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 		{
 			char	   *from;
 			Size		nbytes;
-			Size		nleft;
-			int			written;
 
 			/* OK to write the page(s) */
 			from = XLogCtl->pages + startidx * (Size) XLOG_BLCKSZ;
 			nbytes = npages * (Size) XLOG_BLCKSZ;
-			nleft = nbytes;
-			do
+
+			if (DataEncryptionEnabled())
 			{
-				errno = 0;
-				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
-				written = pg_pwrite(openLogFile, from, nleft, startoffset);
-				pgstat_report_wait_end();
-				if (written <= 0)
+				int i;
+
+				/* Encrypt xlog pages one by one */
+				for (i = 0; i < npages; i++)
 				{
-					if (errno == EINTR)
-						continue;
-					ereport(PANIC,
-							(errcode_for_file_access(),
-							 errmsg("could not write to log file %s "
-									"at offset %u, length %zu: %m",
-									XLogFileNameP(ThisTimeLineID, openLogSegNo),
-									startoffset, nleft)));
+					char	*buftowrite;
+					Size	nwrite = Min(nbytes, XLOG_BLCKSZ);
+
+					buftowrite = EncryptXLog(from, nwrite, openLogSegNo,
+											 startoffset);
+					XLogWritePages(buftowrite, nwrite, startoffset);
+					startoffset += nwrite;
+					from += XLOG_BLCKSZ;
 				}
-				nleft -= written;
-				from += written;
-				startoffset += written;
-			} while (nleft > 0);
+			}
+			else
+			{
+				XLogWritePages(from, npages * (Size) XLOG_BLCKSZ, startoffset);
+				startoffset +=  npages * (Size) XLOG_BLCKSZ;
+			}
 
 			npages = 0;
 
@@ -2625,6 +2628,39 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			XLogCtl->LogwrtRqst.Flush = LogwrtResult.Flush;
 		SpinLockRelease(&XLogCtl->info_lck);
 	}
+}
+
+/*
+ * Write XLOG pages starting from 'startoffset'.
+ */
+static void
+XLogWritePages(char *from, Size nbytes, uint32 startoffset)
+{
+	Size	nleft;
+	Size	nwritten;
+
+	nleft = nbytes;
+	do
+	{
+		errno = 0;
+		pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
+		nwritten = pg_pwrite(openLogFile, from, nleft, startoffset);
+		pgstat_report_wait_end();
+		if (nwritten <= 0)
+		{
+			if (errno == EINTR)
+				continue;
+			ereport(PANIC,
+					(errcode_for_file_access(),
+					 errmsg("could not write to log file %s "
+							"at offset %u, length %zu: %m",
+							XLogFileNameP(ThisTimeLineID, openLogSegNo),
+							startoffset, nleft)));
+		}
+		nleft -= nwritten;
+		from += nwritten;
+		startoffset += nwritten;
+	} while (nleft > 0);
 }
 
 /*
@@ -4783,6 +4819,10 @@ ReadControlFile(void)
 	/* Make the initdb settings visible as GUC variables, too */
 	SetConfigOption("data_checksums", DataChecksumsEnabled() ? "yes" : "no",
 					PGC_INTERNAL, PGC_S_OVERRIDE);
+
+	SetConfigOption("data_encryption_cipher",
+					EncryptionCipherString(GetDataEncryptionCipher()),
+					PGC_INTERNAL, PGC_S_OVERRIDE);
 }
 
 /*
@@ -4815,6 +4855,20 @@ GetMockAuthenticationNonce(void)
 	return ControlFile->mock_authentication_nonce;
 }
 
+WrappedEncKeyWithHmac *
+GetTDERelationEncryptionKey(void)
+{
+	Assert(ControlFile != NULL);
+	return &(ControlFile->tde_rdek);
+}
+
+WrappedEncKeyWithHmac *
+GetTDEWALEncryptionKey(void)
+{
+	Assert(ControlFile != NULL);
+	return &(ControlFile->tde_wdek);
+}
+
 /*
  * Are checksums enabled for data pages?
  */
@@ -4823,6 +4877,13 @@ DataChecksumsEnabled(void)
 {
 	Assert(ControlFile != NULL);
 	return (ControlFile->data_checksum_version > 0);
+}
+
+int
+GetDataEncryptionCipher(void)
+{
+	Assert(ControlFile != NULL);
+	return ControlFile->data_encryption_cipher;
 }
 
 /*
@@ -5091,6 +5152,7 @@ BootStrapXLOG(void)
 	XLogPageHeader page;
 	XLogLongPageHeader longpage;
 	XLogRecord *record;
+	KmgrBootstrapInfo *kmgrinfo;
 	char	   *recptr;
 	bool		use_existent;
 	uint64		sysidentifier;
@@ -5168,6 +5230,12 @@ BootStrapXLOG(void)
 	SetMultiXactIdLimit(checkPoint.oldestMulti, checkPoint.oldestMultiDB, true);
 	SetCommitTsLimit(InvalidTransactionId, InvalidTransactionId);
 
+	/*
+	 * Bootstrap key management module beforehand in order to encrypt the first
+	 * xlog record.
+	 */
+	kmgrinfo = BootStrapKmgr(bootstrap_data_encryption_cipher);
+
 	/* Set up the XLOG page header */
 	page->xlp_magic = XLOG_PAGE_MAGIC;
 	page->xlp_info = XLP_LONG_HEADER;
@@ -5203,6 +5271,11 @@ BootStrapXLOG(void)
 	/* Create first XLOG segment file */
 	use_existent = false;
 	openLogFile = XLogFileInit(1, &use_existent, false);
+
+	/* Encrypt the first xlog record if necessary */
+	if (bootstrap_data_encryption_cipher > TDE_ENCRYPTION_OFF)
+		page = (XLogPageHeader) EncryptXLog((char *) page,
+											recptr - (char *) page, 1, 0);
 
 	/* Write the first page with the initial record */
 	errno = 0;
@@ -5243,6 +5316,11 @@ BootStrapXLOG(void)
 	ControlFile->checkPoint = checkPoint.redo;
 	ControlFile->checkPointCopy = checkPoint;
 	ControlFile->unloggedLSN = FirstNormalUnloggedLSN;
+	if (kmgrinfo)
+	{
+		memcpy(&(ControlFile->tde_rdek), &(kmgrinfo->relEncKey), sizeof(WrappedEncKeyWithHmac));
+		memcpy(&(ControlFile->tde_wdek), &(kmgrinfo->walEncKey), sizeof(WrappedEncKeyWithHmac));
+	}
 
 	/* Set important parameter values for use when replaying WAL */
 	ControlFile->MaxConnections = MaxConnections;
@@ -5254,6 +5332,7 @@ BootStrapXLOG(void)
 	ControlFile->wal_log_hints = wal_log_hints;
 	ControlFile->track_commit_timestamp = track_commit_timestamp;
 	ControlFile->data_checksum_version = bootstrap_data_checksum_version;
+	ControlFile->data_encryption_cipher = bootstrap_data_encryption_cipher;
 
 	/* some additional ControlFile fields are set in WriteControlFile() */
 
@@ -11674,6 +11753,16 @@ retry:
 	Assert(reqLen <= readLen);
 
 	xlogreader->seg.ws_tli = curFileTLI;
+
+	/*
+	 * Decrypt read record so that we can validate page both short header
+	 * and possibly long header.
+	 */
+	if (DataEncryptionEnabled())
+	{
+		DecryptXLog(readBuf, XLOG_BLCKSZ, readSegNo, readOff);
+		xlogreader->encrypted = false;
+	}
 
 	/*
 	 * Check the page header immediately, so that we can retry immediately if

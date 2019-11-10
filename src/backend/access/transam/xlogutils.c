@@ -25,6 +25,7 @@
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/encryption.h"
 #include "storage/smgr.h"
 #include "utils/guc.h"
 #include "utils/hsearch.h"
@@ -1022,6 +1023,9 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	 */
 	XLogRead(cur_page, state->segcxt.ws_segsize, state->seg.ws_tli, targetPagePtr,
 			 XLOG_BLCKSZ);
+
+	if (DataEncryptionEnabled())
+		state->encrypted = true;
 
 	/* number of valid bytes in the buffer */
 	return count;

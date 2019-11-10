@@ -119,6 +119,7 @@
 #include "replication/walsender.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/kmgr.h"
 #include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
@@ -1334,6 +1335,11 @@ PostmasterMain(int argc, char *argv[])
 	 * Initialize the autovacuum subsystem (again, no process start yet)
 	 */
 	autovac_init();
+
+	/*
+	 * Initialize cluster encryption key manager.
+	 */
+	InitializeKmgr();
 
 	/*
 	 * Load configuration files for client authentication.

@@ -53,6 +53,7 @@ typedef struct XLogPageHeaderData
 } XLogPageHeaderData;
 
 #define SizeOfXLogShortPHD	MAXALIGN(sizeof(XLogPageHeaderData))
+#define XLogEncryptionOffset	SizeOfXLogShortPHD
 
 typedef XLogPageHeaderData *XLogPageHeader;
 

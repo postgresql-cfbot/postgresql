@@ -40,6 +40,8 @@
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/condition_variable.h"
+#include "storage/encryption.h"
+#include "storage/kmgr.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
 #include "tcop/tcopprot.h"
@@ -51,6 +53,9 @@
 #include "utils/relmapper.h"
 
 uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
+
+/* No encryption */
+uint32		bootstrap_data_encryption_cipher = TDE_ENCRYPTION_OFF;
 
 
 #define ALLOC(t, c) \
@@ -226,7 +231,7 @@ AuxiliaryProcessMain(int argc, char *argv[])
 	/* If no -x argument, we are a CheckerProcess */
 	MyAuxProcType = CheckerProcess;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:x:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:e:Fkr:x:X:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -248,6 +253,10 @@ AuxiliaryProcessMain(int argc, char *argv[])
 									PGC_POSTMASTER, PGC_S_ARGV);
 					pfree(debugstr);
 				}
+				break;
+
+			case 'e':
+				bootstrap_data_encryption_cipher = EncryptionCipherValue(optarg);
 				break;
 			case 'F':
 				SetConfigOption("fsync", "false", PGC_POSTMASTER, PGC_S_ARGV);

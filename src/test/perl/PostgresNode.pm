@@ -430,12 +430,23 @@ sub init
 
 	$params{allows_streaming} = 0 unless defined $params{allows_streaming};
 	$params{has_archiving}    = 0 unless defined $params{has_archiving};
+	$params{enable_encryption} = 0 unless defined $params{enable_encryption};
 
 	mkdir $self->backup_dir;
 	mkdir $self->archive_dir;
 
-	TestLib::system_or_bail('initdb', '-D', $pgdata, '-A', 'trust', '-N',
-		@{ $params{extra} });
+	if ($params{enable_encryption})
+	{
+		TestLib::system_or_bail('initdb', '-D', $pgdata, '-A', 'trust', '-N',
+								'--cluster-passphrase-command', 'echo "password"',
+								'-e', 'aes-128',
+								@{ $params{extra} });
+	}
+	else
+	{
+		TestLib::system_or_bail('initdb', '-D', $pgdata, '-A', 'trust', '-N',
+								@{ $params{extra} });
+	}
 	TestLib::system_or_bail($ENV{PG_REGRESS}, '--config-auth', $pgdata,
 		@{ $params{auth_extra} });
 

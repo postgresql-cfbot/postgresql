@@ -19,6 +19,7 @@
 #include "access/xlog.h"
 #include "pgstat.h"
 #include "storage/checksum.h"
+#include "storage/encryption.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 
@@ -79,7 +80,7 @@ PageInit(Page page, Size pageSize, Size specialSize)
  * will clean up such a page and make it usable.
  */
 bool
-PageIsVerified(Page page, BlockNumber blkno)
+PageIsVerified(Page page, ForkNumber forknum, BlockNumber blkno)
 {
 	PageHeader	p = (PageHeader) page;
 	size_t	   *pagebytes;
@@ -101,6 +102,8 @@ PageIsVerified(Page page, BlockNumber blkno)
 			if (checksum != p->pd_checksum)
 				checksum_failure = true;
 		}
+
+		PageDecryptInplace(page, forknum, blkno);
 
 		/*
 		 * The following checks don't prove the header is correct, only that
@@ -1202,4 +1205,49 @@ PageSetChecksumInplace(Page page, BlockNumber blkno)
 		return;
 
 	((PageHeader) page)->pd_checksum = pg_checksum_page((char *) page, blkno);
+}
+
+char *
+PageEncryptCopy(Page page, ForkNumber forknum, BlockNumber blkno)
+{
+	static char *pageCopy = NULL;
+
+	if (PageIsNew(page) || !DataEncryptionEnabled() || !EncryptForkNum(forknum))
+		return (char *) page;
+
+	/*
+	 * We allocate the copy space once and use it over on each subsequent
+	 * call.  The point of palloc'ing here, rather than having a static char
+	 * array, is first to ensure adequate alignment for the checksumming code
+	 * and second to avoid wasting space in processes that never call this.
+	 */
+	if (pageCopy == NULL)
+		pageCopy = MemoryContextAlloc(TopMemoryContext, BLCKSZ);
+
+	memcpy(pageCopy, (char *) page, BLCKSZ);
+	EncryptBufferBlock(blkno, pageCopy);
+	return pageCopy;
+}
+
+void
+PageEncryptInplace(Page page, ForkNumber forknum, BlockNumber blkno)
+{
+	Assert(forknum <= MAX_FORKNUM && blkno != InvalidBlockNumber);
+
+	if (PageIsNew(page) || !DataEncryptionEnabled() || !EncryptForkNum(forknum))
+		return;
+
+	EncryptBufferBlock(blkno, page);
+}
+
+
+void
+PageDecryptInplace(Page page, ForkNumber forknum, BlockNumber blkno)
+{
+	Assert(forknum <= MAX_FORKNUM && blkno != InvalidBlockNumber);
+
+	if (PageIsNew(page) || !DataEncryptionEnabled() || !EncryptForkNum(forknum))
+		return;
+
+	DecryptBufferBlock(blkno, page);
 }

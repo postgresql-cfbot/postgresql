@@ -71,7 +71,10 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/encryption.h"
+#include "storage/enc_common.h"
 #include "storage/dsm_impl.h"
+#include "storage/kmgr.h"
 #include "storage/standby.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
@@ -459,6 +462,13 @@ const struct config_enum_entry ssl_protocol_versions_info[] = {
 	{NULL, 0, false}
 };
 
+const struct config_enum_entry data_encryption_cipher_options[] = {
+	{"off",		TDE_ENCRYPTION_OFF, false},
+	{"aes-128", TDE_ENCRYPTION_AES_128, false},
+	{"aes-256", TDE_ENCRYPTION_AES_256, false},
+	{NULL, 0, false}
+};
+
 static struct config_enum_entry shared_memory_options[] = {
 #ifndef WIN32
 	{"sysv", SHMEM_TYPE_SYSV, false},
@@ -710,6 +720,8 @@ const char *const config_group_names[] =
 	gettext_noop("Statistics / Monitoring"),
 	/* STATS_COLLECTOR */
 	gettext_noop("Statistics / Query and Index Statistics Collector"),
+	/* ENCRYPTION */
+	gettext_noop("Encryption"),
 	/* AUTOVACUUM */
 	gettext_noop("Autovacuum"),
 	/* CLIENT_CONN */
@@ -4137,7 +4149,7 @@ static struct config_string ConfigureNamesString[] =
 		{"ssl_ciphers", PGC_SIGHUP, CONN_AUTH_SSL,
 			gettext_noop("Sets the list of allowed SSL ciphers."),
 			NULL,
-			GUC_SUPERUSER_ONLY
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&SSLCipherSuites,
 #ifdef USE_OPENSSL
@@ -4180,6 +4192,16 @@ static struct config_string ConfigureNamesString[] =
 			NULL
 		},
 		&ssl_passphrase_command,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"cluster_passphrase_command", PGC_POSTMASTER, ENCRYPTION,
+			gettext_noop("Command to obtain passphrase for database encryption."),
+			NULL
+		},
+		&cluster_passphrase_command,
 		"",
 		NULL, NULL, NULL
 	},
@@ -4575,6 +4597,19 @@ static struct config_enum ConfigureNamesEnum[] =
 		PG_TLS_ANY,
 		ssl_protocol_versions_info,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"data_encryption_cipher", PGC_INTERNAL, PRESET_OPTIONS,
+		 gettext_noop("Specify encryption algorithms to use."),
+		 NULL,
+		 GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE,
+		 GUC_SUPERUSER_ONLY
+		},
+		&data_encryption_cipher,
+		TDE_ENCRYPTION_OFF,
+		data_encryption_cipher_options,
+		NULL, assign_data_encryption_cipher, NULL
 	},
 
 	/* End-of-list marker */

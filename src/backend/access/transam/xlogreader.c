@@ -27,6 +27,7 @@
 
 #ifndef FRONTEND
 #include "miscadmin.h"
+#include "storage/encryption.h"
 #include "utils/memutils.h"
 #endif
 
@@ -585,6 +586,16 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 		/* we can be sure to have enough WAL available, we scrolled back */
 		Assert(readLen == XLOG_BLCKSZ);
 
+#ifndef FRONTEND
+		if (state->encrypted)
+		{
+			uint32 off = XLogSegmentOffset(targetSegmentPtr, state->segcxt.ws_segsize);
+
+			DecryptXLog(state->readBuf, XLOG_BLCKSZ, targetSegNo, off);
+			state->encrypted = false;
+		}
+#endif
+
 		if (!XLogReaderValidatePageHeader(state, targetSegmentPtr,
 										  state->readBuf))
 			goto err;
@@ -619,6 +630,14 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 		if (readLen < 0)
 			goto err;
 	}
+
+#ifndef FRONTEND
+	if (state->encrypted)
+	{
+		DecryptXLog(state->readBuf, XLOG_BLCKSZ, targetSegNo, targetPageOff);
+		state->encrypted = false;
+	}
+#endif
 
 	/*
 	 * Now that we know we have the full header, validate it.

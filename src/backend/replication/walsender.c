@@ -77,6 +77,7 @@
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"
 #include "storage/condition_variable.h"
+#include "storage/encryption.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
@@ -787,6 +788,10 @@ logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int req
 
 	/* now actually read the data, we know it's there */
 	XLogRead(sendCxt, cur_page, targetPagePtr, XLOG_BLCKSZ);
+
+	/* Decrypt xlog page if needed */
+	if (DataEncryptionEnabled())
+		state->encrypted = true;
 
 	return count;
 }

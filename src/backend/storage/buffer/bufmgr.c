@@ -906,7 +906,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			}
 
 			/* check for garbage data */
-			if (!PageIsVerified((Page) bufBlock, blockNum))
+			if (!PageIsVerified((Page) bufBlock, forkNum, blockNum))
 			{
 				if (mode == RBM_ZERO_ON_ERROR || zero_damaged_pages)
 				{
@@ -2743,12 +2743,15 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 */
 	bufBlock = BufHdrGetBlock(buf);
 
+	bufToWrite = PageEncryptCopy((Page) bufBlock, buf->tag.forkNum,
+								 buf->tag.blockNum);
+
 	/*
 	 * Update page checksum if desired.  Since we have only shared lock on the
 	 * buffer, other processes might be updating hint bits in it, so we must
 	 * copy the page to private storage if we do checksumming.
 	 */
-	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
+	bufToWrite = PageSetChecksumCopy((Page) bufToWrite, buf->tag.blockNum);
 
 	if (track_io_timing)
 		INSTR_TIME_SET_CURRENT(io_start);
@@ -3224,6 +3227,9 @@ FlushRelationBuffers(Relation rel)
 				Page		localpage;
 
 				localpage = (char *) LocalBufHdrGetBlock(bufHdr);
+
+				PageEncryptInplace(localpage, bufHdr->tag.forkNum,
+								   bufHdr->tag.blockNum);
 
 				/* Setup error traceback support for ereport() */
 				errcallback.callback = local_buffer_write_error_callback;

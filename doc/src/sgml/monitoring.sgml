@@ -53,7 +53,6 @@ postgres  15554  0.0  0.0  57536  1184 ?        Ss   18:02   0:00 postgres: back
 postgres  15555  0.0  0.0  57536   916 ?        Ss   18:02   0:00 postgres: checkpointer
 postgres  15556  0.0  0.0  57536   916 ?        Ss   18:02   0:00 postgres: walwriter
 postgres  15557  0.0  0.0  58504  2244 ?        Ss   18:02   0:00 postgres: autovacuum launcher
-postgres  15558  0.0  0.0  17512  1068 ?        Ss   18:02   0:00 postgres: stats collector
 postgres  15582  0.0  0.0  58772  3080 ?        Ss   18:04   0:00 postgres: joe runbug 127.0.0.1 idle
 postgres  15606  0.0  0.0  58772  3052 ?        Ss   18:07   0:00 postgres: tgl regression [local] SELECT waiting
 postgres  15610  0.0  0.0  58772  3056 ?        Ss   18:07   0:00 postgres: tgl regression [local] idle in transaction
@@ -65,9 +64,8 @@ postgres  15610  0.0  0.0  58772  3056 ?        Ss   18:07   0:00 postgres: tgl 
    master server process.  The command arguments
    shown for it are the same ones used when it was launched.  The next five
    processes are background worker processes automatically launched by the
-   master process.  (The <quote>stats collector</quote> process will not be present
-   if you have set the system not to start the statistics collector; likewise
-   the <quote>autovacuum launcher</quote> process can be disabled.)
+   master process.  (The <quote>autovacuum launcher</quote> process will not
+   be present if you have set the system not to start it.)
    Each of the remaining
    processes is a server process handling one client connection.  Each such
    process sets its command line display in the form
@@ -197,12 +195,7 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
 
   <para>
    The statistics collector transmits the collected information to other
-   <productname>PostgreSQL</productname> processes through temporary files.
-   These files are stored in the directory named by the
-   <xref linkend="guc-stats-temp-directory"/> parameter,
-   <filename>pg_stat_tmp</filename> by default.
-   For better performance, <varname>stats_temp_directory</varname> can be
-   pointed at a RAM-based file system, decreasing physical I/O requirements.
+   <productname>PostgreSQL</productname> processes through shared memory.
    When the server shuts down cleanly, a permanent copy of the statistics
    data is stored in the <filename>pg_stat</filename> subdirectory, so that
    statistics can be retained across server restarts.  When recovery is

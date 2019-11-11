@@ -25,6 +25,7 @@
 #include "access/brin_revmap.h"
 #include "access/brin_tuple.h"
 #include "access/brin_xlog.h"
+#include "access/brin.h"
 #include "access/rmgr.h"
 #include "access/xloginsert.h"
 #include "miscadmin.h"
@@ -79,6 +80,13 @@ brinRevmapInitialize(Relation idxrel, BlockNumber *pagesPerRange,
 	meta = ReadBuffer(idxrel, BRIN_METAPAGE_BLKNO);
 	LockBuffer(meta, BUFFER_LOCK_SHARE);
 	page = BufferGetPage(meta);
+
+	if (GlobalTempRelationPageIsNotInitialized(idxrel, page))
+	{
+		Relation heap = RelationIdGetRelation(idxrel->rd_index->indrelid);
+		brinbuild(heap, idxrel,  BuildIndexInfo(idxrel));
+		RelationClose(heap);
+	}
 	TestForOldSnapshot(snapshot, idxrel, page);
 	metadata = (BrinMetaPageData *) PageGetContents(page);
 

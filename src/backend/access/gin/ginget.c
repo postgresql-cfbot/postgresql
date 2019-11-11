@@ -1759,7 +1759,8 @@ scanPendingInsert(IndexScanDesc scan, TIDBitmap *tbm, int64 *ntids)
 				match;
 	int			i;
 	pendingPosition pos;
-	Buffer		metabuffer = ReadBuffer(scan->indexRelation, GIN_METAPAGE_BLKNO);
+	Relation    index = scan->indexRelation;
+	Buffer		metabuffer = ReadBuffer(index, GIN_METAPAGE_BLKNO);
 	Page		page;
 	BlockNumber blkno;
 
@@ -1769,11 +1770,19 @@ scanPendingInsert(IndexScanDesc scan, TIDBitmap *tbm, int64 *ntids)
 	 * Acquire predicate lock on the metapage, to conflict with any fastupdate
 	 * insertions.
 	 */
-	PredicateLockPage(scan->indexRelation, GIN_METAPAGE_BLKNO, scan->xs_snapshot);
+	PredicateLockPage(index, GIN_METAPAGE_BLKNO, scan->xs_snapshot);
 
 	LockBuffer(metabuffer, GIN_SHARE);
 	page = BufferGetPage(metabuffer);
-	TestForOldSnapshot(scan->xs_snapshot, scan->indexRelation, page);
+	TestForOldSnapshot(scan->xs_snapshot, index, page);
+
+	if (GlobalTempRelationPageIsNotInitialized(index, page))
+	{
+		Relation heap = RelationIdGetRelation(index->rd_index->indrelid);
+		ginbuild(heap, index, BuildIndexInfo(index));
+		RelationClose(heap);
+		UnlockReleaseBuffer(metabuffer);
+	}
 	blkno = GinPageGetMeta(page)->head;
 
 	/*
@@ -1784,10 +1793,10 @@ scanPendingInsert(IndexScanDesc scan, TIDBitmap *tbm, int64 *ntids)
 	{
 		/* No pending list, so proceed with normal scan */
 		UnlockReleaseBuffer(metabuffer);
-		return;
+		return true;
 	}
 
-	pos.pendingBuffer = ReadBuffer(scan->indexRelation, blkno);
+	pos.pendingBuffer = ReadBuffer(index, blkno);
 	LockBuffer(pos.pendingBuffer, GIN_SHARE);
 	pos.firstOffset = FirstOffsetNumber;
 	UnlockReleaseBuffer(metabuffer);

@@ -272,6 +272,7 @@ typedef struct StdRdOptions
 	int			parallel_workers;	/* max number of parallel workers */
 	bool		vacuum_index_cleanup;	/* enables index vacuuming and cleanup */
 	bool		vacuum_truncate;	/* enables vacuum to truncate a relation */
+	bool		on_commit_delete_rows;	/* global temp table */
 } StdRdOptions;
 
 #define HEAP_MIN_FILLFACTOR			10
@@ -327,6 +328,18 @@ typedef struct StdRdOptions
 	((relation)->rd_options ? \
 	 ((StdRdOptions *) (relation)->rd_options)->parallel_workers : (defaultpw))
 
+/*
+ * Relation persistence is either TEMP either SESSION
+ */
+#define IsLocalRelpersistence(relpersistence) \
+	((relpersistence) == RELPERSISTENCE_TEMP || (relpersistence) == RELPERSISTENCE_SESSION)
+
+/*
+ * Relation is either global either local temp table
+ */
+#define RelationHasSessionScope(relation) \
+	IsLocalRelpersistence(((relation)->rd_rel->relpersistence))
+
 /* ViewOptions->check_option values */
 typedef enum ViewOptCheckOption
 {
@@ -334,6 +347,7 @@ typedef enum ViewOptCheckOption
 	VIEW_OPTION_CHECK_OPTION_LOCAL,
 	VIEW_OPTION_CHECK_OPTION_CASCADED
 } ViewOptCheckOption;
+
 
 /*
  * ViewOptions
@@ -530,7 +544,7 @@ typedef struct ViewOptions
  *		True if relation's pages are stored in local buffers.
  */
 #define RelationUsesLocalBuffers(relation) \
-	((relation)->rd_rel->relpersistence == RELPERSISTENCE_TEMP)
+	RelationHasSessionScope(relation)
 
 /*
  * RELATION_IS_LOCAL

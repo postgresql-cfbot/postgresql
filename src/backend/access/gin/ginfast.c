@@ -241,6 +241,13 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 	metabuffer = ReadBuffer(index, GIN_METAPAGE_BLKNO);
 	metapage = BufferGetPage(metabuffer);
 
+	if (GlobalTempRelationPageIsNotInitialized(index, metapage))
+	{
+		Relation heap = RelationIdGetRelation(index->rd_index->indrelid);
+		ginbuild(heap, index, BuildIndexInfo(index));
+		RelationClose(heap);
+	}
+
 	/*
 	 * An insertion to the pending list could logically belong anywhere in the
 	 * tree, so it conflicts with all serializable scans.  All scans acquire a

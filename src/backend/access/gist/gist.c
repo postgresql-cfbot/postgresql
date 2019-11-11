@@ -16,6 +16,7 @@
 
 #include "access/gist_private.h"
 #include "access/gistscan.h"
+#include "catalog/index.h"
 #include "catalog/pg_collation.h"
 #include "miscadmin.h"
 #include "storage/lmgr.h"
@@ -677,7 +678,10 @@ gistdoinsert(Relation r, IndexTuple itup, Size freespace,
 		if (!xlocked)
 		{
 			LockBuffer(stack->buffer, GIST_SHARE);
-			gistcheckpage(state.r, stack->buffer);
+			if (stack->blkno == GIST_ROOT_BLKNO && GlobalTempRelationPageIsNotInitialized(state.r, BufferGetPage(stack->buffer)))
+				gistbuild(heapRel, r, BuildIndexInfo(r));
+			else
+				gistcheckpage(state.r, stack->buffer);
 		}
 
 		stack->page = (Page) BufferGetPage(stack->buffer);

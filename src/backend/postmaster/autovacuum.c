@@ -2157,7 +2157,7 @@ do_autovacuum(void)
 		/*
 		 * We cannot safely process other backends' temp tables, so skip 'em.
 		 */
-		if (classForm->relpersistence == RELPERSISTENCE_TEMP)
+		if (IsLocalRelpersistence(classForm->relpersistence))
 			continue;
 
 		relid = classForm->oid;

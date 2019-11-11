@@ -109,157 +109,39 @@ pg_atoi(const char *s, int size, int c)
 	return (int32) l;
 }
 
-/*
- * Convert input string to a signed 16 bit integer.
- *
- * Allows any number of leading or trailing whitespace characters. Will throw
- * ereport() upon bad input format or overflow.
- *
- * NB: Accumulate input as a negative number, to deal with two's complement
- * representation of the most negative number, which can't be represented as a
- * positive number.
- */
-int16
-pg_strtoint16(const char *s)
-{
-	const char *ptr = s;
-	int16		tmp = 0;
-	bool		neg = false;
-
-	/* skip leading spaces */
-	while (likely(*ptr) && isspace((unsigned char) *ptr))
-		ptr++;
-
-	/* handle sign */
-	if (*ptr == '-')
-	{
-		ptr++;
-		neg = true;
-	}
-	else if (*ptr == '+')
-		ptr++;
-
-	/* require at least one digit */
-	if (unlikely(!isdigit((unsigned char) *ptr)))
-		goto invalid_syntax;
-
-	/* process digits */
-	while (*ptr && isdigit((unsigned char) *ptr))
-	{
-		int8		digit = (*ptr++ - '0');
-
-		if (unlikely(pg_mul_s16_overflow(tmp, 10, &tmp)) ||
-			unlikely(pg_sub_s16_overflow(tmp, digit, &tmp)))
-			goto out_of_range;
-	}
-
-	/* allow trailing whitespace, but not other trailing chars */
-	while (*ptr != '\0' && isspace((unsigned char) *ptr))
-		ptr++;
-
-	if (unlikely(*ptr != '\0'))
-		goto invalid_syntax;
-
-	if (!neg)
-	{
-		/* could fail if input is most negative number */
-		if (unlikely(tmp == PG_INT16_MIN))
-			goto out_of_range;
-		tmp = -tmp;
-	}
-
-	return tmp;
-
-out_of_range:
-	ereport(ERROR,
-			(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-			 errmsg("value \"%s\" is out of range for type %s",
-					s, "smallint")));
-
-invalid_syntax:
-	ereport(ERROR,
-			(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-			 errmsg("invalid input syntax for type %s: \"%s\"",
-					"smallint", s)));
-
-	return 0;					/* keep compiler quiet */
-}
 
 /*
- * Convert input string to a signed 32 bit integer.
+ * pg_strtoint_error
  *
- * Allows any number of leading or trailing whitespace characters. Will throw
- * ereport() upon bad input format or overflow.
- *
- * NB: Accumulate input as a negative number, to deal with two's complement
- * representation of the most negative number, which can't be represented as a
- * positive number.
+ * utility wrapper to report an error with string-to-integer conversion
+ * functions.
  */
-int32
-pg_strtoint32(const char *s)
+void
+pg_strtoint_error(pg_strtoint_status status, const char *input,
+				  const char *type)
 {
-	const char *ptr = s;
-	int32		tmp = 0;
-	bool		neg = false;
-
-	/* skip leading spaces */
-	while (likely(*ptr) && isspace((unsigned char) *ptr))
-		ptr++;
-
-	/* handle sign */
-	if (*ptr == '-')
+	switch (status)
 	{
-		ptr++;
-		neg = true;
+		case PG_STRTOINT_SYNTAX_ERROR:
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+					 errmsg("invalid input syntax for type %s: \"%s\"",
+							type, input)));
+			break;
+
+		case PG_STRTOINT_RANGE_ERROR:
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("value \"%s\" is out of range for type %s",
+							input, type)));
+			break;
+
+		default:
+			elog(ERROR, "unexpected status for string-to-integer conversion");
+			break;
 	}
-	else if (*ptr == '+')
-		ptr++;
-
-	/* require at least one digit */
-	if (unlikely(!isdigit((unsigned char) *ptr)))
-		goto invalid_syntax;
-
-	/* process digits */
-	while (*ptr && isdigit((unsigned char) *ptr))
-	{
-		int8		digit = (*ptr++ - '0');
-
-		if (unlikely(pg_mul_s32_overflow(tmp, 10, &tmp)) ||
-			unlikely(pg_sub_s32_overflow(tmp, digit, &tmp)))
-			goto out_of_range;
-	}
-
-	/* allow trailing whitespace, but not other trailing chars */
-	while (*ptr != '\0' && isspace((unsigned char) *ptr))
-		ptr++;
-
-	if (unlikely(*ptr != '\0'))
-		goto invalid_syntax;
-
-	if (!neg)
-	{
-		/* could fail if input is most negative number */
-		if (unlikely(tmp == PG_INT32_MIN))
-			goto out_of_range;
-		tmp = -tmp;
-	}
-
-	return tmp;
-
-out_of_range:
-	ereport(ERROR,
-			(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-			 errmsg("value \"%s\" is out of range for type %s",
-					s, "integer")));
-
-invalid_syntax:
-	ereport(ERROR,
-			(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-			 errmsg("invalid input syntax for type %s: \"%s\"",
-					"integer", s)));
-
-	return 0;					/* keep compiler quiet */
 }
+
 
 /*
  * pg_itoa: converts a signed 16-bit integer to its string representation
@@ -542,26 +424,4 @@ pg_ltostr(char *str, int32 value)
 	}
 
 	return end;
-}
-
-/*
- * pg_strtouint64
- *		Converts 'str' into an unsigned 64-bit integer.
- *
- * This has the identical API to strtoul(3), except that it will handle
- * 64-bit ints even where "long" is narrower than that.
- *
- * For the moment it seems sufficient to assume that the platform has
- * such a function somewhere; let's not roll our own.
- */
-uint64
-pg_strtouint64(const char *str, char **endptr, int base)
-{
-#ifdef _MSC_VER					/* MSVC only */
-	return _strtoui64(str, endptr, base);
-#elif defined(HAVE_STRTOULL) && SIZEOF_LONG < 8
-	return strtoull(str, endptr, base);
-#else
-	return strtoul(str, endptr, base);
-#endif
 }

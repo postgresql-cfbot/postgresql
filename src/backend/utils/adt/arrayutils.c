@@ -226,7 +226,7 @@ ArrayGetIntegerTypmods(ArrayType *arr, int *n)
 	result = (int32 *) palloc(*n * sizeof(int32));
 
 	for (i = 0; i < *n; i++)
-		result[i] = pg_strtoint32(DatumGetCString(elem_values[i]));
+		result[i] = pg_strtoint32_check(DatumGetCString(elem_values[i]));
 
 	pfree(elem_values);
 

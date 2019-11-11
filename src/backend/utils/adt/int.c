@@ -63,8 +63,19 @@ Datum
 int2in(PG_FUNCTION_ARGS)
 {
 	char	   *num = PG_GETARG_CSTRING(0);
+	int16		res;
+	pg_strtoint_status status;
 
-	PG_RETURN_INT16(pg_strtoint16(num));
+	/*
+	 * pg_strtoint16_check is not used here as any error message generated
+	 * should be consistent with the SQL data type used.
+	 */
+	status = pg_strtoint16(num, &res);
+
+	if (unlikely(status != PG_STRTOINT_OK))
+		pg_strtoint_error(status, num, "smallint");
+
+	PG_RETURN_INT16(res);
 }
 
 /*
@@ -268,8 +279,19 @@ Datum
 int4in(PG_FUNCTION_ARGS)
 {
 	char	   *num = PG_GETARG_CSTRING(0);
+	int32		res;
+	pg_strtoint_status status;
 
-	PG_RETURN_INT32(pg_strtoint32(num));
+	/*
+	 * pg_strtoint32_check is not used here as any error message generated
+	 * should be consistent with the SQL data type used.
+	 */
+	status = pg_strtoint32(num, &res);
+
+	if (unlikely(status != PG_STRTOINT_OK))
+		pg_strtoint_error(status, num, "integer");
+
+	PG_RETURN_INT32(res);
 }
 
 /*

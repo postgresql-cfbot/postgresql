@@ -80,7 +80,7 @@
 #define READ_UINT64_FIELD(fldname) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
 	token = pg_strtok(&length);		/* get field value */ \
-	local_node->fldname = pg_strtouint64(token, NULL, 10)
+	local_node->fldname = strtouint64(token)
 
 /* Read a long integer field (anything written as ":fldname %ld") */
 #define READ_LONG_FIELD(fldname) \
@@ -189,6 +189,27 @@
 #define nullable_string(token,length)  \
 	((length) == 0 ? NULL : debackslash(token, length))
 
+/*
+ * pg_strtouint64
+ *	  Converts 'str' into an unsigned 64-bit integer.
+ *
+ * This has an identical API to strtoul(3) with base 10, except that
+ * it will handle 64-bit ints even where "long" is narrower than that.
+ *
+ * This has the advantage to not consider as a syntax failure any characters
+ * present in the string after the conversion is done.
+ */
+static uint64
+strtouint64(const char *str)
+{
+#ifdef _MSC_VER                    /* MSVC only */
+   return _strtoui64(str, NULL, 10);
+#elif defined(HAVE_STRTOULL) && SIZEOF_LONG < 8
+   return strtoull(str, NULL, 10);
+#else
+   return strtoul(str, NULL, 10);
+#endif
+}
 
 /*
  * _readBitmapset

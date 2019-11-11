@@ -17,6 +17,7 @@
 #include "access/htup_details.h"
 #include "access/table.h"
 #include "catalog/pg_type.h"
+#include "common/string.h"
 #include "mb/pg_wchar.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -25,7 +26,6 @@
 #include "parser/parse_expr.h"
 #include "parser/parse_relation.h"
 #include "utils/builtins.h"
-#include "utils/int8.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 #include "utils/varbit.h"
@@ -496,7 +496,7 @@ make_const(ParseState *pstate, Value *value, int location)
 
 		case T_Float:
 			/* could be an oversize integer as well as a float ... */
-			if (scanint8(strVal(value), true, &val64))
+			if (pg_strtoint64(strVal(value), &val64) == PG_STRTOINT_OK)
 			{
 				/*
 				 * It might actually fit in int32. Probably only INT_MIN can

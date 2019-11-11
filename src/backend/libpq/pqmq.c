@@ -286,10 +286,10 @@ pq_parse_errornotice(StringInfo msg, ErrorData *edata)
 				edata->hint = pstrdup(value);
 				break;
 			case PG_DIAG_STATEMENT_POSITION:
-				edata->cursorpos = pg_strtoint32(value);
+				edata->cursorpos = pg_strtoint32_check(value);
 				break;
 			case PG_DIAG_INTERNAL_POSITION:
-				edata->internalpos = pg_strtoint32(value);
+				edata->internalpos = pg_strtoint32_check(value);
 				break;
 			case PG_DIAG_INTERNAL_QUERY:
 				edata->internalquery = pstrdup(value);
@@ -316,7 +316,7 @@ pq_parse_errornotice(StringInfo msg, ErrorData *edata)
 				edata->filename = pstrdup(value);
 				break;
 			case PG_DIAG_SOURCE_LINE:
-				edata->lineno = pg_strtoint32(value);
+				edata->lineno = pg_strtoint32_check(value);
 				break;
 			case PG_DIAG_SOURCE_FUNCTION:
 				edata->funcname = pstrdup(value);

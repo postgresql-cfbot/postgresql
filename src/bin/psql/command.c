@@ -1980,7 +1980,7 @@ exec_command_pset(PsqlScanState scan_state, bool active_branch)
 			int			i;
 			static const char *const my_list[] = {
 				"border", "columns", "csv_fieldsep", "expanded", "fieldsep",
-				"fieldsep_zero", "footer", "format", "linestyle", "null",
+				"fieldsep_zero", "final_spaces", "footer", "format", "linestyle", "null",
 				"numericlocale", "pager", "pager_min_lines",
 				"recordsep", "recordsep_zero",
 				"tableattr", "title", "tuples_only",
@@ -3746,6 +3746,19 @@ _unicode_linestyle2string(int linestyle)
 	return "unknown";
 }
 
+static const char *
+_final_spaces_style2string(int finalspaces)
+{
+	switch (finalspaces)
+	{
+		case FINAL_SPACES_AUTO:
+			return "auto";
+		case FINAL_SPACES_ALWAYS:
+			return "always";
+	}
+	return "unknown";
+}
+
 /*
  * do_pset
  *
@@ -3817,6 +3830,21 @@ do_pset(const char *param, const char *value, printQueryOpt *popt, bool quiet)
 				pg_log_error("\\pset: allowed formats are aligned, asciidoc, csv, html, latex, latex-longtable, troff-ms, unaligned, wrapped");
 				return false;
 			}
+		}
+	}
+
+	else if (strcmp(param, "final_spaces") == 0)
+	{
+		if (!value)
+			;
+		if (pg_strncasecmp("auto", value, vallen) == 0)
+			popt->topt.final_spaces = FINAL_SPACES_AUTO;
+		else if (pg_strncasecmp("always", value, vallen) == 0)
+			popt->topt.final_spaces = FINAL_SPACES_ALWAYS;
+		else
+		{
+			pg_log_error("\\pset: allowed final space styles are auto or always");
+			return false;
 		}
 	}
 
@@ -4247,6 +4275,12 @@ printPsetInfo(const char *param, struct printQueryOpt *popt)
 			   _unicode_linestyle2string(popt->topt.unicode_header_linestyle));
 	}
 
+	else if (strcmp(param, "final_spaces") == 0)
+	{
+		printf(_("final spaces style is \"%s\".\n"),
+			   _final_spaces_style2string(popt->topt.final_spaces));
+	}
+
 	else
 	{
 		pg_log_error("\\pset: unknown option: %s", param);
@@ -4357,6 +4391,8 @@ pset_value_string(const char *param, struct printQueryOpt *popt)
 		return pstrdup(_unicode_linestyle2string(popt->topt.unicode_column_linestyle));
 	else if (strcmp(param, "unicode_header_linestyle") == 0)
 		return pstrdup(_unicode_linestyle2string(popt->topt.unicode_header_linestyle));
+	else if (strcmp(param, "final_spaces") == 0)
+		return pstrdup(_final_spaces_style2string(popt->topt.final_spaces));
 	else
 		return pstrdup("ERROR");
 }

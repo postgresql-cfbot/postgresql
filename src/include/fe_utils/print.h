@@ -88,6 +88,12 @@ typedef enum unicode_linestyle
 	UNICODE_LINESTYLE_DOUBLE
 } unicode_linestyle;
 
+typedef enum final_spaces_style
+{
+	FINAL_SPACES_AUTO = 0,
+	FINAL_SPACES_ALWAYS
+} final_spaces_style;
+
 struct separator
 {
 	char	   *separator;
@@ -123,6 +129,8 @@ typedef struct printTableOpt
 	unicode_linestyle unicode_border_linestyle;
 	unicode_linestyle unicode_column_linestyle;
 	unicode_linestyle unicode_header_linestyle;
+	final_spaces_style final_spaces;	/* allows final spaces for last column
+									 * for other border styles than 2 */
 } printTableOpt;
 
 /*

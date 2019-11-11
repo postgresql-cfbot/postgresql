@@ -2642,6 +2642,15 @@ lo_import 152801
           </varlistentry>
 
           <varlistentry>
+          <term><literal>final_spaces</literal></term>
+          <listitem>
+          <para>
+          With value <literal>always</literal> last column will have same width.
+          </para>
+          </listitem>
+          </varlistentry>
+
+          <varlistentry>
           <term><literal>footer</literal></term>
           <listitem>
           <para>

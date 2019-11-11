@@ -3722,7 +3722,7 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
 	else if (TailMatchesCS("\\pset"))
 		COMPLETE_WITH_CS("border", "columns", "csv_fieldsep", "expanded",
-						 "fieldsep", "fieldsep_zero", "footer", "format",
+						 "fieldsep", "final_spaces", "fieldsep_zero", "footer", "format",
 						 "linestyle", "null", "numericlocale",
 						 "pager", "pager_min_lines",
 						 "recordsep", "recordsep_zero",
@@ -3732,6 +3732,8 @@ psql_completion(const char *text, int start, int end)
 						 "unicode_header_linestyle");
 	else if (TailMatchesCS("\\pset", MatchAny))
 	{
+		if (TailMatchesCS("final_spaces"))
+			COMPLETE_WITH_CS("auto", "always");
 		if (TailMatchesCS("format"))
 			COMPLETE_WITH_CS("aligned", "asciidoc", "csv", "html", "latex",
 							 "latex-longtable", "troff-ms", "unaligned",

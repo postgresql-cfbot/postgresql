@@ -584,6 +584,7 @@ print_aligned_text(const printTableContent *cont, FILE *fout, bool is_pager)
 	unsigned short opt_border = cont->opt->border;
 	const printTextFormat *format = get_line_style(cont->opt);
 	const printTextLineFormat *dformat = &format->lrule[PRINT_RULE_DATA];
+	final_spaces_style opt_final_spaces = cont->opt->final_spaces;
 
 	unsigned int col_count = 0,
 				cell_count = 0;
@@ -1003,8 +1004,14 @@ print_aligned_text(const printTableContent *cont, FILE *fout, bool is_pager)
 				struct lineptr *this_line = &col_lineptrs[j][curr_nl_line[j]];
 				int			bytes_to_output;
 				int			chars_to_output = width_wrap[j];
-				bool		finalspaces = (opt_border == 2 ||
-										   (col_count > 0 && j < col_count - 1));
+				bool		finalspaces;
+
+				if (opt_final_spaces == FINAL_SPACES_AUTO)
+					finalspaces = opt_border == 2 ||
+										   (col_count > 0 && j < col_count - 1);
+				else
+					/* FINAL_SPACES_ALWAYS */
+					finalspaces = true;
 
 				/* Print left-hand wrap or newline mark */
 				if (opt_border != 0)
@@ -1098,7 +1105,7 @@ print_aligned_text(const printTableContent *cont, FILE *fout, bool is_pager)
 					fputs(format->wrap_right, fout);
 				else if (wrap[j] == PRINT_LINE_WRAP_NEWLINE)
 					fputs(format->nl_right, fout);
-				else if (opt_border == 2 || (col_count > 0 && j < col_count - 1))
+				else if (finalspaces)
 					fputc(' ', fout);
 
 				/* Print column divider, if not the last column */

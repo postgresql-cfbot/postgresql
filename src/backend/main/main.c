@@ -61,14 +61,6 @@ main(int argc, char *argv[])
 {
 	bool		do_check_root = true;
 
-	/*
-	 * If supported on the current platform, set up a handler to be called if
-	 * the backend/postmaster crashes with a fatal signal or exception.
-	 */
-#if defined(WIN32) && defined(HAVE_MINIDUMP_TYPE)
-	pgwin32_install_crashdump_handler();
-#endif
-
 	progname = get_progname(argv[0]);
 
 	/*
@@ -231,6 +223,17 @@ startup_hacks(const char *progname)
 	 * Windows-specific execution environment hacking.
 	 */
 #ifdef WIN32
+	/* In case of general protection fault, don't show GUI popup box */
+	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+
+	/*
+	 * If supported on the current platform, set up a handler to be called if
+	 * the backend/postmaster crashes with a fatal signal or exception.
+	 */
+#ifdef HAVE_MINIDUMP_TYPE
+	pgwin32_install_crashdump_handler();
+#endif
+
 	{
 		WSADATA		wsaData;
 		int			err;
@@ -247,9 +250,6 @@ startup_hacks(const char *progname)
 						 progname, err);
 			exit(1);
 		}
-
-		/* In case of general protection fault, don't show GUI popup box */
-		SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 
 #if defined(_M_AMD64) && _MSC_VER == 1800
 

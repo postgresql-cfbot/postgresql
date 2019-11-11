@@ -23,6 +23,7 @@
 
 #include "utils/inval.h"
 #include "utils/int8.h"
+#include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
@@ -90,11 +91,30 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 
 static void
 parse_output_parameters(List *options, uint32 *protocol_version,
-						List **publication_names)
+						List **publication_names, bool *binary_basetypes)
 {
 	ListCell   *lc;
 	bool		protocol_version_given = false;
 	bool		publication_names_given = false;
+	bool		binary_option_given = false;
+	bool		sizeof_int_given = false;
+	bool		sizeof_datum_given = false;
+	bool		sizeof_long_given = false;
+	bool		big_endian_given = false;
+	bool		float4_byval_given = false;
+	bool		float8_byval_given = false;
+	bool		integer_datetimes_given = false;
+	long		datum_size;
+	long 		int_size;
+	long		long_size;
+	bool		bigendian;
+	bool		float4_byval;
+	bool		float8_byval;
+	bool		integer_datetimes;
+
+	// default to false
+	*binary_basetypes = false;
+
 
 	foreach(lc, options)
 	{
@@ -140,8 +160,188 @@ parse_output_parameters(List *options, uint32 *protocol_version,
 						(errcode(ERRCODE_INVALID_NAME),
 						 errmsg("invalid publication_names syntax")));
 		}
+		else if (strcmp(defel->defname, "binary") == 0 )
+		{
+			bool parsed;
+			if (binary_option_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			binary_option_given = true;
+
+			if (!parse_bool(strVal(defel->arg), &parsed))
+							ereport(ERROR,
+									(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+									 errmsg("invalid binary option")));
+
+			*binary_basetypes = parsed;
+
+
+		}
+		else if (strcmp(defel->defname, "sizeof_datum") == 0)
+		{
+
+					if (sizeof_datum_given)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("conflicting or redundant options")));
+					sizeof_datum_given = true;
+
+					if (!scanint8(strVal(defel->arg), true,  &datum_size))
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+								 errmsg("invalid sizeof_datum option")));
+		}
+		else if (strcmp(defel->defname, "sizeof_int") == 0)
+		{
+
+			if (sizeof_int_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			sizeof_int_given = true;
+
+			if (!scanint8(strVal(defel->arg), true,  &int_size))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid sizeof_int option")));
+		}
+		else if (strcmp(defel->defname, "sizeof_long") == 0)
+		{
+
+			if (sizeof_long_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			sizeof_int_given = true;
+
+			if (!scanint8(strVal(defel->arg), true, &long_size))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid sizeof_long option")));
+		}
+		else if (strcmp(defel->defname, "bigendian") == 0)
+		{
+
+			if (big_endian_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			big_endian_given = true;
+
+			if (!parse_bool(strVal(defel->arg), &bigendian))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid bigendian option")));
+		}
+		else if (strcmp(defel->defname, "float4_byval") == 0)
+		{
+
+			if (float4_byval_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			float4_byval_given = true;
+
+			if (!parse_bool(strVal(defel->arg), &float4_byval))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid float4_byval option")));
+		}
+		else if (strcmp(defel->defname, "float8_byval") == 0)
+		{
+
+			if (float8_byval_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			float8_byval_given = true;
+
+			if (!parse_bool(strVal(defel->arg), &float8_byval))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid float8_byval option")));
+		}
+		else if (strcmp(defel->defname, "integer_date_times") == 0)
+		{
+
+			if (integer_datetimes_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			integer_datetimes_given = true;
+
+			if (!parse_bool(strVal(defel->arg), &integer_datetimes))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid integer_date_times option")));
+		}
 		else
 			elog(ERROR, "unrecognized pgoutput option: %s", defel->defname);
+	}
+
+/*
+ * after we know that the subscriber is requesting binary check to make sure
+ * we are compatible with the subscriber.
+ */
+	if ( *binary_basetypes == true )
+	{
+		if (sizeof(Datum) != datum_size)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("incompatible datum size")));
+
+		if (sizeof(int)  != int_size)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("incompatible integer size")));
+
+		if (sizeof(long)  != long_size)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("incompatible long size")));
+		if(
+#ifdef WORDS_BIGENDIAN
+			true
+#else
+			false
+#endif
+				!= bigendian)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("incompatible endianness")));
+		if( float4_byval !=
+#ifdef USE_FLOAT4_BYVAL
+				true
+#else
+				false
+#endif
+				)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("incompatible float4_byval")));
+		if( float8_byval !=
+#ifdef USE_FLOAT4_BYVAL
+						true
+#else
+						false
+#endif
+						)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("incompatible float8_byval")));
+
+		if ( integer_datetimes !=
+#ifdef USE_INTEGER_DATETIMES
+								 true
+#else
+								 false
+#endif
+								 )
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("incompatible integer_datetimes")));
+
 	}
 }
 
@@ -174,7 +374,8 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 		/* Parse the params and ERROR if we see any we don't recognize */
 		parse_output_parameters(ctx->output_plugin_options,
 								&data->protocol_version,
-								&data->publication_names);
+								&data->publication_names,
+								&data->binary_basetypes);
 
 		/* Check if we support requested protocol */
 		if (data->protocol_version > LOGICALREP_PROTO_VERSION_NUM)
@@ -346,7 +547,8 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		case REORDER_BUFFER_CHANGE_INSERT:
 			OutputPluginPrepareWrite(ctx, true);
 			logicalrep_write_insert(ctx->out, relation,
-									&change->data.tp.newtuple->tuple);
+									&change->data.tp.newtuple->tuple,
+									data->binary_basetypes);
 			OutputPluginWrite(ctx, true);
 			break;
 		case REORDER_BUFFER_CHANGE_UPDATE:
@@ -356,7 +558,8 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 				OutputPluginPrepareWrite(ctx, true);
 				logicalrep_write_update(ctx->out, relation, oldtuple,
-										&change->data.tp.newtuple->tuple);
+										&change->data.tp.newtuple->tuple,
+										data->binary_basetypes);
 				OutputPluginWrite(ctx, true);
 				break;
 			}
@@ -365,7 +568,8 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			{
 				OutputPluginPrepareWrite(ctx, true);
 				logicalrep_write_delete(ctx->out, relation,
-										&change->data.tp.oldtuple->tuple);
+										&change->data.tp.oldtuple->tuple,
+										data->binary_basetypes);
 				OutputPluginWrite(ctx, true);
 			}
 			else

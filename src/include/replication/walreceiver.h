@@ -162,6 +162,7 @@ typedef struct
 		{
 			uint32		proto_version;	/* Logical protocol version */
 			List	   *publication_names;	/* String list of publications */
+			bool		binary;				/* Ask publisher output plugin to use binary */
 		}			logical;
 	}			proto;
 } WalRcvStreamOptions;

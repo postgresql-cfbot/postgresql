@@ -2911,6 +2911,15 @@ _equalPartitionCmd(const PartitionCmd *a, const PartitionCmd *b)
 	return true;
 }
 
+static bool
+_equalRowTime(const RowTime *a, const RowTime *b)
+{
+	COMPARE_STRING_FIELD(start_time);
+	COMPARE_STRING_FIELD(end_time);
+
+	return true;
+}
+
 /*
  * Stuff from pg_list.h
  */
@@ -3729,6 +3738,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_PartitionCmd:
 			retval = _equalPartitionCmd(a, b);
+			break;
+		case T_RowTime:
+			retval = _equalRowTime(a, b);
 			break;
 
 		default:

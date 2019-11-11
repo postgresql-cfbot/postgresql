@@ -2621,6 +2621,13 @@ expandTupleDesc(TupleDesc tupdesc, Alias *eref, int count, int offset,
 			continue;
 		}
 
+		if (attr->attgenerated == ATTRIBUTE_ROW_START_TIME || attr->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		{
+			if (aliascell)
+				aliascell = lnext(eref->colnames, aliascell);
+			continue;
+		}
+
 		if (colnames)
 		{
 			char	   *label;

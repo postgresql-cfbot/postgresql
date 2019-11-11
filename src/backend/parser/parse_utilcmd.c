@@ -71,6 +71,8 @@
 #include "utils/syscache.h"
 #include "utils/typcache.h"
 
+#include<string.h>
+
 
 /* State shared by transformCreateStmt and its subroutines */
 typedef struct
@@ -96,6 +98,11 @@ typedef struct
 	bool		ispartitioned;	/* true if table is partitioned */
 	PartitionBoundSpec *partbound;	/* transformed FOR VALUES */
 	bool		ofType;			/* true if statement contains OF typename */
+	bool		isSyetemVersioned;	/* true if table is system versioned */
+	char	   *startTimeColName;		/* name of row start time column */
+	char	   *endTimeColName;		/* name of row end time column */
+	char	   *periodStart;		/* name of period start column */
+	char	   *periodEnd;		/* name of period end column */
 } CreateStmtContext;
 
 /* State shared by transformCreateSchemaStmt and its subroutines */
@@ -119,6 +126,8 @@ static void transformTableConstraint(CreateStmtContext *cxt,
 									 Constraint *constraint);
 static void transformTableLikeClause(CreateStmtContext *cxt,
 									 TableLikeClause *table_like_clause);
+static void transformPeriodColumen(CreateStmtContext *cxt,
+									 RowTime *cols);
 static void transformOfType(CreateStmtContext *cxt,
 							TypeName *ofTypename);
 static CreateStatsStmt *generateClonedExtStatsStmt(RangeVar *heapRel,
@@ -249,6 +258,10 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	cxt.ispartitioned = stmt->partspec != NULL;
 	cxt.partbound = stmt->partbound;
 	cxt.ofType = (stmt->ofTypename != NULL);
+	cxt.startTimeColName = NULL;
+	cxt.endTimeColName = NULL;
+	cxt.isSyetemVersioned = false;
+
 
 	Assert(!stmt->ofTypename || !stmt->inhRelations);	/* grammar enforces */
 
@@ -284,14 +297,15 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 			case T_TableLikeClause:
 				transformTableLikeClause(&cxt, (TableLikeClause *) element);
 				break;
-
+			case T_RowTime:
+				transformPeriodColumen(&cxt, (RowTime *) element);
+				break;
 			default:
 				elog(ERROR, "unrecognized node type: %d",
 					 (int) nodeTag(element));
 				break;
 		}
 	}
-
 	/*
 	 * Transfer anything we already have in cxt.alist into save_alist, to keep
 	 * it separate from the output of transformIndexConstraints.  (This may
@@ -302,6 +316,20 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	cxt.alist = NIL;
 
 	Assert(stmt->constraints == NIL);
+
+	if (cxt.isSyetemVersioned)
+	{
+		ListCell   *lc;
+		foreach(lc, cxt.ixconstraints)
+		{
+			Constraint *constraint = lfirst_node(Constraint, lc);
+
+			if(constraint->contype == CONSTR_PRIMARY && constraint->keys != NIL)
+			{
+				constraint->keys = lappend(constraint->keys, makeString(cxt.endTimeColName));
+			}
+		}
+	}
 
 	/*
 	 * Postprocess constraints that give rise to index definitions.
@@ -714,6 +742,38 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 				column->raw_default = constraint->raw_expr;
 				Assert(constraint->cooked_expr == NULL);
 				saw_generated = true;
+				break;
+
+			case CONSTR_ROW_START_TIME:
+				if (strcmp(strVal ( list_nth(column->typeName->names, 1)), "timestamp") != 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("the data type of row start time must be timestamp")));
+
+				if (cxt->startTimeColName)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("row start time can not be specified multiple time")));
+
+				column->generated = ATTRIBUTE_ROW_START_TIME;
+				cxt->startTimeColName = column->colname;
+				cxt->isSyetemVersioned = true;
+				break;
+
+			case CONSTR_ROW_END_TIME:
+				if (strcmp(strVal ( list_nth(column->typeName->names, 1)), "timestamp") != 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("the data type of row end time must be timestamp")));
+
+				if (cxt->endTimeColName)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("row end time can not be specified multiple time")));
+
+
+				column->generated = ATTRIBUTE_ROW_END_TIME;
+				cxt->endTimeColName = column->colname;
 				break;
 
 			case CONSTR_CHECK:
@@ -1265,6 +1325,27 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 	 * parent before the child is committed.
 	 */
 	table_close(relation, NoLock);
+}
+
+/*
+ * transformPeriodColumen
+ *		transform a period node within CREATE TABLE
+ */
+static void
+transformPeriodColumen(CreateStmtContext *cxt, RowTime *col)
+{
+	cxt->periodStart  = col->start_time;
+	cxt->periodEnd = col->end_time;
+
+	if (strcmp(cxt->periodStart, cxt->startTimeColName) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("The period start time parameter must equal the name of row start time column")));
+
+	if (strcmp(cxt->periodEnd, cxt->endTimeColName) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("The period end time  parameter must equal the name of row end time column")));
 }
 
 static void

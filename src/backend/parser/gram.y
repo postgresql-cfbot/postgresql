@@ -127,6 +127,20 @@ typedef struct ImportQual
 	List	   *table_names;
 } ImportQual;
 
+/* Private struct for the result of generated_type production */
+typedef struct GenerateType
+{
+	ConstrType	contype;
+	Node	   *raw_expr;
+} GenerateType;
+
+/* Private struct for the result of OptWith production */
+typedef struct OptionWith
+{
+	List   *options;
+	bool	systemVersioned;
+} OptionWith;
+
 /* ConstraintAttributeSpec yields an integer bitmask of these flags: */
 #define CAS_NOT_DEFERRABLE			0x01
 #define CAS_DEFERRABLE				0x02
@@ -242,6 +256,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	PartitionSpec		*partspec;
 	PartitionBoundSpec	*partboundspec;
 	RoleSpec			*rolespec;
+	struct GenerateType	*GenerateType;
+	struct OptionWith	*OptionWith;
 }
 
 %type <node>	stmt schema_stmt
@@ -373,12 +389,14 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <ival>	import_qualification_type
 %type <importqual> import_qualification
 %type <node>	vacuum_relation
+%type <GenerateType> generated_type
+%type <OptionWith> OptWith
 
 %type <list>	stmtblock stmtmulti
 				OptTableElementList TableElementList OptInherit definition
 				OptTypedTableElementList TypedTableElementList
 				reloptions opt_reloptions
-				OptWith distinct_clause opt_all_clause opt_definition func_args func_args_list
+				distinct_clause opt_all_clause opt_definition func_args func_args_list
 				func_args_with_defaults func_args_with_defaults_list
 				aggr_args aggr_args_list
 				func_as createfunc_opt_list alterfunc_opt_list
@@ -539,7 +557,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <keyword> unreserved_keyword type_func_name_keyword
 %type <keyword> col_name_keyword reserved_keyword
 
-%type <node>	TableConstraint TableLikeClause
+%type <node>	TableConstraint TableLikeClause optSystemTimeColumn
 %type <ival>	TableLikeOptionList TableLikeOption
 %type <list>	ColQualList
 %type <node>	ColConstraint ColConstraintElem ConstraintAttr
@@ -667,7 +685,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
-	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PLANS POLICY
+	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PERIOD PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
 
@@ -693,7 +711,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	UNTIL UPDATE USER USING
 
 	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
-	VERBOSE VERSION_P VIEW VIEWS VOLATILE
+	VERBOSE VERSION_P VERSIONING VIEW VIEWS VOLATILE
 
 	WHEN WHERE WHITESPACE_P WINDOW WITH WITHIN WITHOUT WORK WRAPPER WRITE
 
@@ -3139,12 +3157,13 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					$4->relpersistence = $2;
 					n->relation = $4;
 					n->tableElts = $6;
+					n->systemVersioned = ($11)->systemVersioned;
 					n->inhRelations = $8;
 					n->partspec = $9;
 					n->ofTypename = NULL;
 					n->constraints = NIL;
 					n->accessMethod = $10;
-					n->options = $11;
+					n->options = ($11)->options;
 					n->oncommit = $12;
 					n->tablespacename = $13;
 					n->if_not_exists = false;
@@ -3158,12 +3177,13 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					$7->relpersistence = $2;
 					n->relation = $7;
 					n->tableElts = $9;
+					n->systemVersioned = ($14)->systemVersioned;
 					n->inhRelations = $11;
 					n->partspec = $12;
 					n->ofTypename = NULL;
 					n->constraints = NIL;
 					n->accessMethod = $13;
-					n->options = $14;
+					n->options = ($14)->options;
 					n->oncommit = $15;
 					n->tablespacename = $16;
 					n->if_not_exists = true;
@@ -3177,13 +3197,14 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					$4->relpersistence = $2;
 					n->relation = $4;
 					n->tableElts = $7;
+					n->systemVersioned = ($10)->systemVersioned;
 					n->inhRelations = NIL;
 					n->partspec = $8;
 					n->ofTypename = makeTypeNameFromNameList($6);
 					n->ofTypename->location = @6;
 					n->constraints = NIL;
 					n->accessMethod = $9;
-					n->options = $10;
+					n->options = ($10)->options;
 					n->oncommit = $11;
 					n->tablespacename = $12;
 					n->if_not_exists = false;
@@ -3197,13 +3218,14 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					$7->relpersistence = $2;
 					n->relation = $7;
 					n->tableElts = $10;
+					n->systemVersioned = ($13)->systemVersioned;
 					n->inhRelations = NIL;
 					n->partspec = $11;
 					n->ofTypename = makeTypeNameFromNameList($9);
 					n->ofTypename->location = @9;
 					n->constraints = NIL;
 					n->accessMethod = $12;
-					n->options = $13;
+					n->options = ($13)->options;
 					n->oncommit = $14;
 					n->tablespacename = $15;
 					n->if_not_exists = true;
@@ -3217,13 +3239,14 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					$4->relpersistence = $2;
 					n->relation = $4;
 					n->tableElts = $8;
+					n->systemVersioned = ($12)->systemVersioned;
 					n->inhRelations = list_make1($7);
 					n->partbound = $9;
 					n->partspec = $10;
 					n->ofTypename = NULL;
 					n->constraints = NIL;
 					n->accessMethod = $11;
-					n->options = $12;
+					n->options = ($12)->options;
 					n->oncommit = $13;
 					n->tablespacename = $14;
 					n->if_not_exists = false;
@@ -3237,13 +3260,14 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					$7->relpersistence = $2;
 					n->relation = $7;
 					n->tableElts = $11;
+					n->systemVersioned = ($15)->systemVersioned;
 					n->inhRelations = list_make1($10);
 					n->partbound = $12;
 					n->partspec = $13;
 					n->ofTypename = NULL;
 					n->constraints = NIL;
 					n->accessMethod = $14;
-					n->options = $15;
+					n->options = ($15)->options;
 					n->oncommit = $16;
 					n->tablespacename = $17;
 					n->if_not_exists = true;
@@ -3320,6 +3344,7 @@ TableElement:
 			columnDef							{ $$ = $1; }
 			| TableLikeClause					{ $$ = $1; }
 			| TableConstraint					{ $$ = $1; }
+			| optSystemTimeColumn					{ $$ = $1; }
 		;
 
 TypedTableElement:
@@ -3416,6 +3441,16 @@ ColConstraint:
 				}
 		;
 
+optSystemTimeColumn:
+			PERIOD FOR SYSTEM_P TIME '(' name ',' name ')'
+				{
+					RowTime *n = makeNode(RowTime);
+					n->start_time = $6;
+					n->end_time = $8;
+					$$ = (Node *)n;
+				}
+		;
+
 /* DEFAULT NULL is already the default for Postgres.
  * But define it here and carry it forward into the system
  * to make it explicit.
@@ -3498,12 +3533,12 @@ ColConstraintElem:
 					n->location = @1;
 					$$ = (Node *)n;
 				}
-			| GENERATED generated_when AS '(' a_expr ')' STORED
+			| GENERATED generated_when AS generated_type
 				{
 					Constraint *n = makeNode(Constraint);
-					n->contype = CONSTR_GENERATED;
+					n->contype = ($4)->contype;
 					n->generated_when = $2;
-					n->raw_expr = $5;
+					n->raw_expr = ($4)->raw_expr;
 					n->cooked_expr = NULL;
 					n->location = @1;
 
@@ -3521,6 +3556,7 @@ ColConstraintElem:
 
 					$$ = (Node *)n;
 				}
+
 			| REFERENCES qualified_name opt_column_list key_match key_actions
 				{
 					Constraint *n = makeNode(Constraint);
@@ -3541,6 +3577,30 @@ ColConstraintElem:
 generated_when:
 			ALWAYS			{ $$ = ATTRIBUTE_IDENTITY_ALWAYS; }
 			| BY DEFAULT	{ $$ = ATTRIBUTE_IDENTITY_BY_DEFAULT; }
+		;
+
+generated_type:
+			'(' a_expr ')' STORED
+				{
+					GenerateType *n = (GenerateType *) palloc(sizeof(GenerateType));
+					n->contype = CONSTR_GENERATED;
+					n->raw_expr = $2;
+					$$ = n;
+				}
+			| ROW START
+				{
+					GenerateType *n = (GenerateType *) palloc(sizeof(GenerateType));
+					n->contype = CONSTR_ROW_START_TIME;
+					n->raw_expr = NULL;
+					$$ = n;
+				}
+			| ROW END_P
+				{
+					GenerateType *n = (GenerateType *) palloc(sizeof(GenerateType));
+					n->contype = CONSTR_ROW_END_TIME;
+					n->raw_expr = NULL;
+					$$ = n;
+				}
 		;
 
 /*
@@ -3922,9 +3982,34 @@ table_access_method_clause:
 
 /* WITHOUT OIDS is legacy only */
 OptWith:
-			WITH reloptions				{ $$ = $2; }
-			| WITHOUT OIDS				{ $$ = NIL; }
-			| /*EMPTY*/					{ $$ = NIL; }
+			WITH reloptions
+				{
+					OptionWith *n = (OptionWith *) palloc(sizeof(OptionWith));
+					n->options = $2;
+					n->systemVersioned = false;
+					$$ = n;
+				}
+			| WITHOUT OIDS
+				{
+					OptionWith *n = (OptionWith *) palloc(sizeof(OptionWith));
+					n->options = NIL;
+					n->systemVersioned = false;
+					$$ = n;
+				}
+			| WITH SYSTEM_P VERSIONING
+				{
+					OptionWith *n = (OptionWith *) palloc(sizeof(OptionWith));
+					n->options = NIL;
+					n->systemVersioned = true;
+					$$ = n;
+				}
+			| /*EMPTY*/
+				{
+					OptionWith *n = (OptionWith *) palloc(sizeof(OptionWith));
+					n->options = NIL;
+					n->systemVersioned = false;
+					$$ = n;
+				}
 		;
 
 OnCommitOption:  ON COMMIT DROP				{ $$ = ONCOMMIT_DROP; }
@@ -4060,7 +4145,7 @@ create_as_target:
 					$$->rel = $1;
 					$$->colNames = $2;
 					$$->accessMethod = $3;
-					$$->options = $4;
+					$$->options = ($4)->options;
 					$$->onCommit = $5;
 					$$->tableSpaceName = $6;
 					$$->viewQuery = NULL;
@@ -15221,6 +15306,7 @@ unreserved_keyword:
 			| PARTITION
 			| PASSING
 			| PASSWORD
+			| PERIOD
 			| PLANS
 			| POLICY
 			| PRECEDING
@@ -15326,6 +15412,7 @@ unreserved_keyword:
 			| VALUE_P
 			| VARYING
 			| VERSION_P
+			| VERSIONING
 			| VIEW
 			| VIEWS
 			| VOLATILE

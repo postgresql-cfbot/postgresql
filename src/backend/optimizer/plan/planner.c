@@ -57,6 +57,8 @@
 #include "parser/analyze.h"
 #include "parser/parsetree.h"
 #include "parser/parse_agg.h"
+#include "parser/parse_clause.h"
+#include "parser/parse_relation.h"
 #include "partitioning/partdesc.h"
 #include "rewrite/rewriteManip.h"
 #include "storage/dsm_impl.h"
@@ -249,6 +251,9 @@ static bool group_by_has_partkey(RelOptInfo *input_rel,
 								 List *targetList,
 								 List *groupClause);
 static int	common_prefix_cmp(const void *a, const void *b);
+static bool check_system_versioned_columen( Node *node, RangeTblEntry *rte);
+static bool check_system_versioned_table( RangeTblEntry *rte);
+char * row_end_time_column_name(RangeTblEntry *rte);
 
 
 /*****************************************************************************
@@ -743,6 +748,67 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 		if (rte->securityQuals)
 			root->qual_security_level = Max(root->qual_security_level,
 											list_length(rte->securityQuals));
+	}
+
+	if (parse->commandType == CMD_SELECT)
+	{
+		foreach(l, parse->rtable)
+		{
+
+			RangeTblEntry *rte = lfirst_node(RangeTblEntry, l);
+
+			if(!check_system_versioned_table(rte) ||
+				check_system_versioned_columen(parse->jointree->quals, rte))
+			{
+				continue;
+			}
+			else
+			{
+				Node	   *wClause;
+				ParseState *pstate;
+				Relation    relation;
+				char *endColNme;
+				ColumnRef  *c;
+				A_Const *n ;
+
+				endColNme = row_end_time_column_name(rte);
+
+				c = makeNode(ColumnRef);
+				c->location = 0;
+				c->fields = lcons(makeString(endColNme), NIL);
+
+				n = makeNode(A_Const);
+				n->val.type = T_String;
+				n->val.val.str = "infinity";
+				n->location = 0;
+
+				wClause = (Node *) makeSimpleA_Expr(AEXPR_OP, "=", (Node *) c, (Node *)n , 0);
+				relation = heap_open(rte->relid, NoLock);
+
+				/*
+				 * Create a dummy ParseState and insert the target relation as its sole
+				 * rangetable entry.  We need a ParseState for transformExpr.
+				 */
+				pstate = make_parsestate(NULL);
+				rte = addRangeTableEntryForRelation(pstate,
+						relation,
+						AccessShareLock,
+						NULL,
+						false,
+						true);
+				addRTEtoQuery(pstate, rte, false, true, true);
+				wClause = transformWhereClause(pstate,
+						wClause,
+						EXPR_KIND_WHERE,
+						"WHERE");
+
+				if (parse->jointree->quals !=  NULL)
+					parse->jointree->quals =make_and_qual(parse->jointree->quals, wClause);
+				else
+					parse->jointree->quals = wClause;
+			}
+
+		}
 	}
 
 	/*
@@ -7403,4 +7469,88 @@ group_by_has_partkey(RelOptInfo *input_rel,
 	}
 
 	return true;
+}
+
+/*
+ * Check for references to system versioned columns
+ */
+static bool
+check_system_versioned_columen_walker(Node *node, RangeTblEntry *rte)
+{
+
+	if (node == NULL)
+		return false;
+	else if (IsA(node, Var))
+	{
+		Var		   *var = (Var *) node;
+		Oid			relid;
+		AttrNumber	attnum;
+		char		result;
+
+		relid = rte->relid;
+		attnum = var->varattno;
+		result  = get_attgenerated(relid, attnum);
+
+		if (OidIsValid(relid) && AttributeNumberIsValid(attnum) &&
+			( result == ATTRIBUTE_ROW_START_TIME || result == ATTRIBUTE_ROW_END_TIME))
+			return true;
+		else
+			return false;
+	}
+	else
+		return expression_tree_walker(node, check_system_versioned_columen_walker,
+				rte);
+}
+
+static bool
+check_system_versioned_columen( Node *node, RangeTblEntry *rte)
+{
+	return check_system_versioned_columen_walker(node, rte);
+}
+
+static bool
+check_system_versioned_table(RangeTblEntry *rte)
+{
+	Relation    rel;
+	TupleDesc	tupdesc;
+	bool        result = false;
+
+	if (rte->relid == 0)
+		return false;
+
+	rel = heap_open(rte->relid, NoLock);
+	tupdesc = RelationGetDescr(rel);
+	result = tupdesc->constr && tupdesc->constr->is_system_versioned;
+
+	heap_close(rel, NoLock);
+
+	return result;
+}
+
+char *
+row_end_time_column_name(RangeTblEntry *rte)
+{
+	Relation    relation;
+	TupleDesc	tupdesc;
+	char*	name;
+	int			natts;
+
+	relation = heap_open(rte->relid, NoLock);
+
+	tupdesc = RelationGetDescr(relation);
+	natts = tupdesc->natts;
+	for (int i = 0; i < natts; i++)
+	{
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
+
+		if (attr->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		{
+			name = NameStr(attr->attname);
+			break;
+		}
+	}
+
+	heap_close(relation, NoLock);
+
+	return name;
 }

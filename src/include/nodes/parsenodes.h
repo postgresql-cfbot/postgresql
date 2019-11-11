@@ -656,6 +656,8 @@ typedef struct ColumnDef
 	RangeVar   *identitySequence;	/* to store identity sequence name for
 									 * ALTER TABLE ... ADD COLUMN */
 	char		generated;		/* attgenerated setting */
+	char		starttime;		/* row star time */
+	char		endtime;		/* row end time */
 	CollateClause *collClause;	/* untransformed COLLATE spec, if any */
 	Oid			collOid;		/* collation OID (InvalidOid if not set) */
 	List	   *constraints;	/* other constraints on column */
@@ -2059,6 +2061,7 @@ typedef struct CreateStmt
 	char	   *tablespacename; /* table space to use, or NULL */
 	char	   *accessMethod;	/* table access method */
 	bool		if_not_exists;	/* just do nothing if it already exists? */
+	bool		systemVersioned; /* true when its is system versioned table */
 } CreateStmt;
 
 /* ----------
@@ -2108,7 +2111,9 @@ typedef enum ConstrType			/* types of constraints */
 	CONSTR_ATTR_DEFERRABLE,		/* attributes for previous constraint node */
 	CONSTR_ATTR_NOT_DEFERRABLE,
 	CONSTR_ATTR_DEFERRED,
-	CONSTR_ATTR_IMMEDIATE
+	CONSTR_ATTR_IMMEDIATE,
+	CONSTR_ROW_START_TIME,
+	CONSTR_ROW_END_TIME
 } ConstrType;
 
 /* Foreign key action codes */
@@ -3532,5 +3537,12 @@ typedef struct DropSubscriptionStmt
 	bool		missing_ok;		/* Skip error if missing? */
 	DropBehavior behavior;		/* RESTRICT or CASCADE behavior */
 } DropSubscriptionStmt;
+
+typedef struct RowTime
+{
+	NodeTag		type;
+	char	  *start_time;		/* Row start time */
+	char	 *end_time;		/* Row end time */
+} RowTime;
 
 #endif							/* PARSENODES_H */

@@ -4746,6 +4746,16 @@ _copyForeignKeyCacheInfo(const ForeignKeyCacheInfo *from)
 	return newnode;
 }
 
+static RowTime *
+_copyRowTime(const RowTime *from)
+{
+	RowTime *newnode = makeNode(RowTime);
+
+	COPY_STRING_FIELD(start_time);
+	COPY_STRING_FIELD(end_time);
+
+	return newnode;
+}
 
 /*
  * copyObjectImpl -- implementation of copyObject(); see nodes/nodes.h
@@ -5633,6 +5643,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_PartitionCmd:
 			retval = _copyPartitionCmd(from);
+			break;
+		case T_RowTime:
+			retval = _copyRowTime(from);
 			break;
 
 			/*

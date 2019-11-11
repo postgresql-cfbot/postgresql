@@ -57,6 +57,7 @@
 #include "pgstat.h"
 #include "storage/fd.h"
 #include "storage/shmem.h"
+#include "utils/fmgrprotos.h"
 #include "miscadmin.h"
 
 
@@ -1188,11 +1189,6 @@ SimpleLruTruncate(SlruCtl ctl, int cutoffPage)
 	int			slotno;
 
 	/*
-	 * The cutoff point is the start of the segment containing cutoffPage.
-	 */
-	cutoffPage -= cutoffPage % SLRU_PAGES_PER_SEGMENT;
-
-	/*
 	 * Scan shared memory and remove any pages preceding the cutoff page, to
 	 * ensure we won't rewrite them later.  (Since this is normally called in
 	 * or just after a checkpoint, any dirty pages should have been flushed
@@ -1208,6 +1204,21 @@ restart:;
 	 * have already wrapped around, and proceeding with the truncation would
 	 * risk removing the current segment.
 	 */
+	if (shared->ControlLock == CLogControlLock)
+	{
+		int test = shared->latest_page_number;
+		elog(WARNING, "important safety check: %d latest < %d cutoff?",
+			 shared->latest_page_number, cutoffPage);
+		while (test < 130000)
+		{
+			if (ctl->PagePrecedes(test, cutoffPage))
+			{
+				elog(WARNING, "safety check would trip at %d", test);
+				break;
+			}
+			test++;
+		}
+	}
 	if (ctl->PagePrecedes(shared->latest_page_number, cutoffPage))
 	{
 		LWLockRelease(shared->ControlLock);
@@ -1249,6 +1260,29 @@ restart:;
 	}
 
 	LWLockRelease(shared->ControlLock);
+
+#if 1
+	if (shared->ControlLock == CLogControlLock)
+	{
+		/* FIXME Move sleep duration into a GUC? */
+		if (LWLockConditionalAcquire(TruncSleepLock, LW_EXCLUSIVE))
+		{
+			elog(LOG, "TruncSleepLock taken: sleeping (%d)",
+				 cutoffPage);
+			DirectFunctionCall1(pg_sleep, Float8GetDatum(10.0));
+			/* TODO increase time, attach debugger and check caller vars */
+			LWLockRelease(TruncSleepLock);
+			elog(LOG, "TruncSleepLock done: proceeding");
+		}
+		else
+			elog(LOG, "TruncSleepLock unavailable: proceeding (%d)",
+				 cutoffPage);
+	}
+#endif
+
+	if (ctl->PagePrecedes(shared->latest_page_number, cutoffPage))
+		ereport(LOG,
+				(errmsg("too late, but apparent wraparound")));
 
 	/* Now we can remove the old segment(s) */
 	(void) SlruScanDirectory(ctl, SlruScanDirCbDeleteCutoff, &cutoffPage);
@@ -1337,11 +1371,10 @@ restart:
 bool
 SlruScanDirCbReportPresence(SlruCtl ctl, char *filename, int segpage, void *data)
 {
+	int			seg_last_page = segpage + SLRU_PAGES_PER_SEGMENT - 1;
 	int			cutoffPage = *(int *) data;
 
-	cutoffPage -= cutoffPage % SLRU_PAGES_PER_SEGMENT;
-
-	if (ctl->PagePrecedes(segpage, cutoffPage))
+	if (ctl->PagePrecedes(seg_last_page, cutoffPage))
 		return true;			/* found one; don't iterate any more */
 
 	return false;				/* keep going */
@@ -1354,9 +1387,10 @@ SlruScanDirCbReportPresence(SlruCtl ctl, char *filename, int segpage, void *data
 static bool
 SlruScanDirCbDeleteCutoff(SlruCtl ctl, char *filename, int segpage, void *data)
 {
+	int			seg_last_page = segpage + SLRU_PAGES_PER_SEGMENT - 1;
 	int			cutoffPage = *(int *) data;
 
-	if (ctl->PagePrecedes(segpage, cutoffPage))
+	if (ctl->PagePrecedes(seg_last_page, cutoffPage))
 		SlruInternalDeleteSegment(ctl, filename);
 
 	return false;				/* keep going */

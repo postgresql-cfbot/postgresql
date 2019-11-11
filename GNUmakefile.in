@@ -67,6 +67,20 @@ check check-tests installcheck installcheck-parallel installcheck-tests: CHECKPR
 check check-tests installcheck installcheck-parallel installcheck-tests: submake-generated-headers
 	$(MAKE) -C src/test/regress $@
 
+TEST_PGDATA_DATA=/var/tmp/test-pg
+trunc_check:
+	make -j20 install PROFILE=-O0
+	$(CC) -g -Wall -I`pg_config --includedir` -L`pg_config --libdir` -Wl,-R`pg_config --libdir` trunc-clog-concurrency.c -lpq -o trunc-clog-concurrency-tester
+	pg_ctl -m fast -w stop ||:
+	rm -rf $(TEST_PGDATA_DATA)
+	initdb -N $(TEST_PGDATA_DATA)
+	cp -p ~/conf-test-pg $(TEST_PGDATA_DATA)/postgresql.conf
+	echo "default_transaction_isolation = 'read committed'" >>$(TEST_PGDATA_DATA)/postgresql.conf
+	pg_ctl -w start
+	createdb
+	psql -Xc 'alter database template0 allow_connections on'
+	env time ./trunc-clog-concurrency-tester
+
 $(call recurse,check-world,src/test src/pl src/interfaces/ecpg contrib src/bin,check)
 $(call recurse,checkprep,  src/test src/pl src/interfaces/ecpg contrib src/bin)
 

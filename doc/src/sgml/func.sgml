@@ -21291,6 +21291,9 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
     <primary>pg_relation_size</primary>
    </indexterm>
    <indexterm>
+    <primary>pg_relation_block_number</primary>
+   </indexterm>
+   <indexterm>
     <primary>pg_size_bytes</primary>
    </indexterm>
    <indexterm>
@@ -21361,6 +21364,15 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
        <entry><type>bigint</type></entry>
        <entry>
         Shorthand for <literal>pg_relation_size(..., 'main')</literal>
+       </entry>
+      </row>
+      <row>
+       <entry>
+        <literal><function>pg_relation_block_number(<parameter>relation</parameter> <type>regclass</type>)</function></literal>
+        </entry>
+       <entry><type>bigint</type></entry>
+       <entry>
+        Shorthand for <literal>pg_relation_block_number(..., 'main')</literal>
        </entry>
       </row>
       <row>
@@ -21502,6 +21514,11 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
       </para>
      </listitem>
     </itemizedlist>
+   </para>
+
+   <para>
+    <function>pg_relation_block_number</function> accepts the OID or name of a table
+    and returns the number of blocks of that relation.
    </para>
 
    <para>

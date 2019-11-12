@@ -23,6 +23,7 @@
 #include "commands/tablespace.h"
 #include "miscadmin.h"
 #include "storage/fd.h"
+#include "storage/bufmgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/numeric.h"
@@ -329,6 +330,25 @@ pg_relation_size(PG_FUNCTION_ARGS)
 
 	size = calculate_relation_size(&(rel->rd_node), rel->rd_backend,
 								   forkname_to_number(text_to_cstring(forkName)));
+
+	relation_close(rel, AccessShareLock);
+
+	PG_RETURN_INT64(size);
+}
+
+Datum
+pg_relation_block_number(PG_FUNCTION_ARGS)
+{
+	Oid			relOid = PG_GETARG_OID(0);
+	Relation	rel;
+	int64		size;
+
+	rel = try_relation_open(relOid, AccessShareLock);
+
+	if (rel == NULL)
+		PG_RETURN_NULL();
+
+	size = RelationGetNumberOfBlocks(rel);
 
 	relation_close(rel, AccessShareLock);
 

@@ -752,5 +752,8 @@ slot_compile_deform(LLVMJitContext *context, TupleDesc desc,
 
 	LLVMDisposeBuilder(b);
 
+	/* optimize according to the chosen optimization settings */
+	llvm_optimize_function(context, v_deform_fn);
+
 	return v_deform_fn;
 }

@@ -2439,6 +2439,9 @@ llvm_compile_expr(ExprState *state)
 
 	LLVMDisposeBuilder(b);
 
+	/* optimize according to the chosen optimization settings */
+	llvm_optimize_function(context, eval_fn);
+
 	/*
 	 * Don't immediately emit function, instead do so the first time the
 	 * expression is actually evaluated. That allows to emit a lot of

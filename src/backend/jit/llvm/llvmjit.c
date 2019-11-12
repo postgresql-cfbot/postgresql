@@ -109,7 +109,7 @@ static void llvm_release_context(JitContext *context);
 static void llvm_session_initialize(void);
 static void llvm_shutdown(int code, Datum arg);
 static void llvm_compile_module(LLVMJitContext *context);
-static void llvm_optimize_module(LLVMJitContext *context, LLVMModuleRef module);
+static void llvm_optimize_module(LLVMJitContext *context);
 
 static void llvm_create_types(void);
 static uint64_t llvm_resolve_symbol(const char *name, void *ctx);
@@ -414,15 +414,49 @@ llvm_function_reference(LLVMJitContext *context,
 }
 
 /*
- * Optimize code in module using the flags set in context.
+ * Optimize code at the function-level for func using the flags set in context.
+ */
+void
+llvm_optimize_function(LLVMJitContext *context, LLVMValueRef func)
+{
+	LLVMPassManagerBuilderRef llvm_pmb;
+	LLVMPassManagerRef llvm_fpm;
+	int compile_optlevel = context->base.flags & PGJIT_OPT3;
+	instr_time starttime;
+	instr_time endtime;
+
+	INSTR_TIME_SET_CURRENT(starttime);
+
+	llvm_pmb = LLVMPassManagerBuilderCreate();
+	LLVMPassManagerBuilderSetOptLevel(llvm_pmb, compile_optlevel);
+	llvm_fpm = LLVMCreateFunctionPassManagerForModule(context->module);
+	if (compile_optlevel == 0)
+	{
+		/* we rely on mem2reg heavily, so emit even in the O0 case */
+		LLVMAddPromoteMemoryToRegisterPass(llvm_fpm);
+	}
+	LLVMPassManagerBuilderPopulateFunctionPassManager(llvm_pmb, llvm_fpm);
+
+	LLVMRunFunctionPassManager(llvm_fpm, func);
+
+	LLVMFinalizeFunctionPassManager(llvm_fpm);
+	LLVMDisposePassManager(llvm_fpm);
+	LLVMPassManagerBuilderDispose(llvm_pmb);
+
+	INSTR_TIME_SET_CURRENT(endtime);
+	INSTR_TIME_ACCUM_DIFF(context->base.instr.optimization_counter,
+						  endtime, starttime);
+}
+
+/*
+ * Optimize code at the module-level for the current module using the flags set
+ * in context.
  */
 static void
-llvm_optimize_module(LLVMJitContext *context, LLVMModuleRef module)
+llvm_optimize_module(LLVMJitContext *context)
 {
 	LLVMPassManagerBuilderRef llvm_pmb;
 	LLVMPassManagerRef llvm_mpm;
-	LLVMPassManagerRef llvm_fpm;
-	LLVMValueRef func;
 	int			compile_optlevel;
 
 	if (context->base.flags & PGJIT_OPT3)
@@ -437,32 +471,12 @@ llvm_optimize_module(LLVMJitContext *context, LLVMModuleRef module)
 	 */
 	llvm_pmb = LLVMPassManagerBuilderCreate();
 	LLVMPassManagerBuilderSetOptLevel(llvm_pmb, compile_optlevel);
-	llvm_fpm = LLVMCreateFunctionPassManagerForModule(module);
 
 	if (context->base.flags & PGJIT_OPT3)
 	{
 		/* TODO: Unscientifically determined threshold */
 		LLVMPassManagerBuilderUseInlinerWithThreshold(llvm_pmb, 512);
 	}
-	else
-	{
-		/* we rely on mem2reg heavily, so emit even in the O0 case */
-		LLVMAddPromoteMemoryToRegisterPass(llvm_fpm);
-	}
-
-	LLVMPassManagerBuilderPopulateFunctionPassManager(llvm_pmb, llvm_fpm);
-
-	/*
-	 * Do function level optimization. This could be moved to the point where
-	 * functions are emitted, to reduce memory usage a bit.
-	 */
-	LLVMInitializeFunctionPassManager(llvm_fpm);
-	for (func = LLVMGetFirstFunction(context->module);
-		 func != NULL;
-		 func = LLVMGetNextFunction(func))
-		LLVMRunFunctionPassManager(llvm_fpm, func);
-	LLVMFinalizeFunctionPassManager(llvm_fpm);
-	LLVMDisposePassManager(llvm_fpm);
 
 	/*
 	 * Perform module level optimization. We do so even in the non-optimized
@@ -525,7 +539,7 @@ llvm_compile_module(LLVMJitContext *context)
 
 	/* optimize according to the chosen optimization settings */
 	INSTR_TIME_SET_CURRENT(starttime);
-	llvm_optimize_module(context, context->module);
+	llvm_optimize_module(context);
 	INSTR_TIME_SET_CURRENT(endtime);
 	INSTR_TIME_ACCUM_DIFF(context->base.instr.optimization_counter,
 						  endtime, starttime);

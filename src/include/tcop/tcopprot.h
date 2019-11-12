@@ -66,6 +66,8 @@ extern void StatementCancelHandler(SIGNAL_ARGS);
 extern void FloatExceptionHandler(SIGNAL_ARGS) pg_attribute_noreturn();
 extern void RecoveryConflictInterrupt(ProcSignalReason reason); /* called from SIGUSR1
 																 * handler */
+/* recovery exit interrupt handling function */
+extern void HandleRecoveryExitInterrupt(void);
 extern void ProcessClientReadInterrupt(bool blocked);
 extern void ProcessClientWriteInterrupt(bool blocked);
 

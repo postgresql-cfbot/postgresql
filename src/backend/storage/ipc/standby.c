@@ -138,6 +138,15 @@ ShutdownRecoveryTransactionEnvironment(void)
 	VirtualXactLockTableCleanup();
 }
 
+/*
+ * SendRecoveryExitSignal
+ *		Signal backends that the server has exited recovery mode.
+ */
+void
+SendRecoveryExitSignal(void)
+{
+	SendSignalToAllBackends(PROCSIG_RECOVERY_EXIT);
+}
 
 /*
  * -----------------------------------------------------

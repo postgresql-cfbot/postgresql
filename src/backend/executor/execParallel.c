@@ -121,7 +121,7 @@ typedef struct ExecParallelInitializeDSMContext
 } ExecParallelInitializeDSMContext;
 
 /* Helper functions that run in the parallel leader. */
-static char *ExecSerializePlan(Plan *plan, EState *estate);
+static char *ExecSerializePlan(Plan *plan, EState *estate, uint64 queryId);
 static bool ExecParallelEstimate(PlanState *node,
 								 ExecParallelEstimateContext *e);
 static bool ExecParallelInitializeDSM(PlanState *node,
@@ -140,7 +140,7 @@ static DestReceiver *ExecParallelGetReceiver(dsm_segment *seg, shm_toc *toc);
  * Create a serialized representation of the plan to be sent to each worker.
  */
 static char *
-ExecSerializePlan(Plan *plan, EState *estate)
+ExecSerializePlan(Plan *plan, EState *estate, uint64 queryId)
 {
 	PlannedStmt *pstmt;
 	ListCell   *lc;
@@ -171,7 +171,7 @@ ExecSerializePlan(Plan *plan, EState *estate)
 	 */
 	pstmt = makeNode(PlannedStmt);
 	pstmt->commandType = CMD_SELECT;
-	pstmt->queryId = UINT64CONST(0);
+	pstmt->queryId = queryId;
 	pstmt->hasReturning = false;
 	pstmt->hasModifyingCTE = false;
 	pstmt->canSetTag = true;
@@ -560,7 +560,8 @@ ExecParallelSetupTupleQueues(ParallelContext *pcxt, bool reinitialize)
 ParallelExecutorInfo *
 ExecInitParallelPlan(PlanState *planstate, EState *estate,
 					 Bitmapset *sendParams, int nworkers,
-					 int64 tuples_needed)
+					 int64 tuples_needed,
+					 uint64 queryId)
 {
 	ParallelExecutorInfo *pei;
 	ParallelContext *pcxt;
@@ -601,7 +602,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	pei->planstate = planstate;
 
 	/* Fix up and serialize plan to be sent to workers. */
-	pstmt_data = ExecSerializePlan(planstate->plan, estate);
+	pstmt_data = ExecSerializePlan(planstate->plan, estate, queryId);
 
 	/* Create a parallel context. */
 	pcxt = CreateParallelContext("postgres", "ParallelQueryMain", nworkers);
@@ -1355,8 +1356,9 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	/* Setting debug_query_string for individual workers */
 	debug_query_string = queryDesc->sourceText;
 
-	/* Report workers' query for monitoring purposes */
+	/* Report workers' query and queryId for monitoring purposes */
 	pgstat_report_activity(STATE_RUNNING, debug_query_string);
+	pgstat_report_queryid(queryDesc->plannedstmt->queryId);
 
 	/* Attach to the dynamic shared memory area. */
 	area_space = shm_toc_lookup(toc, PARALLEL_KEY_DSA, false);

@@ -6507,6 +6507,11 @@ local0.*    /var/log/postgresql
              <entry>no</entry>
             </row>
             <row>
+             <entry><literal>%Q</literal></entry>
+             <entry>queryid: identifier of session's current query, if any</entry>
+             <entry>yes</entry>
+            </row>
+            <row>
              <entry><literal>%%</literal></entry>
              <entry>Literal <literal>%</literal></entry>
              <entry>no</entry>
@@ -6891,8 +6896,8 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       <listitem>
        <para>
         Enables the collection of information on the currently
-        executing command of each session, along with the time when
-        that command began execution. This parameter is on by
+        executing command of each session, along with its identifier and the
+        time when that command began execution. This parameter is on by
         default. Note that even when enabled, this information is not
         visible to all users, only to superusers and the user owning
         the session being reported on, so it should not represent a

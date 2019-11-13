@@ -117,7 +117,7 @@ int			DateOrder = DATEORDER_MDY;
 int			IntervalStyle = INTSTYLE_POSTGRES;
 
 bool		enableFsync = true;
-bool		allowSystemTableMods = false;
+bool		allowSystemTableDDL = false;
 int			work_mem = 1024;
 int			maintenance_work_mem = 16384;
 int			max_parallel_maintenance_workers = 2;

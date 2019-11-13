@@ -99,7 +99,7 @@ CreateSchemaCommand(CreateSchemaStmt *stmt, const char *queryString,
 	check_is_member_of_role(saved_uid, owner_uid);
 
 	/* Additional check to protect reserved schema names */
-	if (!allowSystemTableMods && IsReservedName(schemaName))
+	if (!allowSystemTableDDL && IsReservedName(schemaName))
 		ereport(ERROR,
 				(errcode(ERRCODE_RESERVED_NAME),
 				 errmsg("unacceptable schema name \"%s\"", schemaName),
@@ -275,7 +275,7 @@ RenameSchema(const char *oldname, const char *newname)
 		aclcheck_error(aclresult, OBJECT_DATABASE,
 					   get_database_name(MyDatabaseId));
 
-	if (!allowSystemTableMods && IsReservedName(newname))
+	if (!allowSystemTableDDL && IsReservedName(newname))
 		ereport(ERROR,
 				(errcode(ERRCODE_RESERVED_NAME),
 				 errmsg("unacceptable schema name \"%s\"", newname),

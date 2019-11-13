@@ -3601,7 +3601,7 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 				break;
 
 			case 'O':
-				SetConfigOption("allow_system_table_mods", "true", ctx, gucsource);
+				SetConfigOption("allow_system_table_ddl", "true", ctx, gucsource);
 				break;
 
 			case 'o':

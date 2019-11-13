@@ -864,7 +864,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 										  stmt->oncommit,
 										  reloptions,
 										  true,
-										  allowSystemTableMods,
+										  allowSystemTableDDL,
 										  false,
 										  InvalidOid,
 										  typaddress);
@@ -1443,7 +1443,7 @@ RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid, Oid oldRelOid,
 	}
 
 	/* In the case of an invalid index, it is fine to bypass this check */
-	if (!invalid_system_index && !allowSystemTableMods && IsSystemClass(relOid, classform))
+	if (!invalid_system_index && !allowSystemTableDDL && IsSystemClass(relOid, classform))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied: \"%s\" is a system catalog",
@@ -1925,7 +1925,7 @@ truncate_check_rel(Oid relid, Form_pg_class reltuple)
 		aclcheck_error(aclresult, get_relkind_objtype(reltuple->relkind),
 					   relname);
 
-	if (!allowSystemTableMods && IsSystemClass(relid, reltuple))
+	if (!allowSystemTableDDL && IsSystemClass(relid, reltuple))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied: \"%s\" is a system catalog",
@@ -2896,7 +2896,7 @@ renameatt_check(Oid myrelid, Form_pg_class classform, bool recursing)
 	if (!pg_class_ownercheck(myrelid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(get_rel_relkind(myrelid)),
 					   NameStr(classform->relname));
-	if (!allowSystemTableMods && IsSystemClass(myrelid, classform))
+	if (!allowSystemTableDDL && IsSystemClass(myrelid, classform))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied: \"%s\" is a system catalog",
@@ -5157,7 +5157,7 @@ ATSimplePermissions(Relation rel, int allowed_targets)
 		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(rel->rd_rel->relkind),
 					   RelationGetRelationName(rel));
 
-	if (!allowSystemTableMods && IsSystemRelation(rel))
+	if (!allowSystemTableDDL && IsSystemRelation(rel))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied: \"%s\" is a system catalog",
@@ -6701,7 +6701,7 @@ ATPrepSetStatistics(Relation rel, const char *colName, int16 colNum, Node *newVa
 	 * We do our own permission checking because (a) we want to allow SET
 	 * STATISTICS on indexes (for expressional index columns), and (b) we want
 	 * to allow SET STATISTICS on system catalogs without requiring
-	 * allowSystemTableMods to be turned on.
+	 * allowSystemTableDDL to be turned on.
 	 */
 	if (rel->rd_rel->relkind != RELKIND_RELATION &&
 		rel->rd_rel->relkind != RELKIND_MATVIEW &&
@@ -7353,7 +7353,7 @@ ATExecAddIndexConstraint(AlteredTableInfo *tab, Relation rel,
 									  constraintName,
 									  constraintType,
 									  flags,
-									  allowSystemTableMods,
+									  allowSystemTableDDL,
 									  false);	/* is_internal */
 
 	index_close(indexRel, NoLock);
@@ -7677,7 +7677,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 				 errmsg("referenced relation \"%s\" is not a table",
 						RelationGetRelationName(pkrel))));
 
-	if (!allowSystemTableMods && IsSystemRelation(pkrel))
+	if (!allowSystemTableDDL && IsSystemRelation(pkrel))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied: \"%s\" is a system catalog",
@@ -14843,7 +14843,7 @@ RangeVarCallbackOwnsRelation(const RangeVar *relation,
 		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(get_rel_relkind(relId)),
 					   relation->relname);
 
-	if (!allowSystemTableMods &&
+	if (!allowSystemTableDDL &&
 		IsSystemClass(relId, (Form_pg_class) GETSTRUCT(tuple)))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -14879,7 +14879,7 @@ RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid, Oid oldrelid,
 		aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(get_rel_relkind(relid)), rv->relname);
 
 	/* No system table modifications unless explicitly allowed. */
-	if (!allowSystemTableMods && IsSystemClass(relid, classform))
+	if (!allowSystemTableDDL && IsSystemClass(relid, classform))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied: \"%s\" is a system catalog",

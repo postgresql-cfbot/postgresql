@@ -1776,12 +1776,12 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"allow_system_table_mods", PGC_POSTMASTER, DEVELOPER_OPTIONS,
-			gettext_noop("Allows modifications of the structure of system tables."),
+		{"allow_system_table_ddl", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Allows DDL on system tables."),
 			NULL,
 			GUC_NOT_IN_SAMPLE
 		},
-		&allowSystemTableMods,
+		&allowSystemTableDDL,
 		false,
 		NULL, NULL, NULL
 	},

@@ -241,7 +241,7 @@ extern PGDLLIMPORT int IntervalStyle;
 #define MAXTZLEN		10		/* max TZ name len, not counting tr. null */
 
 extern bool enableFsync;
-extern PGDLLIMPORT bool allowSystemTableMods;
+extern PGDLLIMPORT bool allowSystemTableDDL;
 extern PGDLLIMPORT int work_mem;
 extern PGDLLIMPORT int maintenance_work_mem;
 extern PGDLLIMPORT int max_parallel_maintenance_workers;

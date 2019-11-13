@@ -278,6 +278,16 @@ typedef struct StdRdOptions
 #define HEAP_DEFAULT_FILLFACTOR		100
 
 /*
+ * PartitionedRelOptions
+ *     Binary representation of relation options for partitioned tables.
+ */
+typedef struct PartitionedRelOptions
+{
+   int32       vl_len_;        /* varlena header (do not touch directly!) */
+   /* No options defined yet */
+} PartitionedRelOptions;
+
+/*
  * RelationGetToastTupleTarget
  *		Returns the relation's toast_tuple_target.  Note multiple eval of argument!
  */

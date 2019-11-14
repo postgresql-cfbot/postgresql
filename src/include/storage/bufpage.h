@@ -366,7 +366,10 @@ PageValidateSpecialPointer(Page page)
 #define PageGetLSN(page) \
 	PageXLogRecPtrGet(((PageHeader) (page))->pd_lsn)
 #define PageSetLSN(page, lsn) \
-	PageXLogRecPtrSet(((PageHeader) (page))->pd_lsn, lsn)
+	do { \
+		Assert(PageGetLSN(page) <= lsn); \
+		PageXLogRecPtrSet(((PageHeader) (page))->pd_lsn, lsn); \
+	} while(0)
 
 #define PageHasFreeLinePointers(page) \
 	(((PageHeader) (page))->pd_flags & PD_HAS_FREE_LINES)

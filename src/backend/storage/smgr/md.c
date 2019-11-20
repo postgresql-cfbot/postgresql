@@ -248,11 +248,10 @@ mdcreate(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
  * During replay, we would delete the file and then recreate it, which is fine
  * if the contents of the file were repopulated by subsequent WAL entries.
  * But if we didn't WAL-log insertions, but instead relied on fsyncing the
- * file after populating it (as for instance CLUSTER and CREATE INDEX do),
- * the contents of the file would be lost forever.  By leaving the empty file
- * until after the next checkpoint, we prevent reassignment of the relfilenode
- * number until it's safe, because relfilenode assignment skips over any
- * existing file.
+ * file after populating it (as we do at wal_level=minimal), the contents of
+ * the file would be lost forever.  By leaving the empty file until after the
+ * next checkpoint, we prevent reassignment of the relfilenode number until
+ * it's safe, because relfilenode assignment skips over any existing file.
  *
  * We do not need to go through this dance for temp relations, though, because
  * we never make WAL entries for temp rels, and so a temp rel poses no threat

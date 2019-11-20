@@ -1014,6 +1014,7 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 				relfilenode2;
 	Oid			swaptemp;
 	char		swptmpchr;
+	Relation	rel1;
 
 	/* We need writable copies of both pg_class tuples. */
 	relRelation = table_open(RelationRelationId, RowExclusiveLock);
@@ -1039,6 +1040,7 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		 */
 		Assert(!target_is_pg_class);
 
+		/* swap relfilenodes, reltablespaces, relpersistence */
 		swaptemp = relform1->relfilenode;
 		relform1->relfilenode = relform2->relfilenode;
 		relform2->relfilenode = swaptemp;
@@ -1172,6 +1174,15 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		CacheInvalidateRelcacheByTuple(reltup1);
 		CacheInvalidateRelcacheByTuple(reltup2);
 	}
+
+	/*
+	 * Recognize that rel1's relfilenode (swapped from rel2) is new in this
+	 * subtransaction. Since the next step for rel2 is deletion, don't bother
+	 * recording the newness of its relfilenode.
+	 */
+	rel1 = relation_open(r1, AccessExclusiveLock);
+	RelationAssumeNewRelfilenode(rel1);
+	relation_close(rel1, NoLock);
 
 	/*
 	 * Post alter hook for modified relations. The change to r2 is always

@@ -29,8 +29,12 @@
 #include "miscadmin.h"
 #include "storage/freespace.h"
 #include "storage/smgr.h"
+#include "utils/hsearch.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+
+/* GUC variables */
+int	wal_skip_threshold = 64;  /* in kilobytes */
 
 /*
  * We keep a list of all relations (represented as RelFileNode values)
@@ -58,6 +62,7 @@ typedef struct PendingRelDelete
 	BackendId	backend;		/* InvalidBackendId if not a temp rel */
 	bool		atCommit;		/* T=delete at commit; F=delete at abort */
 	int			nestLevel;		/* xact nesting level of request */
+	bool		sync;			/* whether to fsync at commit */
 	struct PendingRelDelete *next;	/* linked-list link */
 } PendingRelDelete;
 
@@ -114,6 +119,8 @@ RelationCreateStorage(RelFileNode rnode, char relpersistence)
 	pending->backend = backend;
 	pending->atCommit = false;	/* delete if abort */
 	pending->nestLevel = GetCurrentTransactionNestLevel();
+	pending->sync =
+		relpersistence == RELPERSISTENCE_PERMANENT && !XLogIsNeeded();
 	pending->next = pendingDeletes;
 	pendingDeletes = pending;
 
@@ -155,6 +162,7 @@ RelationDropStorage(Relation rel)
 	pending->backend = rel->rd_backend;
 	pending->atCommit = true;	/* delete if commit */
 	pending->nestLevel = GetCurrentTransactionNestLevel();
+	pending->sync = false;
 	pending->next = pendingDeletes;
 	pendingDeletes = pending;
 
@@ -355,7 +363,9 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 
 	/*
 	 * We need to log the copied data in WAL iff WAL archiving/streaming is
-	 * enabled AND it's a permanent relation.
+	 * enabled AND it's a permanent relation.  This gives the same answer as
+	 * "RelationNeedsWAL(rel) || copying_initfork", because we know the
+	 * current operation created a new relfilenode.
 	 */
 	use_wal = XLogIsNeeded() &&
 		(relpersistence == RELPERSISTENCE_PERMANENT || copying_initfork);
@@ -397,22 +407,41 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 	}
 
 	/*
-	 * If the rel is WAL-logged, must fsync before commit.  We use heap_sync
-	 * to ensure that the toast table gets fsync'd too.  (For a temp or
-	 * unlogged rel we don't care since the data will be gone after a crash
-	 * anyway.)
-	 *
-	 * It's obvious that we must do this when not WAL-logging the copy. It's
-	 * less obvious that we have to do it even if we did WAL-log the copied
-	 * pages. The reason is that since we're copying outside shared buffers, a
-	 * CHECKPOINT occurring during the copy has no way to flush the previously
-	 * written data to disk (indeed it won't know the new rel even exists).  A
-	 * crash later on would replay WAL from the checkpoint, therefore it
-	 * wouldn't replay our earlier WAL entries. If we do not fsync those pages
-	 * here, they might still not be on disk when the crash occurs.
+	 * When we WAL-logged rel pages, we must nonetheless fsync them.  The
+	 * reason is that since we're copying outside shared buffers, a CHECKPOINT
+	 * occurring during the copy has no way to flush the previously written
+	 * data to disk (indeed it won't know the new rel even exists).  A crash
+	 * later on would replay WAL from the checkpoint, therefore it wouldn't
+	 * replay our earlier WAL entries. If we do not fsync those pages here,
+	 * they might still not be on disk when the crash occurs.
 	 */
-	if (relpersistence == RELPERSISTENCE_PERMANENT || copying_initfork)
+	if (use_wal || copying_initfork)
 		smgrimmedsync(dst, forkNum);
+}
+
+/*
+ * RelFileNodeSkippingWAL - check if a BM_PERMANENT relfilenode is using WAL
+ *
+ *   Changes of certain relfilenodes must not write WAL; see "Skipping WAL for
+ *   New RelFileNode" in src/backend/access/transam/README.  Though it is
+ *   known from Relation efficiently, this function is intended for the code
+ *   paths not having access to Relation.
+ */
+bool
+RelFileNodeSkippingWAL(RelFileNode rnode)
+{
+	PendingRelDelete *pending;
+
+	if (XLogIsNeeded())
+		return false;  /* no permanent relfilenode skips WAL */
+
+	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
+	{
+		if (RelFileNodeEquals(pending->relnode, rnode) && pending->sync)
+			return true;
+	}
+
+	return false;
 }
 
 /*
@@ -490,6 +519,145 @@ smgrDoPendingDeletes(bool isCommit)
 
 		pfree(srels);
 	}
+}
+
+/*
+ *	smgrDoPendingSyncs() -- Take care of relation syncs at commit.
+ *
+ * This should be called before smgrDoPendingDeletes() at every commit or
+ * prepare. Also this should be called before emitting WAL record so that sync
+ * failure prevents commit.
+ */
+void
+smgrDoPendingSyncs(void)
+{
+	PendingRelDelete *pending;
+	HTAB	*delhash = NULL;
+
+	if (XLogIsNeeded())
+		return;  /* no relation can use this */
+
+	Assert(GetCurrentTransactionNestLevel() == 1);
+	AssertPendingSyncs_RelationCache();
+
+	/*
+	 * Pending syncs on the relation that are to be deleted in this
+	 * transaction-end should be ignored. Collect pending deletes that will
+	 * happen in the following call to smgrDoPendingDeletes().
+	 */
+	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
+	{
+		bool found PG_USED_FOR_ASSERTS_ONLY;
+
+		if (!pending->atCommit)
+			continue;
+
+		/* create the hash if not yet */
+		if (delhash == NULL)
+		{
+			HASHCTL hash_ctl;
+
+			memset(&hash_ctl, 0, sizeof(hash_ctl));
+			hash_ctl.keysize = sizeof(RelFileNode);
+			hash_ctl.entrysize = sizeof(RelFileNode);
+			hash_ctl.hcxt = CurrentMemoryContext;
+			delhash =
+				hash_create("pending del temporary hash", 8, &hash_ctl,
+							HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+		}
+
+		(void) hash_search(delhash, (void *) &pending->relnode,
+						   HASH_ENTER, &found);
+		Assert(!found);
+	}
+
+	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
+	{
+		bool to_be_removed = false; /* don't sync if aborted */
+		ForkNumber fork;
+		BlockNumber nblocks[MAX_FORKNUM + 1];
+		BlockNumber total_blocks = 0;
+		SMgrRelation srel;
+
+		if (!pending->sync)
+			continue;
+		Assert(!pending->atCommit);
+
+		/* don't sync relnodes that is being deleted */
+		if (delhash)
+			hash_search(delhash, (void *) &pending->relnode,
+						HASH_FIND, &to_be_removed);
+		if (to_be_removed)
+			continue;
+
+		/* Now the time to sync the rnode */
+		srel = smgropen(pending->relnode, pending->backend);
+
+		/*
+		 * We emit newpage WAL records for smaller relations.
+		 *
+		 * Small WAL records have a chance to be emitted along with other
+		 * backends' WAL records. We emit WAL records instead of syncing for
+		 * files that are smaller than a certain threshold, expecting faster
+		 * commit. The threshold is defined by the GUC wal_skip_threshold.
+		 */
+		for (fork = 0 ; fork <= MAX_FORKNUM ; fork++)
+		{
+			if (smgrexists(srel, fork))
+			{
+				BlockNumber n = smgrnblocks(srel, fork);
+
+				/* we shouldn't come here for unlogged relations */
+				Assert(fork != INIT_FORKNUM);
+
+				nblocks[fork] = n;
+				total_blocks += n;
+			}
+			else
+				nblocks[fork] = InvalidBlockNumber;
+		}
+
+		/*
+		 * Sync file or emit WAL record for the file according to the total
+		 * size.
+		 */
+		if (total_blocks * BLCKSZ >= wal_skip_threshold * 1024)
+		{
+			/* Flush all buffers then sync the file */
+			FlushRelationBuffersWithoutRelcache(srel, false);
+
+			for (fork = 0; fork <= MAX_FORKNUM; fork++)
+			{
+				if (smgrexists(srel, fork))
+					smgrimmedsync(srel, fork);
+			}
+		}
+		else
+		{
+			/* Emit WAL records for all blocks. The file is small enough. */
+			for (fork = 0 ; fork <= MAX_FORKNUM ; fork++)
+			{
+				int    n        = nblocks[fork];
+				Relation rel;
+
+				if (!BlockNumberIsValid(n))
+					continue;
+
+				/*
+				 * Emit WAL for the whole file.  Unfortunately we don't know
+				 * what kind of a page this is, so we have to log the full
+				 * page including any unused space.  ReadBufferExtended()
+				 * counts some pgstat events; unfortunately, we discard them.
+				 */
+				rel = CreateFakeRelcacheEntry(srel->smgr_rnode.node);
+				log_newpage_range(rel, fork, 0, n, false);
+				FreeFakeRelcacheEntry(rel);
+			}
+		}
+	}
+
+	if (delhash)
+		hash_destroy(delhash);
 }
 
 /*

@@ -58,6 +58,7 @@
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
+#include "access/xlogutils.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
@@ -1515,6 +1516,8 @@ tblspc_redo(XLogReaderState *record)
 	else if (info == XLOG_TBLSPC_DROP)
 	{
 		xl_tblspc_drop_rec *xlrec = (xl_tblspc_drop_rec *) XLogRecGetData(record);
+
+		XLogForgetMissingDir(xlrec->ts_id, InvalidOid, "");
 
 		/*
 		 * If we issued a WAL record for a drop tablespace it implies that

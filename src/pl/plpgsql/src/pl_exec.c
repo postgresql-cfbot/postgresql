@@ -30,6 +30,7 @@
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "optimizer/clauses.h"
 #include "optimizer/optimizer.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_type.h"
@@ -6155,7 +6156,7 @@ exec_eval_simple_expr(PLpgSQL_execstate *estate,
 	 * updates made so far by our own function.
 	 */
 	oldcontext = MemoryContextSwitchTo(get_eval_mcontext(estate));
-	if (!estate->readonly_func)
+	if (!estate->readonly_func && expr->expr_needs_snapshot)
 	{
 		CommandCounterIncrement();
 		PushActiveSnapshot(GetTransactionSnapshot());
@@ -6180,7 +6181,7 @@ exec_eval_simple_expr(PLpgSQL_execstate *estate,
 
 	estate->paramLI->parserSetupArg = save_setup_arg;
 
-	if (!estate->readonly_func)
+	if (!estate->readonly_func && expr->expr_needs_snapshot)
 		PopActiveSnapshot();
 
 	MemoryContextSwitchTo(oldcontext);
@@ -8044,6 +8045,7 @@ exec_save_simple_expr(PLpgSQL_expr *expr, CachedPlan *cplan)
 	 * current transaction".
 	 */
 	expr->expr_simple_expr = tle_expr;
+	expr->expr_needs_snapshot = contain_mutable_functions((Node*)tle_expr);
 	expr->expr_simple_generation = cplan->generation;
 	expr->expr_simple_state = NULL;
 	expr->expr_simple_in_use = false;

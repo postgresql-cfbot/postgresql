@@ -243,6 +243,7 @@ typedef struct PLpgSQL_expr
 	 */
 	ExprState  *expr_simple_state;	/* eval tree for expr_simple_expr */
 	bool		expr_simple_in_use; /* true if eval tree is active */
+	bool		expr_needs_snapshot; /* true if simple expression calls non-immutable functions or performs subqueries */
 	LocalTransactionId expr_simple_lxid;
 } PLpgSQL_expr;
 

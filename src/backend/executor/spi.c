@@ -2458,6 +2458,7 @@ _SPI_convert_params(int nargs, Oid *argtypes,
 			prm->isnull = (Nulls && Nulls[i] == 'n');
 			prm->pflags = PARAM_FLAG_CONST;
 			prm->ptype = argtypes[i];
+			prm->textValue = NULL;
 		}
 	}
 	else

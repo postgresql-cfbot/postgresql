@@ -45,6 +45,7 @@ makeParamList(int numParams)
 	retval->parserSetup = NULL;
 	retval->parserSetupArg = NULL;
 	retval->numParams = numParams;
+	retval->hasTextValues = false;
 
 	return retval;
 }
@@ -91,6 +92,9 @@ copyParamList(ParamListInfo from)
 			continue;
 		get_typlenbyval(nprm->ptype, &typLen, &typByVal);
 		nprm->value = datumCopy(nprm->value, typByVal, typLen);
+
+		/* We don't copy text values, as no caller needs that at present. */
+		nprm->textValue = NULL;
 	}
 
 	return retval;
@@ -247,6 +251,9 @@ RestoreParamList(char **start_address)
 
 		/* Read datum/isnull. */
 		prm->value = datumRestore(start_address, &prm->isnull);
+
+		/* We don't copy text values, as no caller needs that at present. */
+		prm->textValue = NULL;
 	}
 
 	return paramLI;

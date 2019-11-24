@@ -79,6 +79,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
+#include "utils/portal.h"
 #include "utils/ps_status.h"
 
 
@@ -348,6 +349,7 @@ errstart(int elevel, const char *filename, int lineno,
 		{
 			error_context_stack = NULL;
 			debug_query_string = NULL;
+			current_top_portal = NULL;
 		}
 	}
 	if (++errordata_stack_depth >= ERRORDATA_STACK_SIZE)
@@ -2896,6 +2898,19 @@ write_csvlog(ErrorData *edata)
 	if (print_stmt && edata->cursorpos > 0)
 		appendStringInfo(&buf, "%d", edata->cursorpos);
 	appendStringInfoChar(&buf, ',');
+	if (print_stmt && log_parameters_on_error &&
+		PortalIsValid(current_top_portal))
+	{
+		char *params;
+
+		params = get_portal_bind_params(current_top_portal->portalParams);
+		if (params != NULL)
+		{
+			appendCSVLiteral(&buf, params);
+			pfree(params);
+		}
+	}
+	appendStringInfoChar(&buf, ',');
 
 	/* file error location */
 	if (Log_error_verbosity >= PGERROR_VERBOSE)
@@ -3059,6 +3074,19 @@ send_message_to_server_log(ErrorData *edata)
 		appendStringInfoString(&buf, _("STATEMENT:  "));
 		append_with_tabs(&buf, debug_query_string);
 		appendStringInfoChar(&buf, '\n');
+
+		if (log_parameters_on_error && PortalIsValid(current_top_portal))
+		{
+			char *params;
+
+			params = get_portal_bind_params(current_top_portal->portalParams);
+			if (params != NULL)
+			{
+				log_line_prefix(&buf, edata);
+				appendStringInfo(&buf, _("PARAMETERS:  %s\n"), params);
+				pfree(params);
+			}
+		}
 	}
 
 #ifdef HAVE_SYSLOG

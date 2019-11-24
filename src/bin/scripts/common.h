@@ -13,6 +13,7 @@
 #include "libpq-fe.h"
 #include "getopt_long.h"		/* pgrminclude ignore */
 #include "pqexpbuffer.h"		/* pgrminclude ignore */
+#include "fe_utils/cancel.h"
 
 enum trivalue
 {
@@ -59,11 +60,5 @@ extern void appendQualifiedRelation(PQExpBuffer buf, const char *name,
 									PGconn *conn, bool echo);
 
 extern bool yesno_prompt(const char *question);
-
-extern void setup_cancel_handler(void);
-
-extern void SetCancelConn(PGconn *conn);
-extern void ResetCancelConn(void);
-
 
 #endif							/* COMMON_H */

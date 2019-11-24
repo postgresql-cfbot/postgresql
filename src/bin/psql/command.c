@@ -29,6 +29,7 @@
 #include "libpq-fe.h"
 #include "pqexpbuffer.h"
 #include "common/logging.h"
+#include "fe_utils/cancel.h"
 #include "fe_utils/print.h"
 #include "fe_utils/string_utils.h"
 

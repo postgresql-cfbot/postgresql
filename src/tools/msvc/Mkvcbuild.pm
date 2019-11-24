@@ -143,7 +143,7 @@ sub mkvcbuild
 
 	our @pgfeutilsfiles = qw(
 	  conditional.c mbprint.c print.c psqlscan.l psqlscan.c
-	  simple_list.c string_utils.c recovery_gen.c);
+	  simple_list.c string_utils.c recovery_gen.c cancel.c);
 
 	$libpgport = $solution->AddProject('libpgport', 'lib', 'misc');
 	$libpgport->AddDefine('FRONTEND');

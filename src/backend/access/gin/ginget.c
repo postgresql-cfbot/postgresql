@@ -1231,11 +1231,12 @@ keyGetItem(GinState *ginstate, MemoryContext tempCtx, GinScanKey key,
  */
 static bool
 scanGetItem(IndexScanDesc scan, ItemPointerData advancePast,
-			ItemPointerData *item, bool *recheck)
+			ItemPointerData *item, bool *recheckp)
 {
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
 	uint32		i;
 	bool		match;
+	bool		recheck;
 
 	/*----------
 	 * Advance the scan keys in lock-step, until we find an item that matches
@@ -1262,6 +1263,8 @@ scanGetItem(IndexScanDesc scan, ItemPointerData advancePast,
 	{
 		ItemPointerSetMin(item);
 		match = true;
+		recheck = false;
+
 		for (i = 0; i < so->nkeys && match; i++)
 		{
 			GinScanKey	key = so->keys + i;
@@ -1270,43 +1273,54 @@ scanGetItem(IndexScanDesc scan, ItemPointerData advancePast,
 			keyGetItem(&so->ginstate, so->tempCtx, key, advancePast,
 					   scan->xs_snapshot);
 
-			if (key->isFinished)
-				return false;
-
-			/*
-			 * If it's not a match, we can immediately conclude that nothing
-			 * <= this item matches, without checking the rest of the keys.
-			 */
-			if (!key->curItemMatches)
+			if (!key->includeNonMatching)	/* postpone curItem checks */
 			{
-				advancePast = key->curItem;
-				match = false;
-				break;
-			}
+				if (key->isFinished)
+					return false;
 
-			/*
-			 * It's a match. We can conclude that nothing < matches, so the
-			 * other key streams can skip to this item.
-			 *
-			 * Beware of lossy pointers, though; from a lossy pointer, we can
-			 * only conclude that nothing smaller than this *block* matches.
-			 */
-			if (ItemPointerIsLossyPage(&key->curItem))
-			{
-				if (GinItemPointerGetBlockNumber(&advancePast) <
-					GinItemPointerGetBlockNumber(&key->curItem))
+				/*
+				 * If it's not a match, we can immediately conclude that
+				 * nothing <= this item matches, without checking the rest of
+				 * the keys.
+				 */
+				if (!key->curItemMatches)
 				{
+					advancePast = key->curItem;
+					match = false;
+					break;
+				}
+
+				/*
+				 * We must return recheck = true if any of the keys are marked
+				 * recheck.
+				 */
+				recheck |= key->recheckCurItem;
+
+				/*
+				 * It's a match. We can conclude that nothing < matches, so the
+				 * other key streams can skip to this item.
+				 *
+				 * Beware of lossy pointers, though; from a lossy pointer, we
+				 * can only conclude that nothing smaller than this *block*
+				 * matches.
+				 */
+				if (ItemPointerIsLossyPage(&key->curItem))
+				{
+					if (GinItemPointerGetBlockNumber(&advancePast) <
+						GinItemPointerGetBlockNumber(&key->curItem))
+					{
+						ItemPointerSet(&advancePast,
+									   GinItemPointerGetBlockNumber(&key->curItem),
+									   InvalidOffsetNumber);
+					}
+				}
+				else
+				{
+					Assert(GinItemPointerGetOffsetNumber(&key->curItem) > 0);
 					ItemPointerSet(&advancePast,
 								   GinItemPointerGetBlockNumber(&key->curItem),
-								   InvalidOffsetNumber);
+								   OffsetNumberPrev(GinItemPointerGetOffsetNumber(&key->curItem)));
 				}
-			}
-			else
-			{
-				Assert(GinItemPointerGetOffsetNumber(&key->curItem) > 0);
-				ItemPointerSet(&advancePast,
-							   GinItemPointerGetBlockNumber(&key->curItem),
-							   OffsetNumberPrev(GinItemPointerGetOffsetNumber(&key->curItem)));
 			}
 
 			/*
@@ -1322,9 +1336,18 @@ scanGetItem(IndexScanDesc scan, ItemPointerData advancePast,
 			if (i == 0)
 			{
 				*item = key->curItem;
+				/* The first key must be have includeNonMatching == false. */
+				Assert(key->includeNonMatching);
 			}
 			else
 			{
+				if (key->includeNonMatching && key->isFinished)
+				{
+					/* Accept all non-matching items after key was finished. */
+					recheck |= key->recheckNonMatching;
+					continue;
+				}
+
 				if (ItemPointerIsLossyPage(&key->curItem) ||
 					ItemPointerIsLossyPage(item))
 				{
@@ -1337,6 +1360,30 @@ scanGetItem(IndexScanDesc scan, ItemPointerData advancePast,
 					Assert(ginCompareItemPointers(&key->curItem, item) >= 0);
 					match = (ginCompareItemPointers(&key->curItem, item) == 0);
 				}
+
+				if (key->includeNonMatching)
+				{
+					/*
+					 * If the current item matches, then apply ordinary rules,
+					 * else force recheck if needed.
+					 */
+					if (match)
+					{
+						if (!key->curItemMatches)
+						{
+							advancePast = key->curItem;
+							match = false;
+							break;
+						}
+
+						recheck |= key->recheckCurItem;
+					}
+					else
+					{
+						match = true;
+						recheck |= key->recheckNonMatching;
+					}
+				}
 			}
 		}
 	} while (!match);
@@ -1347,20 +1394,8 @@ scanGetItem(IndexScanDesc scan, ItemPointerData advancePast,
 	 * Now *item contains the first ItemPointer after previous result that
 	 * satisfied all the keys for that exact TID, or a lossy reference to the
 	 * same page.
-	 *
-	 * We must return recheck = true if any of the keys are marked recheck.
 	 */
-	*recheck = false;
-	for (i = 0; i < so->nkeys; i++)
-	{
-		GinScanKey	key = so->keys + i;
-
-		if (key->recheckCurItem)
-		{
-			*recheck = true;
-			break;
-		}
-	}
+	*recheckp = recheck;
 
 	return true;
 }
@@ -1814,7 +1849,7 @@ scanPendingInsert(IndexScanDesc scan, TIDBitmap *tbm, int64 *ntids)
 		 * consistent functions.
 		 */
 		oldCtx = MemoryContextSwitchTo(so->tempCtx);
-		recheck = false;
+		recheck = so->forcedRecheck;
 		match = true;
 
 		for (i = 0; i < so->nkeys; i++)
@@ -1888,9 +1923,14 @@ gingetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	{
 		CHECK_FOR_INTERRUPTS();
 
+		/* Get next item ... */
 		if (!scanGetItem(scan, iptr, &iptr, &recheck))
 			break;
 
+		/* ... apply forced recheck if required ... */
+		recheck |= so->forcedRecheck;
+
+		/* ... and transfer it into bitmap */
 		if (ItemPointerIsLossyPage(&iptr))
 			tbm_add_page(tbm, ItemPointerGetBlockNumber(&iptr));
 		else

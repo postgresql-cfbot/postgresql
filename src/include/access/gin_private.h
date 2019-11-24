@@ -297,6 +297,12 @@ typedef struct GinScanKeyData
 	StrategyNumber strategy;
 	int32		searchMode;
 	OffsetNumber attnum;
+	/*
+	 * Include/recheck items from other scankeys that has no entries of this
+	 * scankey. (This is used for execution of ALL keys without a full scan.)
+	 */
+	bool		includeNonMatching;
+	bool		recheckNonMatching;
 
 	/*
 	 * Match status data.  curItem is the TID most recently tested (could be a
@@ -359,6 +365,7 @@ typedef struct GinScanOpaqueData
 	MemoryContext keyCtx;		/* used to hold key and entry data */
 
 	bool		isVoidRes;		/* true if query is unsatisfiable */
+	bool		forcedRecheck;	/* must recheck all returned tuples */
 } GinScanOpaqueData;
 
 typedef GinScanOpaqueData *GinScanOpaque;

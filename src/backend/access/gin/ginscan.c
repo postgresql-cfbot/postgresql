@@ -129,25 +129,37 @@ ginFillScanEntry(GinScanOpaque so, OffsetNumber attnum,
  * Initialize the next GinScanKey using the output from the extractQueryFn
  */
 static void
-ginFillScanKey(GinScanOpaque so, OffsetNumber attnum,
-			   StrategyNumber strategy, int32 searchMode,
+ginFillScanKey(GinScanOpaque so, GinScanKey	key, bool initHiddenEntries,
+			   OffsetNumber attnum, StrategyNumber strategy, int32 searchMode,
 			   Datum query, uint32 nQueryValues,
 			   Datum *queryValues, GinNullCategory *queryCategories,
 			   bool *partial_matches, Pointer *extra_data)
 {
-	GinScanKey	key = &(so->keys[so->nkeys++]);
 	GinState   *ginstate = &so->ginstate;
 	uint32		nUserQueryValues = nQueryValues;
+	uint32		nAllocatedQueryValues = nQueryValues;
 	uint32		i;
 
-	/* Non-default search modes add one "hidden" entry to each key */
+	if (key == NULL)
+		key = &(so->keys[so->nkeys++]);
+
+	/*
+	 * Non-default search modes add one "hidden" entry to each key, but this
+	 * entry is initialized only if requested by initHiddenEntries flag.
+	 */
 	if (searchMode != GIN_SEARCH_MODE_DEFAULT)
-		nQueryValues++;
+	{
+		nAllocatedQueryValues++;
+
+		if (initHiddenEntries)
+			nQueryValues++;
+	}
+
 	key->nentries = nQueryValues;
 	key->nuserentries = nUserQueryValues;
 
-	key->scanEntry = (GinScanEntry *) palloc(sizeof(GinScanEntry) * nQueryValues);
-	key->entryRes = (GinTernaryValue *) palloc0(sizeof(GinTernaryValue) * nQueryValues);
+	key->scanEntry = (GinScanEntry *) palloc(sizeof(GinScanEntry) * nAllocatedQueryValues);
+	key->entryRes = (GinTernaryValue *) palloc0(sizeof(GinTernaryValue) * nAllocatedQueryValues);
 
 	key->query = query;
 	key->queryValues = queryValues;
@@ -156,6 +168,8 @@ ginFillScanKey(GinScanOpaque so, OffsetNumber attnum,
 	key->strategy = strategy;
 	key->searchMode = searchMode;
 	key->attnum = attnum;
+	key->includeNonMatching = false;
+	key->recheckNonMatching = false;
 
 	ItemPointerSetMin(&key->curItem);
 	key->curItemMatches = false;
@@ -199,6 +213,11 @@ ginFillScanKey(GinScanOpaque so, OffsetNumber attnum,
 					break;
 				case GIN_SEARCH_MODE_EVERYTHING:
 					queryCategory = GIN_CAT_EMPTY_QUERY;
+					break;
+				case GIN_SEARCH_MODE_NOT_NULL:
+					queryCategory = GIN_CAT_EMPTY_QUERY;
+					/* use GIN_SEARCH_MODE_ALL to skip NULLs */
+					searchMode = GIN_SEARCH_MODE_ALL;
 					break;
 				default:
 					elog(ERROR, "unexpected searchMode: %d", searchMode);
@@ -265,6 +284,16 @@ ginNewScanKey(IndexScanDesc scan)
 	GinScanOpaque so = (GinScanOpaque) scan->opaque;
 	int			i;
 	bool		hasNullQuery = false;
+	bool		hasAllQuery = false;
+	bool		hasRegularQuery = false;
+	/*
+	 * GIN_FALSE - column has no search keys
+	 * GIN_TRUE  - NOT NULL is implied by some non-empty search key
+	 * GIN_MAYBE - NOT NULL is implied by some empty ALL key
+	 */
+	GinTernaryValue	colNotNull[INDEX_MAX_KEYS] = {0};
+	/* Number of GIN_MAYBE values in colNotNull[]  */
+	int			colNotNullCount = 0;
 	MemoryContext oldCtx;
 
 	/*
@@ -286,6 +315,7 @@ ginNewScanKey(IndexScanDesc scan)
 		palloc(so->allocentries * sizeof(GinScanEntry));
 
 	so->isVoidRes = false;
+	so->forcedRecheck = false;
 
 	for (i = 0; i < scan->numberOfKeys; i++)
 	{
@@ -297,6 +327,7 @@ ginNewScanKey(IndexScanDesc scan)
 		bool	   *nullFlags = NULL;
 		GinNullCategory *categories;
 		int32		searchMode = GIN_SEARCH_MODE_DEFAULT;
+		int			colno = skey->sk_attno - 1;
 
 		/*
 		 * We assume that GIN-indexable operators are strict, so a null query
@@ -310,8 +341,8 @@ ginNewScanKey(IndexScanDesc scan)
 
 		/* OK to call the extractQueryFn */
 		queryValues = (Datum *)
-			DatumGetPointer(FunctionCall7Coll(&so->ginstate.extractQueryFn[skey->sk_attno - 1],
-											  so->ginstate.supportCollation[skey->sk_attno - 1],
+			DatumGetPointer(FunctionCall7Coll(&so->ginstate.extractQueryFn[colno],
+											  so->ginstate.supportCollation[colno],
 											  skey->sk_argument,
 											  PointerGetDatum(&nQueryValues),
 											  UInt16GetDatum(skey->sk_strategy),
@@ -333,17 +364,75 @@ ginNewScanKey(IndexScanDesc scan)
 		if (searchMode != GIN_SEARCH_MODE_DEFAULT)
 			hasNullQuery = true;
 
-		/*
-		 * In default mode, no keys means an unsatisfiable query.
-		 */
+		/* Special cases for queries that contain no keys */
 		if (queryValues == NULL || nQueryValues <= 0)
 		{
 			if (searchMode == GIN_SEARCH_MODE_DEFAULT)
 			{
+				/* In default mode, no keys means an unsatisfiable query */
 				so->isVoidRes = true;
 				break;
 			}
+
 			nQueryValues = 0;	/* ensure sane value */
+		}
+
+		if (searchMode == GIN_SEARCH_MODE_ALL)
+		{
+			hasAllQuery = true;
+
+			/*
+			 * Increment the number of columns with NOT NULL constraints
+			 * if NOT NULL is not yet implied by some non-ALL key.
+			 */
+			if (colNotNull[colno] == GIN_FALSE)
+			{
+				colNotNull[colno] = GIN_MAYBE;
+				colNotNullCount++;
+			}
+
+			if (!nQueryValues)
+			{
+				/*
+				 * The query probably matches all non-null items, but rather
+				 * than scanning the index in ALL mode, we use forced rechecks
+				 * to verify matches of this scankey.  This wins if there are
+				 * any non-ALL scankeys; otherwise we end up adding a NOT_NULL
+				 * scankey below.
+				 */
+				GinScanKeyData key;
+				GinTernaryValue res;
+
+				/* Check whether unconditional recheck is needed. */
+				ginFillScanKey(so, &key, false, skey->sk_attno,
+							   skey->sk_strategy, searchMode,
+							   skey->sk_argument, 0,
+							   NULL, NULL, NULL, NULL);
+
+				res = key.triConsistentFn(&key);
+
+				if (res == GIN_FALSE)
+				{
+					so->isVoidRes = true;	/* unsatisfiable query */
+					break;
+				}
+
+				so->forcedRecheck |= res != GIN_TRUE;
+				continue;
+			}
+		}
+		else
+		{
+			hasRegularQuery = true;
+
+			/*
+			 * Current key implies that column is NOT NULL, so decrement the
+			 * number of columns with NOT NULL constraints.
+			 */
+			if (colNotNull[colno] == GIN_MAYBE)
+				colNotNullCount--;
+
+			colNotNull[colno] = GIN_TRUE;
 		}
 
 		/*
@@ -366,42 +455,146 @@ ginNewScanKey(IndexScanDesc scan)
 			}
 		}
 
-		ginFillScanKey(so, skey->sk_attno,
+		ginFillScanKey(so, NULL,
+					   /* postpone initialization of hidden ALL entry */
+					   searchMode != GIN_SEARCH_MODE_ALL,
+					   skey->sk_attno,
 					   skey->sk_strategy, searchMode,
 					   skey->sk_argument, nQueryValues,
 					   queryValues, categories,
 					   partial_matches, extra_data);
 	}
 
-	/*
-	 * If there are no regular scan keys, generate an EVERYTHING scankey to
-	 * drive a full-index scan.
-	 */
-	if (so->nkeys == 0 && !so->isVoidRes)
+	if (!so->isVoidRes)
 	{
-		hasNullQuery = true;
-		ginFillScanKey(so, FirstOffsetNumber,
-					   InvalidStrategy, GIN_SEARCH_MODE_EVERYTHING,
-					   (Datum) 0, 0,
-					   NULL, NULL, NULL, NULL);
-	}
+		/*
+		 * If there are no regular scan keys, generate one EVERYTHING or
+		 * several NOT_NULL scankeys to drive a full-index scan.
+		 */
+		if (so->nkeys == 0)
+		{
+			hasNullQuery = true;
 
-	/*
-	 * If the index is version 0, it may be missing null and placeholder
-	 * entries, which would render searches for nulls and full-index scans
-	 * unreliable.  Throw an error if so.
-	 */
-	if (hasNullQuery && !so->isVoidRes)
-	{
-		GinStatsData ginStats;
+			/* Initialize EVERYTHING key if there are no non-NULL columns. */
+			if (!colNotNullCount)
+			{
+				ginFillScanKey(so, NULL, true, FirstOffsetNumber,
+							   InvalidStrategy, GIN_SEARCH_MODE_EVERYTHING,
+							   (Datum) 0, 0, NULL, NULL, NULL, NULL);
+			}
+			else
+			{
+				/* Initialize NOT_NULL key for each non-NULL column. */
+				for (i = 0; i < scan->indexRelation->rd_att->natts; i++)
+				{
+					if (colNotNull[i] == GIN_MAYBE)
+						ginFillScanKey(so, NULL, true, i + 1, InvalidStrategy,
+									   GIN_SEARCH_MODE_NOT_NULL, (Datum) 0, 0,
+									   NULL, NULL, NULL, NULL);
+				}
+			}
+		}
+		else
+		{
+			if (hasAllQuery)
+			{
+				GinScanKey	nonAllKey = NULL;
+				int			nkeys = so->nkeys;
+				int			i = 0;
 
-		ginGetStats(scan->indexRelation, &ginStats);
-		if (ginStats.ginVersion < 1)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("old GIN indexes do not support whole-index scans nor searches for nulls"),
-					 errhint("To fix this, do REINDEX INDEX \"%s\".",
-							 RelationGetRelationName(scan->indexRelation))));
+				/*
+				 * Finalize non-empty ALL keys: if we have regular keys, enable
+				 * includeNonMatching mode in ALL keys, otherwise initialize
+				 * previously skipped hidden ALL entries.
+				 */
+				for (i = 0; i < nkeys; i++)
+				{
+					GinScanKey	key = &so->keys[i];
+
+					if (key->searchMode != GIN_SEARCH_MODE_ALL)
+					{
+						nonAllKey = key;
+					}
+					else if (hasRegularQuery)
+					{
+						memset(key->entryRes, GIN_FALSE, key->nentries);
+
+						switch (key->triConsistentFn(key))
+						{
+							case GIN_TRUE:
+								key->includeNonMatching = true;
+								key->recheckNonMatching = false;
+								break;
+							case GIN_MAYBE:
+								key->includeNonMatching = true;
+								key->recheckNonMatching = true;
+							default:
+								/*
+								 * Items with no matching entries are not
+								 * accepted, leave the key as is.
+								 */
+								break;
+						}
+					}
+					else
+					{
+						/* Initialize missing hidden ALL entry */
+						key->scanEntry[key->nentries++] =
+							ginFillScanEntry(so, key->attnum, key->strategy,
+											 GIN_SEARCH_MODE_ALL, (Datum) 0,
+											 GIN_CAT_EMPTY_QUERY, false, NULL);
+
+						/*
+						 * ALL entry implies NOT NULL, so update the number of
+						 * NOT NULL columns.
+						 */
+						if (colNotNull[key->attnum - 1] == GIN_MAYBE)
+						{
+							colNotNull[key->attnum - 1] = GIN_TRUE;
+							colNotNullCount--;
+						}
+					}
+				}
+
+				/* Move some non-ALL key to the beginning (see scanGetItem()) */
+				if (so->keys[0].includeNonMatching)
+				{
+					GinScanKeyData tmp = so->keys[0];
+
+					Assert(nonAllKey);
+
+					so->keys[0] = *nonAllKey;
+					*nonAllKey = tmp;
+				}
+			}
+
+			if (colNotNullCount > 0)
+			{
+				/*
+				 * We use recheck instead of adding NOT_NULL entries to
+				 * eliminate rows with NULL columns.
+				 */
+				so->forcedRecheck = true;
+			}
+		}
+
+		/*
+		 * If the index is version 0, it may be missing null and placeholder
+		 * entries, which would render searches for nulls and full-index scans
+		 * unreliable.  Throw an error if so.
+		 */
+		if (hasNullQuery)
+		{
+			GinStatsData ginStats;
+
+			ginGetStats(scan->indexRelation, &ginStats);
+			if (ginStats.ginVersion < 1)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("old GIN indexes do not support whole-index scans nor searches for nulls"),
+						 errhint("To fix this, do REINDEX INDEX \"%s\".",
+								 RelationGetRelationName(scan->indexRelation))));
+		}
 	}
 
 	MemoryContextSwitchTo(oldCtx);

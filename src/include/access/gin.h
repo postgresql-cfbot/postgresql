@@ -34,6 +34,7 @@
 #define GIN_SEARCH_MODE_INCLUDE_EMPTY	1
 #define GIN_SEARCH_MODE_ALL				2
 #define GIN_SEARCH_MODE_EVERYTHING		3	/* for internal use only */
+#define GIN_SEARCH_MODE_NOT_NULL		4	/* for internal use only */
 
 /*
  * GinStatsData represents stats data for planner use

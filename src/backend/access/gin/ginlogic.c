@@ -224,7 +224,8 @@ shimTriConsistentFn(GinScanKey key)
 void
 ginInitConsistentFunction(GinState *ginstate, GinScanKey key)
 {
-	if (key->searchMode == GIN_SEARCH_MODE_EVERYTHING)
+	if (key->searchMode == GIN_SEARCH_MODE_EVERYTHING ||
+		key->searchMode == GIN_SEARCH_MODE_NOT_NULL)
 	{
 		key->boolConsistentFn = trueConsistentFn;
 		key->triConsistentFn = trueTriConsistentFn;

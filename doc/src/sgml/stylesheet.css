@@ -101,6 +101,8 @@ var		{ font-family: monospace; font-style: italic; }
 /* Konqueror's standard style for ACRONYM is italic. */
 acronym		{ font-style: inherit; }
 
+glossaryterm { font-style: inherit; }
+
 .option		{ white-space: nowrap; }
 
 /* make images not too wide on larger screens */

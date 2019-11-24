@@ -1,0 +1,618 @@
+<!-- doc/src/sgml/glossary.sgml -->
+
+<appendix id="glossary">
+ <title>Glossary</title>
+
+ <para>
+  This is a list of terms and their in the context of <productname>PostgreSQL</productname> and databases in general.
+
+  <variablelist>
+
+   <varlistentry>
+    <term><glossaryterm>Aggregate</glossaryterm></term>
+    <listitem>
+     <para>
+      To combine a collection of data values into a single value, whose value
+may not be of the same type as the original values. Aggregate functions combine
+multiple rows that share a common set of values into one row, which means that
+the only data visible in the values in common, and the aggregates of the
+non-common data.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Analytic</glossaryterm></term>
+    <listitem>
+     <para>
+      A function whose computed value can reference values found in nearby rows
+of the same result set.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Atomic</glossaryterm></term>
+    <listitem>
+     <para>
+      In reference to the value of an Attribute or Datum: cannot be broken up
+into smaller components.
+     </para>
+     <para>
+      In reference to an operation: An event that cannot be completed in part:
+it must either entirely succeed or entirely fail. A series of SQL statements can
+be combined into a Transaction, and that transaction is said to be Atomic.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Attribute</glossaryterm></term>
+    <listitem>
+     <para>
+      A typed data element found within a Tuple or Relation or Table.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Cast</glossaryterm></term>
+    <listitem>
+     <para>
+      A conversion of a Datum from its current data type to another data type.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Check Constraint</glossaryterm></term>
+    <listitem>
+     <para>
+      A type of constraint defined on a relation which restricts the values
+allowed in one or more Attributes. The check constraint can make reference to
+any Attribute in the Relation, but cannot reference other rows of the same
+relation or other relations.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Column</glossaryterm></term>
+    <listitem>
+     <para>
+      An Attribute found in a Table or View.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Commit</glossaryterm></term>
+    <listitem>
+     <para>
+      The act of finalizing a Transaction within the database.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Concurrency</glossaryterm></term>
+    <listitem>
+     <para>
+      The concept that multiple independent operations can be happening within
+the database at the same time.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Constraint</glossaryterm></term>
+    <listitem>
+     <para>
+      A method of restricting the values of data allowed within a Table.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Datum</glossaryterm></term>
+    <listitem>
+     <para>
+      The internal representation of a SQL Datatype.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Delete</glossaryterm></term>
+    <listitem>
+     <para>
+	  A SQL command whose purpose is to remove rows from a given Table or
+relation.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Foreign Data Wrapper</glossaryterm></term>
+    <listitem>
+     <para>
+      A means of representing data that is not contained in the local database
+as if were in local tables. With a Foreign Data Wrapper it is possible to define
+a Foreign Server and Foreign Tables.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Foreign Key</glossaryterm></term>
+    <listitem>
+     <para>
+      A type of Constraint defined on one or more columns in a Table which requires the
+value in those columns to uniquely identify a row in the specified table.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Foreign Server</glossaryterm></term>
+    <listitem>
+     <para>
+      A named collection of Foreign Tables which all use the same Foreign Data
+Wrapper and have other configured attributes in common.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Foreign Table</glossaryterm></term>
+    <listitem>
+     <para>
+      A relation which appears to have Rows and Columns like a regular Table,
+but when queried will instead forward the request for data through its Foreign
+Data Wrapper, which will return results structured according to the definition
+of the Foreign Table.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Function</glossaryterm></term>
+    <listitem>
+     <para>
+      Any pre-defined tranformation of data. Many functions are already defined
+within PostgreSQL itsel, but can also be user-defined.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Grant</glossaryterm></term>
+    <listitem>
+     <para>
+      A SQL command that is used to enable Users or Roles to access specific
+objects within the database.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Index</glossaryterm></term>
+    <listitem>
+     <para>
+      A relation that contains data derived from a Table (or Relation like a
+Materialized View) that stores the data in a way that makes specific values
+easier to retrieve.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Insert</glossaryterm></term>
+    <listitem>
+     <para>
+      A SQL command used to add new data into a Table.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Join</glossaryterm></term>
+    <listitem>
+     <para>
+      A Join is a technique used with Select statements for correlating data in
+one Data Set (usually a Table) with another.
+      TODO
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Key</glossaryterm></term>
+    <listitem>
+     <para>
+      A Key is a means of identifying a row within a Table or Relation by values
+contained within one or more Attributes in that Table.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Lock</glossaryterm></term>
+    <listitem>
+     <para>
+      A mechanism for one process temporarily preventing data from being
+manipulated by any other process.
+      TODO
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Logged</glossaryterm></term>
+    <listitem>
+     <para>
+      A table is considered Logged if changes to the table are send to the WAL
+log. By default, all regular tables are logged. A table can be speficied as
+unlogged either at creation time or via the ALTER TABLE command. The primary use
+of unlogged tables is for storing transient work data that must be shared across
+processes, but with a final result stored in logged tables.  Temporary tables are
+always unlogged.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Master</glossaryterm></term>
+    <listitem>
+     <para>
+      When two or more databases are linked via replication, the server that is
+considered the authoritative source of information is called the Master.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Materialized</glossaryterm></term>
+    <listitem>
+     <para>
+      The act of storing information rather than just the means of accessing the
+information. This term is used in Materialized Views meaning that the data
+derived from the view is actually stored on disk separate from the sources of
+that data. When materialized is used in speaking about mulit-step queries, it
+means that the data of a given step is stored (in memory, but that storage may
+spill over onto disk)
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Materialized View</glossaryterm></term>
+    <listitem>
+     <para>
+      A Relation that is defined in the same way that a View is, but it stores
+data in the same way that a Table does. it cannot be modified via INSERT,
+UPDATE, or DELETE operations.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Null</glossaryterm></term>
+    <listitem>
+     <para>
+      A concept of non-existence that is a central tenet of Relational Database
+Theory. It represents the absence of value.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Partition</glossaryterm></term>
+    <listitem>
+     <para>
+      A Table that can be queried independently by its own name, but can also be
+queried via another table, a partitioend table, which is a collection of
+sub-tables, each capable of holding one defined subset of information that does
+not overlap with any other table in the set of tables.
+     </para>
+     <para>
+      A defined boundary used in an Analytic function to identify which
+neighboring rows can be considered by the function for this particular row.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Primary Key</glossaryterm></term>
+    <listitem>
+     <para>
+      A Unique Index defined on a Table or other Relation that also guarantees
+that all of the Attributes within the Primary Key do not have null values.
+As the name implies, there can be only one Primary Key per table, though it is
+possible to have multiple Unique Indexes that also have no null-capable
+attributes.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Procedure</glossaryterm></term>
+    <listitem>
+     <para>
+      A defined set of instructions for manipulating data within a database.
+Procedures can be written in a variety of programming languages. They may appear
+like Functions but are different in that they must be invoked via the CALL
+command rather than the SELECT or PERFORM commands, and they are allowed to make
+transactional statements like COMMIT and ROLLBACK.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Record</glossaryterm></term>
+    <listitem>
+     <para>
+      A data structure that consists of one or more Attributes in a defined
+order.
+     <para>
+      A single row of a Table or other Relation.
+     </para>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Referential Integrity</glossaryterm></term>
+    <listitem>
+     <para>
+      The means of restricting data in one Relation such that it must have
+matching data in another Relation.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Relation</glossaryterm></term>
+    <listitem>
+     <para>
+      The generic term for all objects in a database that have a name and a
+list of attributes defined in a specific order. Tables, Views, Foreign Tables,
+Materialized Views and Indexes are all Relations.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Replica</glossaryterm></term>
+    <listitem>
+     <para>
+      A database that is paired with a Master database and is maintaining a copy
+of some or all of the Master database's data. The primary reasons for doing this
+are to allow for greater access to that data, and to maintain availability of
+the data in the even that the master becomes unavailable.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Revoke</glossaryterm></term>
+    <listitem>
+     <para>
+      A command to reduce access to a named set of database objects for a named
+list of users and Roles.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Role</glossaryterm></term>
+    <listitem>
+     <para>
+      A collection of access privileges to the database. Roles are themselves a
+privilege that can be granted to other roles. This is often done for convenience
+or to ensure completeness when multiple Users need the same privileges.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Rollback</glossaryterm></term>
+    <listitem>
+     <para>
+      A command to undo all of the operations performed since the beginning of a
+transaction.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Row</glossaryterm></term>
+    <listitem>
+     <para>
+      A tuple or record found within a Relation or a Result Set. This term is
+often used interchangably with Record and Tuple.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Schema</glossaryterm></term>
+    <listitem>
+     <para>
+      A named collection of database objects organized to facilitate clarity or
+security. Most often used like a namespace is used in programming languages.
+All objects belong to exactly one schema, most commonly "public", the default
+schema.
+     </para>
+     <para>
+      More generically, the term Schema is used to mean all data descriptions
+(table definitions, constraints, comments) for a given database.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Select</glossaryterm></term>
+    <listitem>
+     <para>
+      The command used to query a database. Normally, SELECTs are not expected
+to modify the database in any way, but it is possible that functions invoked
+within the query could have side-effects that do modify data.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Serializable</glossaryterm></term>
+    <listitem>
+     <para>
+      Database sessions in a transaction defined as SERIALIZABLE are unable to see changes made
+to the database by other sessions. In effect, the entire database appears to be
+frozen in time for the duration of the transaction.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Session</glossaryterm></term>
+    <listitem>
+     <para>
+      A connection to the database.
+     </para>
+     <para>
+      A description of the commands that were issued in the life cycle of a
+particular connection to the database.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Table</glossaryterm></term>
+    <listitem>
+     <para>
+      A collection of tuples (also known as rows or records) having a common data structure (the same number of columns, in the same order, having the same type). A table is the most common form of relation in <productname>PostgreSQL</productname>. 
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Temporary</glossaryterm></term>
+    <listitem>
+     <para>
+      Temporary tables are tables that exist either for the lifetime of a
+Session or a Transaction, as defined at creation time. The data in them is not
+visible to other Sessions, and is not logged. Temporary tables are most often
+used to store intermediate data for a multi-step data transformation.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Transaction</glossaryterm></term>
+    <listitem>
+     <para>
+      A combination of one or more commands that must act as a single Atomic
+command: they all succeed or fail together, and their effects are not visible to
+other sessions until the transaction is complete.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Trigger</glossaryterm></term>
+    <listitem>
+     <para>
+      A function which can be defined to execute whenever a certain operation
+(Insert, Update, or Delete) is applied to that Relation. A trigger executes
+within the same transaction as the statement which invoked it, and if the
+function fails then the invoking statement also fails.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Tuple</glossaryterm></term>
+    <listitem>
+     <para>
+      A collection of Attributes in a fixed order. That order may be defined by
+the Table where the Tuple is found, in which case the Tuple is often called a
+Row or Record. It may also be defined by the structure of a Result Set.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Unique</glossaryterm></term>
+    <listitem>
+     <para>
+      The condition of having no matching values in the same Relation. Most
+often used in the concept of Unique Indexes.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Unlogged</glossaryterm></term>
+    <listitem>
+     <para>
+      A relation that is unlogged will not have changes reflected in the WAL
+log, which would enable those changes to be duplicated on a replica, and also
+enables the change to survive a database crash.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Update</glossaryterm></term>
+    <listitem>
+     <para>
+      A command used to modify rows that already exist in a specified table. It
+cannot create rows nor can it remove rows.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>User</glossaryterm></term>
+    <listitem>
+     <para>
+      A specific case of a Role that is entitled to access (log into) the
+database.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>User Mapping</glossaryterm></term>
+    <listitem>
+     <para>
+      The translation of user credentials in the local database to credentials
+in a remote data system defined by a Foreign Data Wrapper.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>View</glossaryterm></term>
+    <listitem>
+     <para>
+      A Relation that is defined by a Select Statement, but has no storage of its own. Any
+time a query references a View, the definition of the view is substituted into
+the query as if the user had typed that subquery instead of the name of the
+view.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><glossaryterm>Window Function</glossaryterm></term>
+    <listitem>
+     <para>
+      A type of function similar to an aggregate in that can derive its value
+from a set of rows in a result set, but still retaining the original source
+data.
+     </para>
+    </listitem>
+   </varlistentry>
+
+</appendix>

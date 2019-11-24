@@ -24,6 +24,7 @@
 
 #include "access/nbtree.h"
 #include "access/nbtxlog.h"
+#include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
@@ -42,12 +43,18 @@ static bool _bt_lock_branch_parent(Relation rel, BlockNumber child,
 								   BlockNumber *target, BlockNumber *rightsib);
 static void _bt_log_reuse_page(Relation rel, BlockNumber blkno,
 							   TransactionId latestRemovedXid);
+static TransactionId _bt_compute_xid_horizon_for_tuples(Relation rel,
+														Relation heapRel,
+														Buffer buf,
+														OffsetNumber *itemnos,
+														int nitems);
 
 /*
  *	_bt_initmetapage() -- Fill a page buffer with a correct metapage image
  */
 void
-_bt_initmetapage(Page page, BlockNumber rootbknum, uint32 level)
+_bt_initmetapage(Page page, BlockNumber rootbknum, uint32 level,
+				 bool safededup)
 {
 	BTMetaPageData *metad;
 	BTPageOpaque metaopaque;
@@ -63,6 +70,7 @@ _bt_initmetapage(Page page, BlockNumber rootbknum, uint32 level)
 	metad->btm_fastlevel = level;
 	metad->btm_oldest_btpo_xact = InvalidTransactionId;
 	metad->btm_last_cleanup_num_heap_tuples = -1.0;
+	metad->btm_safededup = safededup;
 
 	metaopaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	metaopaque->btpo_flags = BTP_META;
@@ -102,6 +110,9 @@ _bt_upgrademetapage(Page page)
 	metad->btm_version = BTREE_NOVAC_VERSION;
 	metad->btm_oldest_btpo_xact = InvalidTransactionId;
 	metad->btm_last_cleanup_num_heap_tuples = -1.0;
+	/* Only a REINDEX can set this field */
+	Assert(!metad->btm_safededup);
+	metad->btm_safededup = false;
 
 	/* Adjust pd_lower (see _bt_initmetapage() for details) */
 	((PageHeader) page)->pd_lower =
@@ -213,6 +224,7 @@ _bt_update_meta_cleanup_info(Relation rel, TransactionId oldestBtpoXact,
 		md.fastlevel = metad->btm_fastlevel;
 		md.oldest_btpo_xact = oldestBtpoXact;
 		md.last_cleanup_num_heap_tuples = numHeapTuples;
+		md.btm_safededup = metad->btm_safededup;
 
 		XLogRegisterBufData(0, (char *) &md, sizeof(xl_btree_metadata));
 
@@ -274,6 +286,8 @@ _bt_getroot(Relation rel, int access)
 		Assert(metad->btm_magic == BTREE_MAGIC);
 		Assert(metad->btm_version >= BTREE_MIN_VERSION);
 		Assert(metad->btm_version <= BTREE_VERSION);
+		Assert(!metad->btm_safededup ||
+			   metad->btm_version > BTREE_NOVAC_VERSION);
 		Assert(metad->btm_root != P_NONE);
 
 		rootblkno = metad->btm_fastroot;
@@ -394,6 +408,7 @@ _bt_getroot(Relation rel, int access)
 			md.fastlevel = 0;
 			md.oldest_btpo_xact = InvalidTransactionId;
 			md.last_cleanup_num_heap_tuples = -1.0;
+			md.btm_safededup = metad->btm_safededup;
 
 			XLogRegisterBufData(2, (char *) &md, sizeof(xl_btree_metadata));
 
@@ -618,6 +633,7 @@ _bt_getrootheight(Relation rel)
 	Assert(metad->btm_magic == BTREE_MAGIC);
 	Assert(metad->btm_version >= BTREE_MIN_VERSION);
 	Assert(metad->btm_version <= BTREE_VERSION);
+	Assert(!metad->btm_safededup || metad->btm_version > BTREE_NOVAC_VERSION);
 	Assert(metad->btm_fastroot != P_NONE);
 
 	return metad->btm_fastlevel;
@@ -681,6 +697,56 @@ _bt_heapkeyspace(Relation rel)
 	Assert(metad->btm_fastroot != P_NONE);
 
 	return metad->btm_version > BTREE_NOVAC_VERSION;
+}
+
+/*
+ *	_bt_safededup() -- can deduplication safely be used by index?
+ *
+ * Uses field from index relation's metapage/cached metapage.
+ */
+bool
+_bt_safededup(Relation rel)
+{
+	BTMetaPageData *metad;
+
+	if (rel->rd_amcache == NULL)
+	{
+		Buffer		metabuf;
+
+		metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_READ);
+		metad = _bt_getmeta(rel, metabuf);
+
+		/*
+		 * If there's no root page yet, _bt_getroot() doesn't expect a cache
+		 * to be made, so just stop here.  (XXX perhaps _bt_getroot() should
+		 * be changed to allow this case.)
+		 *
+		 * Note that we rely on the assumption that this field will be zero'ed
+		 * on indexes that were pg_upgrade'd.
+		 */
+		if (metad->btm_root == P_NONE)
+		{
+			_bt_relbuf(rel, metabuf);
+			return metad->btm_safededup;;
+		}
+
+		/* Cache the metapage data for next time */
+		rel->rd_amcache = MemoryContextAlloc(rel->rd_indexcxt,
+											 sizeof(BTMetaPageData));
+		memcpy(rel->rd_amcache, metad, sizeof(BTMetaPageData));
+		_bt_relbuf(rel, metabuf);
+	}
+
+	/* Get cached page */
+	metad = (BTMetaPageData *) rel->rd_amcache;
+	/* We shouldn't have cached it if any of these fail */
+	Assert(metad->btm_magic == BTREE_MAGIC);
+	Assert(metad->btm_version >= BTREE_MIN_VERSION);
+	Assert(metad->btm_version <= BTREE_VERSION);
+	Assert(!metad->btm_safededup || metad->btm_version > BTREE_NOVAC_VERSION);
+	Assert(metad->btm_fastroot != P_NONE);
+
+	return metad->btm_safededup;
 }
 
 /*
@@ -983,13 +1049,51 @@ _bt_page_recyclable(Page page)
 void
 _bt_delitems_vacuum(Relation rel, Buffer buf,
 					OffsetNumber *itemnos, int nitems,
+					OffsetNumber *updateitemnos,
+					IndexTuple *updated, int nupdatable,
 					BlockNumber lastBlockVacuumed)
 {
 	Page		page = BufferGetPage(buf);
 	BTPageOpaque opaque;
+	Size		itemsz;
+	Size		updated_sz = 0;
+	char	   *updated_buf = NULL;
+
+	/* XLOG stuff, buffer for updateds */
+	if (nupdatable > 0 && RelationNeedsWAL(rel))
+	{
+		Size		offset = 0;
+
+		for (int i = 0; i < nupdatable; i++)
+			updated_sz += MAXALIGN(IndexTupleSize(updated[i]));
+
+		updated_buf = palloc(updated_sz);
+		for (int i = 0; i < nupdatable; i++)
+		{
+			itemsz = IndexTupleSize(updated[i]);
+			memcpy(updated_buf + offset, (char *) updated[i], itemsz);
+			offset += MAXALIGN(itemsz);
+		}
+		Assert(offset == updated_sz);
+	}
 
 	/* No ereport(ERROR) until changes are logged */
 	START_CRIT_SECTION();
+
+	/* Handle posting tuples here */
+	for (int i = 0; i < nupdatable; i++)
+	{
+		/* At first, delete the old tuple. */
+		PageIndexTupleDelete(page, updateitemnos[i]);
+
+		itemsz = IndexTupleSize(updated[i]);
+		itemsz = MAXALIGN(itemsz);
+
+		/* Add tuple with updated ItemPointers to the page. */
+		if (PageAddItem(page, (Item) updated[i], itemsz, updateitemnos[i],
+						false, false) == InvalidOffsetNumber)
+			elog(ERROR, "failed to rewrite posting list item in index while doing vacuum");
+	}
 
 	/* Fix the page */
 	if (nitems > 0)
@@ -1020,6 +1124,8 @@ _bt_delitems_vacuum(Relation rel, Buffer buf,
 		xl_btree_vacuum xlrec_vacuum;
 
 		xlrec_vacuum.lastBlockVacuumed = lastBlockVacuumed;
+		xlrec_vacuum.nupdated = nupdatable;
+		xlrec_vacuum.ndeleted = nitems;
 
 		XLogBeginInsert();
 		XLogRegisterBuffer(0, buf, REGBUF_STANDARD);
@@ -1033,12 +1139,110 @@ _bt_delitems_vacuum(Relation rel, Buffer buf,
 		if (nitems > 0)
 			XLogRegisterBufData(0, (char *) itemnos, nitems * sizeof(OffsetNumber));
 
+		/*
+		 * Here we should save offnums and updated tuples themselves. It's
+		 * important to restore them in correct order. At first, we must
+		 * handle updated tuples and only after that other deleted items.
+		 */
+		if (nupdatable > 0)
+		{
+			Assert(updated_buf != NULL);
+			XLogRegisterBufData(0, (char *) updateitemnos,
+								nupdatable * sizeof(OffsetNumber));
+			XLogRegisterBufData(0, updated_buf, updated_sz);
+		}
+
 		recptr = XLogInsert(RM_BTREE_ID, XLOG_BTREE_VACUUM);
 
 		PageSetLSN(page, recptr);
 	}
 
 	END_CRIT_SECTION();
+}
+
+/*
+ * Get the latestRemovedXid from the table entries pointed at by the index
+ * tuples being deleted.
+ *
+ * This is a version of index_compute_xid_horizon_for_tuples() specialized to
+ * nbtree, which can handle posting lists.
+ */
+static TransactionId
+_bt_compute_xid_horizon_for_tuples(Relation rel, Relation heapRel,
+								   Buffer buf, OffsetNumber *itemnos,
+								   int nitems)
+{
+	ItemPointer htids;
+	TransactionId latestRemovedXid = InvalidTransactionId;
+	Page		page = BufferGetPage(buf);
+	int			arraynitems;
+	int			finalnitems;
+
+	/*
+	 * Initial size of array can fit everything when it turns out that are no
+	 * posting lists
+	 */
+	arraynitems = nitems;
+	htids = (ItemPointer) palloc(sizeof(ItemPointerData) * arraynitems);
+
+	finalnitems = 0;
+	/* identify what the index tuples about to be deleted point to */
+	for (int i = 0; i < nitems; i++)
+	{
+		ItemId		itemid;
+		IndexTuple	itup;
+
+		itemid = PageGetItemId(page, itemnos[i]);
+		itup = (IndexTuple) PageGetItem(page, itemid);
+
+		Assert(ItemIdIsDead(itemid));
+
+		if (!BTreeTupleIsPosting(itup))
+		{
+			/* Make sure that we have space for additional heap TID */
+			if (finalnitems + 1 > arraynitems)
+			{
+				arraynitems = arraynitems * 2;
+				htids = (ItemPointer)
+					repalloc(htids, sizeof(ItemPointerData) * arraynitems);
+			}
+
+			Assert(ItemPointerIsValid(&itup->t_tid));
+			ItemPointerCopy(&itup->t_tid, &htids[finalnitems]);
+			finalnitems++;
+		}
+		else
+		{
+			int			nposting = BTreeTupleGetNPosting(itup);
+
+			/* Make sure that we have space for additional heap TIDs */
+			if (finalnitems + nposting > arraynitems)
+			{
+				arraynitems = Max(arraynitems * 2, finalnitems + nposting);
+				htids = (ItemPointer)
+					repalloc(htids, sizeof(ItemPointerData) * arraynitems);
+			}
+
+			for (int j = 0; j < nposting; j++)
+			{
+				ItemPointer htid = BTreeTupleGetPostingN(itup, j);
+
+				Assert(ItemPointerIsValid(htid));
+				ItemPointerCopy(htid, &htids[finalnitems]);
+				finalnitems++;
+			}
+		}
+	}
+
+	Assert(finalnitems >= nitems);
+
+	/* determine the actual xid horizon */
+	latestRemovedXid =
+		table_compute_xid_horizon_for_tuples(heapRel, htids, finalnitems);
+
+	pfree(htids);
+
+	return latestRemovedXid;
 }
 
 /*
@@ -1067,8 +1271,8 @@ _bt_delitems_delete(Relation rel, Buffer buf,
 
 	if (XLogStandbyInfoActive() && RelationNeedsWAL(rel))
 		latestRemovedXid =
-			index_compute_xid_horizon_for_tuples(rel, heapRel, buf,
-												 itemnos, nitems);
+			_bt_compute_xid_horizon_for_tuples(rel, heapRel, buf,
+											   itemnos, nitems);
 
 	/* No ereport(ERROR) until changes are logged */
 	START_CRIT_SECTION();
@@ -2066,6 +2270,7 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, bool *rightsib_empty)
 			xlmeta.fastlevel = metad->btm_fastlevel;
 			xlmeta.oldest_btpo_xact = metad->btm_oldest_btpo_xact;
 			xlmeta.last_cleanup_num_heap_tuples = metad->btm_last_cleanup_num_heap_tuples;
+			xlmeta.btm_safededup = metad->btm_safededup;
 
 			XLogRegisterBufData(4, (char *) &xlmeta, sizeof(xl_btree_metadata));
 			xlinfo = XLOG_BTREE_UNLINK_PAGE_META;

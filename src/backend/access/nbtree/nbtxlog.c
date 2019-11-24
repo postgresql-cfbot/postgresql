@@ -22,6 +22,9 @@
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "storage/procarray.h"
+#include "utils/memutils.h"
+
+static MemoryContext opCtx;		/* working memory for operations */
 
 /*
  * _bt_restore_page -- re-enter all the index tuples on a page
@@ -111,6 +114,7 @@ _bt_restore_meta(XLogReaderState *record, uint8 block_id)
 	Assert(md->btm_version >= BTREE_NOVAC_VERSION);
 	md->btm_oldest_btpo_xact = xlrec->oldest_btpo_xact;
 	md->btm_last_cleanup_num_heap_tuples = xlrec->last_cleanup_num_heap_tuples;
+	md->btm_safededup = xlrec->btm_safededup;
 
 	pageop = (BTPageOpaque) PageGetSpecialPointer(metapg);
 	pageop->btpo_flags = BTP_META;
@@ -181,9 +185,45 @@ btree_xlog_insert(bool isleaf, bool ismeta, XLogReaderState *record)
 
 		page = BufferGetPage(buffer);
 
-		if (PageAddItem(page, (Item) datapos, datalen, xlrec->offnum,
-						false, false) == InvalidOffsetNumber)
-			elog(PANIC, "btree_xlog_insert: failed to add item");
+		if (xlrec->postingoff == InvalidOffsetNumber)
+		{
+			/* Simple retail insertion */
+			if (PageAddItem(page, (Item) datapos, datalen, xlrec->offnum,
+							false, false) == InvalidOffsetNumber)
+				elog(PANIC, "btree_xlog_insert: failed to add item");
+		}
+		else
+		{
+			ItemId		itemid;
+			IndexTuple	oposting,
+						newitem,
+						nposting;
+
+			/*
+			 * A posting list split occurred during insertion.
+			 *
+			 * Use _bt_swap_posting() to repeat posting list split steps from
+			 * primary.  Note that newitem from WAL record is 'orignewitem',
+			 * not the final version of newitem that is actually inserted on
+			 * page.
+			 */
+			Assert(isleaf);
+			itemid = PageGetItemId(page, OffsetNumberPrev(xlrec->offnum));
+			oposting = (IndexTuple) PageGetItem(page, itemid);
+
+			/* newitem must be mutable copy for _bt_swap_posting() */
+			newitem = CopyIndexTuple((IndexTuple) datapos);
+			nposting = _bt_swap_posting(newitem, oposting, xlrec->postingoff);
+
+			/* Replace existing posting list with post-split version */
+			memcpy(oposting, nposting, MAXALIGN(IndexTupleSize(nposting)));
+
+			/* insert new item */
+			Assert(IndexTupleSize(newitem) == datalen);
+			if (PageAddItem(page, (Item) newitem, datalen, xlrec->offnum,
+							false, false) == InvalidOffsetNumber)
+				elog(PANIC, "btree_xlog_insert: failed to add posting split new item");
+		}
 
 		PageSetLSN(page, lsn);
 		MarkBufferDirty(buffer);
@@ -265,20 +305,38 @@ btree_xlog_split(bool onleft, XLogReaderState *record)
 		BTPageOpaque lopaque = (BTPageOpaque) PageGetSpecialPointer(lpage);
 		OffsetNumber off;
 		IndexTuple	newitem = NULL,
-					left_hikey = NULL;
+					left_hikey = NULL,
+					nposting = NULL;
 		Size		newitemsz = 0,
 					left_hikeysz = 0;
 		Page		newlpage;
-		OffsetNumber leftoff;
+		OffsetNumber leftoff,
+					replacepostingoff = InvalidOffsetNumber;
 
 		datapos = XLogRecGetBlockData(record, 0, &datalen);
 
-		if (onleft)
+		if (onleft || xlrec->postingoff != 0)
 		{
 			newitem = (IndexTuple) datapos;
 			newitemsz = MAXALIGN(IndexTupleSize(newitem));
 			datapos += newitemsz;
 			datalen -= newitemsz;
+
+			if (xlrec->postingoff != 0)
+			{
+				ItemId		itemid;
+				IndexTuple	oposting;
+
+				/* Posting list must be at offset number before new item's */
+				replacepostingoff = OffsetNumberPrev(xlrec->newitemoff);
+
+				/* newitem must be mutable copy for _bt_swap_posting() */
+				newitem = CopyIndexTuple(newitem);
+				itemid = PageGetItemId(lpage, replacepostingoff);
+				oposting = (IndexTuple) PageGetItem(lpage, itemid);
+				nposting = _bt_swap_posting(newitem, oposting,
+											xlrec->postingoff);
+			}
 		}
 
 		/* Extract left hikey and its size (assuming 16-bit alignment) */
@@ -304,8 +362,20 @@ btree_xlog_split(bool onleft, XLogReaderState *record)
 			Size		itemsz;
 			IndexTuple	item;
 
+			/* Add replacement posting list when required */
+			if (off == replacepostingoff)
+			{
+				Assert(onleft || xlrec->firstright == xlrec->newitemoff);
+				if (PageAddItem(newlpage, (Item) nposting,
+								MAXALIGN(IndexTupleSize(nposting)), leftoff,
+								false, false) == InvalidOffsetNumber)
+					elog(ERROR, "failed to add new posting list item to left page after split");
+				leftoff = OffsetNumberNext(leftoff);
+				continue;
+			}
+
 			/* add the new item if it was inserted on left page */
-			if (onleft && off == xlrec->newitemoff)
+			else if (onleft && off == xlrec->newitemoff)
 			{
 				if (PageAddItem(newlpage, (Item) newitem, newitemsz, leftoff,
 								false, false) == InvalidOffsetNumber)
@@ -380,14 +450,92 @@ btree_xlog_split(bool onleft, XLogReaderState *record)
 }
 
 static void
+btree_xlog_dedup(XLogReaderState *record)
+{
+	XLogRecPtr	lsn = record->EndRecPtr;
+	Buffer		buf;
+	xl_btree_dedup *xlrec = (xl_btree_dedup *) XLogRecGetData(record);
+
+	if (XLogReadBufferForRedo(record, 0, &buf) == BLK_NEEDS_REDO)
+	{
+		/*
+		 * Initialize a temporary empty page and copy all the items to that in
+		 * item number order.
+		 */
+		Page		page = (Page) BufferGetPage(buf);
+		OffsetNumber offnum;
+		BTDedupState *state;
+
+		state = (BTDedupState *) palloc(sizeof(BTDedupState));
+
+		state->maxitemsize = BTMaxItemSize(page);
+		state->checkingunique = false;	/* unused */
+		state->skippedbase = InvalidOffsetNumber;
+		state->newitem = NULL;
+		/* Metadata about current pending posting list */
+		state->htids = NULL;
+		state->nhtids = 0;
+		state->nitems = 0;
+		state->alltupsize = 0;
+		state->overlap = false;
+		/* Metadata about based tuple of current pending posting list */
+		state->base = NULL;
+		state->baseoff = InvalidOffsetNumber;
+		state->basetupsize = 0;
+
+		/* Conservatively size array */
+		state->htids = palloc(state->maxitemsize);
+
+		/*
+		 * Iterate over tuples on the page belonging to the interval to
+		 * deduplicate them into a posting list.
+		 */
+		for (offnum = xlrec->baseoff;
+			 offnum < xlrec->baseoff + xlrec->nitems;
+			 offnum = OffsetNumberNext(offnum))
+		{
+			ItemId		itemid = PageGetItemId(page, offnum);
+			IndexTuple	itup = (IndexTuple) PageGetItem(page, itemid);
+
+			Assert(!ItemIdIsDead(itemid));
+
+			if (offnum == xlrec->baseoff)
+			{
+				/*
+				 * No previous/base tuple for first data item -- use first
+				 * data item as base tuple of first pending posting list
+				 */
+				_bt_dedup_start_pending(state, itup, offnum);
+			}
+			else
+			{
+				/* Heap TID(s) for itup will be saved in state */
+				if (!_bt_dedup_save_htid(state, itup))
+					elog(ERROR, "could not add heap tid to pending posting list");
+			}
+		}
+
+		Assert(state->nitems == xlrec->nitems);
+		/* Handle the last item */
+		_bt_dedup_finish_pending(buf, state, false);
+
+		PageSetLSN(page, lsn);
+		MarkBufferDirty(buf);
+	}
+
+	if (BufferIsValid(buf))
+		UnlockReleaseBuffer(buf);
+}
+
+static void
 btree_xlog_vacuum(XLogReaderState *record)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
 	Buffer		buffer;
 	Page		page;
 	BTPageOpaque opaque;
-#ifdef UNUSED
 	xl_btree_vacuum *xlrec = (xl_btree_vacuum *) XLogRecGetData(record);
+#ifdef UNUSED
 
 	/*
 	 * This section of code is thought to be no longer needed, after analysis
@@ -478,14 +626,34 @@ btree_xlog_vacuum(XLogReaderState *record)
 
 		if (len > 0)
 		{
-			OffsetNumber *unused;
-			OffsetNumber *unend;
+			if (xlrec->nupdated > 0)
+			{
+				OffsetNumber *updatedoffsets;
+				IndexTuple	updated;
+				Size		itemsz;
 
-			unused = (OffsetNumber *) ptr;
-			unend = (OffsetNumber *) ((char *) ptr + len);
+				updatedoffsets = (OffsetNumber *)
+					(ptr + xlrec->ndeleted * sizeof(OffsetNumber));
+				updated = (IndexTuple) ((char *) updatedoffsets +
+										xlrec->nupdated * sizeof(OffsetNumber));
 
-			if ((unend - unused) > 0)
-				PageIndexMultiDelete(page, unused, unend - unused);
+				/* Handle posting tuples */
+				for (int i = 0; i < xlrec->nupdated; i++)
+				{
+					PageIndexTupleDelete(page, updatedoffsets[i]);
+
+					itemsz = MAXALIGN(IndexTupleSize(updated));
+
+					if (PageAddItem(page, (Item) updated, itemsz, updatedoffsets[i],
+									false, false) == InvalidOffsetNumber)
+						elog(PANIC, "btree_xlog_vacuum: failed to add updated posting list item");
+
+					updated = (IndexTuple) ((char *) updated + itemsz);
+				}
+			}
+
+			if (xlrec->ndeleted)
+				PageIndexMultiDelete(page, (OffsetNumber *) ptr, xlrec->ndeleted);
 		}
 
 		/*
@@ -820,7 +988,9 @@ void
 btree_redo(XLogReaderState *record)
 {
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	MemoryContext oldCtx;
 
+	oldCtx = MemoryContextSwitchTo(opCtx);
 	switch (info)
 	{
 		case XLOG_BTREE_INSERT_LEAF:
@@ -837,6 +1007,9 @@ btree_redo(XLogReaderState *record)
 			break;
 		case XLOG_BTREE_SPLIT_R:
 			btree_xlog_split(false, record);
+			break;
+		case XLOG_BTREE_DEDUP_PAGE:
+			btree_xlog_dedup(record);
 			break;
 		case XLOG_BTREE_VACUUM:
 			btree_xlog_vacuum(record);
@@ -863,6 +1036,23 @@ btree_redo(XLogReaderState *record)
 		default:
 			elog(PANIC, "btree_redo: unknown op code %u", info);
 	}
+	MemoryContextSwitchTo(oldCtx);
+	MemoryContextReset(opCtx);
+}
+
+void
+btree_xlog_startup(void)
+{
+	opCtx = AllocSetContextCreate(CurrentMemoryContext,
+								  "Btree recovery temporary context",
+								  ALLOCSET_DEFAULT_SIZES);
+}
+
+void
+btree_xlog_cleanup(void)
+{
+	MemoryContextDelete(opCtx);
+	opCtx = NULL;
 }
 
 /*

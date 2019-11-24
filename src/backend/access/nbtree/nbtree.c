@@ -97,6 +97,8 @@ static void btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 						 BTCycleId cycleid, TransactionId *oldestBtpoXact);
 static void btvacuumpage(BTVacState *vstate, BlockNumber blkno,
 						 BlockNumber orig_blkno);
+static ItemPointer btreevacuumposting(BTVacState *vstate, IndexTuple itup,
+									  int *nremaining);
 
 
 /*
@@ -160,7 +162,7 @@ btbuildempty(Relation index)
 
 	/* Construct metapage. */
 	metapage = (Page) palloc(BLCKSZ);
-	_bt_initmetapage(metapage, P_NONE, 0);
+	_bt_initmetapage(metapage, P_NONE, 0, _bt_opclasses_support_dedup(index));
 
 	/*
 	 * Write the page and log it.  It might seem that an immediate sync would
@@ -263,8 +265,8 @@ btgettuple(IndexScanDesc scan, ScanDirection dir)
 				 */
 				if (so->killedItems == NULL)
 					so->killedItems = (int *)
-						palloc(MaxIndexTuplesPerPage * sizeof(int));
-				if (so->numKilled < MaxIndexTuplesPerPage)
+						palloc(MaxBTreeIndexTuplesPerPage * sizeof(int));
+				if (so->numKilled < MaxBTreeIndexTuplesPerPage)
 					so->killedItems[so->numKilled++] = so->currPos.itemIndex;
 			}
 
@@ -816,7 +818,7 @@ _bt_vacuum_needs_cleanup(IndexVacuumInfo *info)
 	}
 	else
 	{
-		StdRdOptions *relopts;
+		BtreeOptions *relopts;
 		float8		cleanup_scale_factor;
 		float8		prev_num_heap_tuples;
 
@@ -827,7 +829,7 @@ _bt_vacuum_needs_cleanup(IndexVacuumInfo *info)
 		 * tuples exceeds vacuum_cleanup_index_scale_factor fraction of
 		 * original tuples count.
 		 */
-		relopts = (StdRdOptions *) info->index->rd_options;
+		relopts = (BtreeOptions *) info->index->rd_options;
 		cleanup_scale_factor = (relopts &&
 								relopts->vacuum_cleanup_index_scale_factor >= 0)
 			? relopts->vacuum_cleanup_index_scale_factor
@@ -1069,7 +1071,8 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 								 RBM_NORMAL, info->strategy);
 		LockBufferForCleanup(buf);
 		_bt_checkpage(rel, buf);
-		_bt_delitems_vacuum(rel, buf, NULL, 0, vstate.lastBlockVacuumed);
+		_bt_delitems_vacuum(rel, buf, NULL, 0, NULL, NULL, 0,
+							vstate.lastBlockVacuumed);
 		_bt_relbuf(rel, buf);
 	}
 
@@ -1188,8 +1191,17 @@ restart:
 	}
 	else if (P_ISLEAF(opaque))
 	{
+		/* Deletable item state */
 		OffsetNumber deletable[MaxOffsetNumber];
 		int			ndeletable;
+		int			nhtidsdead;
+		int			nhtidslive;
+
+		/* Updatable item state (for posting lists) */
+		IndexTuple	updated[MaxOffsetNumber];
+		OffsetNumber updatable[MaxOffsetNumber];
+		int			nupdatable;
+
 		OffsetNumber offnum,
 					minoff,
 					maxoff;
@@ -1229,6 +1241,10 @@ restart:
 		 * callback function.
 		 */
 		ndeletable = 0;
+		nupdatable = 0;
+		/* Maintain stats counters for index tuple versions/heap TIDs */
+		nhtidsdead = 0;
+		nhtidslive = 0;
 		minoff = P_FIRSTDATAKEY(opaque);
 		maxoff = PageGetMaxOffsetNumber(page);
 		if (callback)
@@ -1238,11 +1254,9 @@ restart:
 				 offnum = OffsetNumberNext(offnum))
 			{
 				IndexTuple	itup;
-				ItemPointer htup;
 
 				itup = (IndexTuple) PageGetItem(page,
 												PageGetItemId(page, offnum));
-				htup = &(itup->t_tid);
 
 				/*
 				 * During Hot Standby we currently assume that
@@ -1265,8 +1279,71 @@ restart:
 				 * applies to *any* type of index that marks index tuples as
 				 * killed.
 				 */
-				if (callback(htup, callback_state))
-					deletable[ndeletable++] = offnum;
+				if (!BTreeTupleIsPosting(itup))
+				{
+					/* Regular tuple, standard heap TID representation */
+					ItemPointer htid = &(itup->t_tid);
+
+					if (callback(htid, callback_state))
+					{
+						deletable[ndeletable++] = offnum;
+						nhtidsdead++;
+					}
+					else
+						nhtidslive++;
+				}
+				else
+				{
+					ItemPointer newhtids;
+					int			nremaining;
+
+					/*
+					 * Posting list tuple, a physical tuple that represents
+					 * two or more logical tuples, any of which could be an
+					 * index row version that must be removed
+					 */
+					newhtids = btreevacuumposting(vstate, itup, &nremaining);
+					if (newhtids == NULL)
+					{
+						/*
+						 * All TIDs/logical tuples from the posting tuple
+						 * remain, so no update or delete required
+						 */
+						Assert(nremaining == BTreeTupleGetNPosting(itup));
+					}
+					else if (nremaining > 0)
+					{
+						IndexTuple	updatedtuple;
+
+						/*
+						 * Form new tuple that contains only remaining TIDs.
+						 * Remember this tuple and the offset of the old tuple
+						 * for when we update it in place
+						 */
+						Assert(nremaining < BTreeTupleGetNPosting(itup));
+						updatedtuple = _bt_form_posting(itup, newhtids,
+														nremaining);
+						updated[nupdatable] = updatedtuple;
+						updatable[nupdatable++] = offnum;
+						nhtidsdead += BTreeTupleGetNPosting(itup) - nremaining;
+						pfree(newhtids);
+					}
+					else
+					{
+						/*
+						 * All TIDs/logical tuples from the posting list must
+						 * be deleted.  We'll delete the physical tuple
+						 * completely.
+						 */
+						deletable[ndeletable++] = offnum;
+						nhtidsdead += BTreeTupleGetNPosting(itup);
+
+						/* Free empty array of live items */
+						pfree(newhtids);
+					}
+
+					nhtidslive += nremaining;
+				}
 			}
 		}
 
@@ -1274,7 +1351,7 @@ restart:
 		 * Apply any needed deletes.  We issue just one _bt_delitems_vacuum()
 		 * call per page, so as to minimize WAL traffic.
 		 */
-		if (ndeletable > 0)
+		if (ndeletable > 0 || nupdatable > 0)
 		{
 			/*
 			 * Notice that the issued XLOG_BTREE_VACUUM WAL record includes
@@ -1290,7 +1367,8 @@ restart:
 			 * doesn't seem worth the amount of bookkeeping it'd take to avoid
 			 * that.
 			 */
-			_bt_delitems_vacuum(rel, buf, deletable, ndeletable,
+			_bt_delitems_vacuum(rel, buf, deletable, ndeletable, updatable,
+								updated, nupdatable,
 								vstate->lastBlockVacuumed);
 
 			/*
@@ -1300,7 +1378,7 @@ restart:
 			if (blkno > vstate->lastBlockVacuumed)
 				vstate->lastBlockVacuumed = blkno;
 
-			stats->tuples_removed += ndeletable;
+			stats->tuples_removed += nhtidsdead;
 			/* must recompute maxoff */
 			maxoff = PageGetMaxOffsetNumber(page);
 		}
@@ -1315,6 +1393,7 @@ restart:
 			 * We treat this like a hint-bit update because there's no need to
 			 * WAL-log it.
 			 */
+			Assert(nhtidsdead == 0);
 			if (vstate->cycleid != 0 &&
 				opaque->btpo_cycleid == vstate->cycleid)
 			{
@@ -1324,15 +1403,16 @@ restart:
 		}
 
 		/*
-		 * If it's now empty, try to delete; else count the live tuples. We
-		 * don't delete when recursing, though, to avoid putting entries into
+		 * If it's now empty, try to delete; else count the live tuples (live
+		 * heap TIDs in posting lists are counted as live tuples).  We don't
+		 * delete when recursing, though, to avoid putting entries into
 		 * freePages out-of-order (doesn't seem worth any extra code to handle
 		 * the case).
 		 */
 		if (minoff > maxoff)
 			delete_now = (blkno == orig_blkno);
 		else
-			stats->num_index_tuples += maxoff - minoff + 1;
+			stats->num_index_tuples += nhtidslive;
 	}
 
 	if (delete_now)
@@ -1373,6 +1453,68 @@ restart:
 		blkno = recurse_to;
 		goto restart;
 	}
+}
+
+/*
+ * btreevacuumposting() -- determines which logical tuples must remain when
+ * VACUUMing a posting list tuple.
+ *
+ * Returns new palloc'd array of item pointers needed to build replacement
+ * posting list without the index row versions that are to be deleted.
+ *
+ * Note that returned array is NULL in the common case where there is nothing
+ * to delete in caller's posting list tuple.  The number of TIDs that should
+ * remain in the posting list tuple is set for caller in *nremaining.  This is
+ * also the size of the returned array (though only when array isn't just
+ * NULL).
+ */
+static ItemPointer
+btreevacuumposting(BTVacState *vstate, IndexTuple itup, int *nremaining)
+{
+	int			live = 0;
+	int			nitem = BTreeTupleGetNPosting(itup);
+	ItemPointer tmpitems = NULL,
+				items = BTreeTupleGetPosting(itup);
+
+	Assert(BTreeTupleIsPosting(itup));
+
+	/*
+	 * Check each tuple in the posting list.  Save live tuples into tmpitems,
+	 * though try to avoid memory allocation as an optimization.
+	 */
+	for (int i = 0; i < nitem; i++)
+	{
+		if (!vstate->callback(items + i, vstate->callback_state))
+		{
+			/*
+			 * Live heap TID.
+			 *
+			 * Only save live TID when we know that we're going to have to
+			 * kill at least one TID, and have already allocated memory.
+			 */
+			if (tmpitems)
+				tmpitems[live] = items[i];
+			live++;
+		}
+
+		/* Dead heap TID */
+		else if (tmpitems == NULL)
+		{
+			/*
+			 * Turns out we need to delete one or more dead heap TIDs, so
+			 * start maintaining an array of live TIDs for caller to
+			 * reconstruct smaller replacement posting list tuple
+			 */
+			tmpitems = palloc(sizeof(ItemPointerData) * nitem);
+
+			/* Copy live heap TIDs from previous loop iterations */
+			if (live > 0)
+				memcpy(tmpitems, items, sizeof(ItemPointerData) * live);
+		}
+	}
+
+	*nremaining = live;
+	return tmpitems;
 }
 
 /*

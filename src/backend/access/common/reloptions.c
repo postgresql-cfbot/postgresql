@@ -158,6 +158,15 @@ static relopt_bool boolRelOpts[] =
 		},
 		true
 	},
+	{
+		{
+			"deduplication",
+			"Enables deduplication on btree index leaf pages",
+			RELOPT_KIND_BTREE,
+			ShareUpdateExclusiveLock
+		},
+		true
+	},
 	/* list terminator */
 	{{NULL}}
 };
@@ -1521,8 +1530,6 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, user_catalog_table)},
 		{"parallel_workers", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, parallel_workers)},
-		{"vacuum_cleanup_index_scale_factor", RELOPT_TYPE_REAL,
-		offsetof(StdRdOptions, vacuum_cleanup_index_scale_factor)},
 		{"vacuum_index_cleanup", RELOPT_TYPE_BOOL,
 		offsetof(StdRdOptions, vacuum_index_cleanup)},
 		{"vacuum_truncate", RELOPT_TYPE_BOOL,

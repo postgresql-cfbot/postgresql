@@ -433,11 +433,55 @@ returns bool
 <sect1 id="btree-implementation">
  <title>Implementation</title>
 
+ <para>
+  Internally, a B-tree index consists of a tree structure with leaf
+  pages.  Each leaf page contains tuples that point to table entries
+  using a heap item pointer. Each tuple's key is unique, since the
+  item pointer is treated as part of the key.
+ </para>
+ <para>
+  An introduction to the btree index implementation can be found in
+  <filename>src/backend/access/nbtree/README</filename>.
+ </para>
+
+ <sect2 id="btree-deduplication">
+  <title>Deduplication</title>
   <para>
-   An introduction to the btree index implementation can be found in
-   <filename>src/backend/access/nbtree/README</filename>.
+   B-Tree supports <firstterm>deduplication</firstterm>.  Existing
+   leaf page tuples with fully equal keys prior to the heap item
+   pointer are folded together into a compressed representation called
+   a <quote>posting list</quote>. The user-visible keys appear only
+   once, followed by a simple list of heap item pointers.  Posting
+   lists are formed at the point where an insertion would otherwise
+   have to split the page.  This can greatly increase index space
+   efficiency with data sets where each distinct key appears a few
+   times on average.  Cases that don't benefit will incur a small
+   performance penalty.
+  </para>
+  <para>
+   Deduplication can only be used with indexes that use B-Tree
+   operator classes that were declared <literal>BITWISE</literal>.
+   Deduplication is not supported with nondeterministic collations,
+   nor is it supported with <literal>INCLUDE</literal> indexes.  The
+   deduplication storage parameter must be set to
+   <literal>ON</literal> for new posting lists to be formed
+   (deduplication is enabled by default in the case of non-unique
+   indexes).
+  </para>
+ </sect2>
+
+ <sect2 id="btree-deduplication-unique">
+  <title>Unique indexes and deduplication</title>
+
+  <para>
+   Unique indexes can also use deduplication.  This can be useful with
+   unique indexes that are prone to becoming bloated despite
+   aggressive vacuuming.  Deduplication may delay leaf page splits for
+   long enough that vacuuming can prevent unnecesary page splits
+   altogether.
   </para>
 
+ </sect2>
 </sect1>
 
 </chapter>

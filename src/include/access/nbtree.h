@@ -23,6 +23,36 @@
 #include "storage/bufmgr.h"
 #include "storage/shm_toc.h"
 
+/*
+ * Storage type for Btree's reloptions
+ */
+typedef struct BtreeOptions
+{
+	int32		vl_len_;		/* varlena header (do not touch directly!) */
+	int			fillfactor;		/* leaf fillfactor */
+	double		vacuum_cleanup_index_scale_factor;
+	bool		deduplication;	/* Use deduplication where safe? */
+} BtreeOptions;
+
+/*
+ * Deduplication is enabled for non unique indexes and disabled for unique
+ * indexes by default
+ */
+#define BtreeDefaultDoDedup(relation) \
+	(relation->rd_index->indisunique ? false : true)
+
+#define BtreeGetDoDedupOption(relation) \
+	((relation)->rd_options ? \
+	 ((BtreeOptions *) (relation)->rd_options)->deduplication : \
+	 BtreeDefaultDoDedup(relation))
+
+#define BtreeGetFillFactor(relation, defaultff) \
+	((relation)->rd_options ? \
+	 ((BtreeOptions *) (relation)->rd_options)->fillfactor : (defaultff))
+
+#define BtreeGetTargetPageFreeSpace(relation, defaultff) \
+	(BLCKSZ * (100 - BtreeGetFillFactor(relation, defaultff)) / 100)
+
 /* There's room for a 16-bit vacuum cycle ID in BTPageOpaqueData */
 typedef uint16 BTCycleId;
 
@@ -107,6 +137,7 @@ typedef struct BTMetaPageData
 										 * pages */
 	float8		btm_last_cleanup_num_heap_tuples;	/* number of heap tuples
 													 * during last cleanup */
+	bool		btm_safededup;	/* deduplication known to be safe? */
 } BTMetaPageData;
 
 #define BTPageGetMeta(p) \
@@ -114,7 +145,8 @@ typedef struct BTMetaPageData
 
 /*
  * The current Btree version is 4.  That's what you'll get when you create
- * a new index.
+ * a new index.  The btm_safededup field can only be set if this happened
+ * on Postgres 13, but it's safe to read with version 3 indexes.
  *
  * Btree version 3 was used in PostgreSQL v11.  It is mostly the same as
  * version 4, but heap TIDs were not part of the keyspace.  Index tuples
@@ -131,8 +163,8 @@ typedef struct BTMetaPageData
 #define BTREE_METAPAGE	0		/* first page is meta */
 #define BTREE_MAGIC		0x053162	/* magic number in metapage */
 #define BTREE_VERSION	4		/* current version number */
-#define BTREE_MIN_VERSION	2	/* minimal supported version number */
-#define BTREE_NOVAC_VERSION	3	/* minimal version with all meta fields */
+#define BTREE_MIN_VERSION	2	/* minimum supported version */
+#define BTREE_NOVAC_VERSION	3	/* version with all meta fields set */
 
 /*
  * Maximum size of a btree index entry, including its tuple header.
@@ -154,6 +186,26 @@ typedef struct BTMetaPageData
 	MAXALIGN_DOWN((PageGetPageSize(page) - \
 				   MAXALIGN(SizeOfPageHeaderData + 3*sizeof(ItemIdData)) - \
 				   MAXALIGN(sizeof(BTPageOpaqueData))) / 3)
+/*
+ * MaxBTreeIndexTuplesPerPage is an upper bound on the number of "logical"
+ * tuples that may be stored on a btree leaf page.  This is comparable to
+ * the generic/physical MaxIndexTuplesPerPage upper bound.  A separate
+ * upper bound is needed in certain contexts due to posting list tuples,
+ * which only use a single physical page entry to store many logical
+ * tuples.  (MaxBTreeIndexTuplesPerPage is used to size the per-page
+ * temporary buffers used by index scans.)
+ *
+ * Note: we don't bother considering per-physical-tuple overheads here to
+ * keep things simple (value is based on how many elements a single array
+ * of heap TIDs must have to fill the space between the page header and
+ * special area).  The value is slightly higher (i.e. more conservative)
+ * than necessary as a result, which is considered acceptable.  There will
+ * only be three (very large) physical posting list tuples in leaf pages
+ * that have the largest possible number of heap TIDs/logical tuples.
+ */
+#define MaxBTreeIndexTuplesPerPage \
+	(int) ((BLCKSZ - SizeOfPageHeaderData - sizeof(BTPageOpaqueData)) / \
+		   sizeof(ItemPointerData))
 
 /*
  * The leaf-page fillfactor defaults to 90% but is user-adjustable.
@@ -229,16 +281,15 @@ typedef struct BTMetaPageData
  * tuples (non-pivot tuples).  _bt_check_natts() enforces the rules
  * described here.
  *
- * Non-pivot tuple format:
+ * Non-pivot tuple format (plain/non-posting variant):
  *
  *  t_tid | t_info | key values | INCLUDE columns, if any
  *
  * t_tid points to the heap TID, which is a tiebreaker key column as of
- * BTREE_VERSION 4.  Currently, the INDEX_ALT_TID_MASK status bit is never
- * set for non-pivot tuples.
+ * BTREE_VERSION 4.
  *
- * All other types of index tuples ("pivot" tuples) only have key columns,
- * since pivot tuples only exist to represent how the key space is
+ * Non-pivot tuples complement pivot tuples, which only have key columns.
+ * The sole purpose of pivot tuples is to represent how the key space is
  * separated.  In general, any B-Tree index that has more than one level
  * (i.e. any index that does not just consist of a metapage and a single
  * leaf root page) must have some number of pivot tuples, since pivot
@@ -282,20 +333,103 @@ typedef struct BTMetaPageData
  * future use.  BT_N_KEYS_OFFSET_MASK should be large enough to store any
  * number of columns/attributes <= INDEX_MAX_KEYS.
  *
+ * Sometimes non-pivot tuples also use a representation that repurposes
+ * t_tid to store metadata rather than a TID.  Postgres 13 introduced a new
+ * non-pivot tuple format to support deduplication: posting list tuples.
+ * Deduplication folds together multiple equal non-pivot tuples into a
+ * logically equivalent, space efficient representation.  A posting list is
+ * an array of ItemPointerData elements.  Regular non-pivot tuples are
+ * merged together to form posting list tuples lazily, at the point where
+ * we'd otherwise have to split a leaf page.
+ *
+ * Posting tuple format (alternative non-pivot tuple representation):
+ *
+ *  t_tid | t_info | key values | posting list (TID array)
+ *
+ * Posting list tuples are recognized as such by having the
+ * INDEX_ALT_TID_MASK status bit set in t_info and the BT_IS_POSTING status
+ * bit set in t_tid.  These flags redefine the content of the posting
+ * tuple's t_tid to store an offset to the posting list, as well as the
+ * total number of posting list array elements.
+ *
+ * The 12 least significant offset bits from t_tid are used to represent
+ * the number of posting items present in the tuple, leaving 4 status
+ * bits (BT_RESERVED_OFFSET_MASK bits), 3 of which that are reserved for
+ * future use.  Like any non-pivot tuple, the number of columns stored is
+ * always implicitly the total number in the index (in practice there can
+ * never be non-key columns stored, since deduplication is not supported
+ * with INCLUDE indexes).
+ *
  * Note well: The macros that deal with the number of attributes in tuples
- * assume that a tuple with INDEX_ALT_TID_MASK set must be a pivot tuple,
- * and that a tuple without INDEX_ALT_TID_MASK set must be a non-pivot
- * tuple (or must have the same number of attributes as the index has
- * generally in the case of !heapkeyspace indexes).  They will need to be
- * updated if non-pivot tuples ever get taught to use INDEX_ALT_TID_MASK
- * for something else.
+ * assume that a tuple with INDEX_ALT_TID_MASK set must be a pivot tuple or
+ * non-pivot posting tuple, and that a tuple without INDEX_ALT_TID_MASK set
+ * must be a non-pivot tuple (or must have the same number of attributes as
+ * the index has generally in the case of !heapkeyspace indexes).
  */
 #define INDEX_ALT_TID_MASK			INDEX_AM_RESERVED_BIT
 
 /* Item pointer offset bits */
 #define BT_RESERVED_OFFSET_MASK		0xF000
 #define BT_N_KEYS_OFFSET_MASK		0x0FFF
+#define BT_N_POSTING_OFFSET_MASK	0x0FFF
 #define BT_HEAP_TID_ATTR			0x1000
+#define BT_IS_POSTING				0x2000
+
+/*
+ * N.B.: BTreeTupleIsPivot() should only be used in code that deals with
+ * heapkeyspace indexes specifically.  BTreeTupleIsPosting() works with all
+ * nbtree indexes, though.
+ */
+#define BTreeTupleIsPivot(itup)  \
+	( \
+		((itup)->t_info & INDEX_ALT_TID_MASK && \
+		((ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) & BT_IS_POSTING) == 0))\
+	)
+#define BTreeTupleIsPosting(itup)  \
+	( \
+		((itup)->t_info & INDEX_ALT_TID_MASK && \
+		((ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) & BT_IS_POSTING) != 0))\
+	)
+
+#define BTreeTupleClearBtIsPosting(itup) \
+	do { \
+		ItemPointerSetOffsetNumber(&(itup)->t_tid, \
+		ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) & ~BT_IS_POSTING); \
+	} while(0)
+
+#define BTreeTupleGetNPosting(itup)	\
+	( \
+		AssertMacro(BTreeTupleIsPosting(itup)), \
+		ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) & BT_N_POSTING_OFFSET_MASK \
+	)
+#define BTreeTupleSetNPosting(itup, n) \
+	do { \
+		ItemPointerSetOffsetNumber(&(itup)->t_tid, (n) & BT_N_POSTING_OFFSET_MASK); \
+		Assert((itup)->t_info & INDEX_ALT_TID_MASK); \
+		Assert(!((ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) & BT_IS_POSTING) != 0)); \
+		ItemPointerSetOffsetNumber(&(itup)->t_tid, \
+			ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) | BT_IS_POSTING); \
+	} while(0)
+
+/*
+ * If tuple is posting, t_tid.ip_blkid contains offset of the posting list
+ */
+#define BTreeTupleGetPostingOffset(itup) \
+	( \
+		AssertMacro(BTreeTupleIsPosting(itup)), \
+		ItemPointerGetBlockNumberNoCheck(&((itup)->t_tid)) \
+	)
+#define BTreeSetPostingMeta(itup, nposting, off) \
+	do { \
+		BTreeTupleSetNPosting(itup, nposting); \
+		Assert(BTreeTupleIsPosting(itup)); \
+		ItemPointerSetBlockNumber(&((itup)->t_tid), (off)); \
+	} while(0)
+
+#define BTreeTupleGetPosting(itup) \
+	(ItemPointer) ((char*) (itup) + BTreeTupleGetPostingOffset(itup))
+#define BTreeTupleGetPostingN(itup,n) \
+	(BTreeTupleGetPosting(itup) + (n))
 
 /* Get/set downlink block number */
 #define BTreeInnerTupleGetDownLink(itup) \
@@ -326,40 +460,69 @@ typedef struct BTMetaPageData
  */
 #define BTreeTupleGetNAtts(itup, rel)	\
 	( \
-		(itup)->t_info & INDEX_ALT_TID_MASK ? \
+		(BTreeTupleIsPivot(itup)) ? \
 		( \
 			ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) & BT_N_KEYS_OFFSET_MASK \
 		) \
 		: \
 		IndexRelationGetNumberOfAttributes(rel) \
 	)
-#define BTreeTupleSetNAtts(itup, n) \
-	do { \
-		(itup)->t_info |= INDEX_ALT_TID_MASK; \
-		ItemPointerSetOffsetNumber(&(itup)->t_tid, (n) & BT_N_KEYS_OFFSET_MASK); \
-	} while(0)
+
+static inline void
+BTreeTupleSetNAtts(IndexTuple itup, int n)
+{
+	Assert(!BTreeTupleIsPosting(itup));
+	itup->t_info |= INDEX_ALT_TID_MASK;
+	ItemPointerSetOffsetNumber(&itup->t_tid, n & BT_N_KEYS_OFFSET_MASK);
+}
 
 /*
- * Get tiebreaker heap TID attribute, if any.  Macro works with both pivot
- * and non-pivot tuples, despite differences in how heap TID is represented.
+ * Get tiebreaker heap TID attribute, if any.
+ *
+ * This returns the first/lowest heap TID in the case of a posting list tuple.
  */
-#define BTreeTupleGetHeapTID(itup) \
-	( \
-	  (itup)->t_info & INDEX_ALT_TID_MASK && \
-	  (ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) & BT_HEAP_TID_ATTR) != 0 ? \
-	  ( \
-		(ItemPointer) (((char *) (itup) + IndexTupleSize(itup)) - \
-					   sizeof(ItemPointerData)) \
-	  ) \
-	  : (itup)->t_info & INDEX_ALT_TID_MASK ? NULL : (ItemPointer) &((itup)->t_tid) \
-	)
+static inline ItemPointer
+BTreeTupleGetHeapTID(IndexTuple itup)
+{
+	if (BTreeTupleIsPivot(itup))
+	{
+		/* Pivot tuple heap TID representation? */
+		if ((ItemPointerGetOffsetNumberNoCheck(&itup->t_tid) &
+			 BT_HEAP_TID_ATTR) != 0)
+			return (ItemPointer) ((char *) itup + IndexTupleSize(itup) -
+								  sizeof(ItemPointerData));
+
+		/* Heap TID attribute was truncated */
+		return NULL;
+	}
+	else if (BTreeTupleIsPosting(itup))
+		return BTreeTupleGetPosting(itup);
+
+	return &(itup->t_tid);
+}
+
 /*
- * Set the heap TID attribute for a tuple that uses the INDEX_ALT_TID_MASK
- * representation (currently limited to pivot tuples)
+ * Get maximum heap TID attribute, which could be the only TID in the case of
+ * a non-pivot tuple that does not have a posting list tuple.  Works with
+ * non-pivot tuples only.
+ */
+static inline ItemPointer
+BTreeTupleGetMaxHeapTID(IndexTuple itup)
+{
+	Assert(!BTreeTupleIsPivot(itup));
+
+	if (BTreeTupleIsPosting(itup))
+		return BTreeTupleGetPosting(itup) + (BTreeTupleGetNPosting(itup) - 1);
+
+	return &(itup->t_tid);
+}
+
+/*
+ * Set the heap TID attribute for a pivot tuple
  */
 #define BTreeTupleSetAltHeapTID(itup) \
 	do { \
-		Assert((itup)->t_info & INDEX_ALT_TID_MASK); \
+		Assert(BTreeTupleIsPivot(itup)); \
 		ItemPointerSetOffsetNumber(&(itup)->t_tid, \
 								   ItemPointerGetOffsetNumberNoCheck(&(itup)->t_tid) | BT_HEAP_TID_ATTR); \
 	} while(0)
@@ -434,6 +597,11 @@ typedef BTStackData *BTStack;
  * indexes whose version is >= version 4.  It's convenient to keep this close
  * by, rather than accessing the metapage repeatedly.
  *
+ * safededup is set to indicate that index may use dynamic deduplication
+ * safely (index storage parameter separately indicates if deduplication is
+ * currently in use).  This is also a property of the index relation rather
+ * than an indexscan that is kept around for convenience.
+ *
  * anynullkeys indicates if any of the keys had NULL value when scankey was
  * built from index tuple (note that already-truncated tuple key attributes
  * set NULL as a placeholder key value, which also affects value of
@@ -469,6 +637,7 @@ typedef BTStackData *BTStack;
 typedef struct BTScanInsertData
 {
 	bool		heapkeyspace;
+	bool		safededup;
 	bool		anynullkeys;
 	bool		nextkey;
 	bool		pivotsearch;
@@ -507,6 +676,13 @@ typedef struct BTInsertStateData
 	bool		bounds_valid;
 	OffsetNumber low;
 	OffsetNumber stricthigh;
+
+	/*
+	 * if _bt_binsrch_insert found the location inside existing posting list,
+	 * save the position inside the list.  This will be -1 in rare cases
+	 * where the overlapping posting list is LP_DEAD.
+	 */
+	int			postingoff;
 } BTInsertStateData;
 
 typedef BTInsertStateData *BTInsertState;
@@ -534,7 +710,10 @@ typedef BTInsertStateData *BTInsertState;
  * If we are doing an index-only scan, we save the entire IndexTuple for each
  * matched item, otherwise only its heap TID and offset.  The IndexTuples go
  * into a separate workspace array; each BTScanPosItem stores its tuple's
- * offset within that array.
+ * offset within that array.  Posting list tuples store a "base" tuple once,
+ * allowing the same key to be returned for each logical tuple associated
+ * with the physical posting list tuple (i.e. for each TID from the posting
+ * list).
  */
 
 typedef struct BTScanPosItem	/* what we remember about each match */
@@ -568,6 +747,12 @@ typedef struct BTScanPosData
 	int			nextTupleOffset;
 
 	/*
+	 * Posting list tuples use postingTupleOffset to store the current
+	 * location of the tuple that is returned multiple times.
+	 */
+	int			postingTupleOffset;
+
+	/*
 	 * The items array is always ordered in index order (ie, increasing
 	 * indexoffset).  When scanning backwards it is convenient to fill the
 	 * array back-to-front, so we start at the last slot and fill downwards.
@@ -578,7 +763,7 @@ typedef struct BTScanPosData
 	int			lastItem;		/* last valid index in items[] */
 	int			itemIndex;		/* current index in items[] */
 
-	BTScanPosItem items[MaxIndexTuplesPerPage]; /* MUST BE LAST */
+	BTScanPosItem items[MaxBTreeIndexTuplesPerPage];	/* MUST BE LAST */
 } BTScanPosData;
 
 typedef BTScanPosData *BTScanPos;
@@ -681,6 +866,57 @@ typedef BTScanOpaqueData *BTScanOpaque;
 #define SK_BT_NULLS_FIRST	(INDOPTION_NULLS_FIRST << SK_BT_INDOPTION_SHIFT)
 
 /*
+ * State used to representing a pending posting list during deduplication.
+ *
+ * Each entry represents a group of consecutive items from the page, starting
+ * from page offset number 'baseoff', which is the offset number of the "base"
+ * tuple on the page undergoing deduplication.  'nitems' is the total number
+ * of items from the page that will be merged to make a new posting tuple.
+ *
+ * Note: 'nitems' means the number of physical index tuples/line pointers on
+ * the page, starting with and including the item at offset number 'baseoff'
+ * (so nitems should be at least 2 when interval is used).  These existing
+ * tuples may be posting list tuples or regular tuples.
+ */
+typedef struct BTDedupInterval
+{
+	OffsetNumber baseoff;
+	OffsetNumber nitems;
+} BTDedupInterval;
+
+/*
+ * Btree-private state used to deduplicate items on a leaf page
+ */
+typedef struct BTDedupState
+{
+	Relation	rel;
+	/* Deduplication status info for entire page/operation */
+	Size		maxitemsize;	/* Limit on size of final tuple */
+	IndexTuple	newitem;
+	bool		checkingunique; /* Use unique index strategy? */
+	OffsetNumber skippedbase;	/* First offset skipped by checkingunique */
+
+	/* Metadata about current pending posting list */
+	ItemPointer htids;			/* Heap TIDs in pending posting list */
+	int			nhtids;			/* # heap TIDs in nhtids array */
+	int			nitems;			/* See BTDedupInterval definition */
+	Size		alltupsize;		/* Includes line pointer overhead */
+	bool		overlap;		/* Avoid overlapping posting lists? */
+
+	/* Metadata about base tuple of current pending posting list */
+	IndexTuple	base;			/* Use to form new posting list */
+	OffsetNumber baseoff;		/* page offset of base */
+	Size		basetupsize;	/* base size without posting list */
+
+	/*
+	 * Pending posting list.  Contains information about a group of
+	 * consecutive items that will be deduplicated by creating a new posting
+	 * list tuple.
+	 */
+	BTDedupInterval interval;
+} BTDedupState;
+
+/*
  * Constant definition for progress reporting.  Phase numbers must match
  * btbuildphasename.
  */
@@ -726,6 +962,22 @@ extern void _bt_parallel_done(IndexScanDesc scan);
 extern void _bt_parallel_advance_array_keys(IndexScanDesc scan);
 
 /*
+ * prototypes for functions in nbtdedup.c
+ */
+extern void _bt_dedup_one_page(Relation rel, Buffer buffer, Relation heapRel,
+							   IndexTuple newitem, Size newitemsz,
+							   bool checkingunique);
+extern void _bt_dedup_start_pending(BTDedupState *state, IndexTuple base,
+									OffsetNumber base_off);
+extern bool _bt_dedup_save_htid(BTDedupState *state, IndexTuple itup);
+extern Size _bt_dedup_finish_pending(Buffer buffer, BTDedupState *state,
+									 bool need_wal);
+extern IndexTuple _bt_form_posting(IndexTuple tuple, ItemPointer htids,
+								   int nhtids);
+extern IndexTuple _bt_swap_posting(IndexTuple newitem, IndexTuple oposting,
+								   int postingoff);
+
+/*
  * prototypes for functions in nbtinsert.c
  */
 extern bool _bt_doinsert(Relation rel, IndexTuple itup,
@@ -743,7 +995,8 @@ extern OffsetNumber _bt_findsplitloc(Relation rel, Page page,
 /*
  * prototypes for functions in nbtpage.c
  */
-extern void _bt_initmetapage(Page page, BlockNumber rootbknum, uint32 level);
+extern void _bt_initmetapage(Page page, BlockNumber rootbknum, uint32 level,
+							 bool safededup);
 extern void _bt_update_meta_cleanup_info(Relation rel,
 										 TransactionId oldestBtpoXact, float8 numHeapTuples);
 extern void _bt_upgrademetapage(Page page);
@@ -751,6 +1004,7 @@ extern Buffer _bt_getroot(Relation rel, int access);
 extern Buffer _bt_gettrueroot(Relation rel);
 extern int	_bt_getrootheight(Relation rel);
 extern bool _bt_heapkeyspace(Relation rel);
+extern bool _bt_safededup(Relation rel);
 extern void _bt_checkpage(Relation rel, Buffer buf);
 extern Buffer _bt_getbuf(Relation rel, BlockNumber blkno, int access);
 extern Buffer _bt_relandgetbuf(Relation rel, Buffer obuf,
@@ -762,6 +1016,8 @@ extern void _bt_delitems_delete(Relation rel, Buffer buf,
 								OffsetNumber *itemnos, int nitems, Relation heapRel);
 extern void _bt_delitems_vacuum(Relation rel, Buffer buf,
 								OffsetNumber *itemnos, int nitems,
+								OffsetNumber *updateitemnos,
+								IndexTuple *updated, int nupdateable,
 								BlockNumber lastBlockVacuumed);
 extern int	_bt_pagedel(Relation rel, Buffer buf);
 
@@ -812,6 +1068,7 @@ extern bool _bt_check_natts(Relation rel, bool heapkeyspace, Page page,
 							OffsetNumber offnum);
 extern void _bt_check_third_page(Relation rel, Relation heap,
 								 bool needheaptidspace, Page page, IndexTuple newtup);
+extern bool _bt_opclasses_support_dedup(Relation index);
 
 /*
  * prototypes for functions in nbtvalidate.c

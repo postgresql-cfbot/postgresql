@@ -51,6 +51,7 @@ typedef struct
 	Size		newitemsz;		/* size of newitem (includes line pointer) */
 	bool		is_leaf;		/* T if splitting a leaf page */
 	bool		is_rightmost;	/* T if splitting rightmost page on level */
+	bool		is_deduped;		/* T if posting list truncation expected */
 	OffsetNumber newitemoff;	/* where the new item is to be inserted */
 	int			leftspace;		/* space available for items on left page */
 	int			rightspace;		/* space available for items on right page */
@@ -167,7 +168,7 @@ _bt_findsplitloc(Relation rel,
 
 	/* Count up total space in data items before actually scanning 'em */
 	olddataitemstotal = rightspace - (int) PageGetExactFreeSpace(page);
-	leaffillfactor = RelationGetFillFactor(rel, BTREE_DEFAULT_FILLFACTOR);
+	leaffillfactor = BtreeGetFillFactor(rel, BTREE_DEFAULT_FILLFACTOR);
 
 	/* Passed-in newitemsz is MAXALIGNED but does not include line pointer */
 	newitemsz += sizeof(ItemIdData);
@@ -177,11 +178,15 @@ _bt_findsplitloc(Relation rel,
 	state.newitemsz = newitemsz;
 	state.is_leaf = P_ISLEAF(opaque);
 	state.is_rightmost = P_RIGHTMOST(opaque);
+	state.is_deduped = state.is_leaf && BtreeGetDoDedupOption(rel);
 	state.leftspace = leftspace;
 	state.rightspace = rightspace;
 	state.olddataitemstotal = olddataitemstotal;
 	state.minfirstrightsz = SIZE_MAX;
 	state.newitemoff = newitemoff;
+
+	/* newitem cannot be a posting list item */
+	Assert(!BTreeTupleIsPosting(newitem));
 
 	/*
 	 * maxsplits should never exceed maxoff because there will be at most as
@@ -459,6 +464,7 @@ _bt_recsplitloc(FindSplitData *state,
 	int16		leftfree,
 				rightfree;
 	Size		firstrightitemsz;
+	Size		postingsz = 0;
 	bool		newitemisfirstonright;
 
 	/* Is the new item going to be the first item on the right page? */
@@ -468,7 +474,30 @@ _bt_recsplitloc(FindSplitData *state,
 	if (newitemisfirstonright)
 		firstrightitemsz = state->newitemsz;
 	else
+	{
 		firstrightitemsz = firstoldonrightsz;
+
+		/*
+		 * Calculate suffix truncation space saving when firstright is a
+		 * posting list tuple.
+		 *
+		 * Individual posting lists often take up a significant fraction of
+		 * all space on a page.  Failing to consider that the new high key
+		 * won't need to store the posting list a second time really matters.
+		 */
+		if (state->is_leaf && state->is_deduped)
+		{
+			ItemId		itemid;
+			IndexTuple	newhighkey;
+
+			itemid = PageGetItemId(state->page, firstoldonright);
+			newhighkey = (IndexTuple) PageGetItem(state->page, itemid);
+
+			if (BTreeTupleIsPosting(newhighkey))
+				postingsz = IndexTupleSize(newhighkey) -
+					BTreeTupleGetPostingOffset(newhighkey);
+		}
+	}
 
 	/* Account for all the old tuples */
 	leftfree = state->leftspace - olddataitemstoleft;
@@ -492,9 +521,11 @@ _bt_recsplitloc(FindSplitData *state,
 	 * adding a heap TID to the left half's new high key when splitting at the
 	 * leaf level.  In practice the new high key will often be smaller and
 	 * will rarely be larger, but conservatively assume the worst case.
+	 * Truncation always truncates away any posting list that appears in the
+	 * first right tuple, though, so it's safe to subtract that overhead.
 	 */
 	if (state->is_leaf)
-		leftfree -= (int16) (firstrightitemsz +
+		leftfree -= (int16) ((firstrightitemsz - postingsz) +
 							 MAXALIGN(sizeof(ItemPointerData)));
 	else
 		leftfree -= (int16) firstrightitemsz;
@@ -691,7 +722,8 @@ _bt_afternewitemoff(FindSplitData *state, OffsetNumber maxoff,
 	itemid = PageGetItemId(state->page, OffsetNumberPrev(state->newitemoff));
 	tup = (IndexTuple) PageGetItem(state->page, itemid);
 	/* Do cheaper test first */
-	if (!_bt_adjacenthtid(&tup->t_tid, &state->newitem->t_tid))
+	if (BTreeTupleIsPosting(tup) ||
+		!_bt_adjacenthtid(&tup->t_tid, &state->newitem->t_tid))
 		return false;
 	/* Check same conditions as rightmost item case, too */
 	keepnatts = _bt_keep_natts_fast(state->rel, tup, state->newitem);

@@ -104,6 +104,23 @@ select * from btree_bpchar where f1::bpchar like 'foo%';
 select * from btree_bpchar where f1::bpchar like 'foo%';
 
 --
+-- Test deduplication within a unique index
+--
+CREATE TABLE dedup_unique_test_table (a int) WITH (autovacuum_enabled=false);
+CREATE UNIQUE INDEX dedup_unique ON dedup_unique_test_table (a) WITH (deduplication=on);
+CREATE UNIQUE INDEX plain_unique ON dedup_unique_test_table (a) WITH (deduplication=off);
+-- Generate enough garbage tuples in index to ensure that even the unique index
+-- with deduplication enabled has to check multiple leaf pages during unique
+-- checking (at least with a BLCKSZ of 8192 or less)
+DO $$
+BEGIN
+    FOR r IN 1..1350 LOOP
+        DELETE FROM dedup_unique_test_table;
+        INSERT INTO dedup_unique_test_table SELECT 1;
+    END LOOP;
+END$$;
+
+--
 -- Test B-tree fast path (cache rightmost leaf page) optimization.
 --
 

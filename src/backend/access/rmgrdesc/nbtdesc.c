@@ -30,7 +30,8 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 			{
 				xl_btree_insert *xlrec = (xl_btree_insert *) rec;
 
-				appendStringInfo(buf, "off %u", xlrec->offnum);
+				appendStringInfo(buf, "off %u; postingoff %u",
+								 xlrec->offnum, xlrec->postingoff);
 				break;
 			}
 		case XLOG_BTREE_SPLIT_L:
@@ -38,16 +39,30 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 			{
 				xl_btree_split *xlrec = (xl_btree_split *) rec;
 
-				appendStringInfo(buf, "level %u, firstright %d, newitemoff %d",
-								 xlrec->level, xlrec->firstright, xlrec->newitemoff);
+				appendStringInfo(buf, "level %u, firstright %d, newitemoff %d, postingoff %d",
+								 xlrec->level,
+								 xlrec->firstright,
+								 xlrec->newitemoff,
+								 xlrec->postingoff);
+				break;
+			}
+		case XLOG_BTREE_DEDUP_PAGE:
+			{
+				xl_btree_dedup *xlrec = (xl_btree_dedup *) rec;
+
+				appendStringInfo(buf, "baseoff %u; nitems %u",
+								 xlrec->baseoff,
+								 xlrec->nitems);
 				break;
 			}
 		case XLOG_BTREE_VACUUM:
 			{
 				xl_btree_vacuum *xlrec = (xl_btree_vacuum *) rec;
 
-				appendStringInfo(buf, "lastBlockVacuumed %u",
-								 xlrec->lastBlockVacuumed);
+				appendStringInfo(buf, "lastBlockVacuumed %u; nupdated %u; ndeleted %u",
+								 xlrec->lastBlockVacuumed,
+								 xlrec->nupdated,
+								 xlrec->ndeleted);
 				break;
 			}
 		case XLOG_BTREE_DELETE:
@@ -130,6 +145,9 @@ btree_identify(uint8 info)
 			break;
 		case XLOG_BTREE_SPLIT_R:
 			id = "SPLIT_R";
+			break;
+		case XLOG_BTREE_DEDUP_PAGE:
+			id = "DEDUPLICATE";
 			break;
 		case XLOG_BTREE_VACUUM:
 			id = "VACUUM";

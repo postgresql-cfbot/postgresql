@@ -432,7 +432,10 @@ because we allow LP_DEAD to be set with only a share lock (it's exactly
 like a hint bit for a heap tuple), but physically removing tuples requires
 exclusive lock.  In the current code we try to remove LP_DEAD tuples when
 we are otherwise faced with having to split a page to do an insertion (and
-hence have exclusive lock on it already).
+hence have exclusive lock on it already).  Deduplication can also prevent
+a page split, but removing LP_DEAD tuples is the preferred approach.
+(Note that posting list tuples can only have their LP_DEAD bit set when
+every "logical" tuple represented within the posting list is known dead.)
 
 This leaves the index in a state where it has no entry for a dead tuple
 that still exists in the heap.  This is not a problem for the current
@@ -709,6 +712,75 @@ if it must.  When a page that's already full of duplicates must be split,
 the fallback strategy assumes that duplicates are mostly inserted in
 ascending heap TID order.  The page is split in a way that leaves the left
 half of the page mostly full, and the right half of the page mostly empty.
+
+Notes about deduplication
+-------------------------
+
+We deduplicate non-pivot tuples in non-unique indexes to reduce storage
+overhead, and to avoid or at least delay page splits.  Deduplication alters
+the physical representation of tuples without changing the logical contents
+of the index, and without adding overhead to read queries.  Non-pivot
+tuples are folded together into a single physical tuple with a posting list
+(a simple array of heap TIDs with the standard item pointer format).
+Deduplication is always applied lazily, at the point where it would
+otherwise be necessary to perform a page split.  It occurs only when
+LP_DEAD items have been removed, as our last line of defense against
+splitting a leaf page.  We can set the LP_DEAD bit with posting list
+tuples, though only when all table tuples are known dead. (Bitmap scans
+cannot perform LP_DEAD bit setting, and are the common case with indexes
+that contain lots of duplicates, so this downside is considered
+acceptable.)
+
+Large groups of logical duplicates tend to appear together on the same leaf
+page due to the special duplicate logic used when choosing a split point.
+This facilitates lazy/dynamic deduplication.  Deduplication can reliably
+deduplicate a large localized group of duplicates before it can span
+multiple leaf pages.  Posting list tuples are subject to the same 1/3 of a
+page restriction as any other tuple.
+
+Lazy deduplication allows the page space accounting used during page splits
+to have absolutely minimal special case logic for posting lists.  A posting
+list can be thought of as extra payload that suffix truncation will
+reliably truncate away as needed during page splits, just like non-key
+columns from an INCLUDE index tuple.  An incoming tuple (which might cause
+a page split) can always be thought of as a non-posting-list tuple that
+must be inserted alongside existing items, without needing to consider
+deduplication.  Most of the time, that's what actually happens: incoming
+tuples are either not duplicates, or are duplicates with a heap TID that
+doesn't overlap with any existing posting list tuple.  When the incoming
+tuple really does overlap with an existing posting list, a posting list
+split is performed.  Posting list splits work in a way that more or less
+preserves the illusion that all incoming tuples do not need to be merged
+with any existing posting list tuple.
+
+Posting list splits work by "overriding" the details of the incoming tuple.
+The heap TID of the incoming tuple is altered to make it match the
+rightmost heap TID from the existing/originally overlapping posting list.
+The offset number that the new/incoming tuple is to be inserted at is
+incremented so that it will be inserted to the right of the existing
+posting list.  The insertion (or page split) operation that completes the
+insert does one extra step: an in-place update of the posting list.  The
+update changes the posting list such that the "true" heap TID from the
+original incoming tuple is now contained in the posting list.  We make
+space in the posting list by removing the heap TID that became the new
+item.  The size of the posting list won't change, and so the page split
+space accounting does not need to care about posting lists.  Also, overall
+space utilization is improved by keeping existing posting lists large.
+
+The representation of posting lists is identical to the posting lists used
+by GIN, so it would be straightforward to apply GIN's varbyte encoding
+compression scheme to individual posting lists.  Posting list compression
+would break the assumptions made by posting list splits about page space
+accounting, though, so it's not clear how compression could be integrated
+with nbtree.  Besides, posting list compression does not offer a compelling
+trade-off for nbtree, since in general nbtree is optimized for consistent
+performance with many concurrent readers and writers.  A major goal of
+nbtree's lazy approach to deduplication is to limit the performance impact
+of deduplication with random updates.  Even concurrent append-only inserts
+of the same key value will tend to have inserts of individual index tuples
+in an order that doesn't quite match heap TID order.  In general, delaying
+deduplication avoids many unnecessary posting list splits, and minimizes
+page level fragmentation.
 
 Notes About Data Representation
 -------------------------------

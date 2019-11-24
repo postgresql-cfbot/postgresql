@@ -28,7 +28,8 @@
 #define XLOG_BTREE_INSERT_META	0x20	/* same, plus update metapage */
 #define XLOG_BTREE_SPLIT_L		0x30	/* add index tuple with split */
 #define XLOG_BTREE_SPLIT_R		0x40	/* as above, new item on right */
-/* 0x50 and 0x60 are unused */
+#define XLOG_BTREE_DEDUP_PAGE	0x50	/* deduplicate tuples on leaf page */
+/* 0x60 is unused */
 #define XLOG_BTREE_DELETE		0x70	/* delete leaf index tuples for a page */
 #define XLOG_BTREE_UNLINK_PAGE	0x80	/* delete a half-dead page */
 #define XLOG_BTREE_UNLINK_PAGE_META 0x90	/* same, and update metapage */
@@ -53,6 +54,7 @@ typedef struct xl_btree_metadata
 	uint32		fastlevel;
 	TransactionId oldest_btpo_xact;
 	float8		last_cleanup_num_heap_tuples;
+	bool		btm_safededup;
 } xl_btree_metadata;
 
 /*
@@ -61,16 +63,21 @@ typedef struct xl_btree_metadata
  * This data record is used for INSERT_LEAF, INSERT_UPPER, INSERT_META.
  * Note that INSERT_META implies it's not a leaf page.
  *
- * Backup Blk 0: original page (data contains the inserted tuple)
+ * Backup Blk 0: original page (data contains the inserted tuple);
+ *				 if postingoff is set, this started out as an insertion
+ *				 into an existing posting tuple at the offset before
+ *				 offnum (i.e. it's a posting list split).  (REDO will
+ *				 have to update split posting list, too.)
  * Backup Blk 1: child's left sibling, if INSERT_UPPER or INSERT_META
  * Backup Blk 2: xl_btree_metadata, if INSERT_META
  */
 typedef struct xl_btree_insert
 {
 	OffsetNumber offnum;
+	OffsetNumber postingoff;
 } xl_btree_insert;
 
-#define SizeOfBtreeInsert	(offsetof(xl_btree_insert, offnum) + sizeof(OffsetNumber))
+#define SizeOfBtreeInsert	(offsetof(xl_btree_insert, postingoff) + sizeof(OffsetNumber))
 
 /*
  * On insert with split, we save all the items going into the right sibling
@@ -91,9 +98,19 @@ typedef struct xl_btree_insert
  *
  * Backup Blk 0: original page / new left page
  *
- * The left page's data portion contains the new item, if it's the _L variant.
- * An IndexTuple representing the high key of the left page must follow with
- * either variant.
+ * The left page's data portion contains the new item, if it's the _L variant
+ * (though _R variant page split records with a posting list split sometimes
+ * need to include newitem).  An IndexTuple representing the high key of the
+ * left page must follow in all cases.
+ *
+ * The newitem is actually an "original" newitem when a posting list split
+ * occurs that requires than the original posting list be updated in passing.
+ * Recovery recognizes this case when postingoff is set, and must use the
+ * posting offset to do an in-place update of the existing posting list that
+ * was actually split, and change the newitem to the "final" newitem.  This
+ * corresponds to the xl_btree_insert postingoff-is-set case.  postingoff
+ * won't be set when a posting list split occurs where both original posting
+ * list and newitem go on the right page.
  *
  * Backup Blk 1: new right page
  *
@@ -111,10 +128,26 @@ typedef struct xl_btree_split
 {
 	uint32		level;			/* tree level of page being split */
 	OffsetNumber firstright;	/* first item moved to right page */
-	OffsetNumber newitemoff;	/* new item's offset (useful for _L variant) */
+	OffsetNumber newitemoff;	/* new item's offset */
+	OffsetNumber postingoff;	/* offset inside orig posting tuple */
 } xl_btree_split;
 
-#define SizeOfBtreeSplit	(offsetof(xl_btree_split, newitemoff) + sizeof(OffsetNumber))
+#define SizeOfBtreeSplit	(offsetof(xl_btree_split, postingoff) + sizeof(OffsetNumber))
+
+/*
+ * When page is deduplicated, consecutive groups of tuples with equal keys are
+ * merged together into posting list tuples.
+ *
+ * The WAL record represents the interval that describes the posing tuple
+ * that should be added to the page.
+ */
+typedef struct xl_btree_dedup
+{
+	OffsetNumber baseoff;
+	OffsetNumber nitems;
+} xl_btree_dedup;
+
+#define SizeOfBtreeDedup 	(offsetof(xl_btree_dedup, nitems) + sizeof(OffsetNumber))
 
 /*
  * This is what we need to know about delete of individual leaf index tuples.
@@ -166,16 +199,27 @@ typedef struct xl_btree_reuse_page
  * block numbers aren't given.
  *
  * Note that the *last* WAL record in any vacuum of an index is allowed to
- * have a zero length array of offsets. Earlier records must have at least one.
+ * have a zero length array of target offsets (i.e. no deletes or updates).
+ * Earlier records must have at least one.
  */
 typedef struct xl_btree_vacuum
 {
 	BlockNumber lastBlockVacuumed;
 
-	/* TARGET OFFSET NUMBERS FOLLOW */
+	/*
+	 * This field helps us to find beginning of the updated versions of tuples
+	 * which follow array of offset numbers, needed when a posting list is
+	 * vacuumed without killing all of its logical tuples.
+	 */
+	uint32		nupdated;
+	uint32		ndeleted;
+
+	/* UPDATED TARGET OFFSET NUMBERS FOLLOW (if any) */
+	/* UPDATED TUPLES TO ADD BACK FOLLOW (if any) */
+	/* DELETED TARGET OFFSET NUMBERS FOLLOW (if any) */
 } xl_btree_vacuum;
 
-#define SizeOfBtreeVacuum	(offsetof(xl_btree_vacuum, lastBlockVacuumed) + sizeof(BlockNumber))
+#define SizeOfBtreeVacuum	(offsetof(xl_btree_vacuum, ndeleted) + sizeof(BlockNumber))
 
 /*
  * This is what we need to know about marking an empty branch for deletion.
@@ -256,6 +300,8 @@ typedef struct xl_btree_newroot
 extern void btree_redo(XLogReaderState *record);
 extern void btree_desc(StringInfo buf, XLogReaderState *record);
 extern const char *btree_identify(uint8 info);
+extern void btree_xlog_startup(void);
+extern void btree_xlog_cleanup(void);
 extern void btree_mask(char *pagedata, BlockNumber blkno);
 
 #endif							/* NBTXLOG_H */

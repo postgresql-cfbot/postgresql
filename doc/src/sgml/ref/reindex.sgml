@@ -58,8 +58,9 @@ REINDEX [ ( VERBOSE ) ] { INDEX | TABLE | SCHEMA | DATABASE | SYSTEM } [ CONCURR
 
     <listitem>
      <para>
-      You have altered a storage parameter (such as fillfactor)
-      for an index, and wish to ensure that the change has taken full effect.
+      You have altered a storage parameter (such as fillfactor or
+      deduplication) for an index, and wish to ensure that the change has
+      taken full effect.
      </para>
     </listitem>
 

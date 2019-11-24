@@ -166,6 +166,8 @@ CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class=
         maximum size allowed for the index type, data insertion will fail.
         In any case, non-key columns duplicate data from the index's table
         and bloat the size of the index, thus potentially slowing searches.
+        Moreover, B-tree deduplication is never used with indexes that
+        have a non-key column.
        </para>
 
        <para>
@@ -388,10 +390,38 @@ CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class=
    </variablelist>
 
    <para>
-    B-tree indexes additionally accept this parameter:
+    B-tree indexes also accept these parameters:
    </para>
 
    <variablelist>
+   <varlistentry id="index-reloption-deduplication" xreflabel="deduplication">
+    <term><literal>deduplication</literal>
+     <indexterm>
+      <primary><varname>deduplication</varname></primary>
+      <secondary>storage parameter</secondary>
+     </indexterm>
+    </term>
+    <listitem>
+    <para>
+      This setting controls usage of the B-tree deduplication
+      technique described in <xref linkend="btree-deduplication"/>.
+      Defaults to <literal>ON</literal> for non-unique indexes, and
+      <literal>OFF</literal> for unique indexes.  (Alternative
+      spellings of <literal>ON</literal> and <literal>OFF</literal>
+      are allowed as described in <xref linkend="config-setting"/>.)
+    </para>
+
+    <note>
+     <para>
+      Turning <literal>deduplication</literal> off via <command>ALTER
+      INDEX</command> prevents future insertions from triggering
+      deduplication, but does not in itself make existing posting list
+      tuples use the standard tuple representation.
+     </para>
+    </note>
+    </listitem>
+   </varlistentry>
+
    <varlistentry id="index-reloption-vacuum-cleanup-index-scale-factor" xreflabel="vacuum_cleanup_index_scale_factor">
     <term><literal>vacuum_cleanup_index_scale_factor</literal>
      <indexterm>
@@ -446,9 +476,7 @@ CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class=
      This setting controls usage of the fast update technique described in
      <xref linkend="gin-fast-update"/>.  It is a Boolean parameter:
      <literal>ON</literal> enables fast update, <literal>OFF</literal> disables it.
-     (Alternative spellings of <literal>ON</literal> and <literal>OFF</literal> are
-     allowed as described in <xref linkend="config-setting"/>.)  The
-     default is <literal>ON</literal>.
+     The default is <literal>ON</literal>.
     </para>
 
     <note>
@@ -828,6 +856,13 @@ CREATE INDEX title_idx_nulls_low ON films (title NULLS FIRST);
    To create an index with non-default fill factor:
 <programlisting>
 CREATE UNIQUE INDEX title_idx ON films (title) WITH (fillfactor = 70);
+</programlisting>
+  </para>
+
+  <para>
+   To create a unique index with deduplication enabled:
+<programlisting>
+CREATE UNIQUE INDEX title_idx ON films (title) WITH (deduplication = on);
 </programlisting>
   </para>
 

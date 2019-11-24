@@ -329,11 +329,11 @@ test=# SELECT * FROM bt_page_stats('pg_cast_oid_index', 1);
 -[ RECORD 1 ]-+-----
 blkno         | 1
 type          | l
-live_items    | 256
+live_items    | 224
 dead_items    | 0
-avg_item_size | 12
+avg_item_size | 16
 page_size     | 8192
-free_size     | 4056
+free_size     | 3668
 btpo_prev     | 0
 btpo_next     | 0
 btpo          | 0
@@ -356,33 +356,45 @@ btpo_flags    | 3
       <function>bt_page_items</function> returns detailed information about
       all of the items on a B-tree index page.  For example:
 <screen>
-test=# SELECT * FROM bt_page_items('pg_cast_oid_index', 1);
- itemoffset |  ctid   | itemlen | nulls | vars |    data
-------------+---------+---------+-------+------+-------------
-          1 | (0,1)   |      12 | f     | f    | 23 27 00 00
-          2 | (0,2)   |      12 | f     | f    | 24 27 00 00
-          3 | (0,3)   |      12 | f     | f    | 25 27 00 00
-          4 | (0,4)   |      12 | f     | f    | 26 27 00 00
-          5 | (0,5)   |      12 | f     | f    | 27 27 00 00
-          6 | (0,6)   |      12 | f     | f    | 28 27 00 00
-          7 | (0,7)   |      12 | f     | f    | 29 27 00 00
-          8 | (0,8)   |      12 | f     | f    | 2a 27 00 00
+regression=# SELECT * FROM bt_page_items('tenk2_unique1', 5);
+ itemoffset |   ctid   | itemlen | nulls | vars |          data           | dead |   htid   | tids
+------------+----------+---------+-------+------+-------------------------+------+----------+------
+          1 | (40,1)   |      16 | f     | f    | b8 05 00 00 00 00 00 00 |      |          |
+          2 | (58,11)  |      16 | f     | f    | 4a 04 00 00 00 00 00 00 | f    | (58,11)  |
+          3 | (266,4)  |      16 | f     | f    | 4b 04 00 00 00 00 00 00 | f    | (266,4)  |
+          4 | (279,25) |      16 | f     | f    | 4c 04 00 00 00 00 00 00 | f    | (279,25) |
+          5 | (333,11) |      16 | f     | f    | 4d 04 00 00 00 00 00 00 | f    | (333,11) |
+          6 | (87,24)  |      16 | f     | f    | 4e 04 00 00 00 00 00 00 | f    | (87,24)  |
+          7 | (38,22)  |      16 | f     | f    | 4f 04 00 00 00 00 00 00 | f    | (38,22)  |
+          8 | (272,17) |      16 | f     | f    | 50 04 00 00 00 00 00 00 | f    | (272,17) |
 </screen>
-      In a B-tree leaf page, <structfield>ctid</structfield> points to a heap tuple.
-      In an internal page, the block number part of <structfield>ctid</structfield>
-      points to another page in the index itself, while the offset part
-      (the second number) is ignored and is usually 1.
+      In a B-tree leaf page, <structfield>ctid</structfield> usually
+      points to a heap tuple, and <structfield>dead</structfield> may
+      indicate that the item has its <literal>LP_DEAD</literal> bit
+      set.  In an internal page, the block number part of
+      <structfield>ctid</structfield> points to another page in the
+      index itself, while the offset part (the second number) encodes
+      metadata about the tuple.  Posting list tuples on leaf pages
+      also use <structfield>ctid</structfield> for metadata.
+      <structfield>htid</structfield> always shows a single heap TID
+      for the tuple, regardless of how it is represented (internal
+      page tuples may need to store a heap TID when there are many
+      duplicate tuples on descendent leaf pages).
+      <structfield>tids</structfield> is a list of TIDs that is stored
+      within posting list tuples (tuples created by deduplication).
      </para>
      <para>
       Note that the first item on any non-rightmost page (any page with
       a non-zero value in the <structfield>btpo_next</structfield> field) is the
       page's <quote>high key</quote>, meaning its <structfield>data</structfield>
       serves as an upper bound on all items appearing on the page, while
-      its <structfield>ctid</structfield> field is meaningless.  Also, on non-leaf
-      pages, the first real data item (the first item that is not a high
-      key) is a <quote>minus infinity</quote> item, with no actual value
-      in its <structfield>data</structfield> field.  Such an item does have a valid
-      downlink in its <structfield>ctid</structfield> field, however.
+      its <structfield>ctid</structfield> field does not point to
+      another block.  Also, on non-leaf pages, the first real data item
+      (the first item that is not a high key) is a <quote>minus
+      infinity</quote> item, with no actual value in its
+      <structfield>data</structfield> field.  Such an item does have a
+      valid downlink in its <structfield>ctid</structfield> field,
+      however.
      </para>
     </listitem>
    </varlistentry>
@@ -402,17 +414,17 @@ test=# SELECT * FROM bt_page_items('pg_cast_oid_index', 1);
       with <function>get_raw_page</function> should be passed as argument.  So
       the last example could also be rewritten like this:
 <screen>
-test=# SELECT * FROM bt_page_items(get_raw_page('pg_cast_oid_index', 1));
- itemoffset |  ctid   | itemlen | nulls | vars |    data
-------------+---------+---------+-------+------+-------------
-          1 | (0,1)   |      12 | f     | f    | 23 27 00 00
-          2 | (0,2)   |      12 | f     | f    | 24 27 00 00
-          3 | (0,3)   |      12 | f     | f    | 25 27 00 00
-          4 | (0,4)   |      12 | f     | f    | 26 27 00 00
-          5 | (0,5)   |      12 | f     | f    | 27 27 00 00
-          6 | (0,6)   |      12 | f     | f    | 28 27 00 00
-          7 | (0,7)   |      12 | f     | f    | 29 27 00 00
-          8 | (0,8)   |      12 | f     | f    | 2a 27 00 00
+regression=# SELECT * FROM bt_page_items(get_raw_page('tenk2_unique1', 5));
+ itemoffset |   ctid   | itemlen | nulls | vars |          data           | dead |   htid   | tids
+------------+----------+---------+-------+------+-------------------------+------+----------+------
+          1 | (40,1)   |      16 | f     | f    | b8 05 00 00 00 00 00 00 |      |          |
+          2 | (58,11)  |      16 | f     | f    | 4a 04 00 00 00 00 00 00 | f    | (58,11)  |
+          3 | (266,4)  |      16 | f     | f    | 4b 04 00 00 00 00 00 00 | f    | (266,4)  |
+          4 | (279,25) |      16 | f     | f    | 4c 04 00 00 00 00 00 00 | f    | (279,25) |
+          5 | (333,11) |      16 | f     | f    | 4d 04 00 00 00 00 00 00 | f    | (333,11) |
+          6 | (87,24)  |      16 | f     | f    | 4e 04 00 00 00 00 00 00 | f    | (87,24)  |
+          7 | (38,22)  |      16 | f     | f    | 4f 04 00 00 00 00 00 00 | f    | (38,22)  |
+          8 | (272,17) |      16 | f     | f    | 50 04 00 00 00 00 00 00 | f    | (272,17) |
 </screen>
       All the other details are the same as explained in the previous item.
      </para>

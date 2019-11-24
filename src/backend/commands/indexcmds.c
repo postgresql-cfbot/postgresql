@@ -463,7 +463,6 @@ DefineIndex(Oid relationId,
 	bits16		constr_flags;
 	int			numberOfAttributes;
 	int			numberOfKeyAttributes;
-	TransactionId limitXmin;
 	ObjectAddress address;
 	LockRelId	heaprelid;
 	LOCKTAG		heaplocktag;
@@ -1395,10 +1394,8 @@ DefineIndex(Oid relationId,
 	 * Drop the reference snapshot.  We must do this before waiting out other
 	 * snapshot holders, else we will deadlock against other processes also
 	 * doing CREATE INDEX CONCURRENTLY, which would see our snapshot as one
-	 * they must wait for.  But first, save the snapshot's xmin to use as
-	 * limitXmin for GetCurrentVirtualXIDs().
+	 * they must wait for.
 	 */
-	limitXmin = snapshot->xmin;
 
 	PopActiveSnapshot();
 	UnregisterSnapshot(snapshot);
@@ -1417,20 +1414,19 @@ DefineIndex(Oid relationId,
 	/* We should now definitely not be advertising any xmin. */
 	Assert(MyPgXact->xmin == InvalidTransactionId);
 
-	/*
-	 * The index is now valid in the sense that it contains all currently
-	 * interesting tuples.  But since it might not contain tuples deleted just
-	 * before the reference snap was taken, we have to wait out any
-	 * transactions that might have older snapshots.
-	 */
-	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
+pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
 								 PROGRESS_CREATEIDX_PHASE_WAIT_3);
-	WaitForOlderSnapshots(limitXmin, true);
 
 	/*
+	 * The index is now valid in the sense that it contains all currently
+	 * interesting tuples.  But it might not contain tuples deleted just
+	 * before the reference snap was taken. Instead of waiting out any
+	 * transactions that might have older snapshots, we mark indcheckxmin
+	 * to true so that the index can only be used for newer snapshots.
+	 *
 	 * Index can now be marked valid -- update its pg_index entry
 	 */
-	index_set_state_flags(indexRelationId, INDEX_CREATE_SET_VALID);
+	index_set_state_flags(indexRelationId, INDEX_CREATE_SET_VALID_INDCHECKXMIN);
 
 	/*
 	 * The pg_index update will cause backends (including this one) to update

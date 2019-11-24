@@ -1,0 +1,77 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1l s2l s1i s1ul s2i
+step s1l: SELECT pg_advisory_lock(281458);
+pg_advisory_lock
+
+               
+step s2l: SELECT pg_advisory_lock(281458); <waiting ...>
+step s1i: 
+		CREATE INDEX CONCURRENTLY mcic_one_pkey ON mcic_one (id)
+
+step s1ul: SELECT pg_advisory_unlock_all();
+pg_advisory_unlock_all
+
+               
+step s2l: <... completed>
+pg_advisory_lock
+
+               
+step s2i: 
+		CREATE INDEX CONCURRENTLY mcic_one_pkey2 ON mcic_one (id)
+
+pg_advisory_unlock_all
+
+               
+pg_advisory_unlock_all
+
+               
+
+starting permutation: s1l s1i s2l s1ul s2i
+step s1l: SELECT pg_advisory_lock(281458);
+pg_advisory_lock
+
+               
+step s1i: 
+		CREATE INDEX CONCURRENTLY mcic_one_pkey ON mcic_one (id)
+
+step s2l: SELECT pg_advisory_lock(281458); <waiting ...>
+step s1ul: SELECT pg_advisory_unlock_all();
+pg_advisory_unlock_all
+
+               
+step s2l: <... completed>
+pg_advisory_lock
+
+               
+step s2i: 
+		CREATE INDEX CONCURRENTLY mcic_one_pkey2 ON mcic_one (id)
+
+pg_advisory_unlock_all
+
+               
+pg_advisory_unlock_all
+
+               
+
+starting permutation: s1l s2i s1i s1ul
+step s1l: SELECT pg_advisory_lock(281458);
+pg_advisory_lock
+
+               
+step s2i: 
+		CREATE INDEX CONCURRENTLY mcic_one_pkey2 ON mcic_one (id)
+
+step s1i: 
+		CREATE INDEX CONCURRENTLY mcic_one_pkey ON mcic_one (id)
+
+step s1ul: SELECT pg_advisory_unlock_all();
+pg_advisory_unlock_all
+
+               
+pg_advisory_unlock_all
+
+               
+pg_advisory_unlock_all
+
+               

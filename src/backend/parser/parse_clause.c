@@ -702,7 +702,7 @@ transformRangeTableFunc(ParseState *pstate, RangeTableFunc *rtf)
 	char	  **names;
 	int			colno;
 
-	/* Currently only XMLTABLE is supported */
+	tf->functype = TFT_XMLTABLE;
 	constructName = "XMLTABLE";
 	docType = XMLOID;
 
@@ -1125,14 +1125,18 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		rtr->rtindex = rtindex;
 		return (Node *) rtr;
 	}
-	else if (IsA(n, RangeTableFunc))
+	else if (IsA(n, RangeTableFunc) || IsA(n, JsonTable))
 	{
 		/* table function is like a plain relation */
 		RangeTblRef *rtr;
 		RangeTblEntry *rte;
 		int			rtindex;
 
-		rte = transformRangeTableFunc(pstate, (RangeTableFunc *) n);
+		if (IsA(n, RangeTableFunc))
+			rte = transformRangeTableFunc(pstate, (RangeTableFunc *) n);
+		else
+			rte = transformJsonTable(pstate, (JsonTable *) n);
+
 		/* assume new rte is at end */
 		rtindex = list_length(pstate->p_rtable);
 		Assert(rte == rt_fetch(rtindex, pstate->p_rtable));

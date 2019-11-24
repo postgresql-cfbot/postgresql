@@ -10,7 +10,7 @@
   <variablelist>
 
    <varlistentry>
-    <term><acronym>ANSI</acronym></term>
+    <term revision="test badge on term"><acronym>ANSI</acronym></term>
     <listitem>
      <para>
       <ulink url="https://en.wikipedia.org/wiki/American_National_Standards_Institute">
@@ -19,7 +19,7 @@
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+   <varlistentry revision="v15 on varlistentry">
     <term><acronym>API</acronym></term>
     <listitem>
      <para>
@@ -31,7 +31,7 @@
    <varlistentry>
     <term><acronym>ASCII</acronym></term>
     <listitem>
-     <para>
+     <para revision="badge on para">
       <ulink url="https://en.wikipedia.org/wiki/Ascii">American Standard
       Code for Information Interchange</ulink>
      </para>

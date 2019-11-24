@@ -289,4 +289,14 @@ set       toc,title
   </xsl:choose>
 </xsl:template>
 
+<!--<xsl:template name="revision.badge">-->
+<xsl:template match="//*[@revision]">
+  <xsl:param name="node" select="."/>
+  <xsl:variable name="revision" as="xs:string?" select="$node/@revision"/>
+  <xsl:if test="$revision">
+    <span class="revision-badge"><xsl:value-of select="$revision"/></span>
+  </xsl:if>
+  <xsl:apply-templates/>
+</xsl:template>
+
 </xsl:stylesheet>

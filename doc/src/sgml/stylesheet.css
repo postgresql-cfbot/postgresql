@@ -109,3 +109,13 @@ acronym		{ font-style: inherit; }
     width: 75%;
   }
 }
+
+/* version badge styling */
+span.revision-badge {
+	visibility: visible  ;
+    color: white;
+	background-color: #00933C;
+	border: 1px solid #000000;
+	border-radius: 2px;
+    padding: 1px;
+}

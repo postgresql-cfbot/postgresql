@@ -12,6 +12,7 @@
 #include "access/transam.h"
 #include "catalog/pg_language_d.h"
 #include "pg_upgrade.h"
+#include "fe_utils/string_utils.h"
 
 /*
  * qsort comparator for pointers to library names
@@ -269,6 +270,227 @@ check_loadable_libraries(void)
 				 "or remove the functions using them from the old installation.  A list of\n"
 				 "problem libraries is in the file:\n"
 				 "    %s\n\n", output_path);
+	}
+	else
+		check_ok();
+}
+
+/*
+ * qsort comparator for procedure signatures
+ */
+static int
+proc_compare_sig(const void *p1, const void *p2)
+{
+	ProcInfo *proc1 = (ProcInfo *) p1;
+	ProcInfo *proc2 = (ProcInfo *) p2;
+
+	return strcmp(proc1->procsig, proc2->procsig);
+}
+
+/*
+ * Fetch the signatures and ACL of cluster's system procedures.
+ */
+void
+get_catalog_procedures(ClusterInfo *cluster)
+{
+	int			dbnum;
+
+	/*
+	 * Fetch all procedure signatures and ACL.
+	 * Each procedure may have different ACL in different database.
+	 */
+	for (dbnum = 0; dbnum < cluster->dbarr.ndbs; dbnum++)
+	{
+		DbInfo	   *dbinfo = &cluster->dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(cluster, dbinfo->db_name);
+		PGresult   *res;
+		int			num_procs;
+		int			rowno;
+
+		/*
+		 * Fetch procedure signatures and ACL of functions that have
+		 * non default ACL. For each procedure save only ACL that differs
+		 * from initial privilleges. Only check privileges set by initdb.
+		 * Objects which have initial privileges set by CREATE EXTENSION,
+		 * will be handled by extension itself.
+		 */
+		if (cluster->major_version >= 110000)
+		{
+			res = executeQueryOrDie(conn,
+						"select proname::text || '('"
+						" || pg_get_function_arguments(pg_proc.oid)::text"
+						" || ')' as funsig,"
+						" array (SELECT unnest(pg_proc.proacl)"
+						" EXCEPT SELECT unnest(pg_init_privs.initprivs))"
+						" from pg_proc join pg_init_privs"
+						" on pg_proc.oid = pg_init_privs.objoid"
+						" where pg_init_privs.classoid = 'pg_proc'::regclass::oid"
+						" and pg_init_privs.privtype = 'i'"
+						" and pg_proc.prokind='f'"
+						" and pg_proc.proacl != pg_init_privs.initprivs;");
+		}
+		else
+		{
+			res = executeQueryOrDie(conn,
+					"select proname::text || '('"
+					" || pg_get_function_arguments(pg_proc.oid)::text"
+					" || ')' as funsig,"
+					" array (SELECT unnest(pg_proc.proacl)"
+					" EXCEPT SELECT unnest(pg_init_privs.initprivs))"
+					" from pg_proc join pg_init_privs"
+					" on pg_proc.oid = pg_init_privs.objoid"
+					" where pg_init_privs.classoid = 'pg_proc'::regclass::oid"
+					" and pg_init_privs.privtype = 'i'"
+					" and pg_proc.proisagg = false"
+					" and pg_proc.proacl != pg_init_privs.initprivs;");
+		}
+
+		num_procs = PQntuples(res);
+		dbinfo->proc_arr.nprocs = num_procs;
+		dbinfo->proc_arr.procs = (ProcInfo *) pg_malloc(sizeof(ProcInfo) * num_procs);
+
+		for (rowno = 0; rowno < num_procs; rowno++)
+		{
+			ProcInfo    *curr = &dbinfo->proc_arr.procs[rowno];
+			char	   *procsig = PQgetvalue(res, rowno, 0);
+			char	   *procacl = PQgetvalue(res, rowno, 1);
+
+			curr->procsig = pg_strdup(procsig);
+			curr->procacl = pg_strdup(procacl);
+		}
+
+		qsort((void *) dbinfo->proc_arr.procs, dbinfo->proc_arr.nprocs,
+			  sizeof(ProcInfo), proc_compare_sig);
+
+		PQclear(res);
+		PQfinish(conn);
+	}
+}
+
+/* helper for check_catalog_procedures() */
+static void
+log_incompatible_procedure(FILE **script, char *output_path,
+						   DbInfo *olddbinfo, bool *new_db,
+						   ProcInfo *curr)
+{
+	char	  **aclitems;
+	int			naclitems;
+	int			i;
+
+	if (*script == NULL && (*script = fopen_priv(output_path, "w")) == NULL)
+		pg_fatal("could not open file \"%s\": %s\n", output_path, strerror(errno));
+
+	/* REVOKE command must be executed in corresponding database */
+	if (*new_db)
+	{
+		fprintf(*script, _("\\c %s \n"), olddbinfo->db_name);
+		*new_db = false;
+	}
+
+	if (!parsePGArray(curr->procacl, &aclitems, &naclitems))
+	{
+		if (aclitems)
+			free(aclitems);
+		pg_fatal("check_catalog_procedures failed \n");
+	}
+
+	/* generate REVOKE command for each ACL on this function */
+	for (i = 0; i < naclitems; i++)
+	{
+		char *pos = strchr(aclitems[i], '=');
+		*pos = '\0';
+
+		if (pos != aclitems[i])
+			fprintf(*script, _("REVOKE ALL ON FUNCTION %s FROM %s;\n"),
+					curr->procsig, aclitems[i]);
+		else
+			fprintf(*script, _("REVOKE ALL ON FUNCTION %s FROM PUBLIC;\n"),
+					curr->procsig);
+	}
+
+	if (aclitems)
+		free(aclitems);
+}
+
+/*
+ * Check API changes in pg_proc between old_cluster and new_cluster.
+ * Report functions that only exist in old_cluster.
+ *
+ * NOTE It's vital to call it after check_databases_are_compatible(),
+ * because we rely on correct database order.
+ */
+void
+check_catalog_procedures(ClusterInfo *old_cluster, ClusterInfo *new_cluster)
+{
+	int			dbnum;
+	FILE	   *script = NULL;
+	bool		found = false;
+	char		output_path[MAXPGPATH];
+	snprintf(output_path, sizeof(output_path), "catalog_procedures.sql");
+
+	prep_status("Checking for system functions API compatibility\n");
+
+	for (dbnum = 0; dbnum < old_cluster->dbarr.ndbs; dbnum++)
+	{
+		DbInfo	   *olddbinfo = &old_cluster->dbarr.dbs[dbnum];
+		DbInfo	   *newdbinfo = &new_cluster->dbarr.dbs[dbnum];
+		int i, j;
+		bool new_db = true;
+
+		if (strcmp(olddbinfo->db_name, newdbinfo->db_name) != 0)
+			pg_log(PG_FATAL, "check_catalog_procedures failed \n");
+
+		/*
+		 * Check system functions with non-standard ACL from the old cluster
+		 * against system functions from the new cluster. If the function
+		 * only exist in the old cluster, generate REVOKE script to perform
+		 * before upgrade. Both lists are sorted by procsig.
+		 */
+		i = j = 0;
+		while (i < olddbinfo->proc_arr.nprocs && j < newdbinfo->proc_arr.nprocs)
+		{
+			ProcInfo    *oldcurr = &olddbinfo->proc_arr.procs[i];
+			ProcInfo    *newcurr = &newdbinfo->proc_arr.procs[j];
+			int			result = strcmp(oldcurr->procsig, newcurr->procsig);
+
+			if (result == 0) /* The function exists in both clusters */
+			{
+				i++;
+				j++;
+			}
+			else if (result < 0) /* The function exists only in the old cluster */
+			{
+				log_incompatible_procedure(&script, output_path,
+									olddbinfo, &new_db, oldcurr);
+				found = true;
+				i++;
+			}
+			else if (result > 0)  /* The function exists only in the new cluster */
+				j++;
+		}
+
+		/* handle tail of old_cluster proc list */
+		while (i < olddbinfo->proc_arr.nprocs)
+		{
+			ProcInfo    *oldcurr = &olddbinfo->proc_arr.procs[i];
+			/* The function exists only in the old cluster */
+			log_incompatible_procedure(&script, output_path,
+									olddbinfo, &new_db, oldcurr);
+			found = true;
+
+			i++;
+		}
+	}
+
+	if (found)
+	{
+		fclose(script);
+		pg_log(PG_REPORT, "fatal\n");
+		pg_fatal("Your installation contains non-default privileges \n"
+				 "for system procedures for which the API has changed. \n"
+				 "To perform the upgrade, reset these privileges to default.\n"
+				 "File %s contains the script to perform REVOKE ALL for such procedures.\n\n",
+				 output_path);
 	}
 	else
 		check_ok();

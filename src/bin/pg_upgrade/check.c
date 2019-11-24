@@ -90,6 +90,7 @@ check_and_dump_old_cluster(bool live_check)
 
 	get_loadable_libraries();
 
+	get_catalog_procedures(&old_cluster);
 
 	/*
 	 * Check for various failure cases
@@ -163,6 +164,16 @@ check_new_cluster(void)
 	check_databases_are_compatible();
 
 	check_loadable_libraries();
+
+	/*
+	 * When restoring non-default ACL from old cluster we may attempt to apply
+	 * GRANT for functions whose signatures have changed significantly.
+	 *
+	 * Compare function lists of old cluster and new cluster to catch
+	 * the incompatibility early and report it to user with a nice error message
+	 */
+	get_catalog_procedures(&new_cluster);
+	check_catalog_procedures(&old_cluster, &new_cluster);
 
 	switch (user_opts.transfer_mode)
 	{

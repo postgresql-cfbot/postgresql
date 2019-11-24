@@ -325,6 +325,23 @@ SELECT -('-9223372036854775807 us'::interval); -- ok
 
 SELECT -('-2147483647 months -2147483647 days -9223372036854775807 us'::interval); -- should fail
 ERROR:  interval out of range
+SELECT f1 <-> interval '@ 2 day 3 hours' FROM INTERVAL_TBL;
+          ?column?          
+----------------------------
+ 2 days 02:59:00
+ 2 days -02:00:00
+ 8 days -03:00:00
+ 34 years -2 days -03:00:00
+ 3 mons -2 days -03:00:00
+ 2 days 03:00:14
+ 1 day 00:56:56
+ 6 years -2 days -03:00:00
+ 5 mons -2 days -03:00:00
+ 5 mons -2 days +09:00:00
+ infinity
+ infinity
+(12 rows)
+
 -- Test intervals that are large enough to overflow 64 bits in comparisons
 CREATE TEMP TABLE INTERVAL_TBL_OF (f1 interval);
 INSERT INTO INTERVAL_TBL_OF (f1) VALUES

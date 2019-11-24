@@ -4088,3 +4088,52 @@ width_bucket_float8(PG_FUNCTION_ARGS)
 
 	PG_RETURN_INT32(result);
 }
+
+Datum
+float4dist(PG_FUNCTION_ARGS)
+{
+	float4		a = PG_GETARG_FLOAT4(0);
+	float4		b = PG_GETARG_FLOAT4(1);
+	float4		r;
+
+	r = a - b;
+	if (unlikely(isinf(r)) && !isinf(a) && !isinf(b))
+		float_overflow_error();
+
+	PG_RETURN_FLOAT4(fabsf(r));
+}
+
+Datum
+float8dist(PG_FUNCTION_ARGS)
+{
+	float8		a = PG_GETARG_FLOAT8(0);
+	float8		b = PG_GETARG_FLOAT8(1);
+	float8		r;
+
+	r = a - b;
+	if (unlikely(isinf(r)) && !isinf(a) && !isinf(b))
+		float_overflow_error();
+
+	PG_RETURN_FLOAT8(fabs(r));
+}
+
+
+Datum
+float48dist(PG_FUNCTION_ARGS)
+{
+	float4		a = PG_GETARG_FLOAT4(0);
+	float8		b = PG_GETARG_FLOAT8(1);
+	float8		r = float8_mi(a, b);
+
+	PG_RETURN_FLOAT8(fabs(r));
+}
+
+Datum
+float84dist(PG_FUNCTION_ARGS)
+{
+	float8		a = PG_GETARG_FLOAT8(0);
+	float4		b = PG_GETARG_FLOAT4(1);
+	float8		r = float8_mi(a, b);
+
+	PG_RETURN_FLOAT8(fabs(r));
+}

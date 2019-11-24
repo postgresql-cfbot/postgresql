@@ -77,3 +77,6 @@ SELECT date_part('microsecond', TIME '2020-05-26 13:30:25.575401');
 SELECT date_part('millisecond', TIME '2020-05-26 13:30:25.575401');
 SELECT date_part('second',      TIME '2020-05-26 13:30:25.575401');
 SELECT date_part('epoch',       TIME '2020-05-26 13:30:25.575401');
+
+-- distance
+SELECT f1 <-> time '01:23:45' AS "Distance" FROM TIME_TBL;

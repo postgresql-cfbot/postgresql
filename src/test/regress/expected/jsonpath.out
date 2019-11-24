@@ -21,6 +21,24 @@ select 'lax $'::jsonpath;
  $
 (1 row)
 
+select 'pg $'::jsonpath;
+ jsonpath 
+----------
+ pg $
+(1 row)
+
+select 'pg strict $'::jsonpath;
+  jsonpath   
+-------------
+ pg strict $
+(1 row)
+
+select 'pg lax $'::jsonpath;
+ jsonpath 
+----------
+ pg $
+(1 row)
+
 select '$.a'::jsonpath;
  jsonpath 
 ----------
@@ -88,51 +106,56 @@ select '$[*][0].a.b'::jsonpath;
 (1 row)
 
 select '$.a.**.b'::jsonpath;
-   jsonpath   
---------------
- $."a".**."b"
-(1 row)
-
-select '$.a.**{2}.b'::jsonpath;
+ERROR:  jsonpath contains extended operators that were not enabled
+LINE 1: select '$.a.**.b'::jsonpath;
+               ^
+HINT:  use "pg" modifier at the start of jsonpath string to enable extensions
+select 'pg $.a.**.b'::jsonpath;
     jsonpath     
 -----------------
- $."a".**{2}."b"
+ pg $."a".**."b"
 (1 row)
 
-select '$.a.**{2 to 2}.b'::jsonpath;
-    jsonpath     
------------------
- $."a".**{2}."b"
-(1 row)
-
-select '$.a.**{2 to 5}.b'::jsonpath;
-       jsonpath       
-----------------------
- $."a".**{2 to 5}."b"
-(1 row)
-
-select '$.a.**{0 to 5}.b'::jsonpath;
-       jsonpath       
-----------------------
- $."a".**{0 to 5}."b"
-(1 row)
-
-select '$.a.**{5 to last}.b'::jsonpath;
-        jsonpath         
--------------------------
- $."a".**{5 to last}."b"
-(1 row)
-
-select '$.a.**{last}.b'::jsonpath;
+select 'pg $.a.**{2}.b'::jsonpath;
       jsonpath      
 --------------------
- $."a".**{last}."b"
+ pg $."a".**{2}."b"
 (1 row)
 
-select '$.a.**{last to 5}.b'::jsonpath;
+select 'pg $.a.**{2 to 2}.b'::jsonpath;
+      jsonpath      
+--------------------
+ pg $."a".**{2}."b"
+(1 row)
+
+select 'pg $.a.**{2 to 5}.b'::jsonpath;
         jsonpath         
 -------------------------
- $."a".**{last to 5}."b"
+ pg $."a".**{2 to 5}."b"
+(1 row)
+
+select 'pg $.a.**{0 to 5}.b'::jsonpath;
+        jsonpath         
+-------------------------
+ pg $."a".**{0 to 5}."b"
+(1 row)
+
+select 'pg $.a.**{5 to last}.b'::jsonpath;
+          jsonpath          
+----------------------------
+ pg $."a".**{5 to last}."b"
+(1 row)
+
+select 'pg $.a.**{last}.b'::jsonpath;
+       jsonpath        
+-----------------------
+ pg $."a".**{last}."b"
+(1 row)
+
+select 'pg $.a.**{last to 5}.b'::jsonpath;
+          jsonpath          
+----------------------------
+ pg $."a".**{last to 5}."b"
 (1 row)
 
 select '$+1'::jsonpath;
@@ -178,17 +201,101 @@ select '"\x50\u0067\u{53}\u{051}\u{00004C}"'::jsonpath;
 (1 row)
 
 select '$.foo\x50\u0067\u{53}\u{051}\u{00004C}\t\"bar'::jsonpath;
-      jsonpath       
----------------------
- $."fooPgSQL\t\"bar"
-(1 row)
-
+ERROR:  escape sequence is invalid at or near "\x" of jsonpath input
+LINE 1: select '$.foo\x50\u0067\u{53}\u{051}\u{00004C}\t\"bar'::json...
+               ^
 select '"\z"'::jsonpath;  -- unrecognized escape is just the literal char
  jsonpath 
 ----------
  "z"
 (1 row)
 
+select '$."foo\x50\u0067\u{53}\u{051}\u{00004C}\t\"bar"'::jsonpath;
+      jsonpath       
+---------------------
+ $."fooPgSQL\t\"bar"
+(1 row)
+
+select '$.\u12345.a\u1234.b\u{12}34'::jsonpath;
+        jsonpath         
+-------------------------
+ $."ሴ5"."aሴ"."b\u001234"
+(1 row)
+
+select '$.\u123'::jsonpath;
+ERROR:  invalid unicode sequence at or near "\u123" of jsonpath input
+LINE 1: select '$.\u123'::jsonpath;
+               ^
+select '$.\u{}'::jsonpath;
+ERROR:  invalid unicode sequence at or near "\u{" of jsonpath input
+LINE 1: select '$.\u{}'::jsonpath;
+               ^
+select '$.\u{1}'::jsonpath;
+  jsonpath  
+------------
+ $."\u0001"
+(1 row)
+
+select '$.\u{20}'::jsonpath;
+ERROR:  invalid characters in identifier at end of jsonpath input
+LINE 1: select '$.\u{20}'::jsonpath;
+               ^
+select '$."\u{20}"'::jsonpath;
+ jsonpath 
+----------
+ $." "
+(1 row)
+
+select '$.\u{21}'::jsonpath;
+ERROR:  invalid characters in identifier at end of jsonpath input
+LINE 1: select '$.\u{21}'::jsonpath;
+               ^
+select '$."\u{21}"'::jsonpath;
+ jsonpath 
+----------
+ $."!"
+(1 row)
+
+select '$.\u{12345}'::jsonpath;
+ jsonpath 
+----------
+ $."𒍅"
+(1 row)
+
+select '$.\u{10FFFF}'::jsonpath;
+ jsonpath 
+----------
+ $.""
+(1 row)
+
+select '$.\u{110000}'::jsonpath;
+ERROR:  invalid Unicode escape value at or near "\u{110000}" of jsonpath input
+LINE 1: select '$.\u{110000}'::jsonpath;
+               ^
+select '$.\x123'::jsonpath;
+ERROR:  invalid escape sequence at or near "\" of jsonpath input
+LINE 1: select '$.\x123'::jsonpath;
+               ^
+select '$.foo\'::jsonpath;
+ERROR:  escape sequence is invalid at or near "\" of jsonpath input
+LINE 1: select '$.foo\'::jsonpath;
+               ^
+select '"foo'::jsonpath;
+ERROR:  unexpected end of quoted string at end of jsonpath input
+LINE 1: select '"foo'::jsonpath;
+               ^
+select '$.foo"bar'::jsonpath;
+ERROR:  unexpected end of quoted string at end of jsonpath input
+LINE 1: select '$.foo"bar'::jsonpath;
+               ^
+select '"foo\'::jsonpath;
+ERROR:  unexpected end of quoted string at or near "\" of jsonpath input
+LINE 1: select '"foo\'::jsonpath;
+               ^
+select '"foo\\'::jsonpath;
+ERROR:  unexpected end of quoted string at end of jsonpath input
+LINE 1: select '"foo\\'::jsonpath;
+               ^
 select '$.g ? ($.a == 1)'::jsonpath;
       jsonpath      
 --------------------
@@ -276,25 +383,59 @@ select '$.g ? (+@.x >= +-(+@.a + 2))'::jsonpath;
 select '$a'::jsonpath;
  jsonpath 
 ----------
- $"a"
+ $a
 (1 row)
 
+select '$_'::jsonpath;
+ jsonpath 
+----------
+ $_
+(1 row)
+
+select '$123'::jsonpath;
+ jsonpath 
+----------
+ $123
+(1 row)
+
+select '$$$'::jsonpath;
+ jsonpath 
+----------
+ $$$
+(1 row)
+
+select '$_$$1_3a'::jsonpath;
+ jsonpath 
+----------
+ $_$$1_3a
+(1 row)
+
+select '$\u12345'::jsonpath;
+ jsonpath 
+----------
+ $ሴ5
+(1 row)
+
+select '$\u{20}'::jsonpath;
+ERROR:  invalid characters in identifier at end of jsonpath input
+LINE 1: select '$\u{20}'::jsonpath;
+               ^
 select '$a.b'::jsonpath;
  jsonpath 
 ----------
- $"a"."b"
+ $a."b"
 (1 row)
 
 select '$a[*]'::jsonpath;
  jsonpath 
 ----------
- $"a"[*]
+ $a[*]
 (1 row)
 
 select '$.g ? (@.zip == $zip)'::jsonpath;
-         jsonpath          
----------------------------
- $."g"?(@."zip" == $"zip")
+        jsonpath         
+-------------------------
+ $."g"?(@."zip" == $zip)
 (1 row)
 
 select '$.a[1,2, 3 to 16]'::jsonpath;
@@ -304,9 +445,9 @@ select '$.a[1,2, 3 to 16]'::jsonpath;
 (1 row)
 
 select '$.a[$a + 1, ($b[*]) to -($[0] * 2)]'::jsonpath;
-                jsonpath                
-----------------------------------------
- $."a"[$"a" + 1,$"b"[*] to -($[0] * 2)]
+              jsonpath              
+------------------------------------
+ $."a"[$a + 1,$b[*] to -($[0] * 2)]
 (1 row)
 
 select '$.a[$.a.size() - 3]'::jsonpath;
@@ -414,9 +555,9 @@ select '$ ? (@ starts with "abc")'::jsonpath;
 (1 row)
 
 select '$ ? (@ starts with $var)'::jsonpath;
-         jsonpath         
---------------------------
- $?(@ starts with $"var")
+        jsonpath        
+------------------------
+ $?(@ starts with $var)
 (1 row)
 
 select '$ ? (@ like_regex "(invalid pattern")'::jsonpath;
@@ -487,9 +628,9 @@ select '$ < 1'::jsonpath;
 (1 row)
 
 select '($ < 1) || $.a.b <= $x'::jsonpath;
-           jsonpath           
-------------------------------
- ($ < 1 || $."a"."b" <= $"x")
+          jsonpath          
+----------------------------
+ ($ < 1 || $."a"."b" <= $x)
 (1 row)
 
 select '@ + 1'::jsonpath;
@@ -821,8 +962,16 @@ select '0'::jsonpath;
 (1 row)
 
 select '00'::jsonpath;
-ERROR:  syntax error, unexpected IDENT_P at end of jsonpath input
+ERROR:  syntax error, unexpected INT_P, expecting $end at or near "0" of jsonpath input
 LINE 1: select '00'::jsonpath;
+               ^
+select '$.00'::jsonpath;
+ERROR:  syntax error, unexpected INT_P at or near "0" of jsonpath input
+LINE 1: select '$.00'::jsonpath;
+               ^
+select '$.0a'::jsonpath;
+ERROR:  syntax error, unexpected INT_P at or near "0" of jsonpath input
+LINE 1: select '$.0a'::jsonpath;
                ^
 select '0.0'::jsonpath;
  jsonpath 

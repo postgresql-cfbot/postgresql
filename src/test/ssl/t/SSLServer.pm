@@ -66,7 +66,7 @@ sub test_connect_fails
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
 
-	my ($common_connstr, $connstr, $expected_stderr, $test_name) = @_;
+	my ($common_connstr, $connstr, $expected_stderr, $test_name, %kwargs) = @_;
 
 	my $cmd = [
 		'psql', '-X', '-A', '-t', '-c',
@@ -74,7 +74,18 @@ sub test_connect_fails
 		'-d', "$common_connstr $connstr"
 	];
 
-	command_fails_like($cmd, $expected_stderr, $test_name);
+	my @extra_ipcrun_opts = ();
+	if ($kwargs{'close_stdin'})
+	{
+		my $eof_in = "\x04";
+		# We use IPC::Run's pty support here because OpenSSL likes to use
+		# /dev/tty to write its prompt and read the result instead of using
+		# stdio. So we can't stop it blocking the test just by closing stdin.
+		push(@extra_ipcrun_opts, '<pty<', \$eof_in);
+	}
+
+	command_fails_like($cmd, $expected_stderr, $test_name,
+        extra_ipcrun_opts => \@extra_ipcrun_opts);
 	return;
 }
 

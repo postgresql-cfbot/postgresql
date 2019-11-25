@@ -27,6 +27,7 @@
 
 #ifndef FRONTEND
 #include "miscadmin.h"
+#include "access/xlog.h"
 #include "utils/memutils.h"
 #endif
 
@@ -244,7 +245,9 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 	uint32		pageHeaderSize;
 	bool		gotheader;
 	int			readOff;
-
+#ifndef FRONTEND
+	XLogSegNo	targetSegNo;
+#endif
 	/*
 	 * randAccess indicates whether to verify the previous-record pointer of
 	 * the record we're reading.  We only do this if we're reading
@@ -290,6 +293,22 @@ XLogReadRecord(XLogReaderState *state, XLogRecPtr RecPtr, char **errormsg)
 	targetPagePtr = RecPtr - (RecPtr % XLOG_BLCKSZ);
 	targetRecOff = RecPtr % XLOG_BLCKSZ;
 
+#ifndef FRONTEND
+	/*
+	 * Although It's safe that the current segment is recycled as a new
+	 * segment since we check the page/record header at reading, it leads to
+	 * an apparently strange error message when logical replication, which can
+	 * be prevented by explicitly checking if the current segment is removed.
+	 */
+	XLByteToSeg(targetPagePtr, targetSegNo, state->wal_segment_size);
+	if (targetSegNo <= XLogGetLastRemovedSegno())
+	{
+		report_invalid_record(state,
+							  "WAL segment for LSN %X/%X has been removed",
+							  (uint32)(RecPtr >> 32), (uint32) RecPtr);
+		goto err;
+	}
+#endif
 	/*
 	 * Read the page containing the record into state->readBuf. Request enough
 	 * byte to cover the whole record header, or at least the part of it that

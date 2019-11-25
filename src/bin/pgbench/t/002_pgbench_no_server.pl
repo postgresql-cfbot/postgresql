@@ -25,7 +25,7 @@ sub pgbench
 	my ($opts, $stat, $out, $err, $name) = @_;
 	print STDERR "opts=$opts, stat=$stat, out=$out, err=$err, name=$name";
 	command_checks_all([ 'pgbench', split(/\s+/, $opts) ],
-		$stat, $out, $err, $name);
+		$stat, '', $out, $err, $name);
 	return;
 }
 
@@ -52,7 +52,7 @@ sub pgbench_scripts
 			push @cmd, '-f', $filename;
 		}
 	}
-	command_checks_all(\@cmd, $stat, $out, $err, $name);
+	command_checks_all(\@cmd, $stat, '', $out, $err, $name);
 	return;
 }
 

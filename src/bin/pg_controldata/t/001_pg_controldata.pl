@@ -33,6 +33,7 @@ close $fh;
 command_checks_all(
 	[ 'pg_controldata', $node->data_dir ],
 	0,
+	'',
 	[
 		qr/WARNING: Calculated CRC checksum does not match value stored in file/,
 		qr/WARNING: invalid WAL segment size/

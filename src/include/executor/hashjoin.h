@@ -314,6 +314,8 @@ typedef struct HashJoinTableData
 	int			nbatch_outstart;	/* nbatch when we started outer scan */
 
 	bool		growEnabled;	/* flag to shut off nbatch increases */
+	bool		growRemainOldBatch;	/* all the tuple remain in old batch when growing */
+	int			splittableSize;	/* size of splittable tuples in hashtable */
 
 	double		totalTuples;	/* # tuples obtained from inner plan */
 	double		partialTuples;	/* # tuples obtained from inner plan by me */

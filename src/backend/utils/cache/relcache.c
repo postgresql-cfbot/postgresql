@@ -3403,7 +3403,9 @@ RelationBuildLocalRelation(const char *relname,
  * RelationSetNewRelfilenode
  *
  * Assign a new relfilenode (physical file name), and possibly a new
- * persistence setting, to the relation.
+ * persistence setting, to the relation. If tablespaceOid is different
+ * from InvalidOid, then new filenode will be created there instead of
+ * current location.
  *
  * This allows a full rewrite of the relation to be done with transactional
  * safety (since the filenode assignment can be rolled back).  Note however
@@ -3414,7 +3416,7 @@ RelationBuildLocalRelation(const char *relname,
  * Caller must already hold exclusive lock on the relation.
  */
 void
-RelationSetNewRelfilenode(Relation relation, char persistence)
+RelationSetNewRelfilenode(Relation relation, char persistence, Oid tablespaceOid)
 {
 	Oid			newrelfilenode;
 	Relation	pg_class;
@@ -3423,9 +3425,13 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	MultiXactId minmulti = InvalidMultiXactId;
 	TransactionId freezeXid = InvalidTransactionId;
 	RelFileNode newrnode;
+	Oid			newTablespaceOid = relation->rd_rel->reltablespace;
+
+	if (OidIsValid(tablespaceOid))
+		newTablespaceOid = tablespaceOid;
 
 	/* Allocate a new relfilenode */
-	newrelfilenode = GetNewRelFileNode(relation->rd_rel->reltablespace, NULL,
+	newrelfilenode = GetNewRelFileNode(newTablespaceOid, NULL,
 									   persistence);
 
 	/*
@@ -3455,6 +3461,8 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	 */
 	newrnode = relation->rd_node;
 	newrnode.relNode = newrelfilenode;
+	if (OidIsValid(tablespaceOid))
+		newrnode.spcNode = newTablespaceOid;
 
 	switch (relation->rd_rel->relkind)
 	{
@@ -3524,6 +3532,10 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	{
 		/* Normal case, update the pg_class entry */
 		classform->relfilenode = newrelfilenode;
+
+		/* Update tablespace in pg_class entry if it is changed */
+		if (OidIsValid(tablespaceOid))
+			classform->reltablespace = (newTablespaceOid == MyDatabaseTableSpace) ? InvalidOid : tablespaceOid;
 
 		/* relpages etc. never change for sequences */
 		if (relation->rd_rel->relkind != RELKIND_SEQUENCE)

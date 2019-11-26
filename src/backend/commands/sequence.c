@@ -314,7 +314,9 @@ ResetSequence(Oid seq_relid)
 	/*
 	 * Create a new storage file for the sequence.
 	 */
-	RelationSetNewRelfilenode(seq_rel, seq_rel->rd_rel->relpersistence);
+	RelationSetNewRelfilenode(seq_rel,
+							  seq_rel->rd_rel->relpersistence,
+							  InvalidOid);
 
 	/*
 	 * Ensure sequence's relfrozenxid is at 0, since it won't contain any
@@ -489,7 +491,9 @@ AlterSequence(ParseState *pstate, AlterSeqStmt *stmt)
 		 * Create a new storage file for the sequence, making the state
 		 * changes transactional.
 		 */
-		RelationSetNewRelfilenode(seqrel, seqrel->rd_rel->relpersistence);
+		RelationSetNewRelfilenode(seqrel,
+								  seqrel->rd_rel->relpersistence,
+								  InvalidOid);
 
 		/*
 		 * Ensure sequence's relfrozenxid is at 0, since it won't contain any

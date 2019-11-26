@@ -1238,7 +1238,8 @@ index_create(Relation heapRelation,
  * on.  This is called during concurrent reindex processing.
  */
 Oid
-index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId, const char *newName)
+index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
+							   Oid tablespaceOid, const char *newName)
 {
 	Relation	indexRelation;
 	IndexInfo  *oldInfo,
@@ -1368,7 +1369,7 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId, const char
 							  newInfo,
 							  indexColNames,
 							  indexRelation->rd_rel->relam,
-							  indexRelation->rd_rel->reltablespace,
+							  tablespaceOid ? tablespaceOid : indexRelation->rd_rel->reltablespace,
 							  indexRelation->rd_indcollation,
 							  indclass->values,
 							  indcoloptions->values,
@@ -3352,7 +3353,7 @@ IndexGetRelation(Oid indexId, bool missing_ok)
  * reindex_index - This routine is used to recreate a single index
  */
 void
-reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
+reindex_index(Oid indexId, Oid tablespaceOid, bool skip_constraint_checks, char persistence,
 			  int options)
 {
 	Relation	iRel,
@@ -3401,6 +3402,16 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 			 RelationGetRelationName(iRel));
 
 	/*
+	 * We cannot support moving mapped relations into different tablespaces.
+	 * (In particular this eliminates all shared catalogs.)
+	 */
+	if (OidIsValid(tablespaceOid) && RelationIsMapped(iRel))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot move system relation \"%s\"",
+						RelationGetRelationName(iRel))));
+
+	/*
 	 * Don't allow reindex on temp tables of other backends ... their local
 	 * buffer manager is not going to cope.
 	 */
@@ -3442,7 +3453,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 		SetReindexProcessing(heapId, indexId);
 
 		/* Create a new physical relation for the index */
-		RelationSetNewRelfilenode(iRel, persistence);
+		RelationSetNewRelfilenode(iRel, persistence, tablespaceOid);
 
 		/* Initialize the index and rebuild */
 		/* Note: we do not need to re-establish pkey setting */
@@ -3585,7 +3596,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
  * index rebuild.
  */
 bool
-reindex_relation(Oid relid, int flags, int options)
+reindex_relation(Oid relid, Oid tablespaceOid, int flags, int options)
 {
 	Relation	rel;
 	Oid			toast_relid;
@@ -3659,7 +3670,8 @@ reindex_relation(Oid relid, int flags, int options)
 		{
 			Oid			indexOid = lfirst_oid(indexId);
 
-			reindex_index(indexOid, !(flags & REINDEX_REL_CHECK_CONSTRAINTS),
+			reindex_index(indexOid, tablespaceOid,
+						  !(flags & REINDEX_REL_CHECK_CONSTRAINTS),
 						  persistence, options);
 
 			CommandCounterIncrement();
@@ -3692,7 +3704,7 @@ reindex_relation(Oid relid, int flags, int options)
 	 * still hold the lock on the master table.
 	 */
 	if ((flags & REINDEX_REL_PROCESS_TOAST) && OidIsValid(toast_relid))
-		result |= reindex_relation(toast_relid, flags, options);
+		result |= reindex_relation(toast_relid, tablespaceOid, flags, options);
 
 	return result;
 }

@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-REINDEX [ ( VERBOSE ) ] { INDEX | TABLE | SCHEMA | DATABASE | SYSTEM } [ CONCURRENTLY ] <replaceable class="parameter">name</replaceable>
+REINDEX [ ( VERBOSE ) ] { INDEX | TABLE | SCHEMA | DATABASE | SYSTEM } [ CONCURRENTLY ] <replaceable class="parameter">name</replaceable> [ TABLESPACE <replaceable class="parameter">new_tablespace</replaceable> ]
 </synopsis>
  </refsynopsisdiv>
 
@@ -161,6 +161,28 @@ REINDEX [ ( VERBOSE ) ] { INDEX | TABLE | SCHEMA | DATABASE | SYSTEM } [ CONCURR
       There are several caveats to be aware of when using this option
       &mdash; see <xref linkend="sql-reindex-concurrently"
       endterm="sql-reindex-concurrently-title"/>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>TABLESPACE</literal></term>
+    <listitem>
+     <para>
+      This specifies a tablespace, where all rebuilt indexes will be created.
+      Cannot be used with "mapped" and temporary relations. If <literal>SCHEMA</literal>,
+      <literal>DATABASE</literal> or <literal>SYSTEM</literal> is specified, then
+      all unsuitable relations will be skipped and a single <literal>WARNING</literal>
+      will be generated.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">new_tablespace</replaceable></term>
+    <listitem>
+     <para>
+      The name of the specific tablespace to store rebuilt indexes.
      </para>
     </listitem>
    </varlistentry>

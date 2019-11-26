@@ -107,7 +107,7 @@ extern Relation RelationBuildLocalRelation(const char *relname,
 /*
  * Routine to manage assignment of new relfilenode to a relation
  */
-extern void RelationSetNewRelfilenode(Relation relation, char persistence);
+extern void RelationSetNewRelfilenode(Relation relation, char persistence, Oid tablespaceOid);
 
 /*
  * Routines for flushing/rebuilding relcache entries in various scenarios

@@ -87,7 +87,7 @@ static char *ChooseIndexNameAddition(List *colnames);
 static List *ChooseIndexColumnNames(List *indexElems);
 static void RangeVarCallbackForReindexIndex(const RangeVar *relation,
 											Oid relId, Oid oldRelId, void *arg);
-static bool ReindexRelationConcurrently(Oid relationOid, int options);
+static bool ReindexRelationConcurrently(Oid relationOid, Oid tablespaceOid, int options);
 static void ReindexPartitionedIndex(Relation parentIdx);
 static void update_relispartition(Oid relationId, bool newval);
 
@@ -2314,10 +2314,11 @@ ChooseIndexColumnNames(List *indexElems)
  *		Recreate a specific index.
  */
 void
-ReindexIndex(RangeVar *indexRelation, int options, bool concurrent)
+ReindexIndex(RangeVar *indexRelation, char *newTableSpaceName, int options, bool concurrent)
 {
 	struct ReindexIndexCallbackState state;
 	Oid			indOid;
+	Oid			tableSpaceOid = InvalidOid;
 	Relation	irel;
 	char		persistence;
 
@@ -2347,12 +2348,24 @@ ReindexIndex(RangeVar *indexRelation, int options, bool concurrent)
 	}
 
 	persistence = irel->rd_rel->relpersistence;
+
+	if (newTableSpaceName)
+	{
+		tableSpaceOid = get_tablespace_oid(newTableSpaceName, false);
+
+		/* Can't move a non-shared relation into pg_global */
+		if (tableSpaceOid == GLOBALTABLESPACE_OID)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("only shared relations can be placed in pg_global tablespace")));
+	}
+
 	index_close(irel, NoLock);
 
 	if (concurrent)
-		ReindexRelationConcurrently(indOid, options);
+		ReindexRelationConcurrently(indOid, tableSpaceOid, options);
 	else
-		reindex_index(indOid, false, persistence,
+		reindex_index(indOid, tableSpaceOid, false, persistence,
 					  options | REINDEXOPT_REPORT_PROGRESS);
 }
 
@@ -2431,10 +2444,11 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
  *		Recreate all indexes of a table (and of its toast table, if any)
  */
 Oid
-ReindexTable(RangeVar *relation, int options, bool concurrent)
+ReindexTable(RangeVar *relation, char *newTableSpaceName, int options, bool concurrent)
 {
 	Oid			heapOid;
 	bool		result;
+	Oid 		tableSpaceOid = InvalidOid;
 
 	/* The lock level used here should match reindex_relation(). */
 	heapOid = RangeVarGetRelidExtended(relation,
@@ -2442,9 +2456,20 @@ ReindexTable(RangeVar *relation, int options, bool concurrent)
 									   0,
 									   RangeVarCallbackOwnsTable, NULL);
 
+	if (newTableSpaceName)
+	{
+		tableSpaceOid = get_tablespace_oid(newTableSpaceName, false);
+
+		/* Can't move a non-shared relation into pg_global */
+		if (tableSpaceOid == GLOBALTABLESPACE_OID)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("only shared relations can be placed in pg_global tablespace")));
+	}
+
 	if (concurrent)
 	{
-		result = ReindexRelationConcurrently(heapOid, options);
+		result = ReindexRelationConcurrently(heapOid, tableSpaceOid, options);
 
 		if (!result)
 			ereport(NOTICE,
@@ -2454,6 +2479,7 @@ ReindexTable(RangeVar *relation, int options, bool concurrent)
 	else
 	{
 		result = reindex_relation(heapOid,
+								  tableSpaceOid,
 								  REINDEX_REL_PROCESS_TOAST |
 								  REINDEX_REL_CHECK_CONSTRAINTS,
 								  options | REINDEXOPT_REPORT_PROGRESS);
@@ -2475,10 +2501,11 @@ ReindexTable(RangeVar *relation, int options, bool concurrent)
  * That means this must not be called within a user transaction block!
  */
 void
-ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
+ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind, char *newTableSpaceName,
 					  int options, bool concurrent)
 {
 	Oid			objectOid;
+	Oid			tableSpaceOid = InvalidOid;
 	Relation	relationRelation;
 	TableScanDesc scan;
 	ScanKeyData scan_keys[1];
@@ -2488,7 +2515,7 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 	List	   *relids = NIL;
 	ListCell   *l;
 	int			num_keys;
-	bool		concurrent_warning = false;
+	bool		system_warning = false;
 
 	AssertArg(objectName);
 	Assert(objectKind == REINDEX_OBJECT_SCHEMA ||
@@ -2525,6 +2552,17 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 		if (!pg_database_ownercheck(objectOid, GetUserId()))
 			aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_DATABASE,
 						   objectName);
+	}
+
+	if (newTableSpaceName)
+	{
+		tableSpaceOid = get_tablespace_oid(newTableSpaceName, false);
+
+		/* Can't move a non-shared relation into pg_global */
+		if (tableSpaceOid == GLOBALTABLESPACE_OID)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("only shared relations can be placed in pg_global tablespace")));
 	}
 
 	/*
@@ -2609,11 +2647,23 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 		if (concurrent &&
 			IsCatalogRelationOid(relid))
 		{
-			if (!concurrent_warning)
+			if (!system_warning)
 				ereport(WARNING,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot reindex system catalogs concurrently, skipping all")));
-			concurrent_warning = true;
+			system_warning = true;
+			continue;
+		}
+
+		/* Skip all mapped relations if TABLESPACE is specified */
+		if (OidIsValid(tableSpaceOid) &&
+			classtuple->relfilenode == 0)
+		{
+			if (!system_warning)
+				ereport(WARNING,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot move indexes of system relations, skipping all")));
+			system_warning = true;
 			continue;
 		}
 
@@ -2650,7 +2700,7 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 
 		if (concurrent)
 		{
-			(void) ReindexRelationConcurrently(relid, options);
+			(void) ReindexRelationConcurrently(relid, tableSpaceOid, options);
 			/* ReindexRelationConcurrently() does the verbose output */
 		}
 		else
@@ -2658,6 +2708,7 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 			bool		result;
 
 			result = reindex_relation(relid,
+									  tableSpaceOid,
 									  REINDEX_REL_PROCESS_TOAST |
 									  REINDEX_REL_CHECK_CONSTRAINTS,
 									  options | REINDEXOPT_REPORT_PROGRESS);
@@ -2698,7 +2749,7 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
  * indexes, when relevant), otherwise returns false.
  */
 static bool
-ReindexRelationConcurrently(Oid relationOid, int options)
+ReindexRelationConcurrently(Oid relationOid, Oid tablespaceOid, int options)
 {
 	List	   *heapRelationIds = NIL;
 	List	   *indexIds = NIL;
@@ -2770,6 +2821,12 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 
 				/* Open relation to get its indexes */
 				heapRelation = table_open(relationOid, ShareUpdateExclusiveLock);
+
+				if (OidIsValid(tablespaceOid) && RelationIsMapped(heapRelation))
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot move indexes of system relation \"%s\"",
+									RelationGetRelationName(heapRelation))));
 
 				/* Add all the valid indexes of relation to list */
 				foreach(lc, RelationGetIndexList(heapRelation))
@@ -2939,6 +2996,12 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 		heapRel = table_open(indexRel->rd_index->indrelid,
 							 ShareUpdateExclusiveLock);
 
+		if (OidIsValid(tablespaceOid) && RelationIsMapped(heapRel))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot move system relation \"%s\"",
+							RelationGetRelationName(heapRel))));
+
 		pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX,
 									  RelationGetRelid(heapRel));
 		pgstat_progress_update_param(PROGRESS_CREATEIDX_COMMAND,
@@ -2958,6 +3021,7 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 		/* Create new index definition based on given index */
 		newIndexId = index_concurrently_create_copy(heapRel,
 													indexId,
+													tablespaceOid,
 													concurrentName);
 
 		/*

@@ -1802,7 +1802,9 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 			 * as the relfilenode value. The old storage file is scheduled for
 			 * deletion at commit.
 			 */
-			RelationSetNewRelfilenode(rel, rel->rd_rel->relpersistence);
+			RelationSetNewRelfilenode(rel,
+									  rel->rd_rel->relpersistence,
+									  InvalidOid);
 
 			heap_relid = RelationGetRelid(rel);
 
@@ -1816,14 +1818,15 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 													 AccessExclusiveLock);
 
 				RelationSetNewRelfilenode(toastrel,
-										  toastrel->rd_rel->relpersistence);
+										  toastrel->rd_rel->relpersistence,
+										  InvalidOid);
 				table_close(toastrel, NoLock);
 			}
 
 			/*
 			 * Reconstruct the indexes to match, and we're done.
 			 */
-			reindex_relation(heap_relid, REINDEX_REL_PROCESS_TOAST, 0);
+			reindex_relation(heap_relid, InvalidOid, REINDEX_REL_PROCESS_TOAST, 0);
 		}
 
 		pgstat_count_truncate(rel);

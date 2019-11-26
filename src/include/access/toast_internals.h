@@ -52,4 +52,79 @@ extern void toast_close_indexes(Relation *toastidxs, int num_indexes,
 								LOCKMODE lock);
 extern void init_toast_snapshot(Snapshot toast_snapshot);
 
+#ifndef FRONTEND
+#include "access/genam.h"
+
+/*
+ * TOAST buffer is a producer consumer buffer.
+ *
+ *    +--+--+--+--+--+--+--+--+--+--+--+--+--+
+ *    |  |  |  |  |  |  |  |  |  |  |  |  |  |
+ *    +--+--+--+--+--+--+--+--+--+--+--+--+--+
+ *    ^           ^           ^              ^
+ *   buf      position      limit         capacity
+ *
+ * buf: point to the start of buffer.
+ * position: point to the next char to be consumed.
+ * limit: point to the next char to be produced.
+ * capacity: point to the end of buffer.
+ *
+ * Constraints that need to be satisfied:
+ * buf <= position <= limit <= capacity
+ */
+typedef struct ToastBuffer
+{
+	const char	*buf;
+	const char	*position;
+	char		*limit;
+	const char	*capacity;
+} ToastBuffer;
+
+typedef struct FetchDatumIteratorData
+{
+	ToastBuffer	*buf;
+	Relation	toastrel;
+	Relation	*toastidxs;
+	SysScanDesc	toastscan;
+	ScanKeyData	toastkey;
+	SnapshotData			snapshot;
+	struct varatt_external	toast_pointer;
+	int32		ressize;
+	int32		nextidx;
+	int32		numchunks;
+	int			num_indexes;
+	bool		done;
+}				FetchDatumIteratorData;
+
+typedef struct FetchDatumIteratorData *FetchDatumIterator;
+
+/*
+ * If "ctrlc" field in iterator is equal to INVALID_CTRLC, it means that
+ * the field is invalid and need to read the control byte from the
+ * source buffer in the next iteration, see pglz_decompress_iterate().
+ */
+#define INVALID_CTRLC 8
+
+typedef struct DetoastIteratorData
+{
+	ToastBuffer 		*buf;
+	FetchDatumIterator	fetch_datum_iterator;
+	unsigned char		ctrl;
+	int					ctrlc;
+	bool				compressed;		/* toast value is compressed? */
+	bool				done;
+}			DetoastIteratorData;
+
+typedef struct DetoastIteratorData *DetoastIterator;
+
+#endif
+
+extern FetchDatumIterator create_fetch_datum_iterator(struct varlena *attr);
+extern void free_fetch_datum_iterator(FetchDatumIterator iter);
+extern void fetch_datum_iterate(FetchDatumIterator iter);
+extern ToastBuffer *create_toast_buffer(int32 size, bool compressed);
+extern void free_toast_buffer(ToastBuffer *buf);
+extern void pglz_decompress_iterate(ToastBuffer *source, ToastBuffer *dest,
+									DetoastIterator iter);
+
 #endif							/* TOAST_INTERNALS_H */

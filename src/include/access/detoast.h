@@ -11,6 +11,7 @@
  */
 #ifndef DETOAST_H
 #define DETOAST_H
+#include "toast_internals.h"
 
 /*
  * Testing whether an externally-stored value is compressed now requires
@@ -73,12 +74,43 @@ extern struct varlena *detoast_attr_slice(struct varlena *attr,
 										  int32 sliceoffset,
 										  int32 slicelength);
 
+
+/* ----------
+ * create_detoast_iterator -
+ *
+ * It only makes sense to initialize a de-TOAST iterator for external on-disk values.
+ *
+ * ----------
+ */
+extern DetoastIterator create_detoast_iterator(struct varlena *attr);
+
+/* ----------
+ * free_detoast_iterator -
+ *
+ * Free memory used by the de-TOAST iterator, including buffers and
+ * fetch datum iterator.
+ * ----------
+ */
+extern void free_detoast_iterator(DetoastIterator iter);
+
+/* ----------
+ * detoast_iterate -
+ *
+ * Iterate through the toasted value referenced by iterator.
+ *
+ * "need" is a pointer between the beginning and end of iterator's
+ * ToastBuffer, de-TOAST all bytes before "need" into iterator's ToastBuffer.
+ * ----------
+ */
+extern void detoast_iterate(DetoastIterator detoast_iter, const char *need);
+
 /* ----------
  * toast_raw_datum_size -
  *
  *	Return the raw (detoasted) size of a varlena datum
  * ----------
  */
+
 extern Size toast_raw_datum_size(Datum value);
 
 /* ----------

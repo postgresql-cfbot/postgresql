@@ -1191,6 +1191,23 @@ typedef union PGAlignedXLogBlock
 	((underlying_type) (expr))
 #endif
 
+/*
+ * C99 designated-initialiser syntax to set all array elements to 0/false.
+ *
+ * Use the macro in preference to explicit {0} syntax to avoid giving a misleading
+ * impression that the same value is always used for all elements.
+ * e.g.
+ * bool foo[2] = {false}; // sets both elements false
+ * bool foo[2] = {true}; // does NOT set both elements true
+ *
+ * Reference: C99 [$6.7.8/21] If there are fewer initializers in a brace-enclosed list than there
+ * are elements or members of an aggregate, or fewer characters in a string literal used to
+ * initialize an array of known size than there are elements in the array, the remainder of the
+ * aggregate shall be initialized implicitly the same as objects that have static storage duration
+ */
+#define INIT_ALL_ELEMS_ZERO {0}
+
+
 /* ----------------------------------------------------------------
  *				Section 9: system-specific hacks
  *

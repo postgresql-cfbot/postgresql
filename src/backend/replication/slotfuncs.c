@@ -77,7 +77,7 @@ pg_create_physical_replication_slot(PG_FUNCTION_ARGS)
 	bool		immediately_reserve = PG_GETARG_BOOL(1);
 	bool		temporary = PG_GETARG_BOOL(2);
 	Datum		values[2];
-	bool		nulls[2];
+	bool		nulls[2] = INIT_ALL_ELEMS_ZERO;
 	TupleDesc	tupdesc;
 	HeapTuple	tuple;
 	Datum		result;
@@ -95,12 +95,10 @@ pg_create_physical_replication_slot(PG_FUNCTION_ARGS)
 									 InvalidXLogRecPtr);
 
 	values[0] = NameGetDatum(&MyReplicationSlot->data.name);
-	nulls[0] = false;
 
 	if (immediately_reserve)
 	{
 		values[1] = LSNGetDatum(MyReplicationSlot->data.restart_lsn);
-		nulls[1] = false;
 	}
 	else
 		nulls[1] = true;
@@ -167,7 +165,7 @@ pg_create_logical_replication_slot(PG_FUNCTION_ARGS)
 	TupleDesc	tupdesc;
 	HeapTuple	tuple;
 	Datum		values[2];
-	bool		nulls[2];
+	bool		nulls[2] = INIT_ALL_ELEMS_ZERO;
 
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
 		elog(ERROR, "return type must be a row type");
@@ -183,8 +181,6 @@ pg_create_logical_replication_slot(PG_FUNCTION_ARGS)
 
 	values[0] = NameGetDatum(&MyReplicationSlot->data.name);
 	values[1] = LSNGetDatum(MyReplicationSlot->data.confirmed_flush);
-
-	memset(nulls, 0, sizeof(nulls));
 
 	tuple = heap_form_tuple(tupdesc, values, nulls);
 	result = HeapTupleGetDatum(tuple);
@@ -265,7 +261,7 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 	{
 		ReplicationSlot *slot = &ReplicationSlotCtl->replication_slots[slotno];
 		Datum		values[PG_GET_REPLICATION_SLOTS_COLS];
-		bool		nulls[PG_GET_REPLICATION_SLOTS_COLS];
+		bool		nulls[PG_GET_REPLICATION_SLOTS_COLS] = INIT_ALL_ELEMS_ZERO;
 
 		ReplicationSlotPersistency persistency;
 		TransactionId xmin;
@@ -294,8 +290,6 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 		persistency = slot->data.persistency;
 
 		SpinLockRelease(&slot->mutex);
-
-		memset(nulls, 0, sizeof(nulls));
 
 		i = 0;
 		values[i++] = NameGetDatum(&slot_name);
@@ -513,7 +507,7 @@ pg_replication_slot_advance(PG_FUNCTION_ARGS)
 	XLogRecPtr	minlsn;
 	TupleDesc	tupdesc;
 	Datum		values[2];
-	bool		nulls[2];
+	bool		nulls[2] = INIT_ALL_ELEMS_ZERO;
 	HeapTuple	tuple;
 	Datum		result;
 
@@ -572,7 +566,6 @@ pg_replication_slot_advance(PG_FUNCTION_ARGS)
 		endlsn = pg_physical_replication_slot_advance(moveto);
 
 	values[0] = NameGetDatum(&MyReplicationSlot->data.name);
-	nulls[0] = false;
 
 	/* Update the on disk state when lsn was updated. */
 	if (XLogRecPtrIsInvalid(endlsn))
@@ -587,7 +580,6 @@ pg_replication_slot_advance(PG_FUNCTION_ARGS)
 
 	/* Return the reached position. */
 	values[1] = LSNGetDatum(endlsn);
-	nulls[1] = false;
 
 	tuple = heap_form_tuple(tupdesc, values, nulls);
 	result = HeapTupleGetDatum(tuple);
@@ -609,7 +601,7 @@ copy_replication_slot(FunctionCallInfo fcinfo, bool logical_slot)
 	bool		temporary;
 	char	   *plugin;
 	Datum		values[2];
-	bool		nulls[2];
+	bool		nulls[2] = INIT_ALL_ELEMS_ZERO;
 	Datum		result;
 	TupleDesc	tupdesc;
 	HeapTuple	tuple;
@@ -779,11 +771,9 @@ copy_replication_slot(FunctionCallInfo fcinfo, bool logical_slot)
 
 	/* All done.  Set up the return values */
 	values[0] = NameGetDatum(dst_name);
-	nulls[0] = false;
 	if (!XLogRecPtrIsInvalid(MyReplicationSlot->data.confirmed_flush))
 	{
 		values[1] = LSNGetDatum(MyReplicationSlot->data.confirmed_flush);
-		nulls[1] = false;
 	}
 	else
 		nulls[1] = true;

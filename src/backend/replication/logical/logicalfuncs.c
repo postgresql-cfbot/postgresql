@@ -67,7 +67,7 @@ LogicalOutputWrite(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xi
 				   bool last_write)
 {
 	Datum		values[3];
-	bool		nulls[3];
+	bool		nulls[3] = INIT_ALL_ELEMS_ZERO;
 	DecodingOutputState *p;
 
 	/* SQL Datums can only be of a limited length... */
@@ -76,7 +76,6 @@ LogicalOutputWrite(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xi
 
 	p = (DecodingOutputState *) ctx->output_writer_private;
 
-	memset(nulls, 0, sizeof(nulls));
 	values[0] = LSNGetDatum(lsn);
 	values[1] = TransactionIdGetDatum(xid);
 

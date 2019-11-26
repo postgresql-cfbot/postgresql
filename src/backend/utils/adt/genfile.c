@@ -576,7 +576,7 @@ pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
 	while ((de = ReadDir(fctx->dirdesc, fctx->location)) != NULL)
 	{
 		Datum		values[3];
-		bool		nulls[3];
+		bool		nulls[3] = INIT_ALL_ELEMS_ZERO;
 		char		path[MAXPGPATH * 2];
 		struct stat attrib;
 		HeapTuple	tuple;
@@ -599,7 +599,6 @@ pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
 		values[0] = CStringGetTextDatum(de->d_name);
 		values[1] = Int64GetDatum((int64) attrib.st_size);
 		values[2] = TimestampTzGetDatum(time_t_to_timestamptz(attrib.st_mtime));
-		memset(nulls, 0, sizeof(nulls));
 
 		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));

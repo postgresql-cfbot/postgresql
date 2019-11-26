@@ -325,8 +325,8 @@ create_proc_lang(const char *languageName, bool replace,
 {
 	Relation	rel;
 	TupleDesc	tupDesc;
-	Datum		values[Natts_pg_language];
-	bool		nulls[Natts_pg_language];
+	Datum		values[Natts_pg_language] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[Natts_pg_language] = INIT_ALL_ELEMS_ZERO;
 	bool		replaces[Natts_pg_language];
 	NameData	langname;
 	HeapTuple	oldtup;
@@ -340,8 +340,6 @@ create_proc_lang(const char *languageName, bool replace,
 	tupDesc = RelationGetDescr(rel);
 
 	/* Prepare data to be inserted */
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
 	memset(replaces, true, sizeof(replaces));
 
 	namestrcpy(&langname, languageName);

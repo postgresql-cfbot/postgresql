@@ -2414,8 +2414,8 @@ static void
 fill_hba_line(Tuplestorestate *tuple_store, TupleDesc tupdesc,
 			  int lineno, HbaLine *hba, const char *err_msg)
 {
-	Datum		values[NUM_PG_HBA_FILE_RULES_ATTS];
-	bool		nulls[NUM_PG_HBA_FILE_RULES_ATTS];
+	Datum		values[NUM_PG_HBA_FILE_RULES_ATTS] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[NUM_PG_HBA_FILE_RULES_ATTS] = INIT_ALL_ELEMS_ZERO;
 	char		buffer[NI_MAXHOST];
 	HeapTuple	tuple;
 	int			index;
@@ -2427,8 +2427,6 @@ fill_hba_line(Tuplestorestate *tuple_store, TupleDesc tupdesc,
 
 	Assert(tupdesc->natts == NUM_PG_HBA_FILE_RULES_ATTS);
 
-	memset(values, 0, sizeof(values));
-	memset(nulls, 0, sizeof(nulls));
 	index = 0;
 
 	/* line_number */

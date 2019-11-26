@@ -4634,7 +4634,7 @@ pg_timezone_abbrevs(PG_FUNCTION_ARGS)
 	Datum		result;
 	HeapTuple	tuple;
 	Datum		values[3];
-	bool		nulls[3];
+	bool		nulls[3] = INIT_ALL_ELEMS_ZERO;
 	const datetkn *tp;
 	char		buffer[TOKMAXLEN + 1];
 	int			gmtoffset;
@@ -4721,8 +4721,6 @@ pg_timezone_abbrevs(PG_FUNCTION_ARGS)
 			break;
 	}
 
-	MemSet(nulls, 0, sizeof(nulls));
-
 	/*
 	 * Convert name to text, using upcasing conversion that is the inverse of
 	 * what ParseDateTime() uses.
@@ -4764,7 +4762,7 @@ pg_timezone_names(PG_FUNCTION_ARGS)
 	Datum		result;
 	HeapTuple	tuple;
 	Datum		values[4];
-	bool		nulls[4];
+	bool		nulls[4] = INIT_ALL_ELEMS_ZERO;
 	int			tzoff;
 	struct pg_tm tm;
 	fsec_t		fsec;
@@ -4845,8 +4843,6 @@ pg_timezone_names(PG_FUNCTION_ARGS)
 		/* Found a displayable zone */
 		break;
 	}
-
-	MemSet(nulls, 0, sizeof(nulls));
 
 	values[0] = CStringGetTextDatum(pg_get_timezone_name(tz));
 	values[1] = CStringGetTextDatum(tzn ? tzn : "");

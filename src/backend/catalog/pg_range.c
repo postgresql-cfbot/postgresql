@@ -39,14 +39,12 @@ RangeCreate(Oid rangeTypeOid, Oid rangeSubType, Oid rangeCollation,
 {
 	Relation	pg_range;
 	Datum		values[Natts_pg_range];
-	bool		nulls[Natts_pg_range];
+	bool		nulls[Natts_pg_range] = INIT_ALL_ELEMS_ZERO;
 	HeapTuple	tup;
 	ObjectAddress myself;
 	ObjectAddress referenced;
 
 	pg_range = table_open(RangeRelationId, RowExclusiveLock);
-
-	memset(nulls, 0, sizeof(nulls));
 
 	values[Anum_pg_range_rngtypid - 1] = ObjectIdGetDatum(rangeTypeOid);
 	values[Anum_pg_range_rngsubtype - 1] = ObjectIdGetDatum(rangeSubType);

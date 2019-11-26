@@ -182,8 +182,8 @@ pg_stop_backup_v2(PG_FUNCTION_ARGS)
 	Tuplestorestate *tupstore;
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
-	Datum		values[3];
-	bool		nulls[3];
+	Datum		values[3] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[3] = INIT_ALL_ELEMS_ZERO;
 
 	bool		exclusive = PG_GETARG_BOOL(0);
 	bool		waitforarchive = PG_GETARG_BOOL(1);
@@ -214,9 +214,6 @@ pg_stop_backup_v2(PG_FUNCTION_ARGS)
 	rsinfo->setDesc = tupdesc;
 
 	MemoryContextSwitchTo(oldcontext);
-
-	MemSet(values, 0, sizeof(values));
-	MemSet(nulls, 0, sizeof(nulls));
 
 	if (exclusive)
 	{

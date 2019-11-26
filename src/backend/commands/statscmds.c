@@ -69,10 +69,10 @@ CreateStatistics(CreateStatsStmt *stmt)
 	Oid			namespaceId;
 	Oid			stxowner = GetUserId();
 	HeapTuple	htup;
-	Datum		values[Natts_pg_statistic_ext];
-	bool		nulls[Natts_pg_statistic_ext];
-	Datum		datavalues[Natts_pg_statistic_ext_data];
-	bool		datanulls[Natts_pg_statistic_ext_data];
+	Datum		values[Natts_pg_statistic_ext] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[Natts_pg_statistic_ext] = INIT_ALL_ELEMS_ZERO;
+	Datum		datavalues[Natts_pg_statistic_ext_data] = INIT_ALL_ELEMS_ZERO;
+	bool		datanulls[Natts_pg_statistic_ext_data] = INIT_ALL_ELEMS_ZERO;
 	int2vector *stxkeys;
 	Relation	statrel;
 	Relation	datarel;
@@ -330,9 +330,6 @@ CreateStatistics(CreateStatsStmt *stmt)
 	/*
 	 * Everything seems fine, so let's build the pg_statistic_ext tuple.
 	 */
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
-
 	statoid = GetNewOidWithIndex(statrel, StatisticExtOidIndexId,
 								 Anum_pg_statistic_ext_oid);
 	values[Anum_pg_statistic_ext_oid - 1] = ObjectIdGetDatum(statoid);
@@ -356,9 +353,6 @@ CreateStatistics(CreateStatsStmt *stmt)
 	 * statistics data.
 	 */
 	datarel = table_open(StatisticExtDataRelationId, RowExclusiveLock);
-
-	memset(datavalues, 0, sizeof(datavalues));
-	memset(datanulls, false, sizeof(datanulls));
 
 	datavalues[Anum_pg_statistic_ext_data_stxoid - 1] = ObjectIdGetDatum(statoid);
 
@@ -607,9 +601,9 @@ UpdateStatisticsForTypeChange(Oid statsOid, Oid relationOid, int attnum,
 
 	Relation	rel;
 
-	Datum		values[Natts_pg_statistic_ext_data];
-	bool		nulls[Natts_pg_statistic_ext_data];
-	bool		replaces[Natts_pg_statistic_ext_data];
+	Datum		values[Natts_pg_statistic_ext_data] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[Natts_pg_statistic_ext_data] = INIT_ALL_ELEMS_ZERO;
+	bool		replaces[Natts_pg_statistic_ext_data] = INIT_ALL_ELEMS_ZERO;
 
 	oldtup = SearchSysCache1(STATEXTDATASTXOID, ObjectIdGetDatum(statsOid));
 	if (!HeapTupleIsValid(oldtup))
@@ -630,10 +624,6 @@ UpdateStatisticsForTypeChange(Oid statsOid, Oid relationOid, int attnum,
 	 * OK, we need to reset some statistics. So let's build the new tuple,
 	 * replacing the affected statistics types with NULL.
 	 */
-	memset(nulls, 0, Natts_pg_statistic_ext_data * sizeof(bool));
-	memset(replaces, 0, Natts_pg_statistic_ext_data * sizeof(bool));
-	memset(values, 0, Natts_pg_statistic_ext_data * sizeof(Datum));
-
 	replaces[Anum_pg_statistic_ext_data_stxdmcv - 1] = true;
 	nulls[Anum_pg_statistic_ext_data_stxdmcv - 1] = true;
 

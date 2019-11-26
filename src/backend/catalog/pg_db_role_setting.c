@@ -136,10 +136,8 @@ AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
 		/* non-null valuestr means it's not RESET, so insert a new tuple */
 		HeapTuple	newtuple;
 		Datum		values[Natts_pg_db_role_setting];
-		bool		nulls[Natts_pg_db_role_setting];
+		bool		nulls[Natts_pg_db_role_setting] = INIT_ALL_ELEMS_ZERO;
 		ArrayType  *a;
-
-		memset(nulls, false, sizeof(nulls));
 
 		a = GUCArrayAdd(NULL, setstmt->name, valuestr);
 

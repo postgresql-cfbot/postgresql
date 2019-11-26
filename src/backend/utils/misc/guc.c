@@ -9536,11 +9536,8 @@ show_all_file_settings(PG_FUNCTION_ARGS)
 	/* Process the results and create a tuplestore */
 	for (seqno = 1; conf != NULL; conf = conf->next, seqno++)
 	{
-		Datum		values[NUM_PG_FILE_SETTINGS_ATTS];
-		bool		nulls[NUM_PG_FILE_SETTINGS_ATTS];
-
-		memset(values, 0, sizeof(values));
-		memset(nulls, 0, sizeof(nulls));
+		Datum		values[NUM_PG_FILE_SETTINGS_ATTS] = INIT_ALL_ELEMS_ZERO;
+		bool		nulls[NUM_PG_FILE_SETTINGS_ATTS] = INIT_ALL_ELEMS_ZERO;
 
 		/* sourcefile */
 		if (conf->filename)

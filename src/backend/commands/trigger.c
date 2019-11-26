@@ -171,7 +171,7 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	List	   *whenRtable;
 	char	   *qual;
 	Datum		values[Natts_pg_trigger];
-	bool		nulls[Natts_pg_trigger];
+	bool		nulls[Natts_pg_trigger] = INIT_ALL_ELEMS_ZERO;
 	Relation	rel;
 	AclResult	aclresult;
 	Relation	tgrel;
@@ -843,8 +843,6 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	 * makes the triggers in partitions identical to the ones in the
 	 * partitioned tables, except that they are marked internal.
 	 */
-	memset(nulls, false, sizeof(nulls));
-
 	values[Anum_pg_trigger_oid - 1] = ObjectIdGetDatum(trigoid);
 	values[Anum_pg_trigger_tgrelid - 1] = ObjectIdGetDatum(RelationGetRelid(rel));
 	values[Anum_pg_trigger_tgname - 1] = DirectFunctionCall1(namein,

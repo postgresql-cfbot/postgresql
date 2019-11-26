@@ -380,7 +380,7 @@ insert_event_trigger_tuple(const char *trigname, const char *eventname, Oid evtO
 	Oid			trigoid;
 	HeapTuple	tuple;
 	Datum		values[Natts_pg_trigger];
-	bool		nulls[Natts_pg_trigger];
+	bool		nulls[Natts_pg_trigger] = INIT_ALL_ELEMS_ZERO;
 	NameData	evtnamedata,
 				evteventdata;
 	ObjectAddress myself,
@@ -393,7 +393,6 @@ insert_event_trigger_tuple(const char *trigname, const char *eventname, Oid evtO
 	trigoid = GetNewOidWithIndex(tgrel, EventTriggerOidIndexId,
 								 Anum_pg_event_trigger_oid);
 	values[Anum_pg_event_trigger_oid - 1] = ObjectIdGetDatum(trigoid);
-	memset(nulls, false, sizeof(nulls));
 	namestrcpy(&evtnamedata, trigname);
 	values[Anum_pg_event_trigger_evtname - 1] = NameGetDatum(&evtnamedata);
 	namestrcpy(&evteventdata, eventname);
@@ -1487,13 +1486,10 @@ pg_event_trigger_dropped_objects(PG_FUNCTION_ARGS)
 	{
 		SQLDropObject *obj;
 		int			i = 0;
-		Datum		values[12];
-		bool		nulls[12];
+		Datum		values[12] = INIT_ALL_ELEMS_ZERO;
+		bool		nulls[12] = INIT_ALL_ELEMS_ZERO;
 
 		obj = slist_container(SQLDropObject, next, iter.cur);
-
-		MemSet(values, 0, sizeof(values));
-		MemSet(nulls, 0, sizeof(nulls));
 
 		/* classid */
 		values[i++] = ObjectIdGetDatum(obj->address.classId);
@@ -2039,7 +2035,7 @@ pg_event_trigger_ddl_commands(PG_FUNCTION_ARGS)
 	{
 		CollectedCommand *cmd = lfirst(lc);
 		Datum		values[9];
-		bool		nulls[9];
+		bool		nulls[9] = INIT_ALL_ELEMS_ZERO;
 		ObjectAddress addr;
 		int			i = 0;
 
@@ -2056,8 +2052,6 @@ pg_event_trigger_ddl_commands(PG_FUNCTION_ARGS)
 		if (cmd->type == SCT_Simple &&
 			!OidIsValid(cmd->d.simple.address.objectId))
 			continue;
-
-		MemSet(nulls, 0, sizeof(nulls));
 
 		switch (cmd->type)
 		{

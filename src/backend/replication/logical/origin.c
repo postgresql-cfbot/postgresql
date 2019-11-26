@@ -271,7 +271,7 @@ replorigin_create(char *roname)
 
 	for (roident = InvalidOid + 1; roident < PG_UINT16_MAX; roident++)
 	{
-		bool		nulls[Natts_pg_replication_origin];
+		bool		nulls[Natts_pg_replication_origin] = INIT_ALL_ELEMS_ZERO;
 		Datum		values[Natts_pg_replication_origin];
 		bool		collides;
 
@@ -297,8 +297,6 @@ replorigin_create(char *roname)
 			 * Ok, found an unused roident, insert the new row and do a CCI,
 			 * so our callers can look it up if they want to.
 			 */
-			memset(&nulls, 0, sizeof(nulls));
-
 			values[Anum_pg_replication_origin_roident - 1] = ObjectIdGetDatum(roident);
 			values[Anum_pg_replication_origin_roname - 1] = roname_d;
 
@@ -1513,7 +1511,7 @@ pg_show_replication_origin_status(PG_FUNCTION_ARGS)
 	for (i = 0; i < max_replication_slots; i++)
 	{
 		ReplicationState *state;
-		Datum		values[REPLICATION_ORIGIN_PROGRESS_COLS];
+		Datum		values[REPLICATION_ORIGIN_PROGRESS_COLS] = INIT_ALL_ELEMS_ZERO;
 		bool		nulls[REPLICATION_ORIGIN_PROGRESS_COLS];
 		char	   *roname;
 
@@ -1523,7 +1521,6 @@ pg_show_replication_origin_status(PG_FUNCTION_ARGS)
 		if (state->roident == InvalidRepOriginId)
 			continue;
 
-		memset(values, 0, sizeof(values));
 		memset(nulls, 1, sizeof(nulls));
 
 		values[0] = ObjectIdGetDatum(state->roident);

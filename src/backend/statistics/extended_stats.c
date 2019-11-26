@@ -471,14 +471,12 @@ statext_store(Oid statOid,
 {
 	HeapTuple	stup,
 				oldtup;
-	Datum		values[Natts_pg_statistic_ext_data];
+	Datum		values[Natts_pg_statistic_ext_data] = INIT_ALL_ELEMS_ZERO;
 	bool		nulls[Natts_pg_statistic_ext_data];
-	bool		replaces[Natts_pg_statistic_ext_data];
+	bool		replaces[Natts_pg_statistic_ext_data] = INIT_ALL_ELEMS_ZERO;
 	Relation	pg_stextdata;
 
 	memset(nulls, true, sizeof(nulls));
-	memset(replaces, false, sizeof(replaces));
-	memset(values, 0, sizeof(values));
 
 	/*
 	 * Construct a new pg_statistic_ext_data tuple, replacing the calculated

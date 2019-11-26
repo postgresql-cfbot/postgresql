@@ -61,7 +61,7 @@ recordMultipleDependencies(const ObjectAddress *depender,
 	CatalogIndexState indstate;
 	HeapTuple	tup;
 	int			i;
-	bool		nulls[Natts_pg_depend];
+	bool		nulls[Natts_pg_depend] = INIT_ALL_ELEMS_ZERO;
 	Datum		values[Natts_pg_depend];
 
 	if (nreferenced <= 0)
@@ -78,8 +78,6 @@ recordMultipleDependencies(const ObjectAddress *depender,
 
 	/* Don't open indexes unless we need to make an update */
 	indstate = NULL;
-
-	memset(nulls, false, sizeof(nulls));
 
 	for (i = 0; i < nreferenced; i++, referenced++)
 	{

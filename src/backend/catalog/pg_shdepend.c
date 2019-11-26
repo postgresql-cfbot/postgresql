@@ -272,9 +272,7 @@ shdepChangeDep(Relation sdepRel,
 	{
 		/* Need to insert new entry */
 		Datum		values[Natts_pg_shdepend];
-		bool		nulls[Natts_pg_shdepend];
-
-		memset(nulls, false, sizeof(nulls));
+		bool		nulls[Natts_pg_shdepend] = INIT_ALL_ELEMS_ZERO;
 
 		values[Anum_pg_shdepend_dbid - 1] = ObjectIdGetDatum(dbid);
 		values[Anum_pg_shdepend_classid - 1] = ObjectIdGetDatum(classid);
@@ -800,9 +798,9 @@ copyTemplateDependencies(Oid templateDbId, Oid newDbId)
 	SysScanDesc scan;
 	HeapTuple	tup;
 	CatalogIndexState indstate;
-	Datum		values[Natts_pg_shdepend];
-	bool		nulls[Natts_pg_shdepend];
-	bool		replace[Natts_pg_shdepend];
+	Datum		values[Natts_pg_shdepend] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[Natts_pg_shdepend] = INIT_ALL_ELEMS_ZERO;
+	bool		replace[Natts_pg_shdepend] = INIT_ALL_ELEMS_ZERO;
 
 	sdepRel = table_open(SharedDependRelationId, RowExclusiveLock);
 	sdepDesc = RelationGetDescr(sdepRel);
@@ -819,10 +817,6 @@ copyTemplateDependencies(Oid templateDbId, Oid newDbId)
 							  NULL, 1, key);
 
 	/* Set up to copy the tuples except for inserting newDbId */
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
-	memset(replace, false, sizeof(replace));
-
 	replace[Anum_pg_shdepend_dbid - 1] = true;
 	values[Anum_pg_shdepend_dbid - 1] = ObjectIdGetDatum(newDbId);
 
@@ -933,7 +927,7 @@ shdepAddDependency(Relation sdepRel,
 {
 	HeapTuple	tup;
 	Datum		values[Natts_pg_shdepend];
-	bool		nulls[Natts_pg_shdepend];
+	bool		nulls[Natts_pg_shdepend] = INIT_ALL_ELEMS_ZERO;
 
 	/*
 	 * Make sure the object doesn't go away while we record the dependency on
@@ -941,8 +935,6 @@ shdepAddDependency(Relation sdepRel,
 	 * shared dependencies.
 	 */
 	shdepLockAndCheckObject(refclassId, refobjId);
-
-	memset(nulls, false, sizeof(nulls));
 
 	/*
 	 * Form the new tuple and record the dependency.

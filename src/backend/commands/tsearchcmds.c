@@ -179,8 +179,8 @@ DefineTSParser(List *names, List *parameters)
 	ListCell   *pl;
 	Relation	prsRel;
 	HeapTuple	tup;
-	Datum		values[Natts_pg_ts_parser];
-	bool		nulls[Natts_pg_ts_parser];
+	Datum		values[Natts_pg_ts_parser] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[Natts_pg_ts_parser] = INIT_ALL_ELEMS_ZERO;
 	NameData	pname;
 	Oid			prsOid;
 	Oid			namespaceoid;
@@ -197,9 +197,6 @@ DefineTSParser(List *names, List *parameters)
 	namespaceoid = QualifiedNameGetCreationNamespace(names, &prsname);
 
 	/* initialize tuple fields with name/namespace */
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
-
 	prsOid = GetNewOidWithIndex(prsRel, TSParserOidIndexId,
 								Anum_pg_ts_parser_oid);
 	values[Anum_pg_ts_parser_oid - 1] = ObjectIdGetDatum(prsOid);
@@ -414,8 +411,8 @@ DefineTSDictionary(List *names, List *parameters)
 	ListCell   *pl;
 	Relation	dictRel;
 	HeapTuple	tup;
-	Datum		values[Natts_pg_ts_dict];
-	bool		nulls[Natts_pg_ts_dict];
+	Datum		values[Natts_pg_ts_dict] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[Natts_pg_ts_dict] = INIT_ALL_ELEMS_ZERO;
 	NameData	dname;
 	Oid			templId = InvalidOid;
 	List	   *dictoptions = NIL;
@@ -468,9 +465,6 @@ DefineTSDictionary(List *names, List *parameters)
 	/*
 	 * Looks good, insert
 	 */
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
-
 	dictOid = GetNewOidWithIndex(dictRel, TSDictionaryOidIndexId,
 								 Anum_pg_ts_dict_oid);
 	values[Anum_pg_ts_dict_oid - 1] = ObjectIdGetDatum(dictOid);
@@ -733,7 +727,7 @@ DefineTSTemplate(List *names, List *parameters)
 	Relation	tmplRel;
 	HeapTuple	tup;
 	Datum		values[Natts_pg_ts_template];
-	bool		nulls[Natts_pg_ts_template];
+	bool		nulls[Natts_pg_ts_template] = INIT_ALL_ELEMS_ZERO;
 	NameData	dname;
 	int			i;
 	Oid			tmplOid;
@@ -753,7 +747,6 @@ DefineTSTemplate(List *names, List *parameters)
 
 	for (i = 0; i < Natts_pg_ts_template; i++)
 	{
-		nulls[i] = false;
 		values[i] = ObjectIdGetDatum(InvalidOid);
 	}
 
@@ -965,8 +958,8 @@ DefineTSConfiguration(List *names, List *parameters, ObjectAddress *copied)
 	Relation	cfgRel;
 	Relation	mapRel = NULL;
 	HeapTuple	tup;
-	Datum		values[Natts_pg_ts_config];
-	bool		nulls[Natts_pg_ts_config];
+	Datum		values[Natts_pg_ts_config] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[Natts_pg_ts_config] = INIT_ALL_ELEMS_ZERO;
 	AclResult	aclresult;
 	Oid			namespaceoid;
 	char	   *cfgname;
@@ -1050,9 +1043,6 @@ DefineTSConfiguration(List *names, List *parameters, ObjectAddress *copied)
 	/*
 	 * Looks good, build tuple and insert
 	 */
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
-
 	cfgOid = GetNewOidWithIndex(cfgRel, TSConfigOidIndexId,
 								Anum_pg_ts_config_oid);
 	values[Anum_pg_ts_config_oid - 1] = ObjectIdGetDatum(cfgOid);
@@ -1089,11 +1079,8 @@ DefineTSConfiguration(List *names, List *parameters, ObjectAddress *copied)
 		{
 			Form_pg_ts_config_map cfgmap = (Form_pg_ts_config_map) GETSTRUCT(maptup);
 			HeapTuple	newmaptup;
-			Datum		mapvalues[Natts_pg_ts_config_map];
-			bool		mapnulls[Natts_pg_ts_config_map];
-
-			memset(mapvalues, 0, sizeof(mapvalues));
-			memset(mapnulls, false, sizeof(mapnulls));
+			Datum		mapvalues[Natts_pg_ts_config_map] = INIT_ALL_ELEMS_ZERO;
+			bool		mapnulls[Natts_pg_ts_config_map] = INIT_ALL_ELEMS_ZERO;
 
 			mapvalues[Anum_pg_ts_config_map_mapcfg - 1] = cfgOid;
 			mapvalues[Anum_pg_ts_config_map_maptokentype - 1] = cfgmap->maptokentype;
@@ -1420,9 +1407,8 @@ MakeConfigurationMapping(AlterTSConfigurationStmt *stmt,
 			for (j = 0; j < ndict; j++)
 			{
 				Datum		values[Natts_pg_ts_config_map];
-				bool		nulls[Natts_pg_ts_config_map];
+				bool		nulls[Natts_pg_ts_config_map] = INIT_ALL_ELEMS_ZERO;
 
-				memset(nulls, false, sizeof(nulls));
 				values[Anum_pg_ts_config_map_mapcfg - 1] = ObjectIdGetDatum(cfgId);
 				values[Anum_pg_ts_config_map_maptokentype - 1] = Int32GetDatum(tokens[i]);
 				values[Anum_pg_ts_config_map_mapseqno - 1] = Int32GetDatum(j + 1);

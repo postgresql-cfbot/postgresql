@@ -738,11 +738,10 @@ ReadArrayStr(char *arrayStr,
 	bool		eoArray = false;
 	bool		hasnull;
 	int32		totbytes;
-	int			indx[MAXDIM],
+	int			indx[MAXDIM] = INIT_ALL_ELEMS_ZERO,
 				prod[MAXDIM];
 
 	mda_get_prod(ndim, dim, prod);
-	MemSet(indx, 0, sizeof(indx));
 
 	/* Initialize is-null markers to true */
 	memset(nulls, true, nitems * sizeof(bool));

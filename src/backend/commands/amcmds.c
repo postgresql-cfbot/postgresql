@@ -46,8 +46,8 @@ CreateAccessMethod(CreateAmStmt *stmt)
 	ObjectAddress referenced;
 	Oid			amoid;
 	Oid			amhandler;
-	bool		nulls[Natts_pg_am];
-	Datum		values[Natts_pg_am];
+	bool		nulls[Natts_pg_am] = INIT_ALL_ELEMS_ZERO;
+	Datum		values[Natts_pg_am] = INIT_ALL_ELEMS_ZERO;
 	HeapTuple	tup;
 
 	rel = table_open(AccessMethodRelationId, RowExclusiveLock);
@@ -79,9 +79,6 @@ CreateAccessMethod(CreateAmStmt *stmt)
 	/*
 	 * Insert tuple into pg_am.
 	 */
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
-
 	amoid = GetNewOidWithIndex(rel, AmOidIndexId, Anum_pg_am_oid);
 	values[Anum_pg_am_oid - 1] = ObjectIdGetDatum(amoid);
 	values[Anum_pg_am_amname - 1] =

@@ -309,8 +309,8 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	Relation	rel;
 	ObjectAddress myself;
 	Oid			subid;
-	bool		nulls[Natts_pg_subscription];
-	Datum		values[Natts_pg_subscription];
+	bool		nulls[Natts_pg_subscription] = INIT_ALL_ELEMS_ZERO;
+	Datum		values[Natts_pg_subscription] = INIT_ALL_ELEMS_ZERO;
 	Oid			owner = GetUserId();
 	HeapTuple	tup;
 	bool		connect;
@@ -388,9 +388,6 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	walrcv_check_conninfo(conninfo);
 
 	/* Everything ok, form a new tuple. */
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
-
 	subid = GetNewOidWithIndex(rel, SubscriptionObjectIndexId,
 							   Anum_pg_subscription_oid);
 	values[Anum_pg_subscription_oid - 1] = ObjectIdGetDatum(subid);
@@ -623,9 +620,9 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 {
 	Relation	rel;
 	ObjectAddress myself;
-	bool		nulls[Natts_pg_subscription];
-	bool		replaces[Natts_pg_subscription];
-	Datum		values[Natts_pg_subscription];
+	bool		nulls[Natts_pg_subscription] = INIT_ALL_ELEMS_ZERO;
+	bool		replaces[Natts_pg_subscription] = INIT_ALL_ELEMS_ZERO;
+	Datum		values[Natts_pg_subscription] = INIT_ALL_ELEMS_ZERO;
 	HeapTuple	tup;
 	Oid			subid;
 	bool		update_tuple = false;
@@ -658,9 +655,6 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 	LockSharedObject(SubscriptionRelationId, subid, 0, AccessExclusiveLock);
 
 	/* Form a new tuple. */
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
-	memset(replaces, false, sizeof(replaces));
 
 	switch (stmt->kind)
 	{

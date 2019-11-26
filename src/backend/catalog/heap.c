@@ -695,13 +695,9 @@ InsertPgAttributeTuple(Relation pg_attribute_rel,
 					   Form_pg_attribute new_attribute,
 					   CatalogIndexState indstate)
 {
-	Datum		values[Natts_pg_attribute];
-	bool		nulls[Natts_pg_attribute];
+	Datum		values[Natts_pg_attribute] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[Natts_pg_attribute] = INIT_ALL_ELEMS_ZERO;
 	HeapTuple	tup;
-
-	/* This is a tad tedious, but way cleaner than what we used to do... */
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
 
 	values[Anum_pg_attribute_attrelid - 1] = ObjectIdGetDatum(new_attribute->attrelid);
 	values[Anum_pg_attribute_attname - 1] = NameGetDatum(&new_attribute->attname);
@@ -852,13 +848,9 @@ InsertPgClassTuple(Relation pg_class_desc,
 				   Datum reloptions)
 {
 	Form_pg_class rd_rel = new_rel_desc->rd_rel;
-	Datum		values[Natts_pg_class];
-	bool		nulls[Natts_pg_class];
+	Datum		values[Natts_pg_class] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[Natts_pg_class] = INIT_ALL_ELEMS_ZERO;
 	HeapTuple	tup;
-
-	/* This is a tad tedious, but way cleaner than what we used to do... */
-	memset(values, 0, sizeof(values));
-	memset(nulls, false, sizeof(nulls));
 
 	values[Anum_pg_class_oid - 1] = ObjectIdGetDatum(new_rel_oid);
 	values[Anum_pg_class_relname - 1] = NameGetDatum(&rd_rel->relname);
@@ -1645,14 +1637,11 @@ RemoveAttributeById(Oid relid, AttrNumber attnum)
 		/* clear the missing value if any */
 		if (attStruct->atthasmissing)
 		{
-			Datum		valuesAtt[Natts_pg_attribute];
-			bool		nullsAtt[Natts_pg_attribute];
-			bool		replacesAtt[Natts_pg_attribute];
+			Datum		valuesAtt[Natts_pg_attribute] = INIT_ALL_ELEMS_ZERO;
+			bool		nullsAtt[Natts_pg_attribute] = INIT_ALL_ELEMS_ZERO;
+			bool		replacesAtt[Natts_pg_attribute] = INIT_ALL_ELEMS_ZERO;
 
 			/* update the tuple - set atthasmissing and attmissingval */
-			MemSet(valuesAtt, 0, sizeof(valuesAtt));
-			MemSet(nullsAtt, false, sizeof(nullsAtt));
-			MemSet(replacesAtt, false, sizeof(replacesAtt));
 
 			valuesAtt[Anum_pg_attribute_atthasmissing - 1] =
 				BoolGetDatum(false);
@@ -2064,9 +2053,9 @@ RelationClearMissing(Relation rel)
 void
 SetAttrMissing(Oid relid, char *attname, char *value)
 {
-	Datum		valuesAtt[Natts_pg_attribute];
-	bool		nullsAtt[Natts_pg_attribute];
-	bool		replacesAtt[Natts_pg_attribute];
+	Datum		valuesAtt[Natts_pg_attribute] = INIT_ALL_ELEMS_ZERO;
+	bool		nullsAtt[Natts_pg_attribute] = INIT_ALL_ELEMS_ZERO;
+	bool		replacesAtt[Natts_pg_attribute] = INIT_ALL_ELEMS_ZERO;
 	Datum		missingval;
 	Form_pg_attribute attStruct;
 	Relation	attrrel,
@@ -2092,9 +2081,6 @@ SetAttrMissing(Oid relid, char *attname, char *value)
 								  Int32GetDatum(attStruct->atttypmod));
 
 	/* update the tuple - set atthasmissing and attmissingval */
-	MemSet(valuesAtt, 0, sizeof(valuesAtt));
-	MemSet(nullsAtt, false, sizeof(nullsAtt));
-	MemSet(replacesAtt, false, sizeof(replacesAtt));
 
 	valuesAtt[Anum_pg_attribute_atthasmissing - 1] = BoolGetDatum(true);
 	replacesAtt[Anum_pg_attribute_atthasmissing - 1] = true;
@@ -2191,15 +2177,12 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 		Expr	   *expr2 = (Expr *) expr;
 		EState	   *estate = NULL;
 		ExprContext *econtext;
-		Datum		valuesAtt[Natts_pg_attribute];
-		bool		nullsAtt[Natts_pg_attribute];
-		bool		replacesAtt[Natts_pg_attribute];
+		Datum		valuesAtt[Natts_pg_attribute] = INIT_ALL_ELEMS_ZERO;
+		bool		nullsAtt[Natts_pg_attribute] = INIT_ALL_ELEMS_ZERO;
+		bool		replacesAtt[Natts_pg_attribute] = INIT_ALL_ELEMS_ZERO;
 		Datum		missingval = (Datum) 0;
 		bool		missingIsNull = true;
 
-		MemSet(valuesAtt, 0, sizeof(valuesAtt));
-		MemSet(nullsAtt, false, sizeof(nullsAtt));
-		MemSet(replacesAtt, false, sizeof(replacesAtt));
 		valuesAtt[Anum_pg_attribute_atthasdef - 1] = true;
 		replacesAtt[Anum_pg_attribute_atthasdef - 1] = true;
 
@@ -3419,7 +3402,7 @@ StorePartitionKey(Relation rel,
 	Relation	pg_partitioned_table;
 	HeapTuple	tuple;
 	Datum		values[Natts_pg_partitioned_table];
-	bool		nulls[Natts_pg_partitioned_table];
+	bool		nulls[Natts_pg_partitioned_table] = INIT_ALL_ELEMS_ZERO;
 	ObjectAddress myself;
 	ObjectAddress referenced;
 
@@ -3443,8 +3426,6 @@ StorePartitionKey(Relation rel,
 		partexprDatum = (Datum) 0;
 
 	pg_partitioned_table = table_open(PartitionedRelationId, RowExclusiveLock);
-
-	MemSet(nulls, false, sizeof(nulls));
 
 	/* Only this can ever be NULL */
 	if (!partexprDatum)

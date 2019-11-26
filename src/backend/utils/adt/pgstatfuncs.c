@@ -492,12 +492,9 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 	{
 		LocalPgBackendStatus *local_beentry;
 		PgBackendStatus *beentry;
-		Datum		values[PG_STAT_GET_PROGRESS_COLS];
-		bool		nulls[PG_STAT_GET_PROGRESS_COLS];
+		Datum		values[PG_STAT_GET_PROGRESS_COLS] = INIT_ALL_ELEMS_ZERO;
+		bool		nulls[PG_STAT_GET_PROGRESS_COLS] = INIT_ALL_ELEMS_ZERO;
 		int			i;
-
-		MemSet(values, 0, sizeof(values));
-		MemSet(nulls, 0, sizeof(nulls));
 
 		local_beentry = pgstat_fetch_stat_local_beentry(curr_backend);
 
@@ -585,16 +582,13 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 	for (curr_backend = 1; curr_backend <= num_backends; curr_backend++)
 	{
 		/* for each row */
-		Datum		values[PG_STAT_GET_ACTIVITY_COLS];
-		bool		nulls[PG_STAT_GET_ACTIVITY_COLS];
+		Datum		values[PG_STAT_GET_ACTIVITY_COLS] = INIT_ALL_ELEMS_ZERO;
+		bool		nulls[PG_STAT_GET_ACTIVITY_COLS] = INIT_ALL_ELEMS_ZERO;
 		LocalPgBackendStatus *local_beentry;
 		PgBackendStatus *beentry;
 		PGPROC	   *proc;
 		const char *wait_event_type = NULL;
 		const char *wait_event = NULL;
-
-		MemSet(values, 0, sizeof(values));
-		MemSet(nulls, 0, sizeof(nulls));
 
 		/* Get the next one in the list */
 		local_beentry = pgstat_fetch_stat_local_beentry(curr_backend);
@@ -1908,13 +1902,9 @@ Datum
 pg_stat_get_archiver(PG_FUNCTION_ARGS)
 {
 	TupleDesc	tupdesc;
-	Datum		values[7];
-	bool		nulls[7];
+	Datum		values[7] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[7] = INIT_ALL_ELEMS_ZERO;
 	PgStat_ArchiverStats *archiver_stats;
-
-	/* Initialise values and NULL flags arrays */
-	MemSet(values, 0, sizeof(values));
-	MemSet(nulls, 0, sizeof(nulls));
 
 	/* Initialise attributes information in the tuple descriptor */
 	tupdesc = CreateTemplateTupleDesc(7);

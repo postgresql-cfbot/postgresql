@@ -422,8 +422,8 @@ pg_last_committed_xact(PG_FUNCTION_ARGS)
 {
 	TransactionId xid;
 	TimestampTz ts;
-	Datum		values[2];
-	bool		nulls[2];
+	Datum		values[2] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[2] = INIT_ALL_ELEMS_ZERO;
 	TupleDesc	tupdesc;
 	HeapTuple	htup;
 
@@ -448,10 +448,7 @@ pg_last_committed_xact(PG_FUNCTION_ARGS)
 	else
 	{
 		values[0] = TransactionIdGetDatum(xid);
-		nulls[0] = false;
-
 		values[1] = TimestampTzGetDatum(ts);
-		nulls[1] = false;
 	}
 
 	htup = heap_form_tuple(tupdesc, values, nulls);

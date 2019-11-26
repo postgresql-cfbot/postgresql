@@ -757,9 +757,7 @@ pg_prepared_statement(PG_FUNCTION_ARGS)
 		while ((prep_stmt = hash_seq_search(&hash_seq)) != NULL)
 		{
 			Datum		values[5];
-			bool		nulls[5];
-
-			MemSet(nulls, 0, sizeof(nulls));
+			bool		nulls[5] = INIT_ALL_ELEMS_ZERO;
 
 			values[0] = CStringGetTextDatum(prep_stmt->stmt_name);
 			values[1] = CStringGetTextDatum(prep_stmt->plansource->query_string);

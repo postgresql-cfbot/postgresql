@@ -608,9 +608,6 @@ inv_write(LargeObjectDesc *obj_desc, const char *buf, int nbytes)
 	}			workbuf;
 	char	   *workb = VARDATA(&workbuf.hdr);
 	HeapTuple	newtup;
-	Datum		values[Natts_pg_largeobject];
-	bool		nulls[Natts_pg_largeobject];
-	bool		replace[Natts_pg_largeobject];
 	CatalogIndexState indstate;
 
 	Assert(PointerIsValid(obj_desc));
@@ -656,6 +653,10 @@ inv_write(LargeObjectDesc *obj_desc, const char *buf, int nbytes)
 
 	while (nwritten < nbytes)
 	{
+		Datum           values[Natts_pg_largeobject] = INIT_ALL_ELEMS_ZERO;
+		bool            nulls[Natts_pg_largeobject] = INIT_ALL_ELEMS_ZERO;
+		bool            replace[Natts_pg_largeobject] = INIT_ALL_ELEMS_ZERO;
+
 		/*
 		 * If possible, get next pre-existing page of the LO.  We expect the
 		 * indexscan will deliver these in order --- but there may be holes.
@@ -711,9 +712,6 @@ inv_write(LargeObjectDesc *obj_desc, const char *buf, int nbytes)
 			/*
 			 * Form and insert updated tuple
 			 */
-			memset(values, 0, sizeof(values));
-			memset(nulls, false, sizeof(nulls));
-			memset(replace, false, sizeof(replace));
 			values[Anum_pg_largeobject_data - 1] = PointerGetDatum(&workbuf);
 			replace[Anum_pg_largeobject_data - 1] = true;
 			newtup = heap_modify_tuple(oldtuple, RelationGetDescr(lo_heap_r),
@@ -755,8 +753,6 @@ inv_write(LargeObjectDesc *obj_desc, const char *buf, int nbytes)
 			/*
 			 * Form and insert updated tuple
 			 */
-			memset(values, 0, sizeof(values));
-			memset(nulls, false, sizeof(nulls));
 			values[Anum_pg_largeobject_loid - 1] = ObjectIdGetDatum(obj_desc->id);
 			values[Anum_pg_largeobject_pageno - 1] = Int32GetDatum(pageno);
 			values[Anum_pg_largeobject_data - 1] = PointerGetDatum(&workbuf);
@@ -799,9 +795,9 @@ inv_truncate(LargeObjectDesc *obj_desc, int64 len)
 	}			workbuf;
 	char	   *workb = VARDATA(&workbuf.hdr);
 	HeapTuple	newtup;
-	Datum		values[Natts_pg_largeobject];
-	bool		nulls[Natts_pg_largeobject];
-	bool		replace[Natts_pg_largeobject];
+	Datum		values[Natts_pg_largeobject] = INIT_ALL_ELEMS_ZERO;
+	bool		nulls[Natts_pg_largeobject] = INIT_ALL_ELEMS_ZERO;
+	bool		replace[Natts_pg_largeobject] = INIT_ALL_ELEMS_ZERO;
 	CatalogIndexState indstate;
 
 	Assert(PointerIsValid(obj_desc));
@@ -886,9 +882,6 @@ inv_truncate(LargeObjectDesc *obj_desc, int64 len)
 		/*
 		 * Form and insert updated tuple
 		 */
-		memset(values, 0, sizeof(values));
-		memset(nulls, false, sizeof(nulls));
-		memset(replace, false, sizeof(replace));
 		values[Anum_pg_largeobject_data - 1] = PointerGetDatum(&workbuf);
 		replace[Anum_pg_largeobject_data - 1] = true;
 		newtup = heap_modify_tuple(oldtuple, RelationGetDescr(lo_heap_r),
@@ -925,8 +918,6 @@ inv_truncate(LargeObjectDesc *obj_desc, int64 len)
 		/*
 		 * Form and insert new tuple
 		 */
-		memset(values, 0, sizeof(values));
-		memset(nulls, false, sizeof(nulls));
 		values[Anum_pg_largeobject_loid - 1] = ObjectIdGetDatum(obj_desc->id);
 		values[Anum_pg_largeobject_pageno - 1] = Int32GetDatum(pageno);
 		values[Anum_pg_largeobject_data - 1] = PointerGetDatum(&workbuf);

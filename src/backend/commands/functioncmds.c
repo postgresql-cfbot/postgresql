@@ -1504,7 +1504,7 @@ CreateCast(CreateCastStmt *stmt)
 	Relation	relation;
 	HeapTuple	tuple;
 	Datum		values[Natts_pg_cast];
-	bool		nulls[Natts_pg_cast];
+	bool		nulls[Natts_pg_cast] = INIT_ALL_ELEMS_ZERO;
 	ObjectAddress myself,
 				referenced;
 	AclResult	aclresult;
@@ -1757,8 +1757,6 @@ CreateCast(CreateCastStmt *stmt)
 	values[Anum_pg_cast_castcontext - 1] = CharGetDatum(castcontext);
 	values[Anum_pg_cast_castmethod - 1] = CharGetDatum(castmethod);
 
-	MemSet(nulls, false, sizeof(nulls));
-
 	tuple = heap_form_tuple(RelationGetDescr(relation), values, nulls);
 
 	CatalogTupleInsert(relation, tuple);
@@ -1893,8 +1891,8 @@ CreateTransform(CreateTransformStmt *stmt)
 	AclResult	aclresult;
 	Form_pg_proc procstruct;
 	Datum		values[Natts_pg_transform];
-	bool		nulls[Natts_pg_transform];
-	bool		replaces[Natts_pg_transform];
+	bool		nulls[Natts_pg_transform] = INIT_ALL_ELEMS_ZERO;
+	bool		replaces[Natts_pg_transform] = INIT_ALL_ELEMS_ZERO;
 	Oid			transformid;
 	HeapTuple	tuple;
 	HeapTuple	newtuple;
@@ -1999,8 +1997,6 @@ CreateTransform(CreateTransformStmt *stmt)
 	values[Anum_pg_transform_trffromsql - 1] = ObjectIdGetDatum(fromsqlfuncid);
 	values[Anum_pg_transform_trftosql - 1] = ObjectIdGetDatum(tosqlfuncid);
 
-	MemSet(nulls, false, sizeof(nulls));
-
 	relation = table_open(TransformRelationId, RowExclusiveLock);
 
 	tuple = SearchSysCache2(TRFTYPELANG,
@@ -2017,7 +2013,6 @@ CreateTransform(CreateTransformStmt *stmt)
 							format_type_be(typeid),
 							stmt->lang)));
 
-		MemSet(replaces, false, sizeof(replaces));
 		replaces[Anum_pg_transform_trffromsql - 1] = true;
 		replaces[Anum_pg_transform_trftosql - 1] = true;
 

@@ -67,8 +67,8 @@ InsertRule(const char *rulname,
 	char	   *evqual = nodeToString(event_qual);
 	char	   *actiontree = nodeToString((Node *) action);
 	Datum		values[Natts_pg_rewrite];
-	bool		nulls[Natts_pg_rewrite];
-	bool		replaces[Natts_pg_rewrite];
+	bool		nulls[Natts_pg_rewrite] = INIT_ALL_ELEMS_ZERO;
+	bool		replaces[Natts_pg_rewrite] = INIT_ALL_ELEMS_ZERO;
 	NameData	rname;
 	Relation	pg_rewrite_desc;
 	HeapTuple	tup,
@@ -79,10 +79,8 @@ InsertRule(const char *rulname,
 	bool		is_update = false;
 
 	/*
-	 * Set up *nulls and *values arrays
+	 * Set up *values array
 	 */
-	MemSet(nulls, false, sizeof(nulls));
-
 	namestrcpy(&rname, rulname);
 	values[Anum_pg_rewrite_rulename - 1] = NameGetDatum(&rname);
 	values[Anum_pg_rewrite_ev_class - 1] = ObjectIdGetDatum(eventrel_oid);
@@ -115,7 +113,6 @@ InsertRule(const char *rulname,
 		/*
 		 * When replacing, we don't need to replace every attribute
 		 */
-		MemSet(replaces, false, sizeof(replaces));
 		replaces[Anum_pg_rewrite_ev_type - 1] = true;
 		replaces[Anum_pg_rewrite_is_instead - 1] = true;
 		replaces[Anum_pg_rewrite_ev_qual - 1] = true;

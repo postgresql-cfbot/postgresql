@@ -258,12 +258,10 @@ SetSharedSecurityLabel(const ObjectAddress *object,
 	HeapTuple	oldtup;
 	HeapTuple	newtup = NULL;
 	Datum		values[Natts_pg_shseclabel];
-	bool		nulls[Natts_pg_shseclabel];
-	bool		replaces[Natts_pg_shseclabel];
+	bool		nulls[Natts_pg_shseclabel] = INIT_ALL_ELEMS_ZERO;
+	bool		replaces[Natts_pg_shseclabel] = INIT_ALL_ELEMS_ZERO;
 
 	/* Prepare to form or update a tuple, if necessary. */
-	memset(nulls, false, sizeof(nulls));
-	memset(replaces, false, sizeof(replaces));
 	values[Anum_pg_shseclabel_objoid - 1] = ObjectIdGetDatum(object->objectId);
 	values[Anum_pg_shseclabel_classoid - 1] = ObjectIdGetDatum(object->classId);
 	values[Anum_pg_shseclabel_provider - 1] = CStringGetTextDatum(provider);
@@ -333,8 +331,8 @@ SetSecurityLabel(const ObjectAddress *object,
 	HeapTuple	oldtup;
 	HeapTuple	newtup = NULL;
 	Datum		values[Natts_pg_seclabel];
-	bool		nulls[Natts_pg_seclabel];
-	bool		replaces[Natts_pg_seclabel];
+	bool		nulls[Natts_pg_seclabel] = INIT_ALL_ELEMS_ZERO;
+	bool		replaces[Natts_pg_seclabel] = INIT_ALL_ELEMS_ZERO;
 
 	/* Shared objects have their own security label catalog. */
 	if (IsSharedRelation(object->classId))
@@ -344,8 +342,6 @@ SetSecurityLabel(const ObjectAddress *object,
 	}
 
 	/* Prepare to form or update a tuple, if necessary. */
-	memset(nulls, false, sizeof(nulls));
-	memset(replaces, false, sizeof(replaces));
 	values[Anum_pg_seclabel_objoid - 1] = ObjectIdGetDatum(object->objectId);
 	values[Anum_pg_seclabel_classoid - 1] = ObjectIdGetDatum(object->classId);
 	values[Anum_pg_seclabel_objsubid - 1] = Int32GetDatum(object->objectSubId);

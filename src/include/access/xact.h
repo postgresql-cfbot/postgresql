@@ -81,6 +81,9 @@ typedef enum
 /* Synchronous commit level */
 extern int	synchronous_commit;
 
+/* turn on/off logical replication */
+extern bool	logical_replication;
+
 /*
  * Miscellaneous flag bits to record events which occur on the top level
  * transaction. These flags are only persisted in MyXactFlags and are intended
@@ -167,6 +170,12 @@ typedef void (*SubXactCallback) (SubXactEvent event, SubTransactionId mySubid,
 #define XACT_XINFO_HAS_ORIGIN			(1U << 5)
 #define XACT_XINFO_HAS_AE_LOCKS			(1U << 6)
 #define XACT_XINFO_HAS_GID				(1U << 7)
+
+/*
+ * It indicates that the data affected by this transaction does not need
+ * to be included in the logical replication.
+ */
+#define XACT_XINFO_LOGIREPL_OFF			(1U << 28)
 
 /*
  * Also stored in xinfo, these indicating a variety of additional actions that

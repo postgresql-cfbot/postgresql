@@ -615,6 +615,7 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 	 */
 	if (SnapBuildXactNeedsSkip(ctx->snapshot_builder, buf->origptr) ||
 		(parsed->dbId != InvalidOid && parsed->dbId != ctx->slot->data.database) ||
+		(parsed->xinfo & XACT_XINFO_LOGIREPL_OFF) ||
 		ctx->fast_forward || FilterByOrigin(ctx, origin_id))
 	{
 		for (i = 0; i < parsed->nsubxacts; i++)

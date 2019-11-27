@@ -81,6 +81,8 @@ bool		XactDeferrable;
 
 int			synchronous_commit = SYNCHRONOUS_COMMIT_ON;
 
+bool		logical_replication = true;
+
 /*
  * When running as a parallel worker, we place only a single
  * TransactionStateData on the parallel worker's state stack, and the XID
@@ -5536,6 +5538,9 @@ XactLogCommitRecord(TimestampTz commit_time,
 		xl_origin.origin_lsn = replorigin_session_origin_lsn;
 		xl_origin.origin_timestamp = replorigin_session_origin_timestamp;
 	}
+
+	if (!logical_replication)
+		xl_xinfo.xinfo |= XACT_XINFO_LOGIREPL_OFF;
 
 	if (xl_xinfo.xinfo != 0)
 		info |= XLOG_XACT_HAS_INFO;

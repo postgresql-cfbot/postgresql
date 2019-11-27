@@ -1959,6 +1959,16 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"logical_replication", PGC_USERSET, REPLICATION_MASTER,
+			gettext_noop("Close logical replication of transactions in the session."),
+			NULL
+		},
+		&logical_replication,
+		true,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL

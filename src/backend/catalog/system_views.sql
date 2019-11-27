@@ -248,7 +248,15 @@ CREATE VIEW pg_stats WITH (security_barrier) AS
          JOIN pg_attribute a ON (c.oid = attrelid AND attnum = s.staattnum)
          LEFT JOIN pg_namespace n ON (n.oid = c.relnamespace)
     WHERE NOT attisdropped
-    AND has_column_privilege(c.oid, a.attnum, 'select')
+    AND (c.relkind = 'r' AND has_column_privilege(c.oid, a.attnum, 'select'::text)
+        OR
+        (c.relkind = 'i' AND NOT(EXISTS(
+            SELECT 1 FROM pg_depend
+            WHERE pg_depend.objid = c.oid
+            AND pg_depend.refobjsubid > 0
+            AND NOT has_column_privilege(pg_depend.refobjid, pg_depend.refobjsubid::smallint, 'select'::text)))
+        )
+    )
     AND (c.relrowsecurity = false OR NOT row_security_active(c.oid));
 
 REVOKE ALL on pg_statistic FROM public;

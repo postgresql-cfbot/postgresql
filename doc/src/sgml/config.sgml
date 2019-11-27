@@ -4312,6 +4312,24 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-wal-receiver-start-condition" xreflabel="wal_receiver_start_condition">
+      <term><varname>wal_receiver_start_condition</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>wal_receiver_start_condition</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        By default (<literal>"catchup"</literal> condition) the standby will connect to the primary after replaying all
+        WAL files available in the archive.
+        But in case of large <varname>recovery_min_apply_delay</varname> it may lead to master's WAL space overflow
+        because WAL receiver is not launched and so nobody is fetching changes from master.
+        Changine start condition to <literal>"consistency"</literal> will force starting WAL receiver once
+        consistency point is reached.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
     </sect2>
 

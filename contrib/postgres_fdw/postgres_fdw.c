@@ -1950,7 +1950,7 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 	if (plan && plan->operation == CMD_UPDATE &&
 		(resultRelInfo->ri_usesFdwDirectModify ||
 		 resultRelInfo->ri_FdwState) &&
-		resultRelInfo > mtstate->resultRelInfo + mtstate->mt_whichplan)
+		resultRelInfo > mtstate->resultRelInfos[mtstate->mt_whichplan])
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot route tuples into foreign table to be updated \"%s\"",
@@ -2004,7 +2004,7 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 		 */
 		if (plan && plan->operation == CMD_UPDATE &&
 			resultRelation == plan->rootRelation)
-			resultRelation = mtstate->resultRelInfo[0].ri_RangeTableIndex;
+			resultRelation = mtstate->resultRelInfos[0]->ri_RangeTableIndex;
 	}
 
 	/* Construct the SQL command string. */

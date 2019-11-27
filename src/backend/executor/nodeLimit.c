@@ -41,6 +41,7 @@ static TupleTableSlot *			/* return: a tuple or NULL */
 ExecLimit(PlanState *pstate)
 {
 	LimitState *node = castNode(LimitState, pstate);
+	ExprContext *econtext = node->ps.ps_ExprContext;
 	ScanDirection direction;
 	TupleTableSlot *slot;
 	PlanState  *outerPlan;
@@ -102,6 +103,15 @@ ExecLimit(PlanState *pstate)
 					node->lstate = LIMIT_EMPTY;
 					return NULL;
 				}
+				/*
+				 * Tuple at limit is needed for comparation in subsequent execution
+				 * to detect ties.
+				 */
+				if (node->limitOption == LIMIT_OPTION_WITH_TIES &&
+					node->position - node->offset == node->count - 1)
+				{
+					ExecCopySlot(node->last_slot, slot);
+				}
 				node->subSlot = slot;
 				if (++node->position > node->offset)
 					break;
@@ -125,10 +135,13 @@ ExecLimit(PlanState *pstate)
 			if (ScanDirectionIsForward(direction))
 			{
 				/*
-				 * Forwards scan, so check for stepping off end of window. If
-				 * we are at the end of the window, return NULL without
-				 * advancing the subplan or the position variable; but change
-				 * the state machine state to record having done so.
+				 * Forwards scan, so check for stepping off end of window.  At
+				 * the end of the window, the behavior depends on whether WITH
+				 * TIES was specified: in that case, we need to change the state
+				 * machine to LIMIT_WINDOWTIES and fall thru.If not (nothing was
+				 * specified, or ONLY was) return NULL without advancing the
+				 * subplan or the position variable but change the state machine
+				 * to record having done so.
 				 *
 				 * Once at the end, ideally, we can shut down parallel
 				 * resources but that would destroy the parallel context which
@@ -137,23 +150,43 @@ ExecLimit(PlanState *pstate)
 				 * are possible.
 				 */
 				if (!node->noCount &&
-					node->position - node->offset >= node->count)
+					node->position - node->offset >= node->count &&
+					node->limitOption == LIMIT_OPTION_COUNT)
 				{
 					node->lstate = LIMIT_WINDOWEND;
 					return NULL;
 				}
-
-				/*
-				 * Get next tuple from subplan, if any.
-				 */
-				slot = ExecProcNode(outerPlan);
-				if (TupIsNull(slot))
+				else if (!node->noCount &&
+						 node->position - node->offset >= node->count &&
+						 node->limitOption == LIMIT_OPTION_WITH_TIES)
 				{
-					node->lstate = LIMIT_SUBPLANEOF;
-					return NULL;
+					node->lstate = LIMIT_WINDOWTIES;
 				}
-				node->subSlot = slot;
-				node->position++;
+				else
+				{
+					/*
+					 * Get next tuple from subplan, if any.
+					 */
+					slot = ExecProcNode(outerPlan);
+					if (TupIsNull(slot))
+					{
+						node->lstate = LIMIT_SUBPLANEOF;
+						return NULL;
+					}
+
+					/*
+					 * Tuple at limit is needed for comparation in subsequent execution
+					 * to detect ties.
+					 */
+					if (node->limitOption == LIMIT_OPTION_WITH_TIES &&
+						node->position - node->offset == node->count - 1)
+					{
+						ExecCopySlot(node->last_slot, slot);
+					}
+					node->subSlot = slot;
+					node->position++;
+					break;
+				}
 			}
 			else
 			{
@@ -175,6 +208,37 @@ ExecLimit(PlanState *pstate)
 					elog(ERROR, "LIMIT subplan failed to run backwards");
 				node->subSlot = slot;
 				node->position--;
+				break;
+			}
+
+		case LIMIT_WINDOWTIES:
+
+			/*
+			 * Advance the subplan until we find the first row
+			 * with different ORDER BY pathkeys.
+			 */
+			slot = ExecProcNode(outerPlan);
+			if (TupIsNull(slot))
+			{
+				node->lstate = LIMIT_SUBPLANEOF;
+				return NULL;
+			}
+
+			/*
+			 * Test if the new tuple and the last tuple match.
+			 * If so we return the tuple.
+			 */
+			econtext->ecxt_innertuple = slot;
+			econtext->ecxt_outertuple = node->last_slot;
+			if (ExecQualAndReset(node->eqfunction, econtext))
+			{
+				node->subSlot = slot;
+				node->position++;
+			}
+			else
+			{
+				node->lstate = LIMIT_WINDOWEND;
+				return NULL;
 			}
 			break;
 
@@ -319,7 +383,7 @@ recompute_limits(LimitState *node)
 static int64
 compute_tuples_needed(LimitState *node)
 {
-	if (node->noCount)
+	if ((node->noCount) || (node->limitOption == LIMIT_OPTION_WITH_TIES))
 		return -1;
 	/* Note: if this overflows, we'll return a negative value, which is OK */
 	return node->count + node->offset;
@@ -372,6 +436,7 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 										   (PlanState *) limitstate);
 	limitstate->limitCount = ExecInitExpr((Expr *) node->limitCount,
 										  (PlanState *) limitstate);
+	limitstate->limitOption = node->limitOption;
 
 	/*
 	 * Initialize result type.
@@ -387,6 +452,26 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 	 * node appropriately
 	 */
 	limitstate->ps.ps_ProjInfo = NULL;
+
+	/*
+	 * Initialize the equality evaluation, to detect ties.
+	 */
+	if (node->limitOption == LIMIT_OPTION_WITH_TIES)
+	{
+		TupleDesc	desc;
+		const TupleTableSlotOps *ops;
+
+		desc = ExecGetResultType(outerPlanState(limitstate));
+		ops = ExecGetResultSlotOps(outerPlanState(limitstate), NULL);
+
+		limitstate->last_slot = ExecInitExtraTupleSlot(estate, desc, ops);
+		limitstate->eqfunction = execTuplesMatchPrepare(desc,
+								   node->uniqNumCols,
+								   node->uniqColIdx,
+								   node->uniqOperators,
+								   node->uniqCollations,
+								   &limitstate->ps);
+	}
 
 	return limitstate;
 }

@@ -68,14 +68,18 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
       that table is added to the publication.  If <literal>ONLY</literal> is not
       specified, the table and all its descendant tables (if any) are added.
       Optionally, <literal>*</literal> can be specified after the table name to
-      explicitly indicate that descendant tables are included.
+      explicitly indicate that descendant tables are included.  However, adding
+      a partitioned table to a publication never explicitly adds its partitions,
+      because partitions are implicitly published due to the partitioned table
+      being added to the publication.
      </para>
 
      <para>
-      Only persistent base tables can be part of a publication.  Temporary
-      tables, unlogged tables, foreign tables, materialized views, regular
-      views, and partitioned tables cannot be part of a publication.  To
-      replicate a partitioned table, add the individual partitions to the
+      Only persistent base tables and partitioned tables can be part of a
+      publication. Temporary tables, unlogged tables, foreign tables,
+      materialized views, regular views cannot be part of a publication.
+      When a partitioned table is added to a publication, all of its existing
+      and future partitions are also implicitly considered to be part of the
       publication.
      </para>
     </listitem>
@@ -130,6 +134,11 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
    If neither <literal>FOR TABLE</literal> nor <literal>FOR ALL
    TABLES</literal> is specified, then the publication starts out with an
    empty set of tables.  That is useful if tables are to be added later.
+  </para>
+
+  <para>
+   Partitioned tables are not considered when <literal>FOR ALL TABLES</literal>
+   is specified.
   </para>
 
   <para>

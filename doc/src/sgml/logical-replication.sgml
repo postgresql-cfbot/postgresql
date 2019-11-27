@@ -402,13 +402,11 @@
 
    <listitem>
     <para>
-     Replication is only possible from base tables to base tables.  That is,
-     the tables on the publication and on the subscription side must be normal
-     tables, not views, materialized views, partition root tables, or foreign
-     tables.  In the case of partitions, you can therefore replicate a
-     partition hierarchy one-to-one, but you cannot currently replicate to a
-     differently partitioned setup.  Attempts to replicate tables other than
-     base tables will result in an error.
+     Replication is only supported by regular and partitioned tables, although
+     when using partitioned tables as replication <quote>target</quote>, only
+     inserts can be replicated.  Attempts to replicate relations other than
+     regular and partitioned tables, such as views, materialized views, or
+     foreign tables, will result in an error.
     </para>
    </listitem>
   </itemizedlist>

@@ -26,6 +26,7 @@
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/objectaddress.h"
+#include "catalog/partition.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_type.h"
@@ -47,17 +48,9 @@
 static void
 check_publication_add_relation(Relation targetrel)
 {
-	/* Give more specific error for partitioned tables */
-	if (RelationGetForm(targetrel)->relkind == RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("\"%s\" is a partitioned table",
-						RelationGetRelationName(targetrel)),
-				 errdetail("Adding partitioned tables to publications is not supported."),
-				 errhint("You can add the table partitions individually.")));
-
-	/* Must be table */
-	if (RelationGetForm(targetrel)->relkind != RELKIND_RELATION)
+	/* Must be a regular or partitioned table */
+	if (RelationGetForm(targetrel)->relkind != RELKIND_RELATION &&
+		RelationGetForm(targetrel)->relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("\"%s\" is not a table",
@@ -103,7 +96,8 @@ check_publication_add_relation(Relation targetrel)
 static bool
 is_publishable_class(Oid relid, Form_pg_class reltuple)
 {
-	return reltuple->relkind == RELKIND_RELATION &&
+	return (reltuple->relkind == RELKIND_RELATION ||
+			reltuple->relkind == RELKIND_PARTITIONED_TABLE) &&
 		!IsCatalogRelationOid(relid) &&
 		reltuple->relpersistence == RELPERSISTENCE_PERMANENT &&
 		relid >= FirstNormalObjectId;
@@ -244,6 +238,38 @@ GetRelationPublications(Oid relid)
 	ReleaseSysCacheList(pubrellist);
 
 	return result;
+}
+
+/*
+ * Finds all publications that publish changes to the input relation'
+ * ancestors.
+ *
+ * *published_ancestors will contain the OIDs of ancestors, one for each
+ * publication returned. The ancestor OIDs can be repeated, because a given
+ * ancestor may be published via multiple publications.
+ */
+List *
+GetRelationAncestorPublications(Relation rel,
+								List **published_ancestors)
+{
+	List	   *ancestors = get_partition_ancestors(RelationGetRelid(rel));
+	List	   *ancestor_pubids = NIL;
+	ListCell   *lc;
+
+	*published_ancestors = NIL;
+	foreach(lc, ancestors)
+	{
+		Oid		relid = lfirst_oid(lc);
+		List   *rel_publishers = GetRelationPublications(relid);
+		int		n = list_length(rel_publishers),
+				i;
+
+		ancestor_pubids = list_concat_copy(ancestor_pubids, rel_publishers);
+		for (i = 0; i < n; i++)
+			*published_ancestors = lappend_oid(*published_ancestors, relid);
+	}
+
+	return ancestor_pubids;
 }
 
 /*

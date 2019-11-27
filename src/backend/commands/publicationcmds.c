@@ -498,7 +498,8 @@ RemovePublicationRelById(Oid proid)
 
 /*
  * Open relations specified by a RangeVar list.
- * The returned tables are locked in ShareUpdateExclusiveLock mode.
+ * The returned tables are locked in ShareUpdateExclusiveLock mode in order to
+ * add them to a publication.
  */
 static List *
 OpenTableList(List *tables)
@@ -539,8 +540,13 @@ OpenTableList(List *tables)
 		rels = lappend(rels, rel);
 		relids = lappend_oid(relids, myrelid);
 
-		/* Add children of this rel, if requested */
-		if (recurse)
+		/*
+		 * Add children of this rel, if requested, so that they too are added
+		 * to the publication.  A partitioned table can't have any inheritance
+		 * children other than its partitions, which need not be explicitly
+		 * added to the publication.
+		 */
+		if (recurse && rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 		{
 			List	   *children;
 			ListCell   *child;

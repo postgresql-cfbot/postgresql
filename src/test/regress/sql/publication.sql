@@ -69,6 +69,16 @@ RESET client_min_messages;
 DROP TABLE testpub_tbl3, testpub_tbl3a;
 DROP PUBLICATION testpub3, testpub4;
 
+-- Tests for partitioned tables
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub_forparted;
+RESET client_min_messages;
+-- should add only the parent to publication, not the partition
+CREATE TABLE testpub_parted1 PARTITION OF testpub_parted FOR VALUES IN (1);
+ALTER PUBLICATION testpub_forparted ADD TABLE testpub_parted;
+SELECT tablename FROM pg_publication_tables WHERE pubname = 'testpub_forparted';
+DROP PUBLICATION testpub_forparted;
+
 -- fail - view
 CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_view;
 SET client_min_messages = 'ERROR';
@@ -83,8 +93,6 @@ CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_tbl1;
 
 -- fail - view
 ALTER PUBLICATION testpub_default ADD TABLE testpub_view;
--- fail - partitioned table
-ALTER PUBLICATION testpub_fortbl ADD TABLE testpub_parted;
 
 ALTER PUBLICATION testpub_default ADD TABLE testpub_tbl1;
 ALTER PUBLICATION testpub_default SET TABLE testpub_tbl1;

@@ -80,6 +80,8 @@ typedef struct Publication
 extern Publication *GetPublication(Oid pubid);
 extern Publication *GetPublicationByName(const char *pubname, bool missing_ok);
 extern List *GetRelationPublications(Oid relid);
+extern List *GetRelationAncestorPublications(Relation rel,
+								List **published_ancestors);
 extern List *GetPublicationRelations(Oid pubid);
 extern List *GetAllTablesPublications(void);
 extern List *GetAllTablesPublicationRelations(void);

@@ -29,11 +29,13 @@
 #include "access/xlog_internal.h"
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
+#include "catalog/partition.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
+#include "executor/execPartition.h"
 #include "executor/nodeModifyTable.h"
 #include "funcapi.h"
 #include "libpq/pqformat.h"
@@ -138,6 +140,21 @@ should_apply_changes_for_rel(LogicalRepRelMapEntry *rel)
 				 rel->statelsn <= remote_final_lsn));
 }
 
+/*
+ * Different interface to use when a LogicalRepRelMapEntry is not present
+ * for a given local target relation.
+ */
+static bool
+should_apply_changes_for_relid(Oid localreloid, char state,
+							   XLogRecPtr statelsn)
+{
+	if (am_tablesync_worker())
+		return MyLogicalRepWorker->relid == localreloid;
+	else
+		return (state == SUBREL_STATE_READY ||
+				(state == SUBREL_STATE_SYNCDONE &&
+				 statelsn <= remote_final_lsn));
+}
 /*
  * Make sure that we started local transaction.
  *
@@ -589,6 +606,8 @@ apply_handle_insert(StringInfo s)
 	EState	   *estate;
 	TupleTableSlot *remoteslot;
 	MemoryContext oldctx;
+	ModifyTableState *mtstate = NULL;
+	PartitionTupleRouting *proute = NULL;
 
 	ensure_transaction();
 
@@ -617,6 +636,36 @@ apply_handle_insert(StringInfo s)
 	oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
 	slot_store_cstrings(remoteslot, rel, newtup.values);
 	slot_fill_defaults(rel, estate, remoteslot);
+
+	/* Tuple routing for a partitioned table. */
+	if (rel->localrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		ResultRelInfo	 *partrelinfo;
+		PartitionRoutingInfo *partinfo;
+		TupleConversionMap *map;
+
+		mtstate = makeNode(ModifyTableState);
+		mtstate->ps.plan = NULL;
+		mtstate->ps.state = estate;
+		mtstate->operation = CMD_INSERT;
+		mtstate->resultRelInfo = estate->es_result_relations;
+		proute = ExecSetupPartitionTupleRouting(estate, mtstate,
+												rel->localrel);
+		partrelinfo = ExecFindPartition(mtstate,
+										estate->es_result_relation_info,
+										proute, remoteslot, estate);
+		estate->es_result_relation_info = partrelinfo;
+		partinfo = partrelinfo->ri_PartitionInfo;
+		map = partinfo->pi_RootToPartitionMap;
+		if (map != NULL)
+		{
+			TupleTableSlot *new_slot = partinfo->pi_PartitionTupleSlot;
+
+			remoteslot = execute_attr_map_slot(map->attrMap, remoteslot,
+											   new_slot);
+		}
+	}
+
 	MemoryContextSwitchTo(oldctx);
 
 	ExecOpenIndices(estate->es_result_relation_info, false);
@@ -626,6 +675,8 @@ apply_handle_insert(StringInfo s)
 
 	/* Cleanup. */
 	ExecCloseIndices(estate->es_result_relation_info);
+	if (proute)
+		ExecCleanupTupleRouting(mtstate, proute);
 	PopActiveSnapshot();
 
 	/* Handle queued AFTER triggers. */
@@ -922,14 +973,48 @@ apply_handle_truncate(StringInfo s)
 		LogicalRepRelMapEntry *rel;
 
 		rel = logicalrep_rel_open(relid, RowExclusiveLock);
+
 		if (!should_apply_changes_for_rel(rel))
 		{
+			bool	really_skip = true;
+
+			/*
+			 * If we seem to have gotten sent a leaf partition because an
+			 * ancestor was truncated, confirm before proceeding with
+			 * truncating the partition that an ancestor indeed has a valid
+			 * subscription state.
+			 */
+			if (rel->state == SUBREL_STATE_UNKNOWN &&
+				rel->localrel->rd_rel->relispartition)
+			{
+				List   *ancestors = get_partition_ancestors(rel->localreloid);
+				ListCell *lc1;
+
+				foreach(lc1, ancestors)
+				{
+					Oid			ancestor = lfirst_oid(lc1);
+					XLogRecPtr	statelsn;
+					char		state;
+
+					/* Check using the ancestor's subscription state. */
+					state = GetSubscriptionRelState(MySubscription->oid,
+													ancestor, &statelsn,
+													false);
+					really_skip &= !should_apply_changes_for_relid(ancestor,
+																   state,
+																   statelsn);
+				}
+			}
+
 			/*
 			 * The relation can't become interesting in the middle of the
 			 * transaction so it's safe to unlock it.
 			 */
-			logicalrep_rel_close(rel, RowExclusiveLock);
-			continue;
+			if (really_skip)
+			{
+				logicalrep_rel_close(rel, RowExclusiveLock);
+				continue;
+			}
 		}
 
 		remote_rels = lappend(remote_rels, rel);

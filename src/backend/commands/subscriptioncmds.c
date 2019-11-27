@@ -44,7 +44,20 @@
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 
+/*
+ * Structure for fetch_table_list() to store the information about
+ * a given published table.
+ */
+typedef struct PublicationTable
+{
+	char	   *schemaname;
+	char	   *relname;
+	bool		pubupdate;
+	bool		pubdelete;
+} PublicationTable;
+
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
+static Oid ValidateSubscriptionRel(PublicationTable *pt);
 
 /*
  * Common option parsing function for CREATE and ALTER SUBSCRIPTION commands.
@@ -456,15 +469,10 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 			tables = fetch_table_list(wrconn, publications);
 			foreach(lc, tables)
 			{
-				RangeVar   *rv = (RangeVar *) lfirst(lc);
+				PublicationTable *pt = (PublicationTable *) lfirst(lc);
 				Oid			relid;
 
-				relid = RangeVarGetRelid(rv, AccessShareLock, false);
-
-				/* Check for supported relkind. */
-				CheckSubscriptionRelkind(get_rel_relkind(relid),
-										 rv->schemaname, rv->relname);
-
+				relid = ValidateSubscriptionRel(pt);
 				AddSubscriptionRelState(subid, relid, table_state,
 										InvalidXLogRecPtr);
 			}
@@ -565,14 +573,11 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 
 	foreach(lc, pubrel_names)
 	{
-		RangeVar   *rv = (RangeVar *) lfirst(lc);
+		PublicationTable *pt = (PublicationTable *) lfirst(lc);
 		Oid			relid;
 
-		relid = RangeVarGetRelid(rv, AccessShareLock, false);
-
-		/* Check for supported relkind. */
-		CheckSubscriptionRelkind(get_rel_relkind(relid),
-								 rv->schemaname, rv->relname);
+		/* Check that there's an appropriate relation present locally. */
+		relid = ValidateSubscriptionRel(pt);
 
 		pubrel_local_oids[off++] = relid;
 
@@ -584,7 +589,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 									InvalidXLogRecPtr);
 			ereport(DEBUG1,
 					(errmsg("table \"%s.%s\" added to subscription \"%s\"",
-							rv->schemaname, rv->relname, sub->name)));
+							pt->schemaname, pt->relname, sub->name)));
 		}
 	}
 
@@ -1129,7 +1134,7 @@ fetch_table_list(WalReceiverConn *wrconn, List *publications)
 	WalRcvExecResult *res;
 	StringInfoData cmd;
 	TupleTableSlot *slot;
-	Oid			tableRow[2] = {TEXTOID, TEXTOID};
+	Oid			tableRow[4] = {TEXTOID, TEXTOID, BOOLOID, BOOLOID};
 	ListCell   *lc;
 	bool		first;
 	List	   *tablelist = NIL;
@@ -1137,9 +1142,11 @@ fetch_table_list(WalReceiverConn *wrconn, List *publications)
 	Assert(list_length(publications) > 0);
 
 	initStringInfo(&cmd);
-	appendStringInfoString(&cmd, "SELECT DISTINCT t.schemaname, t.tablename\n"
+	appendStringInfoString(&cmd, "SELECT DISTINCT t.schemaname, t.tablename, p.pubupdate, p.pubdelete\n"
 						   "  FROM pg_catalog.pg_publication_tables t\n"
+						   "  JOIN pg_catalog.pg_publication p ON t.pubname = p.pubname\n"
 						   " WHERE t.pubname IN (");
+
 	first = true;
 	foreach(lc, publications)
 	{
@@ -1154,7 +1161,7 @@ fetch_table_list(WalReceiverConn *wrconn, List *publications)
 	}
 	appendStringInfoChar(&cmd, ')');
 
-	res = walrcv_exec(wrconn, cmd.data, 2, tableRow);
+	res = walrcv_exec(wrconn, cmd.data, 4, tableRow);
 	pfree(cmd.data);
 
 	if (res->status != WALRCV_OK_TUPLES)
@@ -1166,18 +1173,19 @@ fetch_table_list(WalReceiverConn *wrconn, List *publications)
 	slot = MakeSingleTupleTableSlot(res->tupledesc, &TTSOpsMinimalTuple);
 	while (tuplestore_gettupleslot(res->tuplestore, true, false, slot))
 	{
-		char	   *nspname;
-		char	   *relname;
+		PublicationTable *pt = palloc0(sizeof(PublicationTable));
 		bool		isnull;
-		RangeVar   *rv;
 
-		nspname = TextDatumGetCString(slot_getattr(slot, 1, &isnull));
+		pt->schemaname = TextDatumGetCString(slot_getattr(slot, 1, &isnull));
 		Assert(!isnull);
-		relname = TextDatumGetCString(slot_getattr(slot, 2, &isnull));
+		pt->relname = TextDatumGetCString(slot_getattr(slot, 2, &isnull));
+		Assert(!isnull);
+		pt->pubupdate = DatumGetBool(slot_getattr(slot, 3, &isnull));
+		Assert(!isnull);
+		pt->pubdelete = DatumGetBool(slot_getattr(slot, 4, &isnull));
 		Assert(!isnull);
 
-		rv = makeRangeVar(pstrdup(nspname), pstrdup(relname), -1);
-		tablelist = lappend(tablelist, rv);
+		tablelist = lappend(tablelist, pt);
 
 		ExecClearTuple(slot);
 	}
@@ -1186,4 +1194,37 @@ fetch_table_list(WalReceiverConn *wrconn, List *publications)
 	walrcv_clear_result(res);
 
 	return tablelist;
+}
+
+/*
+ * Looks up a local relation matching the given publication table and
+ * checks that it's appropriate to use as replication target, erroring
+ * out if not.
+ *
+ * Oid of the successfully validated local relation is returned.
+ */
+static Oid
+ValidateSubscriptionRel(PublicationTable *pt)
+{
+	Oid		relid;
+	char	local_relkind;
+	RangeVar *rv;
+
+	rv = makeRangeVar(pstrdup(pt->schemaname), pstrdup(pt->relname), -1);
+	relid = RangeVarGetRelid(rv, AccessShareLock, false);
+	Assert(OidIsValid(relid));
+
+	/* Check for supported relkind. */
+	local_relkind = get_rel_relkind(relid);
+	CheckSubscriptionRelkind(local_relkind, rv->schemaname, rv->relname);
+
+	if (local_relkind == RELKIND_PARTITIONED_TABLE &&
+		(pt->pubupdate || pt->pubdelete))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot use partitioned table \"%s.%s\" as logical replication target",
+						pt->schemaname, pt->relname),
+				 errdetail("Partitioned tables can accept only insert and truncate operations via logical replication.")));
+
+	return relid;
 }

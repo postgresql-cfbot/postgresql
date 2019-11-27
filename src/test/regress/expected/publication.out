@@ -116,6 +116,20 @@ Tables:
 
 DROP TABLE testpub_tbl3, testpub_tbl3a;
 DROP PUBLICATION testpub3, testpub4;
+-- Tests for partitioned tables
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub_forparted;
+RESET client_min_messages;
+-- should add only the parent to publication, not the partition
+CREATE TABLE testpub_parted1 PARTITION OF testpub_parted FOR VALUES IN (1);
+ALTER PUBLICATION testpub_forparted ADD TABLE testpub_parted;
+SELECT tablename FROM pg_publication_tables WHERE pubname = 'testpub_forparted';
+   tablename    
+----------------
+ testpub_parted
+(1 row)
+
+DROP PUBLICATION testpub_forparted;
 -- fail - view
 CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_view;
 ERROR:  "testpub_view" is not a table
@@ -142,11 +156,6 @@ Tables:
 ALTER PUBLICATION testpub_default ADD TABLE testpub_view;
 ERROR:  "testpub_view" is not a table
 DETAIL:  Only tables can be added to publications.
--- fail - partitioned table
-ALTER PUBLICATION testpub_fortbl ADD TABLE testpub_parted;
-ERROR:  "testpub_parted" is a partitioned table
-DETAIL:  Adding partitioned tables to publications is not supported.
-HINT:  You can add the table partitions individually.
 ALTER PUBLICATION testpub_default ADD TABLE testpub_tbl1;
 ALTER PUBLICATION testpub_default SET TABLE testpub_tbl1;
 ALTER PUBLICATION testpub_default ADD TABLE pub_test.testpub_nopk;

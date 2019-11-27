@@ -66,6 +66,7 @@ DECLARE_TOAST(pg_namespace, 4163, 4164);
 DECLARE_TOAST(pg_partitioned_table, 4165, 4166);
 DECLARE_TOAST(pg_policy, 4167, 4168);
 DECLARE_TOAST(pg_proc, 2836, 2837);
+DECLARE_TOAST(pg_publication_rel, 8287, 8288);
 DECLARE_TOAST(pg_rewrite, 2838, 2839);
 DECLARE_TOAST(pg_seclabel, 3598, 3599);
 DECLARE_TOAST(pg_statistic, 2840, 2841);

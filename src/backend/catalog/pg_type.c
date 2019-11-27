@@ -36,6 +36,9 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
+static int	makeUniqueTypeName(char *dest, const char *typeName, size_t namelen,
+							   Oid typeNamespace, bool tryOriginalName);
+
 /* Potentially set by pg_upgrade_support functions */
 Oid			binary_upgrade_next_pg_type_oid = InvalidOid;
 
@@ -785,34 +788,10 @@ makeArrayTypeName(const char *typeName, Oid typeNamespace)
 {
 	char	   *arr = (char *) palloc(NAMEDATALEN);
 	int			namelen = strlen(typeName);
-	Relation	pg_type_desc;
-	int			i;
+	int			underscores;
 
-	/*
-	 * The idea is to prepend underscores as needed until we make a name that
-	 * doesn't collide with anything...
-	 */
-	pg_type_desc = table_open(TypeRelationId, AccessShareLock);
-
-	for (i = 1; i < NAMEDATALEN - 1; i++)
-	{
-		arr[i - 1] = '_';
-		if (i + namelen < NAMEDATALEN)
-			strcpy(arr + i, typeName);
-		else
-		{
-			memcpy(arr + i, typeName, NAMEDATALEN - i);
-			truncate_identifier(arr, NAMEDATALEN, false);
-		}
-		if (!SearchSysCacheExists2(TYPENAMENSP,
-								   CStringGetDatum(arr),
-								   ObjectIdGetDatum(typeNamespace)))
-			break;
-	}
-
-	table_close(pg_type_desc, AccessShareLock);
-
-	if (i >= NAMEDATALEN - 1)
+	underscores = makeUniqueTypeName(arr, typeName, namelen, typeNamespace, false);
+	if (underscores >= NAMEDATALEN - 1)
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("could not form array type name for type \"%s\"",
@@ -882,4 +861,103 @@ moveArrayTypeName(Oid typeOid, const char *typeName, Oid typeNamespace)
 	pfree(newname);
 
 	return true;
+}
+
+
+/*
+ * makeMultirangeTypeName
+ *	  - given a range type name, make a multirange type name for it
+ *
+ * the caller is responsible for pfreeing the result
+ */
+char *
+makeMultirangeTypeName(const char *rangeTypeName, Oid typeNamespace)
+{
+	char		mltrng[NAMEDATALEN];
+	char	   *mltrngunique = (char *) palloc(NAMEDATALEN);
+	int			namelen = strlen(rangeTypeName);
+	char	   *rangestr;
+	int			rangeoffset;
+	int			underscores;
+
+	/*
+	 * If the range type name contains "range" then change that to
+	 * "multirange". Otherwise add "multirange" to the end. After that,
+	 * prepend underscores as needed until we make a name that doesn't collide
+	 * with anything...
+	 */
+	strlcpy(mltrng, rangeTypeName, NAMEDATALEN);
+	rangestr = strstr(rangeTypeName, "range");
+	if (rangestr)
+	{
+		rangeoffset = rangestr - rangeTypeName;
+		strlcpy(mltrng + rangeoffset, "multi", NAMEDATALEN - rangeoffset);
+		strlcpy(mltrng + rangeoffset + 5, rangestr, NAMEDATALEN - rangeoffset - 5);
+		namelen += 5;
+	}
+	else
+	{
+		strlcpy(mltrng + namelen, "multirange", NAMEDATALEN - namelen);
+		namelen += 10;
+	}
+
+	underscores = makeUniqueTypeName(mltrngunique, mltrng, namelen, typeNamespace, true);
+	if (underscores >= NAMEDATALEN - 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_DUPLICATE_OBJECT),
+				 errmsg("could not form multirange type name for type \"%s\"",
+						rangeTypeName)));
+
+	return mltrngunique;
+}
+
+/*
+ * makeUniqueTypeName: Prepend underscores as needed until we make a name that
+ * doesn't collide with anything. Tries the original typeName if requested.
+ *
+ * Returns the number of underscores added.
+ */
+int
+makeUniqueTypeName(char *dest, const char *typeName, size_t namelen, Oid typeNamespace,
+				   bool tryOriginalName)
+{
+	Relation	pg_type_desc;
+	int			i;
+
+	pg_type_desc = table_open(TypeRelationId, AccessShareLock);
+
+	for (i = 0; i < NAMEDATALEN - 1; i++)
+	{
+		if (i == 0)
+		{
+			if (tryOriginalName &&
+				!SearchSysCacheExists2(TYPENAMENSP,
+									   CStringGetDatum(typeName),
+									   ObjectIdGetDatum(typeNamespace)))
+			{
+				strcpy(dest, typeName);
+				break;
+			}
+
+		}
+		else
+		{
+			dest[i - 1] = '_';
+			if (i + namelen < NAMEDATALEN)
+				strcpy(dest + i, typeName);
+			else
+			{
+				strlcpy(dest + i, typeName, NAMEDATALEN);
+				truncate_identifier(dest, NAMEDATALEN, false);
+			}
+			if (!SearchSysCacheExists2(TYPENAMENSP,
+									   CStringGetDatum(dest),
+									   ObjectIdGetDatum(typeNamespace)))
+				break;
+		}
+	}
+
+	table_close(pg_type_desc, AccessShareLock);
+
+	return i;
 }

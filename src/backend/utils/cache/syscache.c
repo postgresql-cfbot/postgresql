@@ -508,6 +508,17 @@ static const struct cachedesc cacheinfo[] = {
 		},
 		4
 	},
+	{RangeRelationId,			/* MULTIRANGE */
+		RangeMultirangeTypidIndexId,
+		1,
+		{
+			Anum_pg_range_mltrngtypid,
+			0,
+			0,
+			0
+		},
+		4
+	},
 	{NamespaceRelationId,		/* NAMESPACENAME */
 		NamespaceNameIndexId,
 		1,

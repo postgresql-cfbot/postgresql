@@ -14566,7 +14566,9 @@ NULL baz</literallayout>(3 rows)</entry>
 
   <para>
    <xref linkend="range-operators-table"/> shows the operators
-   available for range types.
+   available for range and multirange types.
+   Many of these operators will accept either a range or multirange
+   on either side.
   </para>
 
     <table id="range-operators-table">
@@ -14576,7 +14578,7 @@ NULL baz</literallayout>(3 rows)</entry>
        <row>
         <entry>Operator</entry>
         <entry>Description</entry>
-        <entry>Example</entry>
+        <entry>Examples</entry>
         <entry>Result</entry>
        </row>
       </thead>
@@ -14584,134 +14586,245 @@ NULL baz</literallayout>(3 rows)</entry>
        <row>
         <entry> <literal>=</literal> </entry>
         <entry>equal</entry>
-        <entry><literal>int4range(1,5) = '[1,4]'::int4range</literal></entry>
+        <entry><literallayout class="monospaced">int4range(1,5) = '[1,4]'::int4range
+'{[1,5)}'::int4multirange = '{[1,4]}'::int4multirange</literallayout></entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>&lt;&gt;</literal> </entry>
         <entry>not equal</entry>
-        <entry><literal>numrange(1.1,2.2) &lt;&gt; numrange(1.1,2.3)</literal></entry>
+        <entry><literallayout class="monospaced">numrange(1.1,2.2) &lt;&gt; numrange(1.1,2.3)
+'{[1.1,2.2)}'::nummultirange &lt;&gt; '{[1.1,2.3)}'::nummultirange</literallayout></entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>&lt;</literal> </entry>
         <entry>less than</entry>
-        <entry><literal>int4range(1,10) &lt; int4range(2,3)</literal></entry>
+        <entry><literallayout class="monospaced">int4range(1,10) &lt; int4range(2,3)
+'{[1,10)}'::int4multirange &lt; '{[2,3)}'::int4multirange</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>&gt;</literal> </entry>
         <entry>greater than</entry>
-        <entry><literal>int4range(1,10) &gt; int4range(1,5)</literal></entry>
+        <entry>
+          <literallayout class="monospaced">int4range(1,10) &gt; int4range(1,5)
+'{[1,10)}'::int4multirange &gt; '{[1,5)}'::int4multirange</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>&lt;=</literal> </entry>
         <entry>less than or equal</entry>
-        <entry><literal>numrange(1.1,2.2) &lt;= numrange(1.1,2.2)</literal></entry>
+        <entry>
+          <literallayout class="monospaced">numrange(1.1,2.2) &lt;= numrange(1.1,2.2)
+'{[1.1,2.2)}'::nummultirange &lt;= '{[1.1,2.2)}'::nummultirange</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>&gt;=</literal> </entry>
         <entry>greater than or equal</entry>
-        <entry><literal>numrange(1.1,2.2) &gt;= numrange(1.1,2.0)</literal></entry>
+        <entry>
+          <literallayout class="monospaced">numrange(1.1,2.2) &gt;= numrange(1.1,2.0)
+'{[1.1,2.2)}'::nummultirange &gt;= '{[1.1,2.0)}'::nummultirange</literallayout>
+        </entry>
+        <entry><literal>t</literal></entry>
+       </row>
+
+       <row>
+        <entry> <literal>@&gt;</literal> </entry>
+        <entry>contains multirange</entry>
+        <entry>
+          <literallayout class="monospaced">int4range(2,4) @&gt; '{[2,3)}'::int4multirange
+'{[2,4)}'::int4multirange @&gt; '{[2,3)}'::int4multirange</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>@&gt;</literal> </entry>
         <entry>contains range</entry>
-        <entry><literal>int4range(2,4) @&gt; int4range(2,3)</literal></entry>
+        <entry>
+          <literallayout class="monospaced">int4range(2,4) @&gt; int4range(2,3)
+'{[2,4)}'::int4multirange @&gt; int4range(2,3)</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>@&gt;</literal> </entry>
         <entry>contains element</entry>
-        <entry><literal>'[2011-01-01,2011-03-01)'::tsrange @&gt; '2011-01-10'::timestamp</literal></entry>
+        <entry>
+          <literallayout class="monospaced">'[2011-01-01,2011-03-01)'::tsrange @&gt; '2011-01-10'::timestamp
+'{[2011-01-01,2011-03-01)}'::tsmultirange @&gt; '2011-01-10'::timestamp</literallayout>
+        </entry>
+        <entry><literal>t</literal></entry>
+       </row>
+
+       <row>
+        <entry> <literal>&lt;@</literal> </entry>
+        <entry>multirange is contained by</entry>
+        <entry>
+          <literallayout class="monospaced">'{[2,4)}'::int4multirange &lt;@ int4range(1,7)
+'{[2,4)}'::int4multirange &lt;@ '{[1,7)}'::int4multirange</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>&lt;@</literal> </entry>
         <entry>range is contained by</entry>
-        <entry><literal>int4range(2,4) &lt;@ int4range(1,7)</literal></entry>
+        <entry>
+          <literallayout class="monospaced">int4range(2,4) &lt;@ int4range(1,7)
+int4range(2,4) &lt;@ '{[1,7)}'::int4multirange</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>&lt;@</literal> </entry>
         <entry>element is contained by</entry>
-        <entry><literal>42 &lt;@ int4range(1,7)</literal></entry>
+        <entry>
+          <literallayout class="monospaced">42 &lt;@ int4range(1,7)
+42 &lt;@ '{[1,7)}'::int4multirange</literallayout>
+        </entry>
         <entry><literal>f</literal></entry>
        </row>
 
        <row>
         <entry> <literal>&amp;&amp;</literal> </entry>
         <entry>overlap (have points in common)</entry>
-        <entry><literal>int8range(3,7) &amp;&amp; int8range(4,12)</literal></entry>
+        <entry>
+          <literallayout class="monospaced">int8range(3,7) &amp;&amp; int8range(4,12)
+int8range(3,7) &amp;&amp; '{[4,12)}'::int8multirange
+'{[3,7)}'::int8multirange &amp;&amp; int8range(4,12)
+'{[3,7)}'::int8multirange &amp;&amp; '{[4,12)}'::int8multirange</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>&lt;&lt;</literal> </entry>
         <entry>strictly left of</entry>
-        <entry><literal>int8range(1,10) &lt;&lt; int8range(100,110)</literal></entry>
+        <entry>
+          <literallayout class="monospaced">int8range(1,10) &lt;&lt; int8range(100,110)
+int8range(1,10) &lt;&lt; '{[100,110)}'::int8multirange
+'{[1,10)}'::int8multirange &lt;&lt; int8range(100,110)
+'{[1,10)}'::int8multirange &lt;&lt; '{[100,110)}'::int8multirange</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>&gt;&gt;</literal> </entry>
         <entry>strictly right of</entry>
-        <entry><literal>int8range(50,60) &gt;&gt; int8range(20,30)</literal></entry>
+        <entry>
+          <literallayout class="monospaced">int8range(50,60) &gt;&gt; int8range(20,30)
+int8range(50,60) &gt;&gt; '{[20,30)}'::int8multirange
+'{[50,60)}'::int8multirange &gt;&gt; int8range(20,30)
+'{[50,60)}'::int8multirange &gt;&gt; '{[20,30)}'::int8multirange</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>&amp;&lt;</literal> </entry>
         <entry>does not extend to the right of</entry>
-        <entry><literal>int8range(1,20) &amp;&lt; int8range(18,20)</literal></entry>
+        <entry>
+          <literallayout class="monospaced">int8range(1,20) &amp;&lt; int8range(18,20)
+int8range(1,20) &amp;&lt; '{[18,20)}'::int8multirange
+'{[1,20)}'::int8multirange &amp;&lt; int8range(18,20)
+'{[1,20)}'::int8multirange &amp;&lt; '{[18,20)}'::int8multirange</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>&amp;&gt;</literal> </entry>
         <entry>does not extend to the left of</entry>
-        <entry><literal>int8range(7,20) &amp;&gt; int8range(5,10)</literal></entry>
+        <entry>
+          <literallayout class="monospaced">int8range(7,20) &amp;&gt; int8range(5,10)
+int8range(7,20) &amp;&gt; '{[5,10)}'::int8multirange
+'{[7,20)}'::int8multirange &amp;&gt; int8range(5,10)
+'{[7,20)}'::int8multirange &amp;&gt; '{[5,10)}'::int8multirange</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>-|-</literal> </entry>
         <entry>is adjacent to</entry>
-        <entry><literal>numrange(1.1,2.2) -|- numrange(2.2,3.3)</literal></entry>
+        <entry>
+          <literallayout class="monospaced">numrange(1.1,2.2) -|- numrange(2.2,3.3)
+numrange(1.1,2.2) -|- '{[2.2,3.3)}'::nummultirange
+'{[1.1,2.2)}'::nummultirange -|- numrange(2.2,3.3)
+'{[1.1,2.2)}'::nummultirange -|- '{[2.2,3.3)}'::nummultirange</literallayout>
+        </entry>
         <entry><literal>t</literal></entry>
        </row>
 
        <row>
         <entry> <literal>+</literal> </entry>
         <entry>union</entry>
-        <entry><literal>numrange(5,15) + numrange(10,20)</literal></entry>
+        <entry><literallayout class="monospaced">numrange(5,15) + numrange(10,20)</literallayout></entry>
         <entry><literal>[5,20)</literal></entry>
+       </row>
+
+       <row>
+        <entry> <literal>@+</literal> </entry>
+        <entry>safe union</entry>
+        <entry>
+          <literallayout class="monospaced">numrange(5,10) @+ numrange(15,20)
+numrange(5,10) @+ '{[15,20)}'::nummultirange
+'{[5,10)}'::nummultirange @+ numrange(15,20)
+'{[5,10)}'::nummultirange @+ '{[15,20)}'::nummultirange</literallayout>
+        </entry>
+        <entry><literal>{[5,10), [15,20)}</literal></entry>
        </row>
 
        <row>
         <entry> <literal>*</literal> </entry>
         <entry>intersection</entry>
-        <entry><literal>int8range(5,15) * int8range(10,20)</literal></entry>
+        <entry><literallayout class="monospaced">int8range(5,15) * int8range(10,20)</literallayout></entry>
         <entry><literal>[10,15)</literal></entry>
+       </row>
+
+       <row>
+        <entry> <literal>@*</literal> </entry>
+        <entry>safe intersection</entry>
+        <entry>
+          <literallayout class="monospaced">int8range(5,15) @* int8range(10,20)
+int8range(5,15) @* '{[10,20)}'::int8multirange
+'{[5,15)}'::int8multirange @* int8range(10,20)
+'{[5,15)}'::int8multirange @* '{[10,20)}'::int8multirange</literallayout>
+        </entry>
+        <entry><literal>{[10,15)}</literal></entry>
        </row>
 
        <row>
         <entry> <literal>-</literal> </entry>
         <entry>difference</entry>
-        <entry><literal>int8range(5,15) - int8range(10,20)</literal></entry>
+        <entry><literallayout class="monospaced">int8range(5,15) - int8range(10,20)</literallayout></entry>
         <entry><literal>[5,10)</literal></entry>
+       </row>
+
+       <row>
+        <entry> <literal>@-</literal> </entry>
+        <entry>safe difference</entry>
+        <entry>
+          <literallayout class="monospaced">int8range(5,20) @- int8range(10,15)
+int8range(5,20) @- '{[10,15)}'::int8multirange
+'{[5,20)}'::int8multirange @- int8range(10,15)
+'{[5,20)}'::int8multirange @- '{[10,15)}'::int8multirange</literallayout>
+        </entry>
+        <entry><literal>{[5,10), [15,20)}</literal></entry>
        </row>
 
       </tbody>
@@ -14729,19 +14842,28 @@ NULL baz</literallayout>(3 rows)</entry>
 
   <para>
    The left-of/right-of/adjacent operators always return false when an empty
-   range is involved; that is, an empty range is not considered to be either
-   before or after any other range.
+   range or multirange is involved; that is, an empty range is not considered to
+   be either before or after any other range.
+  </para>
+
+  <para>
+   Elsewhere empty ranges and multiranges are treated as the additive identity:
+   anything unioned with an empty value is itself. Anything minus an empty
+   value is itself. An empty multirange has exactly the same points as an empty
+   range. Every range contains the empty range. Every multirange contains as many
+   empty ranges as you like.
   </para>
 
   <para>
    The union and difference operators will fail if the resulting range would
    need to contain two disjoint sub-ranges, as such a range cannot be
-   represented.
+   represented. The safe versions of union, intersection, and difference
+   return multiranges, so they can handle gaps without failing.
   </para>
 
   <para>
    <xref linkend="range-functions-table"/> shows the functions
-   available for use with range types.
+   available for use with range and multirange types.
   </para>
 
   <indexterm>
@@ -14793,12 +14915,34 @@ NULL baz</literallayout>(3 rows)</entry>
        <row>
         <entry>
          <literal>
+          <function>lower</function>(<type>anymultirange</type>)
+         </literal>
+        </entry>
+        <entry>multirange's element type</entry>
+        <entry>lower bound of multirange</entry>
+        <entry><literal>lower('{[1.1,2.2)}'::nummultirange)</literal></entry>
+        <entry><literal>1.1</literal></entry>
+       </row>
+       <row>
+        <entry>
+         <literal>
           <function>upper</function>(<type>anyrange</type>)
          </literal>
         </entry>
         <entry>range's element type</entry>
         <entry>upper bound of range</entry>
         <entry><literal>upper(numrange(1.1,2.2))</literal></entry>
+        <entry><literal>2.2</literal></entry>
+       </row>
+       <row>
+        <entry>
+         <literal>
+          <function>upper</function>(<type>anymultirange</type>)
+         </literal>
+        </entry>
+        <entry>multirange's element type</entry>
+        <entry>upper bound of multirange</entry>
+        <entry><literal>upper('{[1.1,2.2)}'::nummultirange)</literal></entry>
         <entry><literal>2.2</literal></entry>
        </row>
        <row>
@@ -14815,12 +14959,34 @@ NULL baz</literallayout>(3 rows)</entry>
        <row>
         <entry>
          <literal>
+          <function>isempty</function>(<type>anymultirange</type>)
+         </literal>
+        </entry>
+        <entry><type>boolean</type></entry>
+        <entry>is the multirange empty?</entry>
+        <entry><literal>isempty('{[1.1,2.2)}'::nummultirange)</literal></entry>
+        <entry><literal>false</literal></entry>
+       </row>
+       <row>
+        <entry>
+         <literal>
           <function>lower_inc</function>(<type>anyrange</type>)
          </literal>
         </entry>
         <entry><type>boolean</type></entry>
         <entry>is the lower bound inclusive?</entry>
         <entry><literal>lower_inc(numrange(1.1,2.2))</literal></entry>
+        <entry><literal>true</literal></entry>
+       </row>
+       <row>
+        <entry>
+         <literal>
+          <function>lower_inc</function>(<type>anymultirange</type>)
+         </literal>
+        </entry>
+        <entry><type>boolean</type></entry>
+        <entry>is the lower bound inclusive?</entry>
+        <entry><literal>lower_inc('{[1.1,2.2)}'::nummultirange)</literal></entry>
         <entry><literal>true</literal></entry>
        </row>
        <row>
@@ -14837,12 +15003,34 @@ NULL baz</literallayout>(3 rows)</entry>
        <row>
         <entry>
          <literal>
+          <function>upper_inc</function>(<type>anymultirange</type>)
+         </literal>
+        </entry>
+        <entry><type>boolean</type></entry>
+        <entry>is the upper bound inclusive?</entry>
+        <entry><literal>upper_inc('{[1.1,2.2)}'::nummultirange)</literal></entry>
+        <entry><literal>false</literal></entry>
+       </row>
+       <row>
+        <entry>
+         <literal>
           <function>lower_inf</function>(<type>anyrange</type>)
          </literal>
         </entry>
         <entry><type>boolean</type></entry>
         <entry>is the lower bound infinite?</entry>
         <entry><literal>lower_inf('(,)'::daterange)</literal></entry>
+        <entry><literal>true</literal></entry>
+       </row>
+       <row>
+        <entry>
+         <literal>
+          <function>lower_inf</function>(<type>anymultirange</type>)
+         </literal>
+        </entry>
+        <entry><type>boolean</type></entry>
+        <entry>is the lower bound infinite?</entry>
+        <entry><literal>lower_inf('{(,)}'::datemultirange)</literal></entry>
         <entry><literal>true</literal></entry>
        </row>
        <row>
@@ -14859,6 +15047,17 @@ NULL baz</literallayout>(3 rows)</entry>
        <row>
         <entry>
          <literal>
+          <function>upper_inf</function>(<type>anymultirange</type>)
+         </literal>
+        </entry>
+        <entry><type>boolean</type></entry>
+        <entry>is the upper bound infinite?</entry>
+        <entry><literal>upper_inf('{(,)}'::datemultirange)</literal></entry>
+        <entry><literal>true</literal></entry>
+       </row>
+       <row>
+        <entry>
+         <literal>
           <function>range_merge</function>(<type>anyrange</type>, <type>anyrange</type>)
          </literal>
         </entry>
@@ -14867,16 +15066,27 @@ NULL baz</literallayout>(3 rows)</entry>
         <entry><literal>range_merge('[1,2)'::int4range, '[3,4)'::int4range)</literal></entry>
         <entry><literal>[1,4)</literal></entry>
        </row>
+       <row>
+        <entry>
+         <literal>
+          <function>range_merge</function>(<type>anymultirange</type>)
+         </literal>
+        </entry>
+        <entry><type>anyrange</type></entry>
+        <entry>the smallest range which includes the entire multirange</entry>
+        <entry><literal>range_merge('{[1,2), [3,4)}'::int4multirange)</literal></entry>
+        <entry><literal>[1,4)</literal></entry>
+       </row>
       </tbody>
      </tgroup>
     </table>
 
   <para>
    The <function>lower</function> and  <function>upper</function> functions return null
-   if the range is empty or the requested bound is infinite.
+   if the input range/multirange is empty or the requested bound is infinite.
    The <function>lower_inc</function>, <function>upper_inc</function>,
    <function>lower_inf</function>, and <function>upper_inf</function>
-   functions all return false for an empty range.
+   functions all return false for an empty range or multirange.
   </para>
   </sect1>
 
@@ -15193,6 +15403,44 @@ NULL baz</literallayout>(3 rows)</entry>
        class="parameter">expression</replaceable> across all non-null input
        values
       </entry>
+     </row>
+
+     <row>
+      <entry>
+       <indexterm>
+        <primary>range_agg</primary>
+       </indexterm>
+       <function>
+         range_agg(<replaceable class="parameter">expression</replaceable>)
+       </function>
+      </entry>
+      <entry>
+       <type>anyrange</type>
+      </entry>
+      <entry>
+       <type>multirange</type> of the argument range type
+      </entry>
+      <entry>Yes</entry>
+      <entry>union of the non-null input values</entry>
+     </row>
+
+     <row>
+      <entry>
+       <indexterm>
+        <primary>range_intersect_agg</primary>
+       </indexterm>
+       <function>
+         range_intersect_agg(<replaceable class="parameter">expression</replaceable>)
+       </function>
+      </entry>
+      <entry>
+       <type>anyrange</type>
+      </entry>
+      <entry>
+       <type>multirange</type> of the argument range type
+      </entry>
+      <entry>No</entry>
+      <entry>intersection of the non-null input values</entry>
      </row>
 
      <row>

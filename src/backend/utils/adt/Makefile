@@ -58,6 +58,7 @@ OBJS = \
 	mac.o \
 	mac8.o \
 	misc.o \
+	multirangetypes.o \
 	name.o \
 	network.o \
 	network_gist.o \

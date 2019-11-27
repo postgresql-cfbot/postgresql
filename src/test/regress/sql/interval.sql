@@ -311,3 +311,7 @@ select make_interval(months := 'NaN'::float::int);
 select make_interval(secs := 'inf');
 select make_interval(secs := 'NaN');
 select make_interval(secs := 7e12);
+
+-- test absolute operator
+set IntervalStyle to postgres;
+select @ interval '1 years -2 months 3 days 4 hours -5 minutes 6.789 seconds' as t;

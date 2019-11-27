@@ -2167,6 +2167,9 @@
 { oid => '1803', descr => 'subtract',
   oprname => '-', oprleft => 'timetz', oprright => 'interval',
   oprresult => 'timetz', oprcode => 'timetz_mi_interval' },
+{ oid => '8302', descr => 'absolute value',
+  oprname => '@', oprkind => 'l', oprleft => '0', oprright => 'interval',
+  oprresult => 'interval', oprcode => 'interval_abs' },
 
 { oid => '1804', descr => 'equal',
   oprname => '=', oprcanmerge => 't', oprleft => 'varbit', oprright => 'varbit',

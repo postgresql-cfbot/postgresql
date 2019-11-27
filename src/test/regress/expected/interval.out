@@ -930,3 +930,11 @@ select make_interval(secs := 7e12);
  @ 1944444444 hours 26 mins 40 secs
 (1 row)
 
+-- test absolute operator
+set IntervalStyle to postgres;
+select @ interval '1 years -2 months 3 days 4 hours -5 minutes 6.789 seconds' as t;
+              t              
+-----------------------------
+ 10 mons 3 days 03:55:06.789
+(1 row)
+

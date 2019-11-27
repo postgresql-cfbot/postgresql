@@ -7370,6 +7370,12 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
         <entry><literal>interval '1 hour' / double precision '1.5'</literal></entry>
         <entry><literal>interval '00:40:00'</literal></entry>
        </row>
+
+       <row>
+        <entry> <literal>@</literal> </entry>
+        <entry><literal>@ interval '-2 hour'</literal></entry>
+        <entry><literal>interval '02:00:00'</literal></entry>
+       </row>
       </tbody>
      </tgroup>
     </table>
@@ -7388,6 +7394,19 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
       </thead>
 
       <tbody>
+       <row>
+        <entry>
+         <indexterm>
+          <primary>abs</primary>
+         </indexterm>
+         <literal><function>abs(<type>interval</type>)</function></literal>
+        </entry>
+        <entry><type>interval</type></entry>
+        <entry>Absolute value</entry>
+        <entry><literal>abs(interval '6 days -08:16:27')</literal></entry>
+        <entry><literal>6 days 08:16:27</literal></entry>
+       </row>
+
        <row>
         <entry>
          <indexterm>

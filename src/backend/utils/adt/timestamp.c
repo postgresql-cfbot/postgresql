@@ -2435,6 +2435,23 @@ interval_cmp(PG_FUNCTION_ARGS)
 	PG_RETURN_INT32(interval_cmp_internal(interval1, interval2));
 }
 
+Datum
+interval_abs(PG_FUNCTION_ARGS)
+{
+	Interval   *interval = PG_GETARG_INTERVAL_P(0);
+	Interval   *result;
+
+	result = palloc(sizeof(Interval));
+	*result = *interval;
+
+	/* convert all struct Interval members to absolute values */
+	result->month = (interval->month < 0) ? (-1 * interval->month) : interval->month;
+	result->day = (interval->day < 0) ? (-1 * interval->day) : interval->day;
+	result->time = (interval->time < 0) ? (-1 * interval->time) : interval->time;
+
+	PG_RETURN_INTERVAL_P(result);
+}
+
 /*
  * Hashing for intervals
  *

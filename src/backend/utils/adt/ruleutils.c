@@ -1853,6 +1853,44 @@ pg_get_partconstrdef_string(Oid partitionId, char *aliasname)
 }
 
 /*
+ * pg_get_replidentdef_command
+ *
+ * Returns the definition for the REPLICA IDENTITY, ie, everything that needs to
+ * appear after "ALTER TABLE ... REPLICA IDENTITY USING INDEX <indexname>".
+ */
+char *pg_get_replidentdef_command(Oid indId)
+{
+	Oid			relId;
+	HeapTuple	ht_idx;
+	Form_pg_index idxrec;
+
+	StringInfoData buf;
+
+	ht_idx = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indId));
+	if (!HeapTupleIsValid(ht_idx))
+		elog(ERROR, "cache lookup failed for index %u", indId);
+
+	idxrec = (Form_pg_index) GETSTRUCT(ht_idx);
+	/* not a replica identify */
+	if (!idxrec->indisreplident)
+	{
+		ReleaseSysCache(ht_idx);
+		return NULL;
+	}
+	relId = idxrec->indrelid;
+	ReleaseSysCache(ht_idx);
+
+	initStringInfo(&buf);
+	appendStringInfoString(&buf, "ALTER TABLE ");
+
+	appendStringInfoString(&buf, generate_qualified_relation_name(relId));
+	appendStringInfoString(&buf, " REPLICA IDENTITY USING INDEX ");
+	appendStringInfoString(&buf, quote_identifier(get_rel_name(indId)));
+
+	return buf.data;
+}
+
+/*
  * pg_get_constraintdef
  *
  * Returns the definition for the constraint, ie, everything that needs to

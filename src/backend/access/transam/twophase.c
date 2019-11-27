@@ -1330,15 +1330,21 @@ XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, int *len)
 	XLogReaderState *xlogreader;
 	char	   *errormsg;
 
-	xlogreader = XLogReaderAllocate(wal_segment_size, NULL,
-									&read_local_xlog_page, NULL);
+	xlogreader = XLogReaderAllocate(wal_segment_size, NULL);
 	if (!xlogreader)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory"),
 				 errdetail("Failed while allocating a WAL reading processor.")));
+	xlogreader->readBuf = palloc(XLOG_BLCKSZ);
 
-	record = XLogReadRecord(xlogreader, lsn, &errormsg);
+	while (XLogReadRecord(xlogreader, lsn, &record, &errormsg) ==
+		   XLREAD_NEED_DATA)
+	{
+		if (!read_local_xlog_page(xlogreader))
+			break;
+	}
+
 	if (record == NULL)
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -1360,6 +1366,7 @@ XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, int *len)
 	*buf = palloc(sizeof(char) * XLogRecGetDataLen(xlogreader));
 	memcpy(*buf, XLogRecGetData(xlogreader), sizeof(char) * XLogRecGetDataLen(xlogreader));
 
+	pfree(xlogreader->readBuf);
 	XLogReaderFree(xlogreader);
 }
 

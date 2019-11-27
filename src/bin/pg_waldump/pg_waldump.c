@@ -324,11 +324,13 @@ WALDumpOpenSegment(XLogSegNo nextSegNo, WALSegmentContext *segcxt,
 /*
  * XLogReader read_page callback
  */
-static int
-WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
-				XLogRecPtr targetPtr, char *readBuff)
+static bool
+XLogDumpReadPage(XLogReaderState *state, void *priv)
 {
-	XLogDumpPrivate *private = state->private_data;
+	XLogRecPtr	targetPagePtr = state->readPagePtr;
+	int			reqLen		  = state->readLen;
+	char	   *readBuff	  = state->readBuf;
+	XLogDumpPrivate *private  = (XLogDumpPrivate *) priv;
 	int			count = XLOG_BLCKSZ;
 	WALReadError errinfo;
 
@@ -341,7 +343,8 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 		else
 		{
 			private->endptr_reached = true;
-			return -1;
+			state->readLen = -1;
+			return false;
 		}
 	}
 
@@ -366,7 +369,9 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 						(Size) errinfo.wre_req);
 	}
 
-	return count;
+	Assert(count >= state->readLen);
+	state->readLen = count;
+	return true;
 }
 
 /*
@@ -1027,13 +1032,14 @@ main(int argc, char **argv)
 	/* done with argument parsing, do the actual work */
 
 	/* we have everything we need, start reading */
-	xlogreader_state = XLogReaderAllocate(WalSegSz, waldir, WALDumpReadPage,
-										  &private);
+	xlogreader_state = XLogReaderAllocate(WalSegSz, waldir);
 	if (!xlogreader_state)
 		fatal_error("out of memory");
+	xlogreader_state->readBuf = palloc(XLOG_BLCKSZ);
 
 	/* first find a valid recptr to start from */
-	first_record = XLogFindNextRecord(xlogreader_state, private.startptr);
+	first_record = XLogFindNextRecord(xlogreader_state, private.startptr,
+									  &XLogDumpReadPage, (void*) &private);
 
 	if (first_record == InvalidXLogRecPtr)
 		fatal_error("could not find a valid record after %X/%X",
@@ -1057,7 +1063,14 @@ main(int argc, char **argv)
 	for (;;)
 	{
 		/* try to read the next record */
-		record = XLogReadRecord(xlogreader_state, first_record, &errormsg);
+		while (XLogReadRecord(xlogreader_state,
+							  first_record, &record, &errormsg) ==
+			   XLREAD_NEED_DATA)
+		{
+			if (!XLogDumpReadPage(xlogreader_state, (void *) &private))
+				break;
+		}
+
 		if (!record)
 		{
 			if (!config.follow || private.endptr_reached)
@@ -1103,6 +1116,7 @@ main(int argc, char **argv)
 					(uint32) xlogreader_state->ReadRecPtr,
 					errormsg);
 
+	pfree(xlogreader_state->readBuf);
 	XLogReaderFree(xlogreader_state);
 
 	return EXIT_SUCCESS;

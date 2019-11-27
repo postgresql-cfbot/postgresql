@@ -11,9 +11,6 @@
 
 #include "replication/logical.h"
 
-extern int	logical_read_local_xlog_page(XLogReaderState *state,
-										 XLogRecPtr targetPagePtr,
-										 int reqLen, XLogRecPtr targetRecPtr,
-										 char *cur_page);
+extern bool logical_read_local_xlog_page(LogicalDecodingContext *ctx);
 
 #endif

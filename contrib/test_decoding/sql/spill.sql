@@ -174,6 +174,21 @@ SELECT (regexp_split_to_array(data, ':'))[4] COLLATE "C", COUNT(*), (array_agg(d
 FROM pg_logical_slot_get_changes('regression_slot', NULL,NULL) WHERE data ~ 'INSERT'
 GROUP BY 1 ORDER BY 1;
 
+-- large number of spilling subxacts. Should not exceed maxAllocatedDescs
+BEGIN;
+DO $$
+BEGIN
+    FOR i IN 1..600 LOOP
+        BEGIN
+            INSERT INTO spill_test select generate_series(1, 5000) ;
+        EXCEPTION
+            when division_by_zero then perform 'dummy';
+        END;
+    END LOOP;
+END $$;
+COMMIT;
+SELECT 1 from pg_logical_slot_get_changes('regression_slot', NULL,NULL) LIMIT 1;
+
 DROP TABLE spill_test;
 
 SELECT pg_drop_replication_slot('regression_slot');

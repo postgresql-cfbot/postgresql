@@ -361,6 +361,14 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </row>
 
      <row>
+      <entry><structname>pg_stat_progress_analyze</structname><indexterm><primary>pg_stat_progress_analyze</primary></indexterm></entry>
+      <entry>One row for each backend (including autovacuum worker processes) running
+       <command>ANALYZE</command>, showing current progress.
+       See <xref linkend='analyze-progress-reporting'/>.
+      </entry>
+     </row>
+
+     <row>
       <entry><structname>pg_stat_progress_cluster</structname><indexterm><primary>pg_stat_progress_cluster</primary></indexterm></entry>
       <entry>One row for each backend running
        <command>CLUSTER</command> or <command>VACUUM FULL</command>, showing current progress.
@@ -3502,7 +3510,7 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
    <productname>PostgreSQL</productname> has the ability to report the progress of
    certain commands during command execution.  Currently, the only commands
    which support progress reporting are <command>CREATE INDEX</command>,
-   <command>VACUUM</command> and
+   <command>VACUUM</command>, <command>ANALYZE</command> and
    <command>CLUSTER</command>. This may be expanded in the future.
   </para>
 
@@ -3946,6 +3954,140 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
    </tgroup>
   </table>
 
+ </sect2>
+
+ <sect2 id="analyze-progress-reporting">
+  <title>ANALYZE Progress Reporting</title>
+
+  <para>
+   Whenever <command>ANALYZE</command> is running, the
+   <structname>pg_stat_progress_analyze</structname> view will contain a
+   row for each backend that is currently running that command.  The tables
+   below describe the information that will be reported and provide
+   information about how to interpret it.
+  </para>
+
+  <table id="pg-stat-progress-analyze-view" xreflabel="pg_stat_progress_analyze">
+   <title><structname>pg_stat_progress_analyze</structname> View</title>
+   <tgroup cols="3">
+    <thead>
+    <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><structfield>pid</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Process ID of backend.</entry>
+    </row>
+     <row>
+      <entry><structfield>datid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry>OID of the database to which this backend is connected.</entry>
+     </row>
+     <row>
+      <entry><structfield>datname</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry>Name of the database to which this backend is connected.</entry>
+     </row>
+     <row>
+      <entry><structfield>relid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry>OID of the table being analyzed.</entry>
+     </row>
+     <row>
+      <entry><structfield>include_children</structfield></entry>
+      <entry><type>boolean</type></entry>
+      <entry>Whether scanning through child tables.</entry>
+     </row>
+     <row>
+      <entry><structfield>current_relid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry>OID of the table currently being scanned.
+        It might be different from relid when analyzing tables that have child tables.
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>phase</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry>Current processing phase. See <xref linkend="analyze-phases" /></entry>
+     </row>
+     <row>
+     <entry><structfield>sample_blks_total</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>
+       Total number of heap blocks that will be sampled.
+     </entry>
+     </row>
+    <row>
+     <entry><structfield>heap_blks_scanned</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>
+       Number of heap blocks scanned.
+     </entry>
+    </row>
+    <row>
+     <entry><structfield>ext_compute_count</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>
+       Number of computed extended stats.  This counter only advances when the phase
+       is <literal>computing extended stats</literal>.
+     </entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+  <table id="analyze-phases">
+   <title>ANALYZE phases</title>
+   <tgroup cols="2">
+    <thead>
+    <row>
+      <entry>Phase</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+   <tbody>
+    <row>
+     <entry><literal>initializing</literal></entry>
+     <entry>
+       The command is preparing to begin scanning the heap.  This phase is
+       expected to be very brief.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>acquiring sample rows</literal></entry>
+     <entry>
+       The command is currently scanning the <structfield>current_relid</structfield>
+       to obtain samples.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>computing stats</literal></entry>
+     <entry>
+       The command is computing stats from the samples obtained during the table scan.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>computing extended stats</literal></entry>
+     <entry>
+       The command is computing extended stats from the samples obtained in the previous phase.
+     </entry>
+    </row>
+    <row>
+     <entry><literal>finalizing analyze</literal></entry>
+     <entry>
+       The command is updating pg_class. When this phase is completed, 
+       <command>ANALYZE</command> will end.
+     </entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
  </sect2>
 
  <sect2 id="cluster-progress-reporting">

@@ -30,6 +30,7 @@ close $fh;
 command_checks_all(
 	[ 'pg_resetwal', '-n', $node->data_dir ],
 	0,
+	'',
 	[qr/pg_control version number/],
 	[
 		qr/pg_resetwal: warning: pg_control exists but is broken or wrong version; ignoring it/
@@ -46,6 +47,7 @@ close $fh;
 command_checks_all(
 	[ 'pg_resetwal', '-n', $node->data_dir ],
 	0,
+	'',
 	[qr/pg_control version number/],
 	[
 		qr/\Qpg_resetwal: warning: pg_control specifies invalid WAL segment size (0 bytes); proceed with caution\E/

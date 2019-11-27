@@ -506,6 +506,7 @@ system_or_bail 'pg_ctl', '-D', $pgdata, 'start';
 $node->command_checks_all(
 	[ 'pg_basebackup', '-D', "$tempdir/backup_corrupt" ],
 	1,
+	'',
 	[qr{^$}],
 	[qr/^WARNING.*checksum verification failed/s],
 	'pg_basebackup reports checksum mismatch');
@@ -526,6 +527,7 @@ system_or_bail 'pg_ctl', '-D', $pgdata, 'start';
 $node->command_checks_all(
 	[ 'pg_basebackup', '-D', "$tempdir/backup_corrupt2" ],
 	1,
+	'',
 	[qr{^$}],
 	[qr/^WARNING.*further.*failures.*will.not.be.reported/s],
 	'pg_basebackup does not report more than 5 checksum mismatches');
@@ -542,6 +544,7 @@ system_or_bail 'pg_ctl', '-D', $pgdata, 'start';
 $node->command_checks_all(
 	[ 'pg_basebackup', '-D', "$tempdir/backup_corrupt3" ],
 	1,
+	'',
 	[qr{^$}],
 	[qr/^WARNING.*7 total checksum verification failures/s],
 	'pg_basebackup correctly report the total number of checksum mismatches');

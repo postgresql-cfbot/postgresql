@@ -1676,6 +1676,28 @@ sub command_checks_all
 
 =pod
 
+=item $node->icommand_checks(cmd, ...)
+
+TestLib::icommand_checks with our connection parameters.
+See command_ok(...)
+
+=cut
+
+sub icommand_checks
+{
+	local $Test::Builder::Level = $Test::Builder::Level + 1;
+
+	my $self = shift;
+
+	local $ENV{PGHOST} = $self->host;
+	local $ENV{PGPORT} = $self->port;
+
+	TestLib::icommand_checks(@_);
+	return;
+}
+
+=pod
+
 =item $node->issues_sql_like(cmd, expected_sql, test_name)
 
 Run a command on the node, then verify that $expected_sql appears in the

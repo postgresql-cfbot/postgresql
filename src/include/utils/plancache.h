@@ -219,6 +219,8 @@ extern CachedPlan *GetCachedPlan(CachedPlanSource *plansource,
 								 QueryEnvironment *queryEnv);
 extern void ReleaseCachedPlan(CachedPlan *plan, bool useResOwner);
 
+extern Size CachedPlanMemoryUsage(CachedPlanSource *plansource);
+
 extern CachedExpression *GetCachedExpression(Node *expr);
 extern void FreeCachedExpression(CachedExpression *cexpr);
 

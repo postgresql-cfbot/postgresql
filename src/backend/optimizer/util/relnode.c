@@ -55,7 +55,7 @@ static List *subbuild_joinrel_joinlist(RelOptInfo *joinrel,
 static void set_foreign_rel_properties(RelOptInfo *joinrel,
 									   RelOptInfo *outer_rel, RelOptInfo *inner_rel);
 static void add_join_rel(PlannerInfo *root, RelOptInfo *joinrel);
-static void build_joinrel_partition_info(RelOptInfo *joinrel,
+static void build_joinrel_partition_info(PlannerInfo *root, RelOptInfo *joinrel,
 										 RelOptInfo *outer_rel, RelOptInfo *inner_rel,
 										 List *restrictlist, JoinType jointype);
 static void build_child_join_reltarget(PlannerInfo *root,
@@ -706,7 +706,7 @@ build_join_rel(PlannerInfo *root,
 	joinrel->has_eclass_joins = has_relevant_eclass_joinclause(root, joinrel);
 
 	/* Store the partition information. */
-	build_joinrel_partition_info(joinrel, outer_rel, inner_rel, restrictlist,
+	build_joinrel_partition_info(root, joinrel, outer_rel, inner_rel, restrictlist,
 								 sjinfo->jointype);
 
 	/*
@@ -870,7 +870,7 @@ build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 	joinrel->has_eclass_joins = parent_joinrel->has_eclass_joins;
 
 	/* Is the join between partitions itself partitioned? */
-	build_joinrel_partition_info(joinrel, outer_rel, inner_rel, restrictlist,
+	build_joinrel_partition_info(root, joinrel, outer_rel, inner_rel, restrictlist,
 								 jointype);
 
 	/* Child joinrel is parallel safe if parent is parallel safe. */
@@ -1613,9 +1613,9 @@ find_param_path_info(RelOptInfo *rel, Relids required_outer)
  *		the join relation.
  */
 static void
-build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
-							 RelOptInfo *inner_rel, List *restrictlist,
-							 JoinType jointype)
+build_joinrel_partition_info(PlannerInfo *root, RelOptInfo *joinrel,
+							 RelOptInfo *outer_rel, RelOptInfo *inner_rel,
+							 List *restrictlist, JoinType jointype)
 {
 	int			partnatts;
 	int			cnt;
@@ -1627,6 +1627,13 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 		Assert(!IS_PARTITIONED_REL(joinrel));
 		return;
 	}
+
+	restrictlist =
+		list_concat_unique_ptr(generate_join_implied_equalities_for_all(root,
+																		joinrel->relids,
+																		outer_rel->relids,
+																		inner_rel->relids),
+				restrictlist);
 
 	/*
 	 * We can only consider this join as an input to further partitionwise

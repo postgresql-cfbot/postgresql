@@ -1,0 +1,189 @@
+<!--
+doc/src/sgml/ref/create_variable.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-createvariable">
+ <indexterm zone="sql-createvariable">
+  <primary>CREATE VARIABLE</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>CREATE VARIABLE</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE VARIABLE</refname>
+  <refpurpose>define a new permissioned typed schema variable</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE { TEMPORARY | TEMP } { TRANSACTION } VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable> ] [ COLLATE <replaceable class="parameter">collation</replaceable> ]
+    [ NOT NULL ] [ DEFAULT <replaceable class="parameter">default_expr</replaceable> ] [ { ON COMMIT DROP | ON TRANSACTION END RESET } ]
+</synopsis>
+ </refsynopsisdiv>
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>CREATE VARIABLE</command> creates a new schema variable.
+   These variables are scalar typed, non-transactional, and, like relations,
+   exist within a schema with access controlled via
+   <command>GRANT</command> and <command>REVOKE</command>.
+  </para>
+
+  <para>
+   The value of a schema variable is session-local. Retrieving
+   a variable's value will return NULL unless its value has been set
+   to something else in the current session. The content of variable
+   is not transactional - the behave is same like variables in PLpgSQL.
+  </para>
+
+  <para>
+   Whem variable is created with command <command>CREATE TRANSACTION VARIABLE</command>,
+   then the content of this variable is transactional - should be committed or rollbacked.
+   Still, the content is hold only in memory, and is not persistent. Attention: this
+   is not default behave.
+  </para>
+
+  <para>
+   Retrieval is done via the <function>get_schema_variable</function>dunxrion or the SQL
+   command <command>SELECT</command>.  Setting of values is done via the
+   <function>set_schema_variable</function> function or the SQL command
+   <command>LET</command>.
+   Notably, while schema variables are in many ways a kind of table you cannot use
+   <command>UPDATE</command> on them.
+  </para>
+
+  <para>
+   For purposes of name uniqueness relation-like objects (e.g., tables, indexes)
+   within the same schema are considered.  i.e., you cannot give a table and a
+   schema variable the same name.  This is a consequence of them being treated
+   like relations for purposes of <command>SELECT</command>.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>IF NOT EXISTS</literal></term>
+    <listitem>
+     <para>
+      Do not throw an error if the name already exists. A notice is issued in this case.
+      Note that type of the variable is not considered, nor could it be since the namespace
+      searched contains non-variable objects.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name (optionally schema-qualified) of the variable to be created.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">data_type</replaceable></term>
+    <listitem>
+     <para>
+      The name (optionally schema-qualified) of the data type of the variable to be created.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>COLLATE <replaceable>collation</replaceable></literal></term>
+    <listitem>
+     <para>
+      The <literal>COLLATE</literal> clause assigns a collation to
+      the variable (which must be of a collatable data type).
+      If not specified, the variable data type's default collation is used.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>NOT NULL</literal></term>
+    <listitem>
+     <para>
+      The <literal>NOT NULL</literal> clause doesn't allow null value to
+      the variable. In this case, the uninitialized variable without default
+      value cannot be read, because the result of the read cannot be NULL ever.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DEFAULT <replaceable>default_expr</replaceable></literal></term>
+    <listitem>
+     <para>
+      The <literal>DEFAULT</literal> clause assigns a default data for
+      schema variable.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ON COMMIT DROP</literal>, <literal>ON TRANSACTION END RESET</literal></term>
+    <listitem>
+     <para>
+      The <literal>ON COMMIT DROP</literal> clause specify the bahaviour of
+      temporary schema variable at commit of transaction. It is allowed only
+      for temporal variables, and enforce drop variable at commit time. The
+      <literal>ON TRANSACTION END RESET</literal> enforce reset to default
+      value at transaction end (<literal>COMMIT</literal>, <literal>ROLLBACK</literal>).
+     </para>
+    </listitem>
+   </varlistentry>
+
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Notes</title>
+
+  <para>
+   Use <command>DROP VARIABLE</command> to remove a variable.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   Create an integer variable <literal>var1</literal>:
+<programlisting>
+CREATE VARIABLE var1 AS integer;
+SELECT var1;
+</programlisting>
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   <command>CREATE VARIABLE</command> is a PostgreSQL feature.
+   <!-- The choice of wording here seems to be left to personal preference... -->
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-altervariable"/></member>
+   <member><xref linkend="sql-dropvariable"/></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

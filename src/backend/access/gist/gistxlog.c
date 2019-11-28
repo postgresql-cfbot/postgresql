@@ -195,7 +195,8 @@ gistRedoDeleteRecord(XLogReaderState *record)
 
 		XLogRecGetBlockTag(record, 0, &rnode, NULL, NULL);
 
-		ResolveRecoveryConflictWithSnapshot(xldata->latestRemovedXid, rnode);
+		ResolveRecoveryConflictWithSnapshot(xldata->latestRemovedXid,
+											xldata->onCatalogTable, rnode);
 	}
 
 	if (XLogReadBufferForRedo(record, 0, &buffer) == BLK_NEEDS_REDO)
@@ -414,6 +415,7 @@ gistRedoPageReuse(XLogReaderState *record)
 
 			latestRemovedXid = XidFromFullTransactionId(latestRemovedFullXid);
 			ResolveRecoveryConflictWithSnapshot(latestRemovedXid,
+												xlrec->onCatalogTable,
 												xlrec->node);
 		}
 	}
@@ -596,7 +598,8 @@ gistXLogPageDelete(Buffer buffer, FullTransactionId xid,
  * Write XLOG record about reuse of a deleted page.
  */
 void
-gistXLogPageReuse(Relation rel, BlockNumber blkno, FullTransactionId latestRemovedXid)
+gistXLogPageReuse(Relation heapRel, Relation rel,
+				  BlockNumber blkno, FullTransactionId latestRemovedXid)
 {
 	gistxlogPageReuse xlrec_reuse;
 
@@ -607,6 +610,7 @@ gistXLogPageReuse(Relation rel, BlockNumber blkno, FullTransactionId latestRemov
 	 */
 
 	/* XLOG stuff */
+	xlrec_reuse.onCatalogTable = RelationIsAccessibleInLogicalDecoding(heapRel);
 	xlrec_reuse.node = rel->rd_node;
 	xlrec_reuse.block = blkno;
 	xlrec_reuse.latestRemovedFullXid = latestRemovedXid;

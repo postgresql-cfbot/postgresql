@@ -2789,7 +2789,8 @@ XLogSendLogical(void)
 	/*
 	 * We'll use the current flush point to determine whether we've caught up.
 	 */
-	flushPtr = GetFlushRecPtr();
+	flushPtr = (am_cascading_walsender ?
+				GetStandbyFlushRecPtr() : GetFlushRecPtr());
 
 	if (record != NULL)
 	{

@@ -27,6 +27,7 @@
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
 #include "utils/snapmgr.h"
+#include "utils/lsyscache.h"
 
 
 /* Entry in pending-list of TIDs we need to revisit */
@@ -501,6 +502,13 @@ vacuumRedirectAndPlaceholder(Relation index, Buffer buffer)
 	OffsetNumber itemToPlaceholder[MaxIndexTuplesPerPage];
 	OffsetNumber itemnos[MaxIndexTuplesPerPage];
 	spgxlogVacuumRedirect xlrec;
+
+	/*
+	 * There is no chance of endless recursion even when we are doing catalog
+	 * acceses here; because, spgist is never used for catalogs. Check
+	 * comments in RelationIsAccessibleInLogicalDecoding().
+	 */
+	xlrec.onCatalogTable = get_rel_logical_catalog(index->rd_index->indrelid);
 
 	xlrec.nToPlaceholder = 0;
 	xlrec.newestRedirectXid = InvalidTransactionId;

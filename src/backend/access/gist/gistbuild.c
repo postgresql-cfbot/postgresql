@@ -171,7 +171,7 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	buildstate.giststate->tempCxt = createTempGistContext();
 
 	/* initialize the root page */
-	buffer = gistNewBuffer(index);
+	buffer = gistNewBuffer(heap, index);
 	Assert(BufferGetBlockNumber(buffer) == GIST_ROOT_BLKNO);
 	page = BufferGetPage(buffer);
 

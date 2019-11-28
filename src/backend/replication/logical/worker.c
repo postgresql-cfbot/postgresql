@@ -193,7 +193,6 @@ create_estate_for_relation(LogicalRepRelMapEntry *rel)
 
 	estate->es_result_relations = resultRelInfo;
 	estate->es_num_result_relations = 1;
-	estate->es_result_relation_info = resultRelInfo;
 
 	estate->es_output_cid = GetCurrentCommandId(true);
 
@@ -583,6 +582,7 @@ GetRelationIdentityOrPK(Relation rel)
 static void
 apply_handle_insert(StringInfo s)
 {
+	ResultRelInfo *resultRelInfo;
 	LogicalRepRelMapEntry *rel;
 	LogicalRepTupleData newtup;
 	LogicalRepRelId relid;
@@ -606,6 +606,7 @@ apply_handle_insert(StringInfo s)
 
 	/* Initialize the executor state. */
 	estate = create_estate_for_relation(rel);
+	resultRelInfo = &estate->es_result_relations[0];
 	remoteslot = ExecInitExtraTupleSlot(estate,
 										RelationGetDescr(rel->localrel),
 										&TTSOpsVirtual);
@@ -619,13 +620,13 @@ apply_handle_insert(StringInfo s)
 	slot_fill_defaults(rel, estate, remoteslot);
 	MemoryContextSwitchTo(oldctx);
 
-	ExecOpenIndices(estate->es_result_relation_info, false);
+	ExecOpenIndices(resultRelInfo, false);
 
 	/* Do the insert. */
-	ExecSimpleRelationInsert(estate, remoteslot);
+	ExecSimpleRelationInsert(resultRelInfo, estate, remoteslot);
 
 	/* Cleanup. */
-	ExecCloseIndices(estate->es_result_relation_info);
+	ExecCloseIndices(resultRelInfo);
 	PopActiveSnapshot();
 
 	/* Handle queued AFTER triggers. */
@@ -680,6 +681,7 @@ check_relation_updatable(LogicalRepRelMapEntry *rel)
 static void
 apply_handle_update(StringInfo s)
 {
+	ResultRelInfo *resultRelInfo;
 	LogicalRepRelMapEntry *rel;
 	LogicalRepRelId relid;
 	Oid			idxoid;
@@ -713,6 +715,7 @@ apply_handle_update(StringInfo s)
 
 	/* Initialize the executor state. */
 	estate = create_estate_for_relation(rel);
+	resultRelInfo = &estate->es_result_relations[0];
 	remoteslot = ExecInitExtraTupleSlot(estate,
 										RelationGetDescr(rel->localrel),
 										&TTSOpsVirtual);
@@ -721,7 +724,7 @@ apply_handle_update(StringInfo s)
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
 
 	PushActiveSnapshot(GetTransactionSnapshot());
-	ExecOpenIndices(estate->es_result_relation_info, false);
+	ExecOpenIndices(resultRelInfo, false);
 
 	/* Build the search tuple. */
 	oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
@@ -763,7 +766,8 @@ apply_handle_update(StringInfo s)
 		EvalPlanQualSetSlot(&epqstate, remoteslot);
 
 		/* Do the actual update. */
-		ExecSimpleRelationUpdate(estate, &epqstate, localslot, remoteslot);
+		ExecSimpleRelationUpdate(resultRelInfo, estate, &epqstate, localslot,
+								 remoteslot);
 	}
 	else
 	{
@@ -779,7 +783,7 @@ apply_handle_update(StringInfo s)
 	}
 
 	/* Cleanup. */
-	ExecCloseIndices(estate->es_result_relation_info);
+	ExecCloseIndices(resultRelInfo);
 	PopActiveSnapshot();
 
 	/* Handle queued AFTER triggers. */
@@ -802,6 +806,7 @@ apply_handle_update(StringInfo s)
 static void
 apply_handle_delete(StringInfo s)
 {
+	ResultRelInfo *resultRelInfo;
 	LogicalRepRelMapEntry *rel;
 	LogicalRepTupleData oldtup;
 	LogicalRepRelId relid;
@@ -832,6 +837,7 @@ apply_handle_delete(StringInfo s)
 
 	/* Initialize the executor state. */
 	estate = create_estate_for_relation(rel);
+	resultRelInfo = &estate->es_result_relations[0];
 	remoteslot = ExecInitExtraTupleSlot(estate,
 										RelationGetDescr(rel->localrel),
 										&TTSOpsVirtual);
@@ -840,7 +846,7 @@ apply_handle_delete(StringInfo s)
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
 
 	PushActiveSnapshot(GetTransactionSnapshot());
-	ExecOpenIndices(estate->es_result_relation_info, false);
+	ExecOpenIndices(resultRelInfo, false);
 
 	/* Find the tuple using the replica identity index. */
 	oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
@@ -868,7 +874,7 @@ apply_handle_delete(StringInfo s)
 		EvalPlanQualSetSlot(&epqstate, localslot);
 
 		/* Do the actual delete. */
-		ExecSimpleRelationDelete(estate, &epqstate, localslot);
+		ExecSimpleRelationDelete(resultRelInfo, estate, &epqstate, localslot);
 	}
 	else
 	{
@@ -880,7 +886,7 @@ apply_handle_delete(StringInfo s)
 	}
 
 	/* Cleanup. */
-	ExecCloseIndices(estate->es_result_relation_info);
+	ExecCloseIndices(resultRelInfo);
 	PopActiveSnapshot();
 
 	/* Handle queued AFTER triggers. */

@@ -5458,6 +5458,8 @@ make_foreignscan(List *qptlist,
 	node->fs_relids = NULL;
 	/* fsSystemCol will be filled in by create_foreignscan_plan */
 	node->fsSystemCol = false;
+	/* resultRelIndex will be set by PlanDirectModify/setrefs.c, if needed */
+	node->resultRelIndex = -1;
 
 	return node;
 }

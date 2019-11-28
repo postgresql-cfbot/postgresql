@@ -873,6 +873,7 @@ PlanDirectModify(PlannerInfo *root,
 <programlisting>
 void
 BeginDirectModify(ForeignScanState *node,
+                  ResultRelInfo *rinfo,
                   int eflags);
 </programlisting>
 
@@ -886,6 +887,8 @@ BeginDirectModify(ForeignScanState *node,
      <structname>ForeignScanState</structname> node (in particular, from the underlying
      <structname>ForeignScan</structname> plan node, which contains any FDW-private
      information provided by <function>PlanDirectModify</function>).
+     In addition, the <structname>ResultRelInfo</structname> struct also
+     contains information about the target foreign table.
      <literal>eflags</literal> contains flag bits describing the executor's
      operating mode for this plan node.
     </para>
@@ -917,8 +920,9 @@ IterateDirectModify(ForeignScanState *node);
      tuple table slot (the node's <structfield>ScanTupleSlot</structfield> should be
      used for this purpose).  The data that was actually inserted, updated
      or deleted must be stored in the
-     <literal>es_result_relation_info-&gt;ri_projectReturning-&gt;pi_exprContext-&gt;ecxt_scantuple</literal>
-     of the node's <structname>EState</structname>.
+     <literal>ri_projectReturning-&gt;pi_exprContext-&gt;ecxt_scantuple</literal>
+     of the target foreign table's <structname>ResultRelInfo</structname>
+     passed to <function>BeginDirectModify</function>.
      Return NULL if no more rows are available.
      Note that this is called in a short-lived memory context that will be
      reset between invocations.  Create a memory context in

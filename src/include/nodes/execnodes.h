@@ -485,6 +485,12 @@ typedef struct ResultRelInfo
 
 	/* For use by copy.c when performing multi-inserts */
 	struct CopyMultiInsertBuffer *ri_CopyMultiInsertBuffer;
+
+	/*
+	 * Map to convert child sublan tuples to root parent format, set only if
+	 * either update row movement or transition tuple capture is active.
+	 */
+	TupleConversionMap *ri_ChildToRootMap;
 } ResultRelInfo;
 
 /* ----------------
@@ -518,7 +524,6 @@ typedef struct EState
 	/* Info about target table(s) for insert/update/delete queries: */
 	ResultRelInfo *es_result_relations; /* array of ResultRelInfos */
 	int			es_num_result_relations;	/* length of array */
-	ResultRelInfo *es_result_relation_info; /* currently active array elt */
 
 	/*
 	 * Info about the partition root table(s) for insert/update/delete queries
@@ -1187,9 +1192,6 @@ typedef struct ModifyTableState
 
 	/* controls transition table population for INSERT...ON CONFLICT UPDATE */
 	struct TransitionCaptureState *mt_oc_transition_capture;
-
-	/* Per plan map for tuple conversion from child to root */
-	TupleConversionMap **mt_per_subplan_tupconv_maps;
 } ModifyTableState;
 
 /* ----------------

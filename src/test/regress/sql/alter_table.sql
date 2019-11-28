@@ -1342,17 +1342,19 @@ alter table anothertab alter column f5 type bigint;
 
 drop table anothertab;
 
-create table another (f1 int, f2 text);
+-- test that USING expressions are parsed before column alter type / drop steps
+create table another (f1 int, f2 text, f3 text);
 
-insert into another values(1, 'one');
-insert into another values(2, 'two');
-insert into another values(3, 'three');
+insert into another values(1, 'one', 'uno');
+insert into another values(2, 'two', 'due');
+insert into another values(3, 'three', 'tre');
 
 select * from another;
 
 alter table another
-  alter f1 type text using f2 || ' more',
-  alter f2 type bigint using f1 * 10;
+  alter f1 type text using f2 || ' and ' || f3 || ' more',
+  alter f2 type bigint using f1 * 10,
+  drop column f3;
 
 select * from another;
 
@@ -2174,22 +2176,32 @@ ALTER TABLE ONLY test_add_column
 \d test_add_column
 ALTER TABLE test_add_column
 	ADD COLUMN c2 integer, -- fail because c2 already exists
-	ADD COLUMN c3 integer;
+	ADD COLUMN c3 integer primary key;
 \d test_add_column
 ALTER TABLE test_add_column
 	ADD COLUMN IF NOT EXISTS c2 integer, -- skipping because c2 already exists
-	ADD COLUMN c3 integer; -- fail because c3 already exists
+	ADD COLUMN c3 integer primary key;
 \d test_add_column
 ALTER TABLE test_add_column
 	ADD COLUMN IF NOT EXISTS c2 integer, -- skipping because c2 already exists
-	ADD COLUMN IF NOT EXISTS c3 integer; -- skipping because c3 already exists
+	ADD COLUMN IF NOT EXISTS c3 integer primary key; -- skipping because c3 already exists
 \d test_add_column
 ALTER TABLE test_add_column
 	ADD COLUMN IF NOT EXISTS c2 integer, -- skipping because c2 already exists
 	ADD COLUMN IF NOT EXISTS c3 integer, -- skipping because c3 already exists
-	ADD COLUMN c4 integer;
+	ADD COLUMN c4 integer REFERENCES test_add_column;
 \d test_add_column
+ALTER TABLE test_add_column
+	ADD COLUMN IF NOT EXISTS c4 integer REFERENCES test_add_column;
+\d test_add_column
+ALTER TABLE test_add_column
+	ADD COLUMN IF NOT EXISTS c5 SERIAL;
+\d test_add_column
+ALTER TABLE test_add_column
+	ADD COLUMN IF NOT EXISTS c5 SERIAL;
+\d test_add_column*
 DROP TABLE test_add_column;
+\d test_add_column*
 
 -- unsupported constraint types for partitioned tables
 CREATE TABLE partitioned (

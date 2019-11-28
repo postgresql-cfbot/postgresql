@@ -133,6 +133,7 @@ static inline bool btree_index_mainfork_expected(Relation rel);
 static void bt_check_every_level(Relation rel, Relation heaprel,
 								 bool heapkeyspace, bool readonly, bool heapallindexed,
 								 bool rootdescend);
+static void bt_recheck_block_rightlink(BtreeCheckState *state, BlockNumber leftblockno);
 static BtreeLevel bt_check_level_from_leftmost(BtreeCheckState *state,
 											   BtreeLevel level);
 static void bt_target_page_check(BtreeCheckState *state);
@@ -629,6 +630,42 @@ bt_check_every_level(Relation rel, Relation heaprel, bool heapkeyspace,
 }
 
 /*
+ * Verify that coherence of rightling's leftlink under lock
+ */
+static void bt_recheck_block_rightlink(BtreeCheckState *state, BlockNumber leftblockno)
+{
+	Buffer		lbuffer, rbuffer;
+	Page		lpage,rpage;
+	BTPageOpaque lopaque, ropaque;
+
+	/* Read and lock left block */
+	lbuffer = ReadBufferExtended(state->rel, MAIN_FORKNUM, leftblockno, RBM_NORMAL,
+								state->checkstrategy);
+	LockBuffer(lbuffer, BT_READ);
+	lpage = BufferGetPage(lbuffer);
+	lopaque = (BTPageOpaque) PageGetSpecialPointer(lpage);
+
+	/* Read right block by following lopaque->btpo_next of left block */
+	rbuffer = ReadBufferExtended(state->rel, MAIN_FORKNUM, lopaque->btpo_next, RBM_NORMAL,
+								 state->checkstrategy);
+	/* Here we are going to couple locks on left block and right block */
+	LockBuffer(rbuffer, BT_READ);
+	rpage = BufferGetPage(rbuffer);
+	ropaque = (BTPageOpaque) PageGetSpecialPointer(rpage);
+
+	if (ropaque->btpo_prev != leftblockno)
+		ereport(ERROR,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("left link/right link pair in index \"%s\" not in agreement",
+						RelationGetRelationName(state->rel)),
+				 errdetail_internal("Block=%u left block=%u left link from block=%u.",
+									leftblockno, lopaque->btpo_next, ropaque->btpo_prev)));
+
+	UnlockReleaseBuffer(lbuffer);
+	UnlockReleaseBuffer(rbuffer);
+}
+
+/*
  * Given a left-most block at some level, move right, verifying each page
  * individually (with more verification across pages for "readonly"
  * callers).  Caller should pass the true root page as the leftmost initially,
@@ -783,6 +820,7 @@ bt_check_level_from_leftmost(BtreeCheckState *state, BtreeLevel level)
 		/*
 		 * readonly mode can only ever land on live pages and half-dead pages,
 		 * so sibling pointers should always be in mutual agreement
+		 * if not in readonly mode - we have to recheck links under lock
 		 */
 		if (state->readonly && opaque->btpo_prev != leftcurrent)
 			ereport(ERROR,
@@ -791,6 +829,9 @@ bt_check_level_from_leftmost(BtreeCheckState *state, BtreeLevel level)
 							RelationGetRelationName(state->rel)),
 					 errdetail_internal("Block=%u left block=%u left link from block=%u.",
 										current, leftcurrent, opaque->btpo_prev)));
+		else if (opaque->btpo_prev != leftcurrent && level.level == 0)
+		/* on leaf level - recheck rightlinks */
+			bt_recheck_block_rightlink(state, leftcurrent);
 
 		/* Check level, which must be valid for non-ignorable page */
 		if (level.level != opaque->btpo.level)

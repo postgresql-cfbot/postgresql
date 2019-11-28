@@ -1603,14 +1603,14 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		{
 			AggState   *aggstate;
 			AggStatePerGroup pergroup;
+			AggStatePerGroup pergroup_allaggs;
 
 			aggstate = op->d.agg_init_trans.aggstate;
-			pergroup = &aggstate->all_pergroups
-				[op->d.agg_init_trans.setoff]
-				[op->d.agg_init_trans.transno];
+			pergroup_allaggs = aggstate->all_pergroups[op->d.agg_init_trans.setoff];
+			pergroup = &pergroup_allaggs[op->d.agg_init_trans.transno];
 
 			/* If transValue has not yet been initialized, do so now. */
-			if (pergroup->noTransValue)
+			if (pergroup_allaggs != NULL && pergroup->noTransValue)
 			{
 				AggStatePerTrans pertrans = op->d.agg_init_trans.pertrans;
 
@@ -1631,13 +1631,14 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		{
 			AggState   *aggstate;
 			AggStatePerGroup pergroup;
+			AggStatePerGroup pergroup_allaggs;
 
 			aggstate = op->d.agg_strict_trans_check.aggstate;
-			pergroup = &aggstate->all_pergroups
-				[op->d.agg_strict_trans_check.setoff]
-				[op->d.agg_strict_trans_check.transno];
+			pergroup_allaggs = aggstate->all_pergroups[op->d.agg_strict_trans_check.setoff];
+			pergroup = &pergroup_allaggs[op->d.agg_strict_trans_check.transno];
 
-			if (unlikely(pergroup->transValueIsNull))
+			if (pergroup_allaggs == NULL ||
+				unlikely(pergroup->transValueIsNull))
 				EEO_JUMP(op->d.agg_strict_trans_check.jumpnull);
 
 			EEO_NEXT();
@@ -1653,6 +1654,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			AggState   *aggstate;
 			AggStatePerTrans pertrans;
 			AggStatePerGroup pergroup;
+			AggStatePerGroup pergroup_allaggs;
 			FunctionCallInfo fcinfo;
 			MemoryContext oldContext;
 			Datum		newVal;
@@ -1660,9 +1662,11 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			aggstate = op->d.agg_trans.aggstate;
 			pertrans = op->d.agg_trans.pertrans;
 
-			pergroup = &aggstate->all_pergroups
-				[op->d.agg_trans.setoff]
-				[op->d.agg_trans.transno];
+			pergroup_allaggs = aggstate->all_pergroups[op->d.agg_trans.setoff];
+			pergroup = &pergroup_allaggs[op->d.agg_trans.transno];
+
+			if (pergroup_allaggs == NULL)
+				EEO_NEXT();
 
 			Assert(pertrans->transtypeByVal);
 
@@ -1704,6 +1708,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			AggState   *aggstate;
 			AggStatePerTrans pertrans;
 			AggStatePerGroup pergroup;
+			AggStatePerGroup pergroup_allaggs;
 			FunctionCallInfo fcinfo;
 			MemoryContext oldContext;
 			Datum		newVal;
@@ -1711,9 +1716,11 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			aggstate = op->d.agg_trans.aggstate;
 			pertrans = op->d.agg_trans.pertrans;
 
-			pergroup = &aggstate->all_pergroups
-				[op->d.agg_trans.setoff]
-				[op->d.agg_trans.transno];
+			pergroup_allaggs = aggstate->all_pergroups[op->d.agg_trans.setoff];
+			pergroup = &pergroup_allaggs[op->d.agg_trans.transno];
+
+			if (pergroup_allaggs == NULL)
+				EEO_NEXT();
 
 			Assert(!pertrans->transtypeByVal);
 

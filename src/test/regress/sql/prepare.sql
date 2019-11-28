@@ -78,3 +78,24 @@ SELECT name, statement, parameter_types FROM pg_prepared_statements
 DEALLOCATE ALL;
 SELECT name, statement, parameter_types FROM pg_prepared_statements
     ORDER BY name;
+
+
+-- check parameter handling
+
+CREATE TABLE t1 (a int);
+
+PREPARE p1 AS INSERT INTO t1 (a) VALUES ($1);
+
+CREATE FUNCTION f1(x int) RETURNS int
+LANGUAGE SQL
+AS $$
+EXECUTE p1($1);
+SELECT null::int;
+$$;
+
+SELECT f1(2);
+
+SELECT * FROM t1;
+
+DROP FUNCTION f1(int);
+DROP TABLE t1;

@@ -38,7 +38,7 @@ typedef struct
 extern void PrepareQuery(PrepareStmt *stmt, const char *queryString,
 						 int stmt_location, int stmt_len);
 extern void ExecuteQuery(ExecuteStmt *stmt, IntoClause *intoClause,
-						 const char *queryString, ParamListInfo params,
+						 ParamListInfo params,
 						 DestReceiver *dest, char *completionTag);
 extern void DeallocateQuery(DeallocateStmt *stmt);
 extern void ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into,

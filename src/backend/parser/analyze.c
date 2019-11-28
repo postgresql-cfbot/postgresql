@@ -26,6 +26,7 @@
 
 #include "access/sysattr.h"
 #include "catalog/pg_type.h"
+#include "commands/prepare.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -44,6 +45,7 @@
 #include "parser/parse_target.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
+#include "utils/builtins.h"
 #include "utils/rel.h"
 
 
@@ -72,6 +74,7 @@ static List *transformUpdateTargetList(ParseState *pstate,
 									   List *targetList);
 static Query *transformDeclareCursorStmt(ParseState *pstate,
 										 DeclareCursorStmt *stmt);
+static Query *transformExecuteStmt(ParseState *pstate, ExecuteStmt *stmt);
 static Query *transformExplainStmt(ParseState *pstate,
 								   ExplainStmt *stmt);
 static Query *transformCreateTableAsStmt(ParseState *pstate,
@@ -310,6 +313,11 @@ transformStmt(ParseState *pstate, Node *parseTree)
 		case T_DeclareCursorStmt:
 			result = transformDeclareCursorStmt(pstate,
 												(DeclareCursorStmt *) parseTree);
+			break;
+
+		case T_ExecuteStmt:
+			result = transformExecuteStmt(pstate,
+										  (ExecuteStmt *) parseTree);
 			break;
 
 		case T_ExplainStmt:
@@ -2504,6 +2512,87 @@ transformDeclareCursorStmt(ParseState *pstate, DeclareCursorStmt *stmt)
 				 errdetail("Insensitive cursors must be READ ONLY.")));
 
 	/* represent the command as a utility Query */
+	result = makeNode(Query);
+	result->commandType = CMD_UTILITY;
+	result->utilityStmt = (Node *) stmt;
+
+	return result;
+}
+
+/*
+ * transformExexecuteStmt -
+ *	transform an EXECUTE Statement
+ *
+ * This checks that the number of parameters passed to EXECUTE matches the
+ * prepared statement, and it transforms the passed parameter expressions.
+ */
+static Query *
+transformExecuteStmt(ParseState *pstate, ExecuteStmt *stmt)
+{
+	PreparedStatement *pstmt;
+	Oid		   *param_types;
+	int			num_params;
+	int			nparams;
+	List	   *params;
+	ListCell   *l;
+	int			i;
+	Query	   *result;
+
+	pstmt = FetchPreparedStatement(stmt->name, true);
+
+	param_types = pstmt->plansource->param_types;
+	num_params = pstmt->plansource->num_params;
+	nparams = list_length(stmt->params);
+
+	if (nparams != num_params)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("wrong number of parameters for prepared statement \"%s\"",
+						pstmt->stmt_name),
+				 errdetail("Expected %d parameters but got %d.",
+						   num_params, nparams)));
+
+	/*
+	 * We have to run parse analysis for the expressions.  Since the parser is
+	 * not cool about scribbling on its input, copy first.
+	 */
+	params = copyObject(stmt->params);
+	i = 0;
+	foreach(l, params)
+	{
+		Node	   *expr = lfirst(l);
+		Oid			expected_type_id = param_types[i];
+		Oid			given_type_id;
+
+		expr = transformExpr(pstate, expr, EXPR_KIND_EXECUTE_PARAMETER);
+
+		given_type_id = exprType(expr);
+
+		expr = coerce_to_target_type(pstate, expr, given_type_id,
+									 expected_type_id, -1,
+									 COERCION_ASSIGNMENT,
+									 COERCE_IMPLICIT_CAST,
+									 -1);
+
+		if (expr == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("parameter $%d of type %s cannot be coerced to the expected type %s",
+							i + 1,
+							format_type_be(given_type_id),
+							format_type_be(expected_type_id)),
+					 errhint("You will need to rewrite or cast the expression."),
+					 parser_errposition(pstate, exprLocation(lfirst(l)))));
+
+		/* Take care of collations in the finished expression. */
+		assign_expr_collations(pstate, expr);
+
+		lfirst(l) = expr;
+		i++;
+	}
+
+	stmt->params = params;
+
 	result = makeNode(Query);
 	result->commandType = CMD_UTILITY;
 	result->utilityStmt = (Node *) stmt;

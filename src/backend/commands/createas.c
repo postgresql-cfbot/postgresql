@@ -270,7 +270,7 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 		ExecuteStmt *estmt = castNode(ExecuteStmt, query->utilityStmt);
 
 		Assert(!is_matview);	/* excluded by syntax */
-		ExecuteQuery(estmt, into, queryString, params, dest, completionTag);
+		ExecuteQuery(estmt, into, params, dest, completionTag);
 
 		/* get object address that intorel_startup saved for us */
 		address = ((DR_intorel *) dest)->reladdr;

@@ -47,7 +47,7 @@ static HTAB *prepared_queries = NULL;
 
 static void InitQueryHashTable(void);
 static ParamListInfo EvaluateParams(PreparedStatement *pstmt, List *params,
-									const char *queryString, EState *estate);
+									EState *estate);
 static Datum build_regtype_array(Oid *param_types, int num_params);
 
 /*
@@ -189,16 +189,10 @@ PrepareQuery(PrepareStmt *stmt, const char *queryString,
  * indicated by passing a non-null intoClause.  The DestReceiver is already
  * set up correctly for CREATE TABLE AS, but we still have to make a few
  * other adjustments here.
- *
- * Note: this is one of very few places in the code that needs to deal with
- * two query strings at once.  The passed-in queryString is that of the
- * EXECUTE, which we might need for error reporting while processing the
- * parameter expressions.  The query_string that we copy from the plan
- * source is that of the original PREPARE.
  */
 void
 ExecuteQuery(ExecuteStmt *stmt, IntoClause *intoClause,
-			 const char *queryString, ParamListInfo params,
+			 ParamListInfo params,
 			 DestReceiver *dest, char *completionTag)
 {
 	PreparedStatement *entry;
@@ -229,8 +223,7 @@ ExecuteQuery(ExecuteStmt *stmt, IntoClause *intoClause,
 		 */
 		estate = CreateExecutorState();
 		estate->es_param_list_info = params;
-		paramLI = EvaluateParams(entry, stmt->params,
-								 queryString, estate);
+		paramLI = EvaluateParams(entry, stmt->params, estate);
 	}
 
 	/* Create a new portal to run the query in */
@@ -316,7 +309,6 @@ ExecuteQuery(ExecuteStmt *stmt, IntoClause *intoClause,
  *
  * pstmt: statement we are getting parameters for.
  * params: list of given parameter expressions (raw parser output!)
- * queryString: source text for error messages.
  * estate: executor state to use.
  *
  * Returns a filled-in ParamListInfo -- this can later be passed to
@@ -324,71 +316,18 @@ ExecuteQuery(ExecuteStmt *stmt, IntoClause *intoClause,
  * during query execution.
  */
 static ParamListInfo
-EvaluateParams(PreparedStatement *pstmt, List *params,
-			   const char *queryString, EState *estate)
+EvaluateParams(PreparedStatement *pstmt, List *params, EState *estate)
 {
 	Oid		   *param_types = pstmt->plansource->param_types;
 	int			num_params = pstmt->plansource->num_params;
-	int			nparams = list_length(params);
-	ParseState *pstate;
 	ParamListInfo paramLI;
 	List	   *exprstates;
 	ListCell   *l;
 	int			i;
 
-	if (nparams != num_params)
-		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("wrong number of parameters for prepared statement \"%s\"",
-						pstmt->stmt_name),
-				 errdetail("Expected %d parameters but got %d.",
-						   num_params, nparams)));
-
 	/* Quick exit if no parameters */
 	if (num_params == 0)
 		return NULL;
-
-	/*
-	 * We have to run parse analysis for the expressions.  Since the parser is
-	 * not cool about scribbling on its input, copy first.
-	 */
-	params = copyObject(params);
-
-	pstate = make_parsestate(NULL);
-	pstate->p_sourcetext = queryString;
-
-	i = 0;
-	foreach(l, params)
-	{
-		Node	   *expr = lfirst(l);
-		Oid			expected_type_id = param_types[i];
-		Oid			given_type_id;
-
-		expr = transformExpr(pstate, expr, EXPR_KIND_EXECUTE_PARAMETER);
-
-		given_type_id = exprType(expr);
-
-		expr = coerce_to_target_type(pstate, expr, given_type_id,
-									 expected_type_id, -1,
-									 COERCION_ASSIGNMENT,
-									 COERCE_IMPLICIT_CAST,
-									 -1);
-
-		if (expr == NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_DATATYPE_MISMATCH),
-					 errmsg("parameter $%d of type %s cannot be coerced to the expected type %s",
-							i + 1,
-							format_type_be(given_type_id),
-							format_type_be(expected_type_id)),
-					 errhint("You will need to rewrite or cast the expression.")));
-
-		/* Take care of collations in the finished expression. */
-		assign_expr_collations(pstate, expr);
-
-		lfirst(l) = expr;
-		i++;
-	}
 
 	/* Prepare the expressions for execution */
 	exprstates = ExecPrepareExprList(params, estate);
@@ -655,8 +594,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		 */
 		estate = CreateExecutorState();
 		estate->es_param_list_info = params;
-		paramLI = EvaluateParams(entry, execstmt->params,
-								 queryString, estate);
+		paramLI = EvaluateParams(entry, execstmt->params, estate);
 	}
 
 	/* Replan if needed, and acquire a transient refcount */

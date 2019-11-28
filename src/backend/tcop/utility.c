@@ -564,7 +564,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 
 		case T_ExecuteStmt:
 			ExecuteQuery((ExecuteStmt *) parsetree, NULL,
-						 queryString, params,
+						 params,
 						 dest, completionTag);
 			break;
 

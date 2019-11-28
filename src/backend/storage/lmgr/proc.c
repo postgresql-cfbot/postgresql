@@ -396,6 +396,7 @@ InitProcess(void)
 	MyProc->roleId = InvalidOid;
 	MyProc->tempNamespaceId = InvalidOid;
 	MyProc->isBackgroundWorker = IsBackgroundWorker;
+	MyProc->is_tainted = false;
 	MyPgXact->delayChkpt = false;
 	MyPgXact->vacuumFlags = 0;
 	/* NB -- autovac launcher intentionally does not set IS_AUTOVACUUM */

@@ -133,9 +133,11 @@ typedef struct Latch
 /* avoid having to deal with case on platforms not requiring it */
 #define WL_SOCKET_CONNECTED  WL_SOCKET_WRITEABLE
 #endif
+#define WL_SOCKET_EDGE       (1 << 7)
 
 #define WL_SOCKET_MASK		(WL_SOCKET_READABLE | \
 							 WL_SOCKET_WRITEABLE | \
+							 WL_SOCKET_EDGE | \
 							 WL_SOCKET_CONNECTED)
 
 typedef struct WaitEvent
@@ -143,11 +145,14 @@ typedef struct WaitEvent
 	int			pos;			/* position in the event data structure */
 	uint32		events;			/* triggered events */
 	pgsocket	fd;				/* socket fd associated with event */
+	int         index;          /* position of correspondent element in descriptors array (for poll() and win32 implementation */
 	void	   *user_data;		/* pointer provided in AddWaitEventToSet */
 #ifdef WIN32
 	bool		reset;			/* Is reset of the event required? */
 #endif
 } WaitEvent;
+
+extern bool WaitEventUseEpoll;
 
 /* forward declaration to avoid exposing latch.c implementation details */
 typedef struct WaitEventSet WaitEventSet;
@@ -176,6 +181,8 @@ extern int	WaitLatch(Latch *latch, int wakeEvents, long timeout,
 					  uint32 wait_event_info);
 extern int	WaitLatchOrSocket(Latch *latch, int wakeEvents,
 							  pgsocket sock, long timeout, uint32 wait_event_info);
+
+extern void DeleteWaitEventFromSet(WaitEventSet *set, int event_pos);
 
 /*
  * Unix implementation uses SIGUSR1 for inter-process signaling.

@@ -460,6 +460,14 @@ const struct config_enum_entry ssl_protocol_versions_info[] = {
 	{NULL, 0, false}
 };
 
+static const struct config_enum_entry session_schedule_options[] = {
+	{"round-robin", SESSION_SCHED_ROUND_ROBIN, false},
+	{"random", SESSION_SCHED_RANDOM, false},
+	{"load-balancing", SESSION_SCHED_LOAD_BALANCING, false},
+	{NULL, 0, false}
+};
+
+
 static struct config_enum_entry shared_memory_options[] = {
 #ifndef WIN32
 	{"sysv", SHMEM_TYPE_SYSV, false},
@@ -1288,6 +1296,36 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&restart_after_crash,
 		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"restart_pooler_on_reload", PGC_SIGHUP, CONN_POOLING,
+		 gettext_noop("Restart session pool workers on pg_reload_conf()."),
+		 NULL,
+		},
+		&RestartPoolerOnReload,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"proxying_gucs", PGC_USERSET, CONN_POOLING,
+		 gettext_noop("Support setting parameters in connection pooler sessions."),
+		 NULL,
+		},
+		&ProxyingGUCs,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"multitenant_proxy", PGC_USERSET, CONN_POOLING,
+		 gettext_noop("One pool worker can serve clients with different roles"),
+		 NULL,
+		},
+		&MultitenantProxy,
+		false,
 		NULL, NULL, NULL
 	},
 
@@ -2144,6 +2182,53 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		/* see max_connections and max_wal_senders */
+		{"session_pool_size", PGC_POSTMASTER, CONN_POOLING,
+			gettext_noop("Sets number of backends serving client sessions."),
+			gettext_noop("If non-zero then session pooling will be used: "
+						 "client connections will be redirected to one of the backends and maximal number of backends is determined by this parameter."
+						 "Launched backend are never terminated even in case of no active sessions.")
+		},
+		&SessionPoolSize,
+		10, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"idle_pool_worker_timeout", PGC_USERSET, CONN_POOLING,
+			gettext_noop("Sets the maximum allowed duration of any idling connection pool worker."),
+			gettext_noop("A value of 0 turns off the timeout."),
+			GUC_UNIT_MS
+		},
+		&IdlePoolWorkerTimeout,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"connection_proxies", PGC_POSTMASTER, CONN_POOLING,
+			gettext_noop("Sets number of connection proxies."),
+			gettext_noop("Postmaster spawns separate worker process for each proxy. Postmaster scatters connections between proxies using one of scheduling policies (round-robin, random, load-balancing)."
+						 "Each proxy launches its own subset of backends. So maximal number of non-tainted backends is "
+						 "session_pool_size*connection_proxies*databases*roles.")
+		},
+		&ConnectionProxiesNumber,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+ 	{
+		{"max_sessions", PGC_POSTMASTER, CONN_POOLING,
+			gettext_noop("Sets the maximum number of client session."),
+			gettext_noop("Maximal number of client sessions which can be handled by one connection proxy."
+						 "It can be greater than max_connections and actually be arbitrary large.")
+		},
+		&MaxSessions,
+		1000, 1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
 		/* see max_connections */
 		{"superuser_reserved_connections", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Sets the number of connection slots reserved for superusers."),
@@ -2187,6 +2272,16 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&PostPortNumber,
 		DEF_PGPORT, 1, 65535,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"proxy_port", PGC_POSTMASTER, CONN_POOLING,
+			gettext_noop("Sets the TCP port for the connection pooler."),
+			NULL
+		},
+		&ProxyPortNumber,
+		6543, 1, 65535,
 		NULL, NULL, NULL
 	},
 
@@ -4587,6 +4682,16 @@ static struct config_enum ConfigureNamesEnum[] =
 		&ssl_max_protocol_version,
 		PG_TLS_ANY,
 		ssl_protocol_versions_info,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"session_schedule", PGC_POSTMASTER, CONN_POOLING,
+			gettext_noop("Session schedule policy for connection pool."),
+			NULL
+		},
+		&SessionSchedule,
+		SESSION_SCHED_ROUND_ROBIN, session_schedule_options,
 		NULL, NULL, NULL
 	},
 
@@ -8182,6 +8287,9 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
 				 errmsg("cannot set parameters during a parallel operation")));
+
+	if (!stmt->is_local)
+		MyProc->is_tainted = true;
 
 	switch (stmt->kind)
 	{

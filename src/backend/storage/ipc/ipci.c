@@ -28,6 +28,7 @@
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/postmaster.h"
+#include "postmaster/proxy.h"
 #include "replication/logicallauncher.h"
 #include "replication/origin.h"
 #include "replication/slot.h"
@@ -150,6 +151,7 @@ CreateSharedMemoryAndSemaphores(void)
 #ifdef EXEC_BACKEND
 		size = add_size(size, ShmemBackendArraySize());
 #endif
+		size = add_size(size, ConnectionProxyShmemSize());
 
 		/* freeze the addin request size and include it */
 		addin_request_allowed = false;
@@ -255,6 +257,7 @@ CreateSharedMemoryAndSemaphores(void)
 	WalSndShmemInit();
 	WalRcvShmemInit();
 	ApplyLauncherShmemInit();
+	ConnectionProxyShmemInit();
 
 	/*
 	 * Set up other modules that need some shared memory space

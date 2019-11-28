@@ -19,6 +19,7 @@
 extern char *pg_krb_server_keyfile;
 extern bool pg_krb_caseins_users;
 extern char *pg_krb_realm;
+extern bool cluster_owner_bypass_auth;
 
 extern void ClientAuthentication(Port *port);
 

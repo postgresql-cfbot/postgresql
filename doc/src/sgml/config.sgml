@@ -1115,6 +1115,27 @@ include_dir 'conf.d'
        </note>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="guc-cluster-owner-bypass-auth" xreflabel="cluster_owner_bypass_auth">
+      <term><varname>cluster_owner_bypass_auth</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>cluster_owner_bypass_auth</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        If enabled, when connecting over the Unix-domain socket, if the client
+        user is the same as the user that runs the database server, then
+        access is immediately granted without further checking.  See <xref
+        linkend="auth-cluster-owner"/>.  This is enabled by default and
+        usually very useful.  A possible reason to turn it off might be if all
+        authentication is through PAM with auditing and one wants even cluster
+        owner access to go through auditing that way.  Another reason to turn
+        this off is to be able to test a <filename>pg_hba.conf</filename>
+        configuration more easily.
+       </para>
+      </listitem>
+     </varlistentry>
      </variablelist>
      </sect2>
 

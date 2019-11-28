@@ -165,11 +165,12 @@ static int	CheckCertAuth(Port *port);
 
 
 /*----------------------------------------------------------------
- * Kerberos and GSSAPI GUCs
+ * GUCs
  *----------------------------------------------------------------
  */
 char	   *pg_krb_server_keyfile;
 bool		pg_krb_caseins_users;
+bool		cluster_owner_bypass_auth;
 
 
 /*----------------------------------------------------------------
@@ -349,6 +350,25 @@ ClientAuthentication(Port *port)
 {
 	int			status = STATUS_ERROR;
 	char	   *logdetail = NULL;
+
+	/*
+	 * If connecting over Unix-domain socket and peer uid matches current
+	 * process uid, then allow connection immediately.
+	 */
+	if (cluster_owner_bypass_auth &&
+		IS_AF_UNIX(port->raddr.addr.ss_family))
+	{
+		uid_t		peer_uid = -1;
+		gid_t		peer_gid = -1;
+		int			res;
+
+		res = getpeereid(port->sock, &peer_uid, &peer_gid);
+		if (res == 0 && peer_uid == geteuid())
+		{
+			sendAuthRequest(port, AUTH_REQ_OK, NULL, 0);
+			return;
+		}
+	}
 
 	/*
 	 * Get the authentication method to use for this frontend/database

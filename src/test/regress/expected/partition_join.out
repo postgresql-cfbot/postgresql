@@ -750,6 +750,135 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2
  550 | 0550 |     |      |     1100 | 0
 (12 rows)
 
+-- FULL JOIN with COALESCE expression
+SET enable_partitionwise_aggregate TO true;
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM prt1 FULL JOIN prt2 p2(b,a,c) USING(a,b) FULL JOIN prt2 p3(b,a,c) USING (a, b)
+  WHERE a BETWEEN 490 AND 510
+  GROUP BY 1, 2 ORDER BY 1, 2;
+                                                                      QUERY PLAN                                                                       
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+ Group
+   Group Key: (COALESCE(COALESCE(prt1_p1.a, p2.a), p3.a)), (COALESCE(COALESCE(prt1_p1.b, p2.b), p3.b))
+   ->  Merge Append
+         Sort Key: (COALESCE(COALESCE(prt1_p1.a, p2.a), p3.a)), (COALESCE(COALESCE(prt1_p1.b, p2.b), p3.b))
+         ->  Group
+               Group Key: (COALESCE(COALESCE(prt1_p1.a, p2.a), p3.a)), (COALESCE(COALESCE(prt1_p1.b, p2.b), p3.b))
+               ->  Sort
+                     Sort Key: (COALESCE(COALESCE(prt1_p1.a, p2.a), p3.a)), (COALESCE(COALESCE(prt1_p1.b, p2.b), p3.b))
+                     ->  Hash Full Join
+                           Hash Cond: ((COALESCE(prt1_p1.a, p2.a) = p3.a) AND (COALESCE(prt1_p1.b, p2.b) = p3.b))
+                           Filter: ((COALESCE(COALESCE(prt1_p1.a, p2.a), p3.a) >= 490) AND (COALESCE(COALESCE(prt1_p1.a, p2.a), p3.a) <= 510))
+                           ->  Hash Full Join
+                                 Hash Cond: ((prt1_p1.a = p2.a) AND (prt1_p1.b = p2.b))
+                                 ->  Seq Scan on prt1_p1
+                                 ->  Hash
+                                       ->  Seq Scan on prt2_p1 p2
+                           ->  Hash
+                                 ->  Seq Scan on prt2_p1 p3
+         ->  Group
+               Group Key: (COALESCE(COALESCE(prt1_p2.a, p2_1.a), p3_1.a)), (COALESCE(COALESCE(prt1_p2.b, p2_1.b), p3_1.b))
+               ->  Sort
+                     Sort Key: (COALESCE(COALESCE(prt1_p2.a, p2_1.a), p3_1.a)), (COALESCE(COALESCE(prt1_p2.b, p2_1.b), p3_1.b))
+                     ->  Hash Full Join
+                           Hash Cond: ((COALESCE(prt1_p2.a, p2_1.a) = p3_1.a) AND (COALESCE(prt1_p2.b, p2_1.b) = p3_1.b))
+                           Filter: ((COALESCE(COALESCE(prt1_p2.a, p2_1.a), p3_1.a) >= 490) AND (COALESCE(COALESCE(prt1_p2.a, p2_1.a), p3_1.a) <= 510))
+                           ->  Hash Full Join
+                                 Hash Cond: ((prt1_p2.a = p2_1.a) AND (prt1_p2.b = p2_1.b))
+                                 ->  Seq Scan on prt1_p2
+                                 ->  Hash
+                                       ->  Seq Scan on prt2_p2 p2_1
+                           ->  Hash
+                                 ->  Seq Scan on prt2_p2 p3_1
+         ->  Group
+               Group Key: (COALESCE(COALESCE(prt1_p3.a, p2_2.a), p3_2.a)), (COALESCE(COALESCE(prt1_p3.b, p2_2.b), p3_2.b))
+               ->  Sort
+                     Sort Key: (COALESCE(COALESCE(prt1_p3.a, p2_2.a), p3_2.a)), (COALESCE(COALESCE(prt1_p3.b, p2_2.b), p3_2.b))
+                     ->  Hash Full Join
+                           Hash Cond: ((COALESCE(prt1_p3.a, p2_2.a) = p3_2.a) AND (COALESCE(prt1_p3.b, p2_2.b) = p3_2.b))
+                           Filter: ((COALESCE(COALESCE(prt1_p3.a, p2_2.a), p3_2.a) >= 490) AND (COALESCE(COALESCE(prt1_p3.a, p2_2.a), p3_2.a) <= 510))
+                           ->  Hash Full Join
+                                 Hash Cond: ((prt1_p3.a = p2_2.a) AND (prt1_p3.b = p2_2.b))
+                                 ->  Seq Scan on prt1_p3
+                                 ->  Hash
+                                       ->  Seq Scan on prt2_p3 p2_2
+                           ->  Hash
+                                 ->  Seq Scan on prt2_p3 p3_2
+(46 rows)
+
+SELECT a, b FROM prt1 FULL JOIN prt2 p2(b,a,c) USING(a,b) FULL JOIN prt2 p3(b,a,c) USING (a, b)
+  WHERE a BETWEEN 490 AND 510
+  GROUP BY 1, 2 ORDER BY 1, 2;
+  a  | b  
+-----+----
+ 490 | 15
+ 492 | 17
+ 494 | 19
+ 495 | 20
+ 496 | 21
+ 498 | 23
+ 500 |  0
+ 501 |  1
+ 502 |  2
+ 504 |  4
+ 506 |  6
+ 507 |  7
+ 508 |  8
+ 510 | 10
+(14 rows)
+
+-- Manually written COALESCE expression containing non-key expression
+EXPLAIN (COSTS OFF)
+SELECT p1.a, p1.b FROM prt1 p1 FULL JOIN prt2 p2(b,a,c) USING(a,b) FULL JOIN prt2 p3(b,a,c) ON COALESCE(p2.b, p3.a) = p3.a
+  WHERE p1.a BETWEEN 490 AND 510
+  GROUP BY 1, 2 ORDER BY 1, 2;
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
+ Group
+   Group Key: p1.a, p1.b
+   ->  Sort
+         Sort Key: p1.a, p1.b
+         ->  Nested Loop Left Join
+               Join Filter: (COALESCE(p2.b, p3.a) = p3.a)
+               ->  Append
+                     ->  Hash Right Join
+                           Hash Cond: ((p2.a = p1.a) AND (p2.b = p1.b))
+                           ->  Seq Scan on prt2_p2 p2
+                           ->  Hash
+                                 ->  Seq Scan on prt1_p2 p1
+                                       Filter: ((a >= 490) AND (a <= 510))
+                     ->  Hash Right Join
+                           Hash Cond: ((p2_1.a = p1_1.a) AND (p2_1.b = p1_1.b))
+                           ->  Seq Scan on prt2_p3 p2_1
+                           ->  Hash
+                                 ->  Seq Scan on prt1_p3 p1_1
+                                       Filter: ((a >= 490) AND (a <= 510))
+               ->  Materialize
+                     ->  Append
+                           ->  Seq Scan on prt2_p1 p3
+                           ->  Seq Scan on prt2_p2 p3_1
+                           ->  Seq Scan on prt2_p3 p3_2
+(24 rows)
+
+SELECT p1.a, p1.b FROM prt1 p1 FULL JOIN prt2 p2(b,a,c) USING(a,b) FULL JOIN prt2 p3(b,a,c) ON COALESCE(p2.b, p3.a) = p3.a
+  WHERE p1.a BETWEEN 490 AND 510
+  GROUP BY 1, 2 ORDER BY 1, 2;
+  a  | b  
+-----+----
+ 490 | 15
+ 492 | 17
+ 494 | 19
+ 496 | 21
+ 498 | 23
+ 500 |  0
+ 502 |  2
+ 504 |  4
+ 506 |  6
+ 508 |  8
+ 510 | 10
+(11 rows)
+
+RESET enable_partitionwise_aggregate;
 -- Cases with non-nullable expressions in subquery results;
 -- make sure these go to null as expected
 EXPLAIN (COSTS OFF)

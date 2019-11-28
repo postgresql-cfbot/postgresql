@@ -17,6 +17,9 @@
 #include "postgres.h"
 
 #include <ctype.h>
+#ifdef USE_SECCOMP
+#include <seccomp.h>
+#endif
 
 #include "access/htup_details.h"
 #include "access/parallel.h"
@@ -900,4 +903,86 @@ show_role(void)
 
 	/* Otherwise we can just use the GUC string */
 	return role_string ? role_string : "none";
+}
+
+#ifdef USE_SECCOMP
+/*
+ * check_syscall_list: GUC check_hook
+ * check various lists of syscalls used for seccomp enforcement
+ */
+static bool
+check_syscall_list(char **newval, void **extra, GucSource source)
+{
+	char		   *rawstring = NULL;
+	List		   *elemlist = NIL;
+	ListCell	   *l;
+	bool			result = true;
+
+	/* Need a modifiable copy of string */
+	rawstring = pstrdup(*newval);
+
+	/* Parse string into list of syscalls */
+	if (!SplitIdentifierString(rawstring, ',', &elemlist))
+	{
+		GUC_check_errdetail("List syntax is invalid.");
+		result = false;
+		goto out;
+	}
+
+	foreach(l, elemlist)
+	{
+		char   *cursyscall = (char *) lfirst(l);
+		int		syscallnum;
+
+		/* resolve the syscall name to its number on the current arch */
+		syscallnum = seccomp_syscall_resolve_name(cursyscall);
+		if (syscallnum < 0)
+		{
+			/* invalid syscall name */
+			GUC_check_errcode(ERRCODE_INVALID_PARAMETER_VALUE);
+			GUC_check_errdetail("Seccomp failed to resolve syscall: \"%s\"",
+								cursyscall);
+			result = false;
+			goto out;
+		}
+	}
+
+out:
+	/* safe to release if NIL */
+	list_free(elemlist);
+
+	/* but pfree is not */
+	if (rawstring)
+		pfree(rawstring);
+
+	return result;
+}
+#endif
+
+bool
+check_global_syscall_list(char **newval, void **extra, GucSource source)
+{
+#ifdef USE_SECCOMP
+	return check_syscall_list(newval, extra, source);
+#else
+	return true;
+#endif
+}
+
+bool
+check_session_syscall_list(char **newval, void **extra, GucSource source)
+{
+#ifdef USE_SECCOMP
+	/*
+	 * If the only character of the passed *newval string is '*'
+	 * then use the global allow list. Only applies to children
+	 * of the postmaster.
+	 */
+	if (strlen(*newval) == 1 && *newval[0] == '*')
+		return true;
+	else
+		return check_syscall_list(newval, extra, source);
+#else
+	return true;
+#endif
 }

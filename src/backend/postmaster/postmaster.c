@@ -972,6 +972,20 @@ PostmasterMain(int argc, char *argv[])
 	 */
 	LocalProcessControlFile(false);
 
+#ifdef USE_SECCOMP
+	/*
+	 * If seccomp filtering is requested, load the global filter.
+	 * The list of allowed syscalls may be ratched down further
+	 * in specific backends based on the actual needs by backend type.
+	 */
+	if(!load_seccomp_filter("postmaster"))
+	{
+		ereport(FATAL,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("failed to load global seccomp filter")));
+	}
+#endif
+
 	/*
 	 * Initialize SSL library, if specified.
 	 */

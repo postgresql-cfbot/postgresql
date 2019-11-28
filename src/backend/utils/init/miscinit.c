@@ -29,6 +29,10 @@
 #ifdef HAVE_UTIME_H
 #include <utime.h>
 #endif
+#ifdef USE_SECCOMP
+#include <seccomp.h>
+#include <sys/prctl.h>
+#endif
 
 #include "access/htup_details.h"
 #include "catalog/pg_authid.h"
@@ -36,6 +40,7 @@
 #include "libpq/libpq.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "nodes/bitmapset.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/postmaster.h"
@@ -1617,3 +1622,389 @@ pg_bindtextdomain(const char *domain)
 	}
 #endif
 }
+
+/*-------------------------------------------------------------------------
+ *				seccomp filtering support
+ *-------------------------------------------------------------------------
+ */
+
+/*
+ * GUC variables: lists of syscall names to be filtered at postmaster
+ * start and at backend start
+ */
+
+const struct config_enum_entry seccomp_options[] = {
+	{"allow", PG_SECCOMP_ALLOW, false},
+	{"log", PG_SECCOMP_LOG, false},
+	{"error", PG_SECCOMP_ERROR, false},
+	{"kill", PG_SECCOMP_KILL, false},
+	{NULL, 0}
+};
+
+seccomp_filter *global_filter = NULL;
+seccomp_filter *session_filter = NULL;
+bool	seccomp_enabled = false;
+int		global_syscall_default = PG_SECCOMP_ALLOW;
+char   *global_syscall_allow_string = NULL;
+char   *global_syscall_log_string = NULL;
+char   *global_syscall_error_string = NULL;
+char   *global_syscall_kill_string = NULL;
+int		session_syscall_default = PG_SECCOMP_ALLOW;
+char   *session_syscall_allow_string = NULL;
+char   *session_syscall_log_string = NULL;
+char   *session_syscall_error_string = NULL;
+char   *session_syscall_kill_string = NULL;
+
+#ifdef USE_SECCOMP
+static bool apply_seccomp_list(scmp_filter_ctx	*ctx, const char *slist,
+							   uint32_t rule_action, uint32_t def_action,
+							   seccomp_filter *current_filter);
+static const char *expand_seccomp_list(const char *slist, const char *glist,
+									   const char *saction);
+static void set_filter_def_action(int default_action,
+								  seccomp_filter *current_filter,
+								  char *context);
+#endif
+
+/*
+ * Create and load seccomp filter for the requested context.
+ *
+ * Return false on error and let the caller decide what to do
+ * rather than throwing an ERROR (or FATAL) here.
+ */
+bool
+load_seccomp_filter(char *context)
+{
+#ifdef USE_SECCOMP
+	const char	   *allow_list = NULL;
+	const char	   *log_list = NULL;
+	const char	   *error_list = NULL;
+	const char	   *kill_list = NULL;
+	int				default_action;
+	uint32_t		def_action;
+	scmp_filter_ctx	ctx = NULL;
+	int				rc;
+	bool			result = true;
+	MemoryContext	oldcontext;
+	seccomp_filter *current_filter = NULL;
+
+	/* should not happen */
+	if (context == NULL)
+	{
+		ereport(WARNING, (errmsg("invalid seccomp context")));
+		return false;
+	}
+
+	/* if seccomp is disabled just return with success */
+	if (!seccomp_enabled)
+	{
+		ereport(LOG, (errmsg("seccomp disabled")));
+		return true;
+	}
+
+	/*
+	 * If the only character of the passed syscall_list is '*'
+	 * then use the global allow list. Only applies to children
+	 * of the postmaster.
+	 */
+	if (strcmp(context, "postmaster") != 0)
+	{
+		/* in a backend session */
+		/* we are going to need this later */
+		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+		session_filter = palloc0(sizeof(seccomp_filter));
+		session_filter->source = pstrdup("session");
+		MemoryContextSwitchTo(oldcontext);
+		current_filter = session_filter;
+
+		allow_list = expand_seccomp_list(session_syscall_allow_string,
+										 global_syscall_allow_string,
+										 "allow");
+		log_list = expand_seccomp_list(session_syscall_log_string,
+										 global_syscall_log_string,
+										 "log");
+		error_list = expand_seccomp_list(session_syscall_error_string,
+										 global_syscall_error_string,
+										 "error");
+		kill_list = expand_seccomp_list(session_syscall_kill_string,
+										 global_syscall_kill_string,
+										 "kill");
+
+		default_action = session_syscall_default;
+		/*
+		 * Fastpath: if the lists were all defaulted to their
+		 * respective global list, and the session value of
+		 * default_action is also the same as the global setting,
+		 * just exit with success immediately. This avoids creating
+		 * another identical seccomp bpf filter which will just
+		 * slow everything down for no particular reason.
+		 */
+		if (default_action == global_syscall_default &&
+				allow_list == global_syscall_allow_string &&
+				log_list == global_syscall_log_string &&
+				error_list == global_syscall_error_string &&
+				kill_list == global_syscall_kill_string)
+			return true;
+	}
+	else
+	{
+		/* in the postmaster */
+		/* we are going to need this later */
+		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+		global_filter = palloc0(sizeof(seccomp_filter));
+		global_filter->source = pstrdup("global");
+		MemoryContextSwitchTo(oldcontext);
+		current_filter = global_filter;
+
+		allow_list = global_syscall_allow_string;
+		log_list = global_syscall_log_string;
+		error_list = global_syscall_error_string;
+		kill_list = global_syscall_kill_string;
+		default_action = global_syscall_default;
+	}
+
+	/* Disable ptrace bybass */
+	rc = prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+	if (rc < 0)
+	{
+		ereport(WARNING,
+				(ERRCODE_SYSTEM_ERROR,
+				 errmsg("seccomp could not set dumpable: %m")));
+		result = false;
+		goto out;
+	}
+
+	/* set the seccomp default action */
+	if (default_action == PG_SECCOMP_ERROR)
+		def_action = SCMP_ACT_ERRNO(EACCES);
+	else if (default_action == PG_SECCOMP_KILL)
+		def_action = SCMP_ACT_KILL;
+	else if (default_action == PG_SECCOMP_LOG)
+		def_action = SCMP_ACT_LOG;
+	else if (default_action == PG_SECCOMP_ALLOW)
+		def_action = SCMP_ACT_ALLOW;
+	else
+	{
+		/* unknown enforce action type */
+		ereport(WARNING,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("seccomp default action action unknown")));
+		result = false;
+		goto out;
+	}
+	/* preserve and log the setting */
+	set_filter_def_action(default_action, current_filter, context);
+
+	/* Initialize seccomp with default action */
+	ctx = seccomp_init(def_action);
+	if (ctx == NULL)
+	{
+		ereport(WARNING, (errcode(ERRCODE_OUT_OF_MEMORY),
+						  errmsg("out of memory")));
+		result = false;
+		goto out;
+	}
+
+	/*
+	 * By default, libseccomp will set up audit logging
+	 * such that actions KILL and LOG will get audit records,
+	 * however ERRNO will not. Arrange to have all not-allowed
+	 * syscalls logged instead.
+	 */
+	rc = seccomp_attr_set(ctx, SCMP_FLTATR_CTL_LOG, 1);
+	if (rc != 0)
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_SYSTEM_ERROR),
+				 errmsg("seccomp failed to set audit actions")));
+		result = false;
+		goto out;
+	}
+
+	if (!
+		 (apply_seccomp_list(&ctx, allow_list, SCMP_ACT_ALLOW,
+							 def_action, current_filter) &&
+		  apply_seccomp_list(&ctx, log_list, SCMP_ACT_LOG,
+							 def_action, current_filter) &&
+		  apply_seccomp_list(&ctx, error_list, SCMP_ACT_ERRNO(EACCES),
+							 def_action, current_filter) &&
+		  apply_seccomp_list(&ctx, kill_list, SCMP_ACT_KILL,
+							 def_action, current_filter)))
+	{
+		result = false;
+		goto out;
+	}
+
+	/*
+	 * Although libseccomp will silently throw away repeated filter
+	 * rules against the same syscall (unless arguments are checked,
+	 * which we are not supporting here), it can lead to confusing
+	 * results, so disallow that here.
+	 */
+	if (bms_overlap(current_filter->allow, current_filter->log) ||
+		bms_overlap(current_filter->error, current_filter->kill) ||
+		bms_overlap(bms_union(current_filter->allow, current_filter->log),
+					bms_union(current_filter->error, current_filter->kill)))
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("seccomp failed due to overlapping rule sets")));
+		result = false;
+		goto out;
+	}
+
+	/* Finally, actually load the filter */
+	rc = seccomp_load(ctx);
+	if (rc != 0)
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_SYSTEM_ERROR),
+				 errmsg("seccomp failed to load rule set")));
+		result = false;
+		goto out;
+	}
+
+out:
+	/* safe to release if NULL/NIL */
+	seccomp_release(ctx);
+
+	return result;
+#else
+	return false;
+#endif
+}
+
+#ifdef USE_SECCOMP
+static bool
+apply_seccomp_list(scmp_filter_ctx	*ctx, const char *slist,
+				   uint32_t rule_action, uint32_t def_action,
+				   seccomp_filter *current_filter)
+{
+	char		   *rawstring = NULL;
+	List		   *elemlist = NIL;
+	ListCell	   *l;
+	bool			result = true;
+	MemoryContext	oldcontext;
+
+	/* 
+	 * libseccomp disallows the case where individual syscall rules
+	 * are created with the same as the default action. Therefore,
+	 * be careful not to add those rules to the filter we are creating.
+	 */
+	if (rule_action == def_action)
+		return true;
+
+	/* Need a modifiable copy */
+	rawstring = pstrdup(slist);
+
+	/* Parse string into list of syscalls */
+	if (!SplitIdentifierString(rawstring, ',', &elemlist))
+	{
+		result = false;
+		goto out;
+	}
+
+	/* add syscall specific rules to the filter */
+	foreach(l, elemlist)
+	{
+		char   *cursyscall = (char *) lfirst(l);
+		int		syscallnum;
+		int		rc;
+
+		/*
+		 * Resolve the syscall name to its number on the current arch.
+		 * This should have already been validated by the GUC
+		 * check function.
+		 */
+		syscallnum = seccomp_syscall_resolve_name(cursyscall);
+		if (syscallnum < 0)
+		{
+			/* should not happen */
+			ereport(WARNING,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("seccomp failed to resolve: syscall \"%s\"",
+							cursyscall)));
+			result = false;
+			goto out;
+		}
+		else
+		{
+			rc = seccomp_rule_add(*ctx, rule_action, syscallnum, 0);
+			if (rc != 0)
+			{
+				/* should not be reachable */
+				ereport(WARNING,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("seccomp failed to add rule: syscall \"%s\", %d",
+								 cursyscall, syscallnum)));
+				result = false;
+				goto out;
+			}
+			oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+
+			if (rule_action == SCMP_ACT_ALLOW)
+				current_filter->allow = bms_add_member(current_filter->allow,
+													   syscallnum);
+			else if (rule_action == SCMP_ACT_LOG)
+				current_filter->log = bms_add_member(current_filter->log,
+													   syscallnum);
+			else if (rule_action == SCMP_ACT_ERRNO(EACCES))
+				current_filter->error = bms_add_member(current_filter->error,
+													   syscallnum);
+			else if (rule_action == SCMP_ACT_KILL)
+				current_filter->kill = bms_add_member(current_filter->kill,
+													   syscallnum);
+
+			MemoryContextSwitchTo(oldcontext);
+		}
+	}
+
+out:
+	/* safe to release if still NIL */
+	list_free(elemlist);
+
+	/* but pfree is not */
+	if (rawstring)
+		pfree(rawstring);
+
+	return result;
+}
+
+static const char*
+expand_seccomp_list(const char *slist, const char *glist,
+					const char *saction)
+{
+	
+	if (slist && strlen(slist) == 1 && slist[0] == '*')
+	{
+		/* use the global list as promised */
+		ereport(LOG,
+				(errmsg("seccomp \"%s\" list inherited from postmaster", saction)));
+
+		return glist;
+	}
+	else
+		return slist;
+}
+
+static void
+set_filter_def_action(int default_action, seccomp_filter *current_filter,
+					  char *context)
+{
+	const struct config_enum_entry *entry;
+
+	current_filter->def = default_action;
+	/* stringify the enforcement action levels */
+	for (entry = seccomp_options; entry->name; entry++)
+	{
+		if (entry->val == default_action)
+		{
+			current_filter->def_str = entry->name;
+			break;
+		}
+	}
+	ereport(LOG,
+			(errmsg("seccomp default action set to \"%s\": context \"%s\"",
+					current_filter->def_str, context)));
+}
+#endif /* USE_SECCOMP */

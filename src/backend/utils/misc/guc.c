@@ -481,6 +481,7 @@ extern const struct config_enum_entry archive_mode_options[];
 extern const struct config_enum_entry recovery_target_action_options[];
 extern const struct config_enum_entry sync_method_options[];
 extern const struct config_enum_entry dynamic_shared_memory_options[];
+extern const struct config_enum_entry seccomp_options[];
 
 /*
  * GUC option variables that are exported from this module
@@ -1955,6 +1956,16 @@ static struct config_bool ConfigureNamesBool[] =
 			gettext_noop("Whether to continue running after a failure to sync data files."),
 		},
 		&data_sync_retry,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"seccomp", PGC_POSTMASTER, RESOURCES_KERNEL,
+			gettext_noop("Turns on seccomp syscall enforcement."),
+			NULL
+		},
+		&seccomp_enabled,
 		false,
 		NULL, NULL, NULL
 	},
@@ -4252,6 +4263,94 @@ static struct config_string ConfigureNamesString[] =
 		check_backtrace_functions, assign_backtrace_functions, NULL
 	},
 
+	{
+		{"global_syscall_allow", PGC_POSTMASTER, RESOURCES_KERNEL,
+			gettext_noop("Seccomp global syscall allow list."),
+			NULL,
+			GUC_LIST_INPUT | GUC_SUPERUSER_ONLY
+		},
+		&global_syscall_allow_string,
+		"",
+		check_global_syscall_list, NULL, NULL
+	},
+
+	{
+		{"global_syscall_log", PGC_POSTMASTER, RESOURCES_KERNEL,
+			gettext_noop("Seccomp global syscall log list."),
+			NULL,
+			GUC_LIST_INPUT | GUC_SUPERUSER_ONLY
+		},
+		&global_syscall_log_string,
+		"",
+		check_global_syscall_list, NULL, NULL
+	},
+
+	{
+		{"global_syscall_error", PGC_POSTMASTER, RESOURCES_KERNEL,
+			gettext_noop("Seccomp global syscall error list."),
+			NULL,
+			GUC_LIST_INPUT | GUC_SUPERUSER_ONLY
+		},
+		&global_syscall_error_string,
+		"",
+		check_global_syscall_list, NULL, NULL
+	},
+
+	{
+		{"global_syscall_kill", PGC_POSTMASTER, RESOURCES_KERNEL,
+			gettext_noop("Seccomp global syscall kill list."),
+			NULL,
+			GUC_LIST_INPUT | GUC_SUPERUSER_ONLY
+		},
+		&global_syscall_kill_string,
+		"",
+		check_global_syscall_list, NULL, NULL
+	},
+
+	{
+		{"session_syscall_allow", PGC_SUSET, RESOURCES_KERNEL,
+			gettext_noop("Seccomp backend session syscall allow list."),
+			NULL,
+			GUC_LIST_INPUT | GUC_SUPERUSER_ONLY
+		},
+		&session_syscall_allow_string,
+		"*",
+		check_session_syscall_list, NULL, NULL
+	},
+
+	{
+		{"session_syscall_log", PGC_SUSET, RESOURCES_KERNEL,
+			gettext_noop("Seccomp backend session syscall log list."),
+			NULL,
+			GUC_LIST_INPUT | GUC_SUPERUSER_ONLY
+		},
+		&session_syscall_log_string,
+		"*",
+		check_session_syscall_list, NULL, NULL
+	},
+
+	{
+		{"session_syscall_error", PGC_SUSET, RESOURCES_KERNEL,
+			gettext_noop("Seccomp backend session syscall error list."),
+			NULL,
+			GUC_LIST_INPUT | GUC_SUPERUSER_ONLY
+		},
+		&session_syscall_error_string,
+		"*",
+		check_session_syscall_list, NULL, NULL
+	},
+
+	{
+		{"session_syscall_kill", PGC_SUSET, RESOURCES_KERNEL,
+			gettext_noop("Seccomp backend session syscall allow kill."),
+			NULL,
+			GUC_LIST_INPUT | GUC_SUPERUSER_ONLY
+		},
+		&session_syscall_kill_string,
+		"*",
+		check_session_syscall_list, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, NULL, NULL, NULL, NULL
@@ -4587,6 +4686,26 @@ static struct config_enum ConfigureNamesEnum[] =
 		&ssl_max_protocol_version,
 		PG_TLS_ANY,
 		ssl_protocol_versions_info,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"global_syscall_default", PGC_POSTMASTER, RESOURCES_KERNEL,
+			gettext_noop("Seccomp global syscall default action."),
+			NULL
+		},
+		&global_syscall_default,
+		PG_SECCOMP_ALLOW, seccomp_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"session_syscall_default", PGC_SUSET, RESOURCES_KERNEL,
+			gettext_noop("Seccomp beckend session syscall default action."),
+			NULL
+		},
+		&session_syscall_default,
+		PG_SECCOMP_ALLOW, seccomp_options,
 		NULL, NULL, NULL
 	},
 

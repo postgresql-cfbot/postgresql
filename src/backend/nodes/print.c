@@ -460,6 +460,45 @@ print_pathkeys(const List *pathkeys, const List *rtable)
 }
 
 /*
+ * print_uniquekeys -
+ *	  uniquekeys list of UniqueKeys
+ */
+void
+print_uniquekeys(const List *uniquekeys, const List *rtable)
+{
+	ListCell   *l;
+
+	printf("(");
+	foreach(l, uniquekeys)
+	{
+		UniqueKey *unique_key = (UniqueKey *) lfirst(l);
+		EquivalenceClass *eclass = (EquivalenceClass *) unique_key->eq_clause;
+		ListCell   *k;
+		bool		first = true;
+
+		/* chase up */
+		while (eclass->ec_merged)
+			eclass = eclass->ec_merged;
+
+		printf("(");
+		foreach(k, eclass->ec_members)
+		{
+			EquivalenceMember *mem = (EquivalenceMember *) lfirst(k);
+
+			if (first)
+				first = false;
+			else
+				printf(", ");
+			print_expr((Node *) mem->em_expr, rtable);
+		}
+		printf(")");
+		if (lnext(uniquekeys, l))
+			printf(", ");
+	}
+	printf(")\n");
+}
+
+/*
  * print_tl
  *	  print targetlist in a more legible way.
  */

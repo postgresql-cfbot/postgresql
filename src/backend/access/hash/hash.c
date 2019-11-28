@@ -80,6 +80,7 @@ hashhandler(PG_FUNCTION_ARGS)
 	amroutine->ambulkdelete = hashbulkdelete;
 	amroutine->amvacuumcleanup = hashvacuumcleanup;
 	amroutine->amcanreturn = NULL;
+	amroutine->amskip = NULL;
 	amroutine->amcostestimate = hashcostestimate;
 	amroutine->amoptions = hashoptions;
 	amroutine->amproperty = NULL;

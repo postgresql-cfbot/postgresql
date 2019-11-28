@@ -189,6 +189,7 @@ static Expr *match_clause_to_ordering_op(IndexOptInfo *index,
 static bool ec_member_matches_indexcol(PlannerInfo *root, RelOptInfo *rel,
 									   EquivalenceClass *ec, EquivalenceMember *em,
 									   void *arg);
+static List *get_uniquekeys_for_index(PlannerInfo *root, List *pathkeys);
 
 
 /*
@@ -874,6 +875,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	List	   *orderbyclausecols;
 	List	   *index_pathkeys;
 	List	   *useful_pathkeys;
+	List	   *useful_uniquekeys = NIL;
 	bool		found_lower_saop_clause;
 	bool		pathkeys_possibly_useful;
 	bool		index_is_ordered;
@@ -1036,11 +1038,15 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	if (index_clauses != NIL || useful_pathkeys != NIL || useful_predicate ||
 		index_only_scan)
 	{
+		if (has_useful_uniquekeys(root))
+			useful_uniquekeys = get_uniquekeys_for_index(root, useful_pathkeys);
+
 		ipath = create_index_path(root, index,
 								  index_clauses,
 								  orderbyclauses,
 								  orderbyclausecols,
 								  useful_pathkeys,
+								  useful_uniquekeys,
 								  index_is_ordered ?
 								  ForwardScanDirection :
 								  NoMovementScanDirection,
@@ -1063,6 +1069,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 									  orderbyclauses,
 									  orderbyclausecols,
 									  useful_pathkeys,
+									  useful_uniquekeys,
 									  index_is_ordered ?
 									  ForwardScanDirection :
 									  NoMovementScanDirection,
@@ -1093,11 +1100,15 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 													index_pathkeys);
 		if (useful_pathkeys != NIL)
 		{
+			if (has_useful_uniquekeys(root))
+				useful_uniquekeys = get_uniquekeys_for_index(root, useful_pathkeys);
+
 			ipath = create_index_path(root, index,
 									  index_clauses,
 									  NIL,
 									  NIL,
 									  useful_pathkeys,
+									  useful_uniquekeys,
 									  BackwardScanDirection,
 									  index_only_scan,
 									  outer_relids,
@@ -1115,6 +1126,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 										  NIL,
 										  NIL,
 										  useful_pathkeys,
+										  useful_uniquekeys,
 										  BackwardScanDirection,
 										  index_only_scan,
 										  outer_relids,
@@ -3365,6 +3377,35 @@ match_clause_to_ordering_op(IndexOptInfo *index,
 	return clause;
 }
 
+/*
+ * get_uniquekeys_for_index
+ */
+static List *
+get_uniquekeys_for_index(PlannerInfo *root, List *pathkeys)
+{
+	ListCell *lc;
+
+	if (pathkeys)
+	{
+		List *uniquekeys = NIL;
+		foreach(lc, pathkeys)
+		{
+			UniqueKey *unique_key;
+			PathKey *pk = (PathKey *) lfirst(lc);
+			EquivalenceClass *ec = (EquivalenceClass *) pk->pk_eclass;
+
+			unique_key = makeNode(UniqueKey);
+			unique_key->eq_clause = ec;
+
+			lappend(uniquekeys, unique_key);
+		}
+
+		if (uniquekeys_contained_in(root->canon_uniquekeys, uniquekeys))
+			return uniquekeys;
+	}
+
+	return NIL;
+}
 
 /****************************************************************************
  *				----  ROUTINES TO DO PARTIAL INDEX PREDICATE TESTS	----

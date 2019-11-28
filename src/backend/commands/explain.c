@@ -130,6 +130,7 @@ static void ExplainDummyGroup(const char *objtype, const char *labelname,
 static void ExplainXMLTag(const char *tagname, int flags, ExplainState *es);
 static void ExplainJSONLineEnding(ExplainState *es);
 static void ExplainYAMLLineStarting(ExplainState *es);
+static void ExplainIndexSkipScanKeys(int skipPrefixSize, ExplainState *es);
 static void escape_yaml(StringInfo buf, const char *str);
 
 
@@ -1042,6 +1043,22 @@ ExplainPreScanNode(PlanState *planstate, Bitmapset **rels_used)
 }
 
 /*
+ * ExplainIndexSkipScanKeys -
+ *	  Append information about index skip scan to es->str.
+ *
+ * Can be used to print the skip prefix size.
+ */
+static void
+ExplainIndexSkipScanKeys(int skipPrefixSize, ExplainState *es)
+{
+	if (skipPrefixSize > 0)
+	{
+		if (es->format != EXPLAIN_FORMAT_TEXT)
+			ExplainPropertyInteger("Distinct Prefix", NULL, skipPrefixSize, es);
+	}
+}
+
+/*
  * ExplainNode -
  *	  Appends a description of a plan tree to es->str
  *
@@ -1363,6 +1380,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			{
 				IndexScan  *indexscan = (IndexScan *) plan;
 
+				ExplainIndexSkipScanKeys(indexscan->indexskipprefixsize, es);
+
 				ExplainIndexScanDetails(indexscan->indexid,
 										indexscan->indexorderdir,
 										es);
@@ -1372,6 +1391,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_IndexOnlyScan:
 			{
 				IndexOnlyScan *indexonlyscan = (IndexOnlyScan *) plan;
+
+				ExplainIndexSkipScanKeys(indexonlyscan->indexskipprefixsize, es);
 
 				ExplainIndexScanDetails(indexonlyscan->indexid,
 										indexonlyscan->indexorderdir,
@@ -1582,6 +1603,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	switch (nodeTag(plan))
 	{
 		case T_IndexScan:
+			if (((IndexScan *) plan)->indexskipprefixsize > 0)
+				ExplainPropertyBool("Skip scan", true, es);
 			show_scan_qual(((IndexScan *) plan)->indexqualorig,
 						   "Index Cond", planstate, ancestors, es);
 			if (((IndexScan *) plan)->indexqualorig)
@@ -1595,6 +1618,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 										   planstate, es);
 			break;
 		case T_IndexOnlyScan:
+			if (((IndexOnlyScan *) plan)->indexskipprefixsize > 0)
+				ExplainPropertyBool("Skip scan", true, es);
 			show_scan_qual(((IndexOnlyScan *) plan)->indexqual,
 						   "Index Cond", planstate, ancestors, es);
 			if (((IndexOnlyScan *) plan)->indexqual)

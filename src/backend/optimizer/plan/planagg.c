@@ -511,6 +511,7 @@ minmax_qp_callback(PlannerInfo *root, void *extra)
 									  root->parse->targetList);
 
 	root->query_pathkeys = root->sort_pathkeys;
+	root->query_uniquekeys = NIL;
 }
 
 /*

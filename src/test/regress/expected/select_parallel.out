@@ -590,7 +590,7 @@ select * from explain_parallel_sort_stats();
          Workers Launched: 4
          ->  Sort (actual rows=2000 loops=15)
                Sort Key: tenk1.ten
-               Sort Method: quicksort  Memory: xxx
+               Leader:  Sort Method: quicksort  Memory: xxx
                Worker 0:  Sort Method: quicksort  Memory: xxx
                Worker 1:  Sort Method: quicksort  Memory: xxx
                Worker 2:  Sort Method: quicksort  Memory: xxx

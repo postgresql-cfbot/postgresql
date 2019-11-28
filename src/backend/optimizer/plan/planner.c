@@ -2314,6 +2314,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 			path = (Path *) create_limit_path(root, final_rel, path,
 											  parse->limitOffset,
 											  parse->limitCount,
+											  parse->limitOption,
 											  offset_est, count_est);
 		}
 
@@ -2883,12 +2884,17 @@ preprocess_limit(PlannerInfo *root, double tuple_fraction,
 		/*
 		 * A LIMIT clause limits the absolute number of tuples returned.
 		 * However, if it's not a constant LIMIT then we have to guess; for
-		 * lack of a better idea, assume 10% of the plan's result is wanted.
+		 * lack of a better idea, assume 10% of the plan's result is wanted for
+		 * LIMIT_OPTION_COUNT and 100% wanted in a case of LIMIT_OPTION_PERCENT.
+
 		 */
 		if (*count_est < 0 || *offset_est < 0)
 		{
 			/* LIMIT or OFFSET is an expression ... punt ... */
-			limit_fraction = 0.10;
+			if (parse->limitOption == LIMIT_OPTION_PERCENT)
+				limit_fraction = 1.0;
+			else
+				limit_fraction = 0.10;
 		}
 		else
 		{

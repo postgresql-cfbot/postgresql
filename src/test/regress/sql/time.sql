@@ -40,3 +40,6 @@ SELECT f1 AS "Eight" FROM TIME_TBL WHERE f1 >= '00:00';
 -- where we do mixed-type arithmetic. - thomas 2000-12-02
 
 SELECT f1 + time '00:01' AS "Illegal" FROM TIME_TBL;
+
+-- distance
+SELECT f1 AS "Ten", f1 <-> time '01:23:45' AS "Distance" FROM TIME_TBL;

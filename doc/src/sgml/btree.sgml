@@ -200,6 +200,53 @@
   planner relies on them for optimization purposes.
  </para>
 
+ <para>
+  To implement the distance ordered (nearest-neighbor) search, we only need
+  to define a distance operator (usually it called
+  <literal>&lt;-&gt;</literal>) with a correpsonding operator family for
+  distance comparison in the index's operator class.  These operators must
+  satisfy the following assumptions for all non-null values
+  <replaceable>A</replaceable>, <replaceable>B</replaceable>,
+  <replaceable>C</replaceable> of the datatype:
+
+  <itemizedlist>
+   <listitem>
+    <para>
+     <replaceable>A</replaceable> <literal>&lt;-&gt;</literal>
+     <replaceable>B</replaceable> <literal>=</literal>
+     <replaceable>B</replaceable> <literal>&lt;-&gt;</literal>
+     <replaceable>A</replaceable>
+     (<firstterm>symmetric law</firstterm>)
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+     if <replaceable>A</replaceable> <literal>=</literal>
+     <replaceable>B</replaceable>, then <replaceable>A</replaceable>
+     <literal>&lt;-&gt;</literal> <replaceable>C</replaceable>
+     <literal>=</literal> <replaceable>B</replaceable>
+     <literal>&lt;-&gt;</literal> <replaceable>C</replaceable>
+     (<firstterm>distance equivalence</firstterm>)
+    </para>
+   </listitem>
+   <listitem>
+    <para>
+      if (<replaceable>A</replaceable> <literal>&lt;=</literal>
+      <replaceable>B</replaceable> and <replaceable>B</replaceable>
+      <literal>&lt;=</literal> <replaceable>C</replaceable>) or
+      (<replaceable>A</replaceable> <literal>&gt;=</literal>
+      <replaceable>B</replaceable> and <replaceable>B</replaceable>
+      <literal>&gt;=</literal> <replaceable>C</replaceable>),
+      then <replaceable>A</replaceable> <literal>&lt;-&gt;</literal>
+      <replaceable>B</replaceable> <literal>&lt;=</literal>
+      <replaceable>A</replaceable> <literal>&lt;-&gt;</literal>
+      <replaceable>C</replaceable>
+     (<firstterm>monotonicity</firstterm>)
+    </para>
+   </listitem>
+  </itemizedlist>
+ </para>
+
 </sect1>
 
 <sect1 id="btree-support-funcs">

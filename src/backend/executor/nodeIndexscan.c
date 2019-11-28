@@ -186,10 +186,8 @@ IndexNextWithReorder(IndexScanState *node)
 	 * Only forward scan is supported with reordering.  Note: we can get away
 	 * with just Asserting here because the system will not try to run the
 	 * plan backwards if ExecSupportsBackwardScan() says it won't work.
-	 * Currently, that is guaranteed because no index AMs support both
-	 * amcanorderbyop and amcanbackward; if any ever do,
-	 * ExecSupportsBackwardScan() will need to consider indexorderbys
-	 * explicitly.
+	 * Currently, ExecSupportsBackwardScan() simply returns false for index
+	 * plans with indexorderbys.
 	 */
 	Assert(!ScanDirectionIsBackward(((IndexScan *) node->ss.ps.plan)->indexorderdir));
 	Assert(ScanDirectionIsForward(estate->es_direction));

@@ -63,6 +63,7 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amsupport = GISTNProcs;
 	amroutine->amcanorder = false;
 	amroutine->amcanorderbyop = true;
+	amroutine->amorderbyopfirstcol = false;
 	amroutine->amcanbackward = false;
 	amroutine->amcanunique = false;
 	amroutine->amcanmulticol = true;

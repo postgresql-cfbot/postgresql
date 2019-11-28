@@ -119,4 +119,17 @@ SELECT '' AS three, o.* FROM OID_TBL o WHERE o.f1 > '1234';
        |   99999999
 (3 rows)
 
+SELECT '' AS eight, f1, f1 <-> oid '123' FROM OID_TBL;
+ eight |     f1     |  ?column?  
+-------+------------+------------
+       |       1234 |       1111
+       |       1235 |       1112
+       |        987 |        864
+       | 4294966256 | 4294966133
+       |   99999999 |   99999876
+       |          5 |        118
+       |         10 |        113
+       |         15 |        108
+(8 rows)
+
 DROP TABLE OID_TBL;

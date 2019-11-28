@@ -235,6 +235,8 @@ static const struct config_enum_entry bytea_output_options[] = {
 	{"hex", BYTEA_OUTPUT_HEX, false},
 	{NULL, 0, false}
 };
+StaticAssertDecl(lengthof(bytea_output_options) == BYTEA_OUTPUT_HEX+1+1,
+	"bytea_output_options array inconsistency");
 
 /*
  * We have different sets for client and server message level options because
@@ -280,6 +282,8 @@ static const struct config_enum_entry intervalstyle_options[] = {
 	{"iso_8601", INTSTYLE_ISO_8601, false},
 	{NULL, 0, false}
 };
+StaticAssertDecl(lengthof(intervalstyle_options) == INTSTYLE_ISO_8601+1+1,
+	"intervalstyle_options array inconsistency");
 
 static const struct config_enum_entry log_error_verbosity_options[] = {
 	{"terse", PGERROR_TERSE, false},
@@ -287,6 +291,8 @@ static const struct config_enum_entry log_error_verbosity_options[] = {
 	{"verbose", PGERROR_VERBOSE, false},
 	{NULL, 0, false}
 };
+StaticAssertDecl(lengthof(log_error_verbosity_options) == PGERROR_VERBOSE+1+1,
+	"log_error_verbosity_options array inconsistency");
 
 static const struct config_enum_entry log_statement_options[] = {
 	{"none", LOGSTMT_NONE, false},
@@ -295,6 +301,8 @@ static const struct config_enum_entry log_statement_options[] = {
 	{"all", LOGSTMT_ALL, false},
 	{NULL, 0, false}
 };
+StaticAssertDecl(lengthof(log_statement_options) == LOGSTMT_ALL+1+1,
+	"log_statement_options array inconsistency");
 
 static const struct config_enum_entry isolation_level_options[] = {
 	{"serializable", XACT_SERIALIZABLE, false},
@@ -310,6 +318,8 @@ static const struct config_enum_entry session_replication_role_options[] = {
 	{"local", SESSION_REPLICATION_ROLE_LOCAL, false},
 	{NULL, 0, false}
 };
+StaticAssertDecl(lengthof(session_replication_role_options) == SESSION_REPLICATION_ROLE_LOCAL+1+1,
+	"session_replication_role_options array inconsistency");
 
 static const struct config_enum_entry syslog_facility_options[] = {
 #ifdef HAVE_SYSLOG
@@ -333,18 +343,24 @@ static const struct config_enum_entry track_function_options[] = {
 	{"all", TRACK_FUNC_ALL, false},
 	{NULL, 0, false}
 };
+StaticAssertDecl(lengthof(track_function_options) == TRACK_FUNC_ALL+1+1,
+	"track_function_options array inconsistency");
 
 static const struct config_enum_entry xmlbinary_options[] = {
 	{"base64", XMLBINARY_BASE64, false},
 	{"hex", XMLBINARY_HEX, false},
 	{NULL, 0, false}
 };
+StaticAssertDecl(lengthof(xmlbinary_options) == XMLBINARY_HEX+1+1,
+	"xmlbinary_options array inconsistency");
 
 static const struct config_enum_entry xmloption_options[] = {
 	{"content", XMLOPTION_CONTENT, false},
 	{"document", XMLOPTION_DOCUMENT, false},
 	{NULL, 0, false}
 };
+StaticAssertDecl(lengthof(xmloption_options) == XMLOPTION_CONTENT+1+1,
+	"xmloption_options array inconsistency");
 
 /*
  * Although only "on", "off", and "safe_encoding" are documented, we
@@ -459,6 +475,8 @@ const struct config_enum_entry ssl_protocol_versions_info[] = {
 	{"TLSv1.3", PG_TLS1_3_VERSION, false},
 	{NULL, 0, false}
 };
+StaticAssertDecl(lengthof(ssl_protocol_versions_info) == PG_TLS1_3_VERSION+1+1,
+	"ssl_protocol_versions_info array inconsistency");
 
 static struct config_enum_entry shared_memory_options[] = {
 #ifndef WIN32
@@ -608,6 +626,8 @@ const char *const GucContext_Names[] =
 	 /* PGC_SUSET */ "superuser",
 	 /* PGC_USERSET */ "user"
 };
+StaticAssertDecl(lengthof(GucContext_Names) == PGC_USERSET+1,
+	"GucContext_Names array inconsistency");
 
 /*
  * Displayable names for source types (enum GucSource)
@@ -631,6 +651,8 @@ const char *const GucSource_Names[] =
 	 /* PGC_S_TEST */ "test",
 	 /* PGC_S_SESSION */ "session"
 };
+StaticAssertDecl(lengthof(GucSource_Names) == PGC_S_SESSION+1,
+	"GucSource_Names array inconsistency");
 
 /*
  * Displayable names for the groupings defined in enum config_group
@@ -742,6 +764,8 @@ const char *const config_group_names[] =
 	/* help_config wants this array to be null-terminated */
 	NULL
 };
+StaticAssertDecl(lengthof(config_group_names) == DEVELOPER_OPTIONS+1+1,
+	"config_group_names array inconsistency");
 
 /*
  * Displayable names for GUC variable types (enum config_type)
@@ -756,6 +780,8 @@ const char *const config_type_names[] =
 	 /* PGC_STRING */ "string",
 	 /* PGC_ENUM */ "enum"
 };
+StaticAssertDecl(lengthof(config_type_names) == PGC_ENUM+1,
+	"config_type_names array inconsistency");
 
 /*
  * Unit conversion tables.

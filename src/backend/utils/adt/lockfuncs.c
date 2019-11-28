@@ -35,6 +35,8 @@ const char *const LockTagTypeNames[] = {
 	"userlock",
 	"advisory"
 };
+StaticAssertDecl(lengthof(LockTagTypeNames) == LOCKTAG_ADVISORY+1,
+	"LockTagTypeNames array inconsistency");
 
 /* This must match enum PredicateLockTargetType (predicate_internals.h) */
 static const char *const PredicateLockTagTypeNames[] = {
@@ -42,6 +44,8 @@ static const char *const PredicateLockTagTypeNames[] = {
 	"page",
 	"tuple"
 };
+StaticAssertDecl(lengthof(PredicateLockTagTypeNames) == PREDLOCKTAG_TUPLE+1,
+	"PredicateLockTagTypeNames array inconsistency");
 
 /* Working status for pg_lock_status */
 typedef struct

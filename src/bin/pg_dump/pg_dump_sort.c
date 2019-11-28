@@ -79,6 +79,8 @@ static const int dbObjectTypePriority[] =
 	37,							/* DO_PUBLICATION_REL */
 	38							/* DO_SUBSCRIPTION */
 };
+StaticAssertDecl(lengthof(dbObjectTypePriority) == DO_SUBSCRIPTION+1,
+	"dbObjectTypePriority array inconsistency");
 
 static DumpId preDataBoundId;
 static DumpId postDataBoundId;

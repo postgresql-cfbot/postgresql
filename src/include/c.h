@@ -845,11 +845,16 @@ extern void ExceptionalCondition(const char *conditionName,
 	do { _Static_assert(condition, errmessage); } while(0)
 #define StaticAssertExpr(condition, errmessage) \
 	((void) ({ StaticAssertStmt(condition, errmessage); true; }))
+/* StaticAssertDecl is suitable for use at file scope. */
+#define StaticAssertDecl(condition, errmessage) \
+	_Static_assert(condition, errmessage)
 #else							/* !HAVE__STATIC_ASSERT */
 #define StaticAssertStmt(condition, errmessage) \
 	((void) sizeof(struct { int static_assert_failure : (condition) ? 1 : -1; }))
 #define StaticAssertExpr(condition, errmessage) \
 	StaticAssertStmt(condition, errmessage)
+#define StaticAssertDecl(condition, errmessage) \
+	extern void static_assert_func(int static_assert_failure[(condition) ? 1 : -1])
 #endif							/* HAVE__STATIC_ASSERT */
 #else							/* C++ */
 #if defined(__cpp_static_assert) && __cpp_static_assert >= 200410
@@ -864,7 +869,6 @@ extern void ExceptionalCondition(const char *conditionName,
 	((void) ({ StaticAssertStmt(condition, errmessage); }))
 #endif
 #endif							/* C++ */
-
 
 /*
  * Compile-time checks that a variable (or expression) has the specified type.

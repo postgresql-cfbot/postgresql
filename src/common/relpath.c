@@ -36,6 +36,8 @@ const char *const forkNames[] = {
 	"vm",						/* VISIBILITYMAP_FORKNUM */
 	"init"						/* INIT_FORKNUM */
 };
+StaticAssertDecl(lengthof(forkNames) == (MAX_FORKNUM+1),
+	"forkNames array inconsistency");
 
 /*
  * forkname_to_number - look up fork number by name

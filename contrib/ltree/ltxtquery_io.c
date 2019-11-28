@@ -19,6 +19,8 @@ PG_FUNCTION_INFO_V1(ltxtq_out);
 #define WAITOPERAND 1
 #define INOPERAND 2
 #define WAITOPERATOR	3
+#define WAITESCAPED 4
+#define ENDOPERAND 5
 
 /*
  * node of query tree, also used
@@ -78,38 +80,151 @@ gettoken_query(QPRS_STATE *state, int32 *val, int32 *lenval, char **strval, uint
 					(state->buf)++;
 					return OPEN;
 				}
-				else if (ISALNUM(state->buf))
+				else if (charlen == 1 && t_iseq(state->buf, '\\'))
 				{
+					state->state = WAITESCAPED;
+					*strval = state->buf;
+					*lenval = 1;
+					*flag = 0;
+				}
+				else if (t_isspace(state->buf))
+				{
+					/* do nothing */
+				}
+				else
+				{
+					if (charlen == 1 && strchr("{}()|&%*@", *(state->buf)))
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("unquoted special symbol")));
+
 					state->state = INOPERAND;
 					*strval = state->buf;
 					*lenval = charlen;
 					*flag = 0;
+					if (charlen == 1 && t_iseq(state->buf, '"'))
+						*flag |= LVAR_QUOTEDPART;
 				}
-				else if (!t_isspace(state->buf))
-					ereport(ERROR,
-							(errcode(ERRCODE_SYNTAX_ERROR),
-							 errmsg("operand syntax error")));
 				break;
 			case INOPERAND:
-				if (ISALNUM(state->buf))
+			case ENDOPERAND:
+				if (charlen == 1 && t_iseq(state->buf, '"'))
 				{
-					if (*flag)
+					if (state->state == ENDOPERAND)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("escaping syntax error")));
+					else if (*flag & ~LVAR_QUOTEDPART)
 						ereport(ERROR,
 								(errcode(ERRCODE_SYNTAX_ERROR),
 								 errmsg("modifiers syntax error")));
+					else if (*flag & LVAR_QUOTEDPART)
+					{
+						*flag &= ~LVAR_QUOTEDPART;
+						state->state = ENDOPERAND;
+					}
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("escaping syntax error")));
+				}
+				else if ((*flag & LVAR_QUOTEDPART) == 0)
+				{
+					if ((*(state->buf) == '\0') || t_isspace(state->buf))
+					{
+						/* Adjust */
+						if (state->state == ENDOPERAND)
+						{
+							(*strval)++;
+							(*lenval)--;
+						}
+						state->state = WAITOPERATOR;
+						return VAL;
+					}
+
+					if (charlen == 1 && strchr("!{}()|&", *(state->buf)))
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("unquoted special symbol")));
+
+					if (charlen != 1 || (charlen == 1 && !strchr("@%*\\", *(state->buf))))
+					{
+						if (*flag & ~LVAR_QUOTEDPART)
+							ereport(ERROR,
+									(errcode(ERRCODE_SYNTAX_ERROR),
+									 errmsg("modifiers syntax error")));
+
+						*lenval += charlen;
+					}
+					else if (charlen == 1 && t_iseq(state->buf, '%'))
+						*flag |= LVAR_SUBLEXEME;
+					else if (charlen == 1 && t_iseq(state->buf, '@'))
+						*flag |= LVAR_INCASE;
+					else if (charlen == 1 && t_iseq(state->buf, '*'))
+						*flag |= LVAR_ANYEND;
+					else if (charlen == 1 && t_iseq(state->buf, '\\'))
+					{
+						if (*flag & ~LVAR_QUOTEDPART)
+							ereport(ERROR,
+									(errcode(ERRCODE_SYNTAX_ERROR),
+									 errmsg("escaping syntax error")));
+
+						state->state = WAITESCAPED;
+						*lenval += charlen;
+					}
+					else
+					{
+						/* Adjust */
+						if (state->state == ENDOPERAND)
+						{
+							(*strval)++;
+							(*lenval)--;
+						}
+						state->state = WAITOPERATOR;
+						return VAL;
+					}
+				}
+				else if (charlen == 1 && t_iseq(state->buf, '\\'))
+				{
+					if (state->state == ENDOPERAND)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("escaping syntax error")));
+					if (*flag & ~LVAR_QUOTEDPART)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("escaping syntax error")));
+
+					state->state = WAITESCAPED;
 					*lenval += charlen;
 				}
-				else if (charlen == 1 && t_iseq(state->buf, '%'))
-					*flag |= LVAR_SUBLEXEME;
-				else if (charlen == 1 && t_iseq(state->buf, '@'))
-					*flag |= LVAR_INCASE;
-				else if (charlen == 1 && t_iseq(state->buf, '*'))
-					*flag |= LVAR_ANYEND;
 				else
 				{
-					state->state = WAITOPERATOR;
-					return VAL;
+					if (*(state->buf) == '\0' && (*flag & LVAR_QUOTEDPART))
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("escaping syntax error")));
+
+					if (state->state == ENDOPERAND)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("syntax error")));
+					if (*flag & ~LVAR_QUOTEDPART)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("syntax error")));
+					*lenval += charlen;
 				}
+				break;
+			case WAITESCAPED:
+				if (*(state->buf) == '\0')
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("escaping syntax error")));
+				}
+				*lenval += charlen;
+				state->state = INOPERAND;
 				break;
 			case WAITOPERATOR:
 				if (charlen == 1 && (t_iseq(state->buf, '&') || t_iseq(state->buf, '|')))
@@ -137,6 +252,47 @@ gettoken_query(QPRS_STATE *state, int32 *val, int32 *lenval, char **strval, uint
 
 		state->buf += charlen;
 	}
+}
+
+/*
+ * This function is similar to copy_unescaped.
+ * It proceeds total_len bytes from src
+ * Copying all to dst skipping escapes
+ * Returns amount of skipped symbols
+ * */
+static int
+copy_skip_escapes(char *dst, const char *src, int total_len)
+{
+	uint16		copied = 0;
+	int			charlen;
+	bool		escaping = false;
+	int			skipped = 0;
+
+	while (*src && (copied + skipped < total_len))
+	{
+		charlen = pg_mblen(src);
+		if ((charlen == 1) && t_iseq(src, '\\') && escaping == 0)
+		{
+			escaping = 1;
+			src++;
+			skipped++;
+			continue;
+		};
+
+		if (copied + skipped + charlen > total_len)
+			elog(ERROR, "internal error during copying");
+
+		memcpy(dst, src, charlen);
+		src += charlen;
+		dst += charlen;
+		copied += charlen;
+		escaping = 0;
+	}
+
+	if (copied + skipped != total_len)
+		elog(ERROR, "internal error during copying");
+
+	return skipped;
 }
 
 /*
@@ -171,13 +327,17 @@ pushquery(QPRS_STATE *state, int32 type, int32 val, int32 distance, int32 lenval
 static void
 pushval_asis(QPRS_STATE *state, int type, char *strval, int lenval, uint16 flag)
 {
+	int			skipped = 0;
+
+	if (lenval == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("empty labels are forbidden")));
+
 	if (lenval > 0xffff)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("word is too long")));
-
-	pushquery(state, type, ltree_crc32_sz(strval, lenval),
-			  state->curop - state->op, lenval, flag);
 
 	while (state->curop - state->op + lenval + 1 >= state->lenop)
 	{
@@ -187,11 +347,19 @@ pushval_asis(QPRS_STATE *state, int type, char *strval, int lenval, uint16 flag)
 		state->op = (char *) repalloc((void *) state->op, state->lenop);
 		state->curop = state->op + tmp;
 	}
-	memcpy((void *) state->curop, (void *) strval, lenval);
-	state->curop += lenval;
+	skipped = copy_skip_escapes((void *) state->curop, (void *) strval, lenval);
+	if (lenval == skipped)		/* Empty quoted literal */
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("empty labels are forbidden")));
+
+	pushquery(state, type, ltree_crc32_sz(state->curop, lenval - skipped),
+			  state->curop - state->op, lenval - skipped, flag);
+
+	state->curop += lenval - skipped;
 	*(state->curop) = '\0';
 	state->curop++;
-	state->sumlen += lenval + 1;
+	state->sumlen += lenval - skipped + 1;
 	return;
 }
 
@@ -422,14 +590,14 @@ infix(INFIX *in, bool first)
 	if (in->curpol->type == VAL)
 	{
 		char	   *op = in->op + in->curpol->distance;
+		char	   *opend = strchr(op, '\0');
+		int			delta = opend - op;
+		int			extra_bytes = bytes_to_escape(op, delta, ". \\|!%@*{}&()");
 
 		RESIZEBUF(in, in->curpol->length * 2 + 5);
-		while (*op)
-		{
-			*(in->cur) = *op;
-			op++;
-			in->cur++;
-		}
+		copy_level(in->cur, op, delta, extra_bytes);
+		in->cur += delta + extra_bytes;
+
 		if (in->curpol->flag & LVAR_SUBLEXEME)
 		{
 			*(in->cur) = '%';

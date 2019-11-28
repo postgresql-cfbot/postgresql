@@ -45,6 +45,9 @@
 #include "utils/memutils.h"
 
 
+ssl_passphrase_func_cb ssl_passphrase_function = NULL;
+bool ssl_passphrase_function_supports_reload = false;
+
 static int	my_sock_read(BIO *h, char *buf, int size);
 static int	my_sock_write(BIO *h, const char *buf, int size);
 static BIO_METHOD *my_BIO_s_socket(void);
@@ -124,12 +127,16 @@ be_tls_init(bool isServerStart)
 	 */
 	if (isServerStart)
 	{
-		if (ssl_passphrase_command[0])
+		if (ssl_passphrase_function)
+			SSL_CTX_set_default_passwd_cb(context, ssl_passphrase_function);
+		else if (ssl_passphrase_command[0])
 			SSL_CTX_set_default_passwd_cb(context, ssl_external_passwd_cb);
 	}
 	else
 	{
-		if (ssl_passphrase_command[0] && ssl_passphrase_command_supports_reload)
+		if (ssl_passphrase_function && ssl_passphrase_function_supports_reload)
+			SSL_CTX_set_default_passwd_cb(context, ssl_passphrase_function);
+		else if (ssl_passphrase_command[0] && ssl_passphrase_command_supports_reload)
 			SSL_CTX_set_default_passwd_cb(context, ssl_external_passwd_cb);
 		else
 

@@ -287,6 +287,17 @@ extern void be_tls_get_peer_serial(Port *port, char *ptr, size_t len);
 extern char *be_tls_get_certificate_hash(Port *port, size_t *len);
 #endif
 
+/*
+ * ssl_passphrase_function can be filled in by a shared preloaded module
+ * to supply a passphrase for a key file, as can the flag noting whether the
+ * function supports reloading.
+ */
+
+typedef int (* ssl_passphrase_func_cb) (char *buf, int size, int rwflag,
+										void *userdata);
+extern ssl_passphrase_func_cb ssl_passphrase_function;
+extern bool ssl_passphrase_function_supports_reload;
+
 #endif							/* USE_SSL */
 
 #ifdef ENABLE_GSS

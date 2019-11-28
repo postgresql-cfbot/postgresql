@@ -1027,6 +1027,26 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	Oid			relid;
 	HeapTuple	pg_class_tuple;
 	Form_pg_class relp;
+	MemoryContext tmpcxt = NULL;
+	MemoryContext oldcxt = NULL;
+
+	/*
+	 * find the tuple in pg_class corresponding to the given relation id
+	 */
+	pg_class_tuple = ScanPgRelation(targetRelId, true, false);
+
+	/*
+	 * if no such tuple exists, return NULL
+	 */
+	if (!HeapTupleIsValid(pg_class_tuple))
+		return NULL;
+
+	/*
+	 * get information from the pg_class_tuple
+	 */
+	relp = (Form_pg_class) GETSTRUCT(pg_class_tuple);
+	relid = relp->oid;
+	Assert(relid == targetRelId);
 
 	/*
 	 * This function and its subroutines can allocate a good deal of transient
@@ -1039,41 +1059,21 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	 * zero, arrange to allocate the junk in a temporary context that we'll
 	 * free before returning.  Make it a child of caller's context so that it
 	 * will get cleaned up appropriately if we error out partway through.
+	 *
+	 * Partitioned tables are notoriously leaky to build, so we do this for
+	 * them always.
 	 */
+	if ((relp->relkind == RELKIND_PARTITIONED_TABLE)
 #if RECOVER_RELATION_BUILD_MEMORY
-	MemoryContext tmpcxt;
-	MemoryContext oldcxt;
-
-	tmpcxt = AllocSetContextCreate(CurrentMemoryContext,
-								   "RelationBuildDesc workspace",
-								   ALLOCSET_DEFAULT_SIZES);
-	oldcxt = MemoryContextSwitchTo(tmpcxt);
+		|| true
 #endif
-
-	/*
-	 * find the tuple in pg_class corresponding to the given relation id
-	 */
-	pg_class_tuple = ScanPgRelation(targetRelId, true, false);
-
-	/*
-	 * if no such tuple exists, return NULL
-	 */
-	if (!HeapTupleIsValid(pg_class_tuple))
+	   )
 	{
-#if RECOVER_RELATION_BUILD_MEMORY
-		/* Return to caller's context, and blow away the temporary context */
-		MemoryContextSwitchTo(oldcxt);
-		MemoryContextDelete(tmpcxt);
-#endif
-		return NULL;
+		tmpcxt = AllocSetContextCreate(CurrentMemoryContext,
+									   "RelationBuildDesc workspace",
+									   ALLOCSET_DEFAULT_SIZES);
+		oldcxt = MemoryContextSwitchTo(tmpcxt);
 	}
-
-	/*
-	 * get information from the pg_class_tuple
-	 */
-	relp = (Form_pg_class) GETSTRUCT(pg_class_tuple);
-	relid = relp->oid;
-	Assert(relid == targetRelId);
 
 	/*
 	 * allocate storage for the relation descriptor, and copy pg_class_tuple
@@ -1250,11 +1250,16 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	/* It's fully valid */
 	relation->rd_isvalid = true;
 
+	if ((relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 #if RECOVER_RELATION_BUILD_MEMORY
-	/* Return to caller's context, and blow away the temporary context */
-	MemoryContextSwitchTo(oldcxt);
-	MemoryContextDelete(tmpcxt);
+		|| true
 #endif
+	   )
+	{
+		/* Return to caller's context, and blow away the temporary context */
+		MemoryContextSwitchTo(oldcxt);
+		MemoryContextDelete(tmpcxt);
+	}
 
 	return relation;
 }

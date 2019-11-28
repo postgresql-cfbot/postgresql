@@ -337,4 +337,18 @@ extern void DropRelFileNodeLocalBuffers(RelFileNode rnode, ForkNumber forkNum,
 extern void DropRelFileNodeAllLocalBuffers(RelFileNode rnode);
 extern void AtEOXact_LocalBuffers(bool isCommit);
 
+/* in cached_buf.c */
+/* size of array of linked buffer ID's of target relation */
+#define BUF_ID_ARRAY_SIZE	100
+
+extern Size CachedBufShmemSize(void);
+extern void InitCachedBufTable(int size);
+extern void CachedBufTableInsert(RelFileNode *rnode, BlockNumber *blockNum,
+								 int buf_id);
+extern int CachedBufLookup(RelFileNode rnode, ForkNumber *forkNum, int nforks,
+				  int *forknum_indexes, BlockNumber *firstDelBlock,
+				  int *buf_id_array, int size);
+extern void CachedBufTableDelete(RelFileNode *rnode,  BlockNumber *blockNum,
+								 int buf_id);
+
 #endif							/* BUFMGR_INTERNALS_H */

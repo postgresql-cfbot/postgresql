@@ -110,6 +110,7 @@
 #include "access/heaptoast.h"
 #include "access/rewriteheap.h"
 #include "access/transam.h"
+#include "access/visibilitymap.h"
 #include "access/xact.h"
 #include "access/xloginsert.h"
 #include "catalog/catalog.h"
@@ -153,6 +154,11 @@ typedef struct RewriteStateData
 	HTAB	   *rs_old_new_tid_map; /* unmatched B tuples */
 	HTAB	   *rs_logical_mappings;	/* logical remapping files */
 	uint32		rs_num_rewrite_mappings;	/* # in memory mappings */
+	Page		rs_vm_buffer;	/* visibility map page */
+	BlockNumber rs_vm_blockno;	/* block number of visibility page */
+	BlockNumber rs_vm_buffer_valid;	/* T if any bits are set */
+	bool		rs_all_visible;	/* all visible flag for rs_buffer */
+	bool		rs_all_frozen;	/* all frozen flag for rs_buffer */
 }			RewriteStateData;
 
 /*
@@ -214,6 +220,9 @@ typedef struct RewriteMappingDataEntry
 
 
 /* prototypes for internal functions */
+static void rewrite_flush_vm_page(RewriteState state);
+static void rewrite_set_vm_flags(RewriteState state);
+static void rewrite_update_vm_flags(RewriteState state, HeapTuple tuple);
 static void raw_heap_insert(RewriteState state, HeapTuple tup);
 
 /* internal logical remapping prototypes */
@@ -268,6 +277,11 @@ begin_heap_rewrite(Relation old_heap, Relation new_heap, TransactionId oldest_xm
 	state->rs_freeze_xid = freeze_xid;
 	state->rs_cutoff_multi = cutoff_multi;
 	state->rs_cxt = rw_cxt;
+	state->rs_vm_buffer = (Page) palloc(BLCKSZ);
+	state->rs_vm_blockno = HEAPBLK_TO_MAPBLOCK(state->rs_blockno);
+	state->rs_vm_buffer_valid = false;
+	state->rs_all_visible = true;
+	state->rs_all_frozen = true;
 
 	/* Initialize hash tables used to track update chains */
 	memset(&hash_ctl, 0, sizeof(hash_ctl));
@@ -288,6 +302,10 @@ begin_heap_rewrite(Relation old_heap, Relation new_heap, TransactionId oldest_xm
 					128,		/* arbitrary initial size */
 					&hash_ctl,
 					HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
+	RelationOpenSmgr(state->rs_new_rel);
+	if (!smgrexists(state->rs_new_rel->rd_smgr, VISIBILITYMAP_FORKNUM))
+		smgrcreate(state->rs_new_rel->rd_smgr, VISIBILITYMAP_FORKNUM, false);
 
 	MemoryContextSwitchTo(old_cxt);
 
@@ -322,6 +340,9 @@ end_heap_rewrite(RewriteState state)
 	/* Write the last page, if any */
 	if (state->rs_buffer_valid)
 	{
+		if (state->rs_all_visible)
+			PageSetAllVisible(state->rs_buffer);
+
 		if (state->rs_use_wal)
 			log_newpage(&state->rs_new_rel->rd_node,
 						MAIN_FORKNUM,
@@ -334,7 +355,13 @@ end_heap_rewrite(RewriteState state)
 
 		smgrextend(state->rs_new_rel->rd_smgr, MAIN_FORKNUM, state->rs_blockno,
 				   (char *) state->rs_buffer, true);
+
+		rewrite_set_vm_flags(state);
 	}
+
+	/* Write the last VM page too */
+	if (state->rs_vm_buffer_valid)
+		rewrite_flush_vm_page(state);
 
 	/*
 	 * If the rel is WAL-logged, must fsync before commit.  We use heap_sync
@@ -348,12 +375,104 @@ end_heap_rewrite(RewriteState state)
 	 * wrote before the checkpoint.
 	 */
 	if (RelationNeedsWAL(state->rs_new_rel))
-		heap_sync(state->rs_new_rel);
+		heap_sync(state->rs_new_rel, true);
 
 	logical_end_heap_rewrite(state);
 
 	/* Deleting the context frees everything */
 	MemoryContextDelete(state->rs_cxt);
+}
+
+/* Write contents of VM page */
+static void
+rewrite_flush_vm_page(RewriteState state)
+{
+	Assert(state->rs_vm_buffer_valid);
+
+	if (state->rs_use_wal)
+		log_newpage(&state->rs_new_rel->rd_node,
+					VISIBILITYMAP_FORKNUM,
+					state->rs_vm_blockno,
+					state->rs_vm_buffer,
+					true);
+	RelationOpenSmgr(state->rs_new_rel);
+
+	PageSetChecksumInplace(state->rs_vm_buffer, state->rs_vm_blockno);
+
+	smgrextend(state->rs_new_rel->rd_smgr, VISIBILITYMAP_FORKNUM,
+			   state->rs_vm_blockno, (char *) state->rs_vm_buffer, true);
+
+	state->rs_vm_buffer_valid = false;
+}
+
+/* Set VM flags to the VM page */
+static void
+rewrite_set_vm_flags(RewriteState state)
+{
+	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(state->rs_blockno);
+	uint32		mapByte = HEAPBLK_TO_MAPBYTE(state->rs_blockno);
+	uint8		mapOffset = HEAPBLK_TO_OFFSET(state->rs_blockno);
+	char	   *map;
+	uint8		flags;
+
+	if (mapBlock != state->rs_vm_blockno && state->rs_vm_buffer_valid)
+		rewrite_flush_vm_page(state);
+
+	if (!state->rs_vm_buffer_valid)
+	{
+		PageInit(state->rs_vm_buffer, BLCKSZ, 0);
+		state->rs_vm_blockno = mapBlock;
+		state->rs_vm_buffer_valid = true;
+	}
+
+	flags = (state->rs_all_visible ? VISIBILITYMAP_ALL_VISIBLE : 0) |
+			(state->rs_all_frozen ? VISIBILITYMAP_ALL_FROZEN : 0);
+
+	map = PageGetContents(state->rs_vm_buffer);
+	map[mapByte] |= (flags << mapOffset);
+}
+
+/*
+ * Update rs_all_visible and rs_all_frozen flags according to the tuple.  We
+ * use simplified check assuming that HeapTupleSatisfiesVacuum() should already
+ * set tuple hint bits.
+ */
+static void
+rewrite_update_vm_flags(RewriteState state, HeapTuple tuple)
+{
+	TransactionId	xmin;
+
+	if (!state->rs_all_visible)
+		return;
+
+	if (!HeapTupleHeaderXminCommitted(tuple->t_data))
+	{
+		state->rs_all_visible = false;
+		state->rs_all_frozen = false;
+		return;
+	}
+
+	xmin = HeapTupleHeaderGetXmin(tuple->t_data);
+	if (!TransactionIdPrecedes(xmin, state->rs_oldest_xmin))
+	{
+		state->rs_all_visible = false;
+		state->rs_all_frozen = false;
+		return;
+	}
+
+	if (!(tuple->t_data->t_infomask & HEAP_XMAX_INVALID) &&
+		!HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_data->t_infomask))
+	{
+		state->rs_all_visible = false;
+		state->rs_all_frozen = false;
+		return;
+	}
+
+	if (!state->rs_all_frozen)
+		return;
+
+	if (heap_tuple_needs_eventual_freeze(tuple->t_data))
+		state->rs_all_frozen = false;
 }
 
 /*
@@ -482,6 +601,7 @@ rewrite_heap_tuple(RewriteState state,
 
 		/* Insert the tuple and find out where it's put in new_heap */
 		raw_heap_insert(state, new_tuple);
+		rewrite_update_vm_flags(state, new_tuple);
 		new_tid = new_tuple->t_self;
 
 		logical_rewrite_heap_tuple(state, old_tid, new_tuple);
@@ -686,6 +806,9 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 		{
 			/* Doesn't fit, so write out the existing page */
 
+			if (state->rs_all_visible)
+				PageSetAllVisible(page);
+
 			/* XLOG stuff */
 			if (state->rs_use_wal)
 				log_newpage(&state->rs_new_rel->rd_node,
@@ -705,6 +828,8 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 
 			smgrextend(state->rs_new_rel->rd_smgr, MAIN_FORKNUM,
 					   state->rs_blockno, (char *) page, true);
+
+			rewrite_set_vm_flags(state);
 
 			state->rs_blockno++;
 			state->rs_buffer_valid = false;

@@ -166,7 +166,7 @@ extern void simple_heap_delete(Relation relation, ItemPointer tid);
 extern void simple_heap_update(Relation relation, ItemPointer otid,
 							   HeapTuple tup);
 
-extern void heap_sync(Relation relation);
+extern void heap_sync(Relation relation, bool sync_vm);
 
 extern TransactionId heap_compute_xid_horizon_for_tuples(Relation rel,
 														 ItemPointerData *items,

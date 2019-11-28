@@ -563,7 +563,7 @@ heapam_finish_bulk_insert(Relation relation, int options)
 	 * indexes since those use WAL anyway / don't go through tableam)
 	 */
 	if (options & HEAP_INSERT_SKIP_WAL)
-		heap_sync(relation);
+		heap_sync(relation, false);
 }
 
 

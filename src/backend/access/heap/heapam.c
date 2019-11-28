@@ -8935,7 +8935,7 @@ heap2_redo(XLogReaderState *record)
  * to be done here.)
  */
 void
-heap_sync(Relation rel)
+heap_sync(Relation rel, bool sync_vm)
 {
 	/* non-WAL-logged tables never need fsync */
 	if (!RelationNeedsWAL(rel))
@@ -8945,6 +8945,8 @@ heap_sync(Relation rel)
 	FlushRelationBuffers(rel);
 	/* FlushRelationBuffers will have opened rd_smgr */
 	smgrimmedsync(rel->rd_smgr, MAIN_FORKNUM);
+	if (sync_vm)
+		smgrimmedsync(rel->rd_smgr, VISIBILITYMAP_FORKNUM);
 
 	/* FSM is not critical, don't bother syncing it */
 

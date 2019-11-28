@@ -135,6 +135,13 @@ my %pgdump_runs = (
 			"$tempdir/defaults_tar_format.tar",
 		],
 	},
+	include_foreign_data => {
+		dump_cmd => [
+			'pg_dump',
+			'--include-foreign-data=test_pg_dump_fdw_server',
+			"--file=$tempdir/include_foreign_data.sql",
+		],
+	},
 	pg_dumpall_globals => {
 		dump_cmd => [
 			'pg_dumpall',                             '--no-sync',
@@ -220,6 +227,7 @@ my %full_runs = (
 	createdb        => 1,
 	defaults        => 1,
 	no_privs        => 1,
+	include_foreign_data => 1,
 	no_owner        => 1,);
 
 my %tests = (
@@ -537,6 +545,55 @@ my %tests = (
 			schema_only      => 1,
 			section_pre_data => 1,
 		},
+	},
+
+	'CREATE EXTENSION test_pg_dump_fdw' => {
+		create_order => 2,
+		create_sql   => 'CREATE EXTENSION test_pg_dump_fdw;',
+		regexp => qr/^
+			\QCREATE EXTENSION IF NOT EXISTS test_pg_dump_fdw WITH SCHEMA public;\E
+			\n/xm,
+		like => {
+			%full_runs,
+			include_foreign_data => 1,
+			schema_only => 1,
+			section_pre_data => 1,
+		},
+		unlike => { binary_upgrade => 1, },
+	},
+
+	'CREATE SERVER test_pg_dump_fdw_server FOREIGN DATA WRAPPER test_pg_dump_fdw' => {
+		create_order => 3,
+		create_sql   => 'CREATE SERVER test_pg_dump_fdw_server FOREIGN DATA WRAPPER test_pg_dump_fdw;',
+		regexp => qr/^
+			\QCREATE SERVER test_pg_dump_fdw_server FOREIGN DATA WRAPPER test_pg_dump_fdw;\E
+			\n/xm,
+		like => {
+			%full_runs,
+			include_foreign_data => 1,
+			schema_only => 1,
+			section_pre_data => 1,
+		},
+	},
+
+	'include foreign data' => {
+		create_order => 9,
+		create_sql => 'CREATE FOREIGN TABLE t (a INTEGER, b INTEGER) SERVER test_pg_dump_fdw_server;',
+		regexp => qr/^
+			\QCOPY public.t (a, b) FROM stdin;\E\n
+			\Q0	0\E\n
+			\Q1	1\E\n
+			\Q2	2\E\n
+			\Q3	3\E\n
+			\Q4	4\E\n
+			\Q5	5\E\n
+			\Q6	6\E\n
+			\Q7	7\E\n
+			\Q8	8\E\n
+			\Q9	9\E\n
+			\Q10	10\E\n
+			/xm,
+		like => { include_foreign_data => 1, },
 	},);
 
 #########################################

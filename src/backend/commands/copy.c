@@ -24,6 +24,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "access/printtup.h"
 #include "catalog/dependency.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
@@ -48,7 +49,9 @@
 #include "port/pg_bswap.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/fd.h"
+#include "storage/lmgr.h"
 #include "tcop/tcopprot.h"
+#include "tcop/pquery.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -153,6 +156,7 @@ typedef struct CopyStateData
 	List	   *convert_select; /* list of column names (can be NIL) */
 	bool	   *convert_select_flags;	/* per-column CSV/TEXT CS flags */
 	Node	   *whereClause;	/* WHERE condition (or NULL) */
+	int			error_limit;	/* total number of error to ignore */
 
 	/* these are just for error messages, see CopyFromErrorCallback */
 	const char *cur_relname;	/* table name for error messages */
@@ -182,6 +186,9 @@ typedef struct CopyStateData
 	bool		volatile_defexprs;	/* is any of defexprs volatile? */
 	List	   *range_table;
 	ExprState  *qualexpr;
+	bool		ignore_error;	/* is ignore error specified? */
+	bool		ignore_all_error;	/* is error_limit -1 (ignore all error)
+									 * specified? */
 
 	TransitionCaptureState *transition_capture;
 
@@ -836,7 +843,7 @@ CopyLoadRawBuf(CopyState cstate)
 void
 DoCopy(ParseState *pstate, const CopyStmt *stmt,
 	   int stmt_location, int stmt_len,
-	   uint64 *processed)
+	   uint64 *processed, DestReceiver *dest)
 {
 	CopyState	cstate;
 	bool		is_from = stmt->is_from;
@@ -1067,7 +1074,7 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 		cstate = BeginCopyFrom(pstate, rel, stmt->filename, stmt->is_program,
 							   NULL, stmt->attlist, stmt->options);
 		cstate->whereClause = whereClause;
-		*processed = CopyFrom(cstate);	/* copy from file to database */
+		*processed = CopyFrom(cstate, dest);	/* copy from file to database */
 		EndCopyFrom(cstate);
 	}
 	else
@@ -1289,6 +1296,18 @@ ProcessCopyOptions(ParseState *pstate,
 								defel->defname),
 						 parser_errposition(pstate, defel->location)));
 		}
+		else if (strcmp(defel->defname, "error_limit") == 0)
+		{
+			if (cstate->ignore_error)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
+			cstate->error_limit = defGetInt64(defel);
+			cstate->ignore_error = true;
+			if (cstate->error_limit == -1)
+				cstate->ignore_all_error = true;
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -1439,6 +1458,10 @@ ProcessCopyOptions(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("CSV quote character must not appear in the NULL specification")));
+	if (cstate->ignore_error && !cstate->is_copy_from)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("ERROR LIMIT only available using COPY FROM")));
 }
 
 /*
@@ -2652,7 +2675,7 @@ CopyMultiInsertInfoStore(CopyMultiInsertInfo *miinfo, ResultRelInfo *rri,
  * Copy FROM file to relation.
  */
 uint64
-CopyFrom(CopyState cstate)
+CopyFrom(CopyState cstate, DestReceiver *dest)
 {
 	ResultRelInfo *resultRelInfo;
 	ResultRelInfo *target_resultRelInfo;
@@ -2674,6 +2697,7 @@ CopyFrom(CopyState cstate)
 	bool		has_before_insert_row_trig;
 	bool		has_instead_insert_row_trig;
 	bool		leafpart_use_multi_insert = false;
+	Portal		portal = NULL;
 
 	Assert(cstate->rel);
 
@@ -2837,7 +2861,19 @@ CopyFrom(CopyState cstate)
 	/* Verify the named relation is a valid target for INSERT */
 	CheckValidResultRel(resultRelInfo, CMD_INSERT);
 
-	ExecOpenIndices(resultRelInfo, false);
+	if (cstate->ignore_error)
+	{
+		TupleDesc	tupDesc;
+
+		ExecOpenIndices(resultRelInfo, true);
+		tupDesc = RelationGetDescr(cstate->rel);
+
+		portal = GetPortalByName("");
+		SetRemoteDestReceiverParams(dest, portal);
+		dest->rStartup(dest, (int) CMD_SELECT, tupDesc);
+	}
+	else
+		ExecOpenIndices(resultRelInfo, false);
 
 	estate->es_result_relations = resultRelInfo;
 	estate->es_num_result_relations = 1;
@@ -2939,6 +2975,13 @@ CopyFrom(CopyState cstate)
 		 * Can't support multi-inserts if there are any volatile function
 		 * expressions in WHERE clause.  Similarly to the trigger case above,
 		 * such expressions may query the table we're inserting into.
+		 */
+		insertMethod = CIM_SINGLE;
+	}
+	else if (cstate->ignore_error)
+	{
+		/*
+		 * Can't support speculative insertion in multi-inserts.
 		 */
 		insertMethod = CIM_SINGLE;
 	}
@@ -3284,6 +3327,63 @@ CopyFrom(CopyState cstate)
 						 * evaluating them.
 						 */
 						myslot->tts_tableOid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+					}
+					else if ((cstate->error_limit > 0 || cstate->ignore_all_error) && resultRelInfo->ri_NumIndices > 0)
+					{
+						/* Perform a speculative insertion. */
+						uint32		specToken;
+						ItemPointerData conflictTid;
+						bool		specConflict;
+
+						/*
+						 * Do a non-conclusive check for conflicts first.
+						 */
+						specConflict = false;
+
+						if (!ExecCheckIndexConstraints(myslot, estate, &conflictTid,
+													   NIL))
+						{
+							(void) dest->receiveSlot(myslot, dest);
+							cstate->error_limit--;
+							continue;
+						}
+
+						/*
+						 * Acquire our speculative insertion lock.
+						 */
+						specToken = SpeculativeInsertionLockAcquire(GetCurrentTransactionId());
+
+						/* insert the tuple, with the speculative token */
+						table_tuple_insert_speculative(resultRelInfo->ri_RelationDesc, myslot,
+													   estate->es_output_cid,
+													   0,
+													   NULL,
+													   specToken);
+
+						/* insert index entries for tuple */
+						recheckIndexes = ExecInsertIndexTuples(myslot, estate, true,
+															   &specConflict,
+															   NIL);
+
+						/* adjust the tuple's state accordingly */
+						table_tuple_complete_speculative(resultRelInfo->ri_RelationDesc, myslot,
+														 specToken, !specConflict);
+
+						/*
+						 * Wake up anyone waiting for our decision.
+						 */
+						SpeculativeInsertionLockRelease(GetCurrentTransactionId());
+
+						/*
+						 * If there was a conflict, return it and preceded to
+						 * the next record if there are any.
+						 */
+						if (specConflict)
+						{
+							(void) dest->receiveSlot(myslot, dest);
+							cstate->error_limit--;
+							continue;
+						}
 					}
 					else
 					{
@@ -3702,7 +3802,7 @@ NextCopyFrom(CopyState cstate, ExprContext *econtext,
 	/* Initialize all values for row to NULL */
 	MemSet(values, 0, num_phys_attrs * sizeof(Datum));
 	MemSet(nulls, true, num_phys_attrs * sizeof(bool));
-
+next_line:
 	if (!cstate->binary)
 	{
 		char	  **field_strings;
@@ -3717,9 +3817,21 @@ NextCopyFrom(CopyState cstate, ExprContext *econtext,
 
 		/* check for overflowing fields */
 		if (attr_count > 0 && fldct > attr_count)
-			ereport(ERROR,
-					(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-					 errmsg("extra data after last expected column")));
+		{
+			if (cstate->error_limit > 0 || cstate->ignore_all_error)
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("skipping \"%s\" --- extra data after last expected column",
+								cstate->line_buf.data)));
+				cstate->error_limit--;
+				goto next_line;
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("extra data after last expected column")));
+		}
 
 		fieldno = 0;
 
@@ -3731,10 +3843,22 @@ NextCopyFrom(CopyState cstate, ExprContext *econtext,
 			Form_pg_attribute att = TupleDescAttr(tupDesc, m);
 
 			if (fieldno >= fldct)
-				ereport(ERROR,
-						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-						 errmsg("missing data for column \"%s\"",
-								NameStr(att->attname))));
+			{
+				if (cstate->error_limit > 0 || cstate->ignore_all_error)
+				{
+					ereport(WARNING,
+							(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+							 errmsg("skipping \"%s\" --- missing data for column \"%s\"",
+									cstate->line_buf.data, NameStr(att->attname))));
+					cstate->error_limit--;
+					goto next_line;
+				}
+				else
+					ereport(ERROR,
+							(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+							 errmsg("missing data for column \"%s\"",
+									NameStr(att->attname))));
+			}
 			string = field_strings[fieldno++];
 
 			if (cstate->convert_select_flags &&
@@ -3821,10 +3945,23 @@ NextCopyFrom(CopyState cstate, ExprContext *econtext,
 		}
 
 		if (fld_count != attr_count)
-			ereport(ERROR,
-					(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-					 errmsg("row field count is %d, expected %d",
-							(int) fld_count, attr_count)));
+		{
+			if (cstate->error_limit > 0 || cstate->ignore_all_error)
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("skipping \"%s\" --- row field count is %d, expected %d",
+								cstate->line_buf.data, (int) fld_count, attr_count)));
+				cstate->error_limit--;
+				goto next_line;
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("row field count is %d, expected %d",
+								(int) fld_count, attr_count)));
+
+		}
 
 		i = 0;
 		foreach(cur, cstate->attnumlist)

@@ -556,6 +556,10 @@ DROP ROLE doomed_role;
        <entry>Allow executing programs on the database server as the user the database runs as with
        COPY and other functions which allow executing a server-side program.</entry>
       </row>
+      <row>
+       <entry>pg_install_trusted_extension</entry>
+       <entry>Allow installation of <quote>trusted</quote> extensions.</entry>
+      </row>
      </tbody>
     </tgroup>
    </table>
@@ -586,6 +590,17 @@ DROP ROLE doomed_role;
   the server file system, they bypass all database-level permission checks when accessing files
   directly and they could be used to gain superuser-level access, therefore
   great care should be taken when granting these roles to users.
+  </para>
+
+  <para>
+  The <literal>pg_install_trusted_extension</literal> role allows grantees
+  to install <link linkend="extend-extensions">extensions</link> that are
+  marked <quote>trusted</quote> in their control files.  This is a
+  privilege that is available automatically to database owners, but
+  granting this role allows administrators to let other non-superuser roles
+  do it too.  Generally, unless the <quote>trusted</quote> marking has been
+  applied to extensions incautiously, granting this role carries no large
+  security risk.
   </para>
 
   <para>

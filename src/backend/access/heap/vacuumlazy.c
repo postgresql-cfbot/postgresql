@@ -130,8 +130,8 @@ typedef struct LVRelStats
 	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
 	/* List of TIDs of tuples we intend to delete */
 	/* NB: this list is ordered by TID address */
-	int			num_dead_tuples;	/* current # of entries */
-	int			max_dead_tuples;	/* # slots allocated in array */
+	size_t		num_dead_tuples;	/* current # of entries */
+	size_t		max_dead_tuples;	/* # slots allocated in array */
 	ItemPointer dead_tuples;	/* array of ItemPointerData */
 	int			num_index_scans;
 	TransactionId latestRemovedXid;
@@ -161,8 +161,8 @@ static void lazy_vacuum_index(Relation indrel,
 static void lazy_cleanup_index(Relation indrel,
 							   IndexBulkDeleteResult *stats,
 							   LVRelStats *vacrelstats);
-static int	lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
-							 int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer);
+static size_t lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
+							   size_t tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer);
 static bool should_attempt_truncation(VacuumParams *params,
 									  LVRelStats *vacrelstats);
 static void lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats);
@@ -1525,7 +1525,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 static void
 lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 {
-	int			tupindex;
+	size_t		tupindex;
 	int			npages;
 	PGRUsage	ru0;
 	Buffer		vmbuffer = InvalidBuffer;
@@ -1571,7 +1571,7 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 	}
 
 	ereport(elevel,
-			(errmsg("\"%s\": removed %d row versions in %d pages",
+			(errmsg("\"%s\": removed %zu row versions in %d pages",
 					RelationGetRelationName(onerel),
 					tupindex, npages),
 			 errdetail_internal("%s", pg_rusage_show(&ru0))));
@@ -1587,9 +1587,9 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
  * tuple for this page.  We assume the rest follow sequentially.
  * The return value is the first tupindex after the tuples of this page.
  */
-static int
+static size_t
 lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
-				 int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer)
+				 size_t tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer)
 {
 	Page		page = BufferGetPage(buffer);
 	OffsetNumber unused[MaxOffsetNumber];
@@ -1762,7 +1762,7 @@ lazy_vacuum_index(Relation indrel,
 							   lazy_tid_reaped, (void *) vacrelstats);
 
 	ereport(elevel,
-			(errmsg("scanned index \"%s\" to remove %d row versions",
+			(errmsg("scanned index \"%s\" to remove %zu row versions",
 					RelationGetRelationName(indrel),
 					vacrelstats->num_dead_tuples),
 			 errdetail_internal("%s", pg_rusage_show(&ru0))));
@@ -2141,7 +2141,7 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
 static void
 lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 {
-	long		maxtuples;
+	int64		maxtuples;
 	int			vac_work_mem = IsAutoVacuumWorkerProcess() &&
 	autovacuum_work_mem != -1 ?
 	autovacuum_work_mem : maintenance_work_mem;
@@ -2149,12 +2149,9 @@ lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 	if (vacrelstats->useindex)
 	{
 		maxtuples = (vac_work_mem * 1024L) / sizeof(ItemPointerData);
-		maxtuples = Min(maxtuples, INT_MAX);
-		maxtuples = Min(maxtuples, MaxAllocSize / sizeof(ItemPointerData));
-
-		/* curious coding here to ensure the multiplication can't overflow */
-		if ((BlockNumber) (maxtuples / LAZY_ALLOC_TUPLES) > relblocks)
-			maxtuples = relblocks * LAZY_ALLOC_TUPLES;
+		maxtuples = Min(maxtuples, SIZE_MAX);
+		maxtuples = Min(maxtuples, MaxAllocHugeSize / sizeof(ItemPointerData));
+		maxtuples = Min(maxtuples, (int64) relblocks * LAZY_ALLOC_TUPLES);
 
 		/* stay sane if small maintenance_work_mem */
 		maxtuples = Max(maxtuples, MaxHeapTuplesPerPage);
@@ -2165,9 +2162,10 @@ lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 	}
 
 	vacrelstats->num_dead_tuples = 0;
-	vacrelstats->max_dead_tuples = (int) maxtuples;
+	vacrelstats->max_dead_tuples = (size_t) maxtuples;
 	vacrelstats->dead_tuples = (ItemPointer)
-		palloc(maxtuples * sizeof(ItemPointerData));
+		MemoryContextAllocHuge(CurrentMemoryContext,
+							   maxtuples * sizeof(ItemPointerData));
 }
 
 /*

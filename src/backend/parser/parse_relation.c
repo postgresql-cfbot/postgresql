@@ -1270,6 +1270,7 @@ addRangeTableEntry(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->scanCols = NULL;
 	rte->extraUpdatedCols = NULL;
 
 	/*
@@ -1342,6 +1343,7 @@ addRangeTableEntryForRelation(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->scanCols = NULL;
 	rte->extraUpdatedCols = NULL;
 
 	/*
@@ -1422,6 +1424,7 @@ addRangeTableEntryForSubquery(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->scanCols = NULL;
 	rte->extraUpdatedCols = NULL;
 
 	/*
@@ -1686,6 +1689,7 @@ addRangeTableEntryForFunction(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->scanCols = NULL;
 	rte->extraUpdatedCols = NULL;
 
 	/*
@@ -1750,6 +1754,7 @@ addRangeTableEntryForTableFunc(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->scanCols = NULL;
 	rte->extraUpdatedCols = NULL;
 
 	/*
@@ -1829,6 +1834,7 @@ addRangeTableEntryForValues(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->scanCols = NULL;
 	rte->extraUpdatedCols = NULL;
 
 	/*
@@ -1900,6 +1906,7 @@ addRangeTableEntryForJoin(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->scanCols = NULL;
 	rte->extraUpdatedCols = NULL;
 
 	/*
@@ -2003,6 +2010,7 @@ addRangeTableEntryForCTE(ParseState *pstate,
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
+	rte->scanCols = NULL;
 	rte->extraUpdatedCols = NULL;
 
 	/*
@@ -2109,6 +2117,7 @@ addRangeTableEntryForENR(ParseState *pstate,
 	rte->requiredPerms = 0;
 	rte->checkAsUser = InvalidOid;
 	rte->selectedCols = NULL;
+	rte->scanCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, but not to join list

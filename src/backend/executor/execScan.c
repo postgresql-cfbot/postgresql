@@ -20,6 +20,7 @@
 
 #include "executor/executor.h"
 #include "miscadmin.h"
+#include "nodes/nodeFuncs.h"
 #include "utils/memutils.h"
 
 
@@ -339,4 +340,66 @@ ExecScanReScan(ScanState *node)
 			}
 		}
 	}
+}
+
+typedef struct neededColumnContext
+{
+	Bitmapset **mask;
+	int n;
+} neededColumnContext;
+
+static bool
+neededColumnContextWalker(Node *node, neededColumnContext *c)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Var))
+	{
+		Var *var = (Var *)node;
+
+		if (var->varattno >= 0)
+		{
+			Assert(var->varattno <= c->n);
+			*(c->mask) = bms_add_member(*(c->mask), var->varattno);
+		}
+
+		return false;
+	}
+	return expression_tree_walker(node, neededColumnContextWalker, (void * )c);
+}
+
+/*
+ * n specifies the number of allowed entries in mask: we use
+ * it for bounds-checking in the walker above.
+ */
+void
+PopulateNeededColumnsForNode(Node *expr, int n, Bitmapset **scanCols)
+{
+	neededColumnContext c;
+
+	c.mask = scanCols;
+	c.n = n;
+
+	neededColumnContextWalker(expr, &c);
+}
+
+Bitmapset *
+PopulateNeededColumnsForScan(ScanState *scanstate, int ncol)
+{
+	Bitmapset *result = NULL;
+	Plan	   *plan = scanstate->ps.plan;
+
+	PopulateNeededColumnsForNode((Node *) plan->targetlist, ncol, &result);
+	PopulateNeededColumnsForNode((Node *) plan->qual, ncol, &result);
+
+	if (IsA(plan, IndexScan))
+	{
+		PopulateNeededColumnsForNode((Node *) ((IndexScan *) plan)->indexqualorig, ncol, &result);
+		PopulateNeededColumnsForNode((Node *) ((IndexScan *) plan)->indexorderbyorig, ncol, &result);
+	}
+	else if (IsA(plan, BitmapHeapScan))
+		PopulateNeededColumnsForNode((Node *) ((BitmapHeapScan *) plan)->bitmapqualorig, ncol, &result);
+
+	return result;
 }

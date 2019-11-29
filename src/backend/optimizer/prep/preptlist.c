@@ -191,7 +191,7 @@ preprocess_targetlist(PlannerInfo *root)
 	 * belong to the result rel don't need to be added, because they will be
 	 * made to refer to the actual heap tuple.
 	 */
-	if (parse->returningList && list_length(parse->rtable) > 1)
+	if (result_relation && parse->returningList && list_length(parse->rtable) > 1)
 	{
 		List	   *vars;
 		ListCell   *l;

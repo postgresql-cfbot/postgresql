@@ -1099,7 +1099,14 @@ typedef struct RangeTblEntry
 	Bitmapset  *insertedCols;	/* columns needing INSERT permission */
 	Bitmapset  *updatedCols;	/* columns needing UPDATE permission */
 	Bitmapset  *extraUpdatedCols;	/* generated columns being updated */
+	/*
+	 * Columns to be scanned.
+	 * If the 0th element is set due to varattno == 0
+	 * that means all columns must be scanned, so handle this at scan-time
+	 */
+	Bitmapset  *scanCols;
 	List	   *securityQuals;	/* security barrier quals to apply, if any */
+
 } RangeTblEntry;
 
 /*

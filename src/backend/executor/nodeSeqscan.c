@@ -65,6 +65,30 @@ SeqNext(SeqScanState *node)
 	if (scandesc == NULL)
 	{
 		/*
+		 * Print used cols extracted during planning as well as
+		 * used cols extracted now from the ScanState
+		 */
+		int plan_col_num;
+		Bitmapset *execution_cols = NULL;
+		Scan *planNode = (Scan *)node->ss.ps.plan;
+		int ncols = node->ss.ss_currentRelation->rd_att->natts;
+		int rti = planNode->scanrelid;
+		RangeTblEntry *rangeTblEntry = list_nth(estate->es_plannedstmt->rtable, rti - 1);
+
+		Bitmapset *plan_cols = rangeTblEntry->scanCols;
+#ifdef USE_ASSERT_CHECKING
+		while ((plan_col_num = bms_next_member(plan_cols, ncols)) >= 0)
+			Assert(plan_col_num <= ncols);
+#endif
+		execution_cols = PopulateNeededColumnsForScan(&node->ss, ncols);
+
+		if (bms_is_empty(bms_difference(plan_cols, execution_cols)) == false)
+			elog(NOTICE, "table: %s.\n exec-time cols: %s\n plan-time cols: %s",
+				RelationGetRelationName(node->ss.ss_currentRelation),
+				bmsToString(execution_cols),
+				bmsToString(plan_cols));
+
+		/*
 		 * We reach here if the scan is not parallel, or if we're serially
 		 * executing a scan that was planned to be parallel.
 		 */

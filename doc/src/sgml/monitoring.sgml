@@ -2113,7 +2113,14 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
     <row>
      <entry><structfield>slot_name</structfield></entry>
      <entry><type>text</type></entry>
-     <entry>Replication slot name used by this WAL receiver</entry>
+     <entry>
+      Replication slot name used by this WAL receiver.  This is only set if a
+      permanent replication slot is set using <xref
+      linkend="guc-primary-slot-name"/>.  Otherwise, the WAL receiver may use
+      a temporary replication slot (determined by <xref
+      linkend="guc-wal-receiver-create-temp-slot"/>), but these are not shown
+      here.
+     </entry>
     </row>
     <row>
      <entry><structfield>sender_host</structfield></entry>

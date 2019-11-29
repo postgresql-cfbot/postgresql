@@ -73,6 +73,7 @@
 
 
 /* GUC variables */
+bool		wal_receiver_create_temp_slot;
 int			wal_receiver_status_interval;
 int			wal_receiver_timeout;
 bool		hot_standby_feedback;
@@ -344,6 +345,19 @@ WalReceiverMain(void)
 		 * can.
 		 */
 		WalRcvFetchTimeLineHistoryFiles(startpointTLI, primaryTLI);
+
+		/*
+		 * Create temporary replication slot if no slot name is configured,
+		 * unless disabled.  Note that we don't copy the slot name into shared
+		 * memory, since it will go away when this walreceiver session ends.
+		 */
+		if (slotname[0] == '\0' && wal_receiver_create_temp_slot)
+		{
+			snprintf(slotname, sizeof(slotname),
+					 "pg_walreceiver_%d", walrcv_get_backend_pid(wrconn));
+
+			walrcv_create_slot(wrconn, slotname, true, 0, NULL);
+		}
 
 		/*
 		 * Start streaming.

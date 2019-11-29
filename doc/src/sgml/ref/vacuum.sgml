@@ -34,6 +34,7 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     SKIP_LOCKED [ <replaceable class="parameter">boolean</replaceable> ]
     INDEX_CLEANUP [ <replaceable class="parameter">boolean</replaceable> ]
     TRUNCATE [ <replaceable class="parameter">boolean</replaceable> ]
+    RESUME [ <replaceable class="parameter">boolean</replaceable> ]
 
 <phrase>and <replaceable class="parameter">table_and_columns</replaceable> is:</phrase>
 
@@ -219,6 +220,23 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
       <literal>ACCESS EXCLUSIVE</literal> lock on the table that
       the truncation requires. This option is ignored if the
       <literal>FULL</literal> option is used.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>RESUME</literal></term>
+    <listitem>
+     <para>
+      Specifies that <command>VACUUM</command> should attempt to
+      resume vacuuming from the last vacuumed block saved at
+      <literal>vacuum_resume_block</literal> column of
+      <xref linkend="pg-stat-all-tables-view"/>. This behavior is helpful
+      when resuming vacuum run from interruption and cancellation. The default
+      is false unless the <literal>vacuum_resume</literal> option has been
+      set to true. This option is ignored if either the <literal>FULL</literal>,
+      <literal>FREEZE</literal>, or <literal>DISABLE_PAGE_SKIPPING</literal>
+      option is used.
      </para>
     </listitem>
    </varlistentry>

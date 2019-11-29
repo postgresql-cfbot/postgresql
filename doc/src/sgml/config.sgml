@@ -7004,6 +7004,21 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+    <varlistentry id="guc-track-statement-statistics" xreflabel="track_statement_statistics">
+    <term><varname>track_statement_statistics</varname> (<type>boolean</type>)
+    <indexterm>
+    <primary><varname>track_statement_statistics</varname> configuration parameter</primary>
+    </indexterm>
+    </term>
+    <listitem>
+    <para>
+        Enables collection of different SQL statement statistics that are
+        executed on the instance. This parameter is off by default. Only
+        superusers can change this setting.
+    </para>
+    </listitem>
+    </varlistentry>
+
      <varlistentry id="guc-stats-temp-directory" xreflabel="stats_temp_directory">
       <term><varname>stats_temp_directory</varname> (<type>string</type>)
       <indexterm>

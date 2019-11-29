@@ -1063,6 +1063,7 @@ exec_simple_query(const char *query_string)
 		RawStmt    *parsetree = lfirst_node(RawStmt, parsetree_item);
 		bool		snapshot_set = false;
 		const char *commandTag;
+		StatSqlType eSqlType;
 		char		completionTag[COMPLETION_TAG_BUFSIZE];
 		MemoryContext per_parsetree_context = NULL;
 		List	   *querytree_list,
@@ -1077,8 +1078,7 @@ exec_simple_query(const char *query_string)
 		 * do any special start-of-SQL-command processing needed by the
 		 * destination.
 		 */
-		commandTag = CreateCommandTag(parsetree->stmt);
-
+		commandTag = CreateCommandTagType(parsetree->stmt, &eSqlType);
 		set_ps_display(commandTag, false);
 
 		BeginCommand(commandTag, dest);
@@ -1233,6 +1233,12 @@ exec_simple_query(const char *query_string)
 		receiver->rDestroy(receiver);
 
 		PortalDrop(portal, false);
+
+		/*
+		 * Count SQL statement for pg_stat_sql view
+		 */
+		if (pgstat_track_statement_statistics)
+			pgstat_count_sqlstmt(eSqlType);
 
 		if (lnext(parsetree_list, parsetree_item) == NULL)
 		{
@@ -2117,6 +2123,14 @@ exec_execute_message(const char *portal_name, long max_rows)
 						  completionTag);
 
 	receiver->rDestroy(receiver);
+
+	/*
+	 * Count SQL Statement for pgx_stat_sql
+	 */
+	if (pgstat_track_statement_statistics && !execute_is_fetch)
+	{
+		pgstat_count_sqlstmt(T_Stat_EXECUTE);
+	}
 
 	if (completed)
 	{

@@ -4,6 +4,30 @@
 -- Must be run after tenk2 has been created (by create_table),
 -- populated (by create_misc) and indexed (by create_index).
 --
+-- pg_stat_sql
+SET track_statement_statistics TO OFF;
+SELECT pg_stat_reset_shared('sqlstmt'); -- reset the counters
+
+SELECT pg_sleep(1.0);
+SELECT * FROM pg_stat_sql where tag='SELECT';
+
+SET track_statement_statistics TO ON;
+
+CREATE TABLE t1 (c1 int);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t1 VALUES(1);
+DELETE FROM t1;
+SELECT * FROM pg_stat_sql;
+
+SELECT pg_sleep(1.0);
+SELECT * FROM pg_stat_sql where tag='SELECT';
+
+SET track_statement_statistics TO OFF;
+SELECT pg_stat_reset_shared('sqlstmt'); -- reset the counters
+
+SELECT pg_sleep(1.0);
+SELECT * FROM pg_stat_sql where tag='SELECT';
 
 -- conditio sine qua non
 SHOW track_counts;  -- must be on

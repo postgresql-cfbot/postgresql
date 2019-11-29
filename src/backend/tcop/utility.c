@@ -85,6 +85,193 @@ static void ProcessUtilitySlow(ParseState *pstate,
 							   char *completionTag);
 static void ExecDropStmt(DropStmt *stmt, bool isTopLevel);
 
+const char* g_str_sql_type[] =
+{
+	[T_Stat_INSERT] = "INSERT",
+	[T_Stat_DELETE] = "DELETE",
+	[T_Stat_UPDATE] = "UPDATE",
+	[T_Stat_SELECT] = "SELECT",
+	[T_Stat_BEGIN] = "BEGIN",
+	[T_Stat_START_TRANSACTION] = "START TRANSACTION",
+	[T_Stat_COMMIT] = "COMMIT",
+	[T_Stat_ROLLBACK] = "ROLLBACK",
+	[T_Stat_SAVEPOINT] = "SAVEPOINT",
+	[T_Stat_RELEASE] = "RELEASE",
+	[T_Stat_PREPARE_TRANSACTION] = "PREPARE TRANSACTION",
+	[T_Stat_COMMIT_PREPARED] = "COMMIT PREPARED",
+	[T_Stat_ROLLBACK_PREPARED] = "ROLLBACK PREPARED",
+	[T_Stat_DECLARE_CURSOR] = "DECLARE CURSOR",
+	[T_Stat_CLOSE_CURSOR_ALL] = "CLOSE CURSOR ALL",
+	[T_Stat_CLOSE_CURSOR] = "CLOSE CURSOR",
+	[T_Stat_MOVE] = "MOVE",
+	[T_Stat_FETCH] = "FETCH",
+	[T_Stat_CREATE_DOMAIN] = "CREATE DOMAIN",
+	[T_Stat_CREATE_SCHEMA] = "CREATE SCHEMA",
+	[T_Stat_CREATE_TABLE] = "CREATE TABLE",
+	[T_Stat_CREATE_TABLESPACE] = "CREATE TABLESPACE",
+	[T_Stat_DROP_TABLESPACE] = "DROP TABLESPACE",
+	[T_Stat_ALTER_TABLESPACE] = "ALTER TABLESPACE",
+	[T_Stat_CREATE_EXTENSION] = "CREATE EXTENSION",
+	[T_Stat_ALTER_EXTENSION] = "ALTER EXTENSION",
+	[T_Stat_CREATE_FOREIGN_DATA_WRAPPER] = "CREATE FOREIGN DATA WRAPPER",
+	[T_Stat_ALTER_FOREIGN_DATA_WRAPPER] = "ALTER FOREIGN DATA WRAPPER",
+	[T_Stat_CREATE_SERVER] = "CREATE SERVER",
+	[T_Stat_ALTER_SERVER] = "ALTER SERVER",
+	[T_Stat_CREATE_USER_MAPPING] = "CREATE USER MAPPING",
+	[T_Stat_ALTER_USER_MAPPING] = "ALTER USER MAPPING",
+	[T_Stat_DROP_USER_MAPPING] = "DROP USER MAPPING",
+	[T_Stat_CREATE_FOREIGN_TABLE] = "CREATE FOREIGN TABLE",
+	[T_Stat_IMPORT_FOREIGN_SCHEMA] = "IMPORT FOREIGN SCHEMA",
+	[T_Stat_DROP_TABLE] = "DROP TABLE",
+	[T_Stat_DROP_SEQUENCE] = "DROP SEQUENCE",
+	[T_Stat_DROP_VIEW] = "DROP VIEW",
+	[T_Stat_DROP_MATERIALIZED_VIEW] = "DROP MATERIALIZED VIEW",
+	[T_Stat_DROP_INDEX] = "DROP INDEX",
+	[T_Stat_DROP_TYPE] = "DROP TYPE",
+	[T_Stat_DROP_DOMAIN] = "DROP DOMAIN",
+	[T_Stat_DROP_COLLATION] = "DROP COLLATION",
+	[T_Stat_DROP_CONVERSION] = "DROP CONVERSION",
+	[T_Stat_DROP_SCHEMA] = "DROP SCHEMA",
+	[T_Stat_DROP_TEXT_SEARCH_PARSER] = "DROP TEXT SEARCH PARSER",
+	[T_Stat_DROP_TEXT_SEARCH_DICTIONARY] = "DROP TEXT SEARCH DICTIONARY",
+	[T_Stat_DROP_TEXT_SEARCH_TEMPLATE] = "DROP TEXT SEARCH TEMPLATE",
+	[T_Stat_DROP_DROP_TEXT_SEARCH_CONFIGURATION] = "DROP TEXT SEARCH CONFIGURATION",
+	[T_Stat_DROP_DROP_FOREIGN_TABLE] = "DROP FOREIGN TABLE",
+	[T_Stat_DROP_EXTENSION] = "DROP EXTENSION",
+	[T_Stat_DROP_FUNCTION] = "DROP FUNCTION",
+	[T_Stat_DROP_PROCEDURE] = "DROP PROCEDURE",
+	[T_Stat_DROP_ROUTINE] = "DROP ROUTINE",
+	[T_Stat_DROP_AGGREGATE] = "DROP AGGREGATE",
+	[T_Stat_DROP_OPERATOR] = "DROP OPERATOR",
+	[T_Stat_DROP_LANGUAGE] = "DROP LANGUAGE",
+	[T_Stat_DROP_CAST] = "DROP CAST",
+	[T_Stat_DROP_TRIGGER] = "DROP TRIGGER",
+	[T_Stat_DROP_EVENT_TRIGGER] = "DROP EVENT TRIGGER",
+	[T_Stat_DROP_RULE] = "DROP RULE",
+	[T_Stat_DROP_FOREIGN_DATA_WRAPPER] = "DROP FOREIGN DATA WRAPPER",
+	[T_Stat_DROP_SERVER] = "DROP SERVER",
+	[T_Stat_DROP_OPERATOR_CLASS] = "DROP OPERATOR CLASS",
+	[T_Stat_DROP_OPERATOR_FAMILY] = "DROP OPERATOR FAMILY",
+	[T_Stat_DROP_POLICY] = "DROP POLICY",
+	[T_Stat_DROP_TRANSFORM] = "DROP TRANSFORM",
+	[T_Stat_DROP_ACCESS_METHOD] = "DROP ACCESS METHOD",
+	[T_Stat_DROP_PUBLICATION] = "DROP PUBLICATION",
+	[T_Stat_DROP_STATISTICS] = "DROP STATISTICS",
+	[T_Stat_TRUNCATE_TABLE] = "TRUNCATE TABLE",
+	[T_Stat_COMMENT] = "COMMENT",
+	[T_Stat_SECURITY_LABEL] = "SECURITY LABEL",
+	[T_Stat_COPY] = "COPY",
+	[T_Stat_ALTER_AGGREGATE] = "ALTER AGGREGATE",
+	[T_Stat_ALTER_TYPE] = "ALTER TYPE",
+	[T_Stat_ALTER_CAST] = "ALTER CAST",
+	[T_Stat_ALTER_COLLATION] = "ALTER COLLATION",
+	[T_Stat_ALTER_TABLE] = "ALTER TABLE",
+	[T_Stat_ALTER_CONVERSION] = "ALTER CONVERSION",
+	[T_Stat_ALTER_DATABASE] = "ALTER DATABASE",
+	[T_Stat_ALTER_DOMAIN] = "ALTER DOMAIN",
+	[T_Stat_ALTER_FOREIGN_TABLE] = "ALTER FOREIGN TABLE",
+	[T_Stat_ALTER_FUNCTION] = "ALTER FUNCTION",
+	[T_Stat_ALTER_INDEX] = "ALTER INDEX",
+	[T_Stat_ALTER_LANGUAGE] = "ALTER LANGUAGE",
+	[T_Stat_ALTER_LARGE_OBJECT] = "ALTER LARGE OBJECT",
+	[T_Stat_ALTER_OPERATOR_CLASS] = "ALTER OPERATOR CLASS",
+	[T_Stat_ALTER_OPERATOR] = "ALTER OPERATOR",
+	[T_Stat_ALTER_OPERATOR_FAMILY] = "ALTER OPERATOR FAMILY",
+	[T_Stat_ALTER_POLICY] = "ALTER POLICY",
+	[T_Stat_ALTER_PROCEDURE] = "ALTER PROCEDURE",
+	[T_Stat_ALTER_ROLE] = "ALTER ROLE",
+	[T_Stat_ALTER_ROUTINE] = "ALTER ROUTINE",
+	[T_Stat_ALTER_RULE] = "ALTER RULE",
+	[T_Stat_ALTER_SCHEMA] = "ALTER SCHEMA",
+	[T_Stat_ALTER_SEQUENCE] = "ALTER SEQUENCE",
+	[T_Stat_ALTER_TRIGGER] = "ALTER TRIGGER",
+	[T_Stat_ALTER_EVENT_TRIGGER] = "ALTER EVENT TRIGGER",
+	[T_Stat_ALTER_TEXT_SEARCH_CONFIGURATION] = "ALTER TEXT SEARCH CONFIGURATION",
+	[T_Stat_ALTER_TEXT_SEARCH_DICTIONARY] = "ALTER TEXT SEARCH DICTIONARY",
+	[T_Stat_ALTER_TEXT_SEARCH_PARSER] = "ALTER TEXT SEARCH PARSER",
+	[T_Stat_ALTER_TEXT_SEARCH_TEMPLATE] = "ALTER TEXT SEARCH TEMPLATE",
+	[T_Stat_ALTER_VIEW] = "ALTER VIEW",
+	[T_Stat_ALTER_MATERIALIZED_VIEW] = "ALTER MATERIALIZED VIEW",
+	[T_Stat_ALTER_PUBLICATION] = "ALTER PUBLICATION",
+	[T_Stat_ALTER_SUBSCRIPTION] = "ALTER SUBSCRIPTION",
+	[T_Stat_ALTER_STATISTICS] = "ALTER STATISTICS",
+	[T_Stat_GRANT] = "GRANT",
+	[T_Stat_REVOKE] = "REVOKE",
+	[T_Stat_GRANT_ROLE] = "GRANT ROLE",
+	[T_Stat_REVOKE_ROLE] = "REVOKE ROLE",
+	[T_Stat_ALTER_DEFAULT_PRIVILEGES] = "ALTER DEFAULT PRIVILEGES",
+	[T_Stat_CREATE_AGGREGATE] = "CREATE AGGREGATE",
+	[T_Stat_CREATE_OPERATOR] = "CREATE OPERATOR",
+	[T_Stat_CREATE_TYPE] = "CREATE TYPE",
+	[T_Stat_CREATE_TEXT_SEARCH_PARSER] = "CREATE TEXT SEARCH PARSER",
+	[T_Stat_CREATE_TEXT_SEARCH_DICTIONARY] = "CREATE TEXT SEARCH DICTIONARY",
+	[T_Stat_CREATE_TEXT_SEARCH_TEMPLATE] = "CREATE TEXT SEARCH TEMPLATE",
+	[T_Stat_CREATE_TEXT_SEARCH_CONFIGURATION] = "CREATE TEXT SEARCH CONFIGURATION",
+	[T_Stat_CREATE_COLLATION] = "CREATE COLLATION",
+	[T_Stat_CREATE_ACCESS_METHOD] = "CREATE ACCESS METHOD",
+	[T_Stat_CREATE_VIEW] = "CREATE VIEW",
+	[T_Stat_CREATE_PROCEDURE] = "CREATE PROCEDURE",
+	[T_Stat_CREATE_FUNCTION] = "CREATE FUNCTION",
+	[T_Stat_CREATE_INDEX] = "CREATE INDEX",
+	[T_Stat_CREATE_RULE] = "CREATE RULE",
+	[T_Stat_CREATE_SEQUENCE] = "CREATE SEQUENCE",
+	[T_Stat_DO] = "DO",
+	[T_Stat_CREATE_DATABASE] = "CREATE DATABASE",
+	[T_Stat_DROP_DATABASE] = "DROP DATABASE",
+	[T_Stat_NOTIFY] = "NOTIFY",
+	[T_Stat_LISTEN] = "LISTEN",
+	[T_Stat_UNLISTEN] = "UNLISTEN",
+	[T_Stat_LOAD] = "LOAD",
+	[T_Stat_CALL] = "CALL",
+	[T_Stat_CLUSTER] = "CLUSTER",
+	[T_Stat_VACUUM] = "VACUUM",
+	[T_Stat_ANALYZE] = "ANALYZE",
+	[T_Stat_EXPLAIN] = "EXPLAIN",
+	[T_Stat_SELECT_INTO] = "SELECT INTO",
+	[T_Stat_CREATE_TABLE_AS] = "CREATE TABLE AS",
+	[T_Stat_CREATE_MATERIALIZED_VIEW] = "CREATE MATERIALIZED VIEW",
+	[T_Stat_REFRESH_MATERIALIZED_VIEW] = "REFRESH MATERIALIZED VIEW",
+	[T_Stat_ALTER_SYSTEM] = "ALTER SYSTEM",
+	[T_Stat_SET] = "SET",
+	[T_Stat_RESET] = "RESET",
+	[T_Stat_SHOW] = "SHOW",
+	[T_Stat_DISCARD_ALL] = "DISCARD ALL",
+	[T_Stat_DISCARD_PLANS] = "DISCARD PLANS",
+	[T_Stat_DISCARD_TEMP] = "DISCARD TEMP",
+	[T_Stat_DISCARD_SEQUENCES] = "DISCARD SEQUENCES",
+	[T_Stat_CREATE_TRANSFORM] = "CREATE TRANSFORM",
+	[T_Stat_CREATE_TRIGGER] = "CREATE TRIGGER",
+	[T_Stat_CREATE_EVENT_TRIGGER] = "CREATE EVENT TRIGGER",
+	[T_Stat_CREATE_LANGUAGE] = "CREATE LANGUAGE",
+	[T_Stat_CREATE_ROLE] = "CREATE ROLE",
+	[T_Stat_DROP_ROLE] = "DROP ROLE",
+	[T_Stat_DROP_OWNED] = "DROP OWNED",
+	[T_Stat_REASSIGN_OWNED] = "REASSIGN OWNED",
+	[T_Stat_LOCK_TABLE] = "LOCK TABLE",
+	[T_Stat_SET_CONSTRAINTS] = "SET CONSTRAINTS",
+	[T_Stat_CHECKPOINT] = "CHECKPOINT",
+	[T_Stat_REINDEX] = "REINDEX",
+	[T_Stat_CREATE_CONVERSION] = "CREATE CONVERSION",
+	[T_Stat_CREATE_CAST] = "CREATE CAST",
+	[T_Stat_CREATE_OPERATOR_CLASS] = "CREATE OPERATOR CLASS",
+	[T_Stat_CREATE_OPERATOR_FAMILY] = "CREATE OPERATOR FAMILY",
+	[T_Stat_CREATE_POLICY] = "CREATE POLICY",
+	[T_Stat_CREATE_PUBLICATION] = "CREATE PUBLICATION",
+	[T_Stat_CREATE_SUBSCRIPTION] = "CREATE SUBSCRIPTION",
+	[T_Stat_DROP_SUBSCRIPTION] = "DROP SUBSCRIPTION",
+	[T_Stat_PREPARE] = "PREPARE",
+	[T_Stat_EXECUTE] = "EXECUTE",
+	[T_Stat_CREATE_STATISTICS] = "CREATE STATISTICS",
+	[T_Stat_DEALLOCATE_ALL] = "DEALLOCATE ALL",
+	[T_Stat_DEALLOCATE] = "DEALLOCATE",
+	[T_Stat_SELECT_FOR_KEY_SHARE] = "SELECT FOR KEY SHARE",
+	[T_Stat_SELECT_FOR_SHARE] = "SELECT FOR SHARE",
+	[T_Stat_SELECT_FOR_NO_KEY_UPDATE] = "SELECT FOR NO KEY UPDATE",
+	[T_Stat_SELECT_FOR_UPDATE] = "SELECT FOR UPDATE",
+	[T_Stat_UNKNOWN] = "???"
+};
+
+
 
 /*
  * CommandIsReadOnly: is an executable query read-only?
@@ -1935,13 +2122,13 @@ UtilityContainsQuery(Node *parsetree)
 
 
 /*
- * AlterObjectTypeCommandTag
- *		helper function for CreateCommandTag
+ * AlterObjectTypeCommandTagType
+ *		helper function for CreateCommandTagType
  *
  * This covers most cases where ALTER is used with an ObjectType enum.
  */
 static const char *
-AlterObjectTypeCommandTag(ObjectType objtype)
+AlterObjectTypeCommandTagType(ObjectType objtype, StatSqlType* pESqlType)
 {
 	const char *tag;
 
@@ -1949,128 +2136,169 @@ AlterObjectTypeCommandTag(ObjectType objtype)
 	{
 		case OBJECT_AGGREGATE:
 			tag = "ALTER AGGREGATE";
+			*pESqlType = T_Stat_ALTER_AGGREGATE;
 			break;
 		case OBJECT_ATTRIBUTE:
 			tag = "ALTER TYPE";
+			*pESqlType = T_Stat_ALTER_TYPE;
 			break;
 		case OBJECT_CAST:
 			tag = "ALTER CAST";
+			*pESqlType = T_Stat_ALTER_CAST;
 			break;
 		case OBJECT_COLLATION:
 			tag = "ALTER COLLATION";
+			*pESqlType = T_Stat_ALTER_COLLATION;
 			break;
 		case OBJECT_COLUMN:
 			tag = "ALTER TABLE";
+			*pESqlType = T_Stat_ALTER_TABLE;
 			break;
 		case OBJECT_CONVERSION:
 			tag = "ALTER CONVERSION";
+			*pESqlType = T_Stat_ALTER_CONVERSION;
 			break;
 		case OBJECT_DATABASE:
 			tag = "ALTER DATABASE";
+			*pESqlType = T_Stat_ALTER_DATABASE;
 			break;
 		case OBJECT_DOMAIN:
 		case OBJECT_DOMCONSTRAINT:
 			tag = "ALTER DOMAIN";
+			*pESqlType = T_Stat_ALTER_DOMAIN;
 			break;
 		case OBJECT_EXTENSION:
 			tag = "ALTER EXTENSION";
+			*pESqlType = T_Stat_ALTER_EXTENSION;
 			break;
 		case OBJECT_FDW:
 			tag = "ALTER FOREIGN DATA WRAPPER";
+			*pESqlType = T_Stat_ALTER_FOREIGN_DATA_WRAPPER;
 			break;
 		case OBJECT_FOREIGN_SERVER:
 			tag = "ALTER SERVER";
+			*pESqlType = T_Stat_ALTER_SERVER;
 			break;
 		case OBJECT_FOREIGN_TABLE:
 			tag = "ALTER FOREIGN TABLE";
+			*pESqlType = T_Stat_ALTER_FOREIGN_TABLE;
 			break;
 		case OBJECT_FUNCTION:
 			tag = "ALTER FUNCTION";
+			*pESqlType = T_Stat_ALTER_FUNCTION;
 			break;
 		case OBJECT_INDEX:
 			tag = "ALTER INDEX";
+			*pESqlType = T_Stat_ALTER_INDEX;
 			break;
 		case OBJECT_LANGUAGE:
 			tag = "ALTER LANGUAGE";
+			*pESqlType = T_Stat_ALTER_LANGUAGE;
 			break;
 		case OBJECT_LARGEOBJECT:
 			tag = "ALTER LARGE OBJECT";
+			*pESqlType = T_Stat_ALTER_LARGE_OBJECT;
 			break;
 		case OBJECT_OPCLASS:
 			tag = "ALTER OPERATOR CLASS";
+			*pESqlType = T_Stat_ALTER_OPERATOR_CLASS;
 			break;
 		case OBJECT_OPERATOR:
 			tag = "ALTER OPERATOR";
+			*pESqlType = T_Stat_ALTER_OPERATOR;
 			break;
 		case OBJECT_OPFAMILY:
 			tag = "ALTER OPERATOR FAMILY";
+			*pESqlType = T_Stat_ALTER_OPERATOR_FAMILY;
 			break;
 		case OBJECT_POLICY:
 			tag = "ALTER POLICY";
+			*pESqlType = T_Stat_ALTER_POLICY;
 			break;
 		case OBJECT_PROCEDURE:
 			tag = "ALTER PROCEDURE";
+			*pESqlType = T_Stat_ALTER_PROCEDURE;
 			break;
 		case OBJECT_ROLE:
 			tag = "ALTER ROLE";
+			*pESqlType = T_Stat_ALTER_ROLE;
 			break;
 		case OBJECT_ROUTINE:
 			tag = "ALTER ROUTINE";
+			*pESqlType = T_Stat_ALTER_ROUTINE;
 			break;
 		case OBJECT_RULE:
 			tag = "ALTER RULE";
+			*pESqlType = T_Stat_ALTER_RULE;
 			break;
 		case OBJECT_SCHEMA:
 			tag = "ALTER SCHEMA";
+			*pESqlType = T_Stat_ALTER_SCHEMA;
 			break;
 		case OBJECT_SEQUENCE:
 			tag = "ALTER SEQUENCE";
+			*pESqlType = T_Stat_ALTER_SEQUENCE;
 			break;
 		case OBJECT_TABLE:
 		case OBJECT_TABCONSTRAINT:
 			tag = "ALTER TABLE";
+			*pESqlType = T_Stat_ALTER_TABLE;
 			break;
 		case OBJECT_TABLESPACE:
 			tag = "ALTER TABLESPACE";
+			*pESqlType = T_Stat_ALTER_TABLESPACE;
 			break;
 		case OBJECT_TRIGGER:
 			tag = "ALTER TRIGGER";
+			*pESqlType = T_Stat_ALTER_TRIGGER;
 			break;
 		case OBJECT_EVENT_TRIGGER:
 			tag = "ALTER EVENT TRIGGER";
+			*pESqlType = T_Stat_ALTER_EVENT_TRIGGER;
 			break;
 		case OBJECT_TSCONFIGURATION:
 			tag = "ALTER TEXT SEARCH CONFIGURATION";
+			*pESqlType = T_Stat_ALTER_TEXT_SEARCH_CONFIGURATION;
 			break;
 		case OBJECT_TSDICTIONARY:
 			tag = "ALTER TEXT SEARCH DICTIONARY";
+			*pESqlType = T_Stat_ALTER_TEXT_SEARCH_DICTIONARY;
 			break;
 		case OBJECT_TSPARSER:
 			tag = "ALTER TEXT SEARCH PARSER";
+			*pESqlType = T_Stat_ALTER_TEXT_SEARCH_PARSER;
 			break;
 		case OBJECT_TSTEMPLATE:
 			tag = "ALTER TEXT SEARCH TEMPLATE";
+			*pESqlType = T_Stat_ALTER_TEXT_SEARCH_TEMPLATE;
 			break;
 		case OBJECT_TYPE:
 			tag = "ALTER TYPE";
+			*pESqlType = T_Stat_ALTER_TYPE;
 			break;
 		case OBJECT_VIEW:
 			tag = "ALTER VIEW";
+			*pESqlType = T_Stat_ALTER_VIEW;
 			break;
 		case OBJECT_MATVIEW:
 			tag = "ALTER MATERIALIZED VIEW";
+			*pESqlType = T_Stat_ALTER_MATERIALIZED_VIEW;
 			break;
 		case OBJECT_PUBLICATION:
 			tag = "ALTER PUBLICATION";
+			*pESqlType = T_Stat_ALTER_PUBLICATION;
 			break;
 		case OBJECT_SUBSCRIPTION:
 			tag = "ALTER SUBSCRIPTION";
+			*pESqlType = T_Stat_ALTER_SUBSCRIPTION;
 			break;
 		case OBJECT_STATISTIC_EXT:
 			tag = "ALTER STATISTICS";
+			*pESqlType = T_Stat_ALTER_STATISTICS;
 			break;
 		default:
 			tag = "???";
+			*pESqlType = T_Stat_UNKNOWN;
 			break;
 	}
 
@@ -2078,19 +2306,15 @@ AlterObjectTypeCommandTag(ObjectType objtype)
 }
 
 /*
- * CreateCommandTag
- *		utility to get a string representation of the command operation,
+ * CreateCommandType
+ *		utility to get a StatSqlType representation of the command operation,
  *		given either a raw (un-analyzed) parsetree, an analyzed Query,
  *		or a PlannedStmt.
- *
- * This must handle all command types, but since the vast majority
- * of 'em are utility commands, it seems sensible to keep it here.
- *
- * NB: all result strings must be shorter than COMPLETION_TAG_BUFSIZE.
- * Also, the result must point at a true constant (permanent storage).
+ *		This function is copy-and-modify from CreateCommandTag,
+ *		so if CreateCommandTag changed, this function should be changed accordingly.
  */
-const char *
-CreateCommandTag(Node *parsetree)
+const char*
+CreateCommandTagType(Node *parsetree, StatSqlType* pESqlType)
 {
 	const char *tag;
 
@@ -2098,24 +2322,28 @@ CreateCommandTag(Node *parsetree)
 	{
 			/* recurse if we're given a RawStmt */
 		case T_RawStmt:
-			tag = CreateCommandTag(((RawStmt *) parsetree)->stmt);
+			tag = CreateCommandTagType(((RawStmt *) parsetree)->stmt, pESqlType);
 			break;
 
 			/* raw plannable queries */
 		case T_InsertStmt:
 			tag = "INSERT";
+			*pESqlType = T_Stat_INSERT;
 			break;
 
 		case T_DeleteStmt:
 			tag = "DELETE";
+			*pESqlType = T_Stat_DELETE;
 			break;
 
 		case T_UpdateStmt:
 			tag = "UPDATE";
+			*pESqlType = T_Stat_UPDATE;
 			break;
 
 		case T_SelectStmt:
 			tag = "SELECT";
+			*pESqlType = T_Stat_SELECT;
 			break;
 
 			/* utility statements --- same whether raw or cooked */
@@ -2127,43 +2355,53 @@ CreateCommandTag(Node *parsetree)
 				{
 					case TRANS_STMT_BEGIN:
 						tag = "BEGIN";
+						*pESqlType = T_Stat_BEGIN;
 						break;
 
 					case TRANS_STMT_START:
 						tag = "START TRANSACTION";
+						*pESqlType = T_Stat_START_TRANSACTION;
 						break;
 
 					case TRANS_STMT_COMMIT:
 						tag = "COMMIT";
+						*pESqlType = T_Stat_COMMIT;
 						break;
 
 					case TRANS_STMT_ROLLBACK:
 					case TRANS_STMT_ROLLBACK_TO:
 						tag = "ROLLBACK";
+						*pESqlType = T_Stat_ROLLBACK;
 						break;
 
 					case TRANS_STMT_SAVEPOINT:
 						tag = "SAVEPOINT";
+						*pESqlType = T_Stat_SAVEPOINT;
 						break;
 
 					case TRANS_STMT_RELEASE:
 						tag = "RELEASE";
+						*pESqlType = T_Stat_RELEASE;
 						break;
 
 					case TRANS_STMT_PREPARE:
 						tag = "PREPARE TRANSACTION";
+						*pESqlType = T_Stat_PREPARE_TRANSACTION;
 						break;
 
 					case TRANS_STMT_COMMIT_PREPARED:
 						tag = "COMMIT PREPARED";
+						*pESqlType = T_Stat_COMMIT_PREPARED;
 						break;
 
 					case TRANS_STMT_ROLLBACK_PREPARED:
 						tag = "ROLLBACK PREPARED";
+						*pESqlType = T_Stat_ROLLBACK_PREPARED;
 						break;
 
 					default:
 						tag = "???";
+						*pESqlType = T_Stat_UNKNOWN;
 						break;
 				}
 			}
@@ -2171,6 +2409,7 @@ CreateCommandTag(Node *parsetree)
 
 		case T_DeclareCursorStmt:
 			tag = "DECLARE CURSOR";
+			*pESqlType = T_Stat_DECLARE_CURSOR;
 			break;
 
 		case T_ClosePortalStmt:
@@ -2178,90 +2417,114 @@ CreateCommandTag(Node *parsetree)
 				ClosePortalStmt *stmt = (ClosePortalStmt *) parsetree;
 
 				if (stmt->portalname == NULL)
+				{
 					tag = "CLOSE CURSOR ALL";
+					*pESqlType = T_Stat_CLOSE_CURSOR_ALL;
+				}
 				else
+				{
 					tag = "CLOSE CURSOR";
+					*pESqlType = T_Stat_CLOSE_CURSOR;
+				}
 			}
 			break;
 
 		case T_FetchStmt:
 			{
 				FetchStmt  *stmt = (FetchStmt *) parsetree;
-
 				tag = (stmt->ismove) ? "MOVE" : "FETCH";
+				*pESqlType = (stmt->ismove) ? T_Stat_MOVE : T_Stat_FETCH;
 			}
 			break;
 
 		case T_CreateDomainStmt:
 			tag = "CREATE DOMAIN";
+			*pESqlType = T_Stat_CREATE_DOMAIN;
 			break;
 
 		case T_CreateSchemaStmt:
 			tag = "CREATE SCHEMA";
+			*pESqlType = T_Stat_CREATE_SCHEMA;
 			break;
 
 		case T_CreateStmt:
 			tag = "CREATE TABLE";
+			*pESqlType = T_Stat_CREATE_TABLE;
 			break;
 
 		case T_CreateTableSpaceStmt:
 			tag = "CREATE TABLESPACE";
+			*pESqlType = T_Stat_CREATE_TABLESPACE;
 			break;
 
 		case T_DropTableSpaceStmt:
 			tag = "DROP TABLESPACE";
+			*pESqlType = T_Stat_DROP_TABLESPACE;
 			break;
 
 		case T_AlterTableSpaceOptionsStmt:
 			tag = "ALTER TABLESPACE";
+			*pESqlType = T_Stat_ALTER_TABLESPACE;
 			break;
 
 		case T_CreateExtensionStmt:
 			tag = "CREATE EXTENSION";
+			*pESqlType = T_Stat_CREATE_EXTENSION;
 			break;
 
 		case T_AlterExtensionStmt:
 			tag = "ALTER EXTENSION";
+			*pESqlType = T_Stat_ALTER_EXTENSION;
 			break;
 
 		case T_AlterExtensionContentsStmt:
 			tag = "ALTER EXTENSION";
+			*pESqlType = T_Stat_ALTER_EXTENSION;
 			break;
 
 		case T_CreateFdwStmt:
 			tag = "CREATE FOREIGN DATA WRAPPER";
+			*pESqlType = T_Stat_CREATE_FOREIGN_DATA_WRAPPER;
 			break;
 
 		case T_AlterFdwStmt:
 			tag = "ALTER FOREIGN DATA WRAPPER";
+			*pESqlType = T_Stat_ALTER_FOREIGN_DATA_WRAPPER;
 			break;
 
 		case T_CreateForeignServerStmt:
 			tag = "CREATE SERVER";
+			*pESqlType = T_Stat_CREATE_SERVER;
 			break;
 
 		case T_AlterForeignServerStmt:
 			tag = "ALTER SERVER";
+			*pESqlType = T_Stat_ALTER_SERVER;
 			break;
 
 		case T_CreateUserMappingStmt:
 			tag = "CREATE USER MAPPING";
+			*pESqlType = T_Stat_CREATE_USER_MAPPING;
 			break;
 
 		case T_AlterUserMappingStmt:
 			tag = "ALTER USER MAPPING";
+			*pESqlType = T_Stat_ALTER_USER_MAPPING;
 			break;
 
 		case T_DropUserMappingStmt:
 			tag = "DROP USER MAPPING";
+			*pESqlType = T_Stat_DROP_USER_MAPPING;
 			break;
 
 		case T_CreateForeignTableStmt:
 			tag = "CREATE FOREIGN TABLE";
+			*pESqlType = T_Stat_CREATE_FOREIGN_TABLE;
 			break;
 
 		case T_ImportForeignSchemaStmt:
 			tag = "IMPORT FOREIGN SCHEMA";
+			*pESqlType = T_Stat_IMPORT_FOREIGN_SCHEMA;
 			break;
 
 		case T_DropStmt:
@@ -2269,128 +2532,168 @@ CreateCommandTag(Node *parsetree)
 			{
 				case OBJECT_TABLE:
 					tag = "DROP TABLE";
+					*pESqlType = T_Stat_DROP_TABLE;
 					break;
 				case OBJECT_SEQUENCE:
 					tag = "DROP SEQUENCE";
+					*pESqlType = T_Stat_DROP_SEQUENCE;
 					break;
 				case OBJECT_VIEW:
 					tag = "DROP VIEW";
+					*pESqlType = T_Stat_DROP_VIEW;
 					break;
 				case OBJECT_MATVIEW:
 					tag = "DROP MATERIALIZED VIEW";
+					*pESqlType = T_Stat_DROP_MATERIALIZED_VIEW;
 					break;
 				case OBJECT_INDEX:
 					tag = "DROP INDEX";
+					*pESqlType= T_Stat_DROP_INDEX;
 					break;
 				case OBJECT_TYPE:
 					tag = "DROP TYPE";
+					*pESqlType = T_Stat_DROP_TYPE;
 					break;
 				case OBJECT_DOMAIN:
 					tag = "DROP DOMAIN";
+					*pESqlType = T_Stat_DROP_DOMAIN;
 					break;
 				case OBJECT_COLLATION:
 					tag = "DROP COLLATION";
+					*pESqlType = T_Stat_DROP_COLLATION;
 					break;
 				case OBJECT_CONVERSION:
 					tag = "DROP CONVERSION";
+					*pESqlType = T_Stat_DROP_CONVERSION;
 					break;
 				case OBJECT_SCHEMA:
 					tag = "DROP SCHEMA";
+					*pESqlType = T_Stat_DROP_SCHEMA;
 					break;
 				case OBJECT_TSPARSER:
 					tag = "DROP TEXT SEARCH PARSER";
+					*pESqlType = T_Stat_DROP_TEXT_SEARCH_PARSER;
 					break;
 				case OBJECT_TSDICTIONARY:
 					tag = "DROP TEXT SEARCH DICTIONARY";
+					*pESqlType = T_Stat_DROP_TEXT_SEARCH_DICTIONARY;
 					break;
 				case OBJECT_TSTEMPLATE:
 					tag = "DROP TEXT SEARCH TEMPLATE";
+					*pESqlType = T_Stat_DROP_TEXT_SEARCH_TEMPLATE;
 					break;
 				case OBJECT_TSCONFIGURATION:
 					tag = "DROP TEXT SEARCH CONFIGURATION";
+					*pESqlType = T_Stat_DROP_DROP_TEXT_SEARCH_CONFIGURATION;
 					break;
 				case OBJECT_FOREIGN_TABLE:
 					tag = "DROP FOREIGN TABLE";
+					*pESqlType = T_Stat_DROP_DROP_FOREIGN_TABLE;
 					break;
 				case OBJECT_EXTENSION:
 					tag = "DROP EXTENSION";
+					*pESqlType = T_Stat_DROP_EXTENSION;
 					break;
 				case OBJECT_FUNCTION:
 					tag = "DROP FUNCTION";
+					*pESqlType = T_Stat_DROP_FUNCTION;
 					break;
 				case OBJECT_PROCEDURE:
 					tag = "DROP PROCEDURE";
+					*pESqlType = T_Stat_DROP_PROCEDURE;
 					break;
 				case OBJECT_ROUTINE:
 					tag = "DROP ROUTINE";
+					*pESqlType = T_Stat_DROP_ROUTINE;
 					break;
 				case OBJECT_AGGREGATE:
 					tag = "DROP AGGREGATE";
+					*pESqlType = T_Stat_DROP_AGGREGATE;
 					break;
 				case OBJECT_OPERATOR:
 					tag = "DROP OPERATOR";
+					*pESqlType = T_Stat_DROP_OPERATOR;
 					break;
 				case OBJECT_LANGUAGE:
 					tag = "DROP LANGUAGE";
+					*pESqlType = T_Stat_DROP_LANGUAGE;
 					break;
 				case OBJECT_CAST:
 					tag = "DROP CAST";
+					*pESqlType = T_Stat_DROP_CAST;
 					break;
 				case OBJECT_TRIGGER:
 					tag = "DROP TRIGGER";
+					*pESqlType = T_Stat_DROP_TRIGGER;
 					break;
 				case OBJECT_EVENT_TRIGGER:
 					tag = "DROP EVENT TRIGGER";
+					*pESqlType = T_Stat_DROP_EVENT_TRIGGER;
 					break;
 				case OBJECT_RULE:
 					tag = "DROP RULE";
+					*pESqlType = T_Stat_DROP_RULE;
 					break;
 				case OBJECT_FDW:
 					tag = "DROP FOREIGN DATA WRAPPER";
+					*pESqlType = T_Stat_DROP_FOREIGN_DATA_WRAPPER;
 					break;
 				case OBJECT_FOREIGN_SERVER:
 					tag = "DROP SERVER";
+					*pESqlType = T_Stat_DROP_SERVER;
 					break;
 				case OBJECT_OPCLASS:
 					tag = "DROP OPERATOR CLASS";
+					*pESqlType = T_Stat_DROP_OPERATOR_CLASS;
 					break;
 				case OBJECT_OPFAMILY:
 					tag = "DROP OPERATOR FAMILY";
+					*pESqlType = T_Stat_DROP_OPERATOR_FAMILY;
 					break;
 				case OBJECT_POLICY:
 					tag = "DROP POLICY";
+					*pESqlType = T_Stat_DROP_POLICY;
 					break;
 				case OBJECT_TRANSFORM:
 					tag = "DROP TRANSFORM";
+					*pESqlType = T_Stat_DROP_TRANSFORM;
 					break;
 				case OBJECT_ACCESS_METHOD:
 					tag = "DROP ACCESS METHOD";
+					*pESqlType = T_Stat_DROP_ACCESS_METHOD;
 					break;
 				case OBJECT_PUBLICATION:
 					tag = "DROP PUBLICATION";
+					*pESqlType = T_Stat_DROP_PUBLICATION;
 					break;
 				case OBJECT_STATISTIC_EXT:
 					tag = "DROP STATISTICS";
+					*pESqlType = T_Stat_DROP_STATISTICS;
 					break;
 				default:
 					tag = "???";
+					*pESqlType = T_Stat_UNKNOWN;
 			}
 			break;
 
 		case T_TruncateStmt:
 			tag = "TRUNCATE TABLE";
+			*pESqlType = T_Stat_TRUNCATE_TABLE;
 			break;
 
 		case T_CommentStmt:
 			tag = "COMMENT";
+			*pESqlType = T_Stat_TRUNCATE_TABLE;
 			break;
 
 		case T_SecLabelStmt:
 			tag = "SECURITY LABEL";
+			*pESqlType = T_Stat_SECURITY_LABEL;
 			break;
 
 		case T_CopyStmt:
 			tag = "COPY";
+			*pESqlType = T_Stat_COPY;
 			break;
 
 		case T_RenameStmt:
@@ -2398,34 +2701,35 @@ CreateCommandTag(Node *parsetree)
 			 * When the column is renamed, the command tag is created
 			 * from its relation type
 			 */
-			tag = AlterObjectTypeCommandTag(
+			tag = AlterObjectTypeCommandTagType(
 				((RenameStmt *) parsetree)->renameType == OBJECT_COLUMN ?
 				((RenameStmt *) parsetree)->relationType :
-				((RenameStmt *) parsetree)->renameType);
+				((RenameStmt *) parsetree)->renameType, pESqlType);
 			break;
 
 		case T_AlterObjectDependsStmt:
-			tag = AlterObjectTypeCommandTag(((AlterObjectDependsStmt *) parsetree)->objectType);
+			tag = AlterObjectTypeCommandTagType(((AlterObjectDependsStmt *) parsetree)->objectType, pESqlType);
 			break;
 
 		case T_AlterObjectSchemaStmt:
-			tag = AlterObjectTypeCommandTag(((AlterObjectSchemaStmt *) parsetree)->objectType);
+			tag = AlterObjectTypeCommandTagType(((AlterObjectSchemaStmt *) parsetree)->objectType, pESqlType);
 			break;
 
 		case T_AlterOwnerStmt:
-			tag = AlterObjectTypeCommandTag(((AlterOwnerStmt *) parsetree)->objectType);
+			tag = AlterObjectTypeCommandTagType(((AlterOwnerStmt *) parsetree)->objectType, pESqlType);
 			break;
 
 		case T_AlterTableMoveAllStmt:
-			tag = AlterObjectTypeCommandTag(((AlterTableMoveAllStmt *) parsetree)->objtype);
+			tag = AlterObjectTypeCommandTagType(((AlterTableMoveAllStmt *) parsetree)->objtype, pESqlType);
 			break;
 
 		case T_AlterTableStmt:
-			tag = AlterObjectTypeCommandTag(((AlterTableStmt *) parsetree)->relkind);
+			tag = AlterObjectTypeCommandTagType(((AlterTableStmt *) parsetree)->relkind, pESqlType);
 			break;
 
 		case T_AlterDomainStmt:
 			tag = "ALTER DOMAIN";
+			*pESqlType = T_Stat_ALTER_DOMAIN;
 			break;
 
 		case T_AlterFunctionStmt:
@@ -2433,15 +2737,19 @@ CreateCommandTag(Node *parsetree)
 			{
 				case OBJECT_FUNCTION:
 					tag = "ALTER FUNCTION";
+					*pESqlType = T_Stat_ALTER_FUNCTION;
 					break;
 				case OBJECT_PROCEDURE:
 					tag = "ALTER PROCEDURE";
+					*pESqlType = T_Stat_ALTER_PROCEDURE;
 					break;
 				case OBJECT_ROUTINE:
 					tag = "ALTER ROUTINE";
+					*pESqlType = T_Stat_ALTER_ROUTINE;
 					break;
 				default:
 					tag = "???";
+					*pESqlType = T_Stat_UNKNOWN;
 			}
 			break;
 
@@ -2450,6 +2758,7 @@ CreateCommandTag(Node *parsetree)
 				GrantStmt  *stmt = (GrantStmt *) parsetree;
 
 				tag = (stmt->is_grant) ? "GRANT" : "REVOKE";
+				*pESqlType = (stmt->is_grant) ? T_Stat_GRANT : T_Stat_REVOKE;
 			}
 			break;
 
@@ -2458,11 +2767,13 @@ CreateCommandTag(Node *parsetree)
 				GrantRoleStmt *stmt = (GrantRoleStmt *) parsetree;
 
 				tag = (stmt->is_grant) ? "GRANT ROLE" : "REVOKE ROLE";
+				*pESqlType = (stmt->is_grant) ? T_Stat_GRANT_ROLE : T_Stat_REVOKE_ROLE;
 			}
 			break;
 
 		case T_AlterDefaultPrivilegesStmt:
 			tag = "ALTER DEFAULT PRIVILEGES";
+			*pESqlType = T_Stat_ALTER_DEFAULT_PRIVILEGES;
 			break;
 
 		case T_DefineStmt:
@@ -2470,132 +2781,175 @@ CreateCommandTag(Node *parsetree)
 			{
 				case OBJECT_AGGREGATE:
 					tag = "CREATE AGGREGATE";
+					*pESqlType = T_Stat_CREATE_AGGREGATE;
 					break;
 				case OBJECT_OPERATOR:
 					tag = "CREATE OPERATOR";
+					*pESqlType = T_Stat_CREATE_OPERATOR;
 					break;
 				case OBJECT_TYPE:
 					tag = "CREATE TYPE";
+					*pESqlType = T_Stat_CREATE_TYPE;
 					break;
 				case OBJECT_TSPARSER:
 					tag = "CREATE TEXT SEARCH PARSER";
+					*pESqlType = T_Stat_CREATE_TEXT_SEARCH_PARSER;
 					break;
 				case OBJECT_TSDICTIONARY:
 					tag = "CREATE TEXT SEARCH DICTIONARY";
+					*pESqlType = T_Stat_CREATE_TEXT_SEARCH_DICTIONARY;
 					break;
 				case OBJECT_TSTEMPLATE:
 					tag = "CREATE TEXT SEARCH TEMPLATE";
+					*pESqlType = T_Stat_CREATE_TEXT_SEARCH_TEMPLATE;
 					break;
 				case OBJECT_TSCONFIGURATION:
 					tag = "CREATE TEXT SEARCH CONFIGURATION";
+					*pESqlType = T_Stat_CREATE_TEXT_SEARCH_CONFIGURATION;
 					break;
 				case OBJECT_COLLATION:
 					tag = "CREATE COLLATION";
+					*pESqlType = T_Stat_CREATE_COLLATION;
 					break;
 				case OBJECT_ACCESS_METHOD:
 					tag = "CREATE ACCESS METHOD";
+					*pESqlType = T_Stat_CREATE_ACCESS_METHOD;
 					break;
 				default:
 					tag = "???";
+					*pESqlType = T_Stat_UNKNOWN;
 			}
 			break;
 
 		case T_CompositeTypeStmt:
 			tag = "CREATE TYPE";
+			*pESqlType = T_Stat_CREATE_TYPE;
 			break;
 
 		case T_CreateEnumStmt:
 			tag = "CREATE TYPE";
+			*pESqlType = T_Stat_CREATE_TYPE;
 			break;
 
 		case T_CreateRangeStmt:
 			tag = "CREATE TYPE";
+			*pESqlType = T_Stat_CREATE_TYPE;
 			break;
 
 		case T_AlterEnumStmt:
 			tag = "ALTER TYPE";
+			*pESqlType = T_Stat_ALTER_TYPE;
 			break;
 
 		case T_ViewStmt:
 			tag = "CREATE VIEW";
+			*pESqlType = T_Stat_CREATE_VIEW;
 			break;
 
 		case T_CreateFunctionStmt:
 			if (((CreateFunctionStmt *) parsetree)->is_procedure)
+			{
 				tag = "CREATE PROCEDURE";
+				*pESqlType = T_Stat_CREATE_PROCEDURE;
+			}
 			else
+			{
 				tag = "CREATE FUNCTION";
+				*pESqlType = T_Stat_CREATE_FUNCTION;
+			}
 			break;
 
 		case T_IndexStmt:
 			tag = "CREATE INDEX";
+			*pESqlType = T_Stat_CREATE_INDEX;
 			break;
 
 		case T_RuleStmt:
 			tag = "CREATE RULE";
+			*pESqlType = T_Stat_CREATE_RULE;
 			break;
 
 		case T_CreateSeqStmt:
 			tag = "CREATE SEQUENCE";
+			*pESqlType = T_Stat_CREATE_SEQUENCE;
 			break;
 
 		case T_AlterSeqStmt:
 			tag = "ALTER SEQUENCE";
+			*pESqlType = T_Stat_ALTER_SEQUENCE;
 			break;
 
 		case T_DoStmt:
 			tag = "DO";
+			*pESqlType = T_Stat_DO;
 			break;
 
 		case T_CreatedbStmt:
 			tag = "CREATE DATABASE";
+			*pESqlType = T_Stat_CREATE_DATABASE;
 			break;
 
 		case T_AlterDatabaseStmt:
 			tag = "ALTER DATABASE";
+			*pESqlType = T_Stat_ALTER_DATABASE;
 			break;
 
 		case T_AlterDatabaseSetStmt:
 			tag = "ALTER DATABASE";
+			*pESqlType = T_Stat_ALTER_DATABASE;
 			break;
 
 		case T_DropdbStmt:
 			tag = "DROP DATABASE";
+			*pESqlType = T_Stat_DROP_DATABASE;
 			break;
 
 		case T_NotifyStmt:
 			tag = "NOTIFY";
+			*pESqlType = T_Stat_NOTIFY;
 			break;
 
 		case T_ListenStmt:
 			tag = "LISTEN";
+			*pESqlType = T_Stat_LISTEN;
 			break;
 
 		case T_UnlistenStmt:
 			tag = "UNLISTEN";
+			*pESqlType = T_Stat_UNLISTEN;
 			break;
 
 		case T_LoadStmt:
 			tag = "LOAD";
+			*pESqlType = T_Stat_LOAD;
 			break;
 
 		case T_CallStmt:
 			tag = "CALL";
+			*pESqlType = T_Stat_CALL;
 			break;
 
 		case T_ClusterStmt:
 			tag = "CLUSTER";
+			*pESqlType = T_Stat_CLUSTER;
 			break;
 
 		case T_VacuumStmt:
 			if (((VacuumStmt *) parsetree)->is_vacuumcmd)
+			{
 				tag = "VACUUM";
+				*pESqlType = T_Stat_VACUUM;
+			}
 			else
+			{
 				tag = "ANALYZE";
+				*pESqlType = T_Stat_ANALYZE;
+			}
 			break;
 
 		case T_ExplainStmt:
 			tag = "EXPLAIN";
+			*pESqlType = T_Stat_EXPLAIN;
 			break;
 
 		case T_CreateTableAsStmt:
@@ -2603,24 +2957,34 @@ CreateCommandTag(Node *parsetree)
 			{
 				case OBJECT_TABLE:
 					if (((CreateTableAsStmt *) parsetree)->is_select_into)
+					{
 						tag = "SELECT INTO";
+						*pESqlType = T_Stat_SELECT_INTO;
+					}
 					else
+					{
 						tag = "CREATE TABLE AS";
+						*pESqlType = T_Stat_CREATE_TABLE_AS;
+					}
 					break;
 				case OBJECT_MATVIEW:
 					tag = "CREATE MATERIALIZED VIEW";
+					*pESqlType = T_Stat_CREATE_MATERIALIZED_VIEW;
 					break;
 				default:
 					tag = "???";
+					*pESqlType = T_Stat_UNKNOWN;
 			}
 			break;
 
 		case T_RefreshMatViewStmt:
 			tag = "REFRESH MATERIALIZED VIEW";
+			*pESqlType = T_Stat_REFRESH_MATERIALIZED_VIEW;
 			break;
 
 		case T_AlterSystemStmt:
 			tag = "ALTER SYSTEM";
+			*pESqlType = T_Stat_ALTER_SYSTEM;
 			break;
 
 		case T_VariableSetStmt:
@@ -2631,18 +2995,22 @@ CreateCommandTag(Node *parsetree)
 				case VAR_SET_DEFAULT:
 				case VAR_SET_MULTI:
 					tag = "SET";
+					*pESqlType = T_Stat_SET;
 					break;
 				case VAR_RESET:
 				case VAR_RESET_ALL:
 					tag = "RESET";
+					*pESqlType = T_Stat_RESET;
 					break;
 				default:
 					tag = "???";
+					*pESqlType = T_Stat_UNKNOWN;
 			}
 			break;
 
 		case T_VariableShowStmt:
 			tag = "SHOW";
+			*pESqlType = T_Stat_SHOW;
 			break;
 
 		case T_DiscardStmt:
@@ -2650,163 +3018,204 @@ CreateCommandTag(Node *parsetree)
 			{
 				case DISCARD_ALL:
 					tag = "DISCARD ALL";
+					*pESqlType = T_Stat_DISCARD_ALL;
 					break;
 				case DISCARD_PLANS:
 					tag = "DISCARD PLANS";
+					*pESqlType = T_Stat_DISCARD_PLANS;
 					break;
 				case DISCARD_TEMP:
 					tag = "DISCARD TEMP";
+					*pESqlType = T_Stat_DISCARD_TEMP;
 					break;
 				case DISCARD_SEQUENCES:
 					tag = "DISCARD SEQUENCES";
+					*pESqlType = T_Stat_DISCARD_SEQUENCES;
 					break;
 				default:
 					tag = "???";
+					*pESqlType = T_Stat_UNKNOWN;
 			}
 			break;
 
 		case T_CreateTransformStmt:
 			tag = "CREATE TRANSFORM";
+			*pESqlType = T_Stat_CREATE_TRANSFORM;
 			break;
 
 		case T_CreateTrigStmt:
 			tag = "CREATE TRIGGER";
+			*pESqlType = T_Stat_CREATE_TRIGGER;
 			break;
 
 		case T_CreateEventTrigStmt:
 			tag = "CREATE EVENT TRIGGER";
+			*pESqlType = T_Stat_CREATE_EVENT_TRIGGER;
 			break;
 
 		case T_AlterEventTrigStmt:
 			tag = "ALTER EVENT TRIGGER";
+			*pESqlType = T_Stat_ALTER_EVENT_TRIGGER;
 			break;
 
 		case T_CreatePLangStmt:
 			tag = "CREATE LANGUAGE";
+			*pESqlType = T_Stat_CREATE_LANGUAGE;
 			break;
 
 		case T_CreateRoleStmt:
 			tag = "CREATE ROLE";
+			*pESqlType = T_Stat_CREATE_ROLE;
 			break;
 
 		case T_AlterRoleStmt:
 			tag = "ALTER ROLE";
+			*pESqlType = T_Stat_ALTER_ROLE;
 			break;
 
 		case T_AlterRoleSetStmt:
 			tag = "ALTER ROLE";
+			*pESqlType = T_Stat_ALTER_ROLE;
 			break;
 
 		case T_DropRoleStmt:
 			tag = "DROP ROLE";
+			*pESqlType = T_Stat_DROP_ROLE;
 			break;
 
 		case T_DropOwnedStmt:
 			tag = "DROP OWNED";
+			*pESqlType = T_Stat_DROP_OWNED;
 			break;
 
 		case T_ReassignOwnedStmt:
 			tag = "REASSIGN OWNED";
+			*pESqlType = T_Stat_REASSIGN_OWNED;
 			break;
 
 		case T_LockStmt:
 			tag = "LOCK TABLE";
+			*pESqlType = T_Stat_LOCK_TABLE;
 			break;
 
 		case T_ConstraintsSetStmt:
 			tag = "SET CONSTRAINTS";
+			*pESqlType = T_Stat_SET_CONSTRAINTS;
 			break;
 
 		case T_CheckPointStmt:
 			tag = "CHECKPOINT";
+			*pESqlType = T_Stat_CHECKPOINT;
 			break;
 
 		case T_ReindexStmt:
 			tag = "REINDEX";
+			*pESqlType = T_Stat_REINDEX;
 			break;
 
 		case T_CreateConversionStmt:
 			tag = "CREATE CONVERSION";
+			*pESqlType = T_Stat_CREATE_CONVERSION;
 			break;
 
 		case T_CreateCastStmt:
 			tag = "CREATE CAST";
+			*pESqlType = T_Stat_CREATE_CAST;
 			break;
 
 		case T_CreateOpClassStmt:
 			tag = "CREATE OPERATOR CLASS";
+			*pESqlType = T_Stat_CREATE_OPERATOR_CLASS;
 			break;
 
 		case T_CreateOpFamilyStmt:
 			tag = "CREATE OPERATOR FAMILY";
+			*pESqlType = T_Stat_CREATE_OPERATOR_FAMILY;
 			break;
 
 		case T_AlterOpFamilyStmt:
 			tag = "ALTER OPERATOR FAMILY";
+			*pESqlType = T_Stat_ALTER_OPERATOR_FAMILY;
 			break;
 
 		case T_AlterOperatorStmt:
 			tag = "ALTER OPERATOR";
+			*pESqlType = T_Stat_ALTER_OPERATOR;
 			break;
 
 		case T_AlterTSDictionaryStmt:
 			tag = "ALTER TEXT SEARCH DICTIONARY";
+			*pESqlType = T_Stat_ALTER_TEXT_SEARCH_DICTIONARY;
 			break;
 
 		case T_AlterTSConfigurationStmt:
 			tag = "ALTER TEXT SEARCH CONFIGURATION";
+			*pESqlType = T_Stat_ALTER_TEXT_SEARCH_CONFIGURATION;
 			break;
 
 		case T_CreatePolicyStmt:
 			tag = "CREATE POLICY";
+			*pESqlType = T_Stat_CREATE_POLICY;
 			break;
 
 		case T_AlterPolicyStmt:
 			tag = "ALTER POLICY";
+			*pESqlType = T_Stat_ALTER_POLICY;
 			break;
 
 		case T_CreateAmStmt:
 			tag = "CREATE ACCESS METHOD";
+			*pESqlType = T_Stat_CREATE_ACCESS_METHOD;
 			break;
 
 		case T_CreatePublicationStmt:
 			tag = "CREATE PUBLICATION";
+			*pESqlType = T_Stat_CREATE_PUBLICATION;
 			break;
 
 		case T_AlterPublicationStmt:
 			tag = "ALTER PUBLICATION";
+			*pESqlType = T_Stat_ALTER_PUBLICATION;
 			break;
 
 		case T_CreateSubscriptionStmt:
 			tag = "CREATE SUBSCRIPTION";
+			*pESqlType = T_Stat_CREATE_SUBSCRIPTION;
 			break;
 
 		case T_AlterSubscriptionStmt:
 			tag = "ALTER SUBSCRIPTION";
+			*pESqlType = T_Stat_ALTER_SUBSCRIPTION;
 			break;
 
 		case T_DropSubscriptionStmt:
 			tag = "DROP SUBSCRIPTION";
+			*pESqlType = T_Stat_DROP_SUBSCRIPTION;
 			break;
 
 		case T_AlterCollationStmt:
 			tag = "ALTER COLLATION";
+			*pESqlType = T_Stat_ALTER_COLLATION;
 			break;
 
 		case T_PrepareStmt:
 			tag = "PREPARE";
+			*pESqlType = T_Stat_PREPARE;
 			break;
 
 		case T_ExecuteStmt:
 			tag = "EXECUTE";
+			*pESqlType = T_Stat_EXECUTE;
 			break;
 
 		case T_CreateStatsStmt:
 			tag = "CREATE STATISTICS";
+			*pESqlType = T_Stat_CREATE_STATISTICS;
 			break;
 
 		case T_AlterStatsStmt:
 			tag = "ALTER STATISTICS";
+			*pESqlType = T_Stat_ALTER_STATISTICS;
 			break;
 
 		case T_DeallocateStmt:
@@ -2814,9 +3223,15 @@ CreateCommandTag(Node *parsetree)
 				DeallocateStmt *stmt = (DeallocateStmt *) parsetree;
 
 				if (stmt->name == NULL)
+				{
 					tag = "DEALLOCATE ALL";
+					*pESqlType = T_Stat_DEALLOCATE_ALL;
+				}
 				else
+				{
 					tag = "DEALLOCATE";
+					*pESqlType = T_Stat_DEALLOCATE;
+				}
 			}
 			break;
 
@@ -2841,40 +3256,50 @@ CreateCommandTag(Node *parsetree)
 							{
 								case LCS_FORKEYSHARE:
 									tag = "SELECT FOR KEY SHARE";
+									*pESqlType = T_Stat_SELECT_FOR_KEY_SHARE;
 									break;
 								case LCS_FORSHARE:
 									tag = "SELECT FOR SHARE";
+									*pESqlType = T_Stat_SELECT_FOR_SHARE;
 									break;
 								case LCS_FORNOKEYUPDATE:
 									tag = "SELECT FOR NO KEY UPDATE";
+									*pESqlType = T_Stat_SELECT_FOR_NO_KEY_UPDATE;
 									break;
 								case LCS_FORUPDATE:
 									tag = "SELECT FOR UPDATE";
+									*pESqlType = T_Stat_SELECT_FOR_UPDATE;
 									break;
 								default:
 									tag = "SELECT";
+									*pESqlType = T_Stat_SELECT;
 									break;
 							}
 						}
 						else
 							tag = "SELECT";
+							*pESqlType = T_Stat_SELECT;
 						break;
 					case CMD_UPDATE:
 						tag = "UPDATE";
+						*pESqlType = T_Stat_UPDATE;
 						break;
 					case CMD_INSERT:
 						tag = "INSERT";
+						*pESqlType = T_Stat_INSERT;
 						break;
 					case CMD_DELETE:
 						tag = "DELETE";
+						*pESqlType = T_Stat_DELETE;
 						break;
 					case CMD_UTILITY:
-						tag = CreateCommandTag(stmt->utilityStmt);
+						tag = CreateCommandTagType(stmt->utilityStmt, pESqlType);
 						break;
 					default:
 						elog(WARNING, "unrecognized commandType: %d",
 							 (int) stmt->commandType);
 						tag = "???";
+						*pESqlType = T_Stat_UNKNOWN;
 						break;
 				}
 			}
@@ -2901,40 +3326,50 @@ CreateCommandTag(Node *parsetree)
 							{
 								case LCS_FORKEYSHARE:
 									tag = "SELECT FOR KEY SHARE";
+									*pESqlType = T_Stat_SELECT_FOR_KEY_SHARE;
 									break;
 								case LCS_FORSHARE:
 									tag = "SELECT FOR SHARE";
+									*pESqlType = T_Stat_SELECT_FOR_SHARE;
 									break;
 								case LCS_FORNOKEYUPDATE:
 									tag = "SELECT FOR NO KEY UPDATE";
+									*pESqlType = T_Stat_SELECT_FOR_NO_KEY_UPDATE;
 									break;
 								case LCS_FORUPDATE:
 									tag = "SELECT FOR UPDATE";
+									*pESqlType = T_Stat_SELECT_FOR_UPDATE;
 									break;
 								default:
 									tag = "???";
+									*pESqlType = T_Stat_UNKNOWN;
 									break;
 							}
 						}
 						else
 							tag = "SELECT";
+							*pESqlType = T_Stat_SELECT;
 						break;
 					case CMD_UPDATE:
 						tag = "UPDATE";
+						*pESqlType = T_Stat_UPDATE;
 						break;
 					case CMD_INSERT:
 						tag = "INSERT";
+						*pESqlType = T_Stat_INSERT;
 						break;
 					case CMD_DELETE:
 						tag = "DELETE";
+						*pESqlType = T_Stat_DELETE;
 						break;
 					case CMD_UTILITY:
-						tag = CreateCommandTag(stmt->utilityStmt);
+						tag = CreateCommandTagType(stmt->utilityStmt, pESqlType);
 						break;
 					default:
 						elog(WARNING, "unrecognized commandType: %d",
 							 (int) stmt->commandType);
 						tag = "???";
+						*pESqlType = T_Stat_UNKNOWN;
 						break;
 				}
 			}
@@ -2944,10 +3379,50 @@ CreateCommandTag(Node *parsetree)
 			elog(WARNING, "unrecognized node type: %d",
 				 (int) nodeTag(parsetree));
 			tag = "???";
+			*pESqlType = T_Stat_UNKNOWN;
 			break;
 	}
 
 	return tag;
+}
+
+
+/*
+ * CreateCommandTag
+ *		utility to get a string representation of the command operation,
+ *		given either a raw (un-analyzed) parsetree, an analyzed Query,
+ *		or a PlannedStmt.
+ *
+ * This must handle all command types, but since the vast majority
+ * of 'em are utility commands, it seems sensible to keep it here.
+ *
+ * NB: all result strings must be shorter than COMPLETION_TAG_BUFSIZE.
+ * Also, the result must point at a true constant (permanent storage).
+ */
+const char *
+CreateCommandTag(Node *parsetree)
+{
+	StatSqlType eType;
+	return CreateCommandTagType(parsetree, &eType);
+}
+
+
+/*
+ * CreateCommandType
+ *		utility to get a enum representation of the command operation,
+ *		given either a raw (un-analyzed) parsetree, an analyzed Query,
+ *		or a PlannedStmt.
+ *
+ * This must handle all command types, but since the vast majority
+ * of 'em are utility commands, it seems sensible to keep it here.
+ *
+ */
+StatSqlType
+CreateCommandType(Node *parsetree)
+{
+	StatSqlType eType;
+	CreateCommandTagType(parsetree, &eType);
+	return eType;
 }
 
 

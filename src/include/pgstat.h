@@ -19,6 +19,7 @@
 #include "storage/proc.h"
 #include "utils/hsearch.h"
 #include "utils/relcache.h"
+#include "tcop/utility.h"
 
 
 /* ----------
@@ -119,7 +120,8 @@ typedef struct PgStat_TableCounts
 typedef enum PgStat_Shared_Reset_Target
 {
 	RESET_ARCHIVER,
-	RESET_BGWRITER
+	RESET_BGWRITER,
+	RESET_SQLSTMT
 } PgStat_Shared_Reset_Target;
 
 /* Possible object types for resetting single counters */
@@ -581,7 +583,7 @@ typedef union PgStat_Msg
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BC9D
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BC9E
 
 /* ----------
  * PgStat_StatDBEntry			The collector's data per database
@@ -1210,6 +1212,7 @@ typedef struct PgStat_FunctionCallUsage
  */
 extern bool pgstat_track_activities;
 extern bool pgstat_track_counts;
+extern bool pgstat_track_statement_statistics;
 extern int	pgstat_track_functions;
 extern PGDLLIMPORT int pgstat_track_activity_query_size;
 extern char *pgstat_stat_directory;
@@ -1220,6 +1223,11 @@ extern char *pgstat_stat_filename;
  * BgWriter statistics counters are updated directly by bgwriter and bufmgr
  */
 extern PgStat_MsgBgWriter BgWriterStats;
+
+/*
+ * SQL statement statistics counter
+ */
+extern uint64* pgstat_sql_counts;
 
 /*
  * Updated by pgstat_count_buffer_*_time macros
@@ -1298,6 +1306,9 @@ extern PgStat_BackendFunctionEntry *find_funcstat_entry(Oid func_id);
 extern void pgstat_initstats(Relation rel);
 
 extern char *pgstat_clip_activity(const char *raw_activity);
+
+extern Size pgstat_sql_shmem_size(void);
+extern void pgstat_sql_shmem_init(void);
 
 /* ----------
  * pgstat_report_wait_start() -
@@ -1420,6 +1431,7 @@ extern void pgstat_twophase_postabort(TransactionId xid, uint16 info,
 
 extern void pgstat_send_archiver(const char *xlog, bool failed);
 extern void pgstat_send_bgwriter(void);
+extern void pgstat_count_sqlstmt(StatSqlType sqlType);
 
 /* ----------
  * Support functions for the SQL-callable functions to

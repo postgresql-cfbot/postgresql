@@ -6,7 +6,7 @@ use warnings;
 
 use PostgresNode;
 use TestLib;
-use Test::More tests => 9;
+use Test::More tests => 8;
 
 # To avoid hanging while expecting some specific input from a psql
 # instance being driven by us, add a timeout high enough that it
@@ -66,14 +66,6 @@ my $pid = $killme_stdout;
 chomp($pid);
 $killme_stdout = '';
 $killme_stderr = '';
-
-# Check the connections on foobar1 database.
-is( $node->safe_psql(
-		'postgres',
-		qq[SELECT pid FROM pg_stat_activity WHERE datname='foobar1' AND pid = $pid;]
-	),
-	$pid,
-	'database foobar1 is used');
 
 # Now drop database with dropdb --force command.
 $node->issues_sql_like(

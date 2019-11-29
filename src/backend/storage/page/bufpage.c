@@ -82,11 +82,8 @@ bool
 PageIsVerified(Page page, BlockNumber blkno)
 {
 	PageHeader	p = (PageHeader) page;
-	size_t	   *pagebytes;
-	int			i;
 	bool		checksum_failure = false;
 	bool		header_sane = false;
-	bool		all_zeroes = false;
 	uint16		checksum = 0;
 
 	/*
@@ -120,25 +117,9 @@ PageIsVerified(Page page, BlockNumber blkno)
 	}
 
 	/*
-	 * Check all-zeroes case. Luckily BLCKSZ is guaranteed to always be a
-	 * multiple of size_t - and it's much faster to compare memory using the
-	 * native word size.
+	 * Check all-zeroes case
 	 */
-	StaticAssertStmt(BLCKSZ == (BLCKSZ / sizeof(size_t)) * sizeof(size_t),
-					 "BLCKSZ has to be a multiple of sizeof(size_t)");
-
-	all_zeroes = true;
-	pagebytes = (size_t *) page;
-	for (i = 0; i < (BLCKSZ / sizeof(size_t)); i++)
-	{
-		if (pagebytes[i] != 0)
-		{
-			all_zeroes = false;
-			break;
-		}
-	}
-
-	if (all_zeroes)
+	if (PageIsZero(page))
 		return true;
 
 	/*
@@ -161,6 +142,39 @@ PageIsVerified(Page page, BlockNumber blkno)
 	return false;
 }
 
+/*
+ * PageIsZero
+ *		Check that the page consists only of zero bytes.
+ *
+ */
+bool
+PageIsZero(Page page)
+{
+	bool		all_zeroes = true;
+	int			i;
+	size_t	   *pagebytes = (size_t *) page;
+
+	/*
+	 * Luckily BLCKSZ is guaranteed to always be a multiple of size_t - and
+	 * it's much faster to compare memory using the native word size.
+	 */
+	StaticAssertStmt(BLCKSZ == (BLCKSZ / sizeof(size_t)) * sizeof(size_t),
+					 "BLCKSZ has to be a multiple of sizeof(size_t)");
+
+	for (i = 0; i < (BLCKSZ / sizeof(size_t)); i++)
+	{
+		if (pagebytes[i] != 0)
+		{
+			all_zeroes = false;
+			break;
+		}
+	}
+
+	if (all_zeroes)
+		return true;
+	else
+		return false;
+}
 
 /*
  *	PageAddItemExtended

@@ -1183,6 +1183,152 @@ select jsonb_insert('{"a": {"b": "value"}}', '{a, c}', '"new_value"', true);
 select jsonb_insert('{"a": {"b": "value"}}', '{a, b}', '"new_value"');
 select jsonb_insert('{"a": {"b": "value"}}', '{a, b}', '"new_value"', true);
 
+-- jsonb subscript
+select ('123'::jsonb)['a'];
+select ('123'::jsonb)[0];
+select ('123'::jsonb)[NULL];
+select ('{"a": 1}'::jsonb)['a'];
+select ('{"a": 1}'::jsonb)[0];
+select ('{"a": 1}'::jsonb)['not_exist'];
+select ('{"a": 1}'::jsonb)[NULL];
+select ('[1, "2", null]'::jsonb)['a'];
+select ('[1, "2", null]'::jsonb)[0];
+select ('[1, "2", null]'::jsonb)['1'];
+select ('[1, "2", null]'::jsonb)['1.0'];
+select ('[1, "2", null]'::jsonb)[1.0];
+select ('[1, "2", null]'::jsonb)[1.4];
+select ('[1, "2", null]'::jsonb)[1.5];
+select ('[1, "2", null]'::jsonb)[1.6];
+select ('[1, "2", null]'::jsonb)[0.6];
+select ('[1, "2", null]'::jsonb)['0.3'::numeric];
+select ('[1, "2", null]'::jsonb)[2];
+select ('[1, "2", null]'::jsonb)[3];
+select ('[1, "2", null]'::jsonb)[-2];
+select ('[1, "2", null]'::jsonb)[1]['a'];
+select ('[1, "2", null]'::jsonb)[1][0];
+select ('{"a": 1, "b": "c", "d": [1, 2, 3]}'::jsonb)['b'];
+select ('{"a": 1, "b": "c", "d": [1, 2, 3]}'::jsonb)['d'];
+select ('{"a": 1, "b": "c", "d": [1, 2, 3]}'::jsonb)['d'][1];
+select ('{"a": 1, "b": "c", "d": [1, 2, 3]}'::jsonb)['d']['a'];
+select ('{"a": {"a1": {"a2": "aaa"}}, "b": "bbb", "c": "ccc"}'::jsonb)['a']['a1'];
+select ('{"a": {"a1": {"a2": "aaa"}}, "b": "bbb", "c": "ccc"}'::jsonb)['a']['a1']['a2'];
+select ('{"a": {"a1": {"a2": "aaa"}}, "b": "bbb", "c": "ccc"}'::jsonb)['a']['a1']['a2']['a3'];
+select ('{"a": ["a1", {"b1": ["aaa", "bbb", "ccc"]}], "b": "bb"}'::jsonb)['a'][1]['b1'];
+select ('{"a": ["a1", {"b1": ["aaa", "bbb", "ccc"]}], "b": "bb"}'::jsonb)['a'][1]['b1'][2];
+select ('{"1": "a", "1.0": "b", "1.2": "c"}'::jsonb)[1];
+select ('{"1": "a", "1.0": "b", "1.2": "c"}'::jsonb)[1.0];
+select ('{"1": "a", "1.0": "b", "1.2": "c"}'::jsonb)[1.1];
+select ('{"1": "a", "1.0": "b", "1.2": "c"}'::jsonb)[1.2];
+select ('{"1": "a", "1.0": "b", "1.2": "c"}'::jsonb)['1'];
+select ('{"1": "a", "1.0": "b", "1.2": "c"}'::jsonb)['1.0'];
+select ('{"1": "a", "1.0": "b", "1.2": "c"}'::jsonb)['1.1'];
+select ('{"1": "a", "1.0": "b", "1.2": "c"}'::jsonb)['1.2'];
+
+
+create TEMP TABLE test_jsonb_subscript (
+       id int,
+       test_json jsonb
+);
+
+insert into test_jsonb_subscript values
+(1, '{}'), -- empty jsonb
+(2, '{"key": "value"}'); -- jsonb with data
+
+-- update empty jsonb
+update test_jsonb_subscript set test_json['a'] = 1 where id = 1;
+select * from test_jsonb_subscript;
+
+-- update jsonb with some data
+update test_jsonb_subscript set test_json['a'] = 1 where id = 2;
+select * from test_jsonb_subscript;
+
+-- replace jsonb
+update test_jsonb_subscript set test_json['a'] = 'test';
+select * from test_jsonb_subscript;
+
+-- replace by object
+update test_jsonb_subscript set test_json['a'] = '{"b": 1}'::jsonb;
+select * from test_jsonb_subscript;
+
+-- replace by array
+update test_jsonb_subscript set test_json['a'] = '[1, 2, 3]'::jsonb;
+select * from test_jsonb_subscript;
+
+-- replace element in string subscript
+update test_jsonb_subscript set test_json['a']['3'] = '4'::jsonb;
+select * from test_jsonb_subscript;
+
+-- bad array subscripts
+update test_jsonb_subscript set test_json['a']['a'] = '5'::jsonb;
+select * from test_jsonb_subscript;
+
+update test_jsonb_subscript set test_json['a'][0][1] = '5'::jsonb;
+select * from test_jsonb_subscript;
+
+
+-- append element to array
+update test_jsonb_subscript set test_json['a'][2.9] = '"4"'::jsonb;
+select * from test_jsonb_subscript;
+
+-- append element to array with a gap filled with nulls
+update test_jsonb_subscript set test_json['a'][7] = '8'::jsonb;
+select * from test_jsonb_subscript;
+
+-- replace element in array using negative subscript
+update test_jsonb_subscript set test_json['a'][-4] = '5'::jsonb;
+select * from test_jsonb_subscript;
+
+-- prepend element to array using negative subscript with a gap filled with nulls
+update test_jsonb_subscript set test_json['a'][-10] = '6'::jsonb;
+select * from test_jsonb_subscript;
+
+
+-- use jsonb subscription in where clause
+select * from test_jsonb_subscript where test_json['key'] = '"value"';
+select * from test_jsonb_subscript where test_json['key_doesnt_exists'] = '"value"';
+select * from test_jsonb_subscript where test_json['key'] = '"wrong_value"';
+
+-- NULL
+update test_jsonb_subscript set test_json[NULL] = 1;
+update test_jsonb_subscript set test_json['another_key'] = NULL;
+select * from test_jsonb_subscript;
+
+-- create a path
+delete from test_jsonb_subscript;
+insert into test_jsonb_subscript values (0, NULL);
+
+update test_jsonb_subscript set test_json['a'] = '1'::jsonb;
+select * from test_jsonb_subscript;
+
+update test_jsonb_subscript set test_json['b'][0] = '2'::jsonb;
+select * from test_jsonb_subscript;
+
+update test_jsonb_subscript set test_json['c'][0]['a'] = '3'::jsonb;
+select * from test_jsonb_subscript;
+
+update test_jsonb_subscript set test_json['d'][0]['a'][3] = '4'::jsonb;
+select * from test_jsonb_subscript;
+
+update test_jsonb_subscript set test_json['d'][0]['c'][-3] = '5'::jsonb;
+select * from test_jsonb_subscript;
+
+update test_jsonb_subscript set test_json['d'][0]['b']['x'] = '6'::jsonb;
+select * from test_jsonb_subscript;
+
+update test_jsonb_subscript set test_json['e']['y'] = '7'::jsonb;
+select * from test_jsonb_subscript;
+
+-- updating of scalar's subscripts
+update test_jsonb_subscript set test_json = '1';
+update test_jsonb_subscript set test_json['a'] = '1'::jsonb;
+update test_jsonb_subscript set test_json[0] = '1'::jsonb;
+
+update test_jsonb_subscript set test_json = '{"a": 1}';
+update test_jsonb_subscript set test_json['a']['a'] = '1'::jsonb;
+update test_jsonb_subscript set test_json['a'][0] = '1'::jsonb;
+
+select * from test_jsonb_subscript;
+
 -- jsonb to tsvector
 select to_tsvector('{"a": "aaa bbb ddd ccc", "b": ["eee fff ggg"], "c": {"d": "hhh iii"}}'::jsonb);
 

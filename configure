@@ -16022,6 +16022,12 @@ fi
 esac
 
   case " $LIBOBJS " in
+  *" win32_stat.$ac_objext "* ) ;;
+  *) LIBOBJS="$LIBOBJS win32_stat.$ac_objext"
+ ;;
+esac
+
+  case " $LIBOBJS " in
   *" kill.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS kill.$ac_objext"
  ;;

@@ -2729,8 +2729,6 @@ keep_going:						/* We will come back to here until there is
 				char	   *startpacket;
 				int			packetlen;
 
-#ifdef HAVE_UNIX_SOCKETS
-
 				/*
 				 * Implement requirepeer check, if requested and it's a
 				 * Unix-domain socket.
@@ -2738,10 +2736,12 @@ keep_going:						/* We will come back to here until there is
 				if (conn->requirepeer && conn->requirepeer[0] &&
 					IS_AF_UNIX(conn->raddr.addr.ss_family))
 				{
+#ifndef WIN32
 					char		pwdbuf[BUFSIZ];
 					struct passwd pass_buf;
 					struct passwd *pass;
 					int			passerr;
+#endif
 					uid_t		uid;
 					gid_t		gid;
 
@@ -2762,6 +2762,7 @@ keep_going:						/* We will come back to here until there is
 						goto error_return;
 					}
 
+#ifndef WIN32
 					passerr = pqGetpwuid(uid, &pass_buf, pwdbuf, sizeof(pwdbuf), &pass);
 					if (pass == NULL)
 					{
@@ -2784,8 +2785,11 @@ keep_going:						/* We will come back to here until there is
 										  conn->requirepeer, pass->pw_name);
 						goto error_return;
 					}
+#else							/* WIN32 */
+					/* should have failed with ENOSYS above */
+					Assert(false);
+#endif							/* WIN32 */
 				}
-#endif							/* HAVE_UNIX_SOCKETS */
 
 				if (IS_AF_UNIX(conn->raddr.addr.ss_family))
 				{

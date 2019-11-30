@@ -1565,8 +1565,14 @@ transformMultiAssignRef(ParseState *pstate, MultiAssignRef *maref)
 	Query	   *qtree;
 	TargetEntry *tle;
 
-	/* We should only see this in first-stage processing of UPDATE tlists */
-	Assert(pstate->p_expr_kind == EXPR_KIND_UPDATE_SOURCE);
+	/*
+	 * We should only see this in first-stage processing of UPDATE tlists
+	 * (UPDATE_SOURCE), an INSERT SET tlist (VALUES_SINGLE) or from a rewritten
+	 * query using rules (SELECT_TARGET).
+	 */
+	Assert(pstate->p_expr_kind == EXPR_KIND_UPDATE_SOURCE ||
+		   pstate->p_expr_kind == EXPR_KIND_VALUES_SINGLE ||
+		   pstate->p_expr_kind == EXPR_KIND_SELECT_TARGET);
 
 	/* We only need to transform the source if this is the first column */
 	if (maref->colno == 1)

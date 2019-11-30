@@ -14,6 +14,7 @@
 
 #include "postgres.h"
 
+#include "access/heapam.h"
 #include "access/nbtree.h"
 #include "access/parallel.h"
 #include "access/session.h"
@@ -139,6 +140,9 @@ static const struct
 	},
 	{
 		"_bt_parallel_build_main", _bt_parallel_build_main
+	},
+	{
+		"heap_parallel_vacuum_main", heap_parallel_vacuum_main
 	}
 };
 
@@ -490,10 +494,11 @@ ReinitializeParallelDSM(ParallelContext *pcxt)
  * Launch parallel workers.
  */
 void
-LaunchParallelWorkers(ParallelContext *pcxt)
+LaunchParallelWorkers(ParallelContext *pcxt, int nworkers)
 {
 	MemoryContext oldcontext;
 	BackgroundWorker worker;
+	int			nworkers_to_launch = Min(nworkers, pcxt->nworkers);;
 	int			i;
 	bool		any_registrations_failed = false;
 
@@ -533,7 +538,7 @@ LaunchParallelWorkers(ParallelContext *pcxt)
 	 * fails.  It wouldn't help much anyway, because registering the worker in
 	 * no way guarantees that it will start up and initialize successfully.
 	 */
-	for (i = 0; i < pcxt->nworkers; ++i)
+	for (i = 0; i < nworkers_to_launch; ++i)
 	{
 		memcpy(worker.bgw_extra, &i, sizeof(int));
 		if (!any_registrations_failed &&

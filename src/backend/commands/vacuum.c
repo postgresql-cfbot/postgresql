@@ -42,6 +42,7 @@
 #include "nodes/makefuncs.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
+#include "postmaster/bgworker_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
@@ -99,6 +100,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	/* Set default value */
 	params.index_cleanup = VACOPT_TERNARY_DEFAULT;
 	params.truncate = VACOPT_TERNARY_DEFAULT;
+	params.nworkers = -1;
 
 	/* Parse options list */
 	foreach(lc, vacstmt->options)
@@ -129,6 +131,28 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 			params.index_cleanup = get_vacopt_ternary_value(opt);
 		else if (strcmp(opt->defname, "truncate") == 0)
 			params.truncate = get_vacopt_ternary_value(opt);
+		else if (strcmp(opt->defname, "parallel") == 0)
+		{
+			if (opt->arg == NULL)
+			{
+				/*
+				 * Parallel lazy vacuum is requested but user didn't specify
+				 * the parallel degree. The parallel degree will be determined
+				 * at the start of lazy vacuum.
+				 */
+				params.nworkers = 0;
+			}
+			else
+			{
+				params.nworkers = defGetInt32(opt);
+				if (params.nworkers < 1 || params.nworkers > MAX_PARALLEL_WORKER_LIMIT)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("parallel vacuum degree must be between 1 and %d",
+									MAX_PARALLEL_WORKER_LIMIT),
+							 parser_errposition(pstate, opt->location)));
+			}
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -169,6 +193,11 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 						 errmsg("ANALYZE option must be specified when a column list is provided")));
 		}
 	}
+
+	if ((params.options & VACOPT_FULL) && params.nworkers >= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot specify FULL option with PARALLEL option")));
 
 	/*
 	 * All freeze ages are zero if the FREEZE option is given; otherwise pass
@@ -383,6 +412,7 @@ vacuum(List *relations, VacuumParams *params,
 		VacuumPageHit = 0;
 		VacuumPageMiss = 0;
 		VacuumPageDirty = 0;
+		VacuumSharedCostBalance = NULL;
 
 		/*
 		 * Loop to process each selected relation.
@@ -1739,6 +1769,20 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 	}
 
 	/*
+	 * Since parallel workers cannot access data in temporary tables, parallel
+	 * vacuum is not allowed for temporary relation. However rather than
+	 * skipping vacuum on the table, just disabling parallel option is better
+	 * option in most cases.
+	 */
+	if (RelationUsesLocalBuffers(onerel) && params->nworkers >= 0)
+	{
+		ereport(WARNING,
+				(errmsg("disabling parallel option of vacuum on \"%s\" --- cannot vacuum temporary tables in parallel",
+						RelationGetRelationName(onerel))));
+		params->nworkers = 0;
+	}
+
+	/*
 	 * Silently ignore partitioned tables as there is no work to be done.  The
 	 * useful work is on their child partitions, which have been queued up for
 	 * us separately.
@@ -1941,16 +1985,73 @@ vac_close_indexes(int nindexes, Relation *Irel, LOCKMODE lockmode)
 void
 vacuum_delay_point(void)
 {
+	double	msec = 0;
+
 	/* Always check for interrupts */
 	CHECK_FOR_INTERRUPTS();
 
-	/* Nap if appropriate */
-	if (VacuumCostActive && !InterruptPending &&
-		VacuumCostBalance >= VacuumCostLimit)
-	{
-		double		msec;
+	if (!VacuumCostActive || InterruptPending)
+		return;
 
+	/*
+	 * If the vacuum cost balance is shared among parallel workers we
+	 * decide whether to sleep based on that.
+	 */
+	if (VacuumSharedCostBalance != NULL)
+	{
+		int nworkers = pg_atomic_read_u32(VacuumActiveNWorkers);
+
+		/* At least count itself */
+		Assert(nworkers >= 1);
+
+		/* Update the shared cost balance value atomically */
+		while (true)
+		{
+			uint32 shared_balance;
+			uint32 new_balance;
+			uint32 local_balance;
+
+			msec = 0;
+
+			/* compute new balance by adding the local value */
+			shared_balance = pg_atomic_read_u32(VacuumSharedCostBalance);
+			new_balance = shared_balance + VacuumCostBalance;
+
+			/* also compute the total local balance */
+			local_balance = VacuumCostBalanceLocal + VacuumCostBalance;
+
+			if ((new_balance >= VacuumCostLimit) &&
+				(local_balance > 0.5 * (VacuumCostLimit / nworkers)))
+			{
+				/* compute sleep time based on the local cost balance */
+				msec = VacuumCostDelay * VacuumCostBalanceLocal / VacuumCostLimit;
+				new_balance = shared_balance - VacuumCostBalanceLocal;
+				VacuumCostBalanceLocal = 0;
+			}
+
+			if (pg_atomic_compare_exchange_u32(VacuumSharedCostBalance,
+											   &shared_balance,
+											   new_balance))
+			{
+				/* Updated successfully, break */
+				break;
+			}
+		}
+
+		VacuumCostBalanceLocal += VacuumCostBalance;
+
+		/*
+		 * Reset the local balance as we accumulated it into the shared
+		 * value.
+		 */
+		VacuumCostBalance = 0;
+	}
+	else if (VacuumCostBalance >= VacuumCostLimit)
 		msec = VacuumCostDelay * VacuumCostBalance / VacuumCostLimit;
+
+	/* Nap if appropriate */
+	if (msec > 0)
+	{
 		if (msec > VacuumCostDelay * 4)
 			msec = VacuumCostDelay * 4;
 

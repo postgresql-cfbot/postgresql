@@ -183,7 +183,7 @@ ExecGather(PlanState *pstate)
 			 * requested, or indeed any at all.
 			 */
 			pcxt = node->pei->pcxt;
-			LaunchParallelWorkers(pcxt);
+			LaunchParallelWorkers(pcxt, gather->num_workers);
 			/* We save # workers launched for the benefit of EXPLAIN */
 			node->nworkers_launched = pcxt->nworkers_launched;
 

@@ -122,6 +122,10 @@ typedef struct IndexAmRoutine
     bool        amcanparallel;
     /* does AM support columns included with clause INCLUDE? */
     bool        amcaninclude;
+    /* OR of parallel vacuum flags */
+    uint8       amparallelvacuumoptions;
+    /* does AM use maintenance_work_mem? */
+    bool        amusemaintenanceworkmem;
     /* type of data stored in index, or InvalidOid if variable */
     Oid         amkeytype;
 
@@ -149,6 +153,9 @@ typedef struct IndexAmRoutine
     amestimateparallelscan_function amestimateparallelscan;    /* can be NULL */
     aminitparallelscan_function aminitparallelscan;    /* can be NULL */
     amparallelrescan_function amparallelrescan;    /* can be NULL */
+
+    /* interface function to support parallel vacuum */
+    amestimateparallelvacuum_function amestimateparallelvacuum; /* can be NULL */
 } IndexAmRoutine;
 </programlisting>
   </para>
@@ -731,6 +738,21 @@ amparallelrescan (IndexScanDesc scan);
    the beginning.
   </para>
 
+  <para>
+<programlisting>
+Size
+amestimateparallelvacuum (void);
+</programlisting>
+   Estimate and return the number of bytes of dynamic shared memory needed to
+   store statistics returned by the access method.
+  </para>
+
+  <para>
+   It is not necessary to implement this function for access methods which
+   do not support parallel vacuum or in cases where the access method does not
+   require more than size of <structname>IndexBulkDeleteResult</structname> to
+   store statistics.
+  </para>
  </sect1>
 
  <sect1 id="index-scanning">

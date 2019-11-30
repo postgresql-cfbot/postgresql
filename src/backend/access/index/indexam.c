@@ -711,6 +711,33 @@ index_vacuum_cleanup(IndexVacuumInfo *info,
 	return indexRelation->rd_indam->amvacuumcleanup(info, stats);
 }
 
+/*
+ * index_parallelvacuum_estimate
+ *
+ * Estimates the DSM space needed to store statistics for parallel vacuum.
+ */
+Size
+index_parallelvacuum_estimate(Relation indexRelation)
+{
+	Size		nbytes;
+
+	RELATION_CHECKS;
+
+	/*
+	 * If amestimateparallelvacuum is not provided, assume only
+	 * IndexBulkDeleteResult is needed.
+	 */
+	if (indexRelation->rd_indam->amestimateparallelvacuum != NULL)
+	{
+		nbytes = indexRelation->rd_indam->amestimateparallelvacuum();
+		Assert(nbytes >= MAXALIGN(sizeof(IndexBulkDeleteResult)));
+	}
+	else
+		nbytes = MAXALIGN(sizeof(IndexBulkDeleteResult));
+
+	return nbytes;
+}
+
 /* ----------------
  *		index_can_return
  *

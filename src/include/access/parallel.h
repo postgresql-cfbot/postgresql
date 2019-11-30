@@ -63,7 +63,7 @@ extern ParallelContext *CreateParallelContext(const char *library_name,
 											  const char *function_name, int nworkers);
 extern void InitializeParallelDSM(ParallelContext *pcxt);
 extern void ReinitializeParallelDSM(ParallelContext *pcxt);
-extern void LaunchParallelWorkers(ParallelContext *pcxt);
+extern void LaunchParallelWorkers(ParallelContext *pcxt, int nworkers);
 extern void WaitForParallelWorkersToAttach(ParallelContext *pcxt);
 extern void WaitForParallelWorkersToFinish(ParallelContext *pcxt);
 extern void DestroyParallelContext(ParallelContext *pcxt);

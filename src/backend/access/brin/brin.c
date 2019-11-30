@@ -27,6 +27,7 @@
 #include "access/xloginsert.h"
 #include "catalog/index.h"
 #include "catalog/pg_am.h"
+#include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
@@ -101,6 +102,9 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->ampredlocks = false;
 	amroutine->amcanparallel = false;
 	amroutine->amcaninclude = false;
+	amroutine->amparallelvacuumoptions =
+		VACUUM_OPTION_PARALLEL_CLEANUP;
+	amroutine->amusemaintenanceworkmem = false;
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = brinbuild;
@@ -124,6 +128,7 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
+	amroutine->amestimateparallelvacuum = NULL;
 
 	PG_RETURN_POINTER(amroutine);
 }

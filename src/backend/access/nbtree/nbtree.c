@@ -123,6 +123,9 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->ampredlocks = true;
 	amroutine->amcanparallel = true;
 	amroutine->amcaninclude = true;
+	amroutine->amparallelvacuumoptions =
+		VACUUM_OPTION_PARALLEL_BULKDEL | VACUUM_OPTION_PARALLEL_COND_CLEANUP;
+	amroutine->amusemaintenanceworkmem = false;
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = btbuild;
@@ -146,6 +149,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = btestimateparallelscan;
 	amroutine->aminitparallelscan = btinitparallelscan;
 	amroutine->amparallelrescan = btparallelrescan;
+	amroutine->amestimateparallelvacuum = NULL;
 
 	PG_RETURN_POINTER(amroutine);
 }

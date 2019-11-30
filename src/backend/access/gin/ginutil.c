@@ -20,6 +20,7 @@
 #include "access/xloginsert.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
+#include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
@@ -53,6 +54,9 @@ ginhandler(PG_FUNCTION_ARGS)
 	amroutine->ampredlocks = true;
 	amroutine->amcanparallel = false;
 	amroutine->amcaninclude = false;
+	amroutine->amparallelvacuumoptions =
+		VACUUM_OPTION_PARALLEL_BULKDEL | VACUUM_OPTION_PARALLEL_CLEANUP;
+	amroutine->amusemaintenanceworkmem = true;
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = ginbuild;
@@ -76,6 +80,7 @@ ginhandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
+	amroutine->amestimateparallelvacuum = NULL;
 
 	PG_RETURN_POINTER(amroutine);
 }

@@ -1428,7 +1428,7 @@ _bt_begin_parallel(BTBuildState *buildstate, bool isconcurrent, int request)
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_QUERY_TEXT, sharedquery);
 
 	/* Launch workers, saving status for leader/caller */
-	LaunchParallelWorkers(pcxt);
+	LaunchParallelWorkers(pcxt, request);
 	btleader->pcxt = pcxt;
 	btleader->nparticipanttuplesorts = pcxt->nworkers_launched;
 	if (leaderparticipates)

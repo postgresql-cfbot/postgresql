@@ -34,6 +34,7 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     SKIP_LOCKED [ <replaceable class="parameter">boolean</replaceable> ]
     INDEX_CLEANUP [ <replaceable class="parameter">boolean</replaceable> ]
     TRUNCATE [ <replaceable class="parameter">boolean</replaceable> ]
+    PARALLEL [ <replaceable class="parameter">integer</replaceable> ]
 
 <phrase>and <replaceable class="parameter">table_and_columns</replaceable> is:</phrase>
 
@@ -224,6 +225,32 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
    </varlistentry>
 
    <varlistentry>
+    <term><literal>PARALLEL</literal></term>
+    <listitem>
+     <para>
+      Perform vacuum index and cleanup index phases of <command>VACUUM</command>
+      in parallel using <replaceable class="parameter">integer</replaceable>
+      background workers (for the detail of each vacuum phases, please
+      refer to <xref linkend="vacuum-phases"/>).  If the parallel degree
+      <replaceable class="parameter">integer</replaceable> is omitted,
+      then <command>VACUUM</command> decides the number of workers based
+      on number of indexes that support parallel vacuum operation on the
+      relation which is further limited by
+      <xref linkend="guc-max-parallel-workers-maintenance"/>.  Please note
+      that it is not guaranteed that the number of parallel workers specified
+      in <replaceable class="parameter">integer</replaceable> will be used
+      during execution.  It is possible for a vacuum to run with fewer workers
+      than specified, or even with no workers at all.  Only one worker can
+      be used per index.  So parallel workers are launched only when there
+      are at least <literal>2</literal> indexes in the table.  Workers for
+      vacuum launches before starting each phase and exit at the end of
+      the phase.  These behaviors might change in a future release.  This
+      option can't be used with the <literal>FULL</literal> option.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><replaceable class="parameter">boolean</replaceable></term>
     <listitem>
      <para>
@@ -233,6 +260,18 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
       <literal>OFF</literal>, or <literal>0</literal> to disable it.  The
       <replaceable class="parameter">boolean</replaceable> value can also
       be omitted, in which case <literal>TRUE</literal> is assumed.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">integer</replaceable></term>
+    <listitem>
+     <para>
+      Specifies a positive integer value passed to the selected option.
+      The <replaceable class="parameter">integer</replaceable> value can
+      also be omitted, in which case the value is decided by the command
+      based on the option used.
      </para>
     </listitem>
    </varlistentry>
@@ -314,6 +353,12 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     physically shrink to occupy less disk space and allow faster table
     scans. <command>VACUUM FULL</command> will usually shrink the table
     more than a plain <command>VACUUM</command> would.
+   </para>
+
+   <para>
+     The <option>PARALLEL</option> option is used only for vacuum purpose.
+     Even if this option is specified with <option>ANALYZE</option> option
+     it does not affect <option>ANALYZE</option>.
    </para>
 
    <para>

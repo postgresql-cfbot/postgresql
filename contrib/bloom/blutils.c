@@ -18,6 +18,7 @@
 #include "access/reloptions.h"
 #include "bloom.h"
 #include "catalog/index.h"
+#include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/freespace.h"
@@ -121,6 +122,9 @@ blhandler(PG_FUNCTION_ARGS)
 	amroutine->ampredlocks = false;
 	amroutine->amcanparallel = false;
 	amroutine->amcaninclude = false;
+	amroutine->amparallelvacuumoptions =
+		VACUUM_OPTION_PARALLEL_BULKDEL | VACUUM_OPTION_PARALLEL_CLEANUP;
+	amroutine->amusemaintenanceworkmem = false;
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = blbuild;
@@ -144,6 +148,7 @@ blhandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
+	amroutine->amestimateparallelvacuum = NULL;
 
 	PG_RETURN_POINTER(amroutine);
 }

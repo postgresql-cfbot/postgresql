@@ -157,6 +157,12 @@ typedef void (*aminitparallelscan_function) (void *target);
 typedef void (*amparallelrescan_function) (IndexScanDesc scan);
 
 /*
+ * Callback function signature - for parallel index vacuuming.
+ */
+/* estimate size of statitics needed for parallel index vacuum */
+typedef Size (*amestimateparallelvacuum_function) (void);
+
+/*
  * API struct for an index AM.  Note this must be stored in a single palloc'd
  * chunk of memory.
  */
@@ -197,6 +203,10 @@ typedef struct IndexAmRoutine
 	bool		amcanparallel;
 	/* does AM support columns included with clause INCLUDE? */
 	bool		amcaninclude;
+	/* OR of parallel vacuum flags.  See vacuum.h for flags. */
+	uint8		amparallelvacuumoptions;
+	/* does AM use maintenance_work_mem? */
+	bool		amusemaintenanceworkmem;
 	/* type of data stored in index, or InvalidOid if variable */
 	Oid			amkeytype;
 
@@ -230,6 +240,9 @@ typedef struct IndexAmRoutine
 	amestimateparallelscan_function amestimateparallelscan; /* can be NULL */
 	aminitparallelscan_function aminitparallelscan; /* can be NULL */
 	amparallelrescan_function amparallelrescan; /* can be NULL */
+
+	/* interface function to support parallel vacuum */
+	amestimateparallelvacuum_function amestimateparallelvacuum; /* can be NULL */
 } IndexAmRoutine;
 
 

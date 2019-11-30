@@ -450,3 +450,67 @@ ANALYZE prt2;
 
 EXPLAIN (COSTS OFF)
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.b = 0 ORDER BY t1.a, t2.b;
+
+--
+-- For asymmetric partition-wise join
+--
+CREATE TABLE prt5 (hkey int, a int, b int) PARTITION BY HASH(hkey);
+CREATE TABLE prt5_p0 PARTITION OF prt5
+                     FOR VALUES WITH (modulus 3, remainder 0);
+CREATE TABLE prt5_p1 PARTITION OF prt5
+                     FOR VALUES WITH (modulus 3, remainder 1);
+CREATE TABLE prt5_p2 PARTITION OF prt5
+                     FOR VALUES WITH (modulus 3, remainder 2);
+CREATE TABLE t5_1 (aid int, alabel text);
+CREATE TABLE t5_2 (bid int, blabel text);
+
+INSERT INTO prt5 (SELECT x, (1000.0 * random())::int,
+                            (1000.0 * random())::int
+                    FROM generate_series(1,1000000) x);
+INSERT INTO t5_1 (SELECT x, md5(x::text) FROM generate_series(-200, 800) x);
+INSERT INTO t5_2 (SELECT x, md5(x::text) FROM generate_series(-200, 800) x);
+
+VACUUM ANALYZE prt5;
+VACUUM ANALYZE t5_1;
+VACUUM ANALYZE t5_2;
+
+SET max_parallel_workers_per_gather = 0;
+EXPLAIN (COSTS OFF)
+SELECT *
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%abc%';
+
+EXPLAIN (COSTS OFF)
+SELECT *
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%ab%'
+            JOIN t5_2 ON b = bid AND blabel like '%cd%';
+
+-- unable to extract non-partitioned right relation
+EXPLAIN (COSTS OFF)
+SELECT * FROM prt5 RIGHT JOIN t5_1 ON a = aid AND alabel like '%abc%';
+-- left side can be extracted, but no cost benefit
+EXPLAIN (COSTS OFF)
+SELECT * FROM prt5 LEFT JOIN t5_1 ON a = aid AND alabel like '%abc%';
+
+-- validation of the results with/without asymmetric partition-wise join
+SELECT * INTO pg_temp.result01a
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%abc%';
+
+SELECT * INTO pg_temp.result02a
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%ab%'
+            JOIN t5_2 ON b = bid AND blabel like '%cd%';
+
+SET enable_partitionwise_join = off;
+
+SELECT * INTO pg_temp.result01b
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%abc%';
+
+SELECT * INTO pg_temp.result02b
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%ab%'
+            JOIN t5_2 ON b = bid AND blabel like '%cd%';
+
+SELECT * FROM pg_temp.result01a EXCEPT SELECT * FROM pg_temp.result01b;
+SELECT * FROM pg_temp.result02a EXCEPT SELECT * FROM pg_temp.result02b;
+
+RESET max_parallel_workers_per_gather;
+
+

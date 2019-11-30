@@ -187,8 +187,9 @@ adjust_appendrel_attrs(PlannerInfo *root, Node *node, int nappinfos,
 	context.nappinfos = nappinfos;
 	context.appinfos = appinfos;
 
-	/* If there's nothing to adjust, don't call this function. */
-	Assert(nappinfos >= 1 && appinfos != NULL);
+	/* If there's nothing to adjust, just return a duplication */
+	if (nappinfos == 0)
+		return copyObject(node);
 
 	/*
 	 * Must be prepared to start with a Query or a bare expression tree.
@@ -709,11 +710,11 @@ AppendRelInfo **
 find_appinfos_by_relids(PlannerInfo *root, Relids relids, int *nappinfos)
 {
 	AppendRelInfo **appinfos;
+	int			nrooms = bms_num_members(relids);
 	int			cnt = 0;
 	int			i;
 
-	*nappinfos = bms_num_members(relids);
-	appinfos = (AppendRelInfo **) palloc(sizeof(AppendRelInfo *) * *nappinfos);
+	appinfos = (AppendRelInfo **) palloc(sizeof(AppendRelInfo *) * nrooms);
 
 	i = -1;
 	while ((i = bms_next_member(relids, i)) >= 0)
@@ -721,9 +722,10 @@ find_appinfos_by_relids(PlannerInfo *root, Relids relids, int *nappinfos)
 		AppendRelInfo *appinfo = root->append_rel_array[i];
 
 		if (!appinfo)
-			elog(ERROR, "child rel %d not found in append_rel_array", i);
+			continue;
 
 		appinfos[cnt++] = appinfo;
 	}
+	*nappinfos = cnt;
 	return appinfos;
 }

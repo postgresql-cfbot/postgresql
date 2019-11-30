@@ -1855,7 +1855,8 @@ index_constraint_create(Relation heapRelation,
 	/*
 	 * Construct a pg_constraint entry.
 	 */
-	conOid = CreateConstraintEntry(constraintName,
+	conOid = CreateConstraintEntry(InvalidOid,
+								   constraintName,
 								   namespaceId,
 								   constraintType,
 								   deferrable,

@@ -2209,3 +2209,30 @@ drop table self_ref;
 drop function dump_insert();
 drop function dump_update();
 drop function dump_delete();
+
+-- 
+-- Test case for CREATE OR REPLACE TRIGGER
+--
+create table my_table (id integer);
+create function before_replacement() returns trigger as $$
+begin
+raise notice 'function replaced by another function';
+return null;
+end; $$ language plpgsql;
+
+create function after_replacement() returns trigger as $$
+begin
+raise notice 'function to replace the initial function';
+return null;
+end; $$ language plpgsql;
+
+create or replace trigger my_trig before insert on my_table for each row execute procedure before_replacement();
+insert into my_table (id) values (1);
+
+create or replace trigger my_trig before insert on my_table for each row execute procedure after_replacement();
+insert into my_table (id) values (2);
+
+drop trigger my_trig on my_table;
+drop function before_replacement();
+drop function after_replacement();
+drop table my_table;

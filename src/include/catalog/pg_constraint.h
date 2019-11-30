@@ -182,7 +182,8 @@ typedef enum ConstraintCategory
 } ConstraintCategory;
 
 
-extern Oid	CreateConstraintEntry(const char *constraintName,
+extern Oid	CreateConstraintEntry(Oid existing_constraint_oid,
+								  const char *constraintName,
 								  Oid constraintNamespace,
 								  char constraintType,
 								  bool isDeferrable,

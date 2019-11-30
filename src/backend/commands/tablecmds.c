@@ -8125,7 +8125,8 @@ addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint, Relation rel,
 	/*
 	 * Record the FK constraint in pg_constraint.
 	 */
-	constrOid = CreateConstraintEntry(conname,
+	constrOid = CreateConstraintEntry(InvalidOid,
+									  conname,
 									  RelationGetNamespace(rel),
 									  CONSTRAINT_FOREIGN,
 									  fkconstraint->deferrable,
@@ -8153,7 +8154,7 @@ addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint, Relation rel,
 									  conislocal,	/* islocal */
 									  coninhcount,	/* inhcount */
 									  connoinherit, /* conNoInherit */
-									  false);	/* is_internal */
+									  false); /* is_internal */
 
 	ObjectAddressSet(address, ConstraintRelationId, constrOid);
 
@@ -8393,7 +8394,8 @@ addFkRecurseReferencing(List **wqueue, Constraint *fkconstraint, Relation rel,
 			else
 				conname = fkconstraint->conname;
 			constrOid =
-				CreateConstraintEntry(conname,
+				CreateConstraintEntry(InvalidOid,
+									  conname,
 									  RelationGetNamespace(partition),
 									  CONSTRAINT_FOREIGN,
 									  fkconstraint->deferrable,
@@ -8788,7 +8790,8 @@ CloneFkReferencing(List **wqueue, Relation parentRel, Relation partRel)
 
 		indexOid = constrForm->conindid;
 		constrOid =
-			CreateConstraintEntry(fkconstraint->conname,
+			CreateConstraintEntry(InvalidOid,
+								  fkconstraint->conname,
 								  constrForm->connamespace,
 								  CONSTRAINT_FOREIGN,
 								  fkconstraint->deferrable,

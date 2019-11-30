@@ -57,6 +57,10 @@
 
 #ifndef WIN32
 
+#if defined(__x86_64__) || defined(__i386__)
+#include <x86intrin.h>
+#endif
+
 #ifdef HAVE_CLOCK_GETTIME
 
 /* Use clock_gettime() */
@@ -209,6 +213,8 @@ typedef struct timeval instr_time;
 
 #else							/* WIN32 */
 
+#include <intrin.h>
+
 /* Use QueryPerformanceCounter() */
 
 typedef LARGE_INTEGER instr_time;
@@ -254,3 +260,20 @@ GetTimerFrequency(void)
 	(INSTR_TIME_IS_ZERO(t) ? INSTR_TIME_SET_CURRENT(t), true : false)
 
 #endif							/* INSTR_TIME_H */
+
+
+#ifndef RDTSC_H_
+#define RDTSC_H_
+
+static inline uint64 rdtsc() {
+	uint64 result;
+#if defined(__x86_64__) || defined(__i386__) || defined(WIN32)
+	result = __rdtsc();
+#else
+	result = 0;
+#endif
+
+	return result;
+}
+
+#endif

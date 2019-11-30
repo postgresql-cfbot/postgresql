@@ -951,6 +951,14 @@ CREATE VIEW pg_stat_bgwriter AS
         pg_stat_get_buf_alloc() AS buffers_alloc,
         pg_stat_get_bgwriter_stat_reset_time() AS stats_reset;
 
+CREATE VIEW pg_stat_waitaccum AS
+    SELECT
+		S.wait_event_type AS wait_event_type,
+		S.wait_event AS wait_event,
+		S.calls AS calls,
+		S.times AS times
+	FROM pg_stat_get_waitaccum(NULL) AS S;
+
 CREATE VIEW pg_stat_progress_vacuum AS
     SELECT
         S.pid AS pid, S.datid AS datid, D.datname AS datname,

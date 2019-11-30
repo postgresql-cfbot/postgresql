@@ -983,7 +983,7 @@ static const struct cachedesc cacheinfo[] = {
 	}
 };
 
-static CatCache *SysCache[SysCacheSize];
+CatCache *SysCache[SysCacheSize];
 
 static bool CacheInitialized = false;
 

@@ -60,20 +60,54 @@
 #define CACHE_elog(...)
 #endif
 
+/*
+ * GUC variable to define the minimum age of entries that will be considered
+ * to be evicted in seconds. -1 to disable the feature.
+ */
+int catalog_cache_prune_min_age = 300;
+
 /* Cache management header --- pointer is NULL until created */
 static CatCacheHeader *CacheHdr = NULL;
 
-static inline HeapTuple SearchCatCacheInternal(CatCache *cache,
+/* Clock for the last accessed time of a catcache entry. */
+TimestampTz	catcacheclock = 0;
+
+static HeapTuple SearchCatCacheInternalb(CatCache *cache,
 											   int nkeys,
 											   Datum v1, Datum v2,
 											   Datum v3, Datum v4);
 
+static HeapTuple (*SearchCatCacheInternal)(CatCache *cache,
+											   int nkeys,
+											   Datum v1, Datum v2,
+											   Datum v3, Datum v4) =
+	SearchCatCacheInternalb;
 static pg_noinline HeapTuple SearchCatCacheMiss(CatCache *cache,
 												int nkeys,
 												uint32 hashValue,
 												Index hashIndex,
 												Datum v1, Datum v2,
 												Datum v3, Datum v4);
+
+static HeapTuple SearchCatCacheb(CatCache *cache,
+								 Datum v1, Datum v2, Datum v3, Datum v4);
+HeapTuple (*SearchCatCache)(CatCache *cache,
+							Datum v1, Datum v2, Datum v3, Datum v4) =
+	SearchCatCacheb;
+static HeapTuple SearchCatCache1b(CatCache *cache, Datum v1);
+HeapTuple (*SearchCatCache1)(CatCache *cache, Datum v1) = SearchCatCache1b;
+static HeapTuple SearchCatCache2b(CatCache *cache, Datum v1, Datum v2);
+HeapTuple (*SearchCatCache2)(CatCache *cache, Datum v1, Datum v2) =
+	SearchCatCache2b;
+static HeapTuple SearchCatCache3b(CatCache *cache,
+								  Datum v1, Datum v2, Datum v3);
+HeapTuple (*SearchCatCache3)(CatCache *cache, Datum v1, Datum v2, Datum v3) =
+	SearchCatCache3b;
+static HeapTuple SearchCatCache4b(CatCache *cache,
+								  Datum v1, Datum v2, Datum v3, Datum v4);
+HeapTuple (*SearchCatCache4)(CatCache *cache,
+							 Datum v1, Datum v2, Datum v3, Datum v4) =
+	SearchCatCache4b;
 
 static uint32 CatalogCacheComputeHashValue(CatCache *cache, int nkeys,
 										   Datum v1, Datum v2, Datum v3, Datum v4);
@@ -99,6 +133,12 @@ static void CatCacheFreeKeys(TupleDesc tupdesc, int nkeys, int *attnos,
 static void CatCacheCopyKeys(TupleDesc tupdesc, int nkeys, int *attnos,
 							 Datum *srckeys, Datum *dstkeys);
 
+/* GUC assign function */
+void
+assign_catalog_cache_prune_min_age(int newval, void *extra)
+{
+	catalog_cache_prune_min_age = newval;
+}
 
 /*
  *					internal support functions
@@ -740,6 +780,41 @@ CatalogCacheFlushCatalog(Oid catId)
 	CACHE_elog(DEBUG2, "end of CatalogCacheFlushCatalog call");
 }
 
+
+/* FUNCTION FOR BENCHMARKING */
+void
+CatalogCacheFlushCatalog2(Oid catId)
+{
+	slist_iter	iter;
+
+	CACHE_elog(DEBUG2, "CatalogCacheFlushCatalog called for %u", catId);
+
+	slist_foreach(iter, &CacheHdr->ch_caches)
+	{
+		CatCache   *cache = slist_container(CatCache, cc_next, iter.cur);
+
+		/* Does this cache store tuples of the target catalog? */
+		if (cache->cc_reloid == catId)
+		{
+			/* Yes, so flush all its contents */
+			ResetCatalogCache(cache);
+
+			/* Tell inval.c to call syscache callbacks for this cache */
+			CallSyscacheCallbacks(cache->id, 0);
+
+			cache->cc_nbuckets = 128;
+			pfree(cache->cc_bucket);
+			cache->cc_bucket = palloc0(128 * sizeof(dlist_head));
+			ereport(DEBUG1,
+					(errmsg("Catcache reset"),
+					 errhidestmt(true)));
+		}
+	}
+
+	CACHE_elog(DEBUG2, "end of CatalogCacheFlushCatalog call");
+}
+/* END: FUNCTION FOR BENCHMARKING */
+
 /*
  *		InitCatCache
  *
@@ -1143,8 +1218,8 @@ IndexScanOK(CatCache *cache, ScanKey cur_skey)
  * the caller need not go to the trouble of converting it to a fully
  * null-padded NAME.
  */
-HeapTuple
-SearchCatCache(CatCache *cache,
+static HeapTuple
+SearchCatCacheb(CatCache *cache,
 			   Datum v1,
 			   Datum v2,
 			   Datum v3,
@@ -1160,32 +1235,32 @@ SearchCatCache(CatCache *cache,
  * bit faster than SearchCatCache().
  */
 
-HeapTuple
-SearchCatCache1(CatCache *cache,
+static HeapTuple
+SearchCatCache1b(CatCache *cache,
 				Datum v1)
 {
 	return SearchCatCacheInternal(cache, 1, v1, 0, 0, 0);
 }
 
 
-HeapTuple
-SearchCatCache2(CatCache *cache,
+static HeapTuple
+SearchCatCache2b(CatCache *cache,
 				Datum v1, Datum v2)
 {
 	return SearchCatCacheInternal(cache, 2, v1, v2, 0, 0);
 }
 
 
-HeapTuple
-SearchCatCache3(CatCache *cache,
+static HeapTuple
+SearchCatCache3b(CatCache *cache,
 				Datum v1, Datum v2, Datum v3)
 {
 	return SearchCatCacheInternal(cache, 3, v1, v2, v3, 0);
 }
 
 
-HeapTuple
-SearchCatCache4(CatCache *cache,
+static HeapTuple
+SearchCatCache4b(CatCache *cache,
 				Datum v1, Datum v2, Datum v3, Datum v4)
 {
 	return SearchCatCacheInternal(cache, 4, v1, v2, v3, v4);
@@ -1195,7 +1270,7 @@ SearchCatCache4(CatCache *cache,
  * Work-horse for SearchCatCache/SearchCatCacheN.
  */
 static inline HeapTuple
-SearchCatCacheInternal(CatCache *cache,
+SearchCatCacheInternalb(CatCache *cache,
 					   int nkeys,
 					   Datum v1,
 					   Datum v2,
@@ -1223,6 +1298,12 @@ SearchCatCacheInternal(CatCache *cache,
 #ifdef CATCACHE_STATS
 	cache->cc_searches++;
 #endif
+	/*  cannot be true, but compiler doesn't know */
+	if (catalog_cache_prune_min_age < -1)
+	{
+		return SearchCatCache(cache, v1, v2, v3, v4); /* Never executed */
+	}
+	
 
 	/* Initialize local parameter array */
 	arguments[0] = v1;

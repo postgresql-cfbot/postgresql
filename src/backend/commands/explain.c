@@ -2206,12 +2206,16 @@ show_agg_keys(AggState *astate, List *ancestors,
 {
 	Agg		   *plan = (Agg *) astate->ss.ps.plan;
 
-	if (plan->numCols > 0 || plan->groupingSets)
+	if (plan->grpSetIdFilter)
+		show_expression(plan->grpSetIdFilter, "Dispatched by",
+						astate, ancestors, true, es);
+
+	if (plan->numCols > 0 || plan->rollup)
 	{
 		/* The key columns refer to the tlist of the child plan */
 		ancestors = lcons(astate, ancestors);
 
-		if (plan->groupingSets)
+		if (plan->rollup)
 			show_grouping_sets(outerPlanState(astate), plan, ancestors, es);
 		else
 			show_sort_group_keys(outerPlanState(astate), "Group Key",
@@ -2263,7 +2267,7 @@ show_grouping_set_keys(PlanState *planstate,
 	Plan	   *plan = planstate->plan;
 	char	   *exprstr;
 	ListCell   *lc;
-	List	   *gsets = aggnode->groupingSets;
+	List	   *gsets = aggnode->rollup->gsets;
 	AttrNumber *keycols = aggnode->grpColIdx;
 	const char *keyname;
 	const char *keysetname;

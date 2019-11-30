@@ -2708,6 +2708,9 @@ generate_gather_paths(PlannerInfo *root, RelOptInfo *rel, bool override_rows)
 						   NULL, rowsp);
 	add_path(rel, simple_gather_path);
 
+	if (root->parse->groupingSets)
+		return;
+
 	/*
 	 * For each useful ordering, we can consider an order-preserving Gather
 	 * Merge.

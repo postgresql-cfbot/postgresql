@@ -2991,7 +2991,8 @@ create_groupingsets_path(PlannerInfo *root,
 						 AggStrategy aggstrategy,
 						 List *rollups,
 						 const AggClauseCosts *agg_costs,
-						 double numGroups)
+						 double numGroups,
+						 AggSplit aggsplit)
 {
 	GroupingSetsPath *pathnode = makeNode(GroupingSetsPath);
 	PathTarget *target = rel->reltarget;
@@ -3009,6 +3010,7 @@ create_groupingsets_path(PlannerInfo *root,
 		subpath->parallel_safe;
 	pathnode->path.parallel_workers = subpath->parallel_workers;
 	pathnode->subpath = subpath;
+	pathnode->aggsplit= aggsplit;
 
 	/*
 	 * Simplify callers by downgrading AGG_SORTED to AGG_PLAIN, and AGG_MIXED

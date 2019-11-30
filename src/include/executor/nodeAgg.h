@@ -280,6 +280,11 @@ typedef struct AggStatePerPhaseData
 	Sort	   *sortnode;		/* Sort node for input ordering for phase */
 
 	ExprState  *evaltrans;		/* evaluation of transition functions  */
+
+	/* field for parallel grouping sets */
+	int *grpsetids;
+	Tuplesortstate *sort_in;	/* sorted input to phases > 1 */
+	Tuplestorestate *store_in;	/* sorted input to phases > 1 */
 }			AggStatePerPhaseData;
 
 /*
@@ -302,8 +307,10 @@ typedef struct AggStatePerHashData
 	AttrNumber *hashGrpColIdxInput; /* hash col indices in input slot */
 	AttrNumber *hashGrpColIdxHash;	/* indices in hash table tuples */
 	Agg		   *aggnode;		/* original Agg node, for numGroups etc. */
-}			AggStatePerHashData;
 
+	/* field for parallel grouping sets */
+	int grpsetid;
+}			AggStatePerHashData;
 
 extern AggState *ExecInitAgg(Agg *node, EState *estate, int eflags);
 extern void ExecEndAgg(AggState *node);

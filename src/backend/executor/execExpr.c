@@ -814,10 +814,19 @@ ExecInitExprRec(Expr *node, ExprState *state,
 
 				agg = (Agg *) (state->parent->plan);
 
-				if (agg->groupingSets)
+				if (agg->rollup)
 					scratch.d.grouping_func.clauses = grp_node->cols;
 				else
 					scratch.d.grouping_func.clauses = NIL;
+
+				ExprEvalPushStep(state, &scratch);
+				break;
+			}
+
+		case T_GroupingSetId:
+			{
+				scratch.opcode = EEOP_GROUPING_SET_ID;
+				scratch.d.grouping_set_id.parent = (AggState *) state->parent;
 
 				ExprEvalPushStep(state, &scratch);
 				break;
@@ -3230,6 +3239,7 @@ ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 {
 	int			adjust_init_jumpnull = -1;
 	int			adjust_strict_jumpnull = -1;
+	int			adjust_perhash_jumpnull = -1;
 	ExprContext *aggcontext;
 
 	if (ishash)
@@ -3260,6 +3270,30 @@ ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 
 		/* see comment about jumping out below */
 		adjust_init_jumpnull = state->steps_len - 1;
+	}
+
+	/*
+	 * All grouping sets that use AGG_HASHED are sent to
+	 * phases zero, when combining the partial aggregate
+	 * results, only one group is select for one tuple,
+	 * so we need to add one more check step to skip not
+	 * selected groups.
+	 */
+	if (ishash && aggstate->grpsetid_filter &&
+		DO_AGGSPLIT_COMBINE(aggstate->aggsplit))
+	{
+		scratch->opcode = EEOP_AGG_PERHASH_NULL_CHECK;
+		scratch->d.agg_perhash_null_check.aggstate = aggstate;
+		scratch->d.agg_perhash_null_check.setno = setno;
+		scratch->d.agg_perhash_null_check.setoff = setoff;
+		scratch->d.agg_perhash_null_check.transno = transno;
+		scratch->d.agg_perhash_null_check.jumpnull = -1;	/* adjust later */
+		ExprEvalPushStep(state, scratch);
+
+		/*
+		 * Note, we don't push into adjust_bailout here - those jump to the
+		 */
+		adjust_perhash_jumpnull = state->steps_len - 1;
 	}
 
 	if (pertrans->numSortCols == 0 &&
@@ -3306,6 +3340,12 @@ ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 
 		Assert(as->d.agg_init_trans.jumpnull == -1);
 		as->d.agg_init_trans.jumpnull = state->steps_len;
+	}
+	if (adjust_perhash_jumpnull != -1)
+	{
+		ExprEvalStep *as = &state->steps[adjust_perhash_jumpnull];
+		Assert(as->d.agg_perhash_null_check.jumpnull == -1);
+		as->d.agg_perhash_null_check.jumpnull = state->steps_len;
 	}
 	if (adjust_strict_jumpnull != -1)
 	{

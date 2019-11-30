@@ -153,6 +153,7 @@ typedef enum NodeTag
 	T_Param,
 	T_Aggref,
 	T_GroupingFunc,
+	T_GroupingSetId,
 	T_WindowFunc,
 	T_SubscriptingRef,
 	T_FuncExpr,

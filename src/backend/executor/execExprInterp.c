@@ -422,6 +422,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_XMLEXPR,
 		&&CASE_EEOP_AGGREF,
 		&&CASE_EEOP_GROUPING_FUNC,
+		&&CASE_EEOP_GROUPING_SET_ID,
 		&&CASE_EEOP_WINDOW_FUNC,
 		&&CASE_EEOP_SUBPLAN,
 		&&CASE_EEOP_ALTERNATIVE_SUBPLAN,
@@ -430,6 +431,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_AGG_STRICT_INPUT_CHECK_ARGS,
 		&&CASE_EEOP_AGG_STRICT_INPUT_CHECK_NULLS,
 		&&CASE_EEOP_AGG_INIT_TRANS,
+		&&CASE_EEOP_AGG_PERHASH_NULL_CHECK,
 		&&CASE_EEOP_AGG_STRICT_TRANS_CHECK,
 		&&CASE_EEOP_AGG_PLAIN_TRANS_BYVAL,
 		&&CASE_EEOP_AGG_PLAIN_TRANS,
@@ -1503,6 +1505,21 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			EEO_NEXT();
 		}
 
+		EEO_CASE(EEOP_GROUPING_SET_ID)
+		{
+			int			grpsetid;		
+			AggState	*aggstate = (AggState *) op->d.grouping_set_id.parent;
+
+			if (aggstate->current_phase == 0)
+				grpsetid = aggstate->perhash[aggstate->current_set].grpsetid;	
+			else
+				grpsetid = aggstate->phase->grpsetids[aggstate->current_set];
+
+			*op->resvalue = grpsetid;
+			*op->resnull = false;
+			EEO_NEXT();
+		}
+
 		EEO_CASE(EEOP_WINDOW_FUNC)
 		{
 			/*
@@ -1622,6 +1639,23 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 				/* copied trans value from input, done this round */
 				EEO_JUMP(op->d.agg_init_trans.jumpnull);
 			}
+
+			EEO_NEXT();
+		}
+
+		EEO_CASE(EEOP_AGG_PERHASH_NULL_CHECK)
+		{
+			AggState   *aggstate;
+			AggStatePerGroup pergroup;
+
+			aggstate = op->d.agg_perhash_null_check.aggstate;
+			pergroup = &aggstate->all_pergroups
+				[op->d.agg_perhash_null_check.setoff]
+				[op->d.agg_perhash_null_check.transno];
+
+			/* If transValue has not yet been initialized, do so now. */
+			if (!pergroup)
+				EEO_JUMP(op->d.agg_perhash_null_check.jumpnull);
 
 			EEO_NEXT();
 		}

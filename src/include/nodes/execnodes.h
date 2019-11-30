@@ -2023,6 +2023,13 @@ typedef struct GroupState
  *	expressions and run the aggregate transition functions.
  * ---------------------
  */
+/* mapping from grouping set id to perphase or perhash data */
+typedef struct GrpSetMapping
+{
+	bool	is_hashed;
+	int		index; 		/* index of aggstate->perhash[] or aggstate->phases[]*/
+} GrpSetMapping;
+
 /* these structs are private in nodeAgg.c: */
 typedef struct AggStatePerAggData *AggStatePerAgg;
 typedef struct AggStatePerTransData *AggStatePerTrans;
@@ -2064,6 +2071,7 @@ typedef struct AggState
 	Tuplesortstate *sort_in;	/* sorted input to phases > 1 */
 	Tuplesortstate *sort_out;	/* input is copied here for next phase */
 	TupleTableSlot *sort_slot;	/* slot for sort results */
+	Tuplestorestate *store_in;	/* sorted input to phases > 1 */
 	/* these fields are used in AGG_PLAIN and AGG_SORTED modes: */
 	AggStatePerGroup *pergroups;	/* grouping set indexed array of per-group
 									 * pointers */
@@ -2080,6 +2088,12 @@ typedef struct AggState
 	AggStatePerGroup *all_pergroups;	/* array of first ->pergroups, than
 										 * ->hash_pergroup */
 	ProjectionInfo *combinedproj;	/* projection machinery */
+
+	/* support for parallel grouping sets */
+	bool input_dispatched;
+	ExprState *grpsetid_filter;				/* filter to fetch grouping set id
+											   from child targetlist */
+	struct GrpSetMapping *grpSetMappings;	/* grpsetid <-> perhash or perphase data */
 } AggState;
 
 /* ----------------

@@ -387,6 +387,31 @@
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term>
+     <function>pg_stat_statements_reset_computed_values() returns void</function>
+     <indexterm>
+      <primary>pg_stat_statements_reset_computed_values</primary>
+     </indexterm>
+    </term>
+
+    <listitem>
+     <para>
+      <function>pg_stat_statements_reset_computed_values</function> discards the
+      computed part of statistics gathered so far by <filename>pg_stat_statements</filename>,
+      aka the min_time, max_time, mean_time and sum_var_time fields. These fields,
+      unlike the others, are not plain cumulative values and instead the results of
+      an internal computation. When doing statistics on statements execution or
+      graphing them in an external tool, it can thus be usefull to be able to reset
+      only these instead of resetting the whole statistics. By default, this 
+      function can only be executed by superusers.  Access may be granted to others 
+      using <command>GRANT</command>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+
   </variablelist>
  </sect2>
 

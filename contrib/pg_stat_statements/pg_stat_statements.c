@@ -150,6 +150,7 @@ typedef struct Counters
 	double		max_time;		/* maximum execution time in msec */
 	double		mean_time;		/* mean execution time in msec */
 	double		sum_var_time;	/* sum of variances in execution time in msec */
+	int64		computed_calls;		/* # of times executed considered for the previous computed values */
 	int64		rows;			/* total # of retrieved or affected rows */
 	int64		shared_blks_hit;	/* # of shared buffer hits */
 	int64		shared_blks_read;	/* # of shared disk blocks read */
@@ -289,6 +290,7 @@ static bool pgss_save;			/* whether to save stats across shutdown */
 void		_PG_init(void);
 void		_PG_fini(void);
 
+PG_FUNCTION_INFO_V1(pg_stat_statements_reset_computed_values);
 PG_FUNCTION_INFO_V1(pg_stat_statements_reset);
 PG_FUNCTION_INFO_V1(pg_stat_statements_reset_1_7);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_2);
@@ -1246,8 +1248,9 @@ pgss_store(const char *query, uint64 queryId,
 			e->counters.usage = USAGE_INIT;
 
 		e->counters.calls += 1;
+		e->counters.computed_calls += 1;
 		e->counters.total_time += total_time;
-		if (e->counters.calls == 1)
+		if (e->counters.computed_calls == 1)
 		{
 			e->counters.min_time = total_time;
 			e->counters.max_time = total_time;
@@ -1262,7 +1265,7 @@ pgss_store(const char *query, uint64 queryId,
 			double		old_mean = e->counters.mean_time;
 
 			e->counters.mean_time +=
-				(total_time - old_mean) / e->counters.calls;
+				(total_time - old_mean) / e->counters.computed_calls;
 			e->counters.sum_var_time +=
 				(total_time - old_mean) * (total_time - e->counters.mean_time);
 
@@ -1318,7 +1321,7 @@ pg_stat_statements_reset_1_7(PG_FUNCTION_ARGS)
 }
 
 /*
- * Reset statement statistics.
+ * Reset all statement statistics.
  */
 Datum
 pg_stat_statements_reset(PG_FUNCTION_ARGS)
@@ -1326,6 +1329,48 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 	entry_reset(0, 0, 0);
 
 	PG_RETURN_VOID();
+}
+
+/*
+ * Reset computed statistics from all statements.
+ */
+Datum
+pg_stat_statements_reset_computed_values(PG_FUNCTION_ARGS)
+{
+	if (!pgss || !pgss_hash)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("pg_stat_statements must be loaded via shared_preload_libraries")));
+	entry_reset_computed();
+	PG_RETURN_VOID();
+}
+
+
+/*
+ * Reset computed statement statistics - inner function.
+ */
+static void
+entry_reset_computed(void)
+{
+	HASH_SEQ_STATUS hash_seq;
+	pgssEntry  *entry;
+
+	/* Lookup the hash table entry with shared lock. */
+	LWLockAcquire(pgss->lock, LW_SHARED);
+
+	hash_seq_init(&hash_seq, pgss_hash);
+	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	{
+		SpinLockAcquire(&entry->mutex);
+		entry->counters.computed_calls = 0;
+		entry->counters.min_time = 0;
+		entry->counters.max_time = 0;
+		entry->counters.mean_time = 0;
+		entry->counters.sum_var_time = 0;
+		SpinLockRelease(&entry->mutex);
+	}
+
+	LWLockRelease(pgss->lock);
 }
 
 /* Number of output arguments (columns) for various API versions */

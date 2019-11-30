@@ -114,7 +114,7 @@ struct PgBenchExpr
 		PgBenchValue constant;
 		struct
 		{
-			char	   *varname;
+			int			varnum;
 		}			variable;
 		struct
 		{
@@ -162,5 +162,22 @@ extern void syntax_error(const char *source, int lineno, const char *line,
 
 extern bool strtoint64(const char *str, bool errorOK, int64 *pi);
 extern bool strtodouble(const char *str, bool errorOK, double *pd);
+
+/*
+ * A symbol table is an opaque data structure
+ */
+struct SymbolTable_st;
+typedef struct SymbolTable_st *SymbolTable;
+
+SymbolTable newSymbolTable(void);
+void freeSymbolTable(SymbolTable st);
+void dumpSymbolTable(FILE *out, const char *msg, SymbolTable st);
+int numberOfSymbols(SymbolTable st);
+int getOrCreateSymbolId(SymbolTable st, const char *name);
+int getSymbolId(SymbolTable st, const char *name);
+char *getSymbolName(SymbolTable st, int number);
+int rmSymbolId(SymbolTable st, const char *name);
+
+extern SymbolTable symbol_table;
 
 #endif							/* PGBENCH_H */

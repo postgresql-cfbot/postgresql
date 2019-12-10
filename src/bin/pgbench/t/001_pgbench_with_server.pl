@@ -270,6 +270,41 @@ COMMIT;
 }
 	});
 
+# Verify server logging of parameters
+$node->append_conf('postgresql.conf', "log_parameters_on_error = true");
+$node->reload;
+pgbench(
+		'-n -t1 -c1 -M prepared',
+		2,
+		[],
+		[
+		qr{ERROR:  division by zero},
+		qr{CONTEXT:  extended query with parameters: \$1 = '1', \$2 = NULL}
+		],
+		'server parameter logging',
+		{
+			'001_param_1' => q{select '1' as one \gset
+SELECT 1 / (random() / 2)::int, :one::int, :two::int;
+}
+	});
+
+pgbench(
+		'-n -t1 -c1 -M prepared',
+		2,
+		[],
+		[
+		qr{ERROR:  invalid input syntax for type json},
+		qr[CONTEXT:  JSON data, line 1: \{ invalid\.\.\.
+extended query with parameters: \$1 = '\{ invalid ', \$2 = '''Valame Dios!'' dijo Sancho; ''no le dije yo a vuestra merced que ...'$]m
+		],
+		'server parameter logging',
+		{
+			'001_param_2' => q[select '{ invalid ' as value \gset
+select $$'Valame Dios!' dijo Sancho; 'no le dije yo a vuestra merced que mirase bien lo que hacia?'$$ as long \gset
+select column1::jsonb from (values (:value), (:long)) as q;
+]
+	});
+
 # test expressions
 # command 1..3 and 23 depend on random seed which is used to call srandom.
 pgbench(

@@ -109,6 +109,7 @@ const uint16 ScanKeywordTokens[] = {
 #define startlit()	( yyextra->literallen = 0 )
 static void addlit(char *ytext, int yleng, core_yyscan_t yyscanner);
 static void addlitchar(unsigned char ychar, core_yyscan_t yyscanner);
+static int map_single_char_token(char c);
 static char *litbufdup(core_yyscan_t yyscanner);
 static char *litbuf_udeescape(unsigned char escape, core_yyscan_t yyscanner);
 static unsigned char unescape_single_char(unsigned char c, core_yyscan_t yyscanner);
@@ -377,10 +378,11 @@ not_equals		"!="
  * appears in the "self" set, it is not to be returned as an Op).  Note
  * that the sets overlap, but each has some chars that are not in the other.
  *
- * If you change either set, adjust the character lists appearing in the
- * rule for "operator"!
+ * If you change "op_chars", adjust the character list appearing in the
+ * rule for "operator", and if you change "self", change map_single_char_token()
+ * to match!
  */
-self			[,()\[\].;\:\+\-\*\/\%\^\<\>\=]
+self			[,()\[\]{}.;\:\+\-\*\/\%\^\<\>\=]
 op_chars		[\~\!\@\#\^\&\|\`\?\+\-\*\/\%\<\>\=]
 operator		{op_chars}+
 
@@ -710,10 +712,7 @@ other			.
 				}
 {dolqfailed}	{
 					SET_YYLLOC();
-					/* throw back all but the initial "$" */
-					yyless(1);
-					/* and treat it as {other} */
-					return yytext[0];
+					yyerror("unterminated dollar quote");
 				}
 <xdolq>{dolqdelim} {
 					if (strcmp(yytext, yyextra->dolqstart) == 0)
@@ -881,7 +880,10 @@ other			.
 
 {self}			{
 					SET_YYLLOC();
-					return yytext[0];
+					int self_token = map_single_char_token(yytext[0]);
+					if (self_token < 0)
+						yyerror("invalid single character token");
+					return self_token;
 				}
 
 {operator}		{
@@ -955,9 +957,13 @@ other			.
 						 * return it as a character token the same way
 						 * that the "self" rule would have.
 						 */
-						if (nchars == 1 &&
-							strchr(",()[].;:+-*/%^<>=", yytext[0]))
-							return yytext[0];
+						if (nchars == 1)
+						{
+							int self_token = map_single_char_token(yytext[0]);
+							if (self_token > 0)
+								return self_token;
+						}
+
 						/*
 						 * Likewise, if what we have left is two chars, and
 						 * those match the tokens ">=", "<=", "=>", "<>" or
@@ -1062,7 +1068,7 @@ other			.
 
 {other}			{
 					SET_YYLLOC();
-					return yytext[0];
+					yyerror("invalid single character token");
 				}
 
 <<EOF>>			{
@@ -1264,6 +1270,57 @@ litbufdup(core_yyscan_t yyscanner)
 	memcpy(new, yyextra->literalbuf, llen);
 	new[llen] = '\0';
 	return new;
+}
+
+/*
+ * Return tokens for single characters matching the "self" rule.
+ */
+static int
+map_single_char_token(char c)
+{
+	switch (c)
+	{
+		case ',':
+			return COMMA;
+		case '(':
+			return LPAREN;
+		case ')':
+			return RPAREN;
+		case '[':
+			return LBRACKET;
+		case ']':
+			return RBRACKET;
+		case '{':
+			return LBRACE;
+		case '}':
+			return RBRACE;
+		case '.':
+			return DOT;
+		case ';':
+			return SEMICOLON;
+		case ':':
+			return COLON;
+		case '+':
+			return PLUS;
+		case '-':
+			return MINUS;
+		case '*':
+			return STAR;
+		case '/':
+			return SLASH;
+		case '%':
+			return PERCENT;
+		case '^':
+			return CARET;
+		case '<':
+			return LESS;
+		case '>':
+			return GREATER;
+		case '=':
+			return EQUALS;
+		default:
+			return -1;
+	}
 }
 
 /*

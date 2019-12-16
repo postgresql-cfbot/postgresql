@@ -236,6 +236,9 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %token <ival>	ICONST PARAM
 %token			TYPECAST DOT_DOT COLON_EQUALS EQUALS_GREATER
 %token			LESS_EQUALS GREATER_EQUALS NOT_EQUALS
+%token			COMMA LPAREN RPAREN LBRACKET RBRACKET LBRACE RBRACE DOT
+%token			SEMICOLON COLON PLUS MINUS STAR SLASH
+%token			PERCENT CARET LESS GREATER EQUALS
 
 /*
  * Other tokens recognized by plpgsql's lexer interface layer (pl_scanner.c).
@@ -245,6 +248,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %token <wdatum>		T_DATUM		/* a VAR, ROW, REC, or RECFIELD variable */
 %token				LESS_LESS
 %token				GREATER_GREATER
+%token				OCTOTHORP
 
 /*
  * Keyword tokens.  Some of these are reserved and some are not;
@@ -370,11 +374,11 @@ comp_options	:
 				| comp_options comp_option
 				;
 
-comp_option		: '#' K_OPTION K_DUMP
+comp_option		: OCTOTHORP K_OPTION K_DUMP
 					{
 						plpgsql_DumpExecTree = true;
 					}
-				| '#' K_PRINT_STRICT_PARAMS option_value
+				| OCTOTHORP K_PRINT_STRICT_PARAMS option_value
 					{
 						if (strcmp($3, "on") == 0)
 							plpgsql_curr_compile->print_strict_params = true;
@@ -383,15 +387,15 @@ comp_option		: '#' K_OPTION K_DUMP
 						else
 							elog(ERROR, "unrecognized print_strict_params option %s", $3);
 					}
-				| '#' K_VARIABLE_CONFLICT K_ERROR
+				| OCTOTHORP K_VARIABLE_CONFLICT K_ERROR
 					{
 						plpgsql_curr_compile->resolve_option = PLPGSQL_RESOLVE_ERROR;
 					}
-				| '#' K_VARIABLE_CONFLICT K_USE_VARIABLE
+				| OCTOTHORP K_VARIABLE_CONFLICT K_USE_VARIABLE
 					{
 						plpgsql_curr_compile->resolve_option = PLPGSQL_RESOLVE_VARIABLE;
 					}
-				| '#' K_VARIABLE_CONFLICT K_USE_COLUMN
+				| OCTOTHORP K_VARIABLE_CONFLICT K_USE_COLUMN
 					{
 						plpgsql_curr_compile->resolve_option = PLPGSQL_RESOLVE_COLUMN;
 					}
@@ -407,7 +411,7 @@ option_value : T_WORD
 				}
 
 opt_semi		:
-				| ';'
+				| SEMICOLON
 				;
 
 pl_block		: decl_sect K_BEGIN proc_sect exception_sect K_END opt_label
@@ -529,7 +533,7 @@ decl_statement	: decl_varname decl_const decl_datatype decl_collate decl_notnull
 											var->refname),
 									 parser_errposition(@5)));
 					}
-				| decl_varname K_ALIAS K_FOR decl_aliasitem ';'
+				| decl_varname K_ALIAS K_FOR decl_aliasitem SEMICOLON
 					{
 						plpgsql_ns_additem($4->itemtype,
 										   $4->itemno, $1.name);
@@ -610,7 +614,7 @@ decl_cursor_args :
 					{
 						$$ = NULL;
 					}
-				| '(' decl_cursor_arglist ')'
+				| LPAREN decl_cursor_arglist RPAREN
 					{
 						PLpgSQL_row *new;
 						int i;
@@ -645,7 +649,7 @@ decl_cursor_arglist : decl_cursor_arg
 					{
 						$$ = list_make1($1);
 					}
-				| decl_cursor_arglist ',' decl_cursor_arg
+				| decl_cursor_arglist COMMA decl_cursor_arg
 					{
 						$$ = lappend($1, $3);
 					}
@@ -819,11 +823,11 @@ decl_notnull	:
 					{ $$ = true; }
 				;
 
-decl_defval		: ';'
+decl_defval		: SEMICOLON
 					{ $$ = NULL; }
 				| decl_defkey
 					{
-						$$ = read_sql_expression(';', ";");
+						$$ = read_sql_expression(SEMICOLON, ";");
 					}
 				;
 
@@ -836,7 +840,7 @@ decl_defkey		: assign_operator
  * the SQL standard uses equals for these cases and for GET
  * DIAGNOSTICS, so we support both.  FOR and OPEN only support :=.
  */
-assign_operator	: '='
+assign_operator	: EQUALS
 				| COLON_EQUALS
 				;
 
@@ -852,7 +856,7 @@ proc_sect		:
 					}
 				;
 
-proc_stmt		: pl_block ';'
+proc_stmt		: pl_block SEMICOLON
 						{ $$ = $1; }
 				| stmt_assign
 						{ $$ = $1; }
@@ -964,7 +968,7 @@ stmt_assign		: assign_var assign_operator expr_until_semi
 					}
 				;
 
-stmt_getdiag	: K_GET getdiag_area_opt K_DIAGNOSTICS getdiag_list ';'
+stmt_getdiag	: K_GET getdiag_area_opt K_DIAGNOSTICS getdiag_list SEMICOLON
 					{
 						PLpgSQL_stmt_getdiag	 *new;
 						ListCell		*lc;
@@ -1040,7 +1044,7 @@ getdiag_area_opt :
 					}
 				;
 
-getdiag_list : getdiag_list ',' getdiag_list_item
+getdiag_list : getdiag_list COMMA getdiag_list_item
 					{
 						$$ = lappend($1, $3);
 					}
@@ -1136,7 +1140,7 @@ assign_var		: T_DATUM
 						check_assignable($1.datum, @1);
 						$$ = $1.datum;
 					}
-				| assign_var '[' expr_until_rightbracket
+				| assign_var LBRACKET expr_until_rightbracket
 					{
 						PLpgSQL_arrayelem	*new;
 
@@ -1153,7 +1157,7 @@ assign_var		: T_DATUM
 					}
 				;
 
-stmt_if			: K_IF expr_until_then proc_sect stmt_elsifs stmt_else K_END K_IF ';'
+stmt_if			: K_IF expr_until_then proc_sect stmt_elsifs stmt_else K_END K_IF SEMICOLON
 					{
 						PLpgSQL_stmt_if *new;
 
@@ -1197,7 +1201,7 @@ stmt_else		:
 					}
 				;
 
-stmt_case		: K_CASE opt_expr_until_when case_when_list opt_case_else K_END K_CASE ';'
+stmt_case		: K_CASE opt_expr_until_when case_when_list opt_case_else K_END K_CASE SEMICOLON
 					{
 						$$ = make_case(@1, $2, $3, $4);
 					}
@@ -1376,11 +1380,11 @@ for_control		: for_variable K_IN
 							{
 								do
 								{
-									expr = read_sql_expression2(',', K_LOOP,
+									expr = read_sql_expression2(COMMA, K_LOOP,
 																", or LOOP",
 																&term);
 									new->params = lappend(new->params, expr);
-								} while (term == ',');
+								} while (term == COMMA);
 							}
 
 							$$ = (PLpgSQL_stmt *) new;
@@ -1612,7 +1616,7 @@ for_variable	: T_DATUM
 							/* check for comma-separated list */
 							tok = yylex();
 							plpgsql_push_back_token(tok);
-							if (tok == ',')
+							if (tok == COMMA)
 								$$.row = (PLpgSQL_datum *)
 									read_into_scalar_list($$.name,
 														  $$.scalar,
@@ -1630,7 +1634,7 @@ for_variable	: T_DATUM
 						/* check for comma-separated list */
 						tok = yylex();
 						plpgsql_push_back_token(tok);
-						if (tok == ',')
+						if (tok == COMMA)
 							word_is_not_variable(&($1), @1);
 					}
 				| T_CWORD
@@ -1801,7 +1805,7 @@ stmt_raise		: K_RAISE
 						 * We could have just RAISE, meaning to re-throw
 						 * the current error.
 						 */
-						if (tok != ';')
+						if (tok != SEMICOLON)
 						{
 							/*
 							 * First is an optional elog severity level.
@@ -1862,14 +1866,14 @@ stmt_raise		: K_RAISE
 								 * or USING to begin the options list.
 								 */
 								tok = yylex();
-								if (tok != ',' && tok != ';' && tok != K_USING)
+								if (tok != COMMA && tok != SEMICOLON && tok != K_USING)
 									yyerror("syntax error");
 
-								while (tok == ',')
+								while (tok == COMMA)
 								{
 									PLpgSQL_expr *expr;
 
-									expr = read_sql_construct(',', ';', K_USING,
+									expr = read_sql_construct(COMMA, SEMICOLON, K_USING,
 															  ", or ; or USING",
 															  "SELECT ",
 															  true, true, true,
@@ -1908,7 +1912,7 @@ stmt_raise		: K_RAISE
 																	false);
 								}
 								tok = yylex();
-								if (tok != ';' && tok != K_USING)
+								if (tok != SEMICOLON && tok != K_USING)
 									yyerror("syntax error");
 							}
 
@@ -1933,12 +1937,12 @@ stmt_assert		: K_ASSERT
 						new->lineno		= plpgsql_location_to_lineno(@1);
 						new->stmtid		= ++plpgsql_curr_compile->nstatements;
 
-						new->cond = read_sql_expression2(',', ';',
+						new->cond = read_sql_expression2(COMMA, SEMICOLON,
 														 ", or ;",
 														 &tok);
 
-						if (tok == ',')
-							new->message = read_sql_expression(';', ";");
+						if (tok == COMMA)
+							new->message = read_sql_expression(SEMICOLON, ";");
 						else
 							new->message = NULL;
 
@@ -1946,7 +1950,7 @@ stmt_assert		: K_ASSERT
 					}
 				;
 
-loop_body		: proc_sect K_END K_LOOP opt_label ';'
+loop_body		: proc_sect K_END K_LOOP opt_label SEMICOLON
 					{
 						$$.stmts = $1;
 						$$.end_label = $4;
@@ -1959,7 +1963,7 @@ loop_body		: proc_sect K_END K_LOOP opt_label ';'
  * variable.  (The composite case is probably a syntax error, but we'll let
  * the core parser decide that.)  Normally, we should assume that such a
  * word is a SQL statement keyword that isn't also a plpgsql keyword.
- * However, if the next token is assignment or '[', it can't be a valid
+ * However, if the next token is assignment or LBRACKET, it can't be a valid
  * SQL statement, and what we're probably looking at is an intended variable
  * assignment.  Give an appropriate complaint for that, instead of letting
  * the core parser throw an unhelpful "syntax error".
@@ -1978,7 +1982,7 @@ stmt_execsql	: K_IMPORT
 
 						tok = yylex();
 						plpgsql_push_back_token(tok);
-						if (tok == '=' || tok == COLON_EQUALS || tok == '[')
+						if (tok == EQUALS || tok == COLON_EQUALS || tok == LBRACKET)
 							word_is_not_variable(&($1), @1);
 						$$ = make_execsql_stmt(T_WORD, @1);
 					}
@@ -1988,7 +1992,7 @@ stmt_execsql	: K_IMPORT
 
 						tok = yylex();
 						plpgsql_push_back_token(tok);
-						if (tok == '=' || tok == COLON_EQUALS || tok == '[')
+						if (tok == EQUALS || tok == COLON_EQUALS || tok == LBRACKET)
 							cword_is_not_variable(&($1), @1);
 						$$ = make_execsql_stmt(T_CWORD, @1);
 					}
@@ -2000,7 +2004,7 @@ stmt_dynexecute : K_EXECUTE
 						PLpgSQL_expr *expr;
 						int endtoken;
 
-						expr = read_sql_construct(K_INTO, K_USING, ';',
+						expr = read_sql_construct(K_INTO, K_USING, SEMICOLON,
 												  "INTO or USING or ;",
 												  "SELECT ",
 												  true, true, true,
@@ -2039,15 +2043,15 @@ stmt_dynexecute : K_EXECUTE
 									yyerror("syntax error");
 								do
 								{
-									expr = read_sql_construct(',', ';', K_INTO,
+									expr = read_sql_construct(COMMA, SEMICOLON, K_INTO,
 															  ", or ; or INTO",
 															  "SELECT ",
 															  true, true, true,
 															  NULL, &endtoken);
 									new->params = lappend(new->params, expr);
-								} while (endtoken == ',');
+								} while (endtoken == COMMA);
 							}
-							else if (endtoken == ';')
+							else if (endtoken == SEMICOLON)
 								break;
 							else
 								yyerror("syntax error");
@@ -2101,7 +2105,7 @@ stmt_open		: K_OPEN cursor_variable
 								int		endtoken;
 
 								new->dynquery =
-									read_sql_expression2(K_USING, ';',
+									read_sql_expression2(K_USING, SEMICOLON,
 														 "USING or ;",
 														 &endtoken);
 
@@ -2112,12 +2116,12 @@ stmt_open		: K_OPEN cursor_variable
 
 									do
 									{
-										expr = read_sql_expression2(',', ';',
+										expr = read_sql_expression2(COMMA, SEMICOLON,
 																	", or ;",
 																	&endtoken);
 										new->params = lappend(new->params,
 															  expr);
-									} while (endtoken == ',');
+									} while (endtoken == COMMA);
 								}
 							}
 							else
@@ -2129,7 +2133,7 @@ stmt_open		: K_OPEN cursor_variable
 						else
 						{
 							/* predefined cursor query, so read args */
-							new->argquery = read_cursor_args($2, ';', ";");
+							new->argquery = read_cursor_args($2, SEMICOLON, ";");
 						}
 
 						$$ = (PLpgSQL_stmt *)new;
@@ -2144,7 +2148,7 @@ stmt_fetch		: K_FETCH opt_fetch_direction cursor_variable K_INTO
 						/* We have already parsed everything through the INTO keyword */
 						read_into_target(&target, NULL);
 
-						if (yylex() != ';')
+						if (yylex() != SEMICOLON)
 							yyerror("syntax error");
 
 						/*
@@ -2166,7 +2170,7 @@ stmt_fetch		: K_FETCH opt_fetch_direction cursor_variable K_INTO
 					}
 				;
 
-stmt_move		: K_MOVE opt_fetch_direction cursor_variable ';'
+stmt_move		: K_MOVE opt_fetch_direction cursor_variable SEMICOLON
 					{
 						PLpgSQL_stmt_fetch *fetch = $2;
 
@@ -2184,7 +2188,7 @@ opt_fetch_direction	:
 					}
 				;
 
-stmt_close		: K_CLOSE cursor_variable ';'
+stmt_close		: K_CLOSE cursor_variable SEMICOLON
 					{
 						PLpgSQL_stmt_close *new;
 
@@ -2198,14 +2202,14 @@ stmt_close		: K_CLOSE cursor_variable ';'
 					}
 				;
 
-stmt_null		: K_NULL ';'
+stmt_null		: K_NULL SEMICOLON
 					{
 						/* We do not bother building a node for NULL */
 						$$ = NULL;
 					}
 				;
 
-stmt_commit		: K_COMMIT opt_transaction_chain ';'
+stmt_commit		: K_COMMIT opt_transaction_chain SEMICOLON
 					{
 						PLpgSQL_stmt_commit *new;
 
@@ -2219,7 +2223,7 @@ stmt_commit		: K_COMMIT opt_transaction_chain ';'
 					}
 				;
 
-stmt_rollback	: K_ROLLBACK opt_transaction_chain ';'
+stmt_rollback	: K_ROLLBACK opt_transaction_chain SEMICOLON
 					{
 						PLpgSQL_stmt_rollback *new;
 
@@ -2272,10 +2276,10 @@ cursor_variable	: T_DATUM
 						/*
 						 * In principle we should support a cursor_variable
 						 * that is an array element, but for now we don't, so
-						 * just throw an error if next token is '['.
+						 * just throw an error if next token is LBRACKET.
 						 */
 						if ($1.datum->dtype != PLPGSQL_DTYPE_VAR ||
-							plpgsql_peek() == '[')
+							plpgsql_peek() == LBRACKET)
 							ereport(ERROR,
 									(errcode(ERRCODE_DATATYPE_MISMATCH),
 									 errmsg("cursor variable must be a simple variable"),
@@ -2420,11 +2424,11 @@ proc_condition	: any_identifier
 				;
 
 expr_until_semi :
-					{ $$ = read_sql_expression(';', ";"); }
+					{ $$ = read_sql_expression(SEMICOLON, ";"); }
 				;
 
 expr_until_rightbracket :
-					{ $$ = read_sql_expression(']', "]"); }
+					{ $$ = read_sql_expression(RBRACKET, "]"); }
 				;
 
 expr_until_then :
@@ -2470,7 +2474,7 @@ opt_label	:
 					}
 				;
 
-opt_exitcond	: ';'
+opt_exitcond	: SEMICOLON
 					{ $$ = NULL; }
 				| K_WHEN expr_until_semi
 					{ $$ = $2; }
@@ -2669,11 +2673,11 @@ read_sql_expression2(int until, int until2, const char *expected,
 							  "SELECT ", true, true, true, NULL, endtoken);
 }
 
-/* Convenience routine to read a SQL statement that must end with ';' */
+/* Convenience routine to read a SQL statement that must end with SEMICOLON */
 static PLpgSQL_expr *
 read_sql_stmt(const char *sqlstart)
 {
-	return read_sql_construct(';', 0, 0, ";",
+	return read_sql_construct(SEMICOLON, 0, 0, ";",
 							  sqlstart, false, true, true, NULL, NULL);
 }
 
@@ -2729,9 +2733,9 @@ read_sql_construct(int until,
 			break;
 		if (tok == until3 && parenlevel == 0)
 			break;
-		if (tok == '(' || tok == '[')
+		if (tok == LPAREN || tok == LBRACKET)
 			parenlevel++;
-		else if (tok == ')' || tok == ']')
+		else if (tok == RPAREN || tok == RBRACKET)
 		{
 			parenlevel--;
 			if (parenlevel < 0)
@@ -2742,7 +2746,7 @@ read_sql_construct(int until,
 		 * hit a semicolon either (unless it's the until symbol, in which
 		 * case we should have fallen out above).
 		 */
-		if (tok == 0 || tok == ';')
+		if (tok == 0 || tok == SEMICOLON)
 		{
 			if (parenlevel != 0)
 				yyerror("mismatched parentheses");
@@ -2827,7 +2831,7 @@ read_datatype(int tok)
 		char   *dtname = yylval.word.ident;
 
 		tok = yylex();
-		if (tok == '%')
+		if (tok == PERCENT)
 		{
 			tok = yylex();
 			if (tok_is_keyword(tok, &yylval,
@@ -2851,7 +2855,7 @@ read_datatype(int tok)
 		char   *dtname = pstrdup(yylval.keyword);
 
 		tok = yylex();
-		if (tok == '%')
+		if (tok == PERCENT)
 		{
 			tok = yylex();
 			if (tok_is_keyword(tok, &yylval,
@@ -2875,7 +2879,7 @@ read_datatype(int tok)
 		List   *dtnames = yylval.cword.idents;
 
 		tok = yylex();
-		if (tok == '%')
+		if (tok == PERCENT)
 		{
 			tok = yylex();
 			if (tok_is_keyword(tok, &yylval,
@@ -2895,7 +2899,7 @@ read_datatype(int tok)
 		}
 	}
 
-	while (tok != ';')
+	while (tok != SEMICOLON)
 	{
 		if (tok == 0)
 		{
@@ -2906,14 +2910,14 @@ read_datatype(int tok)
 		}
 		/* Possible followers for datatype in a declaration */
 		if (tok == K_COLLATE || tok == K_NOT ||
-			tok == '=' || tok == COLON_EQUALS || tok == K_DEFAULT)
+			tok == EQUALS || tok == COLON_EQUALS || tok == K_DEFAULT)
 			break;
 		/* Possible followers for datatype in a cursor_arg list */
-		if ((tok == ',' || tok == ')') && parenlevel == 0)
+		if ((tok == COMMA || tok == RPAREN) && parenlevel == 0)
 			break;
-		if (tok == '(')
+		if (tok == LPAREN)
 			parenlevel++;
-		else if (tok == ')')
+		else if (tok == RPAREN)
 			parenlevel--;
 
 		tok = yylex();
@@ -2992,7 +2996,7 @@ make_execsql_stmt(int firsttoken, int location)
 		tok = yylex();
 		if (have_into && into_end_loc < 0)
 			into_end_loc = yylloc;		/* token after the INTO part */
-		if (tok == ';')
+		if (tok == SEMICOLON)
 			break;
 		if (tok == 0)
 			yyerror("unexpected end of function definition");
@@ -3230,7 +3234,7 @@ make_return_stmt(int location)
 
 	if (plpgsql_curr_compile->fn_retset)
 	{
-		if (yylex() != ';')
+		if (yylex() != SEMICOLON)
 			ereport(ERROR,
 					(errcode(ERRCODE_DATATYPE_MISMATCH),
 					 errmsg("RETURN cannot have a parameter in function returning set"),
@@ -3239,7 +3243,7 @@ make_return_stmt(int location)
 	}
 	else if (plpgsql_curr_compile->fn_rettype == VOIDOID)
 	{
-		if (yylex() != ';')
+		if (yylex() != SEMICOLON)
 		{
 			if (plpgsql_curr_compile->fn_prokind == PROKIND_PROCEDURE)
 				ereport(ERROR,
@@ -3255,7 +3259,7 @@ make_return_stmt(int location)
 	}
 	else if (plpgsql_curr_compile->out_param_varno >= 0)
 	{
-		if (yylex() != ';')
+		if (yylex() != SEMICOLON)
 			ereport(ERROR,
 					(errcode(ERRCODE_DATATYPE_MISMATCH),
 					 errmsg("RETURN cannot have a parameter in function with OUT parameters"),
@@ -3270,7 +3274,7 @@ make_return_stmt(int location)
 		 */
 		int		tok = yylex();
 
-		if (tok == T_DATUM && plpgsql_peek() == ';' &&
+		if (tok == T_DATUM && plpgsql_peek() == SEMICOLON &&
 			(yylval.wdatum.datum->dtype == PLPGSQL_DTYPE_VAR ||
 			 yylval.wdatum.datum->dtype == PLPGSQL_DTYPE_PROMISE ||
 			 yylval.wdatum.datum->dtype == PLPGSQL_DTYPE_ROW ||
@@ -3279,7 +3283,7 @@ make_return_stmt(int location)
 			new->retvarno = yylval.wdatum.datum->dno;
 			/* eat the semicolon token that we only peeked at above */
 			tok = yylex();
-			Assert(tok == ';');
+			Assert(tok == SEMICOLON);
 		}
 		else
 		{
@@ -3290,7 +3294,7 @@ make_return_stmt(int location)
 			 * anything else is a compile-time error.
 			 */
 			plpgsql_push_back_token(tok);
-			new->expr = read_sql_expression(';', ";");
+			new->expr = read_sql_expression(SEMICOLON, ";");
 		}
 	}
 
@@ -3318,7 +3322,7 @@ make_return_next_stmt(int location)
 
 	if (plpgsql_curr_compile->out_param_varno >= 0)
 	{
-		if (yylex() != ';')
+		if (yylex() != SEMICOLON)
 			ereport(ERROR,
 					(errcode(ERRCODE_DATATYPE_MISMATCH),
 					 errmsg("RETURN NEXT cannot have a parameter in function with OUT parameters"),
@@ -3333,7 +3337,7 @@ make_return_next_stmt(int location)
 		 */
 		int		tok = yylex();
 
-		if (tok == T_DATUM && plpgsql_peek() == ';' &&
+		if (tok == T_DATUM && plpgsql_peek() == SEMICOLON &&
 			(yylval.wdatum.datum->dtype == PLPGSQL_DTYPE_VAR ||
 			 yylval.wdatum.datum->dtype == PLPGSQL_DTYPE_PROMISE ||
 			 yylval.wdatum.datum->dtype == PLPGSQL_DTYPE_ROW ||
@@ -3342,7 +3346,7 @@ make_return_next_stmt(int location)
 			new->retvarno = yylval.wdatum.datum->dno;
 			/* eat the semicolon token that we only peeked at above */
 			tok = yylex();
-			Assert(tok == ';');
+			Assert(tok == SEMICOLON);
 		}
 		else
 		{
@@ -3353,7 +3357,7 @@ make_return_next_stmt(int location)
 			 * anything else is a compile-time error.
 			 */
 			plpgsql_push_back_token(tok);
-			new->expr = read_sql_expression(';', ";");
+			new->expr = read_sql_expression(SEMICOLON, ";");
 		}
 	}
 
@@ -3390,7 +3394,7 @@ make_return_query_stmt(int location)
 		/* dynamic SQL */
 		int		term;
 
-		new->dynquery = read_sql_expression2(';', K_USING, "; or USING",
+		new->dynquery = read_sql_expression2(SEMICOLON, K_USING, "; or USING",
 											 &term);
 		if (term == K_USING)
 		{
@@ -3398,9 +3402,9 @@ make_return_query_stmt(int location)
 			{
 				PLpgSQL_expr *expr;
 
-				expr = read_sql_expression2(',', ';', ", or ;", &term);
+				expr = read_sql_expression2(COMMA, SEMICOLON, ", or ;", &term);
 				new->params = lappend(new->params, expr);
-			} while (term == ',');
+			} while (term == COMMA);
 		}
 	}
 
@@ -3489,7 +3493,7 @@ read_into_target(PLpgSQL_variable **target, bool *strict)
 				check_assignable(yylval.wdatum.datum, yylloc);
 				*target = (PLpgSQL_variable *) yylval.wdatum.datum;
 
-				if ((tok = yylex()) == ',')
+				if ((tok = yylex()) == COMMA)
 					ereport(ERROR,
 							(errcode(ERRCODE_SYNTAX_ERROR),
 							 errmsg("record variable cannot be part of multiple-item INTO list"),
@@ -3532,7 +3536,7 @@ read_into_scalar_list(char *initial_name,
 	varnos[0]	  = initial_datum->dno;
 	nfields		  = 1;
 
-	while ((tok = yylex()) == ',')
+	while ((tok = yylex()) == COMMA)
 	{
 		/* Check for array overflow */
 		if (nfields >= 1024)
@@ -3788,7 +3792,7 @@ read_cursor_args(PLpgSQL_var *cursor, int until, const char *expected)
 	if (cursor->cursor_explicit_argrow < 0)
 	{
 		/* No arguments expected */
-		if (tok == '(')
+		if (tok == LPAREN)
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("cursor \"%s\" has no arguments",
@@ -3802,7 +3806,7 @@ read_cursor_args(PLpgSQL_var *cursor, int until, const char *expected)
 	}
 
 	/* Else better provide arguments */
-	if (tok != '(')
+	if (tok != LPAREN)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("cursor \"%s\" has arguments",
@@ -3880,7 +3884,7 @@ read_cursor_args(PLpgSQL_var *cursor, int until, const char *expected)
 		 * translated into a form where the second parameter is commented
 		 * out.
 		 */
-		item = read_sql_construct(',', ')', 0,
+		item = read_sql_construct(COMMA, RPAREN, 0,
 								  ",\" or \")",
 								  sqlstart,
 								  true, true,
@@ -3889,14 +3893,14 @@ read_cursor_args(PLpgSQL_var *cursor, int until, const char *expected)
 
 		argv[argpos] = item->query + strlen(sqlstart);
 
-		if (endtoken == ')' && !(argc == row->nfields - 1))
+		if (endtoken == RPAREN && !(argc == row->nfields - 1))
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("not enough arguments for cursor \"%s\"",
 							cursor->refname),
 					 parser_errposition(yylloc)));
 
-		if (endtoken == ',' && (argc == row->nfields - 1))
+		if (endtoken == COMMA && (argc == row->nfields - 1))
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("too many arguments for cursor \"%s\"",
@@ -3989,14 +3993,14 @@ read_raise_options(void)
 			yyerror("unrecognized RAISE statement option");
 
 		tok = yylex();
-		if (tok != '=' && tok != COLON_EQUALS)
+		if (tok != EQUALS && tok != COLON_EQUALS)
 			yyerror("syntax error, expected \"=\"");
 
-		opt->expr = read_sql_expression2(',', ';', ", or ;", &tok);
+		opt->expr = read_sql_expression2(COMMA, SEMICOLON, ", or ;", &tok);
 
 		result = lappend(result, opt);
 
-		if (tok == ';')
+		if (tok == SEMICOLON)
 			break;
 	}
 

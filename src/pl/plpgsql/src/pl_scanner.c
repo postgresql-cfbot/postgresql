@@ -42,12 +42,12 @@ IdentifierLookup plpgsql_IdentifierLookup = IDENTIFIER_LOOKUP_NORMAL;
  * In certain contexts it is desirable to prefer recognizing an unreserved
  * keyword over recognizing a variable name.  In particular, at the start
  * of a statement we should prefer unreserved keywords unless the statement
- * looks like an assignment (i.e., first token is followed by ':=' or '[').
+ * looks like an assignment (i.e., first token is followed by ':=' or LBRACKET).
  * This rule allows most statement-introducing keywords to be kept unreserved.
  * (We still have to reserve initial keywords that might follow a block
  * label, unfortunately, since the method used to determine if we are at
  * start of statement doesn't recognize such cases.  We'd also have to
- * reserve any keyword that could legitimately be followed by ':=' or '['.)
+ * reserve any keyword that could legitimately be followed by ':=' or LBRACKET.)
  * Some additional cases are handled in pl_gram.y using tok_is_keyword().
  *
  * We try to avoid reserving more keywords than we have to; but there's
@@ -80,7 +80,7 @@ static const uint16 UnreservedPLKeywordTokens[] = {
  * fashion seems sufficient.
  */
 #define AT_STMT_START(prev_token) \
-	((prev_token) == ';' || \
+	((prev_token) == SEMICOLON || \
 	 (prev_token) == K_BEGIN || \
 	 (prev_token) == K_THEN || \
 	 (prev_token) == K_ELSE || \
@@ -156,7 +156,7 @@ plpgsql_yylex(void)
 		TokenAuxData aux2;
 
 		tok2 = internal_yylex(&aux2);
-		if (tok2 == '.')
+		if (tok2 == DOT)
 		{
 			int			tok3;
 			TokenAuxData aux3;
@@ -168,7 +168,7 @@ plpgsql_yylex(void)
 				TokenAuxData aux4;
 
 				tok4 = internal_yylex(&aux4);
-				if (tok4 == '.')
+				if (tok4 == DOT)
 				{
 					int			tok5;
 					TokenAuxData aux5;
@@ -243,7 +243,7 @@ plpgsql_yylex(void)
 			/*
 			 * See if it matches a variable name, except in the context where
 			 * we are at start of statement and the next token isn't
-			 * assignment or '['.  In that case, it couldn't validly be a
+			 * assignment or LBRACKET.  In that case, it couldn't validly be a
 			 * variable name, and skipping the lookup allows variable names to
 			 * be used that would conflict with plpgsql or core keywords that
 			 * introduce statements (e.g., "comment").  Without this special
@@ -260,8 +260,8 @@ plpgsql_yylex(void)
 			if (plpgsql_parse_word(aux1.lval.str,
 								   core_yy.scanbuf + aux1.lloc,
 								   (!AT_STMT_START(plpgsql_yytoken) ||
-									(tok2 == '=' || tok2 == COLON_EQUALS ||
-									 tok2 == '[')),
+									(tok2 == EQUALS || tok2 == COLON_EQUALS ||
+									 tok2 == LBRACKET)),
 								   &aux1.lval.wdatum,
 								   &aux1.lval.word))
 				tok1 = T_DATUM;
@@ -334,7 +334,7 @@ internal_yylex(TokenAuxData *auxdata)
 			else if (strcmp(auxdata->lval.str, ">>") == 0)
 				token = GREATER_GREATER;
 			else if (strcmp(auxdata->lval.str, "#") == 0)
-				token = '#';
+				token = OCTOTHORP;
 		}
 
 		/* The core returns PARAM as ival, but we treat it like IDENT */

@@ -16,6 +16,9 @@ SELECT 'first line'
 ' - third line'
 	AS "Illegal comment within continuation";
 
+-- dollar quoting error
+SELECT $abc;
+
 -- Unicode escapes
 SET standard_conforming_strings TO on;
 

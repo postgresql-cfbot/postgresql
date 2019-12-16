@@ -4,8 +4,8 @@ statements: /*EMPTY*/
 				| statements statement
 		;
 
-statement: ecpgstart at stmt ';' { connection = NULL; }
-				| ecpgstart stmt ';'
+statement: ecpgstart at stmt SEMICOLON { connection = NULL; }
+				| ecpgstart stmt SEMICOLON
 				| ecpgstart ECPGVarDeclaration
 				{
 					fprintf(base_yyout, "%s", $2);
@@ -15,8 +15,8 @@ statement: ecpgstart at stmt ';' { connection = NULL; }
 				| ECPGDeclaration
 				| c_thing               { fprintf(base_yyout, "%s", $1); free($1); }
 				| CPP_LINE              { fprintf(base_yyout, "%s", $1); free($1); }
-				| '{'                   { braces_open++; fputs("{", base_yyout); }
-				| '}'
+				| LBRACE                   { braces_open++; fputs("{", base_yyout); }
+				| RBRACE
 		{
 			remove_typedefs(braces_open);
 			remove_variables(braces_open--);
@@ -83,7 +83,7 @@ connection_target: opt_database_name opt_server opt_port
 			else
 				$$ = make3_str(mm_strdup("\""), make3_str($1, $2, $3), mm_strdup("\""));
 		}
-		|  db_prefix ':' server opt_port '/' opt_database_name opt_options
+		|  db_prefix COLON server opt_port SLASH opt_database_name opt_options
 		{
 			/* new style: <tcp|unix>:postgresql://server[:port][/dbname] */
 			if (strncmp($1, "unix:postgresql", strlen("unix:postgresql")) != 0 && strncmp($1, "tcp:postgresql", strlen("tcp:postgresql")) != 0)
@@ -144,11 +144,11 @@ opt_server: server			{ $$ = $1; }
 		;
 
 server_name: ColId					{ $$ = $1; }
-		| ColId '.' server_name		{ $$ = make3_str($1, mm_strdup("."), $3); }
+		| ColId DOT server_name		{ $$ = make3_str($1, mm_strdup("."), $3); }
 		| IP						{ $$ = make_name(); }
 		;
 
-opt_port: ':' Iconst		{ $$ = make2_str(mm_strdup(":"), $2); }
+opt_port: COLON Iconst		{ $$ = make2_str(mm_strdup(":"), $2); }
 		| /*EMPTY*/	{ $$ = EMPTY; }
 		;
 
@@ -162,7 +162,7 @@ opt_user: USER ora_user		{ $$ = $2; }
 
 ora_user: user_name
 			{ $$ = cat2_str($1, mm_strdup(", NULL")); }
-		| user_name '/' user_name
+		| user_name SLASH user_name
 			{ $$ = cat_str(3, $1, mm_strdup(","), $3); }
 		| user_name SQL_IDENTIFIED BY user_name
 			{ $$ = cat_str(3, $1, mm_strdup(","), $4); }
@@ -265,11 +265,11 @@ connect_options:  ColId opt_opt_value
 
 opt_opt_value: /*EMPTY*/
 			{ $$ = EMPTY; }
-		| '=' Iconst
+		| EQUALS Iconst
 			{ $$ = make2_str(mm_strdup("="), $2); }
-		| '=' ecpg_ident
+		| EQUALS ecpg_ident
 			{ $$ = make2_str(mm_strdup("="), $2); }
-		| '=' civar
+		| EQUALS civar
 			{ $$ = make2_str(mm_strdup("="), $2); }
 		;
 
@@ -368,7 +368,7 @@ single_vt_declaration: type_declaration		{ $$ = $1; }
 
 precision:	NumericOnly	{ $$ = $1; };
 
-opt_scale:	',' NumericOnly	{ $$ = $2; }
+opt_scale:	COMMA NumericOnly	{ $$ = $2; }
 		| /* EMPTY */	{ $$ = EMPTY; }
 		;
 
@@ -392,9 +392,9 @@ ECPGDeclaration: sql_startdeclare
 		}
 		;
 
-sql_startdeclare: ecpgstart BEGIN_P DECLARE SQL_SECTION ';' {};
+sql_startdeclare: ecpgstart BEGIN_P DECLARE SQL_SECTION SEMICOLON {};
 
-sql_enddeclare: ecpgstart END_P DECLARE SQL_SECTION ';' {};
+sql_enddeclare: ecpgstart END_P DECLARE SQL_SECTION SEMICOLON {};
 
 var_type_declarations:	/*EMPTY*/			{ $$ = EMPTY; }
 		| vt_declarations			{ $$ = $1; }
@@ -416,7 +416,7 @@ type_declaration: S_TYPEDEF
 		/* an initializer specified */
 		initializer = 0;
 	}
-	var_type opt_pointer ECPGColLabelCommon opt_array_bounds ';'
+	var_type opt_pointer ECPGColLabelCommon opt_array_bounds SEMICOLON
 	{
 		add_typedef($5, $6.index1, $6.index2, $3.type_enum, $3.type_dimension, $3.type_index, initializer, *$4 ? 1 : 0);
 
@@ -436,7 +436,7 @@ var_declaration: storage_declaration
 
 			actual_startline[struct_level] = hashline_number();
 		}
-		variable_list ';'
+		variable_list SEMICOLON
 		{
 			$$ = cat_str(5, actual_startline[struct_level], $1, $2.type_str, $4, mm_strdup(";\n"));
 		}
@@ -450,17 +450,17 @@ var_declaration: storage_declaration
 
 			actual_startline[struct_level] = hashline_number();
 		}
-		variable_list ';'
+		variable_list SEMICOLON
 		{
 			$$ = cat_str(4, actual_startline[struct_level], $1.type_str, $3, mm_strdup(";\n"));
 		}
-		| struct_union_type_with_symbol ';'
+		| struct_union_type_with_symbol SEMICOLON
 		{
 			$$ = cat2_str($1, mm_strdup(";"));
 		}
 		;
 
-opt_bit_field:	':' Iconst	{ $$ =cat2_str(mm_strdup(":"), $2); }
+opt_bit_field:	COLON Iconst	{ $$ =cat2_str(mm_strdup(":"), $2); }
 		| /* EMPTY */	{ $$ = EMPTY; }
 		;
 
@@ -513,7 +513,7 @@ var_type:	simple_type
 			$$.type_index = mm_strdup("-1");
 			$$.type_sizeof = NULL;
 		}
-		| ECPGColLabelCommon '(' precision opt_scale ')'
+		| ECPGColLabelCommon LPAREN precision opt_scale RPAREN
 		{
 			if (strcmp($1, "numeric") == 0)
 			{
@@ -692,7 +692,7 @@ enum_type: ENUM_P symbol enum_definition
 			{ $$ = cat2_str(mm_strdup("enum"), $2); }
 		;
 
-enum_definition: '{' c_list '}'
+enum_definition: LBRACE c_list RBRACE
 			{ $$ = cat_str(3, mm_strdup("{"), $2, mm_strdup("}")); };
 
 struct_union_type_with_symbol: s_struct_union_symbol
@@ -702,7 +702,7 @@ struct_union_type_with_symbol: s_struct_union_symbol
 				 mmerror(PARSE_ERROR, ET_ERROR, "too many levels in nested structure/union definition");
 			forward_name = mm_strdup($1.symbol);
 		}
-		'{' variable_declarations '}'
+		LBRACE variable_declarations RBRACE
 		{
 			struct typedefs *ptr, *this;
 			struct this_type su_type;
@@ -753,7 +753,7 @@ struct_union_type: struct_union_type_with_symbol	{ $$ = $1; }
 			if (struct_level >= STRUCT_DEPTH)
 				 mmerror(PARSE_ERROR, ET_ERROR, "too many levels in nested structure/union definition");
 		}
-		'{' variable_declarations '}'
+		LBRACE variable_declarations RBRACE
 		{
 			ECPGfree_struct_member(struct_member_list[struct_level]);
 			struct_member_list[struct_level] = NULL;
@@ -819,7 +819,7 @@ opt_signed: SQL_SIGNED
 
 variable_list: variable
 			{ $$ = $1; }
-		| variable_list ',' variable
+		| variable_list COMMA variable
 		{
 			if (actual_type[struct_level].type_enum == ECPGt_varchar || actual_type[struct_level].type_enum == ECPGt_bytea)
 				$$ = cat_str(3, $1, mm_strdup(";"), $3);
@@ -929,7 +929,7 @@ variable: opt_pointer ECPGColLabel opt_array_bounds opt_bit_field opt_initialize
 
 opt_initializer: /*EMPTY*/
 			{ $$ = EMPTY; }
-		| '=' c_term
+		| EQUALS c_term
 		{
 			initializer = 1;
 			$$ = cat2_str(mm_strdup("="), $2);
@@ -937,8 +937,8 @@ opt_initializer: /*EMPTY*/
 		;
 
 opt_pointer: /*EMPTY*/				{ $$ = EMPTY; }
-		| '*'						{ $$ = mm_strdup("*"); }
-		| '*' '*'					{ $$ = mm_strdup("**"); }
+		| STAR						{ $$ = mm_strdup("*"); }
+		| STAR STAR					{ $$ = mm_strdup("**"); }
 		;
 
 /*
@@ -1031,7 +1031,7 @@ into_sqlda: INTO name
 		}
 		;
 
-using_list: UsingValue | UsingValue ',' using_list;
+using_list: UsingValue | UsingValue COMMA using_list;
 
 UsingValue: UsingConst
 		{
@@ -1045,11 +1045,11 @@ UsingValue: UsingConst
 		;
 
 UsingConst: Iconst			{ $$ = $1; }
-		| '+' Iconst		{ $$ = cat_str(2, mm_strdup("+"), $2); }
-		| '-' Iconst		{ $$ = cat_str(2, mm_strdup("-"), $2); }
+		| PLUS Iconst		{ $$ = cat_str(2, mm_strdup("+"), $2); }
+		| MINUS Iconst		{ $$ = cat_str(2, mm_strdup("-"), $2); }
 		| ecpg_fconst		{ $$ = $1; }
-		| '+' ecpg_fconst	{ $$ = cat_str(2, mm_strdup("+"), $2); }
-		| '-' ecpg_fconst	{ $$ = cat_str(2, mm_strdup("-"), $2); }
+		| PLUS ecpg_fconst	{ $$ = cat_str(2, mm_strdup("+"), $2); }
+		| MINUS ecpg_fconst	{ $$ = cat_str(2, mm_strdup("-"), $2); }
 		| ecpg_sconst		{ $$ = $1; }
 		| ecpg_bconst		{ $$ = $1; }
 		| ecpg_xconst		{ $$ = $1; }
@@ -1138,10 +1138,10 @@ ECPGGetDescriptorHeader: SQL_GET SQL_DESCRIPTOR quoted_ident_stringvar ECPGGetDe
 		;
 
 ECPGGetDescHeaderItems: ECPGGetDescHeaderItem
-		| ECPGGetDescHeaderItems ',' ECPGGetDescHeaderItem
+		| ECPGGetDescHeaderItems COMMA ECPGGetDescHeaderItem
 		;
 
-ECPGGetDescHeaderItem: cvariable '=' desc_header_item
+ECPGGetDescHeaderItem: cvariable EQUALS desc_header_item
 			{ push_assignment($1, $3); }
 		;
 
@@ -1151,10 +1151,10 @@ ECPGSetDescriptorHeader: SET SQL_DESCRIPTOR quoted_ident_stringvar ECPGSetDescHe
 		;
 
 ECPGSetDescHeaderItems: ECPGSetDescHeaderItem
-		| ECPGSetDescHeaderItems ',' ECPGSetDescHeaderItem
+		| ECPGSetDescHeaderItems COMMA ECPGSetDescHeaderItem
 		;
 
-ECPGSetDescHeaderItem: desc_header_item '=' IntConstVar
+ECPGSetDescHeaderItem: desc_header_item EQUALS IntConstVar
 		{
 			push_assignment($3, $1);
 		}
@@ -1186,10 +1186,10 @@ ECPGGetDescriptor:	SQL_GET SQL_DESCRIPTOR quoted_ident_stringvar VALUE_P IntCons
 		;
 
 ECPGGetDescItems: ECPGGetDescItem
-		| ECPGGetDescItems ',' ECPGGetDescItem
+		| ECPGGetDescItems COMMA ECPGGetDescItem
 		;
 
-ECPGGetDescItem: cvariable '=' descriptor_item	{ push_assignment($1, $3); };
+ECPGGetDescItem: cvariable EQUALS descriptor_item	{ push_assignment($1, $3); };
 
 
 ECPGSetDescriptor:	SET SQL_DESCRIPTOR quoted_ident_stringvar VALUE_P IntConstVar ECPGSetDescItems
@@ -1197,10 +1197,10 @@ ECPGSetDescriptor:	SET SQL_DESCRIPTOR quoted_ident_stringvar VALUE_P IntConstVar
 		;
 
 ECPGSetDescItems: ECPGSetDescItem
-		| ECPGSetDescItems ',' ECPGSetDescItem
+		| ECPGSetDescItems COMMA ECPGSetDescItem
 		;
 
-ECPGSetDescItem: descriptor_item '=' AllConstVar
+ECPGSetDescItem: descriptor_item EQUALS AllConstVar
 		{
 			push_assignment($3, $1);
 		}
@@ -1220,7 +1220,7 @@ AllConstVar: ecpg_fconst
 			$$ = $1;
 		}
 
-		| '-' ecpg_fconst
+		| MINUS ecpg_fconst
 		{
 			char *length = mm_alloc(sizeof(int) * CHAR_BIT * 10 / 3);
 			char *var = cat2_str(mm_strdup("-"), $2);
@@ -1230,7 +1230,7 @@ AllConstVar: ecpg_fconst
 			$$ = var;
 		}
 
-		| '-' Iconst
+		| MINUS Iconst
 		{
 			char *length = mm_alloc(sizeof(int) * CHAR_BIT * 10 / 3);
 			char *var = cat2_str(mm_strdup("-"), $2);
@@ -1273,7 +1273,7 @@ descriptor_item:	SQL_CARDINALITY			{ $$ = ECPGd_cardinality; }
  * set/reset the automatic transaction mode, this needs a different handling
  * as the other set commands
  */
-ECPGSetAutocommit:	SET SQL_AUTOCOMMIT '=' on_off	{ $$ = $4; }
+ECPGSetAutocommit:	SET SQL_AUTOCOMMIT EQUALS on_off	{ $$ = $4; }
 		|  SET SQL_AUTOCOMMIT TO on_off   { $$ = $4; }
 		;
 
@@ -1286,7 +1286,7 @@ on_off: ON				{ $$ = mm_strdup("on"); }
  * set commands
  */
 ECPGSetConnection:	SET CONNECTION TO connection_object { $$ = $4; }
-		| SET CONNECTION '=' connection_object { $$ = $4; }
+		| SET CONNECTION EQUALS connection_object { $$ = $4; }
 		| SET CONNECTION  connection_object { $$ = $3; }
 		;
 
@@ -1438,7 +1438,7 @@ action : CONTINUE_P
 			$<action>$.command = mm_strdup($3);
 			$<action>$.str = cat2_str(mm_strdup("goto "), $3);
 		}
-		| DO name '(' c_args ')'
+		| DO name LPAREN c_args RPAREN
 		{
 			$<action>$.code = W_DO;
 			$<action>$.command = cat_str(4, $2, mm_strdup("("), $4, mm_strdup(")"));
@@ -1456,7 +1456,7 @@ action : CONTINUE_P
 			$<action>$.command = NULL;
 			$<action>$.str = mm_strdup("continue");
 		}
-		| CALL name '(' c_args ')'
+		| CALL name LPAREN c_args RPAREN
 		{
 			$<action>$.code = W_DO;
 			$<action>$.command = cat_str(4, $2, mm_strdup("("), $4, mm_strdup(")"));
@@ -1627,7 +1627,7 @@ ECPGunreserved_interval: DAY_P				{ $$ = mm_strdup("day"); }
 		;
 
 
-into_list : coutputvariable | into_list ',' coutputvariable
+into_list : coutputvariable | into_list COMMA coutputvariable
 		;
 
 ecpgstart: SQL_START	{
@@ -1772,8 +1772,8 @@ quoted_ident_stringvar: name
  */
 
 c_stuff_item: c_anything			{ $$ = $1; }
-		| '(' ')'			{ $$ = mm_strdup("()"); }
-		| '(' c_stuff ')'
+		| LPAREN RPAREN			{ $$ = mm_strdup("()"); }
+		| LPAREN c_stuff RPAREN
 			{ $$ = cat_str(3, mm_strdup("("), $2, mm_strdup(")")); }
 		;
 
@@ -1783,29 +1783,29 @@ c_stuff: c_stuff_item			{ $$ = $1; }
 		;
 
 c_list: c_term				{ $$ = $1; }
-		| c_list ',' c_term	{ $$ = cat_str(3, $1, mm_strdup(","), $3); }
+		| c_list COMMA c_term	{ $$ = cat_str(3, $1, mm_strdup(","), $3); }
 		;
 
 c_term:  c_stuff			{ $$ = $1; }
-		| '{' c_list '}'	{ $$ = cat_str(3, mm_strdup("{"), $2, mm_strdup("}")); }
+		| LBRACE c_list RBRACE	{ $$ = cat_str(3, mm_strdup("{"), $2, mm_strdup("}")); }
 		;
 
 c_thing:	c_anything		{ $$ = $1; }
-		|	'('		{ $$ = mm_strdup("("); }
-		|	')'		{ $$ = mm_strdup(")"); }
-		|	','		{ $$ = mm_strdup(","); }
-		|	';'		{ $$ = mm_strdup(";"); }
+		|	LPAREN		{ $$ = mm_strdup("("); }
+		|	RPAREN		{ $$ = mm_strdup(")"); }
+		|	COMMA		{ $$ = mm_strdup(","); }
+		|	SEMICOLON	{ $$ = mm_strdup(";"); }
 		;
 
 c_anything:  ecpg_ident				{ $$ = $1; }
 		| Iconst			{ $$ = $1; }
 		| ecpg_fconst			{ $$ = $1; }
 		| ecpg_sconst			{ $$ = $1; }
-		| '*'				{ $$ = mm_strdup("*"); }
-		| '+'				{ $$ = mm_strdup("+"); }
-		| '-'				{ $$ = mm_strdup("-"); }
-		| '/'				{ $$ = mm_strdup("/"); }
-		| '%'				{ $$ = mm_strdup("%"); }
+		| STAR				{ $$ = mm_strdup("*"); }
+		| PLUS				{ $$ = mm_strdup("+"); }
+		| MINUS				{ $$ = mm_strdup("-"); }
+		| SLASH				{ $$ = mm_strdup("/"); }
+		| PERCENT			{ $$ = mm_strdup("%"); }
 		| NULL_P			{ $$ = mm_strdup("NULL"); }
 		| S_ADD				{ $$ = mm_strdup("+="); }
 		| S_AND				{ $$ = mm_strdup("&&"); }
@@ -1849,10 +1849,10 @@ c_anything:  ecpg_ident				{ $$ = $1; }
 		| TO				{ $$ = mm_strdup("to"); }
 		| UNION				{ $$ = mm_strdup("union"); }
 		| VARCHAR			{ $$ = mm_strdup("varchar"); }
-		| '['				{ $$ = mm_strdup("["); }
-		| ']'				{ $$ = mm_strdup("]"); }
-		| '='				{ $$ = mm_strdup("="); }
-		| ':'				{ $$ = mm_strdup(":"); }
+		| LBRACKET			{ $$ = mm_strdup("["); }
+		| RBRACKET			{ $$ = mm_strdup("]"); }
+		| EQUALS			{ $$ = mm_strdup("="); }
+		| COLON				{ $$ = mm_strdup(":"); }
 		;
 
 DeallocateStmt: DEALLOCATE prepared_name                { $$ = $2; }
@@ -1862,15 +1862,15 @@ DeallocateStmt: DEALLOCATE prepared_name                { $$ = $2; }
                 ;
 
 Iresult:        Iconst				{ $$ = $1; }
-                | '(' Iresult ')'		{ $$ = cat_str(3, mm_strdup("("), $2, mm_strdup(")")); }
-                | Iresult '+' Iresult		{ $$ = cat_str(3, $1, mm_strdup("+"), $3); }
-                | Iresult '-' Iresult		{ $$ = cat_str(3, $1, mm_strdup("-"), $3); }
-                | Iresult '*' Iresult		{ $$ = cat_str(3, $1, mm_strdup("*"), $3); }
-                | Iresult '/' Iresult		{ $$ = cat_str(3, $1, mm_strdup("/"), $3); }
-                | Iresult '%' Iresult		{ $$ = cat_str(3, $1, mm_strdup("%"), $3); }
+                | LPAREN Iresult RPAREN		{ $$ = cat_str(3, mm_strdup("("), $2, mm_strdup(")")); }
+                | Iresult PLUS Iresult		{ $$ = cat_str(3, $1, mm_strdup("+"), $3); }
+                | Iresult MINUS Iresult		{ $$ = cat_str(3, $1, mm_strdup("-"), $3); }
+                | Iresult STAR Iresult		{ $$ = cat_str(3, $1, mm_strdup("*"), $3); }
+                | Iresult SLASH Iresult		{ $$ = cat_str(3, $1, mm_strdup("/"), $3); }
+                | Iresult PERCENT Iresult		{ $$ = cat_str(3, $1, mm_strdup("%"), $3); }
                 | ecpg_sconst			{ $$ = $1; }
                 | ColId				{ $$ = $1; }
-		| ColId '(' var_type ')'        { if (pg_strcasecmp($1, "sizeof") != 0)
+		| ColId LPAREN var_type RPAREN        { if (pg_strcasecmp($1, "sizeof") != 0)
 							mmerror(PARSE_ERROR, ET_ERROR, "operator not allowed in variable definition");
 						  else
 							$$ = cat_str(4, $1, mm_strdup("("), $3.type_str, mm_strdup(")"));

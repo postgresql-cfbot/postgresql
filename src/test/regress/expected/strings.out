@@ -21,6 +21,11 @@ SELECT 'first line'
 ERROR:  syntax error at or near "' - third line'"
 LINE 3: ' - third line'
         ^
+-- dollar quoting error
+SELECT $abc;
+ERROR:  unterminated dollar quote at or near "$abc"
+LINE 1: SELECT $abc;
+               ^
 -- Unicode escapes
 SET standard_conforming_strings TO on;
 SELECT U&'d\0061t\+000061' AS U&"d\0061t\+000061";

@@ -54,6 +54,7 @@ static bool		include_next;
 #define startlit()	(literalbuf[0] = '\0', literallen = 0)
 static void addlit(char *ytext, int yleng);
 static void addlitchar(unsigned char);
+static int	map_single_char_token(char c);
 static int	process_integer_literal(const char *token, YYSTYPE *lval);
 static void parse_include(void);
 static bool ecpg_isspace(char ch);
@@ -314,10 +315,11 @@ not_equals		"!="
  * appears in the "self" set, it is not to be returned as an Op).  Note
  * that the sets overlap, but each has some chars that are not in the other.
  *
- * If you change either set, adjust the character lists appearing in the
- * rule for "operator"!
+ * If you change "op_chars", adjust the character list appearing in the
+ * rule for "operator", and if you change "self", change map_single_char_token()
+ * to match!
  */
-self			[,()\[\].;\:\+\-\*\/\%\^\<\>\=]
+self			[,()\[\]{}.;\:\+\-\*\/\%\^\<\>\=]
 op_chars		[\~\!\@\#\^\&\|\`\?\+\-\*\/\%\<\>\=]
 operator		{op_chars}+
 
@@ -381,6 +383,8 @@ elif			[eE][lL][iI][fF]
 endif			[eE][nN][dD][iI][fF]
 
 struct			[sS][tT][rR][uU][cC][tT]
+
+c_self			[,()\[\]{};\:\+\-\*\/\%\=]
 
 exec_sql		{exec}{space}*{sql}{space}*
 ipdigit			({digit}|{digit}{digit}|{digit}{digit}{digit})
@@ -762,15 +766,18 @@ cppline			{space}*#([^i][A-Za-z]*|{if}|{ifdef}|{ifndef}|{import})((\/\*[^*/]*\*+
 					return yytext[0];
 				}
 
-{self}			{
+{self}		{
+					int self_token = map_single_char_token(yytext[0]);
+					if (self_token < 0)
+						mmerror(PARSE_ERROR, ET_ERROR, "invalid single character token");
 					/*
-					 * We may find a ';' inside a structure
+					 * We may find a SEMICOLON inside a structure
 					 * definition in a TYPE or VAR statement.
 					 * This is not an EOL marker.
 					 */
-					if (yytext[0] == ';' && struct_level == 0)
+					if (self_token == SEMICOLON && struct_level == 0)
 						BEGIN(C);
-					return yytext[0];
+					return self_token;
 				}
 
 {operator}		{
@@ -842,9 +849,13 @@ cppline			{space}*#([^i][A-Za-z]*|{if}|{ifdef}|{ifndef}|{import})((\/\*[^*/]*\*+
 						 * return it as a character token the same way
 						 * that the "self" rule would have.
 						 */
-						if (nchars == 1 &&
-							strchr(",()[].;:+-*/%^<>=", yytext[0]))
-							return yytext[0];
+						if (nchars == 1)
+						{
+							int self_token = map_single_char_token(yytext[0]);
+							if (self_token > 0)
+								return self_token;
+						}
+
 						/*
 						 * Likewise, if what we have left is two chars, and
 						 * those match the tokens ">=", "<=", "=>", "<>" or
@@ -948,7 +959,7 @@ cppline			{space}*#([^i][A-Za-z]*|{if}|{ifdef}|{ifndef}|{import})((\/\*[^*/]*\*+
 				}
 
 {other}			{
-					return yytext[0];
+					mmerror(PARSE_ERROR, ET_ERROR, "invalid single character token %s", yytext);
 				}
 } /* <SQL> */
 
@@ -1013,7 +1024,8 @@ cppline			{space}*#([^i][A-Za-z]*|{if}|{ifdef}|{ifndef}|{import})((\/\*[^*/]*\*+
 						/*
 						 * Try to detect a function name:
 						 * look for identifiers at the global scope
-						 * keep the last identifier before the first '(' and '{'
+						 * keep the last identifier before the first
+						 * LPAREN and LBRACE
 						 */
 						if (braces_open == 0 && parenths_open == 0)
 						{
@@ -1038,22 +1050,19 @@ cppline			{space}*#([^i][A-Za-z]*|{if}|{ifdef}|{ifndef}|{import})((\/\*[^*/]*\*+
 						}
 					}
 <C>{xcstop}			{ mmerror(PARSE_ERROR, ET_ERROR, "nested /* ... */ comments"); }
-<C>":"				{ return ':'; }
-<C>";"				{ return ';'; }
-<C>","				{ return ','; }
-<C>"*"				{ return '*'; }
-<C>"%"				{ return '%'; }
-<C>"/"				{ return '/'; }
-<C>"+"				{ return '+'; }
-<C>"-"				{ return '-'; }
-<C>"("				{ parenths_open++; return '('; }
-<C>")"				{ parenths_open--; return ')'; }
+<C>{c_self}			{
+						int self_token = map_single_char_token(yytext[0]);
+						if (self_token < 0)
+							mmerror(PARSE_ERROR, ET_ERROR, "invalid single character token %s", yytext);
+
+						if (self_token == LPAREN)
+							parenths_open++;
+						if (self_token == RPAREN)
+							parenths_open--;
+
+						return self_token;
+					}
 <C,xskip>{space}		{ ECHO; }
-<C>\{				{ return '{'; }
-<C>\}				{ return '}'; }
-<C>\[				{ return '['; }
-<C>\]				{ return ']'; }
-<C>\=				{ return '='; }
 <C>"->"				{ return S_MEMBER; }
 <C>">>"				{ return S_RSHIFT; }
 <C>"<<"				{ return S_LSHIFT; }
@@ -1470,6 +1479,58 @@ addlitchar(unsigned char ychar)
 	literalbuf[literallen] = ychar;
 	literallen += 1;
 	literalbuf[literallen] = '\0';
+}
+
+/*
+ * Return tokens for single characters matching the "self" and "c-self" rules.
+ * Note: This must match the function in gram.y of the same name.
+ */
+static int
+map_single_char_token(char c)
+{
+	switch (c)
+	{
+		case ',':
+			return COMMA;
+		case '(':
+			return LPAREN;
+		case ')':
+			return RPAREN;
+		case '[':
+			return LBRACKET;
+		case ']':
+			return RBRACKET;
+		case '{':
+			return LBRACE;
+		case '}':
+			return RBRACE;
+		case '.':
+			return DOT;
+		case ';':
+			return SEMICOLON;
+		case ':':
+			return COLON;
+		case '+':
+			return PLUS;
+		case '-':
+			return MINUS;
+		case '*':
+			return STAR;
+		case '/':
+			return SLASH;
+		case '%':
+			return PERCENT;
+		case '^':
+			return CARET;
+		case '<':
+			return LESS;
+		case '>':
+			return GREATER;
+		case '=':
+			return EQUALS;
+		default:
+			return -1;
+	}
 }
 
 /*

@@ -52,6 +52,9 @@ typedef union core_YYSTYPE
  *	%token <ival>	ICONST PARAM
  *	%token			TYPECAST DOT_DOT COLON_EQUALS EQUALS_GREATER
  *	%token			LESS_EQUALS GREATER_EQUALS NOT_EQUALS
+ *	%token			COMMA LPAREN RPAREN LBRACKET RBRACKET LBRACE RBRACE DOT
+ *	%token			SEMICOLON COLON PLUS MINUS STAR SLASH
+ *	%token			PERCENT CARET LESS GREATER EQUALS
  * The above token definitions *must* be the first ones declared in any
  * bison parser built atop this scanner, so that they will have consistent
  * numbers assigned to them (specifically, IDENT = 258 and so on).

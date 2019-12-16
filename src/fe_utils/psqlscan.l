@@ -323,10 +323,10 @@ not_equals		"!="
  * appears in the "self" set, it is not to be returned as an Op).  Note
  * that the sets overlap, but each has some chars that are not in the other.
  *
- * If you change either set, adjust the character lists appearing in the
+ * If you change "op_chars", adjust the character list appearing in the
  * rule for "operator"!
  */
-self			[,()\[\].;\:\+\-\*\/\%\^\<\>\=]
+self			[,()\[\]{}.;\:\+\-\*\/\%\^\<\>\=]
 op_chars		[\~\!\@\#\^\&\|\`\?\+\-\*\/\%\<\>\=]
 operator		{op_chars}+
 

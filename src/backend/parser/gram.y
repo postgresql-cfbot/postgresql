@@ -605,6 +605,21 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %token <ival>	ICONST PARAM
 %token			TYPECAST DOT_DOT COLON_EQUALS EQUALS_GREATER
 %token			LESS_EQUALS GREATER_EQUALS NOT_EQUALS
+/*
+ * Single character non-keyword token types. We use named tokens to refer
+ * to single character literal tokens, rather than the character itself.
+ *
+ * This enables using the '%define api.token.raw' directive, available in
+ * Bison 3.5 and up, saving one table lookup per token.
+ * Note: If this is done, then you must add '%define api.token.raw' to
+ * pl_gram.y as well, so that the token numbers match.
+ *
+ * LBRACE and RBRACE are unused in the core SQL grammar, and so will always
+ * provoke parse errors.  They are here to avoid adding special cases to ECPG.
+ */
+%token			COMMA LPAREN RPAREN LBRACKET RBRACKET LBRACE RBRACE DOT
+%token			SEMICOLON COLON PLUS MINUS STAR SLASH
+%token			PERCENT CARET LESS GREATER EQUALS
 
 /*
  * If you want to make any keyword changes, update the keyword table in
@@ -727,7 +742,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %left		AND
 %right		NOT
 %nonassoc	IS ISNULL NOTNULL	/* IS sets precedence for IS NULL, etc */
-%nonassoc	'<' '>' '=' LESS_EQUALS GREATER_EQUALS NOT_EQUALS
+%nonassoc	LESS GREATER EQUALS LESS_EQUALS GREATER_EQUALS NOT_EQUALS
 %nonassoc	BETWEEN IN_P LIKE ILIKE SIMILAR NOT_LA
 %nonassoc	ESCAPE			/* ESCAPE must be just above LIKE/ILIKE/SIMILAR */
 %left		POSTFIXOP		/* dummy for postfix Op rules */
@@ -745,7 +760,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
  * postfix-operator problems.
  *
  * To support CUBE and ROLLUP in GROUP BY without reserving them, we give them
- * an explicit priority lower than '(', so that a rule with CUBE '(' will shift
+ * an explicit priority lower than LPAREN, so that a rule with CUBE LPAREN will shift
  * rather than reducing a conflicting rule that takes CUBE as a function name.
  * Using the same precedence as IDENT seems right for the reasons given above.
  *
@@ -761,17 +776,17 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %nonassoc	UNBOUNDED		/* ideally should have same precedence as IDENT */
 %nonassoc	IDENT GENERATED NULL_P PARTITION RANGE ROWS GROUPS PRECEDING FOLLOWING CUBE ROLLUP
 %left		Op OPERATOR		/* multi-character ops and user-defined operators */
-%left		'+' '-'
-%left		'*' '/' '%'
-%left		'^'
+%left		PLUS MINUS
+%left		STAR SLASH PERCENT
+%left		CARET
 /* Unary Operators */
 %left		AT				/* sets precedence for AT TIME ZONE */
 %left		COLLATE
 %right		UMINUS
-%left		'[' ']'
-%left		'(' ')'
+%left		LBRACKET RBRACKET
+%left		LPAREN RPAREN
 %left		TYPECAST
-%left		'.'
+%left		DOT
 /*
  * These might seem to be low-precedence, but actually they are not part
  * of the arithmetic hierarchy at all in their use as JOIN operators.
@@ -804,7 +819,7 @@ stmtblock:	stmtmulti
  * we'd get -1 for the location in such cases.
  * We also take care to discard empty statements entirely.
  */
-stmtmulti:	stmtmulti ';' stmt
+stmtmulti:	stmtmulti SEMICOLON stmt
 				{
 					if ($1 != NIL)
 					{
@@ -1452,7 +1467,7 @@ generic_set:
 					n->args = $3;
 					$$ = n;
 				}
-			| var_name '=' var_list
+			| var_name EQUALS var_list
 				{
 					VariableSetStmt *n = makeNode(VariableSetStmt);
 					n->kind = VAR_SET_VALUE;
@@ -1467,7 +1482,7 @@ generic_set:
 					n->name = $1;
 					$$ = n;
 				}
-			| var_name '=' DEFAULT
+			| var_name EQUALS DEFAULT
 				{
 					VariableSetStmt *n = makeNode(VariableSetStmt);
 					n->kind = VAR_SET_DEFAULT;
@@ -1567,12 +1582,12 @@ set_rest_more:	/* Generic SET syntaxes: */
 		;
 
 var_name:	ColId								{ $$ = $1; }
-			| var_name '.' ColId
+			| var_name DOT ColId
 				{ $$ = psprintf("%s.%s", $1, $3); }
 		;
 
 var_list:	var_value								{ $$ = list_make1($1); }
-			| var_list ',' var_value				{ $$ = lappend($1, $3); }
+			| var_list COMMA var_value				{ $$ = lappend($1, $3); }
 		;
 
 var_value:	opt_boolean_or_string
@@ -1631,7 +1646,7 @@ zone_value:
 					t->typmods = $3;
 					$$ = makeStringConstCast($2, @2, t);
 				}
-			| ConstInterval '(' Iconst ')' Sconst
+			| ConstInterval LPAREN Iconst RPAREN Sconst
 				{
 					TypeName *t = $1;
 					t->typmods = list_make2(makeIntConst(INTERVAL_FULL_RANGE, -1),
@@ -2016,7 +2031,7 @@ AlterTableStmt:
 
 alter_table_cmds:
 			alter_table_cmd							{ $$ = list_make1($1); }
-			| alter_table_cmds ',' alter_table_cmd	{ $$ = lappend($1, $3); }
+			| alter_table_cmds COMMA alter_table_cmd	{ $$ = lappend($1, $3); }
 		;
 
 partition_cmd:
@@ -2619,7 +2634,7 @@ replica_identity:
 ;
 
 reloptions:
-			'(' reloption_list ')'					{ $$ = $2; }
+			LPAREN reloption_list RPAREN					{ $$ = $2; }
 		;
 
 opt_reloptions:		WITH reloptions					{ $$ = $2; }
@@ -2628,12 +2643,12 @@ opt_reloptions:		WITH reloptions					{ $$ = $2; }
 
 reloption_list:
 			reloption_elem							{ $$ = list_make1($1); }
-			| reloption_list ',' reloption_elem		{ $$ = lappend($1, $3); }
+			| reloption_list COMMA reloption_elem		{ $$ = lappend($1, $3); }
 		;
 
 /* This should match def_elem and also allow qualified names */
 reloption_elem:
-			ColLabel '=' def_arg
+			ColLabel EQUALS def_arg
 				{
 					$$ = makeDefElem($1, (Node *) $3, @1);
 				}
@@ -2641,12 +2656,12 @@ reloption_elem:
 				{
 					$$ = makeDefElem($1, NULL, @1);
 				}
-			| ColLabel '.' ColLabel '=' def_arg
+			| ColLabel DOT ColLabel EQUALS def_arg
 				{
 					$$ = makeDefElemExtended($1, $3, (Node *) $5,
 											 DEFELEM_UNSPEC, @1);
 				}
-			| ColLabel '.' ColLabel
+			| ColLabel DOT ColLabel
 				{
 					$$ = makeDefElemExtended($1, $3, NULL, DEFELEM_UNSPEC, @1);
 				}
@@ -2687,7 +2702,7 @@ alter_identity_column_option:
 
 PartitionBoundSpec:
 			/* a HASH partition */
-			FOR VALUES WITH '(' hash_partbound ')'
+			FOR VALUES WITH LPAREN hash_partbound RPAREN
 				{
 					ListCell   *lc;
 					PartitionBoundSpec *n = makeNode(PartitionBoundSpec);
@@ -2740,7 +2755,7 @@ PartitionBoundSpec:
 				}
 
 			/* a LIST partition */
-			| FOR VALUES IN_P '(' expr_list ')'
+			| FOR VALUES IN_P LPAREN expr_list RPAREN
 				{
 					PartitionBoundSpec *n = makeNode(PartitionBoundSpec);
 
@@ -2753,7 +2768,7 @@ PartitionBoundSpec:
 				}
 
 			/* a RANGE partition */
-			| FOR VALUES FROM '(' expr_list ')' TO '(' expr_list ')'
+			| FOR VALUES FROM LPAREN expr_list RPAREN TO LPAREN expr_list RPAREN
 				{
 					PartitionBoundSpec *n = makeNode(PartitionBoundSpec);
 
@@ -2790,7 +2805,7 @@ hash_partbound:
 			{
 				$$ = list_make1($1);
 			}
-		| hash_partbound ',' hash_partbound_elem
+		| hash_partbound COMMA hash_partbound_elem
 			{
 				$$ = lappend($1, $3);
 			}
@@ -2818,7 +2833,7 @@ AlterCompositeTypeStmt:
 
 alter_type_cmds:
 			alter_type_cmd							{ $$ = list_make1($1); }
-			| alter_type_cmds ',' alter_type_cmd	{ $$ = lappend($1, $3); }
+			| alter_type_cmds COMMA alter_type_cmd	{ $$ = lappend($1, $3); }
 		;
 
 alter_type_cmd:
@@ -2952,7 +2967,7 @@ CopyStmt:	COPY opt_binary qualified_name opt_column_list
 						n->options = list_concat(n->options, $10);
 					$$ = (Node *)n;
 				}
-			| COPY '(' PreparableStmt ')' TO opt_program copy_file_name opt_with copy_options
+			| COPY LPAREN PreparableStmt RPAREN TO opt_program copy_file_name opt_with copy_options
 				{
 					CopyStmt *n = makeNode(CopyStmt);
 					n->relation = NULL;
@@ -2995,7 +3010,7 @@ copy_file_name:
 		;
 
 copy_options: copy_opt_list							{ $$ = $1; }
-			| '(' copy_generic_opt_list ')'			{ $$ = $2; }
+			| LPAREN copy_generic_opt_list RPAREN			{ $$ = $2; }
 		;
 
 /* old COPY option syntax */
@@ -3041,7 +3056,7 @@ copy_opt_item:
 				{
 					$$ = makeDefElem("force_quote", (Node *)$3, @1);
 				}
-			| FORCE QUOTE '*'
+			| FORCE QUOTE STAR
 				{
 					$$ = makeDefElem("force_quote", (Node *)makeNode(A_Star), @1);
 				}
@@ -3088,7 +3103,7 @@ copy_generic_opt_list:
 				{
 					$$ = list_make1($1);
 				}
-			| copy_generic_opt_list ',' copy_generic_opt_elem
+			| copy_generic_opt_list COMMA copy_generic_opt_elem
 				{
 					$$ = lappend($1, $3);
 				}
@@ -3104,8 +3119,8 @@ copy_generic_opt_elem:
 copy_generic_opt_arg:
 			opt_boolean_or_string			{ $$ = (Node *) makeString($1); }
 			| NumericOnly					{ $$ = (Node *) $1; }
-			| '*'							{ $$ = (Node *) makeNode(A_Star); }
-			| '(' copy_generic_opt_arg_list ')'		{ $$ = (Node *) $2; }
+			| STAR							{ $$ = (Node *) makeNode(A_Star); }
+			| LPAREN copy_generic_opt_arg_list RPAREN		{ $$ = (Node *) $2; }
 			| /* EMPTY */					{ $$ = NULL; }
 		;
 
@@ -3114,7 +3129,7 @@ copy_generic_opt_arg_list:
 				{
 					$$ = list_make1($1);
 				}
-			| copy_generic_opt_arg_list ',' copy_generic_opt_arg_list_item
+			| copy_generic_opt_arg_list COMMA copy_generic_opt_arg_list_item
 				{
 					$$ = lappend($1, $3);
 				}
@@ -3133,7 +3148,7 @@ copy_generic_opt_arg_list_item:
  *
  *****************************************************************************/
 
-CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
+CreateStmt:	CREATE OptTemp TABLE qualified_name LPAREN OptTableElementList RPAREN
 			OptInherit OptPartitionSpec table_access_method_clause OptWith
 			OnCommitOption OptTableSpace
 				{
@@ -3152,8 +3167,8 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					n->if_not_exists = false;
 					$$ = (Node *)n;
 				}
-		| CREATE OptTemp TABLE IF_P NOT EXISTS qualified_name '('
-			OptTableElementList ')' OptInherit OptPartitionSpec table_access_method_clause
+		| CREATE OptTemp TABLE IF_P NOT EXISTS qualified_name LPAREN
+			OptTableElementList RPAREN OptInherit OptPartitionSpec table_access_method_clause
 			OptWith OnCommitOption OptTableSpace
 				{
 					CreateStmt *n = makeNode(CreateStmt);
@@ -3292,7 +3307,7 @@ OptTableElementList:
 		;
 
 OptTypedTableElementList:
-			'(' TypedTableElementList ')'		{ $$ = $2; }
+			LPAREN TypedTableElementList RPAREN		{ $$ = $2; }
 			| /*EMPTY*/							{ $$ = NIL; }
 		;
 
@@ -3301,7 +3316,7 @@ TableElementList:
 				{
 					$$ = list_make1($1);
 				}
-			| TableElementList ',' TableElement
+			| TableElementList COMMA TableElement
 				{
 					$$ = lappend($1, $3);
 				}
@@ -3312,7 +3327,7 @@ TypedTableElementList:
 				{
 					$$ = list_make1($1);
 				}
-			| TypedTableElementList ',' TypedTableElement
+			| TypedTableElementList COMMA TypedTableElement
 				{
 					$$ = lappend($1, $3);
 				}
@@ -3470,7 +3485,7 @@ ColConstraintElem:
 					n->indexspace = $4;
 					$$ = (Node *)n;
 				}
-			| CHECK '(' a_expr ')' opt_no_inherit
+			| CHECK LPAREN a_expr RPAREN opt_no_inherit
 				{
 					Constraint *n = makeNode(Constraint);
 					n->contype = CONSTR_CHECK;
@@ -3500,7 +3515,7 @@ ColConstraintElem:
 					n->location = @1;
 					$$ = (Node *)n;
 				}
-			| GENERATED generated_when AS '(' a_expr ')' STORED
+			| GENERATED generated_when AS LPAREN a_expr RPAREN STORED
 				{
 					Constraint *n = makeNode(Constraint);
 					n->contype = CONSTR_GENERATED;
@@ -3637,7 +3652,7 @@ TableConstraint:
 		;
 
 ConstraintElem:
-			CHECK '(' a_expr ')' ConstraintAttributeSpec
+			CHECK LPAREN a_expr RPAREN ConstraintAttributeSpec
 				{
 					Constraint *n = makeNode(Constraint);
 					n->contype = CONSTR_CHECK;
@@ -3650,7 +3665,7 @@ ConstraintElem:
 					n->initially_valid = !n->skip_validation;
 					$$ = (Node *)n;
 				}
-			| UNIQUE '(' columnList ')' opt_c_include opt_definition OptConsTableSpace
+			| UNIQUE LPAREN columnList RPAREN opt_c_include opt_definition OptConsTableSpace
 				ConstraintAttributeSpec
 				{
 					Constraint *n = makeNode(Constraint);
@@ -3681,7 +3696,7 @@ ConstraintElem:
 								   NULL, yyscanner);
 					$$ = (Node *)n;
 				}
-			| PRIMARY KEY '(' columnList ')' opt_c_include opt_definition OptConsTableSpace
+			| PRIMARY KEY LPAREN columnList RPAREN opt_c_include opt_definition OptConsTableSpace
 				ConstraintAttributeSpec
 				{
 					Constraint *n = makeNode(Constraint);
@@ -3712,7 +3727,7 @@ ConstraintElem:
 								   NULL, yyscanner);
 					$$ = (Node *)n;
 				}
-			| EXCLUDE access_method_clause '(' ExclusionConstraintList ')'
+			| EXCLUDE access_method_clause LPAREN ExclusionConstraintList RPAREN
 				opt_c_include opt_definition OptConsTableSpace  ExclusionWhereClause
 				ConstraintAttributeSpec
 				{
@@ -3731,7 +3746,7 @@ ConstraintElem:
 								   NULL, yyscanner);
 					$$ = (Node *)n;
 				}
-			| FOREIGN KEY '(' columnList ')' REFERENCES qualified_name
+			| FOREIGN KEY LPAREN columnList RPAREN REFERENCES qualified_name
 				opt_column_list key_match key_actions ConstraintAttributeSpec
 				{
 					Constraint *n = makeNode(Constraint);
@@ -3757,13 +3772,13 @@ opt_no_inherit:	NO INHERIT							{  $$ = true; }
 		;
 
 opt_column_list:
-			'(' columnList ')'						{ $$ = $2; }
+			LPAREN columnList RPAREN						{ $$ = $2; }
 			| /*EMPTY*/								{ $$ = NIL; }
 		;
 
 columnList:
 			columnElem								{ $$ = list_make1($1); }
-			| columnList ',' columnElem				{ $$ = lappend($1, $3); }
+			| columnList COMMA columnElem				{ $$ = lappend($1, $3); }
 		;
 
 columnElem: ColId
@@ -3772,7 +3787,7 @@ columnElem: ColId
 				}
 		;
 
-opt_c_include:	INCLUDE '(' columnList ')'			{ $$ = $3; }
+opt_c_include:	INCLUDE LPAREN columnList RPAREN			{ $$ = $3; }
 			 |		/* EMPTY */						{ $$ = NIL; }
 		;
 
@@ -3800,7 +3815,7 @@ key_match:  MATCH FULL
 
 ExclusionConstraintList:
 			ExclusionConstraintElem					{ $$ = list_make1($1); }
-			| ExclusionConstraintList ',' ExclusionConstraintElem
+			| ExclusionConstraintList COMMA ExclusionConstraintElem
 													{ $$ = lappend($1, $3); }
 		;
 
@@ -3809,14 +3824,14 @@ ExclusionConstraintElem: index_elem WITH any_operator
 				$$ = list_make2($1, $3);
 			}
 			/* allow OPERATOR() decoration for the benefit of ruleutils.c */
-			| index_elem WITH OPERATOR '(' any_operator ')'
+			| index_elem WITH OPERATOR LPAREN any_operator RPAREN
 			{
 				$$ = list_make2($1, $5);
 			}
 		;
 
 ExclusionWhereClause:
-			WHERE '(' a_expr ')'					{ $$ = $3; }
+			WHERE LPAREN a_expr RPAREN					{ $$ = $3; }
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
@@ -3853,7 +3868,7 @@ key_action:
 			| SET DEFAULT				{ $$ = FKCONSTR_ACTION_SETDEFAULT; }
 		;
 
-OptInherit: INHERITS '(' qualified_name_list ')'	{ $$ = $3; }
+OptInherit: INHERITS LPAREN qualified_name_list RPAREN	{ $$ = $3; }
 			| /*EMPTY*/								{ $$ = NIL; }
 		;
 
@@ -3862,7 +3877,7 @@ OptPartitionSpec: PartitionSpec	{ $$ = $1; }
 			| /*EMPTY*/			{ $$ = NULL; }
 		;
 
-PartitionSpec: PARTITION BY part_strategy '(' part_params ')'
+PartitionSpec: PARTITION BY part_strategy LPAREN part_params RPAREN
 				{
 					PartitionSpec *n = makeNode(PartitionSpec);
 
@@ -3879,7 +3894,7 @@ part_strategy:	IDENT					{ $$ = $1; }
 		;
 
 part_params:	part_elem						{ $$ = list_make1($1); }
-			| part_params ',' part_elem			{ $$ = lappend($1, $3); }
+			| part_params COMMA part_elem			{ $$ = lappend($1, $3); }
 		;
 
 part_elem: ColId opt_collate opt_class
@@ -3904,7 +3919,7 @@ part_elem: ColId opt_collate opt_class
 					n->location = @1;
 					$$ = n;
 				}
-			| '(' a_expr ')' opt_collate opt_class
+			| LPAREN a_expr RPAREN opt_collate opt_class
 				{
 					PartitionElem *n = makeNode(PartitionElem);
 
@@ -4207,7 +4222,7 @@ OptSeqOptList: SeqOptList							{ $$ = $1; }
 			| /*EMPTY*/								{ $$ = NIL; }
 		;
 
-OptParenthesizedSeqOptList: '(' SeqOptList ')'		{ $$ = $2; }
+OptParenthesizedSeqOptList: LPAREN SeqOptList RPAREN		{ $$ = $2; }
 			| /*EMPTY*/								{ $$ = NIL; }
 		;
 
@@ -4280,8 +4295,8 @@ opt_by:		BY				{}
 
 NumericOnly:
 			FCONST								{ $$ = makeFloat($1); }
-			| '+' FCONST						{ $$ = makeFloat($2); }
-			| '-' FCONST
+			| PLUS FCONST						{ $$ = makeFloat($2); }
+			| MINUS FCONST
 				{
 					$$ = makeFloat($2);
 					doNegateFloat($$);
@@ -4290,7 +4305,7 @@ NumericOnly:
 		;
 
 NumericOnly_list:	NumericOnly						{ $$ = list_make1($1); }
-				| NumericOnly_list ',' NumericOnly	{ $$ = lappend($1, $3); }
+				| NumericOnly_list COMMA NumericOnly	{ $$ = lappend($1, $3); }
 		;
 
 /*****************************************************************************
@@ -4334,7 +4349,7 @@ opt_trusted:
 		;
 
 /* This ought to be just func_name, but that causes reduce/reduce conflicts
- * (CREATE LANGUAGE is the only place where func_name isn't followed by '(').
+ * (CREATE LANGUAGE is the only place where func_name isn't followed by LPAREN).
  * Work around by using simple names, instead.
  */
 handler_name:
@@ -4539,7 +4554,7 @@ AlterExtensionContentsStmt:
 					n->object = (Node *) $6;
 					$$ = (Node *)n;
 				}
-			| ALTER EXTENSION name add_drop CAST '(' Typename AS Typename ')'
+			| ALTER EXTENSION name add_drop CAST LPAREN Typename AS Typename RPAREN
 				{
 					AlterExtensionContentsStmt *n = makeNode(AlterExtensionContentsStmt);
 					n->extname = $3;
@@ -4836,7 +4851,7 @@ AlterFdwStmt: ALTER FOREIGN DATA_P WRAPPER name opt_fdw_options alter_generic_op
 
 /* Options definition for CREATE FDW, SERVER and USER MAPPING */
 create_generic_options:
-			OPTIONS '(' generic_option_list ')'			{ $$ = $3; }
+			OPTIONS LPAREN generic_option_list RPAREN			{ $$ = $3; }
 			| /*EMPTY*/									{ $$ = NIL; }
 		;
 
@@ -4845,7 +4860,7 @@ generic_option_list:
 				{
 					$$ = list_make1($1);
 				}
-			| generic_option_list ',' generic_option_elem
+			| generic_option_list COMMA generic_option_elem
 				{
 					$$ = lappend($1, $3);
 				}
@@ -4853,7 +4868,7 @@ generic_option_list:
 
 /* Options definition for ALTER FDW, SERVER and USER MAPPING */
 alter_generic_options:
-			OPTIONS	'(' alter_generic_option_list ')'		{ $$ = $3; }
+			OPTIONS	LPAREN alter_generic_option_list RPAREN		{ $$ = $3; }
 		;
 
 alter_generic_option_list:
@@ -4861,7 +4876,7 @@ alter_generic_option_list:
 				{
 					$$ = list_make1($1);
 				}
-			| alter_generic_option_list ',' alter_generic_option_elem
+			| alter_generic_option_list COMMA alter_generic_option_elem
 				{
 					$$ = lappend($1, $3);
 				}
@@ -4995,7 +5010,7 @@ AlterForeignServerStmt: ALTER SERVER name foreign_server_version alter_generic_o
 
 CreateForeignTableStmt:
 		CREATE FOREIGN TABLE qualified_name
-			'(' OptTableElementList ')'
+			LPAREN OptTableElementList RPAREN
 			OptInherit SERVER name create_generic_options
 				{
 					CreateForeignTableStmt *n = makeNode(CreateForeignTableStmt);
@@ -5015,7 +5030,7 @@ CreateForeignTableStmt:
 					$$ = (Node *) n;
 				}
 		| CREATE FOREIGN TABLE IF_P NOT EXISTS qualified_name
-			'(' OptTableElementList ')'
+			LPAREN OptTableElementList RPAREN
 			OptInherit SERVER name create_generic_options
 				{
 					CreateForeignTableStmt *n = makeNode(CreateForeignTableStmt);
@@ -5136,7 +5151,7 @@ import_qualification_type:
 		;
 
 import_qualification:
-		import_qualification_type '(' relation_expr_list ')'
+		import_qualification_type LPAREN relation_expr_list RPAREN
 			{
 				ImportQual *n = (ImportQual *) palloc(sizeof(ImportQual));
 				n->type = $1;
@@ -5273,12 +5288,12 @@ AlterPolicyStmt:
 		;
 
 RowSecurityOptionalExpr:
-			USING '(' a_expr ')'	{ $$ = $3; }
+			USING LPAREN a_expr RPAREN	{ $$ = $3; }
 			| /* EMPTY */			{ $$ = NULL; }
 		;
 
 RowSecurityOptionalWithCheck:
-			WITH CHECK '(' a_expr ')'		{ $$ = $4; }
+			WITH CHECK LPAREN a_expr RPAREN		{ $$ = $4; }
 			| /* EMPTY */					{ $$ = NULL; }
 		;
 
@@ -5355,7 +5370,7 @@ am_type:
 CreateTrigStmt:
 			CREATE TRIGGER name TriggerActionTime TriggerEvents ON
 			qualified_name TriggerReferencing TriggerForSpec TriggerWhen
-			EXECUTE FUNCTION_or_PROCEDURE func_name '(' TriggerFuncArgs ')'
+			EXECUTE FUNCTION_or_PROCEDURE func_name LPAREN TriggerFuncArgs RPAREN
 				{
 					CreateTrigStmt *n = makeNode(CreateTrigStmt);
 					n->trigname = $3;
@@ -5377,7 +5392,7 @@ CreateTrigStmt:
 			| CREATE CONSTRAINT TRIGGER name AFTER TriggerEvents ON
 			qualified_name OptConstrFromTable ConstraintAttributeSpec
 			FOR EACH ROW TriggerWhen
-			EXECUTE FUNCTION_or_PROCEDURE func_name '(' TriggerFuncArgs ')'
+			EXECUTE FUNCTION_or_PROCEDURE func_name LPAREN TriggerFuncArgs RPAREN
 				{
 					CreateTrigStmt *n = makeNode(CreateTrigStmt);
 					n->trigname = $4;
@@ -5511,7 +5526,7 @@ TriggerForType:
 		;
 
 TriggerWhen:
-			WHEN '(' a_expr ')'						{ $$ = $3; }
+			WHEN LPAREN a_expr RPAREN						{ $$ = $3; }
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
@@ -5522,7 +5537,7 @@ FUNCTION_or_PROCEDURE:
 
 TriggerFuncArgs:
 			TriggerFuncArg							{ $$ = list_make1($1); }
-			| TriggerFuncArgs ',' TriggerFuncArg	{ $$ = lappend($1, $3); }
+			| TriggerFuncArgs COMMA TriggerFuncArg	{ $$ = lappend($1, $3); }
 			| /*EMPTY*/								{ $$ = NIL; }
 		;
 
@@ -5590,7 +5605,7 @@ ConstraintAttributeElem:
 
 CreateEventTrigStmt:
 			CREATE EVENT TRIGGER name ON ColLabel
-			EXECUTE FUNCTION_or_PROCEDURE func_name '(' ')'
+			EXECUTE FUNCTION_or_PROCEDURE func_name LPAREN RPAREN
 				{
 					CreateEventTrigStmt *n = makeNode(CreateEventTrigStmt);
 					n->trigname = $4;
@@ -5601,7 +5616,7 @@ CreateEventTrigStmt:
 				}
 		  | CREATE EVENT TRIGGER name ON ColLabel
 			WHEN event_trigger_when_list
-			EXECUTE FUNCTION_or_PROCEDURE func_name '(' ')'
+			EXECUTE FUNCTION_or_PROCEDURE func_name LPAREN RPAREN
 				{
 					CreateEventTrigStmt *n = makeNode(CreateEventTrigStmt);
 					n->trigname = $4;
@@ -5620,14 +5635,14 @@ event_trigger_when_list:
 		;
 
 event_trigger_when_item:
-		ColId IN_P '(' event_trigger_value_list ')'
+		ColId IN_P LPAREN event_trigger_value_list RPAREN
 			{ $$ = makeDefElem($1, (Node *) $4, @1); }
 		;
 
 event_trigger_value_list:
 		  SCONST
 			{ $$ = list_make1(makeString($1)); }
-		| event_trigger_value_list ',' SCONST
+		| event_trigger_value_list COMMA SCONST
 			{ $$ = lappend($1, makeString($3)); }
 		;
 
@@ -5656,7 +5671,7 @@ enable_trigger:
  *****************************************************************************/
 
 CreateAssertionStmt:
-			CREATE ASSERTION any_name CHECK '(' a_expr ')' ConstraintAttributeSpec
+			CREATE ASSERTION any_name CHECK LPAREN a_expr RPAREN ConstraintAttributeSpec
 				{
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -5729,7 +5744,7 @@ DefineStmt:
 					n->definition = NIL;
 					$$ = (Node *)n;
 				}
-			| CREATE TYPE_P any_name AS '(' OptTableFuncElementList ')'
+			| CREATE TYPE_P any_name AS LPAREN OptTableFuncElementList RPAREN
 				{
 					CompositeTypeStmt *n = makeNode(CompositeTypeStmt);
 
@@ -5738,7 +5753,7 @@ DefineStmt:
 					n->coldeflist = $6;
 					$$ = (Node *)n;
 				}
-			| CREATE TYPE_P any_name AS ENUM_P '(' opt_enum_val_list ')'
+			| CREATE TYPE_P any_name AS ENUM_P LPAREN opt_enum_val_list RPAREN
 				{
 					CreateEnumStmt *n = makeNode(CreateEnumStmt);
 					n->typeName = $3;
@@ -5828,14 +5843,14 @@ DefineStmt:
 				}
 		;
 
-definition: '(' def_list ')'						{ $$ = $2; }
+definition: LPAREN def_list RPAREN						{ $$ = $2; }
 		;
 
 def_list:	def_elem								{ $$ = list_make1($1); }
-			| def_list ',' def_elem					{ $$ = lappend($1, $3); }
+			| def_list COMMA def_elem					{ $$ = lappend($1, $3); }
 		;
 
-def_elem:	ColLabel '=' def_arg
+def_elem:	ColLabel EQUALS def_arg
 				{
 					$$ = makeDefElem($1, (Node *) $3, @1);
 				}
@@ -5854,11 +5869,11 @@ def_arg:	func_type						{ $$ = (Node *)$1; }
 			| NONE							{ $$ = (Node *)makeString(pstrdup($1)); }
 		;
 
-old_aggr_definition: '(' old_aggr_list ')'			{ $$ = $2; }
+old_aggr_definition: LPAREN old_aggr_list RPAREN			{ $$ = $2; }
 		;
 
 old_aggr_list: old_aggr_elem						{ $$ = list_make1($1); }
-			| old_aggr_list ',' old_aggr_elem		{ $$ = lappend($1, $3); }
+			| old_aggr_list COMMA old_aggr_elem		{ $$ = lappend($1, $3); }
 		;
 
 /*
@@ -5866,7 +5881,7 @@ old_aggr_list: old_aggr_elem						{ $$ = list_make1($1); }
  * the item names needed in old aggregate definitions are likely to become
  * SQL keywords.
  */
-old_aggr_elem:  IDENT '=' def_arg
+old_aggr_elem:  IDENT EQUALS def_arg
 				{
 					$$ = makeDefElem($1, (Node *)$3, @1);
 				}
@@ -5879,7 +5894,7 @@ opt_enum_val_list:
 
 enum_val_list:	Sconst
 				{ $$ = list_make1(makeString($1)); }
-			| enum_val_list ',' Sconst
+			| enum_val_list COMMA Sconst
 				{ $$ = lappend($1, makeString($3)); }
 		;
 
@@ -5969,7 +5984,7 @@ CreateOpClassStmt:
 
 opclass_item_list:
 			opclass_item							{ $$ = list_make1($1); }
-			| opclass_item_list ',' opclass_item	{ $$ = lappend($1, $3); }
+			| opclass_item_list COMMA opclass_item	{ $$ = lappend($1, $3); }
 		;
 
 opclass_item:
@@ -6003,7 +6018,7 @@ opclass_item:
 					n->number = $2;
 					$$ = (Node *) n;
 				}
-			| FUNCTION Iconst '(' type_list ')' function_with_argtypes
+			| FUNCTION Iconst LPAREN type_list RPAREN function_with_argtypes
 				{
 					CreateOpClassItem *n = makeNode(CreateOpClassItem);
 					n->itemtype = OPCLASS_ITEM_FUNCTION;
@@ -6085,11 +6100,11 @@ AlterOpFamilyStmt:
 
 opclass_drop_list:
 			opclass_drop							{ $$ = list_make1($1); }
-			| opclass_drop_list ',' opclass_drop	{ $$ = lappend($1, $3); }
+			| opclass_drop_list COMMA opclass_drop	{ $$ = lappend($1, $3); }
 		;
 
 opclass_drop:
-			OPERATOR Iconst '(' type_list ')'
+			OPERATOR Iconst LPAREN type_list RPAREN
 				{
 					CreateOpClassItem *n = makeNode(CreateOpClassItem);
 					n->itemtype = OPCLASS_ITEM_OPERATOR;
@@ -6097,7 +6112,7 @@ opclass_drop:
 					n->class_args = $4;
 					$$ = (Node *) n;
 				}
-			| FUNCTION Iconst '(' type_list ')'
+			| FUNCTION Iconst LPAREN type_list RPAREN
 				{
 					CreateOpClassItem *n = makeNode(CreateOpClassItem);
 					n->itemtype = OPCLASS_ITEM_FUNCTION;
@@ -6351,22 +6366,22 @@ drop_type_name_on_any_name:
 
 any_name_list:
 			any_name								{ $$ = list_make1($1); }
-			| any_name_list ',' any_name			{ $$ = lappend($1, $3); }
+			| any_name_list COMMA any_name			{ $$ = lappend($1, $3); }
 		;
 
 any_name:	ColId						{ $$ = list_make1(makeString($1)); }
 			| ColId attrs				{ $$ = lcons(makeString($1), $2); }
 		;
 
-attrs:		'.' attr_name
+attrs:		DOT attr_name
 					{ $$ = list_make1(makeString($2)); }
-			| attrs '.' attr_name
+			| attrs DOT attr_name
 					{ $$ = lappend($1, makeString($3)); }
 		;
 
 type_name_list:
 			Typename								{ $$ = list_make1($1); }
-			| type_name_list ',' Typename			{ $$ = lappend($1, $3); }
+			| type_name_list COMMA Typename			{ $$ = lappend($1, $3); }
 		;
 
 /*****************************************************************************
@@ -6573,7 +6588,7 @@ CommentStmt:
 					n->comment = $7;
 					$$ = (Node *) n;
 				}
-			| COMMENT ON CAST '(' Typename AS Typename ')' IS comment_text
+			| COMMENT ON CAST LPAREN Typename AS Typename RPAREN IS comment_text
 				{
 					CommentStmt *n = makeNode(CommentStmt);
 					n->objtype = OBJECT_CAST;
@@ -6983,14 +6998,14 @@ privileges: privilege_list
 				{ $$ = NIL; }
 			| ALL PRIVILEGES
 				{ $$ = NIL; }
-			| ALL '(' columnList ')'
+			| ALL LPAREN columnList RPAREN
 				{
 					AccessPriv *n = makeNode(AccessPriv);
 					n->priv_name = NULL;
 					n->cols = $3;
 					$$ = list_make1(n);
 				}
-			| ALL PRIVILEGES '(' columnList ')'
+			| ALL PRIVILEGES LPAREN columnList RPAREN
 				{
 					AccessPriv *n = makeNode(AccessPriv);
 					n->priv_name = NULL;
@@ -7000,7 +7015,7 @@ privileges: privilege_list
 		;
 
 privilege_list:	privilege							{ $$ = list_make1($1); }
-			| privilege_list ',' privilege			{ $$ = lappend($1, $3); }
+			| privilege_list COMMA privilege			{ $$ = lappend($1, $3); }
 		;
 
 privilege:	SELECT opt_column_list
@@ -7203,7 +7218,7 @@ privilege_target:
 
 grantee_list:
 			grantee									{ $$ = list_make1($1); }
-			| grantee_list ',' grantee				{ $$ = lappend($1, $3); }
+			| grantee_list COMMA grantee				{ $$ = lappend($1, $3); }
 		;
 
 grantee:
@@ -7370,7 +7385,7 @@ defacl_privilege_target:
  *****************************************************************************/
 
 IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_index_name
-			ON relation_expr access_method_clause '(' index_params ')'
+			ON relation_expr access_method_clause LPAREN index_params RPAREN
 			opt_include opt_reloptions OptTableSpace where_clause
 				{
 					IndexStmt *n = makeNode(IndexStmt);
@@ -7398,7 +7413,7 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_index_name
 					$$ = (Node *)n;
 				}
 			| CREATE opt_unique INDEX opt_concurrently IF_P NOT EXISTS index_name
-			ON relation_expr access_method_clause '(' index_params ')'
+			ON relation_expr access_method_clause LPAREN index_params RPAREN
 			opt_include opt_reloptions OptTableSpace where_clause
 				{
 					IndexStmt *n = makeNode(IndexStmt);
@@ -7448,7 +7463,7 @@ access_method_clause:
 		;
 
 index_params:	index_elem							{ $$ = list_make1($1); }
-			| index_params ',' index_elem			{ $$ = lappend($1, $3); }
+			| index_params COMMA index_elem			{ $$ = lappend($1, $3); }
 		;
 
 /*
@@ -7478,7 +7493,7 @@ index_elem:	ColId opt_collate opt_class opt_asc_desc opt_nulls_order
 					$$->ordering = $4;
 					$$->nulls_ordering = $5;
 				}
-			| '(' a_expr ')' opt_collate opt_class opt_asc_desc opt_nulls_order
+			| LPAREN a_expr RPAREN opt_collate opt_class opt_asc_desc opt_nulls_order
 				{
 					$$ = makeNode(IndexElem);
 					$$->name = NULL;
@@ -7491,12 +7506,12 @@ index_elem:	ColId opt_collate opt_class opt_asc_desc opt_nulls_order
 				}
 		;
 
-opt_include:		INCLUDE '(' index_including_params ')'			{ $$ = $3; }
+opt_include:		INCLUDE LPAREN index_including_params RPAREN			{ $$ = $3; }
 			 |		/* EMPTY */						{ $$ = NIL; }
 		;
 
 index_including_params:	index_elem						{ $$ = list_make1($1); }
-			| index_including_params ',' index_elem		{ $$ = lappend($1, $3); }
+			| index_including_params COMMA index_elem		{ $$ = lappend($1, $3); }
 		;
 
 opt_collate: COLLATE any_name						{ $$ = $2; }
@@ -7543,7 +7558,7 @@ CreateFunctionStmt:
 					$$ = (Node *)n;
 				}
 			| CREATE opt_or_replace FUNCTION func_name func_args_with_defaults
-			  RETURNS TABLE '(' table_func_column_list ')' createfunc_opt_list
+			  RETURNS TABLE LPAREN table_func_column_list RPAREN createfunc_opt_list
 				{
 					CreateFunctionStmt *n = makeNode(CreateFunctionStmt);
 					n->is_procedure = false;
@@ -7586,18 +7601,18 @@ opt_or_replace:
 			| /*EMPTY*/								{ $$ = false; }
 		;
 
-func_args:	'(' func_args_list ')'					{ $$ = $2; }
-			| '(' ')'								{ $$ = NIL; }
+func_args:	LPAREN func_args_list RPAREN					{ $$ = $2; }
+			| LPAREN RPAREN								{ $$ = NIL; }
 		;
 
 func_args_list:
 			func_arg								{ $$ = list_make1($1); }
-			| func_args_list ',' func_arg			{ $$ = lappend($1, $3); }
+			| func_args_list COMMA func_arg			{ $$ = lappend($1, $3); }
 		;
 
 function_with_argtypes_list:
 			function_with_argtypes					{ $$ = list_make1($1); }
-			| function_with_argtypes_list ',' function_with_argtypes
+			| function_with_argtypes_list COMMA function_with_argtypes
 													{ $$ = lappend($1, $3); }
 		;
 
@@ -7643,13 +7658,13 @@ function_with_argtypes:
  * defaults in CREATE FUNCTION, not in ALTER etc.
  */
 func_args_with_defaults:
-		'(' func_args_with_defaults_list ')'		{ $$ = $2; }
-		| '(' ')'									{ $$ = NIL; }
+		LPAREN func_args_with_defaults_list RPAREN		{ $$ = $2; }
+		| LPAREN RPAREN									{ $$ = NIL; }
 		;
 
 func_args_with_defaults_list:
 		func_arg_with_default						{ $$ = list_make1($1); }
-		| func_args_with_defaults_list ',' func_arg_with_default
+		| func_args_with_defaults_list COMMA func_arg_with_default
 													{ $$ = lappend($1, $3); }
 		;
 
@@ -7742,13 +7757,13 @@ func_return:
  * is next best choice.
  */
 func_type:	Typename								{ $$ = $1; }
-			| type_function_name attrs '%' TYPE_P
+			| type_function_name attrs PERCENT TYPE_P
 				{
 					$$ = makeTypeNameFromNameList(lcons(makeString($1), $2));
 					$$->pct_type = true;
 					$$->location = @1;
 				}
-			| SETOF type_function_name attrs '%' TYPE_P
+			| SETOF type_function_name attrs PERCENT TYPE_P
 				{
 					$$ = makeTypeNameFromNameList(lcons(makeString($2), $3));
 					$$->pct_type = true;
@@ -7767,7 +7782,7 @@ func_arg_with_default:
 					$$ = $1;
 					$$->defexpr = $3;
 				}
-		| func_arg '=' a_expr
+		| func_arg EQUALS a_expr
 				{
 					$$ = $1;
 					$$->defexpr = $3;
@@ -7796,7 +7811,7 @@ aggr_arg:	func_arg
  * (ORDER BY aggr_arg,...)				- ordered-set agg with no direct args
  * (aggr_arg,... ORDER BY aggr_arg,...)	- ordered-set agg with direct args
  *
- * The zero-argument case is spelled with '*' for consistency with COUNT(*).
+ * The zero-argument case is spelled with STAR for consistency with COUNT(*).
  *
  * An additional restriction is that if the direct-args list ends in a
  * VARIADIC item, the ordered-args list must contain exactly one item that
@@ -7816,19 +7831,19 @@ aggr_arg:	func_arg
  * on existing aggregates, we can just apply extractArgTypes to the first
  * sublist.
  */
-aggr_args:	'(' '*' ')'
+aggr_args:	LPAREN STAR RPAREN
 				{
 					$$ = list_make2(NIL, makeInteger(-1));
 				}
-			| '(' aggr_args_list ')'
+			| LPAREN aggr_args_list RPAREN
 				{
 					$$ = list_make2($2, makeInteger(-1));
 				}
-			| '(' ORDER BY aggr_args_list ')'
+			| LPAREN ORDER BY aggr_args_list RPAREN
 				{
 					$$ = list_make2($4, makeInteger(0));
 				}
-			| '(' aggr_args_list ORDER BY aggr_args_list ')'
+			| LPAREN aggr_args_list ORDER BY aggr_args_list RPAREN
 				{
 					/* this is the only case requiring consistency checking */
 					$$ = makeOrderedSetArgs($2, $5, yyscanner);
@@ -7837,7 +7852,7 @@ aggr_args:	'(' '*' ')'
 
 aggr_args_list:
 			aggr_arg								{ $$ = list_make1($1); }
-			| aggr_args_list ',' aggr_arg			{ $$ = lappend($1, $3); }
+			| aggr_args_list COMMA aggr_arg			{ $$ = lappend($1, $3); }
 		;
 
 aggregate_with_argtypes:
@@ -7852,7 +7867,7 @@ aggregate_with_argtypes:
 
 aggregate_with_argtypes_list:
 			aggregate_with_argtypes					{ $$ = list_make1($1); }
-			| aggregate_with_argtypes_list ',' aggregate_with_argtypes
+			| aggregate_with_argtypes_list COMMA aggregate_with_argtypes
 													{ $$ = lappend($1, $3); }
 		;
 
@@ -7961,7 +7976,7 @@ createfunc_opt_item:
 		;
 
 func_as:	Sconst						{ $$ = list_make1(makeString($1)); }
-			| Sconst ',' Sconst
+			| Sconst COMMA Sconst
 				{
 					$$ = list_make2(makeString($1), makeString($3));
 				}
@@ -7969,7 +7984,7 @@ func_as:	Sconst						{ $$ = list_make1(makeString($1)); }
 
 transform_type_list:
 			FOR TYPE_P Typename { $$ = list_make1($3); }
-			| transform_type_list ',' FOR TYPE_P Typename { $$ = lappend($1, $5); }
+			| transform_type_list COMMA FOR TYPE_P Typename { $$ = lappend($1, $5); }
 		;
 
 opt_definition:
@@ -7993,7 +8008,7 @@ table_func_column_list:
 				{
 					$$ = list_make1($1);
 				}
-			| table_func_column_list ',' table_func_column
+			| table_func_column_list COMMA table_func_column
 				{
 					$$ = lappend($1, $3);
 				}
@@ -8169,7 +8184,7 @@ RemoveOperStmt:
 		;
 
 oper_argtypes:
-			'(' Typename ')'
+			LPAREN Typename RPAREN
 				{
 				   ereport(ERROR,
 						   (errcode(ERRCODE_SYNTAX_ERROR),
@@ -8177,24 +8192,24 @@ oper_argtypes:
 							errhint("Use NONE to denote the missing argument of a unary operator."),
 							parser_errposition(@3)));
 				}
-			| '(' Typename ',' Typename ')'
+			| LPAREN Typename COMMA Typename RPAREN
 					{ $$ = list_make2($2, $4); }
-			| '(' NONE ',' Typename ')'					/* left unary */
+			| LPAREN NONE COMMA Typename RPAREN					/* left unary */
 					{ $$ = list_make2(NULL, $4); }
-			| '(' Typename ',' NONE ')'					/* right unary */
+			| LPAREN Typename COMMA NONE RPAREN					/* right unary */
 					{ $$ = list_make2($2, NULL); }
 		;
 
 any_operator:
 			all_Op
 					{ $$ = list_make1(makeString($1)); }
-			| ColId '.' any_operator
+			| ColId DOT any_operator
 					{ $$ = lcons(makeString($1), $3); }
 		;
 
 operator_with_argtypes_list:
 			operator_with_argtypes					{ $$ = list_make1($1); }
-			| operator_with_argtypes_list ',' operator_with_argtypes
+			| operator_with_argtypes_list COMMA operator_with_argtypes
 													{ $$ = lappend($1, $3); }
 		;
 
@@ -8247,7 +8262,7 @@ dostmt_opt_item:
  *
  *****************************************************************************/
 
-CreateCastStmt: CREATE CAST '(' Typename AS Typename ')'
+CreateCastStmt: CREATE CAST LPAREN Typename AS Typename RPAREN
 					WITH FUNCTION function_with_argtypes cast_context
 				{
 					CreateCastStmt *n = makeNode(CreateCastStmt);
@@ -8258,7 +8273,7 @@ CreateCastStmt: CREATE CAST '(' Typename AS Typename ')'
 					n->inout = false;
 					$$ = (Node *)n;
 				}
-			| CREATE CAST '(' Typename AS Typename ')'
+			| CREATE CAST LPAREN Typename AS Typename RPAREN
 					WITHOUT FUNCTION cast_context
 				{
 					CreateCastStmt *n = makeNode(CreateCastStmt);
@@ -8269,7 +8284,7 @@ CreateCastStmt: CREATE CAST '(' Typename AS Typename ')'
 					n->inout = false;
 					$$ = (Node *)n;
 				}
-			| CREATE CAST '(' Typename AS Typename ')'
+			| CREATE CAST LPAREN Typename AS Typename RPAREN
 					WITH INOUT cast_context
 				{
 					CreateCastStmt *n = makeNode(CreateCastStmt);
@@ -8288,7 +8303,7 @@ cast_context:  AS IMPLICIT_P					{ $$ = COERCION_IMPLICIT; }
 		;
 
 
-DropCastStmt: DROP CAST opt_if_exists '(' Typename AS Typename ')' opt_drop_behavior
+DropCastStmt: DROP CAST opt_if_exists LPAREN Typename AS Typename RPAREN opt_drop_behavior
 				{
 					DropStmt *n = makeNode(DropStmt);
 					n->removeType = OBJECT_CAST;
@@ -8311,7 +8326,7 @@ opt_if_exists: IF_P EXISTS						{ $$ = true; }
  *
  *****************************************************************************/
 
-CreateTransformStmt: CREATE opt_or_replace TRANSFORM FOR Typename LANGUAGE name '(' transform_element_list ')'
+CreateTransformStmt: CREATE opt_or_replace TRANSFORM FOR Typename LANGUAGE name LPAREN transform_element_list RPAREN
 				{
 					CreateTransformStmt *n = makeNode(CreateTransformStmt);
 					n->replace = $2;
@@ -8323,11 +8338,11 @@ CreateTransformStmt: CREATE opt_or_replace TRANSFORM FOR Typename LANGUAGE name 
 				}
 		;
 
-transform_element_list: FROM SQL_P WITH FUNCTION function_with_argtypes ',' TO SQL_P WITH FUNCTION function_with_argtypes
+transform_element_list: FROM SQL_P WITH FUNCTION function_with_argtypes COMMA TO SQL_P WITH FUNCTION function_with_argtypes
 				{
 					$$ = list_make2($5, $11);
 				}
-				| TO SQL_P WITH FUNCTION function_with_argtypes ',' FROM SQL_P WITH FUNCTION function_with_argtypes
+				| TO SQL_P WITH FUNCTION function_with_argtypes COMMA FROM SQL_P WITH FUNCTION function_with_argtypes
 				{
 					$$ = list_make2($11, $5);
 				}
@@ -8382,7 +8397,7 @@ ReindexStmt:
 					n->options = 0;
 					$$ = (Node *)n;
 				}
-			| REINDEX '(' reindex_option_list ')' reindex_target_type opt_concurrently qualified_name
+			| REINDEX LPAREN reindex_option_list RPAREN reindex_target_type opt_concurrently qualified_name
 				{
 					ReindexStmt *n = makeNode(ReindexStmt);
 					n->kind = $5;
@@ -8392,7 +8407,7 @@ ReindexStmt:
 					n->options = $3;
 					$$ = (Node *)n;
 				}
-			| REINDEX '(' reindex_option_list ')' reindex_target_multitable opt_concurrently name
+			| REINDEX LPAREN reindex_option_list RPAREN reindex_target_multitable opt_concurrently name
 				{
 					ReindexStmt *n = makeNode(ReindexStmt);
 					n->kind = $5;
@@ -8414,7 +8429,7 @@ reindex_target_multitable:
 		;
 reindex_option_list:
 			reindex_option_elem								{ $$ = $1; }
-			| reindex_option_list ',' reindex_option_elem	{ $$ = $1 | $3; }
+			| reindex_option_list COMMA reindex_option_elem	{ $$ = $1 | $3; }
 		;
 reindex_option_elem:
 			VERBOSE	{ $$ = REINDEXOPT_VERBOSE; }
@@ -9311,7 +9326,7 @@ AlterObjectSchemaStmt:
  *****************************************************************************/
 
 AlterOperatorStmt:
-			ALTER OPERATOR operator_with_argtypes SET '(' operator_def_list ')'
+			ALTER OPERATOR operator_with_argtypes SET LPAREN operator_def_list RPAREN
 				{
 					AlterOperatorStmt *n = makeNode(AlterOperatorStmt);
 					n->opername = $3;
@@ -9321,12 +9336,12 @@ AlterOperatorStmt:
 		;
 
 operator_def_list:	operator_def_elem								{ $$ = list_make1($1); }
-			| operator_def_list ',' operator_def_elem				{ $$ = lappend($1, $3); }
+			| operator_def_list COMMA operator_def_elem				{ $$ = lappend($1, $3); }
 		;
 
-operator_def_elem: ColLabel '=' NONE
+operator_def_elem: ColLabel EQUALS NONE
 						{ $$ = makeDefElem($1, NULL, @1); }
-				   | ColLabel '=' operator_def_arg
+				   | ColLabel EQUALS operator_def_arg
 						{ $$ = makeDefElem($1, (Node *) $3, @1); }
 		;
 
@@ -9652,7 +9667,7 @@ publication_name_list:
 				{
 					$$ = list_make1($1);
 				}
-			| publication_name_list ',' publication_name_item
+			| publication_name_list COMMA publication_name_item
 				{
 					$$ = lappend($1, $3);
 				}
@@ -9776,12 +9791,12 @@ RuleStmt:	CREATE opt_or_replace RULE name AS
 RuleActionList:
 			NOTHING									{ $$ = NIL; }
 			| RuleActionStmt						{ $$ = list_make1($1); }
-			| '(' RuleActionMulti ')'				{ $$ = $2; }
+			| LPAREN RuleActionMulti RPAREN				{ $$ = $2; }
 		;
 
 /* the thrashing around here is to discard "empty" statements... */
 RuleActionMulti:
-			RuleActionMulti ';' RuleActionStmtOrEmpty
+			RuleActionMulti SEMICOLON RuleActionStmtOrEmpty
 				{ if ($3 != NULL)
 					$$ = lappend($1, $3);
 				  else
@@ -9839,7 +9854,7 @@ NotifyStmt: NOTIFY ColId notify_payload
 		;
 
 notify_payload:
-			',' Sconst							{ $$ = $2; }
+			COMMA Sconst							{ $$ = $2; }
 			| /*EMPTY*/							{ $$ = NULL; }
 		;
 
@@ -9858,7 +9873,7 @@ UnlistenStmt:
 					n->conditionname = $2;
 					$$ = (Node *)n;
 				}
-			| UNLISTEN '*'
+			| UNLISTEN STAR
 				{
 					UnlistenStmt *n = makeNode(UnlistenStmt);
 					n->conditionname = NULL;
@@ -10008,7 +10023,7 @@ transaction_mode_item:
 transaction_mode_list:
 			transaction_mode_item
 					{ $$ = list_make1($1); }
-			| transaction_mode_list ',' transaction_mode_item
+			| transaction_mode_list COMMA transaction_mode_item
 					{ $$ = lappend($1, $3); }
 			| transaction_mode_list transaction_mode_item
 					{ $$ = lappend($1, $2); }
@@ -10030,7 +10045,7 @@ opt_transaction_chain:
 /*****************************************************************************
  *
  *	QUERY:
- *		CREATE [ OR REPLACE ] [ TEMP ] VIEW <viewname> '('target-list ')'
+ *		CREATE [ OR REPLACE ] [ TEMP ] VIEW <viewname> LPARENtarget-list RPAREN
  *			AS <query> [ WITH [ CASCADED | LOCAL ] CHECK OPTION ]
  *
  *****************************************************************************/
@@ -10061,7 +10076,7 @@ ViewStmt: CREATE OptTemp VIEW qualified_name opt_column_list opt_reloptions
 					n->withCheckOption = $11;
 					$$ = (Node *) n;
 				}
-		| CREATE OptTemp RECURSIVE VIEW qualified_name '(' columnList ')' opt_reloptions
+		| CREATE OptTemp RECURSIVE VIEW qualified_name LPAREN columnList RPAREN opt_reloptions
 				AS SelectStmt opt_check_option
 				{
 					ViewStmt *n = makeNode(ViewStmt);
@@ -10079,7 +10094,7 @@ ViewStmt: CREATE OptTemp VIEW qualified_name opt_column_list opt_reloptions
 								 parser_errposition(@12)));
 					$$ = (Node *) n;
 				}
-		| CREATE OR REPLACE OptTemp RECURSIVE VIEW qualified_name '(' columnList ')' opt_reloptions
+		| CREATE OR REPLACE OptTemp RECURSIVE VIEW qualified_name LPAREN columnList RPAREN opt_reloptions
 				AS SelectStmt opt_check_option
 				{
 					ViewStmt *n = makeNode(ViewStmt);
@@ -10188,7 +10203,7 @@ createdb_opt_name:
  *	Though the equals sign doesn't match other WITH options, pg_dump uses
  *	equals for backward compatibility, and it doesn't seem worth removing it.
  */
-opt_equal:	'='										{}
+opt_equal:	EQUALS										{}
 			| /*EMPTY*/								{}
 		;
 
@@ -10258,7 +10273,7 @@ DropdbStmt: DROP DATABASE database_name
 					n->options = NULL;
 					$$ = (Node *)n;
 				}
-			| DROP DATABASE database_name opt_with '(' drop_option_list ')'
+			| DROP DATABASE database_name opt_with LPAREN drop_option_list RPAREN
 				{
 					DropdbStmt *n = makeNode(DropdbStmt);
 					n->dbname = $3;
@@ -10266,7 +10281,7 @@ DropdbStmt: DROP DATABASE database_name
 					n->options = $6;
 					$$ = (Node *)n;
 				}
-			| DROP DATABASE IF_P EXISTS database_name opt_with '(' drop_option_list ')'
+			| DROP DATABASE IF_P EXISTS database_name opt_with LPAREN drop_option_list RPAREN
 				{
 					DropdbStmt *n = makeNode(DropdbStmt);
 					n->dbname = $5;
@@ -10281,7 +10296,7 @@ drop_option_list:
 				{
 					$$ = list_make1((Node *) $1);
 				}
-			| drop_option_list ',' drop_option
+			| drop_option_list COMMA drop_option
 				{
 					$$ = lappend($1, (Node *) $3);
 				}
@@ -10614,7 +10629,7 @@ VacuumStmt: VACUUM opt_full opt_freeze opt_verbose opt_analyze opt_vacuum_relati
 					n->is_vacuumcmd = true;
 					$$ = (Node *)n;
 				}
-			| VACUUM '(' vac_analyze_option_list ')' opt_vacuum_relation_list
+			| VACUUM LPAREN vac_analyze_option_list RPAREN opt_vacuum_relation_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
 					n->options = $3;
@@ -10635,7 +10650,7 @@ AnalyzeStmt: analyze_keyword opt_verbose opt_vacuum_relation_list
 					n->is_vacuumcmd = false;
 					$$ = (Node *)n;
 				}
-			| analyze_keyword '(' vac_analyze_option_list ')' opt_vacuum_relation_list
+			| analyze_keyword LPAREN vac_analyze_option_list RPAREN opt_vacuum_relation_list
 				{
 					VacuumStmt *n = makeNode(VacuumStmt);
 					n->options = $3;
@@ -10650,7 +10665,7 @@ vac_analyze_option_list:
 				{
 					$$ = list_make1($1);
 				}
-			| vac_analyze_option_list ',' vac_analyze_option_elem
+			| vac_analyze_option_list COMMA vac_analyze_option_elem
 				{
 					$$ = lappend($1, $3);
 				}
@@ -10698,7 +10713,7 @@ opt_freeze: FREEZE									{ $$ = true; }
 		;
 
 opt_name_list:
-			'(' name_list ')'						{ $$ = $2; }
+			LPAREN name_list RPAREN						{ $$ = $2; }
 			| /*EMPTY*/								{ $$ = NIL; }
 		;
 
@@ -10712,7 +10727,7 @@ vacuum_relation:
 vacuum_relation_list:
 			vacuum_relation
 					{ $$ = list_make1($1); }
-			| vacuum_relation_list ',' vacuum_relation
+			| vacuum_relation_list COMMA vacuum_relation
 					{ $$ = lappend($1, $3); }
 		;
 
@@ -10755,7 +10770,7 @@ ExplainStmt:
 					n->options = list_make1(makeDefElem("verbose", NULL, @2));
 					$$ = (Node *) n;
 				}
-		| EXPLAIN '(' explain_option_list ')' ExplainableStmt
+		| EXPLAIN LPAREN explain_option_list RPAREN ExplainableStmt
 				{
 					ExplainStmt *n = makeNode(ExplainStmt);
 					n->query = $5;
@@ -10781,7 +10796,7 @@ explain_option_list:
 				{
 					$$ = list_make1($1);
 				}
-			| explain_option_list ',' explain_option_elem
+			| explain_option_list COMMA explain_option_elem
 				{
 					$$ = lappend($1, $3);
 				}
@@ -10822,7 +10837,7 @@ PrepareStmt: PREPARE name prep_type_clause AS PreparableStmt
 				}
 		;
 
-prep_type_clause: '(' type_list ')'			{ $$ = $2; }
+prep_type_clause: LPAREN type_list RPAREN			{ $$ = $2; }
 				| /* EMPTY */				{ $$ = NIL; }
 		;
 
@@ -10883,7 +10898,7 @@ ExecuteStmt: EXECUTE name execute_param_clause
 				}
 		;
 
-execute_param_clause: '(' expr_list ')'				{ $$ = $2; }
+execute_param_clause: LPAREN expr_list RPAREN				{ $$ = $2; }
 					| /* EMPTY */					{ $$ = NIL; }
 					;
 
@@ -10971,13 +10986,13 @@ insert_rest:
 					$$->override = $2;
 					$$->selectStmt = $4;
 				}
-			| '(' insert_column_list ')' SelectStmt
+			| LPAREN insert_column_list RPAREN SelectStmt
 				{
 					$$ = makeNode(InsertStmt);
 					$$->cols = $2;
 					$$->selectStmt = $4;
 				}
-			| '(' insert_column_list ')' OVERRIDING override_kind VALUE_P SelectStmt
+			| LPAREN insert_column_list RPAREN OVERRIDING override_kind VALUE_P SelectStmt
 				{
 					$$ = makeNode(InsertStmt);
 					$$->cols = $2;
@@ -11000,7 +11015,7 @@ override_kind:
 insert_column_list:
 			insert_column_item
 					{ $$ = list_make1($1); }
-			| insert_column_list ',' insert_column_item
+			| insert_column_list COMMA insert_column_item
 					{ $$ = lappend($1, $3); }
 		;
 
@@ -11042,7 +11057,7 @@ opt_on_conflict:
 		;
 
 opt_conf_expr:
-			'(' index_params ')' where_clause
+			LPAREN index_params RPAREN where_clause
 				{
 					$$ = makeNode(InferClause);
 					$$->indexElems = $2;
@@ -11166,16 +11181,16 @@ UpdateStmt: opt_with_clause UPDATE relation_expr_opt_alias
 
 set_clause_list:
 			set_clause							{ $$ = $1; }
-			| set_clause_list ',' set_clause	{ $$ = list_concat($1,$3); }
+			| set_clause_list COMMA set_clause	{ $$ = list_concat($1,$3); }
 		;
 
 set_clause:
-			set_target '=' a_expr
+			set_target EQUALS a_expr
 				{
 					$1->val = (Node *) $3;
 					$$ = list_make1($1);
 				}
-			| '(' set_target_list ')' '=' a_expr
+			| LPAREN set_target_list RPAREN EQUALS a_expr
 				{
 					int ncolumns = list_length($2);
 					int i = 1;
@@ -11211,7 +11226,7 @@ set_target:
 
 set_target_list:
 			set_target								{ $$ = list_make1($1); }
-			| set_target_list ',' set_target		{ $$ = lappend($1,$3); }
+			| set_target_list COMMA set_target		{ $$ = lappend($1,$3); }
 		;
 
 
@@ -11274,13 +11289,13 @@ opt_hold: /* EMPTY */						{ $$ = 0; }
  *
  * This approach is implemented by defining a nonterminal select_with_parens,
  * which represents a SELECT with at least one outer layer of parentheses,
- * and being careful to use select_with_parens, never '(' SelectStmt ')',
+ * and being careful to use select_with_parens, never LPAREN SelectStmt RPAREN,
  * in the expression grammar.  We will then have shift-reduce conflicts
- * which we can resolve in favor of always treating '(' <select> ')' as
+ * which we can resolve in favor of always treating LPAREN <select> RPAREN as
  * a select_with_parens.  To resolve the conflicts, the productions that
  * conflict with the select_with_parens productions are manually given
- * precedences lower than the precedence of ')', thereby ensuring that we
- * shift ')' (and then reduce to select_with_parens) rather than trying to
+ * precedences lower than the precedence of RPAREN, thereby ensuring that we
+ * shift RPAREN (and then reduce to select_with_parens) rather than trying to
  * reduce the inner <select> nonterminal to something else.  We use UMINUS
  * precedence for this, which is a fairly arbitrary choice.
  *
@@ -11297,8 +11312,8 @@ SelectStmt: select_no_parens			%prec UMINUS
 		;
 
 select_with_parens:
-			'(' select_no_parens ')'				{ $$ = $2; }
-			| '(' select_with_parens ')'			{ $$ = $2; }
+			LPAREN select_no_parens RPAREN				{ $$ = $2; }
+			| LPAREN select_with_parens RPAREN			{ $$ = $2; }
 		;
 
 /*
@@ -11378,8 +11393,8 @@ select_clause:
 
 /*
  * This rule parses SELECT statements that can appear within set operations,
- * including UNION, INTERSECT and EXCEPT.  '(' and ')' can be used to specify
- * the ordering of the set operations.	Without '(' and ')' we want the
+ * including UNION, INTERSECT and EXCEPT.  LPAREN and RPAREN can be used to specify
+ * the ordering of the set operations.	Without LPAREN and RPAREN we want the
  * operations to be ordered per the precedence specs at the head of this file.
  *
  * As with select_no_parens, simple_select cannot have outer parentheses,
@@ -11499,10 +11514,10 @@ with_clause:
 
 cte_list:
 		common_table_expr						{ $$ = list_make1($1); }
-		| cte_list ',' common_table_expr		{ $$ = lappend($1, $3); }
+		| cte_list COMMA common_table_expr		{ $$ = lappend($1, $3); }
 		;
 
-common_table_expr:  name opt_name_list AS opt_materialized '(' PreparableStmt ')'
+common_table_expr:  name opt_name_list AS opt_materialized LPAREN PreparableStmt RPAREN
 			{
 				CommonTableExpr *n = makeNode(CommonTableExpr);
 				n->ctename = $1;
@@ -11614,7 +11629,7 @@ all_or_distinct:
  */
 distinct_clause:
 			DISTINCT								{ $$ = list_make1(NIL); }
-			| DISTINCT ON '(' expr_list ')'			{ $$ = $4; }
+			| DISTINCT ON LPAREN expr_list RPAREN			{ $$ = $4; }
 		;
 
 opt_all_clause:
@@ -11633,7 +11648,7 @@ sort_clause:
 
 sortby_list:
 			sortby									{ $$ = list_make1($1); }
-			| sortby_list ',' sortby				{ $$ = lappend($1, $3); }
+			| sortby_list COMMA sortby				{ $$ = lappend($1, $3); }
 		;
 
 sortby:		a_expr USING qual_all_Op opt_nulls_order
@@ -11672,7 +11687,7 @@ opt_select_limit:
 limit_clause:
 			LIMIT select_limit_value
 				{ $$ = $2; }
-			| LIMIT select_limit_value ',' select_offset_value
+			| LIMIT select_limit_value COMMA select_offset_value
 				{
 					/* Disabled because it was too confusing, bjm 2002-02-18 */
 					ereport(ERROR,
@@ -11733,9 +11748,9 @@ select_offset_value:
  */
 select_fetch_first_value:
 			c_expr									{ $$ = $1; }
-			| '+' I_or_F_const
+			| PLUS I_or_F_const
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "+", NULL, $2, @1); }
-			| '-' I_or_F_const
+			| MINUS I_or_F_const
 				{ $$ = doNegate($2, @1); }
 		;
 
@@ -11781,7 +11796,7 @@ group_clause:
 
 group_by_list:
 			group_by_item							{ $$ = list_make1($1); }
-			| group_by_list ',' group_by_item		{ $$ = lappend($1,$3); }
+			| group_by_list COMMA group_by_item		{ $$ = lappend($1,$3); }
 		;
 
 group_by_item:
@@ -11793,34 +11808,34 @@ group_by_item:
 		;
 
 empty_grouping_set:
-			'(' ')'
+			LPAREN RPAREN
 				{
 					$$ = (Node *) makeGroupingSet(GROUPING_SET_EMPTY, NIL, @1);
 				}
 		;
 
 /*
- * These hacks rely on setting precedence of CUBE and ROLLUP below that of '(',
+ * These hacks rely on setting precedence of CUBE and ROLLUP below that of LPAREN,
  * so that they shift in these rules rather than reducing the conflicting
  * unreserved_keyword rule.
  */
 
 rollup_clause:
-			ROLLUP '(' expr_list ')'
+			ROLLUP LPAREN expr_list RPAREN
 				{
 					$$ = (Node *) makeGroupingSet(GROUPING_SET_ROLLUP, $3, @1);
 				}
 		;
 
 cube_clause:
-			CUBE '(' expr_list ')'
+			CUBE LPAREN expr_list RPAREN
 				{
 					$$ = (Node *) makeGroupingSet(GROUPING_SET_CUBE, $3, @1);
 				}
 		;
 
 grouping_sets_clause:
-			GROUPING SETS '(' group_by_list ')'
+			GROUPING SETS LPAREN group_by_list RPAREN
 				{
 					$$ = (Node *) makeGroupingSet(GROUPING_SET_SETS, $4, @1);
 				}
@@ -11871,18 +11886,18 @@ locked_rels_list:
 
 
 /*
- * We should allow ROW '(' expr_list ')' too, but that seems to require
+ * We should allow ROW LPAREN expr_list RPAREN too, but that seems to require
  * making VALUES a fully reserved word, which will probably break more apps
  * than allowing the noise-word is worth.
  */
 values_clause:
-			VALUES '(' expr_list ')'
+			VALUES LPAREN expr_list RPAREN
 				{
 					SelectStmt *n = makeNode(SelectStmt);
 					n->valuesLists = list_make1($3);
 					$$ = (Node *) n;
 				}
-			| values_clause ',' '(' expr_list ')'
+			| values_clause COMMA LPAREN expr_list RPAREN
 				{
 					SelectStmt *n = (SelectStmt *) $1;
 					n->valuesLists = lappend(n->valuesLists, $4);
@@ -11906,7 +11921,7 @@ from_clause:
 
 from_list:
 			table_ref								{ $$ = list_make1($1); }
-			| from_list ',' table_ref				{ $$ = lappend($1, $3); }
+			| from_list COMMA table_ref				{ $$ = lappend($1, $3); }
 		;
 
 /*
@@ -12017,7 +12032,7 @@ table_ref:	relation_expr opt_alias_clause
 				{
 					$$ = (Node *) $1;
 				}
-			| '(' joined_table ')' alias_clause
+			| LPAREN joined_table RPAREN alias_clause
 				{
 					$2->alias = $4;
 					$$ = (Node *) $2;
@@ -12029,7 +12044,7 @@ table_ref:	relation_expr opt_alias_clause
  * It may seem silly to separate joined_table from table_ref, but there is
  * method in SQL's madness: if you don't do it this way you get reduce-
  * reduce conflicts, because it's not clear to the parser generator whether
- * to expect alias_clause after ')' or not.  For the same reason we must
+ * to expect alias_clause after RPAREN or not.  For the same reason we must
  * treat 'JOIN' and 'join_type JOIN' separately, rather than allowing
  * join_type to expand to empty; if we try it, the parser generator can't
  * figure out when to reduce an empty join_type right after table_ref.
@@ -12043,7 +12058,7 @@ table_ref:	relation_expr opt_alias_clause
  */
 
 joined_table:
-			'(' joined_table ')'
+			LPAREN joined_table RPAREN
 				{
 					$$ = $2;
 				}
@@ -12112,7 +12127,7 @@ joined_table:
 		;
 
 alias_clause:
-			AS ColId '(' name_list ')'
+			AS ColId LPAREN name_list RPAREN
 				{
 					$$ = makeNode(Alias);
 					$$->aliasname = $2;
@@ -12123,7 +12138,7 @@ alias_clause:
 					$$ = makeNode(Alias);
 					$$->aliasname = $2;
 				}
-			| ColId '(' name_list ')'
+			| ColId LPAREN name_list RPAREN
 				{
 					$$ = makeNode(Alias);
 					$$->aliasname = $1;
@@ -12149,17 +12164,17 @@ func_alias_clause:
 				{
 					$$ = list_make2($1, NIL);
 				}
-			| AS '(' TableFuncElementList ')'
+			| AS LPAREN TableFuncElementList RPAREN
 				{
 					$$ = list_make2(NULL, $3);
 				}
-			| AS ColId '(' TableFuncElementList ')'
+			| AS ColId LPAREN TableFuncElementList RPAREN
 				{
 					Alias *a = makeNode(Alias);
 					a->aliasname = $2;
 					$$ = list_make2(a, $4);
 				}
-			| ColId '(' TableFuncElementList ')'
+			| ColId LPAREN TableFuncElementList RPAREN
 				{
 					Alias *a = makeNode(Alias);
 					a->aliasname = $1;
@@ -12191,7 +12206,7 @@ join_outer: OUTER_P									{ $$ = NULL; }
  * We return USING as a List node, while an ON-expr will not be a List.
  */
 
-join_qual:	USING '(' name_list ')'					{ $$ = (Node *) $3; }
+join_qual:	USING LPAREN name_list RPAREN					{ $$ = (Node *) $3; }
 			| ON a_expr								{ $$ = $2; }
 		;
 
@@ -12204,7 +12219,7 @@ relation_expr:
 					$$->inh = true;
 					$$->alias = NULL;
 				}
-			| qualified_name '*'
+			| qualified_name STAR
 				{
 					/* inheritance query, explicitly */
 					$$ = $1;
@@ -12218,7 +12233,7 @@ relation_expr:
 					$$->inh = false;
 					$$->alias = NULL;
 				}
-			| ONLY '(' qualified_name ')'
+			| ONLY LPAREN qualified_name RPAREN
 				{
 					/* no inheritance, SQL99-style syntax */
 					$$ = $3;
@@ -12230,7 +12245,7 @@ relation_expr:
 
 relation_expr_list:
 			relation_expr							{ $$ = list_make1($1); }
-			| relation_expr_list ',' relation_expr	{ $$ = lappend($1, $3); }
+			| relation_expr_list COMMA relation_expr	{ $$ = lappend($1, $3); }
 		;
 
 
@@ -12267,7 +12282,7 @@ relation_expr_opt_alias: relation_expr					%prec UMINUS
  * TABLESAMPLE decoration in a FROM item
  */
 tablesample_clause:
-			TABLESAMPLE func_name '(' expr_list ')' opt_repeatable_clause
+			TABLESAMPLE func_name LPAREN expr_list RPAREN opt_repeatable_clause
 				{
 					RangeTableSample *n = makeNode(RangeTableSample);
 					/* n->relation will be filled in later */
@@ -12280,7 +12295,7 @@ tablesample_clause:
 		;
 
 opt_repeatable_clause:
-			REPEATABLE '(' a_expr ')'	{ $$ = (Node *) $3; }
+			REPEATABLE LPAREN a_expr RPAREN	{ $$ = (Node *) $3; }
 			| /*EMPTY*/					{ $$ = NULL; }
 		;
 
@@ -12306,7 +12321,7 @@ func_table: func_expr_windowless opt_ordinality
 					/* alias and coldeflist are set by table_ref production */
 					$$ = (Node *) n;
 				}
-			| ROWS FROM '(' rowsfrom_list ')' opt_ordinality
+			| ROWS FROM LPAREN rowsfrom_list RPAREN opt_ordinality
 				{
 					RangeFunction *n = makeNode(RangeFunction);
 					n->lateral = false;
@@ -12324,10 +12339,10 @@ rowsfrom_item: func_expr_windowless opt_col_def_list
 
 rowsfrom_list:
 			rowsfrom_item						{ $$ = list_make1($1); }
-			| rowsfrom_list ',' rowsfrom_item	{ $$ = lappend($1, $3); }
+			| rowsfrom_list COMMA rowsfrom_item	{ $$ = lappend($1, $3); }
 		;
 
-opt_col_def_list: AS '(' TableFuncElementList ')'	{ $$ = $3; }
+opt_col_def_list: AS LPAREN TableFuncElementList RPAREN	{ $$ = $3; }
 			| /*EMPTY*/								{ $$ = NIL; }
 		;
 
@@ -12366,7 +12381,7 @@ TableFuncElementList:
 				{
 					$$ = list_make1($1);
 				}
-			| TableFuncElementList ',' TableFuncElement
+			| TableFuncElementList COMMA TableFuncElement
 				{
 					$$ = lappend($1, $3);
 				}
@@ -12396,7 +12411,7 @@ TableFuncElement:	ColId Typename opt_collate_clause
  * XMLTABLE
  */
 xmltable:
-			XMLTABLE '(' c_expr xmlexists_argument COLUMNS xmltable_column_list ')'
+			XMLTABLE LPAREN c_expr xmlexists_argument COLUMNS xmltable_column_list RPAREN
 				{
 					RangeTableFunc *n = makeNode(RangeTableFunc);
 					n->rowexpr = $3;
@@ -12406,8 +12421,8 @@ xmltable:
 					n->location = @1;
 					$$ = (Node *)n;
 				}
-			| XMLTABLE '(' XMLNAMESPACES '(' xml_namespace_list ')' ','
-				c_expr xmlexists_argument COLUMNS xmltable_column_list ')'
+			| XMLTABLE LPAREN XMLNAMESPACES LPAREN xml_namespace_list RPAREN COMMA
+				c_expr xmlexists_argument COLUMNS xmltable_column_list RPAREN
 				{
 					RangeTableFunc *n = makeNode(RangeTableFunc);
 					n->rowexpr = $8;
@@ -12420,7 +12435,7 @@ xmltable:
 		;
 
 xmltable_column_list: xmltable_column_el					{ $$ = list_make1($1); }
-			| xmltable_column_list ',' xmltable_column_el	{ $$ = lappend($1, $3); }
+			| xmltable_column_list COMMA xmltable_column_el	{ $$ = lappend($1, $3); }
 		;
 
 xmltable_column_el:
@@ -12529,7 +12544,7 @@ xmltable_column_option_el:
 xml_namespace_list:
 			xml_namespace_el
 				{ $$ = list_make1($1); }
-			| xml_namespace_list ',' xml_namespace_el
+			| xml_namespace_list COMMA xml_namespace_el
 				{ $$ = lappend($1, $3); }
 		;
 
@@ -12574,12 +12589,12 @@ Typename:	SimpleTypename opt_array_bounds
 					$$->setof = true;
 				}
 			/* SQL standard syntax, currently only one-dimensional */
-			| SimpleTypename ARRAY '[' Iconst ']'
+			| SimpleTypename ARRAY LBRACKET Iconst RBRACKET
 				{
 					$$ = $1;
 					$$->arrayBounds = list_make1(makeInteger($4));
 				}
-			| SETOF SimpleTypename ARRAY '[' Iconst ']'
+			| SETOF SimpleTypename ARRAY LBRACKET Iconst RBRACKET
 				{
 					$$ = $2;
 					$$->arrayBounds = list_make1(makeInteger($5));
@@ -12599,9 +12614,9 @@ Typename:	SimpleTypename opt_array_bounds
 		;
 
 opt_array_bounds:
-			opt_array_bounds '[' ']'
+			opt_array_bounds LBRACKET RBRACKET
 					{  $$ = lappend($1, makeInteger(-1)); }
-			| opt_array_bounds '[' Iconst ']'
+			| opt_array_bounds LBRACKET Iconst RBRACKET
 					{  $$ = lappend($1, makeInteger($3)); }
 			| /*EMPTY*/
 					{  $$ = NIL; }
@@ -12618,7 +12633,7 @@ SimpleTypename:
 					$$ = $1;
 					$$->typmods = $2;
 				}
-			| ConstInterval '(' Iconst ')'
+			| ConstInterval LPAREN Iconst RPAREN
 				{
 					$$ = $1;
 					$$->typmods = list_make2(makeIntConst(INTERVAL_FULL_RANGE, -1),
@@ -12666,7 +12681,7 @@ GenericType:
 				}
 		;
 
-opt_type_modifiers: '(' expr_list ')'				{ $$ = $2; }
+opt_type_modifiers: LPAREN expr_list RPAREN				{ $$ = $2; }
 					| /* EMPTY */					{ $$ = NIL; }
 		;
 
@@ -12733,7 +12748,7 @@ Numeric:	INT_P
 				}
 		;
 
-opt_float:	'(' Iconst ')'
+opt_float:	LPAREN Iconst RPAREN
 				{
 					/*
 					 * Check FLOAT() precision limits assuming IEEE floating
@@ -12788,7 +12803,7 @@ ConstBit:	BitWithLength
 		;
 
 BitWithLength:
-			BIT opt_varying '(' expr_list ')'
+			BIT opt_varying LPAREN expr_list RPAREN
 				{
 					char *typname;
 
@@ -12848,7 +12863,7 @@ ConstCharacter:  CharacterWithLength
 				}
 		;
 
-CharacterWithLength:  character '(' Iconst ')'
+CharacterWithLength:  character LPAREN Iconst RPAREN
 				{
 					$$ = SystemTypeName($1);
 					$$->typmods = list_make1(makeIntConst($3, @3));
@@ -12889,7 +12904,7 @@ opt_varying:
  * SQL date/time types
  */
 ConstDatetime:
-			TIMESTAMP '(' Iconst ')' opt_timezone
+			TIMESTAMP LPAREN Iconst RPAREN opt_timezone
 				{
 					if ($5)
 						$$ = SystemTypeName("timestamptz");
@@ -12906,7 +12921,7 @@ ConstDatetime:
 						$$ = SystemTypeName("timestamp");
 					$$->location = @1;
 				}
-			| TIME '(' Iconst ')' opt_timezone
+			| TIME LPAREN Iconst RPAREN opt_timezone
 				{
 					if ($5)
 						$$ = SystemTypeName("timetz");
@@ -13003,7 +13018,7 @@ interval_second:
 				{
 					$$ = list_make1(makeIntConst(INTERVAL_MASK(SECOND), @1));
 				}
-			| SECOND_P '(' Iconst ')'
+			| SECOND_P LPAREN Iconst RPAREN
 				{
 					$$ = list_make2(makeIntConst(INTERVAL_MASK(SECOND), @1),
 									makeIntConst($3, @3));
@@ -13027,7 +13042,7 @@ interval_second:
  * because that use of AND conflicts with AND as a boolean operator.  So,
  * b_expr is used in BETWEEN and we remove boolean keywords from b_expr.
  *
- * Note that '(' a_expr ')' is a b_expr, so an unrestricted expression can
+ * Note that LPAREN a_expr RPAREN is a b_expr, so an unrestricted expression can
  * always be used by surrounding it with parens.
  *
  * c_expr is all the productions that are common to a_expr and b_expr;
@@ -13065,27 +13080,27 @@ a_expr:		c_expr									{ $$ = $1; }
 		 * If you add more explicitly-known operators, be sure to add them
 		 * also to b_expr and to the MathOp list below.
 		 */
-			| '+' a_expr					%prec UMINUS
+			| PLUS a_expr					%prec UMINUS
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "+", NULL, $2, @1); }
-			| '-' a_expr					%prec UMINUS
+			| MINUS a_expr					%prec UMINUS
 				{ $$ = doNegate($2, @1); }
-			| a_expr '+' a_expr
+			| a_expr PLUS a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "+", $1, $3, @2); }
-			| a_expr '-' a_expr
+			| a_expr MINUS a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "-", $1, $3, @2); }
-			| a_expr '*' a_expr
+			| a_expr STAR a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "*", $1, $3, @2); }
-			| a_expr '/' a_expr
+			| a_expr SLASH a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "/", $1, $3, @2); }
-			| a_expr '%' a_expr
+			| a_expr PERCENT a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "%", $1, $3, @2); }
-			| a_expr '^' a_expr
+			| a_expr CARET a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "^", $1, $3, @2); }
-			| a_expr '<' a_expr
+			| a_expr LESS a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "<", $1, $3, @2); }
-			| a_expr '>' a_expr
+			| a_expr GREATER a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, ">", $1, $3, @2); }
-			| a_expr '=' a_expr
+			| a_expr EQUALS a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "=", $1, $3, @2); }
 			| a_expr LESS_EQUALS a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "<=", $1, $3, @2); }
@@ -13309,11 +13324,11 @@ a_expr:		c_expr									{ $$ = $1; }
 				{
 					$$ = (Node *) makeSimpleA_Expr(AEXPR_NOT_DISTINCT, "=", $1, $6, @2);
 				}
-			| a_expr IS OF '(' type_list ')'			%prec IS
+			| a_expr IS OF LPAREN type_list RPAREN			%prec IS
 				{
 					$$ = (Node *) makeSimpleA_Expr(AEXPR_OF, "=", $1, (Node *) $5, @2);
 				}
-			| a_expr IS NOT OF '(' type_list ')'		%prec IS
+			| a_expr IS NOT OF LPAREN type_list RPAREN		%prec IS
 				{
 					$$ = (Node *) makeSimpleA_Expr(AEXPR_OF, "<>", $1, (Node *) $6, @2);
 				}
@@ -13402,7 +13417,7 @@ a_expr:		c_expr									{ $$ = $1; }
 					n->location = @2;
 					$$ = (Node *)n;
 				}
-			| a_expr subquery_Op sub_type '(' a_expr ')'		%prec Op
+			| a_expr subquery_Op sub_type LPAREN a_expr RPAREN		%prec Op
 				{
 					if ($3 == ANY_SUBLINK)
 						$$ = (Node *) makeA_Expr(AEXPR_OP_ANY, $2, $1, $5, @2);
@@ -13465,27 +13480,27 @@ b_expr:		c_expr
 				{ $$ = $1; }
 			| b_expr TYPECAST Typename
 				{ $$ = makeTypeCast($1, $3, @2); }
-			| '+' b_expr					%prec UMINUS
+			| PLUS b_expr					%prec UMINUS
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "+", NULL, $2, @1); }
-			| '-' b_expr					%prec UMINUS
+			| MINUS b_expr					%prec UMINUS
 				{ $$ = doNegate($2, @1); }
-			| b_expr '+' b_expr
+			| b_expr PLUS b_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "+", $1, $3, @2); }
-			| b_expr '-' b_expr
+			| b_expr MINUS b_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "-", $1, $3, @2); }
-			| b_expr '*' b_expr
+			| b_expr STAR b_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "*", $1, $3, @2); }
-			| b_expr '/' b_expr
+			| b_expr SLASH b_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "/", $1, $3, @2); }
-			| b_expr '%' b_expr
+			| b_expr PERCENT b_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "%", $1, $3, @2); }
-			| b_expr '^' b_expr
+			| b_expr CARET b_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "^", $1, $3, @2); }
-			| b_expr '<' b_expr
+			| b_expr LESS b_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "<", $1, $3, @2); }
-			| b_expr '>' b_expr
+			| b_expr GREATER b_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, ">", $1, $3, @2); }
-			| b_expr '=' b_expr
+			| b_expr EQUALS b_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "=", $1, $3, @2); }
 			| b_expr LESS_EQUALS b_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "<=", $1, $3, @2); }
@@ -13507,11 +13522,11 @@ b_expr:		c_expr
 				{
 					$$ = (Node *) makeSimpleA_Expr(AEXPR_NOT_DISTINCT, "=", $1, $6, @2);
 				}
-			| b_expr IS OF '(' type_list ')'		%prec IS
+			| b_expr IS OF LPAREN type_list RPAREN		%prec IS
 				{
 					$$ = (Node *) makeSimpleA_Expr(AEXPR_OF, "=", $1, (Node *) $5, @2);
 				}
-			| b_expr IS NOT OF '(' type_list ')'	%prec IS
+			| b_expr IS NOT OF LPAREN type_list RPAREN	%prec IS
 				{
 					$$ = (Node *) makeSimpleA_Expr(AEXPR_OF, "<>", $1, (Node *) $6, @2);
 				}
@@ -13553,7 +13568,7 @@ c_expr:		columnref								{ $$ = $1; }
 					else
 						$$ = (Node *) p;
 				}
-			| '(' a_expr ')' opt_indirection
+			| LPAREN a_expr RPAREN opt_indirection
 				{
 					if ($4)
 					{
@@ -13607,7 +13622,7 @@ c_expr:		columnref								{ $$ = $1; }
 					/*
 					 * Because the select_with_parens nonterminal is designed
 					 * to "eat" as many levels of parens as possible, the
-					 * '(' a_expr ')' opt_indirection production above will
+					 * LPAREN a_expr RPAREN opt_indirection production above will
 					 * fail to match a sub-SELECT with indirection decoration;
 					 * the sub-SELECT won't be regarded as an a_expr as long
 					 * as there are parens around it.  To support applying
@@ -13675,7 +13690,7 @@ c_expr:		columnref								{ $$ = $1; }
 					r->location = @1;
 					$$ = (Node *)r;
 				}
-			| GROUPING '(' expr_list ')'
+			| GROUPING LPAREN expr_list RPAREN
 			  {
 				  GroupingFunc *g = makeNode(GroupingFunc);
 				  g->args = $3;
@@ -13684,31 +13699,31 @@ c_expr:		columnref								{ $$ = $1; }
 			  }
 		;
 
-func_application: func_name '(' ')'
+func_application: func_name LPAREN RPAREN
 				{
 					$$ = (Node *) makeFuncCall($1, NIL, @1);
 				}
-			| func_name '(' func_arg_list opt_sort_clause ')'
+			| func_name LPAREN func_arg_list opt_sort_clause RPAREN
 				{
 					FuncCall *n = makeFuncCall($1, $3, @1);
 					n->agg_order = $4;
 					$$ = (Node *)n;
 				}
-			| func_name '(' VARIADIC func_arg_expr opt_sort_clause ')'
+			| func_name LPAREN VARIADIC func_arg_expr opt_sort_clause RPAREN
 				{
 					FuncCall *n = makeFuncCall($1, list_make1($4), @1);
 					n->func_variadic = true;
 					n->agg_order = $5;
 					$$ = (Node *)n;
 				}
-			| func_name '(' func_arg_list ',' VARIADIC func_arg_expr opt_sort_clause ')'
+			| func_name LPAREN func_arg_list COMMA VARIADIC func_arg_expr opt_sort_clause RPAREN
 				{
 					FuncCall *n = makeFuncCall($1, lappend($3, $6), @1);
 					n->func_variadic = true;
 					n->agg_order = $7;
 					$$ = (Node *)n;
 				}
-			| func_name '(' ALL func_arg_list opt_sort_clause ')'
+			| func_name LPAREN ALL func_arg_list opt_sort_clause RPAREN
 				{
 					FuncCall *n = makeFuncCall($1, $4, @1);
 					n->agg_order = $5;
@@ -13718,20 +13733,20 @@ func_application: func_name '(' ')'
 					 */
 					$$ = (Node *)n;
 				}
-			| func_name '(' DISTINCT func_arg_list opt_sort_clause ')'
+			| func_name LPAREN DISTINCT func_arg_list opt_sort_clause RPAREN
 				{
 					FuncCall *n = makeFuncCall($1, $4, @1);
 					n->agg_order = $5;
 					n->agg_distinct = true;
 					$$ = (Node *)n;
 				}
-			| func_name '(' '*' ')'
+			| func_name LPAREN STAR RPAREN
 				{
 					/*
 					 * We consider AGGREGATE(*) to invoke a parameterless
 					 * aggregate.  This does the right thing for COUNT(*),
 					 * and there are no other aggregates in SQL that accept
-					 * '*' as parameter.
+					 * STAR as parameter.
 					 *
 					 * The FuncCall node is also marked agg_star = true,
 					 * so that later processing can detect what the argument
@@ -13807,7 +13822,7 @@ func_expr_windowless:
  * Special expressions that are considered to be functions.
  */
 func_expr_common_subexpr:
-			COLLATION FOR '(' a_expr ')'
+			COLLATION FOR LPAREN a_expr RPAREN
 				{
 					$$ = (Node *) makeFuncCall(SystemFuncName("pg_collation_for"),
 											   list_make1($4),
@@ -13821,7 +13836,7 @@ func_expr_common_subexpr:
 				{
 					$$ = makeSQLValueFunction(SVFOP_CURRENT_TIME, -1, @1);
 				}
-			| CURRENT_TIME '(' Iconst ')'
+			| CURRENT_TIME LPAREN Iconst RPAREN
 				{
 					$$ = makeSQLValueFunction(SVFOP_CURRENT_TIME_N, $3, @1);
 				}
@@ -13829,7 +13844,7 @@ func_expr_common_subexpr:
 				{
 					$$ = makeSQLValueFunction(SVFOP_CURRENT_TIMESTAMP, -1, @1);
 				}
-			| CURRENT_TIMESTAMP '(' Iconst ')'
+			| CURRENT_TIMESTAMP LPAREN Iconst RPAREN
 				{
 					$$ = makeSQLValueFunction(SVFOP_CURRENT_TIMESTAMP_N, $3, @1);
 				}
@@ -13837,7 +13852,7 @@ func_expr_common_subexpr:
 				{
 					$$ = makeSQLValueFunction(SVFOP_LOCALTIME, -1, @1);
 				}
-			| LOCALTIME '(' Iconst ')'
+			| LOCALTIME LPAREN Iconst RPAREN
 				{
 					$$ = makeSQLValueFunction(SVFOP_LOCALTIME_N, $3, @1);
 				}
@@ -13845,7 +13860,7 @@ func_expr_common_subexpr:
 				{
 					$$ = makeSQLValueFunction(SVFOP_LOCALTIMESTAMP, -1, @1);
 				}
-			| LOCALTIMESTAMP '(' Iconst ')'
+			| LOCALTIMESTAMP LPAREN Iconst RPAREN
 				{
 					$$ = makeSQLValueFunction(SVFOP_LOCALTIMESTAMP_N, $3, @1);
 				}
@@ -13873,13 +13888,13 @@ func_expr_common_subexpr:
 				{
 					$$ = makeSQLValueFunction(SVFOP_CURRENT_SCHEMA, -1, @1);
 				}
-			| CAST '(' a_expr AS Typename ')'
+			| CAST LPAREN a_expr AS Typename RPAREN
 				{ $$ = makeTypeCast($3, $5, @1); }
-			| EXTRACT '(' extract_list ')'
+			| EXTRACT LPAREN extract_list RPAREN
 				{
 					$$ = (Node *) makeFuncCall(SystemFuncName("date_part"), $3, @1);
 				}
-			| OVERLAY '(' overlay_list ')'
+			| OVERLAY LPAREN overlay_list RPAREN
 				{
 					/* overlay(A PLACING B FROM C FOR D) is converted to
 					 * overlay(A, B, C, D)
@@ -13888,19 +13903,19 @@ func_expr_common_subexpr:
 					 */
 					$$ = (Node *) makeFuncCall(SystemFuncName("overlay"), $3, @1);
 				}
-			| POSITION '(' position_list ')'
+			| POSITION LPAREN position_list RPAREN
 				{
 					/* position(A in B) is converted to position(B, A) */
 					$$ = (Node *) makeFuncCall(SystemFuncName("position"), $3, @1);
 				}
-			| SUBSTRING '(' substr_list ')'
+			| SUBSTRING LPAREN substr_list RPAREN
 				{
 					/* substring(A from B for C) is converted to
 					 * substring(A, B, C) - thomas 2000-11-28
 					 */
 					$$ = (Node *) makeFuncCall(SystemFuncName("substring"), $3, @1);
 				}
-			| TREAT '(' a_expr AS Typename ')'
+			| TREAT LPAREN a_expr AS Typename RPAREN
 				{
 					/* TREAT(expr AS target) converts expr of a particular type to target,
 					 * which is defined to be a subtype of the original expression.
@@ -13915,37 +13930,37 @@ func_expr_common_subexpr:
 												list_make1($3),
 												@1);
 				}
-			| TRIM '(' BOTH trim_list ')'
+			| TRIM LPAREN BOTH trim_list RPAREN
 				{
 					/* various trim expressions are defined in SQL
 					 * - thomas 1997-07-19
 					 */
 					$$ = (Node *) makeFuncCall(SystemFuncName("btrim"), $4, @1);
 				}
-			| TRIM '(' LEADING trim_list ')'
+			| TRIM LPAREN LEADING trim_list RPAREN
 				{
 					$$ = (Node *) makeFuncCall(SystemFuncName("ltrim"), $4, @1);
 				}
-			| TRIM '(' TRAILING trim_list ')'
+			| TRIM LPAREN TRAILING trim_list RPAREN
 				{
 					$$ = (Node *) makeFuncCall(SystemFuncName("rtrim"), $4, @1);
 				}
-			| TRIM '(' trim_list ')'
+			| TRIM LPAREN trim_list RPAREN
 				{
 					$$ = (Node *) makeFuncCall(SystemFuncName("btrim"), $3, @1);
 				}
-			| NULLIF '(' a_expr ',' a_expr ')'
+			| NULLIF LPAREN a_expr COMMA a_expr RPAREN
 				{
 					$$ = (Node *) makeSimpleA_Expr(AEXPR_NULLIF, "=", $3, $5, @1);
 				}
-			| COALESCE '(' expr_list ')'
+			| COALESCE LPAREN expr_list RPAREN
 				{
 					CoalesceExpr *c = makeNode(CoalesceExpr);
 					c->args = $3;
 					c->location = @1;
 					$$ = (Node *)c;
 				}
-			| GREATEST '(' expr_list ')'
+			| GREATEST LPAREN expr_list RPAREN
 				{
 					MinMaxExpr *v = makeNode(MinMaxExpr);
 					v->args = $3;
@@ -13953,7 +13968,7 @@ func_expr_common_subexpr:
 					v->location = @1;
 					$$ = (Node *)v;
 				}
-			| LEAST '(' expr_list ')'
+			| LEAST LPAREN expr_list RPAREN
 				{
 					MinMaxExpr *v = makeNode(MinMaxExpr);
 					v->args = $3;
@@ -13961,37 +13976,37 @@ func_expr_common_subexpr:
 					v->location = @1;
 					$$ = (Node *)v;
 				}
-			| XMLCONCAT '(' expr_list ')'
+			| XMLCONCAT LPAREN expr_list RPAREN
 				{
 					$$ = makeXmlExpr(IS_XMLCONCAT, NULL, NIL, $3, @1);
 				}
-			| XMLELEMENT '(' NAME_P ColLabel ')'
+			| XMLELEMENT LPAREN NAME_P ColLabel RPAREN
 				{
 					$$ = makeXmlExpr(IS_XMLELEMENT, $4, NIL, NIL, @1);
 				}
-			| XMLELEMENT '(' NAME_P ColLabel ',' xml_attributes ')'
+			| XMLELEMENT LPAREN NAME_P ColLabel COMMA xml_attributes RPAREN
 				{
 					$$ = makeXmlExpr(IS_XMLELEMENT, $4, $6, NIL, @1);
 				}
-			| XMLELEMENT '(' NAME_P ColLabel ',' expr_list ')'
+			| XMLELEMENT LPAREN NAME_P ColLabel COMMA expr_list RPAREN
 				{
 					$$ = makeXmlExpr(IS_XMLELEMENT, $4, NIL, $6, @1);
 				}
-			| XMLELEMENT '(' NAME_P ColLabel ',' xml_attributes ',' expr_list ')'
+			| XMLELEMENT LPAREN NAME_P ColLabel COMMA xml_attributes COMMA expr_list RPAREN
 				{
 					$$ = makeXmlExpr(IS_XMLELEMENT, $4, $6, $8, @1);
 				}
-			| XMLEXISTS '(' c_expr xmlexists_argument ')'
+			| XMLEXISTS LPAREN c_expr xmlexists_argument RPAREN
 				{
 					/* xmlexists(A PASSING [BY REF] B [BY REF]) is
 					 * converted to xmlexists(A, B)*/
 					$$ = (Node *) makeFuncCall(SystemFuncName("xmlexists"), list_make2($3, $4), @1);
 				}
-			| XMLFOREST '(' xml_attribute_list ')'
+			| XMLFOREST LPAREN xml_attribute_list RPAREN
 				{
 					$$ = makeXmlExpr(IS_XMLFOREST, NULL, $3, NIL, @1);
 				}
-			| XMLPARSE '(' document_or_content a_expr xml_whitespace_option ')'
+			| XMLPARSE LPAREN document_or_content a_expr xml_whitespace_option RPAREN
 				{
 					XmlExpr *x = (XmlExpr *)
 						makeXmlExpr(IS_XMLPARSE, NULL, NIL,
@@ -14000,20 +14015,20 @@ func_expr_common_subexpr:
 					x->xmloption = $3;
 					$$ = (Node *)x;
 				}
-			| XMLPI '(' NAME_P ColLabel ')'
+			| XMLPI LPAREN NAME_P ColLabel RPAREN
 				{
 					$$ = makeXmlExpr(IS_XMLPI, $4, NULL, NIL, @1);
 				}
-			| XMLPI '(' NAME_P ColLabel ',' a_expr ')'
+			| XMLPI LPAREN NAME_P ColLabel COMMA a_expr RPAREN
 				{
 					$$ = makeXmlExpr(IS_XMLPI, $4, NULL, list_make1($6), @1);
 				}
-			| XMLROOT '(' a_expr ',' xml_root_version opt_xml_root_standalone ')'
+			| XMLROOT LPAREN a_expr COMMA xml_root_version opt_xml_root_standalone RPAREN
 				{
 					$$ = makeXmlExpr(IS_XMLROOT, NULL, NIL,
 									 list_make3($3, $5, $6), @1);
 				}
-			| XMLSERIALIZE '(' document_or_content a_expr AS SimpleTypename ')'
+			| XMLSERIALIZE LPAREN document_or_content a_expr AS SimpleTypename RPAREN
 				{
 					XmlSerialize *n = makeNode(XmlSerialize);
 					n->xmloption = $3;
@@ -14033,21 +14048,21 @@ xml_root_version: VERSION_P a_expr
 				{ $$ = makeNullAConst(-1); }
 		;
 
-opt_xml_root_standalone: ',' STANDALONE_P YES_P
+opt_xml_root_standalone: COMMA STANDALONE_P YES_P
 				{ $$ = makeIntConst(XML_STANDALONE_YES, -1); }
-			| ',' STANDALONE_P NO
+			| COMMA STANDALONE_P NO
 				{ $$ = makeIntConst(XML_STANDALONE_NO, -1); }
-			| ',' STANDALONE_P NO VALUE_P
+			| COMMA STANDALONE_P NO VALUE_P
 				{ $$ = makeIntConst(XML_STANDALONE_NO_VALUE, -1); }
 			| /*EMPTY*/
 				{ $$ = makeIntConst(XML_STANDALONE_OMITTED, -1); }
 		;
 
-xml_attributes: XMLATTRIBUTES '(' xml_attribute_list ')'	{ $$ = $3; }
+xml_attributes: XMLATTRIBUTES LPAREN xml_attribute_list RPAREN	{ $$ = $3; }
 		;
 
 xml_attribute_list:	xml_attribute_el					{ $$ = list_make1($1); }
-			| xml_attribute_list ',' xml_attribute_el	{ $$ = lappend($1, $3); }
+			| xml_attribute_list COMMA xml_attribute_el	{ $$ = lappend($1, $3); }
 		;
 
 xml_attribute_el: a_expr AS ColLabel
@@ -14107,12 +14122,12 @@ xml_passing_mech:
  * Aggregate decoration clauses
  */
 within_group_clause:
-			WITHIN GROUP_P '(' sort_clause ')'		{ $$ = $4; }
+			WITHIN GROUP_P LPAREN sort_clause RPAREN		{ $$ = $4; }
 			| /*EMPTY*/								{ $$ = NIL; }
 		;
 
 filter_clause:
-			FILTER '(' WHERE a_expr ')'				{ $$ = $4; }
+			FILTER LPAREN WHERE a_expr RPAREN				{ $$ = $4; }
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
@@ -14127,7 +14142,7 @@ window_clause:
 
 window_definition_list:
 			window_definition						{ $$ = list_make1($1); }
-			| window_definition_list ',' window_definition
+			| window_definition_list COMMA window_definition
 													{ $$ = lappend($1, $3); }
 		;
 
@@ -14159,8 +14174,8 @@ over_clause: OVER window_specification
 				{ $$ = NULL; }
 		;
 
-window_specification: '(' opt_existing_window_name opt_partition_clause
-						opt_sort_clause opt_frame_clause ')'
+window_specification: LPAREN opt_existing_window_name opt_partition_clause
+						opt_sort_clause opt_frame_clause RPAREN
 				{
 					WindowDef *n = makeNode(WindowDef);
 					n->name = NULL;
@@ -14177,7 +14192,7 @@ window_specification: '(' opt_existing_window_name opt_partition_clause
 		;
 
 /*
- * If we see PARTITION, RANGE, ROWS or GROUPS as the first token after the '('
+ * If we see PARTITION, RANGE, ROWS or GROUPS as the first token after the LPAREN
  * of a window_specification, we want the assumption to be that there is
  * no existing_window_name; but those keywords are unreserved and so could
  * be ColIds.  We fix this by making them have the same precedence as IDENT
@@ -14353,16 +14368,16 @@ opt_window_exclusion_clause:
  * without conflicting with the parenthesized a_expr production.  Without the
  * ROW keyword, there must be more than one a_expr inside the parens.
  */
-row:		ROW '(' expr_list ')'					{ $$ = $3; }
-			| ROW '(' ')'							{ $$ = NIL; }
-			| '(' expr_list ',' a_expr ')'			{ $$ = lappend($2, $4); }
+row:		ROW LPAREN expr_list RPAREN					{ $$ = $3; }
+			| ROW LPAREN RPAREN							{ $$ = NIL; }
+			| LPAREN expr_list COMMA a_expr RPAREN			{ $$ = lappend($2, $4); }
 		;
 
-explicit_row:	ROW '(' expr_list ')'				{ $$ = $3; }
-			| ROW '(' ')'							{ $$ = NIL; }
+explicit_row:	ROW LPAREN expr_list RPAREN				{ $$ = $3; }
+			| ROW LPAREN RPAREN							{ $$ = NIL; }
 		;
 
-implicit_row:	'(' expr_list ',' a_expr ')'		{ $$ = lappend($2, $4); }
+implicit_row:	LPAREN expr_list COMMA a_expr RPAREN		{ $$ = lappend($2, $4); }
 		;
 
 sub_type:	ANY										{ $$ = ANY_SUBLINK; }
@@ -14374,15 +14389,15 @@ all_Op:		Op										{ $$ = $1; }
 			| MathOp								{ $$ = $1; }
 		;
 
-MathOp:		 '+'									{ $$ = "+"; }
-			| '-'									{ $$ = "-"; }
-			| '*'									{ $$ = "*"; }
-			| '/'									{ $$ = "/"; }
-			| '%'									{ $$ = "%"; }
-			| '^'									{ $$ = "^"; }
-			| '<'									{ $$ = "<"; }
-			| '>'									{ $$ = ">"; }
-			| '='									{ $$ = "="; }
+MathOp:		 PLUS									{ $$ = "+"; }
+			| MINUS									{ $$ = "-"; }
+			| STAR									{ $$ = "*"; }
+			| SLASH									{ $$ = "/"; }
+			| PERCENT									{ $$ = "%"; }
+			| CARET									{ $$ = "^"; }
+			| LESS									{ $$ = "<"; }
+			| GREATER									{ $$ = ">"; }
+			| EQUALS									{ $$ = "="; }
 			| LESS_EQUALS							{ $$ = "<="; }
 			| GREATER_EQUALS						{ $$ = ">="; }
 			| NOT_EQUALS							{ $$ = "<>"; }
@@ -14390,21 +14405,21 @@ MathOp:		 '+'									{ $$ = "+"; }
 
 qual_Op:	Op
 					{ $$ = list_make1(makeString($1)); }
-			| OPERATOR '(' any_operator ')'
+			| OPERATOR LPAREN any_operator RPAREN
 					{ $$ = $3; }
 		;
 
 qual_all_Op:
 			all_Op
 					{ $$ = list_make1(makeString($1)); }
-			| OPERATOR '(' any_operator ')'
+			| OPERATOR LPAREN any_operator RPAREN
 					{ $$ = $3; }
 		;
 
 subquery_Op:
 			all_Op
 					{ $$ = list_make1(makeString($1)); }
-			| OPERATOR '(' any_operator ')'
+			| OPERATOR LPAREN any_operator RPAREN
 					{ $$ = $3; }
 			| LIKE
 					{ $$ = list_make1(makeString("~~")); }
@@ -14428,7 +14443,7 @@ expr_list:	a_expr
 				{
 					$$ = list_make1($1);
 				}
-			| expr_list ',' a_expr
+			| expr_list COMMA a_expr
 				{
 					$$ = lappend($1, $3);
 				}
@@ -14439,7 +14454,7 @@ func_arg_list:  func_arg_expr
 				{
 					$$ = list_make1($1);
 				}
-			| func_arg_list ',' func_arg_expr
+			| func_arg_list COMMA func_arg_expr
 				{
 					$$ = lappend($1, $3);
 				}
@@ -14470,25 +14485,25 @@ func_arg_expr:  a_expr
 		;
 
 type_list:	Typename								{ $$ = list_make1($1); }
-			| type_list ',' Typename				{ $$ = lappend($1, $3); }
+			| type_list COMMA Typename				{ $$ = lappend($1, $3); }
 		;
 
-array_expr: '[' expr_list ']'
+array_expr: LBRACKET expr_list RBRACKET
 				{
 					$$ = makeAArrayExpr($2, @1);
 				}
-			| '[' array_expr_list ']'
+			| LBRACKET array_expr_list RBRACKET
 				{
 					$$ = makeAArrayExpr($2, @1);
 				}
-			| '[' ']'
+			| LBRACKET RBRACKET
 				{
 					$$ = makeAArrayExpr(NIL, @1);
 				}
 		;
 
 array_expr_list: array_expr							{ $$ = list_make1($1); }
-			| array_expr_list ',' array_expr		{ $$ = lappend($1, $3); }
+			| array_expr_list COMMA array_expr		{ $$ = lappend($1, $3); }
 		;
 
 
@@ -14611,7 +14626,7 @@ in_expr:	select_with_parens
 					/* other fields will be filled later */
 					$$ = (Node *)n;
 				}
-			| '(' expr_list ')'						{ $$ = (Node *)$2; }
+			| LPAREN expr_list RPAREN						{ $$ = (Node *)$2; }
 		;
 
 /*
@@ -14670,15 +14685,15 @@ columnref:	ColId
 		;
 
 indirection_el:
-			'.' attr_name
+			DOT attr_name
 				{
 					$$ = (Node *) makeString($2);
 				}
-			| '.' '*'
+			| DOT STAR
 				{
 					$$ = (Node *) makeNode(A_Star);
 				}
-			| '[' a_expr ']'
+			| LBRACKET a_expr RBRACKET
 				{
 					A_Indices *ai = makeNode(A_Indices);
 					ai->is_slice = false;
@@ -14686,7 +14701,7 @@ indirection_el:
 					ai->uidx = $2;
 					$$ = (Node *) ai;
 				}
-			| '[' opt_slice_bound ':' opt_slice_bound ']'
+			| LBRACKET opt_slice_bound COLON opt_slice_bound RBRACKET
 				{
 					A_Indices *ai = makeNode(A_Indices);
 					ai->is_slice = true;
@@ -14728,7 +14743,7 @@ opt_target_list: target_list						{ $$ = $1; }
 
 target_list:
 			target_el								{ $$ = list_make1($1); }
-			| target_list ',' target_el				{ $$ = lappend($1, $3); }
+			| target_list COMMA target_el				{ $$ = lappend($1, $3); }
 		;
 
 target_el:	a_expr AS ColLabel
@@ -14763,7 +14778,7 @@ target_el:	a_expr AS ColLabel
 					$$->val = (Node *)$1;
 					$$->location = @1;
 				}
-			| '*'
+			| STAR
 				{
 					ColumnRef *n = makeNode(ColumnRef);
 					n->fields = list_make1(makeNode(A_Star));
@@ -14786,13 +14801,13 @@ target_el:	a_expr AS ColLabel
 
 qualified_name_list:
 			qualified_name							{ $$ = list_make1($1); }
-			| qualified_name_list ',' qualified_name { $$ = lappend($1, $3); }
+			| qualified_name_list COMMA qualified_name { $$ = lappend($1, $3); }
 		;
 
 /*
  * The production for a qualified relation name has to exactly match the
  * production for a qualified func_name, because in a FROM clause we cannot
- * tell which we are parsing until we see what comes after it ('(' for a
+ * tell which we are parsing until we see what comes after it (LPAREN for a
  * func_name, something else for a relation). Therefore we allow 'indirection'
  * which may contain subscripts, and reject that case in the C code.
  */
@@ -14830,7 +14845,7 @@ qualified_name:
 
 name_list:	name
 					{ $$ = list_make1(makeString($1)); }
-			| name_list ',' name
+			| name_list COMMA name
 					{ $$ = lappend($1, makeString($3)); }
 		;
 
@@ -14852,7 +14867,7 @@ file_name:	Sconst									{ $$ = $1; };
 /*
  * The production for a qualified func_name has to exactly match the
  * production for a qualified columnref, because we cannot tell which we
- * are parsing until we see what comes after it ('(' or Sconst for a func_name,
+ * are parsing until we see what comes after it (LPAREN or Sconst for a func_name,
  * anything else for a columnref).  Therefore we allow 'indirection' which
  * may contain subscripts, and reject that case in the C code.  (If we
  * ever implement SQL99-like methods, such syntax may actually become legal!)
@@ -14902,7 +14917,7 @@ AexprConst: Iconst
 					t->location = @1;
 					$$ = makeStringConstCast($2, @2, t);
 				}
-			| func_name '(' func_arg_list opt_sort_clause ')' Sconst
+			| func_name LPAREN func_arg_list opt_sort_clause RPAREN Sconst
 				{
 					/* generic syntax with a type modifier */
 					TypeName *t = makeTypeNameFromNameList($1);
@@ -14944,7 +14959,7 @@ AexprConst: Iconst
 					t->typmods = $3;
 					$$ = makeStringConstCast($2, @2, t);
 				}
-			| ConstInterval '(' Iconst ')' Sconst
+			| ConstInterval LPAREN Iconst RPAREN Sconst
 				{
 					TypeName *t = $1;
 					t->typmods = list_make2(makeIntConst(INTERVAL_FULL_RANGE, -1),
@@ -14969,8 +14984,8 @@ Iconst:		ICONST									{ $$ = $1; };
 Sconst:		SCONST									{ $$ = $1; };
 
 SignedIconst: Iconst								{ $$ = $1; }
-			| '+' Iconst							{ $$ = + $2; }
-			| '-' Iconst							{ $$ = - $2; }
+			| PLUS Iconst							{ $$ = + $2; }
+			| MINUS Iconst							{ $$ = - $2; }
 		;
 
 /* Role specifications */
@@ -15046,7 +15061,7 @@ RoleSpec:	NonReservedWord
 
 role_list:	RoleSpec
 					{ $$ = list_make1($1); }
-			| role_list ',' RoleSpec
+			| role_list COMMA RoleSpec
 					{ $$ = lappend($1, $3); }
 		;
 
@@ -15411,7 +15426,7 @@ unreserved_keyword:
  * can't be treated as "generic" type or function names.
  *
  * The type names appearing here are not usable as function names
- * because they can be followed by '(' in typename productions, which
+ * because they can be followed by LPAREN in typename productions, which
  * looks too much like a function call for an LR(1) parser.
  */
 col_name_keyword:
@@ -15670,7 +15685,7 @@ makeColumnRef(char *colname, List *indirection,
 		}
 		else if (IsA(lfirst(l), A_Star))
 		{
-			/* We only allow '*' at the end of a ColumnRef */
+			/* We only allow STAR at the end of a ColumnRef */
 			if (lnext(indirection, l) != NULL)
 				parser_yyerror("improper use of \"*\"");
 		}
@@ -15814,7 +15829,7 @@ makeRoleSpec(RoleSpecType type, int location)
 /* check_qualified_name --- check the result of qualified_name production
  *
  * It's easiest to let the grammar production for qualified_name allow
- * subscripts and '*', which we then must reject here.
+ * subscripts and STAR, which we then must reject here.
  */
 static void
 check_qualified_name(List *names, core_yyscan_t yyscanner)
@@ -15831,7 +15846,7 @@ check_qualified_name(List *names, core_yyscan_t yyscanner)
 /* check_func_name --- check the result of func_name production
  *
  * It's easiest to let the grammar production for func_name allow subscripts
- * and '*', which we then must reject here.
+ * and STAR, which we then must reject here.
  */
 static List *
 check_func_name(List *names, core_yyscan_t yyscanner)
@@ -15848,7 +15863,7 @@ check_func_name(List *names, core_yyscan_t yyscanner)
 
 /* check_indirection --- check the result of indirection production
  *
- * We only allow '*' at the end of the list, but it's hard to enforce that
+ * We only allow STAR at the end of the list, but it's hard to enforce that
  * in the grammar, so do it here.
  */
 static List *
@@ -16051,7 +16066,7 @@ doNegate(Node *n, int location)
 	{
 		A_Const *con = (A_Const *)n;
 
-		/* report the constant's location as that of the '-' sign */
+		/* report the constant's location as that of the MINUS sign */
 		con->location = location;
 
 		if (con->val.type == T_Integer)

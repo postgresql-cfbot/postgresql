@@ -52,7 +52,25 @@ my %replace_string = (
 	'EQUALS_GREATER' => '=>',
 	'LESS_EQUALS'    => '<=',
 	'GREATER_EQUALS' => '>=',
-	'NOT_EQUALS'     => '<>',);
+	'NOT_EQUALS'     => '<>',
+	# single character tokens found in the core grammar
+	'COMMA'          => ',',
+	'LPAREN'         => '(',
+	'RPAREN'         => ')',
+	'LBRACKET'       => '[',
+	'RBRACKET'       => ']',
+	'DOT'            => '.',
+	'SEMICOLON'      => ';',
+	'COLON'          => ':',
+	'PLUS'           => '+',
+	'MINUS'          => '-',
+	'STAR'           => '*',
+	'SLASH'          => '/',
+	'PERCENT'        => '%',
+	'CARET'          => '^',
+	'LESS'           => '<',
+	'GREATER'        => '>',
+	'EQUALS'         => '=');
 
 # specific replace_types for specific non-terminals - never include the ':'
 # ECPG-only replace_types are defined in ecpg-replace_types
@@ -92,7 +110,7 @@ my %replace_line = (
 	# some other production rules have to be ignored or replaced
 	'fetch_argsFORWARDopt_from_incursor_name'      => 'ignore',
 	'fetch_argsBACKWARDopt_from_incursor_name'     => 'ignore',
-	"opt_array_boundsopt_array_bounds'['Iconst']'" => 'ignore',
+	"opt_array_boundsopt_array_boundsLBRACKETIconstRBRACKET" => 'ignore',
 	'VariableShowStmtSHOWvar_name' => 'SHOW var_name ecpg_into',
 	'VariableShowStmtSHOWTIMEZONE' => 'SHOW TIME ZONE ecpg_into',
 	'VariableShowStmtSHOWTRANSACTIONISOLATIONLEVEL' =>

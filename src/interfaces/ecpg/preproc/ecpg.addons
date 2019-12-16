@@ -413,7 +413,7 @@ ECPG: TypenameSimpleTypenameopt_array_bounds block
 	{	$$ = cat2_str($1, $2.str); }
 ECPG: TypenameSETOFSimpleTypenameopt_array_bounds block
 	{	$$ = cat_str(3, mm_strdup("setof"), $2, $3.str); }
-ECPG: opt_array_boundsopt_array_bounds'['']' block
+ECPG: opt_array_boundsopt_array_boundsLBRACKETRBRACKET block
 	{
 		$$.index1 = $1.index1;
 		$$.index2 = $1.index2;
@@ -423,7 +423,7 @@ ECPG: opt_array_boundsopt_array_bounds'['']' block
 			$$.index2 = mm_strdup("0");
 		$$.str = cat_str(2, $1.str, mm_strdup("[]"));
 	}
-	| opt_array_bounds '[' Iresult ']'
+	| opt_array_bounds LBRACKET Iresult RBRACKET
 	{
 		$$.index1 = $1.index1;
 		$$.index2 = $1.index2;
@@ -511,7 +511,7 @@ ECPG: FetchStmtMOVEfetch_args rule
 		add_additional_variables($4, false);
 		$$ = cat_str(2, mm_strdup("move backward from"), cursor_marker);
 	}
-ECPG: limit_clauseLIMITselect_limit_value','select_offset_value block
+ECPG: limit_clauseLIMITselect_limit_valueCOMMAselect_offset_value block
 	{
 		mmerror(PARSE_ERROR, ET_WARNING, "no longer supported LIMIT #,# syntax passed to server");
 		$$ = cat_str(4, mm_strdup("limit"), $2, mm_strdup(","), $4);

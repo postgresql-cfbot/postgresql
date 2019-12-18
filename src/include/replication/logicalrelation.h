@@ -21,7 +21,7 @@ typedef struct LogicalRepRelMapEntry
 	/* Mapping to local relation, filled as needed. */
 	Oid			localreloid;	/* local relation id */
 	Relation	localrel;		/* relcache entry */
-	AttrNumber *attrmap;		/* map of local attributes to remote ones */
+	AttrMap    *attrmap;		/* map of local attributes to remote ones */
 	bool		updatable;		/* Can apply updates/deletes? */
 
 	/* Sync state. */

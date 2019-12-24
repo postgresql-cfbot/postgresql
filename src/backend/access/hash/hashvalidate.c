@@ -13,7 +13,7 @@
  */
 #include "postgres.h"
 
-#include "access/amvalidate.h"
+#include "access/indexamvalidate.h"
 #include "access/hash.h"
 #include "access/htup_details.h"
 #include "catalog/pg_amop.h"

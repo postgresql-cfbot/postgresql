@@ -19,7 +19,7 @@
 #ifndef RELOPTIONS_H
 #define RELOPTIONS_H
 
-#include "access/amapi.h"
+#include "access/indexam.h"
 #include "access/htup.h"
 #include "access/tupdesc.h"
 #include "nodes/pg_list.h"

@@ -13,7 +13,7 @@
  */
 #include "postgres.h"
 
-#include "access/genam.h"
+#include "access/indexgenam.h"
 #include "access/heapam.h"
 #include "access/tableam.h"
 #include "catalog/index.h"

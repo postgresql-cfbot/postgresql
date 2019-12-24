@@ -70,7 +70,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#include "access/genam.h"
+#include "access/indexgenam.h"
 #include "access/htup_details.h"
 #include "access/table.h"
 #include "access/xact.h"

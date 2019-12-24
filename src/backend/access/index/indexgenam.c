@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * genam.c
+ * indexgenam.c
  *	  general index access method routines
  *
  * Portions Copyright (c) 1996-2019, PostgreSQL Global Development Group
@@ -8,18 +8,18 @@
  *
  *
  * IDENTIFICATION
- *	  src/backend/access/index/genam.c
+ *	  src/backend/access/index/indexgenam.c
  *
  * NOTES
  *	  many of the old access method routines have been turned into
- *	  macros and moved to genam.h -cim 4/30/91
+ *	  macros and moved to indexgenam.h -cim 4/30/91
  *
  *-------------------------------------------------------------------------
  */
 
 #include "postgres.h"
 
-#include "access/genam.h"
+#include "access/indexgenam.h"
 #include "access/heapam.h"
 #include "access/relscan.h"
 #include "access/tableam.h"

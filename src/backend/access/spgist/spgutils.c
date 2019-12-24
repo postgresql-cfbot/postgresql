@@ -15,7 +15,7 @@
 
 #include "postgres.h"
 
-#include "access/amvalidate.h"
+#include "access/indexamvalidate.h"
 #include "access/htup_details.h"
 #include "access/reloptions.h"
 #include "access/spgist_private.h"

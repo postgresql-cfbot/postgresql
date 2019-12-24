@@ -26,7 +26,7 @@
 
 #include "postgres.h"
 
-#include "access/amapi.h"
+#include "access/indexam.h"
 #include "access/htup_details.h"
 #include "access/relation.h"
 #include "access/reloptions.h"

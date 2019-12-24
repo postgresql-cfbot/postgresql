@@ -36,7 +36,7 @@
 
 #include <math.h>
 
-#include "access/genam.h"
+#include "access/indexgenam.h"
 #include "access/heapam.h"
 #include "access/heapam_xlog.h"
 #include "access/htup_details.h"

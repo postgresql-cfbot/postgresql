@@ -15,7 +15,7 @@
 #include "postgres.h"
 
 #include "access/attmap.h"
-#include "access/genam.h"
+#include "access/indexgenam.h"
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "access/table.h"

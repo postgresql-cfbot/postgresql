@@ -12,7 +12,7 @@
  */
 #include "postgres.h"
 
-#include "access/amapi.h"
+#include "access/indexam.h"
 #include "access/htup_details.h"
 #include "executor/execdebug.h"
 #include "executor/nodeAgg.h"

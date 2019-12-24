@@ -10,7 +10,7 @@
 #ifndef GIN_PRIVATE_H
 #define GIN_PRIVATE_H
 
-#include "access/amapi.h"
+#include "access/indexam.h"
 #include "access/gin.h"
 #include "access/ginblock.h"
 #include "access/itup.h"

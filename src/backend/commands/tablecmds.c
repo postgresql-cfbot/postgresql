@@ -15,7 +15,7 @@
 #include "postgres.h"
 
 #include "access/attmap.h"
-#include "access/genam.h"
+#include "access/indexgenam.h"
 #include "access/heapam.h"
 #include "access/heapam_xlog.h"
 #include "access/multixact.h"

@@ -20,7 +20,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "access/genam.h"
+#include "access/indexgenam.h"
 #include "access/htup_details.h"
 #include "access/sysattr.h"
 #include "access/table.h"

@@ -10,12 +10,14 @@
  * tuples we will keep track of at once.
  *
  * We are willing to use at most maintenance_work_mem (or perhaps
- * autovacuum_work_mem) memory space to keep track of dead tuples.  We
- * initially allocate an array of TIDs of that size, with an upper limit that
- * depends on table size (this limit ensures we don't allocate a huge area
- * uselessly for vacuuming small tables).  If the array threatens to overflow,
- * we suspend the heap scan phase and perform a pass of index cleanup and page
- * compaction, then resume the heap scan with an empty TID array.
+ * autovacuum_work_mem) memory space to keep track of dead tuples. We
+ * divide the autovacuum_work_mem (or maintenance_work_mem) into fixed sized
+ * multiple chunks and allocate the first chunk. Then allocate the rest of
+ * the chunks when required. The total memory has an upper limit that depends
+ * on table size (this limit ensures we don't allocate a huge area uselessly
+ * for vacuuming small tables). If the array threatens to overflow, we suspend
+ * the heap scan phase and perform a pass of index cleanup and page compaction,
+ * then resume the heap scan with an empty TID array.
  *
  * If we're processing a table with no indexes, we can just vacuum each page
  * as we go; there's no need to save up multiple tuples to minimize the number
@@ -110,6 +112,9 @@
  */
 #define PREFETCH_SIZE			((BlockNumber) 32)
 
+/* Total number of chunks of maintenance_work_mem or autovacuum_work_mem */
+#define MAX_ARRAY_COUNT			100
+
 typedef struct LVRelStats
 {
 	/* useindex = true means two-pass strategy; false means one-pass */
@@ -130,9 +135,12 @@ typedef struct LVRelStats
 	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
 	/* List of TIDs of tuples we intend to delete */
 	/* NB: this list is ordered by TID address */
-	int			num_dead_tuples;	/* current # of entries */
-	int			max_dead_tuples;	/* # slots allocated in array */
-	ItemPointer dead_tuples;	/* array of ItemPointerData */
+	int			num_dead_tuples;			/* current # of entries */
+	int			max_dead_tuples;			/* # slots allocated in array */
+	int			num_dead_tuples_array;		/* current # of arrays */
+	int			num_dead_tuples_per_array;	/* current # of entries per array */
+	int			max_dead_tuples_per_array;	/* maximum # of entries per array */
+	ItemPointer	*dead_tuples;				/* array of ItemPointerData */
 	int			num_index_scans;
 	TransactionId latestRemovedXid;
 	bool		lock_waiter_detected;
@@ -148,6 +156,8 @@ static MultiXactId MultiXactCutoff;
 
 static BufferAccessStrategy vac_strategy;
 
+static void *pg_bsearch(ItemPointer key, void **base, int num, int li,
+								int (*cmp)(const void *key, const void *elt));
 
 /* non-export function prototypes */
 static void lazy_scan_heap(Relation onerel, VacuumParams *params,
@@ -162,13 +172,14 @@ static void lazy_cleanup_index(Relation indrel,
 							   IndexBulkDeleteResult *stats,
 							   LVRelStats *vacrelstats);
 static int	lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
-							 int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer);
+							 int arryindex, int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer);
 static bool should_attempt_truncation(VacuumParams *params,
 									  LVRelStats *vacrelstats);
 static void lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats);
 static BlockNumber count_nondeletable_pages(Relation onerel,
 											LVRelStats *vacrelstats);
 static void lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks);
+static void lazy_space_dealloc(LVRelStats *vacrelstat);
 static void lazy_record_dead_tuple(LVRelStats *vacrelstats,
 								   ItemPointer itemptr);
 static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
@@ -740,6 +751,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 		if ((vacrelstats->max_dead_tuples - vacrelstats->num_dead_tuples) < MaxHeapTuplesPerPage &&
 			vacrelstats->num_dead_tuples > 0)
 		{
+			int i;
 			const int	hvp_index[] = {
 				PROGRESS_VACUUM_PHASE,
 				PROGRESS_VACUUM_NUM_INDEX_VACUUMS
@@ -789,7 +801,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			 * not to reset latestRemovedXid since we want that value to be
 			 * valid.
 			 */
-			vacrelstats->num_dead_tuples = 0;
+			lazy_space_dealloc(vacrelstats);
 			vacrelstats->num_index_scans++;
 
 			/*
@@ -1245,7 +1257,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			if (nindexes == 0)
 			{
 				/* Remove tuples from heap if the table has no index */
-				lazy_vacuum_page(onerel, blkno, buf, 0, vacrelstats, &vmbuffer);
+				lazy_vacuum_page(onerel, blkno, buf, 0, 0, vacrelstats, &vmbuffer);
 				vacuumed_pages++;
 				has_dead_tuples = false;
 			}
@@ -1269,7 +1281,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			 * not to reset latestRemovedXid since we want that value to be
 			 * valid.
 			 */
-			vacrelstats->num_dead_tuples = 0;
+			lazy_space_dealloc(vacrelstats);
 
 			/*
 			 * Periodically do incremental FSM vacuuming to make newly-freed
@@ -1527,39 +1539,43 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 	int			npages;
 	PGRUsage	ru0;
 	Buffer		vmbuffer = InvalidBuffer;
-
+	int			i;
 	pg_rusage_init(&ru0);
 	npages = 0;
 
 	tupindex = 0;
-	while (tupindex < vacrelstats->num_dead_tuples)
+
+	for (i = 0; i < vacrelstats->num_dead_tuples_array; i++)
 	{
-		BlockNumber tblk;
-		Buffer		buf;
-		Page		page;
-		Size		freespace;
-
-		vacuum_delay_point();
-
-		tblk = ItemPointerGetBlockNumber(&vacrelstats->dead_tuples[tupindex]);
-		buf = ReadBufferExtended(onerel, MAIN_FORKNUM, tblk, RBM_NORMAL,
-								 vac_strategy);
-		if (!ConditionalLockBufferForCleanup(buf))
+		while (tupindex < vacrelstats->num_dead_tuples_per_array)
 		{
-			ReleaseBuffer(buf);
-			++tupindex;
-			continue;
+			BlockNumber tblk;
+			Buffer		buf;
+			Page		page;
+			Size		freespace;
+
+			vacuum_delay_point();
+
+			tblk = ItemPointerGetBlockNumber(&vacrelstats->dead_tuples[i][tupindex]);
+			buf = ReadBufferExtended(onerel, MAIN_FORKNUM, tblk, RBM_NORMAL,
+									 vac_strategy);
+			if (!ConditionalLockBufferForCleanup(buf))
+			{
+				ReleaseBuffer(buf);
+				++tupindex;
+				continue;
+			}
+			tupindex = lazy_vacuum_page(onerel, tblk, buf, i, tupindex, vacrelstats,
+										&vmbuffer);
+
+			/* Now that we've compacted the page, record its available space */
+			page = BufferGetPage(buf);
+			freespace = PageGetHeapFreeSpace(page);
+
+			UnlockReleaseBuffer(buf);
+			RecordPageWithFreeSpace(onerel, tblk, freespace);
+			npages++;
 		}
-		tupindex = lazy_vacuum_page(onerel, tblk, buf, tupindex, vacrelstats,
-									&vmbuffer);
-
-		/* Now that we've compacted the page, record its available space */
-		page = BufferGetPage(buf);
-		freespace = PageGetHeapFreeSpace(page);
-
-		UnlockReleaseBuffer(buf);
-		RecordPageWithFreeSpace(onerel, tblk, freespace);
-		npages++;
 	}
 
 	if (BufferIsValid(vmbuffer))
@@ -1587,7 +1603,7 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
  */
 static int
 lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
-				 int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer)
+				 int arrindex, int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer)
 {
 	Page		page = BufferGetPage(buffer);
 	OffsetNumber unused[MaxOffsetNumber];
@@ -1599,19 +1615,22 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 
 	START_CRIT_SECTION();
 
-	for (; tupindex < vacrelstats->num_dead_tuples; tupindex++)
+	for (; arrindex < vacrelstats->num_dead_tuples_array; arrindex++)
 	{
-		BlockNumber tblk;
-		OffsetNumber toff;
-		ItemId		itemid;
+		for (; tupindex < vacrelstats->num_dead_tuples_per_array; tupindex++)
+		{
+			BlockNumber tblk;
+			OffsetNumber toff;
+			ItemId		itemid;
 
-		tblk = ItemPointerGetBlockNumber(&vacrelstats->dead_tuples[tupindex]);
-		if (tblk != blkno)
-			break;				/* past end of tuples for this block */
-		toff = ItemPointerGetOffsetNumber(&vacrelstats->dead_tuples[tupindex]);
-		itemid = PageGetItemId(page, toff);
-		ItemIdSetUnused(itemid);
-		unused[uncnt++] = toff;
+			tblk = ItemPointerGetBlockNumber(&vacrelstats->dead_tuples[arrindex][tupindex]);
+			if (tblk != blkno)
+				break;				/* past end of tuples for this block */
+			toff = ItemPointerGetOffsetNumber(&vacrelstats->dead_tuples[arrindex][tupindex]);
+			itemid = PageGetItemId(page, toff);
+			ItemIdSetUnused(itemid);
+			unused[uncnt++] = toff;
+		}
 	}
 
 	PageRepairFragmentation(page);
@@ -2139,11 +2158,10 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
 static void
 lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 {
-	long		maxtuples;
-	int			vac_work_mem = IsAutoVacuumWorkerProcess() &&
+	long        maxtuples;
+	int         vac_work_mem = IsAutoVacuumWorkerProcess() &&
 	autovacuum_work_mem != -1 ?
 	autovacuum_work_mem : maintenance_work_mem;
-
 	if (vacrelstats->useindex)
 	{
 		maxtuples = (vac_work_mem * 1024L) / sizeof(ItemPointerData);
@@ -2162,10 +2180,38 @@ lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 		maxtuples = MaxHeapTuplesPerPage;
 	}
 
+	vacrelstats->num_dead_tuples_array = 0;
 	vacrelstats->num_dead_tuples = 0;
-	vacrelstats->max_dead_tuples = (int) maxtuples;
-	vacrelstats->dead_tuples = (ItemPointer)
-		palloc(maxtuples * sizeof(ItemPointerData));
+	vacrelstats->num_dead_tuples_per_array = 0;
+	vacrelstats->max_dead_tuples_per_array = ceil(maxtuples / MAX_ARRAY_COUNT);
+
+	vacrelstats->max_dead_tuples = maxtuples;
+
+	if (!vacrelstats->dead_tuples)
+		vacrelstats->dead_tuples = palloc(MAX_ARRAY_COUNT * sizeof(ItemPointer));
+}
+
+/*
+ * lazy_space_dealloc - space deallocation decisions for lazy vacuum
+ */
+static void
+lazy_space_dealloc(LVRelStats *vacrelstats)
+{
+	int i;
+
+	for (i = 0; i < vacrelstats->num_dead_tuples_array; i++)
+	{
+		pfree(vacrelstats->dead_tuples[i]);
+		vacrelstats->dead_tuples[i] = NULL;
+	}
+	if (!vacrelstats->dead_tuples)
+	{
+		pfree(vacrelstats->dead_tuples);
+		vacrelstats->dead_tuples = NULL;
+	}
+	vacrelstats->num_dead_tuples_array = 0;
+	vacrelstats->num_dead_tuples = 0;
+	vacrelstats->num_dead_tuples_per_array = 0;
 }
 
 /*
@@ -2180,13 +2226,29 @@ lazy_record_dead_tuple(LVRelStats *vacrelstats,
 	 * could if we are given a really small maintenance_work_mem. In that
 	 * case, just forget the last few tuples (we'll get 'em next time).
 	 */
-	if (vacrelstats->num_dead_tuples < vacrelstats->max_dead_tuples)
+	if (vacrelstats->num_dead_tuples > vacrelstats->max_dead_tuples)
+		return;
+
+	if (vacrelstats->num_dead_tuples_array >= MAX_ARRAY_COUNT)
+		return;
+
+	if ((vacrelstats->num_dead_tuples % vacrelstats->max_dead_tuples_per_array) == 0)
 	{
-		vacrelstats->dead_tuples[vacrelstats->num_dead_tuples] = *itemptr;
+		vacrelstats->num_dead_tuples_per_array = 0;
+		vacrelstats->dead_tuples[vacrelstats->num_dead_tuples_array] =
+									(ItemPointer) palloc(vacrelstats->max_dead_tuples_per_array * sizeof(ItemPointerData));
+
+		vacrelstats->dead_tuples[vacrelstats->num_dead_tuples_array][vacrelstats->num_dead_tuples_per_array++] = *itemptr;
 		vacrelstats->num_dead_tuples++;
-		pgstat_progress_update_param(PROGRESS_VACUUM_NUM_DEAD_TUPLES,
-									 vacrelstats->num_dead_tuples);
+		vacrelstats->num_dead_tuples_array++;
 	}
+	else
+	{
+		vacrelstats->dead_tuples[vacrelstats->num_dead_tuples_array - 1][vacrelstats->num_dead_tuples_per_array++] = *itemptr;
+		vacrelstats->num_dead_tuples++;
+	}
+	pgstat_progress_update_param(PROGRESS_VACUUM_NUM_DEAD_TUPLES,
+									 vacrelstats->num_dead_tuples);
 }
 
 /*
@@ -2201,14 +2263,49 @@ lazy_tid_reaped(ItemPointer itemptr, void *state)
 {
 	LVRelStats *vacrelstats = (LVRelStats *) state;
 	ItemPointer res;
-
-	res = (ItemPointer) bsearch((void *) itemptr,
-								(void *) vacrelstats->dead_tuples,
-								vacrelstats->num_dead_tuples,
-								sizeof(ItemPointerData),
-								vac_cmp_itemptr);
-
+	res = (ItemPointer) pg_bsearch(itemptr,
+									(void**) vacrelstats->dead_tuples,
+									vacrelstats->num_dead_tuples,
+									vacrelstats->max_dead_tuples_per_array,
+									vac_cmp_itemptr);
 	return (res != NULL);
+}
+
+/*
+ * pg_bsearch() -- bsearch algorithem for two dimention array.
+ */
+void *
+pg_bsearch(ItemPointer key, void **base, int num, int li,
+								int (*cmp)(const void *key, const void *elt))
+{
+	ItemPointer pivot;
+	ItemPointer *p = (ItemPointer*)base;
+	int         result;
+	int         n = 0;
+	int         ind = 0;
+	int			i,j,v;
+
+	while (num > 0)
+	{
+		ind = num >> 1;
+
+		v = ind + n;
+		i = v / li;
+		j = v % li;
+
+		pivot =  &p[i][j];
+		result = cmp(key, pivot);
+		if (result == 0)
+			return pivot;
+
+		if (result > 0)
+		{
+			n = ind + n + 1;
+			num--;
+		}
+		num >>= 1;
+	}
+	return NULL;
 }
 
 /*

@@ -20,12 +20,16 @@
 #include "catalog/pg_type.h"
 #include "fmgr.h"
 #include "funcapi.h"
+#include "executor/execExpr.h"
 #include "lib/stringinfo.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "nodes/nodeFuncs.h"
+#include "parser/parse_coerce.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/hsearch.h"
+#include "utils/fmgroids.h"
 #include "utils/json.h"
 #include "utils/jsonapi.h"
 #include "utils/jsonb.h"
@@ -328,6 +332,23 @@ typedef struct JsObject
 			hash_destroy((jso)->val.json_hash); \
 	} while (0)
 
+/* state for assignment of a single subscript */
+typedef struct JsonbSubscriptState
+{
+	bool		exists;			/* does this element exist? */
+	bool		is_array;		/* is it array or object? */
+	int			array_size;		/* size of array */
+	int			array_index;	/* index in array (negative means prepending) */
+} JsonbSubscriptState;
+
+/* state for subscript assignment */
+typedef struct JsonbAssignState
+{
+	JsonbParseState *ps;		/* jsonb building state */
+	JsonbIterator *iter;		/* source jsonb iterator */
+	JsonbSubscriptState subscripts[MAX_SUBSCRIPT_DEPTH + 1]; /* per-subscript states */
+} JsonbAssignState;
+
 /* semantic action functions for json_object_keys */
 static void okeys_object_field_start(void *state, char *fname, bool isnull);
 static void okeys_array_start(void *state);
@@ -457,18 +478,21 @@ static Datum populate_domain(DomainIOData *io, Oid typid, const char *colname,
 /* functions supporting jsonb_delete, jsonb_set and jsonb_concat */
 static JsonbValue *IteratorConcat(JsonbIterator **it1, JsonbIterator **it2,
 								  JsonbParseState **state);
+static Datum jsonb_get_element(Jsonb *jb, Datum *path, int npath,
+							   bool *isnull, bool as_text);
 static JsonbValue *setPath(JsonbIterator **it, Datum *path_elems,
 						   bool *path_nulls, int path_len,
-						   JsonbParseState **st, int level, Jsonb *newval,
+						   JsonbParseState **st, int level, JsonbValue *newval,
 						   int op_type);
 static void setPathObject(JsonbIterator **it, Datum *path_elems,
 						  bool *path_nulls, int path_len, JsonbParseState **st,
-						  int level,
-						  Jsonb *newval, uint32 npairs, int op_type);
+						  int level, JsonbValue *newval, int op_type);
 static void setPathArray(JsonbIterator **it, Datum *path_elems,
 						 bool *path_nulls, int path_len, JsonbParseState **st,
-						 int level, Jsonb *newval, uint32 nelems, int op_type);
-static void addJsonbToParseState(JsonbParseState **jbps, Jsonb *jb);
+						 int level,
+						 JsonbValue *newval, uint32 nelems, int op_type);
+static bool copyJsonbObject(JsonbParseState **st, JsonbIterator **it,
+							const JsonbValue *key);
 
 /* function supporting iterate_json_values */
 static void iterate_values_scalar(void *state, char *token, JsonTokenType tokentype);
@@ -482,6 +506,15 @@ static void transform_string_values_array_end(void *state);
 static void transform_string_values_object_field_start(void *state, char *fname, bool isnull);
 static void transform_string_values_array_element_start(void *state, bool isnull);
 static void transform_string_values_scalar(void *state, char *token, JsonTokenType tokentype);
+
+static SubscriptingRef *jsonb_subscript_prepare(bool isAssignment,
+												SubscriptingRef *sbsref);
+
+static SubscriptingRef *jsonb_subscript_validate(bool isAssignment,
+												 SubscriptingRef *sbsref,
+												 ParseState *pstate);
+static Datum jsonb_subscript_fetch(Datum containerSource, SubscriptingRefState *sbstate);
+static Datum jsonb_subscript_assign(Datum containerSource, SubscriptingRefState *sbstate);
 
 /*
  * SQL function json_object_keys
@@ -787,6 +820,7 @@ jsonb_array_element(PG_FUNCTION_ARGS)
 	Jsonb	   *jb = PG_GETARG_JSONB_P(0);
 	int			element = PG_GETARG_INT32(1);
 	JsonbValue *v;
+	JsonbValue	vbuf;
 
 	if (!JB_ROOT_IS_ARRAY(jb))
 		PG_RETURN_NULL();
@@ -802,7 +836,7 @@ jsonb_array_element(PG_FUNCTION_ARGS)
 			element += nelements;
 	}
 
-	v = getIthJsonbValueFromContainer(&jb->root, element);
+	v = getIthJsonbValueFromContainer(&jb->root, element, &vbuf);
 	if (v != NULL)
 		PG_RETURN_JSONB_P(JsonbValueToJsonb(v));
 
@@ -830,6 +864,7 @@ jsonb_array_element_text(PG_FUNCTION_ARGS)
 	Jsonb	   *jb = PG_GETARG_JSONB_P(0);
 	int			element = PG_GETARG_INT32(1);
 	JsonbValue *v;
+	JsonbValue	vbuf;
 
 	if (!JB_ROOT_IS_ARRAY(jb))
 		PG_RETURN_NULL();
@@ -845,7 +880,7 @@ jsonb_array_element_text(PG_FUNCTION_ARGS)
 			element += nelements;
 	}
 
-	v = getIthJsonbValueFromContainer(&jb->root, element);
+	v = getIthJsonbValueFromContainer(&jb->root, element, &vbuf);
 
 	if (v != NULL && v->type != jbvNull)
 		PG_RETURN_TEXT_P(JsonbValueAsText(v));
@@ -863,6 +898,26 @@ Datum
 json_extract_path_text(PG_FUNCTION_ARGS)
 {
 	return get_path_all(fcinfo, true);
+}
+
+static inline bool
+jsonb_get_array_index_from_cstring(char *indexstr, long *index)
+{
+	char	   *endptr;
+
+	errno = 0;
+	*index = strtol(indexstr, &endptr, 10);
+	if (endptr == indexstr || *endptr != '\0' || errno != 0 ||
+		*index > INT_MAX || *index < INT_MIN)
+		return false;
+
+	return true;
+}
+
+static inline bool
+jsonb_get_array_index_from_text(Datum indextext, long *index)
+{
+	return jsonb_get_array_index_from_cstring(TextDatumGetCString(indextext), index);
 }
 
 /*
@@ -910,11 +965,8 @@ get_path_all(FunctionCallInfo fcinfo, bool as_text)
 		if (*tpath[i] != '\0')
 		{
 			long		ind;
-			char	   *endptr;
 
-			errno = 0;
-			ind = strtol(tpath[i], &endptr, 10);
-			if (*endptr == '\0' && errno == 0 && ind <= INT_MAX && ind >= INT_MIN)
+			if (jsonb_get_array_index_from_cstring(tpath[i], &ind))
 				ipath[i] = (int) ind;
 			else
 				ipath[i] = INT_MIN;
@@ -1328,13 +1380,9 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 	ArrayType  *path = PG_GETARG_ARRAYTYPE_P(1);
 	Datum	   *pathtext;
 	bool	   *pathnulls;
+	bool		isnull;
 	int			npath;
-	int			i;
-	bool		have_object = false,
-				have_array = false;
-	JsonbValue *jbvp = NULL;
-	JsonbValue	jbvbuf;
-	JsonbContainer *container;
+	Datum		res;
 
 	/*
 	 * If the array contains any null elements, return NULL, on the grounds
@@ -1349,19 +1397,402 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 	deconstruct_array(path, TEXTOID, -1, false, 'i',
 					  &pathtext, &pathnulls, &npath);
 
-	/* Identify whether we have object, array, or scalar at top-level */
-	container = &jb->root;
+	res = jsonb_get_element(jb, pathtext, npath, &isnull, as_text);
 
-	if (JB_ROOT_IS_OBJECT(jb))
+	if (isnull)
+		PG_RETURN_NULL();
+	else
+		PG_RETURN_DATUM(res);
+}
+
+/* Initialize private jsonb subscripting state. */
+static void
+jsonb_subscript_init(SubscriptingRefState *sbstate, Datum container, bool isnull)
+{
+	Jsonb	   *jb = isnull ? NULL : DatumGetJsonbP(container);
+
+	if (sbstate->isassignment)
+	{
+		JsonbAssignState *astate = palloc0(sizeof(*astate));
+		JsonbSubscriptState *subscript = &astate->subscripts[0];
+
+		astate->ps = NULL;
+
+		if (jb)
+		{
+			JsonbValue	jbv;
+			JsonbIteratorToken tok;
+
+			astate->iter = JsonbIteratorInit(&jb->root);
+
+			tok = JsonbIteratorNext(&astate->iter, &jbv, false);
+
+			if (tok == WJB_BEGIN_ARRAY)
+			{
+				if (jbv.val.array.rawScalar)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("cannot assign to subscript of scalar jsonb")));
+
+				subscript->is_array = true;
+				subscript->array_size = jbv.val.array.nElems;
+			}
+			else
+				subscript->is_array = false;
+
+			subscript->exists = true;
+		}
+		else
+		{
+			astate->iter = NULL;
+			subscript->exists = false;
+		}
+
+		sbstate->privatedata = astate;
+	}
+	else
+	{
+		JsonbValue *jbv;
+
+		/* Initialize a binary JsonbValue and use it as a private state */
+		if (jb)
+		{
+			jbv = palloc(sizeof(*jbv));
+
+			jbv->type = jbvBinary;
+			jbv->val.binary.data = &jb->root;
+			jbv->val.binary.len = VARSIZE(jb) - VARHDRSZ;
+		}
+		else
+			jbv = NULL;
+
+		sbstate->privatedata = jbv;
+	}
+}
+
+/*
+ * Select subscript expression variant.
+ *
+ * There are two expression variants of jsonb subscripts:
+ *   0th - unmodified expression
+ *   1st - expression casted to int4 (optional, if type is numeric)
+ *
+ * If the current jsonb is an array then we select 1st variant, otherwise
+ * default 0th variant is selected.
+ */
+static int
+jsonb_subscript_selectexpr(SubscriptingRefState *sbstate, int num,
+						   Oid subscriptType, Oid *exprTypes, int nExprs)
+{
+	bool		is_array = false;
+
+	Assert(nExprs == 1);
+	Assert(!OidIsValid(exprTypes[0]) || exprTypes[0] == INT4OID);
+
+	if (sbstate->isassignment)
+	{
+		JsonbAssignState *astate = sbstate->privatedata;
+		JsonbSubscriptState *subscript = &astate->subscripts[num];
+
+		if (!subscript->exists)
+		{
+			/* NULL can be only in assignments, select int4 variant if available. */
+			Assert(sbstate->isassignment);
+
+			subscript->is_array = OidIsValid(exprTypes[0]);
+			subscript->array_size = 0;
+		}
+
+		is_array = subscript->is_array;
+	}
+	else
+	{
+		JsonbValue *jbv = sbstate->privatedata;
+
+		Assert(jbv);
+
+		if (jbv->type == jbvBinary)
+		{
+			JsonbContainer *jbc = jbv->val.binary.data;
+
+			if (JsonContainerIsArray(jbc) && !JsonContainerIsScalar(jbc))
+				is_array = true;
+		}
+	}
+
+	if (is_array && OidIsValid(exprTypes[0]))
+		return 1;
+
+	return 0;
+}
+
+/* Get the integer index from a subscript datum */
+static int32
+jsonb_subscript_get_array_index(Datum value, Oid typid, int num,
+								int arraySize, bool isAssignment)
+{
+	long		lindex;
+
+	if (typid == INT4OID)
+		lindex = DatumGetInt32(value);
+	else if (typid != TEXTOID)
+		elog(ERROR, "invalid jsonb subscript type: %u", typid);
+	else if (!jsonb_get_array_index_from_text(value, &lindex))
+	{
+		if (isAssignment)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+					 errmsg("jsonb array subscript is not an integer: \"%s\"",
+							TextDatumGetCString(value))));
+		return -1;
+	}
+
+	if (lindex >= 0)
+		return lindex;
+	else /* handle negative subscript */
+		return arraySize + lindex;
+}
+
+/* Get the string key from a subscript datum */
+static char *
+jsonb_subscript_get_object_key(Datum value, Oid typid, int *len)
+{
+	if (typid == TEXTOID)
+	{
+		*len = VARSIZE_ANY_EXHDR(value);
+
+		return VARDATA_ANY(value);
+	}
+	else if (typid == INT4OID)
+	{
+		char		*key = DatumGetCString(DirectFunctionCall1(int4out, value));
+
+		*len = strlen(key);
+
+		return key;
+	}
+	else
+	{
+		elog(ERROR, "invalid jsonb subscript type: %u", typid);
+		return NULL;
+	}
+}
+
+/* Apply single susbscript to jsonb container */
+static inline JsonbValue *
+jsonb_subscript_apply(JsonbValue *jbv, Datum subscriptVal, Oid subscriptTypid,
+					  int subscriptIdx)
+{
+	JsonbContainer *jbc;
+
+	if (jbv->type != jbvBinary ||
+		JsonContainerIsScalar(jbv->val.binary.data))
+		return NULL;	/* scalar, extraction yields a null */
+
+	jbc = jbv->val.binary.data;
+
+	if (JsonContainerIsObject(jbc))
+	{
+		int			keylen;
+		char	   *keystr = jsonb_subscript_get_object_key(subscriptVal,
+															subscriptTypid,
+															&keylen);
+
+		return getKeyJsonValueFromContainer(jbc, keystr, keylen, jbv);
+	}
+	else if (JsonContainerIsArray(jbc) && !JsonContainerIsScalar(jbc))
+	{
+		int32		index = jsonb_subscript_get_array_index(subscriptVal,
+															subscriptTypid,
+															subscriptIdx,
+															JsonContainerSize(jbc),
+															false);
+
+		if (index < 0)
+			return NULL;
+
+		return getIthJsonbValueFromContainer(jbc, index, jbv);
+	}
+	else
+	{
+		/* scalar, extraction yields a null */
+		return NULL;
+	}
+}
+
+static void
+push_null_elements(JsonbParseState **ps, int num)
+{
+	JsonbValue	null;
+
+	null.type = jbvNull;
+
+	while (num-- > 0)
+		pushJsonbValue(ps, WJB_ELEM, &null);
+}
+
+/* Perfrom one subscript assignment step */
+static void
+jsonb_subscript_step_assignment(SubscriptingRefState *sbstate, Datum value,
+								Oid typid, int num, bool isupper)
+{
+	JsonbAssignState *astate = sbstate->privatedata;
+	JsonbSubscriptState *subscript = &astate->subscripts[num];
+	JsonbIteratorToken tok;
+	JsonbValue	jbv;
+	bool		last = num >= sbstate->numupper - 1;
+
+	if (!subscript->exists)
+	{
+		/* Select the type of newly created container. */
+		if (typid == INT4OID)
+		{
+			subscript->is_array = true;
+			subscript->array_size = 0;
+		}
+		else if (typid == TEXTOID)
+			subscript->is_array = false;
+		else
+			elog(ERROR, "invalid jsonb subscript type: %u", typid);
+	}
+
+	subscript[1].exists = false;
+
+	if (subscript->is_array)
+	{
+		int32		i = 0;
+		int32		index = jsonb_subscript_get_array_index(value, typid, num,
+															subscript->array_size,
+															true);
+
+		pushJsonbValue(&astate->ps, WJB_BEGIN_ARRAY, NULL);
+
+		subscript->array_index = index;
+
+		if (index >= 0 && subscript->exists)
+		{
+			/* Try to copy preceding elements */
+			for (; i < index; i++)
+			{
+				tok = JsonbIteratorNext(&astate->iter, &jbv, true);
+
+				if (tok != WJB_ELEM)
+					break;
+
+				pushJsonbValue(&astate->ps, tok, &jbv);
+			}
+
+			/* Try to read replaced element */
+			if (i >= index &&
+				JsonbIteratorNext(&astate->iter, &jbv, last) != WJB_END_ARRAY)
+				subscript[1].exists = true;
+		}
+
+		/* Fill the gap before the new element with nulls */
+		if (i < index)
+			push_null_elements(&astate->ps, index - i);
+	}
+	else
+	{
+		JsonbValue	key;
+
+		key.type = jbvString;
+		key.val.string.val = jsonb_subscript_get_object_key(value, typid,
+															&key.val.string.len);
+
+		pushJsonbValue(&astate->ps, WJB_BEGIN_OBJECT, NULL);
+
+		if (subscript->exists &&
+			copyJsonbObject(&astate->ps, &astate->iter, &key))
+		{
+			subscript[1].exists = true;		/* key is found */
+			tok = JsonbIteratorNext(&astate->iter, &jbv, last);
+		}
+
+		pushJsonbValue(&astate->ps, WJB_KEY, &key);
+	}
+
+	/* If the value does exits, process and validate its type. */
+	if (subscript[1].exists)
+	{
+		if (jbv.type == jbvArray)
+		{
+			subscript[1].is_array = true;
+			subscript[1].array_size = jbv.val.array.nElems;
+		}
+		else
+			subscript[1].is_array = false;
+
+		if (!last && IsAJsonbScalar(&jbv))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("cannot assign to subscript of scalar jsonb")));
+	}
+}
+
+/* Perform one subscripting step */
+static bool
+jsonb_subscript_step(SubscriptingRefState *sbstate, int num, bool isupper)
+{
+	Datum		value;
+	Oid			typid;
+
+	if (isupper)
+	{
+		value = sbstate->upperindex[num];
+		typid = sbstate->uppertypid[num];
+	}
+	else
+		elog(ERROR, "jsonb subscript cannot be lower");
+
+	if (sbstate->isassignment)
+	{
+		jsonb_subscript_step_assignment(sbstate, value, typid, num, isupper);
+
+		return true;	/* always process next subscripts */
+	}
+	else
+	{
+		/*
+		 * Perform one subscripting step by applying subscript value to current
+		 * jsonb container and saving the result into private state.
+		 */
+		JsonbValue *jbv = sbstate->privatedata;
+
+		Assert(jbv); 	/* NULL can only be in assignments */
+
+		jbv = jsonb_subscript_apply(jbv, value, typid, num);
+
+		sbstate->privatedata = jbv;
+
+		/* Process next subscripts only if the result is not NULL */
+		return jbv != NULL;
+	}
+}
+
+static Datum
+jsonb_get_element(Jsonb *jb, Datum *path, int npath, bool *isnull, bool as_text)
+{
+	JsonbValue		jbv;
+	JsonbValue	   *jbvp = NULL;
+	JsonbContainer *container = &jb->root;
+	int				i;
+	bool			have_object = false,
+					have_array = false;
+
+	*isnull = false;
+
+	/* Identify whether we have object, array, or scalar at top-level */
+	if (JsonContainerIsObject(container))
 		have_object = true;
-	else if (JB_ROOT_IS_ARRAY(jb) && !JB_ROOT_IS_SCALAR(jb))
+	else if (JsonContainerIsArray(container) && !JsonContainerIsScalar(container))
 		have_array = true;
 	else
 	{
-		Assert(JB_ROOT_IS_ARRAY(jb) && JB_ROOT_IS_SCALAR(jb));
+		Assert(JsonContainerIsArray(container) && JsonContainerIsScalar(container));
 		/* Extract the scalar value, if it is what we'll return */
 		if (npath <= 0)
-			jbvp = getIthJsonbValueFromContainer(container, 0);
+			jbvp = getIthJsonbValueFromContainer(container, 0, &jbv);
 	}
 
 	/*
@@ -1376,7 +1807,7 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 	{
 		if (as_text)
 		{
-			PG_RETURN_TEXT_P(cstring_to_text(JsonbToCString(NULL,
+			return PointerGetDatum(cstring_to_text(JsonbToCString(NULL,
 															container,
 															VARSIZE(jb))));
 		}
@@ -1392,22 +1823,20 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 		if (have_object)
 		{
 			jbvp = getKeyJsonValueFromContainer(container,
-												VARDATA(pathtext[i]),
-												VARSIZE(pathtext[i]) - VARHDRSZ,
-												&jbvbuf);
+												VARDATA(path[i]),
+												VARSIZE(path[i]) - VARHDRSZ,
+												jbvp);
 		}
 		else if (have_array)
 		{
 			long		lindex;
 			uint32		index;
-			char	   *indextext = TextDatumGetCString(pathtext[i]);
-			char	   *endptr;
 
-			errno = 0;
-			lindex = strtol(indextext, &endptr, 10);
-			if (endptr == indextext || *endptr != '\0' || errno != 0 ||
-				lindex > INT_MAX || lindex < INT_MIN)
-				PG_RETURN_NULL();
+			if (!jsonb_get_array_index_from_text(path[i], &lindex))
+			{
+				*isnull = true;
+				return PointerGetDatum(NULL);
+			}
 
 			if (lindex >= 0)
 			{
@@ -1425,21 +1854,28 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 				nelements = JsonContainerSize(container);
 
 				if (-lindex > nelements)
-					PG_RETURN_NULL();
+				{
+					*isnull = true;
+					return PointerGetDatum(NULL);
+				}
 				else
 					index = nelements + lindex;
 			}
 
-			jbvp = getIthJsonbValueFromContainer(container, index);
+			jbvp = getIthJsonbValueFromContainer(container, index, jbvp);
 		}
 		else
 		{
 			/* scalar, extraction yields a null */
-			PG_RETURN_NULL();
+			*isnull = true;
+			return PointerGetDatum(NULL);
 		}
 
 		if (jbvp == NULL)
-			PG_RETURN_NULL();
+		{
+			*isnull = true;
+			return PointerGetDatum(NULL);
+		}
 		else if (i == npath - 1)
 			break;
 
@@ -1461,9 +1897,12 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 	if (as_text)
 	{
 		if (jbvp->type == jbvNull)
-			PG_RETURN_NULL();
+		{
+			*isnull = true;
+			return PointerGetDatum(NULL);
+		}
 
-		PG_RETURN_TEXT_P(JsonbValueAsText(jbvp));
+		return PointerGetDatum(JsonbValueAsText(jbvp));
 	}
 	else
 	{
@@ -4034,58 +4473,6 @@ jsonb_strip_nulls(PG_FUNCTION_ARGS)
 }
 
 /*
- * Add values from the jsonb to the parse state.
- *
- * If the parse state container is an object, the jsonb is pushed as
- * a value, not a key.
- *
- * This needs to be done using an iterator because pushJsonbValue doesn't
- * like getting jbvBinary values, so we can't just push jb as a whole.
- */
-static void
-addJsonbToParseState(JsonbParseState **jbps, Jsonb *jb)
-{
-	JsonbIterator *it;
-	JsonbValue *o = &(*jbps)->contVal;
-	JsonbValue	v;
-	JsonbIteratorToken type;
-
-	it = JsonbIteratorInit(&jb->root);
-
-	Assert(o->type == jbvArray || o->type == jbvObject);
-
-	if (JB_ROOT_IS_SCALAR(jb))
-	{
-		(void) JsonbIteratorNext(&it, &v, false);	/* skip array header */
-		Assert(v.type == jbvArray);
-		(void) JsonbIteratorNext(&it, &v, false);	/* fetch scalar value */
-
-		switch (o->type)
-		{
-			case jbvArray:
-				(void) pushJsonbValue(jbps, WJB_ELEM, &v);
-				break;
-			case jbvObject:
-				(void) pushJsonbValue(jbps, WJB_VALUE, &v);
-				break;
-			default:
-				elog(ERROR, "unexpected parent of nested structure");
-		}
-	}
-	else
-	{
-		while ((type = JsonbIteratorNext(&it, &v, false)) != WJB_DONE)
-		{
-			if (type == WJB_KEY || type == WJB_VALUE || type == WJB_ELEM)
-				(void) pushJsonbValue(jbps, type, &v);
-			else
-				(void) pushJsonbValue(jbps, type, NULL);
-		}
-	}
-
-}
-
-/*
  * SQL function jsonb_pretty (jsonb)
  *
  * Pretty-printed text for the jsonb
@@ -4356,7 +4743,8 @@ jsonb_set(PG_FUNCTION_ARGS)
 {
 	Jsonb	   *in = PG_GETARG_JSONB_P(0);
 	ArrayType  *path = PG_GETARG_ARRAYTYPE_P(1);
-	Jsonb	   *newval = PG_GETARG_JSONB_P(2);
+	Jsonb	   *newjsonb = PG_GETARG_JSONB_P(2);
+	JsonbValue *newval = JsonbToJsonbValue(newjsonb);
 	bool		create = PG_GETARG_BOOL(3);
 	JsonbValue *res = NULL;
 	Datum	   *path_elems;
@@ -4447,7 +4835,8 @@ jsonb_insert(PG_FUNCTION_ARGS)
 {
 	Jsonb	   *in = PG_GETARG_JSONB_P(0);
 	ArrayType  *path = PG_GETARG_ARRAYTYPE_P(1);
-	Jsonb	   *newval = PG_GETARG_JSONB_P(2);
+	Jsonb	   *newjsonb = PG_GETARG_JSONB_P(2);
+	JsonbValue *newval = JsonbToJsonbValue(newjsonb);
 	bool		after = PG_GETARG_BOOL(3);
 	JsonbValue *res = NULL;
 	Datum	   *path_elems;
@@ -4610,7 +4999,7 @@ IteratorConcat(JsonbIterator **it1, JsonbIterator **it2,
 static JsonbValue *
 setPath(JsonbIterator **it, Datum *path_elems,
 		bool *path_nulls, int path_len,
-		JsonbParseState **st, int level, Jsonb *newval, int op_type)
+		JsonbParseState **st, int level, JsonbValue *newval, int op_type)
 {
 	JsonbValue	v;
 	JsonbIteratorToken r;
@@ -4639,10 +5028,8 @@ setPath(JsonbIterator **it, Datum *path_elems,
 		case WJB_BEGIN_OBJECT:
 			(void) pushJsonbValue(st, r, NULL);
 			setPathObject(it, path_elems, path_nulls, path_len, st, level,
-						  newval, v.val.object.nPairs, op_type);
-			r = JsonbIteratorNext(it, &v, true);
-			Assert(r == WJB_END_OBJECT);
-			res = pushJsonbValue(st, r, NULL);
+						  newval, op_type);
+			res = pushJsonbValue(st, WJB_END_OBJECT, NULL);
 			break;
 		case WJB_ELEM:
 		case WJB_VALUE:
@@ -4658,109 +5045,118 @@ setPath(JsonbIterator **it, Datum *path_elems,
 }
 
 /*
+ * Copy object fields, but stop on the desired key if it is specified.
+ *
+ * True is returned if the key was found, otherwise false.
+ */
+static bool
+copyJsonbObject(JsonbParseState **st, JsonbIterator **it, const JsonbValue *key)
+{
+	JsonbIteratorToken r;
+	JsonbValue	keybuf;
+
+	while ((r = JsonbIteratorNext(it, &keybuf, true)) == WJB_KEY)
+	{
+		JsonbValue	val;
+
+		if (key &&
+			key->val.string.len == keybuf.val.string.len &&
+			memcmp(key->val.string.val, keybuf.val.string.val,
+				   key->val.string.len) == 0)
+			return true;	/* stop, key is found */
+
+		(void) pushJsonbValue(st, r, &keybuf);
+
+		/* Copy value */
+		r = JsonbIteratorNext(it, &val, false);
+		(void) pushJsonbValue(st, r, r < WJB_BEGIN_ARRAY ? &val : NULL);
+
+		if (r == WJB_BEGIN_ARRAY || r == WJB_BEGIN_OBJECT)
+		{
+			int			walking_level = 1;
+
+			while (walking_level != 0)
+			{
+				r = JsonbIteratorNext(it, &val, false);
+
+				if (r == WJB_BEGIN_ARRAY || r == WJB_BEGIN_OBJECT)
+					++walking_level;
+				if (r == WJB_END_ARRAY || r == WJB_END_OBJECT)
+					--walking_level;
+
+				(void) pushJsonbValue(st, r, r < WJB_BEGIN_ARRAY ? &val : NULL);
+			}
+		}
+	}
+
+	Assert(r == WJB_END_OBJECT);
+
+	return false;	/* key was not found */
+}
+
+/*
  * Object walker for setPath
  */
 static void
 setPathObject(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 			  int path_len, JsonbParseState **st, int level,
-			  Jsonb *newval, uint32 npairs, int op_type)
+			  JsonbValue *newval, int op_type)
 {
-	JsonbValue	v;
-	int			i;
-	JsonbValue	k;
-	bool		done = false;
+	JsonbValue *key,
+				keybuf,
+				val;
 
 	if (level >= path_len || path_nulls[level])
-		done = true;
-
-	/* empty object is a special case for create */
-	if ((npairs == 0) && (op_type & JB_PATH_CREATE_OR_INSERT) &&
-		(level == path_len - 1))
+		key = NULL;
+	else
 	{
-		JsonbValue	newkey;
-
-		newkey.type = jbvString;
-		newkey.val.string.len = VARSIZE_ANY_EXHDR(path_elems[level]);
-		newkey.val.string.val = VARDATA_ANY(path_elems[level]);
-
-		(void) pushJsonbValue(st, WJB_KEY, &newkey);
-		addJsonbToParseState(st, newval);
+		key = &keybuf;
+		key->type = jbvString;
+		key->val.string.val = VARDATA_ANY(path_elems[level]);
+		key->val.string.len = VARSIZE_ANY_EXHDR(path_elems[level]);
 	}
 
-	for (i = 0; i < npairs; i++)
+	/* Start copying object fields and stop on the desired key. */
+	if (copyJsonbObject(st, it, key))
 	{
-		JsonbIteratorToken r = JsonbIteratorNext(it, &k, true);
-
-		Assert(r == WJB_KEY);
-
-		if (!done &&
-			k.val.string.len == VARSIZE_ANY_EXHDR(path_elems[level]) &&
-			memcmp(k.val.string.val, VARDATA_ANY(path_elems[level]),
-				   k.val.string.len) == 0)
+		/* The desired key was found. */
+		if (level == path_len - 1)
 		{
-			if (level == path_len - 1)
-			{
-				/*
-				 * called from jsonb_insert(), it forbids redefining an
-				 * existing value
-				 */
-				if (op_type & (JB_PATH_INSERT_BEFORE | JB_PATH_INSERT_AFTER))
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-							 errmsg("cannot replace existing key"),
-							 errhint("Try using the function jsonb_set "
-									 "to replace key value.")));
+			/*
+			 * called from jsonb_insert(), it forbids redefining an
+			 * existing value
+			 */
+			if (op_type & (JB_PATH_INSERT_BEFORE | JB_PATH_INSERT_AFTER))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("cannot replace existing key"),
+						 errhint("Try using the function jsonb_set "
+								 "to replace key value.")));
 
-				r = JsonbIteratorNext(it, &v, true);	/* skip value */
-				if (!(op_type & JB_PATH_DELETE))
-				{
-					(void) pushJsonbValue(st, WJB_KEY, &k);
-					addJsonbToParseState(st, newval);
-				}
-				done = true;
-			}
-			else
+			(void) JsonbIteratorNext(it, &val, true);	/* skip value */
+
+			if (!(op_type & JB_PATH_DELETE))
 			{
-				(void) pushJsonbValue(st, r, &k);
-				setPath(it, path_elems, path_nulls, path_len,
-						st, level + 1, newval, op_type);
+				(void) pushJsonbValue(st, WJB_KEY, key);
+				(void) pushJsonbValue(st, WJB_VALUE, newval);
 			}
 		}
 		else
 		{
-			if ((op_type & JB_PATH_CREATE_OR_INSERT) && !done &&
-				level == path_len - 1 && i == npairs - 1)
-			{
-				JsonbValue	newkey;
-
-				newkey.type = jbvString;
-				newkey.val.string.len = VARSIZE_ANY_EXHDR(path_elems[level]);
-				newkey.val.string.val = VARDATA_ANY(path_elems[level]);
-
-				(void) pushJsonbValue(st, WJB_KEY, &newkey);
-				addJsonbToParseState(st, newval);
-			}
-
-			(void) pushJsonbValue(st, r, &k);
-			r = JsonbIteratorNext(it, &v, false);
-			(void) pushJsonbValue(st, r, r < WJB_BEGIN_ARRAY ? &v : NULL);
-			if (r == WJB_BEGIN_ARRAY || r == WJB_BEGIN_OBJECT)
-			{
-				int			walking_level = 1;
-
-				while (walking_level != 0)
-				{
-					r = JsonbIteratorNext(it, &v, false);
-
-					if (r == WJB_BEGIN_ARRAY || r == WJB_BEGIN_OBJECT)
-						++walking_level;
-					if (r == WJB_END_ARRAY || r == WJB_END_OBJECT)
-						--walking_level;
-
-					(void) pushJsonbValue(st, r, r < WJB_BEGIN_ARRAY ? &v : NULL);
-				}
-			}
+			(void) pushJsonbValue(st, WJB_KEY, key);
+			setPath(it, path_elems, path_nulls, path_len, st, level + 1,
+					newval, op_type);
 		}
+
+		/* Copy the remaining fields. */
+		(void) copyJsonbObject(st, it, NULL);
+	}
+	else if (key && (op_type & JB_PATH_CREATE_OR_INSERT) &&
+			 level == path_len - 1)
+	{
+		/* All fields were copied, but the desired key was not found. */
+		(void) pushJsonbValue(st, WJB_KEY, key);
+		(void) pushJsonbValue(st, WJB_VALUE, newval);
 	}
 }
 
@@ -4770,7 +5166,7 @@ setPathObject(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 static void
 setPathArray(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 			 int path_len, JsonbParseState **st, int level,
-			 Jsonb *newval, uint32 nelems, int op_type)
+			 JsonbValue *newval, uint32 nelems, int op_type)
 {
 	JsonbValue	v;
 	int			idx,
@@ -4780,18 +5176,14 @@ setPathArray(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 	/* pick correct index */
 	if (level < path_len && !path_nulls[level])
 	{
-		char	   *c = TextDatumGetCString(path_elems[level]);
 		long		lindex;
-		char	   *badp;
 
-		errno = 0;
-		lindex = strtol(c, &badp, 10);
-		if (errno != 0 || badp == c || *badp != '\0' || lindex > INT_MAX ||
-			lindex < INT_MIN)
+		if (!jsonb_get_array_index_from_text(path_elems[level], &lindex))
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 					 errmsg("path element at position %d is not an integer: \"%s\"",
-							level + 1, c)));
+							level + 1, TextDatumGetCString(path_elems[level]))));
+
 		idx = lindex;
 	}
 	else
@@ -4818,7 +5210,7 @@ setPathArray(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 		(op_type & JB_PATH_CREATE_OR_INSERT))
 	{
 		Assert(newval != NULL);
-		addJsonbToParseState(st, newval);
+		(void) pushJsonbValue(st, WJB_ELEM, newval);
 		done = true;
 	}
 
@@ -4834,7 +5226,7 @@ setPathArray(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 				r = JsonbIteratorNext(it, &v, true);	/* skip */
 
 				if (op_type & (JB_PATH_INSERT_BEFORE | JB_PATH_CREATE))
-					addJsonbToParseState(st, newval);
+					(void) pushJsonbValue(st, WJB_ELEM, newval);
 
 				/*
 				 * We should keep current value only in case of
@@ -4845,7 +5237,7 @@ setPathArray(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 					(void) pushJsonbValue(st, r, &v);
 
 				if (op_type & (JB_PATH_INSERT_AFTER | JB_PATH_REPLACE))
-					addJsonbToParseState(st, newval);
+					(void) pushJsonbValue(st, WJB_ELEM, newval);
 
 				done = true;
 			}
@@ -4879,10 +5271,224 @@ setPathArray(JsonbIterator **it, Datum *path_elems, bool *path_nulls,
 			if ((op_type & JB_PATH_CREATE_OR_INSERT) && !done &&
 				level == path_len - 1 && i == nelems - 1)
 			{
-				addJsonbToParseState(st, newval);
+				(void) pushJsonbValue(st, WJB_ELEM, newval);
 			}
 		}
 	}
+}
+
+/*
+ * Perform an actual data extraction or modification for the jsonb
+ * subscripting. As a result the extracted Datum or the modified containers
+ * value will be returned.
+ */
+Datum
+jsonb_subscript_fetch(Datum containerSource, SubscriptingRefState *sbstate)
+{
+	JsonbValue *jbv = sbstate->privatedata;
+
+	Assert(!sbstate->isassignment);
+
+	return JsonbPGetDatum(JsonbValueToJsonb(jbv));
+}
+
+/*
+ * Perform an actual data extraction or modification for the jsonb
+ * subscripting. As a result the extracted Datum or the modified containers
+ * value will be returned.
+ */
+Datum
+jsonb_subscript_assign(Datum containerSource, SubscriptingRefState *sbstate)
+{
+	JsonbAssignState *astate = sbstate->privatedata;
+	JsonbSubscriptState *subscript = &astate->subscripts[sbstate->numupper - 1];
+	JsonbValue *res = NULL;
+	JsonbValue *newval;
+	JsonbValue jbv;
+	JsonbIteratorToken tok;
+
+	/* If the original jsonb is NULL, we will create a new container. */
+	if (sbstate->resnull)
+		sbstate->resnull = false;
+
+	/* Transform the new value to jsonb */
+	newval = to_jsonb_worker(sbstate->replacevalue, sbstate->refelemtype,
+							 sbstate->replacenull);
+
+	if (newval->type == jbvArray && newval->val.array.rawScalar)
+		*newval = newval->val.array.elems[0];
+
+	/* Push the new value */
+	tok = subscript->is_array ? WJB_ELEM : WJB_VALUE;
+	res = pushJsonbValue(&astate->ps, tok, newval);
+
+	/* Finish unclosed arrays/objects */
+	for (; subscript >= astate->subscripts; subscript--)
+	{
+		/*
+		 * If the element does exists, then all preceding subscripts must exist
+		 * and the iterator may contain remaining elements.  So we need to
+		 * switch to copying from the iterator now.
+		 */
+		if (subscript[1].exists)
+			break;
+
+		if (subscript->is_array && subscript->array_index < 0)
+		{
+			/* Fill the gap between prepended element and 0th element */
+			if (subscript->array_index < -1)
+				push_null_elements(&astate->ps, -1 - subscript->array_index);
+
+			if (subscript->exists)
+				break;	/* original elements are copied from the iterator */
+		}
+
+		tok = subscript->is_array ? WJB_END_ARRAY : WJB_END_OBJECT;
+		res = pushJsonbValue(&astate->ps, tok, NULL);
+	}
+
+	/* Copy remaining elements from the iterator */
+	while ((tok = JsonbIteratorNext(&astate->iter, &jbv, false)) != WJB_DONE)
+		res = pushJsonbValue(&astate->ps, tok, tok < WJB_BEGIN_ARRAY ? &jbv : NULL);
+
+	return JsonbPGetDatum(JsonbValueToJsonb(res));
+}
+
+/*
+ * Perform preparation for the jsonb subscripting. Since there are not any
+ * particular restrictions for this kind of subscripting, we will verify that
+ * it is not a slice operation. This function produces an expression that
+ * represents the result of extracting a single container element or the new
+ * container value with the source data inserted into the right part of the
+ * container. If you have read until this point, and will submit a meaningful
+ * review of this patch series, I'll owe you a beer at the next PGConfEU.
+ */
+
+/*
+ * Handle jsonb-type subscripting logic.
+ */
+Datum
+jsonb_subscript_handler(PG_FUNCTION_ARGS)
+{
+	SubscriptRoutines *sbsroutines = (SubscriptRoutines *)
+		palloc0(sizeof(SubscriptRoutines));
+
+	sbsroutines->prepare = jsonb_subscript_prepare;
+	sbsroutines->validate = jsonb_subscript_validate;
+	sbsroutines->fetch = jsonb_subscript_fetch;
+	sbsroutines->assign = jsonb_subscript_assign;
+	sbsroutines->init = jsonb_subscript_init;
+	sbsroutines->step = jsonb_subscript_step;
+	sbsroutines->selectexpr = jsonb_subscript_selectexpr;
+
+	PG_RETURN_POINTER(sbsroutines);
+}
+
+SubscriptingRef *
+jsonb_subscript_prepare(bool isAssignment, SubscriptingRef *sbsref)
+{
+	if (isAssignment)
+	{
+		sbsref->refelemtype = exprType((Node *) sbsref->refassgnexpr);
+		sbsref->refassgntype = exprType((Node *) sbsref->refassgnexpr);
+	}
+	else
+		sbsref->refelemtype = JSONBOID;
+
+	return sbsref;
+}
+
+SubscriptingRef *
+jsonb_subscript_validate(bool isAssignment, SubscriptingRef *sbsref,
+						 ParseState *pstate)
+{
+	List	   *upperIndexpr = NIL;
+	ListCell   *l;
+
+	if (sbsref->reflowerindexpr != NIL)
+	{
+		Node	   *slice = NULL;
+
+		/* Try to find first non-NULL lower subscript */
+		foreach(l, sbsref->reflowerindexpr)
+		{
+			if (lfirst(l) != NULL)
+			{
+				slice = (Node *) lfirst(l);
+				break;
+			}
+		}
+
+		ereport(ERROR,
+				(errcode(ERRCODE_DATATYPE_MISMATCH),
+				 errmsg("jsonb subscript does not support slices"),
+				 parser_errposition(pstate, exprLocation(slice))));
+	}
+
+	foreach(l, sbsref->refupperindexpr)
+	{
+		Node	   *subexpr = (Node *) lfirst(l);
+		Node	   *textexpr;
+		Node	   *intexpr;
+		Oid			subexprType;
+		char		typcategory;
+		bool		typispreferred;
+
+		if (subexpr == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("jsonb subscript does not support slices"),
+					 parser_errposition(pstate, exprLocation(
+						((Node *) linitial(sbsref->refupperindexpr))))));
+
+		subexprType = exprType(subexpr);
+
+		textexpr = coerce_to_target_type(pstate,
+										 subexpr, subexprType,
+										 TEXTOID, -1,
+										 COERCION_ASSIGNMENT,
+										 COERCE_IMPLICIT_CAST,
+										 -1);
+
+		if (textexpr == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("jsonb subscript must have %s type", "text"),
+					 parser_errposition(pstate, exprLocation(subexpr))));
+
+		/* Try to coerce numeric types to int4 for array subscripting. */
+		get_type_category_preferred(subexprType, &typcategory, &typispreferred);
+
+		if (typcategory == TYPCATEGORY_NUMERIC)
+		{
+			intexpr = coerce_to_target_type(pstate,
+											subexpr, subexprType,
+											INT4OID, -1,
+											COERCION_ASSIGNMENT,
+											COERCE_IMPLICIT_CAST,
+											-1);
+
+			if (intexpr &&
+				(subexprType == INT4OID ||
+				 subexprType == INT2OID))
+				textexpr = NULL;
+		}
+		else
+			intexpr = NULL;
+
+		/*
+		 * If int4 expression variant exists, create a list with both text and
+		 * int4 variants.
+		 */
+		subexpr = textexpr && intexpr ? (Node *) list_make2(textexpr, intexpr) :
+			textexpr ? textexpr : intexpr;
+
+		upperIndexpr = lappend(upperIndexpr, subexpr);
+	}
+
+	sbsref->refupperindexpr = upperIndexpr;
+
+	return sbsref;
 }
 
 /*

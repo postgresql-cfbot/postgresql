@@ -1896,6 +1896,173 @@ include_dir 'conf.d'
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="guc-seccomp" xreflabel="seccomp">
+      <term><varname>seccomp</varname> (<type>bool</type>)
+      <indexterm>
+       <primary><varname>seccomp</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        <varname>seccomp</varname> turns on or off seccomp syscall enforcement.
+        This parameter can only be set at server start. The default value is
+        <literal>off</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-global-syscall-default" xreflabel="global_syscall_default">
+      <term><varname>global_syscall_default</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>global_syscall_default</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        <varname>global_syscall_default</varname> determines the default action taken by
+        kernel seccomp enforcement. It is applied to the postmaster and inherited by
+        all child processes.
+       </para>
+
+       <para>
+        Valid values are as follows in increasing precedence order.
+        The default value is <literal>allow</literal>, which allows all
+        syscalls not in a specific action list without any action including logging.
+        A value of <literal>log</literal> turns on seccomp enforcement
+        in log-only mode. In this mode, disallowed kernel syscalls are logged by auditd
+        to the audit log. When set to <literal>error</literal>, disallowed kernel syscalls
+        will return with a permission denied error. Finally, <literal>kill</literal> will
+        cause the offending process to be killed as though by a
+        <literal>SIGSYS</literal> signal.
+       </para>
+
+       <para>
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-session-syscall-default" xreflabel="session_syscall_default">
+      <term><varname>session_syscall_default</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>session_syscall_default</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        <varname>session_syscall_default</varname> helps determine the default action taken
+        by kernel seccomp enforcement. It is applied to client backend sessions. The
+        effective value is the either this setting or that of the postmaster,
+        <varname>global_syscall_default</varname>, whichever has the higher precedence.
+       </para>
+
+       <para>
+        Valid values are the same as those for <varname>global_syscall_default</varname>.
+       </para>
+
+       <para>
+        This parameter can be set by the superuser, however new values only take effect
+        at session start. This makes it possible to customize sessions with the
+        <command>ALTER ROLE SET</command>. For example, a specific role might have it
+        set to <literal>error</literal> with a restrictive session allow list
+        (<varname>session_syscall_allow</varname>), while other roles have it set to
+        <literal>allow</literal>, assuming <varname>global_syscall_default</varname>
+        is also set to <literal>allow</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-global-syscall-lists" xreflabel="global_syscall_lists">
+      <term><varname>global_syscall_allow</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>global_syscall_allow</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <term><varname>global_syscall_log</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>global_syscall_log</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <term><varname>global_syscall_error</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>global_syscall_error</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <term><varname>global_syscall_kill</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>global_syscall_kill</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+
+      <listitem>
+       <para>
+        These four configuration parameters are lists of kernel syscalls to be given
+        allow, log, error, and kill action rules in the global (postmaster) seccomp
+        filter. They are also inherited by all child processes. Any syscall not explicitly
+        enumerated in one of these lists will have an action as determined by the
+        <varname>global_syscall_default</varname> setting. This parameter can only be set
+        at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-session-syscall-lists" xreflabel="session_syscall_lists">
+      <term><varname>session_syscall_allow</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>session_syscall_allow</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <term><varname>session_syscall_log</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>session_syscall_log</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <term><varname>session_syscall_error</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>session_syscall_error</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <term><varname>session_syscall_kill</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>session_syscall_kill</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+
+      <listitem>
+       <para>
+        These four configuration parameters are lists of kernel syscalls to be given
+        allow, log, error, and kill action rules in the client session backend seccomp
+        filter. Any syscall not explicitly enumerated in one of these lists will have
+        a session filter action as determined by the <varname>session_syscall_default</varname>
+        setting. The actual effective action for any given syscall is the highest
+        precedence action, for that syscall, from either the session filter or the
+        global filter. This setting takes effect on session start and may not be
+        changed once a session is established.
+       </para>
+
+       <para>
+        The intent of this feature is to allow further restriction of the syscalls
+        available in an interactive user session. It is also possible to customize
+        sessions with the <command>ALTER ROLE SET</command>. For example, a specific
+        role might be allowed to use the necessary syscalls to enable an untrusted
+        procedural-language function to execute arbitrary system commands, while
+        other roles are denied that permission.
+       </para>
+
+       <para>
+        These lists may also be set to the single character <literal>'*'</literal>.
+        When set this way, the corresponding action global list is used without
+        modification.
+       </para>
+
+       <para>
+        This parameter can be changed without restarting the server, but changes only
+        take effect when a new session is started.
+       </para>
+
+      </listitem>
+     </varlistentry>
      </variablelist>
     </sect2>
 

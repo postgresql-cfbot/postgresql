@@ -26,6 +26,7 @@
 #include <signal.h>
 
 #include "datatype/timestamp.h" /* for TimestampTz */
+#include "nodes/bitmapset.h"	/* for seccomp */
 #include "pgtime.h"				/* for pg_time_t */
 
 
@@ -331,6 +332,8 @@ extern void ChangeToDataDir(void);
 extern void SwitchToSharedLatch(void);
 extern void SwitchBackToLocalLatch(void);
 
+extern bool load_seccomp_filter(char *context);
+
 /* in utils/misc/superuser.c */
 extern bool superuser(void);	/* current user is superuser */
 extern bool superuser_arg(Oid roleid);	/* given user is superuser */
@@ -444,6 +447,36 @@ extern void process_shared_preload_libraries(void);
 extern void process_session_preload_libraries(void);
 extern void pg_bindtextdomain(const char *domain);
 extern bool has_rolreplication(Oid roleid);
+
+typedef struct seccomp_filter
+{
+	char		   *source;
+	int				def;
+	const char	   *def_str;
+	Bitmapset	   *allow;
+	Bitmapset	   *log;
+	Bitmapset	   *error;
+	Bitmapset	   *kill;
+} seccomp_filter;
+extern seccomp_filter *global_filter;
+extern seccomp_filter *session_filter;
+extern bool seccomp_enabled;
+extern int global_syscall_default;
+extern int session_syscall_default;
+extern char *global_syscall_allow_string;
+extern char *global_syscall_log_string;
+extern char *global_syscall_error_string;
+extern char *global_syscall_kill_string;
+extern char *session_syscall_allow_string;
+extern char *session_syscall_log_string;
+extern char *session_syscall_error_string;
+extern char *session_syscall_kill_string;
+/* seccomp enforce actions in increasing order of precedence */
+#define PG_SECCOMP_ALLOW    0  /* allow */
+#define PG_SECCOMP_LOG      1  /* log */
+#define PG_SECCOMP_ERROR    2  /* permission denied error */
+#define PG_SECCOMP_KILL     3  /* kill process */
+
 
 /* in access/transam/xlog.c */
 extern bool BackupInProgress(void);

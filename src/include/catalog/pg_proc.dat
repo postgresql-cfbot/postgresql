@@ -10703,6 +10703,13 @@
   proallargtypes => '{oid,text,int8,timestamptz}', proargmodes => '{i,o,o,o}',
   proargnames => '{tablespace,name,size,modification}',
   prosrc => 'pg_ls_tmpdir_1arg' },
+{ oid => '8657', descr => 'get current effective seccomp filter actions',
+  proname => 'pg_get_seccomp_filter', prorows => '100', proretset => 't',
+  provolatile => 's', proparallel => 'r', prorettype => 'record',
+  proargtypes => '', proallargtypes => '{text,int4,text,text}',
+  proargmodes => '{o,o,o,o}',
+  proargnames => '{syscall,syscallnum,filter_action,context}',
+  prosrc => 'pg_get_seccomp_filter' },
 
 # hash partitioning constraint function
 { oid => '5028', descr => 'hash partition CHECK constraint',

@@ -358,6 +358,9 @@
 /* Define if you have a function readline library */
 #undef HAVE_LIBREADLINE
 
+/* Define to 1 if you have the `seccomp' library (-lseccomp). */
+#undef HAVE_LIBSECCOMP
+
 /* Define to 1 if you have the `selinux' library (-lselinux). */
 #undef HAVE_LIBSELINUX
 
@@ -915,6 +918,9 @@
 
 /* Define to 1 to build with PAM support. (--with-pam) */
 #undef USE_PAM
+
+/* Define to 1 to build with seccomp support. (--with-seccomp) */
+#undef USE_SECCOMP
 
 /* Define to 1 to use software CRC-32C implementation (slicing-by-8). */
 #undef USE_SLICING_BY_8_CRC32C

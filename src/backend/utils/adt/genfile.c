@@ -15,6 +15,9 @@
  */
 #include "postgres.h"
 
+#ifdef USE_SECCOMP
+#include <seccomp.h>
+#endif
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -28,12 +31,16 @@
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "nodes/bitmapset.h"
 #include "postmaster/syslogger.h"
 #include "storage/fd.h"
 #include "utils/builtins.h"
+#include "utils/guc.h"
+#include "utils/hsearch.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
+#include "utils/varlena.h"
 
 typedef struct
 {
@@ -668,4 +675,439 @@ Datum
 pg_ls_archive_statusdir(PG_FUNCTION_ARGS)
 {
 	return pg_ls_dir_files(fcinfo, XLOGDIR "/archive_status", true);
+}
+
+#define NUM_SECCOMP_FILTER_ATTS		4
+#define NUM_SECCOMP_RULES			400
+
+#ifdef USE_SECCOMP
+typedef struct seccomp_rule
+{
+	int			syscallnum;		/* syscall number */
+	char	   *syscall;		/* syscall name string */
+	int			rule_action;	/* action level for this rule */
+	char	   *source;			/* filter source for this rule */
+} seccomp_rule;
+
+typedef struct seccompHashEntry
+{
+        int					syscallnum;
+        seccomp_rule	   *scr_entry;
+} seccompHashEntry;
+
+extern const struct config_enum_entry seccomp_options[];
+
+static void
+init_hash_from_bitmap(Bitmapset *A, int raction, char *source,
+					  HTAB *seccompHash)
+{
+	bool				found;
+	int					syscallnum;
+	char			   *cursyscall;
+	seccompHashEntry   *hentry;
+
+	syscallnum = -1;
+	while ((syscallnum = bms_next_member(A, syscallnum)) >= 0)
+	{
+		seccomp_rule   *scr = palloc(sizeof(seccomp_rule));
+
+		scr->syscallnum = syscallnum;
+
+		/*
+		 * Resolver returns NULL on error. Given how we got here that
+		 * should never happen. We must free() the result to avoid leakage.
+		 */
+		cursyscall =  seccomp_syscall_resolve_num_arch(seccomp_arch_native(),
+													   syscallnum);
+		if (cursyscall)
+		{
+			scr->syscall = pstrdup(cursyscall);
+			free(cursyscall);
+		}
+		scr->rule_action = raction;
+		scr->source = source;
+
+		hentry = (seccompHashEntry *) hash_search(seccompHash,
+												  (const void *) &syscallnum,
+												  HASH_ENTER, &found);
+
+		/* should not happen */
+		if (found)
+			elog(ERROR, "duplicate syscall entry found: source \"%s\"",
+						 source);
+
+		hentry->syscallnum = syscallnum;
+		hentry->scr_entry = scr;
+	}
+}
+
+static void
+ovly_hash_from_bitmap(Bitmapset *A, int raction, char *gsource,
+					  int sdef, char *ssource, HTAB *seccompHash)
+{
+	bool				found;
+	int					syscallnum;
+	char			   *cursyscall;
+	seccompHashEntry   *hentry;
+
+	syscallnum = -1;
+	while ((syscallnum = bms_next_member(A, syscallnum)) >= 0)
+	{
+		seccomp_rule   *scr;
+
+		hentry = (seccompHashEntry *) hash_search(seccompHash,
+												  (const void *) &syscallnum,
+												  HASH_ENTER, &found);
+
+		/*
+		 * If an entry does not exist, we can just add it. However,
+		 * the default action from the session still wins if it takes
+		 * precedence over that of the global rule.
+		 *
+		 * If an entry does exist, we must determine whether the new
+		 * rule precedence overrides the old one.
+		 */
+		if (!found)
+		{
+			scr = palloc(sizeof(seccomp_rule));
+			scr->syscallnum = syscallnum;
+
+			/*
+			 * Resolver returns NULL on error. Given how we got here that
+			 * should never happen. We must free() the result to avoid leakage.
+			 */
+			cursyscall =  seccomp_syscall_resolve_num_arch(seccomp_arch_native(),
+														   syscallnum);
+			if (cursyscall)
+			{
+				scr->syscall = pstrdup(cursyscall);
+				free(cursyscall);
+			}
+			if (raction > sdef)
+			{
+				scr->rule_action = raction;
+				scr->source = gsource;
+			}
+			else
+			{
+				scr->rule_action = sdef;
+				scr->source = ssource;
+			}
+
+			hentry->syscallnum = syscallnum;
+			hentry->scr_entry = scr;
+		}
+		else
+		{
+			/* determine if adjustment is necessary */
+			scr = hentry->scr_entry;
+			if (raction > scr->rule_action)
+			{
+				/* new rule takes precedence */
+				scr->rule_action = raction;
+				scr->source = gsource;
+			}
+		}
+	}
+}
+
+static void
+ovly_hash_from_default(Bitmapset *A, int raction, char *source,
+					  HTAB *seccompHash)
+{
+	bool				found;
+	int					syscallnum;
+	seccompHashEntry   *hentry;
+
+	syscallnum = -1;
+	while ((syscallnum = bms_next_member(A, syscallnum)) >= 0)
+	{
+		seccomp_rule   *scr;
+
+		hentry = (seccompHashEntry *) hash_search(seccompHash,
+												  (const void *) &syscallnum,
+												  HASH_ENTER, &found);
+
+		/*
+		 * If an entry does not already exist at this point, something
+		 * odd is amiss. Should not happen.
+		 */
+		if (!found)
+			elog(ERROR, "failed to find expected session filter syscall " \
+						"entry: syscall number %d", syscallnum);
+		else
+		{
+			/* determine if adjustment is necessary */
+			scr = hentry->scr_entry;
+			if (raction > scr->rule_action)
+			{
+				/* new rule takes precedence */
+				scr->rule_action = raction;
+				scr->source = source;
+			}
+		}
+	}
+}
+
+static const char *
+get_seccomp_opt_str(int val)
+{
+	const struct config_enum_entry *entry;
+
+	/* stringify the enforcement action levels */
+	for (entry = seccomp_options; entry->name; entry++)
+		if (entry->val == val)
+			return entry->name;
+
+	return "unknown";
+}
+
+static void
+put_global_rules(Bitmapset *A, int raction, char *source,
+				 TupleDesc tupdesc, Tuplestorestate *tupstore)
+{
+	int					syscallnum;
+
+	syscallnum = -1;
+	while ((syscallnum = bms_next_member(A, syscallnum)) >= 0)
+	{
+		Datum				values[NUM_SECCOMP_FILTER_ATTS];
+		bool				nulls[NUM_SECCOMP_FILTER_ATTS];
+		char			   *cursyscall;
+
+		memset(values, 0, sizeof(values));
+		memset(nulls, 0, sizeof(nulls));
+
+		/*
+		 * Resolver returns NULL on error. Given how we got here that
+		 * should never happen. We must free() the result to avoid leakage.
+		 */
+		cursyscall =  seccomp_syscall_resolve_num_arch(seccomp_arch_native(),
+													   syscallnum);
+		if (cursyscall)
+		{
+			char	   *buf;
+
+			values[0] = PointerGetDatum(cstring_to_text(cursyscall));
+			free(cursyscall);
+
+			values[1] = Int32GetDatum(syscallnum);
+
+			buf = psprintf("%s->%s", source, get_seccomp_opt_str(raction));
+			values[2] = PointerGetDatum(cstring_to_text(buf));
+
+			values[3] = PointerGetDatum(cstring_to_text("global"));
+
+			/* shove row into tuplestore */
+			tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+		}
+	}
+}
+#endif /* USE_SECCOMP */
+
+Datum
+pg_get_seccomp_filter(PG_FUNCTION_ARGS)
+{
+#ifdef USE_SECCOMP
+	seccomp_filter	   *g = global_filter;
+	seccomp_filter	   *s = session_filter;
+	HASHCTL         	ctl;
+	HTAB			   *seccompHash = NULL;
+	seccompHashEntry   *hentry;
+	seccomp_rule	   *scr = palloc(sizeof(seccomp_rule));
+	HASH_SEQ_STATUS		status;
+	int					syscallnum;
+	char			   *gsource = "global";
+	char			   *ssource = "session";
+ 	int					gdef = g->def;
+ 	int					sdef = s->def;
+ 	int					mdef = (gdef > sdef) ? gdef : sdef;
+ 	char			   *msource = (gdef > sdef) ? gsource : ssource;
+	Bitmapset		   *gunion = NULL;
+	Bitmapset		   *sunion = NULL;
+	char			   *buf;
+	Datum				values[NUM_SECCOMP_FILTER_ATTS];
+	bool				nulls[NUM_SECCOMP_FILTER_ATTS];
+#endif
+	ReturnSetInfo	   *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc			tupdesc;
+	Tuplestorestate	   *tupstore;
+	MemoryContext		per_query_ctx;
+	MemoryContext		oldcontext;
+
+	/* Check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not " \
+						"allowed in this context")));
+
+	/* Switch into long-lived context to construct returned data structures */
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	/* Build a tuple descriptor for our result type */
+	/* need a tuple descriptor representing three TEXT columns */
+	tupdesc = CreateTemplateTupleDesc(NUM_SECCOMP_FILTER_ATTS);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "syscall",
+					   TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "syscallnum",
+					   INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "filter_action",
+					   TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "context",
+					   TEXTOID, -1, 0);
+
+	/* Build a tuplestore to return our results in */
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+#ifdef USE_SECCOMP
+
+	/*
+	 * We need to iterate through 4 bitmap sets each, across two filters
+	 * (global and session), applying the below logic, in order to
+	 * determine which action applies to what syscall. The most
+	 * straighforward way to do that seems to be to build a hash
+	 * table since the two filter sets may overlap, and the syscall
+	 * numbers may vary with architecture.
+	 *
+	 * The aforementioned logic is:
+	 * 1. The most recently installed filter is evaluated first (session)
+	 * 2. For a given filter, each syscall action is either the action
+	 *    value given in a syscall-specific rule, or the default action. 
+	 * 3. For any given syscall, the "first-seen action value of highest
+	 *    precedence" is applied. The precedence in order of high-to-low
+	 *    is: kill, error, log, allow.
+	 *
+	 * There are four combinations of the possible sets of rules to
+	 * consider:
+	 * g - global (postmaster)
+	 * s - session (backend)
+	 *
+	 * C1. Intersection of g + s
+	 * C2. In g, not in s
+	 * C3. In s, not in g
+	 * C4. Not in g or s
+	 *
+	 * C1 and C2 are handled by init_hash_from_bitmap()
+	 * and ovly_hash_from_bitmap(). C3 is handled by
+	 * ovly_hash_from_default(). C4 is covered by the final
+	 * "<default>" entry in the hash table.
+	 */
+	memset(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(int);
+	ctl.entrysize = sizeof(seccompHashEntry);
+	seccompHash = hash_create("syscall rules", NUM_SECCOMP_RULES,
+							  &ctl, HASH_ELEM | HASH_BLOBS);
+
+	/*
+	 * Build up the hash table initially from the session filter.
+	 * We ensured no overlap of syscalls within a given filter in
+	 * load_seccomp_filter(), so it should be safe to just add
+	 * all the syscall numbers found in the 4 bitmap sets.
+	 */
+	init_hash_from_bitmap(s->kill, PG_SECCOMP_KILL, ssource, seccompHash);
+	init_hash_from_bitmap(s->error, PG_SECCOMP_ERROR, ssource, seccompHash);
+	init_hash_from_bitmap(s->log, PG_SECCOMP_LOG, ssource, seccompHash);
+	init_hash_from_bitmap(s->allow, PG_SECCOMP_ALLOW, ssource, seccompHash);
+
+	/*
+	 * Now overlay the global filter. Again we ensured no overlap
+	 * of syscalls within this filter in load_seccomp_filter(),
+	 * so it should be safe to just overlay all the syscall numbers
+	 * found in the 4 global bitmap sets.
+	 */
+	ovly_hash_from_bitmap(g->kill, PG_SECCOMP_KILL, gsource,
+						  sdef, ssource, seccompHash);
+	ovly_hash_from_bitmap(g->error, PG_SECCOMP_ERROR, gsource,
+						  sdef, ssource, seccompHash);
+	ovly_hash_from_bitmap(g->log, PG_SECCOMP_LOG, gsource,
+						  sdef, ssource, seccompHash);
+	ovly_hash_from_bitmap(g->allow, PG_SECCOMP_ALLOW, gsource,
+						  sdef, ssource, seccompHash);
+
+	/*
+	 * If rules from the session filter are not also explicitly
+	 * in the global filter, they must be compared against, and
+	 * possibly adjusted to, the global default action.
+	 */
+	gunion = bms_union(bms_union(bms_union(g->kill, g->error), g->log),
+					   g->allow);
+	sunion = bms_union(bms_union(bms_union(s->kill, s->error), s->log),
+					   s->allow);
+	ovly_hash_from_default(bms_difference(sunion, gunion),
+						   gdef, gsource, seccompHash);
+
+	/* create entry for the session default rule */
+	scr->syscallnum = -1;
+	scr->syscall = "<default>";
+	scr->rule_action = mdef;
+	scr->source = msource;
+	hentry = (seccompHashEntry *) hash_search(seccompHash,
+											  (const void *) &syscallnum,
+											  HASH_ENTER, NULL);
+	hentry->syscallnum = syscallnum;
+	hentry->scr_entry = scr;
+
+	/* Process the "session" results and fill the tuplestore */
+	hash_seq_init(&status, seccompHash);
+
+	while ((hentry = (seccompHashEntry *) hash_seq_search(&status)) != NULL)
+	{
+		char	   *buf;
+
+		memset(values, 0, sizeof(values));
+		memset(nulls, 0, sizeof(nulls));
+
+		scr = hentry->scr_entry;
+		buf = psprintf("%s->%s", scr->source,
+								 get_seccomp_opt_str(scr->rule_action));
+
+		values[0] = PointerGetDatum(cstring_to_text(scr->syscall));
+		values[1] = Int32GetDatum(scr->syscallnum);
+		values[2] = PointerGetDatum(cstring_to_text(buf));
+		values[3] = PointerGetDatum(cstring_to_text("session"));
+
+		/* shove row into tuplestore */
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	/*
+	 * Add rows for the "global" context. This is far simpler, since
+	 * we can simply iterate through the global bitmaps and do not
+	 * need to take care for rule precedence, etc., due to there
+	 * only being one filter (that we know about in any case).
+	 */
+	put_global_rules(g->kill, PG_SECCOMP_KILL, gsource, tupdesc, tupstore);
+	put_global_rules(g->error, PG_SECCOMP_ERROR, gsource, tupdesc, tupstore);
+	put_global_rules(g->log, PG_SECCOMP_LOG, gsource, tupdesc, tupstore);
+	put_global_rules(g->allow, PG_SECCOMP_ALLOW, gsource, tupdesc, tupstore);
+
+	/* create entry for the global default rule */
+	values[0] = PointerGetDatum(cstring_to_text("<default>"));
+	values[1] = Int32GetDatum(-1);
+
+	buf = psprintf("%s->%s", gsource, get_seccomp_opt_str(gdef));
+	values[2] = PointerGetDatum(cstring_to_text(buf));
+
+	values[3] = PointerGetDatum(cstring_to_text("global"));
+
+	/* shove row into tuplestore */
+	tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+
+#endif	/* USE_SECCOMP */
+
+	tuplestore_donestoring(tupstore);
+
+	/* Reset context */
+	MemoryContextSwitchTo(oldcontext);
+
+	return (Datum) 0;
 }

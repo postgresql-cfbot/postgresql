@@ -2066,6 +2066,7 @@ eqjoinsel(PG_FUNCTION_ARGS)
 		case JOIN_INNER:
 		case JOIN_LEFT:
 		case JOIN_FULL:
+		case JOIN_TEMPORAL_NORMALIZE:
 			selec = selec_inner;
 			break;
 		case JOIN_SEMI:

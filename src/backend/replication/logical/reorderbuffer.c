@@ -1023,11 +1023,6 @@ ReorderBufferIterTXNInit(ReorderBuffer *rb, ReorderBufferTXN *txn)
 			nr_txns++;
 	}
 
-	/*
-	 * TODO: Consider adding fastpath for the rather common nr_txns=1 case, no
-	 * need to allocate/build a heap then.
-	 */
-
 	/* allocate iteration state */
 	state = (ReorderBufferIterTXNState *)
 		MemoryContextAllocZero(rb->context,
@@ -1043,10 +1038,11 @@ ReorderBufferIterTXNInit(ReorderBuffer *rb, ReorderBufferTXN *txn)
 		state->entries[off].segno = 0;
 	}
 
-	/* allocate heap */
-	state->heap = binaryheap_allocate(state->nr_txns,
-									  ReorderBufferIterCompare,
-									  state);
+	/* allocate heap, if we have more than one transaction. */
+	if (nr_txns > 1)
+		state->heap = binaryheap_allocate(state->nr_txns,
+										  ReorderBufferIterCompare,
+										  state);
 
 	/*
 	 * Now insert items into the binary heap, in an unordered fashion.  (We
@@ -1075,7 +1071,9 @@ ReorderBufferIterTXNInit(ReorderBuffer *rb, ReorderBufferTXN *txn)
 		state->entries[off].change = cur_change;
 		state->entries[off].txn = txn;
 
-		binaryheap_add_unordered(state->heap, Int32GetDatum(off++));
+		/* add to heap, only if we have more than one transaction. */
+		if (nr_txns > 1)
+			binaryheap_add_unordered(state->heap, Int32GetDatum(off++));
 	}
 
 	/* add subtransactions if they contain changes */
@@ -1104,12 +1102,15 @@ ReorderBufferIterTXNInit(ReorderBuffer *rb, ReorderBufferTXN *txn)
 			state->entries[off].change = cur_change;
 			state->entries[off].txn = cur_txn;
 
-			binaryheap_add_unordered(state->heap, Int32GetDatum(off++));
+			/* add to heap, only if we have more than one transaction. */
+			if (nr_txns > 1)
+				binaryheap_add_unordered(state->heap, Int32GetDatum(off++));
 		}
 	}
 
 	/* assemble a valid binary heap */
-	binaryheap_build(state->heap);
+	if (nr_txns > 1)
+		binaryheap_build(state->heap);
 
 	return state;
 }
@@ -1127,11 +1128,24 @@ ReorderBufferIterTXNNext(ReorderBuffer *rb, ReorderBufferIterTXNState *state)
 	ReorderBufferIterTXNEntry *entry;
 	int32		off;
 
-	/* nothing there anymore */
-	if (state->heap->bh_size == 0)
-		return NULL;
+	/*
+	 * If there is only one transaction then it will be at the offset 0.
+	 * Otherwise get the offset from the binary heap.
+	 */
+	if (state->nr_txns == 1)
+	{
+		off = 0;
+		if (state->entries[off].change == NULL)
+			return NULL;
+	}
+	else
+	{
+		/* nothing there anymore */
+		if (state->heap->bh_size == 0)
+			return NULL;
 
-	off = DatumGetInt32(binaryheap_first(state->heap));
+		off = DatumGetInt32(binaryheap_first(state->heap));
+	}
 	entry = &state->entries[off];
 
 	/* free memory we might have "leaked" in the previous *Next call */
@@ -1161,7 +1175,8 @@ ReorderBufferIterTXNNext(ReorderBuffer *rb, ReorderBufferIterTXNState *state)
 		state->entries[off].lsn = next_change->lsn;
 		state->entries[off].change = next_change;
 
-		binaryheap_replace_first(state->heap, Int32GetDatum(off));
+		if (state->nr_txns > 1)
+			binaryheap_replace_first(state->heap, Int32GetDatum(off));
 		return change;
 	}
 
@@ -1191,14 +1206,19 @@ ReorderBufferIterTXNNext(ReorderBuffer *rb, ReorderBufferIterTXNState *state)
 			/* txn stays the same */
 			state->entries[off].lsn = next_change->lsn;
 			state->entries[off].change = next_change;
-			binaryheap_replace_first(state->heap, Int32GetDatum(off));
+
+			if (state->nr_txns > 1)
+				binaryheap_replace_first(state->heap, Int32GetDatum(off));
 
 			return change;
 		}
 	}
 
 	/* ok, no changes there anymore, remove */
-	binaryheap_remove_first(state->heap);
+	if (state->nr_txns > 1)
+		binaryheap_remove_first(state->heap);
+	else
+		entry->change = NULL;
 
 	return change;
 }
@@ -1229,7 +1249,8 @@ ReorderBufferIterTXNFinish(ReorderBuffer *rb,
 		Assert(dlist_is_empty(&state->old_change));
 	}
 
-	binaryheap_free(state->heap);
+	if (state->nr_txns > 1)
+		binaryheap_free(state->heap);
 	pfree(state);
 }
 

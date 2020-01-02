@@ -507,6 +507,7 @@ typedef struct OpExpr
 	Oid			inputcollid;	/* OID of collation that operator should use */
 	List	   *args;			/* arguments to the operator (1 or 2) */
 	int			location;		/* token location, or -1 if unknown */
+	bool		isnormalize;
 } OpExpr;
 
 /*
@@ -1479,6 +1480,8 @@ typedef struct JoinExpr
 	Node	   *quals;			/* qualifiers on join, if any */
 	Alias	   *alias;			/* user-written alias clause, if any */
 	int			rtindex;		/* RT index assigned for join, or 0 */
+	List	   *temporalBounds; /* columns that form bounds for both subtrees,
+								 * used by temporal adjustment primitives */
 } JoinExpr;
 
 /*----------

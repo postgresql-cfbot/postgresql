@@ -4654,6 +4654,7 @@ calc_joinrel_size_estimate(PlannerInfo *root,
 	switch (jointype)
 	{
 		case JOIN_INNER:
+		case JOIN_TEMPORAL_NORMALIZE:
 			nrows = outer_rows * inner_rows * fkselec * jselec;
 			/* pselec not used */
 			break;

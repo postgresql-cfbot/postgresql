@@ -1037,6 +1037,46 @@ select scale(-1123.12471856128);
 select scale(-13.000000000000000);
 
 --
+-- Tests for min_scale()
+--
+
+select min_scale(numeric 'NaN') is NULL; -- should be true
+select min_scale(NULL::numeric) is NULL; -- should be true
+select min_scale(0);                     -- no digits
+select min_scale(0.00);                  -- no digits again
+select min_scale(1.0);                   -- no scale
+select min_scale(1.1);                   -- scale 1
+select min_scale(1.12);                  -- scale 2
+select min_scale(1.123);                 -- scale 3
+select min_scale(1.1234);                -- scale 4, filled digit
+select min_scale(1.12345);               -- scale 5, 2 NDIGITS
+select min_scale(1.1000);                -- 1 pos in NDIGITS
+select min_scale(1.1200);                -- 2 pos in NDIGITS
+select min_scale(1.1230);                -- 3 pos in NDIGITS
+select min_scale(1.1234);                -- all pos in NDIGITS
+select min_scale(1.12345000);            -- 2 NDIGITS
+select min_scale(1.123400000000);        -- strip() required/done
+select min_scale(12345.123456789012345); -- "big" number
+select min_scale(-12345.12345);          -- negative number
+select min_scale(1e100);                 -- very big number
+select min_scale(1e100::numeric + 0.1);  -- big number with scale
+
+--
+-- Tests for trim_scale()
+--
+
+select trim_scale(numeric 'NaN') = 'NaN':: numeric; -- should be true
+select trim_scale(NULL::numeric) IS NULL; -- should be true
+select trim_scale(1.120);
+select trim_scale(0);
+select trim_scale(0.00);
+select trim_scale(1.1234500);
+select trim_scale(110123.12475871856128000);
+select trim_scale(-1123.124718561280000000);
+select trim_scale(-13.00000000000000000000);
+select trim_scale(1e100);
+
+--
 -- Tests for SUM()
 --
 

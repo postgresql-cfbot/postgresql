@@ -921,6 +921,20 @@
       <row>
        <entry>
         <indexterm>
+         <primary>min_scale</primary>
+        </indexterm>
+        <literal><function>min_scale(<type>numeric</type>)</function></literal>
+       </entry>
+       <entry><type>integer</type></entry>
+       <entry>minimal scale (number of decimal digits in the fractional part) needed
+       to store the supplied value without data loss</entry>
+       <entry><literal>min_scale(8.4100)</literal></entry>
+       <entry><literal>2</literal></entry>
+      </row>
+
+      <row>
+       <entry>
+        <indexterm>
          <primary>mod</primary>
         </indexterm>
         <literal><function>mod(<parameter>y</parameter>,
@@ -1039,6 +1053,20 @@
        <entry>square root</entry>
        <entry><literal>sqrt(2.0)</literal></entry>
        <entry><literal>1.4142135623731</literal></entry>
+      </row>
+
+      <row>
+       <entry>
+        <indexterm>
+         <primary>trim_scale</primary>
+        </indexterm>
+        <literal><function>trim_scale(<type>numeric</type>)</function></literal>
+       </entry>
+       <entry><type>numeric</type></entry>
+       <entry>reduce the scale (the number of decimal digits in the fractional part)
+       to the minimum needed to store the supplied value without data loss</entry>
+       <entry><literal>scale(8.4100)</literal></entry>
+       <entry><literal>8.41</literal></entry>
       </row>
 
       <row>

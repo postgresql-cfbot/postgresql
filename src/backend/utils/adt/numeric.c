@@ -3179,6 +3179,92 @@ numeric_scale(PG_FUNCTION_ARGS)
 	PG_RETURN_INT32(NUMERIC_DSCALE(num));
 }
 
+/*
+ * Calculate minimal scale. The var should be stripped already.
+ */
+static int
+get_min_scale(NumericVar *var)
+{
+	int		min_scale = 0;
+
+	if (var->ndigits > 0)
+	{
+		NumericDigit last_digit;
+
+		/* maximal size of minscale, can be lower */
+		min_scale = (var->ndigits - var->weight - 1) * DEC_DIGITS;
+
+		/*
+		 * When there are no digits after decimal point,
+		 * the previous expression is negative. In this
+		 * case the minscale must be zero.
+		 */
+		if (min_scale > 0)
+		{
+			/*
+			 * Reduce minscale if trailing digits in last numeric
+			 * digits are zero.
+			 */
+			last_digit = var->digits[var->ndigits - 1];
+
+			while (last_digit % 10 ==  0)
+			{
+				min_scale--;
+				last_digit /= 10;
+			}
+		}
+		else
+			min_scale = 0;
+	}
+
+	return min_scale;
+}
+
+/*
+ * Returns minimal scale required to represent supplied value without loss.
+ */
+Datum
+numeric_min_scale(PG_FUNCTION_ARGS)
+{
+	Numeric		num = PG_GETARG_NUMERIC(0);
+	NumericVar	arg;
+	int			min_scale;
+
+	if (NUMERIC_IS_NAN(num))
+		PG_RETURN_NULL();
+
+	init_var_from_num(num, &arg);
+	strip_var(&arg);
+
+	min_scale = get_min_scale(&arg);
+	free_var(&arg);
+
+	PG_RETURN_INT32(min_scale);
+}
+
+/*
+ * Reduce scale of numeric value to represent supplied value without loss.
+ */
+Datum
+numeric_trim_scale(PG_FUNCTION_ARGS)
+{
+	Numeric		num = PG_GETARG_NUMERIC(0);
+	Numeric		res;
+	NumericVar	result;
+
+	if (NUMERIC_IS_NAN(num))
+		PG_RETURN_NUMERIC(make_result(&const_nan));
+
+	init_var_from_num(num, &result);
+	strip_var(&result);
+
+	result.dscale = get_min_scale(&result);
+
+	res = make_result(&result);
+	free_var(&result);
+
+	PG_RETURN_NUMERIC(res);
+}
 
 
 /* ----------------------------------------------------------------------

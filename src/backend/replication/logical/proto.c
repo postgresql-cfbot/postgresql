@@ -16,9 +16,11 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_type.h"
 #include "libpq/pqformat.h"
+#include "replication/logicalrelation.h"
 #include "replication/logicalproto.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
+#include "utils/rel.h"
 #include "utils/syscache.h"
 
 /*
@@ -31,7 +33,7 @@
 
 static void logicalrep_write_attrs(StringInfo out, Relation rel);
 static void logicalrep_write_tuple(StringInfo out, Relation rel,
-								   HeapTuple tuple);
+								   HeapTuple tuple, bool binary_basetypes);
 
 static void logicalrep_read_attrs(StringInfo in, LogicalRepRelation *rel);
 static void logicalrep_read_tuple(StringInfo in, LogicalRepTupleData *tuple);
@@ -139,7 +141,7 @@ logicalrep_read_origin(StringInfo in, XLogRecPtr *origin_lsn)
  * Write INSERT to the output stream.
  */
 void
-logicalrep_write_insert(StringInfo out, Relation rel, HeapTuple newtuple)
+logicalrep_write_insert(StringInfo out, Relation rel, HeapTuple newtuple, bool binary_basetypes)
 {
 	pq_sendbyte(out, 'I');		/* action INSERT */
 
@@ -151,7 +153,7 @@ logicalrep_write_insert(StringInfo out, Relation rel, HeapTuple newtuple)
 	pq_sendint32(out, RelationGetRelid(rel));
 
 	pq_sendbyte(out, 'N');		/* new tuple follows */
-	logicalrep_write_tuple(out, rel, newtuple);
+	logicalrep_write_tuple(out, rel, newtuple, binary_basetypes);
 }
 
 /*
@@ -165,16 +167,13 @@ logicalrep_read_insert(StringInfo in, LogicalRepTupleData *newtup)
 	char		action;
 	LogicalRepRelId relid;
 
-	/* read the relation id */
 	relid = pq_getmsgint(in, 4);
-
 	action = pq_getmsgbyte(in);
 	if (action != 'N')
 		elog(ERROR, "expected new tuple but got %d",
 			 action);
 
 	logicalrep_read_tuple(in, newtup);
-
 	return relid;
 }
 
@@ -183,7 +182,7 @@ logicalrep_read_insert(StringInfo in, LogicalRepTupleData *newtup)
  */
 void
 logicalrep_write_update(StringInfo out, Relation rel, HeapTuple oldtuple,
-						HeapTuple newtuple)
+						HeapTuple newtuple, bool binary_basetypes)
 {
 	pq_sendbyte(out, 'U');		/* action UPDATE */
 
@@ -200,26 +199,22 @@ logicalrep_write_update(StringInfo out, Relation rel, HeapTuple oldtuple,
 			pq_sendbyte(out, 'O');	/* old tuple follows */
 		else
 			pq_sendbyte(out, 'K');	/* old key follows */
-		logicalrep_write_tuple(out, rel, oldtuple);
+		logicalrep_write_tuple(out, rel, oldtuple, binary_basetypes);
 	}
 
 	pq_sendbyte(out, 'N');		/* new tuple follows */
-	logicalrep_write_tuple(out, rel, newtuple);
+	logicalrep_write_tuple(out, rel, newtuple, binary_basetypes);
 }
 
 /*
  * Read UPDATE from stream.
  */
-LogicalRepRelId
+void
 logicalrep_read_update(StringInfo in, bool *has_oldtuple,
 					   LogicalRepTupleData *oldtup,
 					   LogicalRepTupleData *newtup)
 {
 	char		action;
-	LogicalRepRelId relid;
-
-	/* read the relation id */
-	relid = pq_getmsgint(in, 4);
 
 	/* read and verify action */
 	action = pq_getmsgbyte(in);
@@ -245,14 +240,13 @@ logicalrep_read_update(StringInfo in, bool *has_oldtuple,
 
 	logicalrep_read_tuple(in, newtup);
 
-	return relid;
 }
 
 /*
  * Write DELETE to the output stream.
  */
 void
-logicalrep_write_delete(StringInfo out, Relation rel, HeapTuple oldtuple)
+logicalrep_write_delete(StringInfo out, Relation rel, HeapTuple oldtuple, bool binary_basetypes)
 {
 	Assert(rel->rd_rel->relreplident == REPLICA_IDENTITY_DEFAULT ||
 		   rel->rd_rel->relreplident == REPLICA_IDENTITY_FULL ||
@@ -268,7 +262,7 @@ logicalrep_write_delete(StringInfo out, Relation rel, HeapTuple oldtuple)
 	else
 		pq_sendbyte(out, 'K');	/* old key follows */
 
-	logicalrep_write_tuple(out, rel, oldtuple);
+	logicalrep_write_tuple(out, rel, oldtuple, binary_basetypes);
 }
 
 /*
@@ -276,14 +270,10 @@ logicalrep_write_delete(StringInfo out, Relation rel, HeapTuple oldtuple)
  *
  * Fills the old tuple.
  */
-LogicalRepRelId
+void
 logicalrep_read_delete(StringInfo in, LogicalRepTupleData *oldtup)
 {
 	char		action;
-	LogicalRepRelId relid;
-
-	/* read the relation id */
-	relid = pq_getmsgint(in, 4);
 
 	/* read and verify action */
 	action = pq_getmsgbyte(in);
@@ -292,7 +282,6 @@ logicalrep_read_delete(StringInfo in, LogicalRepTupleData *oldtup)
 
 	logicalrep_read_tuple(in, oldtup);
 
-	return relid;
 }
 
 /*
@@ -441,7 +430,7 @@ logicalrep_read_typ(StringInfo in, LogicalRepTyp *ltyp)
  * Write a tuple to the outputstream, in the most efficient format possible.
  */
 static void
-logicalrep_write_tuple(StringInfo out, Relation rel, HeapTuple tuple)
+logicalrep_write_tuple(StringInfo out, Relation rel, HeapTuple tuple, bool binary_basetypes)
 {
 	TupleDesc	desc;
 	Datum		values[MaxTupleAttributeNumber];
@@ -457,6 +446,7 @@ logicalrep_write_tuple(StringInfo out, Relation rel, HeapTuple tuple)
 			continue;
 		nliveatts++;
 	}
+
 	pq_sendint16(out, nliveatts);
 
 	/* try to allocate enough memory from the get-go */
@@ -492,12 +482,31 @@ logicalrep_write_tuple(StringInfo out, Relation rel, HeapTuple tuple)
 			elog(ERROR, "cache lookup failed for type %u", att->atttypid);
 		typclass = (Form_pg_type) GETSTRUCT(typtup);
 
-		pq_sendbyte(out, 't');	/* 'text' data follows */
 
-		outputstr = OidOutputFunctionCall(typclass->typoutput, values[i]);
-		pq_sendcountedtext(out, outputstr, strlen(outputstr), false);
-		pfree(outputstr);
+		if (binary_basetypes &&
+				 OidIsValid(typclass->typreceive) &&
+				 (att->atttypid < FirstNormalObjectId || typclass->typtype != 'c') &&
+				 (att->atttypid < FirstNormalObjectId || typclass->typelem == InvalidOid))
+		{
+			bytea	   *outputbytes;
+			int			len;
+			pq_sendbyte(out, 'b');	/* binary send/recv data follows */
 
+			outputbytes = OidSendFunctionCall(typclass->typsend,
+											  values[i]);
+
+			len = VARSIZE(outputbytes) - VARHDRSZ;
+			pq_sendint(out, len, 4); /* length */
+			pq_sendbytes(out, VARDATA(outputbytes), len); /* data */
+			pfree(outputbytes);
+		}
+		else
+		{
+			pq_sendbyte(out, 't');	/* 'text' data follows */
+			outputstr = OidOutputFunctionCall(typclass->typoutput, values[i]);
+			pq_sendcountedtext(out, outputstr, strlen(outputstr), false);
+			pfree(outputstr);
+		}
 		ReleaseSysCache(typtup);
 	}
 }
@@ -518,6 +527,9 @@ logicalrep_read_tuple(StringInfo in, LogicalRepTupleData *tuple)
 
 	memset(tuple->changed, 0, sizeof(tuple->changed));
 
+	/* default is text */
+	memset(tuple->binary, 0, sizeof(tuple->binary));
+
 	/* Read the data */
 	for (i = 0; i < natts; i++)
 	{
@@ -528,25 +540,45 @@ logicalrep_read_tuple(StringInfo in, LogicalRepTupleData *tuple)
 		switch (kind)
 		{
 			case 'n':			/* null */
-				tuple->values[i] = NULL;
+				tuple->values[i].len = 0;
+				tuple->values[i].data = NULL;
 				tuple->changed[i] = true;
 				break;
 			case 'u':			/* unchanged column */
 				/* we don't receive the value of an unchanged column */
-				tuple->values[i] = NULL;
+				tuple->values[i].len = 0;
+				tuple->values[i].data = NULL;
 				break;
+			case 'b':			/* binary formatted value */
+				{
+					int len;
+					tuple->changed[i] = true;
+					tuple->binary[i] = true;
+
+					len = pq_getmsgint(in, 4); /* read length */
+
+					tuple->values[i].data = palloc(len + 1);
+					/* and data */
+
+					pq_copymsgbytes(in, tuple->values[i].data, len);
+					tuple->values[i].len = len;
+					tuple->values[i].cursor = 0;
+					tuple->values[i].maxlen = len;
+					/* not strictly necessary but the docs say it is required */
+					tuple->values[i].data[len] = '\0';
+					break;
+				}
 			case 't':			/* text formatted value */
 				{
-					int			len;
-
+					int len;
 					tuple->changed[i] = true;
-
 					len = pq_getmsgint(in, 4);	/* read length */
 
 					/* and data */
-					tuple->values[i] = palloc(len + 1);
-					pq_copymsgbytes(in, tuple->values[i], len);
-					tuple->values[i][len] = '\0';
+					tuple->values[i].data = palloc(len + 1);
+					pq_copymsgbytes(in, tuple->values[i].data, len);
+					tuple->values[i].data[len] = '\0';
+					tuple->values[i].len = len;
 				}
 				break;
 			default:

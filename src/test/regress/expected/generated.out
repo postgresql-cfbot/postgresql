@@ -593,6 +593,31 @@ ERROR:  cannot use generated column "b" in column generation expression
 DETAIL:  A generated column cannot reference another generated column.
 ALTER TABLE gtest25 ADD COLUMN x int GENERATED ALWAYS AS (z * 4) STORED;  -- error
 ERROR:  column "z" does not exist
+ALTER TABLE gtest25 ADD COLUMN c int DEFAULT 42,
+  ADD COLUMN x int GENERATED ALWAYS AS (c * 4) STORED;
+ALTER TABLE gtest25 ADD COLUMN d int DEFAULT 101;
+ALTER TABLE gtest25 ALTER COLUMN d SET DATA TYPE float8,
+  ADD COLUMN y float8 GENERATED ALWAYS AS (d * 4) STORED;
+SELECT * FROM gtest25 ORDER BY a;
+ a | b  | c  |  x  |  d  |  y  
+---+----+----+-----+-----+-----
+ 3 |  9 | 42 | 168 | 101 | 404
+ 4 | 12 | 42 | 168 | 101 | 404
+(2 rows)
+
+\d gtest25
+                                         Table "public.gtest25"
+ Column |       Type       | Collation | Nullable |                       Default                        
+--------+------------------+-----------+----------+------------------------------------------------------
+ a      | integer          |           | not null | 
+ b      | integer          |           |          | generated always as (a * 3) stored
+ c      | integer          |           |          | 42
+ x      | integer          |           |          | generated always as (c * 4) stored
+ d      | double precision |           |          | 101
+ y      | double precision |           |          | generated always as (d * 4::double precision) stored
+Indexes:
+    "gtest25_pkey" PRIMARY KEY, btree (a)
+
 -- ALTER TABLE ... ALTER COLUMN
 CREATE TABLE gtest27 (
     a int,

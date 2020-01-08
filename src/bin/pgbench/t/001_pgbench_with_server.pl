@@ -591,7 +591,7 @@ pgbench(
 }
 	});
 
-# working \gset
+# working \gset and \aset
 pgbench(
 	'-t 1', 0,
 	[ qr{type: .*/001_pgbench_gset}, qr{processed: 1/1} ],
@@ -601,9 +601,11 @@ pgbench(
 		qr{command=6.: int 2\b},
 		qr{command=8.: int 3\b},
 		qr{command=10.: int 4\b},
-		qr{command=12.: int 5\b}
+		qr{command=12.: int 5\b},
+		qr{command=15.: int 8\b},
+		qr{command=16.: int 7\b}
 	],
-	'pgbench gset command',
+	'pgbench gset & aset commands',
 	{
 		'001_pgbench_gset' => q{-- test gset
 -- no columns
@@ -624,6 +626,12 @@ SELECT 0 AS i4, 4 AS i4 \gset
 -- work on the last SQL command under \;
 \; \; SELECT 0 AS i5 \; SELECT 5 AS i5 \; \; \gset
 \set i debug(:i5)
+-- test aset, which applies to a combined query
+\; SELECT 6 AS i6 \; SELECT 7 AS i7 \; \aset
+-- unless it returns more than one row, last is kept
+SELECT 8 AS i6 UNION SELECT 9 ORDER BY 1 DESC \aset
+\set i debug(:i6)
+\set i debug(:i7)
 }
 	});
 

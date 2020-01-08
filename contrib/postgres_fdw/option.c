@@ -194,6 +194,16 @@ InitPgFdwOptions(void)
 		{"fetch_size", ForeignServerRelationId, false},
 		{"fetch_size", ForeignTableRelationId, false},
 		{"password_required", UserMappingRelationId, false},
+		/*
+		 * Extra room for the user mapping copies of sslcert and sslkey. These
+		 * are really libpq options but we repeat them here to allow them to
+		 * appear in both foreign server context (when we generate libpq
+		 * options) and user mapping context (from here). Bit of a hack
+		 * putting this in "non_libpq_options".
+		 */
+		{"sslcert", UserMappingRelationId, true},
+		{"sslkey", UserMappingRelationId, true},
+
 		{NULL, InvalidOid, false}
 	};
 

@@ -1,0 +1,188 @@
+CREATE TABLE stest0(a integer PRIMARY KEY, start_timestamp TIMESTAMP(6) GENERATED ALWAYS AS row START,
+   end_timestamp TIMESTAMP(6) GENERATED ALWAYS AS ROW END,
+   PERIOD FOR SYSTEM_TIME(start_timestamp, end_timestamp)
+) WITH SYSTEM VERSIONING;
+--invalid datatype
+CREATE TABLE stest1(a integer PRIMARY KEY, start_timestamp TIMESTAMP(6) GENERATED ALWAYS AS row START,
+   end_timestamp integer GENERATED ALWAYS AS ROW END,
+   PERIOD FOR SYSTEM_TIME(start_timestamp, end_timestamp)
+) WITH SYSTEM VERSIONING;
+ERROR:  the data type of row end time must be timestamp
+-- references to other column in period columns
+CREATE TABLE stest1(a integer PRIMARY KEY, start_timestamp TIMESTAMP(6) GENERATED ALWAYS AS row START,
+   end_timestamp TIMESTAMP(6) GENERATED ALWAYS AS ROW END,
+   PERIOD FOR SYSTEM_TIME(a, end_timestamp)
+) WITH SYSTEM VERSIONING;
+ERROR:  The period start time parameter must equal the name of row start time column
+-- duplicate system time column
+CREATE TABLE stest1(a integer PRIMARY KEY, start_timestamp TIMESTAMP(6) GENERATED ALWAYS AS row START,
+   end_timestamp TIMESTAMP(6) GENERATED ALWAYS AS ROW END,
+   end_timestamp1 TIMESTAMP(6) GENERATED ALWAYS AS ROW END,
+   PERIOD FOR SYSTEM_TIME(start_timestamp, end_timestamp)
+) WITH SYSTEM VERSIONING;
+ERROR:  row end time can not be specified multiple time
+-- default system time column usage
+CREATE TABLE stest2(a integer
+) WITH SYSTEM VERSIONING;
+\d stest2
+                                     Table "public.stest2"
+  Column   |            Type             | Collation | Nullable |            Default            
+-----------+-----------------------------+-----------+----------+-------------------------------
+ a         | integer                     |           |          | 
+ StartTime | timestamp without time zone |           | not null | generated always as row start
+ EndTime   | timestamp without time zone |           | not null | generated always as row end
+
+-- ALTER TABLE tbName ADD SYSTEM VERSIONING
+CREATE TABLE stest3(a integer
+);
+\d stest3
+               Table "public.stest3"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+
+ALTER TABLE stest3 ADD SYSTEM VERSIONING;
+\d stest3
+                                     Table "public.stest3"
+  Column   |            Type             | Collation | Nullable |            Default            
+-----------+-----------------------------+-----------+----------+-------------------------------
+ a         | integer                     |           |          | 
+ StartTime | timestamp without time zone |           | not null | generated always as row start
+ EndTime   | timestamp without time zone |           | not null | generated always as row end
+
+-- ALTER TABLE tbName DROP SYSTEM VERSIONING
+ALTER TABLE stest3 DROP SYSTEM VERSIONING;
+\d stest3
+               Table "public.stest3"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+
+-- ALTER TABLE
+ALTER TABLE stest0 ALTER start_timestamp drop not null;
+ERROR:  column "start_timestamp" of relation "stest0" is system time column
+ALTER TABLE stest0 ALTER start_timestamp drop not null;
+ERROR:  column "start_timestamp" of relation "stest0" is system time column
+ALTER TABLE stest0 ALTER COLUMN start_timestamp SET DATA TYPE char;
+ERROR:  column "start_timestamp" of relation "stest0" is system time column
+--truncation
+truncate table stest0;
+ERROR:  cannot truncate system versioned table
+-- test UPDATE/DELETE
+INSERT INTO stest0 VALUES (1);
+INSERT INTO stest0 VALUES (2);
+INSERT INTO stest0 VALUES (3);
+SELECT a FROM stest0 ORDER BY a;
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+UPDATE stest0 SET a = 4 where a = 1;
+SELECT a FROM stest0 ORDER BY a;
+ a 
+---
+ 2
+ 3
+ 4
+(3 rows)
+
+select a from for stest0 system_time from '2000-01-01 00:00:00.00000' to 'infinity' ORDER BY a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+DELETE FROM stest0 WHERE a = 2;
+SELECT a FROM stest0 ORDER BY a;
+ a 
+---
+ 3
+ 4
+(2 rows)
+
+select a from for stest0 system_time from '2000-01-01 00:00:00.00000' to 'infinity' ORDER BY a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+-- test with joins
+CREATE TABLE stestx (x int, y int);
+INSERT INTO stestx VALUES (11, 1), (22, 2), (33, 3);
+SELECT a FROM stestx, stest0 WHERE stestx.y = stest0.a;
+ a 
+---
+ 3
+(1 row)
+
+DROP TABLE stestx;
+-- views
+CREATE VIEW stest1v AS SELECT a FROM stest0;
+CREATE VIEW stest2v AS select a from for stest0 system_time from '2000-01-01 00:00:00.00000' to 'infinity' ORDER BY a;
+SELECT * FROM stest1v;
+ a 
+---
+ 3
+ 4
+(2 rows)
+
+SELECT * FROM stest2v;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+DROP VIEW stest1v;
+DROP VIEW stest2v;
+-- CTEs
+WITH foo AS (SELECT a FROM stest0) SELECT * FROM foo;
+ a 
+---
+ 3
+ 4
+(2 rows)
+
+WITH foo AS (select a from for stest0 system_time from '2000-01-01 00:00:00.00000' to 'infinity' ORDER BY a) SELECT * FROM foo;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+-- inheritance
+CREATE TABLE stest1 () INHERITS (stest0);
+SELECT * FROM stest1;
+ a | start_timestamp | end_timestamp 
+---+-----------------+---------------
+(0 rows)
+
+\d stest1
+                                          Table "public.stest1"
+     Column      |              Type              | Collation | Nullable |            Default            
+-----------------+--------------------------------+-----------+----------+-------------------------------
+ a               | integer                        |           | not null | 
+ start_timestamp | timestamp(6) without time zone |           | not null | generated always as row start
+ end_timestamp   | timestamp(6) without time zone |           | not null | generated always as row end
+Inherits: stest0
+
+INSERT INTO stest1 VALUES (4);
+SELECT a FROM stest1;
+ a 
+---
+ 4
+(1 row)
+

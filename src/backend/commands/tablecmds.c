@@ -76,6 +76,7 @@
 #include "parser/parser.h"
 #include "partitioning/partbounds.h"
 #include "partitioning/partdesc.h"
+#include "optimizer/plancat.h"
 #include "pgstat.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rewriteHandler.h"
@@ -1517,6 +1518,7 @@ ExecuteTruncate(TruncateStmt *stmt)
 		bool		recurse = rv->inh;
 		Oid			myrelid;
 		LOCKMODE	lockmode = AccessExclusiveLock;
+		TupleDesc	tupdesc;
 
 		myrelid = RangeVarGetRelidExtended(rv, lockmode,
 										   0, RangeVarCallbackForTruncate,
@@ -1524,6 +1526,14 @@ ExecuteTruncate(TruncateStmt *stmt)
 
 		/* open the relation, we already hold a lock on it */
 		rel = table_open(myrelid, NoLock);
+
+		tupdesc = RelationGetDescr(rel);
+
+		/* throw error for system versioned table */
+		if (tupdesc->constr && tupdesc->constr->is_system_versioned)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("cannot truncate system versioned table")));
 
 		/* don't throw error for "TRUNCATE foo, foo" */
 		if (list_member_oid(relids, myrelid))
@@ -3587,6 +3597,7 @@ AlterTableGetLockLevel(List *cmds)
 				 */
 			case AT_AddColumn:	/* may rewrite heap, in some cases and visible
 								 * to SELECT */
+			case AT_AddSystemVersioning:
 			case AT_SetTableSpace:	/* must rewrite heap */
 			case AT_AlterColumnType:	/* must rewrite heap */
 				cmd_lockmode = AccessExclusiveLock;
@@ -3617,6 +3628,7 @@ AlterTableGetLockLevel(List *cmds)
 				 * Subcommands that may be visible to concurrent SELECTs
 				 */
 			case AT_DropColumn: /* change visible to SELECT */
+			case AT_DropSystemVersioning:	/* change visible to SELECT */
 			case AT_AddColumnToView:	/* CREATE VIEW */
 			case AT_DropOids:	/* used to equiv to DropColumn */
 			case AT_EnableAlwaysRule:	/* may change SELECT rules */
@@ -6152,6 +6164,12 @@ ATExecDropNotNull(Relation rel, const char *colName, LOCKMODE lockmode)
 				 errmsg("column \"%s\" of relation \"%s\" is an identity column",
 						colName, RelationGetRelationName(rel))));
 
+	if (attTup->attgenerated == ATTRIBUTE_ROW_START_TIME || attTup->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
+						colName, RelationGetRelationName(rel))));
+
 	/*
 	 * Check that the attribute is not in a primary key
 	 *
@@ -6529,6 +6547,12 @@ ATExecAddIdentity(Relation rel, const char *colName,
 				 errmsg("cannot alter system column \"%s\"",
 						colName)));
 
+	if (attTup->attgenerated == ATTRIBUTE_ROW_START_TIME || attTup->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
+						colName, RelationGetRelationName(rel))));
+
 	/*
 	 * Creating a column as identity implies NOT NULL, so adding the identity
 	 * to an existing column that is not NOT NULL would create a state that
@@ -6627,6 +6651,12 @@ ATExecSetIdentity(Relation rel, const char *colName, Node *def, LOCKMODE lockmod
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("column \"%s\" of relation \"%s\" is not an identity column",
+						colName, RelationGetRelationName(rel))));
+
+	if (attTup->attgenerated == ATTRIBUTE_ROW_START_TIME || attTup->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
 						colName, RelationGetRelationName(rel))));
 
 	if (generatedEl)
@@ -6874,6 +6904,12 @@ ATExecSetOptions(Relation rel, const char *colName, Node *options,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot alter system column \"%s\"",
 						colName)));
+
+	if (attrtuple->attgenerated == ATTRIBUTE_ROW_START_TIME || attrtuple->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
+						colName, RelationGetRelationName(rel))));
 
 	/* Generate new proposed attoptions (text array) */
 	datum = SysCacheGetAttr(ATTNAME, tuple, Anum_pg_attribute_attoptions,
@@ -10654,6 +10690,11 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot alter type of column \"%s\" twice",
 						colName)));
+	if (attTup->attgenerated == ATTRIBUTE_ROW_START_TIME || attTup->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
+						colName, RelationGetRelationName(rel))));
 
 	/* Look up the target type (should not fail, since prep found it) */
 	typeTuple = typenameType(NULL, typeName, &targettypmod);
@@ -11636,6 +11677,12 @@ ATExecAlterColumnGenericOptions(Relation rel,
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot alter system column \"%s\"", colName)));
+
+	if (atttableform->attgenerated == ATTRIBUTE_ROW_START_TIME || atttableform->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
+						colName, RelationGetRelationName(rel))));
 
 
 	/* Initialize buffers for new tuple values */
@@ -15109,7 +15156,7 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 			 * Generated columns cannot work: They are computed after BEFORE
 			 * triggers, but partition routing is done before all triggers.
 			 */
-			if (attform->attgenerated)
+			if (attform->attgenerated && attform->attgenerated != ATTRIBUTE_ROW_START_TIME && attform->attgenerated != ATTRIBUTE_ROW_END_TIME)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 						 errmsg("cannot use generated column in partition key"),

@@ -73,5 +73,7 @@ extern double get_function_rows(PlannerInfo *root, Oid funcid, Node *node);
 extern bool has_row_triggers(PlannerInfo *root, Index rti, CmdType event);
 
 extern bool has_stored_generated_columns(PlannerInfo *root, Index rti);
-
+extern char *get_row_start_time_col_name(Relation rel);
+extern char *get_row_end_time_col_name(Relation rel);
+extern void add_history_data_filter(Query *query);
 #endif							/* PLANCAT_H */

@@ -31,6 +31,7 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
+#include "optimizer/plancat.h"
 #include "parser/analyze.h"
 #include "parser/parse_clause.h"
 #include "parser/parse_coerce.h"
@@ -97,6 +98,7 @@ static WindowClause *findWindowClause(List *wclist, const char *name);
 static Node *transformFrameOffset(ParseState *pstate, int frameOptions,
 								  Oid rangeopfamily, Oid rangeopcintype, Oid *inRangeFunc,
 								  Node *clause);
+static void addTempToWhereClause(ParseState *pstate, TemporalClause * tc, RangeTblEntry *rte);
 
 
 /*
@@ -1140,6 +1142,35 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		/* Transform TABLESAMPLE details and attach to the RTE */
 		rte->tablesample = transformRangeTableSample(pstate, rts);
 		return rel;
+	}
+	else if (IsA(n, TemporalClause))
+	{
+		TemporalClause *tc = (TemporalClause *) n;
+		RangeVar   *rv = (RangeVar *) tc->relation;
+		RangeTblRef *rtr;
+		ParseNamespaceItem *nsitem;
+		RangeTblEntry *rte;
+		Relation		rel;
+		TupleDesc		tupdesc;
+
+		nsitem = transformTableEntry(pstate, rv);
+		rte = nsitem->p_rte;
+		rel = table_open(rte->relid, NoLock);
+		tupdesc = RelationGetDescr(rel);
+		rte->system_versioned = (tupdesc->constr && tupdesc->constr->is_system_versioned);
+		table_close(rel, NoLock);
+
+		if (!rte->system_versioned)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("Temporal clause can only be to system versioned table")));
+
+		addTempToWhereClause(pstate, tc, rte);
+		*top_nsitem = nsitem;
+		*namespace = list_make1(nsitem);
+		rtr = makeNode(RangeTblRef);
+		rtr->rtindex = nsitem->p_rtindex;
+		return (Node *) rtr;
 	}
 	else if (IsA(n, JoinExpr))
 	{
@@ -3668,4 +3699,49 @@ transformFrameOffset(ParseState *pstate, int frameOptions,
 	checkExprIsVarFree(pstate, node, constructName);
 
 	return node;
+}
+
+/*
+ * changeTempToWhereClause
+ *		add temporal clause specification to where clause.
+ */
+static void
+addTempToWhereClause(ParseState *pstate, TemporalClause * tc, RangeTblEntry *rte)
+{
+	Node	   *fClause;
+	Node	   *tClause;
+	ColumnRef  *s;
+	ColumnRef  *e;
+	Relation	rel;
+
+	rel = table_open(rte->relid, NoLock);
+
+	s = makeColumnRefFromName(get_row_start_time_col_name(rel));
+	e = makeColumnRefFromName(get_row_end_time_col_name(rel));
+
+	if (tc->kind == AS_OF)
+	{
+		fClause = (Node *) makeSimpleA_Expr(AEXPR_OP, "<=", (Node *) s, tc->to, 0);
+		tClause = (Node *) makeSimpleA_Expr(AEXPR_OP, ">", (Node *) e, tc->to, 0);
+		fClause = makeAndExpr(fClause, tClause, 0);
+	}
+	else if (tc->kind == FROM_TO)
+	{
+		fClause = (Node *) makeSimpleA_Expr(AEXPR_OP, ">", (Node *) e, tc->from, 0);
+		tClause = (Node *) makeSimpleA_Expr(AEXPR_OP, "<", (Node *) s, tc->to, 0);
+
+		fClause = makeAndExpr(fClause, tClause, 0);
+	}
+	else if (tc->kind == BETWEEN_SYMMETRIC)
+	{
+		fClause = (Node *) makeSimpleA_Expr(AEXPR_OP, ">", (Node *) e, tc->from, 0);
+		tClause = (Node *) makeSimpleA_Expr(AEXPR_OP, "<=", (Node *) s, tc->to, 0);
+		fClause = makeAndExpr(fClause, tClause, 0);
+	}
+	if (pstate->p_tempwhere != NULL)
+		pstate->p_tempwhere = makeAndExpr(pstate->p_tempwhere, fClause, 0);
+	else
+		pstate->p_tempwhere = fClause;
+
+	table_close(rel, NoLock);
 }

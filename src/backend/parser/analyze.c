@@ -1220,6 +1220,15 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 	/* process the FROM clause */
 	transformFromClause(pstate, stmt->fromClause);
 
+	/* Add temporal filter clause to the rest of where clause */
+	if (pstate->p_tempwhere != NULL)
+	{
+		if (stmt->whereClause)
+			stmt->whereClause = makeAndExpr(stmt->whereClause, pstate->p_tempwhere, 0);
+		else
+			stmt->whereClause = pstate->p_tempwhere;
+	}
+
 	/* transform targetlist */
 	qry->targetList = transformTargetList(pstate, stmt->targetList,
 										  EXPR_KIND_SELECT_TARGET);

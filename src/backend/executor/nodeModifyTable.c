@@ -330,6 +330,129 @@ ExecComputeStoredGenerated(EState *estate, TupleTableSlot *slot)
 	MemoryContextSwitchTo(oldContext);
 }
 
+/*
+ * Set row start time in row start time column for a tuple.
+ */
+void
+ExecSetRowStartTime(EState *estate, TupleTableSlot *slot)
+{
+	ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
+	Relation	rel = resultRelInfo->ri_RelationDesc;
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+	int			natts = tupdesc->natts;
+	MemoryContext oldContext;
+	Datum	   *values;
+	bool	   *nulls;
+
+	Assert(tupdesc->constr && tupdesc->constr->is_system_versioned);
+
+	oldContext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+
+	values = palloc(sizeof(*values) * natts);
+	nulls = palloc(sizeof(*nulls) * natts);
+
+	slot_getallattrs(slot);
+	memcpy(nulls, slot->tts_isnull, sizeof(*nulls) * natts);
+
+	for (int i = 0; i < natts; i++)
+	{
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
+
+		/*
+		 * We set infinity for row end time column for a tuple because row end
+		 * time is not yet known.
+		 */
+		if (attr->attgenerated == ATTRIBUTE_ROW_START_TIME)
+		{
+			Datum		val;
+
+			val = GetCurrentTransactionStartTimestamp();
+
+			values[i] = val;
+			nulls[i] = false;
+		}
+		else if (attr->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		{
+			Datum		val;
+
+			val = DirectFunctionCall3(timestamp_in,
+									  CStringGetDatum("infinity"),
+									  ObjectIdGetDatum(InvalidOid),
+									  Int32GetDatum(-1));
+
+			values[i] = val;
+			nulls[i] = false;
+		}
+		else
+		{
+			if (!nulls[i])
+				values[i] = datumCopy(slot->tts_values[i], attr->attbyval, attr->attlen);
+		}
+	}
+
+	ExecClearTuple(slot);
+	memcpy(slot->tts_values, values, sizeof(*values) * natts);
+	memcpy(slot->tts_isnull, nulls, sizeof(*nulls) * natts);
+	ExecStoreVirtualTuple(slot);
+	ExecMaterializeSlot(slot);
+
+	MemoryContextSwitchTo(oldContext);
+}
+
+/*
+ * Set row end time in row end time columns for a tuple.
+ */
+void
+ExecSetRowEndTime(EState *estate, TupleTableSlot *slot)
+{
+	ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
+	Relation	rel = resultRelInfo->ri_RelationDesc;
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+	int			natts = tupdesc->natts;
+	MemoryContext oldContext;
+	Datum	   *values;
+	bool	   *nulls;
+
+	Assert(tupdesc->constr && tupdesc->constr->is_system_versioned);
+
+	oldContext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+
+	values = palloc(sizeof(*values) * natts);
+	nulls = palloc(sizeof(*nulls) * natts);
+
+	slot_getallattrs(slot);
+	memcpy(nulls, slot->tts_isnull, sizeof(*nulls) * natts);
+
+	for (int i = 0; i < natts; i++)
+	{
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
+
+		if (attr->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		{
+			Datum		val;
+
+			val = GetCurrentTransactionStartTimestamp();
+
+			values[i] = val;
+			nulls[i] = false;
+		}
+		else
+		{
+			if (!nulls[i])
+				values[i] = datumCopy(slot->tts_values[i], attr->attbyval, attr->attlen);
+		}
+
+	}
+
+	ExecClearTuple(slot);
+	memcpy(slot->tts_values, values, sizeof(*values) * natts);
+	memcpy(slot->tts_isnull, nulls, sizeof(*nulls) * natts);
+	ExecStoreVirtualTuple(slot);
+	ExecMaterializeSlot(slot);
+
+	MemoryContextSwitchTo(oldContext);
+}
+
 /* ----------------------------------------------------------------
  *		ExecInsert
  *
@@ -428,6 +551,13 @@ ExecInsert(ModifyTableState *mtstate,
 		if (resultRelationDesc->rd_att->constr &&
 			resultRelationDesc->rd_att->constr->has_generated_stored)
 			ExecComputeStoredGenerated(estate, slot);
+
+		/*
+		 * Set row start time
+		 */
+		if (resultRelationDesc->rd_att->constr &&
+			resultRelationDesc->rd_att->constr->is_system_versioned)
+			ExecSetRowStartTime(estate, slot);
 
 		/*
 		 * Check any RLS WITH CHECK policies.
@@ -755,6 +885,31 @@ ExecDelete(ModifyTableState *mtstate,
 	}
 	else
 	{
+		/*
+		 * Set row end time and insert
+		 */
+		if (resultRelationDesc->rd_att->constr &&
+			resultRelationDesc->rd_att->constr->is_system_versioned)
+		{
+			TupleTableSlot *sslot = NULL;
+
+			sslot = table_slot_create(resultRelationDesc, NULL);
+
+			if (!table_tuple_fetch_row_version(resultRelationDesc, tupleid, SnapshotAny,
+											   sslot))
+			{
+				elog(ERROR, "failed to fetch tuple");
+			}
+			else
+			{
+				ExecSetRowEndTime(estate, sslot);
+				table_tuple_insert(resultRelationDesc, sslot,
+								   estate->es_output_cid,
+								   0, NULL);
+			}
+			ExecDropSingleTupleTableSlot(sslot);
+		}
+
 		/*
 		 * delete the tuple
 		 *
@@ -1126,6 +1281,31 @@ ExecUpdate(ModifyTableState *mtstate,
 		if (resultRelationDesc->rd_att->constr &&
 			resultRelationDesc->rd_att->constr->has_generated_stored)
 			ExecComputeStoredGenerated(estate, slot);
+
+		/*
+		 * Set row end time and insert
+		 */
+		if (resultRelationDesc->rd_att->constr &&
+			resultRelationDesc->rd_att->constr->is_system_versioned)
+		{
+			TupleTableSlot *sslot = NULL;
+
+			sslot = table_slot_create(resultRelationDesc, NULL);
+
+			if (!table_tuple_fetch_row_version(resultRelationDesc, tupleid, SnapshotAny,
+											   sslot))
+			{
+				elog(ERROR, "failed to fetch tuple");
+			}
+			else
+			{
+				ExecSetRowEndTime(estate, sslot);
+				table_tuple_insert(resultRelationDesc, sslot,
+								   estate->es_output_cid,
+								   0, NULL);
+			}
+			ExecDropSingleTupleTableSlot(sslot);
+		}
 
 		/*
 		 * Check any RLS UPDATE WITH CHECK policies

@@ -809,3 +809,123 @@ makeVacuumRelation(RangeVar *relation, Oid oid, List *va_cols)
 	v->va_cols = va_cols;
 	return v;
 }
+
+Node *
+makeAndExpr(Node *lexpr, Node *rexpr, int location)
+{
+	Node	   *lexp = lexpr;
+
+	/* Look through AEXPR_PAREN nodes so they don't affect flattening */
+	while (IsA(lexp, A_Expr) &&
+		   ((A_Expr *) lexp)->kind == AEXPR_PAREN)
+		lexp = ((A_Expr *) lexp)->lexpr;
+	/* Flatten "a AND b AND c ..." to a single BoolExpr on sight */
+	if (IsA(lexp, BoolExpr))
+	{
+		BoolExpr   *blexpr = (BoolExpr *) lexp;
+
+		if (blexpr->boolop == AND_EXPR)
+		{
+			blexpr->args = lappend(blexpr->args, rexpr);
+			return (Node *) blexpr;
+		}
+	}
+	return (Node *) makeBoolExpr(AND_EXPR, list_make2(lexpr, rexpr), location);
+}
+
+/*
+ * makeColumnRefFromName -
+ *	  creates a ColumnRef node using column name
+ */
+ColumnRef *
+makeColumnRefFromName(char *colname)
+{
+	ColumnRef  *c = makeNode(ColumnRef);
+
+	c->location = 0;
+	c->fields = lcons(makeString(colname), NIL);
+
+	return c;
+}
+
+/*
+ * makeConstraint -
+ *       create a constraint node
+ */
+Constraint *
+makeConstraint(ConstrType type)
+{
+	Constraint *c = makeNode(Constraint);
+
+	c->contype = type;
+	c->raw_expr = NULL;
+	c->cooked_expr = NULL;
+	c->location = 1;
+
+	return c;
+}
+
+/*
+ * makeSystemColumnDef -
+ *       create a ColumnDef node for system column
+ */
+ColumnDef *
+makeSystemColumnDef(char *name)
+{
+	ColumnDef  *n = makeNode(ColumnDef);
+
+	if (strcmp(name, "StartTime") == 0)
+	{
+		n->colname = "StartTime";
+		n->constraints = list_make1((Node *) makeConstraint(CONSTR_ROW_START_TIME));
+	}
+	else
+	{
+		n->colname = "EndTime";
+		n->constraints = list_make1((Node *) makeConstraint(CONSTR_ROW_END_TIME));
+	}
+	n->typeName = makeTypeNameFromNameList(list_make2(makeString("pg_catalog"),
+													  makeString("timestamp")));
+	n->inhcount = 0;
+	n->is_local = true;
+	n->is_from_type = false;
+	n->storage = 0;
+	n->raw_default = NULL;
+	n->cooked_default = NULL;
+	n->collOid = InvalidOid;
+	n->location = 1;
+
+	return n;
+}
+
+/*
+ * makeAddColCmd -
+ *       create add column AlterTableCmd node
+ */
+AlterTableCmd *
+makeAddColCmd(ColumnDef *coldef)
+{
+	AlterTableCmd *n = makeNode(AlterTableCmd);
+
+	n->subtype = AT_AddColumn;
+	n->def = (Node *) coldef;
+	n->missing_ok = false;
+
+	return n;
+}
+
+/*
+ * makeDropColCmd -
+ *       create drop column AlterTableCmd node
+ */
+AlterTableCmd *
+makeDropColCmd(char *name)
+{
+	AlterTableCmd *n = makeNode(AlterTableCmd);
+
+	n->subtype = AT_DropColumn;
+	n->name = name;
+	n->missing_ok = false;
+
+	return n;
+}

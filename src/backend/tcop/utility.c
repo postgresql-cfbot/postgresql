@@ -17,6 +17,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/relation.h"
 #include "access/reloptions.h"
 #include "access/twophase.h"
 #include "access/xact.h"
@@ -58,7 +59,9 @@
 #include "commands/vacuum.h"
 #include "commands/view.h"
 #include "miscadmin.h"
+#include "nodes/makefuncs.h"
 #include "parser/parse_utilcmd.h"
+#include "optimizer/plancat.h"
 #include "postmaster/bgwriter.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rewriteRemove.h"
@@ -1095,6 +1098,9 @@ ProcessUtilitySlow(ParseState *pstate,
 					Oid			relid;
 					List	   *stmts;
 					ListCell   *l;
+					ListCell   *s;
+					Relation	rel;
+
 					LOCKMODE	lockmode;
 
 					/*
@@ -1105,6 +1111,61 @@ ProcessUtilitySlow(ParseState *pstate,
 					 */
 					lockmode = AlterTableGetLockLevel(atstmt->cmds);
 					relid = AlterTableLookupRelation(atstmt, lockmode);
+
+
+					/*
+					 * Change add and remove system versioning to individual
+					 * ADD and DROP column command
+					 */
+					foreach(s, atstmt->cmds)
+					{
+						AlterTableCmd *cmd = (AlterTableCmd *) lfirst(s);
+
+						if (cmd->subtype == AT_AddSystemVersioning)
+						{
+							ColumnDef  *startTimeCol;
+							ColumnDef  *endTimeCol;
+
+							rel = relation_open(relid, NoLock);
+
+							/*
+							 * we use defualt column names for system
+							 * versioning in ALTER TABLE statment
+							 */
+							startTimeCol = makeSystemColumnDef("StartTime");
+							endTimeCol = makeSystemColumnDef("EndTime");
+
+							/*
+							 * create alter table cmd and append to the ende
+							 * of commands and remove current listCell because
+							 * we don't want it anymore.
+							 */
+							atstmt->cmds = lappend(atstmt->cmds, (Node *) makeAddColCmd(startTimeCol));
+							atstmt->cmds = lappend(atstmt->cmds, (Node *) makeAddColCmd(endTimeCol));
+
+							/*
+							 * delete current listCell becouse we don't need
+							 * it anymore
+							 */
+							atstmt->cmds = list_delete_cell(atstmt->cmds, s);
+							relation_close(rel, NoLock);
+
+						}
+
+						if (cmd->subtype == AT_DropSystemVersioning)
+						{
+							rel = relation_open(relid, NoLock);
+							atstmt->cmds = lappend(atstmt->cmds, makeDropColCmd(get_row_end_time_col_name(rel)));
+							atstmt->cmds = lappend(atstmt->cmds, makeDropColCmd(get_row_start_time_col_name(rel)));
+
+							/*
+							 * delete current listCell because we don't need
+							 * it anymore
+							 */
+							atstmt->cmds = list_delete_cell(atstmt->cmds, s);
+							relation_close(rel, NoLock);
+						}
+					}
 
 					if (OidIsValid(relid))
 					{

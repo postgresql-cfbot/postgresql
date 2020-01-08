@@ -56,6 +56,8 @@
 #include "optimizer/tlist.h"
 #include "parser/analyze.h"
 #include "parser/parse_agg.h"
+#include "parser/parse_clause.h"
+#include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
 #include "rewrite/rewriteManip.h"
@@ -644,6 +646,12 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	 */
 	if (parse->cteList)
 		SS_process_ctes(root);
+
+	/*
+	 * Check and filter out historical data if necessary.
+	 */
+	if (parse->commandType == CMD_SELECT)
+		add_history_data_filter(parse);
 
 	/*
 	 * If the FROM clause is empty, replace it with a dummy RTE_RESULT RTE, so

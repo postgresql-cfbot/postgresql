@@ -25,6 +25,7 @@
 #include "nodes/nodeFuncs.h"
 #include "parser/analyze.h"
 #include "parser/parse_relation.h"
+#include "optimizer/plancat.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rewriteHandler.h"
 #include "rewrite/rewriteManip.h"
@@ -423,6 +424,11 @@ DefineView(ViewStmt *stmt, const char *queryString,
 	rawstmt->stmt_len = stmt_len;
 
 	viewParse = parse_analyze(rawstmt, queryString, NULL, 0, NULL);
+
+	/*
+	 * check and filter out historical data if necessary.
+	 */
+	add_history_data_filter(viewParse);
 
 	/*
 	 * The grammar should ensure that the result is a single SELECT Query.

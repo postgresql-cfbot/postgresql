@@ -1424,7 +1424,15 @@ static struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
-
+	{
+		{"track_statement_statistics", PGC_SUSET, STATS_COLLECTOR,
+			gettext_noop("Collects the counters of SQL statments."),
+			NULL
+		},
+		&pgstat_track_statement_statistics,
+		false,
+		NULL, NULL, NULL
+	},
 	{
 		{"update_process_title", PGC_SUSET, PROCESS_TITLE,
 			gettext_noop("Updates the process title to show the active SQL command."),

@@ -123,6 +123,7 @@
  */
 bool		pgstat_track_activities = false;
 bool		pgstat_track_counts = false;
+bool		pgstat_track_statement_statistics = false;
 int			pgstat_track_functions = TRACK_FUNC_OFF;
 int			pgstat_track_activity_query_size = 1024;
 
@@ -140,6 +141,13 @@ char	   *pgstat_stat_tmpname = NULL;
  * without needing to copy things around.  We assume this inits to zeroes.
  */
 PgStat_MsgBgWriter BgWriterStats;
+
+
+/*
+ * Global SQL statement counters gathered that are stored in
+ * shared memory.
+ */
+uint64* pgstat_sql_counts = NULL;
 
 /* ----------
  * Local data
@@ -623,6 +631,32 @@ startup_failed:
 	 */
 	SetConfigOption("track_counts", "off", PGC_INTERNAL, PGC_S_OVERRIDE);
 }
+
+
+/*
+ * Initialization of shared memory for pgstat_sql_count
+ */
+Size
+pgstat_sql_shmem_size(void)
+{
+	return sizeof(uint64) * PGSTAT_SQLSTMT_SIZE;
+}
+
+void
+pgstat_sql_shmem_init(void)
+{
+	bool		foundWALWrites;
+
+	pgstat_sql_counts = (uint64 *)
+		ShmemInitStruct("pgstat sql counter", pgstat_sql_shmem_size(), &foundWALWrites);
+
+	if (!foundWALWrites)
+	{
+		MemSet(pgstat_sql_counts, 0, pgstat_sql_shmem_size());
+	}
+}
+
+
 
 /*
  * subroutine for pgstat_reset_all
@@ -1334,11 +1368,21 @@ pgstat_reset_shared_counters(const char *target)
 		msg.m_resettarget = RESET_ARCHIVER;
 	else if (strcmp(target, "bgwriter") == 0)
 		msg.m_resettarget = RESET_BGWRITER;
+	else if (strcmp(target, "sqlstmt") == 0)
+	{
+		/*
+		 * Reset the pgstat sql counters. These statistics are not reset
+		 * by the stats collector because they reside in shared memory.
+		 */
+		LWLockAcquire(WALWriteLock, LW_EXCLUSIVE);
+		memset(pgstat_sql_counts, 0, pgstat_sql_shmem_size());
+		LWLockRelease(WALWriteLock);
+	}
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("unrecognized reset target: \"%s\"", target),
-				 errhint("Target must be \"archiver\" or \"bgwriter\".")));
+				 errhint("Target must be \"archiver\" or \"bgwriter\" or \"sqlstmt\".")));
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETSHAREDCOUNTER);
 	pgstat_send(&msg, sizeof(msg));
@@ -4410,6 +4454,17 @@ pgstat_send_bgwriter(void)
 	MemSet(&BgWriterStats, 0, sizeof(BgWriterStats));
 }
 
+
+/*
+ * Count SQL statement for pg_stat_sql view
+ */
+void
+pgstat_count_sqlstmt(StatSqlType sqlType)
+{
+	LWLockAcquire(PGSTATSqlLock, LW_EXCLUSIVE);
+	pgstat_sql_counts[sqlType] += 1;
+	LWLockRelease(PGSTATSqlLock);
+}
 
 /* ----------
  * PgstatCollectorMain() -

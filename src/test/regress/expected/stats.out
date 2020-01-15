@@ -4,6 +4,70 @@
 -- Must be run after tenk2 has been created (by create_table),
 -- populated (by create_misc) and indexed (by create_index).
 --
+-- pg_stat_sql
+SET track_statement_statistics TO OFF;
+SELECT pg_stat_reset_shared('sqlstmt'); -- reset the counters
+ pg_stat_reset_shared 
+----------------------
+ 
+(1 row)
+
+SELECT pg_sleep(1.0);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+SELECT * FROM pg_stat_sql where tag='SELECT';
+ tag | count 
+-----+-------
+(0 rows)
+
+SET track_statement_statistics TO ON;
+CREATE TABLE t1 (c1 int);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t1 VALUES(1);
+DELETE FROM t1;
+SELECT * FROM pg_stat_sql;
+     tag      | count 
+--------------+-------
+ INSERT       |     3
+ DELETE       |     1
+ CREATE TABLE |     1
+ SET          |     1
+(4 rows)
+
+SELECT pg_sleep(1.0);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+SELECT * FROM pg_stat_sql where tag='SELECT';
+  tag   | count 
+--------+-------
+ SELECT |     2
+(1 row)
+
+SET track_statement_statistics TO OFF;
+SELECT pg_stat_reset_shared('sqlstmt'); -- reset the counters
+ pg_stat_reset_shared 
+----------------------
+ 
+(1 row)
+
+SELECT pg_sleep(1.0);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+SELECT * FROM pg_stat_sql where tag='SELECT';
+ tag | count 
+-----+-------
+(0 rows)
+
 -- conditio sine qua non
 SHOW track_counts;  -- must be on
  track_counts 

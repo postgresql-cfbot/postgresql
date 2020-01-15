@@ -1093,6 +1093,10 @@ REVOKE ALL ON pg_subscription FROM public;
 GRANT SELECT (subdbid, subname, subowner, subenabled, subslotname, subpublications)
     ON pg_subscription TO public;
 
+CREATE VIEW pg_stat_sql AS
+    SELECT * FROM pg_stat_sql();
+
+REVOKE EXECUTE ON FUNCTION pg_stat_sql() FROM public;
 
 --
 -- We have a few function definitions in here, too.

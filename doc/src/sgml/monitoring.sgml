@@ -369,6 +369,13 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </row>
 
      <row>
+      <entry><structname>pg_stat_sql</structname>><indexterm><primary>pg_stat_sql</primary></indexterm></entry>
+      <entry>Shows statistics about the SQL statements that are
+       executed on the instance.
+       See <xref linkend='pg-stat-sql-view'/> for details.</entry>
+     </row>
+
+     <row>
       <entry><structname>pg_stat_progress_cluster</structname><indexterm><primary>pg_stat_progress_cluster</primary></indexterm></entry>
       <entry>One row for each backend running
        <command>CLUSTER</command> or <command>VACUUM FULL</command>, showing current progress.
@@ -3217,6 +3224,39 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
    controls exactly which functions are tracked.
   </para>
 
+  <table id="pg-stat-sql-view" xreflabel="pg_stat_sql">
+   <title><structname>pg_stat_sql</structname> View</title>
+   <tgroup cols="3">
+    <thead>
+    <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><structfield>tag</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Tag of the SQL statement</entry>
+    </row>
+    <row>
+     <entry><structfield>count</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>Number of times the SQL statement is executed</entry>
+    </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The <structname>pg_stat_sql</structname> view will contain statistics
+   about number of SQL statements that are executed on the instance.
+   The <xref linkend="guc-track-statement-statistics"/> parameter controls the SQL statement
+   execution statistics.
+  </para>
+
  </sect2>
 
  <sect2 id="monitoring-stats-functions">
@@ -3312,6 +3352,8 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
        counters shown in the <structname>pg_stat_bgwriter</structname> view.
        Calling <literal>pg_stat_reset_shared('archiver')</literal> will zero all the
        counters shown in the <structname>pg_stat_archiver</structname> view.
+       Calling <literal>pg_stat_reset_shared('sqlstmt')</literal> will zero all the
+       counters shown in the <structname>pg_stat_sql</structname> view.
       </entry>
      </row>
 

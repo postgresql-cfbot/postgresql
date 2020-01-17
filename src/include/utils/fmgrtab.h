@@ -28,11 +28,16 @@ typedef struct
 	short		nargs;			/* 0..FUNC_MAX_ARGS, or -1 if variable count */
 	bool		strict;			/* T if function is "strict" */
 	bool		retset;			/* T if function returns a set */
-	const char *funcName;		/* C name of the function */
 	PGFunction	func;			/* pointer to compiled function */
 } FmgrBuiltin;
 
 extern const FmgrBuiltin fmgr_builtins[];
+
+/* names of builtin functions as a single character array */
+extern const char fmgr_builtin_name_string[];
+
+/* lengths of builtin function names, for computing the offset into the name string */
+extern const uint8 fmgr_builtin_name_lengths[];
 
 extern const int fmgr_nbuiltins;	/* number of entries in table */
 

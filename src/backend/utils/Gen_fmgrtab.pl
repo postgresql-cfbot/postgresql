@@ -207,7 +207,7 @@ my $fmgr_count       = 0;
 foreach my $s (sort { $a->{oid} <=> $b->{oid} } @fmgr)
 {
 	print $tfh
-	  "  { $s->{oid}, $s->{nargs}, $bmap{$s->{strict}}, $bmap{$s->{retset}}, \"$s->{prosrc}\", $s->{prosrc} }";
+	  "  { $s->{oid}, $s->{nargs}, $bmap{$s->{strict}}, $bmap{$s->{retset}}, $s->{prosrc} }";
 
 	$fmgr_builtin_oid_index[ $s->{oid} ] = $fmgr_count++;
 	$last_builtin_oid = $s->{oid};
@@ -254,6 +254,30 @@ for (my $i = 0; $i <= $last_builtin_oid; $i++)
 	{
 		print $tfh "  $oid,\n";
 	}
+}
+print $tfh "};\n";
+
+
+# Emit the string containing all the builtin function names.
+print $tfh qq|\nconst char fmgr_builtin_name_string[] =\n|;
+foreach my $s (sort { $a->{oid} <=> $b->{oid} } @fmgr)
+{
+	print $tfh qq|  "$s->{prosrc}\\0"\n|;
+}
+print $tfh ";\n";
+
+
+# Emit an array of lengths which will be used to calculate the
+# index into the function name string.
+printf $tfh "\nconst uint8 fmgr_builtin_name_lengths[] = {\n";
+my $length = 0;
+foreach my $s (sort { $a->{oid} <=> $b->{oid} } @fmgr)
+{
+	print $tfh "  $length,\n";
+
+	# Get the length of the current function name,
+	# and add 1 for the null terminator.
+	$length = length($s->{prosrc}) + 1;
 }
 print $tfh "};\n";
 

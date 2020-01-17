@@ -97,11 +97,13 @@ fmgr_isbuiltin(Oid id)
 static const FmgrBuiltin *
 fmgr_lookupByName(const char *name)
 {
-	int			i;
+	int			i,
+				offset = 0;
 
 	for (i = 0; i < fmgr_nbuiltins; i++)
 	{
-		if (strcmp(name, fmgr_builtins[i].funcName) == 0)
+		offset += fmgr_builtin_name_lengths[i];
+		if (strcmp(name, fmgr_builtin_name_string + offset) == 0)
 			return fmgr_builtins + i;
 	}
 	return NULL;

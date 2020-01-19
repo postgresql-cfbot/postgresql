@@ -99,6 +99,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	/* Set default value */
 	params.index_cleanup = VACOPT_TERNARY_DEFAULT;
 	params.truncate = VACOPT_TERNARY_DEFAULT;
+	params.resume = VACOPT_TERNARY_DEFAULT;
 
 	/* Parse options list */
 	foreach(lc, vacstmt->options)
@@ -127,6 +128,8 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 			disable_page_skipping = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "index_cleanup") == 0)
 			params.index_cleanup = get_vacopt_ternary_value(opt);
+		else if (strcmp(opt->defname, "resume") == 0)
+			params.resume = get_vacopt_ternary_value(opt);
 		else if (strcmp(opt->defname, "truncate") == 0)
 			params.truncate = get_vacopt_ternary_value(opt);
 		else
@@ -1783,6 +1786,16 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 			params->truncate = VACOPT_TERNARY_ENABLED;
 		else
 			params->truncate = VACOPT_TERNARY_DISABLED;
+	}
+
+	/* Set resume option based on reloptions if not yet, default is false */
+	if (params->resume == VACOPT_TERNARY_DEFAULT)
+	{
+		if (onerel->rd_options == NULL ||
+			!((StdRdOptions *) onerel->rd_options)->vacuum_resume)
+			params->resume = VACOPT_TERNARY_DISABLED;
+		else
+			params->resume = VACOPT_TERNARY_ENABLED;
 	}
 
 	/*

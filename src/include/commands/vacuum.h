@@ -183,7 +183,8 @@ typedef enum VacuumOption
 	VACOPT_FULL = 1 << 4,		/* FULL (non-concurrent) vacuum */
 	VACOPT_SKIP_LOCKED = 1 << 5,	/* skip if cannot get lock */
 	VACOPT_SKIPTOAST = 1 << 6,	/* don't process the TOAST table, if any */
-	VACOPT_DISABLE_PAGE_SKIPPING = 1 << 7	/* don't skip any pages */
+	VACOPT_DISABLE_PAGE_SKIPPING = 1 << 7,	/* don't skip any pages */
+	VACOPT_RESUME = 1 << 8		/* resume from the previous point */
 } VacuumOption;
 
 /*
@@ -222,6 +223,8 @@ typedef struct VacuumParams
 										 * default value depends on reloptions */
 	VacOptTernaryValue truncate;	/* Truncate empty pages at the end,
 									 * default value depends on reloptions */
+	VacOptTernaryValue resume;		/* Resume vacuuming from the last vacuumed
+									 * block */
 } VacuumParams;
 
 /* GUC parameters */

@@ -978,6 +978,14 @@ CREATE VIEW pg_stat_progress_analyze AS
     FROM pg_stat_get_progress_info('ANALYZE') AS S
         LEFT JOIN pg_database D ON S.datid = D.oid;
 
+CREATE VIEW pg_stat_waitaccum AS
+    SELECT
+		S.wait_event_type AS wait_event_type,
+		S.wait_event AS wait_event,
+		S.calls AS calls,
+		S.times AS times
+	FROM pg_stat_get_waitaccum(NULL) AS S;
+
 CREATE VIEW pg_stat_progress_vacuum AS
     SELECT
         S.pid AS pid, S.datid AS datid, D.datname AS datname,

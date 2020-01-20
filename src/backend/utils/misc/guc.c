@@ -1428,6 +1428,15 @@ static struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
+	{
+		{"track_wait_timing", PGC_SUSET, STATS_COLLECTOR,
+			gettext_noop("Collects timing statistics for wait events."),
+			NULL
+		},
+		&pgstat_track_wait_timing,
+		false,
+		NULL, NULL, NULL
+	},
 
 	{
 		{"update_process_title", PGC_SUSET, PROCESS_TITLE,

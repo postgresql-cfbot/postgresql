@@ -59,6 +59,7 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_ANALYZE,
 	PGSTAT_MTYPE_ARCHIVER,
 	PGSTAT_MTYPE_BGWRITER,
+	PGSTAT_MTYPE_WAITACCUM,
 	PGSTAT_MTYPE_FUNCSTAT,
 	PGSTAT_MTYPE_FUNCPURGE,
 	PGSTAT_MTYPE_RECOVERYCONFLICT,
@@ -119,7 +120,8 @@ typedef struct PgStat_TableCounts
 typedef enum PgStat_Shared_Reset_Target
 {
 	RESET_ARCHIVER,
-	RESET_BGWRITER
+	RESET_BGWRITER,
+	RESET_WAITACCUM
 } PgStat_Shared_Reset_Target;
 
 /* Possible object types for resetting single counters */
@@ -423,6 +425,33 @@ typedef struct PgStat_MsgBgWriter
 } PgStat_MsgBgWriter;
 
 /* ----------
+ * PgStat_WaitAccumEntry	Entry in backend/background's per-wait_event_info hash table
+ * ----------
+ */
+typedef struct PgStat_WaitAccumEntry
+{
+	uint32			wait_event_info;
+	PgStat_Counter	calls;
+	uint64			times;
+} PgStat_WaitAccumEntry;
+
+/* ----------
+ * PgStat_MsgWaitAccum	Sent by backend/background's process to update statistics.
+ * ----------
+ */
+#define PGSTAT_NUM_WAITACCUMENTRIES	\
+	((PGSTAT_MSG_PAYLOAD - sizeof(int))  \
+	 / sizeof(PgStat_WaitAccumEntry))
+
+typedef struct PgStat_MsgWaitAccum
+{
+	PgStat_MsgHdr m_hdr;
+
+	int m_nentries;
+	PgStat_WaitAccumEntry m_entry[PGSTAT_NUM_WAITACCUMENTRIES];
+} PgStat_MsgWaitAccum;
+
+/* ----------
  * PgStat_MsgRecoveryConflict	Sent by the backend upon recovery conflict
  * ----------
  */
@@ -564,6 +593,7 @@ typedef union PgStat_Msg
 	PgStat_MsgAnalyze msg_analyze;
 	PgStat_MsgArchiver msg_archiver;
 	PgStat_MsgBgWriter msg_bgwriter;
+	PgStat_MsgWaitAccum msg_waitaccum;
 	PgStat_MsgFuncstat msg_funcstat;
 	PgStat_MsgFuncpurge msg_funcpurge;
 	PgStat_MsgRecoveryConflict msg_recoveryconflict;
@@ -581,7 +611,7 @@ typedef union PgStat_Msg
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BC9D
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BC9E
 
 /* ----------
  * PgStat_StatDBEntry			The collector's data per database
@@ -711,6 +741,30 @@ typedef struct PgStat_GlobalStats
 	TimestampTz stat_reset_timestamp;
 } PgStat_GlobalStats;
 
+typedef struct WAEntry
+{
+	int key;
+	PgStat_WaitAccumEntry *entry;
+	struct WAEntry *next;
+} WAEntry;
+
+#define WA_BUCKET_SIZE 461
+
+typedef struct WAHash
+{
+	WAEntry entries[WA_BUCKET_SIZE];
+	WAEntry *buckets[WA_BUCKET_SIZE];
+	int entry_num;
+} WAHash;
+
+/*
+ * WaitAccum statistics kept in the stats collector
+ */
+typedef struct PgStat_WaitAccumStats
+{
+	WAHash *hash;
+} PgStat_WaitAccumStats;
+
 
 /* ----------
  * Backend types
@@ -787,6 +841,8 @@ typedef enum
 	WAIT_EVENT_WAL_WRITER_MAIN
 } WaitEventActivity;
 
+#define	PG_WAIT_ACTIVITY_LAST_TYPE	WAIT_EVENT_WAL_WRITER_MAIN
+
 /* ----------
  * Wait Events - Client
  *
@@ -807,6 +863,8 @@ typedef enum
 	WAIT_EVENT_WAL_SENDER_WRITE_DATA,
 	WAIT_EVENT_GSS_OPEN_SERVER,
 } WaitEventClient;
+
+#define	PG_WAIT_CLIENT_LAST_TYPE	WAIT_EVENT_GSS_OPEN_SERVER
 
 /* ----------
  * Wait Events - IPC
@@ -856,6 +914,8 @@ typedef enum
 	WAIT_EVENT_SYNC_REP
 } WaitEventIPC;
 
+#define	PG_WAIT_IPC_LAST_TYPE	WAIT_EVENT_SYNC_REP
+
 /* ----------
  * Wait Events - Timeout
  *
@@ -868,6 +928,8 @@ typedef enum
 	WAIT_EVENT_PG_SLEEP,
 	WAIT_EVENT_RECOVERY_APPLY_DELAY
 } WaitEventTimeout;
+
+#define	PG_WAIT_TIMEOUT_LAST_TYPE	WAIT_EVENT_RECOVERY_APPLY_DELAY
 
 /* ----------
  * Wait Events - IO
@@ -947,6 +1009,8 @@ typedef enum
 	WAIT_EVENT_WAL_SYNC_METHOD_ASSIGN,
 	WAIT_EVENT_WAL_WRITE
 } WaitEventIO;
+
+#define	PG_WAIT_IO_LAST_TYPE	WAIT_EVENT_WAL_WRITE
 
 /* ----------
  * Command type for progress reporting purposes
@@ -1205,6 +1269,8 @@ typedef struct PgStat_FunctionCallUsage
 	instr_time	f_start;
 } PgStat_FunctionCallUsage;
 
+extern WAHash *wa_hash;
+extern uint64 waitStart;
 
 /* ----------
  * GUC parameters
@@ -1212,6 +1278,7 @@ typedef struct PgStat_FunctionCallUsage
  */
 extern bool pgstat_track_activities;
 extern bool pgstat_track_counts;
+extern bool pgstat_track_wait_timing;
 extern int	pgstat_track_functions;
 extern PGDLLIMPORT int pgstat_track_activity_query_size;
 extern char *pgstat_stat_directory;
@@ -1229,6 +1296,7 @@ extern PgStat_MsgBgWriter BgWriterStats;
 extern PgStat_Counter pgStatBlockReadTime;
 extern PgStat_Counter pgStatBlockWriteTime;
 
+extern PgStat_WaitAccumEntry *pgstat_get_wa_entry(WAHash *hash, uint32 key);
 /* ----------
  * Functions called from postmaster
  * ----------
@@ -1316,6 +1384,50 @@ extern char *pgstat_clip_activity(const char *raw_activity);
  * initialized.
  * ----------
  */
+
+static inline void
+pgstat_report_waitaccum_start()
+{
+	if (wa_hash == NULL)
+		return;
+
+	if (pgstat_track_wait_timing)
+	{
+		waitStart = rdtsc();
+	}
+}
+
+static inline void
+pgstat_report_waitaccum_end(uint32 wait_event_info)
+{
+	PgStat_WaitAccumEntry *entry;
+	uint64		diff = 0;
+
+	if (wa_hash == NULL)
+		return;
+
+	if (pgstat_track_wait_timing)
+	{
+		diff = rdtsc();
+		diff -= waitStart;
+	}
+
+	entry = pgstat_get_wa_entry(wa_hash, wait_event_info);
+
+	if (!entry)
+	{
+		printf("wait_event_info: %u.\n", wait_event_info);
+		fflush(stdout);
+		return;
+	}
+
+	entry->calls++;
+	if (pgstat_track_wait_timing)
+	{
+		entry->times += diff;
+	}
+}
+
 static inline void
 pgstat_report_wait_start(uint32 wait_event_info)
 {
@@ -1329,6 +1441,8 @@ pgstat_report_wait_start(uint32 wait_event_info)
 	 * four-bytes, updates are atomic.
 	 */
 	proc->wait_event_info = wait_event_info;
+
+	pgstat_report_waitaccum_start();
 }
 
 /* ----------
@@ -1348,12 +1462,15 @@ pgstat_report_wait_end(void)
 	if (!pgstat_track_activities || !proc)
 		return;
 
+	pgstat_report_waitaccum_end(proc->wait_event_info);
+
 	/*
 	 * Since this is a four-byte field which is always read and written as
 	 * four-bytes, updates are atomic.
 	 */
 	proc->wait_event_info = 0;
 }
+
 
 /* nontransactional event counts are simple enough to inline */
 
@@ -1422,6 +1539,7 @@ extern void pgstat_twophase_postabort(TransactionId xid, uint16 info,
 
 extern void pgstat_send_archiver(const char *xlog, bool failed);
 extern void pgstat_send_bgwriter(void);
+extern void pgstat_send_waitaccum(void);
 
 /* ----------
  * Support functions for the SQL-callable functions to
@@ -1436,5 +1554,6 @@ extern PgStat_StatFuncEntry *pgstat_fetch_stat_funcentry(Oid funcid);
 extern int	pgstat_fetch_stat_numbackends(void);
 extern PgStat_ArchiverStats *pgstat_fetch_stat_archiver(void);
 extern PgStat_GlobalStats *pgstat_fetch_global(void);
+extern PgStat_WaitAccumStats *pgstat_fetch_stat_waitaccum(void);
 
 #endif							/* PGSTAT_H */

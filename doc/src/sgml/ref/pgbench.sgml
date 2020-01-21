@@ -85,6 +85,12 @@ pgbench -i <optional> <replaceable>other-options</replaceable> </optional> <repl
    database to test in.  (You may also need <option>-h</option>,
    <option>-p</option>, and/or <option>-U</option> options to specify how to
    connect to the database server.)
+   If this parameter contains an <symbol>=</symbol> sign or starts
+   with a valid <acronym>URI</acronym> prefix
+   (<literal>postgresql://</literal>
+   or <literal>postgres://</literal>), it is treated as a
+   <parameter>conninfo</parameter> string. See <xref
+   linkend="libpq-connstring"/> for more information.
   </para>
 
   <caution>

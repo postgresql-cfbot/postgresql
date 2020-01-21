@@ -99,6 +99,14 @@ PostgreSQL documentation
         that is not set, the user name specified for the connection is
         used.
        </para>
+       <para>
+        If this parameter contains an <symbol>=</symbol> sign or starts
+        with a valid <acronym>URI</acronym> prefix
+        (<literal>postgresql://</literal>
+        or <literal>postgres://</literal>), it is treated as a
+        <parameter>conninfo</parameter> string. See <xref
+        linkend="libpq-connstring"/> for more information.
+       </para>
       </listitem>
      </varlistentry>
 

@@ -155,6 +155,13 @@
         class="parameter">dbname</replaceable> and restore directly
         into the database.
        </para>
+       <para>
+        If this parameter contains an <symbol>=</symbol> sign or starts
+        with a valid <acronym>URI</acronym> prefix
+        (<literal>postgresql://</literal>
+        or <literal>postgres://</literal>), it is treated as a
+        <parameter>conninfo</parameter> string. See <xref linkend="libpq-connect"/> for more information.
+       </para>
       </listitem>
      </varlistentry>
 

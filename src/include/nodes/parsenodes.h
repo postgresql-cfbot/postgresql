@@ -3354,6 +3354,7 @@ typedef struct ReindexStmt
 	const char *name;			/* name of database to reindex */
 	int			options;		/* Reindex options flags */
 	bool		concurrent;		/* reindex concurrently? */
+	char	   *tablespacename; /* name of tablespace to store index */
 } ReindexStmt;
 
 /* ----------------------

@@ -777,41 +777,30 @@ add_partial_path(RelOptInfo *parent_rel, Path *new_path)
 		/* Unless pathkeys are incompatible, keep just one of the two paths. */
 		if (keyscmp != PATHKEYS_DIFFERENT)
 		{
-			if (new_path->total_cost > old_path->total_cost * STD_FUZZ_FACTOR)
+			PathCostComparison costcmp;
+
+			/*
+			 * Do a fuzzy cost comparison with standard fuzziness limit.
+			 */
+			costcmp = compare_path_costs_fuzzily(new_path, old_path,
+												 STD_FUZZ_FACTOR);
+
+			if (costcmp == COSTS_BETTER1)
 			{
-				/* New path costs more; keep it only if pathkeys are better. */
-				if (keyscmp != PATHKEYS_BETTER1)
-					accept_new = false;
-			}
-			else if (old_path->total_cost > new_path->total_cost
-					 * STD_FUZZ_FACTOR)
-			{
-				/* Old path costs more; keep it only if pathkeys are better. */
-				if (keyscmp != PATHKEYS_BETTER2)
+				if (keyscmp == PATHKEYS_BETTER1)
 					remove_old = true;
 			}
-			else if (keyscmp == PATHKEYS_BETTER1)
+			else if (costcmp == COSTS_BETTER2)
 			{
-				/* Costs are about the same, new path has better pathkeys. */
-				remove_old = true;
+				if (keyscmp == PATHKEYS_BETTER2)
+					accept_new = false;
 			}
-			else if (keyscmp == PATHKEYS_BETTER2)
+			else if (costcmp == COSTS_EQUAL)
 			{
-				/* Costs are about the same, old path has better pathkeys. */
-				accept_new = false;
-			}
-			else if (old_path->total_cost > new_path->total_cost * 1.0000000001)
-			{
-				/* Pathkeys are the same, and the old path costs more. */
-				remove_old = true;
-			}
-			else
-			{
-				/*
-				 * Pathkeys are the same, and new path isn't materially
-				 * cheaper.
-				 */
-				accept_new = false;
+				if (keyscmp == PATHKEYS_BETTER1)
+					remove_old = true;
+				else if (keyscmp == PATHKEYS_BETTER2)
+					accept_new = false;
 			}
 		}
 
@@ -2748,6 +2737,57 @@ create_set_projection_path(PlannerInfo *root,
 		target->cost.startup +
 		(cpu_tuple_cost + target->cost.per_tuple) * subpath->rows +
 		(pathnode->path.rows - subpath->rows) * cpu_tuple_cost / 2;
+
+	return pathnode;
+}
+
+/*
+ * create_incremental_sort_path
+ *	  Creates a pathnode that represents performing an incremental sort.
+ *
+ * 'rel' is the parent relation associated with the result
+ * 'subpath' is the path representing the source of data
+ * 'pathkeys' represents the desired sort order
+ * 'presorted_keys' is the number of keys by which the input path is
+ *		already sorted
+ * 'limit_tuples' is the estimated bound on the number of output tuples,
+ *		or -1 if no LIMIT or couldn't estimate
+ */
+SortPath *
+create_incremental_sort_path(PlannerInfo *root,
+				 RelOptInfo *rel,
+				 Path *subpath,
+				 List *pathkeys,
+				 int presorted_keys,
+				 double limit_tuples)
+{
+	IncrementalSortPath *sort = makeNode(IncrementalSortPath);
+	SortPath *pathnode = &sort->spath;
+
+	pathnode->path.pathtype = T_IncrementalSort;
+	pathnode->path.parent = rel;
+	/* Sort doesn't project, so use source path's pathtarget */
+	pathnode->path.pathtarget = subpath->pathtarget;
+	/* For now, assume we are above any joins, so no parameterization */
+	pathnode->path.param_info = NULL;
+	pathnode->path.parallel_aware = false;
+	pathnode->path.parallel_safe = rel->consider_parallel &&
+		subpath->parallel_safe;
+	pathnode->path.parallel_workers = subpath->parallel_workers;
+	pathnode->path.pathkeys = pathkeys;
+
+	pathnode->subpath = subpath;
+
+	cost_incremental_sort(&pathnode->path,
+			  root, pathkeys, presorted_keys,
+			  subpath->startup_cost,
+			  subpath->total_cost,
+			  subpath->rows,
+			  subpath->pathtarget->width,
+			  0.0,				/* XXX comparison_cost shouldn't be 0? */
+			  work_mem, limit_tuples);
+
+	sort->presortedCols = presorted_keys;
 
 	return pathnode;
 }

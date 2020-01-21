@@ -215,6 +215,7 @@ extern Tuplesortstate *tuplesort_begin_datum(Oid datumType,
 											 bool randomAccess);
 
 extern void tuplesort_set_bound(Tuplesortstate *state, int64 bound);
+extern bool tuplesort_used_bound(Tuplesortstate *state);
 
 extern void tuplesort_puttupleslot(Tuplesortstate *state,
 								   TupleTableSlot *slot);
@@ -238,6 +239,8 @@ extern bool tuplesort_skiptuples(Tuplesortstate *state, int64 ntuples,
 								 bool forward);
 
 extern void tuplesort_end(Tuplesortstate *state);
+
+extern void tuplesort_reset(Tuplesortstate *state);
 
 extern void tuplesort_get_stats(Tuplesortstate *state,
 								TuplesortInstrumentation *stats);

@@ -63,6 +63,7 @@ OBJS = \
 	nodeSeqscan.o \
 	nodeSetOp.o \
 	nodeSort.o \
+	nodeIncrementalSort.o \
 	nodeSubplan.o \
 	nodeSubqueryscan.o \
 	nodeTableFuncscan.o \

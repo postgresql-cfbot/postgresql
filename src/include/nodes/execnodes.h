@@ -1976,6 +1976,20 @@ typedef struct MaterialState
 	Tuplestorestate *tuplestorestate;
 } MaterialState;
 
+
+/* ----------------
+ *	 When performing sorting by multiple keys input dataset could be already
+ *	 presorted by some prefix of these keys.  We call them "presorted keys".
+ *	 PresortedKeyData represents information about one such key.
+ * ----------------
+ */
+typedef struct PresortedKeyData
+{
+	FmgrInfo				flinfo;	/* comparison function info */
+	FunctionCallInfo	fcinfo; /* comparison function call info */
+	OffsetNumber			attno;	/* attribute number in tuple */
+} PresortedKeyData;
+
 /* ----------------
  *	 Shared memory container for per-worker sort information
  * ----------------
@@ -2003,6 +2017,60 @@ typedef struct SortState
 	bool		am_worker;		/* are we a worker? */
 	SharedSortInfo *shared_info;	/* one entry per worker */
 } SortState;
+
+/* ----------------
+ *	 Shared memory container for per-worker incremental sort information
+ * ----------------
+ */
+typedef struct IncrementalSortInfo
+{
+	TuplesortInstrumentation	fullsort_instrument;
+	int64						fullsort_group_count;
+	TuplesortInstrumentation	prefixsort_instrument;
+	int64						prefixsort_group_count;
+} IncrementalSortInfo;
+
+typedef struct SharedIncrementalSortInfo
+{
+	int							num_workers;
+	IncrementalSortInfo			sinfo[FLEXIBLE_ARRAY_MEMBER];
+} SharedIncrementalSortInfo;
+
+/* ----------------
+ *	 IncrementalSortState information
+ * ----------------
+ */
+typedef enum
+{
+	INCSORT_LOADFULLSORT,
+	INCSORT_LOADPREFIXSORT,
+	INCSORT_READFULLSORT,
+	INCSORT_READPREFIXSORT,
+} IncrementalSortExecutionStatus;
+
+typedef struct IncrementalSortState
+{
+	ScanState	ss;				/* its first field is NodeTag */
+	bool		bounded;		/* is the result set bounded? */
+	int64		bound;			/* if bounded, how many tuples are needed */
+	bool		sort_Done;		/* sort completed yet? */
+	bool		finished;		/* fetching tuples from outer node
+								   is finished ? */
+	int64		bound_Done;		/* value of bound we did the sort with */
+	IncrementalSortExecutionStatus execution_status;
+	int64			n_fullsort_remaining;
+	Tuplesortstate	   *fullsort_state; /* private state of tuplesort.c */
+	Tuplesortstate	   *prefixsort_state; /* private state of tuplesort.c */
+	/* the keys by which the input path is already sorted */
+	PresortedKeyData *presorted_keys;
+	int64		fullsort_group_count;	/* number of groups with equal presorted keys */
+	int64		prefixsort_group_count;	/* number of groups with equal presorted keys */
+	/* slot for pivot tuple defining values of presorted keys within group */
+	TupleTableSlot *group_pivot;
+	TupleTableSlot *transfer_tuple;
+	bool		am_worker;		/* are we a worker? */
+	SharedIncrementalSortInfo *shared_info;	/* one entry per worker */
+} IncrementalSortState;
 
 /* ---------------------
  *	GroupState information

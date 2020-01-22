@@ -96,7 +96,10 @@ extern List *heap_truncate_find_FKs(List *relationIds);
 extern void InsertPgAttributeTuple(Relation pg_attribute_rel,
 								   Form_pg_attribute new_attribute,
 								   CatalogIndexState indstate);
-
+extern void InsertPgAttributeTuples(Relation pg_attribute_rel,
+									TupleDesc tupdesc,
+									Oid new_rel_oid,
+									CatalogIndexState indstate);
 extern void InsertPgClassTuple(Relation pg_class_desc,
 							   Relation new_rel_desc,
 							   Oid new_rel_oid,

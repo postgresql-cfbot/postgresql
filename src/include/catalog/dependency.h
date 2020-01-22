@@ -162,6 +162,9 @@ extern ObjectClass getObjectClass(const ObjectAddress *object);
 
 extern ObjectAddresses *new_object_addresses(void);
 
+extern void add_object_address(ObjectClass oclass, Oid objectId, int32 subId,
+							   ObjectAddresses *addrs);
+
 extern void add_exact_object_address(const ObjectAddress *object,
 									 ObjectAddresses *addrs);
 
@@ -173,6 +176,8 @@ extern void record_object_address_dependencies(const ObjectAddress *depender,
 											   DependencyType behavior);
 
 extern void sort_object_addresses(ObjectAddresses *addrs);
+
+extern void reset_object_addresses(ObjectAddresses *addrs);
 
 extern void free_object_addresses(ObjectAddresses *addrs);
 

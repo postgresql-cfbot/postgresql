@@ -1771,7 +1771,7 @@ InsertExtensionTuple(const char *extName, Oid extOwner,
 	bool		nulls[Natts_pg_extension];
 	HeapTuple	tuple;
 	ObjectAddress myself;
-	ObjectAddress nsp;
+	ObjectAddresses *refobjs;
 	ListCell   *lc;
 
 	/*
@@ -1812,29 +1812,26 @@ InsertExtensionTuple(const char *extName, Oid extOwner,
 	/*
 	 * Record dependencies on owner, schema, and prerequisite extensions
 	 */
+	refobjs = new_object_addresses();
+
 	recordDependencyOnOwner(ExtensionRelationId, extensionOid, extOwner);
 
 	myself.classId = ExtensionRelationId;
 	myself.objectId = extensionOid;
 	myself.objectSubId = 0;
 
-	nsp.classId = NamespaceRelationId;
-	nsp.objectId = schemaOid;
-	nsp.objectSubId = 0;
-
-	recordDependencyOn(&myself, &nsp, DEPENDENCY_NORMAL);
+	add_object_address(OCLASS_SCHEMA, schemaOid, 0, refobjs);
 
 	foreach(lc, requiredExtensions)
 	{
 		Oid			reqext = lfirst_oid(lc);
-		ObjectAddress otherext;
 
-		otherext.classId = ExtensionRelationId;
-		otherext.objectId = reqext;
-		otherext.objectSubId = 0;
-
-		recordDependencyOn(&myself, &otherext, DEPENDENCY_NORMAL);
+		add_object_address(OCLASS_EXTENSION, reqext, 0, refobjs);
 	}
+
+	record_object_address_dependencies(&myself, refobjs, DEPENDENCY_NORMAL);
+	free_object_addresses(refobjs);
+
 	/* Post creation hook for new extension */
 	InvokeObjectPostCreateHook(ExtensionRelationId, extensionOid, 0);
 

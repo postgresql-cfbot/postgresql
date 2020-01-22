@@ -35,7 +35,8 @@ static bool isObjectPinned(const ObjectAddress *object, Relation rel);
 /*
  * Record a dependency between 2 objects via their respective objectAddress.
  * The first argument is the dependent object, the second the one it
- * references.
+ * references. This is a simplified version of recordMultipleDependencies()
+ * aiming to avoid some overhead when we know there is only a single tuple.
  *
  * This simply creates an entry in pg_depend, without any other processing.
  */
@@ -44,7 +45,51 @@ recordDependencyOn(const ObjectAddress *depender,
 				   const ObjectAddress *referenced,
 				   DependencyType behavior)
 {
-	recordMultipleDependencies(depender, referenced, 1, behavior);
+	Relation	dependDesc;
+	HeapTuple	tuple;
+	bool		nulls[Natts_pg_depend];
+	Datum		values[Natts_pg_depend];
+
+	/*
+	 * During bootstrap, do nothing since pg_depend may not exist yet. initdb
+	 * will fill in appropriate pg_depend entries after bootstrap.
+	 */
+	if (IsBootstrapProcessingMode())
+		return;
+
+	dependDesc = table_open(DependRelationId, RowExclusiveLock);
+
+	memset(nulls, false, sizeof(nulls));
+
+	/*
+	 * If the referenced object is pinned by the system, there's no real
+	 * need to record dependencies on it.  This saves lots of space in
+	 * pg_depend, so it's worth the time taken to check.
+	 */
+	if (isObjectPinned(referenced, dependDesc))
+	{
+		table_close(dependDesc, RowExclusiveLock);
+		return;
+	}
+
+	/*
+	 * Record the Dependency.  Note we don't bother to check for
+	 * duplicate dependencies; there's no harm in them.
+	 */
+	values[Anum_pg_depend_classid - 1] = ObjectIdGetDatum(depender->classId);
+	values[Anum_pg_depend_objid - 1] = ObjectIdGetDatum(depender->objectId);
+	values[Anum_pg_depend_objsubid - 1] = Int32GetDatum(depender->objectSubId);
+
+	values[Anum_pg_depend_refclassid - 1] = ObjectIdGetDatum(referenced->classId);
+	values[Anum_pg_depend_refobjid - 1] = ObjectIdGetDatum(referenced->objectId);
+	values[Anum_pg_depend_refobjsubid - 1] = Int32GetDatum(referenced->objectSubId);
+
+	values[Anum_pg_depend_deptype - 1] = CharGetDatum((char) behavior);
+
+	tuple = heap_form_tuple(dependDesc->rd_att, values, nulls);
+	CatalogTupleInsert(dependDesc, tuple);
+
+	table_close(dependDesc, RowExclusiveLock);
 }
 
 /*
@@ -59,10 +104,9 @@ recordMultipleDependencies(const ObjectAddress *depender,
 {
 	Relation	dependDesc;
 	CatalogIndexState indstate;
-	HeapTuple	tup;
+	TupleTableSlot **slot;
+	int			ntuples;
 	int			i;
-	bool		nulls[Natts_pg_depend];
-	Datum		values[Natts_pg_depend];
 
 	if (nreferenced <= 0)
 		return;					/* nothing to do */
@@ -79,9 +123,10 @@ recordMultipleDependencies(const ObjectAddress *depender,
 	/* Don't open indexes unless we need to make an update */
 	indstate = NULL;
 
-	memset(nulls, false, sizeof(nulls));
+	/* TODO is nreferenced a reasonable allocation of slots? */
+	slot = palloc(sizeof(TupleTableSlot *) * nreferenced);
 
-	for (i = 0; i < nreferenced; i++, referenced++)
+	for (i = 0, ntuples = 0; i < nreferenced; i++, referenced++)
 	{
 		/*
 		 * If the referenced object is pinned by the system, there's no real
@@ -90,34 +135,47 @@ recordMultipleDependencies(const ObjectAddress *depender,
 		 */
 		if (!isObjectPinned(referenced, dependDesc))
 		{
+			slot[ntuples] = MakeSingleTupleTableSlot(RelationGetDescr(dependDesc),
+													 &TTSOpsHeapTuple);
+			ExecClearTuple(slot[ntuples]);
 			/*
 			 * Record the Dependency.  Note we don't bother to check for
 			 * duplicate dependencies; there's no harm in them.
 			 */
-			values[Anum_pg_depend_classid - 1] = ObjectIdGetDatum(depender->classId);
-			values[Anum_pg_depend_objid - 1] = ObjectIdGetDatum(depender->objectId);
-			values[Anum_pg_depend_objsubid - 1] = Int32GetDatum(depender->objectSubId);
+			slot[ntuples]->tts_values[Anum_pg_depend_refclassid - 1] = ObjectIdGetDatum(referenced->classId);
+			slot[ntuples]->tts_values[Anum_pg_depend_refobjid - 1] = ObjectIdGetDatum(referenced->objectId);
+			slot[ntuples]->tts_values[Anum_pg_depend_refobjsubid - 1] = Int32GetDatum(referenced->objectSubId);
 
-			values[Anum_pg_depend_refclassid - 1] = ObjectIdGetDatum(referenced->classId);
-			values[Anum_pg_depend_refobjid - 1] = ObjectIdGetDatum(referenced->objectId);
-			values[Anum_pg_depend_refobjsubid - 1] = Int32GetDatum(referenced->objectSubId);
+			slot[ntuples]->tts_values[Anum_pg_depend_deptype - 1] = CharGetDatum((char) behavior);
 
-			values[Anum_pg_depend_deptype - 1] = CharGetDatum((char) behavior);
+			slot[ntuples]->tts_values[Anum_pg_depend_classid - 1] = ObjectIdGetDatum(depender->classId);
+			slot[ntuples]->tts_values[Anum_pg_depend_objid - 1] = ObjectIdGetDatum(depender->objectId);
+			slot[ntuples]->tts_values[Anum_pg_depend_objsubid - 1] = Int32GetDatum(depender->objectSubId);
 
-			tup = heap_form_tuple(dependDesc->rd_att, values, nulls);
+			memset(slot[ntuples]->tts_isnull, false,
+				   slot[ntuples]->tts_tupleDescriptor->natts * sizeof(bool));
+
+			ExecStoreVirtualTuple(slot[ntuples]);
+			ntuples++;
 
 			/* fetch index info only when we know we need it */
 			if (indstate == NULL)
 				indstate = CatalogOpenIndexes(dependDesc);
-
-			CatalogTupleInsertWithInfo(dependDesc, tup, indstate);
-
-			heap_freetuple(tup);
 		}
 	}
 
+	/*
+	 * We will have an indstate in case we found any tuples to insert in the
+	 * catalog, so perform a multi insert and close the index again when done.
+	 */
 	if (indstate != NULL)
+	{
+		CatalogTuplesMultiInsertWithInfo(dependDesc, slot, ntuples, indstate);
 		CatalogCloseIndexes(indstate);
+	}
+
+	for (int i = 0; i < ntuples; i++)
+		ExecDropSingleTupleTableSlot(slot[i]);
 
 	table_close(dependDesc, RowExclusiveLock);
 }

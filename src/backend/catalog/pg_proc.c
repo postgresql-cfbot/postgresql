@@ -114,8 +114,8 @@ ProcedureCreate(const char *procedureName,
 	NameData	procname;
 	TupleDesc	tupDesc;
 	bool		is_update;
-	ObjectAddress myself,
-				referenced;
+	ObjectAddress myself;
+	ObjectAddresses *refobjs;
 	int			i;
 	Oid			trfid;
 
@@ -611,49 +611,29 @@ ProcedureCreate(const char *procedureName,
 	myself.objectId = retval;
 	myself.objectSubId = 0;
 
+	refobjs = new_object_addresses();
+
 	/* dependency on namespace */
-	referenced.classId = NamespaceRelationId;
-	referenced.objectId = procNamespace;
-	referenced.objectSubId = 0;
-	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+	add_object_address(OCLASS_SCHEMA, procNamespace, 0, refobjs);
 
 	/* dependency on implementation language */
-	referenced.classId = LanguageRelationId;
-	referenced.objectId = languageObjectId;
-	referenced.objectSubId = 0;
-	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+	add_object_address(OCLASS_LANGUAGE, languageObjectId, 0, refobjs);
 
 	/* dependency on return type */
-	referenced.classId = TypeRelationId;
-	referenced.objectId = returnType;
-	referenced.objectSubId = 0;
-	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+	add_object_address(OCLASS_TYPE, returnType, 0, refobjs);
 
 	/* dependency on transform used by return type, if any */
 	if ((trfid = get_transform_oid(returnType, languageObjectId, true)))
-	{
-		referenced.classId = TransformRelationId;
-		referenced.objectId = trfid;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-	}
+		add_object_address(OCLASS_TRANSFORM, trfid, 0, refobjs);
 
 	/* dependency on parameter types */
 	for (i = 0; i < allParamCount; i++)
 	{
-		referenced.classId = TypeRelationId;
-		referenced.objectId = allParams[i];
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		add_object_address(OCLASS_TYPE, allParams[i], 0, refobjs);
 
 		/* dependency on transform used by parameter type, if any */
 		if ((trfid = get_transform_oid(allParams[i], languageObjectId, true)))
-		{
-			referenced.classId = TransformRelationId;
-			referenced.objectId = trfid;
-			referenced.objectSubId = 0;
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-		}
+			add_object_address(OCLASS_TRANSFORM, trfid, 0, refobjs);
 	}
 
 	/* dependency on parameter default expressions */
@@ -663,12 +643,10 @@ ProcedureCreate(const char *procedureName,
 
 	/* dependency on support function, if any */
 	if (OidIsValid(prosupport))
-	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = prosupport;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-	}
+		add_object_address(OCLASS_PROC, prosupport, 0, refobjs);
+
+	record_object_address_dependencies(&myself, refobjs, DEPENDENCY_NORMAL);
+	free_object_addresses(refobjs);
 
 	/* dependency on owner */
 	if (!is_update)

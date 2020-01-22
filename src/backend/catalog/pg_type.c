@@ -544,7 +544,9 @@ GenerateTypeDependencies(Oid typeObjectId,
 						 bool rebuild)
 {
 	ObjectAddress myself,
-				referenced;
+				referenced,
+				refobjs[8];
+	int			nref;
 
 	/* If rebuild, first flush old dependencies, except extension deps */
 	if (rebuild)
@@ -579,62 +581,53 @@ GenerateTypeDependencies(Oid typeObjectId,
 		recordDependencyOnCurrentExtension(&myself, rebuild);
 	}
 
+	nref = 0;
+
 	/* Normal dependencies on the I/O functions */
 	if (OidIsValid(typeForm->typinput))
 	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = typeForm->typinput;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSet(refobjs[nref], ProcedureRelationId, typeForm->typinput);
+		nref++;
 	}
 
 	if (OidIsValid(typeForm->typoutput))
 	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = typeForm->typoutput;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSet(refobjs[nref], ProcedureRelationId, typeForm->typoutput);
+		nref++;
 	}
 
 	if (OidIsValid(typeForm->typreceive))
 	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = typeForm->typreceive;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSet(refobjs[nref], ProcedureRelationId, typeForm->typreceive);
+		nref++;
 	}
 
 	if (OidIsValid(typeForm->typsend))
 	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = typeForm->typsend;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSet(refobjs[nref], ProcedureRelationId, typeForm->typsend);
+		nref++;
 	}
 
 	if (OidIsValid(typeForm->typmodin))
 	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = typeForm->typmodin;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSet(refobjs[nref], ProcedureRelationId, typeForm->typmodin);
+		nref++;
 	}
 
 	if (OidIsValid(typeForm->typmodout))
 	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = typeForm->typmodout;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSet(refobjs[nref], ProcedureRelationId, typeForm->typmodout);
+		nref++;
 	}
 
 	if (OidIsValid(typeForm->typanalyze))
 	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = typeForm->typanalyze;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSet(refobjs[nref], ProcedureRelationId, typeForm->typanalyze);
+		nref++;
 	}
+
+	if (nref)
+		recordMultipleDependencies(&myself, refobjs, nref, DEPENDENCY_NORMAL);
 
 	/*
 	 * If the type is a rowtype for a relation, mark it as internally

@@ -91,6 +91,7 @@ CreateConstraintEntry(const char *constraintName,
 	NameData	cname;
 	int			i;
 	ObjectAddress conobject;
+	ObjectAddresses *refobjs;
 
 	conDesc = table_open(ConstraintRelationId, RowExclusiveLock);
 
@@ -229,30 +230,22 @@ CreateConstraintEntry(const char *constraintName,
 
 	table_close(conDesc, RowExclusiveLock);
 
+	refobjs = new_object_addresses();
+
 	if (OidIsValid(relId))
 	{
 		/*
 		 * Register auto dependency from constraint to owning relation, or to
 		 * specific column(s) if any are mentioned.
 		 */
-		ObjectAddress relobject;
-
-		relobject.classId = RelationRelationId;
-		relobject.objectId = relId;
 		if (constraintNTotalKeys > 0)
 		{
 			for (i = 0; i < constraintNTotalKeys; i++)
-			{
-				relobject.objectSubId = constraintKey[i];
-
-				recordDependencyOn(&conobject, &relobject, DEPENDENCY_AUTO);
-			}
+				add_object_address(OCLASS_CLASS, relId, constraintKey[i], refobjs);
 		}
 		else
 		{
-			relobject.objectSubId = 0;
-
-			recordDependencyOn(&conobject, &relobject, DEPENDENCY_AUTO);
+			add_object_address(OCLASS_CLASS, relId, 0, refobjs);
 		}
 	}
 
@@ -261,14 +254,12 @@ CreateConstraintEntry(const char *constraintName,
 		/*
 		 * Register auto dependency from constraint to owning domain
 		 */
-		ObjectAddress domobject;
-
-		domobject.classId = TypeRelationId;
-		domobject.objectId = domainId;
-		domobject.objectSubId = 0;
-
-		recordDependencyOn(&conobject, &domobject, DEPENDENCY_AUTO);
+		add_object_address(OCLASS_TYPE, domainId, 0, refobjs);
 	}
+
+	/* record the AUTO dependencies we have so far */
+	record_object_address_dependencies(&conobject, refobjs, DEPENDENCY_AUTO);
+	reset_object_addresses(refobjs);
 
 	if (OidIsValid(foreignRelId))
 	{
@@ -276,24 +267,14 @@ CreateConstraintEntry(const char *constraintName,
 		 * Register normal dependency from constraint to foreign relation, or
 		 * to specific column(s) if any are mentioned.
 		 */
-		ObjectAddress relobject;
-
-		relobject.classId = RelationRelationId;
-		relobject.objectId = foreignRelId;
 		if (foreignNKeys > 0)
 		{
 			for (i = 0; i < foreignNKeys; i++)
-			{
-				relobject.objectSubId = foreignKey[i];
-
-				recordDependencyOn(&conobject, &relobject, DEPENDENCY_NORMAL);
-			}
+				add_object_address(OCLASS_CLASS, foreignRelId, foreignKey[i], refobjs);
 		}
 		else
 		{
-			relobject.objectSubId = 0;
-
-			recordDependencyOn(&conobject, &relobject, DEPENDENCY_NORMAL);
+			add_object_address(OCLASS_CLASS, foreignRelId, 0, refobjs);
 		}
 	}
 
@@ -305,13 +286,7 @@ CreateConstraintEntry(const char *constraintName,
 		 * or primary-key constraints, the dependency runs the other way, and
 		 * is not made here.)
 		 */
-		ObjectAddress relobject;
-
-		relobject.classId = RelationRelationId;
-		relobject.objectId = indexRelId;
-		relobject.objectSubId = 0;
-
-		recordDependencyOn(&conobject, &relobject, DEPENDENCY_NORMAL);
+		add_object_address(OCLASS_CLASS, indexRelId, 0, refobjs);
 	}
 
 	if (foreignNKeys > 0)
@@ -322,27 +297,21 @@ CreateConstraintEntry(const char *constraintName,
 		 * all three operators for a column are the same; otherwise they are
 		 * different.
 		 */
-		ObjectAddress oprobject;
-
-		oprobject.classId = OperatorRelationId;
-		oprobject.objectSubId = 0;
-
 		for (i = 0; i < foreignNKeys; i++)
 		{
-			oprobject.objectId = pfEqOp[i];
-			recordDependencyOn(&conobject, &oprobject, DEPENDENCY_NORMAL);
+			add_object_address(OCLASS_OPERATOR, pfEqOp[i], 0, refobjs);
+
 			if (ppEqOp[i] != pfEqOp[i])
-			{
-				oprobject.objectId = ppEqOp[i];
-				recordDependencyOn(&conobject, &oprobject, DEPENDENCY_NORMAL);
-			}
+				add_object_address(OCLASS_OPERATOR, ppEqOp[i], 0, refobjs);
+
 			if (ffEqOp[i] != pfEqOp[i])
-			{
-				oprobject.objectId = ffEqOp[i];
-				recordDependencyOn(&conobject, &oprobject, DEPENDENCY_NORMAL);
-			}
+				add_object_address(OCLASS_OPERATOR, ffEqOp[i], 0, refobjs);
 		}
 	}
+
+	record_object_address_dependencies(&conobject, refobjs, DEPENDENCY_NORMAL);
+
+	free_object_addresses(refobjs);
 
 	/*
 	 * We don't bother to register dependencies on the exclusion operators of

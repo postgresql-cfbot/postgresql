@@ -104,8 +104,8 @@ AggregateCreate(const char *aggName,
 	Oid			procOid;
 	TupleDesc	tupDesc;
 	int			i;
-	ObjectAddress myself,
-				referenced;
+	ObjectAddress myself;
+	ObjectAddresses *refobjs;
 	AclResult	aclresult;
 
 	/* sanity checks (caller should have caught these) */
@@ -740,83 +740,44 @@ AggregateCreate(const char *aggName,
 	 * way.
 	 */
 
+	refobjs = new_object_addresses();
+
 	/* Depends on transition function */
-	referenced.classId = ProcedureRelationId;
-	referenced.objectId = transfn;
-	referenced.objectSubId = 0;
-	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+	add_object_address(OCLASS_PROC, transfn, 0, refobjs);
 
 	/* Depends on final function, if any */
 	if (OidIsValid(finalfn))
-	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = finalfn;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-	}
+		add_object_address(OCLASS_PROC, finalfn, 0, refobjs);
 
 	/* Depends on combine function, if any */
 	if (OidIsValid(combinefn))
-	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = combinefn;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-	}
+		add_object_address(OCLASS_PROC, combinefn, 0, refobjs);
 
 	/* Depends on serialization function, if any */
 	if (OidIsValid(serialfn))
-	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = serialfn;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-	}
+		add_object_address(OCLASS_PROC, serialfn, 0, refobjs);
 
 	/* Depends on deserialization function, if any */
 	if (OidIsValid(deserialfn))
-	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = deserialfn;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-	}
+		add_object_address(OCLASS_PROC, deserialfn, 0, refobjs);
 
 	/* Depends on forward transition function, if any */
 	if (OidIsValid(mtransfn))
-	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = mtransfn;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-	}
+		add_object_address(OCLASS_PROC, mtransfn, 0, refobjs);
 
 	/* Depends on inverse transition function, if any */
 	if (OidIsValid(minvtransfn))
-	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = minvtransfn;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-	}
+		add_object_address(OCLASS_PROC, minvtransfn, 0, refobjs);
 
 	/* Depends on final function, if any */
 	if (OidIsValid(mfinalfn))
-	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = mfinalfn;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-	}
+		add_object_address(OCLASS_PROC, mfinalfn, 0, refobjs);
 
 	/* Depends on sort operator, if any */
 	if (OidIsValid(sortop))
-	{
-		referenced.classId = OperatorRelationId;
-		referenced.objectId = sortop;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-	}
+		add_object_address(OCLASS_OPERATOR, sortop, 0, refobjs);
+
+	record_object_address_dependencies(&myself, refobjs, DEPENDENCY_NORMAL);
 
 	return myself;
 }

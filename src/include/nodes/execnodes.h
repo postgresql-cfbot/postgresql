@@ -1165,7 +1165,7 @@ typedef struct ModifyTableState
 	int			mt_whichplan;	/* which one is being executed (0..n-1) */
 	TupleTableSlot **mt_scans;	/* input tuple corresponding to underlying
 								 * plans */
-	ResultRelInfo *resultRelInfo;	/* per-subplan target relations */
+	ResultRelInfo **resultRelInfos;	/* per-subplan target relations */
 	ResultRelInfo *rootResultRelInfo;	/* root target relation (partitioned
 										 * table root) */
 	List	  **mt_arowmarks;	/* per-subplan ExecAuxRowMark lists */
@@ -1189,6 +1189,14 @@ typedef struct ModifyTableState
 
 	/* Per plan map for tuple conversion from child to root */
 	TupleConversionMap **mt_per_subplan_tupconv_maps;
+
+	/*
+	 * Details required to allow partitions to be eliminated from the scan, or
+	 * NULL if not possible.
+	 */
+	struct PartitionPruneState *mt_prune_state;
+	Bitmapset  *mt_valid_subplans;	/* for runtime pruning, valid mt_plans
+									 * indexes to scan. */
 } ModifyTableState;
 
 /* ----------------

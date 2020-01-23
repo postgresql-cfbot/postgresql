@@ -1239,6 +1239,9 @@ inheritance_planner(PlannerInfo *root)
 	RangeTblEntry *parent_rte;
 	Bitmapset  *parent_relids;
 	Query	  **parent_parses;
+	PlannerInfo *partition_root = NULL;
+	List	   *partitioned_rels = NIL;
+	bool		dummy_update = false;
 
 	/* Should only get here for UPDATE or DELETE */
 	Assert(parse->commandType == CMD_UPDATE ||
@@ -1350,6 +1353,13 @@ inheritance_planner(PlannerInfo *root)
 		 * expand_partitioned_rtentry for the UPDATE target.)
 		 */
 		root->partColsUpdated = subroot->partColsUpdated;
+
+		/*
+		 * Save this for later so that we can enable run-time pruning on
+		 * the partitioned table(s).
+		 */
+		if (parent_rte->relkind == RELKIND_PARTITIONED_TABLE)
+			partition_root = subroot;
 	}
 
 	/*----------
@@ -1745,6 +1755,9 @@ inheritance_planner(PlannerInfo *root)
 			returningLists = list_make1(parse->returningList);
 		/* Disable tuple routing, too, just to be safe */
 		root->partColsUpdated = false;
+
+		/* Mark that we're performing a dummy update */
+		dummy_update = true;
 	}
 	else
 	{
@@ -1784,6 +1797,69 @@ inheritance_planner(PlannerInfo *root)
 	else
 		rowMarks = root->rowMarks;
 
+
+	/*
+	 * When performing UPDATE/DELETE on a partitioned table, if the query has
+	 * a WHERE clause which supports it, we may be able to perform run-time
+	 * partition pruning.  The following code sets things up to allow this to
+	 * be possible.
+	 */
+	if (partition_root && !dummy_update)
+	{
+		RelOptInfo *parent_rel;
+		int			i;
+
+		/*
+		 * Fetch the target partitioned table from the SELECT version of
+		 * the query which we performed above.  This may have the base quals
+		 * which could allow the run-time pruning to work.
+		 */
+		parent_rel = partition_root->simple_rel_array[top_parentRTindex];
+
+		final_rel->baserestrictinfo = parent_rel->baserestrictinfo;
+
+		/* build a list of partitioned rels */
+		i = -1;
+		while ((i = bms_next_member(parent_relids, i)) > 0)
+			partitioned_rels = lappend_int(partitioned_rels, i);
+
+
+		/*
+		 * In order to build the run-time pruning data we'll need append rels
+		 * any sub-partitioned tables.  If there are some of those and the
+		 * append_rel_array is not already allocated, then do that now.
+		 */
+		if (list_length(partitioned_rels) > 1 &&
+			root->append_rel_array == NULL)
+			root->append_rel_array = palloc0(sizeof(AppendRelInfo *) *
+											 root->simple_rel_array_size);
+
+		/*
+		 * There can only be a single partition hierarchy, so it's fine to
+		 * just make a single element list of the partitioned_rels.
+		 */
+		partitioned_rels = list_make1(partitioned_rels);
+
+		i = -1;
+		while ((i = bms_next_member(parent_relids, i)) >= 0)
+		{
+			Assert(root->simple_rel_array[i] == NULL);
+
+			root->simple_rel_array[i] = partition_root->simple_rel_array[i];
+
+			/*
+			 * The root partition won't have an append rel entry, so we can
+			 * skip that.  We'll need to take the partition_root's version for
+			 * any sub-partitioned table's
+			 */
+			if (i != top_parentRTindex)
+			{
+				Assert(root->append_rel_array[i] == NULL);
+				root->append_rel_array[i] = partition_root->append_rel_array[i];
+			}
+		}
+	}
+
 	/* Create Path representing a ModifyTable to do the UPDATE/DELETE work */
 	add_path(final_rel, (Path *)
 			 create_modifytable_path(root, final_rel,
@@ -1793,6 +1869,7 @@ inheritance_planner(PlannerInfo *root)
 									 rootRelation,
 									 root->partColsUpdated,
 									 resultRelations,
+									 partitioned_rels,
 									 subpaths,
 									 subroots,
 									 withCheckOptionLists,
@@ -2376,6 +2453,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 										rootRelation,
 										false,
 										list_make1_int(parse->resultRelation),
+										NIL,
 										list_make1(path),
 										list_make1(root),
 										withCheckOptionLists,

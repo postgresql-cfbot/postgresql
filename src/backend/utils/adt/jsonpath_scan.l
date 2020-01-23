@@ -20,6 +20,8 @@
 #include "mb/pg_wchar.h"
 #include "nodes/pg_list.h"
 
+#define JSONPATH_SPECIAL_CHARS "?%.[]{}()|&!=<>@#,*:-+/~`;\\\"' \b\f\n\r\t\v"
+
 static JsonPathString scanstring;
 
 /* Handles to the buffer that the lexer uses internally */
@@ -63,20 +65,21 @@ fprintf_to_ereport(const char *fmt, const char *msg)
  * quoted variable names and C-style comments.
  * Exclusive states:
  *  <xq> - quoted strings
- *  <xnq> - non-quoted strings
- *  <xvq> - quoted variable names
+ *  <xnq> - non-quoted identifiers
  *  <xc> - C-style comment
  */
 
 %x xq
 %x xnq
-%x xvq
 %x xc
 
-special		[\?\%\$\.\[\]\{\}\(\)\|\&\!\=\<\>\@\#\,\*:\-\+\/]
-blank		[ \t\n\r\f]
-/* "other" means anything that's not special, blank, or '\' or '"' */
-other		[^\?\%\$\.\[\]\{\}\(\)\|\&\!\=\<\>\@\#\,\*:\-\+\/\\\" \t\n\r\f]
+special		[\?\%\.\[\]\{\}\(\)\|\&\!\=\<\>\@\#\,\*:\-\+\/\~\`\;\']
+blank		[ \b\f\n\r\t\v]
+/* "id_start" means anything that's not special, blank, digit, or '\', or '"' */
+id_start	[^\?\%\.\[\]\{\}\(\)\|\&\!\=\<\>\@\#\,\*:\-\+\/\~\`\;\'\\\" \b\f\n\r\t\v(0-9)]
+
+id_cont		({id_start}|[0-9])
+id			{id_start}{id_cont}*
 
 digit		[0-9]
 integer		(0|[1-9]{digit}*)
@@ -94,65 +97,53 @@ hex_fail	\\x{hex_dig}{0,1}
 
 %%
 
-<xnq>{other}+					{
-									addstring(false, yytext, yyleng);
+<xq>\\b							{ addchar(false, '\b'); }
+
+<xq>\\f							{ addchar(false, '\f'); }
+
+<xq>\\n							{ addchar(false, '\n'); }
+
+<xq>\\r							{ addchar(false, '\r'); }
+
+<xq>\\t							{ addchar(false, '\t'); }
+
+<xq>\\v							{ addchar(false, '\v'); }
+
+<xq>{hex_char}					{ parseHexChar(yytext); }
+
+<xq>{hex_fail}					{ yyerror(NULL, "invalid hex character sequence"); }
+
+<xnq,xq>{unicode}+				{ parseUnicode(yytext, yyleng); }
+
+<INITIAL,xq,xnq>{unicode}*{unicodefail}	{ yyerror(NULL, "invalid unicode sequence"); }
+
+<INITIAL,xq,xnq>{unicode}+\\	{
+									/* throw back the \\, and treat as unicode */
+									yyless(yyleng - 1);
+									parseUnicode(yytext, yyleng);
 								}
 
-<xnq>{blank}+					{
-									yylval->str = scanstring;
-									BEGIN INITIAL;
-									return checkKeyword();
-								}
+<xq>\\.							{ addchar(false, yytext[1]); }
 
-<xnq>\/\*						{
-									yylval->str = scanstring;
-									BEGIN xc;
-								}
+<xnq>\\.?						{ yyerror(NULL, "escape sequence is invalid"); }
 
-<xnq>({special}|\")				{
+<xnq>{id_cont}+					{ addstring(false, yytext, yyleng); }
+
+<xnq>({special}|{blank}|\")	{
+									/* throw back the special symbol and return id */
+									yyless(yyleng - 1);
+									addchar(false, '\0');
 									yylval->str = scanstring;
-									yyless(0);
 									BEGIN INITIAL;
 									return checkKeyword();
 								}
 
 <xnq><<EOF>>					{
+									addchar(false, '\0');
 									yylval->str = scanstring;
 									BEGIN INITIAL;
 									return checkKeyword();
 								}
-
-<xnq,xq,xvq>\\b				{ addchar(false, '\b'); }
-
-<xnq,xq,xvq>\\f				{ addchar(false, '\f'); }
-
-<xnq,xq,xvq>\\n				{ addchar(false, '\n'); }
-
-<xnq,xq,xvq>\\r				{ addchar(false, '\r'); }
-
-<xnq,xq,xvq>\\t				{ addchar(false, '\t'); }
-
-<xnq,xq,xvq>\\v				{ addchar(false, '\v'); }
-
-<xnq,xq,xvq>{unicode}+		{ parseUnicode(yytext, yyleng); }
-
-<xnq,xq,xvq>{hex_char}		{ parseHexChar(yytext); }
-
-<xnq,xq,xvq>{unicode}*{unicodefail}	{ yyerror(NULL, "invalid unicode sequence"); }
-
-<xnq,xq,xvq>{hex_fail}		{ yyerror(NULL, "invalid hex character sequence"); }
-
-<xnq,xq,xvq>{unicode}+\\	{
-								/* throw back the \\, and treat as unicode */
-								yyless(yyleng - 1);
-								parseUnicode(yytext, yyleng);
-							}
-
-<xnq,xq,xvq>\\.				{ addchar(false, yytext[1]); }
-
-<xnq,xq,xvq>\\				{ yyerror(NULL, "unexpected end after backslash"); }
-
-<xq,xvq><<EOF>>				{ yyerror(NULL, "unexpected end of quoted string"); }
 
 <xq>\"							{
 									yylval->str = scanstring;
@@ -160,13 +151,11 @@ hex_fail	\\x{hex_dig}{0,1}
 									return STRING_P;
 								}
 
-<xvq>\"							{
-									yylval->str = scanstring;
-									BEGIN INITIAL;
-									return VARIABLE_P;
-								}
+<xq>[^\\\"]+					{ addstring(false, yytext, yyleng); }
 
-<xq,xvq>[^\\\"]+				{ addstring(false, yytext, yyleng); }
+<xq>\\							{ yyerror(NULL, "unexpected end of quoted string"); }
+<xq><<EOF>>						{ yyerror(NULL, "unexpected end of quoted string"); }
+
 
 <xc>\*\/						{ BEGIN INITIAL; }
 
@@ -175,6 +164,7 @@ hex_fail	\\x{hex_dig}{0,1}
 <xc>\*							{ }
 
 <xc><<EOF>>						{ yyerror(NULL, "unexpected end of comment"); }
+
 
 \&\&							{ return AND_P; }
 
@@ -198,17 +188,7 @@ hex_fail	\\x{hex_dig}{0,1}
 
 \>								{ return GREATER_P; }
 
-\${other}+						{
-									addstring(true, yytext + 1, yyleng - 1);
-									addchar(false, '\0');
-									yylval->str = scanstring;
-									return VARIABLE_P;
-								}
-
-\$\"							{
-									addchar(true, '\0');
-									BEGIN xvq;
-								}
+\'								{ yyerror(NULL, "unexpected single quote character"); }
 
 {special}						{ return *yytext; }
 
@@ -251,21 +231,24 @@ hex_fail	\\x{hex_dig}{0,1}
 
 ({realfail1}|{realfail2})		{ yyerror(NULL, "invalid floating point number"); }
 
+
+{id_start}{id_cont}*			{
+									addstring(true, yytext, yyleng);
+									BEGIN xnq;
+								}
+
+{unicode}+						{
+									addstring(true, "", 0);
+									parseUnicode(yytext, yyleng);
+									BEGIN xnq;
+								}
+
 \"								{
 									addchar(true, '\0');
 									BEGIN xq;
 								}
 
-\\								{
-									yyless(0);
-									addchar(true, '\0');
-									BEGIN xnq;
-								}
-
-{other}+						{
-									addstring(true, yytext, yyleng);
-									BEGIN xnq;
-								}
+\\								{ yyerror(NULL, "invalid escape sequence"); }
 
 <<EOF>>							{ yyterminate(); }
 
@@ -305,6 +288,7 @@ typedef struct JsonPathKeyword
  */
 static const JsonPathKeyword keywords[] = {
 	{ 2, false,	IS_P,		"is"},
+	{ 2, false,	PG_P,		"pg"},
 	{ 2, false,	TO_P,		"to"},
 	{ 3, false,	ABS_P,		"abs"},
 	{ 3, false,	LAX_P,		"lax"},
@@ -337,6 +321,12 @@ checkKeyword()
 	const JsonPathKeyword  *StopLow = keywords,
 						   *StopHigh = keywords + lengthof(keywords),
 						   *StopMiddle;
+
+	if (strcspn(scanstring.val, JSONPATH_SPECIAL_CHARS) < scanstring.len)
+		jsonpath_yyerror(NULL, "invalid characters in identifier");
+
+	if (scanstring.val[0] == '$')
+		return scanstring.len == 1 ? '$' : VARIABLE_P;
 
 	if (scanstring.len > keywords[lengthof(keywords) - 1].len)
 		return res;
@@ -588,6 +578,9 @@ parseUnicode(char *s, int l)
 			while (s[++i] != '}' && i < l)
 				ch = (ch << 4) | hexval(s[i]);
 			i++;	/* skip '}' */
+
+			if (ch > 0x10FFFF)
+				jsonpath_yyerror(NULL, "invalid Unicode escape value");
 		}
 		else		/* parse '\uXXXX' */
 		{

@@ -1124,12 +1124,16 @@ JsValue
 JsonAggState
 JsonBaseObjectInfo
 JsonHashEntry
+JsonItem
+JsonItemStack
+JsonItemStackEntry
 JsonIterateStringValuesAction
 JsonLexContext
 JsonLikeRegexContext
 JsonParseContext
 JsonPath
 JsonPathBool
+JsonPathEncodingContext
 JsonPathExecContext
 JsonPathExecResult
 JsonPathGinAddPathItemFunc
@@ -1146,6 +1150,7 @@ JsonPathParseItem
 JsonPathParseResult
 JsonPathPredicateCallback
 JsonPathString
+JsonPathUserFuncContext
 JsonSemAction
 JsonTokenType
 JsonTransformStringValuesAction

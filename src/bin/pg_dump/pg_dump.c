@@ -1650,6 +1650,28 @@ selectDumpableCast(CastInfo *cast, Archive *fout)
 }
 
 /*
+ * selectDumpableCollation: policy-setting subroutine
+ *		Mark a collation as to be dumped or not
+ */
+static void
+selectDumpableCollation(CollInfo *collinfo, Archive *fout)
+{
+	DumpOptions *dopt = fout->dopt;
+
+	if (checkExtensionMembership(&collinfo->dobj, fout))
+		return;					/* extension membership overrides all else */
+
+	collinfo->dobj.dump = collinfo->dobj.namespace->dobj.dump_contains;
+
+	/*
+	 * Collations in pg_catalog created by initdb must be dumped in
+	 * binary-upgrade mode to preserve the collation version.
+	 */
+	if (dopt->binary_upgrade && collinfo->dobj.catId.oid >= FirstBootstrapObjectId)
+			collinfo->dobj.dump = DUMP_COMPONENT_ALL;
+}
+
+/*
  * selectDumpableProcLang: policy-setting subroutine
  *		Mark a procedural language as to be dumped or not
  *
@@ -2980,6 +3002,10 @@ dumpDatabase(Archive *fout)
 						  frozenxid, minmxid);
 		appendStringLiteralAH(creaQry, datname, fout);
 		appendPQExpBufferStr(creaQry, ";\n");
+
+		appendPQExpBufferStr(creaQry, "\n-- Remove collations created by initdb.\n");
+		appendPQExpBuffer(creaQry, "DELETE FROM pg_catalog.pg_collation WHERE oid > %u;\n",
+						  FirstBootstrapObjectId);
 	}
 
 	if (creaQry->len > 0)
@@ -5107,7 +5133,8 @@ getCollations(Archive *fout, int *numCollations)
 	appendPQExpBuffer(query, "SELECT tableoid, oid, collname, "
 					  "collnamespace, "
 					  "(%s collowner) AS rolname "
-					  "FROM pg_collation",
+					  "FROM pg_collation "
+					  "WHERE collencoding = (SELECT encoding FROM pg_database WHERE datname = current_database()) OR collencoding = -1",
 					  username_subquery);
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
@@ -5136,7 +5163,7 @@ getCollations(Archive *fout, int *numCollations)
 		collinfo[i].rolname = pg_strdup(PQgetvalue(res, i, i_rolname));
 
 		/* Decide whether we want to dump it */
-		selectDumpableObject(&(collinfo[i].dobj), fout);
+		selectDumpableCollation(&collinfo[i], fout);
 
 		/* Collations do not currently have ACLs. */
 		collinfo[i].dobj.dump &= ~DUMP_COMPONENT_ACL;

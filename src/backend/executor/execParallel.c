@@ -989,20 +989,22 @@ ExecParallelRetrieveInstrumentation(PlanState *planstate,
 	if (i >= instrumentation->num_plan_nodes)
 		elog(ERROR, "plan node %d not found", plan_node_id);
 
-	/* Accumulate the statistics from all workers. */
-	instrument = GetInstrumentationArray(instrumentation);
-	instrument += i * instrumentation->num_workers;
-	for (n = 0; n < instrumentation->num_workers; ++n)
-		InstrAggNode(planstate->instrument, &instrument[n]);
-
 	/*
-	 * Also store the per-worker detail.
-	 *
 	 * Worker instrumentation should be allocated in the same context as the
 	 * regular instrumentation information, which is the per-query context.
 	 * Switch into per-query memory context.
 	 */
 	oldcontext = MemoryContextSwitchTo(planstate->state->es_query_cxt);
+
+	/* Accumulate the statistics from all workers. */
+	if (!planstate->combined_instrument)
+		planstate->combined_instrument = palloc0(sizeof(Instrumentation));
+	instrument = GetInstrumentationArray(instrumentation);
+	instrument += i * instrumentation->num_workers;
+	for (n = 0; n < instrumentation->num_workers; ++n)
+		InstrAggNode(planstate->combined_instrument, &instrument[n]);
+
+	/* Also store the per-worker detail. */
 	ibytes = mul_size(instrumentation->num_workers, sizeof(Instrumentation));
 	planstate->worker_instrument =
 		palloc(ibytes + offsetof(WorkerInstrumentation, instrument));

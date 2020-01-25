@@ -105,7 +105,7 @@ static void show_hash_info(HashState *hashstate, ExplainState *es);
 static void show_tidbitmap_info(BitmapHeapScanState *planstate,
 								ExplainState *es);
 static void show_instrumentation_count(const char *qlabel, int which,
-									   PlanState *planstate, ExplainState *es);
+									   Instrumentation *instrument, ExplainState *es);
 static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static void show_eval_params(Bitmapset *bms_params, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
@@ -1059,6 +1059,75 @@ ExplainPreScanNode(PlanState *planstate, Bitmapset **rels_used)
 }
 
 /*
+ * ExplainNodePerProcess -
+ *	  Show the per-process instrumentation for a node run in parallel.
+ *
+ * Subroutine for ExplainNode() when showing a parallel query in ANALYZE
+ * VERBOSE mode.  Use worker number -1 for the leader process.
+ */
+static void
+ExplainNodePerProcess(ExplainState *es, bool *opened_group,
+					  int worker_number, Instrumentation *instrument)
+{
+	double		nloops = instrument->nloops;
+	double		startup_ms;
+	double		total_ms;
+	double		rows;
+
+	if (nloops <= 0)
+		return;
+	startup_ms = 1000.0 * instrument->startup / nloops;
+	total_ms = 1000.0 * instrument->total / nloops;
+	rows = instrument->ntuples / nloops;
+
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		appendStringInfoSpaces(es->str, es->indent * 2);
+		if (worker_number < 0)
+			appendStringInfo(es->str, "Leader: ");
+		else
+			appendStringInfo(es->str, "Worker %d: ", worker_number);
+		if (es->timing)
+			appendStringInfo(es->str,
+							 "actual time=%.3f..%.3f rows=%.0f loops=%.0f\n",
+							 startup_ms, total_ms, rows, nloops);
+		else
+			appendStringInfo(es->str,
+							 "actual rows=%.0f loops=%.0f\n",
+							 rows, nloops);
+		es->indent++;
+		if (es->buffers)
+			show_buffer_usage(es, &instrument->bufusage);
+		es->indent--;
+	}
+	else
+	{
+		if (!*opened_group)
+		{
+			ExplainOpenGroup("Workers", "Workers", false, es);
+			*opened_group = true;
+		}
+		ExplainOpenGroup("Worker", NULL, true, es);
+		ExplainPropertyInteger("Worker Number", NULL, worker_number, es);
+
+		if (es->timing)
+		{
+			ExplainPropertyFloat("Actual Startup Time", "ms",
+								 startup_ms, 3, es);
+			ExplainPropertyFloat("Actual Total Time", "ms",
+								 total_ms, 3, es);
+		}
+		ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+		ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
+
+		if (es->buffers)
+			show_buffer_usage(es, &instrument->bufusage);
+
+		ExplainCloseGroup("Worker", NULL, true, es);
+	}
+}
+
+/*
  * ExplainNode -
  *	  Appends a description of a plan tree to es->str
  *
@@ -1084,6 +1153,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			ExplainState *es)
 {
 	Plan	   *plan = planstate->plan;
+	Instrumentation *show_instrument;
 	const char *pname;			/* node type name for text output */
 	const char *sname;			/* node type name for non-text output */
 	const char *strategy = NULL;
@@ -1092,6 +1162,12 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	const char *custom_name = NULL;
 	int			save_indent = es->indent;
 	bool		haschildren;
+
+	/* If this is a parallel query, show the combined stats. */
+	if (planstate->combined_instrument)
+		show_instrument = planstate->combined_instrument;
+	else
+		show_instrument = planstate->instrument;
 
 	switch (nodeTag(plan))
 	{
@@ -1522,13 +1598,19 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	if (planstate->instrument)
 		InstrEndLoop(planstate->instrument);
 
-	if (es->analyze &&
-		planstate->instrument && planstate->instrument->nloops > 0)
+	/*
+	 * If we have combined instrumentation from parallel workers, add the
+	 * leader's contribution.
+	 */
+	if (planstate->combined_instrument && planstate->instrument)
+		InstrAggNode(planstate->combined_instrument, planstate->instrument);
+
+	if (es->analyze && show_instrument && show_instrument->nloops > 0)
 	{
-		double		nloops = planstate->instrument->nloops;
-		double		startup_ms = 1000.0 * planstate->instrument->startup / nloops;
-		double		total_ms = 1000.0 * planstate->instrument->total / nloops;
-		double		rows = planstate->instrument->ntuples / nloops;
+		double		nloops = show_instrument->nloops;
+		double		startup_ms = 1000.0 * show_instrument->startup / nloops;
+		double		total_ms = 1000.0 * show_instrument->total / nloops;
+		double		rows = show_instrument->ntuples / nloops;
 
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 		{
@@ -1603,26 +1685,26 @@ ExplainNode(PlanState *planstate, List *ancestors,
 						   "Index Cond", planstate, ancestors, es);
 			if (((IndexScan *) plan)->indexqualorig)
 				show_instrumentation_count("Rows Removed by Index Recheck", 2,
-										   planstate, es);
+										   show_instrument, es);
 			show_scan_qual(((IndexScan *) plan)->indexorderbyorig,
 						   "Order By", planstate, ancestors, es);
 			show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			break;
 		case T_IndexOnlyScan:
 			show_scan_qual(((IndexOnlyScan *) plan)->indexqual,
 						   "Index Cond", planstate, ancestors, es);
 			if (((IndexOnlyScan *) plan)->indexqual)
 				show_instrumentation_count("Rows Removed by Index Recheck", 2,
-										   planstate, es);
+										   show_instrument, es);
 			show_scan_qual(((IndexOnlyScan *) plan)->indexorderby,
 						   "Order By", planstate, ancestors, es);
 			show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			if (es->analyze)
 				ExplainPropertyFloat("Heap Fetches", NULL,
 									 planstate->instrument->ntuples2, 0, es);
@@ -1636,11 +1718,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 						   "Recheck Cond", planstate, ancestors, es);
 			if (((BitmapHeapScan *) plan)->bitmapqualorig)
 				show_instrumentation_count("Rows Removed by Index Recheck", 2,
-										   planstate, es);
+										   show_instrument, es);
 			show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			if (es->analyze)
 				show_tidbitmap_info((BitmapHeapScanState *) planstate, es);
 			break;
@@ -1658,7 +1740,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			break;
 		case T_Gather:
 			{
@@ -1667,7 +1749,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 				if (plan->qual)
 					show_instrumentation_count("Rows Removed by Filter", 1,
-											   planstate, es);
+											   show_instrument, es);
 				ExplainPropertyInteger("Workers Planned", NULL,
 									   gather->num_workers, es);
 
@@ -1713,7 +1795,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 				if (plan->qual)
 					show_instrumentation_count("Rows Removed by Filter", 1,
-											   planstate, es);
+											   show_instrument, es);
 				ExplainPropertyInteger("Workers Planned", NULL,
 									   gm->num_workers, es);
 
@@ -1751,7 +1833,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			break;
 		case T_TableFuncScan:
 			if (es->verbose)
@@ -1765,7 +1847,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			break;
 		case T_TidScan:
 			{
@@ -1781,14 +1863,14 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 				if (plan->qual)
 					show_instrumentation_count("Rows Removed by Filter", 1,
-											   planstate, es);
+											   show_instrument, es);
 			}
 			break;
 		case T_ForeignScan:
 			show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			show_foreignscan_info((ForeignScanState *) planstate, es);
 			break;
 		case T_CustomScan:
@@ -1798,7 +1880,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
 				if (plan->qual)
 					show_instrumentation_count("Rows Removed by Filter", 1,
-											   planstate, es);
+											   show_instrument, es);
 				if (css->methods->ExplainCustomScan)
 					css->methods->ExplainCustomScan(css, ancestors, es);
 			}
@@ -1808,11 +1890,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 							"Join Filter", planstate, ancestors, es);
 			if (((NestLoop *) plan)->join.joinqual)
 				show_instrumentation_count("Rows Removed by Join Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 2,
-										   planstate, es);
+										   show_instrument, es);
 			break;
 		case T_MergeJoin:
 			show_upper_qual(((MergeJoin *) plan)->mergeclauses,
@@ -1821,11 +1903,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 							"Join Filter", planstate, ancestors, es);
 			if (((MergeJoin *) plan)->join.joinqual)
 				show_instrumentation_count("Rows Removed by Join Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 2,
-										   planstate, es);
+										   show_instrument, es);
 			break;
 		case T_HashJoin:
 			show_upper_qual(((HashJoin *) plan)->hashclauses,
@@ -1834,25 +1916,25 @@ ExplainNode(PlanState *planstate, List *ancestors,
 							"Join Filter", planstate, ancestors, es);
 			if (((HashJoin *) plan)->join.joinqual)
 				show_instrumentation_count("Rows Removed by Join Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 2,
-										   planstate, es);
+										   show_instrument, es);
 			break;
 		case T_Agg:
 			show_agg_keys(castNode(AggState, planstate), ancestors, es);
 			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			break;
 		case T_Group:
 			show_group_keys(castNode(GroupState, planstate), ancestors, es);
 			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			break;
 		case T_Sort:
 			show_sort_keys(castNode(SortState, planstate), ancestors, es);
@@ -1868,7 +1950,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
-										   planstate, es);
+										   show_instrument, es);
 			break;
 		case T_ModifyTable:
 			show_modifytable_info(castNode(ModifyTableState, planstate), ancestors,
@@ -1882,8 +1964,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	}
 
 	/* Show buffer usage */
-	if (es->buffers && planstate->instrument)
-		show_buffer_usage(es, &planstate->instrument->bufusage);
+	if (es->buffers && show_instrument)
+		show_buffer_usage(es, &show_instrument->bufusage);
 
 	/* Show worker detail */
 	if (es->analyze && es->verbose && !es->hide_workers &&
@@ -1891,65 +1973,13 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	{
 		WorkerInstrumentation *w = planstate->worker_instrument;
 		bool		opened_group = false;
-		int			n;
 
-		for (n = 0; n < w->num_workers; ++n)
-		{
-			Instrumentation *instrument = &w->instrument[n];
-			double		nloops = instrument->nloops;
-			double		startup_ms;
-			double		total_ms;
-			double		rows;
+		/* Leader */
+		ExplainNodePerProcess(es, &opened_group, -1, planstate->instrument);
 
-			if (nloops <= 0)
-				continue;
-			startup_ms = 1000.0 * instrument->startup / nloops;
-			total_ms = 1000.0 * instrument->total / nloops;
-			rows = instrument->ntuples / nloops;
-
-			if (es->format == EXPLAIN_FORMAT_TEXT)
-			{
-				appendStringInfoSpaces(es->str, es->indent * 2);
-				appendStringInfo(es->str, "Worker %d: ", n);
-				if (es->timing)
-					appendStringInfo(es->str,
-									 "actual time=%.3f..%.3f rows=%.0f loops=%.0f\n",
-									 startup_ms, total_ms, rows, nloops);
-				else
-					appendStringInfo(es->str,
-									 "actual rows=%.0f loops=%.0f\n",
-									 rows, nloops);
-				es->indent++;
-				if (es->buffers)
-					show_buffer_usage(es, &instrument->bufusage);
-				es->indent--;
-			}
-			else
-			{
-				if (!opened_group)
-				{
-					ExplainOpenGroup("Workers", "Workers", false, es);
-					opened_group = true;
-				}
-				ExplainOpenGroup("Worker", NULL, true, es);
-				ExplainPropertyInteger("Worker Number", NULL, n, es);
-
-				if (es->timing)
-				{
-					ExplainPropertyFloat("Actual Startup Time", "ms",
-										 startup_ms, 3, es);
-					ExplainPropertyFloat("Actual Total Time", "ms",
-										 total_ms, 3, es);
-				}
-				ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
-				ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
-
-				if (es->buffers)
-					show_buffer_usage(es, &instrument->bufusage);
-
-				ExplainCloseGroup("Worker", NULL, true, es);
-			}
-		}
+		/* Workers */
+		for (int n = 0; n < w->num_workers; ++n)
+			ExplainNodePerProcess(es, &opened_group, n, &w->instrument[n]);
 
 		if (opened_group)
 			ExplainCloseGroup("Workers", "Workers", false, es);
@@ -2776,19 +2806,19 @@ show_tidbitmap_info(BitmapHeapScanState *planstate, ExplainState *es)
  */
 static void
 show_instrumentation_count(const char *qlabel, int which,
-						   PlanState *planstate, ExplainState *es)
+						   Instrumentation *instrument, ExplainState *es)
 {
 	double		nfiltered;
 	double		nloops;
 
-	if (!es->analyze || !planstate->instrument)
+	if (!es->analyze || !instrument)
 		return;
 
 	if (which == 2)
-		nfiltered = planstate->instrument->nfiltered2;
+		nfiltered = instrument->nfiltered2;
 	else
-		nfiltered = planstate->instrument->nfiltered1;
-	nloops = planstate->instrument->nloops;
+		nfiltered = instrument->nfiltered1;
+	nloops = instrument->nloops;
 
 	/* In text mode, suppress zero counts; they're not interesting enough */
 	if (nfiltered > 0 || es->format != EXPLAIN_FORMAT_TEXT)
@@ -3306,7 +3336,8 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 		{
 			show_upper_qual((List *) node->onConflictWhere, "Conflict Filter",
 							&mtstate->ps, ancestors, es);
-			show_instrumentation_count("Rows Removed by Conflict Filter", 1, &mtstate->ps, es);
+			show_instrumentation_count("Rows Removed by Conflict Filter", 1,
+									   mtstate->ps.instrument, es);
 		}
 
 		/* EXPLAIN ANALYZE display of actual outcome for each tuple proposed */

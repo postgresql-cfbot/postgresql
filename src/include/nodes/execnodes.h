@@ -947,6 +947,7 @@ typedef struct PlanState
 										 * wrapper */
 
 	Instrumentation *instrument;	/* Optional runtime stats for this node */
+	Instrumentation *combined_instrument;		/* sum for leader and workers */
 	WorkerInstrumentation *worker_instrument;	/* per-worker instrumentation */
 
 	/* Per-worker JIT instrumentation */

@@ -3383,21 +3383,19 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
 
      <variablelist>
      <varlistentry id="guc-recovery-target" xreflabel="recovery_target">
-      <term><varname>recovery_target</varname><literal> = 'immediate'</literal>
+      <term><varname>recovery_target</varname> (<type>string</type>)
       <indexterm>
         <primary><varname>recovery_target</varname> configuration parameter</primary>
       </indexterm>
       </term>
       <listitem>
        <para>
-        This parameter specifies that recovery should end as soon as a
-        consistent state is reached, i.e. as early as possible. When restoring
-        from an online backup, this means the point where taking the backup
-        ended.
-       </para>
-       <para>
-        Technically, this is a string parameter, but <literal>'immediate'</literal>
-        is currently the only allowed value.
+        This parameter determines how far recovery should proceed. The value
+        <literal>immediate</literal> means that recovery should end as soon as a consistent
+        state is reached, i.e. as early as possible. When restoring from an online
+        backup, this means the point where taking the backup ended.
+        The second possible value <literal>latest</literal> means that recovery
+        should proceed to the end of the available WAL log.
        </para>
       </listitem>
      </varlistentry>

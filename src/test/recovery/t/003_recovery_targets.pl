@@ -3,7 +3,8 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 8;
+use Test::More tests => 15;
+#use Time::HiRes qw(usleep);
 
 # Create and test a standby from given backup, with a certain recovery target.
 # Choose $until_lsn later than the transaction commit that causes the row
@@ -26,6 +27,8 @@ sub test_recovery_standby
 		$node_standby->append_conf('postgresql.conf', qq($param_item));
 	}
 
+	$node_standby->append_conf('postgresql.conf', "recovery_target_action = promote");
+
 	$node_standby->start;
 
 	# Wait until standby has replayed enough data
@@ -38,6 +41,15 @@ sub test_recovery_standby
 	my $result =
 	  $node_standby->safe_psql('postgres', "SELECT count(*) FROM tab_int");
 	is($result, qq($num_rows), "check standby content for $test_name");
+
+	# check that mode was promoted
+	if ($test_name ne 'multiple overriding settings')
+	{
+		$node_standby->safe_psql('postgres', "SELECT pg_sleep(1)");
+		my $is_in_recovery =
+		  $node_standby->safe_psql('postgres', "SELECT pg_is_in_recovery()");
+		is($is_in_recovery, 'f', "check that standby was promoted for $test_name");
+	}
 
 	# Stop standby node
 	$node_standby->teardown_node;
@@ -77,7 +89,7 @@ my $lsn3 =
   $node_master->safe_psql('postgres', "SELECT pg_current_wal_lsn();");
 my $recovery_time = $node_master->safe_psql('postgres', "SELECT now()");
 
-# Even more data, this time with a recovery target name
+# More data, with a recovery target name
 $node_master->safe_psql('postgres',
 	"INSERT INTO tab_int VALUES (generate_series(3001,4000))");
 my $recovery_name = "my_target";
@@ -86,14 +98,17 @@ my $lsn4 =
 $node_master->safe_psql('postgres',
 	"SELECT pg_create_restore_point('$recovery_name');");
 
-# And now for a recovery target LSN
+# Even more data, this time with a recovery target LSN
 $node_master->safe_psql('postgres',
 	"INSERT INTO tab_int VALUES (generate_series(4001,5000))");
 my $lsn5 = my $recovery_lsn =
   $node_master->safe_psql('postgres', "SELECT pg_current_wal_lsn()");
 
+# And now for a recovery target 'latest'
 $node_master->safe_psql('postgres',
 	"INSERT INTO tab_int VALUES (generate_series(5001,6000))");
+my $lsn6 =
+  $node_master->safe_psql('postgres', "SELECT pg_current_wal_lsn();");
 
 # Force archiving of WAL file
 $node_master->safe_psql('postgres', "SELECT pg_switch_wal()");
@@ -114,6 +129,9 @@ test_recovery_standby('name', 'standby_4', $node_master, \@recovery_params,
 @recovery_params = ("recovery_target_lsn = '$recovery_lsn'");
 test_recovery_standby('LSN', 'standby_5', $node_master, \@recovery_params,
 	"5000", $lsn5);
+@recovery_params = ("recovery_target = 'latest'");
+test_recovery_standby('latest target', 'standby_6', $node_master, \@recovery_params,
+	"6000", $lsn6);
 
 # Multiple targets
 #
@@ -126,9 +144,9 @@ test_recovery_standby('LSN', 'standby_5', $node_master, \@recovery_params,
 	"recovery_target_name = ''",
 	"recovery_target_time = '$recovery_time'");
 test_recovery_standby('multiple overriding settings',
-	'standby_6', $node_master, \@recovery_params, "3000", $lsn3);
+	'standby_7', $node_master, \@recovery_params, "3000", $lsn3);
 
-my $node_standby = get_new_node('standby_7');
+my $node_standby = get_new_node('standby_8');
 $node_standby->init_from_backup($node_master, 'my_backup',
 	has_restoring => 1);
 $node_standby->append_conf(

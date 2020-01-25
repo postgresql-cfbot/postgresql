@@ -3588,7 +3588,10 @@ static struct config_string ConfigureNamesString[] =
 
 	{
 		{"recovery_target", PGC_POSTMASTER, WAL_RECOVERY_TARGET,
-			gettext_noop("Set to \"immediate\" to end recovery as soon as a consistent state is reached."),
+			gettext_noop("Set to \"immediate\" to end recovery as "
+						 "soon as a consistent state is reached or "
+						 " to \"latest\" to end recovery after "
+						 "replaying all available WAL in the archive."),
 			NULL
 		},
 		&recovery_target_string,
@@ -11735,9 +11738,10 @@ error_multiple_recovery_targets(void)
 static bool
 check_recovery_target(char **newval, void **extra, GucSource source)
 {
-	if (strcmp(*newval, "immediate") != 0 && strcmp(*newval, "") != 0)
+	if (strcmp(*newval, "immediate") != 0 && strcmp(*newval, "latest") != 0 &&
+		strcmp(*newval, "") != 0)
 	{
-		GUC_check_errdetail("The only allowed value is \"immediate\".");
+		GUC_check_errdetail("The only allowed values are \"immediate\" and \"latest\".");
 		return false;
 	}
 	return true;
@@ -11747,11 +11751,17 @@ static void
 assign_recovery_target(const char *newval, void *extra)
 {
 	if (recoveryTarget != RECOVERY_TARGET_UNSET &&
-		recoveryTarget != RECOVERY_TARGET_IMMEDIATE)
+		recoveryTarget != RECOVERY_TARGET_IMMEDIATE &&
+		recoveryTarget != RECOVERY_TARGET_LATEST)
 		error_multiple_recovery_targets();
 
 	if (newval && strcmp(newval, "") != 0)
-		recoveryTarget = RECOVERY_TARGET_IMMEDIATE;
+	{
+		if (strcmp(newval, "immediate") == 0)
+			recoveryTarget = RECOVERY_TARGET_IMMEDIATE;
+		else if (strcmp(newval, "latest") == 0)
+			recoveryTarget = RECOVERY_TARGET_LATEST;
+	}
 	else
 		recoveryTarget = RECOVERY_TARGET_UNSET;
 }

@@ -807,6 +807,7 @@ typedef struct XLogPageReadPrivate
 	int			emode;
 	bool		fetching_ckpt;	/* are we fetching a checkpoint record? */
 	bool		randAccess;
+	bool		return_on_eow;  /* returns when reaching End of WAL */
 } XLogPageReadPrivate;
 
 /*
@@ -841,6 +842,9 @@ static bool updateMinRecoveryPoint = true;
  * recovery, the database is consistent once minRecoveryPoint is reached.
  */
 bool		reachedConsistency = false;
+
+/* Have we reached End of WAL? Used only in case of RECOVERY_TARGET_LATEST */
+bool		reachedEndOfWal = false;
 
 static bool InRedo = false;
 
@@ -886,7 +890,9 @@ static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, int source);
 static int	XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 						 int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
 static bool WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
-										bool fetching_ckpt, XLogRecPtr tliRecPtr);
+										bool fetching_ckpt,
+										XLogRecPtr tliRecPtr,
+										bool return_on_eow);
 static int	emode_for_corrupt_record(int emode, XLogRecPtr RecPtr);
 static void XLogFileClose(void);
 static void PreallocXlogFiles(XLogRecPtr endptr);
@@ -4266,6 +4272,7 @@ ReadRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr, int emode,
 	private->fetching_ckpt = fetching_ckpt;
 	private->emode = emode;
 	private->randAccess = (RecPtr != InvalidXLogRecPtr);
+	private->return_on_eow = (recoveryTarget == RECOVERY_TARGET_LATEST);
 
 	/* This is the first attempt to read this page. */
 	lastSourceFailed = false;
@@ -4384,8 +4391,12 @@ ReadRecord(XLogReaderState *xlogreader, XLogRecPtr RecPtr, int emode,
 				continue;
 			}
 
-			/* In standby mode, loop back to retry. Otherwise, give up. */
-			if (StandbyMode && !CheckForStandbyTrigger())
+			/*
+			 * In standby mode, loop back to retry. Otherwise, give up.
+			 * If we told to return on end of WAL, also give up.
+			 */
+			if (StandbyMode && !CheckForStandbyTrigger() &&
+				!private->return_on_eow)
 				continue;
 			else
 				return NULL;
@@ -6358,6 +6369,9 @@ StartupXLOG(void)
 		else if (recoveryTarget == RECOVERY_TARGET_IMMEDIATE)
 			ereport(LOG,
 					(errmsg("starting point-in-time recovery to earliest consistent point")));
+		else if (recoveryTarget == RECOVERY_TARGET_LATEST)
+			ereport(LOG,
+					(errmsg("starting point-in-time recovery until all available WAL is applied")));
 		else
 			ereport(LOG,
 					(errmsg("starting archive recovery")));
@@ -7270,6 +7284,13 @@ StartupXLOG(void)
 			 * end of main redo apply loop
 			 */
 
+			if (recoveryTarget == RECOVERY_TARGET_LATEST && reachedEndOfWal)
+			{
+				ereport(LOG,
+						(errmsg("recovery stopping after reaching the end of available WAL")));
+				reachedStopPoint = true;
+			}
+
 			if (reachedStopPoint)
 			{
 				if (!reachedConsistency)
@@ -7472,6 +7493,8 @@ StartupXLOG(void)
 					 recoveryStopName);
 		else if (recoveryTarget == RECOVERY_TARGET_IMMEDIATE)
 			snprintf(reason, sizeof(reason), "reached consistency");
+		else if (recoveryTarget == RECOVERY_TARGET_LATEST)
+			snprintf(reason, sizeof(reason), "end of WAL");
 		else
 			snprintf(reason, sizeof(reason), "no recovery target specified");
 
@@ -11635,7 +11658,8 @@ retry:
 		if (!WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
 										 private->randAccess,
 										 private->fetching_ckpt,
-										 targetRecPtr))
+										 targetRecPtr,
+										 private->return_on_eow))
 		{
 			if (readFile >= 0)
 				close(readFile);
@@ -11775,7 +11799,9 @@ next_record_is_invalid:
  *
  * If the record is not immediately available, the function returns false
  * if we're not in standby mode. In standby mode, waits for it to become
- * available.
+ * available looping over all sources if return_on_eow is false. Otherwise the
+ * function returns false if the record is not immediately available on all
+ * sources.
  *
  * When the requested record becomes available, the function opens the file
  * containing it (if not open already), and returns true. When end of standby
@@ -11784,7 +11810,8 @@ next_record_is_invalid:
  */
 static bool
 WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
-							bool fetching_ckpt, XLogRecPtr tliRecPtr)
+							bool fetching_ckpt, XLogRecPtr tliRecPtr,
+							bool return_on_eow)
 {
 	static TimestampTz last_fail_time = 0;
 	TimestampTz now;
@@ -11890,6 +11917,15 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						RequestXLogStreaming(tli, ptr, PrimaryConnInfo,
 											 PrimarySlotName);
 						receivedUpto = 0;
+					}
+
+					/*
+					 * If we don't get into streaming, this is the end of WAL
+					 */
+					else if (return_on_eow)
+					{
+						reachedEndOfWal = true;
+						return false;
 					}
 
 					/*
@@ -12154,6 +12190,18 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 									 WL_EXIT_ON_PM_DEATH,
 									 5000L, WAIT_EVENT_RECOVERY_WAL_ALL);
 					ResetLatch(&XLogCtl->recoveryWakeupLatch);
+
+					/*
+					 * This is not exactly the end of WAL, but assume the
+					 * primary has no more record to send.
+					 */
+					if (return_on_eow)
+					{
+						reachedEndOfWal = true;
+						currentSource = XLOG_FROM_PG_WAL;
+						return false;
+					}
+
 					break;
 				}
 

@@ -1073,3 +1073,23 @@ select trim_scale(1e100);
 -- cases that need carry propagation
 SELECT SUM(9999::numeric) FROM generate_series(1, 100000);
 SELECT SUM((-9999)::numeric) FROM generate_series(1, 100000);
+
+--
+-- Tests for GCD()
+--
+SELECT gcd(a, b), gcd(a, -b), gcd(-a, b), gcd(-a, -b), gcd(b, a)
+FROM (VALUES (330::numeric, 462::numeric)) AS v(a, b);
+SELECT gcd(0::numeric, 0::numeric);
+SELECT gcd(330.4::numeric, 462.7::numeric);
+
+--
+-- Tests for LCM()
+--
+SELECT lcm(a, b), lcm(a, -b), lcm(-a, b), lcm(-a, -b), lcm(b, a)
+FROM (VALUES (330::numeric, 462::numeric)) AS v(a, b);
+SELECT lcm(42::numeric, 42::numeric);
+SELECT lcm(42::numeric, 0::numeric);
+SELECT lcm(0::numeric, 42::numeric);
+SELECT lcm(0::numeric, 0::numeric);
+SELECT lcm(330.4::numeric, 462.7::numeric);
+SELECT lcm(9999 * (10::numeric)^131068 + (10::numeric^131068 - 1), 2); -- fails

@@ -403,3 +403,73 @@ FROM (VALUES (-2.5::numeric),
   2.5 |          3
 (7 rows)
 
+-- gcd
+SELECT gcd(a, b), gcd(a, -b), gcd(-a, b), gcd(-a, -b), gcd(b, a)
+FROM (VALUES (61866666::int4, 6410818::int4)) AS v(a, b);
+ gcd  | gcd  | gcd  | gcd  | gcd  
+------+------+------+------+------
+ 1466 | 1466 | 1466 | 1466 | 1466
+(1 row)
+
+SELECT gcd((-2147483648)::int4, 1073741824::int4);
+    gcd     
+------------
+ 1073741824
+(1 row)
+
+SELECT gcd((-2147483648)::int4, (-1)::int4);
+ gcd 
+-----
+   1
+(1 row)
+
+SELECT gcd((-2147483648)::int4, 0::int4); -- fail
+ERROR:  integer out of range
+SELECT gcd((-2147483648)::int4, (-2147483648)::int4); -- fail
+ERROR:  integer out of range
+-- lcm
+SELECT lcm(a, b), lcm(a, -b), lcm(-a, b), lcm(-a, -b), lcm(b, a)
+FROM (VALUES (330::int4, 462::int4)) AS v(a, b);
+ lcm  | lcm  | lcm  | lcm  | lcm  
+------+------+------+------+------
+ 2310 | 2310 | 2310 | 2310 | 2310
+(1 row)
+
+SELECT lcm(42::int4, 42::int4);
+ lcm 
+-----
+  42
+(1 row)
+
+SELECT lcm(42::int4, 0::int4);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(0::int4, 42::int4);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(0::int4, 0::int4);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm((-2147483648)::int4, 0::int4);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(0::int4, (-2147483648)::int4);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(2147483647::int4, 2147483646::int4); -- fail
+ERROR:  integer out of range

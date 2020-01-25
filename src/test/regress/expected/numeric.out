@@ -2220,3 +2220,67 @@ SELECT SUM((-9999)::numeric) FROM generate_series(1, 100000);
  -999900000
 (1 row)
 
+--
+-- Tests for GCD()
+--
+SELECT gcd(a, b), gcd(a, -b), gcd(-a, b), gcd(-a, -b), gcd(b, a)
+FROM (VALUES (330::numeric, 462::numeric)) AS v(a, b);
+ gcd | gcd | gcd | gcd | gcd 
+-----+-----+-----+-----+-----
+  66 |  66 |  66 |  66 |  66
+(1 row)
+
+SELECT gcd(0::numeric, 0::numeric);
+ gcd 
+-----
+   0
+(1 row)
+
+SELECT gcd(330.4::numeric, 462.7::numeric);
+ gcd 
+-----
+ 0.7
+(1 row)
+
+--
+-- Tests for LCM()
+--
+SELECT lcm(a, b), lcm(a, -b), lcm(-a, b), lcm(-a, -b), lcm(b, a)
+FROM (VALUES (330::numeric, 462::numeric)) AS v(a, b);
+ lcm  | lcm  | lcm  | lcm  | lcm  
+------+------+------+------+------
+ 2310 | 2310 | 2310 | 2310 | 2310
+(1 row)
+
+SELECT lcm(42::numeric, 42::numeric);
+ lcm 
+-----
+  42
+(1 row)
+
+SELECT lcm(42::numeric, 0::numeric);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(0::numeric, 42::numeric);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(0::numeric, 0::numeric);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(330.4::numeric, 462.7::numeric);
+   lcm    
+----------
+ 218394.4
+(1 row)
+
+SELECT lcm(9999 * (10::numeric)^131068 + (10::numeric^131068 - 1), 2); -- fails
+ERROR:  value overflows numeric format

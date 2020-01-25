@@ -2692,6 +2692,137 @@ numeric_div_trunc(PG_FUNCTION_ARGS)
 
 
 /*
+ * Greatest Common Divisor
+ *
+ * We define here that gcd(n, 0) = n and therefore gdc(0, 0) = 0.
+ * See the comments on int[24]gcd for more details.
+ */
+static void
+gcd_var(NumericVar arg1, NumericVar arg2, NumericVar *result)
+{
+	NumericVar	swap;
+	int			cmp;
+
+	/*
+	 * Unlike the integer types, there are no negative numerics that cannot be
+	 * represented positively, so just abs them from the beginning.
+	 */
+	arg1.sign = NUMERIC_POS;
+	arg2.sign = NUMERIC_POS;
+
+	/* gcd(a, a) = a */
+	cmp = cmp_var(&arg1, &arg2);
+	if (cmp == 0)
+	{
+		set_var_from_var(&arg1, result);
+		return;
+	}
+
+	init_var(&swap);
+
+	/* Save ourselves a call to mod_var if arg1 < arg2 */
+	if (cmp == -1)
+	{
+		set_var_from_var(&arg1, &swap);
+		set_var_from_var(&arg2, &arg1);
+		set_var_from_var(&swap, &arg2);
+	}
+
+	/* Use basic Euclidean algorithm for GCD */
+	while (arg2.ndigits != 0)
+	{
+		/* this loop can take awhile, so allow it to be interrupted */
+		CHECK_FOR_INTERRUPTS();
+
+		mod_var(&arg1, &arg2, &swap);
+		set_var_from_var(&arg2, &arg1);
+		set_var_from_var(&swap, &arg2);
+	}
+
+	free_var(&swap);
+
+	set_var_from_var(&arg1, result);
+}
+
+Datum
+numeric_gcd(PG_FUNCTION_ARGS)
+{
+	Numeric		num1 = PG_GETARG_NUMERIC(0);
+	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		res;
+	NumericVar	arg1;
+	NumericVar	arg2;
+	NumericVar	result;
+
+	if (NUMERIC_IS_NAN(num1) || NUMERIC_IS_NAN(num2))
+		PG_RETURN_NUMERIC(make_result(&const_nan));
+
+	init_var_from_num(num1, &arg1);
+	init_var_from_num(num2, &arg2);
+
+	init_var(&result);
+
+	gcd_var(arg1, arg2, &result);
+	res = make_result_opt_error(&result, NULL);
+
+	free_var(&result);
+
+	PG_RETURN_NUMERIC(res);
+}
+
+/*
+ * Least Common Multiple
+ */
+
+Datum
+numeric_lcm(PG_FUNCTION_ARGS)
+{
+	Numeric		num1 = PG_GETARG_NUMERIC(0);
+	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		res;
+	NumericVar	arg1;
+	NumericVar	arg2;
+	NumericVar	result;
+
+	/* If we get a NaN, just return NaN */
+	if (NUMERIC_IS_NAN(num1) || NUMERIC_IS_NAN(num2))
+		PG_RETURN_NUMERIC(make_result(&const_nan));
+
+	/* If either argument is 0, the result is 0 */
+	if (NUMERIC_NDIGITS(num1) == 0 || NUMERIC_NDIGITS(num2) == 0)
+		PG_RETURN_NUMERIC(make_result(&const_zero));
+
+	init_var_from_num(num1, &arg1);
+	init_var_from_num(num2, &arg2);
+
+	/*
+	 * Make arguments positive.  We can do this because all negative numbers
+	 * are representable in the positive space.
+	 */
+	arg1.sign = NUMERIC_POS;
+	arg2.sign = NUMERIC_POS;
+
+	/* If both arguments are the same, just return it */
+	if (cmp_var(&arg1, &arg2) == 0)
+		PG_RETURN_NUMERIC(make_result(&arg1));
+
+	init_var(&result);
+
+	/* result = arg1 / gcd(arg1, arg2) * arg2 */
+	gcd_var(arg1, arg2, &result);
+	div_var(&arg1, &result, &result, select_div_scale(&arg1, &result), true);
+	mul_var(&arg2, &result, &result, arg2.dscale + result.dscale);
+
+	/* Reign in the scale to the largest scale of both inputs. */
+	result.dscale = Max(arg1.dscale, arg2.dscale);
+	res = make_result(&result);
+
+	free_var(&result);
+
+	PG_RETURN_NUMERIC(res);
+}
+
+/*
  * numeric_mod() -
  *
  *	Calculate the modulo of two numerics

@@ -1196,6 +1196,226 @@ int2abs(PG_FUNCTION_ARGS)
 	PG_RETURN_INT16(result);
 }
 
+/*
+ * Greatest Common Divisor
+ *
+ * Special cases:
+ *   - gcd(x, 0) = gcd(0, x) = abs(x)
+ *   		because 0 is divisible by anything
+ *   - gcd(0, 0) = 0
+ *   		complies with the previous definition and is a common convention
+ *
+ * The following cases involving INT_MIN have two possible results.  They could
+ * return INT_MIN because INT_MIN is a valid divisor of INT_MIN, or they could
+ * throw an exception because the result is negative.
+ * The consensus is to throw an exception.
+ *
+ *   - gcd(INT_MIN, 0)
+ *   - gcd(INT_MIN, INT_MIN)
+ *
+ * Any other value with INT_MIN will be a positive value representable within
+ * the data type.
+ */
+static int32
+int4gcd_internal(int32 arg1, int32 arg2)
+{
+	int32	swap;
+	int32	a1, a2;
+
+	/*
+	 * Put the greater absolute value in arg1.
+	 *
+	 * This would happen automatically in the loop below, but avoids an
+	 * expensive modulo simulation on some architectures.
+	 *
+	 * We do this in negative space in order to handle INT_MIN.
+	 */
+	a1 = (arg1 < 0) ? arg1 : -arg1;
+	a2 = (arg2 < 0) ? arg2 : -arg2;
+	if (a1 > a2)
+	{
+		swap = arg1;
+		arg1 = arg2;
+		arg2 = swap;
+	}
+
+	/* Special care needs to be taken with INT_MIN.  See comments above. */
+	if (arg1 == PG_INT32_MIN)
+	{
+		if (arg2 == 0 || arg2 == PG_INT32_MIN)
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("integer out of range")));
+		/*
+		 * Making arg2 positive avoids the INT_MIN % -1 issue described in
+		 * int4mod.
+		 */
+		arg2 = -arg2;
+	}
+
+	/* Find GCD using the basic Euclidean algorithm */
+	while (arg2 != 0)
+	{
+		swap = arg2;
+		arg2 = arg1 % arg2;
+		arg1 = swap;
+	}
+
+	/*
+	 * Make sure the result is positive. (We know we don't have INT_MIN
+	 * anymore).
+	 */
+	if (arg1 < 0)
+		arg1 = -arg1;
+
+	return arg1;
+}
+
+static int16
+int2gcd_internal(int16 arg1, int16 arg2)
+{
+	/* See int4gcd_internal for commented version. */
+	int16	swap;
+	int16	a1, a2;
+
+	a1 = (arg1 < 0) ? arg1 : -arg1;
+	a2 = (arg2 < 0) ? arg2 : -arg2;
+	if (a1 > a2)
+	{
+		swap = arg1;
+		arg1 = arg2;
+		arg2 = swap;
+	}
+
+	if (arg1 == PG_INT16_MIN)
+	{
+		if (arg2 == 0 || arg2 == PG_INT16_MIN)
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("smallint out of range")));
+		arg2 = -arg2;
+	}
+
+	while (arg2 != 0)
+	{
+		swap = arg2;
+		arg2 = arg1 % arg2;
+		arg1 = swap;
+	}
+
+	if (arg1 < 0)
+		arg1 = -arg1;
+
+	return arg1;
+}
+
+Datum
+int4gcd(PG_FUNCTION_ARGS)
+{
+	int32	arg1 = PG_GETARG_INT32(0);
+	int32	arg2 = PG_GETARG_INT32(1);
+	int32	result;
+
+	result = int4gcd_internal(arg1, arg2);
+
+	PG_RETURN_INT32(result);
+}
+
+Datum
+int2gcd(PG_FUNCTION_ARGS)
+{
+	int16	arg1 = PG_GETARG_INT16(0);
+	int16	arg2 = PG_GETARG_INT16(1);
+	int16	result;
+
+	result = int2gcd_internal(arg1, arg2);
+
+	PG_RETURN_INT16(result);
+}
+
+/*
+ * Least Common Multiple
+ */
+
+Datum
+int4lcm(PG_FUNCTION_ARGS)
+{
+	int32	arg1 = PG_GETARG_INT32(0);
+	int32	arg2 = PG_GETARG_INT32(1);
+	int32	gcd;
+	int32	result;
+
+	/* lcm(n, 0) = lcm(0, n) = 0 */
+	if (arg1 == 0 || arg2 == 0)
+		PG_RETURN_INT32(0);
+
+	/* lcm(n, n) = abs(n) */
+	if (arg1 == arg2)
+	{
+		if (arg1 == PG_INT32_MIN)
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("integer out of range")));
+
+		PG_RETURN_INT32(Abs(arg1));
+	}
+
+	/* lcm(m, n) = abs(m / gcd(m, n) * n) */
+	gcd = int4gcd_internal(arg1, arg2);
+	arg1 = arg1 / gcd;
+
+	if (unlikely(pg_mul_s32_overflow(arg1, arg2, &result)))
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("integer out of range")));
+
+	/* If the result is INT_MIN, it cannot be represented. */
+	if (result == PG_INT32_MIN)
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("integer out of range")));
+
+	PG_RETURN_INT32(Abs(result));
+}
+
+Datum
+int2lcm(PG_FUNCTION_ARGS)
+{
+	/* See int4lcm for commented version. */
+	int16	arg1 = PG_GETARG_INT16(0);
+	int16	arg2 = PG_GETARG_INT16(1);
+	int16	gcd;
+	int16	result;
+
+	if (arg1 == 0 || arg2 == 0)
+		PG_RETURN_INT16(0);
+
+	if (arg1 == arg2)
+	{
+		if (arg1 == PG_INT16_MIN)
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("smallint out of range")));
+
+		PG_RETURN_INT16(Abs(arg1));
+	}
+
+	gcd = int2gcd_internal(arg1, arg2);
+	arg1 = arg1 / gcd;
+
+	if (unlikely(pg_mul_s16_overflow(arg1, arg2, &result)))
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("smallint out of range")));
+
+	if (result == PG_INT16_MIN)
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("smallint out of range")));
+
+	PG_RETURN_INT16(Abs(result));
+}
+
 Datum
 int2larger(PG_FUNCTION_ARGS)
 {

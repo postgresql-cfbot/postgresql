@@ -225,3 +225,22 @@ FROM (VALUES (-2.5::numeric),
              (0.5::numeric),
              (1.5::numeric),
              (2.5::numeric)) t(x);
+
+-- gcd
+SELECT gcd(a, b), gcd(a, -b), gcd(-a, b), gcd(-a, -b), gcd(b, a)
+FROM (VALUES (288484263558::int8, 29893644334::int8)) AS v(a, b);
+SELECT gcd((-9223372036854775808)::int8, 4611686018427387904::int8);
+SELECT gcd((-9223372036854775808)::int8, (-1)::int8);
+SELECT gcd((-9223372036854775808)::int8, 0::int8); -- fail
+SELECT gcd((-9223372036854775808)::int8, (-9223372036854775808)::int8); -- fail
+
+-- lcm
+SELECT lcm(a, b), lcm(a, -b), lcm(-a, b), lcm(-a, -b), lcm(b, a)
+FROM (VALUES (330::int8, 462::int8)) AS v(a, b);
+SELECT lcm(42::int8, 42::int8);
+SELECT lcm(42::int8, 0::int8);
+SELECT lcm(0::int8, 42::int8);
+SELECT lcm(0::int8, 0::int8);
+SELECT lcm((-9223372036854775808)::int8, 0::int8);
+SELECT lcm(0::int8, (-9223372036854775808)::int8);
+SELECT lcm(9223372036854775807::int8, 9223372036854775806::int8); -- fail

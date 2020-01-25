@@ -112,3 +112,22 @@ FROM (VALUES (-2.5::numeric),
              (0.5::numeric),
              (1.5::numeric),
              (2.5::numeric)) t(x);
+
+-- gcd
+SELECT gcd(a, b), gcd(a, -b), gcd(-a, b), gcd(-a, -b), gcd(b, a)
+FROM (VALUES (24948::int2, 4914::int2)) AS v(a, b);
+SELECT gcd((-32768)::int2, 16384::int2);
+SELECT gcd((-32768)::int2, (-1)::int2);
+SELECT gcd((-32768)::int2, 0::int2); -- fail
+SELECT gcd((-32768)::int2, (-32768)::int2); -- fail
+
+-- lcm
+SELECT lcm(a, b), lcm(a, -b), lcm(-a, b), lcm(-a, -b), lcm(b, a)
+FROM (VALUES (330::int2, 462::int2)) AS v(a, b);
+SELECT lcm(42::int2, 42::int2);
+SELECT lcm(42::int2, 0::int2);
+SELECT lcm(0::int2, 42::int2);
+SELECT lcm(0::int2, 0::int2);
+SELECT lcm((-32768)::int2, 0::int2);
+SELECT lcm(0::int2, (-32768)::int2);
+SELECT lcm(32767::int2, 32766::int2); -- fail

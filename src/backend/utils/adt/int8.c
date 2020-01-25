@@ -667,6 +667,104 @@ int8mod(PG_FUNCTION_ARGS)
 	PG_RETURN_INT64(arg1 % arg2);
 }
 
+/*
+ * Greatest Common Divisor
+ *
+ * See int4gcd_internal for commented version.
+ */
+
+static int64
+int8gcd_internal(int64 arg1, int64 arg2)
+{
+	int64	swap;
+	int64	a1, a2;
+
+	a1 = (arg1 < 0) ? arg1 : -arg1;
+	a2 = (arg2 < 0) ? arg2 : -arg2;
+	if (a1 > a2)
+	{
+		swap = arg1;
+		arg1 = arg2;
+		arg2 = swap;
+	}
+
+	if (arg1 == PG_INT64_MIN)
+	{
+		if (arg2 == 0 || arg2 == PG_INT64_MIN)
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("bigint out of range")));
+		arg2 = -arg2;
+	}
+
+	while (arg2 != 0)
+	{
+		swap = arg2;
+		arg2 = arg1 % arg2;
+		arg1 = swap;
+	}
+
+	if (arg1 < 0)
+		arg1 = -arg1;
+
+	return arg1;
+}
+
+Datum
+int8gcd(PG_FUNCTION_ARGS)
+{
+	int64	arg1 = PG_GETARG_INT64(0);
+	int64	arg2 = PG_GETARG_INT64(1);
+	int64	result;
+
+	result = int8gcd_internal(arg1, arg2);
+
+	PG_RETURN_INT64(result);
+}
+
+/*
+ * Least Common Multiple
+ *
+ * See int4lcm for commented version.
+ */
+
+Datum
+int8lcm(PG_FUNCTION_ARGS)
+{
+	int64	arg1 = PG_GETARG_INT64(0);
+	int64	arg2 = PG_GETARG_INT64(1);
+	int64	gcd;
+	int64	result;
+
+	if (arg1 == 0 || arg2 == 0)
+		PG_RETURN_INT64(0);
+
+	if (arg1 == arg2)
+	{
+		if (arg1 == PG_INT64_MIN)
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("bigint out of range")));
+
+		PG_RETURN_INT64(Abs(arg1));
+	}
+
+	gcd = int8gcd_internal(arg1, arg2);
+	arg1 = arg1 / gcd;
+
+	if (unlikely(pg_mul_s64_overflow(arg1, arg2, &result)))
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("bigint out of range")));
+
+	if (result == PG_INT64_MIN)
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("bigint out of range")));
+
+	PG_RETURN_INT64(Abs(result));
+}
+
 
 Datum
 int8inc(PG_FUNCTION_ARGS)

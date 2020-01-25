@@ -10748,4 +10748,32 @@
   proname => 'pg_partition_root', prorettype => 'regclass',
   proargtypes => 'regclass', prosrc => 'pg_partition_root' },
 
+# greatest common divisor
+{ oid => '8463', descr => 'greatest common divisor',
+  proname => 'gcd', prorettype => 'int2', proargtypes => 'int2 int2',
+  prosrc => 'int2gcd' },
+{ oid => '8464', descr => 'greatest common divisor',
+  proname => 'gcd', prorettype => 'int4', proargtypes => 'int4 int4',
+  prosrc => 'int4gcd' },
+{ oid => '8465', descr => 'greatest common divisor',
+  proname => 'gcd', prorettype => 'int8', proargtypes => 'int8 int8',
+  prosrc => 'int8gcd' },
+{ oid => '8466', descr => 'greatest common divisor',
+  proname => 'gcd', prorettype => 'numeric', proargtypes => 'numeric numeric',
+  prosrc => 'numeric_gcd' },
+
+# least common multiple
+{ oid => '8467', descr => 'least common multiple',
+  proname => 'lcm', prorettype => 'int2', proargtypes => 'int2 int2',
+  prosrc => 'int2lcm' },
+{ oid => '8468', descr => 'least common multiple',
+  proname => 'lcm', prorettype => 'int4', proargtypes => 'int4 int4',
+  prosrc => 'int4lcm' },
+{ oid => '8469', descr => 'least common multiple',
+  proname => 'lcm', prorettype => 'int8', proargtypes => 'int8 int8',
+  prosrc => 'int8lcm' },
+{ oid => '8470', descr => 'least common multiple',
+  proname => 'lcm', prorettype => 'numeric', proargtypes => 'numeric numeric',
+  prosrc => 'numeric_lcm' },
+
 ]

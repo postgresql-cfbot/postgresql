@@ -886,3 +886,73 @@ FROM (VALUES (-2.5::numeric),
   2.5 |          3
 (7 rows)
 
+-- gcd
+SELECT gcd(a, b), gcd(a, -b), gcd(-a, b), gcd(-a, -b), gcd(b, a)
+FROM (VALUES (288484263558::int8, 29893644334::int8)) AS v(a, b);
+   gcd   |   gcd   |   gcd   |   gcd   |   gcd   
+---------+---------+---------+---------+---------
+ 6835958 | 6835958 | 6835958 | 6835958 | 6835958
+(1 row)
+
+SELECT gcd((-9223372036854775808)::int8, 4611686018427387904::int8);
+         gcd         
+---------------------
+ 4611686018427387904
+(1 row)
+
+SELECT gcd((-9223372036854775808)::int8, (-1)::int8);
+ gcd 
+-----
+   1
+(1 row)
+
+SELECT gcd((-9223372036854775808)::int8, 0::int8); -- fail
+ERROR:  bigint out of range
+SELECT gcd((-9223372036854775808)::int8, (-9223372036854775808)::int8); -- fail
+ERROR:  bigint out of range
+-- lcm
+SELECT lcm(a, b), lcm(a, -b), lcm(-a, b), lcm(-a, -b), lcm(b, a)
+FROM (VALUES (330::int8, 462::int8)) AS v(a, b);
+ lcm  | lcm  | lcm  | lcm  | lcm  
+------+------+------+------+------
+ 2310 | 2310 | 2310 | 2310 | 2310
+(1 row)
+
+SELECT lcm(42::int8, 42::int8);
+ lcm 
+-----
+  42
+(1 row)
+
+SELECT lcm(42::int8, 0::int8);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(0::int8, 42::int8);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(0::int8, 0::int8);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm((-9223372036854775808)::int8, 0::int8);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(0::int8, (-9223372036854775808)::int8);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(9223372036854775807::int8, 9223372036854775806::int8); -- fail
+ERROR:  bigint out of range

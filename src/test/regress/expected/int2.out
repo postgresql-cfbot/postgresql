@@ -306,3 +306,73 @@ FROM (VALUES (-2.5::numeric),
   2.5 |          3
 (7 rows)
 
+-- gcd
+SELECT gcd(a, b), gcd(a, -b), gcd(-a, b), gcd(-a, -b), gcd(b, a)
+FROM (VALUES (24948::int2, 4914::int2)) AS v(a, b);
+ gcd | gcd | gcd | gcd | gcd 
+-----+-----+-----+-----+-----
+ 378 | 378 | 378 | 378 | 378
+(1 row)
+
+SELECT gcd((-32768)::int2, 16384::int2);
+  gcd  
+-------
+ 16384
+(1 row)
+
+SELECT gcd((-32768)::int2, (-1)::int2);
+ gcd 
+-----
+   1
+(1 row)
+
+SELECT gcd((-32768)::int2, 0::int2); -- fail
+ERROR:  smallint out of range
+SELECT gcd((-32768)::int2, (-32768)::int2); -- fail
+ERROR:  smallint out of range
+-- lcm
+SELECT lcm(a, b), lcm(a, -b), lcm(-a, b), lcm(-a, -b), lcm(b, a)
+FROM (VALUES (330::int2, 462::int2)) AS v(a, b);
+ lcm  | lcm  | lcm  | lcm  | lcm  
+------+------+------+------+------
+ 2310 | 2310 | 2310 | 2310 | 2310
+(1 row)
+
+SELECT lcm(42::int2, 42::int2);
+ lcm 
+-----
+  42
+(1 row)
+
+SELECT lcm(42::int2, 0::int2);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(0::int2, 42::int2);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(0::int2, 0::int2);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm((-32768)::int2, 0::int2);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(0::int2, (-32768)::int2);
+ lcm 
+-----
+   0
+(1 row)
+
+SELECT lcm(32767::int2, 32766::int2); -- fail
+ERROR:  smallint out of range

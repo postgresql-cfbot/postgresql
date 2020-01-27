@@ -968,6 +968,42 @@ EndDirectModify(ForeignScanState *node);
 
    </sect2>
 
+   <sect2 id="fdw-callbacks-truncate">
+    <title>FDW Routines for Truncate</title>
+<programlisting>
+void
+ExecForeignTruncate(List *frels_list,
+                    DropBehavior behavior, bool restart_seqs);
+</programlisting>
+    <para>
+     Truncate a set of foreign tables defined by
+     <literal>frels_list</literal> belonging to the same foreign server.
+     This optional function is called during execution of
+     <command>TRUNCATE</command> for each foreign server being involved
+     in one <command>TRUNCATE</command> command (note that invocations
+     are not per foreign table).
+    </para>
+    
+    <para>
+     If the <function>ExecForeignTruncate</function> pointer is set to
+     <literal>NULL</literal>, attempts to truncate the foreign table will
+     fail with an error message.
+    </para>
+    
+    <para>
+     <literal>behavior</literal> defines how foreign tables should
+     be truncated, using as possible values <literal>DROP_RESTRICT</literal>
+     and <literal>DROP_CASCADE</literal> (to map with the equivalents of
+     <command>TRUNCATE</command>).
+    </para>
+    
+    <para>
+     <literal>restart_seqs</literal> is set to <literal>true</literal>
+     if <literal>RESTART IDENTITY</literal> was supplied in the
+     <command>TRUNCATE</command>.
+    </para>
+   </sect2>
+
    <sect2 id="fdw-callbacks-row-locking">
     <title>FDW Routines for Row Locking</title>
 

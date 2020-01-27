@@ -59,6 +59,7 @@
 #include "commands/typecmds.h"
 #include "commands/user.h"
 #include "executor/executor.h"
+#include "foreign/fdwapi.h"
 #include "foreign/foreign.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -294,6 +295,21 @@ struct DropRelationCallbackState
 #define		ATT_COMPOSITE_TYPE		0x0010
 #define		ATT_FOREIGN_TABLE		0x0020
 #define		ATT_PARTITIONED_INDEX	0x0040
+
+/*
+ * ForeignTruncateInfo
+ *
+ * Information related to truncation of foreign tables.  This is used for
+ * the elements in a hash table that uses the server OID as lookup key,
+ * and includes a per-server list of all foreign tables involved in the
+ * truncation.
+ */
+typedef struct
+{
+	Oid			server_oid;
+	List	   *frels_list;
+} ForeignTruncateInfo;
+
 
 /*
  * Partition tables are expected to be dropped when the parent partitioned
@@ -1663,6 +1679,7 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 {
 	List	   *rels;
 	List	   *seq_relids = NIL;
+	HTAB	   *ft_htab = NULL;
 	EState	   *estate;
 	ResultRelInfo *resultRelInfos;
 	ResultRelInfo *resultRelInfo;
@@ -1809,6 +1826,56 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 			continue;
 
 		/*
+		 * If truncating a foreign table, the foreign data wrapper callback
+		 * for TRUNCATE is called once for each server with a list of all the
+		 * relations to process linked to this server.  The list of relations
+		 * for each server is saved as a single entry in a hash table that
+		 * uses the server OID as lookup key.  Once the full set of lists is
+		 * built, all the entries of the hash table are scanned, and the list
+		 * of relations associated to the server is passed down to the
+		 * TRUNCATE callback of its foreign data wrapper.
+		 */
+		if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+		{
+			Oid			frel_oid = RelationGetRelid(rel);
+			Oid			server_oid = GetForeignServerIdByRelId(frel_oid);
+			bool		found;
+			ForeignTruncateInfo *ft_info;
+
+			/* if the hash table does not exist yet, initialize it */
+			if (!ft_htab)
+			{
+				HASHCTL		hctl;
+
+				memset(&hctl, 0, sizeof(HASHCTL));
+				hctl.keysize = sizeof(Oid);
+				hctl.entrysize = sizeof(ForeignTruncateInfo);
+				hctl.hcxt = CurrentMemoryContext;
+
+				ft_htab = hash_create("TRUNCATE for Foreign Tables",
+									  32,	/* start small and extend */
+									  &hctl,
+									  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+			}
+
+			/*
+			 * Look after the entry of the server in the hash table, and
+			 * initialize it if the entry does not exist yet.
+			 */
+			ft_info = hash_search(ft_htab, &server_oid, HASH_ENTER, &found);
+			if (!found)
+			{
+				ft_info->server_oid = server_oid;
+				ft_info->frels_list = NIL;
+
+			}
+
+			/* save the relation in the list */
+			ft_info->frels_list = lappend(ft_info->frels_list, rel);
+			continue;
+		}
+
+		/*
 		 * Normally, we need a transaction-safe truncation here.  However, if
 		 * the table was either created in the current (sub)transaction or has
 		 * a new relfilenode in the current (sub)transaction, then we can just
@@ -1866,6 +1933,30 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 		}
 
 		pgstat_count_truncate(rel);
+	}
+
+	/*
+	 * Now go through the hash table, and process each entry associated to the
+	 * servers involved in the TRUNCATE.
+	 */
+	if (ft_htab)
+	{
+		ForeignTruncateInfo *ft_info;
+		HASH_SEQ_STATUS seq;
+
+		hash_seq_init(&seq, ft_htab);
+
+		while ((ft_info = hash_seq_search(&seq)) != NULL)
+		{
+			FdwRoutine *routine = GetFdwRoutineByServerId(ft_info->server_oid);
+
+			/* truncate_check_rel() has checked that already */
+			Assert(routine->ExecForeignTruncate != NULL);
+
+			routine->ExecForeignTruncate(ft_info->frels_list,
+										 behavior,
+										 restart_seqs);
+		}
 	}
 
 	/*
@@ -1955,12 +2046,24 @@ truncate_check_rel(Oid relid, Form_pg_class reltuple)
 	char	   *relname = NameStr(reltuple->relname);
 
 	/*
-	 * Only allow truncate on regular tables and partitioned tables (although,
-	 * the latter are only being included here for the following checks; no
-	 * physical truncation will occur in their case.)
+	 * Only allow truncate on regular tables, foreign tables using foreign
+	 * data wrappers supporting TRUNCATE and partitioned tables (although, the
+	 * latter are only being included here for the following checks; no
+	 * physical truncation will occur in their case.).
 	 */
-	if (reltuple->relkind != RELKIND_RELATION &&
-		reltuple->relkind != RELKIND_PARTITIONED_TABLE)
+	if (reltuple->relkind == RELKIND_FOREIGN_TABLE)
+	{
+		Oid			server_id = GetForeignServerIdByRelId(relid);
+		FdwRoutine *fdwroutine = GetFdwRoutineByServerId(server_id);
+
+		if (!fdwroutine->ExecForeignTruncate)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot truncate foreign table \"%s\"",
+							relname)));
+	}
+	else if (reltuple->relkind != RELKIND_RELATION &&
+			 reltuple->relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is not a table", relname)));

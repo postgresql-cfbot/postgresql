@@ -7847,6 +7847,22 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
 
  </sect2>
 
+ <sect2>
+  <title>Client Protocol Usage</title>
+  <para>
+   When connecting using SSL, the client and server negotiate which protocol
+   to use for the connection. <productname>PostgreSQL</productname> supports
+   <literal>TLSv1</literal>, <literal>TLSv1.1</literal>,
+   <literal>TLSv1.2</literal> and <literal>TLSv1.3</literal>, but the
+   protocols available depend on the version of
+   <productname>OpenSSL</productname> that the client and the backend are
+   using. The minimum requested version can be specified with
+   <literal>sslminprotocolversion</literal>, which will ensure that the
+   connection uses that protocol version or higher. The maximum requested
+   version can be specified with <literal>sslmaxprotocolversion</literal>.
+  </para>
+ </sect2>
+ 
  <sect2 id="libpq-ssl-fileusage">
   <title>SSL Client File Usage</title>
 

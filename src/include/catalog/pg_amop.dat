@@ -1009,6 +1009,10 @@
 { amopfamily => 'hash/xid_ops', amoplefttype => 'xid', amoprighttype => 'xid',
   amopstrategy => '1', amopopr => '=(xid,xid)', amopmethod => 'hash' },
 
+# xid_ops
+{ amopfamily => 'hash/xid8_ops', amoplefttype => 'xid8', amoprighttype => 'xid8',
+  amopstrategy => '1', amopopr => '=(xid8,xid8)', amopmethod => 'hash' },
+
 # cid_ops
 { amopfamily => 'hash/cid_ops', amoplefttype => 'cid', amoprighttype => 'cid',
   amopstrategy => '1', amopopr => '=(cid,cid)', amopmethod => 'hash' },

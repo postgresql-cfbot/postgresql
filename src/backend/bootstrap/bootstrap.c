@@ -326,6 +326,9 @@ AuxiliaryProcessMain(int argc, char *argv[])
 			case StartupProcess:
 				statmsg = pgstat_get_backend_desc(B_STARTUP);
 				break;
+			case ArchiverProcess:
+				statmsg = pgstat_get_backend_desc(B_ARCHIVER);
+				break;
 			case BgWriterProcess:
 				statmsg = pgstat_get_backend_desc(B_BG_WRITER);
 				break;
@@ -449,6 +452,11 @@ AuxiliaryProcessMain(int argc, char *argv[])
 		case StartupProcess:
 			/* don't set signals, startup process has its own agenda */
 			StartupProcessMain();
+			proc_exit(1);		/* should never return */
+
+		case ArchiverProcess:
+			/* don't set signals, archiver has its own agenda */
+			PgArchiverMain();
 			proc_exit(1);		/* should never return */
 
 		case BgWriterProcess:

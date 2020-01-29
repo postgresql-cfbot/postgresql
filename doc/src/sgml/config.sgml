@@ -4000,8 +4000,14 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
           <varname>primary_conninfo</varname> string.
          </para>
          <para>
-          This parameter can only be set at server start.
+          This parameter can only be set in the <filename>postgresql.conf</filename>
+          file or on the server command line.
           This setting has no effect if the server is not in standby mode.
+         </para>
+         <para>
+          If <varname>primary_conninfo</varname> is changed while WAL receiver is running,
+          the WAL receiver shuts down and then restarts with new setting,
+          except when primary_conninfo is an empty string.
          </para>
         </listitem>
        </varlistentry>
@@ -4017,9 +4023,13 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
           connecting to the sending server via streaming replication to control
           resource removal on the upstream node
           (see <xref linkend="streaming-replication-slots"/>).
-          This parameter can only be set at server start.
+          This parameter can only be set in the <filename>postgresql.conf</filename>
+          file or on the server command line.
           This setting has no effect if <varname>primary_conninfo</varname> is not
-          set.
+          set or the server is not in standby mode.
+         </para>
+         <para>
+          The WAL receiver is restarted after an update of <varname>primary_slot_name</varname>.
          </para>
         </listitem>
        </varlistentry>
@@ -4138,8 +4148,10 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
         The default is on.  The only reason to turn this off would be if the
         remote instance is currently out of available replication slots.  This
         parameter can only be set in the <filename>postgresql.conf</filename>
-        file or on the server command line.  Changes only take effect when the
-        WAL receiver process starts a new connection.
+        file or on the server command line.
+       </para>
+       <para>
+        The WAL receiver is restarted after an update of <varname>wal_receiver_create_temp_slot</varname>.
        </para>
       </listitem>
      </varlistentry>

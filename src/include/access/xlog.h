@@ -129,6 +129,7 @@ extern int	recoveryTargetAction;
 extern int	recovery_min_apply_delay;
 extern char *PrimaryConnInfo;
 extern char *PrimarySlotName;
+extern bool wal_receiver_create_temp_slot;
 
 /* indirectly set via GUC system */
 extern TransactionId recoveryTargetXid;
@@ -319,6 +320,7 @@ extern void SetWalWriterSleeping(bool sleeping);
 
 extern void XLogRequestWalReceiverReply(void);
 
+extern void ProcessStartupSigHup(void);
 extern void assign_max_wal_size(int newval, void *extra);
 extern void assign_checkpoint_completion_target(double newval, void *extra);
 

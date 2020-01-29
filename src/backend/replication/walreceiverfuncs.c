@@ -248,10 +248,16 @@ RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr, const char *conninfo,
 	else
 		walrcv->conninfo[0] = '\0';
 
-	if (slotname != NULL)
+	if (slotname != NULL && slotname[0] != '\0')
+	{
 		strlcpy((char *) walrcv->slotname, slotname, NAMEDATALEN);
+		walrcv->is_temp_slot = false;
+	}
 	else
+	{
 		walrcv->slotname[0] = '\0';
+		walrcv->is_temp_slot = wal_receiver_create_temp_slot;
+	}
 
 	if (walrcv->walRcvState == WALRCV_STOPPED)
 	{

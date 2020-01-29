@@ -101,12 +101,12 @@ void
 HandleStartupProcInterrupts(void)
 {
 	/*
-	 * Check if we were requested to re-read config file.
+	 * Process any requests or signals received recently.
 	 */
 	if (got_SIGHUP)
 	{
 		got_SIGHUP = false;
-		ProcessConfigFile(PGC_SIGHUP);
+		ProcessStartupSigHup();
 	}
 
 	/*

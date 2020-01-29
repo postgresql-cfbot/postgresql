@@ -34,6 +34,7 @@
 static void shutdown_MultiFuncCall(Datum arg);
 static TypeFuncClass internal_get_result_type(Oid funcid,
 											  Node *call_expr,
+											  bool try_describe,
 											  ReturnSetInfo *rsinfo,
 											  Oid *resultTypeId,
 											  TupleDesc *resultTupleDesc);
@@ -199,6 +200,7 @@ get_call_result_type(FunctionCallInfo fcinfo,
 {
 	return internal_get_result_type(fcinfo->flinfo->fn_oid,
 									fcinfo->flinfo->fn_expr,
+									false,
 									(ReturnSetInfo *) fcinfo->resultinfo,
 									resultTypeId,
 									resultTupleDesc);
@@ -210,6 +212,7 @@ get_call_result_type(FunctionCallInfo fcinfo,
  */
 TypeFuncClass
 get_expr_result_type(Node *expr,
+					 bool try_describe,
 					 Oid *resultTypeId,
 					 TupleDesc *resultTupleDesc)
 {
@@ -218,12 +221,14 @@ get_expr_result_type(Node *expr,
 	if (expr && IsA(expr, FuncExpr))
 		result = internal_get_result_type(((FuncExpr *) expr)->funcid,
 										  expr,
+										  try_describe,
 										  NULL,
 										  resultTypeId,
 										  resultTupleDesc);
 	else if (expr && IsA(expr, OpExpr))
 		result = internal_get_result_type(get_opcode(((OpExpr *) expr)->opno),
 										  expr,
+										  try_describe,
 										  NULL,
 										  resultTypeId,
 										  resultTupleDesc);
@@ -292,6 +297,7 @@ get_func_result_type(Oid functionId,
 {
 	return internal_get_result_type(functionId,
 									NULL,
+									false,
 									NULL,
 									resultTypeId,
 									resultTupleDesc);
@@ -308,6 +314,7 @@ get_func_result_type(Oid functionId,
 static TypeFuncClass
 internal_get_result_type(Oid funcid,
 						 Node *call_expr,
+						 bool try_describe,
 						 ReturnSetInfo *rsinfo,
 						 Oid *resultTypeId,
 						 TupleDesc *resultTupleDesc)
@@ -360,6 +367,46 @@ internal_get_result_type(Oid funcid,
 		ReleaseSysCache(tp);
 
 		return result;
+	}
+
+	if (rettype == RECORDOID && procform->prodescribe && try_describe)
+	{
+		FmgrInfo	flinfo;
+		LOCAL_FCINFO(fcinfo, FUNC_MAX_ARGS);
+		Datum       funcres;
+		FuncExpr   *fexpr;
+
+		fmgr_info(procform->prodescribe, &flinfo);
+		InitFunctionCallInfoData(*fcinfo, &flinfo, procform->pronargs, InvalidOid, NULL, NULL);
+
+		Assert(call_expr);
+		fexpr = castNode(FuncExpr, call_expr);
+
+		for (int i = 0; i < procform->pronargs; i++)
+		{
+			Node	   *arg = list_nth(fexpr->args, i);
+
+			if (IsA(arg, Const))
+			{
+				Const	   *c = castNode(Const, arg);
+
+				fcinfo->args[i].value = c->constvalue;
+				fcinfo->args[i].isnull = c->constisnull;
+			}
+			else
+				fcinfo->args[i].isnull = true;
+		}
+
+		funcres = FunctionCallInvoke(fcinfo);
+
+		if (!fcinfo->isnull)
+		{
+			if (resultTupleDesc)
+				*resultTupleDesc = (TupleDesc) DatumGetPointer(funcres);
+
+			ReleaseSysCache(tp);
+			return TYPEFUNC_COMPOSITE;
+		}
 	}
 
 	/*
@@ -431,7 +478,7 @@ get_expr_result_tupdesc(Node *expr, bool noError)
 	TupleDesc	tupleDesc;
 	TypeFuncClass functypclass;
 
-	functypclass = get_expr_result_type(expr, NULL, &tupleDesc);
+	functypclass = get_expr_result_type(expr, true, NULL, &tupleDesc);
 
 	if (functypclass == TYPEFUNC_COMPOSITE ||
 		functypclass == TYPEFUNC_COMPOSITE_DOMAIN)

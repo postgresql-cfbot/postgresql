@@ -158,6 +158,10 @@ SELECT * FROM connectby('connectby_text', 'keyid', 'parent_keyid', 'pos', 'row2'
 -- without branch, with orderby
 SELECT * FROM connectby('connectby_text', 'keyid', 'parent_keyid', 'pos', 'row2', 0) AS t(keyid text, parent_keyid text, level int, pos int) ORDER BY t.pos;
 
+-- PTF
+SELECT * FROM connectby('connectby_text', 'keyid', 'parent_keyid', 'row2', 0, '~');
+SELECT * FROM connectby('connectby_text', 'keyid', 'parent_keyid', 'row2', 0);
+
 -- test connectby with int based hierarchy
 CREATE TABLE connectby_int(keyid int, parent_keyid int);
 \copy connectby_int from 'data/connectby_int.data'
@@ -167,6 +171,10 @@ SELECT * FROM connectby('connectby_int', 'keyid', 'parent_keyid', '2', 0, '~') A
 
 -- without branch
 SELECT * FROM connectby('connectby_int', 'keyid', 'parent_keyid', '2', 0) AS t(keyid int, parent_keyid int, level int);
+
+-- PTF
+SELECT * FROM connectby('connectby_int', 'keyid', 'parent_keyid', '2', 0, '~');
+SELECT * FROM connectby('connectby_int', 'keyid', 'parent_keyid', '2', 0);
 
 -- recursion detection
 INSERT INTO connectby_int VALUES(10,9);

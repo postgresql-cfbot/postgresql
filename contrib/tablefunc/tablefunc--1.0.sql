@@ -65,13 +65,20 @@ RETURNS setof record
 AS 'MODULE_PATHNAME','crosstab_hash'
 LANGUAGE C STABLE STRICT;
 
+CREATE FUNCTION connectby_describe(internal)
+RETURNS internal
+AS 'MODULE_PATHNAME', 'connectby_describe'
+LANGUAGE C;
+
 CREATE FUNCTION connectby(text,text,text,text,int,text)
 RETURNS setof record
+DESCRIBE WITH connectby_describe
 AS 'MODULE_PATHNAME','connectby_text'
 LANGUAGE C STABLE STRICT;
 
 CREATE FUNCTION connectby(text,text,text,text,int)
 RETURNS setof record
+DESCRIBE WITH connectby_describe
 AS 'MODULE_PATHNAME','connectby_text'
 LANGUAGE C STABLE STRICT;
 

@@ -2219,6 +2219,12 @@ select json_object('{a,b,"","d e f"}','{1,2,3,"a b c"}');
 (1 row)
 
 -- json_to_record and json_to_recordset
+select * from json_to_record('{"a":1,"b":"foo","c":"bar"}');
+ a |  b  |  c  
+---+-----+-----
+ 1 | foo | bar
+(1 row)
+
 select * from json_to_record('{"a":1,"b":"foo","c":"bar"}')
     as x(a int, b text, d text);
  a |  b  | d 

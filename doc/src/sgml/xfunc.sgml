@@ -3239,6 +3239,72 @@ CREATE FUNCTION make_array(anyelement) RETURNS anyarray
     </para>
    </sect2>
 
+   <sect2 id="xfunc-describe">
+    <title>Polymorphic Composite Return Type Describe Function</title>
+
+    <para>
+     A function that returns type <type>record</type> normally needs to be
+     called with an explicit column list to specify the names and types of the
+     result columns (see <xref linkend="queries-tablefunctions"/>).  In some
+     cases, this can be avoided if the function can inform the database system
+     about the result row structure based on the input parameters of a
+     specific call.  To do that, a helper function called the
+     <firstterm>describe</firstterm> function is attached to the
+     record-returning function to communicate the result row structure.
+    </para>
+
+    <para>
+     Consider, as an example, a function that unpacks a CSV document, passed
+     as a single text argument, into a set of rows.  It might be defined like
+     this:
+<programlisting>
+CREATE FUNCTION csvtable(doc text) RETURNS SETOF record
+    LANGUAGE C
+    ...
+</programlisting>
+     Because the structure of the CSV document varies, the return type is
+     declared as <type>record</type>.  However, if the passed document
+     argument is a constant, then the return row structure can be computed at
+     parse time.  To do that, first define a separate describe function:
+<programlisting>
+CREATE FUNCTION cvstable_describe(internal) RETURNS internal
+    LANGUAGE C
+    ...
+</programlisting>
+     and specify that in the definition of the original function:
+<programlisting>
+CREATE FUNCTION csvtable(doc text) RETURNS SETOF record
+    DESCRIBE WITH csvtable_describe
+    LANGUAGE C
+    ...
+</programlisting>
+     (The name of the describe function does not matter.)
+    </para>
+
+    <para>
+     The describe function will be called at parse time with the same argument
+     types as the parent function.  Only arguments that are constant at parse
+     time are passed; all other arguments are passed as null values.  The
+     describe function must either return a <type>TupleDesc</type> or may
+     return SQL null (not C <symbol>NULL</symbol>) if it cannot compute the
+     row structure with the provided information.
+    </para>
+
+    <para>
+     In the example of the CSV processing function, the describe function
+     could parse the first line of the document to discover the number of
+     fields and their names.
+    </para>
+
+    <para>
+     If the describe function returns a null value, the function call will
+     error.  But the same function call could still succeed if the caller
+     provides an explicit column list, as with record-returning functions
+     without a describe helper.  If an explicit column list is provided, the
+     describe function is not called at all.
+    </para>
+   </sect2>
+
    <sect2 id="xfunc-shared-addin">
     <title>Shared Memory and LWLocks</title>
 

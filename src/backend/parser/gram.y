@@ -634,7 +634,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR CYCLE
 
 	DATA_P DATABASE DAY_P DEALLOCATE DEC DECIMAL_P DECLARE DEFAULT DEFAULTS
-	DEFERRABLE DEFERRED DEFINER DELETE_P DELIMITER DELIMITERS DEPENDS DESC
+	DEFERRABLE DEFERRED DEFINER DELETE_P DELIMITER DELIMITERS DEPENDS DESC DESCRIBE
 	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
 	DOUBLE_P DROP
 
@@ -7962,6 +7962,10 @@ createfunc_opt_item:
 				{
 					$$ = makeDefElem("as", (Node *)$2, @1);
 				}
+			| DESCRIBE WITH function_with_argtypes
+				{
+					$$ = makeDefElem("describe", (Node *)$3, @1);
+				}
 			| LANGUAGE NonReservedWord_or_Sconst
 				{
 					$$ = makeDefElem("language", (Node *)makeString($2), @1);
@@ -15193,6 +15197,7 @@ unreserved_keyword:
 			| DELIMITER
 			| DELIMITERS
 			| DEPENDS
+			| DESCRIBE
 			| DETACH
 			| DICTIONARY
 			| DISABLE_P

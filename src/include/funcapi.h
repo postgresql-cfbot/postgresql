@@ -156,6 +156,7 @@ extern TypeFuncClass get_call_result_type(FunctionCallInfo fcinfo,
 										  Oid *resultTypeId,
 										  TupleDesc *resultTupleDesc);
 extern TypeFuncClass get_expr_result_type(Node *expr,
+										  bool try_describe,
 										  Oid *resultTypeId,
 										  TupleDesc *resultTupleDesc);
 extern TypeFuncClass get_func_result_type(Oid functionId,

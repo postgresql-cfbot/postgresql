@@ -803,6 +803,14 @@ SELECT *
      that the parser knows, for example, what <literal>*</literal> should
      expand to.
     </para>
+
+    <para>
+     Some functions returning type <type>record</type> allow the column list
+     to be omitted if they can compute the result row type from the constant
+     input arguments.  See <xref linkend="xfunc-describe"/> for details.  In
+     that case, such functions can be called like functions with a specific
+     composite type return type.
+    </para>
    </sect3>
 
    <sect3 id="queries-lateral">

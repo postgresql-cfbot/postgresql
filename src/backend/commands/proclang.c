@@ -122,6 +122,7 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 									  false,	/* replace */
 									  false,	/* returnsSet */
 									  LANGUAGE_HANDLEROID,
+									  InvalidOid,	/* describe */
 									  BOOTSTRAP_SUPERUSERID,
 									  ClanguageId,
 									  F_FMGR_C_VALIDATOR,
@@ -162,6 +163,7 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 										  false,	/* replace */
 										  false,	/* returnsSet */
 										  VOIDOID,
+										  InvalidOid,	/* describe */
 										  BOOTSTRAP_SUPERUSERID,
 										  ClanguageId,
 										  F_FMGR_C_VALIDATOR,
@@ -205,6 +207,7 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 										  false,	/* replace */
 										  false,	/* returnsSet */
 										  VOIDOID,
+										  InvalidOid,	/* describe */
 										  BOOTSTRAP_SUPERUSERID,
 										  ClanguageId,
 										  F_FMGR_C_VALIDATOR,

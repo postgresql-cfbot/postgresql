@@ -733,6 +733,7 @@ init_sexpr(Oid foid, Oid input_collation, Expr *node,
 		MemoryContext oldcontext;
 
 		functypclass = get_expr_result_type(sexpr->func.fn_expr,
+											false,
 											&funcrettype,
 											&tupdesc);
 

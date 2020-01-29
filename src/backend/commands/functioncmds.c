@@ -695,6 +695,7 @@ compute_function_attributes(ParseState *pstate,
 							List *options,
 							List **as,
 							char **language,
+							Node **describe,
 							Node **transform,
 							bool *windowfunc_p,
 							char *volatility_p,
@@ -709,6 +710,7 @@ compute_function_attributes(ParseState *pstate,
 {
 	ListCell   *option;
 	DefElem    *as_item = NULL;
+	DefElem    *describe_item = NULL;
 	DefElem    *language_item = NULL;
 	DefElem    *transform_item = NULL;
 	DefElem    *windowfunc_item = NULL;
@@ -734,6 +736,15 @@ compute_function_attributes(ParseState *pstate,
 						 errmsg("conflicting or redundant options"),
 						 parser_errposition(pstate, defel->location)));
 			as_item = defel;
+		}
+		else if (strcmp(defel->defname, "describe") == 0)
+		{
+			if (describe_item)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
+			describe_item = defel;
 		}
 		else if (strcmp(defel->defname, "language") == 0)
 		{
@@ -810,6 +821,8 @@ compute_function_attributes(ParseState *pstate,
 	}
 
 	/* process optional items */
+	if (describe_item)
+		*describe = describe_item->arg;
 	if (transform_item)
 		*transform = transform_item->arg;
 	if (windowfunc_item)
@@ -926,6 +939,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	char	   *language;
 	Oid			languageOid;
 	Oid			languageValidator;
+	Node	   *describeDefElem = NULL;
 	Node	   *transformDefElem = NULL;
 	char	   *funcname;
 	Oid			namespaceId;
@@ -936,6 +950,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	ArrayType  *parameterNames;
 	List	   *parameterDefaults;
 	Oid			variadicArgType;
+	Oid			describeFuncOid = InvalidOid;
 	List	   *trftypes_list = NIL;
 	ArrayType  *trftypes;
 	Oid			requiredResultType;
@@ -979,7 +994,8 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	compute_function_attributes(pstate,
 								stmt->is_procedure,
 								stmt->options,
-								&as_clause, &language, &transformDefElem,
+								&as_clause, &language,
+								&describeDefElem, &transformDefElem,
 								&isWindowFunc, &volatility,
 								&isStrict, &security, &isLeakProof,
 								&proconfig, &procost, &prorows,
@@ -1028,6 +1044,17 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("only superuser can define a leakproof function")));
+
+	if (describeDefElem)
+	{
+		describeFuncOid = LookupFuncWithArgs(OBJECT_FUNCTION, castNode(ObjectWithArgs, describeDefElem), false);
+
+		if (get_func_rettype(describeFuncOid) != INTERNALOID)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("describe function must return type %s",
+							"internal")));
+	}
 
 	if (transformDefElem)
 	{
@@ -1152,6 +1179,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 						   stmt->replace,
 						   returnsSet,
 						   prorettype,
+						   describeFuncOid,
 						   GetUserId(),
 						   languageOid,
 						   languageValidator,

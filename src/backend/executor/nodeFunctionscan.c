@@ -368,6 +368,7 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 		 * was made; we have to ignore any columns beyond "colcount".
 		 */
 		functypclass = get_expr_result_type(funcexpr,
+											rtfunc->funccolnames ? false : true,
 											&funcrettype,
 											&tupdesc);
 

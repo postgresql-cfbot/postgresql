@@ -1732,6 +1732,7 @@ addRangeTableEntryForFunction(ParseState *pstate,
 		 * Now determine if the function returns a simple or composite type.
 		 */
 		functypclass = get_expr_result_type(funcexpr,
+											coldeflist ? false : true,
 											&funcrettype,
 											&tupdesc);
 
@@ -2588,6 +2589,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 					TupleDesc	tupdesc;
 
 					functypclass = get_expr_result_type(rtfunc->funcexpr,
+														rtfunc->funccolnames ? false : true,
 														&funcrettype,
 														&tupdesc);
 					if (functypclass == TYPEFUNC_COMPOSITE ||

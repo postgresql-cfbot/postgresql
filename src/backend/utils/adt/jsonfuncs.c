@@ -2388,6 +2388,54 @@ json_to_record(PG_FUNCTION_ARGS)
 								  true, false);
 }
 
+Datum
+json_to_record_describe(PG_FUNCTION_ARGS)
+{
+	text	   *arg;
+	JsonLexContext *lex;
+	JsonSemAction *sem;
+	OkeysState *state;
+	TupleDesc	tupdesc;
+
+	if (PG_ARGISNULL(0))
+		PG_RETURN_NULL();
+
+	arg = PG_GETARG_TEXT_PP(0);
+
+	lex = makeJsonLexContext(arg, true);
+
+	state = palloc(sizeof(OkeysState));
+	sem = palloc0(sizeof(JsonSemAction));
+
+	state->lex = lex;
+	state->result_size = 256;
+	state->result_count = 0;
+	state->sent_count = 0;
+	state->result = palloc(256 * sizeof(char *));
+
+	sem->semstate = (void *) state;
+	sem->array_start = okeys_array_start;
+	sem->scalar = okeys_scalar;
+	sem->object_field_start = okeys_object_field_start;
+	/* remainder are all NULL, courtesy of palloc0 above */
+
+	pg_parse_json(lex, sem);
+	/* keys are now in state->result */
+
+	pfree(lex->strval->data);
+	pfree(lex->strval);
+	pfree(lex);
+	pfree(sem);
+
+	tupdesc = CreateTemplateTupleDesc(state->result_count);
+	for (int i = 0; i < state->result_count; i++)
+		TupleDescInitEntry(tupdesc, i + 1, state->result[i], TEXTOID, -1, 0);
+
+	BlessTupleDesc(tupdesc);
+
+	PG_RETURN_POINTER(tupdesc);
+}
+
 /* helper function for diagnostics */
 static void
 populate_array_report_expected_array(PopulateArrayContext *ctx, int ndim)

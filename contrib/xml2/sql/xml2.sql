@@ -34,6 +34,12 @@ as t(id int4);
 SELECT * FROM xpath_table('id', 't', 'xpath_test', '/doc/int', 'true')
 as t(id int4, doc int4);
 
+-- PTF
+DROP TABLE xpath_test;
+CREATE TABLE xpath_test (id integer NOT NULL, t text);
+INSERT INTO xpath_test VALUES (1, '<doc><data>foo</data><stuff>bar</stuff></doc>');
+SELECT * FROM xpath_table('id', 't', 'xpath_test', '/doc/data|/doc/stuff', 'true');
+
 create table articles (article_id integer, article_xml xml, date_entered date);
 insert into articles (article_id, article_xml, date_entered)
 values (2, '<article><author>test</author><pages>37</pages></article>', now());

@@ -615,6 +615,7 @@ AggregateCreate(const char *aggName,
 							 replace,	/* maybe replacement */
 							 false, /* doesn't return a set */
 							 finaltype, /* returnType */
+							 InvalidOid,	/* describe */
 							 GetUserId(),	/* proowner */
 							 INTERNALlanguageId,	/* languageObjectId */
 							 InvalidOid,	/* no validator */

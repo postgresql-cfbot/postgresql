@@ -70,6 +70,7 @@ ProcedureCreate(const char *procedureName,
 				bool replace,
 				bool returnsSet,
 				Oid returnType,
+				Oid describeFuncId,
 				Oid proowner,
 				Oid languageObjectId,
 				Oid languageValidator,
@@ -331,6 +332,7 @@ ProcedureCreate(const char *procedureName,
 	values[Anum_pg_proc_pronargs - 1] = UInt16GetDatum(parameterCount);
 	values[Anum_pg_proc_pronargdefaults - 1] = UInt16GetDatum(list_length(parameterDefaults));
 	values[Anum_pg_proc_prorettype - 1] = ObjectIdGetDatum(returnType);
+	values[Anum_pg_proc_prodescribe - 1] = ObjectIdGetDatum(describeFuncId);
 	values[Anum_pg_proc_proargtypes - 1] = PointerGetDatum(parameterTypes);
 	if (allParameterTypes != PointerGetDatum(NULL))
 		values[Anum_pg_proc_proallargtypes - 1] = allParameterTypes;
@@ -628,6 +630,15 @@ ProcedureCreate(const char *procedureName,
 	referenced.objectId = returnType;
 	referenced.objectSubId = 0;
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+
+	/* dependency on describe function */
+	if (describeFuncId)
+	{
+		referenced.classId = ProcedureRelationId;
+		referenced.objectId = describeFuncId;
+		referenced.objectSubId = 0;
+		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+	}
 
 	/* dependency on transform used by return type, if any */
 	if ((trfid = get_transform_oid(returnType, languageObjectId, true)))

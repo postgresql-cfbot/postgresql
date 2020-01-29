@@ -54,8 +54,14 @@ LANGUAGE SQL STRICT IMMUTABLE PARALLEL SAFE;
 
 -- Table function
 
+CREATE FUNCTION xpath_table_describe(internal)
+RETURNS internal
+AS 'MODULE_PATHNAME'
+LANGUAGE C;
+
 CREATE FUNCTION xpath_table(text,text,text,text,text)
 RETURNS setof record
+DESCRIBE WITH xpath_table_describe
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT STABLE PARALLEL SAFE;
 

@@ -7,12 +7,16 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "catalog/namespace.h"
+#include "catalog/pg_type.h"
 #include "executor/spi.h"
 #include "fmgr.h"
 #include "funcapi.h"
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
+#include "utils/regproc.h"
 #include "utils/xml.h"
 
 /* libxml includes */
@@ -519,6 +523,74 @@ pgxml_result_to_text(xmlXPathObjectPtr res,
  * xpath_table is a table function. It needs some tidying (as do the
  * other functions here!
  */
+PG_FUNCTION_INFO_V1(xpath_table_describe);
+
+Datum
+xpath_table_describe(PG_FUNCTION_ARGS)
+{
+	char	   *pkeyfield;
+	char	   *xmlfield;
+	char	   *relname;
+	List	   *names;
+	Oid			relid;
+	AttrNumber	pkeyattnum;
+	Oid			pkeytype;
+	int32		pkeytypmod;
+	Oid			pkeycoll;
+	char	   *xpathset;
+	const char *pathsep = "|";
+	int			numpaths;
+	TupleDesc	tupdesc;
+
+	if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(3))
+		PG_RETURN_NULL();
+
+	pkeyfield = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	xmlfield = text_to_cstring(PG_GETARG_TEXT_PP(1));
+	relname = text_to_cstring(PG_GETARG_TEXT_PP(2));
+	xpathset = text_to_cstring(PG_GETARG_TEXT_PP(3));
+
+	names = stringToQualifiedNameList(relname);
+	relid = RangeVarGetRelid(makeRangeVarFromNameList(names), AccessShareLock, false);
+
+	pkeyattnum = get_attnum(relid, pkeyfield);
+	if (pkeyattnum == InvalidAttrNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("column \"%s\" of relation \"%s\" does not exist",
+						pkeyfield, relname)));
+	get_atttypetypmodcoll(relid, pkeyattnum,
+						  &pkeytype, &pkeytypmod, &pkeycoll);
+
+	/* count XPaths */
+	numpaths = 1;
+	for (char *pos = xpathset;;)
+	{
+		pos = strstr(pos, pathsep);
+		if (!pos)
+			break;
+		numpaths++;
+		pos++;
+	}
+
+	tupdesc = CreateTemplateTupleDesc(numpaths + 1);
+
+	TupleDescInitEntry(tupdesc, 1, pkeyfield, pkeytype, pkeytypmod, 0);
+	TupleDescInitEntryCollation(tupdesc, 1, pkeycoll);
+
+	for (int i = 0; i < numpaths; i++)
+	{
+		AttrNumber	attnum = 2 + i;
+		char	   *attname = psprintf("%s%d", xmlfield, i + 1);
+
+		TupleDescInitEntry(tupdesc, attnum, attname, TEXTOID, -1, 0);
+	}
+
+	BlessTupleDesc(tupdesc);
+
+	PG_RETURN_POINTER(tupdesc);
+}
+
 PG_FUNCTION_INFO_V1(xpath_table);
 
 Datum

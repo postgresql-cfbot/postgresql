@@ -1719,6 +1719,7 @@ pull_up_constant_function(PlannerInfo *root, Node *jtnode,
 		return jtnode;			/* definitely composite */
 
 	functypclass = get_expr_result_type(rtf->funcexpr,
+										false,
 										&funcrettype,
 										&tupdesc);
 	if (functypclass != TYPEFUNC_SCALAR)

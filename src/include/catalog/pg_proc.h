@@ -86,6 +86,9 @@ CATALOG(pg_proc,1255,ProcedureRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(81,Proce
 	/* OID of result type */
 	Oid			prorettype BKI_LOOKUP(pg_type);
 
+	/* function that describes the result row of this function, if 0 if none */
+	regproc		prodescribe BKI_DEFAULT(0) BKI_LOOKUP(pg_proc);
+
 	/*
 	 * variable-length fields start here, but we allow direct access to
 	 * proargtypes
@@ -182,6 +185,7 @@ extern ObjectAddress ProcedureCreate(const char *procedureName,
 									 bool replace,
 									 bool returnsSet,
 									 Oid returnType,
+									 Oid describeFuncId,
 									 Oid proowner,
 									 Oid languageObjectId,
 									 Oid languageValidator,

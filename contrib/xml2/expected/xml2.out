@@ -88,6 +88,16 @@ as t(id int4, doc int4);
   1 |   1
 (1 row)
 
+-- PTF
+DROP TABLE xpath_test;
+CREATE TABLE xpath_test (id integer NOT NULL, t text);
+INSERT INTO xpath_test VALUES (1, '<doc><data>foo</data><stuff>bar</stuff></doc>');
+SELECT * FROM xpath_table('id', 't', 'xpath_test', '/doc/data|/doc/stuff', 'true');
+ id | t1  | t2  
+----+-----+-----
+  1 | foo | bar
+(1 row)
+
 create table articles (article_id integer, article_xml xml, date_entered date);
 insert into articles (article_id, article_xml, date_entered)
 values (2, '<article><author>test</author><pages>37</pages></article>', now());

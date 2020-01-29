@@ -35,6 +35,7 @@
 #include <math.h>
 
 #include "access/htup_details.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_type.h"
 #include "executor/spi.h"
 #include "funcapi.h"
@@ -42,6 +43,8 @@
 #include "miscadmin.h"
 #include "tablefunc.h"
 #include "utils/builtins.h"
+#include "utils/regproc.h"
+#include "utils/lsyscache.h"
 
 PG_MODULE_MAGIC;
 
@@ -1586,4 +1589,70 @@ compatCrosstabTupleDescs(TupleDesc ret_tupdesc, TupleDesc sql_tupdesc)
 
 	/* OK, the two tupdescs are compatible for our purposes */
 	return true;
+}
+
+PG_FUNCTION_INFO_V1(connectby_describe);
+
+Datum
+connectby_describe(PG_FUNCTION_ARGS)
+{
+	char	   *relname;
+	char	   *key_fld;
+	char	   *parent_key_fld;
+	bool		show_branch;
+	TupleDesc	tupdesc;
+	List	   *names;
+	Oid			relid;
+	AttrNumber	keyattnum;
+	Oid			keytype;
+	int32		keytypmod;
+	Oid			keycoll;
+
+	if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2))
+		PG_RETURN_NULL();
+
+	show_branch = (PG_NARGS() == 6);
+
+	if (show_branch && PG_ARGISNULL(5))
+		PG_RETURN_NULL();
+
+	relname = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	key_fld = text_to_cstring(PG_GETARG_TEXT_PP(1));
+	parent_key_fld = text_to_cstring(PG_GETARG_TEXT_PP(2));
+
+	tupdesc = CreateTemplateTupleDesc(3 + (show_branch ? 1 : 0));
+
+	names = stringToQualifiedNameList(relname);
+	relid = RangeVarGetRelid(makeRangeVarFromNameList(names), AccessShareLock, false);
+
+	keyattnum = get_attnum(relid, key_fld);
+	if (keyattnum == InvalidAttrNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("column \"%s\" of relation \"%s\" does not exist",
+						key_fld, relname)));
+	get_atttypetypmodcoll(relid, keyattnum,
+						  &keytype, &keytypmod, &keycoll);
+	TupleDescInitEntry(tupdesc, 1, key_fld, keytype, keytypmod, 0);
+	TupleDescInitEntryCollation(tupdesc, 1, keycoll);
+
+	keyattnum = get_attnum(relid, parent_key_fld);
+	if (keyattnum == InvalidAttrNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("column \"%s\" of relation \"%s\" does not exist",
+						parent_key_fld, relname)));
+	get_atttypetypmodcoll(relid, keyattnum,
+						  &keytype, &keytypmod, &keycoll);
+	TupleDescInitEntry(tupdesc, 2, parent_key_fld, keytype, keytypmod, 0);
+	TupleDescInitEntryCollation(tupdesc, 2, keycoll);
+
+	TupleDescInitEntry(tupdesc, 3, "level", INT4OID, -1, 0);
+
+	if (show_branch)
+		TupleDescInitEntry(tupdesc, 4, "branch", TEXTOID, -1, 0);
+
+	BlessTupleDesc(tupdesc);
+
+	PG_RETURN_POINTER(tupdesc);
 }

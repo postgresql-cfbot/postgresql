@@ -25,6 +25,7 @@ CREATE [ OR REPLACE ] FUNCTION
     [ RETURNS <replaceable class="parameter">rettype</replaceable>
       | RETURNS TABLE ( <replaceable class="parameter">column_name</replaceable> <replaceable class="parameter">column_type</replaceable> [, ...] ) ]
   { LANGUAGE <replaceable class="parameter">lang_name</replaceable>
+    | DESCRIBE WITH <replaceable class="parameter">describe_func</replaceable>
     | TRANSFORM { FOR TYPE <replaceable class="parameter">type_name</replaceable> } [, ... ]
     | WINDOW
     | IMMUTABLE | STABLE | VOLATILE | [ NOT ] LEAKPROOF
@@ -258,6 +259,19 @@ CREATE [ OR REPLACE ] FUNCTION
        <literal>internal</literal>, or the name of a user-defined
        procedural language, e.g. <literal>plpgsql</literal>.  Enclosing the
        name in single quotes is deprecated and requires matching case.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>DESCRIBE WITH <replaceable class="parameter">describe_func</replaceable></literal></term>
+
+     <listitem>
+      <para>
+       For functions returning type <type>record</type>, this optional clause
+       points to another function that is called to compute the return row
+       structure of a particular call.  See <xref linkend="xfunc-describe"/>
+       for more information.
       </para>
      </listitem>
     </varlistentry>

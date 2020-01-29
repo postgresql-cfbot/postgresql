@@ -1058,14 +1058,14 @@ UsingConst: Iconst			{ $$ = $1; }
 /*
  * We accept DESCRIBE [OUTPUT] but do nothing with DESCRIBE INPUT so far.
  */
-ECPGDescribe: SQL_DESCRIBE INPUT_P prepared_name using_descriptor
+ECPGDescribe: DESCRIBE INPUT_P prepared_name using_descriptor
 	{
 		const char *con = connection ? connection : "NULL";
 		mmerror(PARSE_ERROR, ET_WARNING, "using unsupported DESCRIBE statement");
 		$$ = (char *) mm_alloc(sizeof("1, , ") + strlen(con) + strlen($3));
 		sprintf($$, "1, %s, %s", con, $3);
 	}
-	| SQL_DESCRIBE opt_output prepared_name using_descriptor
+	| DESCRIBE opt_output prepared_name using_descriptor
 	{
 		const char *con = connection ? connection : "NULL";
 		struct variable *var;
@@ -1077,20 +1077,20 @@ ECPGDescribe: SQL_DESCRIBE INPUT_P prepared_name using_descriptor
 		$$ = (char *) mm_alloc(sizeof("0, , ") + strlen(con) + strlen($3));
 		sprintf($$, "0, %s, %s", con, $3);
 	}
-	| SQL_DESCRIBE opt_output prepared_name into_descriptor
+	| DESCRIBE opt_output prepared_name into_descriptor
 	{
 		const char *con = connection ? connection : "NULL";
 		$$ = (char *) mm_alloc(sizeof("0, , ") + strlen(con) + strlen($3));
 		sprintf($$, "0, %s, %s", con, $3);
 	}
-	| SQL_DESCRIBE INPUT_P prepared_name into_sqlda
+	| DESCRIBE INPUT_P prepared_name into_sqlda
 	{
 		const char *con = connection ? connection : "NULL";
 		mmerror(PARSE_ERROR, ET_WARNING, "using unsupported DESCRIBE statement");
 		$$ = (char *) mm_alloc(sizeof("1, , ") + strlen(con) + strlen($3));
 		sprintf($$, "1, %s, %s", con, $3);
 	}
-	| SQL_DESCRIBE opt_output prepared_name into_sqlda
+	| DESCRIBE opt_output prepared_name into_sqlda
 	{
 		const char *con = connection ? connection : "NULL";
 		$$ = (char *) mm_alloc(sizeof("0, , ") + strlen(con) + strlen($3));
@@ -1502,7 +1502,6 @@ ECPGKeywords_vanames:  SQL_BREAK		{ $$ = mm_strdup("break"); }
 		;
 
 ECPGKeywords_rest:  SQL_CONNECT		{ $$ = mm_strdup("connect"); }
-		| SQL_DESCRIBE				{ $$ = mm_strdup("describe"); }
 		| SQL_DISCONNECT			{ $$ = mm_strdup("disconnect"); }
 		| SQL_OPEN					{ $$ = mm_strdup("open"); }
 		| SQL_VAR					{ $$ = mm_strdup("var"); }

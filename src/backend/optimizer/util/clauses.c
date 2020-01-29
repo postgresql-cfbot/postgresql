@@ -4492,6 +4492,7 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 
 	/* fexpr also provides a convenient way to resolve a composite result */
 	(void) get_expr_result_type((Node *) fexpr,
+								false,
 								NULL,
 								&rettupdesc);
 
@@ -5028,7 +5029,7 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 	 * function is just declared to return RECORD, dig the info out of the AS
 	 * clause.
 	 */
-	functypclass = get_expr_result_type((Node *) fexpr, NULL, &rettupdesc);
+	functypclass = get_expr_result_type((Node *) fexpr, false, NULL, &rettupdesc);
 	if (functypclass == TYPEFUNC_RECORD)
 		rettupdesc = BuildDescFromLists(rtfunc->funccolnames,
 										rtfunc->funccoltypes,

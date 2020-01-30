@@ -2688,6 +2688,7 @@ _equalRangeTblEntry(const RangeTblEntry *a, const RangeTblEntry *b)
 	COMPARE_BITMAPSET_FIELD(insertedCols);
 	COMPARE_BITMAPSET_FIELD(updatedCols);
 	COMPARE_BITMAPSET_FIELD(extraUpdatedCols);
+	COMPARE_BITMAPSET_FIELD(scanCols);
 	COMPARE_NODE_FIELD(securityQuals);
 
 	return true;

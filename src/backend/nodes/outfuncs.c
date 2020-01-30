@@ -3122,6 +3122,7 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 	WRITE_BITMAPSET_FIELD(insertedCols);
 	WRITE_BITMAPSET_FIELD(updatedCols);
 	WRITE_BITMAPSET_FIELD(extraUpdatedCols);
+	WRITE_BITMAPSET_FIELD(scanCols);
 	WRITE_NODE_FIELD(securityQuals);
 }
 

@@ -18,6 +18,7 @@
 #include <limits.h>
 
 #include "catalog/pg_type.h"
+#include "common/int.h"
 #include "libpq/pqformat.h"
 #include "nodes/value.h"
 #include "utils/array.h"
@@ -468,4 +469,25 @@ oidvectorgt(PG_FUNCTION_ARGS)
 	int32		cmp = DatumGetInt32(btoidvectorcmp(fcinfo));
 
 	PG_RETURN_BOOL(cmp > 0);
+}
+
+Datum
+oiddist(PG_FUNCTION_ARGS)
+{
+	Oid			a = PG_GETARG_OID(0);
+	Oid			b = PG_GETARG_OID(1);
+	Oid			res;
+	bool		overflow;
+
+	if (a < b)
+		overflow = pg_sub_u32_overflow(b, a, &res);
+	else
+		overflow = pg_sub_u32_overflow(a, b, &res);
+
+	if (overflow)
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("oid out of range")));
+
+	PG_RETURN_OID(res);
 }

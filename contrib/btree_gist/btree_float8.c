@@ -5,6 +5,7 @@
 
 #include "btree_gist.h"
 #include "btree_utils_num.h"
+#include "utils/builtins.h"
 
 typedef struct float8key
 {
@@ -101,14 +102,7 @@ PG_FUNCTION_INFO_V1(float8_dist);
 Datum
 float8_dist(PG_FUNCTION_ARGS)
 {
-	float8		a = PG_GETARG_FLOAT8(0);
-	float8		b = PG_GETARG_FLOAT8(1);
-	float8		r;
-
-	r = a - b;
-	CHECKFLOATVAL(r, isinf(a) || isinf(b), true);
-
-	PG_RETURN_FLOAT8(Abs(r));
+	return float8dist(fcinfo);
 }
 
 /**************************************************

@@ -93,6 +93,16 @@ SELECT '' AS five, i.f1, i.f1 / int2 '2' AS x FROM INT4_TBL i;
 
 SELECT '' AS five, i.f1, i.f1 / int4 '2' AS x FROM INT4_TBL i;
 
+SELECT '' AS five, i.f1, i.f1 <-> int2 '2' AS x FROM INT4_TBL i;
+
+SELECT '' AS four, i.f1, i.f1 <-> int2 '2' AS x FROM INT4_TBL i
+WHERE f1 > -2147483647;
+
+SELECT '' AS four, i.f1, i.f1 <-> int4 '2' AS x FROM INT4_TBL i
+WHERE f1 > -2147483647;
+
+SELECT '' AS five, i.f1, i.f1 <-> int8 '2' AS x FROM INT4_TBL i;
+
 --
 -- more complex expressions
 --

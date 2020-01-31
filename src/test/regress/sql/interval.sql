@@ -59,6 +59,8 @@ SELECT '' AS fortyfive, r1.*, r2.*
    WHERE r1.f1 > r2.f1
    ORDER BY r1.f1, r2.f1;
 
+SELECT '' AS ten, f1 <-> interval '@ 2 day 3 hours' FROM INTERVAL_TBL;
+
 -- Test intervals that are large enough to overflow 64 bits in comparisons
 CREATE TEMP TABLE INTERVAL_TBL_OF (f1 interval);
 INSERT INTO INTERVAL_TBL_OF (f1) VALUES

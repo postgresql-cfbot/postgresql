@@ -295,8 +295,8 @@ ROLLBACK;
 -- Should fail. Invalid values for ALTER OPERATOR FAMILY .. ADD / DROP
 CREATE OPERATOR FAMILY alt_opf4 USING btree;
 ALTER OPERATOR FAMILY alt_opf4 USING invalid_index_method ADD  OPERATOR 1 < (int4, int2); -- invalid indexing_method
-ALTER OPERATOR FAMILY alt_opf4 USING btree ADD OPERATOR 6 < (int4, int2); -- operator number should be between 1 and 5
-ALTER OPERATOR FAMILY alt_opf4 USING btree ADD OPERATOR 0 < (int4, int2); -- operator number should be between 1 and 5
+ALTER OPERATOR FAMILY alt_opf4 USING btree ADD OPERATOR 7 < (int4, int2); -- operator number should be between 1 and 6
+ALTER OPERATOR FAMILY alt_opf4 USING btree ADD OPERATOR 0 < (int4, int2); -- operator number should be between 1 and 6
 ALTER OPERATOR FAMILY alt_opf4 USING btree ADD OPERATOR 1 < ; -- operator without argument types
 ALTER OPERATOR FAMILY alt_opf4 USING btree ADD FUNCTION 0 btint42cmp(int4, int2); -- function number should be between 1 and 5
 ALTER OPERATOR FAMILY alt_opf4 USING btree ADD FUNCTION 6 btint42cmp(int4, int2); -- function number should be between 1 and 5
@@ -340,10 +340,12 @@ CREATE OPERATOR FAMILY alt_opf9 USING gist;
 ALTER OPERATOR FAMILY alt_opf9 USING gist ADD OPERATOR 1 < (int4, int4) FOR ORDER BY float_ops;
 DROP OPERATOR FAMILY alt_opf9 USING gist;
 
--- Should fail. Ensure correct ordering methods in ALTER OPERATOR FAMILY ... ADD OPERATOR .. FOR ORDER BY
+-- Should work. Ensure correct ordering methods in ALTER OPERATOR FAMILY ... ADD OPERATOR .. FOR ORDER BY
+BEGIN TRANSACTION;
 CREATE OPERATOR FAMILY alt_opf10 USING btree;
 ALTER OPERATOR FAMILY alt_opf10 USING btree ADD OPERATOR 1 < (int4, int4) FOR ORDER BY float_ops;
 DROP OPERATOR FAMILY alt_opf10 USING btree;
+ROLLBACK;
 
 -- Should work. Textbook case of ALTER OPERATOR FAMILY ... ADD OPERATOR with FOR ORDER BY
 CREATE OPERATOR FAMILY alt_opf11 USING gist;

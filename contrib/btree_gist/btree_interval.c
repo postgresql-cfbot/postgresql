@@ -128,11 +128,7 @@ PG_FUNCTION_INFO_V1(interval_dist);
 Datum
 interval_dist(PG_FUNCTION_ARGS)
 {
-	Datum		diff = DirectFunctionCall2(interval_mi,
-										   PG_GETARG_DATUM(0),
-										   PG_GETARG_DATUM(1));
-
-	PG_RETURN_INTERVAL_P(abs_interval(DatumGetIntervalP(diff)));
+	return interval_distance(fcinfo);
 }
 
 

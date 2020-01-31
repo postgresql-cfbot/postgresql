@@ -5,6 +5,7 @@
 
 #include "btree_gist.h"
 #include "btree_utils_num.h"
+#include "utils/builtins.h"
 
 typedef struct float4key
 {
@@ -93,14 +94,7 @@ PG_FUNCTION_INFO_V1(float4_dist);
 Datum
 float4_dist(PG_FUNCTION_ARGS)
 {
-	float4		a = PG_GETARG_FLOAT4(0);
-	float4		b = PG_GETARG_FLOAT4(1);
-	float4		r;
-
-	r = a - b;
-	CHECKFLOATVAL(r, isinf(a) || isinf(b), true);
-
-	PG_RETURN_FLOAT4(Abs(r));
+	return float4dist(fcinfo);
 }
 
 

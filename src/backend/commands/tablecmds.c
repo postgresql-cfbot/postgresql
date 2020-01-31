@@ -5040,19 +5040,14 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		newrel = NULL;
 
 	/*
-	 * Prepare a BulkInsertState and options for table_tuple_insert. Because
-	 * we're building a new heap, we can skip WAL-logging and fsync it to disk
-	 * at the end instead (unless WAL-logging is required for archiving or
-	 * streaming replication). The FSM is empty too, so don't bother using it.
+	 * Prepare a BulkInsertState and options for table_tuple_insert.  The FSM
+	 * is empty, so don't bother using it.
 	 */
 	if (newrel)
 	{
 		mycid = GetCurrentCommandId(true);
 		bistate = GetBulkInsertState();
-
 		ti_options = TABLE_INSERT_SKIP_FSM;
-		if (!XLogIsNeeded())
-			ti_options |= TABLE_INSERT_SKIP_WAL;
 	}
 	else
 	{
@@ -7722,12 +7717,35 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 	 * this index will have scheduled the storage for deletion at commit, so
 	 * cancel that pending deletion.
 	 */
+	Assert (OidIsValid(stmt->oldNode) == OidIsValid(stmt->oldRelId));
 	if (OidIsValid(stmt->oldNode))
 	{
-		Relation	irel = index_open(address.objectId, NoLock);
+		Relation	newirel = index_open(address.objectId, NoLock);
+		Relation	oldirel = RelationIdGetRelationCache(stmt->oldRelId);
 
-		RelationPreserveStorage(irel->rd_node, true);
-		index_close(irel, NoLock);
+		RelationPreserveStorage(newirel->rd_node, true);
+
+		/*
+		 * oidirel is valid iff the old relation was created then dropped in
+		 * the current transaction.  We need to copy the newness hints other
+		 * than rd_droppedSubid corresponding to the reused relfilenode in that
+		 * case.
+		 */
+		if (oldirel != NULL)
+		{
+			Assert(!oldirel->rd_isvalid &&
+				   oldirel->rd_createSubid != InvalidSubTransactionId &&
+				   oldirel->rd_droppedSubid != InvalidSubTransactionId);
+
+			newirel->rd_createSubid = oldirel->rd_createSubid;
+			newirel->rd_firstRelfilenodeSubid =
+				oldirel->rd_firstRelfilenodeSubid;
+			newirel->rd_newRelfilenodeSubid =
+				oldirel->rd_newRelfilenodeSubid;
+
+			RelationClose(oldirel);
+		}
+		index_close(newirel, NoLock);
 	}
 
 	return address;
@@ -12006,7 +12024,10 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 
 		/* If it's a partitioned index, there is no storage to share. */
 		if (irel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
+		{
 			stmt->oldNode = irel->rd_node.relNode;
+			stmt->oldRelId = irel->rd_id;
+		}
 		index_close(irel, NoLock);
 	}
 }
@@ -12941,6 +12962,8 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	heap_freetuple(tuple);
 
 	table_close(pg_class, RowExclusiveLock);
+
+	RelationAssumeNewRelfilenode(rel);
 
 	relation_close(rel, NoLock);
 

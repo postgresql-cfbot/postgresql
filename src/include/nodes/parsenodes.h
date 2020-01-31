@@ -2782,6 +2782,7 @@ typedef struct IndexStmt
 	char	   *idxcomment;		/* comment to apply to index, or NULL */
 	Oid			indexOid;		/* OID of an existing index, if any */
 	Oid			oldNode;		/* relfilenode of existing storage, if any */
+	Oid			oldRelId;		/* relid of the old index, if any */
 	bool		unique;			/* is index unique? */
 	bool		primary;		/* is index a primary key? */
 	bool		isconstraint;	/* is it for a pkey/unique constraint? */

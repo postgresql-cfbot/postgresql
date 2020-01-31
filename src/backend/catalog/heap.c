@@ -439,6 +439,10 @@ heap_create(const char *relname,
 				break;
 		}
 	}
+	else
+	{
+		rel->rd_createSubid = InvalidSubTransactionId;
+	}
 
 	return rel;
 }

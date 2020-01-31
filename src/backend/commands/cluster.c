@@ -1014,6 +1014,7 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 				relfilenode2;
 	Oid			swaptemp;
 	char		swptmpchr;
+	Relation	rel1;
 
 	/* We need writable copies of both pg_class tuples. */
 	relRelation = table_open(RelationRelationId, RowExclusiveLock);
@@ -1172,6 +1173,15 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		CacheInvalidateRelcacheByTuple(reltup1);
 		CacheInvalidateRelcacheByTuple(reltup2);
 	}
+
+	/*
+	 * Recognize that rel1's relfilenode (swapped from rel2) is new in this
+	 * subtransaction. Since the next step for rel2 is deletion, don't bother
+	 * recording the newness of its relfilenode.
+	 */
+	rel1 = relation_open(r1, NoLock);
+	RelationAssumeNewRelfilenode(rel1);
+	relation_close(rel1, NoLock);
 
 	/*
 	 * Post alter hook for modified relations. The change to r2 is always
@@ -1489,7 +1499,7 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 
 			/* Get the associated valid index to be renamed */
 			toastidx = toast_get_valid_index(newrel->rd_rel->reltoastrelid,
-											 AccessShareLock);
+											 NoLock);
 
 			/* rename the toast table ... */
 			snprintf(NewToastName, NAMEDATALEN, "pg_toast_%u",

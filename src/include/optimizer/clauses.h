@@ -45,6 +45,9 @@ extern List *find_nonnullable_vars(Node *clause);
 extern List *find_forced_null_vars(Node *clause);
 extern Var *find_forced_null_var(Node *clause);
 
+extern bool is_node_nonnullable(Node * node, Query *parse);
+extern bool list_hasnonnullable(List * list, Query *parse);
+
 extern bool is_pseudo_constant_clause(Node *clause);
 extern bool is_pseudo_constant_clause_relids(Node *clause, Relids relids);
 

@@ -995,7 +995,7 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	 * preprocessing.
 	 */
 	if (hasOuterJoins)
-		reduce_outer_joins(root);
+		reduce_outer_joins(parse);
 
 	/*
 	 * If we have any RTE_RESULT relations, see if they can be deleted from

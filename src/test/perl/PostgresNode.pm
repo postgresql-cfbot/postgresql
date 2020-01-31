@@ -390,7 +390,7 @@ sub set_replication_conf
 	if ($TestLib::windows_os)
 	{
 		print $hba
-		  "host replication all $test_localhost/32 sspi include_realm=1 map=regress\n";
+		  "host &replication &all $test_localhost/32 sspi include_realm=1 map=regress\n";
 	}
 	close $hba;
 	return;

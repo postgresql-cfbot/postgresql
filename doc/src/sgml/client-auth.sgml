@@ -81,10 +81,25 @@
    A record is made
    up of a number of fields which are separated by spaces and/or tabs.
    Fields can contain white space if the field value is double-quoted.
-   Quoting one of the keywords in a database, user, or address field (e.g.,
-   <literal>all</literal> or <literal>replication</literal>) makes the word lose its special
-   meaning, and just match a database, user, or host with that name.
   </para>
+
+  <note>
+   <para>
+    As of version 13, keywords are preceded by the character "&amp;".
+    For compatibility, the following legacy keywords are still accepted
+    on their own:
+    <literal>all</literal>, <literal>replication</literal>,
+    <literal>samegroup</literal>, <literal>samehost</literal>,
+    <literal>samenet</literal>, <literal>samerole</literal>,
+    <literal>sameuser</literal>.
+   </para>
+
+   <para>
+    Quoting one of these legacy keywords in a database, user, or address
+    field makes the word lose its special meaning, and just match a
+    database, user, or host with that name.
+   </para>
+  </note>
 
   <para>
    Each record specifies a connection type, a client IP address range
@@ -221,18 +236,18 @@ hostnogssenc <replaceable>database</replaceable>  <replaceable>user</replaceable
      <listitem>
       <para>
        Specifies which database name(s) this record matches.  The value
-       <literal>all</literal> specifies that it matches all databases.
-       The value <literal>sameuser</literal> specifies that the record
+       <literal>&amp;all</literal> specifies that it matches all databases.
+       The value <literal>&amp;sameuser</literal> specifies that the record
        matches if the requested database has the same name as the
-       requested user.  The value <literal>samerole</literal> specifies that
+       requested user.  The value <literal>&amp;samerole</literal> specifies that
        the requested user must be a member of the role with the same
-       name as the requested database.  (<literal>samegroup</literal> is an
-       obsolete but still accepted spelling of <literal>samerole</literal>.)
+       name as the requested database.  (<literal>&amp;samegroup</literal> is an
+       obsolete but still accepted spelling of <literal>&amp;samerole</literal>.)
        Superusers are not considered to be members of a role for the
-       purposes of <literal>samerole</literal> unless they are explicitly
+       purposes of <literal>&amp;samerole</literal> unless they are explicitly
        members of the role, directly or indirectly, and not just by
        virtue of being a superuser.
-       The value <literal>replication</literal> specifies that the record
+       The value <literal>&amp;replication</literal> specifies that the record
        matches if a physical replication connection is requested (note that
        replication connections do not specify any particular database).
        Otherwise, this is the name of
@@ -249,8 +264,12 @@ hostnogssenc <replaceable>database</replaceable>  <replaceable>user</replaceable
      <listitem>
       <para>
        Specifies which database user name(s) this record
-       matches. The value <literal>all</literal> specifies that it
-       matches all users.  Otherwise, this is either the name of a specific
+       matches. The value <literal>&amp;all</literal> specifies that it
+       matches all users.
+       The value <literal>&amp;superuser</literal> specifies that it matches all
+       superusers.  The value <literal>&amp;nonsuperuser</literal> specifies that it
+       matches no superusers.
+       Otherwise, this is either the name of a specific
        database user, or a group name preceded by <literal>+</literal>.
        (Recall that there is no real distinction between users and groups
        in <productname>PostgreSQL</productname>; a <literal>+</literal> mark really means
@@ -312,9 +331,9 @@ hostnogssenc <replaceable>database</replaceable>  <replaceable>user</replaceable
       </para>
 
       <para>
-       You can also write <literal>all</literal> to match any IP address,
-       <literal>samehost</literal> to match any of the server's own IP
-       addresses, or <literal>samenet</literal> to match any address in any
+       You can also write <literal>&amp;all</literal> to match any IP address,
+       <literal>&amp;samehost</literal> to match any of the server's own IP
+       addresses, or <literal>&amp;samenet</literal> to match any address in any
        subnet that the server is directly connected to.
       </para>
 
@@ -699,40 +718,40 @@ hostnogssenc <replaceable>database</replaceable>  <replaceable>user</replaceable
 # connections).
 #
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
-local   all             all                                     trust
+local   &amp;all            &amp;all                                    trust
 
 # The same using local loopback TCP/IP connections.
 #
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
-host    all             all             127.0.0.1/32            trust
+host    &amp;all            &amp;all            127.0.0.1/32            trust
 
 # The same as the previous line, but using a separate netmask column
 #
 # TYPE  DATABASE        USER            IP-ADDRESS      IP-MASK             METHOD
-host    all             all             127.0.0.1       255.255.255.255     trust
+host    &amp;all            &amp;all            127.0.0.1       255.255.255.255     trust
 
 # The same over IPv6.
 #
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
-host    all             all             ::1/128                 trust
+host    &amp;all            &amp;all            ::1/128                 trust
 
 # The same using a host name (would typically cover both IPv4 and IPv6).
 #
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
-host    all             all             localhost               trust
+host    &amp;all            &amp;all            localhost               trust
 
 # Allow any user from any host with IP address 192.168.93.x to connect
 # to database "postgres" as the same user name that ident reports for
 # the connection (typically the operating system user name).
 #
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
-host    postgres        all             192.168.93.0/24         ident
+host    postgres        &amp;all            192.168.93.0/24         ident
 
 # Allow any user from host 192.168.12.10 to connect to database
 # "postgres" if the user's password is correctly supplied.
 #
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
-host    postgres        all             192.168.12.10/32        scram-sha-256
+host    postgres        &amp;all            192.168.12.10/32        scram-sha-256
 
 # Allow any user from hosts in the example.com domain to connect to
 # any database if the user's password is correctly supplied.
@@ -742,8 +761,8 @@ host    postgres        all             192.168.12.10/32        scram-sha-256
 # authentication.
 #
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
-host    all             mike            .example.com            md5
-host    all             all             .example.com            scram-sha-256
+host    &amp;all            mike            .example.com            md5
+host    &amp;all            &amp;all            .example.com            scram-sha-256
 
 # In the absence of preceding "host" lines, these three lines will
 # reject all connections from 192.168.54.1 (since that entry will be
@@ -754,9 +773,9 @@ host    all             all             .example.com            scram-sha-256
 # encrypted GSSAPI connections) are allowed, but only from 192.168.12.10.
 #
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
-host    all             all             192.168.54.1/32         reject
-hostgssenc all          all             0.0.0.0/0               gss
-host    all             all             192.168.12.10/32        gss
+host    &amp;all            &amp;all            192.168.54.1/32         reject
+hostgssenc &amp;all         &amp;all            0.0.0.0/0               gss
+host    &amp;all            &amp;all            192.168.12.10/32        gss
 
 # Allow users from 192.168.x.x hosts to connect to any database, if
 # they pass the ident check.  If, for example, ident says the user is
@@ -765,7 +784,7 @@ host    all             all             192.168.12.10/32        gss
 # "omicron" that says "bryanh" is allowed to connect as "guest1".
 #
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
-host    all             all             192.168.0.0/16          ident map=omicron
+host    &amp;all            &amp;all            192.168.0.0/16          ident map=omicron
 
 # If these are the only three lines for local connections, they will
 # allow local users to connect only to their own databases (databases
@@ -775,15 +794,15 @@ host    all             all             192.168.0.0/16          ident map=omicro
 # are required in all cases.
 #
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
-local   sameuser        all                                     md5
-local   all             @admins                                 md5
-local   all             +support                                md5
+local   &amp;sameuser       &amp;all                                    md5
+local   &amp;all            @admins                                 md5
+local   &amp;all            +support                                md5
 
 # The last two lines above can be combined into a single line:
-local   all             @admins,+support                        md5
+local   &amp;all            @admins,+support                        md5
 
 # The database column can also use lists and file names:
-local   db1,db2,@demodbs  all                                   md5
+local   db1,db2,@demodbs  &amp;all                                  md5
 </programlisting>
    </example>
  </sect1>

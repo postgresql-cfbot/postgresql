@@ -1065,10 +1065,10 @@ config_sspi_auth(const char *pgdata, const char *superuser_name)
 		exit(2);
 	}
 	CW(fputs("# Configuration written by config_sspi_auth()\n", hba) >= 0);
-	CW(fputs("host all all 127.0.0.1/32  sspi include_realm=1 map=regress\n",
+	CW(fputs("host &all &all 127.0.0.1/32  sspi include_realm=1 map=regress\n",
 			 hba) >= 0);
 	if (have_ipv6)
-		CW(fputs("host all all ::1/128  sspi include_realm=1 map=regress\n",
+		CW(fputs("host &all &all ::1/128  sspi include_realm=1 map=regress\n",
 				 hba) >= 0);
 	CW(fclose(hba) == 0);
 

@@ -21,12 +21,12 @@
 # "hostssl" is an SSL-encrypted TCP/IP socket, and "hostnossl" is a
 # plain TCP/IP socket.
 #
-# DATABASE can be "all", "sameuser", "samerole", "replication", a
-# database name, or a comma-separated list thereof. The "all"
-# keyword does not match "replication". Access to replication
+# DATABASE can be &all, &sameuser, &samerole, &replication, a
+# database name, or a comma-separated list thereof. The &all
+# keyword does not match &replication. Access to replication
 # must be enabled in a separate record (see example below).
 #
-# USER can be "all", a user name, a group name prefixed with "+", or a
+# USER can be &all, a user name, a group name prefixed with "+", or a
 # comma-separated list thereof.  In both the DATABASE and USER fields
 # you can also write a file name prefixed with "@" to include names
 # from a separate file.
@@ -53,11 +53,18 @@
 # section in the documentation for a list of which options are
 # available for which authentication methods.
 #
+# As of version 13, keywords are preceded by the character "&".
+# For compatibility, the following legacy keywords are still accepted on
+# their own:
+#     all,
+#     replication,
+#     sameuser, samegroup, samerole,
+#     samehost, samenet
+#
 # Database and user names containing spaces, commas, quotes and other
-# special characters must be quoted.  Quoting one of the keywords
-# "all", "sameuser", "samerole" or "replication" makes the name lose
-# its special character, and just match a database or username with
-# that name.
+# special characters must be quoted.  Quoting one of the legacy keywords
+# from the previous paragraph makes the name lose its special character,
+# and just match a database or username with that name.
 #
 # This file is read on server startup and when the server receives a
 # SIGHUP signal.  If you edit the file on a running system, you have to
@@ -77,13 +84,13 @@
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
 
 @remove-line-for-nolocal@# "local" is for Unix domain socket connections only
-@remove-line-for-nolocal@local   all             all                                     @authmethodlocal@
+@remove-line-for-nolocal@local   &all            &all                                    @authmethodlocal@
 # IPv4 local connections:
-host    all             all             127.0.0.1/32            @authmethodhost@
+host    &all            &all            127.0.0.1/32            @authmethodhost@
 # IPv6 local connections:
-host    all             all             ::1/128                 @authmethodhost@
+host    &all            &all            ::1/128                 @authmethodhost@
 # Allow replication connections from localhost, by a user with the
 # replication privilege.
-@remove-line-for-nolocal@local   replication     all                                     @authmethodlocal@
-host    replication     all             127.0.0.1/32            @authmethodhost@
-host    replication     all             ::1/128                 @authmethodhost@
+@remove-line-for-nolocal@local   &replication    &all                                    @authmethodlocal@
+host    &replication    &all            127.0.0.1/32            @authmethodhost@
+host    &replication    &all            ::1/128                 @authmethodhost@

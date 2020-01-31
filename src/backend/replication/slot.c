@@ -49,6 +49,7 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/builtins.h"
+#include "utils/memutils.h"
 
 /*
  * Replication slot on-disk data structure.

@@ -221,7 +221,7 @@ pg_drop_replication_slot(PG_FUNCTION_ARGS)
 Datum
 pg_get_replication_slots(PG_FUNCTION_ARGS)
 {
-#define PG_GET_REPLICATION_SLOTS_COLS 11
+#define PG_GET_REPLICATION_SLOTS_COLS 13
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	TupleDesc	tupdesc;
 	Tuplestorestate *tupstore;
@@ -275,6 +275,7 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 		Oid			database;
 		NameData	slot_name;
 		NameData	plugin;
+		WalAvailability walstate;
 		int			i;
 
 		if (!slot->in_use)
@@ -339,6 +340,42 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 
 		if (confirmed_flush_lsn != InvalidXLogRecPtr)
 			values[i++] = LSNGetDatum(confirmed_flush_lsn);
+		else
+			nulls[i++] = true;
+
+		walstate = GetWalAvailability(restart_lsn, active_pid);
+
+		switch (walstate)
+		{
+			case WALAVAIL_INVALID_LSN:
+				nulls[i++] = true;
+				break;
+
+			case WALAVAIL_NORMAL:
+				values[i++] = CStringGetTextDatum("normal");
+				break;
+
+			case WALAVAIL_PRESERVED:
+				values[i++] = CStringGetTextDatum("keeping");
+				break;
+
+			case WALAVAIL_BEING_REMOVED:
+				values[i++] = CStringGetTextDatum("losing");
+				break;
+
+			case WALAVAIL_REMOVED:
+				values[i++] = CStringGetTextDatum("lost");
+				break;
+		}
+
+		if (max_slot_wal_keep_size_mb >=0 &&
+			(walstate == WALAVAIL_NORMAL ||
+			 walstate == WALAVAIL_PRESERVED))
+		{
+			XLogRecPtr currptr = GetXLogWriteRecPtr();
+			values[i++] =
+				Int64GetDatum(DistanceToWalRemoval(currptr, restart_lsn));
+		}
 		else
 			nulls[i++] = true;
 

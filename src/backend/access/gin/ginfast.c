@@ -22,6 +22,8 @@
 #include "access/ginxlog.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
+#include "commands/vacuum.h"
+#include "catalog/index.h"
 #include "catalog/pg_am.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
@@ -240,6 +242,13 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 
 	metabuffer = ReadBuffer(index, GIN_METAPAGE_BLKNO);
 	metapage = BufferGetPage(metabuffer);
+
+	if (GlobalTempRelationPageIsNotInitialized(index, metapage))
+	{
+		Relation heap = RelationIdGetRelation(index->rd_index->indrelid);
+		ginbuild(heap, index, BuildIndexInfo(index));
+		RelationClose(heap);
+	}
 
 	/*
 	 * An insertion to the pending list could logically belong anywhere in the

@@ -30,6 +30,8 @@
 
 #include "access/hash.h"
 #include "access/hash_xlog.h"
+#include "catalog/index.h"
+#include "catalog/pg_am.h"
 #include "miscadmin.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
@@ -74,13 +76,22 @@ _hash_getbuf(Relation rel, BlockNumber blkno, int access, int flags)
 
 	buf = ReadBuffer(rel, blkno);
 
-	if (access != HASH_NOLOCK)
-		LockBuffer(buf, access);
-
 	/* ref count and lock type are correct */
 
-	_hash_checkpage(rel, buf, flags);
-
+	if (blkno == HASH_METAPAGE && GlobalTempRelationPageIsNotInitialized(rel, BufferGetPage(buf)))
+	{
+		Relation heap = RelationIdGetRelation(rel->rd_index->indrelid);
+		hashbuild(heap, rel, BuildIndexInfo(rel));
+		RelationClose(heap);
+		if (access != HASH_NOLOCK)
+			LockBuffer(buf, access);
+	}
+	else
+	{
+		if (access != HASH_NOLOCK)
+			LockBuffer(buf, access);
+		_hash_checkpage(rel, buf, flags);
+	}
 	return buf;
 }
 
@@ -338,7 +349,7 @@ _hash_init(Relation rel, double num_tuples, ForkNumber forkNum)
 	bool		use_wal;
 
 	/* safety check */
-	if (RelationGetNumberOfBlocksInFork(rel, forkNum) != 0)
+	if (rel->rd_rel->relpersistence != RELPERSISTENCE_SESSION && RelationGetNumberOfBlocksInFork(rel, forkNum) != 0)
 		elog(ERROR, "cannot initialize non-empty hash index \"%s\"",
 			 RelationGetRelationName(rel));
 

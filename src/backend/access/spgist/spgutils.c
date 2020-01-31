@@ -21,6 +21,7 @@
 #include "access/spgist_private.h"
 #include "access/transam.h"
 #include "access/xact.h"
+#include "catalog/index.h"
 #include "catalog/pg_amop.h"
 #include "commands/vacuum.h"
 #include "storage/bufmgr.h"
@@ -110,6 +111,7 @@ spgGetCache(Relation index)
 		spgConfigIn in;
 		FmgrInfo   *procinfo;
 		Buffer		metabuffer;
+		Page        metapage;
 		SpGistMetaPageData *metadata;
 
 		cache = MemoryContextAllocZero(index->rd_indexcxt,
@@ -159,12 +161,21 @@ spgGetCache(Relation index)
 		metabuffer = ReadBuffer(index, SPGIST_METAPAGE_BLKNO);
 		LockBuffer(metabuffer, BUFFER_LOCK_SHARE);
 
-		metadata = SpGistPageGetMeta(BufferGetPage(metabuffer));
+		metapage = BufferGetPage(metabuffer);
+		metadata = SpGistPageGetMeta(metapage);
 
 		if (metadata->magicNumber != SPGIST_MAGIC_NUMBER)
-			elog(ERROR, "index \"%s\" is not an SP-GiST index",
-				 RelationGetRelationName(index));
-
+		{
+			if (GlobalTempRelationPageIsNotInitialized(index, metapage))
+			{
+				Relation heap = RelationIdGetRelation(index->rd_index->indrelid);
+				spgbuild(heap, index, BuildIndexInfo(index));
+				RelationClose(heap);
+			}
+			else
+				elog(ERROR, "index \"%s\" is not an SP-GiST index",
+					 RelationGetRelationName(index));
+		}
 		cache->lastUsedPages = metadata->lastUsedPages;
 
 		UnlockReleaseBuffer(metabuffer);

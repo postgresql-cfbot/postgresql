@@ -121,3 +121,10 @@ test: fast_default
 
 # run stats by itself because its delay may be insufficient under heavy load
 test: stats
+
+# global temp table test
+test: gtt_stats
+test: gtt_function
+test: gtt_prepare
+test: gtt_parallel_1 gtt_parallel_2
+test: gtt_clean

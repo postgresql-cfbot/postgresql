@@ -3723,7 +3723,8 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 		if (pset.sversion >= 90100)
 		{
 			appendPQExpBuffer(&buf,
-							  ",\n  CASE c.relpersistence WHEN 'p' THEN '%s' WHEN 't' THEN '%s' WHEN 'u' THEN '%s' END as \"%s\"",
+							  ",\n  CASE c.relpersistence WHEN 'g' THEN '%s' WHEN 'p' THEN '%s' WHEN 't' THEN '%s' WHEN 'u' THEN '%s' END as \"%s\"",
+							  gettext_noop("session"),
 							  gettext_noop("permanent"),
 							  gettext_noop("temporary"),
 							  gettext_noop("unlogged"),

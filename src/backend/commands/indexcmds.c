@@ -2614,6 +2614,16 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 			!isTempNamespace(classtuple->relnamespace))
 			continue;
 
+		/* not support reindex on global temp table, so skip it */
+		if (classtuple->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		{
+			ereport(WARNING,
+				(errmsg("global temp table \"%s.%s\" skip reindexed",
+					get_namespace_name(get_rel_namespace(relid)),
+					get_rel_name(relid))));
+			continue;
+		}
+
 		/* Check user/system classification, and optionally skip */
 		if (objectKind == REINDEX_OBJECT_SYSTEM &&
 			!IsSystemClass(relid, classtuple))

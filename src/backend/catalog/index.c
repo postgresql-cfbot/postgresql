@@ -52,6 +52,7 @@
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "commands/event_trigger.h"
 #include "commands/progress.h"
 #include "commands/tablecmds.h"
@@ -875,6 +876,22 @@ index_create(Relation heapRelation,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("constraint \"%s\" for relation \"%s\" already exists",
 						indexRelationName, RelationGetRelationName(heapRelation))));
+	}
+
+	if (RELATION_IS_GLOBAL_TEMP(heapRelation))
+	{
+		if (accessMethodObjectId != BTREE_AM_OID)
+			elog(ERROR, "only support btree index on global temp table");
+
+		/* No support create index on global temp table use concurrent mode yet */
+		if (concurrent)
+			ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("cannot create indexes on global temporary tables using concurrent mode")));
+
+		/* if global temp table not init storage, then skip build index */
+		if (!gtt_storage_attached(heapRelation->rd_node.relNode))
+			flags |= INDEX_CREATE_SKIP_BUILD;
 	}
 
 	/*
@@ -2054,6 +2071,13 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	 */
 	CheckTableNotInUse(userIndexRelation, "DROP INDEX");
 
+	/* We allow to drop index on global temp table only this session use it */
+	if (RELATION_IS_GLOBAL_TEMP(userHeapRelation))
+	{
+		if (is_other_backend_use_gtt(userHeapRelation->rd_node))
+			elog(ERROR, "can not drop index when other backend attached this global temp table.");
+	}
+
 	/*
 	 * Drop Index Concurrently is more or less the reverse process of Create
 	 * Index Concurrently.
@@ -2660,6 +2684,11 @@ index_update_stats(Relation rel,
 	HeapTuple	tuple;
 	Form_pg_class rd_rel;
 	bool		dirty;
+	bool		is_gtt = false;
+
+	/* update index stats into localhash and rel_rd_rel for global temp table */
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+		is_gtt = true;
 
 	/*
 	 * We always update the pg_class row using a non-transactional,
@@ -2745,20 +2774,34 @@ index_update_stats(Relation rel,
 		else					/* don't bother for indexes */
 			relallvisible = 0;
 
-		if (rd_rel->relpages != (int32) relpages)
+		if (is_gtt)
+			rel->rd_rel->relpages = (int32) relpages;
+		else if (rd_rel->relpages != (int32) relpages)
 		{
 			rd_rel->relpages = (int32) relpages;
 			dirty = true;
 		}
-		if (rd_rel->reltuples != (float4) reltuples)
+
+		if (is_gtt)
+			rel->rd_rel->reltuples = (float4) reltuples;
+		else if (rd_rel->reltuples != (float4) reltuples)
 		{
 			rd_rel->reltuples = (float4) reltuples;
 			dirty = true;
 		}
-		if (rd_rel->relallvisible != (int32) relallvisible)
+
+		if (is_gtt)
+			rel->rd_rel->relallvisible = (int32) relallvisible;
+		else if (rd_rel->relallvisible != (int32) relallvisible)
 		{
 			rd_rel->relallvisible = (int32) relallvisible;
 			dirty = true;
+		}
+
+		if (is_gtt)
+		{
+			up_gtt_relstats(rel, relpages, reltuples, relallvisible,
+							InvalidTransactionId, InvalidMultiXactId);
 		}
 	}
 
@@ -2871,6 +2914,15 @@ index_build(Relation heapRelation,
 		};
 
 		pgstat_progress_update_multi_param(6, index, val);
+	}
+
+	if (RELATION_IS_GLOBAL_TEMP(indexRelation))
+	{
+		if (!gtt_storage_attached(indexRelation->rd_node.relNode))
+		{
+			gtt_force_enable_index(indexRelation);
+			RelationCreateStorage(indexRelation->rd_node, RELPERSISTENCE_GLOBAL_TEMP, indexRelation);
+		}
 	}
 
 	/*
@@ -3466,6 +3518,15 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot reindex temporary tables of other sessions")));
+
+	/*
+	 * Because global temp table cannot change relfilenode
+	 * no support reindex on global temp table yet.
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(iRel))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot reindex global temporary tables")));
 
 	/*
 	 * Also check for active uses of the index in the current transaction; we

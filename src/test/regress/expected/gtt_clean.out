@@ -1,0 +1,7 @@
+reset search_path;
+drop schema gtt cascade;
+NOTICE:  drop cascades to 4 other objects
+DETAIL:  drop cascades to table gtt.gtt1
+drop cascades to table gtt.gtt2
+drop cascades to table gtt.gtt3
+drop cascades to table gtt.gtt_t_kenyon

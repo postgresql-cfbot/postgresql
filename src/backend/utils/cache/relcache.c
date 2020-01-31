@@ -63,6 +63,7 @@
 #include "catalog/pg_type.h"
 #include "catalog/schemapg.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "commands/policy.h"
 #include "commands/trigger.h"
 #include "miscadmin.h"
@@ -1124,6 +1125,29 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 				relation->rd_islocaltemp = false;
 			}
 			break;
+		case RELPERSISTENCE_GLOBAL_TEMP:
+			{
+				BlockNumber     relpages = 0;
+				double          reltuples = 0;
+				BlockNumber     relallvisible = 0;
+
+				relation->rd_backend = BackendIdForTempRelations();
+				/*
+				 * For global temp table, all backend can use
+				 * this relation, so rd_islocaltemp is true
+				 * in every backend.
+				 */
+				relation->rd_islocaltemp = true;
+				get_gtt_relstats(RelationGetRelid(relation),
+								&relpages,
+								&reltuples,
+								&relallvisible,
+								NULL, NULL);
+				relation->rd_rel->relpages = (int32)relpages;
+				relation->rd_rel->reltuples = (float4)reltuples;
+				relation->rd_rel->relallvisible = (int32)relallvisible;
+			}
+			break;
 		default:
 			elog(ERROR, "invalid relpersistence: %c",
 				 relation->rd_rel->relpersistence);
@@ -1178,6 +1202,7 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 		case RELKIND_PARTITIONED_INDEX:
 			Assert(relation->rd_rel->relam != InvalidOid);
 			RelationInitIndexAccessInfo(relation);
+			gtt_fix_index_state(relation);
 			break;
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
@@ -2217,6 +2242,8 @@ RelationReloadIndexInfo(Relation relation)
 							   HeapTupleHeaderGetXmin(tuple->t_data));
 
 		ReleaseSysCache(tuple);
+
+		gtt_fix_index_state(relation);
 	}
 
 	/* Okay, now it's valid again */
@@ -3313,6 +3340,15 @@ RelationBuildLocalRelation(const char *relname,
 			rel->rd_backend = BackendIdForTempRelations();
 			rel->rd_islocaltemp = true;
 			break;
+		case RELPERSISTENCE_GLOBAL_TEMP:
+			rel->rd_backend = BackendIdForTempRelations();
+			/*
+			 * For global temp table, all backend can use
+			 * this relation, so rd_islocaltemp is true
+			 * in every backend.
+			 */
+			rel->rd_islocaltemp = true;
+			break;
 		default:
 			elog(ERROR, "invalid relpersistence: %c", relpersistence);
 			break;
@@ -3427,6 +3463,9 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	TransactionId freezeXid = InvalidTransactionId;
 	RelFileNode newrnode;
 
+	if (RELATION_IS_GLOBAL_TEMP(relation))
+		elog(ERROR, "global temp table does not allow setting new relfilenode");
+
 	/* Allocate a new relfilenode */
 	newrelfilenode = GetNewRelFileNode(relation->rd_rel->reltablespace, NULL,
 									   persistence);
@@ -3467,7 +3506,7 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 				/* handle these directly, at least for now */
 				SMgrRelation srel;
 
-				srel = RelationCreateStorage(newrnode, persistence);
+				srel = RelationCreateStorage(newrnode, persistence, relation);
 				smgrclose(srel);
 			}
 			break;

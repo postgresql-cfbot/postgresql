@@ -2579,6 +2579,11 @@ transformCreateTableAsStmt(ParseState *pstate, CreateTableAsStmt *stmt)
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("materialized views must not use temporary tables or views")));
 
+		if (is_query_using_gtt(query))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("materialized views must not use global temporary tables or views")));
+
 		/*
 		 * A materialized view would either need to save parameters for use in
 		 * maintaining/loading the data or prohibit them entirely.  The latter

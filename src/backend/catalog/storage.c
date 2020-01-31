@@ -26,6 +26,7 @@
 #include "access/xlogutils.h"
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
+#include "catalog/storage_gtt.h"
 #include "miscadmin.h"
 #include "storage/freespace.h"
 #include "storage/smgr.h"
@@ -75,7 +76,7 @@ static PendingRelDelete *pendingDeletes = NULL; /* head of linked list */
  * transaction aborts later on, the storage will be destroyed.
  */
 SMgrRelation
-RelationCreateStorage(RelFileNode rnode, char relpersistence)
+RelationCreateStorage(RelFileNode rnode, char relpersistence, Relation rel)
 {
 	PendingRelDelete *pending;
 	SMgrRelation srel;
@@ -85,6 +86,8 @@ RelationCreateStorage(RelFileNode rnode, char relpersistence)
 	switch (relpersistence)
 	{
 		case RELPERSISTENCE_TEMP:
+		/* global temp table use same storage strategy as local temp table */
+		case RELPERSISTENCE_GLOBAL_TEMP:
 			backend = BackendIdForTempRelations();
 			needs_wal = false;
 			break;
@@ -116,6 +119,10 @@ RelationCreateStorage(RelFileNode rnode, char relpersistence)
 	pending->nestLevel = GetCurrentTransactionNestLevel();
 	pending->next = pendingDeletes;
 	pendingDeletes = pending;
+
+	/* remember global temp table storage info to localhash */
+	if (relpersistence == RELPERSISTENCE_GLOBAL_TEMP && rel)
+		remember_gtt_storage_info(rnode, rel);
 
 	return srel;
 }
@@ -486,7 +493,14 @@ smgrDoPendingDeletes(bool isCommit)
 		smgrdounlinkall(srels, nrels, false);
 
 		for (i = 0; i < nrels; i++)
+		{
 			smgrclose(srels[i]);
+
+			/* clean global temp table flags when transaction commit or rollback */
+			if (SmgrIsTemp(srels[i]) && 
+				gtt_storage_attached(srels[i]->smgr_rnode.node.relNode))
+				forget_gtt_storage_info(srels[i]->smgr_rnode.node.relNode);
+		}
 
 		pfree(srels);
 	}

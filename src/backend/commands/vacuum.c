@@ -35,6 +35,7 @@
 #include "catalog/pg_database.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
+#include "catalog/storage_gtt.h"
 #include "commands/cluster.h"
 #include "commands/defrem.h"
 #include "commands/vacuum.h"
@@ -1217,6 +1218,17 @@ vac_update_relstats(Relation relation,
 	HeapTuple	ctup;
 	Form_pg_class pgcform;
 	bool		dirty;
+	bool		is_gtt = false;
+
+	 /* global temp table remember relstats to localhash and rel->rd_rel, not catalog */
+	if (RELATION_IS_GLOBAL_TEMP(relation))
+	{
+		is_gtt = true;
+		up_gtt_relstats(relation,
+						num_pages, num_tuples,
+						num_all_visible_pages,
+						frozenxid, minmulti);
+	}
 
 	rd = table_open(RelationRelationId, RowExclusiveLock);
 
@@ -1230,17 +1242,26 @@ vac_update_relstats(Relation relation,
 	/* Apply statistical updates, if any, to copied tuple */
 
 	dirty = false;
-	if (pgcform->relpages != (int32) num_pages)
+
+	if (is_gtt)
+		relation->rd_rel->relpages = (int32) num_pages;
+	else if (pgcform->relpages != (int32) num_pages)
 	{
 		pgcform->relpages = (int32) num_pages;
 		dirty = true;
 	}
-	if (pgcform->reltuples != (float4) num_tuples)
+
+	if (is_gtt)
+		relation->rd_rel->reltuples = (float4) num_tuples;
+	else if (pgcform->reltuples != (float4) num_tuples)
 	{
 		pgcform->reltuples = (float4) num_tuples;
 		dirty = true;
 	}
-	if (pgcform->relallvisible != (int32) num_all_visible_pages)
+
+	if (is_gtt)
+		relation->rd_rel->relallvisible = (int32) num_all_visible_pages;
+	else if (pgcform->relallvisible != (int32) num_all_visible_pages)
 	{
 		pgcform->relallvisible = (int32) num_all_visible_pages;
 		dirty = true;
@@ -1285,7 +1306,8 @@ vac_update_relstats(Relation relation,
 	 * This should match vac_update_datfrozenxid() concerning what we consider
 	 * to be "in the future".
 	 */
-	if (TransactionIdIsNormal(frozenxid) &&
+	if (!is_gtt &&
+		TransactionIdIsNormal(frozenxid) &&
 		pgcform->relfrozenxid != frozenxid &&
 		(TransactionIdPrecedes(pgcform->relfrozenxid, frozenxid) ||
 		 TransactionIdPrecedes(ReadNewTransactionId(),
@@ -1296,7 +1318,8 @@ vac_update_relstats(Relation relation,
 	}
 
 	/* Similarly for relminmxid */
-	if (MultiXactIdIsValid(minmulti) &&
+	if (!is_gtt &&
+		MultiXactIdIsValid(minmulti) &&
 		pgcform->relminmxid != minmulti &&
 		(MultiXactIdPrecedes(pgcform->relminmxid, minmulti) ||
 		 MultiXactIdPrecedes(ReadNextMultiXactId(), pgcform->relminmxid)))
@@ -1394,6 +1417,10 @@ vac_update_datfrozenxid(void)
 			continue;
 		}
 
+		/* global temp table relstats not in pg_class */
+		if (classForm->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+			continue;
+
 		/*
 		 * Some table AMs might not need per-relation xid / multixid horizons.
 		 * It therefore seems reasonable to allow relfrozenxid and relminmxid
@@ -1450,6 +1477,25 @@ vac_update_datfrozenxid(void)
 
 	Assert(TransactionIdIsNormal(newFrozenXid));
 	Assert(MultiXactIdIsValid(newMinMulti));
+
+	/*
+	 * Global temp table get frozenxid from MyProc
+	 * to avoid the vacuum truncate clog that gtt need.
+	 */
+	if (max_active_gtt > 0)
+	{
+		TransactionId oldest_gtt_frozenxid =
+			list_all_session_gtt_frozenxids(0, NULL, NULL, NULL);
+
+		if (TransactionIdIsNormal(oldest_gtt_frozenxid) &&
+			TransactionIdPrecedes(oldest_gtt_frozenxid, newFrozenXid))
+		{
+			ereport(WARNING,
+				(errmsg("global temp table oldest FrozenXid is far in the past"),
+				 errhint("please truncate them or kill those sessions that use them.")));
+			newFrozenXid = oldest_gtt_frozenxid;
+		}
+	}
 
 	/* Now fetch the pg_database tuple we need to update. */
 	relation = table_open(DatabaseRelationId, RowExclusiveLock);

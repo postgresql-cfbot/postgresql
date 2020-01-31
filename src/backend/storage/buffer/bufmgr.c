@@ -37,6 +37,7 @@
 #include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "executor/instrument.h"
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
@@ -52,6 +53,7 @@
 #include "utils/rel.h"
 #include "utils/resowner_private.h"
 #include "utils/timestamp.h"
+#include "utils/guc.h"
 
 
 /* Note: these two macros only work on shared buffers, not local ones! */
@@ -432,7 +434,7 @@ ForgetPrivateRefCountEntry(PrivateRefCountEntry *ref)
 static Buffer ReadBuffer_common(SMgrRelation reln, char relpersistence,
 								ForkNumber forkNum, BlockNumber blockNum,
 								ReadBufferMode mode, BufferAccessStrategy strategy,
-								bool *hit);
+								bool *hit, Relation rel);
 static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
 static void PinBuffer_Locked(BufferDesc *buf);
 static void UnpinBuffer(BufferDesc *buf, bool fixOwner);
@@ -664,7 +666,8 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 	 */
 	pgstat_count_buffer_read(reln);
 	buf = ReadBuffer_common(reln->rd_smgr, reln->rd_rel->relpersistence,
-							forkNum, blockNum, mode, strategy, &hit);
+							forkNum, blockNum, mode, strategy, &hit,
+							reln);
 	if (hit)
 		pgstat_count_buffer_hit(reln);
 	return buf;
@@ -692,7 +695,7 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 	Assert(InRecovery);
 
 	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
-							 mode, strategy, &hit);
+							 mode, strategy, &hit, NULL);
 }
 
 
@@ -704,7 +707,8 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 static Buffer
 ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				  BlockNumber blockNum, ReadBufferMode mode,
-				  BufferAccessStrategy strategy, bool *hit)
+				  BufferAccessStrategy strategy, bool *hit,
+				  Relation rel)
 {
 	BufferDesc *bufHdr;
 	Block		bufBlock;
@@ -718,6 +722,15 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
 
 	isExtend = (blockNum == P_NEW);
+
+	/* create storage when first read data page for gtt */
+	if (relpersistence == RELPERSISTENCE_GLOBAL_TEMP &&
+		(isExtend || blockNum == 0) &&
+		forkNum == MAIN_FORKNUM &&
+		!gtt_storage_attached(smgr->smgr_rnode.node.relNode))
+	{
+		RelationCreateStorage(smgr->smgr_rnode.node, relpersistence, rel);
+	}
 
 	TRACE_POSTGRESQL_BUFFER_READ_START(forkNum, blockNum,
 									   smgr->smgr_rnode.node.spcNode,
@@ -2809,6 +2822,16 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 BlockNumber
 RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forkNum)
 {
+	/*
+	 * When this backend not init gtt storage
+	 * return 0
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(relation) &&
+		!gtt_storage_attached(relation->rd_node.relNode))
+	{
+		return 0;
+	}
+
 	switch (relation->rd_rel->relkind)
 	{
 		case RELKIND_SEQUENCE:

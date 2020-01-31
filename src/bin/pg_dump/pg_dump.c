@@ -15583,6 +15583,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 	{
 		char	   *ftoptions = NULL;
 		char	   *srvname = NULL;
+		char		*table_type = NULL;
 
 		switch (tbinfo->relkind)
 		{
@@ -15634,9 +15635,15 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 			binary_upgrade_set_pg_class_oids(fout, q,
 											 tbinfo->dobj.catId.oid, false);
 
+		if (tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED)
+			table_type = "UNLOGGED ";
+		else if (tbinfo->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+			table_type = "GLOBAL TEMPORARY ";
+		else
+			table_type = "";
+
 		appendPQExpBuffer(q, "CREATE %s%s %s",
-						  tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED ?
-						  "UNLOGGED " : "",
+						  table_type,
 						  reltypename,
 						  qualrelname);
 

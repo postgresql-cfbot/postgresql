@@ -763,7 +763,14 @@ _bt_getbuf(Relation rel, BlockNumber blkno, int access)
 		/* Read an existing block of the relation */
 		buf = ReadBuffer(rel, blkno);
 		LockBuffer(buf, access);
-		_bt_checkpage(rel, buf);
+
+		/* global temp table may be not yet initialized for this backend. */
+		if (RELATION_IS_GLOBAL_TEMP(rel) &&
+			blkno == BTREE_METAPAGE &&
+			PageIsNew(BufferGetPage(buf)))
+			_bt_initmetapage(BufferGetPage(buf), P_NONE, 0);
+		else
+			_bt_checkpage(rel, buf);
 	}
 	else
 	{

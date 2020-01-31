@@ -646,6 +646,12 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		 */
 		if (zero_damaged_pages || InRecovery)
 			MemSet(buffer, 0, BLCKSZ);
+		else if(SmgrIsTemp(reln) && blocknum == 0 && forknum == MAIN_FORKNUM)
+		{
+			/* global temp table init btree meta page */
+			MemSet(buffer, 0, BLCKSZ);
+			mdwrite(reln, forknum, blocknum, buffer, true);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),

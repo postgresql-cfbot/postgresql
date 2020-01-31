@@ -19,7 +19,7 @@
 #include "storage/smgr.h"
 #include "utils/relcache.h"
 
-extern SMgrRelation RelationCreateStorage(RelFileNode rnode, char relpersistence);
+extern SMgrRelation RelationCreateStorage(RelFileNode rnode, char relpersistence, Relation rel);
 extern void RelationDropStorage(Relation rel);
 extern void RelationPreserveStorage(RelFileNode rnode, bool atCommit);
 extern void RelationTruncate(Relation rel, BlockNumber nblocks);

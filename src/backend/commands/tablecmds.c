@@ -47,6 +47,7 @@
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
 #include "catalog/toasting.h"
+#include "catalog/storage_gtt.h"
 #include "commands/cluster.h"
 #include "commands/comment.h"
 #include "commands/defrem.h"
@@ -553,6 +554,7 @@ static void refuseDupeIndexAttach(Relation parentIdx, Relation partIdx,
 								  Relation partitionTbl);
 static List *GetParentedForeignKeyRefs(Relation partition);
 static void ATDetachCheckNoForeignKeyRefs(Relation partition);
+static bool has_oncommit_option(List *options);
 
 
 /* ----------------------------------------------------------------
@@ -598,6 +600,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	LOCKMODE	parentLockmode;
 	const char *accessMethod = NULL;
 	Oid			accessMethodId = InvalidOid;
+	bool		has_oncommit_clause = false;
 
 	/*
 	 * Truncate relname to appropriate length (probably a waste of time, as
@@ -608,8 +611,10 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	/*
 	 * Check consistency of arguments
 	 */
+	/* global temp table same as local temp table */
 	if (stmt->oncommit != ONCOMMIT_NOOP
-		&& stmt->relation->relpersistence != RELPERSISTENCE_TEMP)
+		&& !(stmt->relation->relpersistence == RELPERSISTENCE_TEMP ||
+			 stmt->relation->relpersistence == RELPERSISTENCE_GLOBAL_TEMP))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 				 errmsg("ON COMMIT can only be used on temporary tables")));
@@ -639,7 +644,9 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 * code.  This is needed because calling code might not expect untrusted
 	 * tables to appear in pg_temp at the front of its search path.
 	 */
-	if (stmt->relation->relpersistence == RELPERSISTENCE_TEMP
+	/* global temp table same as local temp table */
+	if ((stmt->relation->relpersistence == RELPERSISTENCE_TEMP ||
+		 stmt->relation->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
 		&& InSecurityRestrictedOperation())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -740,6 +747,57 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	/*
 	 * Parse and validate reloptions, if any.
 	 */
+	/* global temp table */
+	has_oncommit_clause = has_oncommit_option(stmt->options);
+	if (stmt->relation->relpersistence == RELPERSISTENCE_GLOBAL_TEMP &&
+		(relkind == RELKIND_RELATION || relkind == RELKIND_PARTITIONED_TABLE))
+	{
+		/* inherit table or parition table inherit on commit property from parent table*/
+		if (inheritOids && stmt->oncommit == ONCOMMIT_NOOP && !has_oncommit_clause)
+		{
+			Oid			parent = linitial_oid(inheritOids);
+			Relation	relation = table_open(parent, NoLock);
+
+			if (!RELATION_IS_GLOBAL_TEMP(relation))
+				elog(ERROR, "The parent table must be global temporary table");
+
+			if (RELATION_GTT_ON_COMMIT_DELETE(relation))
+				stmt->oncommit = ONCOMMIT_DELETE_ROWS;
+			else
+				stmt->oncommit = ONCOMMIT_PRESERVE_ROWS;
+			table_close(relation, NoLock);
+		}
+
+		if (has_oncommit_clause)
+		{
+			if (stmt->oncommit != ONCOMMIT_NOOP)
+				elog(ERROR, "can not defeine global temp table with on commit and with clause at same time");
+		}
+		else
+		{
+			DefElem *opt = makeNode(DefElem);
+
+			opt->type = T_DefElem;
+			opt->defnamespace = NULL;
+			opt->defname = "on_commit_delete_rows";
+			opt->defaction = DEFELEM_UNSPEC;
+
+			/* use reloptions to remember on commit clause */
+			if (stmt->oncommit == ONCOMMIT_DELETE_ROWS)
+				opt->arg  = (Node *)makeString("true");
+			else if (stmt->oncommit == ONCOMMIT_PRESERVE_ROWS)
+				opt->arg  = (Node *)makeString("false");
+			else if (stmt->oncommit == ONCOMMIT_NOOP)
+				opt->arg  = (Node *)makeString("false");
+			else
+				elog(ERROR, "global temp table not support on commit drop clause");
+
+			stmt->options = lappend(stmt->options, opt);
+		}
+	}
+	else if (has_oncommit_clause)
+		elog(ERROR, "regular table cannot specifie on_commit_delete_rows");
+
 	reloptions = transformRelOptions((Datum) 0, stmt->options, NULL, validnsps,
 									 true, false);
 
@@ -1824,7 +1882,8 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 		 * table or the current physical file to be thrown away anyway.
 		 */
 		if (rel->rd_createSubid == mySubid ||
-			rel->rd_newRelfilenodeSubid == mySubid)
+			rel->rd_newRelfilenodeSubid == mySubid ||
+			RELATION_IS_GLOBAL_TEMP(rel))
 		{
 			/* Immediate, non-rollbackable truncation is OK */
 			heap_truncate_one_rel(rel);
@@ -3392,6 +3451,13 @@ RenameRelationInternal(Oid myrelid, const char *newrelname, bool is_internal, bo
 	 * specially.
 	 */
 	targetrelation = relation_open(myrelid, is_index ? ShareUpdateExclusiveLock : AccessExclusiveLock);
+
+	if (RELATION_IS_GLOBAL_TEMP(targetrelation))
+	{
+		if (is_other_backend_use_gtt(targetrelation->rd_node))
+			elog(ERROR, "can not rename relation when other backend attached this global temp table");
+	}
+
 	namespaceId = RelationGetNamespace(targetrelation);
 
 	/*
@@ -3566,6 +3632,13 @@ AlterTable(AlterTableStmt *stmt, LOCKMODE lockmode,
 
 	/* Caller is required to provide an adequate lock. */
 	rel = relation_open(context->relid, NoLock);
+
+	/* We allow to alter global temp table only this session use it */
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+	{
+		if (is_other_backend_use_gtt(rel->rd_node))
+			elog(ERROR, "can not alter relation when other backend attached this global temp table");
+	}
 
 	CheckTableNotInUse(rel, "ALTER TABLE");
 
@@ -8140,6 +8213,13 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 				 errmsg("referenced relation \"%s\" is not a table",
 						RelationGetRelationName(pkrel))));
 
+	/* global temp table not support foreign key constraint yet */
+	if (RELATION_IS_GLOBAL_TEMP(pkrel))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("referenced relation \"%s\" is not a global temp table",
+						RelationGetRelationName(pkrel))));
+
 	if (!allowSystemTableMods && IsSystemRelation(pkrel))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -8178,6 +8258,12 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 						 errmsg("constraints on temporary tables must involve temporary tables of this session")));
+			break;
+		/* global temp table not support foreign key constraint yet */
+		case RELPERSISTENCE_GLOBAL_TEMP:
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+					 errmsg("not support foreign key constraints on global temp table yet")));
 			break;
 	}
 
@@ -13215,7 +13301,7 @@ index_copy_data(Relation rel, RelFileNode newrnode)
 	 * NOTE: any conflict in relfilenode value will be caught in
 	 * RelationCreateStorage().
 	 */
-	RelationCreateStorage(newrnode, rel->rd_rel->relpersistence);
+	RelationCreateStorage(newrnode, rel->rd_rel->relpersistence, rel);
 
 	/* copy main fork */
 	RelationCopyStorage(rel->rd_smgr, dstrel, MAIN_FORKNUM,
@@ -14622,7 +14708,9 @@ ATPrepChangePersistence(Relation rel, bool toLogged)
 	 */
 	switch (rel->rd_rel->relpersistence)
 	{
+		/* global temp table same as local temp table */
 		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_GLOBAL_TEMP:
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 					 errmsg("cannot change logged status of table \"%s\" because it is temporary",
@@ -17263,3 +17351,20 @@ ATDetachCheckNoForeignKeyRefs(Relation partition)
 		table_close(rel, NoLock);
 	}
 }
+
+static bool
+has_oncommit_option(List *options)
+{
+	ListCell   *listptr;
+
+	foreach(listptr, options)
+	{
+		DefElem    *def = (DefElem *) lfirst(listptr);
+
+		if (pg_strcasecmp(def->defname, "on_commit_delete_rows") == 0)
+			return true;
+	}
+
+	return false;
+}
+

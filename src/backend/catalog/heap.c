@@ -61,6 +61,7 @@
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
+#include "catalog/storage_gtt.h"
 #include "commands/tablecmds.h"
 #include "commands/typecmds.h"
 #include "executor/executor.h"
@@ -99,6 +100,7 @@ static void AddNewRelationTuple(Relation pg_class_desc,
 								Oid reloftype,
 								Oid relowner,
 								char relkind,
+								char relpersistence,
 								TransactionId relfrozenxid,
 								TransactionId relminmxid,
 								Datum relacl,
@@ -404,6 +406,10 @@ heap_create(const char *relname,
 									 relpersistence,
 									 relkind);
 
+	/* global temp table not create storage file when catalog create */
+	if (relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		create_storage = false;
+
 	/*
 	 * Have the storage manager create the relation's disk file, if needed.
 	 *
@@ -427,7 +433,7 @@ heap_create(const char *relname,
 
 			case RELKIND_INDEX:
 			case RELKIND_SEQUENCE:
-				RelationCreateStorage(rel->rd_node, relpersistence);
+				RelationCreateStorage(rel->rd_node, relpersistence, rel);
 				break;
 
 			case RELKIND_RELATION:
@@ -956,6 +962,7 @@ AddNewRelationTuple(Relation pg_class_desc,
 					Oid reloftype,
 					Oid relowner,
 					char relkind,
+					char relpersistence,
 					TransactionId relfrozenxid,
 					TransactionId relminmxid,
 					Datum relacl,
@@ -994,8 +1001,18 @@ AddNewRelationTuple(Relation pg_class_desc,
 			break;
 	}
 
-	new_rel_reltup->relfrozenxid = relfrozenxid;
-	new_rel_reltup->relminmxid = relminmxid;
+	/* global temp table not remember transaction info in catalog */
+	if (relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+	{
+		new_rel_reltup->relfrozenxid = InvalidTransactionId;
+		new_rel_reltup->relminmxid = InvalidMultiXactId;
+	}
+	else
+	{
+		new_rel_reltup->relfrozenxid = relfrozenxid;
+		new_rel_reltup->relminmxid = relminmxid;
+	}
+
 	new_rel_reltup->relowner = relowner;
 	new_rel_reltup->reltype = new_type_oid;
 	new_rel_reltup->reloftype = reloftype;
@@ -1357,6 +1374,7 @@ heap_create_with_catalog(const char *relname,
 						reloftypeid,
 						ownerid,
 						relkind,
+						relpersistence,
 						relfrozenxid,
 						relminmxid,
 						PointerGetDatum(relacl),
@@ -1441,11 +1459,15 @@ heap_create_with_catalog(const char *relname,
 	 */
 	StoreConstraints(new_rel_desc, cooked_constraints, is_internal);
 
-	/*
-	 * If there's a special on-commit action, remember it
-	 */
-	if (oncommit != ONCOMMIT_NOOP)
-		register_on_commit_action(relid, oncommit);
+	/* global temp table register action when storage init */
+	if (relpersistence != RELPERSISTENCE_GLOBAL_TEMP)
+	{
+		/*
+		 * If there's a special on-commit action, remember it
+		 */
+		if (oncommit != ONCOMMIT_NOOP)
+			register_on_commit_action(relid, oncommit);
+	}
 
 	/*
 	 * ok, the relation has been cataloged, so close our relations and return
@@ -1936,6 +1958,13 @@ heap_drop_with_catalog(Oid relid)
 	 */
 	if (relid == defaultPartOid)
 		update_default_partition_oid(parentOid, InvalidOid);
+
+	/* We allow to drop global temp table only this session use it */
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+	{
+		if (is_other_backend_use_gtt(rel->rd_node))
+			elog(ERROR, "can not drop relation when other backend attached this global temp table");
+	}
 
 	/*
 	 * Schedule unlinking of the relation's physical files at commit.
@@ -3164,7 +3193,7 @@ RemoveStatistics(Oid relid, AttrNumber attnum)
  * the specified relation.  Caller must hold exclusive lock on rel.
  */
 static void
-RelationTruncateIndexes(Relation heapRelation)
+RelationTruncateIndexes(Relation heapRelation, LOCKMODE lockmode)
 {
 	ListCell   *indlist;
 
@@ -3175,8 +3204,12 @@ RelationTruncateIndexes(Relation heapRelation)
 		Relation	currentIndex;
 		IndexInfo  *indexInfo;
 
+		if (RELATION_IS_GLOBAL_TEMP(heapRelation) &&
+			!gtt_storage_attached(indexId))
+			continue;
+
 		/* Open the index relation; use exclusive lock, just to be sure */
-		currentIndex = index_open(indexId, AccessExclusiveLock);
+		currentIndex = index_open(indexId, lockmode);
 
 		/*
 		 * Fetch info needed for index_build.  Since we know there are no
@@ -3222,8 +3255,13 @@ heap_truncate(List *relids)
 	{
 		Oid			rid = lfirst_oid(cell);
 		Relation	rel;
+		LOCKMODE	lockmode = AccessExclusiveLock;
 
-		rel = table_open(rid, AccessExclusiveLock);
+		/* truncate global temp table only need RowExclusiveLock */
+		if (get_rel_persistence(rid) == RELPERSISTENCE_GLOBAL_TEMP)
+			lockmode = RowExclusiveLock;
+
+		rel = table_open(rid, lockmode);
 		relations = lappend(relations, rel);
 	}
 
@@ -3256,6 +3294,8 @@ void
 heap_truncate_one_rel(Relation rel)
 {
 	Oid			toastrelid;
+	LOCKMODE	lockmode = AccessExclusiveLock;
+	bool		truncate_toastrel = false;
 
 	/*
 	 * Truncate the relation.  Partitioned tables have no storage, so there is
@@ -3264,23 +3304,40 @@ heap_truncate_one_rel(Relation rel)
 	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 		return;
 
+	toastrelid = rel->rd_rel->reltoastrelid;
+
+	/*
+	 * Truncate global temp table only need RowExclusiveLock
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+	{
+		lockmode = RowExclusiveLock;
+		if (OidIsValid(toastrelid) &&
+			gtt_storage_attached(toastrelid))
+			truncate_toastrel = true;
+	}
+	else if (OidIsValid(toastrelid))
+		truncate_toastrel = true;
+
 	/* Truncate the underlying relation */
 	table_relation_nontransactional_truncate(rel);
 
 	/* If the relation has indexes, truncate the indexes too */
-	RelationTruncateIndexes(rel);
+	RelationTruncateIndexes(rel, lockmode);
 
 	/* If there is a toast table, truncate that too */
-	toastrelid = rel->rd_rel->reltoastrelid;
-	if (OidIsValid(toastrelid))
+	if (truncate_toastrel)
 	{
-		Relation	toastrel = table_open(toastrelid, AccessExclusiveLock);
+		Relation	toastrel = table_open(toastrelid, lockmode);
 
 		table_relation_nontransactional_truncate(toastrel);
-		RelationTruncateIndexes(toastrel);
+		RelationTruncateIndexes(toastrel, lockmode);
 		/* keep the lock... */
 		table_close(toastrel, NoLock);
 	}
+
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+		up_gtt_relstats(rel, 0, 0, 0, RecentXmin, InvalidMultiXactId);
 }
 
 /*

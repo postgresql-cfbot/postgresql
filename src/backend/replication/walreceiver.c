@@ -226,7 +226,6 @@ WalReceiverMain(void)
 	}
 	/* Advertise our PID so that the startup process can kill us */
 	walrcv->pid = MyProcPid;
-	walrcv->walRcvState = WALRCV_STREAMING;
 
 	/* Fetch information required to start streaming */
 	walrcv->ready_to_display = false;
@@ -295,6 +294,7 @@ WalReceiverMain(void)
 		strlcpy((char *) walrcv->sender_host, sender_host, NI_MAXHOST);
 
 	walrcv->sender_port = sender_port;
+	walrcv->walRcvState = WALRCV_STREAMING;
 	walrcv->ready_to_display = true;
 	SpinLockRelease(&walrcv->mutex);
 
@@ -1368,6 +1368,8 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 	TimeLineID	receive_start_tli;
 	XLogRecPtr	received_lsn;
 	TimeLineID	received_tli;
+	XLogRecPtr	applied_lsn;
+	TimeLineID	applied_tli;
 	TimestampTz last_send_time;
 	TimestampTz last_receipt_time;
 	XLogRecPtr	latest_end_lsn;
@@ -1379,6 +1381,7 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 
 	/* Take a lock to ensure value consistency */
 	SpinLockAcquire(&WalRcv->mutex);
+	applied_lsn = GetXLogReplayRecPtr(&applied_tli);
 	pid = (int) WalRcv->pid;
 	ready_to_display = WalRcv->ready_to_display;
 	state = WalRcv->walRcvState;
@@ -1396,13 +1399,6 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 	strlcpy(conninfo, (char *) WalRcv->conninfo, sizeof(conninfo));
 	SpinLockRelease(&WalRcv->mutex);
 
-	/*
-	 * No WAL receiver (or not ready yet), just return a tuple with NULL
-	 * values
-	 */
-	if (pid == 0 || !ready_to_display)
-		PG_RETURN_NULL();
-
 	/* determine result type */
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
 		elog(ERROR, "return type must be a row type");
@@ -1411,7 +1407,10 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 	nulls = palloc0(sizeof(bool) * tupdesc->natts);
 
 	/* Fetch values */
-	values[0] = Int32GetDatum(pid);
+	if (pid == 0)
+		nulls[0] = true;
+	else
+		values[0] = Int32GetDatum(pid);
 
 	if (!is_member_of_role(GetUserId(), DEFAULT_ROLE_READ_ALL_STATS))
 	{
@@ -1436,38 +1435,46 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 		else
 			values[4] = LSNGetDatum(received_lsn);
 		values[5] = Int32GetDatum(received_tli);
-		if (last_send_time == 0)
+		if (XLogRecPtrIsInvalid(applied_lsn)) {
 			nulls[6] = true;
-		else
-			values[6] = TimestampTzGetDatum(last_send_time);
-		if (last_receipt_time == 0)
 			nulls[7] = true;
-		else
-			values[7] = TimestampTzGetDatum(last_receipt_time);
-		if (XLogRecPtrIsInvalid(latest_end_lsn))
+		}
+		else {
+			values[6] = LSNGetDatum(applied_lsn);
+			values[7] = Int32GetDatum(applied_tli);
+		}
+		if (last_send_time == 0)
 			nulls[8] = true;
 		else
-			values[8] = LSNGetDatum(latest_end_lsn);
-		if (latest_end_time == 0)
+			values[8] = TimestampTzGetDatum(last_send_time);
+		if (last_receipt_time == 0)
 			nulls[9] = true;
 		else
-			values[9] = TimestampTzGetDatum(latest_end_time);
-		if (*slotname == '\0')
+			values[9] = TimestampTzGetDatum(last_receipt_time);
+		if (XLogRecPtrIsInvalid(latest_end_lsn))
 			nulls[10] = true;
 		else
-			values[10] = CStringGetTextDatum(slotname);
-		if (*sender_host == '\0')
+			values[10] = LSNGetDatum(latest_end_lsn);
+		if (latest_end_time == 0)
 			nulls[11] = true;
 		else
-			values[11] = CStringGetTextDatum(sender_host);
-		if (sender_port == 0)
+			values[11] = TimestampTzGetDatum(latest_end_time);
+		if (*slotname == '\0')
 			nulls[12] = true;
 		else
-			values[12] = Int32GetDatum(sender_port);
-		if (*conninfo == '\0')
+			values[12] = CStringGetTextDatum(slotname);
+		if (*sender_host == '\0' || !ready_to_display)
 			nulls[13] = true;
 		else
-			values[13] = CStringGetTextDatum(conninfo);
+			values[13] = CStringGetTextDatum(sender_host);
+		if (sender_port == 0 || !ready_to_display)
+			nulls[14] = true;
+		else
+			values[14] = Int32GetDatum(sender_port);
+		if (*conninfo == '\0' || !ready_to_display)
+			nulls[15] = true;
+		else
+			values[15] = CStringGetTextDatum(conninfo);
 	}
 
 	/* Returns the record as Datum */

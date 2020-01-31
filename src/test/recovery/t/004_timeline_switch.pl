@@ -6,7 +6,7 @@ use warnings;
 use File::Path qw(rmtree);
 use PostgresNode;
 use TestLib;
-use Test::More tests => 2;
+use Test::More tests => 4;
 
 $ENV{PGDATABASE} = 'postgres';
 
@@ -37,6 +37,11 @@ $node_master->safe_psql('postgres',
 $node_master->wait_for_catchup($node_standby_1, 'replay',
 	$node_master->lsn('write'));
 
+# Check received timeline from pg_stat_get_wal_receiver() on standby 1
+my $node_standby_1_lsn = $node_standby_1->safe_psql('postgres',
+	'SELECT received_tli FROM pg_stat_get_wal_receiver()');
+is($node_standby_1_lsn, 1, 'check received timeline on standby 1');
+
 # Stop and remove master
 $node_master->teardown_node;
 
@@ -66,3 +71,8 @@ $node_standby_1->wait_for_catchup($node_standby_2, 'replay',
 my $result =
   $node_standby_2->safe_psql('postgres', "SELECT count(*) FROM tab_int");
 is($result, qq(2000), 'check content of standby 2');
+
+# Check received timeline from pg_stat_get_wal_receiver() on standby 2
+my $node_standby_2_lsn = $node_standby_2->safe_psql('postgres',
+	'SELECT received_tli FROM pg_stat_get_wal_receiver()');
+is($node_standby_2_lsn, 2, 'check received timeline on standby 2');

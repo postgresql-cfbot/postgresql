@@ -813,6 +813,7 @@ typedef struct Agg
 	Oid		   *grpOperators;	/* equality operators to compare with */
 	Oid		   *grpCollations;
 	long		numGroups;		/* estimated number of groups in input */
+	int32		transitionSpace;	/* estimated transition state size */
 	Bitmapset  *aggParams;		/* IDs of Params used in Aggref inputs */
 	/* Note: planner provides numGroups & aggParams only in HASHED/MIXED case */
 	List	   *groupingSets;	/* grouping sets to use */

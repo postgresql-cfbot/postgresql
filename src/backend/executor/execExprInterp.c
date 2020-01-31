@@ -430,9 +430,13 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_AGG_STRICT_INPUT_CHECK_ARGS,
 		&&CASE_EEOP_AGG_STRICT_INPUT_CHECK_NULLS,
 		&&CASE_EEOP_AGG_INIT_TRANS,
+		&&CASE_EEOP_AGG_INIT_TRANS_SPILLED,
 		&&CASE_EEOP_AGG_STRICT_TRANS_CHECK,
+		&&CASE_EEOP_AGG_STRICT_TRANS_CHECK_SPILLED,
 		&&CASE_EEOP_AGG_PLAIN_TRANS_BYVAL,
+		&&CASE_EEOP_AGG_PLAIN_TRANS_BYVAL_SPILLED,
 		&&CASE_EEOP_AGG_PLAIN_TRANS,
+		&&CASE_EEOP_AGG_PLAIN_TRANS_SPILLED,
 		&&CASE_EEOP_AGG_ORDERED_TRANS_DATUM,
 		&&CASE_EEOP_AGG_ORDERED_TRANS_TUPLE,
 		&&CASE_EEOP_LAST
@@ -1625,6 +1629,36 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 
 			EEO_NEXT();
 		}
+		EEO_CASE(EEOP_AGG_INIT_TRANS_SPILLED)
+		{
+			AggState   *aggstate;
+			AggStatePerGroup pergroup;
+			AggStatePerGroup pergroup_allaggs;
+
+			aggstate = op->d.agg_init_trans.aggstate;
+			pergroup_allaggs = aggstate->all_pergroups[op->d.agg_init_trans.setoff];
+
+			if (pergroup_allaggs == NULL)
+				EEO_NEXT();
+
+			pergroup = &pergroup_allaggs[op->d.agg_init_trans.transno];
+
+			/* If transValue has not yet been initialized, do so now. */
+			if (pergroup->noTransValue)
+			{
+				AggStatePerTrans pertrans = op->d.agg_init_trans.pertrans;
+
+				aggstate->curaggcontext = op->d.agg_init_trans.aggcontext;
+				aggstate->current_set = op->d.agg_init_trans.setno;
+
+				ExecAggInitGroup(aggstate, pertrans, pergroup);
+
+				/* copied trans value from input, done this round */
+				EEO_JUMP(op->d.agg_init_trans.jumpnull);
+			}
+
+			EEO_NEXT();
+		}
 
 		/* check that a strict aggregate's input isn't NULL */
 		EEO_CASE(EEOP_AGG_STRICT_TRANS_CHECK)
@@ -1636,6 +1670,25 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			pergroup = &aggstate->all_pergroups
 				[op->d.agg_strict_trans_check.setoff]
 				[op->d.agg_strict_trans_check.transno];
+
+			if (unlikely(pergroup->transValueIsNull))
+				EEO_JUMP(op->d.agg_strict_trans_check.jumpnull);
+
+			EEO_NEXT();
+		}
+		EEO_CASE(EEOP_AGG_STRICT_TRANS_CHECK_SPILLED)
+		{
+			AggState   *aggstate;
+			AggStatePerGroup pergroup;
+			AggStatePerGroup pergroup_allaggs;
+
+			aggstate = op->d.agg_strict_trans_check.aggstate;
+			pergroup_allaggs = aggstate->all_pergroups[op->d.agg_strict_trans_check.setoff];
+
+			if (pergroup_allaggs == NULL)
+				EEO_NEXT();
+
+			pergroup = &pergroup_allaggs[op->d.agg_strict_trans_check.transno];
 
 			if (unlikely(pergroup->transValueIsNull))
 				EEO_JUMP(op->d.agg_strict_trans_check.jumpnull);
@@ -1691,6 +1744,52 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 
 			EEO_NEXT();
 		}
+		EEO_CASE(EEOP_AGG_PLAIN_TRANS_BYVAL_SPILLED)
+		{
+			AggState   *aggstate;
+			AggStatePerTrans pertrans;
+			AggStatePerGroup pergroup;
+			AggStatePerGroup pergroup_allaggs;
+			FunctionCallInfo fcinfo;
+			MemoryContext oldContext;
+			Datum		newVal;
+
+			aggstate = op->d.agg_trans.aggstate;
+			pertrans = op->d.agg_trans.pertrans;
+
+			pergroup_allaggs = aggstate->all_pergroups[op->d.agg_trans.setoff];
+			pergroup = &pergroup_allaggs[op->d.agg_trans.transno];
+
+			if (pergroup_allaggs == NULL)
+				EEO_NEXT();
+
+			Assert(pertrans->transtypeByVal);
+
+			fcinfo = pertrans->transfn_fcinfo;
+
+			/* cf. select_current_set() */
+			aggstate->curaggcontext = op->d.agg_trans.aggcontext;
+			aggstate->current_set = op->d.agg_trans.setno;
+
+			/* set up aggstate->curpertrans for AggGetAggref() */
+			aggstate->curpertrans = pertrans;
+
+			/* invoke transition function in per-tuple context */
+			oldContext = MemoryContextSwitchTo(aggstate->tmpcontext->ecxt_per_tuple_memory);
+
+			fcinfo->args[0].value = pergroup->transValue;
+			fcinfo->args[0].isnull = pergroup->transValueIsNull;
+			fcinfo->isnull = false; /* just in case transfn doesn't set it */
+
+			newVal = FunctionCallInvoke(fcinfo);
+
+			pergroup->transValue = newVal;
+			pergroup->transValueIsNull = fcinfo->isnull;
+
+			MemoryContextSwitchTo(oldContext);
+
+			EEO_NEXT();
+		}
 
 		/*
 		 * Evaluate aggregate transition / combine function that has a
@@ -1714,6 +1813,67 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			pergroup = &aggstate->all_pergroups
 				[op->d.agg_trans.setoff]
 				[op->d.agg_trans.transno];
+
+			Assert(!pertrans->transtypeByVal);
+
+			fcinfo = pertrans->transfn_fcinfo;
+
+			/* cf. select_current_set() */
+			aggstate->curaggcontext = op->d.agg_trans.aggcontext;
+			aggstate->current_set = op->d.agg_trans.setno;
+
+			/* set up aggstate->curpertrans for AggGetAggref() */
+			aggstate->curpertrans = pertrans;
+
+			/* invoke transition function in per-tuple context */
+			oldContext = MemoryContextSwitchTo(aggstate->tmpcontext->ecxt_per_tuple_memory);
+
+			fcinfo->args[0].value = pergroup->transValue;
+			fcinfo->args[0].isnull = pergroup->transValueIsNull;
+			fcinfo->isnull = false; /* just in case transfn doesn't set it */
+
+			newVal = FunctionCallInvoke(fcinfo);
+
+			/*
+			 * For pass-by-ref datatype, must copy the new value into
+			 * aggcontext and free the prior transValue.  But if transfn
+			 * returned a pointer to its first input, we don't need to do
+			 * anything.  Also, if transfn returned a pointer to a R/W
+			 * expanded object that is already a child of the aggcontext,
+			 * assume we can adopt that value without copying it.
+			 */
+			if (DatumGetPointer(newVal) != DatumGetPointer(pergroup->transValue))
+				newVal = ExecAggTransReparent(aggstate, pertrans,
+											  newVal, fcinfo->isnull,
+											  pergroup->transValue,
+											  pergroup->transValueIsNull);
+
+			pergroup->transValue = newVal;
+			pergroup->transValueIsNull = fcinfo->isnull;
+
+			MemoryContextSwitchTo(oldContext);
+
+			EEO_NEXT();
+		}
+		EEO_CASE(EEOP_AGG_PLAIN_TRANS_SPILLED)
+		{
+			AggState   *aggstate;
+			AggStatePerTrans pertrans;
+			AggStatePerGroup pergroup;
+			AggStatePerGroup pergroup_allaggs;
+			FunctionCallInfo fcinfo;
+			MemoryContext oldContext;
+			Datum		newVal;
+
+			aggstate = op->d.agg_trans.aggstate;
+			pertrans = op->d.agg_trans.pertrans;
+
+			pergroup_allaggs = aggstate->all_pergroups[op->d.agg_trans.setoff];
+
+			if (pergroup_allaggs == NULL)
+				EEO_NEXT();
+
+			pergroup = &pergroup_allaggs[op->d.agg_trans.transno];
 
 			Assert(!pertrans->transtypeByVal);
 

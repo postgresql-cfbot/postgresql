@@ -964,6 +964,26 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_hashagg_spill", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the planner's use of hashed aggregation plans that are expected to exceed work_mem."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_hashagg_spill,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"hashagg_mem_overflow", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables hashed aggregation to overflow work_mem at execution time."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&hashagg_mem_overflow,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_material", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of materialization."),
 			NULL,

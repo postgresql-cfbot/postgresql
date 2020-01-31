@@ -77,6 +77,7 @@
 #include "access/htup_details.h"
 #include "access/tsmapi.h"
 #include "executor/executor.h"
+#include "executor/nodeAgg.h"
 #include "executor/nodeHash.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -128,6 +129,7 @@ bool		enable_bitmapscan = true;
 bool		enable_tidscan = true;
 bool		enable_sort = true;
 bool		enable_hashagg = true;
+bool		enable_hashagg_spill = true;
 bool		enable_nestloop = true;
 bool		enable_material = true;
 bool		enable_mergejoin = true;
@@ -2153,7 +2155,7 @@ cost_agg(Path *path, PlannerInfo *root,
 		 int numGroupCols, double numGroups,
 		 List *quals,
 		 Cost input_startup_cost, Cost input_total_cost,
-		 double input_tuples)
+		 double input_tuples, double input_width)
 {
 	double		output_tuples;
 	Cost		startup_cost;
@@ -2219,20 +2221,69 @@ cost_agg(Path *path, PlannerInfo *root,
 		total_cost += aggcosts->finalCost.per_tuple * numGroups;
 		total_cost += cpu_tuple_cost * numGroups;
 		output_tuples = numGroups;
+
+		/*
+		 * We don't need to compute the disk costs of hash aggregation here,
+		 * because the planner does not choose hash aggregation for grouping
+		 * sets that it doesn't expect to fit in memory.
+		 */
 	}
 	else
 	{
+		double hashentrysize = hash_agg_entry_size(
+				aggcosts->numAggs, input_width, aggcosts->transitionSpace);
+		double	nbatches	 =
+			(numGroups * hashentrysize) / (work_mem * 1024L);
+		double	pages_written = 0.0;
+		double	pages_read = 0.0;
+
 		/* must be AGG_HASHED */
 		startup_cost = input_total_cost;
 		if (!enable_hashagg)
 			startup_cost += disable_cost;
 		startup_cost += aggcosts->transCost.startup;
 		startup_cost += aggcosts->transCost.per_tuple * input_tuples;
+		/* cost of computing hash value */
 		startup_cost += (cpu_operator_cost * numGroupCols) * input_tuples;
 		startup_cost += aggcosts->finalCost.startup;
+
+		/*
+		 * Add the disk costs of hash aggregation that spills to disk.
+		 *
+		 * Groups that go into the hash table stay in memory until finalized,
+		 * so spilling and reprocessing tuples doesn't incur additional
+		 * invocations of transCost or finalCost. Furthermore, the computed
+		 * hash value is stored with the spilled tuples, so we don't incur
+		 * extra invocations of the hash function.
+		 *
+		 * The disk cost depends on the depth of recursion; each level
+		 * requiring one additional write and then read of a tuple. Writes are
+		 * random and reads are sequential, so we assume 1/2 random and half
+		 * sequential.
+		 *
+		 * Hash Agg begins returning tuples after the first batch is
+		 * complete. Accrue writes (spilled tuples) to startup_cost and reads
+		 * only to total_cost. This is not perfect; it penalizes startup_cost
+		 * in the case of recursive spills. Also, transCost is entirely
+		 * counted in startup_cost; but some of that cost could be counted
+		 * only against total_cost.
+		 */
+		if (!hashagg_mem_overflow && nbatches > 1.0)
+		{
+			double depth;
+			double pages;
+
+			pages = relation_byte_size(input_tuples, input_width) / BLCKSZ;
+			depth = ceil( log(nbatches - 1) / log(HASHAGG_MAX_PARTITIONS) );
+			pages_written = pages_read = pages * depth;
+			startup_cost += pages_written * random_page_cost;
+		}
+
 		total_cost = startup_cost;
 		total_cost += aggcosts->finalCost.per_tuple * numGroups;
+		/* cost of retrieving from hash table */
 		total_cost += cpu_tuple_cost * numGroups;
+		total_cost += pages_read * seq_page_cost;
 		output_tuples = numGroups;
 	}
 

@@ -304,11 +304,13 @@ typedef struct AggStatePerHashData
 	Agg		   *aggnode;		/* original Agg node, for numGroups etc. */
 }			AggStatePerHashData;
 
+#define HASHAGG_MAX_PARTITIONS 256
 
 extern AggState *ExecInitAgg(Agg *node, EState *estate, int eflags);
 extern void ExecEndAgg(AggState *node);
 extern void ExecReScanAgg(AggState *node);
 
-extern Size hash_agg_entry_size(int numAggs);
+extern Size hash_agg_entry_size(int numAggs, Size tupleWidth,
+								Size transitionSpace);
 
 #endif							/* NODEAGG_H */

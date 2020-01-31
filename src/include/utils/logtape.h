@@ -67,6 +67,8 @@ extern void LogicalTapeRewindForRead(LogicalTapeSet *lts, int tapenum,
 extern void LogicalTapeRewindForWrite(LogicalTapeSet *lts, int tapenum);
 extern void LogicalTapeFreeze(LogicalTapeSet *lts, int tapenum,
 							  TapeShare *share);
+extern LogicalTapeSet *LogicalTapeSetExtend(LogicalTapeSet *lts,
+											int ntoextend);
 extern size_t LogicalTapeBackspace(LogicalTapeSet *lts, int tapenum,
 								   size_t size);
 extern void LogicalTapeSeek(LogicalTapeSet *lts, int tapenum,

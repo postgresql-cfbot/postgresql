@@ -79,7 +79,8 @@ static void ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
 static void ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 								  ExprEvalStep *scratch,
 								  FunctionCallInfo fcinfo, AggStatePerTrans pertrans,
-								  int transno, int setno, int setoff, bool ishash);
+								  int transno, int setno, int setoff, bool ishash,
+								  bool spilled);
 
 
 /*
@@ -2927,7 +2928,7 @@ ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
  */
 ExprState *
 ExecBuildAggTrans(AggState *aggstate, AggStatePerPhase phase,
-				  bool doSort, bool doHash)
+				  bool doSort, bool doHash, bool spilled)
 {
 	ExprState  *state = makeNode(ExprState);
 	PlanState  *parent = &aggstate->ss.ps;
@@ -3160,7 +3161,8 @@ ExecBuildAggTrans(AggState *aggstate, AggStatePerPhase phase,
 			for (setno = 0; setno < processGroupingSets; setno++)
 			{
 				ExecBuildAggTransCall(state, aggstate, &scratch, trans_fcinfo,
-									  pertrans, transno, setno, setoff, false);
+									  pertrans, transno, setno, setoff, false,
+									  spilled);
 				setoff++;
 			}
 		}
@@ -3178,7 +3180,8 @@ ExecBuildAggTrans(AggState *aggstate, AggStatePerPhase phase,
 			for (setno = 0; setno < numHashes; setno++)
 			{
 				ExecBuildAggTransCall(state, aggstate, &scratch, trans_fcinfo,
-									  pertrans, transno, setno, setoff, true);
+									  pertrans, transno, setno, setoff, true,
+									  spilled);
 				setoff++;
 			}
 		}
@@ -3226,7 +3229,8 @@ static void
 ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 					  ExprEvalStep *scratch,
 					  FunctionCallInfo fcinfo, AggStatePerTrans pertrans,
-					  int transno, int setno, int setoff, bool ishash)
+					  int transno, int setno, int setoff, bool ishash,
+					  bool spilled)
 {
 	int			adjust_init_jumpnull = -1;
 	int			adjust_strict_jumpnull = -1;
@@ -3248,7 +3252,8 @@ ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 		fcinfo->flinfo->fn_strict &&
 		pertrans->initValueIsNull)
 	{
-		scratch->opcode = EEOP_AGG_INIT_TRANS;
+		scratch->opcode = spilled ?
+			EEOP_AGG_INIT_TRANS_SPILLED : EEOP_AGG_INIT_TRANS;
 		scratch->d.agg_init_trans.aggstate = aggstate;
 		scratch->d.agg_init_trans.pertrans = pertrans;
 		scratch->d.agg_init_trans.setno = setno;
@@ -3265,7 +3270,8 @@ ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 	if (pertrans->numSortCols == 0 &&
 		fcinfo->flinfo->fn_strict)
 	{
-		scratch->opcode = EEOP_AGG_STRICT_TRANS_CHECK;
+		scratch->opcode = spilled ?
+			EEOP_AGG_STRICT_TRANS_CHECK_SPILLED : EEOP_AGG_STRICT_TRANS_CHECK;
 		scratch->d.agg_strict_trans_check.aggstate = aggstate;
 		scratch->d.agg_strict_trans_check.setno = setno;
 		scratch->d.agg_strict_trans_check.setoff = setoff;
@@ -3283,9 +3289,11 @@ ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 
 	/* invoke appropriate transition implementation */
 	if (pertrans->numSortCols == 0 && pertrans->transtypeByVal)
-		scratch->opcode = EEOP_AGG_PLAIN_TRANS_BYVAL;
+		scratch->opcode = spilled ?
+			EEOP_AGG_PLAIN_TRANS_BYVAL_SPILLED : EEOP_AGG_PLAIN_TRANS_BYVAL;
 	else if (pertrans->numSortCols == 0)
-		scratch->opcode = EEOP_AGG_PLAIN_TRANS;
+		scratch->opcode = spilled ?
+			EEOP_AGG_PLAIN_TRANS_SPILLED : EEOP_AGG_PLAIN_TRANS;
 	else if (pertrans->numInputs == 1)
 		scratch->opcode = EEOP_AGG_ORDERED_TRANS_DATUM;
 	else

@@ -62,6 +62,7 @@
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
+#include "catalog/pg_variable.h"
 #include "commands/dbcommands.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
@@ -525,6 +526,19 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,		/* no ACL (same as relation) */
 		OBJECT_STATISTIC_EXT,
 		true
+	},
+	{
+		VariableRelationId,
+		VariableObjectIndexId,
+		VARIABLEOID,
+		VARIABLENAMENSP,
+		Anum_pg_variable_oid,
+		Anum_pg_variable_varname,
+		Anum_pg_variable_varnamespace,
+		Anum_pg_variable_varowner,
+		Anum_pg_variable_varacl,
+		OBJECT_VARIABLE,
+		true
 	}
 };
 
@@ -750,6 +764,10 @@ static const struct object_type_map
 	/* OBJECT_STATISTIC_EXT */
 	{
 		"statistics object", OBJECT_STATISTIC_EXT
+	},
+	/* OCLASS_VARIABLE */
+	{
+		"schema variable", OBJECT_VARIABLE
 	}
 };
 
@@ -775,6 +793,7 @@ static ObjectAddress get_object_address_attrdef(ObjectType objtype,
 												bool missing_ok);
 static ObjectAddress get_object_address_type(ObjectType objtype,
 											 TypeName *typename, bool missing_ok);
+static ObjectAddress get_object_address_variable(List *object, bool missing_ok);
 static ObjectAddress get_object_address_opcf(ObjectType objtype, List *object,
 											 bool missing_ok);
 static ObjectAddress get_object_address_opf_member(ObjectType objtype,
@@ -1031,6 +1050,9 @@ get_object_address(ObjectType objtype, Node *object,
 				address.objectId = get_statistics_object_oid(castNode(List, object),
 															 missing_ok);
 				address.objectSubId = 0;
+				break;
+			case OBJECT_VARIABLE:
+				address = get_object_address_variable(castNode(List, object), missing_ok);
 				break;
 			default:
 				elog(ERROR, "unrecognized objtype: %d", (int) objtype);
@@ -1888,16 +1910,20 @@ get_object_address_defacl(List *object, bool missing_ok)
 		case DEFACLOBJ_NAMESPACE:
 			objtype_str = "schemas";
 			break;
+		case DEFACLOBJ_VARIABLE:
+			objtype_str = "variables";
+			break;
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("unrecognized default ACL object type \"%c\"", objtype),
-					 errhint("Valid object types are \"%c\", \"%c\", \"%c\", \"%c\", \"%c\".",
+					 errhint("Valid object types are \"%c\", \"%c\", \"%c\", \"%c\", \"%c\", \"%c\".",
 							 DEFACLOBJ_RELATION,
 							 DEFACLOBJ_SEQUENCE,
 							 DEFACLOBJ_FUNCTION,
 							 DEFACLOBJ_TYPE,
-							 DEFACLOBJ_NAMESPACE)));
+							 DEFACLOBJ_NAMESPACE,
+							 DEFACLOBJ_VARIABLE)));
 	}
 
 	/*
@@ -1980,6 +2006,24 @@ textarray_to_strvaluelist(ArrayType *arr)
 	}
 
 	return list;
+}
+
+/*
+ * Find the ObjectAddress for a schema variable
+ */
+static ObjectAddress
+get_object_address_variable(List *object, bool missing_ok)
+{
+	ObjectAddress address;
+	char	   *nspname = NULL;
+	char	   *varname = NULL;
+
+	ObjectAddressSet(address, VariableRelationId, InvalidOid);
+
+	DeconstructQualifiedName(object, &nspname, &varname);
+	address.objectId = LookupVariable(nspname, varname, missing_ok);
+
+	return address;
 }
 
 /*
@@ -2171,6 +2215,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_TABCONSTRAINT:
 		case OBJECT_OPCLASS:
 		case OBJECT_OPFAMILY:
+		case OBJECT_VARIABLE:
 			objnode = (Node *) name;
 			break;
 		case OBJECT_ACCESS_METHOD:
@@ -2476,6 +2521,11 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 		case OBJECT_STATISTIC_EXT:
 			if (!pg_statistics_object_ownercheck(address.objectId, roleid))
 				aclcheck_error_type(ACLCHECK_NOT_OWNER, address.objectId);
+			break;
+		case OBJECT_VARIABLE:
+			if (!pg_variable_ownercheck(address.objectId, roleid))
+				aclcheck_error(ACLCHECK_NOT_OWNER, objtype,
+							   NameListToString(castNode(List, object)));
 			break;
 		default:
 			elog(ERROR, "unrecognized object type: %d",
@@ -3234,6 +3284,32 @@ getObjectDescription(const ObjectAddress *object)
 				break;
 			}
 
+		case OCLASS_VARIABLE:
+			{
+				char	   *nspname;
+				HeapTuple	tup;
+				Form_pg_variable varform;
+
+				tup = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+					elog(ERROR, "cache lookup failed for schema variable %u",
+						 object->objectId);
+
+				varform = (Form_pg_variable) GETSTRUCT(tup);
+
+				if (VariableIsVisible(object->objectId))
+					nspname = NULL;
+				else
+					nspname = get_namespace_name(varform->varnamespace);
+
+				appendStringInfo(&buffer, _("schema variable %s"),
+								 quote_qualified_identifier(nspname,
+															NameStr(varform->varname)));
+
+				ReleaseSysCache(tup);
+				break;
+			}
+
 		case OCLASS_TSPARSER:
 			{
 				HeapTuple	tup;
@@ -3498,6 +3574,16 @@ getObjectDescription(const ObjectAddress *object)
 						appendStringInfo(&buffer,
 										 _("default privileges on new schemas belonging to role %s"),
 										 rolename);
+						break;
+					case DEFACLOBJ_VARIABLE:
+						if (nspname)
+							appendStringInfo(&buffer,
+											 _("default privileges on new variables belonging to role %s in schema %s"),
+											 rolename, nspname);
+						else
+							appendStringInfo(&buffer,
+											 _("default privileges on new variables belonging to role %s"),
+											 rolename);
 						break;
 					default:
 						/* shouldn't get here */
@@ -4152,6 +4238,10 @@ getObjectTypeDescription(const ObjectAddress *object)
 
 		case OCLASS_TRANSFORM:
 			appendStringInfoString(&buffer, "transform");
+			break;
+
+		case OCLASS_VARIABLE:
+			appendStringInfoString(&buffer, "schema variable");
 			break;
 
 			/*
@@ -5050,6 +5140,10 @@ getObjectIdentityParts(const ObjectAddress *object,
 						appendStringInfoString(&buffer,
 											   " on schemas");
 						break;
+					case DEFACLOBJ_VARIABLE:
+						appendStringInfoString(&buffer,
+											   " on schema variables");
+						break;
 				}
 
 				if (objname)
@@ -5211,6 +5305,33 @@ getObjectIdentityParts(const ObjectAddress *object,
 				table_close(transformDesc, AccessShareLock);
 			}
 			break;
+
+		case OCLASS_VARIABLE:
+			{
+				char	   *schema;
+				char	   *varname;
+				HeapTuple	tup;
+				Form_pg_variable varform;
+
+				tup = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+					elog(ERROR, "cache lookup failed for schema variable %u",
+						 object->objectId);
+
+				varform = (Form_pg_variable) GETSTRUCT(tup);
+
+				schema = get_namespace_name_or_temp(varform->varnamespace);
+				varname = NameStr(varform->varname);
+
+				appendStringInfo(&buffer, "%s",
+								 quote_qualified_identifier(schema, varname));
+
+				if (objname)
+					*objname = list_make2(schema, varname);
+
+				ReleaseSysCache(tup);
+				break;
+			}
 
 			/*
 			 * There's intentionally no default: case here; we want the

@@ -144,6 +144,7 @@ PrepareQuery(ParseState *pstate, PrepareStmt *stmt,
 		case CMD_INSERT:
 		case CMD_UPDATE:
 		case CMD_DELETE:
+		case CMD_PLAN_UTILITY:
 			/* OK */
 			break;
 		default:

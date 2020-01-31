@@ -313,6 +313,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	glob->lastPlanNodeId = 0;
 	glob->transientPlan = false;
 	glob->dependsOnRole = false;
+	glob->schemaVariables = NIL;
 
 	/*
 	 * Assess whether it's feasible to use parallel mode for this query. We
@@ -338,7 +339,8 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	 */
 	if ((cursorOptions & CURSOR_OPT_PARALLEL_OK) != 0 &&
 		IsUnderPostmaster &&
-		parse->commandType == CMD_SELECT &&
+		(parse->commandType == CMD_SELECT ||
+		 parse->commandType == CMD_PLAN_UTILITY) &&
 		!parse->hasModifyingCTE &&
 		max_parallel_workers_per_gather > 0 &&
 		!IsParallelWorker())
@@ -523,6 +525,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	result->resultRelations = glob->resultRelations;
 	result->rootResultRelations = glob->rootResultRelations;
 	result->appendRelations = glob->appendRelations;
+	result->resultVariable = parse->resultVariable;
 	result->subplans = glob->subplans;
 	result->rewindPlanIDs = glob->rewindPlanIDs;
 	result->rowMarks = glob->finalrowmarks;
@@ -531,6 +534,7 @@ standard_planner(Query *parse, int cursorOptions, ParamListInfo boundParams)
 	result->paramExecTypes = glob->paramExecTypes;
 	/* utilityStmt should be null, but we might as well copy it */
 	result->utilityStmt = parse->utilityStmt;
+	result->schemaVariables = glob->schemaVariables;
 	result->stmt_location = parse->stmt_location;
 	result->stmt_len = parse->stmt_len;
 
@@ -673,6 +677,12 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	 * query.
 	 */
 	pull_up_subqueries(root);
+
+	/*
+	 * Check if some subquery uses schema variable. Flag hasSchemaVariables
+	 * should be true if query or some subquery uses any schema variable.
+	 */
+	pull_up_has_schema_variables(root);
 
 	/*
 	 * If this is a simple UNION ALL query, flatten it into an appendrel. We
@@ -2325,9 +2335,10 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 
 		/*
 		 * If this is an INSERT/UPDATE/DELETE, and we're not being called from
-		 * inheritance_planner, add the ModifyTable node.
+		 * inheritance_planner, and  add the ModifyTable node.
 		 */
-		if (parse->commandType != CMD_SELECT && !inheritance_update)
+		if (parse->commandType != CMD_SELECT &&
+			parse->commandType != CMD_PLAN_UTILITY && !inheritance_update)
 		{
 			Index		rootRelation;
 			List	   *withCheckOptionLists;

@@ -114,4 +114,7 @@ bool		describePublications(const char *pattern);
 /* \dRs */
 bool		describeSubscriptions(const char *pattern, bool verbose);
 
+/* \dV */
+extern bool listVariables(const char *pattern, bool varbose);
+
 #endif							/* DESCRIBE_H */

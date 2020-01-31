@@ -127,6 +127,7 @@ static const event_trigger_support_data event_trigger_support[] = {
 	{"TEXT SEARCH TEMPLATE", true},
 	{"TYPE", true},
 	{"USER MAPPING", true},
+	{"VARIABLE", true},
 	{"VIEW", true},
 	{NULL, false}
 };
@@ -296,7 +297,8 @@ check_ddl_tag(const char *tag)
 		pg_strcasecmp(tag, "REVOKE") == 0 ||
 		pg_strcasecmp(tag, "DROP OWNED") == 0 ||
 		pg_strcasecmp(tag, "IMPORT FOREIGN SCHEMA") == 0 ||
-		pg_strcasecmp(tag, "SECURITY LABEL") == 0)
+		pg_strcasecmp(tag, "SECURITY LABEL") == 0 ||
+		pg_strcasecmp(tag, "CREATE VARIABLE") == 0)
 		return EVENT_TRIGGER_COMMAND_TAG_OK;
 
 	/*
@@ -1145,6 +1147,7 @@ EventTriggerSupportsObjectType(ObjectType obtype)
 		case OBJECT_TSTEMPLATE:
 		case OBJECT_TYPE:
 		case OBJECT_USER_MAPPING:
+		case OBJECT_VARIABLE:
 		case OBJECT_VIEW:
 			return true;
 
@@ -1208,6 +1211,7 @@ EventTriggerSupportsObjectClass(ObjectClass objclass)
 		case OCLASS_PUBLICATION_REL:
 		case OCLASS_SUBSCRIPTION:
 		case OCLASS_TRANSFORM:
+		case OCLASS_VARIABLE:
 			return true;
 
 			/*
@@ -2245,6 +2249,8 @@ stringify_grant_objtype(ObjectType objtype)
 			return "TABLESPACE";
 		case OBJECT_TYPE:
 			return "TYPE";
+		case OBJECT_VARIABLE:
+			return "VARIABLE";
 			/* these currently aren't used */
 		case OBJECT_ACCESS_METHOD:
 		case OBJECT_AGGREGATE:
@@ -2327,6 +2333,8 @@ stringify_adefprivs_objtype(ObjectType objtype)
 			return "TABLESPACES";
 		case OBJECT_TYPE:
 			return "TYPES";
+		case OBJECT_VARIABLE:
+			return "VARIABLES";
 			/* these currently aren't used */
 		case OBJECT_ACCESS_METHOD:
 		case OBJECT_AGGREGATE:

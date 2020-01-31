@@ -2441,6 +2441,9 @@ errdetail_recovery_conflict(void)
 		case PROCSIG_RECOVERY_CONFLICT_SNAPSHOT:
 			errdetail("User query might have needed to see row versions that must be removed.");
 			break;
+		case PROCSIG_RECOVERY_CONFLICT_LOGICALSLOT:
+			errdetail("User was using the logical slot that must be dropped.");
+			break;
 		case PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK:
 			errdetail("User transaction caused buffer deadlock with recovery.");
 			break;
@@ -2909,6 +2912,25 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
 			case PROCSIG_RECOVERY_CONFLICT_LOCK:
 			case PROCSIG_RECOVERY_CONFLICT_TABLESPACE:
 			case PROCSIG_RECOVERY_CONFLICT_SNAPSHOT:
+			case PROCSIG_RECOVERY_CONFLICT_LOGICALSLOT:
+				/*
+				 * For conflicts that require a logical slot to be dropped, the
+				 * requirement is for the signal receiver to release the slot,
+				 * so that it could be dropped by the signal sender. So for
+				 * normal backends, the transaction should be aborted, just
+				 * like for other recovery conflicts. But if it's walsender on
+				 * standby, then it has to be killed so as to release an
+				 * acquired logical slot.
+				 */
+				if (am_cascading_walsender &&
+					reason == PROCSIG_RECOVERY_CONFLICT_LOGICALSLOT &&
+					MyReplicationSlot && SlotIsLogical(MyReplicationSlot))
+				{
+					RecoveryConflictPending = true;
+					QueryCancelPending = true;
+					InterruptPending = true;
+					break;
+				}
 
 				/*
 				 * If we aren't in a transaction any longer then ignore.

@@ -2669,6 +2669,10 @@ CancelVirtualTransaction(VirtualTransactionId vxid, ProcSignalReason sigmode)
 
 		GET_VXID_FROM_PGPROC(procvxid, *proc);
 
+		/*
+		 * Note: vxid.localTransactionId can be invalid, which means the
+		 * request is to signal the pid that is not running a transaction.
+		 */
 		if (procvxid.backendId == vxid.backendId &&
 			procvxid.localTransactionId == vxid.localTransactionId)
 		{

@@ -209,6 +209,22 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 static void
 pgoutput_begin_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
 {
+	PGOutputData	*data = ctx->output_plugin_private;
+
+	/*
+	 * Don't send BEGIN message here. Instead, postpone it until the first
+	 * change. In logical replication, common scenarios is to replicate a set
+	 * of tables (instead of all tables) and transactions whose changes were to
+	 * table(s) that are not published will produce empty transactions. These
+	 * empty transactions will send BEGIN and COMMIT messages to subscribers,
+	 * using bandwidth on something with little/no use for logical replication.
+	 */
+	data->xact_wrote_changes = false;
+}
+
+static void
+pgoutput_begin(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
+{
 	bool		send_replication_origin = txn->origin_id != InvalidRepOriginId;
 
 	OutputPluginPrepareWrite(ctx, !send_replication_origin);
@@ -246,7 +262,13 @@ static void
 pgoutput_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 					XLogRecPtr commit_lsn)
 {
+	PGOutputData	*data = ctx->output_plugin_private;
+
 	OutputPluginUpdateProgress(ctx);
+
+	/* skip COMMIT message if nothing was sent */
+	if (!data->xact_wrote_changes)
+		return;
 
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_commit(ctx->out, txn, commit_lsn);
@@ -332,6 +354,12 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			Assert(false);
 	}
 
+	/* output BEGIN if we haven't yet */
+	if (!data->xact_wrote_changes)
+		pgoutput_begin(ctx, txn);
+
+	data->xact_wrote_changes = true;
+
 	/* Avoid leaking memory by using and resetting our own context */
 	old = MemoryContextSwitchTo(data->context);
 
@@ -412,6 +440,12 @@ pgoutput_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 	if (nrelids > 0)
 	{
+		/* output BEGIN if we haven't yet */
+		if (!data->xact_wrote_changes)
+			pgoutput_begin(ctx, txn);
+
+		data->xact_wrote_changes = true;
+
 		OutputPluginPrepareWrite(ctx, true);
 		logicalrep_write_truncate(ctx->out,
 								  nrelids,

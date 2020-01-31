@@ -227,8 +227,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			 * src/backend/access/heap/README.HOT for discussion.
 			 */
 			if (index->indcheckxmin &&
-				!TransactionIdPrecedes(HeapTupleHeaderGetXmin(indexRelation->rd_indextuple->t_data),
-									   TransactionXmin))
+				XidInMVCCSnapshot(HeapTupleHeaderGetXmin(indexRelation->rd_indextuple->t_data),
+								  GetActiveSnapshot()))
 			{
 				root->glob->transientPlan = true;
 				index_close(indexRelation, NoLock);

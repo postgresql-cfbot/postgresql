@@ -7186,7 +7186,7 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 		}
 
 		/* Build new paths for this relation by appending child paths. */
-		add_paths_to_append_rel(root, rel, live_children);
+		add_paths_to_append_rel(root, rel, live_children, NIL);
 	}
 
 	/*
@@ -7339,7 +7339,7 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 		Assert(partially_grouped_live_children != NIL);
 
 		add_paths_to_append_rel(root, partially_grouped_rel,
-								partially_grouped_live_children);
+								partially_grouped_live_children, NIL);
 
 		/*
 		 * We need call set_cheapest, since the finalization step will use the
@@ -7354,7 +7354,7 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 	{
 		Assert(grouped_live_children != NIL);
 
-		add_paths_to_append_rel(root, grouped_rel, grouped_live_children);
+		add_paths_to_append_rel(root, grouped_rel, grouped_live_children, NIL);
 	}
 }
 

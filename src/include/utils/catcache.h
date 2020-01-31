@@ -22,6 +22,7 @@
 
 #include "access/htup.h"
 #include "access/skey.h"
+#include "datatype/timestamp.h"
 #include "lib/ilist.h"
 #include "utils/relcache.h"
 
@@ -61,6 +62,7 @@ typedef struct catcache
 	slist_node	cc_next;		/* list link */
 	ScanKeyData cc_skey[CATCACHE_MAXKEYS];	/* precomputed key info for heap
 											 * scans */
+	TimestampTz	cc_oldest_ts;	/* timestamp of the oldest tuple in the hash */
 
 	/*
 	 * Keep these at the end, so that compiling catcache.c with CATCACHE_STATS
@@ -119,6 +121,8 @@ typedef struct catctup
 	bool		dead;			/* dead but not yet removed? */
 	bool		negative;		/* negative cache entry? */
 	HeapTupleData tuple;		/* tuple management header */
+	unsigned int naccess;		/* # of access to this entry */
+	TimestampTz	lastaccess;		/* timestamp of the last usage */
 
 	/*
 	 * The tuple may also be a member of at most one CatCList.  (If a single
@@ -185,9 +189,55 @@ typedef struct catcacheheader
 	int			ch_ntup;		/* # of tuples in all caches */
 } CatCacheHeader;
 
+typedef HeapTuple (*SearchCatCache_fn)(CatCache *cache,
+									   Datum v1, Datum v2, Datum v3, Datum v4);
+typedef HeapTuple (*SearchCatCache1_fn)(CatCache *cache, Datum v1);
+typedef HeapTuple (*SearchCatCache2_fn)(CatCache *cache, Datum v1, Datum v2);
+typedef HeapTuple (*SearchCatCache3_fn)(CatCache *cache, Datum v1, Datum v2,
+										Datum v3);
+typedef HeapTuple (*SearchCatCache4_fn)(CatCache *cache,
+										Datum v1, Datum v2, Datum v3, Datum v4);
+
+typedef struct SearchCatCacheFuncsType
+{
+	SearchCatCache_fn	SearchCatCache;
+	SearchCatCache1_fn	SearchCatCache1;
+	SearchCatCache2_fn	SearchCatCache2;
+	SearchCatCache3_fn	SearchCatCache3;
+	SearchCatCache4_fn	SearchCatCache4;
+} SearchCatCacheFuncsType;
+
+extern PGDLLIMPORT SearchCatCacheFuncsType *SearchCatCacheFuncs;
+
+#define SearchCatCache(cache, v1, v2, v3, v4) \
+	SearchCatCacheFuncs->SearchCatCache(cache, v1, v2, v3, v4)
+#define SearchCatCache1(cache, v1) \
+	SearchCatCacheFuncs->SearchCatCache1(cache, v1)
+#define SearchCatCache2(cache, v1, v2) \
+	SearchCatCacheFuncs->SearchCatCache2(cache, v1, v2)
+#define SearchCatCache3(cache, v1, v2, v3) \
+	SearchCatCacheFuncs->SearchCatCache3(cache, v1, v2, v3)
+#define SearchCatCache4(cache, v1, v2, v3, v4) \
+	SearchCatCacheFuncs->SearchCatCache4(cache, v1, v2, v3, v4)
 
 /* this extern duplicates utils/memutils.h... */
 extern PGDLLIMPORT MemoryContext CacheMemoryContext;
+
+/* for guc.c, not PGDLLPMPORT'ed */
+extern int catalog_cache_prune_min_age;
+
+/* source clock for access timestamp of catcache entries */
+extern TimestampTz catcacheclock;
+
+/* SetCatCacheClock - set catcache timestamp source clodk */
+static inline void
+SetCatCacheClock(TimestampTz ts)
+{
+	catcacheclock = ts;
+}
+
+
+extern void assign_catalog_cache_prune_min_age(int newval, void *extra);
 
 extern void CreateCacheMemoryContext(void);
 
@@ -196,15 +246,15 @@ extern CatCache *InitCatCache(int id, Oid reloid, Oid indexoid,
 							  int nbuckets);
 extern void InitCatCachePhase2(CatCache *cache, bool touch_index);
 
-extern HeapTuple SearchCatCache(CatCache *cache,
+extern HeapTuple (*SearchCatCache)(CatCache *cache,
 								Datum v1, Datum v2, Datum v3, Datum v4);
-extern HeapTuple SearchCatCache1(CatCache *cache,
+extern HeapTuple (*SearchCatCache1)(CatCache *cache,
 								 Datum v1);
-extern HeapTuple SearchCatCache2(CatCache *cache,
+extern HeapTuple (*SearchCatCache2)(CatCache *cache,
 								 Datum v1, Datum v2);
-extern HeapTuple SearchCatCache3(CatCache *cache,
+extern HeapTuple (*SearchCatCache3)(CatCache *cache,
 								 Datum v1, Datum v2, Datum v3);
-extern HeapTuple SearchCatCache4(CatCache *cache,
+extern HeapTuple (*SearchCatCache4)(CatCache *cache,
 								 Datum v1, Datum v2, Datum v3, Datum v4);
 extern void ReleaseCatCache(HeapTuple tuple);
 

@@ -1,0 +1,201 @@
+--
+-- parallel grouping sets
+--
+-- test data sources
+create table gstest(c1 int, c2 int, c3 int) with (parallel_workers = 4);
+create table gstest1(c1 int, c2 int, c3 int);
+insert into gstest select 1,10,100 from generate_series(1,10)i;
+insert into gstest select 1,10,200 from generate_series(1,10)i;
+insert into gstest select 1,20,30 from generate_series(1,10)i;
+insert into gstest select 2,30,40 from generate_series(1,10)i;
+insert into gstest select 2,40,50 from generate_series(1,10)i;
+insert into gstest select 3,50,60 from generate_series(1,10)i;
+insert into gstest select 1,NULL,0 from generate_series(1,10)i;
+analyze gstest;
+insert into gstest1 select a,b,1 from generate_series(1,100) a, generate_series(1,100) b;
+analyze gstest1;
+SET parallel_tuple_cost=0;
+SET parallel_setup_cost=0;
+SET max_parallel_workers_per_gather=4;
+-- negative case
+explain (costs off, verbose)
+select c1, c2, avg(c3) from gstest1 group by grouping sets((c1),(c2));
+            QUERY PLAN            
+----------------------------------
+ HashAggregate
+   Output: c1, c2, avg(c3)
+   Hash Key: gstest1.c1
+   Hash Key: gstest1.c2
+   ->  Seq Scan on public.gstest1
+         Output: c1, c2, c3
+(6 rows)
+
+-- test for hashagg
+set enable_hashagg to on;
+explain (costs off, verbose)
+select c1, c2, avg(c3) from gstest group by grouping sets((c1,c2),(c1)) order by 1,2,3;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Sort
+   Output: c1, c2, (avg(c3))
+   Sort Key: gstest.c1, gstest.c2, (avg(gstest.c3))
+   ->  Finalize HashAggregate
+         Output: c1, c2, avg(c3)
+         Hash Key: gstest.c1, gstest.c2
+         Hash Key: gstest.c1
+         ->  Gather
+               Output: c1, c2, (PARTIAL avg(c3))
+               Workers Planned: 4
+               ->  Partial HashAggregate
+                     Output: c1, c2, PARTIAL avg(c3)
+                     Group Key: gstest.c1, gstest.c2
+                     ->  Parallel Seq Scan on public.gstest
+                           Output: c1, c2, c3
+(15 rows)
+
+select c1, c2, avg(c3) from gstest group by grouping sets((c1,c2),(c1)) order by 1,2,3;
+ c1 | c2 |          avg           
+----+----+------------------------
+  1 | 10 |   150.0000000000000000
+  1 | 20 |    30.0000000000000000
+  1 |    | 0.00000000000000000000
+  1 |    |    82.5000000000000000
+  2 | 30 |    40.0000000000000000
+  2 | 40 |    50.0000000000000000
+  2 |    |    45.0000000000000000
+  3 | 50 |    60.0000000000000000
+  3 |    |    60.0000000000000000
+(9 rows)
+
+explain (costs off, verbose)
+select c1, c2, c3, avg(c3) from gstest group by grouping sets((c1,c2),(c1),(c2,c3)) order by 1,2,3,4;
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Sort
+   Output: c1, c2, c3, (avg(c3))
+   Sort Key: gstest.c1, gstest.c2, gstest.c3, (avg(gstest.c3))
+   ->  Finalize HashAggregate
+         Output: c1, c2, c3, avg(c3)
+         Hash Key: gstest.c1, gstest.c2
+         Hash Key: gstest.c1
+         Hash Key: gstest.c2, gstest.c3
+         ->  Gather
+               Output: c1, c2, c3, (PARTIAL avg(c3))
+               Workers Planned: 4
+               ->  Partial HashAggregate
+                     Output: c1, c2, c3, PARTIAL avg(c3)
+                     Group Key: gstest.c1, gstest.c2, gstest.c3
+                     ->  Parallel Seq Scan on public.gstest
+                           Output: c1, c2, c3
+(16 rows)
+
+select c1, c2, c3, avg(c3) from gstest group by grouping sets((c1,c2),(c1),(c2,c3)) order by 1,2,3,4;
+ c1 | c2 | c3  |          avg           
+----+----+-----+------------------------
+  1 | 10 |     |   150.0000000000000000
+  1 | 20 |     |    30.0000000000000000
+  1 |    |     | 0.00000000000000000000
+  1 |    |     |    82.5000000000000000
+  2 | 30 |     |    40.0000000000000000
+  2 | 40 |     |    50.0000000000000000
+  2 |    |     |    45.0000000000000000
+  3 | 50 |     |    60.0000000000000000
+  3 |    |     |    60.0000000000000000
+    | 10 | 100 |   100.0000000000000000
+    | 10 | 200 |   200.0000000000000000
+    | 20 |  30 |    30.0000000000000000
+    | 30 |  40 |    40.0000000000000000
+    | 40 |  50 |    50.0000000000000000
+    | 50 |  60 |    60.0000000000000000
+    |    |   0 | 0.00000000000000000000
+(16 rows)
+
+-- test for groupagg
+set enable_hashagg to off;
+explain (costs off, verbose)
+select c1, c2, avg(c3) from gstest group by grouping sets((c1,c2),(c1)) order by 1,2,3;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Sort
+   Output: c1, c2, (avg(c3))
+   Sort Key: gstest.c1, gstest.c2, (avg(gstest.c3))
+   ->  Finalize GroupAggregate
+         Output: c1, c2, avg(c3)
+         Group Key: gstest.c1, gstest.c2
+         Group Key: gstest.c1
+         ->  Gather Merge
+               Output: c1, c2, (PARTIAL avg(c3))
+               Workers Planned: 4
+               ->  Partial GroupAggregate
+                     Output: c1, c2, PARTIAL avg(c3)
+                     Group Key: gstest.c1, gstest.c2
+                     ->  Sort
+                           Output: c1, c2, c3
+                           Sort Key: gstest.c1, gstest.c2
+                           ->  Parallel Seq Scan on public.gstest
+                                 Output: c1, c2, c3
+(18 rows)
+
+select c1, c2, avg(c3) from gstest group by grouping sets((c1,c2),(c1)) order by 1,2,3;
+ c1 | c2 |          avg           
+----+----+------------------------
+  1 | 10 |   150.0000000000000000
+  1 | 20 |    30.0000000000000000
+  1 |    | 0.00000000000000000000
+  1 |    |    82.5000000000000000
+  2 | 30 |    40.0000000000000000
+  2 | 40 |    50.0000000000000000
+  2 |    |    45.0000000000000000
+  3 | 50 |    60.0000000000000000
+  3 |    |    60.0000000000000000
+(9 rows)
+
+explain (costs off, verbose)
+select c1, c2, c3, avg(c3) from gstest group by grouping sets((c1,c2),(c1),(c2,c3)) order by 1,2,3,4;
+                             QUERY PLAN                              
+---------------------------------------------------------------------
+ Sort
+   Output: c1, c2, c3, (avg(c3))
+   Sort Key: gstest.c1, gstest.c2, gstest.c3, (avg(gstest.c3))
+   ->  Finalize GroupAggregate
+         Output: c1, c2, c3, avg(c3)
+         Group Key: gstest.c1, gstest.c2
+         Group Key: gstest.c1
+         Sort Key: gstest.c2, gstest.c3
+           Group Key: gstest.c2, gstest.c3
+         ->  Gather Merge
+               Output: c1, c2, c3, (PARTIAL avg(c3))
+               Workers Planned: 4
+               ->  Partial GroupAggregate
+                     Output: c1, c2, c3, PARTIAL avg(c3)
+                     Group Key: gstest.c1, gstest.c2, gstest.c3
+                     ->  Sort
+                           Output: c1, c2, c3
+                           Sort Key: gstest.c1, gstest.c2, gstest.c3
+                           ->  Parallel Seq Scan on public.gstest
+                                 Output: c1, c2, c3
+(20 rows)
+
+select c1, c2, c3, avg(c3) from gstest group by grouping sets((c1,c2),(c1),(c2,c3)) order by 1,2,3,4;
+ c1 | c2 | c3  |          avg           
+----+----+-----+------------------------
+  1 | 10 |     |   150.0000000000000000
+  1 | 20 |     |    30.0000000000000000
+  1 |    |     | 0.00000000000000000000
+  1 |    |     |    82.5000000000000000
+  2 | 30 |     |    40.0000000000000000
+  2 | 40 |     |    50.0000000000000000
+  2 |    |     |    45.0000000000000000
+  3 | 50 |     |    60.0000000000000000
+  3 |    |     |    60.0000000000000000
+    | 10 | 100 |   100.0000000000000000
+    | 10 | 200 |   200.0000000000000000
+    | 20 |  30 |    30.0000000000000000
+    | 30 |  40 |    40.0000000000000000
+    | 40 |  50 |    50.0000000000000000
+    | 50 |  60 |    60.0000000000000000
+    |    |   0 | 0.00000000000000000000
+(16 rows)
+
+drop table gstest;
+drop table gstest1;

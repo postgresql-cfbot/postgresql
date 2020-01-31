@@ -196,14 +196,9 @@ static void
 sts_flush_chunk(SharedTuplestoreAccessor *accessor)
 {
 	size_t		size;
-	size_t		written;
 
 	size = STS_CHUNK_PAGES * BLCKSZ;
-	written = BufFileWrite(accessor->write_file, accessor->write_chunk, size);
-	if (written != size)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write to temporary file: %m")));
+	BufFileWrite(accessor->write_file, accessor->write_chunk, size);
 	memset(accessor->write_chunk, 0, size);
 	accessor->write_pointer = &accessor->write_chunk->data[0];
 	accessor->sts->participants[accessor->participant].npages +=

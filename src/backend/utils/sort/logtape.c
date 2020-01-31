@@ -248,12 +248,12 @@ ltsWriteBlock(LogicalTapeSet *lts, long blocknum, void *buffer)
 	}
 
 	/* Write the requested block */
-	if (BufFileSeekBlock(lts->pfile, blocknum) != 0 ||
-		BufFileWrite(lts->pfile, buffer, BLCKSZ) != BLCKSZ)
+	if (BufFileSeekBlock(lts->pfile, blocknum) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not write block %ld of temporary file: %m",
+				 errmsg("could not seek to block %ld of temporary file: %m",
 						blocknum)));
+	BufFileWrite(lts->pfile, buffer, BLCKSZ);
 
 	/* Update nBlocksWritten, if we extended the file */
 	if (blocknum == lts->nBlocksWritten)
@@ -273,7 +273,7 @@ ltsReadBlock(LogicalTapeSet *lts, long blocknum, void *buffer)
 		BufFileRead(lts->pfile, buffer, BLCKSZ) != BLCKSZ)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not read block %ld of temporary file: %m",
+				 errmsg("could not read block %ld of temporary file",
 						blocknum)));
 }
 

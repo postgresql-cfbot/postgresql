@@ -1059,9 +1059,11 @@ static int	from_char_parse_int_len(int *dest, const char **src, const int len,
 									FormatNode *node, bool *have_error);
 static int	from_char_parse_int(int *dest, const char **src, FormatNode *node,
 								bool *have_error);
-static int	seq_search(const char *name, const char *const *array, int *len);
+static int	seq_search_ascii(const char *name, const char *const *array, int *len);
+static int	seq_search_localized(const char *name, char **array, int *len);
 static int	from_char_seq_search(int *dest, const char **src,
 								 const char *const *array,
+								 char **localized_array,
 								 FormatNode *node, bool *have_error);
 static void do_to_timestamp(text *date_txt, text *fmt, bool std,
 							struct pg_tm *tm, fsec_t *fsec, int *fprec,
@@ -2459,7 +2461,7 @@ from_char_parse_int(int *dest, const char **src, FormatNode *node, bool *have_er
  * suitable for comparisons to ASCII strings.
  */
 static int
-seq_search(const char *name, const char *const *array, int *len)
+seq_search_ascii(const char *name, const char *const *array, int *len)
 {
 	unsigned char firstc;
 	const char *const *a;
@@ -2505,8 +2507,74 @@ seq_search(const char *name, const char *const *array, int *len)
 }
 
 /*
- * Perform a sequential search in 'array' for an entry matching the first
- * character(s) of the 'src' string case-insensitively.
+ * Sequentially search an array of possibly non-English words for
+ * a case-insensitive match to the initial character(s) of "name".
+ *
+ * This has the same API as seq_search_ascii(), but we use a more general
+ * downcasing transformation to achieve case-insensitivity.
+ *
+ * The array is treated as const, but we don't declare it that way because
+ * the arrays exported by pg_locale.c aren't const.
+ */
+static int
+seq_search_localized(const char *name, char **array, int *len)
+{
+	char	  **a;
+	char	   *lower_name;
+	char	   *upper_name;
+
+	*len = 0;
+
+	/* empty string can't match anything */
+	if (!*name)
+		return -1;
+
+	/*
+	 * We do an upper/lower conversion to avoid problems with languages
+	 * in which case conversions are not injective.
+	 */
+	upper_name = str_toupper(unconstify(char *, name), strlen(name),
+							 DEFAULT_COLLATION_OID);
+	lower_name = str_tolower(upper_name, strlen(upper_name),
+							 DEFAULT_COLLATION_OID);
+	pfree(upper_name);
+
+	for (a = array; *a != NULL; a++)
+	{
+		char	   *lower_element;
+		char	   *upper_element;
+		int			element_len;
+
+		/* Upper/lower-case array element, assuming it is normalized */
+		upper_element = str_toupper(*a, strlen(*a), DEFAULT_COLLATION_OID);
+		lower_element = str_tolower(upper_element, strlen(upper_element),
+									DEFAULT_COLLATION_OID);
+		pfree(upper_element);
+		element_len = strlen(lower_element);
+
+		/* Match? */
+		if (strncmp(lower_name, lower_element, element_len) == 0)
+		{
+			*len = element_len;
+			pfree(lower_element);
+			pfree(lower_name);
+			return a - array;
+		}
+		pfree(lower_element);
+	}
+
+	pfree(lower_name);
+	return -1;
+}
+
+/*
+ * Perform a sequential search in 'array' (or 'localized_array', if that's
+ * not NULL) for an entry matching the first character(s) of the 'src'
+ * string case-insensitively.
+ *
+ * The 'array' is presumed to be English words (all-ASCII), but
+ * if 'localized_array' is supplied, that might be non-English
+ * so we need a more expensive downcasing transformation.
  *
  * If a match is found, copy the array index of the match into the integer
  * pointed to by 'dest', advance 'src' to the end of the part of the string
@@ -2520,11 +2588,15 @@ seq_search(const char *name, const char *const *array, int *len)
  */
 static int
 from_char_seq_search(int *dest, const char **src, const char *const *array,
+					 char **localized_array,
 					 FormatNode *node, bool *have_error)
 {
 	int			len;
 
-	*dest = seq_search(*src, array, &len);
+	if (localized_array == NULL)
+		*dest = seq_search_ascii(*src, array, &len);
+	else
+		*dest = seq_search_localized(*src, localized_array, &len);
 
 	if (len <= 0)
 	{
@@ -3172,6 +3244,9 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out, bool std,
 	/* number of extra skipped characters (more than given in format string) */
 	int			extra_skip = 0;
 
+	/* cache localized days and months */
+	cache_locale_time();
+
 	for (n = node, s = in; n->type != NODE_TYPE_END && *s != '\0'; n++)
 	{
 		/*
@@ -3272,7 +3347,7 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out, bool std,
 			case DCH_P_M:
 			case DCH_a_m:
 			case DCH_p_m:
-				from_char_seq_search(&value, &s, ampm_strings_long,
+				from_char_seq_search(&value, &s, ampm_strings_long, NULL,
 									 n, have_error);
 				CHECK_ERROR;
 				from_char_set_int(&out->pm, value % 2, n, have_error);
@@ -3283,7 +3358,7 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out, bool std,
 			case DCH_PM:
 			case DCH_am:
 			case DCH_pm:
-				from_char_seq_search(&value, &s, ampm_strings,
+				from_char_seq_search(&value, &s, ampm_strings, NULL,
 									 n, have_error);
 				CHECK_ERROR;
 				from_char_set_int(&out->pm, value % 2, n, have_error);
@@ -3396,7 +3471,7 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out, bool std,
 			case DCH_B_C:
 			case DCH_a_d:
 			case DCH_b_c:
-				from_char_seq_search(&value, &s, adbc_strings_long,
+				from_char_seq_search(&value, &s, adbc_strings_long, NULL,
 									 n, have_error);
 				CHECK_ERROR;
 				from_char_set_int(&out->bc, value % 2, n, have_error);
@@ -3406,7 +3481,7 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out, bool std,
 			case DCH_BC:
 			case DCH_ad:
 			case DCH_bc:
-				from_char_seq_search(&value, &s, adbc_strings,
+				from_char_seq_search(&value, &s, adbc_strings, NULL,
 									 n, have_error);
 				CHECK_ERROR;
 				from_char_set_int(&out->bc, value % 2, n, have_error);
@@ -3416,6 +3491,7 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out, bool std,
 			case DCH_Month:
 			case DCH_month:
 				from_char_seq_search(&value, &s, months_full,
+									 S_TM(n->suffix) ? localized_full_months : NULL,
 									 n, have_error);
 				CHECK_ERROR;
 				from_char_set_int(&out->mm, value + 1, n, have_error);
@@ -3425,6 +3501,7 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out, bool std,
 			case DCH_Mon:
 			case DCH_mon:
 				from_char_seq_search(&value, &s, months,
+									 S_TM(n->suffix) ? localized_abbrev_months : NULL,
 									 n, have_error);
 				CHECK_ERROR;
 				from_char_set_int(&out->mm, value + 1, n, have_error);
@@ -3439,6 +3516,7 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out, bool std,
 			case DCH_Day:
 			case DCH_day:
 				from_char_seq_search(&value, &s, days,
+									 S_TM(n->suffix) ? localized_full_days : NULL,
 									 n, have_error);
 				CHECK_ERROR;
 				from_char_set_int(&out->d, value, n, have_error);
@@ -3449,6 +3527,7 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out, bool std,
 			case DCH_Dy:
 			case DCH_dy:
 				from_char_seq_search(&value, &s, days_short,
+									 S_TM(n->suffix) ? localized_abbrev_days : NULL,
 									 n, have_error);
 				CHECK_ERROR;
 				from_char_set_int(&out->d, value, n, have_error);
@@ -3566,7 +3645,7 @@ DCH_from_char(FormatNode *node, const char *in, TmFromChar *out, bool std,
 				break;
 			case DCH_RM:
 			case DCH_rm:
-				from_char_seq_search(&value, &s, rm_months_lower,
+				from_char_seq_search(&value, &s, rm_months_lower, NULL,
 									 n, have_error);
 				CHECK_ERROR;
 				from_char_set_int(&out->mm, MONTHS_PER_YEAR - value,

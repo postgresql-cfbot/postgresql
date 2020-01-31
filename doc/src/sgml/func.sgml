@@ -5968,7 +5968,7 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
        </row>
        <row>
         <entry><literal>TM</literal> prefix</entry>
-        <entry>translation mode (print localized day and month names based on
+        <entry>translation mode (use localized day and month names based on
          <xref linkend="guc-lc-time"/>)</entry>
         <entry><literal>TMMonth</literal></entry>
        </row>
@@ -6000,8 +6000,13 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
      <listitem>
       <para>
        <literal>TM</literal> does not include trailing blanks.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
        <function>to_timestamp</function> and <function>to_date</function> ignore
-       the <literal>TM</literal> modifier.
+       the case when receiving names as an input.
       </para>
      </listitem>
 

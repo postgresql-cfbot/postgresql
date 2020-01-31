@@ -522,12 +522,84 @@ pg_ls_dir_1arg(PG_FUNCTION_ARGS)
 	return pg_ls_dir(fcinfo);
 }
 
-/* Generic function to return a directory listing of files */
+/* Recursive helper to handle showing a first level of files beneath a subdir */
 static Datum
-pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
+pg_ls_dir_files_recurse(FunctionCallInfo fcinfo, FuncCallContext *funcctx, const char *dir, bool missing_ok, bool dir_ok)
+{
+	bool		nulls[3] = {0,};
+	Datum		values[3];
+
+	directory_fctx	*fctx = (directory_fctx *) funcctx->user_fctx;
+
+	while (1) {
+		struct dirent *de;
+		char *location;
+		DIR *dirdesc;
+
+		location = fctx[1].location ? fctx[1].location : fctx[0].location;
+		dirdesc = fctx[1].dirdesc ? fctx[1].dirdesc : fctx[0].dirdesc;
+
+		while ((de = ReadDir(dirdesc, location)) != NULL)
+		{
+			char		path[MAXPGPATH * 2];
+			HeapTuple	tuple;
+			struct stat	attrib;
+
+			/* Skip hidden files */
+			if (de->d_name[0] == '.')
+				continue;
+
+			/* Get the file info */
+			snprintf(path, sizeof(path), "%s/%s", location, de->d_name);
+			if (stat(path, &attrib) < 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not stat file \"%s\": %m", path)));
+
+			/* Ignore anything but regular files or (if requested) dirs */
+			if (S_ISDIR(attrib.st_mode)) {
+				/* Note: decend into dirs, but do not return a tuple for the dir itself */
+				/* Do not expect dirs more than one level deep */
+				if (dir_ok && !fctx[1].location) {
+					MemoryContext oldcontext;
+					oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+					fctx[1].location = pstrdup(path);
+					fctx[1].dirdesc = AllocateDir(path);
+					MemoryContextSwitchTo(oldcontext);
+					return pg_ls_dir_files_recurse(fcinfo, funcctx, path, missing_ok, false);
+				}
+				/* else: fall through and show the dir itself instead of recursing */
+			} else if (!S_ISREG(attrib.st_mode))
+				continue;
+
+			if (fctx[1].location)
+				/* We've already catted together the paths before recursing, so find the last component */
+				values[0] = CStringGetTextDatum(path+1+strlen(fctx[0].location));
+			else
+				values[0] = CStringGetTextDatum(de->d_name);
+			values[1] = Int64GetDatum((int64) attrib.st_size);
+			values[2] = TimestampTzGetDatum(time_t_to_timestamptz(attrib.st_mtime));
+			tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
+			SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
+		}
+
+		if (!fctx[1].dirdesc)
+			break;
+
+		FreeDir(fctx[1].dirdesc);
+		fctx[1].location = NULL;
+		fctx[1].dirdesc = NULL;
+	}
+
+	FreeDir(fctx[0].dirdesc);
+	SRF_RETURN_DONE(funcctx);
+}
+
+/* Generic function to return a directory listing of files (and optionally dirs) */
+static Datum
+pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok, bool dir_ok)
 {
 	FuncCallContext *funcctx;
-	struct dirent *de;
 	directory_fctx *fctx;
 
 	if (SRF_IS_FIRSTCALL())
@@ -538,7 +610,9 @@ pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
-		fctx = palloc(sizeof(directory_fctx));
+		/* Allocate *two* structs, members of the 2nd of which are non-NULL iff recursing */
+		fctx = palloc(2*sizeof(directory_fctx));
+		memset(fctx, 0, 2*sizeof(*fctx));
 
 		tupdesc = CreateTemplateTupleDesc(3);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "name",
@@ -549,10 +623,10 @@ pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
 						   TIMESTAMPTZOID, -1, 0);
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
-		fctx->location = pstrdup(dir);
-		fctx->dirdesc = AllocateDir(fctx->location);
+		fctx[0].location = pstrdup(dir);
+		fctx[0].dirdesc = AllocateDir(dir);
 
-		if (!fctx->dirdesc)
+		if (!fctx[0].dirdesc)
 		{
 			if (missing_ok && errno == ENOENT)
 			{
@@ -563,7 +637,7 @@ pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not open directory \"%s\": %m",
-								fctx->location)));
+								fctx[0].location)));
 		}
 
 		funcctx->user_fctx = fctx;
@@ -571,60 +645,28 @@ pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
 	}
 
 	funcctx = SRF_PERCALL_SETUP();
-	fctx = (directory_fctx *) funcctx->user_fctx;
 
-	while ((de = ReadDir(fctx->dirdesc, fctx->location)) != NULL)
-	{
-		Datum		values[3];
-		bool		nulls[3];
-		char		path[MAXPGPATH * 2];
-		struct stat attrib;
-		HeapTuple	tuple;
-
-		/* Skip hidden files */
-		if (de->d_name[0] == '.')
-			continue;
-
-		/* Get the file info */
-		snprintf(path, sizeof(path), "%s/%s", fctx->location, de->d_name);
-		if (stat(path, &attrib) < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not stat directory \"%s\": %m", dir)));
-
-		/* Ignore anything but regular files */
-		if (!S_ISREG(attrib.st_mode))
-			continue;
-
-		values[0] = CStringGetTextDatum(de->d_name);
-		values[1] = Int64GetDatum((int64) attrib.st_size);
-		values[2] = TimestampTzGetDatum(time_t_to_timestamptz(attrib.st_mtime));
-		memset(nulls, 0, sizeof(nulls));
-
-		tuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
-		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
-	}
-
-	FreeDir(fctx->dirdesc);
-	SRF_RETURN_DONE(funcctx);
+	/* NULL could mean either DONE or error.  We skip dirs with errors, so no need to distinguish in the case of error */
+	return pg_ls_dir_files_recurse(fcinfo, funcctx, dir, missing_ok, dir_ok);
 }
 
 /* Function to return the list of files in the log directory */
 Datum
 pg_ls_logdir(PG_FUNCTION_ARGS)
 {
-	return pg_ls_dir_files(fcinfo, Log_directory, false);
+	return pg_ls_dir_files(fcinfo, Log_directory, false, false);
 }
 
 /* Function to return the list of files in the WAL directory */
 Datum
 pg_ls_waldir(PG_FUNCTION_ARGS)
 {
-	return pg_ls_dir_files(fcinfo, XLOGDIR, false);
+	return pg_ls_dir_files(fcinfo, XLOGDIR, false, false);
 }
 
 /*
  * Generic function to return the list of files in pgsql_tmp
+ * Files are also shown one level deep, with their subdir prefix.
  */
 static Datum
 pg_ls_tmpdir(FunctionCallInfo fcinfo, Oid tblspc)
@@ -638,7 +680,7 @@ pg_ls_tmpdir(FunctionCallInfo fcinfo, Oid tblspc)
 						tblspc)));
 
 	TempTablespacePath(path, tblspc);
-	return pg_ls_dir_files(fcinfo, path, true);
+	return pg_ls_dir_files(fcinfo, path, true, true);
 }
 
 /*
@@ -667,5 +709,5 @@ pg_ls_tmpdir_1arg(PG_FUNCTION_ARGS)
 Datum
 pg_ls_archive_statusdir(PG_FUNCTION_ARGS)
 {
-	return pg_ls_dir_files(fcinfo, XLOGDIR "/archive_status", true);
+	return pg_ls_dir_files(fcinfo, XLOGDIR "/archive_status", true, false);
 }

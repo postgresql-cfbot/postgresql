@@ -21370,12 +21370,14 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
        </entry>
        <entry><type>setof record</type></entry>
        <entry>
-        List the name, size, and last modification time of files in the
-        temporary directory for <parameter>tablespace</parameter>.  If
-        <parameter>tablespace</parameter> is not provided, the
-        <literal>pg_default</literal> tablespace is used.  Access is granted
-        to members of the <literal>pg_monitor</literal> role and may be
-        granted to other non-superuser roles.
+        For files in the temporary directory for
+        <parameter>tablespace</parameter>, list the name, size, and last modification time.
+        Files beneath a first-level directory are shown, and include a pathname
+        component of their parent directory; such files are used by parallel processes.
+        If <parameter>tablespace</parameter> is not provided, the
+        <literal>pg_default</literal> tablespace is used.  Access is granted to
+        members of the <literal>pg_monitor</literal> role and may be granted to
+        other non-superuser roles.
        </entry>
       </row>
       <row>

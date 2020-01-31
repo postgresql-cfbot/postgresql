@@ -45,6 +45,9 @@ CATALOG(pg_range,3541,RangeRelationId)
 
 	/* subtype difference as a float8, or 0 */
 	regproc		rngsubdiff BKI_LOOKUP(pg_proc);
+
+	/* OID of the range's multirange type */
+	Oid			rngmultitypid BKI_LOOKUP(pg_type);
 } FormData_pg_range;
 
 /* ----------------
@@ -60,7 +63,7 @@ typedef FormData_pg_range *Form_pg_range;
 
 extern void RangeCreate(Oid rangeTypeOid, Oid rangeSubType, Oid rangeCollation,
 						Oid rangeSubOpclass, RegProcedure rangeCanonical,
-						RegProcedure rangeSubDiff);
+						RegProcedure rangeSubDiff, Oid multirangeTypeOid);
 extern void RangeDelete(Oid rangeTypeOid);
 
 #endif							/* PG_RANGE_H */

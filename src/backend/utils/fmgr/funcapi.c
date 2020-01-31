@@ -470,11 +470,13 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 	bool		have_anyelement_result = false;
 	bool		have_anyarray_result = false;
 	bool		have_anyrange_result = false;
+	bool		have_anymultirange_result = false;
 	bool		have_anynonarray = false;
 	bool		have_anyenum = false;
 	Oid			anyelement_type = InvalidOid;
 	Oid			anyarray_type = InvalidOid;
 	Oid			anyrange_type = InvalidOid;
+	Oid			anymultirange_type = InvalidOid;
 	Oid			anycollation = InvalidOid;
 	int			i;
 
@@ -500,12 +502,15 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 			case ANYRANGEOID:
 				have_anyrange_result = true;
 				break;
+			case ANYMULTIRANGEOID:
+				have_anymultirange_result = true;
+				break;
 			default:
 				break;
 		}
 	}
 	if (!have_anyelement_result && !have_anyarray_result &&
-		!have_anyrange_result)
+		!have_anyrange_result && !have_anymultirange_result)
 		return true;
 
 	/*
@@ -533,6 +538,10 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 				if (!OidIsValid(anyrange_type))
 					anyrange_type = get_call_expr_argtype(call_expr, i);
 				break;
+			case ANYMULTIRANGEOID:
+				if (!OidIsValid(anymultirange_type))
+					anymultirange_type = get_call_expr_argtype(call_expr, i);
+				break;
 			default:
 				break;
 		}
@@ -540,7 +549,7 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 
 	/* If nothing found, parser messed up */
 	if (!OidIsValid(anyelement_type) && !OidIsValid(anyarray_type) &&
-		!OidIsValid(anyrange_type))
+		!OidIsValid(anyrange_type) && !OidIsValid(anymultirange_type))
 		return false;
 
 	/* If needed, deduce one polymorphic type from others */
@@ -561,19 +570,131 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 				return false;
 			anyelement_type = subtype;
 		}
+
+		if (OidIsValid(anymultirange_type))
+		{
+			Oid			rngtype;
+			Oid			subtype;
+
+			rngtype = resolve_generic_type(ANYRANGEOID,
+										   anymultirange_type,
+										   ANYMULTIRANGEOID);
+
+			/* check for inconsistent range and multirange results */
+			if (OidIsValid(anyrange_type) && anyrange_type != rngtype)
+				return false;
+			anyrange_type = rngtype;
+			subtype = resolve_generic_type(ANYELEMENTOID,
+										   anyrange_type,
+										   ANYRANGEOID);
+
+			/* check for inconsistent array and multirange results */
+			if (OidIsValid(anyelement_type) && anyelement_type != subtype)
+				return false;
+			anyelement_type = subtype;
+		}
 	}
 
 	if (have_anyarray_result && !OidIsValid(anyarray_type))
-		anyarray_type = resolve_generic_type(ANYARRAYOID,
-											 anyelement_type,
-											 ANYELEMENTOID);
+	{
+		if (OidIsValid(anyelement_type))
+		{
+			anyarray_type = resolve_generic_type(ANYARRAYOID,
+												 anyelement_type,
+												 ANYELEMENTOID);
+		}
+
+		/* An array type should have the same elemtype as the range type */
+		if (!OidIsValid(anyarray_type) && OidIsValid(anyrange_type))
+		{
+			anyarray_type = resolve_generic_type(ANYARRAYOID,
+												 anyrange_type,
+												 ANYRANGEOID);
+		}
+
+		/* An array type should have the same elemtype as the multirange type */
+		if (!OidIsValid(anyarray_type) && OidIsValid(anymultirange_type))
+		{
+			anyarray_type = resolve_generic_type(ANYARRAYOID,
+												 anymultirange_type,
+												 ANYMULTIRANGEOID);
+		}
+	}
 
 	/*
 	 * We can't deduce a range type from other polymorphic inputs, because
-	 * there may be multiple range types for the same subtype.
+	 * there may be multiple range types for the same subtype, but a
+	 * multirange might help.
 	 */
 	if (have_anyrange_result && !OidIsValid(anyrange_type))
-		return false;
+	{
+		if (OidIsValid(anymultirange_type))
+		{
+			Oid			rngtype;
+			Oid			subtype;
+
+			rngtype = resolve_generic_type(ANYRANGEOID,
+										   anymultirange_type,
+										   ANYMULTIRANGEOID);
+
+			/* check for inconsistent range and multirange results */
+			if (OidIsValid(anyrange_type) && anyrange_type != rngtype)
+				return false;
+			anyrange_type = rngtype;
+
+			subtype = resolve_generic_type(ANYELEMENTOID,
+										   anyrange_type,
+										   ANYRANGEOID);
+
+			/* check for inconsistent array and multirange results */
+			if (OidIsValid(anyelement_type) && anyelement_type != subtype)
+				return false;
+			anyelement_type = subtype;
+		}
+		else
+		{
+			return false;
+		}
+	}
+
+	/*
+	 * Likewise we can't deduce a multirange from most polymorphic inputs, but
+	 * a range type would work.
+	 */
+	if (have_anymultirange_result && !OidIsValid(anymultirange_type))
+	{
+		if (OidIsValid(anyrange_type))
+		{
+			Oid			subtype;
+			Oid			mltrngtype;
+			Oid			rngtype;
+
+			subtype = resolve_generic_type(ANYELEMENTOID,
+										   anyrange_type,
+										   ANYRANGEOID);
+
+			/* check for inconsistent array and range results */
+			if (OidIsValid(anyelement_type) && anyelement_type != subtype)
+				return false;
+			anyelement_type = subtype;
+
+			mltrngtype = resolve_generic_type(ANYMULTIRANGEOID,
+											  anyrange_type,
+											  ANYRANGEOID);
+
+			/* check for inconsistent range and multirange results */
+			rngtype = get_multirange_subtype(mltrngtype);
+
+			if (OidIsValid(anyrange_type) && anyrange_type != rngtype)
+				return false;
+			anyrange_type = rngtype;
+			anymultirange_type = mltrngtype;
+		}
+		else
+		{
+			return false;
+		}
+	}
 
 	/* Enforce ANYNONARRAY if needed */
 	if (have_anynonarray && type_is_array(anyelement_type))
@@ -640,6 +761,14 @@ resolve_polymorphic_tupdesc(TupleDesc tupdesc, oidvector *declared_args,
 								   0);
 				/* no collation should be attached to a range type */
 				break;
+			case ANYMULTIRANGEOID:
+				TupleDescInitEntry(tupdesc, i + 1,
+								   NameStr(att->attname),
+								   anymultirange_type,
+								   -1,
+								   0);
+				/* no collation should be attached to a multirange type */
+				break;
 			default:
 				break;
 		}
@@ -664,9 +793,11 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 	bool		have_anyelement_result = false;
 	bool		have_anyarray_result = false;
 	bool		have_anyrange_result = false;
+	bool		have_anymultirange_result = false;
 	Oid			anyelement_type = InvalidOid;
 	Oid			anyarray_type = InvalidOid;
 	Oid			anyrange_type = InvalidOid;
+	Oid			anymultirange_type = InvalidOid;
 	int			inargno;
 	int			i;
 
@@ -725,6 +856,21 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 					argtypes[i] = anyrange_type;
 				}
 				break;
+			case ANYMULTIRANGEOID:
+				if (argmode == PROARGMODE_OUT || argmode == PROARGMODE_TABLE)
+					have_anymultirange_result = true;
+				else
+				{
+					if (!OidIsValid(anymultirange_type))
+					{
+						anymultirange_type = get_call_expr_argtype(call_expr,
+																   inargno);
+						if (!OidIsValid(anymultirange_type))
+							return false;
+					}
+					argtypes[i] = anymultirange_type;
+				}
+				break;
 			default:
 				break;
 		}
@@ -734,12 +880,12 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 
 	/* Done? */
 	if (!have_anyelement_result && !have_anyarray_result &&
-		!have_anyrange_result)
+		!have_anyrange_result && !have_anymultirange_result)
 		return true;
 
 	/* If no input polymorphics, parser messed up */
 	if (!OidIsValid(anyelement_type) && !OidIsValid(anyarray_type) &&
-		!OidIsValid(anyrange_type))
+		!OidIsValid(anyrange_type) && !OidIsValid(anymultirange_type))
 		return false;
 
 	/* If needed, deduce one polymorphic type from others */
@@ -760,19 +906,132 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 				return false;
 			anyelement_type = subtype;
 		}
+
+		if (OidIsValid(anymultirange_type))
+		{
+			Oid			rngtype;
+			Oid			subtype;
+
+			rngtype = resolve_generic_type(ANYRANGEOID,
+										   anymultirange_type,
+										   ANYMULTIRANGEOID);
+
+			/* check for inconsistent range and multirange results */
+			if (OidIsValid(anyrange_type) && anyrange_type != rngtype)
+				return false;
+			anyrange_type = rngtype;
+
+			subtype = resolve_generic_type(ANYELEMENTOID,
+										   anyrange_type,
+										   ANYRANGEOID);
+
+			/* check for inconsistent array and multirange results */
+			if (OidIsValid(anyelement_type) && anyelement_type != subtype)
+				return false;
+			anyelement_type = subtype;
+		}
 	}
 
 	if (have_anyarray_result && !OidIsValid(anyarray_type))
-		anyarray_type = resolve_generic_type(ANYARRAYOID,
-											 anyelement_type,
-											 ANYELEMENTOID);
+	{
+		if (OidIsValid(anyelement_type))
+		{
+			anyarray_type = resolve_generic_type(ANYARRAYOID,
+												 anyelement_type,
+												 ANYELEMENTOID);
+		}
+
+		/* An array type should have the same elemtype as the range type */
+		if (!OidIsValid(anyarray_type) && OidIsValid(anyrange_type))
+		{
+			anyarray_type = resolve_generic_type(ANYARRAYOID,
+												 anyrange_type,
+												 ANYRANGEOID);
+		}
+
+		/* An array type should have the same elemtype as the multirange type */
+		if (!OidIsValid(anyarray_type) && OidIsValid(anymultirange_type))
+		{
+			anyarray_type = resolve_generic_type(ANYARRAYOID,
+												 anymultirange_type,
+												 ANYMULTIRANGEOID);
+		}
+	}
 
 	/*
 	 * We can't deduce a range type from other polymorphic inputs, because
-	 * there may be multiple range types for the same subtype.
+	 * there may be multiple range types for the same subtype, but a
+	 * multirange might help.
 	 */
 	if (have_anyrange_result && !OidIsValid(anyrange_type))
-		return false;
+	{
+		if (OidIsValid(anymultirange_type))
+		{
+			Oid			rngtype;
+			Oid			subtype;
+
+			rngtype = resolve_generic_type(ANYRANGEOID,
+										   anymultirange_type,
+										   ANYMULTIRANGEOID);
+
+			/* check for inconsistent range and multirange results */
+			if (OidIsValid(anyrange_type) && anyrange_type != rngtype)
+				return false;
+			anyrange_type = rngtype;
+
+			subtype = resolve_generic_type(ANYELEMENTOID,
+										   anyrange_type,
+										   ANYRANGEOID);
+
+			/* check for inconsistent array and multirange results */
+			if (OidIsValid(anyelement_type) && anyelement_type != subtype)
+				return false;
+			anyelement_type = subtype;
+		}
+		else
+		{
+			return false;
+		}
+	}
+
+	/*
+	 * Likewise we can't deduce a multirange from most polymorphic inputs, but
+	 * a range type would work.
+	 */
+	if (have_anymultirange_result && !OidIsValid(anymultirange_type))
+	{
+		if (OidIsValid(anyrange_type))
+		{
+			Oid			subtype;
+			Oid			mltrngtype;
+			Oid			rngtype;
+
+			subtype = resolve_generic_type(ANYELEMENTOID,
+										   anyrange_type,
+										   ANYRANGEOID);
+
+			/* check for inconsistent array and range results */
+			if (OidIsValid(anyelement_type) && anyelement_type != subtype)
+				return false;
+			anyelement_type = subtype;
+
+			mltrngtype = resolve_generic_type(ANYMULTIRANGEOID,
+											  anyrange_type,
+											  ANYRANGEOID);
+
+			/* check for inconsistent range and multirange results */
+			rngtype = get_multirange_subtype(mltrngtype);
+
+			if (OidIsValid(anyrange_type) && anyrange_type != rngtype)
+				return false;
+			anyrange_type = rngtype;
+
+		}
+		else
+		{
+			return false;
+		}
+	}
 
 	/* XXX do we need to enforce ANYNONARRAY or ANYENUM here?  I think not */
 
@@ -791,6 +1050,9 @@ resolve_polymorphic_argtypes(int numargs, Oid *argtypes, char *argmodes,
 				break;
 			case ANYRANGEOID:
 				argtypes[i] = anyrange_type;
+				break;
+			case ANYMULTIRANGEOID:
+				argtypes[i] = anymultirange_type;
 				break;
 			default:
 				break;

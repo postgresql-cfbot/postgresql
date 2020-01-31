@@ -1498,17 +1498,12 @@ CreateCast(CreateCastStmt *stmt)
 	char		sourcetyptype;
 	char		targettyptype;
 	Oid			funcid;
-	Oid			castid;
 	int			nargs;
 	char		castcontext;
 	char		castmethod;
-	Relation	relation;
 	HeapTuple	tuple;
-	Datum		values[Natts_pg_cast];
-	bool		nulls[Natts_pg_cast];
-	ObjectAddress myself,
-				referenced;
 	AclResult	aclresult;
+	ObjectAddress	myself;
 
 	sourcetypeid = typenameTypeId(NULL, stmt->sourcetype);
 	targettypeid = typenameTypeId(NULL, stmt->targettype);
@@ -1732,74 +1727,8 @@ CreateCast(CreateCastStmt *stmt)
 			break;
 	}
 
-	relation = table_open(CastRelationId, RowExclusiveLock);
-
-	/*
-	 * Check for duplicate.  This is just to give a friendly error message,
-	 * the unique index would catch it anyway (so no need to sweat about race
-	 * conditions).
-	 */
-	tuple = SearchSysCache2(CASTSOURCETARGET,
-							ObjectIdGetDatum(sourcetypeid),
-							ObjectIdGetDatum(targettypeid));
-	if (HeapTupleIsValid(tuple))
-		ereport(ERROR,
-				(errcode(ERRCODE_DUPLICATE_OBJECT),
-				 errmsg("cast from type %s to type %s already exists",
-						format_type_be(sourcetypeid),
-						format_type_be(targettypeid))));
-
-	/* ready to go */
-	castid = GetNewOidWithIndex(relation, CastOidIndexId, Anum_pg_cast_oid);
-	values[Anum_pg_cast_oid - 1] = ObjectIdGetDatum(castid);
-	values[Anum_pg_cast_castsource - 1] = ObjectIdGetDatum(sourcetypeid);
-	values[Anum_pg_cast_casttarget - 1] = ObjectIdGetDatum(targettypeid);
-	values[Anum_pg_cast_castfunc - 1] = ObjectIdGetDatum(funcid);
-	values[Anum_pg_cast_castcontext - 1] = CharGetDatum(castcontext);
-	values[Anum_pg_cast_castmethod - 1] = CharGetDatum(castmethod);
-
-	MemSet(nulls, false, sizeof(nulls));
-
-	tuple = heap_form_tuple(RelationGetDescr(relation), values, nulls);
-
-	CatalogTupleInsert(relation, tuple);
-
-	/* make dependency entries */
-	myself.classId = CastRelationId;
-	myself.objectId = castid;
-	myself.objectSubId = 0;
-
-	/* dependency on source type */
-	referenced.classId = TypeRelationId;
-	referenced.objectId = sourcetypeid;
-	referenced.objectSubId = 0;
-	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-
-	/* dependency on target type */
-	referenced.classId = TypeRelationId;
-	referenced.objectId = targettypeid;
-	referenced.objectSubId = 0;
-	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-
-	/* dependency on function */
-	if (OidIsValid(funcid))
-	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = funcid;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-	}
-
-	/* dependency on extension */
-	recordDependencyOnCurrentExtension(&myself, false);
-
-	/* Post creation hook for new cast */
-	InvokeObjectPostCreateHook(CastRelationId, castid, 0);
-
-	heap_freetuple(tuple);
-
-	table_close(relation, RowExclusiveLock);
-
+	myself = CastCreate(sourcetypeid, targettypeid, funcid, castcontext,
+						castmethod, DEPENDENCY_NORMAL);
 	return myself;
 }
 

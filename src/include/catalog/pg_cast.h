@@ -23,6 +23,8 @@
 #include "catalog/genbki.h"
 #include "catalog/pg_cast_d.h"
 
+#include "catalog/dependency.h"
+
 /* ----------------
  *		pg_cast definition.  cpp turns this into
  *		typedef struct FormData_pg_cast
@@ -86,5 +88,12 @@ typedef enum CoercionMethod
 } CoercionMethod;
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */
+
+extern ObjectAddress CastCreate(Oid sourcetypeid,
+								Oid targettypeid,
+								Oid funcid,
+								char castcontext,
+								char castmethod,
+								DependencyType behavior);
 
 #endif							/* PG_CAST_H */

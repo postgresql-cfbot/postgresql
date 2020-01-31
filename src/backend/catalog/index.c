@@ -74,6 +74,7 @@
 #include "utils/guc.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_locale.h"
 #include "utils/memutils.h"
 #include "utils/pg_rusage.h"
 #include "utils/snapmgr.h"
@@ -724,6 +725,7 @@ index_create(Relation heapRelation,
 	char		relkind;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
+	List	   *collations = NIL;
 
 	/* constraint flags can only be set when a constraint is requested */
 	Assert((constr_flags == 0) ||
@@ -1115,19 +1117,42 @@ index_create(Relation heapRelation,
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_PARTITION_SEC);
 		}
 
-		/* Store dependency on collations */
-		/* The default collation is pinned, so don't bother recording it */
+		/*
+		 * Get required distinct dependencies on collations for all index keys.
+		 * Collations of directly referenced column in hash indexes can be
+		 * skipped is they're deterministic.
+		 */
 		for (i = 0; i < indexInfo->ii_NumIndexKeyAttrs; i++)
 		{
-			if (OidIsValid(collationObjectId[i]) &&
-				collationObjectId[i] != DEFAULT_COLLATION_OID)
-			{
-				referenced.classId = CollationRelationId;
-				referenced.objectId = collationObjectId[i];
-				referenced.objectSubId = 0;
+			Oid colloid = collationObjectId[i];
 
-				recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+			if (OidIsValid(colloid))
+			{
+				if ((indexInfo->ii_Am != HASH_AM_OID) ||
+						!get_collation_isdeterministic(colloid))
+					collations = list_append_unique_oid(collations, colloid);
 			}
+			else
+			{
+				Form_pg_attribute att = TupleDescAttr(indexTupDesc, i);
+
+				Assert(i < indexTupDesc->natts);
+
+				collations = list_concat_unique_oid(collations,
+						GetTypeCollations(att->atttypid,
+							(indexInfo->ii_Am == HASH_AM_OID)));
+			}
+		}
+
+		if (collations)
+		{
+			recordDependencyOnCollations(&myself, collations);
+			/*
+			 * Advance the command counter so that later calls to
+			 * recordMultipleDependencies calls can see the newly-entered
+			 * pg_depend catalog tuples for the index.
+			 */
+			CommandCounterIncrement();
 		}
 
 		/* Store dependency on operator classes */
@@ -1143,21 +1168,29 @@ index_create(Relation heapRelation,
 		/* Store dependencies on anything mentioned in index expressions */
 		if (indexInfo->ii_Expressions)
 		{
+			/* recordDependencyOnSingleRelExpr get rid of duplicate entries */
 			recordDependencyOnSingleRelExpr(&myself,
 											(Node *) indexInfo->ii_Expressions,
 											heapRelationId,
 											DEPENDENCY_NORMAL,
-											DEPENDENCY_AUTO, false);
+											DEPENDENCY_AUTO, false, true);
+			/*
+			 * Advance the command counter so that later
+			 * recordMultipleDependencies calls can see the newly-entered
+			 * pg_depend catalog tuples for the index.
+			 */
+			CommandCounterIncrement();
 		}
 
 		/* Store dependencies on anything mentioned in predicate */
 		if (indexInfo->ii_Predicate)
 		{
+			/* recordDependencyOnSingleRelExpr get rid of duplicate entries */
 			recordDependencyOnSingleRelExpr(&myself,
 											(Node *) indexInfo->ii_Predicate,
 											heapRelationId,
 											DEPENDENCY_NORMAL,
-											DEPENDENCY_AUTO, false);
+											DEPENDENCY_AUTO, false, true);
 		}
 	}
 	else
@@ -1227,6 +1260,90 @@ index_create(Relation heapRelation,
 	index_close(indexRelation, NoLock);
 
 	return indexRelationId;
+}
+
+static NameData *
+index_check_collation_version(const ObjectAddress *otherObject,
+							  const NameData *version,
+							  void *userdata)
+{
+	Oid			relid = *(Oid *) userdata;
+	NameData	current_version;
+
+	/* We only care about dependencies on collations. */
+	if (otherObject->classId != CollationRelationId)
+		return NULL;
+
+	/* Compare with the current version. */
+	get_collation_version_for_oid(otherObject->objectId, &current_version);
+
+	if (strncmp(NameStr(*version),
+				NameStr(current_version),
+				sizeof(NameData)) != 0)
+	{
+		if (strncmp(NameStr(*version), "", sizeof(NameData)) == 0)
+		{
+			ereport(WARNING,
+					(errmsg("index \"%s\" depends on collation \"%s\" with an unknown version, and the current version is \"%s\"",
+							get_rel_name(relid),
+							get_collation_name(otherObject->objectId),
+							NameStr(current_version)),
+					 errdetail("The index may be corrupted due to changes in sort order."),
+					 errhint("REINDEX to avoid the risk of corruption.")));
+		}
+		else
+		{
+			ereport(WARNING,
+				(errmsg("index \"%s\" depends on collation \"%s\" version \"%s\", but the current version is \"%s\"",
+						get_rel_name(relid),
+						get_collation_name(otherObject->objectId),
+						NameStr(*version),
+						NameStr(current_version)),
+				 errdetail("The index may be corrupted due to changes in sort order."),
+				 errhint("REINDEX to avoid the risk of corruption.")));
+		}
+	}
+
+	return NULL;
+}
+
+void
+index_check_collation_versions(Oid relid)
+{
+	ObjectAddress object;
+
+	object.classId = RelationRelationId;
+	object.objectId = relid;
+	object.objectSubId = 0;
+	visitDependentObjects(&object, &index_check_collation_version, &relid);
+}
+
+static NameData *
+index_update_collation_version(const ObjectAddress *otherObject,
+							   const NameData *version,
+							   void *userdata)
+{
+	NameData   *current_version = (NameData *) userdata;
+
+	/* We only care about dependencies on collations. */
+	if (otherObject->classId != CollationRelationId)
+		return NULL;
+
+	get_collation_version_for_oid(otherObject->objectId, current_version);
+	return current_version;
+}
+
+static void
+index_update_collation_versions(Oid relid)
+{
+	ObjectAddress object;
+	NameData	current_version;
+
+	object.classId = RelationRelationId;
+	object.objectId = relid;
+	object.objectSubId = 0;
+	visitDependentObjects(&object, &index_update_collation_version,
+						  &current_version);
 }
 
 /*
@@ -3605,6 +3722,9 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 	/* Close rels, but keep locks */
 	index_close(iRel, NoLock);
 	table_close(heapRelation, NoLock);
+
+	/* Record the current versions of all depended-on collations. */
+	index_update_collation_versions(indexId);
 }
 
 /*

@@ -55,6 +55,7 @@ CATALOG(pg_depend,2608,DependRelationId)
 	Oid			refclassid;		/* OID of table containing object */
 	Oid			refobjid;		/* OID of object itself */
 	int32		refobjsubid;	/* column number, or 0 if not used */
+	NameData	refobjversion;	/* version tracking, or empty if not used */
 
 	/*
 	 * Precise semantics of the relationship are specified by the deptype

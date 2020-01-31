@@ -46,6 +46,7 @@
 #include "catalog/pg_attribute_d.h"
 #include "catalog/pg_cast_d.h"
 #include "catalog/pg_class_d.h"
+#include "catalog/pg_collation_d.h"
 #include "catalog/pg_default_acl_d.h"
 #include "catalog/pg_largeobject_d.h"
 #include "catalog/pg_largeobject_metadata_d.h"
@@ -288,6 +289,8 @@ static void binary_upgrade_extension_member(PQExpBuffer upgrade_buffer,
 static const char *getAttrName(int attrnum, TableInfo *tblInfo);
 static const char *fmtCopyColumnList(const TableInfo *ti, PQExpBuffer buffer);
 static bool nonemptyReloptions(const char *reloptions);
+static void appendIndexCollationVersion(PQExpBuffer buffer, IndxInfo *indxinfo,
+										int enc, int unknown_coll_compat);
 static void appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 									const char *prefix, Archive *fout);
 static char *get_synchronized_snapshot(Archive *fout);
@@ -388,6 +391,7 @@ main(int argc, char **argv)
 		{"no-sync", no_argument, NULL, 7},
 		{"on-conflict-do-nothing", no_argument, &dopt.do_nothing, 1},
 		{"rows-per-insert", required_argument, NULL, 10},
+		{"unknown-collations-binary-compatible", no_argument, &dopt.unknown_coll_compat, 1},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -707,6 +711,10 @@ main(int argc, char **argv)
 	/* Parallel backup only in the directory archive format so far */
 	if (archiveFormat != archDirectory && numWorkers > 1)
 		fatal("parallel backup only supported by the directory format");
+
+	/* Unknown collation versions can only be ignored in binary upgrade mode */
+	if (dopt.unknown_coll_compat && !dopt.binary_upgrade)
+		fatal("option --unknown-collations-binary-compatible only works in binary upgrade mode");
 
 	/* Open the output file */
 	fout = CreateArchive(filename, archiveFormat, compressLevel, dosync,
@@ -6841,7 +6849,9 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 				i_tablespace,
 				i_indreloptions,
 				i_indstatcols,
-				i_indstatvals;
+				i_indstatvals,
+				i_inddependoids,
+				i_inddependversions;
 	int			ntups;
 
 	for (i = 0; i < numTables; i++)
@@ -6877,7 +6887,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 		 * is not.
 		 */
 		resetPQExpBuffer(query);
-		if (fout->remoteVersion >= 110000)
+		if (fout->remoteVersion >= 130000)
 		{
 			appendPQExpBuffer(query,
 							  "SELECT t.tableoid, t.oid, "
@@ -6902,7 +6912,64 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 							  "(SELECT pg_catalog.array_agg(attstattarget ORDER BY attnum) "
 							  "  FROM pg_catalog.pg_attribute "
 							  "  WHERE attrelid = i.indexrelid AND "
-							  "    attstattarget >= 0) AS indstatvals "
+							  "    attstattarget >= 0) AS indstatvals, "
+							  "(SELECT pg_catalog.array_agg(refobjid::pg_catalog.regcollation ORDER BY refobjid) "
+							  "  FROM pg_catalog.pg_depend "
+							  "  WHERE classid = " CppAsString2(RelationRelationId) " AND "
+							  "    objid = i.indexrelid AND "
+							  "    objsubid = 0 AND "
+							  "    refclassid = " CppAsString2(CollationRelationId) " AND "
+							  "    refobjversion != '') AS inddependoids, "
+							  "(SELECT pg_catalog.array_agg(refobjversion ORDER BY refobjid) "
+							  "  FROM pg_catalog.pg_depend "
+							  "  WHERE classid = " CppAsString2(RelationRelationId) " AND "
+							  "    objid = i.indexrelid AND "
+							  "    objsubid = 0 AND "
+							  "    refclassid = " CppAsString2(CollationRelationId) " AND "
+							  "    refobjversion != '') AS inddependversions "
+							  "FROM pg_catalog.pg_index i "
+							  "JOIN pg_catalog.pg_class t ON (t.oid = i.indexrelid) "
+							  "JOIN pg_catalog.pg_class t2 ON (t2.oid = i.indrelid) "
+							  "LEFT JOIN pg_catalog.pg_constraint c "
+							  "ON (i.indrelid = c.conrelid AND "
+							  "i.indexrelid = c.conindid AND "
+							  "c.contype IN ('p','u','x')) "
+							  "LEFT JOIN pg_catalog.pg_inherits inh "
+							  "ON (inh.inhrelid = indexrelid) "
+							  "WHERE i.indrelid = '%u'::pg_catalog.oid "
+							  "AND (i.indisvalid OR t2.relkind = 'p') "
+							  "AND i.indisready "
+							  "ORDER BY indexname",
+							  tbinfo->dobj.catId.oid);
+		}
+		else if (fout->remoteVersion >= 110000)
+		{
+			appendPQExpBuffer(query,
+							  "SELECT t.tableoid, t.oid, "
+							  "t.relname AS indexname, "
+							  "inh.inhparent AS parentidx, "
+							  "pg_catalog.pg_get_indexdef(i.indexrelid) AS indexdef, "
+							  "i.indnkeyatts AS indnkeyatts, "
+							  "i.indnatts AS indnatts, "
+							  "i.indkey, i.indisclustered, "
+							  "i.indisreplident, "
+							  "c.contype, c.conname, "
+							  "c.condeferrable, c.condeferred, "
+							  "c.tableoid AS contableoid, "
+							  "c.oid AS conoid, "
+							  "pg_catalog.pg_get_constraintdef(c.oid, false) AS condef, "
+							  "(SELECT spcname FROM pg_catalog.pg_tablespace s WHERE s.oid = t.reltablespace) AS tablespace, "
+							  "t.reloptions AS indreloptions, "
+							  "(SELECT pg_catalog.array_agg(attnum ORDER BY attnum) "
+							  "  FROM pg_catalog.pg_attribute "
+							  "  WHERE attrelid = i.indexrelid AND "
+							  "    attstattarget >= 0) AS indstatcols,"
+							  "(SELECT pg_catalog.array_agg(attstattarget ORDER BY attnum) "
+							  "  FROM pg_catalog.pg_attribute "
+							  "  WHERE attrelid = i.indexrelid AND "
+							  "    attstattarget >= 0) AS indstatvals, "
+							  "' ' AS inddependoids, "
+							  "' ' AS inddependversions "
 							  "FROM pg_catalog.pg_index i "
 							  "JOIN pg_catalog.pg_class t ON (t.oid = i.indexrelid) "
 							  "JOIN pg_catalog.pg_class t2 ON (t2.oid = i.indrelid) "
@@ -6941,7 +7008,9 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 							  "(SELECT spcname FROM pg_catalog.pg_tablespace s WHERE s.oid = t.reltablespace) AS tablespace, "
 							  "t.reloptions AS indreloptions, "
 							  "'' AS indstatcols, "
-							  "'' AS indstatvals "
+							  "'' AS indstatvals, "
+							  "' ' AS inddependoids, "
+							  "' ' AS inddependversions "
 							  "FROM pg_catalog.pg_index i "
 							  "JOIN pg_catalog.pg_class t ON (t.oid = i.indexrelid) "
 							  "LEFT JOIN pg_catalog.pg_constraint c "
@@ -6976,7 +7045,9 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 							  "(SELECT spcname FROM pg_catalog.pg_tablespace s WHERE s.oid = t.reltablespace) AS tablespace, "
 							  "t.reloptions AS indreloptions, "
 							  "'' AS indstatcols, "
-							  "'' AS indstatvals "
+							  "'' AS indstatvals, "
+							  "' ' AS inddependoids, "
+							  "' ' AS inddependversions "
 							  "FROM pg_catalog.pg_index i "
 							  "JOIN pg_catalog.pg_class t ON (t.oid = i.indexrelid) "
 							  "LEFT JOIN pg_catalog.pg_constraint c "
@@ -7007,7 +7078,9 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 							  "(SELECT spcname FROM pg_catalog.pg_tablespace s WHERE s.oid = t.reltablespace) AS tablespace, "
 							  "t.reloptions AS indreloptions, "
 							  "'' AS indstatcols, "
-							  "'' AS indstatvals "
+							  "'' AS indstatvals, "
+							  "' ' AS inddependoids, "
+							  "' ' AS inddependversions "
 							  "FROM pg_catalog.pg_index i "
 							  "JOIN pg_catalog.pg_class t ON (t.oid = i.indexrelid) "
 							  "LEFT JOIN pg_catalog.pg_depend d "
@@ -7041,7 +7114,9 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 							  "(SELECT spcname FROM pg_catalog.pg_tablespace s WHERE s.oid = t.reltablespace) AS tablespace, "
 							  "null AS indreloptions, "
 							  "'' AS indstatcols, "
-							  "'' AS indstatvals "
+							  "'' AS indstatvals, "
+							  "' ' AS inddependoids, "
+							  "' ' AS inddependversions "
 							  "FROM pg_catalog.pg_index i "
 							  "JOIN pg_catalog.pg_class t ON (t.oid = i.indexrelid) "
 							  "LEFT JOIN pg_catalog.pg_depend d "
@@ -7081,6 +7156,8 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 		i_indreloptions = PQfnumber(res, "indreloptions");
 		i_indstatcols = PQfnumber(res, "indstatcols");
 		i_indstatvals = PQfnumber(res, "indstatvals");
+		i_inddependoids = PQfnumber(res, "inddependoids");
+		i_inddependversions = PQfnumber(res, "inddependversions");
 
 		tbinfo->indexes = indxinfo =
 			(IndxInfo *) pg_malloc(ntups * sizeof(IndxInfo));
@@ -7106,6 +7183,8 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 			indxinfo[j].indreloptions = pg_strdup(PQgetvalue(res, j, i_indreloptions));
 			indxinfo[j].indstatcols = pg_strdup(PQgetvalue(res, j, i_indstatcols));
 			indxinfo[j].indstatvals = pg_strdup(PQgetvalue(res, j, i_indstatvals));
+			indxinfo[j].inddependoids = pg_strdup(PQgetvalue(res, j, i_inddependoids));
+			indxinfo[j].inddependversions = pg_strdup(PQgetvalue(res, j, i_inddependversions));
 			indxinfo[j].indkeys = (Oid *) pg_malloc(indxinfo[j].indnattrs * sizeof(Oid));
 			parseOidArray(PQgetvalue(res, j, i_indkey),
 						  indxinfo[j].indkeys, indxinfo[j].indnattrs);
@@ -13485,7 +13564,11 @@ dumpCollation(Archive *fout, CollInfo *collinfo)
 	/* Get collation-specific details */
 	appendPQExpBufferStr(query, "SELECT ");
 
-	if (fout->remoteVersion >= 100000)
+	if (fout->remoteVersion >= 130000)
+		appendPQExpBufferStr(query,
+							 "collprovider, "
+							 "NULL AS collversion, ");
+	else if (fout->remoteVersion >= 100000)
 		appendPQExpBufferStr(query,
 							 "collprovider, "
 							 "collversion, ");
@@ -13557,7 +13640,7 @@ dumpCollation(Archive *fout, CollInfo *collinfo)
 	 * For binary upgrade, carry over the collation version.  For normal
 	 * dump/restore, omit the version, so that it is computed upon restore.
 	 */
-	if (dopt->binary_upgrade)
+	if (dopt->binary_upgrade && fout->remoteVersion < 130000)
 	{
 		int			i_collversion;
 
@@ -16370,10 +16453,11 @@ dumpIndex(Archive *fout, IndxInfo *indxinfo)
 
 	/*
 	 * If there's an associated constraint, don't dump the index per se, but
-	 * do dump any comment for it.  (This is safe because dependency ordering
-	 * will have ensured the constraint is emitted first.)	Note that the
-	 * emitted comment has to be shown as depending on the constraint, not the
-	 * index, in such cases.
+	 * do dump any comment, or in binary upgrade mode dependency on a collation
+	 * version for it.  (This is safe because dependency ordering will have
+	 * ensured the constraint is emitted first.)	Note that the emitted
+	 * comment has to be shown as depending on the constraint, not the index,
+	 * in such cases.
 	 */
 	if (!is_constraint)
 	{
@@ -16433,6 +16517,10 @@ dumpIndex(Archive *fout, IndxInfo *indxinfo)
 			}
 		}
 
+		if (dopt->binary_upgrade)
+			appendIndexCollationVersion(q, indxinfo, fout->encoding,
+										dopt->unknown_coll_compat);
+
 		/* If the index defines identity, we need to record that. */
 		if (indxinfo->indisreplident)
 		{
@@ -16461,6 +16549,21 @@ dumpIndex(Archive *fout, IndxInfo *indxinfo)
 			free(indstatcolsarray);
 		if (indstatvalsarray)
 			free(indstatvalsarray);
+	}
+	else if (dopt->binary_upgrade)
+	{
+		appendIndexCollationVersion(q, indxinfo, fout->encoding,
+									dopt->unknown_coll_compat);
+
+		if (indxinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
+			ArchiveEntry(fout, indxinfo->dobj.catId, indxinfo->dobj.dumpId,
+						 ARCHIVE_OPTS(.tag = indxinfo->dobj.name,
+									  .namespace = tbinfo->dobj.namespace->dobj.name,
+									  .tablespace = indxinfo->tablespace,
+									  .owner = tbinfo->rolname,
+									  .description = "INDEX",
+									  .section = SECTION_POST_DATA,
+									  .createStmt = q->data));
 	}
 
 	/* Dump Index Comments */
@@ -18417,6 +18520,64 @@ nonemptyReloptions(const char *reloptions)
 {
 	/* Don't want to print it if it's just "{}" */
 	return (reloptions != NULL && strlen(reloptions) > 2);
+}
+
+/*
+ * Format inddependoids and inddependversions arrays and append it to the given
+ * buffer in the form of ALTER INDEX ... DEPENDS ON COLLATION ... VERSION ....
+ */
+static void
+appendIndexCollationVersion(PQExpBuffer buffer, IndxInfo *indxinfo, int enc,
+							int unknown_coll_compat)
+{
+	char	   *inddependoids = indxinfo->inddependoids;
+	char	   *inddependversions = indxinfo->inddependversions;
+	char	  **inddependoidsarray = NULL;
+	char	  **inddependversionsarray = NULL;
+	int			ninddependoids;
+	int			ninddependversions;
+	int			i;
+
+	/*
+	 * for older versions that don't record the collation depndency, issue a
+	 * statement to mark the collation version as unknown
+	 */
+	if (strcmp(inddependoids, " ") == 0)
+	{
+		/*
+		 * do not issue UNKNOWN VERSION is caller specified that those are
+		 * compatible
+		 */
+		if (unknown_coll_compat)
+			return;
+
+		Assert(strcmp(inddependversions, "") == 0);
+
+		appendPQExpBuffer(buffer, "ALTER INDEX %s",
+						  fmtQualifiedDumpable(indxinfo));
+		appendPQExpBuffer(buffer, " DEPENDS ON ANY COLLATION UNKNOWN VERSION;\n");
+		return;
+	}
+
+	parsePGArray(inddependoids, &inddependoidsarray, &ninddependoids);
+	parsePGArray(inddependversions, &inddependversionsarray, &ninddependversions);
+
+	Assert(ninddependoids == ninddependversions);
+
+	for (i = 0; i < ninddependoids; i++)
+	{
+		appendPQExpBuffer(buffer, "ALTER INDEX %s",
+						  fmtQualifiedDumpable(indxinfo));
+		appendPQExpBuffer(buffer, " DEPENDS ON COLLATION %s VERSION ",
+						  inddependoidsarray[i]);
+		appendStringLiteral(buffer, inddependversionsarray[i], enc, true);
+		appendPQExpBuffer(buffer, ";\n");
+	}
+
+	if (inddependoidsarray)
+		free(inddependoidsarray);
+	if (inddependversionsarray)
+		free(inddependversionsarray);
 }
 
 /*

@@ -245,7 +245,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 }
 
 %type <node>	stmt schema_stmt
-		AlterEventTrigStmt AlterCollationStmt
+		AlterEventTrigStmt
 		AlterDatabaseStmt AlterDatabaseSetStmt AlterDomainStmt AlterEnumStmt
 		AlterFdwStmt AlterForeignServerStmt AlterGroupStmt
 		AlterObjectDependsStmt AlterObjectSchemaStmt AlterOwnerStmt
@@ -830,7 +830,6 @@ stmtmulti:	stmtmulti ';' stmt
 
 stmt :
 			AlterEventTrigStmt
-			| AlterCollationStmt
 			| AlterDatabaseStmt
 			| AlterDatabaseSetStmt
 			| AlterDefaultPrivilegesStmt
@@ -2568,6 +2567,33 @@ alter_table_cmd:
 				{
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 					n->subtype = AT_NoForceRowSecurity;
+					$$ = (Node *)n;
+				}
+			/* ALTER INDEX <name> DEPENDS ON COLLATION ... VERSION ... */
+			| DEPENDS ON COLLATION any_name VERSION_P Sconst
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DependsOnCollationVersion;
+					n->object = $4;
+					n->version = $6;
+					$$ = (Node *)n;
+				}
+			/* ALTER INDEX <name> DEPENDS ON ANY COLLATION UNKNOWN VERSION */
+			| DEPENDS ON ANY COLLATION UNKNOWN VERSION_P
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DependsOnCollationVersion;
+					n->object = NIL;
+					n->version = "";
+					$$ = (Node *)n;
+				}
+			/* ALTER INDEX <name> DEPENDS ON ANY COLLATION UNKNOWN VERSION */
+			| DEPENDS ON COLLATION any_name CURRENT_P VERSION_P
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DependsOnCollationVersion;
+					n->object = $4;
+					n->version = NULL;
 					$$ = (Node *)n;
 				}
 			| alter_generic_options
@@ -10320,21 +10346,6 @@ drop_option:
 					$$ = makeDefElem("force", NULL, @1);
 				}
 		;
-
-/*****************************************************************************
- *
- *		ALTER COLLATION
- *
- *****************************************************************************/
-
-AlterCollationStmt: ALTER COLLATION any_name REFRESH VERSION_P
-				{
-					AlterCollationStmt *n = makeNode(AlterCollationStmt);
-					n->collname = $3;
-					$$ = (Node *)n;
-				}
-		;
-
 
 /*****************************************************************************
  *

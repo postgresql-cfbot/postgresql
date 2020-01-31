@@ -213,6 +213,22 @@
      </varlistentry>
 
      <varlistentry>
+      <term><option>--collation-binary-compatible</option></term>
+      <listitem>
+       <para>
+        When upgrading from a PostgreSQL major version 12 or older, all indexes
+        will be marked as depending on an unknown collation version, as such
+        versions weren't tracked.  As a result, numerous warning messages will
+        be emitted as it can be a sign of a corrupted index.  If you're not
+        upgrading the collation libraries, and if you're absolutly certain that
+        all existing indexes are compatible with the current collation
+        libraries, you can use this flag to change this behavior and mark all
+        indexes as depending on current collation libraries version.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-?</option></term>
       <term><option>--help</option></term>
       <listitem><para>show help, then exit</para></listitem>

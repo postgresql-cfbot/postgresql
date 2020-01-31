@@ -1844,7 +1844,8 @@ typedef enum AlterTableType
 	AT_DetachPartition,			/* DETACH PARTITION */
 	AT_AddIdentity,				/* ADD IDENTITY */
 	AT_SetIdentity,				/* SET identity column options */
-	AT_DropIdentity				/* DROP IDENTITY */
+	AT_DropIdentity,			/* DROP IDENTITY */
+	AT_DependsOnCollationVersion	/* DEPENDS ON COLLATION ... VERSION ... */
 } AlterTableType;
 
 typedef struct ReplicaIdentityStmt
@@ -1860,25 +1861,19 @@ typedef struct AlterTableCmd	/* one subcommand of an ALTER TABLE */
 	AlterTableType subtype;		/* Type of table alteration to apply */
 	char	   *name;			/* column, constraint, or trigger to act on,
 								 * or tablespace */
+	List	   *object;			/* collation to act on if it's a collation */
 	int16		num;			/* attribute number for columns referenced by
 								 * number */
+	char	   *version;		/* version reference for collation dependency.
+								 * An empty string is used to represent an
+								 * unknown version, and a NULL pointer is used
+								 * to represent the current version */
 	RoleSpec   *newowner;
 	Node	   *def;			/* definition of new column, index,
 								 * constraint, or parent table */
 	DropBehavior behavior;		/* RESTRICT or CASCADE for DROP cases */
 	bool		missing_ok;		/* skip error if missing? */
 } AlterTableCmd;
-
-
-/* ----------------------
- * Alter Collation
- * ----------------------
- */
-typedef struct AlterCollationStmt
-{
-	NodeTag		type;
-	List	   *collname;
-} AlterCollationStmt;
 
 
 /* ----------------------

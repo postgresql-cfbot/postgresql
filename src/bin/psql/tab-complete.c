@@ -45,6 +45,7 @@
 
 #include "catalog/pg_am_d.h"
 #include "catalog/pg_class_d.h"
+#include "catalog/pg_collation_d.h"
 #include "common.h"
 #include "libpq-fe.h"
 #include "pqexpbuffer.h"
@@ -806,6 +807,20 @@ static const SchemaQuery Query_for_list_of_statistics = {
 "   AND oid IN "\
 "       (SELECT tgrelid FROM pg_catalog.pg_trigger "\
 "         WHERE pg_catalog.quote_ident(tgname)='%s')"
+
+/* the silly-looking length condition is just to eat up the current word */
+#define Query_for_list_of_colls_for_one_index \
+" SELECT DISTINCT pg_catalog.quote_ident(coll.collname) " \
+"   FROM pg_catalog.pg_depend d, pg_catalog.pg_collation coll, " \
+"     pg_catalog.pg_class c" \
+" WHERE (%d = pg_catalog.length('%s'))" \
+"   AND d.refclassid = " CppAsString2(CollationRelationId) \
+"   AND d.refobjid = coll.oid " \
+"   AND d.classid = " CppAsString2(RelationRelationId) \
+"   AND d.objid = c.oid " \
+"   AND c.relkind = " CppAsString2(RELKIND_INDEX) \
+"   AND pg_catalog.pg_table_is_visible(c.oid) " \
+"   AND c.relname = '%s'"
 
 #define Query_for_list_of_ts_configurations \
 "SELECT pg_catalog.quote_ident(cfgname) FROM pg_catalog.pg_ts_config "\
@@ -1697,7 +1712,7 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER INDEX <name> */
 	else if (Matches("ALTER", "INDEX", MatchAny))
 		COMPLETE_WITH("ALTER COLUMN", "OWNER TO", "RENAME TO", "SET",
-					  "RESET", "ATTACH PARTITION");
+					  "RESET", "ATTACH PARTITION", "DEPENDS ON COLLATION");
 	else if (Matches("ALTER", "INDEX", MatchAny, "ATTACH"))
 		COMPLETE_WITH("PARTITION");
 	else if (Matches("ALTER", "INDEX", MatchAny, "ATTACH", "PARTITION"))
@@ -1743,6 +1758,15 @@ psql_completion(const char *text, int start, int end)
 					  "buffering =",	/* GiST */
 					  "pages_per_range =", "autosummarize ="	/* BRIN */
 			);
+	/* ALTER INDEX <name> DEPENDS ON COLLATION */
+	else if (Matches("ALTER", "INDEX", MatchAny, "DEPENDS", "ON", "COLLATION"))
+	{
+		completion_info_charp = prev4_wd;
+		COMPLETE_WITH_QUERY(Query_for_list_of_colls_for_one_index);
+	}
+	/* ALTER INDEX <name> DEPENDS ON COLLATION <name> */
+	else if (Matches("ALTER", "INDEX", MatchAny, "DEPENDS", "ON", "COLLATION", MatchAny))
+		COMPLETE_WITH("CURRENT VERSION");
 
 	/* ALTER LANGUAGE <name> */
 	else if (Matches("ALTER", "LANGUAGE", MatchAny))

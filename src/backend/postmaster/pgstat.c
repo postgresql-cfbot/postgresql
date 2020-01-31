@@ -4919,7 +4919,7 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 						tmpfile)));
 		unlink(tmpfile);
 	}
-	else if (rename(tmpfile, statfile) < 0)
+	else if (rename_temp(tmpfile, statfile) < 0)
 	{
 		ereport(LOG,
 				(errcode_for_file_access(),
@@ -5054,7 +5054,7 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 						tmpfile)));
 		unlink(tmpfile);
 	}
-	else if (rename(tmpfile, statfile) < 0)
+	else if (rename_temp(tmpfile, statfile) < 0)
 	{
 		ereport(LOG,
 				(errcode_for_file_access(),

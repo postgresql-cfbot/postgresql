@@ -2078,6 +2078,358 @@ select refcursor_test2(20000, 20000) as "Should be false",
  f               | t
 (1 row)
 
+-- Check ability to consume from REFCURSOR in SELECT
+explain (verbose, costs off) select * from rows_in(return_unnamed_refcursor()) as (a int);
+                      QUERY PLAN                      
+------------------------------------------------------
+ Function Scan on pg_catalog.rows_in
+   Output: a
+   Function Call: rows_in(return_unnamed_refcursor())
+(3 rows)
+
+select * from rows_in(return_unnamed_refcursor()) as (a int);
+  a  
+-----
+   5
+  50
+ 500
+(3 rows)
+
+explain (verbose, costs off) select * from rows_in(return_unnamed_refcursor()) as (a int) where a >= 50;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Function Scan on pg_catalog.rows_in
+   Output: a
+   Function Call: rows_in(return_unnamed_refcursor())
+   Filter: (rows_in.a >= 50)
+(4 rows)
+
+select * from rows_in(return_unnamed_refcursor()) as (a int) where a >= 50;
+  a  
+-----
+  50
+ 500
+(2 rows)
+
+explain (verbose, costs off) select * from rows_in(return_unnamed_refcursor()) as (a int) order by a desc;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Sort
+   Output: a
+   Sort Key: rows_in.a DESC
+   ->  Function Scan on pg_catalog.rows_in
+         Output: a
+         Function Call: rows_in(return_unnamed_refcursor())
+(6 rows)
+
+select * from rows_in(return_unnamed_refcursor()) as (a int) order by a desc;
+  a  
+-----
+ 500
+  50
+   5
+(3 rows)
+
+-- Check multiple scan of REFCURSOR
+explain (verbose, costs off) select * from (select 1 nr union all select 2) as scan, rows_in(return_unnamed_refcursor()) as (a int) order by nr;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Sort
+   Output: (1), rows_in.a
+   Sort Key: (1)
+   ->  Nested Loop
+         Output: (1), rows_in.a
+         ->  Function Scan on pg_catalog.rows_in
+               Output: rows_in.a
+               Function Call: rows_in(return_unnamed_refcursor())
+         ->  Materialize
+               Output: (1)
+               ->  Append
+                     ->  Result
+                           Output: 1
+                     ->  Result
+                           Output: 2
+(15 rows)
+
+select * from (select 1 nr union all select 2) as scan, rows_in(return_unnamed_refcursor()) as (a int) order by nr;
+ nr |  a  
+----+-----
+  1 |   5
+  1 |  50
+  1 | 500
+  2 |   5
+  2 |  50
+  2 | 500
+(6 rows)
+
+-- Check multiple reference to single REFCURSOR
+explain (verbose, costs off)
+	select * from
+		rows_in(return_unnamed_refcursor()) as a(n int),
+		rows_in(return_unnamed_refcursor()) as b(n int)
+		order by a.n, b.n;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Sort
+   Output: a.n, b.n
+   Sort Key: a.n, b.n
+   ->  Nested Loop
+         Output: a.n, b.n
+         ->  Function Scan on pg_catalog.rows_in a
+               Output: a.n
+               Function Call: rows_in(return_unnamed_refcursor())
+         ->  Function Scan on pg_catalog.rows_in b
+               Output: b.n
+               Function Call: rows_in(return_unnamed_refcursor())
+(11 rows)
+
+select * from
+	rows_in(return_unnamed_refcursor()) as a(n int),
+	rows_in(return_unnamed_refcursor()) as b(n int)
+	order by a.n, b.n;
+  n  |  n  
+-----+-----
+   5 |   5
+   5 |  50
+   5 | 500
+  50 |   5
+  50 |  50
+  50 | 500
+ 500 |   5
+ 500 |  50
+ 500 | 500
+(9 rows)
+
+explain (verbose, costs off)
+	select r.cur::text, a.n, b.n from
+		(select return_unnamed_refcursor() cur) r,
+		rows_in (r.cur) as a(n int),
+		rows_in (r.cur) as b(n int)
+		order by r.cur::text, a.n, b.n;
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Sort
+   Output: (((return_unnamed_refcursor()))::text), a.n, b.n
+   Sort Key: (((return_unnamed_refcursor()))::text), a.n, b.n
+   ->  Nested Loop
+         Output: ((return_unnamed_refcursor()))::text, a.n, b.n
+         ->  Nested Loop
+               Output: (return_unnamed_refcursor()), a.n
+               ->  Result
+                     Output: return_unnamed_refcursor()
+               ->  Function Scan on pg_catalog.rows_in a
+                     Output: a.n
+                     Function Call: rows_in((return_unnamed_refcursor()))
+         ->  Function Scan on pg_catalog.rows_in b
+               Output: b.n
+               Function Call: rows_in((return_unnamed_refcursor()))
+(15 rows)
+
+select r.cur::text, a.n, b.n from
+	(select return_unnamed_refcursor() cur) r,
+	rows_in (r.cur) as a(n int),
+	rows_in (r.cur) as b(n int)
+	order by r.cur::text, a.n, b.n;
+         cur         |  n  |  n  
+---------------------+-----+-----
+ <unnamed portal 11> |   5 |   5
+ <unnamed portal 11> |   5 |  50
+ <unnamed portal 11> |   5 | 500
+ <unnamed portal 11> |  50 |   5
+ <unnamed portal 11> |  50 |  50
+ <unnamed portal 11> |  50 | 500
+ <unnamed portal 11> | 500 |   5
+ <unnamed portal 11> | 500 |  50
+ <unnamed portal 11> | 500 | 500
+(9 rows)
+
+-- Check use of REFCURSOR in WITH
+with rcq as (
+	select * from rows_in(return_unnamed_refcursor()) as (a int)
+)
+select * from rcq where a <= 50;
+ a  
+----
+  5
+ 50
+(2 rows)
+
+-- Check attempt to UPDATE/DELETE REFCURSOR fails
+update rows_in(return_unnamed_refcursor()) set a = 2;
+ERROR:  syntax error at or near "("
+LINE 1: update rows_in(return_unnamed_refcursor()) set a = 2;
+                      ^
+delete from rows_in(return_unnamed_refcursor());
+ERROR:  syntax error at or near "("
+LINE 1: delete from rows_in(return_unnamed_refcursor());
+                           ^
+-- Check type consistency
+select * from rows_in(return_unnamed_refcursor()) as (a int, b int);
+ERROR:  function return row and query-specified return row do not match
+DETAIL:  Returned row contains 1 attribute, but query expects 2.
+select * from rows_in(return_unnamed_refcursor()) as (a text);
+ERROR:  function return row and query-specified return row do not match
+DETAIL:  Returned type integer at ordinal position 1, but query expects text.
+select * from rows_in(return_unnamed_refcursor()) as (a jsonb);
+ERROR:  function return row and query-specified return row do not match
+DETAIL:  Returned type integer at ordinal position 1, but query expects jsonb.
+-- Check consumption from REFCURSOR inside plpgsql FUNCTION
+create function refcursor_test3(input refcursor) returns refcursor as $$
+declare
+    rc refcursor;
+begin
+    open rc for select a, a+1 as a_plus_1 from rows_in(input) as (a int);
+    return rc;
+end
+$$ language plpgsql;
+explain (verbose, costs off) select * from rows_in(refcursor_test3(return_unnamed_refcursor())) as (a int, ap1 int) where a >= 50;
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Function Scan on pg_catalog.rows_in
+   Output: a, ap1
+   Function Call: rows_in(refcursor_test3(return_unnamed_refcursor()))
+   Filter: (rows_in.a >= 50)
+(4 rows)
+
+select * from rows_in(refcursor_test3(return_unnamed_refcursor())) as (a int, ap1 int) where a >= 50;
+  a  | ap1 
+-----+-----
+  50 |  51
+ 500 | 501
+(2 rows)
+
+drop function refcursor_test3;
+-- Check consumption from REFCURSOR defined with USING
+create function refcursor_test4(minimum int) returns refcursor as $$
+declare
+    rc refcursor;
+begin
+	OPEN rc FOR EXECUTE 'select a from rc_test where a >= $1'
+		USING (minimum);
+    return rc;
+end
+$$ language plpgsql;
+explain (verbose, costs off)
+	select * from rows_in(refcursor_test4(50)) as (a int);
+                  QUERY PLAN                   
+-----------------------------------------------
+ Function Scan on pg_catalog.rows_in
+   Output: a
+   Function Call: rows_in(refcursor_test4(50))
+(3 rows)
+
+select * from rows_in(refcursor_test4(50)) as (a int);
+  a  
+-----
+  50
+ 500
+(2 rows)
+
+drop function refcursor_test4;
+-- Check consumption from REFCURSOR defined in immediate mode
+begin;
+declare c cursor for
+	select 1 as i, 'one' v
+	union all
+	select 2, 'two';
+select * from rows_in('c'::refcursor) as (i int, v text);
+ i |  v  
+---+-----
+ 1 | one
+ 2 | two
+(2 rows)
+
+rollback;
+-- Check consumption from REFCURSOR directly in target list (tSRF)
+-- (This isn't particularly useful, but it should work.)
+begin;
+declare c cursor for
+	select 1 as i, 'one' v
+	union all
+	select 2, 'two';
+select rows_in('c'::refcursor);
+ rows_in 
+---------
+ (1,one)
+ (2,two)
+(2 rows)
+
+rollback;
+begin;
+declare c cursor for
+	select 1 as i, 'one' v
+	union all
+	select 2, 'two';
+select rows_in('c'::refcursor), * from rows_in('c'::refcursor) as (i int, v text);
+ rows_in | i |  v  
+---------+---+-----
+ (1,one) | 1 | one
+ (2,two) | 1 | one
+ (1,one) | 2 | two
+ (2,two) | 2 | two
+(4 rows)
+
+rollback;
+-- Check use of ROWS_IN with row_to_json both in the target list
+-- and in the FROM.
+begin;
+declare c cursor for
+	with recursive t as (
+		select 1 i
+		union all
+		select i + 1
+			from t
+			where i + 1 <= 10
+	)
+	select i, 'number ' || i t from t;
+select row_to_json(rows_in('c'::refcursor));
+       row_to_json        
+--------------------------
+ {"i":1,"t":"number 1"}
+ {"i":2,"t":"number 2"}
+ {"i":3,"t":"number 3"}
+ {"i":4,"t":"number 4"}
+ {"i":5,"t":"number 5"}
+ {"i":6,"t":"number 6"}
+ {"i":7,"t":"number 7"}
+ {"i":8,"t":"number 8"}
+ {"i":9,"t":"number 9"}
+ {"i":10,"t":"number 10"}
+(10 rows)
+
+rollback;
+begin;
+declare c cursor for
+	with recursive t as (
+		select 1 i
+		union all
+		select i + 1
+			from t
+			where i + 1 <= 1000
+	)
+	select i, 'number ' || i t from t;
+select j.r,
+		(j.r->'i')::int i, (j.r->'t')::text t
+	from (select row_to_json(rows_in('c'::refcursor))::jsonb as r) j
+	where
+		(j.r->'i')::int >= 50
+		and (j.r->'i')::int <= 60;
+              r              | i  |      t      
+-----------------------------+----+-------------
+ {"i": 50, "t": "number 50"} | 50 | "number 50"
+ {"i": 51, "t": "number 51"} | 51 | "number 51"
+ {"i": 52, "t": "number 52"} | 52 | "number 52"
+ {"i": 53, "t": "number 53"} | 53 | "number 53"
+ {"i": 54, "t": "number 54"} | 54 | "number 54"
+ {"i": 55, "t": "number 55"} | 55 | "number 55"
+ {"i": 56, "t": "number 56"} | 56 | "number 56"
+ {"i": 57, "t": "number 57"} | 57 | "number 57"
+ {"i": 58, "t": "number 58"} | 58 | "number 58"
+ {"i": 59, "t": "number 59"} | 59 | "number 59"
+ {"i": 60, "t": "number 60"} | 60 | "number 60"
+(11 rows)
+
+rollback;
 --
 -- tests for cursors with named parameter arguments
 --

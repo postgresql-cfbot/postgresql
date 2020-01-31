@@ -3427,6 +3427,16 @@ COMMIT;
 </programlisting>
        </para>
      </sect3>
+     <sect3>
+      <title>Querying cursors</title>
+
+      <para>
+       Section <xref linkend="functions-cursor"/> discusses the use of
+       <function>ROWS_IN</function> which allows a returned
+       <type>REFCURSOR</type> to be queried in a normal
+       <command>SELECT</command> command.
+      </para>
+     </sect3>
    </sect2>
 
    <sect2 id="plpgsql-cursor-for-loop">

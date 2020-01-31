@@ -381,17 +381,13 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("TRUNCATE FOR EACH ROW triggers are not supported")));
 
-	/* INSTEAD triggers must be row-level, and can't have WHEN or columns */
+	/* INSTEAD triggers must be row-level, and can't have columns */
 	if (TRIGGER_FOR_INSTEAD(tgtype))
 	{
 		if (!TRIGGER_FOR_ROW(tgtype))
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("INSTEAD OF triggers must be FOR EACH ROW")));
-		if (stmt->whenClause)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("INSTEAD OF triggers cannot have WHEN conditions")));
 		if (stmt->columns != NIL)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),

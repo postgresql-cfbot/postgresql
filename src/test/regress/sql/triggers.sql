@@ -672,7 +672,11 @@ begin
         end if;
 
         if TG_OP = 'UPDATE' then
-            raise NOTICE 'OLD: %, NEW: %', OLD, NEW;
+            if strpos(argstr, 'instead_of_when') > 0 then
+                raise NOTICE 'instead_of_when fired';
+            else
+                raise NOTICE 'OLD: %, NEW: %', OLD, NEW;
+            end if;
             UPDATE main_table SET a = NEW.a, b = NEW.b WHERE a = OLD.a AND b = OLD.b;
             if NOT FOUND then RETURN NULL; end if;
             RETURN NEW;
@@ -727,10 +731,6 @@ FOR EACH ROW EXECUTE PROCEDURE view_trigger('instead_of_upd');
 CREATE TRIGGER invalid_trig INSTEAD OF DELETE ON main_table
 FOR EACH ROW EXECUTE PROCEDURE view_trigger('instead_of_del');
 
--- Don't support WHEN clauses with INSTEAD OF triggers
-CREATE TRIGGER invalid_trig INSTEAD OF UPDATE ON main_view
-FOR EACH ROW WHEN (OLD.a <> NEW.a) EXECUTE PROCEDURE view_trigger('instead_of_upd');
-
 -- Don't support column-level INSTEAD OF triggers
 CREATE TRIGGER invalid_trig INSTEAD OF UPDATE OF a ON main_view
 FOR EACH ROW EXECUTE PROCEDURE view_trigger('instead_of_upd');
@@ -748,6 +748,10 @@ FOR EACH ROW EXECUTE PROCEDURE view_trigger('instead_of_upd');
 
 CREATE TRIGGER instead_of_delete_trig INSTEAD OF DELETE ON main_view
 FOR EACH ROW EXECUTE PROCEDURE view_trigger('instead_of_del');
+
+CREATE TRIGGER when_different_update INSTEAD OF UPDATE ON main_view
+FOR EACH ROW WHEN (OLD.a IS DISTINCT FROM NEW.a)
+EXECUTE PROCEDURE view_trigger('instead_of_when');
 
 -- Valid BEFORE statement VIEW triggers
 CREATE TRIGGER before_ins_stmt_trig BEFORE INSERT ON main_view
@@ -786,6 +790,9 @@ UPDATE main_view SET b = 32 WHERE a = 21 AND b = 31 RETURNING a, b;
 
 -- Before and after stmt triggers should fire even when no rows are affected
 UPDATE main_view SET b = 0 WHERE false;
+
+-- INSTEAD OF ... WHEN trigger fires.
+UPDATE main_view SET a = 23 WHERE a = 21 RETURNING *;
 
 -- Delete from view using trigger
 DELETE FROM main_view WHERE a IN (20,21);

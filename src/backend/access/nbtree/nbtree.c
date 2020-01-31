@@ -132,6 +132,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->ambulkdelete = btbulkdelete;
 	amroutine->amvacuumcleanup = btvacuumcleanup;
 	amroutine->amcanreturn = btcanreturn;
+	amroutine->amskip = btskip;
 	amroutine->amcostestimate = btcostestimate;
 	amroutine->amoptions = btoptions;
 	amroutine->amproperty = btproperty;
@@ -381,6 +382,8 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	 */
 	so->currTuples = so->markTuples = NULL;
 
+	so->skipScanKey = NULL;
+
 	scan->xs_itupdesc = RelationGetDescr(rel);
 
 	scan->opaque = so;
@@ -446,6 +449,16 @@ btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 
 	/* If any keys are SK_SEARCHARRAY type, set up array-key info */
 	_bt_preprocess_array_keys(scan);
+}
+
+/*
+ * btskip() -- skip to the beginning of the next key prefix
+ */
+bool
+btskip(IndexScanDesc scan, ScanDirection direction,
+	   ScanDirection indexdir, bool start, int prefix)
+{
+	return _bt_skip(scan, direction, indexdir, start, prefix);
 }
 
 /*

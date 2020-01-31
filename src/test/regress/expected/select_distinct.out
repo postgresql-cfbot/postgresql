@@ -244,3 +244,508 @@ SELECT null IS NOT DISTINCT FROM null as "yes";
  t
 (1 row)
 
+-- index only skip scan
+CREATE TABLE distinct_a (a int, b int, c int);
+INSERT INTO distinct_a (
+    SELECT five, tenthous, 10 FROM
+    generate_series(1, 5) five,
+    generate_series(1, 10000) tenthous
+);
+CREATE INDEX ON distinct_a (a, b);
+ANALYZE distinct_a;
+SELECT DISTINCT a FROM distinct_a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+ 5
+(5 rows)
+
+SELECT DISTINCT a FROM distinct_a WHERE a = 1;
+ a 
+---
+ 1
+(1 row)
+
+SELECT DISTINCT a FROM distinct_a ORDER BY a DESC;
+ a 
+---
+ 5
+ 4
+ 3
+ 2
+ 1
+(5 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT a FROM distinct_a;
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Index Only Scan using distinct_a_a_b_idx on distinct_a
+   Skip scan: true
+(2 rows)
+
+-- test index skip scan with a condition on a non unique field
+SELECT DISTINCT ON (a) a, b FROM distinct_a WHERE b = 2;
+ a | b 
+---+---
+ 1 | 2
+ 2 | 2
+ 3 | 2
+ 4 | 2
+ 5 | 2
+(5 rows)
+
+-- test index skip scan backwards
+SELECT DISTINCT ON (a) a, b FROM distinct_a ORDER BY a DESC, b DESC;
+ a |   b   
+---+-------
+ 5 | 10000
+ 4 | 10000
+ 3 | 10000
+ 2 | 10000
+ 1 | 10000
+(5 rows)
+
+-- check colums order
+CREATE INDEX distinct_a_b_a on distinct_a (b, a);
+SELECT DISTINCT a FROM distinct_a WHERE b = 2;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+ 5
+(5 rows)
+
+SELECT DISTINCT on (a, b) a, b FROM distinct_a WHERE b = 2;
+ a | b 
+---+---
+ 1 | 2
+ 2 | 2
+ 3 | 2
+ 4 | 2
+ 5 | 2
+(5 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT a FROM distinct_a WHERE b = 2;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Index Only Scan using distinct_a_b_a on distinct_a
+   Skip scan: true
+   Index Cond: (b = 2)
+(3 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT on (a, b) a, b FROM distinct_a WHERE b = 2;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Index Only Scan using distinct_a_b_a on distinct_a
+   Skip scan: true
+   Index Cond: (b = 2)
+(3 rows)
+
+DROP INDEX distinct_a_b_a;
+-- test opposite scan/index directions inside a cursor
+-- forward/backward
+BEGIN;
+DECLARE c SCROLL CURSOR FOR
+SELECT DISTINCT ON (a) a,b FROM distinct_a ORDER BY a, b;
+FETCH FROM c;
+ a | b 
+---+---
+ 1 | 1
+(1 row)
+
+FETCH BACKWARD FROM c;
+ a | b 
+---+---
+(0 rows)
+
+FETCH 6 FROM c;
+ a | b 
+---+---
+ 1 | 1
+ 2 | 1
+ 3 | 1
+ 4 | 1
+ 5 | 1
+(5 rows)
+
+FETCH BACKWARD 6 FROM c;
+ a | b 
+---+---
+ 5 | 1
+ 4 | 1
+ 3 | 1
+ 2 | 1
+ 1 | 1
+(5 rows)
+
+FETCH 6 FROM c;
+ a | b 
+---+---
+ 1 | 1
+ 2 | 1
+ 3 | 1
+ 4 | 1
+ 5 | 1
+(5 rows)
+
+FETCH BACKWARD 6 FROM c;
+ a | b 
+---+---
+ 5 | 1
+ 4 | 1
+ 3 | 1
+ 2 | 1
+ 1 | 1
+(5 rows)
+
+END;
+-- backward/forward
+BEGIN;
+DECLARE c SCROLL CURSOR FOR
+SELECT DISTINCT ON (a) a,b FROM distinct_a ORDER BY a DESC, b DESC;
+FETCH FROM c;
+ a |   b   
+---+-------
+ 5 | 10000
+(1 row)
+
+FETCH BACKWARD FROM c;
+ a | b 
+---+---
+(0 rows)
+
+FETCH 6 FROM c;
+ a |   b   
+---+-------
+ 5 | 10000
+ 4 | 10000
+ 3 | 10000
+ 2 | 10000
+ 1 | 10000
+(5 rows)
+
+FETCH BACKWARD 6 FROM c;
+ a |   b   
+---+-------
+ 1 | 10000
+ 2 | 10000
+ 3 | 10000
+ 4 | 10000
+ 5 | 10000
+(5 rows)
+
+FETCH 6 FROM c;
+ a |   b   
+---+-------
+ 5 | 10000
+ 4 | 10000
+ 3 | 10000
+ 2 | 10000
+ 1 | 10000
+(5 rows)
+
+FETCH BACKWARD 6 FROM c;
+ a |   b   
+---+-------
+ 1 | 10000
+ 2 | 10000
+ 3 | 10000
+ 4 | 10000
+ 5 | 10000
+(5 rows)
+
+END;
+-- test missing values and skipping from the end
+CREATE TABLE distinct_abc(a int, b int, c int);
+CREATE INDEX ON distinct_abc(a, b, c);
+INSERT INTO distinct_abc
+	VALUES (1, 1, 1),
+		   (1, 1, 2),
+		   (1, 2, 2),
+		   (1, 2, 3),
+		   (2, 2, 1),
+		   (2, 2, 3),
+		   (3, 1, 1),
+		   (3, 1, 2),
+		   (3, 2, 2),
+		   (3, 2, 3);
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT ON (a) a,b,c FROM distinct_abc WHERE c = 2;
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Index Only Scan using distinct_abc_a_b_c_idx on distinct_abc
+   Skip scan: true
+   Index Cond: (c = 2)
+(3 rows)
+
+BEGIN;
+DECLARE c SCROLL CURSOR FOR
+SELECT DISTINCT ON (a) a,b,c FROM distinct_abc WHERE c = 2;
+FETCH ALL FROM c;
+ a | b | c 
+---+---+---
+ 1 | 1 | 2
+ 3 | 1 | 2
+(2 rows)
+
+FETCH BACKWARD ALL FROM c;
+ a | b | c 
+---+---+---
+ 3 | 1 | 2
+ 1 | 1 | 2
+(2 rows)
+
+END;
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT ON (a) a,b,c FROM distinct_abc WHERE c = 2
+ORDER BY a DESC, b DESC;
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Index Only Scan Backward using distinct_abc_a_b_c_idx on distinct_abc
+   Skip scan: true
+   Index Cond: (c = 2)
+(3 rows)
+
+BEGIN;
+DECLARE c SCROLL CURSOR FOR
+SELECT DISTINCT ON (a) a,b,c FROM distinct_abc WHERE c = 2
+ORDER BY a DESC, b DESC;
+FETCH ALL FROM c;
+ a | b | c 
+---+---+---
+ 3 | 2 | 2
+ 1 | 2 | 2
+(2 rows)
+
+FETCH BACKWARD ALL FROM c;
+ a | b | c 
+---+---+---
+ 1 | 2 | 2
+ 3 | 2 | 2
+(2 rows)
+
+END;
+DROP TABLE distinct_abc;
+-- index skip scan
+SELECT DISTINCT ON (a) a, b, c
+FROM distinct_a ORDER BY a;
+ a | b | c  
+---+---+----
+ 1 | 1 | 10
+ 2 | 1 | 10
+ 3 | 1 | 10
+ 4 | 1 | 10
+ 5 | 1 | 10
+(5 rows)
+
+SELECT DISTINCT ON (a) a, b, c
+FROM distinct_a WHERE a = 1 ORDER BY a;
+ a | b | c  
+---+---+----
+ 1 | 1 | 10
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT ON (a) a, b, c
+FROM distinct_a ORDER BY a;
+                    QUERY PLAN                     
+---------------------------------------------------
+ Index Scan using distinct_a_a_b_idx on distinct_a
+   Skip scan: true
+(2 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT ON (a) a, b, c
+FROM distinct_a WHERE a = 1 ORDER BY a;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Unique
+   ->  Bitmap Heap Scan on distinct_a
+         Recheck Cond: (a = 1)
+         ->  Bitmap Index Scan on distinct_a_a_b_idx
+               Index Cond: (a = 1)
+(5 rows)
+
+-- check colums order
+SELECT DISTINCT a FROM distinct_a WHERE b = 2 AND c = 10;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+ 5
+(5 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT a FROM distinct_a WHERE b = 2 AND c = 10;
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Unique
+   ->  Index Scan using distinct_a_a_b_idx on distinct_a
+         Index Cond: (b = 2)
+         Filter: (c = 10)
+(4 rows)
+
+-- check projection case
+SELECT DISTINCT a, a FROM distinct_a WHERE b = 2;
+ a | a 
+---+---
+ 1 | 1
+ 2 | 2
+ 3 | 3
+ 4 | 4
+ 5 | 5
+(5 rows)
+
+SELECT DISTINCT a, 1 FROM distinct_a WHERE b = 2;
+ a | ?column? 
+---+----------
+ 1 |        1
+ 2 |        1
+ 3 |        1
+ 4 |        1
+ 5 |        1
+(5 rows)
+
+-- test cursor forward/backward movements
+BEGIN;
+DECLARE c SCROLL CURSOR FOR SELECT DISTINCT a FROM distinct_a;
+FETCH FROM c;
+ a 
+---
+ 1
+(1 row)
+
+FETCH BACKWARD FROM c;
+ a 
+---
+(0 rows)
+
+FETCH 6 FROM c;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+ 5
+(5 rows)
+
+FETCH BACKWARD 6 FROM c;
+ a 
+---
+ 5
+ 4
+ 3
+ 2
+ 1
+(5 rows)
+
+FETCH 6 FROM c;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+ 5
+(5 rows)
+
+FETCH BACKWARD 6 FROM c;
+ a 
+---
+ 5
+ 4
+ 3
+ 2
+ 1
+(5 rows)
+
+END;
+DROP TABLE distinct_a;
+-- test tuples visibility
+CREATE TABLE distinct_visibility (a int, b int);
+INSERT INTO distinct_visibility (select a, b from generate_series(1,5) a, generate_series(1, 10000) b);
+CREATE INDEX ON distinct_visibility (a, b);
+ANALYZE distinct_visibility;
+SELECT DISTINCT ON (a) a, b FROM distinct_visibility ORDER BY a, b;
+ a | b 
+---+---
+ 1 | 1
+ 2 | 1
+ 3 | 1
+ 4 | 1
+ 5 | 1
+(5 rows)
+
+DELETE FROM distinct_visibility WHERE a = 2 and b = 1;
+SELECT DISTINCT ON (a) a, b FROM distinct_visibility ORDER BY a, b;
+ a | b 
+---+---
+ 1 | 1
+ 2 | 2
+ 3 | 1
+ 4 | 1
+ 5 | 1
+(5 rows)
+
+SELECT DISTINCT ON (a) a, b FROM distinct_visibility ORDER BY a DESC, b DESC;
+ a |   b   
+---+-------
+ 5 | 10000
+ 4 | 10000
+ 3 | 10000
+ 2 | 10000
+ 1 | 10000
+(5 rows)
+
+DELETE FROM distinct_visibility WHERE a = 2 and b = 10000;
+SELECT DISTINCT ON (a) a, b FROM distinct_visibility ORDER BY a DESC, b DESC;
+ a |   b   
+---+-------
+ 5 | 10000
+ 4 | 10000
+ 3 | 10000
+ 2 |  9999
+ 1 | 10000
+(5 rows)
+
+DROP TABLE distinct_visibility;
+-- test page boundaries
+CREATE TABLE distinct_boundaries AS
+    SELECT a, b::int2 b, (b % 2)::int2 c FROM
+        generate_series(1, 5) a,
+        generate_series(1,366) b;
+CREATE INDEX ON distinct_boundaries (a, b, c);
+ANALYZE distinct_boundaries;
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT ON (a) a, b, c from distinct_boundaries
+WHERE b >= 1 and c = 0 ORDER BY a, b;
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Index Only Scan using distinct_boundaries_a_b_c_idx on distinct_boundaries
+   Skip scan: true
+   Index Cond: ((b >= 1) AND (c = 0))
+(3 rows)
+
+SELECT DISTINCT ON (a) a, b, c from distinct_boundaries
+WHERE b >= 1 and c = 0 ORDER BY a, b;
+ a | b | c 
+---+---+---
+ 1 | 2 | 0
+ 2 | 2 | 0
+ 3 | 2 | 0
+ 4 | 2 | 0
+ 5 | 2 | 0
+(5 rows)
+
+DROP TABLE distinct_boundaries;

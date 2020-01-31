@@ -1254,6 +1254,29 @@ SELECT target FROM tests WHERE subject = 'some-subject' AND success;
    and later will recognize such cases and allow index-only scans to be
    generated, but older versions will not.
   </para>
+
+  <sect2 id="indexes-index-skip-scans">
+    <title>Index Skip Scans</title>
+
+    <indexterm zone="indexes-index-skip-scans">
+      <primary>index</primary>
+      <secondary>index-skip scans</secondary>
+    </indexterm>
+    <indexterm zone="indexes-index-skip-scans">
+      <primary>index-skip scan</primary>
+    </indexterm>
+
+    <para>
+     When the rows retrieved from an index scan are then deduplicated by
+     eliminating rows matching on a prefix of index keys (e.g. when using
+     <literal>SELECT DISTINCT</literal>), the planner will consider
+     skipping groups of rows with a matching key prefix. When a row with
+     a particular prefix is found, remaining rows with the same key prefix
+     are skipped.  The larger the number of rows with the same key prefix
+     rows (i.e. the lower the number of distinct key prefixes in the index),
+     the more efficient this is.
+    </para>
+  </sect2>
  </sect1>
 
 

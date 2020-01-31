@@ -7083,6 +7083,37 @@ StartupXLOG(void)
 				HandleStartupProcInterrupts();
 
 				/*
+				 * Start WAL receiver without waiting for startup process to
+				 * finish replay, so that streaming replication is established
+				 * at the earliest.  When the replication is configured to be
+				 * synchronous this would unblock commits waiting for WAL to
+				 * be written and/or flushed by synchronous standby.
+				 */
+				if (StandbyModeRequested &&
+					reachedConsistency &&
+					wal_receiver_start_condition == WAL_RCV_START_AT_CONSISTENCY &&
+					!WalRcvStreaming())
+				{
+					XLogRecPtr startpoint;
+					XLogSegNo startseg;
+					TimeLineID startpointTLI;
+					LWLockAcquire(ControlFileLock, LW_SHARED);
+					startseg = ControlFile->lastFlushedSeg;
+					startpointTLI = ControlFile->lastFlushedSegTLI;
+					LWLockRelease(ControlFileLock);
+					if (startpointTLI > 0)
+					{
+						elog(LOG, "found last flushed segment %lu on time line %d, starting WAL receiver",
+							 startseg, startpointTLI);
+						XLogSegNoOffsetToRecPtr(startseg, 0, wal_segment_size, startpoint);
+						RequestXLogStreaming(startpointTLI,
+											 startpoint,
+											 PrimaryConnInfo,
+											 PrimarySlotName);
+					}
+				}
+
+				/*
 				 * Pause WAL replay, if requested by a hot-standby session via
 				 * SetRecoveryPause().
 				 *

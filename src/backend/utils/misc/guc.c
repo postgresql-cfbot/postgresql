@@ -465,6 +465,12 @@ const struct config_enum_entry ssl_protocol_versions_info[] = {
 	{NULL, 0, false}
 };
 
+const struct config_enum_entry wal_rcv_start_options[] = {
+	{"catchup", WAL_RCV_START_AT_CATCHUP, true},
+	{"consistency", WAL_RCV_START_AT_CONSISTENCY, true},
+	{NULL, 0, false}
+};
+
 static struct config_enum_entry shared_memory_options[] = {
 #ifndef WIN32
 	{"sysv", SHMEM_TYPE_SYSV, false},
@@ -4631,6 +4637,17 @@ static struct config_enum ConfigureNamesEnum[] =
 		PG_TLS_ANY,
 		ssl_protocol_versions_info,
 		check_ssl_max_protocol_version, NULL, NULL
+	},
+
+	{
+		{"wal_receiver_start_condition", PGC_POSTMASTER, REPLICATION_STANDBY,
+			gettext_noop("When to start WAL receiver."),
+			NULL,
+		},
+		&wal_receiver_start_condition,
+		WAL_RCV_START_AT_CATCHUP,
+		wal_rcv_start_options,
+		NULL, NULL, NULL
 	},
 
 	/* End-of-list marker */

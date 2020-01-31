@@ -234,6 +234,10 @@ main(int argc, char *argv[])
 		   dbState(ControlFile->state));
 	printf(_("pg_control last modified:             %s\n"),
 		   pgctime_str);
+	printf(_("Latest flushed WAL segment number:    %lu\n"),
+		   ControlFile->lastFlushedSeg);
+	printf(_("Latest flushed TimeLineID:            %u\n"),
+		   ControlFile->lastFlushedSegTLI);
 	printf(_("Latest checkpoint location:           %X/%X\n"),
 		   (uint32) (ControlFile->checkPoint >> 32),
 		   (uint32) ControlFile->checkPoint);

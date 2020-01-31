@@ -143,6 +143,11 @@ typedef struct ControlFileData
 	 * to disk, we mustn't start up until we reach X again. Zero when not
 	 * doing archive recovery.
 	 *
+	 * lastFlushedSeg is the WAL segment number of the most recently flushed
+	 * WAL file by walreceiver.  It is updated by walreceiver when a received
+	 * WAL record falls on a new WAL segment file.  This is used as the start
+	 * point to resume WAL streaming if it is stopped.
+	 *
 	 * backupStartPoint is the redo pointer of the backup start checkpoint, if
 	 * we are recovering from an online backup and haven't reached the end of
 	 * backup yet. It is reset to zero when the end of backup is reached, and
@@ -165,6 +170,8 @@ typedef struct ControlFileData
 	 */
 	XLogRecPtr	minRecoveryPoint;
 	TimeLineID	minRecoveryPointTLI;
+	XLogSegNo	lastFlushedSeg;
+	TimeLineID	lastFlushedSegTLI;
 	XLogRecPtr	backupStartPoint;
 	XLogRecPtr	backupEndPoint;
 	bool		backupEndRequired;

@@ -32,6 +32,36 @@ static const char *sgr_locus = NULL;
 #define ANSI_ESCAPE_FMT "\x1b[%sm"
 #define ANSI_ESCAPE_RESET "\x1b[0m"
 
+#ifdef WIN32
+
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+
+/*
+ * Check Windows support for VT100
+ */
+static bool
+enable_vt_mode()
+{
+	/* Check stderr */
+	HANDLE hOut = GetStdHandle(STD_ERROR_HANDLE);
+	DWORD dwMode = 0;
+
+	if (hOut == INVALID_HANDLE_VALUE)
+		return false;
+
+	if (!GetConsoleMode(hOut, &dwMode))
+		return false;
+
+	dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+	if (!SetConsoleMode(hOut, dwMode))
+		return false;
+
+	return true;
+}
+#endif
+
 /*
  * This should be called before any output happens.
  */
@@ -49,8 +79,13 @@ pg_logging_init(const char *argv0)
 
 	if (pg_color_env)
 	{
+#ifdef WIN32
+		bool	is_terminal = enable_vt_mode();
+#else
+		bool	is_terminal = isatty(fileno(stderr));
+#endif
 		if (strcmp(pg_color_env, "always") == 0 ||
-			(strcmp(pg_color_env, "auto") == 0 && isatty(fileno(stderr))))
+			(strcmp(pg_color_env, "auto") == 0 && is_terminal))
 			log_color = true;
 	}
 

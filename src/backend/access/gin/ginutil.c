@@ -70,6 +70,7 @@ ginhandler(PG_FUNCTION_ARGS)
 	amroutine->amproperty = NULL;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = ginvalidate;
+	amroutine->amcheckmembers = gincheckmembers;
 	amroutine->ambeginscan = ginbeginscan;
 	amroutine->amrescan = ginrescan;
 	amroutine->amgettuple = NULL;

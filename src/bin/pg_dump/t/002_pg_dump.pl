@@ -523,6 +523,7 @@ my %tests = (
 						 OPERATOR 5 >(bigint,int4),
 						 FUNCTION 1 (int4, int4) btint4cmp(int4,int4),
 						 FUNCTION 2 (int4, int4) btint4sortsupport(internal);',
+		# note: it's correct that btint8sortsupport is included here:
 		regexp => qr/^
 			\QALTER OPERATOR FAMILY dump_test.op_family USING btree ADD\E\n\s+
 			\QOPERATOR 1 <(bigint,integer) ,\E\n\s+
@@ -531,6 +532,7 @@ my %tests = (
 			\QOPERATOR 4 >=(bigint,integer) ,\E\n\s+
 			\QOPERATOR 5 >(bigint,integer) ,\E\n\s+
 			\QFUNCTION 1 (integer, integer) btint4cmp(integer,integer) ,\E\n\s+
+			\QFUNCTION 2 (bigint, bigint) btint8sortsupport(internal) ,\E\n\s+
 			\QFUNCTION 2 (integer, integer) btint4sortsupport(internal);\E
 			/xm,
 		like =>
@@ -1555,6 +1557,7 @@ my %tests = (
 						 OPERATOR 5 >(bigint,bigint),
 						 FUNCTION 1 btint8cmp(bigint,bigint),
 						 FUNCTION 2 btint8sortsupport(internal);',
+		# note: it's correct that btint8sortsupport isn't included here:
 		regexp => qr/^
 			\QCREATE OPERATOR CLASS dump_test.op_class\E\n\s+
 			\QFOR TYPE bigint USING btree FAMILY dump_test.op_family AS\E\n\s+
@@ -1563,8 +1566,7 @@ my %tests = (
 			\QOPERATOR 3 =(bigint,bigint) ,\E\n\s+
 			\QOPERATOR 4 >=(bigint,bigint) ,\E\n\s+
 			\QOPERATOR 5 >(bigint,bigint) ,\E\n\s+
-			\QFUNCTION 1 (bigint, bigint) btint8cmp(bigint,bigint) ,\E\n\s+
-			\QFUNCTION 2 (bigint, bigint) btint8sortsupport(internal);\E
+			\QFUNCTION 1 (bigint, bigint) btint8cmp(bigint,bigint);\E
 			/xm,
 		like =>
 		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },

@@ -834,6 +834,10 @@ extern void _bt_check_third_page(Relation rel, Relation heap,
  * prototypes for functions in nbtvalidate.c
  */
 extern bool btvalidate(Oid opclassoid);
+extern void btcheckmembers(Oid opfamilyoid,
+						   Oid opclassoid,
+						   List *operators,
+						   List *functions);
 
 /*
  * prototypes for functions in nbtsort.c

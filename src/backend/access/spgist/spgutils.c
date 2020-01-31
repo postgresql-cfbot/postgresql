@@ -73,6 +73,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amproperty = spgproperty;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = spgvalidate;
+	amroutine->amcheckmembers = spgcheckmembers;
 	amroutine->ambeginscan = spgbeginscan;
 	amroutine->amrescan = spgrescan;
 	amroutine->amgettuple = spggettuple;

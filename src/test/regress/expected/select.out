@@ -861,17 +861,13 @@ RESET enable_indexscan;
 explain (costs off)
 select unique1, unique2 from onek2
   where (unique2 = 11 or unique1 = 0) and stringu1 < 'B';
-                                   QUERY PLAN                                   
---------------------------------------------------------------------------------
+                 QUERY PLAN                  
+---------------------------------------------
  Bitmap Heap Scan on onek2
-   Recheck Cond: (((unique2 = 11) AND (stringu1 < 'B'::name)) OR (unique1 = 0))
-   Filter: (stringu1 < 'B'::name)
-   ->  BitmapOr
-         ->  Bitmap Index Scan on onek2_u2_prtl
-               Index Cond: (unique2 = 11)
-         ->  Bitmap Index Scan on onek2_u1_prtl
-               Index Cond: (unique1 = 0)
-(8 rows)
+   Recheck Cond: (stringu1 < 'B'::name)
+   Filter: ((unique2 = 11) OR (unique1 = 0))
+   ->  Bitmap Index Scan on onek2_u2_prtl
+(4 rows)
 
 select unique1, unique2 from onek2
   where (unique2 = 11 or unique1 = 0) and stringu1 < 'B';

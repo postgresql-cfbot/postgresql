@@ -3144,22 +3144,26 @@ select t1.unique2, t1.stringu1, t2.unique1, t2.stringu2 from
   left join tenk1 t2
   on (subq1.y1 = t2.unique1)
 where t1.unique2 < 42 and t1.stringu1 > t2.stringu2;
-                              QUERY PLAN                               
------------------------------------------------------------------------
+                         QUERY PLAN                         
+------------------------------------------------------------
  Nested Loop
    ->  Nested Loop
          Join Filter: (t1.stringu1 > t2.stringu2)
-         ->  Nested Loop
-               ->  Nested Loop
-                     ->  Seq Scan on onerow
-                     ->  Seq Scan on onerow onerow_1
-               ->  Index Scan using tenk1_unique2 on tenk1 t1
-                     Index Cond: ((unique2 = (11)) AND (unique2 < 42))
+         ->  Hash Join
+               Hash Cond: (t1.unique2 = (11))
+               ->  Bitmap Heap Scan on tenk1 t1
+                     Recheck Cond: (unique2 < 42)
+                     ->  Bitmap Index Scan on tenk1_unique2
+                           Index Cond: (unique2 < 42)
+               ->  Hash
+                     ->  Nested Loop
+                           ->  Seq Scan on onerow
+                           ->  Seq Scan on onerow onerow_1
          ->  Index Scan using tenk1_unique1 on tenk1 t2
                Index Cond: (unique1 = (3))
    ->  Seq Scan on int4_tbl i1
          Filter: (f1 = 0)
-(13 rows)
+(17 rows)
 
 select t1.unique2, t1.stringu1, t2.unique1, t2.stringu2 from
   tenk1 t1
@@ -3212,18 +3216,22 @@ select t1.unique2, t1.stringu1, t2.unique1, t2.stringu2 from
   left join tenk1 t2
   on (subq1.y1 = t2.unique1)
 where t1.unique2 < 42 and t1.stringu1 > t2.stringu2;
-                           QUERY PLAN                            
------------------------------------------------------------------
+                      QUERY PLAN                      
+------------------------------------------------------
  Nested Loop
    Join Filter: (t1.stringu1 > t2.stringu2)
-   ->  Nested Loop
-         ->  Seq Scan on int4_tbl i1
-               Filter: (f1 = 0)
-         ->  Index Scan using tenk1_unique2 on tenk1 t1
-               Index Cond: ((unique2 = (11)) AND (unique2 < 42))
+   ->  Hash Join
+         Hash Cond: (t1.unique2 = (11))
+         ->  Bitmap Heap Scan on tenk1 t1
+               Recheck Cond: (unique2 < 42)
+               ->  Bitmap Index Scan on tenk1_unique2
+                     Index Cond: (unique2 < 42)
+         ->  Hash
+               ->  Seq Scan on int4_tbl i1
+                     Filter: (f1 = 0)
    ->  Index Scan using tenk1_unique1 on tenk1 t2
          Index Cond: (unique1 = (3))
-(9 rows)
+(13 rows)
 
 select t1.unique2, t1.stringu1, t2.unique1, t2.stringu2 from
   tenk1 t1

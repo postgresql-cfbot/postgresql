@@ -491,12 +491,13 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 				csquared;
 	double		spc_seq_page_cost,
 				spc_random_page_cost;
-	Cost		min_IO_cost,
+	double		min_pages_fetched,	/* The min and max page count based on index correlation */
+				max_pages_fetched;
+	Cost		min_IO_cost,	/* The min and max cost based on index correlation */
 				max_IO_cost;
 	QualCost	qpqual_cost;
 	Cost		cpu_per_tuple;
 	double		tuples_fetched;
-	double		pages_fetched;
 	double		rand_heap_pages;
 	double		index_pages;
 
@@ -549,11 +550,13 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 
 	/*
 	 * Save amcostestimate's results for possible use in bitmap scan planning.
-	 * We don't bother to save indexStartupCost or indexCorrelation, because a
-	 * bitmap scan doesn't care about either.
+	 * We don't bother to save indexStartupCost, because a bitmap scan
+	 * can't start until the index scan completes, so only cares about its
+	 * total cost.
 	 */
 	path->indextotalcost = indexTotalCost;
 	path->indexselectivity = indexSelectivity;
+	path->indexCorrelation = indexCorrelation;
 
 	/* all costs for touching index itself included here */
 	startup_cost += indexStartupCost;
@@ -579,7 +582,8 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 	 * (just after a CLUSTER, for example), the number of pages fetched should
 	 * be exactly selectivity * table_size.  What's more, all but the first
 	 * will be sequential fetches, not the random fetches that occur in the
-	 * uncorrelated case.  So if the number of pages is more than 1, we
+	 * uncorrelated case (the index is expected to read fewer pages, *and* each
+	 * page read is cheaper).  So if the number of pages is more than 1, we
 	 * ought to charge
 	 *		spc_random_page_cost + (pages_fetched - 1) * spc_seq_page_cost
 	 * For partially-correlated indexes, we ought to charge somewhere between
@@ -604,17 +608,17 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 		 * pro-rate the costs for one scan.  In this case we assume all the
 		 * fetches are random accesses.
 		 */
-		pages_fetched = index_pages_fetched(tuples_fetched * loop_count,
+		max_pages_fetched = index_pages_fetched(tuples_fetched * loop_count,
 											baserel->pages,
 											(double) index->pages,
 											root);
 
 		if (indexonly)
-			pages_fetched = ceil(pages_fetched * (1.0 - baserel->allvisfrac));
+			max_pages_fetched = ceil(max_pages_fetched * (1.0 - baserel->allvisfrac));
 
-		rand_heap_pages = pages_fetched;
+		rand_heap_pages = max_pages_fetched;
 
-		max_IO_cost = (pages_fetched * spc_random_page_cost) / loop_count;
+		max_IO_cost = (max_pages_fetched * spc_random_page_cost) / loop_count;
 
 		/*
 		 * In the perfectly correlated case, the number of pages touched by
@@ -626,17 +630,17 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 		 * where such a plan is actually interesting, only one page would get
 		 * fetched per scan anyway, so it shouldn't matter much.)
 		 */
-		pages_fetched = ceil(indexSelectivity * (double) baserel->pages);
+		min_pages_fetched = ceil(indexSelectivity * (double) baserel->pages);
 
-		pages_fetched = index_pages_fetched(pages_fetched * loop_count,
+		min_pages_fetched = index_pages_fetched(min_pages_fetched * loop_count,
 											baserel->pages,
 											(double) index->pages,
 											root);
 
 		if (indexonly)
-			pages_fetched = ceil(pages_fetched * (1.0 - baserel->allvisfrac));
+			min_pages_fetched = ceil(min_pages_fetched * (1.0 - baserel->allvisfrac));
 
-		min_IO_cost = (pages_fetched * spc_random_page_cost) / loop_count;
+		min_IO_cost = (min_pages_fetched * spc_random_page_cost) / loop_count;
 	}
 	else
 	{
@@ -644,30 +648,31 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 		 * Normal case: apply the Mackert and Lohman formula, and then
 		 * interpolate between that and the correlation-derived result.
 		 */
-		pages_fetched = index_pages_fetched(tuples_fetched,
+
+		/* For the perfectly uncorrelated case (csquared=0) */
+		max_pages_fetched = index_pages_fetched(tuples_fetched,
 											baserel->pages,
 											(double) index->pages,
 											root);
 
 		if (indexonly)
-			pages_fetched = ceil(pages_fetched * (1.0 - baserel->allvisfrac));
+			max_pages_fetched = ceil(max_pages_fetched * (1.0 - baserel->allvisfrac));
 
-		rand_heap_pages = pages_fetched;
+		rand_heap_pages = max_pages_fetched;
 
-		/* max_IO_cost is for the perfectly uncorrelated case (csquared=0) */
-		max_IO_cost = pages_fetched * spc_random_page_cost;
+		max_IO_cost = max_pages_fetched * spc_random_page_cost;
 
-		/* min_IO_cost is for the perfectly correlated case (csquared=1) */
-		pages_fetched = ceil(indexSelectivity * (double) baserel->pages);
+		/* For the perfectly correlated case (csquared=1) */
+		min_pages_fetched = ceil(indexSelectivity * (double) baserel->pages);
 
 		if (indexonly)
-			pages_fetched = ceil(pages_fetched * (1.0 - baserel->allvisfrac));
+			min_pages_fetched = ceil(min_pages_fetched * (1.0 - baserel->allvisfrac));
 
-		if (pages_fetched > 0)
+		if (min_pages_fetched > 0)
 		{
 			min_IO_cost = spc_random_page_cost;
-			if (pages_fetched > 1)
-				min_IO_cost += (pages_fetched - 1) * spc_seq_page_cost;
+			if (min_pages_fetched > 1)
+				min_IO_cost += (min_pages_fetched - 1) * spc_seq_page_cost;
 		}
 		else
 			min_IO_cost = 0;
@@ -986,12 +991,31 @@ cost_bitmap_heap_scan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
 	 * appropriate to charge spc_seq_page_cost apiece.  The effect is
 	 * nonlinear, too. For lack of a better idea, interpolate like this to
 	 * determine the cost per page.
+	 * Note this works at PAGE granularity, so even if we read 1% of a
+	 * table's tuples, if we have to read nearly every page, it should be
+	 * considered sequential.
 	 */
-	if (pages_fetched >= 2.0)
+	if (pages_fetched >= 2.0) {
+		double correlation = ((IndexPath *)bitmapqual)->indexCorrelation;
+		double cost_per_page_corr;
+		/*
+		 * Interpolate based on pages_fetched and correlation from seq_page_cost to rand_page_cost.
+		 * A highly correlated bitmap scan 1) likely reads fewer pages (handled in
+		 * compute_bitmap_pages); and, 2) at higher "density" (more sequential).
+		 */
 		cost_per_page = spc_random_page_cost -
 			(spc_random_page_cost - spc_seq_page_cost)
 			* sqrt(pages_fetched / T);
-	else
+		cost_per_page_corr = spc_random_page_cost -
+			(spc_random_page_cost - spc_seq_page_cost)
+			* (correlation*correlation);
+
+		/*
+		 * We expect sequential reads and low cost_per_page when *either*
+		 * T is high or correlation is high.
+		 */
+		cost_per_page = Min(cost_per_page,cost_per_page_corr);
+	} else
 		cost_per_page = spc_random_page_cost;
 
 	run_cost += pages_fetched * cost_per_page;
@@ -1035,15 +1059,18 @@ cost_bitmap_heap_scan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
 
 /*
  * cost_bitmap_tree_node
- *		Extract cost and selectivity from a bitmap tree node (index/and/or)
+ *		Extract cost, selectivity, and correlation from a bitmap tree node (index/and/or)
  */
 void
-cost_bitmap_tree_node(Path *path, Cost *cost, Selectivity *selec)
+cost_bitmap_tree_node(Path *path, Cost *cost, Selectivity *selec, double *correlation)
 {
 	if (IsA(path, IndexPath))
 	{
 		*cost = ((IndexPath *) path)->indextotalcost;
-		*selec = ((IndexPath *) path)->indexselectivity;
+		if (selec)
+			*selec = ((IndexPath *) path)->indexselectivity;
+		if (correlation)
+			*correlation = ((IndexPath *) path)->indexCorrelation;
 
 		/*
 		 * Charge a small amount per retrieved tuple to reflect the costs of
@@ -1056,12 +1083,18 @@ cost_bitmap_tree_node(Path *path, Cost *cost, Selectivity *selec)
 	else if (IsA(path, BitmapAndPath))
 	{
 		*cost = path->total_cost;
-		*selec = ((BitmapAndPath *) path)->bitmapselectivity;
+		if (selec)
+			*selec = ((BitmapAndPath *) path)->bitmapselectivity;
+		if (correlation)
+			*correlation = ((BitmapAndPath *) path)->bitmapcorrelation;
 	}
 	else if (IsA(path, BitmapOrPath))
 	{
 		*cost = path->total_cost;
-		*selec = ((BitmapOrPath *) path)->bitmapselectivity;
+		if (selec)
+			*selec = ((BitmapOrPath *) path)->bitmapselectivity;
+		if (correlation)
+			*correlation = ((BitmapOrPath *) path)->bitmapcorrelation;
 	}
 	else
 	{
@@ -1084,8 +1117,9 @@ void
 cost_bitmap_and_node(BitmapAndPath *path, PlannerInfo *root)
 {
 	Cost		totalCost;
-	Selectivity selec;
+	Selectivity selec, minsubselec;
 	ListCell   *l;
+	double		correlation;
 
 	/*
 	 * We estimate AND selectivity on the assumption that the inputs are
@@ -1097,22 +1131,31 @@ cost_bitmap_and_node(BitmapAndPath *path, PlannerInfo *root)
 	 * definitely too simplistic?
 	 */
 	totalCost = 0.0;
-	selec = 1.0;
+	minsubselec = selec = 1.0;
+	correlation = 0;
 	foreach(l, path->bitmapquals)
 	{
 		Path	   *subpath = (Path *) lfirst(l);
 		Cost		subCost;
 		Selectivity subselec;
+		double		subcorrelation;
 
-		cost_bitmap_tree_node(subpath, &subCost, &subselec);
+		cost_bitmap_tree_node(subpath, &subCost, &subselec, &subcorrelation);
 
 		selec *= subselec;
+
+		/* For an AND node, use the correlation of its most-selective subpath */
+		if (subselec <= minsubselec) {
+				correlation = subcorrelation;
+				minsubselec = subselec;
+		}
 
 		totalCost += subCost;
 		if (l != list_head(path->bitmapquals))
 			totalCost += 100.0 * cpu_operator_cost;
 	}
 	path->bitmapselectivity = selec;
+	path->bitmapcorrelation = correlation;
 	path->path.rows = 0;		/* per above, not used */
 	path->path.startup_cost = totalCost;
 	path->path.total_cost = totalCost;
@@ -1128,8 +1171,9 @@ void
 cost_bitmap_or_node(BitmapOrPath *path, PlannerInfo *root)
 {
 	Cost		totalCost;
-	Selectivity selec;
+	Selectivity selec, maxsubselec;
 	ListCell   *l;
+	double		correlation;
 
 	/*
 	 * We estimate OR selectivity on the assumption that the inputs are
@@ -1142,16 +1186,24 @@ cost_bitmap_or_node(BitmapOrPath *path, PlannerInfo *root)
 	 * optimized out when the inputs are BitmapIndexScans.
 	 */
 	totalCost = 0.0;
-	selec = 0.0;
+	maxsubselec = selec = 0.0;
+	correlation = 0;
 	foreach(l, path->bitmapquals)
 	{
 		Path	   *subpath = (Path *) lfirst(l);
 		Cost		subCost;
 		Selectivity subselec;
+		double		subcorrelation;
 
-		cost_bitmap_tree_node(subpath, &subCost, &subselec);
+		cost_bitmap_tree_node(subpath, &subCost, &subselec, &subcorrelation);
 
 		selec += subselec;
+
+		/* For an OR node, use the correlation of its least-selective subpath */
+		if (subselec >= maxsubselec) {
+				correlation = subcorrelation;
+				maxsubselec = subselec;
+		}
 
 		totalCost += subCost;
 		if (l != list_head(path->bitmapquals) &&
@@ -1159,6 +1211,7 @@ cost_bitmap_or_node(BitmapOrPath *path, PlannerInfo *root)
 			totalCost += 100.0 * cpu_operator_cost;
 	}
 	path->bitmapselectivity = Min(selec, 1.0);
+	path->bitmapcorrelation = correlation;
 	path->path.rows = 0;		/* per above, not used */
 	path->path.startup_cost = totalCost;
 	path->path.total_cost = totalCost;
@@ -5510,8 +5563,11 @@ compute_bitmap_pages(PlannerInfo *root, RelOptInfo *baserel, Path *bitmapqual,
 {
 	Cost		indexTotalCost;
 	Selectivity indexSelectivity;
+	double		indexCorrelation;
 	double		T;
-	double		pages_fetched;
+	double		pages_fetched,
+				pages_fetchedMIN,
+				pages_fetchedMAX;
 	double		tuples_fetched;
 	double		heap_pages;
 	long		maxentries;
@@ -5520,7 +5576,7 @@ compute_bitmap_pages(PlannerInfo *root, RelOptInfo *baserel, Path *bitmapqual,
 	 * Fetch total cost of obtaining the bitmap, as well as its total
 	 * selectivity.
 	 */
-	cost_bitmap_tree_node(bitmapqual, &indexTotalCost, &indexSelectivity);
+	cost_bitmap_tree_node(bitmapqual, &indexTotalCost, &indexSelectivity, &indexCorrelation);
 
 	/*
 	 * Estimate number of main-table pages fetched.
@@ -5534,7 +5590,12 @@ compute_bitmap_pages(PlannerInfo *root, RelOptInfo *baserel, Path *bitmapqual,
 	 * the same as the Mackert and Lohman formula for the case T <= b (ie, no
 	 * re-reads needed).
 	 */
-	pages_fetched = (2.0 * T * tuples_fetched) / (2.0 * T + tuples_fetched);
+	pages_fetchedMAX = (2.0 * T * tuples_fetched) / (2.0 * T + tuples_fetched);
+
+	/* pages_fetchedMIN is for the perfectly correlated case (csquared=1) */
+	pages_fetchedMIN = ceil(indexSelectivity * (double) baserel->pages);
+
+	pages_fetched = pages_fetchedMAX + indexCorrelation*indexCorrelation*(pages_fetchedMIN - pages_fetchedMAX);
 
 	/*
 	 * Calculate the number of pages fetched from the heap.  Then based on

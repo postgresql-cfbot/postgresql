@@ -155,6 +155,50 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--auth-hostssl=<replaceable class="parameter">authmethod</replaceable></option></term>
+      <listitem>
+       <para>
+        This option specifies the authentication method for users via
+        TLS remote connections used in <filename>pg_hba.conf</filename>
+        (<literal>hostssl</literal> lines).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--auth-hostnossl=<replaceable class="parameter">authmethod</replaceable></option></term>
+      <listitem>
+       <para>
+        This option specifies the authentication method for users via
+        non-TLS remote connections used in <filename>pg_hba.conf</filename>
+        (<literal>hostnossl</literal> lines).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--auth-hostgssenc=<replaceable class="parameter">authmethod</replaceable></option></term>
+      <listitem>
+       <para>
+        This option specifies the authentication method for users via
+        encrypted GSSAPI remote connections used in <filename>pg_hba.conf</filename>
+        (<literal>hostgssenc</literal> lines).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--auth-hostnogssenc=<replaceable class="parameter">authmethod</replaceable></option></term>
+      <listitem>
+       <para>
+        This option specifies the authentication method for users via
+        remote connections not using encrypted GSSAPI in <filename>pg_hba.conf</filename>
+        (<literal>hostnogssenc</literal> lines).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--auth-local=<replaceable class="parameter">authmethod</replaceable></option></term>
       <listitem>
        <para>

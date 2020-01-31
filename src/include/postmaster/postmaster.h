@@ -17,6 +17,7 @@
 extern bool EnableSSL;
 extern int	ReservedBackends;
 extern PGDLLIMPORT int PostPortNumber;
+extern PGDLLIMPORT int ProxyPortNumber;
 extern int	Unix_socket_permissions;
 extern char *Unix_socket_group;
 extern char *Unix_socket_directories;
@@ -46,6 +47,11 @@ extern int	postmaster_alive_fds[2];
 
 extern PGDLLIMPORT const char *progname;
 
+extern PGDLLIMPORT void* (*LibpqConnectdbParams)(char const* keywords[], char const* values[], char** errmsg);
+
+struct Proxy;
+struct Port;
+
 extern void PostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();
 extern void ClosePostmasterPorts(bool am_syslogger);
 extern void InitProcessGlobals(void);
@@ -61,6 +67,9 @@ extern void SubPostmasterMain(int argc, char *argv[]) pg_attribute_noreturn();
 extern Size ShmemBackendArraySize(void);
 extern void ShmemBackendArrayAllocation(void);
 #endif
+
+extern int  ParseStartupPacket(struct Port* port, MemoryContext memctx, void* pkg_body, int pkg_size, bool SSLdone);
+extern int	BackendStartup(struct Port* port, int* backend_pid);
 
 /*
  * Note: MAX_BACKENDS is limited to 2^18-1 because that's the width reserved

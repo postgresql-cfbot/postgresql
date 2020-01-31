@@ -54,10 +54,9 @@ extern const PGDLLIMPORT PQcommMethods *PqCommMethods;
  * prototypes for functions in pqcomm.c
  */
 extern WaitEventSet *FeBeWaitSet;
-
-extern int	StreamServerPort(int family, char *hostName,
-							 unsigned short portNumber, char *unixSocketDir,
-							 pgsocket ListenSocket[], int MaxListen);
+extern int StreamServerPort(int family, char *hostName,
+							unsigned short portNumber, char *unixSocketDir,
+							pgsocket ListenSocket[], int ListenPort[], int MaxListen);
 extern int	StreamConnection(pgsocket server_fd, Port *port);
 extern void StreamClose(pgsocket sock);
 extern void TouchSocketFiles(void);

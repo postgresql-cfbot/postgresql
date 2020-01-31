@@ -248,8 +248,8 @@ checkCond(lquery_level *curq, int query_numlevel, ltree_level *curt, int tree_nu
 		}
 		else
 		{
-			low_pos = cur_tpos + curq->low;
-			high_pos = cur_tpos + curq->high;
+			low_pos = Min(low_pos + curq->low, PG_UINT16_MAX);
+			high_pos = Min(high_pos + curq->high, PG_UINT16_MAX);
 			if (ptr && ptr->q)
 			{
 				ptr->nq++;
@@ -275,8 +275,8 @@ checkCond(lquery_level *curq, int query_numlevel, ltree_level *curt, int tree_nu
 		}
 		else
 		{
-			low_pos = cur_tpos + curq->low;
-			high_pos = cur_tpos + curq->high;
+			low_pos = Min(low_pos + curq->low, PG_UINT16_MAX);
+			high_pos = Min(high_pos + curq->high, PG_UINT16_MAX);
 		}
 
 		curq = LQL_NEXT(curq);

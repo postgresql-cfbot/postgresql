@@ -53,11 +53,13 @@ int			WalSegSz;
 char	   *datadir_target = NULL;
 char	   *datadir_source = NULL;
 char	   *connstr_source = NULL;
+char	   *restore_command = NULL;
 
 static bool debug = false;
 bool		showprogress = false;
 bool		dry_run = false;
 bool		do_sync = true;
+bool		restore_wal = false;
 
 /* Target history */
 TimeLineHistoryEntry *targetHistory;
@@ -79,6 +81,8 @@ usage(const char *progname)
 	printf(_("      --source-server=CONNSTR    source server to synchronize with\n"));
 	printf(_("  -R, --write-recovery-conf      write configuration for replication\n"
 			 "                                 (requires --source-server)\n"));
+	printf(_("  -c, --restore-target-wal       use restore_command in target config\n"));
+	printf(_("                                 to retrieve WAL files from archive\n"));
 	printf(_("  -n, --dry-run                  stop before modifying anything\n"));
 	printf(_("  -N, --no-sync                  do not wait for changes to be written\n"
 			 "                                 safely to disk\n"));
@@ -105,6 +109,7 @@ main(int argc, char **argv)
 		{"dry-run", no_argument, NULL, 'n'},
 		{"no-sync", no_argument, NULL, 'N'},
 		{"progress", no_argument, NULL, 'P'},
+		{"restore-target-wal", no_argument, NULL, 'c'},
 		{"debug", no_argument, NULL, 3},
 		{NULL, 0, NULL, 0}
 	};
@@ -143,7 +148,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "D:nNPR", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "D:nNPRc", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -153,6 +158,10 @@ main(int argc, char **argv)
 
 			case 'P':
 				showprogress = true;
+				break;
+
+			case 'c':
+				restore_wal = true;
 				break;
 
 			case 'n':
@@ -252,6 +261,65 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
+	if (restore_wal)
+	{
+		int			rc;
+		char		postgres_exec_path[MAXPGPATH],
+					postgres_cmd[MAXPGPATH],
+					cmd_output[MAXPGPATH];
+		FILE	   *output_fp;
+
+		/* Find postgres executable. */
+		rc = find_other_exec(argv[0], "postgres",
+							 PG_BACKEND_VERSIONSTR,
+							 postgres_exec_path);
+
+		if (rc < 0)
+		{
+			char		full_path[MAXPGPATH];
+
+			if (find_my_exec(argv[0], full_path) < 0)
+				strlcpy(full_path, progname, sizeof(full_path));
+
+			if (rc == -1)
+				pg_log_error("The program \"postgres\" is needed by %s but was not found in the\n"
+							 "same directory as \"%s\".\n"
+							 "Check your installation.",
+							 progname, full_path);
+			else
+				pg_log_error("The program \"postgres\" was found by \"%s\"\n"
+							 "but was not the same version as %s.\n"
+							 "Check your installation.",
+							 full_path, progname);
+			exit(1);
+		}
+
+		/*
+		 * Build a command to execute for restore_command GUC retrieval if
+		 * set.
+		 */
+		snprintf(postgres_cmd, sizeof(postgres_cmd), "%s -D %s -C restore_command",
+				 postgres_exec_path, datadir_target);
+
+		if ((output_fp = popen(postgres_cmd, "r")) == NULL ||
+			fgets(cmd_output, sizeof(cmd_output), output_fp) == NULL)
+			pg_fatal("could not get restore_command using %s: %s",
+					 postgres_cmd, strerror(errno));
+
+		pclose(output_fp);
+
+		/* Remove trailing newline */
+		if (strchr(cmd_output, '\n') != NULL)
+			*strchr(cmd_output, '\n') = '\0';
+
+		if (!strcmp(cmd_output, ""))
+			pg_fatal("restore_command is not set on the target cluster");
+
+		restore_command = pg_strdup(cmd_output);
+
+		pg_log_debug("using config variable restore_command=\'%s\'.", restore_command);
+	}
+
 	umask(pg_mode_mask);
 
 	atexit(disconnect_atexit);
@@ -349,9 +417,8 @@ main(int argc, char **argv)
 		exit(0);
 	}
 
-	findLastCheckpoint(datadir_target, divergerec,
-					   lastcommontliIndex,
-					   &chkptrec, &chkpttli, &chkptredo);
+	findLastCheckpoint(datadir_target, divergerec, lastcommontliIndex,
+					   &chkptrec, &chkpttli, &chkptredo, restore_command);
 	pg_log_info("rewinding from last common checkpoint at %X/%X on timeline %u",
 				(uint32) (chkptrec >> 32), (uint32) chkptrec,
 				chkpttli);
@@ -377,7 +444,7 @@ main(int argc, char **argv)
 	if (showprogress)
 		pg_log_info("reading WAL in target");
 	extractPageMap(datadir_target, chkptrec, lastcommontliIndex,
-				   ControlFile_target.checkPoint);
+				   ControlFile_target.checkPoint, restore_command);
 	filemap_finalize();
 
 	if (showprogress)

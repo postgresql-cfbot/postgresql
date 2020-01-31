@@ -38,6 +38,7 @@ use File::Copy;
 use File::Path qw(rmtree);
 use IPC::Run qw(run);
 use PostgresNode;
+use RecursiveCopy;
 use TestLib;
 use Test::More;
 
@@ -227,10 +228,23 @@ sub run_pg_rewind
 	# Append the rewind-specific role to the connection string.
 	$standby_connstr = "$standby_connstr user=rewind_user";
 
-	# Stop the master and be ready to perform the rewind.  The cluster
-	# needs recovery to finish once, and pg_rewind makes sure that it
-	# happens automatically.
-	$node_master->stop('immediate');
+	if ($test_mode eq 'archive')
+	{
+		# We test pg_rewind with restore_command by simply moving all WAL files
+		# to another location.  It leads to failed ensureCleanShutdown
+		# execution.  Since it is difficult to emulate a situation, when
+		# keeping the last WAL segment is enough for startup recovery, but
+		# not enough for successful pg_rewind run, we run these modes with
+		# --no-ensure-shutdown.  So stop the master gracefully.
+		$node_master->stop;
+	}
+	else
+	{
+		# Stop the master and be ready to perform the rewind.  The cluster
+		# needs recovery to finish once, and pg_rewind makes sure that it
+		# happens automatically.
+		$node_master->stop('immediate');
+	}
 
 	# At this point, the rewind processing is ready to run.
 	# We now have a very simple scenario with a few diverged WAL record.
@@ -283,6 +297,48 @@ sub run_pg_rewind
 		# is able to connect to the new master with generated config.
 		$node_standby->safe_psql('postgres',
 			"ALTER ROLE rewind_user WITH REPLICATION;");
+	}
+	elsif ($test_mode eq "archive")
+	{
+
+		# Do rewind using a local pgdata as source and
+		# specified directory with target WAL archive.
+		# Old master should be stopped at this point.
+
+		# First, remove archive_dir, since RecursiveCopy::copypath
+		# does not support copying to existing directories. It should
+		# be empty in this test, so it is safe.
+		rmdir($node_master->archive_dir);
+
+		# Move all old master WAL files to the archive.
+		RecursiveCopy::copypath(
+			$node_master->data_dir . "/pg_wal",
+			$node_master->archive_dir
+		);
+		chmod(0700, $node_master->archive_dir);
+
+		# Fast way to remove entire directory content
+		rmtree($node_master->data_dir . "/pg_wal");
+		mkdir($node_master->data_dir . "/pg_wal");
+		chmod(0700, $node_master->data_dir . "/pg_wal");
+
+		# Just to append an appropriate restore_command
+		# to postgresql.conf
+		$node_master->enable_restoring($node_master, 0);
+
+		# Stop the new master and be ready to perform the rewind.
+		$node_standby->stop;
+
+		command_ok(
+			[
+				'pg_rewind',
+				"--debug",
+				"--source-pgdata=$standby_pgdata",
+				"--target-pgdata=$master_pgdata",
+				"--no-sync", "--no-ensure-shutdown",
+				"-c"
+			],
+			'pg_rewind archive_conf');
 	}
 	else
 	{

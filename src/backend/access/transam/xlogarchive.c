@@ -21,6 +21,7 @@
 
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
+#include "common/archive.h"
 #include "miscadmin.h"
 #include "postmaster/startup.h"
 #include "replication/walsender.h"
@@ -55,9 +56,6 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 	char		xlogpath[MAXPGPATH];
 	char		xlogRestoreCmd[MAXPGPATH];
 	char		lastRestartPointFname[MAXPGPATH];
-	char	   *dp;
-	char	   *endp;
-	const char *sp;
 	int			rc;
 	struct stat stat_buf;
 	XLogSegNo	restartSegNo;
@@ -149,58 +147,8 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 	else
 		XLogFileName(lastRestartPointFname, 0, 0L, wal_segment_size);
 
-	/*
-	 * construct the command to be executed
-	 */
-	dp = xlogRestoreCmd;
-	endp = xlogRestoreCmd + MAXPGPATH - 1;
-	*endp = '\0';
-
-	for (sp = recoveryRestoreCommand; *sp; sp++)
-	{
-		if (*sp == '%')
-		{
-			switch (sp[1])
-			{
-				case 'p':
-					/* %p: relative path of target file */
-					sp++;
-					StrNCpy(dp, xlogpath, endp - dp);
-					make_native_path(dp);
-					dp += strlen(dp);
-					break;
-				case 'f':
-					/* %f: filename of desired file */
-					sp++;
-					StrNCpy(dp, xlogfname, endp - dp);
-					dp += strlen(dp);
-					break;
-				case 'r':
-					/* %r: filename of last restartpoint */
-					sp++;
-					StrNCpy(dp, lastRestartPointFname, endp - dp);
-					dp += strlen(dp);
-					break;
-				case '%':
-					/* convert %% to a single % */
-					sp++;
-					if (dp < endp)
-						*dp++ = *sp;
-					break;
-				default:
-					/* otherwise treat the % as not special */
-					if (dp < endp)
-						*dp++ = *sp;
-					break;
-			}
-		}
-		else
-		{
-			if (dp < endp)
-				*dp++ = *sp;
-		}
-	}
-	*dp = '\0';
+	(void) ConstructRestoreCommand(recoveryRestoreCommand, xlogpath, xlogfname,
+								   lastRestartPointFname, xlogRestoreCmd);
 
 	ereport(DEBUG3,
 			(errmsg_internal("executing restore command \"%s\"",

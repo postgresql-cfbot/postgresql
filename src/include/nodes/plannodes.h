@@ -971,6 +971,7 @@ typedef struct Limit
 	Plan		plan;
 	Node	   *limitOffset;	/* OFFSET parameter, or NULL if none */
 	Node	   *limitCount;		/* COUNT parameter, or NULL if none */
+	AttrNumber	whenColno;		/* input column number of WHEN expr */
 } Limit;
 
 

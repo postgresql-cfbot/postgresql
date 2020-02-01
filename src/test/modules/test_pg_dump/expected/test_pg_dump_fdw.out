@@ -1,0 +1,19 @@
+CREATE EXTENSION test_pg_dump_fdw;
+CREATE SERVER pg_dump_fdw FOREIGN DATA WRAPPER test_pg_dump_fdw;
+CREATE FOREIGN TABLE test_pg_dump_fdw_t (a INTEGER, b INTEGER) SERVER pg_dump_fdw;
+SELECT * FROM test_pg_dump_fdw_t;
+ a  | b  
+----+----
+  0 |  0
+  1 |  1
+  2 |  2
+  3 |  3
+  4 |  4
+  5 |  5
+  6 |  6
+  7 |  7
+  8 |  8
+  9 |  9
+ 10 | 10
+(11 rows)
+

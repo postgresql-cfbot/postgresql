@@ -1,0 +1,5 @@
+# test_pg_dump_fdw
+comment = 'hardcoded foreign-data wrapper for testing dumping foreign data'
+default_version = '1.0'
+module_pathname = '$libdir/test_pg_dump_fdw'
+relocatable = true

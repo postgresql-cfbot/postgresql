@@ -141,6 +141,7 @@ typedef struct _dumpOptions
 	bool		aclsSkip;
 	const char *lockWaitTimeout;
 	int			dump_inserts;	/* 0 = COPY, otherwise rows per INSERT */
+	bool		include_foreign_data;
 
 	/* flags for various command-line long options */
 	int			disable_dollar_quoting;

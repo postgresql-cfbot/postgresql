@@ -151,4 +151,6 @@ extern TupleDesc BuildDescForRelation(List *schema);
 
 extern TupleDesc BuildDescFromLists(List *names, List *types, List *typmods, List *collations);
 
+extern void tupledesc_match(TupleDesc dst_tupdesc, TupleDesc src_tupdesc);
+
 #endif							/* TUPDESC_H */

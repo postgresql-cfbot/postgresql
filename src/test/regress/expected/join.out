@@ -3403,7 +3403,8 @@ select * from mki8(1,2);
  Function Scan on mki8
    Output: q1, q2
    Function Call: '(1,2)'::int8_tbl
-(3 rows)
+   ->  SRF Scan
+(4 rows)
 
 select * from mki8(1,2);
  q1 | q2 
@@ -3418,7 +3419,8 @@ select * from mki4(42);
  Function Scan on mki4
    Output: f1
    Function Call: '(42)'::int4_tbl
-(3 rows)
+   ->  SRF Scan
+(4 rows)
 
 select * from mki4(42);
  f1 
@@ -3660,9 +3662,10 @@ left join unnest(v1ys) as u1(u1y) on u1y = v2y;
          Hash Cond: (u1.u1y = "*VALUES*_1".column2)
          Filter: ("*VALUES*_1".column1 = "*VALUES*".column1)
          ->  Function Scan on unnest u1
+               ->  SRF Scan
          ->  Hash
                ->  Values Scan on "*VALUES*_1"
-(8 rows)
+(9 rows)
 
 select * from
 (values (1, array[10,20]), (2, array[20,30])) as v1(v1x,v1ys)
@@ -4475,7 +4478,9 @@ select 1 from (select a.id FROM a left join b on a.b_id = b.id) q,
    ->  Seq Scan on a
    ->  Function Scan on generate_series gs
          Filter: (a.id = i)
-(4 rows)
+         ->  Materialize
+               ->  SRF Scan
+(6 rows)
 
 rollback;
 create temp table parent (k int primary key, pd int);
@@ -4814,7 +4819,9 @@ explain (costs off)
    ->  Nested Loop
          ->  Seq Scan on tenk1 a
          ->  Function Scan on generate_series g
-(4 rows)
+               ->  Materialize
+                     ->  SRF Scan
+(6 rows)
 
 explain (costs off)
   select count(*) from tenk1 a cross join lateral generate_series(1,two) g;
@@ -4824,7 +4831,9 @@ explain (costs off)
    ->  Nested Loop
          ->  Seq Scan on tenk1 a
          ->  Function Scan on generate_series g
-(4 rows)
+               ->  Materialize
+                     ->  SRF Scan
+(6 rows)
 
 -- don't need the explicit LATERAL keyword for functions
 explain (costs off)
@@ -4835,7 +4844,9 @@ explain (costs off)
    ->  Nested Loop
          ->  Seq Scan on tenk1 a
          ->  Function Scan on generate_series g
-(4 rows)
+               ->  Materialize
+                     ->  SRF Scan
+(6 rows)
 
 -- lateral with UNION ALL subselect
 explain (costs off)
@@ -4846,12 +4857,13 @@ explain (costs off)
 ------------------------------------------
  Nested Loop
    ->  Function Scan on generate_series g
+         ->  SRF Scan
    ->  Append
          ->  Seq Scan on int8_tbl a
                Filter: (g.g = q1)
          ->  Seq Scan on int8_tbl b
                Filter: (g.g = q2)
-(7 rows)
+(8 rows)
 
 select * from generate_series(100,200) g,
   lateral (select * from int8_tbl a where g = q1 union all

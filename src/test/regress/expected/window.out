@@ -3851,7 +3851,8 @@ EXPLAIN (costs off) SELECT * FROM pg_temp.f(2);
          ->  Sort
                Sort Key: s.s
                ->  Function Scan on generate_series s
-(5 rows)
+                     ->  SRF Scan
+(6 rows)
 
 SELECT * FROM pg_temp.f(2);
     f    

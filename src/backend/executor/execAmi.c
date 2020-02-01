@@ -25,6 +25,7 @@
 #include "executor/nodeCustom.h"
 #include "executor/nodeForeignscan.h"
 #include "executor/nodeFunctionscan.h"
+#include "executor/nodeSRFScan.h"
 #include "executor/nodeGather.h"
 #include "executor/nodeGatherMerge.h"
 #include "executor/nodeGroup.h"
@@ -202,6 +203,10 @@ ExecReScan(PlanState *node)
 
 		case T_FunctionScanState:
 			ExecReScanFunctionScan((FunctionScanState *) node);
+			break;
+
+		case T_SRFScanState:
+			ExecReScanSRF((SRFScanState *) node);
 			break;
 
 		case T_TableFuncScanState:

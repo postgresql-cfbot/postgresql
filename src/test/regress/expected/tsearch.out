@@ -1669,8 +1669,9 @@ select * from test_tsquery, to_tsquery('new') q where txtsample @@ q;
  Nested Loop
    Join Filter: (test_tsquery.txtsample @@ q.q)
    ->  Function Scan on to_tsquery q
+         ->  SRF Scan
    ->  Seq Scan on test_tsquery
-(4 rows)
+(5 rows)
 
 -- to_tsquery(regconfig, text) is an immutable function.
 -- That allows us to get rid of using function scan and join at all.

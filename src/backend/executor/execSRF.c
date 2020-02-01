@@ -21,6 +21,9 @@
 #include "access/htup_details.h"
 #include "catalog/objectaccess.h"
 #include "executor/execdebug.h"
+#include "executor/nodeMaterial.h"
+#include "executor/nodeFunctionscan.h"
+#include "executor/nodeSRFScan.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
@@ -44,383 +47,13 @@ static void ExecPrepareTuplestoreResult(SetExprState *sexpr,
 										ExprContext *econtext,
 										Tuplestorestate *resultStore,
 										TupleDesc resultDesc);
-static void tupledesc_match(TupleDesc dst_tupdesc, TupleDesc src_tupdesc);
 
 
 /*
- * Prepare function call in FROM (ROWS FROM) for execution.
+ * Prepare function call in FROM (ROWS FROM) or targetlist SRF function
+ * call for execution for execution.
  *
- * This is used by nodeFunctionscan.c.
- */
-SetExprState *
-ExecInitTableFunctionResult(Expr *expr,
-							ExprContext *econtext, PlanState *parent)
-{
-	SetExprState *state = makeNode(SetExprState);
-
-	state->funcReturnsSet = false;
-	state->expr = expr;
-	state->func.fn_oid = InvalidOid;
-
-	/*
-	 * Normally the passed expression tree will be a FuncExpr, since the
-	 * grammar only allows a function call at the top level of a table
-	 * function reference.  However, if the function doesn't return set then
-	 * the planner might have replaced the function call via constant-folding
-	 * or inlining.  So if we see any other kind of expression node, execute
-	 * it via the general ExecEvalExpr() code.  That code path will not
-	 * support set-returning functions buried in the expression, though.
-	 */
-	if (IsA(expr, FuncExpr))
-	{
-		FuncExpr   *func = (FuncExpr *) expr;
-
-		state->funcReturnsSet = func->funcretset;
-		state->args = ExecInitExprList(func->args, parent);
-
-		init_sexpr(func->funcid, func->inputcollid, expr, state, parent,
-				   econtext->ecxt_per_query_memory, func->funcretset, false);
-	}
-	else
-	{
-		state->elidedFuncState = ExecInitExpr(expr, parent);
-	}
-
-	return state;
-}
-
-/*
- *		ExecMakeTableFunctionResult
- *
- * Evaluate a table function, producing a materialized result in a Tuplestore
- * object.
- *
- * This is used by nodeFunctionscan.c.
- */
-Tuplestorestate *
-ExecMakeTableFunctionResult(SetExprState *setexpr,
-							ExprContext *econtext,
-							MemoryContext argContext,
-							TupleDesc expectedDesc,
-							bool randomAccess)
-{
-	Tuplestorestate *tupstore = NULL;
-	TupleDesc	tupdesc = NULL;
-	Oid			funcrettype;
-	bool		returnsTuple;
-	bool		returnsSet = false;
-	FunctionCallInfo fcinfo;
-	PgStat_FunctionCallUsage fcusage;
-	ReturnSetInfo rsinfo;
-	HeapTupleData tmptup;
-	MemoryContext callerContext;
-	MemoryContext oldcontext;
-	bool		first_time = true;
-
-	callerContext = CurrentMemoryContext;
-
-	funcrettype = exprType((Node *) setexpr->expr);
-
-	returnsTuple = type_is_rowtype(funcrettype);
-
-	/*
-	 * Prepare a resultinfo node for communication.  We always do this even if
-	 * not expecting a set result, so that we can pass expectedDesc.  In the
-	 * generic-expression case, the expression doesn't actually get to see the
-	 * resultinfo, but set it up anyway because we use some of the fields as
-	 * our own state variables.
-	 */
-	rsinfo.type = T_ReturnSetInfo;
-	rsinfo.econtext = econtext;
-	rsinfo.expectedDesc = expectedDesc;
-	rsinfo.allowedModes = (int) (SFRM_ValuePerCall | SFRM_Materialize | SFRM_Materialize_Preferred);
-	if (randomAccess)
-		rsinfo.allowedModes |= (int) SFRM_Materialize_Random;
-	rsinfo.returnMode = SFRM_ValuePerCall;
-	/* isDone is filled below */
-	rsinfo.setResult = NULL;
-	rsinfo.setDesc = NULL;
-
-	fcinfo = palloc(SizeForFunctionCallInfo(list_length(setexpr->args)));
-
-	/*
-	 * Normally the passed expression tree will be a SetExprState, since the
-	 * grammar only allows a function call at the top level of a table
-	 * function reference.  However, if the function doesn't return set then
-	 * the planner might have replaced the function call via constant-folding
-	 * or inlining.  So if we see any other kind of expression node, execute
-	 * it via the general ExecEvalExpr() code; the only difference is that we
-	 * don't get a chance to pass a special ReturnSetInfo to any functions
-	 * buried in the expression.
-	 */
-	if (!setexpr->elidedFuncState)
-	{
-		/*
-		 * This path is similar to ExecMakeFunctionResultSet.
-		 */
-		returnsSet = setexpr->funcReturnsSet;
-		InitFunctionCallInfoData(*fcinfo, &(setexpr->func),
-								 list_length(setexpr->args),
-								 setexpr->fcinfo->fncollation,
-								 NULL, (Node *) &rsinfo);
-
-		/*
-		 * Evaluate the function's argument list.
-		 *
-		 * We can't do this in the per-tuple context: the argument values
-		 * would disappear when we reset that context in the inner loop.  And
-		 * the caller's CurrentMemoryContext is typically a query-lifespan
-		 * context, so we don't want to leak memory there.  We require the
-		 * caller to pass a separate memory context that can be used for this,
-		 * and can be reset each time through to avoid bloat.
-		 */
-		MemoryContextReset(argContext);
-		oldcontext = MemoryContextSwitchTo(argContext);
-		ExecEvalFuncArgs(fcinfo, setexpr->args, econtext);
-		MemoryContextSwitchTo(oldcontext);
-
-		/*
-		 * If function is strict, and there are any NULL arguments, skip
-		 * calling the function and act like it returned NULL (or an empty
-		 * set, in the returns-set case).
-		 */
-		if (setexpr->func.fn_strict)
-		{
-			int			i;
-
-			for (i = 0; i < fcinfo->nargs; i++)
-			{
-				if (fcinfo->args[i].isnull)
-					goto no_function_result;
-			}
-		}
-	}
-	else
-	{
-		/* Treat setexpr as a generic expression */
-		InitFunctionCallInfoData(*fcinfo, NULL, 0, InvalidOid, NULL, NULL);
-	}
-
-	/*
-	 * Switch to short-lived context for calling the function or expression.
-	 */
-	MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
-
-	/*
-	 * Loop to handle the ValuePerCall protocol (which is also the same
-	 * behavior needed in the generic ExecEvalExpr path).
-	 */
-	for (;;)
-	{
-		Datum		result;
-
-		CHECK_FOR_INTERRUPTS();
-
-		/*
-		 * reset per-tuple memory context before each call of the function or
-		 * expression. This cleans up any local memory the function may leak
-		 * when called.
-		 */
-		ResetExprContext(econtext);
-
-		/* Call the function or expression one time */
-		if (!setexpr->elidedFuncState)
-		{
-			pgstat_init_function_usage(fcinfo, &fcusage);
-
-			fcinfo->isnull = false;
-			rsinfo.isDone = ExprSingleResult;
-			result = FunctionCallInvoke(fcinfo);
-
-			pgstat_end_function_usage(&fcusage,
-									  rsinfo.isDone != ExprMultipleResult);
-		}
-		else
-		{
-			result =
-				ExecEvalExpr(setexpr->elidedFuncState, econtext, &fcinfo->isnull);
-			rsinfo.isDone = ExprSingleResult;
-		}
-
-		/* Which protocol does function want to use? */
-		if (rsinfo.returnMode == SFRM_ValuePerCall)
-		{
-			/*
-			 * Check for end of result set.
-			 */
-			if (rsinfo.isDone == ExprEndResult)
-				break;
-
-			/*
-			 * If first time through, build tuplestore for result.  For a
-			 * scalar function result type, also make a suitable tupdesc.
-			 */
-			if (first_time)
-			{
-				oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_query_memory);
-				tupstore = tuplestore_begin_heap(randomAccess, false, work_mem);
-				rsinfo.setResult = tupstore;
-				if (!returnsTuple)
-				{
-					tupdesc = CreateTemplateTupleDesc(1);
-					TupleDescInitEntry(tupdesc,
-									   (AttrNumber) 1,
-									   "column",
-									   funcrettype,
-									   -1,
-									   0);
-					rsinfo.setDesc = tupdesc;
-				}
-				MemoryContextSwitchTo(oldcontext);
-			}
-
-			/*
-			 * Store current resultset item.
-			 */
-			if (returnsTuple)
-			{
-				if (!fcinfo->isnull)
-				{
-					HeapTupleHeader td = DatumGetHeapTupleHeader(result);
-
-					if (tupdesc == NULL)
-					{
-						/*
-						 * This is the first non-NULL result from the
-						 * function.  Use the type info embedded in the
-						 * rowtype Datum to look up the needed tupdesc.  Make
-						 * a copy for the query.
-						 */
-						oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_query_memory);
-						tupdesc = lookup_rowtype_tupdesc_copy(HeapTupleHeaderGetTypeId(td),
-															  HeapTupleHeaderGetTypMod(td));
-						rsinfo.setDesc = tupdesc;
-						MemoryContextSwitchTo(oldcontext);
-					}
-					else
-					{
-						/*
-						 * Verify all later returned rows have same subtype;
-						 * necessary in case the type is RECORD.
-						 */
-						if (HeapTupleHeaderGetTypeId(td) != tupdesc->tdtypeid ||
-							HeapTupleHeaderGetTypMod(td) != tupdesc->tdtypmod)
-							ereport(ERROR,
-									(errcode(ERRCODE_DATATYPE_MISMATCH),
-									 errmsg("rows returned by function are not all of the same row type")));
-					}
-
-					/*
-					 * tuplestore_puttuple needs a HeapTuple not a bare
-					 * HeapTupleHeader, but it doesn't need all the fields.
-					 */
-					tmptup.t_len = HeapTupleHeaderGetDatumLength(td);
-					tmptup.t_data = td;
-
-					tuplestore_puttuple(tupstore, &tmptup);
-				}
-				else
-				{
-					/*
-					 * NULL result from a tuple-returning function; expand it
-					 * to a row of all nulls.  We rely on the expectedDesc to
-					 * form such rows.  (Note: this would be problematic if
-					 * tuplestore_putvalues saved the tdtypeid/tdtypmod from
-					 * the provided descriptor, since that might not match
-					 * what we get from the function itself.  But it doesn't.)
-					 */
-					int			natts = expectedDesc->natts;
-					bool	   *nullflags;
-
-					nullflags = (bool *) palloc(natts * sizeof(bool));
-					memset(nullflags, true, natts * sizeof(bool));
-					tuplestore_putvalues(tupstore, expectedDesc, NULL, nullflags);
-				}
-			}
-			else
-			{
-				/* Scalar-type case: just store the function result */
-				tuplestore_putvalues(tupstore, tupdesc, &result, &fcinfo->isnull);
-			}
-
-			/*
-			 * Are we done?
-			 */
-			if (rsinfo.isDone != ExprMultipleResult)
-				break;
-		}
-		else if (rsinfo.returnMode == SFRM_Materialize)
-		{
-			/* check we're on the same page as the function author */
-			if (!first_time || rsinfo.isDone != ExprSingleResult)
-				ereport(ERROR,
-						(errcode(ERRCODE_E_R_I_E_SRF_PROTOCOL_VIOLATED),
-						 errmsg("table-function protocol for materialize mode was not followed")));
-			/* Done evaluating the set result */
-			break;
-		}
-		else
-			ereport(ERROR,
-					(errcode(ERRCODE_E_R_I_E_SRF_PROTOCOL_VIOLATED),
-					 errmsg("unrecognized table-function returnMode: %d",
-							(int) rsinfo.returnMode)));
-
-		first_time = false;
-	}
-
-no_function_result:
-
-	/*
-	 * If we got nothing from the function (ie, an empty-set or NULL result),
-	 * we have to create the tuplestore to return, and if it's a
-	 * non-set-returning function then insert a single all-nulls row.  As
-	 * above, we depend on the expectedDesc to manufacture the dummy row.
-	 */
-	if (rsinfo.setResult == NULL)
-	{
-		MemoryContextSwitchTo(econtext->ecxt_per_query_memory);
-		tupstore = tuplestore_begin_heap(randomAccess, false, work_mem);
-		rsinfo.setResult = tupstore;
-		if (!returnsSet)
-		{
-			int			natts = expectedDesc->natts;
-			bool	   *nullflags;
-
-			MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
-			nullflags = (bool *) palloc(natts * sizeof(bool));
-			memset(nullflags, true, natts * sizeof(bool));
-			tuplestore_putvalues(tupstore, expectedDesc, NULL, nullflags);
-		}
-	}
-
-	/*
-	 * If function provided a tupdesc, cross-check it.  We only really need to
-	 * do this for functions returning RECORD, but might as well do it always.
-	 */
-	if (rsinfo.setDesc)
-	{
-		tupledesc_match(expectedDesc, rsinfo.setDesc);
-
-		/*
-		 * If it is a dynamically-allocated TupleDesc, free it: it is
-		 * typically allocated in a per-query context, so we must avoid
-		 * leaking it across multiple usages.
-		 */
-		if (rsinfo.setDesc->tdrefcount == -1)
-			FreeTupleDesc(rsinfo.setDesc);
-	}
-
-	MemoryContextSwitchTo(callerContext);
-
-	/* All done, pass back the tuplestore */
-	return rsinfo.setResult;
-}
-
-
-/*
- * Prepare targetlist SRF function call for execution.
- *
- * This is used by nodeProjectSet.c.
+ * This is used by nodeFunctionscan.c and nodeProjectSet.c.
  */
 SetExprState *
 ExecInitFunctionResultSet(Expr *expr,
@@ -428,36 +61,56 @@ ExecInitFunctionResultSet(Expr *expr,
 {
 	SetExprState *state = makeNode(SetExprState);
 
-	state->funcReturnsSet = true;
+	state->funcReturnsSet = false;
 	state->expr = expr;
 	state->func.fn_oid = InvalidOid;
 
-	/*
-	 * Initialize metadata.  The expression node could be either a FuncExpr or
-	 * an OpExpr.
-	 */
 	if (IsA(expr, FuncExpr))
 	{
+		/*
+		 * For a FunctionScan or ProjectSet, the passed expression tree can be a
+		 * FuncExpr, since the grammar only allows a function call at the top
+		 * level of a table function reference.
+		 */
 		FuncExpr   *func = (FuncExpr *) expr;
 
+		state->funcReturnsSet = func->funcretset;
 		state->args = ExecInitExprList(func->args, parent);
 		init_sexpr(func->funcid, func->inputcollid, expr, state, parent,
-				   econtext->ecxt_per_query_memory, true, true);
+				   econtext->ecxt_per_query_memory, func->funcretset, true);
 	}
 	else if (IsA(expr, OpExpr))
 	{
+		/*
+		 * For ProjectSet, the expression node could be an OpExpr.
+		 */
 		OpExpr	   *op = (OpExpr *) expr;
 
+		state->funcReturnsSet = op->opretset;
 		state->args = ExecInitExprList(op->args, parent);
 		init_sexpr(op->opfuncid, op->inputcollid, expr, state, parent,
-				   econtext->ecxt_per_query_memory, true, true);
+				   econtext->ecxt_per_query_memory, op->opretset, true);
 	}
 	else
-		elog(ERROR, "unrecognized node type: %d",
-			 (int) nodeTag(expr));
+	{
+		/*
+		 * However, again for FunctionScan, if the function doesn't return set
+		 * then the planner might have replaced the function call via constant-
+		 * folding or inlining.  So if we see any other kind of expression node,
+		 * execute it via the general ExecEvalExpr() code.  That code path will
+		 * not support set-returning functions buried in the expression, though.
+		 */
+		state->elidedFuncState = ExecInitExpr(expr, parent);
 
-	/* shouldn't get here unless the selected function returns set */
-	Assert(state->func.fn_retset);
+		MemoryContext oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_query_memory);
+
+		/* By performing InitFunctionCallInfoData here, we avoid palloc0() */
+		state->fcinfo = palloc(SizeForFunctionCallInfo(list_length(state->args)));
+
+		MemoryContextSwitchTo(oldcontext);
+
+		InitFunctionCallInfoData(*state->fcinfo, NULL, 0, InvalidOid, NULL, NULL);
+	}
 
 	return state;
 }
@@ -473,7 +126,7 @@ ExecInitFunctionResultSet(Expr *expr,
  * needs to live until all rows have been returned (i.e. *isDone set to
  * ExprEndResult or ExprSingleResult).
  *
- * This is used by nodeProjectSet.c.
+ * This is used by nodeProjectSet.c and nodeFunctionscan.c.
  */
 Datum
 ExecMakeFunctionResultSet(SetExprState *fcache,
@@ -486,7 +139,7 @@ ExecMakeFunctionResultSet(SetExprState *fcache,
 	Datum		result;
 	FunctionCallInfo fcinfo;
 	PgStat_FunctionCallUsage fcusage;
-	ReturnSetInfo rsinfo;
+	ReturnSetInfo *rsinfo;
 	bool		callit;
 	int			i;
 
@@ -540,6 +193,28 @@ restart:
 	}
 
 	/*
+	 * Prepare a resultinfo node for communication.  We always do this even if
+	 * not expecting a set result, so that we can pass expectedDesc.  In the
+	 * generic-expression case, the expression doesn't actually get to see the
+	 * resultinfo, but set it up anyway because we use some of the fields as
+	 * our own state variables.
+	 */
+	fcinfo = fcache->fcinfo;
+	rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+
+	if (rsinfo == NULL)
+	{
+		MemoryContext oldContext = MemoryContextSwitchTo(econtext->ecxt_per_query_memory);
+
+		rsinfo = makeNode (ReturnSetInfo);
+		rsinfo->econtext = econtext;
+		rsinfo->expectedDesc = fcache->funcResultDesc;
+		fcinfo->resultinfo = (Node *) rsinfo;
+
+		MemoryContextSwitchTo(oldContext);
+	}
+
+	/*
 	 * arguments is a list of expressions to evaluate before passing to the
 	 * function manager.  We skip the evaluation if it was already done in the
 	 * previous call (ie, we are continuing the evaluation of a set-valued
@@ -549,7 +224,6 @@ restart:
 	 * rows from this SRF have been returned, otherwise ValuePerCall SRFs
 	 * would reference freed memory after the first returned row.
 	 */
-	fcinfo = fcache->fcinfo;
 	arguments = fcache->args;
 	if (!fcache->setArgsValid)
 	{
@@ -557,6 +231,14 @@ restart:
 
 		ExecEvalFuncArgs(fcinfo, arguments, econtext);
 		MemoryContextSwitchTo(oldContext);
+
+		/* Reset the rsinfo structure */
+		rsinfo->allowedModes = (int) (SFRM_ValuePerCall | SFRM_Materialize);
+		/* note we do not set SFRM_Materialize_Random or _Preferred */
+		rsinfo->returnMode = SFRM_ValuePerCall;
+		/* isDone is filled below */
+		rsinfo->setResult = NULL;
+		rsinfo->setDesc = NULL;
 	}
 	else
 	{
@@ -567,18 +249,6 @@ restart:
 	/*
 	 * Now call the function, passing the evaluated parameter values.
 	 */
-
-	/* Prepare a resultinfo node for communication. */
-	fcinfo->resultinfo = (Node *) &rsinfo;
-	rsinfo.type = T_ReturnSetInfo;
-	rsinfo.econtext = econtext;
-	rsinfo.expectedDesc = fcache->funcResultDesc;
-	rsinfo.allowedModes = (int) (SFRM_ValuePerCall | SFRM_Materialize);
-	/* note we do not set SFRM_Materialize_Random or _Preferred */
-	rsinfo.returnMode = SFRM_ValuePerCall;
-	/* isDone is filled below */
-	rsinfo.setResult = NULL;
-	rsinfo.setDesc = NULL;
 
 	/*
 	 * If function is strict, and there are any NULL arguments, skip calling
@@ -599,16 +269,25 @@ restart:
 
 	if (callit)
 	{
-		pgstat_init_function_usage(fcinfo, &fcusage);
+		if (!fcache->elidedFuncState)
+		{
+			pgstat_init_function_usage(fcinfo, &fcusage);
 
-		fcinfo->isnull = false;
-		rsinfo.isDone = ExprSingleResult;
-		result = FunctionCallInvoke(fcinfo);
-		*isNull = fcinfo->isnull;
-		*isDone = rsinfo.isDone;
+			fcinfo->isnull = false;
+			rsinfo->isDone = ExprSingleResult;
+			result = FunctionCallInvoke(fcinfo);
+			*isNull = fcinfo->isnull;
+			*isDone = rsinfo->isDone;
 
-		pgstat_end_function_usage(&fcusage,
-								  rsinfo.isDone != ExprMultipleResult);
+			pgstat_end_function_usage(&fcusage,
+									  rsinfo->isDone != ExprMultipleResult);
+		}
+		else
+		{
+			result =
+				ExecEvalExpr(fcache->elidedFuncState, econtext, isNull);
+			*isDone = ExprSingleResult;
+		}
 	}
 	else
 	{
@@ -619,10 +298,31 @@ restart:
 	}
 
 	/* Which protocol does function want to use? */
-	if (rsinfo.returnMode == SFRM_ValuePerCall)
+	if (rsinfo->returnMode == SFRM_ValuePerCall)
 	{
 		if (*isDone != ExprEndResult)
 		{
+			/*
+			 * Obtain a suitable tupdesc, when we first encounter a non-NULL result.
+			 */
+			if (rsinfo->setDesc == NULL)
+			{
+				if (fcache->funcReturnsTuple && !*isNull)
+				{
+					HeapTupleHeader td = DatumGetHeapTupleHeader(result);
+
+					/*
+					 * This is the first non-NULL result from the
+					 * function.  Use the type info embedded in the
+					 * rowtype Datum to look up the needed tupdesc.  Make
+					 * a copy for the query.
+					 */
+					MemoryContext oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_query_memory);
+					rsinfo->setDesc = lookup_rowtype_tupdesc_copy(HeapTupleHeaderGetTypeId(td), HeapTupleHeaderGetTypMod(td));
+					MemoryContextSwitchTo(oldcontext);
+				}
+			}
+
 			/*
 			 * Save the current argument values to re-use on the next call.
 			 */
@@ -640,21 +340,34 @@ restart:
 			}
 		}
 	}
-	else if (rsinfo.returnMode == SFRM_Materialize)
+	else if (rsinfo->returnMode == SFRM_Materialize)
 	{
 		/* check we're on the same page as the function author */
-		if (rsinfo.isDone != ExprSingleResult)
+		if (rsinfo->isDone != ExprSingleResult)
 			ereport(ERROR,
 					(errcode(ERRCODE_E_R_I_E_SRF_PROTOCOL_VIOLATED),
 					 errmsg("table-function protocol for materialize mode was not followed")));
-		if (rsinfo.setResult != NULL)
+		if (rsinfo->setResult != NULL)
 		{
 			/* prepare to return values from the tuplestore */
 			ExecPrepareTuplestoreResult(fcache, econtext,
-										rsinfo.setResult,
-										rsinfo.setDesc);
-			/* loop back to top to start returning from tuplestore */
-			goto restart;
+										rsinfo->setResult,
+										rsinfo->setDesc);
+
+			/*
+			 * If we are being invoked by a Materialize node, attempt
+			 * to donate the returned tuplstore to it.
+			 */
+			if (ExecSRFDonateResultTuplestore(fcache))
+			{
+				*isDone = ExprMultipleResult;
+				return 0;
+			}
+			else
+			{
+				/* loop back to top to start returning from tuplestore */
+				goto restart;
+			}
 		}
 		/* if setResult was left null, treat it as empty set */
 		*isDone = ExprEndResult;
@@ -665,7 +378,7 @@ restart:
 		ereport(ERROR,
 				(errcode(ERRCODE_E_R_I_E_SRF_PROTOCOL_VIOLATED),
 				 errmsg("unrecognized table-function returnMode: %d",
-						(int) rsinfo.returnMode)));
+						(int) rsinfo->returnMode)));
 
 	return result;
 }
@@ -712,6 +425,7 @@ init_sexpr(Oid foid, Oid input_collation, Expr *node,
 	InitFunctionCallInfoData(*sexpr->fcinfo, &(sexpr->func),
 							 numargs,
 							 input_collation, NULL, NULL);
+	sexpr->fcinfo->resultinfo = NULL;
 
 	/* If function returns set, check if that's allowed by caller */
 	if (sexpr->func.fn_retset && !allowSRF)
@@ -782,6 +496,7 @@ init_sexpr(Oid foid, Oid input_collation, Expr *node,
 	sexpr->funcResultStore = NULL;
 	sexpr->funcResultSlot = NULL;
 	sexpr->shutdown_reg = false;
+	sexpr->funcResultStoreDonationEnabled = false;
 }
 
 /*
@@ -792,6 +507,7 @@ static void
 ShutdownSetExpr(Datum arg)
 {
 	SetExprState *sexpr = castNode(SetExprState, DatumGetPointer(arg));
+	ReturnSetInfo *rsinfo = castNode(ReturnSetInfo, sexpr->fcinfo->resultinfo);
 
 	/* If we have a slot, make sure it's let go of any tuplestore pointer */
 	if (sexpr->funcResultSlot)
@@ -801,6 +517,13 @@ ShutdownSetExpr(Datum arg)
 	if (sexpr->funcResultStore)
 		tuplestore_end(sexpr->funcResultStore);
 	sexpr->funcResultStore = NULL;
+
+	/* Release the ReturnSetInfo structure */
+	if (rsinfo != NULL)
+	{
+		pfree(rsinfo);
+		sexpr->fcinfo->resultinfo = NULL;
+	}
 
 	/* Clear any active set-argument state */
 	sexpr->setArgsValid = false;
@@ -908,55 +631,5 @@ ExecPrepareTuplestoreResult(SetExprState *sexpr,
 									ShutdownSetExpr,
 									PointerGetDatum(sexpr));
 		sexpr->shutdown_reg = true;
-	}
-}
-
-/*
- * Check that function result tuple type (src_tupdesc) matches or can
- * be considered to match what the query expects (dst_tupdesc). If
- * they don't match, ereport.
- *
- * We really only care about number of attributes and data type.
- * Also, we can ignore type mismatch on columns that are dropped in the
- * destination type, so long as the physical storage matches.  This is
- * helpful in some cases involving out-of-date cached plans.
- */
-static void
-tupledesc_match(TupleDesc dst_tupdesc, TupleDesc src_tupdesc)
-{
-	int			i;
-
-	if (dst_tupdesc->natts != src_tupdesc->natts)
-		ereport(ERROR,
-				(errcode(ERRCODE_DATATYPE_MISMATCH),
-				 errmsg("function return row and query-specified return row do not match"),
-				 errdetail_plural("Returned row contains %d attribute, but query expects %d.",
-								  "Returned row contains %d attributes, but query expects %d.",
-								  src_tupdesc->natts,
-								  src_tupdesc->natts, dst_tupdesc->natts)));
-
-	for (i = 0; i < dst_tupdesc->natts; i++)
-	{
-		Form_pg_attribute dattr = TupleDescAttr(dst_tupdesc, i);
-		Form_pg_attribute sattr = TupleDescAttr(src_tupdesc, i);
-
-		if (IsBinaryCoercible(sattr->atttypid, dattr->atttypid))
-			continue;			/* no worries */
-		if (!dattr->attisdropped)
-			ereport(ERROR,
-					(errcode(ERRCODE_DATATYPE_MISMATCH),
-					 errmsg("function return row and query-specified return row do not match"),
-					 errdetail("Returned type %s at ordinal position %d, but query expects %s.",
-							   format_type_be(sattr->atttypid),
-							   i + 1,
-							   format_type_be(dattr->atttypid))));
-
-		if (dattr->attlen != sattr->attlen ||
-			dattr->attalign != sattr->attalign)
-			ereport(ERROR,
-					(errcode(ERRCODE_DATATYPE_MISMATCH),
-					 errmsg("function return row and query-specified return row do not match"),
-					 errdetail("Physical storage mismatch on dropped attribute at ordinal position %d.",
-							   i + 1)));
 	}
 }

@@ -404,13 +404,6 @@ extern bool ExecCheck(ExprState *state, ExprContext *context);
 /*
  * prototypes from functions in execSRF.c
  */
-extern SetExprState *ExecInitTableFunctionResult(Expr *expr,
-												 ExprContext *econtext, PlanState *parent);
-extern Tuplestorestate *ExecMakeTableFunctionResult(SetExprState *setexpr,
-													ExprContext *econtext,
-													MemoryContext argContext,
-													TupleDesc expectedDesc,
-													bool randomAccess);
 extern SetExprState *ExecInitFunctionResultSet(Expr *expr,
 											   ExprContext *econtext, PlanState *parent);
 extern Datum ExecMakeFunctionResultSet(SetExprState *fcache,

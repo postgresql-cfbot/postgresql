@@ -2646,7 +2646,7 @@ select * from sc_test();
 
 create or replace function sc_test() returns setof integer as $$
 declare
-  c cursor for select * from generate_series(1, 10);
+  c scroll cursor for select * from generate_series(1, 10);
   x integer;
 begin
   open c;

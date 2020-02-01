@@ -16,6 +16,7 @@
 
 #include "access/sdir.h"
 #include "access/stratnum.h"
+#include "access/tupdesc.h"
 #include "lib/stringinfo.h"
 #include "nodes/bitmapset.h"
 #include "nodes/lockoptions.h"
@@ -545,6 +546,14 @@ typedef struct TableFuncScan
 	Scan		scan;
 	TableFunc  *tablefunc;		/* table function node */
 } TableFuncScan;
+
+typedef struct SRFScanPlan {
+	Plan		plan;
+	Node		*funcexpr;
+	Node 		*rtfunc;
+	TupleDesc	funcResultDesc;		/* funciton output columns tuple descriptor */
+	bool		funcReturnsTuple;
+} SRFScanPlan;
 
 /* ----------------
  *		CteScan node

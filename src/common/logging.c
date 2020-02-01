@@ -32,6 +32,37 @@ static const char *sgr_locus = NULL;
 #define ANSI_ESCAPE_FMT "\x1b[%sm"
 #define ANSI_ESCAPE_RESET "\x1b[0m"
 
+
+#define str_starts_with(str, substr) (strncmp(str, substr, strlen(substr)) == 0)
+#define str_ends_with(str, substr) (strcmp(str + strlen(str) - strlen(substr), substr) == 0)
+
+static bool
+terminal_supports_color(void)
+{
+	const char *term_env = getenv("TERM");
+
+	if (!term_env)
+		return false;
+	else if (strcmp(term_env, "ansi") == 0)
+		return true;
+	else if (strcmp(term_env, "cygwin") == 0)
+		return true;
+	else if (strcmp(term_env, "linux") == 0)
+		return true;
+	else if (str_starts_with(term_env, "rxvt"))
+		return true;
+	else if (str_starts_with(term_env, "screen"))
+		return true;
+	else if (str_starts_with(term_env, "xterm"))
+		return true;
+	else if (str_starts_with(term_env, "vt100"))
+		return true;
+	else if (str_ends_with(term_env, "color"))
+		return true;
+	else
+		return false;
+}
+
 /*
  * This should be called before any output happens.
  */
@@ -52,6 +83,16 @@ pg_logging_init(const char *argv0)
 		if (strcmp(pg_color_env, "always") == 0 ||
 			(strcmp(pg_color_env, "auto") == 0 && isatty(fileno(stderr))))
 			log_color = true;
+	}
+	else if (getenv("NO_COLOR"))
+	{
+		/* see https://no-color.org/ */
+		log_color = false;
+	}
+	else
+	{
+		log_color = isatty(fileno(stderr)) &&
+			terminal_supports_color();
 	}
 
 	if (log_color)

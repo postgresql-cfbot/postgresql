@@ -892,6 +892,7 @@ ProcessResult(PGresult **results)
 {
 	bool		success = true;
 	bool		first_cycle = true;
+	bool		is_copy_in = false;
 
 	for (;;)
 	{
@@ -1015,6 +1016,7 @@ ProcessResult(PGresult **results)
 									   copystream,
 									   PQbinaryTuples(*results),
 									   &copy_result) && success;
+				is_copy_in = true;
 			}
 			ResetCancelConn();
 
@@ -1044,6 +1046,11 @@ ProcessResult(PGresult **results)
 		*results = next_result;
 		first_cycle = false;
 	}
+
+	/* Print returned result  for COPY FROM with error_limit. */
+	if (is_copy_in && !success && PQresultStatus(*results) !=
+		PGRES_FATAL_ERROR)
+		(void) PrintQueryTuples(*results);
 
 	SetResultVariables(*results, success);
 

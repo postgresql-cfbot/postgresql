@@ -519,6 +519,49 @@ ComputeIoConcurrency(int io_concurrency, double *target)
 	return (new_prefetch_pages >= 0.0 && new_prefetch_pages < (double) INT_MAX);
 }
 
+bool
+SharedPrefetchBuffer(SMgrRelation smgr_reln, ForkNumber forkNum, BlockNumber blockNum)
+{
+#ifdef USE_PREFETCH
+	BufferTag	newTag;		/* identity of requested block */
+	uint32		newHash;	/* hash value for newTag */
+	LWLock	   *newPartitionLock;	/* buffer partition lock for it */
+	int			buf_id;
+
+	Assert(BlockNumberIsValid(blockNum));
+
+	/* create a tag so we can lookup the buffer */
+	INIT_BUFFERTAG(newTag, smgr_reln->smgr_rnode.node,
+				   forkNum, blockNum);
+
+	/* determine its hash code and partition lock ID */
+	newHash = BufTableHashCode(&newTag);
+	newPartitionLock = BufMappingPartitionLock(newHash);
+
+	/* see if the block is in the buffer pool already */
+	LWLockAcquire(newPartitionLock, LW_SHARED);
+	buf_id = BufTableLookup(&newTag, newHash);
+	LWLockRelease(newPartitionLock);
+
+	/* If not in buffers, initiate prefetch */
+	if (buf_id < 0)
+		return smgrprefetch(smgr_reln, forkNum, blockNum);
+
+	/*
+	 * If the block *is* in buffers, we do nothing.  This is not really ideal:
+	 * the block might be just about to be evicted, which would be stupid
+	 * since we know we are going to need it soon.  But the only easy answer
+	 * is to bump the usage_count, which does not seem like a great solution:
+	 * when the caller does ultimately touch the block, usage_count would get
+	 * bumped again, resulting in too much favoritism for blocks that are
+	 * involved in a prefetch sequence. A real fix would involve some
+	 * additional per-buffer state, and it's not clear that there's enough of
+	 * a problem to justify that.
+	 */
+#endif
+	return true;
+}
+
 /*
  * PrefetchBuffer -- initiate asynchronous read of a block of a relation
  *
@@ -550,39 +593,8 @@ PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
 	}
 	else
 	{
-		BufferTag	newTag;		/* identity of requested block */
-		uint32		newHash;	/* hash value for newTag */
-		LWLock	   *newPartitionLock;	/* buffer partition lock for it */
-		int			buf_id;
-
-		/* create a tag so we can lookup the buffer */
-		INIT_BUFFERTAG(newTag, reln->rd_smgr->smgr_rnode.node,
-					   forkNum, blockNum);
-
-		/* determine its hash code and partition lock ID */
-		newHash = BufTableHashCode(&newTag);
-		newPartitionLock = BufMappingPartitionLock(newHash);
-
-		/* see if the block is in the buffer pool already */
-		LWLockAcquire(newPartitionLock, LW_SHARED);
-		buf_id = BufTableLookup(&newTag, newHash);
-		LWLockRelease(newPartitionLock);
-
-		/* If not in buffers, initiate prefetch */
-		if (buf_id < 0)
-			smgrprefetch(reln->rd_smgr, forkNum, blockNum);
-
-		/*
-		 * If the block *is* in buffers, we do nothing.  This is not really
-		 * ideal: the block might be just about to be evicted, which would be
-		 * stupid since we know we are going to need it soon.  But the only
-		 * easy answer is to bump the usage_count, which does not seem like a
-		 * great solution: when the caller does ultimately touch the block,
-		 * usage_count would get bumped again, resulting in too much
-		 * favoritism for blocks that are involved in a prefetch sequence. A
-		 * real fix would involve some additional per-buffer state, and it's
-		 * not clear that there's enough of a problem to justify that.
-		 */
+		/* pass it to the shared buffer version */
+		SharedPrefetchBuffer(reln->rd_smgr, forkNum, blockNum);
 	}
 #endif							/* USE_PREFETCH */
 }

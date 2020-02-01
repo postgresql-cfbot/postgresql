@@ -83,6 +83,9 @@ typedef struct
 	XLogRecPtr	receivedUpto;
 	TimeLineID	receivedTLI;
 
+	/* same as above, but advanced after writing and before flushing. */
+	XLogRecPtr	writtenUpto;
+
 	/*
 	 * latestChunkStart is the starting byte position of the current "batch"
 	 * of received WAL.  It's actually the same as the previous value of
@@ -322,6 +325,7 @@ extern bool WalRcvStreaming(void);
 extern bool WalRcvRunning(void);
 extern void RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr,
 								 const char *conninfo, const char *slotname);
+extern XLogRecPtr GetWalRcvFlushRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI);
 extern XLogRecPtr GetWalRcvWriteRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI);
 extern int	GetReplicationApplyDelay(void);
 extern int	GetReplicationTransferLatency(void);

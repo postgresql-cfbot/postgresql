@@ -111,6 +111,8 @@ extern int	wal_keep_segments;
 extern int	XLOGbuffers;
 extern int	XLogArchiveTimeout;
 extern int	wal_retrieve_retry_interval;
+extern int	wal_prefetch_distance;
+extern bool wal_prefetch_fpw;
 extern char *XLogArchiveCommand;
 extern bool EnableHotStandby;
 extern bool fullPageWrites;

@@ -286,6 +286,31 @@ RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr, const char *conninfo,
 }
 
 /*
+ * Returns the last+1 byte position that walreceiver has flushed.
+ *
+ * Optionally, returns the previous chunk start, that is the first byte
+ * written in the most recent walreceiver flush cycle.  Callers not
+ * interested in that value may pass NULL for latestChunkStart. Same for
+ * receiveTLI.
+ */
+XLogRecPtr
+GetWalRcvFlushRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI)
+{
+	WalRcvData *walrcv = WalRcv;
+	XLogRecPtr	recptr;
+
+	SpinLockAcquire(&walrcv->mutex);
+	recptr = walrcv->receivedUpto;
+	if (latestChunkStart)
+		*latestChunkStart = walrcv->latestChunkStart;
+	if (receiveTLI)
+		*receiveTLI = walrcv->receivedTLI;
+	SpinLockRelease(&walrcv->mutex);
+
+	return recptr;
+}
+
+/*
  * Returns the last+1 byte position that walreceiver has written.
  *
  * Optionally, returns the previous chunk start, that is the first byte
@@ -300,7 +325,7 @@ GetWalRcvWriteRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI)
 	XLogRecPtr	recptr;
 
 	SpinLockAcquire(&walrcv->mutex);
-	recptr = walrcv->receivedUpto;
+	recptr = walrcv->writtenUpto;
 	if (latestChunkStart)
 		*latestChunkStart = walrcv->latestChunkStart;
 	if (receiveTLI)

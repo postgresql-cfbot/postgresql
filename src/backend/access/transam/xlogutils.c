@@ -25,6 +25,7 @@
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "replication/walreceiver.h"
 #include "storage/smgr.h"
 #include "utils/guc.h"
 #include "utils/hsearch.h"
@@ -827,6 +828,7 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	TimeLineID	tli;
 	int			count;
 	WALReadError errinfo;
+	XLogReadLocalOptions *options = (XLogReadLocalOptions *) state->private_data;
 
 	loc = targetPagePtr + reqLen;
 
@@ -841,7 +843,23 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 		 * notices recovery finishes, so we only have to maintain it for the
 		 * local process until recovery ends.
 		 */
-		if (!RecoveryInProgress())
+		if (options)
+		{
+			switch (options->read_upto_policy)
+			{
+			case XLRO_WALRCV_WRITTEN:
+				read_upto = GetWalRcvWriteRecPtr(NULL, NULL);
+				break;
+			case XLRO_LSN:
+				read_upto = options->lsn;
+				break;
+			default:
+				read_upto = 0;
+				elog(ERROR, "unknown read_upto_policy value");
+				break;
+			}
+		}
+		else if (!RecoveryInProgress())
 			read_upto = GetFlushRecPtr();
 		else
 			read_upto = GetXLogReplayRecPtr(&ThisTimeLineID);
@@ -877,6 +895,9 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 		{
 
 			if (loc <= read_upto)
+				break;
+
+			if (options && options->nowait)
 				break;
 
 			CHECK_FOR_INTERRUPTS();

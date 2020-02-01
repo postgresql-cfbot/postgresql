@@ -525,14 +525,17 @@ mdclose(SMgrRelation reln, ForkNumber forknum)
 /*
  *	mdprefetch() -- Initiate asynchronous read of the specified block of a relation
  */
-void
+bool
 mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 {
 #ifdef USE_PREFETCH
 	off_t		seekpos;
 	MdfdVec    *v;
 
-	v = _mdfd_getseg(reln, forknum, blocknum, false, EXTENSION_FAIL);
+	v = _mdfd_getseg(reln, forknum, blocknum, false,
+					 InRecovery ? EXTENSION_RETURN_NULL : EXTENSION_FAIL);
+	if (v == NULL)
+		return false;
 
 	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
 
@@ -540,6 +543,8 @@ mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 
 	(void) FilePrefetch(v->mdfd_vfd, seekpos, BLCKSZ, WAIT_EVENT_DATA_FILE_PREFETCH);
 #endif							/* USE_PREFETCH */
+
+	return true;
 }
 
 /*
@@ -1238,7 +1243,7 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 			if ((behavior & EXTENSION_RETURN_NULL) &&
 				FILE_POSSIBLY_DELETED(errno))
 				return NULL;
-			ereport(ERROR,
+			ereport(PANIC,
 					(errcode_for_file_access(),
 					 errmsg("could not open file \"%s\" (target block %u): %m",
 							_mdfd_segpath(reln, forknum, nextsegno),

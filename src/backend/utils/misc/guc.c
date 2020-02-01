@@ -1205,6 +1205,18 @@ static struct config_bool ConfigureNamesBool[] =
 		true,
 		NULL, NULL, NULL
 	},
+	{
+		{"wal_prefetch_fpw", PGC_SIGHUP, WAL_SETTINGS,
+			gettext_noop("Prefetch blocks that have full page images in the WAL"),
+			gettext_noop("On some systems, there is no benefit to prefetching pages that will be "
+						 "entirely overwritten, but if the logical page size of the filesystem is "
+						 "larger than PostgreSQL's, this can be beneficial.  This option has no "
+						 "effect unless wal_prefetch_distance is set to a positive number.")
+		},
+		&wal_prefetch_fpw,
+		false,
+		NULL, NULL, NULL
+	},
 
 	{
 		{"wal_log_hints", PGC_POSTMASTER, WAL_SETTINGS,
@@ -2588,6 +2600,17 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&PreAuthDelay,
 		0, 0, 60,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"wal_prefetch_distance", PGC_SIGHUP, WAL_ARCHIVE_RECOVERY,
+			gettext_noop("How many bytes to read ahead in the WAL to prefetch referenced blocks."),
+			gettext_noop("Set to -1 to disable WAL prefetching."),
+			GUC_UNIT_BYTE
+		},
+		&wal_prefetch_distance,
+		-1, -1, INT_MAX,
 		NULL, NULL, NULL
 	},
 

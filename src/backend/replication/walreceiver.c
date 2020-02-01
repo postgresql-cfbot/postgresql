@@ -1007,6 +1007,15 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 
 		LogstreamResult.Write = recptr;
 	}
+
+	/* Update shared-memory status */
+	SpinLockAcquire(&WalRcv->mutex);
+	if (WalRcv->writtenUpto < LogstreamResult.Write)
+	{
+		/* XXX update receivedTLI and latestChunkStart here? */
+		WalRcv->writtenUpto = LogstreamResult.Write;
+	}
+	SpinLockRelease(&WalRcv->mutex);
 }
 
 /*

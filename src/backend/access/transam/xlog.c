@@ -39,6 +39,7 @@
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
+#include "catalog/storage_xlog.h"
 #include "commands/tablespace.h"
 #include "common/controldata_utils.h"
 #include "miscadmin.h"
@@ -104,6 +105,8 @@ int			wal_level = WAL_LEVEL_MINIMAL;
 int			CommitDelay = 0;	/* precommit delay in microseconds */
 int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
+int			wal_prefetch_distance = -1;
+bool		wal_prefetch_fpw = false;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -801,6 +804,7 @@ static XLogSource readSource = 0;	/* XLOG_FROM_* code */
  */
 static XLogSource currentSource = 0;	/* XLOG_FROM_* code */
 static bool lastSourceFailed = false;
+static bool change_prefetch_source = false;
 
 typedef struct XLogPageReadPrivate
 {
@@ -6191,6 +6195,301 @@ CheckRequiredParameterValues(void)
 	}
 }
 
+typedef struct PrefetchState
+{
+	XLogReaderState *reader;
+	XLogReadLocalOptions options;
+	XLogRecPtr		lsn;
+	bool			have_record;
+	bool			error;
+	HTAB		   *filter_table;
+	dlist_head		filter_queue;
+
+	SMgrRelation	last_reln;
+	RelFileNode		last_rnode;
+	BlockNumber		last_blkno;
+} PrefetchState;
+
+typedef struct PrefetchFilter
+{
+	RelFileNode		rnode;
+	XLogRecPtr		filter_until_replayed;
+	BlockNumber		filter_from_block;
+	dlist_node		link;
+} PrefetchFilter;
+
+static void
+BeginPrefetch(PrefetchState *prefetcher, XLogRecPtr replaying_lsn, int source)
+{
+	static HASHCTL hash_table_ctl = {
+		.keysize = sizeof(RelFileNode),
+		.entrysize = sizeof(PrefetchFilter)
+	};
+
+	memset(prefetcher, 0, sizeof(*prefetcher));
+	prefetcher->options.nowait = true;
+	if (source == XLOG_FROM_STREAM)
+		prefetcher->options.read_upto_policy = XLRO_WALRCV_WRITTEN;
+	else
+		prefetcher->options.read_upto_policy = XLRO_LSN;
+	prefetcher->options.lsn = (XLogRecPtr) -1;
+	prefetcher->reader = XLogReaderAllocate(wal_segment_size,
+											NULL,
+											read_local_xlog_page,
+											&prefetcher->options);
+	prefetcher->lsn = replaying_lsn;
+	prefetcher->filter_table = hash_create("PrefetchFilterTable", 1024,
+										   &hash_table_ctl,
+										   HASH_ELEM | HASH_BLOBS);
+	dlist_init(&prefetcher->filter_queue);
+}
+
+static void
+EndPrefetch(PrefetchState *prefetcher)
+{
+	XLogReaderFree(prefetcher->reader);
+	hash_destroy(prefetcher->filter_table);
+}
+
+static void
+SwitchPrefetchSource(PrefetchState *prefetcher, XLogRecPtr replaying_lsn, int source)
+{
+	EndPrefetch(prefetcher);
+	BeginPrefetch(prefetcher, replaying_lsn, source);
+}
+
+/*
+ * Don't prefetch any blocks >= 'blockno' from a given 'rnode', until 'lsn'
+ * has been replayed.
+ */
+static inline void
+PrefetchAddFilter(PrefetchState *prefetcher, RelFileNode rnode,
+				  BlockNumber blockno, XLogRecPtr lsn)
+{
+	PrefetchFilter *filter;
+	bool		found;
+
+	filter = hash_search(prefetcher->filter_table, &rnode, HASH_ENTER, &found);
+	if (!found)
+	{
+		/*
+		 * Don't allow any prefetching of this block or higher until replayed.
+		 */
+		filter->filter_until_replayed = lsn;
+		filter->filter_from_block = blockno;
+		dlist_push_head(&prefetcher->filter_queue, &filter->link);
+	}
+	else
+	{
+		/*
+		 * We were already filtering this rnode.  Extend the filter's lifetime
+		 * to cover this WAL record, but leave the (presumably lower) block
+		 * number there because we don't want to have to track individual
+		 * blocks.
+		 */
+		filter->filter_until_replayed = lsn;
+		dlist_delete(&filter->link);
+		dlist_push_head(&prefetcher->filter_queue, &filter->link);
+	}
+}
+
+/*
+ * Check if a given block should be skipped due to a filter.
+ */
+static inline bool
+PrefetchIsFiltered(PrefetchState *prefetcher, RelFileNode rnode,
+				   BlockNumber blockno)
+{
+	/*
+	 * Test for empty queue first, because we expect it to be empty most of the
+	 * time and we can avoid the hash table lookup in that case.
+	 */
+	if (unlikely(!dlist_is_empty(&prefetcher->filter_queue)))
+	{
+		PrefetchFilter *filter = hash_search(prefetcher->filter_table, &rnode,
+											 HASH_FIND, NULL);
+
+		if (filter && filter->filter_from_block <= blockno)
+			return true;
+	}
+
+	return false;
+}
+
+/*
+ * Drop any filters that were waiting for a given LSN to be replayed.
+ */
+static inline void
+PrefetchDropFilters(PrefetchState *prefetcher, XLogRecPtr replaying_lsn)
+{
+	while (unlikely(!dlist_is_empty(&prefetcher->filter_queue)))
+	{
+		PrefetchFilter *filter = dlist_tail_element(PrefetchFilter,
+													link,
+													&prefetcher->filter_queue);
+
+		if (filter->filter_until_replayed >= replaying_lsn)
+			break;
+		dlist_delete(&filter->link);
+		hash_search(prefetcher->filter_table, filter, HASH_REMOVE, NULL);
+	}
+}
+
+/*
+ * Prefetch blocks references in the WAL, if wal_prefetch_distance is
+ * configured.
+ */
+static void
+PrefetchBlockRefs(PrefetchState *prefetcher, XLogRecPtr replaying_lsn)
+{
+
+	Assert(wal_prefetch_distance >= 0);
+
+	/* Have we switched from one source to another? */
+	if (unlikely(change_prefetch_source))
+	{
+		SwitchPrefetchSource(prefetcher, replaying_lsn, currentSource);
+		change_prefetch_source = false;
+	}
+
+	/* Has an error occurred? */
+	if (prefetcher->error)
+		return;
+
+	/* Can we drop any filters yet? */
+	PrefetchDropFilters(prefetcher, replaying_lsn);
+
+	/* Main prefetch loop. */
+	for (;;)
+	{
+		XLogReaderState *reader = prefetcher->reader;
+		char *error;
+
+		/* If we don't already have a record, then try to read one. */
+		if (!prefetcher->have_record)
+		{
+			if (!XLogReadRecord(reader, prefetcher->lsn, &error))
+			{
+				/* If we got an error, report it and give up. */
+				if (error)
+				{
+					elog(LOG, "WAL prefetch: %s", error);
+					prefetcher->error = true;
+				}
+				/* Otherwise, we'll try again later when more data is here. */
+				return;
+			}
+			prefetcher->have_record = true;
+		}
+
+		/* Are we too far ahead of replay? */
+		if (prefetcher->reader->ReadRecPtr >= replaying_lsn + wal_prefetch_distance)
+			break;
+
+		/*
+		 * If this is a record that creates a new SMGR relation, we'll avoid
+		 * prefetching anything from that rnode until it has been replayed.
+		 */
+		if (replaying_lsn < reader->ReadRecPtr &&
+			XLogRecGetRmid(reader) == RM_SMGR_ID &&
+			(XLogRecGetInfo(reader) & ~XLR_INFO_MASK) == XLOG_SMGR_CREATE)
+		{
+			xl_smgr_create *xlrec = (xl_smgr_create *) XLogRecGetData(reader);
+
+			PrefetchAddFilter(prefetcher, xlrec->rnode, 0, reader->ReadRecPtr);
+		}
+
+		/* Scan the record for block references. */
+		for (int i = 0; i <= reader->max_block_id; ++i)
+		{
+			DecodedBkpBlock *block = &reader->blocks[i];
+			SMgrRelation reln;
+
+			/* Ignore everything but the main fork for now. */
+			if (block->forknum != MAIN_FORKNUM)
+				continue;
+
+			/*
+			 * If there is a full page image attached, we won't be reading the
+			 * page, so you might thing we should skip it.  However, if the
+			 * underlying filesystem uses larger logical blocks than us, it
+			 * might still need to perform a read-before-write some time later.
+			 * Therefore, only prefetch if configured to do so.
+			 */
+			if (block->has_image && !wal_prefetch_fpw)
+				continue;
+
+			/*
+			 * If this block will initialize a new page then it's probably an
+			 * extension.  Since it might create a new segment, we can't try
+			 * to prefetch this block until the record has been replayed, or we
+			 * might try to open a file that doesn't exist yet.
+			 */
+			if (block->flags & BKPBLOCK_WILL_INIT)
+			{
+				PrefetchAddFilter(prefetcher, block->rnode, block->blkno,
+								  reader->ReadRecPtr);
+				continue;
+			}
+
+			/* Should we skip this block due to a filter? */
+			if (PrefetchIsFiltered(prefetcher, block->rnode, block->blkno))
+				continue;
+
+			/* Fast path for repeated references to the same relation. */
+			if (RelFileNodeEquals(block->rnode, prefetcher->last_rnode))
+			{
+				/*
+				 * If this is a repeat or sequential access, then skip it.  We
+				 * expect the kernel to detect sequential access on its own
+				 * and do a better job than we could.
+				 *
+				 * XXX: keep a small array of recently accessed relations?
+				 * Otherwise interleaved sequential access won't be detected
+				 * and filtered out.
+				 */
+				if (block->blkno == prefetcher->last_blkno ||
+					block->blkno == prefetcher->last_blkno + 1)
+				{
+					prefetcher->last_blkno = block->blkno;
+					continue;
+				}
+
+				/* We can avoid calling smgropen(). */
+				reln = prefetcher->last_reln;
+			}
+			else
+			{
+				/* Otherwise we have to open it. */
+				reln = smgropen(block->rnode, InvalidBackendId);
+				prefetcher->last_rnode = block->rnode;
+				prefetcher->last_reln = reln;
+			}
+			prefetcher->last_blkno = block->blkno;
+
+			/* We can prefetch! */
+			if (!SharedPrefetchBuffer(reln, block->forknum, block->blkno))
+			{
+				/*
+				 * The underlying segment file doesn't exist.  Presumably it
+				 * will be unlinked by a later WAL record.  When recovery reads
+				 * this block, it will use the EXTENSION_CREATE_RECOVERY flag.
+				 * We certainly don't want to do that sort of thing while
+				 * prefetching, so let's just ignore references to this
+				 * relation until this record is replayed, and let recovery
+				 * create the dummy file.
+				 */
+				PrefetchAddFilter(prefetcher, block->rnode, 0,
+								  reader->ReadRecPtr);
+			}
+		}
+
+		/* Advance to the next record. */
+		prefetcher->lsn = InvalidXLogRecPtr;
+		prefetcher->have_record = false;
+	}
+}
+
 /*
  * This must be called ONCE during postmaster or standalone-backend startup
  */
@@ -7046,12 +7345,16 @@ StartupXLOG(void)
 		{
 			ErrorContextCallback errcallback;
 			TimestampTz xtime;
+			PrefetchState prefetcher;
 
 			InRedo = true;
 
 			ereport(LOG,
 					(errmsg("redo starts at %X/%X",
 							(uint32) (ReadRecPtr >> 32), (uint32) ReadRecPtr)));
+
+			/* Prepare to fetch WAL records ahead of our current position. */
+			BeginPrefetch(&prefetcher, xlogreader->ReadRecPtr, currentSource);
 
 			/*
 			 * main redo apply loop
@@ -7081,6 +7384,10 @@ StartupXLOG(void)
 
 				/* Handle interrupt signals of startup process */
 				HandleStartupProcInterrupts();
+
+				/* Handle WAL prefetching, if configured. */
+				if (wal_prefetch_distance >= 0)
+					PrefetchBlockRefs(&prefetcher, xlogreader->ReadRecPtr);
 
 				/*
 				 * Pause WAL replay, if requested by a hot-standby session via
@@ -7269,6 +7576,7 @@ StartupXLOG(void)
 			/*
 			 * end of main redo apply loop
 			 */
+			EndPrefetch(&prefetcher);
 
 			if (reachedRecoveryTarget)
 			{
@@ -9261,7 +9569,7 @@ CreateRestartPoint(int flags)
 	 * Retreat _logSegNo using the current end of xlog replayed or received,
 	 * whichever is later.
 	 */
-	receivePtr = GetWalRcvWriteRecPtr(NULL, NULL);
+	receivePtr = GetWalRcvFlushRecPtr(NULL, NULL);
 	replayPtr = GetXLogReplayRecPtr(&replayTLI);
 	endptr = (receivePtr < replayPtr) ? replayPtr : receivePtr;
 	KeepLogSeg(endptr, &_logSegNo);
@@ -11911,6 +12219,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * and move on to the next state.
 					 */
 					currentSource = XLOG_FROM_STREAM;
+					change_prefetch_source = true;
 					break;
 
 				case XLOG_FROM_STREAM:
@@ -12082,7 +12391,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					{
 						XLogRecPtr	latestChunkStart;
 
-						receivedUpto = GetWalRcvWriteRecPtr(&latestChunkStart, &receiveTLI);
+						receivedUpto = GetWalRcvFlushRecPtr(&latestChunkStart, &receiveTLI);
 						if (RecPtr < receivedUpto && receiveTLI == curFileTLI)
 						{
 							havedata = true;

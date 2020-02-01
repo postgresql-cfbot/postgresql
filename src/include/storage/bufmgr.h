@@ -18,6 +18,7 @@
 #include "storage/buf.h"
 #include "storage/bufpage.h"
 #include "storage/relfilenode.h"
+#include "storage/smgr.h"
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"
 
@@ -162,6 +163,8 @@ extern PGDLLIMPORT int32 *LocalRefCount;
  * prototypes for functions in bufmgr.c
  */
 extern bool ComputeIoConcurrency(int io_concurrency, double *target);
+extern bool SharedPrefetchBuffer(SMgrRelation smgr_reln, ForkNumber forkNum,
+								 BlockNumber blockNum);
 extern void PrefetchBuffer(Relation reln, ForkNumber forkNum,
 						   BlockNumber blockNum);
 extern Buffer ReadBuffer(Relation reln, BlockNumber blockNum);

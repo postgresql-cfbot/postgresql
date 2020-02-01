@@ -43,6 +43,7 @@
 #include "catalog/catalog.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
+#include "catalog/partition.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_amproc.h"
 #include "catalog/pg_attrdef.h"
@@ -5138,7 +5139,7 @@ GetRelationPublicationActions(Relation relation)
 					  sizeof(PublicationActions));
 
 	/* Fetch the publication membership info. */
-	puboids = GetRelationPublications(RelationGetRelid(relation));
+	puboids = GetRelationPublications(RelationGetRelid(relation), NULL);
 	puboids = list_concat_unique_oid(puboids, GetAllTablesPublications());
 
 	foreach(lc, puboids)
@@ -5157,7 +5158,9 @@ GetRelationPublicationActions(Relation relation)
 		pubactions->pubinsert |= pubform->pubinsert;
 		pubactions->pubupdate |= pubform->pubupdate;
 		pubactions->pubdelete |= pubform->pubdelete;
-		pubactions->pubtruncate |= pubform->pubtruncate;
+		if (!pubform->pubasroot ||
+			!is_leaf_partition(RelationGetRelid(relation)))
+			pubactions->pubtruncate |= pubform->pubtruncate;
 
 		ReleaseSysCache(tup);
 

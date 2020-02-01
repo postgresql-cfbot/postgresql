@@ -14646,7 +14646,7 @@ ATPrepChangePersistence(Relation rel, bool toLogged)
 	 * UNLOGGED as UNLOGGED tables can't be published.
 	 */
 	if (!toLogged &&
-		list_length(GetRelationPublications(RelationGetRelid(rel))) > 0)
+		list_length(GetRelationPublications(RelationGetRelid(rel), NULL)) > 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("cannot change table \"%s\" to unlogged because it is part of a publication",

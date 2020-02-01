@@ -23,6 +23,7 @@
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/objectaddress.h"
+#include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
@@ -55,20 +56,23 @@ static void PublicationDropTables(Oid pubid, List *rels, bool missing_ok);
 static void
 parse_publication_options(List *options,
 						  bool *publish_given,
-						  bool *publish_insert,
-						  bool *publish_update,
-						  bool *publish_delete,
-						  bool *publish_truncate)
+						  PublicationActions *pubactions,
+						  bool *publish_using_root_schema_given,
+						  bool *publish_using_root_schema)
 {
 	ListCell   *lc;
 
+	*publish_using_root_schema_given = false;
 	*publish_given = false;
 
 	/* Defaults are true */
-	*publish_insert = true;
-	*publish_update = true;
-	*publish_delete = true;
-	*publish_truncate = true;
+	pubactions->pubinsert = true;
+	pubactions->pubupdate = true;
+	pubactions->pubdelete = true;
+	pubactions->pubtruncate = true;
+
+	/* Relation changes published as of itself by default. */
+	*publish_using_root_schema = false;
 
 	/* Parse options */
 	foreach(lc, options)
@@ -90,10 +94,10 @@ parse_publication_options(List *options,
 			 * If publish option was given only the explicitly listed actions
 			 * should be published.
 			 */
-			*publish_insert = false;
-			*publish_update = false;
-			*publish_delete = false;
-			*publish_truncate = false;
+			pubactions->pubinsert = false;
+			pubactions->pubupdate = false;
+			pubactions->pubdelete = false;
+			pubactions->pubtruncate = false;
 
 			*publish_given = true;
 			publish = defGetString(defel);
@@ -109,18 +113,27 @@ parse_publication_options(List *options,
 				char	   *publish_opt = (char *) lfirst(lc);
 
 				if (strcmp(publish_opt, "insert") == 0)
-					*publish_insert = true;
+					pubactions->pubinsert = true;
 				else if (strcmp(publish_opt, "update") == 0)
-					*publish_update = true;
+					pubactions->pubupdate = true;
 				else if (strcmp(publish_opt, "delete") == 0)
-					*publish_delete = true;
+					pubactions->pubdelete = true;
 				else if (strcmp(publish_opt, "truncate") == 0)
-					*publish_truncate = true;
+					pubactions->pubtruncate = true;
 				else
 					ereport(ERROR,
 							(errcode(ERRCODE_SYNTAX_ERROR),
 							 errmsg("unrecognized \"publish\" value: \"%s\"", publish_opt)));
 			}
+		}
+		else if (strcmp(defel->defname, "publish_using_root_schema") == 0)
+		{
+			if (*publish_using_root_schema_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			*publish_using_root_schema_given = true;
+			*publish_using_root_schema = defGetBoolean(defel);
 		}
 		else
 			ereport(ERROR,
@@ -142,10 +155,9 @@ CreatePublication(CreatePublicationStmt *stmt)
 	Datum		values[Natts_pg_publication];
 	HeapTuple	tup;
 	bool		publish_given;
-	bool		publish_insert;
-	bool		publish_update;
-	bool		publish_delete;
-	bool		publish_truncate;
+	PublicationActions pubactions;
+	bool		publish_using_root_schema_given;
+	bool		publish_using_root_schema;
 	AclResult	aclresult;
 
 	/* must have CREATE privilege on database */
@@ -182,9 +194,9 @@ CreatePublication(CreatePublicationStmt *stmt)
 	values[Anum_pg_publication_pubowner - 1] = ObjectIdGetDatum(GetUserId());
 
 	parse_publication_options(stmt->options,
-							  &publish_given, &publish_insert,
-							  &publish_update, &publish_delete,
-							  &publish_truncate);
+							  &publish_given, &pubactions,
+							  &publish_using_root_schema_given,
+							  &publish_using_root_schema);
 
 	puboid = GetNewOidWithIndex(rel, PublicationObjectIndexId,
 								Anum_pg_publication_oid);
@@ -192,13 +204,15 @@ CreatePublication(CreatePublicationStmt *stmt)
 	values[Anum_pg_publication_puballtables - 1] =
 		BoolGetDatum(stmt->for_all_tables);
 	values[Anum_pg_publication_pubinsert - 1] =
-		BoolGetDatum(publish_insert);
+		BoolGetDatum(pubactions.pubinsert);
 	values[Anum_pg_publication_pubupdate - 1] =
-		BoolGetDatum(publish_update);
+		BoolGetDatum(pubactions.pubupdate);
 	values[Anum_pg_publication_pubdelete - 1] =
-		BoolGetDatum(publish_delete);
+		BoolGetDatum(pubactions.pubdelete);
 	values[Anum_pg_publication_pubtruncate - 1] =
-		BoolGetDatum(publish_truncate);
+		BoolGetDatum(pubactions.pubtruncate);
+	values[Anum_pg_publication_pubasroot - 1] =
+		BoolGetDatum(publish_using_root_schema);
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -250,17 +264,16 @@ AlterPublicationOptions(AlterPublicationStmt *stmt, Relation rel,
 	bool		replaces[Natts_pg_publication];
 	Datum		values[Natts_pg_publication];
 	bool		publish_given;
-	bool		publish_insert;
-	bool		publish_update;
-	bool		publish_delete;
-	bool		publish_truncate;
+	PublicationActions pubactions;
+	bool		publish_using_root_schema_given;
+	bool		publish_using_root_schema;
 	ObjectAddress obj;
 	Form_pg_publication pubform;
 
 	parse_publication_options(stmt->options,
-							  &publish_given, &publish_insert,
-							  &publish_update, &publish_delete,
-							  &publish_truncate);
+							  &publish_given, &pubactions,
+							  &publish_using_root_schema_given,
+							  &publish_using_root_schema);
 
 	/* Everything ok, form a new tuple. */
 	memset(values, 0, sizeof(values));
@@ -269,17 +282,23 @@ AlterPublicationOptions(AlterPublicationStmt *stmt, Relation rel,
 
 	if (publish_given)
 	{
-		values[Anum_pg_publication_pubinsert - 1] = BoolGetDatum(publish_insert);
+		values[Anum_pg_publication_pubinsert - 1] = BoolGetDatum(pubactions.pubinsert);
 		replaces[Anum_pg_publication_pubinsert - 1] = true;
 
-		values[Anum_pg_publication_pubupdate - 1] = BoolGetDatum(publish_update);
+		values[Anum_pg_publication_pubupdate - 1] = BoolGetDatum(pubactions.pubupdate);
 		replaces[Anum_pg_publication_pubupdate - 1] = true;
 
-		values[Anum_pg_publication_pubdelete - 1] = BoolGetDatum(publish_delete);
+		values[Anum_pg_publication_pubdelete - 1] = BoolGetDatum(pubactions.pubdelete);
 		replaces[Anum_pg_publication_pubdelete - 1] = true;
 
-		values[Anum_pg_publication_pubtruncate - 1] = BoolGetDatum(publish_truncate);
+		values[Anum_pg_publication_pubtruncate - 1] = BoolGetDatum(pubactions.pubtruncate);
 		replaces[Anum_pg_publication_pubtruncate - 1] = true;
+	}
+
+	if (publish_using_root_schema_given)
+	{
+		values[Anum_pg_publication_pubasroot - 1] = BoolGetDatum(publish_using_root_schema);
+		replaces[Anum_pg_publication_pubasroot - 1] = true;
 	}
 
 	tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
@@ -299,7 +318,13 @@ AlterPublicationOptions(AlterPublicationStmt *stmt, Relation rel,
 	}
 	else
 	{
-		List	   *relids = GetPublicationRelations(pubform->oid);
+		/*
+		 * For any partitioned tables contained in the publication, we must
+		 * invalidate all partitions contained in the respective partition
+		 * trees, not just those explicitly mentioned in the publication.
+		 */
+		List   *relids = GetPublicationRelations(pubform->oid,
+												 PUBLICATION_PART_ALL);
 
 		/*
 		 * We don't want to send too many individual messages, at some point
@@ -356,7 +381,8 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 		PublicationDropTables(pubid, rels, false);
 	else						/* DEFELEM_SET */
 	{
-		List	   *oldrelids = GetPublicationRelations(pubid);
+		List   *oldrelids = GetPublicationRelations(pubid,
+													PUBLICATION_PART_ROOT);
 		List	   *delrels = NIL;
 		ListCell   *oldlc;
 
@@ -498,7 +524,8 @@ RemovePublicationRelById(Oid proid)
 
 /*
  * Open relations specified by a RangeVar list.
- * The returned tables are locked in ShareUpdateExclusiveLock mode.
+ * The returned tables are locked in ShareUpdateExclusiveLock mode in order to
+ * add them to a publication.
  */
 static List *
 OpenTableList(List *tables)
@@ -539,8 +566,13 @@ OpenTableList(List *tables)
 		rels = lappend(rels, rel);
 		relids = lappend_oid(relids, myrelid);
 
-		/* Add children of this rel, if requested */
-		if (recurse)
+		/*
+		 * Add children of this rel, if requested, so that they too are added
+		 * to the publication.  A partitioned table can't have any inheritance
+		 * children other than its partitions, which need not be explicitly
+		 * added to the publication.
+		 */
+		if (recurse && rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 		{
 			List	   *children;
 			ListCell   *child;

@@ -52,6 +52,8 @@ CATALOG(pg_publication,6104,PublicationRelationId)
 	/* true if truncates are published */
 	bool		pubtruncate;
 
+	/* true if partition changes are published using root schema */
+	bool		pubasroot;
 } FormData_pg_publication;
 
 /* ----------------
@@ -74,15 +76,29 @@ typedef struct Publication
 	Oid			oid;
 	char	   *name;
 	bool		alltables;
+	bool		pubasroot;
 	PublicationActions pubactions;
 } Publication;
 
 extern Publication *GetPublication(Oid pubid);
 extern Publication *GetPublicationByName(const char *pubname, bool missing_ok);
-extern List *GetRelationPublications(Oid relid);
-extern List *GetPublicationRelations(Oid pubid);
+extern List *GetRelationPublications(Oid relid, List **published_rels);
+
+/*---------
+ * Expected values for pub_partopt parameter of GetRelationPublications(),
+ * which allows callers to specify which partitions of partitioned tables
+ * mentioned in the publication they expect to see.
+ *
+ *	ROOT:	only the table explicitly mentioned in the publication
+ *	LEAF:	only leaf partitions in given tree
+ *	ALL:	all partitions in given tree
+ */
+#define	PUBLICATION_PART_ROOT	0
+#define	PUBLICATION_PART_LEAF	1
+#define	PUBLICATION_PART_ALL	2
+extern List *GetPublicationRelations(Oid pubid, int pub_partopt);
 extern List *GetAllTablesPublications(void);
-extern List *GetAllTablesPublicationRelations(void);
+extern List *GetAllTablesPublicationRelations(bool pubasroot);
 
 extern bool is_publishable_relation(Relation rel);
 extern ObjectAddress publication_add_relation(Oid pubid, Relation targetrel,

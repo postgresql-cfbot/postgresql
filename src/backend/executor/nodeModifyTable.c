@@ -2295,8 +2295,12 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 	/* If modifying a partitioned table, initialize the root table info */
 	if (node->rootResultRelIndex >= 0)
+	{
 		mtstate->rootResultRelInfo = estate->es_root_result_relations +
 			node->rootResultRelIndex;
+		/* Only necessary to check replication identity. */
+		CheckValidResultRel(mtstate->rootResultRelInfo, operation);
+	}
 
 	mtstate->mt_arowmarks = (List **) palloc0(sizeof(List *) * nplans);
 	mtstate->mt_nplans = nplans;

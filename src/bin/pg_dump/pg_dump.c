@@ -3780,6 +3780,7 @@ getPublications(Archive *fout)
 	int			i_pubupdate;
 	int			i_pubdelete;
 	int			i_pubtruncate;
+	int			i_pubasroot;
 	int			i,
 				ntups;
 
@@ -3791,11 +3792,18 @@ getPublications(Archive *fout)
 	resetPQExpBuffer(query);
 
 	/* Get the publications. */
-	if (fout->remoteVersion >= 110000)
+	if (fout->remoteVersion >= 130000)
 		appendPQExpBuffer(query,
 						  "SELECT p.tableoid, p.oid, p.pubname, "
 						  "(%s p.pubowner) AS rolname, "
-						  "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate "
+						  "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, p.pubasroot "
+						  "FROM pg_publication p",
+						  username_subquery);
+	else if (fout->remoteVersion >= 110000)
+		appendPQExpBuffer(query,
+						  "SELECT p.tableoid, p.oid, p.pubname, "
+						  "(%s p.pubowner) AS rolname, "
+						  "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, false as pubasroot "
 						  "FROM pg_publication p",
 						  username_subquery);
 	else
@@ -3819,6 +3827,7 @@ getPublications(Archive *fout)
 	i_pubupdate = PQfnumber(res, "pubupdate");
 	i_pubdelete = PQfnumber(res, "pubdelete");
 	i_pubtruncate = PQfnumber(res, "pubtruncate");
+	i_pubasroot = PQfnumber(res, "pubasroot");
 
 	pubinfo = pg_malloc(ntups * sizeof(PublicationInfo));
 
@@ -3841,6 +3850,8 @@ getPublications(Archive *fout)
 			(strcmp(PQgetvalue(res, i, i_pubdelete), "t") == 0);
 		pubinfo[i].pubtruncate =
 			(strcmp(PQgetvalue(res, i, i_pubtruncate), "t") == 0);
+		pubinfo[i].pubasroot =
+			(strcmp(PQgetvalue(res, i, i_pubasroot), "t") == 0);
 
 		if (strlen(pubinfo[i].rolname) == 0)
 			pg_log_warning("owner of publication \"%s\" appears to be invalid",
@@ -3917,7 +3928,12 @@ dumpPublication(Archive *fout, PublicationInfo *pubinfo)
 		first = false;
 	}
 
-	appendPQExpBufferStr(query, "');\n");
+	appendPQExpBufferStr(query, "'");
+
+	if (pubinfo->pubasroot)
+		appendPQExpBufferStr(query, ", publish_using_root_schema = true");
+
+	appendPQExpBufferStr(query, ");\n");
 
 	ArchiveEntry(fout, pubinfo->dobj.catId, pubinfo->dobj.dumpId,
 				 ARCHIVE_OPTS(.tag = pubinfo->dobj.name,
@@ -3969,8 +3985,12 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 	{
 		TableInfo  *tbinfo = &tblinfo[i];
 
-		/* Only plain tables can be aded to publications. */
-		if (tbinfo->relkind != RELKIND_RELATION)
+		/*
+		 * Only regular and partitioned tables can be added to
+		 * publications.
+		 */
+		if (tbinfo->relkind != RELKIND_RELATION &&
+			tbinfo->relkind != RELKIND_PARTITIONED_TABLE)
 			continue;
 
 		/*

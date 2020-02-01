@@ -12,6 +12,8 @@
  */
 #include "postgres.h"
 
+#include "access/tupconvert.h"
+#include "catalog/partition.h"
 #include "catalog/pg_publication.h"
 #include "fmgr.h"
 #include "replication/logical.h"
@@ -20,6 +22,7 @@
 #include "replication/pgoutput.h"
 #include "utils/int8.h"
 #include "utils/inval.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
@@ -49,14 +52,44 @@ static bool publications_valid;
 static List *LoadPublications(List *pubnames);
 static void publication_invalidation_cb(Datum arg, int cacheid,
 										uint32 hashvalue);
+static void send_relation_and_attrs(Relation relation, LogicalDecodingContext *ctx);
 
-/* Entry in the map used to remember which relation schemas we sent. */
+/*
+ * Entry in the map used to remember which relation schemas we sent.
+ *
+ * For partitions, 'pubactions' considers not only the table's own
+ * publications, but also those of all of its ancestors.
+ */
 typedef struct RelationSyncEntry
 {
 	Oid			relid;			/* relation oid */
-	bool		schema_sent;	/* did we send the schema? */
+
+	/*
+	 * Did we send the schema?  If ancestor relid is set, its schema must also
+	 * have been sent for this to be true.
+	 */
+	bool		schema_sent;
 	bool		replicate_valid;
 	PublicationActions pubactions;
+
+	/*
+	 * True when publication that is matched by get_rel_sync_entry for this
+	 * relation is configured as such.
+	 */
+	bool		pubasroot;
+
+	/*
+	 * OID of the ancestor whose schema will be used when replicating changes
+	 * to a partition; InvalidOid if pubasroot is false.
+	 */
+	Oid			replicate_as_relid;
+
+	/*
+	 * Map, if any, used when replicating using an ancestor's schema to
+	 * convert the tuples from partition's type to the ancestor's; NULL if
+	 * pubasroot is false.
+	 */
+	TupleConversionMap *map;
 } RelationSyncEntry;
 
 /* Map used to remember which relation schemas we sent. */
@@ -254,47 +287,72 @@ pgoutput_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 }
 
 /*
- * Write the relation schema if the current schema hasn't been sent yet.
+ * Write the current schema of the relation and its ancestor (if any) if not
+ * done yet.
  */
 static void
 maybe_send_schema(LogicalDecodingContext *ctx,
 				  Relation relation, RelationSyncEntry *relentry)
 {
-	if (!relentry->schema_sent)
+	if (relentry->schema_sent)
+		return;
+
+	/* If needed, send the ancestor's schema first. */
+	if (OidIsValid(relentry->replicate_as_relid))
 	{
-		TupleDesc	desc;
-		int			i;
+		Relation	ancestor =
+		RelationIdGetRelation(relentry->replicate_as_relid);
+		TupleDesc	indesc = RelationGetDescr(relation);
+		TupleDesc	outdesc = RelationGetDescr(ancestor);
+		MemoryContext oldctx;
 
-		desc = RelationGetDescr(relation);
+		/* Map must live as long as the session does. */
+		oldctx = MemoryContextSwitchTo(CacheMemoryContext);
+		relentry->map = convert_tuples_by_name(indesc, outdesc);
+		MemoryContextSwitchTo(oldctx);
+		send_relation_and_attrs(ancestor, ctx);
+		RelationClose(ancestor);
+	}
 
-		/*
-		 * Write out type info if needed.  We do that only for user-created
-		 * types.  We use FirstGenbkiObjectId as the cutoff, so that we only
-		 * consider objects with hand-assigned OIDs to be "built in", not for
-		 * instance any function or type defined in the information_schema.
-		 * This is important because only hand-assigned OIDs can be expected
-		 * to remain stable across major versions.
-		 */
-		for (i = 0; i < desc->natts; i++)
-		{
-			Form_pg_attribute att = TupleDescAttr(desc, i);
+	send_relation_and_attrs(relation, ctx);
+	relentry->schema_sent = true;
+}
 
-			if (att->attisdropped || att->attgenerated)
-				continue;
+/*
+ * Sends a relation
+ */
+static void
+send_relation_and_attrs(Relation relation, LogicalDecodingContext *ctx)
+{
+	TupleDesc	desc = RelationGetDescr(relation);
+	int			i;
 
-			if (att->atttypid < FirstGenbkiObjectId)
-				continue;
+	/*
+	 * Write out type info if needed.  We do that only for user-created types.
+	 * We use FirstGenbkiObjectId as the cutoff, so that we only consider
+	 * objects with hand-assigned OIDs to be "built in", not for instance any
+	 * function or type defined in the information_schema. This is important
+	 * because only hand-assigned OIDs can be expected to remain stable across
+	 * major versions.
+	 */
+	for (i = 0; i < desc->natts; i++)
+	{
+		Form_pg_attribute att = TupleDescAttr(desc, i);
 
-			OutputPluginPrepareWrite(ctx, false);
-			logicalrep_write_typ(ctx->out, att->atttypid);
-			OutputPluginWrite(ctx, false);
-		}
+		if (att->attisdropped || att->attgenerated)
+			continue;
+
+		if (att->atttypid < FirstGenbkiObjectId)
+			continue;
 
 		OutputPluginPrepareWrite(ctx, false);
-		logicalrep_write_rel(ctx->out, relation);
+		logicalrep_write_typ(ctx->out, att->atttypid);
 		OutputPluginWrite(ctx, false);
-		relentry->schema_sent = true;
 	}
+
+	OutputPluginPrepareWrite(ctx, false);
+	logicalrep_write_rel(ctx->out, relation);
+	OutputPluginWrite(ctx, false);
 }
 
 /*
@@ -341,28 +399,68 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	switch (change->action)
 	{
 		case REORDER_BUFFER_CHANGE_INSERT:
-			OutputPluginPrepareWrite(ctx, true);
-			logicalrep_write_insert(ctx->out, relation,
-									&change->data.tp.newtuple->tuple);
-			OutputPluginWrite(ctx, true);
-			break;
+			{
+				HeapTuple	tuple = &change->data.tp.newtuple->tuple;
+
+				/* Publish as root relation change if requested. */
+				if (OidIsValid(relentry->replicate_as_relid))
+				{
+					Assert(relentry->pubasroot);
+					Assert(relation->rd_rel->relispartition);
+					relation = RelationIdGetRelation(relentry->replicate_as_relid);
+					/* Convert tuple if needed. */
+					if (relentry->map)
+						tuple = execute_attr_map_tuple(tuple, relentry->map);
+				}
+
+				OutputPluginPrepareWrite(ctx, true);
+				logicalrep_write_insert(ctx->out, relation, tuple);
+				OutputPluginWrite(ctx, true);
+				break;
+			}
 		case REORDER_BUFFER_CHANGE_UPDATE:
 			{
 				HeapTuple	oldtuple = change->data.tp.oldtuple ?
 				&change->data.tp.oldtuple->tuple : NULL;
+				HeapTuple	newtuple = &change->data.tp.newtuple->tuple;
+
+				/* Publish as root relation change if requested. */
+				if (OidIsValid(relentry->replicate_as_relid))
+				{
+					Assert(relentry->pubasroot);
+					Assert(relation->rd_rel->relispartition);
+					relation = RelationIdGetRelation(relentry->replicate_as_relid);
+					/* Convert tuples if needed. */
+					if (relentry->map)
+					{
+						oldtuple = execute_attr_map_tuple(oldtuple, relentry->map);
+						newtuple = execute_attr_map_tuple(newtuple, relentry->map);
+					}
+				}
 
 				OutputPluginPrepareWrite(ctx, true);
-				logicalrep_write_update(ctx->out, relation, oldtuple,
-										&change->data.tp.newtuple->tuple);
+				logicalrep_write_update(ctx->out, relation, oldtuple, newtuple);
 				OutputPluginWrite(ctx, true);
 				break;
 			}
 		case REORDER_BUFFER_CHANGE_DELETE:
 			if (change->data.tp.oldtuple)
 			{
+				HeapTuple	oldtuple = &change->data.tp.oldtuple->tuple;
+
+				/* Publish as root relation change if requested. */
+				if (OidIsValid(relentry->replicate_as_relid))
+				{
+					Assert(relentry->pubasroot);
+					Assert(relation->rd_rel->relispartition);
+					relation = RelationIdGetRelation(relentry->replicate_as_relid);
+					/* Convert tuple if needed. */
+					if (relentry->map)
+						oldtuple = execute_attr_map_tuple(oldtuple, relentry->map);
+				}
+
 				OutputPluginPrepareWrite(ctx, true);
-				logicalrep_write_delete(ctx->out, relation,
-										&change->data.tp.oldtuple->tuple);
+				logicalrep_write_delete(ctx->out, relation, oldtuple);
 				OutputPluginWrite(ctx, true);
 			}
 			else
@@ -404,6 +502,14 @@ pgoutput_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		relentry = get_rel_sync_entry(data, relid);
 
 		if (!relentry->pubactions.pubtruncate)
+			continue;
+
+		/*
+		 * Don't send partitioned tables, because partitions would be
+		 * sent instead, unless user specified to send the former.
+		 */
+		if (relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
+			!relentry->pubasroot)
 			continue;
 
 		relids[nrelids++] = relid;
@@ -524,6 +630,12 @@ init_rel_sync_cache(MemoryContext cachectx)
 
 /*
  * Find or create entry in the relation schema cache.
+ *
+ * This looks up publications that given relation is directly or indirectly
+ * part of (latter if it's really the relation's ancestor that is part of a
+ * publication) and fills up the found entry with the information about
+ * which operations to publish and whether to use an ancestor's schema
+ * when publishing.
  */
 static RelationSyncEntry *
 get_rel_sync_entry(PGOutputData *data, Oid relid)
@@ -545,8 +657,10 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 	/* Not found means schema wasn't sent */
 	if (!found || !entry->replicate_valid)
 	{
-		List	   *pubids = GetRelationPublications(relid);
+		List	   *published_rels = NIL;
+		List	   *pubids = GetRelationPublications(relid, &published_rels);
 		ListCell   *lc;
+		Oid			ancestor = InvalidOid;
 
 		/* Reload publications if needed before use. */
 		if (!publications_valid)
@@ -571,13 +685,42 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 		foreach(lc, data->publications)
 		{
 			Publication *pub = lfirst(lc);
+			bool		publish = false;
 
-			if (pub->alltables || list_member_oid(pubids, pub->oid))
+			if (pub->alltables)
+			{
+				publish = true;
+				if (pub->pubasroot && get_rel_relispartition(relid))
+					ancestor = llast_oid(get_partition_ancestors(relid));
+			}
+
+			if (!publish)
+			{
+				ListCell *lc1,
+						 *lc2;
+
+				forboth(lc1, pubids, lc2, published_rels)
+				{
+					Oid		pubid = lfirst_oid(lc1);
+					Oid		pub_relid = lfirst_oid(lc2);
+					if (pubid == pub->oid)
+					{
+						publish = true;
+						if (pub->pubasroot && pub_relid != relid)
+							ancestor = pub_relid;
+						break;
+					}
+				}
+			}
+
+			if (publish)
 			{
 				entry->pubactions.pubinsert |= pub->pubactions.pubinsert;
 				entry->pubactions.pubupdate |= pub->pubactions.pubupdate;
 				entry->pubactions.pubdelete |= pub->pubactions.pubdelete;
-				entry->pubactions.pubtruncate |= pub->pubactions.pubtruncate;
+				if (!OidIsValid(ancestor))
+					entry->pubactions.pubtruncate |= pub->pubactions.pubtruncate;
+				entry->pubasroot = pub->pubasroot;
 			}
 
 			if (entry->pubactions.pubinsert && entry->pubactions.pubupdate &&
@@ -587,6 +730,7 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 
 		list_free(pubids);
 
+		entry->replicate_as_relid = ancestor;
 		entry->replicate_valid = true;
 	}
 

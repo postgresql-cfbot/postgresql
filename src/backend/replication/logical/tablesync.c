@@ -630,16 +630,17 @@ copy_read_data(void *outbuf, int minread, int maxread)
 
 /*
  * Get information about remote relation in similar fashion the RELATION
- * message provides during replication.
+ * message provides during replication.  XXX - while we fetch relkind too
+ * here, the RELATION message doesn't provide it
  */
 static void
 fetch_remote_table_info(char *nspname, char *relname,
-						LogicalRepRelation *lrel)
+						LogicalRepRelation *lrel, char *relkind)
 {
 	WalRcvExecResult *res;
 	StringInfoData cmd;
 	TupleTableSlot *slot;
-	Oid			tableRow[2] = {OIDOID, CHAROID};
+	Oid			tableRow[3] = {OIDOID, CHAROID, CHAROID};
 	Oid			attrRow[4] = {TEXTOID, OIDOID, INT4OID, BOOLOID};
 	bool		isnull;
 	int			natt;
@@ -649,16 +650,16 @@ fetch_remote_table_info(char *nspname, char *relname,
 
 	/* First fetch Oid and replica identity. */
 	initStringInfo(&cmd);
-	appendStringInfo(&cmd, "SELECT c.oid, c.relreplident"
+	appendStringInfo(&cmd, "SELECT c.oid, c.relreplident, c.relkind"
 					 "  FROM pg_catalog.pg_class c"
 					 "  INNER JOIN pg_catalog.pg_namespace n"
 					 "        ON (c.relnamespace = n.oid)"
 					 " WHERE n.nspname = %s"
 					 "   AND c.relname = %s"
-					 "   AND c.relkind = 'r'",
+					 "   AND pg_relation_is_publishable(c.oid)",
 					 quote_literal_cstr(nspname),
 					 quote_literal_cstr(relname));
-	res = walrcv_exec(wrconn, cmd.data, 2, tableRow);
+	res = walrcv_exec(wrconn, cmd.data, 3, tableRow);
 
 	if (res->status != WALRCV_OK_TUPLES)
 		ereport(ERROR,
@@ -674,6 +675,8 @@ fetch_remote_table_info(char *nspname, char *relname,
 	lrel->remoteid = DatumGetObjectId(slot_getattr(slot, 1, &isnull));
 	Assert(!isnull);
 	lrel->replident = DatumGetChar(slot_getattr(slot, 2, &isnull));
+	Assert(!isnull);
+	*relkind = DatumGetChar(slot_getattr(slot, 3, &isnull));
 	Assert(!isnull);
 
 	ExecDropSingleTupleTableSlot(slot);
@@ -750,10 +753,12 @@ copy_table(Relation rel)
 	CopyState	cstate;
 	List	   *attnamelist;
 	ParseState *pstate;
+	char		remote_relkind;
 
 	/* Get the publisher relation info. */
 	fetch_remote_table_info(get_namespace_name(RelationGetNamespace(rel)),
-							RelationGetRelationName(rel), &lrel);
+							RelationGetRelationName(rel), &lrel,
+							&remote_relkind);
 
 	/* Put the relation into relmap. */
 	logicalrep_relmap_update(&lrel);
@@ -764,8 +769,12 @@ copy_table(Relation rel)
 
 	/* Start copy on the publisher. */
 	initStringInfo(&cmd);
-	appendStringInfo(&cmd, "COPY %s TO STDOUT",
-					 quote_qualified_identifier(lrel.nspname, lrel.relname));
+	if (remote_relkind == RELKIND_PARTITIONED_TABLE)
+		appendStringInfo(&cmd, "COPY (SELECT * FROM %s) TO STDOUT",
+						 quote_qualified_identifier(lrel.nspname, lrel.relname));
+	else
+		appendStringInfo(&cmd, "COPY %s TO STDOUT",
+						 quote_qualified_identifier(lrel.nspname, lrel.relname));
 	res = walrcv_exec(wrconn, cmd.data, 0, NULL);
 	pfree(cmd.data);
 	if (res->status != WALRCV_OK_COPY_OUT)

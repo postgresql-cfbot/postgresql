@@ -28,6 +28,7 @@
 #include "partitioning/partbounds.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/fmgroids.h"
+#include "utils/lsyscache.h"
 #include "utils/partcache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
@@ -124,6 +125,14 @@ get_partition_ancestors(Oid relid)
 	table_close(inhRel, AccessShareLock);
 
 	return result;
+}
+
+/* Is given relation a leaf partition? */
+bool
+is_leaf_partition(Oid relid)
+{
+	return	get_rel_relkind(relid) != RELKIND_PARTITIONED_TABLE &&
+			get_rel_relispartition(relid);
 }
 
 /*

@@ -600,6 +600,7 @@ typedef struct _PublicationInfo
 	bool		pubupdate;
 	bool		pubdelete;
 	bool		pubtruncate;
+	bool		pubasroot;
 } PublicationInfo;
 
 /*

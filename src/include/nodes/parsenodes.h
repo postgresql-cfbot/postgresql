@@ -158,7 +158,8 @@ typedef struct Query
 	List	   *sortClause;		/* a list of SortGroupClause's */
 
 	Node	   *limitOffset;	/* # of result tuples to skip (int8 expr) */
-	Node	   *limitCount;		/* # of result tuples to return (int8 expr) */
+	Node	   *limitCount;		/* # of result tuples to return (int8 or bool expr) */
+	LimitOption	limitOption;	/* limit type { WITH TIES | ONLY | WHEN } */
 
 	List	   *rowMarks;		/* a list of RowMarkClause's */
 
@@ -1616,6 +1617,7 @@ typedef struct SelectStmt
 	List	   *sortClause;		/* sort clause (a list of SortBy's) */
 	Node	   *limitOffset;	/* # of result tuples to skip */
 	Node	   *limitCount;		/* # of result tuples to return */
+	LimitOption	limitOption;	/* limit type */
 	List	   *lockingClause;	/* FOR UPDATE (list of LockingClause's) */
 	WithClause *withClause;		/* WITH clause */
 

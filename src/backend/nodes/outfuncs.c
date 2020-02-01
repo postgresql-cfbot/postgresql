@@ -914,6 +914,7 @@ _outLimit(StringInfo str, const Limit *node)
 
 	WRITE_NODE_FIELD(limitOffset);
 	WRITE_NODE_FIELD(limitCount);
+	WRITE_INT_FIELD(whenColno);
 }
 
 static void
@@ -2720,6 +2721,7 @@ _outSelectStmt(StringInfo str, const SelectStmt *node)
 	WRITE_NODE_FIELD(sortClause);
 	WRITE_NODE_FIELD(limitOffset);
 	WRITE_NODE_FIELD(limitCount);
+	WRITE_ENUM_FIELD(limitOption, LimitOption);
 	WRITE_NODE_FIELD(lockingClause);
 	WRITE_NODE_FIELD(withClause);
 	WRITE_ENUM_FIELD(op, SetOperation);
@@ -2930,6 +2932,7 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_NODE_FIELD(sortClause);
 	WRITE_NODE_FIELD(limitOffset);
 	WRITE_NODE_FIELD(limitCount);
+	WRITE_ENUM_FIELD(limitOption, LimitOption);
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(setOperations);
 	WRITE_NODE_FIELD(constraintDeps);

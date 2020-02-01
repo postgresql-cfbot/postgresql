@@ -108,8 +108,20 @@ ExecLimit(PlanState *pstate)
 			}
 
 			/*
-			 * Okay, we have the first tuple of the window.
+			 * Okay, we have the first tuple of the window. However, if we're
+			 * doing LIMIT WHEN, our stop condition might be true already; so
+			 * check that.
 			 */
+			if (node->whenColno > 0)
+			{
+				bool isnull = false;
+				Datum res = slot_getattr(slot, node->whenColno, &isnull);
+				if (!isnull && DatumGetBool(res))
+				{
+					node->lstate = LIMIT_EMPTY;
+					return NULL;
+				}
+			}
 			node->lstate = LIMIT_INWINDOW;
 			break;
 
@@ -152,6 +164,23 @@ ExecLimit(PlanState *pstate)
 					node->lstate = LIMIT_SUBPLANEOF;
 					return NULL;
 				}
+				/*
+				 * Check whether our termination condition is reached, and
+				 * pretend the subplan ran out if so. The subplan remains
+				 * pointing at the terminating row, we must be careful not
+				 * to advance it further as that will mess up backward scan.
+				 */
+				if (node->whenColno > 0)
+				{
+					bool isnull = false;
+					Datum res = slot_getattr(slot, node->whenColno, &isnull);
+					if (!isnull && DatumGetBool(res))
+					{
+						node->lstate = LIMIT_SUBPLANEOF;
+						return NULL;
+					}
+				}
+
 				node->subSlot = slot;
 				node->position++;
 			}
@@ -372,6 +401,7 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 										   (PlanState *) limitstate);
 	limitstate->limitCount = ExecInitExpr((Expr *) node->limitCount,
 										  (PlanState *) limitstate);
+	limitstate->whenColno = node->whenColno;
 
 	/*
 	 * Initialize result type.

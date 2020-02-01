@@ -2355,6 +2355,27 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 					_SPI_current->processed = pg_strtouint64(completionTag + 5,
 															 NULL, 10);
 				}
+				else if (IsA(stmt->utilityStmt, ExecuteStmt))
+				{
+					if (strncmp(completionTag, "INSERT ", 7) == 0)
+					{
+						char *p = completionTag + 7;
+						/* INSERT: skip oid and space */
+						while (*p && *p != ' ')
+							p++;
+						if (*p != 0)
+						{
+							_SPI_current->processed =
+									pg_strtouint64(p, NULL, 10);
+						}
+					}
+					else if (strncmp(completionTag, "UPDATE ", 7) == 0 ||
+							strncmp(completionTag, "DELETE ", 7) == 0)
+					{
+						_SPI_current->processed =
+								pg_strtouint64(completionTag + 7, NULL, 10);
+					}
+				}
 			}
 
 			/*

@@ -978,10 +978,14 @@ parse_hba_line(TokenizedLine *tok_line, int elevel)
 		return NULL;
 	}
 	token = linitial(tokens);
-	if (strcmp(token->string, "local") == 0)
+	if (strcmp(token->string, "local") == 0 ||
+		strcmp(token->string, "localowner") == 0)
 	{
 #ifdef HAVE_UNIX_SOCKETS
-		parsedline->conntype = ctLocal;
+		if (token->string[5] == 'o')
+			parsedline->conntype = ctLocalOwner;
+		else
+			parsedline->conntype = ctLocal;
 #else
 		ereport(elevel,
 				(errcode(ERRCODE_CONFIG_FILE_ERROR),
@@ -1099,7 +1103,7 @@ parse_hba_line(TokenizedLine *tok_line, int elevel)
 									copy_hba_token(lfirst(tokencell)));
 	}
 
-	if (parsedline->conntype != ctLocal)
+	if (parsedline->conntype != ctLocal && parsedline->conntype != ctLocalOwner)
 	{
 		/* Read the IP address field. (with or without CIDR netmask) */
 		field = lnext(tok_line->fields, field);
@@ -1403,12 +1407,14 @@ parse_hba_line(TokenizedLine *tok_line, int elevel)
 	 * XXX: When using ident on local connections, change it to peer, for
 	 * backwards compatibility.
 	 */
-	if (parsedline->conntype == ctLocal &&
+	if ((parsedline->conntype == ctLocal ||
+		 parsedline->conntype == ctLocalOwner) &&
 		parsedline->auth_method == uaIdent)
 		parsedline->auth_method = uaPeer;
 
 	/* Invalid authentication combinations */
-	if (parsedline->conntype == ctLocal &&
+	if ((parsedline->conntype == ctLocal ||
+		 parsedline->conntype == ctLocalOwner) &&
 		parsedline->auth_method == uaGSS)
 	{
 		ereport(elevel,
@@ -1433,7 +1439,8 @@ parse_hba_line(TokenizedLine *tok_line, int elevel)
 		return NULL;
 	}
 
-	if (parsedline->conntype != ctLocal &&
+	if ((parsedline->conntype != ctLocal &&
+		 parsedline->conntype != ctLocalOwner) &&
 		parsedline->auth_method == uaPeer)
 	{
 		ereport(elevel,
@@ -2087,6 +2094,19 @@ check_hba(hbaPort *port)
 			if (!IS_AF_UNIX(port->raddr.addr.ss_family))
 				continue;
 		}
+		else if (hba->conntype == ctLocalOwner)
+		{
+			uid_t       peer_uid = -1;
+			gid_t       peer_gid = -1;
+			int         res;
+
+			if (!IS_AF_UNIX(port->raddr.addr.ss_family))
+				continue;
+
+			res = getpeereid(port->sock, &peer_uid, &peer_gid);
+			if (!(res == 0 && peer_uid == geteuid()))
+				continue;
+		}
 		else
 		{
 			if (IS_AF_UNIX(port->raddr.addr.ss_family))
@@ -2443,6 +2463,9 @@ fill_hba_line(Tuplestorestate *tuple_store, TupleDesc tupdesc,
 		{
 			case ctLocal:
 				typestr = "local";
+				break;
+			case ctLocalOwner:
+				typestr = "localowner";
 				break;
 			case ctHost:
 				typestr = "host";

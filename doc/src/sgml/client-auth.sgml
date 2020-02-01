@@ -102,6 +102,7 @@
    A record can have one of the seven formats
 <synopsis>
 local      <replaceable>database</replaceable>  <replaceable>user</replaceable>  <replaceable>auth-method</replaceable>  <optional><replaceable>auth-options</replaceable></optional>
+localowner <replaceable>database</replaceable>  <replaceable>user</replaceable>  <replaceable>auth-method</replaceable>  <optional><replaceable>auth-options</replaceable></optional>
 host       <replaceable>database</replaceable>  <replaceable>user</replaceable>  <replaceable>address</replaceable>  <replaceable>auth-method</replaceable>  <optional><replaceable>auth-options</replaceable></optional>
 hostssl    <replaceable>database</replaceable>  <replaceable>user</replaceable>  <replaceable>address</replaceable>  <replaceable>auth-method</replaceable>  <optional><replaceable>auth-options</replaceable></optional>
 hostnossl  <replaceable>database</replaceable>  <replaceable>user</replaceable>  <replaceable>address</replaceable>  <replaceable>auth-method</replaceable>  <optional><replaceable>auth-options</replaceable></optional>
@@ -119,8 +120,30 @@ hostnogssenc <replaceable>database</replaceable>  <replaceable>user</replaceable
      <listitem>
       <para>
        This record matches connection attempts using Unix-domain
-       sockets.  Without a record of this type, Unix-domain socket
-       connections are disallowed.
+       sockets.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>localowner</literal></term>
+     <listitem>
+      <para>
+       This record matches connection attempts using Unix-domain sockets if
+       the user on the client side is the same as the user of the PostgreSQL
+       serve process.  In other words, this applies if a user connects to
+       <quote>their own server</quote> over a Unix-domain socket.
+      </para>
+
+      <para>
+       This record type works only on operating systems providing the
+       <function>getpeereid()</function> function, the
+       <symbol>SO_PEERCRED</symbol> socket parameter, or similar mechanisms.
+       Currently that includes <systemitem class="osname">Linux</systemitem>,
+       most flavors of <systemitem class="osname">BSD</systemitem> including
+       <systemitem class="osname">macOS</systemitem>, and <systemitem
+       class="osname">Solaris</systemitem>.  Otherwise, this record will never
+       match.
       </para>
      </listitem>
     </varlistentry>

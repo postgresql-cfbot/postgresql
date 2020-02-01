@@ -176,6 +176,8 @@ typedef struct AlteredTableInfo
 	List	   *changedConstraintDefs;	/* string definitions of same */
 	List	   *changedIndexOids;	/* OIDs of indexes to rebuild */
 	List	   *changedIndexDefs;	/* string definitions of same */
+	Oid		   changedReplIdentOid;	/* OID of index to reset REPLICA IDENTIFY */
+	char	   *changedReplIdentDef;	/* string definitions of same */
 } AlteredTableInfo;
 
 /* Struct describing one new constraint to check in Phase 3 scan */
@@ -482,6 +484,7 @@ static ObjectAddress ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 										   AlterTableCmd *cmd, LOCKMODE lockmode);
 static void RememberConstraintForRebuilding(Oid conoid, AlteredTableInfo *tab);
 static void RememberIndexForRebuilding(Oid indoid, AlteredTableInfo *tab);
+static void RememberReplicaIdentForRebuilding(Oid indoid, AlteredTableInfo *tab);
 static void ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab,
 								   LOCKMODE lockmode);
 static void ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId,
@@ -11225,6 +11228,9 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 					{
 						Assert(foundObject.objectSubId == 0);
 						RememberIndexForRebuilding(foundObject.objectId, tab);
+
+						if (RelationGetForm(rel)->relreplident==REPLICA_IDENTITY_INDEX)
+							RememberReplicaIdentForRebuilding(foundObject.objectId, tab);
 					}
 					else if (relKind == RELKIND_SEQUENCE)
 					{
@@ -11259,9 +11265,18 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 				}
 
 			case OCLASS_CONSTRAINT:
-				Assert(foundObject.objectSubId == 0);
-				RememberConstraintForRebuilding(foundObject.objectId, tab);
-				break;
+				{
+					Oid indId;
+
+					Assert(foundObject.objectSubId == 0);
+					RememberConstraintForRebuilding(foundObject.objectId, tab);
+
+					indId = get_constraint_index(foundObject.objectId);
+					if (OidIsValid(indId))
+						RememberReplicaIdentForRebuilding(indId, tab);
+
+					break;
+				}
 
 			case OCLASS_REWRITE:
 				/* XXX someday see if we can cope with revising views */
@@ -11585,6 +11600,36 @@ RememberConstraintForRebuilding(Oid conoid, AlteredTableInfo *tab)
 }
 
 /*
+ * Subroutine for ATExecAlterColumnType: remember that a replica identify
+ * needs to be reset (which we might already know).
+ */
+static void
+RememberReplicaIdentForRebuilding(Oid indoid, AlteredTableInfo *tab)
+{
+	char	   *defstring;
+
+	/*
+	 * This de-duplication check is critical for two independent reasons: we
+	 * mustn't try to recreate the same constraint twice, and if a constraint
+	 * depends on more than one column whose type is to be altered, we must
+	 * capture its definition string before applying any of the column type
+	 * changes.  ruleutils.c will get confused if we ask again later.
+	 */
+	if (OidIsValid(tab->changedReplIdentOid))
+		return;
+
+	/* OK, capture the constraint's existing definition string */
+	defstring = pg_get_replidentdef_command(indoid);
+
+	/* not a replica identify */
+	if (defstring==NULL)
+		return;
+
+	tab->changedReplIdentOid = indoid;
+	tab->changedReplIdentDef = defstring;
+}
+
+/*
  * Subroutine for ATExecAlterColumnType: remember that an index needs
  * to be rebuilt (which we might already know).
  */
@@ -11730,6 +11775,15 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		ObjectAddressSet(obj, RelationRelationId, oldId);
 		add_exact_object_address(&obj, objects);
 	}
+
+	if (OidIsValid(tab->changedReplIdentOid))
+	{
+		Oid relid = IndexGetRelation(tab->changedReplIdentOid, false);
+		ATPostAlterTypeParse(InvalidOid, relid, InvalidOid,
+							 tab->changedReplIdentDef,
+							 wqueue, lockmode, tab->rewrite);
+	}
+
 
 	/*
 	 * It should be okay to use DROP_RESTRICT here, since nothing else should
@@ -11890,6 +11944,11 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
 											 rel,
 											 NIL,
 											 con->conname);
+				}
+				else if (cmd->subtype == AT_ReplicaIdentity)
+				{
+					tab->subcmds[AT_PASS_MISC] =
+						lappend(tab->subcmds[AT_PASS_MISC], cmd);
 				}
 				else if (cmd->subtype == AT_SetNotNull)
 				{

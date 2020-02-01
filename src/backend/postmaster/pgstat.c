@@ -3752,6 +3752,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_CHECKPOINT_START:
 			event_name = "CheckpointStart";
 			break;
+		case WAIT_EVENT_CHECKSUM_ENABLE_STARTCONDITION:
+			event_name = "ChecksumEnableStartcondition";
+			break;
 		case WAIT_EVENT_CLOG_GROUP_UPDATE:
 			event_name = "ClogGroupUpdate";
 			break;
@@ -4302,6 +4305,12 @@ pgstat_get_backend_desc(BackendType backendType)
 			break;
 		case B_WAL_WRITER:
 			backendDesc = "walwriter";
+			break;
+		case B_CHECKSUMHELPER_LAUNCHER:
+			backendDesc = "checksumhelper launcher";
+			break;
+		case B_CHECKSUMHELPER_WORKER:
+			backendDesc = "checksumhelper worker";
 			break;
 	}
 

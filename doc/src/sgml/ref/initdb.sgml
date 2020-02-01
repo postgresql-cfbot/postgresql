@@ -220,6 +220,7 @@ PostgreSQL documentation
         are calculated for all objects, in all databases. All checksum
         failures will be reported in the
         <xref linkend="pg-stat-database-view"/> view.
+        See <xref linkend="checksums" /> for details.
        </para>
       </listitem>
      </varlistentry>

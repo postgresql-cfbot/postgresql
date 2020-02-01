@@ -33,6 +33,7 @@
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/xact.h"
+#include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
@@ -72,6 +73,7 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/checksum.h"
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
@@ -479,6 +481,16 @@ static struct config_enum_entry shared_memory_options[] = {
 };
 
 /*
+ * Options for data_checksums enum.
+ */
+static const struct config_enum_entry data_checksum_options[] = {
+	{"on", DATA_CHECKSUMS_ON, true},
+	{"off", DATA_CHECKSUMS_OFF, true},
+	{"inprogress", DATA_CHECKSUMS_INPROGRESS, true},
+	{NULL, 0, false}
+};
+
+/*
  * Options for enum values stored in other modules
  */
 extern const struct config_enum_entry wal_level_options[];
@@ -585,7 +597,7 @@ static int	max_identifier_length;
 static int	block_size;
 static int	segment_size;
 static int	wal_block_size;
-static bool data_checksums;
+static int	data_checksums_tmp;
 static bool integer_datetimes;
 static bool assert_enabled;
 static char *recovery_target_timeline_string;
@@ -1860,17 +1872,6 @@ static struct config_bool ConfigureNamesBool[] =
 			NULL,
 		},
 		&quote_all_identifiers,
-		false,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"data_checksums", PGC_INTERNAL, PRESET_OPTIONS,
-			gettext_noop("Shows whether data checksums are turned on for this cluster."),
-			NULL,
-			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
-		},
-		&data_checksums,
 		false,
 		NULL, NULL, NULL
 	},
@@ -4631,6 +4632,17 @@ static struct config_enum ConfigureNamesEnum[] =
 		PG_TLS_ANY,
 		ssl_protocol_versions_info,
 		check_ssl_max_protocol_version, NULL, NULL
+	},
+
+	{
+		{"data_checksums", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Shows whether data checksums are turned on for this cluster."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&data_checksums_tmp,
+		DATA_CHECKSUMS_OFF, data_checksum_options,
+		NULL, NULL, show_data_checksums
 	},
 
 	/* End-of-list marker */

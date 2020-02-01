@@ -17,6 +17,7 @@
 
 #include "access/transam.h"
 #include "access/xlogdefs.h"
+#include "crypto/kmgr.h"
 #include "pgtime.h"				/* for pg_time_t */
 #include "port/pg_crc32c.h"
 
@@ -219,12 +220,20 @@ typedef struct ControlFileData
 	/* Are data pages protected by checksums? Zero if no checksum version */
 	uint32		data_checksum_version;
 
+	/* Are data pages and WAL encrypted? Zero if encryption is disabled */
+	uint32		data_encryption_cipher;
+
 	/*
 	 * Random nonce, used in authentication requests that need to proceed
 	 * based on values that are cluster-unique, like a SASL exchange that
 	 * failed at an early stage.
 	 */
 	char		mock_authentication_nonce[MOCK_AUTH_NONCE_LEN];
+
+	/*
+	 * Key information for data encryption.
+	 */
+	WrappedEncKeyWithHmac master_dek;
 
 	/* CRC of all above ... MUST BE LAST! */
 	pg_crc32c	crc;

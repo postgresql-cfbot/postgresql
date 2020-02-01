@@ -41,6 +41,7 @@
 #include "catalog/pg_database.h"
 #include "commands/tablespace.h"
 #include "common/controldata_utils.h"
+#include "crypto/kmgr.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
@@ -77,6 +78,7 @@
 #include "utils/timestamp.h"
 
 extern uint32 bootstrap_data_checksum_version;
+extern uint32 bootstrap_data_encryption_cipher;
 
 /* Unsupported old recovery command file names (relative to $PGDATA) */
 #define RECOVERY_COMMAND_FILE	"recovery.conf"
@@ -4777,6 +4779,10 @@ ReadControlFile(void)
 	/* Make the initdb settings visible as GUC variables, too */
 	SetConfigOption("data_checksums", DataChecksumsEnabled() ? "yes" : "no",
 					PGC_INTERNAL, PGC_S_OVERRIDE);
+
+	SetConfigOption("data_encryption_cipher",
+					kmgr_cipher_string(GetDataEncryptionCipher()),
+					PGC_INTERNAL, PGC_S_OVERRIDE);
 }
 
 /*
@@ -4809,6 +4815,13 @@ GetMockAuthenticationNonce(void)
 	return ControlFile->mock_authentication_nonce;
 }
 
+WrappedEncKeyWithHmac *
+GetMasterEncryptionKey(void)
+{
+	Assert(ControlFile != NULL);
+	return &(ControlFile->master_dek);
+}
+
 /*
  * Are checksums enabled for data pages?
  */
@@ -4817,6 +4830,13 @@ DataChecksumsEnabled(void)
 {
 	Assert(ControlFile != NULL);
 	return (ControlFile->data_checksum_version > 0);
+}
+
+int
+GetDataEncryptionCipher(void)
+{
+	Assert(ControlFile != NULL);
+	return ControlFile->data_encryption_cipher;
 }
 
 /*
@@ -5085,6 +5105,7 @@ BootStrapXLOG(void)
 	XLogPageHeader page;
 	XLogLongPageHeader longpage;
 	XLogRecord *record;
+	WrappedEncKeyWithHmac *masterkey;
 	char	   *recptr;
 	bool		use_existent;
 	uint64		sysidentifier;
@@ -5162,6 +5183,12 @@ BootStrapXLOG(void)
 	SetMultiXactIdLimit(checkPoint.oldestMulti, checkPoint.oldestMultiDB, true);
 	SetCommitTsLimit(InvalidTransactionId, InvalidTransactionId);
 
+	/*
+	 * Bootstrap key management module beforehand in order to encrypt the first
+	 * xlog record.
+	 */
+	masterkey = BootStrapKmgr(bootstrap_data_encryption_cipher);
+
 	/* Set up the XLOG page header */
 	page->xlp_magic = XLOG_PAGE_MAGIC;
 	page->xlp_info = XLP_LONG_HEADER;
@@ -5237,6 +5264,9 @@ BootStrapXLOG(void)
 	ControlFile->checkPoint = checkPoint.redo;
 	ControlFile->checkPointCopy = checkPoint;
 	ControlFile->unloggedLSN = FirstNormalUnloggedLSN;
+	if (masterkey)
+		memcpy(&(ControlFile->master_dek), masterkey,
+			   sizeof(WrappedEncKeyWithHmac));
 
 	/* Set important parameter values for use when replaying WAL */
 	ControlFile->MaxConnections = MaxConnections;
@@ -5248,6 +5278,7 @@ BootStrapXLOG(void)
 	ControlFile->wal_log_hints = wal_log_hints;
 	ControlFile->track_commit_timestamp = track_commit_timestamp;
 	ControlFile->data_checksum_version = bootstrap_data_checksum_version;
+	ControlFile->data_encryption_cipher = bootstrap_data_encryption_cipher;
 
 	/* some additional ControlFile fields are set in WriteControlFile() */
 

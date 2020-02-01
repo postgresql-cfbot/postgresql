@@ -10768,4 +10768,17 @@
   proname => 'pg_partition_root', prorettype => 'regclass',
   proargtypes => 'regclass', prosrc => 'pg_partition_root' },
 
+# function for key managements
+{ oid => '8200', descr => 'rotate cluter encryption key',
+  proname => 'pg_rotate_encryption_key',
+  provolatile => 'v', prorettype => 'bool',
+  proargtypes => '', prosrc => 'pg_rotate_encryption_key' },
+{ oid => '8201', descr => 'wrap the given secret',
+  proname => 'pg_kmgr_wrap',
+  provolatile => 'v', prorettype => 'bytea',
+  proargtypes => 'bytea', prosrc => 'pg_kmgr_wrap' },
+{ oid => '8202', descr => 'unwrap the given secret',
+  proname => 'pg_kmgr_unwrap',
+  provolatile => 'v', prorettype => 'bytea',
+  proargtypes => 'bytea', prosrc => 'pg_kmgr_unwrap' },
 ]

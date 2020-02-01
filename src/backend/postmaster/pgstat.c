@@ -3949,6 +3949,15 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_DSM_FILL_ZERO_WRITE:
 			event_name = "DSMFillZeroWrite";
 			break;
+		case WAIT_EVENT_KMGR_FILE_READ:
+			event_name = "KmgrFileRead";
+			break;
+		case WAIT_EVENT_KMGR_FILE_SYNC:
+			event_name = "KmgrFileSync";
+			break;
+		case WAIT_EVENT_KMGR_FILE_WRITE:
+			event_name = "KmgrFileWrite";
+			break;
 		case WAIT_EVENT_LOCK_FILE_ADDTODATADIR_READ:
 			event_name = "LockFileAddToDataDirRead";
 			break;

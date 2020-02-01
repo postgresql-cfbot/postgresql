@@ -15,6 +15,7 @@
 #include "access/xlogdefs.h"
 #include "access/xloginsert.h"
 #include "access/xlogreader.h"
+#include "crypto/kmgr.h"
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
@@ -291,8 +292,10 @@ extern TimestampTz GetCurrentChunkReplayStartTime(void);
 
 extern void UpdateControlFile(void);
 extern uint64 GetSystemIdentifier(void);
+extern WrappedEncKeyWithHmac *GetMasterEncryptionKey(void);
 extern char *GetMockAuthenticationNonce(void);
 extern bool DataChecksumsEnabled(void);
+extern int	GetDataEncryptionCipher(void);
 extern XLogRecPtr GetFakeLSNForUnloggedRel(void);
 extern Size XLOGShmemSize(void);
 extern void XLOGShmemInit(void);

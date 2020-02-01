@@ -2247,9 +2247,8 @@ find_partition_scheme(PlannerInfo *root, Relation relation)
 /*
  * set_baserel_partition_key_exprs
  *
- * Builds partition key expressions for the given base relation and sets them
- * in given RelOptInfo.  Any single column partition keys are converted to Var
- * nodes.  All Var nodes are restamped with the relid of given relation.
+ * Builds partition key expressions for the given base relation and sets
+ * rel->partexprs.
  */
 static void
 set_baserel_partition_key_exprs(Relation relation,
@@ -2297,17 +2296,20 @@ set_baserel_partition_key_exprs(Relation relation,
 			lc = lnext(partkey->partexprs, lc);
 		}
 
+		/* Base relations have a single expression per key. */
 		partexprs[cnt] = list_make1(partexpr);
 	}
 
+	/*
+	 * For base relations, we assume that the partition keys are non-nullable,
+	 * although they are nullable in principle; list and hash partitioned
+	 * tables may contain nulls in the partition key(s), for example.
+	 * Assuming non-nullability is okay for the considerations of partition
+	 * pruning, because pruning is never performed with non-strict operators.
+	 */
 	rel->partexprs = partexprs;
 
-	/*
-	 * A base relation can not have nullable partition key expressions. We
-	 * still allocate array of empty expressions lists to keep partition key
-	 * expression handling code simple. See build_joinrel_partition_info() and
-	 * match_expr_to_partition_keys().
-	 */
+	/* Assigning NIL for each key means there are no nullable keys. */
 	rel->nullable_partexprs = (List **) palloc0(sizeof(List *) * partnatts);
 }
 

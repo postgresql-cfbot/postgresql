@@ -29,6 +29,7 @@
 #include "optimizer/tlist.h"
 #include "partitioning/partbounds.h"
 #include "utils/hsearch.h"
+#include "utils/lsyscache.h"
 
 
 typedef struct JoinHashEntry
@@ -58,11 +59,20 @@ static void add_join_rel(PlannerInfo *root, RelOptInfo *joinrel);
 static void build_joinrel_partition_info(RelOptInfo *joinrel,
 										 RelOptInfo *outer_rel, RelOptInfo *inner_rel,
 										 List *restrictlist, JoinType jointype);
+static void set_joinrel_partition_key_exprs(RelOptInfo *joinrel,
+								RelOptInfo *outer_rel, RelOptInfo *inner_rel,
+								JoinType jointype);
 static void build_child_join_reltarget(PlannerInfo *root,
 									   RelOptInfo *parentrel,
 									   RelOptInfo *childrel,
 									   int nappinfos,
 									   AppendRelInfo **appinfos);
+static bool have_partkey_equi_join(RelOptInfo *joinrel,
+								   RelOptInfo *rel1, RelOptInfo *rel2,
+								   JoinType jointype, List *restrictlist);
+static int match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel,
+										bool strict_op);
+static List *extract_coalesce_args(Expr *expr);
 
 
 /*
@@ -1607,18 +1617,18 @@ find_param_path_info(RelOptInfo *rel, Relids required_outer)
 
 /*
  * build_joinrel_partition_info
- *		If the two relations have same partitioning scheme, their join may be
- *		partitioned and will follow the same partitioning scheme as the joining
- *		relations. Set the partition scheme and partition key expressions in
- *		the join relation.
+ *		Checks if the two relations being joined can use partitionwise join
+ *		and if yes, initialize partitioning information of the resulting
+ *		partitioned relation
+ *
+ * This will set part_scheme and partition key expressions (partexprs and
+ * nullable_partexprs) if required.
  */
 static void
 build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 							 RelOptInfo *inner_rel, List *restrictlist,
 							 JoinType jointype)
 {
-	int			partnatts;
-	int			cnt;
 	PartitionScheme part_scheme;
 
 	/* Nothing to do if partitionwise join technique is disabled. */
@@ -1685,11 +1695,8 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 	 */
 	joinrel->part_scheme = part_scheme;
 	joinrel->boundinfo = outer_rel->boundinfo;
-	partnatts = joinrel->part_scheme->partnatts;
-	joinrel->partexprs = (List **) palloc0(sizeof(List *) * partnatts);
-	joinrel->nullable_partexprs =
-		(List **) palloc0(sizeof(List *) * partnatts);
 	joinrel->nparts = outer_rel->nparts;
+	set_joinrel_partition_key_exprs(joinrel, outer_rel, inner_rel, jointype);
 	joinrel->part_rels =
 		(RelOptInfo **) palloc0(sizeof(RelOptInfo *) * joinrel->nparts);
 
@@ -1699,32 +1706,31 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 	Assert(outer_rel->consider_partitionwise_join);
 	Assert(inner_rel->consider_partitionwise_join);
 	joinrel->consider_partitionwise_join = true;
+}
+
+/*
+ * set_joinrel_partition_key_exprs
+ *		Initialize partition key expressions
+ */
+static void
+set_joinrel_partition_key_exprs(RelOptInfo *joinrel,
+								RelOptInfo *outer_rel, RelOptInfo *inner_rel,
+								JoinType jointype)
+{
+	int		partnatts;
+	int		cnt;
+
+	Assert(joinrel->part_scheme != NULL);
+
+	partnatts = joinrel->part_scheme->partnatts;
+	joinrel->partexprs = (List **) palloc0(sizeof(List *) * partnatts);
+	joinrel->nullable_partexprs =
+		(List **) palloc0(sizeof(List *) * partnatts);
 
 	/*
-	 * Construct partition keys for the join.
-	 *
-	 * An INNER join between two partitioned relations can be regarded as
-	 * partitioned by either key expression.  For example, A INNER JOIN B ON
-	 * A.a = B.b can be regarded as partitioned on A.a or on B.b; they are
-	 * equivalent.
-	 *
-	 * For a SEMI or ANTI join, the result can only be regarded as being
-	 * partitioned in the same manner as the outer side, since the inner
-	 * columns are not retained.
-	 *
-	 * An OUTER join like (A LEFT JOIN B ON A.a = B.b) may produce rows with
-	 * B.b NULL. These rows may not fit the partitioning conditions imposed on
-	 * B.b. Hence, strictly speaking, the join is not partitioned by B.b and
-	 * thus partition keys of an OUTER join should include partition key
-	 * expressions from the OUTER side only.  However, because all
-	 * commonly-used comparison operators are strict, the presence of nulls on
-	 * the outer side doesn't cause any problem; they can't match anything at
-	 * future join levels anyway.  Therefore, we track two sets of
-	 * expressions: those that authentically partition the relation
-	 * (partexprs) and those that partition the relation with the exception
-	 * that extra nulls may be present (nullable_partexprs).  When the
-	 * comparison operator is strict, the latter is just as good as the
-	 * former.
+	 * Join type determines which partition keys are assumed by the resulting
+	 * join relation.  Note that these keys are to be considered when checking
+	 * if any further joins involving this joinrel may be partitioned.
 	 */
 	for (cnt = 0; cnt < partnatts; cnt++)
 	{
@@ -1738,18 +1744,36 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 
 		switch (jointype)
 		{
+			/*
+			 * Join relation resulting from an INNER join may be regarded as
+			 * partitioned by either of inner and outer relation keys.  For
+			 * example, A INNER JOIN B ON A.a = B.b can be regarded as
+			 * partitioned on either A.a or B.b.
+			 */
 			case JOIN_INNER:
 				partexpr = list_concat_copy(outer_expr, inner_expr);
 				nullable_partexpr = list_concat_copy(outer_null_expr,
 													 inner_null_expr);
 				break;
 
+			/*
+			 * Join relation resulting from a SEMI or ANTI join may be
+			 * regarded as partitioned on the outer relation keys, since the
+			 * inner columns are omitted from the output.
+			 */
 			case JOIN_SEMI:
 			case JOIN_ANTI:
 				partexpr = list_copy(outer_expr);
 				nullable_partexpr = list_copy(outer_null_expr);
 				break;
 
+			/*
+			 * Join relation resulting from a LEFT OUTER JOIN likewise may be
+			 * regarded as partitioned on the (non-nullable) outer relation
+			 * keys.  The inner (nullable) relation keys are okay as partition
+			 * keys for further joins as long as they involve strict join
+			 * operators.
+			 */
 			case JOIN_LEFT:
 				partexpr = list_copy(outer_expr);
 				nullable_partexpr = list_concat_copy(inner_expr,
@@ -1758,6 +1782,12 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 												inner_null_expr);
 				break;
 
+			/*
+			 * For FULL OUTER JOINs, both relations are nullable, so the
+			 * resulting join relation may be regarded as partitioned on
+			 * either of inner and outer relation keys, but only for joins
+			 * that involve strict join operators.
+			 */
 			case JOIN_FULL:
 				nullable_partexpr = list_concat_copy(outer_expr,
 													 inner_expr);
@@ -1798,4 +1828,250 @@ build_child_join_reltarget(PlannerInfo *root,
 	childrel->reltarget->cost.startup = parentrel->reltarget->cost.startup;
 	childrel->reltarget->cost.per_tuple = parentrel->reltarget->cost.per_tuple;
 	childrel->reltarget->width = parentrel->reltarget->width;
+}
+
+/*
+ * have_partkey_equi_join
+ *
+ * Returns true if there exist equi-join conditions involving pairs
+ * of matching partition keys of the relations being joined for all
+ * partition keys.
+ */
+bool
+have_partkey_equi_join(RelOptInfo *joinrel,
+					   RelOptInfo *rel1, RelOptInfo *rel2,
+					   JoinType jointype, List *restrictlist)
+{
+	PartitionScheme part_scheme = rel1->part_scheme;
+	ListCell   *lc;
+	int			cnt_pks;
+	bool		pk_has_clause[PARTITION_MAX_KEYS];
+	bool		strict_op;
+
+	/*
+	 * This function should be called when the joining relations have same
+	 * partitioning scheme.
+	 */
+	Assert(rel1->part_scheme == rel2->part_scheme);
+	Assert(part_scheme);
+
+	memset(pk_has_clause, 0, sizeof(pk_has_clause));
+	foreach(lc, restrictlist)
+	{
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
+		OpExpr	   *opexpr;
+		Expr	   *expr1;
+		Expr	   *expr2;
+		int			ipk1;
+		int			ipk2;
+
+		/* If processing an outer join, only use its own join clauses. */
+		if (IS_OUTER_JOIN(jointype) &&
+			RINFO_IS_PUSHED_DOWN(rinfo, joinrel->relids))
+			continue;
+
+		/* Skip clauses which can not be used for a join. */
+		if (!rinfo->can_join)
+			continue;
+
+		/* Skip clauses which are not equality conditions. */
+		if (!rinfo->mergeopfamilies && !OidIsValid(rinfo->hashjoinoperator))
+			continue;
+
+		opexpr = castNode(OpExpr, rinfo->clause);
+
+		/*
+		 * The equi-join between partition keys is strict if equi-join between
+		 * at least one partition key is using a strict operator. See
+		 * explanation about outer join reordering identity 3 in
+		 * optimizer/README
+		 */
+		strict_op = op_strict(opexpr->opno);
+
+		/* Match the operands to the relation. */
+		if (bms_is_subset(rinfo->left_relids, rel1->relids) &&
+			bms_is_subset(rinfo->right_relids, rel2->relids))
+		{
+			expr1 = linitial(opexpr->args);
+			expr2 = lsecond(opexpr->args);
+		}
+		else if (bms_is_subset(rinfo->left_relids, rel2->relids) &&
+				 bms_is_subset(rinfo->right_relids, rel1->relids))
+		{
+			expr1 = lsecond(opexpr->args);
+			expr2 = linitial(opexpr->args);
+		}
+		else
+			continue;
+
+		/*
+		 * Only clauses referencing the partition keys are useful for
+		 * partitionwise join.
+		 */
+		ipk1 = match_expr_to_partition_keys(expr1, rel1, strict_op);
+		if (ipk1 < 0)
+			continue;
+		ipk2 = match_expr_to_partition_keys(expr2, rel2, strict_op);
+		if (ipk2 < 0)
+			continue;
+
+		/*
+		 * If the clause refers to keys at different ordinal positions, it can
+		 * not be used for partitionwise join.
+		 */
+		if (ipk1 != ipk2)
+			continue;
+
+		/*
+		 * The clause allows partitionwise join if only it uses the same
+		 * operator family as that specified by the partition key.
+		 */
+		if (rel1->part_scheme->strategy == PARTITION_STRATEGY_HASH)
+		{
+			if (!op_in_opfamily(rinfo->hashjoinoperator,
+								part_scheme->partopfamily[ipk1]))
+				continue;
+		}
+		else if (!list_member_oid(rinfo->mergeopfamilies,
+								  part_scheme->partopfamily[ipk1]))
+			continue;
+
+		/* Mark the partition key as having an equi-join clause. */
+		pk_has_clause[ipk1] = true;
+	}
+
+	/* Check whether every partition key has an equi-join condition. */
+	for (cnt_pks = 0; cnt_pks < part_scheme->partnatts; cnt_pks++)
+	{
+		if (!pk_has_clause[cnt_pks])
+			return false;
+	}
+
+	return true;
+}
+
+/*
+ * match_expr_to_partition_keys
+ *
+ * Tries to match an expression to one of the nullable or non-nullable
+ * partition keys and if a match is found, returns the matched	key's
+ * ordinal position or -1 if the expression could not be matched to any
+ * of the keys.
+ *
+ * strict_op must be true if the expression will be compared with the
+ * partition key using a strict operator.
+ */
+static int
+match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel, bool strict_op)
+{
+	int			cnt;
+	int			matched = -1;
+	List	   *nullable_exprs;
+
+	/* This function should be called only for partitioned relations. */
+	Assert(rel->part_scheme);
+
+	/* Remove any relabel decorations. */
+	while (IsA(expr, RelabelType))
+		expr = (Expr *) (castNode(RelabelType, expr))->arg;
+
+	/* For PlaceHolderVars, refer to contained expression. */
+	if (IsA(expr, PlaceHolderVar))
+		expr = (castNode(PlaceHolderVar, expr))->phexpr;
+
+	/*
+	 * Extract the arguments from possibly nested COALESCE expressions.  Each
+	 * of these arguments could be null when joining, so these expressions are
+	 * called as such and are to be matched only with the nullable partition
+	 * keys.
+	 */
+	if (IsA(expr, CoalesceExpr))
+		nullable_exprs = extract_coalesce_args(expr);
+	else
+		/*
+		 * expr may or may not be nullable but add to the list anyway to
+		 * simplify the coding below.
+		 */
+		nullable_exprs = list_make1(expr);
+
+	for (cnt = 0; cnt < rel->part_scheme->partnatts; cnt++)
+	{
+		Assert(rel->partexprs);
+
+		/* Is the expression one of the non-nullable partition keys? */
+		if (list_member(rel->partexprs[cnt], expr))
+		{
+			matched = cnt;
+			break;
+		}
+
+		/*
+		 * Nope, so check if it is one of the nullable keys.  Allowing
+		 * nullable keys won't work if the join operator is not strict,
+		 * because null partition keys may then join with rows from other
+		 * partitions.  XXX - would that ever be true if the operator is
+		 * already determined to be mergejoin- and hashjoin-able?
+		 */
+		if (!strict_op)
+			continue;
+
+		/* OK to match with nullable keys. */
+		Assert(rel->nullable_partexprs);
+
+		/* First rule out nullable_exprs containing non-key expressions. */
+		if (list_difference(nullable_exprs,
+							rel->nullable_partexprs[cnt]) != NIL)
+			continue;
+
+		if (list_intersection(rel->nullable_partexprs[cnt],
+							  nullable_exprs) != NIL)
+		{
+			matched = cnt;
+			break;
+		}
+	}
+
+	Assert(list_length(nullable_exprs) >= 1);
+	list_free(nullable_exprs);
+
+	return matched;
+}
+
+/*
+ * extract_coalesce_args
+ *		Extract all arguments from arbitrarily nested CoalesceExpr's
+ *
+ * Note: caller should free the List structure when done using it.
+ */
+static List *
+extract_coalesce_args(Expr *expr)
+{
+	List   *coalesce_args = NIL;
+
+	while (expr && IsA(expr, CoalesceExpr))
+	{
+		CoalesceExpr *cexpr = (CoalesceExpr *) expr;
+		ListCell *lc;
+
+		expr = NULL;
+		foreach(lc, cexpr->args)
+		{
+			Expr   *expr = lfirst(lc);
+
+			/* Remove any relabel decorations. */
+			while (IsA(expr, RelabelType))
+				expr = (Expr *) (castNode(RelabelType, expr))->arg;
+
+			/* For PlaceHolderVars, refer to contained expression. */
+			if (IsA(expr, PlaceHolderVar))
+				expr = (castNode(PlaceHolderVar, expr))->phexpr;
+
+			if (!IsA(expr, CoalesceExpr))
+				coalesce_args = lappend(coalesce_args, expr);
+		}
+
+		Assert(expr == NULL || IsA(expr, CoalesceExpr));
+	}
+
+	return coalesce_args;
 }

@@ -145,6 +145,29 @@ EXPLAIN (COSTS OFF)
 SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b) RIGHT JOIN prt1_e t3 ON (t1.a = (t3.a + t3.b)/2) WHERE t3.c = 0 ORDER BY t1.a, t2.b, t3.a + t3.b;
 SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b) RIGHT JOIN prt1_e t3 ON (t1.a = (t3.a + t3.b)/2) WHERE t3.c = 0 ORDER BY t1.a, t2.b, t3.a + t3.b;
 
+-- FULL JOIN with COALESCE expression
+
+SET enable_partitionwise_aggregate TO true;
+
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM prt1 FULL JOIN prt2 p2(b,a,c) USING(a,b) FULL JOIN prt2 p3(b,a,c) USING (a, b)
+  WHERE a BETWEEN 490 AND 510
+  GROUP BY 1, 2 ORDER BY 1, 2;
+SELECT a, b FROM prt1 FULL JOIN prt2 p2(b,a,c) USING(a,b) FULL JOIN prt2 p3(b,a,c) USING (a, b)
+  WHERE a BETWEEN 490 AND 510
+  GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- Manually written COALESCE expression containing non-key expression
+EXPLAIN (COSTS OFF)
+SELECT p1.a, p1.b FROM prt1 p1 FULL JOIN prt2 p2(b,a,c) USING(a,b) FULL JOIN prt2 p3(b,a,c) ON COALESCE(p2.b, p3.a) = p3.a
+  WHERE p1.a BETWEEN 490 AND 510
+  GROUP BY 1, 2 ORDER BY 1, 2;
+SELECT p1.a, p1.b FROM prt1 p1 FULL JOIN prt2 p2(b,a,c) USING(a,b) FULL JOIN prt2 p3(b,a,c) ON COALESCE(p2.b, p3.a) = p3.a
+  WHERE p1.a BETWEEN 490 AND 510
+  GROUP BY 1, 2 ORDER BY 1, 2;
+
+RESET enable_partitionwise_aggregate;
+
 -- Cases with non-nullable expressions in subquery results;
 -- make sure these go to null as expected
 EXPLAIN (COSTS OFF)
@@ -284,6 +307,7 @@ ANALYZE pht1_e;
 EXPLAIN (COSTS OFF)
 SELECT avg(t1.a), avg(t2.b), avg(t3.a + t3.b), t1.c, t2.c, t3.c FROM pht1 t1, pht2 t2, pht1_e t3 WHERE t1.b = t2.b AND t1.c = t2.c AND ltrim(t3.c, 'A') = t1.c GROUP BY t1.c, t2.c, t3.c ORDER BY t1.c, t2.c, t3.c;
 SELECT avg(t1.a), avg(t2.b), avg(t3.a + t3.b), t1.c, t2.c, t3.c FROM pht1 t1, pht2 t2, pht1_e t3 WHERE t1.b = t2.b AND t1.c = t2.c AND ltrim(t3.c, 'A') = t1.c GROUP BY t1.c, t2.c, t3.c ORDER BY t1.c, t2.c, t3.c;
+
 
 -- test default partition behavior for range
 ALTER TABLE prt1 DETACH PARTITION prt1_p3;

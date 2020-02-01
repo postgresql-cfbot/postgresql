@@ -586,16 +586,32 @@ typedef struct PartitionSchemeData *PartitionScheme;
  *								 this relation that are partitioned tables
  *								 themselves, in hierarchical order
  *
- * Note: A base relation always has only one set of partition keys, but a join
- * relation may have as many sets of partition keys as the number of relations
- * being joined. partexprs and nullable_partexprs are arrays containing
- * part_scheme->partnatts elements each. Each of these elements is a list of
- * partition key expressions.  For a base relation each list in partexprs
- * contains only one expression and nullable_partexprs is not populated. For a
- * join relation, partexprs and nullable_partexprs contain partition key
- * expressions from non-nullable and nullable relations resp. Lists at any
- * given position in those arrays together contain as many elements as the
- * number of joining relations.
+ * Notes on partition key expressions (partexprs and nullable_partexprs):
+ *
+ * Partition key expressions will be used to spot references to the partition
+ * keys of the relation in the expressions of a given query so as to apply
+ * various partitioning-based optimizations to certain query constructs.  For
+ * example, pruning unnecessary partitions of a table using baserestrictinfo
+ * clauses that contain partition keys, converting a join between two
+ * partitioned relations into a series of joins between pairs of their
+ * constituent partitions if the joined rows follow the same partitioning
+ * as the relations being joined.
+ *
+ * The partexprs and nullable_partexprs arrays each contain
+ * part_scheme->partnatts elements.  Each of the elements is a list of
+ * partition key expressions.  For partitioned *base* relations, there is one
+ * expression in every list, whereas for partitioned *join* relations, there
+ * can be as many as the number of component relations.
+ *
+ * nullable_partexprs are populated only in partitioned *join* relationss,
+ * that is, if any of their component relations are nullable due to OUTER JOIN
+ * considerations.  It contains only the expressions of the nullable component
+ * relations, while those of the non-nullable relations are present in the
+ * partexprs.  For the considerations of partitionwise join, nullable partition
+ * keys can be considered to partition the underlying relation in the same
+ * manner as the non-nullable partition keys do, as long as the join operator
+ * is stable, because those null-valued keys can't be joined further, thus
+ * preserving the partitioning.
  *----------
  */
 typedef enum RelOptKind

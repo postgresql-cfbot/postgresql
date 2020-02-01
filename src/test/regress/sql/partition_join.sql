@@ -445,11 +445,765 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_n t1 JOIN prt2_n t2 ON (t1.c = t2.c) JOI
 EXPLAIN (COSTS OFF)
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_n t1 FULL JOIN prt1 t2 ON (t1.c = t2.c);
 
--- partitionwise join can not be applied if only one of joining tables has
--- default partition
-ALTER TABLE prt2 DETACH PARTITION prt2_p3;
-ALTER TABLE prt2 ATTACH PARTITION prt2_p3 FOR VALUES FROM (500) TO (600);
-ANALYZE prt2;
+
+--
+-- Test advanced partition-matching algorithm for partitioned join
+--
+
+-- Tests for range-partitioned tables
+CREATE TABLE prt1_ad (a int, b int, c varchar) PARTITION BY RANGE (a);
+CREATE TABLE prt1_ad_p1 PARTITION OF prt1_ad FOR VALUES FROM (100) TO (200);
+CREATE TABLE prt1_ad_p2 PARTITION OF prt1_ad FOR VALUES FROM (200) TO (300);
+CREATE TABLE prt1_ad_p3 PARTITION OF prt1_ad FOR VALUES FROM (300) TO (400);
+CREATE INDEX prt1_ad_a_idx on prt1_ad (a);
+INSERT INTO prt1_ad SELECT i, i % 25, to_char(i, 'FM0000') FROM generate_series(100, 399) i;
+ANALYZE prt1_ad;
+
+CREATE TABLE prt2_ad (a int, b int, c varchar) PARTITION BY RANGE (b);
+CREATE TABLE prt2_ad_p1 PARTITION OF prt2_ad FOR VALUES FROM (100) TO (150);
+CREATE TABLE prt2_ad_p2 PARTITION OF prt2_ad FOR VALUES FROM (200) TO (300);
+CREATE TABLE prt2_ad_p3 PARTITION OF prt2_ad FOR VALUES FROM (350) TO (500);
+CREATE INDEX prt2_ad_b_idx on prt2_ad (b);
+INSERT INTO prt2_ad_p1 SELECT i % 25, i, to_char(i, 'FM0000') FROM generate_series(100, 149) i;
+INSERT INTO prt2_ad_p2 SELECT i % 25, i, to_char(i, 'FM0000') FROM generate_series(200, 299) i;
+INSERT INTO prt2_ad_p3 SELECT i % 25, i, to_char(i, 'FM0000') FROM generate_series(350, 499) i;
+ANALYZE prt2_ad;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 INNER JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 INNER JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM prt1_ad t1 WHERE EXISTS (SELECT 1 FROM prt2_ad t2 WHERE t1.a = t2.b) AND t1.b = 0 ORDER BY t1.a;
+SELECT t1.* FROM prt1_ad t1 WHERE EXISTS (SELECT 1 FROM prt2_ad t2 WHERE t1.a = t2.b) AND t1.b = 0 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 LEFT JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 LEFT JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM prt1_ad t1 WHERE NOT EXISTS (SELECT 1 FROM prt2_ad t2 WHERE t1.a = t2.b) AND t1.b = 0;
+SELECT t1.* FROM prt1_ad t1 WHERE NOT EXISTS (SELECT 1 FROM prt2_ad t2 WHERE t1.a = t2.b) AND t1.b = 0;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT 175 phv, * FROM prt1_ad WHERE prt1_ad.b = 0) t1 FULL JOIN (SELECT 425 phv, * FROM prt2_ad WHERE prt2_ad.a = 0) t2 ON (t1.a = t2.b) WHERE t1.phv = t1.a OR t2.phv = t2.b ORDER BY t1.a, t2.b;
+SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT 175 phv, * FROM prt1_ad WHERE prt1_ad.b = 0) t1 FULL JOIN (SELECT 425 phv, * FROM prt2_ad WHERE prt2_ad.a = 0) t2 ON (t1.a = t2.b) WHERE t1.phv = t1.a OR t2.phv = t2.b ORDER BY t1.a, t2.b;
+
+-- Test cases where one side has an extra partition
+
+-- Add an extra partition to prt2_ad
+CREATE TABLE prt2_ad_extra PARTITION OF prt2_ad FOR VALUES FROM (500) TO (MAXVALUE);
+INSERT INTO prt2_ad SELECT i % 25, i, to_char(i, 'FM0000') FROM generate_series(500, 599) i;
+ANALYZE prt2_ad;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 INNER JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 INNER JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM prt1_ad t1 WHERE EXISTS (SELECT 1 FROM prt2_ad t2 WHERE t1.a = t2.b) AND t1.b = 0 ORDER BY t1.a;
+SELECT t1.* FROM prt1_ad t1 WHERE EXISTS (SELECT 1 FROM prt2_ad t2 WHERE t1.a = t2.b) AND t1.b = 0 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 LEFT JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 LEFT JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+
+-- left join; currently we can't do partitioned join if there are no matched
+-- partitions on the nullable side
+EXPLAIN (COSTS OFF)
+SELECT t1.b, t1.c, t2.a, t2.c FROM prt2_ad t1 LEFT JOIN prt1_ad t2 ON (t1.b = t2.a) WHERE t1.a = 0 ORDER BY t1.b, t2.a;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM prt1_ad t1 WHERE NOT EXISTS (SELECT 1 FROM prt2_ad t2 WHERE t1.a = t2.b) AND t1.b = 0;
+SELECT t1.* FROM prt1_ad t1 WHERE NOT EXISTS (SELECT 1 FROM prt2_ad t2 WHERE t1.a = t2.b) AND t1.b = 0;
+
+-- anti join; currently we can't do partitioned join if there are no matched
+-- partitions on the nullable side
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM prt2_ad t1 WHERE NOT EXISTS (SELECT 1 FROM prt1_ad t2 WHERE t1.b = t2.a) AND t1.a = 0;
+
+-- full join; currently we can't do partitioned join if there are no matched
+-- partitions on the nullable side
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT 175 phv, * FROM prt1_ad WHERE prt1_ad.b = 0) t1 FULL JOIN (SELECT 425 phv, * FROM prt2_ad WHERE prt2_ad.a = 0) t2 ON (t1.a = t2.b) WHERE t1.phv = t1.a OR t2.phv = t2.b ORDER BY t1.a, t2.b;
+
+-- 3-way join where not every pair of relations can do partitioned join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a, t3.c FROM prt1_ad t1 RIGHT JOIN prt2_ad t2 ON (t1.a = t2.b) INNER JOIN prt1_ad t3 ON (t2.b = t3.a) WHERE t1.b = 0 ORDER BY t1.a, t2.a, t3.c;
+SELECT t1.a, t2.a, t3.c FROM prt1_ad t1 RIGHT JOIN prt2_ad t2 ON (t1.a = t2.b) INNER JOIN prt1_ad t3 ON (t2.b = t3.a) WHERE t1.b = 0 ORDER BY t1.a, t2.a, t3.c;
+
+DROP TABLE prt2_ad_extra;
+
+-- Test cases where a partition on one side matches multiple partitions on
+-- the other side; we currently can't do partitioned join in those cases
+
+-- Split prt2_ad_p3 into two partitions so that prt1_ad_p3 matches both
+-- partitions
+ALTER TABLE prt2_ad DETACH PARTITION prt2_ad_p3;
+CREATE TABLE prt2_ad_p3_350_375 PARTITION OF prt2_ad FOR VALUES FROM (350) TO (375);
+CREATE TABLE prt2_ad_p3_375_500 PARTITION OF prt2_ad FOR VALUES FROM (375) TO (500);
+INSERT INTO prt2_ad SELECT i % 25, i, to_char(i, 'FM0000') FROM generate_series(350, 499) i;
+ANALYZE prt2_ad;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 INNER JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM prt1_ad t1 WHERE EXISTS (SELECT 1 FROM prt2_ad t2 WHERE t1.a = t2.b) AND t1.b = 0 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 LEFT JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM prt1_ad t1 WHERE NOT EXISTS (SELECT 1 FROM prt2_ad t2 WHERE t1.a = t2.b) AND t1.b = 0;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT 175 phv, * FROM prt1_ad WHERE prt1_ad.b = 0) t1 FULL JOIN (SELECT 425 phv, * FROM prt2_ad WHERE prt2_ad.a = 0) t2 ON (t1.a = t2.b) WHERE t1.phv = t1.a OR t2.phv = t2.b ORDER BY t1.a, t2.b;
+
+DROP TABLE prt2_ad_p3_350_375;
+DROP TABLE prt2_ad_p3_375_500;
+
+-- Test default partitions
+
+-- Change prt1_ad_p1 to the default partition
+ALTER TABLE prt1_ad DETACH PARTITION prt1_ad_p1;
+ALTER TABLE prt1_ad ATTACH PARTITION prt1_ad_p1 DEFAULT;
+ANALYZE prt1_ad;
+
+CREATE TABLE prt2_ad_p3_300_400 PARTITION OF prt2_ad FOR VALUES FROM (300) TO (400);
+INSERT INTO prt2_ad SELECT i % 25, i, to_char(i, 'FM0000') FROM generate_series(300, 399) i;
+ANALYZE prt2_ad;
 
 EXPLAIN (COSTS OFF)
-SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.b = 0 ORDER BY t1.a, t2.b;
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 INNER JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 INNER JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+
+DROP TABLE prt2_ad_p3_300_400;
+
+-- Restore prt2_ad_p3
+ALTER TABLE prt2_ad ATTACH PARTITION prt2_ad_p3 FOR VALUES FROM (350) TO (500);
+ANALYZE prt2_ad;
+
+-- Partitioned join can't be applied because the default partition of prt1_ad
+-- prt1_ad_p1 matches prt2_ad_p1 and prt2_ad_p3
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 INNER JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+
+-- Change prt2_ad_p3 to the default partition
+ALTER TABLE prt2_ad DETACH PARTITION prt2_ad_p3;
+ALTER TABLE prt2_ad ATTACH PARTITION prt2_ad_p3 DEFAULT;
+ANALYZE prt2_ad;
+
+-- Partitioned join can't be applied because the default partition of prt1_ad
+-- prt1_ad_p1 matches prt2_ad_p1 and prt2_ad_p3
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_ad t1 INNER JOIN prt2_ad t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
+
+DROP TABLE prt1_ad_p3;
+ANALYZE prt1_ad;
+
+DROP TABLE prt2_ad_p3;
+ANALYZE prt2_ad;
+
+CREATE TABLE prt3_ad (a int, b int, c varchar) PARTITION BY RANGE (a);
+CREATE TABLE prt3_ad_p1 PARTITION OF prt3_ad FOR VALUES FROM (200) TO (300);
+CREATE TABLE prt3_ad_p2 PARTITION OF prt3_ad FOR VALUES FROM (300) TO (400);
+CREATE INDEX prt3_ad_a_idx on prt3_ad (a);
+INSERT INTO prt3_ad SELECT i, i % 25, to_char(i, 'FM0000') FROM generate_series(200, 399) i;
+ANALYZE prt3_ad;
+
+-- 3-way join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.b, t2.c, t3.a, t3.c FROM prt1_ad t1 LEFT JOIN prt2_ad t2 ON (t1.a = t2.b) LEFT JOIN prt3_ad t3 ON (t1.a = t3.a) WHERE t1.b = 0 ORDER BY t1.a, t2.b, t3.a;
+SELECT t1.a, t1.c, t2.b, t2.c, t3.a, t3.c FROM prt1_ad t1 LEFT JOIN prt2_ad t2 ON (t1.a = t2.b) LEFT JOIN prt3_ad t3 ON (t1.a = t3.a) WHERE t1.b = 0 ORDER BY t1.a, t2.b, t3.a;
+
+
+-- Tests for list-partitioned tables
+CREATE TABLE plt1_ad (a int, b int, c text) PARTITION BY LIST (c);
+CREATE TABLE plt1_ad_p1 PARTITION OF plt1_ad FOR VALUES IN ('0001', '0003');
+CREATE TABLE plt1_ad_p2 PARTITION OF plt1_ad FOR VALUES IN ('0004', '0006');
+CREATE TABLE plt1_ad_p3 PARTITION OF plt1_ad FOR VALUES IN ('0008', '0009');
+INSERT INTO plt1_ad SELECT i, i, to_char(i % 10, 'FM0000') FROM generate_series(1, 299) i WHERE i % 10 NOT IN (0, 2, 5, 7);
+ANALYZE plt1_ad;
+
+CREATE TABLE plt2_ad (a int, b int, c text) PARTITION BY LIST (c);
+CREATE TABLE plt2_ad_p1 PARTITION OF plt2_ad FOR VALUES IN ('0002', '0003');
+CREATE TABLE plt2_ad_p2 PARTITION OF plt2_ad FOR VALUES IN ('0004', '0006');
+CREATE TABLE plt2_ad_p3 PARTITION OF plt2_ad FOR VALUES IN ('0007', '0009');
+INSERT INTO plt2_ad SELECT i, i, to_char(i % 10, 'FM0000') FROM generate_series(1, 299) i WHERE i % 10 NOT IN (0, 1, 5, 8);
+ANALYZE plt2_ad;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_ad t1 WHERE EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_ad t1 WHERE EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_ad t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_ad t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 FULL JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 FULL JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
+-- Test cases where one side has an extra partition
+
+-- Add an extra partition to plt2_ad
+CREATE TABLE plt2_ad_extra PARTITION OF plt2_ad FOR VALUES IN ('0000');
+INSERT INTO plt2_ad_extra VALUES (0, 0, '0000');
+ANALYZE plt2_ad;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_ad t1 WHERE EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_ad t1 WHERE EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- left join; currently we can't do partitioned join if there are no matched
+-- partitions on the nullable side
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt2_ad t1 LEFT JOIN plt1_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_ad t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_ad t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+
+-- anti join; currently we can't do partitioned join if there are no matched
+-- partitions on the nullable side
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt2_ad t1 WHERE NOT EXISTS (SELECT 1 FROM plt1_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+
+-- full join; currently we can't do partitioned join if there are no matched
+-- partitions on the nullable side
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 FULL JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
+DROP TABLE plt2_ad_extra;
+
+-- Test cases where a partition on one side matches multiple partitions on
+-- the other side; we currently can't do partitioned join in those cases
+
+-- Split plt2_ad_p2 into two partitions so that prt1_ad_p2 matches both
+-- partitions
+ALTER TABLE plt2_ad DETACH PARTITION plt2_ad_p2;
+CREATE TABLE plt2_ad_p2_0004 PARTITION OF plt2_ad FOR VALUES IN ('0004');
+CREATE TABLE plt2_ad_p2_0006 PARTITION OF plt2_ad FOR VALUES IN ('0006');
+INSERT INTO plt2_ad SELECT i, i, to_char(i % 10, 'FM0000') FROM generate_series(1, 299) i WHERE i % 10 IN (4, 6);
+ANALYZE plt2_ad;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_ad t1 WHERE EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_ad t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 FULL JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
+DROP TABLE plt2_ad_p2_0004;
+DROP TABLE plt2_ad_p2_0006;
+
+-- Restore plt2_ad_p2
+ALTER TABLE plt2_ad ATTACH PARTITION plt2_ad_p2 FOR VALUES IN ('0004', '0006');
+ANALYZE plt2_ad;
+
+-- Test NULL partitions
+
+-- Change plt1_ad_p1 to the NULL partition
+ALTER TABLE plt1_ad DETACH PARTITION plt1_ad_p1;
+CREATE TABLE plt1_ad_p1_null PARTITION OF plt1_ad FOR VALUES IN (NULL, '0001', '0003');
+INSERT INTO plt1_ad SELECT i, i, to_char(i % 10, 'FM0000') FROM generate_series(1, 299) i WHERE i % 10 IN (1, 3);
+INSERT INTO plt1_ad VALUES (-1, -1, NULL);
+ANALYZE plt1_ad;
+
+-- Change plt2_ad_p3 to the NULL partition
+ALTER TABLE plt2_ad DETACH PARTITION plt2_ad_p3;
+CREATE TABLE plt2_ad_p3_null PARTITION OF plt2_ad FOR VALUES IN (NULL, '0007', '0009');
+INSERT INTO plt2_ad SELECT i, i, to_char(i % 10, 'FM0000') FROM generate_series(1, 299) i WHERE i % 10 IN (7, 9);
+INSERT INTO plt2_ad VALUES (-1, -1, NULL);
+ANALYZE plt2_ad;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_ad t1 WHERE EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_ad t1 WHERE EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_ad t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_ad t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_ad t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 FULL JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 FULL JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
+DROP TABLE plt1_ad_p1_null;
+DROP TABLE plt2_ad_p3_null;
+
+-- Restore plt1_ad_p1
+ALTER TABLE plt1_ad ATTACH PARTITION plt1_ad_p1 FOR VALUES IN ('0001', '0003');
+
+-- Add to plt1_ad the extra NULL partition containing only NULL values as the
+-- key values
+CREATE TABLE plt1_ad_extra PARTITION OF plt1_ad FOR VALUES IN (NULL);
+INSERT INTO plt1_ad VALUES (-1, -1, NULL);
+ANALYZE plt1_ad;
+
+-- Restore plt2_ad_p3
+ALTER TABLE plt2_ad ATTACH PARTITION plt2_ad_p3 FOR VALUES IN ('0007', '0009');
+ANALYZE plt2_ad;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- Partitioned join can't be applied because there isn't any partition on the
+-- plt2_ad side that matches the NULL partition of plt1_ad plt1_ad_extra
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- Partitioned join can't be applied because there isn't any partition on the
+-- plt2_ad side that matches the NULL partition of plt1_ad plt1_ad_extra
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 FULL JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
+-- Add to plt2_ad the extra NULL partition containing only NULL values as the
+-- key values
+CREATE TABLE plt2_ad_extra PARTITION OF plt2_ad FOR VALUES IN (NULL);
+INSERT INTO plt2_ad VALUES (-1, -1, NULL);
+ANALYZE plt2_ad;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 FULL JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 FULL JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
+DROP TABLE plt1_ad_extra;
+DROP TABLE plt2_ad_extra;
+
+-- Test default partitions
+
+-- Change plt1_ad_p1 to the default partition
+ALTER TABLE plt1_ad DETACH PARTITION plt1_ad_p1;
+ALTER TABLE plt1_ad ATTACH PARTITION plt1_ad_p1 DEFAULT;
+DROP TABLE plt1_ad_p3;
+ANALYZE plt1_ad;
+
+DROP TABLE plt2_ad_p3;
+ANALYZE plt2_ad;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- Change plt2_ad_p2 to contain '0005' in addition to '0004' and '0006' as
+-- the key values
+ALTER TABLE plt2_ad DETACH PARTITION plt2_ad_p2;
+CREATE TABLE plt2_ad_p2_ext PARTITION OF plt2_ad FOR VALUES IN ('0004', '0005', '0006');
+INSERT INTO plt2_ad SELECT i, i, to_char(i % 10, 'FM0000') FROM generate_series(1, 299) i WHERE i % 10 IN (4, 5, 6);
+ANALYZE plt2_ad;
+
+-- Partitioned join can't be applied because the default partition of plt1_ad
+-- plt1_ad_p1 matches plt2_ad_p1 and plt2_ad_p2_ext
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- Change plt2_ad_p2_ext to the default partition
+ALTER TABLE plt2_ad DETACH PARTITION plt2_ad_p2_ext;
+ALTER TABLE plt2_ad ATTACH PARTITION plt2_ad_p2_ext DEFAULT;
+ANALYZE plt2_ad;
+
+-- Partitioned join can't be applied because the default partition of plt1_ad
+-- plt1_ad_p1 matches plt2_ad_p1 and plt2_ad_p2_ext
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+DROP TABLE plt2_ad_p2_ext;
+
+-- Restore plt2_ad_p2
+ALTER TABLE plt2_ad ATTACH PARTITION plt2_ad_p2 FOR VALUES IN ('0004', '0006');
+ANALYZE plt2_ad;
+
+CREATE TABLE plt3_ad (a int, b int, c text) PARTITION BY LIST (c);
+CREATE TABLE plt3_ad_p1 PARTITION OF plt3_ad FOR VALUES IN ('0004', '0006');
+CREATE TABLE plt3_ad_p2 PARTITION OF plt3_ad FOR VALUES IN ('0007', '0009');
+INSERT INTO plt3_ad SELECT i, i, to_char(i % 10, 'FM0000') FROM generate_series(1, 299) i WHERE i % 10 IN (4, 6, 7, 9);
+ANALYZE plt3_ad;
+
+-- 3-way join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c, t3.a, t3.c FROM plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) LEFT JOIN plt3_ad t3 ON (t1.a = t3.a AND t1.c = t3.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c, t3.a, t3.c FROM plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) LEFT JOIN plt3_ad t3 ON (t1.a = t3.a AND t1.c = t3.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- Test cases where one side has the default partition while the other side
+-- has the NULL partition
+
+-- Change plt2_ad_p1 to the NULL partition
+ALTER TABLE plt2_ad DETACH PARTITION plt2_ad_p1;
+CREATE TABLE plt2_ad_p1_null PARTITION OF plt2_ad FOR VALUES IN (NULL, '0001', '0003');
+INSERT INTO plt2_ad SELECT i, i, to_char(i % 10, 'FM0000') FROM generate_series(1, 299) i WHERE i % 10 IN (1, 3);
+INSERT INTO plt2_ad VALUES (-1, -1, NULL);
+ANALYZE plt2_ad;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- Change the NULL partition to contain only NULL values as the key values
+ALTER TABLE plt2_ad DETACH PARTITION plt2_ad_p1_null;
+CREATE TABLE plt2_ad_p1_nullonly PARTITION OF plt2_ad FOR VALUES IN (NULL);
+INSERT INTO plt2_ad VALUES (-1, -1, NULL);
+ANALYZE plt2_ad;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_ad t1 INNER JOIN plt2_ad t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
+
+DROP TABLE plt2_ad_p1_nullonly;
+DROP TABLE plt2_ad_p1_null;
+DROP TABLE plt2_ad_p1;
+
+DROP TABLE plt1_ad;
+DROP TABLE plt2_ad;
+DROP TABLE plt3_ad;
+
+
+CREATE TABLE plt1_ad (a int, b int, c text) PARTITION BY LIST (c);
+CREATE TABLE plt1_ad_p1 PARTITION OF plt1_ad FOR VALUES IN ('0000', '0001', '0002');
+CREATE TABLE plt1_ad_p2 PARTITION OF plt1_ad FOR VALUES IN ('0003', '0004');
+INSERT INTO plt1_ad SELECT i, i, to_char(i % 5, 'FM0000') FROM generate_series(0, 24) i;
+ANALYZE plt1_ad;
+
+CREATE TABLE plt2_ad (a int, b int, c text) PARTITION BY LIST (c);
+CREATE TABLE plt2_ad_p1 PARTITION OF plt2_ad FOR VALUES IN ('0002');
+CREATE TABLE plt2_ad_p2 PARTITION OF plt2_ad FOR VALUES IN ('0003', '0004');
+INSERT INTO plt2_ad SELECT i, i, to_char(i % 5, 'FM0000') FROM generate_series(0, 24) i WHERE i % 5 IN (2, 3, 4);
+ANALYZE plt2_ad;
+
+CREATE TABLE plt3_ad (a int, b int, c text) PARTITION BY LIST (c);
+CREATE TABLE plt3_ad_p1 PARTITION OF plt3_ad FOR VALUES IN ('0001');
+CREATE TABLE plt3_ad_p2 PARTITION OF plt3_ad FOR VALUES IN ('0003', '0004');
+INSERT INTO plt3_ad SELECT i, i, to_char(i % 5, 'FM0000') FROM generate_series(0, 24) i WHERE i % 5 IN (1, 3, 4);
+ANALYZE plt3_ad;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t2.a, t2.c, t3.a, t3.c FROM (plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.c = t2.c)) FULL JOIN plt3_ad t3 ON (t1.c = t3.c) WHERE coalesce(t1.a, 0) % 5 != 3 AND coalesce(t1.a, 0) % 5 != 4 ORDER BY t1.c, t1.a, t2.a, t3.a;
+SELECT t1.a, t1.c, t2.a, t2.c, t3.a, t3.c FROM (plt1_ad t1 LEFT JOIN plt2_ad t2 ON (t1.c = t2.c)) FULL JOIN plt3_ad t3 ON (t1.c = t3.c) WHERE coalesce(t1.a, 0) % 5 != 3 AND coalesce(t1.a, 0) % 5 != 4 ORDER BY t1.c, t1.a, t2.a, t3.a;
+
+CREATE TABLE raw_data (a text);
+INSERT INTO raw_data (a) VALUES ('Türkiye'),
+								('TÜRKIYE'),
+								('bıt'),
+								('BIT'),
+								('äbç'),
+								('ÄBÇ'),
+								('aaá'),
+								('coté'),
+								('Götz'),
+								('ὀδυσσεύς'),
+								('ὈΔΥΣΣΕΎΣ'),
+								('を読み取り用'),
+								('にオープンできませんでした');
+
+CREATE TABLE alpha
+	(a TEXT, b TEXT)
+	PARTITION BY RANGE(a, b);
+CREATE TABLE alpha_a PARTITION OF alpha FOR VALUES FROM ('a','v') TO ('c','q');
+CREATE TABLE alpha_b PARTITION OF alpha FOR VALUES FROM ('c','q') TO ('d','f');
+CREATE TABLE alpha_c PARTITION OF alpha FOR VALUES FROM ('d','f') TO ('p','m');
+CREATE TABLE alpha_d PARTITION OF alpha FOR VALUES FROM ('p','m') TO ('z','z');
+CREATE TABLE alpha_e PARTITION OF alpha FOR VALUES FROM ('z','z') TO ('√','Σ');
+CREATE TABLE alpha_f PARTITION OF alpha FOR VALUES FROM ('√','Σ') TO ('き','ま');
+CREATE TABLE alpha_default PARTITION OF alpha DEFAULT;
+
+CREATE TABLE beta
+	(a TEXT, b TEXT)
+	PARTITION BY RANGE(a, b);
+CREATE TABLE beta_a PARTITION OF beta FOR VALUES FROM ('a','z') TO ('d','z');
+CREATE TABLE beta_b PARTITION OF beta FOR VALUES FROM ('d','z') TO ('g','z');
+CREATE TABLE beta_c PARTITION OF beta FOR VALUES FROM ('g','z') TO ('k','z');
+CREATE TABLE beta_d PARTITION OF beta FOR VALUES FROM ('k','z') TO ('o','z');
+CREATE TABLE beta_e PARTITION OF beta FOR VALUES FROM ('o','z') TO ('t','z');
+CREATE TABLE beta_f PARTITION OF beta FOR VALUES FROM ('t','z') TO ('Δ','υ');
+CREATE TABLE beta_g PARTITION OF beta FOR VALUES FROM ('Δ','υ') TO ('ὀ','√');
+CREATE TABLE beta_h PARTITION OF beta FOR VALUES FROM ('ὀ','√') TO ('ん', '用');
+CREATE TABLE beta_default PARTITION OF beta DEFAULT;
+
+INSERT INTO alpha (SELECT a, a FROM raw_data);
+INSERT INTO beta (SELECT a, a FROM raw_data);
+
+ANALYZE alpha;
+ANALYZE beta;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IN ('äbç', 'ὀδυσσεύς');
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IN ('äbç', 'ὀδυσσεύς');
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'äbç';
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'äbç';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'ὀδυσσεύς';
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'ὀδυσσεύς';
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a IN ('äbç', 'ὀδυσσεύς');
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a IN ('äbç', 'ὀδυσσεύς');
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'äbç';
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'äbç';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'ὀδυσσεύς';
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'ὀδυσσεύς';
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IN ('äbç', 'ὀδυσσεύς');
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IN ('äbç', 'ὀδυσσεύς');
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'äbç';
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'äbç';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'ὀδυσσεύς';
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'ὀδυσσεύς';
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a IN ('äbç', 'ὀδυσσεύς');
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a IN ('äbç', 'ὀδυσσεύς');
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'äbç';
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'äbç';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'ὀδυσσεύς';
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'ὀδυσσεύς';
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IN ('äbç', 'ὀδυσσεύς');
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IN ('äbç', 'ὀδυσσεύς');
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'äbç';
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'äbç';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'ὀδυσσεύς';
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'ὀδυσσεύς';
+
+-- Try again, this time with list partitioning
+DROP TABLE alpha CASCADE;
+DROP TABLE beta CASCADE;
+
+CREATE TABLE alpha (a TEXT) PARTITION BY LIST(a);
+CREATE TABLE alpha_a PARTITION OF alpha FOR VALUES IN ('Türkiye', 'TÜRKIYE');
+CREATE TABLE alpha_b PARTITION OF alpha FOR VALUES IN ('bıt', 'BIT');
+CREATE TABLE alpha_c PARTITION OF alpha FOR VALUES IN ('äbç', 'ÄBÇ');
+CREATE TABLE alpha_d PARTITION OF alpha FOR VALUES IN ('aaá', 'coté', 'Götz');
+CREATE TABLE alpha_e PARTITION OF alpha FOR VALUES IN ('ὀδυσσεύς', 'ὈΔΥΣΣΕΎΣ');
+CREATE TABLE alpha_f PARTITION OF alpha FOR VALUES IN ('を読み取り用', 'にオープンできませんでした', NULL);
+CREATE TABLE alpha_default PARTITION OF alpha DEFAULT;
+
+CREATE TABLE beta (a TEXT) PARTITION BY LIST(a);
+CREATE TABLE beta_a PARTITION OF beta FOR VALUES IN ('Türkiye', 'coté', 'ὈΔΥΣΣΕΎΣ');
+CREATE TABLE beta_b PARTITION OF beta FOR VALUES IN ('bıt', 'TÜRKIYE');
+CREATE TABLE beta_c PARTITION OF beta FOR VALUES IN ('äbç', 'を読み取り用', 'にオープンできませんでした');
+CREATE TABLE beta_d PARTITION OF beta FOR VALUES IN ('aaá', 'Götz', 'BIT', 'ὀδυσσεύς', 'ÄBÇ', NULL);
+CREATE TABLE beta_default PARTITION OF beta DEFAULT;
+
+INSERT INTO alpha (SELECT a FROM raw_data);
+INSERT INTO beta (SELECT a FROM raw_data);
+INSERT INTO alpha VALUES (null);
+INSERT INTO beta VALUES (null);
+INSERT INTO alpha VALUES ('grumble');
+INSERT INTO beta VALUES ('grumble');
+
+ANALYZE alpha;
+ANALYZE beta;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IN ('äbç', 'ὀδυσσεύς');
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IN ('äbç', 'ὀδυσσεύς');
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'äbç';
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'äbç';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'ὀδυσσεύς';
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'ὀδυσσεύς';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IS NULL;
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IS NULL;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a IS NOT DISTINCT FROM t2.a) WHERE t1.a IS NULL;
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a IS NOT DISTINCT FROM t2.a) WHERE t1.a IS NULL;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IS NULL;
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IS NULL;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a IS NOT DISTINCT FROM t2.a) WHERE t1.a IS NULL;
+SELECT t1.a, t2.a FROM alpha t1 INNER JOIN beta t2 ON (t1.a IS NOT DISTINCT FROM t2.a) WHERE t1.a IS NULL;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a IN ('äbç', 'ὀδυσσεύς');
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a IN ('äbç', 'ὀδυσσεύς');
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'äbç';
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'äbç';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'ὀδυσσεύς';
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'ὀδυσσεύς';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a IS NOT DISTINCT FROM t2.a) AND t1.a IS NULL;
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a IS NOT DISTINCT FROM t2.a) AND t1.a IS NULL;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a IS NULL;
+SELECT t1.a FROM alpha t1 WHERE EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a IS NULL;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IN ('äbç', 'ὀδυσσεύς');
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IN ('äbç', 'ὀδυσσεύς');
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'äbç';
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'äbç';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'ὀδυσσεύς';
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'ὀδυσσεύς';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a IS NOT DISTINCT FROM t2.a) WHERE t1.a IS NULL;
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a IS NOT DISTINCT FROM t2.a) WHERE t1.a IS NULL;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IS NULL;
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IS NULL;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a IS NOT DISTINCT FROM t2.a) WHERE t1.a IS NOT DISTINCT FROM t2.a;
+SELECT t1.a, t2.a FROM alpha t1 LEFT JOIN beta t2 ON (t1.a IS NOT DISTINCT FROM t2.a) WHERE t1.a IS NOT DISTINCT FROM t2.a;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a IN ('äbç', 'ὀδυσσεύς');
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a IN ('äbç', 'ὀδυσσεύς');
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'äbç';
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'äbç';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'ὀδυσσεύς';
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a = 'ὀδυσσεύς';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a IS NOT DISTINCT FROM t2.a) AND t1.a IS NULL;
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a IS NOT DISTINCT FROM t2.a) AND t1.a IS NULL;
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a IS NULL;
+SELECT t1.a FROM alpha t1 WHERE NOT EXISTS (SELECT 1 FROM beta t2 WHERE t1.a = t2.a) AND t1.a IS NULL;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IN ('äbç', 'ὀδυσσεύς');
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IN ('äbç', 'ὀδυσσεύς');
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'äbç';
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'äbç';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'ὀδυσσεύς';
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a = 'ὀδυσσεύς';
+
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IS NULL;
+SELECT t1.a, t2.a FROM alpha t1 FULL JOIN beta t2 ON (t1.a = t2.a) WHERE t1.a IS NULL;

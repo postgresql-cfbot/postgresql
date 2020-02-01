@@ -54,9 +54,11 @@ static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
  * accommodate that.
  */
 static void
-parse_subscription_options(List *options, bool *connect, bool *enabled_given,
-						   bool *enabled, bool *create_slot,
+parse_subscription_options(List *options, bool *connect,
+						   bool *enabled_given, bool *enabled,
+						   bool *create_slot,
 						   bool *slot_name_given, char **slot_name,
+						   bool *logical_wm_given, int *logical_wm,
 						   bool *copy_data, char **synchronous_commit,
 						   bool *refresh)
 {
@@ -89,6 +91,8 @@ parse_subscription_options(List *options, bool *connect, bool *enabled_given,
 		*synchronous_commit = NULL;
 	if (refresh)
 		*refresh = true;
+	if (logical_wm)
+		*logical_wm_given = false;
 
 	/* Parse options */
 	foreach(lc, options)
@@ -173,6 +177,26 @@ parse_subscription_options(List *options, bool *connect, bool *enabled_given,
 
 			refresh_given = true;
 			*refresh = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "work_mem") == 0)
+		{
+			if (!logical_wm)
+				elog(ERROR, "option \"work_mem\" not valid in this context");
+
+			if (*logical_wm_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+
+			/* Test if the value is valid for logical_decoding_work_mem */
+			(void) set_config_option("logical_decoding_work_mem", defGetString(defel),
+									 PGC_BACKEND, PGC_S_TEST, GUC_ACTION_SET,
+									 false, 0, false);
+			if (!parse_int(defGetString(defel), logical_wm,
+						   GUC_UNIT_KB, NULL))
+				elog(ERROR, "parse_int failed");	/* shouldn't happen */
+			*logical_wm_given = true;
+
 		}
 		else
 			ereport(ERROR,
@@ -317,6 +341,8 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	bool		enabled_given;
 	bool		enabled;
 	bool		copy_data;
+	int			logical_wm;
+	bool		logical_wm_given;
 	char	   *synchronous_commit;
 	char	   *conninfo;
 	char	   *slotname;
@@ -330,10 +356,11 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	 *
 	 * Connection and publication should not be specified here.
 	 */
-	parse_subscription_options(stmt->options, &connect, &enabled_given,
-							   &enabled, &create_slot, &slotname_given,
-							   &slotname, &copy_data, &synchronous_commit,
-							   NULL);
+	parse_subscription_options(stmt->options, &connect,
+							   &enabled_given, &enabled,
+							   &create_slot, &slotname_given, &slotname,
+							   &logical_wm_given, &logical_wm,
+							   &copy_data, &synchronous_commit, NULL);
 
 	/*
 	 * Since creating a replication slot is not transactional, rolling back
@@ -410,6 +437,12 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 		CStringGetTextDatum(synchronous_commit);
 	values[Anum_pg_subscription_subpublications - 1] =
 		publicationListToArray(publications);
+
+	if (logical_wm_given)
+		values[Anum_pg_subscription_subworkmem - 1] =
+			Int32GetDatum(logical_wm);
+	else
+		nulls[Anum_pg_subscription_subworkmem - 1] = true;
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -668,9 +701,13 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 				char	   *slotname;
 				bool		slotname_given;
 				char	   *synchronous_commit;
+				int			logical_wm;
+				bool		logical_wm_given;
 
-				parse_subscription_options(stmt->options, NULL, NULL, NULL,
+				parse_subscription_options(stmt->options, NULL,
+										   NULL, NULL,	/* enabled */
 										   NULL, &slotname_given, &slotname,
+										   &logical_wm_given, &logical_wm,
 										   NULL, &synchronous_commit, NULL);
 
 				if (slotname_given)
@@ -696,6 +733,13 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 					replaces[Anum_pg_subscription_subsynccommit - 1] = true;
 				}
 
+				if (logical_wm_given)
+				{
+					values[Anum_pg_subscription_subworkmem - 1] =
+						Int32GetDatum(logical_wm);
+					replaces[Anum_pg_subscription_subworkmem - 1] = true;
+				}
+
 				update_tuple = true;
 				break;
 			}
@@ -706,8 +750,10 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 							enabled_given;
 
 				parse_subscription_options(stmt->options, NULL,
-										   &enabled_given, &enabled, NULL,
-										   NULL, NULL, NULL, NULL, NULL);
+										   &enabled_given, &enabled,
+										   NULL, NULL, NULL,	/* slot */
+										   NULL, NULL,	/* logical wm */
+										   NULL, NULL, NULL);
 				Assert(enabled_given);
 
 				if (!sub->slotname && enabled)
@@ -743,9 +789,11 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 				bool		copy_data;
 				bool		refresh;
 
-				parse_subscription_options(stmt->options, NULL, NULL, NULL,
-										   NULL, NULL, NULL, &copy_data,
-										   NULL, &refresh);
+				parse_subscription_options(stmt->options, NULL,
+										   NULL, NULL,	/* enabled */
+										   NULL, NULL, NULL,	/* slot */
+										   NULL, NULL,	/* logical wm */
+										   &copy_data, NULL, &refresh);
 
 				values[Anum_pg_subscription_subpublications - 1] =
 					publicationListToArray(stmt->publication);
@@ -780,9 +828,11 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 							(errcode(ERRCODE_SYNTAX_ERROR),
 							 errmsg("ALTER SUBSCRIPTION ... REFRESH is not allowed for disabled subscriptions")));
 
-				parse_subscription_options(stmt->options, NULL, NULL, NULL,
-										   NULL, NULL, NULL, &copy_data,
-										   NULL, NULL);
+				parse_subscription_options(stmt->options, NULL,
+										   NULL, NULL,	/* enabled */
+										   NULL, NULL, NULL,	/* slot */
+										   NULL, NULL,	/* logical wm */
+										   &copy_data, NULL, NULL);
 
 				AlterSubscription_refresh(sub, copy_data);
 

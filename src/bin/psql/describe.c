@@ -5933,7 +5933,7 @@ describeSubscriptions(const char *pattern, bool verbose)
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
 	static const bool translate_columns[] = {false, false, false, false,
-	false, false};
+	false, false, false};
 
 	if (pset.sversion < 100000)
 	{
@@ -5961,8 +5961,10 @@ describeSubscriptions(const char *pattern, bool verbose)
 	{
 		appendPQExpBuffer(&buf,
 						  ",  subsynccommit AS \"%s\"\n"
+						  ",  pg_catalog.pg_size_pretty(subworkmem::bigint * 1024) AS \"%s\"\n"
 						  ",  subconninfo AS \"%s\"\n",
 						  gettext_noop("Synchronous commit"),
+						  gettext_noop("Working Memory"),
 						  gettext_noop("Conninfo"));
 	}
 

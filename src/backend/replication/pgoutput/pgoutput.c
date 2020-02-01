@@ -13,11 +13,13 @@
 #include "postgres.h"
 
 #include "catalog/pg_publication.h"
+#include "commands/defrem.h"
 #include "fmgr.h"
 #include "replication/logical.h"
 #include "replication/logicalproto.h"
 #include "replication/origin.h"
 #include "replication/pgoutput.h"
+#include "utils/guc.h"
 #include "utils/int8.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
@@ -87,11 +89,12 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 
 static void
 parse_output_parameters(List *options, uint32 *protocol_version,
-						List **publication_names)
+						List **publication_names, int *logical_decoding_work_mem)
 {
 	ListCell   *lc;
 	bool		protocol_version_given = false;
 	bool		publication_names_given = false;
+	bool		work_mem_given = false;
 
 	foreach(lc, options)
 	{
@@ -137,6 +140,23 @@ parse_output_parameters(List *options, uint32 *protocol_version,
 						(errcode(ERRCODE_INVALID_NAME),
 						 errmsg("invalid publication_names syntax")));
 		}
+		else if (strcmp(defel->defname, "work_mem") == 0)
+		{
+			if (work_mem_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			work_mem_given = true;
+			/* Test if the value is valid for logical_decoding_work_mem */
+			(void) set_config_option("logical_decoding_work_mem", defGetString(defel),
+									 PGC_BACKEND, PGC_S_TEST, GUC_ACTION_SET,
+									 false, 0, false);
+
+			/* by here it must be valid, so this shouldn't fail */
+			if (!parse_int(defGetString(defel), logical_decoding_work_mem,
+						   GUC_UNIT_KB, NULL))
+				elog(ERROR, "parse_int failed");	/* shouldn't happen */
+		}
 		else
 			elog(ERROR, "unrecognized pgoutput option: %s", defel->defname);
 	}
@@ -171,7 +191,8 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 		/* Parse the params and ERROR if we see any we don't recognize */
 		parse_output_parameters(ctx->output_plugin_options,
 								&data->protocol_version,
-								&data->publication_names);
+								&data->publication_names,
+								&logical_decoding_work_mem);
 
 		/* Check if we support requested protocol */
 		if (data->protocol_version > LOGICALREP_PROTO_VERSION_NUM)

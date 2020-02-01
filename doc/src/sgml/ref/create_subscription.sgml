@@ -206,6 +206,18 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
          </para>
         </listitem>
        </varlistentry>
+
+       <varlistentry>
+        <term><literal>work_mem</literal> (<type>integer</type>)</term>
+        <listitem>
+         <para>
+          Limits the amount of memory used to decode changes on the
+          publisher.  If not specified, the publisher will use the default
+          specified by <varname>logical_decoding_work_mem</varname>. When
+          needed, additional data are spilled to disk.
+         </para>
+        </listitem>
+       </varlistentry>
       </variablelist>
      </para>
     </listitem>

@@ -169,6 +169,7 @@ typedef struct
 		{
 			uint32		proto_version;	/* Logical protocol version */
 			List	   *publication_names;	/* String list of publications */
+			int			work_mem;	/* Memory limit to use for decoding */
 		}			logical;
 	}			proto;
 } WalRcvStreamOptions;

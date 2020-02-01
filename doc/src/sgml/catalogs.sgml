@@ -2102,6 +2102,13 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
      </row>
 
      <row>
+      <entry><structfield>collisreverse</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>Is the collation reversed?</entry>
+     </row>
+
+     <row>
       <entry><structfield>collencoding</structfield></entry>
       <entry><type>int4</type></entry>
       <entry></entry>

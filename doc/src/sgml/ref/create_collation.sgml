@@ -24,7 +24,8 @@ CREATE COLLATION [ IF NOT EXISTS ] <replaceable>name</replaceable> (
     [ LC_CTYPE = <replaceable>lc_ctype</replaceable>, ]
     [ PROVIDER = <replaceable>provider</replaceable>, ]
     [ DETERMINISTIC = <replaceable>boolean</replaceable>, ]
-    [ VERSION = <replaceable>version</replaceable> ]
+    [ VERSION = <replaceable>version</replaceable>, ]
+    [ REVERSE = <replaceable>boolean</replaceable> ]
 )
 CREATE COLLATION [ IF NOT EXISTS ] <replaceable>name</replaceable> FROM <replaceable>existing_collation</replaceable>
 </synopsis>
@@ -167,6 +168,16 @@ CREATE COLLATION [ IF NOT EXISTS ] <replaceable>name</replaceable> FROM <replace
     </varlistentry>
 
     <varlistentry>
+     <term><literal>REVERSE</literal></term>
+
+     <listitem>
+      <para>
+       Specifies whether the collation should sort in reverse. Defaults to false.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
      <term><replaceable>existing_collation</replaceable></term>
 
      <listitem>
@@ -222,6 +233,13 @@ CREATE COLLATION french (locale = 'fr_FR.utf8');
    To create a collation using the ICU provider using German phone book sort order:
 <programlisting>
 CREATE COLLATION german_phonebook (provider = icu, locale = 'de-u-co-phonebk');
+</programlisting>
+  </para>
+
+  <para>
+   To create a collation from the <literal>C</literal> locale that sorts backwards:
+<programlisting>
+CREATE COLLATION C_sdrawckab (locale = 'C', reverse = true);
 </programlisting>
   </para>
 

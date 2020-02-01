@@ -13466,6 +13466,7 @@ dumpCollation(Archive *fout, CollInfo *collinfo)
 	PGresult   *res;
 	int			i_collprovider;
 	int			i_collisdeterministic;
+	int			i_collisreverse;
 	int			i_collcollate;
 	int			i_collctype;
 	const char *collprovider;
@@ -13501,6 +13502,13 @@ dumpCollation(Archive *fout, CollInfo *collinfo)
 		appendPQExpBufferStr(query,
 							 "true AS collisdeterministic, ");
 
+	if (fout->remoteVersion >= 130000)
+		appendPQExpBufferStr(query,
+							 "collisreverse, ");
+	else
+		appendPQExpBufferStr(query,
+							 "false as collisreverse, ");
+
 	appendPQExpBuffer(query,
 					  "collcollate, "
 					  "collctype "
@@ -13512,6 +13520,7 @@ dumpCollation(Archive *fout, CollInfo *collinfo)
 
 	i_collprovider = PQfnumber(res, "collprovider");
 	i_collisdeterministic = PQfnumber(res, "collisdeterministic");
+	i_collisreverse = PQfnumber(res, "collisreverse");
 	i_collcollate = PQfnumber(res, "collcollate");
 	i_collctype = PQfnumber(res, "collctype");
 
@@ -13539,6 +13548,9 @@ dumpCollation(Archive *fout, CollInfo *collinfo)
 
 	if (strcmp(PQgetvalue(res, 0, i_collisdeterministic), "f") == 0)
 		appendPQExpBufferStr(q, ", deterministic = false");
+
+	if (strcmp(PQgetvalue(res, 0, i_collisreverse), "t") == 0)
+		appendPQExpBufferStr(q, ", reverse = true");
 
 	if (strcmp(collcollate, collctype) == 0)
 	{

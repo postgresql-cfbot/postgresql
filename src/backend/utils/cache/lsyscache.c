@@ -954,6 +954,22 @@ get_collation_isdeterministic(Oid colloid)
 	return result;
 }
 
+bool
+get_collation_isreverse(Oid colloid)
+{
+	HeapTuple	tp;
+	Form_pg_collation	colltup;
+	bool		result;
+
+	tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(colloid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for collation %u", colloid);
+	colltup = (Form_pg_collation) GETSTRUCT(tp);
+	result = colltup->collisreverse;
+	ReleaseSysCache(tp);
+	return result;
+}
+
 /*				---------- CONSTRAINT CACHE ----------					 */
 
 /*

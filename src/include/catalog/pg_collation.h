@@ -34,6 +34,7 @@ CATALOG(pg_collation,3456,CollationRelationId)
 	Oid			collowner;		/* owner of collation */
 	char		collprovider;	/* see constants below */
 	bool		collisdeterministic BKI_DEFAULT(t);
+	bool		collisreverse BKI_DEFAULT(f);
 	int32		collencoding;	/* encoding for this collation; -1 = "all" */
 	NameData	collcollate;	/* LC_COLLATE setting */
 	NameData	collctype;		/* LC_CTYPE setting */
@@ -63,6 +64,7 @@ extern Oid	CollationCreate(const char *collname, Oid collnamespace,
 							Oid collowner,
 							char collprovider,
 							bool collisdeterministic,
+							bool collisreverse,
 							int32 collencoding,
 							const char *collcollate, const char *collctype,
 							const char *collversion,

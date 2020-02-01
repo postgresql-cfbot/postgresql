@@ -29,6 +29,7 @@
 #include "port.h"
 #include "postmaster/syslogger.h"
 #include "replication/basebackup.h"
+#include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"
 #include "storage/bufpage.h"
@@ -38,6 +39,7 @@
 #include "storage/ipc.h"
 #include "storage/reinit.h"
 #include "utils/builtins.h"
+#include "utils/guc.h"
 #include "utils/ps_status.h"
 #include "utils/relcache.h"
 #include "utils/timestamp.h"
@@ -120,6 +122,9 @@ static long long int total_checksum_failures;
 
 /* Do not verify checksums. */
 static bool noverify_checksums = false;
+
+/* Do not copy config files. */
+static bool exclude_conf = false;
 
 /*
  * The contents of these directories are removed or recreated during server
@@ -639,6 +644,7 @@ parse_basebackup_options(List *options, basebackup_options *opt)
 	bool		o_maxrate = false;
 	bool		o_tablespace_map = false;
 	bool		o_noverify_checksums = false;
+	bool		o_exclude_conf = false;
 
 	MemSet(opt, 0, sizeof(*opt));
 	foreach(lopt, options)
@@ -726,6 +732,15 @@ parse_basebackup_options(List *options, basebackup_options *opt)
 						 errmsg("duplicate option \"%s\"", defel->defname)));
 			noverify_checksums = true;
 			o_noverify_checksums = true;
+		}
+		else if (strcmp(defel->defname, "exclude_conf") == 0)
+		{
+			if (o_exclude_conf)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("duplicate option \"%s\"", defel->defname)));
+			exclude_conf = true;
+			o_exclude_conf = true;
 		}
 		else
 			elog(ERROR, "option \"%s\" not recognized",
@@ -1134,6 +1149,18 @@ sendDir(const char *path, int basepathlen, bool sizeonly, List *tablespaces,
 				 de->d_name);
 
 			continue;
+		}
+
+		if (exclude_conf)
+		{
+			char	   *dot = strrchr(de->d_name, '.');
+			if (dot && strcmp(dot, ".conf") == 0)
+			{
+				elog(DEBUG2,
+					 "configuration file \"%s\" excluded from backup",
+					 de->d_name);
+				continue;
+			}
 		}
 
 		snprintf(pathbuf, sizeof(pathbuf), "%s/%s", path, de->d_name);
@@ -1729,4 +1756,47 @@ throttle(size_t increment)
 	 * starts now.
 	 */
 	throttled_last = GetCurrentTimestamp();
+}
+
+
+/*
+ * base backup worker process (client) main function
+ */
+void
+BaseBackupMain(void)
+{
+	WalReceiverConn *wrconn = NULL;
+	char	   *err;
+	TimeLineID	primaryTLI;
+	uint64		primary_sysid;
+
+	/* Load the libpq-specific functions */
+	load_file("libpqwalreceiver", false);
+	if (WalReceiverFunctions == NULL)
+		elog(ERROR, "libpqwalreceiver didn't initialize correctly");
+
+	/* Establish the connection to the primary */
+	wrconn = walrcv_connect(PrimaryConnInfo, false, cluster_name[0] ? cluster_name : "basebackup", &err);
+	if (!wrconn)
+		ereport(ERROR,
+				(errmsg("could not connect to the primary server: %s", err)));
+
+	/*
+	 * Get the remote sysid and stick it into the local control file, so that
+	 * the walreceiver is happy.  The control file will later be overwritten
+	 * by the base backup.
+	 */
+	primary_sysid = strtoull(walrcv_identify_system(wrconn, &primaryTLI), NULL, 10);
+	InitControlFile(primary_sysid);
+	WriteControlFile();
+
+	walrcv_base_backup(wrconn);
+
+	walrcv_disconnect(wrconn);
+
+	SyncDataDirectory(false, ERROR);
+
+	ereport(LOG,
+			(errmsg("base backup completed")));
+	proc_exit(0);
 }

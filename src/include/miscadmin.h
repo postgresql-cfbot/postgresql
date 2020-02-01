@@ -396,6 +396,7 @@ typedef enum
 	CheckerProcess = 0,
 	BootstrapProcess,
 	StartupProcess,
+	BaseBackupProcess,
 	BgWriterProcess,
 	CheckpointerProcess,
 	WalWriterProcess,
@@ -408,6 +409,7 @@ extern AuxProcType MyAuxProcType;
 
 #define AmBootstrapProcess()		(MyAuxProcType == BootstrapProcess)
 #define AmStartupProcess()			(MyAuxProcType == StartupProcess)
+#define AmBaseBackupProcess()		(MyAuxProcType == BaseBackupProcess)
 #define AmBackgroundWriterProcess() (MyAuxProcType == BgWriterProcess)
 #define AmCheckpointerProcess()		(MyAuxProcType == CheckpointerProcess)
 #define AmWalWriterProcess()		(MyAuxProcType == WalWriterProcess)

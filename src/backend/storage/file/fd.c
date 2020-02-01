@@ -3153,21 +3153,14 @@ looks_like_temp_rel_name(const char *name)
  * Other symlinks are presumed to point at files we're not responsible
  * for fsyncing, and might not have privileges to write at all.
  *
- * Errors are logged but not considered fatal; that's because this is used
- * only during database startup, to deal with the possibility that there are
- * issued-but-unsynced writes pending against the data directory.  We want to
- * ensure that such writes reach disk before anything that's done in the new
- * run.  However, aborting on error would result in failure to start for
- * harmless cases such as read-only files in the data directory, and that's
- * not good either.
- *
- * Note that if we previously crashed due to a PANIC on fsync(), we'll be
- * rewriting all changes again during recovery.
+ * If pre_sync is true, issue flush requests to the kernel before starting the
+ * actual fsync calls.  This can be skipped if the caller has already done it
+ * itself.
  *
  * Note we assume we're chdir'd into PGDATA to begin with.
  */
 void
-SyncDataDirectory(void)
+SyncDataDirectory(bool pre_sync, int loglevel)
 {
 	bool		xlog_is_symlink;
 
@@ -3186,7 +3179,7 @@ SyncDataDirectory(void)
 		struct stat st;
 
 		if (lstat("pg_wal", &st) < 0)
-			ereport(LOG,
+			ereport(loglevel,
 					(errcode_for_file_access(),
 					 errmsg("could not stat file \"%s\": %m",
 							"pg_wal")));
@@ -3200,15 +3193,18 @@ SyncDataDirectory(void)
 
 	/*
 	 * If possible, hint to the kernel that we're soon going to fsync the data
-	 * directory and its contents.  Errors in this step are even less
+	 * directory and its contents.  Errors in this step are less
 	 * interesting than normal, so log them only at DEBUG1.
 	 */
+	if (pre_sync)
+	{
 #ifdef PG_FLUSH_DATA_WORKS
-	walkdir(".", pre_sync_fname, false, DEBUG1);
-	if (xlog_is_symlink)
-		walkdir("pg_wal", pre_sync_fname, false, DEBUG1);
-	walkdir("pg_tblspc", pre_sync_fname, true, DEBUG1);
+		walkdir(".", pre_sync_fname, false, DEBUG1);
+		if (xlog_is_symlink)
+			walkdir("pg_wal", pre_sync_fname, false, DEBUG1);
+		walkdir("pg_tblspc", pre_sync_fname, true, DEBUG1);
 #endif
+	}
 
 	/*
 	 * Now we do the fsync()s in the same order.
@@ -3219,10 +3215,10 @@ SyncDataDirectory(void)
 	 * in pg_tblspc, they'll get fsync'd twice.  That's not an expected case
 	 * so we don't worry about optimizing it.
 	 */
-	walkdir(".", datadir_fsync_fname, false, LOG);
+	walkdir(".", datadir_fsync_fname, false, loglevel);
 	if (xlog_is_symlink)
-		walkdir("pg_wal", datadir_fsync_fname, false, LOG);
-	walkdir("pg_tblspc", datadir_fsync_fname, true, LOG);
+		walkdir("pg_wal", datadir_fsync_fname, false, loglevel);
+	walkdir("pg_tblspc", datadir_fsync_fname, true, loglevel);
 }
 
 /*

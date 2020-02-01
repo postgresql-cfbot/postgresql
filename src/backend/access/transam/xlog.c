@@ -903,8 +903,6 @@ static void CheckRecoveryConsistency(void);
 static XLogRecord *ReadCheckpointRecord(XLogReaderState *xlogreader,
 										XLogRecPtr RecPtr, int whichChkpt, bool report);
 static bool rescanLatestTimeLine(void);
-static void WriteControlFile(void);
-static void ReadControlFile(void);
 static char *str_time(pg_time_t tnow);
 static bool CheckForStandbyTrigger(void);
 
@@ -4492,7 +4490,7 @@ rescanLatestTimeLine(void)
  * ReadControlFile() verifies they are correct.  We could split out the
  * I/O and compatibility-check functions, but there seems no need currently.
  */
-static void
+void
 WriteControlFile(void)
 {
 	int			fd;
@@ -4583,7 +4581,7 @@ WriteControlFile(void)
 						XLOG_CONTROL_FILE)));
 }
 
-static void
+void
 ReadControlFile(void)
 {
 	pg_crc32c	crc;
@@ -5073,6 +5071,41 @@ XLOGShmemInit(void)
 	InitSharedLatch(&XLogCtl->recoveryWakeupLatch);
 }
 
+void
+InitControlFile(uint64 sysidentifier)
+{
+	char		mock_auth_nonce[MOCK_AUTH_NONCE_LEN];
+
+	/*
+	 * Generate a random nonce. This is used for authentication requests that
+	 * will fail because the user does not exist. The nonce is used to create
+	 * a genuine-looking password challenge for the non-existent user, in lieu
+	 * of an actual stored password.
+	 */
+	if (!pg_strong_random(mock_auth_nonce, MOCK_AUTH_NONCE_LEN))
+		ereport(PANIC,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("could not generate secret authorization token")));
+
+	memset(ControlFile, 0, sizeof(ControlFileData));
+	/* Initialize pg_control status fields */
+	ControlFile->system_identifier = sysidentifier;
+	memcpy(ControlFile->mock_authentication_nonce, mock_auth_nonce, MOCK_AUTH_NONCE_LEN);
+	ControlFile->state = DB_SHUTDOWNED;
+	ControlFile->unloggedLSN = FirstNormalUnloggedLSN;
+
+	/* Set important parameter values for use when replaying WAL */
+	ControlFile->MaxConnections = MaxConnections;
+	ControlFile->max_worker_processes = max_worker_processes;
+	ControlFile->max_wal_senders = max_wal_senders;
+	ControlFile->max_prepared_xacts = max_prepared_xacts;
+	ControlFile->max_locks_per_xact = max_locks_per_xact;
+	ControlFile->wal_level = wal_level;
+	ControlFile->wal_log_hints = wal_log_hints;
+	ControlFile->track_commit_timestamp = track_commit_timestamp;
+	ControlFile->data_checksum_version = bootstrap_data_checksum_version;
+}
+
 /*
  * This func must be called ONCE on system install.  It creates pg_control
  * and the initial XLOG segment.
@@ -5088,7 +5121,6 @@ BootStrapXLOG(void)
 	char	   *recptr;
 	bool		use_existent;
 	uint64		sysidentifier;
-	char		mock_auth_nonce[MOCK_AUTH_NONCE_LEN];
 	struct timeval tv;
 	pg_crc32c	crc;
 
@@ -5108,17 +5140,6 @@ BootStrapXLOG(void)
 	sysidentifier = ((uint64) tv.tv_sec) << 32;
 	sysidentifier |= ((uint64) tv.tv_usec) << 12;
 	sysidentifier |= getpid() & 0xFFF;
-
-	/*
-	 * Generate a random nonce. This is used for authentication requests that
-	 * will fail because the user does not exist. The nonce is used to create
-	 * a genuine-looking password challenge for the non-existent user, in lieu
-	 * of an actual stored password.
-	 */
-	if (!pg_strong_random(mock_auth_nonce, MOCK_AUTH_NONCE_LEN))
-		ereport(PANIC,
-				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("could not generate secret authorization token")));
 
 	/* First timeline ID is always 1 */
 	ThisTimeLineID = 1;
@@ -5227,30 +5248,12 @@ BootStrapXLOG(void)
 	openLogFile = -1;
 
 	/* Now create pg_control */
-
-	memset(ControlFile, 0, sizeof(ControlFileData));
-	/* Initialize pg_control status fields */
-	ControlFile->system_identifier = sysidentifier;
-	memcpy(ControlFile->mock_authentication_nonce, mock_auth_nonce, MOCK_AUTH_NONCE_LEN);
-	ControlFile->state = DB_SHUTDOWNED;
+	InitControlFile(sysidentifier);
 	ControlFile->time = checkPoint.time;
 	ControlFile->checkPoint = checkPoint.redo;
 	ControlFile->checkPointCopy = checkPoint;
-	ControlFile->unloggedLSN = FirstNormalUnloggedLSN;
-
-	/* Set important parameter values for use when replaying WAL */
-	ControlFile->MaxConnections = MaxConnections;
-	ControlFile->max_worker_processes = max_worker_processes;
-	ControlFile->max_wal_senders = max_wal_senders;
-	ControlFile->max_prepared_xacts = max_prepared_xacts;
-	ControlFile->max_locks_per_xact = max_locks_per_xact;
-	ControlFile->wal_level = wal_level;
-	ControlFile->wal_log_hints = wal_log_hints;
-	ControlFile->track_commit_timestamp = track_commit_timestamp;
-	ControlFile->data_checksum_version = bootstrap_data_checksum_version;
 
 	/* some additional ControlFile fields are set in WriteControlFile() */
-
 	WriteControlFile();
 
 	/* Bootstrap the commit log, too */
@@ -6295,24 +6298,31 @@ StartupXLOG(void)
 	 */
 	ValidateXLOGDirectoryStructure();
 
-	/*----------
+	/*
 	 * If we previously crashed, perform a couple of actions:
+	 *
 	 *	- The pg_wal directory may still include some temporary WAL segments
-	 * used when creating a new segment, so perform some clean up to not
-	 * bloat this path.  This is done first as there is no point to sync this
-	 * temporary data.
-	 *	- There might be data which we had written, intending to fsync it,
-	 * but which we had not actually fsync'd yet. Therefore, a power failure
-	 * in the near future might cause earlier unflushed writes to be lost,
-	 * even though more recent data written to disk from here on would be
-	 * persisted.  To avoid that, fsync the entire data directory.
-	 *---------
+	 *    used when creating a new segment, so perform some clean up to not
+	 *    bloat this path.  This is done first as there is no point to sync
+	 *    this temporary data.
+	 *
+	 *	- There might be data which we had written, intending to fsync it, but
+	 *    which we had not actually fsync'd yet.  Therefore, a power failure
+	 *    in the near future might cause earlier unflushed writes to be lost,
+	 *    even though more recent data written to disk from here on would be
+	 *    persisted.  To avoid that, fsync the entire data directory.  Errors
+	 *    are logged but not considered fatal.  Aborting on error would result
+	 *    in failure to start for harmless cases such as read-only files in
+	 *    the data directory, and that's not good either.
+	 *
+	 *    Note that if we previously crashed due to a PANIC on fsync(), we'll
+	 *    be rewriting all changes again during recovery.
 	 */
 	if (ControlFile->state != DB_SHUTDOWNED &&
 		ControlFile->state != DB_SHUTDOWNED_IN_RECOVERY)
 	{
 		RemoveTempXlogFiles();
-		SyncDataDirectory();
+		SyncDataDirectory(true, LOG);
 	}
 
 	/*

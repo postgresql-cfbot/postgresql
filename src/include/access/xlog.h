@@ -127,8 +127,8 @@ extern char *archiveCleanupCommand;
 extern bool recoveryTargetInclusive;
 extern int	recoveryTargetAction;
 extern int	recovery_min_apply_delay;
-extern char *PrimaryConnInfo;
-extern char *PrimarySlotName;
+extern PGDLLIMPORT char *PrimaryConnInfo;
+extern PGDLLIMPORT char *PrimarySlotName;
 
 /* indirectly set via GUC system */
 extern TransactionId recoveryTargetXid;
@@ -298,6 +298,9 @@ extern Size XLOGShmemSize(void);
 extern void XLOGShmemInit(void);
 extern void BootStrapXLOG(void);
 extern void LocalProcessControlFile(bool reset);
+extern void InitControlFile(uint64 sysidentifier);
+extern void WriteControlFile(void);
+extern void ReadControlFile(void);
 extern void StartupXLOG(void);
 extern void ShutdownXLOG(int code, Datum arg);
 extern void InitXLOGAccess(void);
@@ -354,6 +357,7 @@ extern void register_persistent_abort_backup_handler(void);
 extern SessionBackupState get_backup_status(void);
 
 /* File path names (all relative to $PGDATA) */
+#define BASEBACKUP_SIGNAL_FILE	"basebackup.signal"
 #define RECOVERY_SIGNAL_FILE	"recovery.signal"
 #define STANDBY_SIGNAL_FILE		"standby.signal"
 #define BACKUP_LABEL_FILE		"backup_label"

@@ -17,20 +17,29 @@
 #include "postgres.h"
 
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/time.h>
+
+#ifdef USE_SYSTEMD
+#include <systemd/sd-daemon.h>
+#endif
 
 #include "access/xlog.h"
 #include "catalog/pg_type.h"
+#include "common/string.h"
 #include "funcapi.h"
 #include "libpq-fe.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "pgtar.h"
 #include "pqexpbuffer.h"
 #include "replication/walreceiver.h"
 #include "utils/builtins.h"
+#include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
+#include "utils/ps_status.h"
 #include "utils/tuplestore.h"
 
 PG_MODULE_MAGIC;
@@ -61,6 +70,7 @@ static int	libpqrcv_server_version(WalReceiverConn *conn);
 static void libpqrcv_readtimelinehistoryfile(WalReceiverConn *conn,
 											 TimeLineID tli, char **filename,
 											 char **content, int *len);
+static void libpqrcv_base_backup(WalReceiverConn *conn);
 static bool libpqrcv_startstreaming(WalReceiverConn *conn,
 									const WalRcvStreamOptions *options);
 static void libpqrcv_endstreaming(WalReceiverConn *conn,
@@ -89,6 +99,7 @@ static WalReceiverFunctionsType PQWalReceiverFunctions = {
 	libpqrcv_identify_system,
 	libpqrcv_server_version,
 	libpqrcv_readtimelinehistoryfile,
+	libpqrcv_base_backup,
 	libpqrcv_startstreaming,
 	libpqrcv_endstreaming,
 	libpqrcv_receive,
@@ -356,6 +367,395 @@ static int
 libpqrcv_server_version(WalReceiverConn *conn)
 {
 	return PQserverVersion(conn->streamConn);
+}
+
+/*
+ * XXX copied from pg_basebackup.c
+ */
+
+unsigned long long totaldone;
+unsigned long long totalsize_kb;
+int tablespacenum;
+int tablespacecount;
+
+static void
+base_backup_report_progress(void)
+{
+	int			percent;
+	char	   *progress;
+
+	percent = totalsize_kb ? (int) ((totaldone / 1024) * 100 / totalsize_kb) : 0;
+
+	/*
+	 * Avoid overflowing past 100% or the full size. This may make the total
+	 * size number change as we approach the end of the backup (the estimate
+	 * will always be wrong if WAL is included), but that's better than having
+	 * the done column be bigger than the total.
+	 */
+	if (percent > 100)
+		percent = 100;
+	if (totaldone / 1024 > totalsize_kb)
+		totalsize_kb = totaldone / 1024;
+
+	/* Note: no translation of ps status */
+	progress = psprintf((tablespacecount == 1 ?
+						 "%llu/%llu kB (%d%%), %d/%d tablespace" :
+						 "%llu/%llu kB (%d%%), %d/%d tablespaces"),
+						totaldone / 1024,
+						totalsize_kb,
+						percent,
+						tablespacenum,
+						tablespacecount);
+
+	set_ps_display(progress, false);
+#ifdef USE_SYSTEMD
+	sd_pid_notifyf(PostmasterPid, 0, "STATUS=base backup %s", progress);
+#endif
+
+	pfree(progress);
+}
+
+static void
+ReceiveAndUnpackTarFile(PGconn *conn, PGresult *res)
+{
+	char		current_path[MAXPGPATH];
+	char		filename[MAXPGPATH];
+	pgoff_t		current_len_left = 0;
+	int			current_padding = 0;
+	char	   *copybuf = NULL;
+	FILE	   *file = NULL;
+	off_t		flush_offset;
+
+	strlcpy(current_path, DataDir, sizeof(current_path));
+
+	/*
+	 * Get the COPY data
+	 */
+	res = PQgetResult(conn);
+	if (PQresultStatus(res) != PGRES_COPY_OUT)
+		ereport(ERROR,
+				(errmsg("could not get COPY data stream: %s",
+						PQerrorMessage(conn))));
+
+	while (1)
+	{
+		int			r;
+
+		if (copybuf != NULL)
+		{
+			PQfreemem(copybuf);
+			copybuf = NULL;
+		}
+
+		r = PQgetCopyData(conn, &copybuf, 0);
+
+		if (r == -1)
+		{
+			/*
+			 * End of chunk
+			 */
+			if (file)
+				fclose(file);
+
+			break;
+		}
+		else if (r == -2)
+		{
+			ereport(ERROR,
+					(errmsg("could not read COPY data: %s",
+							PQerrorMessage(conn))));
+		}
+
+		if (file == NULL)
+		{
+			int			filemode;
+
+			/*
+			 * No current file, so this must be the header for a new file
+			 */
+			if (r != 512)
+				ereport(ERROR,
+						(errmsg("invalid tar block header size: %d", r)));
+
+			current_len_left = read_tar_number(&copybuf[124], 12);
+
+			/* Set permissions on the file */
+			filemode = read_tar_number(&copybuf[100], 8);
+
+			/*
+			 * All files are padded up to 512 bytes
+			 */
+			current_padding =
+				((current_len_left + 511) & ~511) - current_len_left;
+
+			/*
+			 * First part of header is zero terminated filename
+			 */
+			snprintf(filename, sizeof(filename), "%s/%s", current_path,
+					 copybuf);
+			if (filename[strlen(filename) - 1] == '/')
+			{
+				/*
+				 * Ends in a slash means directory or symlink to directory
+				 */
+				if (copybuf[156] == '5')
+				{
+					/*
+					 * Directory
+					 */
+					filename[strlen(filename) - 1] = '\0';	/* Remove trailing slash */
+					if (MakePGDirectory(filename) != 0)
+					{
+						if (errno != EEXIST)
+							ereport(ERROR,
+									(errcode_for_file_access(),
+									 errmsg("could not create directory \"%s\": %m",
+											filename)));
+					}
+#ifndef WIN32
+					if (chmod(filename, (mode_t) filemode))
+						ereport(ERROR,
+								(errcode_for_file_access(),
+								 errmsg("could not set permissions on directory \"%s\": %m",
+										filename)));
+#endif
+				}
+				/*
+				 * Symbolic link
+				 */
+				else if (copybuf[156] == '2')
+				{
+					/* TODO: tablespace mapping */
+					const char *tblspc_path = &copybuf[157];
+
+					filename[strlen(filename) - 1] = '\0';	/* Remove trailing slash */
+
+					if (symlink(tblspc_path, filename) != 0)
+						ereport(ERROR,
+								(errcode_for_file_access(),
+								 errmsg("could not create symbolic link from \"%s\" to \"%s\": %m",
+										filename, tblspc_path)));
+				}
+				else
+				{
+					ereport(ERROR,
+							(errmsg("unrecognized link indicator \"%c\"",
+									copybuf[156])));
+				}
+				continue;		/* directory or link handled */
+			}
+
+			/*
+			 * regular file
+			 */
+			file = fopen(filename, "wb");
+			if (!file)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 (errmsg("could not create file \"%s\": %m", filename))));
+
+			flush_offset = 0;
+
+#ifndef WIN32
+			if (chmod(filename, (mode_t) filemode))
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 (errmsg("could not set permissions on file \"%s\": %m",
+								 filename))));
+#endif
+
+			if (current_len_left == 0)
+			{
+				/*
+				 * Done with this file, next one will be a new tar header
+				 */
+				fclose(file);
+				file = NULL;
+				continue;
+			}
+		}						/* new file */
+		else
+		{
+			/*
+			 * Continuing blocks in existing file
+			 */
+			if (current_len_left == 0 && r == current_padding)
+			{
+				/*
+				 * Received the padding block for this file, ignore it and
+				 * close the file, then move on to the next tar header.
+				 */
+				fclose(file);
+				file = NULL;
+				continue;
+			}
+
+			if (fwrite(copybuf, r, 1, file) != 1)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not write to file \"%s\": %m", filename)));
+
+			pg_flush_data(fileno(file), flush_offset, r);
+			flush_offset += r;
+			totaldone += r;
+			base_backup_report_progress();
+
+			current_len_left -= r;
+			if (current_len_left == 0 && current_padding == 0)
+			{
+				/*
+				 * Received the last block, and there is no padding to be
+				 * expected. Close the file and move on to the next tar
+				 * header.
+				 */
+				fclose(file);
+				file = NULL;
+				continue;
+			}
+		}						/* continuing data in existing file */
+	}							/* loop over all data blocks */
+	base_backup_report_progress();
+
+	if (file != NULL)
+		ereport(ERROR,
+				(errmsg("COPY stream ended before last file was finished")));
+
+	if (copybuf != NULL)
+		PQfreemem(copybuf);
+}
+
+/*
+ * Make base backup from remote and write to local disk.
+ */
+static void
+libpqrcv_base_backup(WalReceiverConn *conn)
+{
+	StringInfoData stmt;
+	PGresult   *res;
+	char		xlogstart[64];
+	TimeLineID	starttli;
+	XLogRecPtr	recptr;
+	bool		error;
+
+	ereport(LOG,
+			(errmsg("initiating base backup, waiting for remote checkpoint to complete")));
+	set_ps_display("waiting for checkpoint", false);
+
+	initStringInfo(&stmt);
+	appendStringInfo(&stmt, "BASE_BACKUP PROGRESS NOWAIT EXCLUDE_CONF");
+	if (cluster_name && cluster_name[0])
+		appendStringInfo(&stmt, " LABEL %s", quote_literal_cstr(cluster_name));
+
+	if (PQsendQuery(conn->streamConn, stmt.data) == 0)
+		ereport(ERROR,
+				(errmsg("could not start base backup on remote server: %s",
+						pchomp(PQerrorMessage(conn->streamConn)))));
+
+	/*
+	 * First result set: WAL start position and timeline ID
+	 */
+	res = PQgetResult(conn->streamConn);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("could not start base backup on remote server: %s",
+						pchomp(PQerrorMessage(conn->streamConn)))));
+	}
+	if (PQntuples(res) != 1)
+	{
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("server returned unexpected response to BASE_BACKUP command; got %d rows and %d fields, expected %d rows and %d fields",
+						PQntuples(res), PQnfields(res), 1, 2)));
+	}
+
+	ereport(LOG,
+			(errmsg("remote checkpoint completed")));
+
+	strlcpy(xlogstart, PQgetvalue(res, 0, 0), sizeof(xlogstart));
+	starttli = atoi(PQgetvalue(res, 0, 1));
+	PQclear(res);
+	elog(DEBUG1, "write-ahead log start point: %s on timeline %u",
+		 xlogstart, starttli);
+	recptr = pg_lsn_in_internal(xlogstart, &error);
+	if (error)
+		elog(ERROR, "invalid LSN received: %s", xlogstart);
+
+	/*
+	 * Second result set: tablespace information
+	 */
+	res = PQgetResult(conn->streamConn);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("could not get backup header: %s",
+						pchomp(PQerrorMessage(conn->streamConn)))));
+	}
+	if (PQntuples(res) < 1)
+	{
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("no data returned from server")));
+	}
+
+	totalsize_kb = totaldone = 0;
+	tablespacecount = PQntuples(res);
+	for (int i = 0; i < PQntuples(res); i++)
+	{
+		totalsize_kb += atol(PQgetvalue(res, i, 2));
+	}
+
+	RequestXLogStreaming(starttli, recptr, PrimaryConnInfo, PrimarySlotName);
+
+	/*
+	 * Start receiving chunks
+	 */
+	for (int i = 0; i < PQntuples(res); i++)
+	{
+		tablespacenum = i;
+		ReceiveAndUnpackTarFile(conn->streamConn, res);
+	}
+	tablespacenum++;
+	base_backup_report_progress();
+
+	PQclear(res);
+
+	/*
+	 * Final result set: WAL end position and timeline ID
+	 */
+	res = PQgetResult(conn->streamConn);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("could not get write-ahead log end position from server: %s",
+						pchomp(PQerrorMessage(conn->streamConn)))));
+	}
+	if (PQntuples(res) != 1)
+	{
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("no write-ahead log end position returned from server")));
+	}
+	PQclear(res);
+
+	res = PQgetResult(conn->streamConn);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		const char *sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+
+		if (sqlstate &&
+			strcmp(sqlstate, "XX001" /*ERRCODE_DATA_CORRUPTED*/) == 0)
+			ereport(ERROR,
+					(errmsg("checksum error occurred")));
+		else
+			ereport(ERROR,
+					(errmsg("final receive failed: %s",
+							pchomp(PQerrorMessage(conn->streamConn)))));
+	}
+	PQclear(res);
 }
 
 /*

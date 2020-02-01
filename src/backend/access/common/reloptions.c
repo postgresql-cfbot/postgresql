@@ -158,6 +158,15 @@ static relopt_bool boolRelOpts[] =
 		},
 		true
 	},
+	{
+		{
+			"deduplicate_items",
+			"Enables deduplication on btree index leaf pages",
+			RELOPT_KIND_BTREE,
+			ShareUpdateExclusiveLock
+		},
+		true
+	},
 	/* list terminator */
 	{{NULL}}
 };

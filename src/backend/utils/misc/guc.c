@@ -28,6 +28,7 @@
 
 #include "access/commit_ts.h"
 #include "access/gin.h"
+#include "access/nbtree.h"
 #include "access/rmgr.h"
 #include "access/tableam.h"
 #include "access/transam.h"
@@ -1095,6 +1096,15 @@ static struct config_bool ConfigureNamesBool[] =
 		&enable_bonjour,
 		false,
 		check_bonjour, NULL, NULL
+	},
+	{
+		{"deduplicate_btree_items", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Enables B-tree index deduplication optimization."),
+			NULL
+		},
+		&deduplicate_btree_items,
+		true,
+		NULL, NULL, NULL
 	},
 	{
 		{"track_commit_timestamp", PGC_POSTMASTER, REPLICATION,

@@ -433,11 +433,127 @@ returns bool
 <sect1 id="btree-implementation">
  <title>Implementation</title>
 
+ <para>
+  Internally, a B-tree index consists of a tree structure with leaf
+  pages.  Each leaf page contains tuples that point to table entries
+  using a heap item pointer.  Each tuple's key is considered unique
+  internally, since the item pointer is treated as part of the key.
+ </para>
+ <para>
+  An introduction to the btree index implementation can be found in
+  <filename>src/backend/access/nbtree/README</filename>.
+ </para>
+
+ <sect2 id="btree-deduplication">
+  <title>Deduplication</title>
   <para>
-   An introduction to the btree index implementation can be found in
-   <filename>src/backend/access/nbtree/README</filename>.
+   B-Tree supports <firstterm>deduplication</firstterm>.  Existing
+   leaf page tuples with fully equal keys (equal prior to the heap
+   item pointer) are merged together into a single <quote>posting
+   list</quote> tuple.  The keys appear only once in this
+   representation.  A simple array of heap item pointers follows.
+   Posting lists are formed <quote>lazily</quote>, when a new item is
+   inserted that cannot fit on an existing leaf page.  The immediate
+   goal of the deduplication process is to at least free enough space
+   to fit the new item; otherwise a leaf page split occurs, which
+   allocates a new leaf page.  The <firstterm>key space</firstterm>
+   covered by the original leaf page is shared among the original page,
+   and its new right sibling page.
+  </para>
+  <para>
+   A duplicate is a row where <emphasis>all</emphasis> indexed key
+   columns are equal to the corresponding column values from some
+   other row.
+  </para>
+  <para>
+   Deduplication can greatly increase index space efficiency with data
+   sets where each distinct key appears at least a few times on
+   average.  It can also reduce the cost of subsequent index scans,
+   especially when many leaf pages must be accessed.  For example, an
+   index on a simple <type>integer</type> column that uses
+   deduplication will have a storage size that is only about 65% of an
+   equivalent unoptimized index when each distinct
+   <type>integer</type> value appears three times.  If each distinct
+   <type>integer</type> value appears six times, the storage overhead
+   can be as low as 50% of baseline.  With hundreds of duplicates per
+   distinct value (or with larger <quote>base</quote> key values), a
+   storage size of about one third of the unoptimized case is
+   expected.  There is usually a direct benefit for queries, as well
+   as an indirect benefit due to reduced I/O during routine vacuuming.
+  </para>
+  <para>
+   Cases that don't benefit due to having no duplicate values will
+   incur a small performance penalty with mixed read-write workloads.
+   There is no performance penalty with read-only workloads, since
+   reading from posting lists is at least as efficient as reading the
+   standard index tuple representation.
+  </para>
+ </sect2>
+
+ <sect2 id="btree-deduplication-configure">
+  <title>Configuring Deduplication</title>
+
+  <para>
+   The <xref linkend="guc-btree-deduplicate-items"/> configuration
+   parameter controls deduplication.  By default, deduplication is
+   enabled.  The <literal>deduplicate_items</literal> storage
+   parameter can be used to override the configuration paramater for
+   individual indexes.  See <xref
+   linkend="sql-createindex-storage-parameters"/> from the
+   <command>CREATE INDEX</command> documentation for details.
+  </para>
+ </sect2>
+
+ <sect2 id="btree-deduplication-restrictions">
+  <title>Restrictions</title>
+
+  <para>
+   Deduplication can only be used with a B-Tree index when
+   <emphasis>all</emphasis> indexed columns use a deduplication-safe
+   operator class that explicitly indicates that deduplication is safe
+   at <command>CREATE INDEX</command> time.  In practice almost all
+   datatypes support deduplication.  <type>numeric</type> is a notable
+   exception (<quote>display scale</quote> makes it impossible to
+   enable deduplication without losing useful information about equal
+   <type>numeric</type> datums).  Some operator classes support
+   deduplication conditionally.  For example, deduplication of indexes
+   on a <type>text</type> column (with the default
+   <literal>btree/text_ops</literal> operator class) is not supported
+   when the column uses a  nondeterministic collation.
+  </para>
+  <para>
+   <literal>INCLUDE</literal> indexes do not support deduplication.
   </para>
 
+ </sect2>
+
+ <sect2 id="btree-deduplication-unique">
+  <title>Internal use of Deduplication in unique indexes</title>
+
+  <para>
+   Page splits that occur due to inserting multiple physical versions
+   (rather than inserting new logical rows) tend to degrade the
+   structure of indexes, especially in the case of unique indexes.
+   Unique indexes use deduplication <emphasis>internally</emphasis>
+   and <emphasis>selectively</emphasis> to delay (and ideally to
+   prevent) these <quote>unnecessary</quote> page splits.
+   <command>VACUUM</command> or autovacuum will eventually remove dead
+   versions of tuples from every index in any case, but usually cannot
+   reverse page splits (in general, the page must be completely empty
+   before <command>VACUUM</command> can <quote>delete</quote> it).
+  </para>
+  <para>
+   The <xref linkend="guc-btree-deduplicate-items"/> configuration
+   parameter does not affect whether or not deduplication is used
+   within unique indexes.  The internal use of deduplication for
+   unique indexes is subject to all of the same restrictions as
+   deduplication in general.  The <literal>deduplicate_items</literal>
+   storage parameter can be set to <literal>OFF</literal> to disable
+   deduplication in unique indexes, but this is intended only as a
+   debugging option for developers.
+  </para>
+
+ </sect2>
 </sect1>
 
 </chapter>

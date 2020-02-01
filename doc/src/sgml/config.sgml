@@ -8048,6 +8048,31 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-btree-deduplicate-items" xreflabel="deduplicate_btree_items">
+      <term><varname>deduplicate_btree_items</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>deduplicate_btree_items</varname></primary>
+       <secondary>configuration parameter</secondary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls whether deduplication should be used within B-Tree
+        indexes.  Deduplication is an optimization that reduces the
+        storage size of indexes by storing equal index keys only once.
+        See <xref linkend="btree-deduplication"/> for more
+        information.
+       </para>
+
+       <para>
+        This setting can be overridden for individual B-Tree indexes
+        by changing index storage parameters.  See <xref
+        linkend="sql-createindex-storage-parameters"/> from the
+        <command>CREATE INDEX</command> documentation for details.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-bytea-output" xreflabel="bytea_output">
       <term><varname>bytea_output</varname> (<type>enum</type>)
       <indexterm>

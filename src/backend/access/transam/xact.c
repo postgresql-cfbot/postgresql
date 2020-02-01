@@ -34,6 +34,7 @@
 #include "catalog/pg_enum.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/matview.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
 #include "executor/spi.h"
@@ -2664,6 +2665,7 @@ AbortTransaction(void)
 	AtAbort_Notify();
 	AtEOXact_RelationMap(false, is_parallel_worker);
 	AtAbort_Twophase();
+	AtAbort_IVM();
 
 	/*
 	 * Advertise the fact that we aborted in pg_xact (assuming that we got as
@@ -4900,6 +4902,9 @@ AbortSubTransaction(void)
 	pgstat_progress_end_command();
 	AbortBufferIO();
 	UnlockBuffers();
+
+	/* Clean up hash entries for incremental view maintenance */
+	AtAbort_IVM();
 
 	/* Reset WAL record construction state */
 	XLogResetInsertion();

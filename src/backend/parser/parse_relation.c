@@ -36,6 +36,7 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
+#include "commands/matview.h"
 
 
 /*
@@ -78,7 +79,7 @@ static void expandTupleDesc(TupleDesc tupdesc, Alias *eref,
 							int count, int offset,
 							int rtindex, int sublevels_up,
 							int location, bool include_dropped,
-							List **colnames, List **colvars);
+							List **colnames, List **colvars, bool is_ivm);
 static int	specialAttNum(const char *attname);
 static bool isQueryUsingTempRelation_walker(Node *node, void *context);
 
@@ -1428,6 +1429,7 @@ addRangeTableEntry(ParseState *pstate,
 	rte->relid = RelationGetRelid(rel);
 	rte->relkind = rel->rd_rel->relkind;
 	rte->rellockmode = lockmode;
+	rte->relisivm = rel->rd_rel->relisivm;
 
 	/*
 	 * Build the list of effective column names using user-supplied aliases
@@ -1516,6 +1518,7 @@ addRangeTableEntryForRelation(ParseState *pstate,
 	rte->relid = RelationGetRelid(rel);
 	rte->relkind = rel->rd_rel->relkind;
 	rte->rellockmode = lockmode;
+	rte->relisivm = rel->rd_rel->relisivm;
 
 	/*
 	 * Build the list of effective column names using user-supplied aliases
@@ -2598,7 +2601,7 @@ expandRTE(RangeTblEntry *rte, int rtindex, int sublevels_up,
 						expandTupleDesc(tupdesc, rte->eref,
 										rtfunc->funccolcount, atts_done,
 										rtindex, sublevels_up, location,
-										include_dropped, colnames, colvars);
+										include_dropped, colnames, colvars, false);
 					}
 					else if (functypclass == TYPEFUNC_SCALAR)
 					{
@@ -2866,7 +2869,7 @@ expandRelation(Oid relid, Alias *eref, int rtindex, int sublevels_up,
 	expandTupleDesc(rel->rd_att, eref, rel->rd_att->natts, 0,
 					rtindex, sublevels_up,
 					location, include_dropped,
-					colnames, colvars);
+					colnames, colvars, RelationIsIVM(rel));
 	relation_close(rel, AccessShareLock);
 }
 
@@ -2883,7 +2886,7 @@ static void
 expandTupleDesc(TupleDesc tupdesc, Alias *eref, int count, int offset,
 				int rtindex, int sublevels_up,
 				int location, bool include_dropped,
-				List **colnames, List **colvars)
+				List **colnames, List **colvars, bool is_ivm)
 {
 	ListCell   *aliascell;
 	int			varattno;
@@ -2895,6 +2898,9 @@ expandTupleDesc(TupleDesc tupdesc, Alias *eref, int count, int offset,
 	for (varattno = 0; varattno < count; varattno++)
 	{
 		Form_pg_attribute attr = TupleDescAttr(tupdesc, varattno);
+
+		if (is_ivm && isIvmColumn(NameStr(attr->attname)) && !MatViewIncrementalMaintenanceIsEnabled())
+			continue;
 
 		if (attr->attisdropped)
 		{

@@ -24,12 +24,18 @@
 #include "utils/builtins.h"
 #include "utils/float.h"
 #include "utils/geo_decls.h"
+#include "utils/sortsupport.h"
 
 
 static bool gist_box_leaf_consistent(BOX *key, BOX *query,
 									 StrategyNumber strategy);
 static bool rtree_internal_consistent(BOX *key, BOX *query,
 									  StrategyNumber strategy);
+static int64 part_bits32_by2(uint32 x);
+static int64 interleave_bits32(uint32 x, uint32 y);
+static inline uint64 point_zorder_internal(Point *p);
+static int gist_bbox_fastcmp(Datum x, Datum y, SortSupport ssup);
+
 
 /* Minimum accepted ratio of split */
 #define LIMIT_RATIO 0.3
@@ -1539,4 +1545,64 @@ gist_poly_distance(PG_FUNCTION_ARGS)
 	*recheck = true;
 
 	PG_RETURN_FLOAT8(distance);
+}
+
+/* Z-order routines */
+/* Interleave 32 bits with zeroes */
+static int64
+part_bits32_by2(uint32 x)
+{
+	uint64		n = x;
+
+	n = (n | (n << 16)) & 0x0000FFFF0000FFFF;
+	n = (n | (n <<  8)) & 0x00FF00FF00FF00FF;
+	n = (n | (n <<  4)) & 0x0F0F0F0F0F0F0F0F;
+	n = (n | (n <<  2)) & 0x3333333333333333;
+	n = (n | (n <<  1)) & 0x5555555555555555;
+
+	return n;
+}
+
+/* Compute Z-order for integers */
+static int64
+interleave_bits32(uint32 x, uint32 y)
+{
+	return part_bits32_by2(x) | (part_bits32_by2(y) << 1);
+}
+
+/* Compute Z-oder for point */
+static inline uint64
+point_zorder_internal(Point *p)
+{
+	union {
+		float f;
+		uint32 i;
+	} a,b;
+	if (isnan(a.f))
+		a.i = INT32_MAX;
+	if (isnan(b.f))
+		b.i = INT32_MAX;
+	a.f = p->x;
+	b.f = p->y;
+	return interleave_bits32(a.i, b.i);
+}
+
+static int
+gist_bbox_fastcmp(Datum x, Datum y, SortSupport ssup)
+{
+	Point	*p1 = &(DatumGetBoxP(x)->low);
+	Point	*p2 = &(DatumGetBoxP(y)->low);
+	uint64	 z1 = point_zorder_internal(p1);
+	uint64	 z2 = point_zorder_internal(p2);
+
+	return z1 == z2 ? 0 : z1 > z2 ? 1 : -1;
+}
+
+Datum
+gist_point_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gist_bbox_fastcmp;
+	PG_RETURN_VOID();
 }

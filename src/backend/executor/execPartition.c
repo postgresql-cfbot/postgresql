@@ -924,9 +924,22 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 	if (mtstate &&
 		(mtstate->mt_transition_capture || mtstate->mt_oc_transition_capture))
 	{
-		partrouteinfo->pi_PartitionToRootMap =
-			convert_tuples_by_name(RelationGetDescr(partRelInfo->ri_RelationDesc),
-								   RelationGetDescr(partRelInfo->ri_PartitionRoot));
+		ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
+
+		/*
+		 * If the partition appears to be an UPDATE result relation, the map
+		 * has already been initialized by ExecInitModifyTable(); use that one
+		 * instead of building one from scratch.  To distinguish UPDATE result
+		 * relations from tuple-routing result relations, we rely on the fact
+		 * that each of the former has a distinct RT index.
+		 */
+		if (node && node->rootRelation != partRelInfo->ri_RangeTableIndex)
+			partrouteinfo->pi_PartitionToRootMap =
+				partRelInfo->ri_ChildToRootMap;
+		else
+			partrouteinfo->pi_PartitionToRootMap =
+				convert_tuples_by_name(RelationGetDescr(partRelInfo->ri_RelationDesc),
+									   RelationGetDescr(partRelInfo->ri_PartitionRoot));
 	}
 	else
 		partrouteinfo->pi_PartitionToRootMap = NULL;

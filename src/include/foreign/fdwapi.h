@@ -112,6 +112,7 @@ typedef bool (*PlanDirectModify_function) (PlannerInfo *root,
 										   int subplan_index);
 
 typedef void (*BeginDirectModify_function) (ForeignScanState *node,
+											ResultRelInfo *rinfo,
 											int eflags);
 
 typedef TupleTableSlot *(*IterateDirectModify_function) (ForeignScanState *node);

@@ -22,6 +22,7 @@
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_index.h"
 #include "catalog/pg_type.h"
 #include "commands/dbcommands.h"
 #include "commands/proclang.h"
@@ -98,6 +99,8 @@ static AclMode convert_any_priv_string(text *priv_type_text,
 static Oid	convert_table_name(text *tablename);
 static AclMode convert_table_priv_string(text *priv_type_text);
 static AclMode convert_sequence_priv_string(text *priv_type_text);
+static int	index_column_privilege_check(Oid indexoid, AttrNumber attnum,
+										 Oid roleid, AclMode mode);
 static AttrNumber convert_column_name(Oid tableoid, text *column);
 static AclMode convert_column_priv_string(text *priv_type_text);
 static Oid	convert_database_name(text *databasename);
@@ -2458,6 +2461,7 @@ static int
 column_privilege_check(Oid tableoid, AttrNumber attnum,
 					   Oid roleid, AclMode mode)
 {
+	char		relkind;
 	AclResult	aclresult;
 	HeapTuple	attTuple;
 	Form_pg_attribute attributeForm;
@@ -2469,16 +2473,28 @@ column_privilege_check(Oid tableoid, AttrNumber attnum,
 		return -1;
 
 	/*
-	 * First check if we have the privilege at the table level.  We check
-	 * existence of the pg_class row before risking calling pg_class_aclcheck.
+	 * Check existence of the pg_class row, and find out what relkind it is.
+	 * We rely here on get_rel_relkind() returning '\0' if the syscache lookup
+	 * fails.
+	 */
+	relkind = get_rel_relkind(tableoid);
+	if (relkind == '\0')
+		return -1;				/* table doesn't exist */
+
+	/*
+	 * Special case for indexes.
+	 */
+	if (relkind == RELKIND_INDEX)
+		return index_column_privilege_check(tableoid, attnum, roleid, mode);
+
+	/*
+	 * Now we can check if we have the privilege at the table level.
+	 *
 	 * Note: it might seem there's a race condition against concurrent DROP,
 	 * but really it's safe because there will be no syscache flush between
-	 * here and there.  So if we see the row in the syscache, so will
-	 * pg_class_aclcheck.
+	 * get_rel_relkind() and pg_class_aclcheck().  So if the former saw the
+	 * row in the syscache, so will the latter.
 	 */
-	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(tableoid)))
-		return -1;
-
 	aclresult = pg_class_aclcheck(tableoid, roleid, mode);
 
 	if (aclresult == ACLCHECK_OK)
@@ -2505,6 +2521,68 @@ column_privilege_check(Oid tableoid, AttrNumber attnum,
 	aclresult = pg_attribute_aclcheck(tableoid, attnum, roleid, mode);
 
 	return (aclresult == ACLCHECK_OK);
+}
+
+/*
+ * Column privilege check on an index.
+ *
+ * Normally, indexes have no privileges, since one cannot access them via
+ * SQL DML statements.  However, it's useful for us to report that SELECT
+ * privilege exists if the user has SELECT on the underlying table, as that
+ * will allow the pg_stats view to show index expression statistics to
+ * unprivileged users.
+ *
+ * Returns 1 if have the privilege, 0 if not, -1 if dropped column/table.
+ */
+static int
+index_column_privilege_check(Oid indexoid, AttrNumber attnum,
+							 Oid roleid, AclMode mode)
+{
+	HeapTuple	tuple;
+	Form_pg_index indexForm;
+	Oid			tableoid;
+	AclResult	aclresult;
+
+	/* No privilege unless it's SELECT */
+	if (mode != ACL_SELECT)
+		return 0;
+
+	/* Identify the index's underlying table. */
+	tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexoid));
+	if (!HeapTupleIsValid(tuple))
+		return -1;				/* index was dropped? */
+	indexForm = (Form_pg_index) GETSTRUCT(tuple);
+
+	tableoid = indexForm->indrelid;
+
+	/*
+	 * Before we risk calling pg_class_aclcheck, ensure the pg_class row is in
+	 * syscache, much as in column_privilege_check.
+	 */
+	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(tableoid)))
+	{
+		ReleaseSysCache(tuple);
+		return -1;
+	}
+
+	/* If we have the privilege for the whole table, we're good. */
+	aclresult = pg_class_aclcheck(tableoid, roleid, mode);
+
+	if (aclresult == ACLCHECK_OK)
+	{
+		ReleaseSysCache(tuple);
+		return 1;
+	}
+
+	/*
+	 * In principle, we could examine the pg_index entry to see which table
+	 * column or columns the index column depends on, and return success if
+	 * the user has column-level privileges for all those columns.  For now,
+	 * we just say "no privilege".
+	 */
+
+	ReleaseSysCache(tuple);
+	return 0;
 }
 
 /*

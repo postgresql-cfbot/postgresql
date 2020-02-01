@@ -177,6 +177,7 @@ typedef struct LVShared
 	 * the lazy vacuum.
 	 */
 	Oid			relid;
+	char		relname[NAMEDATALEN];	/* tablename, used for error callback */
 	int			elevel;
 
 	/*
@@ -270,6 +271,7 @@ typedef struct LVParallelState
 
 typedef struct LVRelStats
 {
+	char		*relname;	/* tablename, used for error callback */
 	/* useindex = true means two-pass strategy; false means one-pass */
 	bool		useindex;
 	/* Overall statistics about rel */
@@ -292,6 +294,14 @@ typedef struct LVRelStats
 	bool		lock_waiter_detected;
 } LVRelStats;
 
+typedef struct
+{
+	char 		*relnamespace;
+	char		*relname;
+	char 		*indname; /* If vacuuming index */
+	BlockNumber blkno;
+	int			stage;	/* 0: scan heap; 1: vacuum heap; 2: vacuum index */
+} vacuum_error_callback_arg;
 
 /* A few variables that don't seem worth passing around as parameters */
 static int	elevel = -1;
@@ -314,7 +324,7 @@ static void lazy_vacuum_all_indexes(Relation onerel, Relation *Irel,
 									LVRelStats *vacrelstats, LVParallelState *lps,
 									int nindexes);
 static void lazy_vacuum_index(Relation indrel, IndexBulkDeleteResult **stats,
-							  LVDeadTuples *dead_tuples, double reltuples);
+							  LVDeadTuples *dead_tuples, double reltuples, char *relname);
 static void lazy_cleanup_index(Relation indrel,
 							   IndexBulkDeleteResult **stats,
 							   double reltuples, bool estimated_count);
@@ -361,6 +371,7 @@ static void end_parallel_vacuum(Relation *Irel, IndexBulkDeleteResult **stats,
 								LVParallelState *lps, int nindexes);
 static LVSharedIndStats *get_indstats(LVShared *lvshared, int n);
 static bool skip_parallel_vacuum_index(Relation indrel, LVShared *lvshared);
+static void vacuum_error_callback(void *arg);
 
 
 /*
@@ -724,6 +735,8 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 		PROGRESS_VACUUM_MAX_DEAD_TUPLES
 	};
 	int64		initprog_val[3];
+	ErrorContextCallback errcallback;
+	vacuum_error_callback_arg errcbarg;
 
 	pg_rusage_init(&ru0);
 
@@ -747,6 +760,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 		palloc0(nindexes * sizeof(IndexBulkDeleteResult *));
 
 	nblocks = RelationGetNumberOfBlocks(onerel);
+	vacrelstats->relname = relname;
 	vacrelstats->rel_pages = nblocks;
 	vacrelstats->scanned_pages = 0;
 	vacrelstats->tupcount_pages = 0;
@@ -870,6 +884,17 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 	else
 		skipping_blocks = false;
 
+	/* Setup error traceback support for ereport() */
+	errcbarg.relnamespace = get_namespace_name(RelationGetNamespace(onerel));
+	errcbarg.relname = relname;
+	errcbarg.blkno = InvalidBlockNumber; /* Not known yet */
+	errcbarg.stage = 0;
+
+	errcallback.callback = vacuum_error_callback;
+	errcallback.arg = (void *) &errcbarg;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
 	for (blkno = 0; blkno < nblocks; blkno++)
 	{
 		Buffer		buf;
@@ -890,6 +915,8 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 		/* see note above about forcing scanning of last page */
 #define FORCE_CHECK_PAGE() \
 		(blkno == nblocks - 1 && should_attempt_truncation(params, vacrelstats))
+
+		errcbarg.blkno = blkno;
 
 		pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED, blkno);
 
@@ -987,12 +1014,17 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 				vmbuffer = InvalidBuffer;
 			}
 
+			/* Pop the error context stack */
+			error_context_stack = errcallback.previous;
+
 			/* Work on all the indexes, then the heap */
 			lazy_vacuum_all_indexes(onerel, Irel, indstats,
 									vacrelstats, lps, nindexes);
-
 			/* Remove tuples from heap */
 			lazy_vacuum_heap(onerel, vacrelstats);
+
+			/* Replace error context while continuing heap scan */
+			error_context_stack = &errcallback;
 
 			/*
 			 * Forget the now-vacuumed tuples, and press on, but be careful
@@ -1597,6 +1629,9 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			RecordPageWithFreeSpace(onerel, blkno, freespace);
 	}
 
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+
 	/* report that everything is scanned and vacuumed */
 	pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_SCANNED, blkno);
 
@@ -1744,7 +1779,7 @@ lazy_vacuum_all_indexes(Relation onerel, Relation *Irel,
 
 		for (idx = 0; idx < nindexes; idx++)
 			lazy_vacuum_index(Irel[idx], &stats[idx], vacrelstats->dead_tuples,
-							  vacrelstats->old_live_tuples);
+							  vacrelstats->old_live_tuples, vacrelstats->relname);
 	}
 
 	/* Increase and report the number of index scans */
@@ -1772,10 +1807,24 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 	int			npages;
 	PGRUsage	ru0;
 	Buffer		vmbuffer = InvalidBuffer;
+	ErrorContextCallback errcallback;
+	vacuum_error_callback_arg errcbarg;
 
 	/* Report that we are now vacuuming the heap */
 	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 								 PROGRESS_VACUUM_PHASE_VACUUM_HEAP);
+
+	/*
+	 * Setup error traceback support for ereport()
+	 * ->relnamespace and ->relname are already set
+	 */
+	errcbarg.blkno = InvalidBlockNumber; /* Not known yet */
+	errcbarg.stage = 1;
+
+	errcallback.callback = vacuum_error_callback;
+	errcallback.arg = (void *) &errcbarg;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
 
 	pg_rusage_init(&ru0);
 	npages = 0;
@@ -1791,6 +1840,7 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 		vacuum_delay_point();
 
 		tblk = ItemPointerGetBlockNumber(&vacrelstats->dead_tuples->itemptrs[tupindex]);
+		errcbarg.blkno = tblk;
 		buf = ReadBufferExtended(onerel, MAIN_FORKNUM, tblk, RBM_NORMAL,
 								 vac_strategy);
 		if (!ConditionalLockBufferForCleanup(buf))
@@ -1810,6 +1860,9 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 		RecordPageWithFreeSpace(onerel, tblk, freespace);
 		npages++;
 	}
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
 
 	if (BufferIsValid(vmbuffer))
 	{
@@ -2223,7 +2276,7 @@ vacuum_one_index(Relation indrel, IndexBulkDeleteResult **stats,
 						   lvshared->estimated_count);
 	else
 		lazy_vacuum_index(indrel, stats, dead_tuples,
-						  lvshared->reltuples);
+						  lvshared->reltuples, lvshared->relname);
 
 	/*
 	 * Copy the index bulk-deletion result returned from ambulkdelete and
@@ -2310,14 +2363,17 @@ lazy_cleanup_all_indexes(Relation *Irel, IndexBulkDeleteResult **stats,
  *
  *		reltuples is the number of heap tuples to be passed to the
  *		bulkdelete callback.
+ *		relname is the name of the table to be passed to the error callback.
  */
 static void
 lazy_vacuum_index(Relation indrel, IndexBulkDeleteResult **stats,
-				  LVDeadTuples *dead_tuples, double reltuples)
+				  LVDeadTuples *dead_tuples, double reltuples, char *relname)
 {
 	IndexVacuumInfo ivinfo;
 	const char *msg;
 	PGRUsage	ru0;
+	ErrorContextCallback errcallback;
+	vacuum_error_callback_arg errcbarg;
 
 	pg_rusage_init(&ru0);
 
@@ -2329,9 +2385,23 @@ lazy_vacuum_index(Relation indrel, IndexBulkDeleteResult **stats,
 	ivinfo.num_heap_tuples = reltuples;
 	ivinfo.strategy = vac_strategy;
 
+	/* Setup error traceback support for ereport() */
+	errcbarg.relnamespace = get_namespace_name(RelationGetNamespace(indrel));
+	errcbarg.indname = RelationGetRelationName(indrel);
+	errcbarg.relname = relname;
+	errcbarg.stage = 2;
+
+	errcallback.callback = vacuum_error_callback;
+	errcallback.arg = (void *) &errcbarg;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
 	/* Do bulk deletion */
 	*stats = index_bulk_delete(&ivinfo, *stats,
 							   lazy_tid_reaped, (void *) dead_tuples);
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
 
 	if (IsParallelWorker())
 		msg = gettext_noop("scanned index \"%s\" to remove %d row versions by parallel vacuum worker");
@@ -3165,6 +3235,7 @@ begin_parallel_vacuum(Oid relid, Relation *Irel, LVRelStats *vacrelstats,
 	MemSet(shared, 0, est_shared);
 	shared->relid = relid;
 	shared->elevel = elevel;
+	strcpy(shared->relname, vacrelstats->relname);
 	shared->maintenance_work_mem_worker =
 		(nindexes_mwm > 0) ?
 		maintenance_work_mem / Min(parallel_workers, nindexes_mwm) :
@@ -3374,4 +3445,23 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	vac_close_indexes(nindexes, indrels, RowExclusiveLock);
 	table_close(onerel, ShareUpdateExclusiveLock);
 	pfree(stats);
+}
+
+/*
+ * Error context callback for errors occurring during vacuum.
+ */
+static void
+vacuum_error_callback(void *arg)
+{
+	vacuum_error_callback_arg *cbarg = arg;
+
+	if (cbarg->stage == 0)
+		errcontext(_("while scanning block %u of relation \"%s.%s\""),
+				cbarg->blkno, cbarg->relnamespace, cbarg->relname);
+	else if (cbarg->stage == 1)
+		errcontext(_("while vacuuming block %u of relation \"%s.%s\""),
+				cbarg->blkno, cbarg->relnamespace, cbarg->relname);
+	else if (cbarg->stage == 2)
+		errcontext(_("while vacuuming index \"%s.%s\" of table \"%s\""),
+				cbarg->relnamespace, cbarg->indname, cbarg->relname);
 }

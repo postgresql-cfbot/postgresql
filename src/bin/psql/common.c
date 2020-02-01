@@ -708,6 +708,7 @@ static bool
 PrintQueryTuples(const PGresult *results)
 {
 	printQueryOpt my_popt = pset.popt;
+	bool result = true;
 
 	/* one-shot expanded output requested via \gx */
 	if (pset.g_expanded)
@@ -726,6 +727,12 @@ PrintQueryTuples(const PGresult *results)
 
 		printQuery(results, &my_popt, fout, false, pset.logfile);
 
+		if (ferror(fout))
+		{
+			pg_log_error("Error printing tuples");
+			result = false;
+		}
+
 		if (is_pipe)
 		{
 			pclose(fout);
@@ -735,9 +742,16 @@ PrintQueryTuples(const PGresult *results)
 			fclose(fout);
 	}
 	else
+	{
 		printQuery(results, &my_popt, pset.queryFout, false, pset.logfile);
+		if (ferror(pset.queryFout))
+		{
+			pg_log_error("Error printing tuples");
+			result = false;
+		}
+	}
 
-	return true;
+	return result;
 }
 
 

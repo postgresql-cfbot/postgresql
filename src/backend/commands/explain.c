@@ -370,7 +370,10 @@ ExplainOneQuery(Query *query, int cursorOptions,
 		PlannedStmt *plan;
 		instr_time	planstart,
 					planduration;
+		BufferUsage bufusage_start,
+					bufusage;
 
+		bufusage_start = pgBufferUsage;
 		INSTR_TIME_SET_CURRENT(planstart);
 
 		/* plan the query */
@@ -379,9 +382,12 @@ ExplainOneQuery(Query *query, int cursorOptions,
 		INSTR_TIME_SET_CURRENT(planduration);
 		INSTR_TIME_SUBTRACT(planduration, planstart);
 
+		/* calc differences of buffer counters. */
+		bufusage = ComputeBufferCounters(&bufusage_start, &pgBufferUsage);
+
 		/* run it (if needed) and produce output */
 		ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
-					   &planduration);
+					   &planduration, &bufusage);
 	}
 }
 
@@ -474,7 +480,8 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 void
 ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
-			   QueryEnvironment *queryEnv, const instr_time *planduration)
+			   QueryEnvironment *queryEnv, const instr_time *planduration,
+			   const BufferUsage *bufusage)
 {
 	DestReceiver *dest;
 	QueryDesc  *queryDesc;
@@ -558,12 +565,25 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	/* Create textual dump of plan tree */
 	ExplainPrintPlan(es, queryDesc);
 
+	if (es->summary && (planduration || es->buffers))
+		ExplainOpenGroup("Planning", "Planning", true, es);
+
 	if (es->summary && planduration)
 	{
 		double		plantime = INSTR_TIME_GET_DOUBLE(*planduration);
 
 		ExplainPropertyFloat("Planning Time", "ms", 1000.0 * plantime, 3, es);
 	}
+
+	if (es->summary && es->buffers)
+	{
+		es->indent += 1;
+		show_buffer_usage(es, bufusage);
+		es->indent -= 1;
+	}
+
+	if (es->summary && (planduration || es->buffers))
+		ExplainCloseGroup("Planning", "Planning", true, es);
 
 	/* Print info about runtime of triggers */
 	if (es->analyze)

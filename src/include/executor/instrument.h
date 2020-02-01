@@ -72,6 +72,7 @@ typedef struct WorkerInstrumentation
 
 extern PGDLLIMPORT BufferUsage pgBufferUsage;
 
+extern BufferUsage ComputeBufferCounters(BufferUsage *start, BufferUsage *stop);
 extern Instrumentation *InstrAlloc(int n, int instrument_options);
 extern void InstrInit(Instrumentation *instr, int instrument_options);
 extern void InstrStartNode(Instrumentation *instr);

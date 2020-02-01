@@ -25,6 +25,33 @@ static void BufferUsageAccumDiff(BufferUsage *dst,
 								 const BufferUsage *add, const BufferUsage *sub);
 
 
+/* Compute the difference between two BufferUsage */
+BufferUsage
+ComputeBufferCounters(BufferUsage *start, BufferUsage *stop)
+{
+	BufferUsage result;
+
+#define CALC_BUFF_DIFF(x) result.x = stop->x - start->x;
+	CALC_BUFF_DIFF(shared_blks_hit);
+	CALC_BUFF_DIFF(shared_blks_read);
+	CALC_BUFF_DIFF(shared_blks_dirtied);
+	CALC_BUFF_DIFF(shared_blks_written);
+	CALC_BUFF_DIFF(local_blks_hit);
+	CALC_BUFF_DIFF(local_blks_read);
+	CALC_BUFF_DIFF(local_blks_dirtied);
+	CALC_BUFF_DIFF(local_blks_written);
+	CALC_BUFF_DIFF(temp_blks_read);
+	CALC_BUFF_DIFF(temp_blks_written);
+#undef CALC_BUFF_DIFF
+
+	result.blk_read_time = stop->blk_read_time;
+	INSTR_TIME_SUBTRACT(result.blk_read_time, start->blk_read_time);
+	result.blk_write_time = stop->blk_write_time;
+	INSTR_TIME_SUBTRACT(result.blk_write_time, start->blk_write_time);
+
+	return result;
+}
+
 /* Allocate new instrumentation structure(s) */
 Instrumentation *
 InstrAlloc(int n, int instrument_options)

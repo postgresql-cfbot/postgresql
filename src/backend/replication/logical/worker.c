@@ -29,7 +29,7 @@
 #include "access/xlog_internal.h"
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
-#include "catalog/pg_subscription.h"
+#include "catalog/pg_sub.h"
 #include "catalog/pg_subscription_rel.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"

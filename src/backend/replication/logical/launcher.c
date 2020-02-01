@@ -22,7 +22,7 @@
 #include "access/htup_details.h"
 #include "access/tableam.h"
 #include "access/xact.h"
-#include "catalog/pg_subscription.h"
+#include "catalog/pg_sub.h"
 #include "catalog/pg_subscription_rel.h"
 #include "funcapi.h"
 #include "libpq/pqsignal.h"
@@ -95,7 +95,7 @@ static void logicalrep_worker_cleanup(LogicalRepWorker *worker);
 
 static bool on_commit_launcher_wakeup = false;
 
-Datum		pg_stat_get_subscription(PG_FUNCTION_ARGS);
+Datum		pg_stat_get_sub(PG_FUNCTION_ARGS);
 
 
 /*
@@ -147,7 +147,7 @@ get_subscription_list(void)
 		sub->oid = subform->oid;
 		sub->dbid = subform->subdbid;
 		sub->owner = subform->subowner;
-		sub->enabled = subform->subenabled;
+		sub->enabled = subform->subactive;
 		sub->name = pstrdup(NameStr(subform->subname));
 		/* We don't fill fields we are not interested in. */
 
@@ -1068,7 +1068,7 @@ IsLogicalLauncher(void)
  * Returns state of the subscriptions.
  */
 Datum
-pg_stat_get_subscription(PG_FUNCTION_ARGS)
+pg_stat_get_sub(PG_FUNCTION_ARGS)
 {
 #define PG_STAT_GET_SUBSCRIPTION_COLS	8
 	Oid			subid = PG_ARGISNULL(0) ? InvalidOid : PG_GETARG_OID(0);

@@ -4117,7 +4117,7 @@ getSubscriptions(Archive *fout)
 		int			n;
 
 		res = ExecuteSqlQuery(fout,
-							  "SELECT count(*) FROM pg_subscription "
+							  "SELECT count(*) FROM pg_sub "
 							  "WHERE subdbid = (SELECT oid FROM pg_database"
 							  "                 WHERE datname = current_database())",
 							  PGRES_TUPLES_OK);
@@ -4136,9 +4136,9 @@ getSubscriptions(Archive *fout)
 	appendPQExpBuffer(query,
 					  "SELECT s.tableoid, s.oid, s.subname,"
 					  "(%s s.subowner) AS rolname, "
-					  " s.subconninfo, s.subslotname, s.subsynccommit, "
+					  " s.subconn, s.subslotname, s.subsynccommit, "
 					  " s.subpublications "
-					  "FROM pg_subscription s "
+					  "FROM pg_sub s "
 					  "WHERE s.subdbid = (SELECT oid FROM pg_database"
 					  "                   WHERE datname = current_database())",
 					  username_subquery);
@@ -4150,7 +4150,7 @@ getSubscriptions(Archive *fout)
 	i_oid = PQfnumber(res, "oid");
 	i_subname = PQfnumber(res, "subname");
 	i_rolname = PQfnumber(res, "rolname");
-	i_subconninfo = PQfnumber(res, "subconninfo");
+	i_subconninfo = PQfnumber(res, "subconn");
 	i_subslotname = PQfnumber(res, "subslotname");
 	i_subsynccommit = PQfnumber(res, "subsynccommit");
 	i_subpublications = PQfnumber(res, "subpublications");

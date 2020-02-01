@@ -15,7 +15,7 @@
 #include <signal.h>
 
 #include "access/xlogdefs.h"
-#include "catalog/pg_subscription.h"
+#include "catalog/pg_sub.h"
 #include "datatype/timestamp.h"
 #include "storage/lock.h"
 

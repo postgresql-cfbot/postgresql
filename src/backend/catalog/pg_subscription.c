@@ -20,7 +20,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/indexing.h"
-#include "catalog/pg_subscription.h"
+#include "catalog/pg_sub.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
@@ -64,12 +64,12 @@ GetSubscription(Oid subid, bool missing_ok)
 	sub->dbid = subform->subdbid;
 	sub->name = pstrdup(NameStr(subform->subname));
 	sub->owner = subform->subowner;
-	sub->enabled = subform->subenabled;
+	sub->enabled = subform->subactive;
 
 	/* Get conninfo */
 	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
 							tup,
-							Anum_pg_subscription_subconninfo,
+							Anum_pg_sub_subconn,
 							&isnull);
 	Assert(!isnull);
 	sub->conninfo = TextDatumGetCString(datum);
@@ -77,7 +77,7 @@ GetSubscription(Oid subid, bool missing_ok)
 	/* Get slotname */
 	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
 							tup,
-							Anum_pg_subscription_subslotname,
+							Anum_pg_sub_subslotname,
 							&isnull);
 	if (!isnull)
 		sub->slotname = pstrdup(NameStr(*DatumGetName(datum)));
@@ -87,7 +87,7 @@ GetSubscription(Oid subid, bool missing_ok)
 	/* Get synccommit */
 	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
 							tup,
-							Anum_pg_subscription_subsynccommit,
+							Anum_pg_sub_subsynccommit,
 							&isnull);
 	Assert(!isnull);
 	sub->synccommit = TextDatumGetCString(datum);
@@ -95,7 +95,7 @@ GetSubscription(Oid subid, bool missing_ok)
 	/* Get publications */
 	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
 							tup,
-							Anum_pg_subscription_subpublications,
+							Anum_pg_sub_subpublications,
 							&isnull);
 	Assert(!isnull);
 	sub->publications = textarray_to_stringlist(DatumGetArrayTypeP(datum));
@@ -121,7 +121,7 @@ CountDBSubscriptions(Oid dbid)
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 
 	ScanKeyInit(&scankey,
-				Anum_pg_subscription_subdbid,
+				Anum_pg_sub_subdbid,
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(dbid));
 
@@ -163,7 +163,7 @@ get_subscription_oid(const char *subname, bool missing_ok)
 {
 	Oid			oid;
 
-	oid = GetSysCacheOid2(SUBSCRIPTIONNAME, Anum_pg_subscription_oid,
+	oid = GetSysCacheOid2(SUBSCRIPTIONNAME, Anum_pg_sub_oid,
 						  MyDatabaseId, CStringGetDatum(subname));
 	if (!OidIsValid(oid) && !missing_ok)
 		ereport(ERROR,

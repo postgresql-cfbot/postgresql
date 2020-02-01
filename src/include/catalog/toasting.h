@@ -95,7 +95,7 @@ DECLARE_TOAST(pg_shdescription, 2846, 2847);
 DECLARE_TOAST(pg_shseclabel, 4060, 4061);
 #define PgShseclabelToastTable 4060
 #define PgShseclabelToastIndex 4061
-DECLARE_TOAST(pg_subscription, 4183, 4184);
+DECLARE_TOAST(pg_sub, 4183, 4184);
 #define PgSubscriptionToastTable 4183
 #define PgSubscriptionToastIndex 4184
 DECLARE_TOAST(pg_tablespace, 4185, 4186);

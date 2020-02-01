@@ -23,7 +23,7 @@
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/objectaddress.h"
-#include "catalog/pg_subscription.h"
+#include "catalog/pg_sub.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
@@ -309,8 +309,8 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	Relation	rel;
 	ObjectAddress myself;
 	Oid			subid;
-	bool		nulls[Natts_pg_subscription];
-	Datum		values[Natts_pg_subscription];
+	bool		nulls[Natts_pg_sub];
+	Datum		values[Natts_pg_sub];
 	Oid			owner = GetUserId();
 	HeapTuple	tup;
 	bool		connect;
@@ -361,7 +361,7 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
 
 	/* Check if name is used */
-	subid = GetSysCacheOid2(SUBSCRIPTIONNAME, Anum_pg_subscription_oid,
+	subid = GetSysCacheOid2(SUBSCRIPTIONNAME, Anum_pg_sub_oid,
 							MyDatabaseId, CStringGetDatum(stmt->subname));
 	if (OidIsValid(subid))
 	{
@@ -392,23 +392,23 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	memset(nulls, false, sizeof(nulls));
 
 	subid = GetNewOidWithIndex(rel, SubscriptionObjectIndexId,
-							   Anum_pg_subscription_oid);
-	values[Anum_pg_subscription_oid - 1] = ObjectIdGetDatum(subid);
-	values[Anum_pg_subscription_subdbid - 1] = ObjectIdGetDatum(MyDatabaseId);
-	values[Anum_pg_subscription_subname - 1] =
+							   Anum_pg_sub_oid);
+	values[Anum_pg_sub_oid - 1] = ObjectIdGetDatum(subid);
+	values[Anum_pg_sub_subdbid - 1] = ObjectIdGetDatum(MyDatabaseId);
+	values[Anum_pg_sub_subname - 1] =
 		DirectFunctionCall1(namein, CStringGetDatum(stmt->subname));
-	values[Anum_pg_subscription_subowner - 1] = ObjectIdGetDatum(owner);
-	values[Anum_pg_subscription_subenabled - 1] = BoolGetDatum(enabled);
-	values[Anum_pg_subscription_subconninfo - 1] =
+	values[Anum_pg_sub_subowner - 1] = ObjectIdGetDatum(owner);
+	values[Anum_pg_sub_subactive - 1] = BoolGetDatum(enabled);
+	values[Anum_pg_sub_subconn - 1] =
 		CStringGetTextDatum(conninfo);
 	if (slotname)
-		values[Anum_pg_subscription_subslotname - 1] =
+		values[Anum_pg_sub_subslotname - 1] =
 			DirectFunctionCall1(namein, CStringGetDatum(slotname));
 	else
-		nulls[Anum_pg_subscription_subslotname - 1] = true;
-	values[Anum_pg_subscription_subsynccommit - 1] =
+		nulls[Anum_pg_sub_subslotname - 1] = true;
+	values[Anum_pg_sub_subsynccommit - 1] =
 		CStringGetTextDatum(synchronous_commit);
-	values[Anum_pg_subscription_subpublications - 1] =
+	values[Anum_pg_sub_subpublications - 1] =
 		publicationListToArray(publications);
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
@@ -622,9 +622,9 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 {
 	Relation	rel;
 	ObjectAddress myself;
-	bool		nulls[Natts_pg_subscription];
-	bool		replaces[Natts_pg_subscription];
-	Datum		values[Natts_pg_subscription];
+	bool		nulls[Natts_pg_sub];
+	bool		replaces[Natts_pg_sub];
+	Datum		values[Natts_pg_sub];
 	HeapTuple	tup;
 	Oid			subid;
 	bool		update_tuple = false;
@@ -682,18 +682,18 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 										"slot_name = NONE")));
 
 					if (slotname)
-						values[Anum_pg_subscription_subslotname - 1] =
+						values[Anum_pg_sub_subslotname - 1] =
 							DirectFunctionCall1(namein, CStringGetDatum(slotname));
 					else
-						nulls[Anum_pg_subscription_subslotname - 1] = true;
-					replaces[Anum_pg_subscription_subslotname - 1] = true;
+						nulls[Anum_pg_sub_subslotname - 1] = true;
+					replaces[Anum_pg_sub_subslotname - 1] = true;
 				}
 
 				if (synchronous_commit)
 				{
-					values[Anum_pg_subscription_subsynccommit - 1] =
+					values[Anum_pg_sub_subsynccommit - 1] =
 						CStringGetTextDatum(synchronous_commit);
-					replaces[Anum_pg_subscription_subsynccommit - 1] = true;
+					replaces[Anum_pg_sub_subsynccommit - 1] = true;
 				}
 
 				update_tuple = true;
@@ -715,9 +715,9 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 							(errcode(ERRCODE_SYNTAX_ERROR),
 							 errmsg("cannot enable subscription that does not have a slot name")));
 
-				values[Anum_pg_subscription_subenabled - 1] =
+				values[Anum_pg_sub_subactive - 1] =
 					BoolGetDatum(enabled);
-				replaces[Anum_pg_subscription_subenabled - 1] = true;
+				replaces[Anum_pg_sub_subactive - 1] = true;
 
 				if (enabled)
 					ApplyLauncherWakeupAtCommit();
@@ -732,9 +732,9 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 			/* Check the connection info string. */
 			walrcv_check_conninfo(stmt->conninfo);
 
-			values[Anum_pg_subscription_subconninfo - 1] =
+			values[Anum_pg_sub_subconn - 1] =
 				CStringGetTextDatum(stmt->conninfo);
-			replaces[Anum_pg_subscription_subconninfo - 1] = true;
+			replaces[Anum_pg_sub_subconn - 1] = true;
 			update_tuple = true;
 			break;
 
@@ -747,9 +747,9 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 										   NULL, NULL, NULL, &copy_data,
 										   NULL, &refresh);
 
-				values[Anum_pg_subscription_subpublications - 1] =
+				values[Anum_pg_sub_subpublications - 1] =
 					publicationListToArray(stmt->publication);
-				replaces[Anum_pg_subscription_subpublications - 1] = true;
+				replaces[Anum_pg_sub_subpublications - 1] = true;
 
 				update_tuple = true;
 
@@ -883,19 +883,19 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 
 	/* Get subname */
 	datum = SysCacheGetAttr(SUBSCRIPTIONOID, tup,
-							Anum_pg_subscription_subname, &isnull);
+							Anum_pg_sub_subname, &isnull);
 	Assert(!isnull);
 	subname = pstrdup(NameStr(*DatumGetName(datum)));
 
 	/* Get conninfo */
 	datum = SysCacheGetAttr(SUBSCRIPTIONOID, tup,
-							Anum_pg_subscription_subconninfo, &isnull);
+							Anum_pg_sub_subconn, &isnull);
 	Assert(!isnull);
 	conninfo = TextDatumGetCString(datum);
 
 	/* Get slotname */
 	datum = SysCacheGetAttr(SUBSCRIPTIONOID, tup,
-							Anum_pg_subscription_subslotname, &isnull);
+							Anum_pg_sub_subslotname, &isnull);
 	if (!isnull)
 		slotname = pstrdup(NameStr(*DatumGetName(datum)));
 	else

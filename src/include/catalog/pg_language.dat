@@ -20,6 +20,6 @@
   lanname => 'c', lanvalidator => 'fmgr_c_validator' },
 { oid => '14', oid_symbol => 'SQLlanguageId',
   descr => 'SQL-language functions',
-  lanname => 'sql', lanpltrusted => 't', lanvalidator => 'fmgr_sql_validator' },
+  lanname => 'pgsql', lanpltrusted => 't', lanvalidator => 'fmgr_sql_validator' },
 
 ]

@@ -18,7 +18,7 @@
 #define PG_SUBSCRIPTION_H
 
 #include "catalog/genbki.h"
-#include "catalog/pg_subscription_d.h"
+#include "catalog/pg_sub_d.h"
 
 #include "nodes/pg_list.h"
 
@@ -36,7 +36,7 @@
  *
  * NOTE:  When adding a column, also update system_views.sql.
  */
-CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID(6101,SubscriptionRelation_Rowtype_Id) BKI_SCHEMA_MACRO
+CATALOG(pg_sub,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID(6101,SubscriptionRelation_Rowtype_Id) BKI_SCHEMA_MACRO
 {
 	Oid			oid;			/* oid */
 
@@ -45,12 +45,12 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 
 	Oid			subowner;		/* Owner of the subscription */
 
-	bool		subenabled;		/* True if the subscription is enabled (the
+	bool		subactive;		/* True if the subscription is enabled (the
 								 * worker should be running) */
 
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	/* Connection string to the publisher */
-	text		subconninfo BKI_FORCE_NOT_NULL;
+	text		subconn BKI_FORCE_NOT_NULL;
 
 	/* Slot name on publisher */
 	NameData	subslotname;

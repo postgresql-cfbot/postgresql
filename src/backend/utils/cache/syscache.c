@@ -63,7 +63,7 @@
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_statistic_ext_data.h"
-#include "catalog/pg_subscription.h"
+#include "catalog/pg_sub.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_transform.h"
@@ -776,8 +776,8 @@ static const struct cachedesc cacheinfo[] = {
 		SubscriptionNameIndexId,
 		2,
 		{
-			Anum_pg_subscription_subdbid,
-			Anum_pg_subscription_subname,
+			Anum_pg_sub_subdbid,
+			Anum_pg_sub_subname,
 			0,
 			0
 		},
@@ -787,7 +787,7 @@ static const struct cachedesc cacheinfo[] = {
 		SubscriptionObjectIndexId,
 		1,
 		{
-			Anum_pg_subscription_oid,
+			Anum_pg_sub_oid,
 			0,
 			0,
 			0

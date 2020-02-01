@@ -42,7 +42,7 @@ SET search_path TO information_schema;
 /* Expand any 1-D array into a set with integers 1..N */
 CREATE FUNCTION _pg_expandarray(IN anyarray, OUT x anyelement, OUT n int)
     RETURNS SETOF RECORD
-    LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE
+    LANGUAGE pgsql STRICT IMMUTABLE PARALLEL SAFE
     AS 'select $1[s], s - pg_catalog.array_lower($1,1) + 1
         from pg_catalog.generate_series(pg_catalog.array_lower($1,1),
                                         pg_catalog.array_upper($1,1),
@@ -51,7 +51,7 @@ CREATE FUNCTION _pg_expandarray(IN anyarray, OUT x anyelement, OUT n int)
 /* Given an index's OID and an underlying-table column number, return the
  * column's position in the index (NULL if not there) */
 CREATE FUNCTION _pg_index_position(oid, smallint) RETURNS int
-    LANGUAGE sql STRICT STABLE
+    LANGUAGE pgsql STRICT STABLE
     AS $$
 SELECT (ss.a).n FROM
   (SELECT information_schema._pg_expandarray(indkey) AS a
@@ -60,7 +60,7 @@ SELECT (ss.a).n FROM
 $$;
 
 CREATE FUNCTION _pg_truetypid(pg_attribute, pg_type) RETURNS oid
-    LANGUAGE sql
+    LANGUAGE pgsql
     IMMUTABLE
     PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
@@ -68,7 +68,7 @@ CREATE FUNCTION _pg_truetypid(pg_attribute, pg_type) RETURNS oid
 $$SELECT CASE WHEN $2.typtype = 'd' THEN $2.typbasetype ELSE $1.atttypid END$$;
 
 CREATE FUNCTION _pg_truetypmod(pg_attribute, pg_type) RETURNS int4
-    LANGUAGE sql
+    LANGUAGE pgsql
     IMMUTABLE
     PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
@@ -78,7 +78,7 @@ $$SELECT CASE WHEN $2.typtype = 'd' THEN $2.typtypmod ELSE $1.atttypmod END$$;
 -- these functions encapsulate knowledge about the encoding of typmod:
 
 CREATE FUNCTION _pg_char_max_length(typid oid, typmod int4) RETURNS integer
-    LANGUAGE sql
+    LANGUAGE pgsql
     IMMUTABLE
     PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
@@ -94,7 +94,7 @@ $$SELECT
   END$$;
 
 CREATE FUNCTION _pg_char_octet_length(typid oid, typmod int4) RETURNS integer
-    LANGUAGE sql
+    LANGUAGE pgsql
     IMMUTABLE
     PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
@@ -110,7 +110,7 @@ $$SELECT
   END$$;
 
 CREATE FUNCTION _pg_numeric_precision(typid oid, typmod int4) RETURNS integer
-    LANGUAGE sql
+    LANGUAGE pgsql
     IMMUTABLE
     PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
@@ -131,7 +131,7 @@ $$SELECT
   END$$;
 
 CREATE FUNCTION _pg_numeric_precision_radix(typid oid, typmod int4) RETURNS integer
-    LANGUAGE sql
+    LANGUAGE pgsql
     IMMUTABLE
     PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
@@ -143,7 +143,7 @@ $$SELECT
   END$$;
 
 CREATE FUNCTION _pg_numeric_scale(typid oid, typmod int4) RETURNS integer
-    LANGUAGE sql
+    LANGUAGE pgsql
     IMMUTABLE
     PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
@@ -159,7 +159,7 @@ $$SELECT
   END$$;
 
 CREATE FUNCTION _pg_datetime_precision(typid oid, typmod int4) RETURNS integer
-    LANGUAGE sql
+    LANGUAGE pgsql
     IMMUTABLE
     PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
@@ -175,7 +175,7 @@ $$SELECT
   END$$;
 
 CREATE FUNCTION _pg_interval_type(typid oid, mod int4) RETURNS text
-    LANGUAGE sql
+    LANGUAGE pgsql
     IMMUTABLE
     PARALLEL SAFE
     RETURNS NULL ON NULL INPUT
@@ -1477,7 +1477,7 @@ CREATE VIEW routines AS
            CAST(null AS cardinal_number) AS maximum_cardinality,
            CAST(CASE WHEN p.prokind <> 'p' THEN 0 END AS sql_identifier) AS dtd_identifier,
 
-           CAST(CASE WHEN l.lanname = 'sql' THEN 'SQL' ELSE 'EXTERNAL' END AS character_data)
+           CAST(CASE WHEN l.lanname = 'pgsql' THEN 'PGSQL' ELSE 'EXTERNAL' END AS character_data)
              AS routine_body,
            CAST(
              CASE WHEN pg_has_role(p.proowner, 'USAGE') THEN p.prosrc ELSE null END

@@ -478,7 +478,7 @@ SELECT
     l.provider, l.label
 FROM
     pg_shseclabel l
-    JOIN pg_subscription s ON l.classoid = s.tableoid AND l.objoid = s.oid
+    JOIN pg_sub s ON l.classoid = s.tableoid AND l.objoid = s.oid
 UNION ALL
 SELECT
     l.objoid, l.classoid, 0::int4 AS objsubid,
@@ -810,19 +810,19 @@ CREATE VIEW pg_stat_wal_receiver AS
     FROM pg_stat_get_wal_receiver() s
     WHERE s.pid IS NOT NULL;
 
-CREATE VIEW pg_stat_subscription AS
+CREATE VIEW pg_stat_sub AS
     SELECT
             su.oid AS subid,
             su.subname,
             st.pid,
             st.relid,
-            st.received_lsn,
+            st.received_lsn received_location,
             st.last_msg_send_time,
             st.last_msg_receipt_time,
-            st.latest_end_lsn,
+            st.latest_end_lsn latest_end_location,
             st.latest_end_time
-    FROM pg_subscription su
-            LEFT JOIN pg_stat_get_subscription(NULL) st
+    FROM pg_sub su
+            LEFT JOIN pg_stat_get_sub(NULL) st
                       ON (st.subid = su.oid);
 
 CREATE VIEW pg_stat_ssl AS
@@ -1090,9 +1090,9 @@ CREATE VIEW pg_replication_origin_status AS
 REVOKE ALL ON pg_replication_origin_status FROM public;
 
 -- All columns of pg_subscription except subconninfo are readable.
-REVOKE ALL ON pg_subscription FROM public;
-GRANT SELECT (subdbid, subname, subowner, subenabled, subslotname, subpublications)
-    ON pg_subscription TO public;
+REVOKE ALL ON pg_sub FROM public;
+GRANT SELECT (subdbid, subname, subowner, subactive, subslotname, subpublications)
+    ON pg_sub TO public;
 
 
 --
@@ -1142,7 +1142,7 @@ FROM pg_catalog.ts_parse(
     ) AS tt
 WHERE tt.tokid = parse.tokid
 $$
-LANGUAGE SQL STRICT STABLE PARALLEL SAFE;
+LANGUAGE PGSQL STRICT STABLE PARALLEL SAFE;
 
 COMMENT ON FUNCTION ts_debug(regconfig,text) IS
     'debug function for text search configuration';
@@ -1158,7 +1158,7 @@ RETURNS SETOF record AS
 $$
     SELECT * FROM pg_catalog.ts_debug( pg_catalog.get_current_ts_config(), $1);
 $$
-LANGUAGE SQL STRICT STABLE PARALLEL SAFE;
+LANGUAGE PGSQL STRICT STABLE PARALLEL SAFE;
 
 COMMENT ON FUNCTION ts_debug(text) IS
     'debug function for current text search configuration';

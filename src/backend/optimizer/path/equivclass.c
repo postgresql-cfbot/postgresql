@@ -1269,6 +1269,108 @@ generate_join_implied_equalities_for_ecs(PlannerInfo *root,
 }
 
 /*
+ * generate_join_implied_equalities_for_all
+ *	  Create any EC-derived joinclauses of form 'outer_em = inner_em'.
+ *
+ * This is used when building partition info for joinrel.
+ */
+List *
+generate_join_implied_equalities_for_all(PlannerInfo *root,
+										 Relids join_relids,
+										 Relids outer_relids,
+										 Relids inner_relids)
+{
+	List	   *result = NIL;
+	Bitmapset * matching_ecs;
+	int			i;
+
+	/*
+	 * Get all eclasses in common between inner_relids and outer_relids
+	 */
+	matching_ecs = get_common_eclass_indexes(root, inner_relids,
+											 outer_relids);
+
+	i = -1;
+	while ((i = bms_next_member(matching_ecs, i)) >= 0)
+	{
+		EquivalenceClass *ec = (EquivalenceClass *) list_nth(root->eq_classes, i);
+		List	   *outer_members = NIL;
+		List	   *inner_members = NIL;
+		ListCell   *lc1;
+
+		/* Do not consider this EC if it's ec_broken */
+		if (ec->ec_broken)
+			continue;
+
+		/* Single-member ECs won't generate any deductions */
+		if (list_length(ec->ec_members) <= 1)
+			continue;
+
+		/*
+		 * First, scan the EC to identify member values that are computable at the
+		 * outer rel or at the inner rel.
+		 */
+		foreach(lc1, ec->ec_members)
+		{
+			EquivalenceMember *cur_em = (EquivalenceMember *) lfirst(lc1);
+
+			/*
+			 * We don't need to check explicitly for child EC members.  This test
+			 * against join_relids will cause them to be ignored except when
+			 * considering a child inner rel, which is what we want.
+			 */
+			if (!bms_is_subset(cur_em->em_relids, join_relids))
+				continue;			/* not computable yet, or wrong child */
+
+			if (bms_is_subset(cur_em->em_relids, outer_relids))
+				outer_members = lappend(outer_members, cur_em);
+			else if (bms_is_subset(cur_em->em_relids, inner_relids))
+				inner_members = lappend(inner_members, cur_em);
+		}
+
+		/*
+		 * First, select the joinclause if needed.  We can equate any one outer
+		 * member to any one inner member, since we know this EC is not
+		 * ec_broken.
+		 */
+		if (outer_members && inner_members)
+		{
+			RestrictInfo *rinfo;
+
+			foreach(lc1, outer_members)
+			{
+				EquivalenceMember *outer_em = (EquivalenceMember *) lfirst(lc1);
+				ListCell   *lc2;
+
+				foreach(lc2, inner_members)
+				{
+					EquivalenceMember *inner_em = (EquivalenceMember *) lfirst(lc2);
+					Oid			eq_op;
+
+					eq_op = select_equality_operator(ec,
+													 outer_em->em_datatype,
+													 inner_em->em_datatype);
+					if (!OidIsValid(eq_op))
+						continue;
+
+					/*
+					 * Create clause, setting parent_ec to mark it as redundant with other
+					 * joinclauses
+					 */
+					rinfo = create_join_clause(root, ec, eq_op,
+											   outer_em, inner_em,
+											   ec);
+
+					result = lappend(result, rinfo);
+				}
+			}
+		}
+	}
+
+	return result;
+}
+
+/*
  * generate_join_implied_equalities for a still-valid EC
  */
 static List *

@@ -1485,7 +1485,6 @@ AllocSetCheck(MemoryContext context)
 
 			chsize = chunk->size;	/* aligned chunk size */
 			dsize = chunk->requested_size;	/* real data */
-
 			/*
 			 * Check chunk size
 			 */

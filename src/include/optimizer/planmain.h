@@ -16,6 +16,7 @@
 
 #include "nodes/pathnodes.h"
 #include "nodes/plannodes.h"
+#include "optimizer/paths.h"
 
 /* GUC parameters */
 #define DEFAULT_CURSOR_TUPLE_FRACTION 0.1
@@ -96,13 +97,15 @@ extern void match_foreign_keys_to_quals(PlannerInfo *root);
 /*
  * prototypes for plan/analyzejoins.c
  */
-extern List *remove_useless_joins(PlannerInfo *root, List *joinlist);
+extern List *remove_useless_left_joins(PlannerInfo *root, List *joinlist);
 extern void reduce_unique_semijoins(PlannerInfo *root);
 extern bool query_supports_distinctness(Query *query);
 extern bool query_is_distinct_for(Query *query, List *colnos, List *opids);
 extern bool innerrel_is_unique(PlannerInfo *root,
 							   Relids joinrelids, Relids outerrelids, RelOptInfo *innerrel,
-							   JoinType jointype, List *restrictlist, bool force_cache);
+							   JoinType jointype, List *restrictlist, bool force_cache,
+							   UniqueRelInfo **unique_info);
+extern void remove_useless_self_joins(PlannerInfo *root, List **jointree);
 
 /*
  * prototypes for plan/setrefs.c

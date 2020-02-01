@@ -10742,6 +10742,14 @@
   proallargtypes => '{oid,text,int8,timestamptz}', proargmodes => '{i,o,o,o}',
   proargnames => '{tablespace,name,size,modification}',
   prosrc => 'pg_ls_tmpdir_1arg' },
+{ oid => '9147', descr => 'check data integrity for one or all relations',
+  proname => 'pg_check_relation', proisstrict => 'f', procost => '10000',
+  prorows => '20', proretset => 't', proparallel => 'r',
+  provolatile => 'v', prorettype => 'record', proargtypes => 'regclass text',
+  proallargtypes => '{regclass,text,oid,int4,int8,int4,int4}',
+  proargmodes => '{i,i,o,o,o,o,o}',
+  proargnames => '{relation,fork,relid,forknum,failed_blocknum,expected_checksum,found_checksum}',
+  prosrc => 'pg_check_relation' },
 
 # hash partitioning constraint function
 { oid => '5028', descr => 'hash partition CHECK constraint',

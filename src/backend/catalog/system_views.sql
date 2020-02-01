@@ -1369,6 +1369,13 @@ LANGUAGE INTERNAL
 STRICT STABLE PARALLEL SAFE
 AS 'jsonb_path_query_first_tz';
 
+CREATE OR REPLACE FUNCTION pg_check_relation(
+  IN relation regclass DEFAULT NULL::regclass, IN fork text DEFAULT NULL::text,
+  OUT relid oid, OUT forknum integer, OUT failed_blocknum bigint,
+  OUT expected_checksum integer, OUT found_checksum integer)
+  RETURNS SETOF record VOLATILE LANGUAGE internal AS 'pg_check_relation'
+  PARALLEL RESTRICTED;
+
 --
 -- The default permissions for functions mean that anyone can execute them.
 -- A number of functions shouldn't be executable by just anyone, but rather

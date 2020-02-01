@@ -998,7 +998,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
 
       <row>
        <entry> <literal>default_seed</literal> </entry>
-       <entry>seed used in hash functions by default</entry>
+       <entry>seed used in hash and pseudo-random permutation functions by default</entry>
       </row>
 
       <row>
@@ -1495,6 +1495,13 @@ SELECT 2 AS two, 3 AS three \gset p_
        <entry><literal>1024.0</literal></entry>
       </row>
       <row>
+       <entry><literal><function>pr_perm(<replaceable>i</replaceable>, <replaceable>size</replaceable> [, <replaceable>seed</replaceable> ] )</function></literal></entry>
+       <entry>integer</entry>
+       <entry>pseudo-random permutation in [0,size)</entry>
+       <entry><literal>pr_perm(0, 4)</literal></entry>
+       <entry><literal>0</literal>, <literal>1</literal>, <literal>2</literal> or <literal>3</literal></entry>
+      </row>
+      <row>
        <entry><literal><function>random(<replaceable>lb</replaceable>, <replaceable>ub</replaceable>)</function></literal></entry>
        <entry>integer</entry>
        <entry>uniformly-distributed random integer in <literal>[lb, ub]</literal></entry>
@@ -1544,6 +1551,20 @@ SELECT 2 AS two, 3 AS three \gset p_
     functions require an additional double parameter which determines the precise
     shape of the distribution.
    </para>
+
+   <note>
+    <para>
+      When designing a benchmark which selects rows non-uniformly, be aware
+      that using <application>pgbench</application> non-uniform random functions
+      directly leads to unduly correlations: rows with close ids come out with
+      similar probability, skewing performance measures because they also reside
+      in close pages.
+    </para>
+    <para>
+      You must use <function>pr_perm</function> to shuffle the selected ids, or
+      some other additional step with similar effect, to avoid these skewing impacts.
+    </para>
+   </note>
 
    <itemizedlist>
     <listitem>
@@ -1639,24 +1660,54 @@ f(x) = PHI(2.0 * parameter * (x - mu) / (max - min + 1)) /
     <literal>hash_fnv1a</literal> accept an input value and an optional seed parameter.
     In case the seed isn't provided the value of <literal>:default_seed</literal>
     is used, which is initialized randomly unless set by the command-line
-    <literal>-D</literal> option. Hash functions can be used to scatter the
-    distribution of random functions such as <literal>random_zipfian</literal> or
-    <literal>random_exponential</literal>. For instance, the following pgbench
-    script simulates possible real world workload typical for social media and
+    <literal>-D</literal> option.
+  </para>
+
+  <para>
+    Function <literal>pr_perm</literal> implements a pseudo-random permutation
+    on an arbitrary size.
+    It allows to shuffle output of non uniform random functions so that 
+    values drawn more often are not trivially correlated.
+    It permutes integers in [0, size) using a seed by applying rounds of
+    simple invertible functions, similarly to an encryption function,
+    although beware that it is not at all cryptographically secure.
+    Compared to <literal>hash</literal> functions discussed above, the function
+    ensures that a perfect permutation is applied: there are neither collisions
+    nor holes in the output values.
+    Values outside the interval are interpreted modulo the size.
+    The function raises an error if size is not positive.
+    If no seed is provided, <literal>:default_seed</literal> is used.
+
+    For instance, the following <application>pgbench</application> script
+    simulates possible real world workload typical for social media and
     blogging platforms where few accounts generate excessive load:
 
 <programlisting>
-\set r random_zipfian(0, 100000000, 1.07)
-\set k abs(hash(:r)) % 1000000
+\set size 1000000
+\set r random_zipfian(1, :size, 1.07)
+\set k 1 + pr_perm(:r, :size)
 </programlisting>
 
     In some cases several distinct distributions are needed which don't correlate
     with each other and this is when implicit seed parameter comes in handy:
 
 <programlisting>
-\set k1 abs(hash(:r, :default_seed + 123)) % 1000000
-\set k2 abs(hash(:r, :default_seed + 321)) % 1000000
+\set k1 1 + pr_perm(:r, :size, :default_seed + 123)
+\set k2 1 + pr_perm(:r, :size, :default_seed + 321)
 </programlisting>
+
+    An similar behavior can also be approximated with
+    <function>hash</function>:
+
+<programlisting>
+\set size 1000000
+\set r random_zipfian(1, 100 * :size, 1.07)
+\set k 1 + abs(hash(:r)) % :size
+</programlisting>
+
+    As this hash-modulo version generates collisions, some
+    <literal>id</literal> would not be reachable and others would come more often
+    than the target distribution.
   </para>
 
   <para>

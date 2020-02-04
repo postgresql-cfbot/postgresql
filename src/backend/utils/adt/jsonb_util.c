@@ -1915,6 +1915,9 @@ uniqueifyJsonbObject(JsonbValue *object)
 				if (ptr != res)
 					memcpy(res, ptr, sizeof(JsonbPair));
 			}
+			else
+				elog(WARNING, "dropping duplicate jsonb key %s",
+					 ptr->key.val.string.val);
 			ptr++;
 		}
 

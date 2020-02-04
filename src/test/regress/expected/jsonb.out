@@ -3488,6 +3488,9 @@ SELECT '{"ff":{"a":12,"b":16},"qq":123}'::jsonb;
 (1 row)
 
 SELECT '{"aa":["a","aaa"],"qq":{"a":12,"b":16,"c":["c1","c2"],"d":{"d1":"d1","d2":"d2","d1":"d3"}}}'::jsonb;
+WARNING:  dropping duplicate jsonb key d1
+LINE 1: SELECT '{"aa":["a","aaa"],"qq":{"a":12,"b":16,"c":["c1","c2"...
+               ^
                                               jsonb                                               
 --------------------------------------------------------------------------------------------------
  {"aa": ["a", "aaa"], "qq": {"a": 12, "b": 16, "c": ["c1", "c2"], "d": {"d1": "d3", "d2": "d2"}}}
@@ -4021,6 +4024,8 @@ select jsonb_concat('{"d": "test", "a": [1, 2]}', '{"g": "test2", "c": {"c1":1, 
 (1 row)
 
 select '{"aa":1 , "b":2, "cq":3}'::jsonb || '{"cq":"l", "b":"g", "fg":false}';
+WARNING:  dropping duplicate jsonb key baacq
+WARNING:  dropping duplicate jsonb key cq
                   ?column?                   
 ---------------------------------------------
  {"b": "g", "aa": 1, "cq": "l", "fg": false}
@@ -4033,6 +4038,7 @@ select '{"aa":1 , "b":2, "cq":3}'::jsonb || '{"aq":"l"}';
 (1 row)
 
 select '{"aa":1 , "b":2, "cq":3}'::jsonb || '{"aa":"l"}';
+WARNING:  dropping duplicate jsonb key aacq
            ?column?           
 ------------------------------
  {"b": 2, "aa": "l", "cq": 3}

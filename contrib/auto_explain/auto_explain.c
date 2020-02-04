@@ -18,6 +18,7 @@
 #include "commands/explain.h"
 #include "executor/instrument.h"
 #include "jit/jit.h"
+#include "utils/builtins.h"
 #include "utils/guc.h"
 
 PG_MODULE_MAGIC;
@@ -397,6 +398,10 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 			{
 				es->str->data[0] = '{';
 				es->str->data[es->str->len - 1] = '}';
+
+				/* Verify that it's valid JSON by feeding to jsonb_in */
+				(void) DirectFunctionCall1(jsonb_in,
+										   CStringGetDatum(es->str->data));
 			}
 
 			/*

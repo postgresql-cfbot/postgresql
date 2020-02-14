@@ -1486,6 +1486,9 @@ inheritance_planner(PlannerInfo *root)
 		RelOptInfo *sub_final_rel;
 		Path	   *subpath;
 
+		ListCell *listCell;
+		int rti;
+
 		/*
 		 * expand_inherited_rtentry() always processes a parent before any of
 		 * that parent's children, so the parent query for this relation
@@ -1690,6 +1693,15 @@ inheritance_planner(PlannerInfo *root)
 
 		/* Build list of modified subroots, too */
 		subroots = lappend(subroots, subroot);
+		rti = 0;
+		foreach(listCell, subroot->parse->rtable)
+		{
+			RangeTblEntry *subroot_rte = lfirst(listCell);
+			RangeTblEntry *finalroot_rte = list_nth(final_rtable, rti);
+			if (finalroot_rte != subroot_rte)
+				finalroot_rte->scanCols = bms_union(finalroot_rte->scanCols, subroot_rte->scanCols);
+			rti++;
+		}
 
 		/* Build list of target-relation RT indexes */
 		resultRelations = lappend_int(resultRelations, appinfo->child_relid);

@@ -1641,6 +1641,7 @@ ApplyRetrieveRule(Query *parsetree,
 			rte->selectedCols = NULL;
 			rte->insertedCols = NULL;
 			rte->updatedCols = NULL;
+			rte->scanCols = NULL;
 
 			/*
 			 * For the most part, Vars referencing the view should remain as
@@ -1749,6 +1750,7 @@ ApplyRetrieveRule(Query *parsetree,
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
 	rte->extraUpdatedCols = NULL;
+	rte->scanCols = NULL;
 
 	return parsetree;
 }

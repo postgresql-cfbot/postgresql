@@ -8,24 +8,19 @@
 #include <ctype.h>
 
 #include "crc32.h"
+#include "libpq/pqformat.h"
 #include "ltree.h"
+#include "utils/builtins.h"
 #include "utils/memutils.h"
-
-PG_FUNCTION_INFO_V1(ltree_in);
-PG_FUNCTION_INFO_V1(ltree_out);
-PG_FUNCTION_INFO_V1(lquery_in);
-PG_FUNCTION_INFO_V1(lquery_out);
-
 
 #define UNCHAR ereport(ERROR, \
 					   (errcode(ERRCODE_SYNTAX_ERROR), \
 						errmsg("syntax error at position %d", \
 						pos)));
 
-
 typedef struct
 {
-	char	   *start;
+	const char *start;
 	int			len;			/* length in bytes */
 	int			flag;
 	int			wlen;			/* length in characters */
@@ -34,11 +29,14 @@ typedef struct
 #define LTPRS_WAITNAME	0
 #define LTPRS_WAITDELIM 1
 
-Datum
-ltree_in(PG_FUNCTION_ARGS)
+/*
+ * expects a null terminated string
+ * returns an ltree
+ */
+static ltree *
+parse_ltree(const char *buf)
 {
-	char	   *buf = (char *) PG_GETARG_POINTER(0);
-	char	   *ptr;
+	const char *ptr;
 	nodeitem   *list,
 			   *lptr;
 	int			num = 0,
@@ -143,13 +141,16 @@ ltree_in(PG_FUNCTION_ARGS)
 	}
 
 	pfree(list);
-	PG_RETURN_POINTER(result);
+	return result;
 }
 
-Datum
-ltree_out(PG_FUNCTION_ARGS)
+/*
+ * expects an ltree
+ * returns a null terminated string
+ */
+static char *
+deparse_ltree(const ltree *in)
 {
-	ltree	   *in = PG_GETARG_LTREE_P(0);
 	char	   *buf,
 			   *ptr;
 	int			i;
@@ -170,9 +171,83 @@ ltree_out(PG_FUNCTION_ARGS)
 	}
 
 	*ptr = '\0';
+	return buf;
+}
+
+PG_FUNCTION_INFO_V1(ltree_in);
+Datum
+ltree_in(PG_FUNCTION_ARGS)
+{
+	char	   *buf = (char *) PG_GETARG_POINTER(0);
+	ltree	   *result = parse_ltree(buf);
+
+	PG_RETURN_POINTER(result);
+}
+
+PG_FUNCTION_INFO_V1(ltree_out);
+Datum
+ltree_out(PG_FUNCTION_ARGS)
+{
+	ltree	   *in = PG_GETARG_LTREE_P(0);
+	char	   *buf = deparse_ltree(in);
+
 	PG_FREE_IF_COPY(in, 0);
 
 	PG_RETURN_POINTER(buf);
+}
+
+/*
+ * ltree type send function
+ *
+ * The type is sent as text in binary mode, so this is almost the same
+ * as the input function, but it's prefixed with a version number so we
+ * can change the binary format sent in future if necessary. For now,
+ * only version 1 is supported.
+ */
+PG_FUNCTION_INFO_V1(ltree_send);
+Datum
+ltree_send(PG_FUNCTION_ARGS)
+{
+	ltree	   *in = PG_GETARG_LTREE_P(0);
+	StringInfoData buf;
+	int			version = 1;
+	char	   *res = deparse_ltree(in);
+
+	pq_begintypsend(&buf);
+	pq_sendint8(&buf, version);
+	pq_sendtext(&buf, res, pg_mbstrlen(res));
+	pfree(res);
+
+	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+}
+
+/*
+ * ltree type recv function
+ *
+ * The type is sent as text in binary mode, so this is almost the same
+ * as the input function, but it's prefixed with a version number so we
+ * can change the binary format sent in future if necessary. For now,
+ * only version 1 is supported.
+ */
+PG_FUNCTION_INFO_V1(ltree_recv);
+Datum
+ltree_recv(PG_FUNCTION_ARGS)
+{
+	StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
+	int			version = pq_getmsgint(buf, 1);
+	char	   *str;
+	int			nbytes;
+	ltree	   *res;
+
+	if (version == 1)
+		str = pq_getmsgtext(buf, buf->len - buf->cursor, &nbytes);
+	else
+		elog(ERROR, "unsupported ltree version number %d", version);
+
+	res = parse_ltree(str);
+	pfree(str);
+
+	PG_RETURN_POINTER(res);
 }
 
 #define LQPRS_WAITLEVEL 0
@@ -190,11 +265,14 @@ ltree_out(PG_FUNCTION_ARGS)
 #define ITEMSIZE	MAXALIGN(LQL_HDRSIZE+sizeof(nodeitem*))
 #define NEXTLEV(x) ( (lquery_level*)( ((char*)(x)) + ITEMSIZE) )
 
-Datum
-lquery_in(PG_FUNCTION_ARGS)
+/*
+ * expects a null terminated string
+ * returns an lquery
+ */
+static lquery *
+parse_lquery(const char *buf)
 {
-	char	   *buf = (char *) PG_GETARG_POINTER(0);
-	char	   *ptr;
+	const char *ptr;
 	int			num = 0,
 				totallen = 0,
 				numOR = 0;
@@ -515,13 +593,16 @@ lquery_in(PG_FUNCTION_ARGS)
 	}
 
 	pfree(tmpql);
-	PG_RETURN_POINTER(result);
+	return result;
 }
 
-Datum
-lquery_out(PG_FUNCTION_ARGS)
+/*
+ * expects an lquery
+ * returns a null terminated string
+ */
+static char *
+deparse_lquery(const lquery *in)
 {
-	lquery	   *in = PG_GETARG_LQUERY_P(0);
 	char	   *buf,
 			   *ptr;
 	int			i,
@@ -614,7 +695,81 @@ lquery_out(PG_FUNCTION_ARGS)
 	}
 
 	*ptr = '\0';
+	return buf;
+}
+
+PG_FUNCTION_INFO_V1(lquery_in);
+Datum
+lquery_in(PG_FUNCTION_ARGS)
+{
+	char	   *buf = (char *) PG_GETARG_POINTER(0);
+	lquery	   *result = parse_lquery(buf);
+
+	PG_RETURN_POINTER(result);
+}
+
+PG_FUNCTION_INFO_V1(lquery_out);
+Datum
+lquery_out(PG_FUNCTION_ARGS)
+{
+	lquery	   *in = PG_GETARG_LQUERY_P(0);
+	char	   *buf = deparse_lquery(in);
+
 	PG_FREE_IF_COPY(in, 0);
 
 	PG_RETURN_POINTER(buf);
+}
+
+/*
+ * lquery type send function
+ *
+ * The type is sent as text in binary mode, so this is almost the same
+ * as the input function, but it's prefixed with a version number so we
+ * can change the binary format sent in future if necessary. For now,
+ * only version 1 is supported.
+ */
+PG_FUNCTION_INFO_V1(lquery_send);
+Datum
+lquery_send(PG_FUNCTION_ARGS)
+{
+	lquery	   *in = PG_GETARG_LQUERY_P(0);
+	StringInfoData buf;
+	int			version = 1;
+	char	   *res = deparse_lquery(in);
+
+	pq_begintypsend(&buf);
+	pq_sendint8(&buf, version);
+	pq_sendtext(&buf, res, pg_mbstrlen(res));
+	pfree(res);
+
+	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+}
+
+/*
+ * lquery type recv function
+ *
+ * The type is sent as text in binary mode, so this is almost the same
+ * as the input function, but it's prefixed with a version number so we
+ * can change the binary format sent in future if necessary. For now,
+ * only version 1 is supported.
+ */
+PG_FUNCTION_INFO_V1(lquery_recv);
+Datum
+lquery_recv(PG_FUNCTION_ARGS)
+{
+	StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
+	int			version = pq_getmsgint(buf, 1);
+	char	   *str;
+	int			nbytes;
+	lquery	   *res;
+
+	if (version == 1)
+		str = pq_getmsgtext(buf, buf->len - buf->cursor, &nbytes);
+	else
+		elog(ERROR, "unsupported lquery version number %d", version);
+
+	res = parse_lquery(str);
+	pfree(str);
+
+	PG_RETURN_POINTER(res);
 }

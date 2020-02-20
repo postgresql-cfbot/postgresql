@@ -111,12 +111,11 @@
   the command, and vice versa.
   In the <productname>Microsoft Windows SDK</productname>, start the
   <application>CMD shell</application> listed under the SDK on the Start Menu.
-  In recent SDK versions you can change the targeted CPU architecture, build
-  type, and target OS by using the <command>setenv</command> command, e.g.
-  <command>setenv /x86 /release /xp</command> to target Windows XP or later
-  with a 32-bit release build. See <command>/?</command> for other options to
-  <command>setenv</command>.  All commands should be run from the
-  <filename>src\tools\msvc</filename> directory.
+  You can change certain build options, such as the targeted CPU
+  architecture, build type, and the selection of the SDK by using either
+  <command>VSVARS32.bat</command> or <command>VsDevCmd.bat</command> depending
+  on your <productname>Visual Studio</productname> release. All commands
+  should be run from the <filename>src\tools\msvc</filename> directory.
  </para>
 
  <para>

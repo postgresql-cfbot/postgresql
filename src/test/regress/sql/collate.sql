@@ -13,6 +13,8 @@
 CREATE SCHEMA collate_tests;
 SET search_path = collate_tests;
 
+CREATE COLLATION "C_sdrawckab" (locale = 'C', reverse = true);
+
 CREATE TABLE collate_test1 (
     a int,
     b text COLLATE "C" NOT NULL
@@ -42,6 +44,7 @@ INSERT INTO collate_test2 SELECT * FROM collate_test1;
 SELECT * FROM collate_test1 WHERE b COLLATE "C" >= 'abc';
 SELECT * FROM collate_test1 WHERE b >= 'abc' COLLATE "C";
 SELECT * FROM collate_test1 WHERE b COLLATE "C" >= 'abc' COLLATE "C";
+SELECT * FROM collate_test1 WHERE b COLLATE "C_sdrawckab" >= 'abc' COLLATE "C_sdrawckab";
 SELECT * FROM collate_test1 WHERE b COLLATE "C" >= 'bbc' COLLATE "POSIX"; -- fail
 
 CREATE DOMAIN testdomain_p AS text COLLATE "POSIX";

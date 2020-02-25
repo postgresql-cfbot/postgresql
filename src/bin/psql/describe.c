@@ -4525,6 +4525,17 @@ listCollations(const char *pattern, bool verbose, bool showSystem)
 						  gettext_noop("yes"),
 						  gettext_noop("Deterministic?"));
 
+	if (pset.sversion >= 130000)
+		appendPQExpBuffer(&buf,
+						  ",\n       CASE WHEN c.collisreverse THEN '%s' ELSE '%s' END AS \"%s\"",
+						  gettext_noop("yes"), gettext_noop("no"),
+						  gettext_noop("Reverse?"));
+	else
+		appendPQExpBuffer(&buf,
+						  ",\n       '%s' AS \"%s\"",
+						  gettext_noop("no"),
+						  gettext_noop("Reverse?"));
+
 	if (verbose)
 		appendPQExpBuffer(&buf,
 						  ",\n       pg_catalog.obj_description(c.oid, 'pg_collation') AS \"%s\"",

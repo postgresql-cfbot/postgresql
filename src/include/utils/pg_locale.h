@@ -83,6 +83,7 @@ struct pg_locale_struct
 {
 	char		provider;
 	bool		deterministic;
+	bool		reverse;
 	union
 	{
 #ifdef HAVE_LOCALE_T

@@ -1155,7 +1155,8 @@ lookup_collation_cache(Oid collation, bool set_flags)
 		collcollate = NameStr(collform->collcollate);
 		collctype = NameStr(collform->collctype);
 
-		cache_entry->collate_is_c = ((strcmp(collcollate, "C") == 0) ||
+		cache_entry->collate_is_c = !collform->collisreverse &&
+									((strcmp(collcollate, "C") == 0) ||
 									 (strcmp(collcollate, "POSIX") == 0));
 		cache_entry->ctype_is_c = ((strcmp(collctype, "C") == 0) ||
 								   (strcmp(collctype, "POSIX") == 0));
@@ -1357,6 +1358,7 @@ pg_newlocale_from_collation(Oid collid)
 		memset(&result, 0, sizeof(result));
 		result.provider = collform->collprovider;
 		result.deterministic = collform->collisdeterministic;
+		result.reverse = collform->collisreverse;
 
 		if (collform->collprovider == COLLPROVIDER_LIBC)
 		{

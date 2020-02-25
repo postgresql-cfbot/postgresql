@@ -47,6 +47,7 @@ CollationCreate(const char *collname, Oid collnamespace,
 				Oid collowner,
 				char collprovider,
 				bool collisdeterministic,
+				bool collisreverse,
 				int32 collencoding,
 				const char *collcollate, const char *collctype,
 				const char *collversion,
@@ -162,6 +163,7 @@ CollationCreate(const char *collname, Oid collnamespace,
 	values[Anum_pg_collation_collowner - 1] = ObjectIdGetDatum(collowner);
 	values[Anum_pg_collation_collprovider - 1] = CharGetDatum(collprovider);
 	values[Anum_pg_collation_collisdeterministic - 1] = BoolGetDatum(collisdeterministic);
+	values[Anum_pg_collation_collisreverse - 1] = BoolGetDatum(collisreverse);
 	values[Anum_pg_collation_collencoding - 1] = Int32GetDatum(collencoding);
 	namestrcpy(&name_collate, collcollate);
 	values[Anum_pg_collation_collcollate - 1] = NameGetDatum(&name_collate);

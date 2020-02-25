@@ -11,6 +11,7 @@
  */
 CREATE SCHEMA collate_tests;
 SET search_path = collate_tests;
+CREATE COLLATION "C_sdrawckab" (locale = 'C', reverse = true);
 CREATE TABLE collate_test1 (
     a int,
     b text COLLATE "C" NOT NULL
@@ -65,6 +66,14 @@ SELECT * FROM collate_test1 WHERE b COLLATE "C" >= 'abc' COLLATE "C";
  1 | abc
  3 | bbc
 (2 rows)
+
+SELECT * FROM collate_test1 WHERE b COLLATE "C_sdrawckab" >= 'abc' COLLATE "C_sdrawckab";
+ a |  b  
+---+-----
+ 1 | abc
+ 2 | Abc
+ 4 | ABD
+(3 rows)
 
 SELECT * FROM collate_test1 WHERE b COLLATE "C" >= 'bbc' COLLATE "POSIX"; -- fail
 ERROR:  collation mismatch between explicit collations "C" and "POSIX"
@@ -682,8 +691,9 @@ SELECT collation for ((SELECT b FROM collate_test1 LIMIT 1));
 -- must get rid of them.
 --
 DROP SCHEMA collate_tests CASCADE;
-NOTICE:  drop cascades to 17 other objects
-DETAIL:  drop cascades to table collate_test1
+NOTICE:  drop cascades to 18 other objects
+DETAIL:  drop cascades to collation "C_sdrawckab"
+drop cascades to table collate_test1
 drop cascades to table collate_test_like
 drop cascades to table collate_test2
 drop cascades to type testdomain_p

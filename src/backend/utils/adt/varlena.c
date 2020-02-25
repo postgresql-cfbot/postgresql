@@ -84,6 +84,7 @@ typedef struct
 	int			last_returned;	/* Last comparison result (cache) */
 	bool		cache_blob;		/* Does buf2 contain strxfrm() blob, etc? */
 	bool		collate_c;
+	bool		reverse;
 	Oid			typid;			/* Actual datatype (text/bpchar/bytea/name) */
 	hyperLogLogState abbr_card; /* Abbreviated key cardinality state */
 	hyperLogLogState full_card; /* Full key cardinality state */
@@ -1603,6 +1604,9 @@ varstr_cmp(const char *arg1, int len1, const char *arg2, int len2, Oid collid)
 			if (a2p != a2buf)
 				pfree(a2p);
 
+			if (collid != DEFAULT_COLLATION_OID && mylocale->reverse)
+				INVERT_COMPARE_RESULT(result);
+
 			return result;
 		}
 #endif							/* WIN32 */
@@ -1680,6 +1684,9 @@ varstr_cmp(const char *arg1, int len1, const char *arg2, int len2, Oid collid)
 		if (result == 0 &&
 			(!mylocale || mylocale->deterministic))
 			result = strcmp(a1p, a2p);
+
+		if (collid != DEFAULT_COLLATION_OID && mylocale->reverse)
+			INVERT_COMPARE_RESULT(result);
 
 		if (a1p != a1buf)
 			pfree(a1p);
@@ -2084,6 +2091,7 @@ varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid)
 		/* Initialize */
 		sss->last_returned = 0;
 		sss->locale = locale;
+		sss->reverse = (locale != 0) && locale->reverse;
 
 		/*
 		 * To avoid somehow confusing a strxfrm() blob and an original string,
@@ -2395,6 +2403,9 @@ varstrfastcmp_locale(char *a1p, int len1, char *a2p, int len2, SortSupport ssup)
 		(!sss->locale || sss->locale->deterministic))
 		result = strcmp(sss->buf1, sss->buf2);
 
+	if (sss->reverse)
+		INVERT_COMPARE_RESULT(result);
+
 	/* Cache result, perhaps saving an expensive strcoll() call next time */
 	sss->cache_blob = false;
 	sss->last_returned = result;
@@ -2656,6 +2667,13 @@ done:
 	 * the first byte of each abbreviated key, which is slower.
 	 */
 	res = DatumBigEndianToNative(res);
+
+	/*
+	 * Account for reverse-ordering locales by flipping the bits. Note that
+	 * Datum is an unsigned type (uintptr_t).
+	 */
+	if (sss->reverse)
+		res ^= ~(Datum)0;
 
 	/* Don't leak memory here */
 	if (PointerGetDatum(authoritative) != original)

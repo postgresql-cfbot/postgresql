@@ -60,11 +60,13 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 	DefElem    *lcctypeEl = NULL;
 	DefElem    *providerEl = NULL;
 	DefElem    *deterministicEl = NULL;
+	DefElem    *reverseEl = NULL;
 	DefElem    *versionEl = NULL;
 	char	   *collcollate = NULL;
 	char	   *collctype = NULL;
 	char	   *collproviderstr = NULL;
 	bool		collisdeterministic = true;
+	bool		collisreverse = false;
 	int			collencoding = 0;
 	char		collprovider = 0;
 	char	   *collversion = NULL;
@@ -95,6 +97,8 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 			defelp = &providerEl;
 		else if (strcmp(defel->defname, "deterministic") == 0)
 			defelp = &deterministicEl;
+		else if (strcmp(defel->defname, "reverse") == 0)
+			defelp = &reverseEl;
 		else if (strcmp(defel->defname, "version") == 0)
 			defelp = &versionEl;
 		else
@@ -130,6 +134,7 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 		collctype = pstrdup(NameStr(((Form_pg_collation) GETSTRUCT(tp))->collctype));
 		collprovider = ((Form_pg_collation) GETSTRUCT(tp))->collprovider;
 		collisdeterministic = ((Form_pg_collation) GETSTRUCT(tp))->collisdeterministic;
+		collisreverse = ((Form_pg_collation) GETSTRUCT(tp))->collisreverse;
 		collencoding = ((Form_pg_collation) GETSTRUCT(tp))->collencoding;
 
 		ReleaseSysCache(tp);
@@ -164,6 +169,9 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 
 	if (deterministicEl)
 		collisdeterministic = defGetBoolean(deterministicEl);
+
+	if (reverseEl)
+		collisreverse = defGetBoolean(reverseEl);
 
 	if (versionEl)
 		collversion = defGetString(versionEl);
@@ -222,6 +230,7 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 							 GetUserId(),
 							 collprovider,
 							 collisdeterministic,
+							 collisreverse,
 							 collencoding,
 							 collcollate,
 							 collctype,
@@ -605,7 +614,7 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 			 * about existing ones.
 			 */
 			collid = CollationCreate(localebuf, nspid, GetUserId(),
-									 COLLPROVIDER_LIBC, true, enc,
+									 COLLPROVIDER_LIBC, true, false, enc,
 									 localebuf, localebuf,
 									 get_collation_actual_version(COLLPROVIDER_LIBC, localebuf),
 									 true, true);
@@ -666,7 +675,7 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 			int			enc = aliases[i].enc;
 
 			collid = CollationCreate(alias, nspid, GetUserId(),
-									 COLLPROVIDER_LIBC, true, enc,
+									 COLLPROVIDER_LIBC, true, false, enc,
 									 locale, locale,
 									 get_collation_actual_version(COLLPROVIDER_LIBC, locale),
 									 true, true);
@@ -728,7 +737,7 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 
 			collid = CollationCreate(psprintf("%s-x-icu", langtag),
 									 nspid, GetUserId(),
-									 COLLPROVIDER_ICU, true, -1,
+									 COLLPROVIDER_ICU, true, false, -1,
 									 collcollate, collcollate,
 									 get_collation_actual_version(COLLPROVIDER_ICU, collcollate),
 									 true, true);

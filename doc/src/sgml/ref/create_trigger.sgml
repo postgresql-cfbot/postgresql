@@ -377,10 +377,6 @@ UPDATE OF <replaceable>column_name1</replaceable> [, <replaceable>column_name2</
       and <literal>DELETE</literal> triggers cannot refer to <literal>NEW</literal>.
      </para>
 
-     <para><literal>INSTEAD OF</literal> triggers do not support <literal>WHEN</literal>
-      conditions.
-     </para>
-
      <para>
       Currently, <literal>WHEN</literal> expressions cannot contain
       subqueries.

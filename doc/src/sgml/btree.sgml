@@ -207,7 +207,7 @@
 
  <para>
   As shown in <xref linkend="xindex-btree-support-table"/>, btree defines
-  one required and two optional support functions.  The three
+  one required and three optional support functions.  The four
   user-defined methods are:
  </para>
  <variablelist>
@@ -456,6 +456,89 @@ returns bool
     </para>
    </listitem>
   </varlistentry>
+  <varlistentry>
+   <term><function>equalimage</function></term>
+   <listitem>
+    <para>
+     Optionally, a btree operator family may provide
+     <function>equalimage</function> (<quote>equality is image
+      equality</quote>) support functions, registered under support
+     function number 4.  These functions allow the implementation to
+     determine when it is safe to apply the btree deduplication
+     optimization.  Currently, <function>equalimage</function>
+     functions are only called when building or rebuilding an index.
+    </para>
+    <para>
+     An <function>equalimage</function> function must have the
+     signature
+<synopsis>
+equalimage(<replaceable>opcintype</replaceable> <type>oid</type>) returns bool
+</synopsis>
+     The return value is static information about an operator class
+     and collation.  Returning <literal>true</literal> indicates that
+     any two non-null values that could possibly be used as arguments
+     to the <function>order</function>/comparison function must be
+     equivalent in every way if and only if the return value is
+     <literal>0</literal>.  This condition implies that deduplication
+     is safe, provided that there is no other factor that makes
+     deduplication unsafe.  Not registering an
+     <function>equalimage</function> function or returning
+     <literal>false</literal> indicates that deduplication is unsafe.
+     Every column in an index must have an
+     <function>equalimage</function> function that returns
+     <literal>true</literal> before deduplication can be used.
+    </para>
+    <para>
+     The <replaceable>opcintype</replaceable> argument is the
+     <literal><structname>pg_type</structname>.oid</literal> of the
+     data type that is indexed.  This is a convenience that allows
+     reuse of the same underlying <function>equalimage</function>
+     function across operator classes.  If the indexed values are of a
+     collatable data type, the appropriate collation OID will be
+     passed to the <function>equalimage</function> function, using the
+     standard <function>PG_GET_COLLATION()</function> mechanism.
+    </para>
+    <para>
+     The convention followed by all operator classes with an
+     <function>equalimage</function> function that are included with
+     the core distribution is to register one of two generic
+     functions, rather than registering their own custom function.
+     Most register <function>btequalimage()</function>, which
+     unconditionally indicates that deduplication is safe.  Operator
+     classes for collatable data types such as <type>text</type>
+     register the generic <function>btvarstrequalimage()</function>
+     function to indicate that deduplication is safe with
+     deterministic collations.  Best practice for third-party
+     extensions is to register their own custom function to retain
+     control.
+    </para>
+    <para>
+     <quote>Image</quote> equality is <emphasis>almost</emphasis> the
+     same condition as simple bitwise equality.  There is one subtle
+     difference.  When indexing a varlena data type, the on-disk
+     representation of two image equal datums may not be bitwise equal
+     due to inconsistent application of <acronym>TOAST</acronym>
+     compression on input.  Formally, when an operator class's
+     <function>equalimage</function> function returns
+     <literal>true</literal>, it is safe to assume that the
+     <literal>datum_image_eq()</literal> C function will always agree
+     with the operator class's <function>order</function> function
+     (provided that the same collation OID is passed to both the
+     <function>equalimage</function> and <function>order</function>
+     functions).
+    </para>
+    <para>
+     It is not possible for the core system to deduce anything about
+     an operator class within a multiple-data-type family based only
+     on the fact that some other operator class in the same family has
+     an <function>equalimage</function> function.  It is not sensible
+     to provide a cross-type <function>equalimage</function> function,
+     and attempting to do so will result in an error (that is,
+     <function>equalimage</function> functions cannot be
+     <quote>loose</quote> within an operator family).
+    </para>
+   </listitem>
+  </varlistentry>
  </variablelist>
 
 </sect1>
@@ -463,11 +546,226 @@ returns bool
 <sect1 id="btree-implementation">
  <title>Implementation</title>
 
+ <para>
+  This section covers B-Tree index implementation details that may be
+  of use to advanced users.  See
+  <filename>src/backend/access/nbtree/README</filename> in the source
+  distribution for a much more detailed, internals-focused description
+  of the B-Tree implementation.
+ </para>
+ <sect2 id="btree-structure">
+  <title>Structure</title>
   <para>
-   An introduction to the btree index implementation can be found in
-   <filename>src/backend/access/nbtree/README</filename>.
+   <productname>PostgreSQL</productname> B-Tree indexes are
+   multi-level tree structures, where each level of the tree can be
+   used as a doubly-linked list of pages.  A single metapage is stored
+   in a fixed position at the start of the first segment file of the
+   index.  All other pages are either leaf pages or internal pages.
+   Leaf pages are the pages on the lowest level of the tree.  All
+   other levels consist of internal pages.  Each leaf page contains
+   tuples that point to table entries using a heap item pointer.  Each
+   internal page contains tuples that point to the next level down in
+   the tree.  Typically, over 99% of all pages are leaf pages.  Both
+   internal pages and leaf pages use the standard page format
+   described in <xref linkend="storage-page-layout"/>.
+  </para>
+  <para>
+   New pages are added to a B-Tree index when an existing page becomes
+   full.  A <firstterm>page split</firstterm> is performed, which
+   makes room for items that belong on the overflowing page by moving
+   a portion of the items to a new page.  Splits in leaf pages insert
+   a new tuple into the original page's parent page, which may cause
+   the parent page to split in turn.  Page splits <quote>cascade
+    upwards</quote> in a recursive fashion.  When the root page cannot
+   fit a new item, a <firstterm>root page split</firstterm> is
+   performed.  This adds a new level to the tree structure.
+  </para>
+ </sect2>
+
+ <sect2 id="btree-deduplication">
+  <title>Deduplication</title>
+  <para>
+   A duplicate is a tuple where <emphasis>all</emphasis> indexed key
+   columns have values that match corresponding column values from at
+   least one other tuple in the same index.  In practice, duplicate
+   tuples are quite common.  B-Tree has an optimization that stores
+   duplicates using a space efficient representation: deduplication.
+   Deduplication periodically replaces each contiguous group of
+   duplicate tuples with a single equivalent posting list tuple.  The
+   keys appear only once in this representation, followed by a sorted
+   array of heap item pointers.  This significantly reduces the
+   storage size of indexes where each value (or each distinct set of
+   column values) appears several times on average.  The latency of
+   queries can be reduced significantly.  Overall query throughput may
+   increase significantly.  The overhead of routine index vacuuming
+   may also be significantly reduced.
+  </para>
+  <note>
+   <para>
+    While NULL is generally not considered to be equal to any other
+    value, including NULL, NULL is nevertheless treated as just
+    another value from the domain of indexed values by the
+    B-Tree implementation.  B-Tree deduplication is just as effective
+    with <quote>duplicates</quote> that contain a NULL value.
+   </para>
+  </note>
+  <para>
+   The deduplication process occurs <quote>lazily</quote>, when a new
+   item is inserted that cannot fit on an existing leaf page.  This
+   prevents (or at least delays) leaf page splits.  Unlike GIN posting
+   list tuples, B-Tree posting list tuples do not need to expand every
+   time a new duplicate is inserted; they are merely an alternative
+   physical representation of the original logical contents found on
+   the page.  B-Tree indexes can store duplicates efficiently, without
+   adding overhead to read operators or to most individual write
+   operations.
+  </para>
+  <para>
+   Workloads that don't benefit from deduplication due to having no
+   duplicate values in indexes will incur a small, fixed performance
+   penalty with write heavy workloads (unless deduplication is
+   explicitly disabled).  The <literal>deduplicate_items</literal>
+   storage parameter can be used to disable deduplication within
+   individual indexes.  See <xref
+    linkend="sql-createindex-storage-parameters"/> from the
+   <command>CREATE INDEX</command> documentation for details.  There
+   is never any performance penalty with read-only workloads, since
+   reading from posting lists is at least as efficient as reading the
+   standard index tuple representation.
+  </para>
+  <para>
+   <productname>PostgreSQL</productname> uses <acronym>MVCC</acronym>
+   to maintain data consistency.  This impacts nearly every major
+   subsystem, including the B-Tree index access method.  B-Tree
+   indexes may contain multiple physical tuples for the same logical
+   table row, even in unique indexes.  Note that
+   <command>UPDATE</command> statements that avoid modifying most (but
+   not all) of the columns that are covered by indexes will generally
+   still need succesor index tuples that point to a new physical row
+   version <emphasis>for each and every index</emphasis>.  These
+   implementation-level duplicates are sometimes a significant source
+   of index bloat.
+  </para>
+  <para>
+   Deduplication tends to avoid page splits that are only needed due
+   to a short-term increase in <quote>duplicate</quote> tuples that
+   all point to different versions of the same logical table row.
+   <command>VACUUM</command> or autovacuum will eventually remove dead
+   versions of tuples from every index in any case, but
+   <command>VACUUM</command> usually cannot reverse page splits (in
+   general, a leaf page must be completely empty before
+   <command>VACUUM</command> can <quote>delete</quote> it).  In
+   effect, deduplication delays <quote>version driven</quote> page
+   splits, which may give VACUUM enough time to run and prevent the
+   splits entirely.  Unique indexes make use of deduplication for this
+   reason.  Also, even unique indexes can have a set of
+   <quote>duplicate</quote> rows that are all visible to a given
+   <acronym>MVCC</acronym> snapshot, provided at least one column has
+   a NULL value.  In general, the implementation considers tuples with
+   NULL values to be duplicates for the purposes of deduplication.
+  </para>
+  <para>
+   Unique indexes can only contain non-NULL duplicates because of
+   version churn.  The implementation applies a special heuristic when
+   considering whether to attempt deduplication in a unique index.
+   This heuristic virtually avoids the possibility of a performance
+   penalty in unique indexes.
+  </para>
+  <note>
+   <para>
+    Like all <productname>PostgreSQL</productname> index access
+    methods, B-Tree does not have direct access to visibility
+    information.  B-Tree deduplication does not distinguish duplicates
+    caused by <command>UPDATE</command> statements (that needed
+    successor versions) from duplicates that were created by
+    <command>INSERT</command> statements.
+   </para>
+  </note>
+  <para>
+   Typically, most B-Tree indexes can make use of deduplication
+   without any special configuration on the administrator's part.
+   Note, however, that deduplication cannot be used in all cases.
+   Deduplication is only deemed safe when <emphasis>all</emphasis>
+   indexed columns use an operator class that has an
+   <function>equalimage</function> function, and the function returns
+   <literal>true</literal>.  Deduplication safety is determined when
+   <command>CREATE INDEX</command> or <command>REINDEX</command> run.
+   Note that deduplication cannot be used in the following cases:
+  </para>
+  <para>
+   <itemizedlist>
+    <listitem>
+     <para>
+      <type>text</type>, <type>varchar</type>, <type>bpchar</type> and
+      <type>name</type> cannot use deduplication when the collation is
+      a <emphasis>nondeterministic</emphasis> collation.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <type>numeric</type> cannot use deduplication.  In general, a
+      pair of equal <type>numeric</type> datums may still have
+      different <quote>display scales</quote>.  These differences must
+      be preserved.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <type>jsonb</type> cannot use deduplication, since the
+      <type>jsonb</type> B-Tree operator class uses
+      <type>numeric</type> internally.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <type>float4</type>, <type>float8</type> and <type>money</type>
+      cannot use deduplication.  Each of these types has
+      representations for both <literal>-0</literal> and
+      <literal>0</literal> that are treated as equal.
+     </para>
+    </listitem>
+   </itemizedlist>
+  </para>
+  <para>
+   There are several implementation-level restriction that may be
+   lifted in a future version of
+   <productname>PostgreSQL</productname>:
+  </para>
+  <para>
+   <itemizedlist>
+    <listitem>
+     <para>
+      enum types cannot use deduplication.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Container types (such as composite types, arrays, or range
+      types) cannot use deduplication.
+     </para>
+    </listitem>
+   </itemizedlist>
+  </para>
+  <para>
+   There is a further implementation-level restriction that prevents
+   the use of deduplication, regardless of the types, operator
+   classes, or collations that are used by an index:
+  </para>
+  <para>
+   <itemizedlist>
+    <listitem>
+     <para>
+      <literal>INCLUDE</literal> indexes can never use deduplication.
+     </para>
+    </listitem>
+   </itemizedlist>
   </para>
 
+ </sect2>
 </sect1>
 
 </chapter>

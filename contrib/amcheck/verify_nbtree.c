@@ -167,6 +167,7 @@ static ItemId PageGetItemIdCareful(BtreeCheckState *state, BlockNumber block,
 								   Page page, OffsetNumber offset);
 static inline ItemPointer BTreeTupleGetHeapTIDCareful(BtreeCheckState *state,
 													  IndexTuple itup, bool nonpivot);
+static void bt_check_trueroot(BtreeCheckState *state);
 
 /*
  * bt_index_check(index regclass, heapallindexed boolean)
@@ -737,6 +738,10 @@ bt_check_level_from_leftmost(BtreeCheckState *state, BtreeLevel level)
 							(errcode(ERRCODE_INDEX_CORRUPTED),
 							 errmsg("block %u is not true root in index \"%s\"",
 									current, RelationGetRelationName(state->rel))));
+			}
+			else
+			{
+				bt_check_trueroot(state);
 			}
 
 			/*
@@ -2570,4 +2575,35 @@ BTreeTupleGetHeapTIDCareful(BtreeCheckState *state, IndexTuple itup,
 						targetblock, RelationGetRelationName(state->rel))));
 
 	return result;
+}
+
+static void bt_check_trueroot(BtreeCheckState *state)
+{
+	Buffer meta_buffer;
+	Page meta_page, root_page;
+	BTMetaPageData *metad;
+	BTPageOpaque root_opaque;
+	bool is_root;
+	meta_page = palloc(BLCKSZ);
+	meta_buffer = ReadBufferExtended(state->rel, MAIN_FORKNUM, BTREE_METAPAGE, RBM_NORMAL,
+									 state->checkstrategy);
+	LockBuffer(meta_buffer, BT_READ);
+	/*
+	 * Perform the same basic sanity checking that nbtree itself performs for
+	 * every page:
+	 */
+	_bt_checkpage(state->rel, meta_buffer);	
+	/* Only use copy of page in palloc()'d memory */
+	memcpy(meta_page, BufferGetPage(meta_buffer), BLCKSZ);
+	/* Get true root block from meta-page */
+	metad = BTPageGetMeta(meta_page);
+	root_page = palloc_btree_page(state, metad->btm_root);
+	root_opaque = (BTPageOpaque) PageGetSpecialPointer(root_page);
+	is_root = P_ISROOT(root_opaque);
+	UnlockReleaseBuffer(meta_buffer);
+	if (!is_root)
+		ereport(ERROR,
+				(errcode(ERRCODE_INDEX_CORRUPTED),
+				 errmsg("block %u is not true root in index \"%s\"",
+						metad->btm_root, RelationGetRelationName(state->rel))));
 }

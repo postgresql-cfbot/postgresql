@@ -2402,7 +2402,8 @@ StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 	 * Create the Check Constraint
 	 */
 	constrOid =
-		CreateConstraintEntry(ccname,	/* Constraint Name */
+		CreateConstraintEntry(InvalidOid,
+							  ccname,	/* Constraint Name */
 							  RelationGetNamespace(rel),	/* namespace */
 							  CONSTRAINT_CHECK, /* Constraint Type */
 							  false,	/* Is Deferrable */

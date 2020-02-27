@@ -3538,6 +3538,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
  * 'subpath' is the path representing the source of data
  * 'limitOffset' is the actual OFFSET expression, or NULL
  * 'limitCount' is the actual LIMIT expression, or NULL
+ * 'limitOption' is how the LIMIT is to be interpreted
  * 'offset_est' is the estimated value of the OFFSET expression
  * 'count_est' is the estimated value of the LIMIT expression
  */
@@ -3545,6 +3546,7 @@ LimitPath *
 create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 				  Path *subpath,
 				  Node *limitOffset, Node *limitCount,
+				  AttrNumber whenColno,
 				  int64 offset_est, int64 count_est)
 {
 	LimitPath  *pathnode = makeNode(LimitPath);
@@ -3566,6 +3568,7 @@ create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->subpath = subpath;
 	pathnode->limitOffset = limitOffset;
 	pathnode->limitCount = limitCount;
+	pathnode->whenColno = whenColno;
 
 	/*
 	 * Adjust the output rows count and costs according to the offset/limit.

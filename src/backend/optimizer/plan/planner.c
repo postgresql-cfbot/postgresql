@@ -190,6 +190,13 @@ static void create_one_window_path(PlannerInfo *root,
 								   PathTarget *output_target,
 								   WindowFuncLists *wflists,
 								   List *activeWindows);
+static Path *generate_windowed_limit(PlannerInfo *root,
+									 RelOptInfo *rel,
+									 Path *input_path,
+									 Node *limitOffset,
+									 Node *limitCount,
+									 LimitOption limitOption,
+									 int64 offset_est, int64 count_est);
 static RelOptInfo *create_distinct_paths(PlannerInfo *root,
 										 RelOptInfo *input_rel);
 static RelOptInfo *create_ordered_paths(PlannerInfo *root,
@@ -2317,10 +2324,19 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		 */
 		if (limit_needed(parse))
 		{
-			path = (Path *) create_limit_path(root, final_rel, path,
-											  parse->limitOffset,
-											  parse->limitCount,
-											  offset_est, count_est);
+			if (parse->limitOption == LIMIT_OPTION_COUNT)
+				path = (Path *) create_limit_path(root, final_rel, path,
+												  parse->limitOffset,
+												  parse->limitCount,
+												  0, offset_est, count_est);
+			else
+			{
+				path = (Path *) generate_windowed_limit(root, final_rel, path,
+														parse->limitOffset,
+														parse->limitCount,
+														parse->limitOption,
+														offset_est, count_est);
+			}
 		}
 
 		/*
@@ -4714,6 +4730,105 @@ create_one_window_path(PlannerInfo *root,
 
 	add_path(window_rel, path);
 }
+
+/*
+ * generate_windowed_limit
+ *
+ * Given a path which is ordered by the query ORDER BY, generate a window
+ * function expression over that same ordering, and a limit node on top.
+ * This is used to implement WITH TIES and (in future) PERCENT
+ */
+static Path *
+generate_windowed_limit(PlannerInfo *root,
+						RelOptInfo *rel,
+						Path *input_path,
+						Node *limitOffset,
+						Node *limitCount,
+						LimitOption limitOption,
+						int64 offset_est, int64 count_est)
+{
+	WindowFunc	   *arg1;
+	Node		   *arg2;
+	FuncExpr	   *newexpr;
+	PathTarget	   *target = copy_pathtarget(input_path->pathtarget);
+	WindowClause   *wc = makeNode(WindowClause);
+	Path		   *path;
+	AttrNumber		attno;
+
+	/*
+	 * Cons up an expression of the form
+	 *
+	 *  pg_catalog.rank() OVER (order by ...) > offset+limit
+	 *
+	 */
+	arg1 = makeNode(WindowFunc);
+	arg1->winfnoid = WINDOW_RANK_OID;
+	arg1->wintype = INT8OID;
+	arg1->wincollid = InvalidOid;
+	arg1->inputcollid = InvalidOid;
+	arg1->args = NIL;
+	arg1->aggfilter = NULL;
+	arg1->winref = ~0;
+	arg1->winstar = false;
+	arg1->winagg = false;
+	arg1->location = -1;
+
+	if (limitOffset)
+	{
+		FuncExpr   *arg = makeNode(FuncExpr);
+		arg->funcid = INT8PL_OID;
+		arg->funcresulttype = INT8OID;
+		arg->funcretset = false;
+		arg->funcvariadic = false;
+		arg->funcformat = COERCE_EXPLICIT_CALL;
+		arg->funccollid = InvalidOid;
+		arg->inputcollid = InvalidOid;
+		arg->args = list_make2(limitOffset,limitCount);
+		arg->location = -1;
+		arg2 = (Node *) arg;
+	}
+	else
+		arg2 = limitCount;
+
+	newexpr = makeNode(FuncExpr);
+	newexpr->funcid = INT8GT_OID;
+	newexpr->funcresulttype = INT8OID;
+	newexpr->funcretset = false;
+	newexpr->funcvariadic = false;
+	newexpr->funcformat = COERCE_EXPLICIT_CALL;
+	newexpr->funccollid = InvalidOid;
+	newexpr->inputcollid = InvalidOid;
+	newexpr->args = list_make2(arg1,arg2);
+	newexpr->location = exprLocation(limitCount);
+
+	attno = list_length(root->processed_tlist) + 1;
+	root->processed_tlist = lappend(root->processed_tlist,
+									makeTargetEntry((Expr *) newexpr,
+													attno,
+													"limit_flag",
+													true));
+
+	add_column_to_pathtarget(target, (Expr *) newexpr, 0);
+
+	wc->name = NULL;
+	wc->refname = NULL;
+	wc->partitionClause = NIL;
+	wc->orderClause = root->parse->sortClause;
+	wc->frameOptions = 0;
+	wc->startOffset = NULL;
+	wc->endOffset = NULL;
+	wc->winref = ~0;
+	wc->copiedOrder = false;
+
+	path = (Path *)
+		create_windowagg_path(root, rel, input_path, target,
+							  list_make1(arg1),
+							  wc);
+	return (Path *) create_limit_path(root, rel, path,
+									  limitOffset, NULL, attno,
+									  offset_est, count_est);
+}
+
 
 /*
  * create_distinct_paths

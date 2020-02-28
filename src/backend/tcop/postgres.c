@@ -1155,7 +1155,13 @@ exec_simple_query(const char *query_string)
 		plantree_list = pg_plan_queries(querytree_list,
 										CURSOR_OPT_PARALLEL_OK, NULL);
 
-		/* Done with the snapshot used for parsing/planning */
+		/* Done with the snapshot used for parsing/planning.
+		 *
+		 * While it is looks promising to reuse snapshot for query execution (at least for simple protocol)
+		 * but unfortunately it caused execution to use a snapshot that had been acquired before
+		 * locking any of the tables mentioned in the query.
+		 * This created user-visible anomalies that were not present in any prior release.
+		 */
 		if (snapshot_set)
 			PopActiveSnapshot();
 

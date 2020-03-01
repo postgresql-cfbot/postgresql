@@ -32,6 +32,35 @@ static const char *sgr_locus = NULL;
 #define ANSI_ESCAPE_FMT "\x1b[%sm"
 #define ANSI_ESCAPE_RESET "\x1b[0m"
 
+#ifdef WIN32
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+
+/*
+ * Attempt to enable VT100 sequence processing.
+ * If it is not possible consider it as unsupported.
+ */
+static bool
+enable_vt_processing(void)
+{
+	/* Check stderr */
+	HANDLE hOut = GetStdHandle(STD_ERROR_HANDLE);
+	DWORD dwMode = 0;
+
+	if (hOut == INVALID_HANDLE_VALUE)
+		return false;
+	if (!GetConsoleMode(hOut, &dwMode))
+		return false;
+	if (dwMode & ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+		return true;
+	dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+	if (!SetConsoleMode(hOut, dwMode))
+		return false;
+	return true;
+}
+#endif	/* WIN32 */
+
 /*
  * This should be called before any output happens.
  */
@@ -40,6 +69,10 @@ pg_logging_init(const char *argv0)
 {
 	const char *pg_color_env = getenv("PG_COLOR");
 	bool		log_color = false;
+	bool		color_terminal = isatty(fileno(stderr));
+#ifdef WIN32
+	color_terminal = color_terminal && enable_vt_processing();
+#endif
 
 	/* usually the default, but not on Windows */
 	setvbuf(stderr, NULL, _IONBF, 0);
@@ -50,7 +83,7 @@ pg_logging_init(const char *argv0)
 	if (pg_color_env)
 	{
 		if (strcmp(pg_color_env, "always") == 0 ||
-			(strcmp(pg_color_env, "auto") == 0 && isatty(fileno(stderr))))
+			(strcmp(pg_color_env, "auto") == 0 && color_terminal))
 			log_color = true;
 	}
 

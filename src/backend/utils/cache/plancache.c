@@ -163,7 +163,7 @@ InitPlanCache(void)
 CachedPlanSource *
 CreateCachedPlan(RawStmt *raw_parse_tree,
 				 const char *query_string,
-				 const char *commandTag)
+				 CommandTag commandTag)
 {
 	CachedPlanSource *plansource;
 	MemoryContext source_context;
@@ -246,7 +246,7 @@ CreateCachedPlan(RawStmt *raw_parse_tree,
 CachedPlanSource *
 CreateOneShotCachedPlan(RawStmt *raw_parse_tree,
 						const char *query_string,
-						const char *commandTag)
+						CommandTag commandTag)
 {
 	CachedPlanSource *plansource;
 

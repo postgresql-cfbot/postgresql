@@ -265,14 +265,14 @@ fmgr_info_cxt_security(Oid functionId, FmgrInfo *finfo, MemoryContext mcxt,
 /*
  * Return module and C function name providing implementation of functionId.
  *
- * If *mod == NULL and *fn == NULL, no C symbol is known to implement
- * function.
- *
  * If *mod == NULL and *fn != NULL, the function is implemented by a symbol in
  * the main binary.
  *
  * If *mod != NULL and *fn !=NULL the function is implemented in an extension
  * shared object.
+ *
+ * If functionId references a PL function, mod and fn will point to the PL
+ * handler's shared object and function name.
  *
  * The returned module and function names are pstrdup'ed into the current
  * memory context.
@@ -285,6 +285,11 @@ fmgr_symbol(Oid functionId, char **mod, char **fn)
 	bool		isnull;
 	Datum		prosrcattr;
 	Datum		probinattr;
+	Datum		pronameattr;
+	Oid			language;
+	HeapTuple	languageTuple;
+	Form_pg_language languageStruct;
+	HeapTuple	plhandlerTuple;
 
 	/* Otherwise we need the pg_proc entry */
 	procedureTuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(functionId));
@@ -304,8 +309,9 @@ fmgr_symbol(Oid functionId, char **mod, char **fn)
 		return;
 	}
 
+	language = procedureStruct->prolang;
 	/* see fmgr_info_cxt_security for the individual cases */
-	switch (procedureStruct->prolang)
+	switch (language)
 	{
 		case INTERNALlanguageId:
 			prosrcattr = SysCacheGetAttr(PROCOID, procedureTuple,
@@ -342,9 +348,34 @@ fmgr_symbol(Oid functionId, char **mod, char **fn)
 			break;
 
 		default:
-			*mod = NULL;
-			*fn = NULL;			/* unknown, pass pointer */
-			break;
+			/*
+			 * We referenced a PL function. Return PL handler's module and C
+			 * function name.
+			 */
+			languageTuple = SearchSysCache1(LANGOID,
+											ObjectIdGetDatum(language));
+			if (!HeapTupleIsValid(languageTuple))
+				elog(ERROR, "cache lookup failed for language %u", language);
+			languageStruct = (Form_pg_language) GETSTRUCT(languageTuple);
+			plhandlerTuple = SearchSysCache1(PROCOID,
+											 ObjectIdGetDatum(languageStruct->lanplcallfoid));
+			if (!HeapTupleIsValid(plhandlerTuple))
+				elog(ERROR, "cache lookup failed for function %u", languageStruct->lanplcallfoid);
+
+			probinattr = SysCacheGetAttr(PROCOID, plhandlerTuple,
+										 Anum_pg_proc_probin, &isnull);
+			if (isnull)
+				*mod = NULL;
+			else
+				*mod = TextDatumGetCString(probinattr);
+
+			pronameattr = SysCacheGetAttr(PROCOID, plhandlerTuple,
+										  Anum_pg_proc_proname, &isnull);
+			Assert(!isnull);
+			*fn = pstrdup(NameStr(*(DatumGetName(pronameattr))));
+
+			ReleaseSysCache(languageTuple);
+			ReleaseSysCache(plhandlerTuple);
 	}
 
 	ReleaseSysCache(procedureTuple);

@@ -1,0 +1,6 @@
+# jsonb_plperl extension
+comment = 'transform between bool and plperlu'
+default_version = '1.0'
+module_pathname = '$libdir/bool_plperl'
+relocatable = true
+requires = 'plperlu'

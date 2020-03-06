@@ -55,7 +55,10 @@
    syntax:
 
 <programlisting>
-CREATE FUNCTION <replaceable>funcname</replaceable> (<replaceable>argument-types</replaceable>) RETURNS <replaceable>return-type</replaceable> AS $$
+CREATE FUNCTION <replaceable>funcname</replaceable> (<replaceable>argument-types</replaceable>) 
+    RETURNS <replaceable>return-type</replaceable> 
+    -- function attributes
+    AS $$
     # PL/Perl function body
 $$ LANGUAGE plperl;
 </programlisting>
@@ -345,6 +348,36 @@ $$ LANGUAGE plperl;
 
 SELECT * FROM perl_set();
 </programlisting>
+  </para>
+
+  <para>
+   By default, <type>json</type> and <type>jsonb</type> values are passed to
+   PL/Perl functions and procedures as text. For <type>jsonb</type> it is 
+   possible to convert the values into internal Perl representation automatically
+   using the transforms, see <xref linkend="sql-createtransform"/> and <xref linkend="sql-createfunction"/>. 
+   <filename>jsonb_plperl</filename> extension provides such transform for <type>jsonb</type> data type. 
+   To enable the transform, create this extension and then specify 
+<programlisting>
+  TRANSFORM FOR TYPE jsonb
+</programlisting>
+   in the <literal>CREATE FUNCTION</literal> statement.
+  </para>
+
+  <para>
+   By default, boolean values are passed to plperl as text, namely <literal>'t'</literal>
+   for <literal>true</literal> and <literal>'f'</literal> for <literal>false</literal>. 
+   To transform these values into Perl true and false values, use the transform
+   provided by <filename>bool_plperl</filename> extension.
+   To enable the transform, create this extension and then specify 
+<programlisting>
+  TRANSFORM FOR TYPE bool
+</programlisting>
+   in the <literal>CREATE FUNCTION</literal> statement.
+  </para>
+
+  <para>
+   The above mentioned <type>jsonb</type> and <type>bool</type> transforms are applied for function arguments,
+   its return value and results of SPI database queries performed inside the function.
   </para>
 
   <para>

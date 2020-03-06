@@ -2140,7 +2140,7 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches("ALTER", "TEXT", "SEARCH", "TEMPLATE|PARSER", MatchAny))
 		COMPLETE_WITH("RENAME TO", "SET SCHEMA");
 	else if (Matches("ALTER", "TEXT", "SEARCH", "DICTIONARY", MatchAny))
-		COMPLETE_WITH("OWNER TO", "RENAME TO", "SET SCHEMA");
+		COMPLETE_WITH("(", "OWNER TO", "RENAME TO", "SET SCHEMA");
 	else if (Matches("ALTER", "TEXT", "SEARCH", "CONFIGURATION", MatchAny))
 		COMPLETE_WITH("ADD MAPPING FOR", "ALTER MAPPING",
 					  "DROP MAPPING FOR",

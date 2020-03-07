@@ -1,4 +1,4 @@
-Parsed test spec with 3 sessions
+Parsed test spec with 5 sessions
 
 starting permutation: reindex sel1 upd2 ins2 del2 end1 end2
 step reindex: REINDEX TABLE CONCURRENTLY reind_con_tab;
@@ -76,3 +76,55 @@ step end1: COMMIT;
 step reindex: REINDEX TABLE CONCURRENTLY reind_con_tab; <waiting ...>
 step end2: COMMIT;
 step reindex: <... completed>
+
+starting permutation: check_invalid lock reindex_timeout unlock check_invalid nowarn normal_reindex check_invalid reindex check_invalid
+step check_invalid: SELECT i.indisvalid
+    FROM pg_class c
+    JOIN pg_class t ON t.oid = c.reltoastrelid
+    JOIN pg_index i ON i.indrelid = t.oid
+    WHERE c.relname = 'reind_con_tab'
+    ORDER BY i.indisvalid::text COLLATE "C";
+indisvalid     
+
+t              
+step lock: BEGIN; SELECT data FROM reind_con_tab WHERE data = 'aa' FOR UPDATE;
+data           
+
+aa             
+isolationtester: canceling step reindex_timeout after 1 seconds
+step reindex_timeout: REINDEX TABLE CONCURRENTLY reind_con_tab;
+ERROR:  canceling statement due to user request
+step unlock: COMMIT;
+step check_invalid: SELECT i.indisvalid
+    FROM pg_class c
+    JOIN pg_class t ON t.oid = c.reltoastrelid
+    JOIN pg_index i ON i.indrelid = t.oid
+    WHERE c.relname = 'reind_con_tab'
+    ORDER BY i.indisvalid::text COLLATE "C";
+indisvalid     
+
+f              
+t              
+step nowarn: SET client_min_messages = 'ERROR';
+step normal_reindex: REINDEX TABLE reind_con_tab;
+step check_invalid: SELECT i.indisvalid
+    FROM pg_class c
+    JOIN pg_class t ON t.oid = c.reltoastrelid
+    JOIN pg_index i ON i.indrelid = t.oid
+    WHERE c.relname = 'reind_con_tab'
+    ORDER BY i.indisvalid::text COLLATE "C";
+indisvalid     
+
+f              
+t              
+step reindex: REINDEX TABLE CONCURRENTLY reind_con_tab;
+step check_invalid: SELECT i.indisvalid
+    FROM pg_class c
+    JOIN pg_class t ON t.oid = c.reltoastrelid
+    JOIN pg_index i ON i.indrelid = t.oid
+    WHERE c.relname = 'reind_con_tab'
+    ORDER BY i.indisvalid::text COLLATE "C";
+indisvalid     
+
+f              
+t              

@@ -25,6 +25,7 @@ TestSpec		parseresult;			/* result of parsing is left here */
 %union
 {
 	char	   *str;
+	int			ival;
 	Session	   *session;
 	Step	   *step;
 	Permutation *permutation;
@@ -43,9 +44,11 @@ TestSpec		parseresult;			/* result of parsing is left here */
 %type <session> session
 %type <step> step
 %type <permutation> permutation
+%type <ival> opt_timeout
 
 %token <str> sqlblock string_literal
-%token PERMUTATION SESSION SETUP STEP TEARDOWN TEST
+%token <ival> INTEGER
+%token PERMUTATION SESSION SETUP STEP TEARDOWN TEST TIMEOUT
 
 %%
 
@@ -140,16 +143,27 @@ step_list:
 
 
 step:
-			STEP string_literal sqlblock
+			STEP string_literal sqlblock opt_timeout
 			{
 				$$ = pg_malloc(sizeof(Step));
 				$$->name = $2;
 				$$->sql = $3;
 				$$->used = false;
 				$$->errormsg = NULL;
+				$$->timeout = $4;
 			}
 		;
 
+opt_timeout:
+			TIMEOUT INTEGER
+			{
+				$$ = $2;
+			}
+			| /* EMPTY */
+			{
+				$$ = 0;
+			}
+		;
 
 opt_permutation_list:
 			permutation_list

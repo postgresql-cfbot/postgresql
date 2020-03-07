@@ -31,6 +31,22 @@ step "end2" { COMMIT; }
 
 session "s3"
 step "reindex" { REINDEX TABLE CONCURRENTLY reind_con_tab; }
+step "reindex_timeout" { REINDEX TABLE CONCURRENTLY reind_con_tab; } timeout 1
+step "nowarn" { SET client_min_messages = 'ERROR'; }
+
+session "s4"
+step "lock" { BEGIN; SELECT data FROM reind_con_tab WHERE data = 'aa' FOR UPDATE; }
+step "unlock" { COMMIT; }
+
+session "s5"
+setup { SET client_min_messages = 'WARNING'; }
+step "normal_reindex" { REINDEX TABLE reind_con_tab; }
+step "check_invalid" {SELECT i.indisvalid
+    FROM pg_class c
+    JOIN pg_class t ON t.oid = c.reltoastrelid
+    JOIN pg_index i ON i.indrelid = t.oid
+    WHERE c.relname = 'reind_con_tab'
+    ORDER BY i.indisvalid::text COLLATE "C"; }
 
 permutation "reindex" "sel1" "upd2" "ins2" "del2" "end1" "end2"
 permutation "sel1" "reindex" "upd2" "ins2" "del2" "end1" "end2"
@@ -38,3 +54,6 @@ permutation "sel1" "upd2" "reindex" "ins2" "del2" "end1" "end2"
 permutation "sel1" "upd2" "ins2" "reindex" "del2" "end1" "end2"
 permutation "sel1" "upd2" "ins2" "del2" "reindex" "end1" "end2"
 permutation "sel1" "upd2" "ins2" "del2" "end1" "reindex" "end2"
+permutation "check_invalid" "lock" "reindex_timeout" "unlock" "check_invalid"
+            "nowarn" "normal_reindex" "check_invalid"
+            "reindex" "check_invalid"

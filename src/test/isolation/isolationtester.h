@@ -33,6 +33,8 @@ struct Step
 	char	   *name;
 	char	   *sql;
 	char	   *errormsg;
+	int			timeout;
+	struct timeval start_time;
 };
 
 typedef struct

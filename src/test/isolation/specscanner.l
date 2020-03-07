@@ -53,6 +53,7 @@ session			{ return SESSION; }
 setup			{ return SETUP; }
 step			{ return STEP; }
 teardown		{ return TEARDOWN; }
+timeout			{ return TIMEOUT; }
 
 [\n]			{ yyline++; }
 {comment}		{ /* ignore */ }
@@ -94,6 +95,13 @@ teardown		{ return TEARDOWN; }
 				}
 <sql><<EOF>>	{
 					yyerror("unterminated sql block");
+				}
+
+ /* integer */
+[0-9]+			{
+					yylval.ival = atoi(yytext);
+					return INTEGER;
+
 				}
 
 .				{

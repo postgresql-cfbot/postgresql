@@ -120,10 +120,28 @@ main(int argc, char **argv)
 	spec_yyparse();
 	testspec = &parseresult;
 
-	/* Create a lookup table of all steps. */
+	/*
+	 * Create a lookup table of all steps and validate any timeout
+	 * specification.
+	 */
 	nallsteps = 0;
 	for (i = 0; i < testspec->nsessions; i++)
+	{
 		nallsteps += testspec->sessions[i]->nsteps;
+		for (j = 0; j < testspec->sessions[i]->nsteps; j++)
+		{
+			if ((testspec->sessions[i]->steps[j]->timeout  * USECS_PER_SEC) >=
+					(max_step_wait /2))
+			{
+				fprintf(stderr, "step %s: step timeout (%d) should be less"
+						" than global timeout (%ld)",
+						testspec->sessions[i]->steps[j]->name,
+						testspec->sessions[i]->steps[j]->timeout,
+						(max_step_wait / USECS_PER_SEC));
+				exit(1);
+			}
+		}
+	}
 
 	allsteps = pg_malloc(nallsteps * sizeof(Step *));
 
@@ -587,8 +605,14 @@ run_permutation(TestSpec *testspec, int nsteps, Step **steps)
 			exit(1);
 		}
 
-		/* Try to complete this step without blocking.  */
-		mustwait = try_complete_step(testspec, step, STEP_NONBLOCK);
+		/*
+		 * Try to complete this step without blocking, unless the step has a
+		 * timeout.
+		 */
+		mustwait = try_complete_step(testspec, step,
+				(step->timeout == 0 ? STEP_NONBLOCK : 0));
+		if (step->timeout != 0)
+			report_error_message(step);
 
 		/* Check for completion of any steps that were previously waiting. */
 		w = 0;
@@ -721,6 +745,7 @@ try_complete_step(TestSpec *testspec, Step *step, int flags)
 		{
 			struct timeval current_time;
 			int64		td;
+			int64		step_timeout;
 
 			/* If it's OK for the step to block, check whether it has. */
 			if (flags & STEP_NONBLOCK)
@@ -778,6 +803,11 @@ try_complete_step(TestSpec *testspec, Step *step, int flags)
 			td *= USECS_PER_SEC;
 			td += (int64) current_time.tv_usec - (int64) start_time.tv_usec;
 
+			if (step->timeout)
+				step_timeout = step->timeout * USECS_PER_SEC;
+			else
+				step_timeout = max_step_wait;
+
 			/*
 			 * After max_step_wait microseconds, try to cancel the query.
 			 *
@@ -787,7 +817,7 @@ try_complete_step(TestSpec *testspec, Step *step, int flags)
 			 * failing, but remaining permutations and tests should still be
 			 * OK.
 			 */
-			if (td > max_step_wait && !canceled)
+			if (td > step_timeout && !canceled)
 			{
 				PGcancel   *cancel = PQgetCancel(conn);
 
@@ -812,13 +842,13 @@ try_complete_step(TestSpec *testspec, Step *step, int flags)
 			}
 
 			/*
-			 * After twice max_step_wait, just give up and die.
+			 * After twice the step timeout, just give up and die.
 			 *
 			 * Since cleanup steps won't be run in this case, this may cause
 			 * later tests to fail.  That stinks, but it's better than waiting
 			 * forever for the server to respond to the cancel.
 			 */
-			if (td > 2 * max_step_wait)
+			if (td > 2 * step_timeout)
 			{
 				fprintf(stderr, "step %s timed out after %d seconds\n",
 						step->name, (int) (td / USECS_PER_SEC));

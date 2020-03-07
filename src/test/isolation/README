@@ -86,10 +86,12 @@ session "<name>"
 
   Each step has the syntax
 
-  step "<name>" { <SQL> }
+  step "<name>" { <SQL> } [ TIMEOUT seconds ]
 
-  where <name> is a name identifying this step, and SQL is a SQL statement
-  (or statements, separated by semicolons) that is executed in the step.
+  where <name> is a name identifying this step, SQL is a SQL statement
+  (or statements, separated by semicolons) that is executed in the step and
+  seconds an optional timeout for the given SQL statement(s) to wait on before
+  canceling it.
   Step names must be unique across the whole spec file.
 
 permutation "<step name>" ...
@@ -125,6 +127,9 @@ after PGISOLATIONTIMEOUT seconds.  If the cancel doesn't work, isolationtester
 will exit uncleanly after a total of twice PGISOLATIONTIMEOUT.  Testing
 invalid permutations should be avoided because they can make the isolation
 tests take a very long time to run, and they serve no useful testing purpose.
+If a test specified the option timeout specification, then isolationtester will
+actively wait for the step commands completion rather than continuing with the
+permutation next step, and send a cancel once the given timeout is reached.
 
 Note that isolationtester recognizes that a command has blocked by looking
 to see if it is shown as waiting in the pg_locks view; therefore, only

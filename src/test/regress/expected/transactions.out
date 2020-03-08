@@ -860,11 +860,21 @@ DROP TABLE abc;
 -- tests rely on the fact that psql will not break SQL commands apart at a
 -- backslash-quoted semicolon, but will send them as one Query.
 create temp table i_table (f1 int);
--- psql will show only the last result in a multi-statement Query
-SELECT 1\; SELECT 2\; SELECT 3;
- ?column? 
-----------
-        3
+-- psql will show all results of a multi-statement Query
+SELECT 1 AS one\; SELECT 2 AS two\; SELECT 3 AS three;
+ one 
+-----
+   1
+(1 row)
+
+ two 
+-----
+   2
+(1 row)
+
+ three 
+-------
+     3
 (1 row)
 
 -- this implicitly commits:
@@ -876,6 +886,12 @@ insert into i_table values(1)\; select * from i_table;
 
 -- 1/0 error will cause rolling back the whole implicit transaction
 insert into i_table values(2)\; select * from i_table\; select 1/0;
+ f1 
+----
+  1
+  2
+(2 rows)
+
 ERROR:  division by zero
 select * from i_table;
  f1 
@@ -894,9 +910,19 @@ rollback;  -- we are not in a transaction at this point
 WARNING:  there is no transaction in progress
 -- begin converts implicit transaction into a regular one that
 -- can extend past the end of the Query
-select 1\; begin\; insert into i_table values(5);
+select 1 AS one\; begin\; insert into i_table values(5);
+ one 
+-----
+   1
+(1 row)
+
 commit;
-select 1\; begin\; insert into i_table values(6);
+select 1 AS one\; begin\; insert into i_table values(6);
+ one 
+-----
+   1
+(1 row)
+
 rollback;
 -- commit in implicit-transaction state commits but issues a warning.
 insert into i_table values(7)\; commit\; insert into i_table values(8)\; select 1/0;
@@ -922,23 +948,53 @@ select * from i_table;
 rollback;  -- we are not in a transaction at this point
 WARNING:  there is no transaction in progress
 -- implicit transaction block is still a transaction block, for e.g. VACUUM
-SELECT 1\; VACUUM;
+SELECT 1 AS one\; VACUUM;
+ one 
+-----
+   1
+(1 row)
+
 ERROR:  VACUUM cannot run inside a transaction block
-SELECT 1\; COMMIT\; VACUUM;
+SELECT 2 AS two\; COMMIT\; VACUUM;
 WARNING:  there is no transaction in progress
+ two 
+-----
+   2
+(1 row)
+
 ERROR:  VACUUM cannot run inside a transaction block
 -- we disallow savepoint-related commands in implicit-transaction state
-SELECT 1\; SAVEPOINT sp;
+SELECT 3 AS three\; SAVEPOINT sp;
+ three 
+-------
+     3
+(1 row)
+
 ERROR:  SAVEPOINT can only be used in transaction blocks
-SELECT 1\; COMMIT\; SAVEPOINT sp;
+SELECT 4 AS four\; COMMIT\; SAVEPOINT sp;
 WARNING:  there is no transaction in progress
+ four 
+------
+    4
+(1 row)
+
 ERROR:  SAVEPOINT can only be used in transaction blocks
-ROLLBACK TO SAVEPOINT sp\; SELECT 2;
+ROLLBACK TO SAVEPOINT sp\; SELECT 5 AS five;
 ERROR:  ROLLBACK TO SAVEPOINT can only be used in transaction blocks
-SELECT 2\; RELEASE SAVEPOINT sp\; SELECT 3;
+SELECT 6 AS six\; RELEASE SAVEPOINT sp\; SELECT 7 AS seven;
+ six 
+-----
+   6
+(1 row)
+
 ERROR:  RELEASE SAVEPOINT can only be used in transaction blocks
 -- but this is OK, because the BEGIN converts it to a regular xact
-SELECT 1\; BEGIN\; SAVEPOINT sp\; ROLLBACK TO SAVEPOINT sp\; COMMIT;
+SELECT 8\; BEGIN\; SAVEPOINT sp\; ROLLBACK TO SAVEPOINT sp\; COMMIT;
+ ?column? 
+----------
+        8
+(1 row)
+
 -- Tests for AND CHAIN in implicit transaction blocks
 SET TRANSACTION READ ONLY\; COMMIT AND CHAIN;  -- error
 ERROR:  COMMIT AND CHAIN can only be used in transaction blocks

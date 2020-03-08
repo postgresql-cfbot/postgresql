@@ -25,7 +25,7 @@
   <title>Configuration</title>
 
   <para>
-   The dictionary accepts two options:
+   The dictionary accepts three options:
   </para>
 
   <itemizedlist>
@@ -45,7 +45,14 @@
      word, so that it will not be indexed.  Note that this also means that
      such an integer cannot be searched for.
     </para>
-   </listitem>
+   </listitem> 
+   <listitem>
+    <para>
+     The <literal>absval</literal> parameter specifies whether a leading
+     '+' or '-' sign should be removed from the integer.  The default is <literal>false</literal>.
+     If <literal>true</literal>, the sign is removed before <literal>maxlen</literal> is applied.
+    </para>
+   </listitem> 
   </itemizedlist>
  </sect2>
 

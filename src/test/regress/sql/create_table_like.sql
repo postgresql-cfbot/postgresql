@@ -170,3 +170,10 @@ DROP SEQUENCE ctlseq1;
 DROP TYPE ctlty1;
 DROP VIEW ctlv1;
 DROP TABLE IF EXISTS ctlt4, ctlt10, ctlt11, ctlt11a, ctlt12;
+
+/* LIKE must respect NO INHERIT property of constraints */
+CREATE TABLE noinh_con_copy (a int CHECK (a > 0) NO INHERIT);
+CREATE TABLE noinh_con_copy1 (LIKE noinh_con_copy INCLUDING ALL);
+\d noinh_con_copy1
+-- error as partitioned tables don't allow NO INHERIT constraints
+CREATE TABLE noinh_con_copy1_parted (LIKE noinh_con_copy INCLUDING ALL) PARTITION BY LIST (a);

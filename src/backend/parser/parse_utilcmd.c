@@ -1165,6 +1165,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 			n->contype = CONSTR_CHECK;
 			n->location = -1;
 			n->conname = pstrdup(ccname);
+			n->is_no_inherit = tupleDesc->constr->check[ccnum].ccnoinherit;
 			n->raw_expr = NULL;
 			n->cooked_expr = nodeToString(ccbin_node);
 			cxt->ckconstraints = lappend(cxt->ckconstraints, n);

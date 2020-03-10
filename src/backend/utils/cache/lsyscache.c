@@ -3227,3 +3227,26 @@ get_index_column_opclass(Oid index_oid, int attno)
 
 	return opclass;
 }
+
+/*
+ * get_index_is_replident
+ *
+ * Returns indisreplident field.
+ */
+bool
+get_index_is_replident(Oid index_oid)
+{
+	HeapTuple		tuple;
+	Form_pg_index	rd_index;
+	bool			result;
+
+	tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(index_oid));
+	if (!HeapTupleIsValid(tuple))
+		return false;
+
+	rd_index = (Form_pg_index) GETSTRUCT(tuple);
+	result = rd_index->indisreplident;
+	ReleaseSysCache(tuple);
+
+	return result;
+}

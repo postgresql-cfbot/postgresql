@@ -178,6 +178,26 @@ extern char pkglib_path[];
 extern char postgres_exec_path[];
 #endif
 
+typedef enum BackendType
+{
+	B_INVALID = 0,
+	B_AUTOVAC_LAUNCHER,
+	B_AUTOVAC_WORKER,
+	B_BACKEND,
+	B_BG_WORKER,
+	B_BG_WRITER,
+	B_CHECKPOINTER,
+	B_STARTUP,
+	B_WAL_RECEIVER,
+	B_WAL_SENDER,
+	B_WAL_WRITER,
+	B_ARCHIVER,
+	B_STATS_COLLECTOR,
+	B_LOGGER,
+} BackendType;
+
+extern BackendType MyBackendType;
+
 /*
  * done in storage/backendid.h for now.
  *

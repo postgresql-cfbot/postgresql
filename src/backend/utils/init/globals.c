@@ -78,6 +78,8 @@ char		postgres_exec_path[MAXPGPATH];	/* full path to backend */
 /* note: currently this is not valid in backend processes */
 #endif
 
+BackendType	MyBackendType;
+
 BackendId	MyBackendId = InvalidBackendId;
 
 BackendId	ParallelMasterBackendId = InvalidBackendId;

@@ -13,6 +13,7 @@
 
 #include "datatype/timestamp.h"
 #include "libpq/pqcomm.h"
+#include "miscadmin.h"
 #include "port/atomics.h"
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"
@@ -710,25 +711,6 @@ typedef struct PgStat_GlobalStats
 	PgStat_Counter buf_alloc;
 	TimestampTz stat_reset_timestamp;
 } PgStat_GlobalStats;
-
-
-/* ----------
- * Backend types
- * ----------
- */
-typedef enum BackendType
-{
-	B_AUTOVAC_LAUNCHER,
-	B_AUTOVAC_WORKER,
-	B_BACKEND,
-	B_BG_WORKER,
-	B_BG_WRITER,
-	B_CHECKPOINTER,
-	B_STARTUP,
-	B_WAL_RECEIVER,
-	B_WAL_SENDER,
-	B_WAL_WRITER
-} BackendType;
 
 
 /* ----------

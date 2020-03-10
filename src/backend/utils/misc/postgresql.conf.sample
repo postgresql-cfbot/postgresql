@@ -524,6 +524,7 @@
 #log_hostname = off
 #log_line_prefix = '%m [%p] '		# special values:
 					#   %a = application name
+					#   %b = backend type
 					#   %u = user name
 					#   %d = database name
 					#   %r = remote host and port

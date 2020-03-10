@@ -2892,62 +2892,7 @@ pgstat_bestart(void)
 	 * out-of-line data.  Those have to be handled separately, below.
 	 */
 	lbeentry.st_procpid = MyProcPid;
-
-	if (MyBackendId != InvalidBackendId)
-	{
-		if (IsAutoVacuumLauncherProcess())
-		{
-			/* Autovacuum Launcher */
-			lbeentry.st_backendType = B_AUTOVAC_LAUNCHER;
-		}
-		else if (IsAutoVacuumWorkerProcess())
-		{
-			/* Autovacuum Worker */
-			lbeentry.st_backendType = B_AUTOVAC_WORKER;
-		}
-		else if (am_walsender)
-		{
-			/* Wal sender */
-			lbeentry.st_backendType = B_WAL_SENDER;
-		}
-		else if (IsBackgroundWorker)
-		{
-			/* bgworker */
-			lbeentry.st_backendType = B_BG_WORKER;
-		}
-		else
-		{
-			/* client-backend */
-			lbeentry.st_backendType = B_BACKEND;
-		}
-	}
-	else
-	{
-		/* Must be an auxiliary process */
-		Assert(MyAuxProcType != NotAnAuxProcess);
-		switch (MyAuxProcType)
-		{
-			case StartupProcess:
-				lbeentry.st_backendType = B_STARTUP;
-				break;
-			case BgWriterProcess:
-				lbeentry.st_backendType = B_BG_WRITER;
-				break;
-			case CheckpointerProcess:
-				lbeentry.st_backendType = B_CHECKPOINTER;
-				break;
-			case WalWriterProcess:
-				lbeentry.st_backendType = B_WAL_WRITER;
-				break;
-			case WalReceiverProcess:
-				lbeentry.st_backendType = B_WAL_RECEIVER;
-				break;
-			default:
-				elog(FATAL, "unrecognized process type: %d",
-					 (int) MyAuxProcType);
-		}
-	}
-
+	lbeentry.st_backendType = MyBackendType;
 	lbeentry.st_proc_start_timestamp = MyStartTimestamp;
 	lbeentry.st_activity_start_timestamp = 0;
 	lbeentry.st_state_start_timestamp = 0;
@@ -4276,6 +4221,9 @@ pgstat_get_backend_desc(BackendType backendType)
 
 	switch (backendType)
 	{
+		case B_INVALID:
+			backendDesc = "not initialized";
+			break;
 		case B_AUTOVAC_LAUNCHER:
 			backendDesc = "autovacuum launcher";
 			break;
@@ -4305,6 +4253,15 @@ pgstat_get_backend_desc(BackendType backendType)
 			break;
 		case B_WAL_WRITER:
 			backendDesc = "walwriter";
+			break;
+		case B_ARCHIVER:
+			backendDesc = "archiver";
+			break;
+		case B_STATS_COLLECTOR:
+			backendDesc = "stats collector";
+			break;
+		case B_LOGGER:
+			backendDesc = "logger";
 			break;
 	}
 
@@ -4447,10 +4404,8 @@ PgstatCollectorMain(int argc, char *argv[])
 	pqsignal(SIGCHLD, SIG_DFL);
 	PG_SETMASK(&UnBlockSig);
 
-	/*
-	 * Identify myself via ps
-	 */
-	init_ps_display("stats collector", "", "", "");
+	MyBackendType = B_STATS_COLLECTOR;
+	init_ps_display(NULL);
 
 	/*
 	 * Read in existing stats files or initialize the stats to zero.

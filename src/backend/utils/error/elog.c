@@ -72,6 +72,8 @@
 #include "libpq/pqformat.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "pgstat.h"
+#include "postmaster/bgworker.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
 #include "storage/ipc.h"
@@ -2492,6 +2494,23 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 										   padding > 0 ? padding : -padding);
 
 				break;
+			case 'b':
+				{
+					const char *backend_type_str;
+
+					if (MyProcPid == PostmasterPid)
+						backend_type_str = "postmaster";
+					else if (MyBackendType == B_BG_WORKER)
+						backend_type_str = MyBgworkerEntry->bgw_type;
+					else
+						backend_type_str = pgstat_get_backend_desc(MyBackendType);
+
+					if (padding != 0)
+						appendStringInfo(buf, "%*s", padding, backend_type_str);
+					else
+						appendStringInfoString(buf, backend_type_str);
+					break;
+				}
 			case 'u':
 				if (MyProcPort)
 				{
@@ -2920,10 +2939,20 @@ write_csvlog(ErrorData *edata)
 	if (application_name)
 		appendCSVLiteral(&buf, application_name);
 
+	appendStringInfoChar(&buf, ',');
+
+	/* backend type */
+	if (MyProcPid == PostmasterPid)
+		appendCSVLiteral(&buf, "postmaster");
+	else if (MyBackendType == B_BG_WORKER)
+		appendCSVLiteral(&buf, MyBgworkerEntry->bgw_type);
+	else
+		appendCSVLiteral(&buf, pgstat_get_backend_desc(MyBackendType));
+
 	appendStringInfoChar(&buf, '\n');
 
 	/* If in the syslogger process, try to write messages direct to file */
-	if (am_syslogger)
+	if (MyBackendType == B_LOGGER)
 		write_syslogger_file(buf.data, buf.len, LOG_DESTINATION_CSVLOG);
 	else
 		write_pipe_chunks(buf.data, buf.len, LOG_DESTINATION_CSVLOG);
@@ -3117,7 +3146,7 @@ send_message_to_server_log(ErrorData *edata)
 		 * catching stderr output, and we are not ourselves the syslogger.
 		 * Otherwise, just do a vanilla write to stderr.
 		 */
-		if (redirection_done && !am_syslogger)
+		if (redirection_done && MyBackendType != B_LOGGER)
 			write_pipe_chunks(buf.data, buf.len, LOG_DESTINATION_STDERR);
 #ifdef WIN32
 
@@ -3136,13 +3165,13 @@ send_message_to_server_log(ErrorData *edata)
 	}
 
 	/* If in the syslogger process, try to write messages direct to file */
-	if (am_syslogger)
+	if (MyBackendType == B_LOGGER)
 		write_syslogger_file(buf.data, buf.len, LOG_DESTINATION_STDERR);
 
 	/* Write to CSV log if enabled */
 	if (Log_destination & LOG_DESTINATION_CSVLOG)
 	{
-		if (redirection_done || am_syslogger)
+		if (redirection_done || MyBackendType == B_LOGGER)
 		{
 			/*
 			 * send CSV data if it's safe to do so (syslogger doesn't need the

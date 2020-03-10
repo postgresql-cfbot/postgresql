@@ -6471,6 +6471,11 @@ local0.*    /var/log/postgresql
              <entry>yes</entry>
             </row>
             <row>
+             <entry><literal>%b</literal></entry>
+             <entry>Backend process type</entry>
+             <entry>yes</entry>
+            </row>
+            <row>
              <entry><literal>%u</literal></entry>
              <entry>User name</entry>
              <entry>yes</entry>
@@ -6785,7 +6790,7 @@ log_line_prefix = '%m [%p] %q%u@%d/%a '
         character count of the error position therein,
         location of the error in the PostgreSQL source code
         (if <varname>log_error_verbosity</varname> is set to <literal>verbose</literal>),
-        and application name.
+        application name, and backend type.
         Here is a sample table definition for storing CSV-format log output:
 
 <programlisting>
@@ -6814,6 +6819,7 @@ CREATE TABLE postgres_log
   query_pos integer,
   location text,
   application_name text,
+  backend_type text,
   PRIMARY KEY (session_id, session_line_num)
 );
 </programlisting>

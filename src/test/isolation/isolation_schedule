@@ -48,6 +48,7 @@ test: lock-committed-update
 test: lock-committed-keyupdate
 test: update-locked-tuple
 test: reindex-concurrently
+test: reindex-invalid
 test: propagate-lock-delete
 test: tuplelock-conflict
 test: tuplelock-update

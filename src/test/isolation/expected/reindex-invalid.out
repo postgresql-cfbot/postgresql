@@ -1,0 +1,34 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_select s2_timeout s2_reindex s2_check s1_commit s1_drop s2_check
+step s1_select: SELECT data FROM reind_con_invalid FOR UPDATE;
+data           
+
+foo            
+bar            
+step s2_timeout: SET statement_timeout = 1000;
+step s2_reindex: REINDEX TABLE CONCURRENTLY reind_con_invalid; <waiting ...>
+step s2_reindex: <... completed>
+ERROR:  canceling statement due to statement timeout
+step s2_check: SELECT regexp_replace(i.indexrelid::regclass::text, '(pg_toast_)([0-9+/=]+)(_index)', '\1<oid>\3'),
+					         i.indisvalid
+					    FROM pg_class c
+					      JOIN pg_class t ON t.oid = c.reltoastrelid
+					      JOIN pg_index i ON i.indrelid = t.oid
+					    WHERE c.relname = 'reind_con_invalid'
+					      ORDER BY c.relname;
+regexp_replace indisvalid     
+
+pg_toast.pg_toast_<oid>_index_ccoldf              
+pg_toast.pg_toast_<oid>_indext              
+step s1_commit: COMMIT;
+step s1_drop: DROP TABLE reind_con_invalid;
+step s2_check: SELECT regexp_replace(i.indexrelid::regclass::text, '(pg_toast_)([0-9+/=]+)(_index)', '\1<oid>\3'),
+					         i.indisvalid
+					    FROM pg_class c
+					      JOIN pg_class t ON t.oid = c.reltoastrelid
+					      JOIN pg_index i ON i.indrelid = t.oid
+					    WHERE c.relname = 'reind_con_invalid'
+					      ORDER BY c.relname;
+regexp_replace indisvalid     
+

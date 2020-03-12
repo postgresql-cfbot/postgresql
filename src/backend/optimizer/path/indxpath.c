@@ -1464,11 +1464,9 @@ choose_bitmap_and(PlannerInfo *root, RelOptInfo *rel, List *paths)
 			/* duplicate clauseids, keep the cheaper one */
 			Cost		ncost;
 			Cost		ocost;
-			Selectivity nselec;
-			Selectivity oselec;
 
-			cost_bitmap_tree_node(pathinfo->path, &ncost, &nselec);
-			cost_bitmap_tree_node(pathinfoarray[i]->path, &ocost, &oselec);
+			cost_bitmap_tree_node(pathinfo->path, &ncost, NULL, NULL);
+			cost_bitmap_tree_node(pathinfoarray[i]->path, &ocost, NULL, NULL);
 			if (ncost < ocost)
 				pathinfoarray[i] = pathinfo;
 		}
@@ -1580,8 +1578,8 @@ path_usage_comparator(const void *a, const void *b)
 	Selectivity aselec;
 	Selectivity bselec;
 
-	cost_bitmap_tree_node(pa->path, &acost, &aselec);
-	cost_bitmap_tree_node(pb->path, &bcost, &bselec);
+	cost_bitmap_tree_node(pa->path, &acost, &aselec, NULL);
+	cost_bitmap_tree_node(pb->path, &bcost, &bselec, NULL);
 
 	/*
 	 * If costs are the same, sort by selectivity.

@@ -92,7 +92,6 @@ static volatile ProcSignalSlot *MyProcSignalSlot = NULL;
 
 static bool CheckProcSignal(ProcSignalReason reason);
 static void CleanupProcSignalState(int status, Datum arg);
-static void ProcessBarrierPlaceholder(void);
 
 /*
  * ProcSignalShmemSize
@@ -456,8 +455,14 @@ ProcessProcSignalBarrier(void)
 	 * unconditionally, but it's more efficient to call only the ones that
 	 * might need us to do something based on the flags.
 	 */
-	if (BARRIER_SHOULD_CHECK(flags, PROCSIGNAL_BARRIER_PLACEHOLDER))
-		ProcessBarrierPlaceholder();
+	if (BARRIER_SHOULD_CHECK(flags, PROCSIGNAL_BARRIER_CHECKSUM))
+	{
+		/*
+		 * By virtue of getting here (i.e. interrupts being processed), we
+		 * know that this backend won't have any in-progress writes (which
+		 * might have missed the checksum change).
+		 */
+	}
 
 	/*
 	 * State changes related to all types of barriers that might have been
@@ -467,19 +472,6 @@ ProcessProcSignalBarrier(void)
 	 * next called.
 	 */
 	pg_atomic_write_u64(&MyProcSignalSlot->pss_barrierGeneration, generation);
-}
-
-static void
-ProcessBarrierPlaceholder(void)
-{
-	/*
-	 * XXX. This is just a placeholder until the first real user of this
-	 * machinery gets committed. Rename PROCSIGNAL_BARRIER_PLACEHOLDER to
-	 * PROCSIGNAL_BARRIER_SOMETHING_ELSE where SOMETHING_ELSE is something
-	 * appropriately descriptive. Get rid of this function and instead have
-	 * ProcessBarrierSomethingElse. Most likely, that function should live
-	 * in the file pertaining to that subsystem, rather than here.
-	 */
 }
 
 /*

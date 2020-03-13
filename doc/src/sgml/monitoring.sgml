@@ -1364,6 +1364,10 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
          <entry>Waiting for a checkpoint to start.</entry>
         </row>
         <row>
+         <entry><literal>ChecksumEnableStartcondition</literal></entry>
+         <entry>Waiting for transactions to finish before starting to enable checksums.</entry>
+        </row>
+        <row>
          <entry><literal>ClogGroupUpdate</literal></entry>
          <entry>Waiting for group leader to update transaction status at transaction end.</entry>
         </row>

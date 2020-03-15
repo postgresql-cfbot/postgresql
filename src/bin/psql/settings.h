@@ -140,6 +140,7 @@ typedef struct _psqlSettings
 	const char *prompt3;
 	PGVerbosity verbosity;		/* current error verbosity level */
 	PGContextVisibility show_context;	/* current context display level */
+	time_t connection_start;	/* unixtime for start time connection */
 } PsqlSettings;
 
 extern PsqlSettings pset;

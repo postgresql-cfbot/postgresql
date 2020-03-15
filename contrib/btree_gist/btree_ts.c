@@ -146,48 +146,14 @@ PG_FUNCTION_INFO_V1(ts_dist);
 Datum
 ts_dist(PG_FUNCTION_ARGS)
 {
-	Timestamp	a = PG_GETARG_TIMESTAMP(0);
-	Timestamp	b = PG_GETARG_TIMESTAMP(1);
-	Interval   *r;
-
-	if (TIMESTAMP_NOT_FINITE(a) || TIMESTAMP_NOT_FINITE(b))
-	{
-		Interval   *p = palloc(sizeof(Interval));
-
-		p->day = INT_MAX;
-		p->month = INT_MAX;
-		p->time = PG_INT64_MAX;
-		PG_RETURN_INTERVAL_P(p);
-	}
-	else
-		r = DatumGetIntervalP(DirectFunctionCall2(timestamp_mi,
-												  PG_GETARG_DATUM(0),
-												  PG_GETARG_DATUM(1)));
-	PG_RETURN_INTERVAL_P(abs_interval(r));
+	return timestamp_distance(fcinfo);
 }
 
 PG_FUNCTION_INFO_V1(tstz_dist);
 Datum
 tstz_dist(PG_FUNCTION_ARGS)
 {
-	TimestampTz a = PG_GETARG_TIMESTAMPTZ(0);
-	TimestampTz b = PG_GETARG_TIMESTAMPTZ(1);
-	Interval   *r;
-
-	if (TIMESTAMP_NOT_FINITE(a) || TIMESTAMP_NOT_FINITE(b))
-	{
-		Interval   *p = palloc(sizeof(Interval));
-
-		p->day = INT_MAX;
-		p->month = INT_MAX;
-		p->time = PG_INT64_MAX;
-		PG_RETURN_INTERVAL_P(p);
-	}
-
-	r = DatumGetIntervalP(DirectFunctionCall2(timestamp_mi,
-											  PG_GETARG_DATUM(0),
-											  PG_GETARG_DATUM(1)));
-	PG_RETURN_INTERVAL_P(abs_interval(r));
+	return timestamptz_distance(fcinfo);
 }
 
 

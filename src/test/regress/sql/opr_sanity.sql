@@ -806,6 +806,8 @@ WHERE o1.oprnegate = o2.oid AND p1.oid = o1.oprcode AND p2.oid = o2.oprcode AND
 
 -- Btree comparison operators' functions should have the same volatility
 -- and leakproofness markings as the associated comparison support function.
+-- Btree ordering operators' functions may be not leakproof, while the
+-- associated comparison support function is leakproof.
 SELECT pp.oid::regprocedure as proc, pp.provolatile as vp, pp.proleakproof as lp,
        po.oid::regprocedure as opr, po.provolatile as vo, po.proleakproof as lo
 FROM pg_proc pp, pg_proc po, pg_operator o, pg_amproc ap, pg_amop ao
@@ -816,7 +818,10 @@ WHERE pp.oid = ap.amproc AND po.oid = o.oprcode AND o.oid = ao.amopopr AND
     ao.amoprighttype = ap.amprocrighttype AND
     ap.amprocnum = 1 AND
     (pp.provolatile != po.provolatile OR
-     pp.proleakproof != po.proleakproof)
+     (pp.proleakproof != po.proleakproof AND
+      ao.amoppurpose = 's') OR
+     (pp.proleakproof < po.proleakproof AND
+      ao.amoppurpose = 'o'))
 ORDER BY 1;
 
 

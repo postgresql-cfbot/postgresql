@@ -340,4 +340,6 @@ extern void AdjustTimestampForTypmod(Timestamp *time, int32 typmod);
 extern bool AdjustTimestampForTypmodError(Timestamp *time, int32 typmod,
 										  bool *error);
 
+extern Interval *abs_interval(Interval *a);
+
 #endif							/* DATETIME_H */

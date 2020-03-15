@@ -898,3 +898,25 @@ item is irrelevant, and need not be stored at all.  This arrangement
 corresponds to the fact that an L&Y non-leaf page has one more pointer
 than key.  Suffix truncation's negative infinity attributes behave in
 the same way.
+
+Nearest-neighbor search
+-----------------------
+
+B-tree supports a special scan strategy for nearest-neighbor (kNN) search,
+which is used for queries with "ORDER BY indexed_column operator constant"
+clause.  See the following example.
+
+  SELECT * FROM tab WHERE col > const1 ORDER BY col <-> const2 LIMIT k
+
+Unlike GiST and SP-GiST, B-tree supports kNN by the only one ordering operator
+applied to the first indexed column.
+
+At the beginning of kNN scan, we determine the scan strategy to use: normal
+unidirectional or special bidirectional.  If the second distance operand falls
+into the scan range, then we use bidirectional scan, otherwise we use normal
+unidirectional scan.
+
+The bidirectional scan algorithm is quite simple.  We start both forward and
+backward scans starting from the tree location corresponding to the second
+distance operand.  Each time we need the next tuple, we return the nearest
+tuple from two directions and advance scan in corresponding direction.

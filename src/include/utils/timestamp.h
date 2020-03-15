@@ -93,9 +93,11 @@ extern Timestamp SetEpochTimestamp(void);
 extern void GetEpochTime(struct pg_tm *tm);
 
 extern int	timestamp_cmp_internal(Timestamp dt1, Timestamp dt2);
+extern Interval *timestamp_dist_internal(Timestamp a, Timestamp b);
 
-/* timestamp comparison works for timestamptz also */
+/* timestamp comparison and distance works for timestamptz also */
 #define timestamptz_cmp_internal(dt1,dt2)	timestamp_cmp_internal(dt1, dt2)
+#define timestamptz_dist_internal(dt1,dt2)	timestamp_dist_internal(dt1, dt2)
 
 extern TimestampTz timestamp2timestamptz_opt_overflow(Timestamp timestamp,
 													  int *overflow);

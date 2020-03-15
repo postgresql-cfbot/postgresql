@@ -1260,7 +1260,7 @@ gen_prune_steps_from_opexps(GeneratePruningStepsContext *context,
 {
 	PartitionScheme part_scheme = context->rel->part_scheme;
 	List	   *opsteps = NIL;
-	List	   *btree_clauses[BTMaxStrategyNumber + 1],
+	List	   *btree_clauses[BTMaxSearchStrategyNumber + 1],
 			   *hash_clauses[HTMaxStrategyNumber + 1];
 	int			i;
 	ListCell   *lc;
@@ -1388,7 +1388,7 @@ gen_prune_steps_from_opexps(GeneratePruningStepsContext *context,
 				 * combinations of expressions of different keys, which
 				 * get_steps_using_prefix takes care of for us.
 				 */
-				for (strat = 1; strat <= BTMaxStrategyNumber; strat++)
+				for (strat = 1; strat <= BTMaxSearchStrategyNumber; strat++)
 				{
 					foreach(lc, btree_clauses[strat])
 					{

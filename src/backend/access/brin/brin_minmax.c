@@ -25,7 +25,7 @@
 typedef struct MinmaxOpaque
 {
 	Oid			cached_subtype;
-	FmgrInfo	strategy_procinfos[BTMaxStrategyNumber];
+	FmgrInfo	strategy_procinfos[BTMaxSearchStrategyNumber];
 } MinmaxOpaque;
 
 static FmgrInfo *minmax_get_strategy_procinfo(BrinDesc *bdesc, uint16 attno,
@@ -319,7 +319,7 @@ minmax_get_strategy_procinfo(BrinDesc *bdesc, uint16 attno, Oid subtype,
 	MinmaxOpaque *opaque;
 
 	Assert(strategynum >= 1 &&
-		   strategynum <= BTMaxStrategyNumber);
+		   strategynum <= BTMaxSearchStrategyNumber);
 
 	opaque = (MinmaxOpaque *) bdesc->bd_info[attno - 1]->oi_opaque;
 
@@ -332,7 +332,7 @@ minmax_get_strategy_procinfo(BrinDesc *bdesc, uint16 attno, Oid subtype,
 	{
 		uint16		i;
 
-		for (i = 1; i <= BTMaxStrategyNumber; i++)
+		for (i = 1; i <= BTMaxSearchStrategyNumber; i++)
 			opaque->strategy_procinfos[i - 1].fn_oid = InvalidOid;
 		opaque->cached_subtype = subtype;
 	}

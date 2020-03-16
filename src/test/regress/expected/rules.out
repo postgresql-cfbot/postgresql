@@ -1324,6 +1324,9 @@ pg_available_extensions| SELECT e.name,
     e.comment
    FROM (pg_available_extensions() e(name, default_version, comment)
      LEFT JOIN pg_extension x ON ((e.name = x.extname)));
+pg_command_stats| SELECT s.tag,
+    s.cnt
+   FROM pg_command_stats_data() s(tag, cnt);
 pg_config| SELECT pg_config.name,
     pg_config.setting
    FROM pg_config() pg_config(name, setting);

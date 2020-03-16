@@ -62,6 +62,7 @@
 #include "postmaster/autovacuum.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/bgwriter.h"
+#include "postmaster/cmdstats.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
 #include "postmaster/walwriter.h"
@@ -1481,6 +1482,18 @@ static struct config_bool ConfigureNamesBool[] =
 			NULL
 		},
 		&track_io_timing,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"cmdstats_tracking", PGC_POSTMASTER, STATS_COLLECTOR,
+			gettext_noop("Collects statistics of commands by type."),
+			gettext_noop("For each type of command (INSERT, UPDATE, DELETE, "
+						 "CREATE TABLE, etc), tracks statistics about the "
+						 "commands of that type which have been run."),
+			GUC_SUPERUSER_ONLY
+		},
+		&cmdstats_tracking,
 		false,
 		NULL, NULL, NULL
 	},

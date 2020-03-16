@@ -23,6 +23,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/bgworker_internals.h"
+#include "postmaster/cmdstats.h"
 #include "postmaster/postmaster.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
@@ -1983,4 +1984,65 @@ pg_stat_get_archiver(PG_FUNCTION_ARGS)
 
 	/* Returns the record as Datum */
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}
+
+Datum
+pg_command_stats_data(PG_FUNCTION_ARGS)
+{
+	TupleDesc		tupdesc;
+	Datum			values[2] = { 0, 0 };
+	bool			nulls[2] = { false, false };
+	ReturnSetInfo  *rsi;
+	MemoryContext	old_ctx;
+	Tuplestorestate *tuple_store;
+	CommandTag		tag;
+
+	rsi = (ReturnSetInfo *) fcinfo->resultinfo;
+
+	/* Check to see if caller supports us returning a tuplestore */
+	if (rsi == NULL || !IsA(rsi, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsi->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not "
+						"allowed in this context")));
+
+	rsi->returnMode = SFRM_Materialize;
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	/* Build tuplestore to hold the result rows */
+	old_ctx = MemoryContextSwitchTo(rsi->econtext->ecxt_per_query_memory);
+
+	tuple_store =
+		tuplestore_begin_heap(rsi->allowedModes & SFRM_Materialize_Random,
+							  false, work_mem);
+	rsi->setDesc = tupdesc;
+	rsi->setResult = tuple_store;
+
+	MemoryContextSwitchTo(old_ctx);
+
+	if (cmdstats_tracking)
+	{
+		CmdStats   *tally = cmdstats_shared_tally();
+		for (tag = FIRST_CMDTAG; tally != NULL && tag <= LAST_CMDTAG; tag++)
+		{
+			HeapTuple		tuple;
+
+			if (tally->cnt[tag] == 0)
+				continue;
+
+			values[0] = CStringGetTextDatum(GetCommandTagName(tag));
+			values[1] = Int64GetDatum(tally->cnt[tag]);
+
+			tuple = heap_form_tuple(tupdesc, values, nulls);
+			tuplestore_puttuple(tuple_store, tuple);
+		}
+	}
+	PG_RETURN_NULL();
 }

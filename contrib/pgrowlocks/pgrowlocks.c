@@ -54,13 +54,6 @@ PG_FUNCTION_INFO_V1(pgrowlocks);
 
 #define NCHARS 32
 
-typedef struct
-{
-	Relation	rel;
-	TableScanDesc scan;
-	int			ncolumns;
-} MyData;
-
 #define		Atnum_tid		0
 #define		Atnum_xmax		1
 #define		Atnum_ismulti	2
@@ -71,82 +64,84 @@ typedef struct
 Datum
 pgrowlocks(PG_FUNCTION_ARGS)
 {
-	FuncCallContext *funcctx;
 	TableScanDesc scan;
 	HeapScanDesc hscan;
 	HeapTuple	tuple;
 	TupleDesc	tupdesc;
 	AttInMetadata *attinmeta;
-	Datum		result;
-	MyData	   *mydata;
 	Relation	rel;
 
-	if (SRF_IS_FIRSTCALL())
-	{
-		text	   *relname;
-		RangeVar   *relrv;
-		MemoryContext oldcontext;
-		AclResult	aclresult;
+	ReturnSetInfo   *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	Tuplestorestate	*tupstore;
+	bool            randomAccess;
 
-		funcctx = SRF_FIRSTCALL_INIT();
-		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+	text	   *relname;
+	RangeVar   *relrv;
+	MemoryContext oldcontext;
+	AclResult	aclresult;
+	char	  **values;
 
-		/* Build a tuple descriptor for our result type */
-		if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
-			elog(ERROR, "return type must be a row type");
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("materialize mode required, but it is not allowed in this context")));
 
-		attinmeta = TupleDescGetAttInMetadata(tupdesc);
-		funcctx->attinmeta = attinmeta;
+	/* The Tuplestore and TupleDesc should be created in ecxt_per_query_memory */
+	oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
+	randomAccess = (rsinfo->allowedModes&SFRM_Materialize_Random) != 0;
+	tupstore = tuplestore_begin_heap(randomAccess, false, work_mem);
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
 
-		relname = PG_GETARG_TEXT_PP(0);
-		relrv = makeRangeVarFromNameList(textToQualifiedNameList(relname));
-		rel = relation_openrv(relrv, AccessShareLock);
+	attinmeta = TupleDescGetAttInMetadata(tupdesc);
 
-		if (rel->rd_rel->relam != HEAP_TABLE_AM_OID)
-			ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							errmsg("only heap AM is supported")));
+	relname = PG_GETARG_TEXT_PP(0);
+	relrv = makeRangeVarFromNameList(textToQualifiedNameList(relname));
+	rel = relation_openrv(relrv, AccessShareLock);
 
-		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is a partitioned table",
-							RelationGetRelationName(rel)),
-					 errdetail("Partitioned tables do not contain rows.")));
-		else if (rel->rd_rel->relkind != RELKIND_RELATION)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is not a table",
-							RelationGetRelationName(rel))));
+	if (rel->rd_rel->relam != HEAP_TABLE_AM_OID)
+		ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						errmsg("only heap AM is supported")));
 
-		/*
-		 * check permissions: must have SELECT on table or be in
-		 * pg_stat_scan_tables
-		 */
-		aclresult = pg_class_aclcheck(RelationGetRelid(rel), GetUserId(),
-									  ACL_SELECT);
-		if (aclresult != ACLCHECK_OK)
-			aclresult = is_member_of_role(GetUserId(), DEFAULT_ROLE_STAT_SCAN_TABLES) ? ACLCHECK_OK : ACLCHECK_NO_PRIV;
+	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("\"%s\" is a partitioned table",
+						RelationGetRelationName(rel)),
+				 errdetail("Partitioned tables do not contain rows.")));
+	else if (rel->rd_rel->relkind != RELKIND_RELATION)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("\"%s\" is not a table",
+						RelationGetRelationName(rel))));
 
-		if (aclresult != ACLCHECK_OK)
-			aclcheck_error(aclresult, get_relkind_objtype(rel->rd_rel->relkind),
-						   RelationGetRelationName(rel));
+	/*
+	 * check permissions: must have SELECT on table or be in
+	 * pg_stat_scan_tables
+	 */
+	aclresult = pg_class_aclcheck(RelationGetRelid(rel), GetUserId(),
+								  ACL_SELECT);
+	if (aclresult != ACLCHECK_OK)
+		aclresult = is_member_of_role(GetUserId(), DEFAULT_ROLE_STAT_SCAN_TABLES) ? ACLCHECK_OK : ACLCHECK_NO_PRIV;
 
-		scan = table_beginscan(rel, GetActiveSnapshot(), 0, NULL);
-		hscan = (HeapScanDesc) scan;
-		mydata = palloc(sizeof(*mydata));
-		mydata->rel = rel;
-		mydata->scan = scan;
-		mydata->ncolumns = tupdesc->natts;
-		funcctx->user_fctx = mydata;
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult, get_relkind_objtype(rel->rd_rel->relkind),
+					   RelationGetRelationName(rel));
 
-		MemoryContextSwitchTo(oldcontext);
-	}
-
-	funcctx = SRF_PERCALL_SETUP();
-	attinmeta = funcctx->attinmeta;
-	mydata = (MyData *) funcctx->user_fctx;
-	scan = mydata->scan;
+	scan = table_beginscan(rel, GetActiveSnapshot(), 0, NULL);
 	hscan = (HeapScanDesc) scan;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	values = (char **) palloc(tupdesc->natts * sizeof(char *));
 
 	/* scan the relation */
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
@@ -169,9 +164,6 @@ pgrowlocks(PG_FUNCTION_ARGS)
 		 */
 		if (htsu == TM_BeingModified)
 		{
-			char	  **values;
-
-			values = (char **) palloc(mydata->ncolumns * sizeof(char *));
 
 			values[Atnum_tid] = (char *) DirectFunctionCall1(tidout,
 															 PointerGetDatum(&tuple->t_self));
@@ -297,16 +289,7 @@ pgrowlocks(PG_FUNCTION_ARGS)
 
 			/* build a tuple */
 			tuple = BuildTupleFromCStrings(attinmeta, values);
-
-			/* make the tuple into a datum */
-			result = HeapTupleGetDatum(tuple);
-
-			/*
-			 * no need to pfree what we allocated; it's on a short-lived
-			 * memory context anyway
-			 */
-
-			SRF_RETURN_NEXT(funcctx, result);
+			tuplestore_puttuple(tupstore, tuple);
 		}
 		else
 		{
@@ -314,8 +297,9 @@ pgrowlocks(PG_FUNCTION_ARGS)
 		}
 	}
 
+	tuplestore_donestoring(tupstore);
 	table_endscan(scan);
-	table_close(mydata->rel, AccessShareLock);
+	table_close(rel, AccessShareLock);
 
-	SRF_RETURN_DONE(funcctx);
+	return (Datum) 0;
 }

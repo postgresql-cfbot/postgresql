@@ -374,11 +374,9 @@ hash_page_items(PG_FUNCTION_ARGS)
 
 		SRF_RETURN_NEXT(fctx, result);
 	}
-	else
-	{
-		pfree(uargs);
-		SRF_RETURN_DONE(fctx);
-	}
+
+	/* allocations in multi_call_memory_ctx are released automatically */
+	SRF_RETURN_DONE(fctx);
 }
 
 /* ------------------------------------------------

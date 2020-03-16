@@ -2812,7 +2812,7 @@ HeapTupleGetDatum(HeapTuple tuple)
     <title>Returning Sets</title>
 
     <para>
-     There is also a special API that provides support for returning
+     There is also a special, helper API that provides support for returning
      sets (multiple rows) from a C-language function.  A set-returning
      function must follow the version-1 calling conventions.  Also,
      source files must include <filename>funcapi.h</filename>, as
@@ -2820,10 +2820,19 @@ HeapTupleGetDatum(HeapTuple tuple)
     </para>
 
     <para>
-     A set-returning function (<acronym>SRF</acronym>) is called
-     once for each item it returns.  The <acronym>SRF</acronym> must
-     therefore save enough state to remember what it was doing and
+     The helper API allows writing a set-returning function
+     (<acronym>SRF</acronym>) using the ValuePerCall mode, in which the SRF is
+     called once for each item it returns.  The <acronym>SRF</acronym> must
+     then save enough state to remember what it was doing and
      return the next item on each call.
+     Note, however, that an SRF will possibly not be run to completion, due to
+     a LIMIT or a cursor, and should avoid leaving resources like DIR*s or
+     tablescans opened across calls.  To avoid leaking resources in those cases,
+     instead of using ValuePerCall mode, the SRF should populate and return a
+     tuplestore with SFRM_Materialize mode.  See fmgr/README.
+    </para>
+
+    <para>
      The structure <structname>FuncCallContext</structname> is provided to help
      control this process.  Within a function, <literal>fcinfo-&gt;flinfo-&gt;fn_extra</literal>
      is used to hold a pointer to <structname>FuncCallContext</structname>
@@ -2852,7 +2861,8 @@ typedef struct FuncCallContext
      * OPTIONAL pointer to miscellaneous user-provided context information
      *
      * user_fctx is for use as a pointer to your own data to retain
-     * arbitrary context information between calls of your function.
+     * context information between calls of your function.
+     * It should probably not include resources other than allocated memory.
      */
     void *user_fctx;
 
@@ -2872,7 +2882,8 @@ typedef struct FuncCallContext
      * multi_call_memory_ctx is set by SRF_FIRSTCALL_INIT() for you, and used
      * by SRF_RETURN_DONE() for cleanup. It is the most appropriate memory
      * context for any memory that is to be reused across multiple calls
-     * of the SRF.
+     * of the SRF.  Memory palloc'd in this context will be pfree'd
+     * automatically.
      */
     MemoryContext multi_call_memory_ctx;
 
@@ -2926,6 +2937,7 @@ SRF_RETURN_NEXT(funcctx, result)
 SRF_RETURN_DONE(funcctx)
 </programlisting>
      to clean up and end the <acronym>SRF</acronym>.
+     Allocations within multi_call_memory_ctx are automatically pfree'd.
     </para>
 
     <para>
@@ -2995,7 +3007,10 @@ my_set_returning_function(PG_FUNCTION_ARGS)
     }
     else
     {
-        /* Here we are done returning items and just need to clean up: */
+        /*
+         * Here we are done returning items and just need to clean up, but no
+         * need to pfree allocations within multi_call_memory_ctx.
+         */
         <replaceable>user code</replaceable>
         SRF_RETURN_DONE(funcctx);
     }

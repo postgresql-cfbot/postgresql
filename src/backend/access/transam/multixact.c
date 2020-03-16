@@ -3388,9 +3388,6 @@ pg_get_multixact_members(PG_FUNCTION_ARGS)
 		SRF_RETURN_NEXT(funccxt, HeapTupleGetDatum(tuple));
 	}
 
-	if (multi->nmembers > 0)
-		pfree(multi->members);
-	pfree(multi);
-
+	/* allocations in multi_call_memory_ctx are released automatically */
 	SRF_RETURN_DONE(funccxt);
 }

@@ -36,13 +36,6 @@
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
 
-typedef struct
-{
-	char	   *location;
-	DIR		   *dirdesc;
-	bool		include_dot_dirs;
-} directory_fctx;
-
 
 /*
  * Convert a "text" filename argument to C string, and check it's allowable.
@@ -447,67 +440,81 @@ pg_stat_file_1arg(PG_FUNCTION_ARGS)
 Datum
 pg_ls_dir(PG_FUNCTION_ARGS)
 {
-	FuncCallContext *funcctx;
-	struct dirent *de;
-	directory_fctx *fctx;
-	MemoryContext oldcontext;
+	ReturnSetInfo	*rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	MemoryContext	oldcontext;
+	TupleDesc		tupdesc;
+	Tuplestorestate *tupstore;
+	bool			randomAccess;
 
-	if (SRF_IS_FIRSTCALL())
+	bool			missing_ok = false;
+	bool			include_dot_dirs = false;
+	char			*location;
+	DIR				*dirdesc;
+	struct dirent	*de;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("materialize mode required, but it is not allowed in this context")));
+
+	/* check the optional arguments */
+	if (PG_NARGS() == 3)
 	{
-		bool		missing_ok = false;
-		bool		include_dot_dirs = false;
-
-		/* check the optional arguments */
-		if (PG_NARGS() == 3)
-		{
-			if (!PG_ARGISNULL(1))
-				missing_ok = PG_GETARG_BOOL(1);
-			if (!PG_ARGISNULL(2))
-				include_dot_dirs = PG_GETARG_BOOL(2);
-		}
-
-		funcctx = SRF_FIRSTCALL_INIT();
-		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
-
-		fctx = palloc(sizeof(directory_fctx));
-		fctx->location = convert_and_check_filename(PG_GETARG_TEXT_PP(0));
-
-		fctx->include_dot_dirs = include_dot_dirs;
-		fctx->dirdesc = AllocateDir(fctx->location);
-
-		if (!fctx->dirdesc)
-		{
-			if (missing_ok && errno == ENOENT)
-			{
-				MemoryContextSwitchTo(oldcontext);
-				SRF_RETURN_DONE(funcctx);
-			}
-			else
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not open directory \"%s\": %m",
-								fctx->location)));
-		}
-		funcctx->user_fctx = fctx;
-		MemoryContextSwitchTo(oldcontext);
+		if (!PG_ARGISNULL(1))
+			missing_ok = PG_GETARG_BOOL(1);
+		if (!PG_ARGISNULL(2))
+			include_dot_dirs = PG_GETARG_BOOL(2);
 	}
 
-	funcctx = SRF_PERCALL_SETUP();
-	fctx = (directory_fctx *) funcctx->user_fctx;
+	/* The Tuplestore and TupleDesc should be created in ecxt_per_query_memory */
+	oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
+	randomAccess = (rsinfo->allowedModes&SFRM_Materialize_Random) != 0;
+	tupstore = tuplestore_begin_heap(randomAccess, false, work_mem);
 
-	while ((de = ReadDir(fctx->dirdesc, fctx->location)) != NULL)
+	tupdesc = CreateTemplateTupleDesc(1);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "column", TEXTOID, -1, 0);
+
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+	MemoryContextSwitchTo(oldcontext);
+
+	location = convert_and_check_filename(PG_GETARG_TEXT_PP(0));
+	dirdesc = AllocateDir(location);
+
+	if (!dirdesc)
 	{
-		if (!fctx->include_dot_dirs &&
+		if (missing_ok && errno == ENOENT)
+			return (Datum) 0;
+		else
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not open directory \"%s\": %m",
+							location)));
+	}
+
+	while ((de = ReadDir(dirdesc, location)) != NULL)
+	{
+		Datum		values[1];
+		bool		nulls[1] = {false};
+
+		if (!include_dot_dirs &&
 			(strcmp(de->d_name, ".") == 0 ||
 			 strcmp(de->d_name, "..") == 0))
 			continue;
 
-		SRF_RETURN_NEXT(funcctx, CStringGetTextDatum(de->d_name));
+		values[0] = CStringGetTextDatum(de->d_name);
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
 
-	FreeDir(fctx->dirdesc);
-
-	SRF_RETURN_DONE(funcctx);
+	tuplestore_donestoring(tupstore);
+	FreeDir(dirdesc);
+	return (Datum) 0;
 }
 
 /*

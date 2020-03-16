@@ -77,7 +77,7 @@ typedef struct FuncCallContext
 	 * OPTIONAL pointer to miscellaneous user-provided context information
 	 *
 	 * user_fctx is for use as a pointer to your own struct to retain
-	 * arbitrary context information between calls of your function.
+	 * context information between calls of your function.
 	 */
 	void	   *user_fctx;
 
@@ -93,8 +93,9 @@ typedef struct FuncCallContext
 	/*
 	 * memory context used for structures that must live for multiple calls
 	 *
-	 * multi_call_memory_ctx is set by SRF_FIRSTCALL_INIT() for you, and used
-	 * by SRF_RETURN_DONE() for cleanup. It is the most appropriate memory
+	 * multi_call_memory_ctx is set by SRF_FIRSTCALL_INIT() for you, and
+	 * automatically cleaned up by SRF_RETURN_DONE(). It is the most
+	 * appropriate memory
 	 * context for any memory that is to be reused across multiple calls of
 	 * the SRF.
 	 */
@@ -234,7 +235,12 @@ extern Datum HeapTupleHeaderGetDatum(HeapTupleHeader tuple);
 /*----------
  *		Support for Set Returning Functions (SRFs)
  *
- * The basic API for SRFs looks something like:
+ * The basic API for SRFs using ValuePerCall mode looks something like this.
+ * Note that an SRF will possibly not be run to completion, due to a LIMIT or a
+ * cursor, and should avoid leaving resources like DIR*s or tablescans opened
+ * across calls.  To avoid leaking resources in those cases, instead of using
+ * ValuePerCall mode, the SRF should populate and return a tuplestore with
+ * SFRM_Materialize mode.  See fmgr/README.
  *
  * Datum
  * my_Set_Returning_Function(PG_FUNCTION_ARGS)

@@ -104,9 +104,8 @@ tt_process_call(FuncCallContext *funcctx)
 		st->cur++;
 		return result;
 	}
-	if (st->list)
-		pfree(st->list);
-	pfree(st);
+
+	/* allocations in multi_call_memory_ctx are released automatically */
 	return (Datum) 0;
 }
 
@@ -245,12 +244,8 @@ prs_process_call(FuncCallContext *funcctx)
 		st->cur++;
 		return result;
 	}
-	else
-	{
-		if (st->list)
-			pfree(st->list);
-		pfree(st);
-	}
+
+	/* allocations in multi_call_memory_ctx are released automatically */
 	return (Datum) 0;
 }
 

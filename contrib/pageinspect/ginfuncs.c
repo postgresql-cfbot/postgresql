@@ -260,6 +260,7 @@ gin_leafpage_items(PG_FUNCTION_ARGS)
 
 		SRF_RETURN_NEXT(fctx, result);
 	}
-	else
-		SRF_RETURN_DONE(fctx);
+
+	/* allocations in multi_call_memory_ctx are released automatically */
+	SRF_RETURN_DONE(fctx);
 }

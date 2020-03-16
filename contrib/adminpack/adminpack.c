@@ -504,50 +504,56 @@ pg_logdir_ls_v1_1(PG_FUNCTION_ARGS)
 static Datum
 pg_logdir_ls_internal(FunctionCallInfo fcinfo)
 {
-	FuncCallContext *funcctx;
 	struct dirent *de;
-	directory_fctx *fctx;
+
+	ReturnSetInfo	*rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	MemoryContext	oldcontext;
+	TupleDesc		tupdesc;
+	Tuplestorestate	*tupstore;
+	bool			randomAccess;
+	DIR				*dirdesc;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("materialize mode required, but it is not allowed in this context")));
 
 	if (strcmp(Log_filename, "postgresql-%Y-%m-%d_%H%M%S.log") != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("the log_filename parameter must equal 'postgresql-%%Y-%%m-%%d_%%H%%M%%S.log'")));
 
-	if (SRF_IS_FIRSTCALL())
-	{
-		MemoryContext oldcontext;
-		TupleDesc	tupdesc;
+	/* The Tuplestore and TupleDesc should be created in ecxt_per_query_memory */
+	oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
+	randomAccess = (rsinfo->allowedModes&SFRM_Materialize_Random) != 0;
+	tupstore = tuplestore_begin_heap(randomAccess, false, work_mem);
 
-		funcctx = SRF_FIRSTCALL_INIT();
-		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+	/* Is this right ?? */
+	tupdesc = CreateTemplateTupleDesc(2);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "starttime",
+			TIMESTAMPOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "filename",
+			TEXTOID, -1, 0);
 
-		fctx = palloc(sizeof(directory_fctx));
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
 
-		tupdesc = CreateTemplateTupleDesc(2);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "starttime",
-						   TIMESTAMPOID, -1, 0);
-		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "filename",
-						   TEXTOID, -1, 0);
+	MemoryContextSwitchTo(oldcontext);
 
-		funcctx->attinmeta = TupleDescGetAttInMetadata(tupdesc);
+	dirdesc = AllocateDir(Log_directory);
+	if (!dirdesc)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open directory \"%s\": %m",
+						Log_directory)));
 
-		fctx->location = pstrdup(Log_directory);
-		fctx->dirdesc = AllocateDir(fctx->location);
-
-		if (!fctx->dirdesc)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not open directory \"%s\": %m",
-							fctx->location)));
-
-		funcctx->user_fctx = fctx;
-		MemoryContextSwitchTo(oldcontext);
-	}
-
-	funcctx = SRF_PERCALL_SETUP();
-	fctx = (directory_fctx *) funcctx->user_fctx;
-
-	while ((de = ReadDir(fctx->dirdesc, fctx->location)) != NULL)
+	while ((de = ReadDir(dirdesc, Log_directory)) != NULL)
 	{
 		char	   *values[2];
 		HeapTuple	tuple;
@@ -584,13 +590,13 @@ pg_logdir_ls_internal(FunctionCallInfo fcinfo)
 		/* Seems the timestamp is OK; prepare and return tuple */
 
 		values[0] = timestampbuf;
-		values[1] = psprintf("%s/%s", fctx->location, de->d_name);
+		values[1] = psprintf("%s/%s", Log_directory, de->d_name);
 
-		tuple = BuildTupleFromCStrings(funcctx->attinmeta, values);
-
-		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
+		tuple = BuildTupleFromCStrings(TupleDescGetAttInMetadata(tupdesc), values);
+		tuplestore_puttuple(tupstore, tuple);
 	}
 
-	FreeDir(fctx->dirdesc);
-	SRF_RETURN_DONE(funcctx);
+	tuplestore_donestoring(tupstore);
+	FreeDir(dirdesc);
+	return (Datum) 0;
 }

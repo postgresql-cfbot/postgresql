@@ -706,7 +706,7 @@ tsvector_unnest(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		pfree(tsin);
+		/* allocations in multi_call_memory_ctx are released automatically */
 		SRF_RETURN_DONE(funcctx);
 	}
 }

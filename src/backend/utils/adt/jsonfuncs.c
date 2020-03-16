@@ -535,7 +535,6 @@ jsonb_object_keys(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *funcctx;
 	OkeysState *state;
-	int			i;
 
 	if (SRF_IS_FIRSTCALL())
 	{
@@ -598,12 +597,7 @@ jsonb_object_keys(PG_FUNCTION_ARGS)
 		SRF_RETURN_NEXT(funcctx, CStringGetTextDatum(nxt));
 	}
 
-	/* cleanup to reduce or eliminate memory leaks */
-	for (i = 0; i < state->result_count; i++)
-		pfree(state->result[i]);
-	pfree(state->result);
-	pfree(state);
-
+	/* allocations in multi_call_memory_ctx are released automatically */
 	SRF_RETURN_DONE(funcctx);
 }
 
@@ -706,7 +700,6 @@ json_object_keys(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *funcctx;
 	OkeysState *state;
-	int			i;
 
 	if (SRF_IS_FIRSTCALL())
 	{
@@ -755,12 +748,7 @@ json_object_keys(PG_FUNCTION_ARGS)
 		SRF_RETURN_NEXT(funcctx, CStringGetTextDatum(nxt));
 	}
 
-	/* cleanup to reduce or eliminate memory leaks */
-	for (i = 0; i < state->result_count; i++)
-		pfree(state->result[i]);
-	pfree(state->result);
-	pfree(state);
-
+	/* allocations in multi_call_memory_ctx are released automatically */
 	SRF_RETURN_DONE(funcctx);
 }
 

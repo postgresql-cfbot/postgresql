@@ -262,6 +262,19 @@ HandleSlashCmds(PsqlScanState scan_state,
 }
 
 
+static void
+printTimeConnected(void)
+{
+
+	const char *strftime_fmt;
+	char timebuf[128];
+
+	strftime_fmt = "%c";
+	strftime(timebuf, sizeof(timebuf), strftime_fmt, localtime(&pset.connection_start));
+
+	printf(_("The connection started at %s\n"), timebuf);
+}
+
 /*
  * Subroutine to actually try to execute a backslash command.
  *
@@ -623,6 +636,7 @@ exec_command_conninfo(PsqlScanState scan_state, bool active_branch)
 			}
 			printSSLInfo();
 			printGSSInfo();
+			printTimeConnected();
 		}
 	}
 
@@ -3356,6 +3370,7 @@ SyncVariables(void)
 	pset.encoding = PQclientEncoding(pset.db);
 	pset.popt.topt.encoding = pset.encoding;
 	pset.sversion = PQserverVersion(pset.db);
+	pset.connection_start = time(NULL);
 
 	SetVariable(pset.vars, "DBNAME", PQdb(pset.db));
 	SetVariable(pset.vars, "USER", PQuser(pset.db));

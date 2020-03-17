@@ -144,6 +144,7 @@ typedef struct WaitEvent
 	uint32		events;			/* triggered events */
 	pgsocket	fd;				/* socket fd associated with event */
 	void	   *user_data;		/* pointer provided in AddWaitEventToSet */
+	int			next_free;		/* free list for internal use */
 #ifdef WIN32
 	bool		reset;			/* Is reset of the event required? */
 #endif
@@ -168,6 +169,8 @@ extern void FreeWaitEventSet(WaitEventSet *set);
 extern int	AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd,
 							  Latch *latch, void *user_data);
 extern void ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch);
+extern void RemoveWaitEvent(WaitEventSet *set, int pos, bool fd_closed);
+extern int WaitEventSetSize(WaitEventSet *set);
 
 extern int	WaitEventSetWait(WaitEventSet *set, long timeout,
 							 WaitEvent *occurred_events, int nevents,
@@ -176,6 +179,7 @@ extern int	WaitLatch(Latch *latch, int wakeEvents, long timeout,
 					  uint32 wait_event_info);
 extern int	WaitLatchOrSocket(Latch *latch, int wakeEvents,
 							  pgsocket sock, long timeout, uint32 wait_event_info);
+extern void InitializeCommonWaitSet(void);
 
 /*
  * Unix implementation uses SIGUSR1 for inter-process signaling.

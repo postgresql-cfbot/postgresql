@@ -457,6 +457,8 @@ pgthreadlock_t pg_g_threadlock = default_threadlock;
 void
 pqDropConnection(PGconn *conn, bool flushInput)
 {
+	int i;
+
 	/* Drop any SSL state */
 	pqsecure_close(conn);
 
@@ -465,6 +467,18 @@ pqDropConnection(PGconn *conn, bool flushInput)
 		closesocket(conn->sock);
 	conn->sock = PGINVALID_SOCKET;
 
+	/* let any event procs notice of disconnection */
+	for (i = 0; i < conn->nEvents; i++)
+	{
+		PGEventConnDisconnection evt;
+
+		evt.conn = conn;
+
+		/* ignoring failure */
+		(void) conn->events[i].proc(PGEVT_CONNDISCONNECTION, &evt,
+									conn->events[i].passThrough);
+	}
+	
 	/* Optionally discard any unread data */
 	if (flushInput)
 		conn->inStart = conn->inCursor = conn->inEnd = 0;

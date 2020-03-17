@@ -239,6 +239,8 @@ typedef WalRcvExecResult *(*walrcv_exec_fn) (WalReceiverConn *conn,
 											 const int nRetTypes,
 											 const Oid *retTypes);
 typedef void (*walrcv_disconnect_fn) (WalReceiverConn *conn);
+typedef int (*walrcv_wait_fn) (WalReceiverConn *conn, long timeout,
+							   int wait_event);
 
 typedef struct WalReceiverFunctionsType
 {
@@ -257,6 +259,7 @@ typedef struct WalReceiverFunctionsType
 	walrcv_get_backend_pid_fn walrcv_get_backend_pid;
 	walrcv_exec_fn walrcv_exec;
 	walrcv_disconnect_fn walrcv_disconnect;
+	walrcv_wait_fn walrcv_wait;
 } WalReceiverFunctionsType;
 
 extern PGDLLIMPORT WalReceiverFunctionsType *WalReceiverFunctions;
@@ -291,6 +294,8 @@ extern PGDLLIMPORT WalReceiverFunctionsType *WalReceiverFunctions;
 	WalReceiverFunctions->walrcv_exec(conn, exec, nRetTypes, retTypes)
 #define walrcv_disconnect(conn) \
 	WalReceiverFunctions->walrcv_disconnect(conn)
+#define walrcv_wait(conn, timeout, wait_event) \
+	WalReceiverFunctions->walrcv_wait(conn, timeout, wait_event)
 
 static inline void
 walrcv_clear_result(WalRcvExecResult *walres)

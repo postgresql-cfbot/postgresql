@@ -36,20 +36,31 @@
  * The function returns a non-zero if successful.  If the function fails,
  * zero is returned.
  */
-int
+PGRegEventResult
 PQregisterEventProc(PGconn *conn, PGEventProc proc,
 					const char *name, void *passThrough)
 {
 	int			i;
 	PGEventRegister regevt;
 
-	if (!proc || !conn || !name || !*name)
-		return false;			/* bad arguments */
+	if (!conn)
+		return PGEVTREG_BADARG;
+
+	if (!proc || !name || !*name)
+	{
+		printfPQExpBuffer(&conn->errorMessage,
+						  "bad argument in PQregisterEventProc");
+		return PGEVTREG_BADARG;
+	}
 
 	for (i = 0; i < conn->nEvents; i++)
 	{
 		if (conn->events[i].proc == proc)
-			return false;		/* already registered */
+		{
+			printfPQExpBuffer(&conn->errorMessage,
+							  "proc is already registered in PQregisterEventProc");
+			return PGEVTREG_ALREADY_REAGISTERED;
+		}
 	}
 
 	if (conn->nEvents >= conn->eventArraySize)
@@ -64,7 +75,10 @@ PQregisterEventProc(PGconn *conn, PGEventProc proc,
 			e = (PGEvent *) malloc(newSize * sizeof(PGEvent));
 
 		if (!e)
-			return false;
+		{
+			printfPQExpBuffer(&conn->errorMessage, "out of memory");
+			return PGEVTREG_OUT_OF_MEMORY;
+		}
 
 		conn->eventArraySize = newSize;
 		conn->events = e;
@@ -73,7 +87,10 @@ PQregisterEventProc(PGconn *conn, PGEventProc proc,
 	conn->events[conn->nEvents].proc = proc;
 	conn->events[conn->nEvents].name = strdup(name);
 	if (!conn->events[conn->nEvents].name)
-		return false;
+	{
+		printfPQExpBuffer(&conn->errorMessage, "out of memory");
+		return PGEVTREG_OUT_OF_MEMORY;
+	}
 	conn->events[conn->nEvents].passThrough = passThrough;
 	conn->events[conn->nEvents].data = NULL;
 	conn->events[conn->nEvents].resultInitialized = false;
@@ -84,10 +101,11 @@ PQregisterEventProc(PGconn *conn, PGEventProc proc,
 	{
 		conn->nEvents--;
 		free(conn->events[conn->nEvents].name);
-		return false;
+		printfPQExpBuffer(&conn->errorMessage, "proc rejected");
+		return PGEVTREG_PROC_REJECTED;
 	}
 
-	return true;
+	return PGEVTREG_SUCCESS;
 }
 
 /*

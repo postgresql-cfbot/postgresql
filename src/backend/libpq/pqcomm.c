@@ -222,7 +222,7 @@ pq_init(void)
 	AddWaitEventToSet(FeBeWaitSet, WL_SOCKET_WRITEABLE, MyProcPort->sock,
 					  NULL, NULL);
 	AddWaitEventToSet(FeBeWaitSet, WL_LATCH_SET, -1, MyLatch, NULL);
-	AddWaitEventToSet(FeBeWaitSet, WL_POSTMASTER_DEATH, -1, NULL, NULL);
+	AddWaitEventToSet(FeBeWaitSet, WL_EXIT_ON_PM_DEATH, -1, NULL, NULL);
 }
 
 /* --------------------------------

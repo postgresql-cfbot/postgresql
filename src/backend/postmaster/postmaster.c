@@ -4883,9 +4883,6 @@ SubPostmasterMain(int argc, char *argv[])
 	IsPostmasterEnvironment = true;
 	whereToSendOutput = DestNone;
 
-	/* Setup as postmaster child */
-	InitPostmasterChild();
-
 	/* Setup essential subsystems (to ensure elog() behaves sanely) */
 	InitializeGUCOptions();
 
@@ -4899,6 +4896,18 @@ SubPostmasterMain(int argc, char *argv[])
 
 	/* Close the postmaster's sockets (as soon as we know them) */
 	ClosePostmasterPorts(strcmp(argv[1], "--forklog") == 0);
+
+	/*
+	 * Start our win32 signal implementation. This has to be done after we
+	 * read the backend variables, because we need to pick up the signal pipe
+	 * from the parent process.
+	 */
+#ifdef WIN32
+	pgwin32_signal_initialize();
+#endif
+
+	/* Setup as postmaster child */
+	InitPostmasterChild();
 
 	/*
 	 * Set reference point for stack-depth checking
@@ -4947,15 +4956,6 @@ SubPostmasterMain(int argc, char *argv[])
 		AutovacuumLauncherIAm();
 	if (strcmp(argv[1], "--forkavworker") == 0)
 		AutovacuumWorkerIAm();
-
-	/*
-	 * Start our win32 signal implementation. This has to be done after we
-	 * read the backend variables, because we need to pick up the signal pipe
-	 * from the parent process.
-	 */
-#ifdef WIN32
-	pgwin32_signal_initialize();
-#endif
 
 	/* In EXEC_BACKEND case we will not have inherited these settings */
 	pqinitmask();

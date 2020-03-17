@@ -1240,7 +1240,7 @@ WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 	/* If we have pending write here, go to slow path */
 	for (;;)
 	{
-		int			wakeEvents;
+		WaitEvent	event;
 		long		sleeptime;
 
 		/* Check for input from the client */
@@ -1257,13 +1257,11 @@ WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 
 		sleeptime = WalSndComputeSleeptime(GetCurrentTimestamp());
 
-		wakeEvents = WL_LATCH_SET | WL_EXIT_ON_PM_DEATH |
-			WL_SOCKET_WRITEABLE | WL_SOCKET_READABLE | WL_TIMEOUT;
-
 		/* Sleep until something happens or we time out */
-		(void) WaitLatchOrSocket(MyLatch, wakeEvents,
-								 MyProcPort->sock, sleeptime,
-								 WAIT_EVENT_WAL_SENDER_WRITE_DATA);
+		ModifyWaitEvent(FeBeWaitSet, 0,
+						WL_SOCKET_WRITEABLE | WL_SOCKET_READABLE, NULL);
+		(void) WaitEventSetWait(FeBeWaitSet, sleeptime, &event, 1,
+								WAIT_EVENT_WAL_SENDER_WRITE_DATA);
 
 		/* Clear any already-pending wakeups */
 		ResetLatch(MyLatch);
@@ -1347,6 +1345,7 @@ WalSndWaitForWal(XLogRecPtr loc)
 
 	for (;;)
 	{
+		WaitEvent	event;
 		long		sleeptime;
 
 		/* Clear any already-pending wakeups */
@@ -1440,15 +1439,14 @@ WalSndWaitForWal(XLogRecPtr loc)
 		 */
 		sleeptime = WalSndComputeSleeptime(GetCurrentTimestamp());
 
-		wakeEvents = WL_LATCH_SET | WL_EXIT_ON_PM_DEATH |
-			WL_SOCKET_READABLE | WL_TIMEOUT;
+		wakeEvents = WL_SOCKET_READABLE;
 
 		if (pq_is_send_pending())
 			wakeEvents |= WL_SOCKET_WRITEABLE;
 
-		(void) WaitLatchOrSocket(MyLatch, wakeEvents,
-								 MyProcPort->sock, sleeptime,
-								 WAIT_EVENT_WAL_SENDER_WAIT_WAL);
+		ModifyWaitEvent(FeBeWaitSet, 0, wakeEvents, NULL);
+		(void) WaitEventSetWait(FeBeWaitSet, sleeptime, &event, 1,
+								WAIT_EVENT_WAL_SENDER_WAIT_WAL);
 	}
 
 	/* reactivate latch so WalSndLoop knows to continue */
@@ -2289,9 +2287,9 @@ WalSndLoop(WalSndSendDataCallback send_data)
 		{
 			long		sleeptime;
 			int			wakeEvents;
+			WaitEvent	event;
 
-			wakeEvents = WL_LATCH_SET | WL_EXIT_ON_PM_DEATH | WL_TIMEOUT |
-				WL_SOCKET_READABLE;
+			wakeEvents = WL_SOCKET_READABLE;
 
 			/*
 			 * Use fresh timestamp, not last_processing, to reduce the chance
@@ -2303,9 +2301,9 @@ WalSndLoop(WalSndSendDataCallback send_data)
 				wakeEvents |= WL_SOCKET_WRITEABLE;
 
 			/* Sleep until something happens or we time out */
-			(void) WaitLatchOrSocket(MyLatch, wakeEvents,
-									 MyProcPort->sock, sleeptime,
-									 WAIT_EVENT_WAL_SENDER_MAIN);
+			ModifyWaitEvent(FeBeWaitSet, 0, wakeEvents, NULL);
+			(void) WaitEventSetWait(FeBeWaitSet, sleeptime, &event, 1,
+									WAIT_EVENT_WAL_SENDER_MAIN);
 		}
 	}
 }

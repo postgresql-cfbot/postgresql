@@ -2704,6 +2704,22 @@ sort_object_addresses(ObjectAddresses *addrs)
 }
 
 /*
+ * Clear an ObjectAddresses array such that it can be reused to avoid an
+ * allocation cycle.
+ */
+void
+reset_object_addresses(ObjectAddresses *addrs)
+{
+	if (addrs->numrefs == 0)
+		return;
+
+	memset(addrs->refs, 0, addrs->maxrefs * sizeof(ObjectAddress));
+	if (addrs->extras)
+		memset(addrs->extras, 0, addrs->maxrefs * sizeof(ObjectAddressExtra));
+	addrs->numrefs = 0;
+}
+
+/*
  * Clean up when done with an ObjectAddresses array.
  */
 void

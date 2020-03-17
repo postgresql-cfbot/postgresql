@@ -105,7 +105,7 @@ static TupleDesc ConstructTupleDescriptor(Relation heapRelation,
 										  Oid *classObjectId);
 static void InitializeAttributeOids(Relation indexRelation,
 									int numatts, Oid indexoid);
-static void AppendAttributeTuples(Relation indexRelation, int numatts);
+static void AppendAttributeTuples(Relation indexRelation);
 static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 								Oid parentIndexId,
 								IndexInfo *indexInfo,
@@ -484,12 +484,11 @@ InitializeAttributeOids(Relation indexRelation,
  * ----------------------------------------------------------------
  */
 static void
-AppendAttributeTuples(Relation indexRelation, int numatts)
+AppendAttributeTuples(Relation indexRelation)
 {
 	Relation	pg_attribute;
 	CatalogIndexState indstate;
 	TupleDesc	indexTupDesc;
-	int			i;
 
 	/*
 	 * open the attribute relation and its indexes
@@ -503,14 +502,7 @@ AppendAttributeTuples(Relation indexRelation, int numatts)
 	 */
 	indexTupDesc = RelationGetDescr(indexRelation);
 
-	for (i = 0; i < numatts; i++)
-	{
-		Form_pg_attribute attr = TupleDescAttr(indexTupDesc, i);
-
-		Assert(attr->attnum == i + 1);
-
-		InsertPgAttributeTuple(pg_attribute, attr, indstate);
-	}
+	InsertPgAttributeTuples(pg_attribute, indexTupDesc, InvalidOid, indstate);
 
 	CatalogCloseIndexes(indstate);
 
@@ -976,7 +968,7 @@ index_create(Relation heapRelation,
 	/*
 	 * append ATTRIBUTE tuples for the index
 	 */
-	AppendAttributeTuples(indexRelation, indexInfo->ii_NumIndexAttrs);
+	AppendAttributeTuples(indexRelation);
 
 	/* ----------------
 	 *	  update pg_index
@@ -1025,10 +1017,13 @@ index_create(Relation heapRelation,
 	{
 		ObjectAddress myself,
 					referenced;
+		ObjectAddresses *refobjs;
 
 		myself.classId = RelationRelationId;
 		myself.objectId = indexRelationId;
 		myself.objectSubId = 0;
+
+		refobjs = new_object_addresses();
 
 		if ((flags & INDEX_CREATE_ADD_CONSTRAINT) != 0)
 		{
@@ -1066,14 +1061,14 @@ index_create(Relation heapRelation,
 			/* Create auto dependencies on simply-referenced columns */
 			for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
 			{
+				ObjectAddress obj;
+
 				if (indexInfo->ii_IndexAttrNumbers[i] != 0)
 				{
-					referenced.classId = RelationRelationId;
-					referenced.objectId = heapRelationId;
-					referenced.objectSubId = indexInfo->ii_IndexAttrNumbers[i];
-
-					recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
-
+					ObjectAddressSubSet(obj, RelationRelationId,
+										heapRelationId,
+										indexInfo->ii_IndexAttrNumbers[i]);
+					add_exact_object_address(&obj, refobjs);
 					have_simple_col = true;
 				}
 			}
@@ -1092,6 +1087,8 @@ index_create(Relation heapRelation,
 
 				recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
 			}
+			else
+				record_object_address_dependencies(&myself, refobjs, DEPENDENCY_AUTO);
 		}
 
 		/*
@@ -1115,30 +1112,32 @@ index_create(Relation heapRelation,
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_PARTITION_SEC);
 		}
 
+
 		/* Store dependency on collations */
 		/* The default collation is pinned, so don't bother recording it */
+		reset_object_addresses(refobjs);
 		for (i = 0; i < indexInfo->ii_NumIndexKeyAttrs; i++)
 		{
+			ObjectAddress	obj;
+
 			if (OidIsValid(collationObjectId[i]) &&
 				collationObjectId[i] != DEFAULT_COLLATION_OID)
 			{
-				referenced.classId = CollationRelationId;
-				referenced.objectId = collationObjectId[i];
-				referenced.objectSubId = 0;
-
-				recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+				ObjectAddressSet(obj, CollationRelationId, collationObjectId[i]);
+				add_exact_object_address(&obj, refobjs);
 			}
 		}
 
 		/* Store dependency on operator classes */
 		for (i = 0; i < indexInfo->ii_NumIndexKeyAttrs; i++)
 		{
-			referenced.classId = OperatorClassRelationId;
-			referenced.objectId = classObjectId[i];
-			referenced.objectSubId = 0;
+			ObjectAddress	obj;
 
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+			ObjectAddressSet(obj, OperatorClassRelationId, classObjectId[i]);
+			add_exact_object_address(&obj, refobjs);
 		}
+
+		record_object_address_dependencies(&myself, refobjs, DEPENDENCY_NORMAL);
 
 		/* Store dependencies on anything mentioned in index expressions */
 		if (indexInfo->ii_Expressions)
@@ -1159,6 +1158,8 @@ index_create(Relation heapRelation,
 											DEPENDENCY_NORMAL,
 											DEPENDENCY_AUTO, false);
 		}
+
+		free_object_addresses(refobjs);
 	}
 	else
 	{

@@ -174,6 +174,8 @@ extern void record_object_address_dependencies(const ObjectAddress *depender,
 
 extern void sort_object_addresses(ObjectAddresses *addrs);
 
+extern void reset_object_addresses(ObjectAddresses *addrs);
+
 extern void free_object_addresses(ObjectAddresses *addrs);
 
 /* in pg_depend.c */

@@ -2208,10 +2208,6 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 
 			RelationPutHeapTuple(relation, buffer, heaptup, false);
 
-			/*
-			 * We don't use heap_multi_insert for catalog tuples yet, but
-			 * better be prepared...
-			 */
 			if (needwal && need_cids)
 				log_heap_new_cid(relation, heaptup);
 		}

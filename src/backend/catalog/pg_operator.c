@@ -773,12 +773,15 @@ ObjectAddress
 makeOperatorDependencies(HeapTuple tuple, bool isUpdate)
 {
 	Form_pg_operator oper = (Form_pg_operator) GETSTRUCT(tuple);
-	ObjectAddress myself,
-				referenced;
+	ObjectAddress myself;
+	ObjectAddresses *refobjs;
+	ObjectAddress obj;
 
 	myself.classId = OperatorRelationId;
 	myself.objectId = oper->oid;
 	myself.objectSubId = 0;
+
+	refobjs = new_object_addresses();
 
 	/*
 	 * If we are updating the operator, delete any existing entries, except
@@ -793,37 +796,29 @@ makeOperatorDependencies(HeapTuple tuple, bool isUpdate)
 	/* Dependency on namespace */
 	if (OidIsValid(oper->oprnamespace))
 	{
-		referenced.classId = NamespaceRelationId;
-		referenced.objectId = oper->oprnamespace;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSubSet(obj, NamespaceRelationId, oper->oprnamespace, 0);
+		add_exact_object_address(&obj, refobjs);
 	}
 
 	/* Dependency on left type */
 	if (OidIsValid(oper->oprleft))
 	{
-		referenced.classId = TypeRelationId;
-		referenced.objectId = oper->oprleft;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSubSet(obj, TypeRelationId, oper->oprleft, 0);
+		add_exact_object_address(&obj, refobjs);
 	}
 
 	/* Dependency on right type */
 	if (OidIsValid(oper->oprright))
 	{
-		referenced.classId = TypeRelationId;
-		referenced.objectId = oper->oprright;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSubSet(obj, TypeRelationId, oper->oprright, 0);
+		add_exact_object_address(&obj, refobjs);
 	}
 
 	/* Dependency on result type */
 	if (OidIsValid(oper->oprresult))
 	{
-		referenced.classId = TypeRelationId;
-		referenced.objectId = oper->oprresult;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSubSet(obj, TypeRelationId, oper->oprresult, 0);
+		add_exact_object_address(&obj, refobjs);
 	}
 
 	/*
@@ -838,29 +833,26 @@ makeOperatorDependencies(HeapTuple tuple, bool isUpdate)
 	/* Dependency on implementation function */
 	if (OidIsValid(oper->oprcode))
 	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = oper->oprcode;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSubSet(obj, ProcedureRelationId, oper->oprcode, 0);
+		add_exact_object_address(&obj, refobjs);
 	}
 
 	/* Dependency on restriction selectivity function */
 	if (OidIsValid(oper->oprrest))
 	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = oper->oprrest;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSubSet(obj, ProcedureRelationId, oper->oprrest, 0);
+		add_exact_object_address(&obj, refobjs);
 	}
 
 	/* Dependency on join selectivity function */
 	if (OidIsValid(oper->oprjoin))
 	{
-		referenced.classId = ProcedureRelationId;
-		referenced.objectId = oper->oprjoin;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+		ObjectAddressSubSet(obj, ProcedureRelationId, oper->oprjoin, 0);
+		add_exact_object_address(&obj, refobjs);
 	}
+
+	record_object_address_dependencies(&myself, refobjs, DEPENDENCY_NORMAL);
+	free_object_addresses(refobjs);
 
 	/* Dependency on owner */
 	recordDependencyOnOwner(OperatorRelationId, oper->oid,

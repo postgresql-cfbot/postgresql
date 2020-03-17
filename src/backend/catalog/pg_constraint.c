@@ -91,6 +91,8 @@ CreateConstraintEntry(const char *constraintName,
 	NameData	cname;
 	int			i;
 	ObjectAddress conobject;
+	ObjectAddresses *refobjs;
+	ObjectAddress obj;
 
 	conDesc = table_open(ConstraintRelationId, RowExclusiveLock);
 
@@ -229,30 +231,26 @@ CreateConstraintEntry(const char *constraintName,
 
 	table_close(conDesc, RowExclusiveLock);
 
+	refobjs = new_object_addresses();
+
 	if (OidIsValid(relId))
 	{
 		/*
 		 * Register auto dependency from constraint to owning relation, or to
 		 * specific column(s) if any are mentioned.
 		 */
-		ObjectAddress relobject;
-
-		relobject.classId = RelationRelationId;
-		relobject.objectId = relId;
 		if (constraintNTotalKeys > 0)
 		{
 			for (i = 0; i < constraintNTotalKeys; i++)
 			{
-				relobject.objectSubId = constraintKey[i];
-
-				recordDependencyOn(&conobject, &relobject, DEPENDENCY_AUTO);
+				ObjectAddressSubSet(obj, RelationRelationId, relId, constraintKey[i]);
+				add_exact_object_address(&obj, refobjs);
 			}
 		}
 		else
 		{
-			relobject.objectSubId = 0;
-
-			recordDependencyOn(&conobject, &relobject, DEPENDENCY_AUTO);
+			ObjectAddressSubSet(obj, RelationRelationId, relId, 0);
+			add_exact_object_address(&obj, refobjs);
 		}
 	}
 
@@ -261,14 +259,14 @@ CreateConstraintEntry(const char *constraintName,
 		/*
 		 * Register auto dependency from constraint to owning domain
 		 */
-		ObjectAddress domobject;
-
-		domobject.classId = TypeRelationId;
-		domobject.objectId = domainId;
-		domobject.objectSubId = 0;
-
-		recordDependencyOn(&conobject, &domobject, DEPENDENCY_AUTO);
+		ObjectAddressSubSet(obj, TypeRelationId, domainId, 0);
+		add_exact_object_address(&obj, refobjs);
 	}
+
+	/* record the AUTO dependencies we have so far */
+	record_object_address_dependencies(&conobject, refobjs, DEPENDENCY_AUTO);
+
+	reset_object_addresses(refobjs);
 
 	if (OidIsValid(foreignRelId))
 	{
@@ -276,24 +274,18 @@ CreateConstraintEntry(const char *constraintName,
 		 * Register normal dependency from constraint to foreign relation, or
 		 * to specific column(s) if any are mentioned.
 		 */
-		ObjectAddress relobject;
-
-		relobject.classId = RelationRelationId;
-		relobject.objectId = foreignRelId;
 		if (foreignNKeys > 0)
 		{
 			for (i = 0; i < foreignNKeys; i++)
 			{
-				relobject.objectSubId = foreignKey[i];
-
-				recordDependencyOn(&conobject, &relobject, DEPENDENCY_NORMAL);
+				ObjectAddressSubSet(obj, RelationRelationId, foreignRelId, foreignKey[i]);
+				add_exact_object_address(&obj, refobjs);
 			}
 		}
 		else
 		{
-			relobject.objectSubId = 0;
-
-			recordDependencyOn(&conobject, &relobject, DEPENDENCY_NORMAL);
+			ObjectAddressSubSet(obj, RelationRelationId, foreignRelId, 0);
+			add_exact_object_address(&obj, refobjs);
 		}
 	}
 
@@ -305,13 +297,8 @@ CreateConstraintEntry(const char *constraintName,
 		 * or primary-key constraints, the dependency runs the other way, and
 		 * is not made here.)
 		 */
-		ObjectAddress relobject;
-
-		relobject.classId = RelationRelationId;
-		relobject.objectId = indexRelId;
-		relobject.objectSubId = 0;
-
-		recordDependencyOn(&conobject, &relobject, DEPENDENCY_NORMAL);
+		ObjectAddressSubSet(obj, RelationRelationId, indexRelId, 0);
+		add_exact_object_address(&obj, refobjs);
 	}
 
 	if (foreignNKeys > 0)
@@ -322,27 +309,28 @@ CreateConstraintEntry(const char *constraintName,
 		 * all three operators for a column are the same; otherwise they are
 		 * different.
 		 */
-		ObjectAddress oprobject;
-
-		oprobject.classId = OperatorRelationId;
-		oprobject.objectSubId = 0;
-
 		for (i = 0; i < foreignNKeys; i++)
 		{
-			oprobject.objectId = pfEqOp[i];
-			recordDependencyOn(&conobject, &oprobject, DEPENDENCY_NORMAL);
+			ObjectAddressSubSet(obj, OperatorRelationId, pfEqOp[i], 0);
+			add_exact_object_address(&obj, refobjs);
+
 			if (ppEqOp[i] != pfEqOp[i])
 			{
-				oprobject.objectId = ppEqOp[i];
-				recordDependencyOn(&conobject, &oprobject, DEPENDENCY_NORMAL);
+				ObjectAddressSubSet(obj, OperatorRelationId, ppEqOp[i], 0);
+				add_exact_object_address(&obj, refobjs);
 			}
+
 			if (ffEqOp[i] != pfEqOp[i])
 			{
-				oprobject.objectId = ffEqOp[i];
-				recordDependencyOn(&conobject, &oprobject, DEPENDENCY_NORMAL);
+				ObjectAddressSubSet(obj, OperatorRelationId, ffEqOp[i], 0);
+				add_exact_object_address(&obj, refobjs);
 			}
 		}
 	}
+
+	record_object_address_dependencies(&conobject, refobjs, DEPENDENCY_NORMAL);
+
+	free_object_addresses(refobjs);
 
 	/*
 	 * We don't bother to register dependencies on the exclusion operators of

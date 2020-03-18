@@ -16543,13 +16543,6 @@ CloneRowTriggersToPartition(Relation parent, Relation partition)
 			 !OidIsValid(trigForm->tgparentid)))
 			continue;
 
-		/*
-		 * Complain if we find an unexpected trigger type.
-		 */
-		if (!TRIGGER_FOR_AFTER(trigForm->tgtype))
-			elog(ERROR, "unexpected trigger \"%s\" found",
-				 NameStr(trigForm->tgname));
-
 		/* Use short-lived context for CREATE TRIGGER */
 		oldcxt = MemoryContextSwitchTo(perTupCxt);
 

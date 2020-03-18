@@ -9437,6 +9437,7 @@ get_windowfunc_expr(WindowFunc *wfunc, deparse_context *context)
 	int			nargs;
 	List	   *argnames;
 	ListCell   *l;
+	bool		ignorenulls = false;
 
 	if (list_length(wfunc->args) > FUNC_MAX_ARGS)
 		ereport(ERROR,
@@ -9463,7 +9464,32 @@ get_windowfunc_expr(WindowFunc *wfunc, deparse_context *context)
 	if (wfunc->winstar)
 		appendStringInfoChar(buf, '*');
 	else
-		get_rule_expr((Node *) wfunc->args, context, true);
+	{
+		ListCell	*arglist;
+		Node *argnode = (Node *) wfunc->args;
+
+		get_rule_expr(argnode, context, true);
+
+		/* Determine if IGNORE NULLS should be appended */
+		foreach(arglist, (List *) argnode)
+		{
+			Node *arg = (Node *) lfirst(arglist);
+			if (nodeTag(arg) == T_Const)
+			{
+				Const *constnode = (Const *) arg;
+				if (constnode->consttype == IGNORENULLSOID)
+				{
+					/* parser does not save RESPECT NULLS arguments */
+					ignorenulls = true;
+					buf->len -= 2;
+				}
+			}
+		}
+        }
+
+	appendStringInfoChar(buf, ')');
+	if (ignorenulls)
+		appendStringInfoString(buf, " IGNORE NULLS");
 
 	if (wfunc->aggfilter != NULL)
 	{
@@ -9471,7 +9497,7 @@ get_windowfunc_expr(WindowFunc *wfunc, deparse_context *context)
 		get_rule_expr((Node *) wfunc->aggfilter, context, false);
 	}
 
-	appendStringInfoString(buf, ") OVER ");
+	appendStringInfoString(buf, " OVER ");
 
 	foreach(l, context->windowClause)
 	{
@@ -9647,6 +9673,10 @@ get_const_expr(Const *constval, deparse_context *context, int showtype)
 				appendStringInfoString(buf, "true");
 			else
 				appendStringInfoString(buf, "false");
+			break;
+
+		case IGNORENULLSOID:
+			showtype = -1;
 			break;
 
 		default:

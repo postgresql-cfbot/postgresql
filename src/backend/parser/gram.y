@@ -154,6 +154,7 @@ static Node *makeBitStringConst(char *str, int location);
 static Node *makeNullAConst(int location);
 static Node *makeAConst(Value *v, int location);
 static Node *makeBoolAConst(bool state, int location);
+static Node *makeTypedBoolAConst(bool state, char *type, int location);
 static RoleSpec *makeRoleSpec(RoleSpecType type, int location);
 static void check_qualified_name(List *names, core_yyscan_t yyscanner);
 static List *check_func_name(List *names, core_yyscan_t yyscanner);
@@ -569,7 +570,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	xml_namespace_list
 %type <target>	xml_namespace_el
 
-%type <node>	func_application func_expr_common_subexpr
+%type <node>	func_application func_expr_common_subexpr func_expr_respect_ignore
 %type <node>	func_expr func_expr_windowless
 %type <node>	common_table_expr
 %type <with>	with_clause opt_with_clause
@@ -577,6 +578,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <list>	within_group_clause
 %type <node>	filter_clause
+%type <ival>	null_treatment_clause
 %type <list>	window_clause window_definition_list opt_partition_clause
 %type <windef>	window_definition over_clause window_specification
 				opt_frame_clause frame_extent frame_bound
@@ -642,14 +644,14 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN EXPRESSION
 	EXTENSION EXTERNAL EXTRACT
 
-	FALSE_P FAMILY FETCH FILTER FIRST_P FLOAT_P FOLLOWING FOR
+	FALSE_P FAMILY FETCH FILTER FIRST_P FIRST_VALUE FLOAT_P FOLLOWING FOR
 	FORCE FOREIGN FORWARD FREEZE FROM FULL FUNCTION FUNCTIONS
 
 	GENERATED GLOBAL GRANT GRANTED GREATEST GROUP_P GROUPING GROUPS
 
 	HANDLER HAVING HEADER_P HOLD HOUR_P
 
-	IDENTITY_P IF_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P INCLUDE
+	IDENTITY_P IF_P IGNORE_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P INCLUDE
 	INCLUDING INCREMENT INDEX INDEXES INHERIT INHERITS INITIALLY INLINE_P
 	INNER_P INOUT INPUT_P INSENSITIVE INSERT INSTEAD INT_P INTEGER
 	INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
@@ -658,14 +660,14 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	KEY
 
-	LABEL LANGUAGE LARGE_P LAST_P LATERAL_P
-	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
+	LABEL LAG LANGUAGE LARGE_P LAST_P LAST_VALUE LATERAL_P
+	LEAD LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
 	MAPPING MATCH MATERIALIZED MAXVALUE METHOD MINUTE_P MINVALUE MODE MONTH_P MOVE
 
 	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NO NONE
-	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
+	NOT NOTHING NOTIFY NOTNULL NOWAIT NTH_VALUE NULL_P NULLIF
 	NULLS_P NUMERIC
 
 	OBJECT_P OF OFF OFFSET OIDS OLD ON ONLY OPERATOR OPTION OPTIONS OR
@@ -680,7 +682,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	RANGE READ REAL REASSIGN RECHECK RECURSIVE REF REFERENCES REFERENCING
 	REFRESH REINDEX RELATIVE_P RELEASE RENAME REPEATABLE REPLACE REPLICA
-	RESET RESTART RESTRICT RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
+	RESET RESPECT RESTART RESTRICT RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROUTINE ROUTINES ROW ROWS RULE
 
 	SAVEPOINT SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
@@ -724,6 +726,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 /* Precedence: lowest to highest */
 %nonassoc	SET				/* see relation_expr_opt_alias */
+%nonassoc	FIRST_VALUE LAG LAST_VALUE LEAD NTH_VALUE
 %left		UNION EXCEPT
 %left		INTERSECT
 %left		OR
@@ -13788,6 +13791,10 @@ func_application: func_name '(' ')'
 				}
 		;
 
+null_treatment_clause:
+			RESPECT NULLS_P			{ $$ = 0; }
+			| IGNORE_P NULLS_P		{ $$ = WINFUNC_OPT_IGNORE_NULLS; }
+		;
 
 /*
  * func_expr and its cousin func_expr_windowless are split out from c_expr just
@@ -13835,7 +13842,132 @@ func_expr: func_application within_group_clause filter_clause over_clause
 				}
 			| func_expr_common_subexpr
 				{ $$ = $1; }
+			| func_expr_respect_ignore over_clause
+				{
+					FuncCall *n = (FuncCall *) $1;
+					n->over = $2;
+					$$ = (Node *) n;
+				}
 		;
+
+func_expr_respect_ignore:
+			FIRST_VALUE '(' func_arg_list opt_sort_clause ')' null_treatment_clause
+				{
+					FuncCall *n;
+					List *l = $3;
+					int winFuncArgs = $6;
+
+					/* Convert Ignore Nulls option to bool */
+					if (winFuncArgs & WINFUNC_OPT_IGNORE_NULLS)
+						l = lappend(l, makeTypedBoolAConst(true, "ignorenulls", @2));
+
+					n = makeFuncCall(list_make1(makeString("first_value")), l, @1);
+					n->agg_order = $4;
+					$$ = (Node *) n;
+				}
+			| FIRST_VALUE '(' func_arg_list opt_sort_clause ')'
+				{
+					FuncCall *n;
+					List *l = $3;
+
+					n = makeFuncCall(list_make1(makeString("first_value")), l, @1);
+					n->agg_order = $4;
+					$$ = (Node *) n;
+				}
+			| LAG '(' func_arg_list opt_sort_clause ')' null_treatment_clause
+				{
+					FuncCall *n;
+					List *l = $3;
+					int winFuncArgs = $6;
+
+					/* Convert Ignore Nulls option to bool */
+					if (winFuncArgs & WINFUNC_OPT_IGNORE_NULLS)
+						l = lappend(l, makeTypedBoolAConst(true, "ignorenulls", @2));
+
+					n = makeFuncCall(list_make1(makeString("lag")), l, @1);
+					n->agg_order = $4;
+					$$ = (Node *) n;
+				}
+			| LAG '(' func_arg_list opt_sort_clause ')'
+				{
+					FuncCall *n;
+					List *l = $3;
+
+					n = makeFuncCall(list_make1(makeString("lag")), l, @1);
+					n->agg_order = $4;
+					$$ = (Node *) n;
+				}
+			| LAST_VALUE '(' func_arg_list opt_sort_clause ')' null_treatment_clause
+				{
+					FuncCall *n;
+					List *l = $3;
+					int winFuncArgs = $6;
+
+					/* Convert Ignore Nulls option to bool */
+					if (winFuncArgs & WINFUNC_OPT_IGNORE_NULLS)
+						l = lappend(l, makeTypedBoolAConst(true, "ignorenulls", @2));
+
+					n = makeFuncCall(list_make1(makeString("last_value")), l, @1);
+					n->agg_order = $4;
+					$$ = (Node *) n;
+				}
+			| LAST_VALUE '(' func_arg_list opt_sort_clause ')'
+				{
+					FuncCall *n;
+					List *l = $3;
+
+					n = makeFuncCall(list_make1(makeString("last_value")), l, @1);
+					n->agg_order = $4;
+					$$ = (Node *) n;
+				}
+			| LEAD '(' func_arg_list opt_sort_clause ')' null_treatment_clause
+				{
+					FuncCall *n;
+					List *l = $3;
+					int winFuncArgs = $6;
+
+					/* Convert Ignore Nulls option to bool */
+					if (winFuncArgs & WINFUNC_OPT_IGNORE_NULLS)
+						l = lappend(l, makeTypedBoolAConst(true, "ignorenulls", @2));
+
+					n = makeFuncCall(list_make1(makeString("lead")), l, @1);
+					n->agg_order = $4;
+					$$ = (Node *) n;
+				}
+			| LEAD '(' func_arg_list opt_sort_clause ')'
+				{
+					FuncCall *n;
+					List *l = $3;
+
+					n = makeFuncCall(list_make1(makeString("lead")), l, @1);
+					n->agg_order = $4;
+					$$ = (Node *) n;
+				}
+			| NTH_VALUE '(' func_arg_list opt_sort_clause ')' null_treatment_clause
+				{
+					FuncCall *n;
+					List *l = $3;
+					int winFuncArgs = $6;
+
+					/* Convert Nulls option to bool */
+					if (winFuncArgs & WINFUNC_OPT_IGNORE_NULLS)
+						l = lappend(l, makeTypedBoolAConst(true, "ignorenulls", @2));
+
+					n = makeFuncCall(list_make1(makeString("nth_value")), l, @1);
+					n->agg_order = $4;
+					$$ = (Node *) n;
+				}
+			| NTH_VALUE '(' func_arg_list opt_sort_clause ')'
+				{
+					FuncCall *n;
+					List *l = $3;
+
+					n = makeFuncCall(list_make1(makeString("nth_value")), l, @1);
+					n->agg_order = $4;
+					$$ = (Node *) n;
+				}
+		;
+
 
 /*
  * As func_expr but does not accept WINDOW functions directly
@@ -15244,6 +15376,7 @@ unreserved_keyword:
 			| FAMILY
 			| FILTER
 			| FIRST_P
+			| FIRST_VALUE
 			| FOLLOWING
 			| FORCE
 			| FORWARD
@@ -15259,6 +15392,7 @@ unreserved_keyword:
 			| HOUR_P
 			| IDENTITY_P
 			| IF_P
+			| IGNORE_P
 			| IMMEDIATE
 			| IMMUTABLE
 			| IMPLICIT_P
@@ -15279,9 +15413,12 @@ unreserved_keyword:
 			| ISOLATION
 			| KEY
 			| LABEL
+			| LAG
 			| LANGUAGE
 			| LARGE_P
 			| LAST_P
+			| LAST_VALUE
+			| LEAD
 			| LEAKPROOF
 			| LEVEL
 			| LISTEN
@@ -15309,6 +15446,7 @@ unreserved_keyword:
 			| NOTHING
 			| NOTIFY
 			| NOWAIT
+			| NTH_VALUE
 			| NULLS_P
 			| OBJECT_P
 			| OF
@@ -15360,6 +15498,7 @@ unreserved_keyword:
 			| REPLACE
 			| REPLICA
 			| RESET
+			| RESPECT
 			| RESTART
 			| RESTRICT
 			| RETURNS
@@ -15835,13 +15974,22 @@ makeAConst(Value *v, int location)
 static Node *
 makeBoolAConst(bool state, int location)
 {
+	return makeTypedBoolAConst(state, "bool", location);
+}
+
+/* makeTypedBoolAConst()
+ * Create an A_Const string node from a boolean and store inside the specified type.
+ */
+static Node *
+makeTypedBoolAConst(bool state, char *type, int location)
+{
 	A_Const *n = makeNode(A_Const);
 
 	n->val.type = T_String;
 	n->val.val.str = (state ? "t" : "f");
 	n->location = location;
 
-	return makeTypeCast((Node *)n, SystemTypeName("bool"), -1);
+	return makeTypeCast((Node *)n, SystemTypeName(type), -1);
 }
 
 /* makeRoleSpec

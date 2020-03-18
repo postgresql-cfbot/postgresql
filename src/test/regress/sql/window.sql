@@ -1276,3 +1276,67 @@ $$ LANGUAGE SQL STABLE;
 
 EXPLAIN (costs off) SELECT * FROM pg_temp.f(2);
 SELECT * FROM pg_temp.f(2);
+
+-- RESPECT NULLS and IGNORE NULLS tests
+CREATE TEMPORARY TABLE planets (
+    name text,
+    orbit int
+);
+
+INSERT INTO planets VALUES
+  ('mercury', 88),
+  ('venus', 224),
+  ('earth', NULL),
+  ('mars', NULL),
+  ('jupiter', 4332),
+  ('saturn', 24491),
+  ('uranus', NULL),
+  ('neptune', 60182),
+  ('pluto', 90560);
+
+  -- test view definitions are preserved
+CREATE TEMP VIEW v_planets AS
+    SELECT
+      name,
+      sum(orbit) OVER (order by orbit) as sum_rows,
+      lag(orbit, 1) RESPECT NULLS OVER (ORDER BY name DESC) AS lagged_by_1,
+      lag(orbit, 2) IGNORE NULLS OVER w AS lagged_by_2,
+      first_value(orbit) IGNORE NULLS OVER w AS first_value_ignore,
+      nth_value(orbit,2) IGNORE NULLS OVER w AS nth_first_ignore,
+      nth_value(orbit,-2) IGNORE NULLS OVER w AS nth_last_ignore
+    FROM planets
+    WINDOW w as (ORDER BY name ASC);
+SELECT pg_get_viewdef('v_planets');
+
+SELECT name, lag(orbit) OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, lag(orbit) RESPECT NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, lag(orbit) IGNORE NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+
+SELECT name, lead(orbit) OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, lead(orbit) RESPECT NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, lead(orbit) IGNORE NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+
+SELECT name, lag(orbit, -1) IGNORE NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, lead(orbit, -1) IGNORE NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+
+SELECT name, first_value(orbit) OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, first_value(orbit) RESPECT NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, first_value(orbit) IGNORE NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+
+SELECT name, last_value(orbit) OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, last_value(orbit) IGNORE NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, last_value(orbit) RESPECT NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+
+SELECT name, nth_value(orbit, 2) OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, nth_value(orbit, 2) IGNORE NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, nth_value(orbit, 2) RESPECT NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+
+SELECT name, nth_value(orbit, 2) OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, nth_value(orbit, 2) IGNORE NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, nth_value(orbit, 2) RESPECT NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, nth_value(orbit, -2) OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, nth_value(orbit, -2) IGNORE NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+SELECT name, nth_value(orbit, -2) RESPECT NULLS OVER (ORDER BY name range between unbounded preceding and unbounded following) FROM planets ORDER BY name;
+
+--cleanup
+DROP TABLE planets CASCADE;

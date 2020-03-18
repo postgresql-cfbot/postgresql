@@ -533,6 +533,11 @@ typedef struct WindowDef
 	 FRAMEOPTION_END_CURRENT_ROW)
 
 /*
+ * Null Treatment option
+ */
+#define WINFUNC_OPT_IGNORE_NULLS			0x00001 /* IGNORE NULLS */
+
+/*
  * RangeSubselect - subquery appearing in a FROM clause
  */
 typedef struct RangeSubselect

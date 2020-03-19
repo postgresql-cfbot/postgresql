@@ -10348,10 +10348,6 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 	PG_ENSURE_ERROR_CLEANUP(pg_start_backup_callback, (Datum) BoolGetDatum(exclusive));
 	{
 		bool		gotUniqueStartpoint = false;
-		DIR		   *tblspcdir;
-		struct dirent *de;
-		tablespaceinfo *ti;
-		int			datadirpathlen;
 
 		/*
 		 * Force an XLOG file switch before the checkpoint, to ensure that the
@@ -10477,8 +10473,6 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 		if (exclusive)
 			tblspcmapfile = makeStringInfo();
 
-		datadirpathlen = strlen(DataDir);
-
 		/*
 		 * Report that we are now estimating the total backup size
 		 * if we're streaming base backup as requested by pg_basebackup
@@ -10487,91 +10481,7 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 			pgstat_progress_update_param(PROGRESS_BASEBACKUP_PHASE,
 										 PROGRESS_BASEBACKUP_PHASE_ESTIMATE_BACKUP_SIZE);
 
-		/* Collect information about all tablespaces */
-		tblspcdir = AllocateDir("pg_tblspc");
-		while ((de = ReadDir(tblspcdir, "pg_tblspc")) != NULL)
-		{
-			char		fullpath[MAXPGPATH + 10];
-			char		linkpath[MAXPGPATH];
-			char	   *relpath = NULL;
-			int			rllen;
-			StringInfoData buflinkpath;
-			char	   *s = linkpath;
-
-			/* Skip special stuff */
-			if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
-				continue;
-
-			snprintf(fullpath, sizeof(fullpath), "pg_tblspc/%s", de->d_name);
-
-#if defined(HAVE_READLINK) || defined(WIN32)
-			rllen = readlink(fullpath, linkpath, sizeof(linkpath));
-			if (rllen < 0)
-			{
-				ereport(WARNING,
-						(errmsg("could not read symbolic link \"%s\": %m",
-								fullpath)));
-				continue;
-			}
-			else if (rllen >= sizeof(linkpath))
-			{
-				ereport(WARNING,
-						(errmsg("symbolic link \"%s\" target is too long",
-								fullpath)));
-				continue;
-			}
-			linkpath[rllen] = '\0';
-
-			/*
-			 * Add the escape character '\\' before newline in a string to
-			 * ensure that we can distinguish between the newline in the
-			 * tablespace path and end of line while reading tablespace_map
-			 * file during archive recovery.
-			 */
-			initStringInfo(&buflinkpath);
-
-			while (*s)
-			{
-				if ((*s == '\n' || *s == '\r') && needtblspcmapfile)
-					appendStringInfoChar(&buflinkpath, '\\');
-				appendStringInfoChar(&buflinkpath, *s++);
-			}
-
-			/*
-			 * Relpath holds the relative path of the tablespace directory
-			 * when it's located within PGDATA, or NULL if it's located
-			 * elsewhere.
-			 */
-			if (rllen > datadirpathlen &&
-				strncmp(linkpath, DataDir, datadirpathlen) == 0 &&
-				IS_DIR_SEP(linkpath[datadirpathlen]))
-				relpath = linkpath + datadirpathlen + 1;
-
-			ti = palloc(sizeof(tablespaceinfo));
-			ti->oid = pstrdup(de->d_name);
-			ti->path = pstrdup(buflinkpath.data);
-			ti->rpath = relpath ? pstrdup(relpath) : NULL;
-			ti->size = infotbssize ? sendTablespace(fullpath, true) : -1;
-
-			if (tablespaces)
-				*tablespaces = lappend(*tablespaces, ti);
-
-			appendStringInfo(tblspcmapfile, "%s %s\n", ti->oid, ti->path);
-
-			pfree(buflinkpath.data);
-#else
-
-			/*
-			 * If the platform does not have symbolic links, it should not be
-			 * possible to have tablespaces - clearly somebody else created
-			 * them. Warn about it and ignore.
-			 */
-			ereport(WARNING,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("tablespaces are not supported on this platform")));
-#endif
-		}
-		FreeDir(tblspcdir);
+		collect_tablespaces(tablespaces, tblspcmapfile, infotbssize, needtblspcmapfile);
 
 		/*
 		 * Construct backup label file
@@ -11218,7 +11128,7 @@ do_pg_abort_backup(int code, Datum arg)
 
 	if (emit_warning)
 		ereport(WARNING,
-				(errmsg("aborting backup due to backend exiting before pg_stop_back up was called")));
+				(errmsg("aborting backup due to backend exiting while a non-exclusive backup is in progress")));
 }
 
 /*
@@ -12389,4 +12299,103 @@ void
 XLogRequestWalReceiverReply(void)
 {
 	doRequestWalReceiverReply = true;
+}
+
+/*
+ * Collect information about all tablespaces.
+ */
+void
+collect_tablespaces(List **tablespaces, StringInfo tblspcmapfile,
+					bool infotbssize, bool needtblspcmapfile)
+{
+	DIR		   *tblspcdir;
+	struct dirent *de;
+	tablespaceinfo *ti;
+	int			datadirpathlen;
+
+	datadirpathlen = strlen(DataDir);
+
+	tblspcdir = AllocateDir("pg_tblspc");
+	while ((de = ReadDir(tblspcdir, "pg_tblspc")) != NULL)
+	{
+		char		fullpath[MAXPGPATH + 10];
+		char		linkpath[MAXPGPATH];
+		char	   *relpath = NULL;
+		int			rllen;
+		StringInfoData buflinkpath;
+		char	   *s = linkpath;
+
+		/* Skip special stuff */
+		if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+			continue;
+
+		snprintf(fullpath, sizeof(fullpath), "pg_tblspc/%s", de->d_name);
+
+#if defined(HAVE_READLINK) || defined(WIN32)
+		rllen = readlink(fullpath, linkpath, sizeof(linkpath));
+		if (rllen < 0)
+		{
+			ereport(WARNING,
+					(errmsg("could not read symbolic link \"%s\": %m",
+							fullpath)));
+			continue;
+		}
+		else if (rllen >= sizeof(linkpath))
+		{
+			ereport(WARNING,
+					(errmsg("symbolic link \"%s\" target is too long",
+							fullpath)));
+			continue;
+		}
+		linkpath[rllen] = '\0';
+
+		/*
+		 * Add the escape character '\\' before newline in a string to ensure
+		 * that we can distinguish between the newline in the tablespace path
+		 * and end of line while reading tablespace_map file during archive
+		 * recovery.
+		 */
+		initStringInfo(&buflinkpath);
+
+		while (*s)
+		{
+			if ((*s == '\n' || *s == '\r') && needtblspcmapfile)
+				appendStringInfoChar(&buflinkpath, '\\');
+			appendStringInfoChar(&buflinkpath, *s++);
+		}
+
+		/*
+		 * Relpath holds the relative path of the tablespace directory when
+		 * it's located within PGDATA, or NULL if it's located elsewhere.
+		 */
+		if (rllen > datadirpathlen &&
+			strncmp(linkpath, DataDir, datadirpathlen) == 0 &&
+			IS_DIR_SEP(linkpath[datadirpathlen]))
+			relpath = linkpath + datadirpathlen + 1;
+
+		ti = palloc(sizeof(tablespaceinfo));
+		ti->oid = pstrdup(de->d_name);
+		ti->path = pstrdup(buflinkpath.data);
+		ti->rpath = relpath ? pstrdup(relpath) : NULL;
+		ti->size = infotbssize ? sendTablespace(fullpath, true, NULL) : -1;
+
+		if (tablespaces)
+			*tablespaces = lappend(*tablespaces, ti);
+
+		appendStringInfo(tblspcmapfile, "%s %s\n", ti->oid, ti->path);
+
+		pfree(buflinkpath.data);
+#else
+
+		/*
+		 * If the platform does not have symbolic links, it should not be
+		 * possible to have tablespaces - clearly somebody else created them.
+		 * Warn about it and ignore.
+		 */
+		ereport(WARNING,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("tablespaces are not supported on this platform")));
+#endif
+	}
+	FreeDir(tblspcdir);
 }

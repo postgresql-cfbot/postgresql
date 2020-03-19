@@ -552,6 +552,26 @@ PostgreSQL documentation
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry>
+      <term><option>-j <replaceable class="parameter">n</replaceable></option></term>
+      <term><option>--jobs=<replaceable class="parameter">n</replaceable></option></term>
+      <listitem>
+       <para>
+        Create <replaceable class="parameter">n</replaceable> threads to copy
+        backup files from the database server. <application>pg_basebackup</application>
+        will open at least <replaceable class="parameter">n</replaceable> + 1
+        connections to the database. An additional connection is made if WAL
+        streaming is enabled. Therefore, the server must be configured with
+        <xref linkend="guc-max-wal-senders"/> set high enough to accommodate all
+        connections.
+       </para>
+       <para>
+        parallel mode only works with plain format.
+       </para>
+      </listitem>
+     </varlistentry>
+
     </variablelist>
    </para>
 

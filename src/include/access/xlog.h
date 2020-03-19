@@ -350,6 +350,8 @@ extern XLogRecPtr do_pg_start_backup(const char *backupidstr, bool fast,
 extern XLogRecPtr do_pg_stop_backup(char *labelfile, bool waitforarchive,
 									TimeLineID *stoptli_p);
 extern void do_pg_abort_backup(int code, Datum arg);
+extern void collect_tablespaces(List **tablespaces, StringInfo tblspcmapfile,
+								bool infotbssize, bool needtblspcmapfile);
 extern void register_persistent_abort_backup_handler(void);
 extern SessionBackupState get_backup_status(void);
 

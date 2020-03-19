@@ -87,13 +87,28 @@ static SQLCmd *make_sqlcmd(void);
 %token K_EXPORT_SNAPSHOT
 %token K_NOEXPORT_SNAPSHOT
 %token K_USE_SNAPSHOT
+%token K_START_BACKUP
+%token K_LIST_TABLESPACES
+%token K_LIST_FILES
+%token K_SEND_FILES
+%token K_STOP_BACKUP
+%token K_LIST_WAL_FILES
+%token K_START_WAL_LOCATION
+%token K_END_WAL_LOCATION
 
 %type <node>	command
 %type <node>	base_backup start_replication start_logical_replication
 				create_replication_slot drop_replication_slot identify_system
 				timeline_history show sql_cmd
-%type <list>	base_backup_opt_list
-%type <defelt>	base_backup_opt
+%type <list>	base_backup_opt_list start_backup_opt_list stop_backup_opt_list
+				list_tablespace_opt_list list_files_opt_list
+				list_wal_files_opt_list send_backup_files_opt_list
+				backup_files backup_files_list
+%type <defelt>	base_backup_opt backup_opt_label backup_opt_progress
+				backup_opt_fast backup_opt_wal backup_opt_nowait
+				backup_opt_maxrate backup_opt_tsmap backup_opt_chksum
+				backup_opt_start_wal_loc backup_opt_end_wal_loc
+				backup_opt_tablespace start_backup_opt send_backup_files_opt
 %type <uintval>	opt_timeline
 %type <list>	plugin_options plugin_opt_list
 %type <defelt>	plugin_opt_elem
@@ -153,15 +168,68 @@ var_name:	IDENT	{ $$ = $1; }
 				{ $$ = psprintf("%s.%s", $1, $3); }
 		;
 
-/*
- * BASE_BACKUP [LABEL '<label>'] [PROGRESS] [FAST] [WAL] [NOWAIT]
- * [MAX_RATE %d] [TABLESPACE_MAP] [NOVERIFY_CHECKSUMS]
- */
 base_backup:
+			/*
+			 * BASE_BACKUP [LABEL '<label>'] [PROGRESS] [FAST] [WAL] [NOWAIT]
+			 * [MAX_RATE %d] [TABLESPACE_MAP] [NOVERIFY_CHECKSUMS]
+			 */
 			K_BASE_BACKUP base_backup_opt_list
 				{
 					BaseBackupCmd *cmd = makeNode(BaseBackupCmd);
 					cmd->options = $2;
+					cmd->cmdtag = BASE_BACKUP;
+					$$ = (Node *) cmd;
+				}
+			 /* START_BACKUP [LABEL '<label>'] [FAST] */
+			| K_START_BACKUP start_backup_opt_list
+				{
+					BaseBackupCmd *cmd = makeNode(BaseBackupCmd);
+					cmd->options = $2;
+					cmd->cmdtag = START_BACKUP;
+					$$ = (Node *) cmd;
+				}
+			/* STOP_BACKUP [NOWAIT] */
+			| K_STOP_BACKUP stop_backup_opt_list
+				{
+					BaseBackupCmd *cmd = makeNode(BaseBackupCmd);
+					cmd->options = $2;
+					cmd->cmdtag = STOP_BACKUP;
+					$$ = (Node *) cmd;
+				}
+			/* LIST_TABLESPACES [PROGRESS] */
+			| K_LIST_TABLESPACES list_tablespace_opt_list
+				{
+					BaseBackupCmd *cmd = makeNode(BaseBackupCmd);
+					cmd->options = $2;
+					cmd->cmdtag = LIST_TABLESPACES;
+					$$ = (Node *) cmd;
+				}
+			/* LIST_FILES [TABLESPACE] */
+			| K_LIST_FILES list_files_opt_list
+				{
+					BaseBackupCmd *cmd = makeNode(BaseBackupCmd);
+					cmd->options = $2;
+					cmd->cmdtag = LIST_FILES;
+					$$ = (Node *) cmd;
+				}
+			/* LIST_WAL_FILES [START_WAL_LOCATION 'X/X'] [END_WAL_LOCATION 'X/X'] */
+			| K_LIST_WAL_FILES list_wal_files_opt_list
+				{
+					BaseBackupCmd *cmd = makeNode(BaseBackupCmd);
+					cmd->options = $2;
+					cmd->cmdtag = LIST_WAL_FILES;
+					$$ = (Node *) cmd;
+				}
+			/*
+			 * SEND_FILES '(' 'FILE' [, ...] ')' [START_WAL_LOCATION 'X/X']
+			 *		[NOVERIFY_CHECKSUMS]
+			 */
+			| K_SEND_FILES backup_files send_backup_files_opt_list
+				{
+					BaseBackupCmd *cmd = makeNode(BaseBackupCmd);
+					cmd->options = $3;
+					cmd->cmdtag = SEND_FILES;
+					cmd->backupfiles = $2;
 					$$ = (Node *) cmd;
 				}
 			;
@@ -174,47 +242,156 @@ base_backup_opt_list:
 			;
 
 base_backup_opt:
-			K_LABEL SCONST
-				{
-				  $$ = makeDefElem("label",
-								   (Node *)makeString($2), -1);
-				}
-			| K_PROGRESS
-				{
-				  $$ = makeDefElem("progress",
-								   (Node *)makeInteger(true), -1);
-				}
-			| K_FAST
-				{
-				  $$ = makeDefElem("fast",
-								   (Node *)makeInteger(true), -1);
-				}
-			| K_WAL
-				{
-				  $$ = makeDefElem("wal",
-								   (Node *)makeInteger(true), -1);
-				}
-			| K_NOWAIT
-				{
-				  $$ = makeDefElem("nowait",
-								   (Node *)makeInteger(true), -1);
-				}
-			| K_MAX_RATE UCONST
-				{
-				  $$ = makeDefElem("max_rate",
-								   (Node *)makeInteger($2), -1);
-				}
-			| K_TABLESPACE_MAP
-				{
-				  $$ = makeDefElem("tablespace_map",
-								   (Node *)makeInteger(true), -1);
-				}
-			| K_NOVERIFY_CHECKSUMS
-				{
-				  $$ = makeDefElem("noverify_checksums",
-								   (Node *)makeInteger(true), -1);
-				}
+			backup_opt_label		{ $$ = $1; }
+			| backup_opt_progress	{ $$ = $1; }
+			| backup_opt_fast		{ $$ = $1; }
+			| backup_opt_wal 		{ $$ = $1; }
+			| backup_opt_nowait		{ $$ = $1; }
+			| backup_opt_maxrate	{ $$ = $1; }
+			| backup_opt_tsmap		{ $$ = $1; }
+			| backup_opt_chksum		{ $$ = $1; }
 			;
+
+start_backup_opt_list:
+			start_backup_opt_list start_backup_opt
+				{ $$ = lappend($1, $2); }
+			| /* EMPTY */
+				{ $$ = NIL; }
+			;
+
+start_backup_opt:
+			backup_opt_label		{ $$ = $1; }
+			| backup_opt_fast		{ $$ = $1; }
+			;
+
+stop_backup_opt_list:
+			backup_opt_nowait
+				{ $$ = list_make1($1); }
+			| /* EMPTY */
+				{ $$ = NIL; }
+			;
+
+list_tablespace_opt_list:
+			backup_opt_progress
+				{ $$ = list_make1($1); }
+			| /* EMPTY */
+				{ $$ = NIL; }
+			;
+
+list_files_opt_list:
+			backup_opt_tablespace
+				{ $$ = list_make1($1); }
+			| /* EMPTY */
+				{ $$ = NIL; }
+			;
+
+list_wal_files_opt_list:
+			backup_opt_start_wal_loc backup_opt_end_wal_loc
+				{ $$ = list_make2($1, $2); }
+			;
+
+send_backup_files_opt_list:
+			send_backup_files_opt_list send_backup_files_opt
+				{ $$ = lappend($1, $2); }
+			| /* EMPTY */
+				{ $$ = NIL; }
+			;
+
+backup_files:
+			'(' backup_files_list ')'
+				{ $$ = $2; }
+			| /* EMPTY */
+				{ $$ = NIL; }
+			;
+
+backup_files_list:
+			SCONST
+				{ $$ = list_make1(makeString($1)); }
+			| backup_files_list ',' SCONST
+				{ $$ = lappend($1, makeString($3)); }
+			;
+
+send_backup_files_opt:
+			backup_opt_chksum		{ $$ = $1; }
+			| backup_opt_start_wal_loc	{ $$ = $1; }
+			;
+
+backup_opt_label:
+	K_LABEL SCONST
+	{
+	  $$ = makeDefElem("label",
+					   (Node *)makeString($2), -1);
+	};
+
+backup_opt_progress:
+	K_PROGRESS
+	{
+	  $$ = makeDefElem("progress",
+					   (Node *)makeInteger(true), -1);
+	};
+
+backup_opt_fast:
+	K_FAST
+	{
+	  $$ = makeDefElem("fast",
+					   (Node *)makeInteger(true), -1);
+	};
+
+backup_opt_wal:
+	K_WAL
+	{
+	  $$ = makeDefElem("wal",
+					   (Node *)makeInteger(true), -1);
+	};
+
+backup_opt_nowait:
+	K_NOWAIT
+	{
+	  $$ = makeDefElem("nowait",
+					   (Node *)makeInteger(true), -1);
+	};
+
+backup_opt_maxrate:
+	K_MAX_RATE UCONST
+	{
+	  $$ = makeDefElem("max_rate",
+					   (Node *)makeInteger($2), -1);
+	};
+
+backup_opt_tsmap:
+	K_TABLESPACE_MAP
+	{
+	  $$ = makeDefElem("tablespace_map",
+					   (Node *)makeInteger(true), -1);
+	};
+
+backup_opt_chksum:
+	K_NOVERIFY_CHECKSUMS
+	{
+	  $$ = makeDefElem("noverify_checksums",
+					   (Node *)makeInteger(true), -1);
+	};
+
+backup_opt_start_wal_loc:
+	K_START_WAL_LOCATION SCONST
+	{
+	  $$ = makeDefElem("start_wal_location",
+					   (Node *)makeString($2), -1);
+	};
+
+backup_opt_end_wal_loc:
+	K_END_WAL_LOCATION SCONST
+	{
+	  $$ = makeDefElem("end_wal_location",
+					   (Node *)makeString($2), -1);
+	};
+
+backup_opt_tablespace:
+	SCONST
+	{
+		$$ = makeDefElem("tablespace", //tblspcname?
+						 (Node *)makeString($1), -1);
+	};
 
 create_replication_slot:
 			/* CREATE_REPLICATION_SLOT slot TEMPORARY PHYSICAL RESERVE_WAL */

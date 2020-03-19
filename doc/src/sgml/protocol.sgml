@@ -2700,6 +2700,372 @@ The commands accepted in replication mode are:
      </para>
     </listitem>
   </varlistentry>
+  
+  <varlistentry>
+    <term><literal>START_BACKUP</literal>
+        [ <literal>LABEL</literal> <replaceable>'label'</replaceable> ]
+        [ <literal>FAST</literal> ]
+     <indexterm><primary>START_BACKUP</primary></indexterm>
+    </term>
+    <listitem>
+     <para>
+      Instructs the server to prepare for performing on-line backup. The following
+      options are accepted:
+      <variablelist>
+       <varlistentry>
+        <term><literal>LABEL</literal> <replaceable>'label'</replaceable></term>
+        <listitem>
+         <para>
+          Sets the label of the backup. If none is specified, a backup label
+          of <literal>start backup</literal> will be used. The quoting rules
+          for the label are the same as a standard SQL string with
+          <xref linkend="guc-standard-conforming-strings"/> turned on.
+         </para>
+        </listitem>
+       </varlistentry>
+       <varlistentry>
+        <term><literal>FAST</literal></term>
+        <listitem>
+         <para>
+          Request a fast checkpoint.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
+     <para>
+      In response to this command, server will send out a single result set. The
+      first column contains the start position given in XLogRecPtr format, and
+      the second column contains the corresponding timeline ID.
+     </para>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry>
+    <term><literal>STOP_BACKUP</literal>
+        [ <literal>NOWAIT</literal> ]
+     <indexterm><primary>STOP_BACKUP</primary></indexterm>
+    </term>
+    <listitem>
+     <para>
+      Instructs the server to finish performing on-line backup.
+      <variablelist>
+       <varlistentry>
+        <term><literal>NOWAIT</literal></term>
+        <listitem>
+         <para>
+          By default, the backup will wait until the last required WAL
+          segment has been archived, or emit a warning if log archiving is
+          not enabled. Specifying <literal>NOWAIT</literal> disables both
+          the waiting and the warning, leaving the client responsible for
+          ensuring the required log is available.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
+     <para>
+      In response to this command, server will send out a single result set. The
+      first column contains the start position given in XLogRecPtr format, the
+      second column contains the corresponding timeline ID and the third column
+      contains the contents of the <filename>backup_label</filename> file.
+     </para>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry>
+    <term><literal>LIST_TABLESPACES</literal>
+        [ <literal>PROGRESS</literal> ]
+      <indexterm><primary>LIST_TABLESPACES</primary></indexterm>
+    </term>
+    <listitem>
+     <para>
+      Instruct the server to return a list of tablespaces available in data
+      directory.
+      <variablelist>
+       <varlistentry>
+        <term><literal>PROGRESS</literal></term>
+        <listitem>
+         <para>
+          Request information required to generate a progress report. This will
+          send back an approximate size in the header of each tablespace, which
+          can be used to calculate how far along the stream is done. This is
+          calculated by enumerating all the file sizes once before the transfer
+          is even started, and might as such have a negative impact on the
+          performance.  In particular, it might take longer before the first data
+          is streamed. Since the database files can change during the backup,
+          the size is only approximate and might both grow and shrink between
+          the time of approximation and the sending of the actual files.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
+     <para>
+      In response to this command, server will send one result set.
+      The result set will have one row for each tablespace. The fields in this
+      row are:
+      <variablelist>
+       <varlistentry>
+        <term><literal>spcoid</literal> (<type>oid</type>)</term>
+        <listitem>
+         <para>
+          The OID of the tablespace, or null if it's the base directory.
+         </para>
+        </listitem>
+       </varlistentry>
+       <varlistentry>
+        <term><literal>spclocation</literal> (<type>text</type>)</term>
+        <listitem>
+         <para>
+          The full path of the tablespace directory, or null if it's the base
+          directory.
+         </para>
+        </listitem>
+       </varlistentry>
+       <varlistentry>
+        <term><literal>size</literal> (<type>int8</type>)</term>
+        <listitem>
+        <para>
+         The approximate size of the tablespace, in kilobytes (1024 bytes),
+         if progress report has been requested; otherwise it's null.
+        </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry>
+    <term><literal>LIST_FILES</literal>
+        [ <literal>TABLESPACE</literal> ]
+     <indexterm><primary>LIST_FILES</primary></indexterm>
+    </term>
+    <listitem>
+     <para>
+      This command instructs the server to return a list of files available
+      in the given tablespace.
+      <variablelist>
+       <varlistentry>
+        <term><literal>TABLESPACE</literal></term>
+        <listitem>
+         <para>
+          name of the tablespace. If its empty or not provided then 'base' tablespace
+          is assumed.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
+     <para>
+      In response to this command, server will send out a result set. The fields
+      in this result set are:
+      <variablelist>
+       <varlistentry>
+        <term><literal>path</literal> (<type>text</type>)</term>
+        <listitem>
+         <para>
+          The path and name of the file. In case of tablespace, it is an absolute
+          path on the database server, however, in case of <filename>base</filename>
+          tablespace, it is relative to $PGDATA.
+         </para>
+        </listitem>
+       </varlistentry>
+       <varlistentry>
+        <term><literal>type</literal> (<type>char</type>)</term>
+        <listitem>
+         <para>
+          A single character, identifying the type of file.
+          <itemizedlist spacing="compact" mark="bullet">
+           <listitem>
+            <para>
+             <literal>'f'</literal> - Regular file. Can be any relation or
+             non-relation file in $PGDATA.
+            </para>
+           </listitem>
+           <listitem>
+            <para>
+             <literal>'d'</literal> - Directory.
+            </para>
+           </listitem>
+           <listitem>
+            <para>
+             <literal>'l'</literal> - Symbolic link.
+            </para>
+           </listitem>
+          </itemizedlist>
+         </para>
+        </listitem>
+       </varlistentry>
+       <varlistentry>
+        <term><literal>size</literal> (<type>int8</type>)</term>
+        <listitem>
+         <para>
+          The approximate size of the file, in kilobytes (1024 bytes). It's null
+          if type is 'd' or 'l'.
+         </para>
+        </listitem>
+       </varlistentry>
+       <varlistentry>
+        <term><literal>mtime</literal> (<type>Int64</type>)</term>
+        <listitem>
+         <para>
+          The file or directory last modification time, as seconds since the Epoch.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
+     <para>
+      The list will contain all files in tablespace directory, regardless of whether
+      they are PostgreSQL files or other files added to the same directory. The only
+      excluded files are:
+      <itemizedlist spacing="compact" mark="bullet">
+       <listitem>
+        <para>
+         <filename>postmaster.pid</filename>
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         <filename>postmaster.opts</filename>
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         <filename>pg_internal.init</filename> (found in multiple directories)
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         Various temporary files and directories created during the operation
+         of the PostgreSQL server, such as any file or directory beginning
+         with <filename>pgsql_tmp</filename> and temporary relations.
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         Unlogged relations, except for the init fork which is required to
+         recreate the (empty) unlogged relation on recovery.
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         <filename>pg_wal</filename>, including subdirectories. If the backup is run
+         with WAL files included, a synthesized version of <filename>pg_wal</filename>
+         will be included, but it will only contain the files necessary for the backup
+         to work, not the rest of the contents.
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         <filename>pg_dynshmem</filename>, <filename>pg_notify</filename>,
+         <filename>pg_replslot</filename>, <filename>pg_serial</filename>,
+         <filename>pg_snapshots</filename>, <filename>pg_stat_tmp</filename>, and
+         <filename>pg_subtrans</filename> are copied as empty directories (even if
+         they are symbolic links).
+        </para>
+       </listitem>
+       <listitem>
+        <para>
+         Files other than regular files and directories, such as symbolic
+         links (other than for the directories listed above) and special
+         device files, are skipped.  (Symbolic links
+         in <filename>pg_tblspc</filename> are maintained.)
+        </para>
+       </listitem>
+      </itemizedlist>
+     </para>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry>
+    <term><literal>LIST_WAL_FILES</literal>
+        <literal>START_WAL_LOCATION</literal> <replaceable class="parameter">X/X</replaceable>
+        <literal>END_WAL_LOCATION</literal> <replaceable class="parameter">X/X</replaceable>
+      <indexterm><primary>LIST_WAL_FILES</primary></indexterm>
+    </term>
+    <listitem>
+     <para>
+      Instruct the server to return a list of WAL files available in pg_wal directory.
+      The following options are accepted:
+      <variablelist>
+       <varlistentry>
+         <term><literal>START_WAL_LOCATION</literal></term>
+         <listitem>
+          <para>
+           The starting WAL position when START BACKUP command was issued,
+           returned in the form of XLogRecPtr format.
+          </para>
+         </listitem>
+       </varlistentry>
+       <varlistentry>
+         <term><literal>END_WAL_LOCATION</literal></term>
+         <listitem>
+          <para>
+           The ending WAL position when STOP BACKUP command was issued,
+           returned in the form of XLogRecPtr format.
+          </para>
+         </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
+     <para>
+      In response to this command, server will send out a result and each row will
+      consist of a WAL file entry. The result set will have the same fields as
+      <literal>LIST_FILES</literal> command.
+      </para>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry>
+    <term><literal>SEND_FILES ( <replaceable class="parameter">'FILE'</replaceable> [, ...] )</literal>
+        [ <literal>START_WAL_LOCATION</literal> <replaceable class="parameter">X/X</replaceable> ]
+        [ <literal>NOVERIFY_CHECKSUMS</literal> ]
+        <indexterm><primary>SEND_FILES</primary></indexterm>
+    </term>
+    <listitem>
+     <para>
+      Instructs the server to send the contents of the requested FILE(s).
+     </para>
+     <para>
+      A clause of the form <literal>SEND_FILES ( 'FILE', 'FILE', ... ) [OPTIONS]</literal>
+      is accepted where one or more FILE(s) can be requested.
+     </para>
+     <para>
+      In response to this command, one or more CopyResponse results will be sent,
+      one for each FILE requested. The data in the CopyResponse results will be
+      a tar format (following the “ustar interchange format” specified in the
+      POSIX 1003.1-2008 standard) dump of the tablespace contents, except that
+      the two trailing blocks of zeroes specified in the standard are omitted.
+     </para>
+     <para>
+      The following options are accepted:
+      <variablelist>
+       <varlistentry>
+         <term><literal>START_WAL_LOCATION</literal></term>
+         <listitem>
+          <para>
+           The starting WAL position when START BACKUP command was issued,
+           returned in the form of XLogRecPtr format.
+          </para>
+         </listitem>
+       </varlistentry>
+       <varlistentry>
+         <term><literal>NOVERIFY_CHECKSUMS</literal></term>
+         <listitem>
+          <para>
+           By default, checksums are verified during a base backup if they are
+           enabled. Specifying <literal>NOVERIFY_CHECKSUMS</literal> disables
+           this verification.
+          </para>
+         </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
+    </listitem>
+  </varlistentry>
 </variablelist>
 
 </para>

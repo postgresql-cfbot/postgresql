@@ -751,3 +751,82 @@ select *, row_to_json(u) from unnest(array[null::rngfunc2, (1,'foo')::rngfunc2, 
 select *, row_to_json(u) from unnest(array[]::rngfunc2[]) u;
 
 drop type rngfunc2;
+
+--------------------------------------------------------------------------------
+-- Start of tests for support of ValuePerCall-mode SRFs
+
+CREATE TEMPORARY SEQUENCE rngfunc_vpc_seq;
+CREATE TEMPORARY SEQUENCE rngfunc_mat_seq;
+CREATE TYPE rngfunc_vpc_t AS (i integer, s bigint);
+
+-- rngfunc_vpc is SQL, so will yield a ValuePerCall SRF
+CREATE FUNCTION rngfunc_vpc(int,int)
+	RETURNS setof rngfunc_vpc_t AS
+$$
+	SELECT i, nextval('rngfunc_vpc_seq')
+		FROM generate_series($1,$2) i;
+$$
+LANGUAGE SQL;
+
+-- rngfunc_mat is plpgsql, so will yield a Materialize SRF
+CREATE FUNCTION rngfunc_mat(int,int)
+	RETURNS setof rngfunc_vpc_t AS
+$$
+begin
+	for i in $1..$2 loop
+		return next (i, nextval('rngfunc_mat_seq'));
+	end loop;
+end;
+$$
+LANGUAGE plpgsql;
+
+-- A VPC SRF that is not part of a complex query should not materialize.
+-- 
+-- To illustrate this, we explain a simple VPC SRF scan, and note the
+-- absence of a Materialize node.
+--
+explain (costs off)
+	select * from rngfunc_vpc(1, 3) t;
+
+-- A VPC SRF that aborts early should do so without emitting all results.
+-- 
+-- To illustrate this, we show that an SRF that uses a sequence does not
+-- have its value incremented if the SRF is not invoked to generate a row.
+--
+select nextval('rngfunc_vpc_seq');
+select * from rngfunc_vpc(1, 3) t limit 2;
+select nextval('rngfunc_vpc_seq');
+
+-- A Marerialize SRF should show Materialization if the query demand rescan.
+--
+-- To illustrate this, we construct a cross join, which forces rescan.
+--
+-- The same plan should be generated for both VPC and Materialize mode SRFs.
+--
+explain (costs off)
+	select * from generate_series (1, 3) n, rngfunc_vpc(1, 3) t;
+explain (costs off)
+	select * from generate_series (1, 3) n, rngfunc_mat(1, 3) t;
+
+-- A Marerialize SRF should show donation of the returned tuplestore.
+--
+-- To illustrate this, we construct a cross join, which forces rescan.
+--
+-- Only the Materialize mode SRF should show donation.
+--
+explain (analyze, timing off, costs off, summary off)
+	select * from generate_series (1, 3) n, rngfunc_vpc(1, 3) t;
+explain (analyze, timing off, costs off, summary off)
+	select * from generate_series (1, 3) n, rngfunc_mat(1, 3) t;
+
+-- A Marerialize SRF that aborts early should still generate all results.
+--
+-- To illustrate this, we show that an SRF that uses a sequence still has
+-- its value incremented if even when SRF's rows are not emitted.
+--
+select nextval('rngfunc_mat_seq');
+select * from rngfunc_mat(1, 3) t limit 2;
+select nextval('rngfunc_mat_seq');
+
+-- End of tests for support of ValuePerCall-mode SRFs
+--------------------------------------------------------------------------------

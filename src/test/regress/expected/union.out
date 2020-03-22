@@ -577,8 +577,10 @@ select from generate_series(1,5) union select from generate_series(1,3);
  HashAggregate
    ->  Append
          ->  Function Scan on generate_series
+               ->  SRF Scan
          ->  Function Scan on generate_series generate_series_1
-(4 rows)
+               ->  SRF Scan
+(6 rows)
 
 explain (costs off)
 select from generate_series(1,5) intersect select from generate_series(1,3);
@@ -588,9 +590,11 @@ select from generate_series(1,5) intersect select from generate_series(1,3);
    ->  Append
          ->  Subquery Scan on "*SELECT* 1"
                ->  Function Scan on generate_series
+                     ->  SRF Scan
          ->  Subquery Scan on "*SELECT* 2"
                ->  Function Scan on generate_series generate_series_1
-(6 rows)
+                     ->  SRF Scan
+(8 rows)
 
 select from generate_series(1,5) union select from generate_series(1,3);
 --
@@ -626,8 +630,10 @@ select from generate_series(1,5) union select from generate_series(1,3);
  Unique
    ->  Append
          ->  Function Scan on generate_series
+               ->  SRF Scan
          ->  Function Scan on generate_series generate_series_1
-(4 rows)
+               ->  SRF Scan
+(6 rows)
 
 explain (costs off)
 select from generate_series(1,5) intersect select from generate_series(1,3);
@@ -637,9 +643,11 @@ select from generate_series(1,5) intersect select from generate_series(1,3);
    ->  Append
          ->  Subquery Scan on "*SELECT* 1"
                ->  Function Scan on generate_series
+                     ->  SRF Scan
          ->  Subquery Scan on "*SELECT* 2"
                ->  Function Scan on generate_series generate_series_1
-(6 rows)
+                     ->  SRF Scan
+(8 rows)
 
 select from generate_series(1,5) union select from generate_series(1,3);
 --

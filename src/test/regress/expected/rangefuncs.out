@@ -1894,7 +1894,8 @@ explain (verbose, costs off)
  Function Scan on public.array_to_set t
    Output: f1, f2
    Function Call: array_to_set('{one,two}'::text[])
-(3 rows)
+   ->  SRF Scan
+(4 rows)
 
 -- but without, it can be:
 create or replace function array_to_set(anyarray) returns setof record as $$
@@ -1932,7 +1933,8 @@ explain (verbose, costs off)
  Function Scan on pg_catalog.generate_subscripts i
    Output: i.i, ('{one,two}'::text[])[i.i]
    Function Call: generate_subscripts('{one,two}'::text[], 1)
-(3 rows)
+   ->  SRF Scan
+(4 rows)
 
 create temp table rngfunc(f1 int8, f2 int8);
 create function testrngfunc() returns record as $$
@@ -2003,7 +2005,8 @@ select * from testrngfunc();
  Function Scan on testrngfunc
    Output: f1, f2
    Function Call: '(7.136178,7.14)'::rngfunc_type
-(3 rows)
+   ->  SRF Scan
+(4 rows)
 
 select * from testrngfunc();
     f1    |  f2  
@@ -2035,7 +2038,8 @@ select * from testrngfunc();
  Function Scan on public.testrngfunc
    Output: f1, f2
    Function Call: testrngfunc()
-(3 rows)
+   ->  SRF Scan
+(4 rows)
 
 select * from testrngfunc();
     f1    |  f2  
@@ -2101,7 +2105,8 @@ select * from testrngfunc();
  Function Scan on public.testrngfunc
    Output: f1, f2
    Function Call: testrngfunc()
-(3 rows)
+   ->  SRF Scan
+(4 rows)
 
 select * from testrngfunc();
     f1    |  f2  
@@ -2270,7 +2275,9 @@ select x from int8_tbl, extractq2(int8_tbl) f(x);
    ->  Function Scan on f
          Output: f.x
          Function Call: int8_tbl.q2
-(7 rows)
+         ->  Materialize
+               ->  SRF Scan
+(9 rows)
 
 select x from int8_tbl, extractq2(int8_tbl) f(x);
          x         
@@ -2359,3 +2366,155 @@ select *, row_to_json(u) from unnest(array[]::rngfunc2[]) u;
 (0 rows)
 
 drop type rngfunc2;
+--------------------------------------------------------------------------------
+-- Start of tests for support of ValuePerCall-mode SRFs
+CREATE TEMPORARY SEQUENCE rngfunc_vpc_seq;
+CREATE TEMPORARY SEQUENCE rngfunc_mat_seq;
+CREATE TYPE rngfunc_vpc_t AS (i integer, s bigint);
+-- rngfunc_vpc is SQL, so will yield a ValuePerCall SRF
+CREATE FUNCTION rngfunc_vpc(int,int)
+	RETURNS setof rngfunc_vpc_t AS
+$$
+	SELECT i, nextval('rngfunc_vpc_seq')
+		FROM generate_series($1,$2) i;
+$$
+LANGUAGE SQL;
+-- rngfunc_mat is plpgsql, so will yield a Materialize SRF
+CREATE FUNCTION rngfunc_mat(int,int)
+	RETURNS setof rngfunc_vpc_t AS
+$$
+begin
+	for i in $1..$2 loop
+		return next (i, nextval('rngfunc_mat_seq'));
+	end loop;
+end;
+$$
+LANGUAGE plpgsql;
+-- A VPC SRF that is not part of a complex query should not materialize.
+-- 
+-- To illustrate this, we explain a simple VPC SRF scan, and note the
+-- absence of a Materialize node.
+--
+explain (costs off)
+	select * from rngfunc_vpc(1, 3) t;
+           QUERY PLAN           
+--------------------------------
+ Function Scan on rngfunc_vpc t
+   ->  SRF Scan
+(2 rows)
+
+-- A VPC SRF that aborts early should do so without emitting all results.
+-- 
+-- To illustrate this, we show that an SRF that uses a sequence does not
+-- have its value incremented if the SRF is not invoked to generate a row.
+--
+select nextval('rngfunc_vpc_seq');
+ nextval 
+---------
+       1
+(1 row)
+
+select * from rngfunc_vpc(1, 3) t limit 2;
+ i | s 
+---+---
+ 1 | 2
+ 2 | 3
+(2 rows)
+
+select nextval('rngfunc_vpc_seq');
+ nextval 
+---------
+       4
+(1 row)
+
+-- A Marerialize SRF should show Materialization if the query demand rescan.
+--
+-- To illustrate this, we construct a cross join, which forces rescan.
+--
+-- The same plan should be generated for both VPC and Materialize mode SRFs.
+--
+explain (costs off)
+	select * from generate_series (1, 3) n, rngfunc_vpc(1, 3) t;
+                QUERY PLAN                
+------------------------------------------
+ Nested Loop
+   ->  Function Scan on generate_series n
+         ->  SRF Scan
+   ->  Function Scan on rngfunc_vpc t
+         ->  Materialize
+               ->  SRF Scan
+(6 rows)
+
+explain (costs off)
+	select * from generate_series (1, 3) n, rngfunc_mat(1, 3) t;
+                QUERY PLAN                
+------------------------------------------
+ Nested Loop
+   ->  Function Scan on generate_series n
+         ->  SRF Scan
+   ->  Function Scan on rngfunc_mat t
+         ->  Materialize
+               ->  SRF Scan
+(6 rows)
+
+-- A Marerialize SRF should show donation of the returned tuplestore.
+--
+-- To illustrate this, we construct a cross join, which forces rescan.
+--
+-- Only the Materialize mode SRF should show donation.
+--
+explain (analyze, timing off, costs off, summary off)
+	select * from generate_series (1, 3) n, rngfunc_vpc(1, 3) t;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Nested Loop (actual rows=9 loops=1)
+   ->  Function Scan on generate_series n (actual rows=3 loops=1)
+         ->  SRF Scan (actual rows=3 loops=1)
+               SFRM: ValuePerCall
+   ->  Function Scan on rngfunc_vpc t (actual rows=3 loops=3)
+         ->  Materialize (actual rows=3 loops=3)
+               ->  SRF Scan (actual rows=3 loops=1)
+                     SFRM: ValuePerCall
+(8 rows)
+
+explain (analyze, timing off, costs off, summary off)
+	select * from generate_series (1, 3) n, rngfunc_mat(1, 3) t;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Nested Loop (actual rows=9 loops=1)
+   ->  Function Scan on generate_series n (actual rows=3 loops=1)
+         ->  SRF Scan (actual rows=3 loops=1)
+               SFRM: ValuePerCall
+   ->  Function Scan on rngfunc_mat t (actual rows=3 loops=3)
+         ->  Materialize (actual rows=3 loops=3)
+               ->  SRF Scan (actual rows=0 loops=1)
+                     SFRM: Materialize
+                     Donated tuplestore: true
+(9 rows)
+
+-- A Marerialize SRF that aborts early should still generate all results.
+--
+-- To illustrate this, we show that an SRF that uses a sequence still has
+-- its value incremented if even when SRF's rows are not emitted.
+--
+select nextval('rngfunc_mat_seq');
+ nextval 
+---------
+       4
+(1 row)
+
+select * from rngfunc_mat(1, 3) t limit 2;
+ i | s 
+---+---
+ 1 | 5
+ 2 | 6
+(2 rows)
+
+select nextval('rngfunc_mat_seq');
+ nextval 
+---------
+       8
+(1 row)
+
+-- End of tests for support of ValuePerCall-mode SRFs
+--------------------------------------------------------------------------------

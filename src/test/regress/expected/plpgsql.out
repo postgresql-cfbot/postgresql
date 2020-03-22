@@ -3272,7 +3272,7 @@ select * from sc_test();
 
 create or replace function sc_test() returns setof integer as $$
 declare
-  c cursor for select * from generate_series(1, 10);
+  c scroll cursor for select * from generate_series(1, 10);
   x integer;
 begin
   open c;
@@ -5030,7 +5030,9 @@ select i, a from
    ->  Function Scan on public.consumes_rw_array i
          Output: i.i
          Function Call: consumes_rw_array((returns_rw_array(1)))
-(7 rows)
+         ->  Materialize
+               ->  SRF Scan
+(9 rows)
 
 select i, a from
   (select returns_rw_array(1) as a offset 0) ss,
@@ -5047,7 +5049,8 @@ select consumes_rw_array(a), a from returns_rw_array(1) a;
  Function Scan on public.returns_rw_array a
    Output: consumes_rw_array(a), a
    Function Call: returns_rw_array(1)
-(3 rows)
+   ->  SRF Scan
+(4 rows)
 
 select consumes_rw_array(a), a from returns_rw_array(1) a;
  consumes_rw_array |   a   

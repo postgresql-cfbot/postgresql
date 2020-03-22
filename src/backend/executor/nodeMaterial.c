@@ -45,8 +45,11 @@ ExecMaterial(PlanState *pstate)
 	Tuplestorestate *tuplestorestate;
 	bool		eof_tuplestore;
 	TupleTableSlot *slot;
+	bool 		first_time = true;
 
 	CHECK_FOR_INTERRUPTS();
+
+restart:
 
 	/*
 	 * get state info from node
@@ -126,12 +129,24 @@ ExecMaterial(PlanState *pstate)
 		PlanState  *outerNode;
 		TupleTableSlot *outerslot;
 
+		if (!first_time)
+			ereport(ERROR,
+					(errcode(ERRCODE_E_R_I_E_SRF_PROTOCOL_VIOLATED),
+					 errmsg("attempt to scan donated result store failed")));
+
 		/*
 		 * We can only get here with forward==true, so no need to worry about
 		 * which direction the subplan will go.
 		 */
 		outerNode = outerPlanState(node);
 		outerslot = ExecProcNode(outerNode);
+
+		if (node->tuplestore_donated)
+		{
+			first_time = false;
+			goto restart;
+		}
+
 		if (TupIsNull(outerslot))
 		{
 			node->eof_underlying = true;
@@ -196,6 +211,7 @@ ExecInitMaterial(Material *node, EState *estate, int eflags)
 
 	matstate->eof_underlying = false;
 	matstate->tuplestorestate = NULL;
+	matstate->tuplestore_donated = false;
 
 	/*
 	 * Miscellaneous initialization
@@ -346,6 +362,7 @@ ExecReScanMaterial(MaterialState *node)
 		{
 			tuplestore_end(node->tuplestorestate);
 			node->tuplestorestate = NULL;
+			node->tuplestore_donated = false;
 			if (outerPlan->chgParam == NULL)
 				ExecReScan(outerPlan);
 			node->eof_underlying = false;
@@ -361,8 +378,29 @@ ExecReScanMaterial(MaterialState *node)
 		 * if chgParam of subnode is not null then plan will be re-scanned by
 		 * first ExecProcNode.
 		 */
+		node->tuplestore_donated = false;
 		if (outerPlan->chgParam == NULL)
 			ExecReScan(outerPlan);
 		node->eof_underlying = false;
 	}
+}
+
+void
+ExecMaterialReceiveResultStore(MaterialState *node, Tuplestorestate *store)
+{
+	if (!node->tuplestore_donated)
+	{
+		if (node->tuplestorestate)
+		{
+			tuplestore_end(node->tuplestorestate);
+		}
+
+		node->tuplestorestate = store;
+		node->tuplestore_donated = true;
+		node->eof_underlying = true;
+	}
+	else
+		ereport(ERROR,
+				(errcode(ERRCODE_E_R_I_E_SRF_PROTOCOL_VIOLATED),
+				 errmsg("Result tuplestore donated more than once")));
 }

@@ -283,6 +283,7 @@ ExecInitProjectSet(ProjectSet *node, EState *estate, int eflags)
 			state->elems[off] = (Node *)
 				ExecInitFunctionResultSet(expr, state->ps.ps_ExprContext,
 										  &state->ps);
+			Assert (((SetExprState *) state->elems[off])->funcReturnsSet);
 		}
 		else
 		{

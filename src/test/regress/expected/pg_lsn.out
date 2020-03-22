@@ -87,13 +87,17 @@ SELECT DISTINCT (i || '/' || j)::pg_lsn f
          Group Key: ((((i.i)::text || '/'::text) || (j.j)::text))::pg_lsn
          ->  Nested Loop
                ->  Function Scan on generate_series k
+                     ->  SRF Scan
                ->  Materialize
                      ->  Nested Loop
                            ->  Function Scan on generate_series j
                                  Filter: ((j > 0) AND (j <= 10))
+                                 ->  SRF Scan
                            ->  Function Scan on generate_series i
                                  Filter: (i <= 10)
-(12 rows)
+                                 ->  Materialize
+                                       ->  SRF Scan
+(16 rows)
 
 SELECT DISTINCT (i || '/' || j)::pg_lsn f
   FROM generate_series(1, 10) i,

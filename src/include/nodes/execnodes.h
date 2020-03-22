@@ -797,10 +797,16 @@ typedef struct SetExprState
 	/*
 	 * For a set-returning function (SRF) that returns a tuplestore, we keep
 	 * the tuplestore here and dole out the result rows one at a time. The
-	 * slot holds the row currently being returned.
+	 * slot holds the row currently being returned. The boolean
+	 * funcResultStoreDonationEnabled indicates whether the an SRF
+	 * returning SFRM_Materialize tupleStore should attempt to donate its
+	 * resultStore to a higher level Materialize node.
 	 */
 	Tuplestorestate *funcResultStore;
 	TupleTableSlot *funcResultSlot;
+	bool 		funcResultStoreDonationEnabled;
+	bool 		funcResultStoreDonated;
+	struct PlanState *funcResultStoreDonationTarget;
 
 	/*
 	 * In some cases we need to compute a tuple descriptor for the function's
@@ -1651,6 +1657,7 @@ typedef struct SubqueryScanState
  *		funcstates			per-function execution states (private in
  *							nodeFunctionscan.c)
  *		argcontext			memory context to evaluate function arguments in
+ *		pending_srf_tuples	still evaluating any SRFs?
  * ----------------
  */
 struct FunctionScanPerFuncState;
@@ -1978,6 +1985,7 @@ typedef struct MaterialState
 	int			eflags;			/* capability flags to pass to tuplestore */
 	bool		eof_underlying; /* reached end of underlying plan? */
 	Tuplestorestate *tuplestorestate;
+	bool		tuplestore_donated; /* was duplestore donated by another node? */
 } MaterialState;
 
 /* ----------------

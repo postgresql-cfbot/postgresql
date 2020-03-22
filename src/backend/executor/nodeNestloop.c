@@ -293,9 +293,16 @@ ExecInitNestLoop(NestLoop *node, EState *estate, int eflags)
 	 * such parameters, then there is no point in REWIND support at all in the
 	 * inner child, because it will always be rescanned with fresh parameter
 	 * values.
+	 *
+	 * The exception to this simple rule is a ROWS FROM function scan where it
+	 * is possible that only some of the inolved functions are affected by the
+	 * parameters. In this case, we blanket request support for REWIND. A more
+	 * intelligent approch would request REWIND only for nodes unaffected by
+	 * the parameters, but we aren't so intelligent yet.
 	 */
 	outerPlanState(nlstate) = ExecInitNode(outerPlan(node), estate, eflags);
-	if (node->nestParams == NIL)
+	if (node->nestParams == NIL ||
+		IsA(innerPlan(node), FunctionScan))
 		eflags |= EXEC_FLAG_REWIND;
 	else
 		eflags &= ~EXEC_FLAG_REWIND;

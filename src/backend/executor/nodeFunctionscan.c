@@ -1,7 +1,23 @@
 /*-------------------------------------------------------------------------
  *
  * nodeFunctionscan.c
- *	  Support routines for scanning RangeFunctions (functions in rangetable).
+ *	  Coordinates a scan over PL functions. It supports several use cases:
+ *
+ *      - single function scan, and multiple functions in ROWS FROM;
+ *      - SRFs and regular functions;
+ *      - tuple- and scalar-returning functions;
+ *      - it will materialise if eflags call for it;
+ *      - if possible, it will pipeline its output;
+ *      - it avoids double-materialisation in case of SFRM_Materialize.
+ *
+ *    To achieve these, it depends upon the Materialize (for materialisation
+ *    and pipelining) and SRFScan (for SRF handling, and tuple expansion,
+ *    and double-materialisation avoidance) nodes, and the actual function
+ *    invocation (for SRF- and regular functions alike) is done in execSRF.c.
+ *
+ *    The Planner knows nothing of the Materialize and SRFScan structures.
+ *    They are constructed by the Executor at execution time, and are reported
+ *    in the EXPLAIN output.
  *
  * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -24,26 +40,15 @@
 
 #include "catalog/pg_type.h"
 #include "executor/nodeFunctionscan.h"
+#include "executor/nodeSRFScan.h"
+#include "executor/nodeMaterial.h"
 #include "funcapi.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/makefuncs.h"
+#include "parser/parse_type.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
-
-
-/*
- * Runtime data for each function being scanned.
- */
-typedef struct FunctionScanPerFuncState
-{
-	SetExprState *setexpr;		/* state of the expression being evaluated */
-	TupleDesc	tupdesc;		/* desc of the function result type */
-	int			colcount;		/* expected number of result columns */
-	Tuplestorestate *tstore;	/* holds the function result set */
-	int64		rowcount;		/* # of rows in result set, -1 if not known */
-	TupleTableSlot *func_slot;	/* function result slot (or NULL) */
-} FunctionScanPerFuncState;
-
-static TupleTableSlot *FunctionNext(FunctionScanState *node);
+#include "utils/syscache.h"
 
 
 /* ----------------------------------------------------------------
@@ -82,37 +87,22 @@ FunctionNext(FunctionScanState *node)
 		 * into the scan result slot. No need to update ordinality or
 		 * rowcounts either.
 		 */
-		Tuplestorestate *tstore = node->funcstates[0].tstore;
+		TupleTableSlot *rs = node->funcstates[0].scanstate->ps.ps_ResultTupleSlot;
 
 		/*
-		 * If first time through, read all tuples from function and put them
-		 * in a tuplestore. Subsequent calls just fetch tuples from
-		 * tuplestore.
+		 * Get the next tuple from the Scan node.
+		 *
+		 * If we have a rowcount for the function, and we know the previous
+		 * read position was out of bounds, don't try the read. This allows
+		 * backward scan to work when there are mixed row counts present.
 		 */
-		if (tstore == NULL)
-		{
-			node->funcstates[0].tstore = tstore =
-				ExecMakeTableFunctionResult(node->funcstates[0].setexpr,
-											node->ss.ps.ps_ExprContext,
-											node->argcontext,
-											node->funcstates[0].tupdesc,
-											node->eflags & EXEC_FLAG_BACKWARD);
+		rs = ExecProcNode(&node->funcstates[0].scanstate->ps);
 
-			/*
-			 * paranoia - cope if the function, which may have constructed the
-			 * tuplestore itself, didn't leave it pointing at the start. This
-			 * call is fast, so the overhead shouldn't be an issue.
-			 */
-			tuplestore_rescan(tstore);
-		}
+		if (TupIsNull(rs))
+			return NULL;
 
-		/*
-		 * Get the next tuple from tuplestore.
-		 */
-		(void) tuplestore_gettupleslot(tstore,
-									   ScanDirectionIsForward(direction),
-									   false,
-									   scanslot);
+		ExecCopySlot(scanslot, rs);
+
 		return scanslot;
 	}
 
@@ -141,46 +131,22 @@ FunctionNext(FunctionScanState *node)
 	for (funcno = 0; funcno < node->nfuncs; funcno++)
 	{
 		FunctionScanPerFuncState *fs = &node->funcstates[funcno];
+		TupleTableSlot *func_slot = fs->scanstate->ps.ps_ResultTupleSlot;
 		int			i;
 
 		/*
-		 * If first time through, read all tuples from function and put them
-		 * in a tuplestore. Subsequent calls just fetch tuples from
-		 * tuplestore.
-		 */
-		if (fs->tstore == NULL)
-		{
-			fs->tstore =
-				ExecMakeTableFunctionResult(fs->setexpr,
-											node->ss.ps.ps_ExprContext,
-											node->argcontext,
-											fs->tupdesc,
-											node->eflags & EXEC_FLAG_BACKWARD);
-
-			/*
-			 * paranoia - cope if the function, which may have constructed the
-			 * tuplestore itself, didn't leave it pointing at the start. This
-			 * call is fast, so the overhead shouldn't be an issue.
-			 */
-			tuplestore_rescan(fs->tstore);
-		}
-
-		/*
-		 * Get the next tuple from tuplestore.
+		 * Get the next tuple from the Scan node.
 		 *
 		 * If we have a rowcount for the function, and we know the previous
 		 * read position was out of bounds, don't try the read. This allows
 		 * backward scan to work when there are mixed row counts present.
 		 */
 		if (fs->rowcount != -1 && fs->rowcount < oldpos)
-			ExecClearTuple(fs->func_slot);
+			ExecClearTuple(func_slot);
 		else
-			(void) tuplestore_gettupleslot(fs->tstore,
-										   ScanDirectionIsForward(direction),
-										   false,
-										   fs->func_slot);
+			func_slot = ExecProcNode(&fs->scanstate->ps);
 
-		if (TupIsNull(fs->func_slot))
+		if (TupIsNull(func_slot))
 		{
 			/*
 			 * If we ran out of data for this function in the forward
@@ -207,12 +173,12 @@ FunctionNext(FunctionScanState *node)
 			/*
 			 * we have a result, so just copy it to the result cols.
 			 */
-			slot_getallattrs(fs->func_slot);
+			slot_getallattrs(func_slot);
 
 			for (i = 0; i < fs->colcount; i++)
 			{
-				scanslot->tts_values[att] = fs->func_slot->tts_values[i];
-				scanslot->tts_isnull[att] = fs->func_slot->tts_isnull[i];
+				scanslot->tts_values[att] = func_slot->tts_values[i];
+				scanslot->tts_isnull[att] = func_slot->tts_isnull[i];
 				att++;
 			}
 
@@ -272,6 +238,53 @@ ExecFunctionScan(PlanState *pstate)
 					(ExecScanRecheckMtd) FunctionRecheck);
 }
 
+/*
+ * Helper function to build target list, which is required in order for
+ * normal processing of ExecInit, from the tupdesc.
+ */
+static void
+build_tlist_for_tupdesc(TupleDesc tupdesc, int colcount,
+						List **mat_tlist, List **scan_tlist)
+{
+	Form_pg_attribute attr;
+	int attno;
+
+	for (attno = 1; attno <= colcount; attno++)
+	{
+		attr = TupleDescAttr(tupdesc, attno - 1);
+
+		if (attr->attisdropped)
+		{
+			*scan_tlist = lappend(*scan_tlist,
+							  makeTargetEntry((Expr *)
+								  makeConst(INT2OID, -1,
+											0,
+											attr->attlen,
+											0 /* value */, true /* isnull */,
+											true),
+								  attno, attr->attname.data,
+								  attr->attisdropped));
+			*mat_tlist = lappend(*mat_tlist,
+							 makeTargetEntry((Expr *)
+								 makeVar(1 /* varno */, attno, INT2OID, -1, 0, 0),
+								 attno, attr->attname.data, attr->attisdropped));
+		}
+		else
+		{
+			*scan_tlist = lappend(*scan_tlist,
+							  makeTargetEntry((Expr *)
+								  makeVar(1 /* varno */, attno, attr->atttypid,
+										  attr->atttypmod, attr->attcollation, 0),
+								  attno, attr->attname.data, attr->attisdropped));
+			*mat_tlist = lappend(*mat_tlist,
+							 makeTargetEntry((Expr *)
+								 makeVar(1 /* varno */, attno, attr->atttypid,
+										 attr->atttypmod, attr->attcollation, 0),
+								 attno, attr->attname.data, attr->attisdropped));
+		}
+	}
+}
+
 /* ----------------------------------------------------------------
  *		ExecInitFunctionScan
  * ----------------------------------------------------------------
@@ -285,6 +298,7 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 	int			i,
 				natts;
 	ListCell   *lc;
+	bool 		needs_material;
 
 	/* check for unsupported flags */
 	Assert(!(eflags & EXEC_FLAG_MARK));
@@ -314,6 +328,9 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 		scanstate->simple = true;
 	else
 		scanstate->simple = false;
+
+	/* Only add a Mterialize node if required */
+	needs_material = eflags & (EXEC_FLAG_REWIND | EXEC_FLAG_BACKWARD);
 
 	/*
 	 * Ordinal 0 represents the "before the first row" position.
@@ -347,23 +364,17 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 		TypeFuncClass functypclass;
 		Oid			funcrettype;
 		TupleDesc	tupdesc;
+		SRFScanPlan *srfscan;
+		Plan *scan;
+		List /* TargetEntry* */ *mat_tlist = NIL;
+		List /* TargetEntry* */ *scan_tlist = NIL;
+		bool funcReturnsTuple;
 
-		fs->setexpr =
-			ExecInitTableFunctionResult((Expr *) funcexpr,
-										scanstate->ss.ps.ps_ExprContext,
-										&scanstate->ss.ps);
-
-		/*
-		 * Don't allocate the tuplestores; the actual calls to the functions
-		 * do that.  NULL means that we have not called the function yet (or
-		 * need to call it again after a rescan).
-		 */
-		fs->tstore = NULL;
 		fs->rowcount = -1;
 
 		/*
 		 * Now determine if the function returns a simple or composite type,
-		 * and build an appropriate tupdesc.  Note that in the composite case,
+		 * and build an appropriate targetlist.  Note that in the composite case,
 		 * the function may now return more columns than it did when the plan
 		 * was made; we have to ignore any columns beyond "colcount".
 		 */
@@ -379,6 +390,7 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 			Assert(tupdesc->natts >= colcount);
 			/* Must copy it out of typcache for safety */
 			tupdesc = CreateTupleDescCopy(tupdesc);
+			funcReturnsTuple = true;
 		}
 		else if (functypclass == TYPEFUNC_SCALAR)
 		{
@@ -393,6 +405,7 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 			TupleDescInitEntryCollation(tupdesc,
 										(AttrNumber) 1,
 										exprCollation(funcexpr));
+			funcReturnsTuple = false;
 		}
 		else if (functypclass == TYPEFUNC_RECORD)
 		{
@@ -407,6 +420,7 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 			 * case it doesn't.)
 			 */
 			BlessTupleDesc(tupdesc);
+			funcReturnsTuple = true;
 		}
 		else
 		{
@@ -414,21 +428,45 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 			elog(ERROR, "function in FROM has unsupported return type");
 		}
 
-		fs->tupdesc = tupdesc;
 		fs->colcount = colcount;
 
-		/*
-		 * We only need separate slots for the function results if we are
-		 * doing ordinality or multiple functions; otherwise, we'll fetch
-		 * function results directly into the scan slot.
-		 */
-		if (!scanstate->simple)
+		/* Expand tupdesc into targetlists for the scan nodes */
+		build_tlist_for_tupdesc(tupdesc, colcount, &mat_tlist, &scan_tlist);
+
+		srfscan = makeNode(SRFScanPlan);
+		srfscan->funcexpr = funcexpr;
+		srfscan->rtfunc = (Node *) rtfunc;
+		srfscan->plan.targetlist = scan_tlist;
+		srfscan->plan.extParam = rtfunc->funcparams;
+		srfscan->plan.allParam = rtfunc->funcparams;
+		srfscan->funcResultDesc = tupdesc;
+		srfscan->funcReturnsTuple = funcReturnsTuple;
+		scan = &srfscan->plan;
+
+		if (needs_material)
 		{
-			fs->func_slot = ExecInitExtraTupleSlot(estate, fs->tupdesc,
-												   &TTSOpsMinimalTuple);
+			Material *fscan = makeNode(Material);
+			fscan->plan.lefttree = scan;
+			fscan->plan.targetlist = mat_tlist;
+			fscan->plan.extParam = rtfunc->funcparams;
+			fscan->plan.allParam = rtfunc->funcparams;
+			scan = &fscan->plan;
 		}
-		else
-			fs->func_slot = NULL;
+
+		fs->scanstate = (ScanState *) ExecInitNode (scan, estate, eflags);
+
+		if (needs_material)
+		{
+			/*
+			 * Tell the SRFScan about its parent, so that it can donate
+			 * the SRF's tuplestore if the SRF uses SFRM_Materialize.
+			 */
+			MaterialState *ms = (MaterialState *) fs->scanstate;
+			SRFScanState *sss = (SRFScanState *) outerPlanState(ms);
+
+			sss->setexpr->funcResultStoreDonationEnabled = true;
+			sss->setexpr->funcResultStoreDonationTarget = &ms->ss.ps;
+		}
 
 		natts += colcount;
 		i++;
@@ -443,7 +481,11 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 	 */
 	if (scanstate->simple)
 	{
-		scan_tupdesc = CreateTupleDescCopy(scanstate->funcstates[0].tupdesc);
+		SRFScanState *sss = IsA(scanstate->funcstates[0].scanstate, MaterialState) ?
+				(SRFScanState *) outerPlanState((MaterialState *) scanstate->funcstates[0].scanstate) :
+				(SRFScanState *) scanstate->funcstates[0].scanstate;
+
+		scan_tupdesc = CreateTupleDescCopy(sss->setexpr->funcResultDesc);
 		scan_tupdesc->tdtypeid = RECORDOID;
 		scan_tupdesc->tdtypmod = -1;
 	}
@@ -458,8 +500,12 @@ ExecInitFunctionScan(FunctionScan *node, EState *estate, int eflags)
 
 		for (i = 0; i < nfuncs; i++)
 		{
-			TupleDesc	tupdesc = scanstate->funcstates[i].tupdesc;
-			int			colcount = scanstate->funcstates[i].colcount;
+			SRFScanState *sss = IsA(scanstate->funcstates[i].scanstate, MaterialState) ?
+					(SRFScanState *) outerPlanState((MaterialState *) scanstate->funcstates[i].scanstate) :
+					(SRFScanState *) scanstate->funcstates[i].scanstate;
+
+			TupleDesc	tupdesc = sss->setexpr->funcResultDesc;
+			int			colcount = sss->colcount;
 			int			j;
 
 			for (j = 1; j <= colcount; j++)
@@ -536,20 +582,11 @@ ExecEndFunctionScan(FunctionScanState *node)
 	ExecClearTuple(node->ss.ss_ScanTupleSlot);
 
 	/*
-	 * Release slots and tuplestore resources
+	 * Release the Material scan resources
 	 */
 	for (i = 0; i < node->nfuncs; i++)
 	{
-		FunctionScanPerFuncState *fs = &node->funcstates[i];
-
-		if (fs->func_slot)
-			ExecClearTuple(fs->func_slot);
-
-		if (fs->tstore != NULL)
-		{
-			tuplestore_end(node->funcstates[i].tstore);
-			fs->tstore = NULL;
-		}
+		ExecEndNode(&node->funcstates[i].scanstate->ps);
 	}
 }
 
@@ -568,23 +605,12 @@ ExecReScanFunctionScan(FunctionScanState *node)
 
 	if (node->ss.ps.ps_ResultTupleSlot)
 		ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
-	for (i = 0; i < node->nfuncs; i++)
-	{
-		FunctionScanPerFuncState *fs = &node->funcstates[i];
-
-		if (fs->func_slot)
-			ExecClearTuple(fs->func_slot);
-	}
 
 	ExecScanReScan(&node->ss);
 
 	/*
-	 * Here we have a choice whether to drop the tuplestores (and recompute
-	 * the function outputs) or just rescan them.  We must recompute if an
-	 * expression contains changed parameters, else we rescan.
-	 *
-	 * XXX maybe we should recompute if the function is volatile?  But in
-	 * general the executor doesn't conditionalize its actions on that.
+	 * We must recompute if an
+	 * expression contains changed parameters.
 	 */
 	if (chgparam)
 	{
@@ -597,11 +623,9 @@ ExecReScanFunctionScan(FunctionScanState *node)
 
 			if (bms_overlap(chgparam, rtfunc->funcparams))
 			{
-				if (node->funcstates[i].tstore != NULL)
-				{
-					tuplestore_end(node->funcstates[i].tstore);
-					node->funcstates[i].tstore = NULL;
-				}
+				UpdateChangedParamSet(&node->funcstates[i].scanstate->ps,
+									  node->ss.ps.chgParam);
+
 				node->funcstates[i].rowcount = -1;
 			}
 			i++;
@@ -611,10 +635,9 @@ ExecReScanFunctionScan(FunctionScanState *node)
 	/* Reset ordinality counter */
 	node->ordinal = 0;
 
-	/* Make sure we rewind any remaining tuplestores */
+	/* Rescan them all */
 	for (i = 0; i < node->nfuncs; i++)
 	{
-		if (node->funcstates[i].tstore != NULL)
-			tuplestore_rescan(node->funcstates[i].tstore);
+		ExecReScan(&node->funcstates[i].scanstate->ps);
 	}
 }

@@ -514,7 +514,9 @@ typedef enum NodeTag
 	T_SupportRequestSelectivity,	/* in nodes/supportnodes.h */
 	T_SupportRequestCost,		/* in nodes/supportnodes.h */
 	T_SupportRequestRows,		/* in nodes/supportnodes.h */
-	T_SupportRequestIndexCondition	/* in nodes/supportnodes.h */
+	T_SupportRequestIndexCondition,	/* in nodes/supportnodes.h */
+	T_SRFScanPlan,
+	T_SRFScanState
 } NodeTag;
 
 /*

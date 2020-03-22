@@ -247,9 +247,10 @@ SELECT * FROM tenk1 a JOIN my_gen_series(1,1000) g ON a.unique1 = g;
  Hash Join
    Hash Cond: (g.g = a.unique1)
    ->  Function Scan on my_gen_series g
+         ->  SRF Scan
    ->  Hash
          ->  Seq Scan on tenk1 a
-(5 rows)
+(6 rows)
 
 EXPLAIN (COSTS OFF)
 SELECT * FROM tenk1 a JOIN my_gen_series(1,10) g ON a.unique1 = g;
@@ -257,7 +258,8 @@ SELECT * FROM tenk1 a JOIN my_gen_series(1,10) g ON a.unique1 = g;
 -------------------------------------------------
  Nested Loop
    ->  Function Scan on my_gen_series g
+         ->  SRF Scan
    ->  Index Scan using tenk1_unique1 on tenk1 a
          Index Cond: (unique1 = g.g)
-(4 rows)
+(5 rows)
 

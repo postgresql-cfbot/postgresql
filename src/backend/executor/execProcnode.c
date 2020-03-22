@@ -83,6 +83,7 @@
 #include "executor/nodeCustom.h"
 #include "executor/nodeForeignscan.h"
 #include "executor/nodeFunctionscan.h"
+#include "executor/nodeSRFScan.h"
 #include "executor/nodeGather.h"
 #include "executor/nodeGatherMerge.h"
 #include "executor/nodeGroup.h"
@@ -249,6 +250,11 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 
 		case T_TableFuncScan:
 			result = (PlanState *) ExecInitTableFuncScan((TableFuncScan *) node,
+														 estate, eflags);
+			break;
+
+		case T_SRFScanPlan:
+			result = (PlanState *) ExecInitSRFScan((SRFScanPlan *) node,
 														 estate, eflags);
 			break;
 
@@ -637,6 +643,10 @@ ExecEndNode(PlanState *node)
 
 		case T_FunctionScanState:
 			ExecEndFunctionScan((FunctionScanState *) node);
+			break;
+
+		case T_SRFScanState:
+			ExecEndSRFScan((SRFScanState *) node);
 			break;
 
 		case T_TableFuncScanState:

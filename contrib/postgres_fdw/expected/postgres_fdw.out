@@ -2086,9 +2086,11 @@ SELECT t1c1, avg(t1c1 + t2c1) FROM (SELECT t1.c1, t2.c1 FROM ft1 t1 JOIN ft2 t2 
          ->  HashAggregate
                Output: t1.c1, avg((t1.c1 + t2.c1))
                Group Key: t1.c1
+               Buckets: 256
                ->  HashAggregate
                      Output: t1.c1, t2.c1
                      Group Key: t1.c1, t2.c1
+                     Buckets: 4096
                      ->  Append
                            ->  Foreign Scan
                                  Output: t1.c1, t2.c1
@@ -2098,7 +2100,7 @@ SELECT t1c1, avg(t1c1 + t2c1) FROM (SELECT t1.c1, t2.c1 FROM ft1 t1 JOIN ft2 t2 
                                  Output: t1_1.c1, t2_1.c1
                                  Relations: (public.ft1 t1_1) INNER JOIN (public.ft2 t2_1)
                                  Remote SQL: SELECT r1."C 1", r2."C 1" FROM ("S 1"."T 1" r1 INNER JOIN "S 1"."T 1" r2 ON (((r1."C 1" = r2."C 1"))))
-(20 rows)
+(22 rows)
 
 SELECT t1c1, avg(t1c1 + t2c1) FROM (SELECT t1.c1, t2.c1 FROM ft1 t1 JOIN ft2 t2 ON (t1.c1 = t2.c1) UNION SELECT t1.c1, t2.c1 FROM ft1 t1 JOIN ft2 t2 ON (t1.c1 = t2.c1)) AS t (t1c1, t2c1) GROUP BY t1c1 ORDER BY t1c1 OFFSET 100 LIMIT 10;
  t1c1 |         avg          
@@ -2129,11 +2131,12 @@ SELECT t1."C 1" FROM "S 1"."T 1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM 
          ->  HashAggregate
                Output: t2.c1, t3.c1
                Group Key: t2.c1, t3.c1
+               Buckets: 2
                ->  Foreign Scan
                      Output: t2.c1, t3.c1
                      Relations: (public.ft1 t2) INNER JOIN (public.ft2 t3)
                      Remote SQL: SELECT r1."C 1", r2."C 1" FROM ("S 1"."T 1" r1 INNER JOIN "S 1"."T 1" r2 ON (((r1."C 1" = r2."C 1")) AND ((r1.c2 = $1::integer))))
-(13 rows)
+(14 rows)
 
 SELECT t1."C 1" FROM "S 1"."T 1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM ft1 t2, ft2 t3 WHERE t2.c1 = t3.c1 AND t2.c2 = t1.c2) q ORDER BY t1."C 1" OFFSET 10 LIMIT 10;
  C 1 
@@ -2610,10 +2613,11 @@ select c2 * (random() <= 1)::int as c2 from ft2 group by c2 * (random() <= 1)::i
    ->  HashAggregate
          Output: ((c2 * ((random() <= '1'::double precision))::integer))
          Group Key: (ft2.c2 * ((random() <= '1'::double precision))::integer)
+         Buckets: 2
          ->  Foreign Scan on public.ft2
                Output: (c2 * ((random() <= '1'::double precision))::integer)
                Remote SQL: SELECT c2 FROM "S 1"."T 1"
-(9 rows)
+(10 rows)
 
 -- GROUP BY clause in various forms, cardinal, alias and constant expression
 explain (verbose, costs off)
@@ -2713,11 +2717,12 @@ select sum(c1) from ft1 group by c2 having avg(c1 * (random() <= 1)::int) > 100 
    ->  HashAggregate
          Output: sum(c1), c2
          Group Key: ft1.c2
+         Buckets: 16
          Filter: (avg((ft1.c1 * ((random() <= '1'::double precision))::integer)) > '100'::numeric)
          ->  Foreign Scan on public.ft1
                Output: c1, c2
                Remote SQL: SELECT "C 1", c2 FROM "S 1"."T 1"
-(10 rows)
+(11 rows)
 
 -- Remote aggregate in combination with a local Param (for the output
 -- of an initplan) can be trouble, per bug #15781
@@ -2963,10 +2968,11 @@ select sum(c1) filter (where (c1 / c1) * random() <= 1) from ft1 group by c2 ord
    ->  HashAggregate
          Output: sum(c1) FILTER (WHERE ((((c1 / c1))::double precision * random()) <= '1'::double precision)), c2
          Group Key: ft1.c2
+         Buckets: 16
          ->  Foreign Scan on public.ft1
                Output: c1, c2
                Remote SQL: SELECT "C 1", c2 FROM "S 1"."T 1"
-(9 rows)
+(10 rows)
 
 explain (verbose, costs off)
 select sum(c2) filter (where c2 in (select c2 from ft1 where c2 < 5)) from ft1;
@@ -3229,6 +3235,7 @@ select count(*), x.b from ft1, (select c2 a, sum(c1) b from ft1 group by c2) x w
    ->  HashAggregate
          Output: count(*), x.b
          Group Key: x.b
+         Buckets: 16
          ->  Hash Join
                Output: x.b
                Inner Unique: true
@@ -3244,7 +3251,7 @@ select count(*), x.b from ft1, (select c2 a, sum(c1) b from ft1 group by c2) x w
                                  Output: ft1_1.c2, (sum(ft1_1.c1))
                                  Relations: Aggregate on (public.ft1 ft1_1)
                                  Remote SQL: SELECT c2, sum("C 1") FROM "S 1"."T 1" GROUP BY 1
-(21 rows)
+(22 rows)
 
 select count(*), x.b from ft1, (select c2 a, sum(c1) b from ft1 group by c2) x where ft1.c2 = x.a group by x.b order by 1, 2;
  count |   b   
@@ -3449,11 +3456,12 @@ select c2, sum(c1) from ft1 where c2 < 3 group by rollup(c2) order by 1 nulls la
    ->  MixedAggregate
          Output: c2, sum(c1)
          Hash Key: ft1.c2
+         Buckets: 16
          Group Key: ()
          ->  Foreign Scan on public.ft1
                Output: c2, c1
                Remote SQL: SELECT "C 1", c2 FROM "S 1"."T 1" WHERE ((c2 < 3))
-(10 rows)
+(11 rows)
 
 select c2, sum(c1) from ft1 where c2 < 3 group by rollup(c2) order by 1 nulls last;
  c2 |  sum   
@@ -3474,11 +3482,12 @@ select c2, sum(c1) from ft1 where c2 < 3 group by cube(c2) order by 1 nulls last
    ->  MixedAggregate
          Output: c2, sum(c1)
          Hash Key: ft1.c2
+         Buckets: 16
          Group Key: ()
          ->  Foreign Scan on public.ft1
                Output: c2, c1
                Remote SQL: SELECT "C 1", c2 FROM "S 1"."T 1" WHERE ((c2 < 3))
-(10 rows)
+(11 rows)
 
 select c2, sum(c1) from ft1 where c2 < 3 group by cube(c2) order by 1 nulls last;
  c2 |  sum   
@@ -3499,11 +3508,13 @@ select c2, c6, sum(c1) from ft1 where c2 < 3 group by grouping sets(c2, c6) orde
    ->  HashAggregate
          Output: c2, c6, sum(c1)
          Hash Key: ft1.c2
+         Buckets: 16
          Hash Key: ft1.c6
+         Buckets: 16
          ->  Foreign Scan on public.ft1
                Output: c2, c6, c1
                Remote SQL: SELECT "C 1", c2, c6 FROM "S 1"."T 1" WHERE ((c2 < 3))
-(10 rows)
+(12 rows)
 
 select c2, c6, sum(c1) from ft1 where c2 < 3 group by grouping sets(c2, c6) order by 1 nulls last, 2 nulls last;
  c2 | c6 |  sum  
@@ -3526,10 +3537,11 @@ select c2, sum(c1), grouping(c2) from ft1 where c2 < 3 group by c2 order by 1 nu
    ->  HashAggregate
          Output: c2, sum(c1), GROUPING(c2)
          Group Key: ft1.c2
+         Buckets: 16
          ->  Foreign Scan on public.ft1
                Output: c2, c1
                Remote SQL: SELECT "C 1", c2 FROM "S 1"."T 1" WHERE ((c2 < 3))
-(9 rows)
+(10 rows)
 
 select c2, sum(c1), grouping(c2) from ft1 where c2 < 3 group by c2 order by 1 nulls last;
  c2 |  sum  | grouping 
@@ -7147,13 +7159,14 @@ select * from bar where f1 in (select f1 from foo) for update;
                ->  HashAggregate
                      Output: foo.ctid, foo.f1, foo.*, foo.tableoid
                      Group Key: foo.f1
+                     Buckets: 256
                      ->  Append
                            ->  Seq Scan on public.foo foo_1
                                  Output: foo_1.ctid, foo_1.f1, foo_1.*, foo_1.tableoid
                            ->  Foreign Scan on public.foo2 foo_2
                                  Output: foo_2.ctid, foo_2.f1, foo_2.*, foo_2.tableoid
                                  Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct1
-(23 rows)
+(24 rows)
 
 select * from bar where f1 in (select f1 from foo) for update;
  f1 | f2 
@@ -7185,13 +7198,14 @@ select * from bar where f1 in (select f1 from foo) for share;
                ->  HashAggregate
                      Output: foo.ctid, foo.f1, foo.*, foo.tableoid
                      Group Key: foo.f1
+                     Buckets: 256
                      ->  Append
                            ->  Seq Scan on public.foo foo_1
                                  Output: foo_1.ctid, foo_1.f1, foo_1.*, foo_1.tableoid
                            ->  Foreign Scan on public.foo2 foo_2
                                  Output: foo_2.ctid, foo_2.f1, foo_2.*, foo_2.tableoid
                                  Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct1
-(23 rows)
+(24 rows)
 
 select * from bar where f1 in (select f1 from foo) for share;
  f1 | f2 
@@ -7222,6 +7236,7 @@ update bar set f2 = f2 + 100 where f1 in (select f1 from foo);
                ->  HashAggregate
                      Output: foo.ctid, foo.f1, foo.*, foo.tableoid
                      Group Key: foo.f1
+                     Buckets: 256
                      ->  Append
                            ->  Seq Scan on public.foo foo_1
                                  Output: foo_1.ctid, foo_1.f1, foo_1.*, foo_1.tableoid
@@ -7240,13 +7255,14 @@ update bar set f2 = f2 + 100 where f1 in (select f1 from foo);
                ->  HashAggregate
                      Output: foo.ctid, foo.f1, foo.*, foo.tableoid
                      Group Key: foo.f1
+                     Buckets: 256
                      ->  Append
                            ->  Seq Scan on public.foo foo_1
                                  Output: foo_1.ctid, foo_1.f1, foo_1.*, foo_1.tableoid
                            ->  Foreign Scan on public.foo2 foo_2
                                  Output: foo_2.ctid, foo_2.f1, foo_2.*, foo_2.tableoid
                                  Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct1
-(39 rows)
+(41 rows)
 
 update bar set f2 = f2 + 100 where f1 in (select f1 from foo);
 select tableoid::regclass, * from bar order by 1,2;
@@ -8751,12 +8767,13 @@ SELECT a, sum(b), min(b), count(*) FROM pagg_tab GROUP BY a HAVING avg(b) < 22 O
    Sort Key: pagg_tab.a
    ->  HashAggregate
          Group Key: pagg_tab.a
+         Buckets: 64
          Filter: (avg(pagg_tab.b) < '22'::numeric)
          ->  Append
                ->  Foreign Scan on fpagg_tab_p1 pagg_tab_1
                ->  Foreign Scan on fpagg_tab_p2 pagg_tab_2
                ->  Foreign Scan on fpagg_tab_p3 pagg_tab_3
-(9 rows)
+(10 rows)
 
 -- Plan with partitionwise aggregates is enabled
 SET enable_partitionwise_aggregate TO true;
@@ -8799,6 +8816,7 @@ SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
          ->  HashAggregate
                Output: t1.a, count(((t1.*)::pagg_tab))
                Group Key: t1.a
+               Buckets: 16
                Filter: (avg(t1.b) < '22'::numeric)
                ->  Foreign Scan on public.fpagg_tab_p1 t1
                      Output: t1.a, t1.*, t1.b
@@ -8806,6 +8824,7 @@ SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
          ->  HashAggregate
                Output: t1_1.a, count(((t1_1.*)::pagg_tab))
                Group Key: t1_1.a
+               Buckets: 16
                Filter: (avg(t1_1.b) < '22'::numeric)
                ->  Foreign Scan on public.fpagg_tab_p2 t1_1
                      Output: t1_1.a, t1_1.*, t1_1.b
@@ -8813,11 +8832,12 @@ SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
          ->  HashAggregate
                Output: t1_2.a, count(((t1_2.*)::pagg_tab))
                Group Key: t1_2.a
+               Buckets: 16
                Filter: (avg(t1_2.b) < '22'::numeric)
                ->  Foreign Scan on public.fpagg_tab_p3 t1_2
                      Output: t1_2.a, t1_2.*, t1_2.b
                      Remote SQL: SELECT a, b, c FROM public.pagg_tab_p3
-(25 rows)
+(28 rows)
 
 SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
  a  | count 
@@ -8839,18 +8859,22 @@ SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 
    Sort Key: pagg_tab.b
    ->  Finalize HashAggregate
          Group Key: pagg_tab.b
+         Buckets: 64
          Filter: (sum(pagg_tab.a) < 700)
          ->  Append
                ->  Partial HashAggregate
                      Group Key: pagg_tab.b
+                     Buckets: 64
                      ->  Foreign Scan on fpagg_tab_p1 pagg_tab
                ->  Partial HashAggregate
                      Group Key: pagg_tab_1.b
+                     Buckets: 64
                      ->  Foreign Scan on fpagg_tab_p2 pagg_tab_1
                ->  Partial HashAggregate
                      Group Key: pagg_tab_2.b
+                     Buckets: 64
                      ->  Foreign Scan on fpagg_tab_p3 pagg_tab_2
-(15 rows)
+(19 rows)
 
 -- ===================================================================
 -- access rights and superuser

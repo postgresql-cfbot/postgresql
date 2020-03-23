@@ -691,6 +691,33 @@ typedef struct TupleHashEntryData
 #define SH_DECLARE
 #include "lib/simplehash.h"
 
+#define InitTupleHashTableStats(instr, htable, tupctx, addsize) \
+	do{\
+	instr.entrysize = sizeof(MinimalTuple) + addsize; \
+	instr.tuplectx = tupctx; \
+	instr.nbuckets = htable->size; \
+	instr.nbuckets_original = htable->size; \
+	instr.space_peak_hash = MemoryContextMemAllocated(htable->ctx, false); \
+	instr.space_peak_tuples = 0; \
+	}while(0)
+
+#define UpdateTupleHashTableStats(instr, htable) \
+	do{\
+	instr.nbuckets = htable->size; \
+	instr.space_peak_hash = Max(instr.space_peak_hash, MemoryContextMemAllocated(htable->ctx, false)); \
+	instr.space_peak_tuples = Max(instr.space_peak_tuples, MemoryContextMemAllocated(instr.tuplectx, false)); \
+	}while(0)
+
+typedef struct HashTableInstrumentation
+{
+	size_t	entrysize;				/* Includes additionalsize */
+	size_t	nbuckets;				/* number of buckets at end of execution */
+	size_t	nbuckets_original;		/* planned number of buckets */
+	size_t	space_peak_hash;		/* peak memory usage in bytes */
+	size_t	space_peak_tuples;		/* peak memory usage in bytes */
+	MemoryContext	tuplectx;		/* Context where tuples are stored */
+} HashTableInstrumentation;
+
 typedef struct TupleHashTableData
 {
 	tuplehash_hash *hashtab;	/* underlying hash table */
@@ -701,7 +728,6 @@ typedef struct TupleHashTableData
 	Oid		   *tab_collations; /* collations for hash and comparison */
 	MemoryContext tablecxt;		/* memory context containing table */
 	MemoryContext tempcxt;		/* context for function evaluations */
-	Size		entrysize;		/* actual size to make each hash entry */
 	TupleTableSlot *tableslot;	/* slot for referencing table entries */
 	/* The following fields are set transiently for each table search: */
 	TupleTableSlot *inputslot;	/* current input tuple's slot */
@@ -874,6 +900,8 @@ typedef struct SubPlanState
 	FmgrInfo   *lhs_hash_funcs; /* hash functions for lefthand datatype(s) */
 	FmgrInfo   *cur_eq_funcs;	/* equality functions for LHS vs. table */
 	ExprState  *cur_eq_comp;	/* equality comparator for LHS vs. table */
+	HashTableInstrumentation instrument;
+	HashTableInstrumentation instrument_nulls; /* instrumentation for nulls hashtable */
 } SubPlanState;
 
 /* ----------------
@@ -1282,6 +1310,7 @@ typedef struct RecursiveUnionState
 	MemoryContext tempContext;	/* short-term context for comparisons */
 	TupleHashTable hashtable;	/* hash table for tuples already seen */
 	MemoryContext tableContext; /* memory context containing hash table */
+	HashTableInstrumentation instrument;
 } RecursiveUnionState;
 
 /* ----------------
@@ -1600,6 +1629,7 @@ typedef struct BitmapHeapScanState
 	TBMSharedIterator *shared_tbmiterator;
 	TBMSharedIterator *shared_prefetch_iterator;
 	ParallelBitmapHeapState *pstate;
+	HashTableInstrumentation instrument;
 } BitmapHeapScanState;
 
 /* ----------------
@@ -2051,7 +2081,6 @@ typedef struct AggState
 	int			current_phase;	/* current phase number */
 	AggStatePerAgg peragg;		/* per-Aggref information */
 	AggStatePerTrans pertrans;	/* per-Trans state information */
-	ExprContext *hashcontext;	/* econtexts for long-lived data (hashtable) */
 	ExprContext **aggcontexts;	/* econtexts for long-lived data (per GS) */
 	ExprContext *tmpcontext;	/* econtext for input expressions */
 #define FIELDNO_AGGSTATE_CURAGGCONTEXT 14
@@ -2079,7 +2108,6 @@ typedef struct AggState
 	/* these fields are used in AGG_HASHED and AGG_MIXED modes: */
 	bool		table_filled;	/* hash table filled yet? */
 	int			num_hashes;
-	MemoryContext	hash_metacxt;	/* memory for hash table itself */
 	struct HashTapeInfo *hash_tapeinfo; /* metadata for spill tapes */
 	struct HashAggSpill *hash_spills; /* HashAggSpill for each grouping set,
 										 exists only during first pass */
@@ -2093,7 +2121,6 @@ typedef struct AggState
 	int			hash_planned_partitions; /* number of partitions planned
 											for first pass */
 	double		hashentrysize;	/* estimate revised during execution */
-	Size		hash_mem_peak;	/* peak hash table memory usage */
 	uint64		hash_ngroups_current;	/* number of groups currently in
 										   memory in all hash tables */
 	uint64		hash_disk_used; /* kB of disk space used */
@@ -2334,6 +2361,7 @@ typedef struct SetOpState
 	MemoryContext tableContext; /* memory context containing hash table */
 	bool		table_filled;	/* hash table filled yet? */
 	TupleHashIterator hashiter; /* for iterating through hash table */
+	HashTableInstrumentation instrument;
 } SetOpState;
 
 /* ----------------

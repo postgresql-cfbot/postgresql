@@ -26,6 +26,9 @@
 #include "utils/dsa.h"
 
 
+/* Forward decl */
+typedef struct HashTableInstrumentation HashTableInstrumentation;
+
 /*
  * Actual bitmap representation is private to tidbitmap.c.  Callers can
  * do IsA(x, TIDBitmap) on it, but nothing else.
@@ -71,5 +74,6 @@ extern void tbm_end_shared_iterate(TBMSharedIterator *iterator);
 extern TBMSharedIterator *tbm_attach_shared_iterate(dsa_area *dsa,
 													dsa_pointer dp);
 extern long tbm_calculate_entries(double maxbytes);
+extern HashTableInstrumentation *tbm_instrumentation(TIDBitmap *tbm);
 
 #endif							/* TIDBITMAP_H */

@@ -307,6 +307,9 @@ typedef struct AggStatePerHashData
 	AttrNumber *hashGrpColIdxInput; /* hash col indices in input slot */
 	AttrNumber *hashGrpColIdxHash;	/* indices in hash table tuples */
 	Agg		   *aggnode;		/* original Agg node, for numGroups etc. */
+	MemoryContext	hash_metacxt;	/* memory for hash table itself */
+	ExprContext	*hashcontext;	/* context for hash table data */
+	HashTableInstrumentation    instrument;
 }			AggStatePerHashData;
 
 

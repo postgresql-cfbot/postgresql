@@ -3241,7 +3241,7 @@ ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 	int adjust_jumpnull = -1;
 
 	if (ishash)
-		aggcontext = aggstate->hashcontext;
+		aggcontext = aggstate->perhash[setno].hashcontext;
 	else
 		aggcontext = aggstate->aggcontexts[setno];
 

@@ -182,6 +182,8 @@ BitmapHeapNext(BitmapHeapScanState *node)
 #endif							/* USE_PREFETCH */
 		}
 		node->initialized = true;
+		if (node->tbm)
+			node->instrument = *tbm_instrumentation(node->tbm);
 	}
 
 	for (;;)
@@ -741,6 +743,7 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	scanstate->shared_tbmiterator = NULL;
 	scanstate->shared_prefetch_iterator = NULL;
 	scanstate->pstate = NULL;
+	memset(&scanstate->instrument, 0, sizeof(scanstate->instrument));
 
 	/*
 	 * We can potentially skip fetching heap pages if we do not need any

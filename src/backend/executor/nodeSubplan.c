@@ -505,6 +505,7 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 	if (node->hashtable)
 		ResetTupleHashTable(node->hashtable);
 	else
+	{
 		node->hashtable = BuildTupleHashTableExt(node->parent,
 												 node->descRight,
 												 ncols,
@@ -518,6 +519,9 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 												 node->hashtablecxt,
 												 node->hashtempcxt,
 												 false);
+		InitTupleHashTableStats(node->instrument, node->hashtable->hashtab,
+				node->hashtablecxt, 0);
+	}
 
 	if (!subplan->unknownEqFalse)
 	{
@@ -533,6 +537,7 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 		if (node->hashnulls)
 			ResetTupleHashTable(node->hashnulls);
 		else
+		{
 			node->hashnulls = BuildTupleHashTableExt(node->parent,
 													 node->descRight,
 													 ncols,
@@ -546,6 +551,9 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 													 node->hashtablecxt,
 													 node->hashtempcxt,
 													 false);
+			InitTupleHashTableStats(node->instrument_nulls,
+					node->hashnulls->hashtab, node->hashtablecxt, 0);
+		}
 	}
 	else
 		node->hashnulls = NULL;
@@ -621,6 +629,9 @@ buildSubPlanHash(SubPlanState *node, ExprContext *econtext)
 	ExecClearTuple(node->projRight->pi_state.resultslot);
 
 	MemoryContextSwitchTo(oldcontext);
+	UpdateTupleHashTableStats(node->instrument, node->hashtable->hashtab);
+	if (node->hashnulls)
+		UpdateTupleHashTableStats(node->instrument_nulls, node->hashnulls->hashtab);
 }
 
 /*

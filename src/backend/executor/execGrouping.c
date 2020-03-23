@@ -183,7 +183,6 @@ BuildTupleHashTableExt(PlanState *parent,
 	hashtable->tab_collations = collations;
 	hashtable->tablecxt = tablecxt;
 	hashtable->tempcxt = tempcxt;
-	hashtable->entrysize = entrysize;
 	hashtable->tableslot = NULL;	/* will be made on first lookup */
 	hashtable->inputslot = NULL;
 	hashtable->in_hash_funcs = NULL;

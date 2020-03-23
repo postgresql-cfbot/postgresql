@@ -139,6 +139,9 @@ build_hash_table(SetOpState *setopstate)
 												   setopstate->tableContext,
 												   econtext->ecxt_per_tuple_memory,
 												   false);
+
+	InitTupleHashTableStats(setopstate->instrument,
+			setopstate->hashtable->hashtab, setopstate->tableContext, 0);
 }
 
 /*
@@ -415,6 +418,8 @@ setop_fill_hash_table(SetOpState *setopstate)
 
 	setopstate->table_filled = true;
 	/* Initialize to walk the hash table */
+	UpdateTupleHashTableStats(setopstate->instrument,
+			setopstate->hashtable->hashtab);
 	ResetTupleHashIterator(setopstate->hashtable, &setopstate->hashiter);
 }
 

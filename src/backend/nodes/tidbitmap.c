@@ -44,6 +44,7 @@
 #include "common/hashfn.h"
 #include "nodes/bitmapset.h"
 #include "nodes/tidbitmap.h"
+#include "nodes/execnodes.h"
 #include "storage/lwlock.h"
 #include "utils/dsa.h"
 
@@ -166,6 +167,7 @@ struct TIDBitmap
 	dsa_pointer ptpages;		/* dsa_pointer to the page array */
 	dsa_pointer ptchunks;		/* dsa_pointer to the chunk array */
 	dsa_area   *dsa;			/* reference to per-query dsa area */
+	HashTableInstrumentation instrument;	/* Returned by accessor function */
 };
 
 /*
@@ -294,6 +296,7 @@ tbm_create_pagetable(TIDBitmap *tbm)
 	Assert(tbm->pagetable == NULL);
 
 	tbm->pagetable = pagetable_create(tbm->mcxt, 128, tbm);
+	tbm->instrument.nbuckets_original = tbm->pagetable->size;
 
 	/* If entry1 is valid, push it into the hashtable */
 	if (tbm->status == TBM_ONE_PAGE)
@@ -1145,6 +1148,32 @@ void
 tbm_end_iterate(TBMIterator *iterator)
 {
 	pfree(iterator);
+}
+
+/*
+ * tbm_instrumentation - update stored stats and return pointer to
+ * instrumentation structure
+ *
+ * This updates stats when called.
+ * Returned data is within the iterator's tbm, and destroyed with it.
+ */
+HashTableInstrumentation *
+tbm_instrumentation(TIDBitmap *tbm)
+{
+	if (tbm->pagetable)
+	{
+		tbm->instrument.nbuckets = tbm->pagetable->size;
+		tbm->instrument.space_peak_hash = sizeof(PagetableEntry) * tbm->pagetable->size;
+
+		/*
+		 * If there are lossy pages, then at one point, we filled maxentries;
+		 * otherwise, number of pages is "->members".
+		 */
+		tbm->instrument.space_peak_tuples = sizeof(BlockNumber) *
+			(tbm->nchunks>0 ? tbm->maxentries : tbm->pagetable->members);
+	}
+
+	return &tbm->instrument;
 }
 
 /*

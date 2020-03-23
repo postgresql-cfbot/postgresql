@@ -270,22 +270,34 @@ typedef struct AggStatePerGroupData
  */
 typedef struct AggStatePerPhaseData
 {
+	int			phaseidx;		/* phaseidx */
+	bool		is_hashed;		/* plan to do hash aggregate */
 	AggStrategy aggstrategy;	/* strategy for this phase */
-	int			numsets;		/* number of grouping sets (or 0) */
+	int			numsets;		/* number of grouping sets */
 	int		   *gset_lengths;	/* lengths of grouping sets */
 	Bitmapset **grouped_cols;	/* column groupings for rollup */
-	ExprState **eqfunctions;	/* expression returning equality, indexed by
-								 * nr of cols to compare */
 	Agg		   *aggnode;		/* Agg node for phase data */
-	Sort	   *sortnode;		/* Sort node for input ordering for phase */
-
 	ExprState  *evaltrans;		/* evaluation of transition functions  */
-
 	/* cached variants of the compiled expression */
-	ExprState  *evaltrans_cache
-				[2]		/* 0: outerops; 1: TTSOpsMinimalTuple */
-				[2];	/* 0: no NULL check; 1: with NULL check */
+	ExprState  *evaltrans_cache[3];
+
+	List		*concurrent_hashes;	/* hash phases can do transition concurrently */
+	AggStatePerGroup *pergroups;	/* pergroup states for a phase */
+
+	bool		skip_evaltrans;		/* do not build evaltrans */
+#define FIELDNO_AGGSTATEPERPHASE_SETNOGSETIDS 12
+	int			*setno_gsetids;		/* setno <-> gsetid map */
 }			AggStatePerPhaseData;
+
+typedef struct AggStatePerPhaseSortData
+{
+	AggStatePerPhaseData phasedata;
+	Tuplesortstate	*sort_in;		/* sorted input to phases > 1 */
+	Tuplestorestate	*store_in;		/* sorted input to phases > 1 */
+	ExprState 		**eqfunctions;	/* expression returning equality, indexed by
+									 * nr of cols to compare */
+	bool			copy_out;		/* hint for copy input tuples for next phase */
+}			AggStatePerPhaseSortData;
 
 /*
  * AggStatePerHashData - per-hashtable state
@@ -294,8 +306,9 @@ typedef struct AggStatePerPhaseData
  * grouping set. (When doing hashing without grouping sets, we have just one of
  * them.)
  */
-typedef struct AggStatePerHashData
+typedef struct AggStatePerPhaseHashData
 {
+	AggStatePerPhaseData phasedata;
 	TupleHashTable hashtable;	/* hash table with one entry per group */
 	TupleHashIterator hashiter; /* for iterating through hash table */
 	TupleTableSlot *hashslot;	/* slot for loading hash table */
@@ -306,9 +319,8 @@ typedef struct AggStatePerHashData
 	int			largestGrpColIdx;	/* largest col required for hashing */
 	AttrNumber *hashGrpColIdxInput; /* hash col indices in input slot */
 	AttrNumber *hashGrpColIdxHash;	/* indices in hash table tuples */
-	Agg		   *aggnode;		/* original Agg node, for numGroups etc. */
-}			AggStatePerHashData;
-
+	struct HashAggSpill *hash_spill; /* HashAggSpill for current hash grouping set */
+}			AggStatePerPhaseHashData;
 
 extern AggState *ExecInitAgg(Agg *node, EState *estate, int eflags);
 extern void ExecEndAgg(AggState *node);

@@ -544,4 +544,68 @@ drop table gs_hash_3;
 
 SET enable_groupingsets_hash_disk TO DEFAULT;
 
+--
+-- Compare results between parallel plans using sorting and plans using hash
+-- aggregation. Force spilling in both cases by setting work_mem low
+-- and turning on enable_groupingsets_hash_disk.
+--
+create table gstest_p as select g%100 as g100, g%10 as g10, g
+from generate_series(0,199999) g;
+ANALYZE gstest_p;
+
+-- Prepared sort agg without parallelism
+set enable_hashagg = off;
+set min_parallel_table_scan_size = '128MB';
+
+explain (costs off)
+select g100, g10, sum(g::numeric), count(*), max(g::text) from
+gstest_p group by cube (g100,g10);
+
+create table p_gs_group_1 as
+select g100, g10, sum(g::numeric), count(*), max(g::text) from
+gstest_p group by cube (g100,g10);
+
+-- Prepare sort agg with parallelism
+set min_parallel_table_scan_size = '4kB';
+
+explain (costs off)
+select g100, g10, sum(g::numeric), count(*), max(g::text) from
+gstest_p group by cube (g100,g10);
+
+create table p_gs_group_1_p as
+select g100, g10, sum(g::numeric), count(*), max(g::text) from
+gstest_p group by cube (g100,g10);
+
+-- Prepare hash agg with parallelism
+SET enable_groupingsets_hash_disk = true;
+set enable_hashagg = true;
+set enable_sort = false;
+set work_mem='64kB';
+
+explain (costs off)
+select g100, g10, sum(g::numeric), count(*), max(g::text) from
+gstest_p group by cube (g100,g10);
+
+create table p_gs_hash_1_p as
+select g100, g10, sum(g::numeric), count(*), max(g::text) from
+gstest_p group by cube (g100,g10);
+
+RESET enable_sort;
+RESET work_mem;
+RESET enable_groupingsets_hash_disk;
+RESET min_parallel_table_scan_size;
+
+-- Compare results
+(select * from p_gs_group_1 except select * from p_gs_group_1_p)
+  union all
+(select * from p_gs_group_1_p except select * from p_gs_group_1);
+
+(select * from p_gs_group_1 except select * from p_gs_hash_1_p)
+  union all
+(select * from p_gs_hash_1_p except select * from p_gs_group_1);
+
+drop table gstest_p;
+drop table p_gs_group_1;
+drop table p_gs_group_1_p;
+drop table p_gs_hash_1_p;
 -- end

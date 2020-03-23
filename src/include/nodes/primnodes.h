@@ -364,6 +364,12 @@ typedef struct GroupingFunc
 	int			location;		/* token location */
 } GroupingFunc;
 
+/* GroupingSetId */
+typedef struct GroupingSetId
+{
+	Expr		xpr;
+} GroupingSetId;
+
 /*
  * WindowFunc
  */

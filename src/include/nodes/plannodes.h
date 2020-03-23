@@ -20,6 +20,7 @@
 #include "nodes/bitmapset.h"
 #include "nodes/lockoptions.h"
 #include "nodes/primnodes.h"
+#include "nodes/pathnodes.h"
 
 
 /* ----------------------------------------------------------------
@@ -816,8 +817,10 @@ typedef struct Agg
 	uint64		transitionSpace;	/* for pass-by-ref transition data */
 	Bitmapset  *aggParams;		/* IDs of Params used in Aggref inputs */
 	/* Note: planner provides numGroups & aggParams only in HASHED/MIXED case */
-	List	   *groupingSets;	/* grouping sets to use */
+	RollupData *rollup;			/* grouping sets to use */
 	List	   *chain;			/* chained Agg/Sort nodes */
+	Expr	   *gsetid;			/* expression to fetch grouping set id */
+	Plan	   *sortnode;		/* agg does its own sort, only used by grouping sets now */
 } Agg;
 
 /* ----------------

@@ -3078,6 +3078,9 @@ equal(const void *a, const void *b)
 		case T_GroupingFunc:
 			retval = _equalGroupingFunc(a, b);
 			break;
+		case T_GroupingSetId:
+			retval = true;
+			break;
 		case T_WindowFunc:
 			retval = _equalWindowFunc(a, b);
 			break;

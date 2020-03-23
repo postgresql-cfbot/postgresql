@@ -1641,10 +1641,11 @@ create_unique_plan(PlannerInfo *root, UniquePath *best_path, int flags)
 								 groupColIdx,
 								 groupOperators,
 								 groupCollations,
-								 NIL,
+								 NULL,
 								 NIL,
 								 best_path->path.rows,
 								 0,
+								 NULL,
 								 subplan);
 	}
 	else
@@ -2094,10 +2095,11 @@ create_agg_plan(PlannerInfo *root, AggPath *best_path)
 					extract_grouping_ops(best_path->groupClause),
 					extract_grouping_collations(best_path->groupClause,
 												subplan->targetlist),
-					NIL,
+					NULL,
 					NIL,
 					best_path->numGroups,
 					best_path->transitionSpace,
+					NULL,
 					subplan);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
@@ -2159,6 +2161,7 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 	List	   *rollups = best_path->rollups;
 	AttrNumber *grouping_map;
 	int			maxref;
+	int			flags = CP_LABEL_TLIST;
 	List	   *chain;
 	ListCell   *lc;
 
@@ -2168,9 +2171,14 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 
 	/*
 	 * Agg can project, so no need to be terribly picky about child tlist, but
-	 * we do need grouping columns to be available
+	 * we do need grouping columns to be available. If the groupingsets need
+	 * to sort the input, the agg will store the input rows in a tuplesort,
+	 * so we request a small tlist to avoid wasting space.
 	 */
-	subplan = create_plan_recurse(root, best_path->subpath, CP_LABEL_TLIST);
+	if (!best_path->is_sorted)
+		flags = flags | CP_SMALL_TLIST;
+
+	subplan = create_plan_recurse(root, best_path->subpath, flags);
 
 	/*
 	 * Compute the mapping from tleSortGroupRef to column index in the child's
@@ -2206,7 +2214,6 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 	 * never be grouping in an UPDATE/DELETE; but let's Assert that.
 	 */
 	Assert(root->inhTargetKind == INHKIND_NONE);
-	Assert(root->grouping_map == NULL);
 	root->grouping_map = grouping_map;
 
 	/*
@@ -2218,8 +2225,6 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 	chain = NIL;
 	if (list_length(rollups) > 1)
 	{
-		bool		is_first_sort = ((RollupData *) linitial(rollups))->is_hashed;
-
 		for_each_cell(lc, rollups, list_second_cell(rollups))
 		{
 			RollupData *rollup = lfirst(lc);
@@ -2230,16 +2235,26 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 
 			new_grpColIdx = remap_groupColIdx(root, rollup->groupClause);
 
-			if (!rollup->is_hashed && !is_first_sort)
+			/*
+			 * If it's the first rollup using sorted mode, add an explicit sort
+			 * node if the input is not sorted yet, for other rollups using
+			 * sorted mode, always add an explicit sort.
+			 */
+			/* In final stage, rollup may contain empty set here */
+			if (!rollup->is_hashed &&
+				list_length(linitial(rollup->gsets)) != 0)
 			{
 				sort_plan = (Plan *)
 					make_sort_from_groupcols(rollup->groupClause,
 											 new_grpColIdx,
 											 subplan);
-			}
 
-			if (!rollup->is_hashed)
-				is_first_sort = false;
+				/*
+				 * Remove stuff we don't need to avoid bloating debug output.
+				 */
+				sort_plan->targetlist = NIL;
+				sort_plan->lefttree = NULL;
+			}
 
 			if (rollup->is_hashed)
 				strat = AGG_HASHED;
@@ -2251,54 +2266,65 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 			agg_plan = (Plan *) make_agg(NIL,
 										 NIL,
 										 strat,
-										 AGGSPLIT_SIMPLE,
+										 best_path->aggsplit,
 										 list_length((List *) linitial(rollup->gsets)),
 										 new_grpColIdx,
 										 extract_grouping_ops(rollup->groupClause),
 										 extract_grouping_collations(rollup->groupClause, subplan->targetlist),
-										 rollup->gsets,
+										 rollup,
 										 NIL,
 										 rollup->numGroups,
 										 best_path->transitionSpace,
-										 sort_plan);
-
-			/*
-			 * Remove stuff we don't need to avoid bloating debug output.
-			 */
-			if (sort_plan)
-			{
-				sort_plan->targetlist = NIL;
-				sort_plan->lefttree = NULL;
-			}
+										 sort_plan,
+										 NULL);
 
 			chain = lappend(chain, agg_plan);
 		}
 	}
 
 	/*
-	 * Now make the real Agg node
-	 */
+	 * Now make the real Agg node */
 	{
 		RollupData *rollup = linitial(rollups);
 		AttrNumber *top_grpColIdx;
+		Plan	   *sort_plan = NULL;
 		int			numGroupCols;
 
 		top_grpColIdx = remap_groupColIdx(root, rollup->groupClause);
+
+		/*
+		 * When the rollup uses sorted mode, and the input is not already sorted,
+		 * add an explicit sort.
+		 */
+		if (!rollup->is_hashed &&
+			!best_path->is_sorted)
+		{
+			sort_plan = (Plan *)
+				make_sort_from_groupcols(rollup->groupClause,
+										 top_grpColIdx,
+										 subplan);
+			/*
+			 * Remove stuff we don't need to avoid bloating debug output.
+			 */
+			sort_plan->targetlist = NIL;
+			sort_plan->lefttree = NULL;
+		}
 
 		numGroupCols = list_length((List *) linitial(rollup->gsets));
 
 		plan = make_agg(build_path_tlist(root, &best_path->path),
 						best_path->qual,
 						best_path->aggstrategy,
-						AGGSPLIT_SIMPLE,
+						best_path->aggsplit,
 						numGroupCols,
 						top_grpColIdx,
 						extract_grouping_ops(rollup->groupClause),
 						extract_grouping_collations(rollup->groupClause, subplan->targetlist),
-						rollup->gsets,
+						rollup,
 						chain,
 						rollup->numGroups,
 						best_path->transitionSpace,
+						sort_plan,
 						subplan);
 
 		/* Copy cost data from Path to Plan */
@@ -6196,8 +6222,8 @@ Agg *
 make_agg(List *tlist, List *qual,
 		 AggStrategy aggstrategy, AggSplit aggsplit,
 		 int numGroupCols, AttrNumber *grpColIdx, Oid *grpOperators, Oid *grpCollations,
-		 List *groupingSets, List *chain, double dNumGroups,
-		 Size transitionSpace, Plan *lefttree)
+		 RollupData *rollup, List *chain, double dNumGroups,
+		 Size transitionSpace, Plan *sortnode, Plan *lefttree)
 {
 	Agg		   *node = makeNode(Agg);
 	Plan	   *plan = &node->plan;
@@ -6215,8 +6241,10 @@ make_agg(List *tlist, List *qual,
 	node->numGroups = numGroups;
 	node->transitionSpace = transitionSpace;
 	node->aggParams = NULL;		/* SS_finalize_plan() will fill this */
-	node->groupingSets = groupingSets;
+	node->rollup= rollup;
 	node->chain = chain;
+	node->gsetid = NULL;
+	node->sortnode = sortnode;
 
 	plan->qual = qual;
 	plan->targetlist = tlist;

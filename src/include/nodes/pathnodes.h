@@ -1676,6 +1676,7 @@ typedef struct GroupingSetData
 {
 	NodeTag		type;
 	List	   *set;			/* grouping set as list of sortgrouprefs */
+	int			setId;			/* unique grouping set identifier */
 	double		numGroups;		/* est. number of result groups */
 } GroupingSetData;
 
@@ -1702,6 +1703,8 @@ typedef struct GroupingSetsPath
 	List	   *rollups;		/* list of RollupData */
 	List	   *qual;			/* quals (HAVING quals), if any */
 	uint64		transitionSpace;	/* for pass-by-ref transition data */
+	AggSplit	aggsplit;		/* agg-splitting mode, see nodes.h */
+	bool		is_sorted;		/* input sorted in groupcols of first rollup */
 } GroupingSetsPath;
 
 /*

@@ -2710,8 +2710,11 @@ generate_gather_paths(PlannerInfo *root, RelOptInfo *rel, bool override_rows)
 
 	/*
 	 * For each useful ordering, we can consider an order-preserving Gather
-	 * Merge.
+	 * Merge. Don't do this for partial groupingsets.
 	 */
+	if (root->parse->groupingSets)
+		return;
+
 	foreach(lc, rel->partial_pathlist)
 	{
 		Path	   *subpath = (Path *) lfirst(lc);

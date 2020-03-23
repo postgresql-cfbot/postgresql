@@ -340,8 +340,8 @@ SELECT c, sum(a) FROM pagg_tab GROUP BY rollup(c) ORDER BY 1, 2;
  Sort
    Sort Key: pagg_tab.c, (sum(pagg_tab.a))
    ->  MixedAggregate
-         Hash Key: pagg_tab.c
          Group Key: ()
+         Hash Key: pagg_tab.c
          ->  Append
                ->  Seq Scan on pagg_tab_p1 pagg_tab_1
                ->  Seq Scan on pagg_tab_p2 pagg_tab_2

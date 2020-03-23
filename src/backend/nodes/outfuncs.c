@@ -785,8 +785,10 @@ _outAgg(StringInfo str, const Agg *node)
 	WRITE_LONG_FIELD(numGroups);
 	WRITE_UINT64_FIELD(transitionSpace);
 	WRITE_BITMAPSET_FIELD(aggParams);
-	WRITE_NODE_FIELD(groupingSets);
+	WRITE_NODE_FIELD(rollup);
 	WRITE_NODE_FIELD(chain);
+	WRITE_NODE_FIELD(gsetid);
+	WRITE_NODE_FIELD(sortnode);
 }
 
 static void
@@ -1147,6 +1149,13 @@ _outGroupingFunc(StringInfo str, const GroupingFunc *node)
 	WRITE_NODE_FIELD(cols);
 	WRITE_UINT_FIELD(agglevelsup);
 	WRITE_LOCATION_FIELD(location);
+}
+
+static void
+_outGroupingSetId(StringInfo str,
+				  const GroupingSetId *node __attribute__((unused)))
+{
+	WRITE_NODE_TYPE("GROUPINGSETID");
 }
 
 static void
@@ -2001,6 +2010,7 @@ _outGroupingSetData(StringInfo str, const GroupingSetData *node)
 	WRITE_NODE_TYPE("GSDATA");
 
 	WRITE_NODE_FIELD(set);
+	WRITE_INT_FIELD(setId);
 	WRITE_FLOAT_FIELD(numGroups, "%.0f");
 }
 
@@ -3845,6 +3855,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_GroupingFunc:
 				_outGroupingFunc(str, obj);
+				break;
+			case T_GroupingSetId:
+				_outGroupingSetId(str, obj);
 				break;
 			case T_WindowFunc:
 				_outWindowFunc(str, obj);

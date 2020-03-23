@@ -54,8 +54,8 @@ extern Sort *make_sort_from_sortclauses(List *sortcls, Plan *lefttree);
 extern Agg *make_agg(List *tlist, List *qual,
 					 AggStrategy aggstrategy, AggSplit aggsplit,
 					 int numGroupCols, AttrNumber *grpColIdx, Oid *grpOperators, Oid *grpCollations,
-					 List *groupingSets, List *chain, double dNumGroups,
-					 Size transitionSpace, Plan *lefttree);
+					 RollupData *rollup, List *chain, double dNumGroups,
+					 Size transitionSpace, Plan *sortnode, Plan *lefttree);
 extern Limit *make_limit(Plan *lefttree, Node *limitOffset, Node *limitCount);
 
 /*

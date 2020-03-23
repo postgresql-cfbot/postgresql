@@ -62,6 +62,9 @@ exprType(const Node *expr)
 		case T_GroupingFunc:
 			type = INT4OID;
 			break;
+		case T_GroupingSetId:
+			type = INT4OID;
+			break;
 		case T_WindowFunc:
 			type = ((const WindowFunc *) expr)->wintype;
 			break;
@@ -738,6 +741,9 @@ exprCollation(const Node *expr)
 			coll = ((const Aggref *) expr)->aggcollid;
 			break;
 		case T_GroupingFunc:
+			coll = InvalidOid;
+			break;
+		case T_GroupingSetId:
 			coll = InvalidOid;
 			break;
 		case T_WindowFunc:
@@ -1869,6 +1875,7 @@ expression_tree_walker(Node *node,
 		case T_NextValueExpr:
 		case T_RangeTblRef:
 		case T_SortGroupClause:
+		case T_GroupingSetId:
 			/* primitive node types with no expression subnodes */
 			break;
 		case T_WithCheckOption:
@@ -2575,6 +2582,7 @@ expression_tree_mutator(Node *node,
 		case T_NextValueExpr:
 		case T_RangeTblRef:
 		case T_SortGroupClause:
+		case T_GroupingSetId:
 			return (Node *) copyObject(node);
 		case T_WithCheckOption:
 			{

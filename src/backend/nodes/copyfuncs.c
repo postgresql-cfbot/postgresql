@@ -990,8 +990,10 @@ _copyAgg(const Agg *from)
 	COPY_SCALAR_FIELD(numGroups);
 	COPY_SCALAR_FIELD(transitionSpace);
 	COPY_BITMAPSET_FIELD(aggParams);
-	COPY_NODE_FIELD(groupingSets);
+	COPY_NODE_FIELD(rollup);
 	COPY_NODE_FIELD(chain);
+	COPY_NODE_FIELD(gsetid);
+	COPY_NODE_FIELD(sortnode);
 
 	return newnode;
 }
@@ -1473,6 +1475,50 @@ _copyGroupingFunc(const GroupingFunc *from)
 	COPY_NODE_FIELD(cols);
 	COPY_SCALAR_FIELD(agglevelsup);
 	COPY_LOCATION_FIELD(location);
+
+	return newnode;
+}
+
+/*
+ * _copyGroupingSetId
+ */
+static GroupingSetId *
+_copyGroupingSetId(const GroupingSetId *from)
+{
+	GroupingSetId *newnode = makeNode(GroupingSetId);
+
+	return newnode;
+}
+
+/*
+ * _copyRollupData
+ */
+static RollupData*
+_copyRollupData(const RollupData *from)
+{
+	RollupData *newnode = makeNode(RollupData);
+
+	COPY_NODE_FIELD(groupClause);
+	COPY_NODE_FIELD(gsets);
+	COPY_NODE_FIELD(gsets_data);
+	COPY_SCALAR_FIELD(numGroups);
+	COPY_SCALAR_FIELD(hashable);
+	COPY_SCALAR_FIELD(is_hashed);
+
+	return newnode;
+}
+
+/*
+ * _copyGroupingSetData
+ */
+static GroupingSetData *
+_copyGroupingSetData(const GroupingSetData *from)
+{
+	GroupingSetData *newnode = makeNode(GroupingSetData);
+
+	COPY_NODE_FIELD(set);
+	COPY_SCALAR_FIELD(setId);
+	COPY_SCALAR_FIELD(numGroups);
 
 	return newnode;
 }
@@ -4971,6 +5017,9 @@ copyObjectImpl(const void *from)
 		case T_GroupingFunc:
 			retval = _copyGroupingFunc(from);
 			break;
+		case T_GroupingSetId:
+			retval = _copyGroupingSetId(from);
+			break;
 		case T_WindowFunc:
 			retval = _copyWindowFunc(from);
 			break;
@@ -5606,6 +5655,12 @@ copyObjectImpl(const void *from)
 			break;
 		case T_SortGroupClause:
 			retval = _copySortGroupClause(from);
+			break;
+		case T_RollupData:
+			retval = _copyRollupData(from);
+			break;
+		case T_GroupingSetData:
+			retval = _copyGroupingSetData(from);
 			break;
 		case T_GroupingSet:
 			retval = _copyGroupingSet(from);

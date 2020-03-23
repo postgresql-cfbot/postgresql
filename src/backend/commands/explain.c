@@ -2258,12 +2258,16 @@ show_agg_keys(AggState *astate, List *ancestors,
 {
 	Agg		   *plan = (Agg *) astate->ss.ps.plan;
 
-	if (plan->numCols > 0 || plan->groupingSets)
+	if (plan->gsetid)
+		show_expression((Node *) plan->gsetid, "Filtered by",
+						(PlanState *) astate, ancestors, true, es);
+
+	if (plan->numCols > 0 || plan->rollup)
 	{
 		/* The key columns refer to the tlist of the child plan */
 		ancestors = lcons(plan, ancestors);
 
-		if (plan->groupingSets)
+		if (plan->rollup)
 			show_grouping_sets(outerPlanState(astate), plan, ancestors, es);
 		else
 			show_sort_group_keys(outerPlanState(astate), "Group Key",
@@ -2291,15 +2295,14 @@ show_grouping_sets(PlanState *planstate, Agg *agg,
 
 	ExplainOpenGroup("Grouping Sets", "Grouping Sets", false, es);
 
-	show_grouping_set_keys(planstate, agg, NULL,
+	show_grouping_set_keys(planstate, agg, (Sort *) agg->sortnode,
 						   context, useprefix, ancestors, es);
 
 	foreach(lc, agg->chain)
 	{
 		Agg		   *aggnode = lfirst(lc);
-		Sort	   *sortnode = (Sort *) aggnode->plan.lefttree;
 
-		show_grouping_set_keys(planstate, aggnode, sortnode,
+		show_grouping_set_keys(planstate, aggnode, (Sort *) aggnode->sortnode,
 							   context, useprefix, ancestors, es);
 	}
 
@@ -2315,12 +2318,12 @@ show_grouping_set_keys(PlanState *planstate,
 	Plan	   *plan = planstate->plan;
 	char	   *exprstr;
 	ListCell   *lc;
-	List	   *gsets = aggnode->groupingSets;
+	List	   *gsets = aggnode->rollup->gsets;
 	AttrNumber *keycols = aggnode->grpColIdx;
 	const char *keyname;
 	const char *keysetname;
 
-	if (aggnode->aggstrategy == AGG_HASHED || aggnode->aggstrategy == AGG_MIXED)
+	if (aggnode->aggstrategy == AGG_HASHED)
 	{
 		keyname = "Hash Key";
 		keysetname = "Hash Keys";

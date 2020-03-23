@@ -80,7 +80,7 @@ static void ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
 static void ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 								  ExprEvalStep *scratch,
 								  FunctionCallInfo fcinfo, AggStatePerTrans pertrans,
-								  int transno, int setno, int setoff, bool ishash,
+								  int transno, int setno, AggStatePerPhase perphase,
 								  bool nullcheck);
 
 
@@ -815,10 +815,18 @@ ExecInitExprRec(Expr *node, ExprState *state,
 
 				agg = (Agg *) (state->parent->plan);
 
-				if (agg->groupingSets)
+				if (agg->rollup)
 					scratch.d.grouping_func.clauses = grp_node->cols;
 				else
 					scratch.d.grouping_func.clauses = NIL;
+
+				ExprEvalPushStep(state, &scratch);
+				break;
+			}
+
+		case T_GroupingSetId:
+			{
+				scratch.opcode = EEOP_GROUPING_SET_ID;
 
 				ExprEvalPushStep(state, &scratch);
 				break;
@@ -2931,13 +2939,13 @@ ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
  * the array of AggStatePerGroup, and skip evaluation if so.
  */
 ExprState *
-ExecBuildAggTrans(AggState *aggstate, AggStatePerPhase phase,
-				  bool doSort, bool doHash, bool nullcheck)
+ExecBuildAggTrans(AggState *aggstate, AggStatePerPhase phase, bool nullcheck, bool allow_concurrent_hashing)
 {
 	ExprState  *state = makeNode(ExprState);
 	PlanState  *parent = &aggstate->ss.ps;
 	ExprEvalStep scratch = {0};
 	bool		isCombine = DO_AGGSPLIT_COMBINE(aggstate->aggsplit);
+	ListCell   *lc;
 	LastAttnumInfo deform = {0, 0, 0};
 
 	state->expr = (Expr *) aggstate;
@@ -2978,6 +2986,7 @@ ExecBuildAggTrans(AggState *aggstate, AggStatePerPhase phase,
 		NullableDatum *strictargs = NULL;
 		bool	   *strictnulls = NULL;
 		int			argno;
+		int			setno;
 		ListCell   *bail;
 
 		/*
@@ -3155,37 +3164,27 @@ ExecBuildAggTrans(AggState *aggstate, AggStatePerPhase phase,
 		 * grouping set). Do so for both sort and hash based computations, as
 		 * applicable.
 		 */
-		if (doSort)
+		for (setno = 0; setno < phase->numsets; setno++)
 		{
-			int			processGroupingSets = Max(phase->numsets, 1);
-			int			setoff = 0;
-
-			for (int setno = 0; setno < processGroupingSets; setno++)
-			{
-				ExecBuildAggTransCall(state, aggstate, &scratch, trans_fcinfo,
-									  pertrans, transno, setno, setoff, false,
-									  nullcheck);
-				setoff++;
-			}
+			ExecBuildAggTransCall(state, aggstate, &scratch, trans_fcinfo,
+								  pertrans, transno, setno, phase, nullcheck);
 		}
 
-		if (doHash)
+		/*
+		 * Call transition function for HASHED aggs that can be
+		 * advanced concurrently.
+		 */
+		if (allow_concurrent_hashing &&
+			phase->concurrent_hashes)
 		{
-			int			numHashes = aggstate->num_hashes;
-			int			setoff;
-
-			/* in MIXED mode, there'll be preceding transition values */
-			if (aggstate->aggstrategy != AGG_HASHED)
-				setoff = aggstate->maxsets;
-			else
-				setoff = 0;
-
-			for (int setno = 0; setno < numHashes; setno++)
+			foreach(lc, phase->concurrent_hashes)
 			{
+				AggStatePerPhaseHash perhash = (AggStatePerPhaseHash) lfirst(lc);
+
 				ExecBuildAggTransCall(state, aggstate, &scratch, trans_fcinfo,
-									  pertrans, transno, setno, setoff, true,
+									  pertrans, transno, 0,
+									  (AggStatePerPhase) perhash,
 									  nullcheck);
-				setoff++;
 			}
 		}
 
@@ -3234,14 +3233,17 @@ static void
 ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 					  ExprEvalStep *scratch,
 					  FunctionCallInfo fcinfo, AggStatePerTrans pertrans,
-					  int transno, int setno, int setoff, bool ishash,
+					  int transno, int setno, AggStatePerPhase perphase,
 					  bool nullcheck)
 {
 	ExprContext *aggcontext;
 	int adjust_jumpnull = -1;
 
-	if (ishash)
+	if (perphase->is_hashed)
+	{
+		Assert(setno == 0);
 		aggcontext = aggstate->hashcontext;
+	}
 	else
 		aggcontext = aggstate->aggcontexts[setno];
 
@@ -3249,9 +3251,10 @@ ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 	if (nullcheck)
 	{
 		scratch->opcode = EEOP_AGG_PLAIN_PERGROUP_NULLCHECK;
-		scratch->d.agg_plain_pergroup_nullcheck.setoff = setoff;
+		scratch->d.agg_plain_pergroup_nullcheck.pergroups = perphase->pergroups;
 		/* adjust later */
 		scratch->d.agg_plain_pergroup_nullcheck.jumpnull = -1;
+		scratch->d.agg_plain_pergroup_nullcheck.setno = setno;
 		ExprEvalPushStep(state, scratch);
 		adjust_jumpnull = state->steps_len - 1;
 	}
@@ -3319,7 +3322,7 @@ ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 
 	scratch->d.agg_trans.pertrans = pertrans;
 	scratch->d.agg_trans.setno = setno;
-	scratch->d.agg_trans.setoff = setoff;
+	scratch->d.agg_trans.pergroups = perphase->pergroups;
 	scratch->d.agg_trans.transno = transno;
 	scratch->d.agg_trans.aggcontext = aggcontext;
 	ExprEvalPushStep(state, scratch);

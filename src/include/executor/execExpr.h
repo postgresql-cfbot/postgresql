@@ -216,6 +216,7 @@ typedef enum ExprEvalOp
 	EEOP_XMLEXPR,
 	EEOP_AGGREF,
 	EEOP_GROUPING_FUNC,
+	EEOP_GROUPING_SET_ID,
 	EEOP_WINDOW_FUNC,
 	EEOP_SUBPLAN,
 	EEOP_ALTERNATIVE_SUBPLAN,
@@ -626,7 +627,8 @@ typedef struct ExprEvalStep
 		/* for EEOP_AGG_PLAIN_PERGROUP_NULLCHECK */
 		struct
 		{
-			int			setoff;
+			AggStatePerGroup *pergroups;
+			int			setno;
 			int			jumpnull;
 		}			agg_plain_pergroup_nullcheck;
 
@@ -634,11 +636,11 @@ typedef struct ExprEvalStep
 		/* for EEOP_AGG_ORDERED_TRANS_{DATUM,TUPLE} */
 		struct
 		{
+			AggStatePerGroup *pergroups;
 			AggStatePerTrans pertrans;
 			ExprContext *aggcontext;
 			int			setno;
 			int			transno;
-			int			setoff;
 		}			agg_trans;
 	}			d;
 } ExprEvalStep;

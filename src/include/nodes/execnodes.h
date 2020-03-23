@@ -2036,7 +2036,8 @@ typedef struct AggStatePerAggData *AggStatePerAgg;
 typedef struct AggStatePerTransData *AggStatePerTrans;
 typedef struct AggStatePerGroupData *AggStatePerGroup;
 typedef struct AggStatePerPhaseData *AggStatePerPhase;
-typedef struct AggStatePerHashData *AggStatePerHash;
+typedef struct AggStatePerPhaseSortData *AggStatePerPhaseSort;
+typedef struct AggStatePerPhaseHashData *AggStatePerPhaseHash;
 
 typedef struct AggState
 {
@@ -2046,6 +2047,7 @@ typedef struct AggState
 	int			numtrans;		/* number of pertrans items */
 	AggStrategy aggstrategy;	/* strategy mode */
 	AggSplit	aggsplit;		/* agg-splitting mode, see nodes.h */
+#define FIELDNO_AGGSTATE_PHASE 6
 	AggStatePerPhase phase;		/* pointer to current phase data */
 	int			numphases;		/* number of phases (including phase 0) */
 	int			current_phase;	/* current phase number */
@@ -2068,21 +2070,15 @@ typedef struct AggState
 	List	   *all_grouped_cols;	/* list of all grouped cols in DESC order */
 	/* These fields are for grouping set phase data */
 	int			maxsets;		/* The max number of sets in any phase */
-	AggStatePerPhase phases;	/* array of all phases */
-	Tuplesortstate *sort_in;	/* sorted input to phases > 1 */
-	Tuplesortstate *sort_out;	/* input is copied here for next phase */
+	AggStatePerPhase *phases;	/* array of all phases */
 	TupleTableSlot *sort_slot;	/* slot for sort results */
 	/* these fields are used in AGG_PLAIN and AGG_SORTED modes: */
-	AggStatePerGroup *pergroups;	/* grouping set indexed array of per-group
-									 * pointers */
 	HeapTuple	grp_firstTuple; /* copy of first tuple of current group */
-	/* these fields are used in AGG_HASHED and AGG_MIXED modes: */
+	/* these fields are used in AGG_HASHED */
 	bool		table_filled;	/* hash table filled yet? */
 	int			num_hashes;
 	MemoryContext	hash_metacxt;	/* memory for hash table itself */
 	struct HashTapeInfo *hash_tapeinfo; /* metadata for spill tapes */
-	struct HashAggSpill *hash_spills; /* HashAggSpill for each grouping set,
-										 exists only during first pass */
 	TupleTableSlot *hash_spill_slot; /* slot for reading from spill files */
 	List	   *hash_batches;	/* hash batches remaining to be processed */
 	bool		hash_ever_spilled;	/* ever spilled during this execution? */
@@ -2098,16 +2094,22 @@ typedef struct AggState
 										   memory in all hash tables */
 	uint64		hash_disk_used; /* kB of disk space used */
 	int			hash_batches_used;	/* batches used during entire execution */
+#define HASHNORMALMODE 0		/* normal mode: no minmal slot, no null check */
+#define HASHSPILLMODE 1			/* spill mode: no minmal slot, null check */
+#define HASHREFILLMODE 2		/* refill mode: minmal slot, no null check */
+	int			evaltrans_mode;
 
-	AggStatePerHash perhash;	/* array of per-hashtable data */
-	AggStatePerGroup *hash_pergroup;	/* grouping set indexed array of
-										 * per-group pointers */
+	/* these fields are used in AGG_SORTED and AGG_MIXED */
+	bool		input_sorted;	/* hash table filled yet? */
+	int			eflags;			/* eflags for the first sort */
 
-	/* support for evaluation of agg input expressions: */
-#define FIELDNO_AGGSTATE_ALL_PERGROUPS 49
-	AggStatePerGroup *all_pergroups;	/* array of first ->pergroups, than
-										 * ->hash_pergroup */
+
 	ProjectionInfo *combinedproj;	/* projection machinery */
+
+	/* these field are used in parallel grouping sets */
+	bool		groupingsets_preprocess; /* groupingsets preprocessed yet? */
+	ExprState	*gsetid;				/* expression state to get grpsetid from input */
+	int			*gsetid_phaseidxs;	/* grpsetid <-> phaseidx mapping */
 } AggState;
 
 /* ----------------

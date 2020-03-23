@@ -91,15 +91,18 @@
 /*----------
  * New-style error reporting API: to be used in this way:
  *		ereport(ERROR,
- *				(errcode(ERRCODE_UNDEFINED_CURSOR),
- *				 errmsg("portal \"%s\" not found", stmt->portalname),
- *				 ... other errxxx() fields as needed ...));
+ *				errcode(ERRCODE_UNDEFINED_CURSOR),
+ *				errmsg("portal \"%s\" not found", stmt->portalname),
+ *				... other errxxx() fields as needed ...);
  *
  * The error level is required, and so is a primary error message (errmsg
  * or errmsg_internal).  All else is optional.  errcode() defaults to
  * ERRCODE_INTERNAL_ERROR if elevel is ERROR or more, ERRCODE_WARNING
  * if elevel is WARNING, or ERRCODE_SUCCESSFUL_COMPLETION if elevel is
  * NOTICE or below.
+ *
+ * Before v12, extra parentheses were required around the support routine
+ * calls; that's now optional.
  *
  * ereport_domain() allows a message domain to be specified, for modules that
  * wish to use a different message catalog from the backend's.  To avoid having
@@ -118,59 +121,58 @@
  *----------
  */
 #ifdef HAVE__BUILTIN_CONSTANT_P
-#define ereport_domain(elevel, domain, rest)	\
+#define ereport_domain(elevel, domain, ...)	\
 	do { \
 		pg_prevent_errno_in_scope(); \
-		if (errstart(elevel, __FILE__, __LINE__, PG_FUNCNAME_MACRO, domain)) \
-			errfinish rest; \
+		if (errstart(elevel, domain)) \
+			__VA_ARGS__, errfinish(__FILE__, __LINE__, PG_FUNCNAME_MACRO); \
 		if (__builtin_constant_p(elevel) && (elevel) >= ERROR) \
 			pg_unreachable(); \
 	} while(0)
 #else							/* !HAVE__BUILTIN_CONSTANT_P */
-#define ereport_domain(elevel, domain, rest)	\
+#define ereport_domain(elevel, domain, ...)	\
 	do { \
 		const int elevel_ = (elevel); \
 		pg_prevent_errno_in_scope(); \
-		if (errstart(elevel_, __FILE__, __LINE__, PG_FUNCNAME_MACRO, domain)) \
-			errfinish rest; \
+		if (errstart(elevel_, domain)) \
+			__VA_ARGS__, errfinish(__FILE__, __LINE__, PG_FUNCNAME_MACRO); \
 		if (elevel_ >= ERROR) \
 			pg_unreachable(); \
 	} while(0)
 #endif							/* HAVE__BUILTIN_CONSTANT_P */
 
-#define ereport(elevel, rest)	\
-	ereport_domain(elevel, TEXTDOMAIN, rest)
+#define ereport(elevel, ...)	\
+	ereport_domain(elevel, TEXTDOMAIN, __VA_ARGS__)
 
 #define TEXTDOMAIN NULL
 
-extern bool errstart(int elevel, const char *filename, int lineno,
-					 const char *funcname, const char *domain);
-extern void errfinish(int dummy,...);
+extern bool errstart(int elevel, const char *domain);
+extern void errfinish(const char *filename, int lineno, const char *funcname);
 
-extern int	errcode(int sqlerrcode);
+extern void errcode(int sqlerrcode);
 
-extern int	errcode_for_file_access(void);
-extern int	errcode_for_socket_access(void);
+extern void errcode_for_file_access(void);
+extern void errcode_for_socket_access(void);
 
-extern int	errmsg(const char *fmt,...) pg_attribute_printf(1, 2);
-extern int	errmsg_internal(const char *fmt,...) pg_attribute_printf(1, 2);
+extern void errmsg(const char *fmt,...) pg_attribute_printf(1, 2);
+extern void errmsg_internal(const char *fmt,...) pg_attribute_printf(1, 2);
 
-extern int	errmsg_plural(const char *fmt_singular, const char *fmt_plural,
+extern void errmsg_plural(const char *fmt_singular, const char *fmt_plural,
 						  unsigned long n,...) pg_attribute_printf(1, 4) pg_attribute_printf(2, 4);
 
-extern int	errdetail(const char *fmt,...) pg_attribute_printf(1, 2);
-extern int	errdetail_internal(const char *fmt,...) pg_attribute_printf(1, 2);
+extern void errdetail(const char *fmt,...) pg_attribute_printf(1, 2);
+extern void errdetail_internal(const char *fmt,...) pg_attribute_printf(1, 2);
 
-extern int	errdetail_log(const char *fmt,...) pg_attribute_printf(1, 2);
+extern void errdetail_log(const char *fmt,...) pg_attribute_printf(1, 2);
 
-extern int	errdetail_log_plural(const char *fmt_singular,
+extern void errdetail_log_plural(const char *fmt_singular,
 								 const char *fmt_plural,
 								 unsigned long n,...) pg_attribute_printf(1, 4) pg_attribute_printf(2, 4);
 
-extern int	errdetail_plural(const char *fmt_singular, const char *fmt_plural,
+extern void errdetail_plural(const char *fmt_singular, const char *fmt_plural,
 							 unsigned long n,...) pg_attribute_printf(1, 4) pg_attribute_printf(2, 4);
 
-extern int	errhint(const char *fmt,...) pg_attribute_printf(1, 2);
+extern void errhint(const char *fmt,...) pg_attribute_printf(1, 2);
 
 /*
  * errcontext() is typically called in error context callback functions, not
@@ -182,22 +184,22 @@ extern int	errhint(const char *fmt,...) pg_attribute_printf(1, 2);
  */
 #define errcontext	set_errcontext_domain(TEXTDOMAIN),	errcontext_msg
 
-extern int	set_errcontext_domain(const char *domain);
+extern void set_errcontext_domain(const char *domain);
 
-extern int	errcontext_msg(const char *fmt,...) pg_attribute_printf(1, 2);
+extern void errcontext_msg(const char *fmt,...) pg_attribute_printf(1, 2);
 
-extern int	errhidestmt(bool hide_stmt);
-extern int	errhidecontext(bool hide_ctx);
+extern void errhidestmt(bool hide_stmt);
+extern void errhidecontext(bool hide_ctx);
 
-extern int	errbacktrace(void);
+extern void errbacktrace(void);
 
-extern int	errfunction(const char *funcname);
-extern int	errposition(int cursorpos);
+extern void errfunction(const char *funcname);
+extern void errposition(int cursorpos);
 
-extern int	internalerrposition(int cursorpos);
-extern int	internalerrquery(const char *query);
+extern void internalerrposition(int cursorpos);
+extern void internalerrquery(const char *query);
 
-extern int	err_generic_string(int field, const char *str);
+extern void err_generic_string(int field, const char *str);
 
 extern int	geterrcode(void);
 extern int	geterrposition(void);
@@ -209,37 +211,8 @@ extern int	getinternalerrposition(void);
  *		elog(ERROR, "portal \"%s\" not found", stmt->portalname);
  *----------
  */
-/*
- * Using variadic macros, we can give the compiler a hint about the
- * call not returning when elevel >= ERROR.  See comments for ereport().
- * Note that historically elog() has called elog_start (which saves errno)
- * before evaluating "elevel", so we preserve that behavior here.
- */
-#ifdef HAVE__BUILTIN_CONSTANT_P
 #define elog(elevel, ...)  \
-	do { \
-		pg_prevent_errno_in_scope(); \
-		elog_start(__FILE__, __LINE__, PG_FUNCNAME_MACRO); \
-		elog_finish(elevel, __VA_ARGS__); \
-		if (__builtin_constant_p(elevel) && (elevel) >= ERROR) \
-			pg_unreachable(); \
-	} while(0)
-#else							/* !HAVE__BUILTIN_CONSTANT_P */
-#define elog(elevel, ...)  \
-	do { \
-		pg_prevent_errno_in_scope(); \
-		elog_start(__FILE__, __LINE__, PG_FUNCNAME_MACRO); \
-		{ \
-			const int elevel_ = (elevel); \
-			elog_finish(elevel_, __VA_ARGS__); \
-			if (elevel_ >= ERROR) \
-				pg_unreachable(); \
-		} \
-	} while(0)
-#endif							/* HAVE__BUILTIN_CONSTANT_P */
-
-extern void elog_start(const char *filename, int lineno, const char *funcname);
-extern void elog_finish(int elevel, const char *fmt,...) pg_attribute_printf(2, 3);
+	ereport(elevel, errmsg_internal(__VA_ARGS__))
 
 
 /* Support for constructing error strings separately from ereport() calls */

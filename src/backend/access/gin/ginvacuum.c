@@ -662,12 +662,12 @@ ginbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			UnlockReleaseBuffer(buffer);
 		}
 
-		vacuum_delay_point();
+		stats->delay_msec += vacuum_delay_point();
 
 		for (i = 0; i < nRoot; i++)
 		{
 			ginVacuumPostingTree(&gvs, rootOfPostingTree[i]);
-			vacuum_delay_point();
+			stats->delay_msec += vacuum_delay_point();
 		}
 
 		if (blkno == InvalidBlockNumber)	/* rightmost page */
@@ -748,7 +748,7 @@ ginvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 		Buffer		buffer;
 		Page		page;
 
-		vacuum_delay_point();
+		stats->delay_msec += vacuum_delay_point();
 
 		buffer = ReadBufferExtended(index, MAIN_FORKNUM, blkno,
 									RBM_NORMAL, info->strategy);

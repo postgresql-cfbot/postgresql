@@ -1098,7 +1098,7 @@ restart:
 	recurse_to = P_NONE;
 
 	/* call vacuum_delay_point while not holding any buffer lock */
-	vacuum_delay_point();
+	vstate->stats->delay_msec += vacuum_delay_point();
 
 	/*
 	 * We can't use _bt_getbuf() here because it always applies

@@ -1990,10 +1990,11 @@ vac_close_indexes(int nindexes, Relation *Irel, LOCKMODE lockmode)
 /*
  * vacuum_delay_point --- check for interrupts and cost-based delay.
  *
+ * Return the number of milliseconds delayed.
  * This should be called in each major loop of VACUUM processing,
  * typically once per page processed.
  */
-void
+double
 vacuum_delay_point(void)
 {
 	double		msec = 0;
@@ -2002,7 +2003,7 @@ vacuum_delay_point(void)
 	CHECK_FOR_INTERRUPTS();
 
 	if (!VacuumCostActive || InterruptPending)
-		return;
+		return 0;
 
 	/*
 	 * For parallel vacuum, the delay is computed based on the shared cost
@@ -2019,7 +2020,9 @@ vacuum_delay_point(void)
 		if (msec > VacuumCostDelay * 4)
 			msec = VacuumCostDelay * 4;
 
+		pgstat_report_wait_start(WAIT_EVENT_VACUUM_DELAY);
 		pg_usleep((long) (msec * 1000));
+		pgstat_report_wait_end();
 
 		VacuumCostBalance = 0;
 
@@ -2028,7 +2031,10 @@ vacuum_delay_point(void)
 
 		/* Might have gotten an interrupt while sleeping */
 		CHECK_FOR_INTERRUPTS();
+		return msec;
 	}
+
+	return 0;
 }
 
 /*

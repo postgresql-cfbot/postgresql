@@ -285,6 +285,7 @@ typedef struct LVRelStats
 	double		new_dead_tuples;	/* new estimated total # of dead tuples */
 	BlockNumber pages_removed;
 	double		tuples_deleted;
+	double		delay_msec;	/* milliseconds delay by vacuum_delay_point() */
 	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
 	LVDeadTuples *dead_tuples;
 	int			num_index_scans;
@@ -464,6 +465,7 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 	vacrelstats->old_live_tuples = onerel->rd_rel->reltuples;
 	vacrelstats->num_index_scans = 0;
 	vacrelstats->pages_removed = 0;
+	vacrelstats->delay_msec = 0;
 	vacrelstats->lock_waiter_detected = false;
 
 	/* Open all indexes of the relation */
@@ -620,8 +622,8 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 							 (long long) VacuumPageDirty);
 			appendStringInfo(&buf, _("avg read rate: %.3f MB/s, avg write rate: %.3f MB/s\n"),
 							 read_rate, write_rate);
-			appendStringInfo(&buf, _("system usage: %s"), pg_rusage_show(&ru0));
-
+			appendStringInfo(&buf, _("system usage: %s, cost-based delay: %.0f msec"),
+							 pg_rusage_show(&ru0), vacrelstats->delay_msec);
 			ereport(LOG,
 					(errmsg_internal("%s", buf.data)));
 			pfree(buf.data);
@@ -860,7 +862,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 				if ((vmstatus & VISIBILITYMAP_ALL_VISIBLE) == 0)
 					break;
 			}
-			vacuum_delay_point();
+			vacrelstats->delay_msec += vacuum_delay_point();
 			next_unskippable_block++;
 		}
 	}
@@ -916,7 +918,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 						if ((vmskipflags & VISIBILITYMAP_ALL_VISIBLE) == 0)
 							break;
 					}
-					vacuum_delay_point();
+					vacrelstats->delay_msec += vacuum_delay_point();
 					next_unskippable_block++;
 				}
 			}
@@ -966,7 +968,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			all_visible_according_to_vm = true;
 		}
 
-		vacuum_delay_point();
+		vacrelstats->delay_msec += vacuum_delay_point();
 
 		/*
 		 * If we are close to overrunning the available space for dead-tuple
@@ -1690,6 +1692,9 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 									"%u pages are entirely empty.\n",
 									empty_pages),
 					 empty_pages);
+	if (vacrelstats->delay_msec > 0)
+		appendStringInfo(&buf, "Cost-based delay: %.0f msec\n",
+										vacrelstats->delay_msec);
 	appendStringInfo(&buf, _("%s."), pg_rusage_show(&ru0));
 
 	ereport(elevel,
@@ -1788,7 +1793,7 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 		Page		page;
 		Size		freespace;
 
-		vacuum_delay_point();
+		vacrelstats->delay_msec += vacuum_delay_point();
 
 		tblk = ItemPointerGetBlockNumber(&vacrelstats->dead_tuples->itemptrs[tupindex]);
 		buf = ReadBufferExtended(onerel, MAIN_FORKNUM, tblk, RBM_NORMAL,

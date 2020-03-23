@@ -78,6 +78,7 @@ typedef struct IndexBulkDeleteResult
 	double		tuples_removed; /* # removed during vacuum operation */
 	BlockNumber pages_deleted;	/* # unused pages in index */
 	BlockNumber pages_free;		/* # pages available for reuse */
+	double		delay_msec;		/* milliseconds delay by vacuum_delay_point() */
 } IndexBulkDeleteResult;
 
 /* Typedef for callback function to determine if a tuple is bulk-deletable */

@@ -296,13 +296,12 @@ slot_store_error_callback(void *arg)
 }
 
 /*
- * Store data in C string form into slot.
- * This is similar to BuildTupleFromCStrings but TupleTableSlot fits our
- * use better.
+ * Store data into slot.
+ * Data can be either text or binary transfer format
  */
 static void
-slot_store_cstrings(TupleTableSlot *slot, LogicalRepRelMapEntry *rel,
-					char **values)
+slot_store_data(TupleTableSlot *slot, LogicalRepRelMapEntry *rel,
+					LogicalRepTupleData *tupleData)
 {
 	int			natts = slot->tts_tupleDescriptor->natts;
 	int			i;
@@ -328,18 +327,40 @@ slot_store_cstrings(TupleTableSlot *slot, LogicalRepRelMapEntry *rel,
 		int			remoteattnum = rel->attrmap->attnums[i];
 
 		if (!att->attisdropped && remoteattnum >= 0 &&
-			values[remoteattnum] != NULL)
+			tupleData->values[remoteattnum].data != NULL)
 		{
-			Oid			typinput;
-			Oid			typioparam;
 
 			errarg.local_attnum = i;
 			errarg.remote_attnum = remoteattnum;
 
-			getTypeInputInfo(att->atttypid, &typinput, &typioparam);
-			slot->tts_values[i] =
-				OidInputFunctionCall(typinput, values[remoteattnum],
-									 typioparam, att->atttypmod);
+			if (tupleData->binary[remoteattnum])
+			{
+				Oid typreceive;
+				Oid typioparam;
+
+				getTypeBinaryInputInfo(att->atttypid, &typreceive, &typioparam);
+
+				int cursor = tupleData->values[remoteattnum].cursor;
+				slot->tts_values[i] =
+					OidReceiveFunctionCall(typreceive, &tupleData->values[remoteattnum],
+										   typioparam, att->atttypmod);
+				/*
+				 * Do not advance the cursor in case we need to re-read this
+				 * This saves us from pushing all of this type logic into proto.c
+				 */
+				tupleData->values[remoteattnum].cursor = cursor;
+
+			}
+			else
+			{
+				Oid			typinput;
+				Oid			typioparam;
+
+				getTypeInputInfo(att->atttypid, &typinput, &typioparam);
+				slot->tts_values[i] =
+					OidInputFunctionCall(typinput, tupleData->values[remoteattnum].data,
+										 typioparam, att->atttypmod);
+			}
 			slot->tts_isnull[i] = false;
 
 			errarg.local_attnum = -1;
@@ -373,11 +394,17 @@ slot_store_cstrings(TupleTableSlot *slot, LogicalRepRelMapEntry *rel,
  * Caution: unreplaced pass-by-ref columns in "slot" will point into the
  * storage for "srcslot".  This is OK for current usage, but someday we may
  * need to materialize "slot" at the end to make it independent of "srcslot".
+ *
+ * TODO: figure out the right comment here
+ * Modify slot with user data provided.
+ * This is somewhat similar to heap_modify_tuple but also calls the type
+ * input function on the user data as the input is either text or binary transfer
+ * format
  */
 static void
-slot_modify_cstrings(TupleTableSlot *slot, TupleTableSlot *srcslot,
-					 LogicalRepRelMapEntry *rel,
-					 char **values, bool *replaces)
+slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
+					LogicalRepRelMapEntry *rel,
+					LogicalRepTupleData *tupleData)
 {
 	int			natts = slot->tts_tupleDescriptor->natts;
 	int			i;
@@ -415,21 +442,43 @@ slot_modify_cstrings(TupleTableSlot *slot, TupleTableSlot *srcslot,
 		if (remoteattnum < 0)
 			continue;
 
-		if (!replaces[remoteattnum])
+		if (!tupleData->changed[remoteattnum])
 			continue;
 
-		if (values[remoteattnum] != NULL)
+		if (tupleData->values[remoteattnum].data != NULL)
 		{
-			Oid			typinput;
-			Oid			typioparam;
 
 			errarg.local_attnum = i;
 			errarg.remote_attnum = remoteattnum;
 
-			getTypeInputInfo(att->atttypid, &typinput, &typioparam);
-			slot->tts_values[i] =
-				OidInputFunctionCall(typinput, values[remoteattnum],
-									 typioparam, att->atttypmod);
+			if (tupleData->binary[remoteattnum])
+			{
+				Oid typreceive;
+				Oid typioparam;
+
+				getTypeBinaryInputInfo(att->atttypid, &typreceive, &typioparam);
+
+
+				int cursor = tupleData->values[remoteattnum].cursor;
+				slot->tts_values[i] =
+					OidReceiveFunctionCall(typreceive, &tupleData->values[remoteattnum],
+										   typioparam, att->atttypmod);
+				/*
+				 * Do not advance the cursor in case we need to re-read this
+				 * This saves us from pushing all of this type logic into proto.c
+				 */
+				tupleData->values[remoteattnum].cursor = cursor;
+			}
+			else
+			{
+				Oid			typinput;
+				Oid			typioparam;
+
+				getTypeInputInfo(att->atttypid, &typinput, &typioparam);
+				slot->tts_values[i] =
+					OidInputFunctionCall(typinput, tupleData->values[remoteattnum].data,
+										 typioparam, att->atttypmod);
+			}
 			slot->tts_isnull[i] = false;
 
 			errarg.local_attnum = -1;
@@ -594,8 +643,12 @@ apply_handle_insert(StringInfo s)
 
 	ensure_transaction();
 
+	/* read the relation id */
 	relid = logicalrep_read_insert(s, &newtup);
 	rel = logicalrep_rel_open(relid, RowExclusiveLock);
+
+
+
 	if (!should_apply_changes_for_rel(rel))
 	{
 		/*
@@ -617,7 +670,7 @@ apply_handle_insert(StringInfo s)
 
 	/* Process and store remote tuple in the slot */
 	oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-	slot_store_cstrings(remoteslot, rel, newtup.values);
+	slot_store_data(remoteslot, rel, &newtup);
 	slot_fill_defaults(rel, estate, remoteslot);
 	MemoryContextSwitchTo(oldctx);
 
@@ -698,9 +751,12 @@ apply_handle_update(StringInfo s)
 
 	ensure_transaction();
 
-	relid = logicalrep_read_update(s, &has_oldtup, &oldtup,
-								   &newtup);
+	/* read the relation id */
+	relid = pq_getmsgint(s, 4);
 	rel = logicalrep_rel_open(relid, RowExclusiveLock);
+
+	logicalrep_read_update(s, &has_oldtup, &oldtup,
+								   &newtup);
 	if (!should_apply_changes_for_rel(rel))
 	{
 		/*
@@ -745,8 +801,8 @@ apply_handle_update(StringInfo s)
 
 	/* Build the search tuple. */
 	oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-	slot_store_cstrings(remoteslot, rel,
-						has_oldtup ? oldtup.values : newtup.values);
+	slot_store_data(remoteslot, rel,
+						has_oldtup ? &oldtup : &newtup);
 	MemoryContextSwitchTo(oldctx);
 
 	/*
@@ -776,8 +832,7 @@ apply_handle_update(StringInfo s)
 	{
 		/* Process and store remote tuple in the slot */
 		oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-		slot_modify_cstrings(remoteslot, localslot, rel,
-							 newtup.values, newtup.changed);
+		slot_modify_data(remoteslot, localslot,  rel, &newtup);
 		MemoryContextSwitchTo(oldctx);
 
 		EvalPlanQualSetSlot(&epqstate, remoteslot);
@@ -835,8 +890,11 @@ apply_handle_delete(StringInfo s)
 
 	ensure_transaction();
 
-	relid = logicalrep_read_delete(s, &oldtup);
+	/* read the relation id */
+	relid = pq_getmsgint(s, 4);
 	rel = logicalrep_rel_open(relid, RowExclusiveLock);
+
+	logicalrep_read_delete(s, &oldtup);
 	if (!should_apply_changes_for_rel(rel))
 	{
 		/*
@@ -864,7 +922,7 @@ apply_handle_delete(StringInfo s)
 
 	/* Find the tuple using the replica identity index. */
 	oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-	slot_store_cstrings(remoteslot, rel, oldtup.values);
+	slot_store_data(remoteslot, rel, &oldtup);
 	MemoryContextSwitchTo(oldctx);
 
 	/*
@@ -1748,6 +1806,7 @@ ApplyWorkerMain(Datum main_arg)
 	options.slotname = myslotname;
 	options.proto.logical.proto_version = LOGICALREP_PROTO_VERSION_NUM;
 	options.proto.logical.publication_names = MySubscription->publications;
+	options.proto.logical.binary = MySubscription->binary;
 
 	/* Start normal logical streaming replication. */
 	walrcv_startstreaming(wrconn, &options);

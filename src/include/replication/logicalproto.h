@@ -30,8 +30,12 @@
 /* Tuple coming via logical replication. */
 typedef struct LogicalRepTupleData
 {
-	/* column values in text format, or NULL for a null value: */
-	char	   *values[MaxTupleAttributeNumber];
+	/* column values */
+	StringInfoData	   values[MaxTupleAttributeNumber];
+
+	/* markers for binary */
+	bool 		binary[MaxTupleAttributeNumber];
+
 	/* markers for changed/unchanged column values: */
 	bool		changed[MaxTupleAttributeNumber];
 } LogicalRepTupleData;
@@ -87,16 +91,16 @@ extern void logicalrep_write_origin(StringInfo out, const char *origin,
 									XLogRecPtr origin_lsn);
 extern char *logicalrep_read_origin(StringInfo in, XLogRecPtr *origin_lsn);
 extern void logicalrep_write_insert(StringInfo out, Relation rel,
-									HeapTuple newtuple);
+									HeapTuple newtuple, bool binary_basetypes);
 extern LogicalRepRelId logicalrep_read_insert(StringInfo in, LogicalRepTupleData *newtup);
 extern void logicalrep_write_update(StringInfo out, Relation rel, HeapTuple oldtuple,
-									HeapTuple newtuple);
-extern LogicalRepRelId logicalrep_read_update(StringInfo in,
+									HeapTuple newtuple, bool binary_basetypes);
+extern void logicalrep_read_update(StringInfo in,
 											  bool *has_oldtuple, LogicalRepTupleData *oldtup,
 											  LogicalRepTupleData *newtup);
 extern void logicalrep_write_delete(StringInfo out, Relation rel,
-									HeapTuple oldtuple);
-extern LogicalRepRelId logicalrep_read_delete(StringInfo in,
+									HeapTuple oldtuple, bool binary_basetypes);
+extern void logicalrep_read_delete(StringInfo in,
 											  LogicalRepTupleData *oldtup);
 extern void logicalrep_write_truncate(StringInfo out, int nrelids, Oid relids[],
 									  bool cascade, bool restart_seqs);

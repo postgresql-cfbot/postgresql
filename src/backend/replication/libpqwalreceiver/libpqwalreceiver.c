@@ -423,7 +423,40 @@ libpqrcv_startstreaming(WalReceiverConn *conn,
 		appendStringInfo(&cmd, ", publication_names %s", pubnames_literal);
 		PQfreemem(pubnames_literal);
 		pfree(pubnames_str);
-
+		if (options->proto.logical.binary) {
+			appendStringInfo(&cmd, ", binary 'true'");
+			appendStringInfo(&cmd, ", sizeof_datum %zu", sizeof(Datum));
+			appendStringInfo(&cmd, ", sizeof_int %zu", sizeof(int));
+			appendStringInfo(&cmd, ", sizeof_long %zu", sizeof(long));
+			appendStringInfo(&cmd, ", bigendian %d",
+#ifdef WORDS_BIGENDIAN
+								 true
+#else
+								 false
+#endif
+								 );
+			appendStringInfo(&cmd, ", float4_byval %d",
+#ifdef USE_FLOAT4_BYVAL
+								 true
+#else
+								 false
+#endif
+								 );
+				appendStringInfo(&cmd, ", float8_byval %d",
+#ifdef USE_FLOAT8_BYVAL
+								 true
+#else
+								 false
+#endif
+								 );
+				appendStringInfo(&cmd, ", integer_datetimes %d",
+#ifdef USE_INTEGER_DATETIMES
+								 true
+#else
+								 false
+#endif
+								 );
+		}
 		appendStringInfoChar(&cmd, ')');
 	}
 	else

@@ -59,7 +59,7 @@ parse_subscription_options(List *options, bool *connect, bool *enabled_given,
 						   bool *enabled, bool *create_slot,
 						   bool *slot_name_given, char **slot_name,
 						   bool *copy_data, char **synchronous_commit,
-						   bool *refresh)
+						   bool *refresh, bool *binary_given, bool *binary)
 {
 	ListCell   *lc;
 	bool		connect_given = false;
@@ -90,6 +90,12 @@ parse_subscription_options(List *options, bool *connect, bool *enabled_given,
 		*synchronous_commit = NULL;
 	if (refresh)
 		*refresh = true;
+	if (binary)
+	{
+		*binary_given = false;
+		/* not all versions of pgoutput will understand this option default to false */
+		*binary = false;
+	}
 
 	/* Parse options */
 	foreach(lc, options)
@@ -174,6 +180,11 @@ parse_subscription_options(List *options, bool *connect, bool *enabled_given,
 
 			refresh_given = true;
 			*refresh = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "binary") == 0 && binary)
+		{
+			*binary_given = true;
+			*binary = defGetBoolean(defel);
 		}
 		else
 			ereport(ERROR,
@@ -324,8 +335,10 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	bool		slotname_given;
 	char		originname[NAMEDATALEN];
 	bool		create_slot;
-	List	   *publications;
+	bool		binary;
+	bool		binary_given;
 
+	List	   *publications;
 	/*
 	 * Parse and check options.
 	 *
@@ -334,7 +347,7 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	parse_subscription_options(stmt->options, &connect, &enabled_given,
 							   &enabled, &create_slot, &slotname_given,
 							   &slotname, &copy_data, &synchronous_commit,
-							   NULL);
+							   NULL, &binary_given, &binary);
 
 	/*
 	 * Since creating a replication slot is not transactional, rolling back
@@ -400,6 +413,7 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 		DirectFunctionCall1(namein, CStringGetDatum(stmt->subname));
 	values[Anum_pg_subscription_subowner - 1] = ObjectIdGetDatum(owner);
 	values[Anum_pg_subscription_subenabled - 1] = BoolGetDatum(enabled);
+	values[Anum_pg_subscription_subbinary - 1] = BoolGetDatum(binary);
 	values[Anum_pg_subscription_subconninfo - 1] =
 		CStringGetTextDatum(conninfo);
 	if (slotname)
@@ -669,10 +683,13 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 				char	   *slotname;
 				bool		slotname_given;
 				char	   *synchronous_commit;
+				bool		binary_given;
+				bool		binary;
 
 				parse_subscription_options(stmt->options, NULL, NULL, NULL,
 										   NULL, &slotname_given, &slotname,
-										   NULL, &synchronous_commit, NULL);
+										   NULL, &synchronous_commit, NULL,
+										   &binary_given, &binary);
 
 				if (slotname_given)
 				{
@@ -697,6 +714,13 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 					replaces[Anum_pg_subscription_subsynccommit - 1] = true;
 				}
 
+				if (binary_given)
+				{
+				values[Anum_pg_subscription_subbinary - 1] =
+					BoolGetDatum(binary);
+					replaces[Anum_pg_subscription_subbinary - 1] = true;
+				}
+
 				update_tuple = true;
 				break;
 			}
@@ -708,7 +732,8 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 
 				parse_subscription_options(stmt->options, NULL,
 										   &enabled_given, &enabled, NULL,
-										   NULL, NULL, NULL, NULL, NULL);
+										   NULL, NULL, NULL, NULL, NULL,
+										   NULL, NULL);
 				Assert(enabled_given);
 
 				if (!sub->slotname && enabled)
@@ -746,7 +771,7 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 
 				parse_subscription_options(stmt->options, NULL, NULL, NULL,
 										   NULL, NULL, NULL, &copy_data,
-										   NULL, &refresh);
+										   NULL, &refresh, NULL, NULL);
 
 				values[Anum_pg_subscription_subpublications - 1] =
 					publicationListToArray(stmt->publication);
@@ -783,7 +808,7 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 
 				parse_subscription_options(stmt->options, NULL, NULL, NULL,
 										   NULL, NULL, NULL, &copy_data,
-										   NULL, NULL);
+										   NULL, NULL, NULL, NULL);
 
 				AlterSubscription_refresh(sub, copy_data);
 

@@ -322,7 +322,8 @@ select unique1, unique2, nextval('testseq')
    Output: unique1, unique2, (nextval('testseq'::regclass))
    ->  Index Scan using tenk1_unique2 on public.tenk1
          Output: unique1, unique2, nextval('testseq'::regclass)
-(4 rows)
+         Skip scan: All
+(5 rows)
 
 select unique1, unique2, nextval('testseq')
   from tenk1 order by unique2 limit 10;
@@ -395,7 +396,8 @@ select unique1, unique2, generate_series(1,10)
          Output: unique1, unique2, generate_series(1, 10)
          ->  Index Scan using tenk1_unique2 on public.tenk1
                Output: unique1, unique2, two, four, ten, twenty, hundred, thousand, twothousand, fivethous, tenthous, odd, even, stringu1, stringu2, string4
-(6 rows)
+               Skip scan: All
+(7 rows)
 
 select unique1, unique2, generate_series(1,10)
   from tenk1 order by unique2 limit 7;
@@ -492,7 +494,8 @@ select sum(tenthous) as s1, sum(tenthous) + random()*0 as s2
          Group Key: tenk1.thousand
          ->  Index Only Scan using tenk1_thous_tenthous on public.tenk1
                Output: thousand, tenthous
-(7 rows)
+               Skip scan: All
+(8 rows)
 
 select sum(tenthous) as s1, sum(tenthous) + random()*0 as s2
   from tenk1 group by thousand order by thousand limit 3;

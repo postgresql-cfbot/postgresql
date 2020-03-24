@@ -562,6 +562,8 @@ _outIndexScan(StringInfo str, const IndexScan *node)
 	WRITE_NODE_FIELD(indexorderbyorig);
 	WRITE_NODE_FIELD(indexorderbyops);
 	WRITE_ENUM_FIELD(indexorderdir, ScanDirection);
+	WRITE_INT_FIELD(indexskipprefixsize);
+	WRITE_INT_FIELD(indexdistinct);
 }
 
 static void
@@ -576,6 +578,9 @@ _outIndexOnlyScan(StringInfo str, const IndexOnlyScan *node)
 	WRITE_NODE_FIELD(indexorderby);
 	WRITE_NODE_FIELD(indextlist);
 	WRITE_ENUM_FIELD(indexorderdir, ScanDirection);
+	WRITE_INT_FIELD(indexskipprefixsize);
+	WRITE_INT_FIELD(indexdistinct);
+
 }
 
 static void
@@ -589,6 +594,7 @@ _outBitmapIndexScan(StringInfo str, const BitmapIndexScan *node)
 	WRITE_BOOL_FIELD(isshared);
 	WRITE_NODE_FIELD(indexqual);
 	WRITE_NODE_FIELD(indexqualorig);
+	WRITE_INT_FIELD(indexskipprefixsize);
 }
 
 static void
@@ -1724,6 +1730,7 @@ _outPathInfo(StringInfo str, const Path *node)
 	WRITE_FLOAT_FIELD(startup_cost, "%.2f");
 	WRITE_FLOAT_FIELD(total_cost, "%.2f");
 	WRITE_NODE_FIELD(pathkeys);
+	WRITE_NODE_FIELD(uniquekeys);
 }
 
 /*
@@ -2208,6 +2215,7 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_NODE_FIELD(eq_classes);
 	WRITE_BOOL_FIELD(ec_merging_done);
 	WRITE_NODE_FIELD(canon_pathkeys);
+	WRITE_NODE_FIELD(canon_uniquekeys);
 	WRITE_NODE_FIELD(left_join_clauses);
 	WRITE_NODE_FIELD(right_join_clauses);
 	WRITE_NODE_FIELD(full_join_clauses);
@@ -2217,6 +2225,7 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_NODE_FIELD(placeholder_list);
 	WRITE_NODE_FIELD(fkey_list);
 	WRITE_NODE_FIELD(query_pathkeys);
+	WRITE_NODE_FIELD(query_uniquekeys);
 	WRITE_NODE_FIELD(group_pathkeys);
 	WRITE_NODE_FIELD(window_pathkeys);
 	WRITE_NODE_FIELD(distinct_pathkeys);
@@ -2402,6 +2411,14 @@ _outPathKey(StringInfo str, const PathKey *node)
 	WRITE_OID_FIELD(pk_opfamily);
 	WRITE_INT_FIELD(pk_strategy);
 	WRITE_BOOL_FIELD(pk_nulls_first);
+}
+
+static void
+_outUniqueKey(StringInfo str, const UniqueKey *node)
+{
+	WRITE_NODE_TYPE("UNIQUEKEY");
+
+	WRITE_NODE_FIELD(eq_clause);
 }
 
 static void
@@ -4094,6 +4111,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_PathKey:
 				_outPathKey(str, obj);
+				break;
+			case T_UniqueKey:
+				_outUniqueKey(str, obj);
 				break;
 			case T_PathTarget:
 				_outPathTarget(str, obj);

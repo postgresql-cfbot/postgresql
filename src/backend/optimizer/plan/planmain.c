@@ -70,6 +70,7 @@ query_planner(PlannerInfo *root,
 	root->join_rel_level = NULL;
 	root->join_cur_level = 0;
 	root->canon_pathkeys = NIL;
+	root->canon_uniquekeys = NIL;
 	root->left_join_clauses = NIL;
 	root->right_join_clauses = NIL;
 	root->full_join_clauses = NIL;

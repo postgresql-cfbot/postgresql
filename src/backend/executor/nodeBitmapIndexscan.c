@@ -22,12 +22,13 @@
 #include "postgres.h"
 
 #include "access/genam.h"
+#include "access/relscan.h"
 #include "executor/execdebug.h"
 #include "executor/nodeBitmapIndexscan.h"
 #include "executor/nodeIndexscan.h"
 #include "miscadmin.h"
+#include "utils/rel.h"
 #include "utils/memutils.h"
-
 
 /* ----------------------------------------------------------------
  *		ExecBitmapIndexScan
@@ -308,10 +309,20 @@ ExecInitBitmapIndexScan(BitmapIndexScan *node, EState *estate, int eflags)
 	/*
 	 * Initialize scan descriptor.
 	 */
-	indexstate->biss_ScanDesc =
-		index_beginscan_bitmap(indexstate->biss_RelationDesc,
-							   estate->es_snapshot,
-							   indexstate->biss_NumScanKeys);
+	if (node->indexskipprefixsize > 0)
+	{
+		indexstate->biss_ScanDesc =
+			index_beginscan_bitmap_skip(indexstate->biss_RelationDesc,
+				estate->es_snapshot,
+				indexstate->biss_NumScanKeys,
+				Min(IndexRelationGetNumberOfKeyAttributes(indexstate->biss_RelationDesc),
+					node->indexskipprefixsize));
+	}
+	else
+		indexstate->biss_ScanDesc =
+			index_beginscan_bitmap(indexstate->biss_RelationDesc,
+								   estate->es_snapshot,
+								   indexstate->biss_NumScanKeys);
 
 	/*
 	 * If no run-time keys to calculate, go ahead and pass the scankeys to the

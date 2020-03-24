@@ -54,10 +54,11 @@ explain (costs off) insert into insertconflicttest values(0, 'Crowberry') on con
    ->  Result
    SubPlan 1
      ->  Index Only Scan using both_index_expr_key on insertconflicttest ii
+           Skip scan: All
            Index Cond: (key = excluded.key)
    SubPlan 2
      ->  Seq Scan on insertconflicttest ii_1
-(10 rows)
+(11 rows)
 
 -- Neither collation nor operator class specifications are required --
 -- supplying them merely *limits* matches to indexes with matching opclasses

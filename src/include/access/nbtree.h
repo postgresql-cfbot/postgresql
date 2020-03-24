@@ -910,6 +910,53 @@ typedef struct BTArrayKeyInfo
 	Datum	   *elem_values;	/* array of num_elems Datums */
 } BTArrayKeyInfo;
 
+typedef struct BTSkipCompareResult
+{
+	bool		equal;
+	int			prefixCmpResult, skCmpResult;
+	bool		prefixSkip, fullKeySkip;
+	int			prefixSkipIndex;
+} BTSkipCompareResult;
+
+typedef enum BTSkipState
+{
+	SkipStateStop,
+	SkipStateSkip,
+	SkipStateSkipExtra,
+	SkipStateNext
+} BTSkipState;
+
+typedef struct BTSkipPosData
+{
+	BTSkipState nextAction;
+	ScanDirection nextDirection;
+	int nextSkipIndex;
+	BTScanInsertData skipScanKey;
+} BTSkipPosData;
+
+typedef struct BTSkipData
+{
+	/* used to control skipping
+	 * skipScanKey is a combination of currentTupleKey and fwdScanKey/bwdScanKey.
+	 * currentTupleKey contains the scan keys for the current tuple
+	 * fwdScanKey contains the scan keys for quals that would be chosen for a forward scan
+	 * bwdScanKey contains the scan keys for quals that would be chosen for a backward scan
+	 * we need both fwd and bwd, because the scan keys differ for going fwd and bwd
+	 * if a qual would be a>2 and a<5, fwd would have a>2, while bwd would have a<5
+	 */
+	BTScanInsertData	currentTupleKey;
+	BTScanInsertData	fwdScanKey;
+	ScanKeyData			fwdNotNullKeys[INDEX_MAX_KEYS];
+	BTScanInsertData	bwdScanKey;
+	ScanKeyData			bwdNotNullKeys[INDEX_MAX_KEYS];
+	/* length of prefix to skip */
+	int					prefix;
+
+	BTSkipPosData curPos, markPos;
+} BTSkipData;
+
+typedef BTSkipData *BTSkip;
+
 typedef struct BTScanOpaqueData
 {
 	/* these fields are set by _bt_preprocess_keys(): */
@@ -947,6 +994,9 @@ typedef struct BTScanOpaqueData
 	 */
 	int			markItemIndex;	/* itemIndex, or -1 if not valid */
 
+	/* Work space for _bt_skip */
+	BTSkip	skipData;	/* used to control skipping */
+
 	/* keep these last in struct for efficiency */
 	BTScanPosData currPos;		/* current position data */
 	BTScanPosData markPos;		/* marked position, if any */
@@ -961,6 +1011,8 @@ typedef BTScanOpaqueData *BTScanOpaque;
  */
 #define SK_BT_REQFWD	0x00010000	/* required to continue forward scan */
 #define SK_BT_REQBKWD	0x00020000	/* required to continue backward scan */
+#define SK_BT_REQSKIPFWD	0x00040000	/* required to continue forward scan within current prefix */
+#define SK_BT_REQSKIPBKWD	0x00080000	/* required to continue backward scan within current prefix */
 #define SK_BT_INDOPTION_SHIFT  24	/* must clear the above bits */
 #define SK_BT_DESC			(INDOPTION_DESC << SK_BT_INDOPTION_SHIFT)
 #define SK_BT_NULLS_FIRST	(INDOPTION_NULLS_FIRST << SK_BT_INDOPTION_SHIFT)
@@ -1007,9 +1059,12 @@ extern bool btinsert(Relation rel, Datum *values, bool *isnull,
 					 IndexUniqueCheck checkUnique,
 					 struct IndexInfo *indexInfo);
 extern IndexScanDesc btbeginscan(Relation rel, int nkeys, int norderbys);
+extern IndexScanDesc btbeginscan_skip(Relation rel, int nkeys, int norderbys, int skipPrefix);
 extern Size btestimateparallelscan(void);
 extern void btinitparallelscan(void *target);
 extern bool btgettuple(IndexScanDesc scan, ScanDirection dir);
+extern bool btgettuple_skip(IndexScanDesc scan, ScanDirection prefixDir, ScanDirection postfixDir);
+extern bool btskip(IndexScanDesc scan, ScanDirection prefixDir, ScanDirection postfixDir);
 extern int64 btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
 extern void btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 					 ScanKey orderbys, int norderbys);
@@ -1101,15 +1156,79 @@ extern Buffer _bt_moveright(Relation rel, BTScanInsert key, Buffer buf,
 							bool forupdate, BTStack stack, int access, Snapshot snapshot);
 extern OffsetNumber _bt_binsrch_insert(Relation rel, BTInsertState insertstate);
 extern int32 _bt_compare(Relation rel, BTScanInsert key, Page page, OffsetNumber offnum);
-extern bool _bt_first(IndexScanDesc scan, ScanDirection dir);
-extern bool _bt_next(IndexScanDesc scan, ScanDirection dir);
+extern bool _bt_first(IndexScanDesc scan, ScanDirection prefixDir, ScanDirection postfixDir);
+extern bool _bt_next(IndexScanDesc scan, ScanDirection prefixDir, ScanDirection postfixDir);
 extern Buffer _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 							   Snapshot snapshot);
+extern Buffer _bt_walk_left(Relation rel, Buffer buf, Snapshot snapshot);
+extern OffsetNumber _bt_binsrch(Relation rel, BTScanInsert key, Buffer buf);
+extern void _bt_initialize_more_data(BTScanOpaque so, ScanDirection dir);
+extern bool _bt_readpage(IndexScanDesc scan, ScanDirection dir,
+						 OffsetNumber *offnum, bool isRegularMode);
+extern bool _bt_steppage(IndexScanDesc scan, ScanDirection dir);
+extern bool _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir);
+extern void _bt_drop_lock_and_maybe_pin(IndexScanDesc scan, BTScanPos sp);
+
+/*
+* prototypes for functions in nbtskip.c
+*/
+static inline bool
+_bt_skip_enabled(BTScanOpaque so)
+{
+	return so->skipData != NULL;
+}
+
+static inline bool
+_bt_skip_is_regular_mode(ScanDirection prefixDir, ScanDirection postfixDir)
+{
+	return prefixDir == postfixDir;
+}
+
+/* returns whether or not we can use extra quals in the scankey after skipping to a prefix */
+static inline bool
+_bt_has_extra_quals_after_skip(BTSkip skip, ScanDirection dir, int prefix)
+{
+	if (ScanDirectionIsForward(dir))
+	{
+		return skip->fwdScanKey.keysz > prefix;
+	}
+	else
+	{
+		return skip->bwdScanKey.keysz > prefix;
+	}
+}
+
+/* alias of BTScanPosIsValid */
+static inline bool
+_bt_skip_is_always_valid(BTScanOpaque so)
+{
+	return BTScanPosIsValid(so->currPos);
+}
+
+extern bool _bt_skip(IndexScanDesc scan, ScanDirection prefixDir, ScanDirection postfixDir);
+extern void _bt_skip_create_scankeys(Relation rel, BTScanOpaque so);
+extern void _bt_skip_update_scankey_for_extra_skip(IndexScanDesc scan, Relation indexRel,
+					ScanDirection curDir, ScanDirection prefixDir, bool prioritizeEqual, IndexTuple itup);
+extern void _bt_skip_once(IndexScanDesc scan, IndexTuple *curTuple, OffsetNumber *curTupleOffnum,
+						  bool forceSkip, ScanDirection prefixDir, ScanDirection postfixDir);
+extern void _bt_skip_extra_conditions(IndexScanDesc scan, IndexTuple *curTuple, OffsetNumber *curTupleOffnum,
+									  ScanDirection prefixDir, ScanDirection postfixDir, BTSkipCompareResult *cmp);
+extern bool _bt_skip_find_next(IndexScanDesc scan, IndexTuple curTuple, OffsetNumber curTupleOffnum,
+							   ScanDirection prefixDir, ScanDirection postfixDir);
+extern void _bt_skip_until_match(IndexScanDesc scan, IndexTuple *curTuple, OffsetNumber *curTupleOffnum,
+								 ScanDirection prefixDir, ScanDirection postfixDir);
+extern bool _bt_has_results(BTScanOpaque so);
+extern void _bt_compare_current_item(IndexScanDesc scan, IndexTuple tuple, int tupnatts,
+									 ScanDirection dir, bool isRegularMode, BTSkipCompareResult* cmp);
+extern bool _bt_step_back_page(IndexScanDesc scan, IndexTuple *curTuple, OffsetNumber *curTupleOffnum);
+extern bool _bt_step_forward_page(IndexScanDesc scan, BlockNumber next, IndexTuple *curTuple,
+								  OffsetNumber *curTupleOffnum);
+extern bool _bt_checkkeys_skip(IndexScanDesc scan, IndexTuple tuple, int tupnatts,
+							   ScanDirection dir, bool *continuescan, int *prefixskipindex);
 
 /*
  * prototypes for functions in nbtutils.c
  */
-extern BTScanInsert _bt_mkscankey(Relation rel, IndexTuple itup);
 extern void _bt_freestack(BTStack stack);
 extern void _bt_preprocess_array_keys(IndexScanDesc scan);
 extern void _bt_start_array_keys(IndexScanDesc scan, ScanDirection dir);
@@ -1118,7 +1237,7 @@ extern void _bt_mark_array_keys(IndexScanDesc scan);
 extern void _bt_restore_array_keys(IndexScanDesc scan);
 extern void _bt_preprocess_keys(IndexScanDesc scan);
 extern bool _bt_checkkeys(IndexScanDesc scan, IndexTuple tuple,
-						  int tupnatts, ScanDirection dir, bool *continuescan);
+						  int tupnatts, ScanDirection dir, bool *continuescan, int *indexSkipPrefix);
 extern void _bt_killitems(IndexScanDesc scan);
 extern BTCycleId _bt_vacuum_cycleid(Relation rel);
 extern BTCycleId _bt_start_vacuum(Relation rel);
@@ -1140,6 +1259,19 @@ extern bool _bt_check_natts(Relation rel, bool heapkeyspace, Page page,
 extern void _bt_check_third_page(Relation rel, Relation heap,
 								 bool needheaptidspace, Page page, IndexTuple newtup);
 extern bool _bt_allequalimage(Relation rel, bool debugmessage);
+extern bool _bt_checkkeys_threeway(IndexScanDesc scan, IndexTuple tuple, int tupnatts,
+				ScanDirection dir, bool *continuescan, int *prefixSkipIndex);
+extern bool _bt_create_insertion_scan_key(Relation	rel, ScanDirection dir,
+				ScanKey* startKeys, int keysCount,
+				BTScanInsert inskey, StrategyNumber* stratTotal,
+				bool* goback);
+extern void _bt_set_bsearch_flags(StrategyNumber stratTotal, ScanDirection dir,
+		bool* nextkey, bool* goback);
+extern int _bt_choose_scan_keys(ScanKey scanKeys, int numberOfKeys, ScanDirection dir,
+ScanKey* startKeys, ScanKeyData* notnullkeys,
+  StrategyNumber* stratTotal, int prefix);
+extern BTScanInsert _bt_mkscankey(Relation rel, IndexTuple itup, BTScanInsert key);
+extern void print_itup(BlockNumber blk, IndexTuple left, IndexTuple right, Relation rel, char *extra);
 
 /*
  * prototypes for functions in nbtvalidate.c

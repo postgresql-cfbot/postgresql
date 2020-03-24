@@ -431,8 +431,9 @@ DELETE FROM T WHERE pk BETWEEN 10 AND 20 RETURNING *;
          Output: ctid
          Recheck Cond: ((t.pk >= 10) AND (t.pk <= 20))
          ->  Bitmap Index Scan on t_pkey
+               Skip scan: All
                Index Cond: ((t.pk >= 10) AND (t.pk <= 20))
-(7 rows)
+(8 rows)
 
 -- UPDATE
 UPDATE T SET c_text = '"' || c_text || '"'  WHERE pk < 10;

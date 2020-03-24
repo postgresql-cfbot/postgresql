@@ -149,9 +149,17 @@ extern IndexScanDesc index_beginscan(Relation heapRelation,
 									 Relation indexRelation,
 									 Snapshot snapshot,
 									 int nkeys, int norderbys);
+extern IndexScanDesc index_beginscan_skip(Relation heapRelation,
+									 Relation indexRelation,
+									 Snapshot snapshot,
+									 int nkeys, int norderbys, int prefix);
 extern IndexScanDesc index_beginscan_bitmap(Relation indexRelation,
 											Snapshot snapshot,
 											int nkeys);
+extern IndexScanDesc index_beginscan_bitmap_skip(Relation indexRelation,
+											Snapshot snapshot,
+											int nkeys,
+											int prefix);
 extern void index_rescan(IndexScanDesc scan,
 						 ScanKey keys, int nkeys,
 						 ScanKey orderbys, int norderbys);
@@ -167,10 +175,16 @@ extern IndexScanDesc index_beginscan_parallel(Relation heaprel,
 											  ParallelIndexScanDesc pscan);
 extern ItemPointer index_getnext_tid(IndexScanDesc scan,
 									 ScanDirection direction);
+extern ItemPointer index_getnext_tid_skip(IndexScanDesc scan,
+									 ScanDirection prefixDir,
+									 ScanDirection postfixDir);
 struct TupleTableSlot;
 extern bool index_fetch_heap(IndexScanDesc scan, struct TupleTableSlot *slot);
 extern bool index_getnext_slot(IndexScanDesc scan, ScanDirection direction,
 							   struct TupleTableSlot *slot);
+extern bool index_getnext_slot_skip(IndexScanDesc scan, ScanDirection prefixDir,
+									ScanDirection postfixDir,
+									struct TupleTableSlot *slot);
 extern int64 index_getbitmap(IndexScanDesc scan, TIDBitmap *bitmap);
 
 extern IndexBulkDeleteResult *index_bulk_delete(IndexVacuumInfo *info,
@@ -180,6 +194,8 @@ extern IndexBulkDeleteResult *index_bulk_delete(IndexVacuumInfo *info,
 extern IndexBulkDeleteResult *index_vacuum_cleanup(IndexVacuumInfo *info,
 												   IndexBulkDeleteResult *stats);
 extern bool index_can_return(Relation indexRelation, int attno);
+extern bool index_skip(IndexScanDesc scan, ScanDirection prefixDir,
+					   ScanDirection postfixDir);
 extern RegProcedure index_getprocid(Relation irel, AttrNumber attnum,
 									uint16 procnum);
 extern FmgrInfo *index_getprocinfo(Relation irel, AttrNumber attnum,

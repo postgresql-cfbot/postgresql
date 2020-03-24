@@ -14,7 +14,9 @@
  *		index_open		- open an index relation by relation OID
  *		index_close		- close an index relation
  *		index_beginscan - start a scan of an index with amgettuple
+ *		index_beginscan_skip - start a scan of an index with amgettuple and skipping
  *		index_beginscan_bitmap - start a scan of an index with amgetbitmap
+ *		index_beginscan_bitmap_skip - start a skip scan of an index with amgetbitmap
  *		index_rescan	- restart a scan of an index
  *		index_endscan	- end a scan
  *		index_insert	- insert an index tuple into a relation
@@ -25,14 +27,17 @@
  *		index_parallelrescan  - (re)start a parallel scan of an index
  *		index_beginscan_parallel - join parallel index scan
  *		index_getnext_tid	- get the next TID from a scan
+ *		index_getnext_tid_skip	- get the next TID from a skip scan
  *		index_fetch_heap		- get the scan's next heap tuple
  *		index_getnext_slot	- get the next tuple from a scan
+ *		index_getnext_slot	- get the next tuple from a skip scan
  *		index_getbitmap - get all tuples from a scan
  *		index_bulk_delete	- bulk deletion of index tuples
  *		index_vacuum_cleanup	- post-deletion cleanup of an index
  *		index_can_return	- does index support index-only scans?
  *		index_getprocid - get a support procedure OID
  *		index_getprocinfo - get a support procedure's lookup info
+ *		index_skip		- advance past duplicate key values in a scan
  *
  * NOTES
  *		This file contains the index_ routines which used
@@ -212,6 +217,78 @@ index_beginscan(Relation heapRelation,
 
 	/* prepare to fetch index matches from table */
 	scan->xs_heapfetch = table_index_fetch_begin(heapRelation);
+
+	return scan;
+}
+
+static IndexScanDesc
+index_beginscan_internal_skip(Relation indexRelation,
+						 int nkeys, int norderbys, int prefix, Snapshot snapshot,
+						 ParallelIndexScanDesc pscan, bool temp_snap)
+{
+	IndexScanDesc scan;
+
+	RELATION_CHECKS;
+	CHECK_REL_PROCEDURE(ambeginskipscan);
+
+	if (!(indexRelation->rd_indam->ampredlocks))
+		PredicateLockRelation(indexRelation, snapshot);
+
+	/*
+	 * We hold a reference count to the relcache entry throughout the scan.
+	 */
+	RelationIncrementReferenceCount(indexRelation);
+
+	/*
+	 * Tell the AM to open a scan.
+	 */
+	scan = indexRelation->rd_indam->ambeginskipscan(indexRelation, nkeys,
+												norderbys, prefix);
+	/* Initialize information for parallel scan. */
+	scan->parallel_scan = pscan;
+	scan->xs_temp_snap = temp_snap;
+
+	return scan;
+}
+
+IndexScanDesc
+index_beginscan_skip(Relation heapRelation,
+				Relation indexRelation,
+				Snapshot snapshot,
+				int nkeys, int norderbys, int prefix)
+{
+	IndexScanDesc scan;
+
+	scan = index_beginscan_internal_skip(indexRelation, nkeys, norderbys, prefix, snapshot, NULL, false);
+
+	/*
+	 * Save additional parameters into the scandesc.  Everything else was set
+	 * up by RelationGetIndexScan.
+	 */
+	scan->heapRelation = heapRelation;
+	scan->xs_snapshot = snapshot;
+
+	/* prepare to fetch index matches from table */
+	scan->xs_heapfetch = table_index_fetch_begin(heapRelation);
+
+	return scan;
+}
+
+IndexScanDesc
+index_beginscan_bitmap_skip(Relation indexRelation,
+					   Snapshot snapshot,
+					   int nkeys,
+					   int prefix)
+{
+	IndexScanDesc scan;
+
+	scan = index_beginscan_internal_skip(indexRelation, nkeys, 0, prefix, snapshot, NULL, false);
+
+	/*
+	 * Save additional parameters into the scandesc.  Everything else was set
+	 * up by RelationGetIndexScan.
+	 */
+	scan->xs_snapshot = snapshot;
 
 	return scan;
 }
@@ -544,6 +621,45 @@ index_getnext_tid(IndexScanDesc scan, ScanDirection direction)
 	return &scan->xs_heaptid;
 }
 
+ItemPointer
+index_getnext_tid_skip(IndexScanDesc scan, ScanDirection prefixDir, ScanDirection postfixDir)
+{
+	bool		found;
+
+	SCAN_CHECKS;
+	CHECK_SCAN_PROCEDURE(amgetskiptuple);
+
+	Assert(TransactionIdIsValid(RecentGlobalXmin));
+
+	/*
+	 * The AM's amgettuple proc finds the next index entry matching the scan
+	 * keys, and puts the TID into scan->xs_heaptid.  It should also set
+	 * scan->xs_recheck and possibly scan->xs_itup/scan->xs_hitup, though we
+	 * pay no attention to those fields here.
+	 */
+	found = scan->indexRelation->rd_indam->amgetskiptuple(scan, prefixDir, postfixDir);
+
+	/* Reset kill flag immediately for safety */
+	scan->kill_prior_tuple = false;
+	scan->xs_heap_continue = false;
+
+	/* If we're out of index entries, we're done */
+	if (!found)
+	{
+		/* release resources (like buffer pins) from table accesses */
+		if (scan->xs_heapfetch)
+			table_index_fetch_reset(scan->xs_heapfetch);
+
+		return NULL;
+	}
+	Assert(ItemPointerIsValid(&scan->xs_heaptid));
+
+	pgstat_count_index_tuples(scan->indexRelation, 1);
+
+	/* Return the TID of the tuple we found. */
+	return &scan->xs_heaptid;
+}
+
 /* ----------------
  *		index_fetch_heap - get the scan's next heap tuple
  *
@@ -614,6 +730,38 @@ index_getnext_slot(IndexScanDesc scan, ScanDirection direction, TupleTableSlot *
 
 			/* Time to fetch the next TID from the index */
 			tid = index_getnext_tid(scan, direction);
+
+			/* If we're out of index entries, we're done */
+			if (tid == NULL)
+				break;
+
+			Assert(ItemPointerEquals(tid, &scan->xs_heaptid));
+		}
+
+		/*
+		 * Fetch the next (or only) visible heap tuple for this index entry.
+		 * If we don't find anything, loop around and grab the next TID from
+		 * the index.
+		 */
+		Assert(ItemPointerIsValid(&scan->xs_heaptid));
+		if (index_fetch_heap(scan, slot))
+			return true;
+	}
+
+	return false;
+}
+
+bool
+index_getnext_slot_skip(IndexScanDesc scan, ScanDirection prefixDir, ScanDirection postfixDir, TupleTableSlot *slot)
+{
+	for (;;)
+	{
+		if (!scan->xs_heap_continue)
+		{
+			ItemPointer tid;
+
+			/* Time to fetch the next TID from the index */
+			tid = index_getnext_tid_skip(scan, prefixDir, postfixDir);
 
 			/* If we're out of index entries, we're done */
 			if (tid == NULL)
@@ -728,6 +876,21 @@ index_can_return(Relation indexRelation, int attno)
 		return false;
 
 	return indexRelation->rd_indam->amcanreturn(indexRelation, attno);
+}
+
+/* ----------------
+ *		index_skip
+ *
+ *		Skip past all tuples where the first 'prefix' columns have the
+ *		same value as the last tuple returned in the current scan.
+ * ----------------
+ */
+bool
+index_skip(IndexScanDesc scan, ScanDirection prefixDir, ScanDirection postfixDir)
+{
+	SCAN_CHECKS;
+
+	return scan->indexRelation->rd_indam->amskip(scan, prefixDir, postfixDir);
 }
 
 /* ----------------

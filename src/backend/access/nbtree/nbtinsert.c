@@ -89,7 +89,7 @@ _bt_doinsert(Relation rel, IndexTuple itup,
 	bool		checkingunique = (checkUnique != UNIQUE_CHECK_NO);
 
 	/* we need an insertion scan key to do our search, so build one */
-	itup_key = _bt_mkscankey(rel, itup);
+	itup_key = _bt_mkscankey(rel, itup, NULL);
 
 	if (checkingunique)
 	{

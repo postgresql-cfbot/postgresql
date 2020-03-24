@@ -478,8 +478,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM clstr_expression WHERE upper(b) = 'PREFIX3';
                           QUERY PLAN                           
 ---------------------------------------------------------------
  Index Scan using clstr_expression_upper_b on clstr_expression
+   Skip scan: All
    Index Cond: (upper(b) = 'PREFIX3'::text)
-(2 rows)
+(3 rows)
 
 SELECT * FROM clstr_expression WHERE upper(b) = 'PREFIX3';
  id | a |    b    
@@ -491,8 +492,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM clstr_expression WHERE -a = -3 ORDER BY -a, b;
                           QUERY PLAN                           
 ---------------------------------------------------------------
  Index Scan using clstr_expression_minus_a on clstr_expression
+   Skip scan: All
    Index Cond: ((- a) = '-3'::integer)
-(2 rows)
+(3 rows)
 
 SELECT * FROM clstr_expression WHERE -a = -3 ORDER BY -a, b;
  id  | a |     b     
@@ -512,8 +514,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM clstr_expression WHERE upper(b) = 'PREFIX3';
                           QUERY PLAN                           
 ---------------------------------------------------------------
  Index Scan using clstr_expression_upper_b on clstr_expression
+   Skip scan: All
    Index Cond: (upper(b) = 'PREFIX3'::text)
-(2 rows)
+(3 rows)
 
 SELECT * FROM clstr_expression WHERE upper(b) = 'PREFIX3';
  id | a |    b    
@@ -525,8 +528,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM clstr_expression WHERE -a = -3 ORDER BY -a, b;
                           QUERY PLAN                           
 ---------------------------------------------------------------
  Index Scan using clstr_expression_minus_a on clstr_expression
+   Skip scan: All
    Index Cond: ((- a) = '-3'::integer)
-(2 rows)
+(3 rows)
 
 SELECT * FROM clstr_expression WHERE -a = -3 ORDER BY -a, b;
  id  | a |     b     
@@ -546,8 +550,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM clstr_expression WHERE upper(b) = 'PREFIX3';
                           QUERY PLAN                           
 ---------------------------------------------------------------
  Index Scan using clstr_expression_upper_b on clstr_expression
+   Skip scan: All
    Index Cond: (upper(b) = 'PREFIX3'::text)
-(2 rows)
+(3 rows)
 
 SELECT * FROM clstr_expression WHERE upper(b) = 'PREFIX3';
  id | a |    b    
@@ -559,8 +564,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM clstr_expression WHERE -a = -3 ORDER BY -a, b;
                           QUERY PLAN                           
 ---------------------------------------------------------------
  Index Scan using clstr_expression_minus_a on clstr_expression
+   Skip scan: All
    Index Cond: ((- a) = '-3'::integer)
-(2 rows)
+(3 rows)
 
 SELECT * FROM clstr_expression WHERE -a = -3 ORDER BY -a, b;
  id  | a |     b     

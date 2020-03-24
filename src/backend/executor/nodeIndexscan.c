@@ -69,6 +69,37 @@ static void reorderqueue_push(IndexScanState *node, TupleTableSlot *slot,
 							  Datum *orderbyvals, bool *orderbynulls);
 static HeapTuple reorderqueue_pop(IndexScanState *node);
 
+static bool
+IndexSkip(IndexScanState *node)
+{
+	EState	   *estate;
+	ScanDirection direction;
+	IndexScanDesc scandesc;
+	IndexScan *indexscan = (IndexScan *) node->ss.ps.plan;
+
+	if (!node->iss_Distinct)
+		return true;
+
+	/*
+	 * extract necessary information from index scan node
+	 */
+	estate = node->ss.ps.state;
+	direction = estate->es_direction;
+	/* flip direction if this is an overall backward scan */
+	if (ScanDirectionIsBackward(indexscan->indexorderdir))
+	{
+		if (ScanDirectionIsForward(direction))
+			direction = BackwardScanDirection;
+		else if (ScanDirectionIsBackward(direction))
+			direction = ForwardScanDirection;
+	}
+	scandesc = node->iss_ScanDesc;
+
+	if (!index_skip(scandesc, direction, indexscan->indexorderdir))
+		return false;
+
+	return true;
+}
 
 /* ----------------------------------------------------------------
  *		IndexNext
@@ -85,6 +116,7 @@ IndexNext(IndexScanState *node)
 	ScanDirection direction;
 	IndexScanDesc scandesc;
 	TupleTableSlot *slot;
+	IndexScan *indexscan = (IndexScan *) node->ss.ps.plan;
 
 	/*
 	 * extract necessary information from index scan node
@@ -92,7 +124,7 @@ IndexNext(IndexScanState *node)
 	estate = node->ss.ps.state;
 	direction = estate->es_direction;
 	/* flip direction if this is an overall backward scan */
-	if (ScanDirectionIsBackward(((IndexScan *) node->ss.ps.plan)->indexorderdir))
+	if (ScanDirectionIsBackward(indexscan->indexorderdir))
 	{
 		if (ScanDirectionIsForward(direction))
 			direction = BackwardScanDirection;
@@ -109,13 +141,24 @@ IndexNext(IndexScanState *node)
 		 * We reach here if the index scan is not parallel, or if we're
 		 * serially executing an index scan that was planned to be parallel.
 		 */
-		scandesc = index_beginscan(node->ss.ss_currentRelation,
-								   node->iss_RelationDesc,
-								   estate->es_snapshot,
-								   node->iss_NumScanKeys,
-								   node->iss_NumOrderByKeys);
+		if (node->iss_SkipPrefixSize > 0)
+			scandesc = index_beginscan_skip(node->ss.ss_currentRelation,
+									   node->iss_RelationDesc,
+									   estate->es_snapshot,
+									   node->iss_NumScanKeys,
+									   node->iss_NumOrderByKeys,
+									   Min(IndexRelationGetNumberOfKeyAttributes(node->iss_RelationDesc), node->iss_SkipPrefixSize));
+		else
+			scandesc = index_beginscan(node->ss.ss_currentRelation,
+									   node->iss_RelationDesc,
+									   estate->es_snapshot,
+									   node->iss_NumScanKeys,
+									   node->iss_NumOrderByKeys);
 
 		node->iss_ScanDesc = scandesc;
+
+		/* Index skip scan assumes xs_want_itup, so set it to true if we skip over distinct */
+		node->iss_ScanDesc->xs_want_itup = indexscan->indexdistinct;
 
 		/*
 		 * If no run-time keys to calculate or they are ready, go ahead and
@@ -130,7 +173,9 @@ IndexNext(IndexScanState *node)
 	/*
 	 * ok, now that we have what we need, fetch the next tuple.
 	 */
-	while (index_getnext_slot(scandesc, direction, slot))
+	while (node->iss_SkipPrefixSize > 0 ?
+		   index_getnext_slot_skip(scandesc, direction, node->iss_Distinct ? indexscan->indexorderdir : direction, slot) :
+		   index_getnext_slot(scandesc, direction, slot))
 	{
 		CHECK_FOR_INTERRUPTS();
 
@@ -530,13 +575,15 @@ ExecIndexScan(PlanState *pstate)
 		ExecReScan((PlanState *) node);
 
 	if (node->iss_NumOrderByKeys > 0)
-		return ExecScan(&node->ss,
+		return ExecScanExtended(&node->ss,
 						(ExecScanAccessMtd) IndexNextWithReorder,
-						(ExecScanRecheckMtd) IndexRecheck);
+						(ExecScanRecheckMtd) IndexRecheck,
+						node->iss_Distinct ? (ExecScanSkipMtd) IndexSkip : NULL);
 	else
-		return ExecScan(&node->ss,
+		return ExecScanExtended(&node->ss,
 						(ExecScanAccessMtd) IndexNext,
-						(ExecScanRecheckMtd) IndexRecheck);
+						(ExecScanRecheckMtd) IndexRecheck,
+						node->iss_Distinct ? (ExecScanSkipMtd) IndexSkip : NULL);
 }
 
 /* ----------------------------------------------------------------
@@ -910,6 +957,8 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 	indexstate->ss.ps.plan = (Plan *) node;
 	indexstate->ss.ps.state = estate;
 	indexstate->ss.ps.ExecProcNode = ExecIndexScan;
+	indexstate->iss_SkipPrefixSize = node->indexskipprefixsize;
+	indexstate->iss_Distinct = node->indexdistinct;
 
 	/*
 	 * Miscellaneous initialization

@@ -895,12 +895,13 @@ where o.ten = 0;
                Filter: (o.ten = 0)
          ->  Index Scan using onek_unique1 on public.onek i
                Output: (hashed SubPlan 1), random()
+               Skip scan: All
                Index Cond: (i.unique1 = o.unique1)
                SubPlan 1
                  ->  Seq Scan on public.int4_tbl
                        Output: int4_tbl.f1
                        Filter: (int4_tbl.f1 <= $0)
-(14 rows)
+(15 rows)
 
 select sum(ss.tst::int) from
   onek o cross join lateral (
@@ -935,11 +936,13 @@ where o.ten = 1;
                      ->  Append
                            ->  Subquery Scan on "*SELECT* 1"
                                  ->  Index Scan using onek_unique1 on onek i1
+                                       Skip scan: All
                                        Index Cond: (unique1 = o.unique1)
                            ->  Subquery Scan on "*SELECT* 2"
                                  ->  Index Scan using onek_unique1 on onek i2
+                                       Skip scan: All
                                        Index Cond: (unique1 = o.unique2)
-(13 rows)
+(15 rows)
 
 select count(*) from
   onek o cross join lateral (
@@ -1095,7 +1098,8 @@ select * from int4_tbl where
    SubPlan 1
      ->  Index Only Scan using tenk1_unique1 on public.tenk1 a
            Output: a.unique1
-(10 rows)
+           Skip scan: All
+(11 rows)
 
 select * from int4_tbl where
   (case when f1 in (select unique1 from tenk1 a) then f1 else null end) in

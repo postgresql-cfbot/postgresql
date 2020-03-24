@@ -28,6 +28,7 @@ extern char *pretty_format_node_dump(const char *dump);
 extern void print_rt(const List *rtable);
 extern void print_expr(const Node *expr, const List *rtable);
 extern void print_pathkeys(const List *pathkeys, const List *rtable);
+extern void print_uniquekeys(const List *uniquekeys, const List *rtable);
 extern void print_tl(const List *tlist, const List *rtable);
 extern void print_slot(TupleTableSlot *slot);
 

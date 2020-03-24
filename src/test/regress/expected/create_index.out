@@ -1804,12 +1804,15 @@ SELECT * FROM tenk1
    Recheck Cond: (((thousand = 42) AND (tenthous = 1)) OR ((thousand = 42) AND (tenthous = 3)) OR ((thousand = 42) AND (tenthous = 42)))
    ->  BitmapOr
          ->  Bitmap Index Scan on tenk1_thous_tenthous
+               Skip scan: All
                Index Cond: ((thousand = 42) AND (tenthous = 1))
          ->  Bitmap Index Scan on tenk1_thous_tenthous
+               Skip scan: All
                Index Cond: ((thousand = 42) AND (tenthous = 3))
          ->  Bitmap Index Scan on tenk1_thous_tenthous
+               Skip scan: All
                Index Cond: ((thousand = 42) AND (tenthous = 42))
-(9 rows)
+(12 rows)
 
 SELECT * FROM tenk1
   WHERE thousand = 42 AND (tenthous = 1 OR tenthous = 3 OR tenthous = 42);
@@ -1828,13 +1831,16 @@ SELECT count(*) FROM tenk1
          Recheck Cond: ((hundred = 42) AND ((thousand = 42) OR (thousand = 99)))
          ->  BitmapAnd
                ->  Bitmap Index Scan on tenk1_hundred
+                     Skip scan: All
                      Index Cond: (hundred = 42)
                ->  BitmapOr
                      ->  Bitmap Index Scan on tenk1_thous_tenthous
+                           Skip scan: All
                            Index Cond: (thousand = 42)
                      ->  Bitmap Index Scan on tenk1_thous_tenthous
+                           Skip scan: All
                            Index Cond: (thousand = 99)
-(11 rows)
+(14 rows)
 
 SELECT count(*) FROM tenk1
   WHERE hundred = 42 AND (thousand = 42 OR thousand = 99);
@@ -1859,8 +1865,9 @@ EXPLAIN (COSTS OFF)
    ->  Bitmap Heap Scan on dupindexcols
          Recheck Cond: ((f1 >= 'WA'::text) AND (f1 <= 'ZZZ'::text) AND (id < 1000) AND (f1 ~<~ 'YX'::text))
          ->  Bitmap Index Scan on dupindexcols_i
+               Skip scan: All
                Index Cond: ((f1 >= 'WA'::text) AND (f1 <= 'ZZZ'::text) AND (id < 1000) AND (f1 ~<~ 'YX'::text))
-(5 rows)
+(6 rows)
 
 SELECT count(*) FROM dupindexcols
   WHERE f1 BETWEEN 'WA' AND 'ZZZ' and id < 1000 and f1 ~<~ 'YX';
@@ -1880,8 +1887,9 @@ ORDER BY unique1;
                       QUERY PLAN                       
 -------------------------------------------------------
  Index Only Scan using tenk1_unique1 on tenk1
+   Skip scan: All
    Index Cond: (unique1 = ANY ('{1,42,7}'::integer[]))
-(2 rows)
+(3 rows)
 
 SELECT unique1 FROM tenk1
 WHERE unique1 IN (1,42,7)
@@ -1900,9 +1908,10 @@ ORDER BY thousand;
                       QUERY PLAN                       
 -------------------------------------------------------
  Index Only Scan using tenk1_thous_tenthous on tenk1
+   Skip scan: All
    Index Cond: (thousand < 2)
    Filter: (tenthous = ANY ('{1001,3000}'::integer[]))
-(3 rows)
+(4 rows)
 
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
@@ -1923,8 +1932,9 @@ ORDER BY thousand;
  Sort
    Sort Key: thousand
    ->  Index Scan using tenk1_thous_tenthous on tenk1
+         Skip scan: All
          Index Cond: ((thousand < 2) AND (tenthous = ANY ('{1001,3000}'::integer[])))
-(4 rows)
+(5 rows)
 
 SELECT thousand, tenthous FROM tenk1
 WHERE thousand < 2 AND tenthous IN (1001,3000)
@@ -1944,8 +1954,9 @@ explain (costs off)
                       QUERY PLAN                      
 ------------------------------------------------------
  Index Scan using tenk1_thous_tenthous on tenk1
+   Skip scan: All
    Index Cond: ((thousand = 1) AND (tenthous = 1001))
-(2 rows)
+(3 rows)
 
 --
 -- Check matching of boolean index columns to WHERE conditions and sort keys
@@ -1957,7 +1968,8 @@ explain (costs off)
 -------------------------------------------------------
  Limit
    ->  Index Scan using boolindex_b_i_key on boolindex
-(2 rows)
+         Skip scan: All
+(3 rows)
 
 explain (costs off)
   select * from boolindex where b order by i limit 10;
@@ -1965,8 +1977,9 @@ explain (costs off)
 -------------------------------------------------------
  Limit
    ->  Index Scan using boolindex_b_i_key on boolindex
+         Skip scan: All
          Index Cond: (b = true)
-(3 rows)
+(4 rows)
 
 explain (costs off)
   select * from boolindex where b = true order by i desc limit 10;
@@ -1974,8 +1987,9 @@ explain (costs off)
 ----------------------------------------------------------------
  Limit
    ->  Index Scan Backward using boolindex_b_i_key on boolindex
+         Skip scan: All
          Index Cond: (b = true)
-(3 rows)
+(4 rows)
 
 explain (costs off)
   select * from boolindex where not b order by i limit 10;
@@ -1983,8 +1997,9 @@ explain (costs off)
 -------------------------------------------------------
  Limit
    ->  Index Scan using boolindex_b_i_key on boolindex
+         Skip scan: All
          Index Cond: (b = false)
-(3 rows)
+(4 rows)
 
 explain (costs off)
   select * from boolindex where b is true order by i desc limit 10;
@@ -1992,8 +2007,9 @@ explain (costs off)
 ----------------------------------------------------------------
  Limit
    ->  Index Scan Backward using boolindex_b_i_key on boolindex
+         Skip scan: All
          Index Cond: (b = true)
-(3 rows)
+(4 rows)
 
 explain (costs off)
   select * from boolindex where b is false order by i desc limit 10;
@@ -2001,8 +2017,9 @@ explain (costs off)
 ----------------------------------------------------------------
  Limit
    ->  Index Scan Backward using boolindex_b_i_key on boolindex
+         Skip scan: All
          Index Cond: (b = false)
-(3 rows)
+(4 rows)
 
 --
 -- REINDEX (VERBOSE)

@@ -1418,14 +1418,16 @@ explain (costs off) delete from t1 where a = 1;
  Delete on t2
    ->  Nested Loop
          ->  Index Scan using t1_pkey on t1
+               Skip scan: All
                Index Cond: (a = 1)
          ->  Seq Scan on t2
                Filter: (b = 1)
  
  Delete on t1
    ->  Index Scan using t1_pkey on t1
+         Skip scan: All
          Index Cond: (a = 1)
-(10 rows)
+(12 rows)
 
 delete from t1 where a = 1;
 -- Test a primary key with attributes located in later attnum positions

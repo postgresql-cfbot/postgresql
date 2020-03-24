@@ -409,6 +409,8 @@ typedef struct IndexScan
 	List	   *indexorderbyorig;	/* the same in original form */
 	List	   *indexorderbyops;	/* OIDs of sort ops for ORDER BY exprs */
 	ScanDirection indexorderdir;	/* forward or backward or don't care */
+	int			indexskipprefixsize;	/* the size of the prefix for skip scans */
+	bool		indexdistinct; /* whether only distinct keys are requested */
 } IndexScan;
 
 /* ----------------
@@ -436,6 +438,8 @@ typedef struct IndexOnlyScan
 	List	   *indexorderby;	/* list of index ORDER BY exprs */
 	List	   *indextlist;		/* TargetEntry list describing index's cols */
 	ScanDirection indexorderdir;	/* forward or backward or don't care */
+	int			indexskipprefixsize;	/* the size of the prefix for skip scans */
+	bool		indexdistinct; /* whether only distinct keys are requested */
 } IndexOnlyScan;
 
 /* ----------------
@@ -462,6 +466,7 @@ typedef struct BitmapIndexScan
 	bool		isshared;		/* Create shared bitmap if set */
 	List	   *indexqual;		/* list of index quals (OpExprs) */
 	List	   *indexqualorig;	/* the same in original form */
+	int			indexskipprefixsize;	/* the size of the prefix for skip scans */
 } BitmapIndexScan;
 
 /* ----------------

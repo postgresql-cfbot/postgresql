@@ -720,8 +720,9 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan using tenk1_unique1 on tenk1
+                 Skip scan: All
                  Index Cond: (unique1 IS NOT NULL)
-(5 rows)
+(6 rows)
 
 select min(unique1) from tenk1;
  min 
@@ -737,8 +738,9 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan Backward using tenk1_unique1 on tenk1
+                 Skip scan: All
                  Index Cond: (unique1 IS NOT NULL)
-(5 rows)
+(6 rows)
 
 select max(unique1) from tenk1;
  max  
@@ -754,8 +756,9 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan Backward using tenk1_unique1 on tenk1
+                 Skip scan: All
                  Index Cond: ((unique1 IS NOT NULL) AND (unique1 < 42))
-(5 rows)
+(6 rows)
 
 select max(unique1) from tenk1 where unique1 < 42;
  max 
@@ -771,8 +774,9 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan Backward using tenk1_unique1 on tenk1
+                 Skip scan: All
                  Index Cond: ((unique1 IS NOT NULL) AND (unique1 > 42))
-(5 rows)
+(6 rows)
 
 select max(unique1) from tenk1 where unique1 > 42;
  max  
@@ -794,8 +798,9 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan Backward using tenk1_unique1 on tenk1
+                 Skip scan: All
                  Index Cond: ((unique1 IS NOT NULL) AND (unique1 > 42000))
-(5 rows)
+(6 rows)
 
 select max(unique1) from tenk1 where unique1 > 42000;
  max 
@@ -813,8 +818,9 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan Backward using tenk1_thous_tenthous on tenk1
+                 Skip scan: All
                  Index Cond: ((thousand = 33) AND (tenthous IS NOT NULL))
-(5 rows)
+(6 rows)
 
 select max(tenthous) from tenk1 where thousand = 33;
  max  
@@ -830,8 +836,9 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan using tenk1_thous_tenthous on tenk1
+                 Skip scan: All
                  Index Cond: ((thousand = 33) AND (tenthous IS NOT NULL))
-(5 rows)
+(6 rows)
 
 select min(tenthous) from tenk1 where thousand = 33;
  min 
@@ -851,8 +858,9 @@ explain (costs off)
            InitPlan 1 (returns $1)
              ->  Limit
                    ->  Index Only Scan using tenk1_unique1 on tenk1
+                         Skip scan: All
                          Index Cond: ((unique1 IS NOT NULL) AND (unique1 > int4_tbl.f1))
-(7 rows)
+(8 rows)
 
 select f1, (select min(unique1) from tenk1 where unique1 > f1) AS gt
   from int4_tbl;
@@ -875,9 +883,10 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan Backward using tenk1_unique2 on tenk1
+                 Skip scan: All
                  Index Cond: (unique2 IS NOT NULL)
    ->  Result
-(7 rows)
+(8 rows)
 
 select distinct max(unique2) from tenk1;
  max  
@@ -894,9 +903,10 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan Backward using tenk1_unique2 on tenk1
+                 Skip scan: All
                  Index Cond: (unique2 IS NOT NULL)
    ->  Result
-(7 rows)
+(8 rows)
 
 select max(unique2) from tenk1 order by 1;
  max  
@@ -913,9 +923,10 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan Backward using tenk1_unique2 on tenk1
+                 Skip scan: All
                  Index Cond: (unique2 IS NOT NULL)
    ->  Result
-(7 rows)
+(8 rows)
 
 select max(unique2) from tenk1 order by max(unique2);
  max  
@@ -932,9 +943,10 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan Backward using tenk1_unique2 on tenk1
+                 Skip scan: All
                  Index Cond: (unique2 IS NOT NULL)
    ->  Result
-(7 rows)
+(8 rows)
 
 select max(unique2) from tenk1 order by max(unique2)+1;
  max  
@@ -951,10 +963,11 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan Backward using tenk1_unique2 on tenk1
+                 Skip scan: All
                  Index Cond: (unique2 IS NOT NULL)
    ->  ProjectSet
          ->  Result
-(8 rows)
+(9 rows)
 
 select max(unique2), generate_series(1,3) as g from tenk1 order by g desc;
  max  | g 
@@ -1006,24 +1019,32 @@ explain (costs off)
            ->  Merge Append
                  Sort Key: minmaxtest.f1
                  ->  Index Only Scan using minmaxtesti on minmaxtest minmaxtest_1
+                       Skip scan: All
                        Index Cond: (f1 IS NOT NULL)
                  ->  Index Only Scan using minmaxtest1i on minmaxtest1 minmaxtest_2
+                       Skip scan: All
                        Index Cond: (f1 IS NOT NULL)
                  ->  Index Only Scan Backward using minmaxtest2i on minmaxtest2 minmaxtest_3
+                       Skip scan: All
                        Index Cond: (f1 IS NOT NULL)
                  ->  Index Only Scan using minmaxtest3i on minmaxtest3 minmaxtest_4
+                       Skip scan: All
    InitPlan 2 (returns $1)
      ->  Limit
            ->  Merge Append
                  Sort Key: minmaxtest_5.f1 DESC
                  ->  Index Only Scan Backward using minmaxtesti on minmaxtest minmaxtest_6
+                       Skip scan: All
                        Index Cond: (f1 IS NOT NULL)
                  ->  Index Only Scan Backward using minmaxtest1i on minmaxtest1 minmaxtest_7
+                       Skip scan: All
                        Index Cond: (f1 IS NOT NULL)
                  ->  Index Only Scan using minmaxtest2i on minmaxtest2 minmaxtest_8
+                       Skip scan: All
                        Index Cond: (f1 IS NOT NULL)
                  ->  Index Only Scan Backward using minmaxtest3i on minmaxtest3 minmaxtest_9
-(23 rows)
+                       Skip scan: All
+(31 rows)
 
 select min(f1), max(f1) from minmaxtest;
  min | max 
@@ -1042,27 +1063,35 @@ explain (costs off)
            ->  Merge Append
                  Sort Key: minmaxtest.f1
                  ->  Index Only Scan using minmaxtesti on minmaxtest minmaxtest_1
+                       Skip scan: All
                        Index Cond: (f1 IS NOT NULL)
                  ->  Index Only Scan using minmaxtest1i on minmaxtest1 minmaxtest_2
+                       Skip scan: All
                        Index Cond: (f1 IS NOT NULL)
                  ->  Index Only Scan Backward using minmaxtest2i on minmaxtest2 minmaxtest_3
+                       Skip scan: All
                        Index Cond: (f1 IS NOT NULL)
                  ->  Index Only Scan using minmaxtest3i on minmaxtest3 minmaxtest_4
+                       Skip scan: All
    InitPlan 2 (returns $1)
      ->  Limit
            ->  Merge Append
                  Sort Key: minmaxtest_5.f1 DESC
                  ->  Index Only Scan Backward using minmaxtesti on minmaxtest minmaxtest_6
+                       Skip scan: All
                        Index Cond: (f1 IS NOT NULL)
                  ->  Index Only Scan Backward using minmaxtest1i on minmaxtest1 minmaxtest_7
+                       Skip scan: All
                        Index Cond: (f1 IS NOT NULL)
                  ->  Index Only Scan using minmaxtest2i on minmaxtest2 minmaxtest_8
+                       Skip scan: All
                        Index Cond: (f1 IS NOT NULL)
                  ->  Index Only Scan Backward using minmaxtest3i on minmaxtest3 minmaxtest_9
+                       Skip scan: All
    ->  Sort
          Sort Key: ($0), ($1)
          ->  Result
-(26 rows)
+(34 rows)
 
 select distinct min(f1), max(f1) from minmaxtest;
  min | max 

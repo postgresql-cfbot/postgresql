@@ -523,8 +523,9 @@ explain (costs off)
                ->  Parallel Bitmap Heap Scan on tenk1
                      Recheck Cond: (hundred > 1)
                      ->  Bitmap Index Scan on tenk1_hundred
+                           Skip scan: All
                            Index Cond: (hundred > 1)
-(10 rows)
+(11 rows)
 
 select count(*) from tenk1, tenk2 where tenk1.hundred > 1 and tenk2.thousand=0;
  count 
@@ -621,7 +622,8 @@ explain (costs off)
                      Merge Cond: (tenk1.unique1 = tenk2.unique1)
                      ->  Parallel Index Only Scan using tenk1_unique1 on tenk1
                      ->  Index Only Scan using tenk2_unique1 on tenk2
-(8 rows)
+                           Skip scan: All
+(9 rows)
 
 select  count(*) from tenk1, tenk2 where tenk1.unique1 = tenk2.unique1;
  count 
@@ -949,8 +951,9 @@ explain (costs off)
    Workers Planned: 1
    Single Copy: true
    ->  Index Scan using tenk1_unique1 on tenk1
+         Skip scan: All
          Index Cond: (unique1 = 1)
-(5 rows)
+(6 rows)
 
 ROLLBACK TO SAVEPOINT settings;
 -- exercise record typmod remapping between backends

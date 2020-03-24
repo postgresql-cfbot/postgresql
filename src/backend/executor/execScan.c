@@ -133,6 +133,14 @@ ExecScanFetch(ScanState *node,
 	return (*accessMtd) (node);
 }
 
+TupleTableSlot *
+ExecScan(ScanState *node,
+		 ExecScanAccessMtd accessMtd,	/* function returning a tuple */
+		 ExecScanRecheckMtd recheckMtd)
+{
+	return ExecScanExtended(node, accessMtd, recheckMtd, NULL);
+}
+
 /* ----------------------------------------------------------------
  *		ExecScan
  *
@@ -155,9 +163,10 @@ ExecScanFetch(ScanState *node,
  * ----------------------------------------------------------------
  */
 TupleTableSlot *
-ExecScan(ScanState *node,
+ExecScanExtended(ScanState *node,
 		 ExecScanAccessMtd accessMtd,	/* function returning a tuple */
-		 ExecScanRecheckMtd recheckMtd)
+		 ExecScanRecheckMtd recheckMtd,
+		 ExecScanSkipMtd skipMtd)
 {
 	ExprContext *econtext;
 	ExprState  *qual;
@@ -170,6 +179,20 @@ ExecScan(ScanState *node,
 	projInfo = node->ps.ps_ProjInfo;
 	econtext = node->ps.ps_ExprContext;
 
+	if (skipMtd != NULL && node->ss_FirstTupleEmitted)
+	{
+		bool cont = skipMtd(node);
+		if (!cont)
+		{
+			node->ss_FirstTupleEmitted = false;
+			return ExecClearTuple(node->ss_ScanTupleSlot);
+		}
+	}
+	else
+	{
+		node->ss_FirstTupleEmitted = true;
+	}
+
 	/* interrupt checks are in ExecScanFetch */
 
 	/*
@@ -178,8 +201,13 @@ ExecScan(ScanState *node,
 	 */
 	if (!qual && !projInfo)
 	{
+		TupleTableSlot *slot;
+
 		ResetExprContext(econtext);
-		return ExecScanFetch(node, accessMtd, recheckMtd);
+		slot = ExecScanFetch(node, accessMtd, recheckMtd);
+		if (TupIsNull(slot))
+			node->ss_FirstTupleEmitted = false;
+		return slot;
 	}
 
 	/*
@@ -206,6 +234,7 @@ ExecScan(ScanState *node,
 		 */
 		if (TupIsNull(slot))
 		{
+			node->ss_FirstTupleEmitted = false;
 			if (projInfo)
 				return ExecClearTuple(projInfo->pi_state.resultslot);
 			else

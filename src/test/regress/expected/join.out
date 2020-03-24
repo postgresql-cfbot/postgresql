@@ -1857,16 +1857,16 @@ select * from int4_tbl i4, tenk1 a
 where exists(select * from tenk1 b
              where a.twothousand = b.twothousand and a.fivethous <> b.fivethous)
       and i4.f1 = a.tenthous;
-                  QUERY PLAN                  
-----------------------------------------------
+                          QUERY PLAN                          
+--------------------------------------------------------------
  Hash Semi Join
    Hash Cond: (a.twothousand = b.twothousand)
    Join Filter: (a.fivethous <> b.fivethous)
-   ->  Hash Join
-         Hash Cond: (a.tenthous = i4.f1)
-         ->  Seq Scan on tenk1 a
-         ->  Hash
-               ->  Seq Scan on int4_tbl i4
+   ->  Nested Loop
+         ->  Seq Scan on int4_tbl i4
+         ->  Index Scan using tenk1_thous_tenthous on tenk1 a
+               Skip scan: All
+               Index Cond: (tenthous = i4.f1)
    ->  Hash
          ->  Seq Scan on tenk1 b
 (10 rows)
@@ -2293,8 +2293,9 @@ where b.f1 = t.thousand and a.f1 = b.f1 and (a.f1+b.f1+999) = t.tenthous;
          ->  Aggregate
                ->  Seq Scan on int4_tbl i4a
          ->  Index Only Scan using tenk1_thous_tenthous on tenk1 t
+               Skip scan: All
                Index Cond: ((thousand = (sum(i4b.f1))) AND (tenthous = ((((sum(i4a.f1) + 1)) + (sum(i4b.f1))) + 999)))
-(9 rows)
+(10 rows)
 
 select a.f1, b.f1, t.thousand, t.tenthous from
   tenk1 t,
@@ -2373,7 +2374,8 @@ select count(*) from
                ->  Seq Scan on tenk1 x
          ->  Materialize
                ->  Index Scan using tenk1_unique2 on tenk1 y
-(9 rows)
+                     Skip scan: All
+(10 rows)
 
 select count(*) from
   (select * from tenk1 x order by x.thousand, x.twothousand, x.fivethous) x
@@ -2493,10 +2495,11 @@ select count(*) from tenk1 a, tenk1 b
    ->  Hash Join
          Hash Cond: (a.hundred = b.thousand)
          ->  Index Only Scan using tenk1_hundred on tenk1 a
+               Skip scan: All
          ->  Hash
                ->  Seq Scan on tenk1 b
                      Filter: ((fivethous % 10) < 10)
-(7 rows)
+(8 rows)
 
 select count(*) from tenk1 a, tenk1 b
   where a.hundred = b.thousand and (b.fivethous % 10) < 10;
@@ -2702,9 +2705,11 @@ select a.idv, b.idv from tidv a, tidv b where a.idv = b.idv;
  Merge Join
    Merge Cond: (a.idv = b.idv)
    ->  Index Only Scan using tidv_idv_idx on tidv a
+         Skip scan: All
    ->  Materialize
          ->  Index Only Scan using tidv_idv_idx on tidv b
-(5 rows)
+               Skip scan: All
+(7 rows)
 
 set enable_mergejoin = 0;
 explain (costs off)
@@ -2714,8 +2719,9 @@ select a.idv, b.idv from tidv a, tidv b where a.idv = b.idv;
  Nested Loop
    ->  Seq Scan on tidv a
    ->  Index Only Scan using tidv_idv_idx on tidv b
+         Skip scan: All
          Index Cond: (idv = a.idv)
-(4 rows)
+(5 rows)
 
 rollback;
 --
@@ -2874,8 +2880,9 @@ SELECT qq, unique1
          ->  Hash
                ->  Seq Scan on int8_tbl b
    ->  Index Scan using tenk1_unique2 on tenk1 c
+         Skip scan: All
          Index Cond: (unique2 = COALESCE((COALESCE(a.q1, '0'::bigint)), (COALESCE(b.q2, '-1'::bigint))))
-(8 rows)
+(9 rows)
 
 SELECT qq, unique1
   FROM
@@ -2938,13 +2945,16 @@ where nt3.id = 1 and ss2.b3;
  Nested Loop
    ->  Nested Loop
          ->  Index Scan using nt3_pkey on nt3
+               Skip scan: All
                Index Cond: (id = 1)
          ->  Index Scan using nt2_pkey on nt2
+               Skip scan: All
                Index Cond: (id = nt3.nt2_id)
    ->  Index Only Scan using nt1_pkey on nt1
+         Skip scan: All
          Index Cond: (id = nt2.nt1_id)
          Filter: (nt2.b1 AND (id IS NOT NULL))
-(9 rows)
+(12 rows)
 
 select nt3.id
 from nt3 as nt3
@@ -3081,12 +3091,14 @@ where q1 = thousand or q2 = thousand;
                Recheck Cond: ((q1.q1 = thousand) OR (q2.q2 = thousand))
                ->  BitmapOr
                      ->  Bitmap Index Scan on tenk1_thous_tenthous
+                           Skip scan: All
                            Index Cond: (thousand = q1.q1)
                      ->  Bitmap Index Scan on tenk1_thous_tenthous
+                           Skip scan: All
                            Index Cond: (thousand = q2.q2)
    ->  Hash
          ->  Seq Scan on int4_tbl
-(15 rows)
+(17 rows)
 
 explain (costs off)
 select * from
@@ -3104,10 +3116,11 @@ where thousand = (q1 + q2);
          ->  Bitmap Heap Scan on tenk1
                Recheck Cond: (thousand = (q1.q1 + q2.q2))
                ->  Bitmap Index Scan on tenk1_thous_tenthous
+                     Skip scan: All
                      Index Cond: (thousand = (q1.q1 + q2.q2))
    ->  Hash
          ->  Seq Scan on int4_tbl
-(12 rows)
+(13 rows)
 
 --
 -- test ability to generate a suitable plan for a star-schema query
@@ -3116,17 +3129,19 @@ explain (costs off)
 select * from
   tenk1, int8_tbl a, int8_tbl b
 where thousand = a.q1 and tenthous = b.q1 and a.q2 = 1 and b.q2 = 2;
-                             QUERY PLAN                              
----------------------------------------------------------------------
+                         QUERY PLAN                         
+------------------------------------------------------------
  Nested Loop
-   ->  Seq Scan on int8_tbl b
-         Filter: (q2 = 2)
+   Join Filter: (tenk1.thousand = a.q1)
    ->  Nested Loop
-         ->  Seq Scan on int8_tbl a
-               Filter: (q2 = 1)
+         ->  Seq Scan on int8_tbl b
+               Filter: (q2 = 2)
          ->  Index Scan using tenk1_thous_tenthous on tenk1
-               Index Cond: ((thousand = a.q1) AND (tenthous = b.q1))
-(8 rows)
+               Skip scan: All
+               Index Cond: (tenthous = b.q1)
+   ->  Seq Scan on int8_tbl a
+         Filter: (q2 = 1)
+(10 rows)
 
 --
 -- test a corner case in which we shouldn't apply the star-schema optimization
@@ -3154,12 +3169,14 @@ where t1.unique2 < 42 and t1.stringu1 > t2.stringu2;
                      ->  Seq Scan on onerow
                      ->  Seq Scan on onerow onerow_1
                ->  Index Scan using tenk1_unique2 on tenk1 t1
+                     Skip scan: All
                      Index Cond: ((unique2 = (11)) AND (unique2 < 42))
          ->  Index Scan using tenk1_unique1 on tenk1 t2
+               Skip scan: All
                Index Cond: (unique1 = (3))
    ->  Seq Scan on int4_tbl i1
          Filter: (f1 = 0)
-(13 rows)
+(15 rows)
 
 select t1.unique2, t1.stringu1, t2.unique1, t2.stringu2 from
   tenk1 t1
@@ -3220,10 +3237,12 @@ where t1.unique2 < 42 and t1.stringu1 > t2.stringu2;
          ->  Seq Scan on int4_tbl i1
                Filter: (f1 = 0)
          ->  Index Scan using tenk1_unique2 on tenk1 t1
+               Skip scan: All
                Index Cond: ((unique2 = (11)) AND (unique2 < 42))
    ->  Index Scan using tenk1_unique1 on tenk1 t2
+         Skip scan: All
          Index Cond: (unique1 = (3))
-(9 rows)
+(11 rows)
 
 select t1.unique2, t1.stringu1, t2.unique1, t2.stringu2 from
   tenk1 t1
@@ -3280,8 +3299,9 @@ where x = unique1;
                   QUERY PLAN                  
 ----------------------------------------------
  Index Only Scan using tenk1_unique1 on tenk1
+   Skip scan: All
    Index Cond: (unique1 = 1)
-(2 rows)
+(3 rows)
 
 explain (verbose, costs off)
 select unique1, x.*
@@ -3295,32 +3315,36 @@ where x = unique1;
          Output: 1, random()
    ->  Index Only Scan using tenk1_unique1 on public.tenk1
          Output: tenk1.unique1
+         Skip scan: All
          Index Cond: (tenk1.unique1 = (1))
-(7 rows)
+(8 rows)
 
 explain (costs off)
 select unique1 from tenk1, f_immutable_int4(1) x where x = unique1;
                   QUERY PLAN                  
 ----------------------------------------------
  Index Only Scan using tenk1_unique1 on tenk1
+   Skip scan: All
    Index Cond: (unique1 = 1)
-(2 rows)
+(3 rows)
 
 explain (costs off)
 select unique1 from tenk1, lateral f_immutable_int4(1) x where x = unique1;
                   QUERY PLAN                  
 ----------------------------------------------
  Index Only Scan using tenk1_unique1 on tenk1
+   Skip scan: All
    Index Cond: (unique1 = 1)
-(2 rows)
+(3 rows)
 
 explain (costs off)
 select unique1, x from tenk1 join f_immutable_int4(1) x on unique1 = x;
                   QUERY PLAN                  
 ----------------------------------------------
  Index Only Scan using tenk1_unique1 on tenk1
+   Skip scan: All
    Index Cond: (unique1 = 1)
-(2 rows)
+(3 rows)
 
 explain (costs off)
 select unique1, x from tenk1 left join f_immutable_int4(1) x on unique1 = x;
@@ -3329,9 +3353,10 @@ select unique1, x from tenk1 left join f_immutable_int4(1) x on unique1 = x;
  Nested Loop Left Join
    Join Filter: (tenk1.unique1 = 1)
    ->  Index Only Scan using tenk1_unique1 on tenk1
+         Skip scan: All
    ->  Materialize
          ->  Result
-(5 rows)
+(6 rows)
 
 explain (costs off)
 select unique1, x from tenk1 right join f_immutable_int4(1) x on unique1 = x;
@@ -3340,8 +3365,9 @@ select unique1, x from tenk1 right join f_immutable_int4(1) x on unique1 = x;
  Nested Loop Left Join
    ->  Result
    ->  Index Only Scan using tenk1_unique1 on tenk1
+         Skip scan: All
          Index Cond: (unique1 = 1)
-(4 rows)
+(5 rows)
 
 explain (costs off)
 select unique1, x from tenk1 full join f_immutable_int4(1) x on unique1 = x;
@@ -3350,10 +3376,11 @@ select unique1, x from tenk1 full join f_immutable_int4(1) x on unique1 = x;
  Merge Full Join
    Merge Cond: (tenk1.unique1 = (1))
    ->  Index Only Scan using tenk1_unique1 on tenk1
+         Skip scan: All
    ->  Sort
          Sort Key: (1)
          ->  Result
-(6 rows)
+(7 rows)
 
 -- check that pullup of a const function allows further const-folding
 explain (costs off)
@@ -3382,13 +3409,15 @@ where nt3.id = 1 and ss2.b3;
  Nested Loop Left Join
    Filter: ((nt2.b1 OR ((0) = 42)))
    ->  Index Scan using nt3_pkey on nt3
+         Skip scan: All
          Index Cond: (id = 1)
    ->  Nested Loop Left Join
          Join Filter: (0 = nt2.nt1_id)
          ->  Index Scan using nt2_pkey on nt2
+               Skip scan: All
                Index Cond: (id = nt3.nt2_id)
          ->  Result
-(9 rows)
+(11 rows)
 
 drop function f_immutable_int4(int);
 -- test inlining when function returns composite
@@ -3443,18 +3472,22 @@ select * from tenk1 a join tenk1 b on
          Recheck Cond: ((unique1 = 2) OR (hundred = 4))
          ->  BitmapOr
                ->  Bitmap Index Scan on tenk1_unique1
+                     Skip scan: All
                      Index Cond: (unique1 = 2)
                ->  Bitmap Index Scan on tenk1_hundred
+                     Skip scan: All
                      Index Cond: (hundred = 4)
    ->  Materialize
          ->  Bitmap Heap Scan on tenk1 a
                Recheck Cond: ((unique1 = 1) OR (unique2 = 3))
                ->  BitmapOr
                      ->  Bitmap Index Scan on tenk1_unique1
+                           Skip scan: All
                            Index Cond: (unique1 = 1)
                      ->  Bitmap Index Scan on tenk1_unique2
+                           Skip scan: All
                            Index Cond: (unique2 = 3)
-(17 rows)
+(21 rows)
 
 explain (costs off)
 select * from tenk1 a join tenk1 b on
@@ -3470,10 +3503,12 @@ select * from tenk1 a join tenk1 b on
                Recheck Cond: ((unique1 = 1) OR (unique2 = 3))
                ->  BitmapOr
                      ->  Bitmap Index Scan on tenk1_unique1
+                           Skip scan: All
                            Index Cond: (unique1 = 1)
                      ->  Bitmap Index Scan on tenk1_unique2
+                           Skip scan: All
                            Index Cond: (unique2 = 3)
-(12 rows)
+(14 rows)
 
 explain (costs off)
 select * from tenk1 a join tenk1 b on
@@ -3487,20 +3522,25 @@ select * from tenk1 a join tenk1 b on
          Recheck Cond: ((unique1 = 2) OR (hundred = 4))
          ->  BitmapOr
                ->  Bitmap Index Scan on tenk1_unique1
+                     Skip scan: All
                      Index Cond: (unique1 = 2)
                ->  Bitmap Index Scan on tenk1_hundred
+                     Skip scan: All
                      Index Cond: (hundred = 4)
    ->  Materialize
          ->  Bitmap Heap Scan on tenk1 a
                Recheck Cond: ((unique1 = 1) OR (unique2 = 3) OR (unique2 = 7))
                ->  BitmapOr
                      ->  Bitmap Index Scan on tenk1_unique1
+                           Skip scan: All
                            Index Cond: (unique1 = 1)
                      ->  Bitmap Index Scan on tenk1_unique2
+                           Skip scan: All
                            Index Cond: (unique2 = 3)
                      ->  Bitmap Index Scan on tenk1_unique2
+                           Skip scan: All
                            Index Cond: (unique2 = 7)
-(19 rows)
+(24 rows)
 
 --
 -- test placement of movable quals in a parameterized join tree
@@ -3514,16 +3554,19 @@ where t1.unique1 = 1;
 --------------------------------------------------------
  Nested Loop Left Join
    ->  Index Scan using tenk1_unique1 on tenk1 t1
+         Skip scan: All
          Index Cond: (unique1 = 1)
    ->  Nested Loop
          Join Filter: (t1.ten = t3.ten)
          ->  Bitmap Heap Scan on tenk1 t2
                Recheck Cond: (t1.hundred = hundred)
                ->  Bitmap Index Scan on tenk1_hundred
+                     Skip scan: All
                      Index Cond: (hundred = t1.hundred)
          ->  Index Scan using tenk1_unique2 on tenk1 t3
+               Skip scan: All
                Index Cond: (unique2 = t2.thousand)
-(11 rows)
+(14 rows)
 
 explain (costs off)
 select * from tenk1 t1 left join
@@ -3534,16 +3577,19 @@ where t1.unique1 = 1;
 --------------------------------------------------------
  Nested Loop Left Join
    ->  Index Scan using tenk1_unique1 on tenk1 t1
+         Skip scan: All
          Index Cond: (unique1 = 1)
    ->  Nested Loop
          Join Filter: ((t1.ten + t2.ten) = t3.ten)
          ->  Bitmap Heap Scan on tenk1 t2
                Recheck Cond: (t1.hundred = hundred)
                ->  Bitmap Index Scan on tenk1_hundred
+                     Skip scan: All
                      Index Cond: (hundred = t1.hundred)
          ->  Index Scan using tenk1_unique2 on tenk1 t3
+               Skip scan: All
                Index Cond: (unique2 = t2.thousand)
-(11 rows)
+(14 rows)
 
 explain (costs off)
 select count(*) from
@@ -3561,12 +3607,15 @@ select count(*) from
                      ->  Bitmap Heap Scan on tenk1 b
                            Recheck Cond: (thousand = int4_tbl.f1)
                            ->  Bitmap Index Scan on tenk1_thous_tenthous
+                                 Skip scan: All
                                  Index Cond: (thousand = int4_tbl.f1)
                ->  Index Scan using tenk1_unique1 on tenk1 a
+                     Skip scan: All
                      Index Cond: (unique1 = b.unique2)
          ->  Index Only Scan using tenk1_thous_tenthous on tenk1 c
+               Skip scan: All
                Index Cond: (thousand = a.thousand)
-(14 rows)
+(17 rows)
 
 select count(*) from
   tenk1 a join tenk1 b on a.unique1 = b.unique2
@@ -3584,24 +3633,28 @@ select b.unique1 from
   join int4_tbl i1 on b.thousand = f1
   right join int4_tbl i2 on i2.f1 = b.tenthous
   order by 1;
-                                       QUERY PLAN                                        
------------------------------------------------------------------------------------------
+                                   QUERY PLAN                                   
+--------------------------------------------------------------------------------
  Sort
    Sort Key: b.unique1
    ->  Nested Loop Left Join
          ->  Seq Scan on int4_tbl i2
-         ->  Nested Loop Left Join
-               Join Filter: (b.unique1 = 42)
-               ->  Nested Loop
+         ->  Nested Loop
+               Join Filter: (b.thousand = i1.f1)
+               ->  Nested Loop Left Join
+                     Join Filter: (b.unique1 = 42)
                      ->  Nested Loop
-                           ->  Seq Scan on int4_tbl i1
                            ->  Index Scan using tenk1_thous_tenthous on tenk1 b
-                                 Index Cond: ((thousand = i1.f1) AND (tenthous = i2.f1))
-                     ->  Index Scan using tenk1_unique1 on tenk1 a
-                           Index Cond: (unique1 = b.unique2)
-               ->  Index Only Scan using tenk1_thous_tenthous on tenk1 c
-                     Index Cond: (thousand = a.thousand)
-(15 rows)
+                                 Skip scan: All
+                                 Index Cond: (tenthous = i2.f1)
+                           ->  Index Scan using tenk1_unique1 on tenk1 a
+                                 Skip scan: All
+                                 Index Cond: (unique1 = b.unique2)
+                     ->  Index Only Scan using tenk1_thous_tenthous on tenk1 c
+                           Skip scan: All
+                           Index Cond: (thousand = a.thousand)
+               ->  Seq Scan on int4_tbl i1
+(19 rows)
 
 select b.unique1 from
   tenk1 a join tenk1 b on a.unique1 = b.unique2
@@ -3632,8 +3685,9 @@ order by fault;
    Filter: ((COALESCE(tenk1.unique1, '-1'::integer) + int8_tbl.q1) = 122)
    ->  Seq Scan on int8_tbl
    ->  Index Scan using tenk1_unique2 on tenk1
+         Skip scan: All
          Index Cond: (unique2 = int8_tbl.q2)
-(5 rows)
+(6 rows)
 
 select * from
 (
@@ -3687,8 +3741,9 @@ select q1, unique2, thousand, hundred
    Filter: ((COALESCE(b.thousand, 123) = a.q1) AND (a.q1 = COALESCE(b.hundred, 123)))
    ->  Seq Scan on int8_tbl a
    ->  Index Scan using tenk1_unique2 on tenk1 b
+         Skip scan: All
          Index Cond: (unique2 = a.q1)
-(5 rows)
+(6 rows)
 
 select q1, unique2, thousand, hundred
   from int8_tbl a left join tenk1 b on q1 = unique2
@@ -3707,8 +3762,9 @@ select f1, unique2, case when unique2 is null then f1 else 0 end
    Filter: (CASE WHEN (b.unique2 IS NULL) THEN a.f1 ELSE 0 END = 0)
    ->  Seq Scan on int4_tbl a
    ->  Index Only Scan using tenk1_unique2 on tenk1 b
+         Skip scan: All
          Index Cond: (unique2 = a.f1)
-(5 rows)
+(6 rows)
 
 select f1, unique2, case when unique2 is null then f1 else 0 end
   from int4_tbl a left join tenk1 b on f1 = unique2
@@ -3731,14 +3787,17 @@ select a.unique1, b.unique1, c.unique1, coalesce(b.twothousand, a.twothousand)
    ->  Nested Loop Left Join
          Filter: (COALESCE(b.twothousand, a.twothousand) = 44)
          ->  Index Scan using tenk1_unique2 on tenk1 a
+               Skip scan: All
                Index Cond: (unique2 < 10)
          ->  Bitmap Heap Scan on tenk1 b
                Recheck Cond: (thousand = a.unique1)
                ->  Bitmap Index Scan on tenk1_thous_tenthous
+                     Skip scan: All
                      Index Cond: (thousand = a.unique1)
    ->  Index Scan using tenk1_unique2 on tenk1 c
+         Skip scan: All
          Index Cond: ((unique2 = COALESCE(b.twothousand, a.twothousand)) AND (unique2 = 44))
-(11 rows)
+(14 rows)
 
 select a.unique1, b.unique1, c.unique1, coalesce(b.twothousand, a.twothousand)
   from tenk1 a left join tenk1 b on b.thousand = a.unique1                        left join tenk1 c on c.unique2 = coalesce(b.twothousand, a.twothousand)
@@ -3778,8 +3837,9 @@ using (join_key);
                      Output: i1.f1
                ->  Index Only Scan using tenk1_unique2 on public.tenk1 i2
                      Output: i2.unique2
+                     Skip scan: All
                      Index Cond: (i2.unique2 = i1.f1)
-(14 rows)
+(15 rows)
 
 select foo1.join_key as foo1_id, foo3.join_key AS foo3_id, bug_field from
   (values (0),(1)) foo1(join_key)
@@ -4281,8 +4341,9 @@ explain (costs off)
    ->  Seq Scan on int4_tbl a
          Filter: (f1 = 0)
    ->  Index Scan using tenk1_unique2 on tenk1 b
+         Skip scan: All
          Index Cond: (unique2 = 0)
-(6 rows)
+(7 rows)
 
 explain (costs off)
   select * from tenk1 a full join tenk1 b using(unique2) where unique2 = 42;
@@ -4291,10 +4352,12 @@ explain (costs off)
  Merge Full Join
    Merge Cond: (a.unique2 = b.unique2)
    ->  Index Scan using tenk1_unique2 on tenk1 a
+         Skip scan: All
          Index Cond: (unique2 = 42)
    ->  Index Scan using tenk1_unique2 on tenk1 b
+         Skip scan: All
          Index Cond: (unique2 = 42)
-(6 rows)
+(8 rows)
 
 --
 -- test that quals attached to an outer join have correct semantics,
@@ -4424,10 +4487,11 @@ select d.* from d left join (select * from b group by b.id, b.c_id) s
    ->  Group
          Group Key: b.id
          ->  Index Scan using b_pkey on b
+               Skip scan: All
    ->  Sort
          Sort Key: d.a
          ->  Seq Scan on d
-(8 rows)
+(9 rows)
 
 -- similarly, but keying off a DISTINCT clause
 explain (costs off)
@@ -4539,8 +4603,9 @@ select p.* from
  Result
    One-Time Filter: false
    ->  Index Scan using parent_pkey on parent p
+         Skip scan: All
          Index Cond: (k = 1)
-(4 rows)
+(5 rows)
 
 select p.* from
   (parent p left join child c on (p.k = c.k)) join parent x on p.k = x.k
@@ -4632,11 +4697,12 @@ where ss.stringu2 !~* ss.case1;
    ->  Nested Loop
          ->  Seq Scan on int4_tbl i4
          ->  Index Scan using tenk1_unique2 on tenk1 t1
+               Skip scan: All
                Index Cond: (unique2 = i4.f1)
                Filter: (stringu2 !~* CASE ten WHEN 0 THEN 'doh!'::text ELSE NULL::text END)
    ->  Materialize
          ->  Seq Scan on text_tbl t0
-(9 rows)
+(10 rows)
 
 select t0.*
 from
@@ -4723,8 +4789,9 @@ explain (costs off)
  Nested Loop
    ->  Seq Scan on int4_tbl b
    ->  Index Scan using tenk1_unique1 on tenk1 a
+         Skip scan: All
          Index Cond: (unique1 = b.f1)
-(4 rows)
+(5 rows)
 
 select unique2, x.*
 from int4_tbl x, lateral (select unique2 from tenk1 where f1 = unique1) ss;
@@ -4741,8 +4808,9 @@ explain (costs off)
  Nested Loop
    ->  Seq Scan on int4_tbl x
    ->  Index Scan using tenk1_unique1 on tenk1
+         Skip scan: All
          Index Cond: (unique1 = x.f1)
-(4 rows)
+(5 rows)
 
 explain (costs off)
   select unique2, x.*
@@ -4752,8 +4820,9 @@ explain (costs off)
  Nested Loop
    ->  Seq Scan on int4_tbl x
    ->  Index Scan using tenk1_unique1 on tenk1
+         Skip scan: All
          Index Cond: (unique1 = x.f1)
-(4 rows)
+(5 rows)
 
 select unique2, x.*
 from int4_tbl x left join lateral (select unique1, unique2 from tenk1 where f1 = unique1) ss on true;
@@ -4774,8 +4843,9 @@ explain (costs off)
  Nested Loop Left Join
    ->  Seq Scan on int4_tbl x
    ->  Index Scan using tenk1_unique1 on tenk1
+         Skip scan: All
          Index Cond: (unique1 = x.f1)
-(4 rows)
+(5 rows)
 
 -- check scoping of lateral versus parent references
 -- the first of these should return int8_tbl.q2, the second int8_tbl.q1
@@ -4873,8 +4943,10 @@ explain (costs off)
    ->  Merge Join
          Merge Cond: (a.unique1 = b.unique2)
          ->  Index Only Scan using tenk1_unique1 on tenk1 a
+               Skip scan: All
          ->  Index Only Scan using tenk1_unique2 on tenk1 b
-(5 rows)
+               Skip scan: All
+(7 rows)
 
 select count(*) from tenk1 a,
   tenk1 b join lateral (values(a.unique1)) ss(x) on b.unique2 = ss.x;
@@ -4894,10 +4966,12 @@ explain (costs off)
          Hash Cond: ("*VALUES*".column1 = b.unique2)
          ->  Nested Loop
                ->  Index Only Scan using tenk1_unique1 on tenk1 a
+                     Skip scan: All
                ->  Values Scan on "*VALUES*"
          ->  Hash
                ->  Index Only Scan using tenk1_unique2 on tenk1 b
-(8 rows)
+                     Skip scan: All
+(10 rows)
 
 select count(*) from tenk1 a,
   tenk1 b join lateral (values(a.unique1),(-1)) ss(x) on b.unique2 = ss.x;
@@ -5638,8 +5712,9 @@ select * from
                Output: tenk1.unique1
                ->  Index Scan using tenk1_unique2 on public.tenk1
                      Output: tenk1.unique1
+                     Skip scan: All
                      Index Cond: (tenk1.unique2 = "*VALUES*".column2)
-(14 rows)
+(15 rows)
 
 select * from
   (values (0,9998), (1,1000)) v(id,x),
@@ -5867,14 +5942,18 @@ where f.c = 1;
    ->  Nested Loop Left Join
          ->  Nested Loop Left Join
                ->  Index Scan using fkest_c_key on fkest f
+                     Skip scan: All
                      Index Cond: (c = 1)
                ->  Index Only Scan using fkest1_pkey on fkest1 f1
+                     Skip scan: All
                      Index Cond: ((a = f.a) AND (b = f.b))
          ->  Index Only Scan using fkest1_pkey on fkest1 f2
+               Skip scan: All
                Index Cond: ((a = f.a) AND (b = f.b))
    ->  Index Only Scan using fkest1_pkey on fkest1 f3
+         Skip scan: All
          Index Cond: ((a = f.a) AND (b = f.b))
-(11 rows)
+(15 rows)
 
 rollback;
 --
@@ -6164,8 +6243,10 @@ where j1.id1 % 1000 = 1 and j2.id1 % 1000 = 1;
    Merge Cond: (j1.id1 = j2.id1)
    Join Filter: (j1.id2 = j2.id2)
    ->  Index Scan using j1_id1_idx on j1
+         Skip scan: All
    ->  Index Scan using j2_id1_idx on j2
-(5 rows)
+         Skip scan: All
+(7 rows)
 
 select * from j1
 inner join j2 on j1.id1 = j2.id1 and j1.id2 = j2.id2
@@ -6201,15 +6282,18 @@ where exists (select 1 from tenk1 t3
                Group Key: t3.thousand, t3.tenthous
                ->  Index Only Scan using tenk1_thous_tenthous on public.tenk1 t3
                      Output: t3.thousand, t3.tenthous
+                     Skip scan: All
          ->  Hash
                Output: t1.unique1
                ->  Index Only Scan using onek_unique1 on public.onek t1
                      Output: t1.unique1
+                     Skip scan: All
                      Index Cond: (t1.unique1 < 1)
    ->  Index Only Scan using tenk1_hundred on public.tenk1 t2
          Output: t2.hundred
+         Skip scan: All
          Index Cond: (t2.hundred = t3.tenthous)
-(18 rows)
+(21 rows)
 
 -- ... unless it actually is unique
 create table j3 as select unique1, tenthous from onek;
@@ -6229,13 +6313,16 @@ where exists (select 1 from j3
          Output: t1.unique1, j3.tenthous
          ->  Index Only Scan using onek_unique1 on public.onek t1
                Output: t1.unique1
+               Skip scan: All
                Index Cond: (t1.unique1 < 1)
          ->  Index Only Scan using j3_unique1_tenthous_idx on public.j3
                Output: j3.unique1, j3.tenthous
+               Skip scan: All
                Index Cond: (j3.unique1 = t1.unique1)
    ->  Index Only Scan using tenk1_hundred on public.tenk1 t2
          Output: t2.hundred
+         Skip scan: All
          Index Cond: (t2.hundred = j3.tenthous)
-(13 rows)
+(16 rows)
 
 drop table j3;

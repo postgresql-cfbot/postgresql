@@ -3654,15 +3654,30 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 	 * much easier, since we know that the parser ensured that one is a
 	 * superset of the other.
 	 */
+	root->query_uniquekeys = NIL;
+
 	if (root->group_pathkeys)
+	{
 		root->query_pathkeys = root->group_pathkeys;
+
+		if (!root->parse->hasAggs)
+			root->query_uniquekeys = build_uniquekeys(root, qp_extra->groupClause);
+	}
 	else if (root->window_pathkeys)
 		root->query_pathkeys = root->window_pathkeys;
 	else if (list_length(root->distinct_pathkeys) >
 			 list_length(root->sort_pathkeys))
+	{
 		root->query_pathkeys = root->distinct_pathkeys;
+		root->query_uniquekeys = build_uniquekeys(root, parse->distinctClause);
+	}
 	else if (root->sort_pathkeys)
+	{
 		root->query_pathkeys = root->sort_pathkeys;
+
+		if (root->distinct_pathkeys)
+			root->query_uniquekeys = build_uniquekeys(root, parse->distinctClause);
+	}
 	else
 		root->query_pathkeys = NIL;
 }
@@ -4817,6 +4832,70 @@ create_distinct_paths(PlannerInfo *root,
 												  path,
 												  list_length(root->distinct_pathkeys),
 												  numDistinctRows));
+
+				/* Consider index skip scan as well */
+				if (enable_indexskipscan &&
+					IsA(path, IndexPath) &&
+					((IndexPath *) path)->indexinfo->amcanskip &&
+					root->distinct_pathkeys != NIL)
+				{
+					ListCell   		*lc;
+					IndexOptInfo 	*index = NULL;
+					bool 			different_columns_order = false,
+									multiple_froms = false;
+					int 			i = 0;
+					int 			distinctPrefixKeys;
+
+					Assert(path->pathtype == T_IndexOnlyScan ||
+						   path->pathtype == T_IndexScan);
+
+					index = ((IndexPath *) path)->indexinfo;
+					distinctPrefixKeys = list_length(root->query_uniquekeys);
+
+					/*
+					 * Normally we can think about distinctPrefixKeys as just
+					 * a number of distinct keys. But if lets say we have a
+					 * distinct key a, and the index contains b, a in exactly
+					 * this order. In such situation we need to use position
+					 * of a in the index as distinctPrefixKeys, otherwise skip
+					 * will happen only by the first column.
+					 */
+					foreach(lc, root->query_uniquekeys)
+					{
+						UniqueKey *uniquekey = (UniqueKey *) lfirst(lc);
+						EquivalenceMember *em =
+							lfirst_node(EquivalenceMember,
+										list_head(uniquekey->eq_clause->ec_members));
+						Var *var = (Var *) em->em_expr;
+
+						Assert(i < index->ncolumns);
+
+						for (i = 0; i < index->ncolumns; i++)
+						{
+							if (index->indexkeys[i] == var->varattno)
+							{
+								distinctPrefixKeys = Max(i + 1, distinctPrefixKeys);
+								break;
+							}
+						}
+					}
+
+					/* we can only do this if scanning from one relation */
+					if (path->pathtype == T_IndexScan &&
+						parse->jointree != NULL &&
+						list_length(parse->jointree->fromlist) > 1)
+							multiple_froms = true;
+
+					if (!different_columns_order &&	!multiple_froms)
+					{
+						add_path(distinct_rel, (Path *)
+								 create_skipscan_unique_path(root,
+															 distinct_rel,
+															 path,
+															 distinctPrefixKeys,
+															 numDistinctRows));
+					}
+				}
 			}
 		}
 
@@ -6215,7 +6294,7 @@ plan_cluster_use_sort(Oid tableOid, Oid indexOid)
 
 	/* Estimate the cost of index scan */
 	indexScanPath = create_index_path(root, indexInfo,
-									  NIL, NIL, NIL, NIL,
+									  NIL, NIL, NIL, NIL, NIL,
 									  ForwardScanDirection, false,
 									  NULL, 1.0, false);
 

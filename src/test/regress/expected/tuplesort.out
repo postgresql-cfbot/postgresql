@@ -146,7 +146,8 @@ SELECT id, noabort_increasing, noabort_decreasing FROM abbrev_abort_uuids ORDER 
 -----------------------------------------------------------------------------------------
  Limit
    ->  Index Scan using abbrev_abort_uuids__noabort_increasing_idx on abbrev_abort_uuids
-(2 rows)
+         Skip scan: All
+(3 rows)
 
 SELECT id, noabort_increasing, noabort_decreasing FROM abbrev_abort_uuids ORDER BY noabort_increasing LIMIT 5;
   id   |          noabort_increasing          |          noabort_decreasing          
@@ -164,7 +165,8 @@ SELECT id, noabort_increasing, noabort_decreasing FROM abbrev_abort_uuids ORDER 
 -----------------------------------------------------------------------------------------
  Limit
    ->  Index Scan using abbrev_abort_uuids__noabort_decreasing_idx on abbrev_abort_uuids
-(2 rows)
+         Skip scan: All
+(3 rows)
 
 SELECT id, noabort_increasing, noabort_decreasing FROM abbrev_abort_uuids ORDER BY noabort_decreasing LIMIT 5;
   id   |          noabort_increasing          |          noabort_decreasing          
@@ -186,7 +188,8 @@ SELECT id, abort_increasing, abort_decreasing FROM abbrev_abort_uuids ORDER BY a
 ---------------------------------------------------------------------------------------
  Limit
    ->  Index Scan using abbrev_abort_uuids__abort_increasing_idx on abbrev_abort_uuids
-(2 rows)
+         Skip scan: All
+(3 rows)
 
 SELECT id, abort_increasing, abort_decreasing FROM abbrev_abort_uuids ORDER BY abort_increasing LIMIT 5;
   id   |           abort_increasing           |           abort_decreasing           
@@ -204,7 +207,8 @@ SELECT id, abort_increasing, abort_decreasing FROM abbrev_abort_uuids ORDER BY a
 ---------------------------------------------------------------------------------------
  Limit
    ->  Index Scan using abbrev_abort_uuids__abort_decreasing_idx on abbrev_abort_uuids
-(2 rows)
+         Skip scan: All
+(3 rows)
 
 SELECT id, abort_increasing, abort_decreasing FROM abbrev_abort_uuids ORDER BY abort_decreasing LIMIT 5;
   id   |           abort_increasing           |           abort_decreasing           

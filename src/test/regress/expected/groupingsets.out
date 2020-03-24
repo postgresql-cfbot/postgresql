@@ -466,8 +466,9 @@ explain (costs off)
    InitPlan 1 (returns $0)
      ->  Limit
            ->  Index Only Scan using tenk1_unique1 on tenk1
+                 Skip scan: All
                  Index Cond: (unique1 IS NOT NULL)
-(5 rows)
+(6 rows)
 
 -- Views with GROUPING SET queries
 CREATE VIEW gstest_view AS select a, b, grouping(a,b), sum(c), count(*), max(c)
@@ -1402,7 +1403,8 @@ EXPLAIN (COSTS OFF) SELECT a, b, count(*), max(a), max(b) FROM gstest3 GROUP BY 
          Sort Key: b
            Group Key: b
          ->  Index Scan using gstest3_pkey on gstest3
-(8 rows)
+               Skip scan: All
+(9 rows)
 
 SELECT a, b, count(*), max(a), max(b) FROM gstest3 GROUP BY GROUPING SETS(a, b,()) ORDER BY a, b;
  a | b | count | max | max 

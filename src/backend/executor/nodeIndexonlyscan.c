@@ -41,6 +41,7 @@
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/predicate.h"
+#include "storage/itemptr.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -49,6 +50,37 @@ static TupleTableSlot *IndexOnlyNext(IndexOnlyScanState *node);
 static void StoreIndexTuple(TupleTableSlot *slot, IndexTuple itup,
 							TupleDesc itupdesc);
 
+static bool
+IndexOnlySkip(IndexOnlyScanState *node)
+{
+	EState	   *estate;
+	ScanDirection direction;
+	IndexScanDesc scandesc;
+	IndexOnlyScan *indexonlyscan = (IndexOnlyScan *) node->ss.ps.plan;
+
+	if (!node->ioss_Distinct)
+		return true;
+
+	/*
+	 * extract necessary information from index scan node
+	 */
+	estate = node->ss.ps.state;
+	direction = estate->es_direction;
+	/* flip direction if this is an overall backward scan */
+	if (ScanDirectionIsBackward(indexonlyscan->indexorderdir))
+	{
+		if (ScanDirectionIsForward(direction))
+			direction = BackwardScanDirection;
+		else if (ScanDirectionIsBackward(direction))
+			direction = ForwardScanDirection;
+	}
+	scandesc = node->ioss_ScanDesc;
+
+	if (!index_skip(scandesc, direction, indexonlyscan->indexorderdir))
+		return false;
+
+	return true;
+}
 
 /* ----------------------------------------------------------------
  *		IndexOnlyNext
@@ -65,6 +97,8 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	IndexScanDesc scandesc;
 	TupleTableSlot *slot;
 	ItemPointer tid;
+	ItemPointerData startTid;
+	IndexOnlyScan *indexonlyscan = (IndexOnlyScan *) node->ss.ps.plan;
 
 	/*
 	 * extract necessary information from index scan node
@@ -72,7 +106,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	estate = node->ss.ps.state;
 	direction = estate->es_direction;
 	/* flip direction if this is an overall backward scan */
-	if (ScanDirectionIsBackward(((IndexOnlyScan *) node->ss.ps.plan)->indexorderdir))
+	if (ScanDirectionIsBackward(indexonlyscan->indexorderdir))
 	{
 		if (ScanDirectionIsForward(direction))
 			direction = BackwardScanDirection;
@@ -90,11 +124,19 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * serially executing an index only scan that was planned to be
 		 * parallel.
 		 */
-		scandesc = index_beginscan(node->ss.ss_currentRelation,
-								   node->ioss_RelationDesc,
-								   estate->es_snapshot,
-								   node->ioss_NumScanKeys,
-								   node->ioss_NumOrderByKeys);
+		if (node->ioss_SkipPrefixSize > 0)
+			scandesc = index_beginscan_skip(node->ss.ss_currentRelation,
+									   node->ioss_RelationDesc,
+									   estate->es_snapshot,
+									   node->ioss_NumScanKeys,
+									   node->ioss_NumOrderByKeys,
+									   Min(IndexRelationGetNumberOfKeyAttributes(node->ioss_RelationDesc), node->ioss_SkipPrefixSize));
+		else
+			scandesc = index_beginscan(node->ss.ss_currentRelation,
+									   node->ioss_RelationDesc,
+									   estate->es_snapshot,
+									   node->ioss_NumScanKeys,
+									   node->ioss_NumOrderByKeys);
 
 		node->ioss_ScanDesc = scandesc;
 
@@ -114,11 +156,16 @@ IndexOnlyNext(IndexOnlyScanState *node)
 						 node->ioss_OrderByKeys,
 						 node->ioss_NumOrderByKeys);
 	}
+	else
+	{
+		ItemPointerCopy(&scandesc->xs_heaptid, &startTid);
+	}
 
 	/*
 	 * OK, now that we have what we need, fetch the next tuple.
 	 */
-	while ((tid = index_getnext_tid(scandesc, direction)) != NULL)
+	while ((tid = node->ioss_SkipPrefixSize > 0 ? index_getnext_tid_skip(scandesc, direction, node->ioss_Distinct ? indexonlyscan->indexorderdir : direction) :
+			index_getnext_tid(scandesc, direction)) != NULL)
 	{
 		bool		tuple_from_heap = false;
 
@@ -314,9 +361,10 @@ ExecIndexOnlyScan(PlanState *pstate)
 	if (node->ioss_NumRuntimeKeys != 0 && !node->ioss_RuntimeKeysReady)
 		ExecReScan((PlanState *) node);
 
-	return ExecScan(&node->ss,
+	return ExecScanExtended(&node->ss,
 					(ExecScanAccessMtd) IndexOnlyNext,
-					(ExecScanRecheckMtd) IndexOnlyRecheck);
+					(ExecScanRecheckMtd) IndexOnlyRecheck,
+					node->ioss_Distinct ? (ExecScanSkipMtd) IndexOnlySkip : NULL);
 }
 
 /* ----------------------------------------------------------------
@@ -503,7 +551,10 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 	indexstate = makeNode(IndexOnlyScanState);
 	indexstate->ss.ps.plan = (Plan *) node;
 	indexstate->ss.ps.state = estate;
+	indexstate->ss.ss_FirstTupleEmitted = false;
 	indexstate->ss.ps.ExecProcNode = ExecIndexOnlyScan;
+	indexstate->ioss_SkipPrefixSize = node->indexskipprefixsize;
+	indexstate->ioss_Distinct = node->indexdistinct;
 
 	/*
 	 * Miscellaneous initialization

@@ -2504,7 +2504,7 @@ bt_rootdescend(BtreeCheckState *state, IndexTuple itup)
 	Buffer		lbuf;
 	bool		exists;
 
-	key = _bt_mkscankey(state->rel, itup);
+	key = _bt_mkscankey(state->rel, itup, NULL);
 	Assert(key->heapkeyspace && key->scantid != NULL);
 
 	/*
@@ -2936,7 +2936,7 @@ bt_mkscankey_pivotsearch(Relation rel, IndexTuple itup)
 {
 	BTScanInsert skey;
 
-	skey = _bt_mkscankey(rel, itup);
+	skey = _bt_mkscankey(rel, itup, NULL);
 	skey->pivotsearch = true;
 
 	return skey;

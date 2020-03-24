@@ -290,8 +290,9 @@ explain (costs off) execute test_mode_pp(2);
 ----------------------------------------------------------
  Aggregate
    ->  Index Only Scan using test_mode_a_idx on test_mode
+         Skip scan: All
          Index Cond: (a = 2)
-(3 rows)
+(4 rows)
 
 -- force generic plan
 set plan_cache_mode to force_generic_plan;
@@ -351,7 +352,8 @@ explain (costs off) execute test_mode_pp(2);
 ----------------------------------------------------------
  Aggregate
    ->  Index Only Scan using test_mode_a_idx on test_mode
+         Skip scan: All
          Index Cond: (a = 2)
-(3 rows)
+(4 rows)
 
 drop table test_mode;

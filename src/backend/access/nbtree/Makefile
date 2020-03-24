@@ -19,6 +19,7 @@ OBJS = \
 	nbtpage.o \
 	nbtree.o \
 	nbtsearch.o \
+	nbtskip.o \
 	nbtsort.o \
 	nbtsplitloc.o \
 	nbtutils.o \

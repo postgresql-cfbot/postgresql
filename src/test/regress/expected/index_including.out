@@ -134,8 +134,9 @@ select * from tbl where (c1,c2,c3) < (2,5,1);
  Bitmap Heap Scan on tbl
    Filter: (ROW(c1, c2, c3) < ROW(2, 5, 1))
    ->  Bitmap Index Scan on covering
+         Skip scan: All
          Index Cond: (ROW(c1, c2) <= ROW(2, 5))
-(4 rows)
+(5 rows)
 
 select * from tbl where (c1,c2,c3) < (2,5,1);
  c1 | c2 | c3 | c4 
@@ -152,9 +153,10 @@ select * from tbl where (c1,c2,c3) < (262,1,1) limit 1;
 ----------------------------------------------------
  Limit
    ->  Index Only Scan using covering on tbl
+         Skip scan: All
          Index Cond: (ROW(c1, c2) <= ROW(262, 1))
          Filter: (ROW(c1, c2, c3) < ROW(262, 1, 1))
-(4 rows)
+(5 rows)
 
 select * from tbl where (c1,c2,c3) < (262,1,1) limit 1;
  c1 | c2 | c3 | c4 

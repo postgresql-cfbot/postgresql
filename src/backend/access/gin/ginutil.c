@@ -65,6 +65,9 @@ ginhandler(PG_FUNCTION_ARGS)
 	amroutine->ambulkdelete = ginbulkdelete;
 	amroutine->amvacuumcleanup = ginvacuumcleanup;
 	amroutine->amcanreturn = NULL;
+	amroutine->amskip = NULL;
+	amroutine->ambeginskipscan = NULL;
+	amroutine->amgetskiptuple = NULL;
 	amroutine->amcostestimate = gincostestimate;
 	amroutine->amoptions = ginoptions;
 	amroutine->amproperty = NULL;

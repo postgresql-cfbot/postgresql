@@ -5929,13 +5929,22 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 
 		if (indexcol != iclause->indexcol)
 		{
+			/* @todo this estimate is wrong but use it for
+				now for testing purposes. it forces index skip scan to
+				be used as often as possible.
+			*/
 			/* Beginning of a new column's quals */
-			if (!eqQualHere)
+			if (!eqQualHere && path->indexskipprefix == 0)
 				break;			/* done if no '=' qual for indexcol */
 			eqQualHere = false;
 			indexcol++;
 			if (indexcol != iclause->indexcol)
-				break;			/* no quals at all for indexcol */
+			{
+				if (path->indexskipprefix == 0)
+					break;			/* no quals at all for indexcol */
+				else
+					continue;
+			}
 		}
 
 		/* Examine each indexqual associated with this index clause */

@@ -444,7 +444,8 @@ EXPLAIN (VERBOSE, COSTS OFF)
                Remote SQL: SELECT "C 1" FROM "S 1"."T 1" ORDER BY "C 1" ASC NULLS LAST
          ->  Index Only Scan using t1_pkey on "S 1"."T 1" t2
                Output: t2."C 1"
-(11 rows)
+               Skip scan: All
+(12 rows)
 
 SELECT t1.c1, t2."C 1" FROM ft2 t1 JOIN "S 1"."T 1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
  c1  | C 1 
@@ -478,7 +479,8 @@ EXPLAIN (VERBOSE, COSTS OFF)
                Remote SQL: SELECT "C 1" FROM "S 1"."T 1" ORDER BY "C 1" ASC NULLS LAST
          ->  Index Only Scan using t1_pkey on "S 1"."T 1" t2
                Output: t2."C 1"
-(11 rows)
+               Skip scan: All
+(12 rows)
 
 SELECT t1.c1, t2."C 1" FROM ft2 t1 LEFT JOIN "S 1"."T 1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
  c1  | C 1 
@@ -513,7 +515,8 @@ EXPLAIN (VERBOSE, COSTS OFF)
                Remote SQL: SELECT r3."C 1" FROM ("S 1"."T 1" r2 INNER JOIN "S 1"."T 1" r3 ON (((r2."C 1" = r3."C 1")))) ORDER BY r2."C 1" ASC NULLS LAST
          ->  Index Only Scan using t1_pkey on "S 1"."T 1" t1
                Output: t1."C 1"
-(12 rows)
+               Skip scan: All
+(13 rows)
 
 SELECT t1."C 1" FROM "S 1"."T 1" t1 left join ft1 t2 join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
  C 1 
@@ -549,7 +552,8 @@ EXPLAIN (VERBOSE, COSTS OFF)
                Remote SQL: SELECT r3."C 1", r2."C 1" FROM ("S 1"."T 1" r3 LEFT JOIN "S 1"."T 1" r2 ON (((r2."C 1" = r3."C 1")))) ORDER BY r3."C 1" ASC NULLS LAST
          ->  Index Only Scan using t1_pkey on "S 1"."T 1" t1
                Output: t1."C 1"
-(12 rows)
+               Skip scan: All
+(13 rows)
 
 SELECT t1."C 1", t2.c1, t3.c1 FROM "S 1"."T 1" t1 left join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
  C 1 | c1  | c1  
@@ -583,7 +587,8 @@ EXPLAIN (VERBOSE, COSTS OFF)
                Remote SQL: SELECT r2."C 1", r3."C 1" FROM ("S 1"."T 1" r2 FULL JOIN "S 1"."T 1" r3 ON (((r2."C 1" = r3."C 1")))) ORDER BY r3."C 1" ASC NULLS LAST
          ->  Index Only Scan using t1_pkey on "S 1"."T 1" t1
                Output: t1."C 1"
-(12 rows)
+               Skip scan: All
+(13 rows)
 
 SELECT t1."C 1", t2.c1, t3.c1 FROM "S 1"."T 1" t1 full join ft1 t2 full join ft2 t3 on (t2.c1 = t3.c1) on (t3.c1 = t1."C 1") OFFSET 100 LIMIT 10;
  C 1 | c1  | c1  
@@ -711,11 +716,12 @@ EXPLAIN (VERBOSE, COSTS OFF)
    Output: a."C 1", a.c2, a.c3, a.c4, a.c5, a.c6, a.c7, a.c8, b.c1, b.c2, b.c3, b.c4, b.c5, b.c6, b.c7, b.c8
    ->  Index Scan using t1_pkey on "S 1"."T 1" a
          Output: a."C 1", a.c2, a.c3, a.c4, a.c5, a.c6, a.c7, a.c8
+         Skip scan: All
          Index Cond: (a."C 1" = 47)
    ->  Foreign Scan on public.ft2 b
          Output: b.c1, b.c2, b.c3, b.c4, b.c5, b.c6, b.c7, b.c8
          Remote SQL: SELECT "C 1", c2, c3, c4, c5, c6, c7, c8 FROM "S 1"."T 1" WHERE (($1::integer = "C 1"))
-(8 rows)
+(9 rows)
 
 SELECT * FROM ft2 a, ft2 b WHERE a.c1 = 47 AND b.c1 = a.c2;
  c1 | c2 |  c3   |              c4              |            c5            | c6 |     c7     | c8  | c1 | c2 |  c3   |              c4              |            c5            | c6 |     c7     | c8  
@@ -2126,6 +2132,7 @@ SELECT t1."C 1" FROM "S 1"."T 1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM 
          Output: t1."C 1"
          ->  Index Scan using t1_pkey on "S 1"."T 1" t1
                Output: t1."C 1", t1.c2, t1.c3, t1.c4, t1.c5, t1.c6, t1.c7, t1.c8
+               Skip scan: All
          ->  HashAggregate
                Output: t2.c1, t3.c1
                Group Key: t2.c1, t3.c1
@@ -2133,7 +2140,7 @@ SELECT t1."C 1" FROM "S 1"."T 1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM 
                      Output: t2.c1, t3.c1
                      Relations: (public.ft1 t2) INNER JOIN (public.ft2 t3)
                      Remote SQL: SELECT r1."C 1", r2."C 1" FROM ("S 1"."T 1" r1 INNER JOIN "S 1"."T 1" r2 ON (((r1."C 1" = r2."C 1")) AND ((r1.c2 = $1::integer))))
-(13 rows)
+(14 rows)
 
 SELECT t1."C 1" FROM "S 1"."T 1" t1, LATERAL (SELECT DISTINCT t2.c1, t3.c1 FROM ft1 t2, ft2 t3 WHERE t2.c1 = t3.c1 AND t2.c2 = t1.c2) q ORDER BY t1."C 1" OFFSET 10 LIMIT 10;
  C 1 
@@ -2288,7 +2295,8 @@ SELECT * FROM ft1, ft2, ft4, ft5, local_tbl WHERE ft1.c1 = ft2.c1 AND ft1.c2 = f
                                  Remote SQL: SELECT c1, c2, c3 FROM "S 1"."T 4" FOR UPDATE
          ->  Index Scan using local_tbl_pkey on public.local_tbl
                Output: local_tbl.c1, local_tbl.c2, local_tbl.c3, local_tbl.ctid
-(47 rows)
+               Skip scan: All
+(48 rows)
 
 SELECT * FROM ft1, ft2, ft4, ft5, local_tbl WHERE ft1.c1 = ft2.c1 AND ft1.c2 = ft4.c1
     AND ft1.c2 = ft5.c1 AND ft1.c2 = local_tbl.c1 AND ft1.c1 < 100 AND ft2.c1 < 100 FOR UPDATE;
@@ -3332,6 +3340,7 @@ select c2, sum from "S 1"."T 1" t1, lateral (select sum(t2.c1 + t1."C 1") sum fr
          Output: t1.c2, qry.sum
          ->  Index Scan using t1_pkey on "S 1"."T 1" t1
                Output: t1."C 1", t1.c2, t1.c3, t1.c4, t1.c5, t1.c6, t1.c7, t1.c8
+               Skip scan: All
                Index Cond: (t1."C 1" < 100)
                Filter: (t1.c2 < 3)
          ->  Subquery Scan on qry
@@ -3341,7 +3350,7 @@ select c2, sum from "S 1"."T 1" t1, lateral (select sum(t2.c1 + t1."C 1") sum fr
                      Output: (sum((t2.c1 + t1."C 1"))), t2.c1
                      Relations: Aggregate on (public.ft2 t2)
                      Remote SQL: SELECT sum(("C 1" + $1::integer)), "C 1" FROM "S 1"."T 1" GROUP BY 2
-(16 rows)
+(17 rows)
 
 select c2, sum from "S 1"."T 1" t1, lateral (select sum(t2.c1 + t1."C 1") sum from ft2 t2 group by t2.c1) qry where t1.c2 * 2 = qry.sum and t1.c2 < 3 and t1."C 1" < 100 order by 1;
  c2 | sum 
@@ -3372,6 +3381,7 @@ ORDER BY ref_0."C 1";
          Output: ref_0.c2, ref_0."C 1", ref_1.c3, (ref_0.c2)
          ->  Index Scan using t1_pkey on "S 1"."T 1" ref_0
                Output: ref_0."C 1", ref_0.c2, ref_0.c3, ref_0.c4, ref_0.c5, ref_0.c6, ref_0.c7, ref_0.c8
+               Skip scan: All
                Index Cond: (ref_0."C 1" < 10)
          ->  Foreign Scan on public.ft1 ref_1
                Output: ref_1.c3, ref_0.c2
@@ -3381,7 +3391,7 @@ ORDER BY ref_0."C 1";
          ->  Foreign Scan on public.ft2 ref_3
                Output: ref_3.c3
                Remote SQL: SELECT c3 FROM "S 1"."T 1" WHERE ((c3 = '00001'::text))
-(15 rows)
+(16 rows)
 
 SELECT ref_0.c2, subq_1.*
 FROM
@@ -4149,11 +4159,12 @@ explain (verbose, costs off) select * from ft3 f, loct3 l
    Output: f.f1, f.f2, f.f3, l.f1, l.f2, l.f3
    ->  Index Scan using loct3_f1_key on public.loct3 l
          Output: l.f1, l.f2, l.f3
+         Skip scan: All
          Index Cond: (l.f1 = 'foo'::text)
    ->  Foreign Scan on public.ft3 f
          Output: f.f1, f.f2, f.f3
          Remote SQL: SELECT f1, f2, f3 FROM public.loct3 WHERE (($1::character varying(10) = f3))
-(8 rows)
+(9 rows)
 
 -- can't be sent to remote
 explain (verbose, costs off) select * from ft3 where f1 COLLATE "POSIX" = 'foo';
@@ -4207,8 +4218,9 @@ explain (verbose, costs off) select * from ft3 f, loct3 l
          Output: l.f1, l.f2, l.f3
          ->  Index Scan using loct3_f1_key on public.loct3 l
                Output: l.f1, l.f2, l.f3
+               Skip scan: All
                Index Cond: (l.f1 = 'foo'::text)
-(12 rows)
+(13 rows)
 
 -- ===================================================================
 -- test writable foreign table stuff
@@ -7361,12 +7373,14 @@ explain (verbose, costs off)
                      Sort Key: foo.f1
                      ->  Index Scan using i_foo_f1 on public.foo foo_1
                            Output: foo_1.f1, foo_1.f2
+                           Skip scan: All
                      ->  Foreign Scan on public.foo2 foo_2
                            Output: foo_2.f1, foo_2.f2
                            Remote SQL: SELECT f1, f2 FROM public.loct1 ORDER BY f1 ASC NULLS LAST
                ->  Index Only Scan using i_loct1_f1 on public.loct1
                      Output: loct1.f1
-(17 rows)
+                     Skip scan: All
+(19 rows)
 
 select foo.f1, loct1.f1 from foo join loct1 on (foo.f1 = loct1.f1) order by foo.f2 offset 10 limit 10;
  f1 | f1 
@@ -7401,12 +7415,14 @@ explain (verbose, costs off)
                      Sort Key: foo.f1
                      ->  Index Scan using i_foo_f1 on public.foo foo_1
                            Output: foo_1.f1, foo_1.f2
+                           Skip scan: All
                      ->  Foreign Scan on public.foo2 foo_2
                            Output: foo_2.f1, foo_2.f2
                            Remote SQL: SELECT f1, f2 FROM public.loct1 ORDER BY f1 ASC NULLS LAST
                ->  Index Only Scan using i_loct1_f1 on public.loct1
                      Output: loct1.f1
-(17 rows)
+                     Skip scan: All
+(19 rows)
 
 select foo.f1, loct1.f1 from foo left join loct1 on (foo.f1 = loct1.f1) order by foo.f2 offset 10 limit 10;
  f1 | f1 
@@ -7447,10 +7463,11 @@ delete from foo where f1 < 5 returning *;
    Foreign Delete on public.foo2 foo_1
    ->  Index Scan using i_foo_f1 on public.foo
          Output: foo.ctid
+         Skip scan: All
          Index Cond: (foo.f1 < 5)
    ->  Foreign Delete on public.foo2 foo_1
          Remote SQL: DELETE FROM public.loct1 WHERE ((f1 < 5)) RETURNING f1, f2
-(9 rows)
+(10 rows)
 
 delete from foo where f1 < 5 returning *;
  f1 | f2 

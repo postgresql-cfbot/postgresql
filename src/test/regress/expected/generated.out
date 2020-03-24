@@ -462,8 +462,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b = 4;
                  QUERY PLAN                  
 ---------------------------------------------
  Index Scan using gtest22c_b_idx on gtest22c
+   Skip scan: All
    Index Cond: (b = 4)
-(2 rows)
+(3 rows)
 
 SELECT * FROM gtest22c WHERE b = 4;
  a | b 
@@ -475,8 +476,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b * 3 = 6;
                    QUERY PLAN                   
 ------------------------------------------------
  Index Scan using gtest22c_expr_idx on gtest22c
+   Skip scan: All
    Index Cond: ((b * 3) = 6)
-(2 rows)
+(3 rows)
 
 SELECT * FROM gtest22c WHERE b * 3 = 6;
  a | b 
@@ -488,8 +490,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
                    QUERY PLAN                   
 ------------------------------------------------
  Index Scan using gtest22c_pred_idx on gtest22c
+   Skip scan: All
    Index Cond: (a = 1)
-(2 rows)
+(3 rows)
 
 SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
  a | b 

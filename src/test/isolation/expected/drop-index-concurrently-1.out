@@ -15,6 +15,7 @@ QUERY PLAN
 Sort           
   Sort Key: id 
   ->  Index Scan using test_dc_data on test_dc
+        Skip scan: All
         Index Cond: (data = 34)
 step explains: EXPLAIN (COSTS OFF) EXECUTE getrow_seq;
 QUERY PLAN     

@@ -837,7 +837,9 @@ LockRows
   ->  Merge Join
         Merge Cond: (a.id = b.id)
         ->  Index Scan using jointest_id_idx on jointest a
+              Skip scan: All
         ->  Index Scan using jointest_id_idx on jointest b
+              Skip scan: All
 id             data           id             data           
 
 1              0              1              0              

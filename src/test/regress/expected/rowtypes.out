@@ -259,8 +259,9 @@ order by thousand, tenthous;
                         QUERY PLAN                         
 -----------------------------------------------------------
  Index Only Scan using tenk1_thous_tenthous on tenk1
+   Skip scan: All
    Index Cond: (ROW(thousand, tenthous) >= ROW(997, 5000))
-(2 rows)
+(3 rows)
 
 select thousand, tenthous from tenk1
 where (thousand, tenthous) >= (997, 5000)
@@ -305,8 +306,9 @@ order by thousand, tenthous;
    ->  Bitmap Heap Scan on tenk1
          Filter: (ROW(thousand, tenthous, four) > ROW(998, 5000, 3))
          ->  Bitmap Index Scan on tenk1_thous_tenthous
+               Skip scan: All
                Index Cond: (ROW(thousand, tenthous) >= ROW(998, 5000))
-(6 rows)
+(7 rows)
 
 select thousand, tenthous, four from tenk1
 where (thousand, tenthous, four) > (998, 5000, 3)
@@ -337,8 +339,9 @@ order by thousand, tenthous;
                         QUERY PLAN                        
 ----------------------------------------------------------
  Index Only Scan using tenk1_thous_tenthous on tenk1
+   Skip scan: All
    Index Cond: (ROW(thousand, tenthous) > ROW(998, 5000))
-(2 rows)
+(3 rows)
 
 select thousand, tenthous from tenk1
 where (998, 5000) < (thousand, tenthous)
@@ -373,8 +376,9 @@ order by thousand, hundred;
    ->  Bitmap Heap Scan on tenk1
          Filter: (ROW(998, 5000) < ROW(thousand, hundred))
          ->  Bitmap Index Scan on tenk1_thous_tenthous
+               Skip scan: All
                Index Cond: (thousand >= 998)
-(6 rows)
+(7 rows)
 
 select thousand, hundred from tenk1
 where (998, 5000) < (thousand, hundred)
@@ -405,8 +409,9 @@ select a,b from test_table where (a,b) > ('a','a') order by a,b;
                        QUERY PLAN                       
 --------------------------------------------------------
  Index Only Scan using test_table_a_b_idx on test_table
+   Skip scan: All
    Index Cond: (ROW(a, b) > ROW('a'::text, 'a'::text))
-(2 rows)
+(3 rows)
 
 select a,b from test_table where (a,b) > ('a','a') order by a,b;
  a | b 
@@ -1109,8 +1114,9 @@ select row_to_json(q) from
 -------------------------------------------------------------
  Subquery Scan on q
    ->  Index Only Scan using tenk1_thous_tenthous on tenk1
+         Skip scan: All
          Index Cond: ((thousand = 42) AND (tenthous < 2000))
-(3 rows)
+(4 rows)
 
 select row_to_json(q) from
   (select thousand, tenthous from tenk1

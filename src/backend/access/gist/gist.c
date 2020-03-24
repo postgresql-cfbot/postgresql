@@ -86,6 +86,9 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->ambulkdelete = gistbulkdelete;
 	amroutine->amvacuumcleanup = gistvacuumcleanup;
 	amroutine->amcanreturn = gistcanreturn;
+	amroutine->amskip = NULL;
+	amroutine->ambeginskipscan = NULL;
+	amroutine->amgetskiptuple = NULL;
 	amroutine->amcostestimate = gistcostestimate;
 	amroutine->amoptions = gistoptions;
 	amroutine->amproperty = gistproperty;

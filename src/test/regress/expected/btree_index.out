@@ -110,9 +110,10 @@ select proname from pg_proc where proname like E'RI\\_FKey%del' order by 1;
                                   QUERY PLAN                                  
 ------------------------------------------------------------------------------
  Index Only Scan using pg_proc_proname_args_nsp_index on pg_proc
+   Skip scan: All
    Index Cond: ((proname >= 'RI_FKey'::text) AND (proname < 'RI_FKez'::text))
    Filter: (proname ~~ 'RI\_FKey%del'::text)
-(3 rows)
+(4 rows)
 
 select proname from pg_proc where proname like E'RI\\_FKey%del' order by 1;
         proname         
@@ -129,9 +130,10 @@ select proname from pg_proc where proname ilike '00%foo' order by 1;
                              QUERY PLAN                             
 --------------------------------------------------------------------
  Index Only Scan using pg_proc_proname_args_nsp_index on pg_proc
+   Skip scan: All
    Index Cond: ((proname >= '00'::text) AND (proname < '01'::text))
    Filter: (proname ~~* '00%foo'::text)
-(3 rows)
+(4 rows)
 
 select proname from pg_proc where proname ilike '00%foo' order by 1;
  proname 
@@ -143,8 +145,9 @@ select proname from pg_proc where proname ilike 'ri%foo' order by 1;
                            QUERY PLAN                            
 -----------------------------------------------------------------
  Index Only Scan using pg_proc_proname_args_nsp_index on pg_proc
+   Skip scan: All
    Filter: (proname ~~* 'ri%foo'::text)
-(2 rows)
+(3 rows)
 
 set enable_indexscan to false;
 set enable_bitmapscan to true;
@@ -157,8 +160,9 @@ select proname from pg_proc where proname like E'RI\\_FKey%del' order by 1;
    ->  Bitmap Heap Scan on pg_proc
          Filter: (proname ~~ 'RI\_FKey%del'::text)
          ->  Bitmap Index Scan on pg_proc_proname_args_nsp_index
+               Skip scan: All
                Index Cond: ((proname >= 'RI_FKey'::text) AND (proname < 'RI_FKez'::text))
-(6 rows)
+(7 rows)
 
 select proname from pg_proc where proname like E'RI\\_FKey%del' order by 1;
         proname         
@@ -179,8 +183,9 @@ select proname from pg_proc where proname ilike '00%foo' order by 1;
    ->  Bitmap Heap Scan on pg_proc
          Filter: (proname ~~* '00%foo'::text)
          ->  Bitmap Index Scan on pg_proc_proname_args_nsp_index
+               Skip scan: All
                Index Cond: ((proname >= '00'::text) AND (proname < '01'::text))
-(6 rows)
+(7 rows)
 
 select proname from pg_proc where proname ilike '00%foo' order by 1;
  proname 
@@ -192,8 +197,9 @@ select proname from pg_proc where proname ilike 'ri%foo' order by 1;
                            QUERY PLAN                            
 -----------------------------------------------------------------
  Index Only Scan using pg_proc_proname_args_nsp_index on pg_proc
+   Skip scan: All
    Filter: (proname ~~* 'ri%foo'::text)
-(2 rows)
+(3 rows)
 
 reset enable_seqscan;
 reset enable_indexscan;
@@ -240,8 +246,9 @@ select * from btree_bpchar where f1::bpchar like 'foo';
  Bitmap Heap Scan on btree_bpchar
    Filter: ((f1)::bpchar ~~ 'foo'::text)
    ->  Bitmap Index Scan on btree_bpchar_f1_idx
+         Skip scan: All
          Index Cond: ((f1)::bpchar = 'foo'::bpchar)
-(4 rows)
+(5 rows)
 
 select * from btree_bpchar where f1::bpchar like 'foo';
  f1  
@@ -256,8 +263,9 @@ select * from btree_bpchar where f1::bpchar like 'foo%';
  Bitmap Heap Scan on btree_bpchar
    Filter: ((f1)::bpchar ~~ 'foo%'::text)
    ->  Bitmap Index Scan on btree_bpchar_f1_idx
+         Skip scan: All
          Index Cond: (((f1)::bpchar >= 'foo'::bpchar) AND ((f1)::bpchar < 'fop'::bpchar))
-(4 rows)
+(5 rows)
 
 select * from btree_bpchar where f1::bpchar like 'foo%';
   f1  

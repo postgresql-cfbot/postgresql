@@ -299,49 +299,55 @@ explain (costs off) select * from pg_proc where proname ~ '^abc';
                               QUERY PLAN                              
 ----------------------------------------------------------------------
  Index Scan using pg_proc_proname_args_nsp_index on pg_proc
+   Skip scan: All
    Index Cond: ((proname >= 'abc'::text) AND (proname < 'abd'::text))
    Filter: (proname ~ '^abc'::text)
-(3 rows)
+(4 rows)
 
 explain (costs off) select * from pg_proc where proname ~ '^abc$';
                          QUERY PLAN                         
 ------------------------------------------------------------
  Index Scan using pg_proc_proname_args_nsp_index on pg_proc
+   Skip scan: All
    Index Cond: (proname = 'abc'::text)
    Filter: (proname ~ '^abc$'::text)
-(3 rows)
+(4 rows)
 
 explain (costs off) select * from pg_proc where proname ~ '^abcd*e';
                               QUERY PLAN                              
 ----------------------------------------------------------------------
  Index Scan using pg_proc_proname_args_nsp_index on pg_proc
+   Skip scan: All
    Index Cond: ((proname >= 'abc'::text) AND (proname < 'abd'::text))
    Filter: (proname ~ '^abcd*e'::text)
-(3 rows)
+(4 rows)
 
 explain (costs off) select * from pg_proc where proname ~ '^abc+d';
                               QUERY PLAN                              
 ----------------------------------------------------------------------
  Index Scan using pg_proc_proname_args_nsp_index on pg_proc
+   Skip scan: All
    Index Cond: ((proname >= 'abc'::text) AND (proname < 'abd'::text))
    Filter: (proname ~ '^abc+d'::text)
-(3 rows)
+(4 rows)
 
 explain (costs off) select * from pg_proc where proname ~ '^(abc)(def)';
                                  QUERY PLAN                                 
 ----------------------------------------------------------------------------
  Index Scan using pg_proc_proname_args_nsp_index on pg_proc
+   Skip scan: All
    Index Cond: ((proname >= 'abcdef'::text) AND (proname < 'abcdeg'::text))
    Filter: (proname ~ '^(abc)(def)'::text)
-(3 rows)
+(4 rows)
 
 explain (costs off) select * from pg_proc where proname ~ '^(abc)$';
                          QUERY PLAN                         
 ------------------------------------------------------------
  Index Scan using pg_proc_proname_args_nsp_index on pg_proc
+   Skip scan: All
    Index Cond: (proname = 'abc'::text)
    Filter: (proname ~ '^(abc)$'::text)
-(3 rows)
+(4 rows)
 
 explain (costs off) select * from pg_proc where proname ~ '^(abc)?d';
                QUERY PLAN               
@@ -354,9 +360,10 @@ explain (costs off) select * from pg_proc where proname ~ '^abcd(x|(?=\w\w)q)';
                                QUERY PLAN                               
 ------------------------------------------------------------------------
  Index Scan using pg_proc_proname_args_nsp_index on pg_proc
+   Skip scan: All
    Index Cond: ((proname >= 'abcd'::text) AND (proname < 'abce'::text))
    Filter: (proname ~ '^abcd(x|(?=\w\w)q)'::text)
-(3 rows)
+(4 rows)
 
 -- Test for infinite loop in pullback() (CVE-2007-4772)
 select 'a' ~ '($|^)*';

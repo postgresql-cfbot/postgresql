@@ -126,8 +126,9 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1 RIGHT JOIN prt2 t2 ON t1.a = t2.b WHE
                ->  Seq Scan on prt2_p3 t2_3
                      Filter: (a = 0)
                ->  Index Scan using iprt1_p3_a on prt1_p3 t1_3
+                     Skip scan: All
                      Index Cond: (a = t2_3.b)
-(20 rows)
+(21 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1 RIGHT JOIN prt2 t2 ON t1.a = t2.b WHERE t2.a = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -366,26 +367,32 @@ SELECT * FROM prt1 t1 LEFT JOIN LATERAL
                      Filter: (b = 0)
                ->  Nested Loop
                      ->  Index Only Scan using iprt1_p1_a on prt1_p1 t2_1
+                           Skip scan: All
                            Index Cond: (a = t1_1.a)
                      ->  Index Scan using iprt2_p1_b on prt2_p1 t3_1
+                           Skip scan: All
                            Index Cond: (b = t2_1.a)
          ->  Nested Loop Left Join
                ->  Seq Scan on prt1_p2 t1_2
                      Filter: (b = 0)
                ->  Nested Loop
                      ->  Index Only Scan using iprt1_p2_a on prt1_p2 t2_2
+                           Skip scan: All
                            Index Cond: (a = t1_2.a)
                      ->  Index Scan using iprt2_p2_b on prt2_p2 t3_2
+                           Skip scan: All
                            Index Cond: (b = t2_2.a)
          ->  Nested Loop Left Join
                ->  Seq Scan on prt1_p3 t1_3
                      Filter: (b = 0)
                ->  Nested Loop
                      ->  Index Only Scan using iprt1_p3_a on prt1_p3 t2_3
+                           Skip scan: All
                            Index Cond: (a = t1_3.a)
                      ->  Index Scan using iprt2_p3_b on prt2_p3 t3_3
+                           Skip scan: All
                            Index Cond: (b = t2_3.a)
-(27 rows)
+(33 rows)
 
 SELECT * FROM prt1 t1 LEFT JOIN LATERAL
 			  (SELECT t2.a AS t2a, t3.a AS t3a, least(t1.a,t2.a,t3.b) FROM prt1 t2 JOIN prt2 t3 ON (t2.a = t3.b)) ss
@@ -609,6 +616,7 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM prt1 t1, prt2 t2, prt1_e t
                            ->  Seq Scan on prt1_p1 t1_1
                                  Filter: (b = 0)
                ->  Index Scan using iprt1_e_p1_ab2 on prt1_e_p1 t3_1
+                     Skip scan: All
                      Index Cond: (((a + b) / 2) = t2_1.b)
          ->  Nested Loop
                Join Filter: (t1_2.a = ((t3_2.a + t3_2.b) / 2))
@@ -619,6 +627,7 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM prt1 t1, prt2 t2, prt1_e t
                            ->  Seq Scan on prt1_p2 t1_2
                                  Filter: (b = 0)
                ->  Index Scan using iprt1_e_p2_ab2 on prt1_e_p2 t3_2
+                     Skip scan: All
                      Index Cond: (((a + b) / 2) = t2_2.b)
          ->  Nested Loop
                Join Filter: (t1_3.a = ((t3_3.a + t3_3.b) / 2))
@@ -629,8 +638,9 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM prt1 t1, prt2 t2, prt1_e t
                            ->  Seq Scan on prt1_p3 t1_3
                                  Filter: (b = 0)
                ->  Index Scan using iprt1_e_p3_ab2 on prt1_e_p3 t3_3
+                     Skip scan: All
                      Index Cond: (((a + b) / 2) = t2_3.b)
-(33 rows)
+(36 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM prt1 t1, prt2 t2, prt1_e t3 WHERE t1.a = t2.b AND t1.a = (t3.a + t3.b)/2 AND t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   | ?column? | c 
@@ -712,6 +722,7 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2
                            ->  Seq Scan on prt1_e_p1 t3_1
                                  Filter: (c = 0)
                ->  Index Scan using iprt2_p1_b on prt2_p1 t2_1
+                     Skip scan: All
                      Index Cond: (b = t1_1.a)
          ->  Nested Loop Left Join
                ->  Hash Right Join
@@ -721,6 +732,7 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2
                            ->  Seq Scan on prt1_e_p2 t3_2
                                  Filter: (c = 0)
                ->  Index Scan using iprt2_p2_b on prt2_p2 t2_2
+                     Skip scan: All
                      Index Cond: (b = t1_2.a)
          ->  Nested Loop Left Join
                ->  Hash Right Join
@@ -730,8 +742,9 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2
                            ->  Seq Scan on prt1_e_p3 t3_3
                                  Filter: (c = 0)
                ->  Index Scan using iprt2_p3_b on prt2_p3 t2_3
+                     Skip scan: All
                      Index Cond: (b = t1_3.a)
-(30 rows)
+(33 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b) RIGHT JOIN prt1_e t3 ON (t1.a = (t3.a + t3.b)/2) WHERE t3.c = 0 ORDER BY t1.a, t2.b, t3.a + t3.b;
   a  |  c   |  b  |  c   | ?column? | c 
@@ -826,6 +839,7 @@ SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1, prt1_e t2 WHER
                                  ->  Seq Scan on prt2_p1 t1_5
                                        Filter: (a = 0)
                ->  Index Scan using iprt1_p1_a on prt1_p1 t1_2
+                     Skip scan: All
                      Index Cond: (a = ((t2_1.a + t2_1.b) / 2))
                      Filter: (b = 0)
          ->  Nested Loop
@@ -839,6 +853,7 @@ SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1, prt1_e t2 WHER
                                  ->  Seq Scan on prt2_p2 t1_6
                                        Filter: (a = 0)
                ->  Index Scan using iprt1_p2_a on prt1_p2 t1_3
+                     Skip scan: All
                      Index Cond: (a = ((t2_2.a + t2_2.b) / 2))
                      Filter: (b = 0)
          ->  Nested Loop
@@ -849,11 +864,13 @@ SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1, prt1_e t2 WHER
                            ->  Seq Scan on prt2_p3 t1_7
                                  Filter: (a = 0)
                            ->  Index Scan using iprt1_e_p3_ab2 on prt1_e_p3 t2_3
+                                 Skip scan: All
                                  Index Cond: (((a + b) / 2) = t1_7.b)
                ->  Index Scan using iprt1_p3_a on prt1_p3 t1_4
+                     Skip scan: All
                      Index Cond: (a = ((t2_3.a + t2_3.b) / 2))
                      Filter: (b = 0)
-(41 rows)
+(45 rows)
 
 SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1, prt1_e t2 WHERE t1.a = 0 AND t1.b = (t2.a + t2.b)/2) AND t1.b = 0 ORDER BY t1.a;
   a  | b |  c   
@@ -881,6 +898,7 @@ SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1 WHERE t1.b IN (
                                  ->  Seq Scan on prt1_e_p1 t1_9
                                        Filter: (c = 0)
                ->  Index Scan using iprt1_p1_a on prt1_p1 t1_3
+                     Skip scan: All
                      Index Cond: (a = t1_6.b)
                      Filter: (b = 0)
          ->  Nested Loop
@@ -893,6 +911,7 @@ SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1 WHERE t1.b IN (
                                  ->  Seq Scan on prt1_e_p2 t1_10
                                        Filter: (c = 0)
                ->  Index Scan using iprt1_p2_a on prt1_p2 t1_4
+                     Skip scan: All
                      Index Cond: (a = t1_7.b)
                      Filter: (b = 0)
          ->  Nested Loop
@@ -905,9 +924,10 @@ SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1 WHERE t1.b IN (
                                  ->  Seq Scan on prt1_e_p3 t1_11
                                        Filter: (c = 0)
                ->  Index Scan using iprt1_p3_a on prt1_p3 t1_5
+                     Skip scan: All
                      Index Cond: (a = t1_8.b)
                      Filter: (b = 0)
-(39 rows)
+(42 rows)
 
 SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1 WHERE t1.b IN (SELECT (t1.a + t1.b)/2 FROM prt1_e t1 WHERE t1.c = 0)) AND t1.b = 0 ORDER BY t1.a;
   a  | b |  c   
@@ -1933,12 +1953,15 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1 LEFT JOIN prt2 t2 ON (t1.a < t2.b);
          ->  Seq Scan on prt1_p3 t1_3
    ->  Append
          ->  Index Scan using iprt2_p1_b on prt2_p1 t2_1
+               Skip scan: All
                Index Cond: (b > t1.a)
          ->  Index Scan using iprt2_p2_b on prt2_p2 t2_2
+               Skip scan: All
                Index Cond: (b > t1.a)
          ->  Index Scan using iprt2_p3_b on prt2_p3 t2_3
+               Skip scan: All
                Index Cond: (b > t1.a)
-(12 rows)
+(15 rows)
 
 -- equi-join with join condition on partial keys does not qualify for
 -- partitionwise join

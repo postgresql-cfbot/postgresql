@@ -2070,24 +2070,33 @@ select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on 
                            Filter: (a = ANY ('{0,0,1}'::integer[]))
                      ->  Append (actual rows=N loops=N)
                            ->  Index Scan using ab_a1_b1_a_idx on ab_a1_b1 ab_1 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a1_b2_a_idx on ab_a1_b2 ab_2 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
-(27 rows)
+(36 rows)
 
 -- Ensure the same partitions are pruned when we make the nested loop
 -- parameter an Expr rather than a plain Param.
@@ -2104,24 +2113,33 @@ select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on 
                            Filter: (a = ANY ('{0,0,1}'::integer[]))
                      ->  Append (actual rows=N loops=N)
                            ->  Index Scan using ab_a1_b1_a_idx on ab_a1_b1 ab_1 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = (a.a + 0))
                            ->  Index Scan using ab_a1_b2_a_idx on ab_a1_b2 ab_2 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = (a.a + 0))
                            ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = (a.a + 0))
                            ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = (a.a + 0))
                            ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = (a.a + 0))
                            ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = (a.a + 0))
                            ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = (a.a + 0))
                            ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = (a.a + 0))
                            ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = (a.a + 0))
-(27 rows)
+(36 rows)
 
 insert into lprt_a values(3),(3);
 select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on ab.a = a.a where a.a in(1, 0, 3)');
@@ -2137,24 +2155,33 @@ select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on 
                            Filter: (a = ANY ('{1,0,3}'::integer[]))
                      ->  Append (actual rows=N loops=N)
                            ->  Index Scan using ab_a1_b1_a_idx on ab_a1_b1 ab_1 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a1_b2_a_idx on ab_a1_b2 ab_2 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
-(27 rows)
+(36 rows)
 
 select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on ab.a = a.a where a.a in(1, 0, 0)');
                                         explain_parallel_append                                         
@@ -2170,24 +2197,33 @@ select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on 
                            Rows Removed by Filter: N
                      ->  Append (actual rows=N loops=N)
                            ->  Index Scan using ab_a1_b1_a_idx on ab_a1_b1 ab_1 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a1_b2_a_idx on ab_a1_b2 ab_2 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (actual rows=N loops=N)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
-(28 rows)
+(37 rows)
 
 delete from lprt_a where a = 1;
 select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on ab.a = a.a where a.a in(1, 0, 0)');
@@ -2204,24 +2240,33 @@ select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on 
                            Rows Removed by Filter: N
                      ->  Append (actual rows=N loops=N)
                            ->  Index Scan using ab_a1_b1_a_idx on ab_a1_b1 ab_1 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a1_b2_a_idx on ab_a1_b2 ab_2 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (never executed)
+                                 Skip scan: All
                                  Index Cond: (a = a.a)
-(28 rows)
+(37 rows)
 
 reset enable_hashjoin;
 reset enable_mergejoin;
@@ -2245,48 +2290,57 @@ select * from ab where a = (select max(a) from lprt_a) and b = (select max(a)-1 
          Recheck Cond: (a = $0)
          Filter: (b = $1)
          ->  Bitmap Index Scan on ab_a1_b1_a_idx (never executed)
+               Skip scan: All
                Index Cond: (a = $0)
    ->  Bitmap Heap Scan on ab_a1_b2 ab_2 (never executed)
          Recheck Cond: (a = $0)
          Filter: (b = $1)
          ->  Bitmap Index Scan on ab_a1_b2_a_idx (never executed)
+               Skip scan: All
                Index Cond: (a = $0)
    ->  Bitmap Heap Scan on ab_a1_b3 ab_3 (never executed)
          Recheck Cond: (a = $0)
          Filter: (b = $1)
          ->  Bitmap Index Scan on ab_a1_b3_a_idx (never executed)
+               Skip scan: All
                Index Cond: (a = $0)
    ->  Bitmap Heap Scan on ab_a2_b1 ab_4 (never executed)
          Recheck Cond: (a = $0)
          Filter: (b = $1)
          ->  Bitmap Index Scan on ab_a2_b1_a_idx (never executed)
+               Skip scan: All
                Index Cond: (a = $0)
    ->  Bitmap Heap Scan on ab_a2_b2 ab_5 (never executed)
          Recheck Cond: (a = $0)
          Filter: (b = $1)
          ->  Bitmap Index Scan on ab_a2_b2_a_idx (never executed)
+               Skip scan: All
                Index Cond: (a = $0)
    ->  Bitmap Heap Scan on ab_a2_b3 ab_6 (never executed)
          Recheck Cond: (a = $0)
          Filter: (b = $1)
          ->  Bitmap Index Scan on ab_a2_b3_a_idx (never executed)
+               Skip scan: All
                Index Cond: (a = $0)
    ->  Bitmap Heap Scan on ab_a3_b1 ab_7 (never executed)
          Recheck Cond: (a = $0)
          Filter: (b = $1)
          ->  Bitmap Index Scan on ab_a3_b1_a_idx (never executed)
+               Skip scan: All
                Index Cond: (a = $0)
    ->  Bitmap Heap Scan on ab_a3_b2 ab_8 (actual rows=0 loops=1)
          Recheck Cond: (a = $0)
          Filter: (b = $1)
          ->  Bitmap Index Scan on ab_a3_b2_a_idx (actual rows=0 loops=1)
+               Skip scan: All
                Index Cond: (a = $0)
    ->  Bitmap Heap Scan on ab_a3_b3 ab_9 (never executed)
          Recheck Cond: (a = $0)
          Filter: (b = $1)
          ->  Bitmap Index Scan on ab_a3_b3_a_idx (never executed)
+               Skip scan: All
                Index Cond: (a = $0)
-(52 rows)
+(61 rows)
 
 -- Test run-time partition pruning with UNION ALL parents
 explain (analyze, costs off, summary off, timing off)
@@ -2301,16 +2355,19 @@ select * from (select * from ab where a = 1 union all select * from ab) ab where
                Recheck Cond: (a = 1)
                Filter: (b = $0)
                ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual rows=0 loops=1)
+                     Skip scan: All
                      Index Cond: (a = 1)
          ->  Bitmap Heap Scan on ab_a1_b2 ab_12 (never executed)
                Recheck Cond: (a = 1)
                Filter: (b = $0)
                ->  Bitmap Index Scan on ab_a1_b2_a_idx (never executed)
+                     Skip scan: All
                      Index Cond: (a = 1)
          ->  Bitmap Heap Scan on ab_a1_b3 ab_13 (never executed)
                Recheck Cond: (a = 1)
                Filter: (b = $0)
                ->  Bitmap Index Scan on ab_a1_b3_a_idx (never executed)
+                     Skip scan: All
                      Index Cond: (a = 1)
    ->  Seq Scan on ab_a1_b1 ab_1 (actual rows=0 loops=1)
          Filter: (b = $0)
@@ -2330,7 +2387,7 @@ select * from (select * from ab where a = 1 union all select * from ab) ab where
          Filter: (b = $0)
    ->  Seq Scan on ab_a3_b3 ab_9 (never executed)
          Filter: (b = $0)
-(37 rows)
+(40 rows)
 
 -- A case containing a UNION ALL with a non-partitioned child.
 explain (analyze, costs off, summary off, timing off)
@@ -2345,16 +2402,19 @@ select * from (select * from ab where a = 1 union all (values(10,5)) union all s
                Recheck Cond: (a = 1)
                Filter: (b = $0)
                ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual rows=0 loops=1)
+                     Skip scan: All
                      Index Cond: (a = 1)
          ->  Bitmap Heap Scan on ab_a1_b2 ab_12 (never executed)
                Recheck Cond: (a = 1)
                Filter: (b = $0)
                ->  Bitmap Index Scan on ab_a1_b2_a_idx (never executed)
+                     Skip scan: All
                      Index Cond: (a = 1)
          ->  Bitmap Heap Scan on ab_a1_b3 ab_13 (never executed)
                Recheck Cond: (a = 1)
                Filter: (b = $0)
                ->  Bitmap Index Scan on ab_a1_b3_a_idx (never executed)
+                     Skip scan: All
                      Index Cond: (a = 1)
    ->  Result (actual rows=0 loops=1)
          One-Time Filter: (5 = $0)
@@ -2376,7 +2436,7 @@ select * from (select * from ab where a = 1 union all (values(10,5)) union all s
          Filter: (b = $0)
    ->  Seq Scan on ab_a3_b3 ab_9 (never executed)
          Filter: (b = $0)
-(39 rows)
+(42 rows)
 
 -- Another UNION ALL test, but containing a mix of exec init and exec run-time pruning.
 create table xy_1 (x int, y int);
@@ -2446,63 +2506,75 @@ update ab_a1 set b = 3 from ab where ab.a = 1 and ab.a = ab_a1.a;
                ->  Bitmap Heap Scan on ab_a1_b1 ab_1 (actual rows=0 loops=1)
                      Recheck Cond: (a = 1)
                      ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual rows=0 loops=1)
+                           Skip scan: All
                            Index Cond: (a = 1)
                ->  Bitmap Heap Scan on ab_a1_b2 ab_2 (actual rows=1 loops=1)
                      Recheck Cond: (a = 1)
                      Heap Blocks: exact=1
                      ->  Bitmap Index Scan on ab_a1_b2_a_idx (actual rows=1 loops=1)
+                           Skip scan: All
                            Index Cond: (a = 1)
                ->  Bitmap Heap Scan on ab_a1_b3 ab_3 (actual rows=0 loops=1)
                      Recheck Cond: (a = 1)
                      ->  Bitmap Index Scan on ab_a1_b3_a_idx (actual rows=0 loops=1)
+                           Skip scan: All
                            Index Cond: (a = 1)
          ->  Materialize (actual rows=0 loops=1)
                ->  Bitmap Heap Scan on ab_a1_b1 ab_a1_1 (actual rows=0 loops=1)
                      Recheck Cond: (a = 1)
                      ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual rows=0 loops=1)
+                           Skip scan: All
                            Index Cond: (a = 1)
    ->  Nested Loop (actual rows=1 loops=1)
          ->  Append (actual rows=1 loops=1)
                ->  Bitmap Heap Scan on ab_a1_b1 ab_1 (actual rows=0 loops=1)
                      Recheck Cond: (a = 1)
                      ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual rows=0 loops=1)
+                           Skip scan: All
                            Index Cond: (a = 1)
                ->  Bitmap Heap Scan on ab_a1_b2 ab_2 (actual rows=1 loops=1)
                      Recheck Cond: (a = 1)
                      Heap Blocks: exact=1
                      ->  Bitmap Index Scan on ab_a1_b2_a_idx (actual rows=1 loops=1)
+                           Skip scan: All
                            Index Cond: (a = 1)
                ->  Bitmap Heap Scan on ab_a1_b3 ab_3 (actual rows=0 loops=1)
                      Recheck Cond: (a = 1)
                      ->  Bitmap Index Scan on ab_a1_b3_a_idx (actual rows=1 loops=1)
+                           Skip scan: All
                            Index Cond: (a = 1)
          ->  Materialize (actual rows=1 loops=1)
                ->  Bitmap Heap Scan on ab_a1_b2 ab_a1_2 (actual rows=1 loops=1)
                      Recheck Cond: (a = 1)
                      Heap Blocks: exact=1
                      ->  Bitmap Index Scan on ab_a1_b2_a_idx (actual rows=1 loops=1)
+                           Skip scan: All
                            Index Cond: (a = 1)
    ->  Nested Loop (actual rows=0 loops=1)
          ->  Append (actual rows=1 loops=1)
                ->  Bitmap Heap Scan on ab_a1_b1 ab_1 (actual rows=0 loops=1)
                      Recheck Cond: (a = 1)
                      ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual rows=0 loops=1)
+                           Skip scan: All
                            Index Cond: (a = 1)
                ->  Bitmap Heap Scan on ab_a1_b2 ab_2 (actual rows=1 loops=1)
                      Recheck Cond: (a = 1)
                      Heap Blocks: exact=1
                      ->  Bitmap Index Scan on ab_a1_b2_a_idx (actual rows=1 loops=1)
+                           Skip scan: All
                            Index Cond: (a = 1)
                ->  Bitmap Heap Scan on ab_a1_b3 ab_3 (actual rows=0 loops=1)
                      Recheck Cond: (a = 1)
                      ->  Bitmap Index Scan on ab_a1_b3_a_idx (actual rows=1 loops=1)
+                           Skip scan: All
                            Index Cond: (a = 1)
          ->  Materialize (actual rows=0 loops=1)
                ->  Bitmap Heap Scan on ab_a1_b3 ab_a1_3 (actual rows=0 loops=1)
                      Recheck Cond: (a = 1)
                      ->  Bitmap Index Scan on ab_a1_b3_a_idx (actual rows=1 loops=1)
+                           Skip scan: All
                            Index Cond: (a = 1)
-(65 rows)
+(77 rows)
 
 table ab;
  a | b 
@@ -2593,18 +2665,24 @@ select * from tbl1 join tprt on tbl1.col1 > tprt.col1;
    ->  Seq Scan on tbl1 (actual rows=2 loops=1)
    ->  Append (actual rows=3 loops=2)
          ->  Index Scan using tprt1_idx on tprt_1 (actual rows=2 loops=2)
+               Skip scan: All
                Index Cond: (col1 < tbl1.col1)
          ->  Index Scan using tprt2_idx on tprt_2 (actual rows=2 loops=1)
+               Skip scan: All
                Index Cond: (col1 < tbl1.col1)
          ->  Index Scan using tprt3_idx on tprt_3 (never executed)
+               Skip scan: All
                Index Cond: (col1 < tbl1.col1)
          ->  Index Scan using tprt4_idx on tprt_4 (never executed)
+               Skip scan: All
                Index Cond: (col1 < tbl1.col1)
          ->  Index Scan using tprt5_idx on tprt_5 (never executed)
+               Skip scan: All
                Index Cond: (col1 < tbl1.col1)
          ->  Index Scan using tprt6_idx on tprt_6 (never executed)
+               Skip scan: All
                Index Cond: (col1 < tbl1.col1)
-(15 rows)
+(21 rows)
 
 explain (analyze, costs off, summary off, timing off)
 select * from tbl1 join tprt on tbl1.col1 = tprt.col1;
@@ -2614,18 +2692,24 @@ select * from tbl1 join tprt on tbl1.col1 = tprt.col1;
    ->  Seq Scan on tbl1 (actual rows=2 loops=1)
    ->  Append (actual rows=1 loops=2)
          ->  Index Scan using tprt1_idx on tprt_1 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt2_idx on tprt_2 (actual rows=1 loops=2)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt3_idx on tprt_3 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt4_idx on tprt_4 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt5_idx on tprt_5 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt6_idx on tprt_6 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
-(15 rows)
+(21 rows)
 
 select tbl1.col1, tprt.col1 from tbl1
 inner join tprt on tbl1.col1 > tprt.col1
@@ -2659,18 +2743,24 @@ select * from tbl1 inner join tprt on tbl1.col1 > tprt.col1;
    ->  Seq Scan on tbl1 (actual rows=5 loops=1)
    ->  Append (actual rows=5 loops=5)
          ->  Index Scan using tprt1_idx on tprt_1 (actual rows=2 loops=5)
+               Skip scan: All
                Index Cond: (col1 < tbl1.col1)
          ->  Index Scan using tprt2_idx on tprt_2 (actual rows=3 loops=4)
+               Skip scan: All
                Index Cond: (col1 < tbl1.col1)
          ->  Index Scan using tprt3_idx on tprt_3 (actual rows=1 loops=2)
+               Skip scan: All
                Index Cond: (col1 < tbl1.col1)
          ->  Index Scan using tprt4_idx on tprt_4 (never executed)
+               Skip scan: All
                Index Cond: (col1 < tbl1.col1)
          ->  Index Scan using tprt5_idx on tprt_5 (never executed)
+               Skip scan: All
                Index Cond: (col1 < tbl1.col1)
          ->  Index Scan using tprt6_idx on tprt_6 (never executed)
+               Skip scan: All
                Index Cond: (col1 < tbl1.col1)
-(15 rows)
+(21 rows)
 
 explain (analyze, costs off, summary off, timing off)
 select * from tbl1 inner join tprt on tbl1.col1 = tprt.col1;
@@ -2680,18 +2770,24 @@ select * from tbl1 inner join tprt on tbl1.col1 = tprt.col1;
    ->  Seq Scan on tbl1 (actual rows=5 loops=1)
    ->  Append (actual rows=1 loops=5)
          ->  Index Scan using tprt1_idx on tprt_1 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt2_idx on tprt_2 (actual rows=1 loops=2)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt3_idx on tprt_3 (actual rows=0 loops=3)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt4_idx on tprt_4 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt5_idx on tprt_5 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt6_idx on tprt_6 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
-(15 rows)
+(21 rows)
 
 select tbl1.col1, tprt.col1 from tbl1
 inner join tprt on tbl1.col1 > tprt.col1
@@ -2744,18 +2840,24 @@ select * from tbl1 join tprt on tbl1.col1 < tprt.col1;
    ->  Seq Scan on tbl1 (actual rows=1 loops=1)
    ->  Append (actual rows=1 loops=1)
          ->  Index Scan using tprt1_idx on tprt_1 (never executed)
+               Skip scan: All
                Index Cond: (col1 > tbl1.col1)
          ->  Index Scan using tprt2_idx on tprt_2 (never executed)
+               Skip scan: All
                Index Cond: (col1 > tbl1.col1)
          ->  Index Scan using tprt3_idx on tprt_3 (never executed)
+               Skip scan: All
                Index Cond: (col1 > tbl1.col1)
          ->  Index Scan using tprt4_idx on tprt_4 (never executed)
+               Skip scan: All
                Index Cond: (col1 > tbl1.col1)
          ->  Index Scan using tprt5_idx on tprt_5 (never executed)
+               Skip scan: All
                Index Cond: (col1 > tbl1.col1)
          ->  Index Scan using tprt6_idx on tprt_6 (actual rows=1 loops=1)
+               Skip scan: All
                Index Cond: (col1 > tbl1.col1)
-(15 rows)
+(21 rows)
 
 select tbl1.col1, tprt.col1 from tbl1
 inner join tprt on tbl1.col1 < tprt.col1
@@ -2776,18 +2878,24 @@ select * from tbl1 join tprt on tbl1.col1 = tprt.col1;
    ->  Seq Scan on tbl1 (actual rows=1 loops=1)
    ->  Append (actual rows=0 loops=1)
          ->  Index Scan using tprt1_idx on tprt_1 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt2_idx on tprt_2 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt3_idx on tprt_3 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt4_idx on tprt_4 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt5_idx on tprt_5 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt6_idx on tprt_6 (never executed)
+               Skip scan: All
                Index Cond: (col1 = tbl1.col1)
-(15 rows)
+(21 rows)
 
 select tbl1.col1, tprt.col1 from tbl1
 inner join tprt on tbl1.col1 = tprt.col1
@@ -3115,12 +3223,14 @@ explain (analyze, costs off, summary off, timing off) execute mt_q1(15);
    Sort Key: ma_test.b
    Subplans Removed: 1
    ->  Index Scan using ma_test_p2_b_idx on ma_test_p2 ma_test_1 (actual rows=1 loops=1)
+         Skip scan: All
          Filter: ((a >= $1) AND ((a % 10) = 5))
          Rows Removed by Filter: 9
    ->  Index Scan using ma_test_p3_b_idx on ma_test_p3 ma_test_2 (actual rows=1 loops=1)
+         Skip scan: All
          Filter: ((a >= $1) AND ((a % 10) = 5))
          Rows Removed by Filter: 9
-(9 rows)
+(11 rows)
 
 execute mt_q1(15);
  a  
@@ -3136,9 +3246,10 @@ explain (analyze, costs off, summary off, timing off) execute mt_q1(25);
    Sort Key: ma_test.b
    Subplans Removed: 2
    ->  Index Scan using ma_test_p3_b_idx on ma_test_p3 ma_test_1 (actual rows=1 loops=1)
+         Skip scan: All
          Filter: ((a >= $1) AND ((a % 10) = 5))
          Rows Removed by Filter: 9
-(6 rows)
+(7 rows)
 
 execute mt_q1(25);
  a  
@@ -3185,14 +3296,18 @@ explain (analyze, costs off, summary off, timing off) select * from ma_test wher
            InitPlan 1 (returns $0)
              ->  Limit (actual rows=1 loops=1)
                    ->  Index Scan using ma_test_p2_b_idx on ma_test_p2 (actual rows=1 loops=1)
+                         Skip scan: All
                          Index Cond: (b IS NOT NULL)
    ->  Index Scan using ma_test_p1_b_idx on ma_test_p1 ma_test_1 (never executed)
+         Skip scan: All
          Filter: (a >= $1)
    ->  Index Scan using ma_test_p2_b_idx on ma_test_p2 ma_test_2 (actual rows=10 loops=1)
+         Skip scan: All
          Filter: (a >= $1)
    ->  Index Scan using ma_test_p3_b_idx on ma_test_p3 ma_test_3 (actual rows=10 loops=1)
+         Skip scan: All
          Filter: (a >= $1)
-(14 rows)
+(18 rows)
 
 reset enable_seqscan;
 reset enable_sort;

@@ -3954,6 +3954,14 @@ print_path(PlannerInfo *root, Path *path, int indent)
 		print_pathkeys(path->pathkeys, root->parse->rtable);
 	}
 
+	if (path->uniquekeys)
+	{
+		for (i = 0; i < indent; i++)
+			printf("\t");
+		printf("  uniquekeys: ");
+		print_uniquekeys(path->uniquekeys, root->parse->rtable);
+	}
+
 	if (join)
 	{
 		JoinPath   *jp = (JoinPath *) path;

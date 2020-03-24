@@ -136,14 +136,17 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->ambulkdelete = btbulkdelete;
 	amroutine->amvacuumcleanup = btvacuumcleanup;
 	amroutine->amcanreturn = btcanreturn;
+	amroutine->amskip = btskip;
 	amroutine->amcostestimate = btcostestimate;
 	amroutine->amoptions = btoptions;
 	amroutine->amproperty = btproperty;
 	amroutine->ambuildphasename = btbuildphasename;
 	amroutine->amvalidate = btvalidate;
 	amroutine->ambeginscan = btbeginscan;
+	amroutine->ambeginskipscan = btbeginscan_skip;
 	amroutine->amrescan = btrescan;
 	amroutine->amgettuple = btgettuple;
+	amroutine->amgetskiptuple = btgettuple_skip;
 	amroutine->amgetbitmap = btgetbitmap;
 	amroutine->amendscan = btendscan;
 	amroutine->ammarkpos = btmarkpos;
@@ -220,6 +223,15 @@ btinsert(Relation rel, Datum *values, bool *isnull,
 bool
 btgettuple(IndexScanDesc scan, ScanDirection dir)
 {
+	return btgettuple_skip(scan, dir, dir);
+}
+
+/*
+ *	btgettuple() -- Get the next tuple in the scan.
+ */
+bool
+btgettuple_skip(IndexScanDesc scan, ScanDirection prefixDir, ScanDirection postfixDir)
+{
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	bool		res;
 
@@ -237,7 +249,7 @@ btgettuple(IndexScanDesc scan, ScanDirection dir)
 		if (so->numArrayKeys < 0)
 			return false;
 
-		_bt_start_array_keys(scan, dir);
+		_bt_start_array_keys(scan, prefixDir);
 	}
 
 	/* This loop handles advancing to the next array elements, if any */
@@ -249,7 +261,7 @@ btgettuple(IndexScanDesc scan, ScanDirection dir)
 		 * _bt_first() to get the first item in the scan.
 		 */
 		if (!BTScanPosIsValid(so->currPos))
-			res = _bt_first(scan, dir);
+			res = _bt_first(scan, prefixDir, postfixDir);
 		else
 		{
 			/*
@@ -276,14 +288,14 @@ btgettuple(IndexScanDesc scan, ScanDirection dir)
 			/*
 			 * Now continue the scan.
 			 */
-			res = _bt_next(scan, dir);
+			res = _bt_next(scan, prefixDir, postfixDir);
 		}
 
 		/* If we have a tuple, return it ... */
 		if (res)
 			break;
 		/* ... otherwise see if we have more array keys to deal with */
-	} while (so->numArrayKeys && _bt_advance_array_keys(scan, dir));
+	} while (so->numArrayKeys && _bt_advance_array_keys(scan, prefixDir));
 
 	return res;
 }
@@ -314,7 +326,7 @@ btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	do
 	{
 		/* Fetch the first page & tuple */
-		if (_bt_first(scan, ForwardScanDirection))
+		if (_bt_first(scan, ForwardScanDirection, ForwardScanDirection))
 		{
 			/* Save tuple ID, and continue scanning */
 			heapTid = &scan->xs_heaptid;
@@ -330,7 +342,7 @@ btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 				if (++so->currPos.itemIndex > so->currPos.lastItem)
 				{
 					/* let _bt_next do the heavy lifting */
-					if (!_bt_next(scan, ForwardScanDirection))
+					if (!_bt_next(scan, ForwardScanDirection, ForwardScanDirection))
 						break;
 				}
 
@@ -351,6 +363,16 @@ btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
  */
 IndexScanDesc
 btbeginscan(Relation rel, int nkeys, int norderbys)
+{
+	return btbeginscan_skip(rel, nkeys, norderbys, -1);
+}
+
+
+/*
+ *	btbeginscan() -- start a scan on a btree index
+ */
+IndexScanDesc
+btbeginscan_skip(Relation rel, int nkeys, int norderbys, int skipPrefix)
 {
 	IndexScanDesc scan;
 	BTScanOpaque so;
@@ -385,9 +407,17 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	 */
 	so->currTuples = so->markTuples = NULL;
 
+	so->skipData = NULL;
+
 	scan->xs_itupdesc = RelationGetDescr(rel);
 
 	scan->opaque = so;
+
+	if (skipPrefix > 0)
+	{
+		so->skipData = (BTSkip) palloc0(sizeof(BTSkipData));
+		so->skipData->prefix = skipPrefix;
+	}
 
 	return scan;
 }
@@ -453,6 +483,15 @@ btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 }
 
 /*
+ * btskip() -- skip to the beginning of the next key prefix
+ */
+bool
+btskip(IndexScanDesc scan, ScanDirection prefixDir, ScanDirection postfixDir)
+{
+	return _bt_skip(scan, prefixDir, postfixDir);
+}
+
+/*
  *	btendscan() -- close down a scan
  */
 void
@@ -485,6 +524,8 @@ btendscan(IndexScanDesc scan)
 	if (so->currTuples != NULL)
 		pfree(so->currTuples);
 	/* so->markTuples should not be pfree'd, see btrescan */
+	if (_bt_skip_enabled(so))
+		pfree(so->skipData);
 	pfree(so);
 }
 
@@ -568,6 +609,9 @@ btrestrpos(IndexScanDesc scan)
 			if (so->currTuples)
 				memcpy(so->currTuples, so->markTuples,
 					   so->markPos.nextTupleOffset);
+			if (so->skipData)
+				memcpy(&so->skipData->curPos, &so->skipData->markPos,
+					   sizeof(BTSkipPosData));
 		}
 		else
 			BTScanPosInvalidate(so->currPos);

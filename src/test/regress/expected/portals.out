@@ -1253,8 +1253,9 @@ DECLARE c1 CURSOR FOR SELECT stringu1 FROM onek WHERE stringu1 = 'DZAAAA';
                  QUERY PLAN                  
 ---------------------------------------------
  Index Only Scan using onek_stringu1 on onek
+   Skip scan: All
    Index Cond: (stringu1 = 'DZAAAA'::name)
-(2 rows)
+(3 rows)
 
 DECLARE c1 CURSOR FOR SELECT stringu1 FROM onek WHERE stringu1 = 'DZAAAA';
 FETCH FROM c1;

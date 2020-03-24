@@ -212,9 +212,10 @@ EXPLAIN (COSTS OFF) SELECT * FROM atest12v x, atest12v y WHERE x.a = y.b;
    ->  Seq Scan on atest12 atest12_1
          Filter: (b <<< 5)
    ->  Index Scan using atest12_a_idx on atest12
+         Skip scan: All
          Index Cond: (a = atest12_1.b)
          Filter: (b <<< 5)
-(6 rows)
+(7 rows)
 
 -- And this one.
 EXPLAIN (COSTS OFF) SELECT * FROM atest12 x, atest12 y
@@ -225,8 +226,9 @@ EXPLAIN (COSTS OFF) SELECT * FROM atest12 x, atest12 y
    ->  Seq Scan on atest12 y
          Filter: (abs(a) <<< 5)
    ->  Index Scan using atest12_a_idx on atest12 x
+         Skip scan: All
          Index Cond: (a = y.b)
-(5 rows)
+(6 rows)
 
 -- This should also be a nestloop, but the security barrier forces the inner
 -- scan to be materialized
@@ -261,9 +263,10 @@ EXPLAIN (COSTS OFF) SELECT * FROM atest12v x, atest12v y WHERE x.a = y.b;
    ->  Seq Scan on atest12 atest12_1
          Filter: (b <<< 5)
    ->  Index Scan using atest12_a_idx on atest12
+         Skip scan: All
          Index Cond: (a = atest12_1.b)
          Filter: (b <<< 5)
-(6 rows)
+(7 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM atest12sbv x, atest12sbv y WHERE x.a = y.b;
                 QUERY PLAN                 
@@ -286,9 +289,10 @@ EXPLAIN (COSTS OFF) SELECT * FROM atest12v x, atest12v y
    ->  Seq Scan on atest12 atest12_1
          Filter: ((b <<< 5) AND (abs(a) <<< 5))
    ->  Index Scan using atest12_a_idx on atest12
+         Skip scan: All
          Index Cond: (a = atest12_1.b)
          Filter: (b <<< 5)
-(6 rows)
+(7 rows)
 
 -- But a security barrier view isolates the leaky operator.
 EXPLAIN (COSTS OFF) SELECT * FROM atest12sbv x, atest12sbv y
@@ -317,9 +321,10 @@ EXPLAIN (COSTS OFF) SELECT * FROM atest12v x, atest12v y WHERE x.a = y.b;
    ->  Seq Scan on atest12 atest12_1
          Filter: (b <<< 5)
    ->  Index Scan using atest12_a_idx on atest12
+         Skip scan: All
          Index Cond: (a = atest12_1.b)
          Filter: (b <<< 5)
-(6 rows)
+(7 rows)
 
 -- But not for this, due to lack of table-wide permissions needed
 -- to make use of the expression index's statistics.

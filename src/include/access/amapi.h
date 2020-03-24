@@ -119,6 +119,12 @@ typedef IndexScanDesc (*ambeginscan_function) (Relation indexRelation,
 											   int nkeys,
 											   int norderbys);
 
+/* prepare for index scan with skip */
+typedef IndexScanDesc (*ambeginscan_skip_function) (Relation indexRelation,
+											   int nkeys,
+											   int norderbys,
+											   int prefix);
+
 /* (re)start index scan */
 typedef void (*amrescan_function) (IndexScanDesc scan,
 								   ScanKey keys,
@@ -129,6 +135,16 @@ typedef void (*amrescan_function) (IndexScanDesc scan,
 /* next valid tuple */
 typedef bool (*amgettuple_function) (IndexScanDesc scan,
 									 ScanDirection direction);
+
+/* next valid tuple */
+typedef bool (*amgettuple_with_skip_function) (IndexScanDesc scan,
+											   ScanDirection prefixDir,
+											   ScanDirection postfixDir);
+
+/* skip past duplicates */
+typedef bool (*amskip_function) (IndexScanDesc scan,
+								 ScanDirection prefixDir,
+								 ScanDirection postfixDir);
 
 /* fetch all valid tuples */
 typedef int64 (*amgetbitmap_function) (IndexScanDesc scan,
@@ -223,12 +239,15 @@ typedef struct IndexAmRoutine
 	ambuildphasename_function ambuildphasename; /* can be NULL */
 	amvalidate_function amvalidate;
 	ambeginscan_function ambeginscan;
+	ambeginscan_skip_function ambeginskipscan;
 	amrescan_function amrescan;
 	amgettuple_function amgettuple; /* can be NULL */
+	amgettuple_with_skip_function amgetskiptuple; /* can be NULL */
 	amgetbitmap_function amgetbitmap;	/* can be NULL */
 	amendscan_function amendscan;
 	ammarkpos_function ammarkpos;	/* can be NULL */
 	amrestrpos_function amrestrpos; /* can be NULL */
+	amskip_function amskip;				/* can be NULL */
 
 	/* interface functions to support parallel index scans */
 	amestimateparallelscan_function amestimateparallelscan; /* can be NULL */

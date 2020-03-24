@@ -148,6 +148,9 @@ typedef struct IndexAmRoutine
     amendscan_function amendscan;
     ammarkpos_function ammarkpos;       /* can be NULL */
     amrestrpos_function amrestrpos;     /* can be NULL */
+    amskip_function amskip;                        /* can be NULL */
+    ambeginscan_skip_function ambeginskipscan;     /* can be NULL */
+    amgettuple_with_skip_function amgetskiptuple;  /* can be NULL */
 
     /* interface functions to support parallel index scans */
     amestimateparallelscan_function amestimateparallelscan;    /* can be NULL */
@@ -675,6 +678,122 @@ amrestrpos (IndexScanDesc scan);
   </para>
 
   <para>
+<programlisting>
+bool
+amskip (IndexScanDesc scan,
+        ScanDirection prefixDir,
+	ScanDirection postfixDir);
+</programlisting>
+  Skip past all tuples where the first 'prefix' columns have the same value as
+  the last tuple returned in the current scan. The arguments are:
+
+   <variablelist>
+    <varlistentry>
+     <term><parameter>scan</parameter></term>
+     <listitem>
+      <para>
+       Index scan information
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><parameter>prefixDir</parameter></term>
+     <listitem>
+      <para>
+       The direction in which the prefix part of the tuple is advancing.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><parameter>postfixDir</parameter></term>
+     <listitem>
+      <para>
+        The direction in which the postfix (everything after the prefix) of the tuple is advancing.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+
+  </para>
+  <para>
+<programlisting>
+IndexScanDesc
+ambeginscan_skip (Relation indexRelation,
+             int nkeys,
+	     int norderbys,
+	     int prefix);
+</programlisting>
+   Prepare for an index scan.  The <literal>nkeys</literal> and <literal>norderbys</literal>
+   parameters indicate the number of quals and ordering operators that will be
+   used in the scan; these may be useful for space allocation purposes.
+   Note that the actual values of the scan keys aren't provided yet.
+   The result must be a palloc'd struct.
+   For implementation reasons the index access method
+   <emphasis>must</emphasis> create this struct by calling
+   <function>RelationGetIndexScan()</function>.  In most cases
+   <function>ambeginscan</function> does little beyond making that call and perhaps
+   acquiring locks;
+   the interesting parts of index-scan startup are in <function>amrescan</function>.
+   If this is a skip scan, prefix must indicate the length of the prefix that can be
+   skipped over. Prefix can be set to -1 to disable skipping, which will yield an
+   identical scan to a regular call to <function>ambeginscan</function>.
+  </para>
+  <para>
+  <programlisting>
+  boolean
+  amgettuple_skip (IndexScanDesc scan,
+              ScanDirection prefixDir,
+	      ScanDirection postfixDir);
+  </programlisting>
+     Fetch the next tuple in the given scan, moving in the given
+     directions. Directions are specified by the direction of the prefix we're moving in,
+     of which the size of the prefix has been specified in the <function>btbeginscan_skip</function>
+     call. This direction can be different in DISTINCT scans when fetching backwards
+     from a cursor.
+     Returns true if a tuple was
+     obtained, false if no matching tuples remain.  In the true case the tuple
+     TID is stored into the <literal>scan</literal> structure.  Note that
+     <quote>success</quote> means only that the index contains an entry that matches
+     the scan keys, not that the tuple necessarily still exists in the heap or
+     will pass the caller's snapshot test.  On success, <function>amgettuple</function>
+     must also set <literal>scan-&gt;xs_recheck</literal> to true or false.
+     False means it is certain that the index entry matches the scan keys.
+     true means this is not certain, and the conditions represented by the
+     scan keys must be rechecked against the heap tuple after fetching it.
+     This provision supports <quote>lossy</quote> index operators.
+     Note that rechecking will extend only to the scan conditions; a partial
+     index predicate (if any) is never rechecked by <function>amgettuple</function>
+     callers.
+    </para>
+
+    <para>
+     If the index supports <link linkend="indexes-index-only-scans">index-only
+     scans</link> (i.e., <function>amcanreturn</function> returns true for it),
+     then on success the AM must also check <literal>scan-&gt;xs_want_itup</literal>,
+     and if that is true it must return the originally indexed data for the
+     index entry.  The data can be returned in the form of an
+     <structname>IndexTuple</structname> pointer stored at <literal>scan-&gt;xs_itup</literal>,
+     with tuple descriptor <literal>scan-&gt;xs_itupdesc</literal>; or in the form of
+     a <structname>HeapTuple</structname> pointer stored at <literal>scan-&gt;xs_hitup</literal>,
+     with tuple descriptor <literal>scan-&gt;xs_hitupdesc</literal>.  (The latter
+     format should be used when reconstructing data that might possibly not fit
+     into an <structname>IndexTuple</structname>.)  In either case,
+     management of the data referenced by the pointer is the access method's
+     responsibility.  The data must remain good at least until the next
+     <function>amgettuple</function>, <function>amrescan</function>, or <function>amendscan</function>
+     call for the scan.
+    </para>
+
+    <para>
+     The <function>amgettuple</function> function need only be provided if the access
+     method supports <quote>plain</quote> index scans.  If it doesn't, the
+     <structfield>amgettuple</structfield> field in its <structname>IndexAmRoutine</structname>
+     struct must be set to NULL.
+    </para>
+
+  <para>
    In addition to supporting ordinary index scans, some types of index
    may wish to support <firstterm>parallel index scans</firstterm>, which allow
    multiple backends to cooperate in performing an index scan.  The
@@ -689,7 +808,7 @@ amrestrpos (IndexScanDesc scan);
    functions may be implemented to support parallel index scans:
   </para>
 
-  <para>
+    <para>
 <programlisting>
 Size
 amestimateparallelscan (void);

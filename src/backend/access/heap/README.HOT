@@ -319,8 +319,8 @@ too, but since the case is unexpected we prefer to throw an error.)
 
 Practically, we prevent certain transactions from using the new index by
 setting pg_index.indcheckxmin to TRUE.  Transactions are allowed to use
-such an index only after pg_index.xmin is below their TransactionXmin
-horizon, thereby ensuring that any incompatible rows in HOT chains are
+such an index only after pg_index.xmin is below their active snapshot,
+thereby ensuring that any incompatible rows in HOT chains are
 dead to them. (pg_index.xmin will be the XID of the CREATE INDEX
 transaction.  The reason for using xmin rather than a normal column is
 that the regular vacuum freezing mechanism will take care of converting

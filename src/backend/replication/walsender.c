@@ -762,10 +762,12 @@ StartReplication(StartReplicationCmd *cmd)
  * which has to do a plain sleep/busy loop, because the walsender's latch gets
  * set every time WAL is flushed.
  */
-static int
-logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
-					   XLogRecPtr targetRecPtr, char *cur_page)
+static bool
+logical_read_xlog_page(XLogReaderState *state)
 {
+	XLogRecPtr		targetPagePtr = state->readPagePtr;
+	int				reqLen		  = state->readLen;
+	char		   *cur_page	  = state->readBuf;
 	XLogRecPtr	flushptr;
 	int			count;
 	WALReadError errinfo;
@@ -782,7 +784,10 @@ logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int req
 
 	/* fail if not (implies we are going to shut down) */
 	if (flushptr < targetPagePtr + reqLen)
-		return -1;
+	{
+		state->readLen = -1;
+		return false;
+	}
 
 	if (targetPagePtr + XLOG_BLCKSZ <= flushptr)
 		count = XLOG_BLCKSZ;	/* more than one block available */
@@ -812,7 +817,8 @@ logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int req
 	XLByteToSeg(targetPagePtr, segno, sendCxt->ws_segsize);
 	CheckXLogRemoved(segno, sendSeg->ws_tli);
 
-	return count;
+	state->readLen = count;
+	return true;
 }
 
 /*
@@ -2797,7 +2803,12 @@ XLogSendLogical(void)
 	 */
 	WalSndCaughtUp = false;
 
-	record = XLogReadRecord(logical_decoding_ctx->reader, &errm);
+	while (XLogReadRecord(logical_decoding_ctx->reader, &record, &errm) ==
+		   XLREAD_NEED_DATA)
+	{
+		if (!logical_decoding_ctx->read_page(logical_decoding_ctx->reader))
+			break;
+	}
 
 	/* xlog record was invalid */
 	if (errm != NULL)

@@ -22,11 +22,18 @@
 #include "storage/spin.h"
 #include "utils/tuplestore.h"
 
+typedef enum
+{
+	WAL_RCV_START_AT_CATCHUP, /* start a WAL receiver  after replaying all WAL files */
+	WAL_RCV_START_AT_CONSISTENCY /* start a WAL receiver once consistency has been reached */
+} WalRcvStartCondition;
+
 /* user-settable parameters */
 extern bool wal_receiver_create_temp_slot;
 extern int	wal_receiver_status_interval;
 extern int	wal_receiver_timeout;
 extern bool hot_standby_feedback;
+extern int  wal_receiver_start_condition;
 
 /*
  * MAXCONNINFO: maximum size of a connection string.

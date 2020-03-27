@@ -5591,6 +5591,98 @@ exitArchiveRecovery(TimeLineID endTLI, XLogRecPtr endOfLog)
 			(errmsg("archive recovery complete")));
 }
 
+static int
+XLogReadFirstPage(XLogRecPtr targetPagePtr, char *readBuf)
+{
+	int fd;
+	XLogSegNo segno;
+	char xlogfname[MAXFNAMELEN];
+
+	XLByteToSeg(targetPagePtr, segno, wal_segment_size);
+	elog(DEBUG3, "reading first page of segment %lu", segno);
+	fd = XLogFileReadAnyTLI(segno, LOG, XLOG_FROM_PG_WAL);
+	if (fd == -1)
+		return -1;
+
+	/* Seek to the beginning, we want to check if the first page is valid */
+	if (lseek(fd, (off_t) 0, SEEK_SET) < 0)
+	{
+		XLogFileName(xlogfname, ThisTimeLineID, segno, wal_segment_size);
+		close(fd);
+		elog(ERROR, "could not seek XLOG file %s, segment %lu: %m",
+			 xlogfname, segno);
+	}
+
+	if (read(fd, readBuf, XLOG_BLCKSZ) != XLOG_BLCKSZ)
+	{
+		close(fd);
+		elog(ERROR, "could not read from XLOG file %s, segment %lu: %m",
+			 xlogfname, segno);
+	}
+
+	close(fd);
+	return XLOG_BLCKSZ;
+}
+
+/*
+ * Find the LSN that points to the beginning of the segment file most recently
+ * flushed by WAL receiver.  It will be used as start point by new instance of
+ * WAL receiver.
+ *
+ * The XLogReaderState abstraction is not suited for this purpose.  The
+ * interface it offers is XLogReadRecord, which is not suited to read a
+ * specific page from WAL.
+ */
+static XLogRecPtr
+GetLastLSN(XLogRecPtr lsn)
+{
+	XLogSegNo lastValidSegNo;
+	char readBuf[XLOG_BLCKSZ];
+
+	XLByteToSeg(lsn, lastValidSegNo, wal_segment_size);
+	/*
+	 * We know that lsn falls in a valid segment.  Start searching from the
+	 * next segment.
+	 */
+	XLogSegNoOffsetToRecPtr(lastValidSegNo+1, 0, wal_segment_size, lsn);
+
+	elog(LOG, "scanning WAL for last valid segment, starting from %X/%X",
+		 (uint32) (lsn >> 32), (uint32) lsn);
+
+	while (XLogReadFirstPage(lsn, readBuf) == XLOG_BLCKSZ)
+	{
+		/*
+		 * Validate page header, it must be a long header because we are
+		 * inspecting the first page in a segment file.  The big if condition
+		 * is modelled according to XLogReaderValidatePageHeader.
+		 */
+		XLogLongPageHeader longhdr = (XLogLongPageHeader) readBuf;
+		if ((longhdr->std.xlp_info & XLP_LONG_HEADER) == 0 ||
+			(longhdr->std.xlp_magic != XLOG_PAGE_MAGIC) ||
+			((longhdr->std.xlp_info & ~XLP_ALL_FLAGS) != 0) ||
+			(longhdr->xlp_sysid != ControlFile->system_identifier) ||
+			(longhdr->xlp_seg_size != wal_segment_size) ||
+			(longhdr->xlp_xlog_blcksz != XLOG_BLCKSZ) ||
+			(longhdr->std.xlp_pageaddr != lsn) ||
+			(longhdr->std.xlp_tli != ThisTimeLineID))
+		{
+			break;
+		}
+		XLByteToSeg(lsn, lastValidSegNo, wal_segment_size);
+		XLogSegNoOffsetToRecPtr(lastValidSegNo+1, 0, wal_segment_size, lsn);
+	}
+
+	/*
+	 * The last valid segment number is previous to the one that was just
+	 * found to be invalid.
+	 */
+	XLogSegNoOffsetToRecPtr(lastValidSegNo, 0, wal_segment_size, lsn);
+
+	elog(LOG, "last valid segment number = %lu", lastValidSegNo);
+
+	return lsn;
+}
+
 /*
  * Extract timestamp from WAL record.
  *
@@ -7126,6 +7218,27 @@ StartupXLOG(void)
 
 				/* Handle interrupt signals of startup process */
 				HandleStartupProcInterrupts();
+
+				/*
+				 * Start WAL receiver without waiting for startup process to
+				 * finish replay, so that streaming replication is established
+				 * at the earliest.  When the replication is configured to be
+				 * synchronous this would unblock commits waiting for WAL to
+				 * be written and/or flushed by synchronous standby.
+				 */
+				if (StandbyModeRequested &&
+					reachedConsistency &&
+					wal_receiver_start_condition == WAL_RCV_START_AT_CONSISTENCY &&
+					!WalRcvStreaming())
+				{
+					XLogRecPtr startpoint = GetLastLSN(record->xl_prev);
+					elog(LOG, "starting WAL receiver, startpoint %X/%X",
+						 (uint32) (startpoint >> 32), (uint32) startpoint);
+					RequestXLogStreaming(ThisTimeLineID,
+										 startpoint,
+										 PrimaryConnInfo,
+										 PrimarySlotName);
+				}
 
 				/*
 				 * Pause WAL replay, if requested by a hot-standby session via
@@ -12093,11 +12206,6 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		{
 			case XLOG_FROM_ARCHIVE:
 			case XLOG_FROM_PG_WAL:
-				/*
-				 * WAL receiver must not be running when reading WAL from
-				 * archive or pg_wal.
-				 */
-				Assert(!WalRcvStreaming());
 
 				/* Close any old file we might have open. */
 				if (readFile >= 0)

@@ -195,6 +195,20 @@ pg_stat_get_mod_since_analyze(PG_FUNCTION_ARGS)
 	PG_RETURN_INT64(result);
 }
 
+Datum
+pg_stat_get_vacuum_resume_block(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	uint64		result;
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		result = 0;
+	else
+		result = (int64) (tabentry->vacuum_resume_block);
+
+	PG_RETURN_INT64(result);
+}
 
 Datum
 pg_stat_get_blocks_fetched(PG_FUNCTION_ARGS)

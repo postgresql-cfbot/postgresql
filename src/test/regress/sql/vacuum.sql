@@ -152,6 +152,26 @@ SELECT pg_relation_size('vac_truncate_test') = 0;
 VACUUM (TRUNCATE FALSE, FULL TRUE) vac_truncate_test;
 DROP TABLE vac_truncate_test;
 
+-- RESUME option
+CREATE TABLE resume_test (i INT PRIMARY KEY, t TEXT);
+INSERT INTO resume_test(i, t) VALUES (generate_series(1,30),
+    repeat('1234567890',300));
+VACUUM (RESUME TRUE) resume_test;
+-- resume option is ignored
+VACUUM (RESUME TRUE, FREEZE TRUE) resume_test;
+VACUUM (RESUME TRUE, FULL TRUE) resume_test;
+VACUUM (RESUME TRUE, DISABLE_PAGE_SKIPPING TRUE) resume_test;
+-- Only parent enables resuming
+ALTER TABLE resume_test SET (vacuum_resume = true,
+      toast.vacuum_resume = false);
+VACUUM (RESUME TRUE) resume_test;
+-- Only toast table enables resuming
+ALTER TABLE resume_test SET (vacuum_resume = false,
+      toast.vacuum_resume = true);
+-- Test some extra relations.
+VACUUM (RESUME TRUE) vaccluster;
+VACUUM (RESUME TRUE) vactst;
+
 -- partitioned table
 CREATE TABLE vacparted (a int, b char) PARTITION BY LIST (a);
 CREATE TABLE vacparted1 PARTITION OF vacparted FOR VALUES IN (1);
@@ -214,6 +234,7 @@ DROP TABLE vaccluster;
 DROP TABLE vactst;
 DROP TABLE vacparted;
 DROP TABLE no_index_cleanup;
+DROP TABLE resume_test;
 
 -- relation ownership, WARNING logs generated as all are skipped.
 CREATE TABLE vacowned (a int);

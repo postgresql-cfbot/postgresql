@@ -222,6 +222,8 @@ typedef struct VacuumParams
 										 * default value depends on reloptions */
 	VacOptTernaryValue truncate;	/* Truncate empty pages at the end,
 									 * default value depends on reloptions */
+	VacOptTernaryValue resume;		/* Resume vacuuming from the last vacuumed
+									 * block */
 
 	/*
 	 * The number of parallel vacuum workers.  0 by default which means choose

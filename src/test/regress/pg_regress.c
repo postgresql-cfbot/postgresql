@@ -100,11 +100,10 @@ static char *logfilename;
 static FILE *logfile;
 static char *difffilename;
 static const char *sockdir;
-#ifdef HAVE_UNIX_SOCKETS
+static bool use_unix_sockets;
 static const char *temp_sockdir;
 static char sockself[MAXPGPATH];
 static char socklock[MAXPGPATH];
-#endif
 
 static _resultmap *resultmap = NULL;
 
@@ -292,7 +291,7 @@ stop_postmaster(void)
  * remove the directory.  Ignore errors; leaking a temporary directory is
  * unimportant.  This can run from a signal handler.  The code is not
  * acceptable in a Windows signal handler (see initdb.c:trapsig()), but
- * Windows is not a HAVE_UNIX_SOCKETS platform.
+ * on Windows, pg_regress does not use Unix sockets by default.
  */
 static void
 remove_temp(void)
@@ -330,7 +329,7 @@ signal_remove_temp(int signum)
 static const char *
 make_temp_sockdir(void)
 {
-	char	   *template = pg_strdup("/tmp/pg_regress-XXXXXX");
+	char	   *template = psprintf("%s/pg_regress-XXXXXX", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
 
 	temp_sockdir = mkdtemp(template);
 	if (temp_sockdir == NULL)
@@ -991,6 +990,9 @@ config_sspi_auth(const char *pgdata, const char *superuser_name)
 	FILE	   *hba,
 			   *ident;
 	_stringlist *sl;
+
+	if (use_unix_sockets)
+		return;
 
 	/* Find out the name of the current OS user */
 	current_windows_user(&accountname, &domainname);
@@ -2121,9 +2123,16 @@ regression_main(int argc, char *argv[], init_function ifunc, test_function tfunc
 	atexit(stop_postmaster);
 
 #ifndef HAVE_UNIX_SOCKETS
-	/* no unix domain sockets available, so change default */
-	hostname = "localhost";
+	use_unix_sockets = false;
+#elif defined(WIN32)
+	use_unix_sockets = getenv("PG_TEST_USE_UNIX_SOCKETS") ? true : false;
+#else
+	use_unix_sockets = true;
 #endif
+
+	if (!use_unix_sockets)
+		/* no unix domain sockets available, so change default */
+		hostname = "localhost";
 
 	/*
 	 * We call the initialization function here because that way we can set

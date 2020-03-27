@@ -20,6 +20,9 @@
 
 #include "common/unicode_norm.h"
 #include "common/unicode_norm_table.h"
+#ifndef FRONTEND
+#include "common/unicode_normprops_table.h"
+#endif
 
 #ifndef FRONTEND
 #define ALLOC(size) palloc(size)
@@ -442,3 +445,123 @@ unicode_normalize(UnicodeNormalizationForm form, const pg_wchar *input)
 
 	return recomp_chars;
 }
+
+/*
+ * Normalization "quick check" algorithm; see
+ * <http://www.unicode.org/reports/tr15/#Detecting_Normalization_Forms>
+ */
+
+/* We only need this in the backend. */
+#ifndef FRONTEND
+
+static uint8
+get_canonical_class(pg_wchar ch)
+{
+	pg_unicode_decomposition *entry = get_code_entry(ch);
+
+	if (!entry)
+		return 0;
+	else
+		return entry->comb_class;
+}
+
+/*
+ * Return index to array of code point values for quick check.
+ */
+static int
+qc_lookup(pg_wchar ch, const unicode_norm_info *norminfo)
+{
+	int			h;
+	uint32		hashkey;
+
+	/*
+	 * Compute the hash function. The hash key is the 32-bit wide
+	 * codepoint with the bytes in network order.
+	 */
+	hashkey = htonl(ch);
+	h = norminfo->hash(&hashkey);
+
+	/* An out-of-range result implies no match */
+	if (h < 0 || h >= norminfo->num_codepoints)
+		return -1;
+
+	/*
+	 * Since it's a perfect hash, we need only match to the
+	 * specific codepoint it identifies.
+	 */
+	if (ch != norminfo->codepoints[h])
+		return -1;
+
+	/* Success! */
+	return h;
+}
+
+/*
+ * Look up the normalization quick check character property
+ */
+static UnicodeNormalizationQC
+qc_is_allowed(UnicodeNormalizationForm form, pg_wchar ch)
+{
+	int			idx;
+	unicode_norm_info norminfo;
+
+	switch (form)
+	{
+		case UNICODE_NFC:
+			norminfo = UnicodeNormInfo_NFC_QC;
+			break;
+		case UNICODE_NFKC:
+			norminfo = UnicodeNormInfo_NFKC_QC;
+			break;
+		default:
+			Assert(false);
+			return UNICODE_NORM_QC_MAYBE;
+	}
+
+	idx = qc_lookup(ch, &norminfo);
+	if (idx < 0)
+		return UNICODE_NORM_QC_YES;
+	else if (idx < norminfo.num_maybes)
+		return UNICODE_NORM_QC_MAYBE;
+	else
+		return UNICODE_NORM_QC_NO;
+}
+
+UnicodeNormalizationQC
+unicode_is_normalized_quickcheck(UnicodeNormalizationForm form, const pg_wchar *input)
+{
+	uint8		lastCanonicalClass = 0;
+	UnicodeNormalizationQC result = UNICODE_NORM_QC_YES;
+
+	/*
+	 * For the "D" forms, we don't run the quickcheck.  We don't include the
+	 * lookup tables for those because they are huge, checking for these
+	 * particular forms is less common, and running the slow path is faster
+	 * for the "D" forms than the "C" forms because you don't need to
+	 * recompose, which is slow.
+	 */
+	if (form == UNICODE_NFD || form == UNICODE_NFKD)
+		return UNICODE_NORM_QC_MAYBE;
+
+	for (const pg_wchar *p = input; *p; p++)
+	{
+		pg_wchar	ch = *p;
+		uint8		canonicalClass;
+		UnicodeNormalizationQC check;
+
+		canonicalClass = get_canonical_class(ch);
+		if (lastCanonicalClass > canonicalClass && canonicalClass != 0)
+			return UNICODE_NORM_QC_NO;
+
+		check = qc_is_allowed(form, ch);
+		if (check == UNICODE_NORM_QC_NO)
+			return UNICODE_NORM_QC_NO;
+		else if (check == UNICODE_NORM_QC_MAYBE)
+			result = UNICODE_NORM_QC_MAYBE;
+
+		lastCanonicalClass = canonicalClass;
+	}
+	return result;
+}
+
+#endif			/* !FRONTEND */

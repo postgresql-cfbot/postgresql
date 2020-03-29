@@ -70,7 +70,7 @@ ConditionVariablePrepareToSleep(ConditionVariable *cv)
 	{
 		WaitEventSet *new_event_set;
 
-		new_event_set = CreateWaitEventSet(TopMemoryContext, 2);
+		new_event_set = CreateWaitEventSet(TopMemoryContext, NULL, 2);
 		AddWaitEventToSet(new_event_set, WL_LATCH_SET, PGINVALID_SOCKET,
 						  MyLatch, NULL);
 		AddWaitEventToSet(new_event_set, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,

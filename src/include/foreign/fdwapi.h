@@ -169,6 +169,11 @@ typedef bool (*IsForeignScanParallelSafe_function) (PlannerInfo *root,
 typedef List *(*ReparameterizeForeignPathByChild_function) (PlannerInfo *root,
 															List *fdw_private,
 															RelOptInfo *child_rel);
+typedef bool (*IsForeignPathAsyncCapable_function) (ForeignPath *path);
+typedef bool (*ForeignAsyncConfigureWait_function) (ForeignScanState *node,
+													WaitEventSet *wes,
+													void *caller_data,
+													bool reinit);
 
 /*
  * FdwRoutine is the struct returned by a foreign-data wrapper's handler
@@ -190,6 +195,7 @@ typedef struct FdwRoutine
 	GetForeignPlan_function GetForeignPlan;
 	BeginForeignScan_function BeginForeignScan;
 	IterateForeignScan_function IterateForeignScan;
+	IterateForeignScan_function IterateForeignScanAsync;
 	ReScanForeignScan_function ReScanForeignScan;
 	EndForeignScan_function EndForeignScan;
 
@@ -242,6 +248,11 @@ typedef struct FdwRoutine
 	InitializeDSMForeignScan_function InitializeDSMForeignScan;
 	ReInitializeDSMForeignScan_function ReInitializeDSMForeignScan;
 	InitializeWorkerForeignScan_function InitializeWorkerForeignScan;
+
+	/* Support functions for asynchronous execution */
+	IsForeignPathAsyncCapable_function IsForeignPathAsyncCapable;
+	ForeignAsyncConfigureWait_function ForeignAsyncConfigureWait;
+
 	ShutdownForeignScan_function ShutdownForeignScan;
 
 	/* Support functions for path reparameterization. */

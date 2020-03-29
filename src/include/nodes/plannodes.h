@@ -136,6 +136,11 @@ typedef struct Plan
 	bool		parallel_safe;	/* OK to use as part of parallel plan? */
 
 	/*
+	 * information needed for asynchronous execution
+	 */
+	bool		async_capable;  /* engage asyncronous execution logic? */
+
+	/*
 	 * Common structural data for all Plan types.
 	 */
 	int			plan_node_id;	/* unique across entire final plan tree */
@@ -262,6 +267,10 @@ typedef struct Append
 
 	/* Info for run-time subplan pruning; NULL if we're not doing that */
 	struct PartitionPruneInfo *part_prune_info;
+
+	/* Async child node execution stuff */
+	int			nasyncplans;	/* # async subplans, always at start of list */
+	int			referent; 		/* index of inheritance tree referent */
 } Append;
 
 /* ----------------

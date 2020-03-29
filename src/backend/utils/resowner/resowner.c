@@ -128,6 +128,7 @@ typedef struct ResourceOwnerData
 	ResourceArray filearr;		/* open temporary files */
 	ResourceArray dsmarr;		/* dynamic shmem segments */
 	ResourceArray jitarr;		/* JIT contexts */
+	ResourceArray wesarr;		/* wait event sets */
 
 	/* We can remember up to MAX_RESOWNER_LOCKS references to local locks. */
 	int			nlocks;			/* number of owned locks */
@@ -175,6 +176,7 @@ static void PrintTupleDescLeakWarning(TupleDesc tupdesc);
 static void PrintSnapshotLeakWarning(Snapshot snapshot);
 static void PrintFileLeakWarning(File file);
 static void PrintDSMLeakWarning(dsm_segment *seg);
+static void PrintWESLeakWarning(WaitEventSet *events);
 
 
 /*****************************************************************************
@@ -444,6 +446,7 @@ ResourceOwnerCreate(ResourceOwner parent, const char *name)
 	ResourceArrayInit(&(owner->filearr), FileGetDatum(-1));
 	ResourceArrayInit(&(owner->dsmarr), PointerGetDatum(NULL));
 	ResourceArrayInit(&(owner->jitarr), PointerGetDatum(NULL));
+	ResourceArrayInit(&(owner->wesarr), PointerGetDatum(NULL));
 
 	return owner;
 }
@@ -552,6 +555,16 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 			JitContext *context = (JitContext *) PointerGetDatum(foundres);
 
 			jit_release_context(context);
+		}
+
+		/* Ditto for wait event sets */
+		while (ResourceArrayGetAny(&(owner->wesarr), &foundres))
+		{
+			WaitEventSet *event = (WaitEventSet *) DatumGetPointer(foundres);
+
+			if (isCommit)
+				PrintWESLeakWarning(event);
+			FreeWaitEventSet(event);
 		}
 	}
 	else if (phase == RESOURCE_RELEASE_LOCKS)
@@ -725,6 +738,7 @@ ResourceOwnerDelete(ResourceOwner owner)
 	Assert(owner->filearr.nitems == 0);
 	Assert(owner->dsmarr.nitems == 0);
 	Assert(owner->jitarr.nitems == 0);
+	Assert(owner->wesarr.nitems == 0);
 	Assert(owner->nlocks == 0 || owner->nlocks == MAX_RESOWNER_LOCKS + 1);
 
 	/*
@@ -752,6 +766,7 @@ ResourceOwnerDelete(ResourceOwner owner)
 	ResourceArrayFree(&(owner->filearr));
 	ResourceArrayFree(&(owner->dsmarr));
 	ResourceArrayFree(&(owner->jitarr));
+	ResourceArrayFree(&(owner->wesarr));
 
 	pfree(owner);
 }
@@ -1369,4 +1384,56 @@ ResourceOwnerForgetJIT(ResourceOwner owner, Datum handle)
 	if (!ResourceArrayRemove(&(owner->jitarr), handle))
 		elog(ERROR, "JIT context %p is not owned by resource owner %s",
 			 DatumGetPointer(handle), owner->name);
+}
+
+/*
+ * wait event set reference array.
+ *
+ * This is separate from actually inserting an entry because if we run out
+ * of memory, it's critical to do so *before* acquiring the resource.
+ */
+void
+ResourceOwnerEnlargeWESs(ResourceOwner owner)
+{
+	ResourceArrayEnlarge(&(owner->wesarr));
+}
+
+/*
+ * Remember that a wait event set is owned by a ResourceOwner
+ *
+ * Caller must have previously done ResourceOwnerEnlargeWESs()
+ */
+void
+ResourceOwnerRememberWES(ResourceOwner owner, WaitEventSet *events)
+{
+	ResourceArrayAdd(&(owner->wesarr), PointerGetDatum(events));
+}
+
+/*
+ * Forget that a wait event set is owned by a ResourceOwner
+ */
+void
+ResourceOwnerForgetWES(ResourceOwner owner, WaitEventSet *events)
+{
+	/*
+	 * XXXX: There's no property to show as an identier of a wait event set,
+	 * use its pointer instead.
+	 */
+	if (!ResourceArrayRemove(&(owner->wesarr), PointerGetDatum(events)))
+		elog(ERROR, "wait event set %p is not owned by resource owner %s",
+			 events, owner->name);
+}
+
+/*
+ * Debugging subroutine
+ */
+static void
+PrintWESLeakWarning(WaitEventSet *events)
+{
+	/*
+	 * XXXX: There's no property to show as an identier of a wait event set,
+	 * use its pointer instead.
+	 */
+	elog(WARNING, "wait event set leak: %p still referenced",
+		 events);
 }

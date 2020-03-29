@@ -58,6 +58,7 @@ typedef struct ConnCacheEntry
 	bool		invalidated;	/* true if reconnect is pending */
 	uint32		server_hashvalue;	/* hash value of foreign server OID */
 	uint32		mapping_hashvalue;	/* hash value of user mapping OID */
+	void		*storage;		/* connection specific storage */
 } ConnCacheEntry;
 
 /*
@@ -202,6 +203,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 
 		elog(DEBUG3, "new postgres_fdw connection %p for server \"%s\" (user mapping oid %u, userid %u)",
 			 entry->conn, server->servername, user->umid, user->userid);
+		entry->storage = NULL;
 	}
 
 	/*
@@ -213,6 +215,32 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 	entry->have_prep_stmt |= will_prep_stmt;
 
 	return entry->conn;
+}
+
+/*
+ * Rerturns the connection specific storage for this user. Allocate with
+ * initsize if not exists.
+ */
+void *
+GetConnectionSpecificStorage(UserMapping *user, size_t initsize)
+{
+	bool		found;
+	ConnCacheEntry *entry;
+	ConnCacheKey key;
+
+	/* Find storage using the same key with GetConnection */
+	key = user->umid;
+	entry = hash_search(ConnectionHash, &key, HASH_ENTER, &found);
+	Assert(found);
+
+	/* Create one if not any. */
+	if (entry->storage == NULL)
+	{
+		entry->storage = MemoryContextAlloc(CacheMemoryContext, initsize);
+		memset(entry->storage, 0, initsize);
+	}
+
+	return entry->storage;
 }
 
 /*

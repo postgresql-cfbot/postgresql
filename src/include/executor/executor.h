@@ -59,6 +59,7 @@
 #define EXEC_FLAG_MARK			0x0008	/* need mark/restore */
 #define EXEC_FLAG_SKIP_TRIGGERS 0x0010	/* skip AfterTrigger calls */
 #define EXEC_FLAG_WITH_NO_DATA	0x0020	/* rel scannability doesn't matter */
+#define EXEC_FLAG_ASYNC			0x0040	/* request async execution */
 
 
 /* Hook for plugins to get control in ExecutorStart() */

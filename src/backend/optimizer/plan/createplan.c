@@ -292,6 +292,7 @@ static ModifyTable *make_modifytable(PlannerInfo *root,
 									 List *rowMarks, OnConflictExpr *onconflict, int epqParam);
 static GatherMerge *create_gather_merge_plan(PlannerInfo *root,
 											 GatherMergePath *best_path);
+static bool is_async_capable_path(Path *path);
 
 
 /*
@@ -1069,6 +1070,11 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 	bool		tlist_was_changed = false;
 	List	   *pathkeys = best_path->path.pathkeys;
 	List	   *subplans = NIL;
+	List	   *asyncplans = NIL;
+	List	   *syncplans = NIL;
+	List	   *asyncpaths = NIL;
+	List	   *syncpaths = NIL;
+	List	   *newsubpaths = NIL;
 	ListCell   *subpaths;
 	RelOptInfo *rel = best_path->path.parent;
 	PartitionPruneInfo *partpruneinfo = NULL;
@@ -1077,6 +1083,9 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 	Oid		   *nodeSortOperators = NULL;
 	Oid		   *nodeCollations = NULL;
 	bool	   *nodeNullsFirst = NULL;
+	int			nasyncplans = 0;
+	bool		first = true;
+	bool		referent_is_sync = true;
 
 	/*
 	 * The subpaths list could be empty, if every child was proven empty by
@@ -1206,8 +1215,35 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 			}
 		}
 
-		subplans = lappend(subplans, subplan);
+		/*
+		 * Classify as async-capable or not. If we have decided to run the
+		 * chidlren in parallel, we cannot any one of them run asynchronously.
+		 */
+		if (!best_path->path.parallel_safe && is_async_capable_path(subpath))
+		{
+			subplan->async_capable = true;
+			asyncplans = lappend(asyncplans, subplan);
+			asyncpaths = lappend(asyncpaths, subpath);
+			++nasyncplans;
+			if (first)
+				referent_is_sync = false;
+		}
+		else
+		{
+			syncplans = lappend(syncplans, subplan);
+			syncpaths = lappend(syncpaths, subpath);
+		}
+
+		first = false;
 	}
+
+	/*
+	 * subplan contains asyncplans in the first half, if any, and sync plans in
+	 * another half, if any.  We need that the same for subpaths to make
+	 * partition pruning information in sync with subplans.
+	 */
+	subplans = list_concat(asyncplans, syncplans);
+	newsubpaths = list_concat(asyncpaths, syncpaths);
 
 	/*
 	 * If any quals exist, they may be useful to perform further partition
@@ -1236,7 +1272,7 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 		if (prunequal != NIL)
 			partpruneinfo =
 				make_partition_pruneinfo(root, rel,
-										 best_path->subpaths,
+										 newsubpaths,
 										 best_path->partitioned_rels,
 										 prunequal);
 	}
@@ -1244,6 +1280,8 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 	plan->appendplans = subplans;
 	plan->first_partial_plan = best_path->first_partial_path;
 	plan->part_prune_info = partpruneinfo;
+	plan->nasyncplans = nasyncplans;
+	plan->referent = referent_is_sync ? nasyncplans : 0;
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
 
@@ -6840,4 +6878,28 @@ is_projection_capable_plan(Plan *plan)
 			break;
 	}
 	return true;
+}
+
+/*
+ * is_projection_capable_path
+ *		Check whether a given Path node is async-capable.
+ */
+static bool
+is_async_capable_path(Path *path)
+{
+	switch (nodeTag(path))
+	{
+		case T_ForeignPath:
+			{
+				FdwRoutine *fdwroutine = path->parent->fdwroutine;
+
+				Assert(fdwroutine != NULL);
+				if (fdwroutine->IsForeignPathAsyncCapable != NULL &&
+					fdwroutine->IsForeignPathAsyncCapable((ForeignPath *) path))
+					return true;
+			}
+		default:
+			break;
+	}
+	return false;
 }

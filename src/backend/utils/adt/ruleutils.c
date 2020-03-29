@@ -4573,10 +4573,14 @@ set_deparse_plan(deparse_namespace *dpns, Plan *plan)
 	 * tlists according to one of the children, and the first one is the most
 	 * natural choice.  Likewise special-case ModifyTable to pretend that the
 	 * first child plan is the OUTER referent; this is to support RETURNING
-	 * lists containing references to non-target relations.
+	 * lists containing references to non-target relations. For Append, use the
+	 * explicitly specified referent.
 	 */
 	if (IsA(plan, Append))
-		dpns->outer_plan = linitial(((Append *) plan)->appendplans);
+	{
+		Append *app = (Append *) plan;
+		dpns->outer_plan = list_nth(app->appendplans, app->referent);
+	}
 	else if (IsA(plan, MergeAppend))
 		dpns->outer_plan = linitial(((MergeAppend *) plan)->mergeplans);
 	else if (IsA(plan, ModifyTable))

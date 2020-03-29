@@ -23,6 +23,7 @@
 
 #include "postgres.h"
 
+#include "catalog/storage.h"
 #include "executor/execParallel.h"
 #include "executor/executor.h"
 #include "executor/nodeAppend.h"
@@ -62,6 +63,7 @@
 #define PARALLEL_KEY_DSA				UINT64CONST(0xE000000000000007)
 #define PARALLEL_KEY_QUERY_TEXT		UINT64CONST(0xE000000000000008)
 #define PARALLEL_KEY_JIT_INSTRUMENTATION UINT64CONST(0xE000000000000009)
+#define PARALLEL_KEY_PENDING_SYNCS		UINT64CONST(0xE00000000000000A)
 
 #define PARALLEL_TUPLE_QUEUE_SIZE		65536
 
@@ -583,6 +585,9 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	Size		dsa_minsize = dsa_minimum_size();
 	char	   *query_string;
 	int			query_len;
+	int			pendingsync_list_size = 0;
+	RelFileNode *pendingsync_buf;
+	char	   *pendingsync_space;
 
 	/*
 	 * Force any initplan outputs that we're going to pass to workers to be
@@ -684,6 +689,14 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 		}
 	}
 
+	/* Estimate space pending-sync relfilenodes */
+	pendingsync_list_size = SerializePendingSyncs(&pendingsync_buf);
+	if (pendingsync_list_size > 0)
+	{
+		shm_toc_estimate_chunk(&pcxt->estimator, pendingsync_list_size);
+		shm_toc_estimate_keys(&pcxt->estimator, 1);
+	}
+
 	/* Estimate space for DSA area. */
 	shm_toc_estimate_chunk(&pcxt->estimator, dsa_minsize);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
@@ -767,6 +780,15 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 						   jit_instrumentation);
 			pei->jit_instrumentation = jit_instrumentation;
 		}
+	}
+
+	/* Copy pending sync list if any */
+	if (pendingsync_list_size > 0)
+	{
+		pendingsync_space = shm_toc_allocate(pcxt->toc, pendingsync_list_size);
+		memcpy(pendingsync_space, pendingsync_buf, pendingsync_list_size);
+		shm_toc_insert(pcxt->toc, PARALLEL_KEY_PENDING_SYNCS,
+					   pendingsync_space);
 	}
 
 	/*
@@ -1332,6 +1354,7 @@ void
 ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 {
 	FixedParallelExecutorState *fpes;
+	RelFileNode	*pendingsyncs;
 	BufferUsage *buffer_usage;
 	DestReceiver *receiver;
 	QueryDesc  *queryDesc;
@@ -1344,6 +1367,11 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 
 	/* Get fixed-size state. */
 	fpes = shm_toc_lookup(toc, PARALLEL_KEY_EXECUTOR_FIXED, false);
+
+	/* Get pending-sync information */
+	pendingsyncs = shm_toc_lookup(toc, PARALLEL_KEY_PENDING_SYNCS, true);
+	if (pendingsyncs)
+		DeserializePendingSyncs(pendingsyncs);
 
 	/* Set up DestReceiver, SharedExecutorInstrumentation, and QueryDesc. */
 	receiver = ExecParallelGetReceiver(seg, toc);

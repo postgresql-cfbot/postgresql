@@ -307,6 +307,7 @@ static BufferAccessStrategy vac_strategy;
 static void lazy_scan_heap(Relation onerel, VacuumParams *params,
 						   LVRelStats *vacrelstats, Relation *Irel, int nindexes,
 						   bool aggressive);
+static void vacuum_msg(StringInfoData *buf, const char *prefix, LVRelStats *vacrelstats, double nkeep, double nunused, BlockNumber empty_pages, PGRUsage *ru0);
 static void lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats);
 static bool lazy_check_needs_freeze(Buffer buf, bool *hastup);
 static void lazy_vacuum_all_indexes(Relation onerel, Relation *Irel,
@@ -500,6 +501,7 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 		lazy_truncate_heap(onerel, vacrelstats);
 
 	/* Report that we are now doing final cleanup */
+	elog(DEBUG1, "cleaning up");
 	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 								 PROGRESS_VACUUM_PHASE_FINAL_CLEANUP);
 
@@ -717,7 +719,8 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 	BlockNumber next_unskippable_block;
 	bool		skipping_blocks;
 	xl_heap_freeze_tuple *frozen;
-	StringInfoData buf;
+	StringInfoData logdetail,
+				clientdetail;
 	const int	initprog_index[] = {
 		PROGRESS_VACUUM_PHASE,
 		PROGRESS_VACUUM_TOTAL_HEAP_BLKS,
@@ -1668,37 +1671,66 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 						RelationGetRelationName(onerel),
 						tups_vacuumed, vacuumed_pages)));
 
-	/*
-	 * This is pretty messy, but we split it up so that we can skip emitting
-	 * individual parts of the message when not applicable.
-	 */
-	initStringInfo(&buf);
-	appendStringInfo(&buf,
-					 _("%.0f dead row versions cannot be removed yet, oldest xmin: %u\n"),
-					 nkeep, OldestXmin);
-	appendStringInfo(&buf, _("There were %.0f unused item identifiers.\n"),
-					 nunused);
-	appendStringInfo(&buf, ngettext("Skipped %u page due to buffer pins, ",
-									"Skipped %u pages due to buffer pins, ",
-									vacrelstats->pinskipped_pages),
-					 vacrelstats->pinskipped_pages);
-	appendStringInfo(&buf, ngettext("%u frozen page.\n",
-									"%u frozen pages.\n",
-									vacrelstats->frozenskipped_pages),
-					 vacrelstats->frozenskipped_pages);
-	appendStringInfo(&buf, ngettext("%u page is entirely empty.\n",
-									"%u pages are entirely empty.\n",
-									empty_pages),
-					 empty_pages);
-	appendStringInfo(&buf, _("%s."), pg_rusage_show(&ru0));
+	/* Write separate log messages to client (with prefix) and logfile (without prefix) */
+	vacuum_msg(&logdetail, "", vacrelstats, nkeep, nunused, empty_pages, &ru0);
+	vacuum_msg(&clientdetail, "! ", vacrelstats, nkeep, nunused, empty_pages, &ru0);
 
 	ereport(elevel,
 			(errmsg("\"%s\": found %.0f removable, %.0f nonremovable row versions in %u out of %u pages",
 					RelationGetRelationName(onerel),
 					tups_vacuumed, num_tuples,
 					vacrelstats->scanned_pages, nblocks),
-			 errdetail_internal("%s", buf.data)));
-	pfree(buf.data);
+			 errdetail_log("%s", logdetail.data),
+			 errdetail_internal("%s", clientdetail.data)));
+
+	pfree(logdetail.data);
+	pfree(clientdetail.data);
+}
+
+/* Populate buf with string to be freed by caller */
+static void
+vacuum_msg(StringInfoData *buf, const char *prefix, LVRelStats *vacrelstats, double nkeep, double nunused, BlockNumber empty_pages, PGRUsage *ru0)
+{
+	/*
+	 * This is pretty messy, but we split it up so that we can skip emitting
+	 * individual parts of the message when not applicable.
+	 */
+	initStringInfo(buf);
+	if (prefix)
+		appendStringInfoString(buf, prefix);
+	appendStringInfo(buf, ngettext("%.0f dead row version cannot be removed yet, oldest xmin: %u\n",
+									"%.0f dead row versions cannot be removed yet, oldest xmin: %u\n",
+									nkeep),
+					 nkeep, OldestXmin);
+
+	if (prefix)
+		appendStringInfoString(buf, prefix);
+	appendStringInfo(buf, ngettext("There was %.0f unused item identifier.\n",
+									"There were %.0f unused item identifiers.\n",
+									nunused),
+					 nunused);
+
+	if (prefix)
+		appendStringInfoString(buf, prefix);
+	appendStringInfo(buf, ngettext("Skipped %u page due to buffer pins, ",
+									"Skipped %u pages due to buffer pins, ",
+									vacrelstats->pinskipped_pages),
+					 vacrelstats->pinskipped_pages);
+	appendStringInfo(buf, ngettext("%u frozen page.\n",
+									"%u frozen pages.\n",
+									vacrelstats->frozenskipped_pages),
+					 vacrelstats->frozenskipped_pages);
+
+	if (prefix)
+		appendStringInfoString(buf, prefix);
+	appendStringInfo(buf, ngettext("%u page is entirely empty.\n",
+									"%u pages are entirely empty.\n",
+									empty_pages),
+					 empty_pages);
+
+	if (prefix)
+		appendStringInfoString(buf, prefix);
+	appendStringInfo(buf, "%s.", pg_rusage_show(ru0));
 }
 
 /*
@@ -1742,9 +1774,12 @@ lazy_vacuum_all_indexes(Relation onerel, Relation *Irel,
 	{
 		int			idx;
 
-		for (idx = 0; idx < nindexes; idx++)
+		for (idx = 0; idx < nindexes; idx++) {
+			ereport(DEBUG1, (errmsg("\"%s\": vacuuming index",
+							RelationGetRelationName(Irel[idx]))));
 			lazy_vacuum_index(Irel[idx], &stats[idx], vacrelstats->dead_tuples,
 							  vacrelstats->old_live_tuples);
+		}
 	}
 
 	/* Increase and report the number of index scans */
@@ -1774,6 +1809,8 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 	Buffer		vmbuffer = InvalidBuffer;
 
 	/* Report that we are now vacuuming the heap */
+	ereport(DEBUG1, (errmsg("\"%s\": vacuuming heap",
+					RelationGetRelationName(onerel))));
 	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 								 PROGRESS_VACUUM_PHASE_VACUUM_HEAP);
 
@@ -1817,7 +1854,7 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 		vmbuffer = InvalidBuffer;
 	}
 
-	ereport(elevel,
+	ereport(DEBUG1,
 			(errmsg("\"%s\": removed %d row versions in %d pages",
 					RelationGetRelationName(onerel),
 					tupindex, npages),
@@ -2062,13 +2099,13 @@ lazy_parallel_vacuum_indexes(Relation *Irel, IndexBulkDeleteResult **stats,
 		}
 
 		if (lps->lvshared->for_cleanup)
-			ereport(elevel,
+			ereport(DEBUG1,
 					(errmsg(ngettext("launched %d parallel vacuum worker for index cleanup (planned: %d)",
 									 "launched %d parallel vacuum workers for index cleanup (planned: %d)",
 									 lps->pcxt->nworkers_launched),
 							lps->pcxt->nworkers_launched, nworkers)));
 		else
-			ereport(elevel,
+			ereport(DEBUG1,
 					(errmsg(ngettext("launched %d parallel vacuum worker for index vacuuming (planned: %d)",
 									 "launched %d parallel vacuum workers for index vacuuming (planned: %d)",
 									 lps->pcxt->nworkers_launched),
@@ -2295,10 +2332,13 @@ lazy_cleanup_all_indexes(Relation *Irel, IndexBulkDeleteResult **stats,
 	}
 	else
 	{
-		for (idx = 0; idx < nindexes; idx++)
+		for (idx = 0; idx < nindexes; idx++) {
+			ereport(DEBUG1, (errmsg("cleaning up index \"%s\"",
+							RelationGetRelationName(Irel[idx]))));
 			lazy_cleanup_index(Irel[idx], &stats[idx],
 							   vacrelstats->new_rel_tuples,
 							   vacrelstats->tupcount_pages < vacrelstats->rel_pages);
+		}
 	}
 }
 
@@ -2338,7 +2378,7 @@ lazy_vacuum_index(Relation indrel, IndexBulkDeleteResult **stats,
 	else
 		msg = gettext_noop("scanned index \"%s\" to remove %d row versions");
 
-	ereport(elevel,
+	ereport(DEBUG1,
 			(errmsg(msg,
 					RelationGetRelationName(indrel),
 					dead_tuples->num_tuples),
@@ -2381,7 +2421,7 @@ lazy_cleanup_index(Relation indrel,
 	else
 		msg = gettext_noop("index \"%s\" now contains %.0f row versions in %u pages");
 
-	ereport(elevel,
+	ereport(DEBUG1,
 			(errmsg(msg,
 					RelationGetRelationName(indrel),
 					(*stats)->num_index_tuples,
@@ -2442,6 +2482,7 @@ lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats)
 	int			lock_retry;
 
 	/* Report that we are now truncating */
+	elog(DEBUG1, "truncating heap");
 	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 								 PROGRESS_VACUUM_PHASE_TRUNCATE);
 

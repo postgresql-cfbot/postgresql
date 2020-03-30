@@ -445,6 +445,12 @@ SELECT '1.*.4|3|2.*{1}'::lquery;
  1.*.4|3|2.*{1}
 (1 row)
 
+SELECT 'foo.bar{,}.!a*|b{1,}.c{,44}.d{3,4}'::lquery;
+               lquery               
+------------------------------------
+ foo.bar{,}.!a*|b{1,}.c{,44}.d{3,4}
+(1 row)
+
 SELECT 'qwerty%@*.tu'::lquery;
     lquery    
 --------------
@@ -464,7 +470,7 @@ SELECT nlevel(('1' || repeat('.1', 65534))::ltree);
 (1 row)
 
 SELECT nlevel(('1' || repeat('.1', 65535))::ltree);
-ERROR:  number of ltree levels (65536) exceeds the maximum allowed (65535)
+ERROR:  number of ltree labels (65536) exceeds the maximum allowed (65535)
 SELECT nlevel(('1' || repeat('.1', 65534))::ltree || '1');
 ERROR:  number of ltree levels (65536) exceeds the maximum allowed (65535)
 SELECT ('1' || repeat('.1', 65534))::lquery IS NULL;
@@ -474,7 +480,7 @@ SELECT ('1' || repeat('.1', 65534))::lquery IS NULL;
 (1 row)
 
 SELECT ('1' || repeat('.1', 65535))::lquery IS NULL;
-ERROR:  number of lquery levels (65536) exceeds the maximum allowed (65535)
+ERROR:  number of lquery items (65536) exceeds the maximum allowed (65535)
 SELECT '*{65535}'::lquery;
   lquery  
 ----------
@@ -485,7 +491,7 @@ SELECT '*{65536}'::lquery;
 ERROR:  lquery syntax error
 LINE 1: SELECT '*{65536}'::lquery;
                ^
-DETAIL:  Low limit (65536) exceeds the maximum allowed (65535).
+DETAIL:  Low limit (65536) exceeds the maximum allowed (65535), at character 3.
 SELECT '*{,65534}'::lquery;
   lquery   
 -----------
@@ -502,7 +508,12 @@ SELECT '*{,65536}'::lquery;
 ERROR:  lquery syntax error
 LINE 1: SELECT '*{,65536}'::lquery;
                ^
-DETAIL:  High limit (65536) exceeds the maximum allowed (65535).
+DETAIL:  High limit (65536) exceeds the maximum allowed (65535), at character 4.
+SELECT '*{4,3}'::lquery;
+ERROR:  lquery syntax error
+LINE 1: SELECT '*{4,3}'::lquery;
+               ^
+DETAIL:  Low limit (4) is greater than high limit (3), at character 5.
 SELECT '1.2'::ltree  < '2.2'::ltree;
  ?column? 
 ----------
@@ -722,7 +733,7 @@ SELECT 'a.b.c.d.e'::ltree ~ '*.a.*.d.*';
 SELECT 'a.b.c.d.e'::ltree ~ '*.!d.*';
  ?column? 
 ----------
- f
+ t
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ '*.!d';
@@ -752,7 +763,7 @@ SELECT 'a.b.c.d.e'::ltree ~ '*.!e';
 SELECT 'a.b.c.d.e'::ltree ~ '*.!e.*';
  ?column? 
 ----------
- f
+ t
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ 'a.*.!e';
@@ -770,7 +781,7 @@ SELECT 'a.b.c.d.e'::ltree ~ 'a.*.!d';
 SELECT 'a.b.c.d.e'::ltree ~ 'a.*.!d.*';
  ?column? 
 ----------
- f
+ t
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ 'a.*.!f.*';
@@ -788,7 +799,7 @@ SELECT 'a.b.c.d.e'::ltree ~ '*.a.*.!f.*';
 SELECT 'a.b.c.d.e'::ltree ~ '*.a.*.!d.*';
  ?column? 
 ----------
- f
+ t
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ '*.a.!d.*';
@@ -812,13 +823,13 @@ SELECT 'a.b.c.d.e'::ltree ~ 'a.!d.*';
 SELECT 'a.b.c.d.e'::ltree ~ '*.a.*.!d.*';
  ?column? 
 ----------
- f
+ t
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ '*.!b.*';
  ?column? 
 ----------
- f
+ t
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ '*.!b.c.*';
@@ -830,7 +841,7 @@ SELECT 'a.b.c.d.e'::ltree ~ '*.!b.c.*';
 SELECT 'a.b.c.d.e'::ltree ~ '*.!b.*.c.*';
  ?column? 
 ----------
- f
+ t
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ '!b.*.c.*';
@@ -878,31 +889,31 @@ SELECT 'a.b.c.d.e'::ltree ~ '*{1}.!b.*.!c.*.e';
 SELECT 'a.b.c.d.e'::ltree ~ '*{1}.!b.*{1}.!c.*.e';
  ?column? 
 ----------
- t
+ f
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ 'a.!b.*{1}.!c.*.e';
  ?column? 
 ----------
- t
+ f
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ '!b.*{1}.!c.*.e';
  ?column? 
 ----------
- t
+ f
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ '*.!b.*{1}.!c.*.e';
  ?column? 
 ----------
- t
+ f
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ '*.!b.*.!c.*.e';
  ?column? 
 ----------
- f
+ t
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ '!b.!c.*';
@@ -932,19 +943,19 @@ SELECT 'a.b.c.d.e'::ltree ~ '*{1}.!b.*.!c.*';
 SELECT 'a.b.c.d.e'::ltree ~ '*{1}.!b.*{1}.!c.*';
  ?column? 
 ----------
- t
+ f
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ 'a.!b.*{1}.!c.*';
  ?column? 
 ----------
- t
+ f
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ '!b.*{1}.!c.*';
  ?column? 
 ----------
- t
+ f
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ '*.!b.*{1}.!c.*';
@@ -956,7 +967,7 @@ SELECT 'a.b.c.d.e'::ltree ~ '*.!b.*{1}.!c.*';
 SELECT 'a.b.c.d.e'::ltree ~ '*.!b.*.!c.*';
  ?column? 
 ----------
- f
+ t
 (1 row)
 
 SELECT 'a.b.c.d.e'::ltree ~ 'a.*{2}.*{2}';
@@ -981,6 +992,78 @@ SELECT 'a.b.c.d.e'::ltree ~ 'a.*{5}.*';
  ?column? 
 ----------
  f
+(1 row)
+
+SELECT '5.0.1.0'::ltree ~ '5.!0.!0.0';
+ ?column? 
+----------
+ f
+(1 row)
+
+SELECT 'a.b'::ltree ~ '!a.!a';
+ ?column? 
+----------
+ f
+(1 row)
+
+SELECT 'a.b.c.d.e'::ltree ~ 'a{,}';
+ ?column? 
+----------
+ f
+(1 row)
+
+SELECT 'a.b.c.d.e'::ltree ~ 'a{1,}.*';
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT 'a.b.c.d.e'::ltree ~ 'a{,}.!a{,}';
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT 'a.b.c.d.a'::ltree ~ 'a{,}.!a{,}';
+ ?column? 
+----------
+ f
+(1 row)
+
+SELECT 'a.b.c.d.a'::ltree ~ 'a{,2}.!a{1,}';
+ ?column? 
+----------
+ f
+(1 row)
+
+SELECT 'a.b.c.d.e'::ltree ~ 'a{,2}.!a{1,}';
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT 'a.b.c.d.e'::ltree ~ '!x{,}';
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT 'a.b.c.d.e'::ltree ~ '!c{,}';
+ ?column? 
+----------
+ f
+(1 row)
+
+SELECT 'a.b.c.d.e'::ltree ~ '!c{0,3}.!a{2,}';
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT 'a.b.c.d.e'::ltree ~ '!c{0,3}.!d{2,}.*';
+ ?column? 
+----------
+ t
 (1 row)
 
 SELECT 'QWER_TY'::ltree ~ 'q%@*';

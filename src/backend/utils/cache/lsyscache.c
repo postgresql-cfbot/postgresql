@@ -934,6 +934,35 @@ get_cast_oid(Oid sourcetypeid, Oid targettypeid, bool missing_ok)
 	return oid;
 }
 
+/*
+ * get_attnotnull
+ *		Given the relation id and the attribute number,
+ *		return the "attnotnull" field from the attribute relation.
+ */
+bool
+get_attnotnull(Oid relid, AttrNumber attnum)
+{
+	HeapTuple	  tp;
+	Form_pg_attribute att_tup;
+
+	tp = SearchSysCache2(ATTNUM,
+			ObjectIdGetDatum(relid),
+			Int16GetDatum(attnum));
+
+	if (HeapTupleIsValid(tp))
+	{
+		bool result;
+
+		att_tup = (Form_pg_attribute) GETSTRUCT(tp);
+		result = att_tup->attnotnull;
+		ReleaseSysCache(tp);
+
+		return result;
+	}
+	/* Assume att is nullable if no valid heap tuple is found */
+	return false;
+}
+
 /*				---------- COLLATION CACHE ----------					 */
 
 /*

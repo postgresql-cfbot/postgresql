@@ -396,6 +396,7 @@ typedef struct GiSTOptions
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	int			fillfactor;		/* page fill factor in percent (0..100) */
 	GistOptBufferingMode buffering_mode;	/* buffering build mode */
+	int			buildSortFunctionOffset;	/* used buffering sort function */
 } GiSTOptions;
 
 /* gist.c */
@@ -495,12 +496,15 @@ extern IndexTuple gistgetadjusted(Relation r,
 								  GISTSTATE *giststate);
 extern IndexTuple gistFormTuple(GISTSTATE *giststate,
 								Relation r, Datum *attdata, bool *isnull, bool isleaf);
+extern IndexTuple gistCompressValuesAndFormTuple(GISTSTATE *giststate, Relation r,
+							Datum attdata[], bool isnull[], bool isleaf, Datum compatt[]);
 
 extern OffsetNumber gistchoose(Relation r, Page p,
 							   IndexTuple it,
 							   GISTSTATE *giststate);
 
 extern void GISTInitBuffer(Buffer b, uint32 f);
+extern void gistinitpage(Page page, uint32 f);
 extern void gistdentryinit(GISTSTATE *giststate, int nkey, GISTENTRY *e,
 						   Datum k, Relation r, Page pg, OffsetNumber o,
 						   bool l, bool isNull);
@@ -540,6 +544,7 @@ extern void gistSplitByKey(Relation r, Page page, IndexTuple *itup,
 extern IndexBuildResult *gistbuild(Relation heap, Relation index,
 								   struct IndexInfo *indexInfo);
 extern void gistValidateBufferingOption(const char *value);
+extern void gistValidateBuildFuncOption(const char *value);
 
 /* gistbuildbuffers.c */
 extern GISTBuildBuffers *gistInitBuildBuffers(int pagesPerBuffer, int levelStep,

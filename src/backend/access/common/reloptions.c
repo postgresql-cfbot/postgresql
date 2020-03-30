@@ -522,6 +522,18 @@ static relopt_enum enumRelOpts[] =
 
 static relopt_string stringRelOpts[] =
 {
+	{
+		{
+			"fast_build_sort_function",
+			"Function for presorting data instead of usual penalty\\split inserts",
+			RELOPT_KIND_GIST,
+			AccessExclusiveLock
+		},
+		0,
+		true,
+		gistValidateBuildFuncOption,
+		NULL
+	},
 	/* list terminator */
 	{{NULL}}
 };

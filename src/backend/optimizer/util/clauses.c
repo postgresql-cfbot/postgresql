@@ -28,6 +28,7 @@
 #include "catalog/pg_type.h"
 #include "executor/executor.h"
 #include "executor/functions.h"
+#include "executor/execExpr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -1067,6 +1068,18 @@ max_parallel_hazard_walker(Node *node, max_parallel_hazard_context *context)
 		return query_tree_walker(query,
 								 max_parallel_hazard_walker,
 								 context, 0);
+	}
+
+	/* JsonExpr is parallel-unsafe if subtransactions can be used. */
+	else if (IsA(node, JsonExpr))
+	{
+		JsonExpr  *jsexpr = (JsonExpr *) node;
+
+		if (ExecEvalJsonNeedsSubTransaction(jsexpr, NULL))
+		{
+			context->max_hazard = PROPARALLEL_UNSAFE;
+			return true;
+		}
 	}
 
 	/* Recurse to check arguments */
@@ -3522,6 +3535,29 @@ eval_const_expressions_mutator(Node *node,
 				if (arg != NULL && IsA(arg, Const))
 					return ece_evaluate_expr((Node *) newcre);
 				return (Node *) newcre;
+			}
+		case T_JsonValueExpr:
+			{
+				JsonValueExpr *jve = (JsonValueExpr *) node;
+				Node	   *raw = eval_const_expressions_mutator((Node *) jve->raw_expr,
+																 context);
+
+				if (raw && IsA(raw, Const))
+				{
+					Node	   *formatted;
+					Node	   *save_case_val = context->case_val;
+
+					context->case_val = raw;
+
+					formatted = eval_const_expressions_mutator((Node *) jve->formatted_expr,
+																context);
+
+					context->case_val = save_case_val;
+
+					if (formatted && IsA(formatted, Const))
+						return formatted;
+				}
+				break;
 			}
 		default:
 			break;

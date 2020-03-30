@@ -20,5 +20,11 @@
 extern void escape_json(StringInfo buf, const char *str);
 extern char *JsonEncodeDateTime(char *buf, Datum value, Oid typid,
 								const int *tzp);
+extern Datum json_build_object_worker(int nargs, Datum *args, bool *nulls,
+									  Oid *types, bool absent_on_null,
+									  bool unique_keys);
+extern Datum json_build_array_worker(int nargs, Datum *args, bool *nulls,
+									 Oid *types, bool absent_on_null);
+extern bool json_validate(text *json, bool check_unique_keys);
 
 #endif							/* JSON_H */

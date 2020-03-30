@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/hash.h"
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "libpq/pqformat.h"
@@ -42,6 +43,23 @@ typedef enum					/* type categories for datum_to_json */
 	JSONTYPE_OTHER				/* all else */
 } JsonTypeCategory;
 
+/* Context for key uniqueness check */
+typedef struct JsonUniqueCheckContext
+{
+	struct JsonKeyInfo
+	{
+		int			offset;				/* key offset:
+										 *   in result if positive,
+										 *   in skipped_keys if negative */
+		int			length;				/* key length */
+	}		   *keys;					/* key info array */
+	int			nkeys;					/* number of processed keys */
+	int			nallocated;				/* number of allocated keys in array */
+	StringInfo	result;					/* resulting json */
+	StringInfoData skipped_keys;		/* skipped keys with NULL values */
+	MemoryContext mcxt;					/* context for saving skipped keys */
+} JsonUniqueCheckContext;
+
 typedef struct JsonAggState
 {
 	StringInfo	str;
@@ -49,7 +67,23 @@ typedef struct JsonAggState
 	Oid			key_output_func;
 	JsonTypeCategory val_category;
 	Oid			val_output_func;
+	JsonUniqueCheckContext unique_check;
 } JsonAggState;
+
+/* Element of object stack for key uniqueness check */
+typedef struct JsonObjectFields
+{
+	struct JsonObjectFields *parent;
+	HTAB	   *fields;
+} JsonObjectFields;
+
+/* State for key uniqueness check */
+typedef struct JsonUniqueState
+{
+	JsonLexContext *lex;
+	JsonObjectFields *stack;
+	bool		unique;
+} JsonUniqueState;
 
 static void composite_to_json(Datum composite, StringInfo result,
 							  bool use_line_feeds);
@@ -754,8 +788,8 @@ to_json(PG_FUNCTION_ARGS)
  *
  * aggregate input column as a json array value.
  */
-Datum
-json_agg_transfn(PG_FUNCTION_ARGS)
+static Datum
+json_agg_transfn_worker(FunctionCallInfo fcinfo, bool absent_on_null)
 {
 	MemoryContext aggcontext,
 				oldcontext;
@@ -795,8 +829,13 @@ json_agg_transfn(PG_FUNCTION_ARGS)
 	else
 	{
 		state = (JsonAggState *) PG_GETARG_POINTER(0);
-		appendStringInfoString(state->str, ", ");
 	}
+
+	if (absent_on_null && PG_ARGISNULL(1))
+		PG_RETURN_POINTER(state);
+
+	if (state->str->len > 1)
+		appendStringInfoString(state->str, ", ");
 
 	/* fast path for NULLs */
 	if (PG_ARGISNULL(1))
@@ -809,7 +848,7 @@ json_agg_transfn(PG_FUNCTION_ARGS)
 	val = PG_GETARG_DATUM(1);
 
 	/* add some whitespace if structured type and not first item */
-	if (!PG_ARGISNULL(0) &&
+	if (!PG_ARGISNULL(0) && state->str->len > 1 &&
 		(state->val_category == JSONTYPE_ARRAY ||
 		 state->val_category == JSONTYPE_COMPOSITE))
 	{
@@ -825,6 +864,25 @@ json_agg_transfn(PG_FUNCTION_ARGS)
 	 * pass the JsonAggState pointer through nodeAgg.c's machinations.
 	 */
 	PG_RETURN_POINTER(state);
+}
+
+
+/*
+ * json_agg aggregate function
+ */
+Datum
+json_agg_transfn(PG_FUNCTION_ARGS)
+{
+	return json_agg_transfn_worker(fcinfo, false);
+}
+
+/*
+ * json_agg_strict aggregate function
+ */
+Datum
+json_agg_strict_transfn(PG_FUNCTION_ARGS)
+{
+	return json_agg_transfn_worker(fcinfo, true);
 }
 
 /*
@@ -850,18 +908,115 @@ json_agg_finalfn(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(catenate_stringinfo_string(state->str, "]"));
 }
 
+static inline void
+json_unique_check_init(JsonUniqueCheckContext *cxt,
+					   StringInfo result, int nkeys)
+{
+	cxt->mcxt = CurrentMemoryContext;
+	cxt->nkeys = 0;
+	cxt->nallocated = nkeys ? nkeys : 16;
+	cxt->keys = palloc(sizeof(*cxt->keys) * cxt->nallocated);
+	cxt->result = result;
+	cxt->skipped_keys.data = NULL;
+}
+
+static inline void
+json_unique_check_free(JsonUniqueCheckContext *cxt)
+{
+	if (cxt->keys)
+		pfree(cxt->keys);
+
+	if (cxt->skipped_keys.data)
+		pfree(cxt->skipped_keys.data);
+}
+
+/* On-demand initialization of skipped_keys StringInfo structure */
+static inline StringInfo
+json_unique_check_get_skipped_keys(JsonUniqueCheckContext *cxt)
+{
+	StringInfo	out = &cxt->skipped_keys;
+
+	if (!out->data)
+	{
+		MemoryContext oldcxt = MemoryContextSwitchTo(cxt->mcxt);
+		initStringInfo(out);
+		MemoryContextSwitchTo(oldcxt);
+	}
+
+	return out;
+}
+
+/*
+ * Save current key offset (key is not yet appended) to the key list, key
+ * length is saved later in json_unique_check_key() when the key is appended.
+ */
+static inline void
+json_unique_check_save_key_offset(JsonUniqueCheckContext *cxt, StringInfo out)
+{
+	if (cxt->nkeys >= cxt->nallocated)
+	{
+		cxt->nallocated *= 2;
+		cxt->keys = repalloc(cxt->keys, sizeof(*cxt->keys) * cxt->nallocated);
+	}
+
+	cxt->keys[cxt->nkeys++].offset = out->len;
+}
+
+/*
+ * Check uniqueness of key already appended to 'out' StringInfo.
+ */
+static inline void
+json_unique_check_key(JsonUniqueCheckContext *cxt, StringInfo out)
+{
+	struct JsonKeyInfo *keys = cxt->keys;
+	int			curr = cxt->nkeys - 1;
+	int			offset = keys[curr].offset;
+	int			length = out->len - offset;
+	char	   *curr_key = &out->data[offset];
+	int			i;
+
+	keys[curr].length = length; /* save current key length */
+
+	if (out == &cxt->skipped_keys)
+		/* invert offset for skipped keys for their recognition */
+		keys[curr].offset = -keys[curr].offset;
+
+	/* check collisions with previous keys */
+	for (i = 0; i < curr; i++)
+	{
+		char	   *prev_key;
+
+		if (cxt->keys[i].length != length)
+			continue;
+
+		offset = cxt->keys[i].offset;
+
+		prev_key = offset > 0
+				? &cxt->result->data[offset]
+				: &cxt->skipped_keys.data[-offset];
+
+		if (!memcmp(curr_key, prev_key, length))
+			ereport(ERROR,
+					(errcode(ERRCODE_DUPLICATE_JSON_OBJECT_KEY_VALUE),
+					 errmsg("duplicate JSON key %s", curr_key)));
+	}
+}
+
 /*
  * json_object_agg transition function.
  *
  * aggregate two input columns as a single json object value.
  */
-Datum
-json_object_agg_transfn(PG_FUNCTION_ARGS)
+static Datum
+json_object_agg_transfn_worker(FunctionCallInfo fcinfo,
+							   bool absent_on_null, bool unique_keys)
 {
 	MemoryContext aggcontext,
 				oldcontext;
 	JsonAggState *state;
+	StringInfo	out;
 	Datum		arg;
+	bool		skip;
 
 	if (!AggCheckCallContext(fcinfo, &aggcontext))
 	{
@@ -882,6 +1037,10 @@ json_object_agg_transfn(PG_FUNCTION_ARGS)
 		oldcontext = MemoryContextSwitchTo(aggcontext);
 		state = (JsonAggState *) palloc(sizeof(JsonAggState));
 		state->str = makeStringInfo();
+		if (unique_keys)
+			json_unique_check_init(&state->unique_check, state->str, 0);
+		else
+			memset(&state->unique_check, 0, sizeof(state->unique_check));
 		MemoryContextSwitchTo(oldcontext);
 
 		arg_type = get_fn_expr_argtype(fcinfo->flinfo, 1);
@@ -909,7 +1068,6 @@ json_object_agg_transfn(PG_FUNCTION_ARGS)
 	else
 	{
 		state = (JsonAggState *) PG_GETARG_POINTER(0);
-		appendStringInfoString(state->str, ", ");
 	}
 
 	/*
@@ -925,10 +1083,40 @@ json_object_agg_transfn(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("field name must not be null")));
 
+	/* Skip null values if absent_on_null */
+	skip = absent_on_null && PG_ARGISNULL(2);
+
+	if (skip)
+	{
+		/* If key uniqueness check is needed we must save skipped keys */
+		if (!unique_keys)
+			PG_RETURN_POINTER(state);
+
+		out = json_unique_check_get_skipped_keys(&state->unique_check);
+	}
+	else
+	{
+		out = state->str;
+
+		if (out->len > 2)
+			appendStringInfoString(out, ", ");
+	}
+
 	arg = PG_GETARG_DATUM(1);
 
-	datum_to_json(arg, false, state->str, state->key_category,
+	if (unique_keys)
+		json_unique_check_save_key_offset(&state->unique_check, out);
+
+	datum_to_json(arg, false, out, state->key_category,
 				  state->key_output_func, true);
+
+	if (unique_keys)
+	{
+		json_unique_check_key(&state->unique_check, out);
+
+		if (skip)
+			PG_RETURN_POINTER(state);
+	}
 
 	appendStringInfoString(state->str, " : ");
 
@@ -941,6 +1129,42 @@ json_object_agg_transfn(PG_FUNCTION_ARGS)
 				  state->val_output_func, false);
 
 	PG_RETURN_POINTER(state);
+}
+
+/*
+ * json_object_agg aggregate function
+ */
+Datum
+json_object_agg_transfn(PG_FUNCTION_ARGS)
+{
+	return json_object_agg_transfn_worker(fcinfo, false, false);
+}
+
+/*
+ * json_object_agg_strict aggregate function
+ */
+Datum
+json_object_agg_strict_transfn(PG_FUNCTION_ARGS)
+{
+	return json_object_agg_transfn_worker(fcinfo, true, false);
+}
+
+/*
+ * json_object_agg_unique aggregate function
+ */
+Datum
+json_object_agg_unique_transfn(PG_FUNCTION_ARGS)
+{
+	return json_object_agg_transfn_worker(fcinfo, false, true);
+}
+
+/*
+ * json_object_agg_unique_strict aggregate function
+ */
+Datum
+json_object_agg_unique_strict_transfn(PG_FUNCTION_ARGS)
+{
+	return json_object_agg_transfn_worker(fcinfo, true, true);
 }
 
 /*
@@ -959,6 +1183,8 @@ json_object_agg_finalfn(PG_FUNCTION_ARGS)
 	/* NULL result for no rows in, as is standard with aggregates */
 	if (state == NULL)
 		PG_RETURN_NULL();
+
+	json_unique_check_free(&state->unique_check);
 
 	/* Else return state with appropriate object terminator added */
 	PG_RETURN_TEXT_P(catenate_stringinfo_string(state->str, " }"));
@@ -984,25 +1210,14 @@ catenate_stringinfo_string(StringInfo buffer, const char *addon)
 	return result;
 }
 
-/*
- * SQL function json_build_object(variadic "any")
- */
 Datum
-json_build_object(PG_FUNCTION_ARGS)
+json_build_object_worker(int nargs, Datum *args, bool *nulls, Oid *types,
+						 bool absent_on_null, bool unique_keys)
 {
-	int			nargs = PG_NARGS();
 	int			i;
 	const char *sep = "";
 	StringInfo	result;
-	Datum	   *args;
-	bool	   *nulls;
-	Oid		   *types;
-
-	/* fetch argument values to build the object */
-	nargs = extract_variadic_args(fcinfo, 0, false, &args, &types, &nulls);
-
-	if (nargs < 0)
-		PG_RETURN_NULL();
+	JsonUniqueCheckContext unique_check;
 
 	if (nargs % 2 != 0)
 		ereport(ERROR,
@@ -1016,19 +1231,53 @@ json_build_object(PG_FUNCTION_ARGS)
 
 	appendStringInfoChar(result, '{');
 
+	if (unique_keys)
+		json_unique_check_init(&unique_check, result, nargs / 2);
+
 	for (i = 0; i < nargs; i += 2)
 	{
-		appendStringInfoString(result, sep);
-		sep = ", ";
+		StringInfo	out;
+		bool		skip;
+
+		/* Skip null values if absent_on_null */
+		skip = absent_on_null && nulls[i + 1];
+
+		if (skip)
+		{
+			/* If key uniqueness check is needed we must save skipped keys */
+			if (!unique_keys)
+				continue;
+
+			out = json_unique_check_get_skipped_keys(&unique_check);
+		}
+		else
+		{
+			appendStringInfoString(result, sep);
+			sep = ", ";
+			out = result;
+		}
 
 		/* process key */
 		if (nulls[i])
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("argument %d cannot be null", i + 1),
+					 errmsg("argument %d cannot be null",  i + 1),
 					 errhint("Object keys should be text.")));
 
-		add_json(args[i], false, result, types[i], true);
+		if (unique_keys)
+			/* save key offset before key appending */
+			json_unique_check_save_key_offset(&unique_check, out);
+
+		add_json(args[i], false, out, types[i], true);
+
+		if (unique_keys)
+		{
+			/* check key uniqueness after key appending */
+			json_unique_check_key(&unique_check, out);
+
+			if (skip)
+				continue;
+		}
 
 		appendStringInfoString(result, " : ");
 
@@ -1038,7 +1287,29 @@ json_build_object(PG_FUNCTION_ARGS)
 
 	appendStringInfoChar(result, '}');
 
-	PG_RETURN_TEXT_P(cstring_to_text_with_len(result->data, result->len));
+	if (unique_keys)
+		json_unique_check_free(&unique_check);
+
+	return PointerGetDatum(cstring_to_text_with_len(result->data, result->len));
+}
+
+/*
+ * SQL function json_build_object(variadic "any")
+ */
+Datum
+json_build_object(PG_FUNCTION_ARGS)
+{
+	Datum	   *args;
+	bool	   *nulls;
+	Oid		   *types;
+	/* build argument values to build the object */
+	int			nargs = extract_variadic_args(fcinfo, 0, true,
+											  &args, &types, &nulls);
+
+	if (nargs < 0)
+		PG_RETURN_NULL();
+
+	PG_RETURN_DATUM(json_build_object_worker(nargs, args, nulls, types, false, false));
 }
 
 /*
@@ -1050,25 +1321,13 @@ json_build_object_noargs(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(cstring_to_text_with_len("{}", 2));
 }
 
-/*
- * SQL function json_build_array(variadic "any")
- */
 Datum
-json_build_array(PG_FUNCTION_ARGS)
+json_build_array_worker(int nargs, Datum *args, bool *nulls, Oid *types,
+						bool absent_on_null)
 {
-	int			nargs;
 	int			i;
 	const char *sep = "";
 	StringInfo	result;
-	Datum	   *args;
-	bool	   *nulls;
-	Oid		   *types;
-
-	/* fetch argument values to build the array */
-	nargs = extract_variadic_args(fcinfo, 0, false, &args, &types, &nulls);
-
-	if (nargs < 0)
-		PG_RETURN_NULL();
 
 	result = makeStringInfo();
 
@@ -1076,6 +1335,9 @@ json_build_array(PG_FUNCTION_ARGS)
 
 	for (i = 0; i < nargs; i++)
 	{
+		if (absent_on_null && nulls[i])
+			continue;
+
 		appendStringInfoString(result, sep);
 		sep = ", ";
 		add_json(args[i], nulls[i], result, types[i], false);
@@ -1083,7 +1345,26 @@ json_build_array(PG_FUNCTION_ARGS)
 
 	appendStringInfoChar(result, ']');
 
-	PG_RETURN_TEXT_P(cstring_to_text_with_len(result->data, result->len));
+	return PointerGetDatum(cstring_to_text_with_len(result->data, result->len));
+}
+
+/*
+ * SQL function json_build_array(variadic "any")
+ */
+Datum
+json_build_array(PG_FUNCTION_ARGS)
+{
+	Datum	   *args;
+	bool	   *nulls;
+	Oid		   *types;
+	/* build argument values to build the object */
+	int			nargs = extract_variadic_args(fcinfo, 0, true,
+											  &args, &types, &nulls);
+
+	if (nargs < 0)
+		PG_RETURN_NULL();
+
+	PG_RETURN_DATUM(json_build_array_worker(nargs, args, nulls, types, false));
 }
 
 /*
@@ -1317,6 +1598,129 @@ escape_json(StringInfo buf, const char *str)
 	appendStringInfoCharMacro(buf, '"');
 }
 
+/* Functions implementing hash table for key uniqueness check */
+static int
+json_unique_hash_match(const void *key1, const void *key2, Size keysize)
+{
+	return strcmp(*(const char **) key1, *(const char **) key2);
+}
+
+static void *
+json_unique_hash_keycopy(void *dest, const void *src, Size keysize)
+{
+	*(const char **) dest = pstrdup(*(const char **) src);
+
+	return dest;
+}
+
+static uint32
+json_unique_hash(const void *key, Size keysize)
+{
+	const char *s = *(const char **) key;
+
+	return DatumGetUInt32(hash_any((const unsigned char *) s, (int) strlen(s)));
+}
+
+/* Semantic actions for key uniqueness check */
+static void
+json_unique_object_start(void *_state)
+{
+	JsonUniqueState *state = _state;
+	JsonObjectFields *obj;
+	HASHCTL		ctl;
+
+	if (!state->unique)
+		return;
+
+	obj = palloc(sizeof(*obj));
+
+	memset(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(char *);
+	ctl.entrysize = sizeof(char *);
+	ctl.hcxt = CurrentMemoryContext;
+	ctl.hash = json_unique_hash;
+	ctl.keycopy = json_unique_hash_keycopy;
+	ctl.match = json_unique_hash_match;
+	obj->fields = hash_create("json object hashtable",
+							  32,
+							  &ctl,
+							  HASH_ELEM | HASH_CONTEXT |
+							  HASH_FUNCTION | HASH_COMPARE | HASH_KEYCOPY);
+
+	obj->parent = state->stack;		/* push object to stack */
+
+	state->stack = obj;
+}
+
+static void
+json_unique_object_end(void *_state)
+{
+	JsonUniqueState *state = _state;
+
+	if (!state->unique)
+		return;
+
+	hash_destroy(state->stack->fields);
+
+	state->stack = state->stack->parent;	/* pop object from stack */
+}
+
+static void
+json_unique_object_field_start(void *_state, char *field, bool isnull)
+{
+	JsonUniqueState *state = _state;
+	bool		found;
+
+	if (!state->unique)
+		return;
+
+	/* find key collision in the current object */
+	(void) hash_search(state->stack->fields, &field, HASH_ENTER, &found);
+
+	if (found)
+	{
+		state->unique = false;
+
+		while (state->stack)
+		{
+			hash_destroy(state->stack->fields);
+			state->stack = state->stack->parent;	/* pop all objects */
+		}
+	}
+}
+
+/* Validate JSON text and additionally check key uniqueness */
+bool
+json_validate(text *json, bool check_unique_keys)
+{
+	JsonLexContext *lex = makeJsonLexContext(json, check_unique_keys);
+	JsonSemAction uniqueSemAction = {0};
+	JsonUniqueState state;
+	JsonParseErrorType result;
+
+	if (check_unique_keys)
+	{
+		state.lex = lex;
+		state.stack = NULL;
+		state.unique = true;
+
+		uniqueSemAction.semstate = &state;
+		uniqueSemAction.object_start = json_unique_object_start;
+		uniqueSemAction.object_field_start = json_unique_object_field_start;
+		uniqueSemAction.object_end = json_unique_object_end;
+	}
+
+	result = pg_parse_json(lex, check_unique_keys ? &uniqueSemAction : &nullSemAction);
+
+	if (result != JSON_SUCCESS)
+		return false;	/* invalid json */
+
+	if (check_unique_keys && !state.unique)
+		return false;	/* not unique keys */
+
+	return true;	/* ok */
+}
+
 /*
  * SQL function json_typeof(json) -> text
  *
@@ -1332,21 +1736,13 @@ escape_json(StringInfo buf, const char *str)
 Datum
 json_typeof(PG_FUNCTION_ARGS)
 {
-	text	   *json;
-
-	JsonLexContext *lex;
-	JsonTokenType tok;
+	text	   *json = PG_GETARG_TEXT_PP(0);
 	char	   *type;
-	JsonParseErrorType	result;
-
-	json = PG_GETARG_TEXT_PP(0);
-	lex = makeJsonLexContext(json, false);
+	JsonTokenType tok;
 
 	/* Lex exactly one token from the input and check its type. */
-	result = json_lex(lex);
-	if (result != JSON_SUCCESS)
-		json_ereport_error(result, lex);
-	tok = lex->token_type;
+	tok = json_get_first_token(json, true);
+
 	switch (tok)
 	{
 		case JSON_TOKEN_OBJECT_START:

@@ -196,6 +196,15 @@ typedef enum NodeTag
 	T_FromExpr,
 	T_OnConflictExpr,
 	T_IntoClause,
+	T_JsonFormat,
+	T_JsonReturning,
+	T_JsonValueExpr,
+	T_JsonCtorExpr,
+	T_JsonExpr,
+	T_JsonCoercion,
+	T_JsonItemCoercions,
+	T_JsonTableParentNode,
+	T_JsonTableSiblingNode,
 
 	/*
 	 * TAGS FOR EXPRESSION STATE NODES (execnodes.h)
@@ -478,6 +487,22 @@ typedef enum NodeTag
 	T_PartitionRangeDatum,
 	T_PartitionCmd,
 	T_VacuumRelation,
+	T_JsonObjectCtor,
+	T_JsonArrayCtor,
+	T_JsonArrayQueryCtor,
+	T_JsonObjectAgg,
+	T_JsonArrayAgg,
+	T_JsonFuncExpr,
+	T_JsonIsPredicate,
+	T_JsonExistsPredicate,
+	T_JsonTable,
+	T_JsonTableColumn,
+	T_JsonTablePlan,
+	T_JsonCommon,
+	T_JsonArgument,
+	T_JsonKeyValue,
+	T_JsonBehavior,
+	T_JsonOutput,
 
 	/*
 	 * TAGS FOR REPLICATION GRAMMAR PARSE NODES (replnodes.h)

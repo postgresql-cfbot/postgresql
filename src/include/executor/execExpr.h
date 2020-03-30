@@ -20,6 +20,7 @@
 /* forward references to avoid circularity */
 struct ExprEvalStep;
 struct SubscriptingRefState;
+struct JsonbValue;
 
 /* Bits in ExprState->flags (see also execnodes.h for public flag bits): */
 /* expression's interpreter has been initialized */
@@ -219,6 +220,9 @@ typedef enum ExprEvalOp
 	EEOP_WINDOW_FUNC,
 	EEOP_SUBPLAN,
 	EEOP_ALTERNATIVE_SUBPLAN,
+	EEOP_JSON_CTOR,
+	EEOP_IS_JSON,
+	EEOP_JSONEXPR,
 
 	/* aggregation related nodes */
 	EEOP_AGG_STRICT_DESERIALIZE,
@@ -640,6 +644,67 @@ typedef struct ExprEvalStep
 			int			transno;
 			int			setoff;
 		}			agg_trans;
+
+		/* for EEOP_JSON_CTOR */
+		struct
+		{
+			JsonCtorExpr *ctor;
+			Datum	   *arg_values;
+			bool	   *arg_nulls;
+			Oid		   *arg_types;
+			int			nargs;
+		}			json_ctor;
+
+		/* for EEOP_IS_JSON */
+		struct
+		{
+					JsonIsPredicate *pred;	/* original expression node */
+		}			is_json;
+
+		/* for EEOP_JSONEXPR */
+		struct
+		{
+			JsonExpr   *jsexpr;			/* original expression node */
+
+			struct
+			{
+				FmgrInfo	func;		/* typinput function for output type */
+				Oid			typioparam;
+			} input;					/* I/O info for output type */
+
+			NullableDatum
+					   *formatted_expr,		/* formatted context item value */
+					   *res_expr,			/* result item */
+					   *coercion_expr,		/* input for JSON item coercion */
+					   *pathspec;			/* path specification value */
+
+			ExprState  *result_expr;		/* coerced to output type */
+			ExprState  *default_on_empty;	/* ON EMPTY DEFAULT expression */
+			ExprState  *default_on_error;	/* ON ERROR DEFAULT expression */
+			List	   *args;				/* passing arguments */
+
+			void	   *cache;				/* cache for json_populate_type() */
+
+			struct JsonCoercionsState
+			{
+				struct JsonCoercionState
+				{
+					JsonCoercion *coercion;		/* coercion expression */
+					ExprState  *estate;	/* coercion expression state */
+				} 			null,
+							string,
+							numeric,
+							boolean,
+							date,
+							time,
+							timetz,
+							timestamp,
+							timestamptz,
+							composite;
+			}			coercions;	/* states for coercion from SQL/JSON item
+									 * types directly to the output type */
+		}			jsonexpr;
+
 	}			d;
 } ExprEvalStep;
 
@@ -731,6 +796,7 @@ extern void ExecEvalScalarArrayOp(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalConstraintNotNull(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalConstraintCheck(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalXmlExpr(ExprState *state, ExprEvalStep *op);
+extern void ExecEvalJsonIsPredicate(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalGroupingFunc(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalSubPlan(ExprState *state, ExprEvalStep *op,
 							ExprContext *econtext);
@@ -740,6 +806,18 @@ extern void ExecEvalWholeRowVar(ExprState *state, ExprEvalStep *op,
 								ExprContext *econtext);
 extern void ExecEvalSysVar(ExprState *state, ExprEvalStep *op,
 						   ExprContext *econtext, TupleTableSlot *slot);
+extern void ExecEvalJson(ExprState *state, ExprEvalStep *op,
+						 ExprContext *econtext);
+extern Datum ExecPrepareJsonItemCoercion(struct JsonbValue *item,
+										 JsonReturning *returning,
+										 struct JsonCoercionsState *coercions,
+										 struct JsonCoercionState **pjcstate);
+extern bool ExecEvalJsonNeedsSubTransaction(JsonExpr *jsexpr,
+											struct JsonCoercionsState *);
+extern Datum ExecEvalExprPassingCaseValue(ExprState *estate,
+										  ExprContext *econtext, bool *isnull,
+										  Datum caseval_datum,
+										  bool caseval_isnull);
 
 extern void ExecAggInitGroup(AggState *aggstate, AggStatePerTrans pertrans, AggStatePerGroup pergroup,
 							 ExprContext *aggcontext);

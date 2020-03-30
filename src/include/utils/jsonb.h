@@ -404,8 +404,16 @@ extern char *JsonbToCString(StringInfo out, JsonbContainer *in,
 							int estimated_len);
 extern char *JsonbToCStringIndent(StringInfo out, JsonbContainer *in,
 								  int estimated_len);
+extern Jsonb *JsonbMakeEmptyArray(void);
+extern Jsonb *JsonbMakeEmptyObject(void);
+extern char *JsonbUnquote(Jsonb *jb);
 extern bool JsonbExtractScalar(JsonbContainer *jbc, JsonbValue *res);
 extern const char *JsonbTypeName(JsonbValue *jb);
 
+extern Datum jsonb_build_object_worker(int nargs, Datum *args, bool *nulls,
+									   Oid *types, bool absent_on_null,
+									   bool unique_keys);
+extern Datum jsonb_build_array_worker(int nargs, Datum *args, bool *nulls,
+									  Oid *types, bool absent_on_null);
 
 #endif							/* __JSONB_H__ */

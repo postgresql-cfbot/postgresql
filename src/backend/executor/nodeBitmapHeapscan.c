@@ -231,14 +231,14 @@ BitmapHeapNext(BitmapHeapScanState *node)
 				 * node->return_empty_tuples.
 				 */
 				node->return_empty_tuples = tbmres->ntuples;
+				node->unfetched_pages++;
 			}
 			else if (!table_scan_bitmap_next_block(scan, tbmres))
 			{
 				/* AM doesn't think this block is valid, skip */
 				continue;
 			}
-
-			if (tbmres->ntuples >= 0)
+			else if (tbmres->ntuples >= 0)
 				node->exact_pages++;
 			else
 				node->lossy_pages++;
@@ -733,6 +733,7 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	scanstate->pvmbuffer = InvalidBuffer;
 	scanstate->exact_pages = 0;
 	scanstate->lossy_pages = 0;
+	scanstate->unfetched_pages = 0;
 	scanstate->prefetch_iterator = NULL;
 	scanstate->prefetch_pages = 0;
 	scanstate->prefetch_target = 0;

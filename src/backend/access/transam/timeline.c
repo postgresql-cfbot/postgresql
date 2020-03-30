@@ -36,6 +36,7 @@
 
 #include "access/timeline.h"
 #include "access/xlog.h"
+#include "access/xlogarchive.h"
 #include "access/xlog_internal.h"
 #include "access/xlogdefs.h"
 #include "pgstat.h"

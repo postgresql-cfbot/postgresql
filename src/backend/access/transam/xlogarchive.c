@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include "access/xlog.h"
+#include "access/xlogarchive.h"
 #include "access/xlog_internal.h"
 #include "common/archive.h"
 #include "miscadmin.h"

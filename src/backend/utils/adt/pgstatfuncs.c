@@ -2000,3 +2000,83 @@ pg_stat_get_archiver(PG_FUNCTION_ARGS)
 	/* Returns the record as Datum */
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
 }
+
+Datum
+pg_stat_get_waitaccum(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_WAITACCUM_COLS	4
+	PgStat_WaitAccumStats *waitaccum_stats;
+	PgStat_WaitAccumEntry *entry;
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	int i;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not " \
+						"allowed in this context")));
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	/* Get statistics about the waitaccum process */
+	waitaccum_stats = pgstat_fetch_stat_waitaccum();
+
+	for (i = 0; i < waitaccum_stats->hash->entry_num; i++)
+	{
+		Datum		values[PG_STAT_GET_WAITACCUM_COLS];
+		bool		nulls[PG_STAT_GET_WAITACCUM_COLS];
+		const char *wait_event_type = NULL;
+		const char *wait_event = NULL;
+
+		/* Initialise values and NULL flags arrays */
+		MemSet(values, 0, sizeof(values));
+		MemSet(nulls, 0, sizeof(nulls));
+
+		entry = waitaccum_stats->hash->entries[i].entry;
+
+		/* Fill values and NULLs */
+		{
+			uint32		raw_wait_event;
+
+			raw_wait_event = UINT32_ACCESS_ONCE(entry->wait_event_info);
+			wait_event_type = pgstat_get_wait_event_type(raw_wait_event);
+			wait_event = pgstat_get_wait_event(raw_wait_event);
+		}
+
+		values[0] = CStringGetTextDatum(wait_event_type);
+
+		values[1] = CStringGetTextDatum(wait_event);
+
+		values[2] = Int64GetDatum(entry->calls);
+
+		values[3] = UInt64GetDatum(entry->times);
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	/* clean up and return the tuplestore */
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
+}

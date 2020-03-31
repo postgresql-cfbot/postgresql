@@ -21,6 +21,7 @@
 #include "storage/lock.h"
 #include "storage/pg_sema.h"
 #include "storage/proclist_types.h"
+#include "portability/instr_time.h"
 
 /*
  * Each backend advertises up to PGPROC_MAX_CACHED_SUBXIDS TransactionIds

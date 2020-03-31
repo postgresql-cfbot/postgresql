@@ -123,6 +123,7 @@
  */
 bool		pgstat_track_activities = false;
 bool		pgstat_track_counts = false;
+bool		pgstat_track_wait_timing = false;
 int			pgstat_track_functions = TRACK_FUNC_OFF;
 int			pgstat_track_activity_query_size = 1024;
 
@@ -152,6 +153,10 @@ static struct sockaddr_storage pgStatAddr;
 static time_t last_pgstat_start_time;
 
 static bool pgStatRunningInCollector = false;
+
+WAHash *wa_hash;
+
+uint64 waitStart;
 
 /*
  * Structures in which backends store per-table info that's waiting to be
@@ -255,6 +260,7 @@ static int	localNumBackends = 0;
  */
 static PgStat_ArchiverStats archiverStats;
 static PgStat_GlobalStats globalStats;
+static PgStat_WaitAccumStats waitAccumStats;
 
 /*
  * List of OIDs of databases we need to write out.  If an entry is InvalidOid,
@@ -280,6 +286,8 @@ static pid_t pgstat_forkexec(void);
 #endif
 
 NON_EXEC_STATIC void PgstatCollectorMain(int argc, char *argv[]) pg_attribute_noreturn();
+static void pgstat_init_waitaccum_hash(WAHash **hash);
+static PgStat_WaitAccumEntry *pgstat_add_wa_entry(WAHash *hash, uint32 key);
 static void pgstat_beshutdown_hook(int code, Datum arg);
 
 static PgStat_StatDBEntry *pgstat_get_db_entry(Oid databaseid, bool create);
@@ -287,8 +295,11 @@ static PgStat_StatTabEntry *pgstat_get_tab_entry(PgStat_StatDBEntry *dbentry,
 												 Oid tableoid, bool create);
 static void pgstat_write_statsfiles(bool permanent, bool allDbs);
 static void pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent);
+static void pgstat_write_waitaccum_statsfile(FILE *fpout);
 static HTAB *pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep);
 static void pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash, bool permanent);
+static bool pgstat_read_waitaccum_statsfile(PgStat_WaitAccumStats *stats,
+											FILE *fpin, const char *statfile);
 static void backend_read_statsfile(void);
 static void pgstat_read_current_status(void);
 
@@ -324,12 +335,34 @@ static void pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len);
 static void pgstat_recv_analyze(PgStat_MsgAnalyze *msg, int len);
 static void pgstat_recv_archiver(PgStat_MsgArchiver *msg, int len);
 static void pgstat_recv_bgwriter(PgStat_MsgBgWriter *msg, int len);
+static void pgstat_recv_waitaccum(PgStat_MsgWaitAccum *msg, int len);
 static void pgstat_recv_funcstat(PgStat_MsgFuncstat *msg, int len);
 static void pgstat_recv_funcpurge(PgStat_MsgFuncpurge *msg, int len);
 static void pgstat_recv_recoveryconflict(PgStat_MsgRecoveryConflict *msg, int len);
 static void pgstat_recv_deadlock(PgStat_MsgDeadlock *msg, int len);
 static void pgstat_recv_checksum_failure(PgStat_MsgChecksumFailure *msg, int len);
 static void pgstat_recv_tempfile(PgStat_MsgTempFile *msg, int len);
+
+
+PgStat_WaitAccumEntry *
+pgstat_get_wa_entry(WAHash *hash, uint32 key)
+{
+	WAEntry *current;
+	int bucket = key % WA_BUCKET_SIZE;
+
+	current = hash->buckets[bucket];
+
+	while (current != NULL)
+	{
+		if (current->key == key)
+			return current->entry;
+
+		current = current->next;
+	}
+
+	return NULL;
+}
+
 
 /* ------------------------------------------------------------
  * Public functions called from postmaster follow
@@ -605,6 +638,8 @@ retry2:
 	/* Now that we have a long-lived socket, tell fd.c about it. */
 	ReserveExternalFD();
 
+	pgstat_init_waitaccum_hash(&wa_hash);
+
 	return;
 
 startup_failed:
@@ -625,6 +660,75 @@ startup_failed:
 	 * on from postgresql.conf without a restart.
 	 */
 	SetConfigOption("track_counts", "off", PGC_INTERNAL, PGC_S_OVERRIDE);
+}
+
+static PgStat_WaitAccumEntry *
+pgstat_add_wa_entry(WAHash *hash, uint32 key)
+{
+	WAEntry *prev;
+	WAEntry *new;
+	int bucket = key % WA_BUCKET_SIZE;
+
+	prev = hash->buckets[bucket];
+
+	while (prev != NULL && prev->next != NULL)
+		prev = prev->next;
+
+	new = &hash->entries[hash->entry_num++];
+	new->key = key;
+	new->entry = MemoryContextAllocZero(TopMemoryContext, (sizeof(PgStat_WaitAccumEntry)));
+
+	if (prev != NULL)
+		prev->next = new;
+	else
+		hash->buckets[bucket] = new;
+
+	return new->entry;
+}
+
+static void
+pgstat_init_waitaccum_entry(WAHash *hash, uint32 wait_event_info)
+{
+	PgStat_WaitAccumEntry *entry;
+
+	entry = pgstat_add_wa_entry(hash, wait_event_info);
+	entry->wait_event_info = wait_event_info;
+}
+
+static void
+pgstat_init_waitaccum_hash(WAHash **hash)
+{
+	uint32 i;
+	int last_tranche_id;
+
+	*hash = MemoryContextAllocZero(TopMemoryContext, sizeof(WAHash));
+
+	last_tranche_id = LWLockGetLastTrancheId();
+	for (i = PG_WAIT_LWLOCK + 1; i <= (PG_WAIT_LWLOCK | last_tranche_id); i++)
+		pgstat_init_waitaccum_entry(*hash, i);
+
+	for (i = (PG_WAIT_LOCK | LOCKTAG_RELATION); i <= (PG_WAIT_LOCK | LOCKTAG_LAST_TYPE); i++)
+		pgstat_init_waitaccum_entry(*hash, i);
+
+	for (i = PG_WAIT_BUFFER_PIN; i <= PG_WAIT_BUFFER_PIN; i++)
+		pgstat_init_waitaccum_entry(*hash, i);
+
+	for (i = PG_WAIT_ACTIVITY; i <= PG_WAIT_ACTIVITY_LAST_TYPE; i++)
+		pgstat_init_waitaccum_entry(*hash, i);
+
+	for (i = PG_WAIT_CLIENT; i <= PG_WAIT_CLIENT_LAST_TYPE; i++)
+		pgstat_init_waitaccum_entry(*hash, i);
+
+	//do extension stuff
+
+	for (i = PG_WAIT_IPC; i <= PG_WAIT_IPC_LAST_TYPE; i++)
+		pgstat_init_waitaccum_entry(*hash, i);
+
+	for (i = PG_WAIT_TIMEOUT; i <= PG_WAIT_TIMEOUT_LAST_TYPE; i++)
+		pgstat_init_waitaccum_entry(*hash, i);
+
+	for (i = PG_WAIT_IO; i <= PG_WAIT_IO_LAST_TYPE; i++)
+		pgstat_init_waitaccum_entry(*hash, i);
 }
 
 /*
@@ -907,6 +1011,9 @@ pgstat_report_stat(bool force)
 
 	/* Now, send function statistics */
 	pgstat_send_funcstats();
+
+	/* Send wait accumulative statistics */
+	pgstat_send_waitaccum();
 }
 
 /*
@@ -1337,6 +1444,8 @@ pgstat_reset_shared_counters(const char *target)
 		msg.m_resettarget = RESET_ARCHIVER;
 	else if (strcmp(target, "bgwriter") == 0)
 		msg.m_resettarget = RESET_BGWRITER;
+	else if (strcmp(target, "waitaccum") == 0)
+		msg.m_resettarget = RESET_WAITACCUM;
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -2619,6 +2728,22 @@ pgstat_fetch_global(void)
 	backend_read_statsfile();
 
 	return &globalStats;
+}
+
+/*
+ * ---------
+ * pgstat_fetch_stat_waitaccum() -
+ *
+ *	Support function for the SQL-callable pgstat* functions. Returns
+ *	a pointer to the wait accum statistics struct.
+ * ---------
+ */
+PgStat_WaitAccumStats *
+pgstat_fetch_stat_waitaccum(void)
+{
+	backend_read_statsfile();
+
+	return &waitAccumStats;
 }
 
 
@@ -4325,6 +4450,53 @@ pgstat_send_bgwriter(void)
 	MemSet(&BgWriterStats, 0, sizeof(BgWriterStats));
 }
 
+/* ----------
+ * pgstat_send_waitaccum() -
+ *
+ * ----------
+ */
+void
+pgstat_send_waitaccum()
+{
+	PgStat_MsgWaitAccum msg;
+	PgStat_WaitAccumEntry *entry;
+	int i;
+
+	if (wa_hash == NULL)
+		return;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_WAITACCUM);
+	msg.m_nentries = 0;
+
+	for (i = 0; i < wa_hash->entry_num; i++)
+	{
+		entry = wa_hash->entries[i].entry;
+
+		/* Send only wait events that have occurred. */
+		if (entry->calls == 0)
+			continue;
+
+		/*
+		 * Prepare and send the message
+		 */
+		memcpy(&msg.m_entry[msg.m_nentries], entry, sizeof(PgStat_WaitAccumEntry));
+		if (++msg.m_nentries >= PGSTAT_NUM_WAITACCUMENTRIES)
+		{
+			pgstat_send(&msg, offsetof(PgStat_MsgWaitAccum, m_entry[0]) +
+						msg.m_nentries * sizeof(PgStat_WaitAccumEntry));
+			msg.m_nentries = 0;
+		}
+
+		/* Clear wait events information. */
+		entry->calls = 0;
+		entry->times = 0;
+	}
+
+	if (msg.m_nentries > 0)
+		pgstat_send(&msg, offsetof(PgStat_MsgWaitAccum, m_entry[0]) +
+					msg.m_nentries * sizeof(PgStat_WaitAccumEntry));
+}
+
 
 /* ----------
  * PgstatCollectorMain() -
@@ -4511,6 +4683,10 @@ PgstatCollectorMain(int argc, char *argv[])
 
 				case PGSTAT_MTYPE_BGWRITER:
 					pgstat_recv_bgwriter(&msg.msg_bgwriter, len);
+					break;
+
+				case PGSTAT_MTYPE_WAITACCUM:
+					pgstat_recv_waitaccum(&msg.msg_waitaccum, len);
 					break;
 
 				case PGSTAT_MTYPE_FUNCSTAT:
@@ -4782,6 +4958,8 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 	rc = fwrite(&archiverStats, sizeof(archiverStats), 1, fpout);
 	(void) rc;					/* we'll check for error with ferror */
 
+	pgstat_write_waitaccum_statsfile(fpout);
+
 	/*
 	 * Walk through the database table.
 	 */
@@ -4987,6 +5165,43 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 }
 
 /* ----------
+ * pgstat_write_waitaccum_statsfile() -
+ *		Write the waitAccumStats to the stat file.
+ *
+ * ----------
+ */
+static void
+pgstat_write_waitaccum_statsfile(FILE *fpout)
+{
+	PgStat_WaitAccumEntry *entry;
+	WAHash *hash = waitAccumStats.hash;
+	int			rc;
+	int			i;
+
+	/*
+	 * Walk through the waitaccum hash.
+	 */
+	for (i = 0; i < hash->entry_num; i++)
+	{
+		entry = hash->entries[i].entry;
+
+		/* Write only wait events that have occurred. */
+		if (entry->calls == 0)
+			continue;
+
+		/*
+		 * Write out the DB entry. We don't write the tables or functions
+		 * pointers, since they're of no use to any other process.
+		 */
+		fputc('D', fpout);
+		rc = fwrite(entry, sizeof(PgStat_WaitAccumEntry), 1, fpout);
+		(void) rc;				/* we'll check for error with ferror */
+	}
+
+	fputc('E', fpout);
+}
+
+/* ----------
  * pgstat_read_statsfiles() -
  *
  *	Reads in some existing statistics collector files and returns the
@@ -5039,6 +5254,7 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 	 */
 	memset(&globalStats, 0, sizeof(globalStats));
 	memset(&archiverStats, 0, sizeof(archiverStats));
+	waitAccumStats.hash = MemoryContextAllocZero(pgStatLocalContext, sizeof(WAHash));
 
 	/*
 	 * Set the current timestamp (will be kept only in case we can't load an
@@ -5108,6 +5324,9 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 		memset(&archiverStats, 0, sizeof(archiverStats));
 		goto done;
 	}
+
+	if(!pgstat_read_waitaccum_statsfile(&waitAccumStats, fpin, statfile))
+		goto done;
 
 	/*
 	 * We found an existing collector stats file. Read it and put all the
@@ -5407,9 +5626,12 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 	PgStat_StatDBEntry dbentry;
 	PgStat_GlobalStats myGlobalStats;
 	PgStat_ArchiverStats myArchiverStats;
+	PgStat_WaitAccumStats myWaitAccumStats;
 	FILE	   *fpin;
 	int32		format_id;
 	const char *statfile = permanent ? PGSTAT_STAT_PERMANENT_FILENAME : pgstat_stat_filename;
+
+	myWaitAccumStats.hash = MemoryContextAllocZero(CurrentMemoryContext, sizeof(WAHash));
 
 	/*
 	 * Try to open the stats file.  As above, anything but ENOENT is worthy of
@@ -5460,6 +5682,9 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 		FreeFile(fpin);
 		return false;
 	}
+
+	if(!pgstat_read_waitaccum_statsfile(&myWaitAccumStats, fpin, statfile))
+		return false;
 
 	/* By default, we're going to return the timestamp of the global file. */
 	*ts = myGlobalStats.stats_timestamp;
@@ -5512,6 +5737,75 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 done:
 	FreeFile(fpin);
 	return true;
+}
+
+/* ----------
+ * pgstat_read_statsfiles() -
+ *
+ *	Reads the waitaccum stats from the file.
+ *	If an error happens when reading file, return false. Otherwise return true.
+ *
+ * ----------
+ */
+static bool
+pgstat_read_waitaccum_statsfile(PgStat_WaitAccumStats *stats,
+								FILE *fpin, const char *statfile)
+{
+	PgStat_WaitAccumEntry *entry;
+	PgStat_WaitAccumEntry buf;
+	WAHash *hash = stats->hash;
+
+	/*
+	 * Read and put all the hashtable entries into place.
+	 */
+	for (;;)
+	{
+		switch (fgetc(fpin))
+		{
+				/*
+				 * 'D'	A PgStat_WaitAccumEntry struct describing a database
+				 * follows.
+				 */
+			case 'D':
+				if (fread(&buf, 1, sizeof(PgStat_WaitAccumEntry), fpin)
+									 != sizeof(PgStat_WaitAccumEntry))
+				{
+					ereport(pgStatRunningInCollector ? LOG : WARNING,
+							(errmsg("corrupted statistics file \"%s\"",
+									statfile)));
+					return false;
+				}
+
+				entry = pgstat_get_wa_entry(hash, buf.wait_event_info);
+
+				if (entry)
+				{
+					ereport(pgStatRunningInCollector ? LOG : WARNING,
+							(errmsg("corrupted statistics file \"%s\"",
+									statfile)));
+					return false;
+				}
+
+				/*
+				 * Add to the DB hash
+				 */
+				entry = pgstat_add_wa_entry(hash, buf.wait_event_info);
+				memcpy(entry, &buf, sizeof(PgStat_WaitAccumEntry));
+
+				break;
+
+			case 'E':
+				return true;
+
+			default:
+				ereport(pgStatRunningInCollector ? LOG : WARNING,
+						(errmsg("corrupted statistics file \"%s\"",
+								statfile)));
+				return false;
+		}
+	}
+
+	return 0;
 }
 
 /*
@@ -6026,7 +6320,20 @@ pgstat_recv_resetsharedcounter(PgStat_MsgResetsharedcounter *msg, int len)
 		memset(&archiverStats, 0, sizeof(archiverStats));
 		archiverStats.stat_reset_timestamp = GetCurrentTimestamp();
 	}
+	else if (msg->m_resettarget == RESET_WAITACCUM)
+	{
+		PgStat_WaitAccumEntry *entry;
+		WAHash *hash = waitAccumStats.hash;
+		int i;
 
+		for (i = 0; i < hash->entry_num; i++)
+		{
+			entry = hash->entries[i].entry;
+
+			entry->calls = 0;
+			entry->times = 0;
+		}
+	}
 	/*
 	 * Presumably the sender of this message validated the target, don't
 	 * complain here if it's not valid
@@ -6215,6 +6522,43 @@ pgstat_recv_bgwriter(PgStat_MsgBgWriter *msg, int len)
 	globalStats.buf_written_backend += msg->m_buf_written_backend;
 	globalStats.buf_fsync_backend += msg->m_buf_fsync_backend;
 	globalStats.buf_alloc += msg->m_buf_alloc;
+}
+
+/* ----------
+ * pgstat_recv_waitaccum() -
+ *
+ *	Process a WAITACCUM message.
+ * ----------
+ */
+static void
+pgstat_recv_waitaccum(PgStat_MsgWaitAccum *msg, int len)
+{
+	PgStat_WaitAccumEntry *m_entry = &(msg->m_entry[0]);
+	PgStat_WaitAccumEntry *entry;
+	WAHash *hash = waitAccumStats.hash;
+	int			i;
+
+	/*
+	 * Process all function entries in the message.
+	 */
+	for (i = 0; i < msg->m_nentries; i++, m_entry++)
+	{
+		entry = pgstat_get_wa_entry(hash, m_entry->wait_event_info);
+
+		if (!entry)
+		{
+			entry = pgstat_add_wa_entry(hash, m_entry->wait_event_info);
+			memcpy(entry, m_entry, sizeof(PgStat_WaitAccumEntry));
+		}
+		else
+		{
+			/*
+			 * Otherwise add the values to the existing entry.
+			 */
+			entry->calls += m_entry->calls;
+			entry->times += m_entry->times;
+		}
+	}
 }
 
 /* ----------

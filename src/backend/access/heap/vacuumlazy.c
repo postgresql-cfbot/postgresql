@@ -331,10 +331,10 @@ static void lazy_vacuum_all_indexes(Relation onerel, Relation *Irel,
 									LVRelStats *vacrelstats, LVParallelState *lps,
 									int nindexes);
 static void lazy_vacuum_index(Relation indrel, IndexBulkDeleteResult **stats,
-							  LVDeadTuples *dead_tuples, double reltuples, LVRelStats *vacrelstats);
+							  LVDeadTuples *dead_tuples, LVRelStats *vacrelstats);
 static void lazy_cleanup_index(Relation indrel,
 							   IndexBulkDeleteResult **stats,
-							   double reltuples, bool estimated_count, LVRelStats *vacrelstats);
+							   bool estimated_count, LVRelStats *vacrelstats);
 static int	lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 							 int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer);
 static bool should_attempt_truncation(VacuumParams *params,
@@ -636,8 +636,8 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 			}
 			appendStringInfo(&buf, msgfmt,
 							 get_database_name(MyDatabaseId),
-							 get_namespace_name(RelationGetNamespace(onerel)),
-							 RelationGetRelationName(onerel),
+							 vacrelstats->relnamespace,
+							 vacrelstats->relname,
 							 vacrelstats->num_index_scans);
 			appendStringInfo(&buf, _("pages: %u removed, %u remain, %u skipped due to pins, %u skipped frozen\n"),
 							 vacrelstats->pages_removed,
@@ -808,7 +808,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			if (params->nworkers > 0)
 				ereport(WARNING,
 						(errmsg("disabling parallel option of vacuum on \"%s\" --- cannot vacuum temporary tables in parallel",
-								RelationGetRelationName(onerel))));
+								vacrelstats->relname)));
 		}
 		else
 			lps = begin_parallel_vacuum(RelationGetRelid(onerel), Irel,
@@ -1693,7 +1693,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 	if (vacuumed_pages)
 		ereport(elevel,
 				(errmsg("\"%s\": removed %.0f row versions in %u pages",
-						RelationGetRelationName(onerel),
+						vacrelstats->relname,
 						tups_vacuumed, vacuumed_pages)));
 
 	/*
@@ -1722,7 +1722,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 
 	ereport(elevel,
 			(errmsg("\"%s\": found %.0f removable, %.0f nonremovable row versions in %u out of %u pages",
-					RelationGetRelationName(onerel),
+					vacrelstats->relname,
 					tups_vacuumed, num_tuples,
 					vacrelstats->scanned_pages, nblocks),
 			 errdetail_internal("%s", buf.data)));
@@ -1772,7 +1772,7 @@ lazy_vacuum_all_indexes(Relation onerel, Relation *Irel,
 
 		for (idx = 0; idx < nindexes; idx++)
 			lazy_vacuum_index(Irel[idx], &stats[idx], vacrelstats->dead_tuples,
-							  vacrelstats->old_live_tuples, vacrelstats);
+							  vacrelstats);
 	}
 
 	/* Increase and report the number of index scans */
@@ -1854,7 +1854,7 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 
 	ereport(elevel,
 			(errmsg("\"%s\": removed %d row versions in %d pages",
-					RelationGetRelationName(onerel),
+					vacrelstats->relname,
 					tupindex, npages),
 			 errdetail_internal("%s", pg_rusage_show(&ru0))));
 
@@ -2272,11 +2272,10 @@ vacuum_one_index(Relation indrel, IndexBulkDeleteResult **stats,
 
 	/* Do vacuum or cleanup of the index */
 	if (lvshared->for_cleanup)
-		lazy_cleanup_index(indrel, stats, lvshared->reltuples,
-						   lvshared->estimated_count, vacrelstats);
+		lazy_cleanup_index(indrel, stats, lvshared->estimated_count, vacrelstats);
 	else
 		lazy_vacuum_index(indrel, stats, dead_tuples,
-						  lvshared->reltuples, vacrelstats);
+						  vacrelstats);
 
 	/*
 	 * Copy the index bulk-deletion result returned from ambulkdelete and
@@ -2350,7 +2349,6 @@ lazy_cleanup_all_indexes(Relation *Irel, IndexBulkDeleteResult **stats,
 	{
 		for (idx = 0; idx < nindexes; idx++)
 			lazy_cleanup_index(Irel[idx], &stats[idx],
-							   vacrelstats->new_rel_tuples,
 							   vacrelstats->tupcount_pages < vacrelstats->rel_pages,
 							   vacrelstats);
 	}
@@ -2367,7 +2365,7 @@ lazy_cleanup_all_indexes(Relation *Irel, IndexBulkDeleteResult **stats,
  */
 static void
 lazy_vacuum_index(Relation indrel, IndexBulkDeleteResult **stats,
-				  LVDeadTuples *dead_tuples, double reltuples, LVRelStats *vacrelstats)
+				  LVDeadTuples *dead_tuples, LVRelStats *vacrelstats)
 {
 	IndexVacuumInfo ivinfo;
 	const char *msg;
@@ -2381,7 +2379,7 @@ lazy_vacuum_index(Relation indrel, IndexBulkDeleteResult **stats,
 	ivinfo.report_progress = false;
 	ivinfo.estimated_count = true;
 	ivinfo.message_level = elevel;
-	ivinfo.num_heap_tuples = reltuples;
+	ivinfo.num_heap_tuples = vacrelstats->old_live_tuples;
 	ivinfo.strategy = vac_strategy;
 
 	/* Update error traceback information */
@@ -2402,7 +2400,7 @@ lazy_vacuum_index(Relation indrel, IndexBulkDeleteResult **stats,
 
 	ereport(elevel,
 			(errmsg(msg,
-					RelationGetRelationName(indrel),
+					vacrelstats->indname,
 					dead_tuples->num_tuples),
 			 errdetail_internal("%s", pg_rusage_show(&ru0))));
 
@@ -2422,7 +2420,7 @@ lazy_vacuum_index(Relation indrel, IndexBulkDeleteResult **stats,
 static void
 lazy_cleanup_index(Relation indrel,
 				   IndexBulkDeleteResult **stats,
-				   double reltuples, bool estimated_count, LVRelStats *vacrelstats)
+				   bool estimated_count, LVRelStats *vacrelstats)
 {
 	IndexVacuumInfo ivinfo;
 	const char *msg;
@@ -2437,7 +2435,7 @@ lazy_cleanup_index(Relation indrel,
 	ivinfo.estimated_count = estimated_count;
 	ivinfo.message_level = elevel;
 
-	ivinfo.num_heap_tuples = reltuples;
+	ivinfo.num_heap_tuples = vacrelstats->new_rel_tuples;
 	ivinfo.strategy = vac_strategy;
 
 	/* Update error traceback information */
@@ -2565,7 +2563,7 @@ lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats)
 				vacrelstats->lock_waiter_detected = true;
 				ereport(elevel,
 						(errmsg("\"%s\": stopping truncate due to conflicting lock request",
-								RelationGetRelationName(onerel))));
+								vacrelstats->relname)));
 				return;
 			}
 
@@ -2631,7 +2629,7 @@ lazy_truncate_heap(Relation onerel, LVRelStats *vacrelstats)
 
 		ereport(elevel,
 				(errmsg("\"%s\": truncated %u to %u pages",
-						RelationGetRelationName(onerel),
+						vacrelstats->relname,
 						old_rel_pages, new_rel_pages),
 				 errdetail_internal("%s",
 									pg_rusage_show(&ru0))));
@@ -2696,7 +2694,7 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
 				{
 					ereport(elevel,
 							(errmsg("\"%s\": suspending truncate due to conflicting lock request",
-									RelationGetRelationName(onerel))));
+									vacrelstats->relname)));
 
 					vacrelstats->lock_waiter_detected = true;
 					return blkno;
@@ -3453,14 +3451,14 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	if (lvshared->maintenance_work_mem_worker > 0)
 		maintenance_work_mem = lvshared->maintenance_work_mem_worker;
 
-	/*
-	 * Initialize vacrelstats for use as error callback arg by parallel
-	 * worker.
-	 */
+	/* Initialize vacrelstats for use by parallel worker. */
 	vacrelstats.relnamespace = get_namespace_name(RelationGetNamespace(onerel));
 	vacrelstats.relname = pstrdup(RelationGetRelationName(onerel));
 	vacrelstats.indname = NULL;
 	vacrelstats.phase = VACUUM_ERRCB_PHASE_UNKNOWN; /* Not yet processing */
+	vacrelstats.old_live_tuples = lvshared->reltuples; /* Used for vacuum phase */
+	vacrelstats.new_rel_tuples = lvshared->reltuples; /* Used for cleanup phase */
+	vacrelstats.tupcount_pages = lvshared->estimated_count; /* Used for cleanup phase */
 
 	/* Setup error traceback support for ereport() */
 	errcallback.callback = vacuum_error_callback;

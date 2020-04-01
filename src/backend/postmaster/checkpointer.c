@@ -350,7 +350,7 @@ CheckpointerMain(void)
 		if (((volatile CheckpointerShmemStruct *) CheckpointerShmem)->ckpt_flags)
 		{
 			do_checkpoint = true;
-			BgWriterStats.m_requested_checkpoints++;
+			BgWriterStats.requested_checkpoints++;
 		}
 
 		/*
@@ -364,7 +364,7 @@ CheckpointerMain(void)
 		if (elapsed_secs >= CheckPointTimeout)
 		{
 			if (!do_checkpoint)
-				BgWriterStats.m_timed_checkpoints++;
+				BgWriterStats.timed_checkpoints++;
 			do_checkpoint = true;
 			flags |= CHECKPOINT_CAUSE_TIME;
 		}
@@ -486,13 +486,13 @@ CheckpointerMain(void)
 		CheckArchiveTimeout();
 
 		/*
-		 * Send off activity statistics to the stats collector.  (The reason
-		 * why we re-use bgwriter-related code for this is that the bgwriter
-		 * and checkpointer used to be just one process.  It's probably not
-		 * worth the trouble to split the stats support into two independent
-		 * stats message types.)
+		 * Send off activity statistics to the activity stats facility.  (The
+		 * reason why we re-use bgwriter-related code for this is that the
+		 * bgwriter and checkpointer used to be just one process.  It's
+		 * probably not worth the trouble to split the stats support into two
+		 * independent stats message types.)
 		 */
-		pgstat_send_bgwriter();
+		pgstat_report_bgwriter();
 
 		/*
 		 * Sleep until we are signaled or it's time for another checkpoint or
@@ -533,29 +533,29 @@ HandleCheckpointerInterrupts(void)
 		ProcessConfigFile(PGC_SIGHUP);
 
 		/*
-		 * Checkpointer is the last process to shut down, so we ask it to
-		 * hold the keys for a range of other tasks required most of which
-		 * have nothing to do with checkpointing at all.
+		 * Checkpointer is the last process to shut down, so we ask it to hold
+		 * the keys for a range of other tasks required most of which have
+		 * nothing to do with checkpointing at all.
 		 *
-		 * For various reasons, some config values can change dynamically
-		 * so the primary copy of them is held in shared memory to make
-		 * sure all backends see the same value.  We make Checkpointer
-		 * responsible for updating the shared memory copy if the
-		 * parameter setting changes because of SIGHUP.
+		 * For various reasons, some config values can change dynamically so
+		 * the primary copy of them is held in shared memory to make sure all
+		 * backends see the same value.  We make Checkpointer responsible for
+		 * updating the shared memory copy if the parameter setting changes
+		 * because of SIGHUP.
 		 */
 		UpdateSharedMemoryConfig();
 	}
 	if (ShutdownRequestPending)
 	{
 		/*
-		 * From here on, elog(ERROR) should end with exit(1), not send
-		 * control back to the sigsetjmp block above
+		 * From here on, elog(ERROR) should end with exit(1), not send control
+		 * back to the sigsetjmp block above
 		 */
 		ExitOnAnyError = true;
 		/* Close down the database */
 		ShutdownXLOG(0, 0);
 		/* Normal exit from the checkpointer is here */
-		proc_exit(0);		/* done */
+		proc_exit(0);			/* done */
 	}
 }
 
@@ -691,9 +691,9 @@ CheckpointWriteDelay(int flags, double progress)
 		CheckArchiveTimeout();
 
 		/*
-		 * Report interim activity statistics to the stats collector.
+		 * Report interim activity statistics.
 		 */
-		pgstat_send_bgwriter();
+		pgstat_report_bgwriter();
 
 		/*
 		 * This sleep used to be connected to bgwriter_delay, typically 200ms.
@@ -1238,8 +1238,8 @@ AbsorbSyncRequests(void)
 	LWLockAcquire(CheckpointerCommLock, LW_EXCLUSIVE);
 
 	/* Transfer stats counts into pending pgstats message */
-	BgWriterStats.m_buf_written_backend += CheckpointerShmem->num_backend_writes;
-	BgWriterStats.m_buf_fsync_backend += CheckpointerShmem->num_backend_fsync;
+	BgWriterStats.buf_written_backend += CheckpointerShmem->num_backend_writes;
+	BgWriterStats.buf_fsync_backend += CheckpointerShmem->num_backend_fsync;
 
 	CheckpointerShmem->num_backend_writes = 0;
 	CheckpointerShmem->num_backend_fsync = 0;

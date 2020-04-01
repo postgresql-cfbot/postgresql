@@ -490,7 +490,7 @@ XLogArchiveNotify(const char *xlog)
 
 	/* Notify archiver that it's got something to do */
 	if (IsUnderPostmaster)
-		SendPostmasterSignal(PMSIGNAL_WAKEN_ARCHIVER);
+		XLogArchiveWakeup();
 }
 
 /*

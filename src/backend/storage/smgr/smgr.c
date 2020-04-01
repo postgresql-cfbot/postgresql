@@ -362,10 +362,10 @@ smgrdounlink(SMgrRelation reln, bool isRedo)
 	DropRelFileNodesAllBuffers(&rnode, 1);
 
 	/*
-	 * It'd be nice to tell the stats collector to forget it immediately, too.
-	 * But we can't because we don't know the OID (and in cases involving
-	 * relfilenode swaps, it's not always clear which table OID to forget,
-	 * anyway).
+	 * It'd be nice to tell the activity stats facility to forget it
+	 * immediately, too.  But we can't because we don't know the OID (and in
+	 * cases involving relfilenode swaps, it's not always clear which table OID
+	 * to forget, anyway).
 	 */
 
 	/*
@@ -435,8 +435,8 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	DropRelFileNodesAllBuffers(rnodes, nrels);
 
 	/*
-	 * It'd be nice to tell the stats collector to forget them immediately,
-	 * too. But we can't because we don't know the OIDs.
+	 * It'd be nice to tell the activity stats facility to forget them
+	 * immediately, too. But we can't because we don't know the OIDs.
 	 */
 
 	/*

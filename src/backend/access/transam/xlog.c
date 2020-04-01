@@ -685,6 +685,13 @@ typedef struct XLogCtlData
 	Latch		recoveryWakeupLatch;
 
 	/*
+	 * archiverWakeupLatch is used to wake up the archiver process to process
+	 * completed WAL segments, if it is waiting for WAL to arrive.  Protected
+	 * by info_lck.
+	 */
+	Latch	   *archiverWakeupLatch;
+
+	/*
 	 * During recovery, we keep a copy of the latest checkpoint record here.
 	 * lastCheckPointRecPtr points to start of checkpoint record and
 	 * lastCheckPointEndPtr points to end+1 of checkpoint record.  Used by the
@@ -8451,6 +8458,45 @@ GetLastSegSwitchData(XLogRecPtr *lastSwitchLSN)
 }
 
 /*
+ * XLogArchiveWakeupStart - Set up archiver wakeup stuff
+ */
+void
+XLogArchiveWakeupStart(void)
+{
+	SpinLockAcquire(&XLogCtl->info_lck);
+	Assert(XLogCtl->archiverWakeupLatch == NULL);
+	XLogCtl->archiverWakeupLatch = MyLatch;
+	SpinLockRelease(&XLogCtl->info_lck);
+}
+
+/*
+ * XLogArchiveWakeupEnd - Clean up archiver wakeup stuff
+ */
+void
+XLogArchiveWakeupEnd(void)
+{
+	SpinLockAcquire(&XLogCtl->info_lck);
+	XLogCtl->archiverWakeupLatch = NULL;
+	SpinLockRelease(&XLogCtl->info_lck);
+}
+
+/*
+ * XLogWakeupArchiver - Wake up archiver process
+ */
+void
+XLogArchiveWakeup(void)
+{
+	Latch *latch;
+
+	SpinLockAcquire(&XLogCtl->info_lck);
+	latch = XLogCtl->archiverWakeupLatch;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	if (latch)
+		SetLatch(latch);
+}
+
+/*
  * This must be called ONCE during postmaster or standalone-backend shutdown
  */
 void
@@ -8548,9 +8594,9 @@ LogCheckpointEnd(bool restartpoint)
 						&sync_secs, &sync_usecs);
 
 	/* Accumulate checkpoint timing summary data, in milliseconds. */
-	BgWriterStats.m_checkpoint_write_time +=
+	BgWriterStats.checkpoint_write_time +=
 		write_secs * 1000 + write_usecs / 1000;
-	BgWriterStats.m_checkpoint_sync_time +=
+	BgWriterStats.checkpoint_sync_time +=
 		sync_secs * 1000 + sync_usecs / 1000;
 
 	/*

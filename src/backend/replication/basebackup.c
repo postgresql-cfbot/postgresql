@@ -254,7 +254,6 @@ perform_base_backup(basebackup_options *opt)
 	TimeLineID	endtli;
 	StringInfo	labelfile;
 	StringInfo	tblspc_map_file = NULL;
-	int			datadirpathlen;
 	List	   *tablespaces = NIL;
 
 	backup_total = 0;
@@ -272,8 +271,6 @@ perform_base_backup(basebackup_options *opt)
 		pgstat_progress_update_param(PROGRESS_BASEBACKUP_BACKUP_TOTAL,
 									 backup_total);
 	}
-
-	datadirpathlen = strlen(DataDir);
 
 	backup_started_in_recovery = RecoveryInProgress();
 
@@ -306,13 +303,9 @@ perform_base_backup(basebackup_options *opt)
 		 * Calculate the relative path of temporary statistics directory in
 		 * order to skip the files which are located in that directory later.
 		 */
-		if (is_absolute_path(pgstat_stat_directory) &&
-			strncmp(pgstat_stat_directory, DataDir, datadirpathlen) == 0)
-			statrelpath = psprintf("./%s", pgstat_stat_directory + datadirpathlen + 1);
-		else if (strncmp(pgstat_stat_directory, "./", 2) != 0)
-			statrelpath = psprintf("./%s", pgstat_stat_directory);
-		else
-			statrelpath = pgstat_stat_directory;
+
+		Assert(strchr(PG_STAT_TMP_DIR, '/') == NULL);
+		statrelpath = psprintf("./%s", PG_STAT_TMP_DIR);
 
 		/* Add a node for the base directory at the end */
 		ti = palloc0(sizeof(tablespaceinfo));
@@ -1445,8 +1438,8 @@ is_checksummed_file(const char *fullpath, const char *filename)
  *
  * If 'missing_ok' is true, will not throw an error if the file is not found.
  *
- * If dboid is anything other than InvalidOid then any checksum failures detected
- * will get reported to the stats collector.
+ * If dboid is anything other than InvalidOid then any checksum failures
+ * detected will get reported to the activity stats facility.
  *
  * Returns true if the file was successfully sent, false if 'missing_ok',
  * and the file did not exist.

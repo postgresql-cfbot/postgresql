@@ -7525,6 +7525,39 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
     </variablelist>
    </sect1>
 
+   <sect1 id="runtime-config-encryption">
+    <title>Encryption Key Management</title>
+
+    <variablelist>
+     <varlistentry id="guc-cluster-passphrase-command" xreflabel="cluster_passphrase_command">
+      <term><varname>cluster_passphrase_command</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>cluster_passphrase_command</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This option specifies an external command to be invoked when a passphrase
+        for key management system needs to be obtained.
+       </para>
+       <para>
+        The command must print the passphrase to the standard output and exit
+        with code 0.  In the parameter value, <literal>%p</literal> is
+        replaced by a prompt string.  (Write <literal>%%</literal> for a
+        literal <literal>%</literal>.)  Note that the prompt string will
+        probably contain whitespace, so be sure to quote adequately.  A single
+        newline is stripped from the end of the output if present.  The passphrase
+        must be at least 64 bytes.
+       </para>
+       <para>
+        This parameter can only be set in the <filename>postgresql.conf</filename>
+        file or on the server command line.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </sect1>
+
    <sect1 id="runtime-config-client">
     <title>Client Connection Defaults</title>
 
@@ -9365,6 +9398,20 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
        <para>
         Reports whether data checksums are enabled for this cluster.
         See <xref linkend="app-initdb-data-checksums"/> for more information.
+       </para>
+      </listitem>
+     </varlistentry>
+
+      <varlistentry id="guc-key-management-enabled" xreflabel="key_management_enabled">
+      <term><varname>key_management_enabled</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary>Key management configuration parameter parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Reports whether encryption key management is enabled for this cluster.
+        See <xref linkend="app-initdb-cluster-passphrase-command"/> for more information.
        </para>
       </listitem>
      </varlistentry>

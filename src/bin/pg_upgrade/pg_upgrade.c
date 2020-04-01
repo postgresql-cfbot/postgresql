@@ -158,6 +158,13 @@ main(int argc, char **argv)
 								 old_cluster.pgdata, new_cluster.pgdata);
 
 	/*
+	 * Copy the internal encryption keys from the old cluster to the new one.
+	 * This is necessary because the data in the old cluster might be
+	 * encrypted with the old master encryption key.
+	 */
+	copy_master_encryption_key(&old_cluster, &new_cluster);
+
+	/*
 	 * Assuming OIDs are only used in system tables, there is no need to
 	 * restore the OID counter because we have not transferred any OIDs from
 	 * the old system, but we do it anyway just in case.  We do it late here

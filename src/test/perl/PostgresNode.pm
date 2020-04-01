@@ -434,8 +434,19 @@ sub init
 	mkdir $self->backup_dir;
 	mkdir $self->archive_dir;
 
-	TestLib::system_or_bail('initdb', '-D', $pgdata, '-A', 'trust', '-N',
-		@{ $params{extra} });
+	if ($params{enable_kms})
+	{
+		TestLib::system_or_bail('initdb', '-D', $pgdata, '-A', 'trust', '-N',
+								'--cluster-passphrase-command',
+								'echo 1234567890123456789012345678901234567890123456789012345678901234',
+								@{ $params{extra} });
+	}
+	else
+	{
+	  TestLib::system_or_bail('initdb', '-D', $pgdata, '-A', 'trust', '-N',
+							  @{ $params{extra} });
+	}
+
 	TestLib::system_or_bail($ENV{PG_REGRESS}, '--config-auth', $pgdata,
 		@{ $params{auth_extra} });
 

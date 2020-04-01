@@ -28,6 +28,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
 #include "common/link-canary.h"
+#include "crypto/kmgr.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -51,6 +52,7 @@
 #include "utils/relmapper.h"
 
 uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
+bool		bootstrap_key_management_enabled = false;
 
 
 #define ALLOC(t, c) \
@@ -226,7 +228,7 @@ AuxiliaryProcessMain(int argc, char *argv[])
 	/* If no -x argument, we are a CheckerProcess */
 	MyAuxProcType = CheckerProcess;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:x:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:eFkr:x:X:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -248,6 +250,9 @@ AuxiliaryProcessMain(int argc, char *argv[])
 									PGC_POSTMASTER, PGC_S_ARGV);
 					pfree(debugstr);
 				}
+				break;
+			case 'e':
+				bootstrap_key_management_enabled = true;
 				break;
 			case 'F':
 				SetConfigOption("fsync", "false", PGC_POSTMASTER, PGC_S_ARGV);

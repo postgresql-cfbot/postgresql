@@ -10827,4 +10827,17 @@
   proname => 'pg_partition_root', prorettype => 'regclass',
   proargtypes => 'regclass', prosrc => 'pg_partition_root' },
 
+# function for key managements
+{ oid => '8200', descr => 'rotate cluter passphrase',
+  proname => 'pg_rotate_cluster_passphrase',
+  provolatile => 'v', prorettype => 'bool',
+  proargtypes => '', prosrc => 'pg_rotate_cluster_passphrase' },
+{ oid => '8201', descr => 'wrap the given data',
+  proname => 'pg_wrap',
+  provolatile => 'v', prorettype => 'bytea',
+  proargtypes => 'text', prosrc => 'pg_wrap' },
+{ oid => '8202', descr => 'unwrap the given data',
+  proname => 'pg_unwrap',
+  provolatile => 'v', prorettype => 'text',
+  proargtypes => 'bytea', prosrc => 'pg_unwrap' },
 ]

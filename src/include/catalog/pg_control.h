@@ -17,6 +17,7 @@
 
 #include "access/transam.h"
 #include "access/xlogdefs.h"
+#include "crypto/kmgr.h"
 #include "pgtime.h"				/* for pg_time_t */
 #include "port/pg_crc32c.h"
 
@@ -225,6 +226,9 @@ typedef struct ControlFileData
 	 * failed at an early stage.
 	 */
 	char		mock_authentication_nonce[MOCK_AUTH_NONCE_LEN];
+
+	/* Key management cipher. Off by default */
+	bool		key_management_enabled;
 
 	/* CRC of all above ... MUST BE LAST! */
 	pg_crc32c	crc;

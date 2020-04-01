@@ -11,6 +11,7 @@
 
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <dirent.h>
 #ifdef HAVE_COPYFILE_H
 #include <copyfile.h>
 #endif
@@ -21,6 +22,7 @@
 
 #include "access/visibilitymap.h"
 #include "common/file_perm.h"
+#include "common/file_utils.h"
 #include "pg_upgrade.h"
 #include "storage/bufpage.h"
 #include "storage/checksum.h"
@@ -371,4 +373,79 @@ check_hard_link(void)
 				 strerror(errno));
 
 	unlink(new_link_file);
+}
+
+/*
+ * Copy cryptographic keys from the old cluster to the new cluster.
+ */
+void
+copy_master_encryption_key(ClusterInfo *old_cluster, ClusterInfo * new_cluster)
+{
+	DIR				*dir;
+	struct dirent *de;
+	char path[MAXPGPATH];
+
+	/* We copy the crypto keys only if both clusters enable the key management */
+	if (!old_cluster->controldata.key_management_enabled ||
+		!new_cluster->controldata.key_management_enabled)
+		return;
+
+	prep_status("Copying master encryption key");
+
+	snprintf(path, MAXPGPATH, "%s/%s", old_cluster->pgdata, KMGR_DIR);
+
+	if ((dir = opendir(path)) == NULL)
+		pg_fatal("could not open directory \"%s\": %m", path);
+
+	while ((de = readdir(dir)) != NULL)
+	{
+		if (strlen(de->d_name) == 4 &&
+			strspn(de->d_name, "0123456789ABCDEF") == 4)
+		{
+			CryptoKeyOnDisk key;
+			char src_path[MAXPGPATH];
+			char dst_path[MAXPGPATH];
+			uint32	id;
+			int src_fd;
+			int dst_fd;
+			int len;
+
+			id = strtoul(de->d_name, NULL, 16);
+
+			snprintf(src_path, MAXPGPATH, "%s/%s/%04X",
+					 old_cluster->pgdata, KMGR_DIR, id);
+			snprintf(dst_path, MAXPGPATH, "%s/%s/%04X",
+					 new_cluster->pgdata, KMGR_DIR, id);
+
+			if ((src_fd = open(src_path, O_RDONLY | PG_BINARY, 0)) < 0)
+				pg_fatal("could not open file \"%s\": %m", src_path);
+
+			if ((dst_fd = open(dst_path, O_RDWR | O_CREAT | O_TRUNC | PG_BINARY,
+								pg_file_create_mode)) < 0)
+				pg_fatal("could not open file \"%s\": %m", dst_path);
+
+			/* Read the source key */
+			len = read(src_fd, &key, sizeof(CryptoKeyOnDisk));
+			if (len != sizeof(CryptoKeyOnDisk))
+			{
+				if (len < 0)
+					pg_fatal("could not read file \"%s\": %m", src_path);
+				else
+					pg_fatal("could not read file \"%s\": read %d of %zu",
+							 src_path, len, sizeof(CryptoKeyOnDisk));
+			}
+
+			/* Write to the dest key */
+			len = write(dst_fd, &key, sizeof(CryptoKeyOnDisk));
+			if (len != sizeof(CryptoKeyOnDisk))
+				pg_fatal("could not write fie \"%s\"", dst_path);
+
+			close(src_fd);
+			close(dst_fd);
+		}
+	}
+
+	closedir(dir);
+
+	check_ok();
 }

@@ -145,6 +145,7 @@ static bool data_checksums = false;
 static char *xlog_dir = NULL;
 static char *str_wal_segment_size_mb = NULL;
 static int	wal_segment_size_mb;
+static char *cluster_passphrase = NULL;
 
 
 /* internal vars */
@@ -202,6 +203,7 @@ static const char *const subdirs[] = {
 	"global",
 	"pg_wal/archive_status",
 	"pg_commit_ts",
+	"pg_cryptokeys",
 	"pg_dynshmem",
 	"pg_notify",
 	"pg_serial",
@@ -1206,6 +1208,13 @@ setup_config(void)
 								  "password_encryption = scram-sha-256");
 	}
 
+	if (cluster_passphrase)
+	{
+		snprintf(repltok, sizeof(repltok), "cluster_passphrase_command = '%s'",
+				 escape_quotes(cluster_passphrase));
+		conflines = replace_token(conflines, "#cluster_passphrase_command = ''", repltok);
+	}
+
 	/*
 	 * If group access has been enabled for the cluster then it makes sense to
 	 * ensure that the log files also allow group access.  Otherwise a backup
@@ -1416,13 +1425,13 @@ bootstrap_template1(void)
 	unsetenv("PGCLIENTENCODING");
 
 	snprintf(cmd, sizeof(cmd),
-			 "\"%s\" --boot -x1 -X %u %s %s %s",
+			 "\"%s\" --boot -x1 -X %u %s %s %s %s",
 			 backend_exec,
 			 wal_segment_size_mb * (1024 * 1024),
 			 data_checksums ? "-k" : "",
+			 cluster_passphrase ? "-e" : "",
 			 boot_options,
 			 debug ? "-d 5" : "");
-
 
 	PG_CMD_OPEN;
 
@@ -2311,6 +2320,8 @@ usage(const char *progname)
 	printf(_("      --wal-segsize=SIZE    size of WAL segments, in megabytes\n"));
 	printf(_("\nLess commonly used options:\n"));
 	printf(_("  -d, --debug               generate lots of debugging output\n"));
+	printf(_("  -c  --cluster-passphrase-command=COMMAND\n"
+			 "                            set command to obtain passphrase for key management\n"));
 	printf(_("  -k, --data-checksums      use data page checksums\n"));
 	printf(_("  -L DIRECTORY              where to find the input files\n"));
 	printf(_("  -n, --no-clean            do not clean up after errors\n"));
@@ -2376,7 +2387,6 @@ check_need_password(const char *authmethodlocal, const char *authmethodhost)
 		exit(1);
 	}
 }
-
 
 void
 setup_pgdata(void)
@@ -2984,6 +2994,7 @@ main(int argc, char *argv[])
 		{"wal-segsize", required_argument, NULL, 12},
 		{"data-checksums", no_argument, NULL, 'k'},
 		{"allow-group-access", no_argument, NULL, 'g'},
+		{"cluster-passphrase-command", required_argument, NULL, 'c'},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3025,7 +3036,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "dD:E:kL:nNU:WA:sST:X:g", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "c:dD:E:kL:nNU:WA:sST:X:g", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -3107,6 +3118,9 @@ main(int argc, char *argv[])
 			case 9:
 				pwfilename = pg_strdup(optarg);
 				break;
+			case 'c':
+				cluster_passphrase = pg_strdup(optarg);
+				break;
 			case 's':
 				show_setting = true;
 				break;
@@ -3177,6 +3191,14 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
+#ifndef USE_OPENSSL
+	if (cluster_passphrase)
+	{
+		pg_log_error("cluster encryption is not supported because OpenSSL is not supported by this build");
+		exit(1);
+	}
+#endif
+
 	check_authmethod_unspecified(&authmethodlocal);
 	check_authmethod_unspecified(&authmethodhost);
 
@@ -3243,6 +3265,11 @@ main(int argc, char *argv[])
 		printf(_("Data page checksums are enabled.\n"));
 	else
 		printf(_("Data page checksums are disabled.\n"));
+
+	if (cluster_passphrase)
+		printf(_("Key management system is enabled.\n"));
+	else
+		printf(_("Key management system is disabled.\n"));
 
 	if (pwprompt || pwfilename)
 		get_su_pwd();

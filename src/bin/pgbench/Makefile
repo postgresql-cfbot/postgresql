@@ -10,6 +10,7 @@ include $(top_builddir)/src/Makefile.global
 OBJS = \
 	$(WIN32RES) \
 	exprparse.o \
+	symbol_table.o \
 	pgbench.o
 
 override CPPFLAGS := -I. -I$(srcdir) -I$(libpq_srcdir) $(CPPFLAGS)

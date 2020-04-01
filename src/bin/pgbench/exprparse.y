@@ -211,7 +211,7 @@ make_variable(char *varname)
 	PgBenchExpr *expr = pg_malloc(sizeof(PgBenchExpr));
 
 	expr->etype = ENODE_VARIABLE;
-	expr->u.variable.varname = varname;
+	expr->u.variable.varnum = getOrCreateSymbolId(symbol_table, varname);
 	return expr;
 }
 

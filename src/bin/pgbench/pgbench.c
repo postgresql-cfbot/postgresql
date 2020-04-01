@@ -251,24 +251,32 @@ const char *progname;
 volatile bool timer_exceeded = false;	/* flag from signal handler */
 
 /*
- * Variable definitions.
+ * Variable contents.
+ *
+ * Variable names are managed in symbol_table with a number.
  *
  * If a variable only has a string value, "svalue" is that value, and value is
- * "not set".  If the value is known, "value" contains the value (in any
- * variant).
+ * not set.
+ *
+ * If the value is known, "value" contains the value (in any variant).
  *
  * In this case "svalue" contains the string equivalent of the value, if we've
- * had occasion to compute that, or NULL if we haven't.
+ * had occasion to compute that, or an empty string if we haven't.
+ *
+ * The string length is arbitrary limited to benefit from static allocation.
  */
+#define SVALUE_SIZE	128
 typedef struct
 {
-	char	   *name;			/* variable's name */
-	char	   *svalue;			/* its value in string form, if known */
-	PgBenchValue value;			/* actual variable's value */
+	int			number;				/* variable symbol number, -1 if unset */
+	char			svalue[SVALUE_SIZE];	/* value in string form, if known */
+	PgBenchValue	value;					/* actual value, if known */
 } Variable;
 
+#define undefined_variable_value(v)						\
+	v.svalue[0] == '\0' && v.value.type == PGBT_NO_VALUE
+
 #define MAX_SCRIPTS		128		/* max number of SQL scripts allowed */
-#define SHELL_COMMAND_SIZE	256 /* maximum size allowed for shell command */
 
 /*
  * Simple data structure to keep stats about something.
@@ -414,7 +422,6 @@ typedef struct
 	/* client variables */
 	Variable   *variables;		/* array of variable definitions */
 	int			nvariables;		/* number of variables */
-	bool		vars_sorted;	/* are variables sorted by name? */
 
 	/* various times about current transaction */
 	int64		txn_scheduled;	/* scheduled start time of transaction (usec) */
@@ -427,6 +434,9 @@ typedef struct
 	/* per client collected stats */
 	int64		cnt;			/* client transaction count, for -t */
 	int			ecnt;			/* error count */
+
+	/* next buffer should be at thread level, but it would change functions... */
+	PQExpBufferData	buf;		/* persistant buffer to avoid malloc/free cycles */
 } CState;
 
 /*
@@ -512,6 +522,7 @@ static const char *QUERYMODE[] = {"simple", "extended", "prepared"};
  * varprefix 	SQL commands terminated with \gset have this set
  *				to a non NULL value.  If nonempty, it's used to prefix the
  *				variable name that receives the value.
+ * set_varnum	variable symbol number for \set and \setshell.
  * expr			Parsed expression, if needed.
  * stats		Time spent in this command.
  */
@@ -524,6 +535,7 @@ typedef struct Command
 	int			argc;
 	char	   *argv[MAX_ARGS];
 	char	   *varprefix;
+	int			set_varnum;
 	PgBenchExpr *expr;
 	SimpleStats stats;
 } Command;
@@ -539,6 +551,9 @@ typedef struct ParsedScript
 static ParsedScript sql_script[MAX_SCRIPTS];	/* SQL script files */
 static int	num_scripts;		/* number of scripts in sql_script[] */
 static int64 total_weight = 0;
+
+#define MAX_VARIABLES (32 * MAX_SCRIPTS)
+SymbolTable symbol_table = NULL;	/* also used by exprparse.y */
 
 /* Builtin test scripts */
 typedef struct BuiltinScript
@@ -686,7 +701,7 @@ usage(void)
 		   progname, progname, PACKAGE_BUGREPORT, PACKAGE_NAME, PACKAGE_URL);
 }
 
-/* return whether str matches "^\s*[-+]?[0-9]+$" */
+/* return whether str matches "^\s*[-+]?[0-9]+\s*$" */
 static bool
 is_an_int(const char *str)
 {
@@ -706,6 +721,9 @@ is_an_int(const char *str)
 
 	/* eat all digits */
 	while (*ptr && isdigit((unsigned char) *ptr))
+		ptr++;
+
+	while (*ptr && isspace((unsigned char) *ptr))
 		ptr++;
 
 	/* must have reached end of string */
@@ -1233,71 +1251,39 @@ doConnect(void)
 	return conn;
 }
 
-/* qsort comparator for Variable array */
-static int
-compareVariableNames(const void *v1, const void *v2)
-{
-	return strcmp(((const Variable *) v1)->name,
-				  ((const Variable *) v2)->name);
-}
-
-/* Locate a variable by name; returns NULL if unknown */
-static Variable *
-lookupVariable(CState *st, char *name)
-{
-	Variable	key;
-
-	/* On some versions of Solaris, bsearch of zero items dumps core */
-	if (st->nvariables <= 0)
-		return NULL;
-
-	/* Sort if we have to */
-	if (!st->vars_sorted)
-	{
-		qsort((void *) st->variables, st->nvariables, sizeof(Variable),
-			  compareVariableNames);
-		st->vars_sorted = true;
-	}
-
-	/* Now we can search */
-	key.name = name;
-	return (Variable *) bsearch((void *) &key,
-								(void *) st->variables,
-								st->nvariables,
-								sizeof(Variable),
-								compareVariableNames);
-}
-
 /* Get the value of a variable, in string form; returns NULL if unknown */
 static char *
-getVariable(CState *st, char *name)
+getVariable(CState *st, const char *name)
 {
+	int		num = getSymbolId(symbol_table, name);
 	Variable   *var;
-	char		stringform[64];
 
-	var = lookupVariable(st, name);
-	if (var == NULL)
-		return NULL;			/* not found */
+	if (num < 0 || st->nvariables <= num)
+		return NULL; /* not found */
 
-	if (var->svalue)
+	var = &st->variables[num];
+
+	if (var->svalue[0] != '\0')
 		return var->svalue;		/* we have it in string form */
 
 	/* We need to produce a string equivalent of the value */
 	Assert(var->value.type != PGBT_NO_VALUE);
-	if (var->value.type == PGBT_NULL)
-		snprintf(stringform, sizeof(stringform), "NULL");
-	else if (var->value.type == PGBT_BOOLEAN)
-		snprintf(stringform, sizeof(stringform),
-				 "%s", var->value.u.bval ? "true" : "false");
-	else if (var->value.type == PGBT_INT)
-		snprintf(stringform, sizeof(stringform),
+	if (var->value.type == PGBT_INT)
+		/* we could call fmtint() directly if available */
+		snprintf(var->svalue, SVALUE_SIZE,
 				 INT64_FORMAT, var->value.u.ival);
+	else if (var->value.type == PGBT_NULL)
+		strcpy(var->svalue, "NULL");
+	else if (var->value.type == PGBT_BOOLEAN)
+		strcpy(var->svalue, var->value.u.bval ? "true" : "false");
 	else if (var->value.type == PGBT_DOUBLE)
-		snprintf(stringform, sizeof(stringform),
+		/* we could call fmtfloat() directly if available */
+		snprintf(var->svalue, SVALUE_SIZE,
 				 "%.*g", DBL_DIG, var->value.u.dval);
-	else						/* internal error, unexpected type */
+	else
+		/* internal error, unexpected type */
 		Assert(0);
-	var->svalue = pg_strdup(stringform);
+
 	return var->svalue;
 }
 
@@ -1310,17 +1296,26 @@ makeVariableValue(Variable *var)
 	if (var->value.type != PGBT_NO_VALUE)
 		return true;			/* no work */
 
-	slen = strlen(var->svalue);
-
-	if (slen == 0)
-		/* what should it do on ""? */
+	if (var->svalue[0] == '\0')
 		return false;
 
-	if (pg_strcasecmp(var->svalue, "null") == 0)
+	slen = strlen(var->svalue);
+
+	/* try most probable first */
+	if (is_an_int(var->svalue))
+	{
+		/* if it looks like an int, it must be an int without overflow */
+		int64		iv;
+
+		if (!strtoint64(var->svalue, false, &iv))
+			return false;
+
+		setIntValue(&var->value, iv);
+	}
+	else if (pg_strcasecmp(var->svalue, "null") == 0)
 	{
 		setNullValue(&var->value);
 	}
-
 	/*
 	 * accept prefixes such as y, ye, n, no... but not for "o". 0/1 are
 	 * recognized later as an int, which is converted to bool if needed.
@@ -1338,24 +1333,16 @@ makeVariableValue(Variable *var)
 	{
 		setBoolValue(&var->value, false);
 	}
-	else if (is_an_int(var->svalue))
-	{
-		/* if it looks like an int, it must be an int without overflow */
-		int64		iv;
-
-		if (!strtoint64(var->svalue, false, &iv))
-			return false;
-
-		setIntValue(&var->value, iv);
-	}
 	else						/* type should be double */
 	{
 		double		dv;
 
 		if (!strtodouble(var->svalue, true, &dv))
 		{
+			/* well, it is not */
 			pg_log_error("malformed variable \"%s\" value: \"%s\"",
-						 var->name, var->svalue);
+						 var->number >= 0 ? getSymbolName(symbol_table, var->number) : "<null>",
+						 var->svalue);
 			return false;
 		}
 		setDoubleValue(&var->value, dv);
@@ -1398,203 +1385,216 @@ valid_variable_name(const char *name)
 }
 
 /*
- * Lookup a variable by name, creating it if need be.
- * Caller is expected to assign a value to the variable.
- * Returns NULL on failure (bad name).
+ * Assign a string value to a variable, creating it if need be.
+ *
+ * For parsed expressions and \set variable names are already known, and
+ * switched to their symbol number.
+ *
+ * This routine is only used for possibly unknown variables names resulting from
+ * \gset and from option -D. For the former case which would be repeated often,
+ * we could do a switch on first execution, which would require some additional
+ * data structure.
+ *
+ * Returns false on failure (too many variables, bad name)
  */
-static Variable *
-lookupCreateVariable(CState *st, const char *context, char *name)
-{
-	Variable   *var;
-
-	var = lookupVariable(st, name);
-	if (var == NULL)
-	{
-		Variable   *newvars;
-
-		/*
-		 * Check for the name only when declaring a new variable to avoid
-		 * overhead.
-		 */
-		if (!valid_variable_name(name))
-		{
-			pg_log_error("%s: invalid variable name: \"%s\"", context, name);
-			return NULL;
-		}
-
-		/* Create variable at the end of the array */
-		if (st->variables)
-			newvars = (Variable *) pg_realloc(st->variables,
-											  (st->nvariables + 1) * sizeof(Variable));
-		else
-			newvars = (Variable *) pg_malloc(sizeof(Variable));
-
-		st->variables = newvars;
-
-		var = &newvars[st->nvariables];
-
-		var->name = pg_strdup(name);
-		var->svalue = NULL;
-		/* caller is expected to initialize remaining fields */
-
-		st->nvariables++;
-		/* we don't re-sort the array till we have to */
-		st->vars_sorted = false;
-	}
-
-	return var;
-}
-
-/* Assign a string value to a variable, creating it if need be */
-/* Returns false on failure (bad name) */
 static bool
 putVariable(CState *st, const char *context, char *name, const char *value)
 {
+	int		num = getOrCreateSymbolId(symbol_table, name);
 	Variable   *var;
-	char	   *val;
 
-	var = lookupCreateVariable(st, context, name);
-	if (!var)
+	if (num < 0 || st->nvariables <= num)
+	{
+		pg_log_error("%s: too many variables while adding \"%s\"",
+					 context, name);
 		return false;
+	}
 
-	/* dup then free, in case value is pointing at this variable */
-	val = pg_strdup(value);
+	var = &st->variables[num];
 
-	if (var->svalue)
-		free(var->svalue);
-	var->svalue = val;
+	if (unlikely(var->number == -1))
+	{
+		/* first time the variable is encountered, do some checks */
+		if (!valid_variable_name(name))
+		{
+			pg_log_error("%s: invalid variable name \"%s\"", context, name);
+			return false;
+		}
+
+		var->number = num;
+	}
+
+	if (unlikely(strlen(value) >= SVALUE_SIZE))
+	{
+		/* we could truncate with a warning? */
+		pg_log_error("%s: \"%s\" value is too long (\"%s\")",
+					 context, name, value);
+		return false;
+	}
+
+	strncpy(var->svalue, value, SVALUE_SIZE);
 	var->value.type = PGBT_NO_VALUE;
 
 	return true;
 }
 
-/* Assign a value to a variable, creating it if need be */
-/* Returns false on failure (bad name) */
+/* shortcut version if variable number is known */
 static bool
-putVariableValue(CState *st, const char *context, char *name,
-				 const PgBenchValue *value)
+putSymbolValue(CState *st, const char *context, int var_num,
+			   const PgBenchValue *value)
 {
-	Variable   *var;
+	Variable	*var;
 
-	var = lookupCreateVariable(st, context, name);
-	if (!var)
+	if (unlikely(var_num < 0 || var_num >= st->nvariables))
+	{
+		fprintf(stderr, "%s: unexpected variable number %d\n",
+				context, var_num);
 		return false;
+	}
 
-	if (var->svalue)
-		free(var->svalue);
-	var->svalue = NULL;
+	var = &st->variables[var_num];
+
+	if (unlikely(var->number == -1))
+		var->number = var_num;
+
+	var->svalue[0] = '\0';
 	var->value = *value;
 
 	return true;
 }
 
-/* Assign an integer value to a variable, creating it if need be */
-/* Returns false on failure (bad name) */
+/* shortcut version with variable number */
 static bool
-putVariableInt(CState *st, const char *context, char *name, int64 value)
+putSymbolInt(CState *st, const char *context, int var_num, int64 value)
 {
-	PgBenchValue val;
+	Variable	*var;
 
-	setIntValue(&val, value);
-	return putVariableValue(st, context, name, &val);
+	if (unlikely(var_num < 0 || var_num >= st->nvariables))
+	{
+		fprintf(stderr, "%s: unexpected variable number %d\n",
+				context, var_num);
+		return false;
+	}
+
+	var = &st->variables[var_num];
+
+	if (unlikely(var->number == -1))
+		var->number = var_num;
+
+	var->svalue[0] = '\0';
+	setIntValue(&var->value, value);
+
+	return true;
 }
+
+#define MAX_VARNAME_LENGTH 64 /* in bytes, whatever encoding */
 
 /*
- * Parse a possible variable reference (:varname).
+ * Parse a possible variable reference (:varname), starting after the ':'.
  *
- * "sql" points at a colon.  If what follows it looks like a valid
- * variable name, return a malloc'd string containing the variable name,
- * and set *eaten to the number of characters consumed.
- * Otherwise, return NULL.
+ * return the number of bytes parsed, possibly zero, and the name.
  */
-static char *
-parseVariable(const char *sql, int *eaten)
+static int
+parseVariable(const char *sql, char name[MAX_VARNAME_LENGTH])
 {
 	int			i = 0;
-	char	   *name;
 
-	do
+	while (i < MAX_VARNAME_LENGTH &&
+		   (IS_HIGHBIT_SET(sql[i]) ||
+			strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZ" "abcdefghijklmnopqrstuvwxyz"
+				   "_0123456789", sql[i]) != NULL))
+		name[i] = sql[i], i++;
+
+	if (unlikely(i == MAX_VARNAME_LENGTH))
 	{
-		i++;
-	} while (IS_HIGHBIT_SET(sql[i]) ||
-			 strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZ" "abcdefghijklmnopqrstuvwxyz"
-					"_0123456789", sql[i]) != NULL);
-	if (i == 1)
-		return NULL;			/* no valid variable name chars */
-
-	name = pg_malloc(i);
-	memcpy(name, &sql[1], i - 1);
-	name[i - 1] = '\0';
-
-	*eaten = i;
-	return name;
-}
-
-static char *
-replaceVariable(char **sql, char *param, int len, char *value)
-{
-	int			valueln = strlen(value);
-
-	if (valueln > len)
-	{
-		size_t		offset = param - *sql;
-
-		*sql = pg_realloc(*sql, strlen(*sql) - len + valueln + 1);
-		param = *sql + offset;
+		fprintf(stderr, "variable name is too long: %s\n", sql);
+		/* ignore? abort? error handling? */
+		return 0;
 	}
 
-	if (valueln != len)
-		memmove(param + valueln, param + len, strlen(param + len) + 1);
-	memcpy(param, value, valueln);
-
-	return param + valueln;
+	name[i] = '\0';
+	return i;
 }
 
-static char *
-assignVariables(CState *st, char *sql)
+
+/*
+ * Substitutes :vars inside sql into buf, in quite a primitive way.
+ *
+ * Although the SQL query has been cleanly tokenized, there is
+ * no memory of that here, so that substitutions would be performed
+ * within a string or comment.
+ */
+static void
+substituteVariables(PQExpBufferData *buf, const char *sql,
+					char *(name2val)(void *, const char * name), void *ctx)
 {
 	char	   *p,
-			   *name,
-			   *val;
+			   *start;
 
-	p = sql;
+	resetPQExpBuffer(buf);
+
+	start = p = (char *) sql;
 	while ((p = strchr(p, ':')) != NULL)
 	{
-		int			eaten;
+		char		name[MAX_VARNAME_LENGTH];
+		int		namelen;
+		char	   *val;
 
-		name = parseVariable(p, &eaten);
-		if (name == NULL)
+		/* look for a possible variable name */
+		namelen = parseVariable(p+1, name);
+
+		if (namelen == 0)
 		{
-			while (*p == ':')
-			{
+			/* skip leading ':' */
+			do {
 				p++;
-			}
-			continue;
+			} while (*p == ':');
 		}
 
-		val = getVariable(st, name);
-		free(name);
-		if (val == NULL)
-		{
-			p++;
-			continue;
-		}
+		/* append verbatim up to that point */
+		appendBinaryPQExpBuffer(buf, start, p-start);
+		start = p;
 
-		p = replaceVariable(&sql, p, eaten, val);
+		if (namelen == 0)
+			/* no :variable, let us look for another :name */
+			continue;
+
+		/* we have a name, is there an associated value? */
+		val = name2val(ctx, name);
+
+		if (val != NULL)
+			appendPQExpBufferStr(buf, val);
+		else
+			/* no value, coldly insert :name */
+			appendBinaryPQExpBuffer(buf, start, namelen+1);
+
+		/* skip name and proceed to look for further ':' */
+		start += namelen + 1;
+		p = start;
 	}
 
-	return sql;
+	/* append end of string */
+	appendPQExpBufferStr(buf, start);
 }
 
+
+/* substitutes :vars inside sql by their value into buf  */
+static void
+assignVariables(CState *st, const char *sql)
+{
+	substituteVariables(&st->buf, sql,
+						(char *(*)(void *, const char *)) getVariable, st);
+}
+
+/* get the string value of all parameters */
 static void
 getQueryParams(CState *st, const Command *command, const char **params)
 {
-	int			i;
-
-	for (i = 0; i < command->argc - 1; i++)
+	for (int i = 0; i < command->argc - 1; i++)
 		params[i] = getVariable(st, command->argv[i + 1]);
 }
 
+/* for debug display, return type name of value */
 static char *
 valueTypeName(PgBenchValue *pval)
 {
@@ -1738,6 +1738,7 @@ setDoubleValue(PgBenchValue *pv, double dval)
 	pv->u.dval = dval;
 }
 
+/* functions and operators which have a lazy evaluation */
 static bool
 isLazyFunc(PgBenchFunction func)
 {
@@ -1797,8 +1798,6 @@ evalLazyFunc(CState *st,
 				return true;
 			}
 
-			return true;
-
 		case PGBENCH_OR:
 
 			if (a1.type == PGBT_NULL)
@@ -1844,7 +1843,7 @@ evalLazyFunc(CState *st,
 			if (args->next == NULL)
 				return evaluateExpr(st, args->expr, retval);
 
-			/* no, another when, proceed */
+			/* no, another when, proceed recursively */
 			return evalLazyFunc(st, PGBENCH_CASE, args, retval);
 
 		default:
@@ -2434,15 +2433,18 @@ evaluateExpr(CState *st, PgBenchExpr *expr, PgBenchValue *retval)
 		case ENODE_VARIABLE:
 			{
 				Variable   *var;
+				int			num = expr->u.variable.varnum;
 
-				if ((var = lookupVariable(st, expr->u.variable.varname)) == NULL)
-				{
-					pg_log_error("undefined variable \"%s\"", expr->u.variable.varname);
-					return false;
-				}
+				Assert(0 <= num && num < st->nvariables);
+
+				var = &st->variables[num];
 
 				if (!makeVariableValue(var))
+				{
+					fprintf(stderr, "no value for variable \"%s\"\n",
+							getSymbolName(symbol_table, num));
 					return false;
+				}
 
 				*retval = var->value;
 				return true;
@@ -2495,19 +2497,16 @@ getMetaCommand(const char *cmd)
 }
 
 /*
- * Run a shell command. The result is assigned to the variable if not NULL.
+ * Run a shell command. The result is assigned to the variable if != -1.
  * Return true if succeeded, or false on error.
  */
 static bool
-runShellCommand(CState *st, char *variable, char **argv, int argc)
+runShellCommand(CState *st, int var_num, char **argv, int argc)
 {
-	char		command[SHELL_COMMAND_SIZE];
-	int			i,
-				len = 0;
 	FILE	   *fp;
 	char		res[64];
-	char	   *endptr;
-	int			retval;
+
+	resetPQExpBuffer(&st->buf);
 
 	/*----------
 	 * Join arguments with whitespace separators. Arguments starting with
@@ -2517,10 +2516,9 @@ runShellCommand(CState *st, char *variable, char **argv, int argc)
 	 *	::name - append a string ":name"
 	 *----------
 	 */
-	for (i = 0; i < argc; i++)
+	for (int i = 0; i < argc; i++)
 	{
 		char	   *arg;
-		int			arglen;
 
 		if (argv[i][0] != ':')
 		{
@@ -2536,25 +2534,14 @@ runShellCommand(CState *st, char *variable, char **argv, int argc)
 			return false;
 		}
 
-		arglen = strlen(arg);
-		if (len + arglen + (i > 0 ? 1 : 0) >= SHELL_COMMAND_SIZE - 1)
-		{
-			pg_log_error("%s: shell command is too long", argv[0]);
-			return false;
-		}
-
-		if (i > 0)
-			command[len++] = ' ';
-		memcpy(command + len, arg, arglen);
-		len += arglen;
+		appendPQExpBufferStr(&st->buf, arg);
+		appendPQExpBufferChar(&st->buf, ' ');
 	}
 
-	command[len] = '\0';
-
 	/* Fast path for non-assignment case */
-	if (variable == NULL)
+	if (var_num == -1)
 	{
-		if (system(command))
+		if (system(st->buf.data) != 0)
 		{
 			if (!timer_exceeded)
 				pg_log_error("%s: could not launch shell command", argv[0]);
@@ -2564,7 +2551,7 @@ runShellCommand(CState *st, char *variable, char **argv, int argc)
 	}
 
 	/* Execute the command with pipe and read the standard output. */
-	if ((fp = popen(command, "r")) == NULL)
+	if ((fp = popen(st->buf.data, "r")) == NULL)
 	{
 		pg_log_error("%s: could not launch shell command", argv[0]);
 		return false;
@@ -2583,16 +2570,21 @@ runShellCommand(CState *st, char *variable, char **argv, int argc)
 	}
 
 	/* Check whether the result is an integer and assign it to the variable */
-	retval = (int) strtol(res, &endptr, 10);
-	while (*endptr != '\0' && isspace((unsigned char) *endptr))
-		endptr++;
-	if (*res == '\0' || *endptr != '\0')
+	if (is_an_int(res))
+	{
+		int64	retval;
+
+		if (!strtoint64(res, false, &retval))
+			return false;
+
+		if (!putSymbolInt(st, "setshell", var_num, retval))
+			return false;
+	}
+	else
 	{
 		pg_log_error("%s: shell command must return an integer (not \"%s\")", argv[0], res);
 		return false;
 	}
-	if (!putVariableInt(st, "setshell", variable, retval))
-		return false;
 
 	pg_log_debug("%s: shell parameter name: \"%s\", value: \"%s\"", argv[0], argv[1], res);
 
@@ -2640,14 +2632,10 @@ sendCommand(CState *st, Command *command)
 
 	if (querymode == QUERY_SIMPLE)
 	{
-		char	   *sql;
+		assignVariables(st, command->argv[0]);
 
-		sql = pg_strdup(command->argv[0]);
-		sql = assignVariables(st, sql);
-
-		pg_log_debug("client %d sending %s", st->id, sql);
-		r = PQsendQuery(st->con, sql);
-		free(sql);
+		pg_log_debug("client %d sending %s", st->id, st->buf.data);
+		r = PQsendQuery(st->con, st->buf.data);
 	}
 	else if (querymode == QUERY_EXTENDED)
 	{
@@ -2665,6 +2653,7 @@ sendCommand(CState *st, Command *command)
 		char		name[MAX_PREPARE_NAME];
 		const char *params[MAX_ARGS];
 
+		/* prepare the first time it is needed */
 		if (!st->prepared[st->use_file])
 		{
 			int			j;
@@ -2759,22 +2748,22 @@ readCommandResponse(CState *st, char *varprefix)
 					{
 						char	   *varname = PQfname(res, fld);
 
-						/* allocate varname only if necessary, freed below */
 						if (*varprefix != '\0')
-							varname = psprintf("%s%s", varprefix, varname);
+						{
+							resetPQExpBuffer(&st->buf);
+							appendPQExpBufferStr(&st->buf, varprefix);
+							appendPQExpBufferStr(&st->buf, varname);
+							varname = st->buf.data;
+						}
 
 						/* store result as a string */
-						if (!putVariable(st, "gset", varname,
-										 PQgetvalue(res, 0, fld)))
+						if (!putVariable(st, "gset", varname, PQgetvalue(res, 0, fld)))
 						{
 							/* internal error */
 							pg_log_error("client %d script %d command %d query %d: error storing into variable %s",
 										 st->id, st->use_file, st->command, qrynum, varname);
 							goto error;
 						}
-
-						if (*varprefix != '\0')
-							pg_free(varname);
 					}
 				}
 				/* otherwise the result is simply thrown away by PQclear below */
@@ -2822,17 +2811,17 @@ error:
 static bool
 evaluateSleep(CState *st, int argc, char **argv, int *usecs)
 {
-	char	   *var;
 	int			usec;
 
 	if (*argv[1] == ':')
 	{
-		if ((var = getVariable(st, argv[1] + 1)) == NULL)
+		char	   *val;
+		if ((val = getVariable(st, argv[1] + 1)) == NULL)
 		{
 			pg_log_error("%s: undefined variable \"%s\"", argv[0], argv[1] + 1);
 			return false;
 		}
-		usec = atoi(var);
+		usec = atoi(val);
 	}
 	else
 		usec = atoi(argv[1]);
@@ -2843,6 +2832,7 @@ evaluateSleep(CState *st, int argc, char **argv, int *usecs)
 			usec *= 1000;
 		else if (pg_strcasecmp(argv[2], "s") == 0)
 			usec *= 1000000;
+		/* else there should be an error? */
 	}
 	else
 		usec *= 1000000;
@@ -3342,7 +3332,7 @@ executeMetaCommand(CState *st, instr_time *now)
 			return CSTATE_ABORTED;
 		}
 
-		if (!putVariableValue(st, argv[0], argv[1], &result))
+		if (!putSymbolValue(st, argv[0], command->set_varnum, &result))
 		{
 			commandFailed(st, "set", "assignment of meta-command failed");
 			return CSTATE_ABORTED;
@@ -3412,7 +3402,7 @@ executeMetaCommand(CState *st, instr_time *now)
 	}
 	else if (command->meta == META_SETSHELL)
 	{
-		if (!runShellCommand(st, argv[1], argv + 2, argc - 2))
+		if (!runShellCommand(st, command->set_varnum, argv + 2, argc - 2))
 		{
 			commandFailed(st, "setshell", "execution of meta-command failed");
 			return CSTATE_ABORTED;
@@ -3420,7 +3410,7 @@ executeMetaCommand(CState *st, instr_time *now)
 	}
 	else if (command->meta == META_SHELL)
 	{
-		if (!runShellCommand(st, NULL, argv + 1, argc - 1))
+		if (!runShellCommand(st, -1, argv + 1, argc - 1))
 		{
 			commandFailed(st, "shell", "execution of meta-command failed");
 			return CSTATE_ABORTED;
@@ -4164,6 +4154,33 @@ runInitSteps(const char *initialize_steps)
 	termPQExpBuffer(&stats);
 }
 
+/* parseQuery helper struct */
+typedef struct {
+	char		value[13];
+	Command    *cmd;
+	bool		ok;
+} NumberContext;
+
+/* parseQuery helper function to generate "$<i>"*/
+static char *
+genDollarN(NumberContext *ctx, const char *name)
+{
+	Command    *cmd = ctx->cmd;
+
+	if (unlikely(cmd->argc >= MAX_ARGS))
+	{
+		fprintf(stderr,
+				"statement has too many arguments (maximum is %d): %s\n",
+				MAX_ARGS - 1, cmd->lines.data);
+		ctx->ok = false;
+		return NULL;
+	}
+	sprintf(ctx->value, "$%d", cmd->argc);
+	cmd->argv[cmd->argc] = pg_strdup(name);
+	cmd->argc++;
+	return ctx->value;
+}
+
 /*
  * Extract pgbench table informations into global variables scale,
  * partition_method and partitions.
@@ -4280,54 +4297,27 @@ GetTableInfo(PGconn *con, bool scale_given)
 /*
  * Replace :param with $n throughout the command's SQL text, which
  * is a modifiable string in cmd->lines.
+ *
+ * The substituted query is hold in argv[0] and subsequent argv's hold
+ * variable names.
  */
 static bool
 parseQuery(Command *cmd)
 {
-	char	   *sql,
-			   *p;
+	NumberContext			ctx = { "", cmd, true };
+	PQExpBufferData		buf;
 
+	initPQExpBuffer(&buf);
 	cmd->argc = 1;
 
-	p = sql = pg_strdup(cmd->lines.data);
-	while ((p = strchr(p, ':')) != NULL)
-	{
-		char		var[13];
-		char	   *name;
-		int			eaten;
-
-		name = parseVariable(p, &eaten);
-		if (name == NULL)
-		{
-			while (*p == ':')
-			{
-				p++;
-			}
-			continue;
-		}
-
-		/*
-		 * cmd->argv[0] is the SQL statement itself, so the max number of
-		 * arguments is one less than MAX_ARGS
-		 */
-		if (cmd->argc >= MAX_ARGS)
-		{
-			pg_log_error("statement has too many arguments (maximum is %d): %s",
-						 MAX_ARGS - 1, cmd->lines.data);
-			pg_free(name);
-			return false;
-		}
-
-		sprintf(var, "$%d", cmd->argc);
-		p = replaceVariable(&sql, p, eaten, var);
-
-		cmd->argv[cmd->argc] = name;
-		cmd->argc++;
-	}
+	substituteVariables(&buf, cmd->lines.data,
+						(char *(*)(void *, const char *)) genDollarN, &ctx);
 
 	Assert(cmd->argv[0] == NULL);
-	cmd->argv[0] = sql;
-	return true;
+	cmd->argv[0] = pg_strdup(buf.data);
+
+	termPQExpBuffer(&buf);
+	return ctx.ok;
 }
 
 /*
@@ -4550,6 +4540,12 @@ process_backslash_command(PsqlScanState sstate, const char *source)
 			offsets[j] = word_offset;
 			my_command->argv[j++] = pg_strdup(word_buf.data);
 			my_command->argc++;
+
+			if (!valid_variable_name(word_buf.data))
+				syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
+							 "invalid variable name", word_buf.data, -1);
+
+			my_command->set_varnum = getOrCreateSymbolId(symbol_table, word_buf.data);
 		}
 
 		/* then for all parse the expression */
@@ -4647,6 +4643,12 @@ process_backslash_command(PsqlScanState sstate, const char *source)
 		if (my_command->argc < 3)
 			syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
 						 "missing argument", NULL, -1);
+
+		if (!valid_variable_name(my_command->argv[1]))
+			syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
+						 "invalid variable name", my_command->argv[1], -1);
+
+		my_command->set_varnum = getOrCreateSymbolId(symbol_table, my_command->argv[1]);
 	}
 	else if (my_command->meta == META_SHELL)
 	{
@@ -5422,8 +5424,9 @@ main(int argc, char **argv)
 	StatsData	stats;
 	int			weight;
 
-	int			i;
 	int			nclients_dealt;
+	int			scale_symbol, client_id_symbol,
+					random_seed_symbol, default_seed_symbol;
 
 #ifdef HAVE_GETRLIMIT
 	struct rlimit rlim;
@@ -5459,6 +5462,22 @@ main(int argc, char **argv)
 		login = env;
 
 	state = (CState *) pg_malloc0(sizeof(CState));
+	state->nvariables = MAX_VARIABLES;
+	state->variables = pg_malloc(sizeof(Variable) * state->nvariables);
+	for (int i = 0; i < state->nvariables; i++)
+	{
+		state->variables[i].number = -1;
+		memset(state->variables[i].svalue, 0, SVALUE_SIZE);
+		state->variables[i].value.type = PGBT_NO_VALUE;
+	}
+	initPQExpBuffer(&state->buf);
+
+	/* symbol table */
+	symbol_table = newSymbolTable();
+	scale_symbol = getOrCreateSymbolId(symbol_table, "scale");
+	client_id_symbol = getOrCreateSymbolId(symbol_table, "client_id");
+	random_seed_symbol = getOrCreateSymbolId(symbol_table, "random_seed");
+	default_seed_symbol = getOrCreateSymbolId(symbol_table, "default_seed");
 
 	/* set random seed early, because it may be used while parsing scripts. */
 	if (!set_random_seed(getenv("PGBENCH_RANDOM_SEED")))
@@ -5785,7 +5804,7 @@ main(int argc, char **argv)
 	}
 
 	/* complete SQL command initialization and compute total weight */
-	for (i = 0; i < num_scripts; i++)
+	for (int i = 0; i < num_scripts; i++)
 	{
 		Command   **commands = sql_script[i].commands;
 
@@ -5961,34 +5980,19 @@ main(int argc, char **argv)
 		state = (CState *) pg_realloc(state, sizeof(CState) * nclients);
 		memset(state + 1, 0, sizeof(CState) * (nclients - 1));
 
-		/* copy any -D switch values to all clients */
-		for (i = 1; i < nclients; i++)
+		for (int i = 1; i < nclients; i++)
 		{
-			int			j;
-
 			state[i].id = i;
-			for (j = 0; j < state[0].nvariables; j++)
-			{
-				Variable   *var = &state[0].variables[j];
-
-				if (var->value.type != PGBT_NO_VALUE)
-				{
-					if (!putVariableValue(&state[i], "startup",
-										  var->name, &var->value))
-						exit(1);
-				}
-				else
-				{
-					if (!putVariable(&state[i], "startup",
-									 var->name, var->svalue))
-						exit(1);
-				}
-			}
+			state[i].nvariables = MAX_VARIABLES;
+			state[i].variables = pg_malloc(sizeof(Variable) * MAX_VARIABLES);
+			/* copy any -D switch values to all clients */
+			memcpy(state[i].variables, state[0].variables, sizeof(Variable) * MAX_VARIABLES);
+			initPQExpBuffer(&state[i].buf);
 		}
 	}
 
 	/* other CState initializations */
-	for (i = 0; i < nclients; i++)
+	for (int i = 0; i < nclients; i++)
 	{
 		state[i].cstack = conditional_stack_create();
 		initRandomState(&state[i].cs_func_rs);
@@ -6018,43 +6022,41 @@ main(int argc, char **argv)
 	 * :scale variables normally get -s or database scale, but don't override
 	 * an explicit -D switch
 	 */
-	if (lookupVariable(&state[0], "scale") == NULL)
+	if (undefined_variable_value(state[0].variables[scale_symbol]))
 	{
-		for (i = 0; i < nclients; i++)
-		{
-			if (!putVariableInt(&state[i], "startup", "scale", scale))
+		for (int i = 0; i < nclients; i++)
+			if (!putSymbolInt(&state[i], "startup", scale_symbol, scale))
 				exit(1);
-		}
 	}
 
 	/*
 	 * Define a :client_id variable that is unique per connection. But don't
 	 * override an explicit -D switch.
 	 */
-	if (lookupVariable(&state[0], "client_id") == NULL)
+	if (undefined_variable_value(state[0].variables[client_id_symbol]))
 	{
-		for (i = 0; i < nclients; i++)
-			if (!putVariableInt(&state[i], "startup", "client_id", i))
+		for (int i = 0; i < nclients; i++)
+			if (!putSymbolInt(&state[i], "startup", client_id_symbol, i))
 				exit(1);
 	}
 
 	/* set default seed for hash functions */
-	if (lookupVariable(&state[0], "default_seed") == NULL)
+	if (undefined_variable_value(state[0].variables[default_seed_symbol]))
 	{
 		uint64		seed =
 		((uint64) pg_jrand48(base_random_sequence.xseed) & 0xFFFFFFFF) |
 		(((uint64) pg_jrand48(base_random_sequence.xseed) & 0xFFFFFFFF) << 32);
 
-		for (i = 0; i < nclients; i++)
-			if (!putVariableInt(&state[i], "startup", "default_seed", (int64) seed))
+		for (int i = 0; i < nclients; i++)
+			if (!putSymbolInt(&state[i], "startup", default_seed_symbol, (int64) seed))
 				exit(1);
 	}
 
 	/* set random seed unless overwritten */
-	if (lookupVariable(&state[0], "random_seed") == NULL)
+	if (undefined_variable_value(state[0].variables[random_seed_symbol]))
 	{
-		for (i = 0; i < nclients; i++)
-			if (!putVariableInt(&state[i], "startup", "random_seed", random_seed))
+		for (int i = 0; i < nclients; i++)
+			if (!putSymbolInt(&state[i], "startup", random_seed_symbol, random_seed))
 				exit(1);
 	}
 
@@ -6079,7 +6081,7 @@ main(int argc, char **argv)
 	threads = (TState *) pg_malloc(sizeof(TState) * nthreads);
 	nclients_dealt = 0;
 
-	for (i = 0; i < nthreads; i++)
+	for (int i = 0; i < nthreads; i++)
 	{
 		TState	   *thread = &threads[i];
 
@@ -6109,7 +6111,7 @@ main(int argc, char **argv)
 
 	/* start threads */
 #ifdef ENABLE_THREAD_SAFETY
-	for (i = 0; i < nthreads; i++)
+	for (int i = 0; i < nthreads; i++)
 	{
 		TState	   *thread = &threads[i];
 
@@ -6148,7 +6150,7 @@ main(int argc, char **argv)
 	/* wait for threads and accumulate results */
 	initStats(&stats, 0);
 	INSTR_TIME_SET_ZERO(conn_total_time);
-	for (i = 0; i < nthreads; i++)
+	for (int i = 0; i < nthreads; i++)
 	{
 		TState	   *thread = &threads[i];
 
@@ -6193,6 +6195,8 @@ main(int argc, char **argv)
 
 	if (exit_code != 0)
 		pg_log_fatal("Run was aborted; the above results are incomplete.");
+
+	freeSymbolTable(symbol_table);
 
 	return exit_code;
 }

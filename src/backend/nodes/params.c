@@ -269,7 +269,7 @@ RestoreParamList(char **start_address)
  * can contain NULLs for any unknown individual values.  NULL can be given if
  * no parameters are known.
  *
- * If maxlen is not zero, that's the maximum number of bytes of any one
+ * If maxlen is not -1, that's the maximum number of bytes of any one
  * parameter value to be printed; an ellipsis is added if the string is
  * longer.  (Added quotes are not considered in this calculation.)
  */
@@ -280,6 +280,7 @@ BuildParamLogString(ParamListInfo params, char **knownTextValues, int maxlen)
 				oldCxt;
 	StringInfoData buf;
 
+	Assert(maxlen == -1 || maxlen > 0);
 	/*
 	 * NB: think not of returning params->paramValuesStr!  It may have been
 	 * generated with a different maxlen, and so be unsuitable.  Besides that,

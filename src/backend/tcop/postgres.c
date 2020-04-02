@@ -1838,7 +1838,7 @@ exec_bind_message(StringInfo input_message)
 				 */
 				if (pstring)
 				{
-					if (log_parameters_on_error)
+					if (log_parameter_max_length_on_error != 0)
 					{
 						MemoryContext	oldcxt;
 
@@ -1846,13 +1846,24 @@ exec_bind_message(StringInfo input_message)
 						if (knownTextValues == NULL)
 							knownTextValues =
 								palloc0(numParams * sizeof(char *));
-						/*
-						 * Note: must copy at least two more full characters
-						 * than BuildParamLogString wants to see; otherwise it
-						 * might fail to include the ellipsis.
-						 */
-						knownTextValues[paramno] =
-							pnstrdup(pstring, 64 + 2 * MAX_MULTIBYTE_CHAR_LEN);
+
+						if (log_parameter_max_length_on_error == -1)
+							knownTextValues[paramno] = pstrdup(pstring);
+						else
+						{
+							/*
+							 * We can trim the saved string, knowing that we
+							 * won't print all of it.  But we must copy at
+							 * least two more full characters than
+							 * BuildParamLogString wants to use; otherwise it
+							 * might fail to include the trailing ellipsis.
+							 */
+							knownTextValues[paramno] =
+								pnstrdup(pstring,
+										 log_parameter_max_length_on_error
+										 + 2 * MAX_MULTIBYTE_CHAR_LEN);
+						}
+
 						MemoryContextSwitchTo(oldcxt);
 					}
 					if (pstring != pbuf.data)
@@ -1913,9 +1924,11 @@ exec_bind_message(StringInfo input_message)
 		 * errors, if configured to do so.  (This is saved in the portal, so
 		 * that they'll appear when the query is executed later.)
 		 */
-		if (log_parameters_on_error)
+		if (log_parameter_max_length_on_error != 0)
 			params->paramValuesStr =
-				BuildParamLogString(params, knownTextValues, 64);
+				BuildParamLogString(params,
+									knownTextValues,
+									log_parameter_max_length_on_error);
 	}
 	else
 		params = NULL;
@@ -2400,11 +2413,11 @@ errdetail_execute(List *raw_parsetree_list)
 static int
 errdetail_params(ParamListInfo params)
 {
-	if (params && params->numParams > 0)
+	if (log_parameter_max_length != 0 && params && params->numParams > 0)
 	{
 		char   *str;
 
-		str = BuildParamLogString(params, NULL, 0);
+		str = BuildParamLogString(params, NULL, log_parameter_max_length);
 		if (str && str[0] != '\0')
 			errdetail("parameters: %s", str);
 	}

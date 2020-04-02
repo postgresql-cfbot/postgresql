@@ -918,13 +918,20 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 	}
 	else
 	{
+		bool droppedItem = false;
 		/* A posting tree */
 		do
 		{
 			/* If we've processed the current batch, load more items */
 			while (entry->offset >= entry->nlist)
 			{
-				entryLoadMoreItems(ginstate, entry, advancePast, snapshot);
+				/* Load items past curItem if item was dropped and curItem is greater than advancePast */
+				if (droppedItem == true && ginCompareItemPointers(&entry->curItem, &advancePast) > 0)
+				{
+					entryLoadMoreItems(ginstate, entry, entry->curItem, snapshot);
+				} else {
+					entryLoadMoreItems(ginstate, entry, advancePast, snapshot);
+				}
 
 				if (entry->isFinished)
 				{
@@ -935,8 +942,10 @@ entryGetItem(GinState *ginstate, GinScanEntry entry,
 
 			entry->curItem = entry->list[entry->offset++];
 
+			droppedItem = false;
+
 		} while (ginCompareItemPointers(&entry->curItem, &advancePast) <= 0 ||
-				 (entry->reduceResult == true && dropItem(entry)));
+				 (entry->reduceResult == true && (droppedItem = dropItem(entry))));
 	}
 }
 

@@ -34,17 +34,6 @@
 
 static void markTargetListOrigin(ParseState *pstate, TargetEntry *tle,
 								 Var *var, int levelsup);
-static Node *transformAssignmentIndirection(ParseState *pstate,
-											Node *basenode,
-											const char *targetName,
-											bool targetIsSubscripting,
-											Oid targetTypeId,
-											int32 targetTypMod,
-											Oid targetCollation,
-											List *indirection,
-											ListCell *indirection_cell,
-											Node *rhs,
-											int location);
 static Node *transformAssignmentSubscripts(ParseState *pstate,
 										   Node *basenode,
 										   const char *targetName,
@@ -99,7 +88,9 @@ transformTargetEntry(ParseState *pstate,
 		 * through unmodified.  (transformExpr will throw the appropriate
 		 * error if we're disallowing it.)
 		 */
-		if (exprKind == EXPR_KIND_UPDATE_SOURCE && IsA(node, SetToDefault))
+		if ((exprKind == EXPR_KIND_UPDATE_SOURCE ||
+			 exprKind == EXPR_KIND_LET_TARGET)
+			&& IsA(node, SetToDefault))
 			expr = node;
 		else
 			expr = transformExpr(pstate, node, exprKind);
@@ -672,7 +663,7 @@ updateTargetListEntry(ParseState *pstate,
  * might want to decorate indirection cells with their own location info,
  * in which case the location argument could probably be dropped.)
  */
-static Node *
+Node *
 transformAssignmentIndirection(ParseState *pstate,
 							   Node *basenode,
 							   const char *targetName,

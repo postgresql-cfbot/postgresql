@@ -349,6 +349,7 @@ typedef enum NodeTag
 	T_CreateTableAsStmt,
 	T_CreateSeqStmt,
 	T_AlterSeqStmt,
+	T_CreateSchemaVarStmt,
 	T_VariableSetStmt,
 	T_VariableShowStmt,
 	T_DiscardStmt,
@@ -422,6 +423,7 @@ typedef enum NodeTag
 	T_AlterCollationStmt,
 	T_CallStmt,
 	T_AlterStatsStmt,
+	T_LetStmt,
 
 	/*
 	 * TAGS FOR PARSE TREE NODES (parsenodes.h)
@@ -675,6 +677,10 @@ typedef enum CmdType
 	CMD_DELETE,
 	CMD_UTILITY,				/* cmds like create, destroy, copy, vacuum,
 								 * etc. */
+	CMD_SELECT_UTILITY,			/* parsing, rewriting is same like select
+								 * stmt (preparing is allowed), execution is
+								 * like utility stms with own dest receiver.
+								 * used only for let stmt now */
 	CMD_NOTHING					/* dummy command for instead nothing rules
 								 * with qual */
 } CmdType;

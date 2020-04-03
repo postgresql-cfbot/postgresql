@@ -45,6 +45,7 @@ OBJS = \
 	proclang.o \
 	publicationcmds.o \
 	schemacmds.o \
+	schemavariable.o \
 	seclabel.o \
 	sequence.o \
 	statscmds.o \

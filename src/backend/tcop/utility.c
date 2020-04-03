@@ -47,6 +47,7 @@
 #include "commands/proclang.h"
 #include "commands/publicationcmds.h"
 #include "commands/schemacmds.h"
+#include "commands/schema_variable.h"
 #include "commands/seclabel.h"
 #include "commands/sequence.h"
 #include "commands/subscriptioncmds.h"
@@ -185,6 +186,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 		case T_CreateRangeStmt:
 		case T_CreateRoleStmt:
 		case T_CreateSchemaStmt:
+		case T_CreateSchemaVarStmt:
 		case T_CreateSeqStmt:
 		case T_CreateStatsStmt:
 		case T_CreateStmt:
@@ -236,6 +238,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 
 		case T_CallStmt:
 		case T_DoStmt:
+		case T_LetStmt:
 			{
 				/*
 				 * Commands inside the DO block or the called procedure might
@@ -505,7 +508,8 @@ ProcessUtility(PlannedStmt *pstmt,
 			   QueryCompletion *qc)
 {
 	Assert(IsA(pstmt, PlannedStmt));
-	Assert(pstmt->commandType == CMD_UTILITY);
+	Assert(pstmt->commandType == CMD_UTILITY ||
+		   pstmt->commandType == CMD_SELECT_UTILITY);
 	Assert(queryString != NULL);	/* required as of 8.4 */
 	Assert(qc == NULL || qc->commandTag == CMDTAG_UNKNOWN);
 
@@ -1062,6 +1066,10 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 				break;
 			}
 
+		case T_LetStmt:
+			ExecuteLetStmt(pstmt, params, queryEnv, queryString);
+			break;
+
 		default:
 			/* All other statement types have event trigger support */
 			ProcessUtilitySlow(pstate, pstmt, queryString,
@@ -1333,6 +1341,10 @@ ProcessUtilitySlow(ParseState *pstate,
 							break;
 					}
 				}
+				break;
+
+			case T_CreateSchemaVarStmt:
+				address = DefineSchemaVariable(pstate, (CreateSchemaVarStmt *) parsetree);
 				break;
 
 				/*
@@ -2223,6 +2235,9 @@ AlterObjectTypeCommandTag(ObjectType objtype)
 		case OBJECT_STATISTIC_EXT:
 			tag = CMDTAG_ALTER_STATISTICS;
 			break;
+		case OBJECT_VARIABLE:
+			tag = CMDTAG_ALTER_VARIABLE;
+			break;
 		default:
 			tag = CMDTAG_UNKNOWN;
 			break;
@@ -2267,6 +2282,10 @@ CreateCommandTag(Node *parsetree)
 
 		case T_SelectStmt:
 			tag = CMDTAG_SELECT;
+			break;
+
+		case T_LetStmt:
+			tag = CMDTAG_LET;
 			break;
 
 			/* utility statements --- same whether raw or cooked */
@@ -2522,6 +2541,9 @@ CreateCommandTag(Node *parsetree)
 					break;
 				case OBJECT_STATISTIC_EXT:
 					tag = CMDTAG_DROP_STATISTICS;
+					break;
+				case OBJECT_VARIABLE:
+					tag = CMDTAG_DROP_VARIABLE;
 					break;
 				default:
 					tag = CMDTAG_UNKNOWN;
@@ -2811,6 +2833,9 @@ CreateCommandTag(Node *parsetree)
 				case DISCARD_SEQUENCES:
 					tag = CMDTAG_DISCARD_SEQUENCES;
 					break;
+				case DISCARD_VARIABLES:
+					tag = CMDTAG_DISCARD_VARIABLES;
+					break;
 				default:
 					tag = CMDTAG_UNKNOWN;
 			}
@@ -3024,6 +3049,7 @@ CreateCommandTag(Node *parsetree)
 						tag = CMDTAG_DELETE;
 						break;
 					case CMD_UTILITY:
+					case CMD_SELECT_UTILITY:
 						tag = CreateCommandTag(stmt->utilityStmt);
 						break;
 					default:
@@ -3095,6 +3121,10 @@ CreateCommandTag(Node *parsetree)
 			}
 			break;
 
+		case T_CreateSchemaVarStmt:
+			tag = CMDTAG_CREATE_VARIABLE;
+			break;
+
 		default:
 			elog(WARNING, "unrecognized node type: %d",
 				 (int) nodeTag(parsetree));
@@ -3139,6 +3169,10 @@ GetCommandLogLevel(Node *parsetree)
 				lev = LOGSTMT_DDL;	/* SELECT INTO */
 			else
 				lev = LOGSTMT_ALL;
+			break;
+
+		case T_LetStmt:
+			lev = LOGSTMT_ALL;
 			break;
 
 			/* utility statements --- same whether raw or cooked */

@@ -33,6 +33,7 @@
 #include "tcop/pquery.h"
 #include "tcop/utility.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
 #include "utils/snapmgr.h"
 #include "utils/timestamp.h"
 
@@ -176,6 +177,42 @@ PrepareQuery(ParseState *pstate, PrepareStmt *stmt,
 }
 
 /*
+ * Parser callback for resolving parameter references from an existing
+ * ParamListInfo structure.
+ */
+static Node *
+pli_paramref_hook(ParseState *pstate, ParamRef *pref)
+{
+	ParamListInfo paramInfo = (ParamListInfo) pstate->p_ref_hook_state;
+	int			paramno = pref->number;
+	ParamExternData *ped;
+	ParamExternData pedws;
+	Param	   *param;
+
+	/* Check parameter number is valid */
+	if (paramno <= 0 || paramno > paramInfo->numParams)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_PARAMETER),
+				 errmsg("there is no parameter $%d", paramno),
+				 parser_errposition(pstate, pref->location)));
+
+	if (paramInfo->paramFetch != NULL)
+		ped = paramInfo->paramFetch(paramInfo, paramno, false, &pedws);
+	else
+		ped = &paramInfo->params[paramno - 1];
+
+	param = makeNode(Param);
+	param->paramkind = PARAM_EXTERN;
+	param->paramid = paramno;
+	param->paramtype = ped->ptype;
+	param->paramtypmod = -1;
+	param->paramcollid = get_typcollation(param->paramtype);
+	param->location = pref->location;
+
+	return (Node *) param;
+}
+
+/*
  * ExecuteQuery --- implement the 'EXECUTE' utility statement.
  *
  * This code also supports CREATE TABLE ... AS EXECUTE.  That case is
@@ -198,6 +235,10 @@ ExecuteQuery(ParseState *pstate,
 	char	   *query_string;
 	int			eflags;
 	long		count;
+
+	Assert(pstate->p_paramref_hook == NULL);
+	pstate->p_ref_hook_state = (void *) params;
+	pstate->p_paramref_hook = pli_paramref_hook;
 
 	/* Look it up in the hash table */
 	entry = FetchPreparedStatement(stmt->name, true);
@@ -639,6 +680,9 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 		pstate = make_parsestate(NULL);
 		pstate->p_sourcetext = queryString;
+		/* XXX what about p_queryEnv? */
+		if (params && params->parserSetup)
+			params->parserSetup(pstate, params->parserSetupArg);
 
 		/*
 		 * Need an EState to evaluate parameters; must not delete it till end

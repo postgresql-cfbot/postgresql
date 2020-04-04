@@ -92,6 +92,87 @@ pgrename(const char *from, const char *to)
 }
 
 
+#ifdef WIN32
+
+/*
+ *	pgrename_temp
+ *
+ *	Renames file concurrently to operations on target.  Not safe version, if OS
+ *	crashes during replacing a file, then afterwards target filename might not
+ *	exists.  Suitable for temporary files.
+ */
+int
+pgrename_temp(const char *from, const char *to)
+{
+	int			loops = 0;
+
+	/*
+	 * We need to loop because even though PostgreSQL uses flags that allow
+	 * rename while the file is open, other applications might have the file
+	 * open without those flags.  However, we won't wait indefinitely for
+	 * someone else to close the file, as the caller might be holding locks
+	 * and blocking other backends.
+	 */
+	DWORD		err;
+
+	/*
+	 * On Windows we use ReplaceFile() to rename while concurrent processes
+	 * have file open.  However, ReplaceFile() is to be used only when target
+	 * file is already exists.  Thus, we check for file existence and then
+	 * choose between MoveFileEx() and ReplaceFile() functions.
+	 */
+	while (true)
+	{
+		DWORD		dwAttrib;
+		bool		filePresent;
+
+		dwAttrib = GetFileAttributes(to);
+		filePresent = (dwAttrib != INVALID_FILE_ATTRIBUTES) &&
+			!(dwAttrib & FILE_ATTRIBUTE_DIRECTORY);
+
+		if (filePresent)
+		{
+			if (ReplaceFile(to, from, NULL, REPLACEFILE_IGNORE_MERGE_ERRORS, 0, 0))
+				break;
+		}
+		else
+		{
+			if (MoveFileEx(from, to, MOVEFILE_REPLACE_EXISTING))
+				break;
+		}
+		err = GetLastError();
+
+		_dosmaperr(err);
+
+		/*
+		 * Modern NT-based Windows versions return ERROR_SHARING_VIOLATION if
+		 * another process has the file open without FILE_SHARE_DELETE.
+		 * ERROR_LOCK_VIOLATION has also been seen with some anti-virus
+		 * software. This used to check for just ERROR_ACCESS_DENIED, so
+		 * presumably you can get that too with some OS versions. We don't
+		 * expect real permission errors where we currently use rename().
+		 *
+		 * Due to cuncurrent operation ReplaceFile() might return either
+		 * ERROR_UNABLE_TO_MOVE_REPLACEMENT or
+		 * ERROR_UNABLE_TO_REMOVE_REPLACED. In both cases it worth retrying.
+		 */
+		if (err != ERROR_ACCESS_DENIED &&
+			err != ERROR_SHARING_VIOLATION &&
+			err != ERROR_LOCK_VIOLATION &&
+			err != ERROR_UNABLE_TO_MOVE_REPLACEMENT &&
+			err != ERROR_UNABLE_TO_REMOVE_REPLACED)
+			return -1;
+
+		if (++loops > 100)		/* time out after 10 sec */
+			return -1;
+		pg_usleep(100000);		/* us */
+	}
+	return 0;
+}
+
+#endif
+
+
 /*
  *	pgunlink
  */

@@ -1517,7 +1517,7 @@ update_metainfo_datafile(void)
 	}
 	fclose(fh);
 
-	if (rename(LOG_METAINFO_DATAFILE_TMP, LOG_METAINFO_DATAFILE) != 0)
+	if (rename_temp(LOG_METAINFO_DATAFILE_TMP, LOG_METAINFO_DATAFILE) != 0)
 		ereport(LOG,
 				(errcode_for_file_access(),
 				 errmsg("could not rename file \"%s\" to \"%s\": %m",

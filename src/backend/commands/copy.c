@@ -233,18 +233,6 @@ typedef struct
 	uint64		processed;		/* # of tuples processed */
 } DR_copy;
 
-
-/*
- * No more than this many tuples per CopyMultiInsertBuffer
- *
- * Caution: Don't make this too big, as we could end up with this many
- * CopyMultiInsertBuffer items stored in CopyMultiInsertInfo's
- * multiInsertBuffers list.  Increasing this can cause quadratic growth in
- * memory requirements during copies into partitioned tables with a large
- * number of partitions.
- */
-#define MAX_BUFFERED_TUPLES		1000
-
 /*
  * Flush buffers if there are >= this many bytes, as counted by the input
  * size, of tuples stored.
@@ -257,11 +245,11 @@ typedef struct
 /* Stores multi-insert data related to a single relation in CopyFrom. */
 typedef struct CopyMultiInsertBuffer
 {
-	TupleTableSlot *slots[MAX_BUFFERED_TUPLES]; /* Array to store tuples */
+	TupleTableSlot *slots[MAX_MULTI_INSERT_TUPLES]; /* Array to store tuples */
 	ResultRelInfo *resultRelInfo;	/* ResultRelInfo for 'relid' */
 	BulkInsertState bistate;	/* BulkInsertState for this rel */
 	int			nused;			/* number of 'slots' containing tuples */
-	uint64		linenos[MAX_BUFFERED_TUPLES];	/* Line # of tuple in copy
+	uint64		linenos[MAX_MULTI_INSERT_TUPLES];	/* Line # of tuple in copy
 												 * stream */
 } CopyMultiInsertBuffer;
 
@@ -2351,7 +2339,7 @@ CopyMultiInsertBufferInit(ResultRelInfo *rri)
 	CopyMultiInsertBuffer *buffer;
 
 	buffer = (CopyMultiInsertBuffer *) palloc(sizeof(CopyMultiInsertBuffer));
-	memset(buffer->slots, 0, sizeof(TupleTableSlot *) * MAX_BUFFERED_TUPLES);
+	memset(buffer->slots, 0, sizeof(TupleTableSlot *) * MAX_MULTI_INSERT_TUPLES);
 	buffer->resultRelInfo = rri;
 	buffer->bistate = GetBulkInsertState();
 	buffer->nused = 0;
@@ -2410,7 +2398,7 @@ CopyMultiInsertInfoInit(CopyMultiInsertInfo *miinfo, ResultRelInfo *rri,
 static inline bool
 CopyMultiInsertInfoIsFull(CopyMultiInsertInfo *miinfo)
 {
-	if (miinfo->bufferedTuples >= MAX_BUFFERED_TUPLES ||
+	if (miinfo->bufferedTuples >= MAX_MULTI_INSERT_TUPLES ||
 		miinfo->bufferedBytes >= MAX_BUFFERED_BYTES)
 		return true;
 	return false;
@@ -2531,7 +2519,7 @@ CopyMultiInsertBufferCleanup(CopyMultiInsertInfo *miinfo,
 	FreeBulkInsertState(buffer->bistate);
 
 	/* Since we only create slots on demand, just drop the non-null ones. */
-	for (i = 0; i < MAX_BUFFERED_TUPLES && buffer->slots[i] != NULL; i++)
+	for (i = 0; i < MAX_MULTI_INSERT_TUPLES && buffer->slots[i] != NULL; i++)
 		ExecDropSingleTupleTableSlot(buffer->slots[i]);
 
 	table_finish_bulk_insert(buffer->resultRelInfo->ri_RelationDesc,
@@ -2620,7 +2608,7 @@ CopyMultiInsertInfoNextFreeSlot(CopyMultiInsertInfo *miinfo,
 	int			nused = buffer->nused;
 
 	Assert(buffer != NULL);
-	Assert(nused < MAX_BUFFERED_TUPLES);
+	Assert(nused < MAX_MULTI_INSERT_TUPLES);
 
 	if (buffer->slots[nused] == NULL)
 		buffer->slots[nused] = table_slot_create(rri->ri_RelationDesc, NULL);

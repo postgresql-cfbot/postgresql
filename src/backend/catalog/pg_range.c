@@ -35,7 +35,7 @@
 void
 RangeCreate(Oid rangeTypeOid, Oid rangeSubType, Oid rangeCollation,
 			Oid rangeSubOpclass, RegProcedure rangeCanonical,
-			RegProcedure rangeSubDiff)
+			RegProcedure rangeSubDiff, Oid multirangeTypeOid)
 {
 	Relation	pg_range;
 	Datum		values[Natts_pg_range];
@@ -43,6 +43,7 @@ RangeCreate(Oid rangeTypeOid, Oid rangeSubType, Oid rangeCollation,
 	HeapTuple	tup;
 	ObjectAddress myself;
 	ObjectAddress referenced;
+	ObjectAddress referencing;
 
 	pg_range = table_open(RangeRelationId, RowExclusiveLock);
 
@@ -54,6 +55,7 @@ RangeCreate(Oid rangeTypeOid, Oid rangeSubType, Oid rangeCollation,
 	values[Anum_pg_range_rngsubopc - 1] = ObjectIdGetDatum(rangeSubOpclass);
 	values[Anum_pg_range_rngcanonical - 1] = ObjectIdGetDatum(rangeCanonical);
 	values[Anum_pg_range_rngsubdiff - 1] = ObjectIdGetDatum(rangeSubDiff);
+	values[Anum_pg_range_rngmultitypid - 1] = ObjectIdGetDatum(multirangeTypeOid);
 
 	tup = heap_form_tuple(RelationGetDescr(pg_range), values, nulls);
 
@@ -99,6 +101,12 @@ RangeCreate(Oid rangeTypeOid, Oid rangeSubType, Oid rangeCollation,
 		referenced.objectSubId = 0;
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
+
+	/* record multirange type's dependency on the range type */
+	referencing.classId = TypeRelationId;
+	referencing.objectId = multirangeTypeOid;
+	referencing.objectSubId = 0;
+	recordDependencyOn(&referencing, &myself, DEPENDENCY_INTERNAL);
 
 	table_close(pg_range, RowExclusiveLock);
 }

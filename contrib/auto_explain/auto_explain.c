@@ -34,6 +34,7 @@ static int	auto_explain_log_format = EXPLAIN_FORMAT_TEXT;
 static int	auto_explain_log_level = LOG;
 static bool auto_explain_log_nested_statements = false;
 static double auto_explain_sample_rate = 1;
+static bool auto_explain_log_before_query = false;
 
 static const struct config_enum_entry format_options[] = {
 	{"text", EXPLAIN_FORMAT_TEXT, false},
@@ -63,6 +64,9 @@ static int	nesting_level = 0;
 /* Is the current top-level query to be sampled? */
 static bool current_query_sampled = false;
 
+/* Was the plan logged before query execution? */
+static bool was_logged = false;
+
 #define auto_explain_enabled() \
 	(auto_explain_log_min_duration >= 0 && \
 	 (nesting_level == 0 || auto_explain_log_nested_statements) && \
@@ -84,6 +88,7 @@ static void explain_ExecutorRun(QueryDesc *queryDesc,
 static void explain_ExecutorFinish(QueryDesc *queryDesc);
 static void explain_ExecutorEnd(QueryDesc *queryDesc);
 
+static ExplainState *do_explain(QueryDesc *queryDesc);
 
 /*
  * Module load callback
@@ -218,6 +223,17 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
+	DefineCustomBoolVariable("auto_explain.log_before_query",
+							 "Log before query is executed.",
+							 NULL,
+							 &auto_explain_log_before_query,
+							 false,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
 	EmitWarningsOnPlaceholders("auto_explain");
 
 	/* Install hooks. */
@@ -288,6 +304,7 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	else
 		standard_ExecutorStart(queryDesc, eflags);
 
+	was_logged = false;
 	if (auto_explain_enabled())
 	{
 		/*
@@ -302,6 +319,25 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			oldcxt = MemoryContextSwitchTo(queryDesc->estate->es_query_cxt);
 			queryDesc->totaltime = InstrAlloc(1, INSTRUMENT_ALL);
 			MemoryContextSwitchTo(oldcxt);
+		}
+
+		/* Log plan before the query is executed */
+		if (!auto_explain_log_analyze && auto_explain_log_before_query)
+		{
+			ExplainState *es = do_explain(queryDesc);
+
+			/*
+			 * Note: we rely on the existing logging of context or
+			 * debug_query_string to identify just which statement is being
+			 * reported.  This isn't ideal but trying to do it here would
+			 * often result in duplication.
+			 */
+			ereport(auto_explain_log_level,
+					(errmsg("plan:\n%s", es->str->data),
+					 errhidestmt(true)));
+			pfree(es->str->data);
+
+			was_logged = true;
 		}
 	}
 }
@@ -369,48 +405,26 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 		msec = queryDesc->totaltime->total * 1000.0;
 		if (msec >= auto_explain_log_min_duration)
 		{
-			ExplainState *es = NewExplainState();
-
-			es->analyze = (queryDesc->instrument_options && auto_explain_log_analyze);
-			es->verbose = auto_explain_log_verbose;
-			es->buffers = (es->analyze && auto_explain_log_buffers);
-			es->timing = (es->analyze && auto_explain_log_timing);
-			es->summary = es->analyze;
-			es->format = auto_explain_log_format;
-			es->settings = auto_explain_log_settings;
-
-			ExplainBeginOutput(es);
-			ExplainQueryText(es, queryDesc);
-			ExplainPrintPlan(es, queryDesc);
-			if (es->analyze && auto_explain_log_triggers)
-				ExplainPrintTriggers(es, queryDesc);
-			if (es->costs)
-				ExplainPrintJITSummary(es, queryDesc);
-			ExplainEndOutput(es);
-
-			/* Remove last line break */
-			if (es->str->len > 0 && es->str->data[es->str->len - 1] == '\n')
-				es->str->data[--es->str->len] = '\0';
-
-			/* Fix JSON to output an object */
-			if (auto_explain_log_format == EXPLAIN_FORMAT_JSON)
-			{
-				es->str->data[0] = '{';
-				es->str->data[es->str->len - 1] = '}';
-			}
-
 			/*
 			 * Note: we rely on the existing logging of context or
 			 * debug_query_string to identify just which statement is being
 			 * reported.  This isn't ideal but trying to do it here would
 			 * often result in duplication.
 			 */
-			ereport(auto_explain_log_level,
-					(errmsg("duration: %.3f ms  plan:\n%s",
-							msec, es->str->data),
-					 errhidestmt(true)));
+			if (was_logged)
+				ereport(auto_explain_log_level,
+						(errmsg("duration: %.3f ms", msec),
+						 errhidestmt(true)));
+			else
+			{
+				ExplainState *es = do_explain(queryDesc);
 
-			pfree(es->str->data);
+				ereport(auto_explain_log_level,
+						(errmsg("duration: %.3f ms  plan:\n%s",
+								msec, es->str->data),
+						 errhidestmt(true)));
+				pfree(es->str->data);
+			}
 		}
 	}
 
@@ -418,4 +432,43 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 		prev_ExecutorEnd(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
+}
+
+/*
+ * do_explain: make an execution plan
+ */
+static ExplainState *
+do_explain(QueryDesc *queryDesc)
+{
+	ExplainState *es = NewExplainState();
+
+	es->analyze = (queryDesc->instrument_options && auto_explain_log_analyze);
+	es->verbose = auto_explain_log_verbose;
+	es->buffers = (es->analyze && auto_explain_log_buffers);
+	es->timing = (es->analyze && auto_explain_log_timing);
+	es->summary = es->analyze;
+	es->format = auto_explain_log_format;
+	es->settings = auto_explain_log_settings;
+
+	ExplainBeginOutput(es);
+	ExplainQueryText(es, queryDesc);
+	ExplainPrintPlan(es, queryDesc);
+	if (es->analyze && auto_explain_log_triggers)
+		ExplainPrintTriggers(es, queryDesc);
+	if (es->costs)
+		ExplainPrintJITSummary(es, queryDesc);
+	ExplainEndOutput(es);
+
+	/* Remove last line break */
+	if (es->str->len > 0 && es->str->data[es->str->len - 1] == '\n')
+		es->str->data[--es->str->len] = '\0';
+
+	/* Fix JSON to output an object */
+	if (auto_explain_log_format == EXPLAIN_FORMAT_JSON)
+	{
+		es->str->data[0] = '{';
+		es->str->data[es->str->len - 1] = '}';
+	}
+
+	return es;
 }

@@ -55,6 +55,8 @@ LOAD 'auto_explain';
       <varname>auto_explain.log_min_duration</varname> is the minimum statement
       execution time, in milliseconds, that will cause the statement's plan to
       be logged. Setting this to <literal>0</literal> logs all plans.
+	  Also if <varname>auto_explain.log_before_query</varname> is enable, all
+	  plans are logged regardless of <varname>auto_explain.log_min_duration</varname>.
       <literal>-1</literal> (the default) disables logging of plans. For
       example, if you set it to <literal>250ms</literal> then all statements
       that run 250ms or longer will be logged. Only superusers can change this
@@ -260,6 +262,25 @@ LOAD 'auto_explain';
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term>
+     <varname>auto_explain.log_before_query</varname> (<type>boolean</type>)
+     <indexterm>
+      <primary><varname>auto_explain.log_before_query</varname> configuration parameter</primary>
+     </indexterm>
+    </term>
+    <listitem>
+     <para>
+      <varname>auto_explain.log_before_query</varname> controls whether
+      execution plans are logged before query are executed.  When it is on,
+      all plans are logged before query execution.  This parameter is off by
+      default.  This parameter has no effect
+      if <varname>auto_explain.log_analyze</varname> is enabled.
+      Only superusers can change this setting.
+     </para>
+    </listitem>
+    </varlistentry>
   </variablelist>
 
   <para>

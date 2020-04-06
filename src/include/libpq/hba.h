@@ -53,6 +53,7 @@ typedef enum IPCompareMethod
 typedef enum ConnType
 {
 	ctLocal,
+	ctLocalOwner,
 	ctHost,
 	ctHostSSL,
 	ctHostNoSSL,

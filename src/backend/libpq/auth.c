@@ -2208,7 +2208,7 @@ CheckPAMAuth(Port *port, const char *user, const char *password)
 		return STATUS_ERROR;
 	}
 
-	if (port->hba->conntype != ctLocal)
+	if (port->hba->conntype != ctLocal && port->hba->conntype != ctLocalOwner)
 	{
 		char		hostinfo[NI_MAXHOST];
 		int			flags;

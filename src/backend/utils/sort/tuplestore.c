@@ -1474,7 +1474,7 @@ getlen(Tuplestorestate *state, bool eofOK)
 	if (nbytes != 0 || !eofOK)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not read from tuplestore temporary file: %m")));
+				 errmsg("could not read from tuplestore temporary file")));
 	return 0;
 }
 
@@ -1511,22 +1511,10 @@ writetup_heap(Tuplestorestate *state, void *tup)
 	/* total on-disk footprint: */
 	unsigned int tuplen = tupbodylen + sizeof(int);
 
-	if (BufFileWrite(state->myfile, (void *) &tuplen,
-					 sizeof(tuplen)) != sizeof(tuplen))
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write to tuplestore temporary file: %m")));
-	if (BufFileWrite(state->myfile, (void *) tupbody,
-					 tupbodylen) != (size_t) tupbodylen)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write to tuplestore temporary file: %m")));
+	BufFileWrite(state->myfile, (void *) &tuplen, sizeof(tuplen));
+	BufFileWrite(state->myfile, (void *) tupbody, tupbodylen);
 	if (state->backward)		/* need trailing length word? */
-		if (BufFileWrite(state->myfile, (void *) &tuplen,
-						 sizeof(tuplen)) != sizeof(tuplen))
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write to tuplestore temporary file: %m")));
+		BufFileWrite(state->myfile, (void *) &tuplen, sizeof(tuplen));
 
 	FREEMEM(state, GetMemoryChunkSpace(tuple));
 	heap_free_minimal_tuple(tuple);
@@ -1547,12 +1535,12 @@ readtup_heap(Tuplestorestate *state, unsigned int len)
 					tupbodylen) != (size_t) tupbodylen)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not read from tuplestore temporary file: %m")));
+				 errmsg("could not read from tuplestore temporary file")));
 	if (state->backward)		/* need trailing length word? */
 		if (BufFileRead(state->myfile, (void *) &tuplen,
 						sizeof(tuplen)) != sizeof(tuplen))
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not read from tuplestore temporary file: %m")));
+					 errmsg("could not read from tuplestore temporary file")));
 	return (void *) tuple;
 }

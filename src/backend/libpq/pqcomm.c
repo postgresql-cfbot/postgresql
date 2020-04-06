@@ -193,14 +193,12 @@ pq_init(void)
 {
 	/* initialize state variables */
 	PqSendBufferSize = PQ_SEND_BUFFER_SIZE;
-	PqSendBuffer = MemoryContextAlloc(TopMemoryContext, PqSendBufferSize);
+	if (!PqSendBuffer)
+		PqSendBuffer = MemoryContextAlloc(TopMemoryContext, PqSendBufferSize);
 	PqSendPointer = PqSendStart = PqRecvPointer = PqRecvLength = 0;
 	PqCommBusy = false;
 	PqCommReadingMsg = false;
 	DoingCopyOut = false;
-
-	/* set up process-exit hook to close the socket */
-	on_proc_exit(socket_close, 0);
 
 	/*
 	 * In backends (as soon as forked) we operate the underlying socket in
@@ -218,12 +216,18 @@ pq_init(void)
 				(errmsg("could not set socket to nonblocking mode: %m")));
 #endif
 
+	if (FeBeWaitSet)
+		FreeWaitEventSet(FeBeWaitSet);
+	else
+		on_proc_exit(socket_close, 0);
+
 	FeBeWaitSet = CreateWaitEventSet(TopMemoryContext, 3);
 	AddWaitEventToSet(FeBeWaitSet, WL_SOCKET_WRITEABLE, MyProcPort->sock,
 					  NULL, NULL);
 	AddWaitEventToSet(FeBeWaitSet, WL_LATCH_SET, -1, MyLatch, NULL);
 	AddWaitEventToSet(FeBeWaitSet, WL_POSTMASTER_DEATH, -1, NULL, NULL);
 }
+
 
 /* --------------------------------
  *		socket_comm_reset - reset libpq during error recovery
@@ -327,7 +331,7 @@ socket_close(int code, Datum arg)
 int
 StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 				 const char *unixSocketDir,
-				 pgsocket ListenSocket[], int MaxListen)
+				 pgsocket ListenSocket[], int ListenPort[], int MaxListen)
 {
 	pgsocket	fd;
 	int			err;
@@ -591,6 +595,7 @@ StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 							familyDesc, addrDesc, (int) portNumber)));
 
 		ListenSocket[listen_index] = fd;
+		ListenPort[listen_index] = portNumber;
 		added++;
 	}
 

@@ -813,7 +813,10 @@ LockAcquireExtended(const LOCKTAG *locktag,
 
 	/* Identify owner for lock */
 	if (sessionLock)
+	{
 		owner = NULL;
+		MyProc->is_tainted = true;
+	}
 	else
 		owner = CurrentResourceOwner;
 

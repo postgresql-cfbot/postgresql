@@ -4283,6 +4283,8 @@ PostgresMain(int argc, char *argv[],
 		 */
 		if (ConfigReloadPending)
 		{
+			if (RestartPoolerOnReload && strcmp(application_name, "pool_worker") == 0)
+				proc_exit(0);
 			ConfigReloadPending = false;
 			ProcessConfigFile(PGC_SIGHUP);
 		}

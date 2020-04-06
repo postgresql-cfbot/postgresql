@@ -513,6 +513,7 @@ RelationBuildTupleDesc(Relation relation)
 												sizeof(TupleConstr));
 	constr->has_not_null = false;
 	constr->has_generated_stored = false;
+	constr->is_system_versioned = false;
 
 	/*
 	 * Form a scan key that selects only user attributes (attnum > 0).
@@ -567,6 +568,9 @@ RelationBuildTupleDesc(Relation relation)
 			constr->has_not_null = true;
 		if (attp->attgenerated == ATTRIBUTE_GENERATED_STORED)
 			constr->has_generated_stored = true;
+		if (attp->attgenerated == ATTRIBUTE_ROW_START_TIME ||
+			attp->attgenerated == ATTRIBUTE_ROW_END_TIME)
+			constr->is_system_versioned = true;
 
 		/* If the column has a default, fill it into the attrdef array */
 		if (attp->atthasdef)

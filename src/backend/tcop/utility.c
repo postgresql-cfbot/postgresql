@@ -17,6 +17,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/relation.h"
 #include "access/reloptions.h"
 #include "access/twophase.h"
 #include "access/xact.h"
@@ -58,7 +59,9 @@
 #include "commands/vacuum.h"
 #include "commands/view.h"
 #include "miscadmin.h"
+#include "nodes/makefuncs.h"
 #include "parser/parse_utilcmd.h"
+#include "optimizer/plancat.h"
 #include "postmaster/bgwriter.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rewriteRemove.h"
@@ -1238,6 +1241,12 @@ ProcessUtilitySlow(ParseState *pstate,
 					AlterTableStmt *atstmt = (AlterTableStmt *) parsetree;
 					Oid			relid;
 					LOCKMODE	lockmode;
+					ListCell   *s;
+					Relation	rel;
+					bool		isSystemVersioned = false;
+					TupleDesc	tupdesc;
+
+
 
 					/*
 					 * Figure out lock mode, and acquire lock.  This also does
@@ -1247,6 +1256,86 @@ ProcessUtilitySlow(ParseState *pstate,
 					 */
 					lockmode = AlterTableGetLockLevel(atstmt->cmds);
 					relid = AlterTableLookupRelation(atstmt, lockmode);
+
+
+					/*
+					 * Change add and remove system versioning to individual
+					 * ADD and DROP column command
+					 */
+					foreach(s, atstmt->cmds)
+					{
+						AlterTableCmd *cmd = (AlterTableCmd *) lfirst(s);
+
+						if (cmd->subtype == AT_AddSystemVersioning)
+						{
+							ColumnDef  *startTimeCol;
+							ColumnDef  *endTimeCol;
+
+							rel = relation_open(relid, NoLock);
+							tupdesc = RelationGetDescr(rel);
+
+							isSystemVersioned = tupdesc->constr && tupdesc->constr->is_system_versioned;
+
+							if (isSystemVersioned)
+								ereport(ERROR,
+										(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+										 errmsg("table is already system versioned")));
+
+							/*
+							 * TODO create composite primary key
+							 */
+							if (RelationGetPrimaryKeyIndex(rel) != InvalidOid)
+								ereport(ERROR,
+										(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+										 errmsg("can not add system versioning for table with primary key")));
+
+							/*
+							 * we use defualt column names for system
+							 * versioning in ALTER TABLE statment
+							 */
+							startTimeCol = makeTemporalColumnDef("StartTime");
+							endTimeCol = makeTemporalColumnDef("EndTime");
+
+							/*
+							 * create alter table cmd and append to the ende
+							 * of commands and remove current listCell because
+							 * we don't want it anymore.
+							 */
+							atstmt->cmds = lappend(atstmt->cmds, (Node *) makeAddColCmd(startTimeCol));
+							atstmt->cmds = lappend(atstmt->cmds, (Node *) makeAddColCmd(endTimeCol));
+
+							/*
+							 * delete current listCell becouse we don't need
+							 * it anymore
+							 */
+							atstmt->cmds = list_delete_cell(atstmt->cmds, s);
+							relation_close(rel, NoLock);
+
+						}
+
+						if (cmd->subtype == AT_DropSystemVersioning)
+						{
+							rel = relation_open(relid, NoLock);
+							tupdesc = RelationGetDescr(rel);
+
+							isSystemVersioned = tupdesc->constr && tupdesc->constr->is_system_versioned;
+
+							if (!isSystemVersioned)
+								ereport(ERROR,
+										(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+										 errmsg("table is not system versioned")));
+
+							atstmt->cmds = lappend(atstmt->cmds, makeDropColCmd(get_row_end_time_col_name(rel)));
+							atstmt->cmds = lappend(atstmt->cmds, makeDropColCmd(get_row_start_time_col_name(rel)));
+
+							/*
+							 * delete current listCell because we don't need
+							 * it anymore
+							 */
+							atstmt->cmds = list_delete_cell(atstmt->cmds, s);
+							relation_close(rel, NoLock);
+						}
+					}
 
 					if (OidIsValid(relid))
 					{
@@ -1258,6 +1347,11 @@ ProcessUtilitySlow(ParseState *pstate,
 						atcontext.relid = relid;
 						atcontext.params = params;
 						atcontext.queryEnv = queryEnv;
+						atcontext.startTimeColName = NULL;
+						atcontext.endTimeColName = NULL;
+						atcontext.periodEnd = NULL;
+						atcontext.periodStart = NULL;
+						atcontext.isSystemVersioned = false;
 
 						/* ... ensure we have an event trigger context ... */
 						EventTriggerAlterTableStart(parsetree);

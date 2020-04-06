@@ -1,0 +1,429 @@
+/*
+ * CREATE TABLE
+ */
+-- invalid datatype
+CREATE TABLE stest1 (
+    a integer PRIMARY KEY,
+    start_timestamp timestamp GENERATED ALWAYS AS ROW START,
+    end_timestamp integer GENERATED ALWAYS AS ROW END,
+    PERIOD FOR SYSTEM_TIME (start_timestamp, end_timestamp)
+) WITH SYSTEM VERSIONING;
+ERROR:  the data type of row start time must be timestamptz 
+-- references to other column in period columns
+CREATE TABLE stest1 (
+    a integer PRIMARY KEY,
+    start_timestamp timestamp with time zone GENERATED ALWAYS AS ROW START,
+    end_timestamp timestamp with time zone GENERATED ALWAYS AS ROW END,
+    PERIOD FOR SYSTEM_TIME (a, end_timestamp)
+) WITH SYSTEM VERSIONING;
+ERROR:  The period start time parameter must equal the name of row start time column
+CREATE TABLE stest1 (
+    a integer PRIMARY KEY,
+    start_timestamp timestamp with time zone GENERATED ALWAYS AS ROW START,
+    end_timestamp timestamp with time zone GENERATED ALWAYS AS ROW END,
+    PERIOD FOR SYSTEM_TIME (start_timestamp, a)
+) WITH SYSTEM VERSIONING;
+ERROR:  The period end time  parameter must equal the name of row end time column
+CREATE TABLE stest1 (
+    a integer PRIMARY KEY,
+    start_timestamp timestamp with time zone GENERATED ALWAYS AS ROW START,
+    end_timestamp timestamp with time zone GENERATED ALWAYS AS ROW END,
+    PERIOD FOR SYSTEM_TIME (end_timestamp, start_timestamp)
+) WITH SYSTEM VERSIONING;
+ERROR:  The period start time parameter must equal the name of row start time column
+-- duplicate system time column
+CREATE TABLE stest1 (
+    a integer PRIMARY KEY,
+    start_timestamp timestamp with time zone GENERATED ALWAYS AS row START,
+    start_timestamp1 timestamp with time zone GENERATED ALWAYS AS row START,
+    end_timestamp timestamp with time zone GENERATED ALWAYS AS ROW END,
+    PERIOD FOR SYSTEM_TIME (start_timestamp, end_timestamp)
+) WITH SYSTEM VERSIONING;
+ERROR:  row start time can not be specified multiple time
+CREATE TABLE stest1 (
+    a integer PRIMARY KEY,
+    start_timestamp timestamp with time zone GENERATED ALWAYS AS row START,
+    end_timestamp timestamp with time zone GENERATED ALWAYS AS ROW END,
+    end_timestamp1 timestamp with time zone GENERATED ALWAYS AS ROW END,
+    PERIOD FOR SYSTEM_TIME (start_timestamp, end_timestamp)
+) WITH SYSTEM VERSIONING;
+ERROR:  row end time can not be specified multiple time
+-- success
+CREATE TABLE stest0 (
+    a integer PRIMARY KEY,
+    start_timestamp timestamp with time zone GENERATED ALWAYS AS ROW START,
+    end_timestamp timestamp with time zone GENERATED ALWAYS AS ROW END,
+    PERIOD FOR SYSTEM_TIME (start_timestamp, end_timestamp)
+) WITH SYSTEM VERSIONING;
+-- default system time column usage
+CREATE TABLE stest2 (
+    a integer
+) WITH SYSTEM VERSIONING;
+\d stest2
+                                    Table "public.stest2"
+  Column   |           Type           | Collation | Nullable |            Default            
+-----------+--------------------------+-----------+----------+-------------------------------
+ a         | integer                  |           |          | 
+ StartTime | timestamp with time zone |           | not null | generated always as row start
+ EndTime   | timestamp with time zone |           | not null | generated always as row end
+
+-- ALTER TABLE tbName ADD SYSTEM VERSIONING
+CREATE TABLE stest3 (
+    a integer
+);
+\d stest3
+               Table "public.stest3"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+
+ALTER TABLE stest3 ADD SYSTEM VERSIONING;
+\d stest3
+                                    Table "public.stest3"
+  Column   |           Type           | Collation | Nullable |            Default            
+-----------+--------------------------+-----------+----------+-------------------------------
+ a         | integer                  |           |          | 
+ StartTime | timestamp with time zone |           | not null | generated always as row start
+ EndTime   | timestamp with time zone |           | not null | generated always as row end
+
+-- ALTER TABLE tbName DROP SYSTEM VERSIONING
+ALTER TABLE stest3 DROP SYSTEM VERSIONING;
+\d stest3
+               Table "public.stest3"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+
+-- ALTER TABLE
+ALTER TABLE stest0 ALTER start_timestamp DROP NOT NULL;
+ERROR:  column "start_timestamp" of relation "stest0" is system time column
+ALTER TABLE stest0 ALTER start_timestamp DROP NOT NULL;
+ERROR:  column "start_timestamp" of relation "stest0" is system time column
+ALTER TABLE stest0 ALTER COLUMN start_timestamp SET DATA TYPE character;
+ERROR:  column "start_timestamp" of relation "stest0" is system time column
+--truncation
+truncate table stest0;
+ERROR:  cannot truncate system versioned table
+-- test UPDATE/DELETE
+INSERT INTO stest0 VALUES (1);
+INSERT INTO stest0 VALUES (2);
+INSERT INTO stest0 VALUES (3);
+SELECT now() AS ts1 \gset
+SELECT a FROM stest0 ORDER BY a;
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+SELECT a FROM stest0 FOR system_time FROM '-infinity' TO 'infinity' ORDER BY a;
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+UPDATE stest0 SET a = 4 WHERE a = 1;
+SELECT now() AS ts2 \gset
+SELECT a FROM stest0 ORDER BY a;
+ a 
+---
+ 2
+ 3
+ 4
+(3 rows)
+
+SELECT a FROM stest0 FOR system_time FROM '-infinity' TO 'infinity' ORDER BY a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+DELETE FROM stest0 WHERE a = 2;
+SELECT now() AS ts3 \gset
+SELECT a FROM stest0 ORDER BY a;
+ a 
+---
+ 3
+ 4
+(2 rows)
+
+SELECT a FROM stest0 FOR system_time FROM '-infinity' TO 'infinity' ORDER BY a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+INSERT INTO stest0 VALUES (5);
+SELECT a FROM stest0 ORDER BY a;
+ a 
+---
+ 3
+ 4
+ 5
+(3 rows)
+
+SELECT a FROM stest0 FOR system_time FROM '-infinity' TO 'infinity' ORDER BY a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+ 5
+(5 rows)
+
+/*
+ * Temporal Queries
+ */
+-- AS OF ...
+SELECT a FROM stest0 FOR system_time AS OF :'ts1' ORDER BY start_timestamp, a;
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+SELECT a FROM stest0 FOR system_time AS OF :'ts2' ORDER BY start_timestamp, a;
+ a 
+---
+ 2
+ 3
+ 4
+(3 rows)
+
+SELECT a FROM stest0 FOR system_time AS OF :'ts3' ORDER BY start_timestamp, a;
+ a 
+---
+ 3
+ 4
+(2 rows)
+
+-- BETWEEN ... AND ...
+SELECT a FROM stest0 FOR system_time BETWEEN :'ts1' AND :'ts2' ORDER BY start_timestamp, a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+SELECT a FROM stest0 FOR system_time BETWEEN :'ts2' AND :'ts3' ORDER BY start_timestamp, a;
+ a 
+---
+ 2
+ 3
+ 4
+(3 rows)
+
+SELECT a FROM stest0 FOR system_time BETWEEN :'ts1' AND :'ts3' ORDER BY start_timestamp, a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+-- BETWEEN ASYMMETRIC ... AND ...
+SELECT a FROM stest0 FOR system_time BETWEEN ASYMMETRIC :'ts1' AND :'ts2' ORDER BY start_timestamp, a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+SELECT a FROM stest0 FOR system_time BETWEEN ASYMMETRIC :'ts2' AND :'ts3' ORDER BY start_timestamp, a;
+ a 
+---
+ 2
+ 3
+ 4
+(3 rows)
+
+SELECT a FROM stest0 FOR system_time BETWEEN ASYMMETRIC :'ts1' AND :'ts3' ORDER BY start_timestamp, a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+-- BETWEEN SYMMETRIC ... AND ...
+SELECT a FROM stest0 FOR system_time BETWEEN SYMMETRIC :'ts2' AND :'ts1' ORDER BY start_timestamp, a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+SELECT a FROM stest0 FOR system_time BETWEEN SYMMETRIC :'ts3' AND :'ts2' ORDER BY start_timestamp, a;
+ a 
+---
+ 2
+ 3
+ 4
+(3 rows)
+
+SELECT a FROM stest0 FOR system_time BETWEEN SYMMETRIC :'ts3' AND :'ts1' ORDER BY start_timestamp, a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+-- FROM ... TO ...
+SELECT a FROM stest0 FOR system_time FROM :'ts1' TO :'ts2' ORDER BY start_timestamp, a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+SELECT a FROM stest0 FOR system_time FROM :'ts2' TO :'ts3' ORDER BY start_timestamp, a;
+ a 
+---
+ 2
+ 3
+ 4
+(3 rows)
+
+SELECT a FROM stest0 FOR system_time FROM :'ts1' TO :'ts3' ORDER BY start_timestamp, a;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+(4 rows)
+
+/*
+ * JOINS
+ */
+CREATE TABLE stestx (x int, y int);
+INSERT INTO stestx VALUES (11, 1), (22, 2), (33, 3);
+SELECT a, x, y
+FROM stestx
+INNER JOIN stest0 ON stestx.y = stest0.a;
+ a | x  | y 
+---+----+---
+ 3 | 33 | 3
+(1 row)
+
+SELECT a, x, y
+FROM stestx
+LEFT OUTER JOIN stest0 ON stestx.y = stest0.a;
+ a | x  | y 
+---+----+---
+   | 11 | 1
+   | 22 | 2
+ 3 | 33 | 3
+(3 rows)
+
+SELECT a, x, y
+FROM stestx
+RIGHT OUTER JOIN stest0 ON stestx.y = stest0.a;
+ a | x  | y 
+---+----+---
+ 3 | 33 | 3
+ 4 |    |  
+ 5 |    |  
+(3 rows)
+
+SELECT a, x, y
+FROM stestx
+FULL OUTER JOIN stest0 ON stestx.y = stest0.a;
+ a | x  | y 
+---+----+---
+   | 11 | 1
+   | 22 | 2
+ 3 | 33 | 3
+ 4 |    |  
+ 5 |    |  
+(5 rows)
+
+DROP TABLE stestx;
+-- views
+CREATE VIEW stest1v AS SELECT a FROM stest0;
+CREATE VIEW stest2v AS select a from stest0 for system_time from '2000-01-01 00:00:00.00000' to 'infinity' ORDER BY a;
+SELECT * FROM stest1v;
+ a 
+---
+ 3
+ 4
+ 5
+(3 rows)
+
+SELECT * FROM stest2v;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+ 5
+(5 rows)
+
+DROP VIEW stest1v;
+DROP VIEW stest2v;
+-- CTEs
+WITH foo AS (SELECT a FROM stest0) SELECT * FROM foo;
+ a 
+---
+ 3
+ 4
+ 5
+(3 rows)
+
+WITH foo AS (select a from stest0 for system_time from '2000-01-01 00:00:00.00000' to 'infinity' ORDER BY a) SELECT * FROM foo;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+ 5
+(5 rows)
+
+-- inheritance
+CREATE TABLE stest1 () INHERITS (stest0);
+SELECT * FROM stest1;
+ a | start_timestamp | end_timestamp 
+---+-----------------+---------------
+(0 rows)
+
+\d stest1
+                                       Table "public.stest1"
+     Column      |           Type           | Collation | Nullable |            Default            
+-----------------+--------------------------+-----------+----------+-------------------------------
+ a               | integer                  |           | not null | 
+ start_timestamp | timestamp with time zone |           | not null | generated always as row start
+ end_timestamp   | timestamp with time zone |           | not null | generated always as row end
+Inherits: stest0
+
+INSERT INTO stest1 VALUES (4);
+SELECT a FROM stest1;
+ a 
+---
+ 4
+(1 row)
+

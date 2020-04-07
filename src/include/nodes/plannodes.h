@@ -233,6 +233,8 @@ typedef struct ModifyTable
 	Bitmapset  *fdwDirectModifyPlans;	/* indices of FDW DM plans */
 	List	   *rowMarks;		/* PlanRowMarks (non-locking only) */
 	int			epqParam;		/* ID of Param for EvalPlanQual re-eval */
+	/* Info for run-time subplan pruning; NULL if we're not doing that */
+	struct PartitionPruneInfo *part_prune_info;
 	OnConflictAction onConflictAction;	/* ON CONFLICT action */
 	List	   *arbiterIndexes; /* List of ON CONFLICT arbiter index OIDs  */
 	List	   *onConflictSet;	/* SET for INSERT ON CONFLICT DO UPDATE */

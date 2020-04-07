@@ -472,7 +472,7 @@ ExecHashSubPlanResultRelsByOid(ModifyTableState *mtstate,
 	/* Hash all subplans by their Oid */
 	for (i = 0; i < mtstate->mt_nplans; i++)
 	{
-		ResultRelInfo *rri = &mtstate->resultRelInfo[i];
+		ResultRelInfo *rri = mtstate->resultRelInfos[i];
 		bool		found;
 		Oid			partoid = RelationGetRelid(rri->ri_RelationDesc);
 		SubplanResultRelHashElem *elem;
@@ -509,7 +509,7 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 	ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
 	Relation	rootrel = rootResultRelInfo->ri_RelationDesc,
 				partrel;
-	Relation	firstResultRel = mtstate->resultRelInfo[0].ri_RelationDesc;
+	Relation	firstResultRel = mtstate->resultRelInfos[0]->ri_RelationDesc;
 	ResultRelInfo *leaf_part_rri;
 	MemoryContext oldcxt;
 	AttrMap    *part_attmap = NULL;
@@ -557,7 +557,7 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 		List	   *wcoList;
 		List	   *wcoExprs = NIL;
 		ListCell   *ll;
-		int			firstVarno = mtstate->resultRelInfo[0].ri_RangeTableIndex;
+		int			firstVarno = mtstate->resultRelInfos[0]->ri_RangeTableIndex;
 
 		/*
 		 * In the case of INSERT on a partitioned table, there is only one
@@ -621,7 +621,7 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 		TupleTableSlot *slot;
 		ExprContext *econtext;
 		List	   *returningList;
-		int			firstVarno = mtstate->resultRelInfo[0].ri_RangeTableIndex;
+		int			firstVarno = mtstate->resultRelInfos[0]->ri_RangeTableIndex;
 
 		/* See the comment above for WCO lists. */
 		Assert((node->operation == CMD_INSERT &&
@@ -680,7 +680,7 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 	 */
 	if (node && node->onConflictAction != ONCONFLICT_NONE)
 	{
-		int			firstVarno = mtstate->resultRelInfo[0].ri_RangeTableIndex;
+		int			firstVarno = mtstate->resultRelInfos[0]->ri_RangeTableIndex;
 		TupleDesc	partrelDesc = RelationGetDescr(partrel);
 		ExprContext *econtext = mtstate->ps.ps_ExprContext;
 		ListCell   *lc;

@@ -1238,6 +1238,9 @@ inheritance_planner(PlannerInfo *root)
 	RangeTblEntry *parent_rte;
 	Bitmapset  *parent_relids;
 	Query	  **parent_parses;
+	PlannerInfo *partition_root = NULL;
+	List	   *partitioned_rels = NIL;
+	bool		dummy_modifytbl = false;
 
 	/* Should only get here for UPDATE or DELETE */
 	Assert(parse->commandType == CMD_UPDATE ||
@@ -1349,6 +1352,13 @@ inheritance_planner(PlannerInfo *root)
 		 * expand_partitioned_rtentry for the UPDATE target.)
 		 */
 		root->partColsUpdated = subroot->partColsUpdated;
+
+		/*
+		 * Save this for later so that we can enable run-time pruning on
+		 * the partitioned table(s).
+		 */
+		if (parent_rte->relkind == RELKIND_PARTITIONED_TABLE)
+			partition_root = subroot;
 	}
 
 	/*----------
@@ -1385,6 +1395,9 @@ inheritance_planner(PlannerInfo *root)
 	{
 		AppendRelInfo *appinfo = lfirst_node(AppendRelInfo, lc);
 		RangeTblEntry *child_rte;
+		int				old_rti;
+		int				new_rti;
+
 
 		/* append_rel_list contains all append rels; ignore others */
 		if (!bms_is_member(appinfo->parent_relid, parent_relids))
@@ -1399,11 +1412,18 @@ inheritance_planner(PlannerInfo *root)
 		/* and append it to the original rtable */
 		parse->rtable = lappend(parse->rtable, child_rte);
 
-		/* remember child's index in the SELECT rtable */
-		old_child_rtis = lappend_int(old_child_rtis, appinfo->child_relid);
+		old_rti = appinfo->child_relid;
+		new_rti = list_length(parse->rtable);
 
-		/* and its new index in the final rtable */
-		new_child_rtis = lappend_int(new_child_rtis, list_length(parse->rtable));
+		/* record RT indexes for any RTEs that have changed RT index */
+		if (old_rti != new_rti)
+		{
+			/* remember child's index in the SELECT rtable */
+			old_child_rtis = lappend_int(old_child_rtis, old_rti);
+
+			/* and its new index in the final rtable */
+			new_child_rtis = lappend_int(new_child_rtis, new_rti);
+		}
 
 		/* if child is itself partitioned, update parent_relids */
 		if (child_rte->inh)
@@ -1424,9 +1444,6 @@ inheritance_planner(PlannerInfo *root)
 	{
 		int			old_child_rti = lfirst_int(lc);
 		int			new_child_rti = lfirst_int(lc2);
-
-		if (old_child_rti == new_child_rti)
-			continue;			/* nothing to do */
 
 		Assert(old_child_rti > new_child_rti);
 
@@ -1744,6 +1761,9 @@ inheritance_planner(PlannerInfo *root)
 			returningLists = list_make1(parse->returningList);
 		/* Disable tuple routing, too, just to be safe */
 		root->partColsUpdated = false;
+
+		/* Mark that we're performing a dummy modify table */
+		dummy_modifytbl = true;
 	}
 	else
 	{
@@ -1783,6 +1803,105 @@ inheritance_planner(PlannerInfo *root)
 	else
 		rowMarks = root->rowMarks;
 
+
+	/*
+	 * When performing UPDATE/DELETE on a partitioned table, if the query has
+	 * a WHERE clause which supports it, we may be able to perform run-time
+	 * partition pruning.  The following code makes use of PlannerInfo fields
+	 * from the SELECT planning invocation we performed above.  We must
+	 * translate the RT indexes to allow us to use these in 'root'.
+	 */
+	if (partition_root && !dummy_modifytbl)
+	{
+		RelOptInfo *parent_rel;
+		int		   *relid_map;
+		int			i;
+
+		/* create a map to translate old RT indexes into new ones */
+		relid_map = palloc(sizeof(int) * partition_root->simple_rel_array_size);
+
+		/*
+		 * initialize the map assuming everything is the same.  We'll make
+		 * the required adjustments by looking at the old_child_rtis and
+		 * new_child_rtis lists shortly.
+		 */
+		for (i = 1; i < partition_root->simple_rel_array_size; i++)
+			relid_map[i] = i;
+
+		/*
+		 * Fetch the target partitioned table's RelOptInfo.  This may have
+		 * base quals which we can use for run-time pruning.
+		 */
+		parent_rel = partition_root->simple_rel_array[top_parentRTindex];
+
+		final_rel->baserestrictinfo = parent_rel->baserestrictinfo;
+
+		/* adjust varnos of any RTEs that have changed their RT index */
+		forboth(lc, old_child_rtis, lc2, new_child_rtis)
+		{
+			int			old_child_rti = lfirst_int(lc);
+			int			new_child_rti = lfirst_int(lc2);
+
+			Assert(old_child_rti > new_child_rti);
+
+			ChangeVarNodes((Node *) final_rel->baserestrictinfo,
+						   old_child_rti, new_child_rti, 0);
+
+			/*
+			 * While we're at it, adjust the map to account for the changed RT
+			 * index.
+			 */
+			relid_map[old_child_rti] = new_child_rti;
+		}
+
+		/*
+		 * Build a list of each non-leaf partitioned rels which are being
+		 * UPDATEd / DELETEd.
+		 */
+		i = -1;
+		while ((i = bms_next_member(parent_relids, i)) > 0)
+			partitioned_rels = lappend_int(partitioned_rels, relid_map[i]);
+
+		/*
+		 * In order to build the run-time pruning data we'll need append rels
+		 * of any sub-partitioned tables.  If there are some of those and the
+		 * append_rel_array is not already allocated, then do that now.
+		 */
+		if (list_length(partitioned_rels) > 1 &&
+			root->append_rel_array == NULL)
+			root->append_rel_array = palloc0(sizeof(AppendRelInfo *) *
+											 root->simple_rel_array_size);
+
+		/*
+		 * There can only be a single partition hierarchy, so it's fine to
+		 * just make a single element list of the partitioned_rels.
+		 */
+		partitioned_rels = list_make1(partitioned_rels);
+
+		i = -1;
+		while ((i = bms_next_member(parent_relids, i)) >= 0)
+		{
+			int new_rti = relid_map[i];
+
+			Assert(root->simple_rel_array[new_rti] == NULL);
+
+			root->simple_rel_array[new_rti] = partition_root->simple_rel_array[i];
+
+			/*
+			 * The root partition won't have an append rel entry, so we can
+			 * skip that.  We'll need to take the partition_root's version for
+			 * any sub-partitioned table's
+			 */
+			if (i != top_parentRTindex)
+			{
+				Assert(root->append_rel_array[new_rti] == NULL);
+				root->append_rel_array[new_rti] = partition_root->append_rel_array[i];
+			}
+		}
+
+		pfree(relid_map);
+	}
+
 	/* Create Path representing a ModifyTable to do the UPDATE/DELETE work */
 	add_path(final_rel, (Path *)
 			 create_modifytable_path(root, final_rel,
@@ -1792,6 +1911,7 @@ inheritance_planner(PlannerInfo *root)
 									 rootRelation,
 									 root->partColsUpdated,
 									 resultRelations,
+									 partitioned_rels,
 									 subpaths,
 									 subroots,
 									 withCheckOptionLists,
@@ -2375,6 +2495,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 										rootRelation,
 										false,
 										list_make1_int(parse->resultRelation),
+										NIL,
 										list_make1(path),
 										list_make1(root),
 										withCheckOptionLists,

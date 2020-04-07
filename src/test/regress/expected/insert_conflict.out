@@ -211,6 +211,7 @@ explain (costs off, format json) insert into insertconflicttest values (0, 'Bilb
        "Conflict Resolution": "UPDATE",                                +
        "Conflict Arbiter Indexes": ["key_index"],                      +
        "Conflict Filter": "(insertconflicttest.fruit <> 'Lime'::text)",+
+       "Subplans Removed": 0,                                          +
        "Plans": [                                                      +
          {                                                             +
            "Node Type": "Result",                                      +

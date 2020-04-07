@@ -214,7 +214,12 @@ static void partkey_datum_from_expr(PartitionPruneContext *context,
  * 'parentrel' is the RelOptInfo for an appendrel, and 'subpaths' is the list
  * of scan paths for its child rels.
  *
- * 'partitioned_rels' is a List containing Lists of relids of partitioned
+ * If 'resultRelations' is non-NIL, then this List of RT indexes is used to
+ * build the mapping structures.  Otherwise the 'subpaths' List is used.  Both
+ * of these lists correspond to the planner node's subplans list that we're
+ * building the PartitionPruneInfo for.
+ *
+ * 'partitioned_rels' is a List containing Lists of RT indexes of partitioned
  * tables (a/k/a non-leaf partitions) that are parents of some of the child
  * rels.  Here we attempt to populate the PartitionPruneInfo by adding a
  * 'prune_infos' item for each sublist in the 'partitioned_rels' list.
@@ -228,8 +233,8 @@ static void partkey_datum_from_expr(PartitionPruneContext *context,
  */
 PartitionPruneInfo *
 make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
-						 List *subpaths, List *partitioned_rels,
-						 List *prunequal)
+						 List *resultRelations, List *subpaths,
+						 List *partitioned_rels, List *prunequal)
 {
 	PartitionPruneInfo *pruneinfo;
 	Bitmapset  *allmatchedsubplans = NULL;
@@ -246,21 +251,39 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	relid_subplan_map = palloc0(sizeof(int) * root->simple_rel_array_size);
 
 	/*
-	 * relid_subplan_map maps relid of a leaf partition to the index in
-	 * 'subpaths' of the scan plan for that partition.
+	 * If 'resultRelations' are present then map these, otherwise, we map the
+	 * 'subpaths' List.  Later, this will allow us to map partition indexes
+	 * into the executor node's subpath list index during query execution.
 	 */
-	i = 1;
-	foreach(lc, subpaths)
+	if (resultRelations != NIL)
 	{
-		Path	   *path = (Path *) lfirst(lc);
-		RelOptInfo *pathrel = path->parent;
+		i = 1;
+		foreach(lc, resultRelations)
+		{
+			int			resultrel = lfirst_int(lc);
 
-		Assert(IS_SIMPLE_REL(pathrel));
-		Assert(pathrel->relid < root->simple_rel_array_size);
-		/* No duplicates please */
-		Assert(relid_subplan_map[pathrel->relid] == 0);
+			Assert(resultrel < root->simple_rel_array_size);
+			/* No duplicates please */
+			Assert(relid_subplan_map[resultrel] == 0);
 
-		relid_subplan_map[pathrel->relid] = i++;
+			relid_subplan_map[resultrel] = i++;
+		}
+	}
+	else
+	{
+		i = 1;
+		foreach(lc, subpaths)
+		{
+			Path	   *path = (Path *) lfirst(lc);
+			RelOptInfo *pathrel = path->parent;
+
+			Assert(IS_SIMPLE_REL(pathrel));
+			Assert(pathrel->relid < root->simple_rel_array_size);
+			/* No duplicates please */
+			Assert(relid_subplan_map[pathrel->relid] == 0);
+
+			relid_subplan_map[pathrel->relid] = i++;
+		}
 	}
 
 	/* We now build a PartitionedRelPruneInfo for each partitioned rel. */
@@ -404,9 +427,12 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 			 * an adjust_appendrel_attrs step.  But it might not be, and then
 			 * we have to translate.  We update the prunequal parameter here,
 			 * because in later iterations of the loop for child partitions,
-			 * we want to translate from parent to child variables.
+			 * we want to translate from parent to child variables.  We don't
+			 * need to do this when planning a non-SELECT as, in that case,
+			 * we're only working with a single partition hierarchy.
 			 */
-			if (!bms_equal(parentrel->relids, subpart->relids))
+			if (root->parse->commandType == CMD_SELECT &&
+				!bms_equal(parentrel->relids, subpart->relids))
 			{
 				int			nappinfos;
 				AppendRelInfo **appinfos = find_appinfos_by_relids(root,

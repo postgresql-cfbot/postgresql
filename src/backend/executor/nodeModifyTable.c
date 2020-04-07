@@ -57,6 +57,8 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
+ /* Special value for mt_whichplan */
+#define WHICHPLAN_CHOOSE_SUBPLAN			-1
 
 static bool ExecOnConflictUpdate(ModifyTableState *mtstate,
 								 ResultRelInfo *resultRelInfo,
@@ -1198,7 +1200,6 @@ lreplace:;
 			TupleTableSlot *ret_slot;
 			TupleTableSlot *epqslot = NULL;
 			PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
-			int			map_index;
 			TupleConversionMap *tupconv_map;
 
 			/*
@@ -1277,17 +1278,8 @@ lreplace:;
 			if (mtstate->mt_transition_capture)
 				saved_tcs_map = mtstate->mt_transition_capture->tcs_map;
 
-			/*
-			 * resultRelInfo is one of the per-subplan resultRelInfos.  So we
-			 * should convert the tuple into root's tuple descriptor, since
-			 * ExecInsert() starts the search from root.  The tuple conversion
-			 * map list is in the order of mtstate->resultRelInfo[], so to
-			 * retrieve the one for this resultRel, we need to know the
-			 * position of the resultRel in mtstate->resultRelInfo[].
-			 */
-			map_index = resultRelInfo - mtstate->resultRelInfo;
-			Assert(map_index >= 0 && map_index < mtstate->mt_nplans);
-			tupconv_map = tupconv_map_for_subplan(mtstate, map_index);
+			/* Fetch the tuple conversion map for the current subplan */
+			tupconv_map = tupconv_map_for_subplan(mtstate, mtstate->mt_whichplan);
 			if (tupconv_map != NULL)
 				slot = execute_attr_map_slot(tupconv_map->attrMap,
 											 slot,
@@ -1731,12 +1723,12 @@ static void
 fireBSTriggers(ModifyTableState *node)
 {
 	ModifyTable *plan = (ModifyTable *) node->ps.plan;
-	ResultRelInfo *resultRelInfo = node->resultRelInfo;
+	ResultRelInfo *resultRelInfo = node->resultRelInfos[0];
 
 	/*
 	 * If the node modifies a partitioned table, we must fire its triggers.
-	 * Note that in that case, node->resultRelInfo points to the first leaf
-	 * partition, not the root table.
+	 * Note that in that case, node->resultRelInfos[0] points to the first
+	 * leaf partition, not the root table.
 	 */
 	if (node->rootResultRelInfo != NULL)
 		resultRelInfo = node->rootResultRelInfo;
@@ -1774,13 +1766,14 @@ static ResultRelInfo *
 getTargetResultRelInfo(ModifyTableState *node)
 {
 	/*
-	 * Note that if the node modifies a partitioned table, node->resultRelInfo
-	 * points to the first leaf partition, not the root table.
+	 * Note that if the node modifies a partitioned table,
+	 * node->resultRelInfos[0] points to the first leaf partition, not the
+	 * root table.
 	 */
 	if (node->rootResultRelInfo != NULL)
 		return node->rootResultRelInfo;
 	else
-		return node->resultRelInfo;
+		return node->resultRelInfos[0];
 }
 
 /*
@@ -1959,7 +1952,7 @@ static void
 ExecSetupChildParentMapForSubplan(ModifyTableState *mtstate)
 {
 	ResultRelInfo *targetRelInfo = getTargetResultRelInfo(mtstate);
-	ResultRelInfo *resultRelInfos = mtstate->resultRelInfo;
+	ResultRelInfo **resultRelInfos = mtstate->resultRelInfos;
 	TupleDesc	outdesc;
 	int			numResultRelInfos = mtstate->mt_nplans;
 	int			i;
@@ -1979,7 +1972,7 @@ ExecSetupChildParentMapForSubplan(ModifyTableState *mtstate)
 	for (i = 0; i < numResultRelInfos; ++i)
 	{
 		mtstate->mt_per_subplan_tupconv_maps[i] =
-			convert_tuples_by_name(RelationGetDescr(resultRelInfos[i].ri_RelationDesc),
+			convert_tuples_by_name(RelationGetDescr(resultRelInfos[i]->ri_RelationDesc),
 								   outdesc);
 	}
 }
@@ -2055,8 +2048,33 @@ ExecModifyTable(PlanState *pstate)
 		node->fireBSTriggers = false;
 	}
 
+
+	/* Handle choosing the valid subplans */
+	if (node->mt_whichplan == WHICHPLAN_CHOOSE_SUBPLAN)
+	{
+		PartitionPruneState *prunestate = node->mt_prune_state;
+
+		/* Bail if all partitions were run-time pruned */
+		if (node->mt_nplans == 0)
+			goto done;
+
+		/*
+		 * mt_whichplan should never get set to WHICHPLAN_CHOOSE_SUBPLAN
+		 * unless we're performing do_exec_prune
+		 */
+		Assert(prunestate != NULL && prunestate->do_exec_prune);
+
+		/* Determine the minimum set of matching subplans */
+		node->mt_valid_subplans = ExecFindMatchingSubPlans(prunestate);
+		node->mt_whichplan = bms_next_member(node->mt_valid_subplans, -1);
+
+		/* If no subplan matches these params then we're done */
+		if (node->mt_whichplan < 0)
+			goto done;
+	}
+
 	/* Preload local variables */
-	resultRelInfo = node->resultRelInfo + node->mt_whichplan;
+	resultRelInfo = node->resultRelInfos[node->mt_whichplan];
 	subplanstate = node->mt_plans[node->mt_whichplan];
 	junkfilter = resultRelInfo->ri_junkFilter;
 
@@ -2097,11 +2115,13 @@ ExecModifyTable(PlanState *pstate)
 
 		if (TupIsNull(planSlot))
 		{
-			/* advance to next subplan if any */
-			node->mt_whichplan++;
-			if (node->mt_whichplan < node->mt_nplans)
+			/* advance to the next valid subplan if any */
+			node->mt_whichplan = bms_next_member(node->mt_valid_subplans,
+												 node->mt_whichplan);
+
+			if (node->mt_whichplan >= 0)
 			{
-				resultRelInfo++;
+				resultRelInfo = node->resultRelInfos[node->mt_whichplan];
 				subplanstate = node->mt_plans[node->mt_whichplan];
 				junkfilter = resultRelInfo->ri_junkFilter;
 				estate->es_result_relation_info = resultRelInfo;
@@ -2271,6 +2291,8 @@ ExecModifyTable(PlanState *pstate)
 	/* Restore es_result_relation_info before exiting */
 	estate->es_result_relation_info = saved_resultRelInfo;
 
+done:
+
 	/*
 	 * We're done, but fire AFTER STATEMENT triggers before exiting.
 	 */
@@ -2293,9 +2315,11 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	int			nplans = list_length(node->plans);
 	ResultRelInfo *saved_resultRelInfo;
 	ResultRelInfo *resultRelInfo;
+	Bitmapset  *validsubplans;
 	Plan	   *subplan;
 	ListCell   *l;
-	int			i;
+	int			i,
+				j;
 	Relation	rel;
 	bool		update_tuple_routing_needed = node->partColsUpdated;
 
@@ -2314,8 +2338,74 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	mtstate->canSetTag = node->canSetTag;
 	mtstate->mt_done = false;
 
+	/* If run-time partition pruning is enabled, then set that up now */
+	if (node->part_prune_info != NULL)
+	{
+		PartitionPruneState *prunestate;
+
+		ExecAssignExprContext(estate, &mtstate->ps);
+
+		prunestate = ExecCreatePartitionPruneState(&mtstate->ps,
+												   node->part_prune_info);
+		mtstate->mt_prune_state = prunestate;
+
+		/* Perform an initial partition prune, if required. */
+		if (prunestate->do_initial_prune)
+		{
+			/* Determine which subplans match the external params */
+			validsubplans = ExecFindInitialMatchingSubPlans(prunestate,
+													list_length(node->plans));
+
+			nplans = bms_num_members(validsubplans);
+		}
+		else
+		{
+			/* We'll need to initialize all subplans */
+			nplans = list_length(node->plans);
+			validsubplans = bms_add_range(NULL, 0, nplans - 1);
+		}
+
+		/*
+		 * When no run-time pruning is required and there's at least one
+		 * subplan, we can fill mt_valid_subplans immediately, preventing
+		 * later calls to ExecFindMatchingSubPlans.  Additionally, we can also
+		 * select the first subplan to execute.
+		 */
+		if (!prunestate->do_exec_prune && nplans > 0)
+		{
+			mtstate->mt_valid_subplans = bms_add_range(NULL, 0, nplans - 1);
+			mtstate->mt_whichplan = 0;
+		}
+		else
+		{
+			/*
+			 * When performing do_exec_prune or we pruned all subplans above
+			 * then we set mt_whichplan to WHICHPLAN_CHOOSE_SUBPLAN so that
+			 * we properly handle those cases during execution.
+			 */
+			mtstate->mt_valid_subplans = NULL;
+			mtstate->mt_whichplan = WHICHPLAN_CHOOSE_SUBPLAN;
+		}
+	}
+	else
+	{
+		nplans = list_length(node->plans);
+
+		/*
+		 * When run-time partition pruning is not enabled we can just mark all
+		 * plans as valid, they must also all be initialized.
+		 */
+		validsubplans = bms_add_range(NULL, 0, nplans - 1);
+		mtstate->mt_valid_subplans = validsubplans;
+		mtstate->mt_prune_state = NULL;
+
+		/* Also set the plan to execute first */
+		mtstate->mt_whichplan = 0;
+	}
+
 	mtstate->mt_plans = (PlanState **) palloc0(sizeof(PlanState *) * nplans);
-	mtstate->resultRelInfo = estate->es_result_relations + node->resultRelIndex;
+	mtstate->resultRelInfos = (ResultRelInfo **)
+		palloc(sizeof(ResultRelInfo *) * nplans);
 	mtstate->mt_scans = (TupleTableSlot **) palloc0(sizeof(TupleTableSlot *) * nplans);
 
 	/* If modifying a partitioned table, initialize the root table info */
@@ -2342,11 +2432,14 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	 */
 	saved_resultRelInfo = estate->es_result_relation_info;
 
-	resultRelInfo = mtstate->resultRelInfo;
-	i = 0;
-	foreach(l, node->plans)
+	j = 0;
+	i = -1;
+	while ((i = bms_next_member(validsubplans, i)) >= 0)
 	{
-		subplan = (Plan *) lfirst(l);
+		subplan = (Plan *) list_nth(node->plans, i);
+
+		resultRelInfo = &estate->es_result_relations[node->resultRelIndex + i];
+		mtstate->resultRelInfos[j] = resultRelInfo;
 
 		/* Initialize the usesFdwDirectModify flag */
 		resultRelInfo->ri_usesFdwDirectModify = bms_is_member(i,
@@ -2384,9 +2477,9 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 		/* Now init the plan for this result rel */
 		estate->es_result_relation_info = resultRelInfo;
-		mtstate->mt_plans[i] = ExecInitNode(subplan, estate, eflags);
-		mtstate->mt_scans[i] =
-			ExecInitExtraTupleSlot(mtstate->ps.state, ExecGetResultType(mtstate->mt_plans[i]),
+		mtstate->mt_plans[j] = ExecInitNode(subplan, estate, eflags);
+		mtstate->mt_scans[j] =
+			ExecInitExtraTupleSlot(mtstate->ps.state, ExecGetResultType(mtstate->mt_plans[j]),
 								   table_slot_callbacks(resultRelInfo->ri_RelationDesc));
 
 		/* Also let FDWs init themselves for foreign-table result rels */
@@ -2402,9 +2495,7 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 															 i,
 															 eflags);
 		}
-
-		resultRelInfo++;
-		i++;
+		j++;
 	}
 
 	estate->es_result_relation_info = saved_resultRelInfo;
@@ -2453,33 +2544,35 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	/*
 	 * Initialize any WITH CHECK OPTION constraints if needed.
 	 */
-	resultRelInfo = mtstate->resultRelInfo;
-	i = 0;
-	foreach(l, node->withCheckOptionLists)
+	if (node->withCheckOptionLists != NIL)
 	{
-		List	   *wcoList = (List *) lfirst(l);
-		List	   *wcoExprs = NIL;
-		ListCell   *ll;
-
-		foreach(ll, wcoList)
+		j = 0;
+		i = -1;
+		while ((i = bms_next_member(validsubplans, i)) >= 0)
 		{
-			WithCheckOption *wco = (WithCheckOption *) lfirst(ll);
-			ExprState  *wcoExpr = ExecInitQual((List *) wco->qual,
-											   &mtstate->ps);
+			List	   *wcoList = (List *) list_nth(node->withCheckOptionLists, i);;
+			List	   *wcoExprs = NIL;
 
-			wcoExprs = lappend(wcoExprs, wcoExpr);
+			foreach(l, wcoList)
+			{
+				WithCheckOption *wco = (WithCheckOption *) lfirst(l);
+				ExprState  *wcoExpr = ExecInitQual((List *) wco->qual,
+												   &mtstate->ps);
+
+				wcoExprs = lappend(wcoExprs, wcoExpr);
+			}
+
+			resultRelInfo = mtstate->resultRelInfos[j];
+			resultRelInfo->ri_WithCheckOptions = wcoList;
+			resultRelInfo->ri_WithCheckOptionExprs = wcoExprs;
+			j++;
 		}
-
-		resultRelInfo->ri_WithCheckOptions = wcoList;
-		resultRelInfo->ri_WithCheckOptionExprs = wcoExprs;
-		resultRelInfo++;
-		i++;
 	}
 
 	/*
 	 * Initialize RETURNING projections if needed.
 	 */
-	if (node->returningLists)
+	if (node->returningLists != NIL)
 	{
 		TupleTableSlot *slot;
 		ExprContext *econtext;
@@ -2502,16 +2595,18 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		/*
 		 * Build a projection for each result rel.
 		 */
-		resultRelInfo = mtstate->resultRelInfo;
-		foreach(l, node->returningLists)
+		j = 0;
+		i = -1;
+		while ((i = bms_next_member(validsubplans, i)) >= 0)
 		{
-			List	   *rlist = (List *) lfirst(l);
+			List	   *rlist = (List *) list_nth(node->returningLists, i);
 
+			resultRelInfo = mtstate->resultRelInfos[j];
 			resultRelInfo->ri_returningList = rlist;
 			resultRelInfo->ri_projectReturning =
 				ExecBuildProjectionInfo(rlist, econtext, slot, &mtstate->ps,
 										resultRelInfo->ri_RelationDesc->rd_att);
-			resultRelInfo++;
+			j++;
 		}
 	}
 	else
@@ -2522,12 +2617,10 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		 */
 		mtstate->ps.plan->targetlist = NIL;
 		ExecInitResultTypeTL(&mtstate->ps);
-
-		mtstate->ps.ps_ExprContext = NULL;
 	}
 
 	/* Set the list of arbiter indexes if needed for ON CONFLICT */
-	resultRelInfo = mtstate->resultRelInfo;
+	resultRelInfo = mtstate->resultRelInfos[0];
 	if (node->onConflictAction != ONCONFLICT_NONE)
 		resultRelInfo->ri_onConflictArbiterIndexes = node->arbiterIndexes;
 
@@ -2618,7 +2711,6 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	}
 
 	/* select first subplan */
-	mtstate->mt_whichplan = 0;
 	subplan = (Plan *) linitial(node->plans);
 	EvalPlanQualSetPlan(&mtstate->mt_epqstate, subplan,
 						mtstate->mt_arowmarks[0]);
@@ -2667,12 +2759,12 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 		if (junk_filter_needed)
 		{
-			resultRelInfo = mtstate->resultRelInfo;
 			for (i = 0; i < nplans; i++)
 			{
 				JunkFilter *j;
 				TupleTableSlot *junkresslot;
 
+				resultRelInfo = mtstate->resultRelInfos[i];
 				subplan = mtstate->mt_plans[i]->plan;
 				if (operation == CMD_INSERT || operation == CMD_UPDATE)
 					ExecCheckPlanOutput(resultRelInfo->ri_RelationDesc,
@@ -2715,13 +2807,12 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 				}
 
 				resultRelInfo->ri_junkFilter = j;
-				resultRelInfo++;
 			}
 		}
 		else
 		{
 			if (operation == CMD_INSERT)
-				ExecCheckPlanOutput(mtstate->resultRelInfo->ri_RelationDesc,
+				ExecCheckPlanOutput(mtstate->resultRelInfos[0]->ri_RelationDesc,
 									subplan->targetlist);
 		}
 	}
@@ -2760,7 +2851,7 @@ ExecEndModifyTable(ModifyTableState *node)
 	 */
 	for (i = 0; i < node->mt_nplans; i++)
 	{
-		ResultRelInfo *resultRelInfo = node->resultRelInfo + i;
+		ResultRelInfo *resultRelInfo = node->resultRelInfos[i];
 
 		if (!resultRelInfo->ri_usesFdwDirectModify &&
 			resultRelInfo->ri_FdwRoutine != NULL &&

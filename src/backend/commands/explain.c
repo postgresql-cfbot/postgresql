@@ -2046,6 +2046,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 								  list_length(((MergeAppend *) plan)->mergeplans),
 								  es);
 			break;
+		case T_ModifyTable:
+			ExplainMissingMembers(((ModifyTableState *) planstate)->mt_nplans,
+								  list_length(((ModifyTable *) plan)->plans),
+								  es);
+			break;
 		default:
 			break;
 	}
@@ -3590,14 +3595,14 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 	/* Should we explicitly label target relations? */
 	labeltargets = (mtstate->mt_nplans > 1 ||
 					(mtstate->mt_nplans == 1 &&
-					 mtstate->resultRelInfo->ri_RangeTableIndex != node->nominalRelation));
+					 mtstate->resultRelInfos[0]->ri_RangeTableIndex != node->nominalRelation));
 
 	if (labeltargets)
 		ExplainOpenGroup("Target Tables", "Target Tables", false, es);
 
 	for (j = 0; j < mtstate->mt_nplans; j++)
 	{
-		ResultRelInfo *resultRelInfo = mtstate->resultRelInfo + j;
+		ResultRelInfo *resultRelInfo = mtstate->resultRelInfos[j];
 		FdwRoutine *fdwroutine = resultRelInfo->ri_FdwRoutine;
 
 		if (labeltargets)

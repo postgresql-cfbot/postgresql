@@ -70,6 +70,7 @@ typedef struct PartitionPruneContext
 
 extern PartitionPruneInfo *make_partition_pruneinfo(struct PlannerInfo *root,
 													struct RelOptInfo *parentrel,
+													List *resultRelations,
 													List *subpaths,
 													List *partitioned_rels,
 													List *prunequal);

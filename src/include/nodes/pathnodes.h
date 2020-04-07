@@ -1806,6 +1806,8 @@ typedef struct ModifyTablePath
 	Index		rootRelation;	/* Root RT index, if target is partitioned */
 	bool		partColsUpdated;	/* some part key in hierarchy updated */
 	List	   *resultRelations;	/* integer list of RT indexes */
+	/* RT indexes of non-leaf tables in a partition tree */
+	List	   *partitioned_rels;
 	List	   *subpaths;		/* Path(s) producing source data */
 	List	   *subroots;		/* per-target-table PlannerInfos */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */
@@ -1814,6 +1816,11 @@ typedef struct ModifyTablePath
 	OnConflictExpr *onconflict; /* ON CONFLICT clause, or NULL */
 	int			epqParam;		/* ID of Param for EvalPlanQual re-eval */
 } ModifyTablePath;
+
+#define IS_DUMMY_MODIFYTABLE(p) \
+	(IsA((p), ModifyTablePath) && \
+		list_length((p)->subpaths) == 1 && \
+		IS_DUMMY_APPEND(linitial((p)->subpaths)))
 
 /*
  * LimitPath represents applying LIMIT/OFFSET restrictions

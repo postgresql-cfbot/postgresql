@@ -200,6 +200,21 @@ DROP TABLE VARBIT_SHIFT_TABLE;
 SELECT get_bit(B'0101011000100', 10);
 SELECT set_bit(B'0101011000100100', 15, 1);
 SELECT set_bit(B'0101011000100100', 16, 1);	-- fail
+SELECT get_bit(
+       set_bit((repeat('Postgres', 512 * 1024 * 1024 / 8))::bytea, 0, 0)
+       ,0);
+SELECT get_bit(
+       set_bit((repeat('Postgres', 512 * 1024 * 1024 / 8))::bytea, 0, 1)
+       ,0);
+select get_bit(
+        set_bit((repeat('Postgres', 512 * 1024 * 1024 / 8))::bytea, 
+                512::bigint * 1024 * 1024 * 8 - 1, 0)
+        ,512::bigint * 1024 * 1024 * 8 - 1);
+select get_bit(
+        set_bit((repeat('Postgres', 512 * 1024 * 1024 / 8))::bytea,
+                512::bigint * 1024 * 1024 * 8 - 1, 1)
+       ,512::bigint * 1024 * 1024 * 8 - 1);
+
 
 -- Overlay
 SELECT overlay(B'0101011100' placing '001' from 2 for 3);

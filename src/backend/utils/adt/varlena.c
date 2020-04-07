@@ -389,7 +389,7 @@ byteaout(PG_FUNCTION_ARGS)
 	{
 		/* Print traditional escaped format */
 		char	   *vp;
-		int			len;
+		int64		len;
 		int			i;
 
 		len = 1;				/* empty string has 1 char */
@@ -3456,7 +3456,7 @@ Datum
 byteaGetBit(PG_FUNCTION_ARGS)
 {
 	bytea	   *v = PG_GETARG_BYTEA_PP(0);
-	int32		n = PG_GETARG_INT32(1);
+	int64		n = PG_GETARG_INT64(1);
 	int			byteNo,
 				bitNo;
 	int			len;
@@ -3464,14 +3464,17 @@ byteaGetBit(PG_FUNCTION_ARGS)
 
 	len = VARSIZE_ANY_EXHDR(v);
 
-	if (n < 0 || n >= len * 8)
+	if (n < 0 || n >= (int64)len * 8)
 		ereport(ERROR,
 				(errcode(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
-				 errmsg("index %d out of valid range, 0..%d",
-						n, len * 8 - 1)));
-
-	byteNo = n / 8;
-	bitNo = n % 8;
+				 errmsg("index "INT64_FORMAT" out of valid range, 0.."INT64_FORMAT,
+						n, (int64)len * 8 - 1)));
+	/*
+	 * The value of 'n' is smaller than 'len * 8', and 'len' is by int type,
+	 * so it is safe to downcasting 'n' from int64 to int.
+	 */
+	byteNo = (int)(n / 8);
+	bitNo = (int)(n % 8);
 
 	byte = ((unsigned char *) VARDATA_ANY(v))[byteNo];
 
@@ -3525,7 +3528,7 @@ Datum
 byteaSetBit(PG_FUNCTION_ARGS)
 {
 	bytea	   *res = PG_GETARG_BYTEA_P_COPY(0);
-	int32		n = PG_GETARG_INT32(1);
+	int64		n = PG_GETARG_INT64(1);
 	int32		newBit = PG_GETARG_INT32(2);
 	int			len;
 	int			oldByte,
@@ -3535,14 +3538,17 @@ byteaSetBit(PG_FUNCTION_ARGS)
 
 	len = VARSIZE(res) - VARHDRSZ;
 
-	if (n < 0 || n >= len * 8)
+	if (n < 0 || n >= (int64)len * 8)
 		ereport(ERROR,
 				(errcode(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
-				 errmsg("index %d out of valid range, 0..%d",
-						n, len * 8 - 1)));
-
-	byteNo = n / 8;
-	bitNo = n % 8;
+				 errmsg("index "INT64_FORMAT" out of valid range, 0.."INT64_FORMAT,
+						n, (int64)len * 8 - 1)));
+	/*
+	 * The value of 'n' is smaller than 'len * 8', and 'len' is by int type,
+	 * so it is safe to downcasting 'n' from int64 to int.
+	 */
+	byteNo = (int64)(n / 8);
+	bitNo = (int64)(n % 8);
 
 	/*
 	 * sanity check!

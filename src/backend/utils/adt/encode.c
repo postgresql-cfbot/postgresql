@@ -20,10 +20,10 @@
 
 struct pg_encoding
 {
-	unsigned	(*encode_len) (const char *data, unsigned dlen);
-	unsigned	(*decode_len) (const char *data, unsigned dlen);
-	unsigned	(*encode) (const char *data, unsigned dlen, char *res);
-	unsigned	(*decode) (const char *data, unsigned dlen, char *res);
+	uint64		(*encode_len) (const char *data, size_t dlen);
+	uint64		(*decode_len) (const char *data, size_t dlen);
+	uint64		(*encode) (const char *data, size_t dlen, char *res);
+	uint64		(*decode) (const char *data, size_t dlen, char *res);
 };
 
 static const struct pg_encoding *pg_find_encoding(const char *name);
@@ -39,9 +39,9 @@ binary_encode(PG_FUNCTION_ARGS)
 	Datum		name = PG_GETARG_DATUM(1);
 	text	   *result;
 	char	   *namebuf;
-	int			datalen,
-				resultlen,
-				res;
+	size_t		datalen;
+	uint64		res;
+	uint64		resultlen;
 	const struct pg_encoding *enc;
 
 	datalen = VARSIZE_ANY_EXHDR(data);
@@ -75,9 +75,9 @@ binary_decode(PG_FUNCTION_ARGS)
 	Datum		name = PG_GETARG_DATUM(1);
 	bytea	   *result;
 	char	   *namebuf;
-	int			datalen,
-				resultlen,
-				res;
+	size_t		datalen;
+	uint64		resultlen;
+	uint64		res;
 	const struct pg_encoding *enc;
 
 	datalen = VARSIZE_ANY_EXHDR(data);
@@ -122,8 +122,8 @@ static const int8 hexlookup[128] = {
 	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
 };
 
-unsigned
-hex_encode(const char *src, unsigned len, char *dst)
+uint64
+hex_encode(const char *src, size_t len, char *dst)
 {
 	const char *end = src + len;
 
@@ -133,7 +133,7 @@ hex_encode(const char *src, unsigned len, char *dst)
 		*dst++ = hextbl[*src & 0xF];
 		src++;
 	}
-	return len * 2;
+	return (int64)len * 2;
 }
 
 static inline char
@@ -152,8 +152,8 @@ get_hex(char c)
 	return (char) res;
 }
 
-unsigned
-hex_decode(const char *src, unsigned len, char *dst)
+uint64
+hex_decode(const char *src, size_t len, char *dst)
 {
 	const char *s,
 			   *srcend;
@@ -184,16 +184,16 @@ hex_decode(const char *src, unsigned len, char *dst)
 	return p - dst;
 }
 
-static unsigned
-hex_enc_len(const char *src, unsigned srclen)
+static uint64
+hex_enc_len(const char *src, size_t srclen)
 {
-	return srclen << 1;
+	return (uint64)srclen << 1;
 }
 
-static unsigned
-hex_dec_len(const char *src, unsigned srclen)
+static uint64
+hex_dec_len(const char *src, size_t srclen)
 {
-	return srclen >> 1;
+	return (uint64)srclen >> 1;
 }
 
 /*
@@ -214,8 +214,8 @@ static const int8 b64lookup[128] = {
 	41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,
 };
 
-static unsigned
-pg_base64_encode(const char *src, unsigned len, char *dst)
+static uint64
+pg_base64_encode(const char *src, size_t len, char *dst)
 {
 	char	   *p,
 			   *lend = dst + 76;
@@ -261,8 +261,8 @@ pg_base64_encode(const char *src, unsigned len, char *dst)
 	return p - dst;
 }
 
-static unsigned
-pg_base64_decode(const char *src, unsigned len, char *dst)
+static uint64
+pg_base64_decode(const char *src, size_t len, char *dst)
 {
 	const char *srcend = src + len,
 			   *s = src;
@@ -331,17 +331,17 @@ pg_base64_decode(const char *src, unsigned len, char *dst)
 }
 
 
-static unsigned
-pg_base64_enc_len(const char *src, unsigned srclen)
+static uint64
+pg_base64_enc_len(const char *src, size_t srclen)
 {
 	/* 3 bytes will be converted to 4, linefeed after 76 chars */
-	return (srclen + 2) * 4 / 3 + srclen / (76 * 3 / 4);
+	return ((uint64)srclen + 2) * 4 / 3 + (uint64)srclen / (76 * 3 / 4);
 }
 
-static unsigned
-pg_base64_dec_len(const char *src, unsigned srclen)
+static uint64
+pg_base64_dec_len(const char *src, size_t srclen)
 {
-	return (srclen * 3) >> 2;
+	return ((uint64)srclen * 3) >> 2;
 }
 
 /*
@@ -361,12 +361,12 @@ pg_base64_dec_len(const char *src, unsigned srclen)
 #define VAL(CH)			((CH) - '0')
 #define DIG(VAL)		((VAL) + '0')
 
-static unsigned
-esc_encode(const char *src, unsigned srclen, char *dst)
+static uint64
+esc_encode(const char *src, size_t srclen, char *dst)
 {
 	const char *end = src + srclen;
 	char	   *rp = dst;
-	int			len = 0;
+	uint64		len = 0;
 
 	while (src < end)
 	{
@@ -400,12 +400,12 @@ esc_encode(const char *src, unsigned srclen, char *dst)
 	return len;
 }
 
-static unsigned
-esc_decode(const char *src, unsigned srclen, char *dst)
+static uint64
+esc_decode(const char *src, size_t srclen, char *dst)
 {
 	const char *end = src + srclen;
 	char	   *rp = dst;
-	int			len = 0;
+	uint64		len = 0;
 
 	while (src < end)
 	{
@@ -448,11 +448,11 @@ esc_decode(const char *src, unsigned srclen, char *dst)
 	return len;
 }
 
-static unsigned
-esc_enc_len(const char *src, unsigned srclen)
+static uint64
+esc_enc_len(const char *src, size_t srclen)
 {
 	const char *end = src + srclen;
-	int			len = 0;
+	uint64		len = 0;
 
 	while (src < end)
 	{
@@ -469,11 +469,11 @@ esc_enc_len(const char *src, unsigned srclen)
 	return len;
 }
 
-static unsigned
-esc_dec_len(const char *src, unsigned srclen)
+static uint64
+esc_dec_len(const char *src, size_t srclen)
 {
 	const char *end = src + srclen;
-	int			len = 0;
+	uint64		len = 0;
 
 	while (src < end)
 	{

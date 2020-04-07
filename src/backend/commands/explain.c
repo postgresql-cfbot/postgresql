@@ -2532,7 +2532,7 @@ show_sort_group_keys(PlanState *planstate, const char *qlabel,
 
 	ExplainPropertyList(qlabel, result, es);
 	if (nPresortedKeys > 0)
-		ExplainPropertyList("Presorted Key", resultPresorted, es);
+		ExplainPropertyList("Pre-sorted Key", resultPresorted, es);
 }
 
 /*
@@ -2829,7 +2829,6 @@ show_incremental_sort_group_info(IncrementalSortGroupInfo *groupInfo,
 
 		ExplainPropertyList("Sort Methods Used", methodNames, es);
 
-		if (groupInfo->maxMemorySpaceUsed > 0)
 		{
 			long		avgSpace = groupInfo->totalMemorySpaceUsed / groupInfo->groupCount;
 			const char *spaceTypeName;
@@ -2841,12 +2840,12 @@ show_incremental_sort_group_info(IncrementalSortGroupInfo *groupInfo,
 			ExplainOpenGroup("Sort Space", memoryName.data, true, es);
 
 			ExplainPropertyInteger("Average Sort Space Used", "kB", avgSpace, es);
-			ExplainPropertyInteger("Maximum Sort Space Used", "kB",
+			ExplainPropertyInteger("Peak Sort Space Used", "kB",
 								   groupInfo->maxMemorySpaceUsed, es);
 
 			ExplainCloseGroup("Sort Spaces", memoryName.data, true, es);
 		}
-		if (groupInfo->maxDiskSpaceUsed > 0)
+
 		{
 			long		avgSpace = groupInfo->totalDiskSpaceUsed / groupInfo->groupCount;
 			const char *spaceTypeName;
@@ -2858,7 +2857,7 @@ show_incremental_sort_group_info(IncrementalSortGroupInfo *groupInfo,
 			ExplainOpenGroup("Sort Space", diskName.data, true, es);
 
 			ExplainPropertyInteger("Average Sort Space Used", "kB", avgSpace, es);
-			ExplainPropertyInteger("Maximum Sort Space Used", "kB",
+			ExplainPropertyInteger("Peak Sort Space Used", "kB",
 								   groupInfo->maxDiskSpaceUsed, es);
 
 			ExplainCloseGroup("Sort Spaces", diskName.data, true, es);
@@ -2869,7 +2868,7 @@ show_incremental_sort_group_info(IncrementalSortGroupInfo *groupInfo,
 }
 
 /*
- * If it's EXPLAIN ANALYZE, show tuplesort stats for a incremental sort node
+ * If it's EXPLAIN ANALYZE, show tuplesort stats for an incremental sort node
  */
 static void
 show_incremental_sort_info(IncrementalSortState *incrsortstate,
@@ -2891,7 +2890,7 @@ show_incremental_sort_info(IncrementalSortState *incrsortstate,
 		{
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 				appendStringInfo(es->str, " ");
-			show_incremental_sort_group_info(prefixsortGroupInfo, "Presorted", false, es);
+			show_incremental_sort_group_info(prefixsortGroupInfo, "Pre-sorted", false, es);
 		}
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 			appendStringInfo(es->str, "\n");
@@ -2908,7 +2907,7 @@ show_incremental_sort_info(IncrementalSortState *incrsortstate,
 			&incrsortstate->shared_info->sinfo[n];
 
 			/*
-			 * If a worker hasn't process any sort groups at all, then exclude
+			 * If a worker hasn't processed any sort groups at all, then exclude
 			 * it from output since it either didn't launch or didn't
 			 * contribute anything meaningful.
 			 */
@@ -2928,7 +2927,7 @@ show_incremental_sort_info(IncrementalSortState *incrsortstate,
 			{
 				if (es->format == EXPLAIN_FORMAT_TEXT)
 					appendStringInfo(es->str, " ");
-				show_incremental_sort_group_info(prefixsortGroupInfo, "Presorted", false, es);
+				show_incremental_sort_group_info(prefixsortGroupInfo, "Pre-sorted", false, es);
 			}
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 				appendStringInfo(es->str, "\n");

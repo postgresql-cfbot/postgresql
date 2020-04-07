@@ -808,7 +808,7 @@ tuplesort_begin_common(int workMem, SortCoordinate coordinate,
  *
  * Setup, or reset, all state need for processing a new set of tuples with this
  * sort state. Called both from tuplesort_begin_common (the first time sorting
- * with this sort state) and tuplesort_reseti (for subsequent usages).
+ * with this sort state) and tuplesort_reset (for subsequent usages).
  */
 static void
 tuplesort_begin_batch(Tuplesortstate *state)
@@ -1428,11 +1428,11 @@ tuplesort_updatemax(Tuplesortstate *state)
 	}
 
 	/*
-	 * Sort evicts data to the disk when it didn't manage to fit those data to
-	 * the main memory.  This is why we assume space used on the disk to be
+	 * Sort evicts data to the disk when it didn't manage to fit the data in
+	 * main memory.  This is why we assume space used on the disk to be
 	 * more important for tracking resource usage than space used in memory.
-	 * Note that amount of space occupied by some tuple set on the disk might
-	 * be less than amount of space occupied by the same tuple set in the
+	 * Note that amount of space occupied by some tupleset on the disk might
+	 * be less than amount of space occupied by the same tupleset in the
 	 * memory due to more compact representation.
 	 */
 	if ((isSpaceDisk && !state->isMaxSpaceDisk) ||

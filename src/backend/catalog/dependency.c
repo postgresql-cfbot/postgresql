@@ -78,6 +78,7 @@
 #include "rewrite/rewriteRemove.h"
 #include "storage/lmgr.h"
 #include "utils/acl.h"
+#include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
@@ -138,6 +139,9 @@ typedef struct
 {
 	ObjectAddresses *addrs;		/* addresses being accumulated */
 	List	   *rtables;		/* list of rangetables to resolve Vars */
+	bool		track_version;	/* whether caller asked to track dependency
+								 * versions */
+	NodeTag		type;			/* nodetag of the current node */
 } find_expr_references_context;
 
 /*
@@ -435,6 +439,81 @@ performMultipleDeletions(const ObjectAddresses *objects,
 	/* And clean up */
 	free_object_addresses(targetObjects);
 
+	table_close(depRel, RowExclusiveLock);
+}
+
+/*
+ * Call a function for all objects that depend on 'object'.  If the function
+ * returns a non-NULL pointer to a new version string, update the version.
+ */
+void
+visitDependentObjects(const ObjectAddress *object,
+					  VisitDependentObjectsFun callback,
+					  void *userdata)
+{
+	Relation	depRel;
+	ScanKeyData key[3];
+	SysScanDesc scan;
+	HeapTuple	tup;
+	ObjectAddress otherObject;
+
+	ScanKeyInit(&key[0],
+				Anum_pg_depend_classid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(object->classId));
+	ScanKeyInit(&key[1],
+				Anum_pg_depend_objid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(object->objectId));
+	ScanKeyInit(&key[2],
+				Anum_pg_depend_objsubid,
+				BTEqualStrategyNumber, F_INT4EQ,
+				Int32GetDatum(object->objectSubId));
+
+	depRel = table_open(DependRelationId, RowExclusiveLock);
+	scan = systable_beginscan(depRel, DependDependerIndexId, true,
+							  NULL, 3, key);
+
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
+	{
+		Form_pg_depend foundDep = (Form_pg_depend) GETSTRUCT(tup);
+		char	   *cur_version,
+				   *new_version;
+		Datum		depversion;
+		bool		isnull;
+
+		otherObject.classId = foundDep->refclassid;
+		otherObject.objectId = foundDep->refobjid;
+		otherObject.objectSubId = foundDep->refobjsubid;
+
+		depversion = heap_getattr(tup, Anum_pg_depend_refobjversion,
+								  RelationGetDescr(depRel), &isnull);
+
+		cur_version = isnull ? NULL : TextDatumGetCString(depversion);
+
+		new_version = callback(&otherObject, cur_version, userdata);
+		if (new_version)
+		{
+			Datum		values[Natts_pg_depend];
+			bool		nulls[Natts_pg_depend];
+			bool		replaces[Natts_pg_depend];
+
+			memset(values, 0, sizeof(values));
+			memset(nulls, false, sizeof(nulls));
+			memset(replaces, false, sizeof(replaces));
+
+			values[Anum_pg_depend_refobjversion - 1] =
+				CStringGetTextDatum(new_version);
+			replaces[Anum_pg_depend_refobjversion - 1] = true;
+
+			tup = heap_modify_tuple(tup, RelationGetDescr(depRel), values,
+									nulls, replaces);
+			CatalogTupleUpdate(depRel, &tup->t_self, tup);
+
+			heap_freetuple(tup);
+		}
+	}
+	systable_endscan(scan);
 	table_close(depRel, RowExclusiveLock);
 }
 
@@ -1591,6 +1670,10 @@ recordDependencyOnExpr(const ObjectAddress *depender,
 	find_expr_references_context context;
 
 	context.addrs = new_object_addresses();
+	if (expr)
+		context.type = expr->type;
+	else
+		context.type = T_Invalid;
 
 	/* Set up interpretation for Vars at varlevelsup = 0 */
 	context.rtables = list_make1(rtable);
@@ -1603,8 +1686,10 @@ recordDependencyOnExpr(const ObjectAddress *depender,
 
 	/* And record 'em */
 	recordMultipleDependencies(depender,
-							   context.addrs->refs, context.addrs->numrefs,
-							   behavior);
+							   context.addrs->refs,
+							   context.addrs->numrefs,
+							   behavior,
+							   false);
 
 	free_object_addresses(context.addrs);
 }
@@ -1631,12 +1716,18 @@ recordDependencyOnSingleRelExpr(const ObjectAddress *depender,
 								Node *expr, Oid relId,
 								DependencyType behavior,
 								DependencyType self_behavior,
-								bool reverse_self)
+								bool reverse_self,
+								bool track_version)
 {
 	find_expr_references_context context;
 	RangeTblEntry rte;
 
 	context.addrs = new_object_addresses();
+	context.track_version = track_version;
+	if (expr)
+		context.type = expr->type;
+	else
+		context.type = T_Invalid;
 
 	/* We gin up a rather bogus rangetable list to handle Vars */
 	MemSet(&rte, 0, sizeof(rte));
@@ -1690,8 +1781,10 @@ recordDependencyOnSingleRelExpr(const ObjectAddress *depender,
 		/* Record the self-dependencies with the appropriate direction */
 		if (!reverse_self)
 			recordMultipleDependencies(depender,
-									   self_addrs->refs, self_addrs->numrefs,
-									   self_behavior);
+									   self_addrs->refs,
+									   self_addrs->numrefs,
+									   self_behavior,
+									   track_version);
 		else
 		{
 			/* Can't use recordMultipleDependencies, so do it the hard way */
@@ -1710,8 +1803,10 @@ recordDependencyOnSingleRelExpr(const ObjectAddress *depender,
 
 	/* Record the external dependencies */
 	recordMultipleDependencies(depender,
-							   context.addrs->refs, context.addrs->numrefs,
-							   behavior);
+							   context.addrs->refs,
+							   context.addrs->numrefs,
+							   behavior,
+							   track_version);
 
 	free_object_addresses(context.addrs);
 }
@@ -1733,8 +1828,13 @@ static bool
 find_expr_references_walker(Node *node,
 							find_expr_references_context *context)
 {
+	NodeTag		parent_type = context->type;
+
 	if (node == NULL)
 		return false;
+
+	context->type = node->type;
+
 	if (IsA(node, Var))
 	{
 		Var		   *var = (Var *) node;
@@ -1767,6 +1867,49 @@ find_expr_references_walker(Node *node,
 			/* If it's a plain relation, reference this column */
 			add_object_address(OCLASS_CLASS, rte->relid, var->varattno,
 							   context->addrs);
+
+			/*
+			 * Record collations from the type itself, or underlying in case
+			 * of complex type.  Note that if the direct parent is a
+			 * CollateExpr node, there's no need to record the type underlying
+			 * collation if any.  A dependency already exists for the owning
+			 * relation, and a change in the collation sort order wouldn't
+			 * cause any harm as the collation isn't used at all in such case.
+			 */
+			if (parent_type != T_CollateExpr)
+			{
+				/* type's collation if valid */
+				if (OidIsValid(var->varcollid))
+				{
+					add_object_address(OCLASS_COLLATION, var->varcollid, 0,
+									   context->addrs);
+				}
+
+				/*
+				 * otherwise, it may be a composite type having underlying
+				 * collations
+				 */
+				else if (var->vartype >= FirstNormalObjectId)
+				{
+					List	   *collations = NIL;
+					ListCell   *lc;
+
+					collations = GetTypeCollations(var->vartype, false);
+
+					foreach(lc, collations)
+					{
+						Oid			coll = lfirst_oid(lc);
+
+						if (OidIsValid(coll) &&
+							(coll != DEFAULT_COLLATION_OID ||
+							 context->track_version)
+							)
+							add_object_address(OCLASS_COLLATION,
+											   lfirst_oid(lc), 0,
+											   context->addrs);
+					}
+				}
+			}
 		}
 
 		/*
@@ -1792,10 +1935,12 @@ find_expr_references_walker(Node *node,
 		 * We must also depend on the constant's collation: it could be
 		 * different from the datatype's, if a CollateExpr was const-folded to
 		 * a simple constant.  However we can save work in the most common
-		 * case where the collation is "default", since we know that's pinned.
+		 * case where the collation is "default", since we know that's pinned,
+		 * if the caller didn't ask to track dependency versions.
 		 */
 		if (OidIsValid(con->constcollid) &&
-			con->constcollid != DEFAULT_COLLATION_OID)
+			(con->constcollid != DEFAULT_COLLATION_OID ||
+			 context->track_version))
 			add_object_address(OCLASS_COLLATION, con->constcollid, 0,
 							   context->addrs);
 
@@ -1885,7 +2030,8 @@ find_expr_references_walker(Node *node,
 						   context->addrs);
 		/* and its collation, just as for Consts */
 		if (OidIsValid(param->paramcollid) &&
-			param->paramcollid != DEFAULT_COLLATION_OID)
+			(param->paramcollid != DEFAULT_COLLATION_OID ||
+			 context->track_version))
 			add_object_address(OCLASS_COLLATION, param->paramcollid, 0,
 							   context->addrs);
 	}
@@ -1973,7 +2119,8 @@ find_expr_references_walker(Node *node,
 							   context->addrs);
 		/* the collation might not be referenced anywhere else, either */
 		if (OidIsValid(fselect->resultcollid) &&
-			fselect->resultcollid != DEFAULT_COLLATION_OID)
+			(fselect->resultcollid != DEFAULT_COLLATION_OID ||
+			 context->track_version))
 			add_object_address(OCLASS_COLLATION, fselect->resultcollid, 0,
 							   context->addrs);
 	}
@@ -2004,7 +2151,8 @@ find_expr_references_walker(Node *node,
 						   context->addrs);
 		/* the collation might not be referenced anywhere else, either */
 		if (OidIsValid(relab->resultcollid) &&
-			relab->resultcollid != DEFAULT_COLLATION_OID)
+			(relab->resultcollid != DEFAULT_COLLATION_OID ||
+			 context->track_version))
 			add_object_address(OCLASS_COLLATION, relab->resultcollid, 0,
 							   context->addrs);
 	}
@@ -2017,7 +2165,8 @@ find_expr_references_walker(Node *node,
 						   context->addrs);
 		/* the collation might not be referenced anywhere else, either */
 		if (OidIsValid(iocoerce->resultcollid) &&
-			iocoerce->resultcollid != DEFAULT_COLLATION_OID)
+			(iocoerce->resultcollid != DEFAULT_COLLATION_OID ||
+			 context->track_version))
 			add_object_address(OCLASS_COLLATION, iocoerce->resultcollid, 0,
 							   context->addrs);
 	}
@@ -2030,7 +2179,8 @@ find_expr_references_walker(Node *node,
 						   context->addrs);
 		/* the collation might not be referenced anywhere else, either */
 		if (OidIsValid(acoerce->resultcollid) &&
-			acoerce->resultcollid != DEFAULT_COLLATION_OID)
+			(acoerce->resultcollid != DEFAULT_COLLATION_OID ||
+			 context->track_version))
 			add_object_address(OCLASS_COLLATION, acoerce->resultcollid, 0,
 							   context->addrs);
 		/* fall through to examine arguments */
@@ -2119,7 +2269,8 @@ find_expr_references_walker(Node *node,
 			add_object_address(OCLASS_PROC, wc->endInRangeFunc, 0,
 							   context->addrs);
 		if (OidIsValid(wc->inRangeColl) &&
-			wc->inRangeColl != DEFAULT_COLLATION_OID)
+			(wc->inRangeColl != DEFAULT_COLLATION_OID ||
+			 context->track_version))
 			add_object_address(OCLASS_COLLATION, wc->inRangeColl, 0,
 							   context->addrs);
 		/* fall through to examine substructure */
@@ -2264,7 +2415,9 @@ find_expr_references_walker(Node *node,
 		{
 			Oid			collid = lfirst_oid(ct);
 
-			if (OidIsValid(collid) && collid != DEFAULT_COLLATION_OID)
+			if (OidIsValid(collid) &&
+				(collid != DEFAULT_COLLATION_OID ||
+				 context->track_version))
 				add_object_address(OCLASS_COLLATION, collid, 0,
 								   context->addrs);
 		}
@@ -2286,7 +2439,9 @@ find_expr_references_walker(Node *node,
 		{
 			Oid			collid = lfirst_oid(ct);
 
-			if (OidIsValid(collid) && collid != DEFAULT_COLLATION_OID)
+			if (OidIsValid(collid) &&
+				(collid != DEFAULT_COLLATION_OID ||
+				 context->track_version))
 				add_object_address(OCLASS_COLLATION, collid, 0,
 								   context->addrs);
 		}
@@ -2683,7 +2838,8 @@ record_object_address_dependencies(const ObjectAddress *depender,
 	eliminate_duplicate_dependencies(referenced);
 	recordMultipleDependencies(depender,
 							   referenced->refs, referenced->numrefs,
-							   behavior);
+							   behavior,
+							   false);
 }
 
 /*

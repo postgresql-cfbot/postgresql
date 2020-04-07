@@ -31,6 +31,8 @@
 #include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
+#include "catalog/catalog.h"
+#include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_inherits.h"
@@ -632,6 +634,36 @@ vacuum_open_relation(Oid relid, RangeVar *relation, int options,
 	{
 		onerel = NULL;
 		rel_lock = false;
+	}
+
+	/*
+	 * Perform version sanity checks on the relation underlying indexes if
+	 * it's not a VACUUM FULL, as VACUUM FULL will recreate the index and
+	 * update the recorded collation version.
+	 */
+	if (!(options & VACOPT_FULL) && onerel && !IsSystemRelation(onerel) &&
+		onerel->rd_rel->relhasindex)
+	{
+		List	   *indexoidlist;
+		ListCell   *l;
+
+		indexoidlist = RelationGetIndexList(onerel);
+		foreach(l, indexoidlist)
+		{
+			Oid			indexoid = lfirst_oid(l);
+			Relation	indexRelation;
+
+			indexRelation = index_open(indexoid, AccessShareLock);
+
+			/* Warn if any dependent collations' versions have moved. */
+			if (!indexRelation->rd_version_checked)
+			{
+				index_check_collation_versions(indexoid);
+				indexRelation->rd_version_checked = true;
+			}
+
+			index_close(indexRelation, NoLock);
+		}
 	}
 
 	/* if relation is opened, leave */

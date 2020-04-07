@@ -213,6 +213,24 @@
      </varlistentry>
 
      <varlistentry>
+      <term><option>--collation-binary-compatible</option></term>
+      <listitem>
+       <para>
+        After upgrading from a release of <productname>PostgreSQL</productname>
+        older than 13, warnings may be reported when collation-dependent
+        indexes are first accessed.  This is because
+        <application>pg_upgrade</application> records the collation versions
+        as unknown, so <productname>PostgreSQL</productname> considers the
+        indexes to be potentially corrupted.  If you're certain that the
+        collation definitions used by your operating system or ICU haven't
+        changed since all indexes were created, you can use this flag
+        to mark all indexes as using the currently installed version.
+        Otherwise, see <xref linkend="sql-reindex"/>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-?</option></term>
       <term><option>--help</option></term>
       <listitem><para>show help, then exit</para></listitem>

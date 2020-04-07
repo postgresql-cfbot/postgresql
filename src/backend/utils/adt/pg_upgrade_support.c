@@ -13,6 +13,7 @@
 
 #include "catalog/binary_upgrade.h"
 #include "catalog/heap.h"
+#include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_type.h"
 #include "commands/extension.h"
@@ -205,6 +206,30 @@ binary_upgrade_set_missing_value(PG_FUNCTION_ARGS)
 
 	CHECK_IS_BINARY_UPGRADE;
 	SetAttrMissing(table_id, cattname, cvalue);
+
+	PG_RETURN_VOID();
+}
+
+Datum
+binary_upgrade_set_index_coll_version(PG_FUNCTION_ARGS)
+{
+	Oid			relid;
+	Oid			coll;
+	char	   *version;
+
+	CHECK_IS_BINARY_UPGRADE;
+
+	relid = PG_GETARG_OID(0);
+
+	/* Detect if a collation is specified */
+	if (PG_ARGISNULL(1))
+		coll = InvalidOid;
+	else
+		coll = PG_GETARG_OID(1);
+
+	version = TextDatumGetCString(PG_GETARG_TEXT_PP(2));
+
+	index_force_collation_versions(relid, coll, version);
 
 	PG_RETURN_VOID();
 }

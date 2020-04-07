@@ -366,6 +366,9 @@ typedef struct _indxInfo
 	int			indnattrs;		/* total number of index attributes */
 	Oid		   *indkeys;		/* In spite of the name 'indkeys' this field
 								 * contains both key and nonkey attributes */
+	char	   *inddependoids;	/* oids of collation this index depends on */
+	char	   *inddependversions;	/* version of collation this index depends
+									 * on */
 	bool		indisclustered;
 	bool		indisreplident;
 	Oid			parentidx;		/* if partitioned, parent index OID */

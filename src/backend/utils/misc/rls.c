@@ -17,6 +17,7 @@
 #include "access/htup.h"
 #include "access/htup_details.h"
 #include "access/transam.h"
+#include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_class.h"
 #include "miscadmin.h"
@@ -54,6 +55,7 @@ check_enable_rls(Oid relid, Oid checkAsUser, bool noError)
 	Oid			user_id = checkAsUser ? checkAsUser : GetUserId();
 	HeapTuple	tuple;
 	Form_pg_class classform;
+	char		relkind;
 	bool		relrowsecurity;
 	bool		relforcerowsecurity;
 	bool		amowner;
@@ -62,16 +64,31 @@ check_enable_rls(Oid relid, Oid checkAsUser, bool noError)
 	if (relid < (Oid) FirstNormalObjectId)
 		return RLS_NONE;
 
-	/* Fetch relation's relrowsecurity and relforcerowsecurity flags */
+	/* Fetch info from the relation's pg_class row */
 	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tuple))
 		return RLS_NONE;
 	classform = (Form_pg_class) GETSTRUCT(tuple);
 
+	relkind = classform->relkind;
 	relrowsecurity = classform->relrowsecurity;
 	relforcerowsecurity = classform->relforcerowsecurity;
 
 	ReleaseSysCache(tuple);
+
+	/*
+	 * If it's an index, transfer our attention to the underlying table.  This
+	 * allows the pg_stats view to do the right thing with statistics for
+	 * indexes.
+	 */
+	if (relkind == RELKIND_INDEX)
+	{
+		Oid			tableoid = IndexGetRelation(relid, true);
+
+		if (!OidIsValid(tableoid))
+			return RLS_NONE;	/* index was just dropped? */
+		return check_enable_rls(tableoid, user_id, noError);
+	}
 
 	/* Nothing to do if the relation does not have RLS */
 	if (!relrowsecurity)

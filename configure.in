@@ -774,6 +774,9 @@ PGAC_ARG_BOOL(with, python, no, [build Python modules (PL/Python)])
 AC_MSG_RESULT([$with_python])
 AC_SUBST(with_python)
 
+PGAC_ARG_BOOL(with, python2-stub, no, [build Python 2 compatibility stub])
+AC_SUBST(with_python2_stub)
+
 #
 # GSSAPI
 #
@@ -1064,6 +1067,12 @@ fi
 if test "$with_python" = yes; then
   PGAC_PATH_PYTHON
   PGAC_CHECK_PYTHON_EMBED_SETUP
+  # Disable building Python 2 stub if primary version isn't Python 3
+  if test "$python_majorversion" -lt 3; then
+    with_python2_stub=no
+  fi
+else
+  with_python2_stub=no
 fi
 
 if test "$cross_compiling" = yes && test -z "$with_system_tzdata"; then

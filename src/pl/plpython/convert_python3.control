@@ -1,0 +1,5 @@
+# convert_python3 extension
+comment = 'convert plpython[2]u functions to plpython3u'
+default_version = '1.0'
+relocatable = true
+requires = 'plpython3u'

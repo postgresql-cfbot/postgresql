@@ -77,13 +77,7 @@
      <para>
       The language named <literal>plpythonu</literal> implements
       PL/Python based on the default Python language variant, which is
-      currently Python 2.  (This default is independent of what any
-      local Python installations might consider to be
-      their <quote>default</quote>, for example,
-      what <filename>/usr/bin/python</filename> might be.)  The
-      default will probably be changed to Python 3 in a distant future
-      release of PostgreSQL, depending on the progress of the
-      migration to Python 3 in the Python community.
+      determined by the person who builds and installs PostgreSQL.
      </para>
     </listitem>
    </itemizedlist>
@@ -103,9 +97,22 @@
     The built variant depends on which Python version was found during
     the installation or which version was explicitly set using
     the <envar>PYTHON</envar> environment variable;
-    see <xref linkend="install-procedure"/>.  To make both variants of
-    PL/Python available in one installation, the source tree has to be
-    configured and built twice.
+    see <xref linkend="install-procedure"/>.  To make working versions of
+    both variants of PL/Python available in one installation, the source
+    tree has to be configured and built twice.
+   </para>
+
+   <para>
+    However, if the builder specifies both <option>--with-python</option>
+    and <option>--with-python2-stub</option> while building with Python 3,
+    then in addition to the working Python-3-based PL/Python,
+    a <quote>stub</quote> version of <literal>plpython2u</literal> is
+    produced.  This stub is non-functional and will simply throw errors if
+    any <literal>plpython2u</literal> function is executed, but its
+    presence allows such functions to be loaded into the database in
+    preparation for conversion to <literal>plpython3u</literal>.  This
+    configuration also causes <literal>plpythonu</literal> to become
+    Python 3 rather than Python 2.
    </para>
   </tip>
 
@@ -115,59 +122,41 @@
    <itemizedlist>
     <listitem>
      <para>
-      Existing users and users who are currently not interested in
-      Python 3 use the language name <literal>plpythonu</literal> and
-      don't have to change anything for the foreseeable future.  It is
-      recommended to gradually <quote>future-proof</quote> the code
-      via migration to Python 2.6/2.7 to simplify the eventual
-      migration to Python 3.
+      Use the language name <literal>plpythonu</literal> if you have
+      simple Python code that works for either Python 2 or Python 3;
+      or if you are prepared to migrate your code whenever your packager
+      decides to change the default Python version.
      </para>
 
      <para>
       In practice, many PL/Python functions will migrate to Python 3
-      with few or no changes.
+      with few or no changes.  However, there are some cases that
+      will require more work.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      Users who know that they have heavily Python 2 dependent code
-      and don't plan to ever change it can make use of
+      If you know that you have heavily Python 2 dependent code
+      and don't plan to ever change it, you can make use of
       the <literal>plpython2u</literal> language name.  This will
-      continue to work into the very distant future, until Python 2
-      support might be completely dropped by PostgreSQL.
+      continue to work for as long as your operating system platform
+      continues to provide Python 2.  PostgreSQL itself may eventually
+      drop support for this option, but that is unlikely to happen
+      as long as any platform support remains in the wild.
      </para>
     </listitem>
 
     <listitem>
      <para>
-      Users who want to dive into Python 3 can use
-      the <literal>plpython3u</literal> language name, which will keep
-      working forever by today's standards.  In the distant future,
-      when Python 3 might become the default, they might like to
-      remove the <quote>3</quote> for aesthetic reasons.
-     </para>
-    </listitem>
-
-    <listitem>
-     <para>
-      Daredevils, who want to build a Python-3-only operating system
-      environment, can change the contents of
-      <literal>plpythonu</literal>'s extension control and script files
-      to make <literal>plpythonu</literal> be equivalent
-      to <literal>plpython3u</literal>, keeping in mind that this
-      would make their installation incompatible with most of the rest
-      of the world.
+      If you know your code requires Python 3, use
+      the <literal>plpython3u</literal> language name.  You can also
+      use this language name to tag functions that have been successfully
+      converted from Python 2, so as to keep track of which functions have
+      been converted and which have not.
      </para>
     </listitem>
    </itemizedlist>
-  </para>
-
-  <para>
-   See also the
-   document <ulink url="https://docs.python.org/3/whatsnew/3.0.html">What's
-   New In Python 3.0</ulink> for more information about porting to
-   Python 3.
   </para>
 
   <para>
@@ -178,7 +167,93 @@
    Python major versions in a session, which will abort the session if
    a mismatch is detected.  It is possible, however, to use both
    PL/Python variants in the same database, from separate sessions.
+   (Also, the <quote>stub</quote> version of <literal>plpython2u</literal>
+   does not present any conflicts.)
   </para>
+
+  <sect2 id="plpython-python3-conversion">
+   <title>Converting from Python 2 to Python 3</title>
+
+   <para>
+    See the
+    document <ulink url="https://docs.python.org/3/whatsnew/3.0.html">What's
+    New In Python 3.0</ulink> for the Python community's information and
+    recommendations about porting to Python 3.
+   </para>
+
+   <para>
+    <productname>PostgreSQL</productname> provides some support for helping
+    you to convert existing Python 2 routines to Python 3.  In an
+    installation built with Python 3, there is an
+    extension <filename>convert_python3</filename> that changes functions
+    and procedures from the <literal>plpythonu</literal>
+    and <literal>plpython2u</literal> languages to
+    the <literal>plpython3u</literal> language.  While doing so, it applies
+    the <filename>2to3</filename> tool described in the above document to
+    the body of each such routine.
+   </para>
+
+   <para>
+    Using <filename>convert_python3</filename> can be as simple as:
+<programlisting>
+CREATE EXTENSION convert_python3;
+CALL convert_python3_all();
+</programlisting>
+    This must be done as database superuser.  If you wish, you can drop the
+    extension once you're done converting everything.
+   </para>
+
+   <para>
+    Since <filename>convert_python3</filename> is Python 3 code, be careful
+    not to install or run it in a session that has previously executed any
+    Python 2 code.  As explained above, that won't work.
+   </para>
+
+   <para>
+    <function>convert_python3_all</function> has two optional arguments: the
+    name of the conversion tool to use (by default <literal>2to3</literal>,
+    but you might for instance need to provide a full path name) and any
+    special command-line options to provide to it.  You might for example
+    want to adjust the set of <quote>fixer</quote> rules
+    that <literal>2to3</literal> applies:
+<programlisting>
+CALL convert_python3_all(options =&gt; '-f idioms -x apply');
+</programlisting>
+    See <literal>2to3</literal>'s
+    <ulink url="https://docs.python.org/3/library/2to3.html">documentation</ulink>
+    for more information.
+   </para>
+
+   <para>
+    The <filename>convert_python3</filename> extension also provides a
+    procedure that converts just one Python 2 function at a time:
+<programlisting>
+CALL convert_python3_one('myfunc(int)');
+</programlisting>
+    The argument is the target function's OID, which can be written as
+    a <type>regprocedure</type> constant (see
+    <xref linkend="datatype-oid"/>).  The main reason to use this would be
+    if you need to use different options for different functions.  It has
+    the same optional arguments as <function>convert_python3_all</function>:
+<programlisting>
+CALL convert_python3_one('otherfunc(text)', tool =&gt; '/usr/bin/2to3',
+                         options =&gt; '-f idioms');
+</programlisting>
+   </para>
+
+   <para>
+    If you have needs that go beyond this, consult the source code for
+    the <filename>convert_python3</filename> extension (it's just a
+    couple of <literal>plpython3u</literal> procedures) and adapt those
+    procedures as necessary.
+   </para>
+
+   <para>
+    Keep in mind that if you've constructed any <command>DO</command> blocks
+    that use Python 2 code, those will have to be fixed up manually,
+    wherever the source code for them exists.
+   </para>
+  </sect2>
  </sect1>
 
  <sect1 id="plpython-funcs">

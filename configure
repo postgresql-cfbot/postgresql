@@ -716,6 +716,7 @@ with_ldap
 with_krb_srvnam
 krb_srvtab
 with_gssapi
+with_python2_stub
 with_python
 with_perl
 with_tcl
@@ -849,6 +850,7 @@ with_tcl
 with_tclconfig
 with_perl
 with_python
+with_python2_stub
 with_gssapi
 with_krb_srvnam
 with_pam
@@ -1550,6 +1552,7 @@ Optional Packages:
   --with-tclconfig=DIR    tclConfig.sh is in DIR
   --with-perl             build Perl modules (PL/Perl)
   --with-python           build Python modules (PL/Python)
+  --with-python2-stub     build Python 2 compatibility stub
   --with-gssapi           build with GSSAPI support
   --with-krb-srvnam=NAME  default service principal name in Kerberos (GSSAPI)
                           [postgres]
@@ -7666,6 +7669,32 @@ fi
 $as_echo "$with_python" >&6; }
 
 
+
+
+
+# Check whether --with-python2-stub was given.
+if test "${with_python2_stub+set}" = set; then :
+  withval=$with_python2_stub;
+  case $withval in
+    yes)
+      :
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-python2-stub option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_python2_stub=no
+
+fi
+
+
+
+
 #
 # GSSAPI
 #
@@ -9852,6 +9881,12 @@ $as_echo "${python_libspec} ${python_additional_libs}" >&6; }
 
 
 
+  # Disable building Python 2 stub if primary version isn't Python 3
+  if test "$python_majorversion" -lt 3; then
+    with_python2_stub=no
+  fi
+else
+  with_python2_stub=no
 fi
 
 if test "$cross_compiling" = yes && test -z "$with_system_tzdata"; then

@@ -1151,6 +1151,7 @@ sub GetFakeConfigure
 	$cfg .= ' --with-tcl'           if ($self->{options}->{tcl});
 	$cfg .= ' --with-perl'          if ($self->{options}->{perl});
 	$cfg .= ' --with-python'        if ($self->{options}->{python});
+	$cfg .= ' --with-python2-stub'  if ($self->{options}->{python2_stub});
 
 	return $cfg;
 }

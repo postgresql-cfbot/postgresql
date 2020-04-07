@@ -154,6 +154,7 @@ sub Install
 		my @pldirs             = ('src/pl/plpgsql/src');
 		push @pldirs, "src/pl/plperl"   if $config->{perl};
 		push @pldirs, "src/pl/plpython" if $config->{python};
+		push @pldirs, "src/pl/stub_plpython2" if $config->{python2_stub};
 		push @pldirs, "src/pl/tcl"      if $config->{tcl};
 		File::Find::find(
 			{

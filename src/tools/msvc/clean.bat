@@ -26,6 +26,7 @@ if exist src\interfaces\ecpg\test\win32ver.rc del /q src\interfaces\ecpg\test\wi
 if exist src\pl\plperl\win32ver.rc del /q src\pl\plperl\win32ver.rc
 if exist src\pl\plpgsql\src\win32ver.rc del /q src\pl\plpgsql\src\win32ver.rc
 if exist src\pl\plpython\win32ver.rc del /q src\pl\plpython\win32ver.rc
+if exist src\pl\stub_plpython2\win32ver.rc del /q src\pl\stub_plpython2\win32ver.rc
 if exist src\pl\tcl\win32ver.rc del /q src\pl\tcl\win32ver.rc
 if exist src\test\isolation\win32ver.rc del /q src\test\isolation\win32ver.rc
 if exist src\test\regress\win32ver.rc del /q src\test\regress\win32ver.rc

@@ -26,6 +26,12 @@ else
 ALWAYS_SUBDIRS += plpython
 endif
 
+ifeq ($(with_python2_stub), yes)
+SUBDIRS += stub_plpython2
+else
+ALWAYS_SUBDIRS += stub_plpython2
+endif
+
 ifeq ($(with_tcl), yes)
 SUBDIRS += tcl
 else

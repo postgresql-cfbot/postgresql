@@ -1,0 +1,11 @@
+--
+-- Test stub plpython2 and convert_python3 extension
+--
+-- skip test unless we have python3 installed and the others are available
+SELECT (SELECT count(*) FROM pg_extension WHERE extname = 'plpython3u') = 0 OR
+       (SELECT count(*) FROM pg_available_extensions WHERE name = 'plpython2u') = 0 OR
+       (SELECT count(*) FROM pg_available_extensions WHERE name = 'plpythonu') = 0 OR
+       (SELECT count(*) FROM pg_available_extensions WHERE name = 'convert_python3') = 0
+       AS skip_test \gset
+\if :skip_test
+\quit

@@ -533,6 +533,22 @@ sub mkvcbuild
 			'ltree',                        'contrib');
 		$ltree_plpython->AddDefine(
 			'PLPYTHON_LIBNAME="plpython' . $pymajorver . '"');
+
+		# Ignore --with-python2-stub if building real plpython2
+		$solution->{options}->{python2_stub} = 0 if $pymajorver < 3;
+
+		# Otherwise, if the stub is requested then build it
+		if ($solution->{options}->{python2_stub})
+		{
+			my $plpython2_stub =
+			  $solution->AddProject('plpython2', 'dll', 'PLs',
+				'src/pl/stub_plpython2');
+			$plpython2_stub->AddReference($postgres);
+		}
+	}
+	else
+	{
+		$solution->{options}->{python2_stub} = 0;
 	}
 
 	if ($solution->{options}->{perl})

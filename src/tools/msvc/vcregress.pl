@@ -423,15 +423,15 @@ sub subdircheck
 
 		@opts = grep { $_ !~ /plpythonu/ } @opts;
 
-		if (-d "$topdir/$Config/plpython2")
+		if (-d "$topdir/$Config/plpython3")
 		{
+			@tests = mangle_plpython3(\@tests);
+		}
+		elsif (-d "$topdir/$Config/plpython2")
+		{
+			# if python3 doesn't exist, this is real python2 not the stub
 			push @opts, "--load-extension=plpythonu";
 			push @opts, '--load-extension=' . $module . 'u';
-		}
-		else
-		{
-			# must be python 3
-			@tests = mangle_plpython3(\@tests);
 		}
 	}
 

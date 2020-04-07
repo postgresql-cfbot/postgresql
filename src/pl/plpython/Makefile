@@ -37,6 +37,12 @@ OBJS = \
 DATA = $(NAME)u.control $(NAME)u--1.0.sql
 ifeq ($(python_majorversion),2)
 DATA += plpythonu.control plpythonu--1.0.sql
+else ifeq ($(with_python2_stub), yes)
+# install extension files for the stub module (see ../stub_plpython2)
+DATA += plpythonu.control plpythonu--1.0.sql plpython2u.control plpython2u--1.0.sql
+endif
+ifeq ($(python_majorversion),3)
+DATA += convert_python3.control convert_python3--1.0.sql
 endif
 
 # header files to install - it's not clear which of these might be needed
@@ -106,6 +112,7 @@ REGRESS = \
 	plpython_composite \
 	plpython_subtransaction \
 	plpython_transaction \
+	plpython_stub \
 	plpython_drop
 
 REGRESS_PLPYTHON3_MANGLE := $(REGRESS)

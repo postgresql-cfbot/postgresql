@@ -1,0 +1,60 @@
+--
+-- Test stub plpython2 and convert_python3 extension
+--
+
+-- skip test unless we have python3 installed and the others are available
+SELECT (SELECT count(*) FROM pg_extension WHERE extname = 'plpython3u') = 0 OR
+       (SELECT count(*) FROM pg_available_extensions WHERE name = 'plpython2u') = 0 OR
+       (SELECT count(*) FROM pg_available_extensions WHERE name = 'plpythonu') = 0 OR
+       (SELECT count(*) FROM pg_available_extensions WHERE name = 'convert_python3') = 0
+       AS skip_test \gset
+\if :skip_test
+\quit
+\endif
+
+-- Funny formatting of some commands below is to prevent
+-- regress-python3-mangle.mk from being "helpful".
+
+-- install the additional extensions
+CREATE EXTENSION
+plpython2u;
+CREATE EXTENSION
+plpythonu;
+CREATE EXTENSION convert_python3;
+
+-- create some functions that need conversion
+create function convert1() returns int
+as 'return 123l'
+language
+plpython2u
+immutable;
+
+-- disable syntax checking since if plpythonu is python 3, this'll fail
+set check_function_bodies = false;
+
+create function convert2() returns int
+as 'return 123l'
+language
+plpythonu
+immutable;
+
+-- can't use \sf here because mangling would affect the LANGUAGE clauses
+select proname, lanname, prosrc
+from pg_proc p join pg_language l on prolang = l.oid
+where proname = 'convert1';
+
+select proname, lanname, prosrc
+from pg_proc p join pg_language l on prolang = l.oid
+where proname = 'convert2';
+
+call convert_python3_all();
+
+\sf convert1()
+\sf convert2()
+
+-- clean up
+DROP EXTENSION
+plpython2u;
+DROP EXTENSION
+plpythonu;
+DROP EXTENSION convert_python3;

@@ -877,6 +877,23 @@ build-postgresql:
       </varlistentry>
 
       <varlistentry>
+       <term><option>--with-python2-stub</option></term>
+       <listitem>
+        <para>
+         Build a stub version of the Python
+         2 <application>PL/Python</application> language, to aid in
+         transitioning old <application>PL/Python</application> code.
+         This option is recommended if you are
+         building <application>PL/Python</application> for Python 3
+         and do not intend to also build a version for Python 2.
+         This option is ignored if you do not also
+         specify <option>--with-python</option>, or if the selected Python
+         implementation is Python 2.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
        <term><option>--with-tcl</option></term>
        <listitem>
         <para>

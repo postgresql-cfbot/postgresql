@@ -2320,8 +2320,17 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 	/* If modifying a partitioned table, initialize the root table info */
 	if (node->rootResultRelIndex >= 0)
+	{
 		mtstate->rootResultRelInfo = estate->es_root_result_relations +
 			node->rootResultRelIndex;
+
+		/*
+		 * Check replication identity. Checking for partitions would suffice,
+		 * as we do below, but checking for the root relation provides a more
+		 * useful error message if the required replica identity is not there.
+		 */
+		CheckValidResultRel(mtstate->rootResultRelInfo, operation);
+	}
 
 	mtstate->mt_arowmarks = (List **) palloc0(sizeof(List *) * nplans);
 	mtstate->mt_nplans = nplans;

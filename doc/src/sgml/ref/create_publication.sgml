@@ -123,6 +123,23 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
          </para>
         </listitem>
        </varlistentry>
+
+       <varlistentry>
+        <term><literal>publish_via_partition_root</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          This parameter determines whether DML operations on a partitioned
+          table (or on its partitions) contained in the publication will be
+          published using its own schema rather than of the individual
+          partitions which are actually changed; the latter is the default.
+          Setting it to <literal>true</literal> allows the changes to be
+          replicated into a non-partitioned table or a partitioned table
+          consisting of a different set of partitions.  However,
+          <literal>TRUNCATE</literal> operations performed directly on
+          partitions are not replicated.
+         </para>
+        </listitem>
+       </varlistentry>
       </variablelist>
 
      </para>

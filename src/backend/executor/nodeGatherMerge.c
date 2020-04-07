@@ -24,6 +24,7 @@
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
 #include "optimizer/optimizer.h"
+#include "pgstat.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -216,7 +217,8 @@ ExecGatherMerge(PlanState *pstate)
 												 estate,
 												 gm->initParam,
 												 gm->num_workers,
-												 node->tuples_needed);
+												 node->tuples_needed,
+												 pgstat_get_my_queryid());
 			else
 				ExecParallelReinitialize(node->ps.lefttree,
 										 node->pei,

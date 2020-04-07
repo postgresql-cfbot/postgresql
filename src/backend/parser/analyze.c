@@ -43,6 +43,7 @@
 #include "parser/parse_relation.h"
 #include "parser/parse_target.h"
 #include "parser/parsetree.h"
+#include "pgstat.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/rel.h"
 
@@ -120,6 +121,8 @@ parse_analyze(RawStmt *parseTree, const char *sourceText,
 
 	free_parsestate(pstate);
 
+	pgstat_report_queryid(query->queryId, false);
+
 	return query;
 }
 
@@ -152,6 +155,8 @@ parse_analyze_varparams(RawStmt *parseTree, const char *sourceText,
 		(*post_parse_analyze_hook) (pstate, query);
 
 	free_parsestate(pstate);
+
+	pgstat_report_queryid(query->queryId, false);
 
 	return query;
 }

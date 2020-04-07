@@ -861,6 +861,18 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      <entry>The current backend's <literal>xmin</literal> horizon.</entry>
     </row>
     <row>
+     <entry><structfield>queryid</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>Identifier of this backend's most recent query. If
+      <structfield>state</structfield> is <literal>active</literal> this field
+      shows the identifier of the currently executing query. In all other
+      states, it shows the identifier of last query that was executed.  By
+      default, query identifiers are not computed, so this field will always
+      be null, unless an additional module that compute query identifiers, such
+      as <xref linkend="pgstatstatements"/>, is configured.
+     </entry>
+    </row>
+    <row>
      <entry><structfield>query</structfield></entry>
      <entry><type>text</type></entry>
      <entry>Text of this backend's most recent query. If

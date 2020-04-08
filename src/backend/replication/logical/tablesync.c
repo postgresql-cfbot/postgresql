@@ -802,7 +802,7 @@ copy_table(Relation rel)
 	cstate = BeginCopyFrom(pstate, rel, NULL, false, copy_read_data, attnamelist, NIL);
 
 	/* Do the copy */
-	(void) CopyFrom(cstate);
+	(void) CopyFrom(cstate, NULL);
 
 	logicalrep_rel_close(relmapentry, NoLock);
 }

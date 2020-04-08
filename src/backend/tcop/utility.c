@@ -733,7 +733,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 
 				DoCopy(pstate, (CopyStmt *) parsetree,
 					   pstmt->stmt_location, pstmt->stmt_len,
-					   &processed);
+					   &processed, dest);
 				if (qc)
 					SetQueryCompletion(qc, CMDTAG_COPY, processed);
 			}

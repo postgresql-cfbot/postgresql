@@ -44,6 +44,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     FORCE_NOT_NULL ( <replaceable class="parameter">column_name</replaceable> [, ...] )
     FORCE_NULL ( <replaceable class="parameter">column_name</replaceable> [, ...] )
     ENCODING '<replaceable class="parameter">encoding_name</replaceable>'
+    ERROR_LIMIT <replaceable class="parameter">limit_number</replaceable>
 </synopsis>
  </refsynopsisdiv>
 
@@ -352,6 +353,28 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       omitted, the current client encoding is used. See the Notes below
       for more details.
      </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ERROR_LIMIT</literal></term>
+    <listitem>
+     <para>
+      Enables ignoring of errored out rows up to <replaceable
+      class="parameter">limit_number</replaceable>. If <replaceable
+      class="parameter">limit_number</replaceable> is set
+      to -1, then all errors will be ignored.
+     </para>
+
+     <para>
+      Currently, only unique or exclusion constraint violation
+      and rows formatting errors are ignored. Malformed
+      rows will rise warnings, while constraint violating rows
+      will be returned back to the caller unless any error is raised;
+      i.e. if any error is raised due to error_limit exceeds, no rows
+      will be returned back to the caller.
+     </para>
+
     </listitem>
    </varlistentry>
 

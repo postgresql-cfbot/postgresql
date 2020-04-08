@@ -1,5 +1,5 @@
 CREATE TEMP TABLE x (
-	a serial,
+	a serial UNIQUE,
 	b int,
 	c text not null default 'stuff',
 	d text,
@@ -108,6 +108,15 @@ COPY x from stdin WHERE a > 60003;
 60003	24	34	44	54
 60004	25	35	45	55
 60005	26	36	46	56
+\.
+
+COPY x from stdin WITH(ERROR_LIMIT 5);
+70001	22	32
+70002	23	33	43	53	54
+70003	24	34	44
+70004	25	35	45	55
+70005	26	36	46	56
+70005	27	37	47	57
 \.
 
 COPY x from stdin WHERE f > 60003;

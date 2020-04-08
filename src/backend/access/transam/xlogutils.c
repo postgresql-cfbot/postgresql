@@ -25,6 +25,7 @@
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "replication/walreceiver.h"
 #include "storage/smgr.h"
 #include "utils/guc.h"
 #include "utils/hsearch.h"
@@ -785,6 +786,30 @@ XLogReadDetermineTimeline(XLogReaderState *state, XLogRecPtr wantPage, uint32 wa
 
 /* openSegment callback for WALRead */
 static int
+wal_segment_try_open(XLogSegNo nextSegNo,
+					 WALSegmentContext *segcxt,
+					 TimeLineID *tli_p)
+{
+	TimeLineID	tli = *tli_p;
+	char		path[MAXPGPATH];
+	int			fd;
+
+	XLogFilePath(path, tli, nextSegNo, segcxt->ws_segsize);
+	fd = BasicOpenFile(path, O_RDONLY | PG_BINARY);
+	if (fd >= 0)
+		return fd;
+
+	if (errno != ENOENT)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m",
+						path)));
+
+	return -1;					/* keep compiler quiet */
+}
+
+/* openSegment callback for WALRead */
+static int
 wal_segment_open(XLogSegNo nextSegNo, WALSegmentContext * segcxt,
 				 TimeLineID *tli_p)
 {
@@ -831,57 +856,91 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	TimeLineID	tli;
 	int			count;
 	WALReadError errinfo;
+	bool		try_read = false;
+	XLogReadLocalOptions *options =
+		(XLogReadLocalOptions *) state->read_page_data;
 
 	loc = targetPagePtr + reqLen;
 
 	/* Loop waiting for xlog to be available if necessary */
 	while (1)
 	{
-		/*
-		 * Determine the limit of xlog we can currently read to, and what the
-		 * most recent timeline is.
-		 *
-		 * RecoveryInProgress() will update ThisTimeLineID when it first
-		 * notices recovery finishes, so we only have to maintain it for the
-		 * local process until recovery ends.
-		 */
-		if (!RecoveryInProgress())
-			read_upto = GetFlushRecPtr();
-		else
-			read_upto = GetXLogReplayRecPtr(&ThisTimeLineID);
-		tli = ThisTimeLineID;
+		switch (options ? options->read_upto_policy : -1)
+		{
+		case XLRO_WALRCV_WRITTEN:
+			/*
+			 * We'll try to read as far as has been written by the WAL
+			 * receiver, on the requested timeline.  When we run out of valid
+			 * data, we'll return an error.  This is used by xlogprefetch.c
+			 * while streaming.
+			 */
+			read_upto = GetWalRcvWriteRecPtr();
+			try_read = true;
+			state->currTLI = tli = options->tli;
+			break;
 
-		/*
-		 * Check which timeline to get the record from.
-		 *
-		 * We have to do it each time through the loop because if we're in
-		 * recovery as a cascading standby, the current timeline might've
-		 * become historical. We can't rely on RecoveryInProgress() because in
-		 * a standby configuration like
-		 *
-		 * A => B => C
-		 *
-		 * if we're a logical decoding session on C, and B gets promoted, our
-		 * timeline will change while we remain in recovery.
-		 *
-		 * We can't just keep reading from the old timeline as the last WAL
-		 * archive in the timeline will get renamed to .partial by
-		 * StartupXLOG().
-		 *
-		 * If that happens after our caller updated ThisTimeLineID but before
-		 * we actually read the xlog page, we might still try to read from the
-		 * old (now renamed) segment and fail. There's not much we can do
-		 * about this, but it can only happen when we're a leaf of a cascading
-		 * standby whose master gets promoted while we're decoding, so a
-		 * one-off ERROR isn't too bad.
-		 */
-		XLogReadDetermineTimeline(state, targetPagePtr, reqLen);
+		case XLRO_END:
+			/*
+			 * We'll try to read as far as we can on one timeline.  This is
+			 * used by xlogprefetch.c for crash recovery.
+			 */
+			read_upto = (XLogRecPtr) -1;
+			try_read = true;
+			state->currTLI = tli = options->tli;
+			break;
 
-		if (state->currTLI == ThisTimeLineID)
+		default:
+			/*
+			 * Determine the limit of xlog we can currently read to, and what the
+			 * most recent timeline is.
+			 *
+			 * RecoveryInProgress() will update ThisTimeLineID when it first
+			 * notices recovery finishes, so we only have to maintain it for
+			 * the local process until recovery ends.
+			 */
+			if (!RecoveryInProgress())
+				read_upto = GetFlushRecPtr();
+			else
+				read_upto = GetXLogReplayRecPtr(&ThisTimeLineID);
+			tli = ThisTimeLineID;
+
+			/*
+			 * Check which timeline to get the record from.
+			 *
+			 * We have to do it each time through the loop because if we're in
+			 * recovery as a cascading standby, the current timeline might've
+			 * become historical. We can't rely on RecoveryInProgress()
+			 * because in a standby configuration like
+			 *
+			 * A => B => C
+			 *
+			 * if we're a logical decoding session on C, and B gets promoted,
+			 * our timeline will change while we remain in recovery.
+			 *
+			 * We can't just keep reading from the old timeline as the last
+			 * WAL archive in the timeline will get renamed to .partial by
+			 * StartupXLOG().
+			 *
+			 * If that happens after our caller updated ThisTimeLineID but
+			 * before we actually read the xlog page, we might still try to
+			 * read from the old (now renamed) segment and fail. There's not
+			 * much we can do about this, but it can only happen when we're a
+			 * leaf of a cascading standby whose master gets promoted while
+			 * we're decoding, so a one-off ERROR isn't too bad.
+			 */
+			XLogReadDetermineTimeline(state, targetPagePtr, reqLen);
+			break;
+		}
+
+		if (state->currTLI == tli)
 		{
 
 			if (loc <= read_upto)
 				break;
+
+			/* not enough data there, but we were asked not to wait */
+			if (options && options->nowait)
+				return XLOGPAGEREAD_WOULDBLOCK;
 
 			CHECK_FOR_INTERRUPTS();
 			pg_usleep(1000L);
@@ -924,7 +983,7 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	else if (targetPagePtr + reqLen > read_upto)
 	{
 		/* not enough data there */
-		return -1;
+		return XLOGPAGEREAD_ERROR;
 	}
 	else
 	{
@@ -938,8 +997,18 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	 * zero-padded up to the page boundary if it's incomplete.
 	 */
 	if (!WALRead(cur_page, targetPagePtr, XLOG_BLCKSZ, tli, &state->seg,
-				 &state->segcxt, wal_segment_open, &errinfo))
+				 &state->segcxt,
+				 try_read ? wal_segment_try_open : wal_segment_open,
+				 &errinfo))
+	{
+		/*
+		 * When on one single timeline, we may read past the end of available
+		 * segments.  Report lack of file as an error.
+		 */
+		if (try_read)
+			return XLOGPAGEREAD_ERROR;
 		WALReadRaiseError(&errinfo);
+	}
 
 	/* number of valid bytes in the buffer */
 	return count;

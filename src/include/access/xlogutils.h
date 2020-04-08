@@ -47,6 +47,29 @@ extern Buffer XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 extern Relation CreateFakeRelcacheEntry(RelFileNode rnode);
 extern void FreeFakeRelcacheEntry(Relation fakerel);
 
+/*
+ * A pointer to an XLogReadLocalOptions struct can supplied as the private data
+ * for an XLogReader, causing read_local_xlog_page() to modify its behavior.
+ */
+typedef struct XLogReadLocalOptions
+{
+	/* Don't block waiting for new WAL to arrive. */
+	bool		nowait;
+
+	/*
+	 * For XLRO_WALRCV_WRITTEN and XLRO_END modes, the timeline ID must be
+	 * provided.
+	 */
+	TimeLineID	tli;
+
+	/* How far to read. */
+	enum {
+		XLRO_STANDARD,
+		XLRO_WALRCV_WRITTEN,
+		XLRO_END
+	} read_upto_policy;
+} XLogReadLocalOptions;
+
 extern int	read_local_xlog_page(XLogReaderState *state,
 								 XLogRecPtr targetPagePtr, int reqLen,
 								 XLogRecPtr targetRecPtr, char *cur_page);

@@ -50,6 +50,10 @@ typedef struct WALSegmentContext
 
 typedef struct XLogReaderState XLogReaderState;
 
+/* Special negative return values for XLogPageReadCB functions */
+#define XLOGPAGEREAD_ERROR		-1
+#define XLOGPAGEREAD_WOULDBLOCK	-2
+
 /* Function type definition for the read_page callback */
 typedef int (*XLogPageReadCB) (XLogReaderState *xlogreader,
 							   XLogRecPtr targetPagePtr,
@@ -99,10 +103,13 @@ struct XLogReaderState
 	 * This callback shall read at least reqLen valid bytes of the xlog page
 	 * starting at targetPagePtr, and store them in readBuf.  The callback
 	 * shall return the number of bytes read (never more than XLOG_BLCKSZ), or
-	 * -1 on failure.  The callback shall sleep, if necessary, to wait for the
-	 * requested bytes to become available.  The callback will not be invoked
-	 * again for the same page unless more than the returned number of bytes
-	 * are needed.
+	 * XLOGPAGEREAD_ERROR on failure.  The callback may either sleep or return
+	 * XLOGPAGEREAD_WOULDBLOCK, if necessary, to wait for the requested bytes
+	 * to become available.  If a callback that can return
+	 * XLOGPAGEREAD_WOULDBLOCK is installed, the reader client must expect to
+	 * fail to read when there is not enough data.  The callback will not be
+	 * invoked again for the same page unless more than the returned number of
+	 * bytes are needed.
 	 *
 	 * targetRecPtr is the position of the WAL record we're reading.  Usually
 	 * it is equal to targetPagePtr + reqLen, but sometimes xlogreader needs
@@ -125,6 +132,11 @@ struct XLogReaderState
 	 * Opaque data for callbacks to use.  Not used by XLogReader.
 	 */
 	void	   *private_data;
+
+	/*
+	 * Opaque data for callbacks to use.  Not used by XLogReader.
+	 */
+	void	   *read_page_data;
 
 	/*
 	 * Start and end point of last record read.  EndRecPtr is also used as the

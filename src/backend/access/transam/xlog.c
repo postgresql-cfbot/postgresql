@@ -35,6 +35,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogarchive.h"
 #include "access/xloginsert.h"
+#include "access/xlogprefetch.h"
 #include "access/xlogreader.h"
 #include "access/xlogutils.h"
 #include "catalog/catversion.h"
@@ -208,8 +209,8 @@ HotStandbyState standbyState = STANDBY_DISABLED;
 
 static XLogRecPtr LastRec;
 
-/* Local copy of WalRcv->receivedUpto */
-static XLogRecPtr receivedUpto = 0;
+/* Local copy of WalRcv->flushedUpto */
+static XLogRecPtr flushedUpto = 0;
 static TimeLineID receiveTLI = 0;
 
 /*
@@ -7143,12 +7144,16 @@ StartupXLOG(void)
 		{
 			ErrorContextCallback errcallback;
 			TimestampTz xtime;
+			XLogPrefetchState prefetch;
 
 			InRedo = true;
 
 			ereport(LOG,
 					(errmsg("redo starts at %X/%X",
 							(uint32) (ReadRecPtr >> 32), (uint32) ReadRecPtr)));
+
+			/* Prepare to prefetch, if configured. */
+			XLogPrefetchBegin(&prefetch);
 
 			/*
 			 * main redo apply loop
@@ -7178,6 +7183,12 @@ StartupXLOG(void)
 
 				/* Handle interrupt signals of startup process */
 				HandleStartupProcInterrupts();
+
+				/* Peform WAL prefetching, if enabled. */
+				XLogPrefetch(&prefetch,
+							 ThisTimeLineID,
+							 xlogreader->ReadRecPtr,
+							 currentSource == XLOG_FROM_STREAM);
 
 				/*
 				 * Pause WAL replay, if requested by a hot-standby session via
@@ -7350,6 +7361,9 @@ StartupXLOG(void)
 					 */
 					if (switchedTLI && AllowCascadeReplication())
 						WalSndWakeup();
+
+					/* Reset the prefetcher. */
+					XLogPrefetchReconfigure();
 				}
 
 				/* Exit loop if we reached inclusive recovery target */
@@ -7366,6 +7380,7 @@ StartupXLOG(void)
 			/*
 			 * end of main redo apply loop
 			 */
+			XLogPrefetchEnd(&prefetch);
 
 			if (reachedRecoveryTarget)
 			{
@@ -9363,7 +9378,7 @@ CreateRestartPoint(int flags)
 	 * Retreat _logSegNo using the current end of xlog replayed or received,
 	 * whichever is later.
 	 */
-	receivePtr = GetWalRcvWriteRecPtr(NULL, NULL);
+	receivePtr = GetWalRcvFlushRecPtr(NULL, NULL);
 	replayPtr = GetXLogReplayRecPtr(&replayTLI);
 	endptr = (receivePtr < replayPtr) ? replayPtr : receivePtr;
 	KeepLogSeg(endptr, &_logSegNo);
@@ -11856,7 +11871,7 @@ retry:
 	/* See if we need to retrieve more data */
 	if (readFile < 0 ||
 		(readSource == XLOG_FROM_STREAM &&
-		 receivedUpto < targetPagePtr + reqLen))
+		 flushedUpto < targetPagePtr + reqLen))
 	{
 		if (!WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
 										 private->randAccess,
@@ -11887,10 +11902,10 @@ retry:
 	 */
 	if (readSource == XLOG_FROM_STREAM)
 	{
-		if (((targetPagePtr) / XLOG_BLCKSZ) != (receivedUpto / XLOG_BLCKSZ))
+		if (((targetPagePtr) / XLOG_BLCKSZ) != (flushedUpto / XLOG_BLCKSZ))
 			readLen = XLOG_BLCKSZ;
 		else
-			readLen = XLogSegmentOffset(receivedUpto, wal_segment_size) -
+			readLen = XLogSegmentOffset(flushedUpto, wal_segment_size) -
 				targetPageOff;
 	}
 	else
@@ -12094,6 +12109,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 */
 					currentSource = XLOG_FROM_STREAM;
 					startWalReceiver = true;
+					XLogPrefetchReconfigure();
 					break;
 
 				case XLOG_FROM_STREAM:
@@ -12305,7 +12321,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						RequestXLogStreaming(tli, ptr, PrimaryConnInfo,
 											 PrimarySlotName,
 											 wal_receiver_create_temp_slot);
-						receivedUpto = 0;
+						flushedUpto = 0;
 					}
 
 					/*
@@ -12329,14 +12345,14 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * XLogReceiptTime will not advance, so the grace time
 					 * allotted to conflicting queries will decrease.
 					 */
-					if (RecPtr < receivedUpto)
+					if (RecPtr < flushedUpto)
 						havedata = true;
 					else
 					{
 						XLogRecPtr	latestChunkStart;
 
-						receivedUpto = GetWalRcvWriteRecPtr(&latestChunkStart, &receiveTLI);
-						if (RecPtr < receivedUpto && receiveTLI == curFileTLI)
+						flushedUpto = GetWalRcvFlushRecPtr(&latestChunkStart, &receiveTLI);
+						if (RecPtr < flushedUpto && receiveTLI == curFileTLI)
 						{
 							havedata = true;
 							if (latestChunkStart <= RecPtr)

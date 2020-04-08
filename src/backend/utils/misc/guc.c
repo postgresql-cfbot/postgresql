@@ -34,6 +34,7 @@
 #include "access/twophase.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
+#include "access/xlogprefetch.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
 #include "catalog/storage.h"
@@ -198,6 +199,7 @@ static bool check_max_wal_senders(int *newval, void **extra, GucSource source);
 static bool check_autovacuum_work_mem(int *newval, void **extra, GucSource source);
 static bool check_effective_io_concurrency(int *newval, void **extra, GucSource source);
 static bool check_maintenance_io_concurrency(int *newval, void **extra, GucSource source);
+static void assign_maintenance_io_concurrency(int newval, void *extra);
 static void assign_pgstat_temp_directory(const char *newval, void *extra);
 static bool check_application_name(char **newval, void **extra, GucSource source);
 static void assign_application_name(const char *newval, void *extra);
@@ -1271,6 +1273,18 @@ static struct config_bool ConfigureNamesBool[] =
 		&fullPageWrites,
 		true,
 		NULL, NULL, NULL
+	},
+	{
+		{"recovery_prefetch_fpw", PGC_SIGHUP, WAL_SETTINGS,
+			gettext_noop("Prefetch blocks that have full page images in the WAL"),
+			gettext_noop("On some systems, there is no benefit to prefetching pages that will be "
+						 "entirely overwritten, but if the logical page size of the filesystem is "
+						 "larger than PostgreSQL's, this can be beneficial.  This option has no "
+						 "effect unless max_recovery_prefetch_distance is set to a positive number.")
+		},
+		&recovery_prefetch_fpw,
+		false,
+		NULL, assign_recovery_prefetch_fpw, NULL
 	},
 
 	{
@@ -2650,6 +2664,22 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"max_recovery_prefetch_distance", PGC_SIGHUP, WAL_ARCHIVE_RECOVERY,
+			gettext_noop("Maximum number of bytes to read ahead in the WAL to prefetch referenced blocks."),
+			gettext_noop("Set to -1 to disable prefetching during recovery."),
+			GUC_UNIT_BYTE
+		},
+		&max_recovery_prefetch_distance,
+#ifdef USE_PREFETCH
+		256 * 1024,
+#else
+		-1,
+#endif
+		-1, INT_MAX,
+		NULL, assign_max_recovery_prefetch_distance, NULL
+	},
+
+	{
 		{"wal_keep_segments", PGC_SIGHUP, REPLICATION_SENDING,
 			gettext_noop("Sets the number of WAL files held for standby servers."),
 			NULL
@@ -2968,7 +2998,8 @@ static struct config_int ConfigureNamesInt[] =
 		0,
 #endif
 		0, MAX_IO_CONCURRENCY,
-		check_maintenance_io_concurrency, NULL, NULL
+		check_maintenance_io_concurrency, assign_maintenance_io_concurrency,
+		NULL
 	},
 
 	{
@@ -11584,6 +11615,20 @@ check_maintenance_io_concurrency(int *newval, void **extra, GucSource source)
 	}
 #endif							/* USE_PREFETCH */
 	return true;
+}
+
+static void
+assign_maintenance_io_concurrency(int newval, void *extra)
+{
+#ifdef USE_PREFETCH
+	/*
+	 * Reconfigure recovery prefetching, because a setting it depends on
+	 * changed.
+	 */
+	maintenance_io_concurrency = newval;
+	if (AmStartupProcess())
+		XLogPrefetchReconfigure();
+#endif
 }
 
 static void

@@ -3121,6 +3121,51 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-max-recovery-prefetch-distance" xreflabel="max_recovery_prefetch_distance">
+      <term><varname>max_recovery_prefetch_distance</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>max_recovery_prefetch_distance</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        The maximum distance to look ahead in the WAL during recovery, to find
+        blocks to prefetch.  Prefetching blocks that will soon be needed can
+        reduce I/O wait times.  The number of concurrent prefetches is limited
+        by this setting as well as
+        <xref linkend="guc-maintenance-io-concurrency"/>.  Setting it too high
+        might be counterproductive, if it means that data falls out of the
+        kernel cache before it is needed.  If this value is specified without
+        units, it is taken as bytes.  A setting of -1 disables prefetching
+        during recovery.
+        The default is 256kB on systems that support
+        <function>posix_fadvise</function>, and otherwise -1.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-recovery-prefetch-fpw" xreflabel="recovery_prefetch_fpw">
+      <term><varname>recovery_prefetch_fpw</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>recovery_prefetch_fpw</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Whether to prefetch blocks that were logged with full page images,
+        during recovery.  Often this doesn't help, since such blocks will not
+        be read the first time they are needed and might remain in the buffer
+        pool after that.  However, on file systems with a block size larger
+        than
+        <productname>PostgreSQL</productname>'s, prefetching can avoid a
+        costly read-before-write when a blocks are later written.  This
+        setting has no effect unless
+        <xref linkend="guc-max-recovery-prefetch-distance"/> is set to a positive
+        number.  The default is off.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
      <sect2 id="runtime-config-wal-archiving">

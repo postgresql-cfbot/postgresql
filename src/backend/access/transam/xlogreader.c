@@ -257,6 +257,9 @@ XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr)
  * If the reading fails for some other reason, NULL is also returned, and
  * *errormsg is set to a string with details of the failure.
  *
+ * If the read_page callback is one that returns XLOGPAGEREAD_WOULDBLOCK rather
+ * than waiting for WAL to arrive, NULL is also returned in that case.
+ *
  * The returned pointer (or *errormsg) points to an internal buffer that's
  * valid until the next call to XLogReadRecord.
  */
@@ -546,10 +549,11 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 err:
 
 	/*
-	 * Invalidate the read state. We might read from a different source after
-	 * failure.
+	 * Invalidate the read state, if this was an error. We might read from a
+	 * different source after failure.
 	 */
-	XLogReaderInvalReadState(state);
+	if (readOff != XLOGPAGEREAD_WOULDBLOCK)
+		XLogReaderInvalReadState(state);
 
 	if (state->errormsg_buf[0] != '\0')
 		*errormsg = state->errormsg_buf;
@@ -561,8 +565,9 @@ err:
  * Read a single xlog page including at least [pageptr, reqLen] of valid data
  * via the read_page() callback.
  *
- * Returns -1 if the required page cannot be read for some reason; errormsg_buf
- * is set in that case (unless the error occurs in the read_page callback).
+ * Returns XLOGPAGEREAD_ERROR or XLOGPAGEREAD_WOULDBLOCK if the required page
+ * cannot be read for some reason; errormsg_buf is set in the former case
+ * (unless the error occurs in the read_page callback).
  *
  * We fetch the page from a reader-local cache if we know we have the required
  * data and if there hasn't been any error since caching the data.
@@ -659,8 +664,11 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	return readLen;
 
 err:
+	if (readLen == XLOGPAGEREAD_WOULDBLOCK)
+		return XLOGPAGEREAD_WOULDBLOCK;
+
 	XLogReaderInvalReadState(state);
-	return -1;
+	return XLOGPAGEREAD_ERROR;
 }
 
 /*
@@ -939,6 +947,7 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 	XLogRecPtr	found = InvalidXLogRecPtr;
 	XLogPageHeader header;
 	char	   *errormsg;
+	int			readLen;
 
 	Assert(!XLogRecPtrIsInvalid(RecPtr));
 
@@ -952,7 +961,6 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 		XLogRecPtr	targetPagePtr;
 		int			targetRecOff;
 		uint32		pageHeaderSize;
-		int			readLen;
 
 		/*
 		 * Compute targetRecOff. It should typically be equal or greater than
@@ -1033,7 +1041,8 @@ XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr)
 	}
 
 err:
-	XLogReaderInvalReadState(state);
+	if (readLen != XLOGPAGEREAD_WOULDBLOCK)
+		XLogReaderInvalReadState(state);
 
 	return InvalidXLogRecPtr;
 }
@@ -1084,12 +1093,22 @@ WALRead(char *buf, XLogRecPtr startptr, Size count, TimeLineID tli,
 			tli != seg->ws_tli)
 		{
 			XLogSegNo	nextSegNo;
-
 			if (seg->ws_file >= 0)
 				close(seg->ws_file);
 
 			XLByteToSeg(recptr, nextSegNo, segcxt->ws_segsize);
 			seg->ws_file = openSegment(nextSegNo, segcxt, &tli);
+
+			/* callback reported that there was no such file */
+			if (seg->ws_file < 0)
+			{
+				errinfo->wre_errno = errno;
+				errinfo->wre_req = 0;
+				errinfo->wre_read = 0;
+				errinfo->wre_off = startoff;
+				errinfo->wre_seg = *seg;
+				return false;
+			}
 
 			/* Update the current segment info. */
 			seg->ws_tli = tli;

@@ -230,6 +230,11 @@
 #checkpoint_flush_after = 0		# measured in pages, 0 disables
 #checkpoint_warning = 30s		# 0 disables
 
+# - Prefetching during recovery -
+
+#max_recovery_prefetch_distance = 256kB	# -1 disables prefetching
+#recovery_prefetch_fpw = off	# whether to prefetch pages logged with FPW
+
 # - Archiving -
 
 #archive_mode = off		# enables archiving; off, on, or always

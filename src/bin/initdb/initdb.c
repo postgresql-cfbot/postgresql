@@ -136,6 +136,10 @@ static char *pwfilename = NULL;
 static char *superuser_password = NULL;
 static const char *authmethodhost = NULL;
 static const char *authmethodlocal = NULL;
+static const char *authmethodhostssl = NULL;
+static const char *authmethodhostnossl = NULL;
+static const char *authmethodhostgssenc = NULL;
+static const char *authmethodhostnogssenc = NULL;
 static bool debug = false;
 static bool noclean = false;
 static bool do_sync = true;
@@ -179,10 +183,12 @@ static const char *default_timezone = NULL;
  * Warning messages for authentication methods
  */
 #define AUTHTRUST_WARNING \
-"# CAUTION: Configuring the system for local \"trust\" authentication\n" \
-"# allows any local user to connect as any PostgreSQL user, including\n" \
-"# the database superuser.  If you do not trust all your local users,\n" \
-"# use another authentication method.\n"
+"# CAUTION: Configuring the system for \"trust\" authentication\n" \
+"# allows any user who can reach the databse on the route specified\n" \
+"# to connect as any PostgreSQL user, including the database\n" \
+"# superuser.  If you do not trust all the users who could\n" \
+"# reach the database on the route specified, use a more restrictive\n" \
+"# authentication method.\n"
 static bool authwarning = false;
 
 /*
@@ -436,7 +442,6 @@ replace_token(char **lines, const char *token, const char *replacement)
  *
  * a sort of poor man's grep -v
  */
-#ifndef HAVE_UNIX_SOCKETS
 static char **
 filter_lines_with_token(char **lines, const char *token)
 {
@@ -459,7 +464,6 @@ filter_lines_with_token(char **lines, const char *token)
 
 	return result;
 }
-#endif
 
 /*
  * get the lines from a text file
@@ -1320,9 +1324,97 @@ setup_config(void)
 							  "@authmethodlocal@",
 							  authmethodlocal);
 
+	authwarning = (
+			strcmp(authmethodlocal, "trust") == 0 ||
+			strcmp(authmethodhost, "trust") == 0 ||
+			(authmethodhostssl != NULL &&
+			 strcmp(authmethodhostssl, "trust") == 0) ||
+			(authmethodhostnossl != NULL &&
+			 strcmp(authmethodhostnossl, "trust") == 0) ||
+			(authmethodhostgssenc != NULL &&
+			 strcmp(authmethodhostgssenc, "trust") == 0) ||
+			(authmethodhostnogssenc != NULL &&
+			 strcmp(authmethodhostnogssenc, "trust")) == 0);
+
 	conflines = replace_token(conflines,
 							  "@authcomment@",
-							  (strcmp(authmethodlocal, "trust") == 0 || strcmp(authmethodhost, "trust") == 0) ? AUTHTRUST_WARNING : "");
+							   authwarning ? AUTHTRUST_WARNING : "");
+
+	if (authmethodhostssl != NULL)
+	{
+		conflines = replace_token(conflines,
+								  "# hostssl all             all             0.0.0.0/0               @authmethodhostssl@",
+								  "hostssl all             all             0.0.0.0/0               @authmethodhostssl@");
+#ifdef HAVE_IPV6
+		conflines = replace_token(conflines,
+								  "# hostssl all             all             ::/0                    @authmethodhostssl@",
+								  "hostssl all             all             ::/0                    @authmethodhostssl@");
+#endif
+		conflines = replace_token(conflines,
+								  "@authmethodhostssl@",
+								  authmethodhostssl);
+	}
+	else
+	{
+		conflines = filter_lines_with_token(conflines, "@authmethodhostssl@");
+	}
+
+	if (authmethodhostnossl != NULL)
+	{
+		conflines = replace_token(conflines,
+								  "# hostnossl all           all             0.0.0.0/0               @authmethodhostnossl@",
+								  "hostnossl all           all             0.0.0.0/0               @authmethodhostnossl@");
+#ifdef HAVE_IPV6
+		conflines = replace_token(conflines,
+								  "# hostnossl all           all             ::/0                    @authmethodhostnossl@",
+								  "hostnossl all           all             ::/0                    @authmethodhostnossl@");
+#endif
+		conflines = replace_token(conflines,
+								  "@authmethodhostnossl@",
+								  authmethodhostnossl);
+	}
+	else
+	{
+		conflines = filter_lines_with_token(conflines, "@authmethodhostnossl@");
+	}
+
+	if (authmethodhostgssenc != NULL)
+	{
+		conflines = replace_token(conflines,
+								  "# hostgssenc all             all             0.0.0.0/0               @authmethodhostgssenc@",
+								  "hostgssenc all             all             0.0.0.0/0               @authmethodhostgssenc@");
+#ifdef HAVE_IPV6
+		conflines = replace_token(conflines,
+								  "# hostgssenc all             all             ::/0                    @authmethodhostgssenc@",
+								  "hostgssenc all             all             ::/0                    @authmethodhostgssenc@");
+#endif
+		conflines = replace_token(conflines,
+								  "@authmethodhostgssenc@",
+								  authmethodhostgssenc);
+	}
+	else
+	{
+		conflines = filter_lines_with_token(conflines, "@authmethodhostgssenc@");
+	}
+
+	if (authmethodhostnogssenc != NULL)
+	{
+		conflines = replace_token(conflines,
+								  "# hostnogssenc all           all             0.0.0.0/0               @authmethodhostnogssenc@",
+								  "hostnogssenc all           all             0.0.0.0/0               @authmethodhostnogssenc@");
+#ifdef HAVE_IPV6
+		conflines = replace_token(conflines,
+								  "# hostnogssenc all           all             ::/0                    @authmethodhostnogssenc@",
+								  "hostnogssenc all           all             ::/0                    @authmethodhostnogssenc@");
+#endif
+		conflines = replace_token(conflines,
+								  "@authmethodhostnogssenc@",
+								  authmethodhostnogssenc);
+	}
+	else
+	{
+		conflines = filter_lines_with_token(conflines, "@authmethodhostnogssenc@");
+	}
 
 	snprintf(path, sizeof(path), "%s/pg_hba.conf", pg_data);
 
@@ -2290,36 +2382,40 @@ usage(const char *progname)
 	printf(_("Usage:\n"));
 	printf(_("  %s [OPTION]... [DATADIR]\n"), progname);
 	printf(_("\nOptions:\n"));
-	printf(_("  -A, --auth=METHOD         default authentication method for local connections\n"));
-	printf(_("      --auth-host=METHOD    default authentication method for local TCP/IP connections\n"));
-	printf(_("      --auth-local=METHOD   default authentication method for local-socket connections\n"));
-	printf(_(" [-D, --pgdata=]DATADIR     location for this database cluster\n"));
-	printf(_("  -E, --encoding=ENCODING   set default encoding for new databases\n"));
-	printf(_("  -g, --allow-group-access  allow group read/execute on data directory\n"));
-	printf(_("      --locale=LOCALE       set default locale for new databases\n"));
+	printf(_("  -A, --auth=METHOD              default authentication method for local connections\n"));
+	printf(_("      --auth-host=METHOD         default authentication method for local TCP/IP connections\n"));
+	printf(_("      --auth-local=METHOD        default authentication method for local-socket connections\n"));
+	printf(_("      --auth-hostssl=METHOD      default authentication method for TLS connections\n"));
+	printf(_("      --auth-hostnossl=METHOD    default authentication method for non-TLS connections\n"));
+	printf(_("      --auth-hostgssenc=METHOD   default authentication method for encrypted GSSAPI connections\n"));
+	printf(_("      --auth-hostnogssenc=METHOD default authentication method for connections not using encrypted GSSAPI\n"));
+	printf(_(" [-D, --pgdata=]DATADIR          location for this database cluster\n"));
+	printf(_("  -E, --encoding=ENCODING        set default encoding for new databases\n"));
+	printf(_("  -g, --allow-group-access       allow group read/execute on data directory\n"));
+	printf(_("      --locale=LOCALE            set default locale for new databases\n"));
 	printf(_("      --lc-collate=, --lc-ctype=, --lc-messages=LOCALE\n"
 			 "      --lc-monetary=, --lc-numeric=, --lc-time=LOCALE\n"
-			 "                            set default locale in the respective category for\n"
-			 "                            new databases (default taken from environment)\n"));
-	printf(_("      --no-locale           equivalent to --locale=C\n"));
-	printf(_("      --pwfile=FILE         read password for the new superuser from file\n"));
+			 "                                 set default locale in the respective category for\n"
+			 "                                 new databases (default taken from environment)\n"));
+	printf(_("      --no-locale                equivalent to --locale=C\n"));
+	printf(_("      --pwfile=FILE              read password for the new superuser from file\n"));
 	printf(_("  -T, --text-search-config=CFG\n"
-			 "                            default text search configuration\n"));
-	printf(_("  -U, --username=NAME       database superuser name\n"));
-	printf(_("  -W, --pwprompt            prompt for a password for the new superuser\n"));
-	printf(_("  -X, --waldir=WALDIR       location for the write-ahead log directory\n"));
-	printf(_("      --wal-segsize=SIZE    size of WAL segments, in megabytes\n"));
+			 "                                 default text search configuration\n"));
+	printf(_("  -U, --username=NAME            database superuser name\n"));
+	printf(_("  -W, --pwprompt                 prompt for a password for the new superuser\n"));
+	printf(_("  -X, --waldir=WALDIR            location for the write-ahead log directory\n"));
+	printf(_("      --wal-segsize=SIZE         size of WAL segments, in megabytes\n"));
 	printf(_("\nLess commonly used options:\n"));
-	printf(_("  -d, --debug               generate lots of debugging output\n"));
-	printf(_("  -k, --data-checksums      use data page checksums\n"));
-	printf(_("  -L DIRECTORY              where to find the input files\n"));
-	printf(_("  -n, --no-clean            do not clean up after errors\n"));
-	printf(_("  -N, --no-sync             do not wait for changes to be written safely to disk\n"));
-	printf(_("  -s, --show                show internal settings\n"));
-	printf(_("  -S, --sync-only           only sync data directory\n"));
+	printf(_("  -d, --debug                    generate lots of debugging output\n"));
+	printf(_("  -k, --data-checksums           use data page checksums\n"));
+	printf(_("  -L DIRECTORY                   where to find the input files\n"));
+	printf(_("  -n, --no-clean                 do not clean up after errors\n"));
+	printf(_("  -N, --no-sync                  do not wait for changes to be written safely to disk\n"));
+	printf(_("  -s, --show                     show internal settings\n"));
+	printf(_("  -S, --sync-only                only sync data directory\n"));
 	printf(_("\nOther options:\n"));
-	printf(_("  -V, --version             output version information, then exit\n"));
-	printf(_("  -?, --help                show this help, then exit\n"));
+	printf(_("  -V, --version                  output version information, then exit\n"));
+	printf(_("  -?, --help                     show this help, then exit\n"));
 	printf(_("\nIf the data directory is not specified, the environment variable PGDATA\n"
 			 "is used.\n"));
 	printf(_("\nReport bugs to <%s>.\n"), PACKAGE_BUGREPORT);
@@ -2968,6 +3064,10 @@ main(int argc, char *argv[])
 		{"auth", required_argument, NULL, 'A'},
 		{"auth-local", required_argument, NULL, 10},
 		{"auth-host", required_argument, NULL, 11},
+		{"auth-hostssl", required_argument, NULL, 13},
+		{"auth-hostnossl", required_argument, NULL, 14},
+		{"auth-hostgssenc", required_argument, NULL, 15},
+		{"auth-hostnogssenc", required_argument, NULL, 16},
 		{"pwprompt", no_argument, NULL, 'W'},
 		{"pwfile", required_argument, NULL, 9},
 		{"username", required_argument, NULL, 'U'},
@@ -3047,6 +3147,18 @@ main(int argc, char *argv[])
 				break;
 			case 11:
 				authmethodhost = pg_strdup(optarg);
+				break;
+			case 13:
+				authmethodhostssl = pg_strdup(optarg);
+				break;
+			case 14:
+				authmethodhostnossl = pg_strdup(optarg);
+				break;
+			case 15:
+				authmethodhostgssenc = pg_strdup(optarg);
+				break;
+			case 16:
+				authmethodhostnogssenc = pg_strdup(optarg);
 				break;
 			case 'D':
 				pg_data = pg_strdup(optarg);
@@ -3182,6 +3294,14 @@ main(int argc, char *argv[])
 
 	check_authmethod_valid(authmethodlocal, auth_methods_local, "local");
 	check_authmethod_valid(authmethodhost, auth_methods_host, "host");
+	if (authmethodhostssl != NULL)
+		check_authmethod_valid(authmethodhostssl, auth_methods_host, "hostssl");
+	if (authmethodhostnossl != NULL)
+		check_authmethod_valid(authmethodhostnossl, auth_methods_host, "hostnossl");
+	if (authmethodhostgssenc != NULL)
+		check_authmethod_valid(authmethodhostgssenc, auth_methods_host, "hostgssenc");
+	if (authmethodhostnogssenc != NULL)
+		check_authmethod_valid(authmethodhostnogssenc, auth_methods_host, "hostnogssenc");
 
 	check_need_password(authmethodlocal, authmethodhost);
 
@@ -3264,9 +3384,9 @@ main(int argc, char *argv[])
 	if (authwarning)
 	{
 		printf("\n");
-		pg_log_warning("enabling \"trust\" authentication for local connections");
+		pg_log_warning("enabling \"trust\" authentication");
 		fprintf(stderr, _("You can change this by editing pg_hba.conf or using the option -A, or\n"
-						  "--auth-local and --auth-host, the next time you run initdb.\n"));
+						  "the various options that start with --auth, the next time you run initdb.\n"));
 	}
 
 	/*

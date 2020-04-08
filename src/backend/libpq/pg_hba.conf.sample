@@ -87,3 +87,15 @@ host    all             all             ::1/128                 @authmethodhost@
 @remove-line-for-nolocal@local   replication     all                                     @authmethodlocal@
 host    replication     all             127.0.0.1/32            @authmethodhost@
 host    replication     all             ::1/128                 @authmethodhost@
+
+# hostnossl all           all             0.0.0.0/0               @authmethodhostnossl@
+# hostnossl all           all             ::/0                    @authmethodhostnossl@
+
+# hostssl all             all             0.0.0.0/0               @authmethodhostssl@
+# hostssl all             all             ::/0                    @authmethodhostssl@
+
+# hostnogssenc all           all             0.0.0.0/0               @authmethodhostnogssenc@
+# hostnogssenc all           all             ::/0                    @authmethodhostnogssenc@
+
+# hostgssenc all             all             0.0.0.0/0               @authmethodhostgssenc@
+# hostgssenc all             all             ::/0                    @authmethodhostgssenc@

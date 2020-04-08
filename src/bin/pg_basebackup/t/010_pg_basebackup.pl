@@ -6,7 +6,7 @@ use File::Basename qw(basename dirname);
 use File::Path qw(rmtree);
 use PostgresNode;
 use TestLib;
-use Test::More tests => 109;
+use Test::More tests => 112;
 
 program_help_ok('pg_basebackup');
 program_version_ok('pg_basebackup');
@@ -497,21 +497,37 @@ my $file_corrupt2 = $node->safe_psql('postgres',
 my $pageheader_size = 24;
 my $block_size = $node->safe_psql('postgres', 'SHOW block_size;');
 
-# induce corruption
+# induce corruption in the pageheader by writing random data into it
 system_or_bail 'pg_ctl', '-D', $pgdata, 'stop';
 open $file, '+<', "$pgdata/$file_corrupt1";
-seek($file, $pageheader_size, 0);
-syswrite($file, "\0\0\0\0\0\0\0\0\0");
+my $random_data = join '', map { ("a".."z")[rand 26] } 1 .. $pageheader_size;
+syswrite($file, $random_data);
 close $file;
 system_or_bail 'pg_ctl', '-D', $pgdata, 'start';
 
 $node->command_checks_all(
-	[ 'pg_basebackup', '-D', "$tempdir/backup_corrupt" ],
+	[ 'pg_basebackup', '-D', "$tempdir/backup_corrupt1" ],
 	1,
 	[qr{^$}],
 	[qr/^WARNING.*checksum verification failed/s],
-	'pg_basebackup reports checksum mismatch');
-rmtree("$tempdir/backup_corrupt");
+	"pg_basebackup reports checksum mismatch for random pageheader data");
+rmtree("$tempdir/backup_corrupt1");
+
+# zero out the pageheader completely
+open $file, '+<', "$pgdata/$file_corrupt1";
+system_or_bail 'pg_ctl', '-D', $pgdata, 'stop';
+my $zero_data = "\0"x$pageheader_size;
+syswrite($file, $zero_data);
+close $file;
+system_or_bail 'pg_ctl', '-D', $pgdata, 'start';
+
+$node->command_checks_all(
+	[ 'pg_basebackup', '-D', "$tempdir/backup_corrupt1a" ],
+	1,
+	[qr{^$}],
+	[qr/^WARNING.*checksum verification failed/s],
+	"pg_basebackup reports checksum mismatch for zeroed pageheader");
+rmtree("$tempdir/backup_corrupt1a");
 
 # induce further corruption in 5 more blocks
 system_or_bail 'pg_ctl', '-D', $pgdata, 'stop';

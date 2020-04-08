@@ -419,17 +419,18 @@ do { \
 						((is_heap) ? PAI_IS_HEAP : 0))
 
 /*
- * Check that BLCKSZ is a multiple of sizeof(size_t).  In PageIsVerified(),
- * it is much faster to check if a page is full of zeroes using the native
- * word size.  Note that this assertion is kept within a header to make
- * sure that StaticAssertDecl() works across various combinations of
- * platforms and compilers.
+ * Check that BLCKSZ is a multiple of sizeof(size_t).  In PageIsZero(), it is
+ * much faster to check if a page is full of zeroes using the native word size.
+ * Note that this assertion is kept within a header to make sure that
+ * StaticAssertDecl() works across various combinations of platforms and
+ * compilers.
  */
 StaticAssertDecl(BLCKSZ == ((BLCKSZ / sizeof(size_t)) * sizeof(size_t)),
 				 "BLCKSZ has to be a multiple of sizeof(size_t)");
 
 extern void PageInit(Page page, Size pageSize, Size specialSize);
 extern bool PageIsVerified(Page page, BlockNumber blkno);
+extern bool PageIsZero(Page page);
 extern OffsetNumber PageAddItemExtended(Page page, Item item, Size size,
 										OffsetNumber offsetNumber, int flags);
 extern Page PageGetTempPage(Page page);

@@ -246,6 +246,13 @@ extern PGDLLIMPORT int work_mem;
 extern PGDLLIMPORT int maintenance_work_mem;
 extern PGDLLIMPORT int max_parallel_maintenance_workers;
 
+extern int	ChecksumCostPage;
+extern int	ChecksumCostLimit;
+extern double ChecksumCostDelay;
+
+extern int	ChecksumCostBalance;
+extern bool ChecksumCostActive;
+
 extern int	VacuumCostPageHit;
 extern int	VacuumCostPageMiss;
 extern int	VacuumCostPageDirty;

@@ -21986,6 +21986,57 @@ SELECT (pg_stat_file('filename')).modification;
 
   </sect2>
 
+  <sect2 id="functions-data-sanity">
+   <title>Data Sanity Functions</title>
+
+   <para>
+    The functions shown in <xref linkend="functions-data-sanity-table"/>
+    provide means to check for health of data file in a cluster.
+   </para>
+
+   <table id="functions-data-sanity-table">
+    <title>Data Sanity Functions</title>
+    <tgroup cols="3">
+     <thead>
+      <row><entry>Name</entry> <entry>Return Type</entry> <entry>Description</entry>
+      </row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry>
+        <literal><function>pg_check_relation(<parameter>relation</parameter> <type>regclass</type> [, <parameter>fork</parameter> <type>text</type>])</function></literal>
+       </entry>
+       <entry><type>setof record</type></entry>
+       <entry>Validate the checksums for all blocks of all or the given fork of
+       a given relation.</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+   <indexterm>
+    <primary>pg_check_relation</primary>
+   </indexterm>
+   <para id="functions-check-relation-note" xreflabel="pg_check_relation">
+    <function>pg_check_relation</function> iterates over all the blocks of a
+    given relation and verify their checksum.  If provided,
+    <replaceable>fork</replaceable> should be <literal>'main'</literal> for the
+    main data fork, <literal>'fsm'</literal> for the free space map,
+    <literal>'vm'</literal> for the visibility map, or
+    <literal>'init'</literal> for the initialization fork, and only this
+    specific fork will be verifies, otherwise all forks will.  The function
+    returns the list of blocks for which the found checksum doesn't match the
+    expected one.  See <xref
+    linkend="runtime-config-resource-checksum-verification-cost"/> for
+    information on how to configure cost-based verification delay.  You must be
+    a member of the <literal>pg_read_all_stats</literal> role to use this
+    function.  It can only be used if data checksums are enabled.  See <xref
+    linkend="app-initdb-data-checksums"/> for more information.
+   </para>
+
+  </sect2>
+
   </sect1>
 
   <sect1 id="functions-trigger">

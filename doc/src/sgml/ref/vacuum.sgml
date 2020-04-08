@@ -79,11 +79,16 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
    same table.  It also allows us to leverage multiple CPUs in order to process
    indexes.  This feature is known as <firstterm>parallel vacuum</firstterm>.
    To disable this feature, one can use <literal>PARALLEL</literal> option and
-   specify parallel workers as zero.  <command>VACUUM FULL</command> rewrites
-   the entire contents of the table into a new disk file with no extra space,
-   allowing unused space to be returned to the operating system.  This form is
-   much slower and requires an exclusive lock on each table while it is being
-   processed.
+   specify parallel workers as zero.
+  </para>
+
+  <para>
+   <command>VACUUM FULL</command> rewrites the entire contents of the table
+   into a new file on disk with internal space left available as determined by
+   <literal>fillfactor</literal>.  If the table includes many dead tuples from
+   updates/deletes, this allows unused space to be returned to the operating
+   system.  This form is much slower and requires an exclusive lock on each
+   table while it is being processed.
   </para>
 
   <para>

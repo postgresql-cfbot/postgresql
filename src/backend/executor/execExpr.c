@@ -2536,6 +2536,144 @@ ExecInitWholeRowVar(ExprEvalStep *scratch, Var *variable, ExprState *state)
 	}
 }
 
+static void
+ExecInitSubscriptExpr(ExprEvalStep *scratch, SubscriptingRefState *sbsrefstate,
+					  ExprState *state, Node *expr, int off, bool isupper,
+					  List **adjust_jumps)
+{
+	/* Each subscript is evaluated into subscriptvalue/subscriptnull */
+	ExecInitExprRec((Expr *) expr, state,
+					&sbsrefstate->subscriptvalue,
+					&sbsrefstate->subscriptnull);
+
+	/* ... and then SBSREF_SUBSCRIPT saves it into step's workspace */
+	scratch->opcode = EEOP_SBSREF_SUBSCRIPT;
+	scratch->d.sbsref_subscript.state = sbsrefstate;
+	scratch->d.sbsref_subscript.typid = exprType(expr);
+	scratch->d.sbsref_subscript.off = off;
+	scratch->d.sbsref_subscript.isupper = isupper;
+	scratch->d.sbsref_subscript.jumpdone = -1;	/* adjust later */
+	ExprEvalPushStep(state, scratch);
+
+	*adjust_jumps = lappend_int(*adjust_jumps, state->steps_len - 1);
+}
+
+/* Init subscript expressions. */
+static void
+ExecInitSubscript(ExprEvalStep *scratch, SubscriptingRefState *sbsrefstate,
+				  ExprState *state, Node *expr, int i, bool isupper,
+				  List **adjust_jumps, bool *isprovided, Oid *exprtype)
+{
+	List	   *exprs = NULL;
+	int			nexprs = 0;
+	int			select_step;
+
+	/* When slicing, individual subscript bounds can be omitted */
+	*isprovided = expr != NULL;
+	if (!*isprovided)
+		return;
+
+	/*
+	 * Node can be a list of expression variants.  The first variant is
+	 * an unmodified expression, other variants can be NULL, so we need
+	 * to check if there are any non-NULL and emit SELECTEXPR if any.
+	 */
+	if (IsA(expr, List))
+	{
+		exprs = (List *) expr;
+		expr = linitial(exprs);
+
+		if (list_length(exprs) > 1)
+		{
+			ListCell   *lc = list_head(exprs);
+
+			while ((lc = lnext(exprs, lc)))
+			{
+				if (lfirst(lc))
+				{
+					nexprs = list_length(exprs) - 1;
+					break;
+				}
+			}
+		}
+	}
+
+	*exprtype = exprType(expr);
+
+	/* Emit SELECTEXPR step if there are expression variants */
+	if (nexprs)
+	{
+		scratch->opcode = EEOP_SBSREF_SELECTEXPR;
+		scratch->d.sbsref_selectexpr.state = sbsrefstate;
+		scratch->d.sbsref_selectexpr.off = i;
+		scratch->d.sbsref_selectexpr.isupper = isupper;
+		scratch->d.sbsref_selectexpr.nexprs = nexprs;
+		scratch->d.sbsref_selectexpr.exprtypes = palloc(sizeof(Oid) * nexprs);
+		scratch->d.sbsref_selectexpr.jumpdones = palloc(sizeof(int) * nexprs);
+		ExprEvalPushStep(state, scratch);
+		select_step = state->steps_len - 1;
+	}
+
+	/* Emit main expression */
+	ExecInitSubscriptExpr(scratch, sbsrefstate, state, expr, i, isupper,
+						  adjust_jumps);
+
+	/* Emit additional expression variants, if any */
+	if (nexprs)
+	{
+		ListCell   *lc = list_head(exprs);
+		List	   *adjust_subexpr_jumps = NIL;
+		int			j = 0;
+
+		/* Skip first expression which is already emitted */
+		while ((lc = lnext(exprs, lc)))
+		{
+			int			jumpdone;
+			Oid			exprtype;
+			ExprEvalStep *step;
+
+			expr = lfirst(lc);
+
+			if (expr)
+			{
+				/* Emit JUMP to the end for previous expression */
+				scratch->opcode = EEOP_JUMP;
+				scratch->d.jump.jumpdone = -1; /* adjust later */
+				ExprEvalPushStep(state, scratch);
+
+				adjust_subexpr_jumps = lappend_int(adjust_subexpr_jumps,
+												   state->steps_len - 1);
+
+				exprtype = exprType((Node *) expr);
+				jumpdone = state->steps_len;
+
+				ExecInitSubscriptExpr(scratch, sbsrefstate, state, expr,
+									  i, isupper, adjust_jumps);
+			}
+			else
+			{
+				exprtype = InvalidOid;
+				jumpdone = -1;
+			}
+
+			step = &state->steps[select_step];
+			step->d.sbsref_selectexpr.exprtypes[j] = exprtype;
+			step->d.sbsref_selectexpr.jumpdones[j] = jumpdone;
+
+			j++;
+		}
+
+		/* Adjust JUMPs for expression variants */
+		foreach(lc, adjust_subexpr_jumps)
+		{
+			ExprEvalStep *step = &state->steps[lfirst_int(lc)];
+
+			Assert(step->opcode == EEOP_JUMP);
+			step->d.jump.jumpdone = state->steps_len;
+		}
+	}
+}
+
 /*
  * Prepare evaluation of a SubscriptingRef expression.
  */
@@ -2543,20 +2681,20 @@ static void
 ExecInitSubscriptingRef(ExprEvalStep *scratch, SubscriptingRef *sbsref,
 						ExprState *state, Datum *resv, bool *resnull)
 {
-	bool		isAssignment = (sbsref->refassgnexpr != NULL);
 	SubscriptingRefState *sbsrefstate = palloc0(sizeof(SubscriptingRefState));
 	List	   *adjust_jumps = NIL;
 	ListCell   *lc;
+	ListCell   *ulc;
+	ListCell   *llc;
 	int			i;
+	RegProcedure typsubshandler = get_typsubsprocs(sbsref->refcontainertype);
+	bool		isAssignment = (sbsref->refassgnexpr != NULL);
 
 	/* Fill constant fields of SubscriptingRefState */
 	sbsrefstate->isassignment = isAssignment;
 	sbsrefstate->refelemtype = sbsref->refelemtype;
 	sbsrefstate->refattrlength = get_typlen(sbsref->refcontainertype);
-	get_typlenbyvalalign(sbsref->refelemtype,
-						 &sbsrefstate->refelemlength,
-						 &sbsrefstate->refelembyval,
-						 &sbsrefstate->refelemalign);
+	sbsrefstate->sbsroutines = (SubscriptRoutines *) OidFunctionCall0(typsubshandler);
 
 	/*
 	 * Evaluate array input.  It's safe to do so into resv/resnull, because we
@@ -2580,84 +2718,43 @@ ExecInitSubscriptingRef(ExprEvalStep *scratch, SubscriptingRef *sbsref,
 								   state->steps_len - 1);
 	}
 
-	/* Verify subscript list lengths are within limit */
-	if (list_length(sbsref->refupperindexpr) > MAXDIM)
-		ereport(ERROR,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg("number of array dimensions (%d) exceeds the maximum allowed (%d)",
-						list_length(sbsref->refupperindexpr), MAXDIM)));
-
-	if (list_length(sbsref->reflowerindexpr) > MAXDIM)
-		ereport(ERROR,
-				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg("number of array dimensions (%d) exceeds the maximum allowed (%d)",
-						list_length(sbsref->reflowerindexpr), MAXDIM)));
-
-	/* Evaluate upper subscripts */
-	i = 0;
-	foreach(lc, sbsref->refupperindexpr)
+	/* Emit INIT step if needed. */
+	if (sbsrefstate->sbsroutines->init)
 	{
-		Expr	   *e = (Expr *) lfirst(lc);
+		scratch->opcode = EEOP_SBSREF_INIT;
+		scratch->d.sbsref.state = sbsrefstate;
+		ExprEvalPushStep(state, scratch);
+	}
 
-		/* When slicing, individual subscript bounds can be omitted */
-		if (!e)
+	/* Evaluate upper and lower subscripts */
+	i = 0;
+	llc = list_head(sbsref->reflowerindexpr);
+
+	sbsrefstate->numlower = 0;
+
+	foreach(ulc, sbsref->refupperindexpr)
+	{
+		ExecInitSubscript(scratch, sbsrefstate, state, lfirst(ulc), i,
+						  true, &adjust_jumps,
+						  &sbsrefstate->upperprovided[i],
+						  &sbsrefstate->uppertypid[i]);
+
+		if (llc)
 		{
-			sbsrefstate->upperprovided[i] = false;
-			i++;
-			continue;
+			ExecInitSubscript(scratch, sbsrefstate, state, lfirst(llc),
+							  i, false, &adjust_jumps,
+							  &sbsrefstate->lowerprovided[i],
+							  &sbsrefstate->lowertypid[i]);
+
+			llc = lnext(sbsref->reflowerindexpr, llc);
+
+			sbsrefstate->numlower++;
 		}
 
-		sbsrefstate->upperprovided[i] = true;
-
-		/* Each subscript is evaluated into subscriptvalue/subscriptnull */
-		ExecInitExprRec(e, state,
-						&sbsrefstate->subscriptvalue, &sbsrefstate->subscriptnull);
-
-		/* ... and then SBSREF_SUBSCRIPT saves it into step's workspace */
-		scratch->opcode = EEOP_SBSREF_SUBSCRIPT;
-		scratch->d.sbsref_subscript.state = sbsrefstate;
-		scratch->d.sbsref_subscript.off = i;
-		scratch->d.sbsref_subscript.isupper = true;
-		scratch->d.sbsref_subscript.jumpdone = -1;	/* adjust later */
-		ExprEvalPushStep(state, scratch);
-		adjust_jumps = lappend_int(adjust_jumps,
-								   state->steps_len - 1);
 		i++;
 	}
+
 	sbsrefstate->numupper = i;
-
-	/* Evaluate lower subscripts similarly */
-	i = 0;
-	foreach(lc, sbsref->reflowerindexpr)
-	{
-		Expr	   *e = (Expr *) lfirst(lc);
-
-		/* When slicing, individual subscript bounds can be omitted */
-		if (!e)
-		{
-			sbsrefstate->lowerprovided[i] = false;
-			i++;
-			continue;
-		}
-
-		sbsrefstate->lowerprovided[i] = true;
-
-		/* Each subscript is evaluated into subscriptvalue/subscriptnull */
-		ExecInitExprRec(e, state,
-						&sbsrefstate->subscriptvalue, &sbsrefstate->subscriptnull);
-
-		/* ... and then SBSREF_SUBSCRIPT saves it into step's workspace */
-		scratch->opcode = EEOP_SBSREF_SUBSCRIPT;
-		scratch->d.sbsref_subscript.state = sbsrefstate;
-		scratch->d.sbsref_subscript.off = i;
-		scratch->d.sbsref_subscript.isupper = false;
-		scratch->d.sbsref_subscript.jumpdone = -1;	/* adjust later */
-		ExprEvalPushStep(state, scratch);
-		adjust_jumps = lappend_int(adjust_jumps,
-								   state->steps_len - 1);
-		i++;
-	}
-	sbsrefstate->numlower = i;
 
 	/* Should be impossible if parser is sane, but check anyway: */
 	if (sbsrefstate->numlower != 0 &&

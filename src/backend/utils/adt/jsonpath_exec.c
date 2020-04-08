@@ -783,7 +783,7 @@ executeItemOptUnwrapTarget(JsonPathExecContext *cxt, JsonPathItem *jsp,
 						else
 						{
 							v = getIthJsonbValueFromContainer(jb->val.binary.data,
-															  (uint32) index);
+															  (uint32) index, NULL);
 
 							if (v == NULL)
 								continue;

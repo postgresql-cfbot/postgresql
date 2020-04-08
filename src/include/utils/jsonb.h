@@ -386,12 +386,13 @@ extern JsonbValue *getKeyJsonValueFromContainer(JsonbContainer *container,
 												const char *keyVal, int keyLen,
 												JsonbValue *res);
 extern JsonbValue *getIthJsonbValueFromContainer(JsonbContainer *sheader,
-												 uint32 i);
+												 uint32 i, JsonbValue *result);
 extern JsonbValue *pushJsonbValue(JsonbParseState **pstate,
 								  JsonbIteratorToken seq, JsonbValue *jbval);
 extern JsonbIterator *JsonbIteratorInit(JsonbContainer *container);
 extern JsonbIteratorToken JsonbIteratorNext(JsonbIterator **it, JsonbValue *val,
 											bool skipNested);
+extern JsonbValue *JsonbToJsonbValue(Jsonb *jsonb);
 extern Jsonb *JsonbValueToJsonb(JsonbValue *val);
 extern bool JsonbDeepContains(JsonbIterator **val,
 							  JsonbIterator **mContained);
@@ -407,5 +408,6 @@ extern char *JsonbToCStringIndent(StringInfo out, JsonbContainer *in,
 extern bool JsonbExtractScalar(JsonbContainer *jbc, JsonbValue *res);
 extern const char *JsonbTypeName(JsonbValue *jb);
 
+extern JsonbValue *to_jsonb_worker(Datum source, Oid source_type, bool is_null);
 
 #endif							/* __JSONB_H__ */

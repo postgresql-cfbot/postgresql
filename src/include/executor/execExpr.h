@@ -19,7 +19,7 @@
 
 /* forward references to avoid circularity */
 struct ExprEvalStep;
-struct SubscriptingRefState;
+struct SubscriptRoutines;
 
 /* Bits in ExprState->flags (see also execnodes.h for public flag bits): */
 /* expression's interpreter has been initialized */
@@ -184,6 +184,12 @@ typedef enum ExprEvalOp
 	 * DEFORM step.
 	 */
 	EEOP_FIELDSTORE_FORM,
+
+	/* Init subscripting */
+	EEOP_SBSREF_INIT,
+
+	/* Select an expression for container subscript evaluation */
+	EEOP_SBSREF_SELECTEXPR,
 
 	/* Process a container subscript; short-circuit expression to NULL if NULL */
 	EEOP_SBSREF_SUBSCRIPT,
@@ -495,17 +501,30 @@ typedef struct ExprEvalStep
 			int			ncolumns;
 		}			fieldstore;
 
-		/* for EEOP_SBSREF_SUBSCRIPT */
+		/* for EEOP_SBSREF_SELECTEXPR */
 		struct
 		{
 			/* too big to have inline */
 			struct SubscriptingRefState *state;
 			int			off;	/* 0-based index of this subscript */
 			bool		isupper;	/* is it upper or lower subscript? */
+			int			nexprs;		/* subscript expression count */
+			Oid		   *exprtypes;		/* type oids of subscript expression variants */
+			int		   *jumpdones;		/* jumps to expression variants */
+		}			sbsref_selectexpr;
+
+		/* for EEOP_SBSREF_SUBSCRIPT */
+		struct
+		{
+			/* too big to have inline */
+			struct SubscriptingRefState *state;
+			Oid			typid;	/* type oid of subscript */
+			int			off;	/* 0-based index of this subscript */
+			bool		isupper;	/* is it upper or lower subscript? */
 			int			jumpdone;	/* jump here on null */
 		}			sbsref_subscript;
 
-		/* for EEOP_SBSREF_OLD / ASSIGN / FETCH */
+		/* for EEOP_SBSREF_OLD / ASSIGN / FETCH / INIT */
 		struct
 		{
 			/* too big to have inline */
@@ -658,13 +677,15 @@ typedef struct SubscriptingRefState
 	/* numupper and upperprovided[] are filled at compile time */
 	/* at runtime, extracted subscript datums get stored in upperindex[] */
 	int			numupper;
-	bool		upperprovided[MAXDIM];
-	int			upperindex[MAXDIM];
+	bool		upperprovided[MAX_SUBSCRIPT_DEPTH];
+	Oid			uppertypid[MAX_SUBSCRIPT_DEPTH];
+	Datum		upperindex[MAX_SUBSCRIPT_DEPTH];
 
 	/* similarly for lower indexes, if any */
 	int			numlower;
-	bool		lowerprovided[MAXDIM];
-	int			lowerindex[MAXDIM];
+	bool		lowerprovided[MAX_SUBSCRIPT_DEPTH];
+	Oid			lowertypid[MAX_SUBSCRIPT_DEPTH];
+	Datum		lowerindex[MAX_SUBSCRIPT_DEPTH];
 
 	/* subscript expressions get evaluated into here */
 	Datum		subscriptvalue;
@@ -677,6 +698,10 @@ typedef struct SubscriptingRefState
 	/* if we have a nested assignment, SBSREF_OLD puts old value here */
 	Datum		prevvalue;
 	bool		prevnull;
+
+	bool		resnull;
+	struct SubscriptRoutines *sbsroutines;
+	void	   *privatedata;
 } SubscriptingRefState;
 
 
@@ -721,6 +746,8 @@ extern void ExecEvalFieldStoreDeForm(ExprState *state, ExprEvalStep *op,
 									 ExprContext *econtext);
 extern void ExecEvalFieldStoreForm(ExprState *state, ExprEvalStep *op,
 								   ExprContext *econtext);
+extern void ExecEvalSubscriptingRefInit(ExprState *state, ExprEvalStep *op);
+extern int ExecEvalSubscriptingRefSelect(ExprState *state, ExprEvalStep *op);
 extern bool ExecEvalSubscriptingRef(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalSubscriptingRefFetch(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalSubscriptingRefOld(ExprState *state, ExprEvalStep *op);

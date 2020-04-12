@@ -93,6 +93,14 @@ typedef struct
 #define USECS_PER_MINUTE INT64CONST(60000000)
 #define USECS_PER_SEC	INT64CONST(1000000)
 
+/* compute total of non-month, non-year units in a pg_tm struct + fsec */
+#define Minor_Units(tm, usec) \
+	(tm.tm_mday - 1) * USECS_PER_DAY + \
+	tm.tm_hour * USECS_PER_HOUR + \
+	tm.tm_min * USECS_PER_MINUTE + \
+	tm.tm_sec * USECS_PER_SEC + \
+	usec
+
 /*
  * We allow numeric timezone offsets up to 15:59:59 either way from Greenwich.
  * Currently, the record holders for wackiest offsets in actual use are zones

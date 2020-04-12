@@ -45,6 +45,13 @@
 
 #define SAMESIGN(a,b)	(((a) < 0) == ((b) < 0))
 
+/*
+ * The default origin is 2001-01-01, which matches date_trunc as far as
+ * aligning on ISO weeks. This numeric value should match the internal
+ * value of SELECT make_timestamp(2001, 1, 1, 0, 0, 0);
+ */
+#define DATE_TRUNC_DEFAULT_ORIGIN 31622400000000
+
 /* Set at postmaster start */
 TimestampTz PgStartTime;
 
@@ -3804,6 +3811,146 @@ timestamptz_age(PG_FUNCTION_ARGS)
  *---------------------------------------------------------*/
 
 
+static Timestamp
+timestamp_trunc_interval_internal(Interval *stride,
+								  Timestamp timestamp,
+								  Timestamp origin)
+{
+	Timestamp	result,
+				tm_diff,
+				tm_usecs,
+				tm_delta;
+	fsec_t		ofsec,
+				tfsec;
+	int 		origin_months,
+				tm_months,
+				result_months,
+				month_diff,
+				month_delta = 0;
+
+	struct pg_tm ot, /* origin */
+				 tt, /* input */
+				 rt; /* result */
+
+	tm_diff = timestamp - origin;
+
+	/*
+	 * For strides measured in days or smaller units, do one simple calculation
+	 * on the time in microseconds.
+	 */
+	if (stride->month == 0)
+	{
+		tm_usecs = stride->day * USECS_PER_DAY + stride->time;
+
+		/* trivial case of 1 usec */
+		if (tm_usecs == 1)
+			return timestamp;
+
+		tm_delta = tm_diff - tm_diff % tm_usecs;;
+		if (tm_diff < 0)
+			tm_delta -= tm_usecs;
+
+		result = origin + tm_delta;
+	}
+	else
+	{
+		/*
+		 * For strides measured in years and/or months, convert origin and
+		 * input timestamps to months.
+		 */
+		if (stride->day != 0 || stride->time != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("cannot mix year or month interval units with day units or smaller")));
+
+		if (timestamp2tm(timestamp, NULL, &tt, &tfsec, NULL, NULL) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+
+		if (timestamp2tm(origin, NULL, &ot, &ofsec, NULL, NULL) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+
+
+		origin_months = ot.tm_year * 12 + ot.tm_mon - 1;
+		tm_months = tt.tm_year * 12 + tt.tm_mon - 1;
+		month_diff = tm_months - origin_months;
+
+		/* take the origin's smaller units into account */
+		if (Minor_Units(tt, tfsec) < Minor_Units(ot, ofsec))
+			month_diff--;
+
+		month_delta = month_diff - month_diff % stride->month;
+
+		/*
+		 * Make sure truncation happens in the right direction.
+		 * XXX This is a bit of a hack.
+		 */
+		if (month_diff < 0 && stride->month != 1)
+			month_delta -= stride->month;
+
+		result_months = origin_months + month_delta;
+
+		/* compute result fields of pg_tm struct */
+		rt.tm_year = result_months / 12;
+		rt.tm_mon = (result_months % 12) + 1;
+		/* align on origin's smaller units */
+		rt.tm_mday = ot.tm_mday;
+		rt.tm_hour = ot.tm_hour;
+		rt.tm_min = ot.tm_min;
+		rt.tm_sec = ot.tm_sec;
+
+		/* Note using the origin's fsec directly */
+		if (tm2timestamp(&rt, ofsec, NULL, &result) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+	}
+	return result;
+}
+
+/* timestamp_trunc_interval()
+ * Truncate timestamp to specified interval.
+ */
+Datum
+timestamp_trunc_interval(PG_FUNCTION_ARGS)
+{
+	Interval   *stride = PG_GETARG_INTERVAL_P(0);
+	Timestamp	timestamp = PG_GETARG_TIMESTAMP(1);
+	Timestamp	result;
+
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+		PG_RETURN_TIMESTAMP(timestamp);
+
+	result = timestamp_trunc_interval_internal(stride, timestamp,
+											   DATE_TRUNC_DEFAULT_ORIGIN);
+
+	PG_RETURN_TIMESTAMP(result);
+}
+
+Datum
+timestamp_trunc_interval_origin(PG_FUNCTION_ARGS)
+{
+	Interval   *stride = PG_GETARG_INTERVAL_P(0);
+	Timestamp	timestamp = PG_GETARG_TIMESTAMP(1);
+	Timestamp	origin = PG_GETARG_TIMESTAMP(2);
+	Timestamp	result;
+
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+		PG_RETURN_TIMESTAMP(timestamp);
+
+	if (TIMESTAMP_NOT_FINITE(origin))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range")));
+
+	result = timestamp_trunc_interval_internal(stride, timestamp, origin);
+
+	PG_RETURN_TIMESTAMP(result);
+}
+
 /* timestamp_trunc()
  * Truncate timestamp to specified units.
  */
@@ -3936,6 +4083,132 @@ timestamp_trunc(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_TIMESTAMP(result);
+}
+
+/*
+ * Common code for timestamptz_trunc_interval*()
+ *
+ * tzp identifies the zone to truncate with respect to.  We assume
+ * infinite timestamps have already been rejected.
+ */
+static TimestampTz
+timestamptz_trunc_interval_internal(Interval *stride,
+									TimestampTz timestamp,
+									pg_tz *tzp,
+									TimestampTz origin)
+{
+	TimestampTz	result,
+				tm_diff,
+				tm_usecs,
+				tm_delta;
+	fsec_t		ofsec,
+				tfsec;
+	int 		origin_months,
+				tm_months,
+				result_months,
+				month_diff,
+				month_delta = 0,
+				tz;
+
+	struct pg_tm ot, /* origin */
+				 tt, /* input */
+				 rt; /* result */
+
+	/* Convert input to pg_tm with timezone. */
+	if (timestamp2tm(timestamp, &tz, &tt, &tfsec, NULL, tzp) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range")));
+
+	// XXX it seems like we should pass TZ here, but it seems to break
+	// things
+	if (timestamp2tm(origin, NULL, &ot, &ofsec, NULL, tzp) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range")));
+
+	/*
+	 * For strides measured in days or smaller units, do one simple calculation
+	 * on the time in microseconds.
+	 */
+	if (stride->month == 0)
+	{
+		tm_usecs = stride->day * USECS_PER_DAY + stride->time;
+
+		/* trivial case of 1 usec */
+		if (tm_usecs == 1)
+			return timestamp;
+
+		// got the idea from timestamp_zone() to just recovert to timestamp
+		// with null tz.
+		if (tm2timestamp(&tt, tfsec, NULL, &timestamp) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+
+		// WIP
+		// if (tm2timestamp(&ot, ofsec, NULL, &origin) != 0)
+		// 	ereport(ERROR,
+		// 			(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+		// 			 errmsg("timestamp out of range")));
+
+		tm_diff = timestamp - origin;
+
+		tm_delta = tm_diff - tm_diff % tm_usecs;;
+		if (tm_diff < 0)
+			tm_delta -= tm_usecs;
+
+
+		// XXX this seems mysterious, hopefully there's a more principled way
+		result = dt2local(origin + tm_delta, -tz);
+	}
+	else
+	{
+		/*
+		 * For strides measured in years and/or months, convert origin and
+		 * input timestamps to months.
+		 */
+		if (stride->day != 0 || stride->time != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("cannot mix year or month interval units with day units or smaller")));
+
+		origin_months = ot.tm_year * 12 + ot.tm_mon - 1;
+		tm_months = tt.tm_year * 12 + tt.tm_mon - 1;
+		month_diff = tm_months - origin_months;
+
+		/* take the origin's smaller units into account */
+		if (Minor_Units(tt, tfsec) < Minor_Units(ot, ofsec))
+			month_diff--;
+
+		month_delta = month_diff - month_diff % stride->month;
+
+		/*
+		 * Make sure truncation happens in the right direction.
+		 * XXX This is a bit of a hack.
+		 */
+		if (month_diff < 0 && stride->month != 1)
+			month_delta -= stride->month;
+
+		result_months = origin_months + month_delta;
+
+		/* compute result fields of pg_tm struct */
+		rt.tm_year = result_months / 12;
+		rt.tm_mon = (result_months % 12) + 1;
+		/* align on origin's smaller units */
+		rt.tm_mday = ot.tm_mday;
+		rt.tm_hour = ot.tm_hour;
+		rt.tm_min = ot.tm_min;
+		rt.tm_sec = ot.tm_sec;
+
+		/* Note using the origin's fsec directly */
+		if (tm2timestamp(&rt, ofsec, &tz, &result) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+	}
+
+	return result;
 }
 
 /*
@@ -4085,6 +4358,52 @@ timestamptz_trunc_internal(text *units, TimestampTz timestamp, pg_tz *tzp)
 	return result;
 }
 
+/* timestamptz_trunc_interval()
+ * Truncate timestamptz to specified interval in session timezone.
+ */
+Datum
+timestamptz_trunc_interval(PG_FUNCTION_ARGS)
+{
+	Interval   *stride = PG_GETARG_INTERVAL_P(0);
+	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(1);
+	TimestampTz result;
+
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+		PG_RETURN_TIMESTAMPTZ(timestamp);
+
+	result = timestamptz_trunc_interval_internal(stride, timestamp,
+												 session_timezone,
+												 DATE_TRUNC_DEFAULT_ORIGIN);
+
+	PG_RETURN_TIMESTAMPTZ(result);
+}
+
+/* timestamptz_trunc_interval_origin()
+ * Truncate timestamptz to specified interval in session timezone.
+ */
+Datum
+timestamptz_trunc_interval_origin(PG_FUNCTION_ARGS)
+{
+	Interval   *stride = PG_GETARG_INTERVAL_P(0);
+	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(1);
+	TimestampTz result;
+	TimestampTz	origin = PG_GETARG_TIMESTAMPTZ(2);
+
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+		PG_RETURN_TIMESTAMP(timestamp);
+
+	if (TIMESTAMP_NOT_FINITE(origin))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range")));
+
+	result = timestamptz_trunc_interval_internal(stride, timestamp,
+												 session_timezone,
+												 origin);
+
+	PG_RETURN_TIMESTAMPTZ(result);
+}
+
 /* timestamptz_trunc()
  * Truncate timestamptz to specified units in session timezone.
  */
@@ -4099,6 +4418,127 @@ timestamptz_trunc(PG_FUNCTION_ARGS)
 		PG_RETURN_TIMESTAMPTZ(timestamp);
 
 	result = timestamptz_trunc_internal(units, timestamp, session_timezone);
+
+	PG_RETURN_TIMESTAMPTZ(result);
+}
+
+/* timestamptz_trunc_interval_zone()
+ * Truncate timestamptz to specified interval in specified timezone.
+ */
+Datum
+timestamptz_trunc_interval_zone(PG_FUNCTION_ARGS)
+{
+	Interval   *stride = PG_GETARG_INTERVAL_P(0);
+	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(1);
+	text	   *zone = PG_GETARG_TEXT_PP(2);
+	TimestampTz result;
+	char		tzname[TZ_STRLEN_MAX + 1];
+	char	   *lowzone;
+	int			type,
+				val;
+	pg_tz	   *tzp;
+
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+		PG_RETURN_TIMESTAMPTZ(timestamp);
+
+	/*
+	 * Look up the requested timezone (see notes in timestamptz_zone()).
+	 */
+	text_to_cstring_buffer(zone, tzname, sizeof(tzname));
+
+	/* DecodeTimezoneAbbrev requires lowercase input */
+	lowzone = downcase_truncate_identifier(tzname,
+										   strlen(tzname),
+										   false);
+
+	type = DecodeTimezoneAbbrev(0, lowzone, &val, &tzp);
+
+	if (type == TZ || type == DTZ)
+	{
+		/* fixed-offset abbreviation, get a pg_tz descriptor for that */
+		tzp = pg_tzset_offset(-val);
+	}
+	else if (type == DYNTZ)
+	{
+		/* dynamic-offset abbreviation, use its referenced timezone */
+	}
+	else
+	{
+		/* try it as a full zone name */
+		tzp = pg_tzset(tzname);
+		if (!tzp)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("time zone \"%s\" not recognized", tzname)));
+	}
+
+	result = timestamptz_trunc_interval_internal(stride, timestamp,
+												 tzp,
+												 DATE_TRUNC_DEFAULT_ORIGIN);
+
+	PG_RETURN_TIMESTAMPTZ(result);
+}
+
+/* timestamptz_trunc_interval_origin_zone()
+ * Truncate timestamptz to specified interval in specified timezone,
+ * aligned to the specified origin.
+ */
+Datum
+timestamptz_trunc_interval_origin_zone(PG_FUNCTION_ARGS)
+{
+	Interval   *stride = PG_GETARG_INTERVAL_P(0);
+	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(1);
+	TimestampTz	origin = PG_GETARG_TIMESTAMPTZ(2);
+	text	   *zone = PG_GETARG_TEXT_PP(3);
+	TimestampTz result;
+	char		tzname[TZ_STRLEN_MAX + 1];
+	char	   *lowzone;
+	int			type,
+				val;
+	pg_tz	   *tzp;
+
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+		PG_RETURN_TIMESTAMP(timestamp);
+
+	if (TIMESTAMP_NOT_FINITE(origin))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range")));
+
+	/*
+	 * Look up the requested timezone (see notes in timestamptz_zone()).
+	 */
+	text_to_cstring_buffer(zone, tzname, sizeof(tzname));
+
+	/* DecodeTimezoneAbbrev requires lowercase input */
+	lowzone = downcase_truncate_identifier(tzname,
+										   strlen(tzname),
+										   false);
+
+	type = DecodeTimezoneAbbrev(0, lowzone, &val, &tzp);
+
+	if (type == TZ || type == DTZ)
+	{
+		/* fixed-offset abbreviation, get a pg_tz descriptor for that */
+		tzp = pg_tzset_offset(-val);
+	}
+	else if (type == DYNTZ)
+	{
+		/* dynamic-offset abbreviation, use its referenced timezone */
+	}
+	else
+	{
+		/* try it as a full zone name */
+		tzp = pg_tzset(tzname);
+		if (!tzp)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("time zone \"%s\" not recognized", tzname)));
+	}
+
+	result = timestamptz_trunc_interval_internal(stride, timestamp,
+												 tzp,
+												 origin);
 
 	PG_RETURN_TIMESTAMPTZ(result);
 }

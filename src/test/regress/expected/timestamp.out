@@ -545,6 +545,215 @@ SELECT '' AS date_trunc_week, date_trunc( 'week', timestamp '2004-02-29 15:44:17
                  | Mon Feb 23 00:00:00 2004
 (1 row)
 
+-- verify date_trunc_interval behaves the same as date_trunc (excluding decade)
+-- case 1: AD dates, origin < input
+SELECT
+  str,
+  interval,
+  date_trunc(str, ts) = date_trunc_interval(interval::interval, ts) AS equal
+FROM (
+  VALUES
+  ('millennium', '1000 y'),
+  ('century', '100 y'),
+  ('year', '1 y'),
+  ('quarter', '3 mon'),
+  ('month', '1 mon'),
+  ('week', '7 d'),
+  ('day', '1 d'),
+  ('hour', '1 h'),
+  ('minute', '1 m'),
+  ('second', '1 s'),
+  ('millisecond', '1 ms'),
+  ('microsecond', '1 us')
+) intervals (str, interval),
+(SELECT timestamp '2020-02-29 15:44:17.71393') ts (ts);
+     str     | interval | equal 
+-------------+----------+-------
+ millennium  | 1000 y   | t
+ century     | 100 y    | t
+ year        | 1 y      | t
+ quarter     | 3 mon    | t
+ month       | 1 mon    | t
+ week        | 7 d      | t
+ day         | 1 d      | t
+ hour        | 1 h      | t
+ minute      | 1 m      | t
+ second      | 1 s      | t
+ millisecond | 1 ms     | t
+ microsecond | 1 us     | t
+(12 rows)
+
+-- case 2: BC dates, origin < input
+SELECT
+  str,
+  interval,
+  date_trunc(str, ts) = date_trunc_interval(interval::interval, ts, timestamp '2000-01-01 BC') AS equal
+FROM (
+  VALUES
+  ('millennium', '1000 y'),
+  ('century', '100 y'),
+  ('year', '1 y'),
+  ('quarter', '3 mon'),
+  ('month', '1 mon'),
+  ('week', '7 d'),
+  ('day', '1 d'),
+  ('hour', '1 h'),
+  ('minute', '1 m'),
+  ('second', '1 s'),
+  ('millisecond', '1 ms'),
+  ('microsecond', '1 us')
+) intervals (str, interval),
+(SELECT timestamp '0055-6-10 15:44:17.71393 BC') ts (ts);
+     str     | interval | equal 
+-------------+----------+-------
+ millennium  | 1000 y   | t
+ century     | 100 y    | t
+ year        | 1 y      | t
+ quarter     | 3 mon    | t
+ month       | 1 mon    | t
+ week        | 7 d      | t
+ day         | 1 d      | t
+ hour        | 1 h      | t
+ minute      | 1 m      | t
+ second      | 1 s      | t
+ millisecond | 1 ms     | t
+ microsecond | 1 us     | t
+(12 rows)
+
+-- case 3: AD dates, origin > input
+SELECT
+  str,
+  interval,
+  date_trunc(str, ts) = date_trunc_interval(interval::interval, ts) AS equal
+FROM (
+  VALUES
+  ('millennium', '1000 y'),
+  ('century', '100 y'),
+  ('year', '1 y'),
+  ('quarter', '3 mon'),
+  ('month', '1 mon'),
+  ('week', '7 d'),
+  ('day', '1 d'),
+  ('hour', '1 h'),
+  ('minute', '1 m'),
+  ('second', '1 s'),
+  ('millisecond', '1 ms'),
+  ('microsecond', '1 us')
+) intervals (str, interval),
+(SELECT timestamp '1999-12-31 15:44:17.71393') ts (ts);
+     str     | interval | equal 
+-------------+----------+-------
+ millennium  | 1000 y   | t
+ century     | 100 y    | t
+ year        | 1 y      | t
+ quarter     | 3 mon    | t
+ month       | 1 mon    | t
+ week        | 7 d      | t
+ day         | 1 d      | t
+ hour        | 1 h      | t
+ minute      | 1 m      | t
+ second      | 1 s      | t
+ millisecond | 1 ms     | t
+ microsecond | 1 us     | t
+(12 rows)
+
+-- case 4: BC dates, origin > input
+SELECT
+  str,
+  interval,
+  date_trunc(str, ts) = date_trunc_interval(interval::interval, ts) AS equal
+FROM (
+  VALUES
+  ('millennium', '1000 y'),
+  ('century', '100 y'),
+  ('year', '1 y'),
+  ('quarter', '3 mon'),
+  ('month', '1 mon'),
+  ('week', '7 d'),
+  ('day', '1 d'),
+  ('hour', '1 h'),
+  ('minute', '1 m'),
+  ('second', '1 s'),
+  ('millisecond', '1 ms'),
+  ('microsecond', '1 us')
+) intervals (str, interval),
+(SELECT timestamp '0055-6-07 15:44:17.71393 BC') ts (ts);
+     str     | interval | equal 
+-------------+----------+-------
+ millennium  | 1000 y   | t
+ century     | 100 y    | t
+ year        | 1 y      | t
+ quarter     | 3 mon    | t
+ month       | 1 mon    | t
+ week        | 7 d      | t
+ day         | 1 d      | t
+ hour        | 1 h      | t
+ minute      | 1 m      | t
+ second      | 1 s      | t
+ millisecond | 1 ms     | t
+ microsecond | 1 us     | t
+(12 rows)
+
+-- truncate timestamps on arbitrary intervals
+SELECT
+  interval,
+  date_trunc_interval(interval::interval, ts)
+FROM (
+  VALUES
+  ('50 years'),
+  ('1.5 years'),
+  ('18 months'),
+  ('6 months'),
+  ('15 days'),
+  ('2 hours'),
+  ('15 minutes'),
+  ('10 seconds'),
+  ('100 milliseconds'),
+  ('250 microseconds')
+) intervals (interval),
+(SELECT TIMESTAMP '2020-02-11 15:44:17.71393') ts (ts);
+     interval     |      date_trunc_interval       
+------------------+--------------------------------
+ 50 years         | Mon Jan 01 00:00:00 2001
+ 1.5 years        | Tue Jan 01 00:00:00 2019
+ 18 months        | Tue Jan 01 00:00:00 2019
+ 6 months         | Wed Jan 01 00:00:00 2020
+ 15 days          | Thu Feb 06 00:00:00 2020
+ 2 hours          | Tue Feb 11 14:00:00 2020
+ 15 minutes       | Tue Feb 11 15:30:00 2020
+ 10 seconds       | Tue Feb 11 15:44:10 2020
+ 100 milliseconds | Tue Feb 11 15:44:17.7 2020
+ 250 microseconds | Tue Feb 11 15:44:17.71375 2020
+(10 rows)
+
+-- shift bins using the origin parameter:
+SELECT date_trunc_interval('5 min'::interval, timestamp '2020-02-1 01:01:01', timestamp '2020-02-01 00:02:30');
+   date_trunc_interval    
+--------------------------
+ Sat Feb 01 00:57:30 2020
+(1 row)
+
+SELECT date_trunc_interval('5 years'::interval, timestamp '2020-02-1 01:01:01', timestamp '2012-01-01');
+   date_trunc_interval    
+--------------------------
+ Sun Jan 01 00:00:00 2017
+(1 row)
+
+SELECT date_trunc_interval('3 year', timestamp '2015-01-14 20:38:40', timestamp '2012-01-15 01:01:01.123');
+     date_trunc_interval      
+------------------------------
+ Sun Jan 15 01:01:01.123 2012
+(1 row)
+
+SELECT date_trunc_interval('3 year', timestamp '2015-01-15 20:38:40', timestamp '2012-01-15 01:01:01.123');
+     date_trunc_interval      
+------------------------------
+ Thu Jan 15 01:01:01.123 2015
+(1 row)
+
+-- not defined
+SELECT date_trunc_interval('1 month 1 day', timestamp '2001-02-16 20:38:40.123456');
+ERROR:  cannot mix year or month interval units with day units or smaller
 -- Test casting within a BETWEEN qualifier
 SELECT '' AS "54", d1 - timestamp without time zone '1997-01-02' AS diff
   FROM TIMESTAMP_TBL

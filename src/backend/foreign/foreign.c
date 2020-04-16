@@ -187,6 +187,49 @@ GetForeignServerByName(const char *srvname, bool missing_ok)
 	return GetForeignServer(serverid);
 }
 
+/*
+ * GetUserMappingOid - look up the user mapping by user mapping oid.
+ *
+ * If userid of the mapping is invalid, we set it to current userid.
+ */
+UserMapping *
+GetUserMappingByOid(Oid umid)
+{
+	Datum		datum;
+	HeapTuple   tp;
+	UserMapping	*um;
+	bool		isnull;
+	Form_pg_user_mapping tableform;
+
+	tp = SearchSysCache1(USERMAPPINGOID,
+						 ObjectIdGetDatum(umid));
+
+	if (!HeapTupleIsValid(tp))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("user mapping not found for %d", umid)));
+
+	tableform = (Form_pg_user_mapping) GETSTRUCT(tp);
+	um = (UserMapping *) palloc(sizeof(UserMapping));
+	um->umid = umid;
+	um->userid = OidIsValid(tableform->umuser) ?
+		tableform->umuser : GetUserId();
+	um->serverid = tableform->umserver;
+
+	/* Extract the umoptions */
+	datum = SysCacheGetAttr(USERMAPPINGUSERSERVER,
+							tp,
+							Anum_pg_user_mapping_umoptions,
+							&isnull);
+	if (isnull)
+		um->options = NIL;
+	else
+		um->options = untransformRelOptions(datum);
+
+	ReleaseSysCache(tp);
+
+	return um;
+}
 
 /*
  * GetUserMapping - look up the user mapping.
@@ -327,6 +370,18 @@ GetFdwRoutine(Oid fdwhandler)
 	if (routine == NULL || !IsA(routine, FdwRoutine))
 		elog(ERROR, "foreign-data wrapper handler function %u did not return an FdwRoutine struct",
 			 fdwhandler);
+
+	/* Sanity check for transaction management callbacks */
+	if ((routine->CommitForeignTransaction && !routine->RollbackForeignTransaction) ||
+		(!routine->CommitForeignTransaction && routine->RollbackForeignTransaction))
+		elog(ERROR,
+			 "foreign-data wrapper must support both commit and rollback routines or neither");
+
+	if (routine->PrepareForeignTransaction &&
+		!routine->CommitForeignTransaction &&
+		!routine->RollbackForeignTransaction)
+		elog(ERROR,
+			 "foreign-data wrapper that supports prepare routine must support both commit and rollback routines");
 
 	return routine;
 }

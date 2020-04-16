@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/fdwxact.h"
 #include "access/table.h"
 #include "access/tableam.h"
 #include "catalog/partition.h"
@@ -939,7 +940,14 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 	 */
 	if (partRelInfo->ri_FdwRoutine != NULL &&
 		partRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
+	{
+		Relation		child = partRelInfo->ri_RelationDesc;
+
+		/* Remember the transaction modifies data on a foreign server*/
+		RegisterFdwXactByRelId(RelationGetRelid(child), true);
+
 		partRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate, partRelInfo);
+	}
 
 	partRelInfo->ri_PartitionInfo = partrouteinfo;
 	partRelInfo->ri_CopyMultiInsertBuffer = NULL;

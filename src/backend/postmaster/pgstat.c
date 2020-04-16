@@ -3661,6 +3661,12 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_CHECKPOINTER_MAIN:
 			event_name = "CheckpointerMain";
 			break;
+		case WAIT_EVENT_FDWXACT_RESOLVER_MAIN:
+			event_name = "FdwXactResolverMain";
+			break;
+		case WAIT_EVENT_FDWXACT_LAUNCHER_MAIN:
+			event_name = "FdwXactLauncherMain";
+			break;
 		case WAIT_EVENT_LOGICAL_APPLY_MAIN:
 			event_name = "LogicalApplyMain";
 			break;
@@ -3872,6 +3878,11 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 			break;
 		case WAIT_EVENT_SYNC_REP:
 			event_name = "SyncRep";
+			break;
+		case WAIT_EVENT_FDWXACT:
+			event_name = "FdwXact";
+		case WAIT_EVENT_FDWXACT_RESOLUTION:
+			event_name = "FdwXactResolution";
 			break;
 			/* no default case, so that compiler will warn */
 	}
@@ -4096,6 +4107,15 @@ pgstat_get_wait_io(WaitEventIO w)
 			break;
 		case WAIT_EVENT_TWOPHASE_FILE_WRITE:
 			event_name = "TwophaseFileWrite";
+			break;
+		case WAIT_EVENT_FDWXACT_FILE_WRITE:
+			event_name = "FdwXactFileWrite";
+			break;
+		case WAIT_EVENT_FDWXACT_FILE_READ:
+			event_name = "FdwXactFileRead";
+			break;
+		case WAIT_EVENT_FDWXACT_FILE_SYNC:
+			event_name = "FdwXactFileSync";
 			break;
 		case WAIT_EVENT_WALSENDER_TIMELINE_HISTORY_READ:
 			event_name = "WALSenderTimelineHistoryRead";

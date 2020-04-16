@@ -1342,6 +1342,14 @@ pg_file_settings| SELECT a.sourcefile,
     a.applied,
     a.error
    FROM pg_show_all_file_settings() a(sourcefile, sourceline, seqno, name, setting, applied, error);
+pg_foreign_xacts| SELECT f.dbid,
+    f.xid,
+    f.serverid,
+    f.userid,
+    f.status,
+    f.in_doubt,
+    f.identifier
+   FROM pg_foreign_xacts() f(dbid, xid, serverid, userid, status, in_doubt, identifier);
 pg_group| SELECT pg_authid.rolname AS groname,
     pg_authid.oid AS grosysid,
     ARRAY( SELECT pg_auth_members.member
@@ -1851,6 +1859,11 @@ pg_stat_database_conflicts| SELECT d.oid AS datid,
     pg_stat_get_db_conflict_bufferpin(d.oid) AS confl_bufferpin,
     pg_stat_get_db_conflict_startup_deadlock(d.oid) AS confl_deadlock
    FROM pg_database d;
+pg_stat_foreign_xact| SELECT r.pid,
+    r.dbid,
+    r.last_resolved_time
+   FROM pg_stat_get_foreign_xact() r(pid, dbid, last_resolved_time)
+  WHERE (r.pid IS NOT NULL);
 pg_stat_gssapi| SELECT s.pid,
     s.gss_auth AS gss_authenticated,
     s.gss_princ AS principal,

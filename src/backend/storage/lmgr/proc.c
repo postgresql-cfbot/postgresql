@@ -35,6 +35,7 @@
 #include <unistd.h>
 #include <sys/time.h>
 
+#include "access/fdwxact.h"
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/xact.h"
@@ -420,6 +421,10 @@ InitProcess(void)
 	MyProc->waitLSN = 0;
 	MyProc->syncRepState = SYNC_REP_NOT_WAITING;
 	SHMQueueElemInit(&(MyProc->syncRepLinks));
+
+	/* Initialize fields for fdw xact */
+	MyProc->fdwXactState = FDWXACT_NOT_WAITING;
+	SHMQueueElemInit(&(MyProc->fdwXactLinks));
 
 	/* Initialize fields for group XID clearing. */
 	MyProc->procArrayGroupMember = false;
@@ -821,6 +826,9 @@ ProcKill(int code, Datum arg)
 
 	/* Make sure we're out of the sync rep lists */
 	SyncRepCleanupAtProcExit();
+
+	/* Make sure we're out of the fdwxact lists */
+	FdwXactCleanupAtProcExit();
 
 #ifdef USE_ASSERT_CHECKING
 	{

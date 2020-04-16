@@ -49,3 +49,6 @@ MultiXactTruncationLock				41
 OldSnapshotTimeMapLock				42
 LogicalRepWorkerLock				43
 CLogTruncationLock					44
+FdwXactLock							45
+FdwXactResolverLock					46
+FdwXactResolutionLock				47

@@ -8203,6 +8203,11 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
      </row>
 
      <row>
+      <entry><link linkend="view-pg-foreign-xacts"><structname>pg_foreign_xacts</structname></link></entry>
+      <entry>foreign transactions</entry>
+     </row>
+
+     <row>
       <entry><link linkend="view-pg-file-settings"><structname>pg_file_settings</structname></link></entry>
       <entry>summary of configuration file contents</entry>
      </row>
@@ -9642,6 +9647,146 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       <entry><literal><link linkend="catalog-pg-database"><structname>pg_database</structname></link>.datname</literal></entry>
       <entry>
        Name of the database in which the transaction was executed
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   When the <structname>pg_prepared_xacts</structname> view is accessed, the
+   internal transaction manager data structures are momentarily locked, and
+   a copy is made for the view to display.  This ensures that the
+   view produces a consistent set of results, while not blocking
+   normal operations longer than necessary.  Nonetheless
+   there could be some impact on database performance if this view is
+   frequently accessed.
+  </para>
+
+ </sect1>
+
+ <sect1 id="view-pg-foreign-xacts">
+  <title><structname>pg_foreign_xacts</structname></title>
+
+  <indexterm zone="view-pg-foreign-xacts">
+   <primary>pg_foreign_xacts</primary>
+  </indexterm>
+
+  <para>
+   The view <structname>pg_foreign_xacts</structname> displays
+   information about foreign transactions that are opened on
+   foreign servers for atomic distributed transaction commit (see
+   <xref linkend="atomic-commit"/> for details).
+  </para>
+
+  <para>
+   <structname>pg_foreign_xacts</structname> contains one row per foreign
+   transaction.  An entry is removed when the foreign transaction is
+   committed or rolled back.
+  </para>
+
+  <table>
+   <title><structname>pg_foreign_xacts</structname> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><structfield>dbid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-database"><structname>pg_database</structname></link>.oid</literal></entry>
+      <entry>
+       OID of the database which the foreign transaction resides in
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>xid</structfield></entry>
+      <entry><type>xid</type></entry>
+      <entry></entry>
+      <entry>
+       Numeric transaction identifier with that this foreign transaction
+       associates
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>serverid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-foreign-server"><structname>pg_foreign_server</structname></link>.oid</literal></entry>
+      <entry>
+       The OID of the foreign server on that the foreign transaction is prepared
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>userid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="view-pg-user"><structname>pg_user</structname></link>.oid</literal></entry>
+      <entry>
+       The OID of the user that prepared this foreign transaction.
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>status</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+      <entry>
+       Status of foreign transaction. Possible values are:
+       <itemizedlist>
+        <listitem>
+         <para>
+          <literal>initial</literal> : Initial status.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>preparing</literal> : This foreign transaction is being prepared.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>prepared</literal> : This foreign transaction has been prepared.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>committing</literal> : This foreign transcation is being committed.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>aborting</literal> : This foreign transaction is being aborted.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>resolved</literal> : This foreign transaction has been resolved.
+         </para>
+        </listitem>
+       </itemizedlist>
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>in_doubt</structfield></entry>
+      <entry><type>boolean</type></entry>
+      <entry></entry>
+      <entry>
+       If <literal>true</literal> this foreign transaction is in-dbout status and
+       needs to be resolved by calling <function>pg_resolve_fdwxact</function>
+       function.
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>identifier</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+      <entry>
+       The identifier of the prepared foreign transaction.
       </entry>
      </row>
     </tbody>

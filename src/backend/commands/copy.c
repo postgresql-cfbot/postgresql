@@ -2812,8 +2812,14 @@ CopyFrom(CopyState cstate)
 
 	if (resultRelInfo->ri_FdwRoutine != NULL &&
 		resultRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
+	{
+		/* Remember the transaction modifies data on a foreign server*/
+		RegisterFdwXactByRelId(RelationGetRelid(resultRelInfo->ri_RelationDesc),
+							   true);
+
 		resultRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate,
 														 resultRelInfo);
+	}
 
 	/* Prepare to catch AFTER triggers. */
 	AfterTriggerBeginQuery();

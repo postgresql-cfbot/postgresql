@@ -113,8 +113,6 @@ typedef struct
 
 #define LQUERY_HASNOT		0x01
 
-#define ISALNUM(x)	( t_isalpha(x) || t_isdigit(x)	|| ( pg_mblen(x) == 1 && t_iseq((x), '_') ) )
-
 /* full text query */
 
 /*
@@ -161,6 +159,24 @@ typedef struct
 #define VALTRUE					6	/* for stop words */
 #define VALFALSE				7
 
+typedef enum ltree_token
+{
+	LTREE_TOK_END,
+	LTREE_TOK_SPACE,
+	LTREE_TOK_LABEL,
+	LTREE_TOK_DOT,
+	LTREE_TOK_ASTERISK,
+	LTREE_TOK_NOT,
+	LTREE_TOK_OR,
+	LTREE_TOK_AND,
+	LTREE_TOK_AT,
+	LTREE_TOK_PERCENT,
+	LTREE_TOK_LBRACE,
+	LTREE_TOK_RBRACE,
+	LTREE_TOK_LPAREN,
+	LTREE_TOK_RPAREN,
+	LTREE_TOK_COMMA
+} ltree_token;
 
 /* use in array iterator */
 Datum		ltree_isparent(PG_FUNCTION_ARGS);
@@ -197,6 +213,11 @@ bool		compare_subnode(ltree_level *t, char *q, int len,
 							int (*cmpptr) (const char *, const char *, size_t), bool anyend);
 ltree	   *lca_inner(ltree **a, int len);
 int			ltree_strncasecmp(const char *a, const char *b, size_t s);
+int			extra_bytes_for_escaping(const char *start, const int len);
+void		copy_level(char *dst, const char *src, int len, int extra_bytes);
+void		copy_unescaped(char *dst, const char *src, int len);
+ltree_token	ltree_get_token(const char *ptr, const char *datatype_name, int pos,
+							int *len, int *wlen, int *escaped_count);
 
 /* fmgr macros for ltree objects */
 #define DatumGetLtreeP(X)			((ltree *) PG_DETOAST_DATUM(X))

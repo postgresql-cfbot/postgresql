@@ -35,6 +35,7 @@ typedef struct NODE
 typedef struct
 {
 	char	   *buf;
+	int			pos;
 	int32		state;
 	int32		count;
 	/* reverse polish notation in list (for temporary usage) */
@@ -53,87 +54,100 @@ typedef struct
  * get token from query string
  */
 static int32
-gettoken_query(QPRS_STATE *state, int32 *val, int32 *lenval, char **strval, uint16 *flag)
+gettoken_query(QPRS_STATE *state, int32 *val, int32 *lenval, char **strval,
+			   uint16 *flag)
 {
-	int			charlen;
-
 	for (;;)
 	{
-		charlen = pg_mblen(state->buf);
+		int			len;
+		int			wlen;
+		int			pos = state->pos;
+		char	   *buf = state->buf;
+		int			escaped_cnt;
+		ltree_token tok = ltree_get_token(buf, "ltxtquery", pos,
+										  &len, &wlen, &escaped_cnt);
+
+		state->buf += len;
+		state->pos += wlen;
 
 		switch (state->state)
 		{
 			case WAITOPERAND:
-				if (charlen == 1 && t_iseq(state->buf, '!'))
+				if (tok == LTREE_TOK_NOT)
 				{
-					(state->buf)++;
 					*val = (int32) '!';
 					return OPR;
 				}
-				else if (charlen == 1 && t_iseq(state->buf, '('))
+				else if (tok == LTREE_TOK_LPAREN)
 				{
 					state->count++;
-					(state->buf)++;
 					return OPEN;
 				}
-				else if (ISALNUM(state->buf))
+				else if (tok == LTREE_TOK_LABEL)
 				{
-					state->state = INOPERAND;
-					*strval = state->buf;
-					*lenval = charlen;
+					*strval = buf;
+					*lenval = len - escaped_cnt;
 					*flag = 0;
+
+					if (t_iseq(buf, '"'))	/* strip quotes */
+					{
+						*lenval -= 2;
+						*strval += 1;
+					}
+
+					state->state = INOPERAND;
 				}
-				else if (!t_isspace(state->buf))
+				else if (tok == LTREE_TOK_SPACE)
+				{
+					/* do nothing */
+				}
+				else
 					ereport(ERROR,
 							(errcode(ERRCODE_SYNTAX_ERROR),
-							 errmsg("operand syntax error")));
+							 errmsg("ltxtquery syntax error at character %d", pos),
+							 errdetail("Unquoted special symbol")));
 				break;
+
 			case INOPERAND:
-				if (ISALNUM(state->buf))
-				{
-					if (*flag)
-						ereport(ERROR,
-								(errcode(ERRCODE_SYNTAX_ERROR),
-								 errmsg("modifiers syntax error")));
-					*lenval += charlen;
-				}
-				else if (charlen == 1 && t_iseq(state->buf, '%'))
-					*flag |= LVAR_SUBLEXEME;
-				else if (charlen == 1 && t_iseq(state->buf, '@'))
-					*flag |= LVAR_INCASE;
-				else if (charlen == 1 && t_iseq(state->buf, '*'))
-					*flag |= LVAR_ANYEND;
-				else
+				if (tok == LTREE_TOK_END || tok == LTREE_TOK_SPACE)
 				{
 					state->state = WAITOPERATOR;
 					return VAL;
 				}
+				else if (tok == LTREE_TOK_PERCENT)
+					*flag |= LVAR_SUBLEXEME;
+				else if (tok == LTREE_TOK_AT)
+					*flag |= LVAR_INCASE;
+				else if (tok == LTREE_TOK_ASTERISK)
+					*flag |= LVAR_ANYEND;
+				else
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("ltxtquery syntax error at character %d", pos),
+							 errdetail("Unquoted special symbol")));
 				break;
+
 			case WAITOPERATOR:
-				if (charlen == 1 && (t_iseq(state->buf, '&') || t_iseq(state->buf, '|')))
+				if (tok == LTREE_TOK_OR || tok == LTREE_TOK_AND)
 				{
 					state->state = WAITOPERAND;
-					*val = (int32) *(state->buf);
-					(state->buf)++;
+					*val = (int32) *buf;
 					return OPR;
 				}
-				else if (charlen == 1 && t_iseq(state->buf, ')'))
+				else if (tok == LTREE_TOK_RPAREN)
 				{
-					(state->buf)++;
 					state->count--;
 					return (state->count < 0) ? ERR : CLOSE;
 				}
-				else if (*(state->buf) == '\0')
+				else if (tok == LTREE_TOK_END)
 					return (state->count) ? ERR : END;
-				else if (charlen == 1 && !t_iseq(state->buf, ' '))
+				else if (tok != LTREE_TOK_SPACE)
 					return ERR;
 				break;
+
 			default:
 				return ERR;
-				break;
 		}
-
-		state->buf += charlen;
 	}
 }
 
@@ -169,23 +183,30 @@ pushquery(QPRS_STATE *state, int32 type, int32 val, int32 distance, int32 lenval
 static void
 pushval_asis(QPRS_STATE *state, int type, char *strval, int lenval, uint16 flag)
 {
+	if (lenval <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("empty labels are forbidden")));
+
 	if (lenval > 0xffff)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("word is too long")));
-
-	pushquery(state, type, ltree_crc32_sz(strval, lenval),
-			  state->curop - state->op, lenval, flag);
 
 	while (state->curop - state->op + lenval + 1 >= state->lenop)
 	{
 		int32		tmp = state->curop - state->op;
 
 		state->lenop *= 2;
-		state->op = (char *) repalloc((void *) state->op, state->lenop);
+		state->op = (char *) repalloc(state->op, state->lenop);
 		state->curop = state->op + tmp;
 	}
-	memcpy((void *) state->curop, (void *) strval, lenval);
+
+	copy_unescaped(state->curop, strval, lenval);
+
+	pushquery(state, type, ltree_crc32_sz(state->curop, lenval),
+			  state->curop - state->op, lenval, flag);
+
 	state->curop += lenval;
 	*(state->curop) = '\0';
 	state->curop++;
@@ -322,6 +343,7 @@ queryin(char *buf)
 
 	/* init state */
 	state.buf = buf;
+	state.pos = 1;
 	state.state = WAITOPERAND;
 	state.count = 0;
 	state.num = 0;
@@ -448,14 +470,14 @@ infix(INFIX *in, bool first)
 	if (in->curpol->type == VAL)
 	{
 		char	   *op = in->op + in->curpol->distance;
+		char	   *opend = strchr(op, '\0');
+		int			delta = opend - op;
+		int			extra_bytes = extra_bytes_for_escaping(op, delta);
 
 		RESIZEBUF(in, in->curpol->length * 2 + 5);
-		while (*op)
-		{
-			*(in->cur) = *op;
-			op++;
-			in->cur++;
-		}
+		copy_level(in->cur, op, delta, extra_bytes);
+		in->cur += delta + extra_bytes;
+
 		if (in->curpol->flag & LVAR_SUBLEXEME)
 		{
 			*(in->cur) = '%';

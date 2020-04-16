@@ -20,6 +20,9 @@ typedef struct PGOutputData
 	MemoryContext context;		/* private memory context for transient
 								 * allocations */
 
+	/* control wether messages can already be sent */
+	bool		xact_wrote_changes;
+
 	/* client info */
 	uint32		protocol_version;
 

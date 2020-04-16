@@ -63,6 +63,7 @@
 #include "utils/builtins.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
+#include "utils/guc.h"
 
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
 
@@ -4086,3 +4087,77 @@ KnownAssignedXidsReset(void)
 
 	LWLockRelease(ProcArrayLock);
 }
+
+/*
+ * search all active backend to get oldest frozenxid
+ * for global temp table.
+ */
+int
+list_all_session_gtt_frozenxids(int max_size, int *pids, uint32 *xids, int *n)
+{
+	ProcArrayStruct *arrayP = procArray;
+	TransactionId result = InvalidTransactionId;
+	int			index;
+	int			flags = 0;
+	int			i = 0;
+
+	if (max_active_gtt <= 0)
+		return 0;
+
+	if (max_size > 0)
+	{
+		Assert(pids);
+		Assert(xids);
+		Assert(n);
+		*n = 0;
+	}
+
+	if (max_active_gtt <= 0)
+		return InvalidTransactionId;
+
+	if (RecoveryInProgress())
+		return InvalidTransactionId;
+
+	flags |= PROC_IS_AUTOVACUUM;
+	flags |= PROC_IN_LOGICAL_DECODING;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	if (max_size > 0 && max_size < arrayP->numProcs)
+	{
+		LWLockRelease(ProcArrayLock);
+		elog(ERROR, "list_all_gtt_frozenxids require more array");
+	}
+
+	for (index = 0; index < arrayP->numProcs; index++)
+	{
+		int			pgprocno = arrayP->pgprocnos[index];
+		volatile PGPROC *proc = &allProcs[pgprocno];
+		volatile PGXACT *pgxact = &allPgXact[pgprocno];
+
+		if (pgxact->vacuumFlags & flags)
+			continue;
+
+		if (proc->databaseId == MyDatabaseId &&
+			TransactionIdIsNormal(proc->session_gtt_frozenxid))
+		{
+			if (result == InvalidTransactionId)
+				result = proc->session_gtt_frozenxid;
+			else if (TransactionIdPrecedes(proc->session_gtt_frozenxid, result))
+				result = proc->session_gtt_frozenxid;
+
+			if (max_size > 0)
+			{
+				pids[i] = proc->pid;
+				xids[i] = proc->session_gtt_frozenxid;
+				i++;
+			}
+		}
+	}
+	LWLockRelease(ProcArrayLock);
+
+	if (max_size > 0)
+		*n = i;
+
+	return result;
+}
+

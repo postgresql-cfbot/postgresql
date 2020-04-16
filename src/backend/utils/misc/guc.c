@@ -142,6 +142,18 @@ char	   *GUC_check_errmsg_string;
 char	   *GUC_check_errdetail_string;
 char	   *GUC_check_errhint_string;
 
+/*
+ * num = 0 means disable global temp table feature.
+ * global temp table define can still storage in catalog
+ * just can not use.
+ * num > 0 means database can management num active global temp table.
+ */
+#define	MIN_NUM_ACTIVE_GTT			0
+#define	DEFAULT_NUM_ACTIVE_GTT			1000
+#define	MAX_NUM_ACTIVE_GTT			1000000
+
+int		max_active_gtt = MIN_NUM_ACTIVE_GTT;
+
 static void do_serialize(char **destptr, Size *maxbytes, const char *fmt,...) pg_attribute_printf(3, 4);
 
 static void set_config_sourcefile(const char *name, char *sourcefile,
@@ -2069,6 +2081,15 @@ static struct config_bool ConfigureNamesBool[] =
 
 static struct config_int ConfigureNamesInt[] =
 {
+	{
+		{"max_active_global_temporary_table", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("max active global temporary table."),
+			NULL
+		},
+		&max_active_gtt,
+		DEFAULT_NUM_ACTIVE_GTT, MIN_NUM_ACTIVE_GTT, MAX_NUM_ACTIVE_GTT,
+		NULL, NULL, NULL
+	},
 	{
 		{"archive_timeout", PGC_SIGHUP, WAL_ARCHIVING,
 			gettext_noop("Forces a switch to the next WAL file if a "

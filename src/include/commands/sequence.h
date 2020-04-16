@@ -65,5 +65,6 @@ extern void seq_redo(XLogReaderState *rptr);
 extern void seq_desc(StringInfo buf, XLogReaderState *rptr);
 extern const char *seq_identify(uint8 info);
 extern void seq_mask(char *pagedata, BlockNumber blkno);
+extern void gtt_init_seq(Relation rel);
 
 #endif							/* SEQUENCE_H */

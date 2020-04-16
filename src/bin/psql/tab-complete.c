@@ -1023,6 +1023,8 @@ static const pgsql_thing_t words_after_create[] = {
 	{"FOREIGN TABLE", NULL, NULL, NULL},
 	{"FUNCTION", NULL, NULL, Query_for_list_of_functions},
 	{"GROUP", Query_for_list_of_roles},
+	{"GLOBAL", NULL, NULL, NULL, THING_NO_DROP | THING_NO_ALTER}, /* for CREATE GLOBAL TEMP/TEMPORARY TABLE
+																	* ... */
 	{"INDEX", NULL, NULL, &Query_for_list_of_indexes},
 	{"LANGUAGE", Query_for_list_of_languages},
 	{"LARGE OBJECT", NULL, NULL, NULL, THING_NO_CREATE | THING_NO_DROP},
@@ -2390,6 +2392,9 @@ psql_completion(const char *text, int start, int end)
 	/* CREATE FOREIGN DATA WRAPPER */
 	else if (Matches("CREATE", "FOREIGN", "DATA", "WRAPPER", MatchAny))
 		COMPLETE_WITH("HANDLER", "VALIDATOR", "OPTIONS");
+	/* CREATE GLOBAL TEMP/TEMPORARY*/
+	else if (Matches("CREATE", "GLOBAL"))
+		COMPLETE_WITH("TEMP", "TEMPORARY");
 
 	/* CREATE INDEX --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* First off we complete CREATE UNIQUE with "INDEX" */
@@ -2598,6 +2603,8 @@ psql_completion(const char *text, int start, int end)
 	/* Complete "CREATE TEMP/TEMPORARY" with the possible temp objects */
 	else if (TailMatches("CREATE", "TEMP|TEMPORARY"))
 		COMPLETE_WITH("SEQUENCE", "TABLE", "VIEW");
+	else if (TailMatches("CREATE", "GLOBAL", "TEMP|TEMPORARY"))
+		COMPLETE_WITH("TABLE");
 	/* Complete "CREATE UNLOGGED" with TABLE or MATVIEW */
 	else if (TailMatches("CREATE", "UNLOGGED"))
 		COMPLETE_WITH("TABLE", "MATERIALIZED VIEW");

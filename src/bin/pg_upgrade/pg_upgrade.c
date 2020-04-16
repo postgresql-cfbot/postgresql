@@ -411,7 +411,7 @@ create_new_objects(void)
 		set_frozenxids(true);
 
 	/* update new_cluster info now that we have objects in the databases */
-	get_db_and_rel_infos(&new_cluster);
+	get_db_and_rel_infos(&new_cluster, true);
 }
 
 /*
@@ -642,7 +642,9 @@ set_frozenxids(bool minmxid_only)
 									  "UPDATE	pg_catalog.pg_class "
 									  "SET	relfrozenxid = '%u' "
 			/* only heap, materialized view, and TOAST are vacuumed */
-									  "WHERE	relkind IN ("
+									  "WHERE "
+									  " relpersistence != " CppAsString2(RELPERSISTENCE_GLOBAL_TEMP) " AND "
+									  "relkind IN ("
 									  CppAsString2(RELKIND_RELATION) ", "
 									  CppAsString2(RELKIND_MATVIEW) ", "
 									  CppAsString2(RELKIND_TOASTVALUE) ")",
@@ -653,7 +655,9 @@ set_frozenxids(bool minmxid_only)
 								  "UPDATE	pg_catalog.pg_class "
 								  "SET	relminmxid = '%u' "
 		/* only heap, materialized view, and TOAST are vacuumed */
-								  "WHERE	relkind IN ("
+								  "WHERE "
+								  " relpersistence != " CppAsString2(RELPERSISTENCE_GLOBAL_TEMP) " AND "
+								  "relkind IN ("
 								  CppAsString2(RELKIND_RELATION) ", "
 								  CppAsString2(RELKIND_MATVIEW) ", "
 								  CppAsString2(RELKIND_TOASTVALUE) ")",

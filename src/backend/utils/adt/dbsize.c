@@ -1008,6 +1008,9 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 				Assert(backend != InvalidBackendId);
 			}
 			break;
+		case RELPERSISTENCE_GLOBAL_TEMP:
+			backend = BackendIdForTempRelations();
+			break;
 		default:
 			elog(ERROR, "invalid relpersistence: %c", relform->relpersistence);
 			backend = InvalidBackendId; /* placate compiler */

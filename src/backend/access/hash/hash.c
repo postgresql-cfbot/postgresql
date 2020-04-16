@@ -150,7 +150,9 @@ hashbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	 * metapage, nor the first bitmap page.
 	 */
 	sort_threshold = (maintenance_work_mem * 1024L) / BLCKSZ;
-	if (index->rd_rel->relpersistence != RELPERSISTENCE_TEMP)
+	/* global temp table is same as local temp table */
+	if (!(index->rd_rel->relpersistence == RELPERSISTENCE_TEMP ||
+		index->rd_rel->relpersistence == RELPERSISTENCE_GLOBAL_TEMP))
 		sort_threshold = Min(sort_threshold, NBuffers);
 	else
 		sort_threshold = Min(sort_threshold, NLocBuffer);

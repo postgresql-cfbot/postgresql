@@ -33,6 +33,7 @@
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_am.h"
+#include "catalog/storage_gtt.h"
 #include "catalog/toasting.h"
 #include "commands/cluster.h"
 #include "commands/progress.h"
@@ -72,6 +73,12 @@ static void copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex,
 							bool verbose, bool *pSwapToastByContent,
 							TransactionId *pFreezeXid, MultiXactId *pCutoffMulti);
 static List *get_tables_to_cluster(MemoryContext cluster_context);
+static void gtt_swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
+					bool swap_toast_by_content,
+					bool is_internal,
+					TransactionId frozenXid,
+					MultiXactId cutoffMulti,
+					Oid *mapped_tables);
 
 
 /*---------------------------------------------------------------------------
@@ -364,6 +371,14 @@ cluster_rel(Oid tableOid, Oid indexOid, int options)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot vacuum temporary tables of other sessions")));
+	}
+
+	if (RELATION_IS_GLOBAL_TEMP(OldHeap) &&
+		!gtt_storage_attached(RelationGetRelid(OldHeap)))
+	{
+		relation_close(OldHeap, AccessExclusiveLock);
+		pgstat_progress_end_command();
+		return;
 	}
 
 	/*
@@ -750,6 +765,9 @@ copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 	BlockNumber num_pages;
 	int			elevel = verbose ? INFO : DEBUG2;
 	PGRUsage	ru0;
+	bool		is_gtt = false;
+	uint32		gtt_relfrozenxid = 0;
+	uint32		gtt_relminmxid = 0;
 
 	pg_rusage_init(&ru0);
 
@@ -762,6 +780,9 @@ copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 		OldIndex = index_open(OIDOldIndex, AccessExclusiveLock);
 	else
 		OldIndex = NULL;
+
+	if (RELATION_IS_GLOBAL_TEMP(OldHeap))
+		is_gtt = true;
 
 	/*
 	 * Their tuple descriptors should be exactly alike, but here we only need
@@ -830,20 +851,37 @@ copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 						  &OldestXmin, &FreezeXid, NULL, &MultiXactCutoff,
 						  NULL);
 
-	/*
-	 * FreezeXid will become the table's new relfrozenxid, and that mustn't go
-	 * backwards, so take the max.
-	 */
-	if (TransactionIdIsValid(OldHeap->rd_rel->relfrozenxid) &&
-		TransactionIdPrecedes(FreezeXid, OldHeap->rd_rel->relfrozenxid))
-		FreezeXid = OldHeap->rd_rel->relfrozenxid;
+	if (is_gtt)
+	{
+		get_gtt_relstats(OIDOldHeap,
+					NULL, NULL, NULL,
+					&gtt_relfrozenxid, &gtt_relminmxid);
 
-	/*
-	 * MultiXactCutoff, similarly, shouldn't go backwards either.
-	 */
-	if (MultiXactIdIsValid(OldHeap->rd_rel->relminmxid) &&
-		MultiXactIdPrecedes(MultiXactCutoff, OldHeap->rd_rel->relminmxid))
-		MultiXactCutoff = OldHeap->rd_rel->relminmxid;
+		if (TransactionIdIsValid(gtt_relfrozenxid) &&
+			TransactionIdPrecedes(FreezeXid, gtt_relfrozenxid))
+			FreezeXid = gtt_relfrozenxid;
+
+		if (MultiXactIdIsValid(gtt_relminmxid) &&
+			MultiXactIdPrecedes(MultiXactCutoff, gtt_relminmxid))
+			MultiXactCutoff = gtt_relminmxid;
+	}
+	else
+	{
+		/*
+		 * FreezeXid will become the table's new relfrozenxid, and that mustn't go
+		 * backwards, so take the max.
+		 */
+		if (TransactionIdIsValid(OldHeap->rd_rel->relfrozenxid) &&
+			TransactionIdPrecedes(FreezeXid, OldHeap->rd_rel->relfrozenxid))
+			FreezeXid = OldHeap->rd_rel->relfrozenxid;
+
+		/*
+		 * MultiXactCutoff, similarly, shouldn't go backwards either.
+		 */
+		if (MultiXactIdIsValid(OldHeap->rd_rel->relminmxid) &&
+			MultiXactIdPrecedes(MultiXactCutoff, OldHeap->rd_rel->relminmxid))
+			MultiXactCutoff = OldHeap->rd_rel->relminmxid;
+	}
 
 	/*
 	 * Decide whether to use an indexscan or seqscan-and-optional-sort to scan
@@ -910,6 +948,12 @@ copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 		index_close(OldIndex, NoLock);
 	table_close(OldHeap, NoLock);
 	table_close(NewHeap, NoLock);
+
+	if (is_gtt)
+	{
+		CommandCounterIncrement();
+		return;
+	}
 
 	/* Update pg_class to reflect the correct values of pages and tuples. */
 	relRelation = table_open(RelationRelationId, RowExclusiveLock);
@@ -1346,10 +1390,20 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 	 * Swap the contents of the heap relations (including any toast tables).
 	 * Also set old heap's relfrozenxid to frozenXid.
 	 */
-	swap_relation_files(OIDOldHeap, OIDNewHeap,
+	if (newrelpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+	{
+		gtt_swap_relation_files(OIDOldHeap, OIDNewHeap,
+								(OIDOldHeap == RelationRelationId),
+								swap_toast_by_content, is_internal,
+								frozenXid, cutoffMulti, mapped_tables);
+	}
+	else
+	{
+		swap_relation_files(OIDOldHeap, OIDNewHeap,
 						(OIDOldHeap == RelationRelationId),
 						swap_toast_by_content, is_internal,
 						frozenXid, cutoffMulti, mapped_tables);
+	}
 
 	/*
 	 * If it's a system catalog, queue a sinval message to flush all catcaches
@@ -1557,3 +1611,141 @@ get_tables_to_cluster(MemoryContext cluster_context)
 
 	return rvs;
 }
+
+static void
+gtt_swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
+					bool swap_toast_by_content,
+					bool is_internal,
+					TransactionId frozenXid,
+					MultiXactId cutoffMulti,
+					Oid *mapped_tables)
+{
+	Relation	relRelation;
+	Oid			relfilenode1,
+				relfilenode2;
+	Relation	rel1;
+	Relation	rel2;
+
+	relRelation = table_open(RelationRelationId, RowExclusiveLock);
+
+	rel1 = relation_open(r1, AccessExclusiveLock);
+	rel2 = relation_open(r2, AccessExclusiveLock);
+
+	relfilenode1 = gtt_fetch_current_relfilenode(r1);
+	relfilenode2 = gtt_fetch_current_relfilenode(r2);
+
+	Assert(OidIsValid(relfilenode1) && OidIsValid(relfilenode2));
+	gtt_switch_rel_relfilenode(r1, relfilenode1, r2, relfilenode2, true);
+
+	CacheInvalidateRelcache(rel1);
+	CacheInvalidateRelcache(rel2);
+
+	InvokeObjectPostAlterHookArg(RelationRelationId, r1, 0,
+								 InvalidOid, is_internal);
+	InvokeObjectPostAlterHookArg(RelationRelationId, r2, 0,
+								 InvalidOid, true);
+
+	if (rel1->rd_rel->reltoastrelid || rel2->rd_rel->reltoastrelid)
+	{
+		if (swap_toast_by_content)
+		{
+			if (rel1->rd_rel->reltoastrelid && rel2->rd_rel->reltoastrelid)
+			{
+				gtt_swap_relation_files(rel1->rd_rel->reltoastrelid,
+									rel2->rd_rel->reltoastrelid,
+									target_is_pg_class,
+									swap_toast_by_content,
+									is_internal,
+									frozenXid,
+									cutoffMulti,
+									mapped_tables);
+			}
+			else
+				elog(ERROR, "cannot swap toast files by content when there's only one");
+		}
+		else
+		{
+			ObjectAddress baseobject,
+						toastobject;
+			long		count;
+
+			if (IsSystemRelation(rel1))
+				elog(ERROR, "cannot swap toast files by links for system catalogs");
+
+			if (rel1->rd_rel->reltoastrelid)
+			{
+				count = deleteDependencyRecordsFor(RelationRelationId,
+												   rel1->rd_rel->reltoastrelid,
+												   false);
+				if (count != 1)
+					elog(ERROR, "expected one dependency record for TOAST table, found %ld",
+						 count);
+			}
+			if (rel2->rd_rel->reltoastrelid)
+			{
+				count = deleteDependencyRecordsFor(RelationRelationId,
+												   rel2->rd_rel->reltoastrelid,
+												   false);
+				if (count != 1)
+					elog(ERROR, "expected one dependency record for TOAST table, found %ld",
+						 count);
+			}
+
+			/* Register new dependencies */
+			baseobject.classId = RelationRelationId;
+			baseobject.objectSubId = 0;
+			toastobject.classId = RelationRelationId;
+			toastobject.objectSubId = 0;
+
+			if (rel1->rd_rel->reltoastrelid)
+			{
+				baseobject.objectId = r1;
+				toastobject.objectId = rel1->rd_rel->reltoastrelid;
+				recordDependencyOn(&toastobject, &baseobject,
+								   DEPENDENCY_INTERNAL);
+			}
+
+			if (rel2->rd_rel->reltoastrelid)
+			{
+				baseobject.objectId = r2;
+				toastobject.objectId = rel2->rd_rel->reltoastrelid;
+				recordDependencyOn(&toastobject, &baseobject,
+								   DEPENDENCY_INTERNAL);
+			}
+		}
+	}
+
+	if (swap_toast_by_content &&
+		rel1->rd_rel->relkind == RELKIND_TOASTVALUE &&
+		rel2->rd_rel->relkind == RELKIND_TOASTVALUE)
+	{
+		Oid			toastIndex1,
+					toastIndex2;
+
+		/* Get valid index for each relation */
+		toastIndex1 = toast_get_valid_index(r1,
+											AccessExclusiveLock);
+		toastIndex2 = toast_get_valid_index(r2,
+											AccessExclusiveLock);
+
+		gtt_swap_relation_files(toastIndex1,
+							toastIndex2,
+							target_is_pg_class,
+							swap_toast_by_content,
+							is_internal,
+							InvalidTransactionId,
+							InvalidMultiXactId,
+							mapped_tables);
+	}
+
+	relation_close(rel1, NoLock);
+	relation_close(rel2, NoLock);
+
+	table_close(relRelation, RowExclusiveLock);
+
+	RelationCloseSmgrByOid(r1);
+	RelationCloseSmgrByOid(r2);
+
+	CommandCounterIncrement();
+}
+

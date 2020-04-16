@@ -27,8 +27,8 @@ extern int	CheckPointTimeout;
 extern int	CheckPointWarning;
 extern double CheckPointCompletionTarget;
 
-extern void BackgroundWriterMain(void) pg_attribute_noreturn();
-extern void CheckpointerMain(void) pg_attribute_noreturn();
+extern void BackgroundWriterMain(int argc, char *argv[]) pg_attribute_noreturn();
+extern void CheckpointerMain(int argc, char *argv[]) pg_attribute_noreturn();
 
 extern void RequestCheckpoint(int flags);
 extern void CheckpointWriteDelay(int flags, double progress);

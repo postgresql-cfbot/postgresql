@@ -85,7 +85,7 @@ int			WalWriterFlushAfter = 128;
  * basic execution environment, but not enabled signals yet.
  */
 void
-WalWriterMain(void)
+WalWriterMain(int argc, char *argv[])
 {
 	sigjmp_buf	local_sigjmp_buf;
 	MemoryContext walwriter_context;

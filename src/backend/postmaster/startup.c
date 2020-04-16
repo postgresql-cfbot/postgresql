@@ -167,7 +167,7 @@ HandleStartupProcInterrupts(void)
  * ----------------------------------
  */
 void
-StartupProcessMain(void)
+StartupProcessMain(int argc, char *argv[])
 {
 	/*
 	 * Properly accept or ignore signals the postmaster might send us.
@@ -208,6 +208,18 @@ StartupProcessMain(void)
 	 * successfully.
 	 */
 	proc_exit(0);
+}
+
+/*
+ * StartupForkFailure
+ *
+ * Tell the postmaster to exit/panic on failure to fork.
+ */
+bool
+StartupForkFailure(int fork_errno)
+{
+	/* Panic! */
+	return true;
 }
 
 void

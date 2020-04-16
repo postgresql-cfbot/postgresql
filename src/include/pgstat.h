@@ -18,6 +18,7 @@
 #include "port/atomics.h"
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"
+#include "postmaster/subprocess.h"
 #include "storage/proc.h"
 #include "utils/hsearch.h"
 #include "utils/relcache.h"
@@ -1283,10 +1284,8 @@ extern int	pgstat_start(void);
 extern void pgstat_reset_all(void);
 extern void allow_immediate_pgstat_restart(void);
 
-#ifdef EXEC_BACKEND
+extern int PgstatCollectorPrep(int argc, char *argv[]);
 extern void PgstatCollectorMain(int argc, char *argv[]) pg_attribute_noreturn();
-#endif
-
 
 /* ----------
  * Functions called from backends

@@ -38,10 +38,10 @@
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
-#include "postmaster/fork_process.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/pgarch.h"
 #include "postmaster/postmaster.h"
+#include "postmaster/subprocess.h"
 #include "storage/dsm.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -91,11 +91,6 @@ static volatile sig_atomic_t ready_to_stop = false;
  * Local function forward declarations
  * ----------
  */
-#ifdef EXEC_BACKEND
-static pid_t pgarch_forkexec(void);
-#endif
-
-NON_EXEC_STATIC void PgArchiverMain(int argc, char *argv[]) pg_attribute_noreturn();
 static void pgarch_exit(SIGNAL_ARGS);
 static void pgarch_waken(SIGNAL_ARGS);
 static void pgarch_waken_stop(SIGNAL_ARGS);
@@ -122,10 +117,9 @@ static void pgarch_archiveDone(char *xlog);
  *	Note: if fail, we will be called again from the postmaster main loop.
  */
 int
-pgarch_start(void)
+PgArchiverPrep(int argc, char *argv[])
 {
 	time_t		curtime;
-	pid_t		pgArchPid;
 
 	/*
 	 * Do nothing if no archiver needed
@@ -140,78 +134,12 @@ pgarch_start(void)
 	 * the postmaster main loop, we will get another chance later.
 	 */
 	curtime = time(NULL);
-	if ((unsigned int) (curtime - last_pgarch_start_time) <
+	if ((unsigned int) (curtime - last_pgarch_start_time) >=
 		(unsigned int) PGARCH_RESTART_INTERVAL)
-		return 0;
-	last_pgarch_start_time = curtime;
+		last_pgarch_start_time = curtime;
 
-#ifdef EXEC_BACKEND
-	switch ((pgArchPid = pgarch_forkexec()))
-#else
-	switch ((pgArchPid = fork_process()))
-#endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork archiver: %m")));
-			return 0;
-
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
-
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
-
-			/* Drop our connection to postmaster's shared memory, as well */
-			dsm_detach_all();
-			PGSharedMemoryDetach();
-
-			PgArchiverMain(0, NULL);
-			break;
-#endif
-
-		default:
-			return (int) pgArchPid;
-	}
-
-	/* shouldn't get here */
 	return 0;
 }
-
-/* ------------------------------------------------------------
- * Local functions called by archiver follow
- * ------------------------------------------------------------
- */
-
-
-#ifdef EXEC_BACKEND
-
-/*
- * pgarch_forkexec() -
- *
- * Format up the arglist for, then fork and exec, archive process
- */
-static pid_t
-pgarch_forkexec(void)
-{
-	char	   *av[10];
-	int			ac = 0;
-
-	av[ac++] = "postgres";
-
-	av[ac++] = "--forkarch";
-
-	av[ac++] = NULL;			/* filled in by postmaster_forkexec */
-
-	av[ac] = NULL;
-	Assert(ac < lengthof(av));
-
-	return postmaster_forkexec(ac, av);
-}
-#endif							/* EXEC_BACKEND */
-
 
 /*
  * PgArchiverMain
@@ -219,7 +147,7 @@ pgarch_forkexec(void)
  *	The argc/argv parameters are valid only in EXEC_BACKEND case.  However,
  *	since we don't use 'em, it hardly matters...
  */
-NON_EXEC_STATIC void
+void
 PgArchiverMain(int argc, char *argv[])
 {
 	/*
@@ -238,13 +166,18 @@ PgArchiverMain(int argc, char *argv[])
 	pqsignal(SIGCHLD, SIG_DFL);
 	PG_SETMASK(&UnBlockSig);
 
-	MyBackendType = B_ARCHIVER;
+	/* Identify myself via ps */
 	init_ps_display(NULL);
 
 	pgarch_MainLoop();
 
 	exit(0);
 }
+
+/* ------------------------------------------------------------
+ * Local functions called by archiver follow
+ * ------------------------------------------------------------
+ */
 
 /* SIGQUIT signal handler for archiver process */
 static void

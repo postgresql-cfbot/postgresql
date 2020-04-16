@@ -38,6 +38,7 @@ volatile uint32 QueryCancelHoldoffCount = 0;
 volatile uint32 CritSectionCount = 0;
 
 int			MyProcPid;
+int			MyChildProcPid;
 pg_time_t	MyStartTime;
 TimestampTz MyStartTimestamp;
 struct Port *MyProcPort;

@@ -38,8 +38,8 @@
 #include "nodes/pg_list.h"
 #include "pgstat.h"
 #include "pgtime.h"
-#include "postmaster/fork_process.h"
 #include "postmaster/postmaster.h"
+#include "postmaster/subprocess.h"
 #include "postmaster/syslogger.h"
 #include "storage/dsm.h"
 #include "storage/fd.h"
@@ -75,6 +75,10 @@ bool		Log_truncate_on_rotation = false;
 int			Log_file_mode = S_IRUSR | S_IWUSR;
 
 extern bool redirection_done;
+#ifdef EXEC_BACKEND
+extern LogFileNo	syslogFileNo;
+extern LogFileNo	csvlogFileNo;
+#endif
 
 /*
  * Private state
@@ -129,10 +133,8 @@ static volatile sig_atomic_t rotation_requested = false;
 
 /* Local subroutines */
 #ifdef EXEC_BACKEND
-static pid_t syslogger_forkexec(void);
-static void syslogger_parseArgs(int argc, char *argv[]);
+static void syslogger_openfds(void);
 #endif
-NON_EXEC_STATIC void SysLoggerMain(int argc, char *argv[]) pg_attribute_noreturn();
 static void process_pipe_input(char *logbuffer, int *bytes_in_logbuffer);
 static void flush_pipe_input(char *logbuffer, int *bytes_in_logbuffer);
 static FILE *logfile_open(const char *filename, const char *mode,
@@ -153,7 +155,7 @@ static void update_metainfo_datafile(void);
  * Main entry point for syslogger process
  * argc/argv parameters are valid only in EXEC_BACKEND case.
  */
-NON_EXEC_STATIC void
+void
 SysLoggerMain(int argc, char *argv[])
 {
 #ifndef WIN32
@@ -169,10 +171,9 @@ SysLoggerMain(int argc, char *argv[])
 	now = MyStartTime;
 
 #ifdef EXEC_BACKEND
-	syslogger_parseArgs(argc, argv);
+	syslogger_openfds();
 #endif							/* EXEC_BACKEND */
 
-	MyBackendType = B_LOGGER;
 	init_ps_display(NULL);
 
 	/*
@@ -537,13 +538,13 @@ SysLoggerMain(int argc, char *argv[])
  * Postmaster subroutine to start a syslogger subprocess.
  */
 int
-SysLogger_Start(void)
+SysLoggerPrep(int argc, char *argv[])
 {
-	pid_t		sysloggerPid;
 	char	   *filename;
 
+	/* Tell postmaster to stop forking */
 	if (!Logging_collector)
-		return 0;
+		return -1;
 
 	/*
 	 * If first time through, create the pipe which will receive stderr
@@ -626,179 +627,124 @@ SysLogger_Start(void)
 	}
 
 #ifdef EXEC_BACKEND
-	switch ((sysloggerPid = syslogger_forkexec()))
-#else
-	switch ((sysloggerPid = fork_process()))
-#endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork system logger: %m")));
-			return 0;
-
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
-
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(true);
-
-			/* Drop our connection to postmaster's shared memory, as well */
-			dsm_detach_all();
-			PGSharedMemoryDetach();
-
-			/* do the work */
-			SysLoggerMain(0, NULL);
-			break;
-#endif
-
-		default:
-			/* success, in postmaster */
-
-			/* now we redirect stderr, if not done already */
-			if (!redirection_done)
-			{
-#ifdef WIN32
-				int			fd;
-#endif
-
-				/*
-				 * Leave a breadcrumb trail when redirecting, in case the user
-				 * forgets that redirection is active and looks only at the
-				 * original stderr target file.
-				 */
-				ereport(LOG,
-						(errmsg("redirecting log output to logging collector process"),
-						 errhint("Future log output will appear in directory \"%s\".",
-								 Log_directory)));
+#ifndef WIN32
+	if (syslogFile != NULL)
+		syslogFileNo = fileno(syslogFile);
+	else
+		syslogFileNo = -1;
+#else							/* WIN32 */
+	if (syslogFile != NULL)
+		syslogFileNo = (long) _get_osfhandle(_fileno(syslogFile));
+	else
+		syslogFileNo = 0;
+#endif							/* WIN32 */
 
 #ifndef WIN32
-				fflush(stdout);
-				if (dup2(syslogPipe[1], fileno(stdout)) < 0)
-					ereport(FATAL,
-							(errcode_for_file_access(),
-							 errmsg("could not redirect stdout: %m")));
-				fflush(stderr);
-				if (dup2(syslogPipe[1], fileno(stderr)) < 0)
-					ereport(FATAL,
-							(errcode_for_file_access(),
-							 errmsg("could not redirect stderr: %m")));
-				/* Now we are done with the write end of the pipe. */
-				close(syslogPipe[1]);
-				syslogPipe[1] = -1;
-#else
+	if (csvlogFile != NULL)
+		csvlogFileNo = fileno(csvlogFile);
+	else
+		csvlogFileNo = -1;
+#else							/* WIN32 */
+	if (csvlogFile != NULL)
+		csvlogFileNo = (long) _get_osfhandle(_fileno(csvlogFile));
+	else
+		csvlogFileNo = 0;
+#endif							/* WIN32 */
+#endif							/* EXEC_BACKEND */
 
-				/*
-				 * open the pipe in binary mode and make sure stderr is binary
-				 * after it's been dup'ed into, to avoid disturbing the pipe
-				 * chunking protocol.
-				 */
-				fflush(stderr);
-				fd = _open_osfhandle((intptr_t) syslogPipe[1],
-									 _O_APPEND | _O_BINARY);
-				if (dup2(fd, _fileno(stderr)) < 0)
-					ereport(FATAL,
-							(errcode_for_file_access(),
-							 errmsg("could not redirect stderr: %m")));
-				close(fd);
-				_setmode(_fileno(stderr), _O_BINARY);
-
-				/*
-				 * Now we are done with the write end of the pipe.
-				 * CloseHandle() must not be called because the preceding
-				 * close() closes the underlying handle.
-				 */
-				syslogPipe[1] = 0;
-#endif
-				redirection_done = true;
-			}
-
-			/* postmaster will never write the file(s); close 'em */
-			fclose(syslogFile);
-			syslogFile = NULL;
-			if (csvlogFile != NULL)
-			{
-				fclose(csvlogFile);
-				csvlogFile = NULL;
-			}
-			return (int) sysloggerPid;
-	}
-
-	/* we should never reach here */
 	return 0;
 }
 
-
-#ifdef EXEC_BACKEND
-
 /*
- * syslogger_forkexec() -
+ * SysLoggerPostmasterMain
  *
- * Format up the arglist for, then fork and exec, a syslogger process
+ * Control function for subprocess parent (postmaster) after a successful fork.
  */
-static pid_t
-syslogger_forkexec(void)
+void
+SysLoggerPostmasterMain(int argc, char *argv[])
 {
-	char	   *av[10];
-	int			ac = 0;
-	char		filenobuf[32];
-	char		csvfilenobuf[32];
+	/* success, in postmaster */
 
-	av[ac++] = "postgres";
-	av[ac++] = "--forklog";
-	av[ac++] = NULL;			/* filled in by postmaster_forkexec */
+	/* now we redirect stderr, if not done already */
+	if (!redirection_done)
+	{
+#ifdef WIN32
+		int			fd;
+#endif
 
-	/* static variables (those not passed by write_backend_variables) */
-#ifndef WIN32
-	if (syslogFile != NULL)
-		snprintf(filenobuf, sizeof(filenobuf), "%d",
-				 fileno(syslogFile));
-	else
-		strcpy(filenobuf, "-1");
-#else							/* WIN32 */
-	if (syslogFile != NULL)
-		snprintf(filenobuf, sizeof(filenobuf), "%ld",
-				 (long) _get_osfhandle(_fileno(syslogFile)));
-	else
-		strcpy(filenobuf, "0");
-#endif							/* WIN32 */
-	av[ac++] = filenobuf;
+		/*
+		 * Leave a breadcrumb trail when redirecting, in case the user
+		 * forgets that redirection is active and looks only at the
+		 * original stderr target file.
+		 */
+		ereport(LOG,
+				(errmsg("redirecting log output to logging collector process"),
+				 errhint("Future log output will appear in directory \"%s\".",
+						 Log_directory)));
 
 #ifndef WIN32
-	if (csvlogFile != NULL)
-		snprintf(csvfilenobuf, sizeof(csvfilenobuf), "%d",
-				 fileno(csvlogFile));
-	else
-		strcpy(csvfilenobuf, "-1");
-#else							/* WIN32 */
-	if (csvlogFile != NULL)
-		snprintf(csvfilenobuf, sizeof(csvfilenobuf), "%ld",
-				 (long) _get_osfhandle(_fileno(csvlogFile)));
-	else
-		strcpy(csvfilenobuf, "0");
-#endif							/* WIN32 */
-	av[ac++] = csvfilenobuf;
+		fflush(stdout);
+		if (dup2(syslogPipe[1], fileno(stdout)) < 0)
+			ereport(FATAL,
+					(errcode_for_file_access(),
+					 errmsg("could not redirect stdout: %m")));
+		fflush(stderr);
+		if (dup2(syslogPipe[1], fileno(stderr)) < 0)
+			ereport(FATAL,
+					(errcode_for_file_access(),
+					 errmsg("could not redirect stderr: %m")));
+		/* Now we are done with the write end of the pipe. */
+		close(syslogPipe[1]);
+		syslogPipe[1] = -1;
+#else
 
-	av[ac] = NULL;
-	Assert(ac < lengthof(av));
+		/*
+		 * open the pipe in binary mode and make sure stderr is binary
+		 * after it's been dup'ed into, to avoid disturbing the pipe
+		 * chunking protocol.
+		 */
+		fflush(stderr);
+		fd = _open_osfhandle((intptr_t) syslogPipe[1],
+							 _O_APPEND | _O_BINARY);
+		if (dup2(fd, _fileno(stderr)) < 0)
+			ereport(FATAL,
+					(errcode_for_file_access(),
+					 errmsg("could not redirect stderr: %m")));
+		close(fd);
+		_setmode(_fileno(stderr), _O_BINARY);
 
-	return postmaster_forkexec(ac, av);
+		/*
+		 * Now we are done with the write end of the pipe.
+		 * CloseHandle() must not be called because the preceding
+		 * close() closes the underlying handle.
+		 */
+		syslogPipe[1] = 0;
+#endif
+		redirection_done = true;
+	}
+
+	/* postmaster will never write the file(s); close 'em */
+	fclose(syslogFile);
+	syslogFile = NULL;
+	if (csvlogFile != NULL)
+	{
+		fclose(csvlogFile);
+		csvlogFile = NULL;
+	}
 }
 
+#ifdef EXEC_BACKEND
 /*
- * syslogger_parseArgs() -
+ * syslogger_openfds() -
  *
  * Extract data from the arglist for exec'ed syslogger process
  */
 static void
-syslogger_parseArgs(int argc, char *argv[])
+syslogger_openfds(void)
 {
-	int			fd;
-
-	Assert(argc == 5);
-	argv += 3;
-
+#ifdef WIN32
+	int			fd = 0;
+#endif
 	/*
 	 * Re-open the error output files that were opened by SysLogger_Start().
 	 *
@@ -807,21 +753,18 @@ syslogger_parseArgs(int argc, char *argv[])
 	 * coded, we'll just crash on a null pointer dereference after failure...
 	 */
 #ifndef WIN32
-	fd = atoi(*argv++);
-	if (fd != -1)
+	if (syslogFileNo != -1)
 	{
-		syslogFile = fdopen(fd, "a");
+		syslogFile = fdopen(syslogFileNo, "a");
 		setvbuf(syslogFile, NULL, PG_IOLBF, 0);
 	}
-	fd = atoi(*argv++);
-	if (fd != -1)
+	if (csvlogFileNo != -1)
 	{
-		csvlogFile = fdopen(fd, "a");
+		csvlogFile = fdopen(csvlogFileNo, "a");
 		setvbuf(csvlogFile, NULL, PG_IOLBF, 0);
 	}
 #else							/* WIN32 */
-	fd = atoi(*argv++);
-	if (fd != 0)
+	if (syslogFileNo != 0)
 	{
 		fd = _open_osfhandle(fd, _O_APPEND | _O_TEXT);
 		if (fd > 0)
@@ -830,8 +773,7 @@ syslogger_parseArgs(int argc, char *argv[])
 			setvbuf(syslogFile, NULL, PG_IOLBF, 0);
 		}
 	}
-	fd = atoi(*argv++);
-	if (fd != 0)
+	if (syslogFileNo != 0)
 	{
 		fd = _open_osfhandle(fd, _O_APPEND | _O_TEXT);
 		if (fd > 0)

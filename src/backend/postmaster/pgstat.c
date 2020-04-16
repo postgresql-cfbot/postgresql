@@ -48,9 +48,9 @@
 #include "pg_trace.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
-#include "postmaster/fork_process.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
+#include "postmaster/subprocess.h"
 #include "replication/walsender.h"
 #include "storage/backendid.h"
 #include "storage/dsm.h"
@@ -296,11 +296,6 @@ static instr_time total_func_time;
  * Local function forward declarations
  * ----------
  */
-#ifdef EXEC_BACKEND
-static pid_t pgstat_forkexec(void);
-#endif
-
-NON_EXEC_STATIC void PgstatCollectorMain(int argc, char *argv[]) pg_attribute_noreturn();
 static void pgstat_beshutdown_hook(int code, Datum arg);
 
 static PgStat_StatDBEntry *pgstat_get_db_entry(Oid databaseid, bool create);
@@ -709,46 +704,15 @@ pgstat_reset_all(void)
 	pgstat_reset_remove_files(PGSTAT_STAT_PERMANENT_DIRECTORY);
 }
 
-#ifdef EXEC_BACKEND
-
 /*
- * pgstat_forkexec() -
+ * PgstatCollectorPrep
  *
- * Format up the arglist for, then fork and exec, statistics collector process
- */
-static pid_t
-pgstat_forkexec(void)
-{
-	char	   *av[10];
-	int			ac = 0;
-
-	av[ac++] = "postgres";
-	av[ac++] = "--forkcol";
-	av[ac++] = NULL;			/* filled in by postmaster_forkexec */
-
-	av[ac] = NULL;
-	Assert(ac < lengthof(av));
-
-	return postmaster_forkexec(ac, av);
-}
-#endif							/* EXEC_BACKEND */
-
-
-/*
- * pgstat_start() -
- *
- *	Called from postmaster at startup or after an existing collector
- *	died.  Attempt to fire up a fresh statistics collector.
- *
- *	Returns PID of child process, or 0 if fail.
- *
- *	Note: if fail, we will be called again from the postmaster main loop.
+ *	Called from StartSubprocess to prepare a new collector fork
  */
 int
-pgstat_start(void)
+PgstatCollectorPrep(int argc, char *argv[])
 {
 	time_t		curtime;
-	pid_t		pgStatPid;
 
 	/*
 	 * Check that the socket is there, else pgstat_init failed and we can do
@@ -764,46 +728,10 @@ pgstat_start(void)
 	 * from the postmaster main loop, we will get another chance later.
 	 */
 	curtime = time(NULL);
-	if ((unsigned int) (curtime - last_pgstat_start_time) <
+	if ((unsigned int) (curtime - last_pgstat_start_time) >=
 		(unsigned int) PGSTAT_RESTART_INTERVAL)
-		return 0;
-	last_pgstat_start_time = curtime;
+		last_pgstat_start_time = curtime;
 
-	/*
-	 * Okay, fork off the collector.
-	 */
-#ifdef EXEC_BACKEND
-	switch ((pgStatPid = pgstat_forkexec()))
-#else
-	switch ((pgStatPid = fork_process()))
-#endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork statistics collector: %m")));
-			return 0;
-
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
-
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
-
-			/* Drop our connection to postmaster's shared memory, as well */
-			dsm_detach_all();
-			PGSharedMemoryDetach();
-
-			PgstatCollectorMain(0, NULL);
-			break;
-#endif
-
-		default:
-			return (int) pgStatPid;
-	}
-
-	/* shouldn't get here */
 	return 0;
 }
 
@@ -4449,7 +4377,7 @@ pgstat_send_slru(void)
  *	The argc/argv parameters are valid only in EXEC_BACKEND case.
  * ----------
  */
-NON_EXEC_STATIC void
+void
 PgstatCollectorMain(int argc, char *argv[])
 {
 	int			len;

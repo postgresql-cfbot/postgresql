@@ -91,7 +91,7 @@ static XLogRecPtr last_snapshot_lsn = InvalidXLogRecPtr;
  * basic execution environment, but not enabled signals yet.
  */
 void
-BackgroundWriterMain(void)
+BackgroundWriterMain(int argc, char *argv[])
 {
 	sigjmp_buf	local_sigjmp_buf;
 	MemoryContext bgwriter_context;

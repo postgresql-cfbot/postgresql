@@ -31,6 +31,8 @@ extern Relation boot_reldesc;
 extern Form_pg_attribute attrtypes[MAXATTR];
 extern int	numattr;
 
+extern void CheckerModeMain(int argc, char *argv[]);
+extern void BootstrapModeMain(int argc, char *argv[]);
 
 extern void AuxiliaryProcessMain(int argc, char *argv[]) pg_attribute_noreturn();
 

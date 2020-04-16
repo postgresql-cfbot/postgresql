@@ -43,6 +43,10 @@ typedef struct RegisteredBgWorker
 } RegisteredBgWorker;
 
 extern slist_head BackgroundWorkerList;
+extern RegisteredBgWorker	*MyRegisteredBgWorker;
+
+/* Hold the shmem slot globally instead of shoving it into argv */
+extern int bgworker_shmem_slot;
 
 extern Size BackgroundWorkerShmemSize(void);
 extern void BackgroundWorkerShmemInit(void);
@@ -53,8 +57,11 @@ extern void ReportBackgroundWorkerExit(slist_mutable_iter *cur);
 extern void BackgroundWorkerStopNotifications(pid_t pid);
 extern void ResetBackgroundWorkerCrashTimes(void);
 
-/* Function to start a background worker, called from postmaster.c */
-extern void StartBackgroundWorker(void) pg_attribute_noreturn();
+/* BgWorkerType subprocess */
+extern int BackgroundWorkerPrep(int argc, char *argv[]);
+extern void BackgroundWorkerMain(int argc, char *argv[]);
+extern bool BackgroundWorkerForkFailure(int fork_errno);
+extern void BackgroundWorkerPostmasterMain(int argc, char *argv[]);
 
 #ifdef EXEC_BACKEND
 extern BackgroundWorker *BackgroundWorkerEntry(int slotno);

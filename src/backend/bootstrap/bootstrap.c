@@ -35,6 +35,7 @@
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/startup.h"
+#include "postmaster/subprocess.h"
 #include "postmaster/walwriter.h"
 #include "replication/walreceiver.h"
 #include "storage/bufmgr.h"
@@ -56,8 +57,6 @@ uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
 #define ALLOC(t, c) \
 	((t *) MemoryContextAllocZero(TopMemoryContext, (unsigned)(c) * sizeof(t)))
 
-static void CheckerModeMain(void);
-static void BootstrapModeMain(void);
 static void bootstrap_signals(void);
 static void ShutdownAuxiliaryProcess(int code, Datum arg);
 static Form_pg_attribute AllocateAttribute(void);
@@ -314,26 +313,14 @@ AuxiliaryProcessMain(int argc, char *argv[])
 		proc_exit(1);
 	}
 
-	switch (MyAuxProcType)
-	{
-		case StartupProcess:
-			MyBackendType = B_STARTUP;
-			break;
-		case BgWriterProcess:
-			MyBackendType = B_BG_WRITER;
-			break;
-		case CheckpointerProcess:
-			MyBackendType = B_CHECKPOINTER;
-			break;
-		case WalWriterProcess:
-			MyBackendType = B_WAL_WRITER;
-			break;
-		case WalReceiverProcess:
-			MyBackendType = B_WAL_RECEIVER;
-			break;
-		default:
-			MyBackendType = B_INVALID;
-	}
+	/*
+	 * We've read the arguments and know what backend type we are.
+	 */
+	SetMySubprocess((BackendType)MyAuxProcType);
+
+	/*
+	 * Identify myself via ps
+	 */
 	if (IsUnderPostmaster)
 		init_ps_display(NULL);
 
@@ -418,56 +405,10 @@ AuxiliaryProcessMain(int argc, char *argv[])
 	 */
 	SetProcessingMode(NormalProcessing);
 
-	switch (MyAuxProcType)
-	{
-		case CheckerProcess:
-			/* don't set signals, they're useless here */
-			CheckerModeMain();
-			proc_exit(1);		/* should never return */
+	/* Now jump into the subprocess main function and never look back! */
+	MySubprocess->entrypoint(argc, argv);
 
-		case BootstrapProcess:
-
-			/*
-			 * There was a brief instant during which mode was Normal; this is
-			 * okay.  We need to be in bootstrap mode during BootStrapXLOG for
-			 * the sake of multixact initialization.
-			 */
-			SetProcessingMode(BootstrapProcessing);
-			bootstrap_signals();
-			BootStrapXLOG();
-			BootstrapModeMain();
-			proc_exit(1);		/* should never return */
-
-		case StartupProcess:
-			/* don't set signals, startup process has its own agenda */
-			StartupProcessMain();
-			proc_exit(1);		/* should never return */
-
-		case BgWriterProcess:
-			/* don't set signals, bgwriter has its own agenda */
-			BackgroundWriterMain();
-			proc_exit(1);		/* should never return */
-
-		case CheckpointerProcess:
-			/* don't set signals, checkpointer has its own agenda */
-			CheckpointerMain();
-			proc_exit(1);		/* should never return */
-
-		case WalWriterProcess:
-			/* don't set signals, walwriter has its own agenda */
-			InitXLOGAccess();
-			WalWriterMain();
-			proc_exit(1);		/* should never return */
-
-		case WalReceiverProcess:
-			/* don't set signals, walreceiver has its own agenda */
-			WalReceiverMain();
-			proc_exit(1);		/* should never return */
-
-		default:
-			elog(PANIC, "unrecognized process type: %d", (int) MyAuxProcType);
-			proc_exit(1);
-	}
+	proc_exit(1);		/* should never return */
 }
 
 /*
@@ -476,8 +417,8 @@ AuxiliaryProcessMain(int argc, char *argv[])
  * settings).  Since, in fact, that was already done by BaseInit(),
  * we have nothing more to do here.
  */
-static void
-CheckerModeMain(void)
+void
+CheckerModeMain(int argc, char *argv[])
 {
 	proc_exit(0);
 }
@@ -489,10 +430,14 @@ CheckerModeMain(void)
  *	 The bootstrap backend doesn't speak SQL, but instead expects
  *	 commands in a special bootstrap language.
  */
-static void
-BootstrapModeMain(void)
+void
+BootstrapModeMain(int argc, char *argv[])
 {
 	int			i;
+
+	SetProcessingMode(BootstrapProcessing);
+	bootstrap_signals();
+	BootStrapXLOG();
 
 	Assert(!IsUnderPostmaster);
 	Assert(IsBootstrapProcessingMode());
@@ -508,7 +453,6 @@ BootstrapModeMain(void)
 	 * Do backend-like initialization for bootstrap mode
 	 */
 	InitProcess();
-
 	InitPostgres(NULL, InvalidOid, NULL, InvalidOid, NULL, false);
 
 	/* Initialize stuff for bootstrap-file processing */

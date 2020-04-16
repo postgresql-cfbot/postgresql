@@ -180,7 +180,7 @@ static void ReqCheckpointHandler(SIGNAL_ARGS);
  * basic execution environment, but not enabled signals yet.
  */
 void
-CheckpointerMain(void)
+CheckpointerMain(int argc, char *argv[])
 {
 	sigjmp_buf	local_sigjmp_buf;
 	MemoryContext checkpointer_context;

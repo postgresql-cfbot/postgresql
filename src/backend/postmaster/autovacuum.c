@@ -83,7 +83,6 @@
 #include "nodes/makefuncs.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
-#include "postmaster/fork_process.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
 #include "storage/bufmgr.h"
@@ -95,6 +94,7 @@
 #include "storage/procsignal.h"
 #include "storage/sinvaladt.h"
 #include "storage/smgr.h"
+#include "postmaster/subprocess.h"
 #include "tcop/tcopprot.h"
 #include "utils/fmgroids.h"
 #include "utils/fmgrprotos.h"
@@ -304,13 +304,6 @@ static WorkerInfo MyWorkerInfo = NULL;
 /* PID of launcher, valid only in worker while shutting down */
 int			AutovacuumLauncherPid = 0;
 
-#ifdef EXEC_BACKEND
-static pid_t avlauncher_forkexec(void);
-static pid_t avworker_forkexec(void);
-#endif
-NON_EXEC_STATIC void AutoVacWorkerMain(int argc, char *argv[]) pg_attribute_noreturn();
-NON_EXEC_STATIC void AutoVacLauncherMain(int argc, char *argv[]) pg_attribute_noreturn();
-
 static Oid	do_start_worker(void);
 static void HandleAutoVacLauncherInterrupts(void);
 static void AutoVacLauncherShutdown(void) pg_attribute_noreturn();
@@ -355,26 +348,6 @@ static void autovac_refresh_stats(void);
  ********************************************************************/
 
 #ifdef EXEC_BACKEND
-/*
- * forkexec routine for the autovacuum launcher process.
- *
- * Format up the arglist, then fork and exec.
- */
-static pid_t
-avlauncher_forkexec(void)
-{
-	char	   *av[10];
-	int			ac = 0;
-
-	av[ac++] = "postgres";
-	av[ac++] = "--forkavlauncher";
-	av[ac++] = NULL;			/* filled in by postmaster_forkexec */
-	av[ac] = NULL;
-
-	Assert(ac < lengthof(av));
-
-	return postmaster_forkexec(ac, av);
-}
 
 /*
  * We need this set from the outside, before InitProcess is called
@@ -387,55 +360,16 @@ AutovacuumLauncherIAm(void)
 #endif
 
 /*
- * Main entry point for autovacuum launcher process, to be called from the
- * postmaster.
- */
-int
-StartAutoVacLauncher(void)
-{
-	pid_t		AutoVacPID;
-
-#ifdef EXEC_BACKEND
-	switch ((AutoVacPID = avlauncher_forkexec()))
-#else
-	switch ((AutoVacPID = fork_process()))
-#endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork autovacuum launcher process: %m")));
-			return 0;
-
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
-
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
-
-			AutoVacLauncherMain(0, NULL);
-			break;
-#endif
-		default:
-			return (int) AutoVacPID;
-	}
-
-	/* shouldn't get here */
-	return 0;
-}
-
-/*
  * Main loop for the autovacuum launcher process.
  */
-NON_EXEC_STATIC void
-AutoVacLauncherMain(int argc, char *argv[])
+void
+AutoVacLauncherMain(pg_attribute_unused() int argc, pg_attribute_unused() char *argv[])
 {
 	sigjmp_buf	local_sigjmp_buf;
 
 	am_autovacuum_launcher = true;
 
-	MyBackendType = B_AUTOVAC_LAUNCHER;
+	/* Identify myself via ps */
 	init_ps_display(NULL);
 
 	ereport(DEBUG1,
@@ -1427,27 +1361,6 @@ avl_sigusr2_handler(SIGNAL_ARGS)
 
 #ifdef EXEC_BACKEND
 /*
- * forkexec routines for the autovacuum worker.
- *
- * Format up the arglist, then fork and exec.
- */
-static pid_t
-avworker_forkexec(void)
-{
-	char	   *av[10];
-	int			ac = 0;
-
-	av[ac++] = "postgres";
-	av[ac++] = "--forkavworker";
-	av[ac++] = NULL;			/* filled in by postmaster_forkexec */
-	av[ac] = NULL;
-
-	Assert(ac < lengthof(av));
-
-	return postmaster_forkexec(ac, av);
-}
-
-/*
  * We need this set from the outside, before InitProcess is called
  */
 void
@@ -1458,49 +1371,9 @@ AutovacuumWorkerIAm(void)
 #endif
 
 /*
- * Main entry point for autovacuum worker process.
- *
- * This code is heavily based on pgarch.c, q.v.
- */
-int
-StartAutoVacWorker(void)
-{
-	pid_t		worker_pid;
-
-#ifdef EXEC_BACKEND
-	switch ((worker_pid = avworker_forkexec()))
-#else
-	switch ((worker_pid = fork_process()))
-#endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork autovacuum worker process: %m")));
-			return 0;
-
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
-
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
-
-			AutoVacWorkerMain(0, NULL);
-			break;
-#endif
-		default:
-			return (int) worker_pid;
-	}
-
-	/* shouldn't get here */
-	return 0;
-}
-
-/*
  * AutoVacWorkerMain
  */
-NON_EXEC_STATIC void
+void
 AutoVacWorkerMain(int argc, char *argv[])
 {
 	sigjmp_buf	local_sigjmp_buf;
@@ -1508,7 +1381,7 @@ AutoVacWorkerMain(int argc, char *argv[])
 
 	am_autovacuum_worker = true;
 
-	MyBackendType = B_AUTOVAC_WORKER;
+	/* Identify myself via ps */
 	init_ps_display(NULL);
 
 	SetProcessingMode(InitProcessing);

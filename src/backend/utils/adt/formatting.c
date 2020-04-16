@@ -4594,20 +4594,50 @@ do_to_timestamp(text *date_txt, text *fmt, Oid collid, bool std,
 			fmask |= DTK_DATE_M;
 		}
 		else
-			tmfc.ddd = (tmfc.ww - 1) * 7 + 1;
+		{
+			/*
+			 * If tmfc.d is not set, then the date is left at the beginning of
+			 * the week (Sunday).
+			 */
+			if (tmfc.d)
+				weekdate2date(tmfc.ww, tmfc.d, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
+			else
+				week2date(tmfc.ww, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
+			fmask |= DTK_DATE_M;
+		}
 	}
 
-	if (tmfc.w)
-		tmfc.dd = (tmfc.w - 1) * 7 + 1;
-	if (tmfc.dd)
-	{
-		tm->tm_mday = tmfc.dd;
-		fmask |= DTK_M(DAY);
-	}
 	if (tmfc.mm)
 	{
 		tm->tm_mon = tmfc.mm;
 		fmask |= DTK_M(MONTH);
+	}
+
+	if (tmfc.w)
+	{
+		/* if tmfc.mm is set, the date can be calculated */
+		if (tmfc.mm)
+		{
+			/*
+			 * If tmfc.d is not set, then the date is left at the beginning of
+			 * the week (Sunday).
+			 */
+			if (tmfc.d)
+				monthweekdate2date(tmfc.mm, tmfc.w, tmfc.d, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
+			else
+				monthweek2date(tmfc.mm, tmfc.w, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
+
+			fmask |= DTK_DATE_M;
+			tmfc.dd = tm->tm_mday;
+		}
+		else
+			tmfc.dd = (tmfc.w - 1) * 7 + 1;
+	}
+
+	if (tmfc.dd)
+	{
+		tm->tm_mday = tmfc.dd;
+		fmask |= DTK_M(DAY);
 	}
 
 	if (tmfc.ddd && (tm->tm_mon <= 1 || tm->tm_mday <= 1))

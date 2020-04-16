@@ -14,12 +14,13 @@
 #define CLUSTER_H
 
 #include "nodes/parsenodes.h"
+#include "parser/parse_node.h"
 #include "storage/lock.h"
 #include "utils/relcache.h"
 
 
-extern void cluster(ClusterStmt *stmt, bool isTopLevel);
-extern void cluster_rel(Oid tableOid, Oid indexOid, int options);
+extern void cluster(ParseState *pstate, ClusterStmt *stmt, bool isTopLevel);
+extern void cluster_rel(Oid tableOid, Oid indexOid, Oid tablespaceOid, Oid indextablespaceOid, int options);
 extern void check_index_is_clusterable(Relation OldHeap, Oid indexOid,
 									   bool recheck, LOCKMODE lockmode);
 extern void mark_index_clustered(Relation rel, Oid indexOid, bool is_internal);
@@ -33,6 +34,7 @@ extern void finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 							 bool is_internal,
 							 TransactionId frozenXid,
 							 MultiXactId minMulti,
-							 char newrelpersistence);
+							 char newrelpersistence,
+							 Oid idxtablespaceOid);
 
 #endif							/* CLUSTER_H */

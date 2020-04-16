@@ -21,8 +21,15 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CLUSTER [VERBOSE] <replaceable class="parameter">table_name</replaceable> [ USING <replaceable class="parameter">index_name</replaceable> ]
-CLUSTER [VERBOSE]
+CLUSTER [VERBOSE] [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] <replaceable class="parameter">table_name</replaceable> [ USING <replaceable class="parameter">index_name</replaceable> ]
+CLUSTER [VERBOSE] [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ]
+
+<phrase>where <replaceable class="parameter">option</replaceable> can be one of:</phrase>
+
+    VERBOSE [ <replaceable class="parameter">boolean</replaceable> ]
+    TABLESPACE <replaceable class="parameter">new_tablespace</replaceable>
+    INDEX_TABLESPACE <replaceable class="parameter">new_tablespace</replaceable>
+
 </synopsis>
  </refsynopsisdiv>
 
@@ -82,6 +89,34 @@ CLUSTER [VERBOSE]
 
   <variablelist>
    <varlistentry>
+    <term><literal>VERBOSE</literal></term>
+    <listitem>
+     <para>
+      Prints a progress report as each table is clustered.
+<!-- When specified within parenthesis, <literal>VERBOSE</literal> may be followed by a boolean ...-->
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>TABLESPACE</literal></term>
+    <listitem>
+     <para>
+      Specifies that the table will be rebuilt on a new tablespace.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>INDEX_TABLESPACE</literal></term>
+    <listitem>
+     <para>
+      Specifies that the table's indexes will be rebuilt on a new tablespace.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><replaceable class="parameter">table_name</replaceable></term>
     <listitem>
      <para>
@@ -100,13 +135,28 @@ CLUSTER [VERBOSE]
    </varlistentry>
 
    <varlistentry>
-    <term><literal>VERBOSE</literal></term>
+    <term><replaceable class="parameter">boolean</replaceable></term>
     <listitem>
      <para>
-      Prints a progress report as each table is clustered.
+      Specifies whether the selected option should be turned on or off.
+      You can write <literal>TRUE</literal>, <literal>ON</literal>, or
+      <literal>1</literal> to enable the option, and <literal>FALSE</literal>,
+      <literal>OFF</literal>, or <literal>0</literal> to disable it.  The
+      <replaceable class="parameter">boolean</replaceable> value can also
+      be omitted, in which case <literal>TRUE</literal> is assumed.
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">new_tablespace</replaceable></term>
+    <listitem>
+     <para>
+      The tablespace where the table or its indexes will be rebuilt.
+     </para>
+    </listitem>
+   </varlistentry>
+
   </variablelist>
  </refsect1>
 

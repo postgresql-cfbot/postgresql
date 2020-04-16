@@ -2047,3 +2047,24 @@ SELECT encode(overlay(E'Th\\000omas'::bytea placing E'\\002\\003'::bytea from 5 
  Th\000o\x02\x03
 (1 row)
 
+SET bytea_output TO hex;
+SELECT encode(E'en\\300\\336d'::bytea, 'uri');
+  encode   
+-----------
+ en%C0%DEd
+(1 row)
+
+SELECT decode('%De%c0%DEd', 'uri');
+   decode   
+------------
+ \xdec0de64
+(1 row)
+
+SELECT decode('error%Ex', 'uri');
+ERROR:  invalid hexadecimal digit: "x"
+SELECT decode('error%E', 'uri');
+ERROR:  invalid uri percent encoding
+HINT:  Input data ends prematurely.
+SELECT decode('error%', 'uri');
+ERROR:  invalid uri percent encoding
+HINT:  Input data ends prematurely.

@@ -3227,7 +3227,8 @@ SELECT format('Testing %3$s, %2$s, %s', 'one', 'two', 'three');
        <parameter>format</parameter> values are:
        <link linkend="encode-format-base64"><literal>base64</literal></link>,
        <link linkend="encode-format-escape"><literal>escape</literal></link>,
-       <link linkend="encode-format-hex"><literal>hex</literal></link>
+       <link linkend="encode-format-hex"><literal>hex</literal></link>,
+       <link linkend="encode-format-uri"><literal>uri</literal></link>
       </entry>
       <entry><literal>encode('123\000\001', 'base64')</literal></entry>
       <entry><literal>MTIzAAE=</literal></entry>
@@ -3321,6 +3322,19 @@ SELECT format('Testing %3$s, %2$s, %s', 'one', 'two', 'three');
       </para>
      </listitem>
     </varlistentry>
+
+    <varlistentry id="encode-format-uri">
+     <term>uri
+     <indexterm>
+      <primary>uri format</primary>
+     </indexterm></term>
+     <listitem>
+      <para>
+       The <literal>uri</literal> format represents ...
+      </para>
+     </listitem>
+    </varlistentry>
+
    </variablelist>
   </para>
 

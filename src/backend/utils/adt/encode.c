@@ -144,6 +144,7 @@ binary_decode(PG_FUNCTION_ARGS)
  */
 
 static const char hextbl[] = "0123456789abcdef";
+static const char hextbl_upper[] = "0123456789ABCDEF";
 
 static const int8 hexlookup[128] = {
 	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -547,6 +548,128 @@ esc_dec_len(const char *src, size_t srclen)
 }
 
 /*
+ * URI percent encoding
+ *
+ * Percent encodes all byte values except the unreserved ASCII characters as
+ * per RFC3986.
+ */
+
+static unsigned
+uri_encode(const char *src, unsigned srclen, char *dst)
+{
+	char	   *d = dst;
+
+	for (const char *s = src; s < src + srclen; s++)
+	{
+		/*
+		 * RFC3986:
+		 *
+		 * unreserved  = ALPHA / DIGIT / "-" / "." / "_" / "~"
+		 */
+		if ((*s >= 'A' && *s <= 'Z') ||
+			(*s >= 'a' && *s <= 'z') ||
+			(*s >= '0' && *s <= '9') ||
+			*s == '-' ||
+			*s == '.' ||
+			*s == '_' ||
+			*s == '~')
+		{
+			*d++ = *s;
+		}
+		else
+		{
+			*d++ = '%';
+			*d++ = hextbl_upper[(*s >> 4) & 0xF];
+			*d++ = hextbl_upper[*s & 0xF];
+		}
+	}
+	return d - dst;
+}
+
+static unsigned
+uri_decode(const char *src, unsigned srclen, char *dst)
+{
+	const char *s = src;
+	const char *srcend = src + srclen;
+	char	   *d = dst;
+	char		val;
+
+	while (s < srcend)
+	{
+		if (*s == '%')
+		{
+			/*
+			 * Verify we have the needed bytes.  This doesn't happen, since
+			 * uri_dec_len already takes care of validation.
+			 */
+			if (s > srcend - 3)
+				elog(ERROR, "invalid uri percent encoding");
+
+			/* Skip '%' */
+			s++;
+
+			val = get_hex(*s++) << 4;
+			val += get_hex(*s++);
+			*d++ = val;
+		}
+		else
+			*d++ = *s++;
+	}
+	return d - dst;
+}
+
+static unsigned
+uri_enc_len(const char *src, unsigned srclen)
+{
+	int			len = 0;
+
+	for (const char *s = src; s < src + srclen; s++)
+	{
+		if ((*s >= 'A' && *s <= 'Z') ||
+			(*s >= 'a' && *s <= 'z') ||
+			(*s >= '0' && *s <= '9') ||
+			*s == '-' ||
+			*s == '_' ||
+			*s == '.' ||
+			*s == '~')
+		{
+			len++;
+		}
+		else
+			len += 3;
+	}
+	return len;
+}
+
+static unsigned
+uri_dec_len(const char *src, unsigned srclen)
+{
+	const char *s = src;
+	const char *srcend = src + srclen;
+	int			len = 0;
+
+	while (s < srcend)
+	{
+		if (*s == '%')
+		{
+			if (s > srcend - 3)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid uri percent encoding"),
+						 errhint("Input data ends prematurely.")));
+			s++;
+			get_hex(*s++);
+			get_hex(*s++);
+		}
+		else
+			s++;
+		len++;
+	}
+
+	return len;
+}
+
+/*
  * Common
  */
 
@@ -573,6 +696,12 @@ static const struct
 		"escape",
 		{
 			esc_enc_len, esc_dec_len, esc_encode, esc_decode
+		}
+	},
+	{
+		"uri",
+		{
+			uri_enc_len, uri_dec_len, uri_encode, uri_decode
 		}
 	},
 	{

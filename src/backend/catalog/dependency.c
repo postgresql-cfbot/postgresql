@@ -589,6 +589,7 @@ findDependentObjects(const ObjectAddress *object,
 			case DEPENDENCY_NORMAL:
 			case DEPENDENCY_AUTO:
 			case DEPENDENCY_AUTO_EXTENSION:
+			case DEPENDENCY_IMMV:
 				/* no problem */
 				break;
 
@@ -915,6 +916,7 @@ findDependentObjects(const ObjectAddress *object,
 				subflags = DEPFLAG_AUTO;
 				break;
 			case DEPENDENCY_INTERNAL:
+			case DEPENDENCY_IMMV:
 				subflags = DEPFLAG_INTERNAL;
 				break;
 			case DEPENDENCY_PARTITION_PRI:

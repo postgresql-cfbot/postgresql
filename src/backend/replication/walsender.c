@@ -1950,7 +1950,7 @@ PhysicalReplicationSlotNewXmin(TransactionId feedbackXmin, TransactionId feedbac
 	ReplicationSlot *slot = MyReplicationSlot;
 
 	SpinLockAcquire(&slot->mutex);
-	MyPgXact->xmin = InvalidTransactionId;
+	MyProc->xmin = InvalidTransactionId;
 
 	/*
 	 * For physical replication we don't need the interlock provided by xmin
@@ -2079,7 +2079,7 @@ ProcessStandbyHSFeedbackMessage(void)
 	if (!TransactionIdIsNormal(feedbackXmin)
 		&& !TransactionIdIsNormal(feedbackCatalogXmin))
 	{
-		MyPgXact->xmin = InvalidTransactionId;
+		MyProc->xmin = InvalidTransactionId;
 		if (MyReplicationSlot != NULL)
 			PhysicalReplicationSlotNewXmin(feedbackXmin, feedbackCatalogXmin);
 		return;
@@ -2099,9 +2099,10 @@ ProcessStandbyHSFeedbackMessage(void)
 
 	/*
 	 * Set the WalSender's xmin equal to the standby's requested xmin, so that
-	 * the xmin will be taken into account by GetOldestXmin.  This will hold
-	 * back the removal of dead rows and thereby prevent the generation of
-	 * cleanup conflicts on the standby server.
+	 * the xmin will be taken into account by GetSnapshotData() /
+	 * ComputeXidHorizons().  This will hold back the removal of dead rows and
+	 * thereby prevent the generation of cleanup conflicts on the standby
+	 * server.
 	 *
 	 * There is a small window for a race condition here: although we just
 	 * checked that feedbackXmin precedes nextXid, the nextXid could have
@@ -2114,13 +2115,13 @@ ProcessStandbyHSFeedbackMessage(void)
 	 * own xmin would prevent nextXid from advancing so far.
 	 *
 	 * We don't bother taking the ProcArrayLock here.  Setting the xmin field
-	 * is assumed atomic, and there's no real need to prevent a concurrent
-	 * GetOldestXmin.  (If we're moving our xmin forward, this is obviously
-	 * safe, and if we're moving it backwards, well, the data is at risk
-	 * already since a VACUUM could have just finished calling GetOldestXmin.)
+	 * is assumed atomic, and there's no real need to prevent concurrent
+	 * horizon determinations.  (If we're moving our xmin forward, this is
+	 * obviously safe, and if we're moving it backwards, well, the data is at
+	 * risk already since a VACUUM could already have determined the horizon.)
 	 *
 	 * If we're using a replication slot we reserve the xmin via that,
-	 * otherwise via the walsender's PGXACT entry. We can only track the
+	 * otherwise via the walsender's PGPROC entry. We can only track the
 	 * catalog xmin separately when using a slot, so we store the least of the
 	 * two provided when not using a slot.
 	 *
@@ -2133,9 +2134,9 @@ ProcessStandbyHSFeedbackMessage(void)
 	{
 		if (TransactionIdIsNormal(feedbackCatalogXmin)
 			&& TransactionIdPrecedes(feedbackCatalogXmin, feedbackXmin))
-			MyPgXact->xmin = feedbackCatalogXmin;
+			MyProc->xmin = feedbackCatalogXmin;
 		else
-			MyPgXact->xmin = feedbackXmin;
+			MyProc->xmin = feedbackXmin;
 	}
 }
 

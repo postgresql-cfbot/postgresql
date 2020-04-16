@@ -1535,6 +1535,7 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 	bool		at_chain_start;
 	bool		valid;
 	bool		skip;
+	GlobalVisState *vistest = NULL;
 
 	/* If this is not the first call, previous call returned a (live!) tuple */
 	if (all_dead)
@@ -1545,7 +1546,8 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 	at_chain_start = first_call;
 	skip = !first_call;
 
-	Assert(TransactionIdIsValid(RecentGlobalXmin));
+	/* XXX: we should assert that a snapshot is pushed or registered */
+	Assert(TransactionIdIsValid(RecentXmin));
 	Assert(BufferGetBlockNumber(buffer) == blkno);
 
 	/* Scan through possible multiple members of HOT-chain */
@@ -1634,9 +1636,14 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 		 * Note: if you change the criterion here for what is "dead", fix the
 		 * planner's get_actual_variable_range() function to match.
 		 */
-		if (all_dead && *all_dead &&
-			!HeapTupleIsSurelyDead(heapTuple, RecentGlobalXmin))
-			*all_dead = false;
+		if (all_dead && *all_dead)
+		{
+			if (!vistest)
+				vistest = GlobalVisTestFor(relation);
+
+			if (!HeapTupleIsSurelyDead(vistest, heapTuple))
+				*all_dead = false;
+		}
 
 		/*
 		 * Check to see if HOT chain continues past this tuple; if so fetch
@@ -2192,8 +2199,8 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		RelationPutHeapTuple(relation, buffer, heaptuples[ndone], false);
 
 		/*
-		 * Note that heap_multi_insert is not used for catalog tuples yet,
-		 * but this will cover the gap once that is the case.
+		 * Note that heap_multi_insert is not used for catalog tuples yet, but
+		 * this will cover the gap once that is the case.
 		 */
 		if (needwal && need_cids)
 			log_heap_new_cid(relation, heaptuples[ndone]);

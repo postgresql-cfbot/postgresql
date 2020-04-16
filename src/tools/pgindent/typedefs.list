@@ -386,6 +386,7 @@ CompositeTypeStmt
 CompoundAffixFlag
 CompressionAlgorithm
 CompressorState
+ComputeXidHorizonsResult
 ConditionVariable
 ConditionalStack
 ConfigData
@@ -919,6 +920,7 @@ GistSplitVector
 GistTsVectorOptions
 GistVacState
 GlobalTransaction
+GlobalVisState
 GrantRoleStmt
 GrantStmt
 GrantTargetType
@@ -1508,7 +1510,6 @@ PGSetenvStatusType
 PGShmemHeader
 PGTransactionStatusType
 PGVerbosity
-PGXACT
 PG_Locale_Strategy
 PG_Lock_Status
 PG_init_t

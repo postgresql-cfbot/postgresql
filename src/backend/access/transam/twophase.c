@@ -21,9 +21,9 @@
  *		GIDs and aborts the transaction if there already is a global
  *		transaction in prepared state with the same GID.
  *
- *		A global transaction (gxact) also has dummy PGXACT and PGPROC; this is
- *		what keeps the XID considered running by TransactionIdIsInProgress.
- *		It is also convenient as a PGPROC to hook the gxact's locks to.
+ *		A global transaction (gxact) also has dummy PGPROC; this is what keeps
+ *		the XID considered running by TransactionIdIsInProgress.  It is also
+ *		convenient as a PGPROC to hook the gxact's locks to.
  *
  *		Information to recover prepared transactions in case of crash is
  *		now stored in WAL for the common case. In some cases there will be
@@ -351,7 +351,7 @@ AtAbort_Twophase(void)
 
 /*
  * This is called after we have finished transferring state to the prepared
- * PGXACT entry.
+ * PGPROC entry.
  */
 void
 PostPrepare_Twophase(void)
@@ -447,14 +447,12 @@ MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
 					TimestampTz prepared_at, Oid owner, Oid databaseid)
 {
 	PGPROC	   *proc;
-	PGXACT	   *pgxact;
 	int			i;
 
 	Assert(LWLockHeldByMeInMode(TwoPhaseStateLock, LW_EXCLUSIVE));
 
 	Assert(gxact != NULL);
 	proc = &ProcGlobal->allProcs[gxact->pgprocno];
-	pgxact = &ProcGlobal->allPgXact[gxact->pgprocno];
 
 	/* Initialize the PGPROC entry */
 	MemSet(proc, 0, sizeof(PGPROC));
@@ -463,10 +461,10 @@ MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
 	proc->waitStatus = STATUS_OK;
 	/* We set up the gxact's VXID as InvalidBackendId/XID */
 	proc->lxid = (LocalTransactionId) xid;
-	pgxact->xid = xid;
-	pgxact->xmin = InvalidTransactionId;
+	proc->xid = xid;
+	Assert(proc->xmin == InvalidTransactionId);
 	proc->delayChkpt = false;
-	pgxact->vacuumFlags = 0;
+	proc->vacuumFlags = 0;
 	proc->pid = 0;
 	proc->backendId = InvalidBackendId;
 	proc->databaseId = databaseid;
@@ -480,8 +478,8 @@ MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
 	for (i = 0; i < NUM_LOCK_PARTITIONS; i++)
 		SHMQueueInit(&(proc->myProcLocks[i]));
 	/* subxid data must be filled later by GXactLoadSubxactData */
-	pgxact->overflowed = false;
-	pgxact->nxids = 0;
+	proc->subxidStatus.count = 0;
+	proc->subxidStatus.overflowed = 0;
 
 	gxact->prepared_at = prepared_at;
 	gxact->xid = xid;
@@ -510,19 +508,18 @@ GXactLoadSubxactData(GlobalTransaction gxact, int nsubxacts,
 					 TransactionId *children)
 {
 	PGPROC	   *proc = &ProcGlobal->allProcs[gxact->pgprocno];
-	PGXACT	   *pgxact = &ProcGlobal->allPgXact[gxact->pgprocno];
 
 	/* We need no extra lock since the GXACT isn't valid yet */
 	if (nsubxacts > PGPROC_MAX_CACHED_SUBXIDS)
 	{
-		pgxact->overflowed = true;
+		proc->subxidStatus.overflowed = true;
 		nsubxacts = PGPROC_MAX_CACHED_SUBXIDS;
 	}
 	if (nsubxacts > 0)
 	{
 		memcpy(proc->subxids.xids, children,
 			   nsubxacts * sizeof(TransactionId));
-		pgxact->nxids = nsubxacts;
+		proc->subxidStatus.count = PGPROC_MAX_CACHED_SUBXIDS;
 	}
 }
 
@@ -768,7 +765,6 @@ pg_prepared_xact(PG_FUNCTION_ARGS)
 	{
 		GlobalTransaction gxact = &status->array[status->currIdx++];
 		PGPROC	   *proc = &ProcGlobal->allProcs[gxact->pgprocno];
-		PGXACT	   *pgxact = &ProcGlobal->allPgXact[gxact->pgprocno];
 		Datum		values[5];
 		bool		nulls[5];
 		HeapTuple	tuple;
@@ -783,7 +779,7 @@ pg_prepared_xact(PG_FUNCTION_ARGS)
 		MemSet(values, 0, sizeof(values));
 		MemSet(nulls, 0, sizeof(nulls));
 
-		values[0] = TransactionIdGetDatum(pgxact->xid);
+		values[0] = TransactionIdGetDatum(proc->xid);
 		values[1] = CStringGetTextDatum(gxact->gid);
 		values[2] = TimestampTzGetDatum(gxact->prepared_at);
 		values[3] = ObjectIdGetDatum(gxact->owner);
@@ -829,9 +825,8 @@ TwoPhaseGetGXact(TransactionId xid, bool lock_held)
 	for (i = 0; i < TwoPhaseState->numPrepXacts; i++)
 	{
 		GlobalTransaction gxact = TwoPhaseState->prepXacts[i];
-		PGXACT	   *pgxact = &ProcGlobal->allPgXact[gxact->pgprocno];
 
-		if (pgxact->xid == xid)
+		if (gxact->xid == xid)
 		{
 			result = gxact;
 			break;
@@ -987,8 +982,7 @@ void
 StartPrepare(GlobalTransaction gxact)
 {
 	PGPROC	   *proc = &ProcGlobal->allProcs[gxact->pgprocno];
-	PGXACT	   *pgxact = &ProcGlobal->allPgXact[gxact->pgprocno];
-	TransactionId xid = pgxact->xid;
+	TransactionId xid = gxact->xid;
 	TwoPhaseFileHeader hdr;
 	TransactionId *children;
 	RelFileNode *commitrels;
@@ -1140,15 +1134,15 @@ EndPrepare(GlobalTransaction gxact)
 
 	/*
 	 * Mark the prepared transaction as valid.  As soon as xact.c marks
-	 * MyPgXact as not running our XID (which it will do immediately after
+	 * MyProc as not running our XID (which it will do immediately after
 	 * this function returns), others can commit/rollback the xact.
 	 *
 	 * NB: a side effect of this is to make a dummy ProcArray entry for the
-	 * prepared XID.  This must happen before we clear the XID from MyPgXact,
-	 * else there is a window where the XID is not running according to
-	 * TransactionIdIsInProgress, and onlookers would be entitled to assume
-	 * the xact crashed.  Instead we have a window where the same XID appears
-	 * twice in ProcArray, which is OK.
+	 * prepared XID.  This must happen before we clear the XID from MyProc /
+	 * ProcGlobal->xids[], else there is a window where the XID is not running
+	 * according to TransactionIdIsInProgress, and onlookers would be entitled
+	 * to assume the xact crashed.  Instead we have a window where the same
+	 * XID appears twice in ProcArray, which is OK.
 	 */
 	MarkAsPrepared(gxact, false);
 
@@ -1401,7 +1395,6 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 {
 	GlobalTransaction gxact;
 	PGPROC	   *proc;
-	PGXACT	   *pgxact;
 	TransactionId xid;
 	char	   *buf;
 	char	   *bufptr;
@@ -1420,8 +1413,7 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	 */
 	gxact = LockGXact(gid, GetUserId());
 	proc = &ProcGlobal->allProcs[gxact->pgprocno];
-	pgxact = &ProcGlobal->allPgXact[gxact->pgprocno];
-	xid = pgxact->xid;
+	xid = gxact->xid;
 
 	/*
 	 * Read and validate 2PC state data. State data will typically be stored
@@ -1723,7 +1715,7 @@ CheckPointTwoPhase(XLogRecPtr redo_horizon)
 	for (i = 0; i < TwoPhaseState->numPrepXacts; i++)
 	{
 		/*
-		 * Note that we are using gxact not pgxact so this works in recovery
+		 * Note that we are using gxact not PGPROC so this works in recovery
 		 * also
 		 */
 		GlobalTransaction gxact = TwoPhaseState->prepXacts[i];

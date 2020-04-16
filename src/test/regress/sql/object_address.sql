@@ -210,6 +210,10 @@ SELECT (pg_identify_object(addr1.classid, addr1.objid, addr1.objsubid)).*,
 			pg_get_object_address(typ, nms, ioa.args) as addr2
 	ORDER BY addr1.classid, addr1.objid, addr1.objsubid;
 
+-- identity if the object is built-in or user-defined
+SELECT pg_is_user_object('pg_class'::regclass);
+SELECT pg_is_user_object('trig'::regproc);
+
 ---
 --- Cleanup resources
 ---

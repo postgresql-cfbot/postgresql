@@ -154,6 +154,9 @@ FullTransactionIdAdvance(FullTransactionId *dest)
 #define FirstBootstrapObjectId	12000
 #define FirstNormalObjectId		16384
 
+/* Return true if the oid is assigned during normal multiuser operation */
+#define ObjectIsUserObject(oid) (((Oid) oid) >= FirstNormalObjectId)
+
 /*
  * VariableCache is a data structure in shared memory that is used to track
  * OID and XID assignment state.  For largely historical reasons, there is

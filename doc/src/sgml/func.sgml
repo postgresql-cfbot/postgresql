@@ -19190,6 +19190,10 @@ SELECT collation for ('foo' COLLATE "de_DE");
     <primary>pg_get_object_address</primary>
    </indexterm>
 
+   <indexterm>
+    <primary>pg_is_user_object</primary>
+   </indexterm>
+
   <para>
    <xref linkend="functions-info-object-table"/> lists functions related to
    database object identification and addressing.
@@ -19222,6 +19226,14 @@ SELECT collation for ('foo' COLLATE "de_DE");
        <entry><literal><function>pg_get_object_address(<parameter>type</parameter> <type>text</type>, <parameter>object_names</parameter> <type>text[]</type>, <parameter>object_args</parameter> <type>text[]</type>)</function></literal></entry>
        <entry><parameter>classid</parameter> <type>oid</type>, <parameter>objid</parameter> <type>oid</type>, <parameter>objsubid</parameter> <type>integer</type></entry>
        <entry>get address of a database object from its external representation</entry>
+      </row>
+      <row>
+       <entry><literal><function>pg_is_user_object(<parameter>oid</parameter>)</function></literal></entry>
+       <entry><type>bool</type></entry>
+       <entry>
+        true for OIDs assigned while database is operating in normal multi-user
+        mode, as opposed to single-user mode (see <xref linkend="app-postgres"/>).
+       </entry>
       </row>
      </tbody>
     </tgroup>

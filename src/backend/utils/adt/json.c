@@ -204,7 +204,7 @@ json_categorize_type(Oid typoid,
 				/* It's probably the general case ... */
 				*tcategory = JSONTYPE_OTHER;
 				/* but let's look for a cast to json, if it's not built-in */
-				if (typoid >= FirstNormalObjectId)
+				if (ObjectIsUserObject(typoid))
 				{
 					Oid			castfunc;
 					CoercionPathType ctype;

@@ -258,3 +258,4 @@ output_escaped_str(char *str, bool quoted)
 	if (quoted && str[0] == '"' && str[len] == '"')
 		fputs("\"", base_yyout);
 }
+

@@ -8200,6 +8200,239 @@ select * from rem3;
 drop foreign table rem3;
 drop table loc3;
 -- ===================================================================
+-- test for TRUNCATE
+-- ===================================================================
+CREATE TABLE tru_rtable0 (id int primary key, x text);
+CREATE TABLE tru_rtable1 (id int primary key, y text);
+CREATE FOREIGN TABLE tru_ftable (id int, x text)
+       SERVER loopback OPTIONS (table_name 'tru_rtable0');
+INSERT INTO tru_rtable0 (SELECT x,md5(x::text) FROM generate_series(1,10) x);
+CREATE TABLE tru_ptable (id int, y text) PARTITION BY HASH(id);
+CREATE TABLE tru_ptable__p0 PARTITION OF tru_ptable
+                            FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+CREATE FOREIGN TABLE tru_ftable__p1 PARTITION OF tru_ptable
+                                    FOR VALUES WITH (MODULUS 2, REMAINDER 1)
+       SERVER loopback OPTIONS (table_name 'tru_rtable1');
+INSERT INTO tru_ptable (SELECT x,md5(x::text) FROM generate_series(11,20) x);
+CREATE TABLE tru_pk_table(id int primary key, z text);
+CREATE TABLE tru_fk_table(fkey int references tru_pk_table(id));
+INSERT INTO tru_pk_table (SELECT x,md5((x+1)::text) FROM generate_series(1,10) x);
+INSERT INTO tru_fk_table (SELECT x % 10 + 1 FROM generate_series(5,25) x);
+CREATE FOREIGN TABLE tru_pk_ftable (id int, z text)
+       SERVER loopback OPTIONS (table_name 'tru_pk_table');
+CREATE TABLE tru_rtable_parent (id int, a text);
+CREATE TABLE tru_rtable_child (id int, a text);
+CREATE FOREIGN TABLE tru_ftable_parent (id int, a text)
+       SERVER loopback OPTIONS (table_name 'tru_rtable_parent');
+CREATE FOREIGN TABLE tru_ftable_child () INHERITS (tru_ftable_parent)
+       SERVER loopback OPTIONS (table_name 'tru_rtable_child');
+INSERT INTO tru_rtable_parent (SELECT x, md5(x::text) FROM generate_series(1,8) x);
+INSERT INTO tru_rtable_child  (SELECT x, md5(x::text) FROM generate_series(10, 18) x);
+-- normal truncate
+SELECT * FROM tru_ftable;
+ id |                x                 
+----+----------------------------------
+  1 | c4ca4238a0b923820dcc509a6f75849b
+  2 | c81e728d9d4c2f636f067f89cc14862c
+  3 | eccbc87e4b5ce2fe28308fd9f2a7baf3
+  4 | a87ff679a2f3e71d9181a67b7542122c
+  5 | e4da3b7fbbce2345d7772b0674a318d5
+  6 | 1679091c5a880faf6fb5e6087eb1b2dc
+  7 | 8f14e45fceea167a5a36dedd4bea2543
+  8 | c9f0f895fb98ab9159f51fd0297e236d
+  9 | 45c48cce2e2d7fbdea1afc51c7c6ad26
+ 10 | d3d9446802a44259755d38e6d163e820
+(10 rows)
+
+TRUNCATE tru_ftable;
+SELECT * FROM tru_rtable0;		-- empty
+ id | x 
+----+---
+(0 rows)
+
+SELECT * FROM tru_ftable;		-- empty
+ id | x 
+----+---
+(0 rows)
+
+-- 'truncatable' option
+ALTER SERVER loopback OPTIONS (ADD truncatable 'false');
+TRUNCATE tru_ftable;			-- error
+ERROR:  truncate on "tru_ftable" is prohibited
+ALTER SERVER loopback OPTIONS (DROP truncatable);
+ALTER FOREIGN TABLE tru_ftable OPTIONS (ADD truncatable 'false');
+TRUNCATE tru_ftable;			-- error
+ERROR:  truncate on "tru_ftable" is prohibited
+ALTER FOREIGN TABLE tru_ftable OPTIONS (SET truncatable 'true');
+TRUNCATE tru_ftable;			-- accepted
+-- partition table mixtured by table and foreign table
+SELECT * FROM tru_ptable;
+ id |                y                 
+----+----------------------------------
+ 12 | c20ad4d76fe97759aa27a0c99bff6710
+ 13 | c51ce410c124a10e0db5e4b97fc2af39
+ 14 | aab3238922bcc25a6f606eb525ffdc56
+ 16 | c74d97b01eae257e44aa9d5bade97baf
+ 17 | 70efdf2ec9b086079795c442636b55fb
+ 18 | 6f4922f45568161a8cdf4ad2299f6d23
+ 11 | 6512bd43d9caa6e02c990b0a82652dca
+ 15 | 9bf31c7ff062936a96d3c8bd1f8f2ff3
+ 19 | 1f0e3dad99908345f7439f8ffabdffc4
+ 20 | 98f13708210194c475687be6106a3b84
+(10 rows)
+
+TRUNCATE tru_ptable;
+SELECT * FROM tru_ptable;		-- empty
+ id | y 
+----+---
+(0 rows)
+
+SELECT * FROM tru_ptable__p0;	-- empty
+ id | y 
+----+---
+(0 rows)
+
+SELECT * FROM tru_ftable__p1;	-- empty
+ id | y 
+----+---
+(0 rows)
+
+SELECT * FROM tru_rtable1;		-- empty
+ id | y 
+----+---
+(0 rows)
+
+-- 'CASCADE' option
+SELECT * FROM tru_pk_ftable;
+ id |                z                 
+----+----------------------------------
+  1 | c81e728d9d4c2f636f067f89cc14862c
+  2 | eccbc87e4b5ce2fe28308fd9f2a7baf3
+  3 | a87ff679a2f3e71d9181a67b7542122c
+  4 | e4da3b7fbbce2345d7772b0674a318d5
+  5 | 1679091c5a880faf6fb5e6087eb1b2dc
+  6 | 8f14e45fceea167a5a36dedd4bea2543
+  7 | c9f0f895fb98ab9159f51fd0297e236d
+  8 | 45c48cce2e2d7fbdea1afc51c7c6ad26
+  9 | d3d9446802a44259755d38e6d163e820
+ 10 | 6512bd43d9caa6e02c990b0a82652dca
+(10 rows)
+
+TRUNCATE tru_pk_ftable;	-- failed by FK reference
+ERROR:  cannot truncate a table referenced in a foreign key constraint
+DETAIL:  Table "tru_fk_table" references "tru_pk_table".
+HINT:  Truncate table "tru_fk_table" at the same time, or use TRUNCATE ... CASCADE.
+CONTEXT:  remote SQL command: TRUNCATE public.tru_pk_table CONTINUE IDENTITY RESTRICT
+TRUNCATE tru_pk_ftable CASCADE;
+SELECT * FROM tru_pk_ftable;
+ id | z 
+----+---
+(0 rows)
+
+SELECT * FROM tru_fk_table;		-- also truncated
+ fkey 
+------
+(0 rows)
+
+-- truncate two tables at a command
+INSERT INTO tru_ftable (SELECT x,md5((x+2)::text) FROM generate_series(1,8) x);
+INSERT INTO tru_pk_ftable (SELECT x,md5((x+3)::text) FROM generate_series(3,10) x);
+SELECT * FROM tru_ftable a FULL OUTER JOIN tru_pk_ftable b ON a.id = b.id;
+ id |                x                 | id |                z                 
+----+----------------------------------+----+----------------------------------
+  1 | eccbc87e4b5ce2fe28308fd9f2a7baf3 |    | 
+  2 | a87ff679a2f3e71d9181a67b7542122c |    | 
+  3 | e4da3b7fbbce2345d7772b0674a318d5 |  3 | 1679091c5a880faf6fb5e6087eb1b2dc
+  4 | 1679091c5a880faf6fb5e6087eb1b2dc |  4 | 8f14e45fceea167a5a36dedd4bea2543
+  5 | 8f14e45fceea167a5a36dedd4bea2543 |  5 | c9f0f895fb98ab9159f51fd0297e236d
+  6 | c9f0f895fb98ab9159f51fd0297e236d |  6 | 45c48cce2e2d7fbdea1afc51c7c6ad26
+  7 | 45c48cce2e2d7fbdea1afc51c7c6ad26 |  7 | d3d9446802a44259755d38e6d163e820
+  8 | d3d9446802a44259755d38e6d163e820 |  8 | 6512bd43d9caa6e02c990b0a82652dca
+    |                                  |  9 | c20ad4d76fe97759aa27a0c99bff6710
+    |                                  | 10 | c51ce410c124a10e0db5e4b97fc2af39
+(10 rows)
+
+TRUNCATE tru_ftable, tru_pk_ftable CASCADE;
+SELECT * FROM tru_ftable a FULL OUTER JOIN tru_pk_ftable b ON a.id = b.id;
+ id | x | id | z 
+----+---+----+---
+(0 rows)
+
+-- truncate with ONLY clause
+TRUNCATE ONLY tru_ftable_parent;
+SELECT * FROM tru_ftable_parent;
+ id |                a                 
+----+----------------------------------
+ 10 | d3d9446802a44259755d38e6d163e820
+ 11 | 6512bd43d9caa6e02c990b0a82652dca
+ 12 | c20ad4d76fe97759aa27a0c99bff6710
+ 13 | c51ce410c124a10e0db5e4b97fc2af39
+ 14 | aab3238922bcc25a6f606eb525ffdc56
+ 15 | 9bf31c7ff062936a96d3c8bd1f8f2ff3
+ 16 | c74d97b01eae257e44aa9d5bade97baf
+ 17 | 70efdf2ec9b086079795c442636b55fb
+ 18 | 6f4922f45568161a8cdf4ad2299f6d23
+(9 rows)
+
+TRUNCATE tru_ftable_parent;
+SELECT * FROM tru_ftable_parent;
+ id | a 
+----+---
+(0 rows)
+
+-- in case when remote table has inherited children
+CREATE TABLE tru_rtable0_child () INHERITS (tru_rtable0);
+INSERT INTO tru_rtable0 (SELECT x,md5(x::text) FROM generate_series(5,9) x);
+INSERT INTO tru_rtable0_child (SELECT x,md5(x::text) FROM generate_series(10,14) x);
+SELECT * FROM tru_ftable;
+ id |                x                 
+----+----------------------------------
+  5 | e4da3b7fbbce2345d7772b0674a318d5
+  6 | 1679091c5a880faf6fb5e6087eb1b2dc
+  7 | 8f14e45fceea167a5a36dedd4bea2543
+  8 | c9f0f895fb98ab9159f51fd0297e236d
+  9 | 45c48cce2e2d7fbdea1afc51c7c6ad26
+ 10 | d3d9446802a44259755d38e6d163e820
+ 11 | 6512bd43d9caa6e02c990b0a82652dca
+ 12 | c20ad4d76fe97759aa27a0c99bff6710
+ 13 | c51ce410c124a10e0db5e4b97fc2af39
+ 14 | aab3238922bcc25a6f606eb525ffdc56
+(10 rows)
+
+TRUNCATE ONLY tru_ftable;		-- truncate only parent portion
+SELECT * FROM tru_ftable;
+ id |                x                 
+----+----------------------------------
+ 10 | d3d9446802a44259755d38e6d163e820
+ 11 | 6512bd43d9caa6e02c990b0a82652dca
+ 12 | c20ad4d76fe97759aa27a0c99bff6710
+ 13 | c51ce410c124a10e0db5e4b97fc2af39
+ 14 | aab3238922bcc25a6f606eb525ffdc56
+(5 rows)
+
+INSERT INTO tru_rtable0 (SELECT x,md5(x::text) FROM generate_series(21,25) x);
+SELECT * FROM tru_ftable;
+ id |                x                 
+----+----------------------------------
+ 21 | 3c59dc048e8850243be8079a5c74d079
+ 22 | b6d767d2f8ed5d21a44b0e5886680cb9
+ 23 | 37693cfc748049e45d87b8c7d8b9aacd
+ 24 | 1ff1de774005f8da13f42943881c655f
+ 25 | 8e296a067a37563370ded05f5a3bf3ec
+ 10 | d3d9446802a44259755d38e6d163e820
+ 11 | 6512bd43d9caa6e02c990b0a82652dca
+ 12 | c20ad4d76fe97759aa27a0c99bff6710
+ 13 | c51ce410c124a10e0db5e4b97fc2af39
+ 14 | aab3238922bcc25a6f606eb525ffdc56
+(10 rows)
+
+TRUNCATE tru_ftable;			-- truncate both of parent and child
+SELECT * FROM tru_ftable;
+ id | x 
+----+---
+(0 rows)
+
+-- ===================================================================
 -- test IMPORT FOREIGN SCHEMA
 -- ===================================================================
 CREATE SCHEMA import_source;
@@ -8898,7 +9131,7 @@ DO $d$
     END;
 $d$;
 ERROR:  invalid option "password"
-HINT:  Valid options in this context are: service, passfile, channel_binding, connect_timeout, dbname, host, hostaddr, port, options, application_name, keepalives, keepalives_idle, keepalives_interval, keepalives_count, tcp_user_timeout, sslmode, sslcompression, sslcert, sslkey, sslrootcert, sslcrl, requirepeer, sslminprotocolversion, sslmaxprotocolversion, gssencmode, krbsrvname, gsslib, target_session_attrs, use_remote_estimate, fdw_startup_cost, fdw_tuple_cost, extensions, updatable, fetch_size
+HINT:  Valid options in this context are: service, passfile, channel_binding, connect_timeout, dbname, host, hostaddr, port, options, application_name, keepalives, keepalives_idle, keepalives_interval, keepalives_count, tcp_user_timeout, sslmode, sslcompression, sslcert, sslkey, sslrootcert, sslcrl, requirepeer, sslminprotocolversion, sslmaxprotocolversion, gssencmode, krbsrvname, gsslib, target_session_attrs, use_remote_estimate, fdw_startup_cost, fdw_tuple_cost, extensions, updatable, truncatable, fetch_size
 CONTEXT:  SQL statement "ALTER SERVER loopback_nopw OPTIONS (ADD password 'dummypw')"
 PL/pgSQL function inline_code_block line 3 at EXECUTE
 -- If we add a password for our user mapping instead, we should get a different

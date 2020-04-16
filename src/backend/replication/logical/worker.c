@@ -1240,6 +1240,7 @@ apply_handle_truncate(StringInfo s)
 	List	   *rels = NIL;
 	List	   *part_rels = NIL;
 	List	   *relids = NIL;
+	List	   *relids_extra = NIL;
 	List	   *relids_logged = NIL;
 	ListCell   *lc;
 
@@ -1266,6 +1267,7 @@ apply_handle_truncate(StringInfo s)
 		remote_rels = lappend(remote_rels, rel);
 		rels = lappend(rels, rel->localrel);
 		relids = lappend_oid(relids, rel->localreloid);
+		relids_extra = lappend_int(relids_extra, 0);
 		if (RelationIsLogicallyLogged(rel->localrel))
 			relids_logged = lappend_oid(relids_logged, rel->localreloid);
 
@@ -1316,8 +1318,12 @@ apply_handle_truncate(StringInfo s)
 	 * replaying changes without further cascading. This might be later
 	 * changeable with a user specified option.
 	 */
-	ExecuteTruncateGuts(rels, relids, relids_logged, DROP_RESTRICT, restart_seqs);
-
+	ExecuteTruncateGuts(rels,
+						relids,
+						relids_extra,
+						relids_logged,
+						DROP_RESTRICT,
+						restart_seqs);
 	foreach(lc, remote_rels)
 	{
 		LogicalRepRelMapEntry *rel = lfirst(lc);

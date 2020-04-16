@@ -84,7 +84,10 @@ static void vac_truncate_clog(TransactionId frozenXID,
 							  MultiXactId minMulti,
 							  TransactionId lastSaneFrozenXid,
 							  MultiXactId lastSaneMinMulti);
-static bool vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params);
+static bool vacuum_rel(Oid relid,
+					   RangeVar *relation,
+					   VacuumParams *params,
+					   bool processing_toast_table);
 static double compute_parallel_delay(void);
 static VacOptTernaryValue get_vacopt_ternary_value(DefElem *def);
 
@@ -105,6 +108,8 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	bool		full = false;
 	bool		disable_page_skipping = false;
 	bool		parallel_option = false;
+	bool		main_rel_cleanup = true;
+	bool		toast_cleanup = true;
 	ListCell   *lc;
 
 	/* Set default value */
@@ -141,6 +146,10 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 			disable_page_skipping = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "index_cleanup") == 0)
 			params.index_cleanup = get_vacopt_ternary_value(opt);
+		else if (strcmp(opt->defname, "main_relation_cleanup") == 0)
+			main_rel_cleanup = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "toast_table_cleanup") == 0)
+			toast_cleanup = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "truncate") == 0)
 			params.truncate = get_vacopt_ternary_value(opt);
 		else if (strcmp(opt->defname, "parallel") == 0)
@@ -191,13 +200,14 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		(analyze ? VACOPT_ANALYZE : 0) |
 		(freeze ? VACOPT_FREEZE : 0) |
 		(full ? VACOPT_FULL : 0) |
-		(disable_page_skipping ? VACOPT_DISABLE_PAGE_SKIPPING : 0);
+		(disable_page_skipping ? VACOPT_DISABLE_PAGE_SKIPPING : 0) |
+		(main_rel_cleanup ? VACOPT_MAIN_REL_CLEANUP : 0) |
+		(toast_cleanup ? VACOPT_TOAST_CLEANUP : 0);
 
 	/* sanity checks on options */
 	Assert(params.options & (VACOPT_VACUUM | VACOPT_ANALYZE));
 	Assert((params.options & VACOPT_VACUUM) ||
 		   !(params.options & (VACOPT_FULL | VACOPT_FREEZE)));
-	Assert(!(params.options & VACOPT_SKIPTOAST));
 
 	if ((params.options & VACOPT_FULL) && parallel_option)
 		ereport(ERROR,
@@ -319,6 +329,16 @@ vacuum(List *relations, VacuumParams *params,
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("VACUUM option DISABLE_PAGE_SKIPPING cannot be used with FULL")));
+
+	/*
+	 * Sanity check TOAST_TABLE_CLEANUP option.
+	 */
+	if ((params->options & VACOPT_FULL) != 0 &&
+		(params->options & VACOPT_TOAST_CLEANUP) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("VACUUM option TOAST_TABLE_CLEANUP cannot be "
+						"disabled when FULL is specified")));
 
 	/*
 	 * Send info about dead objects to the statistics collector, unless we are
@@ -448,7 +468,7 @@ vacuum(List *relations, VacuumParams *params,
 
 			if (params->options & VACOPT_VACUUM)
 			{
-				if (!vacuum_rel(vrel->oid, vrel->relation, params))
+				if (!vacuum_rel(vrel->oid, vrel->relation, params, false))
 					continue;
 			}
 
@@ -1667,7 +1687,10 @@ vac_truncate_clog(TransactionId frozenXID,
  *		At entry and exit, we are not inside a transaction.
  */
 static bool
-vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
+vacuum_rel(Oid relid,
+		   RangeVar *relation,
+		   VacuumParams *params,
+		   bool processing_toast_table)
 {
 	LOCKMODE	lmode;
 	Relation	onerel;
@@ -1676,6 +1699,7 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 	Oid			save_userid;
 	int			save_sec_context;
 	int			save_nestlevel;
+	bool		process_toast;
 
 	Assert(params != NULL);
 
@@ -1843,9 +1867,16 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 	/*
 	 * Remember the relation's TOAST relation for later, if the caller asked
 	 * us to process it.  In VACUUM FULL, though, the toast table is
-	 * automatically rebuilt by cluster_rel so we shouldn't recurse to it.
+	 * automatically rebuilt by cluster_rel, so we shouldn't recurse to it
+	 * unless MAIN_RELATION_CLEANUP is disabled.
 	 */
-	if (!(params->options & VACOPT_SKIPTOAST) && !(params->options & VACOPT_FULL))
+	process_toast = (params->options & VACOPT_TOAST_CLEANUP) != 0;
+
+	if ((params->options & VACOPT_FULL) != 0 &&
+		(params->options & VACOPT_MAIN_REL_CLEANUP) != 0)
+		process_toast = false;
+
+	if (process_toast)
 		toast_relid = onerel->rd_rel->reltoastrelid;
 	else
 		toast_relid = InvalidOid;
@@ -1863,23 +1894,30 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 
 	/*
 	 * Do the actual work --- either FULL or "lazy" vacuum
+	 *
+	 * We skip this part if we're processing the main relation and
+	 * MAIN_RELATION_CLEANUP has been disabled.
 	 */
-	if (params->options & VACOPT_FULL)
+	if ((params->options & VACOPT_MAIN_REL_CLEANUP) != 0 ||
+		processing_toast_table)
 	{
-		int			cluster_options = 0;
+		if (params->options & VACOPT_FULL)
+		{
+			int			cluster_options = 0;
 
-		/* close relation before vacuuming, but hold lock until commit */
-		relation_close(onerel, NoLock);
-		onerel = NULL;
+			/* close relation before vacuuming, but hold lock until commit */
+			relation_close(onerel, NoLock);
+			onerel = NULL;
 
-		if ((params->options & VACOPT_VERBOSE) != 0)
-			cluster_options |= CLUOPT_VERBOSE;
+			if ((params->options & VACOPT_VERBOSE) != 0)
+				cluster_options |= CLUOPT_VERBOSE;
 
-		/* VACUUM FULL is now a variant of CLUSTER; see cluster.c */
-		cluster_rel(relid, InvalidOid, cluster_options);
+			/* VACUUM FULL is now a variant of CLUSTER; see cluster.c */
+			cluster_rel(relid, InvalidOid, cluster_options);
+		}
+		else
+			table_relation_vacuum(onerel, params, vac_strategy);
 	}
-	else
-		table_relation_vacuum(onerel, params, vac_strategy);
 
 	/* Roll back any GUC changes executed by index functions */
 	AtEOXact_GUC(false, save_nestlevel);
@@ -1905,7 +1943,7 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 	 * totally unimportant for toast relations.
 	 */
 	if (toast_relid != InvalidOid)
-		vacuum_rel(toast_relid, NULL, params);
+		vacuum_rel(toast_relid, NULL, params, true);
 
 	/*
 	 * Now release the session-level lock on the master table.

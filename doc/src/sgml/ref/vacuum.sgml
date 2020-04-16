@@ -33,6 +33,8 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     DISABLE_PAGE_SKIPPING [ <replaceable class="parameter">boolean</replaceable> ]
     SKIP_LOCKED [ <replaceable class="parameter">boolean</replaceable> ]
     INDEX_CLEANUP [ <replaceable class="parameter">boolean</replaceable> ]
+    MAIN_RELATION_CLEANUP [ <replaceable class="parameter">boolean</replaceable> ]
+    TOAST_TABLE_CLEANUP [ <replaceable class="parameter">boolean</replaceable> ]
     TRUNCATE [ <replaceable class="parameter">boolean</replaceable> ]
     PARALLEL <replaceable class="parameter">integer</replaceable>
 
@@ -206,6 +208,32 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
       removed until index cleanup is completed.  This option has no effect
       for tables that do not have an index and is ignored if the
       <literal>FULL</literal> option is used.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>MAIN_RELATION_CLEANUP</literal></term>
+    <listitem>
+     <para>
+      Specifies that <command>VACUUM</command> should attempt to process the
+      main relation.  This is normally the desired behavior and is the default.
+      Setting this option to false may be useful when it is necessary to only
+      vacuum a relation's corresponding <literal>TOAST</literal> table.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>TOAST_TABLE_CLEANUP</literal></term>
+    <listitem>
+     <para>
+      Specifies that <command>VACUUM</command> should attempt to process the
+      corresponding <literal>TOAST</literal> table for each relation, if one
+      exists.  This is normally the desired behavior and is the default.
+      Setting this option to false may be useful when it is necessary to only
+      vacuum the main relation.  This option cannot be disabled when the
+      <literal>FULL</literal> option is specified.
      </para>
     </listitem>
    </varlistentry>

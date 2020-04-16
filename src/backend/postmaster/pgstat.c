@@ -38,6 +38,7 @@
 #include "access/transam.h"
 #include "access/twophase_rmgr.h"
 #include "access/xact.h"
+#include "catalog/partition.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_proc.h"
 #include "common/ip.h"
@@ -1523,8 +1524,12 @@ pgstat_report_analyze(Relation rel,
 	msg.m_autovacuum = IsAutoVacuumWorkerProcess();
 	msg.m_resetcounter = resetcounter;
 	msg.m_analyzetime = GetCurrentTimestamp();
-	msg.m_live_tuples = livetuples;
-	msg.m_dead_tuples = deadtuples;
+	msg.m_live_tuples = (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		? 0  /* partitioned tables don't have any data, so it's 0 */
+		: livetuples;
+	msg.m_dead_tuples = (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		? 0 /* partitioned tables don't have any data, so it's 0 */
+		: deadtuples;
 	pgstat_send(&msg, sizeof(msg));
 }
 
@@ -1803,6 +1808,7 @@ pgstat_initstats(Relation rel)
 	/* We only count stats for things that have storage */
 	if (!(relkind == RELKIND_RELATION ||
 		  relkind == RELKIND_MATVIEW ||
+		  relkind == RELKIND_PARTITIONED_TABLE ||
 		  relkind == RELKIND_INDEX ||
 		  relkind == RELKIND_TOASTVALUE ||
 		  relkind == RELKIND_SEQUENCE))
@@ -2001,6 +2007,28 @@ pgstat_count_heap_insert(Relation rel, PgStat_Counter n)
 		/* We have to log the effect at the proper transactional level */
 		int			nest_level = GetCurrentTransactionNestLevel();
 
+		/*
+		 * If this relation is partitioned, we store all ancestors' oid
+		 * to propagate its changed_tuples to their parents when this
+		 * transaction is committed.
+		 */
+		if (rel->rd_rel->relispartition && pgstat_info->ancestors == NULL)
+		{
+			List      *ancestors;
+			ListCell  *lc;
+			int       i = 0;
+
+			ancestors = get_partition_ancestors(rel->rd_rel->oid);
+			pgstat_info->ancestors =
+				(Oid *) MemoryContextAllocZero(TopTransactionContext,
+											   sizeof(Oid) * (ancestors->length + 1));
+			foreach(lc, ancestors)
+			{
+				pgstat_info->ancestors[i] = lfirst_oid(lc);
+				++i;
+			}
+		}
+
 		if (pgstat_info->trans == NULL ||
 			pgstat_info->trans->nest_level != nest_level)
 			add_tabstat_xact_level(pgstat_info, nest_level);
@@ -2021,6 +2049,28 @@ pgstat_count_heap_update(Relation rel, bool hot)
 	{
 		/* We have to log the effect at the proper transactional level */
 		int			nest_level = GetCurrentTransactionNestLevel();
+
+		/*
+		 * If this relation is partitioned, we store all ancestors' oid
+		 * to propagate its changed_tuples to their parents when this
+		 * transaction is committed.
+		 */
+		if (rel->rd_rel->relispartition && pgstat_info->ancestors == NULL)
+		{
+			List      *ancestors;
+			ListCell  *lc;
+			int       i = 0;
+
+			ancestors = get_partition_ancestors(rel->rd_rel->oid);
+			pgstat_info->ancestors =
+				(Oid *) MemoryContextAllocZero(TopTransactionContext,
+											   sizeof(Oid) * (ancestors->length + 1));
+			foreach(lc, ancestors)
+			{
+				pgstat_info->ancestors[i] = lfirst_oid(lc);
+				++i;
+			}
+		}
 
 		if (pgstat_info->trans == NULL ||
 			pgstat_info->trans->nest_level != nest_level)
@@ -2046,6 +2096,28 @@ pgstat_count_heap_delete(Relation rel)
 	{
 		/* We have to log the effect at the proper transactional level */
 		int			nest_level = GetCurrentTransactionNestLevel();
+
+		/*
+		 * If this relation is partitioned, we store all ancestors' oid
+		 * to propagate its changed_tuples to their parents when this
+		 * transaction is committed.
+		 */
+		if (rel->rd_rel->relispartition && pgstat_info->ancestors == NULL)
+		{
+			List      *ancestors;
+			ListCell  *lc;
+			int       i = 0;
+
+			ancestors = get_partition_ancestors(rel->rd_rel->oid);
+			pgstat_info->ancestors =
+				(Oid *) MemoryContextAllocZero(TopTransactionContext,
+											   sizeof(Oid) * (ancestors->length + 1));
+			foreach(lc, ancestors)
+			{
+				pgstat_info->ancestors[i] = lfirst_oid(lc);
+				++i;
+			}
+		}
 
 		if (pgstat_info->trans == NULL ||
 			pgstat_info->trans->nest_level != nest_level)
@@ -2201,6 +2273,29 @@ AtEOXact_PgStat(bool isCommit, bool parallel)
 				tabstat->t_counts.t_changed_tuples +=
 					trans->tuples_inserted + trans->tuples_updated +
 					trans->tuples_deleted;
+
+				/*
+				 * If this relation is partitioned, propagate its own
+				 * changed_tuples to their all ancestors.
+				 */
+				if (tabstat->ancestors != NULL)
+				{
+					int i = 0;
+
+					for(;;)
+					{
+						PgStat_TableStatus *entry;
+						Oid                relid = tabstat->ancestors[i];
+
+						if(relid == InvalidOid)
+							break;
+
+						entry = get_tabstat_entry(relid, false);
+						entry->t_counts.t_changed_tuples +=
+							tabstat->t_counts.t_changed_tuples;
+						++i;
+					}
+				}
 			}
 			else
 			{
@@ -6352,7 +6447,6 @@ pgstat_recv_analyze(PgStat_MsgAnalyze *msg, int len)
 		tabentry->analyze_count++;
 	}
 }
-
 
 /* ----------
  * pgstat_recv_archiver() -

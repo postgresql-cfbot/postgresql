@@ -659,6 +659,13 @@ Indexes:
    </para>
 
    <para>
+    Because the second table scan must wait for any transactions having a
+    snapshot preceding the start of that scan to finish before completing the
+    scan, concurrent index builds on multiple tables at the same time will
+    not return on any one table until all have completed.
+   </para>
+
+   <para>
     Concurrent builds for indexes on partitioned tables are currently not
     supported.  However, you may concurrently build the index on each
     partition individually and then finally create the partitioned index

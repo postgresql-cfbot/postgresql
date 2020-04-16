@@ -236,6 +236,8 @@ insert into insertconflicttest values (2, 'Orange') on conflict (key, key, key) 
 insert into insertconflicttest
 values (1, 'Apple'), (2, 'Orange')
 on conflict (key) do update set (fruit, key) = (excluded.fruit, excluded.key);
+-- Using insert set syntax
+insert into insertconflicttest set key = 1, fruit = 'Banana' on conflict (key) do update set fruit = excluded.fruit;
 -- Give good diagnostic message when EXCLUDED.* spuriously referenced from
 -- RETURNING:
 insert into insertconflicttest values (1, 'Apple') on conflict (key) do update set fruit = excluded.fruit RETURNING excluded.fruit;

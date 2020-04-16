@@ -475,7 +475,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	OptSeqOptList SeqOptList OptParenthesizedSeqOptList
 %type <defelt>	SeqOptElem
 
-%type <istmt>	insert_rest
+%type <istmt>	insert_rest insert_set_clause
 %type <infer>	opt_conf_expr
 %type <onconflict> opt_on_conflict
 
@@ -11054,6 +11054,15 @@ insert_rest:
 					$$->override = $5;
 					$$->selectStmt = $7;
 				}
+			| insert_set_clause
+				{
+					$$ = $1;
+				}
+			| OVERRIDING override_kind VALUE_P insert_set_clause
+				{
+					$$ = $4;
+					$$->override = $2;
+				}
 			| DEFAULT VALUES
 				{
 					$$ = makeNode(InsertStmt);
@@ -11083,6 +11092,57 @@ insert_column_item:
 					$$->val = NULL;
 					$$->location = @1;
 				}
+		;
+
+insert_set_clause:
+		SET set_clause_list from_clause where_clause group_clause
+		having_clause window_clause opt_sort_clause opt_select_limit
+		opt_for_locking_clause
+			{
+				SelectStmt *n = makeNode(SelectStmt);
+				List *values = NIL;
+				ListCell *col_cell;
+				ResTarget *res_col;
+
+				foreach(col_cell, $2)
+				{
+					res_col = (ResTarget *) lfirst(col_cell);
+
+					if (IsA(res_col->val, MultiAssignRef))
+						ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("INSERT SET does not support multi-assignment of columns."),
+							 errhint("Specify the column assignments separately."),
+							 parser_errposition(@2)));
+				}
+
+				if ($3 == NULL)
+				{
+					foreach(col_cell, $2)
+					{
+						res_col = (ResTarget *) lfirst(col_cell);
+						values = lappend(values, res_col->val);
+					}
+					n->valuesLists = list_make1(values);
+				}
+				else
+				{
+					n->targetList = $2;
+					n->fromClause = $3;
+				}
+
+				n->whereClause = $4;
+				n->groupClause = $5;
+				n->havingClause = $6;
+				n->windowClause = $7;
+				insertSelectOptions(n, $8, $10,
+									list_nth($9, 0), list_nth($9, 1),
+									NULL,
+									yyscanner);
+				$$ = makeNode(InsertStmt);
+				$$->cols = $2;
+				$$->selectStmt = (Node *) n;
+			}
 		;
 
 opt_on_conflict:
@@ -11468,6 +11528,9 @@ select_clause:
  *
  * NOTE: only the leftmost component SelectStmt should have INTO.
  * However, this is not checked by the grammar; parse analysis must check it.
+ *
+ * NOTE: insert_set_clause also has SELECT-like syntax so if you add any
+ * clauses after from_clause here you may need to add them there as well.
  */
 simple_select:
 			SELECT opt_all_clause opt_target_list

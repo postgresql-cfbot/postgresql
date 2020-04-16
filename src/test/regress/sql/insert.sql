@@ -7,6 +7,7 @@ insert into inserttest (col2, col3) values (3, DEFAULT);
 insert into inserttest (col1, col2, col3) values (DEFAULT, 5, DEFAULT);
 insert into inserttest values (DEFAULT, 5, 'test');
 insert into inserttest values (DEFAULT, 7);
+insert into inserttest set col1 = DEFAULT, col2 = 9;
 
 select * from inserttest;
 

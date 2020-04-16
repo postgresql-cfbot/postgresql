@@ -1303,6 +1303,15 @@ heap_getnext(TableScanDesc sscan, ScanDirection direction)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg_internal("only heap AM is supported")));
 
+	/*
+	 * We don't expect direct calls to heap_getnext with valid
+	 * CheckXidAlive for regular tables. Track that below.
+	 */
+	if (unlikely(TransactionIdIsValid(CheckXidAlive) &&
+		!(IsCatalogRelation(scan->rs_base.rs_rd) ||
+		  RelationIsUsedAsCatalogTable(scan->rs_base.rs_rd))))
+		elog(ERROR, "unexpected heap_getnext call during logical decoding");
+
 	/* Note: no locking manipulations needed */
 
 	HEAPDEBUG_1;				/* heap_getnext( info ) */
@@ -1422,6 +1431,14 @@ heap_fetch(Relation relation,
 	bool		valid;
 
 	/*
+	 * We don't expect direct calls to heap_fetch with valid
+	 * CheckXidAlive for regular tables. Track that below.
+	 */
+	if (unlikely(TransactionIdIsValid(CheckXidAlive) &&
+		!(IsCatalogRelation(relation) || RelationIsUsedAsCatalogTable(relation))))
+		elog(ERROR, "unexpected heap_fetch call during logical decoding");
+
+	/*
 	 * Fetch and pin the appropriate page of the relation.
 	 */
 	buffer = ReadBuffer(relation, ItemPointerGetBlockNumber(tid));
@@ -1535,6 +1552,14 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 	bool		at_chain_start;
 	bool		valid;
 	bool		skip;
+
+	/*
+	 * We don't expect direct calls to heap_hot_search_buffer with
+	 * valid CheckXidAlive for regular tables. Track that below.
+	 */
+	if (unlikely(TransactionIdIsValid(CheckXidAlive) &&
+		!(IsCatalogRelation(relation) || RelationIsUsedAsCatalogTable(relation))))
+		elog(ERROR, "unexpected heap_hot_search_buffer call during logical decoding");
 
 	/* If this is not the first call, previous call returned a (live!) tuple */
 	if (all_dead)
@@ -1683,6 +1708,14 @@ heap_get_latest_tid(TableScanDesc sscan,
 	 * in the table.
 	 */
 	Assert(ItemPointerIsValid(tid));
+
+	/*
+	 * We don't expect direct calls to heap_get_latest_tid with valid
+	 * CheckXidAlive for regular tables. Track that below.
+	 */
+	if (unlikely(TransactionIdIsValid(CheckXidAlive) &&
+		!(IsCatalogRelation(relation) || RelationIsUsedAsCatalogTable(relation))))
+		elog(ERROR, "unexpected heap_get_latest_tid call during logical decoding");
 
 	/*
 	 * Loop to chase down t_ctid links.  At top of loop, ctid is the tuple we
@@ -1984,6 +2017,9 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		{
 			xlrec.flags |= XLH_INSERT_CONTAINS_NEW_TUPLE;
 			bufflags |= REGBUF_KEEP_DATA;
+
+			if (IsToastRelation(relation))
+				xlrec.flags |= XLH_INSERT_ON_TOAST_RELATION;
 		}
 
 		XLogBeginInsert();
@@ -5489,6 +5525,14 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
 	OffsetNumber offnum;
 	ItemId		lp = NULL;
 	HeapTupleHeader htup;
+
+	/*
+	 * We don't expect direct calls to heap_finish_speculative with
+	 * valid CheckXidAlive for regular tables. Track that below.
+	 */
+	if (unlikely(TransactionIdIsValid(CheckXidAlive) &&
+		!(IsCatalogRelation(relation) || RelationIsUsedAsCatalogTable(relation))))
+		elog(ERROR, "unexpected heap_finish_speculative call during logical decoding");
 
 	buffer = ReadBuffer(relation, ItemPointerGetBlockNumber(tid));
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);

@@ -28,6 +28,7 @@
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
+#include "storage/procarray.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
@@ -433,6 +434,25 @@ systable_beginscan(Relation heapRelation,
 }
 
 /*
+ * HandleConcurrentAbort - Handle concurrent abort of the CheckXidAlive.
+ *
+ * If CheckXidAlive is valid, then we check if it aborted. If it did, we error
+ * out.  We can't directly use TransactionIdDidAbort as after crash such
+ * transaction might not have been marked as aborted.  See detailed  comments at
+ * snapmgr.c where the variable is declared.
+ */
+static inline void
+HandleConcurrentAbort()
+{
+	if (TransactionIdIsValid(CheckXidAlive) &&
+			!TransactionIdIsInProgress(CheckXidAlive) &&
+			!TransactionIdDidCommit(CheckXidAlive))
+			ereport(ERROR,
+				(errcode(ERRCODE_TRANSACTION_ROLLBACK),
+				 errmsg("transaction aborted during system catalog scan")));
+}
+
+/*
  * systable_getnext --- get next tuple in a heap-or-index scan
  *
  * Returns NULL if no more tuples available.
@@ -481,6 +501,12 @@ systable_getnext(SysScanDesc sysscan)
 		}
 	}
 
+	/*
+	 * Handle the concurrent abort while fetching the catalog tuple during
+	 * logical streaming of a transaction.
+	 */
+	HandleConcurrentAbort();
+
 	return htup;
 }
 
@@ -516,6 +542,12 @@ systable_recheck_tuple(SysScanDesc sysscan, HeapTuple tup)
 	result = table_tuple_satisfies_snapshot(sysscan->heap_rel,
 											sysscan->slot,
 											freshsnap);
+
+	/*
+	 * Handle the concurrent abort while fetching the catalog tuple during
+	 * logical streaming of a transaction.
+	 */
+	HandleConcurrentAbort();
 
 	return result;
 }
@@ -642,6 +674,12 @@ systable_getnext_ordered(SysScanDesc sysscan, ScanDirection direction)
 	/* See notes in systable_getnext */
 	if (htup && sysscan->iscan->xs_recheck)
 		elog(ERROR, "system catalog scans with lossy index conditions are not implemented");
+
+	/*
+	 * Handle the concurrent abort while fetching the catalog tuple during
+	 * logical streaming of a transaction.
+	 */
+	HandleConcurrentAbort();
 
 	return htup;
 }

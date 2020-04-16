@@ -85,6 +85,12 @@
  *	worth trying to avoid sending such inval traffic in the future, if those
  *	problems can be overcome cheaply.
  *
+ *	When wal_level=logical, write invalidations into WAL at each command end to
+ *	support the decoding of the in-progress transaction.  As of now it was
+ *	enough to log invalidation only at commit because we are only decoding the
+ *	transaction at the commit time.   We only need to log the catalog cache and
+ *	relcache invalidation.  There can not be any active MVCC scan in logical
+ *	decoding so we don't need to log the snapshot invalidation.
  *
  * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -104,6 +110,7 @@
 #include "catalog/pg_constraint.h"
 #include "miscadmin.h"
 #include "storage/sinval.h"
+#include "storage/standby.h"
 #include "storage/smgr.h"
 #include "utils/catcache.h"
 #include "utils/inval.h"
@@ -209,6 +216,8 @@ static struct RELCACHECALLBACK
 }			relcache_callback_list[MAX_RELCACHE_CALLBACKS];
 
 static int	relcache_callback_count = 0;
+
+static void LogLogicalInvalidations(void);
 
 /* ----------------------------------------------------------------
  *				Invalidation list support functions
@@ -1092,6 +1101,9 @@ CommandEndInvalidationMessages(void)
 	if (transInvalInfo == NULL)
 		return;
 
+	if (XLogLogicalInfoActive())
+		LogLogicalInvalidations();
+
 	ProcessInvalidationMessages(&transInvalInfo->CurrentCmdInvalidMsgs,
 								LocalExecuteInvalidationMessage);
 	AppendInvalidationMessages(&transInvalInfo->PriorCmdInvalidMsgs,
@@ -1499,5 +1511,42 @@ CallSyscacheCallbacks(int cacheid, uint32 hashvalue)
 		Assert(ccitem->id == cacheid);
 		ccitem->function(ccitem->arg, cacheid, hashvalue);
 		i = ccitem->link - 1;
+	}
+}
+
+/*
+ * Emit WAL for invalidations.
+ */
+static void
+LogLogicalInvalidations()
+{
+	xl_xact_invalidations xlrec;
+	SharedInvalidationMessage	*invalMessages;
+	int	nmsgs = 0;
+
+	if (transInvalInfo->CurrentCmdInvalidMsgs.cclist)
+	{
+		ProcessInvalidationMessagesMulti(&transInvalInfo->CurrentCmdInvalidMsgs,
+								 MakeSharedInvalidMessagesArray);
+		invalMessages = SharedInvalidMessagesArray;
+		nmsgs  = numSharedInvalidMessagesArray;
+		SharedInvalidMessagesArray = NULL;
+		numSharedInvalidMessagesArray = 0;
+	}
+
+	if (nmsgs > 0)
+	{
+		/* prepare record */
+		memset(&xlrec, 0, MinSizeOfXactInvalidations);
+		xlrec.nmsgs = nmsgs;
+
+		/* perform insertion */
+		XLogBeginInsert();
+		XLogRegisterData((char *) (&xlrec), MinSizeOfXactInvalidations);
+		XLogRegisterData((char *) invalMessages,
+						nmsgs * sizeof(SharedInvalidationMessage));
+		XLogInsert(RM_XACT_ID, XLOG_XACT_INVALIDATIONS);
+
+		pfree(invalMessages);
 	}
 }

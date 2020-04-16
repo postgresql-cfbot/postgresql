@@ -156,6 +156,12 @@ create_logical_replication_slot(char *name, char *plugin,
 									NULL);
 
 	/*
+	 * Make sure streaming is disabled here - we may have the methods,
+	 * but we don't have anywhere to send the data yet.
+	 */
+	ctx->streaming = false;
+
+	/*
 	 * If caller needs us to determine the decoding start point, do so now.
 	 * This might take a while.
 	 */

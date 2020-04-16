@@ -80,7 +80,7 @@ $node_publisher->safe_psql('postgres',
 	q{CREATE PUBLICATION pub1 FOR ALL TABLES});
 
 $node_subscriber->safe_psql('postgres',
-	qq{CREATE SUBSCRIPTION sub1 CONNECTION '$publisher_connstr' PUBLICATION pub1 WITH (copy_data = false)}
+	qq{CREATE SUBSCRIPTION sub1 CONNECTION '$publisher_connstr' PUBLICATION pub1 WITH (copy_data = false, streaming = on)}
 );
 
 $node_publisher->wait_for_catchup('sub1');

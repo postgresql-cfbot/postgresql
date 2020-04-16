@@ -59,7 +59,8 @@ parse_subscription_options(List *options, bool *connect, bool *enabled_given,
 						   bool *enabled, bool *create_slot,
 						   bool *slot_name_given, char **slot_name,
 						   bool *copy_data, char **synchronous_commit,
-						   bool *refresh)
+						   bool *refresh, bool *streaming,
+						   bool *streaming_given)
 {
 	ListCell   *lc;
 	bool		connect_given = false;
@@ -90,6 +91,8 @@ parse_subscription_options(List *options, bool *connect, bool *enabled_given,
 		*synchronous_commit = NULL;
 	if (refresh)
 		*refresh = true;
+	if (streaming)
+		*streaming_given = false;
 
 	/* Parse options */
 	foreach(lc, options)
@@ -174,6 +177,16 @@ parse_subscription_options(List *options, bool *connect, bool *enabled_given,
 
 			refresh_given = true;
 			*refresh = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "streaming") == 0 && streaming)
+		{
+			if (*streaming_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+
+			*streaming_given = true;
+			*streaming = defGetBoolean(defel);
 		}
 		else
 			ereport(ERROR,
@@ -318,6 +331,8 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	bool		enabled_given;
 	bool		enabled;
 	bool		copy_data;
+	bool		streaming;
+	bool		streaming_given;
 	char	   *synchronous_commit;
 	char	   *conninfo;
 	char	   *slotname;
@@ -334,7 +349,7 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	parse_subscription_options(stmt->options, &connect, &enabled_given,
 							   &enabled, &create_slot, &slotname_given,
 							   &slotname, &copy_data, &synchronous_commit,
-							   NULL);
+							   NULL, &streaming, &streaming_given);
 
 	/*
 	 * Since creating a replication slot is not transactional, rolling back
@@ -411,6 +426,13 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 		CStringGetTextDatum(synchronous_commit);
 	values[Anum_pg_subscription_subpublications - 1] =
 		publicationListToArray(publications);
+
+	if (streaming_given)
+		values[Anum_pg_subscription_substream - 1] =
+			BoolGetDatum(streaming);
+	else
+		values[Anum_pg_subscription_substream - 1] =
+			BoolGetDatum(false);
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -669,10 +691,13 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 				char	   *slotname;
 				bool		slotname_given;
 				char	   *synchronous_commit;
+				bool		streaming;
+				bool		streaming_given;
 
 				parse_subscription_options(stmt->options, NULL, NULL, NULL,
 										   NULL, &slotname_given, &slotname,
-										   NULL, &synchronous_commit, NULL);
+										   NULL, &synchronous_commit, NULL,
+										   &streaming, &streaming_given);
 
 				if (slotname_given)
 				{
@@ -697,6 +722,13 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 					replaces[Anum_pg_subscription_subsynccommit - 1] = true;
 				}
 
+				if (streaming_given)
+				{
+					values[Anum_pg_subscription_substream - 1] =
+						BoolGetDatum(streaming);
+					replaces[Anum_pg_subscription_substream - 1] = true;
+				}
+
 				update_tuple = true;
 				break;
 			}
@@ -708,7 +740,8 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 
 				parse_subscription_options(stmt->options, NULL,
 										   &enabled_given, &enabled, NULL,
-										   NULL, NULL, NULL, NULL, NULL);
+										   NULL, NULL, NULL, NULL, NULL,
+										   NULL, NULL);
 				Assert(enabled_given);
 
 				if (!sub->slotname && enabled)
@@ -746,7 +779,7 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 
 				parse_subscription_options(stmt->options, NULL, NULL, NULL,
 										   NULL, NULL, NULL, &copy_data,
-										   NULL, &refresh);
+										   NULL, &refresh, NULL, NULL);
 
 				values[Anum_pg_subscription_subpublications - 1] =
 					publicationListToArray(stmt->publication);
@@ -783,7 +816,7 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 
 				parse_subscription_options(stmt->options, NULL, NULL, NULL,
 										   NULL, NULL, NULL, &copy_data,
-										   NULL, NULL);
+										   NULL, NULL, NULL, NULL);
 
 				AlterSubscription_refresh(sub, copy_data);
 

@@ -85,6 +85,11 @@ typedef struct WalSnd
 	int64		spillTxns;
 	int64		spillCount;
 	int64		spillBytes;
+
+	/* Statistics for in-progress transactions streamed to subscriber. */
+	int64           streamTxns;
+	int64           streamCount;
+	int64           streamBytes;
 } WalSnd;
 
 extern WalSnd *MyWalSnd;

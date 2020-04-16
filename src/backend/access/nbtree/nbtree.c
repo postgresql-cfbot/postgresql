@@ -142,6 +142,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->amproperty = btproperty;
 	amroutine->ambuildphasename = btbuildphasename;
 	amroutine->amvalidate = btvalidate;
+	amroutine->amcheckmembers = btcheckmembers;
 	amroutine->ambeginscan = btbeginscan;
 	amroutine->amrescan = btrescan;
 	amroutine->amgettuple = btgettuple;

@@ -1329,10 +1329,12 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	if (oldPartitionLock != NULL)
 	{
+		CachedBufTableDelete(&oldTag.rnode, &oldTag.blockNum, buf->buf_id);
 		BufTableDelete(&oldTag, oldHash);
 		if (oldPartitionLock != newPartitionLock)
 			LWLockRelease(oldPartitionLock);
 	}
+	CachedBufTableInsert(&newTag.rnode, &newTag.blockNum, buf->buf_id);
 
 	LWLockRelease(newPartitionLock);
 
@@ -1442,7 +1444,10 @@ retry:
 	 * Remove the buffer from the lookup hashtable, if it was in there.
 	 */
 	if (oldFlags & BM_TAG_VALID)
+	{
+		CachedBufTableDelete(&oldTag.rnode, &oldTag.blockNum, buf->buf_id);
 		BufTableDelete(&oldTag, oldHash);
+	}
 
 	/*
 	 * Done with mapping lock.
@@ -2936,71 +2941,71 @@ BufferGetLSNAtomic(Buffer buffer)
  *		later.  It is also the responsibility of higher-level code to ensure
  *		that no other process could be trying to load more pages of the
  *		relation into buffers.
- *
- *		XXX currently it sequentially searches the buffer pool, should be
- *		changed to more clever ways of searching.  However, this routine
- *		is used only in code paths that aren't very performance-critical,
- *		and we shouldn't slow down the hot paths to make it faster ...
  * --------------------------------------------------------------------
  */
 void
 DropRelFileNodeBuffers(RelFileNodeBackend rnode, ForkNumber *forkNum,
 					   int nforks, BlockNumber *firstDelBlock)
 {
-	int			i;
-	int			j;
+	int			i,
+				nbufs,
+				buf_id_array[BUF_ID_ARRAY_SIZE],
+				forknum_indexes[BUF_ID_ARRAY_SIZE];
 
 	/* If it's a local relation, it's localbuf.c's problem. */
 	if (RelFileNodeBackendIsTemp(rnode))
 	{
 		if (rnode.backend == MyBackendId)
 		{
-			for (j = 0; j < nforks; j++)
-				DropRelFileNodeLocalBuffers(rnode.node, forkNum[j],
-											firstDelBlock[j]);
+			for (i = 0; i < nforks; i++)
+				DropRelFileNodeLocalBuffers(rnode.node, forkNum[i],
+											firstDelBlock[i]);
 		}
 		return;
 	}
 
-	for (i = 0; i < NBuffers; i++)
+	do
 	{
-		BufferDesc *bufHdr = GetBufferDescriptor(i);
-		uint32		buf_state;
+		nbufs = CachedBufLookup(rnode.node, forkNum, nforks,
+								forknum_indexes, firstDelBlock,
+								buf_id_array, lengthof(buf_id_array));
 
-		/*
-		 * We can make this a tad faster by prechecking the buffer tag before
-		 * we attempt to lock the buffer; this saves a lot of lock
-		 * acquisitions in typical cases.  It should be safe because the
-		 * caller must have AccessExclusiveLock on the relation, or some other
-		 * reason to be certain that no one is loading new pages of the rel
-		 * into the buffer pool.  (Otherwise we might well miss such pages
-		 * entirely.)  Therefore, while the tag might be changing while we
-		 * look at it, it can't be changing *to* a value we care about, only
-		 * *away* from such a value.  So false negatives are impossible, and
-		 * false positives are safe because we'll recheck after getting the
-		 * buffer lock.
-		 *
-		 * We could check forkNum and blockNum as well as the rnode, but the
-		 * incremental win from doing so seems small.
-		 */
-		if (!RelFileNodeEquals(bufHdr->tag.rnode, rnode.node))
-			continue;
-
-		buf_state = LockBufHdr(bufHdr);
-
-		for (j = 0; j < nforks; j++)
+		for (i = 0; i < nbufs; i++)
 		{
+			BufferDesc	*bufHdr = GetBufferDescriptor(buf_id_array[i]);
+			uint32		buf_state;
+			int		index = forknum_indexes[i];
+
+			/*
+			 * We can make this a tad faster by prechecking the buffer tag
+			 * before we attempt to lock the buffer; this saves a lot of
+			 * lock acquisitions in typical cases.  It should be safe
+			 * because the caller must have AccessExclusiveLock on the
+			 * relation, or some other reason to be certain that no one is
+			 * loading new pages of the rel into the buffer pool.
+			 * (Otherwise we might well miss such pages entirely.)
+			 * Therefore, while the tag might be changing while we look at
+			 * it, it can't be changing *to* a value we care about, only
+			 * *away* from such a value.  So false negatives are impossible,
+			 * and false positives are safe because we'll recheck after
+			 * getting the buffer lock.
+			 *
+			 * We could check forkNum and blockNum as well as the rnode, but
+			 * the incremental win from doing so seems small.
+			 */
+			if (!RelFileNodeEquals(bufHdr->tag.rnode, rnode.node))
+				continue;
+
+			buf_state = LockBufHdr(bufHdr);
+
 			if (RelFileNodeEquals(bufHdr->tag.rnode, rnode.node) &&
-				bufHdr->tag.forkNum == forkNum[j] &&
-				bufHdr->tag.blockNum >= firstDelBlock[j])
-			{
+				bufHdr->tag.forkNum == forkNum[index] &&
+				bufHdr->tag.blockNum >= firstDelBlock[index])
 				InvalidateBuffer(bufHdr); /* releases spinlock */
-				break;
-			}
+			else
+				UnlockBufHdr(bufHdr, buf_state);
 		}
-		if (j >= nforks)
-			UnlockBufHdr(bufHdr, buf_state);
-	}
+	} while (nbufs == lengthof(buf_id_array));
 }
 
 /* ---------------------------------------------------------------------
@@ -3016,7 +3021,9 @@ void
 DropRelFileNodesAllBuffers(RelFileNodeBackend *rnodes, int nnodes)
 {
 	int			i,
-				n = 0;
+				n = 0,
+				nbufs,
+				buf_id_array[BUF_ID_ARRAY_SIZE];
 	RelFileNode *nodes;
 	bool		use_bsearch;
 
@@ -3059,47 +3066,53 @@ DropRelFileNodesAllBuffers(RelFileNodeBackend *rnodes, int nnodes)
 	if (use_bsearch)
 		pg_qsort(nodes, n, sizeof(RelFileNode), rnode_comparator);
 
-	for (i = 0; i < NBuffers; i++)
+	do
 	{
-		RelFileNode *rnode = NULL;
-		BufferDesc *bufHdr = GetBufferDescriptor(i);
-		uint32		buf_state;
+		nbufs = CachedBufLookupAll(nodes, nnodes, buf_id_array,
+								   lengthof(buf_id_array));
 
-		/*
-		 * As in DropRelFileNodeBuffers, an unlocked precheck should be safe
-		 * and saves some cycles.
-		 */
-
-		if (!use_bsearch)
+		for (i = 0; i < nbufs; i++)
 		{
-			int			j;
+			RelFileNode *rnode = NULL;
+			BufferDesc	*bufHdr = GetBufferDescriptor(buf_id_array[i]);
+			uint32		buf_state;
 
-			for (j = 0; j < n; j++)
+			/*
+			* As in DropRelFileNodeBuffers, an unlocked precheck should be safe
+			* and saves some cycles.
+			*/
+
+			if (!use_bsearch)
 			{
-				if (RelFileNodeEquals(bufHdr->tag.rnode, nodes[j]))
+				int			j;
+
+				for (j = 0; j < n; j++)
 				{
-					rnode = &nodes[j];
-					break;
+					if (RelFileNodeEquals(bufHdr->tag.rnode, nodes[j]))
+					{
+						rnode = &nodes[j];
+						break;
+					}
 				}
 			}
-		}
-		else
-		{
-			rnode = bsearch((const void *) &(bufHdr->tag.rnode),
-							nodes, n, sizeof(RelFileNode),
-							rnode_comparator);
-		}
+			else
+			{
+				rnode = bsearch((const void *) &(bufHdr->tag.rnode),
+								nodes, n, sizeof(RelFileNode),
+								rnode_comparator);
+			}
 
-		/* buffer doesn't belong to any of the given relfilenodes; skip it */
-		if (rnode == NULL)
-			continue;
+			/* buffer doesn't belong to any of the given relfilenodes; skip it */
+			if (rnode == NULL)
+				continue;
 
-		buf_state = LockBufHdr(bufHdr);
-		if (RelFileNodeEquals(bufHdr->tag.rnode, (*rnode)))
-			InvalidateBuffer(bufHdr);	/* releases spinlock */
-		else
-			UnlockBufHdr(bufHdr, buf_state);
-	}
+			buf_state = LockBufHdr(bufHdr);
+			if (RelFileNodeEquals(bufHdr->tag.rnode, (*rnode)))
+				InvalidateBuffer(bufHdr);	/* releases spinlock */
+			else
+				UnlockBufHdr(bufHdr, buf_state);
+		}
+	} while (nbufs == lengthof(buf_id_array));
 
 	pfree(nodes);
 }

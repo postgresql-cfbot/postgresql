@@ -46,6 +46,7 @@
 #include "pgstat.h"
 #include "replication/slot.h"
 #include "storage/fd.h"
+#include "storage/lock.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/builtins.h"
@@ -101,6 +102,7 @@ int			max_replication_slots = 0;	/* the maximum number of replication
 
 static void ReplicationSlotDropAcquired(void);
 static void ReplicationSlotDropPtr(ReplicationSlot *slot);
+static void ReplicationSlotDropConflicting(ReplicationSlot *slot);
 
 /* internal persistency functions */
 static void RestoreSlotFromDisk(const char *name);
@@ -649,6 +651,64 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 }
 
 /*
+ * Permanently drop a conflicting replication slot. If it's already active by
+ * another backend, send it a recovery conflict signal, and then try again.
+ */
+static void
+ReplicationSlotDropConflicting(ReplicationSlot *slot)
+{
+	pid_t		active_pid;
+	PGPROC	   *proc;
+	VirtualTransactionId	vxid;
+
+	ConditionVariablePrepareToSleep(&slot->active_cv);
+	while (1)
+	{
+		SpinLockAcquire(&slot->mutex);
+		active_pid = slot->active_pid;
+		if (active_pid == 0)
+			active_pid = slot->active_pid = MyProcPid;
+		SpinLockRelease(&slot->mutex);
+
+		/* Drop the acquired slot, unless it is acquired by another backend */
+		if (active_pid == MyProcPid)
+		{
+			elog(DEBUG1, "acquired conflicting slot, now dropping it");
+			ReplicationSlotDropPtr(slot);
+			break;
+		}
+
+		/* Send the other backend, a conflict recovery signal */
+
+		SetInvalidVirtualTransactionId(vxid);
+		LWLockAcquire(ProcArrayLock, LW_SHARED);
+		proc = BackendPidGetProcWithLock(active_pid);
+		if (proc)
+			GET_VXID_FROM_PGPROC(vxid, *proc);
+		LWLockRelease(ProcArrayLock);
+
+		/*
+		 * If coincidently that process finished, some other backend may
+		 * acquire the slot again. So start over again.
+		 * Note: Even if vxid.localTransactionId is invalid, we need to cancel
+		 * that backend, because there is no other way to make it release the
+		 * slot. So don't bother to validate vxid.localTransactionId.
+		 */
+		if (vxid.backendId == InvalidBackendId)
+			continue;
+
+		elog(DEBUG1, "cancelling pid %d (backendId: %d) for releasing slot",
+					 active_pid, vxid.backendId);
+
+		CancelVirtualTransaction(vxid, PROCSIG_RECOVERY_CONFLICT_LOGICALSLOT);
+		ConditionVariableSleep(&slot->active_cv,
+							   WAIT_EVENT_REPLICATION_SLOT_DROP);
+	}
+
+	ConditionVariableCancelSleep();
+}
+
+/*
  * Serialize the currently acquired slot's state from memory to disk, thereby
  * guaranteeing the current state will survive a crash.
  */
@@ -1034,36 +1094,55 @@ ReplicationSlotReserveWal(void)
 		/*
 		 * For logical slots log a standby snapshot and start logical decoding
 		 * at exactly that position. That allows the slot to start up more
-		 * quickly.
+		 * quickly. But on a standby we cannot do WAL writes, so just use the
+		 * replay pointer; effectively, an attempt to create a logical slot on
+		 * standby will cause it to wait for an xl_running_xact record to be
+		 * logged independently on the primary, so that a snapshot can be built
+		 * using the record.
 		 *
-		 * That's not needed (or indeed helpful) for physical slots as they'll
-		 * start replay at the last logged checkpoint anyway. Instead return
-		 * the location of the last redo LSN. While that slightly increases
-		 * the chance that we have to retry, it's where a base backup has to
-		 * start replay at.
+		 * None of this is needed (or indeed helpful) for physical slots as
+		 * they'll start replay at the last logged checkpoint anyway. Instead
+		 * return the location of the last redo LSN. While that slightly
+		 * increases the chance that we have to retry, it's where a base backup
+		 * has to start replay at.
 		 */
+		if (SlotIsPhysical(slot))
+			restart_lsn = GetRedoRecPtr();
+		else if (RecoveryInProgress())
+		{
+			restart_lsn = GetXLogReplayRecPtr(NULL);
+			/*
+			 * Replay pointer may point one past the end of the record. If that
+			 * is a XLOG page boundary, it will not be a valid LSN for the
+			 * start of a record, so bump it up past the page header.
+			 */
+			if (!XRecOffIsValid(restart_lsn))
+			{
+				if (restart_lsn % XLOG_BLCKSZ != 0)
+					elog(ERROR, "invalid replay pointer");
+				/* For the first page of a segment file, it's a long header */
+				if (XLogSegmentOffset(restart_lsn, wal_segment_size) == 0)
+					restart_lsn += SizeOfXLogLongPHD;
+				else
+					restart_lsn += SizeOfXLogShortPHD;
+			}
+		}
+		else
+			restart_lsn = GetXLogInsertRecPtr();
+
+		SpinLockAcquire(&slot->mutex);
+		slot->data.restart_lsn = restart_lsn;
+		SpinLockRelease(&slot->mutex);
+
 		if (!RecoveryInProgress() && SlotIsLogical(slot))
 		{
 			XLogRecPtr	flushptr;
-
-			/* start at current insert position */
-			restart_lsn = GetXLogInsertRecPtr();
-			SpinLockAcquire(&slot->mutex);
-			slot->data.restart_lsn = restart_lsn;
-			SpinLockRelease(&slot->mutex);
 
 			/* make sure we have enough information to start */
 			flushptr = LogStandbySnapshot();
 
 			/* and make sure it's fsynced to disk */
 			XLogFlush(flushptr);
-		}
-		else
-		{
-			restart_lsn = GetRedoRecPtr();
-			SpinLockAcquire(&slot->mutex);
-			slot->data.restart_lsn = restart_lsn;
-			SpinLockRelease(&slot->mutex);
 		}
 
 		/* prevent WAL removal as fast as possible */
@@ -1155,6 +1234,122 @@ restart:
 	}
 	LWLockRelease(ReplicationSlotControlLock);
 }
+
+/*
+ * Resolve recovery conflicts with logical slots.
+ *
+ * When xid is valid, it means that rows older than xid might have been
+ * removed. Therefore we need to drop slots that depend on seeing those rows.
+ * When xid is invalid, drop all logical slots. This is required when the
+ * master wal_level is set back to replica, so existing logical slots need to
+ * be dropped. Also, when xid is invalid, a common 'conflict_reason' is
+ * provided for the error detail; otherwise it is NULL, in which case it is
+ * constructed out of the xid value.
+ */
+void
+ResolveRecoveryConflictWithLogicalSlots(Oid dboid, TransactionId xid,
+										char *conflict_reason)
+{
+	int			i;
+	bool		found_conflict = false;
+
+	if (max_replication_slots <= 0)
+		return;
+
+restart:
+	if (found_conflict)
+	{
+		CHECK_FOR_INTERRUPTS();
+		found_conflict = false;
+	}
+
+	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+	for (i = 0; i < max_replication_slots; i++)
+	{
+		ReplicationSlot *s;
+
+		s = &ReplicationSlotCtl->replication_slots[i];
+
+		/* cannot change while ReplicationSlotCtlLock is held */
+		if (!s->in_use)
+			continue;
+
+		/* We are only dealing with *logical* slot conflicts. */
+		if (!SlotIsLogical(s))
+			continue;
+
+		/* Invalid xid means caller is asking to drop all logical slots */
+		if (!TransactionIdIsValid(xid))
+			found_conflict = true;
+		else
+		{
+			TransactionId slot_xmin;
+			TransactionId slot_catalog_xmin;
+			StringInfoData	conflict_str, conflict_xmins;
+			char	   *conflict_sentence =
+				gettext_noop("Slot conflicted with xid horizon which was being increased to");
+
+			/* not our database, skip */
+			if (s->data.database != InvalidOid && s->data.database != dboid)
+				continue;
+
+			SpinLockAcquire(&s->mutex);
+			slot_xmin = s->data.xmin;
+			slot_catalog_xmin = s->data.catalog_xmin;
+			SpinLockRelease(&s->mutex);
+
+			/*
+			 * Build the conflict_str which will look like :
+			 * "Slot conflicted with xid horizon which was being increased
+			 * to 9012 (slot xmin: 1234, slot catalog_xmin: 5678)."
+			 */
+			initStringInfo(&conflict_xmins);
+			if (TransactionIdIsValid(slot_xmin) &&
+				TransactionIdPrecedesOrEquals(slot_xmin, xid))
+			{
+				appendStringInfo(&conflict_xmins, "slot xmin: %d", slot_xmin);
+			}
+			if (TransactionIdIsValid(slot_catalog_xmin) &&
+				TransactionIdPrecedesOrEquals(slot_catalog_xmin, xid))
+				appendStringInfo(&conflict_xmins, "%sslot catalog_xmin: %d",
+								 conflict_xmins.len > 0 ? ", " : "",
+								 slot_catalog_xmin);
+
+			if (conflict_xmins.len > 0)
+			{
+				initStringInfo(&conflict_str);
+				appendStringInfo(&conflict_str, "%s %d (%s).",
+								 conflict_sentence, xid, conflict_xmins.data);
+				found_conflict = true;
+				conflict_reason = conflict_str.data;
+			}
+		}
+
+		if (found_conflict)
+		{
+			NameData	slotname;
+
+			SpinLockAcquire(&s->mutex);
+			slotname = s->data.name;
+			SpinLockRelease(&s->mutex);
+
+			/* ReplicationSlotDropConflicting() will acquire the lock below */
+			LWLockRelease(ReplicationSlotControlLock);
+
+			ReplicationSlotDropConflicting(s);
+
+			ereport(LOG,
+					(errmsg("dropped conflicting slot %s", NameStr(slotname)),
+					 errdetail("%s", conflict_reason)));
+
+			/* We released the lock above; so re-scan the slots. */
+			goto restart;
+		}
+	}
+
+	LWLockRelease(ReplicationSlotControlLock);
+}
+
 
 /*
  * Flush all replication slots to disk.

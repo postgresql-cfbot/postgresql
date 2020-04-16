@@ -2770,6 +2770,12 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
       old snapshots</entry>
     </row>
     <row>
+     <entry><structfield>confl_logicalslot</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>Number of queries in this database that have been canceled due to
+      logical slots</entry>
+    </row>
+    <row>
      <entry><structfield>confl_bufferpin</structfield></entry>
      <entry><type>bigint</type></entry>
      <entry>Number of queries in this database that have been canceled due to

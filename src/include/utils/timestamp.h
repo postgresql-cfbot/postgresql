@@ -62,6 +62,8 @@ extern TimestampTz PgStartTime;
 /* Set at configuration reload */
 extern TimestampTz PgReloadTime;
 
+/* Set at shared memory (re)initialization */
+extern TimestampTz PgShmemInitTime;
 
 /* Internal routines (not fmgr-callable) */
 

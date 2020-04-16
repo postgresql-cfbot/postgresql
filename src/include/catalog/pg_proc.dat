@@ -7944,6 +7944,12 @@
   prorettype => 'timestamptz', proargtypes => '',
   prosrc => 'pg_conf_load_time' },
 
+# shared memory (re)init time function
+{ oid => '4035', descr => 'shared memory (re)init time',
+  proname => 'pg_shmem_init_time', provolatile => 's', proparallel => 'r',
+  prorettype => 'timestamptz', proargtypes => '',
+  prosrc => 'pg_shmem_init_time' },
+
 # new functions for Y-direction rtree opclasses
 { oid => '2562',
   proname => 'box_below', prorettype => 'bool', proargtypes => 'box box',

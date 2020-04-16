@@ -17392,6 +17392,12 @@ SELECT * FROM pg_ls_dir('.') WITH ORDINALITY AS t(ls,n);
       </row>
 
       <row>
+       <entry><literal><function>pg_shmem_init_time()</function></literal></entry>
+       <entry><type>timestamp with time zone</type></entry>
+       <entry>shared memory initialization time</entry>
+      </row>
+
+      <row>
        <entry><literal><function>pg_current_logfile(<optional><type>text</type></optional>)</function></literal></entry>
        <entry><type>text</type></entry>
        <entry>Primary log file name, or log in the requested format,
@@ -17640,6 +17646,19 @@ SET search_path TO <replaceable>schema</replaceable> <optional>, <replaceable>sc
     when the session itself re-read the configuration files, so the
     reading will vary a little in different sessions.  Otherwise it is
     the time when the postmaster process re-read the configuration files.)
+   </para>
+
+   <indexterm>
+    <primary>pg_shmem_init_time</primary>
+   </indexterm>
+
+   <para>
+    <function>pg_shmem_init_time</function> returns the
+    <type>timestamp with time zone</type> when the server shared memory was
+    initialized or reinitialized the last time.  When server crashes, postmaster
+    typically stays alive, but reinitializes shared memory and restarts peers.
+    <function>pg_shmem_init_time</function> lets one calculate real server
+    uptime.
    </para>
 
    <indexterm>

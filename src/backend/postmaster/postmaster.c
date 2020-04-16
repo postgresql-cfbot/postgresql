@@ -225,11 +225,11 @@ static char ExtraOptions[MAXPGPATH];
 /*
  * These globals control the behavior of the postmaster in case some
  * backend dumps core.  Normally, it kills all peers of the dead backend
- * and reinitializes shared memory.  By specifying -s or -n, we can have
+ * and reinitializes shared memory.  By specifying -T, we can have
  * the postmaster stop (rather than kill) peers and not reinitialize
- * shared data structures.  (Reinit is currently dead code, though.)
+ * shared data structures.  It lets us analyze the full postgres state
+ * after crash.
  */
-static bool Reinit = true;
 static int	SendStop = false;
 
 /* still more option variables */
@@ -506,6 +506,7 @@ typedef struct
 	pid_t		PostmasterPid;
 	TimestampTz PgStartTime;
 	TimestampTz PgReloadTime;
+	TimestampTz PgShmemInitTime;
 	pg_time_t	first_syslogger_file_time;
 	bool		redirection_done;
 	bool		IsBinaryUpgrade;
@@ -678,7 +679,7 @@ PostmasterMain(int argc, char *argv[])
 	 * tcop/postgres.c (the option sets should not conflict) and with the
 	 * common help() function in main/main.c.
 	 */
-	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOo:Pp:r:S:sTt:W:-:")) != -1)
+	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:Oo:Pp:r:S:sTt:W:-:")) != -1)
 	{
 		switch (opt)
 		{
@@ -746,11 +747,6 @@ PostmasterMain(int argc, char *argv[])
 
 			case 'N':
 				SetConfigOption("max_connections", optarg, PGC_POSTMASTER, PGC_S_ARGV);
-				break;
-
-			case 'n':
-				/* Don't reinit shared mem after abnormal exit */
-				Reinit = false;
 				break;
 
 			case 'O':
@@ -2651,6 +2647,8 @@ reset_shared(void)
 	 * clean up dead IPC objects if the postmaster crashes and is restarted.
 	 */
 	CreateSharedMemoryAndSemaphores();
+
+	PgShmemInitTime = GetCurrentTimestamp();
 }
 
 
@@ -3557,7 +3555,7 @@ HandleChildCrash(int pid, int exitstatus, const char *procname)
 			 *
 			 * SIGQUIT is the special signal that says exit without proc_exit
 			 * and let the user know what's going on. But if SendStop is set
-			 * (-s on command line), then we send SIGSTOP instead, so that we
+			 * (-T on command line), then we send SIGSTOP instead, so that we
 			 * can get core dumps from all backends by hand.
 			 *
 			 * We could exclude dead_end children here, but at least in the
@@ -6191,6 +6189,7 @@ save_backend_variables(BackendParameters *param, Port *port,
 	param->PostmasterPid = PostmasterPid;
 	param->PgStartTime = PgStartTime;
 	param->PgReloadTime = PgReloadTime;
+	param->PgShmemInitTime = PgShmemInitTime;
 	param->first_syslogger_file_time = first_syslogger_file_time;
 
 	param->redirection_done = redirection_done;
@@ -6426,6 +6425,7 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	PostmasterPid = param->PostmasterPid;
 	PgStartTime = param->PgStartTime;
 	PgReloadTime = param->PgReloadTime;
+	PgShmemInitTime = param->PgShmemInitTime;
 	first_syslogger_file_time = param->first_syslogger_file_time;
 
 	redirection_done = param->redirection_done;

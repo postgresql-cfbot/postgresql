@@ -428,24 +428,6 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
-      <term><option>-n</option></term>
-      <listitem>
-       <para>
-        This option is for debugging problems that cause a server
-        process to die abnormally.  The ordinary strategy in this
-        situation is to notify all other server processes that they
-        must terminate and then reinitialize the shared memory and
-        semaphores.  This is because an errant server process could
-        have corrupted some shared state before terminating.  This
-        option specifies that <command>postgres</command> will
-        not reinitialize shared data structures.  A knowledgeable
-        system programmer can then use a debugger to examine shared
-        memory and semaphore state.
-       </para>
-     </listitem>
-    </varlistentry>
-
-     <varlistentry>
       <term><option>-O</option></term>
       <listitem>
        <para>

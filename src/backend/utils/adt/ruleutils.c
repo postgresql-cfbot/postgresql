@@ -10977,6 +10977,7 @@ generate_function_name(Oid funcid, int nargs, List *argnames, Oid *argtypes,
 	int			p_nvargs;
 	Oid			p_vatype;
 	Oid		   *p_true_typeids;
+	Oid			p_support_func;
 	bool		force_qualify = false;
 
 	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
@@ -11031,7 +11032,8 @@ generate_function_name(Oid funcid, int nargs, List *argnames, Oid *argtypes,
 								   !use_variadic, true,
 								   &p_funcid, &p_rettype,
 								   &p_retset, &p_nvargs, &p_vatype,
-								   &p_true_typeids, NULL);
+								   &p_true_typeids, NULL,
+								   &p_support_func);
 	else
 	{
 		p_result = FUNCDETAIL_NOTFOUND;

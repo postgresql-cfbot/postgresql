@@ -157,8 +157,8 @@ select count(*) > 0 as ok from (select pg_ls_waldir()) ss;
 
 -- Test not-run-to-completion cases.
 select * from pg_ls_waldir() limit 0;
- name | size | modification 
-------+------+--------------
+ name | size | access | modification | change | creation | type 
+------+------+--------+--------------+--------+----------+------
 (0 rows)
 
 select count(*) > 0 as ok from (select * from pg_ls_waldir() limit 1) ss;
@@ -200,6 +200,62 @@ select count(*) > 0 from
 ----------
  t
 (1 row)
+
+select * from (select pg_ls_dir('.', false, true) as name) as ls where ls.name='.'; -- include_dot_dirs=true
+ name 
+------
+ .
+(1 row)
+
+select * from (select pg_ls_dir('.', false, false) as name) as ls where ls.name='.'; -- include_dot_dirs=false
+ name 
+------
+(0 rows)
+
+select pg_ls_dir('does not exist', true, false); -- ok with missingok=true
+ pg_ls_dir 
+-----------
+(0 rows)
+
+select pg_ls_dir('does not exist'); -- fails with missingok=false
+ERROR:  could not open directory "does not exist": No such file or directory
+-- This tests the missing_ok parameter, which causes pg_ls_tmpdir to succeed even if the tmpdir doesn't exist yet
+-- The name='' condition is never true, so the function runs to completion but returns zero rows.
+select * from pg_ls_tmpdir() where name='Does not exist';
+ name | size | access | modification | change | creation | type 
+------+------+--------+--------------+--------+----------+------
+(0 rows)
+
+select name, type from pg_ls_dir_metadata('.') where name='.';
+ name | type 
+------+------
+ .    | d
+(1 row)
+
+select name, type from pg_ls_dir_metadata('.', false, false) where name='.'; -- include_dot_dirs=false
+ name | type 
+------+------
+(0 rows)
+
+-- Check that expected columns are present
+select * from pg_ls_dir_metadata('.') limit 0;
+ name | size | access | modification | change | creation | type 
+------+------+--------+--------------+--------+----------+------
+(0 rows)
+
+-- Check that we at least succeed in recursing once, and that we don't show the leading dir prefix
+SELECT name, type FROM pg_ls_dir_recurse('.') WHERE type='d' AND name~'^pg_wal';
+         name          | type 
+-----------------------+------
+ pg_wal                | d
+ pg_wal/archive_status | d
+(2 rows)
+
+-- Check that expected columns are present
+SELECT * FROM pg_ls_dir_recurse('.') LIMIT 0;
+ name | size | access | modification | change | creation | type 
+------+------+--------+--------------+--------+----------+------
+(0 rows)
 
 --
 -- Test adding a support function to a subject function

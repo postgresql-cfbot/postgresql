@@ -60,6 +60,28 @@ select count(*) > 0 from
    where spcname = 'pg_default') pts
   join pg_database db on pts.pts = db.oid;
 
+select * from (select pg_ls_dir('.', false, true) as name) as ls where ls.name='.'; -- include_dot_dirs=true
+select * from (select pg_ls_dir('.', false, false) as name) as ls where ls.name='.'; -- include_dot_dirs=false
+select pg_ls_dir('does not exist', true, false); -- ok with missingok=true
+select pg_ls_dir('does not exist'); -- fails with missingok=false
+
+-- This tests the missing_ok parameter, which causes pg_ls_tmpdir to succeed even if the tmpdir doesn't exist yet
+-- The name='' condition is never true, so the function runs to completion but returns zero rows.
+select * from pg_ls_tmpdir() where name='Does not exist';
+
+select name, type from pg_ls_dir_metadata('.') where name='.';
+
+select name, type from pg_ls_dir_metadata('.', false, false) where name='.'; -- include_dot_dirs=false
+
+-- Check that expected columns are present
+select * from pg_ls_dir_metadata('.') limit 0;
+
+-- Check that we at least succeed in recursing once, and that we don't show the leading dir prefix
+SELECT name, type FROM pg_ls_dir_recurse('.') WHERE type='d' AND name~'^pg_wal';
+
+-- Check that expected columns are present
+SELECT * FROM pg_ls_dir_recurse('.') LIMIT 0;
+
 --
 -- Test adding a support function to a subject function
 --

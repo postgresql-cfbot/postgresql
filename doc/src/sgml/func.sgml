@@ -21879,12 +21879,31 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
       </row>
       <row>
        <entry>
+        <literal><function>pg_ls_dir_metadata(<parameter>dirname</parameter> <type>text</type> [, <parameter>missing_ok</parameter> <type>boolean</type>, <parameter>include_dot_dirs</parameter> <type>boolean</type>])</function></literal>
+       </entry>
+       <entry><type>setof text</type></entry>
+       <entry>
+        For each file in a directory, list the file and its metadata.  Restricted to superusers by default, but other users can be granted EXECUTE to run the function.
+       </entry>
+      </row>
+      <row>
+       <entry>
+        <literal><function>pg_ls_dir_recurse(<parameter>dirname</parameter> <type>text</type>)</function></literal>
+       </entry>
+       <entry><type>setof text</type></entry>
+       <entry>
+         Call pg_ls_dir_metadata to recursively list the files in the specified directory, along with each file's metadata.
+         Restricted to superusers by default, but other users can be granted EXECUTE to run the function.
+       </entry>
+      </row>
+      <row>
+       <entry>
         <literal><function>pg_ls_logdir()</function></literal>
        </entry>
        <entry><type>setof record</type></entry>
        <entry>
-        List the name, size, and last modification time of files in the log
-        directory. Access is granted to members of the <literal>pg_monitor</literal>
+        For each file in the log directory, list the file and its metadata.
+        Access is granted to members of the <literal>pg_monitor</literal>
         role and may be granted to other non-superuser roles.
        </entry>
       </row>
@@ -21894,8 +21913,8 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
        </entry>
        <entry><type>setof record</type></entry>
        <entry>
-        List the name, size, and last modification time of files in the WAL
-        directory. Access is granted to members of the <literal>pg_monitor</literal>
+        For each file in the WAL directory, list the file and its metadata.
+        Access is granted to members of the <literal>pg_monitor</literal>
         role and may be granted to other non-superuser roles.
        </entry>
       </row>
@@ -21905,8 +21924,8 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
        </entry>
        <entry><type>setof record</type></entry>
        <entry>
-        List the name, size, and last modification time of files in the WAL
-        archive status directory. Access is granted to members of the
+        For each file in the WAL archive status directory, list the file and its metadata.
+        Access is granted to members of the
         <literal>pg_monitor</literal> role and may be granted to other
         non-superuser roles.
        </entry>
@@ -21917,12 +21936,11 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
        </entry>
        <entry><type>setof record</type></entry>
        <entry>
-        List the name, size, and last modification time of files in the
-        temporary directory for <parameter>tablespace</parameter>.  If
-        <parameter>tablespace</parameter> is not provided, the
-        <literal>pg_default</literal> tablespace is used.  Access is granted
-        to members of the <literal>pg_monitor</literal> role and may be
-        granted to other non-superuser roles.
+        For the temporary directory within <parameter>tablespace</parameter>,
+        list each file and its metadata.  If <parameter>tablespace</parameter>
+        is not provided, the <literal>pg_default</literal> tablespace is used.
+        Access is granted to members of the <literal>pg_monitor</literal> role
+        and may be granted to other non-superuser roles.
        </entry>
       </row>
       <row>
@@ -21978,53 +21996,80 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
    </para>
 
    <indexterm>
+    <primary>pg_ls_dir_metadata</primary>
+   </indexterm>
+   <para>
+    <function>pg_ls_dir_metadata</function> lists the files in the specified
+    directory along with the file's metadata.
+   </para>
+
+   <indexterm>
+    <primary>pg_ls_dir_recurse</primary>
+   </indexterm>
+   <para>
+    <function>pg_ls_dir_recurse</function> recursively lists the files 
+    in the specified directory.
+    To recursively list temporary directories in all tablespaces:
+<programlisting>
+SELECT * FROM (SELECT DISTINCT COALESCE(NULLIF(pg_tablespace_location(b.oid),'')||suffix, 'base/pgsql_tmp') AS dir
+FROM pg_tablespace b, pg_control_system() pcs,
+lateral format('/PG_%s_%s', left(current_setting('server_version_num'), 2), pcs.catalog_version_no) AS suffix) AS dir,
+lateral pg_ls_dir_recurse(dir) AS a;
+</programlisting>
+   </para>
+
+   <indexterm>
     <primary>pg_ls_logdir</primary>
    </indexterm>
    <para>
-    <function>pg_ls_logdir</function> returns the name, size, and last modified time
-    (mtime) of each file in the log directory. By default, only superusers
+    <function>pg_ls_logdir</function> lists each file in the log directory,
+    along with the metadata columns returned by <function>pg_stat_file</function>.
+    By default, only superusers
     and members of the <literal>pg_monitor</literal> role can use this function.
     Access may be granted to others using <command>GRANT</command>.
-    Filenames beginning with a dot, directories, and other special files are not shown.
+    Filenames beginning with a dot and special file types are not shown.
    </para>
 
    <indexterm>
     <primary>pg_ls_waldir</primary>
    </indexterm>
    <para>
-    <function>pg_ls_waldir</function> returns the name, size, and last modified time
-    (mtime) of each file in the write ahead log (WAL) directory. By
-    default only superusers and members of the <literal>pg_monitor</literal> role
+    <function>pg_ls_waldir</function> lists each file in the WAL directory,
+    along with the metadata columns returned by <function>pg_stat_file</function>.
+    By default, only superusers
+    and members of the <literal>pg_monitor</literal> role
     can use this function. Access may be granted to others using
     <command>GRANT</command>.
-    Filenames beginning with a dot, directories, and other special files are not shown.
+    Filenames beginning with a dot and special file types are not shown.
    </para>
 
    <indexterm>
     <primary>pg_ls_archive_statusdir</primary>
    </indexterm>
    <para>
-    <function>pg_ls_archive_statusdir</function> returns the name, size, and
-    last modified time (mtime) of each file in the WAL archive status
-    directory <filename>pg_wal/archive_status</filename>. By default only
+    <function>pg_ls_archive_statusdir</function> lists each file in the WAL
+    archive status directory, along with the metadata columns returned by
+    <function>pg_stat_file</function>.  By default, only 
     superusers and members of the <literal>pg_monitor</literal> role can
     use this function. Access may be granted to others using
     <command>GRANT</command>.
-    Filenames beginning with a dot, directories, and other special files are not shown.
+    Filenames beginning with a dot and special file types are not shown.
    </para>
 
    <indexterm>
     <primary>pg_ls_tmpdir</primary>
    </indexterm>
    <para>
-    <function>pg_ls_tmpdir</function> returns the name, size, and last modified
-    time (mtime) of each file in the temporary file directory for the specified
-    <parameter>tablespace</parameter>.  If <parameter>tablespace</parameter> is
+    <function>pg_ls_tmpdir</function> lists each file in the temporary file
+    directory for the specified <parameter>tablespace</parameter>, along with
+    the metadata columns returned by <function>pg_stat_file</function>.
+    Directories are used for temporary files shared by parallel
+    processes.  If <parameter>tablespace</parameter> is
     not provided, the <literal>pg_default</literal> tablespace is used.  By
     default only superusers and members of the <literal>pg_monitor</literal>
     role can use this function.  Access may be granted to others using
     <command>GRANT</command>.
-    Filenames beginning with a dot, directories, and other special files are not shown.
+    Filenames beginning with a dot and special file types are not shown.
    </para>
 
    <indexterm>
@@ -22063,7 +22108,8 @@ SELECT convert_from(pg_read_binary_file('file_in_utf8.txt'), 'UTF8');
     size, last accessed time stamp, last modified time stamp,
     last file status change time stamp (Unix platforms only),
     file creation time stamp (Windows only), and a <type>boolean</type>
-    indicating if it is a directory.  Typical usages include:
+    indicating if it is a directory.
+    Typical usages include:
 <programlisting>
 SELECT * FROM pg_stat_file('filename');
 SELECT (pg_stat_file('filename')).modification;

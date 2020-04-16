@@ -1266,6 +1266,13 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		}
 
 		/*
+		 * If a USING clause alias was specified, save the USING columns as
+		 * its column list.
+		 */
+		if (j->join_using_alias)
+			j->join_using_alias->colnames = j->usingClause;
+
+		/*
 		 * Now transform the join qualifications, if any.
 		 */
 		l_colnos = NIL;
@@ -1462,6 +1469,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 										   res_colvars,
 										   l_colnos,
 										   r_colnos,
+										   j->join_using_alias,
 										   j->alias,
 										   true);
 
@@ -1515,10 +1523,21 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		 * The join RTE itself is always made visible for unqualified column
 		 * names.  It's visible as a relation name only if it has an alias.
 		 */
-		nsitem->p_rel_visible = (j->alias != NULL);
+		nsitem->p_rel_visible = (j->alias != NULL || j->join_using_alias != NULL);
 		nsitem->p_cols_visible = true;
 		nsitem->p_lateral_only = false;
 		nsitem->p_lateral_ok = true;
+		nsitem->p_join_using_alias = (j->join_using_alias != NULL);
+
+		/*
+		 * Check the JOIN/USING alias for namespace conflicts against the
+		 * subtrees (per SQL standard).
+		 */
+		if (j->join_using_alias)
+		{
+			checkNameSpaceConflicts(pstate, list_make1(nsitem), l_namespace);
+			checkNameSpaceConflicts(pstate, list_make1(nsitem), r_namespace);
+		}
 
 		*top_nsitem = nsitem;
 		*namespace = lappend(my_namespace, nsitem);

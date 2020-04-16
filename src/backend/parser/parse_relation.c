@@ -672,6 +672,37 @@ scanNSItemForColumn(ParseState *pstate, ParseNamespaceItem *nsitem,
 	Var		   *var;
 
 	/*
+	 * If this is a JOIN/USING alias, then check that the column is part of
+	 * the USING column list.  If so, let scanRTEForColumn() below do the main
+	 * work.
+	 */
+	if (nsitem->p_join_using_alias)
+	{
+		ListCell   *c;
+		bool		found = false;
+
+		foreach(c, rte->join_using_alias->colnames)
+		{
+			const char *attcolname = strVal(lfirst(c));
+
+			if (strcmp(attcolname, colname) == 0)
+			{
+				found = true;
+				break;
+			}
+		}
+
+		if (!found)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
+					 errmsg("column reference \"%s\" is invalid",
+							colname),
+					 errdetail("The range variable \"%s\" only contains columns in the USING clause.",
+							   rte->join_using_alias->aliasname),
+					 parser_errposition(pstate, location)));
+	}
+
+	/*
 	 * Scan the RTE's column names (or aliases) for a match.  Complain if
 	 * multiple matches.
 	 */
@@ -1265,6 +1296,7 @@ buildNSItemFromTupleDesc(RangeTblEntry *rte, Index rtindex, TupleDesc tupdesc)
 	nsitem->p_cols_visible = true;
 	nsitem->p_lateral_only = false;
 	nsitem->p_lateral_ok = true;
+	nsitem->p_join_using_alias = false;
 
 	return nsitem;
 }
@@ -1326,6 +1358,7 @@ buildNSItemFromLists(RangeTblEntry *rte, Index rtindex,
 	nsitem->p_cols_visible = true;
 	nsitem->p_lateral_only = false;
 	nsitem->p_lateral_ok = true;
+	nsitem->p_join_using_alias = false;
 
 	return nsitem;
 }
@@ -2105,6 +2138,7 @@ addRangeTableEntryForJoin(ParseState *pstate,
 						  List *aliasvars,
 						  List *leftcols,
 						  List *rightcols,
+						  Alias *join_using_alias,
 						  Alias *alias,
 						  bool inFromCl)
 {
@@ -2133,9 +2167,16 @@ addRangeTableEntryForJoin(ParseState *pstate,
 	rte->joinaliasvars = aliasvars;
 	rte->joinleftcols = leftcols;
 	rte->joinrightcols = rightcols;
+	rte->join_using_alias = join_using_alias;
 	rte->alias = alias;
 
-	eref = alias ? copyObject(alias) : makeAlias("unnamed_join", NIL);
+	if (alias)
+		eref = copyObject(alias);
+	else if (join_using_alias)
+		eref = copyObject(join_using_alias);
+	else
+		eref = makeAlias("unnamed_join", NIL);
+
 	numaliases = list_length(eref->colnames);
 
 	/* fill in any unspecified alias columns */
@@ -2181,6 +2222,7 @@ addRangeTableEntryForJoin(ParseState *pstate,
 	nsitem->p_cols_visible = true;
 	nsitem->p_lateral_only = false;
 	nsitem->p_lateral_ok = true;
+	nsitem->p_join_using_alias = false;
 
 	return nsitem;
 }
@@ -2481,6 +2523,7 @@ addNSItemToQuery(ParseState *pstate, ParseNamespaceItem *nsitem,
 		nsitem->p_cols_visible = addToVarNameSpace;
 		nsitem->p_lateral_only = false;
 		nsitem->p_lateral_ok = true;
+		nsitem->p_join_using_alias = false;
 		pstate->p_namespace = lappend(pstate->p_namespace, nsitem);
 	}
 }

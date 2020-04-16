@@ -174,7 +174,7 @@ note "simple bind";
 
 unlink($node->data_dir . '/pg_hba.conf');
 $node->append_conf('pg_hba.conf',
-	qq{local all all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapprefix="uid=" ldapsuffix=",dc=example,dc=net"}
+	qq{local &all &all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapprefix="uid=" ldapsuffix=",dc=example,dc=net"}
 );
 $node->restart;
 
@@ -190,7 +190,7 @@ note "search+bind";
 
 unlink($node->data_dir . '/pg_hba.conf');
 $node->append_conf('pg_hba.conf',
-	qq{local all all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapbasedn="$ldap_basedn"}
+	qq{local &all &all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapbasedn="$ldap_basedn"}
 );
 $node->restart;
 
@@ -206,7 +206,7 @@ note "multiple servers";
 
 unlink($node->data_dir . '/pg_hba.conf');
 $node->append_conf('pg_hba.conf',
-	qq{local all all ldap ldapserver="$ldap_server $ldap_server" ldapport=$ldap_port ldapbasedn="$ldap_basedn"}
+	qq{local &all &all ldap ldapserver="$ldap_server $ldap_server" ldapport=$ldap_port ldapbasedn="$ldap_basedn"}
 );
 $node->restart;
 
@@ -222,7 +222,7 @@ note "LDAP URLs";
 
 unlink($node->data_dir . '/pg_hba.conf');
 $node->append_conf('pg_hba.conf',
-	qq{local all all ldap ldapurl="$ldap_url/$ldap_basedn?uid?sub"});
+	qq{local &all &all ldap ldapurl="$ldap_url/$ldap_basedn?uid?sub"});
 $node->restart;
 
 $ENV{"PGPASSWORD"} = 'wrong';
@@ -239,7 +239,7 @@ note "search filters";
 
 unlink($node->data_dir . '/pg_hba.conf');
 $node->append_conf('pg_hba.conf',
-	qq{local all all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapbasedn="$ldap_basedn" ldapsearchfilter="(|(uid=\$username)(mail=\$username))"}
+	qq{local &all &all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapbasedn="$ldap_basedn" ldapsearchfilter="(|(uid=\$username)(mail=\$username))"}
 );
 $node->restart;
 
@@ -252,7 +252,7 @@ note "search filters in LDAP URLs";
 
 unlink($node->data_dir . '/pg_hba.conf');
 $node->append_conf('pg_hba.conf',
-	qq{local all all ldap ldapurl="$ldap_url/$ldap_basedn??sub?(|(uid=\$username)(mail=\$username))"}
+	qq{local &all &all ldap ldapurl="$ldap_url/$ldap_basedn??sub?(|(uid=\$username)(mail=\$username))"}
 );
 $node->restart;
 
@@ -266,7 +266,7 @@ test_access($node, 'test2@example.net', 0, 'search filter finds by mail');
 # override.  It might be useful in a case like this.
 unlink($node->data_dir . '/pg_hba.conf');
 $node->append_conf('pg_hba.conf',
-	qq{local all all ldap ldapurl="$ldap_url/$ldap_basedn??sub" ldapsearchfilter="(|(uid=\$username)(mail=\$username))"}
+	qq{local &all &all ldap ldapurl="$ldap_url/$ldap_basedn??sub" ldapsearchfilter="(|(uid=\$username)(mail=\$username))"}
 );
 $node->restart;
 
@@ -278,7 +278,7 @@ note "diagnostic message";
 # note bad ldapprefix with a question mark that triggers a diagnostic message
 unlink($node->data_dir . '/pg_hba.conf');
 $node->append_conf('pg_hba.conf',
-	qq{local all all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapprefix="?uid=" ldapsuffix=""}
+	qq{local &all &all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapprefix="?uid=" ldapsuffix=""}
 );
 $node->restart;
 
@@ -290,7 +290,7 @@ note "TLS";
 # request StartTLS with ldaptls=1
 unlink($node->data_dir . '/pg_hba.conf');
 $node->append_conf('pg_hba.conf',
-	qq{local all all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapbasedn="$ldap_basedn" ldapsearchfilter="(uid=\$username)" ldaptls=1}
+	qq{local &all &all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapbasedn="$ldap_basedn" ldapsearchfilter="(uid=\$username)" ldaptls=1}
 );
 $node->restart;
 
@@ -300,7 +300,7 @@ test_access($node, 'test1', 0, 'StartTLS');
 # request LDAPS with ldapscheme=ldaps
 unlink($node->data_dir . '/pg_hba.conf');
 $node->append_conf('pg_hba.conf',
-	qq{local all all ldap ldapserver=$ldap_server ldapscheme=ldaps ldapport=$ldaps_port ldapbasedn="$ldap_basedn" ldapsearchfilter="(uid=\$username)"}
+	qq{local &all &all ldap ldapserver=$ldap_server ldapscheme=ldaps ldapport=$ldaps_port ldapbasedn="$ldap_basedn" ldapsearchfilter="(uid=\$username)"}
 );
 $node->restart;
 
@@ -310,7 +310,7 @@ test_access($node, 'test1', 0, 'LDAPS');
 # request LDAPS with ldapurl=ldaps://...
 unlink($node->data_dir . '/pg_hba.conf');
 $node->append_conf('pg_hba.conf',
-	qq{local all all ldap ldapurl="$ldaps_url/$ldap_basedn??sub?(uid=\$username)"}
+	qq{local &all &all ldap ldapurl="$ldaps_url/$ldap_basedn??sub?(uid=\$username)"}
 );
 $node->restart;
 
@@ -320,7 +320,7 @@ test_access($node, 'test1', 0, 'LDAPS with URL');
 # bad combination of LDAPS and StartTLS
 unlink($node->data_dir . '/pg_hba.conf');
 $node->append_conf('pg_hba.conf',
-	qq{local all all ldap ldapurl="$ldaps_url/$ldap_basedn??sub?(uid=\$username)" ldaptls=1}
+	qq{local &all &all ldap ldapurl="$ldaps_url/$ldap_basedn??sub?(uid=\$username)" ldaptls=1}
 );
 $node->restart;
 

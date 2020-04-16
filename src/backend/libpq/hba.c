@@ -64,8 +64,20 @@ typedef struct check_network_data
 	bool		result;			/* set to true if match */
 } check_network_data;
 
+/*
+ * The following keywords are accepted without the keyword sigil for legacy
+ * reasons.  They may become normal words at some point in the future.
+ */
+#define token_is_legacy_keyword(t, k)  (!t->quoted && ( \
+			strcmp(t->string, "all") == 0 || \
+			strcmp(t->string, "replication") == 0 || \
+			strcmp(t->string, "samegroup") == 0 || \
+			strcmp(t->string, "samehost") == 0 || \
+			strcmp(t->string, "samenet") == 0 || \
+			strcmp(t->string, "samerole") == 0 || \
+			strcmp(t->string, "sameuser") == 0))
 
-#define token_is_keyword(t, k)	(!t->quoted && strcmp(t->string, k) == 0)
+#define token_is_keyword(t, k)  ((t->string[0] == '&' && strcmp(t->string+1, k) == 0) || token_is_legacy_keyword(t, k))
 #define token_matches(t, k)  (strcmp(t->string, k) == 0)
 
 /*
@@ -594,6 +606,16 @@ check_role(const char *role, Oid roleid, List *tokens)
 		if (!tok->quoted && tok->string[0] == '+')
 		{
 			if (is_member(roleid, tok->string + 1))
+				return true;
+		}
+		else if (token_is_keyword(tok, "superuser"))
+		{
+			if (superuser_arg(roleid))
+				return true;
+		}
+		else if (token_is_keyword(tok, "nonsuperuser"))
+		{
+			if (!superuser_arg(roleid))
 				return true;
 		}
 		else if (token_matches(tok, role) ||
@@ -2472,7 +2494,7 @@ fill_hba_line(Tuplestorestate *tuple_store, TupleDesc tupdesc,
 			 * Flatten HbaToken list to string list.  It might seem that we
 			 * should re-quote any quoted tokens, but that has been rejected
 			 * on the grounds that it makes it harder to compare the array
-			 * elements to other system catalogs.  That makes entries like
+			 * elements to other system catalogs.  That makes entries with legacy keywords like
 			 * "all" or "samerole" formally ambiguous ... but users who name
 			 * databases/roles that way are inflicting their own pain.
 			 */

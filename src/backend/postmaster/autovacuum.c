@@ -289,6 +289,15 @@ typedef struct
 	AutoVacuumWorkItem av_workItems[NUM_WORKITEMS];
 } AutoVacuumShmemStruct;
 
+/*
+ * Struct for deciding which tables to vacuum first
+ */
+typedef struct
+{
+	uint32	relfrozenxid_age;
+	Oid		table_oid;
+} RelFrozenXidAge;
+
 static AutoVacuumShmemStruct *AutoVacuumShmem;
 
 /*
@@ -322,6 +331,7 @@ static void rebuild_database_list(Oid newdb);
 static int	db_comparator(const void *a, const void *b);
 static void autovac_balance_cost(void);
 
+static int	rfxa_comparator(const void *a, const void *b);
 static void do_autovacuum(void);
 static void FreeWorkerInfo(int code, Datum arg);
 
@@ -1933,7 +1943,9 @@ do_autovacuum(void)
 	HeapTuple	tuple;
 	TableScanDesc relScan;
 	Form_pg_database dbForm;
-	List	   *table_oids = NIL;
+	RelFrozenXidAge	*table_ages;
+	int			table_ages_size = 1024;
+	int			table_ages_count = 0;
 	List	   *orphan_oids = NIL;
 	HASHCTL		ctl;
 	HTAB	   *table_toast_map;
@@ -1948,6 +1960,7 @@ do_autovacuum(void)
 	bool		found_concurrent_worker = false;
 	int			i;
 
+	table_ages = (RelFrozenXidAge *)palloc(table_ages_size * sizeof(RelFrozenXidAge));
 	/*
 	 * StartTransactionCommand and CommitTransactionCommand will automatically
 	 * switch to other contexts.  We need this one to keep the list of
@@ -2100,9 +2113,22 @@ do_autovacuum(void)
 								  effective_multixact_freeze_max_age,
 								  &dovacuum, &doanalyze, &wraparound);
 
-		/* Relations that need work are added to table_oids */
+		/* Relations that need work are added to table_ages */
 		if (dovacuum || doanalyze)
-			table_oids = lappend_oid(table_oids, relid);
+		{
+			RelFrozenXidAge	rfxa;
+			rfxa.relfrozenxid_age = DirectFunctionCall1(xid_age,
+														classForm->relfrozenxid);
+			rfxa.table_oid = relid;
+			if (table_ages_count == table_ages_size)
+			{
+				table_ages_size *= 2;
+				table_ages = (RelFrozenXidAge *)repalloc(table_ages, table_ages_size * sizeof(RelFrozenXidAge));
+			}
+			table_ages[table_ages_count] = rfxa;
+			table_ages_count++;
+		}
+
 
 		/*
 		 * Remember TOAST associations for the second pass.  Note: we must do
@@ -2185,7 +2211,20 @@ do_autovacuum(void)
 
 		/* ignore analyze for toast tables */
 		if (dovacuum)
-			table_oids = lappend_oid(table_oids, relid);
+		{
+			RelFrozenXidAge	rfxa;
+
+			rfxa.relfrozenxid_age = DirectFunctionCall1(xid_age,
+														classForm->relfrozenxid);
+			rfxa.table_oid = relid;
+
+			if (table_ages_count == table_ages_size)
+			{
+				table_ages_size *= 2;
+				table_ages = (RelFrozenXidAge *)repalloc(table_ages, table_ages_size * sizeof(RelFrozenXidAge));
+			}
+			table_ages[table_ages_count++] = rfxa;
+		}
 	}
 
 	table_endscan(relScan);
@@ -2293,12 +2332,15 @@ do_autovacuum(void)
 										  "Autovacuum Portal",
 										  ALLOCSET_DEFAULT_SIZES);
 
+
+	qsort(table_ages, table_ages_count, sizeof(table_ages), rfxa_comparator);
+
 	/*
 	 * Perform operations on collected tables.
 	 */
-	foreach(cell, table_oids)
+	for (int i = 0; i < table_ages_count; i++)
 	{
-		Oid			relid = lfirst_oid(cell);
+		Oid			relid = table_ages[i].table_oid;
 		HeapTuple	classTup;
 		autovac_table *tab;
 		bool		isshared;
@@ -2604,6 +2646,22 @@ deleted:
 
 	/* Finally close out the last transaction. */
 	CommitTransactionCommand();
+}
+
+/*
+ * qsort comparator for RelFrozenXidAges
+ *
+ * N.B. This comparator sorts in descending order.
+ */
+static int
+rfxa_comparator(const void *a, const void *b)
+{
+	const RelFrozenXidAge *pa = a;
+	const RelFrozenXidAge *pb = b;
+	if (pa->relfrozenxid_age == pb->relfrozenxid_age)
+		return 0;
+	else
+		return (pa->relfrozenxid_age > pb->relfrozenxid_age) ? 1 : -1;
 }
 
 /*

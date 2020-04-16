@@ -689,6 +689,8 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 	/* Undo effects of possibly forcing tuple_fraction to 0 */
 	root->tuple_fraction = save_fraction;
 
+	/* Add the UniqueKeys */
+	populate_unionrel_uniquiekeys(root, result_rel);
 	return result_rel;
 }
 

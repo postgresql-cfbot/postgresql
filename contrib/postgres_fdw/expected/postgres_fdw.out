@@ -1378,6 +1378,7 @@ SELECT t1.c1, ss.a, ss.b FROM (SELECT c1 FROM ft4 WHERE c1 between 50 and 60) t1
 (8 rows)
 
 -- d. test deparsing rowmarked relations as subqueries
+-- YYY:  The inner table in the plan is "T 3", which has a primary key on c1, that's why we have the new added "Inner Unique: true".
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT t1.c1, ss.a, ss.b FROM (SELECT c1 FROM "S 1"."T 3" WHERE c1 = 50) t1 INNER JOIN (SELECT t2.c1, t3.c1 FROM (SELECT c1 FROM ft4 WHERE c1 between 50 and 60) t2 FULL JOIN (SELECT c1 FROM ft5 WHERE c1 between 50 and 60) t3 ON (t2.c1 = t3.c1) WHERE t2.c1 IS NULL OR t2.c1 IS NOT NULL) ss(a, b) ON (TRUE) ORDER BY t1.c1, ss.a, ss.b FOR UPDATE OF t1;
                                                                                                                                                                                              QUERY PLAN                                                                                                                                                                                             
@@ -1386,6 +1387,7 @@ SELECT t1.c1, ss.a, ss.b FROM (SELECT c1 FROM "S 1"."T 3" WHERE c1 = 50) t1 INNE
    Output: "T 3".c1, ft4.c1, ft5.c1, "T 3".ctid, ft4.*, ft5.*
    ->  Nested Loop
          Output: "T 3".c1, ft4.c1, ft5.c1, "T 3".ctid, ft4.*, ft5.*
+         Inner Unique: true
          ->  Foreign Scan
                Output: ft4.c1, ft4.*, ft5.c1, ft5.*
                Relations: (public.ft4) FULL JOIN (public.ft5)
@@ -1410,7 +1412,7 @@ SELECT t1.c1, ss.a, ss.b FROM (SELECT c1 FROM "S 1"."T 3" WHERE c1 = 50) t1 INNE
                ->  Seq Scan on "S 1"."T 3"
                      Output: "T 3".c1, "T 3".ctid
                      Filter: ("T 3".c1 = 50)
-(28 rows)
+(29 rows)
 
 SELECT t1.c1, ss.a, ss.b FROM (SELECT c1 FROM "S 1"."T 3" WHERE c1 = 50) t1 INNER JOIN (SELECT t2.c1, t3.c1 FROM (SELECT c1 FROM ft4 WHERE c1 between 50 and 60) t2 FULL JOIN (SELECT c1 FROM ft5 WHERE c1 between 50 and 60) t3 ON (t2.c1 = t3.c1) WHERE t2.c1 IS NULL OR t2.c1 IS NOT NULL) ss(a, b) ON (TRUE) ORDER BY t1.c1, ss.a, ss.b FOR UPDATE OF t1;
  c1 | a  | b  
@@ -2902,22 +2904,20 @@ select sum(c1%3), sum(distinct c1%3 order by c1%3) filter (where c1%3 < 2), c2 f
 -- Outer query is aggregation query
 explain (verbose, costs off)
 select distinct (select count(*) filter (where t2.c2 = 6 and t2.c1 < 10) from ft1 t1 where t1.c1 = 6) from ft2 t2 where t2.c2 % 6 = 0 order by 1;
-                                                          QUERY PLAN                                                          
-------------------------------------------------------------------------------------------------------------------------------
- Unique
+                                                       QUERY PLAN                                                       
+------------------------------------------------------------------------------------------------------------------------
+ Sort
    Output: ((SubPlan 1))
-   ->  Sort
-         Output: ((SubPlan 1))
-         Sort Key: ((SubPlan 1))
-         ->  Foreign Scan
-               Output: (SubPlan 1)
-               Relations: Aggregate on (public.ft2 t2)
-               Remote SQL: SELECT count(*) FILTER (WHERE ((c2 = 6) AND ("C 1" < 10))) FROM "S 1"."T 1" WHERE (((c2 % 6) = 0))
-               SubPlan 1
-                 ->  Foreign Scan on public.ft1 t1
-                       Output: (count(*) FILTER (WHERE ((t2.c2 = 6) AND (t2.c1 < 10))))
-                       Remote SQL: SELECT NULL FROM "S 1"."T 1" WHERE (("C 1" = 6))
-(13 rows)
+   Sort Key: ((SubPlan 1))
+   ->  Foreign Scan
+         Output: (SubPlan 1)
+         Relations: Aggregate on (public.ft2 t2)
+         Remote SQL: SELECT count(*) FILTER (WHERE ((c2 = 6) AND ("C 1" < 10))) FROM "S 1"."T 1" WHERE (((c2 % 6) = 0))
+         SubPlan 1
+           ->  Foreign Scan on public.ft1 t1
+                 Output: (count(*) FILTER (WHERE ((t2.c2 = 6) AND (t2.c1 < 10))))
+                 Remote SQL: SELECT NULL FROM "S 1"."T 1" WHERE (("C 1" = 6))
+(11 rows)
 
 select distinct (select count(*) filter (where t2.c2 = 6 and t2.c1 < 10) from ft1 t1 where t1.c1 = 6) from ft2 t2 where t2.c2 % 6 = 0 order by 1;
  count 

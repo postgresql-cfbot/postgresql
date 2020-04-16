@@ -4349,11 +4349,11 @@ reset enable_nestloop;
 --
 begin;
 CREATE TEMP TABLE a (id int PRIMARY KEY, b_id int);
-CREATE TEMP TABLE b (id int PRIMARY KEY, c_id int);
+CREATE TEMP TABLE b (id int PRIMARY KEY, c_id int, d int);
 CREATE TEMP TABLE c (id int PRIMARY KEY);
 CREATE TEMP TABLE d (a int, b int);
 INSERT INTO a VALUES (0, 0), (1, NULL);
-INSERT INTO b VALUES (0, 0), (1, NULL);
+INSERT INTO b VALUES (0, 0, 1), (1, NULL, 1);
 INSERT INTO c VALUES (0), (1);
 INSERT INTO d VALUES (1,3), (2,2), (3,1);
 -- all three cases should be optimizable into a simple seqscan
@@ -4411,40 +4411,37 @@ select d.* from d left join (select distinct * from b) s
 (1 row)
 
 -- join removal is not possible when the GROUP BY contains a column that is
--- not in the join condition.  (Note: as of 9.6, we notice that b.id is a
--- primary key and so drop b.c_id from the GROUP BY of the resulting plan;
--- but this happens too late for join removal in the outer plan level.)
+-- not in the join condition.
 explain (costs off)
-select d.* from d left join (select * from b group by b.id, b.c_id) s
-  on d.a = s.id;
-                QUERY PLAN                
-------------------------------------------
- Merge Right Join
-   Merge Cond: (b.id = d.a)
-   ->  Group
-         Group Key: b.id
-         ->  Index Scan using b_pkey on b
-   ->  Sort
-         Sort Key: d.a
-         ->  Seq Scan on d
+select d.* from d left join (select d, c_id from b group by b.d, b.c_id) s
+  on d.a = s.d;
+                 QUERY PLAN                 
+--------------------------------------------
+ Hash Left Join
+   Hash Cond: (d.a = s.d)
+   ->  Seq Scan on d
+   ->  Hash
+         ->  Subquery Scan on s
+               ->  HashAggregate
+                     Group Key: b.d, b.c_id
+                     ->  Seq Scan on b
 (8 rows)
 
 -- similarly, but keying off a DISTINCT clause
 explain (costs off)
-select d.* from d left join (select distinct * from b) s
-  on d.a = s.id;
-              QUERY PLAN              
---------------------------------------
- Merge Right Join
-   Merge Cond: (b.id = d.a)
-   ->  Unique
-         ->  Sort
-               Sort Key: b.id, b.c_id
-               ->  Seq Scan on b
-   ->  Sort
-         Sort Key: d.a
-         ->  Seq Scan on d
-(9 rows)
+select d.* from d left join (select distinct c_id, d from b) s
+  on d.a = s.d;
+                 QUERY PLAN                 
+--------------------------------------------
+ Hash Left Join
+   Hash Cond: (d.a = s.d)
+   ->  Seq Scan on d
+   ->  Hash
+         ->  Subquery Scan on s
+               ->  HashAggregate
+                     Group Key: b.c_id, b.d
+                     ->  Seq Scan on b
+(8 rows)
 
 -- check join removal works when uniqueness of the join condition is enforced
 -- by a UNION

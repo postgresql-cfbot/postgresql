@@ -241,4 +241,38 @@ extern PathKey *make_canonical_pathkey(PlannerInfo *root,
 extern void add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 									List *live_childrels);
 
+/*
+ * uniquekeys.c
+ *	  Utilities for matching and building unique keys
+ */
+extern void populate_baserel_uniquekeys(PlannerInfo *root,
+										RelOptInfo *baserel,
+										List* unique_index_list);
+extern void populate_partitionedrel_uniquekeys(PlannerInfo *root,
+												RelOptInfo *rel,
+												List *childrels);
+extern void populate_distinctrel_uniquekeys(PlannerInfo *root,
+											RelOptInfo *inputrel,
+											RelOptInfo *distinctrel);
+extern void populate_grouprel_uniquekeys(PlannerInfo *root,
+										 RelOptInfo *grouprel);
+extern void populate_unionrel_uniquiekeys(PlannerInfo *root,
+										  RelOptInfo *unionrel);
+extern void simple_copy_uniquekeys(RelOptInfo *oldrel,
+								   RelOptInfo *newrel);
+extern void convert_subquery_uniquekeys(PlannerInfo *root,
+										RelOptInfo *currel,
+										RelOptInfo *sub_final_rel);
+extern void populate_joinrel_uniquekeys(PlannerInfo *root,
+										RelOptInfo *joinrel,
+										RelOptInfo *rel1,
+										RelOptInfo *rel2,
+										List *restrictlist,
+										JoinType jointype);
+
+extern bool relation_has_uniquekeys_for(PlannerInfo *root,
+										RelOptInfo *rel,
+										List *exprs);
+extern bool relation_is_onerow(RelOptInfo *rel);
+
 #endif							/* PATHS_H */

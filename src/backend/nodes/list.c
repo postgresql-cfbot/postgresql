@@ -688,6 +688,37 @@ list_member_oid(const List *list, Oid datum)
 }
 
 /*
+ * Return true iff there is an equal member in target for every
+ * member in members
+ */
+bool
+list_is_subset(const List *members, const List *target)
+{
+	const ListCell	*lc1, *lc2;
+
+	Assert(IsPointerList(members));
+	Assert(IsPointerList(target));
+	check_list_invariants(members);
+	check_list_invariants(target);
+
+	foreach(lc1, members)
+	{
+		bool found = false;
+		foreach(lc2, target)
+		{
+			if (equal(lfirst(lc1), lfirst(lc2)))
+			{
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+			return false;
+	}
+	return true;
+}
+
+/*
  * Delete the n'th cell (counting from 0) in list.
  *
  * The List is pfree'd if this was the last member.

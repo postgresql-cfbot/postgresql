@@ -39,6 +39,7 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/plancat.h"
+#include "optimizer/planmain.h"
 #include "optimizer/planner.h"
 #include "optimizer/restrictinfo.h"
 #include "optimizer/tlist.h"
@@ -222,13 +223,24 @@ make_one_rel(PlannerInfo *root, List *joinlist)
 	set_base_rel_pathlists(root);
 
 	/*
+	 * Remove any useless outer joins.  Ideally this would be done during
+	 * jointree preprocessing, but the necessary information isn't available
+	 * until we've built baserel data structures, classified qual clauses
+	 * and uniquekeys
+	 */
+	joinlist = remove_useless_joins(root, joinlist);
+
+	/*
+	 * Also, reduce any semijoins with unique inner rels to plain inner joins.
+	 * Likewise, this can't be done until now for lack of needed info.
+	 */
+	reduce_unique_semijoins(root);
+
+	/*
 	 * Generate access paths for the entire join tree.
 	 */
 	rel = make_rel_from_joinlist(root, joinlist);
 
-	/*
-	 * The result should join all and only the query's base rels.
-	 */
 	Assert(bms_equal(rel->relids, root->all_baserels));
 
 	return rel;
@@ -786,6 +798,9 @@ set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 
 	/* Consider TID scans */
 	create_tidscan_paths(root, rel);
+
+	/* Set UniqueKeys for this relation */
+	populate_baserel_uniquekeys(root, rel, rel->indexlist);
 }
 
 /*
@@ -1276,6 +1291,8 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 
 	/* Add paths to the append relation. */
 	add_paths_to_append_rel(root, rel, live_childrels);
+	if (IS_PARTITIONED_REL(rel))
+		populate_partitionedrel_uniquekeys(root, rel, live_childrels);
 }
 
 
@@ -2348,6 +2365,8 @@ set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 				 create_subqueryscan_path(root, rel, subpath,
 										  pathkeys, required_outer));
 	}
+
+	convert_subquery_uniquekeys(root, rel, sub_final_rel);
 
 	/* If outer rel allows parallelism, do same for partial paths. */
 	if (rel->consider_parallel && bms_is_empty(required_outer))

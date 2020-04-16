@@ -1479,11 +1479,11 @@ reset enable_nestloop;
 begin;
 
 CREATE TEMP TABLE a (id int PRIMARY KEY, b_id int);
-CREATE TEMP TABLE b (id int PRIMARY KEY, c_id int);
+CREATE TEMP TABLE b (id int PRIMARY KEY, c_id int, d int);
 CREATE TEMP TABLE c (id int PRIMARY KEY);
 CREATE TEMP TABLE d (a int, b int);
 INSERT INTO a VALUES (0, 0), (1, NULL);
-INSERT INTO b VALUES (0, 0), (1, NULL);
+INSERT INTO b VALUES (0, 0, 1), (1, NULL, 1);
 INSERT INTO c VALUES (0), (1);
 INSERT INTO d VALUES (1,3), (2,2), (3,1);
 
@@ -1512,17 +1512,15 @@ select d.* from d left join (select distinct * from b) s
   on d.a = s.id and d.b = s.c_id;
 
 -- join removal is not possible when the GROUP BY contains a column that is
--- not in the join condition.  (Note: as of 9.6, we notice that b.id is a
--- primary key and so drop b.c_id from the GROUP BY of the resulting plan;
--- but this happens too late for join removal in the outer plan level.)
+-- not in the join condition.
 explain (costs off)
-select d.* from d left join (select * from b group by b.id, b.c_id) s
-  on d.a = s.id;
+select d.* from d left join (select d, c_id from b group by b.d, b.c_id) s
+  on d.a = s.d;
 
 -- similarly, but keying off a DISTINCT clause
 explain (costs off)
-select d.* from d left join (select distinct * from b) s
-  on d.a = s.id;
+select d.* from d left join (select distinct c_id, d from b) s
+  on d.a = s.d;
 
 -- check join removal works when uniqueness of the join condition is enforced
 -- by a UNION

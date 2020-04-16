@@ -16,6 +16,7 @@
 
 #include "nodes/execnodes.h"
 #include "nodes/parsenodes.h"
+#include "nodes/pathnodes.h"
 
 
 extern A_Expr *makeA_Expr(A_Expr_Kind kind, List *name,
@@ -105,4 +106,6 @@ extern GroupingSet *makeGroupingSet(GroupingSetKind kind, List *content, int loc
 
 extern VacuumRelation *makeVacuumRelation(RangeVar *relation, Oid oid, List *va_cols);
 
+extern UniqueKey* makeUniqueKey(List *exprs, List *positions,
+								bool multi_nullvals, bool onerow);
 #endif							/* MAKEFUNC_H */

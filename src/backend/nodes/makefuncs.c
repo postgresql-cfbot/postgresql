@@ -812,3 +812,19 @@ makeVacuumRelation(RangeVar *relation, Oid oid, List *va_cols)
 	v->va_cols = va_cols;
 	return v;
 }
+
+
+/*
+ * makeUniqueKey
+ */
+UniqueKey*
+makeUniqueKey(List *exprs, List* positions, bool multi_nullvals, bool onerow)
+{
+	UniqueKey * ukey = makeNode(UniqueKey);
+	Assert(list_length(exprs) == list_length(positions));
+	ukey->exprs = exprs;
+	ukey->positions = positions;
+	ukey->multi_nullvals = multi_nullvals;
+	ukey->onerow = onerow;
+	return ukey;
+}

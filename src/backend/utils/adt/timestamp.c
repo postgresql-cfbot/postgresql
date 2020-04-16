@@ -4264,6 +4264,90 @@ interval_trunc(PG_FUNCTION_ARGS)
 	PG_RETURN_INTERVAL_P(result);
 }
 
+/* monthweek2j()
+ *
+ *	Return the Julian day which corresponds to the first day (Sunday) of the given month/year and week.
+ *	Julian days are used to convert between ISO week dates and Gregorian dates.
+ */
+int
+monthweek2j(int year, int month, int week)
+{
+	int			day0,
+				day1;
+
+	/* first day of given month */
+	day1 = date2j(year, month, 1);
+
+	// day0 == offset to first day of week (Sunday)
+	day0 = j2day(day1);
+
+	return ((week - 1) * 7) + (day1 - day0);
+}
+
+/* monthweek2date()
+ * Convert week of month and year number to date.
+ */
+void
+monthweek2date(int month, int wom, int *year, int *mon, int *mday)
+{
+	j2date(monthweek2j(*year, month, wom), year, mon, mday);
+}
+
+/* monthweek2date()
+ *
+ *	Convert a week of month date (year, month, week of month) into a Gregorian date.
+ *	Gregorian day of week sent so weekday strings can be supplied.
+ *	Populates year, mon, and mday with the correct Gregorian values.
+ */
+void
+monthweekdate2date(int month, int wom, int wday, int *year, int *mon, int *mday)
+{
+	int 		jday;
+
+	jday = monthweek2j(*year, month, wom);
+	jday += wday - 1;
+
+	j2date(jday, year, mon, mday);
+}
+
+/* week2j()
+ *
+ *	Return the Julian day which corresponds to the first day (Sunday) of the given year and week.
+ *	Julian days are used to convert between ISO week dates and Gregorian dates.
+ */
+int
+week2j(int year, int week)
+{
+	/* calculating the Julian Day from first month of current year */
+	return monthweek2j(year, 1, week);
+}
+
+/* week2date()
+ * Convert week of year number to date.
+ */
+void
+week2date(int woy, int *year, int *mon, int *mday)
+{
+	j2date(week2j(*year, woy), year, mon, mday);
+}
+
+/* weekdate2date()
+ *
+ *	Convert a week date (year, week) into a Gregorian date.
+ *	Gregorian day of week sent so weekday strings can be supplied.
+ *	Populates year, mon, and mday with the correct Gregorian values.
+ */
+void
+weekdate2date(int woy, int wday, int *year, int *mon, int *mday)
+{
+	int			jday;
+
+	jday = week2j(*year, woy);
+	jday += wday - 1;
+
+	j2date(jday, year, mon, mday);
+}
+
 /* isoweek2j()
  *
  *	Return the Julian day which corresponds to the first day (Monday) of the given ISO 8601 year and week.

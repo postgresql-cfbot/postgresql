@@ -375,6 +375,14 @@ SELECT to_timestamp('95-1116', 'YY-MMDD');
 SELECT to_timestamp('995-1116', 'YYY-MMDD');
 
 SELECT to_timestamp('2005426', 'YYYYWWD');
+SELECT to_timestamp('2019011', 'YYYYWWD');
+SELECT to_timestamp('2019013', 'YYYYWWD');
+SELECT to_timestamp('2019017', 'YYYYWWD');
+SELECT to_timestamp('2019021', 'YYYYWWD');
+SELECT to_timestamp('201901-Monday', 'YYYYWW-Day');
+SELECT to_timestamp('201901-Thursday', 'YYYYWW-Day');
+SELECT to_timestamp('201901-SAT', 'YYYYWW-DY');
+SELECT to_timestamp('201902-mon', 'YYYYWW-dy');
 
 SELECT to_timestamp('2005300', 'YYYYDDD');
 

@@ -27,6 +27,8 @@ typedef struct GlobalTransactionData *GlobalTransaction;
 
 /* GUC variable */
 extern PGDLLIMPORT int max_prepared_xacts;
+extern PGDLLIMPORT int max_age_prepared_xacts;
+extern PGDLLIMPORT int prepared_xacts_vacuum_warn_timeout;
 
 extern Size TwoPhaseShmemSize(void);
 extern void TwoPhaseShmemInit(void);
@@ -58,4 +60,6 @@ extern void PrepareRedoAdd(char *buf, XLogRecPtr start_lsn,
 						   XLogRecPtr end_lsn, RepOriginId origin_id);
 extern void PrepareRedoRemove(TransactionId xid, bool giveWarning);
 extern void restoreTwoPhaseData(void);
+
+extern int WarnOverAgedPreparedTransactions(bool force_warning);
 #endif							/* TWOPHASE_H */

@@ -2471,6 +2471,28 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"max_age_prepared_xacts", PGC_SIGHUP, LOGGING_WHEN,
+			gettext_noop("Sets the maximum age for a prepared transaciton after which vacuum starts complaining."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&max_age_prepared_xacts,
+		-1, -1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"prepared_xacts_vacuum_warn_timeout", PGC_SIGHUP, LOGGING_WHEN,
+			gettext_noop("Timeout before vacuum throws a warning about overage prepared transactions."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&prepared_xacts_vacuum_warn_timeout,
+		-1, -1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 #ifdef LOCK_DEBUG
 	{
 		{"trace_lock_oidmin", PGC_SUSET, DEVELOPER_OPTIONS,

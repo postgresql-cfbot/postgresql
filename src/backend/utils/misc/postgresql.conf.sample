@@ -185,6 +185,11 @@
 					# (change requires restart)
 #backend_flush_after = 0		# measured in pages, 0 disables
 
+# - Prepared Transactions -
+
+#max_age_prepared_xacts = 6h			# 0ms - INT_MAX; default is -1 (disabled)
+#prepared_xacts_vacuum_warn_timeout = 6h	# 0ms - INT_MAX; default is -1 (disabled)
+
 
 #------------------------------------------------------------------------------
 # WRITE-AHEAD LOG

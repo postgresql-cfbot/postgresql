@@ -71,6 +71,7 @@
 #include "access/reloptions.h"
 #include "access/tableam.h"
 #include "access/transam.h"
+#include "access/twophase.h"
 #include "access/xact.h"
 #include "catalog/dependency.h"
 #include "catalog/namespace.h"
@@ -2005,6 +2006,11 @@ do_autovacuum(void)
 		default_multixact_freeze_min_age = vacuum_multixact_freeze_min_age;
 		default_multixact_freeze_table_age = vacuum_multixact_freeze_table_age;
 	}
+
+	/*
+	 * Let's throw warnings for any orphaned prepared transactions.
+	 */
+	WarnOverAgedPreparedTransactions(false);
 
 	ReleaseSysCache(tuple);
 

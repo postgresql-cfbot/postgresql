@@ -30,6 +30,7 @@
 #include "access/multixact.h"
 #include "access/tableam.h"
 #include "access/transam.h"
+#include "access/twophase.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_database.h"
@@ -371,7 +372,17 @@ vacuum(List *relations, VacuumParams *params,
 		relations = newrels;
 	}
 	else
+	{
+		/*
+		 * We need to throw a warning to a client running a vacuum process if
+		 * there are any orphaned prepared transactions so that an administrator
+		 * may take requisite action. Since this is a manually initiated commmand,
+		 * we need to force generation of warnings.
+		 */
+		WarnOverAgedPreparedTransactions(true);
+
 		relations = get_all_vacuum_rels(params->options);
+	}
 
 	/*
 	 * Decide whether we need to start/commit our own transactions.

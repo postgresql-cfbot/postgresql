@@ -116,6 +116,10 @@
 /* GUC variable, can't be changed after startup */
 int			max_prepared_xacts = 0;
 
+/* GUC variables for checking for orphaned prepared transactions */
+int			max_age_prepared_xacts = 0;
+int			prepared_xacts_vacuum_warn_timeout = 0;
+
 /*
  * This struct describes one global transaction that is in prepared state
  * or attempting to become prepared.
@@ -183,6 +187,9 @@ typedef struct TwoPhaseStateData
 
 	/* Number of valid prepXacts entries. */
 	int			numPrepXacts;
+
+	/* Flag to tell if we throw a warning for over aged prepared xacts */
+	TimestampTz overage_warned_at;
 
 	/* There are max_prepared_xacts items in this array */
 	GlobalTransaction prepXacts[FLEXIBLE_ARRAY_MEMBER];
@@ -264,6 +271,7 @@ TwoPhaseShmemInit(void)
 		Assert(!found);
 		TwoPhaseState->freeGXacts = NULL;
 		TwoPhaseState->numPrepXacts = 0;
+		TwoPhaseState->overage_warned_at = 0;
 
 		/*
 		 * Initialize the linked list of free GlobalTransactionData structs
@@ -427,6 +435,14 @@ MarkAsPreparing(TransactionId xid, const char *gid,
 	/* And insert it into the active array */
 	Assert(TwoPhaseState->numPrepXacts < max_prepared_xacts);
 	TwoPhaseState->prepXacts[TwoPhaseState->numPrepXacts++] = gxact;
+
+	/*
+	 * Is this the first prepared transaction? If so, then let's set
+	 * last warned date at curret timestamp, so that we can warn
+	 * about this if it becomes orphaned.
+	 */
+	if (TwoPhaseState->numPrepXacts == 1)
+		TwoPhaseState->overage_warned_at = GetCurrentTimestamp();
 
 	LWLockRelease(TwoPhaseStateLock);
 
@@ -697,6 +713,81 @@ GetPreparedTransactionList(GlobalTransaction *gxacts)
 	return num;
 }
 
+/*
+ * To be called from within a vacuum process whether initiated through
+ * autovacuum or via client initiated vacuum command.
+ *
+ * Returns total number of orphaned prepared transactions and throws
+ * one warning message for every orphaned prepared transactions found.
+ * Return -1 if timeout period hasn't completed.
+ *
+ * force_warning skips the timeout check for throwing warnings. This
+ * ensures that manually executed vacuum command is notified of any
+ * orphaned prepared transactions.
+ */
+int
+WarnOverAgedPreparedTransactions(bool force_warning)
+{
+	bool		should_warn = force_warning;
+	int			num = 0;
+	int			num_overage = 0;
+	int			i;
+	TimestampTz	current_time = GetCurrentTimestamp();
+
+	if (prepared_xacts_vacuum_warn_timeout == -1 || max_age_prepared_xacts == -1)
+		return -1;
+
+	/* Get exclusive lock so that we can update data in TwoPhaseState
+	 * global structure.
+	 */
+	LWLockAcquire(TwoPhaseStateLock, LW_EXCLUSIVE);
+
+	should_warn |= TimestampDifferenceExceeds(TwoPhaseState->overage_warned_at, current_time, prepared_xacts_vacuum_warn_timeout);
+
+	if (should_warn)
+	{
+		TwoPhaseState->overage_warned_at = current_time;
+	}
+
+	LWLockRelease(TwoPhaseStateLock);
+
+	if (!should_warn)
+		return -1;
+
+	/* Get shared lock to count orphaned transactions */
+	LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
+
+	if (TwoPhaseState->numPrepXacts == 0)
+	{
+		LWLockRelease(TwoPhaseStateLock);
+		return 0;
+	}
+
+	num = TwoPhaseState->numPrepXacts;
+
+	for (i = 0; i < num; i++)
+	{
+		if (TimestampDifferenceExceeds(TwoPhaseState->prepXacts[i]->prepared_at, current_time, max_age_prepared_xacts))
+		{
+			num_overage += 1;
+
+			ereport(WARNING,
+					(errcode(ERRCODE_WARNING),
+					 errmsg("prepared transaction with identifier \"%s\" created on \"%s\" is overage.",
+						TwoPhaseState->prepXacts[i]->gid, timestamptz_to_str(TwoPhaseState->prepXacts[i]->prepared_at))));
+		}
+	}
+
+	if (num_overage > 0)
+		ereport(WARNING,
+				(errcode(ERRCODE_WARNING),
+				 errmsg("%d orphaned prepared transactions found.", num_overage),
+				 errhint("Overage transaction(s) may require manual administrative action(s).")));
+
+	LWLockRelease(TwoPhaseStateLock);
+
+	return num_overage;
+}
 
 /* Working status for pg_prepared_xact */
 typedef struct
@@ -2382,6 +2473,14 @@ PrepareRedoAdd(char *buf, XLogRecPtr start_lsn,
 	/* And insert it into the active array */
 	Assert(TwoPhaseState->numPrepXacts < max_prepared_xacts);
 	TwoPhaseState->prepXacts[TwoPhaseState->numPrepXacts++] = gxact;
+
+	/*
+	 * Is this the first prepared transaction? If so, then let's set
+	 * last warned date at curret timestamp, so that we can warn
+	 * about this if it becomes orphaned.
+	 */
+	if (TwoPhaseState->numPrepXacts == 1)
+		TwoPhaseState->overage_warned_at = GetCurrentTimestamp();
 
 	if (origin_id != InvalidRepOriginId)
 	{

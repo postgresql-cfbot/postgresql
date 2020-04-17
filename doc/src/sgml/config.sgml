@@ -1649,6 +1649,78 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-max-age-prepared-xacts" xreflabel="max_age_prepared_xacts">
+      <term><varname>max_age_prepared_xacts</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>max_age_prepared_xacts</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets maximum age after which a prepared transaction is considered an
+        orphan. <varname>max_age_prepared_xacts</varname> only applies when
+        <quote>prepared transactions</quote> are enabled (see
+        <xref linkend="guc-max-prepared-transactions"/>). The age for a
+        transaction is calculated from the time it was created to current time.
+        If this value is specified without units, it is taken as milliseconds.
+        The default value is -1 which allows prepared transactions to live
+        forever. This parameter can only be set in the
+        <filename>postgresql.conf</filename> file or on the server command
+        line.
+       </para>
+
+       <para>
+        If you are planning to use prepared transactions, this parameter
+        may be set to a value that defines maximum age a prepared
+        transaction can take in your environment. This parameter must be
+        used in conjunction with <varname>prepared_xacts_vacuum_warn_timeout
+        </varname> (see
+        <xref linkend="guc-prepared-xacts-vacuum-warn-timeout"/>).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-prepared-xacts-vacuum-warn-timeout" xreflabel="prepared_xacts_vacuum_warn_timeout">
+      <term><varname>prepared_xacts_vacuum_warn_timeout</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>prepared_xacts_vacuum_warn_timeout</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets timeout after which vacuum starts throwing warnings for every
+        prepared transactions that has exceeded maximum age defined by
+        <varname>max_age_prepared_xacts</varname> (see <xref
+        linkend="guc-max-age-prepared-xacts"/>).
+        If this value is specified without units, it is taken as milliseconds.
+        The default value of -1 will disable this warning mechanism. Setting
+        a too value could potentially fill up log with orphaned prepared
+        transaction warnings, so this parameter must be set to a value that
+        is reasonably large to not fill up log file, but small enough to
+        notify of long running and potential orphaned prepared transactions.
+        This parameter can only be set in the
+        <filename>postgresql.conf</filename> file or on the server command
+        line.
+       </para>
+
+       <para>
+        This guc along with <varname>max_age_prepared_xacts</varname>, if
+        enabled, help you better manage prepared transactions. Warnings are
+        emitted to log when an autovacuum worker encounters orphaned
+        prepared transactions, or to a client which has issued a vacuum
+        command. This parameter defines how frequently a vacuum process
+        should throw a warning when it encounters a prepared transaction
+        with an age exceeding <varname>max_age_prepared_xacts</varname>.
+       </para>
+
+       <para>
+        The warning are <quote>not</quote> thrown when vacuum command is run
+        with relations, or when vacuumdb command is executed.
+       </para>
+
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-work-mem" xreflabel="work_mem">
       <term><varname>work_mem</varname> (<type>integer</type>)
       <indexterm>

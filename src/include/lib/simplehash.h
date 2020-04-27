@@ -560,7 +560,7 @@ restart:
 		uint32		curoptimal;
 		SH_ELEMENT_TYPE *entry = &data[curelem];
 
-		/* any empty bucket can directly be used */
+		/* any empty bucket can be used directly */
 		if (entry->status == SH_STATUS_EMPTY)
 		{
 			tb->members++;

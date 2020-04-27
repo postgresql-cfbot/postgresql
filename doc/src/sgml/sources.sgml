@@ -466,8 +466,8 @@ Hint:       the addendum
     enough for error messages.  Detail and hint messages can be relegated to a
     verbose mode, or perhaps a pop-up error-details window.  Also, details and
     hints would normally be suppressed from the server log to save
-    space. Reference to implementation details is best avoided since users
-    aren't expected to know the details.
+    space. References to implementation details are best avoided since users
+    aren't expected to know them.
    </para>
 
   </simplesect>

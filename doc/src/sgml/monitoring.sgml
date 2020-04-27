@@ -1484,11 +1484,11 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
         </row>
         <row>
          <entry><literal>RecoveryConflictSnapshot</literal></entry>
-         <entry>Waiting for recovery conflict resolution on a vacuum cleanup.</entry>
+         <entry>Waiting for recovery conflict resolution during vacuum cleanup.</entry>
         </row>
         <row>
          <entry><literal>RecoveryConflictTablespace</literal></entry>
-         <entry>Waiting for recovery conflict resolution on dropping tablespace.</entry>
+         <entry>Waiting for recovery conflict resolution while dropping tablespace.</entry>
         </row>
         <row>
          <entry><literal>RecoveryPause</literal></entry>
@@ -1526,9 +1526,9 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
         <row>
          <entry><literal>RecoveryRetrieveRetryInterval</literal></entry>
          <entry>
-          Waiting when WAL data is not available from any kind of sources
-          (<filename>pg_wal</filename>, archive or stream) before trying
-          again to retrieve WAL data, at recovery.
+          Waiting in recovery when WAL data is not available from any source
+          (<filename>pg_wal</filename>, archive or stream) before re-trying
+          to retrieve WAL data.
          </entry>
         </row>
         <row>
@@ -4577,8 +4577,8 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
       <entry><literal>waiting for checkpoint to finish</literal></entry>
       <entry>
        The WAL sender process is currently performing
-       <function>pg_start_backup</function> to set up for
-       taking a base backup, and waiting for backup start
+       <function>pg_start_backup</function> to prepare to
+       take a base backup, and waiting for the start-of-backup
        checkpoint to finish.
       </entry>
      </row>

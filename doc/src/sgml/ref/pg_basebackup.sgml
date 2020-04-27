@@ -808,7 +808,7 @@ PostgreSQL documentation
   </para>
 
   <para>
-   Tablespaces will in plain format by default be backed up to the same path
+   In plain format, tablespaces will by default be backed up to the same path
    they have on the server, unless the
    option <literal>--tablespace-mapping</literal> is used.  Without
    this option, running a plain format base backup on the same host as the

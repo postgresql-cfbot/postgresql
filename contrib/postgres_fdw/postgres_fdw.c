@@ -373,6 +373,10 @@ static void postgresExplainForeignModify(ModifyTableState *mtstate,
 										 ExplainState *es);
 static void postgresExplainDirectModify(ForeignScanState *node,
 										ExplainState *es);
+static void postgresExecForeignTruncate(List *frels_list,
+										List *frels_extra,
+										DropBehavior behavior,
+										bool restart_seqs);
 static bool postgresAnalyzeForeignTable(Relation relation,
 										AcquireSampleRowsFunc *func,
 										BlockNumber *totalpages);
@@ -545,6 +549,9 @@ postgres_fdw_handler(PG_FUNCTION_ARGS)
 	routine->ExplainForeignScan = postgresExplainForeignScan;
 	routine->ExplainForeignModify = postgresExplainForeignModify;
 	routine->ExplainDirectModify = postgresExplainDirectModify;
+
+	/* Support function for TRUNCATE */
+	routine->ExecForeignTruncate = postgresExecForeignTruncate;
 
 	/* Support functions for ANALYZE */
 	routine->AnalyzeForeignTable = postgresAnalyzeForeignTable;
@@ -2656,6 +2663,84 @@ postgresExplainDirectModify(ForeignScanState *node, ExplainState *es)
 	}
 }
 
+/*
+ * postgresExecForeignTruncate
+ *		It propagates TRUNCATE command to the remote host inside of the
+ *		transaction block.
+ */
+static void
+postgresExecForeignTruncate(List *frels_list,
+							List *frels_extra,
+							DropBehavior behavior,
+							bool restart_seqs)
+{
+	Oid				server_id = InvalidOid;
+	ForeignServer  *serv = NULL;
+	UserMapping	   *user = NULL;
+	PGconn		   *conn = NULL;
+	PGresult	   *res;
+	StringInfoData	sql;
+	ListCell	   *lc;
+	bool			server_truncatable = true;
+
+	/* pick up remote connection, and sanity checks */
+	foreach (lc, frels_list)
+	{
+		Relation	frel = lfirst(lc);
+		Oid			frel_oid = RelationGetRelid(frel);
+		ForeignTable *ft = GetForeignTable(frel_oid);
+		ListCell   *cell;
+		bool		truncatable;
+
+		if (!OidIsValid(server_id))
+		{
+			server_id = GetForeignServerIdByRelId(frel_oid);
+			serv = GetForeignServer(server_id);
+			user = GetUserMapping(GetUserId(), server_id);
+			conn = GetConnection(user, false);
+			
+			foreach (cell, serv->options)
+			{
+				DefElem	   *defel = (DefElem *) lfirst(cell);
+
+				if (strcmp(defel->defname, "truncatable") == 0)
+					server_truncatable = defGetBoolean(defel);
+			}
+		}
+		else
+		{
+			/* ExecForeignTruncate() is invoked for each server */
+			Assert(server_id == GetForeignServerIdByRelId(frel_oid));
+		}
+
+		/* ensure the target foreign table is truncatable */
+		truncatable = server_truncatable;
+		foreach (cell, ft->options)
+		{
+			DefElem	   *defel = (DefElem *) lfirst(cell);
+
+			if (strcmp(defel->defname, "truncatable") == 0)
+				truncatable = defGetBoolean(defel);
+		}
+		if (!truncatable)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("truncate on \"%s\" is prohibited",
+							RelationGetRelationName(frel))));
+	}
+	/* set up remote query */
+	initStringInfo(&sql);
+	deparseTruncateSql(&sql, frels_list, frels_extra, behavior, restart_seqs);
+	/* run remote query */
+	if (!PQsendQuery(conn, sql.data))
+		pgfdw_report_error(ERROR, NULL, conn, false, sql.data);
+	res = pgfdw_get_result(conn, sql.data);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pgfdw_report_error(ERROR, res, conn, true, sql.data);
+	/* clean-up */
+	PQclear(res);
+	pfree(sql.data);
+}
 
 /*
  * estimate_path_cost_size

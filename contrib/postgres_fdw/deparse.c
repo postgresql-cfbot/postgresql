@@ -2115,6 +2115,44 @@ deparseAnalyzeSql(StringInfo buf, Relation rel, List **retrieved_attrs)
 }
 
 /*
+ * Construct a simple "TRUNCATE rel" statement
+ */
+void
+deparseTruncateSql(StringInfo buf,
+				   List *frels_list,
+				   List *frels_extra,
+				   DropBehavior behavior,
+				   bool restart_seqs)
+{
+	ListCell   *lc1, *lc2;
+
+	appendStringInfoString(buf, "TRUNCATE ");
+	forboth (lc1, frels_list,
+			 lc2, frels_extra)
+	{
+		Relation	frel = lfirst(lc1);
+		int			extra = lfirst_int(lc2);
+
+		if (lc1 != list_head(frels_list))
+			appendStringInfoString(buf, ", ");
+		if (extra != 0)
+			appendStringInfoString(buf, "ONLY ");
+		deparseRelation(buf, frel);
+	}
+	appendStringInfo(buf, " %s IDENTITY",
+					 restart_seqs ? "RESTART" : "CONTINUE");
+	switch (behavior)
+	{
+		case DROP_RESTRICT:
+			appendStringInfoString(buf, " RESTRICT");
+			break;
+		case DROP_CASCADE:
+			appendStringInfoString(buf, " CASCADE");
+			break;
+	}
+}
+
+/*
  * Construct name to use for given column, and emit it into buf.
  * If it has a column_name FDW option, use that instead of attribute name.
  *

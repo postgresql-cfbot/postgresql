@@ -2308,6 +2308,96 @@ drop foreign table rem3;
 drop table loc3;
 
 -- ===================================================================
+-- test for TRUNCATE
+-- ===================================================================
+CREATE TABLE tru_rtable0 (id int primary key, x text);
+CREATE TABLE tru_rtable1 (id int primary key, y text);
+CREATE FOREIGN TABLE tru_ftable (id int, x text)
+       SERVER loopback OPTIONS (table_name 'tru_rtable0');
+INSERT INTO tru_rtable0 (SELECT x,md5(x::text) FROM generate_series(1,10) x);
+
+CREATE TABLE tru_ptable (id int, y text) PARTITION BY HASH(id);
+CREATE TABLE tru_ptable__p0 PARTITION OF tru_ptable
+                            FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+CREATE FOREIGN TABLE tru_ftable__p1 PARTITION OF tru_ptable
+                                    FOR VALUES WITH (MODULUS 2, REMAINDER 1)
+       SERVER loopback OPTIONS (table_name 'tru_rtable1');
+INSERT INTO tru_ptable (SELECT x,md5(x::text) FROM generate_series(11,20) x);
+
+CREATE TABLE tru_pk_table(id int primary key, z text);
+CREATE TABLE tru_fk_table(fkey int references tru_pk_table(id));
+INSERT INTO tru_pk_table (SELECT x,md5((x+1)::text) FROM generate_series(1,10) x);
+INSERT INTO tru_fk_table (SELECT x % 10 + 1 FROM generate_series(5,25) x);
+CREATE FOREIGN TABLE tru_pk_ftable (id int, z text)
+       SERVER loopback OPTIONS (table_name 'tru_pk_table');
+
+CREATE TABLE tru_rtable_parent (id int, a text);
+CREATE TABLE tru_rtable_child (id int, a text);
+CREATE FOREIGN TABLE tru_ftable_parent (id int, a text)
+       SERVER loopback OPTIONS (table_name 'tru_rtable_parent');
+CREATE FOREIGN TABLE tru_ftable_child () INHERITS (tru_ftable_parent)
+       SERVER loopback OPTIONS (table_name 'tru_rtable_child');
+INSERT INTO tru_rtable_parent (SELECT x, md5(x::text) FROM generate_series(1,8) x);
+INSERT INTO tru_rtable_child  (SELECT x, md5(x::text) FROM generate_series(10, 18) x);
+
+-- normal truncate
+SELECT * FROM tru_ftable;
+TRUNCATE tru_ftable;
+SELECT * FROM tru_rtable0;		-- empty
+SELECT * FROM tru_ftable;		-- empty
+
+-- 'truncatable' option
+ALTER SERVER loopback OPTIONS (ADD truncatable 'false');
+TRUNCATE tru_ftable;			-- error
+ALTER SERVER loopback OPTIONS (DROP truncatable);
+ALTER FOREIGN TABLE tru_ftable OPTIONS (ADD truncatable 'false');
+TRUNCATE tru_ftable;			-- error
+ALTER FOREIGN TABLE tru_ftable OPTIONS (SET truncatable 'true');
+TRUNCATE tru_ftable;			-- accepted
+
+-- partition table mixtured by table and foreign table
+SELECT * FROM tru_ptable;
+TRUNCATE tru_ptable;
+SELECT * FROM tru_ptable;		-- empty
+SELECT * FROM tru_ptable__p0;	-- empty
+SELECT * FROM tru_ftable__p1;	-- empty
+SELECT * FROM tru_rtable1;		-- empty
+
+-- 'CASCADE' option
+SELECT * FROM tru_pk_ftable;
+TRUNCATE tru_pk_ftable;	-- failed by FK reference
+TRUNCATE tru_pk_ftable CASCADE;
+SELECT * FROM tru_pk_ftable;
+SELECT * FROM tru_fk_table;		-- also truncated
+
+-- truncate two tables at a command
+INSERT INTO tru_ftable (SELECT x,md5((x+2)::text) FROM generate_series(1,8) x);
+INSERT INTO tru_pk_ftable (SELECT x,md5((x+3)::text) FROM generate_series(3,10) x);
+SELECT * FROM tru_ftable a FULL OUTER JOIN tru_pk_ftable b ON a.id = b.id;
+TRUNCATE tru_ftable, tru_pk_ftable CASCADE;
+SELECT * FROM tru_ftable a FULL OUTER JOIN tru_pk_ftable b ON a.id = b.id;
+
+-- truncate with ONLY clause
+TRUNCATE ONLY tru_ftable_parent;
+SELECT * FROM tru_ftable_parent;
+TRUNCATE tru_ftable_parent;
+SELECT * FROM tru_ftable_parent;
+
+-- in case when remote table has inherited children
+CREATE TABLE tru_rtable0_child () INHERITS (tru_rtable0);
+INSERT INTO tru_rtable0 (SELECT x,md5(x::text) FROM generate_series(5,9) x);
+INSERT INTO tru_rtable0_child (SELECT x,md5(x::text) FROM generate_series(10,14) x);
+SELECT * FROM tru_ftable;
+
+TRUNCATE ONLY tru_ftable;		-- truncate only parent portion
+SELECT * FROM tru_ftable;
+
+INSERT INTO tru_rtable0 (SELECT x,md5(x::text) FROM generate_series(21,25) x);
+SELECT * FROM tru_ftable;
+TRUNCATE tru_ftable;			-- truncate both of parent and child
+SELECT * FROM tru_ftable;
+
+-- ===================================================================
 -- test IMPORT FOREIGN SCHEMA
 -- ===================================================================
 

@@ -200,7 +200,6 @@ static void reportDependentObjects(const ObjectAddresses *targetObjects,
 static void deleteOneObject(const ObjectAddress *object,
 							Relation *depRel, int32 flags);
 static void doDeletion(const ObjectAddress *object, int flags);
-static void AcquireDeletionLock(const ObjectAddress *object, int flags);
 static void ReleaseDeletionLock(const ObjectAddress *object);
 static bool find_expr_references_walker(Node *node,
 										find_expr_references_context *context);
@@ -1531,7 +1530,7 @@ doDeletion(const ObjectAddress *object, int flags)
  * else.  Note that dependency.c is not concerned with deleting any kind of
  * shared-across-databases object, so we have no need for LockSharedObject.
  */
-static void
+void
 AcquireDeletionLock(const ObjectAddress *object, int flags)
 {
 	if (object->classId == RelationRelationId)

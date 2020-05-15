@@ -6434,6 +6434,10 @@ StartupXLOG(void)
 	else
 		recoveryTargetTLI = ControlFile->checkPointCopy.ThisTimeLineID;
 
+	/* clean temp relation files */
+	if (max_active_gtt > 0)
+		RemovePgTempFiles();
+
 	/*
 	 * Check for signal files, and if so set up state for offline recovery
 	 */

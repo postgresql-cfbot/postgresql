@@ -27,6 +27,7 @@
 #include "catalog/dependency.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
+#include "catalog/storage_gtt.h"
 #include "commands/copy.h"
 #include "commands/defrem.h"
 #include "commands/trigger.h"
@@ -1063,7 +1064,7 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 		Assert(rel);
 
 		/* check read-only transaction and parallel mode */
-		if (XactReadOnly && !rel->rd_islocaltemp)
+		if (XactReadOnly && !RELATION_IS_TEMP(rel))
 			PreventCommandIfReadOnly("COPY FROM");
 
 		cstate = BeginCopyFrom(pstate, rel, stmt->filename, stmt->is_program,
@@ -2788,6 +2789,8 @@ CopyFrom(CopyState cstate)
 	CheckValidResultRel(resultRelInfo, CMD_INSERT);
 
 	ExecOpenIndices(resultRelInfo, false);
+
+	init_gtt_storage(CMD_INSERT, resultRelInfo);
 
 	estate->es_result_relations = resultRelInfo;
 	estate->es_num_result_relations = 1;

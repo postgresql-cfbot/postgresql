@@ -53,6 +53,7 @@
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "commands/event_trigger.h"
 #include "commands/progress.h"
 #include "commands/tablecmds.h"
@@ -727,6 +728,11 @@ index_create(Relation heapRelation,
 	char		relkind;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
+	bool		skip_create_storage = false;
+
+	if (RELATION_IS_GLOBAL_TEMP(heapRelation) &&
+		!gtt_storage_attached(RelationGetRelid(heapRelation)))
+		skip_create_storage = true;
 
 	/* constraint flags can only be set when a constraint is requested */
 	Assert((constr_flags == 0) ||
@@ -880,6 +886,19 @@ index_create(Relation heapRelation,
 						indexRelationName, RelationGetRelationName(heapRelation))));
 	}
 
+	if (RELATION_IS_GLOBAL_TEMP(heapRelation))
+	{
+		/* No support create index on global temp table use concurrent mode yet */
+		if (concurrent)
+			ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("cannot reindex global temporary tables concurrently")));
+
+		/* if global temp table not init storage, then skip build index */
+		if (!gtt_storage_attached(RelationGetRelid(heapRelation)))
+			flags |= INDEX_CREATE_SKIP_BUILD;
+	}
+
 	/*
 	 * construct tuple descriptor for index tuples
 	 */
@@ -934,7 +953,8 @@ index_create(Relation heapRelation,
 								mapped_relation,
 								allow_system_table_mods,
 								&relfrozenxid,
-								&relminmxid);
+								&relminmxid,
+								skip_create_storage);
 
 	Assert(relfrozenxid == InvalidTransactionId);
 	Assert(relminmxid == InvalidMultiXactId);
@@ -2040,7 +2060,8 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	 * lock (see comments in RemoveRelations), and a non-concurrent DROP is
 	 * more efficient.
 	 */
-	Assert(get_rel_persistence(indexId) != RELPERSISTENCE_TEMP ||
+	Assert(!(get_rel_persistence(indexId) == RELPERSISTENCE_TEMP ||
+			 get_rel_persistence(indexId) == RELPERSISTENCE_GLOBAL_TEMP) ||
 		   (!concurrent && !concurrent_lock_mode));
 
 	/*
@@ -2071,6 +2092,14 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	 * above locking won't prevent, so test explicitly.
 	 */
 	CheckTableNotInUse(userIndexRelation, "DROP INDEX");
+
+	/* We allow to drop index on global temp table only this session use it */
+	if (RELATION_IS_GLOBAL_TEMP(userHeapRelation))
+	{
+		if (is_other_backend_use_gtt(RelationGetRelid(userHeapRelation)))
+			elog(ERROR, "can not drop index %s when other backend attached this global temp table.",
+						RelationGetRelationName(userHeapRelation));
+	}
 
 	/*
 	 * Drop Index Concurrently is more or less the reverse process of Create
@@ -2680,6 +2709,11 @@ index_update_stats(Relation rel,
 	HeapTuple	tuple;
 	Form_pg_class rd_rel;
 	bool		dirty;
+	bool		is_gtt = false;
+
+	/* update index stats into localhash and rel_rd_rel for global temp table */
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+		is_gtt = true;
 
 	/*
 	 * We always update the pg_class row using a non-transactional,
@@ -2765,20 +2799,34 @@ index_update_stats(Relation rel,
 		else					/* don't bother for indexes */
 			relallvisible = 0;
 
-		if (rd_rel->relpages != (int32) relpages)
+		if (is_gtt)
+			rel->rd_rel->relpages = (int32) relpages;
+		else if (rd_rel->relpages != (int32) relpages)
 		{
 			rd_rel->relpages = (int32) relpages;
 			dirty = true;
 		}
-		if (rd_rel->reltuples != (float4) reltuples)
+
+		if (is_gtt)
+			rel->rd_rel->reltuples = (float4) reltuples;
+		else if (rd_rel->reltuples != (float4) reltuples)
 		{
 			rd_rel->reltuples = (float4) reltuples;
 			dirty = true;
 		}
-		if (rd_rel->relallvisible != (int32) relallvisible)
+
+		if (is_gtt)
+			rel->rd_rel->relallvisible = (int32) relallvisible;
+		else if (rd_rel->relallvisible != (int32) relallvisible)
 		{
 			rd_rel->relallvisible = (int32) relallvisible;
 			dirty = true;
+		}
+
+		if (is_gtt)
+		{
+			up_gtt_relstats(rel, relpages, reltuples, relallvisible,
+							InvalidTransactionId, InvalidMultiXactId);
 		}
 	}
 
@@ -2891,6 +2939,15 @@ index_build(Relation heapRelation,
 		};
 
 		pgstat_progress_update_multi_param(6, index, val);
+	}
+
+	if (RELATION_IS_GLOBAL_TEMP(indexRelation))
+	{
+		if (!gtt_storage_attached(RelationGetRelid(indexRelation)))
+		{
+			gtt_force_enable_index(indexRelation);
+			RelationCreateStorage(indexRelation->rd_node, RELPERSISTENCE_GLOBAL_TEMP, indexRelation);
+		}
 	}
 
 	/*
@@ -3440,6 +3497,10 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 	volatile bool skipped_constraint = false;
 	PGRUsage	ru0;
 	bool		progress = (options & REINDEXOPT_REPORT_PROGRESS) != 0;
+
+	if (persistence == RELPERSISTENCE_GLOBAL_TEMP &&
+		!gtt_storage_attached(indexId))
+		return;
 
 	pg_rusage_init(&ru0);
 

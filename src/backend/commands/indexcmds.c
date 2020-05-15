@@ -521,6 +521,7 @@ DefineIndex(Oid relationId,
 	Snapshot	snapshot;
 	int			save_nestlevel = -1;
 	int			i;
+	char		rel_persistence;
 
 	/*
 	 * Some callers need us to run with an empty default_tablespace; this is a
@@ -542,7 +543,9 @@ DefineIndex(Oid relationId,
 	 * is more efficient.  Do this before any use of the concurrent option is
 	 * done.
 	 */
-	if (stmt->concurrent && get_rel_persistence(relationId) != RELPERSISTENCE_TEMP)
+	rel_persistence = get_rel_persistence(relationId);
+	if (stmt->concurrent &&
+		!(rel_persistence == RELPERSISTENCE_TEMP || rel_persistence == RELPERSISTENCE_GLOBAL_TEMP))
 		concurrent = true;
 	else
 		concurrent = false;
@@ -2460,7 +2463,8 @@ ReindexIndex(RangeVar *indexRelation, int options, bool concurrent)
 	persistence = irel->rd_rel->relpersistence;
 	index_close(irel, NoLock);
 
-	if (concurrent && persistence != RELPERSISTENCE_TEMP)
+	if (concurrent &&
+		!(persistence == RELPERSISTENCE_TEMP || persistence == RELPERSISTENCE_GLOBAL_TEMP))
 		ReindexRelationConcurrently(indOid, options);
 	else
 		reindex_index(indOid, false, persistence,
@@ -2546,6 +2550,7 @@ ReindexTable(RangeVar *relation, int options, bool concurrent)
 {
 	Oid			heapOid;
 	bool		result;
+	char		rel_persistence;
 
 	/*
 	 * The lock level used here should match reindex_relation().
@@ -2560,7 +2565,9 @@ ReindexTable(RangeVar *relation, int options, bool concurrent)
 									   0,
 									   RangeVarCallbackOwnsTable, NULL);
 
-	if (concurrent && get_rel_persistence(heapOid) != RELPERSISTENCE_TEMP)
+	rel_persistence = get_rel_persistence(heapOid);
+	if (concurrent &&
+		!(rel_persistence == RELPERSISTENCE_TEMP || rel_persistence == RELPERSISTENCE_GLOBAL_TEMP))
 	{
 		result = ReindexRelationConcurrently(heapOid, options);
 
@@ -2761,12 +2768,15 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 	foreach(l, relids)
 	{
 		Oid			relid = lfirst_oid(l);
+		char		rel_persistence;
 
 		StartTransactionCommand();
 		/* functions in indexes may want a snapshot set */
 		PushActiveSnapshot(GetTransactionSnapshot());
 
-		if (concurrent && get_rel_persistence(relid) != RELPERSISTENCE_TEMP)
+		rel_persistence = get_rel_persistence(relid);
+		if (concurrent &&
+			!(rel_persistence == RELPERSISTENCE_TEMP || rel_persistence == RELPERSISTENCE_GLOBAL_TEMP))
 		{
 			(void) ReindexRelationConcurrently(relid, options);
 			/* ReindexRelationConcurrently() does the verbose output */

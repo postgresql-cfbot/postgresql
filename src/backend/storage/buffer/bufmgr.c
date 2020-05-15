@@ -37,6 +37,7 @@
 #include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "executor/instrument.h"
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
@@ -53,6 +54,7 @@
 #include "utils/rel.h"
 #include "utils/resowner_private.h"
 #include "utils/timestamp.h"
+#include "utils/guc.h"
 
 
 /* Note: these two macros only work on shared buffers, not local ones! */
@@ -2819,6 +2821,16 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 BlockNumber
 RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forkNum)
 {
+	/*
+	 * When this backend not init gtt storage
+	 * return 0
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(relation) &&
+		!gtt_storage_attached(RelationGetRelid(relation)))
+	{
+		return 0;
+	}
+
 	switch (relation->rd_rel->relkind)
 	{
 		case RELKIND_SEQUENCE:

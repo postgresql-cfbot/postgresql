@@ -393,7 +393,9 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 
 	switch (relpersistence)
 	{
+		/* global temp table is same as local temp table */
 		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_GLOBAL_TEMP:
 			backend = BackendIdForTempRelations();
 			break;
 		case RELPERSISTENCE_UNLOGGED:

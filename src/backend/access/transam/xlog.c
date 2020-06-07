@@ -2820,7 +2820,7 @@ UpdateMinRecoveryPoint(XLogRecPtr lsn, bool force)
 		{
 			ControlFile->minRecoveryPoint = newMinRecoveryPoint;
 			ControlFile->minRecoveryPointTLI = newMinRecoveryPointTLI;
-			UpdateControlFile();
+			UpdateControlFile(true);
 			minRecoveryPoint = newMinRecoveryPoint;
 			minRecoveryPointTLI = newMinRecoveryPointTLI;
 
@@ -4434,7 +4434,7 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 				 */
 				updateMinRecoveryPoint = true;
 
-				UpdateControlFile();
+				UpdateControlFile(true);
 
 				/*
 				 * We update SharedRecoveryState while holding the lock on
@@ -4896,10 +4896,16 @@ ReadControlFile(void)
 /*
  * Utility wrapper to update the control file.  Note that the control
  * file gets flushed.
+ *
+ * Most callers should acquire ControlFileLock exclusively before calling
+ * this function.  Callers that can safely use this function without holding
+ * the lock should set holds_lock to false.  Otherwise, holds_lock should be
+ * set to true.
  */
 void
-UpdateControlFile(void)
+UpdateControlFile(bool holds_lock)
 {
+	Assert(!holds_lock || LWLockHeldByMeInMode(ControlFileLock, LW_EXCLUSIVE));
 	update_controlfile(DataDir, ControlFile, true);
 }
 
@@ -6956,7 +6962,7 @@ StartupXLOG(void)
 		}
 		ControlFile->time = (pg_time_t) time(NULL);
 		/* No need to hold ControlFileLock yet, we aren't up far enough */
-		UpdateControlFile();
+		UpdateControlFile(false);
 
 		/*
 		 * Initialize our local copy of minRecoveryPoint.  When doing crash
@@ -7940,7 +7946,7 @@ StartupXLOG(void)
 	XLogCtl->SharedRecoveryState = RECOVERY_STATE_DONE;
 	SpinLockRelease(&XLogCtl->info_lck);
 
-	UpdateControlFile();
+	UpdateControlFile(true);
 	LWLockRelease(ControlFileLock);
 
 	/*
@@ -8007,7 +8013,7 @@ CheckRecoveryConsistency(void)
 		ControlFile->backupStartPoint = InvalidXLogRecPtr;
 		ControlFile->backupEndPoint = InvalidXLogRecPtr;
 		ControlFile->backupEndRequired = false;
-		UpdateControlFile();
+		UpdateControlFile(true);
 
 		LWLockRelease(ControlFileLock);
 	}
@@ -8762,7 +8768,7 @@ CreateCheckPoint(int flags)
 		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 		ControlFile->state = DB_SHUTDOWNING;
 		ControlFile->time = (pg_time_t) time(NULL);
-		UpdateControlFile();
+		UpdateControlFile(true);
 		LWLockRelease(ControlFileLock);
 	}
 
@@ -9044,7 +9050,7 @@ CreateCheckPoint(int flags)
 	ControlFile->unloggedLSN = XLogCtl->unloggedLSN;
 	SpinLockRelease(&XLogCtl->ulsn_lck);
 
-	UpdateControlFile();
+	UpdateControlFile(true);
 	LWLockRelease(ControlFileLock);
 
 	/* Update shared-memory copy of checkpoint XID/epoch */
@@ -9153,7 +9159,7 @@ CreateEndOfRecoveryRecord(void)
 	ControlFile->time = (pg_time_t) time(NULL);
 	ControlFile->minRecoveryPoint = recptr;
 	ControlFile->minRecoveryPointTLI = ThisTimeLineID;
-	UpdateControlFile();
+	UpdateControlFile(true);
 	LWLockRelease(ControlFileLock);
 
 	END_CRIT_SECTION();
@@ -9304,7 +9310,7 @@ CreateRestartPoint(int flags)
 			LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 			ControlFile->state = DB_SHUTDOWNED_IN_RECOVERY;
 			ControlFile->time = (pg_time_t) time(NULL);
-			UpdateControlFile();
+			UpdateControlFile(true);
 			LWLockRelease(ControlFileLock);
 		}
 		LWLockRelease(CheckpointLock);
@@ -9386,7 +9392,7 @@ CreateRestartPoint(int flags)
 		}
 		if (flags & CHECKPOINT_IS_SHUTDOWN)
 			ControlFile->state = DB_SHUTDOWNED_IN_RECOVERY;
-		UpdateControlFile();
+		UpdateControlFile(true);
 	}
 	LWLockRelease(ControlFileLock);
 
@@ -9743,6 +9749,8 @@ XLogReportParameters(void)
 			XLogFlush(recptr);
 		}
 
+		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+
 		ControlFile->MaxConnections = MaxConnections;
 		ControlFile->max_worker_processes = max_worker_processes;
 		ControlFile->max_wal_senders = max_wal_senders;
@@ -9751,7 +9759,9 @@ XLogReportParameters(void)
 		ControlFile->wal_level = wal_level;
 		ControlFile->wal_log_hints = wal_log_hints;
 		ControlFile->track_commit_timestamp = track_commit_timestamp;
-		UpdateControlFile();
+		UpdateControlFile(true);
+
+		LWLockRelease(ControlFileLock);
 	}
 }
 
@@ -9976,7 +9986,9 @@ xlog_redo(XLogReaderState *record)
 		}
 
 		/* ControlFile->checkPointCopy always tracks the latest ckpt XID */
+		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 		ControlFile->checkPointCopy.nextFullXid = checkPoint.nextFullXid;
+		LWLockRelease(ControlFileLock);
 
 		/* Update shared-memory copy of checkpoint XID/epoch */
 		SpinLockAcquire(&XLogCtl->info_lck);
@@ -10033,7 +10045,9 @@ xlog_redo(XLogReaderState *record)
 			SetTransactionIdLimit(checkPoint.oldestXid,
 								  checkPoint.oldestXidDB);
 		/* ControlFile->checkPointCopy always tracks the latest ckpt XID */
+		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 		ControlFile->checkPointCopy.nextFullXid = checkPoint.nextFullXid;
+		LWLockRelease(ControlFileLock);
 
 		/* Update shared-memory copy of checkpoint XID/epoch */
 		SpinLockAcquire(&XLogCtl->info_lck);
@@ -10134,7 +10148,7 @@ xlog_redo(XLogReaderState *record)
 			}
 			ControlFile->backupStartPoint = InvalidXLogRecPtr;
 			ControlFile->backupEndRequired = false;
-			UpdateControlFile();
+			UpdateControlFile(true);
 
 			LWLockRelease(ControlFileLock);
 		}
@@ -10178,7 +10192,7 @@ xlog_redo(XLogReaderState *record)
 								ControlFile->track_commit_timestamp);
 		ControlFile->track_commit_timestamp = xlrec.track_commit_timestamp;
 
-		UpdateControlFile();
+		UpdateControlFile(true);
 		LWLockRelease(ControlFileLock);
 
 		/* Check to see if any parameter change gives a problem on recovery */

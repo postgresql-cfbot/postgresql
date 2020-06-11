@@ -4,7 +4,7 @@ use warnings;
 use Config;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 78;
+use Test::More tests => 80;
 
 my $tempdir       = TestLib::tempdir;
 my $tempdir_short = TestLib::tempdir_short;
@@ -174,4 +174,10 @@ command_fails_like(
 	[ 'pg_dumpall', '--exclude-database=foo', '--globals-only' ],
 	qr/\Qpg_dumpall: error: option --exclude-database cannot be used together with -g\/--globals-only\E/,
 	'pg_dumpall: option --exclude-database cannot be used together with -g/--globals-only'
+);
+
+command_fails_like(
+       [ 'pg_dump', '--extra-float-digits', '4' ],
+       qr/\Qpg_dump: error: extra_float_digits must be in range -15..3\E/,
+       'pg_dump: extra_float_digits must be in range -15..3'
 );

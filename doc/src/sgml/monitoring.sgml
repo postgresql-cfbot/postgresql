@@ -5690,6 +5690,12 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
      </entry>
     </row>
     <row>
+     <entry><structfield>confl_logicalslot</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>Number of queries in this database that have been canceled due to
+      logical slots</entry>
+    </row>
+    <row>
      <entry><literal>scanning heap</literal></entry>
      <entry>
        <command>VACUUM</command> is currently scanning the heap.  It will prune and

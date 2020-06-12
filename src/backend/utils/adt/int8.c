@@ -147,11 +147,9 @@ Datum
 int8out(PG_FUNCTION_ARGS)
 {
 	int64		val = PG_GETARG_INT64(0);
-	char		buf[MAXINT8LEN + 1];
-	char	   *result;
+	char	   *result = (char *) palloc(MAXINT8LEN + 1);
 
-	pg_lltoa(val, buf);
-	result = pstrdup(buf);
+	pg_lltoa(val, result);
 	PG_RETURN_CSTRING(result);
 }
 

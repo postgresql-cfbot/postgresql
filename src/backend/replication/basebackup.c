@@ -1659,15 +1659,47 @@ sendFile(const char *readfilename, const char *tarfilename,
 				page = buf + BLCKSZ * i;
 
 				/*
-				 * Only check pages which have not been modified since the
-				 * start of the base backup. Otherwise, they might have been
-				 * written only halfway and the checksum would not be valid.
-				 * However, replaying WAL would reinstate the correct page in
-				 * this case. We also skip completely new pages, since they
-				 * don't have a checksum yet.
+				 * We skip completely new pages after checking they are
+				 * all-zero, since they don't have a checksum yet.
 				 */
-				if (!PageIsNew(page) && PageGetLSN(page) < startptr)
+				if (PageIsNew(page))
 				{
+					if (!PageIsZero(page))
+					{
+						/*
+						 * pd_upper is zero, but the page is not all zero.  We
+						 * cannot run pg_checksum_page() on the page as it
+						 * would throw an assertion failure.  Consider this a
+						 * checksum failure.
+						 */
+						checksum_failures++;
+
+						if (checksum_failures <= 5)
+							ereport(WARNING,
+									(errmsg("checksum verification failed in "
+											"file \"%s\", block %d: pd_upper "
+											"is zero but page is not all-zero",
+											readfilename, blkno)));
+						if (checksum_failures == 5)
+							ereport(WARNING,
+									(errmsg("further checksum verification "
+											"failures in file \"%s\" will not "
+											"be reported", readfilename)));
+					}
+				}
+				else if (PageGetLSN(page) < startptr ||
+						 PageGetLSN(page) > GetInsertRecPtr())
+				{
+					/*
+					 * Only check pages which have not been modified since the
+					 * start of the base backup. Otherwise, they might have
+					 * been written only halfway and the checksum would not be
+					 * valid. However, replaying WAL would reinstate the
+					 * correct page in this case. If the page LSN is larger
+					 * than the current insert pointer then we assume a bogus
+					 * LSN due to random page header corruption and do verify
+					 * the checksum.
+					 */
 					checksum = pg_checksum_page((char *) page, blkno + segmentno * RELSEG_SIZE);
 					phdr = (PageHeader) page;
 					if (phdr->pd_checksum != checksum)
@@ -1695,20 +1727,6 @@ sendFile(const char *readfilename, const char *tarfilename,
 
 							if (fread(buf + BLCKSZ * i, 1, BLCKSZ, fp) != BLCKSZ)
 							{
-								/*
-								 * If we hit end-of-file, a concurrent
-								 * truncation must have occurred, so break out
-								 * of this loop just as if the initial fread()
-								 * returned 0. We'll drop through to the same
-								 * code that handles that case. (We must fix
-								 * up cnt first, though.)
-								 */
-								if (feof(fp))
-								{
-									cnt = BLCKSZ * i;
-									break;
-								}
-
 								ereport(ERROR,
 										(errcode_for_file_access(),
 										 errmsg("could not reread block %d of file \"%s\": %m",

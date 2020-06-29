@@ -1,0 +1,24 @@
+#  appveyor.yml
+install:
+  - '"C:\Program Files\Microsoft SDKs\Windows\v7.1\Bin\SetEnv.cmd" /x64'
+  - '"C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\vcvarsall.bat" x86_amd64'
+  - SET PATH=%PATH%;C:\msys64\usr\bin
+
+before_build:
+  - perl buildsetup.pl
+
+build:
+  project: pgsql.sln
+
+before_test:
+  - 'perl -p -i.bak -e "s/^test: tablespace/#test: tablespace/" src/test/regress/serial_schedule'
+  - 'perl -p -i.bak -e "s/^test: tablespace/#test: tablespace/" src/test/regress/parallel_schedule'
+
+test_script:
+  - cd src\tools\msvc && vcregress check
+
+on_failure:
+  - perl dumpregr.pl
+
+configuration:
+  - Release

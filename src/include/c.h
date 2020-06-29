@@ -179,6 +179,21 @@
 #endif
 
 /*
+ * Marking certain functions as "hot" or "cold" can be useful to assist the
+ * compiler in arranging the assembly code in a more efficient way.
+ * These are supported from GCC >= 4.3 and clang >= 3.2
+ */
+#if (defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 3))) || \
+	(defined(__clang__) && (__clang_major__ > 3 || (__clang_major__ == 3 && __clang_minor__ >= 2)))
+#define HAVE_PG_ATTRIBUTE_HOT_AND_COLD 1
+#define pg_attribute_hot __attribute__((hot))
+#define pg_attribute_cold __attribute__((cold))
+#else
+#define pg_attribute_hot
+#define pg_attribute_cold
+#endif
+
+/*
  * Mark a point as unreachable in a portable fashion.  This should preferably
  * be something that the compiler understands, to aid code generation.
  * In assert-enabled builds, we prefer abort() for debugging reasons.

@@ -121,6 +121,18 @@
  *----------
  */
 #ifdef HAVE__BUILTIN_CONSTANT_P
+#ifdef HAVE_PG_ATTRIBUTE_HOT_AND_COLD
+#define ereport_domain(elevel, domain, ...)	\
+	do { \
+		pg_prevent_errno_in_scope(); \
+		if (__builtin_constant_p(elevel) && (elevel) >= ERROR ? \
+			 errstart_cold(elevel, domain) : \
+			 errstart(elevel, domain)) \
+			__VA_ARGS__, errfinish(__FILE__, __LINE__, PG_FUNCNAME_MACRO); \
+		if (__builtin_constant_p(elevel) && (elevel) >= ERROR) \
+			pg_unreachable(); \
+	} while(0)
+#else							/* !HAVE_PG_ATTRIBUTE_HOT_AND_COLD */
 #define ereport_domain(elevel, domain, ...)	\
 	do { \
 		pg_prevent_errno_in_scope(); \
@@ -129,6 +141,7 @@
 		if (__builtin_constant_p(elevel) && (elevel) >= ERROR) \
 			pg_unreachable(); \
 	} while(0)
+#endif							/* HAVE_PG_ATTRIBUTE_HOT_AND_COLD */
 #else							/* !HAVE__BUILTIN_CONSTANT_P */
 #define ereport_domain(elevel, domain, ...)	\
 	do { \
@@ -146,6 +159,9 @@
 
 #define TEXTDOMAIN NULL
 
+#ifdef HAVE_PG_ATTRIBUTE_HOT_AND_COLD
+extern bool pg_attribute_cold errstart_cold(int elevel, const char *domain);
+#endif
 extern bool errstart(int elevel, const char *domain);
 extern void errfinish(const char *filename, int lineno, const char *funcname);
 

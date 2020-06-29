@@ -219,6 +219,19 @@ err_gettext(const char *str)
 #endif
 }
 
+#if defined(HAVE_PG_ATTRIBUTE_HOT_AND_COLD) && defined(HAVE__BUILTIN_CONSTANT_P)
+/*
+ * errstart_cold
+ *		A simple wrapper around errstart, but hinted to be cold so that the
+ *		compiler is more likely to put error code in a cold area away from the
+ *		main function body.
+ */
+bool
+pg_attribute_cold errstart_cold(int elevel, const char *domain)
+{
+	return errstart(elevel, domain);
+}
+#endif
 
 /*
  * errstart --- begin an error-reporting cycle

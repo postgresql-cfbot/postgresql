@@ -66,6 +66,21 @@ SharedFileSetInit(SharedFileSet *fileset, dsm_segment *seg)
 		fileset->tablespaces[0] = DEFAULTTABLESPACE_OID;
 		fileset->ntablespaces = 1;
 	}
+	else
+	{
+		int			i;
+
+		/*
+		 * An entry of InvalidOid means use the default tablespace for the
+		 * current database.  Replace that now, to be sure that all users of
+		 * the SharedFileSet agree on what to do.
+		 */
+		for (i = 0; i < fileset->ntablespaces; i++)
+		{
+			if (fileset->tablespaces[i] == InvalidOid)
+				fileset->tablespaces[i] = MyDatabaseTableSpace;
+		}
+	}
 
 	/* Register our cleanup callback. */
 	on_dsm_detach(seg, SharedFileSetOnDetach, PointerGetDatum(fileset));

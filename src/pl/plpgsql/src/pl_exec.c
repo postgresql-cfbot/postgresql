@@ -417,10 +417,14 @@ static void instantiate_empty_record_variable(PLpgSQL_execstate *estate,
 											  PLpgSQL_rec *rec);
 static char *convert_value_to_string(PLpgSQL_execstate *estate,
 									 Datum value, Oid valtype);
-static Datum exec_cast_value(PLpgSQL_execstate *estate,
+static inline Datum exec_cast_value(PLpgSQL_execstate *estate,
 							 Datum value, bool *isnull,
 							 Oid valtype, int32 valtypmod,
 							 Oid reqtype, int32 reqtypmod);
+static Datum do_cast_value(PLpgSQL_execstate *estate,
+				Datum value, bool *isnull,
+				Oid valtype, int32 valtypmod,
+				Oid reqtype, int32 reqtypmod);
 static plpgsql_CastHashEntry *get_cast_hashentry(PLpgSQL_execstate *estate,
 												 Oid srctype, int32 srctypmod,
 												 Oid dsttype, int32 dsttypmod);
@@ -7823,9 +7827,11 @@ convert_value_to_string(PLpgSQL_execstate *estate, Datum value, Oid valtype)
  * also contain the result Datum if we have to do a conversion to a pass-
  * by-reference data type.  Be sure to do an exec_eval_cleanup() call when
  * done with the result.
+ * The actual code to cast is kept outside of this function, to keep it short
+ * since it is an inline function, being called frequently.
  * ----------
  */
-static Datum
+static inline Datum
 exec_cast_value(PLpgSQL_execstate *estate,
 				Datum value, bool *isnull,
 				Oid valtype, int32 valtypmod,
@@ -7836,31 +7842,48 @@ exec_cast_value(PLpgSQL_execstate *estate,
 	 */
 	if (valtype != reqtype ||
 		(valtypmod != reqtypmod && reqtypmod != -1))
+		value = do_cast_value(estate, value, isnull, valtype, valtypmod,
+							  reqtype, reqtypmod);
+
+	return value;
+}
+
+/* ----------
+ * do_cast_value			cast the input value.
+ *
+ * Returns the cast value.
+ * Check comments in the wrapper function exec_cast_value().
+ * ----------
+ */
+static Datum
+do_cast_value(PLpgSQL_execstate *estate,
+				Datum value, bool *isnull,
+				Oid valtype, int32 valtypmod,
+				Oid reqtype, int32 reqtypmod)
+{
+	plpgsql_CastHashEntry *cast_entry;
+
+	cast_entry = get_cast_hashentry(estate,
+									valtype, valtypmod,
+									reqtype, reqtypmod);
+	if (cast_entry)
 	{
-		plpgsql_CastHashEntry *cast_entry;
+		ExprContext *econtext = estate->eval_econtext;
+		MemoryContext oldcontext;
 
-		cast_entry = get_cast_hashentry(estate,
-										valtype, valtypmod,
-										reqtype, reqtypmod);
-		if (cast_entry)
-		{
-			ExprContext *econtext = estate->eval_econtext;
-			MemoryContext oldcontext;
+		oldcontext = MemoryContextSwitchTo(get_eval_mcontext(estate));
 
-			oldcontext = MemoryContextSwitchTo(get_eval_mcontext(estate));
+		econtext->caseValue_datum = value;
+		econtext->caseValue_isNull = *isnull;
 
-			econtext->caseValue_datum = value;
-			econtext->caseValue_isNull = *isnull;
+		cast_entry->cast_in_use = true;
 
-			cast_entry->cast_in_use = true;
+		value = ExecEvalExpr(cast_entry->cast_exprstate, econtext,
+							 isnull);
 
-			value = ExecEvalExpr(cast_entry->cast_exprstate, econtext,
-								 isnull);
+		cast_entry->cast_in_use = false;
 
-			cast_entry->cast_in_use = false;
-
-			MemoryContextSwitchTo(oldcontext);
-		}
+		MemoryContextSwitchTo(oldcontext);
 	}
 
 	return value;

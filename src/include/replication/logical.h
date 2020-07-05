@@ -80,6 +80,11 @@ typedef struct LogicalDecodingContext
 	void	   *output_writer_private;
 
 	/*
+	 * Does the output plugin support streaming, and is it enabled?
+	 */
+	bool		streaming;
+
+	/*
 	 * State for writing output.
 	 */
 	bool		accept_writes;
@@ -116,5 +121,6 @@ extern void LogicalIncreaseRestartDecodingForSlot(XLogRecPtr current_lsn,
 extern void LogicalConfirmReceivedLocation(XLogRecPtr lsn);
 
 extern bool filter_by_origin_cb_wrapper(LogicalDecodingContext *ctx, RepOriginId origin_id);
+extern void ResetLogicalStreamingState(void);
 
 #endif

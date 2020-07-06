@@ -2686,7 +2686,10 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 		{
 			TupleTableSlot *epqslot_clean;
 
-			epqslot_clean = ExecFilterJunk(relinfo->ri_junkFilter, epqslot_candidate);
+			Assert(relinfo->ri_projectNew != NULL);
+			Assert(relinfo->ri_oldTupleSlot != NULL);
+			epqslot_clean = ExecGetUpdateNewTuple(relinfo, epqslot_candidate,
+												  tupleid, NULL);
 
 			if (newslot != epqslot_clean)
 				ExecCopySlot(newslot, epqslot_clean);

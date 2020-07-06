@@ -81,18 +81,6 @@ typedef enum UpperRelationKind
 	/* NB: UPPERREL_FINAL must be last enum entry; it's used to size arrays */
 } UpperRelationKind;
 
-/*
- * This enum identifies which type of relation is being planned through the
- * inheritance planner.  INHKIND_NONE indicates the inheritance planner
- * was not used.
- */
-typedef enum InheritanceKind
-{
-	INHKIND_NONE,
-	INHKIND_INHERITED,
-	INHKIND_PARTITIONED
-} InheritanceKind;
-
 /*----------
  * PlannerGlobal
  *		Global information for planning/optimization
@@ -218,6 +206,12 @@ struct PlannerInfo
 	 */
 	struct AppendRelInfo **append_rel_array;
 
+	/* Valid for UPDATE/DELETE. */
+	List	   *result_rel_list;	/* List of ResultRelPlanInfo */
+	/* Same length as other "simple" rel arrays. */
+	struct ResultRelPlanInfo **result_rel_array;
+	List	   *specialJunkVars;	/* List of SpecialJunkVarInfo */
+
 	/*
 	 * all_baserels is a Relids set of all base relids (but not "other"
 	 * relids) in the query; that is, the Relids identifier of the final join
@@ -339,9 +333,6 @@ struct PlannerInfo
 	Index		qual_security_level;	/* minimum security_level for quals */
 	/* Note: qual_security_level is zero if there are no securityQuals */
 
-	InheritanceKind inhTargetKind;	/* indicates if the target relation is an
-									 * inheritance child or partition or a
-									 * partitioned table */
 	bool		hasJoinRTEs;	/* true if any RTEs are RTE_JOIN kind */
 	bool		hasLateralRTEs; /* true if any RTEs are marked LATERAL */
 	bool		hasHavingQual;	/* true if havingQual was non-null */
@@ -1818,6 +1809,7 @@ typedef struct ModifyTablePath
 	List	   *resultRelations;	/* integer list of RT indexes */
 	List	   *subpaths;		/* Path(s) producing source data */
 	List	   *subroots;		/* per-target-table PlannerInfos */
+	List	   *updateTargetLists; /* per-target-table tlists */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */
 	List	   *returningLists; /* per-target-table RETURNING tlists */
 	List	   *rowMarks;		/* PlanRowMarks (non-locking only) */
@@ -2272,6 +2264,85 @@ typedef struct AppendRelInfo
 	 */
 	Oid			parent_reloid;	/* OID of parent relation */
 } AppendRelInfo;
+
+/*
+ * ResultRelPlanInfo
+ *		Information about UPDATE/DELETE result relations
+ *
+ * For the original result relation, these fields point to the information
+ * in the original Query, except the target lists are different.
+ * subplanTargetList is set to a copy of PlannerInfo.processed_tlist after all
+ * the necessary junk columns have been added and is also what the top-level
+ * plan produces.  updateTargetList is obtained by applying expand_targetlist()
+ * to subplanTargetList, followed by filtering out junk columns, so that its
+ * output is a tuple ready to be put into the result relation.
+ *
+ * For child result relations, relevant fields are obtained by translating Vars
+ * and for updateTargetList also adjusting the resnos to match the child
+ * attributes numbers.
+ *
+ * Everything execpt subplanTargetList goes into the ModifyTable node.
+ *
+ * See set_result_relation_info().
+ */
+typedef struct ResultRelPlanInfo
+{
+	NodeTag		type;
+
+	Index		resultRelation;
+	List	   *subplanTargetList;
+	List	   *updateTargetList;
+	List	   *withCheckOptions;
+	List	   *returningList;
+} ResultRelPlanInfo;
+
+/*
+ * SpecialJunkVarInfo
+ *
+ * This contains mapping information about certain junk Vars contained in the
+ * top-level targetlist.
+ *
+ * When updating (or deleting) inheritance hierarchies, some child tables may
+ * require row-identifying junk Vars that are not same as the one installed by
+ * the table being modified (the inheritance root).  For each such group of
+ * child junk vars (typically coming from the same FDW), we add a TargetEntry
+ * containing a "special" Var to the top-level target list, while also adding
+ * adding the Var to the root parent's reltarget, and the information to map
+ * the special Var back to the child Var is stored in this node.  A list of
+ * these nodes is present in PlannerInfo.specialJunkVars.
+ *
+ * The Var is special, because the parent may not actually be able to produce
+ * a value for it by itself.  That is not a problem in practice, because the
+ * actual value for it comes from the child table that introduced such a Var
+ * in the first place.  adjust_appendrel_attrs_mutator() which maps the
+ * parent's Vars to a given child's refers to the mapping information here
+ * to convert a special parent Var to the child Var.
+ */
+typedef struct SpecialJunkVarInfo
+{
+	NodeTag		type;
+
+	/* TargetEntry resname */
+	char	   *attrname;
+
+	/* Child Var info */
+	Oid			vartype;
+	int			vartypmod;
+	Oid			varcollid;
+	AttrNumber	varattno;
+
+	/*
+	 * Special parent attribute number.  If not 0, this starts at
+	 * parent's RelOptInfo.max_attr + 1.
+	 */
+	AttrNumber	special_attno;
+
+	/*
+	 * RT indexes of all child relations sharing a given instance of this
+	 * node.
+	 */
+	Relids		child_relids;
+} SpecialJunkVarInfo;
 
 /*
  * For each distinct placeholder expression generated during planning, we

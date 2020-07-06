@@ -54,4 +54,6 @@ extern void split_pathtarget_at_srfs(PlannerInfo *root,
 #define create_pathtarget(root, tlist) \
 	set_pathtarget_cost_width(root, make_pathtarget_from_tlist(tlist))
 
+extern SpecialJunkVarInfo *get_special_junk_var(PlannerInfo *root,
+					Index special_attno);
 #endif							/* TLIST_H */

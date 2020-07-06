@@ -18,6 +18,7 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/appendinfo.h"
+#include "optimizer/tlist.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -29,6 +30,7 @@ typedef struct
 	PlannerInfo *root;
 	int			nappinfos;
 	AppendRelInfo **appinfos;
+	bool		need_parent_wholerow;
 } adjust_appendrel_attrs_context;
 
 static void make_inh_translation_list(Relation oldrelation,
@@ -37,8 +39,6 @@ static void make_inh_translation_list(Relation oldrelation,
 									  AppendRelInfo *appinfo);
 static Node *adjust_appendrel_attrs_mutator(Node *node,
 											adjust_appendrel_attrs_context *context);
-static List *adjust_inherited_tlist(List *tlist,
-									AppendRelInfo *context);
 
 
 /*
@@ -200,42 +200,42 @@ adjust_appendrel_attrs(PlannerInfo *root, Node *node, int nappinfos,
 	context.root = root;
 	context.nappinfos = nappinfos;
 	context.appinfos = appinfos;
+	context.need_parent_wholerow = true;
 
 	/* If there's nothing to adjust, don't call this function. */
 	Assert(nappinfos >= 1 && appinfos != NULL);
 
-	/*
-	 * Must be prepared to start with a Query or a bare expression tree.
-	 */
-	if (node && IsA(node, Query))
-	{
-		Query	   *newnode;
-		int			cnt;
+	/* Should never be translating a Query tree. */
+	Assert (node == NULL || !IsA(node, Query));
+	result = adjust_appendrel_attrs_mutator(node, &context);
 
-		newnode = query_tree_mutator((Query *) node,
-									 adjust_appendrel_attrs_mutator,
-									 (void *) &context,
-									 QTW_IGNORE_RC_SUBQUERIES);
-		for (cnt = 0; cnt < nappinfos; cnt++)
-		{
-			AppendRelInfo *appinfo = appinfos[cnt];
+	return result;
+}
 
-			if (newnode->resultRelation == appinfo->parent_relid)
-			{
-				newnode->resultRelation = appinfo->child_relid;
-				/* Fix tlist resnos too, if it's inherited UPDATE */
-				if (newnode->commandType == CMD_UPDATE)
-					newnode->targetList =
-						adjust_inherited_tlist(newnode->targetList,
-											   appinfo);
-				break;
-			}
-		}
+/*
+ * adjust_target_appendrel_attrs
+ *		like adjust_appendrel_attrs, but treats wholerow Vars a bit
+ *		differently in that it doesn't convert any child table
+ *		wholerows contained in 'node' back to the parent reltype.
+ */
+Node *
+adjust_target_appendrel_attrs(PlannerInfo *root, Node *node,
+							  AppendRelInfo *appinfo)
+{
+	Node	   *result;
+	adjust_appendrel_attrs_context context;
 
-		result = (Node *) newnode;
-	}
-	else
-		result = adjust_appendrel_attrs_mutator(node, &context);
+	context.root = root;
+	context.nappinfos = 1;
+	context.appinfos = &appinfo;
+	context.need_parent_wholerow = false;
+
+	/* If there's nothing to adjust, don't call this function. */
+	Assert(appinfo != NULL);
+
+	/* Should never be translating a Query tree. */
+	Assert (node == NULL || !IsA(node, Query));
+	result = adjust_appendrel_attrs_mutator(node, &context);
 
 	return result;
 }
@@ -277,9 +277,25 @@ adjust_appendrel_attrs_mutator(Node *node,
 			{
 				Node	   *newnode;
 
+				/*
+				 * If this Var appears to have a unusual attno assigned,
+				 * it must be one of the "special" Vars assigned to parent
+				 * target table.
+				 */
 				if (var->varattno > list_length(appinfo->translated_vars))
-					elog(ERROR, "attribute %d of relation \"%s\" does not exist",
-						 var->varattno, get_rel_name(appinfo->parent_reloid));
+				{
+					SpecialJunkVarInfo *sjv =
+						get_special_junk_var(context->root, var->varattno);
+
+					if (sjv == NULL)
+						elog(ERROR, "attribute %d of relation \"%s\" does not exist",
+							 var->varattno, get_rel_name(appinfo->parent_reloid));
+					if (!bms_is_member(appinfo->child_relid, sjv->child_relids))
+						return (Node *) makeNullConst(var->vartype,
+													  var->vartypmod,
+													  var->varcollid);
+					var->varattno = sjv->varattno;
+				}
 				newnode = copyObject(list_nth(appinfo->translated_vars,
 											  var->varattno - 1));
 				if (newnode == NULL)
@@ -298,7 +314,10 @@ adjust_appendrel_attrs_mutator(Node *node,
 				if (OidIsValid(appinfo->child_reltype))
 				{
 					Assert(var->vartype == appinfo->parent_reltype);
-					if (appinfo->parent_reltype != appinfo->child_reltype)
+					/* Make sure the Var node has the right type ID, too */
+					var->vartype = appinfo->child_reltype;
+					if (appinfo->parent_reltype != appinfo->child_reltype &&
+						context->need_parent_wholerow)
 					{
 						ConvertRowtypeExpr *r = makeNode(ConvertRowtypeExpr);
 
@@ -306,8 +325,6 @@ adjust_appendrel_attrs_mutator(Node *node,
 						r->resulttype = appinfo->parent_reltype;
 						r->convertformat = COERCE_IMPLICIT_CAST;
 						r->location = -1;
-						/* Make sure the Var node has the right type ID, too */
-						var->vartype = appinfo->child_reltype;
 						return (Node *) r;
 					}
 				}
@@ -630,13 +647,9 @@ adjust_child_relids_multilevel(PlannerInfo *root, Relids relids,
  * (We do all this work in special cases so that preptlist.c is fast for
  * the typical case.)
  *
- * The given tlist has already been through expression_tree_mutator;
- * therefore the TargetEntry nodes are fresh copies that it's okay to
- * scribble on.
- *
- * Note that this is not needed for INSERT because INSERT isn't inheritable.
+ * Note that the caller must be okay with the input tlist being scribbled on.
  */
-static List *
+List *
 adjust_inherited_tlist(List *tlist, AppendRelInfo *context)
 {
 	bool		changed_it = false;

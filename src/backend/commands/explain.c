@@ -3667,14 +3667,14 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 	}
 
 	/* Should we explicitly label target relations? */
-	labeltargets = (mtstate->mt_nplans > 1 ||
-					(mtstate->mt_nplans == 1 &&
+	labeltargets = (mtstate->mt_nrels > 1 ||
+					(mtstate->mt_nrels == 1 &&
 					 mtstate->resultRelInfo->ri_RangeTableIndex != node->nominalRelation));
 
 	if (labeltargets)
 		ExplainOpenGroup("Target Tables", "Target Tables", false, es);
 
-	for (j = 0; j < mtstate->mt_nplans; j++)
+	for (j = 0; j < mtstate->mt_nrels; j++)
 	{
 		ResultRelInfo *resultRelInfo = mtstate->resultRelInfo + j;
 		FdwRoutine *fdwroutine = resultRelInfo->ri_FdwRoutine;

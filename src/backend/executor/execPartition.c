@@ -20,6 +20,7 @@
 #include "catalog/pg_type.h"
 #include "executor/execPartition.h"
 #include "executor/executor.h"
+#include "executor/nodeModifyTable.h"
 #include "foreign/fdwapi.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
@@ -94,7 +95,6 @@ struct PartitionTupleRouting
 	ResultRelInfo **partitions;
 	int			num_partitions;
 	int			max_partitions;
-	HTAB	   *subplan_resultrel_htab;
 	MemoryContext memcxt;
 };
 
@@ -147,16 +147,7 @@ typedef struct PartitionDispatchData
 	int			indexes[FLEXIBLE_ARRAY_MEMBER];
 }			PartitionDispatchData;
 
-/* struct to hold result relations coming from UPDATE subplans */
-typedef struct SubplanResultRelHashElem
-{
-	Oid			relid;			/* hash key -- must be first */
-	ResultRelInfo *rri;
-} SubplanResultRelHashElem;
 
-
-static void ExecHashSubPlanResultRelsByOid(ModifyTableState *mtstate,
-										   PartitionTupleRouting *proute);
 static ResultRelInfo *ExecInitPartitionInfo(ModifyTableState *mtstate,
 											EState *estate, PartitionTupleRouting *proute,
 											PartitionDispatch dispatch,
@@ -212,7 +203,6 @@ ExecSetupPartitionTupleRouting(EState *estate, ModifyTableState *mtstate,
 							   Relation rel)
 {
 	PartitionTupleRouting *proute;
-	ModifyTable *node = mtstate ? (ModifyTable *) mtstate->ps.plan : NULL;
 
 	/*
 	 * Here we attempt to expend as little effort as possible in setting up
@@ -233,17 +223,6 @@ ExecSetupPartitionTupleRouting(EState *estate, ModifyTableState *mtstate,
 	 */
 	ExecInitPartitionDispatchInfo(estate, proute, RelationGetRelid(rel),
 								  NULL, 0);
-
-	/*
-	 * If performing an UPDATE with tuple routing, we can reuse partition
-	 * sub-plan result rels.  We build a hash table to map the OIDs of
-	 * partitions present in mtstate->resultRelInfo to their ResultRelInfos.
-	 * Every time a tuple is routed to a partition that we've yet to set the
-	 * ResultRelInfo for, before we go to the trouble of making one, we check
-	 * for a pre-made one in the hash table.
-	 */
-	if (node && node->operation == CMD_UPDATE)
-		ExecHashSubPlanResultRelsByOid(mtstate, proute);
 
 	return proute;
 }
@@ -352,7 +331,7 @@ ExecFindPartition(ModifyTableState *mtstate,
 
 		if (partdesc->is_leaf[partidx])
 		{
-			ResultRelInfo *rri;
+			ResultRelInfo *rri = NULL;
 
 			/*
 			 * Look to see if we've already got a ResultRelInfo for this
@@ -366,27 +345,31 @@ ExecFindPartition(ModifyTableState *mtstate,
 			}
 			else
 			{
-				bool		found = false;
-
 				/*
 				 * We have not yet set up a ResultRelInfo for this partition,
-				 * but if we have a subplan hash table, we might have one
-				 * there.  If not, we'll have to create one.
+				 * but if we might be able to find one in the mtstate's
+				 * result relations array.
 				 */
-				if (proute->subplan_resultrel_htab)
+				if (mtstate && mtstate->mt_subplan_resultrel_hash)
 				{
 					Oid			partoid = partdesc->oids[partidx];
-					SubplanResultRelHashElem *elem;
+					int			whichrel;	/* unused */
 
-					elem = hash_search(proute->subplan_resultrel_htab,
-									   &partoid, HASH_FIND, NULL);
-					if (elem)
+					rri = ExecLookupResultRelByOid(mtstate, partoid,
+												   &whichrel);
+					if (rri)
 					{
-						found = true;
-						rri = elem->rri;
-
 						/* Verify this ResultRelInfo allows INSERTs */
 						CheckValidResultRel(rri, CMD_INSERT);
+
+						/*
+						 * This is required in order to convert the
+						 * partition's tuple to be compatible with the root
+						 * partitioned table's tuple descriptor. When
+						 * generating the per-subplan result rels, this would
+						 * not have been set.
+						 */
+						rri->ri_PartitionRoot = proute->partition_root;
 
 						/* Set up the PartitionRoutingInfo for it */
 						ExecInitRoutingInfo(mtstate, estate, proute, dispatch,
@@ -395,7 +378,7 @@ ExecFindPartition(ModifyTableState *mtstate,
 				}
 
 				/* We need to create a new one. */
-				if (!found)
+				if (rri == NULL)
 					rri = ExecInitPartitionInfo(mtstate, estate, proute,
 												dispatch,
 												rootResultRelInfo, partidx);
@@ -443,51 +426,6 @@ ExecFindPartition(ModifyTableState *mtstate,
 				dispatch = subdispatch;
 			}
 		}
-	}
-}
-
-/*
- * ExecHashSubPlanResultRelsByOid
- *		Build a hash table to allow fast lookups of subplan ResultRelInfos by
- *		partition Oid.  We also populate the subplan ResultRelInfo with an
- *		ri_PartitionRoot.
- */
-static void
-ExecHashSubPlanResultRelsByOid(ModifyTableState *mtstate,
-							   PartitionTupleRouting *proute)
-{
-	HASHCTL		ctl;
-	HTAB	   *htab;
-	int			i;
-
-	memset(&ctl, 0, sizeof(ctl));
-	ctl.keysize = sizeof(Oid);
-	ctl.entrysize = sizeof(SubplanResultRelHashElem);
-	ctl.hcxt = CurrentMemoryContext;
-
-	htab = hash_create("PartitionTupleRouting table", mtstate->mt_nplans,
-					   &ctl, HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
-	proute->subplan_resultrel_htab = htab;
-
-	/* Hash all subplans by their Oid */
-	for (i = 0; i < mtstate->mt_nplans; i++)
-	{
-		ResultRelInfo *rri = &mtstate->resultRelInfo[i];
-		bool		found;
-		Oid			partoid = RelationGetRelid(rri->ri_RelationDesc);
-		SubplanResultRelHashElem *elem;
-
-		elem = (SubplanResultRelHashElem *)
-			hash_search(htab, &partoid, HASH_ENTER, &found);
-		Assert(!found);
-		elem->rri = rri;
-
-		/*
-		 * This is required in order to convert the partition's tuple to be
-		 * compatible with the root partitioned table's tuple descriptor. When
-		 * generating the per-subplan result rels, this was not set.
-		 */
-		rri->ri_PartitionRoot = proute->partition_root;
 	}
 }
 
@@ -566,10 +504,10 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 		 */
 		Assert((node->operation == CMD_INSERT &&
 				list_length(node->withCheckOptionLists) == 1 &&
-				list_length(node->plans) == 1) ||
+				list_length(node->resultRelations) == 1) ||
 			   (node->operation == CMD_UPDATE &&
 				list_length(node->withCheckOptionLists) ==
-				list_length(node->plans)));
+				list_length(node->resultRelations)));
 
 		/*
 		 * Use the WCO list of the first plan as a reference to calculate
@@ -626,10 +564,10 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 		/* See the comment above for WCO lists. */
 		Assert((node->operation == CMD_INSERT &&
 				list_length(node->returningLists) == 1 &&
-				list_length(node->plans) == 1) ||
+				list_length(node->resultRelations) == 1) ||
 			   (node->operation == CMD_UPDATE &&
 				list_length(node->returningLists) ==
-				list_length(node->plans)));
+				list_length(node->resultRelations)));
 
 		/*
 		 * Use the RETURNING list of the first plan as a reference to
@@ -1096,7 +1034,7 @@ void
 ExecCleanupTupleRouting(ModifyTableState *mtstate,
 						PartitionTupleRouting *proute)
 {
-	HTAB	   *htab = proute->subplan_resultrel_htab;
+	HTAB	   *htab = mtstate->mt_subplan_resultrel_hash;
 	int			i;
 
 	/*

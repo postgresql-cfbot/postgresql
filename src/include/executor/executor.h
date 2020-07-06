@@ -603,4 +603,13 @@ extern void CheckCmdReplicaIdentity(Relation rel, CmdType cmd);
 extern void CheckSubscriptionRelkind(char relkind, const char *nspname,
 									 const char *relname);
 
+/* prototypes from functions in nodeModifyTable.c */
+extern ResultRelInfo *ExecLookupResultRelByOid(ModifyTableState *mtstate, Oid reloid,
+						 int *whichrel);
+/* needed by trigger.c */
+extern TupleTableSlot *ExecGetUpdateNewTuple(ResultRelInfo *relinfo,
+						  TupleTableSlot *planSlot,
+						  ItemPointerData *tupleid,
+						  HeapTupleData *oldtuple);
+
 #endif							/* EXECUTOR_H  */

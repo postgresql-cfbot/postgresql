@@ -220,6 +220,25 @@ count_nonjunk_tlist_entries(List *tlist)
 	return len;
 }
 
+/*
+ * filter_junk_tlist_entries
+ *		What it says ...
+ */
+List *
+filter_junk_tlist_entries(List *tlist)
+{
+	List	   *result = NIL;
+	ListCell   *l;
+
+	foreach(l, tlist)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(l);
+
+		if (!tle->resjunk)
+			result = lappend(result, tle);
+	}
+	return result;
+}
 
 /*
  * tlist_same_exprs

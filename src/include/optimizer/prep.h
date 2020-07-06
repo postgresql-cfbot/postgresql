@@ -16,6 +16,7 @@
 
 #include "nodes/pathnodes.h"
 #include "nodes/plannodes.h"
+#include "utils/relcache.h"
 
 
 /*
@@ -35,7 +36,10 @@ extern Relids get_relids_for_join(Query *query, int joinrelid);
  * prototypes for preptlist.c
  */
 extern List *preprocess_targetlist(PlannerInfo *root);
-
+/* XXX not really a "prep" function? */
+extern List *make_update_targetlist(PlannerInfo *root,
+					   Index rti, Relation relation,
+					   List *plan_tlist);
 extern PlanRowMark *get_plan_rowmark(List *rowmarks, Index rtindex);
 
 /*

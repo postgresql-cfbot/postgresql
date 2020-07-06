@@ -35,6 +35,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/supportnodes.h"
+#include "optimizer/appendinfo.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
@@ -111,7 +112,7 @@ static void set_baserel_partition_constraint(Relation relation,
  */
 void
 get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
-				  RelOptInfo *rel)
+				  RelOptInfo *rel, RelOptInfo *parent)
 {
 	Index		varno = rel->relid;
 	Relation	relation;
@@ -462,6 +463,16 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	 */
 	if (inhparent && relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 		set_relation_partition_info(root, rel, relation);
+
+	/*
+	 * If this appears to be a child of an UPDATE/DELETE parent relation, make
+	 * its ResultRelPlanInfo now while we have the relation open.
+	 */
+	if (root->parse->resultRelation &&
+		root->parse->commandType != CMD_INSERT &&
+		parent && root->result_rel_array[parent->relid])
+		make_result_relation_info(root, varno, relation,
+								  root->result_rel_array[parent->relid]);
 
 	table_close(relation, NoLock);
 
@@ -1438,18 +1449,11 @@ relation_excluded_by_constraints(PlannerInfo *root,
 
 			/*
 			 * When constraint_exclusion is set to 'partition' we only handle
-			 * appendrel members.  Normally, they are RELOPT_OTHER_MEMBER_REL
-			 * relations, but we also consider inherited target relations as
-			 * appendrel members for the purposes of constraint exclusion
-			 * (since, indeed, they were appendrel members earlier in
-			 * inheritance_planner).
-			 *
-			 * In both cases, partition pruning was already applied, so there
-			 * is no need to consider the rel's partition constraints here.
+			 * appendrel members.  Partition pruning has already been applied,
+			 * so there is no need to consider the rel's partition constraints
+			 * here.
 			 */
-			if (rel->reloptkind == RELOPT_OTHER_MEMBER_REL ||
-				(rel->relid == root->parse->resultRelation &&
-				 root->inhTargetKind != INHKIND_NONE))
+			if (rel->reloptkind == RELOPT_OTHER_MEMBER_REL)
 				break;			/* appendrel member, so process it */
 			return false;
 
@@ -1462,9 +1466,7 @@ relation_excluded_by_constraints(PlannerInfo *root,
 			 * its partition constraints haven't been considered yet, so
 			 * include them in the processing here.
 			 */
-			if (rel->reloptkind == RELOPT_BASEREL &&
-				!(rel->relid == root->parse->resultRelation &&
-				  root->inhTargetKind != INHKIND_NONE))
+			if (rel->reloptkind == RELOPT_BASEREL)
 				include_partition = true;
 			break;				/* always try to exclude */
 	}
@@ -2343,5 +2345,100 @@ set_baserel_partition_constraint(Relation relation, RelOptInfo *rel)
 		if (rel->relid != 1)
 			ChangeVarNodes((Node *) partconstr, 1, rel->relid, 0);
 		rel->partition_qual = partconstr;
+	}
+}
+
+/*
+ * make_result_relation_info
+ *		Adds information to the PlannerInfo about a UPDATE/DELETE result
+ *		relation that will be made part of the ModifyTable node in the
+ *		final plan.
+ *
+ * For UPDATE, this adds the targetlist (called 'updateTargetList') that is
+ * computed separately from the plan's top-level targetlist to get the tuples
+ * suitable for this result relation.  Some entries are copied directly from
+ * the plan's top-level targetlist while others are simply Vars of the
+ * relation.  In fact, each TLE copied from the top-level targetlist is later
+ * changed such that its expression is an OUTER Var referring to the
+ * appropriate column in the plan's output; see setrefs.c:
+ * set_update_tlist_references().
+ */
+void
+make_result_relation_info(PlannerInfo *root,
+						  Index rti, Relation relation,
+						  ResultRelPlanInfo *parentInfo)
+{
+	Query			  *parse = root->parse;
+	ResultRelPlanInfo *resultInfo = makeNode(ResultRelPlanInfo);
+	AppendRelInfo	  *appinfo = parentInfo ? root->append_rel_array[rti] :
+								NULL;
+	List   *subplanTargetList;
+	List   *returningList = NIL;
+	List   *updateTargetList = NIL;
+	List   *withCheckOptions = NIL;
+
+	Assert(appinfo != NULL || parentInfo == NULL);
+	if (parentInfo)
+	{
+		subplanTargetList = (List *)
+			adjust_appendrel_attrs(root, (Node *) parentInfo->subplanTargetList,
+								   1, &appinfo);
+		Assert(appinfo != NULL);
+		if (parentInfo->withCheckOptions)
+			withCheckOptions = (List *)
+				adjust_appendrel_attrs(root,
+									   (Node *) parentInfo->withCheckOptions,
+									   1, &appinfo);
+		if (parentInfo->returningList)
+			returningList = (List *)
+				adjust_appendrel_attrs(root, (Node *) parentInfo->returningList,
+									   1, &appinfo);
+	}
+	else
+	{
+		/* parse->targetList resnos get updated later, so make a copy. */
+		subplanTargetList = copyObject(parse->targetList);
+		withCheckOptions = parse->withCheckOptions;
+		returningList = parse->returningList;
+	}
+
+	if (parse->commandType == CMD_UPDATE)
+	{
+		List	   *planTargetList = subplanTargetList;
+
+		/* resnos must match the child attributes numbers. */
+		if (appinfo)
+			planTargetList = adjust_inherited_tlist(planTargetList, appinfo);
+
+		/* Fix to use plan TLEs over the existing ones. */
+		updateTargetList = make_update_targetlist(root, rti, relation,
+												  planTargetList);
+	}
+
+	/*
+	 * Of the following, everything except subplanTargetList goes into the
+	 * ModifyaTable plan.  subplanTargetListis is only kept around because
+	 * set_update_tlist_references() must use result relation specific
+	 * version of the original targetlist when matching the entries in
+	 * their updateTargetLists.
+	 */
+	resultInfo->resultRelation = rti;
+	resultInfo->subplanTargetList = subplanTargetList;
+	resultInfo->updateTargetList = updateTargetList;
+	resultInfo->withCheckOptions = withCheckOptions;
+	resultInfo->returningList = returningList;
+
+	root->result_rel_list = lappend(root->result_rel_list, resultInfo);
+
+	/*
+	 * We can get here before query_planner() is called, so the array may
+	 * not have been created yet.  Worry not, because once it's created,
+	 * anything present in result_rel_list at that point will be put into
+	 * the array.
+	 */
+	if (root->result_rel_array)
+	{
+		Assert(root->result_rel_array[rti] == NULL);
+		root->result_rel_array[rti] = resultInfo;
 	}
 }

@@ -148,6 +148,9 @@ static List *set_returning_clause_references(PlannerInfo *root,
 											 Plan *topplan,
 											 Index resultRelation,
 											 int rtoffset);
+static void set_update_tlist_references(PlannerInfo *root,
+										ModifyTable *splan,
+										int rtoffset);
 
 
 /*****************************************************************************
@@ -808,9 +811,13 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 		case T_ModifyTable:
 			{
 				ModifyTable *splan = (ModifyTable *) plan;
+				Plan		*subplan = linitial(splan->plans);
 
 				Assert(splan->plan.targetlist == NIL);
 				Assert(splan->plan.qual == NIL);
+
+				if (splan->operation == CMD_UPDATE)
+					set_update_tlist_references(root, splan, rtoffset);
 
 				splan->withCheckOptionLists =
 					fix_scan_list(root, splan->withCheckOptionLists, rtoffset);
@@ -819,22 +826,17 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 				{
 					List	   *newRL = NIL;
 					ListCell   *lcrl,
-							   *lcrr,
-							   *lcp;
+							   *lcrr;
 
 					/*
-					 * Pass each per-subplan returningList through
+					 * Pass each per-resultrel returningList through
 					 * set_returning_clause_references().
 					 */
 					Assert(list_length(splan->returningLists) == list_length(splan->resultRelations));
-					Assert(list_length(splan->returningLists) == list_length(splan->plans));
-					forthree(lcrl, splan->returningLists,
-							 lcrr, splan->resultRelations,
-							 lcp, splan->plans)
+					forboth(lcrl, splan->returningLists, lcrr, splan->resultRelations)
 					{
 						List	   *rlist = (List *) lfirst(lcrl);
 						Index		resultrel = lfirst_int(lcrr);
-						Plan	   *subplan = (Plan *) lfirst(lcp);
 
 						rlist = set_returning_clause_references(root,
 																rlist,
@@ -2692,6 +2694,52 @@ set_returning_clause_references(PlannerInfo *root,
 	pfree(itlist);
 
 	return rlist;
+}
+
+/*
+ * Update splan->updateTargetLists to refer to the subplan's output where
+ * applicable.
+ */
+static void
+set_update_tlist_references(PlannerInfo *root,
+							ModifyTable *splan,
+							int rtoffset)
+{
+	ListCell   *lc1,
+			   *lc2;
+
+	forboth(lc1, splan->resultRelations, lc2, splan->updateTargetLists)
+	{
+		Index	resultRel = lfirst_int(lc1);
+		List   *updateTargetList = lfirst(lc2);
+		ResultRelPlanInfo *resultInfo = root->result_rel_array[resultRel];
+		AttrNumber	resno;
+		ListCell *lc;
+		indexed_tlist *itlist;
+
+		Assert(resultInfo);
+
+		/*
+		 * Make resnos of subplan tlist TLEs match their ordinal position in
+		 * the list.  It's okay to scribble on them now.
+		 */
+		resno = 1;
+		foreach(lc, resultInfo->subplanTargetList)
+		{
+			TargetEntry *tle = lfirst(lc);
+
+			tle->resno = resno++;
+		}
+
+		itlist = build_tlist_index(resultInfo->subplanTargetList);
+		lfirst(lc2) = fix_join_expr(root,
+									updateTargetList,
+									itlist,
+									NULL,
+									resultRel,
+									rtoffset);
+
+	}
 }
 
 

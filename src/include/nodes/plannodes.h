@@ -226,9 +226,10 @@ typedef struct ModifyTable
 	List	   *resultRelations;	/* integer list of RT indexes */
 	int			resultRelIndex; /* index of first resultRel in plan's list */
 	int			rootResultRelIndex; /* index of the partitioned table root */
-	List	   *plans;			/* plan(s) producing source data */
+	List	   *plans;				/* Plan(s) producing source data */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */
-	List	   *returningLists; /* per-target-table RETURNING tlists */
+	List	   *returningLists;	/* per-target-table RETURNING tlists */
+	List	   *updateTargetLists;	/* per-target-table tlists */
 	List	   *fdwPrivLists;	/* per-target-table FDW private data lists */
 	Bitmapset  *fdwDirectModifyPlans;	/* indices of FDW DM plans */
 	List	   *rowMarks;		/* PlanRowMarks (non-locking only) */

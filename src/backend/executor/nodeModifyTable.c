@@ -75,6 +75,8 @@ static ResultRelInfo *getTargetResultRelInfo(ModifyTableState *node);
 static void ExecSetupChildParentMapForSubplan(ModifyTableState *mtstate);
 static TupleConversionMap *tupconv_map_for_subplan(ModifyTableState *node,
 												   int whichplan);
+static TupleTableSlot *ExecGetNewInsertTuple(ResultRelInfo *relinfo,
+					  TupleTableSlot *planSlot);
 
 /*
  * Verify that the tuples to be produced by INSERT or UPDATE match the
@@ -1043,6 +1045,130 @@ ldelete:;
 	return NULL;
 }
 
+/* struct to hold info about UPDATE/DELETE result relations */
+typedef struct SubplanResultRelHashElem
+{
+	Oid			relid;			/* hash key -- must be first */
+	int			whichrel;		/* index into mtstate->resultRelInfo */
+} SubplanResultRelHashElem;
+
+/*
+ * ExecHashSubPlanResultRelsByOid
+ *		Build a hash table to allow fast lookups of subplan ResultRelInfos by
+ *		result relation OIDs.
+ */
+static void
+ExecHashSubPlanResultRelsByOid(ModifyTableState *mtstate)
+{
+	HASHCTL		ctl;
+	HTAB	   *htab;
+	int			i;
+
+	memset(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(SubplanResultRelHashElem);
+	ctl.hcxt = CurrentMemoryContext;
+
+	Assert(mtstate->mt_subplan_resultrel_hash == NULL);
+
+	htab = hash_create("ModifyTable result relations", mtstate->mt_nrels,
+					   &ctl, HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	mtstate->mt_subplan_resultrel_hash = htab;
+
+	/* Hash all subplans by their Oid */
+	for (i = 0; i < mtstate->mt_nrels; i++)
+	{
+		ResultRelInfo *rri = &mtstate->resultRelInfo[i];
+		bool		found;
+		Oid			partoid = RelationGetRelid(rri->ri_RelationDesc);
+		SubplanResultRelHashElem *elem;
+
+		elem = (SubplanResultRelHashElem *)
+			hash_search(htab, &partoid, HASH_ENTER, &found);
+		Assert(!found);
+		elem->whichrel = i;
+	}
+}
+
+ResultRelInfo *
+ExecLookupResultRelByOid(ModifyTableState *mtstate, Oid reloid,
+						 int *whichrel)
+{
+	SubplanResultRelHashElem *elem;
+
+	Assert(mtstate->mt_subplan_resultrel_hash != NULL);
+	elem = hash_search(mtstate->mt_subplan_resultrel_hash, &reloid,
+					   HASH_FIND, NULL);
+
+	*whichrel = -1;
+	if (elem)
+	{
+		*whichrel = elem->whichrel;
+		return mtstate->resultRelInfo + elem->whichrel;
+	}
+
+	return NULL;
+}
+
+/*
+ * ExecProjectNewInsertTuple
+ *		This prepares a "new" tuple ready to be put into a result relation
+ *		by removing any junk columns of the tuple produced by a plan.
+ */
+static TupleTableSlot *
+ExecGetNewInsertTuple(ResultRelInfo *relinfo,
+					  TupleTableSlot *planSlot)
+{
+	ProjectionInfo *newProj = relinfo->ri_projectNew;
+	ExprContext   *econtext;
+
+	if (newProj == NULL)
+		return planSlot;
+
+	econtext = newProj->pi_exprContext;
+	econtext->ecxt_outertuple = planSlot;
+	return ExecProject(newProj);
+}
+
+
+/*
+ * ExecProjectNewUpdateTuple
+ *		This prepares a "new" tuple ready to be put into a result relation
+ *		by combining the "plan" tuple and the "old" tuple.
+ *
+ * The "plan" tuple contains values for only those columns that were specified
+ * in the update statement's SET clause and some junk columns which must be
+ * filtered out.  Values for the rest of the columns are taken from the "old"
+ * tuple.
+ *
+ * The caller may pass either tupleid of the old tuple or its HeapTuple.
+ */
+TupleTableSlot *
+ExecGetUpdateNewTuple(ResultRelInfo *relinfo,
+					  TupleTableSlot *planSlot,
+					  ItemPointerData *tupleid,
+					  HeapTupleData *oldtuple)
+{
+	ProjectionInfo *newProj = relinfo->ri_projectNew;
+	ExprContext   *econtext;
+	TupleTableSlot *oldSlot = relinfo->ri_oldTupleSlot;
+	Relation		relation = relinfo->ri_RelationDesc;
+
+	Assert(newProj != NULL);
+	Assert(oldSlot != NULL);
+	Assert(tupleid != NULL || oldtuple != NULL);
+	ExecClearTuple(oldSlot);
+	if (tupleid != NULL)
+		table_tuple_fetch_row_version(relation, tupleid, SnapshotAny,
+									  oldSlot);
+	else
+		ExecForceStoreHeapTuple(oldtuple, oldSlot, false);
+	econtext = newProj->pi_exprContext;
+	econtext->ecxt_scantuple = oldSlot;
+	econtext->ecxt_outertuple = planSlot;
+	return ExecProject(newProj);
+}
+
 /* ----------------------------------------------------------------
  *		ExecUpdate
  *
@@ -1269,7 +1395,8 @@ lreplace:;
 					return NULL;
 				else
 				{
-					slot = ExecFilterJunk(resultRelInfo->ri_junkFilter, epqslot);
+					slot = ExecGetUpdateNewTuple(resultRelInfo, epqslot,
+												 tupleid, oldtuple);
 					goto lreplace;
 				}
 			}
@@ -1293,7 +1420,7 @@ lreplace:;
 			 * position of the resultRel in mtstate->resultRelInfo[].
 			 */
 			map_index = resultRelInfo - mtstate->resultRelInfo;
-			Assert(map_index >= 0 && map_index < mtstate->mt_nplans);
+			Assert(map_index >= 0 && map_index < mtstate->mt_nrels);
 			tupconv_map = tupconv_map_for_subplan(mtstate, map_index);
 			if (tupconv_map != NULL)
 				slot = execute_attr_map_slot(tupconv_map->attrMap,
@@ -1423,7 +1550,9 @@ lreplace:;
 								/* Tuple not passing quals anymore, exiting... */
 								return NULL;
 
-							slot = ExecFilterJunk(resultRelInfo->ri_junkFilter, epqslot);
+							slot = ExecGetUpdateNewTuple(resultRelInfo,
+														 epqslot, tupleid,
+														 oldtuple);
 							goto lreplace;
 
 						case TM_Deleted:
@@ -1968,7 +2097,7 @@ ExecSetupChildParentMapForSubplan(ModifyTableState *mtstate)
 	ResultRelInfo *targetRelInfo = getTargetResultRelInfo(mtstate);
 	ResultRelInfo *resultRelInfos = mtstate->resultRelInfo;
 	TupleDesc	outdesc;
-	int			numResultRelInfos = mtstate->mt_nplans;
+	int			numResultRelInfos = mtstate->mt_nrels;
 	int			i;
 
 	/*
@@ -2001,7 +2130,7 @@ tupconv_map_for_subplan(ModifyTableState *mtstate, int whichplan)
 	if (mtstate->mt_per_subplan_tupconv_maps == NULL)
 		ExecSetupChildParentMapForSubplan(mtstate);
 
-	Assert(whichplan >= 0 && whichplan < mtstate->mt_nplans);
+	Assert(whichplan >= 0 && whichplan < mtstate->mt_nrels);
 	return mtstate->mt_per_subplan_tupconv_maps[whichplan];
 }
 
@@ -2022,7 +2151,6 @@ ExecModifyTable(PlanState *pstate)
 	ResultRelInfo *saved_resultRelInfo;
 	ResultRelInfo *resultRelInfo;
 	PlanState  *subplanstate;
-	JunkFilter *junkfilter;
 	TupleTableSlot *slot;
 	TupleTableSlot *planSlot;
 	ItemPointer tupleid;
@@ -2063,9 +2191,8 @@ ExecModifyTable(PlanState *pstate)
 	}
 
 	/* Preload local variables */
-	resultRelInfo = node->resultRelInfo + node->mt_whichplan;
+	resultRelInfo = node->resultRelInfo + node->mt_whichrel;
 	subplanstate = node->mt_plans[node->mt_whichplan];
-	junkfilter = resultRelInfo->ri_junkFilter;
 
 	/*
 	 * es_result_relation_info must point to the currently active result
@@ -2102,42 +2229,53 @@ ExecModifyTable(PlanState *pstate)
 
 		planSlot = ExecProcNode(subplanstate);
 
+		/* No more tuples to process? */
 		if (TupIsNull(planSlot))
+			break;
+
+		/* Select the result relation to operate on. */
+		if (node->mt_nrels > 1)
 		{
-			/* advance to next subplan if any */
-			node->mt_whichplan++;
-			if (node->mt_whichplan < node->mt_nplans)
+			bool	isNull;
+			Datum	datum;
+			Oid		tupleRel;
+
+			/* Table OID must be present in the plan's targetlist. */
+			Assert(AttributeNumberIsValid(node->mt_tableOidAttno));
+			datum = ExecGetJunkAttribute(planSlot, node->mt_tableOidAttno,
+										 &isNull);
+			if (isNull)
+				elog(ERROR, "tableoid is NULL");
+			tupleRel = DatumGetObjectId(datum);
+			Assert(OidIsValid(tupleRel));
+
+			/* Table OID -> ResultRelInfo. */
+			resultRelInfo = ExecLookupResultRelByOid(node, tupleRel,
+													 &node->mt_whichrel);
+			Assert(node->mt_whichrel >= 0 &&
+				   node->mt_whichrel < node->mt_nrels);
+			estate->es_result_relation_info = resultRelInfo;
+
+			/* Prepare to convert transition tuples from this child. */
+			if (node->mt_transition_capture != NULL)
 			{
-				resultRelInfo++;
-				subplanstate = node->mt_plans[node->mt_whichplan];
-				junkfilter = resultRelInfo->ri_junkFilter;
-				estate->es_result_relation_info = resultRelInfo;
-				EvalPlanQualSetPlan(&node->mt_epqstate, subplanstate->plan,
-									node->mt_arowmarks[node->mt_whichplan]);
-				/* Prepare to convert transition tuples from this child. */
-				if (node->mt_transition_capture != NULL)
-				{
-					node->mt_transition_capture->tcs_map =
-						tupconv_map_for_subplan(node, node->mt_whichplan);
-				}
-				if (node->mt_oc_transition_capture != NULL)
-				{
-					node->mt_oc_transition_capture->tcs_map =
-						tupconv_map_for_subplan(node, node->mt_whichplan);
-				}
-				continue;
+				node->mt_transition_capture->tcs_map =
+				tupconv_map_for_subplan(node, node->mt_whichrel);
 			}
-			else
-				break;
+			if (node->mt_oc_transition_capture != NULL)
+			{
+				node->mt_oc_transition_capture->tcs_map =
+				tupconv_map_for_subplan(node, node->mt_whichrel);
+			}
 		}
 
 		/*
 		 * Ensure input tuple is the right format for the target relation.
 		 */
-		if (node->mt_scans[node->mt_whichplan]->tts_ops != planSlot->tts_ops)
+		if (node->mt_scans[node->mt_whichrel]->tts_ops != planSlot->tts_ops)
 		{
-			ExecCopySlot(node->mt_scans[node->mt_whichplan], planSlot);
-			planSlot = node->mt_scans[node->mt_whichplan];
+			ExecCopySlot(node->mt_scans[node->mt_whichrel], planSlot);
+			planSlot = node->mt_scans[node->mt_whichrel];
 		}
 
 		/*
@@ -2165,80 +2303,78 @@ ExecModifyTable(PlanState *pstate)
 
 		tupleid = NULL;
 		oldtuple = NULL;
-		if (junkfilter != NULL)
+		/*
+		 * extract the 'ctid' or 'wholerow' junk attribute.
+		 */
+		if (operation == CMD_UPDATE || operation == CMD_DELETE)
 		{
-			/*
-			 * extract the 'ctid' or 'wholerow' junk attribute.
-			 */
-			if (operation == CMD_UPDATE || operation == CMD_DELETE)
+			char		relkind;
+			Datum		datum;
+			bool		isNull;
+
+			relkind = resultRelInfo->ri_RelationDesc->rd_rel->relkind;
+			if (relkind == RELKIND_RELATION || relkind == RELKIND_MATVIEW)
 			{
-				char		relkind;
-				Datum		datum;
-				bool		isNull;
+				Assert(resultRelInfo->ri_junkAttno > 0);
+				datum = ExecGetJunkAttribute(slot,
+											 resultRelInfo->ri_junkAttno,
+											 &isNull);
+				/* shouldn't ever get a null result... */
+				if (isNull)
+					elog(ERROR, "ctid is NULL");
 
-				relkind = resultRelInfo->ri_RelationDesc->rd_rel->relkind;
-				if (relkind == RELKIND_RELATION || relkind == RELKIND_MATVIEW)
-				{
-					datum = ExecGetJunkAttribute(slot,
-												 junkfilter->jf_junkAttNo,
-												 &isNull);
-					/* shouldn't ever get a null result... */
-					if (isNull)
-						elog(ERROR, "ctid is NULL");
-
-					tupleid = (ItemPointer) DatumGetPointer(datum);
-					tuple_ctid = *tupleid;	/* be sure we don't free ctid!! */
-					tupleid = &tuple_ctid;
-				}
-
-				/*
-				 * Use the wholerow attribute, when available, to reconstruct
-				 * the old relation tuple.
-				 *
-				 * Foreign table updates have a wholerow attribute when the
-				 * relation has a row-level trigger.  Note that the wholerow
-				 * attribute does not carry system columns.  Foreign table
-				 * triggers miss seeing those, except that we know enough here
-				 * to set t_tableOid.  Quite separately from this, the FDW may
-				 * fetch its own junk attrs to identify the row.
-				 *
-				 * Other relevant relkinds, currently limited to views, always
-				 * have a wholerow attribute.
-				 */
-				else if (AttributeNumberIsValid(junkfilter->jf_junkAttNo))
-				{
-					datum = ExecGetJunkAttribute(slot,
-												 junkfilter->jf_junkAttNo,
-												 &isNull);
-					/* shouldn't ever get a null result... */
-					if (isNull)
-						elog(ERROR, "wholerow is NULL");
-
-					oldtupdata.t_data = DatumGetHeapTupleHeader(datum);
-					oldtupdata.t_len =
-						HeapTupleHeaderGetDatumLength(oldtupdata.t_data);
-					ItemPointerSetInvalid(&(oldtupdata.t_self));
-					/* Historically, view triggers see invalid t_tableOid. */
-					oldtupdata.t_tableOid =
-						(relkind == RELKIND_VIEW) ? InvalidOid :
-						RelationGetRelid(resultRelInfo->ri_RelationDesc);
-
-					oldtuple = &oldtupdata;
-				}
-				else
-					Assert(relkind == RELKIND_FOREIGN_TABLE);
+				tupleid = (ItemPointer) DatumGetPointer(datum);
+				tuple_ctid = *tupleid;	/* be sure we don't free ctid!! */
+				tupleid = &tuple_ctid;
 			}
 
 			/*
-			 * apply the junkfilter if needed.
+			 * Use the wholerow attribute, when available, to reconstruct
+			 * the old relation tuple.  The old tuple serves one of two
+			 * purposes or both: 1) it serves as the OLD tuple for any row
+			 * triggers on foreign tables, 2) it provides values for any
+			 * missing columns for the NEW tuple of the UPDATEs targeting
+			 * foreign tables, because the plan itself does not produce all
+			 * the columns of the target table; see the "oldtuple" being
+			 * passed to ExecGetUpdateNewTuple() below.
+			 *
+			 * Note that the wholerow attribute does not carry system columns,
+			 * so foreign table triggers miss seeing those, except that we
+			 * know enough here to set t_tableOid. Quite separately from this,
+			 * the FDW may fetch its own junk attrs to identify the row.
+			 *
+			 * Other relevant relkinds, currently limited to views, always
+			 * have a wholerow attribute.
 			 */
-			if (operation != CMD_DELETE)
-				slot = ExecFilterJunk(junkfilter, slot);
+			else if (AttributeNumberIsValid(resultRelInfo->ri_junkAttno))
+			{
+				datum = ExecGetJunkAttribute(slot,
+											 resultRelInfo->ri_junkAttno,
+											 &isNull);
+				/* shouldn't ever get a null result... */
+				if (isNull)
+					elog(ERROR, "wholerow is NULL");
+
+				oldtupdata.t_data = DatumGetHeapTupleHeader(datum);
+				oldtupdata.t_len =
+					HeapTupleHeaderGetDatumLength(oldtupdata.t_data);
+				ItemPointerSetInvalid(&(oldtupdata.t_self));
+				/* Historically, view triggers see invalid t_tableOid. */
+				oldtupdata.t_tableOid =
+					(relkind == RELKIND_VIEW) ? InvalidOid :
+					RelationGetRelid(resultRelInfo->ri_RelationDesc);
+					oldtuple = &oldtupdata;
+			}
+			else
+				Assert(relkind == RELKIND_FOREIGN_TABLE);
 		}
+
+		estate->es_result_relation_info = resultRelInfo;
 
 		switch (operation)
 		{
 			case CMD_INSERT:
+				slot = ExecGetNewInsertTuple(resultRelInfo, planSlot);
 				/* Prepare for tuple routing if needed. */
 				if (proute)
 					slot = ExecPrepareTupleRouting(node, estate, proute,
@@ -2250,6 +2386,10 @@ ExecModifyTable(PlanState *pstate)
 					estate->es_result_relation_info = resultRelInfo;
 				break;
 			case CMD_UPDATE:
+				Assert(resultRelInfo->ri_projectNew);
+				Assert(resultRelInfo->ri_oldTupleSlot);
+				slot = ExecGetUpdateNewTuple(resultRelInfo, planSlot, tupleid,
+											 oldtuple);
 				slot = ExecUpdate(node, tupleid, oldtuple, slot, planSlot,
 								  &node->mt_epqstate, estate, node->canSetTag);
 				break;
@@ -2298,9 +2438,11 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	ModifyTableState *mtstate;
 	CmdType		operation = node->operation;
 	int			nplans = list_length(node->plans);
+	int			nrels = list_length(node->resultRelations);
 	ResultRelInfo *saved_resultRelInfo;
 	ResultRelInfo *resultRelInfo;
 	Plan	   *subplan;
+	TupleDesc	plan_result_type;
 	ListCell   *l;
 	int			i;
 	Relation	rel;
@@ -2323,7 +2465,7 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 	mtstate->mt_plans = (PlanState **) palloc0(sizeof(PlanState *) * nplans);
 	mtstate->resultRelInfo = estate->es_result_relations + node->resultRelIndex;
-	mtstate->mt_scans = (TupleTableSlot **) palloc0(sizeof(TupleTableSlot *) * nplans);
+	mtstate->mt_scans = (TupleTableSlot **) palloc0(sizeof(TupleTableSlot *) * nrels);
 
 	/* If modifying a partitioned table, initialize the root table info */
 	if (node->rootResultRelIndex >= 0)
@@ -2337,23 +2479,73 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	EvalPlanQualInit(&mtstate->mt_epqstate, estate, NULL, NIL, node->epqParam);
 	mtstate->fireBSTriggers = true;
 
+	mtstate->mt_nrels = nrels;
+	mtstate->mt_whichrel = 0;
+
 	/*
-	 * call ExecInitNode on each of the plans to be executed and save the
-	 * results into the array "mt_plans".  This is also a convenient place to
-	 * verify that the proposed target relations are valid and open their
-	 * indexes for insertion of new index entries.  Note we *must* set
-	 * estate->es_result_relation_info correctly while we initialize each
-	 * sub-plan; external modules such as FDWs may depend on that (see
-	 * contrib/postgres_fdw/postgres_fdw.c: postgresBeginDirectModify() as one
-	 * example).
+	 * Call ExecInitNode on the only plan to be executed and save the result
+	 * into the array "mt_plans".
+	 *
+	 * Note we *must* set es_result_relation_info correctly while we
+	 * initialize the plan; external modules such as FDWs may depend on that
+	 * (see contrib/postgres_fdw/postgres_fdw.c: postgresBeginDirectModify()
+	 * as one example).
 	 */
 	saved_resultRelInfo = estate->es_result_relation_info;
+	estate->es_result_relation_info = mtstate->resultRelInfo;
+	subplan = linitial(node->plans);
+	mtstate->mt_plans[0] = ExecInitNode(subplan, estate, eflags);
+	estate->es_result_relation_info = saved_resultRelInfo;
+	plan_result_type = ExecGetResultType(mtstate->mt_plans[0]);
 
-	resultRelInfo = mtstate->resultRelInfo;
-	i = 0;
-	foreach(l, node->plans)
+	if (mtstate->mt_nrels > 1)
 	{
-		subplan = (Plan *) lfirst(l);
+		/*
+		 * There must be "tableoid" junk attribute present if there are
+		 * multiple result relations to update or delete from.
+		 */
+		mtstate->mt_tableOidAttno =
+			ExecFindJunkAttributeInTlist(subplan->targetlist, "tableoid");
+		Assert(AttributeNumberIsValid(mtstate->mt_tableOidAttno));
+	}
+
+	/* Initialize some global state for RETURNING projections. */
+	if (node->returningLists)
+	{
+		/*
+		 * Initialize result tuple slot and assign its rowtype using the first
+		 * RETURNING list.  We assume the rest will look the same.
+		 */
+		mtstate->ps.plan->targetlist = linitial(node->returningLists);
+
+		/* Set up a slot for the output of the RETURNING projection(s) */
+		ExecInitResultTupleSlotTL(&mtstate->ps, &TTSOpsVirtual);
+
+		/* Need an econtext too */
+		if (mtstate->ps.ps_ExprContext == NULL)
+			ExecAssignExprContext(estate, &mtstate->ps);
+	}
+	else
+	{
+		/*
+		 * We still must construct a dummy result tuple type, because InitPlan
+		 * expects one (maybe should change that?).
+		 */
+		mtstate->ps.plan->targetlist = NIL;
+		ExecInitResultTypeTL(&mtstate->ps);
+
+		mtstate->ps.ps_ExprContext = NULL;
+	}
+
+	/*
+	 * Per result relation initializations.
+	 * TODO: do this lazily.
+	 */
+	resultRelInfo = mtstate->resultRelInfo;
+	for (i = 0; i < nrels; i++)
+	{
+		List   *resultTargetList = NIL;
+		bool	need_projection = false;
 
 		/* Initialize the usesFdwDirectModify flag */
 		resultRelInfo->ri_usesFdwDirectModify = bms_is_member(i,
@@ -2389,12 +2581,12 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 			operation == CMD_UPDATE)
 			update_tuple_routing_needed = true;
 
+		mtstate->mt_scans[i] =
+			ExecInitExtraTupleSlot(mtstate->ps.state, plan_result_type,
+								   table_slot_callbacks(resultRelInfo->ri_RelationDesc));
+
 		/* Now init the plan for this result rel */
 		estate->es_result_relation_info = resultRelInfo;
-		mtstate->mt_plans[i] = ExecInitNode(subplan, estate, eflags);
-		mtstate->mt_scans[i] =
-			ExecInitExtraTupleSlot(mtstate->ps.state, ExecGetResultType(mtstate->mt_plans[i]),
-								   table_slot_callbacks(resultRelInfo->ri_RelationDesc));
 
 		/* Also let FDWs init themselves for foreign-table result rels */
 		if (!resultRelInfo->ri_usesFdwDirectModify &&
@@ -2410,11 +2602,145 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 															 eflags);
 		}
 
-		resultRelInfo++;
-		i++;
-	}
+		/*
+		 * Initialize any WITH CHECK OPTION constraints if needed.
+		 */
+		if (node->withCheckOptionLists)
+		{
+			List   *wcoList = (List *) list_nth(node->withCheckOptionLists, i);
+			List   *wcoExprs = NIL;
+			ListCell   *ll;
 
-	estate->es_result_relation_info = saved_resultRelInfo;
+			foreach(ll, wcoList)
+			{
+				WithCheckOption *wco = (WithCheckOption *) lfirst(ll);
+				ExprState  *wcoExpr = ExecInitQual((List *) wco->qual,
+												   &mtstate->ps);
+
+				wcoExprs = lappend(wcoExprs, wcoExpr);
+			}
+
+			resultRelInfo->ri_WithCheckOptions = wcoList;
+			resultRelInfo->ri_WithCheckOptionExprs = wcoExprs;
+		}
+		if (node->returningLists)
+		{
+			List	*rlist = (List *) list_nth(node->returningLists, i);
+			TupleTableSlot *slot;
+			ExprContext *econtext;
+
+			slot = mtstate->ps.ps_ResultTupleSlot;
+			Assert(slot != NULL);
+			econtext = mtstate->ps.ps_ExprContext;
+			Assert(econtext != NULL);
+
+			resultRelInfo->ri_returningList = rlist;
+			resultRelInfo->ri_projectReturning =
+				ExecBuildProjectionInfo(rlist, econtext, slot, &mtstate->ps,
+										resultRelInfo->ri_RelationDesc->rd_att);
+		}
+
+		/*
+		 * Prepare to generate tuples suitable for the target relation.
+		 */
+		if (operation == CMD_INSERT || operation == CMD_UPDATE)
+		{
+			if (operation == CMD_INSERT)
+			{
+				foreach(l, subplan->targetlist)
+				{
+					TargetEntry *tle = (TargetEntry *) lfirst(l);
+
+					if (!tle->resjunk)
+						resultTargetList = lappend(resultTargetList, tle);
+					else
+						need_projection = true;
+				}
+			}
+			else
+			{
+				resultTargetList = (List *) list_nth(node->updateTargetLists,
+													 i);
+				need_projection = true;
+			}
+
+			/*
+			 * The clean list must produce a tuple suitable for the result
+			 * relation.
+			 */
+			ExecCheckPlanOutput(resultRelInfo->ri_RelationDesc,
+								resultTargetList);
+		}
+
+		if (need_projection)
+		{
+			TupleDesc	relDesc = RelationGetDescr(resultRelInfo->ri_RelationDesc);
+
+			/*
+			 * For UPDATE, we use the old tuple to fill up missing values in
+			 * the tuple produced by the plan to get the new tuple.
+			 */
+			if (operation == CMD_UPDATE)
+				resultRelInfo->ri_oldTupleSlot =
+					table_slot_create(resultRelInfo->ri_RelationDesc,
+									  &mtstate->ps.state->es_tupleTable);
+			resultRelInfo->ri_newTupleSlot =
+				table_slot_create(resultRelInfo->ri_RelationDesc,
+								  &mtstate->ps.state->es_tupleTable);
+
+			/* need an expression context to do the projection */
+			if (mtstate->ps.ps_ExprContext == NULL)
+				ExecAssignExprContext(estate, &mtstate->ps);
+			resultRelInfo->ri_projectNew =
+				ExecBuildProjectionInfo(resultTargetList,
+										mtstate->ps.ps_ExprContext,
+										resultRelInfo->ri_newTupleSlot,
+										&mtstate->ps,
+										relDesc);
+		}
+
+		/*
+		 * For UPDATE/DELETE, find the appropriate junk attr now.
+		 */
+		if (operation == CMD_UPDATE || operation == CMD_DELETE)
+		{
+			char	relkind;
+
+			relkind = resultRelInfo->ri_RelationDesc->rd_rel->relkind;
+			if (relkind == RELKIND_RELATION ||
+				relkind == RELKIND_MATVIEW ||
+				relkind == RELKIND_PARTITIONED_TABLE)
+			{
+				resultRelInfo->ri_junkAttno =
+					ExecFindJunkAttributeInTlist(subplan->targetlist, "ctid");
+				if (!AttributeNumberIsValid(resultRelInfo->ri_junkAttno))
+					elog(ERROR, "could not find junk ctid column");
+			}
+			else if (relkind == RELKIND_FOREIGN_TABLE)
+			{
+				/*
+				 * When there is a row-level trigger, there should be
+				 * a wholerow attribute.
+				 */
+				resultRelInfo->ri_junkAttno =
+					ExecFindJunkAttributeInTlist(subplan->targetlist,
+												 "wholerow");
+				/* HACK: we require it to be present for updates. */
+				if (mtstate->operation == CMD_UPDATE &&
+					!AttributeNumberIsValid(resultRelInfo->ri_junkAttno))
+					elog(ERROR, "could not find junk wholerow column");
+			}
+			else
+			{
+				resultRelInfo->ri_junkAttno =
+					ExecFindJunkAttributeInTlist(subplan->targetlist, "wholerow");
+				if (!AttributeNumberIsValid(resultRelInfo->ri_junkAttno))
+					elog(ERROR, "could not find junk wholerow column");
+			}
+		}
+
+		resultRelInfo++;
+	}
 
 	/* Get the target relation */
 	rel = (getTargetResultRelInfo(mtstate))->ri_RelationDesc;
@@ -2457,82 +2783,6 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		mtstate->mt_root_tuple_slot = table_slot_create(rel, NULL);
 	}
 
-	/*
-	 * Initialize any WITH CHECK OPTION constraints if needed.
-	 */
-	resultRelInfo = mtstate->resultRelInfo;
-	i = 0;
-	foreach(l, node->withCheckOptionLists)
-	{
-		List	   *wcoList = (List *) lfirst(l);
-		List	   *wcoExprs = NIL;
-		ListCell   *ll;
-
-		foreach(ll, wcoList)
-		{
-			WithCheckOption *wco = (WithCheckOption *) lfirst(ll);
-			ExprState  *wcoExpr = ExecInitQual((List *) wco->qual,
-											   &mtstate->ps);
-
-			wcoExprs = lappend(wcoExprs, wcoExpr);
-		}
-
-		resultRelInfo->ri_WithCheckOptions = wcoList;
-		resultRelInfo->ri_WithCheckOptionExprs = wcoExprs;
-		resultRelInfo++;
-		i++;
-	}
-
-	/*
-	 * Initialize RETURNING projections if needed.
-	 */
-	if (node->returningLists)
-	{
-		TupleTableSlot *slot;
-		ExprContext *econtext;
-
-		/*
-		 * Initialize result tuple slot and assign its rowtype using the first
-		 * RETURNING list.  We assume the rest will look the same.
-		 */
-		mtstate->ps.plan->targetlist = (List *) linitial(node->returningLists);
-
-		/* Set up a slot for the output of the RETURNING projection(s) */
-		ExecInitResultTupleSlotTL(&mtstate->ps, &TTSOpsVirtual);
-		slot = mtstate->ps.ps_ResultTupleSlot;
-
-		/* Need an econtext too */
-		if (mtstate->ps.ps_ExprContext == NULL)
-			ExecAssignExprContext(estate, &mtstate->ps);
-		econtext = mtstate->ps.ps_ExprContext;
-
-		/*
-		 * Build a projection for each result rel.
-		 */
-		resultRelInfo = mtstate->resultRelInfo;
-		foreach(l, node->returningLists)
-		{
-			List	   *rlist = (List *) lfirst(l);
-
-			resultRelInfo->ri_returningList = rlist;
-			resultRelInfo->ri_projectReturning =
-				ExecBuildProjectionInfo(rlist, econtext, slot, &mtstate->ps,
-										resultRelInfo->ri_RelationDesc->rd_att);
-			resultRelInfo++;
-		}
-	}
-	else
-	{
-		/*
-		 * We still must construct a dummy result tuple type, because InitPlan
-		 * expects one (maybe should change that?).
-		 */
-		mtstate->ps.plan->targetlist = NIL;
-		ExecInitResultTypeTL(&mtstate->ps);
-
-		mtstate->ps.ps_ExprContext = NULL;
-	}
-
 	/* Set the list of arbiter indexes if needed for ON CONFLICT */
 	resultRelInfo = mtstate->resultRelInfo;
 	if (node->onConflictAction != ONCONFLICT_NONE)
@@ -2548,8 +2798,8 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		TupleDesc	relationDesc;
 		TupleDesc	tupDesc;
 
-		/* insert may only have one plan, inheritance is not expanded */
-		Assert(nplans == 1);
+		/* insert may only have one relation, inheritance is not expanded */
+		Assert(nrels == 1);
 
 		/* already exists if created by RETURNING processing above */
 		if (mtstate->ps.ps_ExprContext == NULL)
@@ -2605,133 +2855,29 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	{
 		PlanRowMark *rc = lfirst_node(PlanRowMark, l);
 		ExecRowMark *erm;
+		ExecAuxRowMark *aerm;
 
 		/* ignore "parent" rowmarks; they are irrelevant at runtime */
 		if (rc->isParent)
 			continue;
 
-		/* find ExecRowMark (same for all subplans) */
+		/* Find ExecRowMark and build ExecAuxRowMark */
 		erm = ExecFindRowMark(estate, rc->rti, false);
-
-		/* build ExecAuxRowMark for each subplan */
-		for (i = 0; i < nplans; i++)
-		{
-			ExecAuxRowMark *aerm;
-
-			subplan = mtstate->mt_plans[i]->plan;
-			aerm = ExecBuildAuxRowMark(erm, subplan->targetlist);
-			mtstate->mt_arowmarks[i] = lappend(mtstate->mt_arowmarks[i], aerm);
-		}
+		aerm = ExecBuildAuxRowMark(erm, subplan->targetlist);
+		mtstate->mt_arowmarks[0] = lappend(mtstate->mt_arowmarks[0], aerm);
 	}
 
 	/* select first subplan */
 	mtstate->mt_whichplan = 0;
-	subplan = (Plan *) linitial(node->plans);
 	EvalPlanQualSetPlan(&mtstate->mt_epqstate, subplan,
 						mtstate->mt_arowmarks[0]);
 
 	/*
-	 * Initialize the junk filter(s) if needed.  INSERT queries need a filter
-	 * if there are any junk attrs in the tlist.  UPDATE and DELETE always
-	 * need a filter, since there's always at least one junk attribute present
-	 * --- no need to look first.  Typically, this will be a 'ctid' or
-	 * 'wholerow' attribute, but in the case of a foreign data wrapper it
-	 * might be a set of junk attributes sufficient to identify the remote
-	 * row.
-	 *
-	 * If there are multiple result relations, each one needs its own junk
-	 * filter.  Note multiple rels are only possible for UPDATE/DELETE, so we
-	 * can't be fooled by some needing a filter and some not.
-	 *
-	 * This section of code is also a convenient place to verify that the
-	 * output of an INSERT or UPDATE matches the target table(s).
+	 * Initialize a hash table to look up UPDATE/DELETE result relations by
+	 * OID if there is more than one.
 	 */
-	{
-		bool		junk_filter_needed = false;
-
-		switch (operation)
-		{
-			case CMD_INSERT:
-				foreach(l, subplan->targetlist)
-				{
-					TargetEntry *tle = (TargetEntry *) lfirst(l);
-
-					if (tle->resjunk)
-					{
-						junk_filter_needed = true;
-						break;
-					}
-				}
-				break;
-			case CMD_UPDATE:
-			case CMD_DELETE:
-				junk_filter_needed = true;
-				break;
-			default:
-				elog(ERROR, "unknown operation");
-				break;
-		}
-
-		if (junk_filter_needed)
-		{
-			resultRelInfo = mtstate->resultRelInfo;
-			for (i = 0; i < nplans; i++)
-			{
-				JunkFilter *j;
-				TupleTableSlot *junkresslot;
-
-				subplan = mtstate->mt_plans[i]->plan;
-				if (operation == CMD_INSERT || operation == CMD_UPDATE)
-					ExecCheckPlanOutput(resultRelInfo->ri_RelationDesc,
-										subplan->targetlist);
-
-				junkresslot =
-					ExecInitExtraTupleSlot(estate, NULL,
-										   table_slot_callbacks(resultRelInfo->ri_RelationDesc));
-				j = ExecInitJunkFilter(subplan->targetlist,
-									   junkresslot);
-
-				if (operation == CMD_UPDATE || operation == CMD_DELETE)
-				{
-					/* For UPDATE/DELETE, find the appropriate junk attr now */
-					char		relkind;
-
-					relkind = resultRelInfo->ri_RelationDesc->rd_rel->relkind;
-					if (relkind == RELKIND_RELATION ||
-						relkind == RELKIND_MATVIEW ||
-						relkind == RELKIND_PARTITIONED_TABLE)
-					{
-						j->jf_junkAttNo = ExecFindJunkAttribute(j, "ctid");
-						if (!AttributeNumberIsValid(j->jf_junkAttNo))
-							elog(ERROR, "could not find junk ctid column");
-					}
-					else if (relkind == RELKIND_FOREIGN_TABLE)
-					{
-						/*
-						 * When there is a row-level trigger, there should be
-						 * a wholerow attribute.
-						 */
-						j->jf_junkAttNo = ExecFindJunkAttribute(j, "wholerow");
-					}
-					else
-					{
-						j->jf_junkAttNo = ExecFindJunkAttribute(j, "wholerow");
-						if (!AttributeNumberIsValid(j->jf_junkAttNo))
-							elog(ERROR, "could not find junk wholerow column");
-					}
-				}
-
-				resultRelInfo->ri_junkFilter = j;
-				resultRelInfo++;
-			}
-		}
-		else
-		{
-			if (operation == CMD_INSERT)
-				ExecCheckPlanOutput(mtstate->resultRelInfo->ri_RelationDesc,
-									subplan->targetlist);
-		}
-	}
+	if (mtstate->operation != CMD_INSERT && mtstate->mt_nrels > 1)
+		ExecHashSubPlanResultRelsByOid(mtstate);
 
 	/*
 	 * Lastly, if this is not the primary (canSetTag) ModifyTable node, add it
@@ -2765,7 +2911,7 @@ ExecEndModifyTable(ModifyTableState *node)
 	/*
 	 * Allow any FDWs to shut down
 	 */
-	for (i = 0; i < node->mt_nplans; i++)
+	for (i = 0; i < node->mt_nrels; i++)
 	{
 		ResultRelInfo *resultRelInfo = node->resultRelInfo + i;
 

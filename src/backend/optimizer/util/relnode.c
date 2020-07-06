@@ -108,6 +108,20 @@ setup_simple_rel_arrays(PlannerInfo *root)
 		root->simple_rte_array[rti++] = rte;
 	}
 
+	/* For UPDATE/DELETE result relations. */
+	if (root->parse->resultRelation && root->parse->commandType != CMD_INSERT)
+	{
+		root->result_rel_array = (ResultRelPlanInfo **)
+		palloc0(root->simple_rel_array_size * sizeof(ResultRelPlanInfo *));
+		/* Some may have already been added. */
+		foreach(lc, root->result_rel_list)
+		{
+			ResultRelPlanInfo *resultInfo = lfirst(lc);
+
+			root->result_rel_array[resultInfo->resultRelation] = resultInfo;
+		}
+	}
+
 	/* append_rel_array is not needed if there are no AppendRelInfos */
 	if (root->append_rel_list == NIL)
 	{
@@ -181,6 +195,21 @@ expand_planner_arrays(PlannerInfo *root, int add_size)
 	{
 		root->append_rel_array = (AppendRelInfo **)
 			palloc0(sizeof(AppendRelInfo *) * new_size);
+	}
+
+	if (root->result_rel_array)
+	{
+		root->result_rel_array = (ResultRelPlanInfo **)
+			repalloc(root->result_rel_array,
+					 sizeof(ResultRelPlanInfo *) * new_size);
+		MemSet(root->result_rel_array + root->simple_rel_array_size,
+			   0, sizeof(ResultRelPlanInfo *) * add_size);
+	}
+	else if (root->parse->resultRelation &&
+			 root->parse->commandType != CMD_INSERT)
+	{
+		root->result_rel_array = (ResultRelPlanInfo **)
+			palloc0(sizeof(ResultRelPlanInfo *) * new_size);
 	}
 
 	root->simple_rel_array_size = new_size;
@@ -304,7 +333,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	{
 		case RTE_RELATION:
 			/* Table --- retrieve statistics from the system catalogs */
-			get_relation_info(root, rte->relid, rte->inh, rel);
+			get_relation_info(root, rte->relid, rte->inh, rel, parent);
 			break;
 		case RTE_SUBQUERY:
 		case RTE_FUNCTION:

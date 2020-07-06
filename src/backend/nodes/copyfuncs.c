@@ -212,6 +212,7 @@ _copyModifyTable(const ModifyTable *from)
 	COPY_NODE_FIELD(plans);
 	COPY_NODE_FIELD(withCheckOptionLists);
 	COPY_NODE_FIELD(returningLists);
+	COPY_NODE_FIELD(updateTargetLists);
 	COPY_NODE_FIELD(fdwPrivLists);
 	COPY_BITMAPSET_FIELD(fdwDirectModifyPlans);
 	COPY_NODE_FIELD(rowMarks);

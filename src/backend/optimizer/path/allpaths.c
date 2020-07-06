@@ -949,6 +949,8 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	double	   *parent_attrsizes;
 	int			nattrs;
 	ListCell   *l;
+	ResultRelPlanInfo *resultInfo = root->result_rel_array ?
+							root->result_rel_array[rti] : NULL;
 
 	/* Guard against stack overflow due to overly deep inheritance tree. */
 	check_stack_depth();
@@ -1056,10 +1058,22 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 			adjust_appendrel_attrs(root,
 								   (Node *) rel->joininfo,
 								   1, &appinfo);
-		childrel->reltarget->exprs = (List *)
-			adjust_appendrel_attrs(root,
-								   (Node *) rel->reltarget->exprs,
-								   1, &appinfo);
+
+		/*
+		 * For a result relation, use adjust_target_appendrel_attrs() to
+		 * prevent the child's wholerow Vars from being converted back to the
+		 * parent's reltype.
+		 */
+		if (resultInfo)
+			childrel->reltarget->exprs = (List *)
+				adjust_target_appendrel_attrs(root,
+											  (Node *) rel->reltarget->exprs,
+											  appinfo);
+		else
+			childrel->reltarget->exprs = (List *)
+				adjust_appendrel_attrs(root,
+									   (Node *) rel->reltarget->exprs,
+									   1, &appinfo);
 
 		/*
 		 * We have to make child entries in the EquivalenceClass data

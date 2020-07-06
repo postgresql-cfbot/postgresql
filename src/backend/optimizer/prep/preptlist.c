@@ -45,6 +45,7 @@
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
 #include "optimizer/optimizer.h"
+#include "optimizer/plancat.h"
 #include "optimizer/prep.h"
 #include "optimizer/tlist.h"
 #include "parser/parse_coerce.h"
@@ -111,11 +112,25 @@ preprocess_targetlist(PlannerInfo *root)
 	 * for heap_form_tuple to work, the targetlist must match the exact order
 	 * of the attributes. We also need to fill in any missing attributes. -ay
 	 * 10/94
+	 *
+	 * For UPDATE, we don't expand the plan's targetlist.  Instead, another
+	 * targetlist to be computed separately from the plan's targetlist is
+	 * built and passed to the executor in the ModifyTable node; see
+	 * make_update_targetlist().
 	 */
 	tlist = parse->targetList;
-	if (command_type == CMD_INSERT || command_type == CMD_UPDATE)
+	if (command_type == CMD_INSERT)
 		tlist = expand_targetlist(tlist, command_type,
 								  result_relation, target_relation);
+
+	/*
+	 * Make ResultRelPlanInfo for a UPDATE/DELETE result relation.  If the
+	 * relation has inheritance children, they will get one too when
+	 * query_planner() adds them.
+	 */
+	if (target_relation && command_type != CMD_INSERT)
+		make_result_relation_info(root, result_relation, target_relation,
+								  NULL);
 
 	/*
 	 * Add necessary junk columns for rowmarked rels.  These values are needed
@@ -415,6 +430,99 @@ expand_targetlist(List *tlist, int command_type,
 	return new_tlist;
 }
 
+/*
+ * make_update_targetlist
+ *		Makes UPDATE targetlist such that "plan" TLEs are used for the
+ *		attributes for which they are present.  For the rest, Vars are
+ *		added to fetch the existing values in the "old" tuple of the
+ *		attributes that are not dropped, and NULL constants otherwise.
+ */
+List *
+make_update_targetlist(PlannerInfo *root,
+					   Index rti, Relation relation,
+					   List *plan_tlist)
+{
+	List	   *new_tlist = NIL;
+	ListCell   *plan_item;
+	int			attrno,
+				numattrs;
+
+	plan_item = list_head(plan_tlist);
+
+	numattrs = RelationGetNumberOfAttributes(relation);
+	for (attrno = 1; attrno <= numattrs; attrno++)
+	{
+		Form_pg_attribute att = TupleDescAttr(relation->rd_att, attrno - 1);
+		TargetEntry *new_tle = NULL;
+		Node	   *new_expr;
+
+		if (plan_item != NULL)
+		{
+			TargetEntry *plan_tle = (TargetEntry *) lfirst(plan_item);
+
+			if (!plan_tle->resjunk && plan_tle->resno == attrno)
+			{
+				/* Don't use the plan TLE as is; it gets changed later. */
+				new_tle = copyObject(plan_tle);
+				plan_item = lnext(plan_tlist, plan_item);
+			}
+		}
+
+
+		/*
+		 * If not plan TLE present, generate a Var reference to the existing
+		 * value of the attribute, so that it gets copied to the new tuple. But
+		 * generate a NULL for dropped columns (we want to drop any old values).
+		 */
+		if (new_tle == NULL)
+		{
+			if (!att->attisdropped)
+			{
+				new_expr = (Node *) makeVar(rti,
+											attrno,
+											att->atttypid,
+											att->atttypmod,
+											att->attcollation,
+											0);
+			}
+			else
+			{
+				/* Insert NULL for dropped column */
+				new_expr = (Node *) makeConst(INT4OID,
+											  -1,
+											  InvalidOid,
+											  sizeof(int32),
+											  (Datum) 0,
+											  true, /* isnull */
+											  true /* byval */ );
+			}
+			new_tle = makeTargetEntry((Expr *) new_expr,
+									  attrno,
+									  pstrdup(NameStr(att->attname)),
+									  false);
+			new_tlist = lappend(new_tlist, new_tle);
+		}
+		else
+			new_tlist = lappend(new_tlist, new_tle);
+	}
+
+
+	/*
+	 * The remaining tlist entries should be resjunk.  We don't need them
+	 * for the update target list, but still check that they really are
+	 * junk.
+	 */
+	while (plan_item)
+	{
+		TargetEntry *plan_tle = (TargetEntry *) lfirst(plan_item);
+
+		if (!plan_tle->resjunk)
+			elog(ERROR, "targetlist is not sorted correctly");
+		plan_item = lnext(plan_tlist, plan_item);
+	}
+
+	return new_tlist;
+}
 
 /*
  * Locate PlanRowMark for given RT index, or return NULL if none

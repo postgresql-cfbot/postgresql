@@ -1825,7 +1825,7 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 									rte,
 									resultRelInfo,
 									mtstate->operation,
-									mtstate->mt_plans[subplan_index]->plan,
+									mtstate->mt_plans[0]->plan,
 									query,
 									target_attrs,
 									has_returning,
@@ -1938,8 +1938,7 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 	 */
 	if (plan && plan->operation == CMD_UPDATE &&
 		(resultRelInfo->ri_usesFdwDirectModify ||
-		 resultRelInfo->ri_FdwState) &&
-		resultRelInfo > mtstate->resultRelInfo + mtstate->mt_whichplan)
+		 resultRelInfo->ri_FdwState))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot route tuples into foreign table to be updated \"%s\"",
@@ -2150,6 +2149,7 @@ postgresPlanDirectModify(PlannerInfo *root,
 	List	   *params_list = NIL;
 	List	   *returningList = NIL;
 	List	   *retrieved_attrs = NIL;
+	ResultRelPlanInfo *resultInfo;
 
 	/*
 	 * Decide whether it is safe to modify a foreign table directly.
@@ -2165,7 +2165,9 @@ postgresPlanDirectModify(PlannerInfo *root,
 	 * It's unsafe to modify a foreign table directly if there are any local
 	 * joins needed.
 	 */
-	subplan = (Plan *) list_nth(plan->plans, subplan_index);
+	subplan = (Plan *) linitial(plan->plans);
+	resultInfo = root->result_rel_array[resultRelation];
+	Assert(resultInfo != NULL);
 	if (!IsA(subplan, ForeignScan))
 		return false;
 	fscan = (ForeignScan *) subplan;
@@ -2211,7 +2213,7 @@ postgresPlanDirectModify(PlannerInfo *root,
 			if (attno <= InvalidAttrNumber) /* shouldn't happen */
 				elog(ERROR, "system-column update is not supported");
 
-			tle = get_tle_by_resno(subplan->targetlist, attno);
+			tle = get_tle_by_resno(resultInfo->subplanTargetList, attno);
 
 			if (!tle)
 				elog(ERROR, "attribute number %d not found in subplan targetlist",
@@ -2271,7 +2273,7 @@ postgresPlanDirectModify(PlannerInfo *root,
 		case CMD_UPDATE:
 			deparseDirectUpdateSql(&sql, root, resultRelation, rel,
 								   foreignrel,
-								   ((Plan *) fscan)->targetlist,
+								   resultInfo->subplanTargetList,
 								   targetAttrs,
 								   remote_exprs, &params_list,
 								   returningList, &retrieved_attrs);

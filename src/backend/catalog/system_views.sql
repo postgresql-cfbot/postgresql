@@ -1214,7 +1214,7 @@ CREATE OR REPLACE FUNCTION
 CREATE OR REPLACE FUNCTION pg_stop_backup (
         exclusive boolean, wait_for_archive boolean DEFAULT true,
         OUT lsn pg_lsn, OUT labelfile text, OUT spcmapfile text)
-  RETURNS SETOF record STRICT VOLATILE LANGUAGE internal as 'pg_stop_backup_v2'
+  RETURNS SETOF record STRICT VOLATILE LANGUAGE internal as 'pg_stop_backup'
   PARALLEL RESTRICTED;
 
 CREATE OR REPLACE FUNCTION
@@ -1427,7 +1427,6 @@ AS 'unicode_is_normalized';
 -- available to superuser / cluster owner, if they choose.
 --
 REVOKE EXECUTE ON FUNCTION pg_start_backup(text, boolean, boolean) FROM public;
-REVOKE EXECUTE ON FUNCTION pg_stop_backup() FROM public;
 REVOKE EXECUTE ON FUNCTION pg_stop_backup(boolean, boolean) FROM public;
 REVOKE EXECUTE ON FUNCTION pg_create_restore_point(text) FROM public;
 REVOKE EXECUTE ON FUNCTION pg_switch_wal() FROM public;

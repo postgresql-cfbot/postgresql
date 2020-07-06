@@ -300,8 +300,7 @@ static bool FatalError = false; /* T if recovering from backend crash */
  * and we switch to PM_RUN state.
  *
  * Normal child backends can only be launched when we are in PM_RUN or
- * PM_HOT_STANDBY state.  (We also allow launch of normal
- * child backends in PM_WAIT_BACKUP state, but only for superusers.)
+ * PM_HOT_STANDBY state.
  * In other states we handle connection requests by launching "dead_end"
  * child processes, which will simply send the client an error message and
  * quit.  (We track these in the BackendList so that we can know when they
@@ -327,7 +326,6 @@ typedef enum
 	PM_RECOVERY,				/* in archive recovery mode */
 	PM_HOT_STANDBY,				/* in hot standby mode */
 	PM_RUN,						/* normal "database is alive" state */
-	PM_WAIT_BACKUP,				/* waiting for online backup mode to end */
 	PM_WAIT_READONLY,			/* waiting for read only backends to exit */
 	PM_WAIT_BACKENDS,			/* waiting for live backends to exit */
 	PM_SHUTDOWN,				/* waiting for checkpointer to do shutdown
@@ -2320,9 +2318,6 @@ retry1:
 					(errcode(ERRCODE_TOO_MANY_CONNECTIONS),
 					 errmsg("sorry, too many clients already")));
 			break;
-		case CAC_WAITBACKUP:
-			/* OK for now, will check in InitPostgres */
-			break;
 		case CAC_OK:
 			break;
 	}
@@ -2440,19 +2435,11 @@ canAcceptConnections(int backend_type)
 	 * state.  We treat autovac workers the same as user backends for this
 	 * purpose.  However, bgworkers are excluded from this test; we expect
 	 * bgworker_should_start_now() decided whether the DB state allows them.
-	 *
-	 * In state PM_WAIT_BACKUP only superusers can connect (this must be
-	 * allowed so that a superuser can end online backup mode); we return
-	 * CAC_WAITBACKUP code to indicate that this must be checked later. Note
-	 * that neither CAC_OK nor CAC_WAITBACKUP can safely be returned until we
-	 * have checked for too many children.
 	 */
 	if (pmState != PM_RUN &&
 		backend_type != BACKEND_TYPE_BGWORKER)
 	{
-		if (pmState == PM_WAIT_BACKUP)
-			result = CAC_WAITBACKUP;	/* allow superusers only */
-		else if (Shutdown > NoShutdown)
+		if (Shutdown > NoShutdown)
 			return CAC_SHUTDOWN;	/* shutdown is pending */
 		else if (!FatalError &&
 				 (pmState == PM_STARTUP ||
@@ -2817,7 +2804,7 @@ pmdie(SIGNAL_ARGS)
 				 * and walreceiver processes.
 				 */
 				pmState = (pmState == PM_RUN) ?
-					PM_WAIT_BACKUP : PM_WAIT_READONLY;
+					PM_WAIT_BACKENDS : PM_WAIT_READONLY;
 			}
 
 			/*
@@ -2867,7 +2854,6 @@ pmdie(SIGNAL_ARGS)
 				pmState = PM_WAIT_BACKENDS;
 			}
 			else if (pmState == PM_RUN ||
-					 pmState == PM_WAIT_BACKUP ||
 					 pmState == PM_WAIT_READONLY ||
 					 pmState == PM_WAIT_BACKENDS ||
 					 pmState == PM_HOT_STANDBY)
@@ -3709,7 +3695,6 @@ HandleChildCrash(int pid, int exitstatus, const char *procname)
 	if (pmState == PM_RECOVERY ||
 		pmState == PM_HOT_STANDBY ||
 		pmState == PM_RUN ||
-		pmState == PM_WAIT_BACKUP ||
 		pmState == PM_WAIT_READONLY ||
 		pmState == PM_SHUTDOWN)
 		pmState = PM_WAIT_BACKENDS;
@@ -3793,15 +3778,6 @@ LogChildExit(int lev, const char *procname, int pid, int exitstatus)
 static void
 PostmasterStateMachine(void)
 {
-	if (pmState == PM_WAIT_BACKUP)
-	{
-		/*
-		 * PM_WAIT_BACKUP state ends when online backup mode is not active.
-		 */
-		if (!BackupInProgress())
-			pmState = PM_WAIT_BACKENDS;
-	}
-
 	if (pmState == PM_WAIT_READONLY)
 	{
 		/*
@@ -3967,18 +3943,6 @@ PostmasterStateMachine(void)
 		}
 		else
 		{
-			/*
-			 * Terminate exclusive backup mode to avoid recovery after a clean
-			 * fast shutdown.  Since an exclusive backup can only be taken
-			 * during normal running (and not, for example, while running
-			 * under Hot Standby) it only makes sense to do this if we reached
-			 * normal running. If we're still in recovery, the backup file is
-			 * one we're recovering *from*, and we must keep it around so that
-			 * recovery restarts from the right place.
-			 */
-			if (ReachedNormalRunning)
-				CancelBackup();
-
 			/* Normal exit from the postmaster is here */
 			ExitPostmaster(0);
 		}
@@ -4180,8 +4144,7 @@ BackendStartup(Port *port)
 
 	/* Pass down canAcceptConnections state */
 	port->canAcceptConnections = canAcceptConnections(BACKEND_TYPE_NORMAL);
-	bn->dead_end = (port->canAcceptConnections != CAC_OK &&
-					port->canAcceptConnections != CAC_WAITBACKUP);
+	bn->dead_end = port->canAcceptConnections != CAC_OK;
 
 	/*
 	 * Unless it's a dead_end child, assign it a child slot number
@@ -5898,7 +5861,6 @@ bgworker_should_start_now(BgWorkerStartTime start_time)
 		case PM_SHUTDOWN:
 		case PM_WAIT_BACKENDS:
 		case PM_WAIT_READONLY:
-		case PM_WAIT_BACKUP:
 			break;
 
 		case PM_RUN:

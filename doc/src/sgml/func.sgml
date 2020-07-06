@@ -23990,9 +23990,7 @@ SELECT collation for ('foo' COLLATE "de_DE");
     The functions shown in <xref
     linkend="functions-admin-backup-table"/> assist in making on-line backups.
     These functions cannot be executed during recovery (except
-    non-exclusive <function>pg_start_backup</function>,
-    non-exclusive <function>pg_stop_backup</function>,
-    <function>pg_is_in_backup</function>, <function>pg_backup_start_time</function>
+    <function>pg_start_backup</function>, <function>pg_stop_backup</function>,
     and <function>pg_wal_lsn_diff</function>).
    </para>
 
@@ -24099,20 +24097,9 @@ SELECT collation for ('foo' COLLATE "de_DE");
         it specifies executing <function>pg_start_backup</function> as quickly
         as possible.  This forces an immediate checkpoint which will cause a
         spike in I/O operations, slowing any concurrently executing queries.
-        The optional third parameter specifies whether to perform an exclusive
-        or non-exclusive backup (default is exclusive).
-       </para>
-       <para>
-        When used in exclusive mode, this function writes a backup label file
-        (<filename>backup_label</filename>) and, if there are any links in
-        the <filename>pg_tblspc/</filename> directory, a tablespace map file
-        (<filename>tablespace_map</filename>) into the database cluster's data
-        directory, then performs a checkpoint, and then returns the backup's
-        starting write-ahead log location.  (The user can ignore this
-        result value, but it is provided in case it is useful.)  When used in
-        non-exclusive mode, the contents of these files are instead returned
-        by the <function>pg_stop_backup</function> function, and should be
-        copied to the backup area by the user.
+        The third parameter must be set explicitly <literal>false</literal>.
+        The default of <literal>true</literal> for an exclusive backup is no
+        longer supported.
        </para>
        <para>
         This function is restricted to superusers by default, but other users
@@ -24135,15 +24122,10 @@ SELECT collation for ('foo' COLLATE "de_DE");
         <parameter>spcmapfile</parameter> <type>text</type> )
        </para>
        <para>
-        Finishes performing an exclusive or non-exclusive on-line backup.
-        The <parameter>exclusive</parameter> parameter must match the
+        Finishes performing an on-line backup. The
+        <parameter>exclusive</parameter> parameter must be
+        <literal>false</literal> false to match the
         previous <function>pg_start_backup</function> call.
-        In an exclusive backup, <function>pg_stop_backup</function> removes
-        the backup label file and, if it exists, the tablespace map file
-        created by <function>pg_start_backup</function>.  In a non-exclusive
-        backup, the desired contents of these files are returned as part of
-        the result of the function, and should be written to files in the
-        backup area (not in the data directory).
        </para>
        <para>
         There is an optional second parameter of type <type>boolean</type>.
@@ -24174,57 +24156,13 @@ SELECT collation for ('foo' COLLATE "de_DE");
         The result of the function is a single record.
         The <parameter>lsn</parameter> column holds the backup's ending
         write-ahead log location (which again can be ignored).  The second and
-        third columns are <literal>NULL</literal> when ending an exclusive
-        backup; after a non-exclusive backup they hold the desired contents of
-        the label and tablespace map files.
+        third columns hold the contents of the label and tablespace map files,
+        which should be written to files in the backup area (not in the data
+        directory).
        </para>
        <para>
         This function is restricted to superusers by default, but other users
         can be granted EXECUTE to run the function.
-       </para></entry>
-      </row>
-
-      <row>
-       <entry role="func_table_entry"><para role="func_signature">
-        <function>pg_stop_backup</function> ()
-        <returnvalue>pg_lsn</returnvalue>
-       </para>
-       <para>
-        Finishes performing an exclusive on-line backup.  This simplified
-        version is equivalent to <literal>pg_stop_backup(true,
-        true)</literal>, except that it only returns the <type>pg_lsn</type>
-        result.
-       </para>
-       <para>
-        This function is restricted to superusers by default, but other users
-        can be granted EXECUTE to run the function.
-       </para></entry>
-      </row>
-
-      <row>
-       <entry role="func_table_entry"><para role="func_signature">
-        <indexterm>
-         <primary>pg_is_in_backup</primary>
-        </indexterm>
-        <function>pg_is_in_backup</function> ()
-        <returnvalue>boolean</returnvalue>
-       </para>
-       <para>
-        Returns true if an on-line exclusive backup is in progress.
-       </para></entry>
-      </row>
-
-      <row>
-       <entry role="func_table_entry"><para role="func_signature">
-        <indexterm>
-         <primary>pg_backup_start_time</primary>
-        </indexterm>
-        <function>pg_backup_start_time</function> ()
-        <returnvalue>timestamp with time zone</returnvalue>
-       </para>
-       <para>
-        Returns the start time of the current on-line exclusive backup if one
-        is in progress, otherwise <literal>NULL</literal>.
        </para></entry>
       </row>
 

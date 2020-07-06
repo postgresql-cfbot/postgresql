@@ -507,29 +507,6 @@ typedef union WALInsertLockPadded
 } WALInsertLockPadded;
 
 /*
- * State of an exclusive backup, necessary to control concurrent activities
- * across sessions when working on exclusive backups.
- *
- * EXCLUSIVE_BACKUP_NONE means that there is no exclusive backup actually
- * running, to be more precise pg_start_backup() is not being executed for
- * an exclusive backup and there is no exclusive backup in progress.
- * EXCLUSIVE_BACKUP_STARTING means that pg_start_backup() is starting an
- * exclusive backup.
- * EXCLUSIVE_BACKUP_IN_PROGRESS means that pg_start_backup() has finished
- * running and an exclusive backup is in progress. pg_stop_backup() is
- * needed to finish it.
- * EXCLUSIVE_BACKUP_STOPPING means that pg_stop_backup() is stopping an
- * exclusive backup.
- */
-typedef enum ExclusiveBackupState
-{
-	EXCLUSIVE_BACKUP_NONE = 0,
-	EXCLUSIVE_BACKUP_STARTING,
-	EXCLUSIVE_BACKUP_IN_PROGRESS,
-	EXCLUSIVE_BACKUP_STOPPING
-} ExclusiveBackupState;
-
-/*
  * Session status of running backup, used for sanity checks in SQL-callable
  * functions to start and stop backups.
  */
@@ -576,15 +553,12 @@ typedef struct XLogCtlInsert
 	bool		fullPageWrites;
 
 	/*
-	 * exclusiveBackupState indicates the state of an exclusive backup (see
-	 * comments of ExclusiveBackupState for more details). nonExclusiveBackups
-	 * is a counter indicating the number of streaming base backups currently
-	 * in progress. forcePageWrites is set to true when either of these is
-	 * non-zero. lastBackupStart is the latest checkpoint redo location used
-	 * as a starting point for an online backup.
+	 * runningBackups is a counter indicating the number of backups currently in
+	 * progress. forcePageWrites is set to true when either of these is
+	 * non-zero. lastBackupStart is the latest checkpoint redo location used as
+	 * a starting point for an online backup.
 	 */
-	ExclusiveBackupState exclusiveBackupState;
-	int			nonExclusiveBackups;
+	int			runningBackups;
 	XLogRecPtr	lastBackupStart;
 
 	/*
@@ -944,7 +918,6 @@ static void xlog_outrec(StringInfo buf, XLogReaderState *record);
 #endif
 static void xlog_outdesc(StringInfo buf, XLogReaderState *record);
 static void pg_start_backup_callback(int code, Datum arg);
-static void pg_stop_backup_callback(int code, Datum arg);
 static bool read_backup_label(XLogRecPtr *checkPointLoc,
 							  bool *backupEndRequired, bool *backupFromStandby);
 static bool read_tablespace_map(List **tablespaces);
@@ -9371,7 +9344,7 @@ CreateRestartPoint(int flags)
 		 * Ensure minRecoveryPoint is past the checkpoint record.  Normally,
 		 * this will have happened already while writing out dirty buffers,
 		 * but not necessarily - e.g. because no buffers were dirtied.  We do
-		 * this because a non-exclusive base backup uses minRecoveryPoint to
+		 * this because a backup performed in recovery uses minRecoveryPoint to
 		 * determine which WAL files must be included in the backup, and the
 		 * file (or files) containing the checkpoint record must be included,
 		 * at a minimum. Note that for an ordinary restart of recovery there's
@@ -10444,25 +10417,14 @@ issue_xlog_fsync(int fd, XLogSegNo segno)
 }
 
 /*
- * do_pg_start_backup
+ * do_pg_start_backup is the workhorse of the user-visible pg_start_backup()
+ * function. It creates the necessary starting checkpoint and constructs the
+ * backup label and tablespace map.
  *
- * Utility function called at the start of an online backup. It creates the
- * necessary starting checkpoint and constructs the backup label file.
- *
- * There are two kind of backups: exclusive and non-exclusive. An exclusive
- * backup is started with pg_start_backup(), and there can be only one active
- * at a time. The backup and tablespace map files of an exclusive backup are
- * written to $PGDATA/backup_label and $PGDATA/tablespace_map, and they are
- * removed by pg_stop_backup().
- *
- * A non-exclusive backup is used for the streaming base backups (see
- * src/backend/replication/basebackup.c). The difference to exclusive backups
- * is that the backup label and tablespace map files are not written to disk.
- * Instead, their would-be contents are returned in *labelfile and *tblspcmapfile,
- * and the caller is responsible for including them in the backup archive as
- * 'backup_label' and 'tablespace_map'. There can be many non-exclusive backups
- * active at the same time, and they don't conflict with an exclusive backup
- * either.
+ * The backup label and tablespace map contents are returned in *labelfile and
+ * *tblspcmapfile, and the caller is responsible for including them in the
+ * backup archive as 'backup_label' and 'tablespace_map'. There can be many
+ * backups active at the same time.
  *
  * tablespaces is required only when this function is called while
  * the streaming base backup requested by pg_basebackup is running.
@@ -10472,15 +10434,14 @@ issue_xlog_fsync(int fd, XLogSegNo segno)
  * utilities are not able to create symlinks while extracting files from tar.
  * However for consistency, the same is used for all platforms.
  *
- * needtblspcmapfile is true for the cases (exclusive backup and for
- * non-exclusive backup only when tar format is used for taking backup)
- * when backup needs to generate tablespace_map file, it is used to
- * embed escape character before newline character in tablespace path.
+ * needtblspcmapfile is true for the cases (only when tar format is used for
+ * taking backup) when backup needs to generate tablespace_map file, it is used
+ * to embed escape character before newline character in tablespace path.
  *
  * Returns the minimum WAL location that must be present to restore from this
  * backup, and the corresponding timeline ID in *starttli_p.
  *
- * Every successfully started non-exclusive backup must be stopped by calling
+ * Every successfully started backup must be stopped by calling
  * do_pg_stop_backup() or do_pg_abort_backup().
  *
  * It is the responsibility of the caller of this function to verify the
@@ -10491,7 +10452,6 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 				   StringInfo labelfile, List **tablespaces,
 				   StringInfo tblspcmapfile, bool needtblspcmapfile)
 {
-	bool		exclusive = (labelfile == NULL);
 	bool		backup_started_in_recovery = false;
 	XLogRecPtr	checkpointloc;
 	XLogRecPtr	startpoint;
@@ -10500,19 +10460,8 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 	char		strfbuf[128];
 	char		xlogfilename[MAXFNAMELEN];
 	XLogSegNo	_logSegNo;
-	struct stat stat_buf;
-	FILE	   *fp;
 
 	backup_started_in_recovery = RecoveryInProgress();
-
-	/*
-	 * Currently only non-exclusive backup can be taken during recovery.
-	 */
-	if (backup_started_in_recovery && exclusive)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("recovery is in progress"),
-				 errhint("WAL control functions cannot be executed during recovery.")));
 
 	/*
 	 * During recovery, we don't need to check WAL level. Because, if WAL
@@ -10552,30 +10501,12 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 	 * XLogInsertRecord().
 	 */
 	WALInsertLockAcquireExclusive();
-	if (exclusive)
-	{
-		/*
-		 * At first, mark that we're now starting an exclusive backup, to
-		 * ensure that there are no other sessions currently running
-		 * pg_start_backup() or pg_stop_backup().
-		 */
-		if (XLogCtl->Insert.exclusiveBackupState != EXCLUSIVE_BACKUP_NONE)
-		{
-			WALInsertLockRelease();
-			ereport(ERROR,
-					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					 errmsg("a backup is already in progress"),
-					 errhint("Run pg_stop_backup() and try again.")));
-		}
-		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_STARTING;
-	}
-	else
-		XLogCtl->Insert.nonExclusiveBackups++;
+	XLogCtl->Insert.runningBackups++;
 	XLogCtl->Insert.forcePageWrites = true;
 	WALInsertLockRelease();
 
 	/* Ensure we release forcePageWrites if fail below */
-	PG_ENSURE_ERROR_CLEANUP(pg_start_backup_callback, (Datum) BoolGetDatum(exclusive));
+	PG_ENSURE_ERROR_CLEANUP(pg_start_backup_callback, (Datum) 0);
 	{
 		bool		gotUniqueStartpoint = false;
 		DIR		   *tblspcdir;
@@ -10702,11 +10633,8 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 		XLogFileName(xlogfilename, starttli, _logSegNo, wal_segment_size);
 
 		/*
-		 * Construct tablespace_map file
+		 * Construct tablespace_map
 		 */
-		if (exclusive)
-			tblspcmapfile = makeStringInfo();
-
 		datadirpathlen = strlen(DataDir);
 
 		/* Collect information about all tablespaces */
@@ -10796,11 +10724,8 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 		FreeDir(tblspcdir);
 
 		/*
-		 * Construct backup label file
+		 * Construct backup_label
 		 */
-		if (exclusive)
-			labelfile = makeStringInfo();
-
 		/* Use the log timezone here, not the session timezone */
 		stamp_time = (pg_time_t) time(NULL);
 		pg_strftime(strfbuf, sizeof(strfbuf),
@@ -10810,122 +10735,19 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 						 (uint32) (startpoint >> 32), (uint32) startpoint, xlogfilename);
 		appendStringInfo(labelfile, "CHECKPOINT LOCATION: %X/%X\n",
 						 (uint32) (checkpointloc >> 32), (uint32) checkpointloc);
-		appendStringInfo(labelfile, "BACKUP METHOD: %s\n",
-						 exclusive ? "pg_start_backup" : "streamed");
+		appendStringInfo(labelfile, "BACKUP METHOD: streamed\n");
 		appendStringInfo(labelfile, "BACKUP FROM: %s\n",
 						 backup_started_in_recovery ? "standby" : "master");
 		appendStringInfo(labelfile, "START TIME: %s\n", strfbuf);
 		appendStringInfo(labelfile, "LABEL: %s\n", backupidstr);
 		appendStringInfo(labelfile, "START TIMELINE: %u\n", starttli);
-
-		/*
-		 * Okay, write the file, or return its contents to caller.
-		 */
-		if (exclusive)
-		{
-			/*
-			 * Check for existing backup label --- implies a backup is already
-			 * running.  (XXX given that we checked exclusiveBackupState
-			 * above, maybe it would be OK to just unlink any such label
-			 * file?)
-			 */
-			if (stat(BACKUP_LABEL_FILE, &stat_buf) != 0)
-			{
-				if (errno != ENOENT)
-					ereport(ERROR,
-							(errcode_for_file_access(),
-							 errmsg("could not stat file \"%s\": %m",
-									BACKUP_LABEL_FILE)));
-			}
-			else
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("a backup is already in progress"),
-						 errhint("If you're sure there is no backup in progress, remove file \"%s\" and try again.",
-								 BACKUP_LABEL_FILE)));
-
-			fp = AllocateFile(BACKUP_LABEL_FILE, "w");
-
-			if (!fp)
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not create file \"%s\": %m",
-								BACKUP_LABEL_FILE)));
-			if (fwrite(labelfile->data, labelfile->len, 1, fp) != 1 ||
-				fflush(fp) != 0 ||
-				pg_fsync(fileno(fp)) != 0 ||
-				ferror(fp) ||
-				FreeFile(fp))
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not write file \"%s\": %m",
-								BACKUP_LABEL_FILE)));
-			/* Allocated locally for exclusive backups, so free separately */
-			pfree(labelfile->data);
-			pfree(labelfile);
-
-			/* Write backup tablespace_map file. */
-			if (tblspcmapfile->len > 0)
-			{
-				if (stat(TABLESPACE_MAP, &stat_buf) != 0)
-				{
-					if (errno != ENOENT)
-						ereport(ERROR,
-								(errcode_for_file_access(),
-								 errmsg("could not stat file \"%s\": %m",
-										TABLESPACE_MAP)));
-				}
-				else
-					ereport(ERROR,
-							(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-							 errmsg("a backup is already in progress"),
-							 errhint("If you're sure there is no backup in progress, remove file \"%s\" and try again.",
-									 TABLESPACE_MAP)));
-
-				fp = AllocateFile(TABLESPACE_MAP, "w");
-
-				if (!fp)
-					ereport(ERROR,
-							(errcode_for_file_access(),
-							 errmsg("could not create file \"%s\": %m",
-									TABLESPACE_MAP)));
-				if (fwrite(tblspcmapfile->data, tblspcmapfile->len, 1, fp) != 1 ||
-					fflush(fp) != 0 ||
-					pg_fsync(fileno(fp)) != 0 ||
-					ferror(fp) ||
-					FreeFile(fp))
-					ereport(ERROR,
-							(errcode_for_file_access(),
-							 errmsg("could not write file \"%s\": %m",
-									TABLESPACE_MAP)));
-			}
-
-			/* Allocated locally for exclusive backups, so free separately */
-			pfree(tblspcmapfile->data);
-			pfree(tblspcmapfile);
-		}
 	}
-	PG_END_ENSURE_ERROR_CLEANUP(pg_start_backup_callback, (Datum) BoolGetDatum(exclusive));
+	PG_END_ENSURE_ERROR_CLEANUP(pg_start_backup_callback, (Datum) 0);
 
 	/*
-	 * Mark that start phase has correctly finished for an exclusive backup.
-	 * Session-level locks are updated as well to reflect that state.
-	 *
-	 * Note that CHECK_FOR_INTERRUPTS() must not occur while updating backup
-	 * counters and session-level lock. Otherwise they can be updated
-	 * inconsistently, and which might cause do_pg_abort_backup() to fail.
+	 * Mark that the start phase has correctly finished for the backup.
 	 */
-	if (exclusive)
-	{
-		WALInsertLockAcquireExclusive();
-		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_IN_PROGRESS;
-
-		/* Set session-level lock */
-		sessionBackupState = SESSION_BACKUP_EXCLUSIVE;
-		WALInsertLockRelease();
-	}
-	else
-		sessionBackupState = SESSION_BACKUP_NON_EXCLUSIVE;
+	sessionBackupState = SESSION_BACKUP_RUNNING;
 
 	/*
 	 * We're done.  As a convenience, return the starting WAL location.
@@ -10939,43 +10761,15 @@ do_pg_start_backup(const char *backupidstr, bool fast, TimeLineID *starttli_p,
 static void
 pg_start_backup_callback(int code, Datum arg)
 {
-	bool		exclusive = DatumGetBool(arg);
-
 	/* Update backup counters and forcePageWrites on failure */
 	WALInsertLockAcquireExclusive();
-	if (exclusive)
-	{
-		Assert(XLogCtl->Insert.exclusiveBackupState == EXCLUSIVE_BACKUP_STARTING);
-		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_NONE;
-	}
-	else
-	{
-		Assert(XLogCtl->Insert.nonExclusiveBackups > 0);
-		XLogCtl->Insert.nonExclusiveBackups--;
-	}
 
-	if (XLogCtl->Insert.exclusiveBackupState == EXCLUSIVE_BACKUP_NONE &&
-		XLogCtl->Insert.nonExclusiveBackups == 0)
+	Assert(XLogCtl->Insert.runningBackups > 0);
+	XLogCtl->Insert.runningBackups--;
+
+	if (XLogCtl->Insert.runningBackups == 0)
 	{
 		XLogCtl->Insert.forcePageWrites = false;
-	}
-	WALInsertLockRelease();
-}
-
-/*
- * Error cleanup callback for pg_stop_backup
- */
-static void
-pg_stop_backup_callback(int code, Datum arg)
-{
-	bool		exclusive = DatumGetBool(arg);
-
-	/* Update backup status on failure */
-	WALInsertLockAcquireExclusive();
-	if (exclusive)
-	{
-		Assert(XLogCtl->Insert.exclusiveBackupState == EXCLUSIVE_BACKUP_STOPPING);
-		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_IN_PROGRESS;
 	}
 	WALInsertLockRelease();
 }
@@ -10995,9 +10789,6 @@ get_backup_status(void)
  * Utility function called at the end of an online backup. It cleans up the
  * backup state and can optionally wait for WAL segments to be archived.
  *
- * If labelfile is NULL, this stops an exclusive backup. Otherwise this stops
- * the non-exclusive backup specified by 'labelfile'.
- *
  * Returns the last WAL location that must be present to restore from this
  * backup, and the corresponding timeline ID in *stoptli_p.
  *
@@ -11007,7 +10798,6 @@ get_backup_status(void)
 XLogRecPtr
 do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 {
-	bool		exclusive = (labelfile == NULL);
 	bool		backup_started_in_recovery = false;
 	XLogRecPtr	startpoint;
 	XLogRecPtr	stoppoint;
@@ -11021,7 +10811,6 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 	char		histfilename[MAXFNAMELEN];
 	char		backupfrom[20];
 	XLogSegNo	_logSegNo;
-	FILE	   *lfp;
 	FILE	   *fp;
 	char		ch;
 	int			seconds_before_warning;
@@ -11035,15 +10824,6 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 	backup_started_in_recovery = RecoveryInProgress();
 
 	/*
-	 * Currently only non-exclusive backup can be taken during recovery.
-	 */
-	if (backup_started_in_recovery && exclusive)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("recovery is in progress"),
-				 errhint("WAL control functions cannot be executed during recovery.")));
-
-	/*
 	 * During recovery, we don't need to check WAL level. Because, if WAL
 	 * level is not sufficient, it's impossible to get here during recovery.
 	 */
@@ -11053,106 +10833,23 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
 				 errmsg("WAL level not sufficient for making an online backup"),
 				 errhint("wal_level must be set to \"replica\" or \"logical\" at server start.")));
 
-	if (exclusive)
-	{
-		/*
-		 * At first, mark that we're now stopping an exclusive backup, to
-		 * ensure that there are no other sessions currently running
-		 * pg_start_backup() or pg_stop_backup().
-		 */
-		WALInsertLockAcquireExclusive();
-		if (XLogCtl->Insert.exclusiveBackupState != EXCLUSIVE_BACKUP_IN_PROGRESS)
-		{
-			WALInsertLockRelease();
-			ereport(ERROR,
-					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					 errmsg("exclusive backup not in progress")));
-		}
-		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_STOPPING;
-		WALInsertLockRelease();
-
-		/*
-		 * Remove backup_label. In case of failure, the state for an exclusive
-		 * backup is switched back to in-progress.
-		 */
-		PG_ENSURE_ERROR_CLEANUP(pg_stop_backup_callback, (Datum) BoolGetDatum(exclusive));
-		{
-			/*
-			 * Read the existing label file into memory.
-			 */
-			struct stat statbuf;
-			int			r;
-
-			if (stat(BACKUP_LABEL_FILE, &statbuf))
-			{
-				/* should not happen per the upper checks */
-				if (errno != ENOENT)
-					ereport(ERROR,
-							(errcode_for_file_access(),
-							 errmsg("could not stat file \"%s\": %m",
-									BACKUP_LABEL_FILE)));
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("a backup is not in progress")));
-			}
-
-			lfp = AllocateFile(BACKUP_LABEL_FILE, "r");
-			if (!lfp)
-			{
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not read file \"%s\": %m",
-								BACKUP_LABEL_FILE)));
-			}
-			labelfile = palloc(statbuf.st_size + 1);
-			r = fread(labelfile, statbuf.st_size, 1, lfp);
-			labelfile[statbuf.st_size] = '\0';
-
-			/*
-			 * Close and remove the backup label file
-			 */
-			if (r != 1 || ferror(lfp) || FreeFile(lfp))
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not read file \"%s\": %m",
-								BACKUP_LABEL_FILE)));
-			durable_unlink(BACKUP_LABEL_FILE, ERROR);
-
-			/*
-			 * Remove tablespace_map file if present, it is created only if
-			 * there are tablespaces.
-			 */
-			durable_unlink(TABLESPACE_MAP, DEBUG1);
-		}
-		PG_END_ENSURE_ERROR_CLEANUP(pg_stop_backup_callback, (Datum) BoolGetDatum(exclusive));
-	}
-
 	/*
-	 * OK to update backup counters, forcePageWrites and session-level lock.
+	 * OK to update backup counters and forcePageWrites.
 	 *
 	 * Note that CHECK_FOR_INTERRUPTS() must not occur while updating them.
 	 * Otherwise they can be updated inconsistently, and which might cause
 	 * do_pg_abort_backup() to fail.
 	 */
 	WALInsertLockAcquireExclusive();
-	if (exclusive)
-	{
-		XLogCtl->Insert.exclusiveBackupState = EXCLUSIVE_BACKUP_NONE;
-	}
-	else
-	{
-		/*
-		 * The user-visible pg_start/stop_backup() functions that operate on
-		 * exclusive backups can be called at any time, but for non-exclusive
-		 * backups, it is expected that each do_pg_start_backup() call is
-		 * matched by exactly one do_pg_stop_backup() call.
-		 */
-		Assert(XLogCtl->Insert.nonExclusiveBackups > 0);
-		XLogCtl->Insert.nonExclusiveBackups--;
-	}
 
-	if (XLogCtl->Insert.exclusiveBackupState == EXCLUSIVE_BACKUP_NONE &&
-		XLogCtl->Insert.nonExclusiveBackups == 0)
+	/*
+	 * It is expected that each do_pg_start_backup() call is matched by exactly
+	 * one do_pg_stop_backup() call.
+	 */
+	Assert(XLogCtl->Insert.runningBackups > 0);
+	XLogCtl->Insert.runningBackups--;
+
+	if (XLogCtl->Insert.runningBackups == 0)
 	{
 		XLogCtl->Insert.forcePageWrites = false;
 	}
@@ -11410,10 +11107,6 @@ do_pg_stop_backup(char *labelfile, bool waitforarchive, TimeLineID *stoptli_p)
  * The caller can pass 'arg' as 'true' or 'false' to control whether a warning
  * is emitted.
  *
- * NB: This is only for aborting a non-exclusive backup that doesn't write
- * backup_label. A backup started with pg_start_backup() needs to be finished
- * with pg_stop_backup().
- *
  * NB: This gets used as a before_shmem_exit handler, hence the odd-looking
  * signature.
  */
@@ -11423,18 +11116,16 @@ do_pg_abort_backup(int code, Datum arg)
 	bool		emit_warning = DatumGetBool(arg);
 
 	/*
-	 * Quick exit if session is not keeping around a non-exclusive backup
-	 * already started.
+	 * Quick exit if session does not have a running backup.
 	 */
-	if (sessionBackupState != SESSION_BACKUP_NON_EXCLUSIVE)
+	if (sessionBackupState != SESSION_BACKUP_RUNNING)
 		return;
 
 	WALInsertLockAcquireExclusive();
-	Assert(XLogCtl->Insert.nonExclusiveBackups > 0);
-	XLogCtl->Insert.nonExclusiveBackups--;
+	Assert(XLogCtl->Insert.runningBackups > 0);
+	XLogCtl->Insert.runningBackups--;
 
-	if (XLogCtl->Insert.exclusiveBackupState == EXCLUSIVE_BACKUP_NONE &&
-		XLogCtl->Insert.nonExclusiveBackups == 0)
+	if (XLogCtl->Insert.runningBackups == 0)
 	{
 		XLogCtl->Insert.forcePageWrites = false;
 	}
@@ -11754,87 +11445,6 @@ rm_redo_error_callback(void *arg)
 			   buf.data);
 
 	pfree(buf.data);
-}
-
-/*
- * BackupInProgress: check if online backup mode is active
- *
- * This is done by checking for existence of the "backup_label" file.
- */
-bool
-BackupInProgress(void)
-{
-	struct stat stat_buf;
-
-	return (stat(BACKUP_LABEL_FILE, &stat_buf) == 0);
-}
-
-/*
- * CancelBackup: rename the "backup_label" and "tablespace_map"
- *				 files to cancel backup mode
- *
- * If the "backup_label" file exists, it will be renamed to "backup_label.old".
- * Similarly, if the "tablespace_map" file exists, it will be renamed to
- * "tablespace_map.old".
- *
- * Note that this will render an online backup in progress
- * useless. To correctly finish an online backup, pg_stop_backup must be
- * called.
- */
-void
-CancelBackup(void)
-{
-	struct stat stat_buf;
-
-	/* if the backup_label file is not there, return */
-	if (stat(BACKUP_LABEL_FILE, &stat_buf) < 0)
-		return;
-
-	/* remove leftover file from previously canceled backup if it exists */
-	unlink(BACKUP_LABEL_OLD);
-
-	if (durable_rename(BACKUP_LABEL_FILE, BACKUP_LABEL_OLD, DEBUG1) != 0)
-	{
-		ereport(WARNING,
-				(errcode_for_file_access(),
-				 errmsg("online backup mode was not canceled"),
-				 errdetail("File \"%s\" could not be renamed to \"%s\": %m.",
-						   BACKUP_LABEL_FILE, BACKUP_LABEL_OLD)));
-		return;
-	}
-
-	/* if the tablespace_map file is not there, return */
-	if (stat(TABLESPACE_MAP, &stat_buf) < 0)
-	{
-		ereport(LOG,
-				(errmsg("online backup mode canceled"),
-				 errdetail("File \"%s\" was renamed to \"%s\".",
-						   BACKUP_LABEL_FILE, BACKUP_LABEL_OLD)));
-		return;
-	}
-
-	/* remove leftover file from previously canceled backup if it exists */
-	unlink(TABLESPACE_MAP_OLD);
-
-	if (durable_rename(TABLESPACE_MAP, TABLESPACE_MAP_OLD, DEBUG1) == 0)
-	{
-		ereport(LOG,
-				(errmsg("online backup mode canceled"),
-				 errdetail("Files \"%s\" and \"%s\" were renamed to "
-						   "\"%s\" and \"%s\", respectively.",
-						   BACKUP_LABEL_FILE, TABLESPACE_MAP,
-						   BACKUP_LABEL_OLD, TABLESPACE_MAP_OLD)));
-	}
-	else
-	{
-		ereport(WARNING,
-				(errcode_for_file_access(),
-				 errmsg("online backup mode canceled"),
-				 errdetail("File \"%s\" was renamed to \"%s\", but "
-						   "file \"%s\" could not be renamed to \"%s\": %m.",
-						   BACKUP_LABEL_FILE, BACKUP_LABEL_OLD,
-						   TABLESPACE_MAP, TABLESPACE_MAP_OLD)));
-	}
 }
 
 /*

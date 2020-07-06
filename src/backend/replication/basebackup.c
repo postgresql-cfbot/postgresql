@@ -206,10 +206,8 @@ static const struct exclude_list_item excludeFiles[] =
 	{RELCACHE_INIT_FILENAME, true},
 
 	/*
-	 * If there's a backup_label or tablespace_map file, it belongs to a
-	 * backup started by the user with pg_start_backup().  It is *not* correct
-	 * for this backup.  Our backup_label/tablespace_map is injected into the
-	 * tar separately.
+	 * backup_label and tablespace_map should not exist in in a running cluster
+	 * capable of doing an online backup, but exclude them just in case.
 	 */
 	{BACKUP_LABEL_FILE, false},
 	{TABLESPACE_MAP, false},

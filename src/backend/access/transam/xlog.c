@@ -724,6 +724,16 @@ typedef struct XLogCtlData
 	 */
 	XLogRecPtr	lastFpwDisableRecPtr;
 
+	/* The last segment notified to be archived. Protected by WALWriteLock */
+	XLogSegNo	lastNotifiedSeg;
+
+	/*
+	 * Remember the range of the last segment-spanning record. Protected by
+	 * info_lck
+	 */
+	XLogRecPtr	lastSegContRecStart;
+	XLogRecPtr	lastSegContRecEnd;
+
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
 
@@ -1161,6 +1171,9 @@ XLogInsertRecord(XLogRecData *rdata,
 	 */
 	if (StartPos / XLOG_BLCKSZ != EndPos / XLOG_BLCKSZ)
 	{
+		XLogSegNo startseg;
+		XLogSegNo endseg;
+
 		SpinLockAcquire(&XLogCtl->info_lck);
 		/* advance global request to include new block(s) */
 		if (XLogCtl->LogwrtRqst.Write < EndPos)
@@ -1168,6 +1181,21 @@ XLogInsertRecord(XLogRecData *rdata,
 		/* update local result copy while I have the chance */
 		LogwrtResult = XLogCtl->LogwrtResult;
 		SpinLockRelease(&XLogCtl->info_lck);
+
+		/* Remember the range of the record if it spans over segments */
+		XLByteToSeg(StartPos, startseg, wal_segment_size);
+		XLByteToPrevSeg(EndPos, endseg, wal_segment_size);
+
+		if (startseg != endseg)
+		{
+			SpinLockAcquire(&XLogCtl->info_lck);
+			if (XLogCtl->lastSegContRecEnd < StartPos)
+			{
+				XLogCtl->lastSegContRecStart = StartPos;
+				XLogCtl->lastSegContRecEnd = EndPos;
+			}
+			SpinLockRelease(&XLogCtl->info_lck);
+		}
 	}
 
 	/*
@@ -2400,6 +2428,56 @@ XLogCheckpointNeeded(XLogSegNo new_segno)
 }
 
 /*
+ * Notify segments that are surely stable.
+ *
+ * If the last segment in pg_wal is complete and ended with a continuation
+ * record, crash recovery results in a diverged historiy from archive.  Don't
+ * archive a segment until the whole record is finished writing.
+ */
+static void
+NotifyStableSegments(XLogSegNo notifySegNo)
+{
+	XLogRecPtr	archiveTargetRecPtr;
+	XLogSegNo i;
+
+	if (XLogCtl->lastNotifiedSeg < notifySegNo)
+	{
+		XLogRecPtr lastSegContRecStart;
+		XLogRecPtr lastSegContRecEnd;
+		XLogSegNo	notifyUpTo = 0;
+
+		SpinLockAcquire(&XLogCtl->info_lck);
+		lastSegContRecStart = XLogCtl->lastSegContRecStart;
+		lastSegContRecEnd = XLogCtl->lastSegContRecEnd;
+		SpinLockRelease(&XLogCtl->info_lck);
+
+		/*
+		 * Use start position of the last segmenet-spanning continuation record
+		 * when the record is not flushed completely.
+		 */
+		if (lastSegContRecStart < LogwrtResult.Flush &&
+			LogwrtResult.Flush <= lastSegContRecEnd)
+			archiveTargetRecPtr = lastSegContRecStart;
+		else
+			archiveTargetRecPtr = LogwrtResult.Flush;
+
+		XLByteToSeg(archiveTargetRecPtr, notifyUpTo, wal_segment_size);
+
+		/* back to the last complete segment */
+		notifyUpTo--;
+
+		/* cap by given segment */
+		if (notifyUpTo > notifySegNo)
+			notifyUpTo = notifySegNo;
+
+		for (i = XLogCtl->lastNotifiedSeg + 1 ; i <= notifyUpTo ; i++)
+			XLogArchiveNotifySeg(i);
+
+		XLogCtl->lastNotifiedSeg = notifyUpTo;
+	}
+}
+
+/*
  * Write and/or fsync the log at least as far as WriteRqst indicates.
  *
  * If flexible == true, we don't have to write as far as WriteRqst, but
@@ -2586,7 +2664,7 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 				LogwrtResult.Flush = LogwrtResult.Write;	/* end of page */
 
 				if (XLogArchivingActive())
-					XLogArchiveNotifySeg(openLogSegNo);
+					NotifyStableSegments(openLogSegNo);
 
 				XLogCtl->lastSegSwitchTime = (pg_time_t) time(NULL);
 				XLogCtl->lastSegSwitchLSN = LogwrtResult.Flush;
@@ -2656,6 +2734,10 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 		WalSndWakeupRequest();
 
 		LogwrtResult.Flush = LogwrtResult.Write;
+
+		/* Now the record is fully written, try to notify stable segments */
+		if (XLogArchivingActive())
+			NotifyStableSegments(openLogSegNo - 1);
 	}
 
 	/*
@@ -7707,6 +7789,18 @@ StartupXLOG(void)
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
 
 	/*
+	 * We have archived up to the previous segment of EndOfLog so far.
+	 * Initialize lastNotifiedSeg if needed.
+	 */
+	if (XLogArchivingActive())
+	{
+		XLogSegNo	endLogSegNo;
+
+		XLByteToSeg(EndOfLog, endLogSegNo, wal_segment_size);
+		XLogCtl->lastNotifiedSeg = endLogSegNo - 1;
+	}
+
+	/*
 	 * Update full_page_writes in shared memory and write an XLOG_FPW_CHANGE
 	 * record before resource manager writes cleanup WAL records or checkpoint
 	 * record is written.
@@ -8425,6 +8519,34 @@ GetFlushRecPtr(void)
 	SpinLockAcquire(&XLogCtl->info_lck);
 	LogwrtResult = XLogCtl->LogwrtResult;
 	SpinLockRelease(&XLogCtl->info_lck);
+
+	return LogwrtResult.Flush;
+}
+
+/*
+ * GetReplicationTargetRecPtr -- Returns the latest position that can be
+ * replicated.  WAL records up to this position won't be overwritten even after
+ * a crash of primary.
+ */
+XLogRecPtr
+GetReplicationTargetRecPtr(void)
+{
+	XLogRecPtr lastSegContRecStart;
+	XLogRecPtr lastSegContRecEnd;
+
+	SpinLockAcquire(&XLogCtl->info_lck);
+	LogwrtResult = XLogCtl->LogwrtResult;
+	lastSegContRecStart = XLogCtl->lastSegContRecStart;
+	lastSegContRecEnd = XLogCtl->lastSegContRecEnd;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	/*
+	 * Use start position of the last segmenet-spanning continuation record
+	 * when the record is not flushed completely.
+	 */
+	if (lastSegContRecStart < LogwrtResult.Flush &&
+		LogwrtResult.Flush <= lastSegContRecEnd)
+		return lastSegContRecStart;
 
 	return LogwrtResult.Flush;
 }

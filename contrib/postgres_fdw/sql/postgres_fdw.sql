@@ -2043,11 +2043,14 @@ select tableoid::regclass, * FROM utrtest;
 select tableoid::regclass, * FROM remp;
 select tableoid::regclass, * FROM locp;
 
--- It's not allowed to move a row from a partition that is foreign to another
-update utrtest set a = 2 where b = 'foo' returning *;
+-- It's not allowed to move a row from a foreign partition to a local partition
+update utrtest set a = 2 where a = 1 returning *;
 
--- But the reverse is allowed
-update utrtest set a = 1 where b = 'qux' returning *;
+-- But the reverse is allowed, if the foreign partition itself is not to be updated
+update utrtest set a = 1 where a = 2 returning *;
+delete from remp where b = 'qux';
+insert into utrtest values (2, 'qux');
+update utrtest set a = 1 returning *;
 
 select tableoid::regclass, * FROM utrtest;
 select tableoid::regclass, * FROM remp;

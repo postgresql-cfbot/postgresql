@@ -389,6 +389,18 @@ select a from ab where b between $1 and $2 and a < (select 3);
 
 explain (analyze, costs off, summary off, timing off) execute ab_q3 (2, 2);
 
+-- Runtime pruning for UPDATE/DELETE (mainly notice result relations listed)
+
+prepare upd_q (int, int) as
+update ab set a = a where a = $1 and b = $2;
+
+-- PARAM_EXTERN
+explain (analyze, costs off, summary off, timing off) execute upd_q (1, 1);
+
+-- PARAM_EXEC
+explain (analyze, costs off, summary off, timing off)
+update ab set a = a where a = (select 1) and b = (select 1);
+
 -- Test a backwards Append scan
 create table list_part (a int) partition by list (a);
 create table list_part1 partition of list_part for values in (1);

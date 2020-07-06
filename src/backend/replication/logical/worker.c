@@ -213,7 +213,7 @@ create_estate_for_relation(LogicalRepRelMapEntry *rel)
 	resultRelInfo = makeNode(ResultRelInfo);
 	InitResultRelInfo(resultRelInfo, rel->localrel, 1, NULL, 0);
 
-	estate->es_result_relations = resultRelInfo;
+	estate->es_result_relations = &resultRelInfo;
 	estate->es_num_result_relations = 1;
 	estate->es_result_relation_info = resultRelInfo;
 

@@ -18,6 +18,7 @@
 #include "commands/createas.h"
 #include "commands/defrem.h"
 #include "commands/prepare.h"
+#include "executor/executor.h"
 #include "executor/nodeHash.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
@@ -795,13 +796,21 @@ ExplainPrintTriggers(ExplainState *es, QueryDesc *queryDesc)
 
 	show_relname = (numrels > 1 || numrootrels > 0 ||
 					routerels != NIL || targrels != NIL);
-	rInfo = queryDesc->estate->es_result_relations;
-	for (nr = 0; nr < numrels; rInfo++, nr++)
-		report_triggers(rInfo, show_relname, es);
+	for (nr = 0; nr < numrels; nr++)
+	{
+		rInfo = queryDesc->estate->es_result_relations[nr];
 
-	rInfo = queryDesc->estate->es_root_result_relations;
-	for (nr = 0; nr < numrootrels; rInfo++, nr++)
-		report_triggers(rInfo, show_relname, es);
+		if (rInfo)
+			report_triggers(rInfo, show_relname, es);
+	}
+
+	for (nr = 0; nr < numrootrels; nr++)
+	{
+		rInfo = queryDesc->estate->es_root_result_relations[nr];
+
+		if (rInfo)
+			report_triggers(rInfo, show_relname, es);
+	}
 
 	foreach(l, routerels)
 	{
@@ -3667,17 +3676,31 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 	}
 
 	/* Should we explicitly label target relations? */
-	labeltargets = (mtstate->mt_nplans > 1 ||
-					(mtstate->mt_nplans == 1 &&
-					 mtstate->resultRelInfo->ri_RangeTableIndex != node->nominalRelation));
+	labeltargets = (mtstate->mt_nrels > 1 ||
+					(mtstate->mt_nrels == 1 &&
+					 linitial_int(node->resultRelations) != node->nominalRelation));
 
 	if (labeltargets)
 		ExplainOpenGroup("Target Tables", "Target Tables", false, es);
 
-	for (j = 0; j < mtstate->mt_nplans; j++)
+	for (j = 0; j < mtstate->mt_nrels; j++)
 	{
-		ResultRelInfo *resultRelInfo = mtstate->resultRelInfo + j;
-		FdwRoutine *fdwroutine = resultRelInfo->ri_FdwRoutine;
+		/*
+		 * Get the ResultRelInfo of to show the information of this result
+		 * relation.  When the ModifyTable is actually performed (ANALYZE is
+		 * on), we pass false for create_it, so as to show only those that
+		 * were actually initialized during the execution due to some tuple
+		 * in them getting modified.
+		 */
+		ResultRelInfo *resultRelInfo =
+			ExecGetResultRelInfo(mtstate, node->resultRelIndex + j,
+								 !es->analyze);
+		FdwRoutine *fdwroutine;
+
+		if (resultRelInfo == NULL)
+			continue;
+
+		fdwroutine = resultRelInfo->ri_FdwRoutine;
 
 		if (labeltargets)
 		{

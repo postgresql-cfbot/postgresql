@@ -462,9 +462,6 @@ typedef struct ResultRelInfo
 	/* number of stored generated columns we need to compute */
 	int			ri_NumGeneratedNeeded;
 
-	/* for removing junk attributes from tuples */
-	JunkFilter *ri_junkFilter;
-
 	/* list of RETURNING expressions */
 	List	   *ri_returningList;
 
@@ -491,6 +488,18 @@ typedef struct ResultRelInfo
 
 	/* For use by copy.c when performing multi-inserts */
 	struct CopyMultiInsertBuffer *ri_CopyMultiInsertBuffer;
+
+	/* Stuff for generating and holding "clean" tuples of this relation */
+	int				ri_junkAttno;
+	TupleTableSlot *ri_oldTupleSlot;
+	TupleTableSlot *ri_newTupleSlot;
+	ProjectionInfo *ri_projectNew;
+
+	/*
+	 * Map to convert child sublan tuples to root parent format, set iff
+	 * either update row movement or transition tuple capture is active.
+	 */
+	TupleConversionMap *ri_childToRootMap;
 } ResultRelInfo;
 
 /* ----------------
@@ -522,7 +531,7 @@ typedef struct EState
 	CommandId	es_output_cid;
 
 	/* Info about target table(s) for insert/update/delete queries: */
-	ResultRelInfo *es_result_relations; /* array of ResultRelInfos */
+	ResultRelInfo **es_result_relations; /* array of ResultRelInfo pointers */
 	int			es_num_result_relations;	/* length of array */
 	ResultRelInfo *es_result_relation_info; /* currently active array elt */
 
@@ -532,7 +541,8 @@ typedef struct EState
 	 * es_result_relations, but we need access to the roots for firing
 	 * triggers and for runtime tuple routing.
 	 */
-	ResultRelInfo *es_root_result_relations;	/* array of ResultRelInfos */
+	ResultRelInfo **es_root_result_relations;	/* array of ResultRelInfo
+												 * pointers */
 	int			es_num_root_result_relations;	/* length of the array */
 	PartitionDirectory es_partition_directory;	/* for PartitionDesc lookup */
 
@@ -1166,15 +1176,25 @@ typedef struct ModifyTableState
 	CmdType		operation;		/* INSERT, UPDATE, or DELETE */
 	bool		canSetTag;		/* do we set the command tag/es_processed? */
 	bool		mt_done;		/* are we done? */
-	PlanState **mt_plans;		/* subplans (one per target rel) */
-	int			mt_nplans;		/* number of plans in the array */
-	int			mt_whichplan;	/* which one is being executed (0..n-1) */
-	TupleTableSlot **mt_scans;	/* input tuple corresponding to underlying
-								 * plans */
-	ResultRelInfo *resultRelInfo;	/* per-subplan target relations */
+	PlanState **mt_plans;		/* subplans (actually only 1!) */
+	int			mt_nplans;		/* number of plans in mt_plans (only 1!) */
+	int			mt_whichplan;	/* which one is being executed (always 0th!) */
+	int			mt_nrels;		/* number of result rels in the arrays */
+	TupleDesc	mt_plan_tupdesc;	/* TupleDesc of plan's output */
+	TupleTableSlot **mt_scans;  /* input tuple for each result relation */
+
+	/*
+	 * For UPDATE and DELETE, resno of the TargetEntry corresponding to
+	 * the "tableoid" junk attribute present in the subplan's targetlist.
+	 */
+	int			mt_tableOidAttno;
+
+	ResultRelInfo *resultRelInfo;	/* Target relation */
+	HTAB	   *mt_subplan_resultrel_hash;	/* hash table to look up result
+											 * relation by OID. */
 	ResultRelInfo *rootResultRelInfo;	/* root target relation (partitioned
 										 * table root) */
-	List	  **mt_arowmarks;	/* per-subplan ExecAuxRowMark lists */
+	List	  **mt_arowmarks;	/* ExecAuxRowMark lists (actually only 1!) */
 	EPQState	mt_epqstate;	/* for evaluating EvalPlanQual rechecks */
 	bool		fireBSTriggers; /* do we need to fire stmt triggers? */
 

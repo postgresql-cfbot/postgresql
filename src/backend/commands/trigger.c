@@ -34,6 +34,7 @@
 #include "commands/dbcommands.h"
 #include "commands/defrem.h"
 #include "commands/trigger.h"
+#include "executor/execPartition.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "nodes/bitmapset.h"
@@ -2686,7 +2687,10 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 		{
 			TupleTableSlot *epqslot_clean;
 
-			epqslot_clean = ExecFilterJunk(relinfo->ri_junkFilter, epqslot_candidate);
+			Assert(relinfo->ri_projectNew != NULL);
+			Assert(relinfo->ri_oldTupleSlot != NULL);
+			epqslot_clean = ExecGetUpdateNewTuple(relinfo, epqslot_candidate,
+												  tupleid, NULL);
 
 			if (newslot != epqslot_clean)
 				ExecCopySlot(newslot, epqslot_clean);
@@ -4292,10 +4296,6 @@ GetAfterTriggersTableData(Oid relid, CmdType cmdType)
  * If there are no triggers in 'trigdesc' that request relevant transition
  * tables, then return NULL.
  *
- * The resulting object can be passed to the ExecAR* functions.  The caller
- * should set tcs_map or tcs_original_insert_tuple as appropriate when dealing
- * with child tables.
- *
  * Note that we copy the flags from a parent table into this struct (rather
  * than subsequently using the relation's TriggerDesc directly) so that we can
  * use it to control collection of transition tuples from child tables.
@@ -5389,7 +5389,9 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 	if (row_trigger && transition_capture != NULL)
 	{
 		TupleTableSlot *original_insert_tuple = transition_capture->tcs_original_insert_tuple;
-		TupleConversionMap *map = transition_capture->tcs_map;
+		PartitionRoutingInfo *pinfo = relinfo->ri_PartitionInfo;
+		TupleConversionMap *map = pinfo ? pinfo->pi_PartitionToRootMap :
+			relinfo->ri_childToRootMap;
 		bool		delete_old_table = transition_capture->tcs_delete_old_table;
 		bool		update_old_table = transition_capture->tcs_update_old_table;
 		bool		update_new_table = transition_capture->tcs_update_new_table;

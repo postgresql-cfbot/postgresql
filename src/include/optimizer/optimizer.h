@@ -152,6 +152,7 @@ extern bool predicate_refuted_by(List *predicate_list, List *clause_list,
 /* in util/tlist.c: */
 
 extern int	count_nonjunk_tlist_entries(List *tlist);
+extern List *filter_junk_tlist_entries(List *tlist);
 extern TargetEntry *get_sortgroupref_tle(Index sortref,
 										 List *targetList);
 extern TargetEntry *get_sortgroupclause_tle(SortGroupClause *sgClause,

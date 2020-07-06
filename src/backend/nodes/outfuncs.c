@@ -413,6 +413,7 @@ _outModifyTable(StringInfo str, const ModifyTable *node)
 	WRITE_NODE_FIELD(plans);
 	WRITE_NODE_FIELD(withCheckOptionLists);
 	WRITE_NODE_FIELD(returningLists);
+	WRITE_NODE_FIELD(updateTargetLists);
 	WRITE_NODE_FIELD(fdwPrivLists);
 	WRITE_BITMAPSET_FIELD(fdwDirectModifyPlans);
 	WRITE_NODE_FIELD(rowMarks);
@@ -698,6 +699,7 @@ _outForeignScan(StringInfo str, const ForeignScan *node)
 	WRITE_NODE_FIELD(fdw_recheck_quals);
 	WRITE_BITMAPSET_FIELD(fs_relids);
 	WRITE_BOOL_FIELD(fsSystemCol);
+	WRITE_INT_FIELD(resultRelIndex);
 }
 
 static void
@@ -2120,6 +2122,7 @@ _outModifyTablePath(StringInfo str, const ModifyTablePath *node)
 	WRITE_NODE_FIELD(subroots);
 	WRITE_NODE_FIELD(withCheckOptionLists);
 	WRITE_NODE_FIELD(returningLists);
+	WRITE_NODE_FIELD(updateTargetLists);
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(onconflict);
 	WRITE_INT_FIELD(epqParam);
@@ -2235,6 +2238,8 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_NODE_FIELD(full_join_clauses);
 	WRITE_NODE_FIELD(join_info_list);
 	WRITE_NODE_FIELD(append_rel_list);
+	WRITE_NODE_FIELD(result_rel_list);
+	WRITE_NODE_FIELD(specialJunkVars);
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(placeholder_list);
 	WRITE_NODE_FIELD(fkey_list);
@@ -2249,7 +2254,6 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_FLOAT_FIELD(tuple_fraction, "%.4f");
 	WRITE_FLOAT_FIELD(limit_tuples, "%.0f");
 	WRITE_UINT_FIELD(qual_security_level);
-	WRITE_ENUM_FIELD(inhTargetKind, InheritanceKind);
 	WRITE_BOOL_FIELD(hasJoinRTEs);
 	WRITE_BOOL_FIELD(hasLateralRTEs);
 	WRITE_BOOL_FIELD(hasHavingQual);
@@ -2543,6 +2547,32 @@ _outAppendRelInfo(StringInfo str, const AppendRelInfo *node)
 	WRITE_INT_FIELD(num_child_cols);
 	WRITE_ATTRNUMBER_ARRAY(parent_colnos, node->num_child_cols);
 	WRITE_OID_FIELD(parent_reloid);
+}
+
+static void
+_outResultRelPlanInfo(StringInfo str, const ResultRelPlanInfo *node)
+{
+	WRITE_NODE_TYPE("RESULTRELPLANINFO");
+
+	WRITE_UINT_FIELD(resultRelation);
+	WRITE_NODE_FIELD(subplanTargetList);
+	WRITE_NODE_FIELD(updateTargetList);
+	WRITE_NODE_FIELD(withCheckOptions);
+	WRITE_NODE_FIELD(returningList);
+}
+
+static void
+_outSpecialJunkVarInfo(StringInfo str, const SpecialJunkVarInfo *node)
+{
+	WRITE_NODE_TYPE("SPECIALJUNKVARINFO");
+
+	WRITE_STRING_FIELD(attrname);
+	WRITE_OID_FIELD(vartype);
+	WRITE_INT_FIELD(vartypmod);
+	WRITE_OID_FIELD(varcollid);
+	WRITE_INT_FIELD(varattno);
+	WRITE_INT_FIELD(special_attno);
+	/* child_relids not printed. */
 }
 
 static void
@@ -4147,6 +4177,12 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_AppendRelInfo:
 				_outAppendRelInfo(str, obj);
+				break;
+			case T_ResultRelPlanInfo:
+				_outResultRelPlanInfo(str, obj);
+				break;
+			case T_SpecialJunkVarInfo:
+				_outSpecialJunkVarInfo(str, obj);
 				break;
 			case T_PlaceHolderInfo:
 				_outPlaceHolderInfo(str, obj);

@@ -1480,17 +1480,27 @@ rewriteTargetListUD(Query *parsetree, RangeTblEntry *target_rte,
 												target_relation);
 
 		/*
-		 * If we have a row-level trigger corresponding to the operation, emit
-		 * a whole-row Var so that executor will have the "old" row to pass to
-		 * the trigger.  Alas, this misses system columns.
+		 * We need the "old" tuple to fill up the values for unassigned-to
+		 * attributes in the case of UPDATE.  We will need it also if there
+		 * are any DELETE row triggers.
+		 *
+		 * This is a HACK. The previous comment and if condition:
+		 *
+		 * -* If we have a row-level trigger corresponding to the operation, emit
+		 * -* a whole-row Var so that executor will have the "old" row to pass to
+		 * -* the trigger.  Alas, this misses system columns.
+		 * -if (target_relation->trigdesc &&
+		 * -    ((parsetree->commandType == CMD_UPDATE &&
+		 * -     (target_relation->trigdesc->trig_update_after_row ||
+		 * -      target_relation->trigdesc->trig_update_before_row)) ||
+		 * -    (parsetree->commandType == CMD_DELETE &&
+		 * -     (target_relation->trigdesc->trig_delete_after_row ||
+		 * -      target_relation->trigdesc->trig_delete_before_row))))
 		 */
-		if (target_relation->trigdesc &&
-			((parsetree->commandType == CMD_UPDATE &&
-			  (target_relation->trigdesc->trig_update_after_row ||
-			   target_relation->trigdesc->trig_update_before_row)) ||
-			 (parsetree->commandType == CMD_DELETE &&
-			  (target_relation->trigdesc->trig_delete_after_row ||
-			   target_relation->trigdesc->trig_delete_before_row))))
+		if (parsetree->commandType == CMD_UPDATE ||
+			(target_relation->trigdesc &&
+			 (target_relation->trigdesc->trig_delete_after_row ||
+			  target_relation->trigdesc->trig_delete_before_row)))
 		{
 			var = makeWholeRowVar(target_rte,
 								  parsetree->resultRelation,

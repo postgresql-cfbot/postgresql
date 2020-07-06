@@ -212,6 +212,7 @@ _copyModifyTable(const ModifyTable *from)
 	COPY_NODE_FIELD(plans);
 	COPY_NODE_FIELD(withCheckOptionLists);
 	COPY_NODE_FIELD(returningLists);
+	COPY_NODE_FIELD(updateTargetLists);
 	COPY_NODE_FIELD(fdwPrivLists);
 	COPY_BITMAPSET_FIELD(fdwDirectModifyPlans);
 	COPY_NODE_FIELD(rowMarks);
@@ -761,6 +762,7 @@ _copyForeignScan(const ForeignScan *from)
 	COPY_NODE_FIELD(fdw_recheck_quals);
 	COPY_BITMAPSET_FIELD(fs_relids);
 	COPY_SCALAR_FIELD(fsSystemCol);
+	COPY_SCALAR_FIELD(resultRelIndex);
 
 	return newnode;
 }

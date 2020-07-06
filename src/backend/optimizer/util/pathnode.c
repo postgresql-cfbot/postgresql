@@ -3490,6 +3490,7 @@ create_lockrows_path(PlannerInfo *root, RelOptInfo *rel,
  * 'resultRelations' is an integer list of actual RT indexes of target rel(s)
  * 'subpaths' is a list of Path(s) producing source data (one per rel)
  * 'subroots' is a list of PlannerInfo structs (one per rel)
+ * 'updateTargetLists' is a list of UPDATE NEW tuple targetlists.
  * 'withCheckOptionLists' is a list of WCO lists (one per rel)
  * 'returningLists' is a list of RETURNING tlists (one per rel)
  * 'rowMarks' is a list of PlanRowMarks (non-locking only)
@@ -3502,7 +3503,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 						Index nominalRelation, Index rootRelation,
 						bool partColsUpdated,
 						List *resultRelations, List *subpaths,
-						List *subroots,
+						List *subroots, List *updateTargetLists,
 						List *withCheckOptionLists, List *returningLists,
 						List *rowMarks, OnConflictExpr *onconflict,
 						int epqParam)
@@ -3511,8 +3512,6 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	double		total_size;
 	ListCell   *lc;
 
-	Assert(list_length(resultRelations) == list_length(subpaths));
-	Assert(list_length(resultRelations) == list_length(subroots));
 	Assert(withCheckOptionLists == NIL ||
 		   list_length(resultRelations) == list_length(withCheckOptionLists));
 	Assert(returningLists == NIL ||
@@ -3572,6 +3571,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->resultRelations = resultRelations;
 	pathnode->subpaths = subpaths;
 	pathnode->subroots = subroots;
+	pathnode->updateTargetLists = updateTargetLists;
 	pathnode->withCheckOptionLists = withCheckOptionLists;
 	pathnode->returningLists = returningLists;
 	pathnode->rowMarks = rowMarks;

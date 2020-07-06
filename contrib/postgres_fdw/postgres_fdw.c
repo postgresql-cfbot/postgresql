@@ -218,6 +218,7 @@ typedef struct PgFdwDirectModifyState
 	int			num_tuples;		/* # of result tuples */
 	int			next_tuple;		/* index of next one to return */
 	Relation	resultRel;		/* relcache entry for the target relation */
+	ResultRelInfo *resultRelInfo;	/* ResultRelInfo for the target relation */
 	AttrNumber *attnoMap;		/* array of attnums of input user columns */
 	AttrNumber	ctidAttno;		/* attnum of input ctid column */
 	AttrNumber	oidAttno;		/* attnum of input oid column */
@@ -361,7 +362,8 @@ static bool postgresPlanDirectModify(PlannerInfo *root,
 									 ModifyTable *plan,
 									 Index resultRelation,
 									 int subplan_index);
-static void postgresBeginDirectModify(ForeignScanState *node, int eflags);
+static void postgresBeginDirectModify(ForeignScanState *node,
+						  int eflags);
 static TupleTableSlot *postgresIterateDirectModify(ForeignScanState *node);
 static void postgresEndDirectModify(ForeignScanState *node);
 static void postgresExplainForeignScan(ForeignScanState *node,
@@ -1825,7 +1827,7 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 									rte,
 									resultRelInfo,
 									mtstate->operation,
-									mtstate->mt_plans[subplan_index]->plan,
+									mtstate->mt_plans[0]->plan,
 									query,
 									target_attrs,
 									has_returning,
@@ -1938,8 +1940,7 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 	 */
 	if (plan && plan->operation == CMD_UPDATE &&
 		(resultRelInfo->ri_usesFdwDirectModify ||
-		 resultRelInfo->ri_FdwState) &&
-		resultRelInfo > mtstate->resultRelInfo + mtstate->mt_whichplan)
+		 resultRelInfo->ri_FdwState))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot route tuples into foreign table to be updated \"%s\"",
@@ -1993,7 +1994,7 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 		 */
 		if (plan && plan->operation == CMD_UPDATE &&
 			resultRelation == plan->rootRelation)
-			resultRelation = mtstate->resultRelInfo[0].ri_RangeTableIndex;
+			resultRelation = linitial_int(plan->resultRelations);
 	}
 
 	/* Construct the SQL command string. */
@@ -2150,6 +2151,7 @@ postgresPlanDirectModify(PlannerInfo *root,
 	List	   *params_list = NIL;
 	List	   *returningList = NIL;
 	List	   *retrieved_attrs = NIL;
+	ResultRelPlanInfo *resultInfo;
 
 	/*
 	 * Decide whether it is safe to modify a foreign table directly.
@@ -2165,7 +2167,9 @@ postgresPlanDirectModify(PlannerInfo *root,
 	 * It's unsafe to modify a foreign table directly if there are any local
 	 * joins needed.
 	 */
-	subplan = (Plan *) list_nth(plan->plans, subplan_index);
+	subplan = (Plan *) linitial(plan->plans);
+	resultInfo = root->result_rel_array[resultRelation];
+	Assert(resultInfo != NULL);
 	if (!IsA(subplan, ForeignScan))
 		return false;
 	fscan = (ForeignScan *) subplan;
@@ -2211,7 +2215,7 @@ postgresPlanDirectModify(PlannerInfo *root,
 			if (attno <= InvalidAttrNumber) /* shouldn't happen */
 				elog(ERROR, "system-column update is not supported");
 
-			tle = get_tle_by_resno(subplan->targetlist, attno);
+			tle = get_tle_by_resno(resultInfo->subplanTargetList, attno);
 
 			if (!tle)
 				elog(ERROR, "attribute number %d not found in subplan targetlist",
@@ -2271,7 +2275,7 @@ postgresPlanDirectModify(PlannerInfo *root,
 		case CMD_UPDATE:
 			deparseDirectUpdateSql(&sql, root, resultRelation, rel,
 								   foreignrel,
-								   ((Plan *) fscan)->targetlist,
+								   resultInfo->subplanTargetList,
 								   targetAttrs,
 								   remote_exprs, &params_list,
 								   returningList, &retrieved_attrs);
@@ -2319,6 +2323,11 @@ postgresPlanDirectModify(PlannerInfo *root,
 			rebuild_fdw_scan_tlist(fscan, returningList);
 	}
 
+	/*
+	 * Set the index of the subplan result rel.
+	 */
+	fscan->resultRelIndex = subplan_index;
+
 	table_close(rel, NoLock);
 	return true;
 }
@@ -2328,10 +2337,12 @@ postgresPlanDirectModify(PlannerInfo *root,
  *		Prepare a direct foreign table modification
  */
 static void
-postgresBeginDirectModify(ForeignScanState *node, int eflags)
+postgresBeginDirectModify(ForeignScanState *node,
+						  int eflags)
 {
 	ForeignScan *fsplan = (ForeignScan *) node->ss.ps.plan;
 	EState	   *estate = node->ss.ps.state;
+	List	   *resultRelations = estate->es_plannedstmt->resultRelations;
 	PgFdwDirectModifyState *dmstate;
 	Index		rtindex;
 	RangeTblEntry *rte;
@@ -2356,7 +2367,8 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 	 * Identify which user to do the remote access as.  This should match what
 	 * ExecCheckRTEPerms() does.
 	 */
-	rtindex = estate->es_result_relation_info->ri_RangeTableIndex;
+	Assert(fsplan->resultRelIndex >= 0);
+	rtindex = list_nth_int(resultRelations, fsplan->resultRelIndex);
 	rte = exec_rt_fetch(rtindex, estate);
 	userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
 
@@ -2388,6 +2400,9 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 		 */
 		dmstate->rel = NULL;
 	}
+
+	/* ResultRelInfo is set when first needed by IterateDirectModify(). */
+	dmstate->resultRelInfo = NULL;
 
 	/* Initialize state variable */
 	dmstate->num_tuples = -1;	/* -1 means not set yet */
@@ -2451,7 +2466,16 @@ postgresIterateDirectModify(ForeignScanState *node)
 {
 	PgFdwDirectModifyState *dmstate = (PgFdwDirectModifyState *) node->fdw_state;
 	EState	   *estate = node->ss.ps.state;
-	ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
+	ResultRelInfo *resultRelInfo = dmstate->resultRelInfo;
+
+	if (resultRelInfo == NULL)
+	{
+		ForeignScan *fscan = (ForeignScan *) node->ss.ps.plan;
+
+		resultRelInfo = estate->es_result_relations[fscan->resultRelIndex];
+		Assert(resultRelInfo != NULL);
+		dmstate->resultRelInfo = resultRelInfo;
+	}
 
 	/*
 	 * If this is the first call after Begin, execute the statement.
@@ -4087,7 +4111,7 @@ get_returning_data(ForeignScanState *node)
 {
 	PgFdwDirectModifyState *dmstate = (PgFdwDirectModifyState *) node->fdw_state;
 	EState	   *estate = node->ss.ps.state;
-	ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
+	ResultRelInfo *resultRelInfo = dmstate->resultRelInfo;
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
 	TupleTableSlot *resultSlot;
 
@@ -4234,7 +4258,7 @@ apply_returning_filter(PgFdwDirectModifyState *dmstate,
 					   TupleTableSlot *slot,
 					   EState *estate)
 {
-	ResultRelInfo *relInfo = estate->es_result_relation_info;
+	ResultRelInfo *relInfo = dmstate->resultRelInfo;
 	TupleDesc	resultTupType = RelationGetDescr(dmstate->resultRel);
 	TupleTableSlot *resultSlot;
 	Datum	   *values;

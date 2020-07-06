@@ -19,8 +19,10 @@
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_type.h"
+#include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "optimizer/appendinfo.h"
 #include "optimizer/inherit.h"
 #include "optimizer/optimizer.h"
@@ -29,16 +31,19 @@
 #include "optimizer/planner.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/tlist.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
 #include "partitioning/partprune.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 
 
 static void expand_partitioned_rtentry(PlannerInfo *root, RelOptInfo *relinfo,
 									   RangeTblEntry *parentrte,
 									   Index parentRTindex, Relation parentrel,
-									   PlanRowMark *top_parentrc, LOCKMODE lockmode);
+									   PlanRowMark *top_parentrc, LOCKMODE lockmode,
+									   RelOptInfo *rootrelinfo);
 static void expand_single_inheritance_child(PlannerInfo *root,
 											RangeTblEntry *parentrte,
 											Index parentRTindex, Relation parentrel,
@@ -49,6 +54,15 @@ static Bitmapset *translate_col_privs(const Bitmapset *parent_privs,
 									  List *translated_vars);
 static void expand_appendrel_subquery(PlannerInfo *root, RelOptInfo *rel,
 									  RangeTblEntry *rte, Index rti);
+static void add_child_junk_vars(PlannerInfo *root, RelOptInfo *childrel,
+					Relation childrelation, RelOptInfo *rootrel);
+static bool need_special_junk_var(PlannerInfo *root,
+					  TargetEntry *tle,
+					  Index child_relid);
+static void add_special_junk_var(PlannerInfo *root,
+					 TargetEntry *tle,
+					 Index child_relid,
+					 RelOptInfo *rootrel);
 
 
 /*
@@ -85,6 +99,8 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 	PlanRowMark *oldrc;
 	bool		old_isParent = false;
 	int			old_allMarkTypes = 0;
+	List	   *newvars = NIL;
+	ListCell   *l;
 
 	Assert(rte->inh);			/* else caller error */
 
@@ -141,7 +157,8 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 		 * extract the partition key columns of all the partitioned tables.
 		 */
 		expand_partitioned_rtentry(root, rel, rte, rti,
-								   oldrelation, oldrc, lockmode);
+								   oldrelation, oldrc, lockmode,
+								   rel);
 	}
 	else
 	{
@@ -151,7 +168,6 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 		 * children, so it's not possible for both cases to apply.)
 		 */
 		List	   *inhOIDs;
-		ListCell   *l;
 
 		/* Scan for all members of inheritance set, acquire needed locks */
 		inhOIDs = find_all_inheritors(parentOID, lockmode, NULL);
@@ -180,6 +196,7 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 			Relation	newrelation;
 			RangeTblEntry *childrte;
 			Index		childRTindex;
+			RelOptInfo *childrel;
 
 			/* Open rel if needed; we already have required locks */
 			if (childOID != parentOID)
@@ -205,7 +222,14 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 											&childrte, &childRTindex);
 
 			/* Create the otherrel RelOptInfo too. */
-			(void) build_simple_rel(root, childRTindex, rel);
+			childrel = build_simple_rel(root, childRTindex, rel);
+
+			if (rti == root->parse->resultRelation)
+			{
+				Assert(root->parse->commandType == CMD_UPDATE ||
+					   root->parse->commandType == CMD_DELETE);
+				add_child_junk_vars(root, childrel, newrelation, rel);
+			}
 
 			/* Close child relations, but keep locks */
 			if (childOID != parentOID)
@@ -226,7 +250,6 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 		Var		   *var;
 		TargetEntry *tle;
 		char		resname[32];
-		List	   *newvars = NIL;
 
 		/* The old PlanRowMark should already have necessitated adding TID */
 		Assert(old_allMarkTypes & ~(1 << ROW_MARK_COPY));
@@ -265,13 +288,55 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 			root->processed_tlist = lappend(root->processed_tlist, tle);
 			newvars = lappend(newvars, var);
 		}
+	}
+
+	/*
+	 * If parent is a result relation, add necessary junk columns to the
+	 * top level targetlist and parent's reltarget.
+	 */
+	if (rti == root->parse->resultRelation)
+	{
+		int		resno = list_length(root->processed_tlist) + 1;
+		TargetEntry *tle;
+		Var	   *var;
 
 		/*
-		 * Add the newly added Vars to parent's reltarget.  We needn't worry
-		 * about the children's reltargets, they'll be made later.
+		 * First, we will need a "tableoid" for the executor to identify
+		 * the result relation to update or delete for a given tuple.
 		 */
-		add_vars_to_targetlist(root, newvars, bms_make_singleton(0), false);
+		var= makeVar(rti, TableOidAttributeNumber, OIDOID, -1, InvalidOid, 0);
+		tle = makeTargetEntry((Expr *) var,
+							  resno,
+							  pstrdup("tableoid"),
+							  true);
+		++resno;
+
+		root->processed_tlist = lappend(root->processed_tlist, tle);
+		newvars = lappend(newvars, var);
+
+		/* Now add "special" child junk Vars. */
+		foreach(l, root->specialJunkVars)
+		{
+			SpecialJunkVarInfo *sjv = lfirst(l);
+			Oid		vartype = sjv->special_attno == 0 ?
+									oldrelation->rd_rel->reltype :
+									sjv->vartype;
+
+			var = makeVar(rti, sjv->special_attno, vartype,
+						  sjv->vartypmod, sjv->varcollid, 0);
+			tle = makeTargetEntry((Expr *) var, resno, sjv->attrname, true);
+			root->processed_tlist = lappend(root->processed_tlist, tle);
+			newvars = lappend(newvars, var);
+			++resno;
+		}
 	}
+
+	/*
+	 * Add the newly added Vars to parent's reltarget.  We needn't worry
+	 * about the children's reltargets, they'll be made later.
+	 */
+	if (newvars != NIL)
+		add_vars_to_targetlist(root, newvars, bms_make_singleton(0), false);
 
 	table_close(oldrelation, NoLock);
 }
@@ -284,7 +349,8 @@ static void
 expand_partitioned_rtentry(PlannerInfo *root, RelOptInfo *relinfo,
 						   RangeTblEntry *parentrte,
 						   Index parentRTindex, Relation parentrel,
-						   PlanRowMark *top_parentrc, LOCKMODE lockmode)
+						   PlanRowMark *top_parentrc, LOCKMODE lockmode,
+						   RelOptInfo *rootrelinfo)
 {
 	PartitionDesc partdesc;
 	Bitmapset  *live_parts;
@@ -379,15 +445,229 @@ expand_partitioned_rtentry(PlannerInfo *root, RelOptInfo *relinfo,
 		relinfo->all_partrels = bms_add_members(relinfo->all_partrels,
 												childrelinfo->relids);
 
+		if (rootrelinfo->relid == root->parse->resultRelation)
+		{
+			Assert(root->parse->commandType == CMD_UPDATE ||
+				   root->parse->commandType == CMD_DELETE);
+			add_child_junk_vars(root, childrelinfo, childrel, rootrelinfo);
+		}
+
 		/* If this child is itself partitioned, recurse */
 		if (childrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 			expand_partitioned_rtentry(root, childrelinfo,
 									   childrte, childRTindex,
-									   childrel, top_parentrc, lockmode);
+									   childrel, top_parentrc, lockmode,
+									   rootrelinfo);
 
 		/* Close child relation, but keep locks */
 		table_close(childrel, NoLock);
 	}
+}
+
+/*
+ * add_child_junk_vars
+ *		Check if the row-identifying junk column(s) required by this child
+ *		table is present in the top-level targetlist and if not, add.  The
+ *		junk column's properties (name, type, or Var attribute number) may
+ *		require us to add "special" junk Vars to parent's targetlist which it
+ *		or any of its other children may not be able to produce themselves.
+ *
+ * Note: this only concerns foreign child tables
+ */
+static void
+add_child_junk_vars(PlannerInfo *root, RelOptInfo *childrel,
+					Relation childrelation,
+					RelOptInfo *rootrel)
+{
+	RangeTblEntry *childrte = root->simple_rte_array[childrel->relid];
+	Query	parsetree;
+	List   *child_junk_vars;
+	ListCell *lc;
+
+	/* Currently, only foreign children may require such junk columns. */
+	if (childrel->fdwroutine == NULL ||
+		childrel->fdwroutine->AddForeignUpdateTargets == NULL)
+		return;
+
+	/*
+	 * Ask the table's FDW what junk Vars it needs.
+	 */
+	memcpy(&parsetree, root->parse, sizeof(Query));
+	parsetree.resultRelation = childrel->relid;
+	parsetree.targetList = NIL;
+	childrel->fdwroutine->AddForeignUpdateTargets(&parsetree,
+												  childrte,
+												  childrelation);
+	child_junk_vars = parsetree.targetList;
+
+	/*
+	 * We need the "old" tuple to fill up the values for unassigned-to
+	 * attributes in the case of UPDATE.  We will need it also if there
+	 * are any DELETE row triggers.  This matches what
+	 * rewriteTargetListUD() does.
+	 */
+	if (parsetree.commandType == CMD_UPDATE ||
+		(childrelation->trigdesc &&
+		 (childrelation->trigdesc->trig_delete_after_row ||
+		  childrelation->trigdesc->trig_delete_before_row)))
+	{
+		Var *var;
+		TargetEntry *tle;
+
+		var = makeWholeRowVar(childrte,
+							  parsetree.resultRelation,
+							  0,
+							  false);
+
+		tle = makeTargetEntry((Expr *) var,
+							  list_length(child_junk_vars) + 1,
+							  "wholerow",
+							  true);
+		child_junk_vars = lappend(child_junk_vars, tle);
+	}
+
+	/* Check if any of the child junk Vars need any special attention. */
+	foreach(lc, child_junk_vars)
+	{
+		TargetEntry *tle = lfirst(lc);
+
+		Assert(tle->resjunk);
+
+		if (!IsA(tle->expr, Var))
+			elog(ERROR, "UPDATE junk expression added by foreign table %u not suppported",
+				 childrte->relid);
+
+		if (need_special_junk_var(root, tle, childrel->relid))
+			add_special_junk_var(root, tle, childrel->relid, rootrel);
+	}
+}
+
+/*
+ * Check if we need to consider the junk TLE required by the given child
+ * target relation a "special" junk var, so as to create a new
+ * SpecialJunkVarInfo for it.
+ *
+ * Side-effect warning: If the TLE is found to match the properties of some
+ * SpecialJunkVarInfo already present in root->specialJunkVars, this adds
+ * child_relid into SpecialJunkVarInfo.child_relids.
+ */
+static bool
+need_special_junk_var(PlannerInfo *root,
+					  TargetEntry *tle,
+					  Index child_relid)
+{
+	Var   *var = (Var *) tle->expr;
+	ListCell *lc;
+
+	Assert(IsA(var, Var));
+
+	/* Maybe a similar looking TLE was already considered one? */
+	foreach(lc, root->specialJunkVars)
+	{
+		SpecialJunkVarInfo *sjv = lfirst(lc);
+
+		if (strcmp(tle->resname, sjv->attrname) == 0 &&
+			var->vartype == sjv->vartype &&
+			var->varattno == sjv->varattno)
+		{
+			sjv->child_relids = bms_add_member(sjv->child_relids, child_relid);
+			return false;
+		}
+	}
+
+	/* It's special if the top-level targetlist doesn't have it. */
+	foreach(lc, root->parse->targetList)
+	{
+		TargetEntry *known_tle = lfirst(lc);
+		Var	   *known_var = (Var *) known_tle->expr;
+		Oid		known_vartype = exprType((Node *) known_var);
+		AttrNumber	known_varattno = known_var->varattno;
+
+		/* Ignore non-junk columns. */
+		if (!known_tle->resjunk)
+			continue;
+
+		/* Ignore RETURNING expressions too, if any. */
+		if (known_tle->resname == NULL)
+			continue;
+
+		Assert(IsA(known_var, Var));
+		if (strcmp(tle->resname, known_tle->resname) == 0 &&
+			var->vartype == known_vartype &&
+			var->varattno == known_varattno)
+			return false;
+	}
+
+	return true;
+}
+
+/*
+ * Makes a SpecialJunkVarInfo for a child junk Var that was unlike
+ * any other seen so far.
+ */
+static void
+add_special_junk_var(PlannerInfo *root,
+					 TargetEntry *tle,
+					 Index child_relid,
+					 RelOptInfo *rootrel)
+{
+	SpecialJunkVarInfo *sjv;
+	Var	   *var = (Var *) tle->expr;
+	Oid		vartype = exprType((Node *) var);
+	AttrNumber		special_attno;
+	AppendRelInfo  *appinfo = root->append_rel_array[child_relid];
+
+	Assert(IsA(var, Var));
+
+	/*
+	 * If root parent can emit this var, no need to assign "special" attribute
+	 * numbers.  Unfortunately, this results in all the children needlessly
+	 * emitting the column, even if only this child needs it.
+	 */
+	Assert(appinfo != NULL && var->varattno < appinfo->num_child_cols);
+
+	/* Wholerow ok. */
+	if (var->varattno == 0)
+		special_attno = 0;
+	/* A column that is also present in the parent. */
+	else if (appinfo->parent_colnos[var->varattno] > 0)
+		special_attno = appinfo->parent_colnos[var->varattno];
+	/* Nope, use a "special" attribute number. */
+	else
+		special_attno = ++(rootrel->max_attr);
+
+	sjv = makeNode(SpecialJunkVarInfo);
+	sjv->attrname = pstrdup(tle->resname);
+	sjv->vartype = vartype;
+	sjv->vartypmod = exprTypmod((Node *) var);
+	sjv->varcollid = exprCollation((Node *) var);
+	/*
+	 * Parent Var with a "special" attribute number is mapped to a child Var
+	 * with this attribute number, provided the child's RT index is in
+	 * child_relids.  For other children, it's mapped to a NULL constant.
+	 * See adjust_appendrel_attrs_mutator().
+	 */
+	sjv->varattno = var->varattno;
+	sjv->special_attno = special_attno;
+	sjv->child_relids = bms_add_member(NULL, child_relid);
+
+	root->specialJunkVars = lappend(root->specialJunkVars, sjv);
+}
+
+SpecialJunkVarInfo *
+get_special_junk_var(PlannerInfo *root, Index special_attno)
+{
+	ListCell *l;
+
+	foreach(l, root->specialJunkVars)
+	{
+		SpecialJunkVarInfo *sjv = lfirst(l);
+
+		if (sjv->special_attno == special_attno)
+			return sjv;
+	}
+
+	return NULL;
 }
 
 /*

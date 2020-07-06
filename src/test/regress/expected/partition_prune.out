@@ -1837,6 +1837,53 @@ explain (analyze, costs off, summary off, timing off) execute ab_q3 (2, 2);
          Filter: ((b >= $1) AND (b <= $2) AND (a < $0))
 (10 rows)
 
+-- Runtime pruning for UPDATE/DELETE (mainly notice result relations listed)
+prepare upd_q (int, int) as
+update ab set a = a where a = $1 and b = $2;
+-- PARAM_EXTERN
+explain (analyze, costs off, summary off, timing off) execute upd_q (1, 1);
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Update on ab (actual rows=0 loops=1)
+   Update on ab_a1_b1 ab_1
+   ->  Append (actual rows=0 loops=1)
+         Subplans Removed: 8
+         ->  Seq Scan on ab_a1_b1 ab_1 (actual rows=0 loops=1)
+               Filter: ((a = $1) AND (b = $2))
+(6 rows)
+
+-- PARAM_EXEC
+explain (analyze, costs off, summary off, timing off)
+update ab set a = a where a = (select 1) and b = (select 1);
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Update on ab (actual rows=0 loops=1)
+   Update on ab_a1_b1 ab_1
+   InitPlan 1 (returns $0)
+     ->  Result (actual rows=1 loops=1)
+   InitPlan 2 (returns $1)
+     ->  Result (actual rows=1 loops=1)
+   ->  Append (actual rows=0 loops=1)
+         ->  Seq Scan on ab_a1_b1 ab_1 (actual rows=0 loops=1)
+               Filter: ((a = $0) AND (b = $1))
+         ->  Seq Scan on ab_a1_b2 ab_2 (never executed)
+               Filter: ((a = $0) AND (b = $1))
+         ->  Seq Scan on ab_a1_b3 ab_3 (never executed)
+               Filter: ((a = $0) AND (b = $1))
+         ->  Seq Scan on ab_a2_b1 ab_4 (never executed)
+               Filter: ((a = $0) AND (b = $1))
+         ->  Seq Scan on ab_a2_b2 ab_5 (never executed)
+               Filter: ((a = $0) AND (b = $1))
+         ->  Seq Scan on ab_a2_b3 ab_6 (never executed)
+               Filter: ((a = $0) AND (b = $1))
+         ->  Seq Scan on ab_a3_b1 ab_7 (never executed)
+               Filter: ((a = $0) AND (b = $1))
+         ->  Seq Scan on ab_a3_b2 ab_8 (never executed)
+               Filter: ((a = $0) AND (b = $1))
+         ->  Seq Scan on ab_a3_b3 ab_9 (never executed)
+               Filter: ((a = $0) AND (b = $1))
+(25 rows)
+
 -- Test a backwards Append scan
 create table list_part (a int) partition by list (a);
 create table list_part1 partition of list_part for values in (1);
@@ -2435,74 +2482,43 @@ deallocate ab_q6;
 insert into ab values (1,2);
 explain (analyze, costs off, summary off, timing off)
 update ab_a1 set b = 3 from ab where ab.a = 1 and ab.a = ab_a1.a;
-                                     QUERY PLAN                                      
--------------------------------------------------------------------------------------
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
  Update on ab_a1 (actual rows=0 loops=1)
    Update on ab_a1_b1 ab_a1_1
    Update on ab_a1_b2 ab_a1_2
    Update on ab_a1_b3 ab_a1_3
-   ->  Nested Loop (actual rows=0 loops=1)
+   ->  Nested Loop (actual rows=1 loops=1)
          ->  Append (actual rows=1 loops=1)
-               ->  Bitmap Heap Scan on ab_a1_b1 ab_1 (actual rows=0 loops=1)
-                     Recheck Cond: (a = 1)
-                     ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual rows=0 loops=1)
-                           Index Cond: (a = 1)
-               ->  Bitmap Heap Scan on ab_a1_b2 ab_2 (actual rows=1 loops=1)
-                     Recheck Cond: (a = 1)
-                     Heap Blocks: exact=1
-                     ->  Bitmap Index Scan on ab_a1_b2_a_idx (actual rows=1 loops=1)
-                           Index Cond: (a = 1)
-               ->  Bitmap Heap Scan on ab_a1_b3 ab_3 (actual rows=0 loops=1)
-                     Recheck Cond: (a = 1)
-                     ->  Bitmap Index Scan on ab_a1_b3_a_idx (actual rows=0 loops=1)
-                           Index Cond: (a = 1)
-         ->  Materialize (actual rows=0 loops=1)
                ->  Bitmap Heap Scan on ab_a1_b1 ab_a1_1 (actual rows=0 loops=1)
                      Recheck Cond: (a = 1)
                      ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual rows=0 loops=1)
                            Index Cond: (a = 1)
-   ->  Nested Loop (actual rows=1 loops=1)
-         ->  Append (actual rows=1 loops=1)
-               ->  Bitmap Heap Scan on ab_a1_b1 ab_1 (actual rows=0 loops=1)
-                     Recheck Cond: (a = 1)
-                     ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual rows=0 loops=1)
-                           Index Cond: (a = 1)
-               ->  Bitmap Heap Scan on ab_a1_b2 ab_2 (actual rows=1 loops=1)
-                     Recheck Cond: (a = 1)
-                     Heap Blocks: exact=1
-                     ->  Bitmap Index Scan on ab_a1_b2_a_idx (actual rows=1 loops=1)
-                           Index Cond: (a = 1)
-               ->  Bitmap Heap Scan on ab_a1_b3 ab_3 (actual rows=0 loops=1)
-                     Recheck Cond: (a = 1)
-                     ->  Bitmap Index Scan on ab_a1_b3_a_idx (actual rows=1 loops=1)
-                           Index Cond: (a = 1)
-         ->  Materialize (actual rows=1 loops=1)
                ->  Bitmap Heap Scan on ab_a1_b2 ab_a1_2 (actual rows=1 loops=1)
                      Recheck Cond: (a = 1)
                      Heap Blocks: exact=1
                      ->  Bitmap Index Scan on ab_a1_b2_a_idx (actual rows=1 loops=1)
                            Index Cond: (a = 1)
-   ->  Nested Loop (actual rows=0 loops=1)
-         ->  Append (actual rows=1 loops=1)
-               ->  Bitmap Heap Scan on ab_a1_b1 ab_1 (actual rows=0 loops=1)
-                     Recheck Cond: (a = 1)
-                     ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual rows=0 loops=1)
-                           Index Cond: (a = 1)
-               ->  Bitmap Heap Scan on ab_a1_b2 ab_2 (actual rows=1 loops=1)
-                     Recheck Cond: (a = 1)
-                     Heap Blocks: exact=1
-                     ->  Bitmap Index Scan on ab_a1_b2_a_idx (actual rows=1 loops=1)
-                           Index Cond: (a = 1)
-               ->  Bitmap Heap Scan on ab_a1_b3 ab_3 (actual rows=0 loops=1)
-                     Recheck Cond: (a = 1)
-                     ->  Bitmap Index Scan on ab_a1_b3_a_idx (actual rows=1 loops=1)
-                           Index Cond: (a = 1)
-         ->  Materialize (actual rows=0 loops=1)
                ->  Bitmap Heap Scan on ab_a1_b3 ab_a1_3 (actual rows=0 loops=1)
                      Recheck Cond: (a = 1)
                      ->  Bitmap Index Scan on ab_a1_b3_a_idx (actual rows=1 loops=1)
                            Index Cond: (a = 1)
-(65 rows)
+         ->  Materialize (actual rows=1 loops=1)
+               ->  Append (actual rows=1 loops=1)
+                     ->  Bitmap Heap Scan on ab_a1_b1 ab_1 (actual rows=0 loops=1)
+                           Recheck Cond: (a = 1)
+                           ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual rows=0 loops=1)
+                                 Index Cond: (a = 1)
+                     ->  Bitmap Heap Scan on ab_a1_b2 ab_2 (actual rows=1 loops=1)
+                           Recheck Cond: (a = 1)
+                           Heap Blocks: exact=1
+                           ->  Bitmap Index Scan on ab_a1_b2_a_idx (actual rows=1 loops=1)
+                                 Index Cond: (a = 1)
+                     ->  Bitmap Heap Scan on ab_a1_b3 ab_3 (actual rows=0 loops=1)
+                           Recheck Cond: (a = 1)
+                           ->  Bitmap Index Scan on ab_a1_b3_a_idx (actual rows=1 loops=1)
+                                 Index Cond: (a = 1)
+(34 rows)
 
 table ab;
  a | b 
@@ -2523,9 +2539,12 @@ update ab_a1 set b = 3 from ab_a2 where ab_a2.b = (select 1);
    Update on ab_a1_b3 ab_a1_3
    InitPlan 1 (returns $0)
      ->  Result (actual rows=1 loops=1)
-   ->  Nested Loop (actual rows=1 loops=1)
-         ->  Seq Scan on ab_a1_b1 ab_a1_1 (actual rows=1 loops=1)
-         ->  Materialize (actual rows=1 loops=1)
+   ->  Nested Loop (actual rows=3 loops=1)
+         ->  Append (actual rows=3 loops=1)
+               ->  Seq Scan on ab_a1_b1 ab_a1_1 (actual rows=1 loops=1)
+               ->  Seq Scan on ab_a1_b2 ab_a1_2 (actual rows=1 loops=1)
+               ->  Seq Scan on ab_a1_b3 ab_a1_3 (actual rows=1 loops=1)
+         ->  Materialize (actual rows=1 loops=3)
                ->  Append (actual rows=1 loops=1)
                      ->  Seq Scan on ab_a2_b1 ab_a2_1 (actual rows=1 loops=1)
                            Filter: (b = $0)
@@ -2533,27 +2552,7 @@ update ab_a1 set b = 3 from ab_a2 where ab_a2.b = (select 1);
                            Filter: (b = $0)
                      ->  Seq Scan on ab_a2_b3 ab_a2_3 (never executed)
                            Filter: (b = $0)
-   ->  Nested Loop (actual rows=1 loops=1)
-         ->  Seq Scan on ab_a1_b2 ab_a1_2 (actual rows=1 loops=1)
-         ->  Materialize (actual rows=1 loops=1)
-               ->  Append (actual rows=1 loops=1)
-                     ->  Seq Scan on ab_a2_b1 ab_a2_1 (actual rows=1 loops=1)
-                           Filter: (b = $0)
-                     ->  Seq Scan on ab_a2_b2 ab_a2_2 (never executed)
-                           Filter: (b = $0)
-                     ->  Seq Scan on ab_a2_b3 ab_a2_3 (never executed)
-                           Filter: (b = $0)
-   ->  Nested Loop (actual rows=1 loops=1)
-         ->  Seq Scan on ab_a1_b3 ab_a1_3 (actual rows=1 loops=1)
-         ->  Materialize (actual rows=1 loops=1)
-               ->  Append (actual rows=1 loops=1)
-                     ->  Seq Scan on ab_a2_b1 ab_a2_1 (actual rows=1 loops=1)
-                           Filter: (b = $0)
-                     ->  Seq Scan on ab_a2_b2 ab_a2_2 (never executed)
-                           Filter: (b = $0)
-                     ->  Seq Scan on ab_a2_b3 ab_a2_3 (never executed)
-                           Filter: (b = $0)
-(36 rows)
+(19 rows)
 
 select tableoid::regclass, * from ab;
  tableoid | a | b 
@@ -3392,28 +3391,30 @@ explain (costs off) select * from pp_lp where a = 1;
 (5 rows)
 
 explain (costs off) update pp_lp set value = 10 where a = 1;
-            QUERY PLAN            
-----------------------------------
+               QUERY PLAN               
+----------------------------------------
  Update on pp_lp
    Update on pp_lp1 pp_lp_1
    Update on pp_lp2 pp_lp_2
-   ->  Seq Scan on pp_lp1 pp_lp_1
-         Filter: (a = 1)
-   ->  Seq Scan on pp_lp2 pp_lp_2
-         Filter: (a = 1)
-(7 rows)
+   ->  Append
+         ->  Seq Scan on pp_lp1 pp_lp_1
+               Filter: (a = 1)
+         ->  Seq Scan on pp_lp2 pp_lp_2
+               Filter: (a = 1)
+(8 rows)
 
 explain (costs off) delete from pp_lp where a = 1;
-            QUERY PLAN            
-----------------------------------
+               QUERY PLAN               
+----------------------------------------
  Delete on pp_lp
    Delete on pp_lp1 pp_lp_1
    Delete on pp_lp2 pp_lp_2
-   ->  Seq Scan on pp_lp1 pp_lp_1
-         Filter: (a = 1)
-   ->  Seq Scan on pp_lp2 pp_lp_2
-         Filter: (a = 1)
-(7 rows)
+   ->  Append
+         ->  Seq Scan on pp_lp1 pp_lp_1
+               Filter: (a = 1)
+         ->  Seq Scan on pp_lp2 pp_lp_2
+               Filter: (a = 1)
+(8 rows)
 
 set constraint_exclusion = 'off'; -- this should not affect the result.
 explain (costs off) select * from pp_lp where a = 1;
@@ -3427,28 +3428,30 @@ explain (costs off) select * from pp_lp where a = 1;
 (5 rows)
 
 explain (costs off) update pp_lp set value = 10 where a = 1;
-            QUERY PLAN            
-----------------------------------
+               QUERY PLAN               
+----------------------------------------
  Update on pp_lp
    Update on pp_lp1 pp_lp_1
    Update on pp_lp2 pp_lp_2
-   ->  Seq Scan on pp_lp1 pp_lp_1
-         Filter: (a = 1)
-   ->  Seq Scan on pp_lp2 pp_lp_2
-         Filter: (a = 1)
-(7 rows)
+   ->  Append
+         ->  Seq Scan on pp_lp1 pp_lp_1
+               Filter: (a = 1)
+         ->  Seq Scan on pp_lp2 pp_lp_2
+               Filter: (a = 1)
+(8 rows)
 
 explain (costs off) delete from pp_lp where a = 1;
-            QUERY PLAN            
-----------------------------------
+               QUERY PLAN               
+----------------------------------------
  Delete on pp_lp
    Delete on pp_lp1 pp_lp_1
    Delete on pp_lp2 pp_lp_2
-   ->  Seq Scan on pp_lp1 pp_lp_1
-         Filter: (a = 1)
-   ->  Seq Scan on pp_lp2 pp_lp_2
-         Filter: (a = 1)
-(7 rows)
+   ->  Append
+         ->  Seq Scan on pp_lp1 pp_lp_1
+               Filter: (a = 1)
+         ->  Seq Scan on pp_lp2 pp_lp_2
+               Filter: (a = 1)
+(8 rows)
 
 drop table pp_lp;
 -- Ensure enable_partition_prune does not affect non-partitioned tables.
@@ -3472,28 +3475,31 @@ explain (costs off) select * from inh_lp where a = 1;
 (5 rows)
 
 explain (costs off) update inh_lp set value = 10 where a = 1;
-             QUERY PLAN             
-------------------------------------
+                   QUERY PLAN                   
+------------------------------------------------
  Update on inh_lp
-   Update on inh_lp
-   Update on inh_lp1 inh_lp_1
-   ->  Seq Scan on inh_lp
-         Filter: (a = 1)
-   ->  Seq Scan on inh_lp1 inh_lp_1
-         Filter: (a = 1)
-(7 rows)
+   Update on inh_lp inh_lp_1
+   Update on inh_lp1 inh_lp_2
+   ->  Result
+         ->  Append
+               ->  Seq Scan on inh_lp inh_lp_1
+                     Filter: (a = 1)
+               ->  Seq Scan on inh_lp1 inh_lp_2
+                     Filter: (a = 1)
+(9 rows)
 
 explain (costs off) delete from inh_lp where a = 1;
-             QUERY PLAN             
-------------------------------------
+                QUERY PLAN                
+------------------------------------------
  Delete on inh_lp
-   Delete on inh_lp
-   Delete on inh_lp1 inh_lp_1
-   ->  Seq Scan on inh_lp
-         Filter: (a = 1)
-   ->  Seq Scan on inh_lp1 inh_lp_1
-         Filter: (a = 1)
-(7 rows)
+   Delete on inh_lp inh_lp_1
+   Delete on inh_lp1 inh_lp_2
+   ->  Append
+         ->  Seq Scan on inh_lp inh_lp_1
+               Filter: (a = 1)
+         ->  Seq Scan on inh_lp1 inh_lp_2
+               Filter: (a = 1)
+(8 rows)
 
 -- Ensure we don't exclude normal relations when we only expect to exclude
 -- inheritance children

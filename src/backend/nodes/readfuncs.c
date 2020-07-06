@@ -1644,6 +1644,7 @@ _readModifyTable(void)
 	READ_NODE_FIELD(plans);
 	READ_NODE_FIELD(withCheckOptionLists);
 	READ_NODE_FIELD(returningLists);
+	READ_NODE_FIELD(updateTargetLists);
 	READ_NODE_FIELD(fdwPrivLists);
 	READ_BITMAPSET_FIELD(fdwDirectModifyPlans);
 	READ_NODE_FIELD(rowMarks);
@@ -2017,6 +2018,7 @@ _readForeignScan(void)
 	READ_NODE_FIELD(fdw_recheck_quals);
 	READ_BITMAPSET_FIELD(fs_relids);
 	READ_BOOL_FIELD(fsSystemCol);
+	READ_INT_FIELD(resultRelIndex);
 
 	READ_DONE();
 }

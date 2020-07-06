@@ -45,10 +45,6 @@ typedef struct TriggerData
 /*
  * The state for capturing old and new tuples into transition tables for a
  * single ModifyTable node (or other operation source, e.g. copy.c).
- *
- * This is per-caller to avoid conflicts in setting tcs_map or
- * tcs_original_insert_tuple.  Note, however, that the pointed-to
- * private data may be shared across multiple callers.
  */
 struct AfterTriggersTableData;	/* private in trigger.c */
 
@@ -64,14 +60,6 @@ typedef struct TransitionCaptureState
 	bool		tcs_update_old_table;
 	bool		tcs_update_new_table;
 	bool		tcs_insert_new_table;
-
-	/*
-	 * For UPDATE and DELETE, AfterTriggerSaveEvent may need to convert the
-	 * new and old tuples from a child table's format to the format of the
-	 * relation named in a query so that it is compatible with the transition
-	 * tuplestores.  The caller must store the conversion map here if so.
-	 */
-	TupleConversionMap *tcs_map;
 
 	/*
 	 * For INSERT and COPY, it would be wasteful to convert tuples from child

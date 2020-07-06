@@ -277,6 +277,9 @@ typedef struct PROC_HDR
 	int			startupProcPid;
 	/* Buffer id of the buffer that Startup process waits for pin on, or -1 */
 	int			startupBufferPinWaitBufId;
+	/* Archiver process's latch */
+	Latch	   *archiverLatch;
+	/* Current shared estimate of appropriate spins_per_delay value */
 } PROC_HDR;
 
 extern PGDLLIMPORT PROC_HDR *ProcGlobal;

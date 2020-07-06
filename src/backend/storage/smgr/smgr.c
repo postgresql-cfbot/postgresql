@@ -414,8 +414,8 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	DropRelFileNodesAllBuffers(rnodes, nrels);
 
 	/*
-	 * It'd be nice to tell the stats collector to forget them immediately,
-	 * too. But we can't because we don't know the OIDs.
+	 * It'd be nice to tell the activity stats facility to forget them
+	 * immediately, too. But we can't because we don't know the OIDs.
 	 */
 
 	/*

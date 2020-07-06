@@ -397,6 +397,75 @@ RetrieveDataDirCreatePerm(PGconn *conn)
 	return true;
 }
 
+#ifdef USE_NVWAL
+/*
+ * Returns nvwal_size in bytes if available, 0 otherwise.
+ * Note that it is caller's responsibility to check if the returned
+ * nvwal_size is really valid, that is, multiple of WAL segment size.
+ */
+size_t
+RetrieveNvwalSize(PGconn *conn)
+{
+	PGresult   *res;
+	char		unit[3];
+	int			val;
+	size_t		nvwal_size;
+
+	/* check connection existence */
+	Assert(conn != NULL);
+
+	/* fail if we do not have SHOW command */
+	if (PQserverVersion(conn) < MINIMUM_VERSION_FOR_SHOW_CMD)
+	{
+		pg_log_error("SHOW command is not supported for retrieving nvwal_size");
+		return 0;
+	}
+
+	res = PQexec(conn, "SHOW nvwal_size");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		pg_log_error("could not send replication command \"%s\": %s",
+					 "SHOW nvwal_size", PQerrorMessage(conn));
+
+		PQclear(res);
+		return 0;
+	}
+	if (PQntuples(res) != 1 || PQnfields(res) < 1)
+	{
+		pg_log_error("could not fetch NVWAL size: got %d rows and %d fields, expected %d rows and %d or more fields",
+					 PQntuples(res), PQnfields(res), 1, 1);
+
+		PQclear(res);
+		return 0;
+	}
+
+	/* fetch value and unit from the result */
+	if (sscanf(PQgetvalue(res, 0, 0), "%d%s", &val, unit) != 2)
+	{
+		pg_log_error("NVWAL size could not be parsed");
+		PQclear(res);
+		return 0;
+	}
+
+	PQclear(res);
+
+	/* convert to bytes */
+	if (strcmp(unit, "MB") == 0)
+		nvwal_size = ((size_t) val) << 20;
+	else if (strcmp(unit, "GB") == 0)
+		nvwal_size = ((size_t) val) << 30;
+	else if (strcmp(unit, "TB") == 0)
+		nvwal_size = ((size_t) val) << 40;
+	else
+	{
+		pg_log_error("unsupported NVWAL unit");
+		return 0;
+	}
+
+	return nvwal_size;
+}
+#endif
+
 /*
  * Run IDENTIFY_SYSTEM through a given connection and give back to caller
  * some result information if requested:

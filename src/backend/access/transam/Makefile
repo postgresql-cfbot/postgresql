@@ -32,7 +32,8 @@ OBJS = \
 	xlogfuncs.o \
 	xloginsert.o \
 	xlogreader.o \
-	xlogutils.o
+	xlogutils.o \
+	nv_xlog_buffer.o
 
 include $(top_srcdir)/src/backend/common.mk
 

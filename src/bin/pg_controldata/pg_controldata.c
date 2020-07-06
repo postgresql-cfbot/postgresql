@@ -272,6 +272,9 @@ main(int argc, char *argv[])
 		   ControlFile->checkPointCopy.oldestCommitTsXid);
 	printf(_("Latest checkpoint's newestCommitTsXid:%u\n"),
 		   ControlFile->checkPointCopy.newestCommitTsXid);
+	printf(_("discarded Up To:                      %X/%X\n"),
+		   (uint32) (ControlFile->discardedUpTo >> 32),
+		   (uint32) ControlFile->discardedUpTo);
 	printf(_("Time of latest checkpoint:            %s\n"),
 		   ckpttime_str);
 	printf(_("Fake LSN counter for unlogged rels:   %X/%X\n"),

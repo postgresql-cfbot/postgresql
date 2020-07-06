@@ -20,7 +20,7 @@ static char *escape_quotes(const char *src);
  * return it.
  */
 PQExpBuffer
-GenerateRecoveryConfig(PGconn *pgconn, char *replication_slot)
+GenerateRecoveryConfig(PGconn *pgconn, char *replication_slot, char *nvwal_path)
 {
 	PQconninfoOption *connOptions;
 	PQExpBufferData conninfo_buf;
@@ -93,6 +93,13 @@ GenerateRecoveryConfig(PGconn *pgconn, char *replication_slot)
 		/* unescaped: ReplicationSlotValidateName allows [a-z0-9_] only */
 		appendPQExpBuffer(contents, "primary_slot_name = '%s'\n",
 						  replication_slot);
+	}
+
+	if (nvwal_path)
+	{
+		escaped = escape_quotes(nvwal_path);
+		appendPQExpBuffer(contents, "nvwal_path = '%s'\n", escaped);
+		free(escaped);
 	}
 
 	if (PQExpBufferBroken(contents))

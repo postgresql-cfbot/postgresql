@@ -21,7 +21,8 @@
 #define MINIMUM_VERSION_FOR_RECOVERY_GUC 120000
 
 extern PQExpBuffer GenerateRecoveryConfig(PGconn *pgconn,
-										  char *pg_replication_slot);
+										  char *pg_replication_slot,
+										  char *nvwal_path);
 extern void WriteRecoveryConfig(PGconn *pgconn, char *target_dir,
 								PQExpBuffer contents);
 

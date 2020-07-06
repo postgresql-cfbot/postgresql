@@ -41,6 +41,9 @@ extern bool RunIdentifySystem(PGconn *conn, char **sysid,
 							  XLogRecPtr *startpos,
 							  char **db_name);
 extern bool RetrieveWalSegSize(PGconn *conn);
+#ifdef USE_NVWAL
+extern size_t RetrieveNvwalSize(PGconn *conn);
+#endif
 extern TimestampTz feGetCurrentTimestamp(void);
 extern void feTimestampDifference(TimestampTz start_time, TimestampTz stop_time,
 								  long *secs, int *microsecs);

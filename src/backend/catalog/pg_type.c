@@ -658,10 +658,25 @@ GenerateTypeDependencies(HeapTuple typeTuple,
 	{
 		ObjectAddressSet(referenced, RelationRelationId, typeForm->typrelid);
 
-		if (relationKind != RELKIND_COMPOSITE_TYPE)
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_INTERNAL);
-		else
-			recordDependencyOn(&referenced, &myself, DEPENDENCY_INTERNAL);
+		switch ((RelKind) relationKind)
+		{
+			case RELKIND_COMPOSITE_TYPE:
+				recordDependencyOn(&referenced, &myself, DEPENDENCY_INTERNAL);
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				recordDependencyOn(&myself, &referenced, DEPENDENCY_INTERNAL);
+				break;
+		}
 	}
 
 	/*

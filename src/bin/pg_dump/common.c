@@ -283,10 +283,23 @@ flagInhTables(Archive *fout, TableInfo *tblinfo, int numTables,
 		bool		mark_parents = true;
 
 		/* Some kinds never have parents */
-		if (tblinfo[i].relkind == RELKIND_SEQUENCE ||
-			tblinfo[i].relkind == RELKIND_VIEW ||
-			tblinfo[i].relkind == RELKIND_MATVIEW)
-			continue;
+		switch ((RelKind) tblinfo[i].relkind)
+		{
+			case RELKIND_SEQUENCE:
+			case RELKIND_VIEW:
+			case RELKIND_MATVIEW:
+				continue;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				break;
+		}
 
 		/*
 		 * Normally, we don't bother computing anything for non-target tables,
@@ -449,10 +462,23 @@ flagInhAttrs(DumpOptions *dopt, TableInfo *tblinfo, int numTables)
 		TableInfo **parents;
 
 		/* Some kinds never have parents */
-		if (tbinfo->relkind == RELKIND_SEQUENCE ||
-			tbinfo->relkind == RELKIND_VIEW ||
-			tbinfo->relkind == RELKIND_MATVIEW)
-			continue;
+		switch ((RelKind) tbinfo->relkind)
+		{
+			case RELKIND_SEQUENCE:
+			case RELKIND_VIEW:
+			case RELKIND_MATVIEW:
+				continue;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				break;
+		}
 
 		/* Don't bother computing anything for non-target tables, either */
 		if (!tbinfo->dobj.dump)

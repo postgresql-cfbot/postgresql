@@ -176,9 +176,9 @@ check_for_data_type_usage(ClusterInfo *cluster, const char *typename,
 						  "		NOT a.attisdropped AND "
 						  "		a.atttypid IN (SELECT oid FROM oids) AND "
 						  "		c.relkind IN ("
-						  CppAsString2(RELKIND_RELATION) ", "
-						  CppAsString2(RELKIND_MATVIEW) ", "
-						  CppAsString2(RELKIND_INDEX) ") AND "
+						  RelKindAsString(RELKIND_RELATION) ", "
+						  RelKindAsString(RELKIND_MATVIEW) ", "
+						  RelKindAsString(RELKIND_INDEX) ") AND "
 						  "		c.relnamespace = n.oid AND "
 		/* exclude possible orphaned temp tables */
 						  "		n.nspname !~ '^pg_temp_' AND "

@@ -354,7 +354,7 @@ static const SchemaQuery Query_for_list_of_datatypes = {
 	.catname = "pg_catalog.pg_type t",
 	/* selcondition --- ignore table rowtypes and array types */
 	.selcondition = "(t.typrelid = 0 "
-	" OR (SELECT c.relkind = " CppAsString2(RELKIND_COMPOSITE_TYPE)
+	" OR (SELECT c.relkind = " RelKindAsString(RELKIND_COMPOSITE_TYPE)
 	"     FROM pg_catalog.pg_class c WHERE c.oid = t.typrelid)) "
 	"AND t.typname !~ '^_'",
 	.viscondition = "pg_catalog.pg_type_is_visible(t.oid)",
@@ -366,7 +366,7 @@ static const SchemaQuery Query_for_list_of_datatypes = {
 static const SchemaQuery Query_for_list_of_composite_datatypes = {
 	.catname = "pg_catalog.pg_type t",
 	/* selcondition --- only get composite types */
-	.selcondition = "(SELECT c.relkind = " CppAsString2(RELKIND_COMPOSITE_TYPE)
+	.selcondition = "(SELECT c.relkind = " RelKindAsString(RELKIND_COMPOSITE_TYPE)
 	" FROM pg_catalog.pg_class c WHERE c.oid = t.typrelid) "
 	"AND t.typname !~ '^_'",
 	.viscondition = "pg_catalog.pg_type_is_visible(t.oid)",
@@ -425,7 +425,7 @@ static const SchemaQuery Query_for_list_of_routines = {
 
 static const SchemaQuery Query_for_list_of_sequences = {
 	.catname = "pg_catalog.pg_class c",
-	.selcondition = "c.relkind IN (" CppAsString2(RELKIND_SEQUENCE) ")",
+	.selcondition = "c.relkind IN (" RelKindAsString(RELKIND_SEQUENCE) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -433,7 +433,7 @@ static const SchemaQuery Query_for_list_of_sequences = {
 
 static const SchemaQuery Query_for_list_of_foreign_tables = {
 	.catname = "pg_catalog.pg_class c",
-	.selcondition = "c.relkind IN (" CppAsString2(RELKIND_FOREIGN_TABLE) ")",
+	.selcondition = "c.relkind IN (" RelKindAsString(RELKIND_FOREIGN_TABLE) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -442,8 +442,8 @@ static const SchemaQuery Query_for_list_of_foreign_tables = {
 static const SchemaQuery Query_for_list_of_tables = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
-	"c.relkind IN (" CppAsString2(RELKIND_RELATION) ", "
-	CppAsString2(RELKIND_PARTITIONED_TABLE) ")",
+	"c.relkind IN (" RelKindAsString(RELKIND_RELATION) ", "
+	RelKindAsString(RELKIND_PARTITIONED_TABLE) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -451,7 +451,7 @@ static const SchemaQuery Query_for_list_of_tables = {
 
 static const SchemaQuery Query_for_list_of_partitioned_tables = {
 	.catname = "pg_catalog.pg_class c",
-	.selcondition = "c.relkind IN (" CppAsString2(RELKIND_PARTITIONED_TABLE) ")",
+	.selcondition = "c.relkind IN (" RelKindAsString(RELKIND_PARTITIONED_TABLE) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -459,7 +459,7 @@ static const SchemaQuery Query_for_list_of_partitioned_tables = {
 
 static const SchemaQuery Query_for_list_of_views = {
 	.catname = "pg_catalog.pg_class c",
-	.selcondition = "c.relkind IN (" CppAsString2(RELKIND_VIEW) ")",
+	.selcondition = "c.relkind IN (" RelKindAsString(RELKIND_VIEW) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -467,7 +467,7 @@ static const SchemaQuery Query_for_list_of_views = {
 
 static const SchemaQuery Query_for_list_of_matviews = {
 	.catname = "pg_catalog.pg_class c",
-	.selcondition = "c.relkind IN (" CppAsString2(RELKIND_MATVIEW) ")",
+	.selcondition = "c.relkind IN (" RelKindAsString(RELKIND_MATVIEW) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -476,8 +476,8 @@ static const SchemaQuery Query_for_list_of_matviews = {
 static const SchemaQuery Query_for_list_of_indexes = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
-	"c.relkind IN (" CppAsString2(RELKIND_INDEX) ", "
-	CppAsString2(RELKIND_PARTITIONED_INDEX) ")",
+	"c.relkind IN (" RelKindAsString(RELKIND_INDEX) ", "
+	RelKindAsString(RELKIND_PARTITIONED_INDEX) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -485,7 +485,7 @@ static const SchemaQuery Query_for_list_of_indexes = {
 
 static const SchemaQuery Query_for_list_of_partitioned_indexes = {
 	.catname = "pg_catalog.pg_class c",
-	.selcondition = "c.relkind = " CppAsString2(RELKIND_PARTITIONED_INDEX),
+	.selcondition = "c.relkind = " RelKindAsString(RELKIND_PARTITIONED_INDEX),
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -503,8 +503,8 @@ static const SchemaQuery Query_for_list_of_relations = {
 /* partitioned relations */
 static const SchemaQuery Query_for_list_of_partitioned_relations = {
 	.catname = "pg_catalog.pg_class c",
-	.selcondition = "c.relkind IN (" CppAsString2(RELKIND_PARTITIONED_TABLE)
-	", " CppAsString2(RELKIND_PARTITIONED_INDEX) ")",
+	.selcondition = "c.relkind IN (" RelKindAsString(RELKIND_PARTITIONED_TABLE)
+	", " RelKindAsString(RELKIND_PARTITIONED_INDEX) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -521,10 +521,10 @@ static const SchemaQuery Query_for_list_of_operator_families = {
 static const SchemaQuery Query_for_list_of_updatables = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
-	"c.relkind IN (" CppAsString2(RELKIND_RELATION) ", "
-	CppAsString2(RELKIND_FOREIGN_TABLE) ", "
-	CppAsString2(RELKIND_VIEW) ", "
-	CppAsString2(RELKIND_PARTITIONED_TABLE) ")",
+	"c.relkind IN (" RelKindAsString(RELKIND_RELATION) ", "
+	RelKindAsString(RELKIND_FOREIGN_TABLE) ", "
+	RelKindAsString(RELKIND_VIEW) ", "
+	RelKindAsString(RELKIND_PARTITIONED_TABLE) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -534,12 +534,12 @@ static const SchemaQuery Query_for_list_of_updatables = {
 static const SchemaQuery Query_for_list_of_selectables = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
-	"c.relkind IN (" CppAsString2(RELKIND_RELATION) ", "
-	CppAsString2(RELKIND_SEQUENCE) ", "
-	CppAsString2(RELKIND_VIEW) ", "
-	CppAsString2(RELKIND_MATVIEW) ", "
-	CppAsString2(RELKIND_FOREIGN_TABLE) ", "
-	CppAsString2(RELKIND_PARTITIONED_TABLE) ")",
+	"c.relkind IN (" RelKindAsString(RELKIND_RELATION) ", "
+	RelKindAsString(RELKIND_SEQUENCE) ", "
+	RelKindAsString(RELKIND_VIEW) ", "
+	RelKindAsString(RELKIND_MATVIEW) ", "
+	RelKindAsString(RELKIND_FOREIGN_TABLE) ", "
+	RelKindAsString(RELKIND_PARTITIONED_TABLE) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -552,10 +552,10 @@ static const SchemaQuery Query_for_list_of_selectables = {
 static const SchemaQuery Query_for_list_of_analyzables = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
-	"c.relkind IN (" CppAsString2(RELKIND_RELATION) ", "
-	CppAsString2(RELKIND_PARTITIONED_TABLE) ", "
-	CppAsString2(RELKIND_MATVIEW) ", "
-	CppAsString2(RELKIND_FOREIGN_TABLE) ")",
+	"c.relkind IN (" RelKindAsString(RELKIND_RELATION) ", "
+	RelKindAsString(RELKIND_PARTITIONED_TABLE) ", "
+	RelKindAsString(RELKIND_MATVIEW) ", "
+	RelKindAsString(RELKIND_FOREIGN_TABLE) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -565,9 +565,9 @@ static const SchemaQuery Query_for_list_of_analyzables = {
 static const SchemaQuery Query_for_list_of_indexables = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
-	"c.relkind IN (" CppAsString2(RELKIND_RELATION) ", "
-	CppAsString2(RELKIND_PARTITIONED_TABLE) ", "
-	CppAsString2(RELKIND_MATVIEW) ")",
+	"c.relkind IN (" RelKindAsString(RELKIND_RELATION) ", "
+	RelKindAsString(RELKIND_PARTITIONED_TABLE) ", "
+	RelKindAsString(RELKIND_MATVIEW) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -577,8 +577,8 @@ static const SchemaQuery Query_for_list_of_indexables = {
 static const SchemaQuery Query_for_list_of_vacuumables = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
-	"c.relkind IN (" CppAsString2(RELKIND_RELATION) ", "
-	CppAsString2(RELKIND_MATVIEW) ")",
+	"c.relkind IN (" RelKindAsString(RELKIND_RELATION) ", "
+	RelKindAsString(RELKIND_MATVIEW) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",

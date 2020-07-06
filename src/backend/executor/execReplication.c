@@ -607,19 +607,34 @@ CheckSubscriptionRelkind(char relkind, const char *nspname,
 	/*
 	 * Give a more specific error for foreign tables.
 	 */
-	if (relkind == RELKIND_FOREIGN_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("cannot use relation \"%s.%s\" as logical replication target",
-						nspname, relname),
-				 errdetail("\"%s.%s\" is a foreign table.",
-						   nspname, relname)));
-
-	if (relkind != RELKIND_RELATION && relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("cannot use relation \"%s.%s\" as logical replication target",
-						nspname, relname),
-				 errdetail("\"%s.%s\" is not a table.",
-						   nspname, relname)));
+	switch ((RelKind) relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_FOREIGN_TABLE:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("cannot use relation \"%s.%s\" as logical replication target",
+							nspname, relname),
+					 errdetail("\"%s.%s\" is a foreign table.",
+							   nspname, relname)));
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("cannot use relation \"%s.%s\" as logical replication target",
+							nspname, relname),
+					 errdetail("\"%s.%s\" is not a table.",
+							   nspname, relname)));
+			break;
+	}
 }

@@ -122,14 +122,27 @@ CreateStatistics(CreateStatsStmt *stmt)
 		rel = relation_openrv((RangeVar *) rln, ShareUpdateExclusiveLock);
 
 		/* Restrict to allowed relation types */
-		if (rel->rd_rel->relkind != RELKIND_RELATION &&
-			rel->rd_rel->relkind != RELKIND_MATVIEW &&
-			rel->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
-			rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("relation \"%s\" is not a table, foreign table, or materialized view",
-							RelationGetRelationName(rel))));
+		switch ((RelKind) rel->rd_rel->relkind)
+		{
+			case RELKIND_RELATION:
+			case RELKIND_MATVIEW:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_PARTITIONED_TABLE:
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("relation \"%s\" is not a table, foreign table, or materialized view",
+								RelationGetRelationName(rel))));
+				break;
+		}
 
 		/* You must own the relation to create stats on it */
 		if (!pg_class_ownercheck(RelationGetRelid(rel), stxowner))

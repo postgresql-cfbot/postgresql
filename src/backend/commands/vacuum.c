@@ -881,10 +881,23 @@ get_all_vacuum_rels(int options)
 		 * to be performed, caller will decide whether to process or ignore
 		 * them.
 		 */
-		if (classForm->relkind != RELKIND_RELATION &&
-			classForm->relkind != RELKIND_MATVIEW &&
-			classForm->relkind != RELKIND_PARTITIONED_TABLE)
-			continue;
+		switch ((RelKind) classForm->relkind)
+		{
+			case RELKIND_RELATION:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				continue;
+		}
 
 		/*
 		 * Build VacuumRelation(s) specifying the table OIDs to be processed.
@@ -1383,13 +1396,27 @@ vac_update_datfrozenxid(void)
 		 * Only consider relations able to hold unfrozen XIDs (anything else
 		 * should have InvalidTransactionId in relfrozenxid anyway).
 		 */
-		if (classForm->relkind != RELKIND_RELATION &&
-			classForm->relkind != RELKIND_MATVIEW &&
-			classForm->relkind != RELKIND_TOASTVALUE)
+		switch ((RelKind) classForm->relkind)
 		{
-			Assert(!TransactionIdIsValid(classForm->relfrozenxid));
-			Assert(!MultiXactIdIsValid(classForm->relminmxid));
-			continue;
+			case RELKIND_RELATION:
+			case RELKIND_MATVIEW:
+			case RELKIND_TOASTVALUE:
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				{
+					Assert(!TransactionIdIsValid(classForm->relfrozenxid));
+					Assert(!MultiXactIdIsValid(classForm->relminmxid));
+					continue;
+				}
+				break;
 		}
 
 		/*
@@ -1762,18 +1789,31 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 	/*
 	 * Check that it's of a vacuumable relkind.
 	 */
-	if (onerel->rd_rel->relkind != RELKIND_RELATION &&
-		onerel->rd_rel->relkind != RELKIND_MATVIEW &&
-		onerel->rd_rel->relkind != RELKIND_TOASTVALUE &&
-		onerel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+	switch ((RelKind) onerel->rd_rel->relkind)
 	{
-		ereport(WARNING,
-				(errmsg("skipping \"%s\" --- cannot vacuum non-tables or special system tables",
-						RelationGetRelationName(onerel))));
-		relation_close(onerel, lmode);
-		PopActiveSnapshot();
-		CommitTransactionCommand();
-		return false;
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			{
+				ereport(WARNING,
+						(errmsg("skipping \"%s\" --- cannot vacuum non-tables or special system tables",
+								RelationGetRelationName(onerel))));
+				relation_close(onerel, lmode);
+				PopActiveSnapshot();
+				CommitTransactionCommand();
+				return false;
+			}
+			break;
 	}
 
 	/*
@@ -1796,13 +1836,26 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 	 * useful work is on their child partitions, which have been queued up for
 	 * us separately.
 	 */
-	if (onerel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	switch ((RelKind) onerel->rd_rel->relkind)
 	{
-		relation_close(onerel, lmode);
-		PopActiveSnapshot();
-		CommitTransactionCommand();
-		/* It's OK to proceed with ANALYZE on this table */
-		return true;
+		case RELKIND_PARTITIONED_TABLE:
+			relation_close(onerel, lmode);
+			PopActiveSnapshot();
+			CommitTransactionCommand();
+			/* It's OK to proceed with ANALYZE on this table */
+			return true;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/*

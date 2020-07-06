@@ -615,7 +615,7 @@ DefineIndex(Oid relationId,
 	namespaceId = RelationGetNamespace(rel);
 
 	/* Ensure that it makes sense to index this kind of relation */
-	switch (rel->rd_rel->relkind)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_MATVIEW:
@@ -633,6 +633,13 @@ DefineIndex(Oid relationId,
 					 errmsg("cannot create index on foreign table \"%s\"",
 							RelationGetRelationName(rel))));
 			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -1190,18 +1197,33 @@ DefineIndex(Oid relationId,
 				 * those if a regular index, or fail if trying to create a
 				 * constraint index.
 				 */
-				if (childrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+				switch ((RelKind) childrel->rd_rel->relkind)
 				{
-					if (stmt->unique || stmt->primary)
-						ereport(ERROR,
-								(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-								 errmsg("cannot create unique index on partitioned table \"%s\"",
-										RelationGetRelationName(rel)),
-								 errdetail("Table \"%s\" contains partitions that are foreign tables.",
-										   RelationGetRelationName(rel))));
+					case RELKIND_FOREIGN_TABLE:
+						{
+							if (stmt->unique || stmt->primary)
+								ereport(ERROR,
+										(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+										 errmsg("cannot create unique index on partitioned table \"%s\"",
+												RelationGetRelationName(rel)),
+										 errdetail("Table \"%s\" contains partitions that are foreign tables.",
+												   RelationGetRelationName(rel))));
 
-					table_close(childrel, lockmode);
-					continue;
+							table_close(childrel, lockmode);
+							continue;
+						}
+						break;
+					case RELKIND_SEQUENCE:
+					case RELKIND_COMPOSITE_TYPE:
+					case RELKIND_INDEX:
+					case RELKIND_MATVIEW:
+					case RELKIND_PARTITIONED_TABLE:
+					case RELKIND_RELATION:
+					case RELKIND_TOASTVALUE:
+					case RELKIND_VIEW:
+					case RELKIND_NULL:
+					default:
+						break;
 				}
 
 				childidxs = RelationGetIndexList(childrel);
@@ -2451,10 +2473,23 @@ ReindexIndex(RangeVar *indexRelation, int options, bool concurrent)
 	 */
 	irel = index_open(indOid, NoLock);
 
-	if (irel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+	switch ((RelKind) irel->rd_rel->relkind)
 	{
-		ReindexPartitionedIndex(irel);
-		return;
+		case RELKIND_PARTITIONED_INDEX:
+			ReindexPartitionedIndex(irel);
+			return;
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	persistence = irel->rd_rel->relpersistence;
@@ -2510,11 +2545,25 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
 	relkind = get_rel_relkind(relId);
 	if (!relkind)
 		return;
-	if (relkind != RELKIND_INDEX &&
-		relkind != RELKIND_PARTITIONED_INDEX)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not an index", relation->relname)));
+	switch ((RelKind) relkind)
+	{
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+			break;
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("\"%s\" is not an index", relation->relname)));
+	}
 
 	/* Check permissions */
 	if (!pg_class_ownercheck(relId, GetUserId()))
@@ -2694,9 +2743,23 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 		 * partitioned tables, and expand that afterwards into relids,
 		 * ignoring any duplicates.
 		 */
-		if (classtuple->relkind != RELKIND_RELATION &&
-			classtuple->relkind != RELKIND_MATVIEW)
-			continue;
+		switch ((RelKind) classtuple->relkind)
+		{
+			case RELKIND_RELATION:
+			case RELKIND_MATVIEW:
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				continue;
+		}
 
 		/* Skip temp tables of other backends; we can't reindex them at all */
 		if (classtuple->relpersistence == RELPERSISTENCE_TEMP &&
@@ -2867,7 +2930,7 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 	 * Extract the list of indexes that are going to be rebuilt based on the
 	 * relation Oid given by caller.
 	 */
-	switch (relkind)
+	switch ((RelKind) relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_MATVIEW:
@@ -3017,6 +3080,12 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 					 errmsg("REINDEX of partitioned tables is not yet implemented, skipping \"%s\"",
 							get_rel_name(relationOid))));
 			return false;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
 		default:
 			/* Return error if type of relation is not supported */
 			ereport(ERROR,
@@ -3443,30 +3512,43 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 	/* Log what we did */
 	if (options & REINDEXOPT_VERBOSE)
 	{
-		if (relkind == RELKIND_INDEX)
-			ereport(INFO,
-					(errmsg("index \"%s.%s\" was reindexed",
-							relationNamespace, relationName),
-					 errdetail("%s.",
-							   pg_rusage_show(&ru0))));
-		else
+		switch ((RelKind) relkind)
 		{
-			foreach(lc, newIndexIds)
-			{
-				Oid			indOid = lfirst_oid(lc);
-
+			case RELKIND_INDEX:
 				ereport(INFO,
 						(errmsg("index \"%s.%s\" was reindexed",
-								get_namespace_name(get_rel_namespace(indOid)),
-								get_rel_name(indOid))));
-				/* Don't show rusage here, since it's not per index. */
-			}
+								relationNamespace, relationName),
+						 errdetail("%s.",
+								   pg_rusage_show(&ru0))));
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				foreach(lc, newIndexIds)
+				{
+					Oid			indOid = lfirst_oid(lc);
 
-			ereport(INFO,
-					(errmsg("table \"%s.%s\" was reindexed",
-							relationNamespace, relationName),
-					 errdetail("%s.",
-							   pg_rusage_show(&ru0))));
+					ereport(INFO,
+							(errmsg("index \"%s.%s\" was reindexed",
+									get_namespace_name(get_rel_namespace(indOid)),
+									get_rel_name(indOid))));
+					/* Don't show rusage here, since it's not per index. */
+				}
+
+				ereport(INFO,
+						(errmsg("table \"%s.%s\" was reindexed",
+								relationNamespace, relationName),
+						 errdetail("%s.",
+								   pg_rusage_show(&ru0))));
+				break;
 		}
 	}
 
@@ -3508,8 +3590,24 @@ IndexSetParentIndex(Relation partitionIdx, Oid parentOid)
 	bool		fix_dependencies;
 
 	/* Make sure this is an index */
-	Assert(partitionIdx->rd_rel->relkind == RELKIND_INDEX ||
-		   partitionIdx->rd_rel->relkind == RELKIND_PARTITIONED_INDEX);
+	switch ((RelKind) partitionIdx->rd_rel->relkind)
+	{
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+			break;				/* ok */
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			Assert(false);
+			break;
+	}
 
 	/*
 	 * Scan pg_inherits for rows linking our index to some parent.

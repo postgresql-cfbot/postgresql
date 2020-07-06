@@ -573,8 +573,8 @@ vacuum_one_database(const char *dbname, vacuumingOptions *vacopts,
 	if (!tables_listed)
 	{
 		appendPQExpBufferStr(&catalog_query, " WHERE c.relkind OPERATOR(pg_catalog.=) ANY (array["
-							 CppAsString2(RELKIND_RELATION) ", "
-							 CppAsString2(RELKIND_MATVIEW) "])\n");
+							 RelKindAsString(RELKIND_RELATION) ", "
+							 RelKindAsString(RELKIND_MATVIEW) "])\n");
 		has_where = true;
 	}
 

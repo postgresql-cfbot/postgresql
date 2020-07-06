@@ -381,8 +381,23 @@ currtid_byreloid(PG_FUNCTION_ARGS)
 		aclcheck_error(aclresult, get_relkind_objtype(rel->rd_rel->relkind),
 					   RelationGetRelationName(rel));
 
-	if (rel->rd_rel->relkind == RELKIND_VIEW)
-		return currtid_for_view(rel, tid);
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_VIEW:
+			return currtid_for_view(rel, tid);
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	if (!RELKIND_HAS_STORAGE(rel->rd_rel->relkind))
 		elog(ERROR, "cannot look at latest visible tid for relation \"%s.%s\"",
@@ -423,8 +438,23 @@ currtid_byrelname(PG_FUNCTION_ARGS)
 		aclcheck_error(aclresult, get_relkind_objtype(rel->rd_rel->relkind),
 					   RelationGetRelationName(rel));
 
-	if (rel->rd_rel->relkind == RELKIND_VIEW)
-		return currtid_for_view(rel, tid);
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_VIEW:
+			return currtid_for_view(rel, tid);
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	if (!RELKIND_HAS_STORAGE(rel->rd_rel->relkind))
 		elog(ERROR, "cannot look at latest visible tid for relation \"%s.%s\"",

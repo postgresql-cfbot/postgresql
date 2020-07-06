@@ -235,8 +235,25 @@ has_partition_attrs(Relation rel, Bitmapset *attnums, bool *used_in_expr)
 	ListCell   *partexprs_item;
 	int			i;
 
-	if (attnums == NULL || rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-		return false;
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			if (attnums == NULL)
+				return false;
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			return false;
+	}
 
 	key = RelationGetPartitionKey(rel);
 	partnatts = get_partition_natts(key);

@@ -387,29 +387,42 @@ set_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		switch (rel->rtekind)
 		{
 			case RTE_RELATION:
-				if (rte->relkind == RELKIND_FOREIGN_TABLE)
+				switch ((RelKind) rte->relkind)
 				{
-					/* Foreign table */
-					set_foreign_size(root, rel, rte);
-				}
-				else if (rte->relkind == RELKIND_PARTITIONED_TABLE)
-				{
-					/*
-					 * We could get here if asked to scan a partitioned table
-					 * with ONLY.  In that case we shouldn't scan any of the
-					 * partitions, so mark it as a dummy rel.
-					 */
-					set_dummy_rel_pathlist(rel);
-				}
-				else if (rte->tablesample != NULL)
-				{
-					/* Sampled relation */
-					set_tablesample_rel_size(root, rel, rte);
-				}
-				else
-				{
-					/* Plain relation */
-					set_plain_rel_size(root, rel, rte);
+					case RELKIND_FOREIGN_TABLE:
+						/* Foreign table */
+						set_foreign_size(root, rel, rte);
+						break;
+					case RELKIND_PARTITIONED_TABLE:
+
+						/*
+						 * We could get here if asked to scan a partitioned
+						 * table with ONLY.  In that case we shouldn't scan
+						 * any of the partitions, so mark it as a dummy rel.
+						 */
+						set_dummy_rel_pathlist(rel);
+						break;
+					case RELKIND_PARTITIONED_INDEX:
+					case RELKIND_SEQUENCE:
+					case RELKIND_COMPOSITE_TYPE:
+					case RELKIND_INDEX:
+					case RELKIND_MATVIEW:
+					case RELKIND_RELATION:
+					case RELKIND_TOASTVALUE:
+					case RELKIND_VIEW:
+					case RELKIND_NULL:
+					default:
+						if (rte->tablesample != NULL)
+						{
+							/* Sampled relation */
+							set_tablesample_rel_size(root, rel, rte);
+						}
+						else
+						{
+							/* Plain relation */
+							set_plain_rel_size(root, rel, rte);
+						}
+						break;
 				}
 				break;
 			case RTE_SUBQUERY:
@@ -484,20 +497,34 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		switch (rel->rtekind)
 		{
 			case RTE_RELATION:
-				if (rte->relkind == RELKIND_FOREIGN_TABLE)
+				switch ((RelKind) rte->relkind)
 				{
-					/* Foreign table */
-					set_foreign_pathlist(root, rel, rte);
-				}
-				else if (rte->tablesample != NULL)
-				{
-					/* Sampled relation */
-					set_tablesample_rel_pathlist(root, rel, rte);
-				}
-				else
-				{
-					/* Plain relation */
-					set_plain_rel_pathlist(root, rel, rte);
+					case RELKIND_FOREIGN_TABLE:
+						/* Foreign table */
+						set_foreign_pathlist(root, rel, rte);
+						break;
+					case RELKIND_PARTITIONED_INDEX:
+					case RELKIND_SEQUENCE:
+					case RELKIND_COMPOSITE_TYPE:
+					case RELKIND_INDEX:
+					case RELKIND_MATVIEW:
+					case RELKIND_PARTITIONED_TABLE:
+					case RELKIND_RELATION:
+					case RELKIND_TOASTVALUE:
+					case RELKIND_VIEW:
+					case RELKIND_NULL:
+					default:
+						if (rte->tablesample != NULL)
+						{
+							/* Sampled relation */
+							set_tablesample_rel_pathlist(root, rel, rte);
+						}
+						else
+						{
+							/* Plain relation */
+							set_plain_rel_pathlist(root, rel, rte);
+						}
+						break;
 				}
 				break;
 			case RTE_SUBQUERY:
@@ -643,13 +670,27 @@ set_rel_consider_parallel(PlannerInfo *root, RelOptInfo *rel,
 			 * up with a separate connection, and these connections might not
 			 * be appropriately coordinated between workers and the leader.
 			 */
-			if (rte->relkind == RELKIND_FOREIGN_TABLE)
+			switch ((RelKind) rte->relkind)
 			{
-				Assert(rel->fdwroutine);
-				if (!rel->fdwroutine->IsForeignScanParallelSafe)
-					return;
-				if (!rel->fdwroutine->IsForeignScanParallelSafe(root, rel, rte))
-					return;
+				case RELKIND_FOREIGN_TABLE:
+					Assert(rel->fdwroutine);
+					if (!rel->fdwroutine->IsForeignScanParallelSafe)
+						return;
+					if (!rel->fdwroutine->IsForeignScanParallelSafe(root, rel, rte))
+						return;
+					break;
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_INDEX:
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_MATVIEW:
+				case RELKIND_VIEW:
+				case RELKIND_SEQUENCE:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_NULL:
+				default:
+					break;
 			}
 
 			/*
@@ -963,19 +1004,52 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	 * that when we've created Paths for all the children, the root
 	 * partitioned table's list will contain all such indexes.
 	 */
-	if (rte->relkind == RELKIND_PARTITIONED_TABLE)
-		rel->partitioned_child_rels = list_make1_int(rti);
+	switch ((RelKind) rte->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			rel->partitioned_child_rels = list_make1_int(rti);
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	/*
 	 * If this is a partitioned baserel, set the consider_partitionwise_join
 	 * flag; currently, we only consider partitionwise joins with the baserel
 	 * if its targetlist doesn't contain a whole-row Var.
 	 */
-	if (enable_partitionwise_join &&
-		rel->reloptkind == RELOPT_BASEREL &&
-		rte->relkind == RELKIND_PARTITIONED_TABLE &&
-		rel->attr_needed[InvalidAttrNumber - rel->min_attr] == NULL)
-		rel->consider_partitionwise_join = true;
+	switch ((RelKind) rte->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			if (enable_partitionwise_join &&
+				rel->reloptkind == RELOPT_BASEREL &&
+				rte->relkind == RELKIND_PARTITIONED_TABLE &&
+				rel->attr_needed[InvalidAttrNumber - rel->min_attr] == NULL)
+				rel->consider_partitionwise_join = true;
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	/*
 	 * Initialize to compute size estimates for whole append relation.

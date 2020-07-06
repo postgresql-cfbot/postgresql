@@ -127,10 +127,26 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 		/*
 		 * Reject clustering a partitioned table.
 		 */
-		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot cluster a partitioned table")));
+		switch ((RelKind) rel->rd_rel->relkind)
+		{
+			case RELKIND_PARTITIONED_TABLE:
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot cluster a partitioned table")));
+				break;
+			case RELKIND_RELATION:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				break;
+		}
 
 		if (stmt->indexname == NULL)
 		{
@@ -383,12 +399,28 @@ cluster_rel(Oid tableOid, Oid indexOid, int options)
 	 * multi-relation request -- for example, CLUSTER was run on the entire
 	 * database.
 	 */
-	if (OldHeap->rd_rel->relkind == RELKIND_MATVIEW &&
-		!RelationIsPopulated(OldHeap))
+	switch ((RelKind) OldHeap->rd_rel->relkind)
 	{
-		relation_close(OldHeap, AccessExclusiveLock);
-		pgstat_progress_end_command();
-		return;
+		case RELKIND_MATVIEW:
+			if (!RelationIsPopulated(OldHeap))
+			{
+				relation_close(OldHeap, AccessExclusiveLock);
+				pgstat_progress_end_command();
+				return;
+			}
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/*
@@ -484,10 +516,26 @@ mark_index_clustered(Relation rel, Oid indexOid, bool is_internal)
 	ListCell   *index;
 
 	/* Disallow applying to a partitioned table */
-	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot mark index clustered in partitioned table")));
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot mark index clustered in partitioned table")));
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	/*
 	 * If the index is already marked clustered, no need to do anything.
@@ -1103,12 +1151,26 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 	 */
 
 	/* set rel1's frozen Xid and minimum MultiXid */
-	if (relform1->relkind != RELKIND_INDEX)
+	switch ((RelKind) relform1->relkind)
 	{
-		Assert(!TransactionIdIsValid(frozenXid) ||
-			   TransactionIdIsNormal(frozenXid));
-		relform1->relfrozenxid = frozenXid;
-		relform1->relminmxid = cutoffMulti;
+		case RELKIND_INDEX:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			Assert(!TransactionIdIsValid(frozenXid) ||
+				   TransactionIdIsNormal(frozenXid));
+			relform1->relfrozenxid = frozenXid;
+			relform1->relminmxid = cutoffMulti;
+			break;
 	}
 
 	/* swap size statistics too, since new rel has freshly-updated stats */
@@ -1267,27 +1329,43 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 	 * valid index. The swap can actually be safely done only if the relations
 	 * have indexes.
 	 */
-	if (swap_toast_by_content &&
-		relform1->relkind == RELKIND_TOASTVALUE &&
-		relform2->relkind == RELKIND_TOASTVALUE)
+	switch ((RelKind) relform1->relkind)
 	{
-		Oid			toastIndex1,
-					toastIndex2;
+		case RELKIND_TOASTVALUE:
+			if (swap_toast_by_content &&
+				relform2->relkind == RELKIND_TOASTVALUE)
+			{
+				Oid			toastIndex1,
+							toastIndex2;
 
-		/* Get valid index for each relation */
-		toastIndex1 = toast_get_valid_index(r1,
-											AccessExclusiveLock);
-		toastIndex2 = toast_get_valid_index(r2,
-											AccessExclusiveLock);
+				/* Get valid index for each relation */
+				toastIndex1 = toast_get_valid_index(r1,
+													AccessExclusiveLock);
+				toastIndex2 = toast_get_valid_index(r2,
+													AccessExclusiveLock);
 
-		swap_relation_files(toastIndex1,
-							toastIndex2,
-							target_is_pg_class,
-							swap_toast_by_content,
-							is_internal,
-							InvalidTransactionId,
-							InvalidMultiXactId,
-							mapped_tables);
+				swap_relation_files(toastIndex1,
+									toastIndex2,
+									target_is_pg_class,
+									swap_toast_by_content,
+									is_internal,
+									InvalidTransactionId,
+									InvalidMultiXactId,
+									mapped_tables);
+			}
+			break;
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/* Clean up. */

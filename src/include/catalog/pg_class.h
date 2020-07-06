@@ -154,16 +154,34 @@ typedef FormData_pg_class *Form_pg_class;
 
 #ifdef EXPOSE_TO_CLIENT_CODE
 
-#define		  RELKIND_RELATION		  'r'	/* ordinary table */
-#define		  RELKIND_INDEX			  'i'	/* secondary index */
-#define		  RELKIND_SEQUENCE		  'S'	/* sequence object */
-#define		  RELKIND_TOASTVALUE	  't'	/* for out-of-line values */
-#define		  RELKIND_VIEW			  'v'	/* view */
-#define		  RELKIND_MATVIEW		  'm'	/* materialized view */
-#define		  RELKIND_COMPOSITE_TYPE  'c'	/* composite type */
-#define		  RELKIND_FOREIGN_TABLE   'f'	/* foreign table */
-#define		  RELKIND_PARTITIONED_TABLE 'p' /* partitioned table */
-#define		  RELKIND_PARTITIONED_INDEX 'I' /* partitioned index */
+typedef enum RelKind
+{
+	RELKIND_RELATION = 'r',		/* ordinary table */
+	RELKIND_INDEX = 'i',		/* secondary index */
+	RELKIND_SEQUENCE = 'S',		/* sequence object */
+	RELKIND_TOASTVALUE = 't',	/* for out-of-line values */
+	RELKIND_VIEW = 'v',			/* view */
+	RELKIND_MATVIEW = 'm',		/* materialized view */
+	RELKIND_COMPOSITE_TYPE = 'c',	/* composite type */
+	RELKIND_FOREIGN_TABLE = 'f',	/* foreign table */
+	RELKIND_PARTITIONED_TABLE = 'p',	/* partitioned table */
+	RELKIND_PARTITIONED_INDEX = 'I',	/* partitioned index */
+	RELKIND_NULL = '\0'			/* unset */
+} RelKind;
+
+#define chr_RELKIND_RELATION			'r'
+#define chr_RELKIND_INDEX				'i'
+#define chr_RELKIND_SEQUENCE			'S'
+#define chr_RELKIND_TOASTVALUE			't'
+#define chr_RELKIND_VIEW				'v'
+#define chr_RELKIND_MATVIEW				'm'
+#define chr_RELKIND_COMPOSITE_TYPE		'c'
+#define chr_RELKIND_FOREIGN_TABLE		'f'
+#define chr_RELKIND_PARTITIONED_TABLE	'p'
+#define chr_RELKIND_PARTITIONED_INDEX	'I'
+#define chr_RELKIND_NULL				'\0'
+
+#define RelKindAsString(x) CppAsString2(chr_##x)
 
 #define		  RELPERSISTENCE_PERMANENT	'p' /* regular table */
 #define		  RELPERSISTENCE_UNLOGGED	'u' /* unlogged permanent table */

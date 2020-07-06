@@ -765,24 +765,38 @@ copy_table(Relation rel)
 
 	/* Start copy on the publisher. */
 	initStringInfo(&cmd);
-	if (lrel.relkind == RELKIND_RELATION)
-		appendStringInfo(&cmd, "COPY %s TO STDOUT",
-						 quote_qualified_identifier(lrel.nspname, lrel.relname));
-	else
+	switch ((RelKind) lrel.relkind)
 	{
-		/*
-		 * For non-tables, we need to do COPY (SELECT ...), but we can't just
-		 * do SELECT * because we need to not copy generated columns.
-		 */
-		appendStringInfo(&cmd, "COPY (SELECT ");
-		for (int i = 0; i < lrel.natts; i++)
-		{
-			appendStringInfoString(&cmd, quote_identifier(lrel.attnames[i]));
-			if (i < lrel.natts - 1)
-				appendStringInfoString(&cmd, ", ");
-		}
-		appendStringInfo(&cmd, " FROM %s) TO STDOUT",
-						 quote_qualified_identifier(lrel.nspname, lrel.relname));
+		case RELKIND_RELATION:
+			appendStringInfo(&cmd, "COPY %s TO STDOUT",
+							 quote_qualified_identifier(lrel.nspname, lrel.relname));
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+
+			/*
+			 * For non-tables, we need to do COPY (SELECT ...), but we can't
+			 * just do SELECT * because we need to not copy generated columns.
+			 */
+			appendStringInfo(&cmd, "COPY (SELECT ");
+			for (int i = 0; i < lrel.natts; i++)
+			{
+				appendStringInfoString(&cmd, quote_identifier(lrel.attnames[i]));
+				if (i < lrel.natts - 1)
+					appendStringInfoString(&cmd, ", ");
+			}
+			appendStringInfo(&cmd, " FROM %s) TO STDOUT",
+							 quote_qualified_identifier(lrel.nspname, lrel.relname));
+			break;
 	}
 	res = walrcv_exec(wrconn, cmd.data, 0, NULL);
 	pfree(cmd.data);

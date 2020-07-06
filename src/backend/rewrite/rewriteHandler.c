@@ -902,24 +902,41 @@ rewriteTargetListIU(List *targetList,
 		 * For an UPDATE on a trigger-updatable view, provide a dummy entry
 		 * whenever there is no explicit assignment.
 		 */
-		if (new_tle == NULL && commandType == CMD_UPDATE &&
-			target_relation->rd_rel->relkind == RELKIND_VIEW &&
-			view_has_instead_trigger(target_relation, CMD_UPDATE))
+		switch ((RelKind) target_relation->rd_rel->relkind)
 		{
-			Node	   *new_expr;
+			case RELKIND_VIEW:
+				if (new_tle == NULL && commandType == CMD_UPDATE &&
+					view_has_instead_trigger(target_relation, CMD_UPDATE))
+				{
+					Node	   *new_expr;
 
-			new_expr = (Node *) makeVar(result_rti,
-										attrno,
-										att_tup->atttypid,
-										att_tup->atttypmod,
-										att_tup->attcollation,
-										0);
+					new_expr = (Node *) makeVar(result_rti,
+												attrno,
+												att_tup->atttypid,
+												att_tup->atttypmod,
+												att_tup->attcollation,
+												0);
 
-			new_tle = makeTargetEntry((Expr *) new_expr,
-									  attrno,
-									  pstrdup(NameStr(att_tup->attname)),
-									  false);
+					new_tle = makeTargetEntry((Expr *) new_expr,
+											  attrno,
+											  pstrdup(NameStr(att_tup->attname)),
+											  false);
+				}
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				break;
 		}
+
 
 		if (new_tle)
 			new_tlist = lappend(new_tlist, new_tle);
@@ -1316,39 +1333,54 @@ rewriteValuesRTE(Query *parsetree, RangeTblEntry *rte, int rti,
 	 * skip this check in that case --- it isn't an auto-updatable view.
 	 */
 	isAutoUpdatableView = false;
-	if (!force_nulls &&
-		target_relation->rd_rel->relkind == RELKIND_VIEW &&
-		!view_has_instead_trigger(target_relation, CMD_INSERT))
+	switch ((RelKind) target_relation->rd_rel->relkind)
 	{
-		List	   *locks;
-		bool		hasUpdate;
-		bool		found;
-		ListCell   *l;
-
-		/* Look for an unconditional DO INSTEAD rule */
-		locks = matchLocks(CMD_INSERT, target_relation->rd_rules,
-						   parsetree->resultRelation, parsetree, &hasUpdate);
-
-		found = false;
-		foreach(l, locks)
-		{
-			RewriteRule *rule_lock = (RewriteRule *) lfirst(l);
-
-			if (rule_lock->isInstead &&
-				rule_lock->qual == NULL)
+		case RELKIND_VIEW:
+			if (!force_nulls && !view_has_instead_trigger(target_relation, CMD_INSERT))
 			{
-				found = true;
-				break;
-			}
-		}
+				List	   *locks;
+				bool		hasUpdate;
+				bool		found;
+				ListCell   *l;
 
-		/*
-		 * If we didn't find an unconditional DO INSTEAD rule, assume that the
-		 * view is auto-updatable.  If it isn't, rewriteTargetView() will
-		 * throw an error.
-		 */
-		if (!found)
-			isAutoUpdatableView = true;
+				/* Look for an unconditional DO INSTEAD rule */
+				locks = matchLocks(CMD_INSERT, target_relation->rd_rules,
+								   parsetree->resultRelation, parsetree, &hasUpdate);
+
+				found = false;
+				foreach(l, locks)
+				{
+					RewriteRule *rule_lock = (RewriteRule *) lfirst(l);
+
+					if (rule_lock->isInstead &&
+						rule_lock->qual == NULL)
+					{
+						found = true;
+						break;
+					}
+				}
+
+				/*
+				 * If we didn't find an unconditional DO INSTEAD rule, assume
+				 * that the view is auto-updatable.  If it isn't,
+				 * rewriteTargetView() will throw an error.
+				 */
+				if (!found)
+					isAutoUpdatableView = true;
+			}
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	newValues = NIL;
@@ -1450,55 +1482,72 @@ rewriteTargetListUD(Query *parsetree, RangeTblEntry *target_rte,
 	const char *attrname;
 	TargetEntry *tle;
 
-	if (target_relation->rd_rel->relkind == RELKIND_RELATION ||
-		target_relation->rd_rel->relkind == RELKIND_MATVIEW ||
-		target_relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	switch ((RelKind) target_relation->rd_rel->relkind)
 	{
-		/*
-		 * Emit CTID so that executor can find the row to update or delete.
-		 */
-		var = makeVar(parsetree->resultRelation,
-					  SelfItemPointerAttributeNumber,
-					  TIDOID,
-					  -1,
-					  InvalidOid,
-					  0);
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+			{
+				/*
+				 * Emit CTID so that executor can find the row to update or
+				 * delete.
+				 */
+				var = makeVar(parsetree->resultRelation,
+							  SelfItemPointerAttributeNumber,
+							  TIDOID,
+							  -1,
+							  InvalidOid,
+							  0);
 
-		attrname = "ctid";
-	}
-	else if (target_relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
-	{
-		/*
-		 * Let the foreign table's FDW add whatever junk TLEs it wants.
-		 */
-		FdwRoutine *fdwroutine;
+				attrname = "ctid";
+			}
+			break;
+		case RELKIND_FOREIGN_TABLE:
+			{
+				/*
+				 * Let the foreign table's FDW add whatever junk TLEs it
+				 * wants.
+				 */
+				FdwRoutine *fdwroutine;
 
-		fdwroutine = GetFdwRoutineForRelation(target_relation, false);
+				fdwroutine = GetFdwRoutineForRelation(target_relation, false);
 
-		if (fdwroutine->AddForeignUpdateTargets != NULL)
-			fdwroutine->AddForeignUpdateTargets(parsetree, target_rte,
-												target_relation);
+				if (fdwroutine->AddForeignUpdateTargets != NULL)
+					fdwroutine->AddForeignUpdateTargets(parsetree, target_rte,
+														target_relation);
 
-		/*
-		 * If we have a row-level trigger corresponding to the operation, emit
-		 * a whole-row Var so that executor will have the "old" row to pass to
-		 * the trigger.  Alas, this misses system columns.
-		 */
-		if (target_relation->trigdesc &&
-			((parsetree->commandType == CMD_UPDATE &&
-			  (target_relation->trigdesc->trig_update_after_row ||
-			   target_relation->trigdesc->trig_update_before_row)) ||
-			 (parsetree->commandType == CMD_DELETE &&
-			  (target_relation->trigdesc->trig_delete_after_row ||
-			   target_relation->trigdesc->trig_delete_before_row))))
-		{
-			var = makeWholeRowVar(target_rte,
-								  parsetree->resultRelation,
-								  0,
-								  false);
+				/*
+				 * If we have a row-level trigger corresponding to the
+				 * operation, emit a whole-row Var so that executor will have
+				 * the "old" row to pass to the trigger.  Alas, this misses
+				 * system columns.
+				 */
+				if (target_relation->trigdesc &&
+					((parsetree->commandType == CMD_UPDATE &&
+					  (target_relation->trigdesc->trig_update_after_row ||
+					   target_relation->trigdesc->trig_update_before_row)) ||
+					 (parsetree->commandType == CMD_DELETE &&
+					  (target_relation->trigdesc->trig_delete_after_row ||
+					   target_relation->trigdesc->trig_delete_before_row))))
+				{
+					var = makeWholeRowVar(target_rte,
+										  parsetree->resultRelation,
+										  0,
+										  false);
 
-			attrname = "wholerow";
-		}
+					attrname = "wholerow";
+				}
+			}
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	if (var != NULL)
@@ -1909,8 +1958,23 @@ fireRIRrules(Query *parsetree, List *activeRIRs)
 		 * In that case this test would need to be postponed till after we've
 		 * opened the rel, so that we could check its state.
 		 */
-		if (rte->relkind == RELKIND_MATVIEW)
-			continue;
+		switch ((RelKind) rte->relkind)
+		{
+			case RELKIND_MATVIEW:
+				continue;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				break;
+		}
 
 		/*
 		 * In INSERT ... ON CONFLICT, ignore the EXCLUDED pseudo-relation;
@@ -2032,10 +2096,25 @@ fireRIRrules(Query *parsetree, List *activeRIRs)
 		++rt_index;
 
 		/* Only normal relations can have RLS policies */
-		if (rte->rtekind != RTE_RELATION ||
-			(rte->relkind != RELKIND_RELATION &&
-			 rte->relkind != RELKIND_PARTITIONED_TABLE))
+		if (rte->rtekind != RTE_RELATION)
 			continue;
+		switch ((RelKind) rte->relkind)
+		{
+			case RELKIND_RELATION:
+			case RELKIND_PARTITIONED_TABLE:
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				continue;
+		}
 
 		rel = table_open(rte->relid, NoLock);
 
@@ -2498,12 +2577,25 @@ view_query_is_auto_updatable(Query *viewquery, bool check_cols)
 		return gettext_noop("Views that do not select from a single table or view are not automatically updatable.");
 
 	base_rte = rt_fetch(rtr->rtindex, viewquery->rtable);
-	if (base_rte->rtekind != RTE_RELATION ||
-		(base_rte->relkind != RELKIND_RELATION &&
-		 base_rte->relkind != RELKIND_FOREIGN_TABLE &&
-		 base_rte->relkind != RELKIND_VIEW &&
-		 base_rte->relkind != RELKIND_PARTITIONED_TABLE))
-		return gettext_noop("Views that do not select from a single table or view are not automatically updatable.");
+	switch ((RelKind) base_rte->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_PARTITIONED_TABLE:
+			if (base_rte->rtekind == RTE_RELATION)
+				break;
+			/* fallthrough */
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			return gettext_noop("Views that do not select from a single table or view are not automatically updatable.");
+	}
 
 	if (base_rte->tablesample)
 		return gettext_noop("Views containing TABLESAMPLE are not automatically updatable.");
@@ -2677,11 +2769,23 @@ relation_is_updatable(Oid reloid,
 	}
 
 	/* If the relation is a table, it is always updatable */
-	if (rel->rd_rel->relkind == RELKIND_RELATION ||
-		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		relation_close(rel, AccessShareLock);
-		return ALL_EVENTS;
+		case RELKIND_RELATION:
+		case RELKIND_PARTITIONED_TABLE:
+			relation_close(rel, AccessShareLock);
+			return ALL_EVENTS;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/* Look for unconditional DO INSTEAD rules, and note supported events */
@@ -2730,84 +2834,103 @@ relation_is_updatable(Oid reloid,
 		}
 	}
 
-	/* If this is a foreign table, check which update events it supports */
-	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		FdwRoutine *fdwroutine = GetFdwRoutineForRelation(rel, false);
-
-		if (fdwroutine->IsForeignRelUpdatable != NULL)
-			events |= fdwroutine->IsForeignRelUpdatable(rel);
-		else
-		{
-			/* Assume presence of executor functions is sufficient */
-			if (fdwroutine->ExecForeignInsert != NULL)
-				events |= (1 << CMD_INSERT);
-			if (fdwroutine->ExecForeignUpdate != NULL)
-				events |= (1 << CMD_UPDATE);
-			if (fdwroutine->ExecForeignDelete != NULL)
-				events |= (1 << CMD_DELETE);
-		}
-
-		relation_close(rel, AccessShareLock);
-		return events;
-	}
-
-	/* Check if this is an automatically updatable view */
-	if (rel->rd_rel->relkind == RELKIND_VIEW)
-	{
-		Query	   *viewquery = get_view_query(rel);
-
-		if (view_query_is_auto_updatable(viewquery, false) == NULL)
-		{
-			Bitmapset  *updatable_cols;
-			int			auto_events;
-			RangeTblRef *rtr;
-			RangeTblEntry *base_rte;
-			Oid			baseoid;
-
 			/*
-			 * Determine which of the view's columns are updatable. If there
-			 * are none within the set of columns we are looking at, then the
-			 * view doesn't support INSERT/UPDATE, but it may still support
-			 * DELETE.
+			 * If this is a foreign table, check which update events it
+			 * supports
 			 */
-			view_cols_are_auto_updatable(viewquery, NULL,
-										 &updatable_cols, NULL);
-
-			if (include_cols != NULL)
-				updatable_cols = bms_int_members(updatable_cols, include_cols);
-
-			if (bms_is_empty(updatable_cols))
-				auto_events = (1 << CMD_DELETE);	/* May support DELETE */
-			else
-				auto_events = ALL_EVENTS;	/* May support all events */
-
-			/*
-			 * The base relation must also support these update commands.
-			 * Tables are always updatable, but for any other kind of base
-			 * relation we must do a recursive check limited to the columns
-			 * referenced by the locally updatable columns in this view.
-			 */
-			rtr = (RangeTblRef *) linitial(viewquery->jointree->fromlist);
-			base_rte = rt_fetch(rtr->rtindex, viewquery->rtable);
-			Assert(base_rte->rtekind == RTE_RELATION);
-
-			if (base_rte->relkind != RELKIND_RELATION &&
-				base_rte->relkind != RELKIND_PARTITIONED_TABLE)
+		case RELKIND_FOREIGN_TABLE:
 			{
-				baseoid = base_rte->relid;
-				outer_reloids = lappend_oid(outer_reloids,
-											RelationGetRelid(rel));
-				include_cols = adjust_view_column_set(updatable_cols,
-													  viewquery->targetList);
-				auto_events &= relation_is_updatable(baseoid,
-													 outer_reloids,
-													 include_triggers,
-													 include_cols);
-				outer_reloids = list_delete_last(outer_reloids);
+				FdwRoutine *fdwroutine = GetFdwRoutineForRelation(rel, false);
+
+				if (fdwroutine->IsForeignRelUpdatable != NULL)
+					events |= fdwroutine->IsForeignRelUpdatable(rel);
+				else
+				{
+					/* Assume presence of executor functions is sufficient */
+					if (fdwroutine->ExecForeignInsert != NULL)
+						events |= (1 << CMD_INSERT);
+					if (fdwroutine->ExecForeignUpdate != NULL)
+						events |= (1 << CMD_UPDATE);
+					if (fdwroutine->ExecForeignDelete != NULL)
+						events |= (1 << CMD_DELETE);
+				}
+
+				relation_close(rel, AccessShareLock);
+				return events;
 			}
-			events |= auto_events;
-		}
+			break;
+			/* Check if this is an automatically updatable view */
+		case RELKIND_VIEW:
+			{
+				Query	   *viewquery = get_view_query(rel);
+
+				if (view_query_is_auto_updatable(viewquery, false) == NULL)
+				{
+					Bitmapset  *updatable_cols;
+					int			auto_events;
+					RangeTblRef *rtr;
+					RangeTblEntry *base_rte;
+					Oid			baseoid;
+
+					/*
+					 * Determine which of the view's columns are updatable. If
+					 * there are none within the set of columns we are looking
+					 * at, then the view doesn't support INSERT/UPDATE, but it
+					 * may still support DELETE.
+					 */
+					view_cols_are_auto_updatable(viewquery, NULL,
+												 &updatable_cols, NULL);
+
+					if (include_cols != NULL)
+						updatable_cols = bms_int_members(updatable_cols, include_cols);
+
+					if (bms_is_empty(updatable_cols))
+						auto_events = (1 << CMD_DELETE);	/* May support DELETE */
+					else
+						auto_events = ALL_EVENTS;	/* May support all events */
+
+					/*
+					 * The base relation must also support these update
+					 * commands. Tables are always updatable, but for any
+					 * other kind of base relation we must do a recursive
+					 * check limited to the columns referenced by the locally
+					 * updatable columns in this view.
+					 */
+					rtr = (RangeTblRef *) linitial(viewquery->jointree->fromlist);
+					base_rte = rt_fetch(rtr->rtindex, viewquery->rtable);
+					Assert(base_rte->rtekind == RTE_RELATION);
+
+					if (base_rte->relkind != RELKIND_RELATION &&
+						base_rte->relkind != RELKIND_PARTITIONED_TABLE)
+					{
+						baseoid = base_rte->relid;
+						outer_reloids = lappend_oid(outer_reloids,
+													RelationGetRelid(rel));
+						include_cols = adjust_view_column_set(updatable_cols,
+															  viewquery->targetList);
+						auto_events &= relation_is_updatable(baseoid,
+															 outer_reloids,
+															 include_triggers,
+															 include_cols);
+						outer_reloids = list_delete_last(outer_reloids);
+					}
+					events |= auto_events;
+				}
+			}
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/* If we reach here, the relation may support some update commands */

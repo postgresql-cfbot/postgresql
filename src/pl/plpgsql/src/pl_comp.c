@@ -1723,14 +1723,23 @@ plpgsql_parse_cwordtype(List *idents)
 	 * It must be a relation, sequence, view, materialized view, composite
 	 * type, or foreign table
 	 */
-	if (classStruct->relkind != RELKIND_RELATION &&
-		classStruct->relkind != RELKIND_SEQUENCE &&
-		classStruct->relkind != RELKIND_VIEW &&
-		classStruct->relkind != RELKIND_MATVIEW &&
-		classStruct->relkind != RELKIND_COMPOSITE_TYPE &&
-		classStruct->relkind != RELKIND_FOREIGN_TABLE &&
-		classStruct->relkind != RELKIND_PARTITIONED_TABLE)
-		goto done;
+	switch ((RelKind) classStruct->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_SEQUENCE:
+		case RELKIND_VIEW:
+		case RELKIND_MATVIEW:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_INDEX:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			goto done;
+	}
 
 	/*
 	 * Fetch the named table field and its type

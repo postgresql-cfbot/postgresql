@@ -414,7 +414,7 @@ perform_base_backup(basebackup_options *opt)
 			if (ti->path == NULL)
 			{
 				struct stat statbuf;
-				bool	sendtblspclinks = true;
+				bool		sendtblspclinks = true;
 
 				/* In the main tar, include the backup_label first... */
 				sendFileWithContent(BACKUP_LABEL_FILE, labelfile->data,
@@ -1777,8 +1777,8 @@ sendFile(const char *readfilename, const char *tarfilename,
 	}
 
 	/*
-	 * Pad to a block boundary, per tar format requirements. (This small
-	 * piece of data is probably not worth throttling, and is not checksummed
+	 * Pad to a block boundary, per tar format requirements. (This small piece
+	 * of data is probably not worth throttling, and is not checksummed
 	 * because it's not actually part of the file.)
 	 */
 	pad = tarPaddingBytesRequired(len);

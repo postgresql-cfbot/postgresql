@@ -62,7 +62,7 @@ main(int argc, char **argv)
 					  "SELECT c.relname, (SELECT nspname FROM "
 					  "pg_catalog.pg_namespace n WHERE n.oid = c.relnamespace) AS nspname "
 					  "FROM pg_catalog.pg_class c "
-					  "WHERE c.relkind = " CppAsString2(RELKIND_RELATION)
+					  "WHERE c.relkind = " RelKindAsString(RELKIND_RELATION)
 					  " AND c.oid < '%u'"
 					  " AND EXISTS(SELECT * FROM pg_attribute a"
 					  "            WHERE a.attrelid = c.oid AND a.attname = 'oid' "
@@ -88,7 +88,7 @@ main(int argc, char **argv)
 					  "FROM pg_catalog.pg_class c, pg_catalog.pg_attribute a "
 					  "WHERE a.attnum > 0"
 					  " AND a.attname != 'oid'"
-					  " AND c.relkind = " CppAsString2(RELKIND_RELATION)
+					  " AND c.relkind = " RelKindAsString(RELKIND_RELATION)
 					  " AND c.oid < '%u'"
 					  " AND a.attrelid = c.oid"
 					  " AND a.atttypid IN ('pg_catalog.oid'::regtype, "
@@ -166,7 +166,7 @@ main(int argc, char **argv)
 					  "a.attname "
 					  "FROM pg_catalog.pg_class c, pg_catalog.pg_attribute a "
 					  "WHERE a.attnum > 0"
-					  " AND c.relkind = " CppAsString2(RELKIND_RELATION)
+					  " AND c.relkind = " RelKindAsString(RELKIND_RELATION)
 					  " AND a.attrelid = c.oid"
 					  " AND a.atttypid IN ('pg_catalog.oid[]'::regtype, "
 					  " 'pg_catalog.oidvector'::regtype, "

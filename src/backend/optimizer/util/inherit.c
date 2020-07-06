@@ -129,88 +129,113 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 	}
 
 	/* Scan the inheritance set and expand it */
-	if (oldrelation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	switch ((RelKind) oldrelation->rd_rel->relkind)
 	{
-		/*
-		 * Partitioned table, so set up for partitioning.
-		 */
-		Assert(rte->relkind == RELKIND_PARTITIONED_TABLE);
-
-		/*
-		 * Recursively expand and lock the partitions.  While at it, also
-		 * extract the partition key columns of all the partitioned tables.
-		 */
-		expand_partitioned_rtentry(root, rel, rte, rti,
-								   oldrelation, oldrc, lockmode);
-	}
-	else
-	{
-		/*
-		 * Ordinary table, so process traditional-inheritance children.  (Note
-		 * that partitioned tables are not allowed to have inheritance
-		 * children, so it's not possible for both cases to apply.)
-		 */
-		List	   *inhOIDs;
-		ListCell   *l;
-
-		/* Scan for all members of inheritance set, acquire needed locks */
-		inhOIDs = find_all_inheritors(parentOID, lockmode, NULL);
-
-		/*
-		 * We used to special-case the situation where the table no longer has
-		 * any children, by clearing rte->inh and exiting.  That no longer
-		 * works, because this function doesn't get run until after decisions
-		 * have been made that depend on rte->inh.  We have to treat such
-		 * situations as normal inheritance.  The table itself should always
-		 * have been found, though.
-		 */
-		Assert(inhOIDs != NIL);
-		Assert(linitial_oid(inhOIDs) == parentOID);
-
-		/* Expand simple_rel_array and friends to hold child objects. */
-		expand_planner_arrays(root, list_length(inhOIDs));
-
-		/*
-		 * Expand inheritance children in the order the OIDs were returned by
-		 * find_all_inheritors.
-		 */
-		foreach(l, inhOIDs)
-		{
-			Oid			childOID = lfirst_oid(l);
-			Relation	newrelation;
-			RangeTblEntry *childrte;
-			Index		childRTindex;
-
-			/* Open rel if needed; we already have required locks */
-			if (childOID != parentOID)
-				newrelation = table_open(childOID, NoLock);
-			else
-				newrelation = oldrelation;
-
-			/*
-			 * It is possible that the parent table has children that are temp
-			 * tables of other backends.  We cannot safely access such tables
-			 * (because of buffering issues), and the best thing to do seems
-			 * to be to silently ignore them.
-			 */
-			if (childOID != parentOID && RELATION_IS_OTHER_TEMP(newrelation))
+		case RELKIND_PARTITIONED_TABLE:
 			{
-				table_close(newrelation, lockmode);
-				continue;
+				/*
+				 * Partitioned table, so set up for partitioning.
+				 */
+				Assert(rte->relkind == RELKIND_PARTITIONED_TABLE);
+
+				/*
+				 * Recursively expand and lock the partitions.  While at it,
+				 * also extract the partition key columns of all the
+				 * partitioned tables.
+				 */
+				expand_partitioned_rtentry(root, rel, rte, rti,
+										   oldrelation, oldrc, lockmode);
 			}
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			{
+				/*
+				 * Ordinary table, so process traditional-inheritance
+				 * children.  (Note that partitioned tables are not allowed to
+				 * have inheritance children, so it's not possible for both
+				 * cases to apply.)
+				 */
+				List	   *inhOIDs;
+				ListCell   *l;
 
-			/* Create RTE and AppendRelInfo, plus PlanRowMark if needed. */
-			expand_single_inheritance_child(root, rte, rti, oldrelation,
-											oldrc, newrelation,
-											&childrte, &childRTindex);
+				/*
+				 * Scan for all members of inheritance set, acquire needed
+				 * locks
+				 */
+				inhOIDs = find_all_inheritors(parentOID, lockmode, NULL);
 
-			/* Create the otherrel RelOptInfo too. */
-			(void) build_simple_rel(root, childRTindex, rel);
+				/*
+				 * We used to special-case the situation where the table no
+				 * longer has any children, by clearing rte->inh and exiting.
+				 * That no longer works, because this function doesn't get run
+				 * until after decisions have been made that depend on
+				 * rte->inh.  We have to treat such situations as normal
+				 * inheritance.  The table itself should always have been
+				 * found, though.
+				 */
+				Assert(inhOIDs != NIL);
+				Assert(linitial_oid(inhOIDs) == parentOID);
 
-			/* Close child relations, but keep locks */
-			if (childOID != parentOID)
-				table_close(newrelation, NoLock);
-		}
+				/* Expand simple_rel_array and friends to hold child objects. */
+				expand_planner_arrays(root, list_length(inhOIDs));
+
+				/*
+				 * Expand inheritance children in the order the OIDs were
+				 * returned by find_all_inheritors.
+				 */
+				foreach(l, inhOIDs)
+				{
+					Oid			childOID = lfirst_oid(l);
+					Relation	newrelation;
+					RangeTblEntry *childrte;
+					Index		childRTindex;
+
+					/* Open rel if needed; we already have required locks */
+					if (childOID != parentOID)
+						newrelation = table_open(childOID, NoLock);
+					else
+						newrelation = oldrelation;
+
+					/*
+					 * It is possible that the parent table has children that
+					 * are temp tables of other backends.  We cannot safely
+					 * access such tables (because of buffering issues), and
+					 * the best thing to do seems to be to silently ignore
+					 * them.
+					 */
+					if (childOID != parentOID && RELATION_IS_OTHER_TEMP(newrelation))
+					{
+						table_close(newrelation, lockmode);
+						continue;
+					}
+
+					/*
+					 * Create RTE and AppendRelInfo, plus PlanRowMark if
+					 * needed.
+					 */
+					expand_single_inheritance_child(root, rte, rti, oldrelation,
+													oldrc, newrelation,
+													&childrte, &childRTindex);
+
+					/* Create the otherrel RelOptInfo too. */
+					(void) build_simple_rel(root, childRTindex, rel);
+
+					/* Close child relations, but keep locks */
+					if (childOID != parentOID)
+						table_close(newrelation, NoLock);
+				}
+			}
+			break;
 	}
 
 	/*
@@ -380,10 +405,26 @@ expand_partitioned_rtentry(PlannerInfo *root, RelOptInfo *relinfo,
 												childrelinfo->relids);
 
 		/* If this child is itself partitioned, recurse */
-		if (childrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			expand_partitioned_rtentry(root, childrelinfo,
-									   childrte, childRTindex,
-									   childrel, top_parentrc, lockmode);
+		switch ((RelKind) childrel->rd_rel->relkind)
+		{
+			case RELKIND_PARTITIONED_TABLE:
+				expand_partitioned_rtentry(root, childrelinfo,
+										   childrte, childRTindex,
+										   childrel, top_parentrc, lockmode);
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				break;
+		}
 
 		/* Close child relation, but keep locks */
 		table_close(childrel, NoLock);
@@ -448,13 +489,26 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 	childrte->relid = childOID;
 	childrte->relkind = childrel->rd_rel->relkind;
 	/* A partitioned child will need to be expanded further. */
-	if (childrte->relkind == RELKIND_PARTITIONED_TABLE)
+	switch ((RelKind) childrte->relkind)
 	{
-		Assert(childOID != parentOID);
-		childrte->inh = true;
+		case RELKIND_PARTITIONED_TABLE:
+			Assert(childOID != parentOID);
+			childrte->inh = true;
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			childrte->inh = false;
+			break;
 	}
-	else
-		childrte->inh = false;
 	childrte->requiredPerms = 0;
 	childrte->securityQuals = NIL;
 
@@ -578,7 +632,25 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 		 * that the executor ignores them (except their existence means that
 		 * the child tables will be locked using the appropriate mode).
 		 */
-		childrc->isParent = (childrte->relkind == RELKIND_PARTITIONED_TABLE);
+		switch ((RelKind) childrte->relkind)
+		{
+			case RELKIND_PARTITIONED_TABLE:
+				childrc->isParent = true;
+				break;
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_VIEW:
+			case RELKIND_SEQUENCE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				childrc->isParent = false;
+				break;
+		}
 
 		/* Include child's rowmark type in top parent's allMarkTypes */
 		top_parentrc->allMarkTypes |= childrc->allMarkTypes;

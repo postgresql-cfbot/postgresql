@@ -2177,56 +2177,77 @@ ExecModifyTable(PlanState *pstate)
 				bool		isNull;
 
 				relkind = resultRelInfo->ri_RelationDesc->rd_rel->relkind;
-				if (relkind == RELKIND_RELATION || relkind == RELKIND_MATVIEW)
+				switch ((RelKind) relkind)
 				{
-					datum = ExecGetJunkAttribute(slot,
-												 junkfilter->jf_junkAttNo,
-												 &isNull);
-					/* shouldn't ever get a null result... */
-					if (isNull)
-						elog(ERROR, "ctid is NULL");
+					case RELKIND_RELATION:
+					case RELKIND_MATVIEW:
+						{
+							datum = ExecGetJunkAttribute(slot,
+														 junkfilter->jf_junkAttNo,
+														 &isNull);
+							/* shouldn't ever get a null result... */
+							if (isNull)
+								elog(ERROR, "ctid is NULL");
 
-					tupleid = (ItemPointer) DatumGetPointer(datum);
-					tuple_ctid = *tupleid;	/* be sure we don't free ctid!! */
-					tupleid = &tuple_ctid;
+							tupleid = (ItemPointer) DatumGetPointer(datum);
+							tuple_ctid = *tupleid;	/* be sure we don't free
+													 * ctid!! */
+							tupleid = &tuple_ctid;
+						}
+						break;
+					case RELKIND_PARTITIONED_INDEX:
+					case RELKIND_SEQUENCE:
+					case RELKIND_COMPOSITE_TYPE:
+					case RELKIND_FOREIGN_TABLE:
+					case RELKIND_INDEX:
+					case RELKIND_PARTITIONED_TABLE:
+					case RELKIND_TOASTVALUE:
+					case RELKIND_VIEW:
+					case RELKIND_NULL:
+					default:
+
+						/*
+						 * Use the wholerow attribute, when available, to
+						 * reconstruct the old relation tuple.
+						 *
+						 * Foreign table updates have a wholerow attribute
+						 * when the relation has a row-level trigger.  Note
+						 * that the wholerow attribute does not carry system
+						 * columns.  Foreign table triggers miss seeing those,
+						 * except that we know enough here to set t_tableOid.
+						 * Quite separately from this, the FDW may fetch its
+						 * own junk attrs to identify the row.
+						 *
+						 * Other relevant relkinds, currently limited to
+						 * views, always have a wholerow attribute.
+						 */
+						if (AttributeNumberIsValid(junkfilter->jf_junkAttNo))
+						{
+							datum = ExecGetJunkAttribute(slot,
+														 junkfilter->jf_junkAttNo,
+														 &isNull);
+							/* shouldn't ever get a null result... */
+							if (isNull)
+								elog(ERROR, "wholerow is NULL");
+
+							oldtupdata.t_data = DatumGetHeapTupleHeader(datum);
+							oldtupdata.t_len =
+								HeapTupleHeaderGetDatumLength(oldtupdata.t_data);
+							ItemPointerSetInvalid(&(oldtupdata.t_self));
+
+							/*
+							 * Historically, view triggers see invalid
+							 * t_tableOid.
+							 */
+							oldtupdata.t_tableOid =
+								(relkind == RELKIND_VIEW) ? InvalidOid :
+								RelationGetRelid(resultRelInfo->ri_RelationDesc);
+
+							oldtuple = &oldtupdata;
+						}
+						else
+							Assert(relkind == RELKIND_FOREIGN_TABLE);
 				}
-
-				/*
-				 * Use the wholerow attribute, when available, to reconstruct
-				 * the old relation tuple.
-				 *
-				 * Foreign table updates have a wholerow attribute when the
-				 * relation has a row-level trigger.  Note that the wholerow
-				 * attribute does not carry system columns.  Foreign table
-				 * triggers miss seeing those, except that we know enough here
-				 * to set t_tableOid.  Quite separately from this, the FDW may
-				 * fetch its own junk attrs to identify the row.
-				 *
-				 * Other relevant relkinds, currently limited to views, always
-				 * have a wholerow attribute.
-				 */
-				else if (AttributeNumberIsValid(junkfilter->jf_junkAttNo))
-				{
-					datum = ExecGetJunkAttribute(slot,
-												 junkfilter->jf_junkAttNo,
-												 &isNull);
-					/* shouldn't ever get a null result... */
-					if (isNull)
-						elog(ERROR, "wholerow is NULL");
-
-					oldtupdata.t_data = DatumGetHeapTupleHeader(datum);
-					oldtupdata.t_len =
-						HeapTupleHeaderGetDatumLength(oldtupdata.t_data);
-					ItemPointerSetInvalid(&(oldtupdata.t_self));
-					/* Historically, view triggers see invalid t_tableOid. */
-					oldtupdata.t_tableOid =
-						(relkind == RELKIND_VIEW) ? InvalidOid :
-						RelationGetRelid(resultRelInfo->ri_RelationDesc);
-
-					oldtuple = &oldtupdata;
-				}
-				else
-					Assert(relkind == RELKIND_FOREIGN_TABLE);
 			}
 
 			/*
@@ -2697,27 +2718,40 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 					char		relkind;
 
 					relkind = resultRelInfo->ri_RelationDesc->rd_rel->relkind;
-					if (relkind == RELKIND_RELATION ||
-						relkind == RELKIND_MATVIEW ||
-						relkind == RELKIND_PARTITIONED_TABLE)
+					switch ((RelKind) relkind)
 					{
-						j->jf_junkAttNo = ExecFindJunkAttribute(j, "ctid");
-						if (!AttributeNumberIsValid(j->jf_junkAttNo))
-							elog(ERROR, "could not find junk ctid column");
-					}
-					else if (relkind == RELKIND_FOREIGN_TABLE)
-					{
-						/*
-						 * When there is a row-level trigger, there should be
-						 * a wholerow attribute.
-						 */
-						j->jf_junkAttNo = ExecFindJunkAttribute(j, "wholerow");
-					}
-					else
-					{
-						j->jf_junkAttNo = ExecFindJunkAttribute(j, "wholerow");
-						if (!AttributeNumberIsValid(j->jf_junkAttNo))
-							elog(ERROR, "could not find junk wholerow column");
+						case RELKIND_RELATION:
+						case RELKIND_MATVIEW:
+						case RELKIND_PARTITIONED_TABLE:
+							{
+								j->jf_junkAttNo = ExecFindJunkAttribute(j, "ctid");
+								if (!AttributeNumberIsValid(j->jf_junkAttNo))
+									elog(ERROR, "could not find junk ctid column");
+							}
+							break;
+						case RELKIND_FOREIGN_TABLE:
+							{
+								/*
+								 * When there is a row-level trigger, there
+								 * should be a wholerow attribute.
+								 */
+								j->jf_junkAttNo = ExecFindJunkAttribute(j, "wholerow");
+							}
+							break;
+						case RELKIND_PARTITIONED_INDEX:
+						case RELKIND_SEQUENCE:
+						case RELKIND_COMPOSITE_TYPE:
+						case RELKIND_INDEX:
+						case RELKIND_TOASTVALUE:
+						case RELKIND_VIEW:
+						case RELKIND_NULL:
+						default:
+							{
+								j->jf_junkAttNo = ExecFindJunkAttribute(j, "wholerow");
+								if (!AttributeNumberIsValid(j->jf_junkAttNo))
+									elog(ERROR, "could not find junk wholerow column");
+							}
+							break;
 					}
 				}
 

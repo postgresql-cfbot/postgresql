@@ -1079,7 +1079,7 @@ CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
 	TriggerDesc *trigDesc = resultRel->trigdesc;
 	FdwRoutine *fdwroutine;
 
-	switch (resultRel->rd_rel->relkind)
+	switch ((RelKind) resultRel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_PARTITIONED_TABLE:
@@ -1193,6 +1193,10 @@ CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
 					break;
 			}
 			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_NULL:
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -1213,7 +1217,7 @@ CheckValidRowMarkRel(Relation rel, RowMarkType markType)
 {
 	FdwRoutine *fdwroutine;
 
-	switch (rel->rd_rel->relkind)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_PARTITIONED_TABLE:
@@ -1257,6 +1261,10 @@ CheckValidRowMarkRel(Relation rel, RowMarkType markType)
 						 errmsg("cannot lock rows in foreign table \"%s\"",
 								RelationGetRelationName(rel))));
 			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_NULL:
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -1308,10 +1316,26 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 		resultRelInfo->ri_TrigWhenExprs = NULL;
 		resultRelInfo->ri_TrigInstrument = NULL;
 	}
-	if (resultRelationDesc->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
-		resultRelInfo->ri_FdwRoutine = GetFdwRoutineForRelation(resultRelationDesc, true);
-	else
-		resultRelInfo->ri_FdwRoutine = NULL;
+
+	switch ((RelKind) resultRelationDesc->rd_rel->relkind)
+	{
+		case RELKIND_FOREIGN_TABLE:
+			resultRelInfo->ri_FdwRoutine = GetFdwRoutineForRelation(resultRelationDesc, true);
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			resultRelInfo->ri_FdwRoutine = NULL;
+			break;
+	}
 
 	/* The following fields are set later if needed */
 	resultRelInfo->ri_FdwState = NULL;
@@ -2614,42 +2638,61 @@ EvalPlanQualFetchRowMark(EPQState *epqstate, Index rti, TupleTableSlot *slot)
 			return false;
 
 		/* fetch requests on foreign tables must be passed to their FDW */
-		if (erm->relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+		switch ((RelKind) erm->relation->rd_rel->relkind)
 		{
-			FdwRoutine *fdwroutine;
-			bool		updated = false;
+			case RELKIND_FOREIGN_TABLE:
+				{
+					FdwRoutine *fdwroutine;
+					bool		updated = false;
 
-			fdwroutine = GetFdwRoutineForRelation(erm->relation, false);
-			/* this should have been checked already, but let's be safe */
-			if (fdwroutine->RefetchForeignRow == NULL)
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("cannot lock rows in foreign table \"%s\"",
-								RelationGetRelationName(erm->relation))));
+					fdwroutine = GetFdwRoutineForRelation(erm->relation, false);
 
-			fdwroutine->RefetchForeignRow(epqstate->recheckestate,
-										  erm,
-										  datum,
-										  slot,
-										  &updated);
-			if (TupIsNull(slot))
-				elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
+					/*
+					 * this should have been checked already, but let's be
+					 * safe
+					 */
+					if (fdwroutine->RefetchForeignRow == NULL)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("cannot lock rows in foreign table \"%s\"",
+										RelationGetRelationName(erm->relation))));
 
-			/*
-			 * Ideally we'd insist on updated == false here, but that assumes
-			 * that FDWs can track that exactly, which they might not be able
-			 * to.  So just ignore the flag.
-			 */
-			return true;
-		}
-		else
-		{
-			/* ordinary table, fetch the tuple */
-			if (!table_tuple_fetch_row_version(erm->relation,
-											   (ItemPointer) DatumGetPointer(datum),
-											   SnapshotAny, slot))
-				elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
-			return true;
+					fdwroutine->RefetchForeignRow(epqstate->recheckestate,
+												  erm,
+												  datum,
+												  slot,
+												  &updated);
+					if (TupIsNull(slot))
+						elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
+
+					/*
+					 * Ideally we'd insist on updated == false here, but that
+					 * assumes that FDWs can track that exactly, which they
+					 * might not be able to.  So just ignore the flag.
+					 */
+					return true;
+				}
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				{
+					/* ordinary table, fetch the tuple */
+					if (!table_tuple_fetch_row_version(erm->relation,
+													   (ItemPointer) DatumGetPointer(datum),
+													   SnapshotAny, slot))
+						elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
+					return true;
+				}
+				break;
 		}
 	}
 	else

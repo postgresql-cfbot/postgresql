@@ -2399,17 +2399,35 @@ makeTableDataInfo(DumpOptions *dopt, TableInfo *tbinfo)
 		return;
 
 	/* Skip VIEWs (no data to dump) */
-	if (tbinfo->relkind == RELKIND_VIEW)
-		return;
-	/* Skip FOREIGN TABLEs (no data to dump) unless requested explicitly */
-	if (tbinfo->relkind == RELKIND_FOREIGN_TABLE &&
-		(foreign_servers_include_oids.head == NULL ||
-		 !simple_oid_list_member(&foreign_servers_include_oids,
-								 tbinfo->foreign_server)))
-		return;
-	/* Skip partitioned tables (data in partitions) */
-	if (tbinfo->relkind == RELKIND_PARTITIONED_TABLE)
-		return;
+	switch ((RelKind) tbinfo->relkind)
+	{
+		case RELKIND_VIEW:
+			return;
+
+			/*
+			 * Skip FOREIGN TABLEs (no data to dump) unless requested
+			 * explicitly
+			 */
+		case RELKIND_FOREIGN_TABLE:
+			if (foreign_servers_include_oids.head == NULL ||
+				!simple_oid_list_member(&foreign_servers_include_oids,
+										tbinfo->foreign_server))
+				return;
+			break;
+			/* Skip partitioned tables (data in partitions) */
+		case RELKIND_PARTITIONED_TABLE:
+			return;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	/* Don't dump data in unlogged tables, if so requested */
 	if (tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED &&
@@ -2424,12 +2442,27 @@ makeTableDataInfo(DumpOptions *dopt, TableInfo *tbinfo)
 	/* OK, let's dump it */
 	tdinfo = (TableDataInfo *) pg_malloc(sizeof(TableDataInfo));
 
-	if (tbinfo->relkind == RELKIND_MATVIEW)
-		tdinfo->dobj.objType = DO_REFRESH_MATVIEW;
-	else if (tbinfo->relkind == RELKIND_SEQUENCE)
-		tdinfo->dobj.objType = DO_SEQUENCE_SET;
-	else
-		tdinfo->dobj.objType = DO_TABLE_DATA;
+	switch ((RelKind) tbinfo->relkind)
+	{
+		case RELKIND_MATVIEW:
+			tdinfo->dobj.objType = DO_REFRESH_MATVIEW;
+			break;
+		case RELKIND_SEQUENCE:
+			tdinfo->dobj.objType = DO_SEQUENCE_SET;
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			tdinfo->dobj.objType = DO_TABLE_DATA;
+			break;
+	}
 
 	/*
 	 * Note: use tableoid 0 so that this object won't be mistaken for
@@ -2476,14 +2509,14 @@ buildMatViewRefreshDependencies(Archive *fout)
 						 "SELECT d1.objid, d2.refobjid, c2.relkind AS refrelkind "
 						 "FROM pg_depend d1 "
 						 "JOIN pg_class c1 ON c1.oid = d1.objid "
-						 "AND c1.relkind = " CppAsString2(RELKIND_MATVIEW)
+						 "AND c1.relkind = " RelKindAsString(RELKIND_MATVIEW)
 						 " JOIN pg_rewrite r1 ON r1.ev_class = d1.objid "
 						 "JOIN pg_depend d2 ON d2.classid = 'pg_rewrite'::regclass "
 						 "AND d2.objid = r1.oid "
 						 "AND d2.refobjid <> d1.objid "
 						 "JOIN pg_class c2 ON c2.oid = d2.refobjid "
-						 "AND c2.relkind IN (" CppAsString2(RELKIND_MATVIEW) ","
-						 CppAsString2(RELKIND_VIEW) ") "
+						 "AND c2.relkind IN (" RelKindAsString(RELKIND_MATVIEW) ","
+						 RelKindAsString(RELKIND_VIEW) ") "
 						 "WHERE d1.classid = 'pg_class'::regclass "
 						 "UNION "
 						 "SELECT w.objid, d3.refobjid, c3.relkind "
@@ -2493,12 +2526,12 @@ buildMatViewRefreshDependencies(Archive *fout)
 						 "AND d3.objid = r3.oid "
 						 "AND d3.refobjid <> w.refobjid "
 						 "JOIN pg_class c3 ON c3.oid = d3.refobjid "
-						 "AND c3.relkind IN (" CppAsString2(RELKIND_MATVIEW) ","
-						 CppAsString2(RELKIND_VIEW) ") "
+						 "AND c3.relkind IN (" RelKindAsString(RELKIND_MATVIEW) ","
+						 RelKindAsString(RELKIND_VIEW) ") "
 						 ") "
 						 "SELECT 'pg_class'::regclass::oid AS classid, objid, refobjid "
 						 "FROM w "
-						 "WHERE refrelkind = " CppAsString2(RELKIND_MATVIEW));
+						 "WHERE refrelkind = " RelKindAsString(RELKIND_MATVIEW));
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 
@@ -2637,9 +2670,23 @@ guessConstraintInheritance(TableInfo *tblinfo, int numTables)
 		TableInfo  *parent;
 
 		/* Sequences and views never have parents */
-		if (tbinfo->relkind == RELKIND_SEQUENCE ||
-			tbinfo->relkind == RELKIND_VIEW)
-			continue;
+		switch ((RelKind) tbinfo->relkind)
+		{
+			case RELKIND_SEQUENCE:
+			case RELKIND_VIEW:
+				continue;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				break;
+		}
 
 		/* Don't bother computing anything for non-target tables, either */
 		if (!(tbinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
@@ -4068,9 +4115,23 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 		/*
 		 * Only regular and partitioned tables can be added to publications.
 		 */
-		if (tbinfo->relkind != RELKIND_RELATION &&
-			tbinfo->relkind != RELKIND_PARTITIONED_TABLE)
-			continue;
+		switch ((RelKind) tbinfo->relkind)
+		{
+			case RELKIND_RELATION:
+			case RELKIND_PARTITIONED_TABLE:
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				continue;
+		}
 
 		/*
 		 * Ignore publication membership of tables whose definitions are not
@@ -6157,7 +6218,7 @@ getTables(Archive *fout, int *numTables)
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
 						initracl_subquery, "c.relacl", "c.relowner",
-						"CASE WHEN c.relkind = " CppAsString2(RELKIND_SEQUENCE)
+						"CASE WHEN c.relkind = " RelKindAsString(RELKIND_SEQUENCE)
 						" THEN 's' ELSE 'r' END::\"char\"",
 						dopt->binary_upgrade);
 
@@ -6786,10 +6847,25 @@ getTables(Archive *fout, int *numTables)
 		/*
 		 * Decide whether we want to dump this table.
 		 */
-		if (tblinfo[i].relkind == RELKIND_COMPOSITE_TYPE)
-			tblinfo[i].dobj.dump = DUMP_COMPONENT_NONE;
-		else
-			selectDumpableTable(&tblinfo[i], fout);
+		switch ((RelKind) tblinfo[i].relkind)
+		{
+			case RELKIND_COMPOSITE_TYPE:
+				tblinfo[i].dobj.dump = DUMP_COMPONENT_NONE;
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				selectDumpableTable(&tblinfo[i], fout);
+				break;
+		}
 
 		/*
 		 * If the table-level and all column-level ACLs for this table are
@@ -6836,16 +6912,31 @@ getTables(Archive *fout, int *numTables)
 		 * We only need to lock the table for certain components; see
 		 * pg_dump.h
 		 */
-		if (tblinfo[i].dobj.dump &&
-			(tblinfo[i].relkind == RELKIND_RELATION ||
-			 tblinfo->relkind == RELKIND_PARTITIONED_TABLE) &&
-			(tblinfo[i].dobj.dump & DUMP_COMPONENTS_REQUIRING_LOCK))
+		switch ((RelKind) tblinfo[i].relkind)
 		{
-			resetPQExpBuffer(query);
-			appendPQExpBuffer(query,
-							  "LOCK TABLE %s IN ACCESS SHARE MODE",
-							  fmtQualifiedDumpable(&tblinfo[i]));
-			ExecuteSqlStatement(fout, query->data);
+			case RELKIND_RELATION:
+			case RELKIND_PARTITIONED_TABLE:
+				if (tblinfo[i].dobj.dump &&
+					(tblinfo[i].dobj.dump & DUMP_COMPONENTS_REQUIRING_LOCK))
+				{
+					resetPQExpBuffer(query);
+					appendPQExpBuffer(query,
+									  "LOCK TABLE %s IN ACCESS SHARE MODE",
+									  fmtQualifiedDumpable(&tblinfo[i]));
+					ExecuteSqlStatement(fout, query->data);
+				}
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				break;
 		}
 
 		/* Emit notice if join for owner failed */
@@ -15749,7 +15840,7 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 		char	   *srvname = NULL;
 		char	   *foreign = "";
 
-		switch (tbinfo->relkind)
+		switch ((RelKind) tbinfo->relkind)
 		{
 			case RELKIND_FOREIGN_TABLE:
 				{
@@ -15788,8 +15879,21 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 			case RELKIND_MATVIEW:
 				reltypename = "MATERIALIZED VIEW";
 				break;
-			default:
+			case RELKIND_RELATION:
+			case RELKIND_PARTITIONED_TABLE:
 				reltypename = "TABLE";
+				break;
+			case RELKIND_SEQUENCE:
+			case RELKIND_VIEW:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				Assert(false);
+				reltypename = "XXX";
+				break;
 		}
 
 		numParents = tbinfo->numParents;

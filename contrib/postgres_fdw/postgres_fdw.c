@@ -4842,11 +4842,11 @@ postgresImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 
 		appendStringInfoString(&buf,
 							   "WHERE c.relkind IN ("
-							   CppAsString2(RELKIND_RELATION) ","
-							   CppAsString2(RELKIND_VIEW) ","
-							   CppAsString2(RELKIND_FOREIGN_TABLE) ","
-							   CppAsString2(RELKIND_MATVIEW) ","
-							   CppAsString2(RELKIND_PARTITIONED_TABLE) ") "
+							   RelKindAsString(RELKIND_RELATION) ","
+							   RelKindAsString(RELKIND_VIEW) ","
+							   RelKindAsString(RELKIND_FOREIGN_TABLE) ","
+							   RelKindAsString(RELKIND_MATVIEW) ","
+							   RelKindAsString(RELKIND_PARTITIONED_TABLE) ") "
 							   "  AND n.nspname = ");
 		deparseStringLiteral(&buf, stmt->remote_schema);
 

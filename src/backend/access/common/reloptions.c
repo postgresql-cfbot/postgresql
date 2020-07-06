@@ -1372,7 +1372,7 @@ extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
 	classForm = (Form_pg_class) GETSTRUCT(tuple);
 
 	/* Parse into appropriate format; don't error out here */
-	switch (classForm->relkind)
+	switch ((RelKind) classForm->relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
@@ -1392,6 +1392,9 @@ extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
 		case RELKIND_FOREIGN_TABLE:
 			options = NULL;
 			break;
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_NULL:
 		default:
 			Assert(false);		/* can't get here */
 			options = NULL;		/* keep compiler quiet */
@@ -1997,7 +2000,7 @@ heap_reloptions(char relkind, Datum reloptions, bool validate)
 {
 	StdRdOptions *rdopts;
 
-	switch (relkind)
+	switch ((RelKind) relkind)
 	{
 		case RELKIND_TOASTVALUE:
 			rdopts = (StdRdOptions *)
@@ -2013,12 +2016,20 @@ heap_reloptions(char relkind, Datum reloptions, bool validate)
 		case RELKIND_RELATION:
 		case RELKIND_MATVIEW:
 			return default_reloptions(reloptions, validate, RELOPT_KIND_HEAP);
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
 		default:
 			/* other relkinds are not supported */
 			return NULL;
 	}
+	return NULL;				/* keep compiler happy */
 }
-
 
 /*
  * Parse options for indexes.

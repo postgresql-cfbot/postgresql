@@ -53,8 +53,23 @@ static List *generate_partition_qual(Relation rel);
 PartitionKey
 RelationGetPartitionKey(Relation rel)
 {
-	if (rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-		return NULL;
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			return NULL;
+	}
 
 	if (unlikely(rel->rd_partkey == NULL))
 		RelationBuildPartitionKey(rel);

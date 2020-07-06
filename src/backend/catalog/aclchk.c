@@ -1765,36 +1765,65 @@ ExecGrant_Relation(InternalGrant *istmt)
 			elog(ERROR, "cache lookup failed for relation %u", relOid);
 		pg_class_tuple = (Form_pg_class) GETSTRUCT(tuple);
 
-		/* Not sensible to grant on an index */
-		if (pg_class_tuple->relkind == RELKIND_INDEX ||
-			pg_class_tuple->relkind == RELKIND_PARTITIONED_INDEX)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is an index",
-							NameStr(pg_class_tuple->relname))));
+		switch ((RelKind) pg_class_tuple->relkind)
+		{
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+				/* Not sensible to grant on an index */
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("\"%s\" is an index",
+								NameStr(pg_class_tuple->relname))));
 
-		/* Composite types aren't tables either */
-		if (pg_class_tuple->relkind == RELKIND_COMPOSITE_TYPE)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is a composite type",
-							NameStr(pg_class_tuple->relname))));
+			case RELKIND_COMPOSITE_TYPE:
+				/* Composite types aren't tables either */
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("\"%s\" is a composite type",
+								NameStr(pg_class_tuple->relname))));
 
-		/* Used GRANT SEQUENCE on a non-sequence? */
-		if (istmt->objtype == OBJECT_SEQUENCE &&
-			pg_class_tuple->relkind != RELKIND_SEQUENCE)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is not a sequence",
-							NameStr(pg_class_tuple->relname))));
+			case RELKIND_SEQUENCE:
+				break;
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				/* Used GRANT SEQUENCE on a non-sequence? */
+				if (istmt->objtype == OBJECT_SEQUENCE)
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is not a sequence",
+									NameStr(pg_class_tuple->relname))));
+				break;
+		}
+
 
 		/* Adjust the default permissions based on object type */
 		if (istmt->all_privs && istmt->privileges == ACL_NO_RIGHTS)
 		{
-			if (pg_class_tuple->relkind == RELKIND_SEQUENCE)
-				this_privileges = ACL_ALL_RIGHTS_SEQUENCE;
-			else
-				this_privileges = ACL_ALL_RIGHTS_RELATION;
+			switch ((RelKind) pg_class_tuple->relkind)
+			{
+				case RELKIND_SEQUENCE:
+					this_privileges = ACL_ALL_RIGHTS_SEQUENCE;
+					break;
+				case RELKIND_INDEX:
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_MATVIEW:
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_VIEW:
+				case RELKIND_NULL:
+				default:
+					this_privileges = ACL_ALL_RIGHTS_RELATION;
+					break;
+			}
 		}
 		else
 			this_privileges = istmt->privileges;
@@ -1807,42 +1836,54 @@ ExecGrant_Relation(InternalGrant *istmt)
 		 */
 		if (istmt->objtype == OBJECT_TABLE)
 		{
-			if (pg_class_tuple->relkind == RELKIND_SEQUENCE)
+			switch ((RelKind) pg_class_tuple->relkind)
 			{
-				/*
-				 * For backward compatibility, just throw a warning for
-				 * invalid sequence permissions when using the non-sequence
-				 * GRANT syntax.
-				 */
-				if (this_privileges & ~((AclMode) ACL_ALL_RIGHTS_SEQUENCE))
-				{
+				case RELKIND_SEQUENCE:
+
 					/*
-					 * Mention the object name because the user needs to know
-					 * which operations succeeded.  This is required because
-					 * WARNING allows the command to continue.
+					 * For backward compatibility, just throw a warning for
+					 * invalid sequence permissions when using the
+					 * non-sequence GRANT syntax.
 					 */
-					ereport(WARNING,
-							(errcode(ERRCODE_INVALID_GRANT_OPERATION),
-							 errmsg("sequence \"%s\" only supports USAGE, SELECT, and UPDATE privileges",
-									NameStr(pg_class_tuple->relname))));
-					this_privileges &= (AclMode) ACL_ALL_RIGHTS_SEQUENCE;
-				}
-			}
-			else
-			{
-				if (this_privileges & ~((AclMode) ACL_ALL_RIGHTS_RELATION))
-				{
-					/*
-					 * USAGE is the only permission supported by sequences but
-					 * not by non-sequences.  Don't mention the object name
-					 * because we didn't in the combined TABLE | SEQUENCE
-					 * check.
-					 */
-					ereport(ERROR,
-							(errcode(ERRCODE_INVALID_GRANT_OPERATION),
-							 errmsg("invalid privilege type %s for table",
-									"USAGE")));
-				}
+					if (this_privileges & ~((AclMode) ACL_ALL_RIGHTS_SEQUENCE))
+					{
+						/*
+						 * Mention the object name because the user needs to
+						 * know which operations succeeded.  This is required
+						 * because WARNING allows the command to continue.
+						 */
+						ereport(WARNING,
+								(errcode(ERRCODE_INVALID_GRANT_OPERATION),
+								 errmsg("sequence \"%s\" only supports USAGE, SELECT, and UPDATE privileges",
+										NameStr(pg_class_tuple->relname))));
+						this_privileges &= (AclMode) ACL_ALL_RIGHTS_SEQUENCE;
+					}
+					break;
+				case RELKIND_INDEX:
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_MATVIEW:
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_VIEW:
+				case RELKIND_NULL:
+				default:
+					if (this_privileges & ~((AclMode) ACL_ALL_RIGHTS_RELATION))
+					{
+						/*
+						 * USAGE is the only permission supported by sequences
+						 * but not by non-sequences.  Don't mention the object
+						 * name because we didn't in the combined TABLE |
+						 * SEQUENCE check.
+						 */
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_GRANT_OPERATION),
+								 errmsg("invalid privilege type %s for table",
+										"USAGE")));
+					}
+					break;
 			}
 		}
 
@@ -1881,12 +1922,21 @@ ExecGrant_Relation(InternalGrant *istmt)
 								   &isNull);
 		if (isNull)
 		{
-			switch (pg_class_tuple->relkind)
+			switch ((RelKind) pg_class_tuple->relkind)
 			{
 				case RELKIND_SEQUENCE:
 					old_acl = acldefault(OBJECT_SEQUENCE, ownerId);
 					break;
-				default:
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_INDEX:
+				case RELKIND_MATVIEW:
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_VIEW:
+				case RELKIND_NULL:
 					old_acl = acldefault(OBJECT_TABLE, ownerId);
 					break;
 			}
@@ -1925,11 +1975,21 @@ ExecGrant_Relation(InternalGrant *istmt)
 								old_acl, ownerId,
 								&grantorId, &avail_goptions);
 
-			switch (pg_class_tuple->relkind)
+			switch ((RelKind) pg_class_tuple->relkind)
 			{
 				case RELKIND_SEQUENCE:
 					objtype = OBJECT_SEQUENCE;
 					break;
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_INDEX:
+				case RELKIND_MATVIEW:
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_VIEW:
+				case RELKIND_NULL:
 				default:
 					objtype = OBJECT_TABLE;
 					break;
@@ -2009,20 +2069,36 @@ ExecGrant_Relation(InternalGrant *istmt)
 						 errmsg("invalid privilege type %s for column",
 								privilege_to_string(this_privileges))));
 
-			if (pg_class_tuple->relkind == RELKIND_SEQUENCE &&
-				this_privileges & ~((AclMode) ACL_SELECT))
+			switch ((RelKind) pg_class_tuple->relkind)
 			{
-				/*
-				 * The only column privilege allowed on sequences is SELECT.
-				 * This is a warning not error because we do it that way for
-				 * relation-level privileges.
-				 */
-				ereport(WARNING,
-						(errcode(ERRCODE_INVALID_GRANT_OPERATION),
-						 errmsg("sequence \"%s\" only supports SELECT column privileges",
-								NameStr(pg_class_tuple->relname))));
+				case RELKIND_SEQUENCE:
+					if (this_privileges & ~((AclMode) ACL_SELECT))
+					{
+						/*
+						 * The only column privilege allowed on sequences is
+						 * SELECT. This is a warning not error because we do
+						 * it that way for relation-level privileges.
+						 */
+						ereport(WARNING,
+								(errcode(ERRCODE_INVALID_GRANT_OPERATION),
+								 errmsg("sequence \"%s\" only supports SELECT column privileges",
+										NameStr(pg_class_tuple->relname))));
 
-				this_privileges &= (AclMode) ACL_SELECT;
+						this_privileges &= (AclMode) ACL_SELECT;
+					}
+					break;
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_INDEX:
+				case RELKIND_MATVIEW:
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_VIEW:
+				case RELKIND_NULL:
+				default:
+					break;
 			}
 
 			expand_col_privileges(col_privs->cols, relOid,
@@ -3824,11 +3900,21 @@ pg_class_aclmask(Oid table_oid, Oid roleid,
 	if (isNull)
 	{
 		/* No ACL, so build default ACL */
-		switch (classForm->relkind)
+		switch ((RelKind) classForm->relkind)
 		{
 			case RELKIND_SEQUENCE:
 				acl = acldefault(OBJECT_SEQUENCE, ownerId);
 				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
 			default:
 				acl = acldefault(OBJECT_TABLE, ownerId);
 				break;
@@ -5519,58 +5605,85 @@ recordExtObjInitPriv(Oid objoid, Oid classoid)
 		 * composite types.  (These cases are unreachable given the
 		 * restrictions in ALTER EXTENSION ADD, but let's check anyway.)
 		 */
-		if (pg_class_tuple->relkind == RELKIND_INDEX ||
-			pg_class_tuple->relkind == RELKIND_PARTITIONED_INDEX ||
-			pg_class_tuple->relkind == RELKIND_COMPOSITE_TYPE)
+		switch ((RelKind) pg_class_tuple->relkind)
 		{
-			ReleaseSysCache(tuple);
-			return;
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+				ReleaseSysCache(tuple);
+				return;
+			case RELKIND_SEQUENCE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				break;
 		}
 
 		/*
 		 * If this isn't a sequence then it's possibly going to have
 		 * column-level ACLs associated with it.
 		 */
-		if (pg_class_tuple->relkind != RELKIND_SEQUENCE)
+		switch ((RelKind) pg_class_tuple->relkind)
 		{
-			AttrNumber	curr_att;
-			AttrNumber	nattrs = pg_class_tuple->relnatts;
-
-			for (curr_att = 1; curr_att <= nattrs; curr_att++)
-			{
-				HeapTuple	attTuple;
-				Datum		attaclDatum;
-
-				attTuple = SearchSysCache2(ATTNUM,
-										   ObjectIdGetDatum(objoid),
-										   Int16GetDatum(curr_att));
-
-				if (!HeapTupleIsValid(attTuple))
-					continue;
-
-				/* ignore dropped columns */
-				if (((Form_pg_attribute) GETSTRUCT(attTuple))->attisdropped)
+			case RELKIND_SEQUENCE:
+				break;
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
 				{
-					ReleaseSysCache(attTuple);
-					continue;
+					AttrNumber	curr_att;
+					AttrNumber	nattrs = pg_class_tuple->relnatts;
+
+					for (curr_att = 1; curr_att <= nattrs; curr_att++)
+					{
+						HeapTuple	attTuple;
+						Datum		attaclDatum;
+
+						attTuple = SearchSysCache2(ATTNUM,
+												   ObjectIdGetDatum(objoid),
+												   Int16GetDatum(curr_att));
+
+						if (!HeapTupleIsValid(attTuple))
+							continue;
+
+						/* ignore dropped columns */
+						if (((Form_pg_attribute) GETSTRUCT(attTuple))->attisdropped)
+						{
+							ReleaseSysCache(attTuple);
+							continue;
+						}
+
+						attaclDatum = SysCacheGetAttr(ATTNUM, attTuple,
+													  Anum_pg_attribute_attacl,
+													  &isNull);
+
+						/* no need to do anything for a NULL ACL */
+						if (isNull)
+						{
+							ReleaseSysCache(attTuple);
+							continue;
+						}
+
+						recordExtensionInitPrivWorker(objoid, classoid, curr_att,
+													  DatumGetAclP(attaclDatum));
+
+						ReleaseSysCache(attTuple);
+					}
 				}
-
-				attaclDatum = SysCacheGetAttr(ATTNUM, attTuple,
-											  Anum_pg_attribute_attacl,
-											  &isNull);
-
-				/* no need to do anything for a NULL ACL */
-				if (isNull)
-				{
-					ReleaseSysCache(attTuple);
-					continue;
-				}
-
-				recordExtensionInitPrivWorker(objoid, classoid, curr_att,
-											  DatumGetAclP(attaclDatum));
-
-				ReleaseSysCache(attTuple);
-			}
+				break;
 		}
 
 		aclDatum = SysCacheGetAttr(RELOID, tuple, Anum_pg_class_relacl,
@@ -5813,40 +5926,70 @@ removeExtObjInitPriv(Oid objoid, Oid classoid)
 		 * composite types.  (These cases are unreachable given the
 		 * restrictions in ALTER EXTENSION DROP, but let's check anyway.)
 		 */
-		if (pg_class_tuple->relkind == RELKIND_INDEX ||
-			pg_class_tuple->relkind == RELKIND_PARTITIONED_INDEX ||
-			pg_class_tuple->relkind == RELKIND_COMPOSITE_TYPE)
+		switch ((RelKind) pg_class_tuple->relkind)
 		{
-			ReleaseSysCache(tuple);
-			return;
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+				ReleaseSysCache(tuple);
+				return;
+			case RELKIND_SEQUENCE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				break;
 		}
 
 		/*
 		 * If this isn't a sequence then it's possibly going to have
 		 * column-level ACLs associated with it.
 		 */
-		if (pg_class_tuple->relkind != RELKIND_SEQUENCE)
+		switch ((RelKind) pg_class_tuple->relkind)
 		{
-			AttrNumber	curr_att;
-			AttrNumber	nattrs = pg_class_tuple->relnatts;
+			case RELKIND_SEQUENCE:
+				break;
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				{
+					AttrNumber	curr_att;
+					AttrNumber	nattrs = pg_class_tuple->relnatts;
 
-			for (curr_att = 1; curr_att <= nattrs; curr_att++)
-			{
-				HeapTuple	attTuple;
+					for (curr_att = 1; curr_att <= nattrs; curr_att++)
+					{
+						HeapTuple	attTuple;
 
-				attTuple = SearchSysCache2(ATTNUM,
-										   ObjectIdGetDatum(objoid),
-										   Int16GetDatum(curr_att));
+						attTuple = SearchSysCache2(ATTNUM,
+												   ObjectIdGetDatum(objoid),
+												   Int16GetDatum(curr_att));
 
-				if (!HeapTupleIsValid(attTuple))
-					continue;
+						if (!HeapTupleIsValid(attTuple))
+							continue;
 
-				/* when removing, remove all entries, even dropped columns */
+						/*
+						 * when removing, remove all entries, even dropped
+						 * columns
+						 */
 
-				recordExtensionInitPrivWorker(objoid, classoid, curr_att, NULL);
+						recordExtensionInitPrivWorker(objoid, classoid, curr_att, NULL);
 
-				ReleaseSysCache(attTuple);
-			}
+						ReleaseSysCache(attTuple);
+					}
+				}
+				break;
 		}
 
 		ReleaseSysCache(tuple);

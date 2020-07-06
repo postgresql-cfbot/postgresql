@@ -446,8 +446,8 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 			 "  SELECT c.oid, 0::oid, 0::oid "
 			 "  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n "
 			 "         ON c.relnamespace = n.oid "
-			 "  WHERE relkind IN (" CppAsString2(RELKIND_RELATION) ", "
-			 CppAsString2(RELKIND_MATVIEW) ") AND "
+			 "  WHERE relkind IN (" RelKindAsString(RELKIND_RELATION) ", "
+			 RelKindAsString(RELKIND_MATVIEW) ") AND "
 	/* exclude possible orphaned temp tables */
 			 "    ((n.nspname !~ '^pg_temp_' AND "
 			 "      n.nspname !~ '^pg_toast_temp_' AND "

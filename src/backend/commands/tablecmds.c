@@ -619,8 +619,24 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 
 	if (stmt->partspec != NULL)
 	{
-		if (relkind != RELKIND_RELATION)
-			elog(ERROR, "unexpected relkind: %d", (int) relkind);
+		switch ((RelKind) relkind)
+		{
+			case RELKIND_RELATION:
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				elog(ERROR, "unexpected relkind: %d", (int) relkind);
+				break;
+		}
 
 		relkind = RELKIND_PARTITIONED_TABLE;
 		partitioned = true;
@@ -746,7 +762,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	reloptions = transformRelOptions((Datum) 0, stmt->options, NULL, validnsps,
 									 true, false);
 
-	switch (relkind)
+	switch ((RelKind) relkind)
 	{
 		case RELKIND_VIEW:
 			(void) view_reloptions(reloptions, true);
@@ -754,6 +770,15 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		case RELKIND_PARTITIONED_TABLE:
 			(void) partitioned_table_reloptions(reloptions, true);
 			break;
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
 		default:
 			(void) heap_reloptions(relkind, reloptions, true);
 	}
@@ -866,10 +891,25 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 					 errmsg("specifying a table access method is not supported on a partitioned table")));
 
 	}
-	else if (relkind == RELKIND_RELATION ||
-			 relkind == RELKIND_TOASTVALUE ||
-			 relkind == RELKIND_MATVIEW)
-		accessMethod = default_table_access_method;
+	else
+		switch ((RelKind) relkind)
+		{
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_MATVIEW:
+				accessMethod = default_table_access_method;
+				break;
+			case RELKIND_VIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_INDEX:
+			case RELKIND_NULL:
+			default:
+				break;
+		}
 
 	/* look up the access method, verify it is for a table */
 	if (accessMethod != NULL)
@@ -956,11 +996,26 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		 * We are going to try to validate the partition bound specification
 		 * against the partition key of parentRel, so it better have one.
 		 */
-		if (parent->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-					 errmsg("\"%s\" is not partitioned",
-							RelationGetRelationName(parent))));
+		switch ((RelKind) parent->rd_rel->relkind)
+		{
+			case RELKIND_PARTITIONED_TABLE:
+				break;
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_MATVIEW:
+			case RELKIND_VIEW:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_INDEX:
+			case RELKIND_NULL:
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("\"%s\" is not partitioned",
+								RelationGetRelationName(parent))));
+		}
 
 		/*
 		 * The partition constraint of the default partition depends on the
@@ -1104,20 +1159,34 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 			IndexStmt  *idxstmt;
 			Oid			constraintOid;
 
-			if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+			switch ((RelKind) rel->rd_rel->relkind)
 			{
-				if (idxRel->rd_index->indisunique)
-					ereport(ERROR,
-							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-							 errmsg("cannot create foreign partition of partitioned table \"%s\"",
-									RelationGetRelationName(parent)),
-							 errdetail("Table \"%s\" contains indexes that are unique.",
-									   RelationGetRelationName(parent))));
-				else
-				{
-					index_close(idxRel, AccessShareLock);
-					continue;
-				}
+				case RELKIND_FOREIGN_TABLE:
+					if (idxRel->rd_index->indisunique)
+						ereport(ERROR,
+								(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+								 errmsg("cannot create foreign partition of partitioned table \"%s\"",
+										RelationGetRelationName(parent)),
+								 errdetail("Table \"%s\" contains indexes that are unique.",
+										   RelationGetRelationName(parent))));
+					else
+					{
+						index_close(idxRel, AccessShareLock);
+						continue;
+					}
+					break;
+				case RELKIND_RELATION:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_MATVIEW:
+				case RELKIND_VIEW:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_SEQUENCE:
+				case RELKIND_INDEX:
+				case RELKIND_NULL:
+				default:
+					break;
 			}
 
 			attmap = build_attrmap_by_name(RelationGetDescr(rel),
@@ -1448,12 +1517,27 @@ RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid, Oid oldRelOid,
 	 * the relation is RELKIND_PARTITIONED_TABLE.  An equivalent problem
 	 * exists with indexes.
 	 */
-	if (classform->relkind == RELKIND_PARTITIONED_TABLE)
-		expected_relkind = RELKIND_RELATION;
-	else if (classform->relkind == RELKIND_PARTITIONED_INDEX)
-		expected_relkind = RELKIND_INDEX;
-	else
-		expected_relkind = classform->relkind;
+	switch ((RelKind) classform->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			expected_relkind = RELKIND_RELATION;
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+			expected_relkind = RELKIND_INDEX;
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_SEQUENCE:
+		case RELKIND_INDEX:
+		case RELKIND_NULL:
+		default:
+			expected_relkind = classform->relkind;
+			break;
+	}
 
 	if (relkind != expected_relkind)
 		DropErrorMsgWrongType(rel->relname, classform->relkind, relkind);
@@ -1470,26 +1554,43 @@ RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid, Oid oldRelOid,
 	 * only concerns indexes of toast relations that became invalid during a
 	 * REINDEX CONCURRENTLY process.
 	 */
-	if (IsSystemClass(relOid, classform) && relkind == RELKIND_INDEX)
+	switch ((RelKind) relkind)
 	{
-		HeapTuple	locTuple;
-		Form_pg_index indexform;
-		bool		indisvalid;
+		case RELKIND_INDEX:
+			if (IsSystemClass(relOid, classform))
+			{
+				HeapTuple	locTuple;
+				Form_pg_index indexform;
+				bool		indisvalid;
 
-		locTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(relOid));
-		if (!HeapTupleIsValid(locTuple))
-		{
-			ReleaseSysCache(tuple);
-			return;
-		}
+				locTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(relOid));
+				if (!HeapTupleIsValid(locTuple))
+				{
+					ReleaseSysCache(tuple);
+					return;
+				}
 
-		indexform = (Form_pg_index) GETSTRUCT(locTuple);
-		indisvalid = indexform->indisvalid;
-		ReleaseSysCache(locTuple);
+				indexform = (Form_pg_index) GETSTRUCT(locTuple);
+				indisvalid = indexform->indisvalid;
+				ReleaseSysCache(locTuple);
 
-		/* Mark object as being an invalid index of system catalogs */
-		if (!indisvalid)
-			invalid_system_index = true;
+				/* Mark object as being an invalid index of system catalogs */
+				if (!indisvalid)
+					invalid_system_index = true;
+			}
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_SEQUENCE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/* In the case of an invalid index, it is fine to bypass this check */
@@ -1508,12 +1609,28 @@ RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid, Oid oldRelOid,
 	 * we do it the other way around.  No error if we don't find a pg_index
 	 * entry, though --- the relation may have been dropped.
 	 */
-	if ((relkind == RELKIND_INDEX || relkind == RELKIND_PARTITIONED_INDEX) &&
-		relOid != oldRelOid)
+	switch ((RelKind) relkind)
 	{
-		state->heapOid = IndexGetRelation(relOid, true);
-		if (OidIsValid(state->heapOid))
-			LockRelationOid(state->heapOid, heap_lockmode);
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+			if (relOid != oldRelOid)
+			{
+				state->heapOid = IndexGetRelation(relOid, true);
+				if (OidIsValid(state->heapOid))
+					LockRelationOid(state->heapOid, heap_lockmode);
+			}
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_SEQUENCE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/*
@@ -1635,11 +1752,28 @@ ExecuteTruncate(TruncateStmt *stmt)
 					relids_logged = lappend_oid(relids_logged, childrelid);
 			}
 		}
-		else if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("cannot truncate only a partitioned table"),
-					 errhint("Do not specify the ONLY keyword, or use TRUNCATE ONLY on the partitions directly.")));
+		else
+			switch ((RelKind) rel->rd_rel->relkind)
+			{
+				case RELKIND_PARTITIONED_TABLE:
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("cannot truncate only a partitioned table"),
+							 errhint("Do not specify the ONLY keyword, or use TRUNCATE ONLY on the partitions directly.")));
+					break;
+				case RELKIND_INDEX:
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_MATVIEW:
+				case RELKIND_VIEW:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_SEQUENCE:
+				case RELKIND_NULL:
+				default:
+					break;
+			}
 	}
 
 	ExecuteTruncateGuts(rels, relids, relids_logged,
@@ -1815,9 +1949,24 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 	{
 		Relation	rel = (Relation) lfirst(cell);
 
-		/* Skip partitioned tables as there is nothing to do */
-		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			continue;
+		switch ((RelKind) rel->rd_rel->relkind)
+		{
+				/* Skip partitioned tables as there is nothing to do */
+			case RELKIND_PARTITIONED_TABLE:
+				continue;
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_MATVIEW:
+			case RELKIND_VIEW:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_SEQUENCE:
+			case RELKIND_NULL:
+			default:
+				break;
+		}
 
 		/*
 		 * Normally, we need a transaction-safe truncation here.  However, if
@@ -1969,11 +2118,25 @@ truncate_check_rel(Oid relid, Form_pg_class reltuple)
 	 * the latter are only being included here for the following checks; no
 	 * physical truncation will occur in their case.)
 	 */
-	if (reltuple->relkind != RELKIND_RELATION &&
-		reltuple->relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table", relname)));
+	switch ((RelKind) reltuple->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_SEQUENCE:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("\"%s\" is not a table", relname)));
+	}
 
 	if (!allowSystemTableMods && IsSystemClass(relid, reltuple))
 		ereport(ERROR,
@@ -2235,24 +2398,37 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 		 * We do not allow partitioned tables and partitions to participate in
 		 * regular inheritance.
 		 */
-		if (relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
-			!is_partition)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("cannot inherit from partitioned table \"%s\"",
-							RelationGetRelationName(relation))));
+		switch ((RelKind) relation->rd_rel->relkind)
+		{
+			case RELKIND_PARTITIONED_TABLE:
+				if (!is_partition)
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("cannot inherit from partitioned table \"%s\"",
+									RelationGetRelationName(relation))));
+				break;
+			case RELKIND_RELATION:
+			case RELKIND_FOREIGN_TABLE:
+				break;
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_MATVIEW:
+			case RELKIND_VIEW:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_SEQUENCE:
+			case RELKIND_NULL:
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("inherited relation \"%s\" is not a table or foreign table",
+								RelationGetRelationName(relation))));
+		}
+
 		if (relation->rd_rel->relispartition && !is_partition)
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("cannot inherit from partition \"%s\"",
-							RelationGetRelationName(relation))));
-
-		if (relation->rd_rel->relkind != RELKIND_RELATION &&
-			relation->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
-			relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("inherited relation \"%s\" is not a table or foreign table",
 							RelationGetRelationName(relation))));
 
 		/*
@@ -2996,18 +3172,26 @@ renameatt_check(Oid myrelid, Form_pg_class classform, bool recursing)
 	 * change names that are hardcoded into the system, hence the following
 	 * restriction.
 	 */
-	if (relkind != RELKIND_RELATION &&
-		relkind != RELKIND_VIEW &&
-		relkind != RELKIND_MATVIEW &&
-		relkind != RELKIND_COMPOSITE_TYPE &&
-		relkind != RELKIND_INDEX &&
-		relkind != RELKIND_PARTITIONED_INDEX &&
-		relkind != RELKIND_FOREIGN_TABLE &&
-		relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table, view, materialized view, composite type, index, or foreign table",
-						NameStr(classform->relname))));
+	switch ((RelKind) relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_MATVIEW:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_TOASTVALUE:
+		case RELKIND_SEQUENCE:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("\"%s\" is not a table, view, materialized view, composite type, index, or foreign table",
+							NameStr(classform->relname))));
+	}
 
 	/*
 	 * permissions checking.  only the owner of a class can change its schema.
@@ -3105,17 +3289,33 @@ renameatt_internal(Oid myrelid,
 	}
 
 	/* rename attributes in typed tables of composite type */
-	if (targetrelation->rd_rel->relkind == RELKIND_COMPOSITE_TYPE)
+	switch ((RelKind) targetrelation->rd_rel->relkind)
 	{
-		List	   *child_oids;
-		ListCell   *lo;
+		case RELKIND_COMPOSITE_TYPE:
+			{
+				List	   *child_oids;
+				ListCell   *lo;
 
-		child_oids = find_typed_table_dependencies(targetrelation->rd_rel->reltype,
-												   RelationGetRelationName(targetrelation),
-												   behavior);
+				child_oids = find_typed_table_dependencies(targetrelation->rd_rel->reltype,
+														   RelationGetRelationName(targetrelation),
+														   behavior);
 
-		foreach(lo, child_oids)
-			renameatt_internal(lfirst_oid(lo), oldattname, newattname, true, true, 0, behavior);
+				foreach(lo, child_oids)
+					renameatt_internal(lfirst_oid(lo), oldattname, newattname, true, true, 0, behavior);
+			}
+			break;
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_MATVIEW:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_SEQUENCE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	attrelation = table_open(AttributeRelationId, RowExclusiveLock);
@@ -3489,13 +3689,28 @@ RenameRelationInternal(Oid myrelid, const char *newrelname, bool is_internal, bo
 	/*
 	 * Also rename the associated constraint, if any.
 	 */
-	if (targetrelation->rd_rel->relkind == RELKIND_INDEX ||
-		targetrelation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+	switch ((RelKind) targetrelation->rd_rel->relkind)
 	{
-		Oid			constraintId = get_index_constraint(myrelid);
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+			{
+				Oid			constraintId = get_index_constraint(myrelid);
 
-		if (OidIsValid(constraintId))
-			RenameConstraintById(constraintId, newrelname);
+				if (OidIsValid(constraintId))
+					RenameConstraintById(constraintId, newrelname);
+			}
+			break;
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_SEQUENCE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/*
@@ -3542,14 +3757,29 @@ CheckTableNotInUse(Relation rel, const char *stmt)
 				 errmsg("cannot %s \"%s\" because it is being used by active queries in this session",
 						stmt, RelationGetRelationName(rel))));
 
-	if (rel->rd_rel->relkind != RELKIND_INDEX &&
-		rel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX &&
-		AfterTriggerPendingOnRel(RelationGetRelid(rel)))
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_IN_USE),
-		/* translator: first %s is a SQL command, eg ALTER TABLE */
-				 errmsg("cannot %s \"%s\" because it has pending trigger events",
-						stmt, RelationGetRelationName(rel))));
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+			break;
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_SEQUENCE:
+		case RELKIND_NULL:
+		default:
+			if (AfterTriggerPendingOnRel(RelationGetRelid(rel)))
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_IN_USE),
+				/* translator: first %s is a SQL command, eg ALTER TABLE */
+						 errmsg("cannot %s \"%s\" because it has pending trigger events",
+								stmt, RelationGetRelationName(rel))));
+			break;
+	}
 }
 
 /*
@@ -4364,11 +4594,27 @@ ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode,
 		 * not modify anything about it that will change its toasting
 		 * requirement, so no need to check.
 		 */
-		if (((tab->relkind == RELKIND_RELATION ||
-			  tab->relkind == RELKIND_PARTITIONED_TABLE) &&
-			 tab->partition_constraint == NULL) ||
-			tab->relkind == RELKIND_MATVIEW)
-			AlterTableCreateToastTable(tab->relid, (Datum) 0, lockmode);
+		switch ((RelKind) tab->relkind)
+		{
+			case RELKIND_RELATION:
+			case RELKIND_PARTITIONED_TABLE:
+				if (tab->partition_constraint != NULL)
+					break;
+				/* fallthrough */
+			case RELKIND_MATVIEW:
+				AlterTableCreateToastTable(tab->relid, (Datum) 0, lockmode);
+				break;
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_VIEW:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_SEQUENCE:
+			case RELKIND_NULL:
+			default:
+				break;
+		}
 	}
 }
 
@@ -4546,15 +4792,29 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			break;
 		case AT_SetTableSpace:	/* SET TABLESPACE */
 
-			/*
-			 * Only do this for partitioned tables and indexes, for which this
-			 * is just a catalog change.  Other relation types which have
-			 * storage are handled by Phase 3.
-			 */
-			if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ||
-				rel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
-				ATExecSetTableSpaceNoStorage(rel, tab->newTableSpace);
-
+			switch ((RelKind) rel->rd_rel->relkind)
+			{
+					/*
+					 * Only do this for partitioned tables and indexes, for
+					 * which this is just a catalog change.  Other relation
+					 * types which have storage are handled by Phase 3.
+					 */
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_PARTITIONED_INDEX:
+					ATExecSetTableSpaceNoStorage(rel, tab->newTableSpace);
+					break;
+				case RELKIND_RELATION:
+				case RELKIND_MATVIEW:
+				case RELKIND_INDEX:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_VIEW:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_SEQUENCE:
+				case RELKIND_NULL:
+				default:
+					break;
+			}
 			break;
 		case AT_SetRelOptions:	/* SET (...) */
 		case AT_ResetRelOptions:	/* RESET (...) */
@@ -4645,11 +4905,26 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			cmd = ATParseTransformCmd(wqueue, tab, rel, cmd, false, lockmode,
 									  cur_pass, context);
 			Assert(cmd != NULL);
-			if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-				ATExecAttachPartition(wqueue, rel, (PartitionCmd *) cmd->def);
-			else
-				ATExecAttachPartitionIdx(wqueue, rel,
-										 ((PartitionCmd *) cmd->def)->name);
+			switch ((RelKind) rel->rd_rel->relkind)
+			{
+				case RELKIND_PARTITIONED_TABLE:
+					ATExecAttachPartition(wqueue, rel, (PartitionCmd *) cmd->def);
+					break;
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_RELATION:
+				case RELKIND_MATVIEW:
+				case RELKIND_INDEX:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_VIEW:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_SEQUENCE:
+				case RELKIND_NULL:
+				default:
+					ATExecAttachPartitionIdx(wqueue, rel,
+											 ((PartitionCmd *) cmd->def)->name);
+					break;
+			}
 			break;
 		case AT_DetachPartition:
 			cmd = ATParseTransformCmd(wqueue, tab, rel, cmd, false, lockmode,
@@ -5477,7 +5752,7 @@ ATSimplePermissions(Relation rel, int allowed_targets)
 {
 	int			actual_target;
 
-	switch (rel->rd_rel->relkind)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_PARTITIONED_TABLE:
@@ -5501,6 +5776,9 @@ ATSimplePermissions(Relation rel, int allowed_targets)
 		case RELKIND_FOREIGN_TABLE:
 			actual_target = ATT_FOREIGN_TABLE;
 			break;
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
 		default:
 			actual_target = 0;
 			break;
@@ -5600,35 +5878,49 @@ ATSimpleRecursion(List **wqueue, Relation rel,
 	 * and partitioned tables have children, so no need to search for other
 	 * relkinds.
 	 */
-	if (recurse &&
-		(rel->rd_rel->relkind == RELKIND_RELATION ||
-		 rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
-		 rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE))
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		Oid			relid = RelationGetRelid(rel);
-		ListCell   *child;
-		List	   *children;
+		case RELKIND_RELATION:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+			if (recurse)
+			{
+				Oid			relid = RelationGetRelid(rel);
+				ListCell   *child;
+				List	   *children;
 
-		children = find_all_inheritors(relid, lockmode, NULL);
+				children = find_all_inheritors(relid, lockmode, NULL);
 
-		/*
-		 * find_all_inheritors does the recursive search of the inheritance
-		 * hierarchy, so all we have to do is process all of the relids in the
-		 * list that it returns.
-		 */
-		foreach(child, children)
-		{
-			Oid			childrelid = lfirst_oid(child);
-			Relation	childrel;
+				/*
+				 * find_all_inheritors does the recursive search of the
+				 * inheritance hierarchy, so all we have to do is process all
+				 * of the relids in the list that it returns.
+				 */
+				foreach(child, children)
+				{
+					Oid			childrelid = lfirst_oid(child);
+					Relation	childrel;
 
-			if (childrelid == relid)
-				continue;
-			/* find_all_inheritors already got lock */
-			childrel = relation_open(childrelid, NoLock);
-			CheckTableNotInUse(childrel, "ALTER TABLE");
-			ATPrepCmd(wqueue, childrel, cmd, false, true, lockmode, context);
-			relation_close(childrel, NoLock);
-		}
+					if (childrelid == relid)
+						continue;
+					/* find_all_inheritors already got lock */
+					childrel = relation_open(childrelid, NoLock);
+					CheckTableNotInUse(childrel, "ALTER TABLE");
+					ATPrepCmd(wqueue, childrel, cmd, false, true, lockmode, context);
+					relation_close(childrel, NoLock);
+				}
+			}
+			break;
+		case RELKIND_VIEW:
+		case RELKIND_MATVIEW:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 }
 
@@ -5773,47 +6065,62 @@ find_composite_type_dependencies(Oid typeOid, Relation origRelation,
 		rel = relation_open(pg_depend->objid, AccessShareLock);
 		att = TupleDescAttr(rel->rd_att, pg_depend->objsubid - 1);
 
-		if (rel->rd_rel->relkind == RELKIND_RELATION ||
-			rel->rd_rel->relkind == RELKIND_MATVIEW ||
-			rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		switch ((RelKind) rel->rd_rel->relkind)
 		{
-			if (origTypeName)
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("cannot alter type \"%s\" because column \"%s.%s\" uses it",
-								origTypeName,
-								RelationGetRelationName(rel),
-								NameStr(att->attname))));
-			else if (origRelation->rd_rel->relkind == RELKIND_COMPOSITE_TYPE)
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("cannot alter type \"%s\" because column \"%s.%s\" uses it",
-								RelationGetRelationName(origRelation),
-								RelationGetRelationName(rel),
-								NameStr(att->attname))));
-			else if (origRelation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("cannot alter foreign table \"%s\" because column \"%s.%s\" uses its row type",
-								RelationGetRelationName(origRelation),
-								RelationGetRelationName(rel),
-								NameStr(att->attname))));
-			else
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("cannot alter table \"%s\" because column \"%s.%s\" uses its row type",
-								RelationGetRelationName(origRelation),
-								RelationGetRelationName(rel),
-								NameStr(att->attname))));
-		}
-		else if (OidIsValid(rel->rd_rel->reltype))
-		{
-			/*
-			 * A view or composite type itself isn't a problem, but we must
-			 * recursively check for indirect dependencies via its rowtype.
-			 */
-			find_composite_type_dependencies(rel->rd_rel->reltype,
-											 origRelation, origTypeName);
+			case RELKIND_RELATION:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+				{
+					if (origTypeName)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("cannot alter type \"%s\" because column \"%s.%s\" uses it",
+										origTypeName,
+										RelationGetRelationName(rel),
+										NameStr(att->attname))));
+					else if (origRelation->rd_rel->relkind == RELKIND_COMPOSITE_TYPE)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("cannot alter type \"%s\" because column \"%s.%s\" uses it",
+										RelationGetRelationName(origRelation),
+										RelationGetRelationName(rel),
+										NameStr(att->attname))));
+					else if (origRelation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("cannot alter foreign table \"%s\" because column \"%s.%s\" uses its row type",
+										RelationGetRelationName(origRelation),
+										RelationGetRelationName(rel),
+										NameStr(att->attname))));
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("cannot alter table \"%s\" because column \"%s.%s\" uses its row type",
+										RelationGetRelationName(origRelation),
+										RelationGetRelationName(rel),
+										NameStr(att->attname))));
+				}
+				break;
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_VIEW:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_SEQUENCE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				if (OidIsValid(rel->rd_rel->reltype))
+				{
+					/*
+					 * A view or composite type itself isn't a problem, but we
+					 * must recursively check for indirect dependencies via
+					 * its rowtype.
+					 */
+					find_composite_type_dependencies(rel->rd_rel->reltype,
+													 origRelation, origTypeName);
+				}
+				break;
 		}
 
 		relation_close(rel, AccessShareLock);
@@ -5934,8 +6241,24 @@ ATPrepAddColumn(List **wqueue, Relation rel, bool recurse, bool recursing,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cannot add column to typed table")));
 
-	if (rel->rd_rel->relkind == RELKIND_COMPOSITE_TYPE)
-		ATTypedTableRecursion(wqueue, rel, cmd, lockmode, context);
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_COMPOSITE_TYPE:
+			ATTypedTableRecursion(wqueue, rel, cmd, lockmode, context);
+			break;
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	if (recurse && !is_view)
 		cmd->subtype = AT_AddColumnRecurse;
@@ -6455,16 +6778,32 @@ ATPrepDropNotNull(Relation rel, bool recurse, bool recursing)
 	 * If the parent is a partitioned table, like check constraints, we do not
 	 * support removing the NOT NULL while partitions exist.
 	 */
-	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		PartitionDesc partdesc = RelationGetPartitionDesc(rel);
+		case RELKIND_PARTITIONED_TABLE:
+			{
+				PartitionDesc partdesc = RelationGetPartitionDesc(rel);
 
-		Assert(partdesc != NULL);
-		if (partdesc->nparts > 0 && !recurse && !recursing)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-					 errmsg("cannot remove constraint from only the partitioned table when partitions exist"),
-					 errhint("Do not specify the ONLY keyword.")));
+				Assert(partdesc != NULL);
+				if (partdesc->nparts > 0 && !recurse && !recursing)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+							 errmsg("cannot remove constraint from only the partitioned table when partitions exist"),
+							 errhint("Do not specify the ONLY keyword.")));
+			}
+			break;
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 }
 
@@ -6614,17 +6953,33 @@ ATPrepSetNotNull(List **wqueue, Relation rel,
 	 * apply ALTER TABLE ... CHECK NOT NULL to every child.  Otherwise, use
 	 * normal recursion logic.
 	 */
-	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
-		!recurse)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		AlterTableCmd *newcmd = makeNode(AlterTableCmd);
+		case RELKIND_PARTITIONED_TABLE:
+			if (!recurse)
+			{
+				AlterTableCmd *newcmd = makeNode(AlterTableCmd);
 
-		newcmd->subtype = AT_CheckNotNull;
-		newcmd->name = pstrdup(cmd->name);
-		ATSimpleRecursion(wqueue, rel, newcmd, true, lockmode, context);
+				newcmd->subtype = AT_CheckNotNull;
+				newcmd->name = pstrdup(cmd->name);
+				ATSimpleRecursion(wqueue, rel, newcmd, true, lockmode, context);
+				break;
+			}
+			/* fallthrough */
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode, context);
+			break;
 	}
-	else
-		ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode, context);
 }
 
 /*
@@ -7249,12 +7604,27 @@ ATExecSetStatistics(Relation rel, const char *colName, int16 colNum, Node *newVa
 	 * We allow referencing columns by numbers only for indexes, since table
 	 * column numbers could contain gaps if columns are later dropped.
 	 */
-	if (rel->rd_rel->relkind != RELKIND_INDEX &&
-		rel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX &&
-		!colName)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot refer to non-index column by number")));
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			if (!colName)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot refer to non-index column by number")));
+			break;
+	}
 
 	Assert(IsA(newValue, Integer));
 	newtarget = intVal(newValue);
@@ -7310,20 +7680,35 @@ ATExecSetStatistics(Relation rel, const char *colName, int16 colNum, Node *newVa
 				 errmsg("cannot alter system column \"%s\"",
 						colName)));
 
-	if (rel->rd_rel->relkind == RELKIND_INDEX ||
-		rel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		if (attnum > rel->rd_index->indnkeyatts)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot alter statistics on included column \"%s\" of index \"%s\"",
-							NameStr(attrtuple->attname), RelationGetRelationName(rel))));
-		else if (rel->rd_index->indkey.values[attnum - 1] != 0)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot alter statistics on non-expression column \"%s\" of index \"%s\"",
-							NameStr(attrtuple->attname), RelationGetRelationName(rel)),
-					 errhint("Alter statistics on table column instead.")));
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+			{
+				if (attnum > rel->rd_index->indnkeyatts)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot alter statistics on included column \"%s\" of index \"%s\"",
+									NameStr(attrtuple->attname), RelationGetRelationName(rel))));
+				else if (rel->rd_index->indkey.values[attnum - 1] != 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot alter statistics on non-expression column \"%s\" of index \"%s\"",
+									NameStr(attrtuple->attname), RelationGetRelationName(rel)),
+							 errhint("Alter statistics on table column instead.")));
+			}
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	attrtuple->attstattarget = newtarget;
@@ -7566,8 +7951,24 @@ ATPrepDropColumn(List **wqueue, Relation rel, bool recurse, bool recursing,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cannot drop column from typed table")));
 
-	if (rel->rd_rel->relkind == RELKIND_COMPOSITE_TYPE)
-		ATTypedTableRecursion(wqueue, rel, cmd, lockmode, context);
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_COMPOSITE_TYPE:
+			ATTypedTableRecursion(wqueue, rel, cmd, lockmode, context);
+			break;
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	if (recurse)
 		cmd->subtype = AT_DropColumnRecurse;
@@ -7676,15 +8077,32 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 		Relation	attr_rel;
 		ListCell   *child;
 
-		/*
-		 * In case of a partitioned table, the column must be dropped from the
-		 * partitions as well.
-		 */
-		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE && !recurse)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-					 errmsg("cannot drop column from only the partitioned table when partitions exist"),
-					 errhint("Do not specify the ONLY keyword.")));
+		switch ((RelKind) rel->rd_rel->relkind)
+		{
+				/*
+				 * In case of a partitioned table, the column must be dropped
+				 * from the partitions as well.
+				 */
+			case RELKIND_PARTITIONED_TABLE:
+				if (!recurse)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+							 errmsg("cannot drop column from only the partitioned table when partitions exist"),
+							 errhint("Do not specify the ONLY keyword.")));
+				break;
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_RELATION:
+			case RELKIND_MATVIEW:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_VIEW:
+			case RELKIND_SEQUENCE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				break;
+		}
 
 		attr_rel = table_open(AttributeRelationId, RowExclusiveLock);
 		foreach(child, children)
@@ -7861,10 +8279,26 @@ ATExecAddIndexConstraint(AlteredTableInfo *tab, Relation rel,
 	 * Doing this on partitioned tables is not a simple feature to implement,
 	 * so let's punt for now.
 	 */
-	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("ALTER TABLE / ADD CONSTRAINT USING INDEX is not supported on partitioned tables")));
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("ALTER TABLE / ADD CONSTRAINT USING INDEX is not supported on partitioned tables")));
+			break;
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	indexRel = index_open(index_oid, AccessShareLock);
 
@@ -8218,29 +8652,43 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	 * Validity checks (permission checks wait till we have the column
 	 * numbers)
 	 */
-	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		if (!recurse)
+		case RELKIND_PARTITIONED_TABLE:
+			{
+				if (!recurse)
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("cannot use ONLY for foreign key on partitioned table \"%s\" referencing relation \"%s\"",
+									RelationGetRelationName(rel),
+									RelationGetRelationName(pkrel))));
+				if (fkconstraint->skip_validation && !fkconstraint->initially_valid)
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("cannot add NOT VALID foreign key on partitioned table \"%s\" referencing relation \"%s\"",
+									RelationGetRelationName(rel),
+									RelationGetRelationName(pkrel)),
+							 errdetail("This feature is not yet supported on partitioned tables.")));
+			}
+			break;
+		case RELKIND_RELATION:
+			break;
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("cannot use ONLY for foreign key on partitioned table \"%s\" referencing relation \"%s\"",
-							RelationGetRelationName(rel),
+					 errmsg("referenced relation \"%s\" is not a table",
 							RelationGetRelationName(pkrel))));
-		if (fkconstraint->skip_validation && !fkconstraint->initially_valid)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("cannot add NOT VALID foreign key on partitioned table \"%s\" referencing relation \"%s\"",
-							RelationGetRelationName(rel),
-							RelationGetRelationName(pkrel)),
-					 errdetail("This feature is not yet supported on partitioned tables.")));
+			break;
 	}
-
-	if (pkrel->rd_rel->relkind != RELKIND_RELATION &&
-		pkrel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("referenced relation \"%s\" is not a table",
-						RelationGetRelationName(pkrel))));
 
 	if (!allowSystemTableMods && IsSystemRelation(pkrel))
 		ereport(ERROR,
@@ -8640,12 +9088,26 @@ addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint, Relation rel,
 	 * Verify relkind for each referenced partition.  At the top level, this
 	 * is redundant with a previous check, but we need it when recursing.
 	 */
-	if (pkrel->rd_rel->relkind != RELKIND_RELATION &&
-		pkrel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("referenced relation \"%s\" is not a table",
-						RelationGetRelationName(pkrel))));
+	switch ((RelKind) pkrel->rd_rel->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("referenced relation \"%s\" is not a table",
+							RelationGetRelationName(pkrel))));
+	}
 
 	/*
 	 * Caller supplies us with a constraint name; however, it may be used in
@@ -8675,7 +9137,23 @@ addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint, Relation rel,
 		/*
 		 * always inherit for partitioned tables, never for legacy inheritance
 		 */
-		connoinherit = rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE;
+		switch ((RelKind) rel->rd_rel->relkind)
+		{
+			case RELKIND_PARTITIONED_TABLE:
+				connoinherit = false;
+			case RELKIND_RELATION:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_VIEW:
+			case RELKIND_SEQUENCE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				connoinherit = true;
+		}
 	}
 
 	/*
@@ -8730,69 +9208,84 @@ addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint, Relation rel,
 	/* make new constraint visible, in case we add more */
 	CommandCounterIncrement();
 
-	/*
-	 * If the referenced table is a plain relation, create the action triggers
-	 * that enforce the constraint.
-	 */
-	if (pkrel->rd_rel->relkind == RELKIND_RELATION)
+	switch ((RelKind) pkrel->rd_rel->relkind)
 	{
-		createForeignKeyActionTriggers(rel, RelationGetRelid(pkrel),
-									   fkconstraint,
-									   constrOid, indexOid);
-	}
-
-	/*
-	 * If the referenced table is partitioned, recurse on ourselves to handle
-	 * each partition.  We need one pg_constraint row created for each
-	 * partition in addition to the pg_constraint row for the parent table.
-	 */
-	if (pkrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-	{
-		PartitionDesc pd = RelationGetPartitionDesc(pkrel);
-
-		for (int i = 0; i < pd->nparts; i++)
-		{
-			Relation	partRel;
-			AttrMap    *map;
-			AttrNumber *mapped_pkattnum;
-			Oid			partIndexId;
-
-			partRel = table_open(pd->oids[i], ShareRowExclusiveLock);
+			/*
+			 * If the referenced table is a plain relation, create the action
+			 * triggers that enforce the constraint.
+			 */
+		case RELKIND_RELATION:
+			createForeignKeyActionTriggers(rel, RelationGetRelid(pkrel),
+										   fkconstraint,
+										   constrOid, indexOid);
+			break;
 
 			/*
-			 * Map the attribute numbers in the referenced side of the FK
-			 * definition to match the partition's column layout.
+			 * If the referenced table is partitioned, recurse on ourselves to
+			 * handle each partition.  We need one pg_constraint row created
+			 * for each partition in addition to the pg_constraint row for the
+			 * parent table.
 			 */
-			map = build_attrmap_by_name_if_req(RelationGetDescr(partRel),
-											   RelationGetDescr(pkrel));
-			if (map)
+		case RELKIND_PARTITIONED_TABLE:
 			{
-				mapped_pkattnum = palloc(sizeof(AttrNumber) * numfks);
-				for (int j = 0; j < numfks; j++)
-					mapped_pkattnum[j] = map->attnums[pkattnum[j] - 1];
-			}
-			else
-				mapped_pkattnum = pkattnum;
+				PartitionDesc pd = RelationGetPartitionDesc(pkrel);
 
-			/* do the deed */
-			partIndexId = index_get_partition(partRel, indexOid);
-			if (!OidIsValid(partIndexId))
-				elog(ERROR, "index for %u not found in partition %s",
-					 indexOid, RelationGetRelationName(partRel));
-			addFkRecurseReferenced(wqueue, fkconstraint, rel, partRel,
-								   partIndexId, constrOid, numfks,
-								   mapped_pkattnum, fkattnum,
-								   pfeqoperators, ppeqoperators, ffeqoperators,
-								   old_check_ok);
+				for (int i = 0; i < pd->nparts; i++)
+				{
+					Relation	partRel;
+					AttrMap    *map;
+					AttrNumber *mapped_pkattnum;
+					Oid			partIndexId;
 
-			/* Done -- clean up (but keep the lock) */
-			table_close(partRel, NoLock);
-			if (map)
-			{
-				pfree(mapped_pkattnum);
-				free_attrmap(map);
+					partRel = table_open(pd->oids[i], ShareRowExclusiveLock);
+
+					/*
+					 * Map the attribute numbers in the referenced side of the
+					 * FK definition to match the partition's column layout.
+					 */
+					map = build_attrmap_by_name_if_req(RelationGetDescr(partRel),
+													   RelationGetDescr(pkrel));
+					if (map)
+					{
+						mapped_pkattnum = palloc(sizeof(AttrNumber) * numfks);
+						for (int j = 0; j < numfks; j++)
+							mapped_pkattnum[j] = map->attnums[pkattnum[j] - 1];
+					}
+					else
+						mapped_pkattnum = pkattnum;
+
+					/* do the deed */
+					partIndexId = index_get_partition(partRel, indexOid);
+					if (!OidIsValid(partIndexId))
+						elog(ERROR, "index for %u not found in partition %s",
+							 indexOid, RelationGetRelationName(partRel));
+					addFkRecurseReferenced(wqueue, fkconstraint, rel, partRel,
+										   partIndexId, constrOid, numfks,
+										   mapped_pkattnum, fkattnum,
+										   pfeqoperators, ppeqoperators, ffeqoperators,
+										   old_check_ok);
+
+					/* Done -- clean up (but keep the lock) */
+					table_close(partRel, NoLock);
+					if (map)
+					{
+						pfree(mapped_pkattnum);
+						free_attrmap(map);
+					}
+				}
 			}
-		}
+			break;
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	return address;
@@ -8836,177 +9329,196 @@ addFkRecurseReferencing(List **wqueue, Constraint *fkconstraint, Relation rel,
 {
 	AssertArg(OidIsValid(parentConstr));
 
-	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("foreign key constraints are not supported on foreign tables")));
-
-	/*
-	 * If the referencing relation is a plain table, add the check triggers to
-	 * it and, if necessary, schedule it to be checked in Phase 3.
-	 *
-	 * If the relation is partitioned, drill down to do it to its partitions.
-	 */
-	if (rel->rd_rel->relkind == RELKIND_RELATION)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		createForeignKeyCheckTriggers(RelationGetRelid(rel),
-									  RelationGetRelid(pkrel),
-									  fkconstraint,
-									  parentConstr,
-									  indexOid);
-
-		/*
-		 * Tell Phase 3 to check that the constraint is satisfied by existing
-		 * rows. We can skip this during table creation, when requested
-		 * explicitly by specifying NOT VALID in an ADD FOREIGN KEY command,
-		 * and when we're recreating a constraint following a SET DATA TYPE
-		 * operation that did not impugn its validity.
-		 */
-		if (wqueue && !old_check_ok && !fkconstraint->skip_validation)
-		{
-			NewConstraint *newcon;
-			AlteredTableInfo *tab;
-
-			tab = ATGetQueueEntry(wqueue, rel);
-
-			newcon = (NewConstraint *) palloc0(sizeof(NewConstraint));
-			newcon->name = get_constraint_name(parentConstr);
-			newcon->contype = CONSTR_FOREIGN;
-			newcon->refrelid = RelationGetRelid(pkrel);
-			newcon->refindid = indexOid;
-			newcon->conid = parentConstr;
-			newcon->qual = (Node *) fkconstraint;
-
-			tab->constraints = lappend(tab->constraints, newcon);
-		}
-	}
-	else if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-	{
-		PartitionDesc pd = RelationGetPartitionDesc(rel);
-
-		/*
-		 * Recurse to take appropriate action on each partition; either we
-		 * find an existing constraint to reparent to ours, or we create a new
-		 * one.
-		 */
-		for (int i = 0; i < pd->nparts; i++)
-		{
-			Oid			partitionId = pd->oids[i];
-			Relation	partition = table_open(partitionId, lockmode);
-			List	   *partFKs;
-			AttrMap    *attmap;
-			AttrNumber	mapped_fkattnum[INDEX_MAX_KEYS];
-			bool		attached;
-			char	   *conname;
-			Oid			constrOid;
-			ObjectAddress address,
-						referenced;
-			ListCell   *cell;
-
-			CheckTableNotInUse(partition, "ALTER TABLE");
-
-			attmap = build_attrmap_by_name(RelationGetDescr(partition),
-										   RelationGetDescr(rel));
-			for (int j = 0; j < numfks; j++)
-				mapped_fkattnum[j] = attmap->attnums[fkattnum[j] - 1];
-
-			/* Check whether an existing constraint can be repurposed */
-			partFKs = copyObject(RelationGetFKeyList(partition));
-			attached = false;
-			foreach(cell, partFKs)
+			/*
+			 * If the referencing relation is a plain table, add the check
+			 * triggers to it and, if necessary, schedule it to be checked in
+			 * Phase 3.
+			 *
+			 * If the relation is partitioned, drill down to do it to its
+			 * partitions.
+			 */
+		case RELKIND_RELATION:
 			{
-				ForeignKeyCacheInfo *fk;
+				createForeignKeyCheckTriggers(RelationGetRelid(rel),
+											  RelationGetRelid(pkrel),
+											  fkconstraint,
+											  parentConstr,
+											  indexOid);
 
-				fk = lfirst_node(ForeignKeyCacheInfo, cell);
-				if (tryAttachPartitionForeignKey(fk,
-												 partitionId,
-												 parentConstr,
-												 numfks,
-												 mapped_fkattnum,
-												 pkattnum,
-												 pfeqoperators))
+				/*
+				 * Tell Phase 3 to check that the constraint is satisfied by
+				 * existing rows. We can skip this during table creation, when
+				 * requested explicitly by specifying NOT VALID in an ADD
+				 * FOREIGN KEY command, and when we're recreating a constraint
+				 * following a SET DATA TYPE operation that did not impugn its
+				 * validity.
+				 */
+				if (wqueue && !old_check_ok && !fkconstraint->skip_validation)
 				{
-					attached = true;
-					break;
+					NewConstraint *newcon;
+					AlteredTableInfo *tab;
+
+					tab = ATGetQueueEntry(wqueue, rel);
+
+					newcon = (NewConstraint *) palloc0(sizeof(NewConstraint));
+					newcon->name = get_constraint_name(parentConstr);
+					newcon->contype = CONSTR_FOREIGN;
+					newcon->refrelid = RelationGetRelid(pkrel);
+					newcon->refindid = indexOid;
+					newcon->conid = parentConstr;
+					newcon->qual = (Node *) fkconstraint;
+
+					tab->constraints = lappend(tab->constraints, newcon);
 				}
 			}
-			if (attached)
+			break;
+		case RELKIND_PARTITIONED_TABLE:
 			{
-				table_close(partition, NoLock);
-				continue;
+				PartitionDesc pd = RelationGetPartitionDesc(rel);
+
+				/*
+				 * Recurse to take appropriate action on each partition;
+				 * either we find an existing constraint to reparent to ours,
+				 * or we create a new one.
+				 */
+				for (int i = 0; i < pd->nparts; i++)
+				{
+					Oid			partitionId = pd->oids[i];
+					Relation	partition = table_open(partitionId, lockmode);
+					List	   *partFKs;
+					AttrMap    *attmap;
+					AttrNumber	mapped_fkattnum[INDEX_MAX_KEYS];
+					bool		attached;
+					char	   *conname;
+					Oid			constrOid;
+					ObjectAddress address,
+								referenced;
+					ListCell   *cell;
+
+					CheckTableNotInUse(partition, "ALTER TABLE");
+
+					attmap = build_attrmap_by_name(RelationGetDescr(partition),
+												   RelationGetDescr(rel));
+					for (int j = 0; j < numfks; j++)
+						mapped_fkattnum[j] = attmap->attnums[fkattnum[j] - 1];
+
+					/* Check whether an existing constraint can be repurposed */
+					partFKs = copyObject(RelationGetFKeyList(partition));
+					attached = false;
+					foreach(cell, partFKs)
+					{
+						ForeignKeyCacheInfo *fk;
+
+						fk = lfirst_node(ForeignKeyCacheInfo, cell);
+						if (tryAttachPartitionForeignKey(fk,
+														 partitionId,
+														 parentConstr,
+														 numfks,
+														 mapped_fkattnum,
+														 pkattnum,
+														 pfeqoperators))
+						{
+							attached = true;
+							break;
+						}
+					}
+					if (attached)
+					{
+						table_close(partition, NoLock);
+						continue;
+					}
+
+					/*
+					 * No luck finding a good constraint to reuse; create our
+					 * own.
+					 */
+					if (ConstraintNameIsUsed(CONSTRAINT_RELATION,
+											 RelationGetRelid(partition),
+											 fkconstraint->conname))
+						conname = ChooseConstraintName(RelationGetRelationName(partition),
+													   ChooseForeignKeyConstraintNameAddition(fkconstraint->fk_attrs),
+													   "fkey",
+													   RelationGetNamespace(partition), NIL);
+					else
+						conname = fkconstraint->conname;
+					constrOid =
+						CreateConstraintEntry(conname,
+											  RelationGetNamespace(partition),
+											  CONSTRAINT_FOREIGN,
+											  fkconstraint->deferrable,
+											  fkconstraint->initdeferred,
+											  fkconstraint->initially_valid,
+											  parentConstr,
+											  partitionId,
+											  mapped_fkattnum,
+											  numfks,
+											  numfks,
+											  InvalidOid,
+											  indexOid,
+											  RelationGetRelid(pkrel),
+											  pkattnum,
+											  pfeqoperators,
+											  ppeqoperators,
+											  ffeqoperators,
+											  numfks,
+											  fkconstraint->fk_upd_action,
+											  fkconstraint->fk_del_action,
+											  fkconstraint->fk_matchtype,
+											  NULL,
+											  NULL,
+											  NULL,
+											  false,
+											  1,
+											  false,
+											  false);
+
+					/*
+					 * Give this constraint partition-type dependencies on the
+					 * parent constraint as well as the table.
+					 */
+					ObjectAddressSet(address, ConstraintRelationId, constrOid);
+					ObjectAddressSet(referenced, ConstraintRelationId, parentConstr);
+					recordDependencyOn(&address, &referenced, DEPENDENCY_PARTITION_PRI);
+					ObjectAddressSet(referenced, RelationRelationId, partitionId);
+					recordDependencyOn(&address, &referenced, DEPENDENCY_PARTITION_SEC);
+
+					/* Make all this visible before recursing */
+					CommandCounterIncrement();
+
+					/* call ourselves to finalize the creation and we're done */
+					addFkRecurseReferencing(wqueue, fkconstraint, partition, pkrel,
+											indexOid,
+											constrOid,
+											numfks,
+											pkattnum,
+											mapped_fkattnum,
+											pfeqoperators,
+											ppeqoperators,
+											ffeqoperators,
+											old_check_ok,
+											lockmode);
+
+					table_close(partition, NoLock);
+				}
 			}
-
-			/*
-			 * No luck finding a good constraint to reuse; create our own.
-			 */
-			if (ConstraintNameIsUsed(CONSTRAINT_RELATION,
-									 RelationGetRelid(partition),
-									 fkconstraint->conname))
-				conname = ChooseConstraintName(RelationGetRelationName(partition),
-											   ChooseForeignKeyConstraintNameAddition(fkconstraint->fk_attrs),
-											   "fkey",
-											   RelationGetNamespace(partition), NIL);
-			else
-				conname = fkconstraint->conname;
-			constrOid =
-				CreateConstraintEntry(conname,
-									  RelationGetNamespace(partition),
-									  CONSTRAINT_FOREIGN,
-									  fkconstraint->deferrable,
-									  fkconstraint->initdeferred,
-									  fkconstraint->initially_valid,
-									  parentConstr,
-									  partitionId,
-									  mapped_fkattnum,
-									  numfks,
-									  numfks,
-									  InvalidOid,
-									  indexOid,
-									  RelationGetRelid(pkrel),
-									  pkattnum,
-									  pfeqoperators,
-									  ppeqoperators,
-									  ffeqoperators,
-									  numfks,
-									  fkconstraint->fk_upd_action,
-									  fkconstraint->fk_del_action,
-									  fkconstraint->fk_matchtype,
-									  NULL,
-									  NULL,
-									  NULL,
-									  false,
-									  1,
-									  false,
-									  false);
-
-			/*
-			 * Give this constraint partition-type dependencies on the parent
-			 * constraint as well as the table.
-			 */
-			ObjectAddressSet(address, ConstraintRelationId, constrOid);
-			ObjectAddressSet(referenced, ConstraintRelationId, parentConstr);
-			recordDependencyOn(&address, &referenced, DEPENDENCY_PARTITION_PRI);
-			ObjectAddressSet(referenced, RelationRelationId, partitionId);
-			recordDependencyOn(&address, &referenced, DEPENDENCY_PARTITION_SEC);
-
-			/* Make all this visible before recursing */
-			CommandCounterIncrement();
-
-			/* call ourselves to finalize the creation and we're done */
-			addFkRecurseReferencing(wqueue, fkconstraint, partition, pkrel,
-									indexOid,
-									constrOid,
-									numfks,
-									pkattnum,
-									mapped_fkattnum,
-									pfeqoperators,
-									ppeqoperators,
-									ffeqoperators,
-									old_check_ok,
-									lockmode);
-
-			table_close(partition, NoLock);
-		}
+			break;
+		case RELKIND_FOREIGN_TABLE:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("foreign key constraints are not supported on foreign tables")));
+			break;
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 }
 
@@ -9229,10 +9741,26 @@ CloneFkReferencing(List **wqueue, Relation parentRel, Relation partRel)
 	if (clone == NIL)
 		return;
 
-	if (partRel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("foreign key constraints are not supported on foreign tables")));
+	switch ((RelKind) partRel->rd_rel->relkind)
+	{
+		case RELKIND_FOREIGN_TABLE:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("foreign key constraints are not supported on foreign tables")));
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	/*
 	 * The constraint key may differ, if the columns in the partition are
@@ -9282,9 +9810,25 @@ CloneFkReferencing(List **wqueue, Relation parentRel, Relation partRel)
 		 * relation, that means to lock all partitions.
 		 */
 		pkrel = table_open(constrForm->confrelid, ShareRowExclusiveLock);
-		if (pkrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			(void) find_all_inheritors(RelationGetRelid(pkrel),
-									   ShareRowExclusiveLock, NULL);
+		switch ((RelKind) pkrel->rd_rel->relkind)
+		{
+			case RELKIND_PARTITIONED_TABLE:
+				(void) find_all_inheritors(RelationGetRelid(pkrel),
+										   ShareRowExclusiveLock, NULL);
+				break;
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_VIEW:
+			case RELKIND_SEQUENCE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				break;
+		}
 
 		DeconstructFkConstraintRow(tuple, &numfks, conkey, confkey,
 								   conpfeqop, conppeqop, conffeqop);
@@ -10249,9 +10793,23 @@ validateCheckConstraint(Relation rel, HeapTuple constrtup)
 	 * VALIDATE CONSTRAINT is a no-op for foreign tables and partitioned
 	 * tables.
 	 */
-	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
-		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		return;
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+			return;
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	constrForm = (Form_pg_constraint) GETSTRUCT(constrtup);
 
@@ -10705,11 +11263,27 @@ ATExecDropConstraint(Relation rel, const char *constrName,
 	 * For partitioned tables, non-CHECK inherited constraints are dropped via
 	 * the dependency mechanism, so we're done here.
 	 */
-	if (contype != CONSTRAINT_CHECK &&
-		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		table_close(conrel, RowExclusiveLock);
-		return;
+		case RELKIND_PARTITIONED_TABLE:
+			if (contype != CONSTRAINT_CHECK)
+			{
+				table_close(conrel, RowExclusiveLock);
+				return;
+			}
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/*
@@ -10727,12 +11301,28 @@ ATExecDropConstraint(Relation rel, const char *constrName,
 	 * recurse, it's a user error.  It doesn't make sense to have a constraint
 	 * be defined only on the parent, especially if it's a partitioned table.
 	 */
-	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
-		children != NIL && !recurse)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-				 errmsg("cannot remove constraint from only the partitioned table when partitions exist"),
-				 errhint("Do not specify the ONLY keyword.")));
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			if (children != NIL && !recurse)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						 errmsg("cannot remove constraint from only the partitioned table when partitions exist"),
+						 errhint("Do not specify the ONLY keyword.")));
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	foreach(child, children)
 	{
@@ -10924,87 +11514,106 @@ ATPrepAlterColumnType(List **wqueue,
 					   list_make1_oid(rel->rd_rel->reltype),
 					   0);
 
-	if (tab->relkind == RELKIND_RELATION ||
-		tab->relkind == RELKIND_PARTITIONED_TABLE)
+	switch ((RelKind) tab->relkind)
 	{
-		/*
-		 * Set up an expression to transform the old data value to the new
-		 * type. If a USING option was given, use the expression as
-		 * transformed by transformAlterTableStmt, else just take the old
-		 * value and try to coerce it.  We do this first so that type
-		 * incompatibility can be detected before we waste effort, and because
-		 * we need the expression to be parsed against the original table row
-		 * type.
-		 */
-		if (!transform)
-		{
-			transform = (Node *) makeVar(1, attnum,
-										 attTup->atttypid, attTup->atttypmod,
-										 attTup->attcollation,
-										 0);
-		}
+		case RELKIND_RELATION:
+		case RELKIND_PARTITIONED_TABLE:
+			{
+				/*
+				 * Set up an expression to transform the old data value to the
+				 * new type. If a USING option was given, use the expression
+				 * as transformed by transformAlterTableStmt, else just take
+				 * the old value and try to coerce it.  We do this first so
+				 * that type incompatibility can be detected before we waste
+				 * effort, and because we need the expression to be parsed
+				 * against the original table row type.
+				 */
+				if (!transform)
+				{
+					transform = (Node *) makeVar(1, attnum,
+												 attTup->atttypid, attTup->atttypmod,
+												 attTup->attcollation,
+												 0);
+				}
 
-		transform = coerce_to_target_type(pstate,
-										  transform, exprType(transform),
-										  targettype, targettypmod,
-										  COERCION_ASSIGNMENT,
-										  COERCE_IMPLICIT_CAST,
-										  -1);
-		if (transform == NULL)
-		{
-			/* error text depends on whether USING was specified or not */
-			if (def->cooked_default != NULL)
+				transform = coerce_to_target_type(pstate,
+												  transform, exprType(transform),
+												  targettype, targettypmod,
+												  COERCION_ASSIGNMENT,
+												  COERCE_IMPLICIT_CAST,
+												  -1);
+				if (transform == NULL)
+				{
+					/*
+					 * error text depends on whether USING was specified or
+					 * not
+					 */
+					if (def->cooked_default != NULL)
+						ereport(ERROR,
+								(errcode(ERRCODE_DATATYPE_MISMATCH),
+								 errmsg("result of USING clause for column \"%s\""
+										" cannot be cast automatically to type %s",
+										colName, format_type_be(targettype)),
+								 errhint("You might need to add an explicit cast.")));
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_DATATYPE_MISMATCH),
+								 errmsg("column \"%s\" cannot be cast automatically to type %s",
+										colName, format_type_be(targettype)),
+						/* translator: USING is SQL, don't translate it */
+								 errhint("You might need to specify \"USING %s::%s\".",
+										 quote_identifier(colName),
+										 format_type_with_typemod(targettype,
+																  targettypmod))));
+				}
+
+				/* Fix collations after all else */
+				assign_expr_collations(pstate, transform);
+
+				/*
+				 * Plan the expr now so we can accurately assess the need to
+				 * rewrite.
+				 */
+				transform = (Node *) expression_planner((Expr *) transform);
+
+				/*
+				 * Add a work queue item to make ATRewriteTable update the
+				 * column contents.
+				 */
+				newval = (NewColumnValue *) palloc0(sizeof(NewColumnValue));
+				newval->attnum = attnum;
+				newval->expr = (Expr *) transform;
+				newval->is_generated = false;
+
+				tab->newvals = lappend(tab->newvals, newval);
+				if (ATColumnChangeRequiresRewrite(transform, attnum))
+					tab->rewrite |= AT_REWRITE_COLUMN_REWRITE;
+			}
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_COMPOSITE_TYPE:
+
+			/*
+			 * For composite types, do this check now.  Tables will check it
+			 * later when the table is being rewritten.
+			 */
+			if (!transform)
+				find_composite_type_dependencies(rel->rd_rel->reltype, rel, NULL);
+			/* fallthrough */
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			if (transform)
 				ereport(ERROR,
-						(errcode(ERRCODE_DATATYPE_MISMATCH),
-						 errmsg("result of USING clause for column \"%s\""
-								" cannot be cast automatically to type %s",
-								colName, format_type_be(targettype)),
-						 errhint("You might need to add an explicit cast.")));
-			else
-				ereport(ERROR,
-						(errcode(ERRCODE_DATATYPE_MISMATCH),
-						 errmsg("column \"%s\" cannot be cast automatically to type %s",
-								colName, format_type_be(targettype)),
-				/* translator: USING is SQL, don't translate it */
-						 errhint("You might need to specify \"USING %s::%s\".",
-								 quote_identifier(colName),
-								 format_type_with_typemod(targettype,
-														  targettypmod))));
-		}
-
-		/* Fix collations after all else */
-		assign_expr_collations(pstate, transform);
-
-		/* Plan the expr now so we can accurately assess the need to rewrite. */
-		transform = (Node *) expression_planner((Expr *) transform);
-
-		/*
-		 * Add a work queue item to make ATRewriteTable update the column
-		 * contents.
-		 */
-		newval = (NewColumnValue *) palloc0(sizeof(NewColumnValue));
-		newval->attnum = attnum;
-		newval->expr = (Expr *) transform;
-		newval->is_generated = false;
-
-		tab->newvals = lappend(tab->newvals, newval);
-		if (ATColumnChangeRequiresRewrite(transform, attnum))
-			tab->rewrite |= AT_REWRITE_COLUMN_REWRITE;
-	}
-	else if (transform)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table",
-						RelationGetRelationName(rel))));
-
-	if (tab->relkind == RELKIND_COMPOSITE_TYPE ||
-		tab->relkind == RELKIND_FOREIGN_TABLE)
-	{
-		/*
-		 * For composite types, do this check now.  Tables will check it later
-		 * when the table is being rewritten.
-		 */
-		find_composite_type_dependencies(rel->rd_rel->reltype, rel, NULL);
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("\"%s\" is not a table",
+								RelationGetRelationName(rel))));
+			break;
 	}
 
 	ReleaseSysCache(tuple);
@@ -11108,8 +11717,24 @@ ATPrepAlterColumnType(List **wqueue,
 				 errmsg("type of inherited column \"%s\" must be changed in child tables too",
 						colName)));
 
-	if (tab->relkind == RELKIND_COMPOSITE_TYPE)
-		ATTypedTableRecursion(wqueue, rel, cmd, lockmode, context);
+	switch ((RelKind) tab->relkind)
+	{
+		case RELKIND_COMPOSITE_TYPE:
+			ATTypedTableRecursion(wqueue, rel, cmd, lockmode, context);
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 }
 
 /*
@@ -11326,44 +11951,53 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 				{
 					char		relKind = get_rel_relkind(foundObject.objectId);
 
-					if (relKind == RELKIND_INDEX ||
-						relKind == RELKIND_PARTITIONED_INDEX)
+					switch ((RelKind) relKind)
 					{
-						Assert(foundObject.objectSubId == 0);
-						RememberIndexForRebuilding(foundObject.objectId, tab);
-					}
-					else if (relKind == RELKIND_SEQUENCE)
-					{
-						/*
-						 * This must be a SERIAL column's sequence.  We need
-						 * not do anything to it.
-						 */
-						Assert(foundObject.objectSubId == 0);
-					}
-					else if (relKind == RELKIND_RELATION &&
-							 foundObject.objectSubId != 0 &&
-							 get_attgenerated(foundObject.objectId, foundObject.objectSubId))
-					{
-						/*
-						 * Changing the type of a column that is used by a
-						 * generated column is not allowed by SQL standard. It
-						 * might be doable with some thinking and effort.
-						 */
-						ereport(ERROR,
-								(errcode(ERRCODE_SYNTAX_ERROR),
-								 errmsg("cannot alter type of a column used by a generated column"),
-								 errdetail("Column \"%s\" is used by generated column \"%s\".",
-										   colName, get_attname(foundObject.objectId, foundObject.objectSubId, false))));
-					}
-					else
-					{
-						/* Not expecting any other direct dependencies... */
-						elog(ERROR, "unexpected object depending on column: %s",
-							 getObjectDescription(&foundObject));
-					}
-					break;
-				}
+						case RELKIND_INDEX:
+						case RELKIND_PARTITIONED_INDEX:
+							Assert(foundObject.objectSubId == 0);
+							RememberIndexForRebuilding(foundObject.objectId, tab);
+							break;
+						case RELKIND_SEQUENCE:
 
+							/*
+							 * This must be a SERIAL column's sequence.  We
+							 * need not do anything to it.
+							 */
+							Assert(foundObject.objectSubId == 0);
+							break;
+						case RELKIND_RELATION:
+							if (foundObject.objectSubId != 0 &&
+								get_attgenerated(foundObject.objectId, foundObject.objectSubId))
+							{
+								/*
+								 * Changing the type of a column that is used
+								 * by a generated column is not allowed by SQL
+								 * standard. It might be doable with some
+								 * thinking and effort.
+								 */
+								ereport(ERROR,
+										(errcode(ERRCODE_SYNTAX_ERROR),
+										 errmsg("cannot alter type of a column used by a generated column"),
+										 errdetail("Column \"%s\" is used by generated column \"%s\".",
+												   colName, get_attname(foundObject.objectId, foundObject.objectSubId, false))));
+							}
+							break;
+						case RELKIND_FOREIGN_TABLE:
+						case RELKIND_PARTITIONED_TABLE:
+						case RELKIND_COMPOSITE_TYPE:
+						case RELKIND_MATVIEW:
+						case RELKIND_VIEW:
+						case RELKIND_TOASTVALUE:
+						case RELKIND_NULL:
+						default:
+							/* Not expecting any other direct dependencies... */
+							elog(ERROR, "unexpected object depending on column: %s",
+								 getObjectDescription(&foundObject));
+							break;
+					}
+				}
+				break;
 			case OCLASS_CONSTRAINT:
 				Assert(foundObject.objectSubId == 0);
 				RememberConstraintForRebuilding(foundObject.objectId, tab);
@@ -12196,13 +12830,28 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 	{
 		Relation	irel = index_open(oldId, NoLock);
 
-		/* If it's a partitioned index, there is no storage to share. */
-		if (irel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
+		switch ((RelKind) irel->rd_rel->relkind)
 		{
-			stmt->oldNode = irel->rd_node.relNode;
-			stmt->oldCreateSubid = irel->rd_createSubid;
-			stmt->oldFirstRelfilenodeSubid = irel->rd_firstRelfilenodeSubid;
+			case RELKIND_PARTITIONED_INDEX:
+				/* If it's a partitioned index, there is no storage to share. */
+				break;
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_VIEW:
+			case RELKIND_SEQUENCE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				stmt->oldNode = irel->rd_node.relNode;
+				stmt->oldCreateSubid = irel->rd_createSubid;
+				stmt->oldFirstRelfilenodeSubid = irel->rd_firstRelfilenodeSubid;
+				break;
 		}
+
 		index_close(irel, NoLock);
 	}
 }
@@ -12397,7 +13046,7 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 	tuple_class = (Form_pg_class) GETSTRUCT(tuple);
 
 	/* Can we change the ownership of this tuple? */
-	switch (tuple_class->relkind)
+	switch ((RelKind) tuple_class->relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_VIEW:
@@ -12467,6 +13116,7 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 			if (recursing)
 				break;
 			/* FALL THRU */
+		case RELKIND_NULL:
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -12554,41 +13204,82 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 		 * none, because it's tracked for the pg_type entry instead of here;
 		 * indexes and TOAST tables don't have their own entries either.
 		 */
-		if (tuple_class->relkind != RELKIND_COMPOSITE_TYPE &&
-			tuple_class->relkind != RELKIND_INDEX &&
-			tuple_class->relkind != RELKIND_PARTITIONED_INDEX &&
-			tuple_class->relkind != RELKIND_TOASTVALUE)
-			changeDependencyOnOwner(RelationRelationId, relationOid,
-									newOwnerId);
+		switch ((RelKind) tuple_class->relkind)
+		{
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_TOASTVALUE:
+				break;
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_MATVIEW:
+			case RELKIND_VIEW:
+			case RELKIND_SEQUENCE:
+			case RELKIND_NULL:
+			default:
+				changeDependencyOnOwner(RelationRelationId, relationOid,
+										newOwnerId);
+				break;
+		}
 
 		/*
 		 * Also change the ownership of the table's row type, if it has one
 		 */
-		if (tuple_class->relkind != RELKIND_INDEX &&
-			tuple_class->relkind != RELKIND_PARTITIONED_INDEX)
-			AlterTypeOwnerInternal(tuple_class->reltype, newOwnerId);
+		switch ((RelKind) tuple_class->relkind)
+		{
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+				break;
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_MATVIEW:
+			case RELKIND_VIEW:
+			case RELKIND_SEQUENCE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				AlterTypeOwnerInternal(tuple_class->reltype, newOwnerId);
+				break;
+		}
 
 		/*
 		 * If we are operating on a table or materialized view, also change
 		 * the ownership of any indexes and sequences that belong to the
 		 * relation, as well as its toast table (if it has one).
 		 */
-		if (tuple_class->relkind == RELKIND_RELATION ||
-			tuple_class->relkind == RELKIND_PARTITIONED_TABLE ||
-			tuple_class->relkind == RELKIND_MATVIEW ||
-			tuple_class->relkind == RELKIND_TOASTVALUE)
+		switch ((RelKind) tuple_class->relkind)
 		{
-			List	   *index_oid_list;
-			ListCell   *i;
+			case RELKIND_RELATION:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_MATVIEW:
+			case RELKIND_TOASTVALUE:
+				{
+					List	   *index_oid_list;
+					ListCell   *i;
 
-			/* Find all the indexes belonging to this relation */
-			index_oid_list = RelationGetIndexList(target_rel);
+					/* Find all the indexes belonging to this relation */
+					index_oid_list = RelationGetIndexList(target_rel);
 
-			/* For each index, recursively change its ownership */
-			foreach(i, index_oid_list)
-				ATExecChangeOwner(lfirst_oid(i), newOwnerId, true, lockmode);
+					/* For each index, recursively change its ownership */
+					foreach(i, index_oid_list)
+						ATExecChangeOwner(lfirst_oid(i), newOwnerId, true, lockmode);
 
-			list_free(index_oid_list);
+					list_free(index_oid_list);
+				}
+				break;
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_VIEW:
+			case RELKIND_SEQUENCE:
+			case RELKIND_NULL:
+			default:
+				break;
 		}
 
 		/* If it has a toast table, recurse to change its ownership */
@@ -12721,11 +13412,24 @@ change_owner_recurse_to_sequences(Oid relationOid, Oid newOwnerId, LOCKMODE lock
 		seqRel = relation_open(depForm->objid, lockmode);
 
 		/* skip non-sequence relations */
-		if (RelationGetForm(seqRel)->relkind != RELKIND_SEQUENCE)
+		switch ((RelKind) RelationGetForm(seqRel)->relkind)
 		{
-			/* No need to keep the lock */
-			relation_close(seqRel, lockmode);
-			continue;
+			case RELKIND_SEQUENCE:
+				break;
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_VIEW:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				/* No need to keep the lock */
+				relation_close(seqRel, lockmode);
+				continue;
 		}
 
 		/* We don't need to close the sequence while we alter it. */
@@ -12867,7 +13571,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 									 operation == AT_ResetRelOptions);
 
 	/* Validate */
-	switch (rel->rd_rel->relkind)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
@@ -12879,50 +13583,53 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 			break;
 		case RELKIND_VIEW:
 			(void) view_reloptions(newOptions, true);
+
+			/* Special-case validation of view options */
+			{
+				Query	   *view_query = get_view_query(rel);
+				List	   *view_options = untransformRelOptions(newOptions);
+				ListCell   *cell;
+				bool		check_option = false;
+
+				foreach(cell, view_options)
+				{
+					DefElem    *defel = (DefElem *) lfirst(cell);
+
+					if (strcmp(defel->defname, "check_option") == 0)
+						check_option = true;
+				}
+
+				/*
+				 * If the check option is specified, look to see if the view
+				 * is actually auto-updatable or not.
+				 */
+				if (check_option)
+				{
+					const char *view_updatable_error =
+					view_query_is_auto_updatable(view_query, true);
+
+					if (view_updatable_error)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("WITH CHECK OPTION is supported only on automatically updatable views"),
+								 errhint("%s", _(view_updatable_error))));
+				}
+			}
 			break;
 		case RELKIND_INDEX:
 		case RELKIND_PARTITIONED_INDEX:
 			(void) index_reloptions(rel->rd_indam->amoptions, newOptions, true);
 			break;
+		case RELKIND_NULL:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_SEQUENCE:
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("\"%s\" is not a table, view, materialized view, index, or TOAST table",
 							RelationGetRelationName(rel))));
 			break;
-	}
-
-	/* Special-case validation of view options */
-	if (rel->rd_rel->relkind == RELKIND_VIEW)
-	{
-		Query	   *view_query = get_view_query(rel);
-		List	   *view_options = untransformRelOptions(newOptions);
-		ListCell   *cell;
-		bool		check_option = false;
-
-		foreach(cell, view_options)
-		{
-			DefElem    *defel = (DefElem *) lfirst(cell);
-
-			if (strcmp(defel->defname, "check_option") == 0)
-				check_option = true;
-		}
-
-		/*
-		 * If the check option is specified, look to see if the view is
-		 * actually auto-updatable or not.
-		 */
-		if (check_option)
-		{
-			const char *view_updatable_error =
-			view_query_is_auto_updatable(view_query, true);
-
-			if (view_updatable_error)
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("WITH CHECK OPTION is supported only on automatically updatable views"),
-						 errhint("%s", _(view_updatable_error))));
-		}
 	}
 
 	/*
@@ -13109,16 +13816,26 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	newrnode.spcNode = newTableSpace;
 
 	/* hand off to AM to actually create the new filenode and copy the data */
-	if (rel->rd_rel->relkind == RELKIND_INDEX)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		index_copy_data(rel, newrnode);
-	}
-	else
-	{
-		Assert(rel->rd_rel->relkind == RELKIND_RELATION ||
-			   rel->rd_rel->relkind == RELKIND_MATVIEW ||
-			   rel->rd_rel->relkind == RELKIND_TOASTVALUE);
-		table_relation_copy_data(rel, &newrnode);
+		case RELKIND_INDEX:
+			index_copy_data(rel, newrnode);
+			break;
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_TOASTVALUE:
+			table_relation_copy_data(rel, &newrnode);
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_NULL:
+		default:
+			Assert(false);
+			break;
 	}
 
 	/*
@@ -13489,10 +14206,26 @@ ATPrepAddInherit(Relation child_rel)
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cannot change inheritance of a partition")));
 
-	if (child_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("cannot change inheritance of partitioned table")));
+	switch ((RelKind) child_rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("cannot change inheritance of partitioned table")));
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 }
 
 /*
@@ -13541,11 +14274,27 @@ ATExecAddInherit(Relation child_rel, RangeVar *parent, LOCKMODE lockmode)
 				 errmsg("cannot inherit to temporary relation of another session")));
 
 	/* Prevent partitioned tables from becoming inheritance parents */
-	if (parent_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("cannot inherit from partitioned table \"%s\"",
-						parent->relname)));
+	switch ((RelKind) parent_rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("cannot inherit from partitioned table \"%s\"",
+							parent->relname)));
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	/* Likewise for partitions */
 	if (parent_rel->rd_rel->relispartition)
@@ -13749,8 +14498,24 @@ MergeAttributesIntoExisting(Relation child_rel, Relation parent_rel)
 	parent_natts = tupleDesc->natts;
 
 	/* If parent_rel is a partitioned table, child_rel must be a partition */
-	if (parent_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		child_is_partition = true;
+	switch ((RelKind) parent_rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			child_is_partition = true;
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	for (parent_attno = 1; parent_attno <= parent_natts; parent_attno++)
 	{
@@ -13858,8 +14623,24 @@ MergeConstraintsIntoExisting(Relation child_rel, Relation parent_rel)
 	tuple_desc = RelationGetDescr(catalog_relation);
 
 	/* If parent_rel is a partitioned table, child_rel must be a partition */
-	if (parent_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		child_is_partition = true;
+	switch ((RelKind) parent_rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			child_is_partition = true;
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	/* Outer loop scans through the parent's constraint definitions */
 	ScanKeyInit(&parent_key,
@@ -14040,8 +14821,24 @@ RemoveInheritance(Relation child_rel, Relation parent_rel)
 	bool		child_is_partition = false;
 
 	/* If parent_rel is a partitioned table, child_rel must be a partition */
-	if (parent_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		child_is_partition = true;
+	switch ((RelKind) parent_rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			child_is_partition = true;
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	found = DeleteInheritsTuple(RelationGetRelid(child_rel),
 								RelationGetRelid(parent_rel));
@@ -14952,20 +15749,36 @@ AlterTableNamespace(AlterObjectSchemaStmt *stmt, Oid *oldschema)
 
 	oldNspOid = RelationGetNamespace(rel);
 
-	/* If it's an owned sequence, disallow moving it by itself. */
-	if (rel->rd_rel->relkind == RELKIND_SEQUENCE)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		Oid			tableId;
-		int32		colId;
+			/* If it's an owned sequence, disallow moving it by itself. */
+		case RELKIND_SEQUENCE:
+			{
+				Oid			tableId;
+				int32		colId;
 
-		if (sequenceIsOwned(relid, DEPENDENCY_AUTO, &tableId, &colId) ||
-			sequenceIsOwned(relid, DEPENDENCY_INTERNAL, &tableId, &colId))
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot move an owned sequence into another schema"),
-					 errdetail("Sequence \"%s\" is linked to table \"%s\".",
-							   RelationGetRelationName(rel),
-							   get_rel_name(tableId))));
+				if (sequenceIsOwned(relid, DEPENDENCY_AUTO, &tableId, &colId) ||
+					sequenceIsOwned(relid, DEPENDENCY_INTERNAL, &tableId, &colId))
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot move an owned sequence into another schema"),
+							 errdetail("Sequence \"%s\" is linked to table \"%s\".",
+									   RelationGetRelationName(rel),
+									   get_rel_name(tableId))));
+			}
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/* Get and lock schema OID and check its permissions. */
@@ -15014,15 +15827,27 @@ AlterTableNamespaceInternal(Relation rel, Oid oldNspOid, Oid nspOid,
 							   nspOid, false, false, objsMoved);
 
 	/* Fix other dependent stuff */
-	if (rel->rd_rel->relkind == RELKIND_RELATION ||
-		rel->rd_rel->relkind == RELKIND_MATVIEW ||
-		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		AlterIndexNamespaces(classRel, rel, oldNspOid, nspOid, objsMoved);
-		AlterSeqNamespaces(classRel, rel, oldNspOid, nspOid,
-						   objsMoved, AccessExclusiveLock);
-		AlterConstraintNamespaces(RelationGetRelid(rel), oldNspOid, nspOid,
-								  false, objsMoved);
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+			AlterIndexNamespaces(classRel, rel, oldNspOid, nspOid, objsMoved);
+			AlterSeqNamespaces(classRel, rel, oldNspOid, nspOid,
+							   objsMoved, AccessExclusiveLock);
+			AlterConstraintNamespaces(RelationGetRelid(rel), oldNspOid, nspOid,
+									  false, objsMoved);
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	table_close(classRel, RowExclusiveLock);
@@ -15193,11 +16018,24 @@ AlterSeqNamespaces(Relation classRel, Relation rel,
 		seqRel = relation_open(depForm->objid, lockmode);
 
 		/* skip non-sequence relations */
-		if (RelationGetForm(seqRel)->relkind != RELKIND_SEQUENCE)
+		switch ((RelKind) RelationGetForm(seqRel)->relkind)
 		{
-			/* No need to keep the lock */
-			relation_close(seqRel, lockmode);
-			continue;
+			case RELKIND_SEQUENCE:
+				break;
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_VIEW:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				/* No need to keep the lock */
+				relation_close(seqRel, lockmode);
+				continue;
 		}
 
 		/* Fix the pg_class and pg_depend entries */
@@ -15477,11 +16315,26 @@ RangeVarCallbackOwnsTable(const RangeVar *relation,
 	relkind = get_rel_relkind(relId);
 	if (!relkind)
 		return;
-	if (relkind != RELKIND_RELATION && relkind != RELKIND_TOASTVALUE &&
-		relkind != RELKIND_MATVIEW && relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table or materialized view", relation->relname)));
+	switch ((RelKind) relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("\"%s\" is not a table or materialized view", relation->relname)));
+			break;
+	}
 
 	/* Check permissions */
 	if (!pg_class_ownercheck(relId, GetUserId()))
@@ -15654,17 +16507,28 @@ RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid, Oid oldrelid,
 	 * Don't allow ALTER TABLE .. SET SCHEMA on relations that can't be moved
 	 * to a different schema, such as indexes and TOAST tables.
 	 */
-	if (IsA(stmt, AlterObjectSchemaStmt) &&
-		relkind != RELKIND_RELATION &&
-		relkind != RELKIND_VIEW &&
-		relkind != RELKIND_MATVIEW &&
-		relkind != RELKIND_SEQUENCE &&
-		relkind != RELKIND_FOREIGN_TABLE &&
-		relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table, view, materialized view, sequence, or foreign table",
-						rv->relname)));
+	switch ((RelKind) relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_MATVIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			if (IsA(stmt, AlterObjectSchemaStmt))
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("\"%s\" is not a table, view, materialized view, sequence, or foreign table",
+								rv->relname)));
+			break;
+	}
 
 	ReleaseSysCache(tuple);
 }
@@ -16139,44 +17003,60 @@ QueuePartitionConstraintValidation(List **wqueue, Relation scanrel,
 	 * validation item now; for partitioned tables, recurse to process each
 	 * partition.
 	 */
-	if (scanrel->rd_rel->relkind == RELKIND_RELATION)
+	switch ((RelKind) scanrel->rd_rel->relkind)
 	{
-		AlteredTableInfo *tab;
+		case RELKIND_RELATION:
+			{
+				AlteredTableInfo *tab;
 
-		/* Grab a work queue entry. */
-		tab = ATGetQueueEntry(wqueue, scanrel);
-		Assert(tab->partition_constraint == NULL);
-		tab->partition_constraint = (Expr *) linitial(partConstraint);
-		tab->validate_default = validate_default;
-	}
-	else if (scanrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-	{
-		PartitionDesc partdesc = RelationGetPartitionDesc(scanrel);
-		int			i;
+				/* Grab a work queue entry. */
+				tab = ATGetQueueEntry(wqueue, scanrel);
+				Assert(tab->partition_constraint == NULL);
+				tab->partition_constraint = (Expr *) linitial(partConstraint);
+				tab->validate_default = validate_default;
+			}
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+			{
+				PartitionDesc partdesc = RelationGetPartitionDesc(scanrel);
+				int			i;
 
-		for (i = 0; i < partdesc->nparts; i++)
-		{
-			Relation	part_rel;
-			List	   *thisPartConstraint;
+				for (i = 0; i < partdesc->nparts; i++)
+				{
+					Relation	part_rel;
+					List	   *thisPartConstraint;
 
-			/*
-			 * This is the minimum lock we need to prevent deadlocks.
-			 */
-			part_rel = table_open(partdesc->oids[i], AccessExclusiveLock);
+					/*
+					 * This is the minimum lock we need to prevent deadlocks.
+					 */
+					part_rel = table_open(partdesc->oids[i], AccessExclusiveLock);
 
-			/*
-			 * Adjust the constraint for scanrel so that it matches this
-			 * partition's attribute numbers.
-			 */
-			thisPartConstraint =
-				map_partition_varattnos(partConstraint, 1,
-										part_rel, scanrel);
+					/*
+					 * Adjust the constraint for scanrel so that it matches
+					 * this partition's attribute numbers.
+					 */
+					thisPartConstraint =
+						map_partition_varattnos(partConstraint, 1,
+												part_rel, scanrel);
 
-			QueuePartitionConstraintValidation(wqueue, part_rel,
-											   thisPartConstraint,
-											   validate_default);
-			table_close(part_rel, NoLock);	/* keep lock till commit */
-		}
+					QueuePartitionConstraintValidation(wqueue, part_rel,
+													   thisPartConstraint,
+													   validate_default);
+					table_close(part_rel, NoLock);	/* keep lock till commit */
+				}
+			}
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 }
 
@@ -16260,11 +17140,29 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd)
 				ObjectIdGetDatum(RelationGetRelid(attachrel)));
 	scan = systable_beginscan(catalog, InheritsParentIndexId, true, NULL,
 							  1, &skey);
-	if (HeapTupleIsValid(systable_getnext(scan)) &&
-		attachrel->rd_rel->relkind == RELKIND_RELATION)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("cannot attach inheritance parent as partition")));
+
+	switch ((RelKind) attachrel->rd_rel->relkind)
+	{
+		case RELKIND_RELATION:
+			if (HeapTupleIsValid(systable_getnext(scan)))
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("cannot attach inheritance parent as partition")));
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
+
 	systable_endscan(scan);
 	table_close(catalog, AccessShareLock);
 
@@ -16510,26 +17408,38 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 	 * before starting work, to avoid wasting the effort of building a few
 	 * non-unique indexes before coming across a unique one.
 	 */
-	if (attachrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+	switch ((RelKind) attachrel->rd_rel->relkind)
 	{
-		foreach(cell, idxes)
-		{
-			Oid			idx = lfirst_oid(cell);
-			Relation	idxRel = index_open(idx, AccessShareLock);
+		case RELKIND_FOREIGN_TABLE:
+			foreach(cell, idxes)
+			{
+				Oid			idx = lfirst_oid(cell);
+				Relation	idxRel = index_open(idx, AccessShareLock);
 
-			if (idxRel->rd_index->indisunique ||
-				idxRel->rd_index->indisprimary)
-				ereport(ERROR,
-						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("cannot attach foreign table \"%s\" as partition of partitioned table \"%s\"",
-								RelationGetRelationName(attachrel),
-								RelationGetRelationName(rel)),
-						 errdetail("Table \"%s\" contains unique indexes.",
-								   RelationGetRelationName(rel))));
-			index_close(idxRel, AccessShareLock);
-		}
-
-		goto out;
+				if (idxRel->rd_index->indisunique ||
+					idxRel->rd_index->indisprimary)
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("cannot attach foreign table \"%s\" as partition of partitioned table \"%s\"",
+									RelationGetRelationName(attachrel),
+									RelationGetRelationName(rel)),
+							 errdetail("Table \"%s\" contains unique indexes.",
+									   RelationGetRelationName(rel))));
+				index_close(idxRel, AccessShareLock);
+			}
+			goto out;
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/*
@@ -16549,10 +17459,23 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 		 * Ignore indexes in the partitioned table other than partitioned
 		 * indexes.
 		 */
-		if (idxRel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
+		switch ((RelKind) idxRel->rd_rel->relkind)
 		{
-			index_close(idxRel, AccessShareLock);
-			continue;
+			case RELKIND_PARTITIONED_INDEX:
+				break;
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_VIEW:
+			case RELKIND_SEQUENCE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				index_close(idxRel, AccessShareLock);
+				continue;
 		}
 
 		/* construct an indexinfo to compare existing indexes against */
@@ -17089,11 +18012,27 @@ RangeVarCallbackForAttachIndex(const RangeVar *rv, Oid relOid, Oid oldRelOid,
 	if (!HeapTupleIsValid(tuple))
 		return;					/* concurrently dropped, so nothing to do */
 	classform = (Form_pg_class) GETSTRUCT(tuple);
-	if (classform->relkind != RELKIND_PARTITIONED_INDEX &&
-		classform->relkind != RELKIND_INDEX)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-				 errmsg("\"%s\" is not an index", rv->relname)));
+
+	switch ((RelKind) classform->relkind)
+	{
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					 errmsg("\"%s\" is not an index", rv->relname)));
+			break;
+	}
 	ReleaseSysCache(tuple);
 
 	/*

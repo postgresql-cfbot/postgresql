@@ -600,12 +600,27 @@ heapam_relation_set_new_filenode(Relation rel,
 	 */
 	if (persistence == RELPERSISTENCE_UNLOGGED)
 	{
-		Assert(rel->rd_rel->relkind == RELKIND_RELATION ||
-			   rel->rd_rel->relkind == RELKIND_MATVIEW ||
-			   rel->rd_rel->relkind == RELKIND_TOASTVALUE);
-		smgrcreate(srel, INIT_FORKNUM, false);
-		log_smgrcreate(newrnode, INIT_FORKNUM);
-		smgrimmedsync(srel, INIT_FORKNUM);
+		switch ((RelKind) rel->rd_rel->relkind)
+		{
+			case RELKIND_RELATION:
+			case RELKIND_MATVIEW:
+			case RELKIND_TOASTVALUE:
+				smgrcreate(srel, INIT_FORKNUM, false);
+				log_smgrcreate(newrnode, INIT_FORKNUM);
+				smgrimmedsync(srel, INIT_FORKNUM);
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				Assert(false);
+				break;
+		}
 	}
 
 	smgrclose(srel);

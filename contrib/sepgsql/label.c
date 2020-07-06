@@ -763,15 +763,28 @@ exec_object_restorecon(struct selabel_handle *sehnd, Oid catalogId)
 			case RelationRelationId:
 				relForm = (Form_pg_class) GETSTRUCT(tuple);
 
-				if (relForm->relkind == RELKIND_RELATION ||
-					relForm->relkind == RELKIND_PARTITIONED_TABLE)
-					objtype = SELABEL_DB_TABLE;
-				else if (relForm->relkind == RELKIND_SEQUENCE)
-					objtype = SELABEL_DB_SEQUENCE;
-				else if (relForm->relkind == RELKIND_VIEW)
-					objtype = SELABEL_DB_VIEW;
-				else
-					continue;	/* no need to assign security label */
+				switch ((RelKind) relForm->relkind)
+				{
+					case RELKIND_RELATION:
+					case RELKIND_PARTITIONED_TABLE:
+						objtype = SELABEL_DB_TABLE;
+						break;
+					case RELKIND_SEQUENCE:
+						objtype = SELABEL_DB_SEQUENCE;
+						break;
+					case RELKIND_VIEW:
+						objtype = SELABEL_DB_VIEW;
+						break;
+					case RELKIND_PARTITIONED_INDEX:
+					case RELKIND_COMPOSITE_TYPE:
+					case RELKIND_FOREIGN_TABLE:
+					case RELKIND_INDEX:
+					case RELKIND_MATVIEW:
+					case RELKIND_TOASTVALUE:
+					case RELKIND_NULL:
+					default:
+						continue;	/* no need to assign security label */
+				}
 
 				namespace_name = get_namespace_name(relForm->relnamespace);
 				objname = quote_object_name(database_name,
@@ -788,9 +801,23 @@ exec_object_restorecon(struct selabel_handle *sehnd, Oid catalogId)
 			case AttributeRelationId:
 				attForm = (Form_pg_attribute) GETSTRUCT(tuple);
 
-				if (get_rel_relkind(attForm->attrelid) != RELKIND_RELATION &&
-					get_rel_relkind(attForm->attrelid) != RELKIND_PARTITIONED_TABLE)
-					continue;	/* no need to assign security label */
+				switch ((RelKind) get_rel_relkind(attForm->attrelid))
+				{
+					case RELKIND_RELATION:
+					case RELKIND_PARTITIONED_TABLE:
+						break;
+					case RELKIND_PARTITIONED_INDEX:
+					case RELKIND_SEQUENCE:
+					case RELKIND_COMPOSITE_TYPE:
+					case RELKIND_FOREIGN_TABLE:
+					case RELKIND_INDEX:
+					case RELKIND_MATVIEW:
+					case RELKIND_TOASTVALUE:
+					case RELKIND_VIEW:
+					case RELKIND_NULL:
+					default:
+						continue;	/* no need to assign security label */
+				}
 
 				objtype = SELABEL_DB_COLUMN;
 

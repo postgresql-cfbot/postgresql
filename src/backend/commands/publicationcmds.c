@@ -548,33 +548,49 @@ OpenTableList(List *tables)
 		 * children other than its partitions, which need not be explicitly
 		 * added to the publication.
 		 */
-		if (recurse && rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+		switch ((RelKind) rel->rd_rel->relkind)
 		{
-			List	   *children;
-			ListCell   *child;
+			case RELKIND_PARTITIONED_TABLE:
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				if (recurse)
+				{
+					List	   *children;
+					ListCell   *child;
 
-			children = find_all_inheritors(myrelid, ShareUpdateExclusiveLock,
-										   NULL);
+					children = find_all_inheritors(myrelid, ShareUpdateExclusiveLock,
+												   NULL);
 
-			foreach(child, children)
-			{
-				Oid			childrelid = lfirst_oid(child);
+					foreach(child, children)
+					{
+						Oid			childrelid = lfirst_oid(child);
 
-				/* Allow query cancel in case this takes a long time */
-				CHECK_FOR_INTERRUPTS();
+						/* Allow query cancel in case this takes a long time */
+						CHECK_FOR_INTERRUPTS();
 
-				/*
-				 * Skip duplicates if user specified both parent and child
-				 * tables.
-				 */
-				if (list_member_oid(relids, childrelid))
-					continue;
+						/*
+						 * Skip duplicates if user specified both parent and
+						 * child tables.
+						 */
+						if (list_member_oid(relids, childrelid))
+							continue;
 
-				/* find_all_inheritors already got lock */
-				rel = table_open(childrelid, NoLock);
-				rels = lappend(rels, rel);
-				relids = lappend_oid(relids, childrelid);
-			}
+						/* find_all_inheritors already got lock */
+						rel = table_open(childrelid, NoLock);
+						rels = lappend(rels, rel);
+						relids = lappend_oid(relids, childrelid);
+					}
+				}
 		}
 	}
 

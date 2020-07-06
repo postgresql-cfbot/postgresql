@@ -837,14 +837,31 @@ getOwnedSequences_internal(Oid relid, AttrNumber attnum, char deptype)
 		 * must be what we are looking for.  (We need the relkind test because
 		 * indexes can also have auto dependencies on columns.)
 		 */
-		if (deprec->classid == RelationRelationId &&
-			deprec->objsubid == 0 &&
-			deprec->refobjsubid != 0 &&
-			(deprec->deptype == DEPENDENCY_AUTO || deprec->deptype == DEPENDENCY_INTERNAL) &&
-			get_rel_relkind(deprec->objid) == RELKIND_SEQUENCE)
+		switch ((RelKind) get_rel_relkind(deprec->objid))
 		{
-			if (!deptype || deprec->deptype == deptype)
-				result = lappend_oid(result, deprec->objid);
+			case RELKIND_SEQUENCE:
+				if (deprec->classid == RelationRelationId &&
+					deprec->objsubid == 0 &&
+					deprec->refobjsubid != 0 &&
+					(deprec->deptype == DEPENDENCY_AUTO ||
+					 deprec->deptype == DEPENDENCY_INTERNAL) &&
+					(!deptype || deprec->deptype == deptype))
+				{
+					result = lappend_oid(result, deprec->objid);
+				}
+				break;
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				break;
 		}
 	}
 
@@ -940,9 +957,23 @@ get_constraint_index(Oid constraintId)
 			 * This is pure paranoia; there shouldn't be any other relkinds
 			 * dependent on a constraint.
 			 */
-			if (relkind != RELKIND_INDEX &&
-				relkind != RELKIND_PARTITIONED_INDEX)
-				continue;
+			switch ((RelKind) relkind)
+			{
+				case RELKIND_INDEX:
+				case RELKIND_PARTITIONED_INDEX:
+					break;
+				case RELKIND_SEQUENCE:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_MATVIEW:
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_VIEW:
+				case RELKIND_NULL:
+				default:
+					continue;
+			}
 
 			indexId = deprec->objid;
 			break;

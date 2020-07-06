@@ -262,14 +262,27 @@ DefineQueryRewrite(const char *rulename,
 	 * Internal callers can target materialized views, but transformRuleStmt()
 	 * blocks them for users.  Don't mention them in the error message.
 	 */
-	if (event_relation->rd_rel->relkind != RELKIND_RELATION &&
-		event_relation->rd_rel->relkind != RELKIND_MATVIEW &&
-		event_relation->rd_rel->relkind != RELKIND_VIEW &&
-		event_relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table or view",
-						RelationGetRelationName(event_relation))));
+	switch ((RelKind) event_relation->rd_rel->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("\"%s\" is not a table or view",
+							RelationGetRelationName(event_relation))));
+			break;
+	}
 
 	if (!allowSystemTableMods && IsSystemRelation(event_relation))
 		ereport(ERROR,
@@ -421,69 +434,83 @@ DefineQueryRewrite(const char *rulename,
 		 * views is just a kluge to allow dump/reload of views that
 		 * participate in circular dependencies.)
 		 */
-		if (event_relation->rd_rel->relkind != RELKIND_VIEW &&
-			event_relation->rd_rel->relkind != RELKIND_MATVIEW)
+		switch ((RelKind) event_relation->rd_rel->relkind)
 		{
-			TableScanDesc scanDesc;
-			Snapshot	snapshot;
-			TupleTableSlot *slot;
-
-			if (event_relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+			case RELKIND_VIEW:
+			case RELKIND_MATVIEW:
+				break;
+			case RELKIND_PARTITIONED_TABLE:
 				ereport(ERROR,
 						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 						 errmsg("cannot convert partitioned table \"%s\" to a view",
 								RelationGetRelationName(event_relation))));
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				{
+					TableScanDesc scanDesc;
+					Snapshot	snapshot;
+					TupleTableSlot *slot;
 
-			if (event_relation->rd_rel->relispartition)
-				ereport(ERROR,
-						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("cannot convert partition \"%s\" to a view",
-								RelationGetRelationName(event_relation))));
+					if (event_relation->rd_rel->relispartition)
+						ereport(ERROR,
+								(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+								 errmsg("cannot convert partition \"%s\" to a view",
+										RelationGetRelationName(event_relation))));
 
-			snapshot = RegisterSnapshot(GetLatestSnapshot());
-			scanDesc = table_beginscan(event_relation, snapshot, 0, NULL);
-			slot = table_slot_create(event_relation, NULL);
-			if (table_scan_getnextslot(scanDesc, ForwardScanDirection, slot))
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("could not convert table \"%s\" to a view because it is not empty",
-								RelationGetRelationName(event_relation))));
-			ExecDropSingleTupleTableSlot(slot);
-			table_endscan(scanDesc);
-			UnregisterSnapshot(snapshot);
+					snapshot = RegisterSnapshot(GetLatestSnapshot());
+					scanDesc = table_beginscan(event_relation, snapshot, 0, NULL);
+					slot = table_slot_create(event_relation, NULL);
+					if (table_scan_getnextslot(scanDesc, ForwardScanDirection, slot))
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								 errmsg("could not convert table \"%s\" to a view because it is not empty",
+										RelationGetRelationName(event_relation))));
+					ExecDropSingleTupleTableSlot(slot);
+					table_endscan(scanDesc);
+					UnregisterSnapshot(snapshot);
 
-			if (event_relation->rd_rel->relhastriggers)
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("could not convert table \"%s\" to a view because it has triggers",
-								RelationGetRelationName(event_relation)),
-						 errhint("In particular, the table cannot be involved in any foreign key relationships.")));
+					if (event_relation->rd_rel->relhastriggers)
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								 errmsg("could not convert table \"%s\" to a view because it has triggers",
+										RelationGetRelationName(event_relation)),
+								 errhint("In particular, the table cannot be involved in any foreign key relationships.")));
 
-			if (event_relation->rd_rel->relhasindex)
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("could not convert table \"%s\" to a view because it has indexes",
-								RelationGetRelationName(event_relation))));
+					if (event_relation->rd_rel->relhasindex)
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								 errmsg("could not convert table \"%s\" to a view because it has indexes",
+										RelationGetRelationName(event_relation))));
 
-			if (event_relation->rd_rel->relhassubclass)
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("could not convert table \"%s\" to a view because it has child tables",
-								RelationGetRelationName(event_relation))));
+					if (event_relation->rd_rel->relhassubclass)
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								 errmsg("could not convert table \"%s\" to a view because it has child tables",
+										RelationGetRelationName(event_relation))));
 
-			if (event_relation->rd_rel->relrowsecurity)
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("could not convert table \"%s\" to a view because it has row security enabled",
-								RelationGetRelationName(event_relation))));
+					if (event_relation->rd_rel->relrowsecurity)
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								 errmsg("could not convert table \"%s\" to a view because it has row security enabled",
+										RelationGetRelationName(event_relation))));
 
-			if (relation_has_policies(event_relation))
-				ereport(ERROR,
-						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-						 errmsg("could not convert table \"%s\" to a view because it has row security policies",
-								RelationGetRelationName(event_relation))));
+					if (relation_has_policies(event_relation))
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								 errmsg("could not convert table \"%s\" to a view because it has row security policies",
+										RelationGetRelationName(event_relation))));
 
-			RelisBecomingView = true;
+					RelisBecomingView = true;
+				}
+				break;
 		}
 	}
 	else
@@ -920,12 +947,26 @@ RangeVarCallbackForRenameRule(const RangeVar *rv, Oid relid, Oid oldrelid,
 	form = (Form_pg_class) GETSTRUCT(tuple);
 
 	/* only tables and views can have rules */
-	if (form->relkind != RELKIND_RELATION &&
-		form->relkind != RELKIND_VIEW &&
-		form->relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table or view", rv->relname)));
+	switch ((RelKind) form->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("\"%s\" is not a table or view", rv->relname)));
+			break;
+	}
 
 	if (!allowSystemTableMods && IsSystemClass(relid, form))
 		ereport(ERROR,

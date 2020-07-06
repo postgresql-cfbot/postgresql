@@ -97,7 +97,8 @@
  */
 typedef struct
 {
-	const char *class_descr;	/* string describing the catalog, for internal error messages */
+	const char *class_descr;	/* string describing the catalog, for internal
+								 * error messages */
 	Oid			class_oid;		/* oid of catalog */
 	Oid			oid_index_oid;	/* oid of index on system oid column */
 	int			oid_catcache_id;	/* id of catcache on system oid column	*/
@@ -1342,48 +1343,136 @@ get_relation_by_qualified_name(ObjectType objtype, List *object,
 	switch (objtype)
 	{
 		case OBJECT_INDEX:
-			if (relation->rd_rel->relkind != RELKIND_INDEX &&
-				relation->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
-				ereport(ERROR,
-						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("\"%s\" is not an index",
-								RelationGetRelationName(relation))));
+			switch ((RelKind) relation->rd_rel->relkind)
+			{
+				case RELKIND_INDEX:
+				case RELKIND_PARTITIONED_INDEX:
+					break;
+				case RELKIND_SEQUENCE:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_MATVIEW:
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_VIEW:
+				case RELKIND_NULL:
+				default:
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is not an index",
+									RelationGetRelationName(relation))));
+			}
 			break;
 		case OBJECT_SEQUENCE:
-			if (relation->rd_rel->relkind != RELKIND_SEQUENCE)
-				ereport(ERROR,
-						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("\"%s\" is not a sequence",
-								RelationGetRelationName(relation))));
+			switch ((RelKind) relation->rd_rel->relkind)
+			{
+				case RELKIND_SEQUENCE:
+					break;
+				case RELKIND_INDEX:
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_MATVIEW:
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_VIEW:
+				case RELKIND_NULL:
+				default:
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is not a sequence",
+									RelationGetRelationName(relation))));
+			}
 			break;
 		case OBJECT_TABLE:
-			if (relation->rd_rel->relkind != RELKIND_RELATION &&
-				relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-				ereport(ERROR,
-						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("\"%s\" is not a table",
-								RelationGetRelationName(relation))));
+			switch ((RelKind) relation->rd_rel->relkind)
+			{
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+					break;
+				case RELKIND_SEQUENCE:
+				case RELKIND_INDEX:
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_MATVIEW:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_VIEW:
+				case RELKIND_NULL:
+				default:
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is not a table",
+									RelationGetRelationName(relation))));
+			}
 			break;
 		case OBJECT_VIEW:
-			if (relation->rd_rel->relkind != RELKIND_VIEW)
-				ereport(ERROR,
-						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("\"%s\" is not a view",
-								RelationGetRelationName(relation))));
+			switch ((RelKind) relation->rd_rel->relkind)
+			{
+				case RELKIND_VIEW:
+					break;
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_SEQUENCE:
+				case RELKIND_INDEX:
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_MATVIEW:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_NULL:
+				default:
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is not a view",
+									RelationGetRelationName(relation))));
+			}
 			break;
 		case OBJECT_MATVIEW:
-			if (relation->rd_rel->relkind != RELKIND_MATVIEW)
-				ereport(ERROR,
-						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("\"%s\" is not a materialized view",
-								RelationGetRelationName(relation))));
+			switch ((RelKind) relation->rd_rel->relkind)
+			{
+				case RELKIND_MATVIEW:
+					break;
+				case RELKIND_VIEW:
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_SEQUENCE:
+				case RELKIND_INDEX:
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_NULL:
+				default:
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is not a materialized view",
+									RelationGetRelationName(relation))));
+			}
 			break;
 		case OBJECT_FOREIGN_TABLE:
-			if (relation->rd_rel->relkind != RELKIND_FOREIGN_TABLE)
-				ereport(ERROR,
-						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("\"%s\" is not a foreign table",
-								RelationGetRelationName(relation))));
+			switch ((RelKind) relation->rd_rel->relkind)
+			{
+				case RELKIND_FOREIGN_TABLE:
+					break;
+				case RELKIND_MATVIEW:
+				case RELKIND_VIEW:
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_SEQUENCE:
+				case RELKIND_INDEX:
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_NULL:
+				default:
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is not a foreign table",
+									RelationGetRelationName(relation))));
+			}
 			break;
 		default:
 			elog(ERROR, "unrecognized objtype: %d", (int) objtype);
@@ -3795,7 +3884,7 @@ getRelationDescription(StringInfo buffer, Oid relid)
 
 	relname = quote_qualified_identifier(nspname, NameStr(relForm->relname));
 
-	switch (relForm->relkind)
+	switch ((RelKind) relForm->relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_PARTITIONED_TABLE:
@@ -3831,6 +3920,7 @@ getRelationDescription(StringInfo buffer, Oid relid)
 			appendStringInfo(buffer, _("foreign table %s"),
 							 relname);
 			break;
+		case RELKIND_NULL:
 		default:
 			/* shouldn't get here */
 			appendStringInfo(buffer, _("relation %s"),
@@ -4276,7 +4366,7 @@ getRelationTypeDescription(StringInfo buffer, Oid relid, int32 objectSubId)
 		elog(ERROR, "cache lookup failed for relation %u", relid);
 	relForm = (Form_pg_class) GETSTRUCT(relTup);
 
-	switch (relForm->relkind)
+	switch ((RelKind) relForm->relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_PARTITIONED_TABLE:
@@ -4304,6 +4394,7 @@ getRelationTypeDescription(StringInfo buffer, Oid relid, int32 objectSubId)
 		case RELKIND_FOREIGN_TABLE:
 			appendStringInfoString(buffer, "foreign table");
 			break;
+		case RELKIND_NULL:
 		default:
 			/* shouldn't get here */
 			appendStringInfoString(buffer, "relation");
@@ -5451,7 +5542,7 @@ strlist_to_textarray(List *list)
 ObjectType
 get_relkind_objtype(char relkind)
 {
-	switch (relkind)
+	switch ((RelKind) relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_PARTITIONED_TABLE:
@@ -5469,6 +5560,8 @@ get_relkind_objtype(char relkind)
 			return OBJECT_FOREIGN_TABLE;
 		case RELKIND_TOASTVALUE:
 			return OBJECT_TABLE;
+		case RELKIND_NULL:
+		case RELKIND_COMPOSITE_TYPE:
 		default:
 			/* Per above, don't raise an error */
 			return OBJECT_TABLE;

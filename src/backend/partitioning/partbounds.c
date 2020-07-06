@@ -3137,11 +3137,26 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 	 * Scan the default partition and its subpartitions, and check for rows
 	 * that do not satisfy the revised partition constraints.
 	 */
-	if (default_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		all_parts = find_all_inheritors(RelationGetRelid(default_rel),
-										AccessExclusiveLock, NULL);
-	else
-		all_parts = list_make1_oid(RelationGetRelid(default_rel));
+	switch ((RelKind) default_rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			all_parts = find_all_inheritors(RelationGetRelid(default_rel),
+											AccessExclusiveLock, NULL);
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			all_parts = list_make1_oid(RelationGetRelid(default_rel));
+			break;
+	}
 
 	foreach(lc, all_parts)
 	{
@@ -3196,19 +3211,30 @@ check_default_partition_contents(Relation parent, Relation default_rel,
 		 * Only RELKIND_RELATION relations (i.e. leaf partitions) need to be
 		 * scanned.
 		 */
-		if (part_rel->rd_rel->relkind != RELKIND_RELATION)
+		switch ((RelKind) part_rel->rd_rel->relkind)
 		{
-			if (part_rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+			case RELKIND_RELATION:
+				break;
+			case RELKIND_FOREIGN_TABLE:
 				ereport(WARNING,
 						(errcode(ERRCODE_CHECK_VIOLATION),
 						 errmsg("skipped scanning foreign table \"%s\" which is a partition of default partition \"%s\"",
 								RelationGetRelationName(part_rel),
 								RelationGetRelationName(default_rel))));
-
-			if (RelationGetRelid(default_rel) != RelationGetRelid(part_rel))
-				table_close(part_rel, NoLock);
-
-			continue;
+				/* fallthrough */
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				if (RelationGetRelid(default_rel) != RelationGetRelid(part_rel))
+					table_close(part_rel, NoLock);
+				continue;
 		}
 
 		estate = CreateExecutorState();

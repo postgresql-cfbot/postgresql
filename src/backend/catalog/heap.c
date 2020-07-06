@@ -335,7 +335,7 @@ heap_create(const char *relname,
 	*relminmxid = InvalidMultiXactId;
 
 	/* Handle reltablespace for specific relkinds. */
-	switch (relkind)
+	switch ((RelKind) relkind)
 	{
 		case RELKIND_VIEW:
 		case RELKIND_COMPOSITE_TYPE:
@@ -360,6 +360,14 @@ heap_create(const char *relname,
 			 */
 			reltablespace = InvalidOid;
 			break;
+
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
 		default:
 			break;
 	}
@@ -415,21 +423,12 @@ heap_create(const char *relname,
 	{
 		RelationOpenSmgr(rel);
 
-		switch (rel->rd_rel->relkind)
+		switch ((RelKind) rel->rd_rel->relkind)
 		{
-			case RELKIND_VIEW:
-			case RELKIND_COMPOSITE_TYPE:
-			case RELKIND_FOREIGN_TABLE:
-			case RELKIND_PARTITIONED_TABLE:
-			case RELKIND_PARTITIONED_INDEX:
-				Assert(false);
-				break;
-
 			case RELKIND_INDEX:
 			case RELKIND_SEQUENCE:
 				RelationCreateStorage(rel->rd_node, relpersistence);
 				break;
-
 			case RELKIND_RELATION:
 			case RELKIND_TOASTVALUE:
 			case RELKIND_MATVIEW:
@@ -437,6 +436,14 @@ heap_create(const char *relname,
 												relpersistence,
 												relfrozenxid, relminmxid);
 				break;
+			case RELKIND_VIEW:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_NULL:
+			default:
+				Assert(false);
 		}
 	}
 
@@ -506,18 +513,32 @@ CheckAttributeNamesTypes(TupleDesc tupdesc, char relkind,
 	 * Skip this for a view or type relation, since those don't have system
 	 * attributes.
 	 */
-	if (relkind != RELKIND_VIEW && relkind != RELKIND_COMPOSITE_TYPE)
+	switch ((RelKind) relkind)
 	{
-		for (i = 0; i < natts; i++)
-		{
-			Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
+		case RELKIND_VIEW:
+		case RELKIND_COMPOSITE_TYPE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			for (i = 0; i < natts; i++)
+			{
+				Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
 
-			if (SystemAttributeByName(NameStr(attr->attname)) != NULL)
-				ereport(ERROR,
-						(errcode(ERRCODE_DUPLICATE_COLUMN),
-						 errmsg("column name \"%s\" conflicts with a system column name",
-								NameStr(attr->attname))));
-		}
+				if (SystemAttributeByName(NameStr(attr->attname)) != NULL)
+					ereport(ERROR,
+							(errcode(ERRCODE_DUPLICATE_COLUMN),
+							 errmsg("column name \"%s\" conflicts with a system column name",
+									NameStr(attr->attname))));
+			}
+			break;
 	}
 
 	/*
@@ -836,19 +857,33 @@ AddNewAttributeTuples(Oid new_rel_oid,
 	 * all for a view or type relation.  We don't bother with making datatype
 	 * dependencies here, since presumably all these types are pinned.
 	 */
-	if (relkind != RELKIND_VIEW && relkind != RELKIND_COMPOSITE_TYPE)
+	switch ((RelKind) relkind)
 	{
-		for (i = 0; i < (int) lengthof(SysAtt); i++)
-		{
-			FormData_pg_attribute attStruct;
+		case RELKIND_VIEW:
+		case RELKIND_COMPOSITE_TYPE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			for (i = 0; i < (int) lengthof(SysAtt); i++)
+			{
+				FormData_pg_attribute attStruct;
 
-			memcpy(&attStruct, SysAtt[i], sizeof(FormData_pg_attribute));
+				memcpy(&attStruct, SysAtt[i], sizeof(FormData_pg_attribute));
 
-			/* Fill in the correct relation OID in the copied tuple */
-			attStruct.attrelid = new_rel_oid;
+				/* Fill in the correct relation OID in the copied tuple */
+				attStruct.attrelid = new_rel_oid;
 
-			InsertPgAttributeTuple(rel, &attStruct, (Datum) 0, indstate);
-		}
+				InsertPgAttributeTuple(rel, &attStruct, (Datum) 0, indstate);
+			}
+			break;
 	}
 
 	/*
@@ -966,7 +1001,7 @@ AddNewRelationTuple(Relation pg_class_desc,
 	 */
 	new_rel_reltup = new_rel_desc->rd_rel;
 
-	switch (relkind)
+	switch ((RelKind) relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_MATVIEW:
@@ -983,6 +1018,12 @@ AddNewRelationTuple(Relation pg_class_desc,
 			new_rel_reltup->reltuples = 1;
 			new_rel_reltup->relallvisible = 0;
 			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
 		default:
 			/* Views, etc, have no disk storage */
 			new_rel_reltup->relpages = 0;
@@ -1215,7 +1256,7 @@ heap_create_with_catalog(const char *relname,
 	 */
 	if (use_user_acl)
 	{
-		switch (relkind)
+		switch ((RelKind) relkind)
 		{
 			case RELKIND_RELATION:
 			case RELKIND_VIEW:
@@ -1229,6 +1270,11 @@ heap_create_with_catalog(const char *relname,
 				relacl = get_user_default_acl(OBJECT_SEQUENCE, ownerid,
 											  relnamespace);
 				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
 			default:
 				relacl = NULL;
 				break;
@@ -1267,13 +1313,27 @@ heap_create_with_catalog(const char *relname,
 	 * during initdb). We do not create them where the use of a relation as
 	 * such is an implementation detail: toast tables, sequences and indexes.
 	 */
-	if (IsUnderPostmaster && (relkind == RELKIND_RELATION ||
-							  relkind == RELKIND_VIEW ||
-							  relkind == RELKIND_MATVIEW ||
-							  relkind == RELKIND_FOREIGN_TABLE ||
-							  relkind == RELKIND_COMPOSITE_TYPE ||
-							  relkind == RELKIND_PARTITIONED_TABLE))
-		new_array_oid = AssignTypeArrayOid();
+	if (IsUnderPostmaster)
+	{
+		switch ((RelKind) relkind)
+		{
+			case RELKIND_RELATION:
+			case RELKIND_VIEW:
+			case RELKIND_MATVIEW:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_PARTITIONED_TABLE:
+				new_array_oid = AssignTypeArrayOid();
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_INDEX:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				break;
+		}
+	}
 
 	/*
 	 * Since defining a relation also defines a complex type, we add a new
@@ -1379,51 +1439,67 @@ heap_create_with_catalog(const char *relname,
 	 * Also, skip this in bootstrap mode, since we don't make dependencies
 	 * while bootstrapping.
 	 */
-	if (relkind != RELKIND_COMPOSITE_TYPE &&
-		relkind != RELKIND_TOASTVALUE &&
-		!IsBootstrapProcessingMode())
+	switch ((RelKind) relkind)
 	{
-		ObjectAddress myself,
-					referenced;
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_TOASTVALUE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			if (!IsBootstrapProcessingMode())
+			{
+				ObjectAddress myself,
+							referenced;
 
-		myself.classId = RelationRelationId;
-		myself.objectId = relid;
-		myself.objectSubId = 0;
+				myself.classId = RelationRelationId;
+				myself.objectId = relid;
+				myself.objectSubId = 0;
 
-		referenced.classId = NamespaceRelationId;
-		referenced.objectId = relnamespace;
-		referenced.objectSubId = 0;
-		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+				referenced.classId = NamespaceRelationId;
+				referenced.objectId = relnamespace;
+				referenced.objectSubId = 0;
+				recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
-		recordDependencyOnOwner(RelationRelationId, relid, ownerid);
+				recordDependencyOnOwner(RelationRelationId, relid, ownerid);
 
-		recordDependencyOnNewAcl(RelationRelationId, relid, 0, ownerid, relacl);
+				recordDependencyOnNewAcl(RelationRelationId, relid, 0, ownerid, relacl);
 
-		recordDependencyOnCurrentExtension(&myself, false);
+				recordDependencyOnCurrentExtension(&myself, false);
 
-		if (reloftypeid)
-		{
-			referenced.classId = TypeRelationId;
-			referenced.objectId = reloftypeid;
-			referenced.objectSubId = 0;
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-		}
+				if (reloftypeid)
+				{
+					referenced.classId = TypeRelationId;
+					referenced.objectId = reloftypeid;
+					referenced.objectSubId = 0;
+					recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+				}
 
-		/*
-		 * Make a dependency link to force the relation to be deleted if its
-		 * access method is. Do this only for relation and materialized views.
-		 *
-		 * No need to add an explicit dependency for the toast table, as the
-		 * main table depends on it.
-		 */
-		if (relkind == RELKIND_RELATION ||
-			relkind == RELKIND_MATVIEW)
-		{
-			referenced.classId = AccessMethodRelationId;
-			referenced.objectId = accessmtd;
-			referenced.objectSubId = 0;
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-		}
+				/*
+				 * Make a dependency link to force the relation to be deleted
+				 * if its access method is. Do this only for relation and
+				 * materialized views.
+				 *
+				 * No need to add an explicit dependency for the toast table,
+				 * as the main table depends on it.
+				 */
+				if (relkind == RELKIND_RELATION ||
+					relkind == RELKIND_MATVIEW)
+				{
+					referenced.classId = AccessMethodRelationId;
+					referenced.objectId = accessmtd;
+					referenced.objectSubId = 0;
+					recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+				}
+			}
+			break;
 	}
 
 	/* Post creation hook for new relation */
@@ -2382,12 +2458,28 @@ StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 	 * Partitioned tables do not contain any rows themselves, so a NO INHERIT
 	 * constraint makes no sense.
 	 */
-	if (is_no_inherit &&
-		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-				 errmsg("cannot add NO INHERIT constraint to partitioned table \"%s\"",
-						RelationGetRelationName(rel))));
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			if (is_no_inherit)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						 errmsg("cannot add NO INHERIT constraint to partitioned table \"%s\"",
+								RelationGetRelationName(rel))));
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	/*
 	 * Create the Check Constraint
@@ -3253,8 +3345,23 @@ heap_truncate_one_rel(Relation rel)
 	 * Truncate the relation.  Partitioned tables have no storage, so there is
 	 * nothing to do for them here.
 	 */
-	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		return;
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			return;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	/* Truncate the underlying relation */
 	table_relation_nontransactional_truncate(rel);
@@ -3307,9 +3414,26 @@ heap_truncate_check_FKs(List *relations, bool tempTables)
 	{
 		Relation	rel = lfirst(cell);
 
-		if (rel->rd_rel->relhastriggers ||
-			rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			oids = lappend_oid(oids, RelationGetRelid(rel));
+		switch ((RelKind) rel->rd_rel->relkind)
+		{
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				if (!rel->rd_rel->relhastriggers)
+					break;
+				/* fallthrough */
+			case RELKIND_PARTITIONED_TABLE:
+				oids = lappend_oid(oids, RelationGetRelid(rel));
+				break;
+		}
 	}
 
 	/*
@@ -3532,7 +3656,24 @@ StorePartitionKey(Relation rel,
 	ObjectAddress myself;
 	ObjectAddress referenced;
 
-	Assert(rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			Assert(false);
+			break;
+	}
 
 	/* Copy the partition attribute numbers, opclass OIDs into arrays */
 	partattrs_vec = buildint2vector(partattrs, partnatts);

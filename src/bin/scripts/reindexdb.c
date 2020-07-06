@@ -621,8 +621,8 @@ get_parallel_object_list(PGconn *conn, ReindexType type,
 							  " ON c.relnamespace = ns.oid\n"
 							  " WHERE ns.nspname != 'pg_catalog'\n"
 							  "   AND c.relkind IN ("
-							  CppAsString2(RELKIND_RELATION) ", "
-							  CppAsString2(RELKIND_MATVIEW) ")\n"
+							  RelKindAsString(RELKIND_RELATION) ", "
+							  RelKindAsString(RELKIND_MATVIEW) ")\n"
 							  " ORDER BY c.relpages DESC;");
 			break;
 
@@ -643,8 +643,8 @@ get_parallel_object_list(PGconn *conn, ReindexType type,
 								  " JOIN pg_catalog.pg_namespace ns"
 								  " ON c.relnamespace = ns.oid\n"
 								  " WHERE c.relkind IN ("
-								  CppAsString2(RELKIND_RELATION) ", "
-								  CppAsString2(RELKIND_MATVIEW) ")\n"
+								  RelKindAsString(RELKIND_RELATION) ", "
+								  RelKindAsString(RELKIND_MATVIEW) ")\n"
 								  " AND ns.nspname IN (");
 
 				for (cell = user_list->head; cell; cell = cell->next)

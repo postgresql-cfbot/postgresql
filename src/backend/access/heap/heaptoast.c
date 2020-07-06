@@ -50,8 +50,24 @@ heap_toast_delete(Relation rel, HeapTuple oldtup, bool is_speculative)
 	 * We should only ever be called for tuples of plain relations or
 	 * materialized views --- recursing on a toast rel is bad news.
 	 */
-	Assert(rel->rd_rel->relkind == RELKIND_RELATION ||
-		   rel->rd_rel->relkind == RELKIND_MATVIEW);
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			Assert(false);
+			break;
+	}
 
 	/*
 	 * Get the tuple descriptor and break down the tuple into fields.
@@ -122,8 +138,24 @@ heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 	 * We should only ever be called for tuples of plain relations or
 	 * materialized views --- recursing on a toast rel is bad news.
 	 */
-	Assert(rel->rd_rel->relkind == RELKIND_RELATION ||
-		   rel->rd_rel->relkind == RELKIND_MATVIEW);
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			Assert(false);
+			break;
+	}
 
 	/*
 	 * Get the tuple descriptor and break down the tuple(s) into fields.

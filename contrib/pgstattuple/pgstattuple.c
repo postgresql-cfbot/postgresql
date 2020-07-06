@@ -252,7 +252,7 @@ pgstat_relation(Relation rel, FunctionCallInfo fcinfo)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot access temporary tables of other sessions")));
 
-	switch (rel->rd_rel->relkind)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_MATVIEW:
@@ -300,6 +300,7 @@ pgstat_relation(Relation rel, FunctionCallInfo fcinfo)
 		case RELKIND_PARTITIONED_INDEX:
 			err = "partitioned index";
 			break;
+		case RELKIND_NULL:
 		default:
 			err = "unknown";
 			break;

@@ -90,16 +90,27 @@ CommentObject(CommentStmt *stmt)
 			 * versions, so dumping per-column comments could create reload
 			 * failures.
 			 */
-			if (relation->rd_rel->relkind != RELKIND_RELATION &&
-				relation->rd_rel->relkind != RELKIND_VIEW &&
-				relation->rd_rel->relkind != RELKIND_MATVIEW &&
-				relation->rd_rel->relkind != RELKIND_COMPOSITE_TYPE &&
-				relation->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
-				relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-				ereport(ERROR,
-						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("\"%s\" is not a table, view, materialized view, composite type, or foreign table",
-								RelationGetRelationName(relation))));
+			switch ((RelKind) relation->rd_rel->relkind)
+			{
+				case RELKIND_RELATION:
+				case RELKIND_VIEW:
+				case RELKIND_MATVIEW:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_PARTITIONED_TABLE:
+					break;
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_SEQUENCE:
+				case RELKIND_INDEX:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_NULL:
+				default:
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is not a table, view, materialized view, composite type, or foreign table",
+									RelationGetRelationName(relation))));
+					break;
+			}
 			break;
 		default:
 			break;

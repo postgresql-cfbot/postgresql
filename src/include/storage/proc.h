@@ -81,7 +81,7 @@ typedef enum
 	PROC_WAIT_STATUS_OK,
 	PROC_WAIT_STATUS_WAITING,
 	PROC_WAIT_STATUS_ERROR,
-} ProcWaitStatus;
+}			ProcWaitStatus;
 
 /*
  * Each backend has a PGPROC struct in shared memory.  There is also a list of

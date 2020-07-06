@@ -758,13 +758,25 @@ GetHashPageStats(Page page, HashIndexStat *stats)
 static void
 check_relation_relkind(Relation rel)
 {
-	if (rel->rd_rel->relkind != RELKIND_RELATION &&
-		rel->rd_rel->relkind != RELKIND_INDEX &&
-		rel->rd_rel->relkind != RELKIND_MATVIEW &&
-		rel->rd_rel->relkind != RELKIND_SEQUENCE &&
-		rel->rd_rel->relkind != RELKIND_TOASTVALUE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table, index, materialized view, sequence, or TOAST table",
-						RelationGetRelationName(rel))));
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("\"%s\" is not a table, index, materialized view, sequence, or TOAST table",
+							RelationGetRelationName(rel))));
+			break;
+	}
 }

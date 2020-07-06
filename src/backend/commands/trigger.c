@@ -194,106 +194,122 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	 * Triggers must be on tables or views, and there are additional
 	 * relation-type-specific restrictions.
 	 */
-	if (rel->rd_rel->relkind == RELKIND_RELATION)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		/* Tables can't have INSTEAD OF triggers */
-		if (stmt->timing != TRIGGER_TYPE_BEFORE &&
-			stmt->timing != TRIGGER_TYPE_AFTER)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is a table",
-							RelationGetRelationName(rel)),
-					 errdetail("Tables cannot have INSTEAD OF triggers.")));
-	}
-	else if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-	{
-		/* Partitioned tables can't have INSTEAD OF triggers */
-		if (stmt->timing != TRIGGER_TYPE_BEFORE &&
-			stmt->timing != TRIGGER_TYPE_AFTER)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is a table",
-							RelationGetRelationName(rel)),
-					 errdetail("Tables cannot have INSTEAD OF triggers.")));
+		case RELKIND_RELATION:
+			{
+				/* Tables can't have INSTEAD OF triggers */
+				if (stmt->timing != TRIGGER_TYPE_BEFORE &&
+					stmt->timing != TRIGGER_TYPE_AFTER)
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is a table",
+									RelationGetRelationName(rel)),
+							 errdetail("Tables cannot have INSTEAD OF triggers.")));
+			}
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+			{
+				/* Partitioned tables can't have INSTEAD OF triggers */
+				if (stmt->timing != TRIGGER_TYPE_BEFORE &&
+					stmt->timing != TRIGGER_TYPE_AFTER)
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is a table",
+									RelationGetRelationName(rel)),
+							 errdetail("Tables cannot have INSTEAD OF triggers.")));
 
-		/*
-		 * FOR EACH ROW triggers have further restrictions
-		 */
-		if (stmt->row)
-		{
-			/*
-			 * Disallow use of transition tables.
-			 *
-			 * Note that we have another restriction about transition tables
-			 * in partitions; search for 'has_superclass' below for an
-			 * explanation.  The check here is just to protect from the fact
-			 * that if we allowed it here, the creation would succeed for a
-			 * partitioned table with no partitions, but would be blocked by
-			 * the other restriction when the first partition was created,
-			 * which is very unfriendly behavior.
-			 */
-			if (stmt->transitionRels != NIL)
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("\"%s\" is a partitioned table",
-								RelationGetRelationName(rel)),
-						 errdetail("Triggers on partitioned tables cannot have transition tables.")));
-		}
-	}
-	else if (rel->rd_rel->relkind == RELKIND_VIEW)
-	{
-		/*
-		 * Views can have INSTEAD OF triggers (which we check below are
-		 * row-level), or statement-level BEFORE/AFTER triggers.
-		 */
-		if (stmt->timing != TRIGGER_TYPE_INSTEAD && stmt->row)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is a view",
-							RelationGetRelationName(rel)),
-					 errdetail("Views cannot have row-level BEFORE or AFTER triggers.")));
-		/* Disallow TRUNCATE triggers on VIEWs */
-		if (TRIGGER_FOR_TRUNCATE(stmt->events))
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is a view",
-							RelationGetRelationName(rel)),
-					 errdetail("Views cannot have TRUNCATE triggers.")));
-	}
-	else if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
-	{
-		if (stmt->timing != TRIGGER_TYPE_BEFORE &&
-			stmt->timing != TRIGGER_TYPE_AFTER)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is a foreign table",
-							RelationGetRelationName(rel)),
-					 errdetail("Foreign tables cannot have INSTEAD OF triggers.")));
+				/*
+				 * FOR EACH ROW triggers have further restrictions
+				 */
+				if (stmt->row)
+				{
+					/*
+					 * Disallow use of transition tables.
+					 *
+					 * Note that we have another restriction about transition
+					 * tables in partitions; search for 'has_superclass' below
+					 * for an explanation.  The check here is just to protect
+					 * from the fact that if we allowed it here, the creation
+					 * would succeed for a partitioned table with no
+					 * partitions, but would be blocked by the other
+					 * restriction when the first partition was created, which
+					 * is very unfriendly behavior.
+					 */
+					if (stmt->transitionRels != NIL)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("\"%s\" is a partitioned table",
+										RelationGetRelationName(rel)),
+								 errdetail("Triggers on partitioned tables cannot have transition tables.")));
+				}
+			}
+			break;
+		case RELKIND_VIEW:
+			{
+				/*
+				 * Views can have INSTEAD OF triggers (which we check below
+				 * are row-level), or statement-level BEFORE/AFTER triggers.
+				 */
+				if (stmt->timing != TRIGGER_TYPE_INSTEAD && stmt->row)
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is a view",
+									RelationGetRelationName(rel)),
+							 errdetail("Views cannot have row-level BEFORE or AFTER triggers.")));
+				/* Disallow TRUNCATE triggers on VIEWs */
+				if (TRIGGER_FOR_TRUNCATE(stmt->events))
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is a view",
+									RelationGetRelationName(rel)),
+							 errdetail("Views cannot have TRUNCATE triggers.")));
+			}
+			break;
+		case RELKIND_FOREIGN_TABLE:
+			{
+				if (stmt->timing != TRIGGER_TYPE_BEFORE &&
+					stmt->timing != TRIGGER_TYPE_AFTER)
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is a foreign table",
+									RelationGetRelationName(rel)),
+							 errdetail("Foreign tables cannot have INSTEAD OF triggers.")));
 
-		if (TRIGGER_FOR_TRUNCATE(stmt->events))
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is a foreign table",
-							RelationGetRelationName(rel)),
-					 errdetail("Foreign tables cannot have TRUNCATE triggers.")));
+				if (TRIGGER_FOR_TRUNCATE(stmt->events))
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is a foreign table",
+									RelationGetRelationName(rel)),
+							 errdetail("Foreign tables cannot have TRUNCATE triggers.")));
 
-		/*
-		 * We disallow constraint triggers to protect the assumption that
-		 * triggers on FKs can't be deferred.  See notes with AfterTriggers
-		 * data structures, below.
-		 */
-		if (stmt->isconstraint)
+				/*
+				 * We disallow constraint triggers to protect the assumption
+				 * that triggers on FKs can't be deferred.  See notes with
+				 * AfterTriggers data structures, below.
+				 */
+				if (stmt->isconstraint)
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is a foreign table",
+									RelationGetRelationName(rel)),
+							 errdetail("Foreign tables cannot have constraint triggers.")));
+			}
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("\"%s\" is a foreign table",
-							RelationGetRelationName(rel)),
-					 errdetail("Foreign tables cannot have constraint triggers.")));
+					 errmsg("\"%s\" is not a table or view",
+							RelationGetRelationName(rel))));
+			break;
 	}
-	else
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table or view",
-						RelationGetRelationName(rel))));
 
 	if (!allowSystemTableMods && IsSystemRelation(rel))
 		ereport(ERROR,
@@ -345,8 +361,26 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	 *
 	 * For that, we'd better hold lock on all of them ahead of time.
 	 */
-	partition_recurse = !isInternal && stmt->row &&
-		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE;
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			partition_recurse = !isInternal && stmt->row;
+			break;
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			partition_recurse = false;
+			break;
+	}
+
 	if (partition_recurse)
 		list_free(find_all_inheritors(RelationGetRelid(rel),
 									  ShareRowExclusiveLock, NULL));
@@ -416,19 +450,34 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 			 * adjustments will be needed below.
 			 */
 
-			if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
-				ereport(ERROR,
-						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("\"%s\" is a foreign table",
-								RelationGetRelationName(rel)),
-						 errdetail("Triggers on foreign tables cannot have transition tables.")));
-
-			if (rel->rd_rel->relkind == RELKIND_VIEW)
-				ereport(ERROR,
-						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("\"%s\" is a view",
-								RelationGetRelationName(rel)),
-						 errdetail("Triggers on views cannot have transition tables.")));
+			switch ((RelKind) rel->rd_rel->relkind)
+			{
+				case RELKIND_FOREIGN_TABLE:
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is a foreign table",
+									RelationGetRelationName(rel)),
+							 errdetail("Triggers on foreign tables cannot have transition tables.")));
+					break;
+				case RELKIND_VIEW:
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("\"%s\" is a view",
+									RelationGetRelationName(rel)),
+							 errdetail("Triggers on views cannot have transition tables.")));
+					break;
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_SEQUENCE:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_INDEX:
+				case RELKIND_MATVIEW:
+				case RELKIND_PARTITIONED_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_NULL:
+				default:
+					break;
+			}
 
 			/*
 			 * We currently don't allow row-level triggers with transition
@@ -1191,14 +1240,27 @@ RemoveTriggerById(Oid trigOid)
 
 	rel = table_open(relid, AccessExclusiveLock);
 
-	if (rel->rd_rel->relkind != RELKIND_RELATION &&
-		rel->rd_rel->relkind != RELKIND_VIEW &&
-		rel->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
-		rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table, view, or foreign table",
-						RelationGetRelationName(rel))));
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("\"%s\" is not a table, view, or foreign table",
+							RelationGetRelationName(rel))));
+			break;
+	}
 
 	if (!allowSystemTableMods && IsSystemRelation(rel))
 		ereport(ERROR,
@@ -1298,13 +1360,27 @@ RangeVarCallbackForRenameTrigger(const RangeVar *rv, Oid relid, Oid oldrelid,
 	form = (Form_pg_class) GETSTRUCT(tuple);
 
 	/* only tables and views can have triggers */
-	if (form->relkind != RELKIND_RELATION && form->relkind != RELKIND_VIEW &&
-		form->relkind != RELKIND_FOREIGN_TABLE &&
-		form->relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table, view, or foreign table",
-						rv->relname)));
+	switch ((RelKind) form->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("\"%s\" is not a table, view, or foreign table",
+							rv->relname)));
+			break;
+	}
 
 	/* you must own the table to rename one of its triggers */
 	if (!pg_class_ownercheck(relid, GetUserId()))
@@ -1534,21 +1610,37 @@ EnableDisableTrigger(Relation rel, const char *tgname,
 			 * When altering FOR EACH ROW triggers on a partitioned table, do
 			 * the same on the partitions as well.
 			 */
-			if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
-				(TRIGGER_FOR_ROW(oldtrig->tgtype)))
+			switch ((RelKind) rel->rd_rel->relkind)
 			{
-				PartitionDesc partdesc = RelationGetPartitionDesc(rel);
-				int			i;
+				case RELKIND_PARTITIONED_TABLE:
+					if (TRIGGER_FOR_ROW(oldtrig->tgtype))
+					{
+						PartitionDesc partdesc = RelationGetPartitionDesc(rel);
+						int			i;
 
-				for (i = 0; i < partdesc->nparts; i++)
-				{
-					Relation	part;
+						for (i = 0; i < partdesc->nparts; i++)
+						{
+							Relation	part;
 
-					part = relation_open(partdesc->oids[i], lockmode);
-					EnableDisableTrigger(part, NameStr(oldtrig->tgname),
-										 fires_when, skip_system, lockmode);
-					table_close(part, NoLock);	/* keep lock till commit */
-				}
+							part = relation_open(partdesc->oids[i], lockmode);
+							EnableDisableTrigger(part, NameStr(oldtrig->tgname),
+												 fires_when, skip_system, lockmode);
+							table_close(part, NoLock);	/* keep lock till commit */
+						}
+					}
+					break;
+				case RELKIND_FOREIGN_TABLE:
+				case RELKIND_RELATION:
+				case RELKIND_COMPOSITE_TYPE:
+				case RELKIND_INDEX:
+				case RELKIND_PARTITIONED_INDEX:
+				case RELKIND_MATVIEW:
+				case RELKIND_VIEW:
+				case RELKIND_SEQUENCE:
+				case RELKIND_TOASTVALUE:
+				case RELKIND_NULL:
+				default:
+					break;
 			}
 
 			changed = true;
@@ -4167,12 +4259,26 @@ afterTriggerInvokeEvents(AfterTriggerEventList *events,
 						ExecDropSingleTupleTableSlot(slot2);
 						slot1 = slot2 = NULL;
 					}
-					if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+					switch ((RelKind) rel->rd_rel->relkind)
 					{
-						slot1 = MakeSingleTupleTableSlot(rel->rd_att,
-														 &TTSOpsMinimalTuple);
-						slot2 = MakeSingleTupleTableSlot(rel->rd_att,
-														 &TTSOpsMinimalTuple);
+						case RELKIND_FOREIGN_TABLE:
+							slot1 = MakeSingleTupleTableSlot(rel->rd_att,
+															 &TTSOpsMinimalTuple);
+							slot2 = MakeSingleTupleTableSlot(rel->rd_att,
+															 &TTSOpsMinimalTuple);
+							break;
+						case RELKIND_PARTITIONED_TABLE:
+						case RELKIND_RELATION:
+						case RELKIND_COMPOSITE_TYPE:
+						case RELKIND_INDEX:
+						case RELKIND_PARTITIONED_INDEX:
+						case RELKIND_MATVIEW:
+						case RELKIND_VIEW:
+						case RELKIND_SEQUENCE:
+						case RELKIND_TOASTVALUE:
+						case RELKIND_NULL:
+						default:
+							break;
 					}
 					if (trigdesc == NULL)	/* should not happen */
 						elog(ERROR, "relation %u has no triggers",
@@ -5566,9 +5672,27 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 			break;
 	}
 
-	if (!(relkind == RELKIND_FOREIGN_TABLE && row_trigger))
-		new_event.ate_flags = (row_trigger && event == TRIGGER_EVENT_UPDATE) ?
-			AFTER_TRIGGER_2CTID : AFTER_TRIGGER_1CTID;
+	switch ((RelKind) relkind)
+	{
+		case RELKIND_FOREIGN_TABLE:
+			if (row_trigger)
+				break;
+			/* fallthrough */
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_VIEW:
+		case RELKIND_SEQUENCE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			new_event.ate_flags = (row_trigger && event == TRIGGER_EVENT_UPDATE) ?
+				AFTER_TRIGGER_2CTID : AFTER_TRIGGER_1CTID;
+			break;
+	}
 	/* else, we'll initialize ate_flags for each trigger */
 
 	tgtype_level = (row_trigger ? TRIGGER_TYPE_ROW : TRIGGER_TYPE_STATEMENT);
@@ -5586,16 +5710,33 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 							modifiedCols, oldslot, newslot))
 			continue;
 
-		if (relkind == RELKIND_FOREIGN_TABLE && row_trigger)
+		switch ((RelKind) relkind)
 		{
-			if (fdw_tuplestore == NULL)
-			{
-				fdw_tuplestore = GetCurrentFDWTuplestore();
-				new_event.ate_flags = AFTER_TRIGGER_FDW_FETCH;
-			}
-			else
-				/* subsequent event for the same tuple */
-				new_event.ate_flags = AFTER_TRIGGER_FDW_REUSE;
+			case RELKIND_FOREIGN_TABLE:
+				if (row_trigger)
+				{
+					if (fdw_tuplestore == NULL)
+					{
+						fdw_tuplestore = GetCurrentFDWTuplestore();
+						new_event.ate_flags = AFTER_TRIGGER_FDW_FETCH;
+					}
+					else
+						/* subsequent event for the same tuple */
+						new_event.ate_flags = AFTER_TRIGGER_FDW_REUSE;
+				}
+				break;
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_RELATION:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_VIEW:
+			case RELKIND_SEQUENCE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				break;
 		}
 
 		/*

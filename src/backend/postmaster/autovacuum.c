@@ -2058,9 +2058,23 @@ do_autovacuum(void)
 		bool		doanalyze;
 		bool		wraparound;
 
-		if (classForm->relkind != RELKIND_RELATION &&
-			classForm->relkind != RELKIND_MATVIEW)
-			continue;
+		switch ((RelKind) classForm->relkind)
+		{
+			case RELKIND_RELATION:
+			case RELKIND_MATVIEW:
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				continue;
+		}
 
 		relid = classForm->oid;
 
@@ -2720,9 +2734,24 @@ extract_autovac_opts(HeapTuple tup, TupleDesc pg_class_desc)
 	bytea	   *relopts;
 	AutoVacOpts *av;
 
-	Assert(((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_RELATION ||
-		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_MATVIEW ||
-		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_TOASTVALUE);
+	switch ((RelKind) ((Form_pg_class) GETSTRUCT(tup))->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_TOASTVALUE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			Assert(false);
+			break;
+	}
 
 	relopts = extractRelOptions(tup, pg_class_desc, NULL);
 	if (relopts == NULL)
@@ -2800,16 +2829,33 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	 * main table reloptions if the toast table itself doesn't have.
 	 */
 	avopts = extract_autovac_opts(classTup, pg_class_desc);
-	if (classForm->relkind == RELKIND_TOASTVALUE &&
-		avopts == NULL && table_toast_map != NULL)
+	switch ((RelKind) classForm->relkind)
 	{
-		av_relation *hentry;
-		bool		found;
+		case RELKIND_TOASTVALUE:
+			if (avopts == NULL && table_toast_map != NULL)
+			{
+				av_relation *hentry;
+				bool		found;
 
-		hentry = hash_search(table_toast_map, &relid, HASH_FIND, &found);
-		if (found && hentry->ar_hasrelopts)
-			avopts = &hentry->ar_reloptions;
+				hentry = hash_search(table_toast_map, &relid, HASH_FIND, &found);
+				if (found && hentry->ar_hasrelopts)
+					avopts = &hentry->ar_reloptions;
+			}
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
+
 
 	/* fetch the pgstat table entry */
 	tabentry = get_pgstat_tabentry_relid(relid, classForm->relisshared,
@@ -2820,8 +2866,24 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 							  &dovacuum, &doanalyze, &wraparound);
 
 	/* ignore ANALYZE for toast tables */
-	if (classForm->relkind == RELKIND_TOASTVALUE)
-		doanalyze = false;
+	switch ((RelKind) classForm->relkind)
+	{
+		case RELKIND_TOASTVALUE:
+			doanalyze = false;
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
 
 	/* OK, it needs something done */
 	if (doanalyze || dovacuum)

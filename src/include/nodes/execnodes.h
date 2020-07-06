@@ -2110,7 +2110,7 @@ typedef struct AggregateInstrumentation
 	Size		hash_mem_peak;	/* peak hash table memory usage */
 	uint64		hash_disk_used; /* kB of disk space used */
 	int			hash_batches_used;	/* batches used during entire execution */
-} AggregateInstrumentation;
+}			AggregateInstrumentation;
 
 /* ----------------
  *	 Shared memory container for per-worker aggregate information
@@ -2120,7 +2120,7 @@ typedef struct SharedAggInfo
 {
 	int			num_workers;
 	AggregateInstrumentation sinstrument[FLEXIBLE_ARRAY_MEMBER];
-} SharedAggInfo;
+}			SharedAggInfo;
 
 /* ---------------------
  *	AggState information

@@ -734,7 +734,7 @@ describeTypes(const char *pattern, bool verbose, bool showSystem)
 	 * composite types
 	 */
 	appendPQExpBufferStr(&buf, "WHERE (t.typrelid = 0 ");
-	appendPQExpBufferStr(&buf, "OR (SELECT c.relkind = " CppAsString2(RELKIND_COMPOSITE_TYPE)
+	appendPQExpBufferStr(&buf, "OR (SELECT c.relkind = " RelKindAsString(RELKIND_COMPOSITE_TYPE)
 						 " FROM pg_catalog.pg_class c "
 						 "WHERE c.oid = t.typrelid))\n");
 
@@ -943,12 +943,12 @@ permissionsList(const char *pattern)
 					  "SELECT n.nspname as \"%s\",\n"
 					  "  c.relname as \"%s\",\n"
 					  "  CASE c.relkind"
-					  " WHEN " CppAsString2(RELKIND_RELATION) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_VIEW) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_MATVIEW) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_SEQUENCE) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_FOREIGN_TABLE) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_PARTITIONED_TABLE) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_RELATION) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_VIEW) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_MATVIEW) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_SEQUENCE) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_FOREIGN_TABLE) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_PARTITIONED_TABLE) " THEN '%s'"
 					  " END as \"%s\",\n"
 					  "  ",
 					  gettext_noop("Schema"),
@@ -1040,12 +1040,12 @@ permissionsList(const char *pattern)
 	appendPQExpBufferStr(&buf, "\nFROM pg_catalog.pg_class c\n"
 						 "     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\n"
 						 "WHERE c.relkind IN ("
-						 CppAsString2(RELKIND_RELATION) ","
-						 CppAsString2(RELKIND_VIEW) ","
-						 CppAsString2(RELKIND_MATVIEW) ","
-						 CppAsString2(RELKIND_SEQUENCE) ","
-						 CppAsString2(RELKIND_FOREIGN_TABLE) ","
-						 CppAsString2(RELKIND_PARTITIONED_TABLE) ")\n");
+						 RelKindAsString(RELKIND_RELATION) ","
+						 RelKindAsString(RELKIND_VIEW) ","
+						 RelKindAsString(RELKIND_MATVIEW) ","
+						 RelKindAsString(RELKIND_SEQUENCE) ","
+						 RelKindAsString(RELKIND_FOREIGN_TABLE) ","
+						 RelKindAsString(RELKIND_PARTITIONED_TABLE) ")\n");
 
 	/*
 	 * Unless a schema pattern is specified, we suppress system and temp
@@ -1692,133 +1692,147 @@ describeOneTableDetails(const char *schemaname,
 	/*
 	 * If it's a sequence, deal with it here separately.
 	 */
-	if (tableinfo.relkind == RELKIND_SEQUENCE)
+	switch ((RelKind) tableinfo.relkind)
 	{
-		PGresult   *result = NULL;
-		printQueryOpt myopt = pset.popt;
-		char	   *footers[2] = {NULL, NULL};
-
-		if (pset.sversion >= 100000)
-		{
-			printfPQExpBuffer(&buf,
-							  "SELECT pg_catalog.format_type(seqtypid, NULL) AS \"%s\",\n"
-							  "       seqstart AS \"%s\",\n"
-							  "       seqmin AS \"%s\",\n"
-							  "       seqmax AS \"%s\",\n"
-							  "       seqincrement AS \"%s\",\n"
-							  "       CASE WHEN seqcycle THEN '%s' ELSE '%s' END AS \"%s\",\n"
-							  "       seqcache AS \"%s\"\n",
-							  gettext_noop("Type"),
-							  gettext_noop("Start"),
-							  gettext_noop("Minimum"),
-							  gettext_noop("Maximum"),
-							  gettext_noop("Increment"),
-							  gettext_noop("yes"),
-							  gettext_noop("no"),
-							  gettext_noop("Cycles?"),
-							  gettext_noop("Cache"));
-			appendPQExpBuffer(&buf,
-							  "FROM pg_catalog.pg_sequence\n"
-							  "WHERE seqrelid = '%s';",
-							  oid);
-		}
-		else
-		{
-			printfPQExpBuffer(&buf,
-							  "SELECT 'bigint' AS \"%s\",\n"
-							  "       start_value AS \"%s\",\n"
-							  "       min_value AS \"%s\",\n"
-							  "       max_value AS \"%s\",\n"
-							  "       increment_by AS \"%s\",\n"
-							  "       CASE WHEN is_cycled THEN '%s' ELSE '%s' END AS \"%s\",\n"
-							  "       cache_value AS \"%s\"\n",
-							  gettext_noop("Type"),
-							  gettext_noop("Start"),
-							  gettext_noop("Minimum"),
-							  gettext_noop("Maximum"),
-							  gettext_noop("Increment"),
-							  gettext_noop("yes"),
-							  gettext_noop("no"),
-							  gettext_noop("Cycles?"),
-							  gettext_noop("Cache"));
-			appendPQExpBuffer(&buf, "FROM %s", fmtId(schemaname));
-			/* must be separate because fmtId isn't reentrant */
-			appendPQExpBuffer(&buf, ".%s;", fmtId(relationname));
-		}
-
-		res = PSQLexec(buf.data);
-		if (!res)
-			goto error_return;
-
-		/* Footer information about a sequence */
-
-		/* Get the column that owns this sequence */
-		printfPQExpBuffer(&buf, "SELECT pg_catalog.quote_ident(nspname) || '.' ||"
-						  "\n   pg_catalog.quote_ident(relname) || '.' ||"
-						  "\n   pg_catalog.quote_ident(attname),"
-						  "\n   d.deptype"
-						  "\nFROM pg_catalog.pg_class c"
-						  "\nINNER JOIN pg_catalog.pg_depend d ON c.oid=d.refobjid"
-						  "\nINNER JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace"
-						  "\nINNER JOIN pg_catalog.pg_attribute a ON ("
-						  "\n a.attrelid=c.oid AND"
-						  "\n a.attnum=d.refobjsubid)"
-						  "\nWHERE d.classid='pg_catalog.pg_class'::pg_catalog.regclass"
-						  "\n AND d.refclassid='pg_catalog.pg_class'::pg_catalog.regclass"
-						  "\n AND d.objid='%s'"
-						  "\n AND d.deptype IN ('a', 'i')",
-						  oid);
-
-		result = PSQLexec(buf.data);
-
-		/*
-		 * If we get no rows back, don't show anything (obviously). We should
-		 * never get more than one row back, but if we do, just ignore it and
-		 * don't print anything.
-		 */
-		if (!result)
-			goto error_return;
-		else if (PQntuples(result) == 1)
-		{
-			switch (PQgetvalue(result, 0, 1)[0])
+		case RELKIND_SEQUENCE:
 			{
-				case 'a':
-					footers[0] = psprintf(_("Owned by: %s"),
-										  PQgetvalue(result, 0, 0));
-					break;
-				case 'i':
-					footers[0] = psprintf(_("Sequence for identity column: %s"),
-										  PQgetvalue(result, 0, 0));
-					break;
+				PGresult   *result = NULL;
+				printQueryOpt myopt = pset.popt;
+				char	   *footers[2] = {NULL, NULL};
+
+				if (pset.sversion >= 100000)
+				{
+					printfPQExpBuffer(&buf,
+									  "SELECT pg_catalog.format_type(seqtypid, NULL) AS \"%s\",\n"
+									  "       seqstart AS \"%s\",\n"
+									  "       seqmin AS \"%s\",\n"
+									  "       seqmax AS \"%s\",\n"
+									  "       seqincrement AS \"%s\",\n"
+									  "       CASE WHEN seqcycle THEN '%s' ELSE '%s' END AS \"%s\",\n"
+									  "       seqcache AS \"%s\"\n",
+									  gettext_noop("Type"),
+									  gettext_noop("Start"),
+									  gettext_noop("Minimum"),
+									  gettext_noop("Maximum"),
+									  gettext_noop("Increment"),
+									  gettext_noop("yes"),
+									  gettext_noop("no"),
+									  gettext_noop("Cycles?"),
+									  gettext_noop("Cache"));
+					appendPQExpBuffer(&buf,
+									  "FROM pg_catalog.pg_sequence\n"
+									  "WHERE seqrelid = '%s';",
+									  oid);
+				}
+				else
+				{
+					printfPQExpBuffer(&buf,
+									  "SELECT 'bigint' AS \"%s\",\n"
+									  "       start_value AS \"%s\",\n"
+									  "       min_value AS \"%s\",\n"
+									  "       max_value AS \"%s\",\n"
+									  "       increment_by AS \"%s\",\n"
+									  "       CASE WHEN is_cycled THEN '%s' ELSE '%s' END AS \"%s\",\n"
+									  "       cache_value AS \"%s\"\n",
+									  gettext_noop("Type"),
+									  gettext_noop("Start"),
+									  gettext_noop("Minimum"),
+									  gettext_noop("Maximum"),
+									  gettext_noop("Increment"),
+									  gettext_noop("yes"),
+									  gettext_noop("no"),
+									  gettext_noop("Cycles?"),
+									  gettext_noop("Cache"));
+					appendPQExpBuffer(&buf, "FROM %s", fmtId(schemaname));
+					/* must be separate because fmtId isn't reentrant */
+					appendPQExpBuffer(&buf, ".%s;", fmtId(relationname));
+				}
+
+				res = PSQLexec(buf.data);
+				if (!res)
+					goto error_return;
+
+				/* Footer information about a sequence */
+
+				/* Get the column that owns this sequence */
+				printfPQExpBuffer(&buf, "SELECT pg_catalog.quote_ident(nspname) || '.' ||"
+								  "\n   pg_catalog.quote_ident(relname) || '.' ||"
+								  "\n   pg_catalog.quote_ident(attname),"
+								  "\n   d.deptype"
+								  "\nFROM pg_catalog.pg_class c"
+								  "\nINNER JOIN pg_catalog.pg_depend d ON c.oid=d.refobjid"
+								  "\nINNER JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace"
+								  "\nINNER JOIN pg_catalog.pg_attribute a ON ("
+								  "\n a.attrelid=c.oid AND"
+								  "\n a.attnum=d.refobjsubid)"
+								  "\nWHERE d.classid='pg_catalog.pg_class'::pg_catalog.regclass"
+								  "\n AND d.refclassid='pg_catalog.pg_class'::pg_catalog.regclass"
+								  "\n AND d.objid='%s'"
+								  "\n AND d.deptype IN ('a', 'i')",
+								  oid);
+
+				result = PSQLexec(buf.data);
+
+				/*
+				 * If we get no rows back, don't show anything (obviously). We
+				 * should never get more than one row back, but if we do, just
+				 * ignore it and don't print anything.
+				 */
+				if (!result)
+					goto error_return;
+				else if (PQntuples(result) == 1)
+				{
+					switch (PQgetvalue(result, 0, 1)[0])
+					{
+						case 'a':
+							footers[0] = psprintf(_("Owned by: %s"),
+												  PQgetvalue(result, 0, 0));
+							break;
+						case 'i':
+							footers[0] = psprintf(_("Sequence for identity column: %s"),
+												  PQgetvalue(result, 0, 0));
+							break;
+					}
+				}
+				PQclear(result);
+
+				printfPQExpBuffer(&title, _("Sequence \"%s.%s\""),
+								  schemaname, relationname);
+
+				myopt.footers = footers;
+				myopt.topt.default_footer = false;
+				myopt.title = title.data;
+				myopt.translate_header = true;
+
+				printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+				if (footers[0])
+					free(footers[0]);
+
+				retval = true;
+				goto error_return;	/* not an error, just return early */
 			}
-		}
-		PQclear(result);
+			break;
 
-		printfPQExpBuffer(&title, _("Sequence \"%s.%s\""),
-						  schemaname, relationname);
-
-		myopt.footers = footers;
-		myopt.topt.default_footer = false;
-		myopt.title = title.data;
-		myopt.translate_header = true;
-
-		printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
-
-		if (footers[0])
-			free(footers[0]);
-
-		retval = true;
-		goto error_return;		/* not an error, just return early */
+			/*
+			 * Identify whether we should print collation, nullable, default
+			 * vals
+			 */
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_PARTITIONED_TABLE:
+			show_column_details = true;
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_INDEX:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
-
-	/* Identify whether we should print collation, nullable, default vals */
-	if (tableinfo.relkind == RELKIND_RELATION ||
-		tableinfo.relkind == RELKIND_VIEW ||
-		tableinfo.relkind == RELKIND_MATVIEW ||
-		tableinfo.relkind == RELKIND_FOREIGN_TABLE ||
-		tableinfo.relkind == RELKIND_COMPOSITE_TYPE ||
-		tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
-		show_column_details = true;
 
 	/*
 	 * Get per-column info
@@ -1861,58 +1875,91 @@ describeOneTableDetails(const char *schemaname,
 			appendPQExpBufferStr(&buf, ",\n  ''::pg_catalog.char AS attgenerated");
 		attgenerated_col = cols++;
 	}
-	if (tableinfo.relkind == RELKIND_INDEX ||
-		tableinfo.relkind == RELKIND_PARTITIONED_INDEX)
+	switch ((RelKind) tableinfo.relkind)
 	{
-		if (pset.sversion >= 110000)
-		{
-			appendPQExpBuffer(&buf, ",\n  CASE WHEN a.attnum <= (SELECT i.indnkeyatts FROM pg_catalog.pg_index i WHERE i.indexrelid = '%s') THEN '%s' ELSE '%s' END AS is_key",
-							  oid,
-							  gettext_noop("yes"),
-							  gettext_noop("no"));
-			isindexkey_col = cols++;
-		}
-		appendPQExpBufferStr(&buf, ",\n  pg_catalog.pg_get_indexdef(a.attrelid, a.attnum, TRUE) AS indexdef");
-		indexdef_col = cols++;
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+			if (pset.sversion >= 110000)
+			{
+				appendPQExpBuffer(&buf, ",\n  CASE WHEN a.attnum <= (SELECT i.indnkeyatts FROM pg_catalog.pg_index i WHERE i.indexrelid = '%s') THEN '%s' ELSE '%s' END AS is_key",
+								  oid,
+								  gettext_noop("yes"),
+								  gettext_noop("no"));
+				isindexkey_col = cols++;
+			}
+			appendPQExpBufferStr(&buf, ",\n  pg_catalog.pg_get_indexdef(a.attrelid, a.attnum, TRUE) AS indexdef");
+			indexdef_col = cols++;
+			break;
+		case RELKIND_FOREIGN_TABLE:
+			/* FDW options for foreign table column, only for 9.2 or later */
+			if (pset.sversion >= 90200)
+			{
+				appendPQExpBufferStr(&buf, ",\n  CASE WHEN attfdwoptions IS NULL THEN '' ELSE "
+									 "  '(' || pg_catalog.array_to_string(ARRAY(SELECT pg_catalog.quote_ident(option_name) || ' ' || pg_catalog.quote_literal(option_value)  FROM "
+									 "  pg_catalog.pg_options_to_table(attfdwoptions)), ', ') || ')' END AS attfdwoptions");
+				fdwopts_col = cols++;
+			}
+			break;
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
-	/* FDW options for foreign table column, only for 9.2 or later */
-	if (tableinfo.relkind == RELKIND_FOREIGN_TABLE && pset.sversion >= 90200)
-	{
-		appendPQExpBufferStr(&buf, ",\n  CASE WHEN attfdwoptions IS NULL THEN '' ELSE "
-							 "  '(' || pg_catalog.array_to_string(ARRAY(SELECT pg_catalog.quote_ident(option_name) || ' ' || pg_catalog.quote_literal(option_value)  FROM "
-							 "  pg_catalog.pg_options_to_table(attfdwoptions)), ', ') || ')' END AS attfdwoptions");
-		fdwopts_col = cols++;
-	}
+
 	if (verbose)
 	{
 		appendPQExpBufferStr(&buf, ",\n  a.attstorage");
 		attstorage_col = cols++;
 
 		/* stats target, if relevant to relkind */
-		if (tableinfo.relkind == RELKIND_RELATION ||
-			tableinfo.relkind == RELKIND_INDEX ||
-			tableinfo.relkind == RELKIND_PARTITIONED_INDEX ||
-			tableinfo.relkind == RELKIND_MATVIEW ||
-			tableinfo.relkind == RELKIND_FOREIGN_TABLE ||
-			tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
+		switch ((RelKind) tableinfo.relkind)
 		{
-			appendPQExpBufferStr(&buf, ",\n  CASE WHEN a.attstattarget=-1 THEN NULL ELSE a.attstattarget END AS attstattarget");
-			attstattarget_col = cols++;
+			case RELKIND_RELATION:
+			case RELKIND_INDEX:
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_PARTITIONED_TABLE:
+				appendPQExpBufferStr(&buf, ",\n  CASE WHEN a.attstattarget=-1 THEN NULL ELSE a.attstattarget END AS attstattarget");
+				attstattarget_col = cols++;
+				break;
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				break;
 		}
 
 		/*
 		 * In 9.0+, we have column comments for: relations, views, composite
 		 * types, and foreign tables (cf. CommentObject() in comment.c).
 		 */
-		if (tableinfo.relkind == RELKIND_RELATION ||
-			tableinfo.relkind == RELKIND_VIEW ||
-			tableinfo.relkind == RELKIND_MATVIEW ||
-			tableinfo.relkind == RELKIND_FOREIGN_TABLE ||
-			tableinfo.relkind == RELKIND_COMPOSITE_TYPE ||
-			tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
+		switch ((RelKind) tableinfo.relkind)
 		{
-			appendPQExpBufferStr(&buf, ",\n  pg_catalog.col_description(a.attrelid, a.attnum)");
-			attdescr_col = cols++;
+			case RELKIND_RELATION:
+			case RELKIND_VIEW:
+			case RELKIND_MATVIEW:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_PARTITIONED_TABLE:
+				appendPQExpBufferStr(&buf, ",\n  pg_catalog.col_description(a.attrelid, a.attnum)");
+				attdescr_col = cols++;
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_INDEX:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				break;
 		}
 	}
 
@@ -1926,7 +1973,7 @@ describeOneTableDetails(const char *schemaname,
 	numrows = PQntuples(res);
 
 	/* Make title */
-	switch (tableinfo.relkind)
+	switch ((RelKind) tableinfo.relkind)
 	{
 		case RELKIND_RELATION:
 			if (tableinfo.relpersistence == 'u')
@@ -1964,11 +2011,6 @@ describeOneTableDetails(const char *schemaname,
 				printfPQExpBuffer(&title, _("Partitioned index \"%s.%s\""),
 								  schemaname, relationname);
 			break;
-		case 's':
-			/* not used as of 8.2, but keep it for backwards compatibility */
-			printfPQExpBuffer(&title, _("Special relation \"%s.%s\""),
-							  schemaname, relationname);
-			break;
 		case RELKIND_TOASTVALUE:
 			printfPQExpBuffer(&title, _("TOAST table \"%s.%s\""),
 							  schemaname, relationname);
@@ -1989,10 +2031,23 @@ describeOneTableDetails(const char *schemaname,
 				printfPQExpBuffer(&title, _("Partitioned table \"%s.%s\""),
 								  schemaname, relationname);
 			break;
+		case RELKIND_SEQUENCE:
+		case RELKIND_NULL:
 		default:
-			/* untranslated unknown relkind */
-			printfPQExpBuffer(&title, "?%c? \"%s.%s\"",
-							  tableinfo.relkind, schemaname, relationname);
+
+			/*
+			 * 's' is not used as of 8.2, but we keep it for backwards
+			 * compatibility. We cannot handle 's' as a case value without
+			 * adding it to enum RelKind, but that would trigger warnings and
+			 * errors elsewhere.  Handle it here, instead.
+			 */
+			if ((RelKind) tableinfo.relkind == 's')
+				printfPQExpBuffer(&title, _("Special relation \"%s.%s\""),
+								  schemaname, relationname);
+			else
+				/* untranslated unknown relkind */
+				printfPQExpBuffer(&title, "?%c? \"%s.%s\"",
+								  tableinfo.relkind, schemaname, relationname);
 			break;
 	}
 
@@ -2150,742 +2205,806 @@ describeOneTableDetails(const char *schemaname,
 		PQclear(result);
 	}
 
-	if (tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
+	switch ((RelKind) tableinfo.relkind)
 	{
-		/* Footer information for a partitioned table (partitioning parent) */
-		PGresult   *result;
-
-		printfPQExpBuffer(&buf,
-						  "SELECT pg_catalog.pg_get_partkeydef('%s'::pg_catalog.oid);",
-						  oid);
-		result = PSQLexec(buf.data);
-		if (!result)
-			goto error_return;
-
-		if (PQntuples(result) == 1)
-		{
-			char	   *partkeydef = PQgetvalue(result, 0, 0);
-
-			printfPQExpBuffer(&tmpbuf, _("Partition key: %s"), partkeydef);
-			printTableAddFooter(&cont, tmpbuf.data);
-		}
-		PQclear(result);
-	}
-
-	if (tableinfo.relkind == RELKIND_TOASTVALUE)
-	{
-		/* For a TOAST table, print name of owning table */
-		PGresult   *result;
-
-		printfPQExpBuffer(&buf,
-						  "SELECT n.nspname, c.relname\n"
-						  "FROM pg_catalog.pg_class c"
-						  " JOIN pg_catalog.pg_namespace n"
-						  " ON n.oid = c.relnamespace\n"
-						  "WHERE reltoastrelid = '%s';", oid);
-		result = PSQLexec(buf.data);
-		if (!result)
-			goto error_return;
-
-		if (PQntuples(result) == 1)
-		{
-			char	   *schemaname = PQgetvalue(result, 0, 0);
-			char	   *relname = PQgetvalue(result, 0, 1);
-
-			printfPQExpBuffer(&tmpbuf, _("Owning table: \"%s.%s\""),
-							  schemaname, relname);
-			printTableAddFooter(&cont, tmpbuf.data);
-		}
-		PQclear(result);
-	}
-
-	if (tableinfo.relkind == RELKIND_INDEX ||
-		tableinfo.relkind == RELKIND_PARTITIONED_INDEX)
-	{
-		/* Footer information about an index */
-		PGresult   *result;
-
-		printfPQExpBuffer(&buf,
-						  "SELECT i.indisunique, i.indisprimary, i.indisclustered, ");
-		if (pset.sversion >= 80200)
-			appendPQExpBufferStr(&buf, "i.indisvalid,\n");
-		else
-			appendPQExpBufferStr(&buf, "true AS indisvalid,\n");
-		if (pset.sversion >= 90000)
-			appendPQExpBufferStr(&buf,
-								 "  (NOT i.indimmediate) AND "
-								 "EXISTS (SELECT 1 FROM pg_catalog.pg_constraint "
-								 "WHERE conrelid = i.indrelid AND "
-								 "conindid = i.indexrelid AND "
-								 "contype IN ('p','u','x') AND "
-								 "condeferrable) AS condeferrable,\n"
-								 "  (NOT i.indimmediate) AND "
-								 "EXISTS (SELECT 1 FROM pg_catalog.pg_constraint "
-								 "WHERE conrelid = i.indrelid AND "
-								 "conindid = i.indexrelid AND "
-								 "contype IN ('p','u','x') AND "
-								 "condeferred) AS condeferred,\n");
-		else
-			appendPQExpBufferStr(&buf,
-								 "  false AS condeferrable, false AS condeferred,\n");
-
-		if (pset.sversion >= 90400)
-			appendPQExpBufferStr(&buf, "i.indisreplident,\n");
-		else
-			appendPQExpBufferStr(&buf, "false AS indisreplident,\n");
-
-		appendPQExpBuffer(&buf, "  a.amname, c2.relname, "
-						  "pg_catalog.pg_get_expr(i.indpred, i.indrelid, true)\n"
-						  "FROM pg_catalog.pg_index i, pg_catalog.pg_class c, pg_catalog.pg_class c2, pg_catalog.pg_am a\n"
-						  "WHERE i.indexrelid = c.oid AND c.oid = '%s' AND c.relam = a.oid\n"
-						  "AND i.indrelid = c2.oid;",
-						  oid);
-
-		result = PSQLexec(buf.data);
-		if (!result)
-			goto error_return;
-		else if (PQntuples(result) != 1)
-		{
-			PQclear(result);
-			goto error_return;
-		}
-		else
-		{
-			char	   *indisunique = PQgetvalue(result, 0, 0);
-			char	   *indisprimary = PQgetvalue(result, 0, 1);
-			char	   *indisclustered = PQgetvalue(result, 0, 2);
-			char	   *indisvalid = PQgetvalue(result, 0, 3);
-			char	   *deferrable = PQgetvalue(result, 0, 4);
-			char	   *deferred = PQgetvalue(result, 0, 5);
-			char	   *indisreplident = PQgetvalue(result, 0, 6);
-			char	   *indamname = PQgetvalue(result, 0, 7);
-			char	   *indtable = PQgetvalue(result, 0, 8);
-			char	   *indpred = PQgetvalue(result, 0, 9);
-
-			if (strcmp(indisprimary, "t") == 0)
-				printfPQExpBuffer(&tmpbuf, _("primary key, "));
-			else if (strcmp(indisunique, "t") == 0)
-				printfPQExpBuffer(&tmpbuf, _("unique, "));
-			else
-				resetPQExpBuffer(&tmpbuf);
-			appendPQExpBuffer(&tmpbuf, "%s, ", indamname);
-
-			/* we assume here that index and table are in same schema */
-			appendPQExpBuffer(&tmpbuf, _("for table \"%s.%s\""),
-							  schemaname, indtable);
-
-			if (strlen(indpred))
-				appendPQExpBuffer(&tmpbuf, _(", predicate (%s)"), indpred);
-
-			if (strcmp(indisclustered, "t") == 0)
-				appendPQExpBufferStr(&tmpbuf, _(", clustered"));
-
-			if (strcmp(indisvalid, "t") != 0)
-				appendPQExpBufferStr(&tmpbuf, _(", invalid"));
-
-			if (strcmp(deferrable, "t") == 0)
-				appendPQExpBufferStr(&tmpbuf, _(", deferrable"));
-
-			if (strcmp(deferred, "t") == 0)
-				appendPQExpBufferStr(&tmpbuf, _(", initially deferred"));
-
-			if (strcmp(indisreplident, "t") == 0)
-				appendPQExpBufferStr(&tmpbuf, _(", replica identity"));
-
-			printTableAddFooter(&cont, tmpbuf.data);
-
-			/*
-			 * If it's a partitioned index, we'll print the tablespace below
-			 */
-			if (tableinfo.relkind == RELKIND_INDEX)
-				add_tablespace_footer(&cont, tableinfo.relkind,
-									  tableinfo.tablespace, true);
-		}
-
-		PQclear(result);
-	}
-	/* If you add relkinds here, see also "Finish printing..." stanza below */
-	else if (tableinfo.relkind == RELKIND_RELATION ||
-			 tableinfo.relkind == RELKIND_MATVIEW ||
-			 tableinfo.relkind == RELKIND_FOREIGN_TABLE ||
-			 tableinfo.relkind == RELKIND_PARTITIONED_TABLE ||
-			 tableinfo.relkind == RELKIND_PARTITIONED_INDEX ||
-			 tableinfo.relkind == RELKIND_TOASTVALUE)
-	{
-		/* Footer information about a table */
-		PGresult   *result = NULL;
-		int			tuples = 0;
-
-		/* print indexes */
-		if (tableinfo.hasindex)
-		{
-			printfPQExpBuffer(&buf,
-							  "SELECT c2.relname, i.indisprimary, i.indisunique, i.indisclustered, ");
-			if (pset.sversion >= 80200)
-				appendPQExpBufferStr(&buf, "i.indisvalid, ");
-			else
-				appendPQExpBufferStr(&buf, "true as indisvalid, ");
-			appendPQExpBufferStr(&buf, "pg_catalog.pg_get_indexdef(i.indexrelid, 0, true),\n  ");
-			if (pset.sversion >= 90000)
-				appendPQExpBufferStr(&buf,
-									 "pg_catalog.pg_get_constraintdef(con.oid, true), "
-									 "contype, condeferrable, condeferred");
-			else
-				appendPQExpBufferStr(&buf,
-									 "null AS constraintdef, null AS contype, "
-									 "false AS condeferrable, false AS condeferred");
-			if (pset.sversion >= 90400)
-				appendPQExpBufferStr(&buf, ", i.indisreplident");
-			else
-				appendPQExpBufferStr(&buf, ", false AS indisreplident");
-			if (pset.sversion >= 80000)
-				appendPQExpBufferStr(&buf, ", c2.reltablespace");
-			appendPQExpBufferStr(&buf,
-								 "\nFROM pg_catalog.pg_class c, pg_catalog.pg_class c2, pg_catalog.pg_index i\n");
-			if (pset.sversion >= 90000)
-				appendPQExpBufferStr(&buf,
-									 "  LEFT JOIN pg_catalog.pg_constraint con ON (conrelid = i.indrelid AND conindid = i.indexrelid AND contype IN ('p','u','x'))\n");
-			appendPQExpBuffer(&buf,
-							  "WHERE c.oid = '%s' AND c.oid = i.indrelid AND i.indexrelid = c2.oid\n"
-							  "ORDER BY i.indisprimary DESC, c2.relname;",
-							  oid);
-			result = PSQLexec(buf.data);
-			if (!result)
-				goto error_return;
-			else
-				tuples = PQntuples(result);
-
-			if (tuples > 0)
-			{
-				printTableAddFooter(&cont, _("Indexes:"));
-				for (i = 0; i < tuples; i++)
-				{
-					/* untranslated index name */
-					printfPQExpBuffer(&buf, "    \"%s\"",
-									  PQgetvalue(result, i, 0));
-
-					/* If exclusion constraint, print the constraintdef */
-					if (strcmp(PQgetvalue(result, i, 7), "x") == 0)
-					{
-						appendPQExpBuffer(&buf, " %s",
-										  PQgetvalue(result, i, 6));
-					}
-					else
-					{
-						const char *indexdef;
-						const char *usingpos;
-
-						/* Label as primary key or unique (but not both) */
-						if (strcmp(PQgetvalue(result, i, 1), "t") == 0)
-							appendPQExpBufferStr(&buf, " PRIMARY KEY,");
-						else if (strcmp(PQgetvalue(result, i, 2), "t") == 0)
-						{
-							if (strcmp(PQgetvalue(result, i, 7), "u") == 0)
-								appendPQExpBufferStr(&buf, " UNIQUE CONSTRAINT,");
-							else
-								appendPQExpBufferStr(&buf, " UNIQUE,");
-						}
-
-						/* Everything after "USING" is echoed verbatim */
-						indexdef = PQgetvalue(result, i, 5);
-						usingpos = strstr(indexdef, " USING ");
-						if (usingpos)
-							indexdef = usingpos + 7;
-						appendPQExpBuffer(&buf, " %s", indexdef);
-
-						/* Need these for deferrable PK/UNIQUE indexes */
-						if (strcmp(PQgetvalue(result, i, 8), "t") == 0)
-							appendPQExpBufferStr(&buf, " DEFERRABLE");
-
-						if (strcmp(PQgetvalue(result, i, 9), "t") == 0)
-							appendPQExpBufferStr(&buf, " INITIALLY DEFERRED");
-					}
-
-					/* Add these for all cases */
-					if (strcmp(PQgetvalue(result, i, 3), "t") == 0)
-						appendPQExpBufferStr(&buf, " CLUSTER");
-
-					if (strcmp(PQgetvalue(result, i, 4), "t") != 0)
-						appendPQExpBufferStr(&buf, " INVALID");
-
-					if (strcmp(PQgetvalue(result, i, 10), "t") == 0)
-						appendPQExpBufferStr(&buf, " REPLICA IDENTITY");
-
-					printTableAddFooter(&cont, buf.data);
-
-					/* Print tablespace of the index on the same line */
-					if (pset.sversion >= 80000)
-						add_tablespace_footer(&cont, RELKIND_INDEX,
-											  atooid(PQgetvalue(result, i, 11)),
-											  false);
-				}
-			}
-			PQclear(result);
-		}
-
-		/* print table (and column) check constraints */
-		if (tableinfo.checks)
-		{
-			printfPQExpBuffer(&buf,
-							  "SELECT r.conname, "
-							  "pg_catalog.pg_get_constraintdef(r.oid, true)\n"
-							  "FROM pg_catalog.pg_constraint r\n"
-							  "WHERE r.conrelid = '%s' AND r.contype = 'c'\n"
-							  "ORDER BY 1;",
-							  oid);
-			result = PSQLexec(buf.data);
-			if (!result)
-				goto error_return;
-			else
-				tuples = PQntuples(result);
-
-			if (tuples > 0)
-			{
-				printTableAddFooter(&cont, _("Check constraints:"));
-				for (i = 0; i < tuples; i++)
-				{
-					/* untranslated constraint name and def */
-					printfPQExpBuffer(&buf, "    \"%s\" %s",
-									  PQgetvalue(result, i, 0),
-									  PQgetvalue(result, i, 1));
-
-					printTableAddFooter(&cont, buf.data);
-				}
-			}
-			PQclear(result);
-		}
-
-		/*
-		 * Print foreign-key constraints (there are none if no triggers,
-		 * except if the table is partitioned, in which case the triggers
-		 * appear in the partitions)
-		 */
-		if (tableinfo.hastriggers ||
-			tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
-		{
-			if (pset.sversion >= 120000 &&
-				(tableinfo.ispartition || tableinfo.relkind == RELKIND_PARTITIONED_TABLE))
+		case RELKIND_PARTITIONED_TABLE:
 			{
 				/*
-				 * Put the constraints defined in this table first, followed
-				 * by the constraints defined in ancestor partitioned tables.
+				 * Footer information for a partitioned table (partitioning
+				 * parent)
 				 */
+				PGresult   *result;
+
 				printfPQExpBuffer(&buf,
-								  "SELECT conrelid = '%s'::pg_catalog.regclass AS sametable,\n"
-								  "       conname,\n"
-								  "       pg_catalog.pg_get_constraintdef(oid, true) AS condef,\n"
-								  "       conrelid::pg_catalog.regclass AS ontable\n"
-								  "  FROM pg_catalog.pg_constraint,\n"
-								  "       pg_catalog.pg_partition_ancestors('%s')\n"
-								  " WHERE conrelid = relid AND contype = 'f' AND conparentid = 0\n"
-								  "ORDER BY sametable DESC, conname;",
-								  oid, oid);
+								  "SELECT pg_catalog.pg_get_partkeydef('%s'::pg_catalog.oid);",
+								  oid);
+				result = PSQLexec(buf.data);
+				if (!result)
+					goto error_return;
+
+				if (PQntuples(result) == 1)
+				{
+					char	   *partkeydef = PQgetvalue(result, 0, 0);
+
+					printfPQExpBuffer(&tmpbuf, _("Partition key: %s"), partkeydef);
+					printTableAddFooter(&cont, tmpbuf.data);
+				}
+				PQclear(result);
 			}
-			else
+			break;
+
+		case RELKIND_TOASTVALUE:
 			{
+				/* For a TOAST table, print name of owning table */
+				PGresult   *result;
+
 				printfPQExpBuffer(&buf,
-								  "SELECT true as sametable, conname,\n"
-								  "  pg_catalog.pg_get_constraintdef(r.oid, true) as condef,\n"
-								  "  conrelid::pg_catalog.regclass AS ontable\n"
-								  "FROM pg_catalog.pg_constraint r\n"
-								  "WHERE r.conrelid = '%s' AND r.contype = 'f'\n",
+								  "SELECT n.nspname, c.relname\n"
+								  "FROM pg_catalog.pg_class c"
+								  " JOIN pg_catalog.pg_namespace n"
+								  " ON n.oid = c.relnamespace\n"
+								  "WHERE reltoastrelid = '%s';", oid);
+				result = PSQLexec(buf.data);
+				if (!result)
+					goto error_return;
+
+				if (PQntuples(result) == 1)
+				{
+					char	   *schemaname = PQgetvalue(result, 0, 0);
+					char	   *relname = PQgetvalue(result, 0, 1);
+
+					printfPQExpBuffer(&tmpbuf, _("Owning table: \"%s.%s\""),
+									  schemaname, relname);
+					printTableAddFooter(&cont, tmpbuf.data);
+				}
+				PQclear(result);
+			}
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
+
+	switch ((RelKind) tableinfo.relkind)
+	{
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+			{
+				/* Footer information about an index */
+				PGresult   *result;
+
+				printfPQExpBuffer(&buf,
+								  "SELECT i.indisunique, i.indisprimary, i.indisclustered, ");
+				if (pset.sversion >= 80200)
+					appendPQExpBufferStr(&buf, "i.indisvalid,\n");
+				else
+					appendPQExpBufferStr(&buf, "true AS indisvalid,\n");
+				if (pset.sversion >= 90000)
+					appendPQExpBufferStr(&buf,
+										 "  (NOT i.indimmediate) AND "
+										 "EXISTS (SELECT 1 FROM pg_catalog.pg_constraint "
+										 "WHERE conrelid = i.indrelid AND "
+										 "conindid = i.indexrelid AND "
+										 "contype IN ('p','u','x') AND "
+										 "condeferrable) AS condeferrable,\n"
+										 "  (NOT i.indimmediate) AND "
+										 "EXISTS (SELECT 1 FROM pg_catalog.pg_constraint "
+										 "WHERE conrelid = i.indrelid AND "
+										 "conindid = i.indexrelid AND "
+										 "contype IN ('p','u','x') AND "
+										 "condeferred) AS condeferred,\n");
+				else
+					appendPQExpBufferStr(&buf,
+										 "  false AS condeferrable, false AS condeferred,\n");
+
+				if (pset.sversion >= 90400)
+					appendPQExpBufferStr(&buf, "i.indisreplident,\n");
+				else
+					appendPQExpBufferStr(&buf, "false AS indisreplident,\n");
+
+				appendPQExpBuffer(&buf, "  a.amname, c2.relname, "
+								  "pg_catalog.pg_get_expr(i.indpred, i.indrelid, true)\n"
+								  "FROM pg_catalog.pg_index i, pg_catalog.pg_class c, pg_catalog.pg_class c2, pg_catalog.pg_am a\n"
+								  "WHERE i.indexrelid = c.oid AND c.oid = '%s' AND c.relam = a.oid\n"
+								  "AND i.indrelid = c2.oid;",
 								  oid);
 
-				if (pset.sversion >= 120000)
-					appendPQExpBufferStr(&buf, "     AND conparentid = 0\n");
-				appendPQExpBufferStr(&buf, "ORDER BY conname");
-			}
-
-			result = PSQLexec(buf.data);
-			if (!result)
-				goto error_return;
-			else
-				tuples = PQntuples(result);
-
-			if (tuples > 0)
-			{
-				int			i_sametable = PQfnumber(result, "sametable"),
-							i_conname = PQfnumber(result, "conname"),
-							i_condef = PQfnumber(result, "condef"),
-							i_ontable = PQfnumber(result, "ontable");
-
-				printTableAddFooter(&cont, _("Foreign-key constraints:"));
-				for (i = 0; i < tuples; i++)
+				result = PSQLexec(buf.data);
+				if (!result)
+					goto error_return;
+				else if (PQntuples(result) != 1)
 				{
-					/*
-					 * Print untranslated constraint name and definition. Use
-					 * a "TABLE tab" prefix when the constraint is defined in
-					 * a parent partitioned table.
-					 */
-					if (strcmp(PQgetvalue(result, i, i_sametable), "f") == 0)
-						printfPQExpBuffer(&buf, "    TABLE \"%s\" CONSTRAINT \"%s\" %s",
-										  PQgetvalue(result, i, i_ontable),
-										  PQgetvalue(result, i, i_conname),
-										  PQgetvalue(result, i, i_condef));
+					PQclear(result);
+					goto error_return;
+				}
+				else
+				{
+					char	   *indisunique = PQgetvalue(result, 0, 0);
+					char	   *indisprimary = PQgetvalue(result, 0, 1);
+					char	   *indisclustered = PQgetvalue(result, 0, 2);
+					char	   *indisvalid = PQgetvalue(result, 0, 3);
+					char	   *deferrable = PQgetvalue(result, 0, 4);
+					char	   *deferred = PQgetvalue(result, 0, 5);
+					char	   *indisreplident = PQgetvalue(result, 0, 6);
+					char	   *indamname = PQgetvalue(result, 0, 7);
+					char	   *indtable = PQgetvalue(result, 0, 8);
+					char	   *indpred = PQgetvalue(result, 0, 9);
+
+					if (strcmp(indisprimary, "t") == 0)
+						printfPQExpBuffer(&tmpbuf, _("primary key, "));
+					else if (strcmp(indisunique, "t") == 0)
+						printfPQExpBuffer(&tmpbuf, _("unique, "));
 					else
-						printfPQExpBuffer(&buf, "    \"%s\" %s",
-										  PQgetvalue(result, i, i_conname),
-										  PQgetvalue(result, i, i_condef));
+						resetPQExpBuffer(&tmpbuf);
+					appendPQExpBuffer(&tmpbuf, "%s, ", indamname);
 
-					printTableAddFooter(&cont, buf.data);
+					/* we assume here that index and table are in same schema */
+					appendPQExpBuffer(&tmpbuf, _("for table \"%s.%s\""),
+									  schemaname, indtable);
+
+					if (strlen(indpred))
+						appendPQExpBuffer(&tmpbuf, _(", predicate (%s)"), indpred);
+
+					if (strcmp(indisclustered, "t") == 0)
+						appendPQExpBufferStr(&tmpbuf, _(", clustered"));
+
+					if (strcmp(indisvalid, "t") != 0)
+						appendPQExpBufferStr(&tmpbuf, _(", invalid"));
+
+					if (strcmp(deferrable, "t") == 0)
+						appendPQExpBufferStr(&tmpbuf, _(", deferrable"));
+
+					if (strcmp(deferred, "t") == 0)
+						appendPQExpBufferStr(&tmpbuf, _(", initially deferred"));
+
+					if (strcmp(indisreplident, "t") == 0)
+						appendPQExpBufferStr(&tmpbuf, _(", replica identity"));
+
+					printTableAddFooter(&cont, tmpbuf.data);
+
+					/*
+					 * If it's a partitioned index, we'll print the tablespace
+					 * below
+					 */
+					if (tableinfo.relkind == RELKIND_INDEX)
+						add_tablespace_footer(&cont, tableinfo.relkind,
+											  tableinfo.tablespace, true);
 				}
+
+				PQclear(result);
 			}
-			PQclear(result);
-		}
-
-		/* print incoming foreign-key references */
-		if (tableinfo.hastriggers ||
-			tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
-		{
-			if (pset.sversion >= 120000)
-			{
-				printfPQExpBuffer(&buf,
-								  "SELECT conname, conrelid::pg_catalog.regclass AS ontable,\n"
-								  "       pg_catalog.pg_get_constraintdef(oid, true) AS condef\n"
-								  "  FROM pg_catalog.pg_constraint c\n"
-								  " WHERE confrelid IN (SELECT pg_catalog.pg_partition_ancestors('%s')\n"
-								  "                     UNION ALL VALUES ('%s'::pg_catalog.regclass))\n"
-								  "       AND contype = 'f' AND conparentid = 0\n"
-								  "ORDER BY conname;",
-								  oid, oid);
-			}
-			else
-			{
-				printfPQExpBuffer(&buf,
-								  "SELECT conname, conrelid::pg_catalog.regclass AS ontable,\n"
-								  "       pg_catalog.pg_get_constraintdef(oid, true) AS condef\n"
-								  "  FROM pg_catalog.pg_constraint\n"
-								  " WHERE confrelid = %s AND contype = 'f'\n"
-								  "ORDER BY conname;",
-								  oid);
-			}
-
-			result = PSQLexec(buf.data);
-			if (!result)
-				goto error_return;
-			else
-				tuples = PQntuples(result);
-
-			if (tuples > 0)
-			{
-				int			i_conname = PQfnumber(result, "conname"),
-							i_ontable = PQfnumber(result, "ontable"),
-							i_condef = PQfnumber(result, "condef");
-
-				printTableAddFooter(&cont, _("Referenced by:"));
-				for (i = 0; i < tuples; i++)
-				{
-					printfPQExpBuffer(&buf, "    TABLE \"%s\" CONSTRAINT \"%s\" %s",
-									  PQgetvalue(result, i, i_ontable),
-									  PQgetvalue(result, i, i_conname),
-									  PQgetvalue(result, i, i_condef));
-
-					printTableAddFooter(&cont, buf.data);
-				}
-			}
-			PQclear(result);
-		}
-
-		/* print any row-level policies */
-		if (pset.sversion >= 90500)
-		{
-			printfPQExpBuffer(&buf, "SELECT pol.polname,");
-			if (pset.sversion >= 100000)
-				appendPQExpBufferStr(&buf,
-									 " pol.polpermissive,\n");
-			else
-				appendPQExpBufferStr(&buf,
-									 " 't' as polpermissive,\n");
-			appendPQExpBuffer(&buf,
-							  "  CASE WHEN pol.polroles = '{0}' THEN NULL ELSE pg_catalog.array_to_string(array(select rolname from pg_catalog.pg_roles where oid = any (pol.polroles) order by 1),',') END,\n"
-							  "  pg_catalog.pg_get_expr(pol.polqual, pol.polrelid),\n"
-							  "  pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid),\n"
-							  "  CASE pol.polcmd\n"
-							  "    WHEN 'r' THEN 'SELECT'\n"
-							  "    WHEN 'a' THEN 'INSERT'\n"
-							  "    WHEN 'w' THEN 'UPDATE'\n"
-							  "    WHEN 'd' THEN 'DELETE'\n"
-							  "    END AS cmd\n"
-							  "FROM pg_catalog.pg_policy pol\n"
-							  "WHERE pol.polrelid = '%s' ORDER BY 1;",
-							  oid);
-
-			result = PSQLexec(buf.data);
-			if (!result)
-				goto error_return;
-			else
-				tuples = PQntuples(result);
+			break;
 
 			/*
-			 * Handle cases where RLS is enabled and there are policies, or
-			 * there aren't policies, or RLS isn't enabled but there are
-			 * policies
+			 * If you add relkinds here, see also "Finish printing..." stanza
+			 * below
 			 */
-			if (tableinfo.rowsecurity && !tableinfo.forcerowsecurity && tuples > 0)
-				printTableAddFooter(&cont, _("Policies:"));
-
-			if (tableinfo.rowsecurity && tableinfo.forcerowsecurity && tuples > 0)
-				printTableAddFooter(&cont, _("Policies (forced row security enabled):"));
-
-			if (tableinfo.rowsecurity && !tableinfo.forcerowsecurity && tuples == 0)
-				printTableAddFooter(&cont, _("Policies (row security enabled): (none)"));
-
-			if (tableinfo.rowsecurity && tableinfo.forcerowsecurity && tuples == 0)
-				printTableAddFooter(&cont, _("Policies (forced row security enabled): (none)"));
-
-			if (!tableinfo.rowsecurity && tuples > 0)
-				printTableAddFooter(&cont, _("Policies (row security disabled):"));
-
-			/* Might be an empty set - that's ok */
-			for (i = 0; i < tuples; i++)
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_TOASTVALUE:
 			{
-				printfPQExpBuffer(&buf, "    POLICY \"%s\"",
-								  PQgetvalue(result, i, 0));
+				/* Footer information about a table */
+				PGresult   *result = NULL;
+				int			tuples = 0;
 
-				if (*(PQgetvalue(result, i, 1)) == 'f')
-					appendPQExpBufferStr(&buf, " AS RESTRICTIVE");
-
-				if (!PQgetisnull(result, i, 5))
-					appendPQExpBuffer(&buf, " FOR %s",
-									  PQgetvalue(result, i, 5));
-
-				if (!PQgetisnull(result, i, 2))
+				/* print indexes */
+				if (tableinfo.hasindex)
 				{
-					appendPQExpBuffer(&buf, "\n      TO %s",
-									  PQgetvalue(result, i, 2));
+					printfPQExpBuffer(&buf,
+									  "SELECT c2.relname, i.indisprimary, i.indisunique, i.indisclustered, ");
+					if (pset.sversion >= 80200)
+						appendPQExpBufferStr(&buf, "i.indisvalid, ");
+					else
+						appendPQExpBufferStr(&buf, "true as indisvalid, ");
+					appendPQExpBufferStr(&buf, "pg_catalog.pg_get_indexdef(i.indexrelid, 0, true),\n  ");
+					if (pset.sversion >= 90000)
+						appendPQExpBufferStr(&buf,
+											 "pg_catalog.pg_get_constraintdef(con.oid, true), "
+											 "contype, condeferrable, condeferred");
+					else
+						appendPQExpBufferStr(&buf,
+											 "null AS constraintdef, null AS contype, "
+											 "false AS condeferrable, false AS condeferred");
+					if (pset.sversion >= 90400)
+						appendPQExpBufferStr(&buf, ", i.indisreplident");
+					else
+						appendPQExpBufferStr(&buf, ", false AS indisreplident");
+					if (pset.sversion >= 80000)
+						appendPQExpBufferStr(&buf, ", c2.reltablespace");
+					appendPQExpBufferStr(&buf,
+										 "\nFROM pg_catalog.pg_class c, pg_catalog.pg_class c2, pg_catalog.pg_index i\n");
+					if (pset.sversion >= 90000)
+						appendPQExpBufferStr(&buf,
+											 "  LEFT JOIN pg_catalog.pg_constraint con ON (conrelid = i.indrelid AND conindid = i.indexrelid AND contype IN ('p','u','x'))\n");
+					appendPQExpBuffer(&buf,
+									  "WHERE c.oid = '%s' AND c.oid = i.indrelid AND i.indexrelid = c2.oid\n"
+									  "ORDER BY i.indisprimary DESC, c2.relname;",
+									  oid);
+					result = PSQLexec(buf.data);
+					if (!result)
+						goto error_return;
+					else
+						tuples = PQntuples(result);
+
+					if (tuples > 0)
+					{
+						printTableAddFooter(&cont, _("Indexes:"));
+						for (i = 0; i < tuples; i++)
+						{
+							/* untranslated index name */
+							printfPQExpBuffer(&buf, "    \"%s\"",
+											  PQgetvalue(result, i, 0));
+
+							/*
+							 * If exclusion constraint, print the
+							 * constraintdef
+							 */
+							if (strcmp(PQgetvalue(result, i, 7), "x") == 0)
+							{
+								appendPQExpBuffer(&buf, " %s",
+												  PQgetvalue(result, i, 6));
+							}
+							else
+							{
+								const char *indexdef;
+								const char *usingpos;
+
+								/*
+								 * Label as primary key or unique (but not
+								 * both)
+								 */
+								if (strcmp(PQgetvalue(result, i, 1), "t") == 0)
+									appendPQExpBufferStr(&buf, " PRIMARY KEY,");
+								else if (strcmp(PQgetvalue(result, i, 2), "t") == 0)
+								{
+									if (strcmp(PQgetvalue(result, i, 7), "u") == 0)
+										appendPQExpBufferStr(&buf, " UNIQUE CONSTRAINT,");
+									else
+										appendPQExpBufferStr(&buf, " UNIQUE,");
+								}
+
+								/* Everything after "USING" is echoed verbatim */
+								indexdef = PQgetvalue(result, i, 5);
+								usingpos = strstr(indexdef, " USING ");
+								if (usingpos)
+									indexdef = usingpos + 7;
+								appendPQExpBuffer(&buf, " %s", indexdef);
+
+								/* Need these for deferrable PK/UNIQUE indexes */
+								if (strcmp(PQgetvalue(result, i, 8), "t") == 0)
+									appendPQExpBufferStr(&buf, " DEFERRABLE");
+
+								if (strcmp(PQgetvalue(result, i, 9), "t") == 0)
+									appendPQExpBufferStr(&buf, " INITIALLY DEFERRED");
+							}
+
+							/* Add these for all cases */
+							if (strcmp(PQgetvalue(result, i, 3), "t") == 0)
+								appendPQExpBufferStr(&buf, " CLUSTER");
+
+							if (strcmp(PQgetvalue(result, i, 4), "t") != 0)
+								appendPQExpBufferStr(&buf, " INVALID");
+
+							if (strcmp(PQgetvalue(result, i, 10), "t") == 0)
+								appendPQExpBufferStr(&buf, " REPLICA IDENTITY");
+
+							printTableAddFooter(&cont, buf.data);
+
+							/* Print tablespace of the index on the same line */
+							if (pset.sversion >= 80000)
+								add_tablespace_footer(&cont, RELKIND_INDEX,
+													  atooid(PQgetvalue(result, i, 11)),
+													  false);
+						}
+					}
+					PQclear(result);
 				}
 
-				if (!PQgetisnull(result, i, 3))
-					appendPQExpBuffer(&buf, "\n      USING (%s)",
-									  PQgetvalue(result, i, 3));
-
-				if (!PQgetisnull(result, i, 4))
-					appendPQExpBuffer(&buf, "\n      WITH CHECK (%s)",
-									  PQgetvalue(result, i, 4));
-
-				printTableAddFooter(&cont, buf.data);
-
-			}
-			PQclear(result);
-		}
-
-		/* print any extended statistics */
-		if (pset.sversion >= 100000)
-		{
-			printfPQExpBuffer(&buf,
-							  "SELECT oid, "
-							  "stxrelid::pg_catalog.regclass, "
-							  "stxnamespace::pg_catalog.regnamespace AS nsp, "
-							  "stxname,\n"
-							  "  (SELECT pg_catalog.string_agg(pg_catalog.quote_ident(attname),', ')\n"
-							  "   FROM pg_catalog.unnest(stxkeys) s(attnum)\n"
-							  "   JOIN pg_catalog.pg_attribute a ON (stxrelid = a.attrelid AND\n"
-							  "        a.attnum = s.attnum AND NOT attisdropped)) AS columns,\n"
-							  "  'd' = any(stxkind) AS ndist_enabled,\n"
-							  "  'f' = any(stxkind) AS deps_enabled,\n"
-							  "  'm' = any(stxkind) AS mcv_enabled\n"
-							  "FROM pg_catalog.pg_statistic_ext stat "
-							  "WHERE stxrelid = '%s'\n"
-							  "ORDER BY 1;",
-							  oid);
-
-			result = PSQLexec(buf.data);
-			if (!result)
-				goto error_return;
-			else
-				tuples = PQntuples(result);
-
-			if (tuples > 0)
-			{
-				printTableAddFooter(&cont, _("Statistics objects:"));
-
-				for (i = 0; i < tuples; i++)
+				/* print table (and column) check constraints */
+				if (tableinfo.checks)
 				{
-					bool		gotone = false;
+					printfPQExpBuffer(&buf,
+									  "SELECT r.conname, "
+									  "pg_catalog.pg_get_constraintdef(r.oid, true)\n"
+									  "FROM pg_catalog.pg_constraint r\n"
+									  "WHERE r.conrelid = '%s' AND r.contype = 'c'\n"
+									  "ORDER BY 1;",
+									  oid);
+					result = PSQLexec(buf.data);
+					if (!result)
+						goto error_return;
+					else
+						tuples = PQntuples(result);
 
-					printfPQExpBuffer(&buf, "    ");
-
-					/* statistics object name (qualified with namespace) */
-					appendPQExpBuffer(&buf, "\"%s\".\"%s\" (",
-									  PQgetvalue(result, i, 2),
-									  PQgetvalue(result, i, 3));
-
-					/* options */
-					if (strcmp(PQgetvalue(result, i, 5), "t") == 0)
+					if (tuples > 0)
 					{
-						appendPQExpBufferStr(&buf, "ndistinct");
-						gotone = true;
+						printTableAddFooter(&cont, _("Check constraints:"));
+						for (i = 0; i < tuples; i++)
+						{
+							/* untranslated constraint name and def */
+							printfPQExpBuffer(&buf, "    \"%s\" %s",
+											  PQgetvalue(result, i, 0),
+											  PQgetvalue(result, i, 1));
+
+							printTableAddFooter(&cont, buf.data);
+						}
 					}
-
-					if (strcmp(PQgetvalue(result, i, 6), "t") == 0)
-					{
-						appendPQExpBuffer(&buf, "%sdependencies", gotone ? ", " : "");
-						gotone = true;
-					}
-
-					if (strcmp(PQgetvalue(result, i, 7), "t") == 0)
-					{
-						appendPQExpBuffer(&buf, "%smcv", gotone ? ", " : "");
-					}
-
-					appendPQExpBuffer(&buf, ") ON %s FROM %s",
-									  PQgetvalue(result, i, 4),
-									  PQgetvalue(result, i, 1));
-
-					printTableAddFooter(&cont, buf.data);
+					PQclear(result);
 				}
-			}
-			PQclear(result);
-		}
 
-		/* print rules */
-		if (tableinfo.hasrules && tableinfo.relkind != RELKIND_MATVIEW)
-		{
-			if (pset.sversion >= 80300)
-			{
-				printfPQExpBuffer(&buf,
-								  "SELECT r.rulename, trim(trailing ';' from pg_catalog.pg_get_ruledef(r.oid, true)), "
-								  "ev_enabled\n"
-								  "FROM pg_catalog.pg_rewrite r\n"
-								  "WHERE r.ev_class = '%s' ORDER BY 1;",
-								  oid);
-			}
-			else
-			{
-				printfPQExpBuffer(&buf,
-								  "SELECT r.rulename, trim(trailing ';' from pg_catalog.pg_get_ruledef(r.oid, true)), "
-								  "'O' AS ev_enabled\n"
-								  "FROM pg_catalog.pg_rewrite r\n"
-								  "WHERE r.ev_class = '%s' ORDER BY 1;",
-								  oid);
-			}
-			result = PSQLexec(buf.data);
-			if (!result)
-				goto error_return;
-			else
-				tuples = PQntuples(result);
-
-			if (tuples > 0)
-			{
-				bool		have_heading;
-				int			category;
-
-				for (category = 0; category < 4; category++)
+				/*
+				 * Print foreign-key constraints (there are none if no
+				 * triggers, except if the table is partitioned, in which case
+				 * the triggers appear in the partitions)
+				 */
+				if (tableinfo.hastriggers ||
+					tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
 				{
-					have_heading = false;
+					if (pset.sversion >= 120000 &&
+						(tableinfo.ispartition || tableinfo.relkind == RELKIND_PARTITIONED_TABLE))
+					{
+						/*
+						 * Put the constraints defined in this table first,
+						 * followed by the constraints defined in ancestor
+						 * partitioned tables.
+						 */
+						printfPQExpBuffer(&buf,
+										  "SELECT conrelid = '%s'::pg_catalog.regclass AS sametable,\n"
+										  "       conname,\n"
+										  "       pg_catalog.pg_get_constraintdef(oid, true) AS condef,\n"
+										  "       conrelid::pg_catalog.regclass AS ontable\n"
+										  "  FROM pg_catalog.pg_constraint,\n"
+										  "       pg_catalog.pg_partition_ancestors('%s')\n"
+										  " WHERE conrelid = relid AND contype = 'f' AND conparentid = 0\n"
+										  "ORDER BY sametable DESC, conname;",
+										  oid, oid);
+					}
+					else
+					{
+						printfPQExpBuffer(&buf,
+										  "SELECT true as sametable, conname,\n"
+										  "  pg_catalog.pg_get_constraintdef(r.oid, true) as condef,\n"
+										  "  conrelid::pg_catalog.regclass AS ontable\n"
+										  "FROM pg_catalog.pg_constraint r\n"
+										  "WHERE r.conrelid = '%s' AND r.contype = 'f'\n",
+										  oid);
 
+						if (pset.sversion >= 120000)
+							appendPQExpBufferStr(&buf, "     AND conparentid = 0\n");
+						appendPQExpBufferStr(&buf, "ORDER BY conname");
+					}
+
+					result = PSQLexec(buf.data);
+					if (!result)
+						goto error_return;
+					else
+						tuples = PQntuples(result);
+
+					if (tuples > 0)
+					{
+						int			i_sametable = PQfnumber(result, "sametable"),
+									i_conname = PQfnumber(result, "conname"),
+									i_condef = PQfnumber(result, "condef"),
+									i_ontable = PQfnumber(result, "ontable");
+
+						printTableAddFooter(&cont, _("Foreign-key constraints:"));
+						for (i = 0; i < tuples; i++)
+						{
+							/*
+							 * Print untranslated constraint name and
+							 * definition. Use a "TABLE tab" prefix when the
+							 * constraint is defined in a parent partitioned
+							 * table.
+							 */
+							if (strcmp(PQgetvalue(result, i, i_sametable), "f") == 0)
+								printfPQExpBuffer(&buf, "    TABLE \"%s\" CONSTRAINT \"%s\" %s",
+												  PQgetvalue(result, i, i_ontable),
+												  PQgetvalue(result, i, i_conname),
+												  PQgetvalue(result, i, i_condef));
+							else
+								printfPQExpBuffer(&buf, "    \"%s\" %s",
+												  PQgetvalue(result, i, i_conname),
+												  PQgetvalue(result, i, i_condef));
+
+							printTableAddFooter(&cont, buf.data);
+						}
+					}
+					PQclear(result);
+				}
+
+				/* print incoming foreign-key references */
+				if (tableinfo.hastriggers ||
+					tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
+				{
+					if (pset.sversion >= 120000)
+					{
+						printfPQExpBuffer(&buf,
+										  "SELECT conname, conrelid::pg_catalog.regclass AS ontable,\n"
+										  "       pg_catalog.pg_get_constraintdef(oid, true) AS condef\n"
+										  "  FROM pg_catalog.pg_constraint c\n"
+										  " WHERE confrelid IN (SELECT pg_catalog.pg_partition_ancestors('%s')\n"
+										  "                     UNION ALL VALUES ('%s'::pg_catalog.regclass))\n"
+										  "       AND contype = 'f' AND conparentid = 0\n"
+										  "ORDER BY conname;",
+										  oid, oid);
+					}
+					else
+					{
+						printfPQExpBuffer(&buf,
+										  "SELECT conname, conrelid::pg_catalog.regclass AS ontable,\n"
+										  "       pg_catalog.pg_get_constraintdef(oid, true) AS condef\n"
+										  "  FROM pg_catalog.pg_constraint\n"
+										  " WHERE confrelid = %s AND contype = 'f'\n"
+										  "ORDER BY conname;",
+										  oid);
+					}
+
+					result = PSQLexec(buf.data);
+					if (!result)
+						goto error_return;
+					else
+						tuples = PQntuples(result);
+
+					if (tuples > 0)
+					{
+						int			i_conname = PQfnumber(result, "conname"),
+									i_ontable = PQfnumber(result, "ontable"),
+									i_condef = PQfnumber(result, "condef");
+
+						printTableAddFooter(&cont, _("Referenced by:"));
+						for (i = 0; i < tuples; i++)
+						{
+							printfPQExpBuffer(&buf, "    TABLE \"%s\" CONSTRAINT \"%s\" %s",
+											  PQgetvalue(result, i, i_ontable),
+											  PQgetvalue(result, i, i_conname),
+											  PQgetvalue(result, i, i_condef));
+
+							printTableAddFooter(&cont, buf.data);
+						}
+					}
+					PQclear(result);
+				}
+
+				/* print any row-level policies */
+				if (pset.sversion >= 90500)
+				{
+					printfPQExpBuffer(&buf, "SELECT pol.polname,");
+					if (pset.sversion >= 100000)
+						appendPQExpBufferStr(&buf,
+											 " pol.polpermissive,\n");
+					else
+						appendPQExpBufferStr(&buf,
+											 " 't' as polpermissive,\n");
+					appendPQExpBuffer(&buf,
+									  "  CASE WHEN pol.polroles = '{0}' THEN NULL ELSE pg_catalog.array_to_string(array(select rolname from pg_catalog.pg_roles where oid = any (pol.polroles) order by 1),',') END,\n"
+									  "  pg_catalog.pg_get_expr(pol.polqual, pol.polrelid),\n"
+									  "  pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid),\n"
+									  "  CASE pol.polcmd\n"
+									  "    WHEN 'r' THEN 'SELECT'\n"
+									  "    WHEN 'a' THEN 'INSERT'\n"
+									  "    WHEN 'w' THEN 'UPDATE'\n"
+									  "    WHEN 'd' THEN 'DELETE'\n"
+									  "    END AS cmd\n"
+									  "FROM pg_catalog.pg_policy pol\n"
+									  "WHERE pol.polrelid = '%s' ORDER BY 1;",
+									  oid);
+
+					result = PSQLexec(buf.data);
+					if (!result)
+						goto error_return;
+					else
+						tuples = PQntuples(result);
+
+					/*
+					 * Handle cases where RLS is enabled and there are
+					 * policies, or there aren't policies, or RLS isn't
+					 * enabled but there are policies
+					 */
+					if (tableinfo.rowsecurity && !tableinfo.forcerowsecurity && tuples > 0)
+						printTableAddFooter(&cont, _("Policies:"));
+
+					if (tableinfo.rowsecurity && tableinfo.forcerowsecurity && tuples > 0)
+						printTableAddFooter(&cont, _("Policies (forced row security enabled):"));
+
+					if (tableinfo.rowsecurity && !tableinfo.forcerowsecurity && tuples == 0)
+						printTableAddFooter(&cont, _("Policies (row security enabled): (none)"));
+
+					if (tableinfo.rowsecurity && tableinfo.forcerowsecurity && tuples == 0)
+						printTableAddFooter(&cont, _("Policies (forced row security enabled): (none)"));
+
+					if (!tableinfo.rowsecurity && tuples > 0)
+						printTableAddFooter(&cont, _("Policies (row security disabled):"));
+
+					/* Might be an empty set - that's ok */
 					for (i = 0; i < tuples; i++)
 					{
-						const char *ruledef;
-						bool		list_rule = false;
+						printfPQExpBuffer(&buf, "    POLICY \"%s\"",
+										  PQgetvalue(result, i, 0));
 
-						switch (category)
+						if (*(PQgetvalue(result, i, 1)) == 'f')
+							appendPQExpBufferStr(&buf, " AS RESTRICTIVE");
+
+						if (!PQgetisnull(result, i, 5))
+							appendPQExpBuffer(&buf, " FOR %s",
+											  PQgetvalue(result, i, 5));
+
+						if (!PQgetisnull(result, i, 2))
 						{
-							case 0:
-								if (*PQgetvalue(result, i, 2) == 'O')
-									list_rule = true;
-								break;
-							case 1:
-								if (*PQgetvalue(result, i, 2) == 'D')
-									list_rule = true;
-								break;
-							case 2:
-								if (*PQgetvalue(result, i, 2) == 'A')
-									list_rule = true;
-								break;
-							case 3:
-								if (*PQgetvalue(result, i, 2) == 'R')
-									list_rule = true;
-								break;
+							appendPQExpBuffer(&buf, "\n      TO %s",
+											  PQgetvalue(result, i, 2));
 						}
-						if (!list_rule)
-							continue;
 
-						if (!have_heading)
+						if (!PQgetisnull(result, i, 3))
+							appendPQExpBuffer(&buf, "\n      USING (%s)",
+											  PQgetvalue(result, i, 3));
+
+						if (!PQgetisnull(result, i, 4))
+							appendPQExpBuffer(&buf, "\n      WITH CHECK (%s)",
+											  PQgetvalue(result, i, 4));
+
+						printTableAddFooter(&cont, buf.data);
+
+					}
+					PQclear(result);
+				}
+
+				/* print any extended statistics */
+				if (pset.sversion >= 100000)
+				{
+					printfPQExpBuffer(&buf,
+									  "SELECT oid, "
+									  "stxrelid::pg_catalog.regclass, "
+									  "stxnamespace::pg_catalog.regnamespace AS nsp, "
+									  "stxname,\n"
+									  "  (SELECT pg_catalog.string_agg(pg_catalog.quote_ident(attname),', ')\n"
+									  "   FROM pg_catalog.unnest(stxkeys) s(attnum)\n"
+									  "   JOIN pg_catalog.pg_attribute a ON (stxrelid = a.attrelid AND\n"
+									  "        a.attnum = s.attnum AND NOT attisdropped)) AS columns,\n"
+									  "  'd' = any(stxkind) AS ndist_enabled,\n"
+									  "  'f' = any(stxkind) AS deps_enabled,\n"
+									  "  'm' = any(stxkind) AS mcv_enabled\n"
+									  "FROM pg_catalog.pg_statistic_ext stat "
+									  "WHERE stxrelid = '%s'\n"
+									  "ORDER BY 1;",
+									  oid);
+
+					result = PSQLexec(buf.data);
+					if (!result)
+						goto error_return;
+					else
+						tuples = PQntuples(result);
+
+					if (tuples > 0)
+					{
+						printTableAddFooter(&cont, _("Statistics objects:"));
+
+						for (i = 0; i < tuples; i++)
 						{
-							switch (category)
+							bool		gotone = false;
+
+							printfPQExpBuffer(&buf, "    ");
+
+							/*
+							 * statistics object name (qualified with
+							 * namespace)
+							 */
+							appendPQExpBuffer(&buf, "\"%s\".\"%s\" (",
+											  PQgetvalue(result, i, 2),
+											  PQgetvalue(result, i, 3));
+
+							/* options */
+							if (strcmp(PQgetvalue(result, i, 5), "t") == 0)
 							{
-								case 0:
-									printfPQExpBuffer(&buf, _("Rules:"));
-									break;
-								case 1:
-									printfPQExpBuffer(&buf, _("Disabled rules:"));
-									break;
-								case 2:
-									printfPQExpBuffer(&buf, _("Rules firing always:"));
-									break;
-								case 3:
-									printfPQExpBuffer(&buf, _("Rules firing on replica only:"));
-									break;
+								appendPQExpBufferStr(&buf, "ndistinct");
+								gotone = true;
 							}
-							printTableAddFooter(&cont, buf.data);
-							have_heading = true;
-						}
 
-						/* Everything after "CREATE RULE" is echoed verbatim */
-						ruledef = PQgetvalue(result, i, 1);
-						ruledef += 12;
-						printfPQExpBuffer(&buf, "    %s", ruledef);
+							if (strcmp(PQgetvalue(result, i, 6), "t") == 0)
+							{
+								appendPQExpBuffer(&buf, "%sdependencies", gotone ? ", " : "");
+								gotone = true;
+							}
+
+							if (strcmp(PQgetvalue(result, i, 7), "t") == 0)
+							{
+								appendPQExpBuffer(&buf, "%smcv", gotone ? ", " : "");
+							}
+
+							appendPQExpBuffer(&buf, ") ON %s FROM %s",
+											  PQgetvalue(result, i, 4),
+											  PQgetvalue(result, i, 1));
+
+							printTableAddFooter(&cont, buf.data);
+						}
+					}
+					PQclear(result);
+				}
+
+				/* print rules */
+				if (tableinfo.hasrules && tableinfo.relkind != RELKIND_MATVIEW)
+				{
+					if (pset.sversion >= 80300)
+					{
+						printfPQExpBuffer(&buf,
+										  "SELECT r.rulename, trim(trailing ';' from pg_catalog.pg_get_ruledef(r.oid, true)), "
+										  "ev_enabled\n"
+										  "FROM pg_catalog.pg_rewrite r\n"
+										  "WHERE r.ev_class = '%s' ORDER BY 1;",
+										  oid);
+					}
+					else
+					{
+						printfPQExpBuffer(&buf,
+										  "SELECT r.rulename, trim(trailing ';' from pg_catalog.pg_get_ruledef(r.oid, true)), "
+										  "'O' AS ev_enabled\n"
+										  "FROM pg_catalog.pg_rewrite r\n"
+										  "WHERE r.ev_class = '%s' ORDER BY 1;",
+										  oid);
+					}
+					result = PSQLexec(buf.data);
+					if (!result)
+						goto error_return;
+					else
+						tuples = PQntuples(result);
+
+					if (tuples > 0)
+					{
+						bool		have_heading;
+						int			category;
+
+						for (category = 0; category < 4; category++)
+						{
+							have_heading = false;
+
+							for (i = 0; i < tuples; i++)
+							{
+								const char *ruledef;
+								bool		list_rule = false;
+
+								switch (category)
+								{
+									case 0:
+										if (*PQgetvalue(result, i, 2) == 'O')
+											list_rule = true;
+										break;
+									case 1:
+										if (*PQgetvalue(result, i, 2) == 'D')
+											list_rule = true;
+										break;
+									case 2:
+										if (*PQgetvalue(result, i, 2) == 'A')
+											list_rule = true;
+										break;
+									case 3:
+										if (*PQgetvalue(result, i, 2) == 'R')
+											list_rule = true;
+										break;
+								}
+								if (!list_rule)
+									continue;
+
+								if (!have_heading)
+								{
+									switch (category)
+									{
+										case 0:
+											printfPQExpBuffer(&buf, _("Rules:"));
+											break;
+										case 1:
+											printfPQExpBuffer(&buf, _("Disabled rules:"));
+											break;
+										case 2:
+											printfPQExpBuffer(&buf, _("Rules firing always:"));
+											break;
+										case 3:
+											printfPQExpBuffer(&buf, _("Rules firing on replica only:"));
+											break;
+									}
+									printTableAddFooter(&cont, buf.data);
+									have_heading = true;
+								}
+
+								/*
+								 * Everything after "CREATE RULE" is echoed
+								 * verbatim
+								 */
+								ruledef = PQgetvalue(result, i, 1);
+								ruledef += 12;
+								printfPQExpBuffer(&buf, "    %s", ruledef);
+								printTableAddFooter(&cont, buf.data);
+							}
+						}
+					}
+					PQclear(result);
+				}
+
+				/* print any publications */
+				if (pset.sversion >= 100000)
+				{
+					printfPQExpBuffer(&buf,
+									  "SELECT pubname\n"
+									  "FROM pg_catalog.pg_publication p\n"
+									  "JOIN pg_catalog.pg_publication_rel pr ON p.oid = pr.prpubid\n"
+									  "WHERE pr.prrelid = '%s'\n"
+									  "UNION ALL\n"
+									  "SELECT pubname\n"
+									  "FROM pg_catalog.pg_publication p\n"
+									  "WHERE p.puballtables AND pg_catalog.pg_relation_is_publishable('%s')\n"
+									  "ORDER BY 1;",
+									  oid, oid);
+
+					result = PSQLexec(buf.data);
+					if (!result)
+						goto error_return;
+					else
+						tuples = PQntuples(result);
+
+					if (tuples > 0)
+						printTableAddFooter(&cont, _("Publications:"));
+
+					/* Might be an empty set - that's ok */
+					for (i = 0; i < tuples; i++)
+					{
+						printfPQExpBuffer(&buf, "    \"%s\"",
+										  PQgetvalue(result, i, 0));
+
 						printTableAddFooter(&cont, buf.data);
 					}
+					PQclear(result);
 				}
 			}
-			PQclear(result);
-		}
-
-		/* print any publications */
-		if (pset.sversion >= 100000)
-		{
-			printfPQExpBuffer(&buf,
-							  "SELECT pubname\n"
-							  "FROM pg_catalog.pg_publication p\n"
-							  "JOIN pg_catalog.pg_publication_rel pr ON p.oid = pr.prpubid\n"
-							  "WHERE pr.prrelid = '%s'\n"
-							  "UNION ALL\n"
-							  "SELECT pubname\n"
-							  "FROM pg_catalog.pg_publication p\n"
-							  "WHERE p.puballtables AND pg_catalog.pg_relation_is_publishable('%s')\n"
-							  "ORDER BY 1;",
-							  oid, oid);
-
-			result = PSQLexec(buf.data);
-			if (!result)
-				goto error_return;
-			else
-				tuples = PQntuples(result);
-
-			if (tuples > 0)
-				printTableAddFooter(&cont, _("Publications:"));
-
-			/* Might be an empty set - that's ok */
-			for (i = 0; i < tuples; i++)
-			{
-				printfPQExpBuffer(&buf, "    \"%s\"",
-								  PQgetvalue(result, i, 0));
-
-				printTableAddFooter(&cont, buf.data);
-			}
-			PQclear(result);
-		}
+			break;
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/* Get view_def if table is a view or materialized view */
-	if ((tableinfo.relkind == RELKIND_VIEW ||
-		 tableinfo.relkind == RELKIND_MATVIEW) && verbose)
+	switch ((RelKind) tableinfo.relkind)
 	{
-		PGresult   *result;
+		case RELKIND_VIEW:
+		case RELKIND_MATVIEW:
+			if (verbose)
+			{
+				PGresult   *result;
 
-		printfPQExpBuffer(&buf,
-						  "SELECT pg_catalog.pg_get_viewdef('%s'::pg_catalog.oid, true);",
-						  oid);
-		result = PSQLexec(buf.data);
-		if (!result)
-			goto error_return;
+				printfPQExpBuffer(&buf,
+								  "SELECT pg_catalog.pg_get_viewdef('%s'::pg_catalog.oid, true);",
+								  oid);
+				result = PSQLexec(buf.data);
+				if (!result)
+					goto error_return;
 
-		if (PQntuples(result) > 0)
-			view_def = pg_strdup(PQgetvalue(result, 0, 0));
+				if (PQntuples(result) > 0)
+					view_def = pg_strdup(PQgetvalue(result, 0, 0));
 
-		PQclear(result);
+				PQclear(result);
+			}
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	if (view_def)
@@ -3086,224 +3205,235 @@ describeOneTableDetails(const char *schemaname,
 	/*
 	 * Finish printing the footer information about a table.
 	 */
-	if (tableinfo.relkind == RELKIND_RELATION ||
-		tableinfo.relkind == RELKIND_MATVIEW ||
-		tableinfo.relkind == RELKIND_FOREIGN_TABLE ||
-		tableinfo.relkind == RELKIND_PARTITIONED_TABLE ||
-		tableinfo.relkind == RELKIND_PARTITIONED_INDEX ||
-		tableinfo.relkind == RELKIND_TOASTVALUE)
+	switch ((RelKind) tableinfo.relkind)
 	{
-		bool		is_partitioned;
-		PGresult   *result;
-		int			tuples;
-
-		/* simplify some repeated tests below */
-		is_partitioned = (tableinfo.relkind == RELKIND_PARTITIONED_TABLE ||
-						  tableinfo.relkind == RELKIND_PARTITIONED_INDEX);
-
-		/* print foreign server name */
-		if (tableinfo.relkind == RELKIND_FOREIGN_TABLE)
-		{
-			char	   *ftoptions;
-
-			/* Footer information about foreign table */
-			printfPQExpBuffer(&buf,
-							  "SELECT s.srvname,\n"
-							  "  pg_catalog.array_to_string(ARRAY(\n"
-							  "    SELECT pg_catalog.quote_ident(option_name)"
-							  " || ' ' || pg_catalog.quote_literal(option_value)\n"
-							  "    FROM pg_catalog.pg_options_to_table(ftoptions)),  ', ')\n"
-							  "FROM pg_catalog.pg_foreign_table f,\n"
-							  "     pg_catalog.pg_foreign_server s\n"
-							  "WHERE f.ftrelid = '%s' AND s.oid = f.ftserver;",
-							  oid);
-			result = PSQLexec(buf.data);
-			if (!result)
-				goto error_return;
-			else if (PQntuples(result) != 1)
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_TOASTVALUE:
 			{
+				bool		is_partitioned;
+				PGresult   *result;
+				int			tuples;
+
+				/* simplify some repeated tests below */
+				is_partitioned = (tableinfo.relkind == RELKIND_PARTITIONED_TABLE ||
+								  tableinfo.relkind == RELKIND_PARTITIONED_INDEX);
+
+				/* print foreign server name */
+				if (tableinfo.relkind == RELKIND_FOREIGN_TABLE)
+				{
+					char	   *ftoptions;
+
+					/* Footer information about foreign table */
+					printfPQExpBuffer(&buf,
+									  "SELECT s.srvname,\n"
+									  "  pg_catalog.array_to_string(ARRAY(\n"
+									  "    SELECT pg_catalog.quote_ident(option_name)"
+									  " || ' ' || pg_catalog.quote_literal(option_value)\n"
+									  "    FROM pg_catalog.pg_options_to_table(ftoptions)),  ', ')\n"
+									  "FROM pg_catalog.pg_foreign_table f,\n"
+									  "     pg_catalog.pg_foreign_server s\n"
+									  "WHERE f.ftrelid = '%s' AND s.oid = f.ftserver;",
+									  oid);
+					result = PSQLexec(buf.data);
+					if (!result)
+						goto error_return;
+					else if (PQntuples(result) != 1)
+					{
+						PQclear(result);
+						goto error_return;
+					}
+
+					/* Print server name */
+					printfPQExpBuffer(&buf, _("Server: %s"),
+									  PQgetvalue(result, 0, 0));
+					printTableAddFooter(&cont, buf.data);
+
+					/* Print per-table FDW options, if any */
+					ftoptions = PQgetvalue(result, 0, 1);
+					if (ftoptions && ftoptions[0] != '\0')
+					{
+						printfPQExpBuffer(&buf, _("FDW options: (%s)"), ftoptions);
+						printTableAddFooter(&cont, buf.data);
+					}
+					PQclear(result);
+				}
+
+				/* print tables inherited from (exclude partitioned parents) */
+				printfPQExpBuffer(&buf,
+								  "SELECT c.oid::pg_catalog.regclass\n"
+								  "FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i\n"
+								  "WHERE c.oid = i.inhparent AND i.inhrelid = '%s'\n"
+								  "  AND c.relkind != " RelKindAsString(RELKIND_PARTITIONED_TABLE)
+								  " AND c.relkind != " RelKindAsString(RELKIND_PARTITIONED_INDEX)
+								  "\nORDER BY inhseqno;",
+								  oid);
+
+				result = PSQLexec(buf.data);
+				if (!result)
+					goto error_return;
+				else
+				{
+					const char *s = _("Inherits");
+					int			sw = pg_wcswidth(s, strlen(s), pset.encoding);
+
+					tuples = PQntuples(result);
+
+					for (i = 0; i < tuples; i++)
+					{
+						if (i == 0)
+							printfPQExpBuffer(&buf, "%s: %s",
+											  s, PQgetvalue(result, i, 0));
+						else
+							printfPQExpBuffer(&buf, "%*s  %s",
+											  sw, "", PQgetvalue(result, i, 0));
+						if (i < tuples - 1)
+							appendPQExpBufferChar(&buf, ',');
+
+						printTableAddFooter(&cont, buf.data);
+					}
+
+					PQclear(result);
+				}
+
+				/* print child tables (with additional info if partitions) */
+				if (pset.sversion >= 100000)
+					printfPQExpBuffer(&buf,
+									  "SELECT c.oid::pg_catalog.regclass, c.relkind,"
+									  " pg_catalog.pg_get_expr(c.relpartbound, c.oid)\n"
+									  "FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i\n"
+									  "WHERE c.oid = i.inhrelid AND i.inhparent = '%s'\n"
+									  "ORDER BY pg_catalog.pg_get_expr(c.relpartbound, c.oid) = 'DEFAULT',"
+									  " c.oid::pg_catalog.regclass::pg_catalog.text;",
+									  oid);
+				else if (pset.sversion >= 80300)
+					printfPQExpBuffer(&buf,
+									  "SELECT c.oid::pg_catalog.regclass, c.relkind, NULL\n"
+									  "FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i\n"
+									  "WHERE c.oid = i.inhrelid AND i.inhparent = '%s'\n"
+									  "ORDER BY c.oid::pg_catalog.regclass::pg_catalog.text;",
+									  oid);
+				else
+					printfPQExpBuffer(&buf,
+									  "SELECT c.oid::pg_catalog.regclass, c.relkind, NULL\n"
+									  "FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i\n"
+									  "WHERE c.oid = i.inhrelid AND i.inhparent = '%s'\n"
+									  "ORDER BY c.relname;",
+									  oid);
+
+				result = PSQLexec(buf.data);
+				if (!result)
+					goto error_return;
+				tuples = PQntuples(result);
+
+				/*
+				 * For a partitioned table with no partitions, always print
+				 * the number of partitions as zero, even when verbose output
+				 * is expected. Otherwise, we will not print "Partitions"
+				 * section for a partitioned table without any partitions.
+				 */
+				if (is_partitioned && tuples == 0)
+				{
+					printfPQExpBuffer(&buf, _("Number of partitions: %d"), tuples);
+					printTableAddFooter(&cont, buf.data);
+				}
+				else if (!verbose)
+				{
+					/* print the number of child tables, if any */
+					if (tuples > 0)
+					{
+						if (is_partitioned)
+							printfPQExpBuffer(&buf, _("Number of partitions: %d (Use \\d+ to list them.)"), tuples);
+						else
+							printfPQExpBuffer(&buf, _("Number of child tables: %d (Use \\d+ to list them.)"), tuples);
+						printTableAddFooter(&cont, buf.data);
+					}
+				}
+				else
+				{
+					/* display the list of child tables */
+					const char *ct = is_partitioned ? _("Partitions") : _("Child tables");
+					int			ctw = pg_wcswidth(ct, strlen(ct), pset.encoding);
+
+					for (i = 0; i < tuples; i++)
+					{
+						char		child_relkind = *PQgetvalue(result, i, 1);
+
+						if (i == 0)
+							printfPQExpBuffer(&buf, "%s: %s",
+											  ct, PQgetvalue(result, i, 0));
+						else
+							printfPQExpBuffer(&buf, "%*s  %s",
+											  ctw, "", PQgetvalue(result, i, 0));
+						if (!PQgetisnull(result, i, 2))
+							appendPQExpBuffer(&buf, " %s", PQgetvalue(result, i, 2));
+						if (child_relkind == RELKIND_PARTITIONED_TABLE ||
+							child_relkind == RELKIND_PARTITIONED_INDEX)
+							appendPQExpBufferStr(&buf, ", PARTITIONED");
+						if (i < tuples - 1)
+							appendPQExpBufferChar(&buf, ',');
+
+						printTableAddFooter(&cont, buf.data);
+					}
+				}
 				PQclear(result);
-				goto error_return;
-			}
 
-			/* Print server name */
-			printfPQExpBuffer(&buf, _("Server: %s"),
-							  PQgetvalue(result, 0, 0));
-			printTableAddFooter(&cont, buf.data);
+				/* Table type */
+				if (tableinfo.reloftype)
+				{
+					printfPQExpBuffer(&buf, _("Typed table of type: %s"), tableinfo.reloftype);
+					printTableAddFooter(&cont, buf.data);
+				}
 
-			/* Print per-table FDW options, if any */
-			ftoptions = PQgetvalue(result, 0, 1);
-			if (ftoptions && ftoptions[0] != '\0')
-			{
-				printfPQExpBuffer(&buf, _("FDW options: (%s)"), ftoptions);
-				printTableAddFooter(&cont, buf.data);
-			}
-			PQclear(result);
-		}
+				if (verbose &&
+					(tableinfo.relkind == RELKIND_RELATION ||
+					 tableinfo.relkind == RELKIND_MATVIEW) &&
 
-		/* print tables inherited from (exclude partitioned parents) */
-		printfPQExpBuffer(&buf,
-						  "SELECT c.oid::pg_catalog.regclass\n"
-						  "FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i\n"
-						  "WHERE c.oid = i.inhparent AND i.inhrelid = '%s'\n"
-						  "  AND c.relkind != " CppAsString2(RELKIND_PARTITIONED_TABLE)
-						  " AND c.relkind != " CppAsString2(RELKIND_PARTITIONED_INDEX)
-						  "\nORDER BY inhseqno;",
-						  oid);
+				/*
+				 * No need to display default values; we already display a
+				 * REPLICA IDENTITY marker on indexes.
+				 */
+					tableinfo.relreplident != 'i' &&
+					((strcmp(schemaname, "pg_catalog") != 0 && tableinfo.relreplident != 'd') ||
+					 (strcmp(schemaname, "pg_catalog") == 0 && tableinfo.relreplident != 'n')))
+				{
+					const char *s = _("Replica Identity");
 
-		result = PSQLexec(buf.data);
-		if (!result)
-			goto error_return;
-		else
-		{
-			const char *s = _("Inherits");
-			int			sw = pg_wcswidth(s, strlen(s), pset.encoding);
-
-			tuples = PQntuples(result);
-
-			for (i = 0; i < tuples; i++)
-			{
-				if (i == 0)
 					printfPQExpBuffer(&buf, "%s: %s",
-									  s, PQgetvalue(result, i, 0));
-				else
-					printfPQExpBuffer(&buf, "%*s  %s",
-									  sw, "", PQgetvalue(result, i, 0));
-				if (i < tuples - 1)
-					appendPQExpBufferChar(&buf, ',');
+									  s,
+									  tableinfo.relreplident == 'f' ? "FULL" :
+									  tableinfo.relreplident == 'n' ? "NOTHING" :
+									  "???");
 
-				printTableAddFooter(&cont, buf.data);
+					printTableAddFooter(&cont, buf.data);
+				}
+
+				/* OIDs, if verbose and not a materialized view */
+				if (verbose && tableinfo.relkind != RELKIND_MATVIEW && tableinfo.hasoids)
+					printTableAddFooter(&cont, _("Has OIDs: yes"));
+
+				/* Tablespace info */
+				add_tablespace_footer(&cont, tableinfo.relkind, tableinfo.tablespace,
+									  true);
+
+				/* Access method info */
+				if (verbose && tableinfo.relam != NULL && !pset.hide_tableam)
+				{
+					printfPQExpBuffer(&buf, _("Access method: %s"), tableinfo.relam);
+					printTableAddFooter(&cont, buf.data);
+				}
 			}
-
-			PQclear(result);
-		}
-
-		/* print child tables (with additional info if partitions) */
-		if (pset.sversion >= 100000)
-			printfPQExpBuffer(&buf,
-							  "SELECT c.oid::pg_catalog.regclass, c.relkind,"
-							  " pg_catalog.pg_get_expr(c.relpartbound, c.oid)\n"
-							  "FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i\n"
-							  "WHERE c.oid = i.inhrelid AND i.inhparent = '%s'\n"
-							  "ORDER BY pg_catalog.pg_get_expr(c.relpartbound, c.oid) = 'DEFAULT',"
-							  " c.oid::pg_catalog.regclass::pg_catalog.text;",
-							  oid);
-		else if (pset.sversion >= 80300)
-			printfPQExpBuffer(&buf,
-							  "SELECT c.oid::pg_catalog.regclass, c.relkind, NULL\n"
-							  "FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i\n"
-							  "WHERE c.oid = i.inhrelid AND i.inhparent = '%s'\n"
-							  "ORDER BY c.oid::pg_catalog.regclass::pg_catalog.text;",
-							  oid);
-		else
-			printfPQExpBuffer(&buf,
-							  "SELECT c.oid::pg_catalog.regclass, c.relkind, NULL\n"
-							  "FROM pg_catalog.pg_class c, pg_catalog.pg_inherits i\n"
-							  "WHERE c.oid = i.inhrelid AND i.inhparent = '%s'\n"
-							  "ORDER BY c.relname;",
-							  oid);
-
-		result = PSQLexec(buf.data);
-		if (!result)
-			goto error_return;
-		tuples = PQntuples(result);
-
-		/*
-		 * For a partitioned table with no partitions, always print the number
-		 * of partitions as zero, even when verbose output is expected.
-		 * Otherwise, we will not print "Partitions" section for a partitioned
-		 * table without any partitions.
-		 */
-		if (is_partitioned && tuples == 0)
-		{
-			printfPQExpBuffer(&buf, _("Number of partitions: %d"), tuples);
-			printTableAddFooter(&cont, buf.data);
-		}
-		else if (!verbose)
-		{
-			/* print the number of child tables, if any */
-			if (tuples > 0)
-			{
-				if (is_partitioned)
-					printfPQExpBuffer(&buf, _("Number of partitions: %d (Use \\d+ to list them.)"), tuples);
-				else
-					printfPQExpBuffer(&buf, _("Number of child tables: %d (Use \\d+ to list them.)"), tuples);
-				printTableAddFooter(&cont, buf.data);
-			}
-		}
-		else
-		{
-			/* display the list of child tables */
-			const char *ct = is_partitioned ? _("Partitions") : _("Child tables");
-			int			ctw = pg_wcswidth(ct, strlen(ct), pset.encoding);
-
-			for (i = 0; i < tuples; i++)
-			{
-				char		child_relkind = *PQgetvalue(result, i, 1);
-
-				if (i == 0)
-					printfPQExpBuffer(&buf, "%s: %s",
-									  ct, PQgetvalue(result, i, 0));
-				else
-					printfPQExpBuffer(&buf, "%*s  %s",
-									  ctw, "", PQgetvalue(result, i, 0));
-				if (!PQgetisnull(result, i, 2))
-					appendPQExpBuffer(&buf, " %s", PQgetvalue(result, i, 2));
-				if (child_relkind == RELKIND_PARTITIONED_TABLE ||
-					child_relkind == RELKIND_PARTITIONED_INDEX)
-					appendPQExpBufferStr(&buf, ", PARTITIONED");
-				if (i < tuples - 1)
-					appendPQExpBufferChar(&buf, ',');
-
-				printTableAddFooter(&cont, buf.data);
-			}
-		}
-		PQclear(result);
-
-		/* Table type */
-		if (tableinfo.reloftype)
-		{
-			printfPQExpBuffer(&buf, _("Typed table of type: %s"), tableinfo.reloftype);
-			printTableAddFooter(&cont, buf.data);
-		}
-
-		if (verbose &&
-			(tableinfo.relkind == RELKIND_RELATION ||
-			 tableinfo.relkind == RELKIND_MATVIEW) &&
-
-		/*
-		 * No need to display default values; we already display a REPLICA
-		 * IDENTITY marker on indexes.
-		 */
-			tableinfo.relreplident != 'i' &&
-			((strcmp(schemaname, "pg_catalog") != 0 && tableinfo.relreplident != 'd') ||
-			 (strcmp(schemaname, "pg_catalog") == 0 && tableinfo.relreplident != 'n')))
-		{
-			const char *s = _("Replica Identity");
-
-			printfPQExpBuffer(&buf, "%s: %s",
-							  s,
-							  tableinfo.relreplident == 'f' ? "FULL" :
-							  tableinfo.relreplident == 'n' ? "NOTHING" :
-							  "???");
-
-			printTableAddFooter(&cont, buf.data);
-		}
-
-		/* OIDs, if verbose and not a materialized view */
-		if (verbose && tableinfo.relkind != RELKIND_MATVIEW && tableinfo.hasoids)
-			printTableAddFooter(&cont, _("Has OIDs: yes"));
-
-		/* Tablespace info */
-		add_tablespace_footer(&cont, tableinfo.relkind, tableinfo.tablespace,
-							  true);
-
-		/* Access method info */
-		if (verbose && tableinfo.relam != NULL && !pset.hide_tableam)
-		{
-			printfPQExpBuffer(&buf, _("Access method: %s"), tableinfo.relam);
-			printTableAddFooter(&cont, buf.data);
-		}
+			break;
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 
 	/* reloptions, if verbose */
@@ -3348,59 +3478,71 @@ add_tablespace_footer(printTableContent *const cont, char relkind,
 					  Oid tablespace, const bool newline)
 {
 	/* relkinds for which we support tablespaces */
-	if (relkind == RELKIND_RELATION ||
-		relkind == RELKIND_MATVIEW ||
-		relkind == RELKIND_INDEX ||
-		relkind == RELKIND_PARTITIONED_TABLE ||
-		relkind == RELKIND_PARTITIONED_INDEX ||
-		relkind == RELKIND_TOASTVALUE)
+	switch ((RelKind) relkind)
 	{
-		/*
-		 * We ignore the database default tablespace so that users not using
-		 * tablespaces don't need to know about them.  This case also covers
-		 * pre-8.0 servers, for which tablespace will always be 0.
-		 */
-		if (tablespace != 0)
-		{
-			PGresult   *result = NULL;
-			PQExpBufferData buf;
-
-			initPQExpBuffer(&buf);
-			printfPQExpBuffer(&buf,
-							  "SELECT spcname FROM pg_catalog.pg_tablespace\n"
-							  "WHERE oid = '%u';", tablespace);
-			result = PSQLexec(buf.data);
-			if (!result)
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_TOASTVALUE:
 			{
-				termPQExpBuffer(&buf);
-				return;
-			}
-			/* Should always be the case, but.... */
-			if (PQntuples(result) > 0)
-			{
-				if (newline)
+				/*
+				 * We ignore the database default tablespace so that users not
+				 * using tablespaces don't need to know about them.  This case
+				 * also covers pre-8.0 servers, for which tablespace will
+				 * always be 0.
+				 */
+				if (tablespace != 0)
 				{
-					/* Add the tablespace as a new footer */
-					printfPQExpBuffer(&buf, _("Tablespace: \"%s\""),
-									  PQgetvalue(result, 0, 0));
-					printTableAddFooter(cont, buf.data);
-				}
-				else
-				{
-					/* Append the tablespace to the latest footer */
-					printfPQExpBuffer(&buf, "%s", cont->footer->data);
+					PGresult   *result = NULL;
+					PQExpBufferData buf;
 
-					/*-------
-					   translator: before this string there's an index description like
-					   '"foo_pkey" PRIMARY KEY, btree (a)' */
-					appendPQExpBuffer(&buf, _(", tablespace \"%s\""),
-									  PQgetvalue(result, 0, 0));
-					printTableSetFooter(cont, buf.data);
+					initPQExpBuffer(&buf);
+					printfPQExpBuffer(&buf,
+									  "SELECT spcname FROM pg_catalog.pg_tablespace\n"
+									  "WHERE oid = '%u';", tablespace);
+					result = PSQLexec(buf.data);
+					if (!result)
+					{
+						termPQExpBuffer(&buf);
+						return;
+					}
+					/* Should always be the case, but.... */
+					if (PQntuples(result) > 0)
+					{
+						if (newline)
+						{
+							/* Add the tablespace as a new footer */
+							printfPQExpBuffer(&buf, _("Tablespace: \"%s\""),
+											  PQgetvalue(result, 0, 0));
+							printTableAddFooter(cont, buf.data);
+						}
+						else
+						{
+							/* Append the tablespace to the latest footer */
+							printfPQExpBuffer(&buf, "%s", cont->footer->data);
+
+							/*-------
+							   translator: before this string there's an index description like
+							   '"foo_pkey" PRIMARY KEY, btree (a)' */
+							appendPQExpBuffer(&buf, _(", tablespace \"%s\""),
+											  PQgetvalue(result, 0, 0));
+							printTableSetFooter(cont, buf.data);
+						}
+					}
+					PQclear(result);
+					termPQExpBuffer(&buf);
 				}
 			}
-			PQclear(result);
-			termPQExpBuffer(&buf);
-		}
+			break;
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
 	}
 }
 
@@ -3694,15 +3836,15 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 					  "SELECT n.nspname as \"%s\",\n"
 					  "  c.relname as \"%s\",\n"
 					  "  CASE c.relkind"
-					  " WHEN " CppAsString2(RELKIND_RELATION) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_VIEW) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_MATVIEW) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_INDEX) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_SEQUENCE) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_RELATION) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_VIEW) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_MATVIEW) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_INDEX) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_SEQUENCE) " THEN '%s'"
 					  " WHEN 's' THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_FOREIGN_TABLE) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_PARTITIONED_TABLE) " THEN '%s'"
-					  " WHEN " CppAsString2(RELKIND_PARTITIONED_INDEX) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_FOREIGN_TABLE) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_PARTITIONED_TABLE) " THEN '%s'"
+					  " WHEN " RelKindAsString(RELKIND_PARTITIONED_INDEX) " THEN '%s'"
 					  " END as \"%s\",\n"
 					  "  pg_catalog.pg_get_userbyid(c.relowner) as \"%s\"",
 					  gettext_noop("Schema"),
@@ -3779,21 +3921,21 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 
 	appendPQExpBufferStr(&buf, "\nWHERE c.relkind IN (");
 	if (showTables)
-		appendPQExpBufferStr(&buf, CppAsString2(RELKIND_RELATION) ","
-							 CppAsString2(RELKIND_PARTITIONED_TABLE) ",");
+		appendPQExpBufferStr(&buf, RelKindAsString(RELKIND_RELATION) ","
+							 RelKindAsString(RELKIND_PARTITIONED_TABLE) ",");
 	if (showViews)
-		appendPQExpBufferStr(&buf, CppAsString2(RELKIND_VIEW) ",");
+		appendPQExpBufferStr(&buf, RelKindAsString(RELKIND_VIEW) ",");
 	if (showMatViews)
-		appendPQExpBufferStr(&buf, CppAsString2(RELKIND_MATVIEW) ",");
+		appendPQExpBufferStr(&buf, RelKindAsString(RELKIND_MATVIEW) ",");
 	if (showIndexes)
-		appendPQExpBufferStr(&buf, CppAsString2(RELKIND_INDEX) ","
-							 CppAsString2(RELKIND_PARTITIONED_INDEX) ",");
+		appendPQExpBufferStr(&buf, RelKindAsString(RELKIND_INDEX) ","
+							 RelKindAsString(RELKIND_PARTITIONED_INDEX) ",");
 	if (showSeq)
-		appendPQExpBufferStr(&buf, CppAsString2(RELKIND_SEQUENCE) ",");
+		appendPQExpBufferStr(&buf, RelKindAsString(RELKIND_SEQUENCE) ",");
 	if (showSystem || pattern)
 		appendPQExpBufferStr(&buf, "'s',"); /* was RELKIND_SPECIAL */
 	if (showForeign)
-		appendPQExpBufferStr(&buf, CppAsString2(RELKIND_FOREIGN_TABLE) ",");
+		appendPQExpBufferStr(&buf, RelKindAsString(RELKIND_FOREIGN_TABLE) ",");
 
 	appendPQExpBufferStr(&buf, "''");	/* dummy */
 	appendPQExpBufferStr(&buf, ")\n");
@@ -3921,8 +4063,8 @@ listPartitionedTables(const char *reltypes, const char *pattern, bool verbose)
 	{
 		appendPQExpBuffer(&buf,
 						  ",\n  CASE c.relkind"
-						  " WHEN " CppAsString2(RELKIND_PARTITIONED_TABLE) " THEN '%s'"
-						  " WHEN " CppAsString2(RELKIND_PARTITIONED_INDEX) " THEN '%s'"
+						  " WHEN " RelKindAsString(RELKIND_PARTITIONED_TABLE) " THEN '%s'"
+						  " WHEN " RelKindAsString(RELKIND_PARTITIONED_INDEX) " THEN '%s'"
 						  " END as \"%s\"",
 						  gettext_noop("partitioned table"),
 						  gettext_noop("partitioned index"),
@@ -4012,9 +4154,9 @@ listPartitionedTables(const char *reltypes, const char *pattern, bool verbose)
 
 	appendPQExpBufferStr(&buf, "\nWHERE c.relkind IN (");
 	if (showTables)
-		appendPQExpBufferStr(&buf, CppAsString2(RELKIND_PARTITIONED_TABLE) ",");
+		appendPQExpBufferStr(&buf, RelKindAsString(RELKIND_PARTITIONED_TABLE) ",");
 	if (showIndexes)
-		appendPQExpBufferStr(&buf, CppAsString2(RELKIND_PARTITIONED_INDEX) ",");
+		appendPQExpBufferStr(&buf, RelKindAsString(RELKIND_PARTITIONED_INDEX) ",");
 	appendPQExpBufferStr(&buf, "''");	/* dummy */
 	appendPQExpBufferStr(&buf, ")\n");
 

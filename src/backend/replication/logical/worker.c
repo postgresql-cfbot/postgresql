@@ -646,12 +646,27 @@ apply_handle_insert(StringInfo s)
 	MemoryContextSwitchTo(oldctx);
 
 	/* For a partitioned table, insert the tuple into a partition. */
-	if (rel->localrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		apply_handle_tuple_routing(estate->es_result_relation_info, estate,
-								   remoteslot, NULL, rel, CMD_INSERT);
-	else
-		apply_handle_insert_internal(estate->es_result_relation_info, estate,
-									 remoteslot);
+	switch ((RelKind) rel->localrel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			apply_handle_tuple_routing(estate->es_result_relation_info, estate,
+									   remoteslot, NULL, rel, CMD_INSERT);
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			apply_handle_insert_internal(estate->es_result_relation_info, estate,
+										 remoteslot);
+			break;
+	}
 
 	PopActiveSnapshot();
 
@@ -781,12 +796,27 @@ apply_handle_update(StringInfo s)
 	MemoryContextSwitchTo(oldctx);
 
 	/* For a partitioned table, apply update to correct partition. */
-	if (rel->localrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		apply_handle_tuple_routing(estate->es_result_relation_info, estate,
-								   remoteslot, &newtup, rel, CMD_UPDATE);
-	else
-		apply_handle_update_internal(estate->es_result_relation_info, estate,
-									 remoteslot, &newtup, rel);
+	switch ((RelKind) rel->localrel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			apply_handle_tuple_routing(estate->es_result_relation_info, estate,
+									   remoteslot, &newtup, rel, CMD_UPDATE);
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			apply_handle_update_internal(estate->es_result_relation_info, estate,
+										 remoteslot, &newtup, rel);
+			break;
+	}
 
 	PopActiveSnapshot();
 
@@ -904,12 +934,27 @@ apply_handle_delete(StringInfo s)
 	MemoryContextSwitchTo(oldctx);
 
 	/* For a partitioned table, apply delete to correct partition. */
-	if (rel->localrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		apply_handle_tuple_routing(estate->es_result_relation_info, estate,
-								   remoteslot, NULL, rel, CMD_DELETE);
-	else
-		apply_handle_delete_internal(estate->es_result_relation_info, estate,
-									 remoteslot, &rel->remoterel);
+	switch ((RelKind) rel->localrel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			apply_handle_tuple_routing(estate->es_result_relation_info, estate,
+									   remoteslot, NULL, rel, CMD_DELETE);
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			apply_handle_delete_internal(estate->es_result_relation_info, estate,
+										 remoteslot, &rel->remoterel);
+			break;
+	}
 
 	PopActiveSnapshot();
 
@@ -1273,41 +1318,61 @@ apply_handle_truncate(StringInfo s)
 		 * Truncate partitions if we got a message to truncate a partitioned
 		 * table.
 		 */
-		if (rel->localrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		switch ((RelKind) rel->localrel->rd_rel->relkind)
 		{
-			ListCell   *child;
-			List	   *children = find_all_inheritors(rel->localreloid,
-													   RowExclusiveLock,
-													   NULL);
-
-			foreach(child, children)
-			{
-				Oid			childrelid = lfirst_oid(child);
-				Relation	childrel;
-
-				if (list_member_oid(relids, childrelid))
-					continue;
-
-				/* find_all_inheritors already got lock */
-				childrel = table_open(childrelid, NoLock);
-
-				/*
-				 * Ignore temp tables of other backends.  See similar code in
-				 * ExecuteTruncate().
-				 */
-				if (RELATION_IS_OTHER_TEMP(childrel))
+			case RELKIND_PARTITIONED_TABLE:
 				{
-					table_close(childrel, RowExclusiveLock);
-					continue;
-				}
+					ListCell   *child;
+					List	   *children = find_all_inheritors(rel->localreloid,
+															   RowExclusiveLock,
+															   NULL);
 
-				rels = lappend(rels, childrel);
-				part_rels = lappend(part_rels, childrel);
-				relids = lappend_oid(relids, childrelid);
-				/* Log this relation only if needed for logical decoding */
-				if (RelationIsLogicallyLogged(childrel))
-					relids_logged = lappend_oid(relids_logged, childrelid);
-			}
+					foreach(child, children)
+					{
+						Oid			childrelid = lfirst_oid(child);
+						Relation	childrel;
+
+						if (list_member_oid(relids, childrelid))
+							continue;
+
+						/* find_all_inheritors already got lock */
+						childrel = table_open(childrelid, NoLock);
+
+						/*
+						 * Ignore temp tables of other backends.  See similar
+						 * code in ExecuteTruncate().
+						 */
+						if (RELATION_IS_OTHER_TEMP(childrel))
+						{
+							table_close(childrel, RowExclusiveLock);
+							continue;
+						}
+
+						rels = lappend(rels, childrel);
+						part_rels = lappend(part_rels, childrel);
+						relids = lappend_oid(relids, childrelid);
+
+						/*
+						 * Log this relation only if needed for logical
+						 * decoding
+						 */
+						if (RelationIsLogicallyLogged(childrel))
+							relids_logged = lappend_oid(relids_logged, childrelid);
+					}
+				}
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				break;
 		}
 	}
 

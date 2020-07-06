@@ -2040,17 +2040,28 @@ heap_prepare_insert(Relation relation, HeapTuple tup, TransactionId xid,
 	 * If the new tuple is too big for storage or contains already toasted
 	 * out-of-line attributes from some other relation, invoke the toaster.
 	 */
-	if (relation->rd_rel->relkind != RELKIND_RELATION &&
-		relation->rd_rel->relkind != RELKIND_MATVIEW)
+	switch ((RelKind) relation->rd_rel->relkind)
 	{
-		/* toast table entries should never be recursively toasted */
-		Assert(!HeapTupleHasExternal(tup));
-		return tup;
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+			if (HeapTupleHasExternal(tup) || tup->t_len > TOAST_TUPLE_THRESHOLD)
+				return heap_toast_insert_or_update(relation, tup, NULL, options);
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			/* toast table entries should never be recursively toasted */
+			Assert(!HeapTupleHasExternal(tup));
+			break;
 	}
-	else if (HeapTupleHasExternal(tup) || tup->t_len > TOAST_TUPLE_THRESHOLD)
-		return heap_toast_insert_or_update(relation, tup, NULL, options);
-	else
-		return tup;
+	return tup;
 }
 
 /*
@@ -2773,14 +2784,27 @@ l1:
 	 * because we need to look at the contents of the tuple, but it's OK to
 	 * release the content lock on the buffer first.
 	 */
-	if (relation->rd_rel->relkind != RELKIND_RELATION &&
-		relation->rd_rel->relkind != RELKIND_MATVIEW)
+	switch ((RelKind) relation->rd_rel->relkind)
 	{
-		/* toast table entries should never be recursively toasted */
-		Assert(!HeapTupleHasExternal(&tp));
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+			if (HeapTupleHasExternal(&tp))
+				heap_toast_delete(relation, &tp, false);
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			/* toast table entries should never be recursively toasted */
+			Assert(!HeapTupleHasExternal(&tp));
+			break;
 	}
-	else if (HeapTupleHasExternal(&tp))
-		heap_toast_delete(relation, &tp, false);
 
 	/*
 	 * Mark tuple for invalidation from system caches at next command
@@ -3362,18 +3386,30 @@ l2:
 	 * We need to invoke the toaster if there are already any out-of-line
 	 * toasted values present, or if the new tuple is over-threshold.
 	 */
-	if (relation->rd_rel->relkind != RELKIND_RELATION &&
-		relation->rd_rel->relkind != RELKIND_MATVIEW)
+	switch ((RelKind) relation->rd_rel->relkind)
 	{
-		/* toast table entries should never be recursively toasted */
-		Assert(!HeapTupleHasExternal(&oldtup));
-		Assert(!HeapTupleHasExternal(newtup));
-		need_toast = false;
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+			need_toast = (HeapTupleHasExternal(&oldtup) ||
+						  HeapTupleHasExternal(newtup) ||
+						  newtup->t_len > TOAST_TUPLE_THRESHOLD);
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			/* toast table entries should never be recursively toasted */
+			Assert(!HeapTupleHasExternal(&oldtup));
+			Assert(!HeapTupleHasExternal(newtup));
+			need_toast = false;
+			break;
 	}
-	else
-		need_toast = (HeapTupleHasExternal(&oldtup) ||
-					  HeapTupleHasExternal(newtup) ||
-					  newtup->t_len > TOAST_TUPLE_THRESHOLD);
 
 	pagefree = PageGetHeapFreeSpace(page);
 

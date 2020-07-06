@@ -47,28 +47,42 @@ table_slot_callbacks(Relation relation)
 
 	if (relation->rd_tableam)
 		tts_cb = relation->rd_tableam->slot_callbacks(relation);
-	else if (relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
-	{
-		/*
-		 * Historically FDWs expect to store heap tuples in slots. Continue
-		 * handing them one, to make it less painful to adapt FDWs to new
-		 * versions. The cost of a heap slot over a virtual slot is pretty
-		 * small.
-		 */
-		tts_cb = &TTSOpsHeapTuple;
-	}
 	else
-	{
-		/*
-		 * These need to be supported, as some parts of the code (like COPY)
-		 * need to create slots for such relations too. It seems better to
-		 * centralize the knowledge that a heap slot is the right thing in
-		 * that case here.
-		 */
-		Assert(relation->rd_rel->relkind == RELKIND_VIEW ||
-			   relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
-		tts_cb = &TTSOpsVirtual;
-	}
+		switch ((RelKind) relation->rd_rel->relkind)
+		{
+			case RELKIND_FOREIGN_TABLE:
+
+				/*
+				 * Historically FDWs expect to store heap tuples in slots.
+				 * Continue handing them one, to make it less painful to adapt
+				 * FDWs to new versions. The cost of a heap slot over a
+				 * virtual slot is pretty small.
+				 */
+				tts_cb = &TTSOpsHeapTuple;
+				break;
+			case RELKIND_VIEW:
+			case RELKIND_PARTITIONED_TABLE:
+
+				/*
+				 * These need to be supported, as some parts of the code (like
+				 * COPY) need to create slots for such relations too. It seems
+				 * better to centralize the knowledge that a heap slot is the
+				 * right thing in that case here.
+				 */
+				tts_cb = &TTSOpsVirtual;
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_MATVIEW:
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_NULL:
+			default:
+				Assert(false);
+				break;
+		}
 
 	return tts_cb;
 }

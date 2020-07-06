@@ -944,37 +944,59 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 
 	relation = relation_openrv(table_like_clause->relation, AccessShareLock);
 
-	if (relation->rd_rel->relkind != RELKIND_RELATION &&
-		relation->rd_rel->relkind != RELKIND_VIEW &&
-		relation->rd_rel->relkind != RELKIND_MATVIEW &&
-		relation->rd_rel->relkind != RELKIND_COMPOSITE_TYPE &&
-		relation->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
-		relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table, view, materialized view, composite type, or foreign table",
-						RelationGetRelationName(relation))));
+	switch ((RelKind) relation->rd_rel->relkind)
+	{
+		case RELKIND_RELATION:
+		case RELKIND_VIEW:
+		case RELKIND_MATVIEW:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_INDEX:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_NULL:
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("\"%s\" is not a table, view, materialized view, composite type, or foreign table",
+							RelationGetRelationName(relation))));
+			break;
+	}
 
 	cancel_parser_errposition_callback(&pcbstate);
 
 	/*
 	 * Check for privileges
 	 */
-	if (relation->rd_rel->relkind == RELKIND_COMPOSITE_TYPE)
+	switch ((RelKind) relation->rd_rel->relkind)
 	{
-		aclresult = pg_type_aclcheck(relation->rd_rel->reltype, GetUserId(),
-									 ACL_USAGE);
-		if (aclresult != ACLCHECK_OK)
-			aclcheck_error(aclresult, OBJECT_TYPE,
-						   RelationGetRelationName(relation));
-	}
-	else
-	{
-		aclresult = pg_class_aclcheck(RelationGetRelid(relation), GetUserId(),
-									  ACL_SELECT);
-		if (aclresult != ACLCHECK_OK)
-			aclcheck_error(aclresult, get_relkind_objtype(relation->rd_rel->relkind),
-						   RelationGetRelationName(relation));
+		case RELKIND_COMPOSITE_TYPE:
+			aclresult = pg_type_aclcheck(relation->rd_rel->reltype, GetUserId(),
+										 ACL_USAGE);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, OBJECT_TYPE,
+							   RelationGetRelationName(relation));
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			aclresult = pg_class_aclcheck(RelationGetRelid(relation), GetUserId(),
+										  ACL_SELECT);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, get_relkind_objtype(relation->rd_rel->relkind),
+							   RelationGetRelationName(relation));
+			break;
 	}
 
 	tupleDesc = RelationGetDescr(relation);
@@ -2306,13 +2328,27 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 
 					rel = table_openrv(inh, AccessShareLock);
 					/* check user requested inheritance from valid relkind */
-					if (rel->rd_rel->relkind != RELKIND_RELATION &&
-						rel->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
-						rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-						ereport(ERROR,
-								(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-								 errmsg("inherited relation \"%s\" is not a table or foreign table",
-										inh->relname)));
+					switch ((RelKind) rel->rd_rel->relkind)
+					{
+						case RELKIND_RELATION:
+						case RELKIND_FOREIGN_TABLE:
+						case RELKIND_PARTITIONED_TABLE:
+							break;
+						case RELKIND_PARTITIONED_INDEX:
+						case RELKIND_SEQUENCE:
+						case RELKIND_COMPOSITE_TYPE:
+						case RELKIND_INDEX:
+						case RELKIND_MATVIEW:
+						case RELKIND_TOASTVALUE:
+						case RELKIND_VIEW:
+						case RELKIND_NULL:
+						default:
+							ereport(ERROR,
+									(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+									 errmsg("inherited relation \"%s\" is not a table or foreign table",
+											inh->relname)));
+							break;
+					}
 					for (count = 0; count < rel->rd_att->natts; count++)
 					{
 						Form_pg_attribute inhattr = TupleDescAttr(rel->rd_att,
@@ -2448,13 +2484,27 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 
 					rel = table_openrv(inh, AccessShareLock);
 					/* check user requested inheritance from valid relkind */
-					if (rel->rd_rel->relkind != RELKIND_RELATION &&
-						rel->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
-						rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-						ereport(ERROR,
-								(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-								 errmsg("inherited relation \"%s\" is not a table or foreign table",
-										inh->relname)));
+					switch ((RelKind) rel->rd_rel->relkind)
+					{
+						case RELKIND_RELATION:
+						case RELKIND_FOREIGN_TABLE:
+						case RELKIND_PARTITIONED_TABLE:
+							break;
+						case RELKIND_PARTITIONED_INDEX:
+						case RELKIND_SEQUENCE:
+						case RELKIND_COMPOSITE_TYPE:
+						case RELKIND_INDEX:
+						case RELKIND_MATVIEW:
+						case RELKIND_TOASTVALUE:
+						case RELKIND_VIEW:
+						case RELKIND_NULL:
+						default:
+							ereport(ERROR,
+									(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+									 errmsg("inherited relation \"%s\" is not a table or foreign table",
+											inh->relname)));
+							break;
+					}
 					for (count = 0; count < rel->rd_att->natts; count++)
 					{
 						Form_pg_attribute inhattr = TupleDescAttr(rel->rd_att,
@@ -2763,10 +2813,27 @@ transformRuleStmt(RuleStmt *stmt, const char *queryString,
 	 */
 	rel = table_openrv(stmt->relation, AccessExclusiveLock);
 
-	if (rel->rd_rel->relkind == RELKIND_MATVIEW)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("rules on materialized views are not supported")));
+	switch ((RelKind) rel->rd_rel->relkind)
+	{
+		case RELKIND_MATVIEW:
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("rules on materialized views are not supported")));
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			break;
+	}
+
 
 	/* Set up pstate */
 	pstate = make_parsestate(NULL);
@@ -3097,15 +3164,26 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 
 	/* Set up CreateStmtContext */
 	cxt.pstate = pstate;
-	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+	switch ((RelKind) rel->rd_rel->relkind)
 	{
-		cxt.stmtType = "ALTER FOREIGN TABLE";
-		cxt.isforeign = true;
-	}
-	else
-	{
-		cxt.stmtType = "ALTER TABLE";
-		cxt.isforeign = false;
+		case RELKIND_FOREIGN_TABLE:
+			cxt.stmtType = "ALTER FOREIGN TABLE";
+			cxt.isforeign = true;
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			cxt.stmtType = "ALTER TABLE";
+			cxt.isforeign = false;
+			break;
 	}
 	cxt.relation = stmt->relation;
 	cxt.rel = rel;
@@ -3722,7 +3800,7 @@ transformPartitionCmd(CreateStmtContext *cxt, PartitionCmd *cmd)
 {
 	Relation	parentRel = cxt->rel;
 
-	switch (parentRel->rd_rel->relkind)
+	switch ((RelKind) parentRel->rd_rel->relkind)
 	{
 		case RELKIND_PARTITIONED_TABLE:
 			/* transform the partition bound, if any */
@@ -3757,6 +3835,13 @@ transformPartitionCmd(CreateStmtContext *cxt, PartitionCmd *cmd)
 					 errmsg("index \"%s\" is not partitioned",
 							RelationGetRelationName(parentRel))));
 			break;
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_MATVIEW:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
 		default:
 			/* parser shouldn't let this case through */
 			elog(ERROR, "\"%s\" is not a partitioned table or index",

@@ -196,54 +196,75 @@ analyze_rel(Oid relid, RangeVar *relation,
 	/*
 	 * Check that it's of an analyzable relkind, and set up appropriately.
 	 */
-	if (onerel->rd_rel->relkind == RELKIND_RELATION ||
-		onerel->rd_rel->relkind == RELKIND_MATVIEW)
+	switch ((RelKind) onerel->rd_rel->relkind)
 	{
-		/* Regular table, so we'll use the regular row acquisition function */
-		acquirefunc = acquire_sample_rows;
-		/* Also get regular table's size */
-		relpages = RelationGetNumberOfBlocks(onerel);
-	}
-	else if (onerel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
-	{
-		/*
-		 * For a foreign table, call the FDW's hook function to see whether it
-		 * supports analysis.
-		 */
-		FdwRoutine *fdwroutine;
-		bool		ok = false;
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+			{
+				/*
+				 * Regular table, so we'll use the regular row acquisition
+				 * function
+				 */
+				acquirefunc = acquire_sample_rows;
+				/* Also get regular table's size */
+				relpages = RelationGetNumberOfBlocks(onerel);
+			}
+			break;
+		case RELKIND_FOREIGN_TABLE:
+			{
+				/*
+				 * For a foreign table, call the FDW's hook function to see
+				 * whether it supports analysis.
+				 */
+				FdwRoutine *fdwroutine;
+				bool		ok = false;
 
-		fdwroutine = GetFdwRoutineForRelation(onerel, false);
+				fdwroutine = GetFdwRoutineForRelation(onerel, false);
 
-		if (fdwroutine->AnalyzeForeignTable != NULL)
-			ok = fdwroutine->AnalyzeForeignTable(onerel,
-												 &acquirefunc,
-												 &relpages);
+				if (fdwroutine->AnalyzeForeignTable != NULL)
+					ok = fdwroutine->AnalyzeForeignTable(onerel,
+														 &acquirefunc,
+														 &relpages);
 
-		if (!ok)
-		{
-			ereport(WARNING,
-					(errmsg("skipping \"%s\" --- cannot analyze this foreign table",
-							RelationGetRelationName(onerel))));
-			relation_close(onerel, ShareUpdateExclusiveLock);
-			return;
-		}
-	}
-	else if (onerel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-	{
-		/*
-		 * For partitioned tables, we want to do the recursive ANALYZE below.
-		 */
-	}
-	else
-	{
-		/* No need for a WARNING if we already complained during VACUUM */
-		if (!(params->options & VACOPT_VACUUM))
-			ereport(WARNING,
-					(errmsg("skipping \"%s\" --- cannot analyze non-tables or special system tables",
-							RelationGetRelationName(onerel))));
-		relation_close(onerel, ShareUpdateExclusiveLock);
-		return;
+				if (!ok)
+				{
+					ereport(WARNING,
+							(errmsg("skipping \"%s\" --- cannot analyze this foreign table",
+									RelationGetRelationName(onerel))));
+					relation_close(onerel, ShareUpdateExclusiveLock);
+					return;
+				}
+			}
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+			{
+				/*
+				 * For partitioned tables, we want to do the recursive ANALYZE
+				 * below.
+				 */
+			}
+			break;
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_INDEX:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			{
+				/*
+				 * No need for a WARNING if we already complained during
+				 * VACUUM
+				 */
+				if (!(params->options & VACOPT_VACUUM))
+					ereport(WARNING,
+							(errmsg("skipping \"%s\" --- cannot analyze non-tables or special system tables",
+									RelationGetRelationName(onerel))));
+				relation_close(onerel, ShareUpdateExclusiveLock);
+				return;
+			}
+			break;
 	}
 
 	/*
@@ -259,9 +280,25 @@ analyze_rel(Oid relid, RangeVar *relation,
 	 * Do the normal non-recursive ANALYZE.  We can skip this for partitioned
 	 * tables, which don't contain any rows.
 	 */
-	if (onerel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
-		do_analyze_rel(onerel, params, va_cols, acquirefunc,
-					   relpages, false, in_outer_xact, elevel);
+	switch ((RelKind) onerel->rd_rel->relkind)
+	{
+		case RELKIND_PARTITIONED_TABLE:
+			break;
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_VIEW:
+		case RELKIND_NULL:
+		default:
+			do_analyze_rel(onerel, params, va_cols, acquirefunc,
+						   relpages, false, in_outer_xact, elevel);
+			break;
+	}
 
 	/*
 	 * If there are child tables, do recursive ANALYZE.
@@ -1283,49 +1320,67 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 		}
 
 		/* Check table type (MATVIEW can't happen, but might as well allow) */
-		if (childrel->rd_rel->relkind == RELKIND_RELATION ||
-			childrel->rd_rel->relkind == RELKIND_MATVIEW)
+		switch ((RelKind) childrel->rd_rel->relkind)
 		{
-			/* Regular table, so use the regular row acquisition function */
-			acquirefunc = acquire_sample_rows;
-			relpages = RelationGetNumberOfBlocks(childrel);
-		}
-		else if (childrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
-		{
-			/*
-			 * For a foreign table, call the FDW's hook function to see
-			 * whether it supports analysis.
-			 */
-			FdwRoutine *fdwroutine;
-			bool		ok = false;
+			case RELKIND_RELATION:
+			case RELKIND_MATVIEW:
+				{
+					/*
+					 * Regular table, so use the regular row acquisition
+					 * function
+					 */
+					acquirefunc = acquire_sample_rows;
+					relpages = RelationGetNumberOfBlocks(childrel);
+				}
+				break;
+			case RELKIND_FOREIGN_TABLE:
+				{
+					/*
+					 * For a foreign table, call the FDW's hook function to
+					 * see whether it supports analysis.
+					 */
+					FdwRoutine *fdwroutine;
+					bool		ok = false;
 
-			fdwroutine = GetFdwRoutineForRelation(childrel, false);
+					fdwroutine = GetFdwRoutineForRelation(childrel, false);
 
-			if (fdwroutine->AnalyzeForeignTable != NULL)
-				ok = fdwroutine->AnalyzeForeignTable(childrel,
-													 &acquirefunc,
-													 &relpages);
+					if (fdwroutine->AnalyzeForeignTable != NULL)
+						ok = fdwroutine->AnalyzeForeignTable(childrel,
+															 &acquirefunc,
+															 &relpages);
 
-			if (!ok)
-			{
-				/* ignore, but release the lock on it */
-				Assert(childrel != onerel);
-				table_close(childrel, AccessShareLock);
-				continue;
-			}
-		}
-		else
-		{
-			/*
-			 * ignore, but release the lock on it.  don't try to unlock the
-			 * passed-in relation
-			 */
-			Assert(childrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
-			if (childrel != onerel)
-				table_close(childrel, AccessShareLock);
-			else
-				table_close(childrel, NoLock);
-			continue;
+					if (!ok)
+					{
+						/* ignore, but release the lock on it */
+						Assert(childrel != onerel);
+						table_close(childrel, AccessShareLock);
+						continue;
+					}
+				}
+				break;
+			case RELKIND_PARTITIONED_TABLE:
+				{
+					/*
+					 * ignore, but release the lock on it.  don't try to
+					 * unlock the passed-in relation
+					 */
+					if (childrel != onerel)
+						table_close(childrel, AccessShareLock);
+					else
+						table_close(childrel, NoLock);
+					continue;
+				}
+				break;
+			case RELKIND_PARTITIONED_INDEX:
+			case RELKIND_SEQUENCE:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_INDEX:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_VIEW:
+			case RELKIND_NULL:
+			default:
+				Assert(false);
+				break;
 		}
 
 		/* OK, we'll process this child */

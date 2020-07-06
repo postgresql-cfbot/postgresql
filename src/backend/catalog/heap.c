@@ -1118,8 +1118,6 @@ heap_create_with_catalog(const char *relname,
 	Oid			existing_relid;
 	Oid			old_type_oid;
 	Oid			new_type_oid;
-	ObjectAddress new_type_addr;
-	Oid			new_array_oid = InvalidOid;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
 
@@ -1262,44 +1260,45 @@ heap_create_with_catalog(const char *relname,
 	new_rel_desc->rd_rel->relrewrite = relrewrite;
 
 	/*
-	 * Decide whether to create an array type over the relation's rowtype.
-	 * Array types are made except where the use of a relation as such is an
+	 * Decide whether to create a pg_type entry for the relation's rowtype.
+	 * These types are made except where the use of a relation as such is an
 	 * implementation detail: toast tables, sequences and indexes.
 	 */
 	if (!(relkind == RELKIND_SEQUENCE ||
 		  relkind == RELKIND_TOASTVALUE ||
 		  relkind == RELKIND_INDEX ||
 		  relkind == RELKIND_PARTITIONED_INDEX))
-		new_array_oid = AssignTypeArrayOid();
-
-	/*
-	 * Since defining a relation also defines a complex type, we add a new
-	 * system type corresponding to the new relation.  The OID of the type can
-	 * be preselected by the caller, but if reltypeid is InvalidOid, we'll
-	 * generate a new OID for it.
-	 *
-	 * NOTE: we could get a unique-index failure here, in case someone else is
-	 * creating the same type name in parallel but hadn't committed yet when
-	 * we checked for a duplicate name above.
-	 */
-	new_type_addr = AddNewRelationType(relname,
-									   relnamespace,
-									   relid,
-									   relkind,
-									   ownerid,
-									   reltypeid,
-									   new_array_oid);
-	new_type_oid = new_type_addr.objectId;
-	if (typaddress)
-		*typaddress = new_type_addr;
-
-	/*
-	 * Now make the array type if wanted.
-	 */
-	if (OidIsValid(new_array_oid))
 	{
+		Oid			new_array_oid;
+		ObjectAddress new_type_addr;
 		char	   *relarrayname;
 
+		/*
+		 * We'll make an array over the composite type, too.  For largely
+		 * historical reasons, the array type's OID is assigned first.
+		 */
+		new_array_oid = AssignTypeArrayOid();
+
+		/*
+		 * The OID of the composite type can be preselected by the caller, but
+		 * if reltypeid is InvalidOid, we'll generate a new OID for it.
+		 *
+		 * NOTE: we could get a unique-index failure here, in case someone
+		 * else is creating the same type name in parallel but hadn't
+		 * committed yet when we checked for a duplicate name above.
+		 */
+		new_type_addr = AddNewRelationType(relname,
+										   relnamespace,
+										   relid,
+										   relkind,
+										   ownerid,
+										   reltypeid,
+										   new_array_oid);
+		new_type_oid = new_type_addr.objectId;
+		if (typaddress)
+			*typaddress = new_type_addr;
+
+		/* Now create the array type. */
 		relarrayname = makeArrayTypeName(relname, relnamespace);
 
 		TypeCreate(new_array_oid,	/* force the type's OID to this */
@@ -1335,6 +1334,14 @@ heap_create_with_catalog(const char *relname,
 				   InvalidOid); /* rowtypes never have a collation */
 
 		pfree(relarrayname);
+	}
+	else
+	{
+		/* Caller should not be expecting a type to be created. */
+		Assert(reltypeid == InvalidOid);
+		Assert(typaddress == NULL);
+
+		new_type_oid = InvalidOid;
 	}
 
 	/*

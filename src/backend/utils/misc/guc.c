@@ -3762,7 +3762,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&PromoteTriggerFile,
 		"",
-		NULL, NULL, NULL
+		check_canonical_path, NULL, NULL
 	},
 
 	{
@@ -3884,7 +3884,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&pg_krb_server_keyfile,
 		PG_KRB_SRVTAB,
-		NULL, NULL, NULL
+		check_canonical_path, NULL, NULL
 	},
 
 	{
@@ -4169,7 +4169,8 @@ static struct config_string ConfigureNamesString[] =
 	{
 		/*
 		 * Can't be set by ALTER SYSTEM as it can lead to recursive definition
-		 * of data_directory.
+		 * of data_directory.  check_canonical_path() is not needed here as
+		 * canonicalization is done when loading configuration files.
 		 */
 		{"data_directory", PGC_POSTMASTER, FILE_LOCATIONS,
 			gettext_noop("Sets the server's data directory."),
@@ -4182,6 +4183,10 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		/*
+		 * check_canonical_path() is not needed here as canonicalization
+		 * is done when loading the configuration file.
+		 */
 		{"config_file", PGC_POSTMASTER, FILE_LOCATIONS,
 			gettext_noop("Sets the server's main configuration file."),
 			NULL,
@@ -4193,6 +4198,10 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		/*
+		 * check_canonical_path() is not needed here as canonicalization
+		 * is done when loading the configuration file.
+		 */
 		{"hba_file", PGC_POSTMASTER, FILE_LOCATIONS,
 			gettext_noop("Sets the server's \"hba\" configuration file."),
 			NULL,
@@ -4204,6 +4213,10 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		/*
+		 * check_canonical_path() is not needed here as canonicalization
+		 * is done when loading the configuration file.
+		 */
 		{"ident_file", PGC_POSTMASTER, FILE_LOCATIONS,
 			gettext_noop("Sets the server's \"ident\" configuration file."),
 			NULL,
@@ -4247,7 +4260,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&ssl_cert_file,
 		"server.crt",
-		NULL, NULL, NULL
+		check_canonical_path, NULL, NULL
 	},
 
 	{
@@ -4257,7 +4270,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&ssl_key_file,
 		"server.key",
-		NULL, NULL, NULL
+		check_canonical_path, NULL, NULL
 	},
 
 	{
@@ -4267,7 +4280,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&ssl_ca_file,
 		"",
-		NULL, NULL, NULL
+		check_canonical_path, NULL, NULL
 	},
 
 	{
@@ -4277,7 +4290,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&ssl_crl_file,
 		"",
-		NULL, NULL, NULL
+		check_canonical_path, NULL, NULL
 	},
 
 	{
@@ -4350,7 +4363,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&ssl_dh_params_file,
 		"",
-		NULL, NULL, NULL
+		check_canonical_path, NULL, NULL
 	},
 
 	{

@@ -9,7 +9,7 @@ PostgreSQL documentation
  </indexterm>
 
  <refmeta>
-  <refentrytitle>CREATE EVENT TRIGGER</refentrytitle>
+  <refentrytitle><command>CREATE EVENT TRIGGER</command></refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Language Statements</refmiscinfo>
  </refmeta>

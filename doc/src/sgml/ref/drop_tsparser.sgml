@@ -9,7 +9,7 @@ PostgreSQL documentation
  </indexterm>
 
  <refmeta>
-  <refentrytitle>DROP TEXT SEARCH PARSER</refentrytitle>
+  <refentrytitle><command>DROP TEXT SEARCH PARSER</command></refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Language Statements</refmiscinfo>
  </refmeta>

@@ -14,7 +14,7 @@ PostgreSQL documentation
  </indexterm>
 
  <refmeta>
-  <refentrytitle>SAVEPOINT</refentrytitle>
+  <refentrytitle><command>SAVEPOINT</command></refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Language Statements</refmiscinfo>
  </refmeta>

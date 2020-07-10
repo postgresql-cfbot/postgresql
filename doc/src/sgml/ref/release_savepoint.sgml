@@ -14,7 +14,7 @@ PostgreSQL documentation
  </indexterm>
 
  <refmeta>
-  <refentrytitle>RELEASE SAVEPOINT</refentrytitle>
+  <refentrytitle><command>RELEASE SAVEPOINT</command></refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Language Statements</refmiscinfo>
  </refmeta>

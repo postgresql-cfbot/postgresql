@@ -9,7 +9,7 @@ PostgreSQL documentation
  </indexterm>
 
  <refmeta>
-  <refentrytitle>CREATE TEXT SEARCH CONFIGURATION</refentrytitle>
+  <refentrytitle><command>CREATE TEXT SEARCH CONFIGURATION</command></refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Language Statements</refmiscinfo>
  </refmeta>

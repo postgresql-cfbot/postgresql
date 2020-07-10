@@ -24,7 +24,7 @@ PostgreSQL documentation
  </indexterm>
 
  <refmeta>
-  <refentrytitle>SET TRANSACTION</refentrytitle>
+  <refentrytitle><command>SET TRANSACTION</command></refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Language Statements</refmiscinfo>
  </refmeta>

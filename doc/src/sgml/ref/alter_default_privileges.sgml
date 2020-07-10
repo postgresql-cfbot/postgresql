@@ -9,7 +9,7 @@ PostgreSQL documentation
  </indexterm>
 
  <refmeta>
-  <refentrytitle>ALTER DEFAULT PRIVILEGES</refentrytitle>
+  <refentrytitle><command>ALTER DEFAULT PRIVILEGES</command></refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Language Statements</refmiscinfo>
  </refmeta>

@@ -9,7 +9,7 @@ PostgreSQL documentation
  </indexterm>
 
  <refmeta>
-  <refentrytitle>IMPORT FOREIGN SCHEMA</refentrytitle>
+  <refentrytitle><command>IMPORT FOREIGN SCHEMA</command></refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Language Statements</refmiscinfo>
  </refmeta>

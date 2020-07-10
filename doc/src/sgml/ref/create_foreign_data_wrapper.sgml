@@ -9,7 +9,7 @@ PostgreSQL documentation
  </indexterm>
 
  <refmeta>
-  <refentrytitle>CREATE FOREIGN DATA WRAPPER</refentrytitle>
+  <refentrytitle><command>CREATE FOREIGN DATA WRAPPER</command></refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Language Statements</refmiscinfo>
  </refmeta>

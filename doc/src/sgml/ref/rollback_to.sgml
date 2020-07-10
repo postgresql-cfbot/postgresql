@@ -14,7 +14,7 @@ PostgreSQL documentation
  </indexterm>
 
  <refmeta>
-  <refentrytitle>ROLLBACK TO SAVEPOINT</refentrytitle>
+  <refentrytitle><command>ROLLBACK TO SAVEPOINT</command></refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Language Statements</refmiscinfo>
  </refmeta>

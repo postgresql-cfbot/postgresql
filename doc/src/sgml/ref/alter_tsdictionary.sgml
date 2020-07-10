@@ -9,7 +9,7 @@ PostgreSQL documentation
  </indexterm>
 
  <refmeta>
-  <refentrytitle>ALTER TEXT SEARCH DICTIONARY</refentrytitle>
+  <refentrytitle><command>ALTER TEXT SEARCH DICTIONARY</command></refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Language Statements</refmiscinfo>
  </refmeta>

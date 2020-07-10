@@ -9,7 +9,7 @@ PostgreSQL documentation
  </indexterm>
 
  <refmeta>
-  <refentrytitle>CREATE TEXT SEARCH TEMPLATE</refentrytitle>
+  <refentrytitle><command>CREATE TEXT SEARCH TEMPLATE</command></refentrytitle>
   <manvolnum>7</manvolnum>
   <refmiscinfo>SQL - Language Statements</refmiscinfo>
  </refmeta>

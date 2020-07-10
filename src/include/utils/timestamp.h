@@ -100,6 +100,12 @@ extern int	timestamp_cmp_internal(Timestamp dt1, Timestamp dt2);
 extern TimestampTz timestamp2timestamptz_opt_overflow(Timestamp timestamp,
 													  int *overflow);
 
+extern int	monthweek2j(int year, int month, int week);
+extern void	monthweek2date(int month, int wom, int *year, int *mon, int *mday);
+extern void	monthweekdate2date(int month, int wom, int wday, int *year, int *mon, int *mday);
+extern int	week2j(int year, int week);
+extern void	week2date(int woy, int *year, int *mon, int *mday);
+extern void	weekdate2date(int woy, int wday, int *year, int *mon, int *mday);
 extern int	isoweek2j(int year, int week);
 extern void isoweek2date(int woy, int *year, int *mon, int *mday);
 extern void isoweekdate2date(int isoweek, int wday, int *year, int *mon, int *mday);

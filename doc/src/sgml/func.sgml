@@ -7679,10 +7679,8 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
      <listitem>
       <para>
        In <function>to_timestamp</function> and <function>to_date</function>,
-       weekday names or numbers (<literal>DAY</literal>, <literal>D</literal>,
-       and related field types) are accepted but are ignored for purposes of
-       computing the result.  The same is true for quarter
-       (<literal>Q</literal>) fields.
+       quarter fields (<literal>Q</literal>) are accepted but are ignored for purposes of
+       computing the result.
       </para>
      </listitem>
 

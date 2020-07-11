@@ -224,6 +224,8 @@ PostgreSQL documentation
         the dump is created in the database encoding.  (Another way to get the
         same result is to set the <envar>PGCLIENTENCODING</envar> environment
         variable to the desired dump encoding.)
+        You can also use variable character set (<envar>i.e. UTF8, EUC_KR, EUC_JP, EUC_CN ... etc</envar>)
+        and you can see the all supported character set in PostgreSQL (see <xref linkend="multibyte-charset-supported"/>)
        </para>
       </listitem>
      </varlistentry>

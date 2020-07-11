@@ -3363,7 +3363,14 @@ BeginCopyFrom(ParseState *pstate,
 	initStringInfo(&cstate->attribute_buf);
 	initStringInfo(&cstate->line_buf);
 	cstate->line_buf_converted = false;
-	cstate->raw_buf = (char *) palloc(RAW_BUF_SIZE + 1);
+
+	/*
+	 * For binary files raw_buf is not used and instead attribute_buf
+	 * is used in CopyReadBinaryAttribute. Hence, don't palloc raw_buf
+	 * for binary files.
+	 */
+	 cstate->raw_buf = (cstate->binary) ? NULL : (char *) palloc(RAW_BUF_SIZE + 1);
+
 	cstate->raw_buf_index = cstate->raw_buf_len = 0;
 
 	/* Assign range table, we'll need it in CopyFrom. */

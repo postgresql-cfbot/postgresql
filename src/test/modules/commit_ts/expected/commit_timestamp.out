@@ -39,9 +39,89 @@ SELECT pg_xact_commit_timestamp('2'::xid);
  
 (1 row)
 
-SELECT x.xid::text::bigint > 0, x.timestamp > '-infinity'::timestamptz, x.timestamp <= now() FROM pg_last_committed_xact() x;
- ?column? | ?column? | ?column? 
-----------+----------+----------
- t        | t        | t
+SELECT x.xid::text::bigint > 0 as xid_valid,
+    x.timestamp <@ tstzrange('-infinity'::timestamptz, now()) AS ts_in_range,
+    roident
+  FROM pg_last_committed_xact() x;
+ xid_valid | ts_in_range | roident 
+-----------+-------------+---------
+ t         | t           |       0
+(1 row)
+
+-- Test non-normal transaction ids.
+SELECT * FROM pg_xact_commit_timestamp_origin(NULL); -- ok, NULL
+ timestamp | roident 
+-----------+---------
+           |        
+(1 row)
+
+SELECT * FROM pg_xact_commit_timestamp_origin('0'::xid); -- error
+ERROR:  cannot retrieve commit timestamp for transaction 0
+SELECT * FROM pg_xact_commit_timestamp_origin('1'::xid); -- ok, NULL
+ timestamp | roident 
+-----------+---------
+           |        
+(1 row)
+
+SELECT * FROM pg_xact_commit_timestamp_origin('2'::xid); -- ok, NULL
+ timestamp | roident 
+-----------+---------
+           |        
+(1 row)
+
+-- Test transaction without replication origin
+SELECT txid_current() as txid_no_origin \gset
+SELECT x.timestamp <@ tstzrange('-infinity'::timestamptz, now()) AS ts_in_range, roident
+  FROM pg_last_committed_xact() x;
+ ts_in_range | roident 
+-------------+---------
+ t           |       0
+(1 row)
+
+SELECT x.timestamp <@ tstzrange('-infinity'::timestamptz, now()) AS ts_in_range, roident
+  FROM pg_xact_commit_timestamp_origin(:'txid_no_origin') x;
+ ts_in_range | roident 
+-------------+---------
+ t           |       0
+(1 row)
+
+-- Test transaction with replication origin
+SELECT pg_replication_origin_create('test_commit_ts: get_origin');
+ pg_replication_origin_create 
+------------------------------
+                            1
+(1 row)
+
+SELECT pg_replication_origin_session_setup('test_commit_ts: get_origin');
+ pg_replication_origin_session_setup 
+-------------------------------------
+ 
+(1 row)
+
+SELECT txid_current() as txid_with_origin \gset
+SELECT x.timestamp <@ tstzrange('-infinity'::timestamptz, now()) AS ts_in_range, roident
+  FROM pg_last_committed_xact() x;
+ ts_in_range | roident 
+-------------+---------
+ t           |       1
+(1 row)
+
+SELECT x.timestamp <@ tstzrange('-infinity'::timestamptz, now()) AS ts_in_range, roident
+  FROM pg_xact_commit_timestamp_origin(:'txid_with_origin') x;
+ ts_in_range | roident 
+-------------+---------
+ t           |       1
+(1 row)
+
+SELECT pg_replication_origin_session_reset();
+ pg_replication_origin_session_reset 
+-------------------------------------
+ 
+(1 row)
+
+SELECT pg_replication_origin_drop('test_commit_ts: get_origin');
+ pg_replication_origin_drop 
+----------------------------
+ 
 (1 row)
 

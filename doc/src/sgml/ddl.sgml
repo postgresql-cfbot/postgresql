@@ -745,6 +745,13 @@ CREATE TABLE products (
    <para>
     Adding a unique constraint will automatically create a unique B-tree
     index on the column or group of columns listed in the constraint.
+    If required, you can later use the <literal>ALTER CONSTRAINT ... USING INDEX</literal>
+    clause of the <literal>ALTER TABLE</literal> command to replace this index
+    with another unique B-tree index that enforces this constraint over the
+    same key columns. In this case, the constraint name is changed accordingly.
+   </para>
+
+   <para>
     A uniqueness restriction covering only some rows cannot be written as
     a unique constraint, but it is possible to enforce such a restriction by
     creating a unique <link linkend="indexes-partial">partial index</link>.
@@ -821,6 +828,10 @@ CREATE TABLE example (
     Adding a primary key will automatically create a unique B-tree index
     on the column or group of columns listed in the primary key, and will
     force the column(s) to be marked <literal>NOT NULL</literal>.
+    If required, you can later use the <literal>ALTER CONSTRAINT ... USING INDEX</literal>
+    clause of the <literal>ALTER TABLE</literal> command to replace this index
+    with another unique B-tree index that enforces this constraint over the
+    same key columns. In this case, the constraint name is changed accordingly.
    </para>
 
    <para>
@@ -1112,6 +1123,10 @@ CREATE TABLE circles (
    <para>
     Adding an exclusion constraint will automatically create an index
     of the type specified in the constraint declaration.
+    If required, you can later use the <literal>ALTER CONSTRAINT ... USING INDEX</literal>
+    clause of the <literal>ALTER TABLE</literal> command to replace this index
+    with another index of the same type that enforces this constraint over the
+    same key columns. In this case, the constraint name is changed accordingly.
    </para>
   </sect2>
  </sect1>

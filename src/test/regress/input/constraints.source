@@ -552,3 +552,714 @@ DROP DOMAIN constraint_comments_dom;
 
 DROP ROLE regress_constraint_comments;
 DROP ROLE regress_constraint_comments_noaccess;
+
+--
+--
+--
+-- ALTER CONSTRAINT ... USING INDEX
+--
+--
+--
+
+CREATE FUNCTION show_some_indexes_from_relation(
+	searched_relname name,
+	searched_indnames name[]
+)
+RETURNS TABLE
+(
+	relname name,
+	indname name,
+	index_relkind "char",
+	index_relispartition boolean,
+	indisunique boolean,
+	indisprimary boolean,
+	indisexclusion boolean,
+	indkey int2vector,
+	indislive boolean,
+	indisvalid boolean,
+	indisready boolean,
+	indoption int2vector,
+	indcollation oidvector,
+	indimmediate boolean,
+	indisreplident boolean,
+	depends_on_table boolean,
+	depends_on_simple_columns boolean,
+	depends_on_constraint boolean,
+	conname name
+)
+AS $$
+	SELECT r.relname, i.relname, i.relkind, i.relispartition, indisunique,
+		   indisprimary, indisexclusion, indkey, indislive, indisvalid,
+		   indisready, indoption, indcollation, indimmediate, indisreplident,
+		   EXISTS(SELECT *
+				  FROM pg_depend
+				  WHERE classid = 'pg_class'::regclass AND
+						objid = indexrelid AND
+						refclassid = 'pg_class'::regclass AND
+						refobjid = indrelid AND
+						refobjsubid = 0),
+		   EXISTS(SELECT *
+				  FROM pg_depend
+				  WHERE classid = 'pg_class'::regclass AND
+						objid = indexrelid AND
+						refclassid = 'pg_class'::regclass AND
+						refobjid = indrelid AND
+						refobjsubid != 0),
+		   EXISTS(SELECT *
+				  FROM pg_depend
+				  WHERE classid = 'pg_class'::regclass AND
+						objid = indexrelid AND
+						refclassid = 'pg_constraint'::regclass AND
+						refobjid = c.oid),
+		   conname
+	FROM pg_index
+	JOIN pg_class i ON indexrelid = i.oid
+	JOIN pg_class r ON indrelid = r.oid
+	LEFT JOIN pg_constraint c ON indexrelid = c.conindid
+	WHERE r.relname = searched_relname AND
+		  (searched_indnames IS NULL OR i.relname = ANY (searched_indnames))
+	ORDER BY indkey, i.relname;
+$$ LANGUAGE SQL;
+--
+CREATE FUNCTION show_indexes_from_relation(searched_relname name)
+RETURNS TABLE
+(
+	relname name,
+	indname name,
+	index_relkind "char",
+	index_relispartition boolean,
+	indisunique boolean,
+	indisprimary boolean,
+	indisexclusion boolean,
+	indkey int2vector,
+	indislive boolean,
+	indisvalid boolean,
+	indisready boolean,
+	indoption int2vector,
+	indcollation oidvector,
+	indimmediate boolean,
+	indisreplident boolean,
+	depends_on_table boolean,
+	depends_on_simple_columns boolean,
+	depends_on_constraint boolean,
+	conname name
+)
+AS $$
+	SELECT * FROM show_some_indexes_from_relation(searched_relname, NULL);
+$$ LANGUAGE SQL;
+--
+CREATE FUNCTION show_some_index_exprs_pred(
+	searched_relname name,
+	searched_indnames name[]
+)
+RETURNS TABLE
+(
+	relname name,
+	indname name,
+	indpred text,
+	indexprs text
+)
+AS $$
+	SELECT
+		r.relname,
+		i.relname,
+		pg_get_expr(indpred, indrelid, true),
+		pg_get_expr(indexprs, indrelid, true)
+	FROM pg_index
+	JOIN pg_class i ON indexrelid = i.oid
+	JOIN pg_class r ON indrelid = r.oid
+	WHERE r.relname = searched_relname AND
+		  (searched_indnames IS NULL OR i.relname = ANY (searched_indnames))
+	ORDER BY indexprs, indpred, indkey, i.relname;
+$$ LANGUAGE SQL;
+--
+CREATE FUNCTION show_index_exprs_pred(searched_relname name)
+RETURNS TABLE
+(
+	relname name,
+	indname name,
+	indpred text,
+	indexprs text
+)
+AS $$
+	SELECT * FROM show_some_index_exprs_pred(searched_relname, NULL);
+$$ LANGUAGE SQL;
+--
+CREATE FUNCTION show_constraints_named_like(searched_conname name)
+RETURNS TABLE
+(
+	conname name,
+	contype "char",
+	conkey smallint[],
+	condeferrable boolean
+)
+AS $$
+	SELECT conname, contype, conkey, condeferrable
+	FROM pg_constraint
+	WHERE conname LIKE searched_conname
+	ORDER BY conkey, conname;
+$$ LANGUAGE SQL;
+--
+CREATE FUNCTION show_index_dependencies_on_table_columns
+(
+	searched_indnames name[]
+)
+RETURNS TABLE
+(
+	indname name,
+	indnatts smallint,
+	indnkeyatts smallint,
+	indkey int2vector,
+	attnum smallint,
+	attname name
+)
+AS $$
+	SELECT relname, indnatts, indnkeyatts, indkey, attnum, attname
+	FROM pg_index
+	JOIN pg_class ON indexrelid = pg_class.oid
+	JOIN pg_depend ON indexrelid = objid
+	JOIN pg_attribute ON attrelid = indrelid
+	WHERE relname = ANY (searched_indnames) AND
+		  classid = 'pg_class'::regclass AND
+		  refclassid = 'pg_class'::regclass AND
+		  refobjid = indrelid AND
+		  refobjsubid != 0 AND
+		  refobjsubid = attnum
+	ORDER BY relname, refobjsubid;
+$$ LANGUAGE SQL;
+--
+CREATE FUNCTION show_alteridx_index_dependencies()
+RETURNS TABLE
+(
+	indname name,
+	referenced_indname name
+)
+AS $$
+	SELECT c.relname, ref_c.relname
+	FROM
+		pg_index AS i
+		JOIN pg_class AS c ON c.oid = i.indexrelid
+		JOIN pg_depend ON objid = i.indexrelid
+		JOIN pg_index AS ref_i ON refobjid = ref_i.indexrelid
+		JOIN pg_class AS ref_c ON ref_c.oid = ref_i.indexrelid
+	WHERE classid = 'pg_class'::regclass
+		AND refclassid = 'pg_class'::regclass
+		AND c.relname like '%alteridx%'
+	ORDER BY c.relname, ref_c.relname;
+$$ LANGUAGE SQL;
+--
+CREATE FUNCTION show_alteridx_constraint_dependencies()
+RETURNS TABLE
+(
+	conname name,
+	referenced_conname name
+)
+AS $$
+	SELECT con.conname, ref_con.conname
+	FROM
+		pg_constraint AS con
+		JOIN pg_depend ON objid = con.oid
+		JOIN pg_constraint AS ref_con ON refobjid = ref_con.oid
+	WHERE
+		classid = 'pg_constraint'::regclass AND
+		refclassid = 'pg_constraint'::regclass AND
+		con.conname like '%alteridx%'
+	ORDER BY con.conname, ref_con.conname;
+$$ LANGUAGE SQL;
+--
+--
+--
+CREATE TABLE alteridx_orig(
+id int PRIMARY KEY,
+uniq int CONSTRAINT alteridx_orig_uniq_key UNIQUE NOT NULL,
+parity int,
+msg text UNIQUE,
+ir int4range,
+partition_key int,
+EXCLUDE using gist(ir with &&),
+EXCLUDE USING btree((id + uniq) WITH =) WHERE (id > 2),
+EXCLUDE ((id + uniq) WITH =) WHERE (parity < 4),
+CONSTRAINT alteridx_orig_double UNIQUE(id, uniq),
+CONSTRAINT alteridx_id_key_deferrable UNIQUE (id) DEFERRABLE,
+CHECK (parity > -10));
+
+CREATE TABLE partitioned_orig_alteridx(
+id int,
+uniq int,
+parity int,
+msg text,
+ir int4range,
+partition_key int UNIQUE,
+UNIQUE (partition_key, id))
+PARTITION BY RANGE (partition_key);
+
+ALTER TABLE partitioned_orig_alteridx ATTACH PARTITION alteridx_orig
+FOR VALUES FROM (0) TO (20);
+--
+--
+CREATE TABLE another_alteridx(
+id int PRIMARY KEY,
+uniq int UNIQUE,
+parity int,
+msg text,
+ir int4range,
+EXCLUDE USING gist(ir with &&),
+EXCLUDE USING btree((id + 4) WITH =));
+--
+--
+CREATE TABLE third_alteridx(
+	id1 int,
+	id2 int,
+	PRIMARY KEY (id1, id2)
+);
+--
+--
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+SELECT * FROM show_index_exprs_pred('alteridx_orig');
+SELECT * FROM show_constraints_named_like('alteridx_%');
+
+SELECT * FROM show_indexes_from_relation('partitioned_orig_alteridx');
+SELECT * FROM show_constraints_named_like('partitioned_%');
+
+SELECT * FROM show_indexes_from_relation('another_alteridx');
+SELECT * FROM show_constraints_named_like('another_%');
+--
+--
+-- Checking that constraints work before index replacement
+--
+--
+INSERT INTO alteridx_orig SELECT n, n, n%2, CHR(62+n) || CHR(63+n),
+int4range(2*n,2*n+1), n from generate_series(1,10) as gs(n);
+INSERT INTO another_alteridx SELECT n, n, n%2, CHR(62+n) || CHR(63+n),
+int4range(2*n,2*n+1) from generate_series(1,10) as gs(n);
+--
+INSERT INTO alteridx_orig VALUES(1, 0, 1, 'AA', int4range(102, 103), 15); -- failure here
+INSERT INTO alteridx_orig VALUES(0, 1, 1, 'AA', int4range(104, 105), 15); -- failure here
+INSERT INTO alteridx_orig VALUES(0, 0, 1, 'AA', int4range(1, 107), 15); -- failure here
+INSERT INTO alteridx_orig VALUES(NULL, 0, 1, 'AA', int4range(102, 107), 15); -- failure here
+INSERT INTO alteridx_orig VALUES(0, NULL, 1, 'AA', int4range(102, 107), 15); -- failure here
+INSERT INTO alteridx_orig VALUES(0, 0, 1, 'AA', int4range(102, 107), 15);
+SELECT * FROM alteridx_orig;
+--
+--
+CREATE UNIQUE INDEX alteridx_new_uniq_key ON alteridx_orig(uniq);
+CREATE UNIQUE INDEX alteridx_new_uniq_key_incl ON alteridx_orig(uniq) INCLUDE (ir);
+CREATE UNIQUE INDEX alteridx_new_uniq_key_incl2 ON alteridx_orig(uniq) INCLUDE (parity);
+CREATE UNIQUE INDEX CONCURRENTLY alteridx_new_uniq_key_back ON alteridx_orig USING BTREE(uniq);
+CREATE UNIQUE INDEX alteridx_new_uniq_key_pred ON alteridx_orig(uniq) WHERE parity=1;
+CREATE INDEX alteridx_new_uniq_key_no_unique ON alteridx_orig(uniq);
+CREATE UNIQUE INDEX alteridx_new_uniq_key_with_msg ON alteridx_orig(uniq, msg);
+CREATE UNIQUE INDEX alteridx_new_msg_key_ops ON alteridx_orig(msg text_pattern_ops);
+CREATE UNIQUE INDEX alteridx_new_pkey ON alteridx_orig(id);
+CREATE INDEX alteridx_new_ir_excl ON alteridx_orig using gist(ir range_ops);
+CREATE INDEX alteridx_new_expr_excl ON alteridx_orig((id + uniq)) WHERE (id > 2);
+CREATE INDEX alteridx_new_expr_excl_hash ON alteridx_orig USING hash((id + uniq)) WHERE (id > 2);
+CREATE INDEX alteridx_new_expr_excl_pred ON alteridx_orig((id + uniq)) WHERE (id > 3);
+CREATE INDEX alteridx_new_expr_excl_pred2 ON alteridx_orig((id + uniq)) WHERE (id > (3 - 1));
+CREATE INDEX alteridx_new_expr_excl_wrong ON alteridx_orig((id - uniq)) WHERE (id > 2);
+CREATE INDEX alteridx_new_expr_excl1 ON alteridx_orig((id + uniq)) WHERE (parity < 4);
+CREATE INDEX another_alteridx_new_expr_excl ON another_alteridx((id + 4));
+CREATE INDEX another_alteridx_new_expr_excl_different ON another_alteridx((id + 2 + 2));
+CREATE INDEX another_alteridx_new_expr_excl_different2 ON another_alteridx((id + (2 + 2)));
+CREATE UNIQUE INDEX alteridx_new_double ON alteridx_orig(id, uniq);
+CREATE INDEX alteridx_new_double_not_unique ON alteridx_orig(id, uniq);
+CREATE UNIQUE INDEX alteridx_id_key ON alteridx_orig(id);
+--
+CREATE UNIQUE INDEX third_alteridx_pkey_new ON third_alteridx(id1, id2);
+CREATE UNIQUE INDEX third_alteridx_pkey_opp ON third_alteridx(id2, id1);
+CREATE UNIQUE INDEX third_alteridx_pkey_single ON third_alteridx(id1);
+CREATE INDEX third_alteridx_pkey_not_unique ON third_alteridx(id1, id2);
+--
+CREATE UNIQUE INDEX alteridx_new_partition_key_key
+ON alteridx_orig(partition_key);
+CREATE UNIQUE INDEX alteridx_new_partition_key_id_key
+ON alteridx_orig(partition_key,id);
+CREATE UNIQUE INDEX partitioned_new_alteridx_partition_key_key
+ON partitioned_orig_alteridx(partition_key);
+CREATE UNIQUE INDEX partitioned_new_alteridx_partition_key_id_key
+ON partitioned_orig_alteridx(partition_key,id);
+
+--
+CREATE UNIQUE INDEX alteridx_new_uniq_key_opt ON alteridx_orig(uniq);
+UPDATE pg_index SET indoption='1'
+FROM pg_class i WHERE indexrelid = i.oid AND i.relname = 'alteridx_new_uniq_key_opt';
+CREATE UNIQUE INDEX alteridx_new_msg_key_coll ON alteridx_orig(msg);
+UPDATE pg_index SET indcollation='12341'
+FROM pg_class i WHERE indexrelid = i.oid AND i.relname = 'alteridx_new_msg_key_coll';
+--
+--
+-- Tests for unique constraint --
+--
+--
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+SELECT * FROM show_index_exprs_pred('alteridx_orig');
+SELECT * FROM show_index_dependencies_on_table_columns(
+	'{"alteridx_new_uniq_key_incl",
+	  "alteridx_new_uniq_key_incl2",
+	  "alteridx_orig_expr_excl1",
+	  "alteridx_new_expr_excl1"}'::name[]);
+SELECT * FROM show_indexes_from_relation('partitioned_orig_alteridx');
+SELECT * FROM show_indexes_from_relation('another_alteridx');
+SELECT * FROM show_index_exprs_pred('another_alteridx');
+SELECT * FROM show_constraints_named_like('another_%');
+DROP INDEX alteridx_orig_uniq_key; -- failure here
+SELECT * FROM show_constraints_named_like('alteridx_%');
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_parity_check
+USING INDEX alteridx_new_uniq_key; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_uniq_key
+USING INDEX alteridx_orig_uniq_key;
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_uniq_key
+USING INDEX alteridx_new_uniq_key;
+--
+SELECT * FROM show_constraints_named_like('alteridx_%');
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+DROP INDEX alteridx_orig_uniq_key;
+DROP INDEX alteridx_new_uniq_key; -- failure here
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_uniq_key
+USING INDEX alteridx_new_uniq_key_incl2;
+--
+--
+-- Checking that all dependencies on simply-referenced columns are correctly
+-- added for old constraint index (included columns may differ in the old and
+-- new constraint index).
+--
+--
+SELECT * FROM show_some_indexes_from_relation(
+	'alteridx_orig',
+	'{"alteridx_new_uniq_key_incl", "alteridx_new_uniq_key_incl2"}'::name[]);
+SELECT * FROM show_index_dependencies_on_table_columns(
+	'{"alteridx_new_uniq_key_incl", "alteridx_new_uniq_key_incl2"}'::name[]);
+
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_uniq_key_incl2
+USING INDEX alteridx_new_uniq_key_incl;
+
+SELECT * FROM show_some_indexes_from_relation(
+	'alteridx_orig',
+	'{"alteridx_new_uniq_key_incl", "alteridx_new_uniq_key_incl2"}'::name[]);
+SELECT * FROM show_index_dependencies_on_table_columns(
+	'{"alteridx_new_uniq_key_incl", "alteridx_new_uniq_key_incl2"}'::name[]);
+--
+DROP INDEX alteridx_new_uniq_key;
+DROP INDEX alteridx_new_uniq_key_incl; -- failure here
+SELECT * FROM show_constraints_named_like('alteridx_%');
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+SELECT * FROM show_index_exprs_pred('alteridx_orig');
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_uniq_key_incl
+USING INDEX alteridx_new_uniq_key_back;
+--
+SELECT * FROM show_constraints_named_like('alteridx_%');
+--
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_uniq_key_back
+USING INDEX alteridx_new_uniq_key_pred; -- failure here
+DROP INDEX alteridx_new_uniq_key_pred;
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_uniq_key_back
+USING INDEX alteridx_new_uniq_key_no_unique; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_msg_key
+USING INDEX alteridx_new_msg_key_coll; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_msg_key
+USING INDEX alteridx_new_msg_key_ops; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_msg_key
+USING INDEX alteridx_new_uniq_key_incl; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_uniq_key_back
+USING INDEX another_alteridx_uniq_key; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_uniq_key_back
+USING INDEX alteridx_new_uniq_key_with_msg; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_uniq_key_back
+USING INDEX alteridx_new_uniq_key_opt; -- failure here
+--
+--
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_double
+USING INDEX alteridx_new_uniq_key_incl; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_double
+USING INDEX alteridx_new_double_not_unique; -- failure here
+--
+--
+-- Checking the notification if the replica identity index is no longer used in
+-- the constraint.
+--
+--
+ALTER TABLE alteridx_orig REPLICA IDENTITY USING INDEX alteridx_orig_double;
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_double
+USING INDEX alteridx_new_double;
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+--
+--
+-- Checking that deferrable constraints cannot use replica identity index
+--
+--
+ALTER TABLE alteridx_orig REPLICA IDENTITY USING INDEX alteridx_id_key;
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_id_key_deferrable
+USING INDEX alteridx_id_key; -- failure here
+
+ALTER TABLE alteridx_orig REPLICA IDENTITY DEFAULT;
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_id_key_deferrable
+USING INDEX alteridx_id_key;
+--
+--
+SELECT * FROM show_constraints_named_like('alteridx_%');
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+ALTER TABLE alteridx_orig DROP CONSTRAINT alteridx_orig_double; -- failure here
+ALTER TABLE alteridx_orig DROP CONSTRAINT alteridx_new_double;
+DROP INDEX alteridx_orig_double;
+DROP INDEX alteridx_new_double_not_unique;
+--
+--
+-- Tests for primary key constraint --
+--
+--
+SELECT * FROM show_constraints_named_like('alteridx_%');
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_pkey
+USING INDEX alteridx_new_pkey;
+SELECT * FROM show_constraints_named_like('alteridx_%');
+--
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_pkey
+USING INDEX another_alteridx_uniq_key; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_pkey
+USING INDEX another_alteridx_pkey; -- failure here
+--
+SELECT * FROM show_indexes_from_relation('third_alteridx');
+SELECT * FROM show_constraints_named_like('third_%');
+
+ALTER TABLE third_alteridx ALTER CONSTRAINT third_alteridx_pkey
+USING INDEX third_alteridx_pkey_opp; -- failure here
+ALTER TABLE third_alteridx ALTER CONSTRAINT third_alteridx_pkey
+USING INDEX third_alteridx_pkey_not_unique; -- failure here
+ALTER TABLE third_alteridx ALTER CONSTRAINT third_alteridx_pkey
+USING INDEX third_alteridx_pkey_single; -- failure here
+ALTER TABLE third_alteridx ALTER CONSTRAINT third_alteridx_pkey
+USING INDEX third_alteridx_pkey_new;
+
+SELECT * FROM show_indexes_from_relation('third_alteridx');
+SELECT * FROM show_constraints_named_like('third_%');
+
+--
+--
+-- Tests for exclusion constraint --
+--
+--
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_ir_excl
+USING INDEX alteridx_new_ir_excl;
+SELECT * FROM show_constraints_named_like('alteridx_%');
+--
+ALTER TABLE alteridx_orig ADD CONSTRAINT alteridx_new_expr_excl2
+EXCLUDE ((id + uniq) WITH =) WHERE (id > 2);
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_expr_excl
+USING INDEX alteridx_new_expr_excl2; -- failure here
+ALTER TABLE alteridx_orig DROP CONSTRAINT alteridx_new_expr_excl2;
+--
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_expr_excl
+USING INDEX alteridx_orig_ir_excl; -- failure here
+--
+--
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_expr_excl
+USING INDEX alteridx_new_expr_excl_wrong; -- failure here
+--
+--
+-- Checking that after simplifying the constants from index predicates some
+-- indexes are considered equal.
+--
+--
+SELECT * FROM show_some_index_exprs_pred(
+	'alteridx_orig',
+	'{"alteridx_orig_expr_excl",
+	  "alteridx_new_expr_excl_pred",
+	  "alteridx_new_expr_excl_pred2"}'::name[]);
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_expr_excl
+USING INDEX alteridx_new_expr_excl_pred; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_expr_excl
+USING INDEX alteridx_new_expr_excl_pred2;
+--
+--
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_expr_excl_pred2
+USING INDEX alteridx_new_expr_excl_hash; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_expr_excl_pred2
+USING INDEX alteridx_new_expr_excl;
+--
+--
+-- Checking that all dependencies on columns from index expressions and/or index
+-- predicate are not removed for new constraint index (they always exist both
+-- for standalone and constraint indexes).
+--
+--
+SELECT * FROM show_some_indexes_from_relation(
+	'alteridx_orig',
+	'{"alteridx_orig_expr_excl1", "alteridx_new_expr_excl1"}'::name[]);
+SELECT * FROM show_index_dependencies_on_table_columns(
+	'{"alteridx_orig_expr_excl1", "alteridx_new_expr_excl1"}'::name[]);
+
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_expr_excl1
+USING INDEX alteridx_new_expr_excl1;
+
+SELECT * FROM show_some_indexes_from_relation(
+	'alteridx_orig',
+	'{"alteridx_orig_expr_excl1", "alteridx_new_expr_excl1"}'::name[]);
+SELECT * FROM show_index_dependencies_on_table_columns(
+	'{"alteridx_orig_expr_excl1", "alteridx_new_expr_excl1"}'::name[]);
+--
+--
+SELECT * FROM show_index_exprs_pred('alteridx_orig');
+DROP INDEX alteridx_new_expr_excl_wrong;
+ALTER TABLE alteridx_does_not_exist ALTER CONSTRAINT alteridx_orig_expr_excl
+USING INDEX alteridx_new_expr_excl_wrong; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_expr_excl
+USING INDEX alteridx_new_expr_excl_wrong; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_expr_excl
+USING INDEX alteridx_new_expr_excl_wrong; -- failure here
+--
+DROP INDEX alteridx_new_expr_excl_pred;
+DROP INDEX alteridx_orig_expr_excl;
+DROP INDEX alteridx_new_expr_excl_hash;
+DROP INDEX alteridx_new_expr_excl; -- failure here
+SELECT * FROM show_index_exprs_pred('alteridx_orig');
+
+ALTER TABLE another_alteridx ALTER CONSTRAINT another_alteridx_expr_excl
+USING INDEX another_alteridx_new_expr_excl;
+--
+--
+-- Checking that after simplifying the constants from index expressions some
+-- indexes are considered equal.
+--
+--
+SELECT * FROM show_some_index_exprs_pred(
+	'another_alteridx',
+	'{"another_alteridx_new_expr_excl",
+	  "another_alteridx_new_expr_excl_different",
+	  "another_alteridx_new_expr_excl_different2"}'::name[]);
+ALTER TABLE another_alteridx ALTER CONSTRAINT another_alteridx_new_expr_excl
+USING INDEX another_alteridx_new_expr_excl_different; -- failure here
+ALTER TABLE another_alteridx ALTER CONSTRAINT another_alteridx_new_expr_excl
+USING INDEX another_alteridx_new_expr_excl_different2;
+
+SELECT * FROM show_indexes_from_relation('another_alteridx');
+SELECT * FROM show_constraints_named_like('another_%');
+--
+--
+-- Checking that DDL changes can be rolled back
+--
+--
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+
+BEGIN;
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_pkey
+USING INDEX alteridx_orig_pkey;
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+ROLLBACK;
+
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+--
+--
+-- Checking constraints in partitions and partitioned tables
+--
+--
+SELECT * FROM show_alteridx_index_dependencies();
+SELECT * FROM show_alteridx_constraint_dependencies();
+
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_partition_key_key
+USING INDEX alteridx_new_partition_key_key; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_partition_key_id_key
+USING INDEX alteridx_new_partition_key_id_key; -- failure here
+
+ALTER TABLE partitioned_orig_alteridx
+ALTER CONSTRAINT partitioned_orig_alteridx_partition_key_key
+USING INDEX partitioned_new_alteridx_partition_key_key; -- failure here
+ALTER TABLE partitioned_orig_alteridx
+ALTER CONSTRAINT partitioned_orig_alteridx_partition_key_id_key
+USING INDEX partitioned_new_alteridx_partition_key_id_key; -- failure here
+
+ALTER TABLE partitioned_orig_alteridx DETACH PARTITION alteridx_orig;
+
+SELECT * FROM show_alteridx_index_dependencies();
+SELECT * FROM show_alteridx_constraint_dependencies();
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_partition_key_key
+USING INDEX alteridx_new_partition_key_key;
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_orig_partition_key_id_key
+USING INDEX alteridx_new_partition_key_id_key;
+
+ALTER TABLE partitioned_orig_alteridx
+ALTER CONSTRAINT partitioned_orig_alteridx_partition_key_key
+USING INDEX partitioned_new_alteridx_partition_key_key; -- failure here
+ALTER TABLE partitioned_orig_alteridx
+ALTER CONSTRAINT partitioned_orig_alteridx_partition_key_id_key
+USING INDEX partitioned_new_alteridx_partition_key_id_key; -- failure here
+--
+--
+-- Dropping replaced indexes
+--
+--
+DROP INDEX alteridx_orig_ir_excl;
+DROP INDEX alteridx_orig_pkey;
+DROP INDEX alteridx_new_uniq_key_no_unique;
+DROP INDEX alteridx_new_uniq_key_incl;
+DROP INDEX alteridx_new_msg_key_coll;
+DROP INDEX alteridx_new_msg_key_ops;
+--
+-- Trying to drop indexes used in constraints after replacement
+--
+DROP INDEX alteridx_new_pkey; -- failure here
+DROP INDEX alteridx_new_uniq_key_back; -- failure here
+DROP INDEX alteridx_orig_msg_key; -- failure here
+DROP INDEX alteridx_new_ir_excl; -- failure here
+DROP INDEX alteridx_new_uniq_key_opt;
+--
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+SELECT * FROM show_constraints_named_like('alteridx_%');
+--
+--
+-- Checking that indexes unavailable for use can't be picked for replacement
+--
+--
+CREATE UNIQUE INDEX alteridx_new_uniq_key_not_live ON alteridx_orig(uniq);
+CREATE UNIQUE INDEX alteridx_new_uniq_key_not_valid ON alteridx_orig(uniq);
+CREATE UNIQUE INDEX alteridx_new_uniq_key_not_ready ON alteridx_orig(uniq);
+UPDATE pg_index SET indislive=false
+FROM pg_class i WHERE indexrelid = i.oid AND i.relname = 'alteridx_new_uniq_key_not_live';
+UPDATE pg_index SET indisvalid=false
+FROM pg_class i WHERE indexrelid = i.oid AND i.relname = 'alteridx_new_uniq_key_not_valid';
+UPDATE pg_index SET indisready=false
+FROM pg_class i WHERE indexrelid = i.oid AND i.relname = 'alteridx_new_uniq_key_not_ready';
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+--
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_uniq_key_back
+USING INDEX alteridx_new_uniq_key_not_live; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_uniq_key_back
+USING INDEX alteridx_new_uniq_key_not_valid; -- failure here
+ALTER TABLE alteridx_orig ALTER CONSTRAINT alteridx_new_uniq_key_back
+USING INDEX alteridx_new_uniq_key_not_ready; -- failure here
+--
+DROP INDEX alteridx_new_uniq_key_not_live;
+DROP INDEX alteridx_new_uniq_key_not_valid;
+DROP INDEX alteridx_new_uniq_key_not_ready;
+--
+SELECT * FROM show_indexes_from_relation('alteridx_orig');
+SELECT * FROM show_index_exprs_pred('alteridx_orig');
+SELECT * FROM show_constraints_named_like('alteridx_%');
+--
+--
+-- Checking that constraints still work
+--
+--
+INSERT INTO alteridx_orig VALUES(1, 0, 1, 'AA', int4range(102, 103), 17); -- failure here
+INSERT INTO alteridx_orig VALUES(0, 1, 1, 'AA', int4range(104, 105), 17); -- failure here
+INSERT INTO alteridx_orig VALUES(0, 0, 1, 'AA', int4range(100, 107), 17); -- failure here
+INSERT INTO alteridx_orig VALUES(0, 0, 1, 'AA', int4range(102, 107), 17); -- failure here
+INSERT INTO alteridx_orig VALUES(NULL, 0, 1, 'AA', int4range(102, 107), 17); -- failure here
+INSERT INTO alteridx_orig VALUES(0, NULL, 1, 'AA', int4range(102, 107), 17); -- failure here
+INSERT INTO alteridx_orig VALUES(-1, -1, 1, 'BB', int4range(108, 110), 17);
+--
+SELECT * FROM alteridx_orig;
+--
+--
+DROP FUNCTION show_indexes_from_relation(searched_relname name);
+DROP FUNCTION show_constraints_named_like(searched_conname name);
+DROP FUNCTION show_index_exprs_pred(searched_relname name);
+DROP TABLE alteridx_orig;
+DROP TABLE partitioned_orig_alteridx;
+DROP TABLE another_alteridx;
+DROP TABLE third_alteridx;

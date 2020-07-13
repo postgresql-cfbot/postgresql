@@ -629,7 +629,6 @@ ExecInsert(ModifyTableState *mtstate,
 	if (canSetTag)
 	{
 		(estate->es_processed)++;
-		setLastTid(&slot->tts_tid);
 	}
 
 	/*

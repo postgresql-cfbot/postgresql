@@ -128,9 +128,6 @@ extern bool heap_hot_search_buffer(ItemPointer tid, Relation relation,
 								   Buffer buffer, Snapshot snapshot, HeapTuple heapTuple,
 								   bool *all_dead, bool first_call);
 
-extern void heap_get_latest_tid(TableScanDesc scan, ItemPointer tid);
-extern void setLastTid(const ItemPointer tid);
-
 extern BulkInsertState GetBulkInsertState(void);
 extern void FreeBulkInsertState(BulkInsertState);
 extern void ReleaseBulkInsertStatePin(BulkInsertState bistate);

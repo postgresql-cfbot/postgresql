@@ -328,6 +328,7 @@ static void AlterSeqNamespaces(Relation classRel, Relation rel,
 							   LOCKMODE lockmode);
 static ObjectAddress ATExecAlterConstraint(Relation rel, AlterTableCmd *cmd,
 										   bool recurse, bool recursing, LOCKMODE lockmode);
+static ObjectAddress ATExecAlterConstraintUsingIndex(Relation rel, AlterTableCmd *cmd);
 static ObjectAddress ATExecValidateConstraint(Relation rel, char *constrName,
 											  bool recurse, bool recursing, LOCKMODE lockmode);
 static int	transformColumnNameList(Oid relId, List *colList,
@@ -3782,6 +3783,7 @@ AlterTableGetLockLevel(List *cmds)
 				 */
 			case AT_ColumnDefault:
 			case AT_AlterConstraint:
+			case AT_AlterConstraintUsingIndex:
 			case AT_AddIndex:	/* from ADD CONSTRAINT */
 			case AT_AddIndexConstraint:
 			case AT_ReplicaIdentity:
@@ -4228,6 +4230,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			pass = AT_PASS_MISC;
 			break;
 		case AT_AlterConstraint:	/* ALTER CONSTRAINT */
+		case AT_AlterConstraintUsingIndex:	/* ALTER CONSTRAINT */
 			ATSimplePermissions(rel, ATT_TABLE);
 			pass = AT_PASS_MISC;
 			break;
@@ -4498,6 +4501,9 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			break;
 		case AT_AlterConstraint:	/* ALTER CONSTRAINT */
 			address = ATExecAlterConstraint(rel, cmd, false, false, lockmode);
+			break;
+		case AT_AlterConstraintUsingIndex:
+			address = ATExecAlterConstraintUsingIndex(rel, cmd);
 			break;
 		case AT_ValidateConstraint: /* VALIDATE CONSTRAINT */
 			address = ATExecValidateConstraint(rel, cmd->name, false, false,
@@ -9546,6 +9552,484 @@ tryAttachPartitionForeignKey(ForeignKeyCacheInfo *fk,
 	return true;
 }
 
+/*
+ * RelationGetIndexClass -- get OIDs of operator classes for each index column
+ */
+static oidvector *
+RelationGetIndexClass(Relation index)
+{
+	Datum		indclassDatum;
+	bool		isnull;
+
+	Assert(index != NULL);
+	Assert(index->rd_indextuple != NULL);
+
+	/*
+	 * indclass cannot be referenced directly through the C struct, because it
+	 * comes after the variable-width indkey field.  Must extract the datum
+	 * the hard way...
+	 */
+	indclassDatum = SysCacheGetAttr(INDEXRELID, index->rd_indextuple,
+									Anum_pg_index_indclass, &isnull);
+	Assert(!isnull);
+
+	return (oidvector *) DatumGetPointer(indclassDatum);
+}
+
+/*
+ * Check if oldIndex can be replaced by newIndex in a constraint
+ * Returns NULL if indexes are compatible or a string with a
+ * description of the incompatibility reasons
+ */
+static const char *
+indexExchangeabilityError(Relation oldIndex, Relation newIndex)
+{
+	Form_pg_index oldIndexForm = oldIndex->rd_index,
+				newIndexForm = newIndex->rd_index;
+	List	   *oldPredicate = RelationGetIndexPredicate(oldIndex),
+			   *newPredicate = RelationGetIndexPredicate(newIndex);
+	oidvector  *oldIndexClass = RelationGetIndexClass(oldIndex),
+			   *newIndexClass = RelationGetIndexClass(newIndex);
+	int			i;
+
+	/* This function might need modificatoins if pg_index gets new fields */
+	Assert(Natts_pg_index == 20);
+
+	if (RelationGetForm(oldIndex)->relam != RelationGetForm(newIndex)->relam)
+		return "Indexes must have the same access methods";
+
+	/*
+	 * We do not want to replace the corresponding partitioned index and/or
+	 * corresponding partition indexes of other partitions.
+	 */
+
+	if (RelationGetForm(oldIndex)->relkind == RELKIND_PARTITIONED_INDEX ||
+		RelationGetForm(newIndex)->relkind == RELKIND_PARTITIONED_INDEX)
+		return "One of the indexes is a partitioned index";
+
+	if (RelationGetForm(oldIndex)->relispartition ||
+		RelationGetForm(newIndex)->relispartition)
+		return "One of the indexes is a partition index";
+
+	if (!oldIndexForm->indislive || !newIndexForm->indislive)
+		return "One of the indexes is being dropped";
+	if (!oldIndexForm->indisvalid || !newIndexForm->indisvalid)
+		return "One of the indexes is not valid for queries";
+	if (!oldIndexForm->indisready || !newIndexForm->indisready)
+		return "One of the indexes is not ready for inserts";
+
+	if (oldIndexForm->indisunique != newIndexForm->indisunique)
+		return "Both indexes must be either unique or not";
+
+	if (IndexRelationGetNumberOfKeyAttributes(oldIndex) !=
+		IndexRelationGetNumberOfKeyAttributes(newIndex))
+		return "Indexes must have the same number of key columns";
+
+	for (i = 0; i < IndexRelationGetNumberOfKeyAttributes(oldIndex); i++)
+	{
+		if (oldIndexForm->indkey.values[i] != newIndexForm->indkey.values[i])
+			return "Indexes must have the same key columns";
+
+		/*
+		 * A deterministic comparison considers strings that are not byte-wise
+		 * equal to be unequal even if they are considered logically equal by
+		 * the comparison. Comparison that is not deterministic can make the
+		 * collation be, say, case- or accent-insensitive. Therefore indexes
+		 * must have the same collation.
+		 */
+		if (oldIndex->rd_indcollation[i] != newIndex->rd_indcollation[i])
+			return "Indexes must have the same collation";
+
+		if (oldIndexClass->values[i] != newIndexClass->values[i])
+			return "Indexes must have the same operator class";
+
+		if (oldIndex->rd_indoption[i] != newIndex->rd_indoption[i])
+			return "Indexes must have the same per-column flag bits";
+	}
+
+	if (!equal(RelationGetIndexExpressions(oldIndex),
+			   RelationGetIndexExpressions(newIndex)))
+		return "Indexes must have the same non-column attributes";
+
+	if (!equal(oldPredicate, newPredicate))
+	{
+		if (oldPredicate && newPredicate)
+			return "Indexes must have the same partial index predicates";
+		else
+			return "Either none or both indexes must have partial index predicates";
+	}
+
+	/*
+	 * Check that the deferrable constraint will not "invalidate" the replica
+	 * identity index. (For each constraint index pg_index.indimmediate !=
+	 * pg_constraint.condeferrable. Therefore for a deferrable constraint
+	 * pg_index.indimmediate = false and such indexes cannot be used as
+	 * replica identity indexes.)
+	 */
+	if (!oldIndexForm->indimmediate && newIndexForm->indisreplident)
+		return "Deferrable constraint cannot use replica identity index";
+
+	return NULL;
+}
+
+/*
+ * Update all changed properties for the old / new constraint index.
+ */
+static void
+AlterConstraintUpdateIndex(Form_pg_constraint currcon, Relation pg_index,
+						   Oid indexOid, bool is_new_constraint_index)
+{
+	HeapTuple	indexTuple;
+	Form_pg_index indexForm;
+	bool		dirty;
+
+	Assert(currcon != NULL);
+	Assert(pg_index != NULL);
+
+	indexTuple = SearchSysCacheCopy1(INDEXRELID, ObjectIdGetDatum(indexOid));
+	if (!HeapTupleIsValid(indexTuple))
+		elog(ERROR, "cache lookup failed for index %u", indexOid);
+	indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
+
+	dirty = false;
+
+	/*
+	 * If this is an exclusion constraint, set pg_index.indisexclusion to true
+	 * for the new index constraint and false for the old index constraint.
+	 */
+	if (currcon->contype == CONSTRAINT_EXCLUSION &&
+		(indexForm->indisexclusion != is_new_constraint_index))
+	{
+		indexForm->indisexclusion = is_new_constraint_index;
+		dirty = true;
+	}
+
+	/*
+	 * If this is a primary key, set pg_index.indisprimary to true for the new
+	 * index constraint and false for the old index constraint.
+	 */
+	if (currcon->contype == CONSTRAINT_PRIMARY &&
+		(indexForm->indisprimary != is_new_constraint_index))
+	{
+		indexForm->indisprimary = is_new_constraint_index;
+		dirty = true;
+	}
+
+	/*
+	 * If the constraint is deferrable, set pg_index.indimmediate to false for
+	 * the new index constraint and true for the old index constraint. (For
+	 * each constraint index pg_index.indimmediate !=
+	 * pg_constraint.condeferrable. pg_index.indimmediate is true for each
+	 * stand-alone index without constraint.)
+	 */
+	if (currcon->condeferrable &&
+		(indexForm->indimmediate == is_new_constraint_index))
+	{
+		indexForm->indimmediate = !is_new_constraint_index;
+		dirty = true;
+	}
+
+	if (dirty)
+	{
+		CatalogTupleUpdate(pg_index, &indexTuple->t_self, indexTuple);
+
+		InvokeObjectPostAlterHook(IndexRelationId, indexOid, 0);
+	}
+
+	heap_freetuple(indexTuple);
+}
+
+/*
+ * For this index:
+ * - create auto dependencies on simply-referenced columns;
+ * - if there are no simply-referenced columns, give the index an auto
+ *   dependency on the whole table.
+ *
+ * This function is based on a part of index_create().
+ */
+static void
+AddRelationDependenciesToIndex(Relation index)
+{
+	Form_pg_index indexForm = index->rd_index;
+	ObjectAddress myself,
+				referenced;
+	int			i,
+				attrnum;
+	bool		have_simple_col = false;
+
+	ObjectAddressSet(myself, RelationRelationId, RelationGetRelid(index));
+
+	/* Create auto dependencies on simply-referenced columns */
+	for (i = 0; i < IndexRelationGetNumberOfAttributes(index); i++)
+	{
+		attrnum = indexForm->indkey.values[i];
+		if (attrnum != 0)
+		{
+			ObjectAddressSubSet(referenced, RelationRelationId,
+								indexForm->indrelid, attrnum);
+			recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+
+			have_simple_col = true;
+		}
+	}
+
+	/*
+	 * If there are no simply-referenced columns, give the index an auto
+	 * dependency on the whole table.
+	 */
+	if (!have_simple_col)
+	{
+		ObjectAddressSet(referenced, RelationRelationId, indexForm->indrelid);
+		recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+	}
+}
+
+/*
+ * ALTER TABLE ALTER CONSTRAINT USING INDEX
+ *
+ * Replace an index of a constraint.
+ *
+ * Currently only works for UNIQUE, EXCLUSION and PRIMARY constraints.
+ * Index can be replaced only with index of same type and with same
+ * configuration (attributes, columns, etc.).
+ *
+ * If the constraint is modified, returns its address; otherwise, return
+ * InvalidObjectAddress.
+ */
+static ObjectAddress
+ATExecAlterConstraintUsingIndex(Relation rel, AlterTableCmd *cmd)
+{
+	Relation	conrel;
+	SysScanDesc scan;
+	ScanKeyData key[3];
+	HeapTuple	contuple;
+	Form_pg_constraint currcon = NULL;
+	Oid			indexOid,
+				oldIndexOid;
+	Relation	indexRel,
+				oldIndexRel;
+	VariableShowStmt *indexName;
+	ObjectAddress address;
+	const char *replaceabilityCheckResult;
+	HeapTuple	copyTuple;
+	Form_pg_constraint copy_con;
+	ObjectAddress constraint_addr,
+				index_addr;
+	List	   *indexprs,
+			   *indpred;
+
+	indexName = castNode(VariableShowStmt, cmd->def);
+
+	conrel = table_open(ConstraintRelationId, RowExclusiveLock);
+
+	/*
+	 * Find and check the target constraint
+	 */
+	ScanKeyInit(&key[0],
+				Anum_pg_constraint_conrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationGetRelid(rel)));
+	ScanKeyInit(&key[1],
+				Anum_pg_constraint_contypid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(InvalidOid));
+	ScanKeyInit(&key[2],
+				Anum_pg_constraint_conname,
+				BTEqualStrategyNumber, F_NAMEEQ,
+				CStringGetDatum(cmd->name));
+	scan = systable_beginscan(conrel, ConstraintRelidTypidNameIndexId,
+							  true, NULL, 3, key);
+
+	/* There can be at most one matching row */
+	if (!HeapTupleIsValid(contuple = systable_getnext(scan)))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("constraint \"%s\" of relation \"%s\" does not exist",
+						cmd->name, RelationGetRelationName(rel))));
+
+	currcon = (Form_pg_constraint) GETSTRUCT(contuple);
+	if (currcon->contype != CONSTRAINT_UNIQUE &&
+		currcon->contype != CONSTRAINT_EXCLUSION &&
+		currcon->contype != CONSTRAINT_PRIMARY &&
+		currcon->contype != CONSTRAINT_FOREIGN)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("constraint \"%s\" of relation \"%s\" is not a primary "
+						"key, unique constraint, exclusion constraint "
+						"or foreign constraint",
+						cmd->name, RelationGetRelationName(rel))));
+
+	oldIndexOid = currcon->conindid;
+	oldIndexRel = index_open(oldIndexOid, ShareLock);
+
+	/* Check that the index exists */
+	indexOid = get_relname_relid(indexName->name, rel->rd_rel->relnamespace);
+	if (!OidIsValid(indexOid))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("index \"%s\" for table \"%s\" does not exist",
+						indexName->name, RelationGetRelationName(rel))));
+
+	indexRel = index_open(indexOid, ShareLock);
+
+	/* Check that the index is on the relation we're altering. */
+	if ((indexRel->rd_index == NULL ||
+		indexRel->rd_index->indrelid != RelationGetRelid(rel)) &&
+		currcon->contype != CONSTRAINT_FOREIGN)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("\"%s\" is not an index for table \"%s\"",
+						indexName->name, RelationGetRelationName(rel))));
+
+	/*
+	 * Check if our constraint uses this index (and therefore everything is
+	 * already in order).
+	 */
+	if (oldIndexOid == indexOid)
+	{
+		ereport(NOTICE,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("constraint \"%s\" already uses index \"%s\", skipping",
+						cmd->name, indexName->name)));
+		address = InvalidObjectAddress;
+		goto cleanup;
+	}
+
+	/* Check if another constraint already uses this index */
+	if (currcon->contype != CONSTRAINT_FOREIGN &&
+		OidIsValid(get_index_constraint(indexOid)))
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("index \"%s\" is already associated with a constraint",
+						indexName->name)));
+
+	/* Check if the new index is compatible with our constraint */
+	if ((replaceabilityCheckResult =
+		 indexExchangeabilityError(oldIndexRel, indexRel)))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("index in constraint \"%s\" cannot be replaced by "
+						"\"%s\"",
+						cmd->name, indexName->name),
+				 errdetail("%s.", replaceabilityCheckResult)));
+
+	/* OK, change the index for this constraint */
+	indexprs = RelationGetIndexExpressions(indexRel);
+	indpred = RelationGetIndexPredicate(indexRel);
+
+	/*
+	 * Now update the catalog, while we have the door open.
+	 */
+	copyTuple = heap_copytuple(contuple);
+	copy_con = (Form_pg_constraint) GETSTRUCT(copyTuple);
+	copy_con->conindid = indexOid;
+	if (currcon->contype == CONSTRAINT_EXCLUSION ||
+		currcon->contype == CONSTRAINT_PRIMARY ||
+		currcon->contype == CONSTRAINT_UNIQUE)
+	{
+		/* Rename the constraint to match the index's name */
+		ereport(NOTICE,
+				(errmsg("ALTER TABLE / ALTER CONSTRAINT USING INDEX will"
+						" rename constraint \"%s\" to \"%s\"",
+						cmd->name, indexName->name)));
+		namestrcpy(&(copy_con->conname), indexName->name);
+
+		/*
+		* If the replaced index is a replica identity index, remind the user
+		* so that he can change table replica identity and only then drop the
+		* "unnecessary" index.
+		*/
+		if (oldIndexRel->rd_index->indisreplident)
+			ereport(NOTICE,
+					(errmsg("replaced index \"%s\" is still chosen as replica"
+							" identity",
+							RelationGetRelationName(oldIndexRel))));
+
+	}
+	CatalogTupleUpdate(conrel, &copyTuple->t_self, copyTuple);
+
+	InvokeObjectPostAlterHook(ConstraintRelationId, currcon->oid, 0);
+
+	heap_freetuple(copyTuple);
+
+	/* Update old and new indexes if necessary */
+	if (currcon->contype == CONSTRAINT_EXCLUSION ||
+		currcon->contype == CONSTRAINT_PRIMARY ||
+		currcon->condeferrable)
+	{
+		Relation	pg_index;
+
+		pg_index = table_open(IndexRelationId, RowExclusiveLock);
+		AlterConstraintUpdateIndex(currcon, pg_index, indexOid, true);
+		AlterConstraintUpdateIndex(currcon, pg_index, oldIndexOid, false);
+		table_close(pg_index, RowExclusiveLock);
+	}
+
+	/* Update dependencies */
+
+	/* For foreign constraints */
+	if (currcon->contype == CONSTRAINT_FOREIGN)
+	{
+		changeDependencyFor(ConstraintRelationId, currcon->oid,
+							RelationRelationId, oldIndexOid, indexOid);
+	}
+	/* For exclusion, primary and unique constraints */
+	else
+	{
+		/* The old index is now independent on any constraints */
+		deleteDependencyRecordsForClass(RelationRelationId, oldIndexOid,
+										ConstraintRelationId,
+										DEPENDENCY_INTERNAL);
+
+		/*
+		 * The old index now depends on its simply-referenced columns and/or
+		 * its table.
+		 */
+		AddRelationDependenciesToIndex(oldIndexRel);
+
+		/* The new index now depends on our constraint */
+		ObjectAddressSet(constraint_addr, ConstraintRelationId, currcon->oid);
+		ObjectAddressSet(index_addr, RelationRelationId, indexOid);
+		recordDependencyOn(&index_addr, &constraint_addr, DEPENDENCY_INTERNAL);
+
+		/*
+		 * The new index is now independent on its simply-referenced columns
+		 * and/or its table.
+		 */
+		deleteDependencyRecordsForClass(RelationRelationId, indexOid,
+										RelationRelationId, DEPENDENCY_AUTO);
+
+		/* Restore dependencies on anything mentioned in index expressions */
+		if (indexprs)
+			recordDependencyOnSingleRelExpr(&index_addr,
+											(Node *) indexprs,
+											RelationGetRelid(rel),
+											DEPENDENCY_NORMAL,
+											DEPENDENCY_AUTO, false);
+
+		/* Restore dependencies on anything mentioned in predicate */
+		if (indpred)
+			recordDependencyOnSingleRelExpr(&index_addr,
+											(Node *) indpred,
+											RelationGetRelid(rel),
+											DEPENDENCY_NORMAL,
+											DEPENDENCY_AUTO, false);
+	}
+
+	/* Invalidate relcache so that others see the new attributes */
+	CacheInvalidateRelcache(rel);
+
+	ObjectAddressSet(address, ConstraintRelationId, currcon->oid);
+
+cleanup:
+	systable_endscan(scan);
+	table_close(conrel, RowExclusiveLock);
+
+	index_close(oldIndexRel, NoLock);
+	index_close(indexRel, NoLock);
+
+	return address;
+}
 
 /*
  * ALTER TABLE ALTER CONSTRAINT

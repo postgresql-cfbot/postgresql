@@ -1803,6 +1803,7 @@ typedef enum AlterTableType
 	AT_ReAddConstraint,			/* internal to commands/tablecmds.c */
 	AT_ReAddDomainConstraint,	/* internal to commands/tablecmds.c */
 	AT_AlterConstraint,			/* alter constraint */
+	AT_AlterConstraintUsingIndex,	/* alter constraint using index */
 	AT_ValidateConstraint,		/* validate constraint */
 	AT_ValidateConstraintRecurse,	/* internal to commands/tablecmds.c */
 	AT_AddIndexConstraint,		/* add constraint using existing index */

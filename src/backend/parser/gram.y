@@ -2337,6 +2337,17 @@ alter_table_cmd:
 									NULL, NULL, yyscanner);
 					$$ = (Node *)n;
 				}
+			/* ALTER TABLE <name> ALTER CONSTRAINT ... USING INDEX */
+			| ALTER CONSTRAINT name USING INDEX name
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					VariableShowStmt *c = makeNode(VariableShowStmt);
+					n->subtype = AT_AlterConstraintUsingIndex;
+					n->name = $3;
+					n->def = (Node *) c;
+					c->name = $6;
+					$$ = (Node *)n;
+				}
 			/* ALTER TABLE <name> VALIDATE CONSTRAINT ... */
 			| VALIDATE CONSTRAINT name
 				{

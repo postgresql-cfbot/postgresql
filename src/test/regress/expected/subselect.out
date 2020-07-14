@@ -844,19 +844,25 @@ explain (verbose, costs off)
 explain (verbose, costs off)
   select x, x from
     (select (select now() where y=y) as x from (values(1),(2)) v(y)) ss;
-                              QUERY PLAN                              
-----------------------------------------------------------------------
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
  Values Scan on "*VALUES*"
    Output: (SubPlan 1), (SubPlan 2)
    SubPlan 1
-     ->  Result
-           Output: now()
-           One-Time Filter: ("*VALUES*".column1 = "*VALUES*".column1)
+     ->  Result Cache
+           Output: (now())
+           Cache Key: "*VALUES*".column1
+           ->  Result
+                 Output: now()
+                 One-Time Filter: ("*VALUES*".column1 = "*VALUES*".column1)
    SubPlan 2
-     ->  Result
-           Output: now()
-           One-Time Filter: ("*VALUES*".column1 = "*VALUES*".column1)
-(10 rows)
+     ->  Result Cache
+           Output: (now())
+           Cache Key: "*VALUES*".column1
+           ->  Result
+                 Output: now()
+                 One-Time Filter: ("*VALUES*".column1 = "*VALUES*".column1)
+(16 rows)
 
 explain (verbose, costs off)
   select x, x from

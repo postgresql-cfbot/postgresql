@@ -79,6 +79,7 @@
 #define SH_RESET SH_MAKE_NAME(reset)
 #define SH_INSERT SH_MAKE_NAME(insert)
 #define SH_INSERT_HASH SH_MAKE_NAME(insert_hash)
+#define SH_DELETE_ITEM SH_MAKE_NAME(delete_item)
 #define SH_DELETE SH_MAKE_NAME(delete)
 #define SH_LOOKUP SH_MAKE_NAME(lookup)
 #define SH_LOOKUP_HASH SH_MAKE_NAME(lookup_hash)
@@ -163,6 +164,7 @@ SH_SCOPE	SH_ELEMENT_TYPE *SH_INSERT_HASH(SH_TYPE * tb, SH_KEY_TYPE key,
 SH_SCOPE	SH_ELEMENT_TYPE *SH_LOOKUP(SH_TYPE * tb, SH_KEY_TYPE key);
 SH_SCOPE	SH_ELEMENT_TYPE *SH_LOOKUP_HASH(SH_TYPE * tb, SH_KEY_TYPE key,
 											uint32 hash);
+SH_SCOPE void SH_DELETE_ITEM(SH_TYPE * tb, SH_ELEMENT_TYPE * entry);
 SH_SCOPE bool SH_DELETE(SH_TYPE * tb, SH_KEY_TYPE key);
 SH_SCOPE void SH_START_ITERATE(SH_TYPE * tb, SH_ITERATOR * iter);
 SH_SCOPE void SH_START_ITERATE_AT(SH_TYPE * tb, SH_ITERATOR * iter, uint32 at);
@@ -763,75 +765,81 @@ SH_LOOKUP_HASH(SH_TYPE * tb, SH_KEY_TYPE key, uint32 hash)
 }
 
 /*
- * Delete entry from hash table.  Returns whether to-be-deleted key was
- * present.
+ * Delete 'entry' from hash table.
+ */
+SH_SCOPE void
+SH_DELETE_ITEM(SH_TYPE * tb, SH_ELEMENT_TYPE * entry)
+{
+	SH_ELEMENT_TYPE *lastentry = entry;
+	uint32		curelem;
+	uint32		startelem;
+
+	Assert(entry >= &tb->data[0] && entry < &tb->data[tb->size]);
+
+	/* Calculate the index of 'entry' */
+	startelem = curelem = entry - &tb->data[0];
+
+	tb->members--;
+
+	/*
+	 * Backward shift following elements till either an empty element
+	 * or an element at its optimal position is encountered.
+	 *
+	 * While that sounds expensive, the average chain length is short,
+	 * and deletions would otherwise require tombstones.
+	 */
+	while (true)
+	{
+		SH_ELEMENT_TYPE *curentry;
+		uint32		curhash;
+		uint32		curoptimal;
+
+		curelem = SH_NEXT(tb, curelem, startelem);
+		curentry = &tb->data[curelem];
+
+		if (curentry->status != SH_STATUS_IN_USE)
+		{
+			lastentry->status = SH_STATUS_EMPTY;
+			break;
+		}
+
+		curhash = SH_ENTRY_HASH(tb, curentry);
+		curoptimal = SH_INITIAL_BUCKET(tb, curhash);
+
+		/* current is at optimal position, done */
+		if (curoptimal == curelem)
+		{
+			lastentry->status = SH_STATUS_EMPTY;
+			break;
+		}
+
+		/* shift */
+		memcpy(lastentry, curentry, sizeof(SH_ELEMENT_TYPE));
+
+		lastentry = curentry;
+	}
+}
+
+/*
+ * Perform hash table lookup on 'key', delete the entry belonging to it and
+ * return true.  Returns false if no item could be found relating to 'key'.
  */
 SH_SCOPE bool
 SH_DELETE(SH_TYPE * tb, SH_KEY_TYPE key)
 {
-	uint32		hash = SH_HASH_KEY(tb, key);
-	uint32		startelem = SH_INITIAL_BUCKET(tb, hash);
-	uint32		curelem = startelem;
+	SH_ELEMENT_TYPE *entry = SH_LOOKUP(tb, key);
 
-	while (true)
+	if (likely(entry != NULL))
 	{
-		SH_ELEMENT_TYPE *entry = &tb->data[curelem];
-
-		if (entry->status == SH_STATUS_EMPTY)
-			return false;
-
-		if (entry->status == SH_STATUS_IN_USE &&
-			SH_COMPARE_KEYS(tb, hash, key, entry))
-		{
-			SH_ELEMENT_TYPE *lastentry = entry;
-
-			tb->members--;
-
-			/*
-			 * Backward shift following elements till either an empty element
-			 * or an element at its optimal position is encountered.
-			 *
-			 * While that sounds expensive, the average chain length is short,
-			 * and deletions would otherwise require tombstones.
-			 */
-			while (true)
-			{
-				SH_ELEMENT_TYPE *curentry;
-				uint32		curhash;
-				uint32		curoptimal;
-
-				curelem = SH_NEXT(tb, curelem, startelem);
-				curentry = &tb->data[curelem];
-
-				if (curentry->status != SH_STATUS_IN_USE)
-				{
-					lastentry->status = SH_STATUS_EMPTY;
-					break;
-				}
-
-				curhash = SH_ENTRY_HASH(tb, curentry);
-				curoptimal = SH_INITIAL_BUCKET(tb, curhash);
-
-				/* current is at optimal position, done */
-				if (curoptimal == curelem)
-				{
-					lastentry->status = SH_STATUS_EMPTY;
-					break;
-				}
-
-				/* shift */
-				memcpy(lastentry, curentry, sizeof(SH_ELEMENT_TYPE));
-
-				lastentry = curentry;
-			}
-
-			return true;
-		}
-
-		/* TODO: return false; if distance too big */
-
-		curelem = SH_NEXT(tb, curelem, startelem);
+		/*
+		 * Perform deletion and also the relocation of subsequent items which
+		 * are not in their optimal position but can now be moved up.
+		 */
+		SH_DELETE_ITEM(tb, entry);
+		return true;
 	}
+
+	return false;		/* Can't find 'key' */
 }
 
 /*

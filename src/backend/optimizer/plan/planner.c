@@ -3719,7 +3719,8 @@ get_number_of_groups(PlannerInfo *root,
 					double		numGroups = estimate_num_groups(root,
 																groupExprs,
 																path_rows,
-																&gset);
+																&gset,
+																NULL);
 
 					gs->numGroups = numGroups;
 					rollup->numGroups += numGroups;
@@ -3744,7 +3745,8 @@ get_number_of_groups(PlannerInfo *root,
 					double		numGroups = estimate_num_groups(root,
 																groupExprs,
 																path_rows,
-																&gset);
+																&gset,
+																NULL);
 
 					gs->numGroups = numGroups;
 					gd->dNumHashGroups += numGroups;
@@ -3760,7 +3762,7 @@ get_number_of_groups(PlannerInfo *root,
 												 target_list);
 
 			dNumGroups = estimate_num_groups(root, groupExprs, path_rows,
-											 NULL);
+											 NULL, NULL);
 		}
 	}
 	else if (parse->groupingSets)
@@ -4777,7 +4779,7 @@ create_distinct_paths(PlannerInfo *root,
 												parse->targetList);
 		numDistinctRows = estimate_num_groups(root, distinctExprs,
 											  cheapest_input_path->rows,
-											  NULL);
+											  NULL, NULL);
 	}
 
 	/*

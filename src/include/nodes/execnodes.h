@@ -17,6 +17,7 @@
 #include "access/tupconvert.h"
 #include "executor/instrument.h"
 #include "fmgr.h"
+#include "lib/ilist.h"
 #include "lib/pairingheap.h"
 #include "nodes/params.h"
 #include "nodes/plannodes.h"
@@ -1982,6 +1983,69 @@ typedef struct MaterialState
 	Tuplestorestate *tuplestorestate;
 } MaterialState;
 
+struct ResultCacheEntry;
+struct ResultCacheTuple;
+struct ResultCacheKey;
+
+typedef struct ResultCacheInstrumentation
+{
+	uint64		cache_hits;		/* number of times we've skipped the subnode
+								 * scan due to tuples already being cached */
+	uint64		cache_misses;	/* number of times we've had to scan the
+								 * subnode to fetch tuples */
+	uint64		cache_evictions;	/* number of cache entries removed due to
+									 * the need to free memory */
+	uint64		cache_overflows;	/* number of times we've had to bypass the
+									 * cache when filling it due to not being
+									 * able to free enough space to store the
+									 * current scan's tuples. */
+} ResultCacheInstrumentation;
+
+/* ----------------
+ *	 Shared memory container for per-worker resultcache information
+ * ----------------
+ */
+typedef struct SharedResultCacheInfo
+{
+	int			num_workers;
+	ResultCacheInstrumentation sinstrument[FLEXIBLE_ARRAY_MEMBER];
+} SharedResultCacheInfo;
+
+/* ----------------
+ *	 ResultCacheState information
+ *
+ *		resultcache nodes are used to cache recent and commonly seen results
+ *		from a parameterized scan.
+ * ----------------
+ */
+typedef struct ResultCacheState
+{
+	ScanState	ss;				/* its first field is NodeTag */
+	int			rc_status;		/* value of ExecResultCache's state machine */
+	int			nkeys;			/* number of hash table keys */
+	struct resultcache_hash *hashtable; /* hash table cache entries */
+	TupleDesc	hashkeydesc;	/* tuple descriptor for hash keys */
+	TupleTableSlot *tableslot;	/* min tuple slot for existing cache entries */
+	TupleTableSlot *probeslot;	/* virtual slot used for hash lookups */
+	ExprState  *cache_eq_expr;	/* Compare exec params to hash key */
+	ExprState **param_exprs;	/* exprs containing the parameters to this
+								 * node */
+	FmgrInfo   *hashfunctions;	/* lookup data for hash funcs nkeys in size */
+	Oid		   *collations;		/* collation for comparisons nkeys in size */
+	uint64		mem_used;		/* bytes of memory used by cache */
+	uint64		mem_upperlimit; /* limit the size of the cache to this (bytes) */
+	uint64		mem_lowerlimit; /* reduce memory usage below this when we free
+								 * up space */
+	MemoryContext tableContext; /* memory context for actual cache */
+	dlist_head	lru_list;		/* least recently used entry list */
+	struct ResultCacheTuple *last_tuple;
+	struct ResultCacheEntry *entry; /* the entry that 'last_tuple' belongs to
+									 * or NULL if 'last_tuple' is NULL. */
+	bool		singlerow;		/* true if the cache entry is to be marked as
+								 * complete after caching the first record. */
+	ResultCacheInstrumentation stats;	/* execution statistics */
+	SharedResultCacheInfo *shared_info; /* statistics for parallel workers */
+} ResultCacheState;
 
 /* ----------------
  *	 When performing sorting by multiple keys, it's possible that the input

@@ -60,6 +60,7 @@ OBJS = \
 	nodeProjectSet.o \
 	nodeRecursiveunion.o \
 	nodeResult.o \
+	nodeResultCache.o \
 	nodeSamplescan.o \
 	nodeSeqscan.o \
 	nodeSetOp.o \

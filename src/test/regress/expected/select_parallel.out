@@ -148,14 +148,18 @@ explain (costs off)
                ->  Parallel Seq Scan on part_pa_test_p1 pa2_1
                ->  Parallel Seq Scan on part_pa_test_p2 pa2_2
    SubPlan 2
-     ->  Result
+     ->  Result Cache
+           Cache Key: max((SubPlan 1))
+           ->  Result
    SubPlan 1
-     ->  Append
-           ->  Seq Scan on part_pa_test_p1 pa1_1
-                 Filter: (a = pa2.a)
-           ->  Seq Scan on part_pa_test_p2 pa1_2
-                 Filter: (a = pa2.a)
-(14 rows)
+     ->  Result Cache
+           Cache Key: pa2.a
+           ->  Append
+                 ->  Seq Scan on part_pa_test_p1 pa1_1
+                       Filter: (a = pa2.a)
+                 ->  Seq Scan on part_pa_test_p2 pa1_2
+                       Filter: (a = pa2.a)
+(18 rows)
 
 drop table part_pa_test;
 -- test with leader participation disabled
@@ -1167,9 +1171,11 @@ SELECT 1 FROM tenk1_vw_sec
          Workers Planned: 4
          ->  Parallel Index Only Scan using tenk1_unique1 on tenk1
    SubPlan 1
-     ->  Aggregate
-           ->  Seq Scan on int4_tbl
-                 Filter: (f1 < tenk1_vw_sec.unique1)
-(9 rows)
+     ->  Result Cache
+           Cache Key: tenk1_vw_sec.unique1
+           ->  Aggregate
+                 ->  Seq Scan on int4_tbl
+                       Filter: (f1 < tenk1_vw_sec.unique1)
+(11 rows)
 
 rollback;

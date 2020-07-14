@@ -4637,6 +4637,24 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-enable-resultcache" xreflabel="enable_resultcache">
+      <term><varname>enable_resultcache</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>enable_resultcache</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Enables or disables the query planner's use of a result cache node for
+        parameterized nodes.  This node type allows scans to the underlying
+        nodes to be skipped when the results for the current parameters are
+        already in the cache.  Less commonly looked up results may be evicted
+        from the cache when more space is required for new entries.
+        The default is <literal>on</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-enable-mergejoin" xreflabel="enable_mergejoin">
       <term><varname>enable_mergejoin</varname> (<type>boolean</type>)
       <indexterm>

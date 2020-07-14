@@ -58,6 +58,7 @@ extern PGDLLIMPORT bool enable_hashagg;
 extern PGDLLIMPORT bool hashagg_avoid_disk_plan;
 extern PGDLLIMPORT bool enable_nestloop;
 extern PGDLLIMPORT bool enable_material;
+extern PGDLLIMPORT bool enable_resultcache;
 extern PGDLLIMPORT bool enable_mergejoin;
 extern PGDLLIMPORT bool enable_hashjoin;
 extern PGDLLIMPORT bool enable_gathermerge;

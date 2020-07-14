@@ -18,10 +18,13 @@
 
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"
+#include "nodes/nodeFuncs.h"
 #include "optimizer/cost.h"
+#include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
+#include "utils/typcache.h"
 
 /* Hook for plugins to get control in add_paths_to_joinrel() */
 set_join_pathlist_hook_type set_join_pathlist_hook = NULL;
@@ -52,6 +55,9 @@ static void try_partial_mergejoin_path(PlannerInfo *root,
 static void sort_inner_and_outer(PlannerInfo *root, RelOptInfo *joinrel,
 								 RelOptInfo *outerrel, RelOptInfo *innerrel,
 								 JoinType jointype, JoinPathExtraData *extra);
+static inline bool clause_sides_match_join(RestrictInfo *rinfo,
+										   RelOptInfo *outerrel,
+										   RelOptInfo *innerrel);
 static void match_unsorted_outer(PlannerInfo *root, RelOptInfo *joinrel,
 								 RelOptInfo *outerrel, RelOptInfo *innerrel,
 								 JoinType jointype, JoinPathExtraData *extra);
@@ -163,6 +169,11 @@ add_paths_to_joinrel(PlannerInfo *root,
 	{
 		case JOIN_SEMI:
 		case JOIN_ANTI:
+
+			/*
+			 * XXX it may be worth proving this to allow a ResultCache to be
+			 * considered for Nested Loop Semi/Anti Joins.
+			 */
 			extra.inner_unique = false; /* well, unproven */
 			break;
 		case JOIN_UNIQUE_INNER:
@@ -355,6 +366,162 @@ allow_star_schema_join(PlannerInfo *root,
 }
 
 /*
+ * paraminfo_get_equal_hashops
+ *		Determine if it's valid to use a ResultCache node to cache inner rows,
+ *		including looking for volatile functions in the inner side of the
+ *		join.  Also, fetch outer side exprs and check for valid hashable
+ *		equality operator for each outer expr.  Returns true and sets the
+ *		'param_exprs' and 'operators' output parameters if the caching is
+ *		possible.
+ */
+static bool
+paraminfo_get_equal_hashops(ParamPathInfo *param_info, List **param_exprs,
+							List **operators, RelOptInfo *outerrel,
+							RelOptInfo *innerrel)
+{
+	List	   *clauses = param_info->ppi_clauses;
+	ListCell   *lc;
+
+	/*
+	 * We can't use a result cache if there are volatile functions in the
+	 * inner rel's target list or restrict list.  A cache hit could reduce the
+	 * number of calls to these functions.
+	 *
+	 * XXX Think about this harder. Any other restrictions to add here?
+	 */
+	if (contain_volatile_functions((Node *) innerrel->reltarget->exprs))
+		return false;
+
+	foreach(lc, innerrel->baserestrictinfo)
+	{
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+
+		if (contain_volatile_functions((Node *) rinfo->clause))
+			return false;
+	}
+
+	*param_exprs = NIL;
+	*operators = NIL;
+
+	Assert(list_length(clauses) > 0);
+
+	foreach(lc, clauses)
+	{
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		OpExpr	   *opexpr;
+		TypeCacheEntry *typentry;
+		Node	   *expr;
+
+		opexpr = (OpExpr *) rinfo->clause;
+
+		/* ppi_clauses should always meet this requirement */
+		if (!IsA(opexpr, OpExpr) || list_length(opexpr->args) != 2 ||
+			!clause_sides_match_join(rinfo, outerrel, innerrel))
+		{
+			list_free(*operators);
+			list_free(*param_exprs);
+			return false;
+		}
+
+		if (rinfo->outer_is_left)
+			expr = (Node *) list_nth(opexpr->args, 0);
+		else
+			expr = (Node *) list_nth(opexpr->args, 1);
+
+		typentry = lookup_type_cache(exprType(expr),
+									 TYPECACHE_HASH_PROC | TYPECACHE_EQ_OPR);
+
+		/* XXX will eq_opr ever be invalid if hash_proc isn't? */
+		if (!OidIsValid(typentry->hash_proc) || !OidIsValid(typentry->eq_opr))
+		{
+			list_free(*operators);
+			list_free(*param_exprs);
+			return false;
+		}
+
+		*operators = lappend_oid(*operators, typentry->eq_opr);
+		*param_exprs = lappend(*param_exprs, expr);
+	}
+
+	return true;
+}
+
+/*
+ * get_resultcache_path
+ *		If possible,.make and return a Result Cache path atop of 'inner_path'.
+ *		Otherwise return NULL.
+ */
+static Path *
+get_resultcache_path(PlannerInfo *root, RelOptInfo *innerrel,
+					 RelOptInfo *outerrel, Path *inner_path,
+					 Path *outer_path, JoinType jointype,
+					 JoinPathExtraData *extra)
+{
+	List	   *param_exprs;
+	List	   *hash_operators;
+
+	/* Obviously not if it's disabled */
+	if (!enable_resultcache)
+		return NULL;
+
+	/*
+	 * We can safely not bother with all this unless we expect to perform more
+	 * than one inner scan.  The first scan is always going to be a cache
+	 * miss.  This would likely fail later anyway based on costs, so this is
+	 * really just to save some wasted effort.
+	 */
+	if (outer_path->parent->rows < 2)
+		return NULL;
+
+	/* We can only have a result cache when there's some kind of cache key */
+	if (inner_path->param_info == NULL ||
+		inner_path->param_info->ppi_clauses == NIL)
+		return NULL;
+
+	/*
+	 * We can't use a result cache when a lateral join var is required from
+	 * somewhere else other than the inner side of the join.
+	 *
+	 * XXX maybe we can just include lateral_vars from above this in the
+	 * result cache's keys?  Not today though. It seems likely to reduce cache
+	 * hits which may make it very seldom worthwhile.
+	 */
+	if (!bms_is_subset(innerrel->lateral_relids, innerrel->relids))
+		return NULL;
+
+	/*
+	 * Currently we don't do this for SEMI and ANTI joins unless they're
+	 * marked as inner_unique.  This is because nested loop SEMI/ANTI joins
+	 * don't scan the inner node to completion, which will mean resultcache
+	 * cannot mark the cache entry as complete.
+	 *
+	 * XXX Currently we don't attempt to mark SEMI/ANTI joins as inner_unique
+	 * = true.  Should we?  See add_paths_to_joinrel()
+	 */
+	if (!extra->inner_unique && (jointype == JOIN_SEMI ||
+								 jointype == JOIN_ANTI))
+		return NULL;
+
+	/* Check if we have hash ops for each parameter to the path */
+	if (paraminfo_get_equal_hashops(inner_path->param_info,
+									&param_exprs,
+									&hash_operators,
+									outerrel,
+									innerrel))
+	{
+		return (Path *) create_resultcache_path(root,
+												innerrel,
+												inner_path,
+												param_exprs,
+												hash_operators,
+												extra->inner_unique,
+												outer_path->parent->rows);
+	}
+
+	return NULL;
+}
+
+/*
  * try_nestloop_path
  *	  Consider a nestloop join path; if it appears useful, push it into
  *	  the joinrel's pathlist via add_path().
@@ -376,6 +543,8 @@ try_nestloop_path(PlannerInfo *root,
 	Relids		outerrelids;
 	Relids		inner_paramrels = PATH_REQ_OUTER(inner_path);
 	Relids		outer_paramrels = PATH_REQ_OUTER(outer_path);
+	Path	   *inner_cache_path;
+	bool		added_path = false;
 
 	/*
 	 * Paths are parameterized by top-level parents, so run parameterization
@@ -458,12 +627,92 @@ try_nestloop_path(PlannerInfo *root,
 									  extra->restrictlist,
 									  pathkeys,
 									  required_outer));
+		added_path = true;
+	}
+
+	/*
+	 * See if we can build a result cache path for this inner_path. That might
+	 * make the nested loop cheaper.
+	 */
+	inner_cache_path = get_resultcache_path(root, innerrel, outerrel,
+											inner_path, outer_path, jointype,
+											extra);
+
+	if (inner_cache_path == NULL)
+	{
+		if (!added_path)
+			bms_free(required_outer);
+		return;
+	}
+
+	initial_cost_nestloop(root, &workspace, jointype,
+						  outer_path, inner_cache_path, extra);
+
+	if (add_path_precheck(joinrel,
+						  workspace.startup_cost, workspace.total_cost,
+						  pathkeys, required_outer))
+	{
+		/*
+		 * If the inner path is parameterized, it is parameterized by the
+		 * topmost parent of the outer rel, not the outer rel itself.  Fix
+		 * that.
+		 */
+		if (PATH_PARAM_BY_PARENT(inner_cache_path, outer_path->parent))
+		{
+			Path	   *reparameterize_path;
+
+			reparameterize_path = reparameterize_path_by_child(root,
+															   inner_cache_path,
+															   outer_path->parent);
+
+			/*
+			 * If we could not translate the path, we can't create nest loop
+			 * path.
+			 */
+			if (!reparameterize_path)
+			{
+				ResultCachePath *rcpath = (ResultCachePath *) inner_cache_path;
+
+				/* Waste no memory when we reject a path here */
+				list_free(rcpath->hash_operators);
+				list_free(rcpath->param_exprs);
+				pfree(rcpath);
+
+				if (!added_path)
+					bms_free(required_outer);
+				return;
+			}
+		}
+
+		add_path(joinrel, (Path *)
+				 create_nestloop_path(root,
+									  joinrel,
+									  jointype,
+									  &workspace,
+									  extra,
+									  outer_path,
+									  inner_cache_path,
+									  extra->restrictlist,
+									  pathkeys,
+									  required_outer));
+		added_path = true;
 	}
 	else
+	{
+		ResultCachePath *rcpath = (ResultCachePath *) inner_cache_path;
+
+		/* Waste no memory when we reject a path here */
+		list_free(rcpath->hash_operators);
+		list_free(rcpath->param_exprs);
+		pfree(rcpath);
+	}
+
+	if (!added_path)
 	{
 		/* Waste no memory when we reject a path here */
 		bms_free(required_outer);
 	}
+
 }
 
 /*
@@ -481,6 +730,9 @@ try_partial_nestloop_path(PlannerInfo *root,
 						  JoinPathExtraData *extra)
 {
 	JoinCostWorkspace workspace;
+	RelOptInfo *innerrel = inner_path->parent;
+	RelOptInfo *outerrel = outer_path->parent;
+	Path	   *inner_cache_path;
 
 	/*
 	 * If the inner path is parameterized, the parameterization must be fully
@@ -492,7 +744,6 @@ try_partial_nestloop_path(PlannerInfo *root,
 	if (inner_path->param_info != NULL)
 	{
 		Relids		inner_paramrels = inner_path->param_info->ppi_req_outer;
-		RelOptInfo *outerrel = outer_path->parent;
 		Relids		outerrelids;
 
 		/*
@@ -511,41 +762,114 @@ try_partial_nestloop_path(PlannerInfo *root,
 
 	/*
 	 * Before creating a path, get a quick lower bound on what it is likely to
-	 * cost.  Bail out right away if it looks terrible.
+	 * cost.  Don't bother if it looks terrible.
 	 */
 	initial_cost_nestloop(root, &workspace, jointype,
 						  outer_path, inner_path, extra);
-	if (!add_partial_path_precheck(joinrel, workspace.total_cost, pathkeys))
-		return;
-
-	/*
-	 * If the inner path is parameterized, it is parameterized by the topmost
-	 * parent of the outer rel, not the outer rel itself.  Fix that.
-	 */
-	if (PATH_PARAM_BY_PARENT(inner_path, outer_path->parent))
+	if (add_partial_path_precheck(joinrel, workspace.total_cost, pathkeys))
 	{
-		inner_path = reparameterize_path_by_child(root, inner_path,
-												  outer_path->parent);
 
 		/*
-		 * If we could not translate the path, we can't create nest loop path.
+		 * If the inner path is parameterized, it is parameterized by the
+		 * topmost parent of the outer rel, not the outer rel itself.  Fix
+		 * that.
 		 */
-		if (!inner_path)
-			return;
+		if (PATH_PARAM_BY_PARENT(inner_path, outer_path->parent))
+		{
+			inner_path = reparameterize_path_by_child(root, inner_path,
+													  outer_path->parent);
+
+			/*
+			 * If we could not translate the path, we can't create nest loop
+			 * path.
+			 */
+			if (!inner_path)
+				return;
+		}
+
+		/* Might be good enough to be worth trying, so let's try it. */
+		add_partial_path(joinrel, (Path *)
+						 create_nestloop_path(root,
+											  joinrel,
+											  jointype,
+											  &workspace,
+											  extra,
+											  outer_path,
+											  inner_path,
+											  extra->restrictlist,
+											  pathkeys,
+											  NULL));
 	}
 
-	/* Might be good enough to be worth trying, so let's try it. */
-	add_partial_path(joinrel, (Path *)
-					 create_nestloop_path(root,
-										  joinrel,
-										  jointype,
-										  &workspace,
-										  extra,
-										  outer_path,
-										  inner_path,
-										  extra->restrictlist,
-										  pathkeys,
-										  NULL));
+	/*
+	 * See if we can build a result cache path for this inner_path. That might
+	 * make the nested loop cheaper.
+	 */
+	inner_cache_path = get_resultcache_path(root, innerrel, outerrel,
+											inner_path, outer_path, jointype,
+											extra);
+
+	if (inner_cache_path == NULL)
+		return;
+
+	initial_cost_nestloop(root, &workspace, jointype,
+						  outer_path, inner_cache_path, extra);
+	if (add_partial_path_precheck(joinrel, workspace.total_cost, pathkeys))
+	{
+		/*
+		 * If the inner path is parameterized, it is parameterized by the
+		 * topmost parent of the outer rel, not the outer rel itself.  Fix
+		 * that.
+		 */
+		if (PATH_PARAM_BY_PARENT(inner_cache_path, outer_path->parent))
+		{
+			Path	   *reparameterize_path;
+
+			reparameterize_path = reparameterize_path_by_child(root,
+															   inner_cache_path,
+															   outer_path->parent);
+
+			/*
+			 * If we could not translate the path, we can't create nest loop
+			 * path.
+			 */
+			if (!reparameterize_path)
+			{
+				ResultCachePath *rcpath = (ResultCachePath *) inner_cache_path;
+
+				/* Waste no memory when we reject a path here */
+				list_free(rcpath->hash_operators);
+				list_free(rcpath->param_exprs);
+				pfree(rcpath);
+				return;
+			}
+			else
+				inner_cache_path = reparameterize_path;
+		}
+
+		/* Might be good enough to be worth trying, so let's try it. */
+		add_partial_path(joinrel, (Path *)
+						 create_nestloop_path(root,
+											  joinrel,
+											  jointype,
+											  &workspace,
+											  extra,
+											  outer_path,
+											  inner_cache_path,
+											  extra->restrictlist,
+											  pathkeys,
+											  NULL));
+	}
+	else
+	{
+		ResultCachePath *rcpath = (ResultCachePath *) inner_cache_path;
+
+		/* Waste no memory when we reject a path here */
+		list_free(rcpath->hash_operators);
+		list_free(rcpath->param_exprs);
+		pfree(rcpath);
+	}
+
 }
 
 /*

@@ -37,6 +37,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
+#include "utils/typcache.h"
 
 
 typedef struct convert_testexpr_context
@@ -135,6 +136,74 @@ get_first_col_type(Plan *plan, Oid *coltype, int32 *coltypmod,
 	*colcollation = InvalidOid;
 }
 
+
+/*
+ * outer_params_hashable
+ *		Determine if it's valid to use a ResultCache node to cache already
+ *		seen rows matching a given set of parameters instead of performing a
+ *		rescan of the subplan pointed to by 'subroot'.  If it's valid, check
+ *		if all parameters required by this query level can be hashed.  If so,
+ *		return true and set 'operators' to the list of hash equality operators
+ *		for the given parameters then populate 'param_exprs' with each
+ *		PARAM_EXEC parameter that the subplan requires the outer query to pass
+ *		it.  When hashing is not possible, false is returned and the two
+ *		output lists are unchanged.
+ */
+static bool
+outer_params_hashable(PlannerInfo *subroot, List *plan_params, List **operators,
+					  List **param_exprs)
+{
+	List	   *oplist = NIL;
+	List	   *exprlist = NIL;
+	ListCell   *lc;
+
+	/* Ensure we're not given a top-level query. */
+	Assert(subroot->parent_root != NULL);
+
+	/*
+	 * It's not valid to use a Result Cache node if there are any volatile
+	 * function in the subquery.  Caching could cause fewer evaluations of
+	 * volatile functions that have side-effects
+	 */
+	if (contain_volatile_functions((Node *) subroot->parse))
+		return false;
+
+	foreach(lc, plan_params)
+	{
+		PlannerParamItem *ppi = (PlannerParamItem *) lfirst(lc);
+		TypeCacheEntry *typentry;
+		Node	   *expr = ppi->item;
+		Param	   *param;
+
+		param = makeNode(Param);
+		param->paramkind = PARAM_EXEC;
+		param->paramid = ppi->paramId;
+		param->paramtype = exprType(expr);
+		param->paramtypmod = exprTypmod(expr);
+		param->paramcollid = exprCollation(expr);
+		param->location = -1;
+
+		typentry = lookup_type_cache(param->paramtype,
+									 TYPECACHE_HASH_PROC | TYPECACHE_EQ_OPR);
+
+		/* XXX will eq_opr ever be invalid if hash_proc isn't? */
+		if (!OidIsValid(typentry->hash_proc) || !OidIsValid(typentry->eq_opr))
+		{
+			list_free(oplist);
+			list_free(exprlist);
+			return false;
+		}
+
+		oplist = lappend_oid(oplist, typentry->eq_opr);
+		exprlist = lappend(exprlist, param);
+	}
+
+	*operators = oplist;
+	*param_exprs = exprlist;
+
+	return true;				/* all params can be hashed */
+}
+
 /*
  * Convert a SubLink (as created by the parser) into a SubPlan.
  *
@@ -231,6 +300,40 @@ make_subplan(PlannerInfo *root, Query *orig_subquery,
 	 */
 	final_rel = fetch_upper_rel(subroot, UPPERREL_FINAL, NULL);
 	best_path = get_cheapest_fractional_path(final_rel, tuple_fraction);
+
+	/*
+	 * When enabled, for parameterized EXPR_SUBLINKS, we add a ResultCache to
+	 * the top of the subplan in order to cache previously looked up results
+	 * in the hope that they'll be needed again by a subsequent call.  At this
+	 * stage we don't have any details of how often we'll be called or with
+	 * which values we'll be called, so for now, we add the Result Cache
+	 * regardless. It may be useful if we can only do this when it seems
+	 * likely that we'll get some repeat lookups, i.e. cache hits.
+	 */
+	if (enable_resultcache && plan_params != NIL && subLinkType == EXPR_SUBLINK)
+	{
+		List	   *operators;
+		List	   *param_exprs;
+
+		/* Determine if all the subplan parameters can be hashed */
+		if (outer_params_hashable(subroot, plan_params, &operators, &param_exprs))
+		{
+			ResultCachePath *cache_path;
+
+			/*
+			 * Pass -1 for the number of calls since we don't have any ideas
+			 * what that'll be.
+			 */
+			cache_path = create_resultcache_path(root,
+												 best_path->parent,
+												 best_path,
+												 param_exprs,
+												 operators,
+												 false,
+												 -1);
+			best_path = (Path *) cache_path;
+		}
+	}
 
 	plan = create_plan(subroot, best_path);
 
@@ -2682,6 +2785,13 @@ finalize_plan(PlannerInfo *root, Plan *plan,
 				gather_param = locally_added_param;
 			}
 			/* rescan_param does *not* get added to scan_params */
+			break;
+
+		case T_ResultCache:
+			/* XXX Check this is correct */
+			finalize_primnode((Node *) ((ResultCache *) plan)->param_exprs,
+							  &context);
+			context.paramids = bms_add_members(context.paramids, scan_params);
 			break;
 
 		case T_ProjectSet:

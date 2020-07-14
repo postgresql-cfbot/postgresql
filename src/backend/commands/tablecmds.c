@@ -11359,7 +11359,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 					{
 						/* Not expecting any other direct dependencies... */
 						elog(ERROR, "unexpected object depending on column: %s",
-							 getObjectDescription(&foundObject));
+							 getObjectDescription(&foundObject, false));
 					}
 					break;
 				}
@@ -11375,7 +11375,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot alter type of a column used by a view or rule"),
 						 errdetail("%s depends on column \"%s\"",
-								   getObjectDescription(&foundObject),
+								   getObjectDescription(&foundObject, false),
 								   colName)));
 				break;
 
@@ -11394,7 +11394,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot alter type of a column used in a trigger definition"),
 						 errdetail("%s depends on column \"%s\"",
-								   getObjectDescription(&foundObject),
+								   getObjectDescription(&foundObject, false),
 								   colName)));
 				break;
 
@@ -11412,7 +11412,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot alter type of a column used in a policy definition"),
 						 errdetail("%s depends on column \"%s\"",
-								   getObjectDescription(&foundObject),
+								   getObjectDescription(&foundObject, false),
 								   colName)));
 				break;
 
@@ -11473,7 +11473,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 				 * a column.
 				 */
 				elog(ERROR, "unexpected object depending on column: %s",
-					 getObjectDescription(&foundObject));
+					 getObjectDescription(&foundObject, false));
 				break;
 
 				/*
@@ -11529,7 +11529,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 			  foundDep->refobjsubid != 0)
 			)
 			elog(ERROR, "found unexpected dependency for column: %s",
-				 getObjectDescription(&foundObject));
+				 getObjectDescription(&foundObject, false));
 
 		CatalogTupleDelete(depRel, &depTup->t_self);
 	}

@@ -234,6 +234,8 @@ sub GenerateFiles
 		HAVE_DECL_LLVMGETHOSTCPUNAME                => 0,
 		HAVE_DECL_LLVMGETHOSTCPUFEATURES            => 0,
 		HAVE_DECL_LLVMORCGETSYMBOLADDRESSIN         => 0,
+		HAVE_DECL_MAP_HUGE_MASK                     => undef,
+		HAVE_DECL_MAP_HUGE_SHIFT                    => undef,
 		HAVE_DECL_POSIX_FADVISE                     => undef,
 		HAVE_DECL_RTLD_GLOBAL                       => 0,
 		HAVE_DECL_RTLD_NOW                          => 0,

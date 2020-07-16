@@ -138,6 +138,14 @@
    to 0 if you don't. */
 #undef HAVE_DECL_LLVMORCGETSYMBOLADDRESSIN
 
+/* Define to 1 if you have the declaration of `MAP_HUGE_MASK', and to 0 if you
+   don't. */
+#undef HAVE_DECL_MAP_HUGE_MASK
+
+/* Define to 1 if you have the declaration of `MAP_HUGE_SHIFT', and to 0 if
+   you don't. */
+#undef HAVE_DECL_MAP_HUGE_SHIFT
+
 /* Define to 1 if you have the declaration of `posix_fadvise', and to 0 if you
    don't. */
 #undef HAVE_DECL_POSIX_FADVISE

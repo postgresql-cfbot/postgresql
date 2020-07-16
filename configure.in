@@ -1689,6 +1689,10 @@ AC_CHECK_FUNCS(posix_fadvise)
 AC_CHECK_DECLS(posix_fadvise, [], [], [#include <fcntl.h>])
 ]) # fi
 
+# Check if system supports mmap flags for allocating huge page memory with page sizes
+# other than the default
+AC_CHECK_DECLS([MAP_HUGE_MASK, MAP_HUGE_SHIFT], [], [], [#include <sys/mman.h>])
+
 AC_CHECK_DECLS(fdatasync, [], [], [#include <unistd.h>])
 AC_CHECK_DECLS([strlcat, strlcpy, strnlen])
 # This is probably only present on macOS, but may as well check always

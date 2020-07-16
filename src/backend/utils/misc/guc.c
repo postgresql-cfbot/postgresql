@@ -197,6 +197,7 @@ static bool check_autovacuum_max_workers(int *newval, void **extra, GucSource so
 static bool check_max_wal_senders(int *newval, void **extra, GucSource source);
 static bool check_autovacuum_work_mem(int *newval, void **extra, GucSource source);
 static bool check_effective_io_concurrency(int *newval, void **extra, GucSource source);
+static bool check_huge_page_size(int *newval, void **extra, GucSource source);
 static bool check_maintenance_io_concurrency(int *newval, void **extra, GucSource source);
 static void assign_pgstat_temp_directory(const char *newval, void *extra);
 static bool check_application_name(char **newval, void **extra, GucSource source);
@@ -576,6 +577,7 @@ int			ssl_renegotiation_limit;
  * need to be duplicated in all the different implementations of pg_shmem.c.
  */
 int			huge_pages;
+int			huge_page_size;
 
 /*
  * These variables are all dummies that don't do anything, except in some
@@ -2249,6 +2251,16 @@ static struct config_int ConfigureNamesInt[] =
 		&NBuffers,
 		1024, 16, INT_MAX / 2,
 		NULL, NULL, NULL
+	},
+	{
+		{"huge_page_size", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("The size of huge page that should be used."),
+			NULL,
+			GUC_UNIT_KB
+		},
+		&huge_page_size,
+		0, 0, INT_MAX,
+		check_huge_page_size, NULL, NULL
 	},
 
 	{
@@ -11549,6 +11561,19 @@ check_effective_io_concurrency(int *newval, void **extra, GucSource source)
 		return false;
 	}
 #endif							/* USE_PREFETCH */
+	return true;
+}
+
+static bool
+check_huge_page_size(int *newval, void **extra, GucSource source)
+{
+#ifndef USE_NON_DEFAULT_HUGE_PAGE_SIZES
+	if (*newval != 0)
+	{
+		GUC_check_errdetail("huge_page_size must be set to 0 on platforms that lack support for choosing huge page size.");
+		return false;
+	}
+#endif							/* USE_NON_DEFAULT_HUGE_PAGE_SIZES */
 	return true;
 }
 

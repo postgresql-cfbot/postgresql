@@ -1391,41 +1391,50 @@ export PG_OOM_ADJUST_VALUE=0
     using large values of <xref linkend="guc-shared-buffers"/>.  To use this
     feature in <productname>PostgreSQL</productname> you need a kernel
     with <varname>CONFIG_HUGETLBFS=y</varname> and
-    <varname>CONFIG_HUGETLB_PAGE=y</varname>. You will also have to adjust
-    the kernel setting <varname>vm.nr_hugepages</varname>. To estimate the
-    number of huge pages needed, start <productname>PostgreSQL</productname>
-    without huge pages enabled and check the
-    postmaster's anonymous shared memory segment size, as well as the system's
-    huge page size, using the <filename>/proc</filename> file system.  This might
-    look like:
+    <varname>CONFIG_HUGETLB_PAGE=y</varname>. You will also have to pre-allocate
+    huge pages with the the desired huge page size. To estimate the number of
+    huge pages needed, start <productname>PostgreSQL</productname> without huge
+    pages enabled and check the postmaster's anonymous shared memory segment size,
+    as well as the system's supported huge page sizes, using the
+    <filename>/sys</filename> file system.  This might look like:
 <programlisting>
 $ <userinput>head -1 $PGDATA/postmaster.pid</userinput>
 4170
 $ <userinput>pmap 4170 | awk '/rw-s/ &amp;&amp; /zero/ {print $2}'</userinput>
 6490428K
+$ <userinput>ls /sys/kernel/mm/hugepages</userinput>
+hugepages-1048576kB  hugepages-2048kB
+</programlisting>
+
+     You can now choose between the supported sizes, 2MiB and 1GiB in this case.
+     By default <productname>PostgreSQL</productname> will use the default huge
+     page size on the system, but that can be configured via
+     <xref linkend="guc-huge-page-size"/>.
+     The default huge page size can be found with:
+<programlisting>
 $ <userinput>grep ^Hugepagesize /proc/meminfo</userinput>
 Hugepagesize:       2048 kB
 </programlisting>
+
+     For <literal>2MiB</literal>,
      <literal>6490428</literal> / <literal>2048</literal> gives approximately
      <literal>3169.154</literal>, so in this example we need at
      least <literal>3170</literal> huge pages, which we can set with:
 <programlisting>
-$ <userinput>sysctl -w vm.nr_hugepages=3170</userinput>
+$ <userinput>echo 3170 | tee /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages</userinput>
 </programlisting>
     A larger setting would be appropriate if other programs on the machine
-    also need huge pages.  Don't forget to add this setting
-    to <filename>/etc/sysctl.conf</filename> so that it will be reapplied
-    after reboots.
+    also need huge pages. It is also possible to pre allocate huge pages on boot
+    by adding the kernel parameters <literal>hugepagesz=2M hugepages=3170</literal>.
    </para>
 
    <para>
     Sometimes the kernel is not able to allocate the desired number of huge
-    pages immediately, so it might be necessary to repeat the command or to
-    reboot.  (Immediately after a reboot, most of the machine's memory
-    should be available to convert into huge pages.)  To verify the huge
-    page allocation situation, use:
+    pages immediately due to external fragmentation, so it might be necessary to
+    repeat the command or to reboot. To verify the huge page allocation situation
+    for a given size, use:
 <programlisting>
-$ <userinput>grep Huge /proc/meminfo</userinput>
+$ <userinput>cat /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages</userinput>
 </programlisting>
    </para>
 

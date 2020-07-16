@@ -157,6 +157,12 @@
 #endif
 
 /*
+ * USE_NON_DEFAULT_HUGE_PAGE_SIZES  */
+#if defined(HAVE_DECL_MAP_HUGE_SHIFT) && defined(HAVE_DECL_MAP_HUGE_MASK)
+#define USE_NON_DEFAULT_HUGE_PAGE_SIZES
+#endif
+
+/*
  * Default and maximum values for backend_flush_after, bgwriter_flush_after
  * and checkpoint_flush_after; measured in blocks.  Currently, these are
  * enabled by default if sync_file_range() exists, ie, only on Linux.  Perhaps

@@ -124,6 +124,9 @@ clean distclean maintainer-clean:
 
 like.o: like.c like_match.c
 
+# Some code in numeric.c benefits from auto-vectorization
+numeric.o: CFLAGS += ${CFLAGS_VECTOR}
+
 varlena.o: varlena.c levenshtein.c
 
 include $(top_srcdir)/src/backend/common.mk

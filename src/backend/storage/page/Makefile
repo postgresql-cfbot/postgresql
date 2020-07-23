@@ -20,4 +20,4 @@ OBJS =  \
 include $(top_srcdir)/src/backend/common.mk
 
 # important optimizations flags for checksum.c
-checksum.o: CFLAGS += ${CFLAGS_VECTOR}
+checksum.o: CFLAGS += ${CFLAGS_VECTOR} ${CFLAGS_UNROLL_LOOPS}

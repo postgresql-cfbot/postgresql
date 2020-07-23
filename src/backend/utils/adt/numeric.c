@@ -8191,6 +8191,7 @@ mul_var(const NumericVar *var1, const NumericVar *var2, NumericVar *result,
 	int			res_weight;
 	int			maxdigits;
 	int		   *dig;
+	int		   *digptr;
 	int			carry;
 	int			maxdig;
 	int			newdig;
@@ -8327,10 +8328,14 @@ mul_var(const NumericVar *var1, const NumericVar *var2, NumericVar *result,
 		 *
 		 * As above, digits of var2 can be ignored if they don't contribute,
 		 * so we only include digits for which i1+i2+2 <= res_ndigits - 1.
+		 *
+		 * For large precisions, this can become a bottleneck; so keep this for
+		 * loop simple so that it can be auto-vectorized.
 		 */
-		for (i2 = Min(var2ndigits - 1, res_ndigits - i1 - 3), i = i1 + i2 + 2;
-			 i2 >= 0; i2--)
-			dig[i--] += var1digit * var2digits[i2];
+		i2 = Min(var2ndigits - 1, res_ndigits - i1 - 3);
+		digptr = &dig[i1 + 2];
+		for (i = 0; i <= i2; i++)
+			digptr[i] += var1digit * var2digits[i];
 	}
 
 	/*

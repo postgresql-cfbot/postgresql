@@ -80,6 +80,9 @@ static Query *transformCallStmt(ParseState *pstate,
 								CallStmt *stmt);
 static void transformLockingClause(ParseState *pstate, Query *qry,
 								   LockingClause *lc, bool pushedDown);
+
+static void preprocessNullTypes(ParseState *pstate, SelectStmt *stmt);
+
 #ifdef RAW_EXPRESSION_COVERAGE_TEST
 static bool test_raw_expression_coverage(Node *node, void *context);
 #endif
@@ -1651,6 +1654,10 @@ transformSetOperationStmt(ParseState *pstate, SelectStmt *stmt)
 	/*
 	 * Recursively transform the components of the tree.
 	 */
+	pstate->set_targetlist_types = palloc0(list_length(leftmostSelect->targetList)
+										   * sizeof(Oid));
+	preprocessNullTypes(pstate, stmt);
+
 	sostmt = castNode(SetOperationStmt,
 					  transformSetOperationTree(pstate, stmt, true, NULL));
 	Assert(sostmt);
@@ -2012,6 +2019,7 @@ transformSetOperationTree(ParseState *pstate, SelectStmt *stmt,
 		op->colTypmods = NIL;
 		op->colCollations = NIL;
 		op->groupClauses = NIL;
+		pstate->exprpos = 0;
 		forboth(ltl, ltargetlist, rtl, rtargetlist)
 		{
 			TargetEntry *ltle = (TargetEntry *) lfirst(ltl);
@@ -2161,6 +2169,7 @@ transformSetOperationTree(ParseState *pstate, SelectStmt *stmt,
 										 false);
 				*targetlist = lappend(*targetlist, restle);
 			}
+			pstate->exprpos += 1;
 		}
 
 		return (Node *) op;
@@ -3011,3 +3020,84 @@ test_raw_expression_coverage(Node *node, void *context)
 }
 
 #endif							/* RAW_EXPRESSION_COVERAGE_TEST */
+
+
+
+/*
+ * parseSelectTargetList
+ *
+ *	Fill the a list of TargetList in each setop query.
+ */
+static void
+parseSelectTargetList(SelectStmt *stmt, List **list_ctx)
+{
+	if (stmt->op == SETOP_NONE)
+		*list_ctx = lappend(*list_ctx,  stmt->targetList);
+	else
+	{
+		parseSelectTargetList(stmt->larg, list_ctx);
+		parseSelectTargetList(stmt->rarg, list_ctx);
+	}
+}
+
+
+/*
+ * getProperNullType
+ *
+ * Get the proper Null exprType for a SetOp Selection targetlist in idx position.
+ * by peaking the later expr.
+ *
+ */
+static Oid
+getProperNullType(ParseState *pstate, List *targetlist_list, int idx)
+{
+	ListCell	*lc;
+	int loops = 0;
+	foreach(lc, targetlist_list)
+	{
+		List *targetlist = lfirst_node(List, lc);
+		Node *node = list_nth_node(ResTarget, targetlist, idx)->val;
+		bool is_null = IsA(node, A_Const)
+			&& nodeTag(&castNode(A_Const, node)->val) == T_Null;
+		if (loops == 0)
+		{
+			if (!is_null)
+				/* The first expr is not null, no need to handle it here */
+				return 0;
+		}
+		else
+		{
+			if (!is_null)
+			{
+				Node *expr = transformExpr(pstate, node, EXPR_KIND_SELECT_TARGET);
+				return exprType(expr);
+			}
+			else /* is_null */
+			{
+				/* do nothing */
+			}
+		}
+		loops++;
+	}
+	return 0;
+}
+
+/*
+ * preprocessNullTypes
+ *
+ */
+static void
+preprocessNullTypes(ParseState *pstate, SelectStmt *stmt)
+{
+	List	*targetlist_list =  NIL;
+	int len, idx;
+
+	parseSelectTargetList(stmt, &targetlist_list);
+	len = list_length(linitial(targetlist_list));
+	for(idx = 0;  idx < len; idx++)
+	{
+		pstate->set_targetlist_types[idx] = getProperNullType(pstate,
+															  targetlist_list,
+															  idx);
+	}
+}

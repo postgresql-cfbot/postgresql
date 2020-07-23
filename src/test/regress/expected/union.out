@@ -1052,3 +1052,28 @@ where (x = 0) or (q1 >= q2 and q1 <= q2);
  4567890123456789 |  4567890123456789 | 1
 (6 rows)
 
+-- Test we should be able to detect the null types correctly.
+select null union all select null union select 1;
+ ?column? 
+----------
+         
+        1
+(2 rows)
+
+select null except select null except select 1;
+ ?column? 
+----------
+(0 rows)
+
+select null intersect select null except select 1 union select 1;
+ ?column? 
+----------
+        1
+         
+(2 rows)
+
+-- The below case still fails which is expected.
+select null intersect select null except select 1 union select 1 union select 'a';
+ERROR:  invalid input syntax for type integer: "a"
+LINE 1: ...select null except select 1 union select 1 union select 'a';
+                                                                   ^

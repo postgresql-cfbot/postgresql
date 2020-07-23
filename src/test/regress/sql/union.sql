@@ -440,3 +440,14 @@ select * from
    union all
    select *, 1 as x from int8_tbl b) ss
 where (x = 0) or (q1 >= q2 and q1 <= q2);
+
+
+-- Test we should be able to detect the null types correctly.
+select null union all select null union select 1;
+
+select null except select null except select 1;
+
+select null intersect select null except select 1 union select 1;
+
+-- The below case still fails which is expected.
+select null intersect select null except select 1 union select 1 union select 'a';

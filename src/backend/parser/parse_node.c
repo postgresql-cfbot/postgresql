@@ -65,6 +65,9 @@ make_parsestate(ParseState *parentParseState)
 		pstate->p_queryEnv = parentParseState->p_queryEnv;
 	}
 
+	pstate->exprpos = 0;
+	pstate->set_targetlist_types = NULL;
+
 	return pstate;
 }
 

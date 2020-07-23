@@ -1373,19 +1373,32 @@ select_common_type(ParseState *pstate, List *exprs, const char *context,
 	}
 
 	/*
-	 * If all the inputs were UNKNOWN type --- ie, unknown-type literals ---
-	 * then resolve as type TEXT.  This situation comes up with constructs
-	 * like SELECT (CASE WHEN foo THEN 'bar' ELSE 'baz' END); SELECT 'foo'
-	 * UNION SELECT 'bar'; It might seem desirable to leave the construct's
-	 * output type as UNKNOWN, but that really doesn't work, because we'd
-	 * probably end up needing a runtime coercion from UNKNOWN to something
-	 * else, and we usually won't have it.  We need to coerce the unknown
-	 * literals while they are still literals, so a decision has to be made
-	 * now.
+	 * If all the inputs were UNKNOWN type --- It may because of unknown-type literals
+	 * or null values.
 	 */
 	if (ptype == UNKNOWNOID)
-		ptype = TEXTOID;
-
+	{
+		if (pstate->set_targetlist_types != NULL &&
+			pstate->set_targetlist_types[pstate->exprpos] != 0)
+			/*			 * This situation comes up with constructs like
+			 * SELECT null UNION select null UNION select 1;
+			 * we set the type based on pstate->set_targetlist_types
+			 *which is set in preprocessNullTypes.
+			 */
+			ptype = pstate->set_targetlist_types[pstate->exprpos];
+		else
+			/*
+			 * Resolve as type TEXT.  This situation comes up with constructs
+			 * like SELECT (CASE WHEN foo THEN 'bar' ELSE 'baz' END); SELECT 'foo'
+			 * UNION SELECT 'bar'; It might seem desirable to leave the construct's
+			 * output type as UNKNOWN, but that really doesn't work, because we'd
+			 * probably end up needing a runtime coercion from UNKNOWN to something
+			 * else, and we usually won't have it.  We need to coerce the unknown
+			 * literals while they are still literals, so a decision has to be made
+			 * now.
+			 */
+			ptype = TEXTOID;
+	}
 	if (which_expr)
 		*which_expr = pexpr;
 	return ptype;

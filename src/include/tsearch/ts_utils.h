@@ -175,7 +175,9 @@ typedef bool (*TSExecuteCallback) (void *arg, QueryOperand *val,
 #define TS_EXEC_EMPTY			(0x00)
 /*
  * If TS_EXEC_CALC_NOT is not set, then NOT expressions are automatically
- * evaluated to be true.  Useful in cases where NOT cannot be accurately
+ * evaluated to be true. This behavior is for compatibility with previous
+ * defaults, so now by default TS_EXEC_CALC_NOT should be set vice versa.
+ * Though it can be left not set in cases where NOT cannot be accurately
  * computed (GiST) or it isn't important (ranking).  From TS_execute's
  * perspective, !CALC_NOT means that the TSExecuteCallback function might
  * return false-positive indications of a lexeme's presence.

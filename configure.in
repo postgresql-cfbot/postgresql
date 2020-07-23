@@ -857,6 +857,15 @@ AC_MSG_RESULT([$with_openssl])
 AC_SUBST(with_openssl)
 
 #
+# LibNSS
+#
+AC_MSG_CHECKING([whether to build with NSS support])
+PGAC_ARG_BOOL(with, nss, no, [build with NSS support],
+              [AC_DEFINE([USE_NSS], 1, [Define to build with NSS support. (--with-nss)])])
+AC_MSG_RESULT([$with_nss])
+AC_SUBST(with_nss)
+
+#
 # SELinux
 #
 AC_MSG_CHECKING([whether to build with SELinux support])
@@ -1205,6 +1214,9 @@ if test "$with_gssapi" = yes ; then
 fi
 
 if test "$with_openssl" = yes ; then
+  if test x"$with_nss" = x"yes" ; then
+    AC_MSG_ERROR([multiple SSL backends cannot be enabled simultaneously"])
+  fi
   dnl Order matters!
   # Minimum required OpenSSL version is 1.0.1
   AC_DEFINE(OPENSSL_API_COMPAT, [0x10001000L],
@@ -1228,6 +1240,19 @@ if test "$with_openssl" = yes ; then
   # thread-safety. In 1.1.0, it's no longer required, and CRYPTO_lock()
   # function was removed.
   AC_CHECK_FUNCS([CRYPTO_lock])
+fi
+
+if test "$with_nss" = yes ; then
+  if test x"$with_openssl" = x"yes" ; then
+    AC_MSG_ERROR([multiple SSL backends cannot be enabled simultaneously"])
+  fi
+  CLEANLDFLAGS="$LDFLAGS"
+  # TODO: document this set of LDFLAGS
+  LDFLAGS="-lssl3 -lsmime3 -lnss3 -lplds4 -lplc4 -lnspr4 $LDFLAGS"
+  AC_CHECK_LIB(nss3, SSL_VersionRangeSet, [], [AC_MSG_ERROR([library 'nss3' is required for NSS])])
+  AC_CHECK_LIB(nspr4, PR_GetDefaultIOMethods, [], [AC_MSG_ERROR([library 'nspr4' is required for NSS])])
+  AC_CHECK_LIB(ssl3, SSL_GetImplementedCiphers, [], [AC_MSG_ERROR([library 'ssl3' is required for NSS])])
+  LDFLAGS="$CLEANLDFLAGS"
 fi
 
 if test "$with_pam" = yes ; then
@@ -1403,6 +1428,11 @@ fi
 if test "$with_openssl" = yes ; then
   AC_CHECK_HEADER(openssl/ssl.h, [], [AC_MSG_ERROR([header file <openssl/ssl.h> is required for OpenSSL])])
   AC_CHECK_HEADER(openssl/err.h, [], [AC_MSG_ERROR([header file <openssl/err.h> is required for OpenSSL])])
+fi
+
+if test "$with_nss" = yes ; then
+  AC_CHECK_HEADER(ssl.h, [], [AC_MSG_ERROR([header file <ssl.h> is required for NSS])])
+  AC_CHECK_HEADER(nss.h, [], [AC_MSG_ERROR([header file <nss.h> is required for NSS])])
 fi
 
 if test "$with_pam" = yes ; then

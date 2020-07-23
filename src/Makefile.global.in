@@ -184,6 +184,7 @@ with_perl	= @with_perl@
 with_python	= @with_python@
 with_tcl	= @with_tcl@
 with_openssl	= @with_openssl@
+with_nss        = @with_nss@
 with_readline	= @with_readline@
 with_selinux	= @with_selinux@
 with_systemd	= @with_systemd@
@@ -231,6 +232,15 @@ LLVM_BINPATH = @LLVM_BINPATH@
 CLANG = @CLANG@
 BITCODE_CFLAGS = @BITCODE_CFLAGS@
 BITCODE_CXXFLAGS = @BITCODE_CXXFLAGS@
+
+ifeq ($(with_openssl),yes)
+with_ssl = yes
+else ifeq ($(with_nss),yes)
+with_ssl = yes
+else
+with_ssl = no
+endif
+
 
 ##########################################################################
 #

@@ -192,12 +192,17 @@ typedef struct Port
 	bool		peer_cert_valid;
 
 	/*
-	 * OpenSSL structures. (Keep these last so that the locations of other
-	 * fields are the same whether or not you build with OpenSSL.)
+	 * SSL backend specific structures. (Keep these last so that the locations
+	 * of other fields are the same whether or not you build with SSL
+	 * enabled.)
 	 */
 #ifdef USE_OPENSSL
 	SSL		   *ssl;
 	X509	   *peer;
+#endif
+
+#ifdef USE_NSS
+	void	   *pr_fd;
 #endif
 } Port;
 

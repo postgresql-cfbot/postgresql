@@ -1090,6 +1090,20 @@ CREATE VIEW pg_stat_progress_basebackup AS
         S.param5 AS tablespaces_streamed
     FROM pg_stat_get_progress_info('BASEBACKUP') AS S;
 
+CREATE VIEW pg_stat_progress_copy AS
+    SELECT
+        S.pid AS pid, S.datid AS datid, D.datname AS datname,
+        S.relid AS relid,
+        CASE S.param1 WHEN 0 THEN 'TO'
+                      WHEN 1 THEN 'FROM'
+                      END as direction,
+        CAST (S.param2::integer AS bool) AS file,
+        CAST (S.param3::integer AS bool) AS program,
+        S.param4 AS lines_processed,
+        S.param5 AS bytes_processed
+    FROM pg_stat_get_progress_info('COPY') AS S
+        LEFT JOIN pg_database D ON S.datid = D.oid;
+
 CREATE VIEW pg_user_mappings AS
     SELECT
         U.oid       AS umid,

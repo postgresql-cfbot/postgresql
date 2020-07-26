@@ -42,9 +42,9 @@ typedef struct TableScanDescData
 	 */
 	uint32		rs_flags;
 
+	void	   *rs_parallel_work;
 	struct ParallelTableScanDescData *rs_parallel;	/* parallel scan
 													 * information */
-
 } TableScanDescData;
 typedef struct TableScanDescData *TableScanDesc;
 
@@ -80,6 +80,18 @@ typedef struct ParallelBlockTableScanDescData
 										 * workers so far. */
 }			ParallelBlockTableScanDescData;
 typedef struct ParallelBlockTableScanDescData *ParallelBlockTableScanDesc;
+
+/*
+ * Per backend state for parallel table sacan, for block oriented storage.
+ */
+typedef struct ParallelBlockTableScanWorkData
+{
+	uint64		phsw_nallocated;		/* Current # of pages into the scan */
+	uint32		phsw_alloc_remaining;	/* Pages left for this allocation */
+	uint32		phsw_chunk_size;		/* The number of pages to take in each
+										 * I/O chunk for the scan */
+} ParallelBlockTableScanWorkData;
+typedef struct ParallelBlockTableScanWorkData *ParallelBlockTableScanWork;
 
 /*
  * Base class for fetches from a table via an index. This is the base-class

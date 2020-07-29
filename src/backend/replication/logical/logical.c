@@ -137,7 +137,8 @@ StartupDecodingContext(List *output_plugin_options,
 					   TransactionId xmin_horizon,
 					   bool need_full_snapshot,
 					   bool fast_forward,
-					   XLogReaderRoutine *xl_routine,
+					   LogicalDecodingXLogPageReadCB page_read,
+					   WALSegmentCleanupCB cleanup_cb,
 					   LogicalOutputPluginWriterPrepareWrite prepare_write,
 					   LogicalOutputPluginWriterWrite do_write,
 					   LogicalOutputPluginWriterUpdateProgress update_progress)
@@ -186,11 +187,13 @@ StartupDecodingContext(List *output_plugin_options,
 
 	ctx->slot = slot;
 
-	ctx->reader = XLogReaderAllocate(wal_segment_size, NULL, xl_routine, ctx);
+	ctx->reader = XLogReaderAllocate(wal_segment_size, NULL, cleanup_cb);
 	if (!ctx->reader)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory")));
+	ctx->reader->readBuf = palloc(XLOG_BLCKSZ);
+	ctx->page_read = page_read;
 
 	ctx->reorder = ReorderBufferAllocate();
 	ctx->snapshot_builder =
@@ -281,7 +284,8 @@ CreateInitDecodingContext(char *plugin,
 						  List *output_plugin_options,
 						  bool need_full_snapshot,
 						  XLogRecPtr restart_lsn,
-						  XLogReaderRoutine *xl_routine,
+						  LogicalDecodingXLogPageReadCB page_read,
+						  WALSegmentCleanupCB cleanup_cb,
 						  LogicalOutputPluginWriterPrepareWrite prepare_write,
 						  LogicalOutputPluginWriterWrite do_write,
 						  LogicalOutputPluginWriterUpdateProgress update_progress)
@@ -378,7 +382,7 @@ CreateInitDecodingContext(char *plugin,
 
 	ctx = StartupDecodingContext(NIL, restart_lsn, xmin_horizon,
 								 need_full_snapshot, false,
-								 xl_routine, prepare_write, do_write,
+								 page_read, cleanup_cb, prepare_write, do_write,
 								 update_progress);
 
 	/* call output plugin initialization callback */
@@ -426,7 +430,8 @@ LogicalDecodingContext *
 CreateDecodingContext(XLogRecPtr start_lsn,
 					  List *output_plugin_options,
 					  bool fast_forward,
-					  XLogReaderRoutine *xl_routine,
+					  LogicalDecodingXLogPageReadCB page_read,
+					  WALSegmentCleanupCB cleanup_cb,
 					  LogicalOutputPluginWriterPrepareWrite prepare_write,
 					  LogicalOutputPluginWriterWrite do_write,
 					  LogicalOutputPluginWriterUpdateProgress update_progress)
@@ -479,8 +484,8 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 
 	ctx = StartupDecodingContext(output_plugin_options,
 								 start_lsn, InvalidTransactionId, false,
-								 fast_forward, xl_routine, prepare_write,
-								 do_write, update_progress);
+								 fast_forward, page_read, cleanup_cb,
+								 prepare_write, do_write, update_progress);
 
 	/* call output plugin initialization callback */
 	old_context = MemoryContextSwitchTo(ctx->context);
@@ -533,7 +538,13 @@ DecodingContextFindStartpoint(LogicalDecodingContext *ctx)
 		char	   *err = NULL;
 
 		/* the read_page callback waits for new WAL */
-		record = XLogReadRecord(ctx->reader, &err);
+		while (XLogReadRecord(ctx->reader, &record, &err) ==
+			   XLREAD_NEED_DATA)
+		{
+			if (!ctx->page_read(ctx->reader))
+				break;
+		}
+
 		if (err)
 			elog(ERROR, "%s", err);
 		if (!record)
@@ -565,6 +576,7 @@ FreeDecodingContext(LogicalDecodingContext *ctx)
 
 	ReorderBufferFree(ctx->reorder);
 	FreeSnapshotBuilder(ctx->snapshot_builder);
+	pfree(ctx->reader->readBuf);
 	XLogReaderFree(ctx->reader);
 	MemoryContextDelete(ctx->context);
 }

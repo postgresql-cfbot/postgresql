@@ -21,6 +21,8 @@
 #include "commands/defrem.h"
 #include "commands/explain.h"
 #include "commands/vacuum.h"
+#include "executor/execAsync.h"
+#include "executor/nodeForeignscan.h"
 #include "foreign/fdwapi.h"
 #include "funcapi.h"
 #include "miscadmin.h"
@@ -35,6 +37,7 @@
 #include "optimizer/restrictinfo.h"
 #include "optimizer/tlist.h"
 #include "parser/parsetree.h"
+#include "pgstat.h"
 #include "postgres_fdw.h"
 #include "utils/builtins.h"
 #include "utils/float.h"
@@ -55,6 +58,9 @@ PG_MODULE_MAGIC;
 
 /* If no remote estimates, assume a sort costs 20% extra */
 #define DEFAULT_FDW_SORT_MULTIPLIER 1.2
+
+/* Retrieve PgFdwScanState struct from ForeignScanState */
+#define GetPgFdwScanState(n) ((PgFdwScanState *)(n)->fdw_state)
 
 /*
  * Indexes of FDW-private information stored in fdw_private lists.
@@ -123,10 +129,28 @@ enum FdwDirectModifyPrivateIndex
 };
 
 /*
+ * Connection common state - shared among all PgFdwState instances using the
+ * same connection.
+ */
+typedef struct PgFdwConnCommonState
+{
+	ForeignScanState   *leader;		/* leader node of this connection */
+	bool				busy;		/* true if this connection is busy */
+} PgFdwConnCommonState;
+
+/* Execution state base type */
+typedef struct PgFdwState
+{
+	PGconn	   *conn;					/* connection for the scan */
+	PgFdwConnCommonState *commonstate;	/* connection common state */
+} PgFdwState;
+
+/*
  * Execution state of a foreign scan using postgres_fdw.
  */
 typedef struct PgFdwScanState
 {
+	PgFdwState	s;				/* common structure */
 	Relation	rel;			/* relcache entry for the foreign table. NULL
 								 * for a foreign join scan. */
 	TupleDesc	tupdesc;		/* tuple descriptor of scan */
@@ -137,7 +161,6 @@ typedef struct PgFdwScanState
 	List	   *retrieved_attrs;	/* list of retrieved attribute numbers */
 
 	/* for remote query execution */
-	PGconn	   *conn;			/* connection for the scan */
 	unsigned int cursor_number; /* quasi-unique ID for my cursor */
 	bool		cursor_exists;	/* have we created the cursor? */
 	int			numParams;		/* number of parameters passed to query */
@@ -153,6 +176,12 @@ typedef struct PgFdwScanState
 	/* batch-level state, for optimizing rewinds and avoiding useless fetch */
 	int			fetch_ct_2;		/* Min(# of fetches done, 2) */
 	bool		eof_reached;	/* true if last fetch reached EOF */
+	bool		async;			/* true if run asynchronously */
+	bool		queued;			/* true if this node is in waiter queue */
+	ForeignScanState *waiter;	/* Next node to run a query among nodes
+								 * sharing the same connection */
+	ForeignScanState *last_waiter;	/* last element in waiter queue.
+									 * valid only on the leader node */
 
 	/* working memory contexts */
 	MemoryContext batch_cxt;	/* context holding current batch of tuples */
@@ -166,11 +195,11 @@ typedef struct PgFdwScanState
  */
 typedef struct PgFdwModifyState
 {
+	PgFdwState	s;				/* common structure */
 	Relation	rel;			/* relcache entry for the foreign table */
 	AttInMetadata *attinmeta;	/* attribute datatype conversion metadata */
 
 	/* for remote query execution */
-	PGconn	   *conn;			/* connection for the scan */
 	char	   *p_name;			/* name of prepared statement, if created */
 
 	/* extracted fdw_private data */
@@ -197,6 +226,7 @@ typedef struct PgFdwModifyState
  */
 typedef struct PgFdwDirectModifyState
 {
+	PgFdwState	s;				/* common structure */
 	Relation	rel;			/* relcache entry for the foreign table */
 	AttInMetadata *attinmeta;	/* attribute datatype conversion metadata */
 
@@ -326,6 +356,7 @@ static void postgresBeginForeignScan(ForeignScanState *node, int eflags);
 static TupleTableSlot *postgresIterateForeignScan(ForeignScanState *node);
 static void postgresReScanForeignScan(ForeignScanState *node);
 static void postgresEndForeignScan(ForeignScanState *node);
+static void postgresShutdownForeignScan(ForeignScanState *node);
 static void postgresAddForeignUpdateTargets(Query *parsetree,
 											RangeTblEntry *target_rte,
 											Relation target_relation);
@@ -391,6 +422,10 @@ static void postgresGetForeignUpperPaths(PlannerInfo *root,
 										 RelOptInfo *input_rel,
 										 RelOptInfo *output_rel,
 										 void *extra);
+static bool postgresIsForeignPathAsyncCapable(ForeignPath *path);
+static bool postgresForeignAsyncConfigureWait(ForeignScanState *node,
+											  WaitEventSet *wes,
+											  void *caller_data, bool reinit);
 
 /*
  * Helper functions
@@ -419,7 +454,9 @@ static bool ec_member_matches_foreign(PlannerInfo *root, RelOptInfo *rel,
 									  EquivalenceClass *ec, EquivalenceMember *em,
 									  void *arg);
 static void create_cursor(ForeignScanState *node);
-static void fetch_more_data(ForeignScanState *node);
+static void request_more_data(ForeignScanState *node);
+static void fetch_received_data(ForeignScanState *node);
+static void vacate_connection(PgFdwState *fdwconn, bool clear_queue);
 static void close_cursor(PGconn *conn, unsigned int cursor_number);
 static PgFdwModifyState *create_foreign_modify(EState *estate,
 											   RangeTblEntry *rte,
@@ -522,6 +559,7 @@ postgres_fdw_handler(PG_FUNCTION_ARGS)
 	routine->IterateForeignScan = postgresIterateForeignScan;
 	routine->ReScanForeignScan = postgresReScanForeignScan;
 	routine->EndForeignScan = postgresEndForeignScan;
+	routine->ShutdownForeignScan = postgresShutdownForeignScan;
 
 	/* Functions for updating foreign tables */
 	routine->AddForeignUpdateTargets = postgresAddForeignUpdateTargets;
@@ -557,6 +595,10 @@ postgres_fdw_handler(PG_FUNCTION_ARGS)
 
 	/* Support functions for upper relation push-down */
 	routine->GetForeignUpperPaths = postgresGetForeignUpperPaths;
+
+	/* Support functions for async execution */
+	routine->IsForeignPathAsyncCapable = postgresIsForeignPathAsyncCapable;
+	routine->ForeignAsyncConfigureWait = postgresForeignAsyncConfigureWait;
 
 	PG_RETURN_POINTER(routine);
 }
@@ -1434,11 +1476,21 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 	 * Get connection to the foreign server.  Connection manager will
 	 * establish new connection if necessary.
 	 */
-	fsstate->conn = GetConnection(user, false);
+	fsstate->s.conn = GetConnection(user, false);
+	fsstate->s.commonstate = (PgFdwConnCommonState *)
+		GetConnectionSpecificStorage(user, sizeof(PgFdwConnCommonState));
+	fsstate->s.commonstate->leader = NULL;
+	fsstate->s.commonstate->busy = false;
+	fsstate->waiter = NULL;
+	fsstate->last_waiter = node;
 
 	/* Assign a unique ID for my cursor */
-	fsstate->cursor_number = GetCursorNumber(fsstate->conn);
+	fsstate->cursor_number = GetCursorNumber(fsstate->s.conn);
 	fsstate->cursor_exists = false;
+
+	/* Initialize async execution status */
+	fsstate->async = false;
+	fsstate->queued = false;
 
 	/* Get private info created by planner functions. */
 	fsstate->query = strVal(list_nth(fsplan->fdw_private,
@@ -1488,39 +1540,240 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 }
 
 /*
+ * Async queue manipulation functions
+ */
+
+/*
+ * add_async_waiter:
+ *
+ * Enqueue node if it isn't in the queue. Immediately send request it if the
+ * underlying connection is not busy.
+ */
+static inline void
+add_async_waiter(ForeignScanState *node)
+{
+	PgFdwScanState   *fsstate = GetPgFdwScanState(node);
+	ForeignScanState *leader = fsstate->s.commonstate->leader;
+
+	/*
+	 * Do nothing if the node is already in the queue or already eof'ed.
+	 * Note: leader node is not marked as queued.
+	 */
+	if (leader == node || fsstate->queued || fsstate->eof_reached)
+		return;
+
+	if (leader == NULL)
+	{
+		/* no leader means not busy, send request immediately */
+		request_more_data(node);
+	}
+	else
+	{
+		/* the connection is busy, queue the node */
+		PgFdwScanState   *leader_state = GetPgFdwScanState(leader);
+		PgFdwScanState   *last_waiter_state
+			= GetPgFdwScanState(leader_state->last_waiter);
+
+		last_waiter_state->waiter = node;
+		leader_state->last_waiter = node;
+		fsstate->queued = true;
+	}
+}
+
+/*
+ * move_to_next_waiter:
+ *
+ * Make the first waiter be the next leader
+ * Returns the new leader or NULL if there's no waiter.
+ */
+static inline ForeignScanState *
+move_to_next_waiter(ForeignScanState *node)
+{
+	PgFdwScanState *leader_state = GetPgFdwScanState(node);
+	ForeignScanState *next_leader = leader_state->waiter;
+
+	Assert(leader_state->s.commonstate->leader = node);
+
+	if (next_leader)
+	{
+		/* the first waiter becomes the next leader */
+		PgFdwScanState *next_leader_state = GetPgFdwScanState(next_leader);
+		next_leader_state->last_waiter = leader_state->last_waiter;
+		next_leader_state->queued = false;
+	}
+
+	leader_state->waiter = NULL;
+	leader_state->s.commonstate->leader = next_leader;
+
+	return next_leader;
+}
+
+/*
+ * Remove the node from waiter queue.
+ *
+ * Remaining results are cleared if the node is a busy leader.
+ * This intended to be used during node shutdown.
+ */
+static inline void
+remove_async_node(ForeignScanState *node)
+{
+	PgFdwScanState		*fsstate = GetPgFdwScanState(node);
+	ForeignScanState	*leader = fsstate->s.commonstate->leader;
+	PgFdwScanState		*leader_state;
+	ForeignScanState	*prev;
+	PgFdwScanState		*prev_state;
+	ForeignScanState	*cur;
+
+	/* no need to remove me */
+	if (!leader || !fsstate->queued)
+		return;
+
+	leader_state = GetPgFdwScanState(leader);
+
+	if (leader == node)
+	{
+		if (leader_state->s.commonstate->busy)
+		{
+			/*
+			 * this node is waiting for result, absorb the result first so
+			 * that the following commands can be sent on the connection.
+			 */
+			PgFdwScanState *leader_state = GetPgFdwScanState(leader);
+			PGconn *conn = leader_state->s.conn;
+
+			while(PQisBusy(conn))
+				PQclear(PQgetResult(conn));
+
+			leader_state->s.commonstate->busy = false;
+		}
+
+		move_to_next_waiter(node);
+
+		return;
+	}
+
+	/*
+	 * Just remove the node from the queue
+	 *
+	 * Nodes don't have a link to the previous node but anyway this function is
+	 * called on the shutdown path, so we don't bother seeking for faster way
+	 * to do this.
+	 */
+	prev = leader;
+	prev_state = leader_state;
+	cur =  GetPgFdwScanState(prev)->waiter;
+	while (cur)
+	{
+		PgFdwScanState *curstate = GetPgFdwScanState(cur);
+
+		if (cur == node)
+		{
+			prev_state->waiter = curstate->waiter;
+
+			/* relink to the previous node if the last node was removed */
+			if (leader_state->last_waiter == cur)
+				leader_state->last_waiter = prev;
+
+			fsstate->queued = false;
+
+			return;
+		}
+		prev = cur;
+		prev_state = curstate;
+		cur = curstate->waiter;
+	}
+}
+
+/*
  * postgresIterateForeignScan
- *		Retrieve next row from the result set, or clear tuple slot to indicate
- *		EOF.
+ *		Retrieve next row from the result set.
+ *
+ *		For synchronous nodes, returns clear tuple slot means EOF.
+ *
+ *		For asynchronous nodes, if clear tuple slot is returned, the caller
+ *		needs to check async state to tell if all tuples received
+ *		(AS_AVAILABLE) or waiting for the next data to come (AS_WAITING).
  */
 static TupleTableSlot *
 postgresIterateForeignScan(ForeignScanState *node)
 {
-	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	PgFdwScanState *fsstate = GetPgFdwScanState(node);
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
 
-	/*
-	 * If this is the first call after Begin or ReScan, we need to create the
-	 * cursor on the remote side.
-	 */
-	if (!fsstate->cursor_exists)
-		create_cursor(node);
+	if (fsstate->next_tuple >= fsstate->num_tuples && !fsstate->eof_reached)
+	{
+		/* we've run out, get some more tuples */
+		if (!node->fs_async)
+		{
+			/*
+			 * finish the running query before sending the next command for
+			 * this node
+			 */
+			if (!fsstate->s.commonstate->busy)
+				vacate_connection((PgFdwState *)fsstate, false);
 
-	/*
-	 * Get some more tuples, if we've run out.
-	 */
+			request_more_data(node);
+
+			/* Fetch the result immediately. */
+			fetch_received_data(node);
+		}
+		else if (!fsstate->s.commonstate->busy)
+		{
+			/* If the connection is not busy, just send the request. */
+			request_more_data(node);
+		}
+		else
+		{
+			/* The connection is busy, queue the request */
+			bool available = true;
+			ForeignScanState *leader = fsstate->s.commonstate->leader;
+			PgFdwScanState *leader_state = GetPgFdwScanState(leader);
+
+			/* queue the requested node */
+			add_async_waiter(node);
+
+			/*
+			 * The request for the next node cannot be sent before the leader
+			 * responds. Finish the current leader if possible.
+			 */
+			if (PQisBusy(leader_state->s.conn))
+			{
+				int rc = WaitLatchOrSocket(NULL,
+										   WL_SOCKET_READABLE | WL_TIMEOUT |
+										   WL_EXIT_ON_PM_DEATH,
+										   PQsocket(leader_state->s.conn), 0,
+										   WAIT_EVENT_ASYNC_WAIT);
+				if (!(rc & WL_SOCKET_READABLE))
+					available = false;
+			}
+
+			/* fetch the leader's data and enqueue it for the next request */
+			if (available)
+			{
+				fetch_received_data(leader);
+				add_async_waiter(leader);
+			}
+		}
+	}
+
 	if (fsstate->next_tuple >= fsstate->num_tuples)
 	{
-		/* No point in another fetch if we already detected EOF, though. */
-		if (!fsstate->eof_reached)
-			fetch_more_data(node);
-		/* If we didn't get any tuples, must be end of data. */
-		if (fsstate->next_tuple >= fsstate->num_tuples)
-			return ExecClearTuple(slot);
+		/*
+		 * We haven't received a result for the given node this time, return
+		 * with no tuple to give way to another node.
+		 */
+		if (fsstate->eof_reached)
+			node->ss.ps.asyncstate = AS_AVAILABLE;
+		else
+			node->ss.ps.asyncstate = AS_WAITING;
+
+		return ExecClearTuple(slot);
 	}
 
 	/*
 	 * Return the next tuple.
 	 */
+	node->ss.ps.asyncstate = AS_AVAILABLE;
 	ExecStoreHeapTuple(fsstate->tuples[fsstate->next_tuple++],
 					   slot,
 					   false);
@@ -1535,13 +1788,15 @@ postgresIterateForeignScan(ForeignScanState *node)
 static void
 postgresReScanForeignScan(ForeignScanState *node)
 {
-	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	PgFdwScanState *fsstate = GetPgFdwScanState(node);
 	char		sql[64];
 	PGresult   *res;
 
 	/* If we haven't created the cursor yet, nothing to do. */
 	if (!fsstate->cursor_exists)
 		return;
+
+	vacate_connection((PgFdwState *)fsstate, true);
 
 	/*
 	 * If any internal parameters affecting this node have changed, we'd
@@ -1571,9 +1826,9 @@ postgresReScanForeignScan(ForeignScanState *node)
 	 * We don't use a PG_TRY block here, so be careful not to throw error
 	 * without releasing the PGresult.
 	 */
-	res = pgfdw_exec_query(fsstate->conn, sql);
+	res = pgfdw_exec_query(fsstate->s.conn, sql);
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-		pgfdw_report_error(ERROR, res, fsstate->conn, true, sql);
+		pgfdw_report_error(ERROR, res, fsstate->s.conn, true, sql);
 	PQclear(res);
 
 	/* Now force a fresh FETCH. */
@@ -1591,7 +1846,7 @@ postgresReScanForeignScan(ForeignScanState *node)
 static void
 postgresEndForeignScan(ForeignScanState *node)
 {
-	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	PgFdwScanState *fsstate = GetPgFdwScanState(node);
 
 	/* if fsstate is NULL, we are in EXPLAIN; nothing to do */
 	if (fsstate == NULL)
@@ -1599,13 +1854,29 @@ postgresEndForeignScan(ForeignScanState *node)
 
 	/* Close the cursor if open, to prevent accumulation of cursors */
 	if (fsstate->cursor_exists)
-		close_cursor(fsstate->conn, fsstate->cursor_number);
+		close_cursor(fsstate->s.conn, fsstate->cursor_number);
 
 	/* Release remote connection */
-	ReleaseConnection(fsstate->conn);
-	fsstate->conn = NULL;
+	ReleaseConnection(fsstate->s.conn);
+	fsstate->s.conn = NULL;
 
 	/* MemoryContexts will be deleted automatically. */
+}
+
+/*
+ * postgresShutdownForeignScan
+ *		Remove asynchrony stuff and cleanup garbage on the connection.
+ */
+static void
+postgresShutdownForeignScan(ForeignScanState *node)
+{
+	ForeignScan *plan = (ForeignScan *) node->ss.ps.plan;
+
+	if (plan->operation != CMD_SELECT)
+		return;
+
+	/* remove the node from waiting queue */
+	remove_async_node(node);
 }
 
 /*
@@ -2372,7 +2643,9 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 	 * Get connection to the foreign server.  Connection manager will
 	 * establish new connection if necessary.
 	 */
-	dmstate->conn = GetConnection(user, false);
+	dmstate->s.conn = GetConnection(user, false);
+	dmstate->s.commonstate = (PgFdwConnCommonState *)
+		GetConnectionSpecificStorage(user, sizeof(PgFdwConnCommonState));
 
 	/* Update the foreign-join-related fields. */
 	if (fsplan->scan.scanrelid == 0)
@@ -2457,7 +2730,11 @@ postgresIterateDirectModify(ForeignScanState *node)
 	 * If this is the first call after Begin, execute the statement.
 	 */
 	if (dmstate->num_tuples == -1)
+	{
+		/* finish running query to send my command */
+		vacate_connection((PgFdwState *)dmstate, true);
 		execute_dml_stmt(node);
+	}
 
 	/*
 	 * If the local query doesn't specify RETURNING, just clear tuple slot.
@@ -2504,8 +2781,8 @@ postgresEndDirectModify(ForeignScanState *node)
 		PQclear(dmstate->result);
 
 	/* Release remote connection */
-	ReleaseConnection(dmstate->conn);
-	dmstate->conn = NULL;
+	ReleaseConnection(dmstate->s.conn);
+	dmstate->s.conn = NULL;
 
 	/* MemoryContext will be deleted automatically. */
 }
@@ -2703,6 +2980,7 @@ estimate_path_cost_size(PlannerInfo *root,
 		List	   *local_param_join_conds;
 		StringInfoData sql;
 		PGconn	   *conn;
+		PgFdwConnCommonState *commonstate;
 		Selectivity local_sel;
 		QualCost	local_cost;
 		List	   *fdw_scan_tlist = NIL;
@@ -2747,6 +3025,18 @@ estimate_path_cost_size(PlannerInfo *root,
 
 		/* Get the remote estimate */
 		conn = GetConnection(fpinfo->user, false);
+		commonstate = GetConnectionSpecificStorage(fpinfo->user,
+												sizeof(PgFdwConnCommonState));
+		if (commonstate)
+		{
+			PgFdwState tmpstate;
+			tmpstate.conn = conn;
+			tmpstate.commonstate = commonstate;
+
+			/* finish running query to send my command */
+			vacate_connection(&tmpstate, true);
+		}
+
 		get_remote_estimate(sql.data, conn, &rows, &width,
 							&startup_cost, &total_cost);
 		ReleaseConnection(conn);
@@ -3317,11 +3607,11 @@ ec_member_matches_foreign(PlannerInfo *root, RelOptInfo *rel,
 static void
 create_cursor(ForeignScanState *node)
 {
-	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	PgFdwScanState *fsstate = GetPgFdwScanState(node);
 	ExprContext *econtext = node->ss.ps.ps_ExprContext;
 	int			numParams = fsstate->numParams;
 	const char **values = fsstate->param_values;
-	PGconn	   *conn = fsstate->conn;
+	PGconn	   *conn = fsstate->s.conn;
 	StringInfoData buf;
 	PGresult   *res;
 
@@ -3384,50 +3674,119 @@ create_cursor(ForeignScanState *node)
 }
 
 /*
- * Fetch some more rows from the node's cursor.
+ * Sends the next request of the node. If the given node is different from the
+ * current connection leader, pushes it back to waiter queue and let the given
+ * node be the leader.
  */
 static void
-fetch_more_data(ForeignScanState *node)
+request_more_data(ForeignScanState *node)
 {
-	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	PgFdwScanState *fsstate = GetPgFdwScanState(node);
+	ForeignScanState *leader = fsstate->s.commonstate->leader;
+	PGconn	   *conn = fsstate->s.conn;
+	char		sql[64];
+
+	/* must be non-busy */
+	Assert(!fsstate->s.commonstate->busy);
+	/* must be not-eof'ed */
+	Assert(!fsstate->eof_reached);
+
+	/*
+	 * If this is the first call after Begin or ReScan, we need to create the
+	 * cursor on the remote side.
+	 */
+	if (!fsstate->cursor_exists)
+		create_cursor(node);
+
+	snprintf(sql, sizeof(sql), "FETCH %d FROM c%u",
+			 fsstate->fetch_size, fsstate->cursor_number);
+
+	if (!PQsendQuery(conn, sql))
+		pgfdw_report_error(ERROR, NULL, conn, false, sql);
+
+	fsstate->s.commonstate->busy = true;
+
+	/* The node is the current leader, just return. */
+	if (leader == node)
+		return;
+
+	/* Let the node be the leader */
+	if (leader != NULL)
+	{
+		remove_async_node(node);
+		fsstate->last_waiter = GetPgFdwScanState(leader)->last_waiter;
+		fsstate->waiter = leader;
+	}
+	else
+	{
+		fsstate->last_waiter = node;
+		fsstate->waiter = NULL;
+	}
+
+	fsstate->s.commonstate->leader = node;
+}
+
+/*
+ * Fetches received data and automatically send requests of the next waiter.
+ */
+static void
+fetch_received_data(ForeignScanState *node)
+{
+	PgFdwScanState *fsstate = GetPgFdwScanState(node);
 	PGresult   *volatile res = NULL;
 	MemoryContext oldcontext;
+	ForeignScanState *waiter;
+
+	/* I should be the current connection leader */
+	Assert(fsstate->s.commonstate->leader == node);
 
 	/*
 	 * We'll store the tuples in the batch_cxt.  First, flush the previous
-	 * batch.
+	 * batch if no tuple is remaining
 	 */
-	fsstate->tuples = NULL;
-	MemoryContextReset(fsstate->batch_cxt);
+	if (fsstate->next_tuple >= fsstate->num_tuples)
+	{
+		fsstate->tuples = NULL;
+		fsstate->num_tuples = 0;
+		MemoryContextReset(fsstate->batch_cxt);
+	}
+	else if (fsstate->next_tuple > 0)
+	{
+		/* There's some remains. Move them to the beginning of the store */
+		int n = 0;
+
+		while(fsstate->next_tuple < fsstate->num_tuples)
+			fsstate->tuples[n++] = fsstate->tuples[fsstate->next_tuple++];
+		fsstate->num_tuples = n;
+	}
+
 	oldcontext = MemoryContextSwitchTo(fsstate->batch_cxt);
 
 	/* PGresult must be released before leaving this function. */
 	PG_TRY();
 	{
-		PGconn	   *conn = fsstate->conn;
-		char		sql[64];
-		int			numrows;
+		PGconn	   *conn = fsstate->s.conn;
+		int			addrows;
+		size_t		newsize;
 		int			i;
 
-		snprintf(sql, sizeof(sql), "FETCH %d FROM c%u",
-				 fsstate->fetch_size, fsstate->cursor_number);
-
-		res = pgfdw_exec_query(conn, sql);
-		/* On error, report the original query, not the FETCH. */
+		res = pgfdw_get_result(conn, fsstate->query);
 		if (PQresultStatus(res) != PGRES_TUPLES_OK)
 			pgfdw_report_error(ERROR, res, conn, false, fsstate->query);
 
 		/* Convert the data into HeapTuples */
-		numrows = PQntuples(res);
-		fsstate->tuples = (HeapTuple *) palloc0(numrows * sizeof(HeapTuple));
-		fsstate->num_tuples = numrows;
-		fsstate->next_tuple = 0;
+		addrows = PQntuples(res);
+		newsize = (fsstate->num_tuples + addrows) * sizeof(HeapTuple);
+		if (fsstate->tuples)
+			fsstate->tuples = (HeapTuple *) repalloc(fsstate->tuples, newsize);
+		else
+			fsstate->tuples = (HeapTuple *) palloc(newsize);
 
-		for (i = 0; i < numrows; i++)
+		for (i = 0; i < addrows; i++)
 		{
 			Assert(IsA(node->ss.ps.plan, ForeignScan));
 
-			fsstate->tuples[i] =
+			fsstate->tuples[fsstate->num_tuples + i] =
 				make_tuple_from_result_row(res, i,
 										   fsstate->rel,
 										   fsstate->attinmeta,
@@ -3437,20 +3796,71 @@ fetch_more_data(ForeignScanState *node)
 		}
 
 		/* Update fetch_ct_2 */
-		if (fsstate->fetch_ct_2 < 2)
+		if (fsstate->fetch_ct_2 < 2 && fsstate->next_tuple == 0)
 			fsstate->fetch_ct_2++;
 
+		fsstate->next_tuple = 0;
+		fsstate->num_tuples += addrows;
+
 		/* Must be EOF if we didn't get as many tuples as we asked for. */
-		fsstate->eof_reached = (numrows < fsstate->fetch_size);
+		fsstate->eof_reached = (addrows < fsstate->fetch_size);
 	}
 	PG_FINALLY();
 	{
+		fsstate->s.commonstate->busy = false;
+
 		if (res)
 			PQclear(res);
 	}
 	PG_END_TRY();
 
+	/* let the first waiter be the next leader of this connection */
+	waiter = move_to_next_waiter(node);
+
+	/* send the next request if any */
+	if (waiter)
+		request_more_data(waiter);
+
 	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
+ * Vacate the underlying connection so that this node can send the next query.
+ */
+static void
+vacate_connection(PgFdwState *fdwstate, bool clear_queue)
+{
+	PgFdwConnCommonState *commonstate = fdwstate->commonstate;
+	ForeignScanState *leader;
+
+	Assert(commonstate != NULL);
+
+	/* just return if the connection is already available */
+	if (commonstate->leader == NULL || !commonstate->busy)
+		return;
+
+	/*
+	 * let the current connection leader read all of the result for the running
+	 * query
+	 */
+	leader = commonstate->leader;
+	fetch_received_data(leader);
+
+	/* let the first waiter be the next leader of this connection */
+	move_to_next_waiter(leader);
+
+	if (!clear_queue)
+		return;
+
+	/* Clear the waiting list */
+	while (leader)
+	{
+		PgFdwScanState *fsstate = GetPgFdwScanState(leader);
+
+		fsstate->last_waiter = NULL;
+		leader = fsstate->waiter;
+		fsstate->waiter = NULL;
+	}
 }
 
 /*
@@ -3566,7 +3976,9 @@ create_foreign_modify(EState *estate,
 	user = GetUserMapping(userid, table->serverid);
 
 	/* Open connection; report that we'll create a prepared statement. */
-	fmstate->conn = GetConnection(user, true);
+	fmstate->s.conn = GetConnection(user, true);
+	fmstate->s.commonstate = (PgFdwConnCommonState *)
+		GetConnectionSpecificStorage(user, sizeof(PgFdwConnCommonState));
 	fmstate->p_name = NULL;		/* prepared statement not made yet */
 
 	/* Set up remote query information. */
@@ -3653,6 +4065,9 @@ execute_foreign_modify(EState *estate,
 		   operation == CMD_UPDATE ||
 		   operation == CMD_DELETE);
 
+	/* finish running query to send my command */
+	vacate_connection((PgFdwState *)fmstate, true);
+
 	/* Set up the prepared statement on the remote server, if we didn't yet */
 	if (!fmstate->p_name)
 		prepare_foreign_modify(fmstate);
@@ -3680,14 +4095,14 @@ execute_foreign_modify(EState *estate,
 	/*
 	 * Execute the prepared statement.
 	 */
-	if (!PQsendQueryPrepared(fmstate->conn,
+	if (!PQsendQueryPrepared(fmstate->s.conn,
 							 fmstate->p_name,
 							 fmstate->p_nums,
 							 p_values,
 							 NULL,
 							 NULL,
 							 0))
-		pgfdw_report_error(ERROR, NULL, fmstate->conn, false, fmstate->query);
+		pgfdw_report_error(ERROR, NULL, fmstate->s.conn, false, fmstate->query);
 
 	/*
 	 * Get the result, and check for success.
@@ -3695,10 +4110,10 @@ execute_foreign_modify(EState *estate,
 	 * We don't use a PG_TRY block here, so be careful not to throw error
 	 * without releasing the PGresult.
 	 */
-	res = pgfdw_get_result(fmstate->conn, fmstate->query);
+	res = pgfdw_get_result(fmstate->s.conn, fmstate->query);
 	if (PQresultStatus(res) !=
 		(fmstate->has_returning ? PGRES_TUPLES_OK : PGRES_COMMAND_OK))
-		pgfdw_report_error(ERROR, res, fmstate->conn, true, fmstate->query);
+		pgfdw_report_error(ERROR, res, fmstate->s.conn, true, fmstate->query);
 
 	/* Check number of rows affected, and fetch RETURNING tuple if any */
 	if (fmstate->has_returning)
@@ -3734,7 +4149,7 @@ prepare_foreign_modify(PgFdwModifyState *fmstate)
 
 	/* Construct name we'll use for the prepared statement. */
 	snprintf(prep_name, sizeof(prep_name), "pgsql_fdw_prep_%u",
-			 GetPrepStmtNumber(fmstate->conn));
+			 GetPrepStmtNumber(fmstate->s.conn));
 	p_name = pstrdup(prep_name);
 
 	/*
@@ -3744,12 +4159,12 @@ prepare_foreign_modify(PgFdwModifyState *fmstate)
 	 * the prepared statements we use in this module are simple enough that
 	 * the remote server will make the right choices.
 	 */
-	if (!PQsendPrepare(fmstate->conn,
+	if (!PQsendPrepare(fmstate->s.conn,
 					   p_name,
 					   fmstate->query,
 					   0,
 					   NULL))
-		pgfdw_report_error(ERROR, NULL, fmstate->conn, false, fmstate->query);
+		pgfdw_report_error(ERROR, NULL, fmstate->s.conn, false, fmstate->query);
 
 	/*
 	 * Get the result, and check for success.
@@ -3757,9 +4172,9 @@ prepare_foreign_modify(PgFdwModifyState *fmstate)
 	 * We don't use a PG_TRY block here, so be careful not to throw error
 	 * without releasing the PGresult.
 	 */
-	res = pgfdw_get_result(fmstate->conn, fmstate->query);
+	res = pgfdw_get_result(fmstate->s.conn, fmstate->query);
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-		pgfdw_report_error(ERROR, res, fmstate->conn, true, fmstate->query);
+		pgfdw_report_error(ERROR, res, fmstate->s.conn, true, fmstate->query);
 	PQclear(res);
 
 	/* This action shows that the prepare has been done. */
@@ -3888,16 +4303,16 @@ finish_foreign_modify(PgFdwModifyState *fmstate)
 		 * We don't use a PG_TRY block here, so be careful not to throw error
 		 * without releasing the PGresult.
 		 */
-		res = pgfdw_exec_query(fmstate->conn, sql);
+		res = pgfdw_exec_query(fmstate->s.conn, sql);
 		if (PQresultStatus(res) != PGRES_COMMAND_OK)
-			pgfdw_report_error(ERROR, res, fmstate->conn, true, sql);
+			pgfdw_report_error(ERROR, res, fmstate->s.conn, true, sql);
 		PQclear(res);
 		fmstate->p_name = NULL;
 	}
 
 	/* Release remote connection */
-	ReleaseConnection(fmstate->conn);
-	fmstate->conn = NULL;
+	ReleaseConnection(fmstate->s.conn);
+	fmstate->s.conn = NULL;
 }
 
 /*
@@ -4056,9 +4471,9 @@ execute_dml_stmt(ForeignScanState *node)
 	 * the desired result.  This allows us to avoid assuming that the remote
 	 * server has the same OIDs we do for the parameters' types.
 	 */
-	if (!PQsendQueryParams(dmstate->conn, dmstate->query, numParams,
+	if (!PQsendQueryParams(dmstate->s.conn, dmstate->query, numParams,
 						   NULL, values, NULL, NULL, 0))
-		pgfdw_report_error(ERROR, NULL, dmstate->conn, false, dmstate->query);
+		pgfdw_report_error(ERROR, NULL, dmstate->s.conn, false, dmstate->query);
 
 	/*
 	 * Get the result, and check for success.
@@ -4066,10 +4481,10 @@ execute_dml_stmt(ForeignScanState *node)
 	 * We don't use a PG_TRY block here, so be careful not to throw error
 	 * without releasing the PGresult.
 	 */
-	dmstate->result = pgfdw_get_result(dmstate->conn, dmstate->query);
+	dmstate->result = pgfdw_get_result(dmstate->s.conn, dmstate->query);
 	if (PQresultStatus(dmstate->result) !=
 		(dmstate->has_returning ? PGRES_TUPLES_OK : PGRES_COMMAND_OK))
-		pgfdw_report_error(ERROR, dmstate->result, dmstate->conn, true,
+		pgfdw_report_error(ERROR, dmstate->result, dmstate->s.conn, true,
 						   dmstate->query);
 
 	/* Get the number of rows affected. */
@@ -5559,6 +5974,40 @@ postgresGetForeignJoinPaths(PlannerInfo *root,
 
 	/* XXX Consider parameterized paths for the join relation */
 }
+
+static bool
+postgresIsForeignPathAsyncCapable(ForeignPath *path)
+{
+	return true;
+}
+
+
+/*
+ * Configure waiting event.
+ *
+ * Add wait event so that the ForeignScan node is going to wait for.
+ */
+static bool
+postgresForeignAsyncConfigureWait(ForeignScanState *node, WaitEventSet *wes,
+								  void *caller_data, bool reinit)
+{
+	PgFdwScanState *fsstate = GetPgFdwScanState(node);
+
+
+	/* Reinit is not supported for now. */
+	Assert(reinit);
+
+	if (fsstate->s.commonstate->leader == node)
+	{
+		AddWaitEventToSet(wes,
+						  WL_SOCKET_READABLE, PQsocket(fsstate->s.conn),
+						  NULL, caller_data);
+		return true;
+	}
+
+	return false;
+}
+
 
 /*
  * Assess whether the aggregation, grouping and having operations can be pushed

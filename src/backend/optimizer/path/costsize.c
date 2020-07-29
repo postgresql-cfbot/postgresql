@@ -2048,22 +2048,59 @@ cost_append(AppendPath *apath)
 
 		if (pathkeys == NIL)
 		{
-			Path	   *subpath = (Path *) linitial(apath->subpaths);
-
-			/*
-			 * For an unordered, non-parallel-aware Append we take the startup
-			 * cost as the startup cost of the first subpath.
-			 */
-			apath->path.startup_cost = subpath->startup_cost;
+			Cost		first_nonasync_startup_cost = -1.0;
+			Cost		async_min_startup_cost = -1;
+			Cost		async_max_cost = 0.0;
 
 			/* Compute rows and costs as sums of subplan rows and costs. */
 			foreach(l, apath->subpaths)
 			{
 				Path	   *subpath = (Path *) lfirst(l);
 
+				/*
+				 * For an unordered, non-parallel-aware Append we take the
+				 * startup cost as the startup cost of the first
+				 * nonasync-capable subpath or the minimum startup cost of
+				 * async-capable subpaths.
+				 */
+				if (!is_async_capable_path(subpath))
+				{
+					if (first_nonasync_startup_cost < 0.0)
+						first_nonasync_startup_cost = subpath->startup_cost;
+
+					apath->path.total_cost += subpath->total_cost;
+				}
+				else
+				{
+					if (async_min_startup_cost < 0.0 ||
+						async_min_startup_cost > subpath->startup_cost)
+						async_min_startup_cost = subpath->startup_cost;
+
+					/*
+					 * It's not obvious how to determine the total cost of
+					 * async subnodes. Although it is not always true, we
+					 * assume it is the maximum cost among all async subnodes.
+					 */
+					if (async_max_cost < subpath->total_cost)
+						async_max_cost = subpath->total_cost;
+				}
+
 				apath->path.rows += subpath->rows;
-				apath->path.total_cost += subpath->total_cost;
 			}
+
+			/*
+			 * If there's an sync subnodes, the startup cost is the startup
+			 * cost of the first sync subnode. Otherwise it's the minimal
+			 * startup cost of async subnodes.
+			 */
+			if (first_nonasync_startup_cost >= 0.0)
+				apath->path.startup_cost = first_nonasync_startup_cost;
+			else
+				apath->path.startup_cost = async_min_startup_cost;
+
+			/* Use async maximum cost if it exceeds the sync total cost */
+			if (async_max_cost > apath->path.total_cost)
+				apath->path.total_cost = async_max_cost;
 		}
 		else
 		{
@@ -2084,6 +2121,8 @@ cost_append(AppendPath *apath)
 			 * This case is also different from the above in that we have to
 			 * account for possibly injecting sorts into subpaths that aren't
 			 * natively ordered.
+			 *
+			 * Note: An ordered append won't be run asynchronously.
 			 */
 			foreach(l, apath->subpaths)
 			{

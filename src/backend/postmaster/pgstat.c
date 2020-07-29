@@ -3878,6 +3878,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_XACT_GROUP_UPDATE:
 			event_name = "XactGroupUpdate";
 			break;
+		case WAIT_EVENT_ASYNC_WAIT:
+			event_name = "AsyncExecWait";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 

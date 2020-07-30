@@ -544,6 +544,24 @@ select string_to_array('1,2,3,4,,6', ',');
 select string_to_array('1,2,3,4,,6', ',', '');
 select string_to_array('1,2,3,4,*,6', ',', '*');
 
+select string_to_table('1|2|3', '|');
+select string_to_table('1|2|3|', '|');
+select string_to_table('1||2|3||', '||');
+select string_to_table('1|2|3', '');
+select string_to_table('', '|');
+select string_to_table('1|2|3', NULL);
+select string_to_table(NULL, '|') IS NULL;
+select string_to_table('abc', '');
+select string_to_table('abc', '', 'abc');
+select string_to_table('abc', ',');
+select string_to_table('abc', ',', 'abc');
+select string_to_table('1,2,3,4,,6', ',');
+select coalesce(v, 'NULL') FROM string_to_table('1,2,3,4,,6', ',') g(v);
+select string_to_table('1,2,3,4,,6', ',', '');
+select coalesce(v, '***') FROM string_to_table('1,2,3,4,,6', ',', '') g(v);
+select string_to_table('1,2,3,4,*,6', ',', '*');
+select coalesce(v, '***') FROM string_to_table('1,2,3,4,*,6', ',', '*') g(v);
+
 select array_to_string(NULL::int4[], ',') IS NULL;
 select array_to_string('{}'::int4[], ',');
 select array_to_string(array[1,2,3,4,NULL,6], ',');

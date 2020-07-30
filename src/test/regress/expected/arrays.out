@@ -1755,6 +1755,147 @@ select string_to_array('1,2,3,4,*,6', ',', '*');
  {1,2,3,4,NULL,6}
 (1 row)
 
+select string_to_table('1|2|3', '|');
+ string_to_table 
+-----------------
+ 1
+ 2
+ 3
+(3 rows)
+
+select string_to_table('1|2|3|', '|');
+ string_to_table 
+-----------------
+ 1
+ 2
+ 3
+ 
+(4 rows)
+
+select string_to_table('1||2|3||', '||');
+ string_to_table 
+-----------------
+ 1
+ 2|3
+ 
+(3 rows)
+
+select string_to_table('1|2|3', '');
+ string_to_table 
+-----------------
+ 1|2|3
+(1 row)
+
+select string_to_table('', '|');
+ string_to_table 
+-----------------
+(0 rows)
+
+select string_to_table('1|2|3', NULL);
+ string_to_table 
+-----------------
+ 1
+ |
+ 2
+ |
+ 3
+(5 rows)
+
+select string_to_table(NULL, '|') IS NULL;
+ ?column? 
+----------
+(0 rows)
+
+select string_to_table('abc', '');
+ string_to_table 
+-----------------
+ abc
+(1 row)
+
+select string_to_table('abc', '', 'abc');
+ string_to_table 
+-----------------
+ 
+(1 row)
+
+select string_to_table('abc', ',');
+ string_to_table 
+-----------------
+ abc
+(1 row)
+
+select string_to_table('abc', ',', 'abc');
+ string_to_table 
+-----------------
+ 
+(1 row)
+
+select string_to_table('1,2,3,4,,6', ',');
+ string_to_table 
+-----------------
+ 1
+ 2
+ 3
+ 4
+ 
+ 6
+(6 rows)
+
+select coalesce(v, 'NULL') FROM string_to_table('1,2,3,4,,6', ',') g(v);
+ coalesce 
+----------
+ 1
+ 2
+ 3
+ 4
+ 
+ 6
+(6 rows)
+
+select string_to_table('1,2,3,4,,6', ',', '');
+ string_to_table 
+-----------------
+ 1
+ 2
+ 3
+ 4
+ 
+ 6
+(6 rows)
+
+select coalesce(v, '***') FROM string_to_table('1,2,3,4,,6', ',', '') g(v);
+ coalesce 
+----------
+ 1
+ 2
+ 3
+ 4
+ ***
+ 6
+(6 rows)
+
+select string_to_table('1,2,3,4,*,6', ',', '*');
+ string_to_table 
+-----------------
+ 1
+ 2
+ 3
+ 4
+ 
+ 6
+(6 rows)
+
+select coalesce(v, '***') FROM string_to_table('1,2,3,4,*,6', ',', '*') g(v);
+ coalesce 
+----------
+ 1
+ 2
+ 3
+ 4
+ ***
+ 6
+(6 rows)
+
 select array_to_string(NULL::int4[], ',') IS NULL;
  ?column? 
 ----------

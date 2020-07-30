@@ -1405,13 +1405,6 @@ for_control		: for_variable K_IN
 										 errmsg("cursor FOR loop must have only one target variable"),
 										 parser_errposition(@1)));
 
-							/* can't use an unbound cursor this way */
-							if (cursor->cursor_explicit_expr == NULL)
-								ereport(ERROR,
-										(errcode(ERRCODE_SYNTAX_ERROR),
-										 errmsg("cursor FOR loop must use a bound cursor variable"),
-										 parser_errposition(tokloc)));
-
 							/* collect cursor's parameters if any */
 							new->argquery = read_cursor_args(cursor,
 															 K_LOOP,
@@ -3785,7 +3778,7 @@ read_cursor_args(PLpgSQL_var *cursor, int until, const char *expected)
 	bool		any_named = false;
 
 	tok = yylex();
-	if (cursor->cursor_explicit_argrow < 0)
+	if (cursor->cursor_explicit_argrow <= 0)
 	{
 		/* No arguments expected */
 		if (tok == '(')

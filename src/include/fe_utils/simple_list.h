@@ -21,6 +21,7 @@ typedef struct SimpleOidListCell
 {
 	struct SimpleOidListCell *next;
 	Oid			val;
+	void		*extra_data;
 } SimpleOidListCell;
 
 typedef struct SimpleOidList
@@ -58,6 +59,9 @@ typedef struct SimplePtrList
 extern void simple_oid_list_append(SimpleOidList *list, Oid val);
 extern bool simple_oid_list_member(SimpleOidList *list, Oid val);
 extern void simple_oid_list_destroy(SimpleOidList *list);
+
+extern void simple_oid_list_append_data(SimpleOidList *list, Oid val, void *extra_data);
+extern bool simple_oid_list_find_data(SimpleOidList *list, Oid val, void **extra_data);
 
 extern void simple_string_list_append(SimpleStringList *list, const char *val);
 extern bool simple_string_list_member(SimpleStringList *list, const char *val);

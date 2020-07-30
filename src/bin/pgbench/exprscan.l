@@ -204,6 +204,13 @@ notnull			[Nn][Oo][Tt][Nn][Uu][Ll][Ll]
 					 */
 					return MAXINT_PLUS_ONE_CONST;
 				}
+:\{\?{alnum}+\}	{
+					/* no pg_strndup? */
+					yylval->str = pg_strdup(yytext + 3);
+					/* scratch final '}' */
+					yylval->str[strlen(yylval->str)-1] = '\0';
+					return VAREXISTS;
+				}
 {digit}+		{
 					if (!strtoint64(yytext, true, &yylval->ival))
 						expr_yyerror_more(yyscanner, "bigint constant overflow",

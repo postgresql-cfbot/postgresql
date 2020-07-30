@@ -2451,6 +2451,10 @@ evaluateExpr(CState *st, PgBenchExpr *expr, PgBenchValue *retval)
 				return true;
 			}
 
+		case ENODE_VAREXISTS:
+				setBoolValue(retval, lookupVariable(st, expr->u.variable.varname) != NULL);
+				return true;
+
 		case ENODE_FUNCTION:
 			return evalFunc(st,
 							expr->u.function.function,

@@ -573,8 +573,11 @@ static const SchemaQuery Query_for_list_of_indexables = {
 	.result = "pg_catalog.quote_ident(c.relname)",
 };
 
-/* Relations supporting VACUUM */
-static const SchemaQuery Query_for_list_of_vacuumables = {
+/* Relations supporting VACUUM are currently same as those supporting indexing */
+#define Query_for_list_of_vacuumables Query_for_list_of_indexables
+
+/* Relations supporting CLUSTER */
+static const SchemaQuery Query_for_list_of_clusterables = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
 	"c.relkind IN (" CppAsString2(RELKIND_RELATION) ", "
@@ -583,9 +586,6 @@ static const SchemaQuery Query_for_list_of_vacuumables = {
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
 };
-
-/* Relations supporting CLUSTER are currently same as those supporting VACUUM */
-#define Query_for_list_of_clusterables Query_for_list_of_vacuumables
 
 static const SchemaQuery Query_for_list_of_constraints_with_schema = {
 	.catname = "pg_catalog.pg_constraint c",

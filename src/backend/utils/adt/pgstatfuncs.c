@@ -1565,7 +1565,7 @@ pg_stat_get_db_checksum_failures(PG_FUNCTION_ARGS)
 	int64		result;
 	PgStat_StatDBEntry *dbentry;
 
-	if (!DataChecksumsEnabled())
+	if (!DataChecksumsNeedWrite())
 		PG_RETURN_NULL();
 
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
@@ -1583,7 +1583,7 @@ pg_stat_get_db_checksum_last_failure(PG_FUNCTION_ARGS)
 	TimestampTz result;
 	PgStat_StatDBEntry *dbentry;
 
-	if (!DataChecksumsEnabled())
+	if (!DataChecksumsNeedWrite())
 		PG_RETURN_NULL();
 
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)

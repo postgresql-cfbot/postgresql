@@ -1595,7 +1595,7 @@ sendFile(const char *readfilename, const char *tarfilename,
 
 	_tarWriteHeader(tarfilename, NULL, statbuf, false);
 
-	if (!noverify_checksums && DataChecksumsEnabled())
+	if (!noverify_checksums && DataChecksumsNeedVerify())
 	{
 		char	   *filename;
 

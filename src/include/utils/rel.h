@@ -612,6 +612,13 @@ typedef struct ViewOptions
 #define RelationIsPopulated(relation) ((relation)->rd_rel->relispopulated)
 
 /*
+ * RelationHasDataChecksums
+ *		True if all data pages of the relation have data checksums.
+ */
+#define RelationHasDataChecksums(relation) \
+	((relation->rd_rel->relhasdatachecksums)
+
+/*
  * RelationIsAccessibleInLogicalDecoding
  *		True if we need to log enough information to have access via
  *		decoding snapshot.

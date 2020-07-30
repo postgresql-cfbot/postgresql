@@ -25,6 +25,7 @@
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "postmaster/datachecksumsworker.h"
 #include "pgstat.h"
 #include "replication/walreceiver.h"
 #include "storage/fd.h"
@@ -783,4 +784,102 @@ pg_promote(PG_FUNCTION_ARGS)
 	ereport(WARNING,
 			(errmsg("server did not promote within %d seconds", wait_seconds)));
 	PG_RETURN_BOOL(false);
+}
+
+/*
+ * Disables checksums for the cluster, unless already disabled.
+ *
+ * Has immediate effect - the checksums are set to off right away.
+ */
+Datum
+disable_data_checksums(PG_FUNCTION_ARGS)
+{
+	/*
+	 * If we don't need to write new checksums, then clearly they are already
+	 * disabled. TODO: it could be argued that this should be a NOTICE, LOG
+	 * or perhaps even an error; or maybe nothing at all with a silent return.
+	 * For now we LOG and return, but this needs to be revisited.
+	 */
+	if (!DataChecksumsNeedWrite())
+	{
+		ereport(LOG,
+				(errmsg("data checksums already disabled")));
+		PG_RETURN_VOID();
+	}
+
+	/*
+	 * Shutting down a concurrently running datachecksumworker will not block
+	 * awaiting shutdown, but we can continue turning off checksums anyway
+	 * since it will at most finish the block it had already started and then
+	 * abort.
+	 */
+	ShutdownDatachecksumsWorkerIfRunning();
+
+	SetDataChecksumsOff();
+
+	PG_RETURN_VOID();
+}
+
+/*
+ * Enables checksums for the cluster, unless already enabled.
+ *
+ * Supports vacuum-like cost-based throttling, to limit system load.
+ * Starts a background worker that updates checksums on existing data.
+ */
+Datum
+enable_data_checksums(PG_FUNCTION_ARGS)
+{
+	int			cost_delay = PG_GETARG_INT32(0);
+	int			cost_limit = PG_GETARG_INT32(1);
+
+	if (cost_delay < 0)
+		ereport(ERROR, (errmsg("cost delay cannot be less than zero")));
+	if (cost_limit <= 0)
+		ereport(ERROR, (errmsg("cost limit must be a positive value")));
+
+	if (DataChecksumWorkerStarted())
+	{
+		ereport(NOTICE,
+				(errmsg("data checksum worker already running"),
+				 errhint("Retry the operation later to allow time for the worker to finish.")));
+		PG_RETURN_VOID();
+	}
+
+	/*
+	 * data checksums on -> on is not a valid state transition as there is
+	 * nothing to do, but it's debatable whether it should be an ERROR, a
+	 * LOG/NOTICE or just returning VOID silently. Figuring this out is a TODO
+	 * much like for the inverse case of disabling disabled checksums.
+	 */
+	if (DataChecksumsNeedVerify())
+	{
+		ereport(NOTICE,
+				(errmsg("data checksums already enabled")));
+	}
+	/*
+	 * If the state is set to inprogress but the worker isn't running, then
+	 * the data checksumming was prematurely terminated. Attempt to continue
+	 * processing data pages where we left off based on state stored in the
+	 * catalog.
+	 */
+	else if (DataChecksumsOnInProgress())
+	{
+		ereport(LOG,
+				(errmsg("data checksums partly enabled, continuing processing")));
+
+		StartDatachecksumsWorkerLauncher(ENABLE_CHECKSUMS, cost_delay, cost_limit);
+	}
+	/*
+	 * We are starting a checksumming process scratch, and need to start by
+	 * clearing the state in pg_class in case checksums have ever been enabled
+	 * before (either fully or partly). As soon as we set the checksum state
+	 * to inprogress new relations will set relhaschecksums in pg_class so it
+	 * must be done first.
+	 */
+	else
+	{
+		StartDatachecksumsWorkerLauncher(RESET_STATE, cost_delay, cost_limit);
+	}
+
+	PG_RETURN_VOID();
 }

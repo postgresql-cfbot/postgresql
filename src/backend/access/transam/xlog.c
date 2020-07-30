@@ -38,6 +38,7 @@
 #include "access/xlogreader.h"
 #include "access/xlogutils.h"
 #include "catalog/catversion.h"
+#include "catalog/pg_class.h"
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
 #include "commands/progress.h"
@@ -250,6 +251,11 @@ static bool LocalPromoteIsTriggered = false;
  * being numerically the same as bool true and false.
  */
 static int	LocalXLogInsertAllowed = -1;
+
+/*
+ * Local state for Controlfile data_checksum_version
+ */
+static uint32 LocalDataChecksumVersion = 0;
 
 /*
  * When ArchiveRecoveryRequested is set, archive recovery was requested,
@@ -892,6 +898,7 @@ static void SetLatestXTime(TimestampTz xtime);
 static void SetCurrentChunkStartTime(TimestampTz xtime);
 static void CheckRequiredParameterValues(void);
 static void XLogReportParameters(void);
+static void XlogChecksums(ChecksumType new_type);
 static void checkTimeLineSwitch(XLogRecPtr lsn, TimeLineID newTLI,
 								TimeLineID prevTLI);
 static void LocalSetXLogInsertAllowed(void);
@@ -1077,7 +1084,7 @@ XLogInsertRecord(XLogRecData *rdata,
 		Assert(RedoRecPtr < Insert->RedoRecPtr);
 		RedoRecPtr = Insert->RedoRecPtr;
 	}
-	doPageWrites = (Insert->fullPageWrites || Insert->forcePageWrites);
+	doPageWrites = (Insert->fullPageWrites || Insert->forcePageWrites || DataChecksumsOnInProgress());
 
 	if (doPageWrites &&
 		(!prevDoPageWrites ||
@@ -4888,9 +4895,7 @@ ReadControlFile(void)
 
 	CalculateCheckpointSegments();
 
-	/* Make the initdb settings visible as GUC variables, too */
-	SetConfigOption("data_checksums", DataChecksumsEnabled() ? "yes" : "no",
-					PGC_INTERNAL, PGC_S_OVERRIDE);
+	LocalDataChecksumVersion = ControlFile->data_checksum_version;
 }
 
 /*
@@ -4927,10 +4932,116 @@ GetMockAuthenticationNonce(void)
  * Are checksums enabled for data pages?
  */
 bool
-DataChecksumsEnabled(void)
+DataChecksumsNeedWrite(void)
+{
+	return (LocalDataChecksumVersion == PG_DATA_CHECKSUM_VERSION ||
+			LocalDataChecksumVersion == PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION);
+}
+
+bool
+DataChecksumsNeedVerify(void)
+{
+	/*
+	 * Only verify checksums if they are fully enabled in the cluster. In
+	 * inprogress state they are only updated, not verified.
+	 */
+	return (LocalDataChecksumVersion == PG_DATA_CHECKSUM_VERSION);
+}
+
+bool
+DataChecksumsOnInProgress(void)
+{
+	return (LocalDataChecksumVersion == PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION);
+}
+
+void
+SetDataChecksumsOnInProgress(void)
 {
 	Assert(ControlFile != NULL);
-	return (ControlFile->data_checksum_version > 0);
+
+	if (LocalDataChecksumVersion > 0)
+		return;
+
+	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+	ControlFile->data_checksum_version = PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION;
+	UpdateControlFile();
+	LWLockRelease(ControlFileLock);
+	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_CHECKSUM_INPROGRESS_ON));
+
+	XlogChecksums(PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION);
+}
+
+void
+AbsorbChecksumsOnInProgressBarrier(void)
+{
+	Assert(LocalDataChecksumVersion == 0 || LocalDataChecksumVersion == PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION);
+	LocalDataChecksumVersion = PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION;
+}
+
+void
+SetDataChecksumsOn(void)
+{
+	Assert(ControlFile != NULL);
+
+	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+
+	if (ControlFile->data_checksum_version != PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION)
+	{
+		LWLockRelease(ControlFileLock);
+		elog(ERROR, "checksums not in inprogress mode");
+	}
+
+	ControlFile->data_checksum_version = PG_DATA_CHECKSUM_VERSION;
+	UpdateControlFile();
+	LWLockRelease(ControlFileLock);
+	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_CHECKSUM_ON));
+
+	XlogChecksums(PG_DATA_CHECKSUM_VERSION);
+}
+
+void
+AbsorbChecksumsOnBarrier(void)
+{
+	Assert(LocalDataChecksumVersion == PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION);
+	LocalDataChecksumVersion = PG_DATA_CHECKSUM_VERSION;
+}
+
+void
+SetDataChecksumsOff(void)
+{
+	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+
+	ControlFile->data_checksum_version = 0;
+	XlogChecksums(0);
+	UpdateControlFile();
+	LWLockRelease(ControlFileLock);
+	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_CHECKSUM_OFF));
+}
+
+void
+AbsorbChecksumsOffBarrier(void)
+{
+	LocalDataChecksumVersion = 0;
+}
+
+void
+InitLocalControldata(void)
+{
+	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+	LocalDataChecksumVersion = ControlFile->data_checksum_version;
+	LWLockRelease(ControlFileLock);
+}
+
+/* guc hook */
+const char *
+show_data_checksums(void)
+{
+	if (LocalDataChecksumVersion == PG_DATA_CHECKSUM_VERSION)
+		return "on";
+	else if (LocalDataChecksumVersion == PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION)
+		return "inprogress";
+	else
+		return "off";
 }
 
 /*
@@ -7917,6 +8028,18 @@ StartupXLOG(void)
 	CompleteCommitTsInitialization();
 
 	/*
+	 * If we reach this point with checksums in an inprogress state (either
+	 * being enabled or being disabled), we notify the user that they need to
+	 * manually restart the process to enable checksums. This is because we
+	 * cannot launch a dynamic background worker directly from here, it has to
+	 * be launched from a regular backend.
+	 */
+	if (ControlFile->data_checksum_version == PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION)
+		ereport(WARNING,
+				(errmsg("data checksums are being enabled, but no worker is running"),
+				 errhint("Either disable or enable data checksums by calling the pg_disable_data_checksums() or pg_enable_data_checksums() functions.")));
+
+	/*
 	 * All done with end-of-recovery actions.
 	 *
 	 * Now allow backends to write WAL and update the control file status in
@@ -9774,6 +9897,24 @@ XLogReportParameters(void)
 }
 
 /*
+ * Log the new state of checksums
+ */
+static void
+XlogChecksums(ChecksumType new_type)
+{
+	xl_checksum_state xlrec;
+	XLogRecPtr	recptr;
+
+	xlrec.new_checksumtype = new_type;
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) &xlrec, sizeof(xl_checksum_state));
+
+	recptr = XLogInsert(RM_XLOG_ID, XLOG_CHECKSUMS);
+	XLogFlush(recptr);
+}
+
+/*
  * Update full_page_writes in shared memory, and write an
  * XLOG_FPW_CHANGE record if necessary.
  *
@@ -10227,6 +10368,26 @@ xlog_redo(XLogReaderState *record)
 
 		/* Keep track of full_page_writes */
 		lastFullPageWrites = fpw;
+	}
+	else if (info == XLOG_CHECKSUMS)
+	{
+		xl_checksum_state state;
+
+		memcpy(&state, XLogRecGetData(record), sizeof(xl_checksum_state));
+
+		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+		ControlFile->data_checksum_version = state.new_checksumtype;
+		UpdateControlFile();
+		LWLockRelease(ControlFileLock);
+		if (state.new_checksumtype == PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION)
+			WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_CHECKSUM_INPROGRESS_ON));
+		else if (state.new_checksumtype == PG_DATA_CHECKSUM_VERSION)
+			WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_CHECKSUM_ON));
+		else
+		{
+			Assert(state.new_checksumtype == 0);
+			WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_CHECKSUM_OFF));
+		}
 	}
 }
 

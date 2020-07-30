@@ -18721,6 +18721,10 @@ SELECT NULLIF(value, '(none)') ...
    substitute zero or an empty array for null when necessary.
   </para>
 
+   <indexterm>
+    <primary>pg_is_user_object</primary>
+   </indexterm>
+
   <para>
    The aggregate functions <function>array_agg</function>,
    <function>json_agg</function>, <function>jsonb_agg</function>,
@@ -19139,6 +19143,14 @@ SELECT count(*) FROM sometable;
         standard deviation).
        </para></entry>
        <entry>Yes</entry>
+      </row>
+      <row>
+       <entry><literal><function>pg_is_user_object(<parameter>oid</parameter>)</function></literal></entry>
+       <entry><type>bool</type></entry>
+       <entry>
+        true for OIDs assigned while database is operating in normal multi-user
+        mode, as opposed to single-user mode (see <xref linkend="app-postgres"/>).
+       </entry>
       </row>
      </tbody>
     </tgroup>

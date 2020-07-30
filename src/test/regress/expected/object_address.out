@@ -492,6 +492,19 @@ SELECT (pg_identify_object(addr1.classid, addr1.objid, addr1.objsubid)).*,
  publication relation      |            |                   | addr_nsp.gentable in publication addr_pub                            | t
 (49 rows)
 
+-- identity if the object is built-in or user-defined
+SELECT pg_is_user_object('pg_class'::regclass);
+ pg_is_user_object 
+-------------------
+ f
+(1 row)
+
+SELECT pg_is_user_object('trig'::regproc);
+ pg_is_user_object 
+-------------------
+ t
+(1 row)
+
 ---
 --- Cleanup resources
 ---

@@ -690,7 +690,7 @@ jsonb_categorize_type(Oid typoid,
 				 * but first let's look for a cast to json (note: not to
 				 * jsonb) if it's not built-in.
 				 */
-				if (typoid >= FirstNormalObjectId)
+				if (ObjectIsUserObject(typoid))
 				{
 					Oid			castfunc;
 					CoercionPathType ctype;

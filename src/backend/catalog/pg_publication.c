@@ -101,7 +101,7 @@ is_publishable_class(Oid relid, Form_pg_class reltuple)
 			reltuple->relkind == RELKIND_PARTITIONED_TABLE) &&
 		!IsCatalogRelationOid(relid) &&
 		reltuple->relpersistence == RELPERSISTENCE_PERMANENT &&
-		relid >= FirstNormalObjectId;
+		ObjectIsUserObject(relid);
 }
 
 /*

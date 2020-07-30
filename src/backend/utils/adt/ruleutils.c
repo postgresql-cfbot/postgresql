@@ -3213,6 +3213,16 @@ pg_get_function_arg_default(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(string_to_text(str));
 }
 
+/*
+ * Return true if the given oid is normal user object
+ */
+Datum
+pg_is_user_object(PG_FUNCTION_ARGS)
+{
+	Oid oid = PG_GETARG_OID(0);
+
+	PG_RETURN_BOOL(ObjectIsUserObject(oid));
+}
 
 /*
  * deparse_expression			- General utility for deparsing expressions

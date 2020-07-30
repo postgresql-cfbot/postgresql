@@ -483,6 +483,10 @@ typedef struct PartitionSchemeData *PartitionScheme;
  *			(no duplicates) output from relation; NULL if not yet requested
  *		cheapest_parameterized_paths - best paths for their parameterizations;
  *			always includes cheapest_total_path, even if that's unparameterized
+ *		preserved_pathlist - List of lesser Path nodes; they are not used in
+ *			the Path consideration in usual, but extension may want to pick up
+ *			in case when a special combination of Path nodes can provide more
+ *			efficient execution plan.
  *		direct_lateral_relids - rels this rel has direct LATERAL references to
  *		lateral_relids - required outer rels for LATERAL, as a Relids set
  *			(includes both direct and indirect lateral references)
@@ -679,6 +683,8 @@ typedef struct RelOptInfo
 	List	   *pathlist;		/* Path structures */
 	List	   *ppilist;		/* ParamPathInfos used in pathlist */
 	List	   *partial_pathlist;	/* partial Paths */
+	List	   *preserved_pathlist;	/* preserved 'lesser' Paths */
+	List	   *preserved_partial_pathlist; /* preserved partial Paths */
 	struct Path *cheapest_startup_path;
 	struct Path *cheapest_total_path;
 	struct Path *cheapest_unique_path;

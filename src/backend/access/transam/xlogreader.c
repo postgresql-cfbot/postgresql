@@ -689,6 +689,15 @@ ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 					  XLogRecPtr PrevRecPtr, XLogRecord *record,
 					  bool randAccess)
 {
+
+	if (record->xl_tot_len == 0)
+	{
+		/* This is strictly not an invalid state, so phrase it as so. */
+		report_invalid_record(state,
+							  "record length is 0 at %X/%X",
+							  (uint32) (RecPtr >> 32), (uint32) RecPtr);
+		return false;
+	}
 	if (record->xl_tot_len < SizeOfXLogRecord)
 	{
 		report_invalid_record(state,

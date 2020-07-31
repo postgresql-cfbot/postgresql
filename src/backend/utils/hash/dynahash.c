@@ -337,6 +337,10 @@ hash_create(const char *tabname, long nelem, HASHCTL *info, int flags)
 	}
 	else
 	{
+		/* test */
+		MemoryContext dyna_child;
+		/* test end*/
+
 		/* Create the hash table's private memory context */
 		if (flags & HASH_CONTEXT)
 			CurrentDynaHashCxt = info->hcxt;
@@ -345,6 +349,12 @@ hash_create(const char *tabname, long nelem, HASHCTL *info, int flags)
 		CurrentDynaHashCxt = AllocSetContextCreate(CurrentDynaHashCxt,
 												   "dynahash",
 												   ALLOCSET_DEFAULT_SIZES);
+		/* test */
+		dyna_child = AllocSetContextCreate(CurrentDynaHashCxt,
+												   "dyna_child",
+												   ALLOCSET_DEFAULT_SIZES);
+		dyna_child->ident = "dyna_child_ident";
+		/* test end */
 	}
 
 	/* Initialize the hash header, plus a copy of the table name */

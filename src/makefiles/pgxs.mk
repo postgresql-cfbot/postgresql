@@ -210,7 +210,6 @@ endef
 
 # end of HEADERS_* stuff
 
-
 all: $(PROGRAM) $(DATA_built) $(HEADER_allbuilt) $(SCRIPTS_built) $(addsuffix $(DLSUFFIX), $(MODULES)) $(addsuffix .control, $(EXTENSION))
 
 ifeq ($(with_llvm), yes)
@@ -226,11 +225,18 @@ include $(top_srcdir)/src/Makefile.shlib
 all: all-lib
 endif # MODULE_big
 
-
-install: all installdirs
+# Resolve the extension control file along the VPATH, so we can find both built
+# and static file control files.
+#
 ifneq (,$(EXTENSION))
-	$(INSTALL_DATA) $(addprefix $(srcdir)/, $(addsuffix .control, $(EXTENSION))) '$(DESTDIR)$(datadir)/extension/'
-endif # EXTENSION
+install_controlfile: $(addsuffix .control, $(EXTENSION)) | installdirs
+	$(INSTALL_DATA) $< '$(DESTDIR)$(datadir)/extension/'
+else
+install_controlfile: ;
+endif
+
+
+install: all installdirs install_controlfile
 ifneq (,$(DATA)$(DATA_built))
 	$(INSTALL_DATA) $(addprefix $(srcdir)/, $(DATA)) $(DATA_built) '$(DESTDIR)$(datadir)/$(datamoduledir)/'
 endif # DATA

@@ -749,6 +749,8 @@ LWLockInitialize(LWLock *lock, int tranche_id)
 	pg_atomic_init_u32(&lock->nwaiters, 0);
 #endif
 	lock->tranche = tranche_id;
+	lock->last_holding_pid = 0;
+	pg_atomic_init_u32(&lock->nholders, 0);
 	proclist_init(&lock->waiters);
 }
 
@@ -872,6 +874,11 @@ LWLockAttemptLock(LWLock *lock, LWLockMode mode)
 			if (lock_free)
 			{
 				/* Great! Got the lock. */
+				if (MyProc) {
+					lock->last_holding_pid = MyProc->pid;
+					lock->last_mode = mode;
+					pg_atomic_fetch_add_u32(&lock->nholders, 1);
+				}
 #ifdef LOCK_DEBUG
 				if (mode == LW_EXCLUSIVE)
 					lock->owner = MyProc;
@@ -1056,6 +1063,7 @@ LWLockWakeup(LWLock *lock)
 		 */
 		pg_write_barrier();
 		waiter->lwWaiting = false;
+		waiter->lwLastHoldingPid = 0;
 		PGSemaphoreUnlock(waiter->sem);
 	}
 }
@@ -1322,6 +1330,9 @@ LWLockAcquire(LWLock *lock, LWLockMode mode)
 		lwstats->block_count++;
 #endif
 
+		MyProc->lwLastHoldingPid = lock->last_holding_pid;
+		MyProc->lwHolderMode = lock->last_mode;
+		MyProc->lwNbHolders = pg_atomic_read_u32(&lock->nholders);
 		LWLockReportWaitStart(lock);
 		TRACE_POSTGRESQL_LWLOCK_WAIT_START(T_NAME(lock), mode);
 
@@ -1483,6 +1494,9 @@ LWLockAcquireOrWait(LWLock *lock, LWLockMode mode)
 			lwstats->block_count++;
 #endif
 
+			MyProc->lwLastHoldingPid = lock->last_holding_pid;
+			MyProc->lwHolderMode = lock->last_mode;
+			MyProc->lwNbHolders = pg_atomic_read_u32(&lock->nholders);
 			LWLockReportWaitStart(lock);
 			TRACE_POSTGRESQL_LWLOCK_WAIT_START(T_NAME(lock), mode);
 
@@ -1699,6 +1713,9 @@ LWLockWaitForVar(LWLock *lock, uint64 *valptr, uint64 oldval, uint64 *newval)
 		lwstats->block_count++;
 #endif
 
+		MyProc->lwLastHoldingPid = lock->last_holding_pid;
+		MyProc->lwHolderMode = lock->last_mode;
+		MyProc->lwNbHolders = pg_atomic_read_u32(&lock->nholders);
 		LWLockReportWaitStart(lock);
 		TRACE_POSTGRESQL_LWLOCK_WAIT_START(T_NAME(lock), LW_EXCLUSIVE);
 
@@ -1800,6 +1817,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 		/* check comment in LWLockWakeup() about this barrier */
 		pg_write_barrier();
 		waiter->lwWaiting = false;
+		waiter->lwLastHoldingPid = 0;
 		PGSemaphoreUnlock(waiter->sem);
 	}
 }
@@ -1844,6 +1862,7 @@ LWLockRelease(LWLock *lock)
 	else
 		oldstate = pg_atomic_sub_fetch_u32(&lock->state, LW_VAL_SHARED);
 
+	pg_atomic_fetch_sub_u32(&lock->nholders, 1);
 	/* nobody else can have that kind of lock */
 	Assert(!(oldstate & LW_VAL_EXCLUSIVE));
 

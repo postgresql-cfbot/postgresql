@@ -98,6 +98,16 @@ static dlist_head unowned_relns;
 /* local function prototypes */
 static void smgrshutdown(int code, Datum arg);
 
+/*
+ * Hook for plugins to extend smgr functions.
+ * for example, collect statistics from smgr functions
+ * via recording the active relfilenode information.
+ */
+smgrcreate_hook_type smgrcreate_hook = NULL;
+smgrextend_hook_type smgrextend_hook = NULL;
+smgrtruncate_hook_type smgrtruncate_hook = NULL;
+smgrdounlinkall_hook_type smgrdounlinkall_hook = NULL;
+
 
 /*
  *	smgrinit(), smgrshutdown() -- Initialize or shut down storage
@@ -333,6 +343,9 @@ smgrclosenode(RelFileNodeBackend rnode)
 void
 smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo)
 {
+	if (smgrcreate_hook)
+		(*smgrcreate_hook)(reln, forknum, isRedo);
+
 	smgrsw[reln->smgr_which].smgr_create(reln, forknum, isRedo);
 }
 
@@ -390,6 +403,9 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 
 	if (nrels == 0)
 		return;
+
+	if (smgrdounlinkall_hook)
+		(*smgrdounlinkall_hook)(rels, nrels, isRedo);
 
 	/*
 	 * create an array which contains all relations to be dropped, and close
@@ -463,6 +479,9 @@ void
 smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		   char *buffer, bool skipFsync)
 {
+	if (smgrextend_hook)
+		(*smgrextend_hook)(reln, forknum, blocknum, buffer, skipFsync);
+
 	smgrsw[reln->smgr_which].smgr_extend(reln, forknum, blocknum,
 										 buffer, skipFsync);
 
@@ -549,6 +568,9 @@ BlockNumber
 smgrnblocks(SMgrRelation reln, ForkNumber forknum)
 {
 	BlockNumber result;
+
+	if (smgrtruncate_hook)
+		(*smgrtruncate_hook)(reln, forknum, nforks, nblocks);
 
 	/*
 	 * For now, we only use cached values in recovery due to lack of a shared

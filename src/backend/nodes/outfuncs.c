@@ -1359,6 +1359,15 @@ _outAlternativeSubPlan(StringInfo str, const AlternativeSubPlan *node)
 }
 
 static void
+_outAlterSystemWALProhibitState(StringInfo str,
+								const AlterSystemWALProhibitState *node)
+{
+	WRITE_NODE_TYPE("ALTERSYSTEMWALPROHIBITSTATE");
+
+	WRITE_BOOL_FIELD(WALProhibited);
+}
+
+static void
 _outFieldSelect(StringInfo str, const FieldSelect *node)
 {
 	WRITE_NODE_TYPE("FIELDSELECT");
@@ -3913,6 +3922,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_AlternativeSubPlan:
 				_outAlternativeSubPlan(str, obj);
+				break;
+			case T_AlterSystemWALProhibitState:
+				_outAlterSystemWALProhibitState(str, obj);
 				break;
 			case T_FieldSelect:
 				_outFieldSelect(str, obj);

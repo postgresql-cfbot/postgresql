@@ -19,6 +19,7 @@
 #include "access/nbtxlog.h"
 #include "access/tableam.h"
 #include "access/transam.h"
+#include "access/walprohibit.h"
 #include "access/xloginsert.h"
 #include "miscadmin.h"
 #include "storage/lmgr.h"
@@ -1246,6 +1247,8 @@ _bt_insertonpg(Relation rel,
 			}
 		}
 
+		AssertWALPermittedHaveXID();
+
 		/* Do the update.  No ereport(ERROR) until changes are logged */
 		START_CRIT_SECTION();
 
@@ -1900,13 +1903,16 @@ _bt_split(Relation rel, BTScanInsert itup_key, Buffer buf, Buffer cbuf,
 			ropaque->btpo_flags |= BTP_SPLIT_END;
 	}
 
+	AssertWALPermittedHaveXID();
+
 	/*
 	 * Right sibling is locked, new siblings are prepared, but original page
 	 * is not updated yet.
 	 *
 	 * NO EREPORT(ERROR) till right sibling is updated.  We can get away with
 	 * not starting the critical section till here because we haven't been
-	 * scribbling on the original page yet; see comments above.
+	 * scribbling on the original page yet; see the comments above for grabbing
+	 * the right sibling.
 	 */
 	START_CRIT_SECTION();
 
@@ -2468,6 +2474,8 @@ _bt_newroot(Relation rel, Buffer lbuf, Buffer rbuf)
 	item = (IndexTuple) PageGetItem(lpage, itemid);
 	right_item = CopyIndexTuple(item);
 	BTreeTupleSetDownLink(right_item, rbkno);
+
+	AssertWALPermittedHaveXID();
 
 	/* NO EREPORT(ERROR) from here till newroot op is logged */
 	START_CRIT_SECTION();

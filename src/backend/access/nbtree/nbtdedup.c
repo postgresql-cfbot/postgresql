@@ -16,6 +16,7 @@
 
 #include "access/nbtree.h"
 #include "access/nbtxlog.h"
+#include "access/walprohibit.h"
 #include "miscadmin.h"
 #include "utils/rel.h"
 
@@ -270,6 +271,8 @@ _bt_dedup_one_page(Relation rel, Buffer buf, Relation heapRel,
 
 		nopaque->btpo_flags &= ~BTP_HAS_GARBAGE;
 	}
+
+	AssertWALPermittedHaveXID();
 
 	START_CRIT_SECTION();
 

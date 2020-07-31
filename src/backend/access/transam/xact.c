@@ -26,6 +26,7 @@
 #include "access/subtrans.h"
 #include "access/transam.h"
 #include "access/twophase.h"
+#include "access/walprohibit.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
@@ -1304,6 +1305,8 @@ RecordTransactionCommit(void)
 		/* Tell bufmgr and smgr to prepare for commit */
 		BufmgrCommit();
 
+		AssertWALPermittedHaveXID();
+
 		/*
 		 * Mark ourselves as within our "commit critical section".  This
 		 * forces any concurrent checkpoint to wait until we've updated
@@ -1664,6 +1667,9 @@ RecordTransactionAbort(bool isSubXact)
 		elog(PANIC, "cannot abort transaction %u, it was already committed",
 			 xid);
 
+	/* We'll be reaching here with valid XID only. */
+	AssertWALPermittedHaveXID();
+
 	/* Fetch the data we need for the abort record */
 	nrels = smgrGetPendingDeletes(false, &rels);
 	nchildren = xactGetCommittedChildren(&children);
@@ -1949,23 +1955,28 @@ StartTransaction(void)
 	Assert(s->prevSecContext == 0);
 
 	/*
-	 * Make sure we've reset xact state variables
+	 * Reset xact state variables.
 	 *
-	 * If recovery is still in progress, mark this transaction as read-only.
-	 * We have lower level defences in XLogInsert and elsewhere to stop us
-	 * from modifying data during recovery, but this gives the normal
-	 * indication to the user that the transaction is read-only.
+	 * If it is not currently possible to insert write-ahead log records,
+	 * either because we are still in recovery or because ALTER SYSTEM READ
+	 * ONLY has been executed, force this to be a read-only transaction.
+	 * We have lower level defences in XLogBeginInsert() and elsewhere to stop
+	 * us from modifying data during recovery when !XLogInsertAllowed(), but
+	 * this gives the normal indication to the user that the transaction is
+	 * read-only.
+	 *
+	 * On the other hand, we only need to set the startedInRecovery flag when
+	 * the transaction started during recovery, and not when WAL is otherwise
+	 * prohibited. This information is used by RelationGetIndexScan() to
+	 * decide whether to permit (1) relying on existing killed-tuple markings
+	 * and (2) further killing of index tuples. Even when WAL is prohibited
+	 * on the master, it's still the master, so the former is OK; and since
+	 * killing index tuples doesn't generate WAL, the latter is also OK.
+	 * See comments in RelationGetIndexScan() and MarkBufferDirtyHint().
 	 */
-	if (RecoveryInProgress())
-	{
-		s->startedInRecovery = true;
-		XactReadOnly = true;
-	}
-	else
-	{
-		s->startedInRecovery = false;
-		XactReadOnly = DefaultXactReadOnly;
-	}
+	XactReadOnly = DefaultXactReadOnly || !XLogInsertAllowed();
+	s->startedInRecovery = RecoveryInProgress();
+
 	XactDeferrable = DefaultXactDeferrable;
 	XactIsoLevel = DefaultXactIsoLevel;
 	forceSyncCommit = false;
@@ -4887,9 +4898,11 @@ CommitSubTransaction(void)
 	/*
 	 * We need to restore the upper transaction's read-only state, in case the
 	 * upper is read-write while the child is read-only; GUC will incorrectly
-	 * think it should leave the child state in place.
+	 * think it should leave the child state in place.  Note that the upper
+	 * transaction will be a force to ready-only irrespective of its previous
+	 * status if the server state is WAL prohibited.
 	 */
-	XactReadOnly = s->prevXactReadOnly;
+	XactReadOnly = s->prevXactReadOnly || !XLogInsertAllowed();
 
 	CurrentResourceOwner = s->parent->curTransactionOwner;
 	CurTransactionResourceOwner = s->parent->curTransactionOwner;
@@ -5045,9 +5058,11 @@ AbortSubTransaction(void)
 	/*
 	 * Restore the upper transaction's read-only state, too.  This should be
 	 * redundant with GUC's cleanup but we may as well do it for consistency
-	 * with the commit case.
+	 * with the commit case.  Note that the upper transaction will be a force
+	 * to ready-only irrespective of its previous status if the server state is
+	 * WAL prohibited.
 	 */
-	XactReadOnly = s->prevXactReadOnly;
+	XactReadOnly = s->prevXactReadOnly || !XLogInsertAllowed();
 
 	RESUME_INTERRUPTS();
 }

@@ -3195,6 +3195,16 @@ typedef struct AlterSystemStmt
 } AlterSystemStmt;
 
 /* ----------------------
+ *		Alter System Read Statement
+ * ----------------------
+ */
+typedef struct AlterSystemWALProhibitState
+{
+	NodeTag		type;
+	bool		WALProhibited;
+} AlterSystemWALProhibitState;
+
+/* ----------------------
  *		Cluster Statement (support pbrown's cluster index implementation)
  * ----------------------
  */

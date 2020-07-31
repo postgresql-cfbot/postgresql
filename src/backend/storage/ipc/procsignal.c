@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "access/parallel.h"
+#include "access/walprohibit.h"
 #include "commands/async.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -87,12 +88,15 @@ typedef struct
 #define BARRIER_SHOULD_CHECK(flags, type) \
 	(((flags) & (((uint32) 1) << (uint32) (type))) != 0)
 
+/* Clear the relevant type bit from the flags. */
+#define BARRIER_CLEAR_BIT(flags, type) \
+	((flags) &= ~(((uint32) 1) << (uint32) (type)))
+
 static ProcSignalHeader *ProcSignal = NULL;
 static volatile ProcSignalSlot *MyProcSignalSlot = NULL;
 
 static bool CheckProcSignal(ProcSignalReason reason);
 static void CleanupProcSignalState(int status, Datum arg);
-static void ProcessBarrierPlaceholder(void);
 
 /*
  * ProcSignalShmemSize
@@ -486,17 +490,59 @@ ProcessProcSignalBarrier(void)
 	flags = pg_atomic_exchange_u32(&MyProcSignalSlot->pss_barrierCheckMask, 0);
 
 	/*
-	 * Process each type of barrier. It's important that nothing we call from
-	 * here throws an error, because pss_barrierCheckMask has already been
-	 * cleared. If we jumped out of here before processing all barrier types,
-	 * then we'd forget about the need to do so later.
-	 *
-	 * NB: It ought to be OK to call the barrier-processing functions
-	 * unconditionally, but it's more efficient to call only the ones that
-	 * might need us to do something based on the flags.
+	 * If there are no flags set, then we can skip doing any real work.
+	 * Otherwise, establish a PG_TRY block, so that we don't lose track of
+	 * which types of barrier processing are needed if an ERROR occurs.
 	 */
-	if (BARRIER_SHOULD_CHECK(flags, PROCSIGNAL_BARRIER_PLACEHOLDER))
-		ProcessBarrierPlaceholder();
+	if (flags != 0)
+	{
+		PG_TRY();
+		{
+			/*
+			 * Process each type of barrier. The barrier-processing functions
+			 * should normally return true, but may return false if the barrier
+			 * can't be absorbed at the current time. This should be rare,
+			 * because it's pretty expensive.  Every single
+			 * CHECK_FOR_INTERRUPTS() will return here until we manage to
+			 * absorb the barrier, and that cost will add up in a hurry.
+			 *
+			 * NB: It ought to be OK to call the barrier-processing functions
+			 * unconditionally, but it's more efficient to call only the ones
+			 * that might need us to do something based on the flags.
+			 */
+			if (BARRIER_SHOULD_CHECK(flags, PROCSIGNAL_BARRIER_WALPROHIBIT)
+				&& ProcessBarrierWALProhibit())
+				BARRIER_CLEAR_BIT(flags, PROCSIGNAL_BARRIER_WALPROHIBIT);
+		}
+		PG_CATCH();
+		{
+			/*
+			 * If an ERROR occurred, add any flags that weren't yet handled
+			 * back into pss_barrierCheckMask, and reset the global variables
+			 * so that we try again the next time we check for interrupts.
+			 */
+			pg_atomic_fetch_or_u32(&MyProcSignalSlot->pss_barrierCheckMask,
+								   flags);
+			ProcSignalBarrierPending = true;
+			InterruptPending = true;
+
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
+
+		/*
+		 * If some barrier was not successfully absorbed, we will have to try
+		 * again later.
+		 */
+		if (flags != 0)
+		{
+			pg_atomic_fetch_or_u32(&MyProcSignalSlot->pss_barrierCheckMask,
+								   flags);
+			ProcSignalBarrierPending = true;
+			InterruptPending = true;
+			return;
+		}
+	}
 
 	/*
 	 * State changes related to all types of barriers that might have been
@@ -506,19 +552,6 @@ ProcessProcSignalBarrier(void)
 	 * next called.
 	 */
 	pg_atomic_write_u64(&MyProcSignalSlot->pss_barrierGeneration, shared_gen);
-}
-
-static void
-ProcessBarrierPlaceholder(void)
-{
-	/*
-	 * XXX. This is just a placeholder until the first real user of this
-	 * machinery gets committed. Rename PROCSIGNAL_BARRIER_PLACEHOLDER to
-	 * PROCSIGNAL_BARRIER_SOMETHING_ELSE where SOMETHING_ELSE is something
-	 * appropriately descriptive. Get rid of this function and instead have
-	 * ProcessBarrierSomethingElse. Most likely, that function should live in
-	 * the file pertaining to that subsystem, rather than here.
-	 */
 }
 
 /*

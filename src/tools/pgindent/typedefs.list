@@ -87,6 +87,7 @@ AlterStatsStmt
 AlterSubscriptionStmt
 AlterSubscriptionType
 AlterSystemStmt
+AlterSystemWALProhibitState
 AlterTSConfigType
 AlterTSConfigurationStmt
 AlterTSDictionaryStmt

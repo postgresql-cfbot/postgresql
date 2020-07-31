@@ -38,7 +38,8 @@ VariableCache ShmemVariableCache = NULL;
  * Allocate the next FullTransactionId for a new transaction or
  * subtransaction.
  *
- * The new XID is also stored into MyPgXact before returning.
+ * The new XID is also stored into MyProc->xid/ProcGlobal->xids[] before
+ * returning.
  *
  * Note: when this is called, we are actually already inside a valid
  * transaction, since XIDs are now not allocated until the transaction
@@ -65,7 +66,8 @@ GetNewTransactionId(bool isSubXact)
 	if (IsBootstrapProcessingMode())
 	{
 		Assert(!isSubXact);
-		MyPgXact->xid = BootstrapTransactionId;
+		MyProc->xid = BootstrapTransactionId;
+		ProcGlobal->xids[MyProc->pgxactoff] = BootstrapTransactionId;
 		return FullTransactionIdFromEpochAndXid(0, BootstrapTransactionId);
 	}
 
@@ -187,13 +189,13 @@ GetNewTransactionId(bool isSubXact)
 	/*
 	 * We must store the new XID into the shared ProcArray before releasing
 	 * XidGenLock.  This ensures that every active XID older than
-	 * latestCompletedXid is present in the ProcArray, which is essential for
-	 * correct OldestXmin tracking; see src/backend/access/transam/README.
+	 * latestCompletedFullXid is present in the ProcArray, which is essential
+	 * for correct OldestXmin tracking; see src/backend/access/transam/README.
 	 *
-	 * Note that readers of PGXACT xid fields should be careful to fetch the
-	 * value only once, rather than assume they can read a value multiple
-	 * times and get the same answer each time.  Note we are assuming that
-	 * TransactionId and int fetch/store are atomic.
+	 * Note that readers of ProcGlobal->xids/PGPROC->xid should be careful
+	 * to fetch the value for each proc only once, rather than assume they can
+	 * read a value multiple times and get the same answer each time.  Note we
+	 * are assuming that TransactionId and int fetch/store are atomic.
 	 *
 	 * The same comments apply to the subxact xid count and overflow fields.
 	 *
@@ -219,19 +221,32 @@ GetNewTransactionId(bool isSubXact)
 	 * answer later on when someone does have a reason to inquire.)
 	 */
 	if (!isSubXact)
-		MyPgXact->xid = xid;	/* LWLockRelease acts as barrier */
+	{
+		Assert(ProcGlobal->subxidStates[MyProc->pgxactoff].count == 0);
+		Assert(!ProcGlobal->subxidStates[MyProc->pgxactoff].overflowed);
+		Assert(MyProc->subxidStatus.count == 0);
+		Assert(!MyProc->subxidStatus.overflowed);
+
+		/* LWLockRelease acts as barrier */
+		MyProc->xid = xid;
+		ProcGlobal->xids[MyProc->pgxactoff] = xid;
+	}
 	else
 	{
-		int			nxids = MyPgXact->nxids;
+		XidCacheStatus *substat = &ProcGlobal->subxidStates[MyProc->pgxactoff];
+		int			nxids = MyProc->subxidStatus.count;
+
+		Assert(substat->count == MyProc->subxidStatus.count);
+		Assert(substat->overflowed == MyProc->subxidStatus.overflowed);
 
 		if (nxids < PGPROC_MAX_CACHED_SUBXIDS)
 		{
 			MyProc->subxids.xids[nxids] = xid;
 			pg_write_barrier();
-			MyPgXact->nxids = nxids + 1;
+			MyProc->subxidStatus.count = substat->count = nxids + 1;
 		}
 		else
-			MyPgXact->overflowed = true;
+			MyProc->subxidStatus.overflowed = substat->overflowed = true;
 	}
 
 	LWLockRelease(XidGenLock);
@@ -566,3 +581,53 @@ GetNewObjectId(void)
 
 	return result;
 }
+
+
+#ifdef USE_ASSERT_CHECKING
+
+/*
+ * Assert that xid is between [oldestXid, nextFullXid], which is the range we
+ * expect XIDs coming from tables etc to be in.
+ *
+ * As ShmemVariableCache->oldestXid could change just after this call without
+ * further precautions, and as a wrapped-around xid could again fall within
+ * the valid range, this assertion can only detect if something is definitely
+ * wrong, but not establish correctness.
+ *
+ * This intentionally does not expose a return value, to avoid code being
+ * introduced that depends on the return value.
+ */
+void
+AssertTransactionIdInAllowableRange(TransactionId xid)
+{
+	TransactionId oldest_xid;
+	TransactionId next_xid;
+
+	Assert(TransactionIdIsValid(xid));
+
+	/* we may see bootstrap / frozen */
+	if (!TransactionIdIsNormal(xid))
+		return;
+
+	/*
+	 * We can't acquire XidGenLock, as this may be called with XidGenLock
+	 * already held (or with other locks that don't allow XidGenLock to be
+	 * nested). That's ok for our purposes though, since we already rely on
+	 * 32bit reads to be atomic. While nextFullXid is 64 bit, we only look at
+	 * the lower 32bit, so a skewed read doesn't hurt.
+	 *
+	 * There's no increased danger of falling outside [oldest, next] by
+	 * accessing them without a lock. xid needs to have been created with
+	 * GetNewTransactionId() in the originating session, and the locks there
+	 * pair with the memory barrier below.  We do however accept xid to be <=
+	 * to next_xid, instead of just <, as xid could be from the procarray,
+	 * before we see the updated nextFullXid value.
+	 */
+	pg_memory_barrier();
+	oldest_xid = ShmemVariableCache->oldestXid;
+	next_xid = XidFromFullTransactionId(ShmemVariableCache->nextFullXid);
+
+	Assert(TransactionIdFollowsOrEquals(xid, oldest_xid) ||
+		   TransactionIdPrecedesOrEquals(xid, next_xid));
+}
+#endif

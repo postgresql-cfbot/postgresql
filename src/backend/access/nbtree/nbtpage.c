@@ -1097,7 +1097,7 @@ _bt_page_recyclable(Page page)
 	 */
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	if (P_ISDELETED(opaque) &&
-		TransactionIdPrecedes(opaque->btpo.xact, RecentGlobalXmin))
+		GlobalVisCheckRemovableXid(NULL, opaque->btpo.xact))
 		return true;
 	return false;
 }
@@ -2315,8 +2315,8 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, BlockNumber scanblkno,
 	 * we're in VACUUM and would not otherwise have an XID.  Having already
 	 * updated links to the target, ReadNewTransactionId() suffices as an
 	 * upper bound.  Any scan having retained a now-stale link is advertising
-	 * in its PGXACT an xmin less than or equal to the value we read here.  It
-	 * will continue to do so, holding back RecentGlobalXmin, for the duration
+	 * in its PGPROC an xmin less than or equal to the value we read here.  It
+	 * will continue to do so, holding back the xmin horizon, for the duration
 	 * of that scan.
 	 */
 	page = BufferGetPage(buf);

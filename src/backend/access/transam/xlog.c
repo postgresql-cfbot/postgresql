@@ -7863,10 +7863,11 @@ StartupXLOG(void)
 	XLogCtl->lastSegSwitchTime = (pg_time_t) time(NULL);
 	XLogCtl->lastSegSwitchLSN = EndOfLog;
 
-	/* also initialize latestCompletedXid, to nextXid - 1 */
+	/* also initialize latestCompletedFullXid, to nextFullXid - 1 */
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
-	ShmemVariableCache->latestCompletedXid = XidFromFullTransactionId(ShmemVariableCache->nextFullXid);
-	TransactionIdRetreat(ShmemVariableCache->latestCompletedXid);
+	ShmemVariableCache->latestCompletedFullXid =
+		ShmemVariableCache->nextFullXid;
+	FullTransactionIdRetreat(&ShmemVariableCache->latestCompletedFullXid);
 	LWLockRelease(ProcArrayLock);
 
 	/*
@@ -9096,7 +9097,7 @@ CreateCheckPoint(int flags)
 	 * StartupSUBTRANS hasn't been called yet.
 	 */
 	if (!RecoveryInProgress())
-		TruncateSUBTRANS(GetOldestXmin(NULL, PROCARRAY_FLAGS_DEFAULT));
+		TruncateSUBTRANS(GetOldestTransactionIdConsideredRunning());
 
 	/* Real work is done, but log and update stats before releasing lock. */
 	LogCheckpointEnd(false);
@@ -9456,7 +9457,7 @@ CreateRestartPoint(int flags)
 	 * this because StartupSUBTRANS hasn't been called yet.
 	 */
 	if (EnableHotStandby)
-		TruncateSUBTRANS(GetOldestXmin(NULL, PROCARRAY_FLAGS_DEFAULT));
+		TruncateSUBTRANS(GetOldestTransactionIdConsideredRunning());
 
 	/* Real work is done, but log and update before releasing lock. */
 	LogCheckpointEnd(true);

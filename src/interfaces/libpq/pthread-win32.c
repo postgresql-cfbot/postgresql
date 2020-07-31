@@ -10,9 +10,12 @@
 *-------------------------------------------------------------------------
 */
 
+#ifdef _MSC_VER
+
 #include "postgres_fe.h"
 
 #include "pthread-win32.h"
+
 
 DWORD
 pthread_self(void)
@@ -58,3 +61,5 @@ pthread_mutex_unlock(pthread_mutex_t *mp)
 	LeaveCriticalSection(*mp);
 	return 0;
 }
+
+#endif						/* _MSC_VER */

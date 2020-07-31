@@ -7,7 +7,7 @@
 
 #ifdef ENABLE_THREAD_SAFETY
 
-#ifndef WIN32
+#ifndef _MSC_VER
 
 #include <pthread.h>
 #else

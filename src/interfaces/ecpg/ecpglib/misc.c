@@ -451,7 +451,7 @@ ECPGis_noind_null(enum ECPGttype type, const void *ptr)
 	return false;
 }
 
-#ifdef WIN32
+#ifdef _MSC_VER
 #ifdef ENABLE_THREAD_SAFETY
 
 void

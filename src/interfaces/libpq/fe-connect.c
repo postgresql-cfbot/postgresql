@@ -56,7 +56,7 @@
 #endif
 
 #ifdef ENABLE_THREAD_SAFETY
-#ifdef WIN32
+#ifdef _MSC_VER
 #include "pthread-win32.h"
 #else
 #include <pthread.h>

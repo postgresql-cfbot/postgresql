@@ -318,7 +318,7 @@ pgbench(
 	],
 	'server parameter logging',
 	{
-		'001_param_2' => q{select '1' as one \gset
+		'001_param_2' => q{select '1' as one, null as two \gset
 SELECT 1 / (random() / 2)::int, :one::int, :two::int;
 }
 	});
@@ -360,7 +360,7 @@ pgbench(
 	],
 	'server parameter logging',
 	{
-		'001_param_4' => q{select '1' as one \gset
+		'001_param_4' => q{select '1' as one, null as two \gset
 SELECT 1 / (random() / 2)::int, :one::int, :two::int;
 }
 	});
@@ -467,6 +467,8 @@ pgbench(
 		qr{command=98.: int 5432\b},                    # :random_seed
 		qr{command=99.: int -9223372036854775808\b},    # min int
 		qr{command=100.: int 9223372036854775807\b},    # max int
+		qr{command=103.: boolean true\b},
+		qr{command=105.: boolean true\b},
 	],
 	'pgbench expressions',
 	{
@@ -594,6 +596,13 @@ SELECT :v0, :v1, :v2, :v3;
 -- minint constant parsing
 \set min debug(-9223372036854775808)
 \set max debug(-(:min + 1))
+-- null handling
+\set n0 null
+SELECT NULL AS n1, 1 AS one \gset
+\set n2 debug(:n0 is null and :n1 is null and :one is not null)
+-- undefined variables are not substituted
+SELECT ':no_such_variable' = ':' || 'no_such_variable' AS eq \gset
+\set ok debug(:eq)
 }
 	});
 

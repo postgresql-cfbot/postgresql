@@ -159,7 +159,12 @@ add_other_rels_to_query(PlannerInfo *root)
 
 		/* If it's marked as inheritable, look for children. */
 		if (rte->inh)
-			expand_inherited_rtentry(root, rel, rte, rti);
+		{
+			if (expand_inherited_rtentry_hook)
+				(*expand_inherited_rtentry_hook) (root, rel, rte, rti);
+			else
+				expand_inherited_rtentry(root, rel, rte, rti);
+		}
 	}
 }
 

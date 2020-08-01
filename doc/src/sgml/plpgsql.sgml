@@ -5810,6 +5810,19 @@ $$ LANGUAGE plpgsql STRICT IMMUTABLE;
 </programlisting>
     </para>
    </sect3>
+
+   <sect3>
+    <title><command>Global variables and constants</command></title>
+
+    <para>
+     The <application>PL/pgSQL</application> language has not packages
+     and then it has not package variables and package constants. The
+     <productname>PostgreSQL</productname> has schema variables and
+     immutable schema variables. The schema variables can be created
+     by <command>CREATE VARIABLE</command> described in <xref
+     linkend="sql-createvariable"/>.
+    </para>
+   </sect3>
   </sect2>
 
   <sect2 id="plpgsql-porting-appendix">

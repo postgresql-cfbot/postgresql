@@ -39,6 +39,9 @@
 int			vacuum_defer_cleanup_age;
 int			max_standby_archive_delay = 30 * 1000;
 int			max_standby_streaming_delay = 30 * 1000;
+bool			log_recovery_conflicts = false;
+
+static TimestampTz 	recovery_conflicts_log_time;
 
 static HTAB *RecoveryLockLists;
 
@@ -216,6 +219,27 @@ WaitExceedsMaxStandbyDelay(uint32 wait_event_info)
 }
 
 /*
+ * Display information about the wal record
+ * apply being blocked
+ */
+static void
+LogBlockedWalRecordInfo(int num_waitlist_entries, ProcSignalReason reason)
+{
+	if (num_waitlist_entries > 0)
+		if (reason == PROCSIG_RECOVERY_CONFLICT_DATABASE)
+			ereport(LOG,
+				(errmsg("recovery is experiencing recovery conflict on %s", get_procsignal_reason_desc(reason)),
+				errdetail("There is %d conflicting connection(s).", num_waitlist_entries)));
+		else
+			ereport(LOG,
+				(errmsg("recovery is waiting for recovery conflict on %s", get_procsignal_reason_desc(reason)),
+				errdetail("There is %d blocking connection(s).", num_waitlist_entries)));
+	else
+		ereport(LOG,
+			(errmsg("recovery is waiting for recovery conflict on %s", get_procsignal_reason_desc(reason))));
+}
+
+/*
  * This is the main executioner for any query backend that conflicts with
  * recovery processing. Judgement has already been passed on it within
  * a specific rmgr. Here we just issue the orders to the procs. The procs
@@ -232,6 +256,8 @@ ResolveRecoveryConflictWithVirtualXIDs(VirtualTransactionId *waitlist,
 {
 	TimestampTz waitStart = 0;
 	char	   *new_status;
+	VirtualTransactionId *tmpWaitlist;
+	int num_waitlist_entries;
 
 	/* Fast exit, to avoid a kernel call if there's no work to be done. */
 	if (!VirtualTransactionIdIsValid(*waitlist))
@@ -240,6 +266,21 @@ ResolveRecoveryConflictWithVirtualXIDs(VirtualTransactionId *waitlist,
 	if (report_waiting)
 		waitStart = GetCurrentTimestamp();
 	new_status = NULL;			/* we haven't changed the ps display */
+
+	tmpWaitlist = waitlist;
+	while (VirtualTransactionIdIsValid(*tmpWaitlist))
+	{
+		tmpWaitlist++;
+	}
+
+	num_waitlist_entries = (tmpWaitlist - waitlist);
+
+	/* display wal record information */
+	if (log_recovery_conflicts && (TimestampDifferenceExceeds(recovery_conflicts_log_time, GetCurrentTimestamp(),
+									DeadlockTimeout))) {
+		LogBlockedWalRecordInfo(num_waitlist_entries, reason);
+		recovery_conflicts_log_time = GetCurrentTimestamp();
+	}
 
 	while (VirtualTransactionIdIsValid(*waitlist))
 	{
@@ -370,6 +411,11 @@ ResolveRecoveryConflictWithDatabase(Oid dbid)
 	 * block during InitPostgres() and then disconnect when they see the
 	 * database has been removed.
 	 */
+
+	/* display wal record information */
+	if (log_recovery_conflicts)
+		LogBlockedWalRecordInfo(CountDBBackends(dbid), PROCSIG_RECOVERY_CONFLICT_DATABASE);
+
 	while (CountDBBackends(dbid) > 0)
 	{
 		CancelDBBackends(dbid, PROCSIG_RECOVERY_CONFLICT_DATABASE, true);
@@ -480,13 +526,21 @@ ResolveRecoveryConflictWithLock(LOCKTAG locktag)
  * at least deadlock_timeout.
  */
 void
-ResolveRecoveryConflictWithBufferPin(void)
+ResolveRecoveryConflictWithBufferPin(bool first_pass)
 {
 	TimestampTz ltime;
 
 	Assert(InHotStandby);
 
 	ltime = GetStandbyLimitTime();
+
+	/* display wal record information */
+	if (log_recovery_conflicts && first_pass
+					&& (TimestampDifferenceExceeds(recovery_conflicts_log_time, GetCurrentTimestamp(),
+						DeadlockTimeout))) {
+		LogBlockedWalRecordInfo(-1, PROCSIG_RECOVERY_CONFLICT_BUFFERPIN);
+		recovery_conflicts_log_time = GetCurrentTimestamp();;
+	}
 
 	if (ltime == 0)
 	{
@@ -522,7 +576,6 @@ ResolveRecoveryConflictWithBufferPin(void)
 
 	/* Wait to be signaled by UnpinBuffer() */
 	ProcWaitForSignal(PG_WAIT_BUFFER_PIN);
-
 	/*
 	 * Clear any timeout requests established above.  We assume here that the
 	 * Startup process doesn't have any other timeouts than what this function

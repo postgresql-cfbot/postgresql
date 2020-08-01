@@ -1570,7 +1570,15 @@ static struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
-
+	{
+		{"log_recovery_conflicts", PGC_SIGHUP, LOGGING_WHAT,
+			gettext_noop("Logs standby recovery conflicts."),
+			NULL
+		},
+		&log_recovery_conflicts,
+		false,
+		NULL, NULL, NULL
+	},
 	{
 		{"log_hostname", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("Logs the host name in the connection logs."),

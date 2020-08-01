@@ -3815,6 +3815,7 @@ LockBufferForCleanup(Buffer buffer)
 {
 	BufferDesc *bufHdr;
 	char	   *new_status = NULL;
+	bool 	   first_pass = true;
 
 	Assert(BufferIsPinned(buffer));
 	Assert(PinCountWaitBuf == NULL);
@@ -3891,7 +3892,8 @@ LockBufferForCleanup(Buffer buffer)
 			/* Publish the bufid that Startup process waits on */
 			SetStartupBufferPinWaitBufId(buffer - 1);
 			/* Set alarm and then wait to be signaled by UnpinBuffer() */
-			ResolveRecoveryConflictWithBufferPin();
+			ResolveRecoveryConflictWithBufferPin(first_pass);
+			first_pass = false;
 			/* Reset the published bufid */
 			SetStartupBufferPinWaitBufId(-1);
 		}

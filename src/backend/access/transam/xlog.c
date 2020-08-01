@@ -11749,10 +11749,37 @@ rm_redo_error_callback(void *arg)
 {
 	XLogReaderState *record = (XLogReaderState *) arg;
 	StringInfoData buf;
+	int block_id;
+	RelFileNode rnode;
+	ForkNumber forknum;
+	BlockNumber blknum;
+	TimestampTz rtime;
+	bool fromStream;
+	char *receipt_time_str;
 
 	initStringInfo(&buf);
 	xlog_outdesc(&buf, record);
-
+	/*
+	 * Ensure we are in the startup process
+	 * if we want to log standby recovery conflicts
+	 */
+	if (AmStartupProcess() && log_recovery_conflicts)
+	{
+		GetXLogReceiptTime(&rtime, &fromStream);
+		if (fromStream)
+		{
+			receipt_time_str = pstrdup(timestamptz_to_str(rtime));
+			appendStringInfo(&buf,"\nWAL record received at %s", receipt_time_str);
+			for (block_id = 0; block_id <= record->max_block_id; block_id++)
+			{
+				if (XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blknum))
+					appendStringInfo(&buf,"\ntbs %u db %u rel %u, fork %s, blkno %u",
+								rnode.spcNode, rnode.dbNode, rnode.relNode,
+								forkNames[forknum],
+								blknum);
+			}
+		}
+	}
 	/* translator: %s is a WAL record description */
 	errcontext("WAL redo at %X/%X for %s",
 			   (uint32) (record->ReadRecPtr >> 32),

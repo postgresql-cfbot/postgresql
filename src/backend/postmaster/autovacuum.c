@@ -75,6 +75,7 @@
 #include "catalog/dependency.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_database.h"
+#include "catalog/pg_inherits.h"
 #include "commands/dbcommands.h"
 #include "commands/vacuum.h"
 #include "lib/ilist.h"
@@ -2032,11 +2033,11 @@ do_autovacuum(void)
 	 * Scan pg_class to determine which tables to vacuum.
 	 *
 	 * We do this in two passes: on the first one we collect the list of plain
-	 * relations and materialized views, and on the second one we collect
-	 * TOAST tables. The reason for doing the second pass is that during it we
-	 * want to use the main relation's pg_class.reloptions entry if the TOAST
-	 * table does not have any, and we cannot obtain it unless we know
-	 * beforehand what's the main table OID.
+	 * relations, materialized views and partitioned tables, and on the second
+	 * one we collect TOAST tables. The reason for doing the second pass is that
+	 * during it we want to use the main relation's pg_class.reloptions entry
+	 * if the TOAST table does not have any, and we cannot obtain it unless we
+	 * know beforehand what's the main table OID.
 	 *
 	 * We need to check TOAST tables separately because in cases with short,
 	 * wide tables there might be proportionally much more activity in the
@@ -2059,7 +2060,8 @@ do_autovacuum(void)
 		bool		wraparound;
 
 		if (classForm->relkind != RELKIND_RELATION &&
-			classForm->relkind != RELKIND_MATVIEW)
+			classForm->relkind != RELKIND_MATVIEW &&
+			classForm->relkind != RELKIND_PARTITIONED_TABLE)
 			continue;
 
 		relid = classForm->oid;
@@ -2722,6 +2724,7 @@ extract_autovac_opts(HeapTuple tup, TupleDesc pg_class_desc)
 
 	Assert(((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_RELATION ||
 		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_MATVIEW ||
+		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_PARTITIONED_TABLE ||
 		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_TOASTVALUE);
 
 	relopts = extractRelOptions(tup, pg_class_desc, NULL);
@@ -2996,6 +2999,38 @@ relation_needs_vacanalyze(Oid relid,
 	AssertArg(OidIsValid(relid));
 
 	/*
+	 * If the relation is a partitioned table, we must add up childrens'
+	 * reltuples.
+	 */
+	if (classForm->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		List     *children;
+		ListCell *lc;
+
+		reltuples = 0;
+
+		/* Find all members of inheritance set taking AccessShareLock */
+		children = find_all_inheritors(relid, AccessShareLock, NULL);
+
+		foreach(lc, children)
+		{
+			Oid        childOID = lfirst_oid(lc);
+			HeapTuple  childtuple;
+			Form_pg_class childclass;
+
+			childtuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(childOID));
+			childclass = (Form_pg_class) GETSTRUCT(childtuple);
+
+			/* Skip foreign partitions */
+			if (childclass->relkind == RELKIND_FOREIGN_TABLE)
+				continue;
+
+			/* Sum up the child's reltuples for its parent table */
+			reltuples += childclass->reltuples;
+		}
+	}
+
+	/*
 	 * Determine vacuum/analyze equation parameters.  We have two possible
 	 * sources: the passed reloptions (which could be a main table or a toast
 	 * table), or the autovacuum GUC variables.
@@ -3071,7 +3106,8 @@ relation_needs_vacanalyze(Oid relid,
 	 */
 	if (PointerIsValid(tabentry) && AutoVacuumingActive())
 	{
-		reltuples = classForm->reltuples;
+		if (classForm->relkind != RELKIND_PARTITIONED_TABLE)
+			reltuples = classForm->reltuples;
 		vactuples = tabentry->n_dead_tuples;
 		instuples = tabentry->inserts_since_vacuum;
 		anltuples = tabentry->changes_since_analyze;

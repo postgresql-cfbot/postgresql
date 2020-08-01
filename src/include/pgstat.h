@@ -156,6 +156,7 @@ typedef enum PgStat_Single_Reset_Type
 typedef struct PgStat_TableStatus
 {
 	Oid			t_id;			/* table's OID */
+	Oid        *ancestors;      /* all ancestors */
 	bool		t_shared;		/* is it a shared catalog? */
 	struct PgStat_TableXactStatus *trans;	/* lowest subxact's counts */
 	PgStat_TableCounts t_counts;	/* event counts to be sent */
@@ -402,7 +403,6 @@ typedef struct PgStat_MsgAnalyze
 	PgStat_Counter m_live_tuples;
 	PgStat_Counter m_dead_tuples;
 } PgStat_MsgAnalyze;
-
 
 /* ----------
  * PgStat_MsgArchiver			Sent by the archiver to update statistics.

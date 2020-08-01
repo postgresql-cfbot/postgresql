@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:xlink="http://www.w3.org/1999/xlink"
+     version="1.1"
+     width="850px" height="280px"
+     viewBox="0 0 850 280" >
+
+  <title>Cyclic usage of XIDs</title>
+
+  <!-- common text classes -->
+  <style type="text/css">
+  .text_normal  {font-style:normal;
+                 font-weight:normal;
+                 font-size:16px;
+                 font-family:"Open Sans", sans-serif;
+                 fill:black;
+                }
+  .text_big     {font-style:normal;
+                 font-weight:normal;
+                 font-size:24px;
+                 font-family:"Open Sans", sans-serif, Helvetica;
+                 fill:black;
+                }
+  </style>
+
+  <defs>
+    <!-- SVG 1.x supports <texPath> only in combination with <path>. SVG 2 allows the
+         combination with every shape element, especially with <circle>. As of 2020
+         we must restrict ourselves to SVG 1. Therefore: we simulate a circle by
+         defining two arcs, each of them is a half-circle.
+    -->
+    <path id="Path_080" d="m -80 0
+                           a 80 80 0 1 1  160 0
+                           a 80 80 0 1 1 -160 0"/>
+    <path id="Path_095" d="m -95 0
+                           a 95 95 0 1 1  190 0
+                           a 95 95 0 1 1 -190 0"/>
+    <path id="Path_120" d="m -120 0
+                           a 120 120 0 1 1  240 0
+                           a 120 120 0 1 1 -240 0"/>
+  </defs>
+
+
+  <!-- start of rendering area -->
+  <!-- enclosing rectangle -->
+  <rect x="1" y="1" rx="5" width="99%" height="99%" stroke="black" fill="none" />
+  <text class="text_big" x="370" y="40">Cyclic usage of XIDs modulo 2
+        <tspan dy="-5">^</tspan> <tspan dy="5">32</tspan></text>
+
+  <!-- set default values -->
+  <g fill="none" transform="translate(170 150)">
+
+    <circle r="100" stroke="blue" />
+
+    <text class="text_normal">
+      <textPath xlink:href="#Path_095" startOffset="0.5%" >|</textPath>
+      <textPath xlink:href="#Path_120" startOffset="00%" >(0)</textPath>
+      <textPath xlink:href="#Path_080" startOffset="01%"  stroke="blue" stroke-width="0.5px" >
+        - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ></textPath>
+      <textPath xlink:href="#Path_095" startOffset="30.5%" >|</textPath>
+      <textPath xlink:href="#Path_120" startOffset="30%" >(1)</textPath>
+      <textPath xlink:href="#Path_095" startOffset="45.5%" >|</textPath>
+      <textPath xlink:href="#Path_120" startOffset="45%" >(2)</textPath>
+      <textPath xlink:href="#Path_095" startOffset="50.5%" >|</textPath>
+      <textPath xlink:href="#Path_120" startOffset="50%" >(3)</textPath>
+      <textPath xlink:href="#Path_095" startOffset="62.5%" >|</textPath>
+      <textPath xlink:href="#Path_120" startOffset="62%" >(4)</textPath>
+    </text>
+  </g>
+
+  <g class="text_normal" transform="translate(400 130)">
+    <text>0: 0 .. 2  <tspan dy="-5">^</tspan> <tspan dy="5">32</tspan> - 1</text>
+    <text y="25">1: oldest <tspan style="font-weight:bold">active</tspan> xid (pg_stat_activity.backend_xmin)</text>
+    <text y="50">2: xmin of one row version</text>
+    <text y="75">3: xmax of the same row version</text>
+    <text y="100">4: jungest xid (txid_current)</text>
+  </g>
+
+</svg>

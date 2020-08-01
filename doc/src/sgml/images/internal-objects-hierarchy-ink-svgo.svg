@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="430" viewBox="0 0 720 430">
+  <title>
+    Hierarchy of Internal Objects
+  </title>
+  <style>
+    .text_normal{font-style:normal;font-weight:400;font-size:16px;font-family:&quot;Open Sans&quot;,sans-serif;fill:#000}
+  </style>
+  <rect x="1" y="1" rx="5" width="99%" height="99%" stroke="black" fill="none"/>
+  <text x="200" y="40" font-weight="400" font-size="24" font-family="&quot;Open Sans&quot;,sans-serif">
+    Hierarchy of internal Objects
+  </text>
+  <g fill="none">
+    <g transform="translate(350 240)">
+      <ellipse rx="320" ry="170" stroke="blue"/>
+      <text class="text_normal" x="-140" y="-130">
+        Cluster
+      </text>
+      <g transform="translate(40 -125)">
+        <ellipse rx="80" ry="20" stroke="blue"/>
+        <text class="text_normal" x="-60" y="5">
+          Database Names
+        </text>
+      </g>
+      <g transform="translate(180 -70)">
+        <ellipse rx="60" ry="20" stroke="blue"/>
+        <text class="text_normal" x="-40" y="5">
+          Tablespace
+        </text>
+      </g>
+      <g transform="translate(230 -5)">
+        <ellipse rx="80" ry="20" stroke="blue"/>
+        <text class="text_normal" x="-70" y="5">
+          Replication Origins
+        </text>
+      </g>
+      <g transform="translate(200 70)">
+        <ellipse rx="78" ry="27" stroke="blue"/>
+        <text class="text_normal" x="-60" y="-3">
+          Subscription for
+        </text>
+        <text class="text_normal" x="-68" y="10">
+          Logical Replication
+        </text>
+      </g>
+      <g transform="translate(100 120)">
+        <ellipse rx="40" ry="20" stroke="blue"/>
+        <text class="text_normal" x="-15" y="5">
+          Role
+        </text>
+      </g>
+    </g>
+    <g transform="translate(270 250)">
+      <ellipse rx="220" ry="110" stroke="blue" stroke-width="2"/>
+      <text class="text_normal" x="-60" y="-80">
+        Database
+      </text>
+      <g transform="translate(-150 -30)">
+        <ellipse rx="50" ry="20" stroke="blue"/>
+        <text class="text_normal" x="-35" y="5">
+          Extension
+        </text>
+      </g>
+      <g transform="translate(-155 35)">
+        <ellipse rx="40" ry="20" stroke="blue"/>
+        <text class="text_normal" x="-35" y="5">
+          Collation
+        </text>
+      </g>
+      <g transform="translate(30 20)">
+        <ellipse rx="140" ry="70" stroke="blue"/>
+        <text class="text_normal" x="-80" y="-35">
+          Schema
+        </text>
+        <g transform="translate(20 10)">
+          <ellipse rx="90" ry="30" stroke="blue"/>
+          <text class="text_normal" x="-50" y="5">
+            Table, View, ...
+          </text>
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>

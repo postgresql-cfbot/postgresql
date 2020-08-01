@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   version="1.1"
+   width="850px"
+   height="280px"
+   viewBox="0 0 850 280"
+   id="svg1072"
+   sodipodi:docname="wraparound-ink.svg"
+   inkscape:version="0.92.3 (2405546, 2018-03-11)">
+  <metadata
+     id="metadata1076">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title>Cyclic usage of XIDs</dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <sodipodi:namedview
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1"
+     objecttolerance="10"
+     gridtolerance="10"
+     guidetolerance="10"
+     inkscape:pageopacity="0"
+     inkscape:pageshadow="2"
+     inkscape:window-width="1193"
+     inkscape:window-height="788"
+     id="namedview1074"
+     showgrid="false"
+     inkscape:zoom="0.44"
+     inkscape:cx="425"
+     inkscape:cy="140"
+     inkscape:window-x="61"
+     inkscape:window-y="27"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg1072" />
+  <title
+     id="title1009">Cyclic usage of XIDs</title>
+  <!-- common text classes -->
+  <style
+     type="text/css"
+     id="style1011">
+  .text_normal  {font-style:normal;
+                 font-weight:normal;
+                 font-size:16px;
+                 font-family:&quot;Open Sans&quot;, sans-serif;
+                 fill:black;
+                }
+  .text_big     {font-style:normal;
+                 font-weight:normal;
+                 font-size:24px;
+                 font-family:&quot;Open Sans&quot;, sans-serif, Helvetica;
+                 fill:black;
+                }
+  </style>
+  <defs
+     id="defs1016">
+    <!-- SVG 1.x supports <texPath> only in combination with <path>. SVG 2 allows the
+         combination with every shape element, especially with <circle>. As of 2020
+         we must restrict ourselves to SVG 1. Therefore: we simulate a circle by
+         defining two arcs, each of them is a half-circle.
+    -->
+    <path
+       id="Path_080"
+       d="m -80 0                            a 80 80 0 1 1  160 0                            a 80 80 0 1 1 -160 0" />
+    <path
+       id="Path_095"
+       d="m -95 0                            a 95 95 0 1 1  190 0                            a 95 95 0 1 1 -190 0" />
+    <path
+       id="Path_120"
+       d="m -120 0                            a 120 120 0 1 1  240 0                            a 120 120 0 1 1 -240 0" />
+  </defs>
+  <!-- start of rendering area -->
+  <!-- enclosing rectangle -->
+  <rect
+     x="1"
+     y="1"
+     rx="5"
+     width="99%"
+     height="99%"
+     stroke="black"
+     fill="none"
+     id="rect1018" />
+  <text
+     class="text_big"
+     x="370"
+     y="40"
+     id="text1024">Cyclic usage of XIDs modulo 2
+        <tspan
+   dy="-5"
+   id="tspan1020">^</tspan>
+<tspan
+   dy="5"
+   id="tspan1022">32</tspan>
+</text>
+  <!-- set default values -->
+  <g
+     fill="none"
+     transform="translate(170 150)"
+     id="g1052">
+    <circle
+       r="100"
+       stroke="blue"
+       id="circle1026" />
+    <text
+       class="text_normal"
+       id="text1050">
+      <textPath
+         xlink:href="#Path_095"
+         startOffset="0.5%"
+         id="textPath1028">|</textPath>
+      <textPath
+         xlink:href="#Path_120"
+         startOffset="00%"
+         id="textPath1030">(0)</textPath>
+      <textPath
+         xlink:href="#Path_080"
+         startOffset="01%"
+         stroke="blue"
+         stroke-width="0.5px"
+         id="textPath1032">
+        - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - &gt;</textPath>
+      <textPath
+         xlink:href="#Path_095"
+         startOffset="30.5%"
+         id="textPath1034">|</textPath>
+      <textPath
+         xlink:href="#Path_120"
+         startOffset="30%"
+         id="textPath1036">(1)</textPath>
+      <textPath
+         xlink:href="#Path_095"
+         startOffset="45.5%"
+         id="textPath1038">|</textPath>
+      <textPath
+         xlink:href="#Path_120"
+         startOffset="45%"
+         id="textPath1040">(2)</textPath>
+      <textPath
+         xlink:href="#Path_095"
+         startOffset="50.5%"
+         id="textPath1042">|</textPath>
+      <textPath
+         xlink:href="#Path_120"
+         startOffset="50%"
+         id="textPath1044">(3)</textPath>
+      <textPath
+         xlink:href="#Path_095"
+         startOffset="62.5%"
+         id="textPath1046">|</textPath>
+      <textPath
+         xlink:href="#Path_120"
+         startOffset="62%"
+         id="textPath1048">(4)</textPath>
+    </text>
+  </g>
+  <g
+     class="text_normal"
+     transform="translate(400 130)"
+     id="g1070">
+    <text
+       id="text1058">0: 0 .. 2  <tspan
+   dy="-5"
+   id="tspan1054">^</tspan>
+<tspan
+   dy="5"
+   id="tspan1056">32</tspan>
+ - 1</text>
+    <text
+       y="25"
+       id="text1062">1: oldest <tspan
+   style="font-weight:bold"
+   id="tspan1060">active</tspan>
+ xid (pg_stat_activity.backend_xmin)</text>
+    <text
+       y="50"
+       id="text1064">2: xmin of one row version</text>
+    <text
+       y="75"
+       id="text1066">3: xmax of the same row version</text>
+    <text
+       y="100"
+       id="text1068">4: jungest xid (txid_current)</text>
+  </g>
+</svg>

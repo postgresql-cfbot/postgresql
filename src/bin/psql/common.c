@@ -588,12 +588,13 @@ PSQLexec(const char *query)
  * e.g., because of the interrupt, -1 on error.
  */
 int
-PSQLexecWatch(const char *query, const printQueryOpt *opt)
+PSQLexecWatch(const char *query, const printQueryOpt *opt, FILE *printQueryFout)
 {
 	PGresult   *res;
 	double		elapsed_msec = 0;
 	instr_time	before;
 	instr_time	after;
+	FILE	   *fout;
 
 	if (!pset.db)
 	{
@@ -634,14 +635,16 @@ PSQLexecWatch(const char *query, const printQueryOpt *opt)
 		return 0;
 	}
 
+	fout = printQueryFout ? printQueryFout : pset.queryFout;
+
 	switch (PQresultStatus(res))
 	{
 		case PGRES_TUPLES_OK:
-			printQuery(res, opt, pset.queryFout, false, pset.logfile);
+			printQuery(res, opt, fout, false, pset.logfile);
 			break;
 
 		case PGRES_COMMAND_OK:
-			fprintf(pset.queryFout, "%s\n%s\n\n", opt->title, PQcmdStatus(res));
+			fprintf(fout, "%s\n%s\n\n", opt->title, PQcmdStatus(res));
 			break;
 
 		case PGRES_EMPTY_QUERY:
@@ -664,7 +667,7 @@ PSQLexecWatch(const char *query, const printQueryOpt *opt)
 
 	PQclear(res);
 
-	fflush(pset.queryFout);
+	fflush(fout);
 
 	/* Possible microtiming output */
 	if (pset.timing)

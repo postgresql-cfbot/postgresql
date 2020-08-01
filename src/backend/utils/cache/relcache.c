@@ -4556,12 +4556,11 @@ RelationGetIndexList(Relation relation)
 		result = lappend_oid(result, index->indexrelid);
 
 		/*
-		 * Invalid, non-unique, non-immediate or predicate indexes aren't
-		 * interesting for either oid indexes or replication identity indexes,
-		 * so don't check them.
+		 * Invalid, non-unique or predicate indexes aren't interesting for
+		 * either oid indexes or replication identity indexes, so don't check
+		 * them.
 		 */
 		if (!index->indisvalid || !index->indisunique ||
-			!index->indimmediate ||
 			!heap_attisnull(htup, Anum_pg_index_indpred, NULL))
 			continue;
 

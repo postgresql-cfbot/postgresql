@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 23;
+use Test::More tests => 24;
 
 # Initialize publisher node
 my $node_publisher = get_new_node('publisher');
@@ -38,6 +38,8 @@ $node_publisher->safe_psql('postgres',
 	"CREATE TABLE tab_full_pk (a int primary key, b text)");
 $node_publisher->safe_psql('postgres',
 	"ALTER TABLE tab_full_pk REPLICA IDENTITY FULL");
+$node_publisher->safe_psql('postgres',
+	"CREATE TABLE tab_deferred_pk (a int PRIMARY KEY DEFERRABLE)");
 # Let this table with REPLICA IDENTITY NOTHING, allowing only INSERT changes.
 $node_publisher->safe_psql('postgres', "CREATE TABLE tab_nothing (a int)");
 $node_publisher->safe_psql('postgres',
@@ -66,13 +68,17 @@ $node_subscriber->safe_psql('postgres',
 	"CREATE TABLE tab_include (a int, b text, CONSTRAINT covering PRIMARY KEY(a) INCLUDE(b))"
 );
 
+# replication of the table with deferrable primary key
+$node_subscriber->safe_psql('postgres',
+	"CREATE TABLE tab_deferred_pk (a int PRIMARY KEY DEFERRABLE)");
+
 # Setup logical replication
 my $publisher_connstr = $node_publisher->connstr . ' dbname=postgres';
 $node_publisher->safe_psql('postgres', "CREATE PUBLICATION tap_pub");
 $node_publisher->safe_psql('postgres',
 	"CREATE PUBLICATION tap_pub_ins_only WITH (publish = insert)");
 $node_publisher->safe_psql('postgres',
-	"ALTER PUBLICATION tap_pub ADD TABLE tab_rep, tab_full, tab_full2, tab_mixed, tab_include, tab_nothing, tab_full_pk"
+	"ALTER PUBLICATION tap_pub ADD TABLE tab_rep, tab_full, tab_full2, tab_mixed, tab_include, tab_nothing, tab_full_pk, tab_deferred_pk"
 );
 $node_publisher->safe_psql('postgres',
 	"ALTER PUBLICATION tap_pub_ins_only ADD TABLE tab_ins");
@@ -122,6 +128,13 @@ $node_publisher->safe_psql('postgres',
 	"DELETE FROM tab_include WHERE a > 20");
 $node_publisher->safe_psql('postgres', "UPDATE tab_include SET a = -a");
 
+$node_publisher->safe_psql('postgres',
+	"INSERT INTO tab_deferred_pk VALUES (1),(2),(3)");
+$node_publisher->safe_psql('postgres',
+	"UPDATE tab_deferred_pk SET a = 11 WHERE a = 1");
+$node_publisher->safe_psql('postgres',
+	"DELETE FROM tab_deferred_pk WHERE a = 2");
+
 $node_publisher->wait_for_catchup('tap_sub');
 
 $result = $node_subscriber->safe_psql('postgres',
@@ -144,6 +157,10 @@ $result = $node_subscriber->safe_psql('postgres',
 	"SELECT count(*), min(a), max(a) FROM tab_include");
 is($result, qq(20|-20|-1),
 	'check replicated changes with primary key index with included columns');
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT count(*), min(a), max(a) FROM tab_deferred_pk");
+is($result, qq(2|3|11), 'check replicated changes with deferred primary key');
 
 # insert some duplicate rows
 $node_publisher->safe_psql('postgres',

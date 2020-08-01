@@ -41,6 +41,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/explain.h"
 #include "commands/prepare.h"
 #include "commands/trigger.h"
 #include "commands/user.h"
@@ -506,6 +507,7 @@ extern const struct config_enum_entry archive_mode_options[];
 extern const struct config_enum_entry recovery_target_action_options[];
 extern const struct config_enum_entry sync_method_options[];
 extern const struct config_enum_entry dynamic_shared_memory_options[];
+extern const struct config_enum_entry explain_format_options[];
 
 /*
  * GUC option variables that are exported from this module
@@ -721,6 +723,8 @@ const char *const config_group_names[] =
 	gettext_noop("Replication / Subscribers"),
 	/* QUERY_TUNING */
 	gettext_noop("Query Tuning"),
+	/* QUERY_TUNING_EXPLAIN */
+	gettext_noop("Query Tuning / EXPLAIN Options"),
 	/* QUERY_TUNING_METHOD */
 	gettext_noop("Query Tuning / Planner Method Configuration"),
 	/* QUERY_TUNING_COST */
@@ -927,6 +931,78 @@ static const unit_conversion time_unit_conversion_table[] =
 
 static struct config_bool ConfigureNamesBool[] =
 {
+	{
+		{"default_explain_analyze", PGC_USERSET, QUERY_TUNING_EXPLAIN,
+			gettext_noop("Sets the default ANALYZE option for EXPLAIN."),
+			NULL
+		},
+		&default_explain_analyze,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"default_explain_buffers", PGC_USERSET, QUERY_TUNING_EXPLAIN,
+			gettext_noop("Sets the default BUFFERS option for EXPLAIN."),
+			NULL
+		},
+		&default_explain_buffers,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"default_explain_costs", PGC_USERSET, QUERY_TUNING_EXPLAIN,
+			gettext_noop("Sets the default COSTS option for EXPLAIN."),
+			NULL
+		},
+		&default_explain_costs,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"default_explain_settings", PGC_USERSET, QUERY_TUNING_EXPLAIN,
+			gettext_noop("Sets the default SETTINGS option for EXPLAIN."),
+			NULL
+		},
+		&default_explain_settings,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"default_explain_summary", PGC_USERSET, QUERY_TUNING_EXPLAIN,
+			gettext_noop("Sets the default SUMMARY option for EXPLAIN."),
+			NULL
+		},
+		&default_explain_summary,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"default_explain_timing", PGC_USERSET, QUERY_TUNING_EXPLAIN,
+			gettext_noop("Sets the default TIMING option for EXPLAIN."),
+			NULL
+		},
+		&default_explain_timing,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"default_explain_verbose", PGC_USERSET, QUERY_TUNING_EXPLAIN,
+			gettext_noop("Sets the default VERBOSE option for EXPLAIN."),
+			NULL
+		},
+		&default_explain_verbose,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"default_explain_wal", PGC_USERSET, QUERY_TUNING_EXPLAIN,
+			gettext_noop("Sets the default WAL option for EXPLAIN."),
+			NULL
+		},
+		&default_explain_wal,
+		false,
+		NULL, NULL, NULL
+	},
 	{
 		{"enable_seqscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of sequential-scan plans."),
@@ -4497,6 +4573,16 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&constraint_exclusion,
 		CONSTRAINT_EXCLUSION_PARTITION, constraint_exclusion_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"default_explain_format", PGC_USERSET, QUERY_TUNING_EXPLAIN,
+			gettext_noop("Sets the default FORMAT option for EXPLAIN."),
+			NULL
+		},
+		&default_explain_format,
+		EXPLAIN_FORMAT_TEXT, explain_format_options,
 		NULL, NULL, NULL
 	},
 

@@ -124,4 +124,17 @@ extern void ExplainOpenGroup(const char *objtype, const char *labelname,
 extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 							  bool labeled, ExplainState *es);
 
+/*
+ *	User-tweakable parameters
+ */
+extern PGDLLEXPORT bool	default_explain_analyze;
+extern PGDLLEXPORT bool	default_explain_buffers;
+extern PGDLLEXPORT bool	default_explain_costs;
+extern PGDLLEXPORT int	default_explain_format;
+extern PGDLLEXPORT bool	default_explain_settings;
+extern PGDLLEXPORT bool	default_explain_summary;
+extern PGDLLEXPORT bool	default_explain_timing;
+extern PGDLLEXPORT bool	default_explain_verbose;
+extern PGDLLEXPORT bool	default_explain_wal;
+
 #endif							/* EXPLAIN_H */

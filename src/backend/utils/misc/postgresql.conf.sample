@@ -418,6 +418,18 @@
 #plan_cache_mode = auto			# auto, force_generic_plan or
 					# force_custom_plan
 
+# - EXPLAIN Options -
+
+#default_explain_analyze = off
+#default_explain_buffers = off
+#default_explain_costs = on
+#default_explain_format = text
+#default_explain_settings = off
+#default_explain_summary = off
+#default_explain_timing = on
+#default_explain_verbose = off
+#default_explain_wal = off
+
 
 #------------------------------------------------------------------------------
 # REPORTING AND LOGGING

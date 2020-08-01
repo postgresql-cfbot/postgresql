@@ -17,6 +17,7 @@
 #include "catalog/pg_type.h"
 #include "commands/createas.h"
 #include "commands/defrem.h"
+#include "commands/explain.h"
 #include "commands/prepare.h"
 #include "executor/nodeHash.h"
 #include "foreign/fdwapi.h"
@@ -39,6 +40,26 @@
 #include "utils/typcache.h"
 #include "utils/xml.h"
 
+/*
+ *	User-tweakable parameters
+ */
+bool	default_explain_analyze = false;
+bool	default_explain_buffers = false;
+bool	default_explain_costs = true;
+int		default_explain_format = EXPLAIN_FORMAT_TEXT;
+bool	default_explain_settings = false;
+bool	default_explain_summary = false;
+bool	default_explain_timing = true;
+bool	default_explain_verbose = false;
+bool	default_explain_wal = false;
+
+const struct config_enum_entry explain_format_options[] = {
+	{"text", EXPLAIN_FORMAT_TEXT, false},
+	{"xml", EXPLAIN_FORMAT_XML, false},
+	{"json", EXPLAIN_FORMAT_JSON, false},
+	{"yaml", EXPLAIN_FORMAT_YAML, false},
+	{NULL, 0, false}
+};
 
 /* Hook for plugins to get control in ExplainOneQuery() */
 ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
@@ -164,8 +185,26 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 	TupOutputState *tstate;
 	List	   *rewritten;
 	ListCell   *lc;
-	bool		timing_set = false;
-	bool		summary_set = false;
+	DefElem    *danalyze = NULL;
+	DefElem    *dbuffers = NULL;
+	DefElem    *dcosts = NULL;
+	DefElem    *dformat = NULL;
+	DefElem    *dsettings = NULL;
+	DefElem    *dsummary = NULL;
+	DefElem    *dtiming = NULL;
+	DefElem    *dverbose = NULL;
+	DefElem    *dwal = NULL;
+
+	/* Set defaults. */
+	es->analyze = default_explain_analyze;
+	es->buffers = default_explain_buffers;
+	es->costs = default_explain_costs;
+	es->format = default_explain_format;
+	es->settings = default_explain_settings;
+	es->summary = default_explain_summary;
+	es->timing = default_explain_timing;
+	es->verbose = default_explain_verbose;
+	es->wal = default_explain_wal;
 
 	/* Parse options list. */
 	foreach(lc, stmt->options)
@@ -173,30 +212,46 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 		DefElem    *opt = (DefElem *) lfirst(lc);
 
 		if (strcmp(opt->defname, "analyze") == 0)
+		{
+			if (danalyze)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, opt->location)));
+			danalyze = opt;
 			es->analyze = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "verbose") == 0)
-			es->verbose = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "costs") == 0)
-			es->costs = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "buffers") == 0)
-			es->buffers = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "wal") == 0)
-			es->wal = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "settings") == 0)
-			es->settings = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "timing") == 0)
-		{
-			timing_set = true;
-			es->timing = defGetBoolean(opt);
 		}
-		else if (strcmp(opt->defname, "summary") == 0)
+		else if (strcmp(opt->defname, "buffers") == 0)
 		{
-			summary_set = true;
-			es->summary = defGetBoolean(opt);
+			if (dbuffers)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, opt->location)));
+			dbuffers = opt;
+			es->buffers = defGetBoolean(opt);
+		}
+		else if (strcmp(opt->defname, "costs") == 0)
+		{
+			if (dcosts)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, opt->location)));
+			dcosts = opt;
+			es->costs = defGetBoolean(opt);
 		}
 		else if (strcmp(opt->defname, "format") == 0)
 		{
-			char	   *p = defGetString(opt);
+			char	   *p;
+
+			if (dformat)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, opt->location)));
+			dformat = opt;
+			p = defGetString(opt);
 
 			if (strcmp(p, "text") == 0)
 				es->format = EXPLAIN_FORMAT_TEXT;
@@ -213,6 +268,56 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 								opt->defname, p),
 						 parser_errposition(pstate, opt->location)));
 		}
+		else if (strcmp(opt->defname, "settings") == 0)
+		{
+			if (dsettings)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, opt->location)));
+			dsettings = opt;
+			es->settings = defGetBoolean(opt);
+		}
+		else if (strcmp(opt->defname, "summary") == 0)
+		{
+			if (dsummary)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, opt->location)));
+			dsummary = opt;
+			es->summary = defGetBoolean(opt);
+		}
+		else if (strcmp(opt->defname, "timing") == 0)
+		{
+			if (dtiming)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, opt->location)));
+			dtiming = opt;
+			es->timing = defGetBoolean(opt);
+		}
+		else if (strcmp(opt->defname, "verbose") == 0)
+		{
+			if (dverbose)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, opt->location)));
+			dverbose = opt;
+			es->verbose = defGetBoolean(opt);
+		}
+		else if (strcmp(opt->defname, "wal") == 0)
+		{
+			if (dwal)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, opt->location)));
+			dwal = opt;
+			es->wal = defGetBoolean(opt);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -221,27 +326,41 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 					 parser_errposition(pstate, opt->location)));
 	}
 
+	/*
+	 * If ANALYZE wasn't explicitly set and isn't on by default, turn off some
+	 * settings that aren't also explicitly set.  This is so we can raise errors
+	 * on incompatible options.
+	 */
+	if (!danalyze && !es->analyze)
+	{
+		if (!dbuffers)
+			es->buffers = false;
+		if (!dtiming)
+			es->timing = false;
+		if (!dwal)
+			es->wal = false;
+	}
+
+	/* check that BUFFERS is used with EXPLAIN ANALYZE */
 	if (es->buffers && !es->analyze)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("EXPLAIN option BUFFERS requires ANALYZE")));
 
-	if (es->wal && !es->analyze)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("EXPLAIN option WAL requires ANALYZE")));
-
-	/* if the timing was not set explicitly, set default value */
-	es->timing = (timing_set) ? es->timing : es->analyze;
-
-	/* check that timing is used with EXPLAIN ANALYZE */
+	/* check that TIMING is used with EXPLAIN ANALYZE */
 	if (es->timing && !es->analyze)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("EXPLAIN option TIMING requires ANALYZE")));
 
-	/* if the summary was not set explicitly, set default value */
-	es->summary = (summary_set) ? es->summary : es->analyze;
+	/* check that WAL is used with EXPLAIN ANALYZE */
+	if (es->wal && !es->analyze)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("EXPLAIN option WAL requires ANALYZE")));
+
+	/* if SUMMARY was not set explicitly, set default value */
+	es->summary = (dsummary) ? es->summary : es->analyze;
 
 	/*
 	 * Parse analysis was done already, but we still have to run the rule

@@ -5376,6 +5376,141 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
 
      </variablelist>
     </sect2>
+
+    <sect2 id="runtime-config-query-explain">
+     <title>Default EXPLAIN options</title>
+
+     <variablelist>
+
+     <varlistentry id="guc-default-explain-analyze" xreflabel="default_explain_analyze">
+      <term><varname>default_explain_analyze</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>default_explain_analyze</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+	    Sets the default <command>ANALYZE</command> option for <command>EXPLAIN</command>.
+		The default is off.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-default-explain-buffers" xreflabel="default_explain_buffers">
+      <term><varname>default_explain_buffers</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>default_explain_buffers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+	    Sets the default <command>BUFFERS</command> option for <command>EXPLAIN</command>.
+		The default is off.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-default-explain-cost" xreflabel="default_explain_cost">
+      <term><varname>default_explain_cost</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>default_explain_cost</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+	    Sets the default <command>COST</command> option for <command>EXPLAIN</command>.
+		The default is on.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-default-explain-format" xreflabel="default_explain_format">
+      <term><varname>default_explain_format</varname> (<type>text</type>)
+      <indexterm>
+       <primary><varname>default_explain_format</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+	    Sets the default <command>FORMAT</command> option for <command>EXPLAIN</command>.
+		The default is text.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-default-explain-settings" xreflabel="default_explain_settings">
+      <term><varname>default_explain_settings</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>default_explain_settings</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+	    Sets the default <command>SETTINGS</command> option for <command>EXPLAIN</command>.
+		The default is off.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-default-explain-summary" xreflabel="default_explain_summary">
+      <term><varname>default_explain_summary</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>default_explain_summary</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+	    Sets the default <command>SUMMARY</command> option for <command>EXPLAIN</command>.
+		The default is off.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-default-explain-timing" xreflabel="default_explain_timing">
+      <term><varname>default_explain_timing</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>default_explain_timing</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+	    Sets the default <command>TIMING</command> option for <command>EXPLAIN</command>.
+		The default is on.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-default-explain-verbose" xreflabel="default_explain_verbose">
+      <term><varname>default_explain_verbose</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>default_explain_verbose</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+	    Sets the default <command>VERBOSE</command> option for <command>EXPLAIN</command>.
+		The default is off.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-default-explain-wal" xreflabel="default_explain_wal">
+      <term><varname>default_explain_wal</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>default_explain_wal</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+	    Sets the default <command>WAL</command> option for <command>EXPLAIN</command>.
+		The default is off.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     </variablelist>
+    </sect2>
+
      <sect2 id="runtime-config-query-other">
      <title>Other Planner Options</title>
 

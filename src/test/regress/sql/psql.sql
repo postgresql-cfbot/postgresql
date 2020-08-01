@@ -456,9 +456,14 @@ select 1 where false;
 \pset tuples_only false
 
 -- check conditional tableam display
+\pset expanded off
 
--- Create a heap2 table am handler with heapam handler
+CREATE SCHEMA conditional_tableam_display;
+CREATE ROLE	conditional_tableam_display_role;
+ALTER SCHEMA conditional_tableam_display OWNER TO conditional_tableam_display_role;
+SET search_path TO conditional_tableam_display;
 CREATE ACCESS METHOD heap_psql TYPE TABLE HANDLER heap_tableam_handler;
+SET role TO conditional_tableam_display_role;
 CREATE TABLE tbl_heap_psql(f1 int, f2 char(100)) using heap_psql;
 CREATE TABLE tbl_heap(f1 int, f2 char(100)) using heap;
 \d+ tbl_heap_psql
@@ -466,9 +471,17 @@ CREATE TABLE tbl_heap(f1 int, f2 char(100)) using heap;
 \set HIDE_TABLEAM off
 \d+ tbl_heap_psql
 \d+ tbl_heap
+\d+
+-- access method column should not be displayed for sequences
+\ds+
 \set HIDE_TABLEAM on
+\d+
+SET ROLE TO default;
 DROP TABLE tbl_heap, tbl_heap_psql;
 DROP ACCESS METHOD heap_psql;
+SET search_path TO default;
+DROP SCHEMA conditional_tableam_display;
+DROP ROLE conditional_tableam_display_role;
 
 -- test numericlocale (as best we can without control of psql's locale)
 

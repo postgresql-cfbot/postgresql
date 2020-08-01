@@ -2796,19 +2796,24 @@ Type                | func
 
 \pset tuples_only false
 -- check conditional tableam display
--- Create a heap2 table am handler with heapam handler
+\pset expanded off
+CREATE SCHEMA conditional_tableam_display;
+CREATE ROLE	conditional_tableam_display_role;
+ALTER SCHEMA conditional_tableam_display OWNER TO conditional_tableam_display_role;
+SET search_path TO conditional_tableam_display;
 CREATE ACCESS METHOD heap_psql TYPE TABLE HANDLER heap_tableam_handler;
+SET role TO conditional_tableam_display_role;
 CREATE TABLE tbl_heap_psql(f1 int, f2 char(100)) using heap_psql;
 CREATE TABLE tbl_heap(f1 int, f2 char(100)) using heap;
 \d+ tbl_heap_psql
-                                   Table "public.tbl_heap_psql"
+                        Table "conditional_tableam_display.tbl_heap_psql"
  Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
 --------+----------------+-----------+----------+---------+----------+--------------+-------------
  f1     | integer        |           |          |         | plain    |              | 
  f2     | character(100) |           |          |         | extended |              | 
 
 \d+ tbl_heap
-                                     Table "public.tbl_heap"
+                           Table "conditional_tableam_display.tbl_heap"
  Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
 --------+----------------+-----------+----------+---------+----------+--------------+-------------
  f1     | integer        |           |          |         | plain    |              | 
@@ -2816,7 +2821,7 @@ CREATE TABLE tbl_heap(f1 int, f2 char(100)) using heap;
 
 \set HIDE_TABLEAM off
 \d+ tbl_heap_psql
-                                   Table "public.tbl_heap_psql"
+                        Table "conditional_tableam_display.tbl_heap_psql"
  Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
 --------+----------------+-----------+----------+---------+----------+--------------+-------------
  f1     | integer        |           |          |         | plain    |              | 
@@ -2824,16 +2829,43 @@ CREATE TABLE tbl_heap(f1 int, f2 char(100)) using heap;
 Access method: heap_psql
 
 \d+ tbl_heap
-                                     Table "public.tbl_heap"
+                           Table "conditional_tableam_display.tbl_heap"
  Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
 --------+----------------+-----------+----------+---------+----------+--------------+-------------
  f1     | integer        |           |          |         | plain    |              | 
  f2     | character(100) |           |          |         | extended |              | 
 Access method: heap
 
+\d+
+                                                              List of relations
+           Schema            |     Name      | Type  |              Owner               | Persistence | Access Method |  Size   | Description 
+-----------------------------+---------------+-------+----------------------------------+-------------+---------------+---------+-------------
+ conditional_tableam_display | tbl_heap      | table | conditional_tableam_display_role | permanent   | heap          | 0 bytes | 
+ conditional_tableam_display | tbl_heap_psql | table | conditional_tableam_display_role | permanent   | heap_psql     | 0 bytes | 
+(2 rows)
+
+-- access method column should not be displayed for sequences
+\ds+
+                        List of relations
+ Schema | Name | Type | Owner | Persistence | Size | Description 
+--------+------+------+-------+-------------+------+-------------
+(0 rows)
+
 \set HIDE_TABLEAM on
+\d+
+                                                      List of relations
+           Schema            |     Name      | Type  |              Owner               | Persistence |  Size   | Description 
+-----------------------------+---------------+-------+----------------------------------+-------------+---------+-------------
+ conditional_tableam_display | tbl_heap      | table | conditional_tableam_display_role | permanent   | 0 bytes | 
+ conditional_tableam_display | tbl_heap_psql | table | conditional_tableam_display_role | permanent   | 0 bytes | 
+(2 rows)
+
+SET ROLE TO default;
 DROP TABLE tbl_heap, tbl_heap_psql;
 DROP ACCESS METHOD heap_psql;
+SET search_path TO default;
+DROP SCHEMA conditional_tableam_display;
+DROP ROLE conditional_tableam_display_role;
 -- test numericlocale (as best we can without control of psql's locale)
 \pset format aligned
 \pset expanded off

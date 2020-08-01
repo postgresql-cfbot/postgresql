@@ -15,6 +15,8 @@
 
 #include "nodes/execnodes.h"
 
+extern PGDLLIMPORT bool insert_in_bulk;
+
 extern void ExecComputeStoredGenerated(EState *estate, TupleTableSlot *slot, CmdType cmdtype);
 
 extern ModifyTableState *ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags);

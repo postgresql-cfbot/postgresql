@@ -54,6 +54,7 @@
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "optimizer/cost.h"
+#include "executor/nodeModifyTable.h"
 #include "optimizer/geqo.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/paths.h"
@@ -921,7 +922,6 @@ static const unit_conversion time_unit_conversion_table[] =
  * 7. If it's a new GUC_LIST_QUOTE option, you must add it to
  *	  variable_is_guc_list_quote() in src/bin/pg_dump/dumputils.c.
  */
-
 
 /******** option records follow ********/
 
@@ -2032,6 +2032,16 @@ static struct config_bool ConfigureNamesBool[] =
 			gettext_noop("Sets whether a WAL receiver should create a temporary replication slot if no permanent slot is configured."),
 		},
 		&wal_receiver_create_temp_slot,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"bulk_insert", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets the transaction to bulk insert mode."),
+			gettext_noop("A ring buffer of limited size will be used."),
+		},
+		&insert_in_bulk,
 		false,
 		NULL, NULL, NULL
 	},

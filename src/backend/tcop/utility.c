@@ -611,6 +611,10 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 									SetPGVariable("transaction_deferrable",
 												  list_make1(item->arg),
 												  true);
+								else if (strcmp(item->defname, "bulk") == 0)
+									SetPGVariable("bulk_insert",
+												  list_make1(item->arg),
+												  true);
 							}
 						}
 						break;

@@ -26,6 +26,7 @@
 #include "access/xlog.h"
 #include "catalog/dependency.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_proc_d.h"
 #include "catalog/pg_type.h"
 #include "commands/copy.h"
 #include "commands/defrem.h"
@@ -40,11 +41,13 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "optimizer/clauses.h"
 #include "optimizer/optimizer.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
 #include "parser/parse_relation.h"
+#include "pgstat.h"
 #include "port/pg_bswap.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/fd.h"
@@ -94,6 +97,193 @@ typedef enum CopyInsertMethod
 	CIM_MULTI,					/* always use table_multi_insert */
 	CIM_MULTI_CONDITIONAL		/* use table_multi_insert only if valid */
 } CopyInsertMethod;
+
+/*
+ * State of the line.
+ */
+typedef enum ParallelCopyLineState
+{
+	LINE_INIT,					/* initial state of line */
+	LINE_LEADER_POPULATING,		/* leader processing line */
+	LINE_LEADER_POPULATED,		/* leader completed populating line */
+	LINE_WORKER_PROCESSING,		/* worker processing line */
+	LINE_WORKER_PROCESSED		/* worker completed processing line */
+}ParallelCopyLineState;
+
+#define RAW_BUF_SIZE 65536		/* we palloc RAW_BUF_SIZE+1 bytes */
+
+/*
+ * The macros DATA_BLOCK_SIZE, RINGSIZE & MAX_BLOCKS_COUNT stores the records
+ * read from the file that need to be inserted into the relation. These values
+ * help in handover of multiple records with significant size of data to be
+ * processed by each of the workers to make sure there is no context switch & the
+ * work is fairly distributed among the workers. This number showed best
+ * results in the performance tests.
+ */
+#define DATA_BLOCK_SIZE RAW_BUF_SIZE
+
+/* It can hold upto 10000 record information for worker to process. */
+#define RINGSIZE (10 * 1000)
+
+/* It can hold 1000 blocks of 64K data in DSM to be processed by the worker. */
+#define MAX_BLOCKS_COUNT 1000
+
+/*
+ * Each worker will be allocated WORKER_CHUNK_COUNT of records from DSM data
+ * block to process to avoid lock contention. This value should be mode of
+ * RINGSIZE, as wrap around cases is currently not handled while selecting the
+ * WORKER_CHUNK_COUNT by the worker.
+ */
+#define WORKER_CHUNK_COUNT 50
+
+#define	IsParallelCopy()		(cstate->is_parallel)
+#define IsLeader()				(cstate->pcdata->is_leader)
+#define IsWorker()				(IsParallelCopy() && !IsLeader())
+#define IsHeaderLine()			(cstate->header_line && cstate->cur_lineno == 1)
+
+/*
+ * Copy data block information.
+ * ParallelCopyDataBlock's will be created in DSM. Data read from file will be
+ * copied in these DSM data blocks. The leader process identifies the records
+ * and the record information will be shared to the workers. The workers will
+ * insert the records into the table. There can be one or more number of records
+ * in each of the data block based on the record size.
+ */
+typedef struct ParallelCopyDataBlock
+{
+	/* The number of unprocessed lines in the current block. */
+	pg_atomic_uint32 unprocessed_line_parts;
+
+	/*
+	 * If the current line data is continued into another block, following_block
+	 * will have the position where the remaining data need to be read.
+	 */
+	uint32	following_block;
+
+	/*
+	 * This flag will be set, when the leader finds out this block can be read
+	 * safely by the worker. This helps the worker to start processing the line
+	 * early where the line will be spread across many blocks and the worker
+	 * need not wait for the complete line to be processed.
+	 */
+	bool   curr_blk_completed;
+	char   data[DATA_BLOCK_SIZE]; /* data read from file */
+	uint8  skip_bytes;
+}ParallelCopyDataBlock;
+
+/*
+ * Individual line information.
+ * ParallelCopyLineBoundary is common data structure between leader & worker,
+ * Leader process will be populating data block, data block offset & the size of
+ * the record in DSM for the workers to copy the data into the relation.
+ * This is protected by the following sequence in the leader & worker. If they
+ * don't follow this order the worker might process wrong line_size and leader
+ * might populate the information which worker has not yet processed or in the
+ * process of processing.
+ * Leader should operate in the following order:
+ * 1) check if line_size is -1, if not wait, it means worker is still
+ * processing.
+ * 2) set line_state to LINE_LEADER_POPULATING.
+ * 3) update first_block, start_offset & cur_lineno in any order.
+ * 4) update line_size.
+ * 5) update line_state to LINE_LEADER_POPULATED.
+ * Worker should operate in the following order:
+ * 1) check line_state is LINE_LEADER_POPULATED, if not it means leader is still
+ * populating the data.
+ * 2) read line_size.
+ * 3) only one worker should choose one line for processing, this is handled by
+ *    using pg_atomic_compare_exchange_u32, worker will change the sate to
+ *    LINE_WORKER_PROCESSING only if line_state is LINE_LEADER_POPULATED.
+ * 4) read first_block, start_offset & cur_lineno in any order.
+ * 5) process line_size data.
+ * 6) update line_size to -1.
+ */
+typedef struct ParallelCopyLineBoundary
+{
+	/* Position of the first block in data_blocks array. */
+	uint32				first_block;
+	uint32				start_offset;   /* start offset of the line */
+
+	/*
+	 * Size of the current line -1 means line is yet to be filled completely,
+	 * 0 means empty line, >0 means line filled with line size data.
+	 */
+	pg_atomic_uint32	line_size;
+	pg_atomic_uint32	line_state;		/* line state */
+	uint64				cur_lineno;		/* line number for error messages */
+}ParallelCopyLineBoundary;
+
+/*
+ * Circular queue used to store the line information.
+ */
+typedef struct ParallelCopyLineBoundaries
+{
+	/* Position for the leader to populate a line. */
+	uint32			pos;
+
+	/* Data read from the file/stdin by the leader process. */
+	ParallelCopyLineBoundary	ring[RINGSIZE];
+}ParallelCopyLineBoundaries;
+
+/*
+ * Shared information among parallel copy workers. This will be allocated in the
+ * DSM segment.
+ */
+typedef struct ParallelCopyShmInfo
+{
+	bool					is_read_in_progress; /* file read status */
+
+	/*
+	 * Actual lines inserted by worker, will not be same as
+	 * total_worker_processed if where condition is specified along with copy.
+	 * This will be the actual records inserted into the relation.
+	 */
+	pg_atomic_uint64			processed;
+
+	/*
+	 * The number of records currently processed by the worker, this will also
+	 * include the number of records that was filtered because of where clause.
+	 */
+	pg_atomic_uint64			total_worker_processed;
+	uint64						populated; /* lines populated by leader */
+	uint32						cur_block_pos; /* current data block */
+	ParallelCopyDataBlock		data_blocks[MAX_BLOCKS_COUNT]; /* data block array */
+	FullTransactionId			full_transaction_id; /* xid for copy from statement */
+	CommandId					mycid;	/* command id */
+	ParallelCopyLineBoundaries	line_boundaries; /* line array */
+} ParallelCopyShmInfo;
+
+/*
+ * Parallel copy line buffer information.
+ */
+typedef struct ParallelCopyLineBuf
+{
+	StringInfoData		line_buf;
+	uint64				cur_lineno;	/* line number for error messages */
+}ParallelCopyLineBuf;
+
+/*
+ * Parallel copy data information.
+ */
+typedef struct ParallelCopyData
+{
+	Oid					relid;				/* relation id of the table */
+	ParallelCopyShmInfo	*pcshared_info;		/* common info in shared memory */
+	bool				is_leader;
+
+	/* line position which worker is processing */
+	uint32				worker_processed_pos;
+
+	/*
+	 * Local line_buf array, workers will copy it here and release the lines
+	 * for the leader to continue.
+	 */
+	ParallelCopyLineBuf	worker_line_buf[WORKER_CHUNK_COUNT];
+	uint32				worker_line_buf_count; /* Number of lines */
+
+	/* Current position in worker_line_buf */
+	uint32				worker_line_buf_pos;
+}ParallelCopyData;
 
 /*
  * This struct contains all the state variables used throughout a COPY
@@ -224,13 +414,40 @@ typedef struct CopyStateData
 	 * appropriate amounts of data from this buffer.  In both modes, we
 	 * guarantee that there is a \0 at raw_buf[raw_buf_len].
 	 */
-#define RAW_BUF_SIZE 65536		/* we palloc RAW_BUF_SIZE+1 bytes */
 	char	   *raw_buf;
 	int			raw_buf_index;	/* next byte to process */
 	int			raw_buf_len;	/* total # of bytes stored */
+	int			nworkers;
+	bool		is_parallel;
+	ParallelCopyData *pcdata;
 	/* Shorthand for number of unconsumed bytes available in raw_buf */
 #define RAW_BUF_BYTES(cstate) ((cstate)->raw_buf_len - (cstate)->raw_buf_index)
 } CopyStateData;
+
+/*
+ * This structure helps in storing the common data from CopyStateData that are
+ * required by the workers. This information will then be allocated and stored
+ * into the DSM for the worker to retrieve and copy it to CopyStateData.
+ */
+typedef struct SerializedParallelCopyState
+{
+	/* low-level state data */
+	CopyDest            copy_dest;		/* type of copy source/destination */
+	int                 file_encoding;	/* file or remote side's character encoding */
+	bool                need_transcoding;	/* file encoding diff from server? */
+	bool                encoding_embeds_ascii;	/* ASCII can be non-first byte? */
+
+	/* parameters from the COPY command */
+	bool                csv_mode;		/* Comma Separated Value format? */
+	bool                header_line;	/* CSV header line? */
+	int                 null_print_len; /* length of same */
+	bool                force_quote_all;	/* FORCE_QUOTE *? */
+	bool                convert_selectively;	/* do selective binary conversion? */
+
+	/* Working state for COPY FROM */
+	AttrNumber          num_defaults;
+	Oid                 relid;
+}SerializedParallelCopyState;
 
 /* DestReceiver for COPY (query) TO */
 typedef struct
@@ -260,6 +477,22 @@ typedef struct
 
 /* Trim the list of buffers back down to this number after flushing */
 #define MAX_PARTITION_BUFFERS	32
+
+/* DSM keys for parallel copy.  */
+#define PARALLEL_COPY_KEY_SHARED_INFO		    1
+#define PARALLEL_COPY_KEY_CSTATE				2
+#define PARALLEL_COPY_KEY_NULL_PRINT			3
+#define PARALLEL_COPY_KEY_DELIM					4
+#define PARALLEL_COPY_KEY_QUOTE					5
+#define PARALLEL_COPY_KEY_ESCAPE				6
+#define PARALLEL_COPY_KEY_ATTNAME_LIST			7
+#define PARALLEL_COPY_KEY_NOT_NULL_LIST		    8
+#define PARALLEL_COPY_KEY_NULL_LIST			    9
+#define PARALLEL_COPY_KEY_CONVERT_LIST		   10
+#define PARALLEL_COPY_KEY_WHERE_CLAUSE_STR     11
+#define PARALLEL_COPY_KEY_RANGE_TABLE		   12
+#define PARALLEL_COPY_WAL_USAGE				   13
+#define PARALLEL_COPY_BUFFER_USAGE			   14
 
 /* Stores multi-insert data related to a single relation in CopyFrom. */
 typedef struct CopyMultiInsertBuffer
@@ -339,9 +572,13 @@ if (1) \
 { \
 	if (raw_buf_ptr > cstate->raw_buf_index) \
 	{ \
-		appendBinaryStringInfo(&cstate->line_buf, \
-							 cstate->raw_buf + cstate->raw_buf_index, \
-							   raw_buf_ptr - cstate->raw_buf_index); \
+		if (!IsParallelCopy()) \
+			appendBinaryStringInfo(&cstate->line_buf, \
+								   cstate->raw_buf + cstate->raw_buf_index, \
+								   raw_buf_ptr - cstate->raw_buf_index); \
+		else \
+			line_size +=  raw_buf_ptr - cstate->raw_buf_index; \
+		\
 		cstate->raw_buf_index = raw_buf_ptr; \
 	} \
 } else ((void) 0)
@@ -353,6 +590,66 @@ if (1) \
 	raw_buf_ptr = prev_raw_ptr + 1; \
 	goto not_end_of_copy; \
 } else ((void) 0)
+
+/* Begin parallel copy Macros */
+#define SET_NEWLINE_SIZE() \
+{ \
+	if (cstate->eol_type == EOL_NL || cstate->eol_type == EOL_CR) \
+		new_line_size = 1; \
+	else if (cstate->eol_type == EOL_CRNL) \
+		new_line_size = 2; \
+	else \
+		new_line_size = 0; \
+}
+
+/*
+ * COPY_WAIT_TO_PROCESS - Wait before continuing to process.
+ */
+#define COPY_WAIT_TO_PROCESS() \
+{ \
+	CHECK_FOR_INTERRUPTS(); \
+	(void) WaitLatch(MyLatch, \
+					 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH, \
+					 1L, WAIT_EVENT_PG_SLEEP); \
+	ResetLatch(MyLatch); \
+}
+
+/*
+ * CLEAR_EOL_LINE - Wrapper for clearing EOL.
+ */
+#define CLEAR_EOL_LINE() \
+if (!result && !IsHeaderLine()) \
+{ \
+	if (IsParallelCopy()) \
+		ClearEOLFromCopiedData(cstate, cstate->raw_buf, \
+									raw_buf_ptr, &line_size); \
+	else \
+		ClearEOLFromCopiedData(cstate, cstate->line_buf.data, \
+									cstate->line_buf.len, \
+									&cstate->line_buf.len); \
+} \
+
+/*
+ * INCREMENTPROCESSED - Increment the lines processed.
+ */
+#define INCREMENTPROCESSED(processed) \
+{ \
+	if (!IsParallelCopy()) \
+		processed++; \
+	else \
+		pg_atomic_add_fetch_u64(&cstate->pcdata->pcshared_info->processed, 1); \
+}
+
+/*
+ * GETPROCESSED - Get the lines processed.
+ */
+#define GETPROCESSED(processed) \
+if (!IsParallelCopy()) \
+	return processed; \
+else \
+	return pg_atomic_read_u64(&cstate->pcdata->pcshared_info->processed);
+
+/* End parallel copy Macros */
 
 static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
 
@@ -401,6 +698,1142 @@ static bool CopyGetInt16(CopyState cstate, int16 *val);
 static bool CopyLoadRawBuf(CopyState cstate);
 static int	CopyReadBinaryData(CopyState cstate, char *dest, int nbytes);
 
+static pg_attribute_always_inline void EndParallelCopy(ParallelContext *pcxt);
+static void PopulateCommonCstateInfo(CopyState cstate, TupleDesc	tup_desc,
+									 List *attnamelist);
+static void ClearEOLFromCopiedData(CopyState cstate, char *copy_line_data,
+								   int copy_line_pos, int *copy_line_size);
+static void ConvertToServerEncoding(CopyState cstate);
+static void ExecBeforeStmtTrigger(CopyState cstate);
+static void CheckTargetRelValidity(CopyState cstate);
+static void PopulateCstateCatalogInfo(CopyState cstate);
+static pg_attribute_always_inline uint32 GetLinePosition(CopyState cstate);
+/*
+ * SerializeParallelCopyState - Copy shared_cstate using cstate information.
+ */
+static pg_attribute_always_inline void
+SerializeParallelCopyState(CopyState cstate, SerializedParallelCopyState *shared_cstate)
+{
+	shared_cstate->copy_dest = cstate->copy_dest;
+	shared_cstate->file_encoding = cstate->file_encoding;
+	shared_cstate->need_transcoding = cstate->need_transcoding;
+	shared_cstate->encoding_embeds_ascii = cstate->encoding_embeds_ascii;
+	shared_cstate->csv_mode = cstate->csv_mode;
+	shared_cstate->header_line = cstate->header_line;
+	shared_cstate->null_print_len = cstate->null_print_len;
+	shared_cstate->force_quote_all = cstate->force_quote_all;
+	shared_cstate->convert_selectively = cstate->convert_selectively;
+	shared_cstate->num_defaults = cstate->num_defaults;
+	shared_cstate->relid = cstate->pcdata->relid;
+}
+
+/*
+ * RestoreString - Retrieve the string from shared memory.
+ */
+static void
+RestoreString(shm_toc *toc, int sharedkey, char **copystr)
+{
+	char *shared_str_val = (char *)shm_toc_lookup(toc, sharedkey, true);
+	if (shared_str_val)
+		*copystr = pstrdup(shared_str_val);
+}
+
+/*
+ * EstimateLineKeysStr - Estimate the size required in shared memory for the
+ * input string.
+ */
+static void
+EstimateLineKeysStr(ParallelContext *pcxt, char *inputstr)
+{
+	if (inputstr)
+	{
+		shm_toc_estimate_chunk(&pcxt->estimator, strlen(inputstr) + 1);
+		shm_toc_estimate_keys(&pcxt->estimator, 1);
+	}
+}
+
+/*
+ * SerializeString - Insert a string into shared memory.
+ */
+static void
+SerializeString(ParallelContext *pcxt, int key, char *inputstr)
+{
+	if (inputstr)
+	{
+		char *shmptr = (char *)shm_toc_allocate(pcxt->toc,
+												strlen(inputstr) + 1);
+		strcpy(shmptr, inputstr);
+		shm_toc_insert(pcxt->toc, key, shmptr);
+	}
+}
+
+/*
+ * PopulateParallelCopyShmInfo - set ParallelCopyShmInfo.
+ */
+static void
+PopulateParallelCopyShmInfo(ParallelCopyShmInfo *shared_info_ptr,
+							FullTransactionId full_transaction_id)
+{
+	uint32 count;
+
+	MemSet(shared_info_ptr, 0, sizeof(ParallelCopyShmInfo));
+	shared_info_ptr->is_read_in_progress = true;
+	shared_info_ptr->cur_block_pos = -1;
+	shared_info_ptr->full_transaction_id = full_transaction_id;
+	shared_info_ptr->mycid = GetCurrentCommandId(true);
+	for (count = 0; count < RINGSIZE; count++)
+	{
+		ParallelCopyLineBoundary *lineInfo = &shared_info_ptr->line_boundaries.ring[count];
+		pg_atomic_init_u32(&(lineInfo->line_size), -1);
+	}
+}
+
+/*
+ * IsTriggerFunctionParallelSafe - Check if the trigger function is parallel
+ * safe for the triggers. Return false if any one of the trigger has parallel
+ * unsafe function.
+ */
+static pg_attribute_always_inline bool
+IsTriggerFunctionParallelSafe(TriggerDesc *trigdesc)
+{
+	int	i;
+	for (i = 0; i < trigdesc->numtriggers; i++)
+	{
+		Trigger    *trigger = &trigdesc->triggers[i];
+		int 		trigtype = RI_TRIGGER_NONE;
+
+		if (func_parallel(trigger->tgfoid) != PROPARALLEL_SAFE)
+			return false;
+
+		/* If the trigger is parallel safe, also look for RI_TRIGGER. */
+		trigtype = RI_FKey_trigger_type(trigger->tgfoid);
+		if (trigtype == RI_TRIGGER_PK || trigtype == RI_TRIGGER_FK)
+			return false;
+	}
+
+	return true;
+}
+
+/*
+ * CheckExprParallelSafety - determine parallel safety of volatile expressions
+ * in default clause of column definition or in where clause and return true if
+ * they are parallel safe.
+ */
+static pg_attribute_always_inline bool
+CheckExprParallelSafety(CopyState cstate)
+{
+	if (contain_volatile_functions(cstate->whereClause))
+	{
+		if (max_parallel_hazard((Query *)cstate->whereClause) != PROPARALLEL_SAFE)
+			return false;
+	}
+
+	/*
+	 * Check if any of the column has volatile default expression. if yes, and
+	 * they are not parallel safe, then parallelism is not allowed. For
+	 * instance, if there are any serial/bigserial columns for which nextval()
+	 * default expression which is parallel unsafe is associated, parallelism
+	 * should not be allowed. In non parallel copy volatile functions are not
+	 * checked for nextval().
+	 */
+	if (cstate->defexprs != NULL && cstate->num_defaults != 0)
+	{
+		int     i;
+		for (i = 0; i < cstate->num_defaults; i++)
+		{
+			bool volatile_expr = contain_volatile_functions((Node *)cstate->defexprs[i]->expr);
+			if (volatile_expr &&
+				(max_parallel_hazard((Query *)cstate->defexprs[i]->expr)) !=
+				 PROPARALLEL_SAFE)
+				return false;
+		}
+	}
+
+	return true;
+}
+
+/*
+ * FindInsertMethod - determine insert mode single, multi, or multi conditional.
+ */
+static pg_attribute_always_inline CopyInsertMethod
+FindInsertMethod(CopyState cstate)
+{
+	if (cstate->rel->trigdesc != NULL &&
+		(cstate->rel->trigdesc->trig_insert_before_row ||
+		 cstate->rel->trigdesc->trig_insert_instead_row))
+		return CIM_SINGLE;
+
+	if (cstate->rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
+			cstate->rel->trigdesc != NULL &&
+			cstate->rel->trigdesc->trig_insert_new_table)
+		return CIM_SINGLE;
+
+	if (cstate->rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+		return CIM_SINGLE;
+
+	if (cstate->rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		return CIM_MULTI_CONDITIONAL;
+
+	return CIM_MULTI;
+}
+
+/*
+ * IsParallelCopyAllowed - check for the cases where parallel copy is not
+ * applicable.
+ */
+static pg_attribute_always_inline bool
+IsParallelCopyAllowed(CopyState cstate)
+{
+	/* Parallel copy not allowed for frontend (2.0 protocol) & binary option. */
+	if ((cstate->copy_dest == COPY_OLD_FE) || cstate->binary)
+		return false;
+
+	/* Check if copy is into foreign table or temporary table. */
+	if (cstate->rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
+		RelationUsesLocalBuffers(cstate->rel))
+		return false;
+
+	/* Check if trigger function is parallel safe. */
+	if (cstate->rel->trigdesc != NULL &&
+		!IsTriggerFunctionParallelSafe(cstate->rel->trigdesc))
+		return false;
+
+	/*
+	 * Check if there is after statement or instead of trigger or transition
+	 * table triggers.
+	 */
+	if (cstate->rel->trigdesc != NULL &&
+		(cstate->rel->trigdesc->trig_insert_after_statement ||
+		 cstate->rel->trigdesc->trig_insert_instead_row ||
+		 cstate->rel->trigdesc->trig_insert_new_table))
+		return false;
+
+	/* Check if the volatile expressions are parallel safe, if present any. */
+	if (!CheckExprParallelSafety(cstate))
+		return false;
+
+	/* Check if the insertion mode is single. */
+	if (FindInsertMethod(cstate) == CIM_SINGLE)
+		return false;
+
+	return true;
+}
+
+/*
+ * BeginParallelCopy - start parallel copy tasks.
+ *
+ * Get the number of workers required to perform the parallel copy. The data
+ * structures that are required by the parallel workers will be initialized, the
+ * size required in DSM will be calculated and the necessary keys will be loaded
+ * in the DSM. The specified number of workers will then be launched.
+ */
+static ParallelContext*
+BeginParallelCopy(int nworkers, CopyState cstate, List *attnamelist, Oid relid)
+{
+	ParallelContext *pcxt;
+	ParallelCopyShmInfo *shared_info_ptr;
+	SerializedParallelCopyState *shared_cstate;
+	FullTransactionId full_transaction_id;
+	Size est_cstateshared;
+	char *whereClauseStr = NULL;
+	char *rangeTableStr = NULL;
+	char *attnameListStr = NULL;
+	char *notnullListStr = NULL;
+	char *nullListStr = NULL;
+	char *convertListStr = NULL;
+	int  parallel_workers = 0;
+	WalUsage   *walusage;
+	BufferUsage *bufferusage;
+	ParallelCopyData *pcdata;
+	MemoryContext oldcontext;
+
+	CheckTargetRelValidity(cstate);
+	parallel_workers = Min(nworkers, max_worker_processes);
+
+	/* Can't perform copy in parallel */
+	if (parallel_workers <= 0)
+		return NULL;
+
+	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
+	pcdata = (ParallelCopyData *) palloc0(sizeof(ParallelCopyData));
+	MemoryContextSwitchTo(oldcontext);
+	cstate->pcdata = pcdata;
+
+	/*
+	 * User chosen parallel copy. Determine if the parallel copy is actually
+	 * allowed. If not, go with the non-parallel mode.
+	 */
+	if (!IsParallelCopyAllowed(cstate))
+		return NULL;
+
+	full_transaction_id = GetCurrentFullTransactionId();
+
+	EnterParallelMode();
+	pcxt = CreateParallelContext("postgres", "ParallelCopyMain",
+								 parallel_workers);
+	Assert(pcxt->nworkers > 0);
+
+	/*
+	 * Estimate size for shared information for PARALLEL_COPY_KEY_SHARED_INFO
+	 */
+	shm_toc_estimate_chunk(&pcxt->estimator, sizeof(ParallelCopyShmInfo));
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/* Estimate the size for shared information for PARALLEL_COPY_KEY_CSTATE */
+	est_cstateshared = 	MAXALIGN(sizeof(SerializedParallelCopyState));
+	shm_toc_estimate_chunk(&pcxt->estimator, est_cstateshared);
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	EstimateLineKeysStr(pcxt, cstate->null_print);
+	EstimateLineKeysStr(pcxt, cstate->null_print_client);
+	EstimateLineKeysStr(pcxt, cstate->delim);
+	EstimateLineKeysStr(pcxt, cstate->quote);
+	EstimateLineKeysStr(pcxt, cstate->escape);
+
+	if (cstate->whereClause != NULL)
+	{
+		whereClauseStr = nodeToString(cstate->whereClause);
+		EstimateLineKeysStr(pcxt, whereClauseStr);
+	}
+
+	if (cstate->range_table != NULL)
+	{
+		rangeTableStr = nodeToString(cstate->range_table);
+		EstimateLineKeysStr(pcxt, rangeTableStr);
+	}
+
+	/* Estimate the size for shared information for PARALLEL_COPY_KEY_XID. */
+	shm_toc_estimate_chunk(&pcxt->estimator, sizeof(FullTransactionId));
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/*
+	 * Estimate the size for shared information for
+	 * PARALLEL_COPY_KEY_ATTNAME_LIST.
+	 */
+	if (attnamelist != NIL)
+	{
+		attnameListStr = nodeToString(attnamelist);
+		EstimateLineKeysStr(pcxt, attnameListStr);
+	}
+
+	/*
+	 * Estimate the size for shared information for
+	 * PARALLEL_COPY_KEY_NOT_NULL_LIST.
+	 */
+	if (cstate->force_notnull != NIL)
+	{
+		notnullListStr = nodeToString(cstate->force_notnull);
+		EstimateLineKeysStr(pcxt, notnullListStr);
+	}
+
+	/*
+	 * Estimate the size for shared information for
+	 * PARALLEL_COPY_KEY_NULL_LIST.
+	 */
+	if (cstate->force_null != NIL)
+	{
+		nullListStr = nodeToString(cstate->force_null);
+		EstimateLineKeysStr(pcxt, nullListStr);
+	}
+
+	/*
+	 * Estimate the size for shared information for
+	 * PARALLEL_COPY_KEY_CONVERT_LIST.
+	 */
+	if (cstate->convert_select != NIL)
+	{
+		convertListStr = nodeToString(cstate->convert_select);
+		EstimateLineKeysStr(pcxt, convertListStr);
+	}
+
+	/*
+	 * Estimate space for WalUsage and BufferUsage -- PARALLEL_COPY_WAL_USAGE
+	 * and PARALLEL_COPY_BUFFER_USAGE.
+	 */
+	shm_toc_estimate_chunk(&pcxt->estimator,
+						   mul_size(sizeof(WalUsage), pcxt->nworkers));
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+	shm_toc_estimate_chunk(&pcxt->estimator,
+						   mul_size(sizeof(BufferUsage), pcxt->nworkers));
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	InitializeParallelDSM(pcxt);
+
+	/* If no DSM segment was available, back out (do serial copy) */
+	if (pcxt->seg == NULL)
+	{
+		EndParallelCopy(pcxt);
+		return NULL;
+	}
+
+	/* Allocate shared memory for PARALLEL_COPY_KEY_SHARED_INFO */
+	shared_info_ptr = (ParallelCopyShmInfo *) shm_toc_allocate(pcxt->toc, sizeof(ParallelCopyShmInfo));
+	PopulateParallelCopyShmInfo(shared_info_ptr, full_transaction_id);
+
+	shm_toc_insert(pcxt->toc, PARALLEL_COPY_KEY_SHARED_INFO, shared_info_ptr);
+	pcdata->pcshared_info = shared_info_ptr;
+	pcdata->relid = relid;
+
+	/* Store shared build state, for which we reserved space. */
+	shared_cstate = (SerializedParallelCopyState *)shm_toc_allocate(pcxt->toc, est_cstateshared);
+
+	/* copy cstate variables. */
+	SerializeParallelCopyState(cstate, shared_cstate);
+	shm_toc_insert(pcxt->toc, PARALLEL_COPY_KEY_CSTATE, shared_cstate);
+
+	SerializeString(pcxt, PARALLEL_COPY_KEY_NULL_PRINT, cstate->null_print);
+	SerializeString(pcxt, PARALLEL_COPY_KEY_DELIM, cstate->delim);
+	SerializeString(pcxt, PARALLEL_COPY_KEY_QUOTE, cstate->quote);
+	SerializeString(pcxt, PARALLEL_COPY_KEY_ESCAPE, cstate->escape);
+	SerializeString(pcxt, PARALLEL_COPY_KEY_ATTNAME_LIST, attnameListStr);
+	SerializeString(pcxt, PARALLEL_COPY_KEY_NOT_NULL_LIST, notnullListStr);
+	SerializeString(pcxt, PARALLEL_COPY_KEY_NULL_LIST, nullListStr);
+	SerializeString(pcxt, PARALLEL_COPY_KEY_CONVERT_LIST, convertListStr);
+	SerializeString(pcxt, PARALLEL_COPY_KEY_WHERE_CLAUSE_STR, whereClauseStr);
+	SerializeString(pcxt, PARALLEL_COPY_KEY_RANGE_TABLE, rangeTableStr);
+
+	/*
+	 * Allocate space for each worker's WalUsage and BufferUsage; no need to
+	 * initialize.
+	 */
+	walusage = shm_toc_allocate(pcxt->toc,
+								mul_size(sizeof(WalUsage), pcxt->nworkers));
+	shm_toc_insert(pcxt->toc, PARALLEL_COPY_WAL_USAGE, walusage);
+	bufferusage = shm_toc_allocate(pcxt->toc,
+								   mul_size(sizeof(BufferUsage), pcxt->nworkers));
+	shm_toc_insert(pcxt->toc, PARALLEL_COPY_BUFFER_USAGE, bufferusage);
+
+	LaunchParallelWorkers(pcxt);
+	if (pcxt->nworkers_launched == 0)
+	{
+		EndParallelCopy(pcxt);
+		return NULL;
+	}
+
+	/*
+	 * Caller needs to wait for all launched workers when we return.  Make sure
+	 * that the failure-to-start case will not hang forever.
+	 */
+	WaitForParallelWorkersToAttach(pcxt);
+
+	pcdata->is_leader = true;
+	cstate->is_parallel = true;
+	return pcxt;
+}
+
+/*
+ * EndParallelCopy - end the parallel copy tasks.
+ */
+static pg_attribute_always_inline void
+EndParallelCopy(ParallelContext *pcxt)
+{
+	Assert(!IsParallelWorker());
+
+	DestroyParallelContext(pcxt);
+	ExitParallelMode();
+}
+
+/*
+ * InitializeParallelCopyInfo - Initialize parallel worker.
+ */
+static void
+InitializeParallelCopyInfo(SerializedParallelCopyState *shared_cstate,
+		CopyState cstate, List *attnamelist)
+{
+	uint32		count;
+	ParallelCopyData *pcdata = cstate->pcdata;
+	TupleDesc	tup_desc = RelationGetDescr(cstate->rel);
+
+	cstate->copy_dest = shared_cstate->copy_dest;
+	cstate->file_encoding = shared_cstate->file_encoding;
+	cstate->need_transcoding = shared_cstate->need_transcoding;
+	cstate->encoding_embeds_ascii = shared_cstate->encoding_embeds_ascii;
+	cstate->csv_mode = shared_cstate->csv_mode;
+	cstate->header_line = shared_cstate->header_line;
+	cstate->null_print_len = shared_cstate->null_print_len;
+	cstate->force_quote_all = shared_cstate->force_quote_all;
+	cstate->convert_selectively = shared_cstate->convert_selectively;
+	cstate->num_defaults = shared_cstate->num_defaults;
+	pcdata->relid = shared_cstate->relid;
+
+	PopulateCommonCstateInfo(cstate, tup_desc, attnamelist);
+
+	/* Initialize state variables. */
+	cstate->reached_eof = false;
+	cstate->eol_type = EOL_UNKNOWN;
+	cstate->cur_relname = RelationGetRelationName(cstate->rel);
+	cstate->cur_lineno = 0;
+	cstate->cur_attname = NULL;
+	cstate->cur_attval = NULL;
+
+	/* Set up variables to avoid per-attribute overhead. */
+	initStringInfo(&cstate->attribute_buf);
+
+	initStringInfo(&cstate->line_buf);
+	for (count = 0; count < WORKER_CHUNK_COUNT; count++)
+		initStringInfo(&pcdata->worker_line_buf[count].line_buf);
+
+	cstate->line_buf_converted = false;
+	cstate->raw_buf = NULL;
+	cstate->raw_buf_index = cstate->raw_buf_len = 0;
+
+	PopulateCstateCatalogInfo(cstate);
+
+	/* Create workspace for CopyReadAttributes results. */
+	if (!cstate->binary)
+	{
+		AttrNumber	attr_count = list_length(cstate->attnumlist);
+
+		cstate->max_fields = attr_count;
+		cstate->raw_fields = (char **)palloc(attr_count * sizeof(char *));
+	}
+}
+
+/*
+ * CacheLineInfo - Cache the line information to local memory.
+ */
+static bool
+CacheLineInfo(CopyState cstate, uint32 buff_count)
+{
+	ParallelCopyShmInfo *pcshared_info = cstate->pcdata->pcshared_info;
+	ParallelCopyData *pcdata = cstate->pcdata;
+	uint32			write_pos;
+	ParallelCopyDataBlock *data_blk_ptr;
+	ParallelCopyLineBoundary *lineInfo;
+	uint32 offset;
+	int dataSize;
+	int copiedSize = 0;
+
+	resetStringInfo(&pcdata->worker_line_buf[buff_count].line_buf);
+	write_pos = GetLinePosition(cstate);
+	if (-1 == write_pos)
+		return true;
+
+	/* Get the current line information. */
+	lineInfo = &pcshared_info->line_boundaries.ring[write_pos];
+	if (pg_atomic_read_u32(&lineInfo->line_size) == 0)
+		goto empty_data_line_update;
+
+	/* Get the block information. */
+	data_blk_ptr = &pcshared_info->data_blocks[lineInfo->first_block];
+
+	/* Get the offset information from where the data must be copied. */
+	offset = lineInfo->start_offset;
+	pcdata->worker_line_buf[buff_count].cur_lineno = lineInfo->cur_lineno;
+
+	elog(DEBUG1, "[Worker] Processing - line position:%d, block:%d, unprocessed lines:%d, offset:%d, line size:%d",
+				 write_pos, lineInfo->first_block,
+				 pg_atomic_read_u32(&data_blk_ptr->unprocessed_line_parts),
+				 offset, pg_atomic_read_u32(&lineInfo->line_size));
+
+	for (;;)
+	{
+		uint8 skip_bytes = data_blk_ptr->skip_bytes;
+		/*
+		 * There is a possibility that the above loop has come out because
+		 * data_blk_ptr->curr_blk_completed is set, but dataSize read might
+		 * be an old value, if data_blk_ptr->curr_blk_completed and the line is
+		 * completed, line_size will be set. Read the line_size again to be
+		 * sure if it is complete or partial block.
+		 */
+		dataSize = pg_atomic_read_u32(&lineInfo->line_size);
+		if (dataSize)
+		{
+			int remainingSize = dataSize - copiedSize;
+			if (!remainingSize)
+				break;
+
+			/* Whole line is in current block. */
+			if (remainingSize + offset + skip_bytes < DATA_BLOCK_SIZE)
+			{
+				appendBinaryStringInfo(&pcdata->worker_line_buf[buff_count].line_buf,
+									   &data_blk_ptr->data[offset],
+									   remainingSize);
+				pg_atomic_sub_fetch_u32(&data_blk_ptr->unprocessed_line_parts,
+										1);
+				break;
+			}
+			else
+			{
+				/* Line is spread across the blocks. */
+				uint32 lineInCurrentBlock =  (DATA_BLOCK_SIZE - skip_bytes) - offset;
+				appendBinaryStringInfoNT(&pcdata->worker_line_buf[buff_count].line_buf,
+										 &data_blk_ptr->data[offset],
+										 lineInCurrentBlock);
+				pg_atomic_sub_fetch_u32(&data_blk_ptr->unprocessed_line_parts, 1);
+				copiedSize += lineInCurrentBlock;
+				while (copiedSize < dataSize)
+				{
+					uint32 currentBlockCopySize;
+					ParallelCopyDataBlock *currBlkPtr = &pcshared_info->data_blocks[data_blk_ptr->following_block];
+					skip_bytes = currBlkPtr->skip_bytes;
+
+					/*
+					 * If complete data is present in current block use
+					 * dataSize - copiedSize, or copy the whole block from
+					 * current block.
+					 */
+					currentBlockCopySize = Min(dataSize - copiedSize, DATA_BLOCK_SIZE - skip_bytes);
+					appendBinaryStringInfoNT(&pcdata->worker_line_buf[buff_count].line_buf,
+											 &currBlkPtr->data[0],
+											 currentBlockCopySize);
+					pg_atomic_sub_fetch_u32(&currBlkPtr->unprocessed_line_parts, 1);
+					copiedSize += currentBlockCopySize;
+					data_blk_ptr = currBlkPtr;
+				}
+
+				break;
+			}
+		}
+		else
+		{
+			/* Copy this complete block from the current offset. */
+			uint32 lineInCurrentBlock =  (DATA_BLOCK_SIZE - skip_bytes) - offset;
+			appendBinaryStringInfoNT(&pcdata->worker_line_buf[buff_count].line_buf,
+									 &data_blk_ptr->data[offset],
+									 lineInCurrentBlock);
+			pg_atomic_sub_fetch_u32(&data_blk_ptr->unprocessed_line_parts, 1);
+			copiedSize += lineInCurrentBlock;
+
+			/*
+			 * Reset the offset. For the first copy, copy from the offset. For
+			 * the subsequent copy the complete block.
+			 */
+			offset = 0;
+
+			/* Set data_blk_ptr to the following block. */
+			data_blk_ptr = &pcshared_info->data_blocks[data_blk_ptr->following_block];
+		}
+
+		for (;;)
+		{
+			/* Get the size of this line */
+			dataSize = pg_atomic_read_u32(&lineInfo->line_size);
+
+			/*
+			 * If the data is present in current block lineInfo.line_size
+			 * will be updated. If the data is spread across the blocks either
+			 * of lineInfo.line_size or data_blk_ptr->curr_blk_completed can
+			 * be updated. lineInfo.line_size will be updated if the complete
+			 * read is finished. data_blk_ptr->curr_blk_completed will be
+			 * updated if processing of current block is finished and data
+			 * processing is not finished.
+			 */
+			if (data_blk_ptr->curr_blk_completed || (dataSize != -1))
+				break;
+
+			COPY_WAIT_TO_PROCESS()
+		}
+	}
+
+empty_data_line_update:
+	elog(DEBUG1, "[Worker] Completed processing line:%d", write_pos);
+	pg_atomic_write_u32(&lineInfo->line_state, LINE_WORKER_PROCESSED);
+	pg_atomic_write_u32(&lineInfo->line_size, -1);
+	pg_atomic_add_fetch_u64(&pcshared_info->total_worker_processed, 1);
+	return false;
+}
+
+/*
+ * GetWorkerLine - Returns a line for worker to process.
+ */
+static bool
+GetWorkerLine(CopyState cstate)
+{
+	uint32 buff_count;
+	ParallelCopyData *pcdata = cstate->pcdata;
+
+	/*
+	 * Copy the line data to line_buf and release the line position so that the
+	 * worker can continue loading data.
+	 */
+	if (pcdata->worker_line_buf_pos < pcdata->worker_line_buf_count)
+		goto return_line;
+
+	pcdata->worker_line_buf_pos = 0;
+	pcdata->worker_line_buf_count = 0;
+
+	for (buff_count = 0; buff_count < WORKER_CHUNK_COUNT; buff_count++)
+	{
+		bool result = CacheLineInfo(cstate, buff_count);
+		if (result)
+			break;
+
+		pcdata->worker_line_buf_count++;
+	}
+
+	if (pcdata->worker_line_buf_count)
+		goto return_line;
+	else
+		resetStringInfo(&cstate->line_buf);
+
+	return true;
+
+return_line:
+	cstate->line_buf = pcdata->worker_line_buf[pcdata->worker_line_buf_pos].line_buf;
+	cstate->cur_lineno = pcdata->worker_line_buf[pcdata->worker_line_buf_pos].cur_lineno;
+	cstate->line_buf_valid = true;
+
+	/* Mark that encoding conversion hasn't occurred yet. */
+	cstate->line_buf_converted = false;
+	ConvertToServerEncoding(cstate);
+	pcdata->worker_line_buf_pos++;
+	return false;
+ }
+
+/*
+ * ParallelCopyMain - parallel copy worker's code.
+ *
+ * Where clause handling, convert tuple to columns, add default null values for
+ * the missing columns that are not present in that record. Find the partition
+ * if it is partitioned table, invoke before row insert Triggers, handle
+ * constraints and insert the tuples.
+ */
+void
+ParallelCopyMain(dsm_segment *seg, shm_toc *toc)
+{
+	CopyState cstate;
+	ParallelCopyData *pcdata;
+	ParallelCopyShmInfo *pcshared_info;
+	SerializedParallelCopyState *shared_cstate;
+	Relation	rel = NULL;
+	MemoryContext oldcontext;
+	List *attlist = NIL;
+	char *whereClauseStr = NULL;
+	char *rangeTableStr = NULL;
+	char *attnameListStr = NULL;
+	char *notnullListStr = NULL;
+	char *nullListStr = NULL;
+	char *convertListStr = NULL;
+	WalUsage   *walusage;
+	BufferUsage *bufferusage;
+
+	/* Allocate workspace and zero all fields. */
+	cstate = (CopyStateData *) palloc0(sizeof(CopyStateData));
+
+	/*
+	 * We allocate everything used by a cstate in a new memory context. This
+	 * avoids memory leaks during repeated use of COPY in a query.
+	 */
+	cstate->copycontext = AllocSetContextCreate(CurrentMemoryContext,
+												"COPY",
+												ALLOCSET_DEFAULT_SIZES);
+	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
+
+	pcdata = (ParallelCopyData *) palloc0(sizeof(ParallelCopyData));
+	cstate->pcdata = pcdata;
+	pcdata->is_leader = false;
+	pcdata->worker_processed_pos = -1;
+	cstate->is_parallel = true;
+	pcshared_info = (ParallelCopyShmInfo *)shm_toc_lookup(toc, PARALLEL_COPY_KEY_SHARED_INFO, false);
+
+	ereport(DEBUG1, (errmsg("Starting parallel copy worker")));
+
+	pcdata->pcshared_info = pcshared_info;
+	AssignFullTransactionIdForWorker(pcshared_info->full_transaction_id);
+	AssignCommandIdForWorker(pcshared_info->mycid, true);
+
+	shared_cstate = (SerializedParallelCopyState *)shm_toc_lookup(toc, PARALLEL_COPY_KEY_CSTATE, false);
+	cstate->null_print = (char *)shm_toc_lookup(toc, PARALLEL_COPY_KEY_NULL_PRINT, true);
+
+	RestoreString(toc, PARALLEL_COPY_KEY_DELIM, &cstate->delim);
+	RestoreString(toc, PARALLEL_COPY_KEY_QUOTE, &cstate->quote);
+	RestoreString(toc, PARALLEL_COPY_KEY_ESCAPE, &cstate->escape);
+	RestoreString(toc, PARALLEL_COPY_KEY_ATTNAME_LIST, &attnameListStr);
+	if (attnameListStr)
+		attlist = (List *)stringToNode(attnameListStr);
+
+	RestoreString(toc, PARALLEL_COPY_KEY_NOT_NULL_LIST, &notnullListStr);
+	if (notnullListStr)
+		cstate->force_notnull = (List *)stringToNode(notnullListStr);
+
+	RestoreString(toc, PARALLEL_COPY_KEY_NULL_LIST, &nullListStr);
+	if (nullListStr)
+		cstate->force_null = (List *)stringToNode(nullListStr);
+
+	RestoreString(toc, PARALLEL_COPY_KEY_CONVERT_LIST, &convertListStr);
+	if (convertListStr)
+		cstate->convert_select = (List *)stringToNode(convertListStr);
+
+	RestoreString(toc, PARALLEL_COPY_KEY_WHERE_CLAUSE_STR, &whereClauseStr);
+	RestoreString(toc, PARALLEL_COPY_KEY_RANGE_TABLE, &rangeTableStr);
+
+	if (whereClauseStr)
+	{
+		Node *whereClauseCnvrtdFrmStr = (Node *) stringToNode(whereClauseStr);
+		cstate->whereClause = whereClauseCnvrtdFrmStr;
+	}
+
+	if (rangeTableStr)
+	{
+		List *rangeTableCnvrtdFrmStr = (List *) stringToNode(rangeTableStr);
+		cstate->range_table = rangeTableCnvrtdFrmStr;
+	}
+
+	/* Open and lock the relation, using the appropriate lock type. */
+	rel = table_open(shared_cstate->relid, RowExclusiveLock);
+	cstate->rel = rel;
+	InitializeParallelCopyInfo(shared_cstate, cstate, attlist);
+
+	CopyFrom(cstate);
+
+	if (rel != NULL)
+		table_close(rel, RowExclusiveLock);
+
+	/* Report WAL/buffer usage during parallel execution */
+	bufferusage = shm_toc_lookup(toc, PARALLEL_COPY_BUFFER_USAGE, false);
+	walusage = shm_toc_lookup(toc, PARALLEL_COPY_WAL_USAGE, false);
+	InstrEndParallelQuery(&bufferusage[ParallelWorkerNumber],
+						  &walusage[ParallelWorkerNumber]);
+
+	MemoryContextSwitchTo(oldcontext);
+	pfree(cstate);
+	return;
+}
+
+/*
+ * UpdateBlockInLineInfo - Update the line information.
+ */
+static pg_attribute_always_inline int
+UpdateBlockInLineInfo(CopyState cstate, uint32 blk_pos,
+					   uint32 offset, uint32 line_size, uint32 line_state)
+{
+	ParallelCopyShmInfo *pcshared_info = cstate->pcdata->pcshared_info;
+	ParallelCopyLineBoundaries *lineBoundaryPtr = &pcshared_info->line_boundaries;
+	ParallelCopyLineBoundary *lineInfo;
+	int line_pos = lineBoundaryPtr->pos;
+
+	/* Update the line information for the worker to pick and process. */
+	lineInfo = &lineBoundaryPtr->ring[line_pos];
+	while (pg_atomic_read_u32(&lineInfo->line_size) != -1)
+		COPY_WAIT_TO_PROCESS()
+
+	lineInfo->first_block = blk_pos;
+	lineInfo->start_offset = offset;
+	lineInfo->cur_lineno = cstate->cur_lineno;
+	pg_atomic_write_u32(&lineInfo->line_size, line_size);
+	pg_atomic_write_u32(&lineInfo->line_state, line_state);
+	lineBoundaryPtr->pos = (lineBoundaryPtr->pos + 1) % RINGSIZE;
+
+	return line_pos;
+}
+
+/*
+ * ParallelCopyFrom - parallel copy leader's functionality.
+ *
+ * Leader executes the before statement for before statement trigger, if before
+ * statement trigger is present. It will read the table data from the file and
+ * copy the contents to DSM data blocks. It will then read the input contents
+ * from the DSM data block and identify the records based on line breaks. This
+ * information is called line or a record that need to be inserted into a
+ * relation. The line information will be stored in ParallelCopyLineBoundary DSM
+ * data structure. Workers will then process this information and insert the
+ * data in to table. It will repeat this process until the all data is read from
+ * the file and all the DSM data blocks are processed. While processing if
+ * leader identifies that DSM Data blocks or DSM ParallelCopyLineBoundary data
+ * structures is full, leader will wait till the worker frees up some entries
+ * and repeat the process. It will wait till all the lines populated are
+ * processed by the workers and exits.
+ */
+static void
+ParallelCopyFrom(CopyState cstate)
+{
+	ParallelCopyShmInfo *pcshared_info = cstate->pcdata->pcshared_info;
+	ereport(DEBUG1, (errmsg("Running parallel copy leader")));
+
+	/* Execute the before statement triggers from the leader */
+	ExecBeforeStmtTrigger(cstate);
+
+	/* On input just throw the header line away. */
+	if (cstate->cur_lineno == 0 && cstate->header_line)
+	{
+		cstate->cur_lineno++;
+		if (CopyReadLine(cstate))
+		{
+			pcshared_info->is_read_in_progress = false;
+			return;			/* done */
+		}
+	}
+
+	for (;;)
+	{
+		bool done;
+		cstate->cur_lineno++;
+
+		/* Actually read the line into memory here. */
+		done = CopyReadLine(cstate);
+
+		/*
+		 * EOF at start of line means we're done.  If we see EOF after some
+		 * characters, we act as though it was newline followed by EOF, ie,
+		 * process the line and then exit loop on next iteration.
+		 */
+		if (done && cstate->line_buf.len == 0)
+			break;
+	}
+
+	pcshared_info->is_read_in_progress = false;
+	cstate->cur_lineno = 0;
+ }
+
+/*
+ * GetLinePosition - return the line position that worker should process.
+ */
+static uint32
+GetLinePosition(CopyState cstate)
+{
+	ParallelCopyData *pcdata = cstate->pcdata;
+	ParallelCopyShmInfo *pcshared_info = pcdata->pcshared_info;
+	uint32  previous_pos = pcdata->worker_processed_pos;
+	uint32 write_pos = (previous_pos == -1) ? 0 : (previous_pos + 1) % RINGSIZE;
+	for (;;)
+	{
+		int		dataSize;
+		bool	is_read_in_progress = pcshared_info->is_read_in_progress;
+		ParallelCopyLineBoundary *lineInfo;
+		ParallelCopyDataBlock *data_blk_ptr;
+		ParallelCopyLineState line_state = LINE_LEADER_POPULATED;
+		ParallelCopyLineState curr_line_state;
+		CHECK_FOR_INTERRUPTS();
+
+		/* File read completed & no elements to process. */
+		if (!is_read_in_progress &&
+			(pcshared_info->populated ==
+			 pg_atomic_read_u64(&pcshared_info->total_worker_processed)))
+		{
+			write_pos = -1;
+			break;
+		}
+
+		/* Get the current line information. */
+		lineInfo = &pcshared_info->line_boundaries.ring[write_pos];
+		curr_line_state = pg_atomic_read_u32(&lineInfo->line_state);
+		if ((write_pos % WORKER_CHUNK_COUNT == 0) &&
+			(curr_line_state == LINE_WORKER_PROCESSED ||
+			 curr_line_state == LINE_WORKER_PROCESSING))
+		{
+			pcdata->worker_processed_pos = write_pos;
+			write_pos = (write_pos + WORKER_CHUNK_COUNT) %  RINGSIZE;
+			continue;
+		}
+
+		/* Get the size of this line. */
+		dataSize = pg_atomic_read_u32(&lineInfo->line_size);
+
+		if (dataSize != 0) /* If not an empty line. */
+		{
+			/* Get the block information. */
+			data_blk_ptr = &pcshared_info->data_blocks[lineInfo->first_block];
+
+			if (!data_blk_ptr->curr_blk_completed && (dataSize == -1))
+			{
+				/* Wait till the current line or block is added. */
+				COPY_WAIT_TO_PROCESS()
+				continue;
+			}
+		}
+
+		/* Make sure that no worker has consumed this element. */
+		if (pg_atomic_compare_exchange_u32(&lineInfo->line_state,
+										   &line_state, LINE_WORKER_PROCESSING))
+			break;
+	}
+
+	pcdata->worker_processed_pos = write_pos;
+	return write_pos;
+}
+
+/*
+ * GetFreeCopyBlock - Get a free block for data to be copied.
+ */
+static pg_attribute_always_inline uint32
+GetFreeCopyBlock(ParallelCopyShmInfo *pcshared_info)
+{
+	int count = 0;
+	uint32 last_free_block = pcshared_info->cur_block_pos;
+	uint32 block_pos = (last_free_block != -1) ? ((last_free_block + 1) % MAX_BLOCKS_COUNT): 0;
+
+	/*
+	 * Get a new block for copying data, don't check current block, current
+	 * block will have some unprocessed data.
+	 */
+	while (count < (MAX_BLOCKS_COUNT - 1))
+	{
+		ParallelCopyDataBlock *dataBlkPtr = &pcshared_info->data_blocks[block_pos];
+		uint32 unprocessed_line_parts = pg_atomic_read_u32(&dataBlkPtr->unprocessed_line_parts);
+		if (unprocessed_line_parts == 0)
+		{
+			dataBlkPtr->curr_blk_completed = false;
+			dataBlkPtr->skip_bytes = 0;
+			pcshared_info->cur_block_pos = block_pos;
+			return block_pos;
+		}
+
+		block_pos = (block_pos + 1) % MAX_BLOCKS_COUNT;
+		count++;
+	}
+
+	return -1;
+}
+
+/*
+ * WaitGetFreeCopyBlock - If there are no blocks available, wait and get a block
+ * for copying data.
+ */
+static uint32
+WaitGetFreeCopyBlock(ParallelCopyShmInfo *pcshared_info)
+{
+	uint32 new_free_pos = -1;
+	for (;;)
+	{
+		new_free_pos = GetFreeCopyBlock(pcshared_info);
+		if (new_free_pos != -1)	/* We have got one block, break now. */
+			break;
+
+		COPY_WAIT_TO_PROCESS()
+	}
+
+	return new_free_pos;
+}
+
+/*
+ * SetRawBufForLoad - Set raw_buf to the shared memory where the file data must
+ * be read.
+ */
+static void
+SetRawBufForLoad(CopyState cstate, uint32 line_size, uint32 copy_buf_len,
+				 uint32 raw_buf_ptr, char **copy_raw_buf)
+{
+	ParallelCopyShmInfo	*pcshared_info;
+	uint32 cur_block_pos;
+	uint32 next_block_pos;
+	ParallelCopyDataBlock	*cur_data_blk_ptr = NULL;
+	ParallelCopyDataBlock	*next_data_blk_ptr = NULL;
+
+	if (!IsParallelCopy())
+		return;
+
+	pcshared_info = cstate->pcdata->pcshared_info;
+	cur_block_pos = pcshared_info->cur_block_pos;
+	cur_data_blk_ptr = (cstate->raw_buf) ? &pcshared_info->data_blocks[cur_block_pos] : NULL;
+	next_block_pos = WaitGetFreeCopyBlock(pcshared_info);
+	next_data_blk_ptr = &pcshared_info->data_blocks[next_block_pos];
+
+	/* set raw_buf to the data block in shared memory */
+	cstate->raw_buf = next_data_blk_ptr->data;
+	*copy_raw_buf = cstate->raw_buf;
+	if (cur_data_blk_ptr && line_size)
+	{
+		/*
+		 * Mark the previous block as completed, worker can start copying this
+		 * data.
+		 */
+		cur_data_blk_ptr->following_block = next_block_pos;
+		pg_atomic_add_fetch_u32(&cur_data_blk_ptr->unprocessed_line_parts, 1);
+		cur_data_blk_ptr->skip_bytes = copy_buf_len - raw_buf_ptr;
+		cur_data_blk_ptr->curr_blk_completed = true;
+	}
+}
+
+/*
+ * EndLineParallelCopy - Update the line information in shared memory.
+ */
+static void
+EndLineParallelCopy(CopyState cstate, uint32 line_pos, uint32 line_size,
+					 uint32 raw_buf_ptr)
+{
+	uint8 new_line_size;
+	if (!IsParallelCopy())
+		return;
+
+	if (!IsHeaderLine())
+	{
+		ParallelCopyShmInfo *pcshared_info = cstate->pcdata->pcshared_info;
+		ParallelCopyLineBoundaries *lineBoundaryPtr = &pcshared_info->line_boundaries;
+		SET_NEWLINE_SIZE()
+		if (line_size)
+		{
+			ParallelCopyLineBoundary *lineInfo = &lineBoundaryPtr->ring[line_pos];
+			/*
+			 * If the new_line_size > raw_buf_ptr, then the new block has only
+			 * new line char content. The unprocessed count should not be
+			 * increased in this case.
+			 */
+			if (raw_buf_ptr > new_line_size)
+			{
+				uint32 cur_block_pos = pcshared_info->cur_block_pos;
+				ParallelCopyDataBlock *curr_data_blk_ptr = &pcshared_info->data_blocks[cur_block_pos];
+				pg_atomic_add_fetch_u32(&curr_data_blk_ptr->unprocessed_line_parts, 1);
+			}
+
+			/* Update line size. */
+			pg_atomic_write_u32(&lineInfo->line_size, line_size);
+			pg_atomic_write_u32(&lineInfo->line_state, LINE_LEADER_POPULATED);
+			elog(DEBUG1, "[Leader] After adding - line position:%d, line_size:%d",
+						 line_pos, line_size);
+			pcshared_info->populated++;
+		}
+		else if (new_line_size)
+		{
+			/* This means only new line char, empty record should be inserted.*/
+			ParallelCopyLineBoundary *lineInfo;
+			line_pos = UpdateBlockInLineInfo(cstate, -1, -1, 0,
+											   LINE_LEADER_POPULATED);
+			lineInfo = &lineBoundaryPtr->ring[line_pos];
+			elog(DEBUG1, "[Leader] Added empty line with offset:%d, line position:%d, line size:%d",
+						 lineInfo->start_offset, line_pos,
+						 pg_atomic_read_u32(&lineInfo->line_size));
+			pcshared_info->populated++;
+		}
+	}
+}
+
+/*
+ * ExecBeforeStmtTrigger - Execute the before statement trigger, this will be
+ * executed for parallel copy by the leader process.
+ */
+static void
+ExecBeforeStmtTrigger(CopyState cstate)
+{
+	EState	   *estate = CreateExecutorState();
+	ResultRelInfo *resultRelInfo;
+
+	Assert(IsLeader());
+
+	/*
+	 * We need a ResultRelInfo so we can use the regular executor's
+	 * index-entry-making machinery.  (There used to be a huge amount of code
+	 * here that basically duplicated execUtils.c ...)
+	 */
+	resultRelInfo = makeNode(ResultRelInfo);
+	InitResultRelInfo(resultRelInfo,
+					  cstate->rel,
+					  1,		/* must match rel's position in range_table */
+					  NULL,
+					  0);
+
+	/* Verify the named relation is a valid target for INSERT */
+	CheckValidResultRel(resultRelInfo, CMD_INSERT);
+
+	estate->es_result_relations = resultRelInfo;
+	estate->es_num_result_relations = 1;
+	estate->es_result_relation_info = resultRelInfo;
+
+	ExecInitRangeTable(estate, cstate->range_table);
+
+	/*
+	 * Check BEFORE STATEMENT insertion triggers. It's debatable whether we
+	 * should do this for COPY, since it's not really an "INSERT" statement as
+	 * such. However, executing these triggers maintains consistency with the
+	 * EACH ROW triggers that we already fire on COPY.
+	 */
+	ExecBSInsertTriggers(estate, resultRelInfo);
+
+	/* Close any trigger target relations */
+	ExecCleanUpTriggerState(estate);
+
+	FreeExecutorState(estate);
+}
 
 /*
  * Send copy start/stop messages for frontend copies.  These have changed
@@ -801,14 +2234,18 @@ CopyLoadRawBuf(CopyState cstate)
 {
 	int			nbytes = RAW_BUF_BYTES(cstate);
 	int			inbytes;
+	int         minread = 1;
 
 	/* Copy down the unprocessed data if any. */
 	if (nbytes > 0)
 		memmove(cstate->raw_buf, cstate->raw_buf + cstate->raw_buf_index,
 				nbytes);
 
+	if (cstate->copy_dest == COPY_NEW_FE)
+		minread = RAW_BUF_SIZE - nbytes;
+
 	inbytes = CopyGetData(cstate, cstate->raw_buf + nbytes,
-						  1, RAW_BUF_SIZE - nbytes);
+						  minread, RAW_BUF_SIZE - nbytes);
 	nbytes += inbytes;
 	cstate->raw_buf[nbytes] = '\0';
 	cstate->raw_buf_index = 0;
@@ -1110,6 +2547,7 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 
 	if (is_from)
 	{
+		ParallelContext *pcxt = NULL;
 		Assert(rel);
 
 		/* check read-only transaction and parallel mode */
@@ -1119,7 +2557,24 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 		cstate = BeginCopyFrom(pstate, rel, stmt->filename, stmt->is_program,
 							   NULL, stmt->attlist, stmt->options);
 		cstate->whereClause = whereClause;
-		*processed = CopyFrom(cstate);	/* copy from file to database */
+		cstate->is_parallel = false;
+
+		if (cstate->nworkers > 0)
+			pcxt = BeginParallelCopy(cstate->nworkers, cstate, stmt->attlist,
+									 relid);
+
+		if (pcxt)
+		{
+			ParallelCopyFrom(cstate);
+
+			/* Wait for all copy workers to finish */
+			WaitForParallelWorkersToFinish(pcxt);
+			*processed = pg_atomic_read_u64(&cstate->pcdata->pcshared_info->processed);
+			EndParallelCopy(pcxt);
+		}
+		else
+			*processed = CopyFrom(cstate); /* copy from file to database */
+
 		EndCopyFrom(cstate);
 	}
 	else
@@ -1168,6 +2623,7 @@ ProcessCopyOptions(ParseState *pstate,
 	cstate->is_copy_from = is_from;
 
 	cstate->file_encoding = -1;
+	cstate->nworkers = -1;
 
 	/* Extract options from the statement node tree */
 	foreach(option, options)
@@ -1333,6 +2789,53 @@ ProcessCopyOptions(ParseState *pstate,
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("argument to option \"%s\" must be a valid encoding name",
+								defel->defname),
+						 parser_errposition(pstate, defel->location)));
+		}
+		else if (strcmp(defel->defname, "parallel") == 0)
+		{
+			char *endptr, *str;
+			long val;
+
+			if (!cstate->is_copy_from)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("parallel option supported only for copy from"),
+						 parser_errposition(pstate, defel->location)));
+			if (cstate->nworkers >= 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
+
+			str = defGetString(defel);
+
+			errno = 0; /* To distinguish success/failure after call */
+			val = strtol(str, &endptr, 10);
+
+			/* Check for various possible errors */
+			if ((errno == ERANGE && (val == LONG_MAX || val == LONG_MIN))
+				|| (errno != 0 && val == 0) ||
+				*endptr)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("improper use of argument to option \"%s\"",
+								defel->defname),
+						 parser_errposition(pstate, defel->location)));
+
+			if (endptr == str)
+			   ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("no digits were found in argument to option \"%s\"",
+								defel->defname),
+						 parser_errposition(pstate, defel->location)));
+
+			cstate->nworkers = (int) val;
+
+			if (cstate->nworkers <= 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("argument to option \"%s\" must be a positive integer greater than zero",
 								defel->defname),
 						 parser_errposition(pstate, defel->location)));
 		}
@@ -1514,7 +3017,6 @@ BeginCopy(ParseState *pstate,
 {
 	CopyState	cstate;
 	TupleDesc	tupDesc;
-	int			num_phys_attrs;
 	MemoryContext oldcontext;
 
 	/* Allocate workspace and zero all fields */
@@ -1680,6 +3182,25 @@ BeginCopy(ParseState *pstate,
 		tupDesc = cstate->queryDesc->tupDesc;
 	}
 
+	PopulateCommonCstateInfo(cstate, tupDesc, attnamelist);
+	cstate->copy_dest = COPY_FILE;	/* default */
+
+	MemoryContextSwitchTo(oldcontext);
+
+	return cstate;
+}
+
+/*
+ * PopulateCommonCstateInfo - Populates the common variables required for copy
+ * from operation. This is a helper function for BeginCopy &
+ * InitializeParallelCopyInfo function.
+ */
+static void
+PopulateCommonCstateInfo(CopyState cstate, TupleDesc	tupDesc,
+						 List *attnamelist)
+{
+	int			num_phys_attrs;
+
 	/* Generate or convert list of attributes to process */
 	cstate->attnumlist = CopyGetAttnums(tupDesc, cstate->rel, attnamelist);
 
@@ -1799,12 +3320,6 @@ BeginCopy(ParseState *pstate,
 		 pg_database_encoding_max_length() > 1);
 	/* See Multibyte encoding comment above */
 	cstate->encoding_embeds_ascii = PG_ENCODING_IS_CLIENT_ONLY(cstate->file_encoding);
-
-	cstate->copy_dest = COPY_FILE;	/* default */
-
-	MemoryContextSwitchTo(oldcontext);
-
-	return cstate;
 }
 
 /*
@@ -2696,32 +4211,11 @@ CopyMultiInsertInfoStore(CopyMultiInsertInfo *miinfo, ResultRelInfo *rri,
 }
 
 /*
- * Copy FROM file to relation.
+ * Check if the relation specified in copy from is valid.
  */
-uint64
-CopyFrom(CopyState cstate)
+static void
+CheckTargetRelValidity(CopyState cstate)
 {
-	ResultRelInfo *resultRelInfo;
-	ResultRelInfo *target_resultRelInfo;
-	ResultRelInfo *prevResultRelInfo = NULL;
-	EState	   *estate = CreateExecutorState(); /* for ExecConstraints() */
-	ModifyTableState *mtstate;
-	ExprContext *econtext;
-	TupleTableSlot *singleslot = NULL;
-	MemoryContext oldcontext = CurrentMemoryContext;
-
-	PartitionTupleRouting *proute = NULL;
-	ErrorContextCallback errcallback;
-	CommandId	mycid = GetCurrentCommandId(true);
-	int			ti_options = 0; /* start with default options for insert */
-	BulkInsertState bistate = NULL;
-	CopyInsertMethod insertMethod;
-	CopyMultiInsertInfo multiInsertInfo = {0};	/* pacify compiler */
-	uint64		processed = 0;
-	bool		has_before_insert_row_trig;
-	bool		has_instead_insert_row_trig;
-	bool		leafpart_use_multi_insert = false;
-
 	Assert(cstate->rel);
 
 	/*
@@ -2758,27 +4252,6 @@ CopyFrom(CopyState cstate)
 							RelationGetRelationName(cstate->rel))));
 	}
 
-	/*
-	 * If the target file is new-in-transaction, we assume that checking FSM
-	 * for free space is a waste of time.  This could possibly be wrong, but
-	 * it's unlikely.
-	 */
-	if (RELKIND_HAS_STORAGE(cstate->rel->rd_rel->relkind) &&
-		(cstate->rel->rd_createSubid != InvalidSubTransactionId ||
-		 cstate->rel->rd_firstRelfilenodeSubid != InvalidSubTransactionId))
-		ti_options |= TABLE_INSERT_SKIP_FSM;
-
-	/*
-	 * Optimize if new relfilenode was created in this subxact or one of its
-	 * committed children and we won't see those rows later as part of an
-	 * earlier scan or command. The subxact test ensures that if this subxact
-	 * aborts then the frozen rows won't be visible after xact cleanup.  Note
-	 * that the stronger test of exactly which subtransaction created it is
-	 * crucial for correctness of this optimization. The test for an earlier
-	 * scan or command tolerates false negatives. FREEZE causes other sessions
-	 * to see rows they would not see under MVCC, and a false negative merely
-	 * spreads that anomaly to the current session.
-	 */
 	if (cstate->freeze)
 	{
 		/*
@@ -2816,9 +4289,69 @@ CopyFrom(CopyState cstate)
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					 errmsg("cannot perform COPY FREEZE because the table was not created or truncated in the current subtransaction")));
-
-		ti_options |= TABLE_INSERT_FROZEN;
 	}
+}
+
+/*
+ * Copy FROM file to relation.
+ */
+uint64
+CopyFrom(CopyState cstate)
+{
+	ResultRelInfo *resultRelInfo;
+	ResultRelInfo *target_resultRelInfo;
+	ResultRelInfo *prevResultRelInfo = NULL;
+	EState	   *estate = CreateExecutorState(); /* for ExecConstraints() */
+	ModifyTableState *mtstate;
+	ExprContext *econtext;
+	TupleTableSlot *singleslot = NULL;
+	MemoryContext oldcontext = CurrentMemoryContext;
+
+	PartitionTupleRouting *proute = NULL;
+	ErrorContextCallback errcallback;
+	CommandId	mycid = IsParallelCopy() ? GetCurrentCommandId(false) :
+										   GetCurrentCommandId(true);
+	int			ti_options = 0; /* start with default options for insert */
+	BulkInsertState bistate = NULL;
+	CopyInsertMethod insertMethod;
+	CopyMultiInsertInfo multiInsertInfo = {0};	/* pacify compiler */
+	uint64		processed = 0;
+	bool		has_before_insert_row_trig;
+	bool		has_instead_insert_row_trig;
+	bool		leafpart_use_multi_insert = false;
+
+	/*
+	 * Perform this check if it is not parallel copy. In case of parallel
+	 * copy, this check is done by the leader, so that if any invalid case
+	 * exist the copy from command will error out from the leader itself,
+	 * avoiding launching workers, just to throw error.
+	 */
+	if (!IsParallelCopy())
+		CheckTargetRelValidity(cstate);
+
+	/*
+	 * If the target file is new-in-transaction, we assume that checking FSM
+	 * for free space is a waste of time.  This could possibly be wrong, but
+	 * it's unlikely.
+	 */
+	if (RELKIND_HAS_STORAGE(cstate->rel->rd_rel->relkind) &&
+		(cstate->rel->rd_createSubid != InvalidSubTransactionId ||
+		 cstate->rel->rd_firstRelfilenodeSubid != InvalidSubTransactionId))
+		ti_options |= TABLE_INSERT_SKIP_FSM;
+
+	/*
+	 * Optimize if new relfilenode was created in this subxact or one of its
+	 * committed children and we won't see those rows later as part of an
+	 * earlier scan or command. The subxact test ensures that if this subxact
+	 * aborts then the frozen rows won't be visible after xact cleanup.  Note
+	 * that the stronger test of exactly which subtransaction created it is
+	 * crucial for correctness of this optimization. The test for an earlier
+	 * scan or command tolerates false negatives. FREEZE causes other sessions
+	 * to see rows they would not see under MVCC, and a false negative merely
+	 * spreads that anomaly to the current session.
+	 */
+	if (cstate->freeze)
+		ti_options |= TABLE_INSERT_FROZEN;
 
 	/*
 	 * We need a ResultRelInfo so we can use the regular executor's
@@ -2834,7 +4367,8 @@ CopyFrom(CopyState cstate)
 	target_resultRelInfo = resultRelInfo;
 
 	/* Verify the named relation is a valid target for INSERT */
-	CheckValidResultRel(resultRelInfo, CMD_INSERT);
+	if (!IsParallelCopy())
+		CheckValidResultRel(resultRelInfo, CMD_INSERT);
 
 	ExecOpenIndices(resultRelInfo, false);
 
@@ -2983,13 +4517,16 @@ CopyFrom(CopyState cstate)
 	has_instead_insert_row_trig = (resultRelInfo->ri_TrigDesc &&
 								   resultRelInfo->ri_TrigDesc->trig_insert_instead_row);
 
-	/*
-	 * Check BEFORE STATEMENT insertion triggers. It's debatable whether we
-	 * should do this for COPY, since it's not really an "INSERT" statement as
-	 * such. However, executing these triggers maintains consistency with the
-	 * EACH ROW triggers that we already fire on COPY.
-	 */
-	ExecBSInsertTriggers(estate, resultRelInfo);
+	if (!IsParallelCopy())
+	{
+		/*
+		 * Check BEFORE STATEMENT insertion triggers. It's debatable whether we
+		 * should do this for COPY, since it's not really an "INSERT" statement as
+		 * such. However, executing these triggers maintains consistency with the
+		 * EACH ROW triggers that we already fire on COPY.
+		 */
+		ExecBSInsertTriggers(estate, resultRelInfo);
+	}
 
 	econtext = GetPerTupleExprContext(estate);
 
@@ -3088,6 +4625,16 @@ CopyFrom(CopyState cstate)
 					!has_before_insert_row_trig &&
 					!has_instead_insert_row_trig &&
 					resultRelInfo->ri_FdwRoutine == NULL;
+
+				/*
+				 * If the table has any partitions that are either foreign or
+				 * has BEFORE/INSTEAD OF triggers, we can't perform copy
+				 * operations with parallel workers.
+				 */
+				if (!leafpart_use_multi_insert && IsParallelWorker())
+					ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("cannot perform PARALLEL COPY if partition has BEFORE/INSTEAD OF triggers, or if the partition is foreign partition"),
+							errhint("Try COPY without PARALLEL option")));
 
 				/* Set the multi-insert buffer to use for this partition. */
 				if (leafpart_use_multi_insert)
@@ -3311,7 +4858,7 @@ CopyFrom(CopyState cstate)
 			 * or FDW; this is the same definition used by nodeModifyTable.c
 			 * for counting tuples inserted by an INSERT command.
 			 */
-			processed++;
+			INCREMENTPROCESSED(processed)
 		}
 	}
 
@@ -3366,30 +4913,15 @@ CopyFrom(CopyState cstate)
 
 	FreeExecutorState(estate);
 
-	return processed;
+	GETPROCESSED(processed)
 }
 
 /*
- * Setup to read tuples from a file for COPY FROM.
- *
- * 'rel': Used as a template for the tuples
- * 'filename': Name of server-local file to read
- * 'attnamelist': List of char *, columns to include. NIL selects all cols.
- * 'options': List of DefElem. See copy_opt_item in gram.y for selections.
- *
- * Returns a CopyState, to be passed to NextCopyFrom and related functions.
+ * PopulateCstateCatalogInfo - populate the catalog information.
  */
-CopyState
-BeginCopyFrom(ParseState *pstate,
-			  Relation rel,
-			  const char *filename,
-			  bool is_program,
-			  copy_data_source_cb data_source_cb,
-			  List *attnamelist,
-			  List *options)
+static void
+PopulateCstateCatalogInfo(CopyState cstate)
 {
-	CopyState	cstate;
-	bool		pipe = (filename == NULL);
 	TupleDesc	tupDesc;
 	AttrNumber	num_phys_attrs,
 				num_defaults;
@@ -3399,37 +4931,7 @@ BeginCopyFrom(ParseState *pstate,
 	Oid			in_func_oid;
 	int		   *defmap;
 	ExprState **defexprs;
-	MemoryContext oldcontext;
 	bool		volatile_defexprs;
-
-	cstate = BeginCopy(pstate, true, rel, NULL, InvalidOid, attnamelist, options);
-	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
-
-	/* Initialize state variables */
-	cstate->reached_eof = false;
-	cstate->eol_type = EOL_UNKNOWN;
-	cstate->cur_relname = RelationGetRelationName(cstate->rel);
-	cstate->cur_lineno = 0;
-	cstate->cur_attname = NULL;
-	cstate->cur_attval = NULL;
-
-	/*
-	 * Set up variables to avoid per-attribute overhead.  attribute_buf and
-	 * raw_buf are used in both text and binary modes, but we use line_buf
-	 * only in text mode.
-	 */
-	initStringInfo(&cstate->attribute_buf);
-	cstate->raw_buf = (char *) palloc(RAW_BUF_SIZE + 1);
-	cstate->raw_buf_index = cstate->raw_buf_len = 0;
-	if (!cstate->binary)
-	{
-		initStringInfo(&cstate->line_buf);
-		cstate->line_buf_converted = false;
-	}
-
-	/* Assign range table, we'll need it in CopyFrom. */
-	if (pstate)
-		cstate->range_table = pstate->p_rtable;
 
 	tupDesc = RelationGetDescr(cstate->rel);
 	num_phys_attrs = tupDesc->natts;
@@ -3508,6 +5010,61 @@ BeginCopyFrom(ParseState *pstate,
 	cstate->defexprs = defexprs;
 	cstate->volatile_defexprs = volatile_defexprs;
 	cstate->num_defaults = num_defaults;
+}
+
+/*
+ * Setup to read tuples from a file for COPY FROM.
+ *
+ * 'rel': Used as a template for the tuples
+ * 'filename': Name of server-local file to read
+ * 'attnamelist': List of char *, columns to include. NIL selects all cols.
+ * 'options': List of DefElem. See copy_opt_item in gram.y for selections.
+ *
+ * Returns a CopyState, to be passed to NextCopyFrom and related functions.
+ */
+CopyState
+BeginCopyFrom(ParseState *pstate,
+			  Relation rel,
+			  const char *filename,
+			  bool is_program,
+			  copy_data_source_cb data_source_cb,
+			  List *attnamelist,
+			  List *options)
+{
+	CopyState	cstate;
+	bool		pipe = (filename == NULL);
+	MemoryContext oldcontext;
+
+	cstate = BeginCopy(pstate, true, rel, NULL, InvalidOid, attnamelist, options);
+	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
+
+	/* Initialize state variables */
+	cstate->reached_eof = false;
+	cstate->eol_type = EOL_UNKNOWN;
+	cstate->cur_relname = RelationGetRelationName(cstate->rel);
+	cstate->cur_lineno = 0;
+	cstate->cur_attname = NULL;
+	cstate->cur_attval = NULL;
+
+	/*
+	 * Set up variables to avoid per-attribute overhead.  attribute_buf is
+	 * used in both text and binary modes, but we use line_buf and raw_buf
+	 * only in text mode.
+	 */
+	initStringInfo(&cstate->attribute_buf);
+	cstate->raw_buf = (IsParallelCopy()) ? NULL : (char *) palloc(RAW_BUF_SIZE + 1);
+	cstate->raw_buf_index = cstate->raw_buf_len = 0;
+	if (!cstate->binary)
+	{
+		initStringInfo(&cstate->line_buf);
+		cstate->line_buf_converted = false;
+	}
+
+	/* Assign range table, we'll need it in CopyFrom. */
+	if (pstate)
+		cstate->range_table = pstate->p_rtable;
+
+	PopulateCstateCatalogInfo(cstate);
 	cstate->is_program = is_program;
 
 	if (data_source_cb)
@@ -3644,26 +5201,35 @@ NextCopyFromRawFields(CopyState cstate, char ***fields, int *nfields)
 	/* only available for text or csv input */
 	Assert(!cstate->binary);
 
-	/* on input just throw the header line away */
-	if (cstate->cur_lineno == 0 && cstate->header_line)
+	if (IsParallelCopy())
 	{
-		cstate->cur_lineno++;
-		if (CopyReadLine(cstate))
-			return false;		/* done */
+		done = GetWorkerLine(cstate);
+		if (done && cstate->line_buf.len == 0)
+			return false;
 	}
+	else
+	{
+		/* on input just throw the header line away */
+		if (cstate->cur_lineno == 0 && cstate->header_line)
+		{
+			cstate->cur_lineno++;
+			if (CopyReadLine(cstate))
+				return false;		/* done */
+		}
 
-	cstate->cur_lineno++;
+		cstate->cur_lineno++;
 
-	/* Actually read the line into memory here */
-	done = CopyReadLine(cstate);
+		/* Actually read the line into memory here */
+		done = CopyReadLine(cstate);
 
-	/*
-	 * EOF at start of line means we're done.  If we see EOF after some
-	 * characters, we act as though it was newline followed by EOF, ie,
-	 * process the line and then exit loop on next iteration.
-	 */
-	if (done && cstate->line_buf.len == 0)
-		return false;
+		/*
+		 * EOF at start of line means we're done.  If we see EOF after some
+		 * characters, we act as though it was newline followed by EOF, ie,
+		 * process the line and then exit loop on next iteration.
+		 */
+		if (done && cstate->line_buf.len == 0)
+			return false;
+	}
 
 	/* Parse the line into de-escaped field values */
 	if (cstate->csv_mode)
@@ -3911,51 +5477,88 @@ CopyReadLine(CopyState cstate)
 		 */
 		if (cstate->copy_dest == COPY_NEW_FE)
 		{
+			bool bIsFirst = true;
 			do
 			{
-				cstate->raw_buf_index = cstate->raw_buf_len;
+				if (!IsParallelCopy())
+					cstate->raw_buf_index = cstate->raw_buf_len;
+				else
+				{
+					if (cstate->raw_buf_index == RAW_BUF_SIZE)
+					{
+						/* Get a new block if it is the first time, From the
+						 * subsequent time, reset the index and re-use the same
+						 * block.
+						 */
+						if (bIsFirst)
+						{
+							ParallelCopyShmInfo *pcshared_info = cstate->pcdata->pcshared_info;
+							uint32 block_pos = WaitGetFreeCopyBlock(pcshared_info);
+							cstate->raw_buf = pcshared_info->data_blocks[block_pos].data;
+							bIsFirst = false;
+						}
+
+						cstate->raw_buf_index = cstate->raw_buf_len = 0;
+					}
+				}
+
 			} while (CopyLoadRawBuf(cstate));
 		}
 	}
-	else
-	{
-		/*
-		 * If we didn't hit EOF, then we must have transferred the EOL marker
-		 * to line_buf along with the data.  Get rid of it.
-		 */
-		switch (cstate->eol_type)
-		{
-			case EOL_NL:
-				Assert(cstate->line_buf.len >= 1);
-				Assert(cstate->line_buf.data[cstate->line_buf.len - 1] == '\n');
-				cstate->line_buf.len--;
-				cstate->line_buf.data[cstate->line_buf.len] = '\0';
-				break;
-			case EOL_CR:
-				Assert(cstate->line_buf.len >= 1);
-				Assert(cstate->line_buf.data[cstate->line_buf.len - 1] == '\r');
-				cstate->line_buf.len--;
-				cstate->line_buf.data[cstate->line_buf.len] = '\0';
-				break;
-			case EOL_CRNL:
-				Assert(cstate->line_buf.len >= 2);
-				Assert(cstate->line_buf.data[cstate->line_buf.len - 2] == '\r');
-				Assert(cstate->line_buf.data[cstate->line_buf.len - 1] == '\n');
-				cstate->line_buf.len -= 2;
-				cstate->line_buf.data[cstate->line_buf.len] = '\0';
-				break;
-			case EOL_UNKNOWN:
-				/* shouldn't get here */
-				Assert(false);
-				break;
-		}
-	}
 
+	ConvertToServerEncoding(cstate);
+	return result;
+}
+
+/*
+ * ClearEOLFromCopiedData - Clear EOL from the copied data.
+ */
+static void
+ClearEOLFromCopiedData(CopyState cstate, char *copy_line_data,
+					   int copy_line_pos, int *copy_line_size)
+{
+	/*
+	 * If we didn't hit EOF, then we must have transferred the EOL marker
+	 * to line_buf along with the data.  Get rid of it.
+	 */
+   switch (cstate->eol_type)
+   {
+	   case EOL_NL:
+		   Assert(*copy_line_size >= 1);
+		   Assert(copy_line_data[copy_line_pos - 1] == '\n');
+		   copy_line_data[copy_line_pos - 1] = '\0';
+		   (*copy_line_size)--;
+		   break;
+	   case EOL_CR:
+		   Assert(*copy_line_size >= 1);
+		   Assert(copy_line_data[copy_line_pos - 1] == '\r');
+		   copy_line_data[copy_line_pos - 1] = '\0';
+		   (*copy_line_size)--;
+		   break;
+	   case EOL_CRNL:
+		   Assert(*copy_line_size >= 2);
+		   Assert(copy_line_data[copy_line_pos - 2] == '\r');
+		   Assert(copy_line_data[copy_line_pos - 1] == '\n');
+		   copy_line_data[copy_line_pos - 2] = '\0';
+		   *copy_line_size -= 2;
+		   break;
+	   case EOL_UNKNOWN:
+		   /* shouldn't get here */
+		   Assert(false);
+		   break;
+   }
+}
+
+/*
+ * ConvertToServerEncoding - convert contents to server encoding.
+ */
+static void
+ConvertToServerEncoding(CopyState cstate)
+{
 	/* Done reading the line.  Convert it to server encoding. */
-	if (cstate->need_transcoding)
+	if (cstate->need_transcoding && (!IsParallelCopy() || IsWorker()))
 	{
 		char	   *cvt;
-
 		cvt = pg_any_to_server(cstate->line_buf.data,
 							   cstate->line_buf.len,
 							   cstate->file_encoding);
@@ -3967,11 +5570,8 @@ CopyReadLine(CopyState cstate)
 			pfree(cvt);
 		}
 	}
-
 	/* Now it's safe to use the buffer in error messages */
 	cstate->line_buf_converted = true;
-
-	return result;
 }
 
 /*
@@ -3995,6 +5595,11 @@ CopyReadLineText(CopyState cstate)
 	char		quotec = '\0';
 	char		escapec = '\0';
 
+	/* For parallel copy */
+	int			line_size = 0;
+	int			line_pos = 0;
+
+	cstate->eol_type = EOL_UNKNOWN;
 	if (cstate->csv_mode)
 	{
 		quotec = cstate->quote[0];
@@ -4049,6 +5654,8 @@ CopyReadLineText(CopyState cstate)
 		if (raw_buf_ptr >= copy_buf_len || need_data)
 		{
 			REFILL_LINEBUF;
+			SetRawBufForLoad(cstate, line_size, copy_buf_len, raw_buf_ptr,
+							 &copy_raw_buf);
 
 			/*
 			 * Try to read some more data.  This will certainly reset
@@ -4273,9 +5880,15 @@ CopyReadLineText(CopyState cstate)
 				 * discard the data and the \. sequence.
 				 */
 				if (prev_raw_ptr > cstate->raw_buf_index)
-					appendBinaryStringInfo(&cstate->line_buf,
+				{
+					if (!IsParallelCopy())
+						appendBinaryStringInfo(&cstate->line_buf,
 										   cstate->raw_buf + cstate->raw_buf_index,
 										   prev_raw_ptr - cstate->raw_buf_index);
+					else
+						line_size += prev_raw_ptr - cstate->raw_buf_index;
+				}
+
 				cstate->raw_buf_index = raw_buf_ptr;
 				result = true;	/* report EOF */
 				break;
@@ -4327,6 +5940,26 @@ not_end_of_copy:
 			IF_NEED_REFILL_AND_EOF_BREAK(mblen - 1);
 			raw_buf_ptr += mblen - 1;
 		}
+
+		/*
+		 * Skip the header line. Update the line here, this cannot be done at
+		 * the beginning, as there is a possibility that file contains empty
+		 * lines.
+		 */
+		if (IsParallelCopy() && first_char_in_line && !IsHeaderLine())
+		{
+			ParallelCopyShmInfo	*pcshared_info = cstate->pcdata->pcshared_info;
+			ParallelCopyLineBoundary *lineInfo;
+			uint32			 line_first_block = pcshared_info->cur_block_pos;
+			line_pos = UpdateBlockInLineInfo(cstate,
+											   line_first_block,
+											   cstate->raw_buf_index, -1,
+											   LINE_LEADER_POPULATING);
+			lineInfo = &pcshared_info->line_boundaries.ring[line_pos];
+			elog(DEBUG1, "[Leader] Adding - block:%d, offset:%d, line position:%d",
+						 line_first_block,	lineInfo->start_offset, line_pos);
+		}
+
 		first_char_in_line = false;
 	}							/* end of outer loop */
 
@@ -4334,6 +5967,8 @@ not_end_of_copy:
 	 * Transfer any still-uncopied data to line_buf.
 	 */
 	REFILL_LINEBUF;
+	CLEAR_EOL_LINE();
+	EndLineParallelCopy(cstate, line_pos, line_size, raw_buf_ptr);
 
 	return result;
 }

@@ -254,18 +254,32 @@ It is "perfect".|
 "It is ""perfect"".","	"
 "",
 --test that we read consecutive LFs properly
-CREATE TEMP TABLE testnl (a int, b text, c int);
+CREATE TABLE testnl (a int, b text, c int);
 COPY testnl FROM stdin CSV;
+COPY testnl FROM stdin WITH (FORMAT 'csv', PARALLEL 1);
+SELECT * FROM testnl;
+ a |          b           | c 
+---+----------------------+---
+ 1 | a field with two LFs+| 2
+   |                     +| 
+   | inside               | 
+ 1 | a field with two LFs+| 2
+   |                     +| 
+   | inside               | 
+(2 rows)
+
 -- test end of copy marker
-CREATE TEMP TABLE testeoc (a text);
+CREATE TABLE testeoc (a text);
 COPY testeoc FROM stdin CSV;
+TRUNCATE testeoc;
+COPY testeoc FROM stdin WITH (FORMAT 'csv', PARALLEL 1);
 COPY testeoc TO stdout CSV;
 a\.
 \.b
 c\.d
 "\."
 -- test handling of nonstandard null marker that violates escaping rules
-CREATE TEMP TABLE testnull(a int, b text);
+CREATE TABLE testnull(a int, b text);
 INSERT INTO testnull VALUES (1, E'\\0'), (NULL, NULL);
 COPY testnull TO stdout WITH NULL AS E'\\0';
 1	\\0
@@ -279,6 +293,15 @@ SELECT * FROM testnull;
  42 | \0
     | 
 (4 rows)
+
+TRUNCATE testnull;
+COPY testnull FROM stdin WITH (NULL E'\\0', PARALLEL 1);
+SELECT * FROM testnull;
+ a  | b  
+----+----
+ 42 | \0
+    | 
+(2 rows)
 
 BEGIN;
 CREATE TABLE vistest (LIKE testeoc);
@@ -332,6 +355,34 @@ SELECT * FROM vistest;
 SAVEPOINT s1;
 TRUNCATE vistest;
 COPY vistest FROM stdin CSV FREEZE;
+SELECT * FROM vistest;
+ a  
+----
+ d2
+ e
+(2 rows)
+
+COMMIT;
+SELECT * FROM vistest;
+ a  
+----
+ d2
+ e
+(2 rows)
+
+BEGIN;
+TRUNCATE vistest;
+COPY vistest FROM stdin WITH (FORMAT 'csv', FREEZE, PARALLEL 1);
+SELECT * FROM vistest;
+ a  
+----
+ a2
+ b
+(2 rows)
+
+SAVEPOINT s1;
+TRUNCATE vistest;
+COPY vistest FROM stdin WITH (FORMAT 'csv', FREEZE, PARALLEL 1);
 SELECT * FROM vistest;
  a  
 ----
@@ -409,7 +460,7 @@ SELECT * FROM vistest;
 (2 rows)
 
 -- Test FORCE_NOT_NULL and FORCE_NULL options
-CREATE TEMP TABLE forcetest (
+CREATE TABLE forcetest (
     a INT NOT NULL,
     b TEXT NOT NULL,
     c TEXT,
@@ -420,6 +471,8 @@ CREATE TEMP TABLE forcetest (
 -- should succeed with no effect ("b" remains an empty string, "c" remains NULL)
 BEGIN;
 COPY forcetest (a, b, c) FROM STDIN WITH (FORMAT csv, FORCE_NOT_NULL(b), FORCE_NULL(c));
+TRUNCATE forcetest;
+COPY forcetest (a, b, c) FROM STDIN WITH (FORMAT csv, FORCE_NOT_NULL(b), FORCE_NULL(c), PARALLEL 1);
 COMMIT;
 SELECT b, c FROM forcetest WHERE a = 1;
  b |  c   
@@ -430,6 +483,8 @@ SELECT b, c FROM forcetest WHERE a = 1;
 -- should succeed, FORCE_NULL and FORCE_NOT_NULL can be both specified
 BEGIN;
 COPY forcetest (a, b, c, d) FROM STDIN WITH (FORMAT csv, FORCE_NOT_NULL(c,d), FORCE_NULL(c,d));
+TRUNCATE forcetest;
+COPY forcetest (a, b, c, d) FROM STDIN WITH (FORMAT csv, FORCE_NOT_NULL(c,d), FORCE_NULL(c,d), PARALLEL 1);
 COMMIT;
 SELECT c, d FROM forcetest WHERE a = 2;
  c |  d   
@@ -479,6 +534,31 @@ NOTICE:  input = {"f1":0}
 ERROR:  new row for relation "check_con_tbl" violates check constraint "check_con_tbl_check"
 DETAIL:  Failing row contains (0).
 CONTEXT:  COPY check_con_tbl, line 1: "0"
+select * from check_con_tbl;
+ f1 
+----
+  1
+   
+(2 rows)
+
+\d+ check_con_tbl
+                               Table "public.check_con_tbl"
+ Column |  Type   | Collation | Nullable | Default | Storage | Stats target | Description 
+--------+---------+-----------+----------+---------+---------+--------------+-------------
+ f1     | integer |           |          |         | plain   |              | 
+Check constraints:
+    "check_con_tbl_check" CHECK (check_con_function(check_con_tbl.*))
+
+truncate check_con_tbl;
+copy check_con_tbl from stdin with (parallel 1);
+NOTICE:  input = {"f1":1}
+NOTICE:  input = {"f1":null}
+copy check_con_tbl from stdin with (parallel 1);
+NOTICE:  input = {"f1":0}
+ERROR:  new row for relation "check_con_tbl" violates check constraint "check_con_tbl_check"
+DETAIL:  Failing row contains (0).
+CONTEXT:  COPY check_con_tbl, line 1: "0"
+parallel worker
 select * from check_con_tbl;
  f1 
 ----
@@ -600,8 +680,126 @@ SELECT * FROM instead_of_insert_tbl;
 (2 rows)
 
 COMMIT;
+-- Parallel copy tests.
+CREATE TABLE test_parallel_copy (
+        a INT,
+        b INT,
+        c TEXT not null default 'stuff',
+        d TEXT,
+        e TEXT
+) ;
+COPY test_parallel_copy (a, b, c, d, e) from stdin with (PARALLEL 1);
+COPY test_parallel_copy (b, d) from stdin with (PARALLEL 1);
+COPY test_parallel_copy (b, d) from stdin with (PARALLEL 1);
+COPY test_parallel_copy (b, d) from stdin with (PARALLEL 1, FORMAT 'csv', HEADER);
+-- zero workers: should perform non-parallel copy
+COPY test_parallel_copy (b, d) from stdin with (PARALLEL '0');
+ERROR:  argument to option "parallel" must be a positive integer greater than zero
+LINE 1: COPY test_parallel_copy (b, d) from stdin with (PARALLEL '0'...
+                                                        ^
+-- referencing table: should perform non-parallel copy
+CREATE TABLE test_copy_pk(c1 INT PRIMARY KEY);
+INSERT INTO test_copy_pk VALUES(10);
+CREATE TABLE test_copy_ri(c1 INT REFERENCES test_copy_pk(c1));
+COPY test_copy_ri from stdin with (FORMAT csv, DELIMITER ',', PARALLEL 1);
+-- expressions: should perform non-parallel copy
+CREATE TABLE test_copy_expr (index INT, height REAL, weight REAL);
+COPY test_copy_expr FROM STDIN WITH (FORMAT csv, DELIMITER ',', PARALLEL 1) WHERE height > random() * 65;
+-- serial data: should perform non-parallel copy
+CREATE TABLE testserial (index SERIAL, height REAL);
+COPY testserial(height) FROM STDIN WITH (FORMAT csv, DELIMITER ',', PARALLEL 1);
+-- temporary table copy: should perform non-parallel copy
+CREATE TEMPORARY TABLE temp_test(
+        a int
+) ;
+COPY temp_test (a) from stdin with (PARALLEL 1);
+-- non-existent column in column list: should fail
+COPY test_parallel_copy (xyz) from stdin with (PARALLEL 1);
+ERROR:  column "xyz" of relation "test_parallel_copy" does not exist
+-- too many columns in column list: should fail
+COPY test_parallel_copy (a, b, c, d, e, d, c) from stdin with (PARALLEL 1);
+ERROR:  column "d" specified more than once
+-- missing data: should fail
+COPY test_parallel_copy from stdin with (PARALLEL 1);
+ERROR:  invalid input syntax for type integer: ""
+CONTEXT:  COPY test_parallel_copy, line 0, column a: ""
+parallel worker
+COPY test_parallel_copy from stdin with (PARALLEL 1);
+ERROR:  missing data for column "e"
+CONTEXT:  COPY test_parallel_copy, line 1: "2000	230	23	23"
+parallel worker
+COPY test_parallel_copy from stdin with (PARALLEL 1);
+ERROR:  missing data for column "e"
+CONTEXT:  COPY test_parallel_copy, line 1: "2001	231	\N	\N"
+parallel worker
+-- extra data: should fail
+COPY test_parallel_copy from stdin with (PARALLEL 1);
+ERROR:  extra data after last expected column
+CONTEXT:  COPY test_parallel_copy, line 1: "2002	232	40	50	60	70	80"
+parallel worker
+-- various COPY options: delimiters, oids, NULL string, encoding
+COPY test_parallel_copy (b, c, d, e) from stdin with (delimiter ',', null 'x', PARALLEL 1) ;
+COPY test_parallel_copy from stdin WITH (DELIMITER ';', NULL '', PARALLEL 1);
+COPY test_parallel_copy from stdin WITH (DELIMITER ':', NULL E'\\X', ENCODING 'sql_ascii', PARALLEL 1);
+COPY test_parallel_copy from stdin WITH (PARALLEL 1) WHERE a = 50004;
+COPY test_parallel_copy from stdin WITH (PARALLEL 1) WHERE a > 60003;
+COPY test_parallel_copy from stdin WITH (PARALLEL 1) WHERE f > 60003;
+ERROR:  column "f" does not exist
+LINE 1: ..._parallel_copy from stdin WITH (PARALLEL 1) WHERE f > 60003;
+                                                             ^
+COPY test_parallel_copy from stdin WITH (PARALLEL 1) WHERE a = max(x.b);
+ERROR:  missing FROM-clause entry for table "x"
+LINE 1: ...rallel_copy from stdin WITH (PARALLEL 1) WHERE a = max(x.b);
+                                                                  ^
+COPY test_parallel_copy from stdin WITH (PARALLEL 1) WHERE a IN (SELECT 1 FROM x);
+ERROR:  cannot use subquery in COPY FROM WHERE condition
+LINE 1: ...arallel_copy from stdin WITH (PARALLEL 1) WHERE a IN (SELECT...
+                                                             ^
+COPY test_parallel_copy from stdin WITH (PARALLEL 1) WHERE a IN (generate_series(1,5));
+ERROR:  set-returning functions are not allowed in COPY FROM WHERE conditions
+LINE 1: ...lel_copy from stdin WITH (PARALLEL 1) WHERE a IN (generate_s...
+                                                             ^
+COPY test_parallel_copy from stdin WITH(PARALLEL 1) WHERE a = row_number() over(b);
+ERROR:  window functions are not allowed in COPY FROM WHERE conditions
+LINE 1: ...rallel_copy from stdin WITH(PARALLEL 1) WHERE a = row_number...
+                                                             ^
+-- check results of copy in
+SELECT * FROM test_parallel_copy;
+   a   | b  |     c      |    d    |    e    
+-------+----+------------+---------+---------
+     1 | 11 | test_c1    | test_d1 | test_e1
+     2 | 12 | test_c2    | test_d2 | test_e2
+       |  3 | stuff      | test_d3 | 
+       |  4 | stuff      | test_d4 | 
+       |  5 | stuff      | test_d5 | 
+       |    | 45         | 80      | 90
+       |    | x          | \x      | \x
+       |    | ,          | \,      | \
+  3000 |    | c          |         | 
+  4000 |    | C          |         | 
+  4001 |  1 | empty      |         | 
+  4002 |  2 | null       |         | 
+  4003 |  3 | Backslash  | \       | \
+  4004 |  4 | BackslashX | \X      | \X
+  4005 |  5 | N          | N       | N
+  4006 |  6 | BackslashN | \N      | \N
+  4007 |  7 | XX         | XX      | XX
+  4008 |  8 | Delimiter  | :       | :
+ 50004 | 25 | 35         | 45      | 55
+ 60004 | 25 | 35         | 45      | 55
+ 60005 | 26 | 36         | 46      | 56
+(21 rows)
+
 -- clean up
+DROP TABLE test_copy_ri;
+DROP TABLE test_copy_pk;
+DROP TABLE test_copy_expr;
+DROP TABLE testeoc;
+DROP TABLE testnl;
 DROP TABLE forcetest;
+DROP TABLE test_parallel_copy;
+DROP TABLE testserial;
+DROP TABLE testnull;
 DROP TABLE vistest;
 DROP FUNCTION truncate_in_subxact();
 DROP TABLE x, y;

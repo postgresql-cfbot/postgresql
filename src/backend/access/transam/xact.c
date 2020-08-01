@@ -504,6 +504,37 @@ GetCurrentFullTransactionIdIfAny(void)
 }
 
 /*
+ *	AssignFullTransactionIdForWorker
+ *
+ * For parallel copy, transaction id of leader will be used by the workers.
+ */
+void
+AssignFullTransactionIdForWorker(FullTransactionId fullTransactionId)
+{
+	TransactionState s = CurrentTransactionState;
+
+	Assert((IsInParallelMode() || IsParallelWorker()));
+	s->fullTransactionId = fullTransactionId;
+}
+
+/*
+ *	AssignCommandIdForWorker
+ *
+ * For parallel copy, command id of leader will be used by the workers.
+ */
+void
+AssignCommandIdForWorker(CommandId commandId, bool used)
+{
+	Assert((IsInParallelMode() || IsParallelWorker()));
+
+	/* this is global to a transaction, not subtransaction-local */
+	if (used)
+		currentCommandIdUsed = true;
+
+	currentCommandId = commandId;
+}
+
+/*
  *	MarkCurrentTransactionIdLoggedIfAny
  *
  * Remember that the current xid - if it is assigned - now has been wal logged.

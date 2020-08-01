@@ -15,6 +15,13 @@ DELETE FROM onek;
 
 COPY onek FROM '@abs_builddir@/results/onek.data';
 
+-- test parallel copy
+COPY tenk1 FROM '@abs_srcdir@/data/tenk.data' WITH (parallel 2);
+
+SELECT COUNT(*) FROM tenk1;
+
+TRUNCATE tenk1;
+
 COPY tenk1 FROM '@abs_srcdir@/data/tenk.data';
 
 COPY slow_emp4000 FROM '@abs_srcdir@/data/rect.data';
@@ -158,6 +165,11 @@ copy (select * from parted_copytest order by a) to '@abs_builddir@/results/parte
 truncate parted_copytest;
 
 copy parted_copytest from '@abs_builddir@/results/parted_copytest.csv';
+
+-- Test parallel copy from with a partitioned table.
+truncate parted_copytest;
+
+copy parted_copytest from '@abs_builddir@/results/parted_copytest.csv' with (parallel 2);
 
 -- Ensure COPY FREEZE errors for partitioned tables.
 begin;

@@ -37,6 +37,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     DELIMITER '<replaceable class="parameter">delimiter_character</replaceable>'
     NULL '<replaceable class="parameter">null_string</replaceable>'
     HEADER [ <replaceable class="parameter">boolean</replaceable> ]
+    PARALLEL <replaceable class="parameter">integer</replaceable>
     QUOTE '<replaceable class="parameter">quote_character</replaceable>'
     ESCAPE '<replaceable class="parameter">escape_character</replaceable>'
     FORCE_QUOTE { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
@@ -270,6 +271,21 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       column in the file.  On output, the first line contains the column
       names from the table, and on input, the first line is ignored.
       This option is allowed only when using <literal>CSV</literal> format.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>PARALLEL</literal></term>
+    <listitem>
+     <para>
+      Perform <command>COPY FROM</command> in parallel using <replaceable
+      class="parameter"> integer</replaceable> background workers.  Please
+      note that it is not guaranteed that the number of parallel workers
+      specified in <replaceable class="parameter">integer</replaceable> will
+      be used during execution.  It is possible for a copy to run with fewer
+      workers than specified, or even with no workers at all.  This option is
+      allowed only in <command>COPY FROM</command>.
      </para>
     </listitem>
    </varlistentry>

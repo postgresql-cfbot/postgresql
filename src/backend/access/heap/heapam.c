@@ -2023,19 +2023,6 @@ static HeapTuple
 heap_prepare_insert(Relation relation, HeapTuple tup, TransactionId xid,
 					CommandId cid, int options)
 {
-	/*
-	 * Parallel operations are required to be strictly read-only in a parallel
-	 * worker.  Parallel inserts are not safe even in the leader in the
-	 * general case, because group locking means that heavyweight locks for
-	 * relation extension or GIN page locks will not conflict between members
-	 * of a lock group, but we don't prohibit that case here because there are
-	 * useful special cases that we can safely allow, such as CREATE TABLE AS.
-	 */
-	if (IsParallelWorker())
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
-				 errmsg("cannot insert tuples in a parallel worker")));
-
 	tup->t_data->t_infomask &= ~(HEAP_XACT_MASK);
 	tup->t_data->t_infomask2 &= ~(HEAP2_XACT_MASK);
 	tup->t_data->t_infomask |= HEAP_XMAX_INVALID;

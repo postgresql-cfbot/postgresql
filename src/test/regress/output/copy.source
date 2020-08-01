@@ -9,6 +9,15 @@ COPY onek FROM '@abs_srcdir@/data/onek.data';
 COPY onek TO '@abs_builddir@/results/onek.data';
 DELETE FROM onek;
 COPY onek FROM '@abs_builddir@/results/onek.data';
+-- test parallel copy
+COPY tenk1 FROM '@abs_srcdir@/data/tenk.data' WITH (parallel 2);
+SELECT COUNT(*) FROM tenk1;
+ count 
+-------
+ 10000
+(1 row)
+
+TRUNCATE tenk1;
 COPY tenk1 FROM '@abs_srcdir@/data/tenk.data';
 COPY slow_emp4000 FROM '@abs_srcdir@/data/rect.data';
 COPY person FROM '@abs_srcdir@/data/person.data';
@@ -113,6 +122,9 @@ insert into parted_copytest select x,1,'One' from generate_series(1011,1020) x;
 copy (select * from parted_copytest order by a) to '@abs_builddir@/results/parted_copytest.csv';
 truncate parted_copytest;
 copy parted_copytest from '@abs_builddir@/results/parted_copytest.csv';
+-- Test parallel copy from with a partitioned table.
+truncate parted_copytest;
+copy parted_copytest from '@abs_builddir@/results/parted_copytest.csv' with (parallel 2);
 -- Ensure COPY FREEZE errors for partitioned tables.
 begin;
 truncate parted_copytest;

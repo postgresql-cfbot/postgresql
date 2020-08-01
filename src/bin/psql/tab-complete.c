@@ -2353,7 +2353,7 @@ psql_completion(const char *text, int start, int end)
 	/* Complete COPY <sth> FROM|TO filename WITH ( */
 	else if (Matches("COPY|\\copy", MatchAny, "FROM|TO", MatchAny, "WITH", "("))
 		COMPLETE_WITH("FORMAT", "FREEZE", "DELIMITER", "NULL",
-					  "HEADER", "QUOTE", "ESCAPE", "FORCE_QUOTE",
+					  "HEADER", "PARALLEL", "QUOTE", "ESCAPE", "FORCE_QUOTE",
 					  "FORCE_NOT_NULL", "FORCE_NULL", "ENCODING");
 
 	/* Complete COPY <sth> FROM|TO filename WITH (FORMAT */

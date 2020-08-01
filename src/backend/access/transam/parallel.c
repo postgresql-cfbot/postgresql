@@ -25,6 +25,7 @@
 #include "catalog/pg_enum.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/copy.h"
 #include "executor/execParallel.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
@@ -145,6 +146,9 @@ static const struct
 	},
 	{
 		"parallel_vacuum_main", parallel_vacuum_main
+	},
+	{
+		"ParallelCopyMain", ParallelCopyMain
 	}
 };
 

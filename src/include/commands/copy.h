@@ -14,6 +14,7 @@
 #ifndef COPY_H
 #define COPY_H
 
+#include "access/parallel.h"
 #include "nodes/execnodes.h"
 #include "nodes/parsenodes.h"
 #include "parser/parse_node.h"
@@ -41,4 +42,5 @@ extern uint64 CopyFrom(CopyState cstate);
 
 extern DestReceiver *CreateCopyDestReceiver(void);
 
+extern void ParallelCopyMain(dsm_segment *seg, shm_toc *toc);
 #endif							/* COPY_H */

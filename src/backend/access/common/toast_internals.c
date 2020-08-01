@@ -17,6 +17,7 @@
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/heaptoast.h"
+#include "access/parallel.h"
 #include "access/table.h"
 #include "access/toast_internals.h"
 #include "access/xact.h"
@@ -116,7 +117,15 @@ toast_save_datum(Relation rel, Datum value,
 	TupleDesc	toasttupDesc;
 	Datum		t_values[3];
 	bool		t_isnull[3];
-	CommandId	mycid = GetCurrentCommandId(true);
+
+	/*
+	 * Parallel copy can insert toast tuples, in case of parallel copy the
+	 * command would have been set already by calling AssignCommandIdForWorker.
+	 * For parallel copy call GetCurrentCommandId to get currentCommandId by
+	 * passing used as false, as this is taken care earlier.
+	 */
+	CommandId	mycid = IsParallelWorker() ? GetCurrentCommandId(false) :
+											 GetCurrentCommandId(true);
 	struct varlena *result;
 	struct varatt_external toast_pointer;
 	union

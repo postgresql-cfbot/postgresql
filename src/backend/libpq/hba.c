@@ -166,11 +166,17 @@ pg_isblank(const char c)
 /*
  * Grab one token out of the string pointed to by *lineptr.
  *
- * Tokens are strings of non-blank
- * characters bounded by blank characters, commas, beginning of line, and
- * end of line. Blank means space or tab. Tokens can be delimited by
- * double quotes (this allows the inclusion of blanks, but not newlines).
- * Comments (started by an unquoted '#') are skipped.
+ * Tokens are strings of non-blank characters bounded by blank characters,
+ * commas, beginning of line, and end of line. Blank means space or tab.
+ *
+ * Tokens can be delimited by double quotes (this allows the inclusion of
+ * blanks or '#', but not newlines). If a continuation occurs within the
+ * quoted text, the quoted text is continued on the next line. There is no
+ * escape mechanism, thus character '"' cannot be part of a token.
+ *
+ * Comments (started by an unquoted '#') are skipped, i.e. the remainder
+ * of the line is ignored. If a line with a comment is backslash-continued,
+ * the continued text is part of the comment, thus ignored as well.
  *
  * The token, if any, is returned at *buf (a buffer of size bufsz), and
  * *lineptr is advanced past the token.
@@ -486,8 +492,43 @@ tokenize_file(const char *filename, FILE *file, List **tok_lines, int elevel)
 		char	   *lineptr;
 		List	   *current_line = NIL;
 		char	   *err_msg = NULL;
+		char	   *cur = rawline;
+		int			len = sizeof(rawline);
+		int			continuations = 0;
 
-		if (!fgets(rawline, sizeof(rawline), file))
+		/* read input and handle simple backslash continuations */
+		while ((cur = fgets(cur, len, file)) != NULL)
+		{
+			int		curlen = strlen(cur);
+			char   *curend = cur + curlen - 1;
+
+			if (curlen == len - 1)
+			{
+				/* Line too long! */
+				ereport(elevel,
+						errcode(ERRCODE_CONFIG_FILE_ERROR),
+						errmsg("authentication file line too long"),
+						errcontext("line %d of configuration file \"%s\"",
+								   line_number + continuations, filename));
+				err_msg = "authentication file line too long";
+			}
+
+			/* Strip trailing linebreak from rawline */
+			while (curend >= cur && (*curend == '\n' || *curend == '\r'))
+				*curend-- = '\0';
+
+			/* empty or not a continuation, we are done */
+			if (curend < cur || *curend != '\\')
+				break;
+
+			/* else we have a continuation, just remove it and loop */
+			continuations++;
+			*curend = '\0';
+			len -= (curend - cur);
+			cur = curend;
+		}
+
+		if (cur == NULL)
 		{
 			int			save_errno = errno;
 
@@ -501,21 +542,6 @@ tokenize_file(const char *filename, FILE *file, List **tok_lines, int elevel)
 							   filename, strerror(save_errno));
 			rawline[0] = '\0';
 		}
-		if (strlen(rawline) == MAX_LINE - 1)
-		{
-			/* Line too long! */
-			ereport(elevel,
-					(errcode(ERRCODE_CONFIG_FILE_ERROR),
-					 errmsg("authentication file line too long"),
-					 errcontext("line %d of configuration file \"%s\"",
-								line_number, filename)));
-			err_msg = "authentication file line too long";
-		}
-
-		/* Strip trailing linebreak from rawline */
-		lineptr = rawline + strlen(rawline) - 1;
-		while (lineptr >= rawline && (*lineptr == '\n' || *lineptr == '\r'))
-			*lineptr-- = '\0';
 
 		/* Parse fields */
 		lineptr = rawline;
@@ -543,7 +569,7 @@ tokenize_file(const char *filename, FILE *file, List **tok_lines, int elevel)
 			*tok_lines = lappend(*tok_lines, tok_line);
 		}
 
-		line_number++;
+		line_number += continuations + 1;
 	}
 
 	MemoryContextSwitchTo(oldcxt);

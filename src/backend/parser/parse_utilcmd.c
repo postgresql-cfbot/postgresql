@@ -4170,5 +4170,8 @@ transformPartitionBoundValue(ParseState *pstate, Node *val,
 	if (!IsA(value, Const))
 		elog(ERROR, "could not evaluate partition bound expression");
 
+	/* Preserve parser location information. */
+	((Const *) value)->location = exprLocation(val);
+
 	return (Const *) value;
 }

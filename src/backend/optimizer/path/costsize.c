@@ -2870,6 +2870,15 @@ final_cost_nestloop(PlannerInfo *root, NestPath *path,
 
 		/* Compute number of tuples processed (not number emitted!) */
 		ntuples = outer_path_rows * inner_path_rows;
+
+		/*
+		 * Add a small surcharge cost to account for performing the final
+		 * check on for another matching inner tuple after we've got the
+		 * final match.  We don't charge this to SEMI/ANTI and unique
+		 * joins as these will skip to the next outer tuple after finding
+		 * the first matching inner tuple.
+		 */
+		run_cost += ntuples * cpu_tuple_cost;
 	}
 
 	/* CPU costs */
@@ -3377,12 +3386,19 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 	 * clauses that are to be applied at the join.  (This is pessimistic since
 	 * not all of the quals may get evaluated at each tuple.)
 	 *
-	 * Note: we could adjust for SEMI/ANTI joins skipping some qual
-	 * evaluations here, but it's probably not worth the trouble.
+	 * Note: we need not apply this for SEMI/ANTI and unique joins as the
+	 * executor will skip to the next outer side row after matching the
+	 * outer row to the first inner row.
 	 */
 	startup_cost += qp_qual_cost.startup;
-	cpu_per_tuple = cpu_tuple_cost + qp_qual_cost.per_tuple;
-	run_cost += cpu_per_tuple * mergejointuples;
+
+	if (path->jpath.jointype != JOIN_SEMI &&
+		path->jpath.jointype != JOIN_ANTI &&
+		!extra->inner_unique)
+	{
+		cpu_per_tuple = cpu_tuple_cost + qp_qual_cost.per_tuple;
+		run_cost += cpu_per_tuple * mergejointuples;
+	}
 
 	/* tlist eval costs are paid per output row, not per tuple scanned */
 	startup_cost += path->jpath.path.pathtarget->cost.startup;
@@ -3811,6 +3827,15 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 		 * JOIN_INNER semantics.
 		 */
 		hashjointuples = approx_tuple_count(root, &path->jpath, hashclauses);
+
+		/*
+		 * Add a small surcharge cost to account for performing the final
+		 * hash bucket scan for another matching inner tuple after we've got
+		 * the final match.  We don't charge this to SEMI/ANTI and unique
+		 * joins as these will skip to the next outer tuple after finding
+		 * the first matching inner tuple.
+		 */
+		run_cost += hashjointuples * cpu_tuple_cost;
 	}
 
 	/*
@@ -4361,7 +4386,7 @@ get_restriction_qual_cost(PlannerInfo *root, RelOptInfo *baserel,
  *	joinrel: join relation under consideration
  *	outerrel: outer relation under consideration
  *	innerrel: inner relation under consideration
- *	jointype: if not JOIN_SEMI or JOIN_ANTI, we assume it's inner_unique
+ *	jointype: if not JOIN_SEMI or JOIN_ANTI, must be an inner_unique case
  *	sjinfo: SpecialJoinInfo relevant to this join
  *	restrictlist: join quals
  * Output parameters:
@@ -4384,14 +4409,16 @@ compute_semi_anti_join_factors(PlannerInfo *root,
 	List	   *joinquals;
 	ListCell   *l;
 
+	/* We have to do this differently for semi/anti joins vs. inner_unique */
+	if (jointype == JOIN_SEMI || jointype == JOIN_ANTI)
+	{
 	/*
 	 * In an ANTI join, we must ignore clauses that are "pushed down", since
 	 * those won't affect the match logic.  In a SEMI join, we do not
 	 * distinguish joinquals from "pushed down" quals, so just use the whole
-	 * restrictinfo list.  For other outer join types, we should consider only
-	 * non-pushed-down quals, so that this devolves to an IS_OUTER_JOIN check.
+	 * restrictinfo list.
 	 */
-	if (IS_OUTER_JOIN(jointype))
+	if (jointype == JOIN_ANTI)
 	{
 		joinquals = NIL;
 		foreach(l, restrictlist)
@@ -4411,7 +4438,7 @@ compute_semi_anti_join_factors(PlannerInfo *root,
 	jselec = clauselist_selectivity(root,
 									joinquals,
 									0,
-									(jointype == JOIN_ANTI) ? JOIN_ANTI : JOIN_SEMI,
+									jointype,
 									sjinfo);
 
 	/*
@@ -4438,7 +4465,7 @@ compute_semi_anti_join_factors(PlannerInfo *root,
 									&norm_sjinfo);
 
 	/* Avoid leaking a lot of ListCells */
-	if (IS_OUTER_JOIN(jointype))
+	if (jointype == JOIN_ANTI)
 		list_free(joinquals);
 
 	/*
@@ -4461,6 +4488,21 @@ compute_semi_anti_join_factors(PlannerInfo *root,
 	}
 	else
 		avgmatch = 1.0;
+	}
+	else
+	{
+		/*
+		 * Must be an inner_unique case.  match_count is 1 by definition, and
+		 * we can compute outer_match_frac as joinrel size / outerrel size.
+		 * For paranoia's sake, clamp that to 0..1.
+		 */
+		if (outerrel->rows > 0)
+			jselec = joinrel->rows / outerrel->rows;
+		else
+			jselec = 1.0;
+		CLAMP_PROBABILITY(jselec);
+		avgmatch = 1.0;
+	}
 
 	semifactors->outer_match_frac = jselec;
 	semifactors->match_count = avgmatch;

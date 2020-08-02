@@ -635,7 +635,13 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 		{
 			CachedPlan *res = (CachedPlan *) DatumGetPointer(foundres);
 
-			if (isCommit)
+			/*
+			 * The transaction can be ended inside execution of CALL statements.
+			 * In this case, the caller cannot to clean own resources, and then
+			 * cleaning by resource owner is expected. Unfortunatelly a caller
+			 * routine doesn't know if this situation will be or not.
+			 */
+			if (isCommit && !res->is_fragile)
 				PrintPlanCacheLeakWarning(res);
 			ReleaseCachedPlan(res, true);
 		}
@@ -1140,7 +1146,7 @@ ResourceOwnerRememberPlanCacheRef(ResourceOwner owner, CachedPlan *plan)
 void
 ResourceOwnerForgetPlanCacheRef(ResourceOwner owner, CachedPlan *plan)
 {
-	if (!ResourceArrayRemove(&(owner->planrefarr), PointerGetDatum(plan)))
+	if (!ResourceArrayRemove(&(owner->planrefarr), PointerGetDatum(plan)) && !plan->is_fragile)
 		elog(ERROR, "plancache reference %p is not owned by resource owner %s",
 			 plan, owner->name);
 }

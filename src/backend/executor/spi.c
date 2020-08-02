@@ -24,6 +24,7 @@
 #include "executor/executor.h"
 #include "executor/spi_priv.h"
 #include "miscadmin.h"
+#include "storage/proc.h"
 #include "tcop/pquery.h"
 #include "tcop/utility.h"
 #include "utils/builtins.h"
@@ -2223,6 +2224,9 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 	CachedPlan *cplan = NULL;
 	ListCell   *lc1;
 
+	LocalTransactionId before_lxid = MyProc->lxid;
+	bool		is_fragile = plan->fragile;
+
 	/*
 	 * Setup error traceback support for ereport()
 	 */
@@ -2326,6 +2330,8 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 		 * plan, the refcount must be backed by the CurrentResourceOwner.
 		 */
 		cplan = GetCachedPlan(plansource, paramLI, plan->saved, _SPI_current->queryEnv);
+		cplan->is_fragile = is_fragile;
+
 		stmt_list = cplan->stmt_list;
 
 		/*
@@ -2520,8 +2526,19 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 			}
 		}
 
-		/* Done with this plan, so release refcount */
-		ReleaseCachedPlan(cplan, plan->saved);
+		if (is_fragile)
+		{
+			LocalTransactionId after_lxid  = MyProc->lxid;;
+
+			if (before_lxid == after_lxid)
+				ReleaseCachedPlan(cplan, plan->saved);
+
+			FinalReleaseFragileCachedPlan(cplan);
+		}
+		else
+			/* Done with this plan, so release refcount */
+			ReleaseCachedPlan(cplan, plan->saved);
+
 		cplan = NULL;
 
 		/*
@@ -2539,9 +2556,25 @@ fail:
 	if (pushed_active_snap)
 		PopActiveSnapshot();
 
-	/* We no longer need the cached plan refcount, if any */
 	if (cplan)
-		ReleaseCachedPlan(cplan, plan->saved);
+	{
+		if (is_fragile)
+		{
+			LocalTransactionId after_lxid  = MyProc->lxid;;
+
+			/*
+			 * Release plan, when the transaction is same. When
+			 * there are new transaction, then cached plan was
+			 * released by resource owner.
+			 */
+			if (before_lxid == after_lxid)
+				ReleaseCachedPlan(cplan, plan->saved);
+
+			FinalReleaseFragileCachedPlan(cplan);
+		}
+		else
+			ReleaseCachedPlan(cplan, plan->saved);
+	}
 
 	/*
 	 * Pop the error context stack

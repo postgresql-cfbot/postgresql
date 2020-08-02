@@ -530,10 +530,14 @@ ReleaseGenericPlan(CachedPlanSource *plansource)
 	if (plansource->gplan)
 	{
 		CachedPlan *plan = plansource->gplan;
+		bool		is_fragile = plan->is_fragile;
 
 		Assert(plan->magic == CACHEDPLAN_MAGIC);
 		plansource->gplan = NULL;
 		ReleaseCachedPlan(plan, false);
+
+		if (is_fragile)
+			FinalReleaseFragileCachedPlan(plan);
 	}
 }
 
@@ -1269,11 +1273,31 @@ ReleaseCachedPlan(CachedPlan *plan, bool useResOwner)
 		Assert(plan->is_saved);
 		ResourceOwnerForgetPlanCacheRef(CurrentResourceOwner, plan);
 	}
+
 	Assert(plan->refcount > 0);
 	plan->refcount--;
-	if (plan->refcount == 0)
+
+	/* We don't want to destroy fragile plans immediately */
+	if (plan->refcount == 0 && !plan->is_fragile)
 	{
 		/* Mark it no longer valid */
+		plan->magic = 0;
+
+		/* One-shot plans do not own their context, so we can't free them */
+		if (!plan->is_oneshot)
+			MemoryContextDelete(plan->context);
+	}
+}
+
+void
+FinalReleaseFragileCachedPlan(CachedPlan *plan)
+{
+
+	Assert(plan->magic == CACHEDPLAN_MAGIC);
+	Assert(plan->is_fragile);
+
+	if (plan->refcount == 0)
+	{
 		plan->magic = 0;
 
 		/* One-shot plans do not own their context, so we can't free them */

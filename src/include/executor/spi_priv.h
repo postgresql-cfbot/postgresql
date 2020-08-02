@@ -93,6 +93,7 @@ typedef struct _SPI_plan
 	bool		saved;			/* saved or unsaved plan? */
 	bool		oneshot;		/* one-shot plan? */
 	bool		no_snapshots;	/* let the caller handle the snapshots */
+	bool		fragile;		/* plancache can be released by resource owner */
 	List	   *plancache_list; /* one CachedPlanSource per parsetree */
 	MemoryContext plancxt;		/* Context containing _SPI_plan and data */
 	int			cursor_options; /* Cursor options used for planning */

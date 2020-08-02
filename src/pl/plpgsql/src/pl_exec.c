@@ -2150,15 +2150,16 @@ static int
 exec_stmt_call(PLpgSQL_execstate *estate, PLpgSQL_stmt_call *stmt)
 {
 	PLpgSQL_expr *expr = stmt->expr;
+	volatile SPIPlanPtr	plan = expr->plan;
 	volatile LocalTransactionId before_lxid;
 	LocalTransactionId after_lxid;
 	volatile bool pushed_active_snap = false;
 	volatile int rc;
+	volatile bool plan_owner = false;
 
 	/* PG_TRY to ensure we clear the plan link, if needed, on failure */
 	PG_TRY();
 	{
-		SPIPlanPtr	plan = expr->plan;
 		ParamListInfo paramLI;
 
 		if (plan == NULL)
@@ -2171,7 +2172,17 @@ exec_stmt_call(PLpgSQL_execstate *estate, PLpgSQL_stmt_call *stmt)
 			 * XXX This would be fixable with some plancache/resowner surgery
 			 * elsewhere, but for now we'll just work around this here.
 			 */
-			exec_prepare_plan(estate, expr, 0, estate->atomic);
+			exec_prepare_plan(estate, expr, 0, true);
+
+			/*
+			 * Not saved plan should be explicitly released. Without it, any
+			 * not recursive usage of CALL statemenst leak plan in SPI memory.
+			 * The created plan can be reused when procedure is called recursively,
+			 * and releasing plan can be done only in recursion root call, when
+			 * expression has not assigned plan. Where a plan was created, then
+			 * there plan can be released.
+			 */
+			plan_owner = true;
 
 			/*
 			 * The procedure call could end transactions, which would upset
@@ -2180,6 +2191,15 @@ exec_stmt_call(PLpgSQL_execstate *estate, PLpgSQL_stmt_call *stmt)
 			 */
 			plan = expr->plan;
 			plan->no_snapshots = true;
+
+			/*
+			 * Plancache have to be released on end of tranaction. But for this
+			 * case, transaction can be ended somewhere inside CALL statements
+			 * chain. We cannot to know where and why. So we should to mark
+			 * this plan as fragile. In this case is possible, there are
+			 * more actors are responsible to cleaning plan cache.
+			 */
+			plan->fragile = true;
 
 			/*
 			 * Force target to be recalculated whenever the plan changes, in
@@ -2319,14 +2339,30 @@ exec_stmt_call(PLpgSQL_execstate *estate, PLpgSQL_stmt_call *stmt)
 		 * If we aren't saving the plan, unset the pointer.  Note that it
 		 * could have been unset already, in case of a recursive call.
 		 */
-		if (expr->plan && !expr->plan->saved)
+		if (plan && !plan->saved)
+		{
+			if (plan_owner)
+				SPI_freeplan(plan);
+
 			expr->plan = NULL;
+		}
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
 
-	if (expr->plan && !expr->plan->saved)
+	if (plan && !plan->saved)
+	{
+		if (plan_owner)
+			SPI_freeplan(plan);
+
+		/*
+		 * If expr->plan is present, it must be the same plan that we
+		 * allocated
+		 */
+		Assert (!expr->plan || plan == expr->plan);
+
 		expr->plan = NULL;
+	}
 
 	if (rc < 0)
 		elog(ERROR, "SPI_execute_plan_with_paramlist failed executing query \"%s\": %s",

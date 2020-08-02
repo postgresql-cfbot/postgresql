@@ -151,6 +151,7 @@ typedef struct CachedPlan
 	bool		is_oneshot;		/* is it a "oneshot" plan? */
 	bool		is_saved;		/* is CachedPlan in a long-lived context? */
 	bool		is_valid;		/* is the stmt_list currently valid? */
+	bool		is_fragile;		/* cleaning by resource owner is expected */
 	Oid			planRoleId;		/* Role ID the plan was created for */
 	bool		dependsOnRole;	/* is plan specific to that role? */
 	TransactionId saved_xmin;	/* if valid, replan when TransactionXmin
@@ -222,6 +223,8 @@ extern CachedPlan *GetCachedPlan(CachedPlanSource *plansource,
 								 bool useResOwner,
 								 QueryEnvironment *queryEnv);
 extern void ReleaseCachedPlan(CachedPlan *plan, bool useResOwner);
+
+extern void FinalReleaseFragileCachedPlan(CachedPlan *plan);
 
 extern bool CachedPlanAllowsSimpleValidityCheck(CachedPlanSource *plansource,
 												CachedPlan *plan,

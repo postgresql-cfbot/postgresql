@@ -165,9 +165,11 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		mode = Min(SyncRepWaitMode, SYNC_REP_WAIT_FLUSH);
 
 	/*
-	 * Fast exit if user has not requested sync replication.
+	 * Fast exit if user has not requested sync replication, or there are no
+	 * sync replication standby names defined.
 	 */
-	if (!SyncRepRequested())
+	if (!SyncRepRequested() ||
+		!((volatile WalSndCtlData *) WalSndCtl)->sync_standbys_defined)
 		return;
 
 	Assert(SHMQueueIsDetached(&(MyProc->syncRepLinks)));

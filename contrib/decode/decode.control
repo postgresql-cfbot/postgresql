@@ -1,0 +1,5 @@
+# decode extension
+comment = 'decode - demo of function with parser support function'
+default_version = '1.0'
+module_pathname = '$libdir/decode'
+relocatable = true

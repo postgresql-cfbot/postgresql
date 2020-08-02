@@ -828,6 +828,7 @@ lookup_agg_function(List *fnName,
 	int			nvargs;
 	Oid			vatype;
 	Oid		   *true_oid_array;
+	Oid			support_func;
 	FuncDetailCode fdresult;
 	AclResult	aclresult;
 	int			i;
@@ -843,7 +844,8 @@ lookup_agg_function(List *fnName,
 							   nargs, input_types, false, false,
 							   &fnOid, rettype, &retset,
 							   &nvargs, &vatype,
-							   &true_oid_array, NULL);
+							   &true_oid_array, NULL,
+							   &support_func);
 
 	/* only valid case is a normal function not returning a set */
 	if (fdresult != FUNCDETAIL_NORMAL || !OidIsValid(fnOid))

@@ -15,6 +15,7 @@ SUBDIRS = \
 		citext		\
 		cube		\
 		dblink		\
+		decode		\
 		dict_int	\
 		dict_xsyn	\
 		earthdistance	\

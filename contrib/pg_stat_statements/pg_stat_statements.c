@@ -116,6 +116,14 @@ static const uint32 PGSS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
 #define JUMBLE_SIZE				1024	/* query serialization buffer size */
 
 /*
+ * Utility statements that pgss_ProcessUtility and pgss_post_parse_analyze
+ * ignores.
+ */
+#define PGSS_HANDLED_UTILITY(n)		(!IsA(n, ExecuteStmt) && \
+									!IsA(n, PrepareStmt) && \
+									!IsA(n, DeallocateStmt))
+
+/*
  * Extension version number, for supporting older extension versions' objects
  */
 typedef enum pgssVersion
@@ -345,7 +353,8 @@ static void pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 								ProcessUtilityContext context, ParamListInfo params,
 								QueryEnvironment *queryEnv,
 								DestReceiver *dest, QueryCompletion *qc);
-static uint64 pgss_hash_string(const char *str, int len);
+static const char *pgss_clean_querytext(const char *query, int *location, int *len);
+static uint64 pgss_compute_utility_queryid(const char *query, int query_len);
 static void pgss_store(const char *query, uint64 queryId,
 					   int query_location, int query_len,
 					   pgssStoreKind kind,
@@ -845,16 +854,34 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query)
 		return;
 
 	/*
-	 * Utility statements get queryId zero.  We do this even in cases where
-	 * the statement contains an optimizable statement for which a queryId
-	 * could be derived (such as EXPLAIN or DECLARE CURSOR).  For such cases,
-	 * runtime control will first go through ProcessUtility and then the
-	 * executor, and we don't want the executor hooks to do anything, since we
-	 * are already measuring the statement's costs at the utility level.
+	 * We compute a queryId now so that it can get exported in out
+	 * PgBackendStatus.  pgss_ProcessUtility will later discard it to prevents
+	 * double counting of optimizable statements that are directly contained in
+	 * utility statements.  Note that we don't compute a queryId for prepared
+	 * statements related utility, as those will inherit from the underlying
+	 * statement's one (except DEALLOCATE which is entirely untracked).
 	 */
 	if (query->utilityStmt)
 	{
-		query->queryId = UINT64CONST(0);
+		if (pgss_track_utility && PGSS_HANDLED_UTILITY(query->utilityStmt)
+			&& pstate->p_sourcetext)
+		{
+			const char *querytext = pstate->p_sourcetext;
+			int query_location = query->stmt_location;
+			int query_len = query->stmt_len;
+
+			/*
+			 * Confine our attention to the relevant part of the string, if the
+			 * query is a portion of a multi-statement source string.
+			 */
+			querytext = pgss_clean_querytext(pstate->p_sourcetext,
+											 &query_location,
+											 &query_len);
+
+			query->queryId = pgss_compute_utility_queryid(querytext, query_len);
+		}
+		else
+			query->queryId = UINT64CONST(0);
 		return;
 	}
 
@@ -1117,6 +1144,23 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 					DestReceiver *dest, QueryCompletion *qc)
 {
 	Node	   *parsetree = pstmt->utilityStmt;
+	uint64		saved_queryId = pstmt->queryId;
+
+	/*
+	 * Utility statements get queryId zero.  We do this even in cases where
+	 * the statement contains an optimizable statement for which a queryId
+	 * could be derived (such as EXPLAIN or DECLARE CURSOR).  For such cases,
+	 * runtime control will first go through ProcessUtility and then the
+	 * executor, and we don't want the executor hooks to do anything, since we
+	 * are already measuring the statement's costs at the utility level.
+	 *
+	 * Note that this is only done if pg_stat_statements is enabled and
+	 * configured to track utility statements, in the unlikely possibility
+	 * that user configured another extension to handle utility statements
+	 * only.
+	 */
+	if (pgss_enabled(exec_nested_level) && pgss_track_utility)
+		pstmt->queryId = UINT64CONST(0);
 
 	/*
 	 * If it's an EXECUTE statement, we don't track it and don't increment the
@@ -1133,9 +1177,7 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	 * Likewise, we don't track execution of DEALLOCATE.
 	 */
 	if (pgss_track_utility && pgss_enabled(exec_nested_level) &&
-		!IsA(parsetree, ExecuteStmt) &&
-		!IsA(parsetree, PrepareStmt) &&
-		!IsA(parsetree, DeallocateStmt))
+		PGSS_HANDLED_UTILITY(parsetree))
 	{
 		instr_time	start;
 		instr_time	duration;
@@ -1189,7 +1231,7 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 		WalUsageAccumDiff(&walusage, &pgWalUsage, &walusage_start);
 
 		pgss_store(queryString,
-				   0,			/* signal that it's a utility stmt */
+				   saved_queryId,
 				   pstmt->stmt_location,
 				   pstmt->stmt_len,
 				   PGSS_EXEC,
@@ -1213,22 +1255,76 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 }
 
 /*
- * Given an arbitrarily long query string, produce a hash for the purposes of
- * identifying the query, without normalizing constants.  Used when hashing
- * utility statements.
+ * Given a possibly multi-statement source string, confine our attention to the
+ * relevant part of the string.
+ */
+static const char *
+pgss_clean_querytext(const char *query, int *location, int *len)
+{
+	int query_location = *location;
+	int query_len = *len;
+
+	/* First apply starting offset, unless it's -1 (unknown). */
+	if (query_location >= 0)
+	{
+		Assert(query_location <= strlen(query));
+		query += query_location;
+		/* Length of 0 (or -1) means "rest of string" */
+		if (query_len <= 0)
+			query_len = strlen(query);
+		else
+			Assert(query_len <= strlen(query));
+	}
+	else
+	{
+		/* If query location is unknown, distrust query_len as well */
+		query_location = 0;
+		query_len = strlen(query);
+	}
+
+	/*
+	 * Discard leading and trailing whitespace, too.  Use scanner_isspace()
+	 * not libc's isspace(), because we want to match the lexer's behavior.
+	 */
+	while (query_len > 0 && scanner_isspace(query[0]))
+		query++, query_location++, query_len--;
+	while (query_len > 0 && scanner_isspace(query[query_len - 1]))
+		query_len--;
+
+	*location = query_location;
+	*len = query_len;
+
+	return query;
+}
+
+/*
+ * Compute a query identifier for the given utility query string.
  */
 static uint64
-pgss_hash_string(const char *str, int len)
+pgss_compute_utility_queryid(const char *str, int query_len)
 {
-	return DatumGetUInt64(hash_any_extended((const unsigned char *) str,
-											len, 0));
+	uint64 queryId;
+
+	queryId = DatumGetUInt64(hash_any_extended((const unsigned char *) str,
+											   query_len, 0));
+
+	/*
+	 * If we are unlucky enough to get a hash of zero(invalid), use
+	 * queryID as 2 instead, queryID 1 is already in use for normal
+	 * statements.
+	 */
+	if (queryId == UINT64CONST(0))
+		queryId = UINT64CONST(2);
+
+	return queryId;
 }
 
 /*
  * Store some statistics for a statement.
  *
- * If queryId is 0 then this is a utility statement and we should compute
- * a suitable queryId internally.
+ * If queryId is 0 then this is a utility statement for which we couldn't
+ * compute a queryId during parse analysis, and we should compute a suitable
+ * queryId internally.
  *
  * If jstate is not NULL then we're trying to create an entry for which
  * we have no statistics as yet; we just want to record the normalized
@@ -1261,50 +1357,15 @@ pgss_store(const char *query, uint64 queryId,
 	/*
 	 * Confine our attention to the relevant part of the string, if the query
 	 * is a portion of a multi-statement source string.
-	 *
-	 * First apply starting offset, unless it's -1 (unknown).
 	 */
-	if (query_location >= 0)
-	{
-		Assert(query_location <= strlen(query));
-		query += query_location;
-		/* Length of 0 (or -1) means "rest of string" */
-		if (query_len <= 0)
-			query_len = strlen(query);
-		else
-			Assert(query_len <= strlen(query));
-	}
-	else
-	{
-		/* If query location is unknown, distrust query_len as well */
-		query_location = 0;
-		query_len = strlen(query);
-	}
+	query = pgss_clean_querytext(query, &query_location, &query_len);
 
 	/*
-	 * Discard leading and trailing whitespace, too.  Use scanner_isspace()
-	 * not libc's isspace(), because we want to match the lexer's behavior.
-	 */
-	while (query_len > 0 && scanner_isspace(query[0]))
-		query++, query_location++, query_len--;
-	while (query_len > 0 && scanner_isspace(query[query_len - 1]))
-		query_len--;
-
-	/*
-	 * For utility statements, we just hash the query string to get an ID.
+	 * For not already handled utility statements, we just hash the query
+	 * string to get an ID.
 	 */
 	if (queryId == UINT64CONST(0))
-	{
-		queryId = pgss_hash_string(query, query_len);
-
-		/*
-		 * If we are unlucky enough to get a hash of zero(invalid), use
-		 * queryID as 2 instead, queryID 1 is already in use for normal
-		 * statements.
-		 */
-		if (queryId == UINT64CONST(0))
-			queryId = UINT64CONST(2);
-	}
+		queryId = pgss_compute_utility_queryid(query, query_len);
 
 	/* Set up key for hashtable search */
 	key.userid = GetUserId();

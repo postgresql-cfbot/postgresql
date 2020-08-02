@@ -54,6 +54,7 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "parser/parsetree.h"
+#include "pgstat.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "tcop/utility.h"
@@ -142,6 +143,13 @@ static void EvalPlanQualStart(EPQState *epqstate, Plan *planTree);
 void
 ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
+	/* In some cases (e.g. an EXECUTE statement) a query execution will skip
+	 * parse analysis, which means that the queryid won't be reported.  Note
+	 * that it's harmless to report the queryid multiple time, as the call will
+	 * be ignored if the top level queryid has already been reported.
+	 */
+	pgstat_report_queryid(queryDesc->plannedstmt->queryId, false);
+
 	if (ExecutorStart_hook)
 		(*ExecutorStart_hook) (queryDesc, eflags);
 	else

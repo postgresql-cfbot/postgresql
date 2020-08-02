@@ -290,6 +290,7 @@ static void appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 static char *get_synchronized_snapshot(Archive *fout);
 static void setupDumpWorker(Archive *AHX);
 static TableInfo *getRootTableInfo(TableInfo *tbinfo);
+static void read_patterns_from_file(char *filename, DumpOptions *dopt);
 
 
 int
@@ -364,6 +365,7 @@ main(int argc, char **argv)
 		{"enable-row-security", no_argument, &dopt.enable_row_security, 1},
 		{"exclude-table-data", required_argument, NULL, 4},
 		{"extra-float-digits", required_argument, NULL, 8},
+		{"filter", required_argument, NULL, 12},
 		{"if-exists", no_argument, &dopt.if_exists, 1},
 		{"inserts", no_argument, NULL, 9},
 		{"lock-wait-timeout", required_argument, NULL, 2},
@@ -601,6 +603,10 @@ main(int argc, char **argv)
 			case 11:			/* include foreign data */
 				simple_string_list_append(&foreign_servers_include_patterns,
 										  optarg);
+				break;
+
+			case 12:			/* filter implementation */
+				read_patterns_from_file(optarg, &dopt);
 				break;
 
 			default:
@@ -1022,6 +1028,8 @@ help(const char *progname)
 			 "                               access to)\n"));
 	printf(_("  --exclude-table-data=PATTERN do NOT dump data for the specified table(s)\n"));
 	printf(_("  --extra-float-digits=NUM     override default setting for extra_float_digits\n"));
+	printf(_("  --filter=FILENAME            dump objects and data based on the filter expressions\n"
+			 "                               from the filter file\n"));
 	printf(_("  --if-exists                  use IF EXISTS when dropping objects\n"));
 	printf(_("  --include-foreign-data=PATTERN\n"
 			 "                               include data of foreign tables on foreign\n"
@@ -18433,4 +18441,212 @@ appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 								fout->std_strings);
 	if (!res)
 		pg_log_warning("could not parse reloptions array");
+}
+
+#define		FILTER_INITIAL_LINE_SIZE		1024
+#define		PG_GETLINE_EXTEND_LINE_SIZE		1024
+
+/*
+ * getline is originally GNU function, and should not be everywhere still.
+ * Use own reduced implementation.
+ */
+static size_t
+pg_getline(char **lineptr, size_t *n, FILE *fp)
+{
+	size_t		total_chars = 0;
+
+	while (!feof(fp) && !ferror(fp))
+	{
+		char	   *str;
+		size_t		chars;
+
+		str = fgets(*lineptr + total_chars,
+					*n - total_chars,
+					fp);
+
+		if (ferror(fp))
+			return -1;
+
+		if (str)
+		{
+			chars = strlen(str);
+			total_chars += chars;
+
+			if (chars > 0 && str[chars - 1] == '\n')
+				return total_chars;
+
+			/* check, if there is good enough space for next content */
+			if (*n - total_chars < 2)
+			{
+				*n += PG_GETLINE_EXTEND_LINE_SIZE;
+				*lineptr = pg_realloc(*lineptr, *n);
+			}
+		}
+		else
+			break;
+	}
+
+	if (ferror(fp))
+		return -1;
+
+	return total_chars > 0 ? total_chars : -1;
+}
+
+/*
+ * Print error message and exit.
+ */
+static void
+exit_invalid_filter_format(FILE *fp, char *filename, char *message, char *line, int lineno)
+{
+	pg_log_error("invalid format of filter file \"%s\": %s",
+				 filename,
+				 message);
+
+	fprintf(stderr, "%d: %s\n", lineno, line);
+
+	if (fp != stdin)
+		fclose(fp);
+
+	exit_nicely(-1);
+}
+
+/*
+ * Read dumped object specification from file
+ */
+static void
+read_patterns_from_file(char *filename, DumpOptions *dopt)
+{
+	FILE	   *fp;
+	char	   *line;
+	ssize_t		chars;
+	size_t		line_size = FILTER_INITIAL_LINE_SIZE;
+	int			lineno = 0;
+
+	/* use "-" as symbol for stdin */
+	if (strcmp(filename, "-") != 0)
+	{
+		fp = fopen(filename, "r");
+		if (!fp)
+			fatal("could not open the input file \"%s\": %m",
+				  filename);
+	}
+	else
+		fp = stdin;
+
+	line = pg_malloc(line_size);
+
+	while ((chars = pg_getline(&line, &line_size, fp)) != -1)
+	{
+		bool		is_include;
+		char		objecttype;
+		char	   *objectname;
+
+		lineno += 1;
+
+		if (line[chars - 1] == '\n')
+			line[chars - 1] = '\0';
+
+		/* ignore empty rows */
+		if (*line == '\0')
+			continue;
+
+		/* when first char is hash, ignore whole line */
+		if (*line == '#')
+			continue;
+
+		if (chars < 2)
+			exit_invalid_filter_format(fp,
+									   filename,
+									   "line too short",
+									   line,
+									   lineno);
+
+		if (line[0] == '+')
+			is_include = true;
+		else if (line[0] == '-')
+			is_include = false;
+		else
+			exit_invalid_filter_format(fp,
+									   filename,
+									   "invalid option type (use [+-]",
+									   line,
+									   lineno);
+
+		objecttype = line[1];
+		objectname = &line[2];
+
+		/* skip initial spaces */
+		while (isspace(*objectname))
+			objectname++;
+
+		if (*objectname == '\0')
+			exit_invalid_filter_format(fp,
+									   filename,
+									   "missing object name",
+									   line,
+									   lineno);
+
+		if (objecttype == 't')
+		{
+			if (is_include)
+			{
+				simple_string_list_append(&table_include_patterns,
+										  objectname);
+				dopt->include_everything = false;
+			}
+			else
+				simple_string_list_append(&table_exclude_patterns,
+										  objectname);
+		}
+		else if (objecttype == 'n')
+		{
+			if (is_include)
+			{
+				simple_string_list_append(&schema_include_patterns,
+										  objectname);
+				dopt->include_everything = false;
+			}
+			else
+				simple_string_list_append(&schema_exclude_patterns,
+										  objectname);
+		}
+		else if (objecttype == 'd')
+		{
+			if (is_include)
+				exit_invalid_filter_format(fp,
+										   filename,
+										   "include filter is not supported for this type of object",
+										   line,
+										   lineno);
+			else
+				simple_string_list_append(&tabledata_exclude_patterns,
+										  objectname);
+		}
+		else if (objecttype == 'f')
+		{
+			if (is_include)
+				simple_string_list_append(&foreign_servers_include_patterns,
+										  objectname);
+			else
+				exit_invalid_filter_format(fp,
+										   filename,
+										   "exclude filter is not supported for this type of object",
+										   line,
+										   lineno);
+		}
+		else
+			exit_invalid_filter_format(fp,
+									   filename,
+									   "invalid object type (use [tndf])",
+									   line,
+									   lineno);
+	}
+
+	if (ferror(fp))
+		fatal("could not read from file \"%s\": %m", filename);
+
+	if (fp != stdin)
+		fclose(fp);
+
+	pg_free(line);
 }

@@ -756,6 +756,56 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--filter=<replaceable class="parameter">filename</replaceable></option></term>
+      <listitem>
+       <para>
+        Read objects filters from the specified file.
+        If you use "-" as a filename, the filters are read from stdin.
+        The lines of this file must have the following format:
+<synopsis>
+(+|-)[tnfd] <replaceable class="parameter">objectname</replaceable>
+</synopsis>
+       </para>
+
+       <para>
+        The first character specifies whether the object is to be included
+        (<literal>+</literal>) or excluded (<literal>-</literal>), and the
+        second character specifies the type of object to be filtered:
+        <literal>t</literal> (table),
+        <literal>n</literal> (schema),
+        <literal>f</literal> (foreign table),
+        <literal>d</literal> (table data).
+       </para>
+
+       <para>
+        With the following filter file, the dump would include table
+        <literal>mytable1</literal> and data from foreign table
+        <literal>some_foreign_table</literal>, but exclude data
+        from table <literal>mytable2</literal>.
+<programlisting>
++t mytable1
++f some_foreign_table
+-d mytable2
+</programlisting>
+       </para>
+
+       <para>
+        The lines starting with symbol <literal>#</literal> are ignored.
+        Previous white chars (spaces, tabs) are not allowed. These
+        lines can be used for comments, notes.
+       </para>
+
+       <para>
+        The <option>--filter</option> option works just like the other
+        options to include or exclude tables, schemas, table data, or foreign
+        tables, and both forms may be combined.  Note that there are no options
+        to exclude a specific foreign table or to include a specific table's
+        data.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--if-exists</option></term>
       <listitem>
        <para>

@@ -23,6 +23,7 @@
 #define OPTIMIZER_H
 
 #include "nodes/parsenodes.h"
+#include "nodes/pathnodes.h"
 
 /*
  * We don't want to include nodes/pathnodes.h here, because non-planner
@@ -156,6 +157,7 @@ extern TargetEntry *get_sortgroupref_tle(Index sortref,
 										 List *targetList);
 extern TargetEntry *get_sortgroupclause_tle(SortGroupClause *sgClause,
 											List *targetList);
+extern Var *find_var_for_subquery_tle(RelOptInfo *rel, TargetEntry *tle);
 extern Node *get_sortgroupclause_expr(SortGroupClause *sgClause,
 									  List *targetList);
 extern List *get_sortgrouplist_exprs(List *sgClauses,

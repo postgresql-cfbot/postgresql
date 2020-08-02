@@ -41,6 +41,7 @@
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/predicate.h"
+#include "storage/itemptr.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -62,9 +63,26 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	EState	   *estate;
 	ExprContext *econtext;
 	ScanDirection direction;
+	ScanDirection readDirection;
 	IndexScanDesc scandesc;
 	TupleTableSlot *slot;
 	ItemPointer tid;
+	ItemPointerData startTid;
+	IndexOnlyScan *indexonlyscan = (IndexOnlyScan *) node->ss.ps.plan;
+
+	/*
+	 * Tells if the current position was reached via skipping. In this case
+	 * there is no nead for the index_getnext_tid
+	 */
+	bool skipped = false;
+
+	/*
+	 * Index only scan must be aware that in case of skipping we can return to
+	 * the starting point due to visibility checks. In this situation we need
+	 * to jump further, and number of skipping attempts tell us how far do we
+	 * need to do so.
+	 */
+	int skipAttempts = 0;
 
 	/*
 	 * extract necessary information from index scan node
@@ -72,7 +90,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	estate = node->ss.ps.state;
 	direction = estate->es_direction;
 	/* flip direction if this is an overall backward scan */
-	if (ScanDirectionIsBackward(((IndexOnlyScan *) node->ss.ps.plan)->indexorderdir))
+	if (ScanDirectionIsBackward(indexonlyscan->indexorderdir))
 	{
 		if (ScanDirectionIsForward(direction))
 			direction = BackwardScanDirection;
@@ -114,15 +132,86 @@ IndexOnlyNext(IndexOnlyScanState *node)
 						 node->ioss_OrderByKeys,
 						 node->ioss_NumOrderByKeys);
 	}
+	else
+	{
+		ItemPointerCopy(&scandesc->xs_heaptid, &startTid);
+	}
+
+	/*
+	 * Check if we need to skip to the next key prefix, because we've been
+	 * asked to implement DISTINCT.
+	 *
+	 * When fetching a cursor in the direction opposite to a general scan
+	 * direction, the result must be what normal fetching should have
+	 * returned, but in reversed order. In other words, return the last or
+	 * first scanned tuple in a DISTINCT set, depending on a cursor direction.
+	 * Due to that we skip also when the first tuple wasn't emitted yet, but
+	 * the directions are opposite.
+	 */
+	if (node->ioss_SkipPrefixSize > 0 &&
+		(node->ioss_FirstTupleEmitted ||
+		 ScanDirectionsAreOpposite(direction, indexonlyscan->indexorderdir)))
+	{
+		if (!index_skip(scandesc, direction, indexonlyscan->indexorderdir,
+						!node->ioss_FirstTupleEmitted, node->ioss_SkipPrefixSize))
+		{
+			/*
+			 * Reached end of index. At this point currPos is invalidated, and
+			 * we need to reset ioss_FirstTupleEmitted, since otherwise after
+			 * going backwards, reaching the end of index, and going forward
+			 * again we apply skip again. It would be incorrect and lead to an
+			 * extra skipped item.
+			 */
+			node->ioss_FirstTupleEmitted = false;
+			return ExecClearTuple(slot);
+		}
+		else
+		{
+			skipAttempts = 1;
+			skipped = true;
+			tid = &scandesc->xs_heaptid;
+		}
+	}
+
+	readDirection = skipped ? indexonlyscan->indexorderdir : direction;
 
 	/*
 	 * OK, now that we have what we need, fetch the next tuple.
 	 */
-	while ((tid = index_getnext_tid(scandesc, direction)) != NULL)
+	while (skipped || (tid = index_getnext_tid(scandesc, readDirection)) != NULL)
 	{
 		bool		tuple_from_heap = false;
 
 		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * While doing index only skip scan with advancing and reading in
+		 * different directions we can return to the same position where we
+		 * started after visibility check. Recognize such situations and skip
+		 * more.
+		 */
+		if ((readDirection != direction) &&
+			ItemPointerIsValid(&startTid) && ItemPointerEquals(&startTid, tid))
+		{
+			int i;
+			skipAttempts += 1;
+
+			for (i = 0; i < skipAttempts; i++)
+			{
+				if (!index_skip(scandesc, direction,
+								indexonlyscan->indexorderdir,
+								!node->ioss_FirstTupleEmitted,
+								node->ioss_SkipPrefixSize))
+				{
+					node->ioss_FirstTupleEmitted = false;
+					return ExecClearTuple(slot);
+				}
+			}
+
+			tid = &scandesc->xs_heaptid;
+		}
+
+		skipped = false;
 
 		/*
 		 * We can skip the heap fetch if the TID references a heap page on
@@ -249,6 +338,8 @@ IndexOnlyNext(IndexOnlyScanState *node)
 			PredicateLockPage(scandesc->heapRelation,
 							  ItemPointerGetBlockNumber(tid),
 							  estate->es_snapshot);
+
+		node->ioss_FirstTupleEmitted = true;
 
 		return slot;
 	}
@@ -504,6 +595,8 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 	indexstate->ss.ps.plan = (Plan *) node;
 	indexstate->ss.ps.state = estate;
 	indexstate->ss.ps.ExecProcNode = ExecIndexOnlyScan;
+	indexstate->ioss_SkipPrefixSize = node->indexskipprefixsize;
+	indexstate->ioss_FirstTupleEmitted = false;
 
 	/*
 	 * Miscellaneous initialization

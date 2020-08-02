@@ -198,6 +198,10 @@ extern Path *get_cheapest_fractional_path_for_pathkeys(List *paths,
 													   Relids required_outer,
 													   double fraction);
 extern Path *get_cheapest_parallel_safe_total_inner(List *paths);
+extern int find_index_prefix_for_pathkey(PlannerInfo *root,
+					 IndexOptInfo *index,
+					 ScanDirection scandir,
+					 PathKey *pathkey);
 extern List *build_index_pathkeys(PlannerInfo *root, IndexOptInfo *index,
 								  ScanDirection scandir);
 extern List *build_partition_pathkeys(PlannerInfo *root, RelOptInfo *partrel,
@@ -215,6 +219,9 @@ extern List *build_join_pathkeys(PlannerInfo *root,
 extern List *make_pathkeys_for_sortclauses(PlannerInfo *root,
 										   List *sortclauses,
 										   List *tlist);
+extern List *make_pathkeys_for_uniquekeys(PlannerInfo *root,
+										  List *sortclauses,
+										  List *tlist);
 extern void initialize_mergeclause_eclasses(PlannerInfo *root,
 											RestrictInfo *restrictinfo);
 extern void update_mergeclause_eclasses(PlannerInfo *root,
@@ -240,5 +247,53 @@ extern PathKey *make_canonical_pathkey(PlannerInfo *root,
 									   int strategy, bool nulls_first);
 extern void add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 									List *live_childrels);
+extern List *select_mergejoin_clauses(PlannerInfo *root,
+									  RelOptInfo *joinrel,
+									  RelOptInfo *outerrel,
+									  RelOptInfo *innerrel,
+									  List *restrictlist,
+									  JoinType jointype,
+									  bool *mergejoin_allowed);
+
+/*
+ * uniquekeys.c
+ *	  Utilities for matching and building unique keys
+ */
+extern void populate_baserel_uniquekeys(PlannerInfo *root,
+										RelOptInfo *baserel,
+										List* unique_index_list);
+extern void populate_partitionedrel_uniquekeys(PlannerInfo *root,
+												RelOptInfo *rel,
+												List *childrels);
+extern void populate_distinctrel_uniquekeys(PlannerInfo *root,
+											RelOptInfo *inputrel,
+											RelOptInfo *distinctrel);
+extern void populate_grouprel_uniquekeys(PlannerInfo *root,
+										 RelOptInfo *grouprel,
+										 RelOptInfo *inputrel);
+extern void populate_unionrel_uniquekeys(PlannerInfo *root,
+										  RelOptInfo *unionrel);
+extern void simple_copy_uniquekeys(RelOptInfo *oldrel,
+								   RelOptInfo *newrel);
+extern void convert_subquery_uniquekeys(PlannerInfo *root,
+										RelOptInfo *currel,
+										RelOptInfo *sub_final_rel);
+extern void populate_joinrel_uniquekeys(PlannerInfo *root,
+										RelOptInfo *joinrel,
+										RelOptInfo *rel1,
+										RelOptInfo *rel2,
+										List *restrictlist,
+										JoinType jointype);
+
+extern bool relation_has_uniquekeys_for(PlannerInfo *root,
+										RelOptInfo *rel,
+										List *exprs,
+										bool allow_multinulls);
+extern bool query_has_uniquekeys_for(PlannerInfo *root,
+									 List *exprs,
+									 bool allow_multinulls);
+extern bool relation_is_onerow(RelOptInfo *rel);
+
+extern List *build_uniquekeys(PlannerInfo *root, List *sortclauses);
 
 #endif							/* PATHS_H */

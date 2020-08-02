@@ -71,13 +71,6 @@ static void consider_parallel_mergejoin(PlannerInfo *root,
 static void hash_inner_and_outer(PlannerInfo *root, RelOptInfo *joinrel,
 								 RelOptInfo *outerrel, RelOptInfo *innerrel,
 								 JoinType jointype, JoinPathExtraData *extra);
-static List *select_mergejoin_clauses(PlannerInfo *root,
-									  RelOptInfo *joinrel,
-									  RelOptInfo *outerrel,
-									  RelOptInfo *innerrel,
-									  List *restrictlist,
-									  JoinType jointype,
-									  bool *mergejoin_allowed);
 static void generate_mergejoin_paths(PlannerInfo *root,
 									 RelOptInfo *joinrel,
 									 RelOptInfo *innerrel,
@@ -1927,7 +1920,7 @@ hash_inner_and_outer(PlannerInfo *root,
  * if it is mergejoinable and involves vars from the two sub-relations
  * currently of interest.
  */
-static List *
+List *
 select_mergejoin_clauses(PlannerInfo *root,
 						 RelOptInfo *joinrel,
 						 RelOptInfo *outerrel,

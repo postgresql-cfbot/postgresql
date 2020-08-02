@@ -23,13 +23,17 @@ SET search_path TO temp_func_test, public;
 CREATE FUNCTION functest_A_1(text, date) RETURNS bool LANGUAGE 'sql'
        AS 'SELECT $1 = ''abcd'' AND $2 > ''2001-01-01''';
 CREATE FUNCTION functest_A_2(text[]) RETURNS int LANGUAGE 'sql'
-       AS 'SELECT $1[0]::int';
+       AS 'SELECT $1[1]::int';
 CREATE FUNCTION functest_A_3() RETURNS bool LANGUAGE 'sql'
        AS 'SELECT false';
 SELECT proname, prorettype::regtype, proargtypes::regtype[] FROM pg_proc
        WHERE oid in ('functest_A_1'::regproc,
                      'functest_A_2'::regproc,
                      'functest_A_3'::regproc) ORDER BY proname;
+
+SELECT functest_A_1('abcd', '2020-01-01');
+SELECT functest_A_2(ARRAY['1', '2', '3']);
+SELECT functest_A_3();
 
 --
 -- IMMUTABLE | STABLE | VOLATILE
@@ -149,6 +153,60 @@ SELECT pg_get_functiondef('functest_C_3'::regproc);
 SELECT pg_get_functiondef('functest_F_2'::regproc);
 
 
+--
+-- SQL-standard body
+--
+CREATE FUNCTION functest_S_1(a text, b date) RETURNS boolean
+    LANGUAGE SQL
+    RETURN a = 'abcd' AND b > '2001-01-01';
+CREATE FUNCTION functest_S_2(a text[]) RETURNS int
+    RETURN a[1]::int;
+CREATE FUNCTION functest_S_3() RETURNS boolean
+    RETURN false;
+
+CREATE FUNCTION functest_S_10(a text, b date) RETURNS boolean
+    LANGUAGE SQL
+    BEGIN ATOMIC
+        SELECT a = 'abcd' AND b > '2001-01-01';
+    END;
+
+CREATE FUNCTION functest_S_13() RETURNS boolean
+    BEGIN ATOMIC
+        SELECT 1;
+        SELECT false;
+    END;
+
+-- polymorphic arguments not allowed in this form
+CREATE FUNCTION functest_S_xx(x anyarray) RETURNS anyelement
+    LANGUAGE SQL
+    RETURN x[1];
+
+SELECT functest_S_1('abcd', '2020-01-01');
+SELECT functest_S_2(ARRAY['1', '2', '3']);
+SELECT functest_S_3();
+
+SELECT functest_S_10('abcd', '2020-01-01');
+SELECT functest_S_13();
+
+SELECT pg_get_functiondef('functest_S_1'::regproc);
+SELECT pg_get_functiondef('functest_S_2'::regproc);
+SELECT pg_get_functiondef('functest_S_3'::regproc);
+SELECT pg_get_functiondef('functest_S_10'::regproc);
+SELECT pg_get_functiondef('functest_S_13'::regproc);
+
+-- test with views
+CREATE TABLE functest3 (a int);
+INSERT INTO functest3 VALUES (1), (2);
+CREATE VIEW functestv3 AS SELECT * FROM functest3;
+
+CREATE FUNCTION functest_S_14() RETURNS bigint
+    RETURN (SELECT count(*) FROM functestv3);
+
+SELECT functest_S_14();
+
+DROP TABLE functest3 CASCADE;
+
+
 -- information_schema tests
 
 CREATE FUNCTION functest_IS_1(a int, b int default 1, c text default 'foo')
@@ -172,6 +230,23 @@ SELECT routine_name, ordinal_position, parameter_name, parameter_default
     ORDER BY 1, 2;
 
 DROP FUNCTION functest_IS_1(int, int, text), functest_IS_2(int), functest_IS_3(int);
+
+CREATE TABLE functest1 (a int, b int);
+CREATE SEQUENCE functest2;
+
+CREATE FUNCTION functest_IS_4()
+    RETURNS int
+    LANGUAGE SQL
+    RETURN (SELECT count(a) FROM functest1);
+
+CREATE FUNCTION functest_IS_5()
+    RETURNS int
+    LANGUAGE SQL
+    RETURN nextval('functest2');
+
+DROP TABLE functest1 CASCADE;
+DROP SEQUENCE functest2 CASCADE;
+
 
 -- overload
 CREATE FUNCTION functest_B_2(bigint) RETURNS bool LANGUAGE 'sql'

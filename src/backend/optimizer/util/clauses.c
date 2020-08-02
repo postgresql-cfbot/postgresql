@@ -4439,7 +4439,22 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 						  Anum_pg_proc_prosrc,
 						  &isNull);
 	if (isNull)
-		elog(ERROR, "null prosrc for function %u", funcid);
+	{
+		char	   *probin;
+		List	   *querytree_list;
+
+		tmp = SysCacheGetAttr(PROCOID, func_tuple, Anum_pg_proc_probin, &isNull);
+		if (isNull)
+			elog(ERROR, "null probin and prosrc");
+
+		probin = TextDatumGetCString(tmp);
+		querytree_list = castNode(List, stringToNode(probin));
+		if (list_length(querytree_list) != 1)
+			goto fail;
+		querytree = linitial(querytree_list);
+	}
+	else
+	{
 	src = TextDatumGetCString(tmp);
 
 	/*
@@ -4497,6 +4512,7 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 	querytree = transformTopLevelStmt(pstate, linitial(raw_parsetree_list));
 
 	free_parsestate(pstate);
+	}
 
 	/*
 	 * The single command must be a simple "SELECT expression".
@@ -4984,7 +5000,11 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 						  Anum_pg_proc_prosrc,
 						  &isNull);
 	if (isNull)
-		elog(ERROR, "null prosrc for function %u", func_oid);
+	{
+		goto fail;	// TODO
+	}
+	else
+	{
 	src = TextDatumGetCString(tmp);
 
 	/*
@@ -5036,6 +5056,7 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 	if (list_length(querytree_list) != 1)
 		goto fail;
 	querytree = linitial(querytree_list);
+	}
 
 	/*
 	 * The single command must be a plain SELECT.

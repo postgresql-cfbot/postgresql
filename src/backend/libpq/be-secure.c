@@ -49,6 +49,9 @@ bool		ssl_passphrase_command_supports_reload;
 #ifdef USE_SSL
 bool		ssl_loaded_verify_locations = false;
 #endif
+#ifdef USE_NSS
+char	   *ssl_database;
+#endif
 
 /* GUC variable controlling SSL cipher list */
 char	   *SSLCipherSuites = NULL;

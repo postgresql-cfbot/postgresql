@@ -711,6 +711,7 @@ with_uuid
 with_readline
 with_systemd
 with_selinux
+with_nss
 with_openssl
 with_ldap
 with_krb_srvnam
@@ -856,6 +857,7 @@ with_bsd_auth
 with_ldap
 with_bonjour
 with_openssl
+with_nss
 with_selinux
 with_systemd
 with_readline
@@ -1558,6 +1560,7 @@ Optional Packages:
   --with-ldap             build with LDAP support
   --with-bonjour          build with Bonjour support
   --with-openssl          build with OpenSSL support
+  --with-nss              build with NSS support
   --with-selinux          build with SELinux support
   --with-systemd          build with systemd support
   --without-readline      do not use GNU Readline nor BSD Libedit for editing
@@ -8101,6 +8104,41 @@ $as_echo "$with_openssl" >&6; }
 
 
 #
+# LibNSS
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with NSS support" >&5
+$as_echo_n "checking whether to build with NSS support... " >&6; }
+
+
+
+# Check whether --with-nss was given.
+if test "${with_nss+set}" = set; then :
+  withval=$with_nss;
+  case $withval in
+    yes)
+
+$as_echo "#define USE_NSS 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-nss option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_nss=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_nss" >&5
+$as_echo "$with_nss" >&6; }
+
+
+#
 # SELinux
 #
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with SELinux support" >&5
@@ -12174,6 +12212,9 @@ fi
 fi
 
 if test "$with_openssl" = yes ; then
+  if test x"$with_nss" = x"yes" ; then
+    as_fn_error $? "multiple SSL backends cannot be enabled simultaneously\"" "$LINENO" 5
+  fi
     # Minimum required OpenSSL version is 1.0.1
 
 $as_echo "#define OPENSSL_API_COMPAT 0x10001000L" >>confdefs.h
@@ -12434,6 +12475,157 @@ _ACEOF
 fi
 done
 
+fi
+
+if test "$with_nss" = yes ; then
+  if test x"$with_openssl" = x"yes" ; then
+    as_fn_error $? "multiple SSL backends cannot be enabled simultaneously\"" "$LINENO" 5
+  fi
+  CLEANLDFLAGS="$LDFLAGS"
+  # TODO: document this set of LDFLAGS
+  LDFLAGS="-lssl3 -lsmime3 -lnss3 -lplds4 -lplc4 -lnspr4 $LDFLAGS"
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for SSL_VersionRangeSet in -lnss3" >&5
+$as_echo_n "checking for SSL_VersionRangeSet in -lnss3... " >&6; }
+if ${ac_cv_lib_nss3_SSL_VersionRangeSet+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lnss3  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char SSL_VersionRangeSet ();
+int
+main ()
+{
+return SSL_VersionRangeSet ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_nss3_SSL_VersionRangeSet=yes
+else
+  ac_cv_lib_nss3_SSL_VersionRangeSet=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_nss3_SSL_VersionRangeSet" >&5
+$as_echo "$ac_cv_lib_nss3_SSL_VersionRangeSet" >&6; }
+if test "x$ac_cv_lib_nss3_SSL_VersionRangeSet" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBNSS3 1
+_ACEOF
+
+  LIBS="-lnss3 $LIBS"
+
+else
+  as_fn_error $? "library 'nss3' is required for NSS" "$LINENO" 5
+fi
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for PR_GetDefaultIOMethods in -lnspr4" >&5
+$as_echo_n "checking for PR_GetDefaultIOMethods in -lnspr4... " >&6; }
+if ${ac_cv_lib_nspr4_PR_GetDefaultIOMethods+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lnspr4  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char PR_GetDefaultIOMethods ();
+int
+main ()
+{
+return PR_GetDefaultIOMethods ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_nspr4_PR_GetDefaultIOMethods=yes
+else
+  ac_cv_lib_nspr4_PR_GetDefaultIOMethods=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_nspr4_PR_GetDefaultIOMethods" >&5
+$as_echo "$ac_cv_lib_nspr4_PR_GetDefaultIOMethods" >&6; }
+if test "x$ac_cv_lib_nspr4_PR_GetDefaultIOMethods" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBNSPR4 1
+_ACEOF
+
+  LIBS="-lnspr4 $LIBS"
+
+else
+  as_fn_error $? "library 'nspr4' is required for NSS" "$LINENO" 5
+fi
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for SSL_GetImplementedCiphers in -lssl3" >&5
+$as_echo_n "checking for SSL_GetImplementedCiphers in -lssl3... " >&6; }
+if ${ac_cv_lib_ssl3_SSL_GetImplementedCiphers+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lssl3  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char SSL_GetImplementedCiphers ();
+int
+main ()
+{
+return SSL_GetImplementedCiphers ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_ssl3_SSL_GetImplementedCiphers=yes
+else
+  ac_cv_lib_ssl3_SSL_GetImplementedCiphers=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_ssl3_SSL_GetImplementedCiphers" >&5
+$as_echo "$ac_cv_lib_ssl3_SSL_GetImplementedCiphers" >&6; }
+if test "x$ac_cv_lib_ssl3_SSL_GetImplementedCiphers" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBSSL3 1
+_ACEOF
+
+  LIBS="-lssl3 $LIBS"
+
+else
+  as_fn_error $? "library 'ssl3' is required for NSS" "$LINENO" 5
+fi
+
+  LDFLAGS="$CLEANLDFLAGS"
 fi
 
 if test "$with_pam" = yes ; then
@@ -13335,6 +13527,25 @@ if test "x$ac_cv_header_openssl_err_h" = xyes; then :
 
 else
   as_fn_error $? "header file <openssl/err.h> is required for OpenSSL" "$LINENO" 5
+fi
+
+
+fi
+
+if test "$with_nss" = yes ; then
+  ac_fn_c_check_header_mongrel "$LINENO" "ssl.h" "ac_cv_header_ssl_h" "$ac_includes_default"
+if test "x$ac_cv_header_ssl_h" = xyes; then :
+
+else
+  as_fn_error $? "header file <ssl.h> is required for NSS" "$LINENO" 5
+fi
+
+
+  ac_fn_c_check_header_mongrel "$LINENO" "nss.h" "ac_cv_header_nss_h" "$ac_includes_default"
+if test "x$ac_cv_header_nss_h" = xyes; then :
+
+else
+  as_fn_error $? "header file <nss.h> is required for NSS" "$LINENO" 5
 fi
 
 

@@ -57,6 +57,10 @@ OBJS += \
 	fe-secure-gssapi.o
 endif
 
+ifeq ($(with_nss), yes)
+OBJS += fe-secure-nss.o
+endif
+
 ifeq ($(PORTNAME), cygwin)
 override shlib = cyg$(NAME)$(DLSUFFIX)
 endif

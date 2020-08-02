@@ -362,6 +362,7 @@ struct pg_conn
 	char	   *sslpassword;	/* client key file password */
 	char	   *sslrootcert;	/* root certificate filename */
 	char	   *sslcrl;			/* certificate revocation list filename */
+	char	   *cert_database;
 	char	   *requirepeer;	/* required peer credentials for local sockets */
 	char	   *gssencmode;		/* GSS mode (require,prefer,disable) */
 	char	   *krbsrvname;		/* Kerberos service name */
@@ -485,6 +486,10 @@ struct pg_conn
 								 * OpenSSL version changes */
 #endif
 #endif							/* USE_OPENSSL */
+
+#ifdef USE_NSS
+	void	   *pr_fd;
+#endif							/* USE_NSS */
 #endif							/* USE_SSL */
 
 #ifdef ENABLE_GSS

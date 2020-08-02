@@ -430,6 +430,9 @@ PQsslAttributeNames(PGconn *conn)
 
 	return result;
 }
+#endif /* USE_SSL */
+
+#ifndef USE_OPENSSL
 
 PQsslKeyPassHook_OpenSSL_type
 PQgetSSLKeyPassHook_OpenSSL(void)
@@ -448,7 +451,7 @@ PQdefaultSSLKeyPassHook_OpenSSL(char *buf, int size, PGconn *conn)
 {
 	return 0;
 }
-#endif							/* USE_SSL */
+#endif							/* USE_OPENSSL */
 
 /* Dummy version of GSSAPI information functions, when built without GSS support */
 #ifndef ENABLE_GSS

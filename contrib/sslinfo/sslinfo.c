@@ -9,9 +9,11 @@
 
 #include "postgres.h"
 
+#ifdef USE_OPENSSL
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <openssl/asn1.h>
+#endif
 
 #include "access/htup_details.h"
 #include "funcapi.h"
@@ -21,8 +23,8 @@
 
 PG_MODULE_MAGIC;
 
+#ifdef USE_OPENSSL
 static Datum X509_NAME_field_to_text(X509_NAME *name, text *fieldName);
-static Datum X509_NAME_to_text(X509_NAME *name);
 static Datum ASN1_STRING_to_text(ASN1_STRING *str);
 
 /*
@@ -32,6 +34,7 @@ typedef struct
 {
 	TupleDesc	tupdesc;
 } SSLExtensionInfoContext;
+#endif
 
 /*
  * Indicates whether current session uses SSL
@@ -54,9 +57,16 @@ PG_FUNCTION_INFO_V1(ssl_version);
 Datum
 ssl_version(PG_FUNCTION_ARGS)
 {
-	if (MyProcPort->ssl == NULL)
+	const char *version;
+
+	if (!MyProcPort->ssl_in_use)
 		PG_RETURN_NULL();
-	PG_RETURN_TEXT_P(cstring_to_text(SSL_get_version(MyProcPort->ssl)));
+
+	version = be_tls_get_version(MyProcPort);
+	if (version == NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_TEXT_P(cstring_to_text(version));
 }
 
 
@@ -67,9 +77,16 @@ PG_FUNCTION_INFO_V1(ssl_cipher);
 Datum
 ssl_cipher(PG_FUNCTION_ARGS)
 {
-	if (MyProcPort->ssl == NULL)
+	const char *cipher;
+
+	if (!MyProcPort->ssl_in_use)
 		PG_RETURN_NULL();
-	PG_RETURN_TEXT_P(cstring_to_text(SSL_get_cipher(MyProcPort->ssl)));
+
+	cipher = be_tls_get_cipher(MyProcPort);
+	if (cipher == NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_TEXT_P(cstring_to_text(cipher));
 }
 
 
@@ -83,7 +100,7 @@ PG_FUNCTION_INFO_V1(ssl_client_cert_present);
 Datum
 ssl_client_cert_present(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_BOOL(MyProcPort->peer != NULL);
+	PG_RETURN_BOOL(MyProcPort->peer_cert_valid);
 }
 
 
@@ -99,29 +116,26 @@ PG_FUNCTION_INFO_V1(ssl_client_serial);
 Datum
 ssl_client_serial(PG_FUNCTION_ARGS)
 {
+	char decimal[NAMEDATALEN];
 	Datum		result;
-	Port	   *port = MyProcPort;
-	X509	   *peer = port->peer;
-	ASN1_INTEGER *serial = NULL;
-	BIGNUM	   *b;
-	char	   *decimal;
 
-	if (!peer)
+	if (!MyProcPort->ssl_in_use || !MyProcPort->peer_cert_valid)
 		PG_RETURN_NULL();
-	serial = X509_get_serialNumber(peer);
-	b = ASN1_INTEGER_to_BN(serial, NULL);
-	decimal = BN_bn2dec(b);
 
-	BN_free(b);
+	be_tls_get_peer_serial(MyProcPort, decimal, NAMEDATALEN);
+
+	if (!*decimal)
+		PG_RETURN_NULL();
+
 	result = DirectFunctionCall3(numeric_in,
 								 CStringGetDatum(decimal),
 								 ObjectIdGetDatum(0),
 								 Int32GetDatum(-1));
-	OPENSSL_free(decimal);
 	return result;
 }
 
 
+#ifdef USE_OPENSSL
 /*
  * Converts OpenSSL ASN1_STRING structure into text
  *
@@ -228,7 +242,7 @@ ssl_client_dn_field(PG_FUNCTION_ARGS)
 	text	   *fieldname = PG_GETARG_TEXT_PP(0);
 	Datum		result;
 
-	if (!(MyProcPort->peer))
+	if (!MyProcPort->ssl_in_use || !MyProcPort->peer_cert_valid)
 		PG_RETURN_NULL();
 
 	result = X509_NAME_field_to_text(X509_get_subject_name(MyProcPort->peer), fieldname);
@@ -273,76 +287,23 @@ ssl_issuer_field(PG_FUNCTION_ARGS)
 	else
 		return result;
 }
+#endif							/* USE_OPENSSL */
 
-
-/*
- * Equivalent of X509_NAME_oneline that respects encoding
- *
- * This function converts X509_NAME structure to the text variable
- * converting all textual data into current database encoding.
- *
- * Parameter: X509_NAME *name X509_NAME structure to be converted
- *
- * Returns: text datum which contains string representation of
- * X509_NAME
- */
-static Datum
-X509_NAME_to_text(X509_NAME *name)
+#ifdef USE_NSS
+PG_FUNCTION_INFO_V1(ssl_client_dn_field);
+Datum
+ssl_client_dn_field(PG_FUNCTION_ARGS)
 {
-	BIO		   *membuf = BIO_new(BIO_s_mem());
-	int			i,
-				nid,
-				count = X509_NAME_entry_count(name);
-	X509_NAME_ENTRY *e;
-	ASN1_STRING *v;
-	const char *field_name;
-	size_t		size;
-	char		nullterm;
-	char	   *sp;
-	char	   *dp;
-	text	   *result;
-
-	if (membuf == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("could not create OpenSSL BIO structure")));
-
-	(void) BIO_set_close(membuf, BIO_CLOSE);
-	for (i = 0; i < count; i++)
-	{
-		e = X509_NAME_get_entry(name, i);
-		nid = OBJ_obj2nid(X509_NAME_ENTRY_get_object(e));
-		if (nid == NID_undef)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("could not get NID for ASN1_OBJECT object")));
-		v = X509_NAME_ENTRY_get_data(e);
-		field_name = OBJ_nid2sn(nid);
-		if (field_name == NULL)
-			field_name = OBJ_nid2ln(nid);
-		if (field_name == NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("could not convert NID %d to an ASN1_OBJECT structure", nid)));
-		BIO_printf(membuf, "/%s=", field_name);
-		ASN1_STRING_print_ex(membuf, v,
-							 ((ASN1_STRFLGS_RFC2253 & ~ASN1_STRFLGS_ESC_MSB)
-							  | ASN1_STRFLGS_UTF8_CONVERT));
-	}
-
-	/* ensure null termination of the BIO's content */
-	nullterm = '\0';
-	BIO_write(membuf, &nullterm, 1);
-	size = BIO_get_mem_data(membuf, &sp);
-	dp = pg_any_to_server(sp, size - 1, PG_UTF8);
-	result = cstring_to_text(dp);
-	if (dp != sp)
-		pfree(dp);
-	if (BIO_free(membuf) != 1)
-		elog(ERROR, "could not free OpenSSL BIO structure");
-
-	PG_RETURN_TEXT_P(result);
+	PG_RETURN_NULL();
 }
+
+PG_FUNCTION_INFO_V1(ssl_issuer_field);
+Datum
+ssl_issuer_field(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_NULL();
+}
+#endif							/* USE_NSS */
 
 
 /*
@@ -358,9 +319,17 @@ PG_FUNCTION_INFO_V1(ssl_client_dn);
 Datum
 ssl_client_dn(PG_FUNCTION_ARGS)
 {
-	if (!(MyProcPort->peer))
+	char		subject[NAMEDATALEN];
+
+	if (!MyProcPort->ssl_in_use || !MyProcPort->peer_cert_valid)
 		PG_RETURN_NULL();
-	return X509_NAME_to_text(X509_get_subject_name(MyProcPort->peer));
+
+	be_tls_get_peer_subject_name(MyProcPort, subject, NAMEDATALEN);
+
+	if (!*subject)
+		PG_RETURN_NULL();
+
+	PG_RETURN_TEXT_P(cstring_to_text(subject));
 }
 
 
@@ -377,12 +346,21 @@ PG_FUNCTION_INFO_V1(ssl_issuer_dn);
 Datum
 ssl_issuer_dn(PG_FUNCTION_ARGS)
 {
-	if (!(MyProcPort->peer))
+	char		issuer[NAMEDATALEN];
+
+	if (!MyProcPort->ssl_in_use || !MyProcPort->peer_cert_valid)
 		PG_RETURN_NULL();
-	return X509_NAME_to_text(X509_get_issuer_name(MyProcPort->peer));
+
+	be_tls_get_peer_issuer_name(MyProcPort, issuer, NAMEDATALEN);
+
+	if (!*issuer)
+		PG_RETURN_NULL();
+
+	PG_RETURN_TEXT_P(cstring_to_text(issuer));
 }
 
 
+#ifdef USE_OPENSSL
 /*
  * Returns information about available SSL extensions.
  *
@@ -516,3 +494,13 @@ ssl_extension_info(PG_FUNCTION_ARGS)
 	/* All done */
 	SRF_RETURN_DONE(funcctx);
 }
+#endif							/* USE_OPENSSL */
+
+#ifdef USE_NSS
+PG_FUNCTION_INFO_V1(ssl_extension_info);
+Datum
+ssl_extension_info(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_NULL();
+}
+#endif							/* USE_NSS */

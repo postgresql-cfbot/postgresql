@@ -17,6 +17,7 @@ our $config = {
 	perl      => undef,    # --with-perl=<path>
 	python    => undef,    # --with-python=<path>
 	openssl   => undef,    # --with-openssl=<path>
+	nss       => undef,    # --with-nss=<path>
 	uuid      => undef,    # --with-uuid=<path>
 	xml       => undef,    # --with-libxml=<path>
 	xslt      => undef,    # --with-libxslt=<path>

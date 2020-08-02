@@ -176,4 +176,14 @@ FROM prevstats AS pr;
 
 DROP TABLE trunc_stats_test, trunc_stats_test1, trunc_stats_test2, trunc_stats_test3, trunc_stats_test4;
 DROP TABLE prevstats;
+
+-- Minimal test of pg_command_stats.  Since cmdstats_tracking defaults to
+-- off, and cannot be changed without a cluster restart, there is nothing we can
+-- do to interrogate its behavior here.  But we can at least verify that it
+-- exists, has the right columns, and does nothing unexpected when we attempt to
+-- reset its counts
+
+SELECT * FROM pg_command_stats;
+SELECT * FROM pg_stat_reset_shared('cmdstats');
+SELECT * FROM pg_command_stats;
 -- End of Stats Test

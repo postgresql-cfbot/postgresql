@@ -10273,6 +10273,15 @@ validateForeignKeyConstraint(char *conname,
 	MemoryContext oldcxt;
 	MemoryContext perTupCxt;
 
+	LOCAL_FCINFO(fcinfo, 0);
+	TriggerData trigdata = {0};
+	ResourceOwner saveResourceOwner;
+	Tuplestorestate *table;
+	TupleDesc	tupdesc;
+	const int16 *attnums;
+	Datum	   *values;
+	bool	   *isnull;
+
 	ereport(DEBUG1,
 			(errmsg("validating foreign key constraint \"%s\"", conname)));
 
@@ -10307,41 +10316,58 @@ validateForeignKeyConstraint(char *conname,
 	slot = table_slot_create(rel, NULL);
 	scan = table_beginscan(rel, snapshot, 0, NULL);
 
+	saveResourceOwner = CurrentResourceOwner;
+	CurrentResourceOwner = CurTransactionResourceOwner;
+	table = tuplestore_begin_heap(false, false, work_mem);
+	CurrentResourceOwner = saveResourceOwner;
+
+	/* Retrieve information on FK attributes. */
+	tupdesc = RI_FKey_fk_attributes(&trig, rel, &attnums);
+	values = (Datum *) palloc(tupdesc->natts * sizeof(Datum));
+	isnull = (bool *) palloc(tupdesc->natts * sizeof(bool));
+
 	perTupCxt = AllocSetContextCreate(CurrentMemoryContext,
 									  "validateForeignKeyConstraint",
 									  ALLOCSET_SMALL_SIZES);
 	oldcxt = MemoryContextSwitchTo(perTupCxt);
 
+	/* Store the rows to be checked, but only the FK attributes. */
 	while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
 	{
-		LOCAL_FCINFO(fcinfo, 0);
-		TriggerData trigdata = {0};
+		int			i;
 
 		CHECK_FOR_INTERRUPTS();
 
-		/*
-		 * Make a call to the trigger function
-		 *
-		 * No parameters are passed, but we do set a context
-		 */
-		MemSet(fcinfo, 0, SizeForFunctionCallInfo(0));
+		for (i = 0; i < slot->tts_tupleDescriptor->natts; i++)
+			values[i] = slot_getattr(slot, attnums[i], &isnull[i]);
 
-		/*
-		 * We assume RI_FKey_check_ins won't look at flinfo...
-		 */
-		trigdata.type = T_TriggerData;
-		trigdata.tg_event = TRIGGER_EVENT_INSERT | TRIGGER_EVENT_ROW;
-		trigdata.tg_relation = rel;
-		trigdata.tg_trigtuple = ExecFetchSlotHeapTuple(slot, false, NULL);
-		trigdata.tg_trigslot = slot;
-		trigdata.tg_trigger = &trig;
-
-		fcinfo->context = (Node *) &trigdata;
-
-		RI_FKey_check_ins(fcinfo);
+		tuplestore_putvalues(table, tupdesc, values, isnull);
 
 		MemoryContextReset(perTupCxt);
 	}
+	pfree(values);
+	pfree(isnull);
+
+	/*
+	 * Make a call to the trigger function
+	 *
+	 * No parameters are passed, but we do set a context
+	 */
+	MemSet(fcinfo, 0, SizeForFunctionCallInfo(0));
+
+	/*
+	 * We assume RI_FKey_check_ins won't look at flinfo...
+	 */
+	trigdata.type = T_TriggerData;
+	trigdata.tg_event = TRIGGER_EVENT_INSERT | TRIGGER_EVENT_ROW;
+	trigdata.tg_relation = rel;
+	trigdata.tg_trigslot = slot;
+	trigdata.tg_trigger = &trig;
+	trigdata.tg_oldtable = table;
+
+	fcinfo->context = (Node *) &trigdata;
+
+	RI_FKey_check_ins(fcinfo);
 
 	MemoryContextSwitchTo(oldcxt);
 	MemoryContextDelete(perTupCxt);

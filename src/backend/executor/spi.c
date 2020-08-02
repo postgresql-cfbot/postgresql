@@ -3068,12 +3068,14 @@ SPI_register_trigger_data(TriggerData *tdata)
 	if (tdata->tg_newtable)
 	{
 		EphemeralNamedRelation enr =
-		palloc(sizeof(EphemeralNamedRelationData));
+		palloc0(sizeof(EphemeralNamedRelationData));
 		int			rc;
 
 		enr->md.name = tdata->tg_trigger->tgnewtable;
-		enr->md.reliddesc = tdata->tg_relation->rd_id;
-		enr->md.tupdesc = NULL;
+		if (tdata->desc)
+			enr->md.tupdesc = tdata->desc;
+		else
+			enr->md.reliddesc = tdata->tg_relation->rd_id;
 		enr->md.enrtype = ENR_NAMED_TUPLESTORE;
 		enr->md.enrtuples = tuplestore_tuple_count(tdata->tg_newtable);
 		enr->reldata = tdata->tg_newtable;
@@ -3085,12 +3087,14 @@ SPI_register_trigger_data(TriggerData *tdata)
 	if (tdata->tg_oldtable)
 	{
 		EphemeralNamedRelation enr =
-		palloc(sizeof(EphemeralNamedRelationData));
+		palloc0(sizeof(EphemeralNamedRelationData));
 		int			rc;
 
 		enr->md.name = tdata->tg_trigger->tgoldtable;
-		enr->md.reliddesc = tdata->tg_relation->rd_id;
-		enr->md.tupdesc = NULL;
+		if (tdata->desc)
+			enr->md.tupdesc = tdata->desc;
+		else
+			enr->md.reliddesc = tdata->tg_relation->rd_id;
 		enr->md.enrtype = ENR_NAMED_TUPLESTORE;
 		enr->md.enrtuples = tuplestore_tuple_count(tdata->tg_oldtable);
 		enr->reldata = tdata->tg_oldtable;

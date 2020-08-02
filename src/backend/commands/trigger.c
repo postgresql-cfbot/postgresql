@@ -105,6 +105,8 @@ static void AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 static void AfterTriggerEnlargeQueryState(void);
 static bool before_stmt_triggers_fired(Oid relid, CmdType cmdType);
 
+static TIDArray *alloc_tid_array(void);
+static void add_tid(TIDArray *ta, ItemPointer item);
 
 /*
  * Create a trigger.  Returns the address of the created trigger.
@@ -3337,10 +3339,14 @@ typedef struct AfterTriggerEventList
 /* Macros to help in iterating over a list of events */
 #define for_each_chunk(cptr, evtlist) \
 	for (cptr = (evtlist).head; cptr != NULL; cptr = cptr->next)
+#define next_event_in_chunk(eptr, cptr) \
+	(AfterTriggerEvent) (((char *) eptr) + SizeofTriggerEvent(eptr))
 #define for_each_event(eptr, cptr) \
 	for (eptr = (AfterTriggerEvent) CHUNK_DATA_START(cptr); \
 		 (char *) eptr < (cptr)->freeptr; \
-		 eptr = (AfterTriggerEvent) (((char *) eptr) + SizeofTriggerEvent(eptr)))
+		 eptr = next_event_in_chunk(eptr, cptr))
+#define is_last_event_in_chunk(eptr, cptr) \
+	((((char *) eptr) + SizeofTriggerEvent(eptr)) >= (cptr)->freeptr)
 /* Use this if no special per-chunk processing is needed */
 #define for_each_event_chunk(eptr, cptr, evtlist) \
 	for_each_chunk(cptr, evtlist) for_each_event(eptr, cptr)
@@ -3488,9 +3494,17 @@ static void AfterTriggerExecute(EState *estate,
 								TriggerDesc *trigdesc,
 								FmgrInfo *finfo,
 								Instrumentation *instr,
+								TriggerData *trig_last,
 								MemoryContext per_tuple_context,
+								MemoryContext batch_context,
 								TupleTableSlot *trig_tuple_slot1,
 								TupleTableSlot *trig_tuple_slot2);
+static void AfterTriggerExecuteRI(EState *estate,
+								  ResultRelInfo *relInfo,
+								  FmgrInfo *finfo,
+								  Instrumentation *instr,
+								  TriggerData *trig_last,
+								  MemoryContext batch_context);
 static AfterTriggersTableData *GetAfterTriggersTableData(Oid relid,
 														 CmdType cmdType);
 static void AfterTriggerFreeQuery(AfterTriggersQueryData *qs);
@@ -3807,13 +3821,16 @@ afterTriggerDeleteHeadEventChunk(AfterTriggersQueryData *qs)
  *	fmgr lookup cache space at the caller level.  (For triggers fired at
  *	the end of a query, we can even piggyback on the executor's state.)
  *
- *	event: event currently being fired.
+ *	event: event currently being fired. Pass NULL if the current batch of RI
+ *		trigger events should be processed.
  *	rel: open relation for event.
  *	trigdesc: working copy of rel's trigger info.
  *	finfo: array of fmgr lookup cache entries (one per trigger in trigdesc).
  *	instr: array of EXPLAIN ANALYZE instrumentation nodes (one per trigger),
  *		or NULL if no instrumentation is wanted.
+ *	trig_last: trigger info used for the last trigger execution.
  *	per_tuple_context: memory context to call trigger function in.
+ *	batch_context: memory context to store tuples for RI triggers.
  *	trig_tuple_slot1: scratch slot for tg_trigtuple (foreign tables only)
  *	trig_tuple_slot2: scratch slot for tg_newtuple (foreign tables only)
  * ----------
@@ -3824,39 +3841,55 @@ AfterTriggerExecute(EState *estate,
 					ResultRelInfo *relInfo,
 					TriggerDesc *trigdesc,
 					FmgrInfo *finfo, Instrumentation *instr,
+					TriggerData *trig_last,
 					MemoryContext per_tuple_context,
+					MemoryContext batch_context,
 					TupleTableSlot *trig_tuple_slot1,
 					TupleTableSlot *trig_tuple_slot2)
 {
 	Relation	rel = relInfo->ri_RelationDesc;
 	AfterTriggerShared evtshared = GetTriggerSharedData(event);
 	Oid			tgoid = evtshared->ats_tgoid;
-	TriggerData LocTriggerData = {0};
 	HeapTuple	rettuple;
-	int			tgindx;
 	bool		should_free_trig = false;
 	bool		should_free_new = false;
+	bool		is_new = false;
 
-	/*
-	 * Locate trigger in trigdesc.
-	 */
-	for (tgindx = 0; tgindx < trigdesc->numtriggers; tgindx++)
+	if (trig_last->tg_trigger == NULL)
 	{
-		if (trigdesc->triggers[tgindx].tgoid == tgoid)
+		int			tgindx;
+
+		/*
+		 * Locate trigger in trigdesc.
+		 */
+		for (tgindx = 0; tgindx < trigdesc->numtriggers; tgindx++)
 		{
-			LocTriggerData.tg_trigger = &(trigdesc->triggers[tgindx]);
-			break;
+			if (trigdesc->triggers[tgindx].tgoid == tgoid)
+			{
+				trig_last->tg_trigger = &(trigdesc->triggers[tgindx]);
+				trig_last->tgindx = tgindx;
+				break;
+			}
 		}
+		if (trig_last->tg_trigger == NULL)
+			elog(ERROR, "could not find trigger %u", tgoid);
+
+		if (RI_FKey_trigger_type(trig_last->tg_trigger->tgfoid) !=
+			RI_TRIGGER_NONE)
+			trig_last->is_ri_trigger = true;
+
+		is_new = true;
 	}
-	if (LocTriggerData.tg_trigger == NULL)
-		elog(ERROR, "could not find trigger %u", tgoid);
+
+	/* trig_last for non-RI trigger should always be initialized again. */
+	Assert(trig_last->is_ri_trigger || is_new);
 
 	/*
 	 * If doing EXPLAIN ANALYZE, start charging time to this trigger. We want
 	 * to include time spent re-fetching tuples in the trigger cost.
 	 */
-	if (instr)
-		InstrStartNode(instr + tgindx);
+	if (instr && !trig_last->is_ri_trigger)
+		InstrStartNode(instr + trig_last->tgindx);
 
 	/*
 	 * Fetch the required tuple(s).
@@ -3864,6 +3897,9 @@ AfterTriggerExecute(EState *estate,
 	switch (event->ate_flags & AFTER_TRIGGER_TUP_BITS)
 	{
 		case AFTER_TRIGGER_FDW_FETCH:
+			/* Foreign keys are not supported on foreign tables. */
+			Assert(!trig_last->is_ri_trigger);
+
 			{
 				Tuplestorestate *fdw_tuplestore = GetCurrentFDWTuplestore();
 
@@ -3879,6 +3915,8 @@ AfterTriggerExecute(EState *estate,
 			}
 			/* fall through */
 		case AFTER_TRIGGER_FDW_REUSE:
+			/* Foreign keys are not supported on foreign tables. */
+			Assert(!trig_last->is_ri_trigger);
 
 			/*
 			 * Store tuple in the slot so that tg_trigtuple does not reference
@@ -3889,38 +3927,56 @@ AfterTriggerExecute(EState *estate,
 			 * that is stored as a heap tuple, constructed in different memory
 			 * context, in the slot anyway.
 			 */
-			LocTriggerData.tg_trigslot = trig_tuple_slot1;
-			LocTriggerData.tg_trigtuple =
+			trig_last->tg_trigslot = trig_tuple_slot1;
+			trig_last->tg_trigtuple =
 				ExecFetchSlotHeapTuple(trig_tuple_slot1, true, &should_free_trig);
 
 			if ((evtshared->ats_event & TRIGGER_EVENT_OPMASK) ==
 				TRIGGER_EVENT_UPDATE)
 			{
-				LocTriggerData.tg_newslot = trig_tuple_slot2;
-				LocTriggerData.tg_newtuple =
+				trig_last->tg_newslot = trig_tuple_slot2;
+				trig_last->tg_newtuple =
 					ExecFetchSlotHeapTuple(trig_tuple_slot2, true, &should_free_new);
 			}
 			else
 			{
-				LocTriggerData.tg_newtuple = NULL;
+				trig_last->tg_newtuple = NULL;
 			}
 			break;
 
 		default:
 			if (ItemPointerIsValid(&(event->ate_ctid1)))
 			{
-				LocTriggerData.tg_trigslot = ExecGetTriggerOldSlot(estate, relInfo);
+				if (!trig_last->is_ri_trigger)
+				{
+					trig_last->tg_trigslot = ExecGetTriggerOldSlot(estate,
+																   relInfo);
 
-				if (!table_tuple_fetch_row_version(rel, &(event->ate_ctid1),
-												   SnapshotAny,
-												   LocTriggerData.tg_trigslot))
-					elog(ERROR, "failed to fetch tuple1 for AFTER trigger");
-				LocTriggerData.tg_trigtuple =
-					ExecFetchSlotHeapTuple(LocTriggerData.tg_trigslot, false, &should_free_trig);
+					if (!table_tuple_fetch_row_version(rel, &(event->ate_ctid1),
+													   SnapshotAny,
+													   trig_last->tg_trigslot))
+						elog(ERROR, "failed to fetch tuple1 for AFTER trigger");
+
+					trig_last->tg_trigtuple =
+						ExecFetchSlotHeapTuple(trig_last->tg_trigslot, false,
+											   &should_free_trig);
+				}
+				else
+				{
+					if (trig_last->ri_tids_old == NULL)
+					{
+						MemoryContext oldcxt;
+
+						oldcxt = MemoryContextSwitchTo(batch_context);
+						trig_last->ri_tids_old = alloc_tid_array();
+						MemoryContextSwitchTo(oldcxt);
+					}
+					add_tid(trig_last->ri_tids_old, &(event->ate_ctid1));
+				}
 			}
 			else
 			{
-				LocTriggerData.tg_trigtuple = NULL;
+				trig_last->tg_trigtuple = NULL;
 			}
 
 			/* don't touch ctid2 if not there */
@@ -3928,18 +3984,36 @@ AfterTriggerExecute(EState *estate,
 				AFTER_TRIGGER_2CTID &&
 				ItemPointerIsValid(&(event->ate_ctid2)))
 			{
-				LocTriggerData.tg_newslot = ExecGetTriggerNewSlot(estate, relInfo);
+				if (!trig_last->is_ri_trigger)
+				{
+					trig_last->tg_newslot = ExecGetTriggerNewSlot(estate,
+																  relInfo);
 
-				if (!table_tuple_fetch_row_version(rel, &(event->ate_ctid2),
-												   SnapshotAny,
-												   LocTriggerData.tg_newslot))
-					elog(ERROR, "failed to fetch tuple2 for AFTER trigger");
-				LocTriggerData.tg_newtuple =
-					ExecFetchSlotHeapTuple(LocTriggerData.tg_newslot, false, &should_free_new);
+					if (!table_tuple_fetch_row_version(rel, &(event->ate_ctid2),
+													   SnapshotAny,
+													   trig_last->tg_newslot))
+						elog(ERROR, "failed to fetch tuple2 for AFTER trigger");
+
+					trig_last->tg_newtuple =
+						ExecFetchSlotHeapTuple(trig_last->tg_newslot, false,
+											   &should_free_new);
+				}
+				else
+				{
+					if (trig_last->ri_tids_new == NULL)
+					{
+						MemoryContext oldcxt;
+
+						oldcxt = MemoryContextSwitchTo(batch_context);
+						trig_last->ri_tids_new = alloc_tid_array();
+						MemoryContextSwitchTo(oldcxt);
+					}
+					add_tid(trig_last->ri_tids_new, &(event->ate_ctid2));
+				}
 			}
 			else
 			{
-				LocTriggerData.tg_newtuple = NULL;
+				trig_last->tg_newtuple = NULL;
 			}
 	}
 
@@ -3949,19 +4023,26 @@ AfterTriggerExecute(EState *estate,
 	 * a trigger, mark it "closed" so that it cannot change anymore.  If any
 	 * additional events of the same type get queued in the current trigger
 	 * query level, they'll go into new transition tables.
+	 *
+	 * RI triggers treat the tuplestores specially, see above.
 	 */
-	LocTriggerData.tg_oldtable = LocTriggerData.tg_newtable = NULL;
+	if (!trig_last->is_ri_trigger)
+		trig_last->tg_oldtable = trig_last->tg_newtable = NULL;
+
 	if (evtshared->ats_table)
 	{
-		if (LocTriggerData.tg_trigger->tgoldtable)
+		/* There shouldn't be any transition table for an RI trigger event. */
+		Assert(!trig_last->is_ri_trigger);
+
+		if (trig_last->tg_trigger->tgoldtable)
 		{
-			LocTriggerData.tg_oldtable = evtshared->ats_table->old_tuplestore;
+			trig_last->tg_oldtable = evtshared->ats_table->old_tuplestore;
 			evtshared->ats_table->closed = true;
 		}
 
-		if (LocTriggerData.tg_trigger->tgnewtable)
+		if (trig_last->tg_trigger->tgnewtable)
 		{
-			LocTriggerData.tg_newtable = evtshared->ats_table->new_tuplestore;
+			trig_last->tg_newtable = evtshared->ats_table->new_tuplestore;
 			evtshared->ats_table->closed = true;
 		}
 	}
@@ -3969,54 +4050,139 @@ AfterTriggerExecute(EState *estate,
 	/*
 	 * Setup the remaining trigger information
 	 */
-	LocTriggerData.type = T_TriggerData;
-	LocTriggerData.tg_event =
-		evtshared->ats_event & (TRIGGER_EVENT_OPMASK | TRIGGER_EVENT_ROW);
-	LocTriggerData.tg_relation = rel;
-	if (TRIGGER_FOR_UPDATE(LocTriggerData.tg_trigger->tgtype))
-		LocTriggerData.tg_updatedcols = evtshared->ats_modifiedcols;
-
-	MemoryContextReset(per_tuple_context);
+	if (is_new)
+	{
+		trig_last->type = T_TriggerData;
+		trig_last->tg_event =
+			evtshared->ats_event & (TRIGGER_EVENT_OPMASK | TRIGGER_EVENT_ROW);
+		trig_last->tg_relation = rel;
+		if (TRIGGER_FOR_UPDATE(trig_last->tg_trigger->tgtype))
+			trig_last->tg_updatedcols = evtshared->ats_modifiedcols;
+	}
 
 	/*
-	 * Call the trigger and throw away any possibly returned updated tuple.
-	 * (Don't let ExecCallTriggerFunc measure EXPLAIN time.)
+	 * RI triggers are executed in batches, see the top of the function.
 	 */
-	rettuple = ExecCallTriggerFunc(&LocTriggerData,
-								   tgindx,
-								   finfo,
-								   NULL,
-								   per_tuple_context);
-	if (rettuple != NULL &&
-		rettuple != LocTriggerData.tg_trigtuple &&
-		rettuple != LocTriggerData.tg_newtuple)
-		heap_freetuple(rettuple);
+	if (!trig_last->is_ri_trigger)
+	{
+		MemoryContextReset(per_tuple_context);
+
+		/*
+		 * Call the trigger and throw away any possibly returned updated
+		 * tuple. (Don't let ExecCallTriggerFunc measure EXPLAIN time.)
+		 */
+		rettuple = ExecCallTriggerFunc(trig_last,
+									   trig_last->tgindx,
+									   finfo,
+									   NULL,
+									   per_tuple_context);
+		if (rettuple != NULL &&
+			rettuple != trig_last->tg_trigtuple &&
+			rettuple != trig_last->tg_newtuple)
+			heap_freetuple(rettuple);
+	}
 
 	/*
 	 * Release resources
 	 */
 	if (should_free_trig)
-		heap_freetuple(LocTriggerData.tg_trigtuple);
+		heap_freetuple(trig_last->tg_trigtuple);
 	if (should_free_new)
-		heap_freetuple(LocTriggerData.tg_newtuple);
+		heap_freetuple(trig_last->tg_newtuple);
 
-	/* don't clear slots' contents if foreign table */
-	if (trig_tuple_slot1 == NULL)
+	/*
+	 * Don't clear slots' contents if foreign table.
+	 *
+	 * For for RI trigger we manage these slots separately, see
+	 * AfterTriggerExecuteRI().
+	 */
+	if (trig_tuple_slot1 == NULL && !trig_last->is_ri_trigger)
 	{
-		if (LocTriggerData.tg_trigslot)
-			ExecClearTuple(LocTriggerData.tg_trigslot);
-		if (LocTriggerData.tg_newslot)
-			ExecClearTuple(LocTriggerData.tg_newslot);
+		if (trig_last->tg_trigslot)
+			ExecClearTuple(trig_last->tg_trigslot);
+		if (trig_last->tg_newslot)
+			ExecClearTuple(trig_last->tg_newslot);
 	}
 
 	/*
 	 * If doing EXPLAIN ANALYZE, stop charging time to this trigger, and count
 	 * one "tuple returned" (really the number of firings).
 	 */
-	if (instr)
-		InstrStopNode(instr + tgindx, 1);
+	if (instr && !trig_last->is_ri_trigger)
+		InstrStopNode(instr + trig_last->tgindx, 1);
+
+	/* RI triggers use trig_last across calls. */
+	if (!trig_last->is_ri_trigger)
+		memset(trig_last, 0, sizeof(TriggerData));
 }
 
+/*
+ * AfterTriggerExecuteRI()
+ *
+ * Execute an RI trigger. It's assumed that AfterTriggerExecute() recognized
+ * RI trigger events and only added them to the batch instead of executing
+ * them. The actual processing of the batch is done by this function.
+ */
+static void
+AfterTriggerExecuteRI(EState *estate,
+					  ResultRelInfo *relInfo,
+					  FmgrInfo *finfo,
+					  Instrumentation *instr,
+					  TriggerData *trig_last,
+					  MemoryContext batch_context)
+{
+	HeapTuple	rettuple;
+
+	/*
+	 * AfterTriggerExecute() must have been called for this trigger already.
+	 */
+	Assert(trig_last->tg_trigger);
+	Assert(trig_last->is_ri_trigger);
+
+	/*
+	 * RI trigger constructs a local tuplestore when it needs it. The point is
+	 * that it might need to check visibility first. If we put the tuples into
+	 * a tuplestore now, it'd be hard to keep pins of the containing buffers,
+	 * and so table_tuple_satisfies_snapshot check wouldn't work.
+	 */
+	Assert(trig_last->tg_oldtable == NULL);
+	Assert(trig_last->tg_newtable == NULL);
+
+	/* Initialize the slots to retrieve the rows by TID. */
+	trig_last->tg_trigslot = ExecGetTriggerOldSlot(estate, relInfo);
+	trig_last->tg_newslot = ExecGetTriggerNewSlot(estate, relInfo);
+
+	if (instr)
+		InstrStartNode(instr + trig_last->tgindx);
+
+	/*
+	 * Call the trigger and throw away any possibly returned updated tuple.
+	 * (Don't let ExecCallTriggerFunc measure EXPLAIN time.)
+	 *
+	 * batch_context already contains the TIDs of the affected rows. The RI
+	 * trigger should also use this context to create the tuplestore for them.
+	 */
+	rettuple = ExecCallTriggerFunc(trig_last,
+								   trig_last->tgindx,
+								   finfo,
+								   NULL,
+								   batch_context);
+	if (rettuple != NULL &&
+		rettuple != trig_last->tg_trigtuple &&
+		rettuple != trig_last->tg_newtuple)
+		heap_freetuple(rettuple);
+
+	if (instr)
+		InstrStopNode(instr + trig_last->tgindx, 1);
+
+	ExecClearTuple(trig_last->tg_trigslot);
+	ExecClearTuple(trig_last->tg_newslot);
+
+	MemoryContextReset(batch_context);
+
+	memset(trig_last, 0, sizeof(TriggerData));
+	return;
+}
 
 /*
  * afterTriggerMarkEvents()
@@ -4112,7 +4278,8 @@ afterTriggerInvokeEvents(AfterTriggerEventList *events,
 {
 	bool		all_fired = true;
 	AfterTriggerEventChunk *chunk;
-	MemoryContext per_tuple_context;
+	MemoryContext per_tuple_context,
+				batch_context;
 	bool		local_estate = false;
 	ResultRelInfo *rInfo = NULL;
 	Relation	rel = NULL;
@@ -4121,6 +4288,7 @@ afterTriggerInvokeEvents(AfterTriggerEventList *events,
 	Instrumentation *instr = NULL;
 	TupleTableSlot *slot1 = NULL,
 			   *slot2 = NULL;
+	TriggerData trig_last;
 
 	/* Make a local EState if need be */
 	if (estate == NULL)
@@ -4134,6 +4302,14 @@ afterTriggerInvokeEvents(AfterTriggerEventList *events,
 		AllocSetContextCreate(CurrentMemoryContext,
 							  "AfterTriggerTupleContext",
 							  ALLOCSET_DEFAULT_SIZES);
+	/* Separate context for a batch of RI trigger events. */
+	batch_context =
+		AllocSetContextCreate(CurrentMemoryContext,
+							  "AfterTriggerBatchContext",
+							  ALLOCSET_DEFAULT_SIZES);
+
+	/* No trigger executed yet in this batch. */
+	memset(&trig_last, 0, sizeof(TriggerData));
 
 	for_each_chunk(chunk, *events)
 	{
@@ -4150,6 +4326,8 @@ afterTriggerInvokeEvents(AfterTriggerEventList *events,
 			if ((event->ate_flags & AFTER_TRIGGER_IN_PROGRESS) &&
 				evtshared->ats_firing_id == firing_id)
 			{
+				bool		fire_ri_batch = false;
+
 				/*
 				 * So let's fire it... but first, find the correct relation if
 				 * this is not the same relation as before.
@@ -4180,12 +4358,60 @@ afterTriggerInvokeEvents(AfterTriggerEventList *events,
 				}
 
 				/*
-				 * Fire it.  Note that the AFTER_TRIGGER_IN_PROGRESS flag is
-				 * still set, so recursive examinations of the event list
-				 * won't try to re-fire it.
+				 * Fire it (or add the corresponding tuple(s) to the current
+				 * batch if it's RI trigger).
+				 *
+				 * Note that the AFTER_TRIGGER_IN_PROGRESS flag is still set,
+				 * so recursive examinations of the event list won't try to
+				 * re-fire it.
 				 */
-				AfterTriggerExecute(estate, event, rInfo, trigdesc, finfo, instr,
-									per_tuple_context, slot1, slot2);
+				AfterTriggerExecute(estate, event, rInfo, trigdesc, finfo,
+									instr, &trig_last,
+									per_tuple_context, batch_context,
+									slot1, slot2);
+
+				/*
+				 * RI trigger events are processed in batches, so extra work
+				 * might be needed to finish the current batch. It's important
+				 * to do this before the chunk iteration ends because the
+				 * trigger execution may generate other events.
+				 *
+				 * XXX Implement maximum batch size so that constraint
+				 * violations are reported as soon as possible?
+				 */
+				if (trig_last.tg_trigger && trig_last.is_ri_trigger)
+				{
+					if (is_last_event_in_chunk(event, chunk))
+						fire_ri_batch = true;
+					else
+					{
+						AfterTriggerEvent evtnext;
+						AfterTriggerShared evtshnext;
+
+						/*
+						 * We even need to look ahead because the next event
+						 * might be affected by execution of the current one.
+						 * For example if the next event is an AS trigger
+						 * event to be cancelled (cancel_prior_stmt_triggers)
+						 * because the current event, during its execution,
+						 * generates a new AS event for the same trigger.
+						 */
+						evtnext = next_event_in_chunk(event, chunk);
+						evtshnext = GetTriggerSharedData(evtnext);
+
+						if (evtshnext != evtshared)
+							fire_ri_batch = true;
+					}
+				}
+
+				if (fire_ri_batch)
+					AfterTriggerExecuteRI(estate,
+										  rInfo,
+										  finfo,
+										  instr,
+										  &trig_last,
+										  batch_context);
+
 
 				/*
 				 * Mark the event as done.
@@ -4216,6 +4442,7 @@ afterTriggerInvokeEvents(AfterTriggerEventList *events,
 				events->tailfree = chunk->freeptr;
 		}
 	}
+
 	if (slot1 != NULL)
 	{
 		ExecDropSingleTupleTableSlot(slot1);
@@ -4224,6 +4451,7 @@ afterTriggerInvokeEvents(AfterTriggerEventList *events,
 
 	/* Release working resources */
 	MemoryContextDelete(per_tuple_context);
+	MemoryContextDelete(batch_context);
 
 	if (local_estate)
 	{
@@ -5811,4 +6039,30 @@ Datum
 pg_trigger_depth(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_INT32(MyTriggerDepth);
+}
+
+static TIDArray *
+alloc_tid_array(void)
+{
+	TIDArray   *result = (TIDArray *) palloc(sizeof(TIDArray));
+
+	/* XXX Tune the chunk size. */
+	result->nmax = 1024;
+	result->tids = (ItemPointer) palloc(result->nmax *
+										sizeof(ItemPointerData));
+	result->n = 0;
+	return result;
+}
+
+static void
+add_tid(TIDArray *ta, ItemPointer item)
+{
+	if (ta->n == ta->nmax)
+	{
+		ta->nmax += 1024;
+		ta->tids = (ItemPointer) repalloc(ta->tids,
+										  ta->nmax * sizeof(ItemPointerData));
+	}
+	memcpy(ta->tids + ta->n, item, sizeof(ItemPointerData));
+	ta->n++;
 }

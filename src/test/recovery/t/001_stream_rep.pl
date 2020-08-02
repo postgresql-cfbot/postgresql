@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 36;
+use Test::More tests => 62;
 
 # Initialize primary node
 my $node_primary = get_new_node('primary');
@@ -120,6 +120,150 @@ test_target_session_attrs($node_primary, $node_standby_1, $node_primary, "any",
 # Connect to standby1 in "any" mode with standby1,primary list.
 test_target_session_attrs($node_standby_1, $node_primary, $node_standby_1,
 	"any", 0);
+
+# Connect to primary in "primary" mode with primary,standby1 list.
+test_target_session_attrs($node_primary, $node_standby_1, $node_primary,
+	"primary", 0);
+
+# Connect to primary in "primary" mode with standby1,primary list.
+test_target_session_attrs($node_standby_1, $node_primary, $node_primary,
+	"primary", 0);
+
+# Connect to primary in "prefer-standby" mode with primary,primary list.
+test_target_session_attrs($node_primary, $node_primary, $node_primary,
+	"prefer-standby", 0);
+
+# Connect to standby1 in "prefer-standby" mode with primary,standby1 list.
+test_target_session_attrs($node_primary, $node_standby_1, $node_standby_1,
+	"prefer-standby", 0);
+
+# Connect to standby1 in "prefer-standby" mode with standby1,primary list.
+test_target_session_attrs($node_standby_1, $node_primary, $node_standby_1,
+	"prefer-standby", 0);
+
+# Connect to primary in "prefer-secondary" mode with primary,primary list.
+test_target_session_attrs($node_primary, $node_primary, $node_primary,
+	"prefer-secondary", 0);
+
+# Connect to standby1 in "prefer-secondary" mode with primary,standby1 list.
+test_target_session_attrs($node_primary, $node_standby_1, $node_standby_1,
+	"prefer-secondary", 0);
+
+# Connect to standby1 in "prefer-ssecondary" mode with standby1,primary list.
+test_target_session_attrs($node_standby_1, $node_primary, $node_standby_1,
+	"prefer-secondary", 0);
+
+# Connect to standby1 in "standby" mode with primary,standby1 list.
+test_target_session_attrs($node_primary, $node_standby_1, $node_standby_1,
+	"standby", 0);
+
+# Connect to standby1 in "standby" mode with standby1,primary list.
+test_target_session_attrs($node_standby_1, $node_primary, $node_standby_1,
+	"standby", 0);
+
+# Connect to standby1 in "secondary" mode with primary,standby1 list.
+test_target_session_attrs($node_primary, $node_standby_1, $node_standby_1,
+	"secondary", 0);
+
+# Connect to standby1 in "secondary" mode with standby1,primary list.
+test_target_session_attrs($node_standby_1, $node_primary, $node_standby_1,
+	"secondary", 0);
+
+# Tests for connection parameter target_server_type
+note "testing connection parameter \"target_server_type\"";
+
+# Routine designed to run tests on the connection parameter
+# target_server_type with multiple nodes.
+sub test_target_server_type
+{
+	my $node1       = shift;
+	my $node2       = shift;
+	my $target_node = shift;
+	my $mode        = shift;
+	my $status      = shift;
+
+	my $node1_host = $node1->host;
+	my $node1_port = $node1->port;
+	my $node1_name = $node1->name;
+	my $node2_host = $node2->host;
+	my $node2_port = $node2->port;
+	my $node2_name = $node2->name;
+
+	my $target_name = $target_node->name;
+
+	# Build connection string for connection attempt.
+	my $connstr = "host=$node1_host,$node2_host ";
+	$connstr .= "port=$node1_port,$node2_port ";
+	$connstr .= "target_server_type=$mode";
+
+	# The client used for the connection does not matter, only the backend
+	# point does.
+	my ($ret, $stdout, $stderr) =
+	  $node1->psql('postgres', 'SHOW port;',
+		extra_params => [ '-d', $connstr ]);
+	is( $status == $ret && $stdout eq $target_node->port,
+		1,
+		"connect to node $target_name if mode \"$mode\" and $node1_name,$node2_name listed"
+	);
+
+	return;
+}
+
+# Connect to primary in "read-write" mode with primary,standby1 list.
+test_target_server_type($node_primary, $node_standby_1, $node_primary,
+	"read-write", 0);
+
+# Connect to primary in "read-write" mode with standby1,primary list.
+test_target_server_type($node_standby_1, $node_primary, $node_primary,
+	"read-write", 0);
+
+# Connect to primary in "primary" mode with primary,standby1 list.
+test_target_server_type($node_primary, $node_standby_1, $node_primary,
+	"primary", 0);
+
+# Connect to primary in "primary" mode with standby1,primary list.
+test_target_server_type($node_standby_1, $node_primary, $node_primary,
+	"primary", 0);
+
+# Connect to primary in "prefer-standby" mode with primary,primary list.
+test_target_server_type($node_primary, $node_primary, $node_primary,
+	"prefer-standby", 0);
+
+# Connect to standby1 in "prefer-standby" mode with primary,standby1 list.
+test_target_server_type($node_primary, $node_standby_1, $node_standby_1,
+	"prefer-standby", 0);
+
+# Connect to standby1 in "prefer-standby" mode with standby1,primary list.
+test_target_server_type($node_standby_1, $node_primary, $node_standby_1,
+	"prefer-standby", 0);
+
+# Connect to primary in "prefer-secondary" mode with primary,primary list.
+test_target_server_type($node_primary, $node_primary, $node_primary,
+	"prefer-secondary", 0);
+
+# Connect to standby1 in "prefer-secondary" mode with primary,standby1 list.
+test_target_server_type($node_primary, $node_standby_1, $node_standby_1,
+	"prefer-secondary", 0);
+
+# Connect to standby1 in "prefer-secondary" mode with standby1,primary list.
+test_target_server_type($node_standby_1, $node_primary, $node_standby_1,
+	"prefer-secondary", 0);
+
+# Connect to standby1 in "standby" mode with primary,standby1 list.
+test_target_server_type($node_primary, $node_standby_1, $node_standby_1,
+	"standby", 0);
+
+# Connect to standby1 in "standby" mode with standby1,primary list.
+test_target_server_type($node_standby_1, $node_primary, $node_standby_1,
+	"standby", 0);
+
+# Connect to standby1 in "secondary" mode with primary,standby1 list.
+test_target_server_type($node_primary, $node_standby_1, $node_standby_1,
+	"secondary", 0);
+
+# Connect to standby1 in "secondary" mode with standby1,primary list.
+test_target_server_type($node_standby_1, $node_primary, $node_standby_1,
+	"secondary", 0);
 
 # Test for SHOW commands using a WAL sender connection with a replication
 # role.

@@ -7940,6 +7940,9 @@ StartupXLOG(void)
 	XLogCtl->SharedRecoveryState = RECOVERY_STATE_DONE;
 	SpinLockRelease(&XLogCtl->info_lck);
 
+	if (standbyState != STANDBY_DISABLED)
+		SendRecoveryExitSignal();
+
 	UpdateControlFile();
 	LWLockRelease(ControlFileLock);
 

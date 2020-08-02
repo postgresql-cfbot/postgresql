@@ -317,6 +317,15 @@ typedef struct pg_conn_host
 								 * found in password file. */
 } pg_conn_host;
 
+/* Target server type to connect to */
+typedef enum
+{
+	SERVER_TYPE_ANY = 0,           /* Any server (default) */
+	SERVER_TYPE_PRIMARY,           /* Primary server */
+	SERVER_TYPE_PREFER_STANDBY,    /* Prefer Standby server */
+	SERVER_TYPE_STANDBY            /* Standby server */
+} TargetServerType;
+
 /*
  * PGconn stores all the state data associated with a single connection
  * to a backend.
@@ -370,8 +379,32 @@ struct pg_conn
 	char	   *ssl_min_protocol_version;	/* minimum TLS protocol version */
 	char	   *ssl_max_protocol_version;	/* maximum TLS protocol version */
 
-	/* Type of connection to make.  Possible values: any, read-write. */
+	/*
+	 * Type of connection to make.  Possible values:
+	 * 	"any"
+	 * 	"primary" (or "read-write")
+	 * 	"prefer-standby" (or "prefer-secondary")
+	 * 	"standby" (or "secondary").
+	 */
 	char	   *target_session_attrs;
+
+	/*
+	 * Type of server to connect to. Possible values:
+	 * 	"primary" (or "read-write")
+	 * 	"prefer-standby" (or "prefer-secondary")
+	 * 	"standby" (or "secondary").
+	 * This overrides any connection type specified by target_session_attrs.
+	 * This option is almost a synonym for the target_session_attrs option, except
+	 * its purpose is to closely reflect the similar PGJDBC targetServerType option.
+	 * Note also that this option only accepts single option values, whereas in
+	 * future, target_session_attrs may accept multiple session attribute values.
+	 */
+	char	   *target_server_type;
+
+	/*
+	 * The requested server type, derived from target_session_attrs / target_server_type.
+	 */
+	TargetServerType requested_server_type;
 
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
@@ -406,6 +439,17 @@ struct pg_conn
 	pg_conn_host *connhost;		/* details about each named host */
 	char	   *connip;			/* IP address for current network connection */
 
+	/*
+	 * Index of the first read-write host encountered (if any) in the connection string.
+	 *
+	 * The initial value is -1, indicating that no read-write host has yet been found.
+	 * It is then set to the index of the first read-write host, if one is found in the
+	 * connection string during processing. If a second connection attempt is later made
+	 * to that read-write host, which_rw_host is then set to -2 to avoid recursion during
+	 * processing (and whichhost is set to the read-write host index).
+	 */
+	int			which_rw_host;
+
 	/* Connection data */
 	pgsocket	sock;			/* FD for socket, PGINVALID_SOCKET if
 								 * unconnected */
@@ -436,6 +480,7 @@ struct pg_conn
 	pgParameterStatus *pstatus; /* ParameterStatus data */
 	int			client_encoding;	/* encoding id */
 	bool		std_strings;	/* standard_conforming_strings */
+	bool		in_recovery;	/* in_recovery */
 	PGVerbosity verbosity;		/* error/notice message verbosity */
 	PGContextVisibility show_context;	/* whether to show CONTEXT field */
 	PGlobjfuncs *lobjfuncs;		/* private state for large-object access fns */
@@ -539,7 +584,6 @@ struct pg_cancel
 	int			be_pid;			/* PID of backend --- needed for cancels */
 	int			be_key;			/* key of backend --- needed for cancels */
 };
-
 
 /* String descriptions of the ExecStatusTypes.
  * direct use of this array is deprecated; call PQresStatus() instead.

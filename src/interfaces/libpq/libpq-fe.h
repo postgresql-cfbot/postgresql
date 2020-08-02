@@ -68,7 +68,8 @@ typedef enum
 	CONNECTION_CONSUME,			/* Wait for any pending message and consume
 								 * them. */
 	CONNECTION_GSS_STARTUP,		/* Negotiating GSSAPI. */
-	CONNECTION_CHECK_TARGET		/* Check if we have a proper target connection */
+	CONNECTION_CHECK_TARGET,	/* Check if we have a proper target connection */
+	CONNECTION_CHECK_RECOVERY	/* Check whether server is in recovery */
 } ConnStatusType;
 
 typedef enum

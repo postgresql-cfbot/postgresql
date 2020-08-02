@@ -162,6 +162,14 @@ static bool UseSemiNewlineNewline = false;	/* -j switch */
 static bool RecoveryConflictPending = false;
 static bool RecoveryConflictRetryable = true;
 static ProcSignalReason RecoveryConflictReason;
+/*
+ * Inbound recovery exit are initially processed by
+ * HandleRecoveryExitInterrupt(), called from inside a signal handler.
+ * That just sets the recoveryExitInterruptPending flag and sets the process
+ * latch. ProcessRecoveryExitInterrupt() will then be called whenever it's
+ * safe to actually deal with the interrupt.
+ */
+volatile sig_atomic_t recoveryExitInterruptPending = false;
 
 /* reused buffer to pass to SendRowDescriptionMessage() */
 static MemoryContext row_description_context = NULL;
@@ -191,6 +199,7 @@ static void drop_unnamed_stmt(void);
 static void log_disconnections(int code, Datum arg);
 static void enable_statement_timeout(void);
 static void disable_statement_timeout(void);
+static void ProcessRecoveryExitInterrupt(void);
 
 
 /* ----------------------------------------------------------------
@@ -539,6 +548,10 @@ ProcessClientReadInterrupt(bool blocked)
 		/* Process notify interrupts, if any */
 		if (notifyInterruptPending)
 			ProcessNotifyInterrupt();
+
+		/* Process recovery exit interrupts that happened while reading */
+		if (recoveryExitInterruptPending)
+			ProcessRecoveryExitInterrupt();
 	}
 	else if (ProcDiePending)
 	{
@@ -3007,6 +3020,52 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
 
 	errno = save_errno;
 }
+
+/*
+ * HandleRecoveryExitInterrupt
+ *
+ *		Signal handler portion of interrupt handling. Let the backend know
+ *		that the server has exited the recovery mode.
+ */
+void
+HandleRecoveryExitInterrupt(void)
+{
+	/*
+	 * Note: this is called by a SIGNAL HANDLER. You must be very wary what
+	 * you do here.
+	 */
+
+	/* signal that work needs to be done */
+	recoveryExitInterruptPending = true;
+
+	/* make sure the event is processed in due course */
+	SetLatch(MyLatch);
+}
+
+/*
+ * ProcessRecoveryExitInterrupt
+ *
+ *		This is called just after waiting for a frontend command.  If a
+ *		interrupt arrives (via HandleRecoveryExitInterrupt()) while reading,
+ *		the read will be interrupted via the process's latch, and this routine
+ *		will get called.
+*/
+static void
+ProcessRecoveryExitInterrupt(void)
+{
+	recoveryExitInterruptPending = false;
+
+	SetConfigOption("in_recovery",
+					"off",
+					PGC_INTERNAL, PGC_S_OVERRIDE);
+
+	/*
+	 * Flush output buffer so that clients receive the ParameterStatus message
+	 * as soon as possible.
+	 */
+	pq_flush();
+}
+
 
 /*
  * ProcessInterrupts: out-of-line portion of CHECK_FOR_INTERRUPTS() macro

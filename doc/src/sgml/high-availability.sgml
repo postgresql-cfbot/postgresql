@@ -1885,8 +1885,9 @@ if (!triggered)
    </para>
 
    <para>
-    During hot standby, the parameter <varname>transaction_read_only</varname> is always
-    true and may not be changed.  But as long as no attempt is made to modify
+    During hot standby, the parameters <varname>in_recovery</varname> and
+    <varname>transaction_read_only</varname> are always true and may not be
+    changed. But as long as no attempt is made to modify
     the database, connections during hot standby will act much like any other
     database connection.  If failover or switchover occurs, the database will
     switch to normal processing mode.  Sessions will remain connected while the

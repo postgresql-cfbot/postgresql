@@ -1811,18 +1811,89 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>target_session_attrs</literal></term>
       <listitem>
        <para>
-        If this parameter is set to <literal>read-write</literal>, only a
-        connection in which read-write transactions are accepted by default
-        is considered acceptable.  The query
-        <literal>SHOW transaction_read_only</literal> will be sent upon any
-        successful connection; if it returns <literal>on</literal>, the connection
-        will be closed.  If multiple hosts were specified in the connection
-        string, any remaining servers will be tried just as if the connection
-        attempt had failed.  The default value of this parameter,
-        <literal>any</literal>, regards all connections as acceptable.
-      </para>
+        The supported options for this parameter are <literal>any</literal>,
+        <literal>primary</literal>, <literal>standby</literal> and
+        <literal>prefer-standby</literal>.
+        <literal>primary</literal> may alternatively be specified as <literal>read-write</literal>.
+        <literal>standby</literal> may alternatively be specified as <literal>secondary</literal>.
+        <literal>prefer-standby</literal> may alternatively be specified as
+        <literal>prefer-secondary</literal>.
+        The default value of this parameter, <literal>any</literal>, regards
+        all connections as acceptable. If multiple hosts are specified in the
+        connection string, each host is tried in the order given until a connection
+        is successful.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>primary</literal>, then if the server is version 14
+        or greater, only a connection in which the server is not in recovery mode is considered
+        acceptable. The recovery mode state is determined by the value of the
+        <varname>in_recovery</varname> configuration parameter that is reported by the server upon
+        successful connection. Otherwise, if the server is prior to version 14, only a connection in
+        which read-write transactions are accepted by default is considered acceptable. To determine
+        whether the server supports read-write transactions, the query
+        <literal>SHOW transaction_read_only</literal> will be sent upon any successful connection; if
+        it returns <literal>on</literal>, it means the server doesn't support read-write transactions.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>standby</literal>, only a connection in which
+        the server is in recovery mode is considered acceptable. If the server is prior to version 14,
+        the query <literal>SELECT pg_is_in_recovery()</literal> will be sent upon any successful
+        connection; if it returns <literal>t</literal>, it means the server is in recovery mode.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>prefer-standby</literal>, a connection in which
+        the server is in recovery mode is preferred. If no such connections can be found,
+        then a connection in which the server is not in recovery mode will be considered.
+       </para>
+
       </listitem>
-    </varlistentry>
+     </varlistentry>
+
+     <varlistentry id="libpq-connect-target-server-type" xreflabel="target_server_type">
+      <term><literal>target_server_type</literal></term>
+      <listitem>
+       <para>
+        The supported options for this parameter are <literal>primary</literal>,
+        <literal>standby</literal> and <literal>prefer-standby</literal>.
+        <literal>primary</literal> may alternatively be specified as <literal>read-write</literal>.
+        <literal>standby</literal> may alternatively be specified as <literal>secondary</literal>.
+        <literal>prefer-standby</literal> may alternatively be specified as
+        <literal>prefer-secondary</literal>.
+        This parameter overrides any connection type specified by <literal>target_session_attrs</literal>.
+        If multiple hosts are specified in the connection string, each host is tried in the order given
+        until a connection is successful.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>primary</literal>, then if the server is version 14
+        or greater, only a connection in which the server is not in recovery mode is considered
+        acceptable. The recovery mode state is determined by the value of the
+        <varname>in_recovery</varname> configuration parameter that is reported by the server upon
+        successful connection. Otherwise, if the server is prior to version 14, only a connection in
+        which read-write transactions are accepted by default is considered acceptable. To determine
+        whether the server supports read-write transactions, the query
+        <literal>SHOW transaction_read_only</literal> will be sent upon any successful connection; if
+        it returns <literal>on</literal>, it means the server doesn't support read-write transactions.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>standby</literal>, only a connection in which
+        the server is in recovery mode is considered acceptable. If the server is prior to version 14,
+        the query <literal>SELECT pg_is_in_recovery()</literal> will be sent upon any successful
+        connection; if it returns <literal>t</literal>, it means the server is in recovery mode.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>prefer-standby</literal>, a connection in which
+        the server is in recovery mode is preferred. If no such connections can be found,
+        then a connection in which the server is not in recovery mode will be considered.
+       </para>
+
+      </listitem>
+     </varlistentry>
     </variablelist>
    </para>
   </sect2>
@@ -2130,14 +2201,16 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
        <varname>DateStyle</varname>,
        <varname>IntervalStyle</varname>,
        <varname>TimeZone</varname>,
-       <varname>integer_datetimes</varname>, and
-       <varname>standard_conforming_strings</varname>.
+       <varname>integer_datetimes</varname>,
+       <varname>standard_conforming_strings</varname> and
+       <varname>in_recovery</varname>.
        (<varname>server_encoding</varname>, <varname>TimeZone</varname>, and
        <varname>integer_datetimes</varname> were not reported by releases before 8.0;
        <varname>standard_conforming_strings</varname> was not reported by releases
        before 8.1;
        <varname>IntervalStyle</varname> was not reported by releases before 8.4;
-       <varname>application_name</varname> was not reported by releases before 9.0.)
+       <varname>application_name</varname> was not reported by releases before 9.0;
+       <varname>in_recovery</varname> was not reported by releases before 14.0.)
        Note that
        <varname>server_version</varname>,
        <varname>server_encoding</varname> and
@@ -7235,6 +7308,16 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
       </indexterm>
       <envar>PGTARGETSESSIONATTRS</envar> behaves the same as the <xref
       linkend="libpq-connect-target-session-attrs"/> connection parameter.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
+       <primary><envar>PGTARGETSERVERTYPE</envar></primary>
+      </indexterm>
+      <envar>PGTARGETSERVERTYPE</envar> behaves the same as the <xref
+      linkend="libpq-connect-target-server-type"/> connection parameter.
      </para>
     </listitem>
    </itemizedlist>

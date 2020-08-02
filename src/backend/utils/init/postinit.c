@@ -646,10 +646,13 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		/*
 		 * The postmaster already started the XLOG machinery, but we need to
 		 * call InitXLOGAccess(), if the system isn't in hot-standby mode.
-		 * This is handled by calling RecoveryInProgress and ignoring the
-		 * result.
+		 * This is handled by calling RecoveryInProgress.
 		 */
-		(void) RecoveryInProgress();
+		if (RecoveryInProgress())
+			SetConfigOption("in_recovery",
+							"on",
+							PGC_INTERNAL, PGC_S_OVERRIDE);
+
 	}
 	else
 	{

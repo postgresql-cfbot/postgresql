@@ -3660,12 +3660,7 @@ reindex_relation(Oid relid, int flags, int options)
 	 */
 	rel = table_open(relid, ShareLock);
 
-	/*
-	 * This may be useful when implemented someday; but that day is not today.
-	 * For now, avoid erroring out when called in a multi-table context
-	 * (REINDEX SCHEMA) and happen to come across a partitioned table.  The
-	 * partitions may be reindexed on their own anyway.
-	 */
+	/* Avoid erroring out */
 	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		ereport(WARNING,

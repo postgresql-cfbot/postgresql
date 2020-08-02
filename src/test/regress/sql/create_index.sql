@@ -903,12 +903,21 @@ CREATE INDEX concur_reindex_part_index_0_2 ON ONLY concur_reindex_part_0_2 (c1);
 ALTER INDEX concur_reindex_part_index_0 ATTACH PARTITION concur_reindex_part_index_0_2;
 SELECT relid, parentrelid, level FROM pg_partition_tree('concur_reindex_part_index')
   ORDER BY relid, level;
--- REINDEX fails for partitioned indexes
+-- REINDEX for partitioned indexes
+REINDEX INDEX concur_reindex_part_index;
+REINDEX INDEX CONCURRENTLY concur_reindex_part_index;
+REINDEX INDEX concur_reindex_part_index_0;
+REINDEX INDEX CONCURRENTLY concur_reindex_part_index_0;
 REINDEX INDEX concur_reindex_part_index_10;
 REINDEX INDEX CONCURRENTLY concur_reindex_part_index_10;
--- REINDEX is a no-op for partitioned tables
+-- REINDEX for partitioned tables
 REINDEX TABLE concur_reindex_part_10;
 REINDEX TABLE CONCURRENTLY concur_reindex_part_10;
+REINDEX TABLE concur_reindex_part_0;
+REINDEX TABLE CONCURRENTLY concur_reindex_part_0;
+REINDEX TABLE concur_reindex_part_10;
+REINDEX TABLE CONCURRENTLY concur_reindex_part_10;
+
 SELECT relid, parentrelid, level FROM pg_partition_tree('concur_reindex_part_index')
   ORDER BY relid, level;
 -- REINDEX should preserve dependencies of partition tree.

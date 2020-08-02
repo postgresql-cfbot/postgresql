@@ -33,6 +33,7 @@
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_inherits.h"
 #include "catalog/toasting.h"
 #include "commands/cluster.h"
 #include "commands/progress.h"
@@ -72,6 +73,9 @@ static void copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex,
 							bool verbose, bool *pSwapToastByContent,
 							TransactionId *pFreezeXid, MultiXactId *pCutoffMulti);
 static List *get_tables_to_cluster(MemoryContext cluster_context);
+static List *get_tables_to_cluster_partitioned(MemoryContext cluster_context,
+		Oid indexOid);
+static void cluster_multiple_rels(List *rvs, int options);
 
 
 /*---------------------------------------------------------------------------
@@ -124,14 +128,6 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot cluster temporary tables of other sessions")));
 
-		/*
-		 * Reject clustering a partitioned table.
-		 */
-		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot cluster a partitioned table")));
-
 		if (stmt->indexname == NULL)
 		{
 			ListCell   *index;
@@ -169,8 +165,37 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 		/* close relation, keep lock till commit */
 		table_close(rel, NoLock);
 
-		/* Do the job. */
-		cluster_rel(tableOid, indexOid, stmt->options);
+		if (rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+		{
+			/* Do the job. */
+			cluster_rel(tableOid, indexOid, stmt->options);
+		} else {
+			List	   *rvs;
+			MemoryContext cluster_context;
+
+			/* Check index directly since cluster_rel isn't called for partitioned table */
+			check_index_is_clusterable(rel, indexOid, true, AccessExclusiveLock);
+
+			/* Refuse to hold strong locks in a user transaction */
+			PreventInTransactionBlock(isTopLevel, "CLUSTER");
+
+			cluster_context = AllocSetContextCreate(PortalContext,
+												"Cluster",
+												ALLOCSET_DEFAULT_SIZES);
+
+			rvs = get_tables_to_cluster_partitioned(cluster_context, indexOid);
+			cluster_multiple_rels(rvs, stmt->options);
+
+			/* Start a new transaction for the cleanup work. */
+			StartTransactionCommand();
+
+			rel = table_open(tableOid, ShareUpdateExclusiveLock);
+			mark_index_clustered(rel, indexOid, true);
+			table_close(rel, NoLock);
+
+			/* Clean up working storage */
+			MemoryContextDelete(cluster_context);
+		}
 	}
 	else
 	{
@@ -180,7 +205,6 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 		 */
 		MemoryContext cluster_context;
 		List	   *rvs;
-		ListCell   *rv;
 
 		/*
 		 * We cannot run this form of CLUSTER inside a user transaction block;
@@ -204,25 +228,7 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 		 */
 		rvs = get_tables_to_cluster(cluster_context);
 
-		/* Commit to get out of starting transaction */
-		PopActiveSnapshot();
-		CommitTransactionCommand();
-
-		/* Ok, now that we've got them all, cluster them one by one */
-		foreach(rv, rvs)
-		{
-			RelToCluster *rvtc = (RelToCluster *) lfirst(rv);
-
-			/* Start a new transaction for each relation. */
-			StartTransactionCommand();
-			/* functions in indexes may want a snapshot set */
-			PushActiveSnapshot(GetTransactionSnapshot());
-			/* Do the job. */
-			cluster_rel(rvtc->tableOid, rvtc->indexOid,
-						stmt->options | CLUOPT_RECHECK);
-			PopActiveSnapshot();
-			CommitTransactionCommand();
-		}
+		cluster_multiple_rels(rvs, stmt->options);
 
 		/* Start a new transaction for the cleanup work. */
 		StartTransactionCommand();
@@ -482,12 +488,6 @@ mark_index_clustered(Relation rel, Oid indexOid, bool is_internal)
 	Form_pg_index indexForm;
 	Relation	pg_index;
 	ListCell   *index;
-
-	/* Disallow applying to a partitioned table */
-	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot mark index clustered in partitioned table")));
 
 	/*
 	 * If the index is already marked clustered, no need to do anything.
@@ -1556,4 +1556,71 @@ get_tables_to_cluster(MemoryContext cluster_context)
 	relation_close(indRelation, AccessShareLock);
 
 	return rvs;
+}
+
+/*
+ * Return a List of tables and associated index, where each index is a
+ * partition of the given index
+ */
+static List *
+get_tables_to_cluster_partitioned(MemoryContext cluster_context, Oid indexOid)
+{
+	List		*inhoids;
+	ListCell	*lc;
+	List		*rvs = NIL;
+
+	MemoryContext old_context = MemoryContextSwitchTo(cluster_context);
+
+	inhoids = find_all_inheritors(indexOid, NoLock, NULL);
+	foreach(lc, inhoids)
+	{
+		Oid		indexrelid = lfirst_oid(lc);
+		Oid		relid = IndexGetRelation(indexrelid, false);
+		RelToCluster	*rvtc;
+
+		/*
+		 * We have a full list of direct and indirect children, so skip
+		 * partitioned tables and just handle their children.
+		 */
+		if (get_rel_relkind(relid) == RELKIND_PARTITIONED_TABLE)
+			continue;
+
+		rvtc = (RelToCluster *) palloc(sizeof(RelToCluster));
+		rvtc->tableOid = relid;
+		rvtc->indexOid = indexrelid;
+		rvs = lappend(rvs, rvtc);
+	}
+
+	MemoryContextSwitchTo(old_context);
+	return rvs;
+}
+
+/* Cluster each relation in a separate transaction */
+static void
+cluster_multiple_rels(List *rvs, int options)
+{
+		ListCell *lc;
+
+		/* Commit to get out of starting transaction */
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+
+		/* Ok, now that we've got them all, cluster them one by one */
+		foreach(lc, rvs)
+		{
+			RelToCluster *rvtc = (RelToCluster *) lfirst(lc);
+
+			/* Start a new transaction for each relation. */
+			StartTransactionCommand();
+
+			/* functions in indexes may want a snapshot set */
+			PushActiveSnapshot(GetTransactionSnapshot());
+
+			/* Do the job. */
+			cluster_rel(rvtc->tableOid, rvtc->indexOid,
+						options | CLUOPT_RECHECK);
+
+			PopActiveSnapshot();
+			CommitTransactionCommand();
+		}
 }

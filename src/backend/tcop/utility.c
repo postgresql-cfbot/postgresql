@@ -926,10 +926,12 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 				switch (stmt->kind)
 				{
 					case REINDEX_OBJECT_INDEX:
-						ReindexIndex(stmt->relation, stmt->options, stmt->concurrent);
+						ReindexIndex(stmt->relation, stmt->options,
+								stmt->concurrent, isTopLevel);
 						break;
 					case REINDEX_OBJECT_TABLE:
-						ReindexTable(stmt->relation, stmt->options, stmt->concurrent);
+						ReindexTable(stmt->relation, stmt->options,
+								stmt->concurrent, isTopLevel);
 						break;
 					case REINDEX_OBJECT_SCHEMA:
 					case REINDEX_OBJECT_SYSTEM:

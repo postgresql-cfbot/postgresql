@@ -258,11 +258,6 @@ REINDEX [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] { IN
    can always reindex anything.
   </para>
 
-  <para>
-   Reindexing partitioned tables or partitioned indexes is not supported.
-   Each individual partition can be reindexed separately instead.
-  </para>
-
   <refsect2 id="sql-reindex-concurrently" xreflabel="Rebuilding Indexes Concurrently">
    <title>Rebuilding Indexes Concurrently</title>
 

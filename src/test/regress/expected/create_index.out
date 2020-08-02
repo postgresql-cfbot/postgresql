@@ -2196,18 +2196,20 @@ SELECT relid, parentrelid, level FROM pg_partition_tree('concur_reindex_part_ind
  concur_reindex_part_index_0_2 | concur_reindex_part_index_0 |     2
 (5 rows)
 
--- REINDEX fails for partitioned indexes
+-- REINDEX for partitioned indexes
+REINDEX INDEX concur_reindex_part_index;
+REINDEX INDEX CONCURRENTLY concur_reindex_part_index;
+REINDEX INDEX concur_reindex_part_index_0;
+REINDEX INDEX CONCURRENTLY concur_reindex_part_index_0;
 REINDEX INDEX concur_reindex_part_index_10;
-ERROR:  REINDEX is not yet implemented for partitioned indexes
 REINDEX INDEX CONCURRENTLY concur_reindex_part_index_10;
-ERROR:  REINDEX is not yet implemented for partitioned indexes
--- REINDEX is a no-op for partitioned tables
+-- REINDEX for partitioned tables
 REINDEX TABLE concur_reindex_part_10;
-WARNING:  REINDEX of partitioned tables is not yet implemented, skipping "concur_reindex_part_10"
-NOTICE:  table "concur_reindex_part_10" has no indexes to reindex
 REINDEX TABLE CONCURRENTLY concur_reindex_part_10;
-WARNING:  REINDEX of partitioned tables is not yet implemented, skipping "concur_reindex_part_10"
-NOTICE:  table "concur_reindex_part_10" has no indexes that can be reindexed concurrently
+REINDEX TABLE concur_reindex_part_0;
+REINDEX TABLE CONCURRENTLY concur_reindex_part_0;
+REINDEX TABLE concur_reindex_part_10;
+REINDEX TABLE CONCURRENTLY concur_reindex_part_10;
 SELECT relid, parentrelid, level FROM pg_partition_tree('concur_reindex_part_index')
   ORDER BY relid, level;
              relid             |         parentrelid         | level 

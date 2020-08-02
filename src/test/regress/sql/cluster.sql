@@ -196,11 +196,19 @@ drop table clstr_temp;
 
 RESET SESSION AUTHORIZATION;
 
--- Check that partitioned tables cannot be clustered
+-- Check that partitioned tables can be clustered
 CREATE TABLE clstrpart (a int) PARTITION BY RANGE (a);
+CREATE TABLE clstrpart1 PARTITION OF clstrpart FOR VALUES FROM (1)TO(10) PARTITION BY RANGE (a);
+CREATE TABLE clstrpart11 PARTITION OF clstrpart1 FOR VALUES FROM (1)TO(10);
+CREATE TABLE clstrpart12 PARTITION OF clstrpart1 FOR VALUES FROM (10)TO(20) PARTITION BY RANGE(a);
+CREATE TABLE clstrpart2 PARTITION OF clstrpart FOR VALUES FROM (20)TO(30);
 CREATE INDEX clstrpart_idx ON clstrpart (a);
-ALTER TABLE clstrpart CLUSTER ON clstrpart_idx;
+ALTER TABLE clstrpart SET WITHOUT CLUSTER;
 CLUSTER clstrpart USING clstrpart_idx;
+CLUSTER clstrpart1 USING clstrpart1_a_idx; -- partition which is itself partitioned
+CLUSTER clstrpart12 USING clstrpart12_a_idx; -- partition which is itself partitioned, no childs
+CLUSTER clstrpart2 USING clstrpart2_a_idx; -- leaf
+\d clstrpart
 DROP TABLE clstrpart;
 
 -- Test CLUSTER with external tuplesorting

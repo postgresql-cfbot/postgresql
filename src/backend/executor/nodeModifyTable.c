@@ -153,9 +153,6 @@ ExecCheckPlanOutput(Relation resultRel, List *targetList)
  * tupleSlot: slot holding tuple actually inserted/updated/deleted
  * planSlot: slot holding tuple returned by top subplan node
  *
- * Note: If tupleSlot is NULL, the FDW should have already provided econtext's
- * scan tuple.
- *
  * Returns a slot holding the result tuple
  */
 static TupleTableSlot *
@@ -166,17 +163,28 @@ ExecProcessReturning(ResultRelInfo *resultRelInfo,
 	ProjectionInfo *projectReturning = resultRelInfo->ri_projectReturning;
 	ExprContext *econtext = projectReturning->pi_exprContext;
 
-	/* Make tuple and any needed join variables available to ExecProject */
+	/*
+	 * Make tuple and any needed join variables available to ExecProject
+	 *
+	 * Note: If tupleSlot is NULL, it means this is called for modifying a
+	 * foreign table directly, in which case the FDW should have already
+	 * provided econtext's ecxt_scantuple.
+	 */
 	if (tupleSlot)
 		econtext->ecxt_scantuple = tupleSlot;
-	econtext->ecxt_outertuple = planSlot;
+	else
+	{
+		Assert(resultRelInfo->ri_usesFdwDirectModify);
+		Assert(econtext->ecxt_scantuple);
 
-	/*
-	 * RETURNING expressions might reference the tableoid column, so
-	 * reinitialize tts_tableOid before evaluating them.
-	 */
-	econtext->ecxt_scantuple->tts_tableOid =
-		RelationGetRelid(resultRelInfo->ri_RelationDesc);
+		/*
+		 * The FDW may already have initialized tts_tableOid, but in case it
+		 * didn't, do so now.
+		 */
+		econtext->ecxt_scantuple->tts_tableOid =
+			RelationGetRelid(resultRelInfo->ri_RelationDesc);
+	}
+	econtext->ecxt_outertuple = planSlot;
 
 	/* Compute the RETURNING expressions */
 	return ExecProject(projectReturning);
@@ -368,7 +376,7 @@ ExecComputeStoredGenerated(EState *estate, TupleTableSlot *slot, CmdType cmdtype
  *		For INSERT, we have to insert the tuple into the target relation
  *		and insert appropriate tuples into the index relations.
  *
- *		Returns RETURNING result if any, otherwise NULL.
+ *		Returns RETURNING result if any and requested, otherwise NULL.
  * ----------------------------------------------------------------
  */
 static TupleTableSlot *
@@ -376,7 +384,9 @@ ExecInsert(ModifyTableState *mtstate,
 		   TupleTableSlot *slot,
 		   TupleTableSlot *planSlot,
 		   EState *estate,
-		   bool canSetTag)
+		   bool canSetTag,
+		   bool processReturning,
+		   TupleTableSlot **resultSlot)
 {
 	ResultRelInfo *resultRelInfo;
 	Relation	resultRelationDesc;
@@ -677,8 +687,12 @@ ExecInsert(ModifyTableState *mtstate,
 		ExecWithCheckOptions(WCO_VIEW_CHECK, resultRelInfo, slot, estate);
 
 	/* Process RETURNING if present */
-	if (resultRelInfo->ri_projectReturning)
+	if (processReturning && resultRelInfo->ri_projectReturning)
 		result = ExecProcessReturning(resultRelInfo, slot, planSlot);
+
+	/* If requested, pass back the inserted row */
+	if (resultSlot)
+		*resultSlot = slot;
 
 	return result;
 }
@@ -1202,11 +1216,14 @@ lreplace:;
 		if (partition_constraint_failed)
 		{
 			bool		tuple_deleted;
-			TupleTableSlot *ret_slot;
+			TupleTableSlot *orig_slot = slot;
+			TupleTableSlot *res_slot = NULL;
+			TupleTableSlot *ret_slot = NULL;
 			TupleTableSlot *epqslot = NULL;
 			PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
 			int			map_index;
 			TupleConversionMap *tupconv_map;
+			ResultRelInfo *destRel;
 
 			/*
 			 * Disallow an INSERT ON CONFLICT DO UPDATE that causes the
@@ -1307,9 +1324,18 @@ lreplace:;
 			Assert(mtstate->rootResultRelInfo != NULL);
 			slot = ExecPrepareTupleRouting(mtstate, estate, proute,
 										   mtstate->rootResultRelInfo, slot);
+			destRel = estate->es_result_relation_info;
 
-			ret_slot = ExecInsert(mtstate, slot, planSlot,
-								  estate, canSetTag);
+			/*
+			 * Tell ExecInsert() to not process RETURNING, because using the
+			 * the destination partition's RETURNING projection may not work
+			 * correctly if some columns in the RETURNING list reference
+			 * planSlot, which is based on the source partition's tuple
+			 * descriptor.
+			 */
+			ret_slot = ExecInsert(mtstate, slot, planSlot, estate, canSetTag,
+								  false, &res_slot);
+			Assert(ret_slot == NULL);
 
 			/* Revert ExecPrepareTupleRouting's node change. */
 			estate->es_result_relation_info = resultRelInfo;
@@ -1317,6 +1343,38 @@ lreplace:;
 			{
 				mtstate->mt_transition_capture->tcs_original_insert_tuple = NULL;
 				mtstate->mt_transition_capture->tcs_map = saved_tcs_map;
+			}
+
+			/* Process RETURNING using the source relation's projection. */
+			if (resultRelInfo->ri_projectReturning && res_slot)
+			{
+				/*
+				 * Switch back to the original slot.  While switching the slot,
+				 * also check if we need to convert the tuple, because the
+				 * tuples descriptors of the source and the destination
+				 * partitions may not match.  While it's not great that we have
+				 * to check and build the map from scratch for every tuple that
+				 * is moved between partitions whose tuple descriptors don't
+				 * match, such cases should be rare in practice.
+				 */
+				if (res_slot != orig_slot)
+				{
+					AttrMap *map;
+
+					map = build_attrmap_by_name_if_req(RelationGetDescr(destRel->ri_RelationDesc),
+													   RelationGetDescr(resultRelInfo->ri_RelationDesc));
+					if (map)
+						orig_slot = execute_attr_map_slot(map,
+														  res_slot,
+														  orig_slot);
+
+					/*
+					 * Override tts_tableOid with the OID of the destination
+					 * partition.
+					 */
+					orig_slot->tts_tableOid = RelationGetRelid(destRel->ri_RelationDesc);
+				}
+				return ExecProcessReturning(resultRelInfo, orig_slot, planSlot);
 			}
 
 			return ret_slot;
@@ -2244,7 +2302,8 @@ ExecModifyTable(PlanState *pstate)
 					slot = ExecPrepareTupleRouting(node, estate, proute,
 												   resultRelInfo, slot);
 				slot = ExecInsert(node, slot, planSlot,
-								  estate, node->canSetTag);
+								  estate, node->canSetTag,
+								  true, NULL);
 				/* Revert ExecPrepareTupleRouting's state change. */
 				if (proute)
 					estate->es_result_relation_info = resultRelInfo;

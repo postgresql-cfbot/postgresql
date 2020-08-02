@@ -13,8 +13,21 @@
 #ifndef CHECKSUM_H
 #define CHECKSUM_H
 
-#include "storage/block.h"
+#include "postgres.h"
 
+#include "access/tupdesc.h"
+#include "common/relpath.h"
+#include "storage/block.h"
+#include "utils/relcache.h"
+#include "utils/tuplestore.h"
+
+/*
+ * A zero checksum can never be computed, see pg_checksum_page() */
+#define NoComputedChecksum	0
+
+extern bool check_one_block(Relation relation, ForkNumber forknum,
+							BlockNumber blkno, uint16 *chk_expected,
+							uint16 *chk_found);
 /*
  * Compute the checksum for a Postgres page.  The page must be aligned on a
  * 4-byte boundary.

@@ -142,6 +142,9 @@ InitBufferPool(void)
 	/* Init other shared buffer-management stuff */
 	StrategyInitialize(!foundDescs);
 
+	/* Init cached buffer hash table and related shmem data structures */
+	InitCachedBufTable(NBuffers);
+
 	/* Initialize per-backend file flush context */
 	WritebackContextInit(&BackendWritebackContext,
 						 &backend_flush_after);
@@ -184,6 +187,9 @@ BufferShmemSize(void)
 
 	/* size of checkpoint sort array in bufmgr.c */
 	size = add_size(size, mul_size(NBuffers, sizeof(CkptSortItem)));
+
+	/* size of cached buffer shmem data structures */
+	size = add_size(size, CachedBufShmemSize());
 
 	return size;
 }

@@ -22,6 +22,9 @@ typedef struct BrinOptions
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	BlockNumber pagesPerRange;
 	bool		autosummarize;
+	double		nDistinctPerRange;	/* number of distinct values per range */
+	double		falsePositiveRate;	/* false positive for bloom filter */
+	int			valuesPerRange;		/* number of values per range */
 } BrinOptions;
 
 

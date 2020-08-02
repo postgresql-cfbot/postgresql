@@ -1217,6 +1217,7 @@ _equalClusterStmt(const ClusterStmt *a, const ClusterStmt *b)
 	COMPARE_NODE_FIELD(relation);
 	COMPARE_STRING_FIELD(indexname);
 	COMPARE_SCALAR_FIELD(options);
+	COMPARE_NODE_FIELD(params);
 
 	return true;
 }
@@ -2135,7 +2136,9 @@ _equalReindexStmt(const ReindexStmt *a, const ReindexStmt *b)
 	COMPARE_NODE_FIELD(relation);
 	COMPARE_STRING_FIELD(name);
 	COMPARE_SCALAR_FIELD(options);
+	COMPARE_NODE_FIELD(params);
 	COMPARE_SCALAR_FIELD(concurrent);
+	COMPARE_STRING_FIELD(tablespacename);
 
 	return true;
 }

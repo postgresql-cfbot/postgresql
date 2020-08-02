@@ -3210,6 +3210,7 @@ typedef struct ClusterStmt
 	RangeVar   *relation;		/* relation being indexed, or NULL if all */
 	char	   *indexname;		/* original index defined */
 	int			options;		/* OR of ClusterOption flags */
+	List		*params;		/* Params not further parsed by the grammar */
 } ClusterStmt;
 
 /* ----------------------
@@ -3369,7 +3370,9 @@ typedef struct ReindexStmt
 	RangeVar   *relation;		/* Table or index to reindex */
 	const char *name;			/* name of database to reindex */
 	int			options;		/* Reindex options flags */
+	List		*params;		/* Params not further parsed by the grammer */
 	bool		concurrent;		/* reindex concurrently? */
+	char	   *tablespacename; /* name of tablespace where index is to be rebuilt */
 } ReindexStmt;
 
 /* ----------------------

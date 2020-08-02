@@ -3358,6 +3358,7 @@ _copyClusterStmt(const ClusterStmt *from)
 	COPY_NODE_FIELD(relation);
 	COPY_STRING_FIELD(indexname);
 	COPY_SCALAR_FIELD(options);
+	COPY_NODE_FIELD(params);
 
 	return newnode;
 }
@@ -4450,7 +4451,9 @@ _copyReindexStmt(const ReindexStmt *from)
 	COPY_NODE_FIELD(relation);
 	COPY_STRING_FIELD(name);
 	COPY_SCALAR_FIELD(options);
+	COPY_NODE_FIELD(params);
 	COPY_SCALAR_FIELD(concurrent);
+	COPY_STRING_FIELD(tablespacename);
 
 	return newnode;
 }

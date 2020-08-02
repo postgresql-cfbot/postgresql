@@ -229,6 +229,9 @@ typedef struct VacuumParams
 	 * disabled.
 	 */
 	int			nworkers;
+	/* tablespaces to use for relations rebuilt by VACUUM FULL */
+	Oid			tablespace_oid;
+	Oid			idxtablespace_oid;
 } VacuumParams;
 
 /* GUC parameters */

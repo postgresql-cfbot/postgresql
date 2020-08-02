@@ -143,13 +143,17 @@ static bool SyncRepQueueIsOrderedByLSN(int mode);
  * represents a commit record.  If it doesn't, then we wait only for the WAL
  * to be flushed if synchronous_commit is set to the higher level of
  * remote_apply, because only commit records provide apply feedback.
+ *
+ * This function return true if we canceled waiting due to an
+ * interruption.
  */
-void
+bool
 SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 {
 	char	   *new_status = NULL;
 	const char *old_status;
 	int			mode;
+	bool		canceled = false;
 
 	/*
 	 * This should be called while holding interrupts during a transaction
@@ -168,7 +172,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 	 * Fast exit if user has not requested sync replication.
 	 */
 	if (!SyncRepRequested())
-		return;
+		return false;
 
 	Assert(SHMQueueIsDetached(&(MyProc->syncRepLinks)));
 	Assert(WalSndCtl != NULL);
@@ -188,7 +192,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		lsn <= WalSndCtl->lsn[mode])
 	{
 		LWLockRelease(SyncRepLock);
-		return;
+		return false;
 	}
 
 	/*
@@ -258,6 +262,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
 			whereToSendOutput = DestNone;
 			SyncRepCancelWait();
+			canceled = true;
 			break;
 		}
 
@@ -274,6 +279,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 					(errmsg("canceling wait for synchronous replication due to user request"),
 					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
 			SyncRepCancelWait();
+			canceled = true;
 			break;
 		}
 
@@ -291,6 +297,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		if (rc & WL_POSTMASTER_DEATH)
 		{
 			ProcDiePending = true;
+			canceled = true;
 			whereToSendOutput = DestNone;
 			SyncRepCancelWait();
 			break;
@@ -316,6 +323,8 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		set_ps_display(new_status);
 		pfree(new_status);
 	}
+
+	return canceled;
 }
 
 /*

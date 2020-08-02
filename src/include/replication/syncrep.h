@@ -82,7 +82,7 @@ extern char *syncrep_parse_error_msg;
 extern char *SyncRepStandbyNames;
 
 /* called by user backend */
-extern void SyncRepWaitForLSN(XLogRecPtr lsn, bool commit);
+extern bool SyncRepWaitForLSN(XLogRecPtr lsn, bool commit);
 
 /* called at backend exit */
 extern void SyncRepCleanupAtProcExit(void);

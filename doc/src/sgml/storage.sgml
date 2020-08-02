@@ -84,6 +84,12 @@ Item
 </row>
 
 <row>
+ <entry><filename>pg_fdwxact</filename></entry>
+ <entry>Subdirectory containing files used by the distributed transaction
+  manager subsystem</entry>
+</row>
+
+<row>
  <entry><filename>pg_logical</filename></entry>
  <entry>Subdirectory containing status data for logical decoding</entry>
 </row>

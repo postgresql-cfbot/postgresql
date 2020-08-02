@@ -1,0 +1,109 @@
+src/backend/access/fdwxact/README
+
+Atomic Commit for Distributed Transactions
+===========================================
+
+The atomic commit feature enables us to commit and rollback either all of
+foreign servers or nothing. This ensures that the database data is always left
+in a consistent state in term of federated database.
+
+
+Commit Sequence of Global Transactions
+---------------------------------------
+
+We employee two-phase commit protocol to achieve commit among all foreign
+servers atomically. The sequence of distributed transaction commit consists
+of the following four steps:
+
+1. Foreign Server Registration
+FDW needs to register foreign transaction to the list FdwXactParticipants until
+commit by calling FdwXactRegisterXact(), which is maintained by PostgreSQL's
+the global transaction manager (GTM), as a distributed transaction participant.
+The registered foreign transactions are tracked until the end of transaction.
+
+2. Pre-Commit phase (1st phase of two-phase commit)
+We record the corresponding WAL indicating that the foreign server is involved
+with the current transaction before doing PREPARE each foreign transactions.
+Thus in case we loose connectivity to the foreign server or crash ourselves,
+we will remember that we might have prepared transaction on the foreign
+server, and try to resolve it when connectivity is restored or after crash
+recovery.
+
+The two-phase commit is required only if the transaction modified two or more
+servers including the local node. In other case, we can commit them at this
+step by calling CommitForeignTransaction() API and no need further operation.
+
+After that we prepare all foreign transactions by calling
+PrepareForeignTransaction() API. If we failed on any of them we change to
+rollback, therefore at this time some participants might be prepared whereas
+some are not prepared. The former foreign transactions need to be resolved
+using pg_resolve_foreign_xact() manually and the latter ends transaction
+in one-phase by calling RollbackForeignTransaction() API.
+
+3. Commit locally
+Once we've prepared all of them, commit the transaction locally.
+
+4. Post-Commit Phase (2nd phase of two-phase commit)
+The steps so far are done by the backend process committing the transaction but
+this resolution step (commit or rollback) is done by the foreign transaction
+resolver process. The backend process inserts itself to the wait queue, and
+then wake up the resolver process (or request to launch new one if necessary).
+The resolver process enqueue the waiter and fetch the distributed transaction
+information that the backend is waiting for. Once all foreign transaction are
+committed or rollbacked the resolver process wake up the waiter.
+
+
+Foreign Data Wrapper Callbacks for Transaction Management
+-----------------------------------------------------------
+
+The core GTM manages the status of individual foreign transactions and calls
+transaction management callback functions according to its status. Each
+callback functions PrepareForeignTransaction, CommitForeignTransaction and
+RollbackForeignTransaction is responsible for PREPARE, COMMIT or ROLLBACK
+the transaction on the foreign server, respectively.
+FdwXactRslvState->flags could contain FDWXACT_FLAG_ONEPHASE, meaning FDW can
+commit or rollback the foreign transaction in one-phase. On failure during
+processing a foreign transaction, FDW needs to raise an error. However, FDW
+needs to tolerate ERRCODE_UNDEFINED_OBJECT error during committing or rolling
+back a foreign transaction, because there is a race condition that the
+coordinator could crash in time between the resolution is completed and writing
+the WAL removing the FdwXact entry.
+
+
+Foreign Transactions Status
+----------------------------
+
+Every foreign transactions will have an FdwXact entry. When preparing a foreign
+transaction a FdwXact entry of which status starts from FDWXACT_STATUS_PREPARING
+are created with WAL logging. The status changes to FDWXACT_STATUS_PREPARED
+after the foreign transaction is prepared and it changes to
+FDWXACT_STATUS_COMMITTING and FDWXACT_STATUS_ABORTING before the foreign
+transaction is committed and aborted by FDW callback functions respectively.
+FdwXact entry is removed once the foreign transaction is resolved with WAL
+logging.
+
+FdwXact entries recovered during the recovery are marked as in-doubt if the
+corresponding local transaction is not prepared transaction. The initial
+status is FDWXACT_STATUS_PREPARED(*1). Because the foreign transaction was
+being processed we cannot know the exact status. So we regard it as PREPARED
+for safety.
+
+The foreign transaction status transition is illustrated by the following graph
+describing the FdwXact->status:
+
+ +----------------------------------------------------+
+ |                     PREPARING                      |----+
+ +----------------------------------------------------+    |
+                          |                                |
+                          v                                |
+ +----------------------------------------------------+    |
+ |                    PREPARED(*1)                    |    | (*2)
+ +----------------------------------------------------+    |
+           |                               |               |
+           v                               v               |
+ +--------------------+          +--------------------+    |
+ |   COMMITTING(*1)   |          |    ABORTING(*1)    |<---+
+ +--------------------+          +--------------------+
+
+(*1) Recovered FdwXact entries starts with PREPARED
+(*2) Paths when an error occurrs during preparing

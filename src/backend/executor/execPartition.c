@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/fdwxact.h"
 #include "access/table.h"
 #include "access/tableam.h"
 #include "catalog/partition.h"

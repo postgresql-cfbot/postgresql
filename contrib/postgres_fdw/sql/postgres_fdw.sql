@@ -15,6 +15,10 @@ DO $d$
             OPTIONS (dbname '$$||current_database()||$$',
                      port '$$||current_setting('port')||$$'
             )$$;
+        EXECUTE $$CREATE SERVER loopback3 FOREIGN DATA WRAPPER postgres_fdw
+            OPTIONS (dbname '$$||current_database()||$$',
+                     port '$$||current_setting('port')||$$'
+            )$$;
     END;
 $d$;
 
@@ -22,6 +26,7 @@ CREATE USER MAPPING FOR public SERVER testserver1
 	OPTIONS (user 'value', password 'value');
 CREATE USER MAPPING FOR CURRENT_USER SERVER loopback;
 CREATE USER MAPPING FOR CURRENT_USER SERVER loopback2;
+CREATE USER MAPPING FOR CURRENT_USER SERVER loopback3;
 
 -- ===================================================================
 -- create objects used through FDW loopback server
@@ -55,6 +60,14 @@ CREATE TABLE "S 1"."T 4" (
 	c2 int NOT NULL,
 	c3 text,
 	CONSTRAINT t4_pkey PRIMARY KEY (c1)
+);
+CREATE TABLE "S 1"."T 5" (
+       c1 int NOT NULL
+);
+
+CREATE TABLE "S 1"."T 6" (
+       c1 int NOT NULL,
+       CONSTRAINT t6_pkey PRIMARY KEY (c1)
 );
 
 -- Disable autovacuum for these tables to avoid unexpected effects of that
@@ -94,6 +107,7 @@ ANALYZE "S 1"."T 1";
 ANALYZE "S 1"."T 2";
 ANALYZE "S 1"."T 3";
 ANALYZE "S 1"."T 4";
+ANALYZE "S 1"."T 5";
 
 -- ===================================================================
 -- create foreign tables
@@ -141,6 +155,15 @@ CREATE FOREIGN TABLE ft6 (
 	c2 int NOT NULL,
 	c3 text
 ) SERVER loopback2 OPTIONS (schema_name 'S 1', table_name 'T 4');
+
+CREATE FOREIGN TABLE ft7_2pc (
+       c1 int NOT NULL
+) SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 5');
+
+CREATE FOREIGN TABLE ft8_2pc (
+       c1 int NOT NULL
+) SERVER loopback2 OPTIONS (schema_name 'S 1', table_name 'T 5');
+
 
 -- ===================================================================
 -- tests for validator
@@ -2598,7 +2621,7 @@ ALTER USER MAPPING FOR regress_nosuper SERVER loopback_nopw OPTIONS (ADD passwor
 SET ROLE regress_nosuper;
 
 -- Should finally work now
-SELECT * FROM ft1_nopw LIMIT 1;
+SELECT * FROM ft1_nopw ORDER BY 1 LIMIT 1;
 
 -- unpriv user also cannot set sslcert / sslkey on the user mapping
 -- first set password_required so we see the right error messages
@@ -2612,7 +2635,7 @@ DROP USER MAPPING FOR CURRENT_USER SERVER loopback_nopw;
 
 -- This will fail again as it'll resolve the user mapping for public, which
 -- lacks password_required=false
-SELECT * FROM ft1_nopw LIMIT 1;
+SELECT * FROM ft1_nopw ORDER BY 1 LIMIT 1;
 
 RESET ROLE;
 
@@ -2628,9 +2651,98 @@ DROP ROLE regress_nosuper;
 -- Clean-up
 RESET enable_partitionwise_aggregate;
 
--- Two-phase transactions are not supported.
+-- ===================================================================
+-- test distributed atomic commit across foreign servers
+-- ===================================================================
+
+-- Enable atomic commit
+SET foreign_twophase_commit TO 'required';
+
+-- Modify single foreign server and then commit and rollback.
 BEGIN;
-SELECT count(*) FROM ft1;
--- error here
-PREPARE TRANSACTION 'fdw_tpc';
+INSERT INTO ft7_2pc VALUES(1);
+COMMIT;
+SELECT * FROM ft7_2pc;
+
+BEGIN;
+INSERT INTO ft7_2pc VALUES(1);
 ROLLBACK;
+SELECT * FROM ft7_2pc;
+
+-- Modify two servers then commit and rollback. This requires to use 2PC.
+BEGIN;
+INSERT INTO ft7_2pc VALUES(2);
+INSERT INTO ft8_2pc VALUES(2);
+COMMIT;
+SELECT * FROM ft8_2pc;
+
+BEGIN;
+INSERT INTO ft7_2pc VALUES(2);
+INSERT INTO ft8_2pc VALUES(2);
+ROLLBACK;
+SELECT * FROM ft8_2pc;
+
+-- Modify both local data and 2PC-capable server then commit and rollback.
+-- This also requires to use 2PC.
+BEGIN;
+INSERT INTO ft7_2pc VALUES(3);
+INSERT INTO "S 1"."T 6" VALUES (3);
+COMMIT;
+SELECT * FROM ft7_2pc;
+SELECT * FROM "S 1"."T 6";
+
+BEGIN;
+INSERT INTO ft7_2pc VALUES(3);
+INSERT INTO "S 1"."T 6" VALUES (3);
+ROLLBACK;
+SELECT * FROM ft7_2pc;
+SELECT * FROM "S 1"."T 6";
+
+-- Modify foreign server and raise an error. No data changed.
+BEGIN;
+INSERT INTO ft7_2pc VALUES(4);
+INSERT INTO ft8_2pc VALUES(NULL); -- violation
+ROLLBACK;
+SELECT * FROM ft8_2pc;
+
+BEGIN;
+INSERT INTO ft7_2pc VALUES (5);
+INSERT INTO ft8_2pc VALUES (5);
+SAVEPOINT S1;
+INSERT INTO ft7_2pc VALUES (6);
+INSERT INTO ft8_2pc VALUES (6);
+ROLLBACK TO S1;
+COMMIT;
+SELECT * FROM ft7_2pc;
+SELECT * FROM ft8_2pc;
+RELEASE SAVEPOINT S1;
+
+-- When set to 'disabled', we can commit it
+SET foreign_twophase_commit TO 'disabled';
+BEGIN;
+INSERT INTO ft7_2pc VALUES(8);
+INSERT INTO ft8_2pc VALUES(8);
+COMMIT; -- success
+SELECT * FROM ft7_2pc;
+SELECT * FROM ft8_2pc;
+
+SET foreign_twophase_commit TO 'required';
+
+-- Commit and rollback foreign transactions that are part of
+-- prepare transaction.
+BEGIN;
+INSERT INTO ft7_2pc VALUES(9);
+INSERT INTO ft8_2pc VALUES(9);
+PREPARE TRANSACTION 'gx1';
+COMMIT PREPARED 'gx1';
+SELECT * FROM ft8_2pc;
+
+BEGIN;
+INSERT INTO ft7_2pc VALUES(9);
+INSERT INTO ft8_2pc VALUES(9);
+PREPARE TRANSACTION 'gx1';
+ROLLBACK PREPARED 'gx1';
+SELECT * FROM ft8_2pc;
+
+-- No entry remained
+SELECT count(*) FROM pg_foreign_xacts;

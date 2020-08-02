@@ -521,9 +521,13 @@ OPTIONS (ADD password_required 'false');
   </para>
 
   <para>
-   Note that it is currently not supported by
-   <filename>postgres_fdw</filename> to prepare the remote transaction for
-   two-phase commit.
+   <filename>postgrs_fdw</filename> support to prepare the remote transaction
+   for two-phase commit.  Also, if two-phase commit protocol is required to
+   commit the distributed transaction, <filename>postgres_fdw</filename> commits
+   the remote transaction using two-phase commit protocol
+   (see <xref linkend="atomic-commit"/>).  So the remote server needs to set
+   set <xref linkend="guc-max-prepared-transactions"/> more than one so that
+   it can prepare the remote transaction.
   </para>
  </sect2>
 

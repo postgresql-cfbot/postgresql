@@ -16,6 +16,7 @@
 
 #include "access/clog.h"
 #include "access/xlogdefs.h"
+#include "datatype/timestamp.h"
 #include "lib/ilist.h"
 #include "storage/latch.h"
 #include "storage/lock.h"
@@ -160,6 +161,17 @@ struct PGPROC
 	XLogRecPtr	waitLSN;		/* waiting for this LSN or higher */
 	int			syncRepState;	/* wait state for sync rep */
 	SHM_QUEUE	syncRepLinks;	/* list link if process is in syncrep queue */
+
+	/*
+	 * Info to allow us to wait for foreign transaction to be resolved, if
+	 * needed.
+	 */
+	TransactionId	fdwXactWaitXid;	/* waiting for foreign transaction involved with
+									 * this transaction id to be resolved */
+	int				fdwXactState;	/* wait state for foreign transaction
+									 * resolution */
+	SHM_QUEUE	fdwXactLinks;	/* list link if process is in queue */
+	TimestampTz fdwXactNextResolutionTs;
 
 	/*
 	 * All PROCLOCK objects for locks held or awaited by this backend are

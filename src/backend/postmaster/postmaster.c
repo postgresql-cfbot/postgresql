@@ -2305,6 +2305,12 @@ retry1:
 					(errcode(ERRCODE_CANNOT_CONNECT_NOW),
 					 errmsg("the database system is starting up")));
 			break;
+		case CAC_STANDBY:
+			ereport(FATAL,
+					(errcode(ERRCODE_CANNOT_CONNECT_NOW),
+					 errmsg("the database system is up, but hot_standby is off")));
+			break;
+
 		case CAC_SHUTDOWN:
 			ereport(FATAL,
 					(errcode(ERRCODE_CANNOT_CONNECT_NOW),
@@ -2454,10 +2460,12 @@ canAcceptConnections(int backend_type)
 			result = CAC_WAITBACKUP;	/* allow superusers only */
 		else if (Shutdown > NoShutdown)
 			return CAC_SHUTDOWN;	/* shutdown is pending */
-		else if (!FatalError &&
-				 (pmState == PM_STARTUP ||
-				  pmState == PM_RECOVERY))
+		else if (!FatalError && pmState == PM_STARTUP)
 			return CAC_STARTUP; /* normal startup */
+		else if (!FatalError && pmState == PM_RECOVERY && EnableHotStandby)
+			return CAC_STARTUP; /* hot standby is starting up */
+		else if (!FatalError && pmState == PM_RECOVERY)
+			return CAC_STANDBY; /* connection disallowed on non-hot standby */
 		else if (!FatalError &&
 				 pmState == PM_HOT_STANDBY)
 			result = CAC_OK;	/* connection OK during hot standby */

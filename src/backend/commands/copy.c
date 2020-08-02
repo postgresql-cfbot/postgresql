@@ -96,6 +96,16 @@ typedef enum CopyInsertMethod
 } CopyInsertMethod;
 
 /*
+ * Represents whether the header must be absent, present or present and match.
+ */
+typedef enum CopyHeader
+{
+	COPY_HEADER_ABSENT,
+	COPY_HEADER_PRESENT,
+	COPY_HEADER_MATCH
+} CopyHeader;
+
+/*
  * This struct contains all the state variables used throughout a COPY
  * operation. For simplicity, we use the same struct for all variants of COPY,
  * even though some fields are used in only some cases.
@@ -136,7 +146,7 @@ typedef struct CopyStateData
 	bool		binary;			/* binary format? */
 	bool		freeze;			/* freeze rows on loading? */
 	bool		csv_mode;		/* Comma Separated Value format? */
-	bool		header_line;	/* CSV header line? */
+	CopyHeader  header_line;	/* CSV or text header line? */
 	char	   *null_print;		/* NULL marker string (server encoding!) */
 	int			null_print_len; /* length of same */
 	char	   *null_print_client;	/* same converted to file encoding */
@@ -1230,7 +1240,29 @@ ProcessCopyOptions(ParseState *pstate,
 						(errcode(ERRCODE_SYNTAX_ERROR),
 						 errmsg("conflicting or redundant options"),
 						 parser_errposition(pstate, defel->location)));
-			cstate->header_line = defGetBoolean(defel);
+
+			PG_TRY();
+			{
+				if (defGetBoolean(defel))
+					cstate->header_line = COPY_HEADER_PRESENT;
+				else
+					cstate->header_line = COPY_HEADER_ABSENT;
+			}
+			PG_CATCH();
+			{
+				char	*sval = defGetString(defel);
+
+				if (!cstate->is_copy_from)
+					PG_RE_THROW();
+
+				if (pg_strcasecmp(sval, "match") == 0)
+					cstate->header_line = COPY_HEADER_MATCH;
+				else
+					ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("header requires a boolean or \"match\"")));
+			}
+			PG_END_TRY();
 		}
 		else if (strcmp(defel->defname, "quote") == 0)
 		{
@@ -1411,10 +1443,10 @@ ProcessCopyOptions(ParseState *pstate,
 				 errmsg("COPY delimiter cannot be \"%s\"", cstate->delim)));
 
 	/* Check header */
-	if (!cstate->csv_mode && cstate->header_line)
+	if (cstate->binary && cstate->header_line)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("COPY HEADER available only in CSV mode")));
+				 errmsg("COPY HEADER available only in CSV and text mode")));
 
 	/* Check quote */
 	if (!cstate->csv_mode && cstate->quote != NULL)
@@ -2147,8 +2179,11 @@ CopyTo(CopyState cstate)
 
 				colname = NameStr(TupleDescAttr(tupDesc, attnum - 1)->attname);
 
-				CopyAttributeOutCSV(cstate, colname, false,
-									list_length(cstate->attnumlist) == 1);
+				if (cstate->csv_mode)
+					CopyAttributeOutCSV(cstate, colname, false,
+										list_length(cstate->attnumlist) == 1);
+				else
+					CopyAttributeOutText(cstate, colname);
 			}
 
 			CopySendEndOfRow(cstate);
@@ -3644,12 +3679,53 @@ NextCopyFromRawFields(CopyState cstate, char ***fields, int *nfields)
 	/* only available for text or csv input */
 	Assert(!cstate->binary);
 
-	/* on input just throw the header line away */
+	/* on input check that the header line is correct if needed */
 	if (cstate->cur_lineno == 0 && cstate->header_line)
 	{
+		ListCell   *cur;
+		TupleDesc   tupDesc;
+
+		tupDesc = RelationGetDescr(cstate->rel);
+
 		cstate->cur_lineno++;
-		if (CopyReadLine(cstate))
-			return false;		/* done */
+		done = CopyReadLine(cstate);
+
+		if (cstate->header_line == COPY_HEADER_MATCH)
+		{
+			if (cstate->csv_mode)
+				fldct = CopyReadAttributesCSV(cstate);
+			else
+				fldct = CopyReadAttributesText(cstate);
+
+			if (fldct < list_length(cstate->attnumlist))
+				ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("missing header")));
+			else if (fldct > list_length(cstate->attnumlist))
+				ereport(ERROR,
+					(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+					 errmsg("extra data after last expected header")));
+
+			foreach(cur, cstate->attnumlist)
+			{
+				int				attnum = lfirst_int(cur);
+				char		  *colName = cstate->raw_fields[attnum - 1];
+				Form_pg_attribute attr = TupleDescAttr(tupDesc, attnum - 1);
+
+				if (colName == NULL)
+					colName = cstate->null_print;
+
+				if (namestrcmp(&attr->attname, colName) != 0) {
+					ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("wrong header for column \"%s\": got \"%s\"",
+								NameStr(attr->attname), colName)));
+				}
+			}
+		}
+
+		if (done)
+			return false;
 	}
 
 	cstate->cur_lineno++;

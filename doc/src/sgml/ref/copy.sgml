@@ -36,7 +36,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     FREEZE [ <replaceable class="parameter">boolean</replaceable> ]
     DELIMITER '<replaceable class="parameter">delimiter_character</replaceable>'
     NULL '<replaceable class="parameter">null_string</replaceable>'
-    HEADER [ <replaceable class="parameter">boolean</replaceable> ]
+    HEADER { <literal>match</literal> | <literal>true</literal> | <literal>false</literal> }
     QUOTE '<replaceable class="parameter">quote_character</replaceable>'
     ESCAPE '<replaceable class="parameter">escape_character</replaceable>'
     FORCE_QUOTE { ( <replaceable class="parameter">column_name</replaceable> [, ...] ) | * }
@@ -268,8 +268,13 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
      <para>
       Specifies that the file contains a header line with the names of each
       column in the file.  On output, the first line contains the column
-      names from the table, and on input, the first line is ignored.
-      This option is allowed only when using <literal>CSV</literal> format.
+      names from the table. On input, the first line is discarded when set
+      to <literal>true</literal> or required to match the column names if set
+      to <literal>match</literal>. If the number of columns in the header is
+      not correct, their order differs from the one expected, or the name or
+      case do not match, the copy will be aborted with an error.
+      This option is allowed only when using <literal>CSV</literal> or
+      <literal>text</literal> format.
      </para>
     </listitem>
    </varlistentry>

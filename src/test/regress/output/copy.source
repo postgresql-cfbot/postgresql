@@ -95,6 +95,14 @@ copy copytest3 to stdout csv header;
 c1,"col with , comma","col with "" quote"
 1,a,1
 2,b,2
+create temp table copytest4 (
+	c1 int,
+	"col with tabulation: 	" text);
+copy copytest4 from stdin (header);
+copy copytest4 to stdout (header);
+c1	col with tabulation: \t
+1	a
+2	b
 -- test copy from with a partitioned table
 create table parted_copytest (
 	a int,
@@ -165,3 +173,20 @@ select * from parted_copytest where b = 2;
 (1 row)
 
 drop table parted_copytest;
+-- Test header matching feature
+create table header_copytest (
+	a int,
+	b int,
+	c text
+);
+copy header_copytest from stdin with (header wrong_choice);
+ERROR:  header requires a boolean or "match"
+copy header_copytest from stdin with (header match);
+copy header_copytest from stdin with (header match);
+ERROR:  missing header
+CONTEXT:  COPY header_copytest, line 1: "a	b"
+copy header_copytest from stdin with (header match);
+ERROR:  extra data after last expected header
+CONTEXT:  COPY header_copytest, line 1: "a	b	c	d"
+copy header_copytest from stdin with (header match, format csv);
+drop table header_copytest;

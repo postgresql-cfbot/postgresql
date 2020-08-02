@@ -3803,6 +3803,14 @@ bar
         fail after having already displayed some rows.
         </para>
 
+        <note>
+        <para>
+        This feature does not works properly with multi-command
+        (<literal>\;</literal>) queries as it depends on the command
+        types encountered in the string.
+        </para>
+        </note>
+
         <tip>
         <para>
         Although you can use any output format with this feature,

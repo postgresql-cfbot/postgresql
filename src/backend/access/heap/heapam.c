@@ -2085,6 +2085,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 	int			ndone;
 	PGAlignedBlock scratch;
 	Page		page;
+	Buffer		vmbuffer = InvalidBuffer;
 	bool		needwal;
 	Size		saveFreeSpace;
 	bool		need_tuple_data = RelationIsLogicallyLogged(relation);
@@ -2139,9 +2140,11 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 	while (ndone < ntuples)
 	{
 		Buffer		buffer;
-		Buffer		vmbuffer = InvalidBuffer;
+		bool		starting_with_empty_page;
 		bool		all_visible_cleared = false;
+		bool		all_frozen_set = false;
 		int			nthispage;
+		XLogRecPtr	recptr;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -2153,6 +2156,11 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 										   InvalidBuffer, options, bistate,
 										   &vmbuffer, NULL);
 		page = BufferGetPage(buffer);
+
+		starting_with_empty_page = PageGetMaxOffsetNumber(page) == 0;
+
+		if (starting_with_empty_page && (options & HEAP_INSERT_FROZEN))
+			all_frozen_set = true;
 
 		/* NO EREPORT(ERROR) from here till changes are logged */
 		START_CRIT_SECTION();
@@ -2187,7 +2195,11 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 				log_heap_new_cid(relation, heaptup);
 		}
 
-		if (PageIsAllVisible(page))
+		/*
+		 * If the page is all visible, need to clear that, unless we're only
+		 * going to add further frozen rows to it.
+		 */
+		if (PageIsAllVisible(page) && !(options & HEAP_INSERT_FROZEN))
 		{
 			all_visible_cleared = true;
 			PageClearAllVisible(page);
@@ -2195,6 +2207,12 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 								BufferGetBlockNumber(buffer),
 								vmbuffer, VISIBILITYMAP_VALID_BITS);
 		}
+		/*
+		 * If we're only adding already frozen rows, and the page was
+		 * previously empty, mark it as all-visible.
+		 */
+		else if (all_frozen_set)
+			PageSetAllVisible(page);
 
 		/*
 		 * XXX Should we set PageSetPrunable on this page ? See heap_insert()
@@ -2205,7 +2223,6 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		/* XLOG stuff */
 		if (needwal)
 		{
-			XLogRecPtr	recptr;
 			xl_heap_multi_insert *xlrec;
 			uint8		info = XLOG_HEAP2_MULTI_INSERT;
 			char	   *tupledata;
@@ -2218,8 +2235,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 			 * If the page was previously empty, we can reinit the page
 			 * instead of restoring the whole thing.
 			 */
-			init = (ItemPointerGetOffsetNumber(&(heaptuples[ndone]->t_self)) == FirstOffsetNumber &&
-					PageGetMaxOffsetNumber(page) == FirstOffsetNumber + nthispage - 1);
+			init = starting_with_empty_page;
 
 			/* allocate xl_heap_multi_insert struct from the scratch area */
 			xlrec = (xl_heap_multi_insert *) scratchptr;
@@ -2237,7 +2253,16 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 			/* the rest of the scratch space is used for tuple data */
 			tupledata = scratchptr;
 
-			xlrec->flags = all_visible_cleared ? XLH_INSERT_ALL_VISIBLE_CLEARED : 0;
+			xlrec->flags = 0;
+			Assert (!(all_visible_cleared && all_frozen_set));
+			if (all_visible_cleared)
+				xlrec->flags |= XLH_INSERT_ALL_VISIBLE_CLEARED;
+			if (all_frozen_set)
+			{
+				xlrec->flags |= XLH_INSERT_ALL_VISIBLE_SET;
+				xlrec->flags |= XLH_INSERT_ALL_FROZEN_SET;
+			}
+
 			xlrec->ntuples = nthispage;
 
 			/*
@@ -2311,12 +2336,45 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 
 		END_CRIT_SECTION();
 
-		UnlockReleaseBuffer(buffer);
-		if (vmbuffer != InvalidBuffer)
-			ReleaseBuffer(vmbuffer);
+		if (all_frozen_set)
+		{
+			Assert(PageIsAllVisible(page));
 
+			/*
+			 * Having to potentially read the page while holding an exclusive
+			 * lock on the page isn't great. But we only get here if
+			 * HEAP_INSERT_FROZEN is set, and we only do so if the table isn't
+			 * readable outside of this session. Therefore doing IO here isn't
+			 * that bad.
+			 */
+			visibilitymap_pin(relation, BufferGetBlockNumber(buffer), &vmbuffer);
+
+			/*
+			 * FIXME: setting recptr here is a dirty dirty hack, to prevent
+			 * visibilitymap_set() from WAL logging.
+			 *
+			 * It's fine to use InvalidTransactionId here - this is only used
+			 * when HEAP_INSERT_FROZEN is specified, which intentionally
+			 * violates visibility rules.
+			 */
+			visibilitymap_set(relation, BufferGetBlockNumber(buffer), buffer,
+							  needwal ? recptr:InvalidXLogRecPtr, vmbuffer,
+							  InvalidTransactionId,
+							  VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN);
+		}
+
+		UnlockReleaseBuffer(buffer);
 		ndone += nthispage;
+
+		/*
+		 * NB: Only release vmbuffer after inserting all tuples - it's fairly
+		 * likely that we'll insert into subsequent heap pages that are likely
+		 * to use the same vm page.
+		 */
 	}
+
+	if (vmbuffer != InvalidBuffer)
+		ReleaseBuffer(vmbuffer);
 
 	/*
 	 * We're done with the actual inserts.  Check for conflicts again, to
@@ -8204,6 +8262,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	BlockNumber blkno;
 	Buffer		buffer;
 	Page		page;
+	Page		vmpage;
 	union
 	{
 		HeapTupleHeaderData hdr;
@@ -8228,13 +8287,54 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
-	if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED)
+	if (xlrec->flags & (XLH_INSERT_ALL_VISIBLE_CLEARED |
+						XLH_INSERT_ALL_VISIBLE_SET |
+						XLH_INSERT_ALL_FROZEN_SET))
 	{
 		Relation	reln = CreateFakeRelcacheEntry(rnode);
 		Buffer		vmbuffer = InvalidBuffer;
 
 		visibilitymap_pin(reln, blkno, &vmbuffer);
-		visibilitymap_clear(reln, blkno, vmbuffer, VISIBILITYMAP_VALID_BITS);
+
+		if (xlrec->flags & (XLH_INSERT_ALL_VISIBLE_CLEARED))
+		{
+			Assert(!(xlrec->flags & (XLH_INSERT_ALL_FROZEN_SET |
+									 XLH_INSERT_ALL_VISIBLE_SET)));
+			visibilitymap_clear(reln, blkno, vmbuffer, VISIBILITYMAP_VALID_BITS);
+		}
+		else
+		{
+			int	vmbits = 0;
+
+			if (xlrec->flags & (XLH_INSERT_ALL_VISIBLE_SET))
+				vmbits |= VISIBILITYMAP_ALL_VISIBLE;
+			if (xlrec->flags & (XLH_INSERT_ALL_FROZEN_SET))
+				vmbits |= VISIBILITYMAP_ALL_FROZEN;
+
+			vmpage = BufferGetPage(vmbuffer);
+
+			/*
+			 * Don't set the bit if replay has already passed this point.
+			 *
+			 * It might be safe to do this unconditionally; if replay has passed
+			 * this point, we'll replay at least as far this time as we did
+			 * before, and if this bit needs to be cleared, the record responsible
+			 * for doing so should be again replayed, and clear it.  For right
+			 * now, out of an abundance of conservatism, we use the same test here
+			 * we did for the heap page.  If this results in a dropped bit, no
+			 * real harm is done; and the next VACUUM will fix it.
+			 *
+			 * XXX: This seems entirely unnecessary?
+			 *
+			 * FIXME: Theoretically we should only do this after we've
+			 * modified the heap - but it's safe to do it here I think,
+			 * because this means that the page previously was empty.
+			 */
+			if (lsn > PageGetLSN(vmpage))
+				visibilitymap_set(reln, blkno, InvalidBuffer, lsn, vmbuffer,
+								  InvalidTransactionId, vmbits);
+		}
+
 		ReleaseBuffer(vmbuffer);
 		FreeFakeRelcacheEntry(reln);
 	}
@@ -8312,6 +8412,8 @@ heap_xlog_multi_insert(XLogReaderState *record)
 
 		if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED)
 			PageClearAllVisible(page);
+		if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_SET)
+			PageSetAllVisible(page);
 
 		MarkBufferDirty(buffer);
 	}

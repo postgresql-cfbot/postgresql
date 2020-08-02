@@ -254,7 +254,6 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 	elog(DEBUG1, "vm_set %s %d", RelationGetRelationName(rel), heapBlk);
 #endif
 
-	Assert(InRecovery || XLogRecPtrIsInvalid(recptr));
 	Assert(InRecovery || BufferIsValid(heapBuf));
 	Assert(flags & VISIBILITYMAP_VALID_BITS);
 

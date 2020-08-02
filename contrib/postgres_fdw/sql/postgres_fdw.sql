@@ -2293,6 +2293,34 @@ drop trigger loc2_trig_row_before_insert on loc2;
 
 delete from rem2;
 
+alter table loc2 drop column f1;
+alter table loc2 drop column f2;
+copy rem2 from stdin;
+1	foo
+2	bar
+\.
+
+alter table loc2 add column f1 int;
+alter table loc2 add column f2 int;
+select * from rem2;
+
+-- dropped columns locally and on the foreign server
+alter table rem2 drop column f1;
+alter table rem2 drop column f2;
+copy rem2 from stdin;
+
+
+\.
+select * from rem2;
+
+alter table loc2 drop column f1;
+alter table loc2 drop column f2;
+copy rem2 from stdin;
+
+
+\.
+select * from rem2;
+
 -- test COPY FROM with foreign table created in the same transaction
 create table loc3 (f1 int, f2 text);
 begin;

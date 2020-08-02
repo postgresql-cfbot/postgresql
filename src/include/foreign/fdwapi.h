@@ -104,6 +104,16 @@ typedef void (*BeginForeignInsert_function) (ModifyTableState *mtstate,
 typedef void (*EndForeignInsert_function) (EState *estate,
 										   ResultRelInfo *rinfo);
 
+typedef void (*BeginForeignCopyIn_function) (ModifyTableState *mtstate,
+											 ResultRelInfo *rinfo);
+
+typedef void (*EndForeignCopyIn_function) (EState *estate,
+										   ResultRelInfo *rinfo);
+
+typedef void (*ExecForeignCopyIn_function) (ResultRelInfo *rinfo,
+													   TupleTableSlot **slots,
+													   int nslots);
+
 typedef int (*IsForeignRelUpdatable_function) (Relation rel);
 
 typedef bool (*PlanDirectModify_function) (PlannerInfo *root,
@@ -219,6 +229,11 @@ typedef struct FdwRoutine
 	BeginDirectModify_function BeginDirectModify;
 	IterateDirectModify_function IterateDirectModify;
 	EndDirectModify_function EndDirectModify;
+
+	/* COPY a bulk of tuples into a foreign relation */
+	BeginForeignCopyIn_function BeginForeignCopyIn;
+	EndForeignCopyIn_function EndForeignCopyIn;
+	ExecForeignCopyIn_function ExecForeignCopyIn;
 
 	/* Functions for SELECT FOR UPDATE/SHARE row locking */
 	GetForeignRowMarkType_function GetForeignRowMarkType;

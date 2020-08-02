@@ -526,6 +526,11 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 					  rootrel,
 					  estate->es_instrument);
 
+	if (rootResultRelInfo->ri_usesBulkModify &&
+		leaf_part_rri->ri_FdwRoutine != NULL &&
+		leaf_part_rri->ri_FdwRoutine->BeginForeignCopyIn != NULL)
+		leaf_part_rri->ri_usesBulkModify = true;
+
 	/*
 	 * Verify result relation is a valid target for an INSERT.  An UPDATE of a
 	 * partition-key becomes a DELETE+INSERT operation, so this check is still
@@ -937,9 +942,16 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 	 * If the partition is a foreign table, let the FDW init itself for
 	 * routing tuples to the partition.
 	 */
-	if (partRelInfo->ri_FdwRoutine != NULL &&
-		partRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
-		partRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate, partRelInfo);
+	if (partRelInfo->ri_FdwRoutine != NULL)
+	{
+		if (partRelInfo->ri_usesBulkModify)
+		{
+			Assert(partRelInfo->ri_FdwRoutine->BeginForeignCopyIn != NULL);
+			partRelInfo->ri_FdwRoutine->BeginForeignCopyIn(mtstate, partRelInfo);
+		}
+		else if (partRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
+			partRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate, partRelInfo);
+	}
 
 	partRelInfo->ri_PartitionInfo = partrouteinfo;
 	partRelInfo->ri_CopyMultiInsertBuffer = NULL;
@@ -1121,10 +1133,18 @@ ExecCleanupTupleRouting(ModifyTableState *mtstate,
 		ResultRelInfo *resultRelInfo = proute->partitions[i];
 
 		/* Allow any FDWs to shut down */
-		if (resultRelInfo->ri_FdwRoutine != NULL &&
-			resultRelInfo->ri_FdwRoutine->EndForeignInsert != NULL)
-			resultRelInfo->ri_FdwRoutine->EndForeignInsert(mtstate->ps.state,
-														   resultRelInfo);
+		if (resultRelInfo->ri_FdwRoutine != NULL)
+		{
+			if (resultRelInfo->ri_usesBulkModify)
+			{
+				Assert(resultRelInfo->ri_FdwRoutine->EndForeignCopyIn != NULL);
+				resultRelInfo->ri_FdwRoutine->EndForeignCopyIn(mtstate->ps.state,
+															   resultRelInfo);
+			}
+			else if (resultRelInfo->ri_FdwRoutine->EndForeignInsert != NULL)
+				resultRelInfo->ri_FdwRoutine->EndForeignInsert(mtstate->ps.state,
+															   resultRelInfo);
+		}
 
 		/*
 		 * Check if this result rel is one belonging to the node's subplans,

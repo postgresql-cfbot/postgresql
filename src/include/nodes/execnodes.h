@@ -491,6 +491,14 @@ typedef struct ResultRelInfo
 
 	/* For use by copy.c when performing multi-inserts */
 	struct CopyMultiInsertBuffer *ri_CopyMultiInsertBuffer;
+
+	/*
+	 * For use by copy.c:
+	 * for partitioned relation "true" means that child relations are allowed for
+	 * using bulk modify operations; for foreign relation (or foreign partition
+	 * of) "true" value means that modify operations must use bulk FDW API.
+	 */
+	bool ri_usesBulkModify;
 } ResultRelInfo;
 
 /* ----------------

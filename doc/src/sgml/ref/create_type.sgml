@@ -64,9 +64,10 @@ CREATE TYPE <replaceable class="parameter">name</replaceable>
   <title>Description</title>
 
   <para>
-   <command>CREATE TYPE</command> registers a new data type for use in
-   the current database.  The user who defines a type becomes its
-   owner.
+   <command>CREATE TYPE</command> registers a new data
+   <glossterm linkend="glossary-type">type</glossterm>
+   for use in the current database.  The user who defines
+   a type becomes its owner.
   </para>
 
   <para>
@@ -83,7 +84,10 @@ CREATE TYPE <replaceable class="parameter">name</replaceable>
    syntax synopsis above.  They respectively create a <firstterm>composite
    type</firstterm>, an <firstterm>enum type</firstterm>, a <firstterm>range type</firstterm>, a
    <firstterm>base type</firstterm>, or a <firstterm>shell type</firstterm>.  The first four
-   of these are discussed in turn below.  A shell type is simply a placeholder
+   of these are discussed in turn below and represent four of the five
+   <glossterm linkend="glossary-type-definition">type definition</glossterm>s,
+   with the fifth, domain, created using the <xref linkend="sql-createdomain"/> command.
+   A shell type is simply a placeholder
    for a type to be defined later; it is created by issuing <command>CREATE
    TYPE</command> with no parameters except for the type name.  Shell types
    are needed as forward references when creating range types and base types,

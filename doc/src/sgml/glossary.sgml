@@ -1701,6 +1701,30 @@
    </glossdef>
   </glossentry>
 
+  <glossentry id="glossary-type">
+   <glossterm>Type</glossterm>
+   <glossdef>
+    <para>
+     All data stored within the database is typed.  Each type has both a name, and associated
+     properties, as well as an overarching Type, of which there are two variations. Extensible
+     types can created by users and comprise of: base, composite, domain, enum, and range. There
+     are also the system-only pseudo-types.  Type records are stored in pg_type and the
+     overarching type is found in pg_type.typtype.
+    </para>
+   </glossdef>
+  </glossentry>  
+
+  <glossentry id="glossary-type-definition">
+   <glossterm>Type Definition</glossterm>
+   <glossdef>
+    <para>
+     Collective term for the various <glossterm linkend="glossary-type">Type</glossterm>
+     variants that are allowed for pg_type.typtype catalog table column values;
+     specifically, ones that are extensible.
+    </para>
+   </glossdef>
+  </glossentry>
+
   <glossentry id="glossary-unique-constraint">
    <glossterm>Unique constraint</glossterm>
    <glossdef>

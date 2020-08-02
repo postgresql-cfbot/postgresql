@@ -38,8 +38,8 @@ CREATE DOMAIN <replaceable class="parameter">name</replaceable> [ AS ] <replacea
 
   <para>
    <command>CREATE DOMAIN</command> creates a new domain.  A domain is
-   essentially a data type with optional constraints (restrictions on
-   the allowed set of values).
+   essentially a data <glossterm linkend="glossary-type">type</glossterm>
+   with optional constraints (restrictions on the allowed set of values).
    The user who defines a domain becomes its owner.
   </para>
 
@@ -63,6 +63,13 @@ CREATE DOMAIN <replaceable class="parameter">name</replaceable> [ AS ] <replacea
   <para>
    To be able to create a domain, you must have <literal>USAGE</literal>
    privilege on the underlying type.
+  </para>
+  
+  <para>
+   This emulates the functionality provided by 
+   <xref linkend="sql-createtype"/> but sets the created object's
+   <glossterm linkend="glossary-type-definition">type definition</glossterm>
+   to domain.
   </para>
  </refsect1>
 

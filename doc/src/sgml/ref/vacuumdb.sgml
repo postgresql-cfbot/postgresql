@@ -242,6 +242,36 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--no-main-relation-cleanup</option></term>
+      <listitem>
+       <para>
+        Do not clean up the main relation.
+       </para>
+       <note>
+        <para>
+         This option is only available for servers running
+         <productname>PostgreSQL</productname> 14 and later.
+        </para>
+       </note>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--no-toast-table-cleanup</option></term>
+      <listitem>
+       <para>
+        Do not clean up the TOAST table.
+       </para>
+       <note>
+        <para>
+         This option is only available for servers running
+         <productname>PostgreSQL</productname> 14 and later.
+        </para>
+       </note>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--no-truncate</option></term>
       <listitem>
        <para>

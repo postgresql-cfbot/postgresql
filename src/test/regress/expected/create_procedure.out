@@ -161,6 +161,10 @@ CREATE PROCEDURE ptestx() LANGUAGE SQL WINDOW AS $$ INSERT INTO cp_test VALUES (
 ERROR:  invalid attribute in procedure definition
 LINE 1: CREATE PROCEDURE ptestx() LANGUAGE SQL WINDOW AS $$ INSERT I...
                                                ^
+CREATE PROCEDURE ptestx() LANGUAGE SQL TREAT NULLS AS $$ INSERT INTO cp_test VALUES (1, 'a') $$;
+ERROR:  invalid attribute in procedure definition
+LINE 1: CREATE PROCEDURE ptestx() LANGUAGE SQL TREAT NULLS AS $$ INS...
+                                               ^
 CREATE PROCEDURE ptestx() LANGUAGE SQL STRICT AS $$ INSERT INTO cp_test VALUES (1, 'a') $$;
 ERROR:  invalid attribute in procedure definition
 LINE 1: CREATE PROCEDURE ptestx() LANGUAGE SQL STRICT AS $$ INSERT I...

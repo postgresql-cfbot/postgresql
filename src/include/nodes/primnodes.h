@@ -52,6 +52,13 @@ typedef enum OnCommitAction
 	ONCOMMIT_DROP				/* ON COMMIT DROP */
 } OnCommitAction;
 
+typedef enum NullTreatment
+{
+	NULL_TREATMENT_NONE = 0,
+	NULL_TREATMENT_RESPECT,
+	NULL_TREATMENT_IGNORE
+} NullTreatment;
+
 /*
  * RangeVar - range variable, used in FROM clauses
  *
@@ -379,6 +386,7 @@ typedef struct WindowFunc
 	Index		winref;			/* index of associated WindowClause */
 	bool		winstar;		/* true if argument list was really '*' */
 	bool		winagg;			/* is function a simple aggregate? */
+	NullTreatment	winnulltreatment;	/* can accept RESPECT/IGNORE NULLS? */
 	int			location;		/* token location, or -1 if unknown */
 } WindowFunc;
 

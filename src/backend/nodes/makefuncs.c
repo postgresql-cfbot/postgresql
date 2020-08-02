@@ -595,6 +595,7 @@ makeFuncCall(List *name, List *args, int location)
 	n->agg_distinct = false;
 	n->func_variadic = false;
 	n->over = NULL;
+	n->win_null_treatment = NULL_TREATMENT_NONE;
 	n->location = location;
 	return n;
 }

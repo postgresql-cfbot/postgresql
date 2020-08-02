@@ -80,6 +80,7 @@ ProcedureCreate(const char *procedureName,
 				bool security_definer,
 				bool isLeakProof,
 				bool isStrict,
+				bool null_treatment,
 				char volatility,
 				char parallel,
 				oidvector *parameterTypes,
@@ -303,6 +304,7 @@ ProcedureCreate(const char *procedureName,
 	values[Anum_pg_proc_prosecdef - 1] = BoolGetDatum(security_definer);
 	values[Anum_pg_proc_proleakproof - 1] = BoolGetDatum(isLeakProof);
 	values[Anum_pg_proc_proisstrict - 1] = BoolGetDatum(isStrict);
+	values[Anum_pg_proc_pronulltreatment - 1] = BoolGetDatum(null_treatment);
 	values[Anum_pg_proc_proretset - 1] = BoolGetDatum(returnsSet);
 	values[Anum_pg_proc_provolatile - 1] = CharGetDatum(volatility);
 	values[Anum_pg_proc_proparallel - 1] = CharGetDatum(parallel);
@@ -381,6 +383,12 @@ ProcedureCreate(const char *procedureName,
 					  oldproc->prokind == PROKIND_WINDOW ?
 					  errdetail("\"%s\" is a window function.", procedureName) :
 					  0)));
+
+		/* Not okay to set null treatment if not a window function */
+		if (null_treatment && oldproc->prokind != PROKIND_WINDOW)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+					 errmsg("cannot set null treatment on a non-window function")));
 
 		dropcmd = (prokind == PROKIND_PROCEDURE ? "DROP PROCEDURE" :
 				   prokind == PROKIND_AGGREGATE ? "DROP AGGREGATE" :

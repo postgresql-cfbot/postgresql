@@ -357,6 +357,7 @@ typedef struct FuncCall
 	bool		agg_distinct;	/* arguments were labeled DISTINCT */
 	bool		func_variadic;	/* last argument was labeled VARIADIC */
 	struct WindowDef *over;		/* OVER clause, if any */
+	NullTreatment	win_null_treatment;	/* IGNORE NULLS or RESPECT NULLS? */
 	int			location;		/* token location, or -1 if unknown */
 } FuncCall;
 

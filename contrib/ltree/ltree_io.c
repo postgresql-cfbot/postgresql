@@ -24,9 +24,319 @@ typedef struct
 #define LTPRS_WAITNAME	0
 #define LTPRS_WAITDELIM 1
 
-static void finish_nodeitem(nodeitem *lptr, const char *ptr,
-							bool is_lquery, int pos);
+static void finish_nodeitem(nodeitem *lptr, const char *ptr, int len, int wlen,
+							int escapes, bool is_lquery, int pos);
 
+
+/*
+ * Calculating the number of literals in the string to be parsed.
+ *
+ * For ltree, returns a number of not escaped delimiters (dots).  If pORs is
+ * not NULL, calculates the number of alternate templates (used in lquery
+ * parsing).  The function can return more levels than is really necessesary,
+ * it will be corrected during the real parsing process.
+ */
+static void
+count_parts_ors(const char *ptr, int *plevels, int *pORs)
+{
+	bool		quote = false;
+	bool		escaping = false;
+
+	while (*ptr)
+	{
+		if (escaping)
+			escaping = false;
+		else if (t_iseq(ptr, '\\'))
+			escaping = true;
+		else if (quote)
+		{
+			if (t_iseq(ptr, '"'))
+				quote = false;
+		}
+		else
+		{
+			if (t_iseq(ptr, '"'))
+				quote = true;
+			else if (t_iseq(ptr, '.'))
+				(*plevels)++;
+			else if (t_iseq(ptr, '|') && pORs != NULL)
+				(*pORs)++;
+		}
+
+		ptr += pg_mblen(ptr);
+	}
+
+	(*plevels)++;
+	if (pORs != NULL)
+		(*pORs)++;
+}
+
+/*
+ * Char-by-char copying from "src" to "dst" representation removing escaping.
+ * Total amount of copied bytes is "len".
+ */
+void
+copy_unescaped(char *dst, const char *src, int len)
+{
+	const char *dst_end = dst + len;
+	bool		escaping = false;
+
+	while (dst < dst_end && *src)
+	{
+		int			charlen;
+
+		if (t_iseq(src, '\\') && !escaping)
+		{
+			escaping = true;
+			src++;
+			continue;
+		}
+
+		charlen = pg_mblen(src);
+
+		if (dst + charlen > dst_end)
+			elog(ERROR, "internal error during splitting levels");
+
+		memcpy(dst, src, charlen);
+		src += charlen;
+		dst += charlen;
+		escaping = false;
+	}
+
+	if (dst != dst_end)
+		elog(ERROR, "internal error during splitting levels");
+}
+
+static bool
+is_quoted_char(const char *ptr)
+{
+	return !(t_isalpha(ptr) || t_isdigit(ptr) || t_iseq(ptr, '_'));
+}
+
+static bool
+is_escaped_char(const char *ptr)
+{
+	return t_iseq(ptr, '"') || t_iseq(ptr, '\\');
+}
+
+/*
+ * Function calculating extra bytes needed for quoting/escaping of special
+ * characters.
+ *
+ * If there are no special characters, return 0.
+ * If there are any special symbol, we need initial and final quote, return 2.
+ * If there are any quotes or backslashes, we need to escape all of them and
+ * also initial and final quote, so return 2 + number of quotes/backslashes.
+ */
+int
+extra_bytes_for_escaping(const char *start, const int len)
+{
+	const char *ptr = start;
+	const char *end = start + len;
+	int			escapes = 0;
+	bool		quotes = false;
+
+	if (len == 0)
+		return 2;
+
+	while (ptr < end && *ptr)
+	{
+		if (is_escaped_char(ptr))
+			escapes++;
+		else if (is_quoted_char(ptr))
+			quotes = true;
+
+		ptr += pg_mblen(ptr);
+	}
+
+	if (ptr > end)
+		elog(ERROR, "internal error during merging levels");
+
+	return (escapes > 0) ? escapes + 2 : quotes ? 2 : 0;
+}
+
+/*
+ * Copy "src" to "dst" escaping backslashes and quotes.
+ *
+ * Return number of escaped characters.
+ */
+static int
+copy_escaped(char *dst, const char *src, int len)
+{
+	const char *src_end = src + len;
+	int			escapes = 0;
+
+	while (src < src_end && *src)
+	{
+		int			charlen = pg_mblen(src);
+
+		if (is_escaped_char(src))
+		{
+			*dst++ = '\\';
+			escapes++;
+		}
+
+		if (src + charlen > src_end)
+			elog(ERROR, "internal error during merging levels");
+
+		memcpy(dst, src, charlen);
+		src += charlen;
+		dst += charlen;
+	}
+
+	return escapes;
+}
+
+/*
+ * Copy "src" to "dst" possibly adding surrounding quotes and escaping
+ * backslashes and internal quotes.
+ *
+ * "extra_bytes" is a value calculated by extra_bytes_for_escaping().
+ */
+void
+copy_level(char *dst, const char *src, int len, int extra_bytes)
+{
+	if (extra_bytes == 0)	/* no quotes and escaping */
+		memcpy(dst, src, len);
+	else if (extra_bytes == 2)	/* only quotes, no escaping */
+	{
+		*dst = '"';
+		memcpy(dst + 1, src, len);
+		dst[len + 1] = '"';
+	}
+	else	/* quotes and escaping */
+	{
+		*dst = '"';
+		copy_escaped(dst + 1, src, len);
+		dst[len + extra_bytes - 1] = '"';
+	}
+}
+
+/*
+ * Read next token from input string "str".
+ *
+ * Output parameteres:
+ *   "len" - token length in bytes.
+ *   "wlen" - token length in characters.
+ *   "escaped_count" - number of escaped characters in LTREE_TOK_LABEL token.
+ */
+ltree_token
+ltree_get_token(const char *str, const char *datatype_name, int pos,
+				int *len, int *wlen, int *escaped_count)
+{
+	const char *ptr = str;
+	int			charlen;
+	bool		quoted = false;
+	bool		escaped = false;
+
+	*escaped_count = 0;
+	*len = 0;
+	*wlen = 0;
+
+	if (!*ptr)
+		return LTREE_TOK_END;
+
+	charlen = pg_mblen(ptr);
+
+	if (t_isspace(ptr))
+	{
+		++*wlen;
+		ptr += charlen;
+
+		while (*ptr && t_isspace(ptr))
+		{
+			ptr += pg_mblen(ptr);
+			++*wlen;
+		}
+
+		*len = ptr - str;
+		return LTREE_TOK_SPACE;
+	}
+
+	if (charlen == 1 && strchr(".*!|&@%{}(),", *ptr))
+	{
+		*wlen = *len = 1;
+
+		if (t_iseq(ptr, '.'))
+			return LTREE_TOK_DOT;
+		else if (t_iseq(ptr, '*'))
+			return LTREE_TOK_ASTERISK;
+		else if (t_iseq(ptr, '!'))
+			return LTREE_TOK_NOT;
+		else if (t_iseq(ptr, '|'))
+			return LTREE_TOK_OR;
+		else if (t_iseq(ptr, '&'))
+			return LTREE_TOK_AND;
+		else if (t_iseq(ptr, '@'))
+			return LTREE_TOK_AT;
+		else if (t_iseq(ptr, '%'))
+			return LTREE_TOK_PERCENT;
+		else if (t_iseq(ptr, ','))
+			return LTREE_TOK_COMMA;
+		else if (t_iseq(ptr, '{'))
+			return LTREE_TOK_LBRACE;
+		else if (t_iseq(ptr, '}'))
+			return LTREE_TOK_RBRACE;
+		else if (t_iseq(ptr, '('))
+			return LTREE_TOK_LPAREN;
+		else if (t_iseq(ptr, ')'))
+			return LTREE_TOK_RPAREN;
+		else
+			elog(ERROR, "invalid special character");
+	}
+	else if (t_iseq(ptr, '\\'))
+		escaped = true;
+	else if (t_iseq(ptr, '"'))
+		quoted = true;
+	else if (is_quoted_char(ptr))
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("%s syntax error at character %d", datatype_name, pos),
+				 errdetail("Unexpected character")));
+
+	for (ptr += charlen, ++*wlen; *ptr; ptr += charlen, ++*wlen)
+	{
+		charlen = pg_mblen(ptr);
+
+		if (escaped)
+		{
+			++*escaped_count;
+			escaped = false;
+		}
+		else if (t_iseq(ptr, '\\'))
+			escaped = true;
+		else if (quoted)
+		{
+			if (t_iseq(ptr, '"'))
+			{
+				quoted = false;
+				ptr += charlen;
+				++*wlen;
+				break;
+			}
+		}
+		else if (is_quoted_char(ptr))
+			break;
+	}
+
+	if (quoted)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("%s syntax error at character %d",
+						datatype_name, pos),
+				 errdetail("Unclosed quote")));
+
+	if (escaped)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("%s syntax error at character %d",
+						datatype_name, pos + *wlen - 1),
+				 errdetail("Unclosed escape sequence")));
+
+	*len = ptr - str;
+
+	return LTREE_TOK_LABEL;
+}
 
 /*
  * expects a null terminated string
@@ -38,12 +348,13 @@ parse_ltree(const char *buf)
 	const char *ptr;
 	nodeitem   *list,
 			   *lptr;
-	int			num = 0,
+	int			levels = 0,
 				totallen = 0;
 	int			state = LTPRS_WAITNAME;
 	ltree	   *result;
 	ltree_level *curlevel;
-	int			charlen;
+	int			len;
+	int			wlen;
 	int			pos = 1;		/* character position for error messages */
 
 #define UNCHAR ereport(ERROR, \
@@ -52,64 +363,51 @@ parse_ltree(const char *buf)
 							  pos))
 
 	ptr = buf;
-	while (*ptr)
-	{
-		charlen = pg_mblen(ptr);
-		if (t_iseq(ptr, '.'))
-			num++;
-		ptr += charlen;
-	}
+	count_parts_ors(ptr, &levels, NULL);
 
-	if (num + 1 > LTREE_MAX_LEVELS)
+	if (levels > LTREE_MAX_LEVELS)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("number of ltree labels (%d) exceeds the maximum allowed (%d)",
-						num + 1, LTREE_MAX_LEVELS)));
-	list = lptr = (nodeitem *) palloc(sizeof(nodeitem) * (num + 1));
-	ptr = buf;
-	while (*ptr)
+						levels, LTREE_MAX_LEVELS)));
+	list = lptr = (nodeitem *) palloc(sizeof(nodeitem) * (levels));
+
+	/*
+	 * This block calculates single nodes' settings
+	 */
+	for (ptr = buf; *ptr; ptr += len, pos += wlen)
 	{
-		charlen = pg_mblen(ptr);
+		int			escaped_count;
+		ltree_token tok = ltree_get_token(ptr, "ltree", pos,
+										  &len, &wlen, &escaped_count);
+
+		if (tok == LTREE_TOK_SPACE)
+			continue;
 
 		switch (state)
 		{
 			case LTPRS_WAITNAME:
-				if (ISALNUM(ptr))
-				{
-					lptr->start = ptr;
-					lptr->wlen = 0;
-					state = LTPRS_WAITDELIM;
-				}
-				else
+				if (tok != LTREE_TOK_LABEL)
 					UNCHAR;
+
+				finish_nodeitem(lptr, ptr, len, wlen, escaped_count, false, pos);
+				totallen += MAXALIGN(lptr->len + LEVEL_HDRSIZE);
+				lptr++;
+
+				state = LTPRS_WAITDELIM;
 				break;
 			case LTPRS_WAITDELIM:
-				if (t_iseq(ptr, '.'))
-				{
-					finish_nodeitem(lptr, ptr, false, pos);
-					totallen += MAXALIGN(lptr->len + LEVEL_HDRSIZE);
-					lptr++;
-					state = LTPRS_WAITNAME;
-				}
-				else if (!ISALNUM(ptr))
+				if (tok != LTREE_TOK_DOT)
 					UNCHAR;
+
+				state = LTPRS_WAITNAME;
 				break;
 			default:
 				elog(ERROR, "internal error in ltree parser");
 		}
-
-		ptr += charlen;
-		lptr->wlen++;
-		pos++;
 	}
 
-	if (state == LTPRS_WAITDELIM)
-	{
-		finish_nodeitem(lptr, ptr, false, pos);
-		totallen += MAXALIGN(lptr->len + LEVEL_HDRSIZE);
-		lptr++;
-	}
-	else if (!(state == LTPRS_WAITNAME && lptr == list))
+	if (state == LTPRS_WAITNAME && lptr != list)	/* Empty string */
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("ltree syntax error"),
@@ -123,7 +421,10 @@ parse_ltree(const char *buf)
 	while (lptr - list < result->numlevel)
 	{
 		curlevel->len = (uint16) lptr->len;
-		memcpy(curlevel->name, lptr->start, lptr->len);
+
+		if (lptr->len > 0)
+			copy_unescaped(curlevel->name, lptr->start, lptr->len);
+
 		curlevel = LEVEL_NEXT(curlevel);
 		lptr++;
 	}
@@ -142,21 +443,40 @@ static char *
 deparse_ltree(const ltree *in)
 {
 	char	   *buf,
+			   *end,
 			   *ptr;
 	int			i;
 	ltree_level *curlevel;
+	Size		allocated = VARSIZE(in);
 
-	ptr = buf = (char *) palloc(VARSIZE(in));
+	ptr = buf = (char *) palloc(allocated);
+	end = buf + allocated;
 	curlevel = LTREE_FIRST(in);
+
 	for (i = 0; i < in->numlevel; i++)
 	{
+		int			extra_bytes = extra_bytes_for_escaping(curlevel->name,
+														   curlevel->len);
+		int			level_len = curlevel->len + extra_bytes;
+
+		if (ptr + level_len + 1 >= end)
+		{
+			char	   *old_buf = buf;
+
+			allocated += (level_len + 1) * 2;
+			buf = repalloc(buf, allocated);
+			ptr = buf + (ptr - old_buf);
+		}
+
 		if (i != 0)
 		{
 			*ptr = '.';
 			ptr++;
 		}
-		memcpy(ptr, curlevel->name, curlevel->len);
-		ptr += curlevel->len;
+
+		copy_level(ptr, curlevel->name, curlevel->len, extra_bytes);
+		ptr += level_len;
+
 		curlevel = LEVEL_NEXT(curlevel);
 	}
 
@@ -262,7 +582,7 @@ static lquery *
 parse_lquery(const char *buf)
 {
 	const char *ptr;
-	int			num = 0,
+	int			levels = 0,
 				totallen = 0,
 				numOR = 0;
 	int			state = LQPRS_WAITLEVEL;
@@ -274,121 +594,128 @@ parse_lquery(const char *buf)
 	lquery_variant *lrptr = NULL;
 	bool		hasnot = false;
 	bool		wasbad = false;
-	int			charlen;
+	int			real_levels = 0;
 	int			pos = 1;		/* character position for error messages */
+	int			wlen;			/* token length in characters */
+	int			len;			/* token length in bytes */
 
 #define UNCHAR ereport(ERROR, \
 					   errcode(ERRCODE_SYNTAX_ERROR), \
 					   errmsg("lquery syntax error at character %d", \
 							  pos))
 
-	ptr = buf;
-	while (*ptr)
-	{
-		charlen = pg_mblen(ptr);
+	count_parts_ors(buf, &levels, &numOR);
 
-		if (t_iseq(ptr, '.'))
-			num++;
-		else if (t_iseq(ptr, '|'))
-			numOR++;
-
-		ptr += charlen;
-	}
-
-	num++;
-	if (num > LQUERY_MAX_LEVELS)
+	if (levels > LQUERY_MAX_LEVELS)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 				 errmsg("number of lquery items (%d) exceeds the maximum allowed (%d)",
-						num, LQUERY_MAX_LEVELS)));
-	curqlevel = tmpql = (lquery_level *) palloc0(ITEMSIZE * num);
-	ptr = buf;
-	while (*ptr)
+						levels, LQUERY_MAX_LEVELS)));
+	curqlevel = tmpql = (lquery_level *) palloc0(ITEMSIZE * levels);
+
+	for (ptr = buf; *ptr; ptr += len, pos += wlen)
 	{
-		charlen = pg_mblen(ptr);
+		int			escaped_count;
+		ltree_token tok = ltree_get_token(ptr, "lquery", pos,
+										  &len, &wlen, &escaped_count);
 
 		switch (state)
 		{
 			case LQPRS_WAITLEVEL:
-				if (ISALNUM(ptr))
+				if (tok == LTREE_TOK_SPACE)
+					break;
+
+				if (tok == LTREE_TOK_NOT)
 				{
-					GETVAR(curqlevel) = lptr = (nodeitem *) palloc0(sizeof(nodeitem) * (numOR + 1));
-					lptr->start = ptr;
-					state = LQPRS_WAITDELIM;
-					curqlevel->numvar = 1;
-				}
-				else if (t_iseq(ptr, '!'))
-				{
-					GETVAR(curqlevel) = lptr = (nodeitem *) palloc0(sizeof(nodeitem) * (numOR + 1));
-					lptr->start = ptr + 1;
-					lptr->wlen = -1;	/* compensate for counting ! below */
-					state = LQPRS_WAITDELIM;
-					curqlevel->numvar = 1;
+					if (curqlevel->flag & LQL_NOT)	/* '!!' is disallowed */
+						UNCHAR;
+
 					curqlevel->flag |= LQL_NOT;
 					hasnot = true;
+					break;
 				}
-				else if (t_iseq(ptr, '*'))
+
+				real_levels++;
+
+				GETVAR(curqlevel) = lptr = (nodeitem *) palloc0(sizeof(nodeitem) * numOR);
+
+				if (tok == LTREE_TOK_LABEL)
+				{
+					curqlevel->numvar = 1;
+					finish_nodeitem(lptr, ptr, len, wlen, escaped_count, true, pos);
+					state = LQPRS_WAITDELIM;
+				}
+				else if (tok == LTREE_TOK_ASTERISK)
+				{
+					if (curqlevel->flag & LQL_NOT)	/* '!*' is meaningless */
+						UNCHAR;
+
+					lptr->start = ptr;
+
+					curqlevel->low = 0;
+					curqlevel->high = LTREE_MAX_LEVELS;
+
 					state = LQPRS_WAITOPEN;
+				}
 				else
 					UNCHAR;
+
 				break;
 			case LQPRS_WAITVAR:
-				if (ISALNUM(ptr))
-				{
-					lptr++;
-					lptr->start = ptr;
-					state = LQPRS_WAITDELIM;
-					curqlevel->numvar++;
-				}
-				else
+				if (tok == LTREE_TOK_SPACE)
+					break;
+
+				if (tok != LTREE_TOK_LABEL)
 					UNCHAR;
+
+				curqlevel->numvar++;
+
+				lptr++;
+				finish_nodeitem(lptr, ptr, len, wlen, escaped_count, true, pos);
+
+				state = LQPRS_WAITDELIM;
 				break;
 			case LQPRS_WAITDELIM:
-				if (t_iseq(ptr, '@'))
+				if (tok == LTREE_TOK_SPACE)
+					break;
+				else if (tok == LTREE_TOK_AT)
 				{
 					lptr->flag |= LVAR_INCASE;
 					curqlevel->flag |= LVAR_INCASE;
 				}
-				else if (t_iseq(ptr, '*'))
+				else if (tok == LTREE_TOK_ASTERISK)
 				{
 					lptr->flag |= LVAR_ANYEND;
 					curqlevel->flag |= LVAR_ANYEND;
 				}
-				else if (t_iseq(ptr, '%'))
+				else if (tok == LTREE_TOK_PERCENT)
 				{
 					lptr->flag |= LVAR_SUBLEXEME;
 					curqlevel->flag |= LVAR_SUBLEXEME;
 				}
-				else if (t_iseq(ptr, '|'))
+				else if (tok == LTREE_TOK_OR)
 				{
-					finish_nodeitem(lptr, ptr, true, pos);
 					state = LQPRS_WAITVAR;
 				}
-				else if (t_iseq(ptr, '{'))
+				else if (tok == LTREE_TOK_LBRACE)
 				{
-					finish_nodeitem(lptr, ptr, true, pos);
 					curqlevel->flag |= LQL_COUNT;
 					state = LQPRS_WAITFNUM;
 				}
-				else if (t_iseq(ptr, '.'))
+				else if (tok == LTREE_TOK_DOT)
 				{
-					finish_nodeitem(lptr, ptr, true, pos);
 					state = LQPRS_WAITLEVEL;
 					curqlevel = NEXTLEV(curqlevel);
-				}
-				else if (ISALNUM(ptr))
-				{
-					/* disallow more chars after a flag */
-					if (lptr->flag)
-						UNCHAR;
 				}
 				else
 					UNCHAR;
 				break;
 			case LQPRS_WAITOPEN:
-				if (t_iseq(ptr, '{'))
+				if (tok == LTREE_TOK_SPACE)
+					break;
+				else if (tok == LTREE_TOK_LBRACE)
 					state = LQPRS_WAITFNUM;
-				else if (t_iseq(ptr, '.'))
+				else if (tok == LTREE_TOK_DOT)
 				{
 					/* We only get here for '*', so these are correct defaults */
 					curqlevel->low = 0;
@@ -400,7 +727,7 @@ parse_lquery(const char *buf)
 					UNCHAR;
 				break;
 			case LQPRS_WAITFNUM:
-				if (t_iseq(ptr, ','))
+				if (tok == LTREE_TOK_COMMA)
 					state = LQPRS_WAITSNUM;
 				else if (t_isdigit(ptr))
 				{
@@ -414,6 +741,7 @@ parse_lquery(const char *buf)
 										   low, LTREE_MAX_LEVELS, pos)));
 
 					curqlevel->low = (uint16) low;
+					len = wlen = 1;
 					state = LQPRS_WAITND;
 				}
 				else
@@ -423,7 +751,7 @@ parse_lquery(const char *buf)
 				if (t_isdigit(ptr))
 				{
 					int			high = atoi(ptr);
-
+					
 					if (high < 0 || high > LTREE_MAX_LEVELS)
 						ereport(ERROR,
 								(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
@@ -438,9 +766,10 @@ parse_lquery(const char *buf)
 										   curqlevel->low, high, pos)));
 
 					curqlevel->high = (uint16) high;
+					len = wlen = 1;
 					state = LQPRS_WAITCLOSE;
 				}
-				else if (t_iseq(ptr, '}'))
+				else if (tok == LTREE_TOK_RBRACE)
 				{
 					curqlevel->high = LTREE_MAX_LEVELS;
 					state = LQPRS_WAITEND;
@@ -449,24 +778,24 @@ parse_lquery(const char *buf)
 					UNCHAR;
 				break;
 			case LQPRS_WAITCLOSE:
-				if (t_iseq(ptr, '}'))
+				if (tok == LTREE_TOK_RBRACE)
 					state = LQPRS_WAITEND;
 				else if (!t_isdigit(ptr))
 					UNCHAR;
 				break;
 			case LQPRS_WAITND:
-				if (t_iseq(ptr, '}'))
+				if (tok == LTREE_TOK_RBRACE)
 				{
 					curqlevel->high = curqlevel->low;
 					state = LQPRS_WAITEND;
 				}
-				else if (t_iseq(ptr, ','))
+				else if (tok == LTREE_TOK_COMMA)
 					state = LQPRS_WAITSNUM;
 				else if (!t_isdigit(ptr))
 					UNCHAR;
 				break;
 			case LQPRS_WAITEND:
-				if (t_iseq(ptr, '.'))
+				if (tok == LTREE_TOK_DOT)
 				{
 					state = LQPRS_WAITLEVEL;
 					curqlevel = NEXTLEV(curqlevel);
@@ -477,18 +806,11 @@ parse_lquery(const char *buf)
 			default:
 				elog(ERROR, "internal error in lquery parser");
 		}
-
-		ptr += charlen;
-		if (state == LQPRS_WAITDELIM)
-			lptr->wlen++;
-		pos++;
 	}
 
-	if (state == LQPRS_WAITDELIM)
-		finish_nodeitem(lptr, ptr, true, pos);
-	else if (state == LQPRS_WAITOPEN)
-		curqlevel->high = LTREE_MAX_LEVELS;
-	else if (state != LQPRS_WAITEND)
+	if (state != LQPRS_WAITDELIM &&
+		state != LQPRS_WAITOPEN &&
+		state != LQPRS_WAITEND)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("lquery syntax error"),
@@ -496,7 +818,7 @@ parse_lquery(const char *buf)
 
 	curqlevel = tmpql;
 	totallen = LQUERY_HDRSIZE;
-	while ((char *) curqlevel - (char *) tmpql < num * ITEMSIZE)
+	while ((char *) curqlevel - (char *) tmpql < levels * ITEMSIZE)
 	{
 		totallen += LQL_HDRSIZE;
 		if (curqlevel->numvar)
@@ -513,14 +835,14 @@ parse_lquery(const char *buf)
 
 	result = (lquery *) palloc0(totallen);
 	SET_VARSIZE(result, totallen);
-	result->numlevel = num;
+	result->numlevel = real_levels;
 	result->firstgood = 0;
 	result->flag = 0;
 	if (hasnot)
 		result->flag |= LQUERY_HASNOT;
 	cur = LQUERY_FIRST(result);
 	curqlevel = tmpql;
-	while ((char *) curqlevel - (char *) tmpql < num * ITEMSIZE)
+	while ((char *) curqlevel - (char *) tmpql < levels * ITEMSIZE)
 	{
 		memcpy(cur, curqlevel, LQL_HDRSIZE);
 		cur->totallen = LQL_HDRSIZE;
@@ -533,8 +855,8 @@ parse_lquery(const char *buf)
 				cur->totallen += MAXALIGN(LVAR_HDRSIZE + lptr->len);
 				lrptr->len = lptr->len;
 				lrptr->flag = lptr->flag;
-				lrptr->val = ltree_crc32_sz(lptr->start, lptr->len);
-				memcpy(lrptr->name, lptr->start, lptr->len);
+				copy_unescaped(lrptr->name, lptr->start, lptr->len);
+				lrptr->val = ltree_crc32_sz(lrptr->name, lptr->len);
 				lptr++;
 				lrptr = LVAR_NEXT(lrptr);
 			}
@@ -568,29 +890,38 @@ parse_lquery(const char *buf)
 /*
  * Close out parsing an ltree or lquery nodeitem:
  * compute the correct length, and complain if it's not OK
+ *
+ * "len"     - length of label in bytes
+ * "wlen"    - length of label in wide characters
+ * "escapes" - number of escaped characters in label
+ * "pos"     - position of label in the input string in wide characters
  */
 static void
-finish_nodeitem(nodeitem *lptr, const char *ptr, bool is_lquery, int pos)
+finish_nodeitem(nodeitem *lptr, const char *ptr, int len, int wlen, int escapes,
+				bool is_lquery, int pos)
 {
-	if (is_lquery)
+	lptr->start = ptr;
+
+	/*
+	 * Exclude escape symbols from the length, because the labels stored
+	 * unescaped.
+	 */
+	lptr->len = len - escapes;
+	lptr->wlen = wlen - escapes;
+
+	/*
+	 * If it is a quoted label, then we have to move start a byte ahead and
+	 * exclude beginning and final quotes from the label itself.
+	 */
+	if (t_iseq(lptr->start, '"'))
 	{
-		/*
-		 * Back up over any flag characters, and discount them from length and
-		 * position.
-		 */
-		while (ptr > lptr->start && strchr("@*%", ptr[-1]) != NULL)
-		{
-			ptr--;
-			lptr->wlen--;
-			pos--;
-		}
+		lptr->start++;
+		lptr->len -= 2;
+		lptr->wlen -= 2;
 	}
 
-	/* Now compute the byte length, which we weren't tracking before. */
-	lptr->len = ptr - lptr->start;
-
 	/* Complain if it's empty or too long */
-	if (lptr->len == 0)
+	if (lptr->len <= 0 || lptr->wlen <= 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 is_lquery ?
@@ -616,7 +947,9 @@ deparse_lquery(const lquery *in)
 			   *ptr;
 	int			i,
 				j,
+				var_num = 0,
 				totallen = 1;
+	int		   *var_extra_bytes;	/* per-var extra bytes for escaping */
 	lquery_level *curqlevel;
 	lquery_variant *curtlevel;
 
@@ -624,6 +957,8 @@ deparse_lquery(const lquery *in)
 	for (i = 0; i < in->numlevel; i++)
 	{
 		totallen++;
+		var_num += curqlevel->numvar;
+
 		if (curqlevel->numvar)
 		{
 			totallen += 1 + (curqlevel->numvar * 4) + curqlevel->totallen;
@@ -631,11 +966,40 @@ deparse_lquery(const lquery *in)
 				totallen += 2 * 11 + 3;
 		}
 		else
-			totallen += 2 * 11 + 4;
+			totallen += 2 * 11 + 4;		/* length of "*{%d,%d}" */
+
+		curqlevel = LQL_NEXT(curqlevel);
+	}
+
+	/* count extra bytes needed for escaping */
+	var_extra_bytes = palloc(sizeof(*var_extra_bytes) * var_num);
+
+	var_num = 0;
+	curqlevel = LQUERY_FIRST(in);
+
+	for (i = 0; i < in->numlevel; i++)
+	{
+		if (curqlevel->numvar)
+		{
+			curtlevel = LQL_FIRST(curqlevel);
+
+			for (j = 0; j < curqlevel->numvar; j++, var_num++)
+			{
+				int			extra_bytes =
+					extra_bytes_for_escaping(curtlevel->name, curtlevel->len);
+
+				var_extra_bytes[var_num] = extra_bytes;
+				totallen += extra_bytes;
+
+				curtlevel = LVAR_NEXT(curtlevel);
+			}
+		}
+
 		curqlevel = LQL_NEXT(curqlevel);
 	}
 
 	ptr = buf = (char *) palloc(totallen);
+	var_num = 0;
 	curqlevel = LQUERY_FIRST(in);
 	for (i = 0; i < in->numlevel; i++)
 	{
@@ -652,15 +1016,20 @@ deparse_lquery(const lquery *in)
 				ptr++;
 			}
 			curtlevel = LQL_FIRST(curqlevel);
-			for (j = 0; j < curqlevel->numvar; j++)
+			for (j = 0; j < curqlevel->numvar; j++, var_num++)
 			{
+				int			extra_bytes = var_extra_bytes[var_num];
+
 				if (j != 0)
 				{
 					*ptr = '|';
 					ptr++;
 				}
-				memcpy(ptr, curtlevel->name, curtlevel->len);
-				ptr += curtlevel->len;
+
+				Assert(ptr + curtlevel->len + extra_bytes < buf + totallen);
+				copy_level(ptr, curtlevel->name, curtlevel->len, extra_bytes);
+				ptr += curtlevel->len + extra_bytes;
+
 				if ((curtlevel->flag & LVAR_SUBLEXEME))
 				{
 					*ptr = '%';
@@ -717,6 +1086,8 @@ deparse_lquery(const lquery *in)
 
 		curqlevel = LQL_NEXT(curqlevel);
 	}
+
+	pfree(var_extra_bytes);
 
 	*ptr = '\0';
 	return buf;

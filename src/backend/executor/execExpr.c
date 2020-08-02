@@ -31,6 +31,7 @@
 #include "postgres.h"
 
 #include "access/nbtree.h"
+#include "access/hash.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_type.h"
 #include "executor/execExpr.h"
@@ -49,6 +50,7 @@
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
 
+#define MIN_ARRAY_SIZE_FOR_BINARY_SEARCH 9
 
 typedef struct LastAttnumInfo
 {
@@ -947,11 +949,13 @@ ExecInitExprRec(Expr *node, ExprState *state,
 		case T_ScalarArrayOpExpr:
 			{
 				ScalarArrayOpExpr *opexpr = (ScalarArrayOpExpr *) node;
+				Oid			func;
 				Expr	   *scalararg;
 				Expr	   *arrayarg;
 				FmgrInfo   *finfo;
 				FunctionCallInfo fcinfo;
 				AclResult	aclresult;
+				bool		useBinarySearch = false;
 
 				Assert(list_length(opexpr->args) == 2);
 				scalararg = (Expr *) linitial(opexpr->args);
@@ -964,12 +968,62 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				if (aclresult != ACLCHECK_OK)
 					aclcheck_error(aclresult, OBJECT_FUNCTION,
 								   get_func_name(opexpr->opfuncid));
-				InvokeFunctionExecuteHook(opexpr->opfuncid);
 
 				/* Set up the primary fmgr lookup information */
 				finfo = palloc0(sizeof(FmgrInfo));
 				fcinfo = palloc0(SizeForFunctionCallInfo(2));
-				fmgr_info(opexpr->opfuncid, finfo);
+				func = opexpr->opfuncid;
+
+				/*
+				 * If we have a constant array and want OR semantics, then we
+				 * can use a binary search to implement the op instead of
+				 * looping through the entire array for each execution.
+				 */
+				if (opexpr->useOr && arrayarg && IsA(arrayarg, Const) &&
+					!((Const *) arrayarg)->constisnull)
+				{
+					Datum		arrdatum = ((Const *) arrayarg)->constvalue;
+					ArrayType  *arr = (ArrayType *) DatumGetPointer(arrdatum);
+					int			nitems;
+
+					/*
+					 * Only do the optimization if we have a large enough
+					 * array to make it worth it.
+					 */
+					nitems = ArrayGetNItems(ARR_NDIM(arr), ARR_DIMS(arr));
+					if (nitems >= MIN_ARRAY_SIZE_FOR_BINARY_SEARCH)
+					{
+						Oid			hash_func;
+
+						/*
+						 * Find the hash op that matches the originally planned
+						 * equality op. If we don't have one, we'll just fall
+						 * back to the default linear scan implementation.
+						 */
+						useBinarySearch = get_op_hash_functions(opexpr->opno, NULL, &hash_func);
+
+						if (useBinarySearch)
+						{
+							FmgrInfo   *hash_finfo;
+							FunctionCallInfo hash_fcinfo;
+
+							hash_finfo = palloc0(sizeof(FmgrInfo));
+							hash_fcinfo = palloc0(SizeForFunctionCallInfo(2));
+							fmgr_info(hash_func, hash_finfo);
+							fmgr_info_set_expr((Node *) node, hash_finfo);
+							InitFunctionCallInfoData(*hash_fcinfo, hash_finfo, 2,
+													 opexpr->inputcollid, NULL, NULL);
+							InvokeFunctionExecuteHook(hash_func);
+
+							scratch.d.scalararraybinsearchop.hash_finfo = hash_finfo;
+							scratch.d.scalararraybinsearchop.hash_fcinfo_data = hash_fcinfo;
+							scratch.d.scalararraybinsearchop.hash_fn_addr = hash_finfo->fn_addr;
+						}
+					}
+				}
+
+				InvokeFunctionExecuteHook(func);
+				fmgr_info(func, finfo);
 				fmgr_info_set_expr((Node *) node, finfo);
 				InitFunctionCallInfoData(*fcinfo, finfo, 2,
 										 opexpr->inputcollid, NULL, NULL);
@@ -981,18 +1035,28 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				/*
 				 * Evaluate array argument into our return value.  There's no
 				 * danger in that, because the return value is guaranteed to
-				 * be overwritten by EEOP_SCALARARRAYOP, and will not be
-				 * passed to any other expression.
+				 * be overwritten by EEOP_SCALARARRAYOP[_BINSEARCH], and will
+				 * not be passed to any other expression.
 				 */
 				ExecInitExprRec(arrayarg, state, resv, resnull);
 
 				/* And perform the operation */
-				scratch.opcode = EEOP_SCALARARRAYOP;
-				scratch.d.scalararrayop.element_type = InvalidOid;
-				scratch.d.scalararrayop.useOr = opexpr->useOr;
-				scratch.d.scalararrayop.finfo = finfo;
-				scratch.d.scalararrayop.fcinfo_data = fcinfo;
-				scratch.d.scalararrayop.fn_addr = finfo->fn_addr;
+				if (useBinarySearch)
+				{
+					scratch.opcode = EEOP_SCALARARRAYOP_BINSEARCH;
+					scratch.d.scalararraybinsearchop.finfo = finfo;
+					scratch.d.scalararraybinsearchop.fcinfo_data = fcinfo;
+					scratch.d.scalararraybinsearchop.fn_addr = finfo->fn_addr;
+				}
+				else
+				{
+					scratch.opcode = EEOP_SCALARARRAYOP;
+					scratch.d.scalararrayop.element_type = InvalidOid;
+					scratch.d.scalararrayop.useOr = opexpr->useOr;
+					scratch.d.scalararrayop.finfo = finfo;
+					scratch.d.scalararrayop.fcinfo_data = fcinfo;
+					scratch.d.scalararrayop.fn_addr = finfo->fn_addr;
+				}
 				ExprEvalPushStep(state, &scratch);
 				break;
 			}

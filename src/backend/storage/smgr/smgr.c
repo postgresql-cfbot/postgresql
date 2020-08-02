@@ -580,12 +580,6 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 	int			i;
 
 	/*
-	 * Get rid of any buffers for the about-to-be-deleted blocks. bufmgr will
-	 * just drop them without bothering to write the contents.
-	 */
-	DropRelFileNodeBuffers(reln->smgr_rnode, forknum, nforks, nblocks);
-
-	/*
 	 * Send a shared-inval message to force other backends to close any smgr
 	 * references they may have for this rel.  This is useful because they
 	 * might have open file pointers to segments that got removed, and/or
@@ -614,6 +608,13 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 		 */
 		reln->smgr_cached_nblocks[forknum[i]] = nblocks[i];
 	}
+
+	/*
+	 * Now that we have successfully truncated the table(shrunk the file),
+	 * get rid of any buffers for the just deleted blocks. Bufmgr will
+	 * just drop them without bothering to write the contents.
+	 */
+	DropTruncatedBuffers(reln->smgr_rnode, forknum, nforks, nblocks);
 }
 
 /*

@@ -326,45 +326,87 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	RelationPreTruncate(rel);
 
 	/*
-	 * We WAL-log the truncation before actually truncating, which means
-	 * trouble if the truncation fails. If we then crash, the WAL replay
-	 * likely isn't going to succeed in the truncation either, and cause a
-	 * PANIC. It's tempting to put a critical section here, but that cure
-	 * would be worse than the disease. It would turn a usually harmless
-	 * failure to truncate, that might spell trouble at WAL replay, into a
-	 * certain PANIC.
+	 * 1) WAL-log the truncation of the file.
+	 * 2) Discard buffers of the pages to be removed.
+	 * 3) Truncate the pages from the file.
+	 *
+	 * We are seeing corruptions, if there are crashes in the midst of these
+	 * operations, treat all the operations as critical and raise PANIC to
+	 * avoid discrepancy between the WAL log, buffer copy and the on-disk image.
 	 */
-	if (RelationNeedsWAL(rel))
+
+	/*
+	 * It seems logical and apt to put a critical section, but there are two
+	 * issues. First the minor one, palloc() operations down the lane are
+	 * restricted, the major one is (as the below comment suggests) for
+	 * a repeatable truncate error, WAL replay will never end and the server
+	 * is hosed. The former issue can be resolved by either reworking palloc()s
+	 * or using TRY/CATCH block instead. The counter argument to the latter
+	 * issue is, the lack of critical section is what pushing us into the
+	 * scenario we want to avoid by omitting it. Missing critical section is
+	 * causing the WAL replay hitting PANIC persistently with invalid-offset
+	 * on the disk page ERRORs.
+	 */
+	PG_TRY();
 	{
-		/*
-		 * Make an XLOG entry reporting the file truncation.
-		 */
-		XLogRecPtr	lsn;
-		xl_smgr_truncate xlrec;
-
-		xlrec.blkno = nblocks;
-		xlrec.rnode = rel->rd_node;
-		xlrec.flags = SMGR_TRUNCATE_ALL;
-
-		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, sizeof(xlrec));
-
-		lsn = XLogInsert(RM_SMGR_ID,
-						 XLOG_SMGR_TRUNCATE | XLR_SPECIAL_REL_UPDATE);
 
 		/*
-		 * Flush, because otherwise the truncation of the main relation might
-		 * hit the disk before the WAL record, and the truncation of the FSM
-		 * or visibility map. If we crashed during that window, we'd be left
-		 * with a truncated heap, but the FSM or visibility map would still
-		 * contain entries for the non-existent heap pages.
+		 * We are going to truncate (shrink) the file, the contents of the
+		 * corresponding buffers are useless and need to be discarded, but
+		 * a background task might flush them to the disk right after we
+		 * truncate and before we discard. Let's prevent it by marking
+		 * buffers as IO_IN_PROGRESS (though we don't do any real IO).
 		 */
-		if (fsm || vm)
+		MarkTruncateBuffers(rel->rd_smgr->smgr_rnode, forks, nforks, blocks);
+
+		/*
+		 * We WAL-log the truncation before actually truncating, which means
+		 * trouble if the truncation fails. If we then crash, the WAL replay
+		 * likely isn't going to succeed in the truncation either, and cause a
+		 * PANIC. It's tempting to put a critical section here, but that cure
+		 * would be worse than the disease. It would turn a usually harmless
+		 * failure to truncate, that might spell trouble at WAL replay, into a
+		 * certain PANIC.
+		 */
+		if (RelationNeedsWAL(rel))
+		{
+			/*
+			 * Make an XLOG entry reporting the file truncation.
+			 */
+			XLogRecPtr	lsn;
+			xl_smgr_truncate xlrec;
+
+			xlrec.blkno = nblocks;
+			xlrec.rnode = rel->rd_node;
+			xlrec.flags = SMGR_TRUNCATE_ALL;
+
+			XLogBeginInsert();
+			XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+
+			lsn = XLogInsert(RM_SMGR_ID,
+							 XLOG_SMGR_TRUNCATE | XLR_SPECIAL_REL_UPDATE);
+
+			/*
+			 * Flush, because otherwise the truncation of the main relation might
+			 * hit the disk before the WAL record, and the truncation of the FSM
+			 * or visibility map. If we crashed during that window, we'd be left
+			 * with a truncated heap, but the FSM or visibility map would still
+			 * contain entries for the non-existent heap pages.
+			 */
 			XLogFlush(lsn);
-	}
+		}
 
-	/* Do the real work to truncate relation forks */
-	smgrtruncate(rel->rd_smgr, forks, nforks, blocks);
+		MemoryContextAllowInCriticalSection(CurrentMemoryContext, true);
+		/* Do the real work to truncate relation forks */
+		smgrtruncate(rel->rd_smgr, forks, nforks, blocks);
+		MemoryContextAllowInCriticalSection(CurrentMemoryContext, false);
+	}
+	PG_CATCH();
+	{
+		ereport(PANIC, (errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("failed to truncate the relation")));
+	}
+	PG_END_TRY();
 
 	/*
 	 * Update upper-level FSM pages to account for the truncation. This is
@@ -992,7 +1034,10 @@ smgr_redo(XLogReaderState *record)
 
 		/* Do the real work to truncate relation forks */
 		if (nforks > 0)
+		{
+			MarkTruncateBuffers(reln->smgr_rnode, forks, nforks, blocks);
 			smgrtruncate(reln, forks, nforks, blocks);
+		}
 
 		/*
 		 * Update upper-level FSM pages to account for the truncation. This is

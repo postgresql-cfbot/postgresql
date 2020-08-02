@@ -205,6 +205,10 @@ extern void FlushRelationsAllBuffers(struct SMgrRelationData **smgrs, int nrels)
 extern void FlushDatabaseBuffers(Oid dbid);
 extern void DropRelFileNodeBuffers(RelFileNodeBackend rnode, ForkNumber *forkNum,
 								   int nforks, BlockNumber *firstDelBlock);
+extern void DropTruncatedBuffers(RelFileNodeBackend rnode, ForkNumber *forkNum,
+								   int nforks, BlockNumber *firstDelBlock);
+extern void MarkTruncateBuffers(RelFileNodeBackend rnode, ForkNumber *forkNum,
+								   int nforks, BlockNumber *firstDelBlock);
 extern void DropRelFileNodesAllBuffers(RelFileNodeBackend *rnodes, int nnodes);
 extern void DropDatabaseBuffers(Oid dbid);
 

@@ -70,6 +70,12 @@ typedef enum
 	hctl_ignoreboth = hctl_ignorespace | hctl_ignoredups
 } HistControl;
 
+typedef enum
+{
+	PSQL_STATUS_STDOUT,
+	PSQL_STATUS_RESULT
+} PSQL_STATUS_TARGET;
+
 enum trivalue
 {
 	TRI_DEFAULT,
@@ -135,6 +141,7 @@ typedef struct _psqlSettings
 	PSQL_ECHO_HIDDEN echo_hidden;
 	PSQL_ERROR_ROLLBACK on_error_rollback;
 	PSQL_COMP_CASE comp_case;
+	PSQL_STATUS_TARGET status_target;
 	HistControl histcontrol;
 	const char *prompt1;
 	const char *prompt2;

@@ -1072,17 +1072,20 @@ static void
 PrintQueryStatus(PGresult *results)
 {
 	char		buf[16];
+	FILE	   *fp;
+
+	fp = pset.status_target == PSQL_STATUS_RESULT ? pset.queryFout : stdout;
 
 	if (!pset.quiet)
 	{
 		if (pset.popt.topt.format == PRINT_HTML)
 		{
-			fputs("<p>", pset.queryFout);
-			html_escaped_print(PQcmdStatus(results), pset.queryFout);
-			fputs("</p>\n", pset.queryFout);
+			fputs("<p>", fp);
+			html_escaped_print(PQcmdStatus(results), fp);
+			fputs("</p>\n", fp);
 		}
 		else
-			fprintf(pset.queryFout, "%s\n", PQcmdStatus(results));
+			fprintf(fp, "%s\n", PQcmdStatus(results));
 	}
 
 	if (pset.logfile)

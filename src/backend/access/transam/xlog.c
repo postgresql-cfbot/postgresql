@@ -6232,16 +6232,32 @@ GetXLogReceiptTime(TimestampTz *rtime, bool *fromStream)
  * Note that text field supplied is a parameter name and does not require
  * translation
  */
-#define RecoveryRequiresIntParameter(param_name, currValue, minValue) \
-do { \
-	if ((currValue) < (minValue)) \
-		ereport(ERROR, \
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE), \
-				 errmsg("hot standby is not possible because %s = %d is a lower setting than on the primary server (its value was %d)", \
-						param_name, \
-						currValue, \
-						minValue))); \
-} while(0)
+static void
+RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue)
+{
+	if (currValue < minValue)
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("hot standby is not possible because %s = %d is a lower setting than on the primary server (its value was %d)",
+						param_name,
+						currValue,
+						minValue)));
+		ereport(LOG,
+				(errmsg("recovery will be paused"),
+				 errdetail("If recovery is unpaused, the server will shut down."),
+				 errhint("You can then restart the server after making the necessary configuration changes.")));
+		SetRecoveryPause(true);
+		while (RecoveryIsPaused())
+		{
+			pg_usleep(1000000L);	/* 1000 ms */
+			HandleStartupProcInterrupts();
+		}
+		ereport(FATAL,
+				(errmsg("recovery aborted because of insufficient parameter settings"),
+				 errhint("You can restart the server after making the necessary configuration changes.")));
+	}
+}
 
 /*
  * Check to see if required parameters are set high enough on this server

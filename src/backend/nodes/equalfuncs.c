@@ -1542,6 +1542,16 @@ _equalTransactionStmt(const TransactionStmt *a, const TransactionStmt *b)
 	COMPARE_STRING_FIELD(savepoint_name);
 	COMPARE_STRING_FIELD(gid);
 	COMPARE_SCALAR_FIELD(chain);
+	COMPARE_NODE_FIELD(wait);
+
+	return true;
+}
+
+static bool
+_equalWaitClause(const WaitClause *a, const WaitClause *b)
+{
+	COMPARE_STRING_FIELD(lsn);
+	COMPARE_SCALAR_FIELD(timeout);
 
 	return true;
 }
@@ -3391,6 +3401,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_TransactionStmt:
 			retval = _equalTransactionStmt(a, b);
+			break;
+		case T_WaitClause:
+			retval = _equalWaitClause(a, b);
 			break;
 		case T_CompositeTypeStmt:
 			retval = _equalCompositeTypeStmt(a, b);

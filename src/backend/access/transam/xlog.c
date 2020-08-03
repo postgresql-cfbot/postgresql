@@ -42,6 +42,7 @@
 #include "catalog/pg_database.h"
 #include "commands/progress.h"
 #include "commands/tablespace.h"
+#include "commands/wait.h"
 #include "common/controldata_utils.h"
 #include "executor/instrument.h"
 #include "miscadmin.h"
@@ -7383,6 +7384,15 @@ StartupXLOG(void)
 				{
 					reachedRecoveryTarget = true;
 					break;
+				}
+
+				/*
+				 * If we replayed an LSN that someone was waiting for,
+				 * set latches in shared memory array to notify the waiter.
+				 */
+				if (XLogCtl->lastReplayedEndRecPtr >= GetMinWaitedLSN())
+				{
+					WaitSetLatch(XLogCtl->lastReplayedEndRecPtr);
 				}
 
 				/* Else, try to fetch the next WAL record */

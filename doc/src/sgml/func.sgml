@@ -8702,6 +8702,62 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
 
        <row>
         <entry role="func_table_entry"><para role="func_signature">
+         <function>date_trunc_interval</function> ( <type>interval</type>, <type>timestamp</type> )
+         <returnvalue>timestamp</returnvalue>
+        </para>
+        <para>
+         Truncate to specified interval; see <xref linkend="functions-datetime-trunc"/>
+        </para>
+        <para>
+         <literal>date_trunc_interval('15 minutes', timestamp '2001-02-16 20:38:40')</literal>
+         <returnvalue>2001-02-16 20:30:00</returnvalue>
+        </para></entry>
+       </row>
+
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
+         <function>date_trunc_interval</function> ( <type>interval</type>, <type>timestamp</type>, <type>timestamp</type> )
+         <returnvalue>timestamp</returnvalue>
+        </para>
+        <para>
+         Truncate to specified interval aligned with specified origin; see <xref linkend="functions-datetime-trunc"/>
+        </para>
+        <para>
+         <literal>date_trunc_interval('15 minutes', timestamp '2001-02-16 20:38:40', timestamp '2001-02-16 20:05:00')</literal>
+         <returnvalue>2001-02-16 20:35:00</returnvalue>
+        </para></entry>
+       </row>
+
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
+         <function>date_trunc_interval</function> ( <type>interval</type>, <type>timestamp with time zone</type> <optional>, <type>text</type></optional> )
+         <returnvalue>timestamp with time zone</returnvalue>
+        </para>
+        <para>
+         Truncate to specified interval in the specified time zone; see <xref linkend="functions-datetime-trunc"/>
+        </para>
+        <para>
+         <literal>date_trunc_interval('6 hours', timestamptz '2001-02-16 20:38:40+00', 'Australia/Sydney')</literal>
+         <returnvalue>2001-02-16 19:00:00+00</returnvalue>
+        </para></entry>
+       </row>
+
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
+         <function>date_trunc_interval</function> ( <type>interval</type>, <type>timestamp with time zone</type>, <type>timestamp with time zone</type> <optional>, <type>text</type></optional> )
+         <returnvalue>timestamp with time zone</returnvalue>
+        </para>
+        <para>
+         Truncate to specified interval aligned with specified origin in the specified time zone; see <xref linkend="functions-datetime-trunc"/>
+        </para>
+        <para>
+         <literal>date_trunc_interval('6 hours', timestamptz '2001-02-16 20:38:40+00', timestamptz '2001-02-16 01:00:00+00', 'Australia/Sydney')</literal>
+         <returnvalue>2001-02-16 20:00:00+00</returnvalue>
+        </para></entry>
+       </row>
+
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
          <indexterm>
           <primary>extract</primary>
          </indexterm>
@@ -9651,7 +9707,7 @@ SELECT date_part('hour', INTERVAL '4 hours 3 minutes');
   </sect2>
 
   <sect2 id="functions-datetime-trunc">
-   <title><function>date_trunc</function></title>
+   <title><function>date_trunc</function>, <function>date_trunc_interval</function></title>
 
    <indexterm>
     <primary>date_trunc</primary>
@@ -9735,6 +9791,33 @@ SELECT date_trunc('hour', INTERVAL '3 days 02:47:33');
 <lineannotation>Result: </lineannotation><computeroutput>3 days 02:00:00</computeroutput>
 </screen>
    </para>
+
+   <para>
+    The function <function>date_trunc_interval</function> is 
+    similar to the <function>date_trunc</function>, except that it
+    truncates to an arbitrary interval.
+   </para>
+
+   <para>
+    Example:
+<screen>
+SELECT date_trunc_interval('5 minutes', TIMESTAMP '2001-02-16 20:38:40');
+<lineannotation>Result: </lineannotation><computeroutput>2001-02-16 20:35:00</computeroutput>
+</screen>
+   </para>
+
+   <para>
+    The boundaries of the interval to truncate on can be controlled by setting the optional origin parameter. If not specfied, the default origin is January 1st, 2001.
+   </para>
+
+   <para>
+    Example:
+<screen>
+SELECT date_trunc_interval('5 years'::interval, TIMESTAMP '2020-02-01', TIMESTAMP '2012-01-01');
+<lineannotation>Result: </lineannotation><computeroutput>2017-01-01 00:00:00</computeroutput>
+</screen>
+   </para>
+
   </sect2>
 
   <sect2 id="functions-datetime-zoneconvert">

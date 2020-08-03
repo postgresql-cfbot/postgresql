@@ -166,6 +166,79 @@ SELECT '' AS "54", d1 - timestamp without time zone '1997-01-02' AS diff
 
 SELECT '' AS date_trunc_week, date_trunc( 'week', timestamp '2004-02-29 15:44:17.71393' ) AS week_trunc;
 
+-- verify date_trunc_interval behaves the same as date_trunc (excluding decade)
+
+-- case 1: AD dates, origin < input
+SELECT
+  str,
+  interval,
+  date_trunc(str, ts) = date_trunc_interval(interval::interval, ts) AS equal
+FROM (
+  VALUES
+  ('millennium', '1000 y'),
+  ('century', '100 y'),
+  ('year', '1 y'),
+  ('quarter', '3 mon'),
+  ('month', '1 mon'),
+  ('week', '7 d'),
+  ('day', '1 d'),
+  ('hour', '1 h'),
+  ('minute', '1 m'),
+  ('second', '1 s'),
+  ('millisecond', '1 ms'),
+  ('microsecond', '1 us')
+) intervals (str, interval),
+(SELECT timestamp '2020-02-29 15:44:17.71393') ts (ts);
+
+-- case 2: BC dates, origin < input
+SELECT
+  str,
+  interval,
+  date_trunc(str, ts) = date_trunc_interval(interval::interval, ts, timestamp '2000-01-01 BC') AS equal
+FROM (
+  VALUES
+  ('millennium', '1000 y'),
+  ('century', '100 y'),
+  ('year', '1 y'),
+  ('quarter', '3 mon'),
+  ('month', '1 mon'),
+  ('week', '7 d'),
+  ('day', '1 d'),
+  ('hour', '1 h'),
+  ('minute', '1 m'),
+  ('second', '1 s'),
+  ('millisecond', '1 ms'),
+  ('microsecond', '1 us')
+) intervals (str, interval),
+(SELECT timestamp '0055-6-10 15:44:17.71393 BC') ts (ts);
+
+-- truncate timestamps on arbitrary intervals
+SELECT
+  interval,
+  date_trunc_interval(interval::interval, ts)
+FROM (
+  VALUES
+  ('50 years'),
+  ('1.5 years'),
+  ('18 months'),
+  ('6 months'),
+  ('15 days'),
+  ('2 hours'),
+  ('15 minutes'),
+  ('10 seconds'),
+  ('100 milliseconds'),
+  ('250 microseconds')
+) intervals (interval),
+(SELECT TIMESTAMP '2020-02-11 15:44:17.71393') ts (ts);
+
+-- shift bins using the origin parameter:
+SELECT date_trunc_interval('5 min'::interval, timestamp '2020-02-1 01:01:01', timestamp '2020-02-01 00:02:30');
+SELECT date_trunc_interval('5 years'::interval, timestamp '2020-02-1 01:01:01', timestamp '2012-01-01');
+SELECT date_trunc_interval('3 year', timestamp '2015-01-14 20:38:40', timestamp '2012-01-01');
+
+-- not defined
+SELECT date_trunc_interval('1 month 1 day', timestamp '2001-02-16 20:38:40.123456');
+
 -- Test casting within a BETWEEN qualifier
 SELECT '' AS "54", d1 - timestamp without time zone '1997-01-02' AS diff
   FROM TIMESTAMP_TBL

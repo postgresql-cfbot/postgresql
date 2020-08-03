@@ -41,7 +41,9 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
 <phrase>where <replaceable class="parameter">action</replaceable> is one of:</phrase>
 
     ADD [ COLUMN ] [ IF NOT EXISTS ] <replaceable class="parameter">column_name</replaceable> <replaceable class="parameter">data_type</replaceable> [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">column_constraint</replaceable> [ ... ] ]
+    ADD SYSTEM VERSIONING
     DROP [ COLUMN ] [ IF EXISTS ] <replaceable class="parameter">column_name</replaceable> [ RESTRICT | CASCADE ]
+    DROP SYSTEM VERSIONING
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> [ SET DATA ] TYPE <replaceable class="parameter">data_type</replaceable> [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ USING <replaceable class="parameter">expression</replaceable> ]
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET DEFAULT <replaceable class="parameter">expression</replaceable>
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> DROP DEFAULT
@@ -160,6 +162,18 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
    </varlistentry>
 
    <varlistentry>
+    <term><literal>ADD SYSTEM VERSIONING</literal></term>
+    <listitem>
+     <para>
+      This form enables system versioning to the table, using default columns
+      names of system versioning which are StartTime and EndtTime. If the table is
+      not empty StartTime and EndtTime columns will be filled with current transaction
+      time and infinity respectively.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>DROP COLUMN [ IF EXISTS ]</literal></term>
     <listitem>
      <para>
@@ -174,6 +188,18 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       If <literal>IF EXISTS</literal> is specified and the column
       does not exist, no error is thrown. In this case a notice
       is issued instead.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DROP SYSTEM VERSIONING</literal></term>
+    <listitem>
+     <para>
+      This form drops system versioning from the table.
+      Indexes and table constraints involving system versioning columns will be
+      automatically dropped along with system versioning columns. If the table is
+      not empty history records also removed.
      </para>
     </listitem>
    </varlistentry>

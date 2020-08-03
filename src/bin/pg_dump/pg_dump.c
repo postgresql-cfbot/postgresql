@@ -15701,6 +15701,10 @@ dumpTableSchema(Archive *fout, TableInfo *tbinfo)
 						if (tbinfo->attgenerated[j] == ATTRIBUTE_GENERATED_STORED)
 							appendPQExpBuffer(q, " GENERATED ALWAYS AS (%s) STORED",
 											  tbinfo->attrdefs[j]->adef_expr);
+						else if (tbinfo->attgenerated[j] == ATTRIBUTE_ROW_START_TIME)
+							appendPQExpBuffer(q, " GENERATED ALWAYS AS ROW START");
+						else if (tbinfo->attgenerated[j] == ATTRIBUTE_ROW_END_TIME)
+							appendPQExpBuffer(q, " GENERATED ALWAYS AS ROW END");
 						else
 							appendPQExpBuffer(q, " DEFAULT %s",
 											  tbinfo->attrdefs[j]->adef_expr);

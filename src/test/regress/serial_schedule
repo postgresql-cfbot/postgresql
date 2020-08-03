@@ -125,6 +125,7 @@ test: drop_operator
 test: password
 test: identity
 test: generated
+test: system_versioned_table
 test: join_hash
 test: create_table_like
 test: alter_generic

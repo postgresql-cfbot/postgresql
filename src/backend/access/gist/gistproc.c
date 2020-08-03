@@ -24,12 +24,18 @@
 #include "utils/builtins.h"
 #include "utils/float.h"
 #include "utils/geo_decls.h"
+#include "utils/sortsupport.h"
 
 
 static bool gist_box_leaf_consistent(BOX *key, BOX *query,
 									 StrategyNumber strategy);
 static bool rtree_internal_consistent(BOX *key, BOX *query,
 									  StrategyNumber strategy);
+static int64 part_bits32_by2(uint32 x);
+static int64 interleave_bits32(uint32 x, uint32 y);
+static inline uint64 point_zorder_internal(Point *p);
+static int gist_bbox_fastcmp(Datum x, Datum y, SortSupport ssup);
+
 
 /* Minimum accepted ratio of split */
 #define LIMIT_RATIO 0.3
@@ -1539,4 +1545,84 @@ gist_poly_distance(PG_FUNCTION_ARGS)
 	*recheck = true;
 
 	PG_RETURN_FLOAT8(distance);
+}
+
+/* Z-order routines */
+/* Interleave 32 bits with zeroes */
+static int64
+part_bits32_by2(uint32 x)
+{
+	uint64		n = x;
+
+	n = (n | (n << 16)) & 0x0000FFFF0000FFFF;
+	n = (n | (n <<  8)) & 0x00FF00FF00FF00FF;
+	n = (n | (n <<  4)) & 0x0F0F0F0F0F0F0F0F;
+	n = (n | (n <<  2)) & 0x3333333333333333;
+	n = (n | (n <<  1)) & 0x5555555555555555;
+
+	return n;
+}
+
+/*
+ * Compute Z-order for integers. Also called Morton code.
+ */
+static int64
+interleave_bits32(uint32 x, uint32 y)
+{
+	return part_bits32_by2(x) | (part_bits32_by2(y) << 1);
+}
+
+/* Compute Z-order for Point */
+static inline uint64
+point_zorder_internal(Point *p)
+{
+	/*
+	 * In this function we need to compute Morton codes for non-integral
+	 * components p->x and p->y. But Morton codes are defined only for
+	 * integral values.
+	 * We expect floats to be in IEEE format, and the sort order of IEEE
+	 * floats is mostly correlated to the binary sort order of the bits
+	 * reinterpreted as an int.  It isn't in some special cases, but for this
+	 * use case we don't really care about that, we're just trying to
+	 * encourage locality.
+	 * There is a big jump in integer value (whether signed or
+	 * unsigned) as you cross from positive to negative floats, and then the
+	 * sort order is reversed. This can have negative effect on searches when
+	 * query window touches many quadrants simulatously. In worst case this
+	 * seaches can be x4 more costly.
+	 * We generate a Morton code that interleaves the bits of N integers
+	 * to produce a single integer that preserves locality: things that were
+	 * close in the N dimensional space are close in the resulting integer.
+	 */
+	union {
+		float f;
+		uint32 i;
+	} a,b;
+	a.f = p->x;
+	b.f = p->y;
+	if (isnan(a.f))
+		a.i = PG_INT32_MAX;
+	if (isnan(b.f))
+		b.i = PG_INT32_MAX;
+	return interleave_bits32(a.i, b.i);
+}
+
+static int
+gist_bbox_fastcmp(Datum x, Datum y, SortSupport ssup)
+{
+	Point	*p1 = &(DatumGetBoxP(x)->low);
+	Point	*p2 = &(DatumGetBoxP(y)->low);
+	uint64	 z1 = point_zorder_internal(p1);
+	uint64	 z2 = point_zorder_internal(p2);
+
+	return z1 == z2 ? 0 : z1 > z2 ? 1 : -1;
+}
+
+Datum
+gist_point_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gist_bbox_fastcmp;
+	PG_RETURN_VOID();
 }

@@ -1168,6 +1168,43 @@ tuplesort_begin_index_hash(Relation heapRel,
 }
 
 Tuplesortstate *
+tuplesort_begin_index_gist(Relation heapRel,
+						   Relation indexRel,
+						   SortSupport ssup,
+						   int workMem,
+						   SortCoordinate coordinate,
+						   bool randomAccess)
+{
+	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
+												   randomAccess);
+	MemoryContext oldcontext;
+
+	oldcontext = MemoryContextSwitchTo(state->sortcontext);
+
+#ifdef TRACE_SORT
+	if (trace_sort)
+		elog(LOG,
+			 "begin index sort: workMem = %d, randomAccess = %c",
+			 workMem, randomAccess ? 't' : 'f');
+#endif
+
+	state->nKeys = IndexRelationGetNumberOfKeyAttributes(indexRel);
+
+	state->comparetup = comparetup_index_btree;
+	state->copytup = copytup_index;
+	state->writetup = writetup_index;
+	state->readtup = readtup_index;
+	state->sortKeys = ssup;
+
+	state->heapRel = heapRel;
+	state->indexRel = indexRel;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	return state;
+}
+
+Tuplesortstate *
 tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 					  bool nullsFirstFlag, int workMem,
 					  SortCoordinate coordinate, bool randomAccess)

@@ -2170,6 +2170,12 @@ ExecAgg(PlanState *pstate)
 			case AGG_SORTED:
 				result = agg_retrieve_direct(node);
 				break;
+			case AGG_UNIQUE:
+				/* AGG_UNIQUE is translated to AGG_SORTED, Handle it here
+				 * to make compiler quiet.
+				 */
+				Assert(false);
+				break;
 		}
 
 		if (!TupIsNull(result))

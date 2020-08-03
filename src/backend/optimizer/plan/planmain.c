@@ -214,19 +214,6 @@ query_planner(PlannerInfo *root,
 	fix_placeholder_input_needed_levels(root);
 
 	/*
-	 * Remove any useless outer joins.  Ideally this would be done during
-	 * jointree preprocessing, but the necessary information isn't available
-	 * until we've built baserel data structures and classified qual clauses.
-	 */
-	joinlist = remove_useless_joins(root, joinlist);
-
-	/*
-	 * Also, reduce any semijoins with unique inner rels to plain inner joins.
-	 * Likewise, this can't be done until now for lack of needed info.
-	 */
-	reduce_unique_semijoins(root);
-
-	/*
 	 * Now distribute "placeholders" to base rels as needed.  This has to be
 	 * done after join removal because removal could change whether a
 	 * placeholder is evaluable at a base rel.

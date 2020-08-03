@@ -656,7 +656,8 @@ postgresGetForeignRelSize(PlannerInfo *root,
 													 JOIN_INNER,
 													 NULL);
 
-	cost_qual_eval(&fpinfo->local_conds_cost, fpinfo->local_conds, root);
+	cost_qual_eval(&fpinfo->local_conds_cost, fpinfo->local_conds,
+				   COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 
 	/*
 	 * Set # of retrieved rows and cached relation costs to some negative
@@ -2766,7 +2767,8 @@ estimate_path_cost_size(PlannerInfo *root,
 		/* Add in the eval cost of the locally-checked quals */
 		startup_cost += fpinfo->local_conds_cost.startup;
 		total_cost += fpinfo->local_conds_cost.per_tuple * retrieved_rows;
-		cost_qual_eval(&local_cost, local_param_join_conds, root);
+		cost_qual_eval(&local_cost, local_param_join_conds,
+					   COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 		startup_cost += local_cost.startup;
 		total_cost += local_cost.per_tuple * retrieved_rows;
 
@@ -2782,7 +2784,8 @@ estimate_path_cost_size(PlannerInfo *root,
 		{
 			QualCost	tlist_cost;
 
-			cost_qual_eval(&tlist_cost, fdw_scan_tlist, root);
+			cost_qual_eval(&tlist_cost, fdw_scan_tlist,
+						   COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 			startup_cost -= tlist_cost.startup;
 			total_cost -= tlist_cost.startup;
 			total_cost -= tlist_cost.per_tuple * rows;
@@ -2870,9 +2873,11 @@ estimate_path_cost_size(PlannerInfo *root,
 			/*
 			 * Calculate the cost of clauses pushed down to the foreign server
 			 */
-			cost_qual_eval(&remote_conds_cost, fpinfo->remote_conds, root);
+			cost_qual_eval(&remote_conds_cost, fpinfo->remote_conds,
+						   COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 			/* Calculate the cost of applying join clauses */
-			cost_qual_eval(&join_cost, fpinfo->joinclauses, root);
+			cost_qual_eval(&join_cost, fpinfo->joinclauses,
+						   COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 
 			/*
 			 * Startup cost includes startup cost of joining relations and the
@@ -3019,7 +3024,8 @@ estimate_path_cost_size(PlannerInfo *root,
 				QualCost	remote_cost;
 
 				/* Add in the eval cost of the remotely-checked quals */
-				cost_qual_eval(&remote_cost, fpinfo->remote_conds, root);
+				cost_qual_eval(&remote_cost, fpinfo->remote_conds,
+							   COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 				startup_cost += remote_cost.startup;
 				run_cost += remote_cost.per_tuple * numGroups;
 				/* Add in the eval cost of the locally-checked quals */
@@ -5514,7 +5520,8 @@ postgresGetForeignJoinPaths(PlannerInfo *root,
 													 0,
 													 JOIN_INNER,
 													 NULL);
-	cost_qual_eval(&fpinfo->local_conds_cost, fpinfo->local_conds, root);
+	cost_qual_eval(&fpinfo->local_conds_cost, fpinfo->local_conds,
+				   COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 
 	/*
 	 * If we are going to estimate costs locally, estimate the join clause
@@ -5912,7 +5919,8 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 													 JOIN_INNER,
 													 NULL);
 
-	cost_qual_eval(&fpinfo->local_conds_cost, fpinfo->local_conds, root);
+	cost_qual_eval(&fpinfo->local_conds_cost, fpinfo->local_conds,
+				   COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 
 	/* Estimate the cost of push down */
 	estimate_path_cost_size(root, grouped_rel, NIL, NIL, NULL,

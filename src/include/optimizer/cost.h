@@ -31,6 +31,12 @@
 
 #define DEFAULT_EFFECTIVE_CACHE_SIZE  524288	/* measured in pages */
 
+/*
+ * If a caller of cost_qual_eval() or cost_qual_eval_node() has no good number
+ * to use for num_evals, use this.
+ */
+#define COST_QUAL_EVAL_DUMMY_NUM_EVALS 1000
+
 typedef enum
 {
 	CONSTRAINT_EXCLUSION_OFF,	/* do not use c_e */
@@ -165,8 +171,10 @@ extern void cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
 							  Cost input_startup_cost, Cost input_total_cost,
 							  double *rows);
 extern void cost_subplan(PlannerInfo *root, SubPlan *subplan, Plan *plan);
-extern void cost_qual_eval(QualCost *cost, List *quals, PlannerInfo *root);
-extern void cost_qual_eval_node(QualCost *cost, Node *qual, PlannerInfo *root);
+extern void cost_qual_eval(QualCost *cost, List *quals, double num_evals,
+						   PlannerInfo *root);
+extern void cost_qual_eval_node(QualCost *cost, Node *qual, double num_evals,
+								PlannerInfo *root);
 extern void compute_semi_anti_join_factors(PlannerInfo *root,
 										   RelOptInfo *joinrel,
 										   RelOptInfo *outerrel,

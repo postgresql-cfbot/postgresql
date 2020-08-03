@@ -439,6 +439,9 @@ add_placeholders_to_joinrel(PlannerInfo *root, RelOptInfo *joinrel,
 				 * charging the PHV's cost for some join paths.  For now, live
 				 * with that; but we might want to improve it later by
 				 * refiguring the reltarget costs for each pair of inputs.
+				 *
+				 * Unfortunately, the joinrel's size isn't set yet, so we
+				 * cannot use that in cost_qual_eval_node().
 				 */
 				if (!bms_is_subset(phinfo->ph_eval_at, outer_rel->relids) &&
 					!bms_is_subset(phinfo->ph_eval_at, inner_rel->relids))
@@ -446,7 +449,7 @@ add_placeholders_to_joinrel(PlannerInfo *root, RelOptInfo *joinrel,
 					QualCost	cost;
 
 					cost_qual_eval_node(&cost, (Node *) phinfo->ph_var->phexpr,
-										root);
+										COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 					joinrel->reltarget->cost.startup += cost.startup;
 					joinrel->reltarget->cost.per_tuple += cost.per_tuple;
 				}

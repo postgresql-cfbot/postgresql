@@ -1509,8 +1509,8 @@ create_group_result_path(PlannerInfo *root, RelOptInfo *rel,
 	{
 		QualCost	qual_cost;
 
-		cost_qual_eval(&qual_cost, havingqual, root);
 		/* havingqual is evaluated once at startup */
+		cost_qual_eval(&qual_cost, havingqual, 1, root);
 		pathnode->path.startup_cost += qual_cost.startup + qual_cost.per_tuple;
 		pathnode->path.total_cost += qual_cost.startup + qual_cost.per_tuple;
 	}
@@ -3280,7 +3280,7 @@ create_minmaxagg_path(PlannerInfo *root,
 	{
 		QualCost	qual_cost;
 
-		cost_qual_eval(&qual_cost, quals, root);
+		cost_qual_eval(&qual_cost, quals, 1, root);
 		pathnode->path.startup_cost += qual_cost.startup;
 		pathnode->path.total_cost += qual_cost.startup + qual_cost.per_tuple;
 	}

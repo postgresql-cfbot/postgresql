@@ -148,7 +148,8 @@ get_first_col_type(Plan *plan, Oid *coltype, int32 *coltypmod,
  *
  * The result is whatever we need to substitute in place of the SubLink node
  * in the executable expression.  If we're going to do the subplan as a
- * regular subplan, this will be the constructed SubPlan node.  If we're going
+ * regular subplan, this will be the constructed SubPlan node, or possibly
+ * an AlternativeSubPlan node with a list of options.  If we're going
  * to do the subplan as an InitPlan, the SubPlan node instead goes into
  * root->init_plans, and what we return here is an expression tree
  * representing the InitPlan's result: usually just a Param node representing
@@ -246,7 +247,7 @@ make_subplan(PlannerInfo *root, Query *orig_subquery,
 	 * likely to be better (it depends on the expected number of executions of
 	 * the EXISTS qual, and we are much too early in planning the outer query
 	 * to be able to guess that).  So we generate both plans, if possible, and
-	 * leave it to the executor to decide which to use.
+	 * wait till later to decide which to use.
 	 */
 	if (simple_exists && IsA(result, SubPlan))
 	{
@@ -298,7 +299,7 @@ make_subplan(PlannerInfo *root, Query *orig_subquery,
 				/* build_subplan won't have filled in paramIds */
 				hashplan->paramIds = paramIds;
 
-				/* Leave it to the executor to decide which plan to use */
+				/* Build an AlternativeSubPlan, which we'll resolve later */
 				asplan = makeNode(AlternativeSubPlan);
 				asplan->subplans = list_make2(result, hashplan);
 				result = (Node *) asplan;
@@ -2862,6 +2863,39 @@ finalize_agg_primnode(Node *node, finalize_primnode_context *context)
 	}
 	return expression_tree_walker(node, finalize_agg_primnode,
 								  (void *) context);
+}
+
+/*
+ * SS_choose_alternative_subplan - choose one subplan using num_evals
+ *
+ * This function resolves the choice that make_subplan() previously punted on.
+ * We call it later in planning when we have a better idea of how many outer
+ * rows the subplan will be invoked for.
+ */
+SubPlan *
+SS_choose_alternative_subplan(AlternativeSubPlan *asplan,
+							  double num_evals)
+{
+	SubPlan    *subplan1;
+	SubPlan    *subplan2;
+	Cost		cost1;
+	Cost		cost2;
+
+	/*
+	 * make_subplan() saved enough info so that we don't have to work very
+	 * hard to estimate the total cost, given the number-of-calls estimate.
+	 */
+	Assert(list_length(asplan->subplans) == 2);
+	subplan1 = (SubPlan *) linitial(asplan->subplans);
+	subplan2 = (SubPlan *) lsecond(asplan->subplans);
+
+	cost1 = subplan1->startup_cost + num_evals * subplan1->per_call_cost;
+	cost2 = subplan2->startup_cost + num_evals * subplan2->per_call_cost;
+
+	if (cost1 < cost2)
+		return subplan1;
+	else
+		return subplan2;
 }
 
 /*

@@ -91,6 +91,7 @@
 #include "optimizer/plancat.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/subselect.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
@@ -144,6 +145,8 @@ bool		enable_partition_pruning = true;
 typedef struct
 {
 	PlannerInfo *root;
+	double		num_evals;
+	bool		num_evals_used;
 	QualCost	total;
 } cost_qual_eval_context;
 
@@ -175,7 +178,7 @@ static Selectivity get_foreign_key_join_selectivity(PlannerInfo *root,
 													List **restrictlist);
 static Cost append_nonpartial_cost(List *subpaths, int numpaths,
 								   int parallel_workers);
-static void set_rel_width(PlannerInfo *root, RelOptInfo *rel);
+static void set_rel_width(PlannerInfo *root, RelOptInfo *rel, double num_evals);
 static double relation_byte_size(double tuples, int width);
 static double page_size(double tuples, int width);
 static double get_parallel_divisor(Path *path);
@@ -721,7 +724,7 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 	 * What we want here is cpu_tuple_cost plus the evaluation costs of any
 	 * qual clauses that we have to evaluate as qpquals.
 	 */
-	cost_qual_eval(&qpqual_cost, qpquals, root);
+	cost_qual_eval(&qpqual_cost, qpquals, tuples_fetched, root);
 
 	startup_cost += qpqual_cost.startup;
 	cpu_per_tuple = cpu_tuple_cost + qpqual_cost.per_tuple;
@@ -1246,7 +1249,7 @@ cost_tidscan(Path *path, PlannerInfo *root,
 	 * The TID qual expressions will be computed once, any other baserestrict
 	 * quals once per retrieved tuple.
 	 */
-	cost_qual_eval(&tid_qual_cost, tidquals, root);
+	cost_qual_eval(&tid_qual_cost, tidquals, 1, root);
 
 	/* fetch estimated page cost for tablespace containing table */
 	get_tablespace_page_costs(baserel->reltablespace,
@@ -1364,7 +1367,7 @@ cost_functionscan(Path *path, PlannerInfo *root,
 	 * estimates for functions tend to be, there's not a lot of point in that
 	 * refinement right now.
 	 */
-	cost_qual_eval_node(&exprcost, (Node *) rte->functions, root);
+	cost_qual_eval_node(&exprcost, (Node *) rte->functions, 1, root);
 
 	startup_cost += exprcost.startup + exprcost.per_tuple;
 
@@ -1420,7 +1423,7 @@ cost_tablefuncscan(Path *path, PlannerInfo *root,
 	 * estimates for tablefuncs tend to be, there's not a lot of point in that
 	 * refinement right now.
 	 */
-	cost_qual_eval_node(&exprcost, (Node *) rte->tablefunc, root);
+	cost_qual_eval_node(&exprcost, (Node *) rte->tablefunc, 1, root);
 
 	startup_cost += exprcost.startup + exprcost.per_tuple;
 
@@ -2466,7 +2469,7 @@ cost_agg(Path *path, PlannerInfo *root,
 	{
 		QualCost	qual_cost;
 
-		cost_qual_eval(&qual_cost, quals, root);
+		cost_qual_eval(&qual_cost, quals, output_tuples, root);
 		startup_cost += qual_cost.startup;
 		total_cost += qual_cost.startup + output_tuples * qual_cost.per_tuple;
 
@@ -2525,7 +2528,8 @@ cost_windowagg(Path *path, PlannerInfo *root,
 		wfunccost = argcosts.per_tuple;
 
 		/* also add the input expressions' cost to per-input-row costs */
-		cost_qual_eval_node(&argcosts, (Node *) wfunc->args, root);
+		cost_qual_eval_node(&argcosts, (Node *) wfunc->args,
+							input_tuples, root);
 		startup_cost += argcosts.startup;
 		wfunccost += argcosts.per_tuple;
 
@@ -2533,7 +2537,8 @@ cost_windowagg(Path *path, PlannerInfo *root,
 		 * Add the filter's cost to per-input-row costs.  XXX We should reduce
 		 * input expression costs according to filter selectivity.
 		 */
-		cost_qual_eval_node(&argcosts, (Node *) wfunc->aggfilter, root);
+		cost_qual_eval_node(&argcosts, (Node *) wfunc->aggfilter,
+							input_tuples, root);
 		startup_cost += argcosts.startup;
 		wfunccost += argcosts.per_tuple;
 
@@ -2593,7 +2598,7 @@ cost_group(Path *path, PlannerInfo *root,
 	{
 		QualCost	qual_cost;
 
-		cost_qual_eval(&qual_cost, quals, root);
+		cost_qual_eval(&qual_cost, quals, output_tuples, root);
 		startup_cost += qual_cost.startup;
 		total_cost += qual_cost.startup + output_tuples * qual_cost.per_tuple;
 
@@ -2873,7 +2878,7 @@ final_cost_nestloop(PlannerInfo *root, NestPath *path,
 	}
 
 	/* CPU costs */
-	cost_qual_eval(&restrict_qual_cost, path->joinrestrictinfo, root);
+	cost_qual_eval(&restrict_qual_cost, path->joinrestrictinfo, ntuples, root);
 	startup_cost += restrict_qual_cost.startup;
 	cpu_per_tuple = cpu_tuple_cost + restrict_qual_cost.per_tuple;
 	run_cost += cpu_per_tuple * ntuples;
@@ -3200,11 +3205,22 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 		startup_cost += disable_cost;
 
 	/*
-	 * Compute cost of the mergequals and qpquals (other restriction clauses)
-	 * separately.
+	 * Get approx # tuples passing the mergequals.  We use approx_tuple_count
+	 * here because we need an estimate done with JOIN_INNER semantics.
 	 */
-	cost_qual_eval(&merge_qual_cost, mergeclauses, root);
-	cost_qual_eval(&qp_qual_cost, path->jpath.joinrestrictinfo, root);
+	mergejointuples = approx_tuple_count(root, &path->jpath, mergeclauses);
+
+	/*
+	 * Compute cost of the mergequals and qpquals (other restriction clauses)
+	 * separately.  We use mergejointuples for num_evals for all the quals,
+	 * else the arithmetic below would be bogus.  That's the right thing for
+	 * the qpquals, and it seems unlikely that there'd be subplans in the
+	 * mergequals.
+	 */
+	cost_qual_eval(&merge_qual_cost, mergeclauses,
+				   mergejointuples, root);
+	cost_qual_eval(&qp_qual_cost, path->jpath.joinrestrictinfo,
+				   mergejointuples, root);
 	qp_qual_cost.startup -= merge_qual_cost.startup;
 	qp_qual_cost.per_tuple -= merge_qual_cost.per_tuple;
 
@@ -3222,12 +3238,6 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 		path->skip_mark_restore = true;
 	else
 		path->skip_mark_restore = false;
-
-	/*
-	 * Get approx # tuples passing the mergequals.  We use approx_tuple_count
-	 * here because we need an estimate done with JOIN_INNER semantics.
-	 */
-	mergejointuples = approx_tuple_count(root, &path->jpath, mergeclauses);
 
 	/*
 	 * When there are equal merge keys in the outer relation, the mergejoin
@@ -3730,13 +3740,12 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 		startup_cost += disable_cost;
 
 	/*
-	 * Compute cost of the hashquals and qpquals (other restriction clauses)
-	 * separately.
+	 * Compute cost of the hashquals.  We don't expend effort on estimating
+	 * how often they'll be evaluated before doing so, reasoning that it's
+	 * unlikely they'll contain any subplans.
 	 */
-	cost_qual_eval(&hash_qual_cost, hashclauses, root);
-	cost_qual_eval(&qp_qual_cost, path->jpath.joinrestrictinfo, root);
-	qp_qual_cost.startup -= hash_qual_cost.startup;
-	qp_qual_cost.per_tuple -= hash_qual_cost.per_tuple;
+	cost_qual_eval(&hash_qual_cost, hashclauses,
+				   COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 
 	/* CPU costs */
 
@@ -3814,6 +3823,16 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 	}
 
 	/*
+	 * Compute cost of the qpquals (join quals that aren't hash quals) by
+	 * costing the joinrestrictinfo list and then subtracting hash_qual_cost.
+	 * XXX This could give a bogus answer if the hash quals contain subplans.
+	 */
+	cost_qual_eval(&qp_qual_cost, path->jpath.joinrestrictinfo,
+				   hashjointuples, root);
+	qp_qual_cost.startup -= hash_qual_cost.startup;
+	qp_qual_cost.per_tuple -= hash_qual_cost.per_tuple;
+
+	/*
 	 * For each tuple that gets through the hashjoin proper, we charge
 	 * cpu_tuple_cost plus the cost of evaluating additional restriction
 	 * clauses that are to be applied at the join.  (This is pessimistic since
@@ -3847,6 +3866,7 @@ cost_subplan(PlannerInfo *root, SubPlan *subplan, Plan *plan)
 	/* Figure any cost for evaluating the testexpr */
 	cost_qual_eval(&sp_cost,
 				   make_ands_implicit((Expr *) subplan->testexpr),
+				   COST_QUAL_EVAL_DUMMY_NUM_EVALS,
 				   root);
 
 	if (subplan->useHashTable)
@@ -4038,14 +4058,21 @@ cost_rescan(PlannerInfo *root, Path *path,
  *		preferred since it allows caching of the results.)
  *		The result includes both a one-time (startup) component,
  *		and a per-evaluation component.
+ *
+ * The caller is also asked to provide an estimated number of evaluations.
+ * That's often fairly bogus, since we may not have any good estimate yet.
+ * We use it only to decide which entry of an AlternativeSubPlan to consider.
  */
 void
-cost_qual_eval(QualCost *cost, List *quals, PlannerInfo *root)
+cost_qual_eval(QualCost *cost, List *quals,
+			   double num_evals, PlannerInfo *root)
 {
 	cost_qual_eval_context context;
 	ListCell   *l;
 
 	context.root = root;
+	context.num_evals = num_evals;
+	context.num_evals_used = false;
 	context.total.startup = 0;
 	context.total.per_tuple = 0;
 
@@ -4066,11 +4093,14 @@ cost_qual_eval(QualCost *cost, List *quals, PlannerInfo *root)
  *		As above, for a single RestrictInfo or expression.
  */
 void
-cost_qual_eval_node(QualCost *cost, Node *qual, PlannerInfo *root)
+cost_qual_eval_node(QualCost *cost, Node *qual,
+					double num_evals, PlannerInfo *root)
 {
 	cost_qual_eval_context context;
 
 	context.root = root;
+	context.num_evals = num_evals;
+	context.num_evals_used = false;
 	context.total.startup = 0;
 	context.total.per_tuple = 0;
 
@@ -4088,8 +4118,9 @@ cost_qual_eval_walker(Node *node, cost_qual_eval_context *context)
 	/*
 	 * RestrictInfo nodes contain an eval_cost field reserved for this
 	 * routine's use, so that it's not necessary to evaluate the qual clause's
-	 * cost more than once.  If the clause's cost hasn't been computed yet,
-	 * the field's startup value will contain -1.
+	 * cost more than once (unless the clause contains an AlternativeSubPlan).
+	 * If the clause's cost hasn't been cached, the field's startup value will
+	 * contain -1.
 	 */
 	if (IsA(node, RestrictInfo))
 	{
@@ -4100,6 +4131,8 @@ cost_qual_eval_walker(Node *node, cost_qual_eval_context *context)
 			cost_qual_eval_context locContext;
 
 			locContext.root = context->root;
+			locContext.num_evals = context->num_evals;
+			locContext.num_evals_used = false;
 			locContext.total.startup = 0;
 			locContext.total.per_tuple = 0;
 
@@ -4122,6 +4155,18 @@ cost_qual_eval_walker(Node *node, cost_qual_eval_context *context)
 				locContext.total.startup += locContext.total.per_tuple;
 				locContext.total.per_tuple = 0;
 			}
+
+			/*
+			 * If we made use of num_evals, we can't cache the result.
+			 */
+			if (locContext.num_evals_used)
+			{
+				context->total.startup += locContext.total.startup;
+				context->total.per_tuple += locContext.total.per_tuple;
+				/* do NOT recurse into children */
+				return false;
+			}
+
 			rinfo->eval_cost = locContext.total;
 		}
 		context->total.startup += rinfo->eval_cost.startup;
@@ -4219,14 +4264,19 @@ cost_qual_eval_walker(Node *node, cost_qual_eval_context *context)
 	else if (IsA(node, ArrayCoerceExpr))
 	{
 		ArrayCoerceExpr *acoerce = (ArrayCoerceExpr *) node;
-		QualCost	perelemcost;
+		cost_qual_eval_context elemContext;
 
-		cost_qual_eval_node(&perelemcost, (Node *) acoerce->elemexpr,
-							context->root);
-		context->total.startup += perelemcost.startup;
-		if (perelemcost.per_tuple > 0)
-			context->total.per_tuple += perelemcost.per_tuple *
+		elemContext.root = context->root;
+		elemContext.num_evals = context->num_evals;
+		elemContext.num_evals_used = false;
+		elemContext.total.startup = 0;
+		elemContext.total.per_tuple = 0;
+		cost_qual_eval_walker((Node *) acoerce->elemexpr, &elemContext);
+		context->total.startup += elemContext.total.startup;
+		if (elemContext.total.per_tuple > 0)
+			context->total.per_tuple += elemContext.total.per_tuple *
 				estimate_array_length((Node *) acoerce->arg);
+		context->num_evals_used |= elemContext.num_evals_used;
 	}
 	else if (IsA(node, RowCompareExpr))
 	{
@@ -4283,15 +4333,15 @@ cost_qual_eval_walker(Node *node, cost_qual_eval_context *context)
 	else if (IsA(node, AlternativeSubPlan))
 	{
 		/*
-		 * Arbitrarily use the first alternative plan for costing.  (We should
-		 * certainly only include one alternative, and we don't yet have
-		 * enough information to know which one the executor is most likely to
-		 * use.)
+		 * Make use of the caller's estimated number of evaluations to decide
+		 * which subplan should be used.
 		 */
 		AlternativeSubPlan *asplan = (AlternativeSubPlan *) node;
+		SubPlan    *subplan;
 
-		return cost_qual_eval_walker((Node *) linitial(asplan->subplans),
-									 context);
+		subplan = SS_choose_alternative_subplan(asplan, context->num_evals);
+		context->num_evals_used = true;
+		return cost_qual_eval_walker((Node *) subplan, context);
 	}
 	else if (IsA(node, PlaceHolderVar))
 	{
@@ -4333,7 +4383,9 @@ get_restriction_qual_cost(PlannerInfo *root, RelOptInfo *baserel,
 	if (param_info)
 	{
 		/* Include costs of pushed-down clauses */
-		cost_qual_eval(qpqual_cost, param_info->ppi_clauses, root);
+		/* XXX baserel->tuples is wrong for a few callers */
+		cost_qual_eval(qpqual_cost, param_info->ppi_clauses,
+					   baserel->tuples, root);
 
 		qpqual_cost->startup += baserel->baserestrictcost.startup;
 		qpqual_cost->per_tuple += baserel->baserestrictcost.per_tuple;
@@ -4641,9 +4693,10 @@ set_baserel_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 
 	rel->rows = clamp_row_est(nrows);
 
-	cost_qual_eval(&rel->baserestrictcost, rel->baserestrictinfo, root);
+	cost_qual_eval(&rel->baserestrictcost, rel->baserestrictinfo,
+				   rel->tuples, root);
 
-	set_rel_width(root, rel);
+	set_rel_width(root, rel, rel->tuples);
 }
 
 /*
@@ -5411,9 +5464,10 @@ set_foreign_size_estimates(PlannerInfo *root, RelOptInfo *rel)
 
 	rel->rows = 1000;			/* entirely bogus default estimate */
 
-	cost_qual_eval(&rel->baserestrictcost, rel->baserestrictinfo, root);
+	cost_qual_eval(&rel->baserestrictcost, rel->baserestrictinfo,
+				   COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 
-	set_rel_width(root, rel);
+	set_rel_width(root, rel, COST_QUAL_EVAL_DUMMY_NUM_EVALS);
 }
 
 
@@ -5427,6 +5481,7 @@ set_foreign_size_estimates(PlannerInfo *root, RelOptInfo *rel)
  * we'd need to pass upwards in case of a sort, hash, etc.
  *
  * This function also sets reltarget->cost, so it's a bit misnamed now.
+ * (Because it estimates costs, it also requires a num_evals estimate.)
  *
  * NB: this works best on plain relations because it prefers to look at
  * real Vars.  For subqueries, set_subquery_size_estimates will already have
@@ -5439,7 +5494,7 @@ set_foreign_size_estimates(PlannerInfo *root, RelOptInfo *rel)
  * building join relations or post-scan/join pathtargets.
  */
 static void
-set_rel_width(PlannerInfo *root, RelOptInfo *rel)
+set_rel_width(PlannerInfo *root, RelOptInfo *rel, double num_evals)
 {
 	Oid			reloid = planner_rt_fetch(rel->relid, root)->relid;
 	int32		tuple_width = 0;
@@ -5524,7 +5579,7 @@ set_rel_width(PlannerInfo *root, RelOptInfo *rel)
 			QualCost	cost;
 
 			tuple_width += phinfo->ph_width;
-			cost_qual_eval_node(&cost, (Node *) phv->phexpr, root);
+			cost_qual_eval_node(&cost, (Node *) phv->phexpr, num_evals, root);
 			rel->reltarget->cost.startup += cost.startup;
 			rel->reltarget->cost.per_tuple += cost.per_tuple;
 		}
@@ -5542,7 +5597,7 @@ set_rel_width(PlannerInfo *root, RelOptInfo *rel)
 			Assert(item_width > 0);
 			tuple_width += item_width;
 			/* Not entirely clear if we need to account for cost, but do so */
-			cost_qual_eval_node(&cost, node, root);
+			cost_qual_eval_node(&cost, node, num_evals, root);
 			rel->reltarget->cost.startup += cost.startup;
 			rel->reltarget->cost.per_tuple += cost.per_tuple;
 		}
@@ -5657,7 +5712,8 @@ set_pathtarget_cost_width(PlannerInfo *root, PathTarget *target)
 			tuple_width += item_width;
 
 			/* Account for cost, too */
-			cost_qual_eval_node(&cost, node, root);
+			/* XXX have caller pass rowcount est */
+			cost_qual_eval_node(&cost, node, COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 			target->cost.startup += cost.startup;
 			target->cost.per_tuple += cost.per_tuple;
 		}

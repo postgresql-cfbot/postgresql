@@ -371,7 +371,8 @@ get_agg_clause_costs_walker(Node *node, get_agg_clause_costs_context *context)
 		if (!DO_AGGSPLIT_COMBINE(context->aggsplit))
 		{
 			/* add the input expressions' cost to per-input-row costs */
-			cost_qual_eval_node(&argcosts, (Node *) aggref->args, context->root);
+			cost_qual_eval_node(&argcosts, (Node *) aggref->args,
+								COST_QUAL_EVAL_DUMMY_NUM_EVALS, context->root);
 			costs->transCost.startup += argcosts.startup;
 			costs->transCost.per_tuple += argcosts.per_tuple;
 
@@ -385,7 +386,7 @@ get_agg_clause_costs_walker(Node *node, get_agg_clause_costs_context *context)
 			if (aggref->aggfilter)
 			{
 				cost_qual_eval_node(&argcosts, (Node *) aggref->aggfilter,
-									context->root);
+									COST_QUAL_EVAL_DUMMY_NUM_EVALS, context->root);
 				costs->transCost.startup += argcosts.startup;
 				costs->transCost.per_tuple += argcosts.per_tuple;
 			}
@@ -398,7 +399,7 @@ get_agg_clause_costs_walker(Node *node, get_agg_clause_costs_context *context)
 		if (aggref->aggdirectargs)
 		{
 			cost_qual_eval_node(&argcosts, (Node *) aggref->aggdirectargs,
-								context->root);
+								1, context->root);
 			costs->finalCost.startup += argcosts.startup;
 			costs->finalCost.per_tuple += argcosts.per_tuple;
 		}
@@ -4625,7 +4626,7 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 			 */
 			if (contain_subplans(param))
 				goto fail;
-			cost_qual_eval(&eval_cost, list_make1(param), NULL);
+			cost_qual_eval_node(&eval_cost, param, 1, NULL);
 			if (eval_cost.startup + eval_cost.per_tuple >
 				10 * cpu_operator_cost)
 				goto fail;

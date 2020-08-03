@@ -5988,7 +5988,7 @@ index_other_operands_eval_cost(PlannerInfo *root, List *indexquals)
 			other_operand = NULL;	/* keep compiler quiet */
 		}
 
-		cost_qual_eval_node(&index_qual_cost, other_operand, root);
+		cost_qual_eval_node(&index_qual_cost, other_operand, 1, root);
 		qual_arg_cost += index_qual_cost.startup + index_qual_cost.per_tuple;
 	}
 	return qual_arg_cost;

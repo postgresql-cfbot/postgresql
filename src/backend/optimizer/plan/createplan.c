@@ -165,7 +165,8 @@ static Node *fix_indexqual_clause(PlannerInfo *root,
 								  Node *clause, List *indexcolnos);
 static Node *fix_indexqual_operand(Node *node, IndexOptInfo *index, int indexcol);
 static List *get_switched_clauses(List *clauses, Relids outerrelids);
-static List *order_qual_clauses(PlannerInfo *root, List *clauses);
+static List *order_qual_clauses(PlannerInfo *root, List *clauses,
+								double num_evals);
 static void copy_generic_path_info(Plan *dest, Path *src);
 static void copy_plan_costsize(Plan *dest, Plan *src);
 static void label_sort_with_costsize(PlannerInfo *root, Sort *plan,
@@ -941,8 +942,11 @@ get_gating_quals(PlannerInfo *root, List *quals)
 	if (!root->hasPseudoConstantQuals)
 		return NIL;
 
-	/* Sort into desirable execution order while still in RestrictInfo form */
-	quals = order_qual_clauses(root, quals);
+	/*
+	 * Sort into desirable execution order while still in RestrictInfo form.
+	 * Use num_evals = 1 since we only care about the gating quals here.
+	 */
+	quals = order_qual_clauses(root, quals, 1);
 
 	/* Pull out any pseudoconstant quals from the RestrictInfo list */
 	return extract_actual_clauses(quals, true);
@@ -1454,7 +1458,7 @@ create_group_result_plan(PlannerInfo *root, GroupResultPath *best_path)
 	tlist = build_path_tlist(root, &best_path->path);
 
 	/* best_path->quals is just bare clauses */
-	quals = order_qual_clauses(root, best_path->quals);
+	quals = order_qual_clauses(root, best_path->quals, 1);
 
 	plan = make_result(tlist, (Node *) quals, NULL);
 
@@ -2057,7 +2061,7 @@ create_group_plan(PlannerInfo *root, GroupPath *best_path)
 
 	tlist = build_path_tlist(root, &best_path->path);
 
-	quals = order_qual_clauses(root, best_path->qual);
+	quals = order_qual_clauses(root, best_path->qual, subplan->plan_rows);
 
 	plan = make_group(tlist,
 					  quals,
@@ -2124,7 +2128,7 @@ create_agg_plan(PlannerInfo *root, AggPath *best_path)
 
 	tlist = build_path_tlist(root, &best_path->path);
 
-	quals = order_qual_clauses(root, best_path->qual);
+	quals = order_qual_clauses(root, best_path->qual, subplan->plan_rows);
 
 	plan = make_agg(tlist, quals,
 					best_path->aggstrategy,
@@ -2753,14 +2757,15 @@ create_seqscan_plan(PlannerInfo *root, Path *best_path,
 					List *tlist, List *scan_clauses)
 {
 	SeqScan    *scan_plan;
-	Index		scan_relid = best_path->parent->relid;
+	RelOptInfo *rel = best_path->parent;
+	Index		scan_relid = rel->relid;
 
 	/* it should be a base rel... */
 	Assert(scan_relid > 0);
-	Assert(best_path->parent->rtekind == RTE_RELATION);
+	Assert(rel->rtekind == RTE_RELATION);
 
 	/* Sort clauses into best execution order */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = order_qual_clauses(root, scan_clauses, rel->tuples);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	scan_clauses = extract_actual_clauses(scan_clauses, false);
@@ -2791,7 +2796,8 @@ create_samplescan_plan(PlannerInfo *root, Path *best_path,
 					   List *tlist, List *scan_clauses)
 {
 	SampleScan *scan_plan;
-	Index		scan_relid = best_path->parent->relid;
+	RelOptInfo *rel = best_path->parent;
+	Index		scan_relid = rel->relid;
 	RangeTblEntry *rte;
 	TableSampleClause *tsc;
 
@@ -2803,7 +2809,7 @@ create_samplescan_plan(PlannerInfo *root, Path *best_path,
 	Assert(tsc != NULL);
 
 	/* Sort clauses into best execution order */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = order_qual_clauses(root, scan_clauses, rel->tuples);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	scan_clauses = extract_actual_clauses(scan_clauses, false);
@@ -2847,7 +2853,8 @@ create_indexscan_plan(PlannerInfo *root,
 	Scan	   *scan_plan;
 	List	   *indexclauses = best_path->indexclauses;
 	List	   *indexorderbys = best_path->indexorderbys;
-	Index		baserelid = best_path->path.parent->relid;
+	RelOptInfo *rel = best_path->path.parent;
+	Index		baserelid = rel->relid;
 	Oid			indexoid = best_path->indexinfo->indexoid;
 	List	   *qpqual;
 	List	   *stripped_indexquals;
@@ -2858,7 +2865,7 @@ create_indexscan_plan(PlannerInfo *root,
 
 	/* it should be a base rel... */
 	Assert(baserelid > 0);
-	Assert(best_path->path.parent->rtekind == RTE_RELATION);
+	Assert(rel->rtekind == RTE_RELATION);
 
 	/*
 	 * Extract the index qual expressions (stripped of RestrictInfos) from the
@@ -2920,7 +2927,9 @@ create_indexscan_plan(PlannerInfo *root,
 	}
 
 	/* Sort clauses into best execution order */
-	qpqual = order_qual_clauses(root, qpqual);
+	qpqual = order_qual_clauses(root, qpqual,
+								clamp_row_est(best_path->indexselectivity *
+											  rel->tuples));
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	qpqual = extract_actual_clauses(qpqual, false);
@@ -3082,7 +3091,7 @@ create_bitmap_scan_plan(PlannerInfo *root,
 	}
 
 	/* Sort clauses into best execution order */
-	qpqual = order_qual_clauses(root, qpqual);
+	qpqual = order_qual_clauses(root, qpqual, bitmapqualplan->plan_rows);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	qpqual = extract_actual_clauses(qpqual, false);
@@ -3353,12 +3362,13 @@ create_tidscan_plan(PlannerInfo *root, TidPath *best_path,
 					List *tlist, List *scan_clauses)
 {
 	TidScan    *scan_plan;
-	Index		scan_relid = best_path->path.parent->relid;
+	RelOptInfo *rel = best_path->path.parent;
+	Index		scan_relid = rel->relid;
 	List	   *tidquals = best_path->tidquals;
 
 	/* it should be a base rel... */
 	Assert(scan_relid > 0);
-	Assert(best_path->path.parent->rtekind == RTE_RELATION);
+	Assert(rel->rtekind == RTE_RELATION);
 
 	/*
 	 * The qpqual list must contain all restrictions not enforced by the
@@ -3400,7 +3410,8 @@ create_tidscan_plan(PlannerInfo *root, TidPath *best_path,
 	}
 
 	/* Sort clauses into best execution order */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	/* XXX need selectivity of tidquals to compute num_evals properly */
+	scan_clauses = order_qual_clauses(root, scan_clauses, rel->tuples);
 
 	/* Reduce RestrictInfo lists to bare expressions; ignore pseudoconstants */
 	tidquals = extract_actual_clauses(tidquals, false);
@@ -3466,7 +3477,7 @@ create_subqueryscan_plan(PlannerInfo *root, SubqueryScanPath *best_path,
 	subplan = create_plan(rel->subroot, best_path->subpath);
 
 	/* Sort clauses into best execution order */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = order_qual_clauses(root, scan_clauses, subplan->plan_rows);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	scan_clauses = extract_actual_clauses(scan_clauses, false);
@@ -3500,7 +3511,8 @@ create_functionscan_plan(PlannerInfo *root, Path *best_path,
 						 List *tlist, List *scan_clauses)
 {
 	FunctionScan *scan_plan;
-	Index		scan_relid = best_path->parent->relid;
+	RelOptInfo *rel = best_path->parent;
+	Index		scan_relid = rel->relid;
 	RangeTblEntry *rte;
 	List	   *functions;
 
@@ -3511,7 +3523,7 @@ create_functionscan_plan(PlannerInfo *root, Path *best_path,
 	functions = rte->functions;
 
 	/* Sort clauses into best execution order */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = order_qual_clauses(root, scan_clauses, rel->tuples);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	scan_clauses = extract_actual_clauses(scan_clauses, false);
@@ -3543,7 +3555,8 @@ create_tablefuncscan_plan(PlannerInfo *root, Path *best_path,
 						  List *tlist, List *scan_clauses)
 {
 	TableFuncScan *scan_plan;
-	Index		scan_relid = best_path->parent->relid;
+	RelOptInfo *rel = best_path->parent;
+	Index		scan_relid = rel->relid;
 	RangeTblEntry *rte;
 	TableFunc  *tablefunc;
 
@@ -3554,7 +3567,7 @@ create_tablefuncscan_plan(PlannerInfo *root, Path *best_path,
 	tablefunc = rte->tablefunc;
 
 	/* Sort clauses into best execution order */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = order_qual_clauses(root, scan_clauses, rel->tuples);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	scan_clauses = extract_actual_clauses(scan_clauses, false);
@@ -3586,7 +3599,8 @@ create_valuesscan_plan(PlannerInfo *root, Path *best_path,
 					   List *tlist, List *scan_clauses)
 {
 	ValuesScan *scan_plan;
-	Index		scan_relid = best_path->parent->relid;
+	RelOptInfo *rel = best_path->parent;
+	Index		scan_relid = rel->relid;
 	RangeTblEntry *rte;
 	List	   *values_lists;
 
@@ -3597,7 +3611,7 @@ create_valuesscan_plan(PlannerInfo *root, Path *best_path,
 	values_lists = rte->values_lists;
 
 	/* Sort clauses into best execution order */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = order_qual_clauses(root, scan_clauses, rel->tuples);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	scan_clauses = extract_actual_clauses(scan_clauses, false);
@@ -3630,7 +3644,8 @@ create_ctescan_plan(PlannerInfo *root, Path *best_path,
 					List *tlist, List *scan_clauses)
 {
 	CteScan    *scan_plan;
-	Index		scan_relid = best_path->parent->relid;
+	RelOptInfo *rel = best_path->parent;
+	Index		scan_relid = rel->relid;
 	RangeTblEntry *rte;
 	SubPlan    *ctesplan = NULL;
 	int			plan_id;
@@ -3693,7 +3708,7 @@ create_ctescan_plan(PlannerInfo *root, Path *best_path,
 	cte_param_id = linitial_int(ctesplan->setParam);
 
 	/* Sort clauses into best execution order */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = order_qual_clauses(root, scan_clauses, rel->tuples);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	scan_clauses = extract_actual_clauses(scan_clauses, false);
@@ -3724,7 +3739,8 @@ create_namedtuplestorescan_plan(PlannerInfo *root, Path *best_path,
 								List *tlist, List *scan_clauses)
 {
 	NamedTuplestoreScan *scan_plan;
-	Index		scan_relid = best_path->parent->relid;
+	RelOptInfo *rel = best_path->parent;
+	Index		scan_relid = rel->relid;
 	RangeTblEntry *rte;
 
 	Assert(scan_relid > 0);
@@ -3732,7 +3748,7 @@ create_namedtuplestorescan_plan(PlannerInfo *root, Path *best_path,
 	Assert(rte->rtekind == RTE_NAMEDTUPLESTORE);
 
 	/* Sort clauses into best execution order */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = order_qual_clauses(root, scan_clauses, rel->tuples);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	scan_clauses = extract_actual_clauses(scan_clauses, false);
@@ -3763,7 +3779,8 @@ create_resultscan_plan(PlannerInfo *root, Path *best_path,
 					   List *tlist, List *scan_clauses)
 {
 	Result	   *scan_plan;
-	Index		scan_relid = best_path->parent->relid;
+	RelOptInfo *rel = best_path->parent;
+	Index		scan_relid = rel->relid;
 	RangeTblEntry *rte PG_USED_FOR_ASSERTS_ONLY;
 
 	Assert(scan_relid > 0);
@@ -3771,7 +3788,7 @@ create_resultscan_plan(PlannerInfo *root, Path *best_path,
 	Assert(rte->rtekind == RTE_RESULT);
 
 	/* Sort clauses into best execution order */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = order_qual_clauses(root, scan_clauses, rel->tuples);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	scan_clauses = extract_actual_clauses(scan_clauses, false);
@@ -3800,7 +3817,8 @@ create_worktablescan_plan(PlannerInfo *root, Path *best_path,
 						  List *tlist, List *scan_clauses)
 {
 	WorkTableScan *scan_plan;
-	Index		scan_relid = best_path->parent->relid;
+	RelOptInfo *rel = best_path->parent;
+	Index		scan_relid = rel->relid;
 	RangeTblEntry *rte;
 	Index		levelsup;
 	PlannerInfo *cteroot;
@@ -3830,7 +3848,7 @@ create_worktablescan_plan(PlannerInfo *root, Path *best_path,
 		elog(ERROR, "could not find param ID for CTE \"%s\"", rte->ctename);
 
 	/* Sort clauses into best execution order */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = order_qual_clauses(root, scan_clauses, rel->tuples);
 
 	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
 	scan_clauses = extract_actual_clauses(scan_clauses, false);
@@ -3890,7 +3908,7 @@ create_foreignscan_plan(PlannerInfo *root, ForeignPath *best_path,
 	 * Sort clauses into best execution order.  We do this first since the FDW
 	 * might have more info than we do and wish to adjust the ordering.
 	 */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = order_qual_clauses(root, scan_clauses, rel->tuples);
 
 	/*
 	 * Let the FDW perform its processing on the restriction clauses and
@@ -4021,7 +4039,7 @@ create_customscan_plan(PlannerInfo *root, CustomPath *best_path,
 	 * Sort clauses into the best execution order, although custom-scan
 	 * provider can reorder them again.
 	 */
-	scan_clauses = order_qual_clauses(root, scan_clauses);
+	scan_clauses = order_qual_clauses(root, scan_clauses, rel->tuples);
 
 	/*
 	 * Invoke custom plan provider to create the Plan node represented by the
@@ -4099,7 +4117,9 @@ create_nestloop_plan(PlannerInfo *root,
 	root->curOuterRels = saveOuterRels;
 
 	/* Sort join qual clauses into best execution order */
-	joinrestrictclauses = order_qual_clauses(root, joinrestrictclauses);
+	/* XXX this underestimates the number of evaluations */
+	joinrestrictclauses = order_qual_clauses(root, joinrestrictclauses,
+											 best_path->path.parent->rows);
 
 	/* Get the join qual clauses (in plain expression form) */
 	/* Any pseudoconstant clauses are ignored here */
@@ -4187,7 +4207,9 @@ create_mergejoin_plan(PlannerInfo *root,
 
 	/* Sort join qual clauses into best execution order */
 	/* NB: do NOT reorder the mergeclauses */
-	joinclauses = order_qual_clauses(root, best_path->jpath.joinrestrictinfo);
+	/* XXX this underestimates the number of evaluations */
+	joinclauses = order_qual_clauses(root, best_path->jpath.joinrestrictinfo,
+									 best_path->jpath.path.parent->rows);
 
 	/* Get the join qual clauses (in plain expression form) */
 	/* Any pseudoconstant clauses are ignored here */
@@ -4488,7 +4510,9 @@ create_hashjoin_plan(PlannerInfo *root,
 									 CP_SMALL_TLIST);
 
 	/* Sort join qual clauses into best execution order */
-	joinclauses = order_qual_clauses(root, best_path->jpath.joinrestrictinfo);
+	/* XXX this underestimates the number of evaluations */
+	joinclauses = order_qual_clauses(root, best_path->jpath.joinrestrictinfo,
+									 best_path->jpath.path.parent->rows);
 	/* There's no point in sorting the hash clauses ... */
 
 	/* Get the join qual clauses (in plain expression form) */
@@ -5027,7 +5051,7 @@ get_switched_clauses(List *clauses, Relids outerrelids)
  * selectivity in the ordering would likely do the wrong thing.
  */
 static List *
-order_qual_clauses(PlannerInfo *root, List *clauses)
+order_qual_clauses(PlannerInfo *root, List *clauses, double num_evals)
 {
 	typedef struct
 	{
@@ -5056,7 +5080,7 @@ order_qual_clauses(PlannerInfo *root, List *clauses)
 		Node	   *clause = (Node *) lfirst(lc);
 		QualCost	qcost;
 
-		cost_qual_eval_node(&qcost, clause, root);
+		cost_qual_eval_node(&qcost, clause, num_evals, root);
 		items[i].clause = clause;
 		items[i].cost = qcost.per_tuple;
 		if (IsA(clause, RestrictInfo))

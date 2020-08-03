@@ -5889,7 +5889,8 @@ make_sort_input_target(PlannerInfo *root,
 				 */
 				QualCost	cost;
 
-				cost_qual_eval_node(&cost, (Node *) expr, root);
+				cost_qual_eval_node(&cost, (Node *) expr,
+									COST_QUAL_EVAL_DUMMY_NUM_EVALS, root);
 
 				/*
 				 * We arbitrarily define "expensive" as "more than 10X
@@ -6311,7 +6312,7 @@ plan_cluster_use_sort(Oid tableOid, Oid indexOid)
 	 * the sort, since tuplesort.c will have to re-evaluate the index
 	 * expressions each time.  (XXX that's pretty inefficient...)
 	 */
-	cost_qual_eval(&indexExprCost, indexInfo->indexprs, root);
+	cost_qual_eval(&indexExprCost, indexInfo->indexprs, rel->tuples, root);
 	comparisonCost = 2.0 * (indexExprCost.startup + indexExprCost.per_tuple);
 
 	/* Estimate the cost of seq scan + sort */

@@ -42,6 +42,7 @@
 #include "catalog/pg_type.h"
 #include "commands/async.h"
 #include "commands/prepare.h"
+#include "crypto/kmgr.h"
 #include "executor/spi.h"
 #include "jit/jit.h"
 #include "libpq/libpq.h"
@@ -3906,6 +3907,13 @@ PostgresMain(int argc, char *argv[],
 
 	/* Early initialization */
 	BaseInit();
+
+	/*
+	 * Initialize kmgr for cluster encryption. Since kmgr needs to attach to
+	 * shared memory the initialization must be called after BaseInit().
+	 */
+	if (!IsUnderPostmaster)
+		InitializeKmgr();
 
 	/*
 	 * Create a per-backend PGPROC struct in shared memory, except in the

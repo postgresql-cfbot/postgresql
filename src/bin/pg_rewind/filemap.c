@@ -74,6 +74,14 @@ static const char *excludeDirContents[] =
 	"pg_notify",
 
 	/*
+	 * Skip cryptographic keys. It's generally not good idea to copy the
+	 * cryptographic keys from source database because these might use
+	 * different cluster passphrase.
+	 */
+	"pg_cryptokeys",			/* defined as KMGR_DIR */
+	"pg_cryptokeys_tmp",		/* defined as KMGR_TMP_DIR */
+
+	/*
 	 * Old contents are loaded for possible debugging but are not required for
 	 * normal operation, see SerialInit().
 	 */

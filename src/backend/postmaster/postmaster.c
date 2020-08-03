@@ -100,6 +100,7 @@
 #include "common/file_perm.h"
 #include "common/ip.h"
 #include "common/string.h"
+#include "crypto/kmgr.h"
 #include "lib/ilist.h"
 #include "libpq/auth.h"
 #include "libpq/libpq.h"
@@ -1334,6 +1335,11 @@ PostmasterMain(int argc, char *argv[])
 	 * Initialize the autovacuum subsystem (again, no process start yet)
 	 */
 	autovac_init();
+
+	/*
+	 * Initialize key manager.
+	 */
+	InitializeKmgr();
 
 	/*
 	 * Load configuration files for client authentication.

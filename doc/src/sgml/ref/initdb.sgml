@@ -163,6 +163,25 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
+     <varlistentry id="app-initdb-cluster-passphrase-command" xreflabel="cluster passphrase command">
+      <term><option>--cluster-passphrase-command=<replaceable class="parameter">command</replaceable></option></term>
+      <listitem>
+       <para>
+        This option specifies an external command to be invoked when a passphrase
+        for key management system needs to be obtained.
+       </para>
+       <para>
+        The command must print the passphrase to the standard output and exit
+        with code 0.  In the parameter value, <literal>%p</literal> is
+        replaced by a prompt string.  (Write <literal>%%</literal> for a
+        literal <literal>%</literal>.)  Note that the prompt string will
+        probably contain whitespace, so be sure to quote adequately.  A single
+        newline is stripped from the end of the output if present.  The passphrase
+        must be at least 64 bytes.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry>
       <term><option>-D <replaceable class="parameter">directory</replaceable></option></term>
       <term><option>--pgdata=<replaceable class="parameter">directory</replaceable></option></term>

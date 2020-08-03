@@ -226,6 +226,9 @@ typedef struct ControlFileData
 	 */
 	char		mock_authentication_nonce[MOCK_AUTH_NONCE_LEN];
 
+	/* Key management cipher. Zero if no version */
+	uint32		key_management_version;
+
 	/* CRC of all above ... MUST BE LAST! */
 	pg_crc32c	crc;
 } ControlFileData;

@@ -2295,3 +2295,133 @@ create trigger aft_row after insert or update on trigger_parted
 create table trigger_parted_p1 partition of trigger_parted for values in (1)
   partition by list (a);
 create table trigger_parted_p1_1 partition of trigger_parted_p1 for values in (1);
+
+-- 
+-- Test case for CREATE OR REPLACE TRIGGER
+--
+create table my_table (id integer);
+create function before_replacement() returns trigger as $$
+begin
+raise notice 'function replaced by another function';
+return null;
+end; $$ language plpgsql;
+
+create function after_replacement() returns trigger as $$
+begin
+raise notice 'function to replace the initial function';
+return null;
+end; $$ language plpgsql;
+
+create or replace trigger my_trig before insert on my_table for each row execute procedure before_replacement();
+insert into my_table (id) values (1);
+
+create or replace trigger my_trig before insert on my_table for each row execute procedure after_replacement();
+insert into my_table (id) values (2);
+
+drop trigger my_trig on my_table;
+drop function before_replacement();
+drop function after_replacement();
+drop table my_table;
+
+-- setup for another test of CREATE OR REPLACE TRIGGER
+drop table if exists parted_trig;
+drop trigger if exists my_trig on parted_trig;
+drop function if exists before_replacement;
+drop function if exists after_replacement;
+
+create table parted_trig (a int) partition by range (a);
+create table parted_trig_1 partition of parted_trig for values from (0) to (1000) partition by range (a);
+create table parted_trig_1_1 partition of parted_trig_1 for values from (0) to (100);
+create table parted_trig_2 partition of parted_trig for values from (1000) to (2000);
+create table default_parted_trig partition of parted_trig default;
+
+create function before_replacement() returns trigger as $$
+begin
+raise notice 'before';
+return null;
+end; $$ language plpgsql;
+
+create function after_replacement() returns trigger as $$
+begin
+raise notice 'after';
+return null;
+end; $$ language plpgsql;
+
+-- trigger attached to the parent partition table is replaced by a new one to the parent partition table.
+-- vefify that all partitioned table share the latter trigger in this case.
+create or replace trigger my_trig after insert on parted_trig for each row execute procedure before_replacement();
+insert into parted_trig (a) values (1);
+insert into parted_trig_1 (a) values (1);
+insert into parted_trig_1_1 (a) values (10);
+insert into parted_trig_2 (a) values (1500);
+insert into parted_trig (a) values (2500);
+
+create or replace trigger my_trig after insert on parted_trig for each row execute procedure after_replacement();
+insert into parted_trig (a) values (1);
+insert into parted_trig_1 (a) values (1);
+insert into parted_trig_1_1 (a) values (10);
+insert into parted_trig_2 (a) values (1500);
+insert into parted_trig (a) values (2500);
+
+truncate parted_trig;
+drop trigger my_trig on parted_trig;
+
+-- trigger attached to the parent partition table is replaced by a new one to the child partition table.
+-- verify that only the child partition's trigger is replaced and other tables' triggers aren't.
+create or replace trigger my_trig after insert on parted_trig for each row execute procedure before_replacement();
+insert into parted_trig (a) values (1);
+insert into parted_trig_1 (a) values (1);
+insert into parted_trig_1_1 (a) values (10);
+insert into parted_trig_2 (a) values (1500);
+insert into parted_trig (a) values (2500);
+
+create or replace trigger my_trig after insert on parted_trig_1 for each row execute procedure after_replacement();
+insert into parted_trig (a) values (1);
+insert into parted_trig_1 (a) values (1);
+insert into parted_trig_1_1 (a) values (10);
+insert into parted_trig_2 (a) values (1500);
+insert into parted_trig (a) values (2500);
+
+truncate parted_trig;
+drop trigger my_trig on parted_trig;
+
+-- trigger attached to the child partition table is replaced by a new one to the parent partition table.
+-- verify that the child partition's trigger is replaced by the new one as well and other partition share the same one.
+create or replace trigger my_trig after insert on parted_trig_1 for each row execute procedure before_replacement();
+insert into parted_trig (a) values (1);
+insert into parted_trig_1 (a) values (1);
+insert into parted_trig_1_1 (a) values (10);
+insert into parted_trig_2 (a) values (1500);
+insert into parted_trig (a) values (2500);
+
+create or replace trigger my_trig after insert on parted_trig for each row execute procedure after_replacement();
+insert into parted_trig (a) values (1);
+insert into parted_trig_1 (a) values (1);
+insert into parted_trig_1_1 (a) values (10);
+insert into parted_trig_2 (a) values (1500);
+insert into parted_trig (a) values (2500);
+
+truncate parted_trig;
+drop trigger my_trig on parted_trig;
+
+-- trigger attached to the child partition table is replaced by a new one to the child partition table.
+-- verify that the trigger of the child parition is replaced and no other partition has the partition.
+create or replace trigger my_trig after insert on parted_trig_1 for each row execute procedure before_replacement();
+insert into parted_trig (a) values (1);
+insert into parted_trig_1 (a) values (1);
+insert into parted_trig_1_1 (a) values (10);
+insert into parted_trig_2 (a) values (1500);
+insert into parted_trig (a) values (2500);
+
+create or replace trigger my_trig after insert on parted_trig_1 for each row execute procedure after_replacement();
+insert into parted_trig (a) values (1);
+insert into parted_trig_1 (a) values (1);
+insert into parted_trig_1_1 (a) values (10);
+insert into parted_trig_2 (a) values (1500);
+insert into parted_trig (a) values (2500);
+
+truncate parted_trig;
+drop trigger my_trig on parted_trig_1;
+drop table parted_trig;
+drop function before_replacement;
+drop function after_replacement;

@@ -92,7 +92,7 @@ clauselist_selectivity(PlannerInfo *root,
 		 */
 		s1 *= statext_clauselist_selectivity(root, clauses, varRelid,
 											 jointype, sjinfo, rel,
-											 &estimatedclauses);
+											 &estimatedclauses, false);
 	}
 
 	/*
@@ -102,6 +102,62 @@ clauselist_selectivity(PlannerInfo *root,
 	return s1 * clauselist_selectivity_simple(root, clauses, varRelid,
 											  jointype, sjinfo,
 											  estimatedclauses);
+}
+
+/*
+ * clauselist_selectivity_or -
+ *	  Compute the selectivity of an implicitly-ORed list of boolean
+ *	  expression clauses.  The list can be empty, in which case 0.0
+ *	  must be returned.  List elements may be either RestrictInfos
+ *	  or bare expression clauses --- the former is preferred since
+ *	  it allows caching of results.
+ *
+ * See clause_selectivity() for the meaning of the additional parameters.
+ *
+ * The basic approach is to apply extended statistics first, on as many
+ * clauses as possible, in order to capture cross-column dependencies etc.
+ * The remaining clauses are then estimated using regular statistics tracked
+ * for individual columns.  This is done by simply passing the clauses to
+ * clauselist_selectivity and then combining the selectivities using the
+ * regular formula (s1+s2 - s1*s2).
+ */
+static Selectivity
+clauselist_selectivity_or(PlannerInfo *root,
+						  List *clauses,
+						  int varRelid,
+						  JoinType jointype,
+						  SpecialJoinInfo *sjinfo)
+{
+	Selectivity	s = 0.0;
+	RelOptInfo *rel;
+	Bitmapset  *estimatedclauses = NULL;
+
+	/*
+	 * Determine if these clauses reference a single relation.  If so, and if
+	 * it has extended statistics, try to apply those.
+	 */
+	rel = find_single_rel_for_clauses(root, clauses);
+	if (rel && rel->rtekind == RTE_RELATION && rel->statlist != NIL)
+	{
+		/*
+		 * Estimate as many clauses as possible using extended statistics.
+		 *
+		 * 'estimatedclauses' tracks the 0-based list position index of
+		 * clauses that we've estimated using extended statistics, and that
+		 * should be ignored.
+		 *
+		 * XXX We can't multiply with current value, because for OR clauses
+		 * we start with 0.0, so we simply assign to 's' directly.
+		 */
+		s = statext_clauselist_selectivity(root, clauses, varRelid,
+										   jointype, sjinfo, rel,
+										   &estimatedclauses, true);
+	}
+
+	/* Estimate the rest of the clauses as if they were independent. */
+	return clauselist_selectivity_simple_or(root, clauses, varRelid,
+											jointype, sjinfo,
+											estimatedclauses, s);
 }
 
 /*
@@ -349,6 +405,65 @@ clauselist_selectivity_simple(PlannerInfo *root,
 	}
 
 	return s1;
+}
+
+/*
+ * clauselist_selectivity_simple_or -
+ *	  Compute the selectivity of an implicitly-ORed list of boolean
+ *	  expression clauses.  The list can be empty, in which case the
+ *	  value passed in the last parameter must be returned.
+ *	  The estimatedclauses bitmap tracks clauses that have already
+ *	  been estimated by other means.
+ *
+ * See clause_selectivity() for the meaning of the additional parameters.
+ *
+ * Our basic approach is to combine selectivities of the subclauses
+ * using the formula (s1 + s2 - s1 * s2).  It's possible some of the
+ * clauses are already estimated by other means, in which case we treat
+ * them as a single logical clause, with the selecitivity passed in the
+ * last parameter.
+ */
+Selectivity
+clauselist_selectivity_simple_or(PlannerInfo *root,
+								 List *clauses,
+								 int varRelid,
+								 JoinType jointype,
+								 SpecialJoinInfo *sjinfo,
+								 Bitmapset *estimatedclauses,
+								 Selectivity s)
+{
+	ListCell   *lc;
+	int			listidx;
+
+	/*
+	 * Selectivities of the remaining clauses for an OR clause are computed
+	 * as s1+s2 - s1*s2 to account for the probable overlap of selected tuple
+	 * sets. The clauses estimated using extended statistics are effectively
+	 * treated as a single clause.
+	 *
+	 * XXX is this too conservative?
+	 */
+	listidx = -1;
+	foreach(lc, clauses)
+	{
+		Selectivity s2;
+
+		listidx++;
+
+		/* skip already estimated clauses */
+		if (bms_is_member(listidx, estimatedclauses))
+			continue;
+
+		s2 = clause_selectivity(root,
+								(Node *) lfirst(lc),
+								varRelid,
+								jointype,
+								sjinfo);
+
+		s = s + s2 - s * s2;
+	}
+
+	return s;
 }
 
 /*
@@ -735,24 +850,14 @@ clause_selectivity(PlannerInfo *root,
 	else if (is_orclause(clause))
 	{
 		/*
-		 * Selectivities for an OR clause are computed as s1+s2 - s1*s2 to
-		 * account for the probable overlap of selected tuple sets.
-		 *
-		 * XXX is this too conservative?
+		 * Almost the same thing as clauselist_selectivity, but with the
+		 * clauses connected by OR.
 		 */
-		ListCell   *arg;
-
-		s1 = 0.0;
-		foreach(arg, ((BoolExpr *) clause)->args)
-		{
-			Selectivity s2 = clause_selectivity(root,
-												(Node *) lfirst(arg),
-												varRelid,
-												jointype,
-												sjinfo);
-
-			s1 = s1 + s2 - s1 * s2;
-		}
+		s1 = clauselist_selectivity_or(root,
+									   ((BoolExpr *) clause)->args,
+									   varRelid,
+									   jointype,
+									   sjinfo);
 	}
 	else if (is_opclause(clause) || IsA(clause, DistinctExpr))
 	{

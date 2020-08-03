@@ -1282,16 +1282,17 @@ statext_is_compatible_clause(PlannerInfo *root, Node *clause, Index relid,
 static Selectivity
 statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varRelid,
 								   JoinType jointype, SpecialJoinInfo *sjinfo,
-								   RelOptInfo *rel, Bitmapset **estimatedclauses)
+								   RelOptInfo *rel, Bitmapset **estimatedclauses,
+								   bool is_or)
 {
 	ListCell   *l;
 	Bitmapset **list_attnums;
 	int			listidx;
-	Selectivity sel = 1.0;
+	Selectivity sel = (is_or) ? 0.0 : 1.0;
 
 	/* check if there's any stats that might be useful for us. */
 	if (!has_stats_of_kind(rel->statlist, STATS_EXT_MCV))
-		return 1.0;
+		return sel;
 
 	list_attnums = (Bitmapset **) palloc(sizeof(Bitmapset *) *
 										 list_length(clauses));
@@ -1377,8 +1378,12 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 		 * columns/clauses. We'll then use the various selectivities computed
 		 * from MCV list to improve it.
 		 */
-		simple_sel = clauselist_selectivity_simple(root, stat_clauses, varRelid,
-												   jointype, sjinfo, NULL);
+		if (is_or)
+			simple_sel = clauselist_selectivity_simple_or(root, stat_clauses, varRelid,
+														  jointype, sjinfo, NULL, 0.0);
+		else
+			simple_sel = clauselist_selectivity_simple(root, stat_clauses, varRelid,
+													   jointype, sjinfo, NULL);
 
 		/*
 		 * Now compute the multi-column estimate from the MCV list, along with
@@ -1386,7 +1391,7 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 		 */
 		mcv_sel = mcv_clauselist_selectivity(root, stat, stat_clauses, varRelid,
 											 jointype, sjinfo, rel,
-											 &mcv_basesel, &mcv_totalsel);
+											 &mcv_basesel, &mcv_totalsel, is_or);
 
 		/* Estimated selectivity of values not covered by MCV matches */
 		other_sel = simple_sel - mcv_basesel;
@@ -1403,8 +1408,11 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 		stat_sel = mcv_sel + other_sel;
 		CLAMP_PROBABILITY(stat_sel);
 
-		/* Factor the estimate from this MCV to the oveall estimate. */
-		sel *= stat_sel;
+		/* Factor the estimate from this MCV to the overall estimate. */
+		if (is_or)
+			sel = sel + stat_sel - sel * stat_sel;
+		else
+			sel *= stat_sel;
 	}
 
 	return sel;
@@ -1417,13 +1425,21 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 Selectivity
 statext_clauselist_selectivity(PlannerInfo *root, List *clauses, int varRelid,
 							   JoinType jointype, SpecialJoinInfo *sjinfo,
-							   RelOptInfo *rel, Bitmapset **estimatedclauses)
+							   RelOptInfo *rel, Bitmapset **estimatedclauses,
+							   bool is_or)
 {
 	Selectivity sel;
 
 	/* First, try estimating clauses using a multivariate MCV list. */
 	sel = statext_mcv_clauselist_selectivity(root, clauses, varRelid, jointype,
-											 sjinfo, rel, estimatedclauses);
+											 sjinfo, rel, estimatedclauses, is_or);
+
+	/*
+	 * Functional dependencies only work for clauses connected by AND, so for
+	 * OR clauses we're done.
+	 */
+	if (is_or)
+		return sel;
 
 	/*
 	 * Then, apply functional dependencies on the remaining clauses by calling

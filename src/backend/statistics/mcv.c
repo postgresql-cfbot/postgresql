@@ -1904,7 +1904,8 @@ mcv_clauselist_selectivity(PlannerInfo *root, StatisticExtInfo *stat,
 						   List *clauses, int varRelid,
 						   JoinType jointype, SpecialJoinInfo *sjinfo,
 						   RelOptInfo *rel,
-						   Selectivity *basesel, Selectivity *totalsel)
+						   Selectivity *basesel, Selectivity *totalsel,
+						   bool is_or)
 {
 	int			i;
 	MCVList    *mcv;
@@ -1917,7 +1918,7 @@ mcv_clauselist_selectivity(PlannerInfo *root, StatisticExtInfo *stat,
 	mcv = statext_mcv_load(stat->statOid);
 
 	/* build a match bitmap for the clauses */
-	matches = mcv_get_match_bitmap(root, clauses, stat->keys, mcv, false);
+	matches = mcv_get_match_bitmap(root, clauses, stat->keys, mcv, is_or);
 
 	/* sum frequencies for all the matching MCV items */
 	*basesel = 0.0;

@@ -2303,7 +2303,8 @@ _outRelOptInfo(StringInfo str, const RelOptInfo *node)
 	WRITE_OID_FIELD(userid);
 	WRITE_BOOL_FIELD(useridiscurrent);
 	/* we don't try to print fdwroutine or fdw_private */
-	/* can't print unique_for_rels/non_unique_for_rels; BMSes aren't Nodes */
+	WRITE_NODE_FIELD(unique_for_rels);
+	/* can't print non_unique_for_rels; BMSes aren't Nodes */
 	WRITE_NODE_FIELD(baserestrictinfo);
 	WRITE_UINT_FIELD(baserestrict_min_security);
 	WRITE_NODE_FIELD(joininfo);
@@ -2375,6 +2376,19 @@ _outStatisticExtInfo(StringInfo str, const StatisticExtInfo *node)
 	/* don't write rel, leads to infinite recursion in plan tree dump */
 	WRITE_CHAR_FIELD(kind);
 	WRITE_BITMAPSET_FIELD(keys);
+}
+
+static void
+_outUniqueRelInfo(StringInfo str, const UniqueRelInfo *node)
+{
+	WRITE_NODE_TYPE("UNIQUERELINFO");
+
+	WRITE_BITMAPSET_FIELD(outerrelids);
+	if (node->index)
+	{
+		WRITE_OID_FIELD(index->indexoid);
+		WRITE_NODE_FIELD(column_values);
+	}
 }
 
 static void
@@ -4165,6 +4179,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_StatisticExtInfo:
 				_outStatisticExtInfo(str, obj);
+				break;
+			case T_UniqueRelInfo:
+				_outUniqueRelInfo(str, obj);
 				break;
 			case T_ExtensibleNode:
 				_outExtensibleNode(str, obj);

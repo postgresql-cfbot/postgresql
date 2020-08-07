@@ -428,20 +428,7 @@ btree_xlog_split(bool newitemonleft, XLogReaderState *record)
 	}
 
 	/*
-	 * We no longer need the buffers.  They must be released together, so that
-	 * readers cannot observe two inconsistent halves.
-	 */
-	if (BufferIsValid(lbuf))
-		UnlockReleaseBuffer(lbuf);
-	UnlockReleaseBuffer(rbuf);
-
-	/*
 	 * Fix left-link of the page to the right of the new right sibling.
-	 *
-	 * Note: in normal operation, we do this while still holding lock on the
-	 * two split pages.  However, that's not necessary for correctness in WAL
-	 * replay, because no other index update can be in progress, and readers
-	 * will cope properly when following an obsolete left-link.
 	 */
 	if (rnext != P_NONE)
 	{
@@ -460,6 +447,15 @@ btree_xlog_split(bool newitemonleft, XLogReaderState *record)
 		if (BufferIsValid(buffer))
 			UnlockReleaseBuffer(buffer);
 	}
+
+	/*
+	 * We no longer need the buffers.  They must be released together, so that
+	 * readers cannot observe two inconsistent halves.
+	 */
+	if (BufferIsValid(lbuf))
+		UnlockReleaseBuffer(lbuf);
+	UnlockReleaseBuffer(rbuf);
+
 }
 
 static void

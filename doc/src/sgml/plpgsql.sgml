@@ -3471,7 +3471,7 @@ FOR <replaceable>recordvar</replaceable> IN <replaceable>bound_cursorvar</replac
 END LOOP <optional> <replaceable>label</replaceable> </optional>;
 </synopsis>
 
-     The cursor variable must have been bound to some query when it was
+     In this case the cursor variable must have been bound to some query when it was
      declared, and it <emphasis>cannot</emphasis> be open already.  The
      <command>FOR</command> statement automatically opens the cursor, and it closes
      the cursor again when the loop exits.  A list of actual argument value
@@ -3479,6 +3479,21 @@ END LOOP <optional> <replaceable>label</replaceable> </optional>;
      arguments.  These values will be substituted in the query, in just
      the same way as during an <command>OPEN</command> (see <xref
      linkend="plpgsql-open-bound-cursor"/>).
+   </para>
+
+    <para>
+     There is a variant for iteration over unbound cursors.
+
+<synopsis>
+<optional> &lt;&lt;<replaceable>label</replaceable>&gt;&gt; </optional>
+FOR <replaceable>recordvar</replaceable> IN <replaceable>unbound_cursorvar</replaceable> LOOP
+    <replaceable>statements</replaceable>
+END LOOP <optional> <replaceable>label</replaceable> </optional>;
+</synopsis>
+
+     In this case the cursor have to be assigned to opened cursor portal. The
+     <command>FOR</command> statement in this case doesn't open the cursor and
+     doesn't close the cursor when loop exists.
    </para>
 
    <para>

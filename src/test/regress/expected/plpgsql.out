@@ -3607,9 +3607,56 @@ begin
   end loop;
 end;
 $$ language plpgsql;
-ERROR:  cursor FOR loop must use a bound cursor variable
-LINE 5:   for r in c loop
-                   ^
+select forc_bad();
+ERROR:  cursor variable "c" is null
+CONTEXT:  PL/pgSQL function forc_bad() line 5 at FOR over cursor
+-- test FOR-over-refcursor
+create or replace function forc02()
+returns void as $$
+declare
+  c refcursor;
+  r record;
+begin
+  open c for select * from generate_series(1,20) g(v);
+  for r in c
+  loop
+    raise notice 'cycle body one %', r.v;
+    exit when r.v >= 10;
+  end loop;
+
+  for r in c
+  loop
+    raise notice 'cycle body two %', r.v;
+  end loop;
+end
+$$ language plpgsql;
+select forc02();
+NOTICE:  cycle body one 1
+NOTICE:  cycle body one 2
+NOTICE:  cycle body one 3
+NOTICE:  cycle body one 4
+NOTICE:  cycle body one 5
+NOTICE:  cycle body one 6
+NOTICE:  cycle body one 7
+NOTICE:  cycle body one 8
+NOTICE:  cycle body one 9
+NOTICE:  cycle body one 10
+NOTICE:  cycle body two 11
+NOTICE:  cycle body two 12
+NOTICE:  cycle body two 13
+NOTICE:  cycle body two 14
+NOTICE:  cycle body two 15
+NOTICE:  cycle body two 16
+NOTICE:  cycle body two 17
+NOTICE:  cycle body two 18
+NOTICE:  cycle body two 19
+NOTICE:  cycle body two 20
+ forc02 
+--------
+ 
+(1 row)
+
+drop function forc02();
 -- test RETURN QUERY EXECUTE
 create or replace function return_dquery()
 returns setof int as $$

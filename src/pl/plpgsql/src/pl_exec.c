@@ -2845,6 +2845,45 @@ exec_stmt_forc(PLpgSQL_execstate *estate, PLpgSQL_stmt_forc *stmt)
 	Portal		portal;
 	int			rc;
 
+	curvar = (PLpgSQL_var *) (estate->datums[stmt->curvar]);
+
+	/* ----------
+	 * REFTYPE cursor support - in this case cursor should be opened,
+	 * so it should be not null with active portal - same prereq like
+	 * FETCH stmt.
+	 * ----------
+	 */
+	if (curvar->cursor_explicit_expr == NULL)
+	{
+		MemoryContext oldcontext;
+
+		if (curvar->isnull)
+			ereport(ERROR,
+					(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
+					 errmsg("cursor variable \"%s\" is null", curvar->refname)));
+
+		/* Use eval_mcontext for short-lived string */
+		oldcontext = MemoryContextSwitchTo(get_eval_mcontext(estate));
+		curname = TextDatumGetCString(curvar->value);
+		MemoryContextSwitchTo(oldcontext);
+
+		portal = SPI_cursor_find(curname);
+		if (portal == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_CURSOR),
+					 errmsg("cursor \"%s\" does not exist", curname)));
+
+		rc = exec_for_query(estate, (PLpgSQL_stmt_forq *) stmt, portal, false);
+
+		/*
+		 * Don't close portal here - who did portal, then he should
+		 * to close portal.
+		 */
+
+		return rc;
+	}
+
+
 	/* ----------
 	 * Get the cursor variable and if it has an assigned name, check
 	 * that it's not in use currently.

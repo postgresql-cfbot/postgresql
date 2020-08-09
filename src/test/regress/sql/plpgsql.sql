@@ -2990,6 +2990,33 @@ begin
 end;
 $$ language plpgsql;
 
+select forc_bad();
+
+-- test FOR-over-refcursor
+create or replace function forc02()
+returns void as $$
+declare
+  c refcursor;
+  r record;
+begin
+  open c for select * from generate_series(1,20) g(v);
+  for r in c
+  loop
+    raise notice 'cycle body one %', r.v;
+    exit when r.v >= 10;
+  end loop;
+
+  for r in c
+  loop
+    raise notice 'cycle body two %', r.v;
+  end loop;
+end
+$$ language plpgsql;
+
+select forc02();
+
+drop function forc02();
+
 -- test RETURN QUERY EXECUTE
 
 create or replace function return_dquery()

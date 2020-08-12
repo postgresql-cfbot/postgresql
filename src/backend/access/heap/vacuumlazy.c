@@ -305,8 +305,11 @@ typedef struct LVRelStats
 	double		new_rel_tuples; /* new estimated total # of tuples */
 	double		new_live_tuples;	/* new estimated total # of live tuples */
 	double		new_dead_tuples;	/* new estimated total # of dead tuples */
-	BlockNumber pages_removed;
+	BlockNumber pages_removed;	/* Due to truncation */
+	BlockNumber pages_allvisible;
+	BlockNumber pages_frozen;
 	double		tuples_deleted;
+	double		hintbit_tuples;
 	BlockNumber nonempty_pages; /* actually, last nonempty page + 1 */
 	LVDeadTuples *dead_tuples;
 	int			num_index_scans;
@@ -661,17 +664,20 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 							 vacrelstats->relnamespace,
 							 vacrelstats->relname,
 							 vacrelstats->num_index_scans);
-			appendStringInfo(&buf, _("pages: %u removed, %u remain, %u skipped due to pins, %u skipped frozen\n"),
+			appendStringInfo(&buf, _("pages: %u removed, %u remain, %u skipped due to pins, %u skipped frozen, %u marked all visible, %u marked frozen\n"),
 							 vacrelstats->pages_removed,
 							 vacrelstats->rel_pages,
 							 vacrelstats->pinskipped_pages,
-							 vacrelstats->frozenskipped_pages);
+							 vacrelstats->frozenskipped_pages,
+							 vacrelstats->pages_allvisible,
+							 vacrelstats->pages_frozen);
 			appendStringInfo(&buf,
-							 _("tuples: %.0f removed, %.0f remain, %.0f are dead but not yet removable, oldest xmin: %u\n"),
+							 _("tuples: %.0f removed, %.0f remain, %.0f are dead but not yet removable, oldest xmin: %u, wrote %.0f hint bits\n"),
 							 vacrelstats->tuples_deleted,
 							 vacrelstats->new_rel_tuples,
 							 vacrelstats->new_dead_tuples,
-							 OldestXmin);
+							 OldestXmin,
+							 vacrelstats->hintbit_tuples);
 			appendStringInfo(&buf,
 							 _("buffer usage: %lld hits, %lld misses, %lld dirtied\n"),
 							 (long long) VacuumPageHit,
@@ -814,6 +820,9 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 	vacrelstats->scanned_pages = 0;
 	vacrelstats->tupcount_pages = 0;
 	vacrelstats->nonempty_pages = 0;
+	vacrelstats->pages_allvisible = 0;
+	vacrelstats->pages_frozen = 0;
+
 	vacrelstats->latestRemovedXid = InvalidTransactionId;
 
 	/*
@@ -1226,6 +1235,8 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 				visibilitymap_set(onerel, blkno, buf, InvalidXLogRecPtr,
 								  vmbuffer, InvalidTransactionId,
 								  VISIBILITYMAP_ALL_VISIBLE | VISIBILITYMAP_ALL_FROZEN);
+				vacrelstats->pages_allvisible++;
+				vacrelstats->pages_frozen++;
 				END_CRIT_SECTION();
 			}
 
@@ -1233,14 +1244,6 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			RecordPageWithFreeSpace(onerel, blkno, freespace);
 			continue;
 		}
-
-		/*
-		 * Prune all HOT-update chains in this page.
-		 *
-		 * We count tuples removed by the pruning step as removed by VACUUM.
-		 */
-		tups_vacuumed += heap_page_prune(onerel, buf, OldestXmin, false,
-										 &vacrelstats->latestRemovedXid);
 
 		/*
 		 * Now scan the page to collect vacuumable items and check for tuples
@@ -1262,6 +1265,8 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			 offnum = OffsetNumberNext(offnum))
 		{
 			ItemId		itemid;
+			HTSV_Result satisfies;
+			int			oldmask;
 
 			itemid = PageGetItemId(page, offnum);
 
@@ -1313,7 +1318,12 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			 * cases impossible (e.g. in-progress insert from the same
 			 * transaction).
 			 */
-			switch (HeapTupleSatisfiesVacuum(&tuple, OldestXmin, buf))
+			oldmask = tuple.t_data->t_infomask;
+			satisfies = HeapTupleSatisfiesVacuum(&tuple, OldestXmin, buf);
+#define HINT_FLAGS (HEAP_XMIN_COMMITTED|HEAP_XMIN_INVALID|HEAP_XMAX_COMMITTED|HEAP_XMAX_INVALID)
+			if ((oldmask&HINT_FLAGS) != (tuple.t_data->t_infomask&HINT_FLAGS))
+				vacrelstats->hintbit_tuples++;
+			switch (satisfies)
 			{
 				case HEAPTUPLE_DEAD:
 
@@ -1452,7 +1462,9 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 				 * Each non-removable tuple must be checked to see if it needs
 				 * freezing.  Note we already have exclusive buffer lock.
 				 */
-				if (heap_prepare_freeze_tuple(tuple.t_data,
+				// Avoid freezing HEAPTUPLE_DEAD, as required
+				if (satisfies!=HEAPTUPLE_DEAD &&
+						heap_prepare_freeze_tuple(tuple.t_data,
 											  relfrozenxid, relminmxid,
 											  FreezeLimit, MultiXactCutoff,
 											  &frozen[nfrozen],
@@ -1463,6 +1475,14 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 					all_frozen = false;
 			}
 		}						/* scan along page */
+
+		/*
+		 * Prune all HOT-update chains in this page.
+		 *
+		 * We count tuples removed by the pruning step as removed by VACUUM.
+		 */
+		tups_vacuumed += heap_page_prune(onerel, buf, OldestXmin, false,
+										 &vacrelstats->latestRemovedXid);
 
 		/*
 		 * If we froze any tuples, mark the buffer dirty, and write a WAL
@@ -1557,8 +1577,12 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 		{
 			uint8		flags = VISIBILITYMAP_ALL_VISIBLE;
 
-			if (all_frozen)
+			if (all_frozen) {
 				flags |= VISIBILITYMAP_ALL_FROZEN;
+				vacrelstats->pages_frozen++;
+			}
+
+			vacrelstats->pages_allvisible++;
 
 			/*
 			 * It should never be the case that the visibility map page is set
@@ -1746,6 +1770,18 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 									"%u pages are entirely empty.\n",
 									empty_pages),
 					 empty_pages);
+	appendStringInfo(&buf, ngettext("Marked %u page all visible, ",
+									"Marked %u pages all visible, ",
+									vacrelstats->pages_allvisible),
+					vacrelstats->pages_allvisible);
+	appendStringInfo(&buf, ngettext("%u page frozen.\n",
+									"%u pages frozen.\n",
+									vacrelstats->pages_frozen),
+					vacrelstats->pages_frozen);
+	appendStringInfo(&buf, ngettext("Wrote %.0f hint bit.\n",
+									"Wrote %.0f hint bits.\n",
+									vacrelstats->hintbit_tuples),
+									vacrelstats->hintbit_tuples);
 	appendStringInfo(&buf, _("%s."), pg_rusage_show(&ru0));
 
 	ereport(elevel,
@@ -1982,10 +2018,14 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 		uint8		flags = 0;
 
 		/* Set the VM all-frozen bit to flag, if needed */
-		if ((vm_status & VISIBILITYMAP_ALL_VISIBLE) == 0)
+		if ((vm_status & VISIBILITYMAP_ALL_VISIBLE) == 0) {
 			flags |= VISIBILITYMAP_ALL_VISIBLE;
-		if ((vm_status & VISIBILITYMAP_ALL_FROZEN) == 0 && all_frozen)
+			vacrelstats->pages_allvisible++;
+		}
+		if ((vm_status & VISIBILITYMAP_ALL_FROZEN) == 0 && all_frozen) {
 			flags |= VISIBILITYMAP_ALL_FROZEN;
+			vacrelstats->pages_frozen++;
+		}
 
 		Assert(BufferIsValid(*vmbuffer));
 		if (flags != 0)

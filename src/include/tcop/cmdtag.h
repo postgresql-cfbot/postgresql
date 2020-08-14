@@ -14,7 +14,7 @@
 #define CMDTAG_H
 
 
-#define PG_CMDTAG(tag, name, evtrgok, rwrok, rowcnt) \
+#define PG_CMDTAG(tag, name, evtrgok, rwrok, rowcnt, localstats) \
 	tag,
 
 typedef enum CommandTag
@@ -22,6 +22,10 @@ typedef enum CommandTag
 #include "tcop/cmdtaglist.h"
 	COMMAND_TAG_NEXTTAG
 } CommandTag;
+
+#define FIRST_CMDTAG ((CommandTag)0)
+#define LAST_CMDTAG ((CommandTag)(COMMAND_TAG_NEXTTAG - 1))
+#define NUM_CMDTAGS ((int)COMMAND_TAG_NEXTTAG)
 
 #undef PG_CMDTAG
 

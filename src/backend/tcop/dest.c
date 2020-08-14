@@ -39,6 +39,7 @@
 #include "executor/tstoreReceiver.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
+#include "postmaster/cmdstats.h"
 #include "utils/portal.h"
 
 
@@ -168,6 +169,9 @@ EndCommand(const QueryCompletion *qc, CommandDest dest, bool force_undecorated_o
 	char		completionTag[COMPLETION_TAG_BUFSIZE];
 	CommandTag	tag;
 	const char *tagname;
+
+	if (cmdstats_tracking)
+		cmdstats_increment(qc->commandTag);
 
 	switch (dest)
 	{

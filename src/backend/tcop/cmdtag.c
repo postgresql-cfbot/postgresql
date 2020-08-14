@@ -23,10 +23,11 @@ typedef struct CommandTagBehavior
 	const bool	event_trigger_ok;
 	const bool	table_rewrite_ok;
 	const bool	display_rowcount;
+	const int	local_stats_idx;
 } CommandTagBehavior;
 
-#define PG_CMDTAG(tag, name, evtrgok, rwrok, rowcnt) \
-	{ name, evtrgok, rwrok, rowcnt },
+#define PG_CMDTAG(tag, name, evtrgok, rwrok, rowcnt, localstats) \
+	{ name, evtrgok, rwrok, rowcnt, localstats },
 
 const CommandTagBehavior tag_behavior[COMMAND_TAG_NEXTTAG] = {
 #include "tcop/cmdtaglist.h"

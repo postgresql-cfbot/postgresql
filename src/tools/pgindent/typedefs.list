@@ -349,6 +349,7 @@ Clump
 ClusterInfo
 ClusterStmt
 CmdType
+CmdStatsShmemStruct
 CoalesceExpr
 CoerceParamHook
 CoerceToDomain

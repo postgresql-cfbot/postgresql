@@ -290,6 +290,13 @@ CREATE VIEW pg_stats_ext WITH (security_barrier) AS
                 WHERE NOT has_column_privilege(c.oid, a.attnum, 'select') )
     AND (c.relrowsecurity = false OR NOT row_security_active(c.oid));
 
+CREATE VIEW pg_command_stats AS
+	SELECT s.tag, s.cnt
+		FROM pg_command_stats_data() AS s(tag, cnt);
+
+REVOKE EXECUTE ON FUNCTION pg_command_stats_data() FROM PUBLIC;
+REVOKE ALL ON pg_command_stats FROM PUBLIC;
+
 -- unprivileged users may read pg_statistic_ext but not pg_statistic_ext_data
 REVOKE ALL on pg_statistic_ext_data FROM public;
 

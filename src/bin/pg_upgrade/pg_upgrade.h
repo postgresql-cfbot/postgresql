@@ -11,6 +11,7 @@
 #include <sys/time.h>
 
 #include "libpq-fe.h"
+#include "common/kmgr_utils.h"
 
 /* Use port in the private/dynamic port number range */
 #define DEF_PGUPORT			50432
@@ -219,6 +220,7 @@ typedef struct
 	bool		date_is_int;
 	bool		float8_pass_by_value;
 	bool		data_checksum_version;
+	bool		key_management_enabled;
 } ControlData;
 
 /*
@@ -375,6 +377,8 @@ void		rewriteVisibilityMap(const char *fromfile, const char *tofile,
 								 const char *schemaName, const char *relName);
 void		check_file_clone(void);
 void		check_hard_link(void);
+void		copy_master_encryption_key(ClusterInfo *old_cluster,
+									   ClusterInfo * new_cluster);
 
 /* fopen_priv() is no longer different from fopen() */
 #define fopen_priv(path, mode)	fopen(path, mode)

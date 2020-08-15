@@ -26740,4 +26740,103 @@ SELECT m.* FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid),
 
   </sect1>
 
+  <sect1 id="functions-encryption">
+   <title>Encryption Functions</title>
+
+   <sect2 id="functions-data-encryption">
+    <title>Data Encryption Function</title>
+    <para>
+     The functions shown in
+     <xref linkend="functions-encryption-table"/> are for encrypting
+     and decrypting data with the <literal>SQL key</literal> described in
+     <xref linkend="encryption-key-management"/>.
+    </para>
+
+    <table id="functions-encryption-table">
+     <title>Encryption <acronym>SQL</acronym> Functions</title>
+     <tgroup cols="3">
+      <thead>
+       <row>
+        <entry>Function</entry>
+        <entry>Return Type</entry>
+        <entry>Description</entry>
+       </row>
+      </thead>
+      <tbody>
+
+       <row>
+        <entry>
+         <indexterm>
+          <primary>pg_encrypt</primary>
+         </indexterm>
+         <literal><function>pg_encrypt(<parameter>data</parameter> <type>text</type>)</function></literal>
+        </entry>
+        <entry>
+         <type>bytea</type>
+        </entry>
+        <entry>
+         Encrypt the given data with the internal SQL key
+        </entry>
+       </row>
+
+       <row>
+        <entry>
+         <indexterm>
+          <primary>pg_unwrap</primary>
+         </indexterm>
+         <literal><function>pg_decrypt(<parameter>data</parameter> <type>bytea</type>)</function></literal>
+        </entry>
+        <entry>
+         <type>text</type>
+        </entry>
+        <entry>
+         Decrypt the given data with the internal SQL key
+        </entry>
+       </row>
+      </tbody>
+     </tgroup>
+    </table>
+   </sect2>
+
+   <sect2 id="functions-key-management">
+    <title>Key Management Functions</title>
+    <para>
+     The function shown in
+     <xref linkend="functions-key-management-table"/> are for encryption
+     key management described in <xref linkend="encryption-key-management"/>.
+    </para>
+
+    <table id="functions-key-management-table">
+     <title>Encryption Key Management <acronym>SQL</acronym> Functions</title>
+     <tgroup cols="3">
+      <thead>
+       <row>
+        <entry>Function</entry>
+        <entry>Return Type</entry>
+        <entry>Description</entry>
+       </row>
+      </thead>
+      <tbody>
+       <row>
+        <entry>
+         <indexterm>
+          <primary>pg_rotate_cluster_passphrase</primary>
+         </indexterm>
+         <literal><function>pg_rotate_cluster_passphrase()</function></literal>
+        </entry>
+        <entry>
+         <type>boolean</type>
+        </entry>
+        <entry>
+         Rotate the cluster passphrase. See
+         <xref linkend="key-management-rotation"/> for details.
+        </entry>
+       </row>
+
+      </tbody>
+     </tgroup>
+    </table>
+   </sect2>
+  </sect1>
+
 </chapter>

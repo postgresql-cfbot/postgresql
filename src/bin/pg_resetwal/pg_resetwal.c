@@ -804,6 +804,8 @@ PrintControlValues(bool guessed)
 		   (ControlFile.float8ByVal ? _("by value") : _("by reference")));
 	printf(_("Data page checksum version:           %u\n"),
 		   ControlFile.data_checksum_version);
+	printf(_("Key management version:               %u\n"),
+		   ControlFile.key_management_version);
 }
 
 

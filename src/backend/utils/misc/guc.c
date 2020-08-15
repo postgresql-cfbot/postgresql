@@ -47,6 +47,7 @@
 #include "commands/vacuum.h"
 #include "commands/variable.h"
 #include "common/string.h"
+#include "crypto/kmgr.h"
 #include "funcapi.h"
 #include "jit/jit.h"
 #include "libpq/auth.h"
@@ -745,6 +746,8 @@ const char *const config_group_names[] =
 	gettext_noop("Statistics / Monitoring"),
 	/* STATS_COLLECTOR */
 	gettext_noop("Statistics / Query and Index Statistics Collector"),
+	/* ENCRYPTION */
+	gettext_noop("Encryption"),
 	/* AUTOVACUUM */
 	gettext_noop("Autovacuum"),
 	/* CLIENT_CONN */
@@ -2032,6 +2035,17 @@ static struct config_bool ConfigureNamesBool[] =
 			gettext_noop("Sets whether a WAL receiver should create a temporary replication slot if no permanent slot is configured."),
 		},
 		&wal_receiver_create_temp_slot,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"key_management", PGC_INTERNAL, PRESET_OPTIONS,
+		 gettext_noop("Show whether key management is enabled for this cluster."),
+		 NULL,
+		 GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&key_management_enabled,
 		false,
 		NULL, NULL, NULL
 	},
@@ -4389,6 +4403,16 @@ static struct config_string ConfigureNamesString[] =
 			GUC_SUPERUSER_ONLY
 		},
 		&ssl_passphrase_command,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"cluster_passphrase_command", PGC_SIGHUP, ENCRYPTION,
+			gettext_noop("Command to obtain passphrase for database encryption."),
+			NULL
+		},
+		&cluster_passphrase_command,
 		"",
 		NULL, NULL, NULL
 	},

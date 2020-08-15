@@ -821,6 +821,13 @@ psql --username=postgres --file=script.sql postgres
    is down.
   </para>
 
+  <para>
+   During the upgrade <command>pg_upgrade</command> copies the all internal keys
+   to the new cluster. If you want to upgrade from the old cluster that enables
+   the key management to the new cluster that also enables, you must use the same
+   <varname>cluster_passphrase_command</varname> to both clusters. Otherwise
+   <command>pg_upgrade</command> fails due to mismatching the cluster passphrase.
+  </para>
  </refsect1>
 
  <refsect1>

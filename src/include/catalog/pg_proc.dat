@@ -10954,4 +10954,10 @@
   proname => 'is_normalized', prorettype => 'bool', proargtypes => 'text text',
   prosrc => 'unicode_is_normalized' },
 
+# function for key managements
+{ oid => '8200', descr => 'rotate cluter passphrase',
+  proname => 'pg_rotate_cluster_passphrase',
+  provolatile => 'v', prorettype => 'bool',
+  proargtypes => '', prosrc => 'pg_rotate_cluster_passphrase' },
+
 ]

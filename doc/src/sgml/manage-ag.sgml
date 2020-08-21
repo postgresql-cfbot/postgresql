@@ -33,21 +33,41 @@
   </para>
 
   <para>
-   When connecting to the database server, a client must specify in
-   its connection request the name of the database it wants to connect
-   to. It is not possible to access more than one database per
-   connection. However, an application is not restricted in the number of
-   connections it opens to the same or other databases.  Databases are
-   physically separated and access control is managed at the
-   connection level.  If one <productname>PostgreSQL</productname> server
-   instance is to house projects or users that should be separate and
-   for the most part unaware of each other, it is therefore
-   recommended to put them into separate databases.  If the projects
-   or users are interrelated and should be able to use each other's
-   resources, they should be put in the same database but possibly
-   into separate schemas.  Schemas are a purely logical structure and who can
-   access what is managed by the privilege system.  More information about
-   managing schemas is in <xref linkend="ddl-schemas"/>.
+   When connecting to the database server, a client must specify the
+   name of the database in its connection request.
+   It is not possible to access more than one database per
+   connection. However, an application may open multiple connections to
+   the same database.
+   Database-level security has two components: access control
+   (see <xref linkend="auth-pg-hba-conf"/>), managed at the
+   connection level, and authorization control
+   (see <xref linkend="ddl-priv"/>), managed via the grant system.
+   The Foreign Data Wrapper (FDW) feature (see <xref linkend="postgres-fdw"/>)
+   allows for objects within one database to act as proxies for objects in a
+   different database (not restricted to the same cluster).
+   The older dblink module (see <xref linkend="dblink"/>) provides a similar capability.
+   By default, all users can connect to all databases over all allowed connections.
+  </para>
+
+  <para>
+   If one <productname>PostgreSQL</productname> server cluster is to house
+   unrelated projects or users that are, for the most part, unaware
+   of each other, it is recommended to put them into separate databases and
+   adjust authorizations and access controls accordingly.
+   If the projects or users are interrelated, and thus should be able to use
+   each other's resources, they should be put in the same database but probably
+   into separate schemas; which provide modular structure with namespace
+   isolation and authorization control.
+   More information about managing schemas is in <xref linkend="ddl-schemas"/>.
+  </para>
+
+  <para>
+   While multiple databases can be created within a single cluster, it is advised
+   to consider carefully whether the benefits outweigh the risks and limitations.
+   In particular, the impact that having a shared WAL (see <xref linkend="wal"/>)
+   has on your backup and recovery options. Individual databases in the cluster
+   are isolated when considered from a user perspective but are closely bound
+   from the point-of-view of the database administrator.
   </para>
 
   <para>

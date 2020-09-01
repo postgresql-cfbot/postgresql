@@ -39,6 +39,8 @@ typedef struct vacuumingOptions
 									 * parallel degree, otherwise -1 */
 	bool		do_index_cleanup;
 	bool		do_truncate;
+	bool		do_main_rel_cleanup;
+	bool		do_toast_table_cleanup;
 } vacuumingOptions;
 
 
@@ -100,6 +102,8 @@ main(int argc, char *argv[])
 		{"min-mxid-age", required_argument, NULL, 7},
 		{"no-index-cleanup", no_argument, NULL, 8},
 		{"no-truncate", no_argument, NULL, 9},
+		{"no-main-relation-cleanup", no_argument, NULL, 10},
+		{"no-toast-table-cleanup", no_argument, NULL, 11},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -126,6 +130,8 @@ main(int argc, char *argv[])
 	vacopts.parallel_workers = -1;
 	vacopts.do_index_cleanup = true;
 	vacopts.do_truncate = true;
+	vacopts.do_main_rel_cleanup = true;
+	vacopts.do_toast_table_cleanup = true;
 
 	pg_logging_init(argv[0]);
 	progname = get_progname(argv[0]);
@@ -235,6 +241,12 @@ main(int argc, char *argv[])
 			case 9:
 				vacopts.do_truncate = false;
 				break;
+			case 10:
+				vacopts.do_main_rel_cleanup = false;
+				break;
+			case 11:
+				vacopts.do_toast_table_cleanup = false;
+				break;
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit(1);
@@ -289,6 +301,18 @@ main(int argc, char *argv[])
 		{
 			pg_log_error("cannot use the \"%s\" option when performing only analyze",
 						 "no-truncate");
+			exit(1);
+		}
+		if (!vacopts.do_main_rel_cleanup)
+		{
+			pg_log_error("cannot use the \"%s\" option when performing only analyze",
+						 "no-main-relation-cleanup");
+			exit(1);
+		}
+		if (!vacopts.do_toast_table_cleanup)
+		{
+			pg_log_error("cannot use the \"%s\" option when performing only analyze",
+						 "no-toast-table-cleanup");
 			exit(1);
 		}
 		/* allow 'and_analyze' with 'analyze_only' */
@@ -449,6 +473,22 @@ vacuum_one_database(const char *dbname, vacuumingOptions *vacopts,
 		PQfinish(conn);
 		pg_log_error("cannot use the \"%s\" option on server versions older than PostgreSQL %s",
 					 "no-truncate", "12");
+		exit(1);
+	}
+
+	if (!vacopts->do_main_rel_cleanup && PQserverVersion(conn) < 140000)
+	{
+		PQfinish(conn);
+		pg_log_error("cannot use the \"%s\" option on server versions older than PostgreSQL %s",
+					 "no-main-relation-cleanup", "14");
+		exit(1);
+	}
+
+	if (!vacopts->do_toast_table_cleanup && PQserverVersion(conn) < 140000)
+	{
+		PQfinish(conn);
+		pg_log_error("cannot use the \"%s\" option on server versions older than PostgreSQL %s",
+					 "no-toast-table-cleanup", "14");
 		exit(1);
 	}
 
@@ -886,6 +926,20 @@ prepare_vacuum_command(PQExpBuffer sql, int serverVersion,
 				appendPQExpBuffer(sql, "%sTRUNCATE FALSE", sep);
 				sep = comma;
 			}
+			if (!vacopts->do_main_rel_cleanup)
+			{
+				/* MAIN_RELATION_CLEANUP is supported since v14 */
+				Assert(serverVersion >= 140000);
+				appendPQExpBuffer(sql, "%sMAIN_RELATION_CLEANUP FALSE", sep);
+				sep = comma;
+			}
+			if (!vacopts->do_toast_table_cleanup)
+			{
+				/* TOAST_TABLE_CLEANUP is supported since v14 */
+				Assert(serverVersion >= 140000);
+				appendPQExpBuffer(sql, "%sTOAST_TABLE_CLEANUP FALSE", sep);
+				sep = comma;
+			}
 			if (vacopts->skip_locked)
 			{
 				/* SKIP_LOCKED is supported since v12 */
@@ -985,6 +1039,8 @@ help(const char *progname)
 	printf(_("      --min-mxid-age=MXID_AGE     minimum multixact ID age of tables to vacuum\n"));
 	printf(_("      --min-xid-age=XID_AGE       minimum transaction ID age of tables to vacuum\n"));
 	printf(_("      --no-index-cleanup          don't remove index entries that point to dead tuples\n"));
+	printf(_("      --no-main-relation-cleanup  don't clean up the main relation\n"));
+	printf(_("      --no-toast-table-cleanup    don't clean up the TOAST table\n"));
 	printf(_("      --no-truncate               don't truncate empty pages at the end of the table\n"));
 	printf(_("  -P, --parallel=PARALLEL_DEGREE  use this many background workers for vacuum, if available\n"));
 	printf(_("  -q, --quiet                     don't write any messages\n"));

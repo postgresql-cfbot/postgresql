@@ -3,7 +3,7 @@ use warnings;
 
 use PostgresNode;
 use TestLib;
-use Test::More tests => 55;
+use Test::More tests => 61;
 
 program_help_ok('vacuumdb');
 program_version_ok('vacuumdb');
@@ -62,6 +62,20 @@ $node->issues_sql_like(
 $node->command_fails(
     [ 'vacuumdb', '--analyze-only', '--no-truncate', 'postgres' ],
     '--analyze-only and --no-truncate specified together');
+$node->issues_sql_like(
+    [ 'vacuumdb', '--no-main-relation-cleanup', 'postgres' ],
+    qr/statement: VACUUM \(MAIN_RELATION_CLEANUP FALSE\).*;/,
+    'vacuumdb --no-main-relation-cleanup');
+$node->command_fails(
+    [ 'vacuumdb', '--analyze-only', '--no-main-relation-cleanup', 'postgres' ],
+    '--analyze-only and --no-main-relation-cleanup specified together');
+$node->issues_sql_like(
+    [ 'vacuumdb', '--no-toast-table-cleanup', 'postgres' ],
+    qr/statement: VACUUM \(TOAST_TABLE_CLEANUP FALSE\).*;/,
+    'vacuumdb --no-toast-table-cleanup');
+$node->command_fails(
+    [ 'vacuumdb', '--analyze-only', '--no-toast-table-cleanup', 'postgres' ],
+    '--analyze-only and --no-toast-table-cleanup specified together');
 $node->issues_sql_like(
 	[ 'vacuumdb', '-P', 2, 'postgres' ],
 	qr/statement: VACUUM \(PARALLEL 2\).*;/,

@@ -1458,6 +1458,9 @@ apply_dispatch(StringInfo s)
 		case 'O':
 			apply_handle_origin(s);
 			break;
+			/* MESSAGE */
+		case 'M':
+			break;
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),

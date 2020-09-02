@@ -45,6 +45,10 @@ static void pgoutput_change(LogicalDecodingContext *ctx,
 static void pgoutput_truncate(LogicalDecodingContext *ctx,
 							  ReorderBufferTXN *txn, int nrelations, Relation relations[],
 							  ReorderBufferChange *change);
+static void pgoutput_message(LogicalDecodingContext *ctx,
+							 ReorderBufferTXN *txn, XLogRecPtr message_lsn,
+							 bool transactional, const char *prefix,
+							 Size sz, const char *message);
 static bool pgoutput_origin_filter(LogicalDecodingContext *ctx,
 								   RepOriginId origin_id);
 
@@ -112,6 +116,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->begin_cb = pgoutput_begin_txn;
 	cb->change_cb = pgoutput_change;
 	cb->truncate_cb = pgoutput_truncate;
+	cb->message_cb = pgoutput_message;
 	cb->commit_cb = pgoutput_commit_txn;
 	cb->filter_by_origin_cb = pgoutput_origin_filter;
 	cb->shutdown_cb = pgoutput_shutdown;
@@ -119,14 +124,16 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 
 static void
 parse_output_parameters(List *options, uint32 *protocol_version,
-						List **publication_names, bool *binary)
+						List **publication_names, bool *binary, bool *messages)
 {
 	ListCell   *lc;
 	bool		protocol_version_given = false;
 	bool		publication_names_given = false;
 	bool		binary_option_given = false;
+	bool		messages_option_given = false;
 
 	*binary = false;
+	*messages = false;
 
 	foreach(lc, options)
 	{
@@ -182,6 +189,16 @@ parse_output_parameters(List *options, uint32 *protocol_version,
 
 			*binary = defGetBoolean(defel);
 		}
+		else if (strcmp(defel->defname, "messages") == 0)
+		{
+			if (messages_option_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			messages_option_given = true;
+
+			*messages = defGetBoolean(defel);
+		}
 		else
 			elog(ERROR, "unrecognized pgoutput option: %s", defel->defname);
 	}
@@ -217,7 +234,8 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 		parse_output_parameters(ctx->output_plugin_options,
 								&data->protocol_version,
 								&data->publication_names,
-								&data->binary);
+								&data->binary,
+								&data->messages);
 
 		/* Check if we support requested protocol */
 		if (data->protocol_version > LOGICALREP_PROTO_VERSION_NUM)
@@ -542,6 +560,26 @@ pgoutput_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 	MemoryContextSwitchTo(old);
 	MemoryContextReset(data->context);
+}
+
+static void
+pgoutput_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+				 XLogRecPtr message_lsn, bool transactional, const char *prefix, Size sz,
+				 const char *message)
+{
+	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
+	if (!data->messages)
+		return;
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_message(ctx->out,
+							 txn,
+							 message_lsn,
+							 transactional,
+							 prefix,
+							 sz,
+							 message);
+	OutputPluginWrite(ctx, true);
 }
 
 /*

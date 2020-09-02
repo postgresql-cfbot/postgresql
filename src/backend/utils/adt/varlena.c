@@ -26,6 +26,7 @@
 #include "lib/hyperloglog.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
+#include "nodes/execnodes.h"
 #include "parser/scansup.h"
 #include "port/pg_bswap.h"
 #include "regex/regex.h"
@@ -35,6 +36,7 @@
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/sortsupport.h"
+#include "utils/tuplestore.h"
 #include "utils/varlena.h"
 
 
@@ -93,6 +95,16 @@ typedef struct
 } VarStringSortSupport;
 
 /*
+ * Holds target metadata used for split string to array or to table.
+ */
+typedef struct
+{
+	ArrayBuildState	*astate;
+	Tuplestorestate *tupstore;
+	TupleDesc	tupdesc;
+} SplitStringTargetData;
+
+/*
  * This should be large enough that most strings will fit, but small enough
  * that we feel comfortable putting it on the stack
  */
@@ -139,7 +151,7 @@ static bytea *bytea_substring(Datum str,
 							  bool length_not_specified);
 static bytea *bytea_overlay(bytea *t1, bytea *t2, int sp, int sl);
 static void appendStringInfoText(StringInfo str, const text *t);
-static Datum text_to_array_internal(PG_FUNCTION_ARGS);
+static bool text_to_array_internal(FunctionCallInfo fcinfo, SplitStringTargetData *tstate);
 static text *array_to_text_internal(FunctionCallInfo fcinfo, ArrayType *v,
 									const char *fldsep, const char *null_string);
 static StringInfo makeStringAggState(FunctionCallInfo fcinfo);
@@ -4679,7 +4691,19 @@ text_isequal(text *txt1, text *txt2, Oid collid)
 Datum
 text_to_array(PG_FUNCTION_ARGS)
 {
-	return text_to_array_internal(fcinfo);
+	SplitStringTargetData tstate;
+
+	/* reset tstate */
+	memset(&tstate, 0, sizeof(tstate));
+
+	if (!text_to_array_internal(fcinfo, &tstate))
+		PG_RETURN_NULL();
+
+	if (tstate.astate == NULL)
+		PG_RETURN_ARRAYTYPE_P(construct_empty_array(TEXTOID));
+
+	PG_RETURN_ARRAYTYPE_P(makeArrayResult(tstate.astate,
+										  CurrentMemoryContext));
 }
 
 /*
@@ -4693,16 +4717,103 @@ text_to_array(PG_FUNCTION_ARGS)
 Datum
 text_to_array_null(PG_FUNCTION_ARGS)
 {
-	return text_to_array_internal(fcinfo);
+	return text_to_array(fcinfo);
 }
 
 /*
- * common code for text_to_array and text_to_array_null functions
+ * text_to_table
+ * Parse input string and returns substrings as a table.
+ */
+Datum
+text_to_table(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo	   *rsi = (ReturnSetInfo *) fcinfo->resultinfo;
+	SplitStringTargetData tstate;
+	MemoryContext		old_cxt;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsi == NULL || !IsA(rsi, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+
+	if (!(rsi->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not "
+						"allowed in this context")));
+
+	old_cxt = MemoryContextSwitchTo(rsi->econtext->ecxt_per_query_memory);
+
+	tstate.astate = NULL;
+	tstate.tupdesc = CreateTupleDescCopy(rsi->expectedDesc);
+	tstate.tupstore = tuplestore_begin_heap(rsi->allowedModes & SFRM_Materialize_Random,
+											false, work_mem);
+
+	MemoryContextSwitchTo(old_cxt);
+
+	(void) text_to_array_internal(fcinfo, &tstate);
+
+	tuplestore_donestoring(tstate.tupstore);
+
+	rsi->returnMode = SFRM_Materialize;
+	rsi->setResult = tstate.tupstore;
+	rsi->setDesc = tstate.tupdesc;
+
+	return (Datum) 0;
+}
+
+Datum
+text_to_table_null(PG_FUNCTION_ARGS)
+{
+	return text_to_table(fcinfo);
+}
+
+/*
+ * Add text to result set (table or array). When a result set is expected,
+ * then we fill a tuplestore, else we prepare an array.
+ */
+static void
+accum_result(SplitStringTargetData *tstate,
+			 text *result_text,
+			 bool is_null)
+{
+	if (tstate->tupdesc)
+	{
+		Datum		values[1];
+		bool		nulls[1];
+
+		/* ensure tupdesc has only one field */
+		Assert(tstate->tupdesc->natts == 1);
+
+		values[0] = PointerGetDatum(result_text);
+		nulls[0] = is_null;
+
+		tuplestore_putvalues(tstate->tupstore,
+							 tstate->tupdesc,
+							 values,
+							 nulls);
+	}
+	else
+	{
+		tstate->astate = accumArrayResult(tstate->astate,
+										 PointerGetDatum(result_text),
+										 is_null,
+										 TEXTOID,
+										 CurrentMemoryContext);
+	}
+}
+
+/*
+ * common code for text_to_array, text_to_array_null, text_to_table and
+ * text_to_table_nulls functions
  *
  * These are not strict so we have to test for null inputs explicitly.
+ * Returns false, when result is null, else returns true.
+ *
  */
-static Datum
-text_to_array_internal(PG_FUNCTION_ARGS)
+static bool
+text_to_array_internal(FunctionCallInfo fcinfo, SplitStringTargetData *tstate)
 {
 	text	   *inputstring;
 	text	   *fldsep;
@@ -4712,11 +4823,10 @@ text_to_array_internal(PG_FUNCTION_ARGS)
 	char	   *start_ptr;
 	text	   *result_text;
 	bool		is_null;
-	ArrayBuildState *astate = NULL;
 
 	/* when input string is NULL, then result is NULL too */
 	if (PG_ARGISNULL(0))
-		PG_RETURN_NULL();
+		return false;
 
 	inputstring = PG_GETARG_TEXT_PP(0);
 
@@ -4745,7 +4855,7 @@ text_to_array_internal(PG_FUNCTION_ARGS)
 
 		/* return empty array for empty input string */
 		if (inputstring_len < 1)
-			PG_RETURN_ARRAYTYPE_P(construct_empty_array(TEXTOID));
+			return true;
 
 		/*
 		 * empty field separator: return the input string as a one-element
@@ -4753,22 +4863,11 @@ text_to_array_internal(PG_FUNCTION_ARGS)
 		 */
 		if (fldsep_len < 1)
 		{
-			Datum		elems[1];
-			bool		nulls[1];
-			int			dims[1];
-			int			lbs[1];
-
 			/* single element can be a NULL too */
 			is_null = null_string ? text_isequal(inputstring, null_string, PG_GET_COLLATION()) : false;
 
-			elems[0] = PointerGetDatum(inputstring);
-			nulls[0] = is_null;
-			dims[0] = 1;
-			lbs[0] = 1;
-			/* XXX: this hardcodes assumptions about the text type */
-			PG_RETURN_ARRAYTYPE_P(construct_md_array(elems, nulls,
-													 1, dims, lbs,
-													 TEXTOID, -1, false, TYPALIGN_INT));
+			accum_result(tstate, inputstring, is_null);
+			return true;
 		}
 
 		text_position_setup(inputstring, fldsep, PG_GET_COLLATION(), &state);
@@ -4802,12 +4901,7 @@ text_to_array_internal(PG_FUNCTION_ARGS)
 			is_null = null_string ? text_isequal(result_text, null_string, PG_GET_COLLATION()) : false;
 
 			/* stash away this field */
-			astate = accumArrayResult(astate,
-									  PointerGetDatum(result_text),
-									  is_null,
-									  TEXTOID,
-									  CurrentMemoryContext);
-
+			accum_result(tstate, result_text, is_null);
 			pfree(result_text);
 
 			if (!found)
@@ -4844,12 +4938,7 @@ text_to_array_internal(PG_FUNCTION_ARGS)
 			is_null = null_string ? text_isequal(result_text, null_string, PG_GET_COLLATION()) : false;
 
 			/* stash away this field */
-			astate = accumArrayResult(astate,
-									  PointerGetDatum(result_text),
-									  is_null,
-									  TEXTOID,
-									  CurrentMemoryContext);
-
+			accum_result(tstate, result_text, is_null);
 			pfree(result_text);
 
 			start_ptr += chunk_len;
@@ -4857,8 +4946,7 @@ text_to_array_internal(PG_FUNCTION_ARGS)
 		}
 	}
 
-	PG_RETURN_ARRAYTYPE_P(makeArrayResult(astate,
-										  CurrentMemoryContext));
+	return true;
 }
 
 /*

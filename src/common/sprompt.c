@@ -8,11 +8,14 @@
  *
  *
  * IDENTIFICATION
- *	  src/port/sprompt.c
+ *	  src/common/sprompt.c
  *
  *-------------------------------------------------------------------------
  */
 #include "c.h"
+
+#include "common/string.h"
+#include "lib/stringinfo.h"
 
 #ifdef HAVE_TERMIOS_H
 #include <termios.h>
@@ -26,20 +29,17 @@
  * passwords interactively.  Reads from /dev/tty or stdin/stderr.
  *
  * prompt:		The prompt to print, or NULL if none (automatically localized)
- * destination: buffer in which to store result
- * destlen:		allocated length of destination
  * echo:		Set to false if you want to hide what is entered (for passwords)
  *
- * The input (without trailing newline) is returned in the destination buffer,
- * with a '\0' appended.
+ * The input (without trailing newline) is returned as a malloc'd string.
+ * Caller is responsible for freeing it when done.
  */
-void
-simple_prompt(const char *prompt, char *destination, size_t destlen, bool echo)
+char *
+simple_prompt(const char *prompt, bool echo)
 {
-	int			length;
 	FILE	   *termin,
 			   *termout;
-
+	StringInfoData buf;
 #if defined(HAVE_TERMIOS_H)
 	struct termios t_orig,
 				t;
@@ -126,29 +126,25 @@ simple_prompt(const char *prompt, char *destination, size_t destlen, bool echo)
 		fflush(termout);
 	}
 
-	if (fgets(destination, destlen, termin) == NULL)
-		destination[0] = '\0';
+	initStringInfo(&buf);
 
-	length = strlen(destination);
-	if (length > 0 && destination[length - 1] != '\n')
+	while (!feof(termin) && !ferror(termin))
 	{
-		/* eat rest of the line */
-		char		buf[128];
-		int			buflen;
+		/* Make sure there's a reasonable amount of room in the buffer */
+		enlargeStringInfo(&buf, 128);
 
-		do
-		{
-			if (fgets(buf, sizeof(buf), termin) == NULL)
-				break;
-			buflen = strlen(buf);
-		} while (buflen > 0 && buf[buflen - 1] != '\n');
+		/* Read some data, appending it to what we already have */
+		if (fgets(buf.data + buf.len, buf.maxlen - buf.len, termin) == NULL)
+			break;
+		buf.len += strlen(buf.data + buf.len);
+
+		/* Done if we have a whole line, else loop to read more */
+		if (buf.len > 0 && buf.data[buf.len - 1] == '\n')
+			break;
 	}
 
 	/* strip trailing newline, including \r in case we're on Windows */
-	while (length > 0 &&
-		   (destination[length - 1] == '\n' ||
-			destination[length - 1] == '\r'))
-		destination[--length] = '\0';
+	(void) pg_strip_crlf(buf.data);
 
 	if (!echo)
 	{
@@ -169,4 +165,6 @@ simple_prompt(const char *prompt, char *destination, size_t destlen, bool echo)
 		fclose(termin);
 		fclose(termout);
 	}
+
+	return buf.data;
 }

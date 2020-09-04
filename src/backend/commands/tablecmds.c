@@ -3032,6 +3032,41 @@ SetRelationHasSubclass(Oid relationId, bool relhassubclass)
 }
 
 /*
+ * SetRelationReplIdent
+ *		Set the value of the relation's relreplident field in pg_class.
+ *
+ * NOTE: caller must be holding an appropriate lock on the relation.
+ * ShareUpdateExclusiveLock is sufficient.
+ */
+void
+SetRelationReplIdent(Oid relationId, char ri_type)
+{
+	Relation	relationRelation;
+	HeapTuple	tuple;
+	Form_pg_class classtuple;
+
+	/*
+	 * Fetch a modifiable copy of the tuple, modify it, update pg_class.
+	 */
+	relationRelation = table_open(RelationRelationId, RowExclusiveLock);
+	tuple = SearchSysCacheCopy1(RELOID,
+								ObjectIdGetDatum(relationId));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation \"%s\"",
+			 get_rel_name(relationId));
+	classtuple = (Form_pg_class) GETSTRUCT(tuple);
+
+	if (classtuple->relreplident != ri_type)
+	{
+		classtuple->relreplident = ri_type;
+		CatalogTupleUpdate(relationRelation, &tuple->t_self, tuple);
+	}
+
+	heap_freetuple(tuple);
+	table_close(relationRelation, RowExclusiveLock);
+}
+
+/*
  *		renameatt_check			- basic sanity checks before attribute rename
  */
 static void
@@ -14498,31 +14533,12 @@ relation_mark_replica_identity(Relation rel, char ri_type, Oid indexOid,
 							   bool is_internal)
 {
 	Relation	pg_index;
-	Relation	pg_class;
-	HeapTuple	pg_class_tuple;
 	HeapTuple	pg_index_tuple;
-	Form_pg_class pg_class_form;
 	Form_pg_index pg_index_form;
-
 	ListCell   *index;
 
-	/*
-	 * Check whether relreplident has changed, and update it if so.
-	 */
-	pg_class = table_open(RelationRelationId, RowExclusiveLock);
-	pg_class_tuple = SearchSysCacheCopy1(RELOID,
-										 ObjectIdGetDatum(RelationGetRelid(rel)));
-	if (!HeapTupleIsValid(pg_class_tuple))
-		elog(ERROR, "cache lookup failed for relation \"%s\"",
-			 RelationGetRelationName(rel));
-	pg_class_form = (Form_pg_class) GETSTRUCT(pg_class_tuple);
-	if (pg_class_form->relreplident != ri_type)
-	{
-		pg_class_form->relreplident = ri_type;
-		CatalogTupleUpdate(pg_class, &pg_class_tuple->t_self, pg_class_tuple);
-	}
-	table_close(pg_class, RowExclusiveLock);
-	heap_freetuple(pg_class_tuple);
+	/* update relreplident if necessary */
+	SetRelationReplIdent(RelationGetRelid(rel), ri_type);
 
 	/*
 	 * Check whether the correct index is marked indisreplident; if so, we're

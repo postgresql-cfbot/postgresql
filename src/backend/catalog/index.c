@@ -2005,6 +2005,7 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	Relation	indexRelation;
 	HeapTuple	tuple;
 	bool		hasexprs;
+	bool		resetreplident;
 	LockRelId	heaprelid,
 				indexrelid;
 	LOCKTAG		heaplocktag;
@@ -2047,6 +2048,15 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	 * above locking won't prevent, so test explicitly.
 	 */
 	CheckTableNotInUse(userIndexRelation, "DROP INDEX");
+
+	/*
+	 * Check if the REPLICA IDENTITY of the parent relation needs to be
+	 * reset.  This should be done only if the index to drop here is
+	 * marked as used in a replica identity.  We cannot rely on the
+	 * contents of pg_index for the index as a concurrent drop would have
+	 * reset indisreplident already, so save the existing value first.
+	 */
+	resetreplident = userIndexRelation->rd_index->indisreplident;
 
 	/*
 	 * Drop Index Concurrently is more or less the reverse process of Create
@@ -2132,7 +2142,29 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 		 */
 		LockRelationIdForSession(&heaprelid, ShareUpdateExclusiveLock);
 		LockRelationIdForSession(&indexrelid, ShareUpdateExclusiveLock);
+	}
 
+	/*
+	 * If the index to be dropped was marked as indisreplident (note that it
+	 * would have been reset when clearing indisvalid previously), reset
+	 * pg_class.relreplident for the parent table.  Note that this part
+	 * needs to be done in the same transaction as the one marking the
+	 * index as invalid, so as we never finish with the case where the
+	 * parent relation uses REPLICA_IDENTITY_INDEX, without any index marked
+	 * with indisreplident.
+	 */
+	if (resetreplident)
+	{
+		SetRelationReplIdent(heapId, REPLICA_IDENTITY_NOTHING);
+
+		/* make the update visible, only for the non-concurrent case */
+		if (!concurrent)
+			CommandCounterIncrement();
+	}
+
+	/* continue the concurrent process */
+	if (concurrent)
+	{
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 		StartTransactionCommand();
@@ -2161,8 +2193,9 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 		index_concurrently_set_dead(heapId, indexId);
 
 		/*
-		 * Again, commit the transaction to make the pg_index update visible
-		 * to other sessions.
+		 * Again, commit the transaction to make the pg_index and pg_class
+		 * (in the case where indisreplident is set) updates are visible to
+		 * other sessions.
 		 */
 		CommitTransactionCommand();
 		StartTransactionCommand();

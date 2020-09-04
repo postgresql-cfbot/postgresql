@@ -98,3 +98,25 @@ DROP TABLE test_replica_identity;
 DROP TABLE test_replica_identity2;
 DROP TABLE test_replica_identity3;
 DROP TABLE test_replica_identity_othertable;
+
+--
+-- Test that DROP INDEX on a index used for REPLICA IDENTITY sets
+-- relreplident back to NOTHING.
+--
+
+CREATE TABLE test_replica_identity_4 (id int NOT NULL);
+CREATE UNIQUE INDEX test_replica_index_4 ON test_replica_identity_4(id);
+ALTER TABLE test_replica_identity_4 REPLICA IDENTITY
+  USING INDEX test_replica_index_4;
+DROP INDEX CONCURRENTLY test_replica_index_4;
+SELECT relreplident FROM pg_class WHERE oid = 'test_replica_identity_4'::regclass;
+DROP TABLE test_replica_identity_4;
+-- Partitioned table
+CREATE TABLE test_replica_part (id int NOT NULL)
+  PARTITION BY RANGE (id);
+CREATE UNIQUE INDEX test_replica_part_index ON test_replica_part(id);
+ALTER TABLE test_replica_part REPLICA IDENTITY
+  USING INDEX test_replica_part_index;
+DROP INDEX test_replica_part_index;
+SELECT relreplident FROM pg_class WHERE oid = 'test_replica_part'::regclass;
+DROP TABLE test_replica_part;

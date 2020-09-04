@@ -175,11 +175,7 @@ typedef FormData_pg_class *Form_pg_class;
 #define		  REPLICA_IDENTITY_NOTHING	'n'
 /* all columns are logged as replica identity */
 #define		  REPLICA_IDENTITY_FULL		'f'
-/*
- * an explicitly chosen candidate key's columns are used as replica identity.
- * Note this will still be set if the index has been dropped; in that case it
- * has the same meaning as 'd'.
- */
+/* an explicitly-chosen candidate key's columns are used as replica identity */
 #define		  REPLICA_IDENTITY_INDEX	'i'
 
 /*

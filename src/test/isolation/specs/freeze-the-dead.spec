@@ -32,6 +32,7 @@ session "s2"
 step "s2_begin"		{ BEGIN; }
 step "s2_key_share"	{ SELECT id FROM tab_freeze WHERE id = 3 FOR KEY SHARE; }
 step "s2_commit"	{ COMMIT; }
+step "s2_wait"		{ select pg_sleep(60); }
 step "s2_vacuum"	{ VACUUM FREEZE tab_freeze; }
 
 session "s3"
@@ -49,6 +50,7 @@ permutation "s1_begin" "s2_begin" "s3_begin" # start transactions
    "s1_update" "s2_key_share" "s3_key_share" # have xmax be a multi with an updater, updater being oldest xid
    "s1_update" # create additional row version that has multis
    "s1_commit" "s2_commit" # commit both updater and share locker
+   "s2_wait"
    "s2_vacuum" # due to bug in freezing logic, we used to *not* prune updated row, and then froze it
    "s1_selectone" # if hot chain is broken, the row can't be found via index scan
    "s3_commit" # commit remaining open xact

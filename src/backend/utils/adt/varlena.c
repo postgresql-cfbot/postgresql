@@ -1654,34 +1654,43 @@ varstr_cmp(const char *arg1, int len1, const char *arg2, int len2, Oid collid)
 			if (mylocale->provider == COLLPROVIDER_ICU)
 			{
 #ifdef USE_ICU
-#ifdef HAVE_UCOL_STRCOLLUTF8
 				if (GetDatabaseEncoding() == PG_UTF8)
 				{
 					UErrorCode	status;
+					UCharIterator	iter1,
+									iter2;
 
 					status = U_ZERO_ERROR;
-					result = ucol_strcollUTF8(mylocale->info.icu.ucol,
-											  arg1, len1,
-											  arg2, len2,
-											  &status);
+
+					uiter_setUTF8(&iter1, arg1, len1);
+					uiter_setUTF8(&iter2, arg2, len2);
+
+					result = ucol_strcollIter(mylocale->info.icu.ucol,
+											  &iter1, &iter2, &status);
 					if (U_FAILURE(status))
 						ereport(ERROR,
 								(errmsg("collation failed: %s", u_errorName(status))));
 				}
 				else
-#endif
 				{
+					UErrorCode	status;
+					UCharIterator	iter1,
+									iter2;
 					int32_t		ulen1,
 								ulen2;
 					UChar	   *uchar1,
 							   *uchar2;
 
+					status = U_ZERO_ERROR;
+
 					ulen1 = icu_to_uchar(&uchar1, arg1, len1);
 					ulen2 = icu_to_uchar(&uchar2, arg2, len2);
 
-					result = ucol_strcoll(mylocale->info.icu.ucol,
-										  uchar1, ulen1,
-										  uchar2, ulen2);
+					uiter_setString(&iter1, uchar1, ulen1);
+					uiter_setString(&iter2, uchar2, ulen2);
+
+					result = ucol_strcollIter(mylocale->info.icu.ucol,
+											  &iter1, &iter2, &status);
 
 					pfree(uchar1);
 					pfree(uchar2);
@@ -2368,34 +2377,43 @@ varstrfastcmp_locale(char *a1p, int len1, char *a2p, int len2, SortSupport ssup)
 		if (sss->locale->provider == COLLPROVIDER_ICU)
 		{
 #ifdef USE_ICU
-#ifdef HAVE_UCOL_STRCOLLUTF8
 			if (GetDatabaseEncoding() == PG_UTF8)
 			{
 				UErrorCode	status;
+				UCharIterator	iter1,
+								iter2;
 
 				status = U_ZERO_ERROR;
-				result = ucol_strcollUTF8(sss->locale->info.icu.ucol,
-										  a1p, len1,
-										  a2p, len2,
-										  &status);
+
+				uiter_setUTF8(&iter1, a1p, len1);
+				uiter_setUTF8(&iter2, a2p, len2);
+
+				result = ucol_strcollIter(sss->locale->info.icu.ucol,
+										  &iter1, &iter2, &status);
 				if (U_FAILURE(status))
 					ereport(ERROR,
 							(errmsg("collation failed: %s", u_errorName(status))));
 			}
 			else
-#endif
 			{
+				UErrorCode	status;
+				UCharIterator	iter1,
+								iter2;
 				int32_t		ulen1,
 							ulen2;
 				UChar	   *uchar1,
 						   *uchar2;
 
+				status = U_ZERO_ERROR;
+
 				ulen1 = icu_to_uchar(&uchar1, a1p, len1);
 				ulen2 = icu_to_uchar(&uchar2, a2p, len2);
 
-				result = ucol_strcoll(sss->locale->info.icu.ucol,
-									  uchar1, ulen1,
-									  uchar2, ulen2);
+				uiter_setString(&iter1, uchar1, ulen1);
+				uiter_setString(&iter2, uchar2, ulen2);
+
+				result = ucol_strcollIter(sss->locale->info.icu.ucol,
+										  &iter1, &iter2, &status);
 
 				pfree(uchar1);
 				pfree(uchar2);

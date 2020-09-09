@@ -722,6 +722,14 @@ INSERT INTO test33 VALUES (2, 'DEF');
 SELECT (SELECT count(*) FROM test33_0) <> (SELECT count(*) FROM test33_1);
 
 
+CREATE COLLATION digitslast (provider = icu, locale = '@colReorder=latn-digit');
+CREATE TABLE test34 (b CHAR(4) NOT NULL COLLATE digitslast);
+INSERT INTO test34 VALUES ('0000'), ('0001'), ('ABCD');
+CREATE INDEX ON test34(b);
+SET enable_seqscan TO off;
+SELECT * FROM test34 WHERE b = '0000' ;
+RESET enable_seqscan;
+
 -- cleanup
 RESET search_path;
 SET client_min_messages TO warning;

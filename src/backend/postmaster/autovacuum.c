@@ -431,7 +431,7 @@ StartAutoVacLauncher(void)
 NON_EXEC_STATIC void
 AutoVacLauncherMain(int argc, char *argv[])
 {
-	sigjmp_buf	local_sigjmp_buf;
+	PG_sigjmp_buf	local_sigjmp_buf;
 
 	am_autovacuum_launcher = true;
 
@@ -496,7 +496,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 	 *
 	 * This code is a stripped down version of PostgresMain error recovery.
 	 */
-	if (sigsetjmp(local_sigjmp_buf, 1) != 0)
+	if (sigsetjmp(local_sigjmp_buf.buf, 1) != 0)
 	{
 		/* since not using PG_TRY, must reset error stack by hand */
 		error_context_stack = NULL;
@@ -1502,7 +1502,7 @@ StartAutoVacWorker(void)
 NON_EXEC_STATIC void
 AutoVacWorkerMain(int argc, char *argv[])
 {
-	sigjmp_buf	local_sigjmp_buf;
+	PG_sigjmp_buf	local_sigjmp_buf;
 	Oid			dbid;
 
 	am_autovacuum_worker = true;
@@ -1552,7 +1552,7 @@ AutoVacWorkerMain(int argc, char *argv[])
 	 *
 	 * See notes in postgres.c about the design of this coding.
 	 */
-	if (sigsetjmp(local_sigjmp_buf, 1) != 0)
+	if (sigsetjmp(local_sigjmp_buf.buf, 1) != 0)
 	{
 		/* since not using PG_TRY, must reset error stack by hand */
 		error_context_stack = NULL;

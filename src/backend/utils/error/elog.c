@@ -91,7 +91,10 @@
 /* Global variables */
 ErrorContextCallback *error_context_stack = NULL;
 
-sigjmp_buf *PG_exception_stack = NULL;
+PG_sigjmp_buf *PG_exception_stack = NULL;
+
+/* HACK for scan-build testing */
+const PG_try_guard_entry * pg_try_guard = NULL;
 
 extern bool redirection_done;
 
@@ -580,6 +583,10 @@ errfinish(const char *filename, int lineno, const char *funcname)
 
 	if (elevel >= PANIC)
 	{
+		/* trick clang into thinking we actually use pg_try_guard, hopefully... */
+		if (pg_try_guard)
+			abort();
+
 		/*
 		 * Serious crash time. Postmaster will observe SIGABRT process exit
 		 * status and kill the other backends too.
@@ -589,6 +596,7 @@ errfinish(const char *filename, int lineno, const char *funcname)
 		 */
 		fflush(stdout);
 		fflush(stderr);
+
 		abort();
 	}
 
@@ -1714,7 +1722,7 @@ pg_re_throw(void)
 {
 	/* If possible, throw the error to the next outer setjmp handler */
 	if (PG_exception_stack != NULL)
-		siglongjmp(*PG_exception_stack, 1);
+		siglongjmp(PG_exception_stack->buf, 1);
 	else
 	{
 		/*

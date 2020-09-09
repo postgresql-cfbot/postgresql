@@ -3441,6 +3441,9 @@ fetch_more_data(ForeignScanState *node)
 
 		/* Must be EOF if we didn't get as many tuples as we asked for. */
 		fsstate->eof_reached = (numrows < fsstate->fetch_size);
+
+		/* Escape PG_TRY() */
+		return;
 	}
 	PG_FINALLY();
 	{
@@ -3844,6 +3847,9 @@ store_returning_result(PgFdwModifyState *fmstate,
 	{
 		HeapTuple	newtup;
 
+		int foo = 0;
+		fprintf(stdout, "%d", 10/foo);
+
 		newtup = make_tuple_from_result_row(res, 0,
 											fmstate->rel,
 											fmstate->attinmeta,
@@ -3856,11 +3862,23 @@ store_returning_result(PgFdwModifyState *fmstate,
 		 * heaptuples directly, so allow for conversion.
 		 */
 		ExecForceStoreHeapTuple(newtup, slot, true);
+
+		/* Escape PG_TRY() */
+		return;
+
 	}
 	PG_CATCH();
 	{
+		int bar = 0;
+		fprintf(stdout, "%d", 10/bar);
+
 		if (res)
 			PQclear(res);
+
+
+		/* Escape PG_CATCH() */
+		return;
+
 		PG_RE_THROW();
 	}
 	PG_END_TRY();

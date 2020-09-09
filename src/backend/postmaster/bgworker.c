@@ -679,7 +679,7 @@ bgworker_sigusr1_handler(SIGNAL_ARGS)
 void
 StartBackgroundWorker(void)
 {
-	sigjmp_buf	local_sigjmp_buf;
+	PG_sigjmp_buf	local_sigjmp_buf;
 	BackgroundWorker *worker = MyBgworkerEntry;
 	bgworker_main_type entrypt;
 
@@ -745,7 +745,7 @@ StartBackgroundWorker(void)
 	 *
 	 * We just need to clean up, report the error, and go away.
 	 */
-	if (sigsetjmp(local_sigjmp_buf, 1) != 0)
+	if (sigsetjmp(local_sigjmp_buf.buf, 1) != 0)
 	{
 		/* Since not using PG_TRY, must reset error stack by hand */
 		error_context_stack = NULL;

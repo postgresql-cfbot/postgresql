@@ -182,7 +182,7 @@ static void ReqCheckpointHandler(SIGNAL_ARGS);
 void
 CheckpointerMain(void)
 {
-	sigjmp_buf	local_sigjmp_buf;
+	PG_sigjmp_buf	local_sigjmp_buf;
 	MemoryContext checkpointer_context;
 
 	CheckpointerShmem->checkpointer_pid = MyProcPid;
@@ -233,7 +233,7 @@ CheckpointerMain(void)
 	 *
 	 * See notes in postgres.c about the design of this coding.
 	 */
-	if (sigsetjmp(local_sigjmp_buf, 1) != 0)
+	if (sigsetjmp(local_sigjmp_buf.buf, 1) != 0)
 	{
 		/* Since not using PG_TRY, must reset error stack by hand */
 		error_context_stack = NULL;

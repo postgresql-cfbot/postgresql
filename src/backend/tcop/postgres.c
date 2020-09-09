@@ -3780,7 +3780,7 @@ PostgresMain(int argc, char *argv[],
 {
 	int			firstchar;
 	StringInfoData input_message;
-	sigjmp_buf	local_sigjmp_buf;
+	PG_sigjmp_buf	local_sigjmp_buf;
 	volatile bool send_ready_for_query = true;
 	bool		disable_idle_in_transaction_timeout = false;
 
@@ -4039,7 +4039,7 @@ PostgresMain(int argc, char *argv[],
 	 * were inside a transaction.
 	 */
 
-	if (sigsetjmp(local_sigjmp_buf, 1) != 0)
+	if (sigsetjmp(local_sigjmp_buf.buf, 1) != 0)
 	{
 		/*
 		 * NOTE: if you are tempted to add more code in this if-block,

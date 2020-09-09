@@ -292,13 +292,29 @@ extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
  * warnings are just about entirely useless for catching such oversights.
  *----------
  */
+
+/* HACK for PoC with scan-build NOT FOR COMMIT */
+typedef struct PG_sigjmp_buf
+{
+	sigjmp_buf buf;
+} PG_sigjmp_buf;
+
+/* HACK to show that scan-build does detect escapes from PG_CATCH() */
+typedef struct PG_try_guard_entry
+{
+	const struct PG_try_guard_entry * const previous;
+} PG_try_guard_entry;
+extern const PG_try_guard_entry * pg_try_guard;
+
 #define PG_TRY()  \
 	do { \
-		sigjmp_buf *_save_exception_stack = PG_exception_stack; \
+		PG_sigjmp_buf *_save_exception_stack = PG_exception_stack; \
 		ErrorContextCallback *_save_context_stack = error_context_stack; \
-		sigjmp_buf _local_sigjmp_buf; \
+		PG_sigjmp_buf _local_sigjmp_buf; \
 		bool _do_rethrow = false; \
-		if (sigsetjmp(_local_sigjmp_buf, 0) == 0) \
+		const PG_try_guard_entry _this_pg_try_guard = { pg_try_guard }; \
+		pg_try_guard = &_this_pg_try_guard; \
+		if (sigsetjmp(_local_sigjmp_buf.buf, 0) == 0) \
 		{ \
 			PG_exception_stack = &_local_sigjmp_buf
 
@@ -319,6 +335,7 @@ extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
 
 #define PG_END_TRY()  \
 		} \
+		pg_try_guard = _this_pg_try_guard.previous; \
 		if (_do_rethrow) \
 				PG_RE_THROW(); \
 		PG_exception_stack = _save_exception_stack; \
@@ -337,7 +354,7 @@ extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
 	(pg_re_throw(), pg_unreachable())
 #endif
 
-extern PGDLLIMPORT sigjmp_buf *PG_exception_stack;
+extern PGDLLIMPORT PG_sigjmp_buf *PG_exception_stack;
 
 
 /* Stuff that error handlers might want to use */

@@ -130,6 +130,7 @@ static void WalRcvWaitForStartPosition(XLogRecPtr *startpoint, TimeLineID *start
 static void WalRcvDie(int code, Datum arg);
 static void XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len);
 static void XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr);
+static void XLogWalRcvStore(char *buf, Size nbytes, XLogRecPtr recptr);
 static void XLogWalRcvFlush(bool dying);
 static void XLogWalRcvSendReply(bool force, bool requestReply);
 static void XLogWalRcvSendHSFeedback(bool immed);
@@ -856,7 +857,10 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len)
 
 				buf += hdrlen;
 				len -= hdrlen;
-				XLogWalRcvWrite(buf, len, dataStart);
+				if (IsNvwalAvail())
+					XLogWalRcvStore(buf, len, dataStart);
+				else
+					XLogWalRcvWrite(buf, len, dataStart);
 				break;
 			}
 		case 'k':				/* Keepalive */
@@ -992,6 +996,42 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 }
 
 /*
+ * Like XLogWalRcvWrite, but store to non-volatile WAL buffer.
+ */
+static void
+XLogWalRcvStore(char *buf, Size nbytes, XLogRecPtr recptr)
+{
+	Assert(IsNvwalAvail());
+
+	CopyXLogRecordsToNVWAL(buf, nbytes, recptr);
+
+	/*
+	 * Also write out to file if we have to archive segments.
+	 *
+	 * We could do this segment by segment but we reuse existing method to
+	 * do it record by record because the former gives us more complexity
+	 * (locking WalBufMappingLock, getting the address of the segment on
+	 * non-volatile WAL buffer, etc).
+	 */
+	if (XLogArchiveMode == ARCHIVE_MODE_ALWAYS)
+		XLogWalRcvWrite(buf, nbytes, recptr);
+	else
+	{
+		/*
+		 * Update status as like XLogWalRcvWrite does.
+		 */
+
+		/* Update process-local status */
+		XLByteToSeg(recptr + nbytes, recvSegNo, wal_segment_size);
+		recvFileTLI = ThisTimeLineID;
+		LogstreamResult.Write = recptr + nbytes;
+
+		/* Update shared-memory status */
+		pg_atomic_write_u64(&WalRcv->writtenUpto, LogstreamResult.Write);
+	}
+}
+
+/*
  * Flush the log to disk.
  *
  * If we're in the midst of dying, it's unwise to do anything that might throw
@@ -1004,7 +1044,16 @@ XLogWalRcvFlush(bool dying)
 	{
 		WalRcvData *walrcv = WalRcv;
 
-		issue_xlog_fsync(recvFile, recvSegNo);
+		/*
+		 * We should call both SyncNVWAL and issue_xlog_fsync if we use NVWAL
+		 * and WAL archive.  So we have the following two if-statements, not
+		 * one if-else-statement.
+		 */
+		if (IsNvwalAvail())
+			SyncNVWAL();
+
+		if (recvFile >= 0)
+			issue_xlog_fsync(recvFile, recvSegNo);
 
 		LogstreamResult.Flush = LogstreamResult.Write;
 

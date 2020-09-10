@@ -1000,6 +1000,38 @@ PGAC_ARG_BOOL(with, zlib, yes,
 AC_SUBST(with_zlib)
 
 #
+# Non-volatile WAL buffer (NVWAL)
+#
+AC_MSG_CHECKING([whether to build with non-volatile WAL buffer (NVWAL)])
+PGAC_ARG_BOOL(with, nvwal, no, [use non-volatile WAL buffer (NVWAL)],
+              [AC_DEFINE([USE_NVWAL], 1, [Define to 1 to use non-volatile WAL buffer (NVWAL). (--with-nvwal)])])
+AC_MSG_RESULT([$with_nvwal])
+
+#
+# Elf
+#
+
+# Assume system is ELF if it predefines __ELF__ as 1,
+# otherwise believe host_os based default.
+case $host_os in
+    freebsd1*|freebsd2*) elf=no;;
+    freebsd3*|freebsd4*) elf=yes;;
+esac
+
+AC_EGREP_CPP(yes,
+[#if __ELF__
+  yes
+#endif
+],
+[ELF_SYS=true],
+[if test "X$elf" = "Xyes" ; then
+  ELF_SYS=true
+else
+  ELF_SYS=
+fi])
+AC_SUBST(ELF_SYS)
+
+#
 # Assignments
 #
 
@@ -1303,6 +1335,12 @@ elif test "$with_uuid" = ossp ; then
 fi
 AC_SUBST(UUID_LIBS)
 
+# for non-volatile WAL buffer (NVWAL)
+if test "$with_nvwal" = yes; then
+  AC_CHECK_LIB(pmem, pmem_map_file, [],
+               [AC_MSG_ERROR([library 'libpmem' is required for non-volatile WAL buffer (NVWAL)])])
+fi
+
 
 ##
 ## Header files
@@ -1478,6 +1516,11 @@ elif test "$with_uuid" = ossp ; then
       [AC_EGREP_HEADER([uuid_export], uuid.h, [],
         [AC_MSG_ERROR([header file <uuid.h> does not match OSSP UUID library])])],
       [AC_MSG_ERROR([header file <ossp/uuid.h> or <uuid.h> is required for OSSP UUID])])])
+fi
+
+# for non-volatile WAL buffer (NVWAL)
+if test "$with_nvwal" = yes ; then
+  AC_CHECK_HEADER(libpmem.h, [], [AC_MSG_ERROR([header file <libpmem.h> is required for non-volatile WAL buffer (NVWAL)])])
 fi
 
 if test "$PORTNAME" = "win32" ; then

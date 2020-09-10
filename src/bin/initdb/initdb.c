@@ -145,7 +145,10 @@ static bool show_setting = false;
 static bool data_checksums = false;
 static char *xlog_dir = NULL;
 static char *str_wal_segment_size_mb = NULL;
+static char *nvwal_path = NULL;
+static char *str_nvwal_size_mb = NULL;
 static int	wal_segment_size_mb;
+static int	nvwal_size_mb;
 
 
 /* internal vars */
@@ -1098,14 +1101,78 @@ setup_config(void)
 	conflines = replace_token(conflines, "#port = 5432", repltok);
 #endif
 
-	/* set default max_wal_size and min_wal_size */
-	snprintf(repltok, sizeof(repltok), "min_wal_size = %s",
-			 pretty_wal_size(DEFAULT_MIN_WAL_SEGS));
-	conflines = replace_token(conflines, "#min_wal_size = 80MB", repltok);
+	if (nvwal_path != NULL)
+	{
+		int nr_segs;
 
-	snprintf(repltok, sizeof(repltok), "max_wal_size = %s",
-			 pretty_wal_size(DEFAULT_MAX_WAL_SEGS));
-	conflines = replace_token(conflines, "#max_wal_size = 1GB", repltok);
+		if (str_nvwal_size_mb == NULL)
+			nvwal_size_mb = 1024;
+		else
+		{
+			char *endptr;
+
+			/* check that the argument is a number */
+			nvwal_size_mb = strtol(str_nvwal_size_mb, &endptr, 10);
+
+			/* verify that the size of non-volatile WAL buffer is valid */
+			if (endptr == str_nvwal_size_mb || *endptr != '\0')
+			{
+				pg_log_error("argument of --nvwal-size must be a number; "
+							 "str_nvwal_size_mb '%s'",
+							 str_nvwal_size_mb);
+				exit(1);
+			}
+			if (nvwal_size_mb <= 0)
+			{
+				pg_log_error("argument of --nvwal-size must be a positive number; "
+							 "str_nvwal_size_mb '%s'; nvwal_size_mb %d",
+							 str_nvwal_size_mb, nvwal_size_mb);
+				exit(1);
+			}
+			if (nvwal_size_mb % wal_segment_size_mb != 0)
+			{
+				pg_log_error("argument of --nvwal-size must be multiple of WAL segment size; "
+							 "str_nvwal_size_mb '%s'; nvwal_size_mb %d; wal_segment_size_mb %d",
+							 str_nvwal_size_mb, nvwal_size_mb, wal_segment_size_mb);
+				exit(1);
+			}
+		}
+
+		/*
+		 * XXX We set {min_,max_,nv}wal_size to the same value.  Note that
+		 * postgres might bootstrap and run if the three config does not have
+		 * the same value, but have not been tested yet.
+		 */
+		nr_segs = nvwal_size_mb / wal_segment_size_mb;
+
+		snprintf(repltok, sizeof(repltok), "min_wal_size = %s",
+				 pretty_wal_size(nr_segs));
+		conflines = replace_token(conflines, "#min_wal_size = 80MB", repltok);
+
+		snprintf(repltok, sizeof(repltok), "max_wal_size = %s",
+				 pretty_wal_size(nr_segs));
+		conflines = replace_token(conflines, "#max_wal_size = 1GB", repltok);
+
+		snprintf(repltok, sizeof(repltok), "nvwal_path = '%s'",
+				 nvwal_path);
+		conflines = replace_token(conflines,
+								  "#nvwal_path = '/path/to/nvwal'", repltok);
+
+		snprintf(repltok, sizeof(repltok), "nvwal_size = %s",
+				 pretty_wal_size(nr_segs));
+		conflines = replace_token(conflines, "#nvwal_size = 1GB", repltok);
+	}
+	else
+	{
+		/* set default max_wal_size and min_wal_size */
+		snprintf(repltok, sizeof(repltok), "min_wal_size = %s",
+				 pretty_wal_size(DEFAULT_MIN_WAL_SEGS));
+		conflines = replace_token(conflines, "#min_wal_size = 80MB", repltok);
+
+		snprintf(repltok, sizeof(repltok), "max_wal_size = %s",
+				 pretty_wal_size(DEFAULT_MAX_WAL_SEGS));
+		conflines = replace_token(conflines, "#max_wal_size = 1GB", repltok);
+	}
 
 	snprintf(repltok, sizeof(repltok), "lc_messages = '%s'",
 			 escape_quotes(lc_messages));
@@ -2310,6 +2377,8 @@ usage(const char *progname)
 	printf(_("  -W, --pwprompt            prompt for a password for the new superuser\n"));
 	printf(_("  -X, --waldir=WALDIR       location for the write-ahead log directory\n"));
 	printf(_("      --wal-segsize=SIZE    size of WAL segments, in megabytes\n"));
+	printf(_("  -P, --nvwal-path=FILE     path to file for non-volatile WAL buffer (NVWAL)\n"));
+	printf(_("  -Q, --nvwal-size=SIZE     size of NVWAL, in megabytes\n"));
 	printf(_("\nLess commonly used options:\n"));
 	printf(_("  -d, --debug               generate lots of debugging output\n"));
 	printf(_("  -k, --data-checksums      use data page checksums\n"));
@@ -2978,6 +3047,8 @@ main(int argc, char *argv[])
 		{"sync-only", no_argument, NULL, 'S'},
 		{"waldir", required_argument, NULL, 'X'},
 		{"wal-segsize", required_argument, NULL, 12},
+		{"nvwal-path", required_argument, NULL, 'P'},
+		{"nvwal-size", required_argument, NULL, 'Q'},
 		{"data-checksums", no_argument, NULL, 'k'},
 		{"allow-group-access", no_argument, NULL, 'g'},
 		{NULL, 0, NULL, 0}
@@ -3021,7 +3092,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "dD:E:kL:nNU:WA:sST:X:g", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "dD:E:kL:nNU:WA:sST:X:P:Q:g", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -3114,6 +3185,12 @@ main(int argc, char *argv[])
 				break;
 			case 12:
 				str_wal_segment_size_mb = pg_strdup(optarg);
+				break;
+			case 'P':
+				nvwal_path = pg_strdup(optarg);
+				break;
+			case 'Q':
+				str_nvwal_size_mb = pg_strdup(optarg);
 				break;
 			case 'g':
 				SetDataDirectoryCreatePerm(PG_DIR_MODE_GROUP);

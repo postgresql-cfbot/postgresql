@@ -325,6 +325,9 @@
 /* Define to 1 if you have the `pam' library (-lpam). */
 #undef HAVE_LIBPAM
 
+/* Define to 1 if you have the `pmem' library (-lpmem). */
+#undef HAVE_LIBPMEM
+
 /* Define if you have a function readline library */
 #undef HAVE_LIBREADLINE
 
@@ -883,6 +886,9 @@
 
 /* Define to select named POSIX semaphores. */
 #undef USE_NAMED_POSIX_SEMAPHORES
+
+/* Define to 1 to use non-volatile WAL buffer (NVWAL). (--with-nvwal) */
+#undef USE_NVWAL
 
 /* Define to build with OpenSSL support. (--with-openssl) */
 #undef USE_OPENSSL

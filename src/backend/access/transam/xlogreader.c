@@ -1067,10 +1067,23 @@ WALRead(XLogReaderState *state,
 	char	   *p;
 	XLogRecPtr	recptr;
 	Size		nbytes;
+#ifndef FRONTEND
+	XLogRecPtr	recptr_nvwal = 0;
+	Size		nbytes_nvwal = 0;
+#endif
 
 	p = buf;
 	recptr = startptr;
 	nbytes = count;
+
+#ifndef FRONTEND
+	/* Try to load records directly from NVWAL if used */
+	if (IsNvwalAvail())
+	{
+		nbytes_nvwal = GetLoadableSizeFromNvwal(startptr, count, &recptr_nvwal);
+		nbytes = count - nbytes_nvwal;
+	}
+#endif
 
 	while (nbytes > 0)
 	{
@@ -1138,6 +1151,17 @@ WALRead(XLogReaderState *state,
 		nbytes -= readbytes;
 		p += readbytes;
 	}
+
+#ifndef FRONTEND
+	if (IsNvwalAvail())
+	{
+		if (!CopyXLogRecordsFromNVWAL(p, nbytes_nvwal, recptr_nvwal))
+		{
+			/* TODO graceful error handling */
+			elog(PANIC, "some records on NVWAL had been discarded");
+		}
+	}
+#endif
 
 	return true;
 }

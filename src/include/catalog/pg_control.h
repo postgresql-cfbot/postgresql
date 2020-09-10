@@ -22,7 +22,7 @@
 
 
 /* Version identifier for this pg_control format */
-#define PG_CONTROL_VERSION	1300
+#define PG_CONTROL_VERSION	1301
 
 /* Nonce key length, see below */
 #define MOCK_AUTH_NONCE_LEN		32
@@ -131,6 +131,21 @@ typedef struct ControlFileData
 	CheckPoint	checkPointCopy; /* copy of last check point record */
 
 	XLogRecPtr	unloggedLSN;	/* current fake LSN value, for unlogged rels */
+
+	/*
+	 * Used for non-volatile WAL buffer (NVWAL).
+	 *
+	 * discardedUpTo is updated to the oldest LSN in the NVWAL when either a
+	 * checkpoint or a restartpoint is completed successfully, or whole the
+	 * NVWAL is filled with WAL records and a new record is being inserted.
+	 * This field tells that the NVWAL contains WAL records in the range of
+	 * [discardedUpTo, discardedUpTo+S), where S is the size of the NVWAL.
+	 * Note that the WAL records whose LSN are less than discardedUpTo would
+	 * remain in WAL segment files and be needed for recovery.
+	 *
+	 * It is set to zero when NVWAL is not used.
+	 */
+	XLogRecPtr	discardedUpTo;
 
 	/*
 	 * These two values determine the minimum point we must recover up to

@@ -39,15 +39,19 @@ SELECT num_nulls();
 select setting as segsize
 from pg_settings where name = 'wal_segment_size'
 \gset
+select setting as nvwal_path
+from pg_settings where name = 'nvwal_path'
+\gset
 
-select count(*) > 0 as ok from pg_ls_waldir();
+select count(*) > 0 or :'nvwal_path' <> '' as ok from pg_ls_waldir();
 -- Test ProjectSet as well as FunctionScan
-select count(*) > 0 as ok from (select pg_ls_waldir()) ss;
+select count(*) > 0 or :'nvwal_path' <> '' as ok from (select pg_ls_waldir()) ss;
 -- Test not-run-to-completion cases.
 select * from pg_ls_waldir() limit 0;
-select count(*) > 0 as ok from (select * from pg_ls_waldir() limit 1) ss;
-select (w).size = :segsize as ok
-from (select pg_ls_waldir() w) ss where length((w).name) = 24 limit 1;
+select count(*) > 0 or :'nvwal_path' <> '' as ok from (select * from pg_ls_waldir() limit 1) ss;
+select count(*) > 0 or :'nvwal_path' <> '' as ok from
+  (select * from pg_ls_waldir() w
+   where length((w).name) = 24 and (w).size = :segsize limit 1) ss;
 
 select count(*) >= 0 as ok from pg_ls_archive_statusdir();
 

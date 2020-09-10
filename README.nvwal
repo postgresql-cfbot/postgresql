@@ -1,0 +1,184 @@
+Non-volatile WAL buffer
+=======================
+Here is a PostgreSQL branch with a proof-of-concept "non-volatile WAL buffer"
+(NVWAL) feature. Putting the WAL buffer pages on persistent memory (PMEM) [1],
+inserting WAL records into it directly, and eliminating I/O for WAL segment
+files, PostgreSQL gets lower latency and higher throughput.
+
+
+Prerequisites and recommends
+----------------------------
+* An x64 system
+  * (Recommended) Supporting CLFLUSHOPT or CLWB instruction
+    * See if lscpu shows "clflushopt" or "clwb" flag
+* An OS supporting PMEM
+  * Linux: 4.15 or later (tested on 5.2)
+  * Windows: (Sorry but we have not tested on Windows yet.)
+* A filesystem supporting DAX (tested on ext4)
+* libpmem in PMDK [2] 1.4 or later (tested on 1.7)
+* ndctl [3] (tested on 61.2)
+* ipmctl [4] if you use Intel DCPMM
+* sudo privilege
+* All other prerequisites of original PostgreSQL
+* (Recommended) PMEM module(s) (NVDIMM-N or Intel DCPMM)
+  * You can emulate PMEM using DRAM [5] even if you have no PMEM module.
+* (Recommended) numactl
+
+
+Build and install PostgreSQL with NVWAL feature
+-----------------------------------------------
+We have a new configure option --with-nvwal.
+
+I believe it is good to install under your home directory with --prefix option.
+If you do so, please DO NOT forget "export PATH".
+
+  $ ./configure --with-nvwal --prefix="$HOME/postgres"
+  $ make
+  $ make install
+  $ export PATH="$HOME/postgres/bin:$PATH"
+
+NOTE: ./configure --with-nvwal will fail if libpmem is not found.
+
+
+Prepare DAX filesystem
+----------------------
+Here we use NVDIMM-N or emulated PMEM, make ext4 filesystem on namespace0.0
+(/dev/pmem0), and mount it onto /mnt/pmem0. Please DO NOT forget "-o dax" option
+on mount. For Intel DCPMM and ipmctl, please see [4].
+
+  $ ndctl list
+  [
+    {
+      "dev":"namespace1.0",
+      "mode":"raw",
+      "size":103079215104,
+      "sector_size":512,
+      "blockdev":"pmem1",
+      "numa_node":1
+    },
+    {
+      "dev":"namespace0.0",
+      "mode":"raw",
+      "size":103079215104,
+      "sector_size":512,
+      "blockdev":"pmem0",
+      "numa_node":0
+    }
+  ]
+
+  $ sudo ndctl create-namespace -f -t pmem -m fsdax -M dev -e namespace0.0
+  {
+    "dev":"namespace0.0",
+    "mode":"fsdax",
+    "map":"dev",
+    "size":"94.50 GiB (101.47 GB)",
+    "uuid":"e7da9d65-140b-4e1e-90ec-6548023a1b6e",
+    "sector_size":512,
+    "blockdev":"pmem0",
+    "numa_node":0
+  }
+
+  $ ls -l /dev/pmem0
+  brw-rw---- 1 root disk 259, 3 Jan  6 17:06 /dev/pmem0
+
+  $ sudo mkfs.ext4 -q -F /dev/pmem0
+  $ sudo mkdir -p /mnt/pmem0
+  $ sudo mount -o dax /dev/pmem0 /mnt/pmem0
+  $ mount -l | grep ^/dev/pmem0
+  /dev/pmem0 on /mnt/pmem0 type ext4 (rw,relatime,dax)
+
+
+Enable transparent huge page
+----------------------------
+Of course transparent huge page would not be suitable for database workload,
+but it improves performance of PMEM by reducing overhead of page walk.
+
+  $ ls -l /sys/kernel/mm/transparent_hugepage/enabled
+  -rw-r--r-- 1 root root 4096 Dec  3 10:38 /sys/kernel/mm/transparent_hugepage/enabled
+
+  $ echo always | sudo dd of=/sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null
+  $ cat /sys/kernel/mm/transparent_hugepage/enabled
+  [always] madvise never
+
+
+initdb
+------
+We have two new options:
+
+  -P, --nvwal-path=FILE  path to file for non-volatile WAL buffer (NVWAL)
+  -Q, --nvwal-size=SIZE  size of NVWAL, in megabytes
+
+If you want to create a new 80GB (81920MB) NVWAL file on /mnt/pmem0/pgsql/nvwal,
+please run initdb as follows:
+
+  $ sudo mkdir -p /mnt/pmem0/pgsql
+  $ sudo chown "$USER:$USER" /mnt/pmem0/pgsql
+  $ export PGDATA="$HOME/pgdata"
+  $ initdb -P /mnt/pmem0/pgsql/nvwal -Q 81920
+
+You will find there is no WAL segment file to be created in PGDATA/pg_wal
+directory. That is okay; your NVWAL file has the content of the first WAL
+segment file.
+
+NOTE:
+* initdb will fail if the given NVWAL size is not multiple of WAL segment
+  size. The segment size is given with initdb --wal-segsize, or is 16MB as
+  default.
+* postgres (executed by initdb) will fail in bootstrap if the directory in
+  which the NVWAL file is being created (/mnt/pmem0/pgsql for example
+  above) does not exist.
+* postgres (executed by initdb) will fail in bootstrap if an entry already
+  exists on the given path.
+* postgres (executed by initdb) will fail in bootstrap if the given path is
+  not on PMEM or you forget "-o dax" option on mount.
+* Resizing an NVWAL file is NOT supported yet. Please be careful to decide
+  how large your NVWAL file is to be.
+* "-Q 1024" (1024MB) will be assumed if -P is given but -Q is not.
+
+
+postgresql.conf
+---------------
+We have two new parameters nvwal_path and nvwal_size, corresponding to the two
+new options of initdb. If you run initdb as above, you will find postgresql.conf
+in your PGDATA directory like as follows:
+
+  max_wal_size = 80GB
+  min_wal_size = 80GB
+  nvwal_path = '/mnt/pmem0/pgsql/nvwal'
+  nvwal_size = 80GB
+
+NOTE:
+* postgres will fail in startup if no file exists on the given nvwal_path.
+* postgres will fail in startup if the given nvwal_size is not equal to the
+  actual NVWAL file size,
+* postgres will fail in startup if the given nvwal_path is not on PMEM or you
+  forget "-o dax" option on mount.
+* wal_buffers will be ignored if nvwal_path is given.
+* You SHOULD give both max_wal_size and min_wal_size the same value as
+  nvwal_size. postgres could possibly run even though the three values are
+  not same, however, we have not tested such a case yet.
+
+
+Startup
+-------
+Same as you know:
+
+  $ pg_ctl start
+
+or use numactl as follows to let postgres run on the specified NUMA node (typi-
+cally the one on which your NVWAL file is) if you need stable performance:
+
+  $ numactl --cpunodebind=0 --membind=0 -- pg_ctl start
+
+
+References
+----------
+[1] https://pmem.io/
+[2] https://pmem.io/pmdk/
+[3] https://docs.pmem.io/ndctl-user-guide/
+[4] https://docs.pmem.io/ipmctl-user-guide/
+[5] https://software.intel.com/en-us/articles/how-to-emulate-persistent-memory-on-an-intel-architecture-server
+
+
+--
+Takashi Menjo <takashi.menjou.vg AT hco.ntt.co.jp>

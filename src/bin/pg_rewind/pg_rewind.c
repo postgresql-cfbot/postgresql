@@ -360,7 +360,7 @@ main(int argc, char **argv)
 		pg_log_info("no rewind required");
 		if (writerecoveryconf && !dry_run)
 			WriteRecoveryConfig(conn, datadir_target,
-								GenerateRecoveryConfig(conn, NULL));
+								GenerateRecoveryConfig(conn, NULL, NULL));
 		exit(0);
 	}
 
@@ -459,7 +459,7 @@ main(int argc, char **argv)
 
 	if (writerecoveryconf && !dry_run)
 		WriteRecoveryConfig(conn, datadir_target,
-							GenerateRecoveryConfig(conn, NULL));
+							GenerateRecoveryConfig(conn, NULL, NULL));
 
 	pg_log_info("Done!");
 

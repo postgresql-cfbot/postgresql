@@ -2714,7 +2714,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_XBLOCKS
 		},
 		&XLOGbuffers,
-		-1, -1, (INT_MAX / XLOG_BLCKSZ),
+		-1, -1, INT_MAX,
 		check_wal_buffers, NULL, NULL
 	},
 
@@ -3397,6 +3397,17 @@ static struct config_int ConfigureNamesInt[] =
 		&huge_page_size,
 		0, 0, INT_MAX,
 		check_huge_page_size, NULL, NULL
+	},
+
+	{
+		{"nvwal_size", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Size of non-volatile WAL buffer (NVWAL)."),
+			NULL,
+			GUC_UNIT_MB
+		},
+		&NvwalSizeMB,
+		1024, 1, INT_MAX,
+		check_nvwal_size, assign_nvwal_size, NULL
 	},
 
 	/* End-of-list marker */
@@ -4446,6 +4457,16 @@ static struct config_string ConfigureNamesString[] =
 		&backtrace_functions,
 		"",
 		check_backtrace_functions, assign_backtrace_functions, NULL
+	},
+
+	{
+		{"nvwal_path", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Path to file for non-volatile WAL buffer (NVWAL)."),
+			NULL
+		},
+		&NvwalPath,
+		"",
+		check_nvwal_path, assign_nvwal_path, NULL
 	},
 
 	/* End-of-list marker */

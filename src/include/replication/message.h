@@ -25,7 +25,9 @@ typedef struct xl_logical_message
 	Size		message_size;	/* size of the message */
 	char		message[FLEXIBLE_ARRAY_MEMBER]; /* message including the null
 												 * terminated prefix of length
-												 * prefix_size */
+												 * prefix_size. Please see
+												 * logicalmsg_desc(), if you
+												 * change this. */
 } xl_logical_message;
 
 #define SizeOfLogicalMessage	(offsetof(xl_logical_message, message))

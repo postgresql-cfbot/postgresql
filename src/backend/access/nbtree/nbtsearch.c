@@ -45,6 +45,7 @@ static bool _bt_parallel_readpage(IndexScanDesc scan, BlockNumber blkno,
 static Buffer _bt_walk_left(Relation rel, Buffer buf, Snapshot snapshot);
 static bool _bt_endpoint(IndexScanDesc scan, ScanDirection dir);
 static inline void _bt_initialize_more_data(BTScanOpaque so, ScanDirection dir);
+static inline BTCompareResult _bt_compare_inline(Relation rel, BTScanInsert key, Page page, OffsetNumber offnum, int scanStartCol);
 
 
 /*
@@ -348,8 +349,10 @@ _bt_binsrch(Relation rel,
 	BTPageOpaque opaque;
 	OffsetNumber low,
 				high;
-	int32		result,
-				cmpval;
+	int32		cmpval;
+	int			higheqcol,
+				loweqcol;
+	BTCompareResult result;
 
 	page = BufferGetPage(buf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -388,19 +391,32 @@ _bt_binsrch(Relation rel,
 
 	cmpval = key->nextkey ? 0 : 1;	/* select comparison value */
 
+	higheqcol = key->searchcolneq;
+	loweqcol = key->searchcolneq;
+
 	while (high > low)
 	{
 		OffsetNumber mid = low + ((high - low) / 2);
 
 		/* We have low <= mid < high, so mid points at a real slot */
 
-		result = _bt_compare(rel, key, page, mid);
+		result = _bt_compare_inline(rel, key, page, mid, Min(higheqcol, loweqcol));
 
-		if (result >= cmpval)
+		Assert(result.compareResult == _bt_compare(rel, key, page, mid));
+
+		if (result.compareResult >= cmpval)
+		{
 			low = mid + 1;
+			loweqcol = result.comparedColumn;
+		}
 		else
+		{
 			high = mid;
+			higheqcol = result.comparedColumn;
+		}
 	}
+
+	key->searchcolneq = Min(loweqcol, higheqcol);
 
 	/*
 	 * At this point we have high == low, but be careful: they could point
@@ -452,8 +468,10 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
 	OffsetNumber low,
 				high,
 				stricthigh;
-	int32		result,
-				cmpval;
+	int32		cmpval;
+	int			higheqcol,
+				loweqcol;
+	BTCompareResult result;
 
 	page = BufferGetPage(insertstate->buf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -500,6 +518,8 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
 	stricthigh = high;			/* high initially strictly higher */
 
 	cmpval = 1;					/* !nextkey comparison value */
+	loweqcol = key->searchcolneq;
+	higheqcol = key->searchcolneq;
 
 	while (high > low)
 	{
@@ -507,14 +527,20 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
 
 		/* We have low <= mid < high, so mid points at a real slot */
 
-		result = _bt_compare(rel, key, page, mid);
+		result = _bt_compare_inline(rel, key, page, mid, Min(loweqcol, higheqcol));
+		Assert(result.compareResult == _bt_compare(rel, key, page, mid));
 
-		if (result >= cmpval)
+		if (result.compareResult >= cmpval)
+		{
 			low = mid + 1;
+			loweqcol = result.comparedColumn;
+		}
 		else
 		{
 			high = mid;
-			if (result != 0)
+			higheqcol = result.comparedColumn;
+
+			if (result.compareResult != 0)
 				stricthigh = high;
 		}
 
@@ -525,9 +551,11 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
 		 * posting list when postingoff is set.  This should happen
 		 * infrequently.
 		 */
-		if (unlikely(result == 0 && key->scantid != NULL))
+		if (unlikely(result.compareResult == 0 && key->scantid != NULL))
 			insertstate->postingoff = _bt_binsrch_posting(key, page, mid);
 	}
+
+	key->searchcolneq = Min(loweqcol, higheqcol);
 
 	/*
 	 * On a leaf page, a binary search always returns the first key >= scan
@@ -623,6 +651,36 @@ _bt_binsrch_posting(BTScanInsert key, Page page, OffsetNumber offnum)
  *			 0 if scankey == tuple at offnum;
  *			>0 if scankey > tuple at offnum.
  *
+ * See _bt_compare_inline() for more specific information.
+ *----------
+ */
+int32
+_bt_compare(Relation rel,
+			BTScanInsert key,
+			Page page,
+			OffsetNumber offnum)
+{
+	BTCompareResult result = _bt_compare_inline(rel, key, page, offnum, 1);
+	return result.compareResult;
+}
+
+/*----------
+ *	_bt_compare_inline() -- Compare insertion-type scankey to tuple on a page
+ *
+ *	page/offnum: location of btree item to be compared to.
+ *	scanStartCol: first column of key to start comparing. 1-based
+ *
+ *		This routine returns:
+ *
+ *		BTCompareResult.compareResult:
+ *			<0 if scankey < tuple at offnum;
+ *			 0 if scankey == tuple at offnum;
+ *			>0 if scankey > tuple at offnum.
+ *		BTCompareResult.comparedColumn:
+ *			if all columns are equal, the number of indexed
+ *			columns in the scankey + 1, otherwise the 1-indexed column
+ *			number that was compared to get the non-0 result.
+ *
  * NULLs in the keys are treated as sortable values.  Therefore
  * "equality" does not necessarily mean that the item should be returned
  * to the caller as a matching key.  Similarly, an insertion scankey
@@ -640,11 +698,12 @@ _bt_binsrch_posting(BTScanInsert key, Page page, OffsetNumber offnum)
  * key.  See backend/access/nbtree/README for details.
  *----------
  */
-int32
-_bt_compare(Relation rel,
-			BTScanInsert key,
-			Page page,
-			OffsetNumber offnum)
+inline static BTCompareResult
+_bt_compare_inline(Relation rel,
+				   BTScanInsert key,
+				   Page page,
+				   OffsetNumber offnum,
+				   int scanStartCol)
 {
 	TupleDesc	itupdesc = RelationGetDescr(rel);
 	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -653,18 +712,23 @@ _bt_compare(Relation rel,
 	ScanKey		scankey;
 	int			ncmpkey;
 	int			ntupatts;
-	int32		result;
+	BTCompareResult result;
 
 	Assert(_bt_check_natts(rel, key->heapkeyspace, page, offnum));
 	Assert(key->keysz <= IndexRelationGetNumberOfKeyAttributes(rel));
 	Assert(key->heapkeyspace || key->scantid == NULL);
+	Assert(scanStartCol >= 1);
 
 	/*
 	 * Force result ">" if target item is first data item on an internal page
 	 * --- see NOTE above.
 	 */
 	if (!P_ISLEAF(opaque) && offnum == P_FIRSTDATAKEY(opaque))
-		return 1;
+	{
+		result.compareResult = 1;
+		result.comparedColumn = scanStartCol;
+		return result;
+	}
 
 	itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
 	ntupatts = BTreeTupleGetNAtts(itup, rel);
@@ -684,8 +748,12 @@ _bt_compare(Relation rel,
 	ncmpkey = Min(ntupatts, key->keysz);
 	Assert(key->heapkeyspace || ncmpkey == key->keysz);
 	Assert(!BTreeTupleIsPosting(itup) || key->allequalimage);
-	scankey = key->scankeys;
-	for (int i = 1; i <= ncmpkey; i++)
+	Assert(scanStartCol <= ncmpkey + 1);
+
+	scankey = key->scankeys + (scanStartCol - 1);
+	result.comparedColumn = scanStartCol;
+
+	for (; result.comparedColumn <= ncmpkey; result.comparedColumn++)
 	{
 		Datum		datum;
 		bool		isNull;
@@ -695,18 +763,18 @@ _bt_compare(Relation rel,
 		if (scankey->sk_flags & SK_ISNULL)	/* key is NULL */
 		{
 			if (isNull)
-				result = 0;		/* NULL "=" NULL */
+				result.compareResult = 0;		/* NULL "=" NULL */
 			else if (scankey->sk_flags & SK_BT_NULLS_FIRST)
-				result = -1;	/* NULL "<" NOT_NULL */
+				result.compareResult = -1;	/* NULL "<" NOT_NULL */
 			else
-				result = 1;		/* NULL ">" NOT_NULL */
+				result.compareResult = 1;		/* NULL ">" NOT_NULL */
 		}
 		else if (isNull)		/* key is NOT_NULL and item is NULL */
 		{
 			if (scankey->sk_flags & SK_BT_NULLS_FIRST)
-				result = 1;		/* NOT_NULL ">" NULL */
+				result.compareResult = 1;		/* NOT_NULL ">" NULL */
 			else
-				result = -1;	/* NOT_NULL "<" NULL */
+				result.compareResult = -1;	/* NOT_NULL "<" NULL */
 		}
 		else
 		{
@@ -718,17 +786,17 @@ _bt_compare(Relation rel,
 			 * to flip the sign of the comparison result.  (Unless it's a DESC
 			 * column, in which case we *don't* flip the sign.)
 			 */
-			result = DatumGetInt32(FunctionCall2Coll(&scankey->sk_func,
-													 scankey->sk_collation,
-													 datum,
-													 scankey->sk_argument));
+			result.compareResult = DatumGetInt32(FunctionCall2Coll(&scankey->sk_func,
+																   scankey->sk_collation,
+																   datum,
+																   scankey->sk_argument));
 
 			if (!(scankey->sk_flags & SK_BT_DESC))
-				INVERT_COMPARE_RESULT(result);
+				INVERT_COMPARE_RESULT(result.compareResult);
 		}
 
 		/* if the keys are unequal, return the difference */
-		if (result != 0)
+		if (result.compareResult != 0)
 			return result;
 
 		scankey++;
@@ -744,7 +812,10 @@ _bt_compare(Relation rel,
 	 * necessary.
 	 */
 	if (key->keysz > ntupatts)
-		return 1;
+	{
+		result.compareResult = 1;
+		return result;
+	}
 
 	/*
 	 * Use the heap TID attribute and scantid to try to break the tie.  The
@@ -789,10 +860,14 @@ _bt_compare(Relation rel,
 		 */
 		if (key->heapkeyspace && !key->pivotsearch &&
 			key->keysz == ntupatts && heapTid == NULL)
-			return 1;
+		{
+			result.compareResult = 1;
+			return result;
+		}
 
 		/* All provided scankey arguments found to be equal */
-		return 0;
+		result.compareResult = 0;
+		return result;
 	}
 
 	/*
@@ -801,7 +876,10 @@ _bt_compare(Relation rel,
 	 */
 	Assert(key->keysz == IndexRelationGetNumberOfKeyAttributes(rel));
 	if (heapTid == NULL)
-		return 1;
+	{
+		result.compareResult = 1;
+		return result;
+	}
 
 	/*
 	 * Scankey must be treated as equal to a posting list tuple if its scantid
@@ -810,18 +888,19 @@ _bt_compare(Relation rel,
 	 * with scantid.
 	 */
 	Assert(ntupatts >= IndexRelationGetNumberOfKeyAttributes(rel));
-	result = ItemPointerCompare(key->scantid, heapTid);
-	if (result <= 0 || !BTreeTupleIsPosting(itup))
+	result.compareResult = ItemPointerCompare(key->scantid, heapTid);
+	if (result.compareResult <= 0 || !BTreeTupleIsPosting(itup))
 		return result;
 	else
 	{
-		result = ItemPointerCompare(key->scantid,
-									BTreeTupleGetMaxHeapTID(itup));
-		if (result > 0)
-			return 1;
+		result.compareResult = ItemPointerCompare(key->scantid,
+												  BTreeTupleGetMaxHeapTID(itup));
+		if (result.compareResult > 0)
+			return result;
 	}
 
-	return 0;
+	result.compareResult = 0;
+	return result;
 }
 
 /*
@@ -1340,6 +1419,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	inskey.anynullkeys = false; /* unused */
 	inskey.nextkey = nextkey;
 	inskey.pivotsearch = false;
+	inskey.searchcolneq = 1;
 	inskey.scantid = NULL;
 	inskey.keysz = keysCount;
 
@@ -1375,6 +1455,8 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 
 	_bt_initialize_more_data(so, dir);
 
+	/* reset the column search position for the following statement */
+	inskey.searchcolneq = 1;
 	/* position to the precise item on the page */
 	offnum = _bt_binsrch(rel, &inskey, buf);
 

@@ -208,6 +208,7 @@ search:
 			/* start over... */
 			if (stack)
 				_bt_freestack(stack);
+			itup_key->searchcolneq = 1;
 			goto search;
 		}
 
@@ -402,6 +403,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 	bool		inposting = false;
 	bool		prevalldead = true;
 	int			curposti = 0;
+	int			searchcolneq = itup_key->searchcolneq;
 
 	/* Assume unique until we find a duplicate */
 	*is_unique = true;
@@ -559,6 +561,8 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 						if (nbuf != InvalidBuffer)
 							_bt_relbuf(rel, nbuf);
 						*is_unique = false;
+						/* Reset the search state to the state as we were called */
+						itup_key->searchcolneq = searchcolneq;
 						return InvalidTransactionId;
 					}
 
@@ -577,6 +581,8 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 						*speculativeToken = SnapshotDirty.speculativeToken;
 						/* Caller releases lock on buf immediately */
 						insertstate->bounds_valid = false;
+						/* Reset the search state to the state as we were called */
+						itup_key->searchcolneq = searchcolneq;
 						return xwait;
 					}
 
@@ -750,6 +756,9 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 
 	if (nbuf != InvalidBuffer)
 		_bt_relbuf(rel, nbuf);
+
+	/* Reset the search state to the state as we were called */
+	itup_key->searchcolneq = searchcolneq;
 
 	return InvalidTransactionId;
 }

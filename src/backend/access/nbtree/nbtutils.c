@@ -122,6 +122,7 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 	key->anynullkeys = false;	/* initial assumption */
 	key->nextkey = false;
 	key->pivotsearch = false;
+	key->searchcolneq = 1;
 	key->keysz = Min(indnkeyatts, tupnatts);
 	key->scantid = key->heapkeyspace && itup ?
 		BTreeTupleGetHeapTID(itup) : NULL;

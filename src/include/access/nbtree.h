@@ -639,6 +639,12 @@ typedef BTStackData *BTStack;
  * using a scankey built from a leaf page's high key.  Most callers set this
  * to false.
  *
+ * scancolneq contains an integer that is the first column number of the
+ * current index scan location that has not yet proven to equal the search
+ * key's columns. This helps by not repeatedly having to compare columns
+ * that we know are equal.
+ * This is incremented by _bt_search and _bt_search_insert
+ *
  * scantid is the heap TID that is used as a final tiebreaker attribute.  It
  * is set to NULL when index scan doesn't need to find a position for a
  * specific physical tuple.  Must be set when inserting new tuples into
@@ -662,6 +668,7 @@ typedef struct BTScanInsertData
 	bool		nextkey;
 	bool		pivotsearch;
 	ItemPointer scantid;		/* tiebreaker for scankeys */
+	int			searchcolneq;	/* column that is not yet equal */
 	int			keysz;			/* Size of scankeys array */
 	ScanKeyData scankeys[INDEX_MAX_KEYS];	/* Must appear last */
 } BTScanInsertData;
@@ -944,6 +951,19 @@ typedef struct BTScanOpaqueData
 } BTScanOpaqueData;
 
 typedef BTScanOpaqueData *BTScanOpaque;
+
+/*
+ * When two tuples are compared, we get a comparison result for one of the
+ * columns. While the result itself is the most interesting, the column
+ * can be used to further optimize searching in the index.
+ *
+ * See also: _bt_compare() and _bt_compare_inline()
+ */
+typedef struct BTCompareResult
+{
+	int32		compareResult; /* the value of the comparison between the first non-equal columns */
+	int			comparedColumn; /* the column number of the first non-equal column */
+} BTCompareResult;
 
 /*
  * We use some private sk_flags bits in preprocessed scan keys.  We're allowed

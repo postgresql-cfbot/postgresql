@@ -8646,7 +8646,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		/*
 		 * Get info about column defaults
 		 */
-		if (hasdefaults)
+		if (!dopt->dataOnly && hasdefaults)
 		{
 			AttrDefInfo *attrdefs;
 			int			numDefaults;
@@ -8733,7 +8733,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		/*
 		 * Get info about table CHECK constraints
 		 */
-		if (tbinfo->ncheck > 0)
+		if (!dopt->dataOnly && tbinfo->ncheck > 0)
 		{
 			ConstraintInfo *constrs;
 			int			numConstrs;

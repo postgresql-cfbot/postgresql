@@ -2972,36 +2972,33 @@ ERROR:  value overflows numeric format
 --
 -- Tests for factorial
 --
-SELECT 4!;
- ?column? 
-----------
-       24
-(1 row)
-
-SELECT !!3;
- ?column? 
-----------
-        6
-(1 row)
-
 SELECT factorial(15);
    factorial   
 ---------------
  1307674368000
 (1 row)
 
-SELECT 100000!;
+SELECT factorial(100000);
 ERROR:  value overflows numeric format
-SELECT 0!;
- ?column? 
-----------
-        1
+SELECT factorial(0);
+ factorial 
+-----------
+         1
 (1 row)
 
-SELECT -4!;
-ERROR:  factorial of a negative number is undefined
 SELECT factorial(-4);
 ERROR:  factorial of a negative number is undefined
+--
+-- Postfix operators are not supported.  Check that.
+--
+SELECT -5!;
+ERROR:  syntax error at or near ";"
+LINE 1: SELECT -5!;
+                  ^
+SELECT 5!;
+ERROR:  syntax error at or near ";"
+LINE 1: SELECT 5!;
+                 ^
 --
 -- Tests for pg_lsn()
 --

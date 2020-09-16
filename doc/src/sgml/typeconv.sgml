@@ -97,7 +97,7 @@ Operators
 <listitem>
 <para>
 <productname>PostgreSQL</productname> allows expressions with
-prefix and postfix unary (one-argument) operators,
+prefix unary (one-argument) operators,
 as well as binary (two-argument) operators.  Like functions, operators can
 be overloaded, so the same problem of selecting the right operator
 exists.

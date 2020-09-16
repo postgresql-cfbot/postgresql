@@ -93,11 +93,27 @@ EOM
 
 # Parse input file for keyword names.
 my @keywords;
+my @implicit_alias;
+my %transform = ( IMPLICIT_ALIAS => 'true', EXPLICIT_ALIAS => 'false');
 while (<$kif>)
 {
 	if (/^PG_KEYWORD\("(\w+)"/)
 	{
-		push @keywords, $1;
+		my $kword = $1;
+		push @keywords, $kword;
+
+		if (/^PG_KEYWORD\("\w+", .*, (IMPLICIT_ALIAS|EXPLICIT_ALIAS)\)/)
+		{
+			push @implicit_alias, $transform{$1};
+		}
+		else
+		{
+			# parser/kwlist.h lists each keyword as either an implicit or an
+			# explicit alias, but other kwlist files do not, and for them, it
+			# won't matter what we use here as long as it is a valid boolean,
+			# so we arbitrarily use 'true'.
+			push @implicit_alias, 'true';
+		}
 	}
 }
 
@@ -153,6 +169,17 @@ foreach my $name (@keywords)
 
 print $kwdef "};\n\n";
 
+# Emit an array of boolean as implicit alias values
+
+printf $kwdef "static const bool %s_kw_is_implicit[] = {\n", $varname;
+
+foreach my $bool (@implicit_alias)
+{
+	print $kwdef "\t$bool,\n";
+}
+
+print $kwdef "};\n\n";
+
 # Emit a macro defining the number of keywords.
 # (In some places it's useful to have access to that as a constant.)
 
@@ -173,6 +200,7 @@ printf $kwdef "static " if !$extern;
 printf $kwdef "const ScanKeywordList %s = {\n", $varname;
 printf $kwdef qq|\t%s_kw_string,\n|,            $varname;
 printf $kwdef qq|\t%s_kw_offsets,\n|,           $varname;
+printf $kwdef qq|\t%s_kw_is_implicit,\n|,       $varname;
 printf $kwdef qq|\t%s,\n|,                      $funcname;
 printf $kwdef qq|\t%s_NUM_KEYWORDS,\n|,         uc $varname;
 printf $kwdef qq|\t%d\n|,                       $max_len;

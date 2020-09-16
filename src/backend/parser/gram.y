@@ -540,14 +540,15 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <str>		Sconst comment_text notify_payload
 %type <str>		RoleId opt_boolean_or_string
 %type <list>	var_list
-%type <str>		ColId ColLabel var_name type_function_name param_name
+%type <str>		ColId ColLabel ImplicitAlias
 %type <str>		NonReservedWord NonReservedWord_or_Sconst
+%type <str>		var_name type_function_name param_name
 %type <str>		createdb_opt_name
 %type <node>	var_value zone_value
 %type <rolespec> auth_ident RoleSpec opt_granted_by
 
 %type <keyword> unreserved_keyword type_func_name_keyword
-%type <keyword> col_name_keyword reserved_keyword
+%type <keyword> col_name_keyword implicit_alias_keyword reserved_keyword
 
 %type <node>	TableConstraint TableLikeClause
 %type <ival>	TableLikeOptionList TableLikeOption
@@ -741,19 +742,14 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %nonassoc	'<' '>' '=' LESS_EQUALS GREATER_EQUALS NOT_EQUALS
 %nonassoc	BETWEEN IN_P LIKE ILIKE SIMILAR NOT_LA
 %nonassoc	ESCAPE			/* ESCAPE must be just above LIKE/ILIKE/SIMILAR */
-%left		POSTFIXOP		/* dummy for postfix Op rules */
 /*
  * To support target_el without AS, we must give IDENT an explicit priority
- * between POSTFIXOP and Op.  We can safely assign the same priority to
- * various unreserved keywords as needed to resolve ambiguities (this can't
- * have any bad effects since obviously the keywords will still behave the
- * same as if they weren't keywords).  We need to do this:
+ * lower than Op.  We can safely assign the same priority to various
+ * unreserved keywords as needed to resolve ambiguities (this can't have any
+ * bad effects since obviously the keywords will still behave the same as if
+ * they weren't keywords).  We need to do this:
  * for PARTITION, RANGE, ROWS, GROUPS to support opt_existing_window_name;
- * for RANGE, ROWS, GROUPS so that they can follow a_expr without creating
- * postfix-operator problems;
  * for GENERATED so that it can follow b_expr;
- * and for NULL so that it can follow b_expr in ColQualList without creating
- * postfix-operator problems.
  *
  * To support CUBE and ROLLUP in GROUP BY without reserving them, we give them
  * an explicit priority lower than '(', so that a rule with CUBE '(' will shift
@@ -7993,7 +7989,12 @@ oper_argtypes:
 			| '(' NONE ',' Typename ')'					/* left unary */
 					{ $$ = list_make2(NULL, $4); }
 			| '(' Typename ',' NONE ')'					/* right unary */
-					{ $$ = list_make2($2, NULL); }
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+							 errmsg("operator right argument must be specified"),
+							 errhint("Postfix operators are not supported.")));
+				}
 		;
 
 any_operator:
@@ -12993,8 +12994,6 @@ a_expr:		c_expr									{ $$ = $1; }
 				{ $$ = (Node *) makeA_Expr(AEXPR_OP, $2, $1, $3, @2); }
 			| qual_Op a_expr					%prec Op
 				{ $$ = (Node *) makeA_Expr(AEXPR_OP, $1, NULL, $2, @1); }
-			| a_expr qual_Op					%prec POSTFIXOP
-				{ $$ = (Node *) makeA_Expr(AEXPR_OP, $2, $1, NULL, @2); }
 
 			| a_expr AND a_expr
 				{ $$ = makeAndExpr($1, $3, @2); }
@@ -13408,8 +13407,6 @@ b_expr:		c_expr
 				{ $$ = (Node *) makeA_Expr(AEXPR_OP, $2, $1, $3, @2); }
 			| qual_Op b_expr					%prec Op
 				{ $$ = (Node *) makeA_Expr(AEXPR_OP, $1, NULL, $2, @1); }
-			| b_expr qual_Op					%prec POSTFIXOP
-				{ $$ = (Node *) makeA_Expr(AEXPR_OP, $2, $1, NULL, @2); }
 			| b_expr IS DISTINCT FROM b_expr		%prec IS
 				{
 					$$ = (Node *) makeSimpleA_Expr(AEXPR_DISTINCT, "=", $1, $5, @2);
@@ -14663,15 +14660,7 @@ target_el:	a_expr AS ColLabel
 					$$->val = (Node *)$1;
 					$$->location = @1;
 				}
-			/*
-			 * We support omitting AS only for column labels that aren't
-			 * any known keyword.  There is an ambiguity against postfix
-			 * operators: is "a ! b" an infix expression, or a postfix
-			 * expression and a column label?  We prefer to resolve this
-			 * as an infix expression, which we accomplish by assigning
-			 * IDENT a precedence higher than POSTFIXOP.
-			 */
-			| a_expr IDENT
+			| a_expr ImplicitAlias
 				{
 					$$ = makeNode(ResTarget);
 					$$->name = $2;
@@ -14999,6 +14988,12 @@ NonReservedWord:	IDENT							{ $$ = $1; }
 			| type_func_name_keyword				{ $$ = pstrdup($1); }
 		;
 
+/* Bare column label --- names that can be column labels without writing "AS".
+ */
+ImplicitAlias:	IDENT								{ $$ = $1; }
+			| implicit_alias_keyword					{ $$ = pstrdup($1); }
+		;
+
 /* Column label --- allowed labels in "AS" clauses.
  * This presently includes *all* Postgres keywords.
  */
@@ -15009,6 +15004,428 @@ ColLabel:	IDENT									{ $$ = $1; }
 			| reserved_keyword						{ $$ = pstrdup($1); }
 		;
 
+
+/*
+ * All keywords can be used explicitly as a column label in expressions
+ * like 'SELECT 1234 AS keyword', but only some keywords can be used
+ * implicitly as column labels in expressions like 'SELECT 1234 keyword'.
+ * Those that can be used implicitly should be listed here.
+ *
+ * Keep this in alphabetical order.
+ */
+implicit_alias_keyword:
+			  ABORT_P
+			| ABSOLUTE_P
+			| ACCESS
+			| ACTION
+			| ADD_P
+			| ADMIN
+			| AFTER
+			| AGGREGATE
+			| ALL
+			| ALSO
+			| ALTER
+			| ALWAYS
+			| ANALYSE
+			| ANALYZE
+			| AND
+			| ANY
+			| ASC
+			| ASSERTION
+			| ASSIGNMENT
+			| ASYMMETRIC
+			| AT
+			| ATTACH
+			| ATTRIBUTE
+			| AUTHORIZATION
+			| BACKWARD
+			| BEFORE
+			| BEGIN_P
+			| BETWEEN
+			| BIGINT
+			| BINARY
+			| BIT
+			| BOOLEAN_P
+			| BOTH
+			| BY
+			| CACHE
+			| CALL
+			| CALLED
+			| CASCADE
+			| CASCADED
+			| CASE
+			| CAST
+			| CATALOG_P
+			| CHAIN
+			| CHARACTERISTICS
+			| CHECK
+			| CHECKPOINT
+			| CLASS
+			| CLOSE
+			| CLUSTER
+			| COALESCE
+			| COLLATE
+			| COLLATION
+			| COLUMN
+			| COLUMNS
+			| COMMENT
+			| COMMENTS
+			| COMMIT
+			| COMMITTED
+			| CONCURRENTLY
+			| CONFIGURATION
+			| CONFLICT
+			| CONNECTION
+			| CONSTRAINT
+			| CONSTRAINTS
+			| CONTENT_P
+			| CONTINUE_P
+			| CONVERSION_P
+			| COPY
+			| COST
+			| CROSS
+			| CSV
+			| CUBE
+			| CURRENT_P
+			| CURRENT_CATALOG
+			| CURRENT_DATE
+			| CURRENT_ROLE
+			| CURRENT_SCHEMA
+			| CURRENT_TIME
+			| CURRENT_TIMESTAMP
+			| CURRENT_USER
+			| CURSOR
+			| CYCLE
+			| DATA_P
+			| DATABASE
+			| DEALLOCATE
+			| DEC
+			| DECIMAL_P
+			| DECLARE
+			| DEFAULT
+			| DEFAULTS
+			| DEFERRABLE
+			| DEFERRED
+			| DEFINER
+			| DELETE_P
+			| DELIMITER
+			| DELIMITERS
+			| DEPENDS
+			| DESC
+			| DETACH
+			| DICTIONARY
+			| DISABLE_P
+			| DISCARD
+			| DISTINCT
+			| DO
+			| DOCUMENT_P
+			| DOMAIN_P
+			| DOUBLE_P
+			| DROP
+			| EACH
+			| ELSE
+			| ENABLE_P
+			| ENCODING
+			| ENCRYPTED
+			| END_P
+			| ENUM_P
+			| ESCAPE
+			| EVENT
+			| EXCLUDE
+			| EXCLUDING
+			| EXCLUSIVE
+			| EXECUTE
+			| EXISTS
+			| EXPLAIN
+			| EXPRESSION
+			| EXTENSION
+			| EXTERNAL
+			| EXTRACT
+			| FALSE_P
+			| FAMILY
+			| FIRST_P
+			| FLOAT_P
+			| FOLLOWING
+			| FORCE
+			| FOREIGN
+			| FORWARD
+			| FREEZE
+			| FULL
+			| FUNCTION
+			| FUNCTIONS
+			| GENERATED
+			| GLOBAL
+			| GRANTED
+			| GREATEST
+			| GROUPING
+			| GROUPS
+			| HANDLER
+			| HEADER_P
+			| HOLD
+			| IDENTITY_P
+			| IF_P
+			| ILIKE
+			| IMMEDIATE
+			| IMMUTABLE
+			| IMPLICIT_P
+			| IMPORT_P
+			| IN_P
+			| INCLUDE
+			| INCLUDING
+			| INCREMENT
+			| INDEX
+			| INDEXES
+			| INHERIT
+			| INHERITS
+			| INITIALLY
+			| INLINE_P
+			| INNER_P
+			| INOUT
+			| INPUT_P
+			| INSENSITIVE
+			| INSERT
+			| INSTEAD
+			| INT_P
+			| INTEGER
+			| INTERVAL
+			| INVOKER
+			| IS
+			| ISOLATION
+			| JOIN
+			| KEY
+			| LABEL
+			| LANGUAGE
+			| LARGE_P
+			| LAST_P
+			| LATERAL_P
+			| LEADING
+			| LEAKPROOF
+			| LEAST
+			| LEFT
+			| LEVEL
+			| LIKE
+			| LISTEN
+			| LOAD
+			| LOCAL
+			| LOCALTIME
+			| LOCALTIMESTAMP
+			| LOCATION
+			| LOCK_P
+			| LOCKED
+			| LOGGED
+			| MAPPING
+			| MATCH
+			| MATERIALIZED
+			| MAXVALUE
+			| METHOD
+			| MINVALUE
+			| MODE
+			| MOVE
+			| NAME_P
+			| NAMES
+			| NATIONAL
+			| NATURAL
+			| NCHAR
+			| NEW
+			| NEXT
+			| NFC
+			| NFD
+			| NFKC
+			| NFKD
+			| NO
+			| NONE
+			| NORMALIZE
+			| NORMALIZED
+			| NOT
+			| NOTHING
+			| NOTIFY
+			| NOWAIT
+			| NULL_P
+			| NULLIF
+			| NULLS_P
+			| NUMERIC
+			| OBJECT_P
+			| OF
+			| OFF
+			| OIDS
+			| OLD
+			| ONLY
+			| OPERATOR
+			| OPTION
+			| OPTIONS
+			| OR
+			| ORDINALITY
+			| OTHERS
+			| OUT_P
+			| OUTER_P
+			| OVERLAY
+			| OVERRIDING
+			| OWNED
+			| OWNER
+			| PARALLEL
+			| PARSER
+			| PARTIAL
+			| PARTITION
+			| PASSING
+			| PASSWORD
+			| PLACING
+			| PLANS
+			| POLICY
+			| POSITION
+			| PRECEDING
+			| PREPARE
+			| PREPARED
+			| PRESERVE
+			| PRIMARY
+			| PRIOR
+			| PRIVILEGES
+			| PROCEDURAL
+			| PROCEDURE
+			| PROCEDURES
+			| PROGRAM
+			| PUBLICATION
+			| QUOTE
+			| RANGE
+			| READ
+			| REAL
+			| REASSIGN
+			| RECHECK
+			| RECURSIVE
+			| REF
+			| REFERENCES
+			| REFERENCING
+			| REFRESH
+			| REINDEX
+			| RELATIVE_P
+			| RELEASE
+			| RENAME
+			| REPEATABLE
+			| REPLACE
+			| REPLICA
+			| RESET
+			| RESTART
+			| RESTRICT
+			| RETURNS
+			| REVOKE
+			| RIGHT
+			| ROLE
+			| ROLLBACK
+			| ROLLUP
+			| ROUTINE
+			| ROUTINES
+			| ROW
+			| ROWS
+			| RULE
+			| SAVEPOINT
+			| SCHEMA
+			| SCHEMAS
+			| SCROLL
+			| SEARCH
+			| SECURITY
+			| SELECT
+			| SEQUENCE
+			| SEQUENCES
+			| SERIALIZABLE
+			| SERVER
+			| SESSION
+			| SESSION_USER
+			| SET
+			| SETOF
+			| SETS
+			| SHARE
+			| SHOW
+			| SIMILAR
+			| SIMPLE
+			| SKIP
+			| SMALLINT
+			| SNAPSHOT
+			| SOME
+			| SQL_P
+			| STABLE
+			| STANDALONE_P
+			| START
+			| STATEMENT
+			| STATISTICS
+			| STDIN
+			| STDOUT
+			| STORAGE
+			| STORED
+			| STRICT_P
+			| STRIP_P
+			| SUBSCRIPTION
+			| SUBSTRING
+			| SUPPORT
+			| SYMMETRIC
+			| SYSID
+			| SYSTEM_P
+			| TABLE
+			| TABLES
+			| TABLESAMPLE
+			| TABLESPACE
+			| TEMP
+			| TEMPLATE
+			| TEMPORARY
+			| TEXT_P
+			| THEN
+			| TIES
+			| TIME
+			| TIMESTAMP
+			| TRAILING
+			| TRANSACTION
+			| TRANSFORM
+			| TREAT
+			| TRIGGER
+			| TRIM
+			| TRUE_P
+			| TRUNCATE
+			| TRUSTED
+			| TYPE_P
+			| TYPES_P
+			| UESCAPE
+			| UNBOUNDED
+			| UNCOMMITTED
+			| UNENCRYPTED
+			| UNIQUE
+			| UNKNOWN
+			| UNLISTEN
+			| UNLOGGED
+			| UNTIL
+			| UPDATE
+			| USER
+			| USING
+			| VACUUM
+			| VALID
+			| VALIDATE
+			| VALIDATOR
+			| VALUE_P
+			| VALUES
+			| VARCHAR
+			| VARIADIC
+			| VERBOSE
+			| VERSION_P
+			| VIEW
+			| VIEWS
+			| VOLATILE
+			| WHEN
+			| WHITESPACE_P
+			| WORK
+			| WRAPPER
+			| WRITE
+			| XML_P
+			| XMLATTRIBUTES
+			| XMLCONCAT
+			| XMLELEMENT
+			| XMLEXISTS
+			| XMLFOREST
+			| XMLNAMESPACES
+			| XMLPARSE
+			| XMLPI
+			| XMLROOT
+			| XMLSERIALIZE
+			| XMLTABLE
+			| YES_P
+			| ZONE
+		;
 
 /*
  * Keyword category lists.  Generally, every keyword present in

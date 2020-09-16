@@ -15,16 +15,16 @@ CREATE OPERATOR <% (
    negator = >=%
 );
 CREATE OPERATOR @#@ (
-   rightarg = int8,		-- left unary
-   procedure = numeric_fac
+   rightarg = float8,	-- left unary
+   procedure = dsqrt
 );
 CREATE OPERATOR #@# (
-   leftarg = int8,		-- right unary
-   procedure = numeric_fac
+   rightarg = float8,	-- left unary
+   procedure = dsqrt
 );
 CREATE OPERATOR #%# (
-   leftarg = int8,		-- right unary
-   procedure = numeric_fac
+   rightarg = float8,	-- left unary
+   procedure = dsqrt
 );
 -- Test operator created above
 SELECT point '(1,2)' <% widget '(0,0,3)' AS t,
@@ -36,7 +36,10 @@ SELECT point '(1,2)' <% widget '(0,0,3)' AS t,
 
 -- Test comments
 COMMENT ON OPERATOR ###### (int4, NONE) IS 'bad right unary';
-ERROR:  operator does not exist: integer ######
+ERROR:  operator right argument must be specified
+HINT:  Postfix operators are not supported.
+COMMENT ON OPERATOR ###### (NONE, int4) IS 'bad left unary';
+ERROR:  operator does not exist: ###### integer
 -- => is disallowed now
 CREATE OPERATOR => (
    leftarg = int8,		-- right unary
@@ -52,12 +55,12 @@ CREATE OPERATOR !=- (
    leftarg = int8,		-- right unary
    procedure = numeric_fac
 );
+ERROR:  operator right argument must be specified
+HINT:  Postfix operators are not supported.
 SELECT 2 !=-;
- ?column? 
-----------
-        2
-(1 row)
-
+ERROR:  syntax error at or near ";"
+LINE 1: SELECT 2 !=-;
+                    ^
 -- make sure lexer returns != as <> even in edge cases
 SELECT 2 !=/**/ 1, 2 !=/**/ 2;
  ?column? | ?column? 
@@ -172,11 +175,13 @@ CREATE OPERATOR #@%# (
    invalid_att = int8
 );
 WARNING:  operator attribute "invalid_att" not recognized
--- Should fail. At least leftarg or rightarg should be mandatorily specified
+ERROR:  operator right argument must be specified
+HINT:  Postfix operators are not supported.
+-- Should fail. At least rightarg should be mandatorily specified
 CREATE OPERATOR #@%# (
    procedure = numeric_fac
 );
-ERROR:  at least one of leftarg or rightarg must be specified
+ERROR:  operator arguments must be specified
 -- Should fail. Procedure should be mandatorily specified
 CREATE OPERATOR #@%# (
    leftarg = int8

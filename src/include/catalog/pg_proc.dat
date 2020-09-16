@@ -327,10 +327,6 @@
 { oid => '110', descr => 'I/O',
   proname => 'unknownout', prorettype => 'cstring', proargtypes => 'unknown',
   prosrc => 'unknownout' },
-{ oid => '111',
-  descr => 'implementation of deprecated ! and !! factorial operators',
-  proname => 'numeric_fac', prorettype => 'numeric', proargtypes => 'int8',
-  prosrc => 'numeric_fac' },
 
 { oid => '115',
   proname => 'box_above_eq', prorettype => 'bool', proargtypes => 'box box',
@@ -3687,10 +3683,10 @@
   prosrc => 'pg_get_function_arg_default' },
 
 { oid => '1686', descr => 'list of SQL keywords',
-  proname => 'pg_get_keywords', procost => '10', prorows => '400',
+  proname => 'pg_get_keywords', procost => '10', prorows => '450',
   proretset => 't', provolatile => 's', prorettype => 'record',
-  proargtypes => '', proallargtypes => '{text,char,text}',
-  proargmodes => '{o,o,o}', proargnames => '{word,catcode,catdesc}',
+  proargtypes => '', proallargtypes => '{text,char,text,text}',
+  proargmodes => '{o,o,o,o}', proargnames => '{word,catcode,catdesc,aliastype}',
   prosrc => 'pg_get_keywords' },
 
 { oid => '2289', descr => 'convert generic options array to name/value table',

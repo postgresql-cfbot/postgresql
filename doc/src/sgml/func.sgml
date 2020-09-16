@@ -1050,36 +1050,6 @@ repeat('Pg', 4) <returnvalue>PgPgPgPg</returnvalue>
 
       <row>
        <entry role="func_table_entry"><para role="func_signature">
-        <type>bigint</type> <literal>!</literal>
-        <returnvalue>numeric</returnvalue>
-       </para>
-       <para>
-        Factorial
-        (deprecated, use <link linkend="function-factorial"><function>factorial()</function></link> instead)
-       </para>
-       <para>
-        <literal>5 !</literal>
-        <returnvalue>120</returnvalue>
-       </para></entry>
-      </row>
-
-      <row>
-       <entry role="func_table_entry"><para role="func_signature">
-        <literal>!!</literal> <type>bigint</type>
-        <returnvalue>numeric</returnvalue>
-       </para>
-       <para>
-        Factorial as a prefix operator
-        (deprecated, use <link linkend="function-factorial"><function>factorial()</function></link> instead)
-       </para>
-       <para>
-        <literal>!! 5</literal>
-        <returnvalue>120</returnvalue>
-       </para></entry>
-      </row>
-
-      <row>
-       <entry role="func_table_entry"><para role="func_signature">
         <literal>@</literal> <replaceable>numeric_type</replaceable>
         <returnvalue><replaceable>numeric_type</replaceable></returnvalue>
        </para>
@@ -22203,7 +22173,8 @@ SELECT pg_type_is_visible('myschema.widget'::regtype);
         <returnvalue>setof record</returnvalue>
         ( <parameter>word</parameter> <type>text</type>,
         <parameter>catcode</parameter> <type>"char"</type>,
-        <parameter>catdesc</parameter> <type>text</type> )
+        <parameter>catdesc</parameter> <type>text</type>,
+        <parameter>aliastype</parameter> <type>text</type> )
        </para>
        <para>
         Returns a set of records describing the SQL keywords recognized by the
@@ -22215,6 +22186,9 @@ SELECT pg_type_is_visible('myschema.widget'::regtype);
         function name, or <literal>R</literal> for a fully reserved keyword.
         The <parameter>catdesc</parameter> column contains a
         possibly-localized string describing the category.
+        The <parameter>aliastype</parameter> column is
+        <literal>implicit</literal> if the keyword can be used as an implicit
+        column label, <literal>explicit</literal> otherwise.
        </para></entry>
       </row>
 

@@ -2716,15 +2716,14 @@ deparseOpExpr(OpExpr *node, deparse_expr_cxt *context)
 	oprkind = form->oprkind;
 
 	/* Sanity check. */
-	Assert((oprkind == 'r' && list_length(node->args) == 1) ||
-		   (oprkind == 'l' && list_length(node->args) == 1) ||
+	Assert((oprkind == 'l' && list_length(node->args) == 1) ||
 		   (oprkind == 'b' && list_length(node->args) == 2));
 
 	/* Always parenthesize the expression. */
 	appendStringInfoChar(buf, '(');
 
 	/* Deparse left operand. */
-	if (oprkind == 'r' || oprkind == 'b')
+	if (oprkind == 'b')
 	{
 		arg = list_head(node->args);
 		deparseExpr(lfirst(arg), context);

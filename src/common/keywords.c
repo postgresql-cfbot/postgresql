@@ -24,7 +24,7 @@
 
 /* Keyword categories for SQL keywords */
 
-#define PG_KEYWORD(kwname, value, category) category,
+#define PG_KEYWORD(kwname, value, category, aliastype) category,
 
 const uint8 ScanKeywordCategories[SCANKEYWORDS_NUM_KEYWORDS] = {
 #include "parser/kwlist.h"

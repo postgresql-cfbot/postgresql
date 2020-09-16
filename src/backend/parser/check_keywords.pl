@@ -21,6 +21,27 @@ sub error
 	return;
 }
 
+sub check_alphabetical_order
+{
+	my ($listname, $list) = @_;
+	my $prevkword = '';
+	my $implicit_alias_kword;
+
+	foreach my $kword (@$list)
+	{
+
+		# Some keyword have a _P suffix. Remove it for the comparison.
+		$implicit_alias_kword = $kword;
+		$implicit_alias_kword =~ s/_P$//;
+		if ($implicit_alias_kword le $prevkword)
+		{
+			error
+			  "'$implicit_alias_kword' after '$prevkword' in $listname list is misplaced";
+		}
+		$prevkword = $implicit_alias_kword;
+	}
+}
+
 $, = ' ';     # set output field separator
 $\ = "\n";    # set output record separator
 
@@ -33,9 +54,11 @@ $keyword_categories{'reserved_keyword'}       = 'RESERVED_KEYWORD';
 open(my $gram, '<', $gram_filename) || die("Could not open : $gram_filename");
 
 my $kcat;
+my $implicit_alias;
 my $comment;
 my @arr;
 my %keywords;
+my @implicit_alias;
 
 line: while (my $S = <$gram>)
 {
@@ -51,7 +74,7 @@ line: while (my $S = <$gram>)
 	$s = '[/][*]', $S =~ s#$s# /* #g;
 	$s = '[*][/]', $S =~ s#$s# */ #g;
 
-	if (!($kcat))
+	if (!($kcat) && !($implicit_alias))
 	{
 
 		# Is this the beginning of a keyword list?
@@ -63,6 +86,10 @@ line: while (my $S = <$gram>)
 				next line;
 			}
 		}
+
+		# Is this the beginning of the implicit_alias_keyword list?
+		$implicit_alias = 1 if ($S =~ m/^implicit_alias_keyword:/);
+
 		next line;
 	}
 
@@ -97,7 +124,8 @@ line: while (my $S = <$gram>)
 		{
 
 			# end of keyword list
-			$kcat = '';
+			undef $kcat;
+			undef $implicit_alias;
 			next;
 		}
 
@@ -107,31 +135,21 @@ line: while (my $S = <$gram>)
 		}
 
 		# Put this keyword into the right list
-		push @{ $keywords{$kcat} }, $arr[$fieldIndexer];
+		if ($implicit_alias)
+		{
+			push @implicit_alias, $arr[$fieldIndexer];
+		}
+		else
+		{
+			push @{ $keywords{$kcat} }, $arr[$fieldIndexer];
+		}
 	}
 }
 close $gram;
 
 # Check that each keyword list is in alphabetical order (just for neatnik-ism)
-my ($prevkword, $bare_kword);
-foreach my $kcat (keys %keyword_categories)
-{
-	$prevkword = '';
-
-	foreach my $kword (@{ $keywords{$kcat} })
-	{
-
-		# Some keyword have a _P suffix. Remove it for the comparison.
-		$bare_kword = $kword;
-		$bare_kword =~ s/_P$//;
-		if ($bare_kword le $prevkword)
-		{
-			error
-			  "'$bare_kword' after '$prevkword' in $kcat list is misplaced";
-		}
-		$prevkword = $bare_kword;
-	}
-}
+check_alphabetical_order($_, $keywords{$_}) for (keys %keyword_categories);
+check_alphabetical_order('implicit_alias_keyword', \@implicit_alias);
 
 # Transform the keyword lists into hashes.
 # kwhashes is a hash of hashes, keyed by keyword category id,
@@ -147,6 +165,7 @@ while (my ($kcat, $kcat_id) = each(%keyword_categories))
 
 	$kwhashes{$kcat_id} = $hash;
 }
+my %implicit_alias = map { $_ => 1 } @implicit_alias;
 
 # Now read in kwlist.h
 
@@ -154,17 +173,41 @@ open(my $kwlist, '<', $kwlist_filename)
   || die("Could not open : $kwlist_filename");
 
 my $prevkwstring = '';
-my $bare_kwname;
+my $implicit_alias_kwname;
 my %kwhash;
 kwlist_line: while (<$kwlist>)
 {
 	my ($line) = $_;
 
-	if ($line =~ /^PG_KEYWORD\(\"(.*)\", (.*), (.*)\)/)
+	if ($line =~ /^PG_KEYWORD\(\"(.*)\", (.*), (.*), (.*)\)/)
 	{
 		my ($kwstring) = $1;
 		my ($kwname)   = $2;
 		my ($kwcat_id) = $3;
+		my ($aliastype) = $4;
+
+		# Check that the keyword label aliastype value matches treatment in gram.y
+		if ($aliastype eq 'IMPLICIT_ALIAS')
+		{
+			unless ($implicit_alias{$kwname})
+			{
+				error
+				  "'$kwstring' in kwlist.h is marked as implicit_alias, but is missing from gram.y's implicit_alias_keyword rule";
+			}
+		}
+		elsif ($aliastype eq 'EXPLICIT_ALIAS')
+		{
+			if ($implicit_alias{$kwname})
+			{
+				error
+				  "'$kwname' in kwlist.h is marked as explicit, but is listed in gram.y's implicit_alias_keyword rule";
+			}
+		}
+		else
+		{
+			error
+			  "'$aliastype' not recognized in kwlist.h.  Expected either 'IMPLICIT_ALIAS' or 'EXPLICIT_ALIAS'";
+		}
 
 		# Check that the list is in alphabetical order (critical!)
 		if ($kwstring le $prevkwstring)
@@ -189,9 +232,9 @@ kwlist_line: while (<$kwlist>)
 		}
 
 		# Check that the keyword string matches keyword name
-		$bare_kwname = $kwname;
-		$bare_kwname =~ s/_P$//;
-		if ($bare_kwname ne uc($kwstring))
+		$implicit_alias_kwname = $kwname;
+		$implicit_alias_kwname =~ s/_P$//;
+		if ($implicit_alias_kwname ne uc($kwstring))
 		{
 			error
 			  "keyword name '$kwname' doesn't match keyword string '$kwstring'";

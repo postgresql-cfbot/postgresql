@@ -203,7 +203,7 @@ DOTypeNameCompare(const void *p1, const void *p2)
 		OprInfo    *oobj1 = *(OprInfo *const *) p1;
 		OprInfo    *oobj2 = *(OprInfo *const *) p2;
 
-		/* oprkind is 'l', 'r', or 'b'; this sorts prefix, postfix, infix */
+		/* oprkind is 'l' or 'b'; this sorts prefix and infix */
 		cmpval = (oobj2->oprkind - oobj1->oprkind);
 		if (cmpval != 0)
 			return cmpval;

@@ -39,7 +39,7 @@ open my $fh, '<', "$srcdir/../../../src/include/parser/kwlist.h" or die;
 
 while (<$fh>)
 {
-	if (/^PG_KEYWORD\("(\w+)", \w+, (\w+)_KEYWORD\)/)
+	if (/^PG_KEYWORD\("(\w+)", \w+, (\w+)_KEYWORD\, \w+\)/)
 	{
 		$keywords{ uc $1 }{'pg'}{ lc $2 } = 1;
 	}

@@ -26,6 +26,7 @@ typedef struct ScanKeywordList
 {
 	const char *kw_string;		/* all keywords in order, separated by \0 */
 	const uint16 *kw_offsets;	/* offsets to the start of each keyword */
+	const bool *kw_is_implicit;	/* whether each keyword can be used as an implicit label */
 	ScanKeywordHashFunc hash;	/* perfect hash function for keywords */
 	int			num_keywords;	/* number of keywords */
 	int			max_kw_len;		/* length of longest keyword */
@@ -39,6 +40,13 @@ static inline const char *
 GetScanKeyword(int n, const ScanKeywordList *keywords)
 {
 	return keywords->kw_string + keywords->kw_offsets[n];
+}
+
+/* Code that wants to retrieve the aliastype of the N'th keyword should use this. */
+static inline bool
+GetScanKeywordIsImplicit(int n, const ScanKeywordList *keywords)
+{
+	return keywords->kw_is_implicit[n];
 }
 
 #endif							/* KWLOOKUP_H */

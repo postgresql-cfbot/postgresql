@@ -18,18 +18,18 @@ CREATE OPERATOR <% (
 );
 
 CREATE OPERATOR @#@ (
-   rightarg = int8,		-- left unary
-   procedure = numeric_fac
+   rightarg = float8,	-- left unary
+   procedure = dsqrt
 );
 
 CREATE OPERATOR #@# (
-   leftarg = int8,		-- right unary
-   procedure = numeric_fac
+   rightarg = float8,	-- left unary
+   procedure = dsqrt
 );
 
 CREATE OPERATOR #%# (
-   leftarg = int8,		-- right unary
-   procedure = numeric_fac
+   rightarg = float8,	-- left unary
+   procedure = dsqrt
 );
 
 -- Test operator created above
@@ -38,6 +38,7 @@ SELECT point '(1,2)' <% widget '(0,0,3)' AS t,
 
 -- Test comments
 COMMENT ON OPERATOR ###### (int4, NONE) IS 'bad right unary';
+COMMENT ON OPERATOR ###### (NONE, int4) IS 'bad left unary';
 
 -- => is disallowed now
 CREATE OPERATOR => (
@@ -133,7 +134,7 @@ CREATE OPERATOR #@%# (
    invalid_att = int8
 );
 
--- Should fail. At least leftarg or rightarg should be mandatorily specified
+-- Should fail. At least rightarg should be mandatorily specified
 CREATE OPERATOR #@%# (
    procedure = numeric_fac
 );

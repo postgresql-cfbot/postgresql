@@ -416,12 +416,14 @@ pg_get_keywords(PG_FUNCTION_ARGS)
 		funcctx = SRF_FIRSTCALL_INIT();
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
-		tupdesc = CreateTemplateTupleDesc(3);
+		tupdesc = CreateTemplateTupleDesc(4);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "word",
 						   TEXTOID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "catcode",
 						   CHAROID, -1, 0);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "catdesc",
+						   TEXTOID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 4, "aliastype",
 						   TEXTOID, -1, 0);
 
 		funcctx->attinmeta = TupleDescGetAttInMetadata(tupdesc);
@@ -433,7 +435,7 @@ pg_get_keywords(PG_FUNCTION_ARGS)
 
 	if (funcctx->call_cntr < ScanKeywords.num_keywords)
 	{
-		char	   *values[3];
+		char	   *values[4];
 		HeapTuple	tuple;
 
 		/* cast-away-const is ugly but alternatives aren't much better */
@@ -464,6 +466,11 @@ pg_get_keywords(PG_FUNCTION_ARGS)
 				values[2] = NULL;
 				break;
 		}
+
+		if (GetScanKeywordIsImplicit(funcctx->call_cntr, &ScanKeywords))
+			values[3] = unconstify(char *, (const char *)"implicit");
+		else
+			values[3] = unconstify(char *, (const char *)"explicit");
 
 		tuple = BuildTupleFromCStrings(funcctx->attinmeta, values);
 

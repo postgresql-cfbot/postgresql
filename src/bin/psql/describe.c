@@ -805,7 +805,7 @@ describeOperators(const char *pattern, bool verbose, bool showSystem)
 					  "SELECT n.nspname as \"%s\",\n"
 					  "  o.oprname AS \"%s\",\n"
 					  "  CASE WHEN o.oprkind='l' THEN NULL ELSE pg_catalog.format_type(o.oprleft, NULL) END AS \"%s\",\n"
-					  "  CASE WHEN o.oprkind='r' THEN NULL ELSE pg_catalog.format_type(o.oprright, NULL) END AS \"%s\",\n"
+					  "  pg_catalog.format_type(o.oprright, NULL) AS \"%s\",\n"
 					  "  pg_catalog.format_type(o.oprresult, NULL) AS \"%s\",\n",
 					  gettext_noop("Schema"),
 					  gettext_noop("Name"),

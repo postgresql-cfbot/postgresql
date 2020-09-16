@@ -9207,25 +9207,16 @@ get_oper_expr(OpExpr *expr, deparse_context *context)
 		if (!HeapTupleIsValid(tp))
 			elog(ERROR, "cache lookup failed for operator %u", opno);
 		optup = (Form_pg_operator) GETSTRUCT(tp);
-		switch (optup->oprkind)
+		if (optup->oprkind == 'l')
 		{
-			case 'l':
-				appendStringInfo(buf, "%s ",
-								 generate_operator_name(opno,
-														InvalidOid,
-														exprType(arg)));
-				get_rule_expr_paren(arg, context, true, (Node *) expr);
-				break;
-			case 'r':
-				get_rule_expr_paren(arg, context, true, (Node *) expr);
-				appendStringInfo(buf, " %s",
-								 generate_operator_name(opno,
-														exprType(arg),
-														InvalidOid));
-				break;
-			default:
-				elog(ERROR, "bogus oprkind: %d", optup->oprkind);
+			appendStringInfo(buf, "%s ",
+							 generate_operator_name(opno,
+													InvalidOid,
+													exprType(arg)));
+			get_rule_expr_paren(arg, context, true, (Node *) expr);
 		}
+		else
+			elog(ERROR, "bogus oprkind: %d", optup->oprkind);
 		ReleaseSysCache(tp);
 	}
 	if (!PRETTY_PAREN(context))
@@ -11086,10 +11077,6 @@ generate_operator_name(Oid operid, Oid arg1, Oid arg2)
 		case 'l':
 			p_result = left_oper(NULL, list_make1(makeString(oprname)), arg2,
 								 true, -1);
-			break;
-		case 'r':
-			p_result = right_oper(NULL, list_make1(makeString(oprname)), arg1,
-								  true, -1);
 			break;
 		default:
 			elog(ERROR, "unrecognized oprkind: %d", operform->oprkind);

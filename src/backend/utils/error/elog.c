@@ -2350,11 +2350,6 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 		 * Note: Since only '-', '0' to '9' are valid formatting characters we
 		 * can do a quick check here to pre-check for formatting. If the char
 		 * is not formatting then we can skip a useless function call.
-		 *
-		 * Further note: At least on some platforms, passing %*s rather than
-		 * %s to appendStringInfo() is substantially slower, so many of the
-		 * cases below avoid doing that unless non-zero padding is in fact
-		 * specified.
 		 */
 		if (*p > '9')
 			padding = 0;
@@ -2371,10 +2366,7 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 
 					if (appname == NULL || *appname == '\0')
 						appname = _("[unknown]");
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, appname);
-					else
-						appendStringInfoString(buf, appname);
+					appendStringInfo(buf, "%*s", padding, appname);
 				}
 				else if (padding != 0)
 					appendStringInfoSpaces(buf,
@@ -2392,10 +2384,7 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 					else
 						backend_type_str = GetBackendTypeDesc(MyBackendType);
 
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, backend_type_str);
-					else
-						appendStringInfoString(buf, backend_type_str);
+					appendStringInfo(buf, "%*s", padding, backend_type_str);
 					break;
 				}
 			case 'u':
@@ -2405,10 +2394,7 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 
 					if (username == NULL || *username == '\0')
 						username = _("[unknown]");
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, username);
-					else
-						appendStringInfoString(buf, username);
+					appendStringInfo(buf, "%*s", padding, username);
 				}
 				else if (padding != 0)
 					appendStringInfoSpaces(buf,
@@ -2421,17 +2407,13 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 
 					if (dbname == NULL || *dbname == '\0')
 						dbname = _("[unknown]");
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, dbname);
-					else
-						appendStringInfoString(buf, dbname);
+					appendStringInfo(buf, "%*s", padding, dbname);
 				}
 				else if (padding != 0)
 					appendStringInfoSpaces(buf,
 										   padding > 0 ? padding : -padding);
 				break;
 			case 'c':
-				if (padding != 0)
 				{
 					char		strfbuf[128];
 
@@ -2439,14 +2421,9 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 							 (long) (MyStartTime), MyProcPid);
 					appendStringInfo(buf, "%*s", padding, strfbuf);
 				}
-				else
-					appendStringInfo(buf, "%lx.%x", (long) (MyStartTime), MyProcPid);
 				break;
 			case 'p':
-				if (padding != 0)
-					appendStringInfo(buf, "%*d", padding, MyProcPid);
-				else
-					appendStringInfo(buf, "%d", MyProcPid);
+				appendStringInfo(buf, "%*d", padding, MyProcPid);
 				break;
 
 			case 'P':
@@ -2472,17 +2449,11 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 				break;
 
 			case 'l':
-				if (padding != 0)
-					appendStringInfo(buf, "%*ld", padding, log_line_number);
-				else
-					appendStringInfo(buf, "%ld", log_line_number);
+				appendStringInfo(buf, "%*ld", padding, log_line_number);
 				break;
 			case 'm':
 				setup_formatted_log_time();
-				if (padding != 0)
-					appendStringInfo(buf, "%*s", padding, formatted_log_time);
-				else
-					appendStringInfoString(buf, formatted_log_time);
+				appendStringInfo(buf, "%*s", padding, formatted_log_time);
 				break;
 			case 't':
 				{
@@ -2492,10 +2463,7 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 					pg_strftime(strfbuf, sizeof(strfbuf),
 								"%Y-%m-%d %H:%M:%S %Z",
 								pg_localtime(&stamp_time, log_timezone));
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, strfbuf);
-					else
-						appendStringInfoString(buf, strfbuf);
+					appendStringInfo(buf, "%*s", padding, strfbuf);
 				}
 				break;
 			case 'n':
@@ -2512,19 +2480,13 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 							 (long) saved_timeval.tv_sec,
 							 (int) (saved_timeval.tv_usec / 1000));
 
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, strfbuf);
-					else
-						appendStringInfoString(buf, strfbuf);
+					appendStringInfo(buf, "%*s", padding, strfbuf);
 				}
 				break;
 			case 's':
 				if (formatted_start_time[0] == '\0')
 					setup_formatted_start_time();
-				if (padding != 0)
-					appendStringInfo(buf, "%*s", padding, formatted_start_time);
-				else
-					appendStringInfoString(buf, formatted_start_time);
+				appendStringInfo(buf, "%*s", padding, formatted_start_time);
 				break;
 			case 'i':
 				if (MyProcPort)
@@ -2533,10 +2495,7 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 					int			displen;
 
 					psdisp = get_ps_display(&displen);
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, psdisp);
-					else
-						appendBinaryStringInfo(buf, psdisp, displen);
+					appendStringInfo(buf, "%*s", padding, psdisp);
 
 				}
 				else if (padding != 0)
@@ -2546,37 +2505,24 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 			case 'r':
 				if (MyProcPort && MyProcPort->remote_host)
 				{
-					if (padding != 0)
+					if (MyProcPort->remote_port && MyProcPort->remote_port[0] != '\0')
 					{
-						if (MyProcPort->remote_port && MyProcPort->remote_port[0] != '\0')
-						{
-							/*
-							 * This option is slightly special as the port
-							 * number may be appended onto the end. Here we
-							 * need to build 1 string which contains the
-							 * remote_host and optionally the remote_port (if
-							 * set) so we can properly align the string.
-							 */
+						/*
+						 * This option is slightly special as the port
+						 * number may be appended onto the end. Here we
+						 * need to build 1 string which contains the
+						 * remote_host and optionally the remote_port (if
+						 * set) so we can properly align the string.
+						 */
 
-							char	   *hostport;
+						char	   *hostport;
 
-							hostport = psprintf("%s(%s)", MyProcPort->remote_host, MyProcPort->remote_port);
-							appendStringInfo(buf, "%*s", padding, hostport);
-							pfree(hostport);
-						}
-						else
-							appendStringInfo(buf, "%*s", padding, MyProcPort->remote_host);
+						hostport = psprintf("%s(%s)", MyProcPort->remote_host, MyProcPort->remote_port);
+						appendStringInfo(buf, "%*s", padding, hostport);
+						pfree(hostport);
 					}
 					else
-					{
-						/* padding is 0, so we don't need a temp buffer */
-						appendStringInfoString(buf, MyProcPort->remote_host);
-						if (MyProcPort->remote_port &&
-							MyProcPort->remote_port[0] != '\0')
-							appendStringInfo(buf, "(%s)",
-											 MyProcPort->remote_port);
-					}
-
+						appendStringInfo(buf, "%*s", padding, MyProcPort->remote_host);
 				}
 				else if (padding != 0)
 					appendStringInfoSpaces(buf,
@@ -2584,12 +2530,7 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 				break;
 			case 'h':
 				if (MyProcPort && MyProcPort->remote_host)
-				{
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, MyProcPort->remote_host);
-					else
-						appendStringInfoString(buf, MyProcPort->remote_host);
-				}
+					appendStringInfo(buf, "%*s", padding, MyProcPort->remote_host);
 				else if (padding != 0)
 					appendStringInfoSpaces(buf,
 										   padding > 0 ? padding : -padding);
@@ -2604,32 +2545,21 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 				/* keep VXID format in sync with lockfuncs.c */
 				if (MyProc != NULL && MyProc->backendId != InvalidBackendId)
 				{
-					if (padding != 0)
-					{
-						char		strfbuf[128];
+					char		strfbuf[128];
 
-						snprintf(strfbuf, sizeof(strfbuf) - 1, "%d/%u",
-								 MyProc->backendId, MyProc->lxid);
+					snprintf(strfbuf, sizeof(strfbuf) - 1, "%d/%u",
+							 MyProc->backendId, MyProc->lxid);
 						appendStringInfo(buf, "%*s", padding, strfbuf);
-					}
-					else
-						appendStringInfo(buf, "%d/%u", MyProc->backendId, MyProc->lxid);
 				}
 				else if (padding != 0)
 					appendStringInfoSpaces(buf,
 										   padding > 0 ? padding : -padding);
 				break;
 			case 'x':
-				if (padding != 0)
-					appendStringInfo(buf, "%*u", padding, GetTopTransactionIdIfAny());
-				else
-					appendStringInfo(buf, "%u", GetTopTransactionIdIfAny());
+				appendStringInfo(buf, "%*u", padding, GetTopTransactionIdIfAny());
 				break;
 			case 'e':
-				if (padding != 0)
-					appendStringInfo(buf, "%*s", padding, unpack_sql_state(edata->sqlerrcode));
-				else
-					appendStringInfoString(buf, unpack_sql_state(edata->sqlerrcode));
+				appendStringInfo(buf, "%*s", padding, unpack_sql_state(edata->sqlerrcode));
 				break;
 			default:
 				/* format error - ignore it */

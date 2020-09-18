@@ -79,6 +79,9 @@ foreach my $row (@{ $catalog_data{pg_proc} })
 		retset => $bki_values{proretset},
 		nargs  => $bki_values{pronargs},
 		prosrc => $bki_values{prosrc},
+		prokind => $bki_values{prokind},
+		proname => $bki_values{proname},
+		proargtypes => $bki_values{proargtypes},
 	  };
 }
 
@@ -190,6 +193,12 @@ TFH
 my %seenit;
 foreach my $s (sort { $a->{oid} <=> $b->{oid} } @fmgr)
 {
+	if ($s->{prokind} eq "a")
+	{
+		$s->{proargtypes} =~ s/ /_/;
+		print $ofh "#define F_AGG_" . uc $s->{proname} . "_" . uc $s->{proargtypes} . " $s->{oid}\n";
+	}
+
 	next if $seenit{ $s->{prosrc} };
 	$seenit{ $s->{prosrc} } = 1;
 	print $ofh "#define F_" . uc $s->{prosrc} . " $s->{oid}\n";

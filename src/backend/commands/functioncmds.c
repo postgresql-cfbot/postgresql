@@ -53,9 +53,11 @@
 #include "commands/proclang.h"
 #include "executor/execdesc.h"
 #include "executor/executor.h"
+#include "executor/functions.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "optimizer/optimizer.h"
+#include "parser/analyze.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
@@ -186,9 +188,11 @@ interpret_function_parameter_list(ParseState *pstate,
 								  Oid languageOid,
 								  ObjectType objtype,
 								  oidvector **parameterTypes,
+								  List **parameterTypes_list,
 								  ArrayType **allParameterTypes,
 								  ArrayType **parameterModes,
 								  ArrayType **parameterNames,
+								  List **inParameterNames_list,
 								  List **parameterDefaults,
 								  Oid *variadicArgType,
 								  Oid *requiredResultType)
@@ -300,6 +304,8 @@ interpret_function_parameter_list(ParseState *pstate,
 						 errmsg("VARIADIC parameter must be the last input parameter")));
 			inTypes[inCount++] = toid;
 			isinput = true;
+			if (parameterTypes_list)
+				*parameterTypes_list = lappend_oid(*parameterTypes_list, toid);
 		}
 
 		/* handle output parameters */
@@ -375,6 +381,9 @@ interpret_function_parameter_list(ParseState *pstate,
 			paramNames[i] = CStringGetTextDatum(fp->name);
 			have_names = true;
 		}
+
+		if (inParameterNames_list)
+			*inParameterNames_list = lappend(*inParameterNames_list, makeString(fp->name ? fp->name : pstrdup("")));
 
 		if (fp->defexpr)
 		{
@@ -790,28 +799,10 @@ compute_function_attributes(ParseState *pstate,
 				 defel->defname);
 	}
 
-	/* process required items */
 	if (as_item)
 		*as = (List *) as_item->arg;
-	else
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
-				 errmsg("no function body specified")));
-		*as = NIL;				/* keep compiler quiet */
-	}
-
 	if (language_item)
 		*language = strVal(language_item->arg);
-	else
-	{
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
-				 errmsg("no language specified")));
-		*language = NULL;		/* keep compiler quiet */
-	}
-
-	/* process optional items */
 	if (transform_item)
 		*transform = transform_item->arg;
 	if (windowfunc_item)
@@ -860,10 +851,19 @@ compute_function_attributes(ParseState *pstate,
  */
 static void
 interpret_AS_clause(Oid languageOid, const char *languageName,
-					char *funcname, List *as,
+					char *funcname, List *as, List *sql_body,
+					List *parameterTypes, List *inParameterNames,
 					char **prosrc_str_p, char **probin_str_p)
 {
-	Assert(as != NIL);
+	if (sql_body && as)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+				 errmsg("duplicate function body specified")));
+
+	if (sql_body && languageOid != SQLlanguageId)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+				 errmsg("inline SQL function body only valid for language SQL")));
 
 	if (languageOid == ClanguageId)
 	{
@@ -884,6 +884,53 @@ interpret_AS_clause(Oid languageOid, const char *languageName,
 			if (strcmp(*prosrc_str_p, "-") == 0)
 				*prosrc_str_p = funcname;
 		}
+	}
+	else if (sql_body)
+	{
+		List	   *transformed_stmts = NIL;
+		ListCell   *lc;
+		SQLFunctionParseInfoPtr pinfo;
+
+		pinfo = (SQLFunctionParseInfoPtr) palloc0(sizeof(SQLFunctionParseInfo));
+
+		pinfo->fname = funcname;
+		pinfo->nargs = list_length(parameterTypes);
+		pinfo->argtypes = (Oid *) palloc(pinfo->nargs * sizeof(Oid));
+		pinfo->argnames = (char **) palloc(pinfo->nargs * sizeof(char *));
+		for (int i = 0; i < list_length(parameterTypes); i++)
+		{
+			char *s = strVal(list_nth(inParameterNames, i));
+
+			pinfo->argtypes[i] = list_nth_oid(parameterTypes, i);
+			if (IsPolymorphicType(pinfo->argtypes[i]))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+						 errmsg("SQL function with unquoted function body cannot have polymorphic arguments")));
+
+			if (s[0] != '\0')
+				pinfo->argnames[i] = s;
+			else
+				pinfo->argnames[i] = NULL;
+		}
+
+		foreach(lc, sql_body)
+		{
+			Node	   *stmt = lfirst(lc);
+			Query	   *q;
+			ParseState *pstate = make_parsestate(NULL);
+
+			/* ignore NULL statement; see gram.y */
+			if (!stmt)
+				continue;
+
+			sql_fn_parser_setup(pstate, pinfo);
+			q = transformStmt(pstate, stmt);
+			transformed_stmts = lappend(transformed_stmts, q);
+			free_parsestate(pstate);
+		}
+
+		*probin_str_p = nodeToString(transformed_stmts);
+		*prosrc_str_p = NULL;
 	}
 	else
 	{
@@ -933,9 +980,11 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	Oid			namespaceId;
 	AclResult	aclresult;
 	oidvector  *parameterTypes;
+	List	   *parameterTypes_list = NIL;
 	ArrayType  *allParameterTypes;
 	ArrayType  *parameterModes;
 	ArrayType  *parameterNames;
+	List	   *inParameterNames_list = NIL;
 	List	   *parameterDefaults;
 	Oid			variadicArgType;
 	List	   *trftypes_list = NIL;
@@ -966,6 +1015,8 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 					   get_namespace_name(namespaceId));
 
 	/* Set default attributes */
+	as_clause = NULL;
+	language = "sql";
 	isWindowFunc = false;
 	isStrict = false;
 	security = false;
@@ -1057,9 +1108,11 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 									  languageOid,
 									  stmt->is_procedure ? OBJECT_PROCEDURE : OBJECT_FUNCTION,
 									  &parameterTypes,
+									  &parameterTypes_list,
 									  &allParameterTypes,
 									  &parameterModes,
 									  &parameterNames,
+									  &inParameterNames_list,
 									  &parameterDefaults,
 									  &variadicArgType,
 									  &requiredResultType);
@@ -1116,7 +1169,8 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 		trftypes = NULL;
 	}
 
-	interpret_AS_clause(languageOid, language, funcname, as_clause,
+	interpret_AS_clause(languageOid, language, funcname, as_clause, stmt->sql_body,
+						parameterTypes_list, inParameterNames_list,
 						&prosrc_str, &probin_str);
 
 	/*

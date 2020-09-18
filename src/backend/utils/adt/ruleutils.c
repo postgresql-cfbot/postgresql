@@ -174,6 +174,9 @@ typedef struct
 	List	   *outer_tlist;	/* referent for OUTER_VAR Vars */
 	List	   *inner_tlist;	/* referent for INNER_VAR Vars */
 	List	   *index_tlist;	/* referent for INDEX_VAR Vars */
+	/* Special namespace representing a function signature: */
+	int			numargs;
+	char	  **argnames;
 } deparse_namespace;
 
 /*
@@ -349,6 +352,7 @@ static int	print_function_arguments(StringInfo buf, HeapTuple proctup,
 									 bool print_table_args, bool print_defaults);
 static void print_function_rettype(StringInfo buf, HeapTuple proctup);
 static void print_function_trftypes(StringInfo buf, HeapTuple proctup);
+static void print_function_sqlbody(StringInfo buf, HeapTuple proctup);
 static void set_rtable_names(deparse_namespace *dpns, List *parent_namespaces,
 							 Bitmapset *rels_used);
 static void set_deparse_for_query(deparse_namespace *dpns, Query *query,
@@ -2800,9 +2804,15 @@ pg_get_functiondef(PG_FUNCTION_ARGS)
 	}
 
 	/* And finally the function definition ... */
+	tmp = SysCacheGetAttr(PROCOID, proctup, Anum_pg_proc_probin, &isnull);
+	if (proc->prolang == SQLlanguageId && !isnull)
+	{
+		print_function_sqlbody(&buf, proctup);
+	}
+	else
+	{
 	appendStringInfoString(&buf, "AS ");
 
-	tmp = SysCacheGetAttr(PROCOID, proctup, Anum_pg_proc_probin, &isnull);
 	if (!isnull)
 	{
 		simple_quote_literal(&buf, TextDatumGetCString(tmp));
@@ -2831,6 +2841,7 @@ pg_get_functiondef(PG_FUNCTION_ARGS)
 	appendBinaryStringInfo(&buf, dq.data, dq.len);
 	appendStringInfoString(&buf, prosrc);
 	appendBinaryStringInfo(&buf, dq.data, dq.len);
+	}
 
 	appendStringInfoChar(&buf, '\n');
 
@@ -3211,6 +3222,78 @@ pg_get_function_arg_default(PG_FUNCTION_ARGS)
 	ReleaseSysCache(proctup);
 
 	PG_RETURN_TEXT_P(string_to_text(str));
+}
+
+static void
+print_function_sqlbody(StringInfo buf, HeapTuple proctup)
+{
+	Datum		tmp;
+	bool		isnull;
+	List       *stmts;
+	ListCell   *lc;
+	int			numargs;
+	Oid		   *argtypes;
+	char	  **argnames;
+	char	   *argmodes;
+	deparse_namespace dpns = {0};
+	bool		need_block;
+
+	tmp = SysCacheGetAttr(PROCOID, proctup, Anum_pg_proc_probin, &isnull);
+	Assert(!isnull);
+	stmts = castNode(List, stringToNode(TextDatumGetCString(tmp)));
+
+	numargs = get_func_arg_info(proctup,
+								&argtypes, &argnames, &argmodes);
+	dpns.numargs = numargs;
+	dpns.argnames = argnames;
+
+	/*
+	 * We need a BEGIN ATOMIC/END block unless the body is a single RETURN
+	 * statement.
+	 */
+	need_block = true;
+	if (list_length(stmts) == 1)
+	{
+		Query	   *query = linitial_node(Query, stmts);
+
+		if (query->isReturn)
+			need_block = false;
+	}
+
+	if (need_block)
+		appendStringInfoString(buf, "BEGIN ATOMIC\n");
+	foreach(lc, stmts)
+	{
+		Query	   *query = lfirst_node(Query, lc);
+
+		get_query_def(query, buf, list_make1(&dpns), NULL, PRETTYFLAG_INDENT, WRAP_COLUMN_DEFAULT, 1);
+		if (lc != list_tail(stmts))
+			appendStringInfoChar(buf, ';');
+		appendStringInfoChar(buf, '\n');
+	}
+	if (need_block)
+		appendStringInfoString(buf, "END");
+}
+
+Datum
+pg_get_function_sqlbody(PG_FUNCTION_ARGS)
+{
+	Oid			funcid = PG_GETARG_OID(0);
+	StringInfoData buf;
+	HeapTuple	proctup;
+
+	initStringInfo(&buf);
+
+	/* Look up the function */
+	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
+	if (!HeapTupleIsValid(proctup))
+		PG_RETURN_NULL();
+
+	print_function_sqlbody(&buf, proctup);
+
+	ReleaseSysCache(proctup);
+
+	PG_RETURN_TEXT_P(cstring_to_text(buf.data));
 }
 
 
@@ -5418,7 +5501,10 @@ get_basic_select_query(Query *query, deparse_context *context,
 	/*
 	 * Build up the query string - first we say SELECT
 	 */
-	appendStringInfoString(buf, "SELECT");
+	if (query->isReturn)
+		appendStringInfoString(buf, "RETURN");
+	else
+		appendStringInfoString(buf, "SELECT");
 
 	/* Add the DISTINCT clause if given */
 	if (query->distinctClause != NIL)
@@ -7548,6 +7634,26 @@ get_parameter(Param *param, deparse_context *context)
 		pop_ancestor_plan(dpns, &save_dpns);
 
 		return;
+	}
+
+	/*
+	 * If it's an external parameter, see if the outermost namespace provides
+	 * function argument names.
+	 */
+	if (param->paramkind == PARAM_EXTERN)
+	{
+		dpns = lfirst(list_tail(context->namespaces));
+		if (dpns->argnames)
+		{
+			char	   *argname = dpns->argnames[param->paramid - 1];
+
+			if (argname)
+			{
+				// TODO: qualify with function name if necessary
+				appendStringInfo(context->buf, "%s", quote_identifier(argname));
+				return;
+			}
+		}
 	}
 
 	/*

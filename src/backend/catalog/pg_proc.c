@@ -32,6 +32,7 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "parser/analyze.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_type.h"
 #include "tcop/pquery.h"
@@ -119,8 +120,6 @@ ProcedureCreate(const char *procedureName,
 	/*
 	 * sanity checks
 	 */
-	Assert(PointerIsValid(prosrc));
-
 	parameterCount = parameterTypes->dim1;
 	if (parameterCount < 0 || parameterCount > FUNC_MAX_ARGS)
 		ereport(ERROR,
@@ -331,7 +330,10 @@ ProcedureCreate(const char *procedureName,
 		values[Anum_pg_proc_protrftypes - 1] = trftypes;
 	else
 		nulls[Anum_pg_proc_protrftypes - 1] = true;
-	values[Anum_pg_proc_prosrc - 1] = CStringGetTextDatum(prosrc);
+	if (prosrc)
+		values[Anum_pg_proc_prosrc - 1] = CStringGetTextDatum(prosrc);
+	else
+		nulls[Anum_pg_proc_prosrc - 1] = true;
 	if (probin)
 		values[Anum_pg_proc_probin - 1] = CStringGetTextDatum(probin);
 	else
@@ -633,6 +635,10 @@ ProcedureCreate(const char *procedureName,
 	record_object_address_dependencies(&myself, addrs, DEPENDENCY_NORMAL);
 	free_object_addresses(addrs);
 
+	/* dependency on SQL routine body */
+	if (languageObjectId == SQLlanguageId && probin)
+		recordDependencyOnExpr(&myself, stringToNode(probin), NIL, DEPENDENCY_NORMAL);
+
 	/* dependency on parameter default expressions */
 	if (parameterDefaults)
 		recordDependencyOnExpr(&myself, (Node *) parameterDefaults,
@@ -806,14 +812,6 @@ fmgr_sql_validator(PG_FUNCTION_ARGS)
 	Oid			funcoid = PG_GETARG_OID(0);
 	HeapTuple	tuple;
 	Form_pg_proc proc;
-	List	   *raw_parsetree_list;
-	List	   *querytree_list;
-	ListCell   *lc;
-	bool		isnull;
-	Datum		tmp;
-	char	   *prosrc;
-	parse_error_callback_arg callback_arg;
-	ErrorContextCallback sqlerrcontext;
 	bool		haspolyarg;
 	int			i;
 
@@ -856,72 +854,93 @@ fmgr_sql_validator(PG_FUNCTION_ARGS)
 	/* Postpone body checks if !check_function_bodies */
 	if (check_function_bodies)
 	{
+		Datum		tmp;
+		bool		isnull;
+		List	   *querytree_list = NIL;
+
 		tmp = SysCacheGetAttr(PROCOID, tuple, Anum_pg_proc_prosrc, &isnull);
 		if (isnull)
-			elog(ERROR, "null prosrc");
-
-		prosrc = TextDatumGetCString(tmp);
-
-		/*
-		 * Setup error traceback support for ereport().
-		 */
-		callback_arg.proname = NameStr(proc->proname);
-		callback_arg.prosrc = prosrc;
-
-		sqlerrcontext.callback = sql_function_parse_error_callback;
-		sqlerrcontext.arg = (void *) &callback_arg;
-		sqlerrcontext.previous = error_context_stack;
-		error_context_stack = &sqlerrcontext;
-
-		/*
-		 * We can't do full prechecking of the function definition if there
-		 * are any polymorphic input types, because actual datatypes of
-		 * expression results will be unresolvable.  The check will be done at
-		 * runtime instead.
-		 *
-		 * We can run the text through the raw parser though; this will at
-		 * least catch silly syntactic errors.
-		 */
-		raw_parsetree_list = pg_parse_query(prosrc);
-
-		if (!haspolyarg)
 		{
+			char	   *probin;
+
+			tmp = SysCacheGetAttr(PROCOID, tuple, Anum_pg_proc_probin, &isnull);
+			if (isnull)
+				elog(ERROR, "null probin and prosrc");
+
+			probin = TextDatumGetCString(tmp);
+			querytree_list = castNode(List, stringToNode(probin));
+		}
+		else
+		{
+			char	   *prosrc;
+			List	   *raw_parsetree_list;
+			parse_error_callback_arg callback_arg;
+			ErrorContextCallback sqlerrcontext;
+
+			prosrc = TextDatumGetCString(tmp);
+
 			/*
-			 * OK to do full precheck: analyze and rewrite the queries, then
-			 * verify the result type.
+			 * Setup error traceback support for ereport().
 			 */
-			SQLFunctionParseInfoPtr pinfo;
-			Oid			rettype;
-			TupleDesc	rettupdesc;
+			callback_arg.proname = NameStr(proc->proname);
+			callback_arg.prosrc = prosrc;
 
-			/* But first, set up parameter information */
-			pinfo = prepare_sql_fn_parse_info(tuple, NULL, InvalidOid);
+			sqlerrcontext.callback = sql_function_parse_error_callback;
+			sqlerrcontext.arg = (void *) &callback_arg;
+			sqlerrcontext.previous = error_context_stack;
+			error_context_stack = &sqlerrcontext;
 
-			querytree_list = NIL;
-			foreach(lc, raw_parsetree_list)
+			/*
+			 * We can't do full prechecking of the function definition if there
+			 * are any polymorphic input types, because actual datatypes of
+			 * expression results will be unresolvable.  The check will be done at
+			 * runtime instead.
+			 *
+			 * We can run the text through the raw parser though; this will at
+			 * least catch silly syntactic errors.
+			 */
+			raw_parsetree_list = pg_parse_query(prosrc);
+
+			if (!haspolyarg)
 			{
-				RawStmt    *parsetree = lfirst_node(RawStmt, lc);
-				List	   *querytree_sublist;
+				/*
+				 * OK to do full precheck: analyze and rewrite the queries, then
+				 * verify the result type.
+				 */
+				ListCell   *lc;
+				SQLFunctionParseInfoPtr pinfo;
+				Oid			rettype;
+				TupleDesc	rettupdesc;
 
-				querytree_sublist = pg_analyze_and_rewrite_params(parsetree,
-																  prosrc,
-																  (ParserSetupHook) sql_fn_parser_setup,
-																  pinfo,
-																  NULL);
-				querytree_list = list_concat(querytree_list,
-											 querytree_sublist);
+				/* But first, set up parameter information */
+				pinfo = prepare_sql_fn_parse_info(tuple, NULL, InvalidOid);
+
+				querytree_list = NIL;
+				foreach(lc, raw_parsetree_list)
+				{
+					RawStmt    *parsetree = lfirst_node(RawStmt, lc);
+					List	   *querytree_sublist;
+
+					querytree_sublist = pg_analyze_and_rewrite_params(parsetree,
+																	  prosrc,
+																	  (ParserSetupHook) sql_fn_parser_setup,
+																	  pinfo,
+																	  NULL);
+					querytree_list = list_concat(querytree_list,
+												 querytree_sublist);
+				}
+
+				check_sql_fn_statements(querytree_list);
+
+				(void) get_func_result_type(funcoid, &rettype, &rettupdesc);
+
+				(void) check_sql_fn_retval(querytree_list,
+										   rettype, rettupdesc,
+										   false, NULL);
 			}
 
-			check_sql_fn_statements(querytree_list);
-
-			(void) get_func_result_type(funcoid, &rettype, &rettupdesc);
-
-			(void) check_sql_fn_retval(querytree_list,
-									   rettype, rettupdesc,
-									   false, NULL);
+			error_context_stack = sqlerrcontext.previous;
 		}
-
-		error_context_stack = sqlerrcontext.previous;
 	}
 
 	ReleaseSysCache(tuple);

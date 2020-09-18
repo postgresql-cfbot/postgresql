@@ -2759,6 +2759,14 @@ _outSelectStmt(StringInfo str, const SelectStmt *node)
 }
 
 static void
+_outReturnStmt(StringInfo str, const ReturnStmt *node)
+{
+	WRITE_NODE_TYPE("RETURN");
+
+	WRITE_NODE_FIELD(returnval);
+}
+
+static void
 _outFuncCall(StringInfo str, const FuncCall *node)
 {
 	WRITE_NODE_TYPE("FUNCCALL");
@@ -2946,6 +2954,7 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_BOOL_FIELD(hasModifyingCTE);
 	WRITE_BOOL_FIELD(hasForUpdate);
 	WRITE_BOOL_FIELD(hasRowSecurity);
+	WRITE_BOOL_FIELD(isReturn);
 	WRITE_NODE_FIELD(cteList);
 	WRITE_NODE_FIELD(rtable);
 	WRITE_NODE_FIELD(jointree);
@@ -4195,6 +4204,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_SelectStmt:
 				_outSelectStmt(str, obj);
+				break;
+			case T_ReturnStmt:
+				_outReturnStmt(str, obj);
 				break;
 			case T_ColumnDef:
 				_outColumnDef(str, obj);

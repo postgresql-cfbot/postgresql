@@ -11814,6 +11814,7 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 	char	   *proretset;
 	char	   *prosrc;
 	char	   *probin;
+	char	   *prosqlbody;
 	char	   *funcargs;
 	char	   *funciargs;
 	char	   *funcresult;
@@ -11860,7 +11861,7 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 					  "provolatile,\n"
 					  "proisstrict,\n"
 					  "prosecdef,\n"
-					  "(SELECT lanname FROM pg_catalog.pg_language WHERE oid = prolang) AS lanname,\n");
+					  "lanname,\n");
 
 	if (fout->remoteVersion >= 80300)
 		appendPQExpBuffer(query,
@@ -11880,9 +11881,9 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 		 * pg_get_function_result instead of examining proallargtypes etc.
 		 */
 		appendPQExpBuffer(query,
-						  "pg_catalog.pg_get_function_arguments(oid) AS funcargs,\n"
-						  "pg_catalog.pg_get_function_identity_arguments(oid) AS funciargs,\n"
-						  "pg_catalog.pg_get_function_result(oid) AS funcresult,\n");
+						  "pg_catalog.pg_get_function_arguments(p.oid) AS funcargs,\n"
+						  "pg_catalog.pg_get_function_identity_arguments(p.oid) AS funciargs,\n"
+						  "pg_catalog.pg_get_function_result(p.oid) AS funcresult,\n");
 	}
 	else if (fout->remoteVersion >= 80100)
 		appendPQExpBuffer(query,
@@ -11925,21 +11926,39 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 
 	if (fout->remoteVersion >= 120000)
 		appendPQExpBuffer(query,
-						  "prosupport\n");
+						  "prosupport,\n");
 	else
 		appendPQExpBuffer(query,
-						  "'-' AS prosupport\n");
+						  "'-' AS prosupport,\n");
+
+	if (fout->remoteVersion >= 140000)
+		appendPQExpBuffer(query,
+						  "CASE WHEN prosrc IS NULL AND lanname = 'sql' THEN pg_get_function_sqlbody(p.oid) END AS prosqlbody\n");
+	else
+		appendPQExpBuffer(query,
+						  "NULL AS prosqlbody\n");
 
 	appendPQExpBuffer(query,
-					  "FROM pg_catalog.pg_proc "
-					  "WHERE oid = '%u'::pg_catalog.oid",
+					  "FROM pg_catalog.pg_proc p, pg_catalog.pg_language l\n"
+					  "WHERE p.oid = '%u'::pg_catalog.oid "
+					  "AND l.oid = p.prolang",
 					  finfo->dobj.catId.oid);
 
 	res = ExecuteSqlQueryForSingleRow(fout, query->data);
 
 	proretset = PQgetvalue(res, 0, PQfnumber(res, "proretset"));
-	prosrc = PQgetvalue(res, 0, PQfnumber(res, "prosrc"));
-	probin = PQgetvalue(res, 0, PQfnumber(res, "probin"));
+	if (PQgetisnull(res, 0, PQfnumber(res, "prosqlbody")))
+	{
+		prosrc = PQgetvalue(res, 0, PQfnumber(res, "prosrc"));
+		probin = PQgetvalue(res, 0, PQfnumber(res, "probin"));
+		prosqlbody = NULL;
+	}
+	else
+	{
+		prosrc = NULL;
+		probin = NULL;
+		prosqlbody = PQgetvalue(res, 0, PQfnumber(res, "prosqlbody"));
+	}
 	if (fout->remoteVersion >= 80400)
 	{
 		funcargs = PQgetvalue(res, 0, PQfnumber(res, "funcargs"));
@@ -11976,7 +11995,11 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 	 * versions would set it to "-".  There are no known cases in which prosrc
 	 * is unused, so the tests below for "-" are probably useless.
 	 */
-	if (probin[0] != '\0' && strcmp(probin, "-") != 0)
+	if (prosqlbody)
+	{
+		appendPQExpBufferStr(asPart, prosqlbody);
+	}
+	else if (probin[0] != '\0' && strcmp(probin, "-") != 0)
 	{
 		appendPQExpBufferStr(asPart, "AS ");
 		appendStringLiteralAH(asPart, probin, fout);

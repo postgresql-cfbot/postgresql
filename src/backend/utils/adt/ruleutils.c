@@ -2661,6 +2661,9 @@ pg_get_functiondef(PG_FUNCTION_ARGS)
 
 	if (proc->prokind == PROKIND_WINDOW)
 		appendStringInfoString(&buf, " WINDOW");
+	if (proc->pronulltreatment)
+		appendStringInfoString(&buf, " TREAT NULLS");
+
 	switch (proc->provolatile)
 	{
 		case PROVOLATILE_IMMUTABLE:
@@ -9464,7 +9467,12 @@ get_windowfunc_expr(WindowFunc *wfunc, deparse_context *context)
 		get_rule_expr((Node *) wfunc->aggfilter, context, false);
 	}
 
-	appendStringInfoString(buf, ") OVER ");
+	if (wfunc->winnulltreatment == NULL_TREATMENT_IGNORE)
+		appendStringInfoString(buf, ") IGNORE NULLS OVER ");
+	else if (wfunc->winnulltreatment == NULL_TREATMENT_RESPECT)
+		appendStringInfoString(buf, ") RESPECT NULLS OVER ");
+	else
+		appendStringInfoString(buf, ") OVER ");
 
 	foreach(l, context->windowClause)
 	{
@@ -11000,7 +11008,7 @@ generate_function_name(Oid funcid, int nargs, List *argnames, Oid *argtypes,
 								   !use_variadic, true,
 								   &p_funcid, &p_rettype,
 								   &p_retset, &p_nvargs, &p_vatype,
-								   &p_true_typeids, NULL);
+								   &p_true_typeids, NULL, NULL);
 	else
 	{
 		p_result = FUNCDETAIL_NOTFOUND;

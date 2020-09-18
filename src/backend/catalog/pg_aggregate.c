@@ -627,6 +627,7 @@ AggregateCreate(const char *aggName,
 									 * definable for agg) */
 							 false, /* isLeakProof */
 							 false, /* isStrict (not needed for agg) */
+							 false, /* null_treatment (not needed for agg) */
 							 PROVOLATILE_IMMUTABLE, /* volatility (not needed
 													 * for agg) */
 							 proparallel,
@@ -848,7 +849,7 @@ lookup_agg_function(List *fnName,
 							   nargs, input_types, false, false,
 							   &fnOid, rettype, &retset,
 							   &nvargs, &vatype,
-							   &true_oid_array, NULL);
+							   &true_oid_array, NULL, NULL);
 
 	/* only valid case is a normal function not returning a set */
 	if (fdresult != FUNCDETAIL_NORMAL || !OidIsValid(fnOid))

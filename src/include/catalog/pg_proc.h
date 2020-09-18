@@ -67,6 +67,9 @@ CATALOG(pg_proc,1255,ProcedureRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(81,Proce
 	/* strict with respect to NULLs? */
 	bool		proisstrict BKI_DEFAULT(t);
 
+	/* can handle IGNORE/RESPECT NULLS? (must be window function) */
+	bool		pronulltreatment BKI_DEFAULT(f);
+
 	/* returns a set? */
 	bool		proretset BKI_DEFAULT(f);
 
@@ -191,6 +194,7 @@ extern ObjectAddress ProcedureCreate(const char *procedureName,
 									 bool security_definer,
 									 bool isLeakProof,
 									 bool isStrict,
+									 bool null_treatment,
 									 char volatility,
 									 char parallel,
 									 oidvector *parameterTypes,

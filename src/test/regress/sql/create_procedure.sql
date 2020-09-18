@@ -118,6 +118,7 @@ CALL version();  -- error: not a procedure
 CALL sum(1);  -- error: not a procedure
 
 CREATE PROCEDURE ptestx() LANGUAGE SQL WINDOW AS $$ INSERT INTO cp_test VALUES (1, 'a') $$;
+CREATE PROCEDURE ptestx() LANGUAGE SQL TREAT NULLS AS $$ INSERT INTO cp_test VALUES (1, 'a') $$;
 CREATE PROCEDURE ptestx() LANGUAGE SQL STRICT AS $$ INSERT INTO cp_test VALUES (1, 'a') $$;
 CREATE PROCEDURE ptestx(OUT a int) LANGUAGE SQL AS $$ INSERT INTO cp_test VALUES (1, 'a') $$;
 

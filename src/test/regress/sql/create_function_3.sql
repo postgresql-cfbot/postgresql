@@ -83,6 +83,12 @@ SELECT proname, prosecdef FROM pg_proc
                      'functest_C_3'::regproc) ORDER BY proname;
 
 --
+-- TREAT NULLS
+--
+CREATE FUNCTION functest_D_1(integer) RETURNS integer LANGUAGE 'sql'
+       TREAT NULLS AS 'SELECT $1';
+
+--
 -- LEAKPROOF
 --
 CREATE FUNCTION functest_E_1(int) RETURNS bool LANGUAGE 'sql'
@@ -190,6 +196,7 @@ DROP FUNCTION functest_b_2;  -- error, ambiguous
 
 CREATE FUNCTION functest1(a int) RETURNS int LANGUAGE SQL AS 'SELECT $1';
 CREATE OR REPLACE FUNCTION functest1(a int) RETURNS int LANGUAGE SQL WINDOW AS 'SELECT $1';
+CREATE OR REPLACE FUNCTION functest1(a int) RETURNS int LANGUAGE SQL TREAT NULLS AS 'SELECT $1';
 CREATE OR REPLACE PROCEDURE functest1(a int) LANGUAGE SQL AS 'SELECT $1';
 DROP FUNCTION functest1(a int);
 

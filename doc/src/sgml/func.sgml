@@ -19738,6 +19738,14 @@ SELECT count(*) FROM sometable;
   </para>
 
   <para>
+   The functions <function>lead</function>, <function>lag</function>,
+   <function>first_value</function>, <function>last_value</function>, and
+   <function>nth_value</function> accept a null treatment option which is
+   <literal>RESPECT NULLS</literal> or <literal>IGNORE NULLS</literal>.
+   If this option is not specified, the default is <literal>RESPECT NULLS</literal>.
+  </para>
+
+  <para>
    When an aggregate function is used as a window function, it aggregates
    over the rows within the current row's window frame.
    An aggregate used with <literal>ORDER BY</literal> and the default window frame
@@ -19750,14 +19758,9 @@ SELECT count(*) FROM sometable;
 
   <note>
    <para>
-    The SQL standard defines a <literal>RESPECT NULLS</literal> or
-    <literal>IGNORE NULLS</literal> option for <function>lead</function>, <function>lag</function>,
-    <function>first_value</function>, <function>last_value</function>, and
-    <function>nth_value</function>.  This is not implemented in
-    <productname>PostgreSQL</productname>: the behavior is always the
-    same as the standard's default, namely <literal>RESPECT NULLS</literal>.
-    Likewise, the standard's <literal>FROM FIRST</literal> or <literal>FROM LAST</literal>
-    option for <function>nth_value</function> is not implemented: only the
+    The SQL standard defines a <literal>FROM FIRST</literal> or <literal>FROM LAST</literal>
+    option for <function>nth_value</function>.  This is not implemented in
+    <productname>PostgreSQL</productname>: only the
     default <literal>FROM FIRST</literal> behavior is supported.  (You can achieve
     the result of <literal>FROM LAST</literal> by reversing the <literal>ORDER BY</literal>
     ordering.)

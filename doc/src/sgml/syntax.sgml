@@ -1770,6 +1770,8 @@ FROM generate_series(1,10) AS s(i);
     The syntax of a window function call is one of the following:
 
 <synopsis>
+<replaceable>function_name</replaceable> (<optional><replaceable>expression</replaceable> <optional>, <replaceable>expression</replaceable> ... </optional></optional>) [ RESPECT NULLS | IGNORE NULLS ] OVER <replaceable>window_name</replaceable>
+<replaceable>function_name</replaceable> (<optional><replaceable>expression</replaceable> <optional>, <replaceable>expression</replaceable> ... </optional></optional>) [ RESPECT NULLS | IGNORE NULLS ] OVER ( <replaceable class="parameter">window_definition</replaceable> )
 <replaceable>function_name</replaceable> (<optional><replaceable>expression</replaceable> <optional>, <replaceable>expression</replaceable> ... </optional></optional>) [ FILTER ( WHERE <replaceable>filter_clause</replaceable> ) ] OVER <replaceable>window_name</replaceable>
 <replaceable>function_name</replaceable> (<optional><replaceable>expression</replaceable> <optional>, <replaceable>expression</replaceable> ... </optional></optional>) [ FILTER ( WHERE <replaceable>filter_clause</replaceable> ) ] OVER ( <replaceable class="parameter">window_definition</replaceable> )
 <replaceable>function_name</replaceable> ( * ) [ FILTER ( WHERE <replaceable>filter_clause</replaceable> ) ] OVER <replaceable>window_name</replaceable>
@@ -1783,6 +1785,18 @@ FROM generate_series(1,10) AS s(i);
 [ ORDER BY <replaceable class="parameter">expression</replaceable> [ ASC | DESC | USING <replaceable class="parameter">operator</replaceable> ] [ NULLS { FIRST | LAST } ] [, ...] ]
 [ <replaceable class="parameter">frame_clause</replaceable> ]
 </synopsis>
+   </para>
+
+   <note>
+    <para>
+     The versions with <literal>RESPECT NULLS</literal> or <literal>IGNORE
+     NULLS</literal> only apply to true window functions, whereas the versions
+     with <literal>FILTER</literal> only apply to aggregate functions used as
+     window functions.
+    </para>
+   </note>
+
+   <para>
     The optional <replaceable class="parameter">frame_clause</replaceable>
     can be one of
 <synopsis>

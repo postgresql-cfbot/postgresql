@@ -94,3 +94,12 @@ WHERE c.oid < 16384 AND
       relkind = 'r' AND
       attstorage != 'p'
 ORDER BY 1, 2;
+
+-- **************** pg_class ****************
+
+-- Look for non-window functions with null treatment (there should be none)
+
+SELECT proname, prokind, pronulltreatment
+FROM pg_proc
+WHERE pronulltreatment AND prokind <> 'w'
+ORDER BY oid;

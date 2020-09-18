@@ -68,6 +68,7 @@ typedef struct WindowObjectData
 	int			readptr;		/* tuplestore read pointer for this fn */
 	int64		markpos;		/* row that markptr is positioned on */
 	int64		seekpos;		/* row that readptr is positioned on */
+	NullTreatment	null_treatment;	/* RESPECT/IGNORE NULLS? */
 } WindowObjectData;
 
 /*
@@ -2478,6 +2479,7 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 			winobj->winstate = winstate;
 			winobj->argstates = wfuncstate->args;
 			winobj->localmem = NULL;
+			winobj->null_treatment = wfunc->winnulltreatment;
 			perfuncstate->winobj = winobj;
 		}
 	}
@@ -3173,48 +3175,103 @@ WinGetFuncArgInPartition(WindowObject winobj, int argno,
 	TupleTableSlot *slot;
 	bool		gottuple;
 	int64		abs_pos;
+	bool		ignore_nulls = false;
+	int			target = relpos;
+	int			step;
+	Datum		result;
 
 	Assert(WindowObjectIsValid(winobj));
 	winstate = winobj->winstate;
 	econtext = winstate->ss.ps.ps_ExprContext;
 	slot = winstate->temp_slot_1;
 
-	switch (seektype)
+	/*
+	 * If we're not ignoring nulls, we'll just go straight to the desired row.
+	 * But if we are ignoring nulls, we'll have to step towards the target row
+	 * by row so we need to determine how we get there.
+	 */
+	if (winobj->null_treatment == NULL_TREATMENT_IGNORE)
 	{
-		case WINDOW_SEEK_CURRENT:
-			abs_pos = winstate->currentpos + relpos;
-			break;
-		case WINDOW_SEEK_HEAD:
-			abs_pos = relpos;
-			break;
-		case WINDOW_SEEK_TAIL:
-			spool_tuples(winstate, -1);
-			abs_pos = winstate->spooled_rows - 1 + relpos;
-			break;
-		default:
-			elog(ERROR, "unrecognized window seek type: %d", seektype);
-			abs_pos = 0;		/* keep compiler quiet */
-			break;
+		ignore_nulls = true;
+
+		if (seektype == WINDOW_SEEK_HEAD)
+		{
+			step = 1;
+			relpos = 0;
+		}
+		else if (seektype == WINDOW_SEEK_TAIL)
+		{
+			step = -1;
+			relpos = 0;
+		}
+		else
+		{
+			if (target > 0)
+				step = 1;
+			else if (target < 0)
+				step = -1;
+			else
+				step = 0;
+			relpos = step;
+		}
 	}
 
-	gottuple = window_gettupleslot(winobj, abs_pos, slot);
+	for (;;)
+	{
+		switch (seektype)
+		{
+			case WINDOW_SEEK_CURRENT:
+				abs_pos = winstate->currentpos + relpos;
+				break;
+			case WINDOW_SEEK_HEAD:
+				abs_pos = relpos;
+				break;
+			case WINDOW_SEEK_TAIL:
+				spool_tuples(winstate, -1);
+				abs_pos = winstate->spooled_rows - 1 + relpos;
+				break;
+			default:
+				elog(ERROR, "unrecognized window seek type: %d", seektype);
+				abs_pos = 0;		/* keep compiler quiet */
+				break;
+		}
 
-	if (!gottuple)
-	{
-		if (isout)
-			*isout = true;
-		*isnull = true;
-		return (Datum) 0;
-	}
-	else
-	{
-		if (isout)
-			*isout = false;
-		if (set_mark)
-			WinSetMarkPosition(winobj, abs_pos);
+		gottuple = window_gettupleslot(winobj, abs_pos, slot);
+
+		/* Did we fall off the end of the partition? */
+		if (!gottuple)
+		{
+			if (isout)
+				*isout = true;
+			*isnull = true;
+			return (Datum) 0;
+		}
+
+		/* Evaluate the expression at this row */
 		econtext->ecxt_outertuple = slot;
-		return ExecEvalExpr((ExprState *) list_nth(winobj->argstates, argno),
-							econtext, isnull);
+		result = ExecEvalExpr((ExprState *) list_nth(winobj->argstates, argno),
+							  econtext, isnull);
+
+		/* If we got a null and we're ignoring them, move the goalposts */
+		if (ignore_nulls && *isnull)
+			target += step;
+
+		/* Once we've reached our target, we're done */
+		if (relpos == target)
+		{
+			if (isout)
+				*isout = false;
+			/*
+			 * We can only mark the row if we're not ignoring nulls (because we
+			 * jump straight there).
+			 */
+			if (set_mark && !ignore_nulls)
+				WinSetMarkPosition(winobj, abs_pos);
+			return result;
+		}
+
+		/* Otherwise move closer and try again */
+		relpos += step;
 	}
 }
 
@@ -3261,170 +3318,218 @@ WinGetFuncArgInFrame(WindowObject winobj, int argno,
 	TupleTableSlot *slot;
 	int64		abs_pos;
 	int64		mark_pos;
+	bool		ignore_nulls = false;
+	int			target = relpos;
+	int			step;
+	Datum		result;
 
 	Assert(WindowObjectIsValid(winobj));
 	winstate = winobj->winstate;
 	econtext = winstate->ss.ps.ps_ExprContext;
 	slot = winstate->temp_slot_1;
 
-	switch (seektype)
+	/*
+	 * If we're not ignoring nulls, we'll just go straight to the desired row.
+	 * But if we are ignoring nulls, we'll have to step towards the target row
+	 * by row so we need to determine how we get there.
+	 */
+	if (winobj->null_treatment == NULL_TREATMENT_IGNORE)
 	{
-		case WINDOW_SEEK_CURRENT:
-			elog(ERROR, "WINDOW_SEEK_CURRENT is not supported for WinGetFuncArgInFrame");
-			abs_pos = mark_pos = 0; /* keep compiler quiet */
-			break;
-		case WINDOW_SEEK_HEAD:
-			/* rejecting relpos < 0 is easy and simplifies code below */
-			if (relpos < 0)
-				goto out_of_frame;
-			update_frameheadpos(winstate);
-			abs_pos = winstate->frameheadpos + relpos;
-			mark_pos = abs_pos;
+		ignore_nulls = true;
 
-			/*
-			 * Account for exclusion option if one is active, but advance only
-			 * abs_pos not mark_pos.  This prevents changes of the current
-			 * row's peer group from resulting in trying to fetch a row before
-			 * some previous mark position.
-			 *
-			 * Note that in some corner cases such as current row being
-			 * outside frame, these calculations are theoretically too simple,
-			 * but it doesn't matter because we'll end up deciding the row is
-			 * out of frame.  We do not attempt to avoid fetching rows past
-			 * end of frame; that would happen in some cases anyway.
-			 */
-			switch (winstate->frameOptions & FRAMEOPTION_EXCLUSION)
-			{
-				case 0:
-					/* no adjustment needed */
-					break;
-				case FRAMEOPTION_EXCLUDE_CURRENT_ROW:
-					if (abs_pos >= winstate->currentpos &&
-						winstate->currentpos >= winstate->frameheadpos)
-						abs_pos++;
-					break;
-				case FRAMEOPTION_EXCLUDE_GROUP:
-					update_grouptailpos(winstate);
-					if (abs_pos >= winstate->groupheadpos &&
-						winstate->grouptailpos > winstate->frameheadpos)
-					{
-						int64		overlapstart = Max(winstate->groupheadpos,
-													   winstate->frameheadpos);
+		if (target > 0)
+			step = 1;
+		else if (target < 0)
+			step = -1;
+		else if (seektype == WINDOW_SEEK_HEAD)
+			step = 1;
+		else if (seektype == WINDOW_SEEK_TAIL)
+			step = -1;
+		else
+			step = 0;
 
-						abs_pos += winstate->grouptailpos - overlapstart;
-					}
-					break;
-				case FRAMEOPTION_EXCLUDE_TIES:
-					update_grouptailpos(winstate);
-					if (abs_pos >= winstate->groupheadpos &&
-						winstate->grouptailpos > winstate->frameheadpos)
-					{
-						int64		overlapstart = Max(winstate->groupheadpos,
-													   winstate->frameheadpos);
-
-						if (abs_pos == overlapstart)
-							abs_pos = winstate->currentpos;
-						else
-							abs_pos += winstate->grouptailpos - overlapstart - 1;
-					}
-					break;
-				default:
-					elog(ERROR, "unrecognized frame option state: 0x%x",
-						 winstate->frameOptions);
-					break;
-			}
-			break;
-		case WINDOW_SEEK_TAIL:
-			/* rejecting relpos > 0 is easy and simplifies code below */
-			if (relpos > 0)
-				goto out_of_frame;
-			update_frametailpos(winstate);
-			abs_pos = winstate->frametailpos - 1 + relpos;
-
-			/*
-			 * Account for exclusion option if one is active.  If there is no
-			 * exclusion, we can safely set the mark at the accessed row.  But
-			 * if there is, we can only mark the frame start, because we can't
-			 * be sure how far back in the frame the exclusion might cause us
-			 * to fetch in future.  Furthermore, we have to actually check
-			 * against frameheadpos here, since it's unsafe to try to fetch a
-			 * row before frame start if the mark might be there already.
-			 */
-			switch (winstate->frameOptions & FRAMEOPTION_EXCLUSION)
-			{
-				case 0:
-					/* no adjustment needed */
-					mark_pos = abs_pos;
-					break;
-				case FRAMEOPTION_EXCLUDE_CURRENT_ROW:
-					if (abs_pos <= winstate->currentpos &&
-						winstate->currentpos < winstate->frametailpos)
-						abs_pos--;
-					update_frameheadpos(winstate);
-					if (abs_pos < winstate->frameheadpos)
-						goto out_of_frame;
-					mark_pos = winstate->frameheadpos;
-					break;
-				case FRAMEOPTION_EXCLUDE_GROUP:
-					update_grouptailpos(winstate);
-					if (abs_pos < winstate->grouptailpos &&
-						winstate->groupheadpos < winstate->frametailpos)
-					{
-						int64		overlapend = Min(winstate->grouptailpos,
-													 winstate->frametailpos);
-
-						abs_pos -= overlapend - winstate->groupheadpos;
-					}
-					update_frameheadpos(winstate);
-					if (abs_pos < winstate->frameheadpos)
-						goto out_of_frame;
-					mark_pos = winstate->frameheadpos;
-					break;
-				case FRAMEOPTION_EXCLUDE_TIES:
-					update_grouptailpos(winstate);
-					if (abs_pos < winstate->grouptailpos &&
-						winstate->groupheadpos < winstate->frametailpos)
-					{
-						int64		overlapend = Min(winstate->grouptailpos,
-													 winstate->frametailpos);
-
-						if (abs_pos == overlapend - 1)
-							abs_pos = winstate->currentpos;
-						else
-							abs_pos -= overlapend - 1 - winstate->groupheadpos;
-					}
-					update_frameheadpos(winstate);
-					if (abs_pos < winstate->frameheadpos)
-						goto out_of_frame;
-					mark_pos = winstate->frameheadpos;
-					break;
-				default:
-					elog(ERROR, "unrecognized frame option state: 0x%x",
-						 winstate->frameOptions);
-					mark_pos = 0;	/* keep compiler quiet */
-					break;
-			}
-			break;
-		default:
-			elog(ERROR, "unrecognized window seek type: %d", seektype);
-			abs_pos = mark_pos = 0; /* keep compiler quiet */
-			break;
+		relpos = 0;
 	}
 
-	if (!window_gettupleslot(winobj, abs_pos, slot))
-		goto out_of_frame;
+	for (;;)
+	{
+		switch (seektype)
+		{
+			case WINDOW_SEEK_CURRENT:
+				elog(ERROR, "WINDOW_SEEK_CURRENT is not supported for WinGetFuncArgInFrame");
+				abs_pos = mark_pos = 0; /* keep compiler quiet */
+				break;
+			case WINDOW_SEEK_HEAD:
+				/* rejecting relpos < 0 is easy and simplifies code below */
+				if (relpos < 0)
+					goto out_of_frame;
+				update_frameheadpos(winstate);
+				abs_pos = winstate->frameheadpos + relpos;
+				mark_pos = abs_pos;
 
-	/* The code above does not detect all out-of-frame cases, so check */
-	if (row_is_in_frame(winstate, abs_pos, slot) <= 0)
-		goto out_of_frame;
+				/*
+				 * Account for exclusion option if one is active, but advance only
+				 * abs_pos not mark_pos.  This prevents changes of the current
+				 * row's peer group from resulting in trying to fetch a row before
+				 * some previous mark position.
+				 *
+				 * Note that in some corner cases such as current row being
+				 * outside frame, these calculations are theoretically too simple,
+				 * but it doesn't matter because we'll end up deciding the row is
+				 * out of frame.  We do not attempt to avoid fetching rows past
+				 * end of frame; that would happen in some cases anyway.
+				 */
+				switch (winstate->frameOptions & FRAMEOPTION_EXCLUSION)
+				{
+					case 0:
+						/* no adjustment needed */
+						break;
+					case FRAMEOPTION_EXCLUDE_CURRENT_ROW:
+						if (abs_pos >= winstate->currentpos &&
+							winstate->currentpos >= winstate->frameheadpos)
+							abs_pos++;
+						break;
+					case FRAMEOPTION_EXCLUDE_GROUP:
+						update_grouptailpos(winstate);
+						if (abs_pos >= winstate->groupheadpos &&
+							winstate->grouptailpos > winstate->frameheadpos)
+						{
+							int64		overlapstart = Max(winstate->groupheadpos,
+														   winstate->frameheadpos);
 
-	if (isout)
-		*isout = false;
-	if (set_mark)
-		WinSetMarkPosition(winobj, mark_pos);
-	econtext->ecxt_outertuple = slot;
-	return ExecEvalExpr((ExprState *) list_nth(winobj->argstates, argno),
-						econtext, isnull);
+							abs_pos += winstate->grouptailpos - overlapstart;
+						}
+						break;
+					case FRAMEOPTION_EXCLUDE_TIES:
+						update_grouptailpos(winstate);
+						if (abs_pos >= winstate->groupheadpos &&
+							winstate->grouptailpos > winstate->frameheadpos)
+						{
+							int64		overlapstart = Max(winstate->groupheadpos,
+														   winstate->frameheadpos);
+
+							if (abs_pos == overlapstart)
+								abs_pos = winstate->currentpos;
+							else
+								abs_pos += winstate->grouptailpos - overlapstart - 1;
+						}
+						break;
+					default:
+						elog(ERROR, "unrecognized frame option state: 0x%x",
+							 winstate->frameOptions);
+						break;
+				}
+				break;
+			case WINDOW_SEEK_TAIL:
+				/* rejecting relpos > 0 is easy and simplifies code below */
+				if (relpos > 0)
+					goto out_of_frame;
+				update_frametailpos(winstate);
+				abs_pos = winstate->frametailpos - 1 + relpos;
+
+				/*
+				 * Account for exclusion option if one is active.  If there is no
+				 * exclusion, we can safely set the mark at the accessed row.  But
+				 * if there is, we can only mark the frame start, because we can't
+				 * be sure how far back in the frame the exclusion might cause us
+				 * to fetch in future.  Furthermore, we have to actually check
+				 * against frameheadpos here, since it's unsafe to try to fetch a
+				 * row before frame start if the mark might be there already.
+				 */
+				switch (winstate->frameOptions & FRAMEOPTION_EXCLUSION)
+				{
+					case 0:
+						/* no adjustment needed */
+						mark_pos = abs_pos;
+						break;
+					case FRAMEOPTION_EXCLUDE_CURRENT_ROW:
+						if (abs_pos <= winstate->currentpos &&
+							winstate->currentpos < winstate->frametailpos)
+							abs_pos--;
+						update_frameheadpos(winstate);
+						if (abs_pos < winstate->frameheadpos)
+							goto out_of_frame;
+						mark_pos = winstate->frameheadpos;
+						break;
+					case FRAMEOPTION_EXCLUDE_GROUP:
+						update_grouptailpos(winstate);
+						if (abs_pos < winstate->grouptailpos &&
+							winstate->groupheadpos < winstate->frametailpos)
+						{
+							int64		overlapend = Min(winstate->grouptailpos,
+														 winstate->frametailpos);
+
+							abs_pos -= overlapend - winstate->groupheadpos;
+						}
+						update_frameheadpos(winstate);
+						if (abs_pos < winstate->frameheadpos)
+							goto out_of_frame;
+						mark_pos = winstate->frameheadpos;
+						break;
+					case FRAMEOPTION_EXCLUDE_TIES:
+						update_grouptailpos(winstate);
+						if (abs_pos < winstate->grouptailpos &&
+							winstate->groupheadpos < winstate->frametailpos)
+						{
+							int64		overlapend = Min(winstate->grouptailpos,
+														 winstate->frametailpos);
+
+							if (abs_pos == overlapend - 1)
+								abs_pos = winstate->currentpos;
+							else
+								abs_pos -= overlapend - 1 - winstate->groupheadpos;
+						}
+						update_frameheadpos(winstate);
+						if (abs_pos < winstate->frameheadpos)
+							goto out_of_frame;
+						mark_pos = winstate->frameheadpos;
+						break;
+					default:
+						elog(ERROR, "unrecognized frame option state: 0x%x",
+							 winstate->frameOptions);
+						mark_pos = 0;	/* keep compiler quiet */
+						break;
+				}
+				break;
+			default:
+				elog(ERROR, "unrecognized window seek type: %d", seektype);
+				abs_pos = mark_pos = 0; /* keep compiler quiet */
+				break;
+		}
+
+		if (!window_gettupleslot(winobj, abs_pos, slot))
+			goto out_of_frame;
+
+		/* The code above does not detect all out-of-frame cases, so check */
+		if (row_is_in_frame(winstate, abs_pos, slot) <= 0)
+			goto out_of_frame;
+
+		/* Evaluate the expression at this row */
+		econtext->ecxt_outertuple = slot;
+		result = ExecEvalExpr((ExprState *) list_nth(winobj->argstates, argno),
+							  econtext, isnull);
+
+		/* If we got a null and we're ignoring them, move the goalposts */
+		if (ignore_nulls && *isnull)
+			target += step;
+
+		/* Once we've reached our target, we're done */
+		if (relpos == target)
+		{
+			if (isout)
+				*isout = false;
+			/*
+			 * We can only mark the row if we're not ignoring nulls (because we
+			 * jump straight there).
+			 */
+			if (set_mark && !ignore_nulls)
+				WinSetMarkPosition(winobj, mark_pos);
+			return result;
+		}
+
+		/* Otherwise move closer and try again */
+		relpos += step;
+	}
 
 out_of_frame:
 	if (isout)

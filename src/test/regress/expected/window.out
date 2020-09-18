@@ -4033,3 +4033,263 @@ SELECT * FROM pg_temp.f(2);
  {5}
 (5 rows)
 
+-- IGNORE NULLS tests
+CREATE TEMPORARY TABLE planets (
+    name text,
+    orbit integer
+);
+INSERT INTO planets VALUES
+  ('mercury', 88),
+  ('venus', 224),
+  ('earth', NULL),
+  ('mars', NULL),
+  ('jupiter', 4332),
+  ('saturn', 24491),
+  ('uranus', NULL),
+  ('neptune', 60182),
+  ('pluto', 90560),
+  ('xyzzy', NULL);
+-- test ruleutils
+CREATE VIEW planets_view AS
+SELECT name,
+       orbit,
+       lag(orbit) OVER w AS lag,
+       lag(orbit) RESPECT NULLS OVER w AS lag_respect,
+       lag(orbit) IGNORE NULLS OVER w AS lag_ignore
+FROM planets
+WINDOW w AS (ORDER BY name)
+;
+NOTICE:  view "planets_view" will be a temporary view
+SELECT pg_get_viewdef('planets_view');
+                       pg_get_viewdef                        
+-------------------------------------------------------------
+  SELECT planets.name,                                      +
+     planets.orbit,                                         +
+     lag(planets.orbit) OVER w AS lag,                      +
+     lag(planets.orbit) RESPECT NULLS OVER w AS lag_respect,+
+     lag(planets.orbit) IGNORE NULLS OVER w AS lag_ignore   +
+    FROM planets                                            +
+   WINDOW w AS (ORDER BY planets.name);
+(1 row)
+
+-- lag
+SELECT name,
+       orbit,
+       lag(orbit) OVER w AS lag,
+       lag(orbit) RESPECT NULLS OVER w AS lag_respect,
+       lag(orbit) IGNORE NULLS OVER w AS lag_ignore
+FROM planets
+WINDOW w AS (ORDER BY name)
+;
+  name   | orbit |  lag  | lag_respect | lag_ignore 
+---------+-------+-------+-------------+------------
+ earth   |       |       |             |           
+ jupiter |  4332 |       |             |           
+ mars    |       |  4332 |        4332 |       4332
+ mercury |    88 |       |             |       4332
+ neptune | 60182 |    88 |          88 |         88
+ pluto   | 90560 | 60182 |       60182 |      60182
+ saturn  | 24491 | 90560 |       90560 |      90560
+ uranus  |       | 24491 |       24491 |      24491
+ venus   |   224 |       |             |      24491
+ xyzzy   |       |   224 |         224 |        224
+(10 rows)
+
+-- lead
+SELECT name,
+       orbit,
+       lead(orbit) OVER w AS lead,
+       lead(orbit) RESPECT NULLS OVER w AS lead_respect,
+       lead(orbit) IGNORE NULLS OVER w AS lead_ignore
+FROM planets
+WINDOW w AS (ORDER BY name)
+;
+  name   | orbit | lead  | lead_respect | lead_ignore 
+---------+-------+-------+--------------+-------------
+ earth   |       |  4332 |         4332 |        4332
+ jupiter |  4332 |       |              |          88
+ mars    |       |    88 |           88 |          88
+ mercury |    88 | 60182 |        60182 |       60182
+ neptune | 60182 | 90560 |        90560 |       90560
+ pluto   | 90560 | 24491 |        24491 |       24491
+ saturn  | 24491 |       |              |         224
+ uranus  |       |   224 |          224 |         224
+ venus   |   224 |       |              |            
+ xyzzy   |       |       |              |            
+(10 rows)
+
+-- first_value
+SELECT name,
+       orbit,
+       first_value(orbit) RESPECT NULLS OVER w1,
+       first_value(orbit) IGNORE NULLS OVER w1,
+       first_value(orbit) RESPECT NULLS OVER w2,
+       first_value(orbit) IGNORE NULLS OVER w2
+FROM planets
+WINDOW w1 AS (ORDER BY name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
+       w2 AS (ORDER BY name ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING)
+;
+  name   | orbit | first_value | first_value | first_value | first_value 
+---------+-------+-------------+-------------+-------------+-------------
+ earth   |       |             |        4332 |             |        4332
+ jupiter |  4332 |             |        4332 |             |        4332
+ mars    |       |             |        4332 |             |        4332
+ mercury |    88 |             |        4332 |        4332 |        4332
+ neptune | 60182 |             |        4332 |             |          88
+ pluto   | 90560 |             |        4332 |          88 |          88
+ saturn  | 24491 |             |        4332 |       60182 |       60182
+ uranus  |       |             |        4332 |       90560 |       90560
+ venus   |   224 |             |        4332 |       24491 |       24491
+ xyzzy   |       |             |        4332 |             |         224
+(10 rows)
+
+-- nth_value
+SELECT name,
+       orbit,
+       nth_value(orbit, 2) RESPECT NULLS OVER w1,
+       nth_value(orbit, 2) IGNORE NULLS OVER w1,
+       nth_value(orbit, 2) RESPECT NULLS OVER w2,
+       nth_value(orbit, 2) IGNORE NULLS OVER w2
+FROM planets
+WINDOW w1 AS (ORDER BY name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
+       w2 AS (ORDER BY name ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING)
+;
+  name   | orbit | nth_value | nth_value | nth_value | nth_value 
+---------+-------+-----------+-----------+-----------+-----------
+ earth   |       |      4332 |        88 |      4332 |          
+ jupiter |  4332 |      4332 |        88 |      4332 |        88
+ mars    |       |      4332 |        88 |      4332 |        88
+ mercury |    88 |      4332 |        88 |           |        88
+ neptune | 60182 |      4332 |        88 |        88 |     60182
+ pluto   | 90560 |      4332 |        88 |     60182 |     60182
+ saturn  | 24491 |      4332 |        88 |     90560 |     90560
+ uranus  |       |      4332 |        88 |     24491 |     24491
+ venus   |   224 |      4332 |        88 |           |       224
+ xyzzy   |       |      4332 |        88 |       224 |          
+(10 rows)
+
+-- nth_value_last
+SELECT name,
+       orbit,
+       nth_value_last(orbit, 2) RESPECT NULLS OVER w1,
+       nth_value_last(orbit, 2) IGNORE NULLS OVER w1,
+       nth_value_last(orbit, 2) RESPECT NULLS OVER w2,
+       nth_value_last(orbit, 2) IGNORE NULLS OVER w2
+FROM planets
+WINDOW w1 AS (ORDER BY name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
+       w2 AS (ORDER BY name ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING)
+;
+  name   | orbit | nth_value_last | nth_value_last | nth_value_last | nth_value_last 
+---------+-------+----------------+----------------+----------------+----------------
+ earth   |       |            224 |          24491 |           4332 |               
+ jupiter |  4332 |            224 |          24491 |                |           4332
+ mars    |       |            224 |          24491 |             88 |             88
+ mercury |    88 |            224 |          24491 |          60182 |          60182
+ neptune | 60182 |            224 |          24491 |          90560 |          90560
+ pluto   | 90560 |            224 |          24491 |          24491 |          90560
+ saturn  | 24491 |            224 |          24491 |                |          24491
+ uranus  |       |            224 |          24491 |            224 |          24491
+ venus   |   224 |            224 |          24491 |            224 |          24491
+ xyzzy   |       |            224 |          24491 |            224 |               
+(10 rows)
+
+-- abs_nth, abs_nth_last
+SELECT name,
+       orbit,
+       abs_nth(orbit, 3) RESPECT NULLS OVER w,
+       abs_nth(orbit, 3) IGNORE NULLS OVER w,
+       abs_nth_last(orbit, 3) RESPECT NULLS OVER w,
+       abs_nth_last(orbit, 3) IGNORE NULLS OVER w
+FROM planets
+WINDOW w AS (ORDER BY name)
+;
+  name   | orbit | abs_nth | abs_nth | abs_nth_last | abs_nth_last 
+---------+-------+---------+---------+--------------+--------------
+ earth   |       |         |   60182 |              |        90560
+ jupiter |  4332 |         |   60182 |              |        90560
+ mars    |       |         |   60182 |              |        90560
+ mercury |    88 |         |   60182 |              |        90560
+ neptune | 60182 |         |   60182 |              |        90560
+ pluto   | 90560 |         |   60182 |              |        90560
+ saturn  | 24491 |         |   60182 |              |        90560
+ uranus  |       |         |   60182 |              |        90560
+ venus   |   224 |         |   60182 |              |        90560
+ xyzzy   |       |         |   60182 |              |        90560
+(10 rows)
+
+-- last_value
+SELECT name,
+       orbit,
+       last_value(orbit) RESPECT NULLS OVER w1,
+       last_value(orbit) IGNORE NULLS OVER w1,
+       last_value(orbit) RESPECT NULLS OVER w2,
+       last_value(orbit) IGNORE NULLS OVER w2
+FROM planets
+WINDOW w1 AS (ORDER BY name ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),
+       w2 AS (ORDER BY name ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING)
+;
+  name   | orbit | last_value | last_value | last_value | last_value 
+---------+-------+------------+------------+------------+------------
+ earth   |       |            |        224 |            |       4332
+ jupiter |  4332 |            |        224 |         88 |         88
+ mars    |       |            |        224 |      60182 |      60182
+ mercury |    88 |            |        224 |      90560 |      90560
+ neptune | 60182 |            |        224 |      24491 |      24491
+ pluto   | 90560 |            |        224 |            |      24491
+ saturn  | 24491 |            |        224 |        224 |        224
+ uranus  |       |            |        224 |            |        224
+ venus   |   224 |            |        224 |            |        224
+ xyzzy   |       |            |        224 |            |        224
+(10 rows)
+
+-- window function without null treatment
+SELECT row_number() OVER (ORDER BY name) FROM planets;
+ row_number 
+------------
+          1
+          2
+          3
+          4
+          5
+          6
+          7
+          8
+          9
+         10
+(10 rows)
+
+SELECT row_number() RESPECT NULLS OVER (ORDER BY name) FROM planets; -- fails
+ERROR:  window function row_number does not accept RESPECT/IGNORE NULLS
+LINE 1: SELECT row_number() RESPECT NULLS OVER (ORDER BY name) FROM ...
+               ^
+SELECT row_number() IGNORE NULLS OVER (ORDER BY name) FROM planets; -- fails
+ERROR:  window function row_number does not accept RESPECT/IGNORE NULLS
+LINE 1: SELECT row_number() IGNORE NULLS OVER (ORDER BY name) FROM p...
+               ^
+-- regular aggregate
+SELECT sum(orbit) OVER () FROM planets;
+  sum   
+--------
+ 179877
+ 179877
+ 179877
+ 179877
+ 179877
+ 179877
+ 179877
+ 179877
+ 179877
+ 179877
+(10 rows)
+
+SELECT sum(orbit) RESPECT NULLS OVER () FROM planets; -- fails
+ERROR:  aggregate functions do not accept RESPECT/IGNORE NULLS
+LINE 1: SELECT sum(orbit) RESPECT NULLS OVER () FROM planets;
+               ^
+SELECT sum(orbit) IGNORE NULLS OVER () FROM planets; -- fails
+ERROR:  aggregate functions do not accept RESPECT/IGNORE NULLS
+LINE 1: SELECT sum(orbit) IGNORE NULLS OVER () FROM planets;
+               ^
+--cleanup
+DROP TABLE planets CASCADE;
+NOTICE:  drop cascades to view planets_view

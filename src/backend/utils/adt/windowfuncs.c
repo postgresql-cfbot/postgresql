@@ -472,3 +472,91 @@ window_nth_value(PG_FUNCTION_ARGS)
 
 	PG_RETURN_DATUM(result);
 }
+
+Datum
+window_nth_value_last(PG_FUNCTION_ARGS)
+{
+	WindowObject winobj = PG_WINDOW_OBJECT();
+	bool		const_offset;
+	Datum		result;
+	bool		isnull;
+	int32		nth;
+
+	nth = DatumGetInt32(WinGetFuncArgCurrent(winobj, 1, &isnull));
+	if (isnull)
+		PG_RETURN_NULL();
+	const_offset = get_fn_expr_arg_stable(fcinfo->flinfo, 1);
+
+	if (nth <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_ARGUMENT_FOR_NTH_VALUE),
+				 errmsg("argument of nth_value_last must be greater than zero")));
+
+	result = WinGetFuncArgInFrame(winobj, 0,
+								  -(nth - 1), WINDOW_SEEK_TAIL, const_offset,
+								  &isnull, NULL);
+	if (isnull)
+		PG_RETURN_NULL();
+
+	PG_RETURN_DATUM(result);
+}
+
+Datum
+window_abs_nth(PG_FUNCTION_ARGS)
+{
+	WindowObject winobj = PG_WINDOW_OBJECT();
+	bool		const_offset;
+	Datum		result;
+	bool		isnull;
+	int32		nth;
+
+	nth = DatumGetInt32(WinGetFuncArgCurrent(winobj, 1, &isnull));
+	if (isnull)
+		PG_RETURN_NULL();
+	const_offset = get_fn_expr_arg_stable(fcinfo->flinfo, 1);
+
+	if (nth <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_ARGUMENT_FOR_NTH_VALUE),
+				 errmsg("argument of abs_nth must be greater than zero")));
+
+	result = WinGetFuncArgInPartition(winobj, 0,
+									  nth - 1,
+									  WINDOW_SEEK_HEAD,
+									  const_offset,
+									  &isnull, NULL);
+	if (isnull)
+		PG_RETURN_NULL();
+
+	PG_RETURN_DATUM(result);
+}
+
+Datum
+window_abs_nth_last(PG_FUNCTION_ARGS)
+{
+	WindowObject winobj = PG_WINDOW_OBJECT();
+	bool		const_offset;
+	Datum		result;
+	bool		isnull;
+	int32		nth;
+
+	nth = DatumGetInt32(WinGetFuncArgCurrent(winobj, 1, &isnull));
+	if (isnull)
+		PG_RETURN_NULL();
+	const_offset = get_fn_expr_arg_stable(fcinfo->flinfo, 1);
+
+	if (nth <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_ARGUMENT_FOR_NTH_VALUE),
+				 errmsg("argument of abs_nth_last must be greater than zero")));
+
+	result = WinGetFuncArgInPartition(winobj, 0,
+									  -(nth - 1),
+									  WINDOW_SEEK_TAIL,
+									  const_offset,
+									  &isnull, NULL);
+	if (isnull)
+		PG_RETURN_NULL();
+
+	PG_RETURN_DATUM(result);
+}

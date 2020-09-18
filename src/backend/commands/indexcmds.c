@@ -1105,7 +1105,7 @@ DefineIndex(Oid relationId,
 	 */
 	if (partitioned && stmt->relation && !stmt->relation->inh)
 	{
-		PartitionDesc pd = RelationGetPartitionDesc(rel);
+		PartitionDesc pd = RelationGetPartitionDesc(rel, false);
 
 		if (pd->nparts != 0)
 			flags |= INDEX_CREATE_INVALID;
@@ -1162,7 +1162,7 @@ DefineIndex(Oid relationId,
 		 */
 		if (!stmt->relation || stmt->relation->inh)
 		{
-			PartitionDesc partdesc = RelationGetPartitionDesc(rel);
+			PartitionDesc partdesc = RelationGetPartitionDesc(rel, false);
 			int			nparts = partdesc->nparts;
 			Oid		   *part_oids = palloc(sizeof(Oid) * nparts);
 			bool		invalidate_parent = false;
@@ -3751,6 +3751,7 @@ IndexSetParentIndex(Relation partitionIdx, Oid parentOid)
 			values[Anum_pg_inherits_inhparent - 1] =
 				ObjectIdGetDatum(parentOid);
 			values[Anum_pg_inherits_inhseqno - 1] = Int32GetDatum(1);
+			values[Anum_pg_inherits_inhdetached - 1] = BoolGetDatum(false);
 			memset(isnull, false, sizeof(isnull));
 
 			tuple = heap_form_tuple(RelationGetDescr(pg_inherits),

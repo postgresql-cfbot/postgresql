@@ -1,0 +1,233 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1b s1s s2d s1s s1c s2drop s1s
+step s1b: BEGIN;
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+step s1c: COMMIT;
+step s2d: <... completed>
+step s2drop: DROP TABLE d_listp2;
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+
+starting permutation: s1b s1s s2d s1s s3s s3i s1c s3i s2drop s1s
+step s1b: BEGIN;
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+step s3s: SELECT * FROM d_listp;
+a              
+
+1              
+step s3i: SELECT relpartbound IS NULL FROM pg_class where relname = 'd_listp2';
+?column?       
+
+f              
+step s1c: COMMIT;
+step s2d: <... completed>
+step s3i: SELECT relpartbound IS NULL FROM pg_class where relname = 'd_listp2';
+?column?       
+
+t              
+step s2drop: DROP TABLE d_listp2;
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+
+starting permutation: s1b s1s s2d s1ins s1c
+step s1b: BEGIN;
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s1ins: INSERT INTO d_listp VALUES (1);
+step s1c: COMMIT;
+step s2d: <... completed>
+
+starting permutation: s1brr s1s s2d s1ins s1c
+step s1brr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s1ins: INSERT INTO d_listp VALUES (1);
+step s1c: COMMIT;
+step s2d: <... completed>
+
+starting permutation: s1brr s1s s2d s1s s1c
+step s1brr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s1c: COMMIT;
+step s2d: <... completed>
+
+starting permutation: s1brr s1prep s1s s2d s1s s1exec s1dealloc s1c
+step s1brr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1prep: PREPARE f(int) AS INSERT INTO d_listp VALUES ($1);
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s1exec: EXECUTE f(1);
+step s1dealloc: DEALLOCATE f;
+step s1c: COMMIT;
+step s2d: <... completed>
+
+starting permutation: s1brr s1prep s1s s2d s1s s1exec2 s1dealloc s1c
+step s1brr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1prep: PREPARE f(int) AS INSERT INTO d_listp VALUES ($1);
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s1exec2: EXECUTE f(2);
+step s1dealloc: DEALLOCATE f;
+step s1c: COMMIT;
+step s2d: <... completed>
+
+starting permutation: s1brr s1prep s1s s2d s1s s1exec2 s1c s1dealloc
+step s1brr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1prep: PREPARE f(int) AS INSERT INTO d_listp VALUES ($1);
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s1exec2: EXECUTE f(2);
+step s1c: COMMIT;
+step s2d: <... completed>
+step s1dealloc: DEALLOCATE f;
+
+starting permutation: s1brr s1prep s2d s1s s1exec2 s1c s1dealloc
+step s1brr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1prep: PREPARE f(int) AS INSERT INTO d_listp VALUES ($1);
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s1exec2: EXECUTE f(2);
+step s1c: COMMIT;
+step s2d: <... completed>
+step s1dealloc: DEALLOCATE f;
+
+starting permutation: s1brr s1prep1 s2d s1s s1exec2 s1c s1dealloc
+step s1brr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1prep1: PREPARE f(int) AS INSERT INTO d_listp VALUES (1);
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s1exec2: EXECUTE f(2);
+step s1c: COMMIT;
+step s2d: <... completed>
+step s1dealloc: DEALLOCATE f;
+
+starting permutation: s1b s1s s2d s3drop1 s1c
+step s1b: BEGIN;
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s3drop1: DROP TABLE d_listp; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s3drop1: <... completed>
+error in steps s1c s2d s3drop1: ERROR:  partitioned table "d_listp" was removed concurrently
+
+starting permutation: s1b s1s s2d s3drop2 s1c
+step s1b: BEGIN;
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s3drop2: DROP TABLE d_listp2; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s3drop2: <... completed>
+error in steps s1c s2d s3drop2: ERROR:  partition "d_listp2" was removed concurrently
+
+starting permutation: s1b s1s s2d s3detach s1c
+step s1b: BEGIN;
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s3detach: ALTER TABLE d_listp DETACH PARTITION d_listp2; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s3detach: <... completed>
+error in steps s1c s2d s3detach: ERROR:  cannot detach partition "d_listp2"
+
+starting permutation: s1b s1s s2d s3rename s1c
+step s1b: BEGIN;
+step s1s: SELECT * FROM d_listp;
+a              
+
+1              
+2              
+step s2d: ALTER TABLE d_listp DETACH PARTITION d_listp2 CONCURRENTLY; <waiting ...>
+step s3rename: ALTER TABLE d_listp2 RENAME TO d_listp_foobar; <waiting ...>
+step s1c: COMMIT;
+step s2d: <... completed>
+step s3rename: <... completed>

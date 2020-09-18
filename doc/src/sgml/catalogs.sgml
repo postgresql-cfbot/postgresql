@@ -4481,6 +4481,16 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        when using declarative partitioning.
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>inhdetached</structfield> <type>bool</type>
+      </para>
+      <para>
+       Set to true for a partition that is in the process of being detached;
+       false otherwise.
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

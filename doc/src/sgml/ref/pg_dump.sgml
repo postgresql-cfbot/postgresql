@@ -1107,6 +1107,24 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--where=<replaceable class="parameter">table</replaceable>:<replaceable class="parameter">filter_clause</replaceable></option></term>
+      <listitem>
+       <para>
+        When dumping data for <replaceable class="parameter">table</replaceable>, only include rows
+        that meet the <replaceable class="parameter">filter_clause</replaceable> condition.
+        if <option>--where</option> contains subquery, uses schema-qualified name otherwise
+        it is error because pg_dump uses schema-qualified object name to identifies the tables.
+        This option is useful when you want to dump only a subset of a particular table.
+        <option>--where</option> can be given more than once to provide different filters
+        for multiple tables. Note that if multiple options refer to the same table,
+        only the first filter_clause will be applied. If necessary, use quotes in your shell to
+        provide an argument that contains spaces.
+        E.g. --where=mytable:"created_at >= '2018-01-01' AND test = 'f'"
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
        <term><option>-?</option></term>
        <term><option>--help</option></term>
        <listitem>

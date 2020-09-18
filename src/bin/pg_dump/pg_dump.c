@@ -121,6 +121,8 @@ static SimpleStringList tabledata_exclude_patterns = {NULL, NULL};
 static SimpleOidList tabledata_exclude_oids = {NULL, NULL};
 static SimpleStringList foreign_servers_include_patterns = {NULL, NULL};
 static SimpleOidList foreign_servers_include_oids = {NULL, NULL};
+static SimpleStringList tabledata_where_patterns = {NULL, NULL};
+static SimpleOidList tabledata_where_oids = {NULL, NULL};
 
 static const CatalogId nilCatalogId = {0, 0};
 
@@ -156,7 +158,8 @@ static void expand_foreign_server_name_patterns(Archive *fout,
 static void expand_table_name_patterns(Archive *fout,
 									   SimpleStringList *patterns,
 									   SimpleOidList *oids,
-									   bool strict_names);
+									   bool strict_names,
+									   bool match_data);
 static NamespaceInfo *findNamespace(Archive *fout, Oid nsoid);
 static void dumpTableData(Archive *fout, TableDataInfo *tdinfo);
 static void refreshMatViewData(Archive *fout, TableDataInfo *tdinfo);
@@ -387,6 +390,7 @@ main(int argc, char **argv)
 		{"on-conflict-do-nothing", no_argument, &dopt.do_nothing, 1},
 		{"rows-per-insert", required_argument, NULL, 10},
 		{"include-foreign-data", required_argument, NULL, 11},
+		{"where", required_argument, NULL, 12},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -604,6 +608,10 @@ main(int argc, char **argv)
 										  optarg);
 				break;
 
+			case 12:				/* table data WHERE clause */
+				simple_string_list_append(&tabledata_where_patterns, optarg);
+				break;
+
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit_nicely(1);
@@ -806,17 +814,26 @@ main(int argc, char **argv)
 	{
 		expand_table_name_patterns(fout, &table_include_patterns,
 								   &table_include_oids,
-								   strict_names);
+								   strict_names, false);
 		if (table_include_oids.head == NULL)
 			fatal("no matching tables were found");
 	}
+
+	if (tabledata_where_patterns.head != NULL)
+	{
+		expand_table_name_patterns(fout, &tabledata_where_patterns,
+								   &tabledata_where_oids,
+								   true, true);
+		if (tabledata_where_oids.head == NULL)
+			fatal("no matching table was found");
+	}
 	expand_table_name_patterns(fout, &table_exclude_patterns,
 							   &table_exclude_oids,
-							   false);
+							   false, false);
 
 	expand_table_name_patterns(fout, &tabledata_exclude_patterns,
 							   &tabledata_exclude_oids,
-							   false);
+							   false, false);
 
 	expand_foreign_server_name_patterns(fout, &foreign_servers_include_patterns,
 										&foreign_servers_include_oids);
@@ -1047,6 +1064,7 @@ help(const char *progname)
 	printf(_("  --use-set-session-authorization\n"
 			 "                               use SET SESSION AUTHORIZATION commands instead of\n"
 			 "                               ALTER OWNER commands to set ownership\n"));
+	printf(_("  --where=TABLE:WHERE_CLAUSE   only dump selected rows for the given table\n"));
 
 	printf(_("\nConnection options:\n"));
 	printf(_("  -d, --dbname=DBNAME      database to dump\n"));
@@ -1394,16 +1412,20 @@ expand_foreign_server_name_patterns(Archive *fout,
 /*
  * Find the OIDs of all tables matching the given list of patterns,
  * and append them to the given OID list. See also expand_dbname_patterns()
- * in pg_dumpall.c
+ * in pg_dumpall.c .If match_data is set, then each pattern is first split on the
+ * ':' character, and the portion after the colon is appended to
+ * the SimpleOidList extra data.
  */
 static void
 expand_table_name_patterns(Archive *fout,
 						   SimpleStringList *patterns, SimpleOidList *oids,
-						   bool strict_names)
+						   bool strict_names, bool match_data)
 {
 	PQExpBuffer query;
 	PGresult   *res;
 	SimpleStringListCell *cell;
+	char *extra_data;
+	char *colon_char;
 	int			i;
 
 	if (patterns->head == NULL)
@@ -1418,6 +1440,19 @@ expand_table_name_patterns(Archive *fout,
 
 	for (cell = patterns->head; cell; cell = cell->next)
 	{
+		/* When match_data is set, split the pattern on the first unquoted ':' character,
+		 * and treat the second-half as extra data to append to the list.
+		 */
+		extra_data = NULL;
+		if (match_data)
+		{
+			colon_char = (char*) findUnquotedChar(cell->val, ':');
+			if (colon_char)
+			{
+				*colon_char = '\0';
+				extra_data = colon_char+1;
+			}
+		}
 		/*
 		 * Query must remain ABSOLUTELY devoid of unqualified names.  This
 		 * would be unnecessary given a pg_table_is_visible() variant taking a
@@ -1444,9 +1479,12 @@ expand_table_name_patterns(Archive *fout,
 		if (strict_names && PQntuples(res) == 0)
 			fatal("no matching tables were found for pattern \"%s\"", cell->val);
 
+		if (extra_data && PQntuples(res) != 1)
+			fatal("multiple matching tables \"%s\" on where clause", cell->val);
+
 		for (i = 0; i < PQntuples(res); i++)
 		{
-			simple_oid_list_append(oids, atooid(PQgetvalue(res, i, 0)));
+			simple_oid_list_append_data(oids, atooid(PQgetvalue(res, i, 0)), extra_data);
 		}
 
 		PQclear(res);
@@ -1873,6 +1911,7 @@ dumpTableData_copy(Archive *fout, void *dcontext)
 	 */
 	if (tdinfo->filtercond || tbinfo->relkind == RELKIND_FOREIGN_TABLE)
 	{
+		ArchiveHandle *AH = (ArchiveHandle *) fout;
 		/* Note: this syntax is only supported in 8.2 and up */
 		appendPQExpBufferStr(q, "COPY (SELECT ");
 		/* klugery to get rid of parens in column list */
@@ -1887,14 +1926,23 @@ dumpTableData_copy(Archive *fout, void *dcontext)
 		appendPQExpBuffer(q, "FROM %s %s) TO stdout;",
 						  fmtQualifiedDumpable(tbinfo),
 						  tdinfo->filtercond ? tdinfo->filtercond : "");
+
+		if (tbinfo->relkind != RELKIND_FOREIGN_TABLE)
+		{
+			res = PQexec(AH->connection, q->data);
+			if (PQresultStatus(res) != PGRES_COPY_OUT)
+				fatal("processing of table \"%s\" failed", fmtQualifiedDumpable(tbinfo));
+		}
+		else
+			res = ExecuteSqlQuery(fout, q->data, PGRES_COPY_OUT);
 	}
 	else
 	{
 		appendPQExpBuffer(q, "COPY %s %s TO stdout;",
 						  fmtQualifiedDumpable(tbinfo),
 						  column_list);
+		res = ExecuteSqlQuery(fout, q->data, PGRES_COPY_OUT);
 	}
-	res = ExecuteSqlQuery(fout, q->data, PGRES_COPY_OUT);
 	PQclear(res);
 	destroyPQExpBuffer(clistBuf);
 
@@ -2013,9 +2061,19 @@ dumpTableData_insert(Archive *fout, void *dcontext)
 					  "SELECT * FROM ONLY %s",
 					  fmtQualifiedDumpable(tbinfo));
 	if (tdinfo->filtercond)
-		appendPQExpBuffer(q, " %s", tdinfo->filtercond);
+	{
+		ArchiveHandle *AH = (ArchiveHandle *) fout;
+		PGresult   *result;
 
-	ExecuteSqlStatement(fout, q->data);
+		appendPQExpBuffer(q, " %s", tdinfo->filtercond);
+		result = PQexec(AH->connection, q->data);
+
+		if (PQresultStatus(result) != PGRES_COMMAND_OK)
+			fatal("processing of table \"%s\" failed", fmtQualifiedDumpable(tbinfo));
+		PQclear(result);
+	}
+	else
+		ExecuteSqlStatement(fout, q->data);
 
 	while (1)
 	{
@@ -2393,6 +2451,7 @@ static void
 makeTableDataInfo(DumpOptions *dopt, TableInfo *tbinfo)
 {
 	TableDataInfo *tdinfo;
+	char *filter_clause;
 
 	/*
 	 * Nothing to do if we already decided to dump the table.  This will
@@ -2445,6 +2504,22 @@ makeTableDataInfo(DumpOptions *dopt, TableInfo *tbinfo)
 	tdinfo->dobj.namespace = tbinfo->dobj.namespace;
 	tdinfo->tdtable = tbinfo;
 	tdinfo->filtercond = NULL;	/* might get set later */
+
+	/*
+	 * --where=<table_name>:<filter_clause> may be provided for this table.
+	 * If provided, filter_clause will be something like "foo < 5", so wrap it in a WHERE clause.
+	 */
+	filter_clause = NULL;
+	if (simple_oid_list_find_data(&tabledata_where_oids,
+		tbinfo->dobj.catId.oid,
+		(void**) &filter_clause))
+	{
+		if (filter_clause)
+		{
+			tdinfo->filtercond = psprintf("WHERE %s", filter_clause);
+		}
+	}
+
 	addObjectDependency(&tdinfo->dobj, tbinfo->dobj.dumpId);
 
 	tbinfo->dataObj = tdinfo;

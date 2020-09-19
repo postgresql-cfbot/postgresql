@@ -61,7 +61,8 @@ table_slot_callbacks(Relation relation)
 
 	if (relation->rd_tableam)
 		tts_cb = relation->rd_tableam->slot_callbacks(relation);
-	else if (relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+	else if (relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
+			 relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		/*
 		 * Historically FDWs expect to store heap tuples in slots. Continue
@@ -79,8 +80,7 @@ table_slot_callbacks(Relation relation)
 		 * centralize the knowledge that a heap slot is the right thing in
 		 * that case here.
 		 */
-		Assert(relation->rd_rel->relkind == RELKIND_VIEW ||
-			   relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
+		Assert(relation->rd_rel->relkind == RELKIND_VIEW);
 		tts_cb = &TTSOpsVirtual;
 	}
 

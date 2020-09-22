@@ -18,6 +18,7 @@
 
 #include "storage/dsm.h"
 #include "storage/fd.h"
+#include "storage/latch.h"
 #include "storage/lock.h"
 #include "utils/catcache.h"
 #include "utils/plancache.h"
@@ -94,5 +95,12 @@ extern void ResourceOwnerRememberJIT(ResourceOwner owner,
 									 Datum handle);
 extern void ResourceOwnerForgetJIT(ResourceOwner owner,
 								   Datum handle);
+
+/* support for wait event set management */
+extern void ResourceOwnerEnlargeWESs(ResourceOwner owner);
+extern void ResourceOwnerRememberWES(ResourceOwner owner,
+						 WaitEventSet *);
+extern void ResourceOwnerForgetWES(ResourceOwner owner,
+					   WaitEventSet *);
 
 #endif							/* RESOWNER_PRIVATE_H */

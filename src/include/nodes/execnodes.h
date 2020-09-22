@@ -937,6 +937,12 @@ typedef TupleTableSlot *(*ExecProcNodeMtd) (struct PlanState *pstate);
  * abstract superclass for all PlanState-type nodes.
  * ----------------
  */
+typedef enum AsyncState
+{
+	AS_AVAILABLE,
+	AS_WAITING
+} AsyncState;
+
 typedef struct PlanState
 {
 	NodeTag		type;
@@ -1025,6 +1031,11 @@ typedef struct PlanState
 	bool		outeropsset;
 	bool		inneropsset;
 	bool		resultopsset;
+
+	/* Async subnode execution stuff */
+	AsyncState	asyncstate;
+
+	int32		padding;			/* to keep alignment of derived types */
 } PlanState;
 
 /* ----------------
@@ -1220,14 +1231,21 @@ struct AppendState
 	PlanState	ps;				/* its first field is NodeTag */
 	PlanState **appendplans;	/* array of PlanStates for my inputs */
 	int			as_nplans;
-	int			as_whichplan;
+	int			as_whichsyncplan; /* which sync plan is being executed  */
 	int			as_first_partial_plan;	/* Index of 'appendplans' containing
 										 * the first partial plan */
+	int			as_nasyncplans;	/* # of async-capable children */
 	ParallelAppendState *as_pstate; /* parallel coordination info */
 	Size		pstate_len;		/* size of parallel coordination info */
 	struct PartitionPruneState *as_prune_state;
-	Bitmapset  *as_valid_subplans;
+	Bitmapset  *as_valid_syncsubplans;
 	bool		(*choose_next_subplan) (AppendState *);
+	bool		as_syncdone;	/* all synchronous plans done? */
+	Bitmapset  *as_needrequest;	/* async plans needing a new request */
+	Bitmapset  *as_pending_async;	/* pending async plans */
+	TupleTableSlot **as_asyncresult;	/* results of each async plan */
+	int			as_nasyncresult;	/* # of valid entries in as_asyncresult */
+	bool		as_exec_prune;	/* runtime pruning needed for async exec? */
 };
 
 /* ----------------
@@ -1795,6 +1813,7 @@ typedef struct ForeignScanState
 	Size		pscan_len;		/* size of parallel coordination information */
 	/* use struct pointer to avoid including fdwapi.h here */
 	struct FdwRoutine *fdwroutine;
+	bool		fs_async;
 	void	   *fdw_state;		/* foreign-data wrapper can keep state here */
 } ForeignScanState;
 

@@ -86,6 +86,7 @@ static void show_incremental_sort_keys(IncrementalSortState *incrsortstate,
 									   List *ancestors, ExplainState *es);
 static void show_merge_append_keys(MergeAppendState *mstate, List *ancestors,
 								   ExplainState *es);
+static void show_append_info(AppendState *astate, ExplainState *es);
 static void show_agg_keys(AggState *astate, List *ancestors,
 						  ExplainState *es);
 static void show_grouping_sets(PlanState *planstate, Agg *agg,
@@ -1377,6 +1378,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		}
 		if (plan->parallel_aware)
 			appendStringInfoString(es->str, "Parallel ");
+		if (plan->async_capable)
+			appendStringInfoString(es->str, "Async ");
 		appendStringInfoString(es->str, pname);
 		es->indent++;
 	}
@@ -1958,6 +1961,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Hash:
 			show_hash_info(castNode(HashState, planstate), es);
 			break;
+
+		case T_Append:
+			show_append_info(castNode(AppendState, planstate), es);
+			break;
+
 		default:
 			break;
 	}
@@ -2309,6 +2317,15 @@ show_merge_append_keys(MergeAppendState *mstate, List *ancestors,
 						 plan->sortOperators, plan->collations,
 						 plan->nullsFirst,
 						 ancestors, es);
+}
+
+static void
+show_append_info(AppendState *astate, ExplainState *es)
+{
+	Append *plan = (Append *) astate->ps.plan;
+
+	if (plan->nasyncplans > 0)
+		ExplainPropertyInteger("Async subplans", "", plan->nasyncplans, es);
 }
 
 /*

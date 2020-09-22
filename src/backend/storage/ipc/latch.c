@@ -57,6 +57,7 @@
 #include "storage/pmsignal.h"
 #include "storage/shmem.h"
 #include "utils/memutils.h"
+#include "utils/resowner_private.h"
 
 /*
  * Select the fd readiness primitive to use. Normally the "most modern"
@@ -84,6 +85,8 @@ struct WaitEventSet
 {
 	int			nevents;		/* number of registered events */
 	int			nevents_space;	/* maximum number of events in this set */
+
+	ResourceOwner	resowner;	/* Resource owner */
 
 	/*
 	 * Array, of nevents_space length, storing the definition of events this
@@ -257,7 +260,7 @@ InitializeLatchWaitSet(void)
 	Assert(LatchWaitSet == NULL);
 
 	/* Set up the WaitEventSet used by WaitLatch(). */
-	LatchWaitSet = CreateWaitEventSet(TopMemoryContext, 2);
+	LatchWaitSet = CreateWaitEventSet(TopMemoryContext, NULL, 2);
 	latch_pos = AddWaitEventToSet(LatchWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
 								  MyLatch, NULL);
 	if (IsUnderPostmaster)
@@ -441,7 +444,7 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 	int			ret = 0;
 	int			rc;
 	WaitEvent	event;
-	WaitEventSet *set = CreateWaitEventSet(CurrentMemoryContext, 3);
+	WaitEventSet *set = CreateWaitEventSet(CurrentMemoryContext, NULL, 3);
 
 	if (wakeEvents & WL_TIMEOUT)
 		Assert(timeout >= 0);
@@ -608,11 +611,14 @@ ResetLatch(Latch *latch)
  * WaitEventSetWait().
  */
 WaitEventSet *
-CreateWaitEventSet(MemoryContext context, int nevents)
+CreateWaitEventSet(MemoryContext context, ResourceOwner res, int nevents)
 {
 	WaitEventSet *set;
 	char	   *data;
 	Size		sz = 0;
+
+	if (res)
+		ResourceOwnerEnlargeWESs(res);
 
 	/*
 	 * Use MAXALIGN size/alignment to guarantee that later uses of memory are
@@ -728,6 +734,11 @@ CreateWaitEventSet(MemoryContext context, int nevents)
 	StaticAssertStmt(WSA_INVALID_EVENT == NULL, "");
 #endif
 
+	/* Register this wait event set if requested */
+	set->resowner = res;
+	if (res)
+		ResourceOwnerRememberWES(set->resowner, set);
+
 	return set;
 }
 
@@ -772,6 +783,9 @@ FreeWaitEventSet(WaitEventSet *set)
 		}
 	}
 #endif
+
+	if (set->resowner != NULL)
+		ResourceOwnerForgetWES(set->resowner, set);
 
 	pfree(set);
 }

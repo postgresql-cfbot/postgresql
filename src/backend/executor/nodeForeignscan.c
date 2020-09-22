@@ -141,6 +141,10 @@ ExecInitForeignScan(ForeignScan *node, EState *estate, int eflags)
 	scanstate->ss.ps.plan = (Plan *) node;
 	scanstate->ss.ps.state = estate;
 	scanstate->ss.ps.ExecProcNode = ExecForeignScan;
+	scanstate->ss.ps.asyncstate = AS_AVAILABLE;
+
+	if ((eflags & EXEC_FLAG_ASYNC) != 0)
+		scanstate->fs_async = true;
 
 	/*
 	 * Miscellaneous initialization
@@ -383,4 +387,21 @@ ExecShutdownForeignScan(ForeignScanState *node)
 
 	if (fdwroutine->ShutdownForeignScan)
 		fdwroutine->ShutdownForeignScan(node);
+}
+
+/* ----------------------------------------------------------------
+ *		ExecAsyncForeignScanConfigureWait
+ *
+ *		In async mode, configure for a wait
+ * ----------------------------------------------------------------
+ */
+bool
+ExecForeignAsyncConfigureWait(ForeignScanState *node, WaitEventSet *wes,
+							  void *caller_data, bool reinit)
+{
+	FdwRoutine *fdwroutine = node->fdwroutine;
+
+	Assert(fdwroutine->ForeignAsyncConfigureWait != NULL);
+	return fdwroutine->ForeignAsyncConfigureWait(node, wes,
+												 caller_data, reinit);
 }

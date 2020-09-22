@@ -3878,6 +3878,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_XACT_GROUP_UPDATE:
 			event_name = "XactGroupUpdate";
 			break;
+		case WAIT_EVENT_ASYNC_WAIT:
+			event_name = "AsyncExecWait";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 
@@ -4503,7 +4506,7 @@ PgstatCollectorMain(int argc, char *argv[])
 	pgStatDBHash = pgstat_read_statsfiles(InvalidOid, true, true);
 
 	/* Prepare to wait for our latch or data in our socket. */
-	wes = CreateWaitEventSet(CurrentMemoryContext, 3);
+	wes = CreateWaitEventSet(CurrentMemoryContext, NULL, 3);
 	AddWaitEventToSet(wes, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch, NULL);
 	AddWaitEventToSet(wes, WL_POSTMASTER_DEATH, PGINVALID_SOCKET, NULL, NULL);
 	AddWaitEventToSet(wes, WL_SOCKET_READABLE, pgStatSock, NULL, NULL);

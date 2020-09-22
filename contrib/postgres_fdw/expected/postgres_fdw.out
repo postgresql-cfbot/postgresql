@@ -6986,7 +6986,7 @@ INSERT INTO a(aa) VALUES('aaaaa');
 INSERT INTO b(aa) VALUES('bbb');
 INSERT INTO b(aa) VALUES('bbbb');
 INSERT INTO b(aa) VALUES('bbbbb');
-SELECT tableoid::regclass, * FROM a;
+SELECT tableoid::regclass, * FROM a ORDER BY 1, 2;
  tableoid |  aa   
 ----------+-------
  a        | aaa
@@ -7014,7 +7014,7 @@ SELECT tableoid::regclass, * FROM ONLY a;
 (3 rows)
 
 UPDATE a SET aa = 'zzzzzz' WHERE aa LIKE 'aaaa%';
-SELECT tableoid::regclass, * FROM a;
+SELECT tableoid::regclass, * FROM a ORDER BY 1, 2;
  tableoid |   aa   
 ----------+--------
  a        | aaa
@@ -7042,7 +7042,7 @@ SELECT tableoid::regclass, * FROM ONLY a;
 (3 rows)
 
 UPDATE b SET aa = 'new';
-SELECT tableoid::regclass, * FROM a;
+SELECT tableoid::regclass, * FROM a ORDER BY 1, 2;
  tableoid |   aa   
 ----------+--------
  a        | aaa
@@ -7070,7 +7070,7 @@ SELECT tableoid::regclass, * FROM ONLY a;
 (3 rows)
 
 UPDATE a SET aa = 'newtoo';
-SELECT tableoid::regclass, * FROM a;
+SELECT tableoid::regclass, * FROM a ORDER BY 1, 2;
  tableoid |   aa   
 ----------+--------
  a        | newtoo
@@ -7140,35 +7140,41 @@ insert into bar2 values(3,33,33);
 insert into bar2 values(4,44,44);
 insert into bar2 values(7,77,77);
 explain (verbose, costs off)
-select * from bar where f1 in (select f1 from foo) for update;
-                                          QUERY PLAN                                          
-----------------------------------------------------------------------------------------------
+select * from bar where f1 in (select f1 from foo) order by 1 for update;
+                                                   QUERY PLAN                                                    
+-----------------------------------------------------------------------------------------------------------------
  LockRows
    Output: bar.f1, bar.f2, bar.ctid, foo.ctid, bar.*, bar.tableoid, foo.*, foo.tableoid
-   ->  Hash Join
+   ->  Merge Join
          Output: bar.f1, bar.f2, bar.ctid, foo.ctid, bar.*, bar.tableoid, foo.*, foo.tableoid
          Inner Unique: true
-         Hash Cond: (bar.f1 = foo.f1)
-         ->  Append
-               ->  Seq Scan on public.bar bar_1
+         Merge Cond: (bar.f1 = foo.f1)
+         ->  Merge Append
+               Sort Key: bar.f1
+               ->  Sort
                      Output: bar_1.f1, bar_1.f2, bar_1.ctid, bar_1.*, bar_1.tableoid
+                     Sort Key: bar_1.f1
+                     ->  Seq Scan on public.bar bar_1
+                           Output: bar_1.f1, bar_1.f2, bar_1.ctid, bar_1.*, bar_1.tableoid
                ->  Foreign Scan on public.bar2 bar_2
                      Output: bar_2.f1, bar_2.f2, bar_2.ctid, bar_2.*, bar_2.tableoid
-                     Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct2 FOR UPDATE
-         ->  Hash
+                     Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct2 ORDER BY f1 ASC NULLS LAST FOR UPDATE
+         ->  Sort
                Output: foo.ctid, foo.f1, foo.*, foo.tableoid
+               Sort Key: foo.f1
                ->  HashAggregate
                      Output: foo.ctid, foo.f1, foo.*, foo.tableoid
                      Group Key: foo.f1
                      ->  Append
-                           ->  Seq Scan on public.foo foo_1
-                                 Output: foo_1.ctid, foo_1.f1, foo_1.*, foo_1.tableoid
-                           ->  Foreign Scan on public.foo2 foo_2
+                           Async subplans: 1 
+                           ->  Async Foreign Scan on public.foo2 foo_2
                                  Output: foo_2.ctid, foo_2.f1, foo_2.*, foo_2.tableoid
                                  Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct1
-(23 rows)
+                           ->  Seq Scan on public.foo foo_1
+                                 Output: foo_1.ctid, foo_1.f1, foo_1.*, foo_1.tableoid
+(29 rows)
 
-select * from bar where f1 in (select f1 from foo) for update;
+select * from bar where f1 in (select f1 from foo) order by 1 for update;
  f1 | f2 
 ----+----
   1 | 11
@@ -7178,35 +7184,41 @@ select * from bar where f1 in (select f1 from foo) for update;
 (4 rows)
 
 explain (verbose, costs off)
-select * from bar where f1 in (select f1 from foo) for share;
-                                          QUERY PLAN                                          
-----------------------------------------------------------------------------------------------
+select * from bar where f1 in (select f1 from foo) order by 1 for share;
+                                                   QUERY PLAN                                                   
+----------------------------------------------------------------------------------------------------------------
  LockRows
    Output: bar.f1, bar.f2, bar.ctid, foo.ctid, bar.*, bar.tableoid, foo.*, foo.tableoid
-   ->  Hash Join
+   ->  Merge Join
          Output: bar.f1, bar.f2, bar.ctid, foo.ctid, bar.*, bar.tableoid, foo.*, foo.tableoid
          Inner Unique: true
-         Hash Cond: (bar.f1 = foo.f1)
-         ->  Append
-               ->  Seq Scan on public.bar bar_1
+         Merge Cond: (bar.f1 = foo.f1)
+         ->  Merge Append
+               Sort Key: bar.f1
+               ->  Sort
                      Output: bar_1.f1, bar_1.f2, bar_1.ctid, bar_1.*, bar_1.tableoid
+                     Sort Key: bar_1.f1
+                     ->  Seq Scan on public.bar bar_1
+                           Output: bar_1.f1, bar_1.f2, bar_1.ctid, bar_1.*, bar_1.tableoid
                ->  Foreign Scan on public.bar2 bar_2
                      Output: bar_2.f1, bar_2.f2, bar_2.ctid, bar_2.*, bar_2.tableoid
-                     Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct2 FOR SHARE
-         ->  Hash
+                     Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct2 ORDER BY f1 ASC NULLS LAST FOR SHARE
+         ->  Sort
                Output: foo.ctid, foo.f1, foo.*, foo.tableoid
+               Sort Key: foo.f1
                ->  HashAggregate
                      Output: foo.ctid, foo.f1, foo.*, foo.tableoid
                      Group Key: foo.f1
                      ->  Append
-                           ->  Seq Scan on public.foo foo_1
-                                 Output: foo_1.ctid, foo_1.f1, foo_1.*, foo_1.tableoid
-                           ->  Foreign Scan on public.foo2 foo_2
+                           Async subplans: 1 
+                           ->  Async Foreign Scan on public.foo2 foo_2
                                  Output: foo_2.ctid, foo_2.f1, foo_2.*, foo_2.tableoid
                                  Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct1
-(23 rows)
+                           ->  Seq Scan on public.foo foo_1
+                                 Output: foo_1.ctid, foo_1.f1, foo_1.*, foo_1.tableoid
+(29 rows)
 
-select * from bar where f1 in (select f1 from foo) for share;
+select * from bar where f1 in (select f1 from foo) order by 1 for share;
  f1 | f2 
 ----+----
   1 | 11
@@ -7236,11 +7248,12 @@ update bar set f2 = f2 + 100 where f1 in (select f1 from foo);
                      Output: foo.ctid, foo.f1, foo.*, foo.tableoid
                      Group Key: foo.f1
                      ->  Append
-                           ->  Seq Scan on public.foo foo_1
-                                 Output: foo_1.ctid, foo_1.f1, foo_1.*, foo_1.tableoid
-                           ->  Foreign Scan on public.foo2 foo_2
+                           Async subplans: 1 
+                           ->  Async Foreign Scan on public.foo2 foo_2
                                  Output: foo_2.ctid, foo_2.f1, foo_2.*, foo_2.tableoid
                                  Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct1
+                           ->  Seq Scan on public.foo foo_1
+                                 Output: foo_1.ctid, foo_1.f1, foo_1.*, foo_1.tableoid
    ->  Hash Join
          Output: bar_1.f1, (bar_1.f2 + 100), bar_1.f3, bar_1.ctid, foo.ctid, foo.*, foo.tableoid
          Inner Unique: true
@@ -7254,12 +7267,13 @@ update bar set f2 = f2 + 100 where f1 in (select f1 from foo);
                      Output: foo.ctid, foo.f1, foo.*, foo.tableoid
                      Group Key: foo.f1
                      ->  Append
-                           ->  Seq Scan on public.foo foo_1
-                                 Output: foo_1.ctid, foo_1.f1, foo_1.*, foo_1.tableoid
-                           ->  Foreign Scan on public.foo2 foo_2
+                           Async subplans: 1 
+                           ->  Async Foreign Scan on public.foo2 foo_2
                                  Output: foo_2.ctid, foo_2.f1, foo_2.*, foo_2.tableoid
                                  Remote SQL: SELECT f1, f2, f3, ctid FROM public.loct1
-(39 rows)
+                           ->  Seq Scan on public.foo foo_1
+                                 Output: foo_1.ctid, foo_1.f1, foo_1.*, foo_1.tableoid
+(41 rows)
 
 update bar set f2 = f2 + 100 where f1 in (select f1 from foo);
 select tableoid::regclass, * from bar order by 1,2;
@@ -7289,16 +7303,17 @@ where bar.f1 = ss.f1;
          Output: bar.f1, (bar.f2 + 100), bar.ctid, (ROW(foo.f1))
          Hash Cond: (foo.f1 = bar.f1)
          ->  Append
-               ->  Seq Scan on public.foo
-                     Output: ROW(foo.f1), foo.f1
-               ->  Foreign Scan on public.foo2 foo_1
+               Async subplans: 2 
+               ->  Async Foreign Scan on public.foo2 foo_1
                      Output: ROW(foo_1.f1), foo_1.f1
                      Remote SQL: SELECT f1 FROM public.loct1
-               ->  Seq Scan on public.foo foo_2
-                     Output: ROW((foo_2.f1 + 3)), (foo_2.f1 + 3)
-               ->  Foreign Scan on public.foo2 foo_3
+               ->  Async Foreign Scan on public.foo2 foo_3
                      Output: ROW((foo_3.f1 + 3)), (foo_3.f1 + 3)
                      Remote SQL: SELECT f1 FROM public.loct1
+               ->  Seq Scan on public.foo
+                     Output: ROW(foo.f1), foo.f1
+               ->  Seq Scan on public.foo foo_2
+                     Output: ROW((foo_2.f1 + 3)), (foo_2.f1 + 3)
          ->  Hash
                Output: bar.f1, bar.f2, bar.ctid
                ->  Seq Scan on public.bar
@@ -7316,17 +7331,18 @@ where bar.f1 = ss.f1;
                Output: (ROW(foo.f1)), foo.f1
                Sort Key: foo.f1
                ->  Append
-                     ->  Seq Scan on public.foo
-                           Output: ROW(foo.f1), foo.f1
-                     ->  Foreign Scan on public.foo2 foo_1
+                     Async subplans: 2 
+                     ->  Async Foreign Scan on public.foo2 foo_1
                            Output: ROW(foo_1.f1), foo_1.f1
                            Remote SQL: SELECT f1 FROM public.loct1
-                     ->  Seq Scan on public.foo foo_2
-                           Output: ROW((foo_2.f1 + 3)), (foo_2.f1 + 3)
-                     ->  Foreign Scan on public.foo2 foo_3
+                     ->  Async Foreign Scan on public.foo2 foo_3
                            Output: ROW((foo_3.f1 + 3)), (foo_3.f1 + 3)
                            Remote SQL: SELECT f1 FROM public.loct1
-(45 rows)
+                     ->  Seq Scan on public.foo
+                           Output: ROW(foo.f1), foo.f1
+                     ->  Seq Scan on public.foo foo_2
+                           Output: ROW((foo_2.f1 + 3)), (foo_2.f1 + 3)
+(47 rows)
 
 update bar set f2 = f2 + 100
 from
@@ -7476,27 +7492,33 @@ delete from foo where f1 < 5 returning *;
 (5 rows)
 
 explain (verbose, costs off)
-update bar set f2 = f2 + 100 returning *;
-                                  QUERY PLAN                                  
-------------------------------------------------------------------------------
- Update on public.bar
-   Output: bar.f1, bar.f2
-   Update on public.bar
-   Foreign Update on public.bar2 bar_1
-   ->  Seq Scan on public.bar
-         Output: bar.f1, (bar.f2 + 100), bar.ctid
-   ->  Foreign Update on public.bar2 bar_1
-         Remote SQL: UPDATE public.loct2 SET f2 = (f2 + 100) RETURNING f1, f2
-(8 rows)
+with u as (update bar set f2 = f2 + 100 returning *) select * from u order by 1;
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Sort
+   Output: u.f1, u.f2
+   Sort Key: u.f1
+   CTE u
+     ->  Update on public.bar
+           Output: bar.f1, bar.f2
+           Update on public.bar
+           Foreign Update on public.bar2 bar_1
+           ->  Seq Scan on public.bar
+                 Output: bar.f1, (bar.f2 + 100), bar.ctid
+           ->  Foreign Update on public.bar2 bar_1
+                 Remote SQL: UPDATE public.loct2 SET f2 = (f2 + 100) RETURNING f1, f2
+   ->  CTE Scan on u
+         Output: u.f1, u.f2
+(14 rows)
 
-update bar set f2 = f2 + 100 returning *;
+with u as (update bar set f2 = f2 + 100 returning *) select * from u order by 1;
  f1 | f2  
 ----+-----
   1 | 311
   2 | 322
-  6 | 266
   3 | 333
   4 | 344
+  6 | 266
   7 | 277
 (6 rows)
 
@@ -8571,11 +8593,12 @@ SELECT t1.a,t2.b,t3.c FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) INNER J
  Sort
    Sort Key: t1.a, t3.c
    ->  Append
-         ->  Foreign Scan
+         Async subplans: 2 
+         ->  Async Foreign Scan
                Relations: ((ftprt1_p1 t1_1) INNER JOIN (ftprt2_p1 t2_1)) INNER JOIN (ftprt1_p1 t3_1)
-         ->  Foreign Scan
+         ->  Async Foreign Scan
                Relations: ((ftprt1_p2 t1_2) INNER JOIN (ftprt2_p2 t2_2)) INNER JOIN (ftprt1_p2 t3_2)
-(7 rows)
+(8 rows)
 
 SELECT t1.a,t2.b,t3.c FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) INNER JOIN fprt1 t3 ON (t2.b = t3.a) WHERE t1.a % 25 =0 ORDER BY 1,2,3;
   a  |  b  |  c   
@@ -8610,20 +8633,22 @@ SELECT t1.a,t2.b,t2.c FROM fprt1 t1 LEFT JOIN (SELECT * FROM fprt2 WHERE a < 10)
 -- with whole-row reference; partitionwise join does not apply
 EXPLAIN (COSTS OFF)
 SELECT t1.wr, t2.wr FROM (SELECT t1 wr, a FROM fprt1 t1 WHERE t1.a % 25 = 0) t1 FULL JOIN (SELECT t2 wr, b FROM fprt2 t2 WHERE t2.b % 25 = 0) t2 ON (t1.a = t2.b) ORDER BY 1,2;
-                       QUERY PLAN                       
---------------------------------------------------------
+                          QUERY PLAN                          
+--------------------------------------------------------------
  Sort
    Sort Key: ((t1.*)::fprt1), ((t2.*)::fprt2)
    ->  Hash Full Join
          Hash Cond: (t1.a = t2.b)
          ->  Append
-               ->  Foreign Scan on ftprt1_p1 t1_1
-               ->  Foreign Scan on ftprt1_p2 t1_2
+               Async subplans: 2 
+               ->  Async Foreign Scan on ftprt1_p1 t1_1
+               ->  Async Foreign Scan on ftprt1_p2 t1_2
          ->  Hash
                ->  Append
-                     ->  Foreign Scan on ftprt2_p1 t2_1
-                     ->  Foreign Scan on ftprt2_p2 t2_2
-(11 rows)
+                     Async subplans: 2 
+                     ->  Async Foreign Scan on ftprt2_p1 t2_1
+                     ->  Async Foreign Scan on ftprt2_p2 t2_2
+(13 rows)
 
 SELECT t1.wr, t2.wr FROM (SELECT t1 wr, a FROM fprt1 t1 WHERE t1.a % 25 = 0) t1 FULL JOIN (SELECT t2 wr, b FROM fprt2 t2 WHERE t2.b % 25 = 0) t2 ON (t1.a = t2.b) ORDER BY 1,2;
        wr       |       wr       
@@ -8652,11 +8677,12 @@ SELECT t1.a,t1.b FROM fprt1 t1, LATERAL (SELECT t2.a, t2.b FROM fprt2 t2 WHERE t
  Sort
    Sort Key: t1.a, t1.b
    ->  Append
-         ->  Foreign Scan
+         Async subplans: 2 
+         ->  Async Foreign Scan
                Relations: (ftprt1_p1 t1_1) INNER JOIN (ftprt2_p1 t2_1)
-         ->  Foreign Scan
+         ->  Async Foreign Scan
                Relations: (ftprt1_p2 t1_2) INNER JOIN (ftprt2_p2 t2_2)
-(7 rows)
+(8 rows)
 
 SELECT t1.a,t1.b FROM fprt1 t1, LATERAL (SELECT t2.a, t2.b FROM fprt2 t2 WHERE t1.a = t2.b AND t1.b = t2.a) q WHERE t1.a%25 = 0 ORDER BY 1,2;
   a  |  b  
@@ -8709,21 +8735,23 @@ SELECT t1.a, t1.phv, t2.b, t2.phv FROM (SELECT 't1_phv' phv, * FROM fprt1 WHERE 
 -- test FOR UPDATE; partitionwise join does not apply
 EXPLAIN (COSTS OFF)
 SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a % 25 = 0 ORDER BY 1,2 FOR UPDATE OF t1;
-                          QUERY PLAN                          
---------------------------------------------------------------
+                             QUERY PLAN                             
+--------------------------------------------------------------------
  LockRows
    ->  Sort
          Sort Key: t1.a
          ->  Hash Join
                Hash Cond: (t2.b = t1.a)
                ->  Append
-                     ->  Foreign Scan on ftprt2_p1 t2_1
-                     ->  Foreign Scan on ftprt2_p2 t2_2
+                     Async subplans: 2 
+                     ->  Async Foreign Scan on ftprt2_p1 t2_1
+                     ->  Async Foreign Scan on ftprt2_p2 t2_2
                ->  Hash
                      ->  Append
-                           ->  Foreign Scan on ftprt1_p1 t1_1
-                           ->  Foreign Scan on ftprt1_p2 t1_2
-(12 rows)
+                           Async subplans: 2 
+                           ->  Async Foreign Scan on ftprt1_p1 t1_1
+                           ->  Async Foreign Scan on ftprt1_p2 t1_2
+(14 rows)
 
 SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a % 25 = 0 ORDER BY 1,2 FOR UPDATE OF t1;
   a  |  b  
@@ -8758,18 +8786,19 @@ ANALYZE fpagg_tab_p3;
 SET enable_partitionwise_aggregate TO false;
 EXPLAIN (COSTS OFF)
 SELECT a, sum(b), min(b), count(*) FROM pagg_tab GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
-                        QUERY PLAN                         
------------------------------------------------------------
+                           QUERY PLAN                            
+-----------------------------------------------------------------
  Sort
    Sort Key: pagg_tab.a
    ->  HashAggregate
          Group Key: pagg_tab.a
          Filter: (avg(pagg_tab.b) < '22'::numeric)
          ->  Append
-               ->  Foreign Scan on fpagg_tab_p1 pagg_tab_1
-               ->  Foreign Scan on fpagg_tab_p2 pagg_tab_2
-               ->  Foreign Scan on fpagg_tab_p3 pagg_tab_3
-(9 rows)
+               Async subplans: 3 
+               ->  Async Foreign Scan on fpagg_tab_p1 pagg_tab_1
+               ->  Async Foreign Scan on fpagg_tab_p2 pagg_tab_2
+               ->  Async Foreign Scan on fpagg_tab_p3 pagg_tab_3
+(10 rows)
 
 -- Plan with partitionwise aggregates is enabled
 SET enable_partitionwise_aggregate TO true;
@@ -8780,13 +8809,14 @@ SELECT a, sum(b), min(b), count(*) FROM pagg_tab GROUP BY a HAVING avg(b) < 22 O
  Sort
    Sort Key: pagg_tab.a
    ->  Append
-         ->  Foreign Scan
+         Async subplans: 3 
+         ->  Async Foreign Scan
                Relations: Aggregate on (fpagg_tab_p1 pagg_tab)
-         ->  Foreign Scan
+         ->  Async Foreign Scan
                Relations: Aggregate on (fpagg_tab_p2 pagg_tab_1)
-         ->  Foreign Scan
+         ->  Async Foreign Scan
                Relations: Aggregate on (fpagg_tab_p3 pagg_tab_2)
-(9 rows)
+(10 rows)
 
 SELECT a, sum(b), min(b), count(*) FROM pagg_tab GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
  a  | sum  | min | count 
@@ -8808,29 +8838,22 @@ SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
  Sort
    Output: t1.a, (count(((t1.*)::pagg_tab)))
    Sort Key: t1.a
-   ->  Append
-         ->  HashAggregate
-               Output: t1.a, count(((t1.*)::pagg_tab))
-               Group Key: t1.a
-               Filter: (avg(t1.b) < '22'::numeric)
-               ->  Foreign Scan on public.fpagg_tab_p1 t1
-                     Output: t1.a, t1.*, t1.b
-                     Remote SQL: SELECT a, b, c FROM public.pagg_tab_p1
-         ->  HashAggregate
-               Output: t1_1.a, count(((t1_1.*)::pagg_tab))
-               Group Key: t1_1.a
-               Filter: (avg(t1_1.b) < '22'::numeric)
-               ->  Foreign Scan on public.fpagg_tab_p2 t1_1
+   ->  HashAggregate
+         Output: t1.a, count(((t1.*)::pagg_tab))
+         Group Key: t1.a
+         Filter: (avg(t1.b) < '22'::numeric)
+         ->  Append
+               Async subplans: 3 
+               ->  Async Foreign Scan on public.fpagg_tab_p1 t1_1
                      Output: t1_1.a, t1_1.*, t1_1.b
-                     Remote SQL: SELECT a, b, c FROM public.pagg_tab_p2
-         ->  HashAggregate
-               Output: t1_2.a, count(((t1_2.*)::pagg_tab))
-               Group Key: t1_2.a
-               Filter: (avg(t1_2.b) < '22'::numeric)
-               ->  Foreign Scan on public.fpagg_tab_p3 t1_2
+                     Remote SQL: SELECT a, b, c FROM public.pagg_tab_p1
+               ->  Async Foreign Scan on public.fpagg_tab_p2 t1_2
                      Output: t1_2.a, t1_2.*, t1_2.b
+                     Remote SQL: SELECT a, b, c FROM public.pagg_tab_p2
+               ->  Async Foreign Scan on public.fpagg_tab_p3 t1_3
+                     Output: t1_3.a, t1_3.*, t1_3.b
                      Remote SQL: SELECT a, b, c FROM public.pagg_tab_p3
-(25 rows)
+(18 rows)
 
 SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
  a  | count 
@@ -8850,20 +8873,15 @@ SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 
 -----------------------------------------------------------------
  Sort
    Sort Key: pagg_tab.b
-   ->  Finalize HashAggregate
+   ->  HashAggregate
          Group Key: pagg_tab.b
          Filter: (sum(pagg_tab.a) < 700)
          ->  Append
-               ->  Partial HashAggregate
-                     Group Key: pagg_tab.b
-                     ->  Foreign Scan on fpagg_tab_p1 pagg_tab
-               ->  Partial HashAggregate
-                     Group Key: pagg_tab_1.b
-                     ->  Foreign Scan on fpagg_tab_p2 pagg_tab_1
-               ->  Partial HashAggregate
-                     Group Key: pagg_tab_2.b
-                     ->  Foreign Scan on fpagg_tab_p3 pagg_tab_2
-(15 rows)
+               Async subplans: 3 
+               ->  Async Foreign Scan on fpagg_tab_p1 pagg_tab_1
+               ->  Async Foreign Scan on fpagg_tab_p2 pagg_tab_2
+               ->  Async Foreign Scan on fpagg_tab_p3 pagg_tab_3
+(10 rows)
 
 -- ===================================================================
 -- access rights and superuser

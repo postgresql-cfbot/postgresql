@@ -4177,6 +4177,13 @@ transformPartitionBoundValue(ParseState *pstate, Node *val,
 	value = transformExpr(pstate, val, EXPR_KIND_PARTITION_BOUND);
 
 	/*
+	 * transformExpr() should have already rejected column references,
+	 * subqueries, aggregates, window functions, and SRFs, based on the
+	 * EXPR_KIND_ of a partition bound expression.
+	 */
+	Assert(!contain_var_clause(value));
+
+	/*
 	 * Check that the input expression's collation is compatible with one
 	 * specified for the parent's partition key (partcollation).  Don't throw
 	 * an error if it's the default collation which we'll replace with the
@@ -4220,14 +4227,18 @@ transformPartitionBoundValue(ParseState *pstate, Node *val,
 					 parser_errposition(pstate, exprLocation(value))));
 	}
 
-	/* Coerce to correct type */
+	/*
+	 * Coerce to the correct type.  This might cause an explicit coercion step
+	 * to be added on top of the expression, which must be evaluated before
+	 * returning the expression to the caller.
+	 */
 	value = coerce_to_target_type(pstate,
 								  value, exprType(value),
 								  colType,
 								  colTypmod,
 								  COERCION_ASSIGNMENT,
 								  COERCE_IMPLICIT_CAST,
-								  -1);
+								  exprLocation(value));
 
 	if (value == NULL)
 		ereport(ERROR,
@@ -4236,25 +4247,23 @@ transformPartitionBoundValue(ParseState *pstate, Node *val,
 						format_type_be(colType), colName),
 				 parser_errposition(pstate, exprLocation(val))));
 
-	/* Simplify the expression, in case we had a coercion */
+	/*
+	 * Evaluate the expression, if needed, assigning the partition key's
+	 * collation to the resulting Const expression.
+	 */
 	if (!IsA(value, Const))
+	{
 		value = (Node *) expression_planner((Expr *) value);
+		value = (Node *) evaluate_expr((Expr *) value, colType, colTypmod,
+									   partCollation);
+		if (!IsA(value, Const))
+			elog(ERROR, "could not evaluate partition bound expression");
 
-	/*
-	 * transformExpr() should have already rejected column references,
-	 * subqueries, aggregates, window functions, and SRFs, based on the
-	 * EXPR_KIND_ for a default expression.
-	 */
-	Assert(!contain_var_clause(value));
-
-	/*
-	 * Evaluate the expression, assigning the partition key's collation to the
-	 * resulting Const expression.
-	 */
-	value = (Node *) evaluate_expr((Expr *) value, colType, colTypmod,
-								   partCollation);
-	if (!IsA(value, Const))
-		elog(ERROR, "could not evaluate partition bound expression");
+		/* Preserve original node's location value. */
+		((Const *) value)->location = exprLocation(val);
+	}
+	else
+		((Const *) value)->constcollid = partCollation;
 
 	return (Const *) value;
 }

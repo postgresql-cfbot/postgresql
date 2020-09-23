@@ -22,6 +22,7 @@
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogarchive.h"
+#include "access/xlogutils.h"
 #include "common/archive.h"
 #include "miscadmin.h"
 #include "postmaster/startup.h"
@@ -55,13 +56,8 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 					bool cleanupEnabled)
 {
 	char		xlogpath[MAXPGPATH];
-	char	   *xlogRestoreCmd;
 	char		lastRestartPointFname[MAXPGPATH];
 	int			rc;
-	struct stat stat_buf;
-	XLogSegNo	restartSegNo;
-	XLogRecPtr	restartRedoPtr;
-	TimeLineID	restartTli;
 
 	/*
 	 * Ignore restore_command when not in archive recovery (meaning we are in
@@ -102,22 +98,7 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 	/*
 	 * Make sure there is no existing file named recovername.
 	 */
-	if (stat(xlogpath, &stat_buf) != 0)
-	{
-		if (errno != ENOENT)
-			ereport(FATAL,
-					(errcode_for_file_access(),
-					 errmsg("could not stat file \"%s\": %m",
-							xlogpath)));
-	}
-	else
-	{
-		if (unlink(xlogpath) != 0)
-			ereport(FATAL,
-					(errcode_for_file_access(),
-					 errmsg("could not remove file \"%s\": %m",
-							xlogpath)));
-	}
+	FileUnlink(xlogpath);
 
 	/*
 	 * Calculate the archive file cutoff point for use during log shipping
@@ -136,96 +117,24 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 	 * flags to signify the point when we can begin deleting WAL files from
 	 * the archive.
 	 */
-	if (cleanupEnabled)
-	{
-		GetOldestRestartPoint(&restartRedoPtr, &restartTli);
-		XLByteToSeg(restartRedoPtr, restartSegNo, wal_segment_size);
-		XLogFileName(lastRestartPointFname, restartTli, restartSegNo,
-					 wal_segment_size);
-		/* we shouldn't need anything earlier than last restart point */
-		Assert(strcmp(lastRestartPointFname, xlogfname) <= 0);
-	}
-	else
-		XLogFileName(lastRestartPointFname, 0, 0L, wal_segment_size);
+	XLogFileNameLastPoint(lastRestartPointFname, cleanupEnabled);
+	Assert(strcmp(lastRestartPointFname, xlogfname) <= 0);
 
-	/* Build the restore command to execute */
-	xlogRestoreCmd = BuildRestoreCommand(recoveryRestoreCommand,
-										 xlogpath, xlogfname,
-										 lastRestartPointFname);
-	if (xlogRestoreCmd == NULL)
-		elog(ERROR, "could not build restore command \"%s\"",
-			 recoveryRestoreCommand);
-
-	ereport(DEBUG3,
-			(errmsg_internal("executing restore command \"%s\"",
-							 xlogRestoreCmd)));
-
-	/*
-	 * Check signals before restore command and reset afterwards.
-	 */
-	PreRestoreCommand();
-
-	/*
-	 * Copy xlog from archival storage to XLOGDIR
-	 */
-	rc = system(xlogRestoreCmd);
-
-	PostRestoreCommand();
-	pfree(xlogRestoreCmd);
+	rc = DoRestore(xlogpath, xlogfname, lastRestartPointFname);
 
 	if (rc == 0)
 	{
-		/*
-		 * command apparently succeeded, but let's make sure the file is
-		 * really there now and has the correct size.
-		 */
-		if (stat(xlogpath, &stat_buf) == 0)
+		bool file_not_found;
+		bool ret = FileValidateSize(xlogpath, expectedSize, xlogfname,
+									&file_not_found);
+		if (ret)
 		{
-			if (expectedSize > 0 && stat_buf.st_size != expectedSize)
-			{
-				int			elevel;
+			strcpy(path, xlogpath);
+			return true;
+		}
 
-				/*
-				 * If we find a partial file in standby mode, we assume it's
-				 * because it's just being copied to the archive, and keep
-				 * trying.
-				 *
-				 * Otherwise treat a wrong-sized file as FATAL to ensure the
-				 * DBA would notice it, but is that too strong? We could try
-				 * to plow ahead with a local copy of the file ... but the
-				 * problem is that there probably isn't one, and we'd
-				 * incorrectly conclude we've reached the end of WAL and we're
-				 * done recovering ...
-				 */
-				if (StandbyMode && stat_buf.st_size < expectedSize)
-					elevel = DEBUG1;
-				else
-					elevel = FATAL;
-				ereport(elevel,
-						(errmsg("archive file \"%s\" has wrong size: %lu instead of %lu",
-								xlogfname,
-								(unsigned long) stat_buf.st_size,
-								(unsigned long) expectedSize)));
-				return false;
-			}
-			else
-			{
-				ereport(LOG,
-						(errmsg("restored log file \"%s\" from archive",
-								xlogfname)));
-				strcpy(path, xlogpath);
-				return true;
-			}
-		}
-		else
-		{
-			/* stat failed */
-			if (errno != ENOENT)
-				ereport(FATAL,
-						(errcode_for_file_access(),
-						 errmsg("could not stat file \"%s\": %m",
-								xlogpath)));
-		}
+		if (!file_not_found)
+			return false;
 	}
 
 	/*

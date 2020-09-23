@@ -18,13 +18,16 @@
 #include "postgres.h"
 
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "access/timeline.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogutils.h"
+#include "common/archive.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "postmaster/startup.h"
 #include "storage/smgr.h"
 #include "utils/guc.h"
 #include "utils/hsearch.h"
@@ -978,4 +981,170 @@ WALReadRaiseError(WALReadError *errinfo)
 						fname, errinfo->wre_off, errinfo->wre_read,
 						(Size) errinfo->wre_req)));
 	}
+}
+
+/*
+ * Remove a file if it does exist.
+ */
+void
+FileUnlink(const char *file_path)
+{
+	struct stat statbuf;
+
+	if (stat(file_path, &statbuf))
+	{
+		if (errno != ENOENT)
+			ereport(FATAL,
+					(errcode_for_file_access(),
+					 errmsg("could not stat file \"%s\": %m",
+							file_path)));
+	}
+	else
+	{
+		if (unlink(file_path) != 0)
+			ereport(FATAL,
+					(errcode_for_file_access(),
+					 errmsg("could not remove file \"%s\": %m",
+							file_path)));
+	}
+}
+
+/*
+ * Get the last valid restart point file name.
+ *
+ * If cleanup is not enabled, initialise the last restart point file name
+ * with InvalidXLogRecPtr, which will prevent the deletion of any WAL files
+ * from the archive because of the alphabetic sorting property of WAL
+ * filenames.
+ */
+void
+XLogFileNameLastPoint(char *lastRestartPointFname, bool cleanupEnabled)
+{
+	XLogSegNo	restartSegNo;
+	XLogRecPtr	restartRedoPtr;
+	TimeLineID	restartTli;
+
+	if (cleanupEnabled)
+	{
+		GetOldestRestartPoint(&restartRedoPtr, &restartTli);
+		XLByteToSeg(restartRedoPtr, restartSegNo, wal_segment_size);
+		XLogFileName(lastRestartPointFname, restartTli, restartSegNo,
+					 wal_segment_size);
+	}
+	else
+		XLogFileName(lastRestartPointFname, 0, 0L, wal_segment_size);
+}
+
+/*
+ * Check a file is really there now and has correct size.
+ *
+ * Return true if the file does exist and has correct size,
+ * else return false.
+ *
+ * If the output variable file_not_found is not null it's assigned
+ * either true or false value depending on whether the file does exist
+ * or not.
+ */
+bool
+FileValidateSize(const char *xlogpath, off_t expectedSize,
+				 const char *xlogfname, bool *file_not_found)
+{
+	struct stat stat_buf;
+
+	if (stat(xlogpath, &stat_buf) == 0)
+	{
+		if (file_not_found)
+			*file_not_found = false;
+
+		if (expectedSize > 0 && stat_buf.st_size != expectedSize)
+		{
+			int			elevel;
+
+			/*
+			 * If we find a partial file in standby mode, we assume it's
+			 * because it's just being copied to the archive, and keep
+			 * trying.
+			 *
+			 * Otherwise treat a wrong-sized file as FATAL to ensure the
+			 * DBA would notice it, but is that too strong? We could try
+			 * to plow ahead with a local copy of the file ... but the
+			 * problem is that there probably isn't one, and we'd
+			 * incorrectly conclude we've reached the end of WAL and we're
+			 * done recovering ...
+			 */
+			if (StandbyMode && stat_buf.st_size < expectedSize)
+				elevel = DEBUG1;
+			else
+				elevel = FATAL;
+			ereport(elevel,
+					(errmsg("archive file \"%s\" has wrong size: %lu instead of %lu",
+							xlogfname,
+							(unsigned long) stat_buf.st_size,
+							(unsigned long) expectedSize)));
+			return false;
+		}
+		else
+		{
+			ereport(LOG,
+					(errmsg("restored log file \"%s\" from archive",
+							xlogfname)));
+			return true;
+		}
+	}
+	else
+	{
+		/* stat failed */
+		if (errno != ENOENT)
+			ereport(FATAL,
+					(errcode_for_file_access(),
+							errmsg("could not stat file \"%s\": %m",
+									xlogpath)));
+		if (file_not_found)
+			*file_not_found = true;
+
+		return false;
+	}
+
+}
+
+/*
+ * Build and execute restore_command.
+ *
+ * Return the result of command execution (the exit status of the shell),
+ * or -1 if a system error occurred. A return value of 127 means
+ * the execution of the shell failed.
+ */
+int
+DoRestore(const char *xlogpath, const char *xlogfname, const char *pointfname)
+{
+	char	   *xlogRestoreCmd;
+	int			rc;
+
+	/* Build a restore command to execute */
+	xlogRestoreCmd = BuildRestoreCommand(recoveryRestoreCommand, xlogpath,
+										 xlogfname, pointfname);
+
+	if (xlogRestoreCmd == NULL)
+		elog(PANIC, "could not build restore command \"%s\"",
+			 recoveryRestoreCommand);
+
+	ereport(DEBUG3,
+			(errmsg_internal("executing restore command \"%s\"",
+							 xlogRestoreCmd)));
+
+	/*
+	 * Check signals before restore command and reset afterwards.
+	 */
+	PreRestoreCommand();
+
+	/*
+	 * Execute
+	 */
+	rc = system(xlogRestoreCmd);
+
+	PostRestoreCommand();
+
+	pfree(xlogRestoreCmd);
+
+	return rc;
 }

@@ -776,3 +776,24 @@ set default_with_oids to f;
 -- Should not allow to set it to true.
 set default_with_oids to t;
 ERROR:  tables declared WITH OIDS are not supported
+--
+-- PGPRO-3691: Check that a value for the new configration parameter
+-- max_restore_command_workers is limited by a value of the parameter
+-- max_worker_processes
+SHOW max_worker_processes;
+ max_worker_processes 
+----------------------
+ 8
+(1 row)
+
+-- max_worker_processes has default value 8
+-- Check that an attempt to set the parameter max_restore_command_workers
+-- to a value execeeding this limit results in error
+ALTER SYSTEM SET max_restore_command_workers = 16; -- fails, it is expected behaviour
+ERROR:  invalid value for parameter "max_restore_command_workers": 16
+DETAIL:  A value of max_restore_command_worker can't exceed a value of max_worker_processes=8
+-- Check that a value lesser than max_worker_processes can be assigned
+-- to the parameter max_restore_command_workers
+ALTER SYSTEM SET max_restore_command_workers = 7; -- ok since 7 < max_worker_processes
+-- Reset to default
+ALTER SYSTEM RESET max_restore_command_workers;

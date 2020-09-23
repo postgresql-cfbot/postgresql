@@ -37,6 +37,7 @@
 #include "access/twophase.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
+#include "access/xlogrestore.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
 #include "catalog/storage.h"
@@ -196,6 +197,7 @@ static const char *show_tcp_keepalives_count(void);
 static const char *show_tcp_user_timeout(void);
 static bool check_maxconnections(int *newval, void **extra, GucSource source);
 static bool check_max_worker_processes(int *newval, void **extra, GucSource source);
+static bool check_max_restore_command_workers(int *newval, void **extra, GucSource source);
 static bool check_autovacuum_max_workers(int *newval, void **extra, GucSource source);
 static bool check_max_wal_senders(int *newval, void **extra, GucSource source);
 static bool check_autovacuum_work_mem(int *newval, void **extra, GucSource source);
@@ -2980,6 +2982,18 @@ static struct config_int ConfigureNamesInt[] =
 		&max_worker_processes,
 		8, 0, MAX_BACKENDS,
 		check_max_worker_processes, NULL, NULL
+	},
+
+	{
+		{"max_restore_command_workers",
+			PGC_POSTMASTER,
+			WAL_ARCHIVE_RECOVERY,
+			gettext_noop("Maximum number of restore_command worker processes."),
+			NULL,
+		},
+		&max_restore_command_workers,
+		0, 0, MAX_PARALLEL_WORKER_LIMIT,
+		check_max_restore_command_workers, NULL, NULL
 	},
 
 	{
@@ -11565,6 +11579,19 @@ check_max_worker_processes(int *newval, void **extra, GucSource source)
 	if (MaxConnections + autovacuum_max_workers + 1 +
 		*newval + max_wal_senders > MAX_BACKENDS)
 		return false;
+	return true;
+}
+
+static bool
+check_max_restore_command_workers(int *newval, void **extra, GucSource source)
+{
+	if (*newval > max_worker_processes)
+	{
+		GUC_check_errdetail("A value of max_restore_command_worker can't "
+			"exceed a value of max_worker_processes=%d", max_worker_processes);
+		return false;
+	}
+
 	return true;
 }
 

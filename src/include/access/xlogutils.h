@@ -60,4 +60,13 @@ extern void XLogReadDetermineTimeline(XLogReaderState *state,
 
 extern void WALReadRaiseError(WALReadError *errinfo);
 
+extern void FileUnlink(const char *xlogpath);
+extern void XLogFileNameLastPoint(char *lastRestartPointFname,
+								  bool cleanupEnabled);
+extern bool FileValidateSize(char const *xlogpath, off_t expectedSize,
+							 char const *xlogfname, bool *file_not_found);
+
+extern int DoRestore(char const *xlogpath, char const *xlogfname,
+					 char const *pointfname);
+
 #endif

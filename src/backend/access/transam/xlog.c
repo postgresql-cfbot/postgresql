@@ -37,6 +37,7 @@
 #include "access/xloginsert.h"
 #include "access/xlogreader.h"
 #include "access/xlogutils.h"
+#include "access/xlogrestore.h"
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
@@ -3682,10 +3683,11 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 					 xlogfname);
 			set_ps_display(activitymsg);
 
-			restoredFromArchive = RestoreArchivedFile(path, xlogfname,
-													  "RECOVERYXLOG",
-													  wal_segment_size,
-													  InRedo);
+			restoredFromArchive = RestoreCommandXLog(path, xlogfname,
+													 "RECOVERYXLOG",
+													 wal_segment_size,
+													 InRedo);
+
 			if (!restoredFromArchive)
 				return -1;
 			break;

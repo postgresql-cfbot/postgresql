@@ -2404,6 +2404,7 @@ Syn
 SyncOps
 SyncRepConfigData
 SyncRepStandbyData
+SyncRequestHandler
 SyncRequestType
 SysScanDesc
 SyscacheCallbackFunction

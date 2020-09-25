@@ -88,7 +88,7 @@ Policy from config file:        targeted
   <para>
    To build this module, include the option <literal>--with-selinux</literal> in
    your PostgreSQL <literal>configure</literal> command.  Be sure that the
-   <filename>libselinux-devel</filename> RPM is installed at build time.
+   <filename>libselinux-devel</filename> package is installed at build time.
   </para>
 
   <para>
@@ -177,7 +177,7 @@ $ for DBNAME in template0 template1 postgres; do
    Makefile on your system; the path shown below is only an example.
    (This Makefile is usually supplied by the
    <filename>selinux-policy-devel</filename> or
-   <filename>selinux-policy</filename> RPM.)
+   <filename>selinux-policy</filename> package.)
    Once built, install this policy package using the
    <command>semodule</command> command, which loads supplied policy packages
    into the kernel.  If the package is correctly installed,

@@ -26656,7 +26656,7 @@ BEGIN
   RAISE NOTICE 'rewriting table % for reason %',
                 pg_event_trigger_table_rewrite_oid()::regclass,
                 pg_event_trigger_table_rewrite_reason();
-END;
+END
 $$;
 
 CREATE EVENT TRIGGER test_table_rewrite_oid

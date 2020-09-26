@@ -25,6 +25,7 @@
 #include "access/table.h"
 #include "catalog/dependency.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "commands/trigger.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
@@ -3521,6 +3522,41 @@ RewriteQuery(Query *parsetree, List *rewrite_events)
 	}
 
 	/*
+	 * Rewrite SetToDefault by default expression of Let statement.
+	 */
+	if (event == CMD_SELECT_UTILITY && IsA(parsetree->utilityStmt, LetStmt))
+	{
+		Oid			resultVariable = parsetree->resultVariable;
+
+		Assert(OidIsValid(resultVariable));
+
+		if (list_length(parsetree->targetList) == 1 &&
+			IsA(((TargetEntry *) linitial(parsetree->targetList))->expr, SetToDefault))
+		{
+			Variable		var;
+			TargetEntry	   *tle;
+			TargetEntry	   *newtle;
+			Expr		   *defexpr;
+
+			/* Read schema variable metadata with defexpr */
+			initVariable(&var, resultVariable, false, false);
+
+			if (var.has_defexpr)
+				defexpr = (Expr *) var.defexpr;
+			else
+				defexpr = (Expr *) makeNullConst(var.typid, var.typmod, var.collation);
+
+			tle = (TargetEntry *) linitial(parsetree->targetList);
+			newtle = makeTargetEntry(defexpr,
+									  tle->resno,
+									  pstrdup(tle->resname),
+									  false);
+
+			parsetree->targetList = list_make1(newtle);
+		}
+	}
+
+	/*
 	 * If the statement is an insert, update, or delete, adjust its targetlist
 	 * as needed, and then fire INSERT/UPDATE/DELETE rules on it.
 	 *
@@ -3528,7 +3564,9 @@ RewriteQuery(Query *parsetree, List *rewrite_events)
 	 * get executed.  Also, utilities aren't rewritten at all (do we still
 	 * need that check?)
 	 */
-	if (event != CMD_SELECT && event != CMD_UTILITY)
+	if (event != CMD_SELECT &&
+		event != CMD_SELECT_UTILITY &&
+		event != CMD_UTILITY)
 	{
 		int			result_relation;
 		RangeTblEntry *rt_entry;

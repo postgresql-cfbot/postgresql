@@ -26,6 +26,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "commands/schema_variable.h"
 #include "executor/executor.h"
 #include "executor/functions.h"
 #include "funcapi.h"
@@ -1033,7 +1034,8 @@ max_parallel_hazard_walker(Node *node, max_parallel_hazard_context *context)
 	{
 		Param	   *param = (Param *) node;
 
-		if (param->paramkind == PARAM_EXTERN)
+		if (param->paramkind == PARAM_EXTERN ||
+			param->paramkind == PARAM_VARIABLE)
 			return false;
 
 		if (param->paramkind != PARAM_EXEC ||
@@ -2314,6 +2316,7 @@ eval_const_expressions(PlannerInfo *root, Node *node)
  *	  value of the Param.
  * 2. Fold stable, as well as immutable, functions to constants.
  * 3. Reduce PlaceHolderVar nodes to their contained expressions.
+ * 4. Current value of schema variable can be used for estimation too.
  *--------------------
  */
 Node *
@@ -2432,6 +2435,30 @@ eval_const_expressions_mutator(Node *node,
 													  typByVal);
 						}
 					}
+				}
+				else if (param->paramkind == PARAM_VARIABLE &&
+						 context->estimate)
+				{
+					int16		typLen;
+					bool		typByVal;
+					Datum		pval;
+					bool		isnull;
+
+					get_typlenbyval(param->paramtype,
+									&typLen, &typByVal);
+
+					pval = GetSchemaVariable(param->paramvarid,
+											 &isnull,
+											 param->paramtype,
+											 true);
+
+					return (Node *) makeConst(param->paramtype,
+											  param->paramtypmod,
+											  param->paramcollid,
+											  (int) typLen,
+											  pval,
+											  isnull,
+											  typByVal);
 				}
 
 				/*
@@ -4705,7 +4732,7 @@ substitute_actual_parameters_mutator(Node *node,
 {
 	if (node == NULL)
 		return NULL;
-	if (IsA(node, Param))
+	if (IsA(node, Param) &&((Param *) node)->paramkind != PARAM_VARIABLE)
 	{
 		Param	   *param = (Param *) node;
 

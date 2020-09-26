@@ -132,5 +132,7 @@ extern bool listOpFamilyOperators(const char *accessMethod_pattern,
 extern bool listOpFamilyFunctions(const char *access_method_pattern,
 								  const char *family_pattern, bool verbose);
 
+/* \dV */
+extern bool listVariables(const char *pattern, bool varbose);
 
 #endif							/* DESCRIBE_H */

@@ -80,7 +80,8 @@ typedef enum
 	DO_POLICY,
 	DO_PUBLICATION,
 	DO_PUBLICATION_REL,
-	DO_SUBSCRIPTION
+	DO_SUBSCRIPTION,
+	DO_VARIABLE
 } DumpableObjectType;
 
 /* component types of an object which can be selected for dumping */
@@ -632,6 +633,25 @@ typedef struct _SubscriptionInfo
 } SubscriptionInfo;
 
 /*
+ * The VariableInfo struct is used to represent schema variables
+ */
+typedef struct _VariableInfo
+{
+	DumpableObject dobj;
+	Oid			vartype;
+	char	   *vartypname;
+	char	   *rolname;		/* name of owner, or empty string */
+	char	   *vareoxaction;
+	char	   *vardefexpr;
+	char	   *varacl;
+	char	   *rvaracl;
+	char	   *initvaracl;
+	char	   *initrvaracl;
+	bool		varisnotnull;
+	bool		varisimmutable;
+}			VariableInfo;
+
+/*
  * We build an array of these with an entry for each object that is an
  * extension member according to pg_depend.
  */
@@ -720,5 +740,6 @@ extern void getPublications(Archive *fout);
 extern void getPublicationTables(Archive *fout, TableInfo tblinfo[],
 								 int numTables);
 extern void getSubscriptions(Archive *fout);
+extern void getVariables(Archive *fout);
 
 #endif							/* PG_DUMP_H */

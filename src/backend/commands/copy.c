@@ -801,14 +801,18 @@ CopyLoadRawBuf(CopyState cstate)
 {
 	int			nbytes = RAW_BUF_BYTES(cstate);
 	int			inbytes;
+	int			minread = 1;
 
 	/* Copy down the unprocessed data if any. */
 	if (nbytes > 0)
 		memmove(cstate->raw_buf, cstate->raw_buf + cstate->raw_buf_index,
 				nbytes);
 
+	if (cstate->copy_dest == COPY_NEW_FE)
+		minread = RAW_BUF_SIZE - nbytes;
+
 	inbytes = CopyGetData(cstate, cstate->raw_buf + nbytes,
-						  1, RAW_BUF_SIZE - nbytes);
+						  minread, RAW_BUF_SIZE - nbytes);
 	nbytes += inbytes;
 	cstate->raw_buf[nbytes] = '\0';
 	cstate->raw_buf_index = 0;
@@ -3917,7 +3921,7 @@ CopyReadLine(CopyState cstate)
 			} while (CopyLoadRawBuf(cstate));
 		}
 	}
-	else
+	else if (!(cstate->cur_lineno == 0 && cstate->header_line))
 	{
 		/*
 		 * If we didn't hit EOF, then we must have transferred the EOL marker
@@ -3951,8 +3955,9 @@ CopyReadLine(CopyState cstate)
 		}
 	}
 
-	/* Done reading the line.  Convert it to server encoding. */
-	if (cstate->need_transcoding)
+	/* Done reading the line.  Convert it to server encoding if not header. */
+	if (cstate->need_transcoding &&
+		!(cstate->cur_lineno == 0 && cstate->header_line))
 	{
 		char	   *cvt;
 

@@ -58,4 +58,6 @@ extern Path *get_cheapest_fractional_path(RelOptInfo *rel,
 
 extern Expr *preprocess_phv_expression(PlannerInfo *root, Expr *expr);
 
+
+
 #endif							/* PLANNER_H */

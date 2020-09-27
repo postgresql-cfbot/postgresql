@@ -200,6 +200,9 @@ typedef struct PgFdwDirectModifyState
 	Relation	rel;			/* relcache entry for the foreign table */
 	AttInMetadata *attinmeta;	/* attribute datatype conversion metadata */
 
+	int			resultRelIndex;	/* index of ResultRelInfo for the foreign table
+								 * in EState.es_result_relations */
+
 	/* extracted fdw_private data */
 	char	   *query;			/* text of UPDATE/DELETE command */
 	bool		has_returning;	/* is there a RETURNING clause? */
@@ -446,11 +449,12 @@ static List *build_remote_returning(Index rtindex, Relation rel,
 									List *returningList);
 static void rebuild_fdw_scan_tlist(ForeignScan *fscan, List *tlist);
 static void execute_dml_stmt(ForeignScanState *node);
-static TupleTableSlot *get_returning_data(ForeignScanState *node);
+static TupleTableSlot *get_returning_data(ForeignScanState *node, ResultRelInfo *resultRelInfo);
 static void init_returning_filter(PgFdwDirectModifyState *dmstate,
 								  List *fdw_scan_tlist,
 								  Index rtindex);
 static TupleTableSlot *apply_returning_filter(PgFdwDirectModifyState *dmstate,
+											  ResultRelInfo *relInfo,
 											  TupleTableSlot *slot,
 											  EState *estate);
 static void prepare_query_params(PlanState *node,
@@ -1824,7 +1828,7 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 									rte,
 									resultRelInfo,
 									mtstate->operation,
-									mtstate->mt_plans[subplan_index]->plan,
+									mtstate->mt_subplan->plan,
 									query,
 									target_attrs,
 									has_returning,
@@ -1937,8 +1941,7 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 	 */
 	if (plan && plan->operation == CMD_UPDATE &&
 		(resultRelInfo->ri_usesFdwDirectModify ||
-		 resultRelInfo->ri_FdwState) &&
-		resultRelInfo > mtstate->resultRelInfo + mtstate->mt_whichplan)
+		 resultRelInfo->ri_FdwState))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot route tuples into foreign table to be updated \"%s\"",
@@ -2124,6 +2127,82 @@ postgresRecheckForeignScan(ForeignScanState *node, TupleTableSlot *slot)
 }
 
 /*
+ * modifytable_result_subplan_pushable
+ *		Helper routine for postgresPlanDirectModify to find subplan
+ *		corresponding to subplan_index'th result relation of the given
+ *		ModifyTable node and check if it's pushable, returning true if
+ *		so and setting *subplan_p to thus found subplan
+ *
+ * *subplan_p will be set to NULL if a pushable subplan can't be located.
+ */
+static bool
+modifytable_result_subplan_pushable(PlannerInfo *root,
+									ModifyTable *plan,
+									int subplan_index,
+									Plan **subplan_p)
+{
+	Plan   *subplan = plan->subplan;
+
+	/*
+	 * In a non-inherited update, check the top-level plan itself.
+	 */
+	if (IsA(subplan, ForeignScan))
+	{
+		*subplan_p = subplan;
+		return true;
+	}
+
+	/*
+	 * In an inherited update, unless the result relation is joined to another
+	 * relation, the top-level plan would be an Append/MergeAppend with result
+	 * relation subplans underneath, and in some cases even a Result node on
+	 * top of the Append/MergeAppend.  These nodes atop result relation
+	 * subplans can be ignored as no-op as far determining if the subplan can
+	 * be pushed to remote side is concerned, because their job is to for the
+	 * most part passing the tuples fetched from the subplan along to the
+	 * ModifyTable node which performs the actual update/delete operation.
+	 * It's true that Result node isn't entirely no-op, because it is added
+	 * to compute the query's targetlist, but if the targetlist is pushable,
+	 * it can be safely ignored too.
+	 */
+	if (IsA(subplan, Append))
+	{
+		Append	   *appendplan = (Append *) subplan;
+
+		subplan = (Plan *) list_nth(appendplan->appendplans, subplan_index);
+	}
+	else if (IsA(plan->subplan, Result) && IsA(outerPlan(subplan), Append))
+	{
+		Append	   *appendplan = (Append *) outerPlan(subplan);
+
+		subplan = (Plan *) list_nth(appendplan->appendplans, subplan_index);
+	}
+	else if (IsA(subplan, MergeAppend))
+	{
+		MergeAppend	   *maplan = (MergeAppend *) subplan;
+
+		subplan = (Plan *) list_nth(maplan->mergeplans, subplan_index);
+	}
+	else if (IsA(subplan, Result) && IsA(outerPlan(subplan), MergeAppend))
+	{
+		MergeAppend	   *maplan = (MergeAppend *) outerPlan(subplan);
+
+		subplan = (Plan *) list_nth(maplan->mergeplans, subplan_index);
+	}
+
+	if (IsA(subplan, ForeignScan))
+	{
+		*subplan_p = subplan;
+		return true;
+	}
+
+	/* Caller won't use it, but set anyway. */
+	*subplan_p = NULL;
+
+	return false;
+}
+
+/*
  * postgresPlanDirectModify
  *		Consider a direct foreign table modification
  *
@@ -2144,6 +2223,7 @@ postgresPlanDirectModify(PlannerInfo *root,
 	Relation	rel;
 	StringInfoData sql;
 	ForeignScan *fscan;
+	List	   *update_tlist;
 	List	   *targetAttrs = NIL;
 	List	   *remote_exprs;
 	List	   *params_list = NIL;
@@ -2161,12 +2241,14 @@ postgresPlanDirectModify(PlannerInfo *root,
 		return false;
 
 	/*
-	 * It's unsafe to modify a foreign table directly if there are any local
-	 * joins needed.
+	 * The following checks if the subplan corresponding to this result
+	 * relation is pushable, if so, returns the ForeignScan node for the
+	 * pushable subplan.
 	 */
-	subplan = (Plan *) list_nth(plan->plans, subplan_index);
-	if (!IsA(subplan, ForeignScan))
+	if (!modifytable_result_subplan_pushable(root, plan, subplan_index,
+											 &subplan))
 		return false;
+	Assert(IsA(subplan, ForeignScan));
 	fscan = (ForeignScan *) subplan;
 
 	/*
@@ -2185,16 +2267,28 @@ postgresPlanDirectModify(PlannerInfo *root,
 	}
 	else
 		foreignrel = root->simple_rel_array[resultRelation];
+
+	/* Sanity check. */
+	if (!bms_is_member(resultRelation, foreignrel->relids))
+		elog(ERROR, "invalid subplan for result relation %u", resultRelation);
+
 	rte = root->simple_rte_array[resultRelation];
 	fpinfo = (PgFdwRelationInfo *) foreignrel->fdw_private;
 
 	/*
 	 * It's unsafe to update a foreign table directly, if any expressions to
-	 * assign to the target columns are unsafe to evaluate remotely.
+	 * assign to the target columns are unsafe to evaluate remotely.  Note
+	 * that we look those expressions up in the result relation's update_tlist,
+	 * not the subplan's targetlist, because the latter cannot be indexed with
+	 * target column attribute numbers, as the resnos of the TLEs contained in
+	 * it don't match with the target columns' attribute numbers.
 	 */
+	update_tlist = get_result_update_tlist(root, resultRelation);
 	if (operation == CMD_UPDATE)
 	{
 		int			col;
+
+		Assert(update_tlist != NIL);
 
 		/*
 		 * We transmit only columns that were explicitly targets of the
@@ -2210,10 +2304,10 @@ postgresPlanDirectModify(PlannerInfo *root,
 			if (attno <= InvalidAttrNumber) /* shouldn't happen */
 				elog(ERROR, "system-column update is not supported");
 
-			tle = get_tle_by_resno(subplan->targetlist, attno);
+			tle = get_tle_by_resno(update_tlist, attno);
 
 			if (!tle)
-				elog(ERROR, "attribute number %d not found in subplan targetlist",
+				elog(ERROR, "attribute number %d not found in UPDATE targetlist",
 					 attno);
 
 			if (!is_foreign_expr(root, foreignrel, (Expr *) tle->expr))
@@ -2270,7 +2364,7 @@ postgresPlanDirectModify(PlannerInfo *root,
 		case CMD_UPDATE:
 			deparseDirectUpdateSql(&sql, root, resultRelation, rel,
 								   foreignrel,
-								   ((Plan *) fscan)->targetlist,
+								   update_tlist,
 								   targetAttrs,
 								   remote_exprs, &params_list,
 								   returningList, &retrieved_attrs);
@@ -2290,6 +2384,11 @@ postgresPlanDirectModify(PlannerInfo *root,
 	 * Update the operation info.
 	 */
 	fscan->operation = operation;
+
+	/*
+	 * Store the index of the result relation we will be operating on.
+	 */
+	fscan->resultRelIndex = subplan_index;
 
 	/*
 	 * Update the fdw_exprs list that will be available to the executor.
@@ -2331,6 +2430,7 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 {
 	ForeignScan *fsplan = (ForeignScan *) node->ss.ps.plan;
 	EState	   *estate = node->ss.ps.state;
+	List	   *resultRelations = estate->es_plannedstmt->resultRelations;
 	PgFdwDirectModifyState *dmstate;
 	Index		rtindex;
 	RangeTblEntry *rte;
@@ -2355,7 +2455,9 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 	 * Identify which user to do the remote access as.  This should match what
 	 * ExecCheckRTEPerms() does.
 	 */
-	rtindex = estate->es_result_relation_info->ri_RangeTableIndex;
+	Assert(fsplan->resultRelIndex >= 0);
+	dmstate->resultRelIndex = fsplan->resultRelIndex;
+	rtindex = list_nth_int(resultRelations, fsplan->resultRelIndex);
 	rte = exec_rt_fetch(rtindex, estate);
 	userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
 
@@ -2450,7 +2552,10 @@ postgresIterateDirectModify(ForeignScanState *node)
 {
 	PgFdwDirectModifyState *dmstate = (PgFdwDirectModifyState *) node->fdw_state;
 	EState	   *estate = node->ss.ps.state;
-	ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
+	ResultRelInfo *resultRelInfo = &estate->es_result_relations[dmstate->resultRelIndex];
+
+	/* The executor must have initialized the ResultRelInfo for us. */
+	Assert(resultRelInfo != NULL);
 
 	/*
 	 * If this is the first call after Begin, execute the statement.
@@ -2482,7 +2587,7 @@ postgresIterateDirectModify(ForeignScanState *node)
 	/*
 	 * Get the next RETURNING tuple.
 	 */
-	return get_returning_data(node);
+	return get_returning_data(node, resultRelInfo);
 }
 
 /*
@@ -4082,11 +4187,10 @@ execute_dml_stmt(ForeignScanState *node)
  * Get the result of a RETURNING clause.
  */
 static TupleTableSlot *
-get_returning_data(ForeignScanState *node)
+get_returning_data(ForeignScanState *node, ResultRelInfo *resultRelInfo)
 {
 	PgFdwDirectModifyState *dmstate = (PgFdwDirectModifyState *) node->fdw_state;
 	EState	   *estate = node->ss.ps.state;
-	ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
 	TupleTableSlot *resultSlot;
 
@@ -4141,7 +4245,8 @@ get_returning_data(ForeignScanState *node)
 		if (dmstate->rel)
 			resultSlot = slot;
 		else
-			resultSlot = apply_returning_filter(dmstate, slot, estate);
+			resultSlot = apply_returning_filter(dmstate, resultRelInfo, slot,
+												estate);
 	}
 	dmstate->next_tuple++;
 
@@ -4230,10 +4335,10 @@ init_returning_filter(PgFdwDirectModifyState *dmstate,
  */
 static TupleTableSlot *
 apply_returning_filter(PgFdwDirectModifyState *dmstate,
+					   ResultRelInfo *relInfo,
 					   TupleTableSlot *slot,
 					   EState *estate)
 {
-	ResultRelInfo *relInfo = estate->es_result_relation_info;
 	TupleDesc	resultTupType = RelationGetDescr(dmstate->resultRel);
 	TupleTableSlot *resultSlot;
 	Datum	   *values;

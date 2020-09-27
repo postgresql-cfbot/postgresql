@@ -3,13 +3,18 @@
  * preptlist.c
  *	  Routines to preprocess the parse tree target list
  *
- * For INSERT and UPDATE queries, the targetlist must contain an entry for
- * each attribute of the target relation in the correct order.  For UPDATE and
- * DELETE queries, it must also contain junk tlist entries needed to allow the
- * executor to identify the rows to be updated or deleted.  For all query
- * types, we may need to add junk tlist entries for Vars used in the RETURNING
- * list and row ID information needed for SELECT FOR UPDATE locking and/or
- * EvalPlanQual checking.
+ * For INSERT and UPDATE, the targetlist must contain an entry for each
+ * attribute of the target relation in the correct order.  For INSERT, we
+ * modify the query's main targetlist to satisfy that requirement, whereas
+ * in UPDATE's case, we maintain another targetlist that will be computed
+ * separately from the query's main targetlist, leaving the latter to produce
+ * only values for the updated columns as before.
+ *
+ * For UPDATE and DELETE queries, the main targetlist must also contain junk
+ * tlist entries needed to allow the executor to identify the rows to be
+ * updated or deleted.  For all query types, we may need to add junk tlist
+ * entries for Vars used in the RETURNING list and row ID information needed
+ * for SELECT FOR UPDATE locking and/or EvalPlanQual checking.
  *
  * The query rewrite phase also does preprocessing of the targetlist (see
  * rewriteTargetListIU).  The division of labor between here and there is
@@ -54,7 +59,6 @@
 
 static List *expand_targetlist(List *tlist, int command_type,
 							   Index result_relation, Relation rel);
-
 
 /*
  * preprocess_targetlist
@@ -103,6 +107,10 @@ preprocess_targetlist(PlannerInfo *root)
 	 * to identify the rows to be updated or deleted.  Note that this step
 	 * scribbles on parse->targetList, which is not very desirable, but we
 	 * keep it that way to avoid changing APIs used by FDWs.
+	 *
+	 * If target relation has inheritance children, junk column(s) needed
+	 * by the individual leaf child relations are added by
+	 * inherit.c: add_child_junk_attrs().
 	 */
 	if (command_type == CMD_UPDATE || command_type == CMD_DELETE)
 		rewriteTargetListUD(parse, target_rte, target_relation);
@@ -111,11 +119,22 @@ preprocess_targetlist(PlannerInfo *root)
 	 * for heap_form_tuple to work, the targetlist must match the exact order
 	 * of the attributes. We also need to fill in any missing attributes. -ay
 	 * 10/94
+	 *
+	 * For INSERT, we fix the the main targetlist itself to produce the full
+	 * tuple.  For UPDATE, we maintain another targetlist that is computed
+	 * separately from the main targetlist to get the full tuple, where any
+	 * missing values are taken from the old tuple.  If the UPDATE's target
+	 * relation has inheritance children, their update_tlist is maintained
+	 * separately; see inherit.c: add_inherit_result_relation_info().
 	 */
 	tlist = parse->targetList;
-	if (command_type == CMD_INSERT || command_type == CMD_UPDATE)
+	if (command_type == CMD_INSERT)
 		tlist = expand_targetlist(tlist, command_type,
 								  result_relation, target_relation);
+	else if (command_type == CMD_UPDATE)
+		root->update_tlist = make_update_tlist(tlist,
+											   result_relation,
+											   target_relation);
 
 	/*
 	 * Add necessary junk columns for rowmarked rels.  These values are needed
@@ -239,6 +258,20 @@ preprocess_targetlist(PlannerInfo *root)
 	return tlist;
 }
 
+/*
+ * make_update_tlist
+ * 		Wrapper over expand_targetlist for generating the expanded tlist
+ * 		for an update target relation
+ *
+ * The returned list does not contain any junk entries, only those for
+ * target relation attributes.
+ */
+List *
+make_update_tlist(List *tlist, Index result_relation, Relation rel)
+{
+	return filter_junk_tlist_entries(expand_targetlist(tlist, CMD_UPDATE,
+													   result_relation, rel));
+}
 
 /*****************************************************************************
  *

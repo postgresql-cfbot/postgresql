@@ -3960,9 +3960,7 @@ planstate_tree_walker(PlanState *planstate,
 	switch (nodeTag(plan))
 	{
 		case T_ModifyTable:
-			if (planstate_walk_members(((ModifyTableState *) planstate)->mt_plans,
-									   ((ModifyTableState *) planstate)->mt_nplans,
-									   walker, context))
+			if (walker(((ModifyTableState *) planstate)->mt_subplan, context))
 				return true;
 			break;
 		case T_Append:

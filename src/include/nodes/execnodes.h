@@ -357,10 +357,6 @@ typedef struct ProjectionInfo
  *						attribute numbers of the "original" tuple and the
  *						attribute numbers of the "clean" tuple.
  *	  resultSlot:		tuple slot used to hold cleaned tuple.
- *	  junkAttNo:		not used by junkfilter code.  Can be used by caller
- *						to remember the attno of a specific junk attribute
- *						(nodeModifyTable.c keeps the "ctid" or "wholerow"
- *						attno here).
  * ----------------
  */
 typedef struct JunkFilter
@@ -370,7 +366,6 @@ typedef struct JunkFilter
 	TupleDesc	jf_cleanTupType;
 	AttrNumber *jf_cleanMap;
 	TupleTableSlot *jf_resultSlot;
-	AttrNumber	jf_junkAttNo;
 } JunkFilter;
 
 /*
@@ -462,9 +457,6 @@ typedef struct ResultRelInfo
 	/* number of stored generated columns we need to compute */
 	int			ri_NumGeneratedNeeded;
 
-	/* for removing junk attributes from tuples */
-	JunkFilter *ri_junkFilter;
-
 	/* list of RETURNING expressions */
 	List	   *ri_returningList;
 
@@ -488,6 +480,22 @@ typedef struct ResultRelInfo
 
 	/* for use by copy.c when performing multi-inserts */
 	struct CopyMultiInsertBuffer *ri_CopyMultiInsertBuffer;
+
+	/*
+	 * For UPDATE and DELETE result relations, this stores the attribute
+	 * number of the junk attribute in the source plan's output tuple.
+	 */
+	AttrNumber		ri_junkAttNo;
+
+	/* Slot to hold the old tuple being updated */
+	TupleTableSlot *ri_oldTupleSlot;
+
+	/*
+	 * Projection to generate new tuple of an UPDATE/INSERT and slot to hold
+	 * that tuple
+	 */
+	TupleTableSlot *ri_newTupleSlot;
+	ProjectionInfo *ri_projectNew;
 } ResultRelInfo;
 
 /* ----------------
@@ -1165,17 +1173,23 @@ typedef struct ModifyTableState
 	CmdType		operation;		/* INSERT, UPDATE, or DELETE */
 	bool		canSetTag;		/* do we set the command tag/es_processed? */
 	bool		mt_done;		/* are we done? */
-	PlanState **mt_plans;		/* subplans (one per target rel) */
-	int			mt_nplans;		/* number of plans in the array */
-	int			mt_whichplan;	/* which one is being executed (0..n-1) */
-	TupleTableSlot **mt_scans;	/* input tuple corresponding to underlying
-								 * plans */
-	ResultRelInfo *resultRelInfo;	/* per-subplan target relations */
+	PlanState  *mt_subplan;		/* subplan state */
+	int			mt_nrels;		/* number of result rels in the arrays */
+	TupleTableSlot **mt_scans;  /* result relation specific tuple slots for
+								 * holding the subplan's output tuple */
+	ResultRelInfo *resultRelInfo;	/* Target relations */
 	ResultRelInfo *rootResultRelInfo;	/* root target relation (partitioned
 										 * table root) */
-	List	  **mt_arowmarks;	/* per-subplan ExecAuxRowMark lists */
+	List	   *mt_arowmarks;	/* ExecAuxRowMark list */
 	EPQState	mt_epqstate;	/* for evaluating EvalPlanQual rechecks */
 	bool		fireBSTriggers; /* do we need to fire stmt triggers? */
+
+	/*
+	 * For UPDATE and DELETE, resno of the TargetEntry corresponding to
+	 * the "__result_index" junk attribute present in the subplan's
+	 * targetlist.
+	 */
+	int			mt_resultIndexAttno;
 
 	/*
 	 * Slot for storing tuples in the root partitioned table's rowtype during

@@ -47,6 +47,7 @@
 #include "nodes/nodeFuncs.h"
 #include "nodes/plannodes.h"
 #include "optimizer/optimizer.h"
+#include "optimizer/planmain.h"
 #include "optimizer/prep.h"
 #include "optimizer/tlist.h"
 #include "parser/parsetree.h"
@@ -1270,7 +1271,7 @@ deparseLockingClause(deparse_expr_cxt *context)
 		 * that DECLARE CURSOR ... FOR UPDATE is supported, which it isn't
 		 * before 8.3.
 		 */
-		if (relid == root->parse->resultRelation &&
+		if (is_result_relation(relid, root) &&
 			(root->parse->commandType == CMD_UPDATE ||
 			 root->parse->commandType == CMD_DELETE))
 		{
@@ -1809,7 +1810,7 @@ deparseUpdateSql(StringInfo buf, RangeTblEntry *rte,
  * 'rel' is the relation descriptor for the target relation
  * 'foreignrel' is the RelOptInfo for the target relation or the join relation
  *		containing all base relations in the query
- * 'targetlist' is the tlist of the underlying foreign-scan plan node
+ * 'update_tlist' is UPDATE targetlist
  * 'targetAttrs' is the target columns of the UPDATE
  * 'remote_conds' is the qual clauses that must be evaluated remotely
  * '*params_list' is an output list of exprs that will become remote Params
@@ -1821,7 +1822,7 @@ void
 deparseDirectUpdateSql(StringInfo buf, PlannerInfo *root,
 					   Index rtindex, Relation rel,
 					   RelOptInfo *foreignrel,
-					   List *targetlist,
+					   List *update_tlist,
 					   List *targetAttrs,
 					   List *remote_conds,
 					   List **params_list,
@@ -1854,7 +1855,7 @@ deparseDirectUpdateSql(StringInfo buf, PlannerInfo *root,
 	foreach(lc, targetAttrs)
 	{
 		int			attnum = lfirst_int(lc);
-		TargetEntry *tle = get_tle_by_resno(targetlist, attnum);
+		TargetEntry *tle = get_tle_by_resno(update_tlist, attnum);
 
 		if (!tle)
 			elog(ERROR, "attribute number %d not found in UPDATE targetlist",

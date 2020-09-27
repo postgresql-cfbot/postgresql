@@ -2673,20 +2673,22 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 		/*
 		 * In READ COMMITTED isolation level it's possible that target tuple
 		 * was changed due to concurrent update.  In that case we have a raw
-		 * subplan output tuple in epqslot_candidate, and need to run it
-		 * through the junk filter to produce an insertable tuple.
+		 * subplan output tuple in epqslot_candidate, and need to form a new
+		 * insertable tuple using ExecGetUpdateNewTuple to replace the one
+		 * we received in passed-in slot ('newslot').
 		 *
 		 * Caution: more than likely, the passed-in slot is the same as the
-		 * junkfilter's output slot, so we are clobbering the original value
-		 * of slottuple by doing the filtering.  This is OK since neither we
-		 * nor our caller have any more interest in the prior contents of that
-		 * slot.
+		 * slot previously returned by ExecGetUpdateNewTuple(), so we are
+		 * clobbering the original value of that slot.  This is OK since
+		 * neither we nor our caller have any more interest in the prior
+		 * contents of that slot.
 		 */
 		if (epqslot_candidate != NULL)
 		{
 			TupleTableSlot *epqslot_clean;
 
-			epqslot_clean = ExecFilterJunk(relinfo->ri_junkFilter, epqslot_candidate);
+			epqslot_clean = ExecGetUpdateNewTuple(relinfo, epqslot_candidate,
+												  oldslot);
 
 			if (newslot != epqslot_clean)
 				ExecCopySlot(newslot, epqslot_clean);

@@ -410,9 +410,10 @@ _outModifyTable(StringInfo str, const ModifyTable *node)
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_INT_FIELD(resultRelIndex);
 	WRITE_INT_FIELD(rootResultRelIndex);
-	WRITE_NODE_FIELD(plans);
+	WRITE_NODE_FIELD(subplan);
 	WRITE_NODE_FIELD(withCheckOptionLists);
 	WRITE_NODE_FIELD(returningLists);
+	WRITE_NODE_FIELD(updateTargetLists);
 	WRITE_NODE_FIELD(fdwPrivLists);
 	WRITE_BITMAPSET_FIELD(fdwDirectModifyPlans);
 	WRITE_NODE_FIELD(rowMarks);
@@ -698,6 +699,7 @@ _outForeignScan(StringInfo str, const ForeignScan *node)
 	WRITE_NODE_FIELD(fdw_recheck_quals);
 	WRITE_BITMAPSET_FIELD(fs_relids);
 	WRITE_BOOL_FIELD(fsSystemCol);
+	WRITE_INT_FIELD(resultRelIndex);
 }
 
 static void
@@ -2120,6 +2122,7 @@ _outModifyTablePath(StringInfo str, const ModifyTablePath *node)
 	WRITE_NODE_FIELD(subroots);
 	WRITE_NODE_FIELD(withCheckOptionLists);
 	WRITE_NODE_FIELD(returningLists);
+	WRITE_NODE_FIELD(updateTargetLists);
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(onconflict);
 	WRITE_INT_FIELD(epqParam);
@@ -2235,6 +2238,7 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_NODE_FIELD(full_join_clauses);
 	WRITE_NODE_FIELD(join_info_list);
 	WRITE_NODE_FIELD(append_rel_list);
+	WRITE_NODE_FIELD(inherit_result_rels);
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_NODE_FIELD(placeholder_list);
 	WRITE_NODE_FIELD(fkey_list);
@@ -2244,12 +2248,13 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_NODE_FIELD(distinct_pathkeys);
 	WRITE_NODE_FIELD(sort_pathkeys);
 	WRITE_NODE_FIELD(processed_tlist);
+	WRITE_NODE_FIELD(update_tlist);
+	WRITE_NODE_FIELD(inherit_junk_tlist);
 	WRITE_NODE_FIELD(minmax_aggs);
 	WRITE_FLOAT_FIELD(total_table_pages, "%.0f");
 	WRITE_FLOAT_FIELD(tuple_fraction, "%.4f");
 	WRITE_FLOAT_FIELD(limit_tuples, "%.0f");
 	WRITE_UINT_FIELD(qual_security_level);
-	WRITE_ENUM_FIELD(inhTargetKind, InheritanceKind);
 	WRITE_BOOL_FIELD(hasJoinRTEs);
 	WRITE_BOOL_FIELD(hasLateralRTEs);
 	WRITE_BOOL_FIELD(hasHavingQual);
@@ -2259,6 +2264,7 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_BITMAPSET_FIELD(curOuterRels);
 	WRITE_NODE_FIELD(curOuterParams);
 	WRITE_BOOL_FIELD(partColsUpdated);
+	WRITE_INT_FIELD(lastResultRelIndex);
 }
 
 static void
@@ -2540,9 +2546,22 @@ _outAppendRelInfo(StringInfo str, const AppendRelInfo *node)
 	WRITE_OID_FIELD(parent_reltype);
 	WRITE_OID_FIELD(child_reltype);
 	WRITE_NODE_FIELD(translated_vars);
+	WRITE_NODE_FIELD(translated_fake_vars);
 	WRITE_INT_FIELD(num_child_cols);
 	WRITE_ATTRNUMBER_ARRAY(parent_colnos, node->num_child_cols);
 	WRITE_OID_FIELD(parent_reloid);
+}
+
+static void
+_outInheritResultRelInfo(StringInfo str, const InheritResultRelInfo *node)
+{
+	WRITE_NODE_TYPE("INHERITRESULTRELINFO");
+
+	WRITE_UINT_FIELD(resultRelation);
+	WRITE_NODE_FIELD(withCheckOptions);
+	WRITE_NODE_FIELD(returningList);
+	WRITE_NODE_FIELD(processed_tlist);
+	WRITE_NODE_FIELD(update_tlist);
 }
 
 static void
@@ -4147,6 +4166,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_AppendRelInfo:
 				_outAppendRelInfo(str, obj);
+				break;
+			case T_InheritResultRelInfo:
+				_outInheritResultRelInfo(str, obj);
 				break;
 			case T_PlaceHolderInfo:
 				_outPlaceHolderInfo(str, obj);

@@ -214,7 +214,7 @@ explain (costs off, format json) insert into insertconflicttest values (0, 'Bilb
        "Plans": [                                                      +
          {                                                             +
            "Node Type": "Result",                                      +
-           "Parent Relationship": "Member",                            +
+           "Parent Relationship": "Source",                            +
            "Parallel Aware": false                                     +
          }                                                             +
        ]                                                               +

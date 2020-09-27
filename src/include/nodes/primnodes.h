@@ -1362,13 +1362,15 @@ typedef struct InferenceElem
  * column for the item; so there may be missing or out-of-order resnos.
  * It is even legal to have duplicated resnos; consider
  *		UPDATE table SET arraycol[1] = ..., arraycol[2] = ..., ...
- * The two meanings come together in the executor, because the planner
- * transforms INSERT/UPDATE tlists into a normalized form with exactly
- * one entry for each column of the destination table.  Before that's
- * happened, however, it is risky to assume that resno == position.
- * Generally get_tle_by_resno() should be used rather than list_nth()
- * to fetch tlist entries by resno, and only in SELECT should you assume
- * that resno is a unique identifier.
+ * For INSERT, the planner normalizes the tlist by filling in NULL constants
+ * for any columns not assigned values in the original tlist.  For UPDATE, the
+ * possibility of multiple destination relations due to inheritance means that
+ * there’s no one unique set of attribute numbers to normalize the tlist with,
+ * so it’s left unchanged except reordering the items in to appear in root
+ * table's attribute numbers.  Given these irregularities, it is risky to
+ * assume that resno == position.  Generally get_tle_by_resno() should be used
+ * rather than list_nth() to fetch tlist entries by resno, and only in SELECT
+ * should you assume that resno is a unique identifier.
  *
  * resname is required to represent the correct column name in non-resjunk
  * entries of top-level SELECT targetlists, since it will be used as the

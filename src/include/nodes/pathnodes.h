@@ -81,18 +81,6 @@ typedef enum UpperRelationKind
 	/* NB: UPPERREL_FINAL must be last enum entry; it's used to size arrays */
 } UpperRelationKind;
 
-/*
- * This enum identifies which type of relation is being planned through the
- * inheritance planner.  INHKIND_NONE indicates the inheritance planner
- * was not used.
- */
-typedef enum InheritanceKind
-{
-	INHKIND_NONE,
-	INHKIND_INHERITED,
-	INHKIND_PARTITIONED
-} InheritanceKind;
-
 /*----------
  * PlannerGlobal
  *		Global information for planning/optimization
@@ -219,6 +207,14 @@ struct PlannerInfo
 	struct AppendRelInfo **append_rel_array;
 
 	/*
+	 * Same length as other "simple" rel arrays and holds pointers to
+	 * InheritResultRelInfo for this subquery's result relations indexed by
+	 * RT index, or NULL if the rel is not a result relation.  The array is not
+	 * allocated unless the query is an inherited UPDATE/DELETE.
+	 */
+	struct InheritResultRelInfo **inherit_result_rel_array;
+
+	/*
 	 * all_baserels is a Relids set of all base relids (but not "other"
 	 * relids) in the query; that is, the Relids identifier of the final join
 	 * we need to form.  This is computed in make_one_rel, just before we
@@ -289,6 +285,8 @@ struct PlannerInfo
 	 */
 	List	   *append_rel_list;	/* list of AppendRelInfos */
 
+	List	   *inherit_result_rels;	/* List of InheritResultRelInfo */
+
 	List	   *rowMarks;		/* list of PlanRowMarks */
 
 	List	   *placeholder_list;	/* list of PlaceHolderInfos */
@@ -315,14 +313,24 @@ struct PlannerInfo
 
 	/*
 	 * The fully-processed targetlist is kept here.  It differs from
-	 * parse->targetList in that (for INSERT and UPDATE) it's been reordered
-	 * to match the target table, and defaults have been filled in.  Also,
-	 * additional resjunk targets may be present.  preprocess_targetlist()
+	 * parse->targetList in that (for INSERT) it's been reordered to match
+	 * the target table, and defaults have been filled in.  Also, additional
+	 * resjunk targets may be present.  preprocess_targetlist() does most of
 	 * does most of this work, but note that more resjunk targets can get
 	 * added during appendrel expansion.  (Hence, upper_targets mustn't get
 	 * set up till after that.)
 	 */
 	List	   *processed_tlist;
+
+	/*
+	 * For UPDATE, this contains the targetlist to compute the updated tuple,
+	 * wherein the updated columns refer to the plan's output tuple (given by
+	 * by 'processed_tlist') and the rest to the old tuple being updated.
+	 */
+	List	   *update_tlist;
+
+	/* Scratch space for inherit.c: add_inherit_junk_var() */
+	List	   *inherit_junk_tlist;	/* List of TargetEntry */
 
 	/* Fields filled during create_plan() for use in setrefs.c */
 	AttrNumber *grouping_map;	/* for GroupingFunc fixup */
@@ -339,9 +347,6 @@ struct PlannerInfo
 	Index		qual_security_level;	/* minimum security_level for quals */
 	/* Note: qual_security_level is zero if there are no securityQuals */
 
-	InheritanceKind inhTargetKind;	/* indicates if the target relation is an
-									 * inheritance child or partition or a
-									 * partitioned table */
 	bool		hasJoinRTEs;	/* true if any RTEs are RTE_JOIN kind */
 	bool		hasLateralRTEs; /* true if any RTEs are marked LATERAL */
 	bool		hasHavingQual;	/* true if havingQual was non-null */
@@ -362,6 +367,9 @@ struct PlannerInfo
 
 	/* Does this query modify any partition key columns? */
 	bool		partColsUpdated;
+
+	/* Highest result relation index assigned in this subquery */
+	int			lastResultRelIndex;
 };
 
 
@@ -1818,6 +1826,7 @@ typedef struct ModifyTablePath
 	List	   *resultRelations;	/* integer list of RT indexes */
 	List	   *subpaths;		/* Path(s) producing source data */
 	List	   *subroots;		/* per-target-table PlannerInfos */
+	List	   *updateTargetLists; /* per-target-table UPDATE tlists */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */
 	List	   *returningLists; /* per-target-table RETURNING tlists */
 	List	   *rowMarks;		/* PlanRowMarks (non-locking only) */
@@ -2257,6 +2266,13 @@ typedef struct AppendRelInfo
 	List	   *translated_vars;	/* Expressions in the child's Vars */
 
 	/*
+	 * The following contains expressions that the child relation is expected
+	 * to output for each "fake" parent Var that add_inherit_junk_var() adds
+	 * to the parent's reltarget; also see translate_fake_parent_var().
+	 */
+	List	   *translated_fake_vars;
+
+	/*
 	 * This array simplifies translations in the reverse direction, from
 	 * child's column numbers to parent's.  The entry at [ccolno - 1] is the
 	 * 1-based parent column number for child column ccolno, or zero if that
@@ -2272,6 +2288,41 @@ typedef struct AppendRelInfo
 	 */
 	Oid			parent_reloid;	/* OID of parent relation */
 } AppendRelInfo;
+
+/*
+ * InheritResultRelInfo
+ *		Information about result relations of an inherited UPDATE/DELETE
+ *		operation
+ *
+ * If the main target relation is an inheritance parent, we build an
+ * InheritResultRelInfo for it and for every child result relation resulting
+ * from expanding it.  This is to store the information relevant to each
+ * result relation that must be added to the ModifyTable, such as its update
+ * targetlist, WITH CHECK OPTIONS, and RETURNING expression lists.  For the
+ * main result relation (root inheritance parent), that information is same
+ * as what's in Query and PlannerInfo.  For child result relations, we make
+ * copies of those expressions with appropriate translation of any Vars.
+ * Also, update_tlist for a given child relation has been made such that
+ * resnos of the TLEs contained in it match the child relation attribute
+ * numbers.
+ *
+ * While it's okay for the code outside of the core planner to look at
+ * update_tlist, processed_tlist is only kept around for internal planner use.
+ * For example, an FDW's PlanDirectModify() may look at update_tlist to check
+ * if the assigned expressions are pushable.
+ */
+typedef struct InheritResultRelInfo
+{
+	NodeTag		type;
+
+	Index		resultRelation;
+	List	   *withCheckOptions;
+	List	   *returningList;
+
+	/* Only valid for UPDATE. */
+	List	   *processed_tlist;
+	List	   *update_tlist;
+} InheritResultRelInfo;
 
 /*
  * For each distinct placeholder expression generated during planning, we

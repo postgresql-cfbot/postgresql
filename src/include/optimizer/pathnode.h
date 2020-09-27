@@ -261,7 +261,7 @@ extern ModifyTablePath *create_modifytable_path(PlannerInfo *root,
 												Index nominalRelation, Index rootRelation,
 												bool partColsUpdated,
 												List *resultRelations, List *subpaths,
-												List *subroots,
+												List *subroots, List *updateTargetLists,
 												List *withCheckOptionLists, List *returningLists,
 												List *rowMarks, OnConflictExpr *onconflict,
 												int epqParam);

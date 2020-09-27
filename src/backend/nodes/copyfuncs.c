@@ -209,9 +209,10 @@ _copyModifyTable(const ModifyTable *from)
 	COPY_NODE_FIELD(resultRelations);
 	COPY_SCALAR_FIELD(resultRelIndex);
 	COPY_SCALAR_FIELD(rootResultRelIndex);
-	COPY_NODE_FIELD(plans);
+	COPY_NODE_FIELD(subplan);
 	COPY_NODE_FIELD(withCheckOptionLists);
 	COPY_NODE_FIELD(returningLists);
+	COPY_NODE_FIELD(updateTargetLists);
 	COPY_NODE_FIELD(fdwPrivLists);
 	COPY_BITMAPSET_FIELD(fdwDirectModifyPlans);
 	COPY_NODE_FIELD(rowMarks);
@@ -761,6 +762,7 @@ _copyForeignScan(const ForeignScan *from)
 	COPY_NODE_FIELD(fdw_recheck_quals);
 	COPY_BITMAPSET_FIELD(fs_relids);
 	COPY_SCALAR_FIELD(fsSystemCol);
+	COPY_SCALAR_FIELD(resultRelIndex);
 
 	return newnode;
 }
@@ -2370,6 +2372,7 @@ _copyAppendRelInfo(const AppendRelInfo *from)
 	COPY_SCALAR_FIELD(parent_reltype);
 	COPY_SCALAR_FIELD(child_reltype);
 	COPY_NODE_FIELD(translated_vars);
+	COPY_NODE_FIELD(translated_fake_vars);
 	COPY_SCALAR_FIELD(num_child_cols);
 	COPY_POINTER_FIELD(parent_colnos, from->num_child_cols * sizeof(AttrNumber));
 	COPY_SCALAR_FIELD(parent_reloid);

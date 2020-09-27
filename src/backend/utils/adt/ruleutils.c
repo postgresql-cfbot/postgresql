@@ -4581,7 +4581,7 @@ set_deparse_plan(deparse_namespace *dpns, Plan *plan)
 	else if (IsA(plan, MergeAppend))
 		dpns->outer_plan = linitial(((MergeAppend *) plan)->mergeplans);
 	else if (IsA(plan, ModifyTable))
-		dpns->outer_plan = linitial(((ModifyTable *) plan)->plans);
+		dpns->outer_plan = ((ModifyTable *) plan)->subplan;
 	else
 		dpns->outer_plan = outerPlan(plan);
 

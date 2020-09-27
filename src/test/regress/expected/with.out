@@ -2184,44 +2184,32 @@ DELETE FROM a USING wcte WHERE aa = q2;
                      QUERY PLAN                     
 ----------------------------------------------------
  Delete on public.a
-   Delete on public.a
-   Delete on public.b a_1
-   Delete on public.c a_2
-   Delete on public.d a_3
+   Delete on public.a a_1
+   Delete on public.b a_2
+   Delete on public.c a_3
+   Delete on public.d a_4
    CTE wcte
      ->  Insert on public.int8_tbl
            Output: int8_tbl.q2
            ->  Result
                  Output: '42'::bigint, '47'::bigint
-   ->  Nested Loop
-         Output: a.ctid, wcte.*
-         Join Filter: (a.aa = wcte.q2)
-         ->  Seq Scan on public.a
-               Output: a.ctid, a.aa
-         ->  CTE Scan on wcte
+   ->  Hash Join
+         Output: a.ctid, wcte.*, (0)
+         Hash Cond: (a.aa = wcte.q2)
+         ->  Append
+               ->  Seq Scan on public.a a_1
+                     Output: a_1.ctid, a_1.aa, 0
+               ->  Seq Scan on public.b a_2
+                     Output: a_2.ctid, a_2.aa, 1
+               ->  Seq Scan on public.c a_3
+                     Output: a_3.ctid, a_3.aa, 2
+               ->  Seq Scan on public.d a_4
+                     Output: a_4.ctid, a_4.aa, 3
+         ->  Hash
                Output: wcte.*, wcte.q2
-   ->  Nested Loop
-         Output: a_1.ctid, wcte.*
-         Join Filter: (a_1.aa = wcte.q2)
-         ->  Seq Scan on public.b a_1
-               Output: a_1.ctid, a_1.aa
-         ->  CTE Scan on wcte
-               Output: wcte.*, wcte.q2
-   ->  Nested Loop
-         Output: a_2.ctid, wcte.*
-         Join Filter: (a_2.aa = wcte.q2)
-         ->  Seq Scan on public.c a_2
-               Output: a_2.ctid, a_2.aa
-         ->  CTE Scan on wcte
-               Output: wcte.*, wcte.q2
-   ->  Nested Loop
-         Output: a_3.ctid, wcte.*
-         Join Filter: (a_3.aa = wcte.q2)
-         ->  Seq Scan on public.d a_3
-               Output: a_3.ctid, a_3.aa
-         ->  CTE Scan on wcte
-               Output: wcte.*, wcte.q2
-(38 rows)
+               ->  CTE Scan on wcte
+                     Output: wcte.*, wcte.q2
+(26 rows)
 
 -- error cases
 -- data-modifying WITH tries to use its own output

@@ -1480,17 +1480,19 @@ rewriteTargetListUD(Query *parsetree, RangeTblEntry *target_rte,
 												target_relation);
 
 		/*
-		 * If we have a row-level trigger corresponding to the operation, emit
-		 * a whole-row Var so that executor will have the "old" row to pass to
-		 * the trigger.  Alas, this misses system columns.
+		 * For UPDATE, we need to let an FDW fetch unchanged columns by
+		 * asking it to fetch the wholerow.  That's because the top-level
+		 * targetlist only contains entries for changed columns.  Actually,
+		 * we only really need this for UPDATEs that are not pushed to the
+		 * remote side, it's hard to tell if that's the case at the point
+		 * when this function is called.
+		 *
+		 * We will need it also if there are any row triggers.
 		 */
-		if (target_relation->trigdesc &&
-			((parsetree->commandType == CMD_UPDATE &&
-			  (target_relation->trigdesc->trig_update_after_row ||
-			   target_relation->trigdesc->trig_update_before_row)) ||
-			 (parsetree->commandType == CMD_DELETE &&
-			  (target_relation->trigdesc->trig_delete_after_row ||
-			   target_relation->trigdesc->trig_delete_before_row))))
+		if (parsetree->commandType == CMD_UPDATE ||
+			(target_relation->trigdesc &&
+			 (target_relation->trigdesc->trig_delete_after_row ||
+			  target_relation->trigdesc->trig_delete_before_row)))
 		{
 			var = makeWholeRowVar(target_rte,
 								  parsetree->resultRelation,

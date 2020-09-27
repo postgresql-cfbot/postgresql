@@ -39,6 +39,7 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/plancat.h"
+#include "optimizer/planmain.h"
 #include "optimizer/planner.h"
 #include "optimizer/restrictinfo.h"
 #include "optimizer/tlist.h"
@@ -1060,10 +1061,25 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 			adjust_appendrel_attrs(root,
 								   (Node *) rel->joininfo,
 								   1, &appinfo);
-		childrel->reltarget->exprs = (List *)
-			adjust_appendrel_attrs(root,
-								   (Node *) rel->reltarget->exprs,
-								   1, &appinfo);
+
+		/*
+		 * If the child is a result relation, the executor expects that any
+		 * wholerow Vars in the targetlist are of its reltype, not parent's
+		 * reltype.  So use adjust_target_appendrel_attrs() to translate the
+		 * reltarget expressions, because it does not wrap a translated
+		 * wholerow Var with ConcertRowtypeExpr to convert it back to the
+		 * parent's reltype.
+		 */
+		if (is_result_relation(childRTindex, root))
+			childrel->reltarget->exprs = (List *)
+				adjust_target_appendrel_attrs(root,
+											  (Node *) rel->reltarget->exprs,
+											  appinfo);
+		else
+			childrel->reltarget->exprs = (List *)
+				adjust_appendrel_attrs(root,
+									   (Node *) rel->reltarget->exprs,
+									   1, &appinfo);
 
 		/*
 		 * We have to make child entries in the EquivalenceClass data

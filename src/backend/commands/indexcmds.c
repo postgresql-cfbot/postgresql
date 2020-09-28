@@ -3409,6 +3409,7 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 		Oid			oldIndexId = lfirst_oid(lc);
 		Oid			newIndexId = lfirst_oid(lc2);
 		Oid			heapId;
+		Oid			indexam;
 
 		/* Start new transaction for this index's concurrent build */
 		StartTransactionCommand();
@@ -3429,7 +3430,20 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 		 */
 		indexRel = index_open(oldIndexId, ShareUpdateExclusiveLock);
 		heapId = indexRel->rd_index->indrelid;
+		/* The access method of the old and new indexes match */
+		indexam = indexRel->rd_rel->relam;
 		index_close(indexRel, NoLock);
+
+		/*
+		 * Update progress for the index to build, with the correct parent
+		 * table involved.
+		 */
+		pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX, heapId);
+		pgstat_progress_update_param(PROGRESS_CREATEIDX_COMMAND,
+									 PROGRESS_CREATEIDX_COMMAND_REINDEX_CONCURRENTLY);
+		pgstat_progress_update_param(PROGRESS_CREATEIDX_INDEX_OID, newIndexId);
+		pgstat_progress_update_param(PROGRESS_CREATEIDX_ACCESS_METHOD_OID,
+									 indexam);
 
 		/* Perform concurrent build of new index */
 		index_concurrently_build(heapId, newIndexId);
@@ -3458,6 +3472,8 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 		Oid			heapId;
 		TransactionId limitXmin;
 		Snapshot	snapshot;
+		Relation	newIndexRel;
+		Oid			indexam;
 
 		StartTransactionCommand();
 
@@ -3468,14 +3484,32 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 		 */
 		CHECK_FOR_INTERRUPTS();
 
-		heapId = IndexGetRelation(newIndexId, false);
-
 		/*
 		 * Take the "reference snapshot" that will be used by validate_index()
 		 * to filter candidate tuples.
 		 */
 		snapshot = RegisterSnapshot(GetTransactionSnapshot());
 		PushActiveSnapshot(snapshot);
+
+		/*
+		 * Index relation has been closed by previous commit, so reopen it to
+		 * get its information.
+		 */
+		newIndexRel = index_open(newIndexId, ShareUpdateExclusiveLock);
+		heapId = newIndexRel->rd_index->indrelid;
+		indexam = newIndexRel->rd_rel->relam;
+		index_close(newIndexRel, NoLock);
+
+		/*
+		 * Update progress for the index to build, with the correct parent
+		 * table involved.
+		 */
+		pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX, heapId);
+		pgstat_progress_update_param(PROGRESS_CREATEIDX_COMMAND,
+									 PROGRESS_CREATEIDX_COMMAND_REINDEX_CONCURRENTLY);
+		pgstat_progress_update_param(PROGRESS_CREATEIDX_INDEX_OID, newIndexId);
+		pgstat_progress_update_param(PROGRESS_CREATEIDX_ACCESS_METHOD_OID,
+									 indexam);
 
 		validate_index(heapId, newIndexId, snapshot);
 
@@ -3611,7 +3645,7 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 	 */
 
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_PHASE,
-								 PROGRESS_CREATEIDX_PHASE_WAIT_4);
+								 PROGRESS_CREATEIDX_PHASE_WAIT_5);
 	WaitForLockersMultiple(lockTags, AccessExclusiveLock, true);
 
 	PushActiveSnapshot(GetTransactionSnapshot());

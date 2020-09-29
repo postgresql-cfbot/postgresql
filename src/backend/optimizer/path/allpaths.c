@@ -1282,7 +1282,7 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	}
 
 	/* Add paths to the append relation. */
-	add_paths_to_append_rel(root, rel, live_childrels);
+	add_paths_to_append_rel(root, rel, live_childrels, NIL);
 }
 
 
@@ -1299,7 +1299,8 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
  */
 void
 add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
-						List *live_childrels)
+						List *live_childrels,
+						List *original_partitioned_rels)
 {
 	List	   *subpaths = NIL;
 	bool		subpaths_valid = true;
@@ -1311,7 +1312,7 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	List	   *all_child_pathkeys = NIL;
 	List	   *all_child_outers = NIL;
 	ListCell   *l;
-	List	   *partitioned_rels = NIL;
+	List	   *partitioned_rels = original_partitioned_rels;
 	double		partial_rows = -1;
 
 	/* If appropriate, consider parallel append */
@@ -3969,7 +3970,7 @@ generate_partitionwise_join_paths(PlannerInfo *root, RelOptInfo *rel)
 	}
 
 	/* Build additional paths for this rel from child-join paths. */
-	add_paths_to_append_rel(root, rel, live_children);
+	add_paths_to_append_rel(root, rel, live_children, NIL);
 	list_free(live_children);
 }
 

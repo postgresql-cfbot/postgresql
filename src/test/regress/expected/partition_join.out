@@ -2330,6 +2330,151 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a =
  375 | 0375 | 375 | 0375
 (8 rows)
 
+--
+-- For asymmetric partition-wise join
+--
+CREATE TABLE prt5 (hkey int, a int, b int) PARTITION BY HASH(hkey);
+CREATE TABLE prt5_p0 PARTITION OF prt5
+                     FOR VALUES WITH (modulus 3, remainder 0);
+CREATE TABLE prt5_p1 PARTITION OF prt5
+                     FOR VALUES WITH (modulus 3, remainder 1);
+CREATE TABLE prt5_p2 PARTITION OF prt5
+                     FOR VALUES WITH (modulus 3, remainder 2);
+CREATE TABLE t5_1 (aid int, alabel text);
+CREATE TABLE t5_2 (bid int, blabel text);
+INSERT INTO prt5 (SELECT x, (1000.0 * random())::int,
+                            (1000.0 * random())::int
+                    FROM generate_series(1,1000000) x);
+INSERT INTO t5_1 (SELECT x, md5(x::text) FROM generate_series(-200, 800) x);
+INSERT INTO t5_2 (SELECT x, md5(x::text) FROM generate_series(-200, 800) x);
+VACUUM ANALYZE prt5;
+VACUUM ANALYZE t5_1;
+VACUUM ANALYZE t5_2;
+SET max_parallel_workers_per_gather = 0;
+EXPLAIN (COSTS OFF)
+SELECT *
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%abc%';
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Append
+   ->  Hash Join
+         Hash Cond: (prt5_1.a = t5_1.aid)
+         ->  Seq Scan on prt5_p0 prt5_1
+         ->  Hash
+               ->  Seq Scan on t5_1
+                     Filter: (alabel ~~ '%abc%'::text)
+   ->  Hash Join
+         Hash Cond: (prt5_2.a = t5_1.aid)
+         ->  Seq Scan on prt5_p1 prt5_2
+         ->  Hash
+               ->  Seq Scan on t5_1
+                     Filter: (alabel ~~ '%abc%'::text)
+   ->  Hash Join
+         Hash Cond: (prt5_3.a = t5_1.aid)
+         ->  Seq Scan on prt5_p2 prt5_3
+         ->  Hash
+               ->  Seq Scan on t5_1
+                     Filter: (alabel ~~ '%abc%'::text)
+(19 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT *
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%ab%'
+            JOIN t5_2 ON b = bid AND blabel like '%cd%';
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Append
+   ->  Hash Join
+         Hash Cond: (prt5_1.a = t5_1.aid)
+         ->  Hash Join
+               Hash Cond: (prt5_1.b = t5_2.bid)
+               ->  Seq Scan on prt5_p0 prt5_1
+               ->  Hash
+                     ->  Seq Scan on t5_2
+                           Filter: (blabel ~~ '%cd%'::text)
+         ->  Hash
+               ->  Seq Scan on t5_1
+                     Filter: (alabel ~~ '%ab%'::text)
+   ->  Hash Join
+         Hash Cond: (prt5_2.a = t5_1.aid)
+         ->  Hash Join
+               Hash Cond: (prt5_2.b = t5_2.bid)
+               ->  Seq Scan on prt5_p1 prt5_2
+               ->  Hash
+                     ->  Seq Scan on t5_2
+                           Filter: (blabel ~~ '%cd%'::text)
+         ->  Hash
+               ->  Seq Scan on t5_1
+                     Filter: (alabel ~~ '%ab%'::text)
+   ->  Hash Join
+         Hash Cond: (prt5_3.a = t5_1.aid)
+         ->  Hash Join
+               Hash Cond: (prt5_3.b = t5_2.bid)
+               ->  Seq Scan on prt5_p2 prt5_3
+               ->  Hash
+                     ->  Seq Scan on t5_2
+                           Filter: (blabel ~~ '%cd%'::text)
+         ->  Hash
+               ->  Seq Scan on t5_1
+                     Filter: (alabel ~~ '%ab%'::text)
+(34 rows)
+
+-- unable to extract non-partitioned right relation
+EXPLAIN (COSTS OFF)
+SELECT * FROM prt5 RIGHT JOIN t5_1 ON a = aid AND alabel like '%abc%';
+                  QUERY PLAN                   
+-----------------------------------------------
+ Hash Right Join
+   Hash Cond: (prt5.a = t5_1.aid)
+   Join Filter: (t5_1.alabel ~~ '%abc%'::text)
+   ->  Append
+         ->  Seq Scan on prt5_p0 prt5_1
+         ->  Seq Scan on prt5_p1 prt5_2
+         ->  Seq Scan on prt5_p2 prt5_3
+   ->  Hash
+         ->  Seq Scan on t5_1
+(9 rows)
+
+-- left side can be extracted, but no cost benefit
+EXPLAIN (COSTS OFF)
+SELECT * FROM prt5 LEFT JOIN t5_1 ON a = aid AND alabel like '%abc%';
+                   QUERY PLAN                    
+-------------------------------------------------
+ Hash Left Join
+   Hash Cond: (prt5.a = t5_1.aid)
+   ->  Append
+         ->  Seq Scan on prt5_p0 prt5_1
+         ->  Seq Scan on prt5_p1 prt5_2
+         ->  Seq Scan on prt5_p2 prt5_3
+   ->  Hash
+         ->  Seq Scan on t5_1
+               Filter: (alabel ~~ '%abc%'::text)
+(9 rows)
+
+-- validation of the results with/without asymmetric partition-wise join
+SELECT * INTO pg_temp.result01a
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%abc%';
+SELECT * INTO pg_temp.result02a
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%ab%'
+            JOIN t5_2 ON b = bid AND blabel like '%cd%';
+SET enable_partitionwise_join = off;
+SELECT * INTO pg_temp.result01b
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%abc%';
+SELECT * INTO pg_temp.result02b
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%ab%'
+            JOIN t5_2 ON b = bid AND blabel like '%cd%';
+SELECT * FROM pg_temp.result01a EXCEPT SELECT * FROM pg_temp.result01b;
+ hkey | a | b | aid | alabel 
+------+---+---+-----+--------
+(0 rows)
+
+SELECT * FROM pg_temp.result02a EXCEPT SELECT * FROM pg_temp.result02b;
+ hkey | a | b | aid | alabel | bid | blabel 
+------+---+---+-----+--------+-----+--------
+(0 rows)
+
+RESET max_parallel_workers_per_gather;
+SET enable_partitionwise_join = true;
 -- semi join
 EXPLAIN (COSTS OFF)
 SELECT t1.* FROM prt1_adv t1 WHERE EXISTS (SELECT 1 FROM prt2_adv t2 WHERE t1.a = t2.b) AND t1.b = 0 ORDER BY t1.a;

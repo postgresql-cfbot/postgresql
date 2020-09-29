@@ -177,6 +177,32 @@ select jsonb '[1]' @? 'strict $[1.2]';
  
 (1 row)
 
+select jsonb_path_query('[1]', 'strict $[1.2]');
+ERROR:  jsonpath array subscript is out of bounds
+select jsonb_path_query('{}', 'strict $[0.3]');
+ERROR:  jsonpath array accessor can only be applied to an array
+select jsonb '{}' @? 'lax $[0.3]';
+ ?column? 
+----------
+ t
+(1 row)
+
+select jsonb_path_query('{}', 'strict $[1.2]');
+ERROR:  jsonpath array accessor can only be applied to an array
+select jsonb '{}' @? 'lax $[1.2]';
+ ?column? 
+----------
+ f
+(1 row)
+
+select jsonb_path_query('{}', 'strict $[-2 to 3]');
+ERROR:  jsonpath array accessor can only be applied to an array
+select jsonb '{}' @? 'lax $[-2 to 3]';
+ ?column? 
+----------
+ t
+(1 row)
+
 select jsonb '{"a": [1,2,3], "b": [3,4,5]}' @? '$ ? (@.a[*] >  @.b[*])';
  ?column? 
 ----------
@@ -404,6 +430,12 @@ select jsonb_path_query('1', 'lax $[*]');
  1
 (1 row)
 
+select jsonb_path_query('{}', 'lax $[0]');
+ jsonb_path_query 
+------------------
+ {}
+(1 row)
+
 select jsonb_path_query('[1]', 'lax $[0]');
  jsonb_path_query 
 ------------------
@@ -452,6 +484,12 @@ select jsonb_path_query('[1]', '$[last]');
  jsonb_path_query 
 ------------------
  1
+(1 row)
+
+select jsonb_path_query('{}', '$[last]');
+ jsonb_path_query 
+------------------
+ {}
 (1 row)
 
 select jsonb_path_query('[1,2,3]', '$[last]');
@@ -2193,6 +2231,12 @@ SELECT jsonb_path_query('[{"a": 1}, {"a": 2}]', '$[*] ? (@.a > 10)');
 ------------------
 (0 rows)
 
+SELECT jsonb_path_query('[{"a": 1}, {"a": 2}]', 'pg [$[*].a]');
+ jsonb_path_query 
+------------------
+ [1, 2]
+(1 row)
+
 SELECT jsonb_path_query_array('[{"a": 1}, {"a": 2}, {}]', 'strict $[*].a');
 ERROR:  JSON object does not contain key "a"
 SELECT jsonb_path_query_array('[{"a": 1}, {"a": 2}]', '$[*].a');
@@ -2223,6 +2267,12 @@ SELECT jsonb_path_query_array('[{"a": 1}, {"a": 2}, {"a": 3}, {"a": 5}]', '$[*].
  jsonb_path_query_array 
 ------------------------
  []
+(1 row)
+
+SELECT jsonb_path_query_array('[{"a": 1}, {"a": 2}]', 'pg [$[*].a]');
+ jsonb_path_query_array 
+------------------------
+ [[1, 2]]
 (1 row)
 
 SELECT jsonb_path_query_first('[{"a": 1}, {"a": 2}, {}]', 'strict $[*].a');
@@ -2517,4 +2567,205 @@ ORDER BY s1.num, s2.num;
  {"s": "B"}    | {"s": "ABcD"} | false | false | false | true  | true
  {"s": "B"}    | {"s": "B"}    | false | true  | true  | true  | false
 (144 rows)
+
+-- extension: path sequences
+select jsonb_path_query('[1,2,3,4,5]', 'pg 10, 20, $[*], 30');
+ jsonb_path_query 
+------------------
+ 10
+ 20
+ 1
+ 2
+ 3
+ 4
+ 5
+ 30
+(8 rows)
+
+select jsonb_path_query('[1,2,3,4,5]', 'pg lax    10, 20, $[*].a, 30');
+ jsonb_path_query 
+------------------
+ 10
+ 20
+ 30
+(3 rows)
+
+select jsonb_path_query('[1,2,3,4,5]', 'pg strict 10, 20, $[*].a, 30');
+ERROR:  jsonpath member accessor can only be applied to an object
+select jsonb_path_query('[1,2,3,4,5]', 'pg -(10, 20, $[1 to 3], 30)');
+ jsonb_path_query 
+------------------
+ -10
+ -20
+ -2
+ -3
+ -4
+ -30
+(6 rows)
+
+select jsonb_path_query('[1,2,3,4,5]', 'pg lax (10, 20.5, $[1 to 3], "30").double()');
+ jsonb_path_query 
+------------------
+ 10
+ 20.5
+ 2
+ 3
+ 4
+ 30
+(6 rows)
+
+select jsonb_path_query('[1,2,3,4,5]', 'pg $[(0, $[*], 5) ? (@ == 3)]');
+ jsonb_path_query 
+------------------
+ 4
+(1 row)
+
+select jsonb_path_query('[1,2,3,4,5]', 'pg $[(0, $[*], 3) ? (@ == 3)]');
+ERROR:  jsonpath array subscript is not a single numeric value
+-- extension: array constructors
+select jsonb_path_query('[1, 2, 3]', 'pg []');
+ jsonb_path_query 
+------------------
+ []
+(1 row)
+
+select jsonb_path_query('[1, 2, 3]', 'pg [1, 2, $[*], 4, 5]');
+   jsonb_path_query    
+-----------------------
+ [1, 2, 1, 2, 3, 4, 5]
+(1 row)
+
+select jsonb_path_query('[1, 2, 3]', 'pg [1, 2, $[*], 4, 5][*]');
+ jsonb_path_query 
+------------------
+ 1
+ 2
+ 1
+ 2
+ 3
+ 4
+ 5
+(7 rows)
+
+select jsonb_path_query('[1, 2, 3]', 'pg [(1, (2, $[*])), (4, 5)]');
+   jsonb_path_query    
+-----------------------
+ [1, 2, 1, 2, 3, 4, 5]
+(1 row)
+
+select jsonb_path_query('[1, 2, 3]', 'pg [[1, 2], [$[*], 4], 5, [(1,2)?(@ > 5)]]');
+       jsonb_path_query        
+-------------------------------
+ [[1, 2], [1, 2, 3, 4], 5, []]
+(1 row)
+
+select jsonb_path_query('[1, 2, 3]', 'pg strict [1, 2, $[*].a, 4, 5]');
+ERROR:  jsonpath member accessor can only be applied to an object
+select jsonb_path_query('[[1, 2], [3, 4, 5], [], [6, 7]]', 'pg [$[*][*] ? (@ > 3)]');
+ jsonb_path_query 
+------------------
+ [4, 5, 6, 7]
+(1 row)
+
+-- extension: object constructors
+select jsonb_path_query('[1, 2, 3]', 'pg {}');
+ jsonb_path_query 
+------------------
+ {}
+(1 row)
+
+select jsonb_path_query('[1, 2, 3]', 'pg {a: 2 + 3, "b": [$[*], 4, 5]}');
+        jsonb_path_query        
+--------------------------------
+ {"a": 5, "b": [1, 2, 3, 4, 5]}
+(1 row)
+
+select jsonb_path_query('[1, 2, 3]', 'pg {a: 2 + 3, "b": [$[*], 4, 5]}.*');
+ jsonb_path_query 
+------------------
+ 5
+ [1, 2, 3, 4, 5]
+(2 rows)
+
+select jsonb_path_query('[1, 2, 3]', 'pg {a: 2 + 3, "b": [$[*], 4, 5]}[*]');
+        jsonb_path_query        
+--------------------------------
+ {"a": 5, "b": [1, 2, 3, 4, 5]}
+(1 row)
+
+select jsonb_path_query('[1, 2, 3]', 'pg {a: 2 + 3, "b": ($[*], 4, 5)}');
+ERROR:  value in jsonpath object constructor is not single
+HINT:  Use jsonpath array syntax to wrap multi-item sequences into arrays
+select jsonb_path_query('[1, 2, 3]', 'pg {a: 2 + 3, "b": {x: $, y: $[1] > 2, z: "foo"}}');
+                    jsonb_path_query                     
+---------------------------------------------------------
+ {"a": 5, "b": {"x": [1, 2, 3], "y": false, "z": "foo"}}
+(1 row)
+
+select jsonb_path_query('[1, 2, 3]', 'pg {a: 2 + 3, "b": $[*] ? (@ > 3), c: "foo"}');
+   jsonb_path_query   
+----------------------
+ {"a": 5, "c": "foo"}
+(1 row)
+
+select jsonb_path_query('[1, 2, 3]', 'pg strict {a: 2 + 3, "b": $[*] ? (@ > 3), c: "foo"}');
+ERROR:  value in jsonpath object constructor is not single
+HINT:  Use jsonpath array syntax to wrap multi-item sequences into arrays
+-- extension: object subscripting
+select jsonb '{"a": 1}' @? 'pg $["a"]';
+ ?column? 
+----------
+ t
+(1 row)
+
+select jsonb '{"a": 1}' @? 'pg $["b"]';
+ ?column? 
+----------
+ f
+(1 row)
+
+select jsonb '{"a": 1}' @? 'pg strict $["b"]';
+ ?column? 
+----------
+ 
+(1 row)
+
+select jsonb '{"a": 1}' @? 'pg $["b", "a"]';
+ ?column? 
+----------
+ t
+(1 row)
+
+select jsonb_path_query('{"a": 1}', 'pg $["a"]');
+ jsonb_path_query 
+------------------
+ 1
+(1 row)
+
+select jsonb_path_query('{"a": 1}', 'pg strict $["b"]');
+ERROR:  JSON object does not contain the specified key
+select jsonb_path_query('{"a": 1}', 'pg lax $["b"]');
+ jsonb_path_query 
+------------------
+(0 rows)
+
+select jsonb_path_query('{"a": 1, "b": 2}', 'pg lax $["b", "c", "b", "a", 0 to 3]');
+ jsonb_path_query 
+------------------
+ 2
+ 2
+ 1
+ {"a": 1, "b": 2}
+(4 rows)
+
+select jsonb_path_query('null', 'pg {"a": 1}["a"]');
+ jsonb_path_query 
+------------------
+ 1
+(1 row)
+
+select jsonb_path_query('null', 'pg {"a": 1}["b"]');
+ jsonb_path_query 
+------------------
+(0 rows)
 

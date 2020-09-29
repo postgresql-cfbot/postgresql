@@ -1393,6 +1393,7 @@ BEGIN;
 CREATE INDEX CONCURRENTLY concur_index7 ON concur_heap(f1);
 ERROR:  CREATE INDEX CONCURRENTLY cannot run inside a transaction block
 COMMIT;
+ERROR:  current transaction failed, rolling back
 -- But you can do a regular index build in a transaction
 BEGIN;
 CREATE INDEX std_index on concur_heap(f2);
@@ -1453,6 +1454,7 @@ INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
 CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
 ERROR:  CREATE INDEX CONCURRENTLY cannot run inside a transaction block
 COMMIT;
+ERROR:  current transaction failed, rolling back
 -- ON COMMIT DELETE ROWS
 CREATE TEMP TABLE concur_temp (f1 int, f2 text)
   ON COMMIT DELETE ROWS;
@@ -2459,6 +2461,7 @@ BEGIN;
 REINDEX TABLE CONCURRENTLY concur_reindex_tab;
 ERROR:  REINDEX CONCURRENTLY cannot run inside a transaction block
 COMMIT;
+ERROR:  current transaction failed, rolling back
 REINDEX TABLE CONCURRENTLY pg_class; -- no catalog relation
 ERROR:  cannot reindex system catalogs concurrently
 REINDEX INDEX CONCURRENTLY pg_class_oid_index; -- no catalog index
@@ -2622,6 +2625,7 @@ BEGIN;
 REINDEX INDEX CONCURRENTLY concur_temp_ind_1;
 ERROR:  REINDEX CONCURRENTLY cannot run inside a transaction block
 COMMIT;
+ERROR:  current transaction failed, rolling back
 -- ON COMMIT DELETE ROWS
 CREATE TEMP TABLE concur_temp_tab_2 (c1 int, c2 text)
   ON COMMIT DELETE ROWS;
@@ -2638,6 +2642,7 @@ CREATE INDEX concur_temp_ind_3 ON concur_temp_tab_3(c2);
 REINDEX INDEX CONCURRENTLY concur_temp_ind_3;
 ERROR:  REINDEX CONCURRENTLY cannot run inside a transaction block
 COMMIT;
+ERROR:  current transaction failed, rolling back
 -- REINDEX SCHEMA processes all temporary relations
 CREATE TABLE reindex_temp_before AS
 SELECT oid, relname, relfilenode, relkind, reltoastrelid
@@ -2717,6 +2722,7 @@ BEGIN;
 REINDEX SCHEMA schema_to_reindex; -- failure, cannot run in a transaction
 ERROR:  REINDEX SCHEMA cannot run inside a transaction block
 END;
+ERROR:  current transaction failed, rolling back
 -- concurrently
 REINDEX SCHEMA CONCURRENTLY schema_to_reindex;
 -- Failure for unauthorized user

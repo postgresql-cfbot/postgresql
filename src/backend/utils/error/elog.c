@@ -3414,6 +3414,7 @@ error_severity(int elevel)
 		case WARNING:
 			prefix = gettext_noop("WARNING");
 			break;
+		case USER_ERROR:
 		case ERROR:
 			prefix = gettext_noop("ERROR");
 			break;

@@ -715,6 +715,7 @@ FETCH BACKWARD 1 FROM foo24; -- should fail
 ERROR:  cursor can only scan forward
 HINT:  Declare it with SCROLL option to enable backward scan.
 END;
+ERROR:  current transaction failed, rolling back
 --
 -- Cursors outside transaction blocks
 --

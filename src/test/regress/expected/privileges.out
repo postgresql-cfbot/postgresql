@@ -114,6 +114,7 @@ BEGIN;
 LOCK atest2 IN ACCESS EXCLUSIVE MODE; -- fail
 ERROR:  permission denied for table atest2
 COMMIT;
+ERROR:  current transaction failed, rolling back
 COPY atest2 FROM stdin; -- fail
 ERROR:  permission denied for table atest2
 GRANT ALL ON atest1 TO PUBLIC; -- fail
@@ -727,6 +728,7 @@ BEGIN;
 LOCK atestc;
 ERROR:  permission denied for table atestc
 END;
+ERROR:  current transaction failed, rolling back
 -- privileges on functions, languages
 -- switch to superuser
 \c -

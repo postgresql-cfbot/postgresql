@@ -522,6 +522,8 @@ struct pg_conn
 								 * connection */
 #endif
 
+	uint8 		remote_retry_conn;
+
 	/* Buffer for current error message */
 	PQExpBufferData errorMessage;	/* expansible string */
 

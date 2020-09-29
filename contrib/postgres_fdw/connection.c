@@ -16,6 +16,7 @@
 #include "access/xact.h"
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
+#include "libpq-int.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -60,6 +61,14 @@ typedef struct ConnCacheEntry
 	uint32		server_hashvalue;	/* hash value of foreign server OID */
 	uint32		mapping_hashvalue;	/* hash value of user mapping OID */
 } ConnCacheEntry;
+
+/* Used for retrying remote connections in postgres_fdw. */
+typedef enum
+{
+	REMOTE_CONNECTION_RETRY_INIT,
+	CAN_RETRY_REMOTE_CONNECTION,
+	DO_RETRY_REMOTE_CONNECTION
+}PGRemoteRetryConnectionType;
 
 /*
  * Connection cache (initialized on first use)
@@ -110,6 +119,7 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 	bool		found;
 	ConnCacheEntry *entry;
 	ConnCacheKey key;
+	uint8        retrycount = 0;
 
 	/* First time through, initialize connection cache hashtable */
 	if (ConnectionHash == NULL)
@@ -181,35 +191,54 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 	 * connection.  (If connect_pg_server throws an error, the cache entry
 	 * will remain in a valid empty state, ie conn == NULL.)
 	 */
-	if (entry->conn == NULL)
+	while(true)
 	{
-		ForeignServer *server = GetForeignServer(user->serverid);
+		if (entry->conn == NULL)
+		{
+			ForeignServer *server = GetForeignServer(user->serverid);
 
-		/* Reset all transient state fields, to be sure all are clean */
-		entry->xact_depth = 0;
-		entry->have_prep_stmt = false;
-		entry->have_error = false;
-		entry->changing_xact_state = false;
-		entry->invalidated = false;
-		entry->server_hashvalue =
-			GetSysCacheHashValue1(FOREIGNSERVEROID,
-								  ObjectIdGetDatum(server->serverid));
-		entry->mapping_hashvalue =
-			GetSysCacheHashValue1(USERMAPPINGOID,
-								  ObjectIdGetDatum(user->umid));
+			/* Reset all transient state fields, to be sure all are clean */
+			entry->xact_depth = 0;
+			entry->have_prep_stmt = false;
+			entry->have_error = false;
+			entry->changing_xact_state = false;
+			entry->invalidated = false;
+			entry->server_hashvalue =
+				GetSysCacheHashValue1(FOREIGNSERVEROID,
+									ObjectIdGetDatum(server->serverid));
+			entry->mapping_hashvalue =
+				GetSysCacheHashValue1(USERMAPPINGOID,
+									ObjectIdGetDatum(user->umid));
 
-		/* Now try to make the connection */
-		entry->conn = connect_pg_server(server, user);
+			/* Now try to make the connection */
+			entry->conn = connect_pg_server(server, user);
 
-		elog(DEBUG3, "new postgres_fdw connection %p for server \"%s\" (user mapping oid %u, userid %u)",
-			 entry->conn, server->servername, user->umid, user->userid);
+			elog(DEBUG3, "new postgres_fdw connection %p for server \"%s\" (user mapping oid %u, userid %u)",
+				entry->conn, server->servername, user->umid, user->userid);
+		}
+
+		if (retrycount == 0)
+			entry->conn->remote_retry_conn = CAN_RETRY_REMOTE_CONNECTION;
+		else
+			entry->conn->remote_retry_conn = REMOTE_CONNECTION_RETRY_INIT;
+		/*
+		* Start a new transaction or subtransaction if needed.
+		*/
+		begin_remote_xact(entry);
+
+		retrycount++;
+
+		if (entry->conn->remote_retry_conn == DO_RETRY_REMOTE_CONNECTION)
+		{
+			disconnect_pg_server(entry);
+			continue;
+		}
+		else
+		{
+			entry->conn->remote_retry_conn = REMOTE_CONNECTION_RETRY_INIT;
+			break;
+		}
 	}
-
-	/*
-	 * Start a new transaction or subtransaction if needed.
-	 */
-	begin_remote_xact(entry);
-
 	/* Remember if caller will prepare statements */
 	entry->have_prep_stmt |= will_prep_stmt;
 
@@ -458,6 +487,11 @@ do_sql_command(PGconn *conn, const char *sql)
 	if (!PQsendQuery(conn, sql))
 		pgfdw_report_error(ERROR, NULL, conn, false, sql);
 	res = pgfdw_get_result(conn, sql);
+
+	if (conn->remote_retry_conn == DO_RETRY_REMOTE_CONNECTION &&
+		res == NULL)
+		return;
+
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 		pgfdw_report_error(ERROR, res, conn, true, sql);
 	PQclear(res);
@@ -491,9 +525,15 @@ begin_remote_xact(ConnCacheEntry *entry)
 		else
 			sql = "START TRANSACTION ISOLATION LEVEL REPEATABLE READ";
 		entry->changing_xact_state = true;
+
 		do_sql_command(entry->conn, sql);
-		entry->xact_depth = 1;
+
 		entry->changing_xact_state = false;
+
+		if (entry->conn->remote_retry_conn == DO_RETRY_REMOTE_CONNECTION)
+			return;
+
+		entry->xact_depth = 1;
 	}
 
 	/*
@@ -618,7 +658,15 @@ pgfdw_get_result(PGconn *conn, const char *query)
 				if (wc & WL_SOCKET_READABLE)
 				{
 					if (!PQconsumeInput(conn))
+					{
+						if (conn->remote_retry_conn == CAN_RETRY_REMOTE_CONNECTION)
+						{
+							conn->remote_retry_conn = DO_RETRY_REMOTE_CONNECTION;
+							return NULL;
+						}
+
 						pgfdw_report_error(ERROR, NULL, conn, false, query);
+					}
 				}
 			}
 

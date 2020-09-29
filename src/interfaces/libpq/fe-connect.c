@@ -3927,6 +3927,7 @@ makeEmptyPGconn(void)
 	conn->rowBuf = (PGdataValue *) malloc(conn->rowBufLen * sizeof(PGdataValue));
 	initPQExpBuffer(&conn->errorMessage);
 	initPQExpBuffer(&conn->workBuffer);
+	conn->remote_retry_conn = 0;
 
 	if (conn->inBuffer == NULL ||
 		conn->outBuffer == NULL ||

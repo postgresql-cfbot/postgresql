@@ -149,3 +149,5 @@ int			VacuumCostBalance = 0;	/* working state for vacuum */
 bool		VacuumCostActive = false;
 
 double		vacuum_cleanup_index_scale_factor;
+
+int         multixact_local_cache_entries = 256;

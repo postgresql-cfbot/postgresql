@@ -946,7 +946,7 @@ SerialGetMinConflictCommitSeqNo(TransactionId xid)
 	 * but will return with that lock held, which must then be released.
 	 */
 	slotno = SimpleLruReadPage_ReadOnly(SerialSlruCtl,
-										SerialPage(xid), xid);
+										SerialPage(xid), xid, false);
 	val = SerialValue(slotno, xid);
 	LWLockRelease(SerialSLRULock);
 	return val;

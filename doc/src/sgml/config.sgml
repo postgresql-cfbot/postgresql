@@ -1823,6 +1823,22 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+    <varlistentry id="guc-multixact-local-cache-entries" xreflabel="multixact_local-cache-entries">
+      <term><varname>multixact_local_cache_entries</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>multixact_local_cache_entries</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the number cached MultiXact by backend. Any SLRU lookup is preceeded
+        by cache lookup. Higher numbers of cache size help to deduplicate lock sets, while
+        lower values make cache lookup faster.
+        It defaults to 256.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-max-stack-depth" xreflabel="max_stack_depth">
       <term><varname>max_stack_depth</varname> (<type>integer</type>)
       <indexterm>

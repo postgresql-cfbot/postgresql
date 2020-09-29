@@ -82,6 +82,7 @@
 #include "lib/ilist.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
+#include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "storage/lmgr.h"
 #include "storage/pmsignal.h"
@@ -233,6 +234,7 @@ typedef struct MultiXactStateData
 	/* support for members anti-wraparound measures */
 	MultiXactOffset offsetStopLimit;	/* known if oldestOffsetKnown */
 
+	ConditionVariable nextoff_cv;
 	/*
 	 * Per-backend data starts here.  We have two arrays stored in the area
 	 * immediately following the MultiXactStateData struct. Each is indexed by
@@ -873,6 +875,14 @@ RecordNewMultiXact(MultiXactId multi, MultiXactOffset offset,
 	/* Exchange our lock */
 	LWLockRelease(MultiXactOffsetSLRULock);
 
+	/*
+	 *  Let everybody know the offset of this mxid is recorded now. The waiters
+	 *  are waiting for the offset of the mxid next of the target to know the
+	 *  number of members of the target mxid, so we don't need to wait for
+	 *  members of this mxid are recorded.
+	 */
+	ConditionVariableBroadcast(&MultiXactState->nextoff_cv);
+
 	LWLockAcquire(MultiXactMemberSLRULock, LW_EXCLUSIVE);
 
 	prev_pageno = -1;
@@ -1321,12 +1331,12 @@ GetMultiXactIdMembers(MultiXactId multi, MultiXactMember **members,
 	 * time on every multixact creation.
 	 */
 retry:
-	LWLockAcquire(MultiXactOffsetSLRULock, LW_EXCLUSIVE);
 
 	pageno = MultiXactIdToOffsetPage(multi);
 	entryno = MultiXactIdToOffsetEntry(multi);
 
-	slotno = SimpleLruReadPage(MultiXactOffsetCtl, pageno, true, multi);
+	/* lock is acquired by SimpleLruReadPage_ReadOnly */
+	slotno = SimpleLruReadPage_ReadOnly(MultiXactOffsetCtl, pageno, multi, false);
 	offptr = (MultiXactOffset *) MultiXactOffsetCtl->shared->page_buffer[slotno];
 	offptr += entryno;
 	offset = *offptr;
@@ -1358,7 +1368,7 @@ retry:
 		entryno = MultiXactIdToOffsetEntry(tmpMXact);
 
 		if (pageno != prev_pageno)
-			slotno = SimpleLruReadPage(MultiXactOffsetCtl, pageno, true, tmpMXact);
+			slotno = SimpleLruReadPage_ReadOnly(MultiXactOffsetCtl, pageno, tmpMXact, true);
 
 		offptr = (MultiXactOffset *) MultiXactOffsetCtl->shared->page_buffer[slotno];
 		offptr += entryno;
@@ -1367,9 +1377,19 @@ retry:
 		if (nextMXOffset == 0)
 		{
 			/* Corner case 2: next multixact is still being filled in */
+
+			/*
+			 * The recorder of the next mxid is just before writing the offset.
+			 * Wait for the offset to be written.
+			 */
+			ConditionVariablePrepareToSleep(&MultiXactState->nextoff_cv);
+
 			LWLockRelease(MultiXactOffsetSLRULock);
 			CHECK_FOR_INTERRUPTS();
-			pg_usleep(1000L);
+
+			ConditionVariableSleep(&MultiXactState->nextoff_cv,
+								   WAIT_EVENT_WAIT_NEXT_MXMEMBERS);
+			ConditionVariableCancelSleep();
 			goto retry;
 		}
 
@@ -1382,7 +1402,7 @@ retry:
 	*members = ptr;
 
 	/* Now get the members themselves. */
-	LWLockAcquire(MultiXactMemberSLRULock, LW_EXCLUSIVE);
+	LWLockAcquire(MultiXactMemberSLRULock, LW_SHARED);
 
 	truelength = 0;
 	prev_pageno = -1;
@@ -1399,7 +1419,7 @@ retry:
 
 		if (pageno != prev_pageno)
 		{
-			slotno = SimpleLruReadPage(MultiXactMemberCtl, pageno, true, multi);
+			slotno = SimpleLruReadPage_ReadOnly(MultiXactMemberCtl, pageno, multi, true);
 			prev_pageno = pageno;
 		}
 
@@ -1589,7 +1609,7 @@ mXactCachePut(MultiXactId multi, int nmembers, MultiXactMember *members)
 	qsort(entry->members, nmembers, sizeof(MultiXactMember), mxactMemberComparator);
 
 	dlist_push_head(&MXactCache, &entry->node);
-	if (MXactCacheMembers++ >= MAX_CACHE_ENTRIES)
+	if (MXactCacheMembers++ >= multixact_local_cache_entries)
 	{
 		dlist_node *node;
 		mXactCacheEnt *entry;
@@ -1849,6 +1869,7 @@ MultiXactShmemInit(void)
 
 		/* Make sure we zero out the per-backend state */
 		MemSet(MultiXactState, 0, SHARED_MULTIXACT_STATE_SIZE);
+		ConditionVariableInit(&MultiXactState->nextoff_cv);
 	}
 	else
 		Assert(found);
@@ -2730,7 +2751,7 @@ find_multixact_start(MultiXactId multi, MultiXactOffset *result)
 		return false;
 
 	/* lock is acquired by SimpleLruReadPage_ReadOnly */
-	slotno = SimpleLruReadPage_ReadOnly(MultiXactOffsetCtl, pageno, multi);
+	slotno = SimpleLruReadPage_ReadOnly(MultiXactOffsetCtl, pageno, multi, false);
 	offptr = (MultiXactOffset *) MultiXactOffsetCtl->shared->page_buffer[slotno];
 	offptr += entryno;
 	offset = *offptr;

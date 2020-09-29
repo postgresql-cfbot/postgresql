@@ -1895,6 +1895,20 @@ testdb=&gt;
         </para>
         </listitem>
       </varlistentry>
+      
+      <varlistentry>
+        <term><literal>\dX [ <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>
+        <listitem>
+        <para>
+        Lists extended statistics.
+        If <replaceable class="parameter">pattern</replaceable>
+        is specified, only those extended statistics whose names match the pattern
+        are listed.
+        If <literal>+</literal> is appended to the command name, each extended statistics
+        is listed with its size.
+        </para>
+        </listitem>
+      </varlistentry>
 
       <varlistentry>
         <term><literal>\dy[+] [ <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>

@@ -4398,6 +4398,98 @@ listEventTriggers(const char *pattern, bool verbose)
 }
 
 /*
+ * \dX
+ *
+ * Briefly describes extended statistics.
+ */
+bool
+listExtendedStats(const char *pattern, bool verbose)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+
+	if (pset.sversion < 100000)
+	{
+		char		sverbuf[32];
+
+		pg_log_error("The server (version %s) does not support extended statistics.",
+					 formatPGVersionNumber(pset.sversion, false,
+										   sverbuf, sizeof(sverbuf)));
+		return true;
+	}
+
+	initPQExpBuffer(&buf);
+	printfPQExpBuffer(&buf,
+					  "SELECT \n"
+					  "stxnamespace::pg_catalog.regnamespace AS \"%s\", \n"
+					  "stxname AS \"%s\", \n"
+					  "pg_catalog.format('%%s FROM %%s', \n"
+					  "  (SELECT pg_catalog.string_agg(pg_catalog.quote_ident(attname),', ') \n"
+					  "   FROM pg_catalog.unnest(stxkeys) s(attnum) \n"
+					  "   JOIN pg_catalog.pg_attribute a \n"
+					  "   ON (stxrelid = a.attrelid \n"
+					  "   AND a.attnum = s.attnum \n"
+					  "   AND NOT attisdropped)), \n"
+					  "  stxrelid::regclass) AS \"%s\", \n"
+					  "CASE WHEN esd.stxdndistinct IS NOT NULL THEN 'built' \n"
+					  "     WHEN 'd' = any(stxkind) THEN 'not built' \n"
+					  "END AS \"%s\", \n"
+					  "CASE WHEN esd.stxddependencies IS NOT NULL THEN 'built' \n"
+					  "     WHEN 'f' = any(stxkind) THEN 'not built' \n"
+					  "END AS \"%s\", \n"
+					  "CASE WHEN esd.stxdmcv IS NOT NULL THEN 'built' \n"
+					  "     WHEN 'm' = any(stxkind) THEN 'not built' \n"
+					  "END AS \"%s\" \n",
+					  gettext_noop("Schema"),
+					  gettext_noop("Name"),
+					  gettext_noop("Definition"),
+					  gettext_noop("N_distinct"),
+					  gettext_noop("Dependencies"),
+					  gettext_noop("Mcv"));
+
+	if (verbose)
+	{
+		appendPQExpBuffer(&buf,
+						  ",\n pg_catalog.length(stxdndistinct) AS \"%s\", \n"
+						  "pg_catalog.length(stxddependencies) AS \"%s\", \n"
+						  "pg_catalog.length(stxdmcv) AS \"%s\" \n",
+						  gettext_noop("N_size"),
+						  gettext_noop("D_size"),
+						  gettext_noop("M_size"));
+
+	}
+
+	appendPQExpBufferStr(&buf,
+						 "FROM pg_catalog.pg_statistic_ext es \n"
+						 "INNER JOIN pg_catalog.pg_class c \n"
+						 "ON stxrelid = c.oid \n"
+						 "LEFT JOIN pg_catalog.pg_statistic_ext_data esd \n"
+						 "ON es.oid = esd.stxoid \n");
+
+	processSQLNamePattern(pset.db, &buf, pattern, false,
+						  false, NULL,
+						  "stxname", NULL,
+						  NULL);
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1, 2;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("List of extended statistics");
+	myopt.translate_header = true;
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+/*
  * \dC
  *
  * Describes casts.

@@ -1225,3 +1225,26 @@ drop role regress_partitioning_role;
 \dAo * pg_catalog.jsonb_path_ops
 \dAp+ btree float_ops
 \dAp * pg_catalog.uuid_ops
+
+-- check printing info about extended statistics
+create table t1 (a int, b int);
+create statistics stts_1 (dependencies) on a, b from t1;
+create statistics stts_2 (dependencies, ndistinct) on a, b from t1;
+create statistics stts_3 (dependencies, ndistinct, mcv) on a, b from t1;
+
+create table t2 (a int, b int, c int);
+create statistics stts_4 on b, c from t2;
+
+create table hoge (col1 int, col2 int, col3 int);
+create statistics stts_hoge on col1, col2, col3 from hoge;
+
+insert into t1 select i,i from generate_series(1,100) i;
+analyze t1;
+
+\dX
+\dX stts_?
+\dX *hoge
+\dX+
+\dX+ stts_?
+\dX+ *hoge
+drop table t1, t2, hoge;

@@ -5072,3 +5072,71 @@ List of access methods
  hash  | uuid_ops        | uuid                 | uuid                  |      2 | uuid_hash_extended
 (5 rows)
 
+-- check printing info about extended statistics
+create table t1 (a int, b int);
+create statistics stts_1 (dependencies) on a, b from t1;
+create statistics stts_2 (dependencies, ndistinct) on a, b from t1;
+create statistics stts_3 (dependencies, ndistinct, mcv) on a, b from t1;
+create table t2 (a int, b int, c int);
+create statistics stts_4 on b, c from t2;
+create table hoge (col1 int, col2 int, col3 int);
+create statistics stts_hoge on col1, col2, col3 from hoge;
+insert into t1 select i,i from generate_series(1,100) i;
+analyze t1;
+\dX
+                               List of extended statistics
+ Schema |   Name    |         Definition         | N_distinct | Dependencies |    Mcv    
+--------+-----------+----------------------------+------------+--------------+-----------
+ public | stts_1    | a, b FROM t1               |            | built        | 
+ public | stts_2    | a, b FROM t1               | built      | built        | 
+ public | stts_3    | a, b FROM t1               | built      | built        | built
+ public | stts_4    | b, c FROM t2               | not built  | not built    | not built
+ public | stts_hoge | col1, col2, col3 FROM hoge | not built  | not built    | not built
+(5 rows)
+
+\dX stts_?
+                      List of extended statistics
+ Schema |  Name  |  Definition  | N_distinct | Dependencies |    Mcv    
+--------+--------+--------------+------------+--------------+-----------
+ public | stts_1 | a, b FROM t1 |            | built        | 
+ public | stts_2 | a, b FROM t1 | built      | built        | 
+ public | stts_3 | a, b FROM t1 | built      | built        | built
+ public | stts_4 | b, c FROM t2 | not built  | not built    | not built
+(4 rows)
+
+\dX *hoge
+                               List of extended statistics
+ Schema |   Name    |         Definition         | N_distinct | Dependencies |    Mcv    
+--------+-----------+----------------------------+------------+--------------+-----------
+ public | stts_hoge | col1, col2, col3 FROM hoge | not built  | not built    | not built
+(1 row)
+
+\dX+
+                                            List of extended statistics
+ Schema |   Name    |         Definition         | N_distinct | Dependencies |    Mcv    | N_size | D_size | M_size 
+--------+-----------+----------------------------+------------+--------------+-----------+--------+--------+--------
+ public | stts_1    | a, b FROM t1               |            | built        |           |        |     40 |       
+ public | stts_2    | a, b FROM t1               | built      | built        |           |     13 |     40 |       
+ public | stts_3    | a, b FROM t1               | built      | built        | built     |     13 |     40 |   6126
+ public | stts_4    | b, c FROM t2               | not built  | not built    | not built |        |        |       
+ public | stts_hoge | col1, col2, col3 FROM hoge | not built  | not built    | not built |        |        |       
+(5 rows)
+
+\dX+ stts_?
+                                    List of extended statistics
+ Schema |  Name  |  Definition  | N_distinct | Dependencies |    Mcv    | N_size | D_size | M_size 
+--------+--------+--------------+------------+--------------+-----------+--------+--------+--------
+ public | stts_1 | a, b FROM t1 |            | built        |           |        |     40 |       
+ public | stts_2 | a, b FROM t1 | built      | built        |           |     13 |     40 |       
+ public | stts_3 | a, b FROM t1 | built      | built        | built     |     13 |     40 |   6126
+ public | stts_4 | b, c FROM t2 | not built  | not built    | not built |        |        |       
+(4 rows)
+
+\dX+ *hoge
+                                            List of extended statistics
+ Schema |   Name    |         Definition         | N_distinct | Dependencies |    Mcv    | N_size | D_size | M_size 
+--------+-----------+----------------------------+------------+--------------+-----------+--------+--------+--------
+ public | stts_hoge | col1, col2, col3 FROM hoge | not built  | not built    | not built |        |        |       
+(1 row)
+
+drop table t1, t2, hoge;

@@ -152,13 +152,14 @@ CREATE [ CONSTRAINT ] TRIGGER <replaceable class="parameter">name</replaceable> 
   </informaltable>
 
   <para>
-   Also, a trigger definition can specify a Boolean <literal>WHEN</literal>
-   condition, which will be tested to see whether the trigger should
+   A trigger definition can specify a Boolean <literal>WHEN</literal>
+   condition which will be tested to see whether the trigger should
    be fired.  In row-level triggers the <literal>WHEN</literal> condition can
-   examine the old and/or new values of columns of the row.  Statement-level
-   triggers can also have <literal>WHEN</literal> conditions, although the feature
-   is not so useful for them since the condition cannot refer to any values
-   in the table.
+   examine the old and/or new values of the columns of each row  which the
+   statement affects.  Statement-level triggers can also have
+   <literal>WHEN</literal> conditions, and are able to examine old and/or new
+   transition relations, that comprise of all rows either deleted or inserted
+   respectively by the triggering statement.
   </para>
 
   <para>
@@ -367,23 +368,41 @@ UPDATE OF <replaceable>column_name1</replaceable> [, <replaceable>column_name2</
       will actually be executed.  If <literal>WHEN</literal> is specified, the
       function will only be called if the <replaceable
       class="parameter">condition</replaceable> returns <literal>true</literal>.
-      In <literal>FOR EACH ROW</literal> triggers, the <literal>WHEN</literal>
+     </para>
+
+     <para>
+      In <literal>FOR EACH ROW</literal> triggers the <literal>WHEN</literal>
       condition can refer to columns of the old and/or new row values
       by writing <literal>OLD.<replaceable
       class="parameter">column_name</replaceable></literal> or
       <literal>NEW.<replaceable
       class="parameter">column_name</replaceable></literal> respectively.
-      Of course, <literal>INSERT</literal> triggers cannot refer to <literal>OLD</literal>
-      and <literal>DELETE</literal> triggers cannot refer to <literal>NEW</literal>.
+      The <literal>WHEN</literal> expression of a <literal>FOR EACH ROW</literal>
+      trigger cannot contain a subquery.
+     </para>
+
+     <para>
+      In <literal>FOR EACH STATEMENT</literal> triggers the
+      <literal>WHEN</literal> condition can refer to the transition relations
+      <literal>OLD</literal> and <literal>NEW</literal>, and the relation that the
+      trigger is for. No other relations can be referenced. As <literal>OLD</literal>
+      and <literal>NEW</literal> are relations rather than row values, a
+      <replaceable class="parameter">condition</replaceable> will typically comprise of
+      subquery expressions defined over those relations. Refer to
+      <xref linkend="functions-subquery"/> for subquery expression examples.
+     </para>
+
+     <para>
+       In both <literal>FOR EACH ROW</literal> and <literal>FOR EACH STATEMENT</literal>
+       triggers, <literal>INSERT</literal> triggers cannot refer to <literal>OLD</literal>
+       row values or transition tables, and <literal>DELETE</literal> triggers cannot refer
+       to <literal>NEW</literal> row values or transition tables. However,
+       </literal>UPDATE</literal> triggers are able to refer to both </literal>OLD</literal>
+       and <literal>NEW</literal>
      </para>
 
      <para><literal>INSTEAD OF</literal> triggers do not support <literal>WHEN</literal>
       conditions.
-     </para>
-
-     <para>
-      Currently, <literal>WHEN</literal> expressions cannot contain
-      subqueries.
      </para>
 
      <para>

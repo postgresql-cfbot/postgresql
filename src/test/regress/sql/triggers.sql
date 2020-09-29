@@ -342,6 +342,69 @@ create trigger oid_unchanged_trig after update on table_with_oids
 update table_with_oids set a = a + 1;
 drop table table_with_oids;
 
+-- Test FOR EACH STATEMENT triggers with queries in their WHEN condition
+--
+
+-- disable other triggers
+ALTER TABLE main_table DISABLE TRIGGER before_ins_stmt_trig;
+ALTER TABLE main_table DISABLE TRIGGER after_ins_stmt_trig;
+ALTER TABLE main_table DISABLE TRIGGER after_upd_row_trig;
+ALTER TABLE main_table DISABLE TRIGGER after_upd_stmt_trig;
+
+SELECT a, b FROM main_table ORDER BY a, b;
+
+-- legal WHEN expressions
+CREATE TRIGGER after_insert AFTER INSERT ON main_table
+  REFERENCING NEW TABLE AS NEW FOR EACH STATEMENT
+  WHEN (500 <= ANY(SELECT b FROM NEW))
+  EXECUTE PROCEDURE trigger_func('after_insert');
+INSERT INTO main_table (a, b) VALUES -- after_insert won't fire
+  (101, 498),
+  (102, 499);
+INSERT INTO main_table (a, b) VALUES -- after_insert will fire
+  (103, 501),
+  (104, -99);
+DROP TRIGGER after_insert ON main_table;
+
+CREATE TRIGGER after_delete AFTER DELETE ON main_table
+  REFERENCING OLD TABLE AS OLD FOR EACH STATEMENT
+  WHEN (0 >= ANY(SELECT b FROM OLD))
+  EXECUTE PROCEDURE trigger_func('after_delete');
+DELETE FROM main_table WHERE a IN (101, 102); -- after delete won't fire
+DELETE FROM main_table WHERE a IN (103, 104); -- after delete will fire
+DROP TRIGGER after_delete ON main_table;
+
+CREATE TRIGGER after_update AFTER UPDATE ON main_table
+  REFERENCING OLD TABLE AS OLD NEW TABLE AS NEW FOR EACH STATEMENT
+  WHEN (EXISTS (SELECT 1 FROM new JOIN old ON (new.a = old.a) WHERE new.a < 50 AND new.b < old.b))
+  EXECUTE PROCEDURE trigger_func('after_update');
+UPDATE main_table SET b = (b + 1); -- after_update won't fire
+UPDATE main_table SET b = (b - 1); -- after_update will fire
+DROP TRIGGER after_update ON main_table;
+
+-- illegal WHEN expressions
+CREATE TABLE other_table (n INTEGER NOT NULL PRIMARY KEY);
+CREATE FUNCTION some_function() RETURNS TABLE (n INTEGER) LANGUAGE SQL AS $$ SELECT n FROM other_table $$;
+CREATE TRIGGER error_due_to_other_table AFTER INSERT ON main_table
+  REFERENCING NEW TABLE AS NEW FOR EACH STATEMENT
+  WHEN (1 = ANY (SELECT a FROM NEW INTERSECT SELECT n FROM other_table))
+  EXECUTE PROCEDURE trigger_func('error_due_to_other_table');
+CREATE TRIGGER error_due_to_other_table AFTER INSERT ON main_table
+  REFERENCING NEW TABLE AS NEW FOR EACH STATEMENT
+  WHEN (EXISTS (SELECT 1 FROM NEW JOIN some_function() AS sf ON (new.a = sf.n)))
+  EXECUTE PROCEDURE trigger_func('error_due_to_some_function');
+DROP FUNCTION some_function();
+DROP TABLE other_table;
+
+-- re-enable other triggers
+ALTER TABLE main_table ENABLE TRIGGER after_upd_stmt_trig;
+ALTER TABLE main_table ENABLE TRIGGER after_upd_row_trig;
+ALTER TABLE main_table ENABLE TRIGGER after_ins_stmt_trig;
+ALTER TABLE main_table ENABLE TRIGGER before_ins_stmt_trig;
+
+--
+-- Done testing FOR EACH STATEMENT with queries in the WHEN condition
+
 -- Test column-level triggers
 DROP TRIGGER after_upd_row_trig ON main_table;
 

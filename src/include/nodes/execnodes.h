@@ -427,7 +427,7 @@ typedef struct ResultRelInfo
 	/* cached lookup info for trigger functions */
 	FmgrInfo   *ri_TrigFunctions;
 
-	/* array of trigger WHEN expr states */
+	/* array of trigger WHEN expr states for FOR EACH ROW triggers */
 	ExprState **ri_TrigWhenExprs;
 
 	/* optional runtime measurements for triggers */

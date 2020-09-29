@@ -997,53 +997,15 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 	if (!isnull)
 	{
 		Node	   *qual;
-		char		relkind;
 		deparse_context context;
-		deparse_namespace dpns;
-		RangeTblEntry *oldrte;
-		RangeTblEntry *newrte;
 
 		appendStringInfoString(&buf, "WHEN (");
 
 		qual = stringToNode(TextDatumGetCString(value));
 
-		relkind = get_rel_relkind(trigrec->tgrelid);
-
-		/* Build minimal OLD and NEW RTEs for the rel */
-		oldrte = makeNode(RangeTblEntry);
-		oldrte->rtekind = RTE_RELATION;
-		oldrte->relid = trigrec->tgrelid;
-		oldrte->relkind = relkind;
-		oldrte->rellockmode = AccessShareLock;
-		oldrte->alias = makeAlias("old", NIL);
-		oldrte->eref = oldrte->alias;
-		oldrte->lateral = false;
-		oldrte->inh = false;
-		oldrte->inFromCl = true;
-
-		newrte = makeNode(RangeTblEntry);
-		newrte->rtekind = RTE_RELATION;
-		newrte->relid = trigrec->tgrelid;
-		newrte->relkind = relkind;
-		newrte->rellockmode = AccessShareLock;
-		newrte->alias = makeAlias("new", NIL);
-		newrte->eref = newrte->alias;
-		newrte->lateral = false;
-		newrte->inh = false;
-		newrte->inFromCl = true;
-
-		/* Build two-element rtable */
-		memset(&dpns, 0, sizeof(dpns));
-		dpns.rtable = list_make2(oldrte, newrte);
-		dpns.subplans = NIL;
-		dpns.ctes = NIL;
-		dpns.appendrels = NULL;
-		set_rtable_names(&dpns, NIL, NULL);
-		set_simple_column_names(&dpns);
-
-		/* Set up context with one-deep namespace stack */
+		/* Set up context */
 		context.buf = &buf;
-		context.namespaces = list_make1(&dpns);
+		context.namespaces = NIL;
 		context.windowClause = NIL;
 		context.windowTList = NIL;
 		context.varprefix = true;
@@ -1052,6 +1014,54 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 		context.indentLevel = PRETTYINDENT_STD;
 		context.special_exprkind = EXPR_KIND_NONE;
 		context.appendparents = NULL;
+
+		/* For ROW triggers we need to build the OLD and NEW RTEs for the rel.
+		 * This isn't necessary for STATEMENT triggers as their WHEN expression
+		 * will already have a range table defined in the EXISTS expressions. */
+		if (TRIGGER_FOR_ROW(trigrec->tgtype))
+		{
+			char				relkind;
+			deparse_namespace	dpns;
+			RangeTblEntry		*oldrte;
+			RangeTblEntry		*newrte;
+
+			relkind = get_rel_relkind(trigrec->tgrelid);
+
+			/* Build minimal OLD and NEW RTEs for the rel */
+			oldrte = makeNode(RangeTblEntry);
+			oldrte->rtekind = RTE_RELATION;
+			oldrte->relid = trigrec->tgrelid;
+			oldrte->relkind = relkind;
+			oldrte->rellockmode = AccessShareLock;
+			oldrte->alias = makeAlias("old", NIL);
+			oldrte->eref = oldrte->alias;
+			oldrte->lateral = false;
+			oldrte->inh = false;
+			oldrte->inFromCl = true;
+
+			newrte = makeNode(RangeTblEntry);
+			newrte->rtekind = RTE_RELATION;
+			newrte->relid = trigrec->tgrelid;
+			newrte->relkind = relkind;
+			newrte->rellockmode = AccessShareLock;
+			newrte->alias = makeAlias("new", NIL);
+			newrte->eref = newrte->alias;
+			newrte->lateral = false;
+			newrte->inh = false;
+			newrte->inFromCl = true;
+
+			/* Build two-element rtable */
+			memset(&dpns, 0, sizeof(dpns));
+			dpns.rtable = list_make2(oldrte, newrte);
+			dpns.subplans = NIL;
+			dpns.ctes = NIL;
+			dpns.appendrels = NULL;
+			set_rtable_names(&dpns, NIL, NULL);
+			set_simple_column_names(&dpns);
+
+			/* Make the deparse context aware */
+			context.namespaces = list_make1(&dpns);
+		}
 
 		get_rule_expr(qual, &context, false);
 
@@ -10209,6 +10219,10 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 				break;
 			case RTE_CTE:
 				appendStringInfoString(buf, quote_identifier(rte->ctename));
+				break;
+			case RTE_NAMEDTUPLESTORE:
+				/* Ephemeral RTE */
+				appendStringInfo(buf, "%s", rte->enrname);
 				break;
 			default:
 				elog(ERROR, "unrecognized RTE kind: %d", (int) rte->rtekind);

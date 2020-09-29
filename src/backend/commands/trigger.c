@@ -35,12 +35,15 @@
 #include "commands/defrem.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
+#include "executor/tstoreReceiver.h"
 #include "miscadmin.h"
 #include "nodes/bitmapset.h"
+#include "nodes/nodeFuncs.h"
 #include "nodes/makefuncs.h"
 #include "optimizer/optimizer.h"
 #include "parser/parse_clause.h"
 #include "parser/parse_collate.h"
+#include "parser/parse_expr.h"
 #include "parser/parse_func.h"
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
@@ -58,6 +61,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/tuplestore.h"
@@ -68,6 +72,17 @@ int			SessionReplicationRole = SESSION_REPLICATION_ROLE_ORIGIN;
 
 /* How many levels deep into trigger execution are we? */
 static int	MyTriggerDepth = 0;
+
+/* Context for walking the WHEN expression when validating it */
+typedef struct CheckWhenExprWalkerContext
+{
+	ParseState *pstate;
+	Relation	rel;
+	int16		tgtype;
+	char	   *oldtablename;
+	char	   *newtablename;
+	List	   *rtable;
+}			CheckWhenExprWalkerContext;
 
 /*
  * Note that similar macros also exist in executor/execMain.c.  There does not
@@ -91,7 +106,8 @@ static bool GetTupleForTrigger(EState *estate,
 static bool TriggerEnabled(EState *estate, ResultRelInfo *relinfo,
 						   Trigger *trigger, TriggerEvent event,
 						   Bitmapset *modifiedCols,
-						   TupleTableSlot *oldslot, TupleTableSlot *newslot);
+						   TupleTableSlot *oldslot, TupleTableSlot *newslot,
+						   Tuplestorestate *oldstore, Tuplestorestate *newstore);
 static HeapTuple ExecCallTriggerFunc(TriggerData *trigdata,
 									 int tgindx,
 									 FmgrInfo *finfo,
@@ -104,6 +120,13 @@ static void AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 								  TransitionCaptureState *transition_capture);
 static void AfterTriggerEnlargeQueryState(void);
 static bool before_stmt_triggers_fired(Oid relid, CmdType cmdType);
+static void check_when_expr(Node *clause, ParseState *pstate,
+							Relation rel, int16 tgtype,
+							char *oldtablename, char *newtablename);
+static bool check_when_expr_walker(Node *node, CheckWhenExprWalkerContext * ctx);
+static void make_and_register_ENR(QueryEnvironment *env, char *name,
+								  Oid relid, Tuplestorestate *data);
+static void unregister_and_free_ENR(QueryEnvironment *env, char *name);
 
 
 /*
@@ -548,29 +571,53 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	if (!whenClause && stmt->whenClause)
 	{
 		ParseState *pstate;
-		ParseNamespaceItem *nsitem;
-		List	   *varList;
-		ListCell   *lc;
+		Oid			relid;
 
 		/* Set up a pstate to parse with */
 		pstate = make_parsestate(NULL);
 		pstate->p_sourcetext = queryString;
+		relid = rel->rd_rel->oid;
 
-		/*
-		 * Set up nsitems for OLD and NEW references.
-		 *
-		 * 'OLD' must always have varno equal to 1 and 'NEW' equal to 2.
-		 */
-		nsitem = addRangeTableEntryForRelation(pstate, rel,
-											   AccessShareLock,
-											   makeAlias("old", NIL),
-											   false, false);
-		addNSItemToQuery(pstate, nsitem, false, true, true);
-		nsitem = addRangeTableEntryForRelation(pstate, rel,
-											   AccessShareLock,
-											   makeAlias("new", NIL),
-											   false, false);
-		addNSItemToQuery(pstate, nsitem, false, true, true);
+		if (TRIGGER_FOR_ROW(tgtype))
+		{
+			/*
+			 * Set up nsitems for OLD/NEW references in a FOR EACH ROW
+			 * trigger.
+			 *
+			 * 'OLD' must always have varno equal to 1 and 'NEW' equal to 2.
+			 */
+			ParseNamespaceItem *nsitem;
+
+			nsitem = addRangeTableEntryForRelation(pstate, rel,
+												   AccessShareLock,
+												   makeAlias("old", NIL),
+												   false, false);
+			addNSItemToQuery(pstate, nsitem, false, true, true);
+			nsitem = addRangeTableEntryForRelation(pstate, rel,
+												   AccessShareLock,
+												   makeAlias("new", NIL),
+												   false, false);
+			addNSItemToQuery(pstate, nsitem, false, true, true);
+
+		}
+		else
+		{
+			/*
+			 * Set up QueryEnvironment for OLD/NEW tables in a FOR EACH
+			 * STATEMENT trigger.
+			 *
+			 * This allows subqueries to resolve column names etc.
+			 */
+			pstate->p_queryEnv = create_queryEnv();
+
+			if (newtablename != NULL)
+				make_and_register_ENR(pstate->p_queryEnv, newtablename,
+									  relid, NULL);
+
+			if (oldtablename != NULL)
+				make_and_register_ENR(pstate->p_queryEnv, oldtablename,
+									  relid, NULL);
+		}
 
 		/* Transform expression.  Copy to be sure we don't modify original */
 		whenClause = transformWhereClause(pstate,
@@ -581,78 +628,32 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 		assign_expr_collations(pstate, whenClause);
 
 		/*
-		 * Check for disallowed references to OLD/NEW.
+		 * Check for disallowed references to OLD/NEW or other relations.
 		 *
-		 * NB: pull_var_clause is okay here only because we don't allow
-		 * subselects in WHEN clauses; it would fail to examine the contents
-		 * of subselects.
+		 * If we are a FOR EACH ROW trigger then the use of OLD/NEW is as a
+		 * row variable. If we are a FOR EACH STATEMENT trigger then OLD/NEW
+		 * are tables. Any expressions in WHEN should be written accordingly.
 		 */
-		varList = pull_var_clause(whenClause, 0);
-		foreach(lc, varList)
-		{
-			Var		   *var = (Var *) lfirst(lc);
+		check_when_expr(whenClause, pstate, rel, tgtype,
+						oldtablename, newtablename);
 
-			switch (var->varno)
-			{
-				case PRS2_OLD_VARNO:
-					if (!TRIGGER_FOR_ROW(tgtype))
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-								 errmsg("statement trigger's WHEN condition cannot reference column values"),
-								 parser_errposition(pstate, var->location)));
-					if (TRIGGER_FOR_INSERT(tgtype))
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-								 errmsg("INSERT trigger's WHEN condition cannot reference OLD values"),
-								 parser_errposition(pstate, var->location)));
-					/* system columns are okay here */
-					break;
-				case PRS2_NEW_VARNO:
-					if (!TRIGGER_FOR_ROW(tgtype))
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-								 errmsg("statement trigger's WHEN condition cannot reference column values"),
-								 parser_errposition(pstate, var->location)));
-					if (TRIGGER_FOR_DELETE(tgtype))
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-								 errmsg("DELETE trigger's WHEN condition cannot reference NEW values"),
-								 parser_errposition(pstate, var->location)));
-					if (var->varattno < 0 && TRIGGER_FOR_BEFORE(tgtype))
-						ereport(ERROR,
-								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								 errmsg("BEFORE trigger's WHEN condition cannot reference NEW system columns"),
-								 parser_errposition(pstate, var->location)));
-					if (TRIGGER_FOR_BEFORE(tgtype) &&
-						var->varattno == 0 &&
-						RelationGetDescr(rel)->constr &&
-						RelationGetDescr(rel)->constr->has_generated_stored)
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-								 errmsg("BEFORE trigger's WHEN condition cannot reference NEW generated columns"),
-								 errdetail("A whole-row reference is used and the table contains generated columns."),
-								 parser_errposition(pstate, var->location)));
-					if (TRIGGER_FOR_BEFORE(tgtype) &&
-						var->varattno > 0 &&
-						TupleDescAttr(RelationGetDescr(rel), var->varattno - 1)->attgenerated)
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-								 errmsg("BEFORE trigger's WHEN condition cannot reference NEW generated columns"),
-								 errdetail("Column \"%s\" is a generated column.",
-										   NameStr(TupleDescAttr(RelationGetDescr(rel), var->varattno - 1)->attname)),
-								 parser_errposition(pstate, var->location)));
-					break;
-				default:
-					/* can't happen without add_missing_from, so just elog */
-					elog(ERROR, "trigger WHEN condition cannot contain references to other relations");
-					break;
-			}
-		}
-
-		/* we'll need the rtable for recordDependencyOnExpr */
+		/*
+		 * We'll need the rtable for recordDependencyOnExpr for FOR EACH ROW
+		 * triggers.
+		 */
 		whenRtable = pstate->p_rtable;
 
 		qual = nodeToString(whenClause);
+
+		/* Free any ephemeral relations */
+		if (!TRIGGER_FOR_ROW(tgtype))
+		{
+			if (newtablename != NULL)
+				unregister_and_free_ENR(pstate->p_queryEnv, newtablename);
+
+			if (oldtablename != NULL)
+				unregister_and_free_ENR(pstate->p_queryEnv, oldtablename);
+		}
 
 		free_parsestate(pstate);
 	}
@@ -1042,8 +1043,32 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	 * expression (eg, functions, as well as any columns used).
 	 */
 	if (whenRtable != NIL)
-		recordDependencyOnExpr(&myself, whenClause, whenRtable,
-							   DEPENDENCY_NORMAL);
+	{
+		if (TRIGGER_FOR_ROW(tgtype))
+			recordDependencyOnExpr(&myself, whenClause, whenRtable,
+								   DEPENDENCY_NORMAL);
+		else
+		{
+			/*
+			 * recordDependencyOnExpr expects to get a Query rather than a
+			 * SubLink. If we were to just pass it the Boolean expression then
+			 * it won't recurse.
+			 */
+			Query	   *whenQuery;
+
+			whenQuery = makeNode(Query);
+			whenQuery->commandType = CMD_SELECT;
+			whenQuery->querySource = QSRC_ORIGINAL;
+			whenQuery->hasSubLinks = true;
+			whenQuery->jointree = makeFromExpr(NIL, NULL);
+			whenQuery->targetList = list_make1(makeTargetEntry((Expr *) whenClause, 1, "WHEN", false));
+
+			recordDependencyOnExpr(&myself, (Node *) whenQuery, NIL,
+								   DEPENDENCY_NORMAL);
+
+			pfree(whenQuery);
+		}
+	}
 
 	/* Post creation hook for new trigger */
 	InvokeObjectPostCreateHookArg(TriggerRelationId, trigoid, 0,
@@ -2160,7 +2185,7 @@ ExecBSInsertTriggers(EState *estate, ResultRelInfo *relinfo)
 								  TRIGGER_TYPE_INSERT))
 			continue;
 		if (!TriggerEnabled(estate, relinfo, trigger, LocTriggerData.tg_event,
-							NULL, NULL, NULL))
+							NULL, NULL, NULL, NULL, NULL))
 			continue;
 
 		LocTriggerData.tg_trigger = trigger;
@@ -2214,7 +2239,7 @@ ExecBRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 								  TRIGGER_TYPE_INSERT))
 			continue;
 		if (!TriggerEnabled(estate, relinfo, trigger, LocTriggerData.tg_event,
-							NULL, NULL, slot))
+							NULL, NULL, slot, NULL, NULL))
 			continue;
 
 		if (!newtuple)
@@ -2270,10 +2295,11 @@ ExecARInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 					 TransitionCaptureState *transition_capture)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
+	int			event = TRIGGER_EVENT_INSERT | TRIGGER_EVENT_ROW | TRIGGER_EVENT_AFTER;
 
 	if ((trigdesc && trigdesc->trig_insert_after_row) ||
 		(transition_capture && transition_capture->tcs_insert_new_table))
-		AfterTriggerSaveEvent(estate, relinfo, TRIGGER_EVENT_INSERT,
+		AfterTriggerSaveEvent(estate, relinfo, event,
 							  true, NULL, slot,
 							  recheckIndexes, NULL,
 							  transition_capture);
@@ -2305,7 +2331,7 @@ ExecIRInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 								  TRIGGER_TYPE_INSERT))
 			continue;
 		if (!TriggerEnabled(estate, relinfo, trigger, LocTriggerData.tg_event,
-							NULL, NULL, slot))
+							NULL, NULL, slot, NULL, NULL))
 			continue;
 
 		if (!newtuple)
@@ -2374,7 +2400,7 @@ ExecBSDeleteTriggers(EState *estate, ResultRelInfo *relinfo)
 								  TRIGGER_TYPE_DELETE))
 			continue;
 		if (!TriggerEnabled(estate, relinfo, trigger, LocTriggerData.tg_event,
-							NULL, NULL, NULL))
+							NULL, NULL, NULL, NULL, NULL))
 			continue;
 
 		LocTriggerData.tg_trigger = trigger;
@@ -2469,7 +2495,7 @@ ExecBRDeleteTriggers(EState *estate, EPQState *epqstate,
 								  TRIGGER_TYPE_DELETE))
 			continue;
 		if (!TriggerEnabled(estate, relinfo, trigger, LocTriggerData.tg_event,
-							NULL, slot, NULL))
+							NULL, slot, NULL, NULL, NULL))
 			continue;
 
 		LocTriggerData.tg_trigslot = slot;
@@ -2502,6 +2528,7 @@ ExecARDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
 	TupleTableSlot *slot = ExecGetTriggerOldSlot(estate, relinfo);
+	int			event = TRIGGER_EVENT_DELETE | TRIGGER_EVENT_ROW | TRIGGER_EVENT_AFTER;
 
 	if ((trigdesc && trigdesc->trig_delete_after_row) ||
 		(transition_capture && transition_capture->tcs_delete_old_table))
@@ -2518,7 +2545,7 @@ ExecARDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 		else
 			ExecForceStoreHeapTuple(fdw_trigtuple, slot, false);
 
-		AfterTriggerSaveEvent(estate, relinfo, TRIGGER_EVENT_DELETE,
+		AfterTriggerSaveEvent(estate, relinfo, event,
 							  true, slot, NULL, NIL, NULL,
 							  transition_capture);
 	}
@@ -2552,7 +2579,7 @@ ExecIRDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 								  TRIGGER_TYPE_DELETE))
 			continue;
 		if (!TriggerEnabled(estate, relinfo, trigger, LocTriggerData.tg_event,
-							NULL, slot, NULL))
+							NULL, slot, NULL, NULL, NULL))
 			continue;
 
 		LocTriggerData.tg_trigslot = slot;
@@ -2609,7 +2636,7 @@ ExecBSUpdateTriggers(EState *estate, ResultRelInfo *relinfo)
 								  TRIGGER_TYPE_UPDATE))
 			continue;
 		if (!TriggerEnabled(estate, relinfo, trigger, LocTriggerData.tg_event,
-							updatedCols, NULL, NULL))
+							updatedCols, NULL, NULL, NULL, NULL))
 			continue;
 
 		LocTriggerData.tg_trigger = trigger;
@@ -2718,7 +2745,7 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 								  TRIGGER_TYPE_UPDATE))
 			continue;
 		if (!TriggerEnabled(estate, relinfo, trigger, LocTriggerData.tg_event,
-							updatedCols, oldslot, newslot))
+							updatedCols, oldslot, newslot, NULL, NULL))
 			continue;
 
 		if (!newtuple)
@@ -2789,6 +2816,7 @@ ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
 	TupleTableSlot *oldslot = ExecGetTriggerOldSlot(estate, relinfo);
+	int			event = TRIGGER_EVENT_UPDATE | TRIGGER_EVENT_ROW | TRIGGER_EVENT_AFTER;
 
 	ExecClearTuple(oldslot);
 
@@ -2814,7 +2842,7 @@ ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 		else if (fdw_trigtuple != NULL)
 			ExecForceStoreHeapTuple(fdw_trigtuple, oldslot, false);
 
-		AfterTriggerSaveEvent(estate, relinfo, TRIGGER_EVENT_UPDATE,
+		AfterTriggerSaveEvent(estate, relinfo, event,
 							  true, oldslot, newslot, recheckIndexes,
 							  GetAllUpdatedColumns(relinfo, estate),
 							  transition_capture);
@@ -2851,7 +2879,7 @@ ExecIRUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 								  TRIGGER_TYPE_UPDATE))
 			continue;
 		if (!TriggerEnabled(estate, relinfo, trigger, LocTriggerData.tg_event,
-							NULL, oldslot, newslot))
+							NULL, oldslot, newslot, NULL, NULL))
 			continue;
 
 		if (!newtuple)
@@ -2917,7 +2945,7 @@ ExecBSTruncateTriggers(EState *estate, ResultRelInfo *relinfo)
 								  TRIGGER_TYPE_TRUNCATE))
 			continue;
 		if (!TriggerEnabled(estate, relinfo, trigger, LocTriggerData.tg_event,
-							NULL, NULL, NULL))
+							NULL, NULL, NULL, NULL, NULL))
 			continue;
 
 		LocTriggerData.tg_trigger = trigger;
@@ -3065,7 +3093,8 @@ static bool
 TriggerEnabled(EState *estate, ResultRelInfo *relinfo,
 			   Trigger *trigger, TriggerEvent event,
 			   Bitmapset *modifiedCols,
-			   TupleTableSlot *oldslot, TupleTableSlot *newslot)
+			   TupleTableSlot *oldslot, TupleTableSlot *newslot,
+			   Tuplestorestate *oldstore, Tuplestorestate *newstore)
 {
 	/* Check replication-role-dependent enable state */
 	if (SessionReplicationRole == SESSION_REPLICATION_ROLE_REPLICA)
@@ -3104,8 +3133,10 @@ TriggerEnabled(EState *estate, ResultRelInfo *relinfo,
 			return false;
 	}
 
-	/* Check for WHEN clause */
-	if (trigger->tgqual)
+	/*
+	 * Check for WHEN clause in a FOR EACH ROW trigger.
+	 */
+	if (TRIGGER_FIRED_FOR_ROW(event) && trigger->tgqual)
 	{
 		ExprState **predicate;
 		ExprContext *econtext;
@@ -3154,6 +3185,109 @@ TriggerEnabled(EState *estate, ResultRelInfo *relinfo,
 		econtext->ecxt_innertuple = oldslot;
 		econtext->ecxt_outertuple = newslot;
 		if (!ExecQual(*predicate, econtext))
+			return false;
+	}
+
+	/*
+	 * Check for WHEN clause in a FOR EACH STATEMENT trigger.
+	 */
+	if (TRIGGER_FIRED_FOR_STATEMENT(event) && trigger->tgqual)
+	{
+		Node	   *qual;
+		char	   *qualstr;
+		Query	   *query;
+		PlannedStmt *stmt;
+		DestReceiver *dest;
+		Tuplestorestate *store;
+		QueryEnvironment *env;
+		QueryDesc  *querydesc;
+		TupleDesc	tupdesc;
+		TupleTableSlot *whenslot;
+		Oid			relid;
+		bool		when;
+		bool		isnull;
+
+		Assert((!TRIGGER_USES_TRANSITION_TABLE(trigger->tgoldtable) || oldstore) &&
+			   (!TRIGGER_USES_TRANSITION_TABLE(trigger->tgnewtable) || newstore));
+
+		qual = stringToNode(trigger->tgqual);
+
+		/*
+		 * Create a QueryEnvironment containing the OLD/NEW transition tables.
+		 */
+		env = create_queryEnv();
+		relid = relinfo->ri_RelationDesc->rd_id;
+
+		if (TRIGGER_USES_TRANSITION_TABLE(trigger->tgoldtable))
+			make_and_register_ENR(env, trigger->tgoldtable, relid, oldstore);
+
+		if (TRIGGER_USES_TRANSITION_TABLE(trigger->tgnewtable))
+			make_and_register_ENR(env, trigger->tgnewtable, relid, newstore);
+
+		/*
+		 * Create a statement to plan and execute to evaluate the WHEN
+		 * expression. This will be of the form `SELECT <when-expression>`.
+		 */
+		query = makeNode(Query);
+		query->commandType = CMD_SELECT;
+		query->querySource = QSRC_ORIGINAL;
+		query->hasSubLinks = true;
+		query->jointree = makeFromExpr(NIL, NULL);
+		query->targetList = list_make1(makeTargetEntry((Expr *) qual, 1, "WHEN", false));
+
+		/*
+		 * Plan the statement. No need to rewrite as it can only refer to the
+		 * transition tables OLD and NEW, and the relation which is being
+		 * triggered upon.
+		 */
+		stmt = pg_plan_query(query, trigger->tgqual, 0, NULL);
+		dest = CreateDestReceiver(DestTuplestore);
+		store = tuplestore_begin_heap(false, false, work_mem);
+		tupdesc = CreateTemplateTupleDesc(1);
+		whenslot = MakeSingleTupleTableSlot(tupdesc, &TTSOpsMinimalTuple);
+
+		/*
+		 * Deparse the qualifier expression so that the executor can emit a
+		 * sensible query string if we are being logged.
+		 */
+		qualstr = deparse_expression(qual, NIL, false, false);
+		SetTuplestoreDestReceiverParams(dest, store,
+										CurrentMemoryContext, false,
+										NULL, NULL);
+		querydesc = CreateQueryDesc(stmt, qualstr, GetActiveSnapshot(),
+									InvalidSnapshot, dest, NULL, env, 0);
+
+		/*
+		 * Execute the statement.
+		 */
+		ExecutorStart(querydesc, 0);
+		ExecutorRun(querydesc, ForwardScanDirection, 0L, true);
+		ExecutorFinish(querydesc);
+		ExecutorEnd(querydesc);
+
+		/*
+		 * Get the Boolean result. The expression should never return NULL.
+		 */
+		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "WHEN", BOOLOID, -1, 0);
+		tuplestore_gettupleslot(store, true, false, whenslot);
+		when = DatumGetBool(slot_getattr(whenslot, 1, &isnull));
+		tuplestore_end(store);
+		Assert(!isnull);
+
+		/*
+		 * Cleanup.
+		 */
+		ExecClearTuple(whenslot);
+		ExecDropSingleTupleTableSlot(whenslot);
+		FreeQueryDesc(querydesc);
+
+		if (TRIGGER_USES_TRANSITION_TABLE(trigger->tgoldtable))
+			unregister_and_free_ENR(env, trigger->tgoldtable);
+
+		if (TRIGGER_USES_TRANSITION_TABLE(trigger->tgnewtable))
+			unregister_and_free_ENR(env, trigger->tgnewtable);
+
+		if (!(when && !isnull))
 			return false;
 	}
 
@@ -5403,14 +5537,14 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 		 * NULL when the event is for a row being inserted, whereas NEW is
 		 * NULL when the event is for a row being deleted.
 		 */
-		Assert(!(event == TRIGGER_EVENT_DELETE && delete_old_table &&
+		Assert(!(TRIGGER_FIRED_BY_DELETE(event) && delete_old_table &&
 				 TupIsNull(oldslot)));
-		Assert(!(event == TRIGGER_EVENT_INSERT && insert_new_table &&
+		Assert(!(TRIGGER_FIRED_BY_INSERT(event) && insert_new_table &&
 				 TupIsNull(newslot)));
 
 		if (!TupIsNull(oldslot) &&
-			((event == TRIGGER_EVENT_DELETE && delete_old_table) ||
-			 (event == TRIGGER_EVENT_UPDATE && update_old_table)))
+			((TRIGGER_FIRED_BY_DELETE(event) && delete_old_table) ||
+			 (TRIGGER_FIRED_BY_UPDATE(event) && update_old_table)))
 		{
 			Tuplestorestate *old_tuplestore;
 
@@ -5436,8 +5570,8 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 				tuplestore_puttupleslot(old_tuplestore, oldslot);
 		}
 		if (!TupIsNull(newslot) &&
-			((event == TRIGGER_EVENT_INSERT && insert_new_table) ||
-			 (event == TRIGGER_EVENT_UPDATE && update_new_table)))
+			((TRIGGER_FIRED_BY_INSERT(event) && insert_new_table) ||
+			 (TRIGGER_FIRED_BY_UPDATE(event) && update_new_table)))
 		{
 			Tuplestorestate *new_tuplestore;
 
@@ -5475,10 +5609,10 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 		 * of them to be NULL.
 		 */
 		if (trigdesc == NULL ||
-			(event == TRIGGER_EVENT_DELETE && !trigdesc->trig_delete_after_row) ||
-			(event == TRIGGER_EVENT_INSERT && !trigdesc->trig_insert_after_row) ||
-			(event == TRIGGER_EVENT_UPDATE && !trigdesc->trig_update_after_row) ||
-			(event == TRIGGER_EVENT_UPDATE && (TupIsNull(oldslot) ^ TupIsNull(newslot))))
+			(TRIGGER_FIRED_BY_DELETE(event) && !trigdesc->trig_delete_after_row) ||
+			(TRIGGER_FIRED_BY_INSERT(event) && !trigdesc->trig_insert_after_row) ||
+			(TRIGGER_FIRED_BY_UPDATE(event) && !trigdesc->trig_update_after_row) ||
+			(TRIGGER_FIRED_BY_UPDATE(event) && (TupIsNull(oldslot) ^ TupIsNull(newslot))))
 			return;
 	}
 
@@ -5494,7 +5628,7 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 	 * if so.  This preserves the behavior that statement-level triggers fire
 	 * just once per statement and fire after row-level triggers.
 	 */
-	switch (event)
+	switch (event & TRIGGER_EVENT_OPMASK)
 	{
 		case TRIGGER_EVENT_INSERT:
 			tgtype_event = TRIGGER_TYPE_INSERT;
@@ -5511,8 +5645,8 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 				Assert(newslot == NULL);
 				ItemPointerSetInvalid(&(new_event.ate_ctid1));
 				ItemPointerSetInvalid(&(new_event.ate_ctid2));
-				cancel_prior_stmt_triggers(RelationGetRelid(rel),
-										   CMD_INSERT, event);
+				cancel_prior_stmt_triggers(RelationGetRelid(rel), CMD_INSERT,
+										   (event & TRIGGER_EVENT_OPMASK));
 			}
 			break;
 		case TRIGGER_EVENT_DELETE:
@@ -5530,8 +5664,8 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 				Assert(newslot == NULL);
 				ItemPointerSetInvalid(&(new_event.ate_ctid1));
 				ItemPointerSetInvalid(&(new_event.ate_ctid2));
-				cancel_prior_stmt_triggers(RelationGetRelid(rel),
-										   CMD_DELETE, event);
+				cancel_prior_stmt_triggers(RelationGetRelid(rel), CMD_DELETE,
+										   (event & TRIGGER_EVENT_OPMASK));
 			}
 			break;
 		case TRIGGER_EVENT_UPDATE:
@@ -5549,8 +5683,8 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 				Assert(newslot == NULL);
 				ItemPointerSetInvalid(&(new_event.ate_ctid1));
 				ItemPointerSetInvalid(&(new_event.ate_ctid2));
-				cancel_prior_stmt_triggers(RelationGetRelid(rel),
-										   CMD_UPDATE, event);
+				cancel_prior_stmt_triggers(RelationGetRelid(rel), CMD_UPDATE,
+										   (event & TRIGGER_EVENT_OPMASK));
 			}
 			break;
 		case TRIGGER_EVENT_TRUNCATE:
@@ -5561,13 +5695,14 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 			ItemPointerSetInvalid(&(new_event.ate_ctid2));
 			break;
 		default:
-			elog(ERROR, "invalid after-trigger event code: %d", event);
+			elog(ERROR, "invalid after-trigger event code: %d",
+				 (event & TRIGGER_EVENT_OPMASK));
 			tgtype_event = 0;	/* keep compiler quiet */
 			break;
 	}
 
 	if (!(relkind == RELKIND_FOREIGN_TABLE && row_trigger))
-		new_event.ate_flags = (row_trigger && event == TRIGGER_EVENT_UPDATE) ?
+		new_event.ate_flags = (row_trigger && TRIGGER_FIRED_BY_UPDATE(event)) ?
 			AFTER_TRIGGER_2CTID : AFTER_TRIGGER_1CTID;
 	/* else, we'll initialize ate_flags for each trigger */
 
@@ -5576,14 +5711,25 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 	for (i = 0; i < trigdesc->numtriggers; i++)
 	{
 		Trigger    *trigger = &trigdesc->triggers[i];
+		Tuplestorestate *oldstore,
+				   *newstore;
+
+		if (transition_capture)
+		{
+			Assert(transition_capture->tcs_private);
+			oldstore = transition_capture->tcs_private->old_tuplestore;
+			newstore = transition_capture->tcs_private->new_tuplestore;
+		}
+		else
+			oldstore = newstore = NULL;
 
 		if (!TRIGGER_TYPE_MATCHES(trigger->tgtype,
 								  tgtype_level,
 								  TRIGGER_TYPE_AFTER,
 								  tgtype_event))
 			continue;
-		if (!TriggerEnabled(estate, relinfo, trigger, event,
-							modifiedCols, oldslot, newslot))
+		if (!TriggerEnabled(estate, relinfo, trigger, event, modifiedCols,
+							oldslot, newslot, oldstore, newstore))
 			continue;
 
 		if (relkind == RELKIND_FOREIGN_TABLE && row_trigger)
@@ -5711,6 +5857,209 @@ before_stmt_triggers_fired(Oid relid, CmdType cmdType)
 	result = table->before_trig_done;
 	table->before_trig_done = true;
 	return result;
+}
+
+
+/*
+ * Detect inappropriate WHEN expressions.  Only certain triggers can make
+ * reference to either the NEW or OLD transition tables/row (e.g. a DELETE
+ * trigger cannot make reference to NEW).  FOR EACH STATEMENT triggers must
+ * treat NEW/OLD as tables whereas FOR EACH ROW triggers treat them as row
+ * values.
+ */
+static void
+check_when_expr(Node *clause, ParseState *pstate,
+				Relation rel, int16 tgtype,
+				char *oldtablename, char *newtablename)
+{
+	CheckWhenExprWalkerContext context;
+
+	context.pstate = pstate;
+	context.rel = rel;
+	context.tgtype = tgtype;
+	context.oldtablename = oldtablename;
+	context.newtablename = newtablename;
+	context.rtable = NIL;
+
+	(void) check_when_expr_walker(clause, (void *) &context);
+}
+
+
+static bool
+check_when_expr_walker(Node *node, CheckWhenExprWalkerContext * ctx)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Query) && TRIGGER_FOR_ROW(ctx->tgtype))
+	{
+		/*
+		 * FOR EACH ROW triggers can only use NEW/OLD as row values so there
+		 * is no support for subqueries.
+		 */
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("row trigger's WHEN condition cannot use subqueries")));
+		return false;
+	}
+	else if (IsA(node, Query) && !TRIGGER_FOR_ROW(ctx->tgtype))
+	{
+		/*
+		 * FOR EACH STATEMENT triggers can have subqueries, so recurse.
+		 */
+		Query	   *query;
+		List	   *rtable;
+		bool		result;
+
+		query = castNode(Query, node);
+		rtable = ctx->rtable;
+
+		ctx->rtable = query->rtable;
+		result = query_tree_walker(query, check_when_expr_walker, ctx, 0);
+		ctx->rtable = rtable;
+
+		return result;
+	}
+	else if (IsA(node, Var))
+	{
+		Var		   *var;
+		bool		old,
+					new;
+
+		var = castNode(Var, node);
+
+		/*
+		 * Determine if this Var is for NEW, OLD, or neither.
+		 */
+		if (TRIGGER_FOR_ROW(ctx->tgtype))
+		{
+			old = (var->varno == PRS2_OLD_VARNO);
+			new = (var->varno == PRS2_NEW_VARNO);
+		}
+		else
+		{
+			RangeTblEntry *entry;
+
+			entry = rt_fetch(var->varno, ctx->rtable);
+			old = entry->relkind == RTE_NAMEDTUPLESTORE &&
+				ctx->oldtablename != NULL &&
+				strcmp(entry->enrname, ctx->oldtablename) != 0;
+			new = entry->relkind == RTE_NAMEDTUPLESTORE &&
+				ctx->newtablename != NULL &&
+				strcmp(entry->enrname, ctx->newtablename) != 0;
+		}
+		Assert(!(new && old));	/* sanity */
+
+		/*
+		 * Now, make checks on the basis of if the Var is OLD or NEW.
+		 */
+		if (old)
+		{
+			if (TRIGGER_FOR_INSERT(ctx->tgtype))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("INSERT trigger's WHEN condition cannot reference OLD values"),
+						 parser_errposition(ctx->pstate, var->location)));
+			/* system columns are okay here */
+		}
+		if (new)
+		{
+			if (TRIGGER_FOR_DELETE(ctx->tgtype))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("DELETE trigger's WHEN condition cannot reference NEW values"),
+						 parser_errposition(ctx->pstate, var->location)));
+			if (var->varattno < 0 && TRIGGER_FOR_BEFORE(ctx->tgtype))
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("BEFORE trigger's WHEN condition cannot reference NEW system columns"),
+						 parser_errposition(ctx->pstate, var->location)));
+			if (TRIGGER_FOR_BEFORE(ctx->tgtype) &&
+				var->varattno == 0 &&
+				RelationGetDescr(ctx->rel)->constr &&
+				RelationGetDescr(ctx->rel)->constr->has_generated_stored)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("BEFORE trigger's WHEN condition cannot reference NEW generated columns"),
+						 errdetail("A whole-row reference is used and the table contains generated columns."),
+						 parser_errposition(ctx->pstate, var->location)));
+			if (TRIGGER_FOR_BEFORE(ctx->tgtype) &&
+				var->varattno > 0 &&
+				TupleDescAttr(RelationGetDescr(ctx->rel), var->varattno - 1)->attgenerated)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("BEFORE trigger's WHEN condition cannot reference NEW generated columns"),
+						 errdetail("Column \"%s\" is a generated column.",
+								   NameStr(TupleDescAttr(RelationGetDescr(ctx->rel), var->varattno - 1)->attname)),
+						 parser_errposition(ctx->pstate, var->location)));
+		}
+		return false;
+	}
+	else if (IsA(node, RangeTblRef))
+	{
+		RangeTblRef *ref;
+		RangeTblEntry *entry;
+
+		ref = castNode(RangeTblRef, node);
+		entry = rt_fetch(ref->rtindex, ctx->rtable);
+
+		switch (entry->rtekind)
+		{
+			case RTE_SUBQUERY:
+			case RTE_JOIN:
+			case RTE_VALUES:
+			case RTE_CTE:
+			case RTE_RESULT:
+			case RTE_NAMEDTUPLESTORE:
+				/* All OK */
+				break;
+			case RTE_RELATION:
+				{
+					if (entry->relid != RelationGetRelid(ctx->rel))
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+								 errmsg("trigger's WHEN condition cannot contain references to other relations")));
+					break;
+				}
+			case RTE_FUNCTION:
+			case RTE_TABLEFUNC:
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("trigger's WHEN condition cannot contain table functions")));
+				break;
+		}
+		return false;
+	}
+	return expression_tree_walker(node, check_when_expr_walker, ctx);
+}
+
+static void
+make_and_register_ENR(QueryEnvironment *env, char *name,
+					  Oid relid, Tuplestorestate *data)
+{
+	EphemeralNamedRelation enr;
+
+	enr = palloc(sizeof(EphemeralNamedRelationData));
+	MemSet(enr, 0, sizeof(EphemeralNamedRelationData));
+	enr->md.enrtype = ENR_NAMED_TUPLESTORE;
+	enr->md.reliddesc = relid;
+	enr->md.name = name;
+	enr->reldata = (void *) data;
+
+	register_ENR(env, enr);
+}
+
+static void
+unregister_and_free_ENR(QueryEnvironment *env, char *name)
+{
+	EphemeralNamedRelation enr;
+
+	enr = get_ENR(env, name);
+	if (enr)
+	{
+		unregister_ENR(env, name);
+		pfree(enr);
+	}
 }
 
 /*

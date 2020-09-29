@@ -3477,7 +3477,8 @@ ec_member_matches_indexcol(PlannerInfo *root, RelOptInfo *rel,
  * relation_has_unique_index_for
  *	  Determine whether the relation provably has at most one row satisfying
  *	  a set of equality conditions, because the conditions constrain all
- *	  columns of some unique index.
+ *	  columns of some unique index. If index_info is not null, it is set to
+ *	  point to a new UniqueRelInfo containing the index and conditions.
  *
  * The conditions can be represented in either or both of two ways:
  * 1. A list of RestrictInfo nodes, where the caller has already determined
@@ -3498,11 +3499,15 @@ ec_member_matches_indexcol(PlannerInfo *root, RelOptInfo *rel,
 bool
 relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 							  List *restrictlist,
-							  List *exprlist, List *oprlist)
+							  List *exprlist, List *oprlist,
+							  UniqueRelInfo **unique_info)
 {
 	ListCell   *ic;
 
 	Assert(list_length(exprlist) == list_length(oprlist));
+
+	if (unique_info)
+		*unique_info = NULL;
 
 	/* Short-circuit if no indexes... */
 	if (rel->indexlist == NIL)
@@ -3554,6 +3559,7 @@ relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 	{
 		IndexOptInfo *ind = (IndexOptInfo *) lfirst(ic);
 		int			c;
+		List *column_values = NIL;
 
 		/*
 		 * If the index is not unique, or not immediately enforced, or if it's
@@ -3602,6 +3608,9 @@ relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 				if (match_index_to_operand(rexpr, c, ind))
 				{
 					matched = true; /* column is unique */
+					column_values = lappend(column_values, rinfo->outer_is_left
+											? get_leftop(rinfo->clause)
+											: get_rightop(rinfo->clause));
 					break;
 				}
 			}
@@ -3644,7 +3653,22 @@ relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 
 		/* Matched all key columns of this index? */
 		if (c == ind->nkeycolumns)
+		{
+			if (unique_info)
+			{
+				/* This may be called in GEQO memory context. */
+				MemoryContext oldContext = MemoryContextSwitchTo(root->planner_cxt);
+				*unique_info = makeNode(UniqueRelInfo);
+				(*unique_info)->index = ind;
+				(*unique_info)->column_values = list_copy(column_values);
+				MemoryContextSwitchTo(oldContext);
+			}
+			if (column_values)
+				list_free(column_values);
 			return true;
+		}
+		if (column_values)
+			list_free(column_values);
 	}
 
 	return false;

@@ -130,6 +130,7 @@ extern char *temp_tablespaces;
 extern bool ignore_checksum_failure;
 extern bool ignore_invalid_pages;
 extern bool synchronize_seqscans;
+extern bool enable_self_join_removal;
 
 #ifdef TRACE_SYNCSCAN
 extern bool trace_syncscan;
@@ -1105,6 +1106,16 @@ static struct config_bool ConfigureNamesBool[] =
 			GUC_EXPLAIN
 		},
 		&enable_partition_pruning,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"enable_self_join_removal", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enable removal of unique self-joins."),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&enable_self_join_removal,
 		true,
 		NULL, NULL, NULL
 	},

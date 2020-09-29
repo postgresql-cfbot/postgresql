@@ -158,3 +158,49 @@ select count(*) from date_tbl
     13
 (1 row)
 
+--
+-- Tests for ScalarArrayOpExpr binary search optimization
+--
+select 1 in (10, 9, 2, 8, 3, 7, 4, 6, 5, 1);
+ ?column? 
+----------
+ t
+(1 row)
+
+select 1 in (10, 9, 2, 8, 3, 7, 4, 6, 5, null);
+ ?column? 
+----------
+ 
+(1 row)
+
+select 1 in (null, null, null, null, null, null, null, null, null, null, null);
+ ?column? 
+----------
+ 
+(1 row)
+
+select 1 in (10, 9, 2, 8, 3, 7, 4, 6, 5, 1, null);
+ ?column? 
+----------
+ t
+(1 row)
+
+select null::int in (10, 9, 2, 8, 3, 7, 4, 6, 5, 1);
+ ?column? 
+----------
+ 
+(1 row)
+
+select null::int in (10, 9, 2, 8, 3, 7, 4, 6, 5, null);
+ ?column? 
+----------
+ 
+(1 row)
+
+select 'a' in ('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j');
+ ?column? 
+----------
+ t
+(1 row)
+
+-- TODO: test non-strict op?

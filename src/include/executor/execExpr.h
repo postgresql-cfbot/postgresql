@@ -21,6 +21,30 @@
 struct ExprEvalStep;
 struct SubscriptingRefState;
 
+typedef struct ScalarArrayOpExprHashEntryData *ScalarArrayOpExprHashEntry;
+typedef struct ScalarArrayOpExprHashTableData *ScalarArrayOpExprHashTable;
+
+typedef struct ScalarArrayOpExprHashEntryData
+{
+	Datum key;
+	uint32		status;			/* hash status */
+	uint32		hash;			/* hash value (cached) */
+} ScalarArrayOpExprHashEntryData;
+
+/* define parameters necessary to generate the tuple hash table interface */
+#define SH_PREFIX saophash
+#define SH_ELEMENT_TYPE ScalarArrayOpExprHashEntryData
+#define SH_KEY_TYPE Datum
+#define SH_SCOPE extern
+#define SH_DECLARE
+#include "lib/simplehash.h"
+
+typedef struct ScalarArrayOpExprHashTableData
+{
+	saophash_hash *hashtab;	/* underlying hash table */
+	struct ExprEvalStep *op;
+}			ScalarArrayOpExprHashTableData;
+
 /* Bits in ExprState->flags (see also execnodes.h for public flag bits): */
 /* expression's interpreter has been initialized */
 #define EEO_FLAG_INTERPRETER_INITIALIZED	(1 << 1)
@@ -213,6 +237,7 @@ typedef enum ExprEvalOp
 	/* evaluate assorted special-purpose expression types */
 	EEOP_CONVERT_ROWTYPE,
 	EEOP_SCALARARRAYOP,
+	EEOP_SCALARARRAYOP_BINSEARCH,
 	EEOP_XMLEXPR,
 	EEOP_AGGREF,
 	EEOP_GROUPING_FUNC,
@@ -549,6 +574,21 @@ typedef struct ExprEvalStep
 			PGFunction	fn_addr;	/* actual call address */
 		}			scalararrayop;
 
+		/* for EEOP_SCALARARRAYOP_BINSEARCH */
+		struct
+		{
+			bool		has_nulls;
+			ScalarArrayOpExprHashTable	   elements_tab;
+			FmgrInfo   *finfo;	/* function's lookup data */
+			FunctionCallInfo fcinfo_data;	/* arguments etc */
+			/* faster to access without additional indirection: */
+			PGFunction	fn_addr;	/* actual call address */
+			FmgrInfo   *hash_finfo;	/* function's lookup data */
+			FunctionCallInfo hash_fcinfo_data;	/* arguments etc */
+			/* faster to access without additional indirection: */
+			PGFunction	hash_fn_addr;	/* actual call address */
+		}			scalararraybinsearchop;
+
 		/* for EEOP_XMLEXPR */
 		struct
 		{
@@ -720,6 +760,7 @@ extern void ExecEvalSubscriptingRefAssign(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalConvertRowtype(ExprState *state, ExprEvalStep *op,
 								   ExprContext *econtext);
 extern void ExecEvalScalarArrayOp(ExprState *state, ExprEvalStep *op);
+extern void ExecEvalScalarArrayOpBinSearch(ExprState *state, ExprEvalStep *op, ExprContext *econtext);
 extern void ExecEvalConstraintNotNull(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalConstraintCheck(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalXmlExpr(ExprState *state, ExprEvalStep *op);

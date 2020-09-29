@@ -65,3 +65,16 @@ select count(*) from date_tbl
   where f1 not between symmetric '1997-01-01' and '1998-01-01';
 select count(*) from date_tbl
   where f1 not between symmetric '1997-01-01' and '1998-01-01';
+
+--
+-- Tests for ScalarArrayOpExpr binary search optimization
+--
+
+select 1 in (10, 9, 2, 8, 3, 7, 4, 6, 5, 1);
+select 1 in (10, 9, 2, 8, 3, 7, 4, 6, 5, null);
+select 1 in (null, null, null, null, null, null, null, null, null, null, null);
+select 1 in (10, 9, 2, 8, 3, 7, 4, 6, 5, 1, null);
+select null::int in (10, 9, 2, 8, 3, 7, 4, 6, 5, 1);
+select null::int in (10, 9, 2, 8, 3, 7, 4, 6, 5, null);
+select 'a' in ('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j');
+-- TODO: test non-strict op?

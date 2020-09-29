@@ -172,6 +172,7 @@ static char *pset_value_string(const char *param, printQueryOpt *popt);
 static void checkWin32Codepage(void);
 #endif
 
+static bool sigpipe_received = false;
 
 
 /*----------
@@ -4640,6 +4641,17 @@ do_shell(const char *command)
 }
 
 /*
+ * We want to detect sigpipe to break from watch cycle faster,
+ * before waiting 1 sec in sleep time, and unsuccess write to
+ * pipe.
+ */
+static void
+pagerpipe_sigpipe_handler(int signum)
+{
+	sigpipe_received = true;
+}
+
+/*
  * do_watch -- handler for \watch
  *
  * We break this out of exec_command to avoid having to plaster "volatile"
@@ -4653,6 +4665,8 @@ do_watch(PQExpBuffer query_buf, double sleep)
 	const char *strftime_fmt;
 	const char *user_title;
 	char	   *title;
+	const char *pagerprog = NULL;
+	FILE	   *pagerpipe = NULL;
 	int			title_len;
 	int			res = 0;
 
@@ -4660,6 +4674,21 @@ do_watch(PQExpBuffer query_buf, double sleep)
 	{
 		pg_log_error("\\watch cannot be used with an empty query");
 		return false;
+	}
+
+	pagerprog = getenv("PSQL_WATCH_PAGER");
+	if (pagerprog)
+	{
+		sigpipe_received = false;
+
+#ifndef WIN32
+		pqsignal(SIGPIPE, pagerpipe_sigpipe_handler);
+#endif
+
+		pagerpipe = popen(pagerprog, "w");
+		if (!pagerpipe)
+			/*silently proceed without pager */
+			restore_sigpipe_trap();
 	}
 
 	/*
@@ -4673,7 +4702,8 @@ do_watch(PQExpBuffer query_buf, double sleep)
 	 * Set up rendering options, in particular, disable the pager, because
 	 * nobody wants to be prompted while watching the output of 'watch'.
 	 */
-	myopt.topt.pager = 0;
+	if (!pagerpipe)
+		myopt.topt.pager = 0;
 
 	/*
 	 * If there's a title in the user configuration, make sure we have room
@@ -4707,13 +4737,16 @@ do_watch(PQExpBuffer query_buf, double sleep)
 		myopt.title = title;
 
 		/* Run the query and print out the results */
-		res = PSQLexecWatch(query_buf->data, &myopt);
+		res = PSQLexecWatch(query_buf->data, &myopt, pagerpipe);
 
 		/*
 		 * PSQLexecWatch handles the case where we can no longer repeat the
 		 * query, and returns 0 or -1.
 		 */
 		if (res <= 0)
+			break;
+
+		if (pagerpipe && ferror(pagerpipe))
 			break;
 
 		/*
@@ -4733,14 +4766,27 @@ do_watch(PQExpBuffer query_buf, double sleep)
 		i = sleep_ms;
 		while (i > 0)
 		{
-			long		s = Min(i, 1000L);
+			long		s = Min(i, pagerpipe ? 100L : 1000L);
 
 			pg_usleep(s * 1000L);
 			if (cancel_pressed)
 				break;
+
+			if (sigpipe_received)
+				break;
+
 			i -= s;
 		}
 		sigint_interrupt_enabled = false;
+
+		if (sigpipe_received)
+			break;
+	}
+
+	if (pagerpipe)
+	{
+		fclose(pagerpipe);
+		restore_sigpipe_trap();
 	}
 
 	pg_free(title);

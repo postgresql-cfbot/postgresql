@@ -262,6 +262,7 @@ struct ParseNamespaceItem
 	bool		p_cols_visible; /* Column names visible as unqualified refs? */
 	bool		p_lateral_only; /* Is only visible to LATERAL expressions? */
 	bool		p_lateral_ok;	/* If so, does join type allow use? */
+	bool		p_join_using_alias;	/* Is it a JOIN/USING alias? */
 };
 
 /*

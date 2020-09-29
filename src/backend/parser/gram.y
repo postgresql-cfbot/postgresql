@@ -446,7 +446,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	locked_rels_list
 %type <boolean>	all_or_distinct
 
-%type <node>	join_outer join_qual
+%type <node>	join_outer
 %type <jtype>	join_type
 
 %type <list>	extract_list overlay_list position_list
@@ -498,7 +498,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <ival>	sub_type opt_materialized
 %type <value>	NumericOnly
 %type <list>	NumericOnly_list
-%type <alias>	alias_clause opt_alias_clause
+%type <alias>	alias_clause opt_alias_clause opt_alias_clause_for_join_using
 %type <list>	func_alias_clause
 %type <sortby>	sortby
 %type <ielem>	index_elem index_elem_options
@@ -11951,20 +11951,28 @@ joined_table:
 					n->quals = NULL;
 					$$ = n;
 				}
-			| table_ref join_type JOIN table_ref join_qual
+			| table_ref join_type JOIN table_ref ON a_expr
 				{
 					JoinExpr *n = makeNode(JoinExpr);
 					n->jointype = $2;
 					n->isNatural = false;
 					n->larg = $1;
 					n->rarg = $4;
-					if ($5 != NULL && IsA($5, List))
-						n->usingClause = (List *) $5; /* USING clause */
-					else
-						n->quals = $5; /* ON clause */
+					n->quals = $6;
 					$$ = n;
 				}
-			| table_ref JOIN table_ref join_qual
+			| table_ref join_type JOIN table_ref USING '(' name_list ')' opt_alias_clause_for_join_using
+				{
+					JoinExpr *n = makeNode(JoinExpr);
+					n->jointype = $2;
+					n->isNatural = false;
+					n->larg = $1;
+					n->rarg = $4;
+					n->usingClause = $7;
+					n->join_using_alias = $9;	/* not n->alias! */
+					$$ = n;
+				}
+			| table_ref JOIN table_ref ON a_expr
 				{
 					/* letting join_type reduce to empty doesn't work */
 					JoinExpr *n = makeNode(JoinExpr);
@@ -11972,10 +11980,19 @@ joined_table:
 					n->isNatural = false;
 					n->larg = $1;
 					n->rarg = $3;
-					if ($4 != NULL && IsA($4, List))
-						n->usingClause = (List *) $4; /* USING clause */
-					else
-						n->quals = $4; /* ON clause */
+					n->quals = $5;
+					$$ = n;
+				}
+			| table_ref JOIN table_ref USING '(' name_list ')' opt_alias_clause_for_join_using
+				{
+					/* letting join_type reduce to empty doesn't work */
+					JoinExpr *n = makeNode(JoinExpr);
+					n->jointype = JOIN_INNER;
+					n->isNatural = false;
+					n->larg = $1;
+					n->rarg = $3;
+					n->usingClause = $6;
+					n->join_using_alias = $8;	/* not n->alias! */
 					$$ = n;
 				}
 			| table_ref NATURAL join_type JOIN table_ref
@@ -12033,6 +12050,21 @@ opt_alias_clause: alias_clause						{ $$ = $1; }
 		;
 
 /*
+ * The alias clause after JOIN ... USING only accepts the AS ColId spelling,
+ * per SQL standard.  (The grammar could parse the other variants, but they
+ * don't seem to be useful, and it might lead to parser problems in the
+ * future.)
+ */
+opt_alias_clause_for_join_using:
+			AS ColId
+				{
+					$$ = makeNode(Alias);
+					$$->aliasname = $2;
+				}
+			| /*EMPTY*/								{ $$ = NULL; }
+		;
+
+/*
  * func_alias_clause can include both an Alias and a coldeflist, so we make it
  * return a 2-element list that gets disassembled by calling production.
  */
@@ -12072,19 +12104,6 @@ join_type:	FULL join_outer							{ $$ = JOIN_FULL; }
 /* OUTER is just noise... */
 join_outer: OUTER_P									{ $$ = NULL; }
 			| /*EMPTY*/								{ $$ = NULL; }
-		;
-
-/* JOIN qualification clauses
- * Possibilities are:
- *	USING ( column list ) allows only unqualified column names,
- *						  which must match between tables.
- *	ON expr allows more general qualifications.
- *
- * We return USING as a List node, while an ON-expr will not be a List.
- */
-
-join_qual:	USING '(' name_list ')'					{ $$ = (Node *) $3; }
-			| ON a_expr								{ $$ = $2; }
 		;
 
 

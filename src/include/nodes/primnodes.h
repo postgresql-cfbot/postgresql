@@ -1494,6 +1494,7 @@ typedef struct JoinExpr
 	Node	   *rarg;			/* right subtree */
 	List	   *usingClause;	/* USING clause, if any (list of String) */
 	Node	   *quals;			/* qualifiers on join, if any */
+	Alias	   *join_using_alias; /* alias attached to USING clause */
 	Alias	   *alias;			/* user-written alias clause, if any */
 	int			rtindex;		/* RT index assigned for join, or 0 */
 } JoinExpr;

@@ -39,7 +39,7 @@
  * in an entry except the counters requires the same.  To look up an entry,
  * one must hold the lock shared.  To read or update the counters within
  * an entry, one must hold the lock shared or exclusive (so the entry doesn't
- * disappear!) and also take the entry's mutex spinlock.
+ * disappear!) and also take the entry's partition lock.
  * The shared state variable pgss->extent (the next free spot in the external
  * query-text file) should be accessed only while holding either the
  * pgss->mutex spinlock, or exclusive lock on pgss->lock.  We use the mutex to
@@ -114,6 +114,11 @@ static const uint32 PGSS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
 #define IS_STICKY(c)	((c.calls[PGSS_PLAN] + c.calls[PGSS_EXEC]) == 0)
 
 #define JUMBLE_SIZE				1024	/* query serialization buffer size */
+
+#define	PGSS_NUM_LOCK_PARTITIONS()		(pgss_max)
+#define	PGSS_HASH_PARTITION_LOCK(key)	\
+	(&(pgss->base +	\
+	   (get_hash_value(pgss_hash, key) % PGSS_NUM_LOCK_PARTITIONS()))->lock)
 
 /*
  * Extension version number, for supporting older extension versions' objects
@@ -207,7 +212,7 @@ typedef struct pgssEntry
 	Size		query_offset;	/* query text offset in external file */
 	int			query_len;		/* # of valid bytes in query string, or -1 */
 	int			encoding;		/* query text encoding */
-	slock_t		mutex;			/* protects the counters only */
+	LWLock	   	*lock;			/* protects the counters only */
 } pgssEntry;
 
 /*
@@ -216,6 +221,7 @@ typedef struct pgssEntry
 typedef struct pgssSharedState
 {
 	LWLock	   *lock;			/* protects hashtable search/modification */
+	LWLockPadded	*base;		/* base address of this LWLock */
 	double		cur_median_usage;	/* current median usage in hashtable */
 	Size		mean_query_len; /* current mean entry text length */
 	slock_t		mutex;			/* protects following fields only: */
@@ -468,7 +474,8 @@ _PG_init(void)
 	 * resources in pgss_shmem_startup().
 	 */
 	RequestAddinShmemSpace(pgss_memsize());
-	RequestNamedLWLockTranche("pg_stat_statements", 1);
+	RequestNamedLWLockTranche("pg_stat_statements",
+							  PGSS_NUM_LOCK_PARTITIONS() + 1);
 
 	/*
 	 * Install hooks.
@@ -547,7 +554,8 @@ pgss_shmem_startup(void)
 	if (!found)
 	{
 		/* First time through ... */
-		pgss->lock = &(GetNamedLWLockTranche("pg_stat_statements"))->lock;
+		pgss->base = GetNamedLWLockTranche("pg_stat_statements");
+		pgss->lock = &(pgss->base + pgss_max)->lock;
 		pgss->cur_median_usage = ASSUMED_MEDIAN_INIT;
 		pgss->mean_query_len = ASSUMED_LENGTH_INIT;
 		SpinLockInit(&pgss->mutex);
@@ -1383,14 +1391,14 @@ pgss_store(const char *query, uint64 queryId,
 	if (!jstate)
 	{
 		/*
-		 * Grab the spinlock while updating the counters (see comment about
-		 * locking rules at the head of the file)
+		 * Grab the partition lock while updating the counters (see comment
+		 * about locking rules at the head of the file)
 		 */
 		volatile pgssEntry *e = (volatile pgssEntry *) entry;
 
 		Assert(kind == PGSS_PLAN || kind == PGSS_EXEC);
 
-		SpinLockAcquire(&e->mutex);
+		LWLockAcquire(e->lock, LW_EXCLUSIVE);
 
 		/* "Unstick" entry if it was previously sticky */
 		if (IS_STICKY(e->counters))
@@ -1442,7 +1450,7 @@ pgss_store(const char *query, uint64 queryId,
 		e->counters.wal_fpi += walusage->wal_fpi;
 		e->counters.wal_bytes += walusage->wal_bytes;
 
-		SpinLockRelease(&e->mutex);
+		LWLockRelease(e->lock);
 	}
 
 done:
@@ -1769,9 +1777,9 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 		{
 			volatile pgssEntry *e = (volatile pgssEntry *) entry;
 
-			SpinLockAcquire(&e->mutex);
+			LWLockAcquire(e->lock, LW_SHARED);
 			tmp = e->counters;
-			SpinLockRelease(&e->mutex);
+			LWLockRelease(e->lock);
 		}
 
 		/* Skip entry if unexecuted (ie, it's a pending "sticky" entry) */
@@ -1915,8 +1923,8 @@ entry_alloc(pgssHashKey *key, Size query_offset, int query_len, int encoding,
 		memset(&entry->counters, 0, sizeof(Counters));
 		/* set the appropriate initial usage count */
 		entry->counters.usage = sticky ? pgss->cur_median_usage : USAGE_INIT;
-		/* re-initialize the mutex each time ... we assume no one using it */
-		SpinLockInit(&entry->mutex);
+		/* determine which partition lock to use for this query */
+		entry->lock = PGSS_HASH_PARTITION_LOCK(key);
 		/* ... and don't forget the query text metadata */
 		Assert(query_len >= 0);
 		entry->query_offset = query_offset;

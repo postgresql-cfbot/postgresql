@@ -691,6 +691,8 @@ const char *const config_group_names[] =
 	gettext_noop("Resource Usage / Disk"),
 	/* RESOURCES_KERNEL */
 	gettext_noop("Resource Usage / Kernel Resources"),
+	/* RESOURCES_CHECKSUM_DELAY */
+	gettext_noop("Resource Usage / Cost-Based Checksum Verification Delay"),
 	/* RESOURCES_VACUUM_DELAY */
 	gettext_noop("Resource Usage / Cost-Based Vacuum Delay"),
 	/* RESOURCES_BGWRITER */
@@ -2386,6 +2388,26 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"checksum_cost_page", PGC_USERSET, RESOURCES_CHECKSUM_DELAY,
+			gettext_noop("Checksum cost for verifying a page."),
+			NULL
+		},
+		&ChecksumCostPage,
+		10, 0, 10000,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"checksum_cost_limit", PGC_USERSET, RESOURCES_CHECKSUM_DELAY,
+			gettext_noop("Checksum cost amount available before napping."),
+			NULL
+		},
+		&ChecksumCostLimit,
+		200, 1, 10000,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"vacuum_cost_page_hit", PGC_USERSET, RESOURCES_VACUUM_DELAY,
 			gettext_noop("Vacuum cost for a page found in the buffer cache."),
 			NULL
@@ -3583,6 +3605,17 @@ static struct config_real ConfigureNamesReal[] =
 		&phony_random_seed,
 		0.0, -1.0, 1.0,
 		check_random_seed, assign_random_seed, show_random_seed
+	},
+
+	{
+		{"checksum_cost_delay", PGC_USERSET, RESOURCES_CHECKSUM_DELAY,
+			gettext_noop("Checksum cost delay in milliseconds."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&ChecksumCostDelay,
+		0, 0, 100,
+		NULL, NULL, NULL
 	},
 
 	{

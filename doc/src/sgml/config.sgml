@@ -2139,6 +2139,91 @@ include_dir 'conf.d'
      </note>
     </sect2>
 
+    <sect2 id="runtime-config-resource-checksum-verification-cost">
+     <title>Cost-based Checksum Verification Delay</title>
+
+     <para>
+      During the execution of <xref linkend="functions-check-relation-note"/>
+      function, the system maintains an internal counter that keeps track of
+      the estimated cost of the various I/O operations that are performed.
+      When the accumulated cost reaches a limit (specified by
+      <varname>checksum_cost_limit</varname>), the process performing the
+      operation will sleep for a short period of time, as specified by
+      <varname>checksum_cost_delay</varname>. Then it will reset the counter
+      and continue execution.
+     </para>
+
+     <para>
+      This feature is disabled by default. To enable it, set the
+      <varname>checksum_cost_delay</varname> variable to a nonzero
+      value.
+     </para>
+
+     <variablelist>
+      <varlistentry id="guc-checksum-cost-delay" xreflabel="checksum_cost_delay">
+       <term><varname>checksum_cost_delay</varname> (<type>floating point</type>)
+       <indexterm>
+        <primary><varname>checksum_cost_delay</varname> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         The amount of time that the process will sleep
+         when the cost limit has been exceeded.
+         If this value is specified without units, it is taken as milliseconds.
+         The default value is zero, which disables the cost-based checksum
+         verification delay feature.  Positive values enable cost-based
+         checksum verification.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="guc-checksum-cost-page" xreflabel="checksum_cost_page">
+       <term><varname>checksum_cost_page</varname> (<type>integer</type>)
+       <indexterm>
+        <primary><varname>checksum_cost_page</varname> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         The estimated cost for verifying a buffer, whether it's found in the
+         shared buffer cache or not. It represents the cost to lock the buffer
+         pool, lookup the shared hash table, read the content of the page from
+         disk and compute its checksum.  The default value is 10.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="guc-checksum-cost-limit" xreflabel="checksum_cost_limit">
+       <term><varname>checksum_cost_limit</varname> (<type>integer</type>)
+       <indexterm>
+        <primary><varname>checksum_cost_limit</varname> configuration parameter</primary>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         The accumulated cost that will cause the verification process to sleep.
+         The default value is 200.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+
+     <note>
+      <para>
+       There are certain operations that hold critical locks and should
+       therefore complete as quickly as possible.  Cost-based checksum
+       verification delays do not occur during such operations.  Therefore it
+       is possible that the cost accumulates far higher than the specified
+       limit.  To avoid uselessly long delays in such cases, the actual delay
+       is calculated as <varname>checksum_cost_delay</varname> *
+       <varname>accumulated_balance</varname> /
+       <varname>checksum_cost_limit</varname> with a maximum of
+       <varname>checksum_cost_delay</varname> * 4.
+      </para>
+     </note>
+    </sect2>
+
     <sect2 id="runtime-config-resource-background-writer">
      <title>Background Writer</title>
 

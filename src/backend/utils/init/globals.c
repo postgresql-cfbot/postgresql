@@ -135,6 +135,13 @@ int			max_worker_processes = 8;
 int			max_parallel_workers = 8;
 int			MaxBackends = 0;
 
+int			ChecksumCostPage = 10;	/* GUC parameters for checksum check */
+int			ChecksumCostLimit = 200;
+double		ChecksumCostDelay = 0;
+
+int			ChecksumCostBalance = 0;	/* working state for checksums check */
+bool		ChecksumCostActive = false;
+
 int			VacuumCostPageHit = 1;	/* GUC parameters for vacuum */
 int			VacuumCostPageMiss = 10;
 int			VacuumCostPageDirty = 20;

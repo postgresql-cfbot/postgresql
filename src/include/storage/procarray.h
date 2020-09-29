@@ -92,4 +92,6 @@ extern void ProcArraySetReplicationSlotXmin(TransactionId xmin,
 extern void ProcArrayGetReplicationSlotXmin(TransactionId *xmin,
 											TransactionId *catalog_xmin);
 
+extern int list_all_session_gtt_frozenxids(int max_size, int *pids, uint32 *xids, int *n);
+
 #endif							/* PROCARRAY_H */

@@ -85,7 +85,7 @@ check_and_dump_old_cluster(bool live_check)
 		start_postmaster(&old_cluster, true);
 
 	/* Extract a list of databases and tables from the old cluster */
-	get_db_and_rel_infos(&old_cluster);
+	get_db_and_rel_infos(&old_cluster, true);
 
 	init_tablespaces();
 
@@ -165,7 +165,7 @@ check_and_dump_old_cluster(bool live_check)
 void
 check_new_cluster(void)
 {
-	get_db_and_rel_infos(&new_cluster);
+	get_db_and_rel_infos(&new_cluster, false);
 
 	check_new_cluster_is_empty();
 	check_databases_are_compatible();

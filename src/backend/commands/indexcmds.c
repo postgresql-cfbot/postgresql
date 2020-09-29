@@ -534,6 +534,7 @@ DefineIndex(Oid relationId,
 	Snapshot	snapshot;
 	int			save_nestlevel = -1;
 	int			i;
+	char		rel_persistence;
 
 	/*
 	 * Some callers need us to run with an empty default_tablespace; this is a
@@ -555,7 +556,9 @@ DefineIndex(Oid relationId,
 	 * is more efficient.  Do this before any use of the concurrent option is
 	 * done.
 	 */
-	if (stmt->concurrent && get_rel_persistence(relationId) != RELPERSISTENCE_TEMP)
+	rel_persistence = get_rel_persistence(relationId);
+	if (stmt->concurrent &&
+		!(rel_persistence == RELPERSISTENCE_TEMP || rel_persistence == RELPERSISTENCE_GLOBAL_TEMP))
 		concurrent = true;
 	else
 		concurrent = false;
@@ -2469,7 +2472,8 @@ ReindexIndex(RangeVar *indexRelation, int options, bool isTopLevel)
 	if (relkind == RELKIND_PARTITIONED_INDEX)
 		ReindexPartitions(indOid, options, isTopLevel);
 	else if ((options & REINDEXOPT_CONCURRENTLY) != 0 &&
-			 persistence != RELPERSISTENCE_TEMP)
+			 persistence != RELPERSISTENCE_TEMP &&
+			 persistence != RELPERSISTENCE_GLOBAL_TEMP)
 		ReindexRelationConcurrently(indOid, options);
 	else
 		reindex_index(indOid, false, persistence,
@@ -2556,6 +2560,7 @@ ReindexTable(RangeVar *relation, int options, bool isTopLevel)
 {
 	Oid			heapOid;
 	bool		result;
+	char		rel_persistence;
 
 	/*
 	 * The lock level used here should match reindex_relation().
@@ -2571,10 +2576,12 @@ ReindexTable(RangeVar *relation, int options, bool isTopLevel)
 									   0,
 									   RangeVarCallbackOwnsTable, NULL);
 
+	rel_persistence = get_rel_persistence(heapOid);
 	if (get_rel_relkind(heapOid) == RELKIND_PARTITIONED_TABLE)
 		ReindexPartitions(heapOid, options, isTopLevel);
 	else if ((options & REINDEXOPT_CONCURRENTLY) != 0 &&
-			 get_rel_persistence(heapOid) != RELPERSISTENCE_TEMP)
+			 rel_persistence != RELPERSISTENCE_TEMP &&
+			 rel_persistence != RELPERSISTENCE_GLOBAL_TEMP)
 	{
 		result = ReindexRelationConcurrently(heapOid, options);
 
@@ -2933,7 +2940,8 @@ ReindexMultipleInternal(List *relids, int options)
 			   relkind != RELKIND_PARTITIONED_TABLE);
 
 		if ((options & REINDEXOPT_CONCURRENTLY) != 0 &&
-			relpersistence != RELPERSISTENCE_TEMP)
+			relpersistence != RELPERSISTENCE_TEMP &&
+			relpersistence != RELPERSISTENCE_GLOBAL_TEMP)
 		{
 			(void) ReindexRelationConcurrently(relid,
 											   options |

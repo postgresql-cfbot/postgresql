@@ -21,7 +21,7 @@ static void report_unmatched_relation(const RelInfo *rel, const DbInfo *db,
 									  bool is_new_db);
 static void free_db_and_rel_infos(DbInfoArr *db_arr);
 static void get_db_infos(ClusterInfo *cluster);
-static void get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo);
+static void get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo, bool skip_gtt);
 static void free_rel_infos(RelInfoArr *rel_arr);
 static void print_db_infos(DbInfoArr *dbinfo);
 static void print_rel_infos(RelInfoArr *rel_arr);
@@ -304,9 +304,11 @@ print_maps(FileNameMap *maps, int n_maps, const char *db_name)
  *
  * higher level routine to generate dbinfos for the database running
  * on the given "port". Assumes that server is already running.
+ * for check object need check global temp table,
+ * for create object skip global temp table.
  */
 void
-get_db_and_rel_infos(ClusterInfo *cluster)
+get_db_and_rel_infos(ClusterInfo *cluster, bool skip_gtt)
 {
 	int			dbnum;
 
@@ -316,7 +318,7 @@ get_db_and_rel_infos(ClusterInfo *cluster)
 	get_db_infos(cluster);
 
 	for (dbnum = 0; dbnum < cluster->dbarr.ndbs; dbnum++)
-		get_rel_infos(cluster, &cluster->dbarr.dbs[dbnum]);
+		get_rel_infos(cluster, &cluster->dbarr.dbs[dbnum], skip_gtt);
 
 	if (cluster == &old_cluster)
 		pg_log(PG_VERBOSE, "\nsource databases:\n");
@@ -404,7 +406,7 @@ get_db_infos(ClusterInfo *cluster)
  * This allows later processing to match up old and new databases efficiently.
  */
 static void
-get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
+get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo, bool skip_gtt)
 {
 	PGconn	   *conn = connectToServer(cluster,
 									   dbinfo->db_name);
@@ -441,22 +443,46 @@ get_rel_infos(ClusterInfo *cluster, DbInfo *dbinfo)
 	 * output, so we have to copy that system table.  It's easiest to do that
 	 * by treating it as a user table.
 	 */
-	snprintf(query + strlen(query), sizeof(query) - strlen(query),
-			 "WITH regular_heap (reloid, indtable, toastheap) AS ( "
-			 "  SELECT c.oid, 0::oid, 0::oid "
-			 "  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n "
-			 "         ON c.relnamespace = n.oid "
-			 "  WHERE relkind IN (" CppAsString2(RELKIND_RELATION) ", "
-			 CppAsString2(RELKIND_MATVIEW) ") AND "
-	/* exclude possible orphaned temp tables */
-			 "    ((n.nspname !~ '^pg_temp_' AND "
-			 "      n.nspname !~ '^pg_toast_temp_' AND "
-			 "      n.nspname NOT IN ('pg_catalog', 'information_schema', "
-			 "                        'binary_upgrade', 'pg_toast') AND "
-			 "      c.oid >= %u::pg_catalog.oid) OR "
-			 "     (n.nspname = 'pg_catalog' AND "
-			 "      relname IN ('pg_largeobject') ))), ",
-			 FirstNormalObjectId);
+	if (skip_gtt)
+	{
+		snprintf(query + strlen(query), sizeof(query) - strlen(query),
+				 "WITH regular_heap (reloid, indtable, toastheap) AS ( "
+				 "  SELECT c.oid, 0::oid, 0::oid "
+				 "  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n "
+				 "         ON c.relnamespace = n.oid "
+				 "  WHERE relkind IN (" CppAsString2(RELKIND_RELATION) ", "
+				 CppAsString2(RELKIND_MATVIEW) ") AND "
+		/* exclude global temp tables */
+				 "    relpersistence != " CppAsString2(RELPERSISTENCE_GLOBAL_TEMP) " AND "
+		/* exclude possible orphaned temp tables */
+				 "    ((n.nspname !~ '^pg_temp_' AND "
+				 "      n.nspname !~ '^pg_toast_temp_' AND "
+				 "      n.nspname NOT IN ('pg_catalog', 'information_schema', "
+				 "                        'binary_upgrade', 'pg_toast') AND "
+				 "      c.oid >= %u::pg_catalog.oid) OR "
+				 "     (n.nspname = 'pg_catalog' AND "
+				 "      relname IN ('pg_largeobject') ))), ",
+				 FirstNormalObjectId);
+	}
+	else
+	{
+		snprintf(query + strlen(query), sizeof(query) - strlen(query),
+				 "WITH regular_heap (reloid, indtable, toastheap) AS ( "
+				 "  SELECT c.oid, 0::oid, 0::oid "
+				 "  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n "
+				 "         ON c.relnamespace = n.oid "
+				 "  WHERE relkind IN (" CppAsString2(RELKIND_RELATION) ", "
+				 CppAsString2(RELKIND_MATVIEW) ") AND "
+		/* exclude possible orphaned temp tables */
+				 "    ((n.nspname !~ '^pg_temp_' AND "
+				 "      n.nspname !~ '^pg_toast_temp_' AND "
+				 "      n.nspname NOT IN ('pg_catalog', 'information_schema', "
+				 "                        'binary_upgrade', 'pg_toast') AND "
+				 "      c.oid >= %u::pg_catalog.oid) OR "
+				 "     (n.nspname = 'pg_catalog' AND "
+				 "      relname IN ('pg_largeobject') ))), ",
+				 FirstNormalObjectId);
+	}
 
 	/*
 	 * Add a CTE that collects OIDs of toast tables belonging to the tables

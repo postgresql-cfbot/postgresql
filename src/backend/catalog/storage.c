@@ -27,6 +27,7 @@
 #include "access/xlogutils.h"
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
+#include "catalog/storage_gtt.h"
 #include "miscadmin.h"
 #include "storage/freespace.h"
 #include "storage/smgr.h"
@@ -61,6 +62,7 @@ typedef struct PendingRelDelete
 {
 	RelFileNode relnode;		/* relation that may need to be deleted */
 	BackendId	backend;		/* InvalidBackendId if not a temp rel */
+	Oid			relOid;			/* InvalidOid if not a global temp rel */
 	bool		atCommit;		/* T=delete at commit; F=delete at abort */
 	int			nestLevel;		/* xact nesting level of request */
 	struct PendingRelDelete *next;	/* linked-list link */
@@ -115,7 +117,7 @@ AddPendingSync(const RelFileNode *rnode)
  * transaction aborts later on, the storage will be destroyed.
  */
 SMgrRelation
-RelationCreateStorage(RelFileNode rnode, char relpersistence)
+RelationCreateStorage(RelFileNode rnode, char relpersistence, Relation rel)
 {
 	PendingRelDelete *pending;
 	SMgrRelation srel;
@@ -127,6 +129,8 @@ RelationCreateStorage(RelFileNode rnode, char relpersistence)
 	switch (relpersistence)
 	{
 		case RELPERSISTENCE_TEMP:
+		/* global temp table use same storage strategy as local temp table */
+		case RELPERSISTENCE_GLOBAL_TEMP:
 			backend = BackendIdForTempRelations();
 			needs_wal = false;
 			break;
@@ -154,6 +158,7 @@ RelationCreateStorage(RelFileNode rnode, char relpersistence)
 		MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelDelete));
 	pending->relnode = rnode;
 	pending->backend = backend;
+	pending->relOid = InvalidOid;
 	pending->atCommit = false;	/* delete if abort */
 	pending->nestLevel = GetCurrentTransactionNestLevel();
 	pending->next = pendingDeletes;
@@ -163,6 +168,13 @@ RelationCreateStorage(RelFileNode rnode, char relpersistence)
 	{
 		Assert(backend == InvalidBackendId);
 		AddPendingSync(&rnode);
+	}
+
+	/* remember global temp table storage info to localhash */
+	if (relpersistence == RELPERSISTENCE_GLOBAL_TEMP && rel)
+	{
+		pending->relOid = RelationGetRelid(rel);
+		remember_gtt_storage_info(rnode, rel);
 	}
 
 	return srel;
@@ -201,10 +213,14 @@ RelationDropStorage(Relation rel)
 		MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelDelete));
 	pending->relnode = rel->rd_node;
 	pending->backend = rel->rd_backend;
+	pending->relOid = InvalidOid;
 	pending->atCommit = true;	/* delete if commit */
 	pending->nestLevel = GetCurrentTransactionNestLevel();
 	pending->next = pendingDeletes;
 	pendingDeletes = pending;
+
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+		pending->relOid = RelationGetRelid(rel);
 
 	/*
 	 * NOTE: if the relation was created in this transaction, it will now be
@@ -601,6 +617,7 @@ smgrDoPendingDeletes(bool isCommit)
 	int			nrels = 0,
 				maxrels = 0;
 	SMgrRelation *srels = NULL;
+	Oid			*reloids = NULL;
 
 	prev = NULL;
 	for (pending = pendingDeletes; pending != NULL; pending = next)
@@ -630,14 +647,18 @@ smgrDoPendingDeletes(bool isCommit)
 				{
 					maxrels = 8;
 					srels = palloc(sizeof(SMgrRelation) * maxrels);
+					reloids = palloc(sizeof(Oid) * maxrels);
 				}
 				else if (maxrels <= nrels)
 				{
 					maxrels *= 2;
 					srels = repalloc(srels, sizeof(SMgrRelation) * maxrels);
+					reloids = repalloc(reloids, sizeof(Oid) * maxrels);
 				}
 
-				srels[nrels++] = srel;
+				srels[nrels] = srel;
+				reloids[nrels] = pending->relOid;
+				nrels++;
 			}
 			/* must explicitly free the list entry */
 			pfree(pending);
@@ -647,12 +668,23 @@ smgrDoPendingDeletes(bool isCommit)
 
 	if (nrels > 0)
 	{
+		int	i;
+
 		smgrdounlinkall(srels, nrels, false);
 
-		for (int i = 0; i < nrels; i++)
+		for (i = 0; i < nrels; i++)
+		{
 			smgrclose(srels[i]);
 
+			/* clean global temp table flags when transaction commit or rollback */
+			if (SmgrIsTemp(srels[i]) &&
+				reloids[i] != InvalidOid &&
+				gtt_storage_attached(reloids[i]))
+				forget_gtt_storage_info(reloids[i], srels[i]->smgr_rnode.node, isCommit);
+		}
+
 		pfree(srels);
+		pfree(reloids);
 	}
 }
 

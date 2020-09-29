@@ -56,7 +56,9 @@ LockTableCommand(LockStmt *lockstmt)
 										  RangeVarCallbackForLockTable,
 										  (void *) &lockstmt->mode);
 
-		if (get_rel_relkind(reloid) == RELKIND_VIEW)
+		if (get_rel_persistence(reloid) == RELPERSISTENCE_GLOBAL_TEMP)
+			continue;
+		else if (get_rel_relkind(reloid) == RELKIND_VIEW)
 			LockViewRecurse(reloid, lockstmt->mode, lockstmt->nowait, NIL);
 		else if (recurse)
 			LockTableRecurse(reloid, lockstmt->mode, lockstmt->nowait);

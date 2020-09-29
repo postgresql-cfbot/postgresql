@@ -57,7 +57,7 @@ typedef struct RelationData
 	struct SMgrRelationData *rd_smgr;	/* cached file handle, or NULL */
 	int			rd_refcnt;		/* reference count */
 	BackendId	rd_backend;		/* owning backend id, if temporary relation */
-	bool		rd_islocaltemp; /* rel is a temp rel of this session */
+	bool		rd_islocaltemp;	/* rel is a temp rel of this session */
 	bool		rd_isnailed;	/* rel is nailed in cache */
 	bool		rd_isvalid;		/* relcache entry is valid */
 	bool		rd_indexvalid;	/* is rd_indexlist valid? (also rd_pkindex and
@@ -305,6 +305,7 @@ typedef struct StdRdOptions
 	int			parallel_workers;	/* max number of parallel workers */
 	bool		vacuum_index_cleanup;	/* enables index vacuuming and cleanup */
 	bool		vacuum_truncate;	/* enables vacuum to truncate a relation */
+	bool		on_commit_delete_rows;	/* global temp table */
 } StdRdOptions;
 
 #define HEAP_MIN_FILLFACTOR			10
@@ -570,11 +571,13 @@ typedef struct ViewOptions
  *		True if relation's pages are stored in local buffers.
  */
 #define RelationUsesLocalBuffers(relation) \
-	((relation)->rd_rel->relpersistence == RELPERSISTENCE_TEMP)
+	((relation)->rd_rel->relpersistence == RELPERSISTENCE_TEMP || \
+	 (relation)->rd_rel->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
 
 /*
  * RELATION_IS_LOCAL
- *		If a rel is either temp or newly created in the current transaction,
+ *		If a rel is either local temp or global temp relation
+ *		or newly created in the current transaction,
  *		it can be assumed to be accessible only to the current backend.
  *		This is typically used to decide that we can skip acquiring locks.
  *
@@ -582,6 +585,7 @@ typedef struct ViewOptions
  */
 #define RELATION_IS_LOCAL(relation) \
 	((relation)->rd_islocaltemp || \
+	 (relation)->rd_rel->relpersistence == RELPERSISTENCE_GLOBAL_TEMP || \
 	 (relation)->rd_createSubid != InvalidSubTransactionId)
 
 /*
@@ -594,6 +598,14 @@ typedef struct ViewOptions
 	((relation)->rd_rel->relpersistence == RELPERSISTENCE_TEMP && \
 	 !(relation)->rd_islocaltemp)
 
+/*
+ * RELATION_IS_TEMP
+ *		Test a rel is either local temp relation of this session
+ * 		or global temp relation.
+ */
+#define RELATION_IS_TEMP(relation) \
+	((relation)->rd_islocaltemp || \
+	 (relation)->rd_rel->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
 
 /*
  * RelationIsScannable
@@ -636,6 +648,17 @@ typedef struct ViewOptions
 	(XLogLogicalInfoActive() && \
 	 RelationNeedsWAL(relation) && \
 	 !IsCatalogRelation(relation))
+
+/* global temp table implementations */
+#define RELATION_IS_GLOBAL_TEMP(relation)	((relation)->rd_rel->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+
+#define RELATION_GTT_ON_COMMIT_DELETE(relation)	\
+	((relation)->rd_options && \
+	 ((relation)->rd_rel->relkind == RELKIND_RELATION || (relation)->rd_rel->relkind == RELKIND_PARTITIONED_TABLE) && \
+	 (relation)->rd_rel->relpersistence == RELPERSISTENCE_GLOBAL_TEMP ? \
+	 ((StdRdOptions *) (relation)->rd_options)->on_commit_delete_rows : false)
+
+#define RelationGetRelPersistence(relation) ((relation)->rd_rel->relpersistence)
 
 /* routines in utils/cache/relcache.c */
 extern void RelationIncrementReferenceCount(Relation rel);

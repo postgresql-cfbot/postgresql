@@ -2108,6 +2108,11 @@ do_autovacuum(void)
 			}
 			continue;
 		}
+		else if (classForm->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		{
+			/* autovacuum skip vacuum global temp table */
+			continue;
+		}
 
 		/* Fetch reloptions and the pgstat entry for this table */
 		relopts = extract_autovac_opts(tuple, pg_class_desc);
@@ -2174,7 +2179,9 @@ do_autovacuum(void)
 		/*
 		 * We cannot safely process other backends' temp tables, so skip 'em.
 		 */
-		if (classForm->relpersistence == RELPERSISTENCE_TEMP)
+		/* autovacuum skip vacuum global temp table */
+		if (classForm->relpersistence == RELPERSISTENCE_TEMP || 
+			classForm->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
 			continue;
 
 		relid = classForm->oid;

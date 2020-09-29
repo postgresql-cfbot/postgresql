@@ -35,6 +35,7 @@
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_type.h"
+#include "catalog/storage_gtt.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "utils/array.h"
@@ -2987,6 +2988,18 @@ get_attavgwidth(Oid relid, AttrNumber attnum)
 		stawidth = (*get_attavgwidth_hook) (relid, attnum);
 		if (stawidth > 0)
 			return stawidth;
+	}
+	if (get_rel_persistence(relid) == RELPERSISTENCE_GLOBAL_TEMP)
+	{
+		tp = get_gtt_att_statistic(relid, attnum, false);
+		if (!HeapTupleIsValid(tp))
+			return 0;
+
+		stawidth = ((Form_pg_statistic) GETSTRUCT(tp))->stawidth;
+		if (stawidth > 0)
+			return stawidth;
+		else
+			return 0;
 	}
 	tp = SearchSysCache3(STATRELATTINH,
 						 ObjectIdGetDatum(relid),

@@ -18,6 +18,7 @@
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_type.h"
+#include "catalog/storage_gtt.h"
 #include "executor/execPartition.h"
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"
@@ -601,6 +602,8 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 		ExecOpenIndices(leaf_part_rri,
 						(node != NULL &&
 						 node->onConflictAction != ONCONFLICT_NONE));
+
+	init_gtt_storage(mtstate->operation, leaf_part_rri);
 
 	/*
 	 * Build WITH CHECK OPTION constraints for the partition.  Note that we

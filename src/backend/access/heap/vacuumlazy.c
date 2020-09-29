@@ -62,6 +62,7 @@
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "commands/dbcommands.h"
 #include "commands/progress.h"
 #include "commands/vacuum.h"
@@ -445,9 +446,9 @@ heap_vacuum_rel(Relation onerel, VacuumParams *params,
 	Assert(params->index_cleanup != VACOPT_TERNARY_DEFAULT);
 	Assert(params->truncate != VACOPT_TERNARY_DEFAULT);
 
-	/* not every AM requires these to be valid, but heap does */
-	Assert(TransactionIdIsNormal(onerel->rd_rel->relfrozenxid));
-	Assert(MultiXactIdIsValid(onerel->rd_rel->relminmxid));
+	/* not every AM requires these to be valid, but regular heap does */
+	Assert(RELATION_IS_GLOBAL_TEMP(onerel) ^ TransactionIdIsNormal(onerel->rd_rel->relfrozenxid));
+	Assert(RELATION_IS_GLOBAL_TEMP(onerel) ^ MultiXactIdIsValid(onerel->rd_rel->relminmxid));
 
 	/* measure elapsed time iff autovacuum logging requires it */
 	if (IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0)

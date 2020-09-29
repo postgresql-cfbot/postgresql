@@ -28,6 +28,7 @@
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/heap.h"
+#include "catalog/storage_gtt.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_statistic_ext.h"
@@ -216,6 +217,14 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			 * queries.
 			 */
 			if (indexRelation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+			{
+				index_close(indexRelation, NoLock);
+				continue;
+			}
+
+			/* Ignore empty index for global temp table */
+			if (RELATION_IS_GLOBAL_TEMP(indexRelation) &&
+				!gtt_storage_attached(RelationGetRelid(indexRelation)))
 			{
 				index_close(indexRelation, NoLock);
 				continue;

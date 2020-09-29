@@ -6438,7 +6438,9 @@ plan_create_index_workers(Oid tableOid, Oid indexOid)
 	 * Furthermore, any index predicate or index expressions must be parallel
 	 * safe.
 	 */
+	/* global temp table is same as local temp table */
 	if (heap->rd_rel->relpersistence == RELPERSISTENCE_TEMP ||
+		heap->rd_rel->relpersistence == RELPERSISTENCE_GLOBAL_TEMP ||
 		!is_parallel_safe(root, (Node *) RelationGetIndexExpressions(index)) ||
 		!is_parallel_safe(root, (Node *) RelationGetIndexPredicate(index)))
 	{

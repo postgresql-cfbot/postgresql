@@ -3159,6 +3159,7 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 			beentry->st_activity_start_timestamp = 0;
 			/* st_xact_start_timestamp and wait_event_info are also disabled */
 			beentry->st_xact_start_timestamp = 0;
+			beentry->st_queryid = 0;
 			proc->wait_event_info = 0;
 			PGSTAT_END_WRITE_ACTIVITY(beentry);
 		}
@@ -3189,6 +3190,14 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 	beentry->st_state = state;
 	beentry->st_state_start_timestamp = current_timestamp;
 
+	/*
+	 * If a new query is started, we reset the query identifier as it'll only
+	 * be known after parse analysis, to avoid reporting last query's
+	 * identifier.
+	 */
+	if (state == STATE_RUNNING)
+		beentry->st_queryid = 0;
+
 	if (cmd_str != NULL)
 	{
 		memcpy((char *) beentry->st_activity_raw, cmd_str, len);
@@ -3196,6 +3205,48 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 		beentry->st_activity_start_timestamp = start_timestamp;
 	}
 
+	PGSTAT_END_WRITE_ACTIVITY(beentry);
+}
+
+/* --------
+ * pgstat_report_queryid() -
+ *
+ *	Called to update top-level query identifier.
+ * --------
+ */
+void
+pgstat_report_queryid(uint64 queryId, bool force)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!beentry)
+		return;
+
+	/*
+	 * if track_activities is disabled, st_queryid should already have been
+	 * reset
+	 */
+	if (!pgstat_track_activities)
+		return;
+
+	/*
+	 * We only report the top-level query identifiers.  The stored queryid is
+	 * reset when a backend calls pgstat_report_activity(STATE_RUNNING), or
+	 * with an explicit call to this function using the force flag.  If the
+	 * saved query identifier is not zero it means that it's not a top-level
+	 * command, so ignore the one provided unless it's an explicit call to
+	 * reset the identifier.
+	 */
+	if (beentry->st_queryid != 0 && !force)
+		return;
+
+	/*
+	 * Update my status entry, following the protocol of bumping
+	 * st_changecount before and after.  We use a volatile pointer here to
+	 * ensure the compiler doesn't try to get cute.
+	 */
+	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+	beentry->st_queryid = queryId;
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
 
@@ -4810,6 +4861,20 @@ pgstat_get_db_entry(Oid databaseid, bool create)
 		reset_dbentry_counters(result);
 
 	return result;
+}
+
+/* ----------
+ * pgstat_get_my_queryid() -
+ *
+ *	Return current backend's query identifier.
+ */
+uint64
+pgstat_get_my_queryid(void)
+{
+	if (!MyBEEntry)
+		return 0;
+
+	return MyBEEntry->st_queryid;
 }
 
 

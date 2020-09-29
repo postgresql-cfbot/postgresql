@@ -3100,7 +3100,8 @@ domainAddConstraint(Oid domainOid, Oid domainNamespace, Oid baseTypeOid,
 	 * Store the constraint in pg_constraint
 	 */
 	ccoid =
-		CreateConstraintEntry(constr->conname,	/* Constraint Name */
+		CreateConstraintEntry(InvalidOid,
+							  constr->conname,	/* Constraint Name */
 							  domainNamespace,	/* namespace */
 							  CONSTRAINT_CHECK, /* Constraint Type */
 							  false,	/* Is Deferrable */

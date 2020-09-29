@@ -3052,3 +3052,222 @@ create trigger aft_row after insert or update on trigger_parted
 create table trigger_parted_p1 partition of trigger_parted for values in (1)
   partition by list (a);
 create table trigger_parted_p1_1 partition of trigger_parted_p1 for values in (1);
+--
+-- Test case for CREATE OR REPLACE TRIGGER
+--
+create table my_table (id integer);
+create function funcA() returns trigger as $$
+begin
+  raise notice 'hello from funcA';
+  return null;
+end; $$ language plpgsql;
+create function funcB() returns trigger as $$
+begin
+  raise notice 'hello from funcB';
+  return null;
+end; $$ language plpgsql;
+create or replace trigger my_trig
+  before insert on my_table
+  for each row execute procedure funcA();
+insert into my_table (id) values (1);
+NOTICE:  hello from funcA
+create or replace trigger my_trig
+  before insert on my_table
+  for each row execute procedure funcB();
+insert into my_table (id) values (2);
+NOTICE:  hello from funcB
+drop trigger my_trig on my_table;
+drop function funcA();
+drop function funcB();
+drop table my_table;
+-- test trigger can't be replaced without OR REPLACE clause
+create table my_table (id integer);
+create function funcA() returns trigger as $$
+begin
+  raise notice 'hello from funcA';
+  return null;
+end; $$ language plpgsql;
+create function funcB() returns trigger as $$
+begin
+  raise notice 'hello from funcB';
+  return null;
+end; $$ language plpgsql;
+create trigger my_trig
+  before insert on my_table
+  for each row execute procedure funcA();
+create trigger my_trig
+  before insert on my_table
+  for each row execute procedure funcB(); --should fail
+ERROR:  trigger "my_trig" for relation "my_table" already exists
+drop trigger my_trig on my_table;
+create constraint trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcA();
+create constraint trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcB(); --should fail
+ERROR:  trigger "my_trig" for relation "my_table" already exists
+drop trigger my_trig on my_table;
+drop function funcA();
+drop function funcB();
+drop table my_table;
+-- test for detecting incompatible replacement of trigger
+create table my_table (id integer);
+create function funcA() returns trigger as $$
+begin
+  raise notice 'hello from funcA';
+  return null;
+end; $$ language plpgsql;
+create function funcB() returns trigger as $$
+begin
+  raise notice 'hello from funcB';
+  return null;
+end; $$ language plpgsql;
+create or replace trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcA();
+create or replace constraint trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcB(); --should fail
+ERROR:  trigger "my_trig" for relation "my_table" is a regular trigger
+HINT:  use CREATE OR REPLACE TRIGGER to replace a regular trigger
+drop trigger my_trig on my_table;
+create or replace constraint trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcB();
+create or replace trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcB(); --should fail
+ERROR:  trigger "my_trig" for relation "my_table" is a constraint trigger
+HINT:  use CREATE OR REPLACE CONSTRAINT TRIGGER to replace a constraint trigger
+drop table my_table;
+drop function funcA();
+drop function funcB();
+-- test CREATE OR REPLACE TRIGGER on partition table
+create table parted_trig (a int) partition by range (a);
+create table parted_trig_1 partition of parted_trig for values from (0) to (1000) partition by range (a);
+create table parted_trig_1_1 partition of parted_trig_1 for values from (0) to (100);
+create table parted_trig_2 partition of parted_trig for values from (1000) to (2000);
+create table default_parted_trig partition of parted_trig default;
+create function funcA() returns trigger as $$
+begin
+  raise notice 'hello from funcA';
+  return null;
+end; $$ language plpgsql;
+create function funcB() returns trigger as $$
+begin
+  raise notice 'hello from funcB';
+  return null;
+end; $$ language plpgsql;
+-- trigger attached to the parent partition table is replaced by a new one to the parent partition table.
+-- verify that all partitioned table share the latter trigger in this case.
+create or replace trigger my_trig
+  after insert on parted_trig
+  for each row execute procedure funcA();
+insert into parted_trig (a) values (50);
+NOTICE:  hello from funcA
+insert into parted_trig (a) values (1500);
+NOTICE:  hello from funcA
+insert into parted_trig (a) values (2500);
+NOTICE:  hello from funcA
+create or replace trigger my_trig
+  after insert on parted_trig
+  for each row execute procedure funcB();
+insert into parted_trig (a) values (50);
+NOTICE:  hello from funcB
+insert into parted_trig (a) values (1500);
+NOTICE:  hello from funcB
+insert into parted_trig (a) values (2500);
+NOTICE:  hello from funcB
+truncate parted_trig;
+drop trigger my_trig on parted_trig;
+-- trigger attached to the parent partition table is replaced by a new one to the child partition table.
+-- verify that only the child partition's trigger is replaced and other tables' triggers aren't.
+create or replace trigger my_trig
+  after insert on parted_trig
+  for each row execute procedure funcA();
+insert into parted_trig (a) values (50);
+NOTICE:  hello from funcA
+insert into parted_trig (a) values (1500);
+NOTICE:  hello from funcA
+insert into parted_trig (a) values (2500);
+NOTICE:  hello from funcA
+create or replace trigger my_trig
+  after insert on parted_trig_1
+  for each row execute procedure funcB();
+insert into parted_trig (a) values (50);
+NOTICE:  hello from funcB
+insert into parted_trig (a) values (1500);
+NOTICE:  hello from funcA
+insert into parted_trig (a) values (2500);
+NOTICE:  hello from funcA
+truncate parted_trig;
+drop trigger my_trig on parted_trig;
+-- trigger attached to the child partition table is replaced by a new one to the parent partition table.
+-- verify that the child partition's trigger is replaced by the new one as well and other partition share the same one.
+create or replace trigger my_trig
+  after insert on parted_trig_1
+  for each row execute procedure funcA();
+insert into parted_trig (a) values (50);
+NOTICE:  hello from funcA
+insert into parted_trig (a) values (1500);
+insert into parted_trig (a) values (2500);
+create or replace trigger my_trig
+  after insert on parted_trig
+  for each row execute procedure funcB();
+insert into parted_trig (a) values (50);
+NOTICE:  hello from funcB
+insert into parted_trig (a) values (1500);
+NOTICE:  hello from funcB
+insert into parted_trig (a) values (2500);
+NOTICE:  hello from funcB
+truncate parted_trig;
+drop trigger my_trig on parted_trig;
+-- trigger attached to the child partition table is replaced by a new one to the child partition table.
+-- verify that the trigger of the child partition is replaced and no other partition has the partition.
+create or replace trigger my_trig
+  after insert on parted_trig_1
+  for each row execute procedure funcA();
+insert into parted_trig (a) values (50);
+NOTICE:  hello from funcA
+insert into parted_trig (a) values (1500);
+insert into parted_trig (a) values (2500);
+create or replace trigger my_trig
+  after insert on parted_trig_1
+  for each row execute procedure funcB();
+insert into parted_trig (a) values (50);
+NOTICE:  hello from funcB
+insert into parted_trig (a) values (1500);
+insert into parted_trig (a) values (2500);
+truncate parted_trig;
+drop trigger my_trig on parted_trig_1;
+drop table parted_trig;
+drop function funcA();
+drop function funcB();
+-- test for protection of dropping a trigger that has pending events in the session
+create table my_table (id integer);
+create function funcA () returns trigger as $$
+begin
+  raise notice 'hello from funcA';
+  return null;
+end; $$ language plpgsql;
+create function funcB() returns trigger as $$
+begin
+  raise notice 'hello from funcB';
+  return null;
+end; $$ language plpgsql;
+begin;
+create or replace constraint trigger my_trig
+  after insert on my_table
+  deferrable initially deferred
+  for each row execute procedure funcA();
+insert into my_table (id) values (1); -- make this trigger above pending
+create or replace constraint trigger my_trig
+  after insert on my_table
+  deferrable initially deferred
+  for each row execute procedure funcB(); -- should fail
+ERROR:  cannot replace "my_trig" on "my_table" because it has pending trigger events
+end;
+drop table my_table;
+drop function funcA();
+drop function funcB();

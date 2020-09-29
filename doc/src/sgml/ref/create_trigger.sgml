@@ -26,7 +26,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE [ CONSTRAINT ] TRIGGER <replaceable class="parameter">name</replaceable> { BEFORE | AFTER | INSTEAD OF } { <replaceable class="parameter">event</replaceable> [ OR ... ] }
+CREATE [ OR REPLACE ] [ CONSTRAINT ] TRIGGER <replaceable class="parameter">name</replaceable> { BEFORE | AFTER | INSTEAD OF } { <replaceable class="parameter">event</replaceable> [ OR ... ] }
     ON <replaceable class="parameter">table_name</replaceable>
     [ FROM <replaceable class="parameter">referenced_table_name</replaceable> ]
     [ NOT DEFERRABLE | [ DEFERRABLE ] [ INITIALLY IMMEDIATE | INITIALLY DEFERRED ] ]
@@ -48,11 +48,19 @@ CREATE [ CONSTRAINT ] TRIGGER <replaceable class="parameter">name</replaceable> 
   <title>Description</title>
 
   <para>
-   <command>CREATE TRIGGER</command> creates a new trigger.  The
-   trigger will be associated with the specified table, view, or foreign table
+   <command>CREATE TRIGGER</command> creates a new trigger.
+   <command>CREATE OR REPLACE TRIGGER</command> will either create a
+   new trigger, or replace an existing trigger. The trigger will be
+   associated with the specified table, view, or foreign table
    and will execute the specified
    function <replaceable class="parameter">function_name</replaceable> when
    certain operations are performed on that table.
+  </para>
+
+  <para>
+   To replace the current definition of an existing trigger, use
+   <command>CREATE OR REPLACE TRIGGER</command>, by specifying the same
+   trigger's name and the corresponding table's name where the trigger belongs.
   </para>
 
   <para>
@@ -443,6 +451,14 @@ UPDATE OF <replaceable>column_name1</replaceable> [, <replaceable>column_name2</
 
   <para>
    Use <xref linkend="sql-droptrigger"/> to remove a trigger.
+  </para>
+
+  <para>
+   When replacing an existing trigger with <command>CREATE OR REPLACE
+   TRIGGER</command>, there are restrictions. You cannot replace triggers with
+   a different type of trigger. That means it is impossible to replace a regular
+   trigger with a constraint trigger, and vice versa. Also, in a transaction
+   you cannot replace triggers that are already fired and have pending events.
   </para>
 
   <para>

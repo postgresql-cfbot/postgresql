@@ -1862,7 +1862,8 @@ index_constraint_create(Relation heapRelation,
 	/*
 	 * Construct a pg_constraint entry.
 	 */
-	conOid = CreateConstraintEntry(constraintName,
+	conOid = CreateConstraintEntry(InvalidOid,
+								   constraintName,
 								   namespaceId,
 								   constraintType,
 								   deferrable,
@@ -1927,6 +1928,8 @@ index_constraint_create(Relation heapRelation,
 		CreateTrigStmt *trigger;
 
 		trigger = makeNode(CreateTrigStmt);
+		trigger->replace = false;
+		trigger->isconstraint = true;
 		trigger->trigname = (constraintType == CONSTRAINT_PRIMARY) ?
 			"PK_ConstraintTrigger" :
 			"Unique_ConstraintTrigger";
@@ -1938,7 +1941,6 @@ index_constraint_create(Relation heapRelation,
 		trigger->events = TRIGGER_TYPE_INSERT | TRIGGER_TYPE_UPDATE;
 		trigger->columns = NIL;
 		trigger->whenClause = NULL;
-		trigger->isconstraint = true;
 		trigger->deferrable = true;
 		trigger->initdeferred = initdeferred;
 		trigger->constrrel = NULL;

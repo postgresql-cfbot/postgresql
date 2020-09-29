@@ -27,19 +27,42 @@
 
 typedef uint32 TriggerEvent;
 
+/*
+ * An intermediate storage for TIDs, in order to process multiple events by a
+ * single call of RI trigger.
+ *
+ * XXX Introduce a size limit and make caller of add_tid() aware of it?
+ */
+typedef struct TIDArray
+{
+	ItemPointerData *tids;
+	uint64		n;
+	uint64		nmax;
+} TIDArray;
+
 typedef struct TriggerData
 {
 	NodeTag		type;
+	int			tgindx;
 	TriggerEvent tg_event;
 	Relation	tg_relation;
 	HeapTuple	tg_trigtuple;
 	HeapTuple	tg_newtuple;
 	Trigger    *tg_trigger;
+	bool		is_ri_trigger;
 	TupleTableSlot *tg_trigslot;
 	TupleTableSlot *tg_newslot;
 	Tuplestorestate *tg_oldtable;
 	Tuplestorestate *tg_newtable;
 	const Bitmapset *tg_updatedcols;
+
+	TupleDesc	desc;
+
+	/*
+	 * RI triggers receive TIDs and retrieve the tuples before they're needed.
+	 */
+	TIDArray   *ri_tids_old;
+	TIDArray   *ri_tids_new;
 } TriggerData;
 
 /*
@@ -262,6 +285,8 @@ extern bool RI_FKey_pk_upd_check_required(Trigger *trigger, Relation pk_rel,
 										  TupleTableSlot *old_slot, TupleTableSlot *new_slot);
 extern bool RI_FKey_fk_upd_check_required(Trigger *trigger, Relation fk_rel,
 										  TupleTableSlot *old_slot, TupleTableSlot *new_slot);
+extern TupleDesc RI_FKey_fk_attributes(Trigger *trigger, Relation trig_rel,
+									   const int16 **attnums_p);
 extern bool RI_Initial_Check(Trigger *trigger,
 							 Relation fk_rel, Relation pk_rel);
 extern void RI_PartitionRemove_Check(Trigger *trigger, Relation fk_rel,

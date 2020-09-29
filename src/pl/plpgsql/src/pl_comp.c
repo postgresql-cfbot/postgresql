@@ -582,6 +582,41 @@ do_compile(FunctionCallInfo fcinfo,
 											  true);
 			}
 
+			if (function->fn_prokind == PROKIND_WINDOW)
+			{
+				PLpgSQL_type   *dtype;
+				PLpgSQL_var	   *var;
+
+				/*
+				 * Add the promise variable windowobject with windowobjectproxy type
+				 *
+				 * Pseudotypes are disallowed for custom variables. It is checked
+				 * in plpgsql_build_variable, so instead call this function, build
+				 * promise variable here.
+				 */
+
+				dtype = plpgsql_build_datatype(WINDOWOBJECTPROXYOID,
+											   -1,
+											   function->fn_input_collation,
+											   NULL);
+
+				/* this should be pseudotype */
+				Assert(dtype->ttype == PLPGSQL_TTYPE_PSEUDO);
+
+				var = palloc0(sizeof(PLpgSQL_var));
+
+				var->dtype = PLPGSQL_DTYPE_PROMISE;
+				var->promise = PLPGSQL_PROMISE_WINDOWOBJECT;
+
+				var->refname = pstrdup("windowobject");
+				var->datatype = dtype;
+
+				plpgsql_adddatum((PLpgSQL_datum *) var);
+				plpgsql_ns_additem(PLPGSQL_NSTYPE_VAR,
+								   var->dno,
+								   var->refname);
+			}
+
 			ReleaseSysCache(typeTup);
 			break;
 

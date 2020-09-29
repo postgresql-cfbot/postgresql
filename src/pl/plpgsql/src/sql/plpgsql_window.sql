@@ -1,0 +1,135 @@
+create or replace function pl_row_number()
+returns bigint as $$
+declare pos int8;
+begin
+  pos := get_current_position(windowobject);
+  pos := pos + 1;
+  perform set_mark_position(windowobject, pos);
+  return pos;
+end
+$$
+language plpgsql window;
+
+select pl_row_number() over (), v from (values(10),(20),(30)) v(v);
+
+create or replace function pl_round_value(numeric)
+returns int as $$
+declare
+  num numeric;
+begin
+  num := get_input_value_for_row(windowobject, 1);
+  return round(num);
+end
+$$ language plpgsql window;
+
+select pl_round_value(v) over(order by v desc) from generate_series(0.1, 1.0, 0.1) g(v);
+
+select pl_round_value(v + 1) over(order by v desc) from generate_series(0.1, 1.0, 0.1) g(v);
+
+create table test_table(v numeric);
+insert into test_table values(1),(3),(6),(6),(8),(7),(6),(5),(4);
+
+create or replace function pl_lag(numeric)
+returns numeric as $$
+declare
+  v numeric;
+begin
+  v := get_input_value_in_partition(windowobject, 1, -1, 'seek_current', false);
+  return v;
+end;
+$$ language plpgsql window;
+
+select pl_lag(v) over (), lag(v) over () from test_table;
+
+drop table test_table;
+
+create table test_table(v integer);
+insert into test_table values(1),(3),(6),(6),(8),(7),(6),(5),(4);
+
+select pl_lag(v) over (), lag(v) over () from test_table;
+
+create or replace function pl_moving_avg(numeric)
+returns numeric as $$
+declare
+  s numeric default 0.0;
+  v numeric;
+  c numeric default 0.0;
+begin
+  -- look before
+  v := get_input_value_in_partition(windowobject, 1, -1, 'seek_current', false);
+  if v is not null then
+    s := s + v;
+    c := c + 1.0;
+  end if;
+
+  -- look after
+  v := get_input_value_in_partition(windowobject, 1, 0, 'seek_current', false);
+  if v is not null then
+    s := s + v;
+    c := c + 1.0;
+  end if;
+
+  v := get_input_value_in_partition(windowobject, 1, 1, 'seek_current', false);
+  if v is not null then
+    s := s + v;
+    c := c + 1.0;
+  end if;
+
+  return trim_scale(s / c);
+end
+$$ language plpgsql window;
+
+select pl_moving_avg(v) over (), v from test_table;
+
+create or replace function pl_lag_polymorphic(anyelement)
+returns anyelement as $$
+declare
+  v $0%type;
+begin
+  v := get_input_value_in_partition(windowobject, 1, -1, 'seek_current', false);
+  return v;
+end;
+$$ language plpgsql window;
+
+select pl_lag_polymorphic(v) over (), lag(v) over () from test_table;
+
+create or replace function pl_pcontext_test(numeric)
+returns numeric as $$
+declare
+  n numeric;
+  v numeric;
+begin
+  n := get_partition_context_value(windowobject, null::numeric);
+  v := get_input_value_for_row(windowobject, 1);
+  perform set_partition_context_value(windowobject, v);
+
+  return n;
+end
+$$
+language plpgsql window;
+
+select v, pl_pcontext_test(v) over () from generate_series(0.1, 1.0, 0.1) g(v);
+
+create table test_missing_values(id int, v integer);
+insert into test_missing_values values(1,10),(2,11),(3,12),(4,null),(5,null),(6,15),(7,16);
+
+create or replace function pl_pcontext_test(numeric)
+returns numeric as $$
+declare
+  n numeric;
+  v numeric;
+begin
+  v := get_input_value_for_row(windowobject, 1);
+
+  if v is null then
+    v := get_partition_context_value(windowobject, null::numeric);
+  else
+    perform set_partition_context_value(windowobject, v);
+  end if;
+
+  return v;
+end
+$$
+language plpgsql window;
+
+select id, v, pl_pcontext_test(v) over (order by id) from test_missing_values;

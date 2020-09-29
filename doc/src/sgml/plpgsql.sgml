@@ -4568,6 +4568,99 @@ CREATE EVENT TRIGGER snitch ON ddl_command_start EXECUTE FUNCTION snitch();
 
   </sect1>
 
+ <sect1 id="plpgsql-window">
+  <title>Window Functions</title>
+
+  <indexterm zone="plpgsql-window">
+   <primary>window</primary>
+   <secondary>in PL/pgSQL</secondary>
+  </indexterm>
+
+  <para>
+   <application>PL/pgSQL</application> can be used to define window
+   functions. A window function is created with the <command>CREATE FUNCTION</command>
+   command with clause <literal>WINDOW</literal>. The specific feature of
+   this functions is a possibility to two special storages with 
+   sorted values of window function arguments and store with stored
+   one value of any type for currently processed partition (of window
+   function).
+  </para>
+
+  <para>
+   Access to both storages is done with special internal variable
+   <varname>WINDOWOBJECT</varname>. This variable is declared implicitly,
+   and it is available only in window functions.
+
+<programlisting>
+CREATE OR REPLACE FUNCTION plpgsql_rownum() RETURNS int8
+LANGUAGE plpgsql WINDOW
+AS $$
+DECLARE pos int8
+BEGIN
+    pos := get_current_position(WINDOWOBJECT);
+    pos := pos + 1;
+    PERFORM set_mark_position(WINDOWOBJECT, pos);
+RETURN pos;
+$$;
+
+SELECT plpgsql_rownum() OVER (), * FROM tab;
+</programlisting>
+  </para>
+
+  <para>
+   The arguments of window function cannot be accessed directly. The special
+   functions should be used. With these functions we can choose a scope of
+   buffered arguments, we can choose a wanted position against first, current, or
+   last row. The implementation of <function>lag</function> can looks like
+   (the window functions in plpgsql can use polymorphic types too):
+
+<programlisting>
+CREATE OR REPLACE FUNCTION plpgsql_lag(anyelement) RETURNS anyelement
+LANGUAGE plpgsql WINDOW
+AS $$
+BEGIN
+    RETURN
+      get_input_value_in_partition(WINDOWOBJECT,
+                                   1, -1,
+                                   'seek_current',
+                                   false);
+END;
+$$;
+
+SELECT v, plpgsql_lag(v) FROM generate_series(1, 10) g(v);
+</programlisting>
+
+  </para>
+
+  <para>
+   Second buffer that can be used in window function is a buffer for one value
+   assigned to partition. The content of this buffer can be read by function
+   <function>get_partition_context_value</function> or modified by function
+   <function>set_partition_context_value</function>. Next function replaces
+   missing values by previous non <literal>NULL</literal> value:
+
+<programlisting>
+CREATE OR REPLACE FUNCTION plpgsql_replace_missing(numeric) RETURNS numeric
+LANGUAGE plpgsql WINDOW
+AS $$
+DECLATE
+    v numeric;
+BEGIN
+    v := get_input_value_for_row(WINDOWOBJECT, 1);
+    IF v IS NULL THEN
+        v := get_partition_context_value(WINDOWOBJECT, NULL::numeric);
+    ELSE
+        PERFORM set_partition_context_value(WINDOWOBJECT, v);
+    END IF;
+    RETURN v;
+END;
+$$;
+</programlisting>
+
+  </para>
+
+  </sect1>
+
   <sect1 id="plpgsql-implementation">
    <title><application>PL/pgSQL</application> under the Hood</title>
 

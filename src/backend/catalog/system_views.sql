@@ -1421,6 +1421,18 @@ LANGUAGE internal
 STRICT IMMUTABLE PARALLEL SAFE
 AS 'unicode_is_normalized';
 
+CREATE OR REPLACE FUNCTION
+  get_partition_context_value(windowobjectproxy, anyelement, int4 DEFAULT NULL)
+  RETURNS anyelement
+LANGUAGE internal
+AS 'windowobject_get_partition_context_value';
+
+CREATE OR REPLACE FUNCTION
+  set_partition_context_value(windowobjectproxy, anyelement, int4 DEFAULT NULL)
+  RETURNS void
+LANGUAGE internal
+AS 'windowobject_set_partition_context_value';
+
 --
 -- The default permissions for functions mean that anyone can execute them.
 -- A number of functions shouldn't be executable by just anyone, but rather

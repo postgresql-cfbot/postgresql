@@ -140,6 +140,7 @@ static double preprocess_limit(PlannerInfo *root,
 							   double tuple_fraction,
 							   int64 *offset_est, int64 *count_est);
 static void remove_useless_groupby_columns(PlannerInfo *root);
+static void remove_useless_distinct(PlannerInfo *root);
 static List *preprocess_groupclause(PlannerInfo *root, List *force);
 static List *extract_rollup_sets(List *groupingSets);
 static List *reorder_grouping_sets(List *groupingSets, List *sortclause);
@@ -651,6 +652,12 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	 * that we don't need so many special cases to deal with that situation.
 	 */
 	replace_empty_jointree(parse);
+
+	/*
+	 * If there is a distinct clause, try to remove it
+	 */
+	if (parse->distinctClause)
+		remove_useless_distinct(root);
 
 	/*
 	 * Look for ANY and EXISTS SubLinks in WHERE and JOIN/ON clauses, and try
@@ -3203,6 +3210,131 @@ remove_useless_groupby_columns(PlannerInfo *root)
 		}
 
 		parse->groupClause = new_groupby;
+	}
+}
+
+/*
+ * remove_useless_distinct
+ *		Remove any distinct that is redundant due to being applied on the
+ *		primary key of the table.
+ *
+ * Currently, we only make use of pkey constraints for this, however, we may
+ * want to take this further in the future and also use unique constraints
+ * with NOT NULL columns.
+ */
+static void
+remove_useless_distinct(PlannerInfo *root)
+{
+	Index distincted_table = 0;
+	if (list_length(root->parse->rtable) > 1)
+	{
+		/**
+		 * There is more than one table.
+		 * If no field is selected from another table, this is a 'typical'
+		 * semi-join written using distinct instead of exists.
+		 */
+		ListCell *targetCell;
+		Var *targetVar;
+		foreach (targetCell, root->parse->targetList)
+		{
+			/**
+			 * This only accept Vars. Later, we could go lower and look for Vars 
+			 * inside function parameters for instance.
+			 */
+			TargetEntry *target = (TargetEntry*) lfirst(targetCell);
+			if (!IsA(target->expr, Var))
+			{
+				return;
+			}
+			else
+			{
+				targetVar = (Var*) target->expr;
+				if (distincted_table == 0)
+					distincted_table = targetVar->varno;
+				else if (distincted_table != targetVar->varno)
+					return;
+			}
+		}
+	}
+	else
+	{
+		distincted_table = 1;
+	}
+
+	/**
+	 * We will fetch the PK, check if we have a distinct on it.
+	 */
+	ListCell *distinctItemCell;
+	TargetEntry *entry;
+	Oid pk_oid = InvalidOid;
+	Bitmapset *pk_attnos;
+	RangeTblEntry *tbl;
+	Var *var;
+	SortGroupClause *distinctItem;
+
+	// To get the pk, we need the table
+	tbl = (RangeTblEntry*) list_nth(root->parse->rtable, distincted_table - 1);
+	// Make sure it is a relkind we understand
+	if (tbl->relkind != RELKIND_RELATION)
+	{
+		return;
+	}
+
+	pk_attnos = get_primary_key_attnos(tbl->relid, false, &pk_oid);
+	if (!pk_attnos)
+	{
+		// This table has no primary key, so we can abort
+		return;
+	}
+
+	foreach (distinctItemCell, root->parse->distinctClause)
+	{
+		distinctItem = (SortGroupClause*) lfirst(distinctItemCell);
+		// Get the entry tleSortGroupRef in targetList
+		entry = list_nth(root->parse->targetList, distinctItem->tleSortGroupRef - 1);
+		if (entry->expr)
+		{
+			if (IsA(entry->expr, Var))
+			{
+				var = (Var*) entry->expr;
+				pk_attnos = bms_del_member(
+					pk_attnos, var->varattno - FirstLowInvalidHeapAttributeNumber);
+			}
+			else
+			{
+				// Ignoring that field
+			}
+		}
+	}
+
+	if (bms_is_empty(pk_attnos)) {
+		/**
+		 * We saw all the fields of the PK, so we can optimize.
+		 * If there is a join, turn it into a SEMI-JOIN.
+		 */
+		ListCell *joinCell;
+		foreach (joinCell, root->parse->jointree->fromlist)
+		{
+			if (IsA(lfirst(joinCell), JoinExpr))
+			{
+				JoinExpr *expr = (JoinExpr*) lfirst(joinCell);
+				if (expr->jointype == JOIN_INNER)
+					expr->jointype = JOIN_SEMI;
+				else
+					return;
+			}
+			else
+			{
+				return;
+			}
+		}
+		/**
+		 * If there was no sort clause, we change the distinct into a sort clause.
+		 */
+		if (!root->parse->sortClause)
+			root->parse->sortClause = root->parse->distinctClause;
+
+		root->parse->distinctClause = NULL;
 	}
 }
 

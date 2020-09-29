@@ -91,6 +91,7 @@ static bool ReindexRelationConcurrently(Oid relationOid, int options);
 
 static void ReindexPartitions(Oid relid, int options, bool isTopLevel);
 static void ReindexMultipleInternal(List *relids, int options);
+static void reindex_invalid_child_indexes(Oid indexRelationId);
 static void reindex_error_callback(void *args);
 static void update_relispartition(Oid relationId, bool newval);
 static bool CompareOpclassOptions(Datum *opts1, Datum *opts2, int natts);
@@ -665,17 +666,6 @@ DefineIndex(Oid relationId,
 	partitioned = rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE;
 	if (partitioned)
 	{
-		/*
-		 * Note: we check 'stmt->concurrent' rather than 'concurrent', so that
-		 * the error is thrown also for temporary tables.  Seems better to be
-		 * consistent, even though we could do it on temporary table because
-		 * we're not actually doing it concurrently.
-		 */
-		if (stmt->concurrent)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot create index on partitioned table \"%s\" concurrently",
-							RelationGetRelationName(rel))));
 		if (stmt->excludeOpNames)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -1110,6 +1100,11 @@ DefineIndex(Oid relationId,
 		if (pd->nparts != 0)
 			flags |= INDEX_CREATE_INVALID;
 	}
+	else if (concurrent && OidIsValid(parentIndexId))
+	{
+		/* If concurrent, initially build index partitions as "invalid" */
+		flags |= INDEX_CREATE_INVALID;
+	}
 
 	if (stmt->deferrable)
 		constr_flags |= INDEX_CONSTR_CREATE_DEFERRABLE;
@@ -1162,6 +1157,14 @@ DefineIndex(Oid relationId,
 		 */
 		if (!stmt->relation || stmt->relation->inh)
 		{
+			/*
+			 * Need to close the relation before recursing into children, so
+			 * copy needed data into a longlived context.
+			 */
+
+			MemoryContext	ind_context = AllocSetContextCreate(PortalContext, "CREATE INDEX",
+					ALLOCSET_DEFAULT_SIZES);
+			MemoryContext	oldcontext = MemoryContextSwitchTo(ind_context);
 			PartitionDesc partdesc = RelationGetPartitionDesc(rel);
 			int			nparts = partdesc->nparts;
 			Oid		   *part_oids = palloc(sizeof(Oid) * nparts);
@@ -1169,12 +1172,15 @@ DefineIndex(Oid relationId,
 			TupleDesc	parentDesc;
 			Oid		   *opfamOids;
 
+			// If concurrent, maybe this should be done after excluding indexes which already exist ?
 			pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_TOTAL,
 										 nparts);
 
 			memcpy(part_oids, partdesc->oids, sizeof(Oid) * nparts);
+			parentDesc = CreateTupleDescCopy(RelationGetDescr(rel));
+			table_close(rel, NoLock);
+			MemoryContextSwitchTo(oldcontext);
 
-			parentDesc = RelationGetDescr(rel);
 			opfamOids = palloc(sizeof(Oid) * numberOfKeyAttributes);
 			for (i = 0; i < numberOfKeyAttributes; i++)
 				opfamOids[i] = get_opclass_family(classObjectId[i]);
@@ -1217,10 +1223,12 @@ DefineIndex(Oid relationId,
 					continue;
 				}
 
+				oldcontext = MemoryContextSwitchTo(ind_context);
 				childidxs = RelationGetIndexList(childrel);
 				attmap =
 					build_attrmap_by_name(RelationGetDescr(childrel),
 										  parentDesc);
+				MemoryContextSwitchTo(oldcontext);
 
 				foreach(cell, childidxs)
 				{
@@ -1291,9 +1299,13 @@ DefineIndex(Oid relationId,
 				 */
 				if (!found)
 				{
-					IndexStmt  *childStmt = copyObject(stmt);
+					IndexStmt  *childStmt;
 					bool		found_whole_row;
 					ListCell   *lc;
+
+					oldcontext = MemoryContextSwitchTo(ind_context);
+					childStmt = copyObject(stmt);
+					MemoryContextSwitchTo(oldcontext);
 
 					/*
 					 * We can't use the same index name for the child index,
@@ -1346,10 +1358,18 @@ DefineIndex(Oid relationId,
 								createdConstraintId,
 								is_alter_table, check_rights, check_not_in_use,
 								skip_build, quiet);
+					if (concurrent)
+					{
+						PopActiveSnapshot();
+						PushActiveSnapshot(GetTransactionSnapshot());
+						invalidate_parent = true;
+					}
 				}
 
-				pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_DONE,
-											 i + 1);
+				/* For concurrent build, this is a catalog-only stage */
+				if (!concurrent)
+					pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_DONE,
+												 i + 1);
 				free_attrmap(attmap);
 			}
 
@@ -1359,51 +1379,42 @@ DefineIndex(Oid relationId,
 			 * invalid, this is incorrect, so update our row to invalid too.
 			 */
 			if (invalidate_parent)
-			{
-				Relation	pg_index = table_open(IndexRelationId, RowExclusiveLock);
-				HeapTuple	tup,
-							newtup;
-
-				tup = SearchSysCache1(INDEXRELID,
-									  ObjectIdGetDatum(indexRelationId));
-				if (!HeapTupleIsValid(tup))
-					elog(ERROR, "cache lookup failed for index %u",
-						 indexRelationId);
-				newtup = heap_copytuple(tup);
-				((Form_pg_index) GETSTRUCT(newtup))->indisvalid = false;
-				CatalogTupleUpdate(pg_index, &tup->t_self, newtup);
-				ReleaseSysCache(tup);
-				table_close(pg_index, RowExclusiveLock);
-				heap_freetuple(newtup);
-			}
-		}
+				index_set_state_flags(indexRelationId, INDEX_DROP_CLEAR_VALID);
+		} else
+			table_close(rel, NoLock);
 
 		/*
 		 * Indexes on partitioned tables are not themselves built, so we're
 		 * done here.
 		 */
-		table_close(rel, NoLock);
 		if (!OidIsValid(parentIndexId))
+		{
+			if (concurrent)
+				reindex_invalid_child_indexes(indexRelationId);
+
 			pgstat_progress_end_command();
+		}
+
 		return address;
 	}
 
-	if (!concurrent)
+	table_close(rel, NoLock);
+	if (!concurrent || OidIsValid(parentIndexId))
 	{
-		/* Close the heap and we're done, in the non-concurrent case */
-		table_close(rel, NoLock);
+		/*
+		 * We're done if this is the top-level index,
+		 * or the catalog-only phase of a partition built concurrently
+		 */
 
-		/* If this is the top-level index, we're done. */
 		if (!OidIsValid(parentIndexId))
 			pgstat_progress_end_command();
 
 		return address;
 	}
 
-	/* save lockrelid and locktag for below, then close rel */
+	/* save lockrelid and locktag for below */
 	heaprelid = rel->rd_lockInfo.lockRelId;
 	SET_LOCKTAG_RELATION(heaplocktag, heaprelid.dbId, heaprelid.relId);
-	table_close(rel, NoLock);
 
 	/*
 	 * For a concurrent build, it's important to make the catalog entries
@@ -1585,6 +1596,50 @@ DefineIndex(Oid relationId,
 	return address;
 }
 
+/* Reindex invalid child indexes created earlier */
+static void
+reindex_invalid_child_indexes(Oid indexRelationId)
+{
+	ListCell *lc;
+	int		npart = 0;
+
+	MemoryContext	ind_context = AllocSetContextCreate(PortalContext, "CREATE INDEX",
+			ALLOCSET_DEFAULT_SIZES);
+	MemoryContext	oldcontext = MemoryContextSwitchTo(ind_context);
+	List		*childs = find_inheritance_children(indexRelationId, NoLock);
+	MemoryContextSwitchTo(oldcontext);
+
+	PopActiveSnapshot();
+
+	foreach (lc, childs)
+	{
+		Oid			indexrelid = lfirst_oid(lc);
+
+		pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_DONE,
+									 npart++);
+
+		CommandCounterIncrement();
+		PushActiveSnapshot(GetTransactionSnapshot());
+
+		if (get_index_isvalid(indexrelid) ||
+				get_rel_relkind(indexrelid) == RELKIND_PARTITIONED_INDEX)
+		{
+			PopActiveSnapshot();
+			continue;
+		}
+
+		ReindexRelationConcurrently(indexrelid, 0);
+	}
+
+	/*
+	 * CIC needs to mark a partitioned index as VALID, which itself
+	 * requires setting READY, which is unset for CIC (even though
+	 * it's meaningless for an index without storage).
+	 */
+	index_set_state_flags(indexRelationId, INDEX_CREATE_SET_READY);
+	CommandCounterIncrement();
+	index_set_state_flags(indexRelationId, INDEX_CREATE_SET_VALID);
+}
 
 /*
  * CheckMutability

@@ -29,10 +29,22 @@ select relname, relkind, relhassubclass, inhparent::regclass
 	where relname like 'idxpart%' order by relname;
 drop table idxpart;
 
--- Some unsupported features
+-- CIC on partitioned table
 create table idxpart (a int, b int, c text) partition by range (a);
-create table idxpart1 partition of idxpart for values from (0) to (10);
-create index concurrently on idxpart (a);
+create table idxpart1 partition of idxpart for values from (0) to (10) partition by range(a);
+create table idxpart11 partition of idxpart1 for values from (0) to (10) partition by range(a);
+create table idxpart111 partition of idxpart11 default partition by range(a);
+create table idxpart1111 partition of idxpart111 default partition by range(a);
+create table idxpart2 partition of idxpart for values from (10) to (20);
+insert into idxpart2 values(10),(10); -- not unique
+create index concurrently on idxpart (a); -- partitioned
+create index concurrently on idxpart1 (a); -- partitioned and partition
+create index concurrently on idxpart11 (a); -- partitioned and partition, with no leaves
+create index concurrently on idxpart2 (a); -- leaf
+create unique index concurrently on idxpart (a); -- partitioned, unique failure
+\d idxpart
+\d idxpart1
+\d idxpart2
 drop table idxpart;
 
 -- Verify bugfix with query on indexed partitioned table with no partitions
@@ -92,8 +104,7 @@ create table idxpart (a int) partition by range (a);
 create index on idxpart (a);
 create table idxpart1 partition of idxpart for values from (0) to (10);
 drop index idxpart1_a_idx;	-- no way
-drop index concurrently idxpart_a_idx;	-- unsupported
-drop index idxpart_a_idx;	-- both indexes go away
+drop index concurrently idxpart_a_idx;
 select relname, relkind from pg_class
   where relname like 'idxpart%' order by relname;
 create index on idxpart (a);

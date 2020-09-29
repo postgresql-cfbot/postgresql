@@ -50,11 +50,63 @@ select relname, relkind, relhassubclass, inhparent::regclass
 (8 rows)
 
 drop table idxpart;
--- Some unsupported features
+-- CIC on partitioned table
 create table idxpart (a int, b int, c text) partition by range (a);
-create table idxpart1 partition of idxpart for values from (0) to (10);
-create index concurrently on idxpart (a);
-ERROR:  cannot create index on partitioned table "idxpart" concurrently
+create table idxpart1 partition of idxpart for values from (0) to (10) partition by range(a);
+create table idxpart11 partition of idxpart1 for values from (0) to (10) partition by range(a);
+create table idxpart111 partition of idxpart11 default partition by range(a);
+create table idxpart1111 partition of idxpart111 default partition by range(a);
+create table idxpart2 partition of idxpart for values from (10) to (20);
+insert into idxpart2 values(10),(10); -- not unique
+create index concurrently on idxpart (a); -- partitioned
+create index concurrently on idxpart1 (a); -- partitioned and partition
+create index concurrently on idxpart11 (a); -- partitioned and partition, with no leaves
+create index concurrently on idxpart2 (a); -- leaf
+create unique index concurrently on idxpart (a); -- partitioned, unique failure
+ERROR:  could not create unique index "idxpart2_a_idx2_ccnew"
+DETAIL:  Key (a)=(10) is duplicated.
+\d idxpart
+        Partitioned table "public.idxpart"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition key: RANGE (a)
+Indexes:
+    "idxpart_a_idx" btree (a)
+    "idxpart_a_idx1" UNIQUE, btree (a) INVALID
+Number of partitions: 2 (Use \d+ to list them.)
+
+\d idxpart1
+        Partitioned table "public.idxpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition of: idxpart FOR VALUES FROM (0) TO (10)
+Partition key: RANGE (a)
+Indexes:
+    "idxpart1_a_idx" btree (a) INVALID
+    "idxpart1_a_idx1" btree (a)
+    "idxpart1_a_idx2" UNIQUE, btree (a) INVALID
+Number of partitions: 1 (Use \d+ to list them.)
+
+\d idxpart2
+              Table "public.idxpart2"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition of: idxpart FOR VALUES FROM (10) TO (20)
+Indexes:
+    "idxpart2_a_idx" btree (a)
+    "idxpart2_a_idx1" btree (a)
+    "idxpart2_a_idx2" UNIQUE, btree (a) INVALID
+    "idxpart2_a_idx2_ccnew" UNIQUE, btree (a) INVALID
+
 drop table idxpart;
 -- Verify bugfix with query on indexed partitioned table with no partitions
 -- https://postgr.es/m/20180124162006.pmapfiznhgngwtjf@alvherre.pgsql
@@ -174,9 +226,7 @@ create table idxpart1 partition of idxpart for values from (0) to (10);
 drop index idxpart1_a_idx;	-- no way
 ERROR:  cannot drop index idxpart1_a_idx because index idxpart_a_idx requires it
 HINT:  You can drop index idxpart_a_idx instead.
-drop index concurrently idxpart_a_idx;	-- unsupported
-ERROR:  cannot drop partitioned index "idxpart_a_idx" concurrently
-drop index idxpart_a_idx;	-- both indexes go away
+drop index concurrently idxpart_a_idx;
 select relname, relkind from pg_class
   where relname like 'idxpart%' order by relname;
  relname  | relkind 

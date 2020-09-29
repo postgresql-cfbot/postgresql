@@ -16,7 +16,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
-#ifdef USE_OPENSSL
+#if defined(USE_OPENSSL) || defined(USE_OPENSSL_RANDOM)
 #include <openssl/rand.h>
 #endif
 
@@ -113,7 +113,7 @@ fork_process(void)
 		 * no longer required in OpenSSL 1.1.1 and later versions, but until
 		 * we drop support for version < 1.1.1 we need to do this.
 		 */
-#ifdef USE_OPENSSL
+#if defined(USE_OPENSSL) || defined(USE_OPENSSL_RANDOM)
 		RAND_poll();
 #endif
 	}

@@ -24,7 +24,7 @@
 #include <unistd.h>
 #include <sys/time.h>
 
-#ifdef USE_OPENSSL
+#ifdef USE_OPENSSL_RANDOM
 #include <openssl/rand.h>
 #endif
 #ifdef USE_WIN32_RANDOM

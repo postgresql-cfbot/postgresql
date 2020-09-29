@@ -53,6 +53,24 @@ my %pgdump_runs = (
 			"$tempdir/binary_upgrade.dump",
 		],
 	},
+	binary_coll_compatible => {
+		dump_cmd => [
+			'pg_dump',
+			'--no-sync',
+			'--format=custom',
+			"--file=$tempdir/binary_coll_compatible.dump",
+			'-w',
+			'--schema-only',
+			'--binary-upgrade',
+			'--unknown-collations-binary-compatible',
+			'-d', 'postgres',    # alternative way to specify database
+		],
+		restore_cmd => [
+			'pg_restore', '-Fc', '--verbose',
+			"--file=$tempdir/binary_coll_compatible.sql",
+			"$tempdir/binary_coll_compatible.dump",
+		],
+	},
 	clean => {
 		dump_cmd => [
 			'pg_dump',
@@ -387,6 +405,7 @@ my %dump_test_schema_runs = (
 # are flags used to exclude specific items (ACLs, blobs, etc).
 my %full_runs = (
 	binary_upgrade           => 1,
+	binary_coll_compatible   => 1,
 	clean                    => 1,
 	clean_if_exists          => 1,
 	createdb                 => 1,
@@ -920,9 +939,10 @@ my %tests = (
 			test_schema_plus_blobs => 1,
 		},
 		unlike => {
-			binary_upgrade => 1,
-			no_blobs       => 1,
-			schema_only    => 1,
+			binary_upgrade         => 1,
+			binary_coll_compatible => 1,
+			no_blobs               => 1,
+			schema_only            => 1,
 		},
 	},
 
@@ -1184,6 +1204,7 @@ my %tests = (
 		},
 		unlike => {
 			binary_upgrade           => 1,
+			binary_coll_compatible   => 1,
 			exclude_dump_test_schema => 1,
 			exclude_test_table       => 1,
 			exclude_test_table_data  => 1,
@@ -1209,6 +1230,7 @@ my %tests = (
 		},
 		unlike => {
 			binary_upgrade           => 1,
+			binary_coll_compatible   => 1,
 			exclude_dump_test_schema => 1,
 			schema_only              => 1,
 		},
@@ -1244,6 +1266,7 @@ my %tests = (
 		},
 		unlike => {
 			binary_upgrade           => 1,
+			binary_coll_compatible   => 1,
 			exclude_dump_test_schema => 1,
 			schema_only              => 1,
 		},
@@ -1266,6 +1289,7 @@ my %tests = (
 		},
 		unlike => {
 			binary_upgrade           => 1,
+			binary_coll_compatible   => 1,
 			exclude_dump_test_schema => 1,
 			schema_only              => 1,
 		},
@@ -1287,6 +1311,7 @@ my %tests = (
 		},
 		unlike => {
 			binary_upgrade           => 1,
+			binary_coll_compatible   => 1,
 			exclude_dump_test_schema => 1,
 			schema_only              => 1,
 		},
@@ -1308,6 +1333,7 @@ my %tests = (
 		},
 		unlike => {
 			binary_upgrade           => 1,
+			binary_coll_compatible   => 1,
 			exclude_dump_test_schema => 1,
 			schema_only              => 1,
 		},
@@ -1674,6 +1700,7 @@ my %tests = (
 		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },
 		unlike => {
 			binary_upgrade           => 1,
+			binary_coll_compatible   => 1,
 			exclude_dump_test_schema => 1,
 		},
 	},
@@ -1688,7 +1715,7 @@ my %tests = (
 			\n.*^
 			\QALTER TYPE dump_test.planets ADD VALUE 'mars';\E
 			\n/xms,
-		like => { binary_upgrade => 1, },
+		like => { binary_upgrade => 1, binary_coll_compatible => 1, },
 	},
 
 	'CREATE TYPE dump_test.textrange AS RANGE' => {
@@ -2356,6 +2383,7 @@ my %tests = (
 		  { %full_runs, %dump_test_schema_runs, section_pre_data => 1, },
 		unlike => {
 			binary_upgrade           => 1,
+			binary_coll_compatible   => 1,
 			exclude_dump_test_schema => 1,
 		},
 	},
@@ -2549,6 +2577,7 @@ my %tests = (
 		},
 		unlike => {
 			binary_upgrade           => 1,
+			binary_coll_compatible   => 1,
 			exclude_dump_test_schema => 1,
 		},
 	},
@@ -2617,6 +2646,7 @@ my %tests = (
 		/xm,
 		like => {
 			binary_upgrade          => 1,
+			binary_coll_compatible  => 1,
 			clean                   => 1,
 			clean_if_exists         => 1,
 			createdb                => 1,
@@ -2688,6 +2718,7 @@ my %tests = (
 		/xm,
 		like => {
 			binary_upgrade           => 1,
+			binary_coll_compatible   => 1,
 			clean                    => 1,
 			clean_if_exists          => 1,
 			createdb                 => 1,
@@ -3155,6 +3186,7 @@ my %tests = (
 		  { %full_runs, %dump_test_schema_runs, section_post_data => 1, },
 		unlike => {
 			binary_upgrade           => 1,
+			binary_coll_compatible   => 1,
 			exclude_dump_test_schema => 1,
 			schema_only              => 1,
 		},
@@ -3170,6 +3202,7 @@ my %tests = (
 		  { %full_runs, %dump_test_schema_runs, section_post_data => 1, },
 		unlike => {
 			binary_upgrade           => 1,
+			binary_coll_compatible   => 1,
 			exclude_dump_test_schema => 1,
 			schema_only              => 1,
 		},
@@ -3302,16 +3335,53 @@ my %tests = (
 			%full_runs, %dump_test_schema_runs, section_pre_data => 1,
 		},
 		unlike => { exclude_dump_test_schema => 1 },
+	},
+
+	"binary_upgrade_set_index_coll_version(oid, oid, 'not_a_version')" => {
+		create_order => 101,
+		create_sql => '
+		CREATE TABLE dump_test.regress_table_coll(id integer, val text);
+		CREATE INDEX regress_coll_idx1 ON dump_test.regress_table_coll(val COLLATE "fr-x-icu");
+		UPDATE pg_depend SET refobjversion = \'not_a_version\' WHERE refobjversion IS NOT NULL AND objid::regclass::text = \'dump_test.regress_coll_idx1\';',
+		regexp => qr/^
+		\QCREATE INDEX regress_coll_idx1 ON dump_test.regress_table_coll USING btree (val COLLATE "fr-x-icu");\E\n
+		\n
+		\Q-- For binary upgrade, restore dependent collation version.\E\n
+		\QSELECT pg_catalog.binary_upgrade_set_index_coll_version\E \(\d+,\ \d+,\ 'not_a_version'\);/xm,
+		like => { binary_upgrade => 1, binary_coll_compatible => 1, },
+		icu => 1,
+	},
+	"binary_upgrade_set_index_coll_version(?, ?, '')" => {
+		create_order => 102,
+		create_sql => '
+		CREATE TABLE dump_test.regress_table_coll_no_ver(id integer, val text);
+		CREATE INDEX regress_coll_no_ver_idx1 ON dump_test.regress_table_coll_no_ver(val COLLATE "fr-x-icu");
+		UPDATE pg_depend SET refobjversion = \'\' WHERE refobjversion IS NOT NULL AND objid::regclass::text = \'dump_test.regress_coll_no_ver_idx1\';',
+		regexp => qr/SELECT pg_catalog.binary_upgrade_set_index_coll_version\(\d+, \d+, ''\)/,
+		like => { binary_upgrade => 1},
+		# should not appear in binary_coll_compatible case!
+		unlike => { binary_coll_compatible => 1},
+		icu => 1,
 	});
 
 #########################################
 # Create a PG instance to test actually dumping from
 
-my $node = get_new_node('main');
-$node->init;
-$node->start;
+my $main_node = get_new_node('main');
+$main_node->init;
+$main_node->start;
 
-my $port = $node->port;
+my $port = $main_node->port;
+
+# And another instance to validate the binary dump
+my $bin_node = get_new_node('binary');
+$bin_node->init;
+$bin_node->start;
+
+my $bin_port = $bin_node->port;
+
+# and add a $node variable pointing to main_node for now
+my $node = $main_node;
 
 # We need to see if this system supports CREATE COLLATION or not
 # If it doesn't then we will skip all the COLLATION-related tests.
@@ -3334,6 +3404,10 @@ $node->psql('postgres', 'create database regress_pg_dump_test;');
 # Start with number of command_fails_like()*2 tests below (each
 # command_fails_like is actually 2 tests)
 my $num_tests = 12;
+
+# 4 more tests for restoring globals and binary_upgrade dump, dumping it again
+# and regenerating the sql file
+$num_tests+= 4;
 
 foreach my $run (sort keys %pgdump_runs)
 {
@@ -3385,16 +3459,29 @@ foreach my $run (sort keys %pgdump_runs)
 			next;
 		}
 
+		# Skip any icu-related commands if there is no icu support
+		if ($ENV{with_icu} ne 'yes' && defined($tests{$test}->{icu}))
+		{
+			next;
+		}
+
 		# If there is a like entry, but no unlike entry, then we will test the like case
 		if ($tests{$test}->{like}->{$test_key}
 			&& !defined($tests{$test}->{unlike}->{$test_key}))
 		{
 			$num_tests++;
+
+			# binary_upgrade tests are also run after being restored and
+			# re-dumped.
+			$num_tests++ if ($test_key eq 'binary_upgrade');
 		}
 		else
 		{
 			# We will test everything that isn't a 'like'
 			$num_tests++;
+			# binary_upgrade tests are also run after being restored and
+			# re-dumped.
+			$num_tests++ if ($test_key eq 'binary_upgrade');
 		}
 	}
 }
@@ -3438,6 +3525,12 @@ foreach my $test (
 
 		# Skip any collation-related commands if there is no collation support
 		if (!$collation_support && defined($tests{$test}->{collation}))
+		{
+			next;
+		}
+
+		# Skip any icu-related commands if there is no icu support
+		if ($ENV{with_icu} ne 'yes' && defined($tests{$test}->{icu}))
 		{
 			next;
 		}
@@ -3495,79 +3588,116 @@ command_fails_like(
 #########################################
 # Run all runs
 
-foreach my $run (sort keys %pgdump_runs)
+foreach my $pass (1, 2)
 {
-	my $test_key = $run;
-	my $run_db   = 'postgres';
-
-	$node->command_ok(\@{ $pgdump_runs{$run}->{dump_cmd} },
-		"$run: pg_dump runs");
-
-	if ($pgdump_runs{$run}->{restore_cmd})
+	foreach my $run (sort keys %pgdump_runs)
 	{
-		$node->command_ok(\@{ $pgdump_runs{$run}->{restore_cmd} },
-			"$run: pg_restore runs");
-	}
+		my $test_key = $run;
+		my $run_db   = 'postgres';
 
-	if ($pgdump_runs{$run}->{test_key})
-	{
-		$test_key = $pgdump_runs{$run}->{test_key};
-	}
+		# we only test binary upgrade on the 2nd pass
+		next if ($pass == 2 and $test_key ne 'binary_upgrade');
 
-	my $output_file = slurp_file("$tempdir/${run}.sql");
+		$node->command_ok(\@{ $pgdump_runs{$run}->{dump_cmd} },
+			"$run: pg_dump runs");
 
-	#########################################
-	# Run all tests where this run is included
-	# as either a 'like' or 'unlike' test.
-
-	foreach my $test (sort keys %tests)
-	{
-		my $test_db = 'postgres';
-
-		if (defined($pgdump_runs{$run}->{database}))
+		if ($pgdump_runs{$run}->{restore_cmd})
 		{
-			$run_db = $pgdump_runs{$run}->{database};
+			$node->command_ok(\@{ $pgdump_runs{$run}->{restore_cmd} },
+				"$run: pg_restore runs");
 		}
 
-		if (defined($tests{$test}->{database}))
+		if ($pgdump_runs{$run}->{test_key})
 		{
-			$test_db = $tests{$test}->{database};
+			$test_key = $pgdump_runs{$run}->{test_key};
 		}
 
-		# Skip any collation-related commands if there is no collation support
-		if (!$collation_support && defined($tests{$test}->{collation}))
-		{
-			next;
-		}
+		my $output_file = slurp_file("$tempdir/${run}.sql");
 
-		if ($run_db ne $test_db)
-		{
-			next;
-		}
+		#########################################
+		# Run all tests where this run is included
+		# as either a 'like' or 'unlike' test.
 
-		# Run the test listed as a like, unless it is specifically noted
-		# as an unlike (generally due to an explicit exclusion or similar).
-		if ($tests{$test}->{like}->{$test_key}
-			&& !defined($tests{$test}->{unlike}->{$test_key}))
+		foreach my $test (sort keys %tests)
 		{
-			if (!ok($output_file =~ $tests{$test}->{regexp},
-					"$run: should dump $test"))
+			my $test_db = 'postgres';
+
+			if (defined($pgdump_runs{$run}->{database}))
 			{
-				diag("Review $run results in $tempdir");
+				$run_db = $pgdump_runs{$run}->{database};
+			}
+
+			if (defined($tests{$test}->{database}))
+			{
+				$test_db = $tests{$test}->{database};
+			}
+
+			# Skip any collation-related commands if there is no collation support
+			if (!$collation_support && defined($tests{$test}->{collation}))
+			{
+				next;
+			}
+
+			# Skip any icu-related commands if there is no icu support
+	        if ($ENV{with_icu} ne 'yes' && defined($tests{$test}->{icu}))
+			{
+				next;
+			}
+
+			if ($run_db ne $test_db)
+			{
+				next;
+			}
+
+			# Run the test listed as a like, unless it is specifically noted
+			# as an unlike (generally due to an explicit exclusion or similar).
+			if ($tests{$test}->{like}->{$test_key}
+				&& !defined($tests{$test}->{unlike}->{$test_key}))
+			{
+				if (!ok($output_file =~ $tests{$test}->{regexp},
+						"$run: should dump $test"))
+				{
+					diag("Review $run results in $tempdir");
+				}
+			}
+			else
+			{
+				if (!ok($output_file !~ $tests{$test}->{regexp},
+						"$run: should not dump $test"))
+				{
+					diag("Review $run results in $tempdir");
+				}
 			}
 		}
-		else
-		{
-			if (!ok($output_file !~ $tests{$test}->{regexp},
-					"$run: should not dump $test"))
-			{
-				diag("Review $run results in $tempdir");
-			}
-		}
+	}
+
+	# After all dump have been generated, restore the binary_upgrade dump with
+	# the required global objects on a suitable node, and continue with the 2nd
+	# pass.
+	if ($pass == 1)
+	{
+		# Stop the original database instance as we don't need it anymore.
+		$node->stop('fast');
+
+		$bin_node->command_ok(\@{['psql',
+			"-d", "postgres", "-f", "$tempdir/pg_dumpall_globals.sql"]},
+			"Restore globals");
+
+		$bin_node->stop('fast');
+		$bin_node->start(binary_start => 1);
+		$bin_node->command_ok(\@{['pg_restore', '-p', $bin_port,
+			'-d', 'postgres',
+			"$tempdir/binary_upgrade.dump"]},
+			"Restore the binary_upgrade dump");
+		$bin_node->stop('fast');
+		$bin_node->start;
+
+		# And change $node to point to the freshly restored node.
+		$node = $bin_node;
 	}
 }
 
 #########################################
 # Stop the database instance, which will be removed at the end of the tests.
 
-$node->stop('fast');
+$bin_node->stop('fast');

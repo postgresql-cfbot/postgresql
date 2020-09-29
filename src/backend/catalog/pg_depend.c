@@ -19,16 +19,24 @@
 #include "access/table.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
+#include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_depend.h"
 #include "catalog/pg_extension.h"
 #include "commands/extension.h"
 #include "miscadmin.h"
+#include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_locale.h"
 #include "utils/rel.h"
 
 
+static bool dependencyExists(const ObjectAddress *depender,
+							 const ObjectAddress *referenced,
+							 char *version);
+static char *getDependencyVersion(const ObjectAddress *depender,
+								  const ObjectAddress *referenced);
 static bool isObjectPinned(const ObjectAddress *object, Relation rel);
 
 
@@ -44,18 +52,24 @@ recordDependencyOn(const ObjectAddress *depender,
 				   const ObjectAddress *referenced,
 				   DependencyType behavior)
 {
-	recordMultipleDependencies(depender, referenced, 1, behavior);
+	recordMultipleDependencies(depender, referenced, 1, behavior, false);
 }
 
 /*
  * Record multiple dependencies (of the same kind) for a single dependent
  * object.  This has a little less overhead than recording each separately.
+ *
+ * If track_version is true, then a record could be added even if the referenced
+ * dependency is pinned, and the dependency version will be retrieved according
+ * to the referenced object kind.
+ * For now, only collation version is supported.
  */
 void
 recordMultipleDependencies(const ObjectAddress *depender,
 						   const ObjectAddress *referenced,
 						   int nreferenced,
-						   DependencyType behavior)
+						   DependencyType behavior,
+						   bool track_version)
 {
 	Relation	dependDesc;
 	CatalogIndexState indstate;
@@ -64,6 +78,7 @@ recordMultipleDependencies(const ObjectAddress *depender,
 				max_slots,
 				slot_init_count,
 				slot_stored_count;
+	char	   *version = NULL;
 
 	if (nreferenced <= 0)
 		return;					/* nothing to do */
@@ -94,12 +109,55 @@ recordMultipleDependencies(const ObjectAddress *depender,
 	slot_init_count = 0;
 	for (i = 0; i < nreferenced; i++, referenced++)
 	{
+		bool		ignore_systempin = false;
+
+		if (track_version)
+		{
+			/* Only dependency on a collation is supported. */
+			if (referenced->classId == CollationRelationId)
+			{
+				/* C and POSIX collations don't require tracking the version */
+				if (referenced->objectId == C_COLLATION_OID ||
+					referenced->objectId == POSIX_COLLATION_OID)
+					continue;
+
+				/*
+				 * We don't want to record redundant dependencies that are used
+				 * to track versions to avoid redundant warnings in case of
+				 * non-matching versions when those are checked.  Note that
+				 * callers have to take care of removing duplicated entries
+				 * and calling CommandCounterIncrement() if the dependencies
+				 * are registered in multiple calls.
+				 * However, we may have already recorded a dependency on a
+				 * collation that didn't required to track the version (if any
+				 * of the *_pattern_ops opclasses was used).  If we now see a
+				 * dependency on the same collation that requires to track the
+				 * version, we need to update it with the current version,
+				 * which is done by dependencyExists().
+				 */
+				version = get_collation_version_for_oid(referenced->objectId);
+				if (dependencyExists(depender, referenced, version))
+					continue;
+
+				/*
+				 * Default collation is pinned, so we need to force recording
+				 * the dependency to store the version.
+				 */
+				if (referenced->objectId == DEFAULT_COLLATION_OID)
+					ignore_systempin = true;
+				Assert(version);
+			}
+		}
+		else
+			Assert(!version);
+
 		/*
 		 * If the referenced object is pinned by the system, there's no real
-		 * need to record dependencies on it.  This saves lots of space in
-		 * pg_depend, so it's worth the time taken to check.
+		 * need to record dependencies on it, unless we need to record a
+		 * version.  This saves lots of space in pg_depend, so it's worth the
+		 * time taken to check.
 		 */
-		if (isObjectPinned(referenced, dependDesc))
+		if (!ignore_systempin && isObjectPinned(referenced, dependDesc))
 			continue;
 
 		if (slot_init_count < max_slots)
@@ -115,6 +173,9 @@ recordMultipleDependencies(const ObjectAddress *depender,
 		 * Record the dependency.  Note we don't bother to check for duplicate
 		 * dependencies; there's no harm in them.
 		 */
+		memset(slot[slot_stored_count]->tts_isnull, false,
+			   slot[slot_stored_count]->tts_tupleDescriptor->natts * sizeof(bool));
+
 		slot[slot_stored_count]->tts_values[Anum_pg_depend_refclassid - 1] = ObjectIdGetDatum(referenced->classId);
 		slot[slot_stored_count]->tts_values[Anum_pg_depend_refobjid - 1] = ObjectIdGetDatum(referenced->objectId);
 		slot[slot_stored_count]->tts_values[Anum_pg_depend_refobjsubid - 1] = Int32GetDatum(referenced->objectSubId);
@@ -122,9 +183,10 @@ recordMultipleDependencies(const ObjectAddress *depender,
 		slot[slot_stored_count]->tts_values[Anum_pg_depend_classid - 1] = ObjectIdGetDatum(depender->classId);
 		slot[slot_stored_count]->tts_values[Anum_pg_depend_objid - 1] = ObjectIdGetDatum(depender->objectId);
 		slot[slot_stored_count]->tts_values[Anum_pg_depend_objsubid - 1] = Int32GetDatum(depender->objectSubId);
-
-		memset(slot[slot_stored_count]->tts_isnull, false,
-			   slot[slot_stored_count]->tts_tupleDescriptor->natts * sizeof(bool));
+		if (version)
+			slot[slot_stored_count]->tts_values[Anum_pg_depend_refobjversion - 1] = CStringGetTextDatum(version);
+		else
+			slot[slot_stored_count]->tts_isnull[Anum_pg_depend_refobjversion - 1] = true;
 
 		ExecStoreVirtualTuple(slot[slot_stored_count]);
 		slot_stored_count++;
@@ -487,7 +549,8 @@ changeDependencyFor(Oid classId, Oid objectId,
 }
 
 /*
- * Adjust all dependency records to come from a different object of the same type
+ * Adjust all dependency records to come from a different object of the same
+ * type, optionally preserving the original referenced version.
  *
  * classId/oldObjectId specify the old referencing object.
  * newObjectId is the new referencing object (must be of class classId).
@@ -495,8 +558,7 @@ changeDependencyFor(Oid classId, Oid objectId,
  * Returns the number of records updated.
  */
 long
-changeDependenciesOf(Oid classId, Oid oldObjectId,
-					 Oid newObjectId)
+changeDependenciesOf(Oid classId, Oid oldObjectId, Oid newObjectId)
 {
 	long		count = 0;
 	Relation	depRel;
@@ -520,14 +582,47 @@ changeDependenciesOf(Oid classId, Oid oldObjectId,
 
 	while (HeapTupleIsValid((tup = systable_getnext(scan))))
 	{
-		Form_pg_depend depform;
+		Form_pg_depend depform = (Form_pg_depend) GETSTRUCT(tup);
+		Datum		values[Natts_pg_depend];
+		bool		nulls[Natts_pg_depend];
+		bool		replaces[Natts_pg_depend];
+		bool		isnull = true;
 
-		/* make a modifiable copy */
-		tup = heap_copytuple(tup);
-		depform = (Form_pg_depend) GETSTRUCT(tup);
+		memset(values, 0, sizeof(values));
+		memset(nulls, 0, sizeof(nulls));
+		memset(replaces, 0, sizeof(replaces));
 
-		depform->objid = newObjectId;
+		values[Anum_pg_depend_objid - 1] = newObjectId;
+		replaces[Anum_pg_depend_objid - 1] = true;
 
+		/*
+		 * We assume that a version would exist for both the old and new
+		 * object or none.
+		 */
+		heap_getattr(tup, Anum_pg_depend_refobjversion,
+					 RelationGetDescr(depRel), &isnull);
+
+		if (!isnull)
+		{
+			ObjectAddress depender,
+						referenced;
+			char	   *version;
+
+			ObjectAddressSubSet(depender, depform->classid,
+								newObjectId, depform->objsubid);
+			ObjectAddressSubSet(referenced, depform->refclassid,
+								depform->refobjid, depform->refobjsubid);
+
+			version = getDependencyVersion(&depender, &referenced);
+			if (version)
+				values[Anum_pg_depend_refobjversion - 1] = CStringGetTextDatum(version);
+			else
+				nulls[Anum_pg_depend_refobjversion - 1] = true;
+			replaces[Anum_pg_depend_refobjversion - 1] = true;
+		}
+
+		tup = heap_modify_tuple(tup, RelationGetDescr(depRel), values,
+								nulls, replaces);
 		CatalogTupleUpdate(depRel, &tup->t_self, tup);
 
 		heap_freetuple(tup);
@@ -628,6 +723,151 @@ changeDependenciesOn(Oid refClassId, Oid oldRefObjectId,
 	table_close(depRel, RowExclusiveLock);
 
 	return count;
+}
+
+/* dependencyExists()
+ *
+ * Test if a record exists for the given depender and referenced addresses.
+ *
+ * If a record is found, also update the stored dependency version if it wasn't
+ * previously tracked.
+ */
+static bool
+dependencyExists(const ObjectAddress *depender,
+				 const ObjectAddress *referenced,
+				 char *version)
+{
+	Relation	depRel;
+	ScanKeyData key[3];
+	SysScanDesc scan;
+	HeapTuple	tup;
+	bool		ret = false;
+
+	ScanKeyInit(&key[0],
+				Anum_pg_depend_classid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(depender->classId));
+	ScanKeyInit(&key[1],
+				Anum_pg_depend_objid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(depender->objectId));
+	ScanKeyInit(&key[2],
+				Anum_pg_depend_objsubid,
+				BTEqualStrategyNumber, F_INT4EQ,
+				Int32GetDatum(depender->objectSubId));
+
+	depRel = table_open(DependRelationId, RowExclusiveLock);
+	scan = systable_beginscan(depRel, DependDependerIndexId, true,
+							  NULL, 3, key);
+
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
+	{
+		Form_pg_depend foundDep = (Form_pg_depend) GETSTRUCT(tup);
+
+		if (foundDep->refclassid == referenced->classId &&
+			foundDep->refobjid == referenced->objectId &&
+			foundDep->refobjsubid == referenced->objectSubId)
+		{
+			char	   *cur_version = NULL;
+			Datum		depversion;
+			bool		isnull;
+
+			ret = true;
+
+			/*
+			 * We only need the retrieve the current version if a new version
+			 * was passed.
+			 */
+			if (version)
+			{
+				depversion = heap_getattr(tup, Anum_pg_depend_refobjversion,
+										  RelationGetDescr(depRel), &isnull);
+
+				cur_version = isnull ? NULL : TextDatumGetCString(depversion);
+			}
+
+			/* Track version if it wasn't yet and we have a new version. */
+			if (version && !cur_version)
+			{
+				Datum		values[Natts_pg_depend];
+				bool		nulls[Natts_pg_depend];
+				bool		replaces[Natts_pg_depend];
+
+				memset(values, 0, sizeof(values));
+				memset(nulls, false, sizeof(nulls));
+				memset(replaces, false, sizeof(replaces));
+
+				values[Anum_pg_depend_refobjversion - 1] =
+					CStringGetTextDatum(version);
+				replaces[Anum_pg_depend_refobjversion - 1] = true;
+
+				tup = heap_modify_tuple(tup, RelationGetDescr(depRel), values,
+										nulls, replaces);
+				CatalogTupleUpdate(depRel, &tup->t_self, tup);
+
+				heap_freetuple(tup);
+			}
+			else
+			{
+				Assert(strcmp(cur_version, version) == 0);
+			}
+
+			break;
+		}
+	}
+	systable_endscan(scan);
+	table_close(depRel, RowExclusiveLock);
+
+	return ret;
+}
+
+static char *
+getDependencyVersion(const ObjectAddress *depender,
+					 const ObjectAddress *referenced)
+{
+	Relation	depRel;
+	ScanKeyData key[3];
+	SysScanDesc scan;
+	HeapTuple	tup;
+	Datum		depversion;
+	char	   *version = NULL;
+
+	ScanKeyInit(&key[0],
+				Anum_pg_depend_classid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(depender->classId));
+	ScanKeyInit(&key[1],
+				Anum_pg_depend_objid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(depender->objectId));
+	ScanKeyInit(&key[2],
+				Anum_pg_depend_objsubid,
+				BTEqualStrategyNumber, F_INT4EQ,
+				Int32GetDatum(depender->objectSubId));
+
+	depRel = table_open(DependRelationId, RowExclusiveLock);
+	scan = systable_beginscan(depRel, DependDependerIndexId, true,
+							  NULL, 3, key);
+
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
+	{
+		Form_pg_depend foundDep = (Form_pg_depend) GETSTRUCT(tup);
+		bool		isnull;
+
+		if (foundDep->refclassid == referenced->classId &&
+			foundDep->refobjid == referenced->objectId &&
+			foundDep->refobjsubid == referenced->objectSubId)
+		{
+			depversion = heap_getattr(tup, Anum_pg_depend_refobjversion,
+									  RelationGetDescr(depRel), &isnull);
+			version = isnull ? NULL : TextDatumGetCString(depversion);
+			break;
+		}
+	}
+	systable_endscan(scan);
+	table_close(depRel, RowExclusiveLock);
+
+	return version;
 }
 
 /*

@@ -53,6 +53,7 @@
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
+#include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/progress.h"
 #include "commands/tablecmds.h"
@@ -75,6 +76,7 @@
 #include "utils/guc.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_locale.h"
 #include "utils/memutils.h"
 #include "utils/pg_rusage.h"
 #include "utils/rel.h"
@@ -1020,6 +1022,11 @@ index_create(Relation heapRelation,
 		ObjectAddress myself,
 					referenced;
 		ObjectAddresses *addrs;
+		ListCell   *lc;
+		List	   *colls = NIL,
+				   *colls_pattern_ops = NIL,
+				   *determ_colls = NIL,
+				   *nondeterm_colls = NIL;
 
 		ObjectAddressSet(myself, RelationRelationId, indexRelationId);
 
@@ -1106,18 +1113,120 @@ index_create(Relation heapRelation,
 		/* placeholder for normal dependencies */
 		addrs = new_object_addresses();
 
-		/* Store dependency on collations */
-
-		/* The default collation is pinned, so don't bother recording it */
+		/* First, get all dependencies on collations for all index keys. */
 		for (i = 0; i < indexInfo->ii_NumIndexKeyAttrs; i++)
 		{
-			if (OidIsValid(collationObjectId[i]) &&
-				collationObjectId[i] != DEFAULT_COLLATION_OID)
+			Oid			colloid = collationObjectId[i];
+
+			if (OidIsValid(colloid))
 			{
-				ObjectAddressSet(referenced, CollationRelationId,
-								 collationObjectId[i]);
-				add_exact_object_address(&referenced, addrs);
+				Oid			opclass = classObjectId[i];
+
+				/*
+				 * The *_pattern_ops opclasses are special, as they're known
+				 * to not rely on the collation sort order.
+				 */
+				if (opclass == TEXT_BTREE_PATTERN_OPS_OID ||
+					 opclass == VARCHAR_BTREE_PATTERN_OPS_OID ||
+					 opclass == BPCHAR_BTREE_PATTERN_OPS_OID)
+					colls_pattern_ops = lappend_oid(colls_pattern_ops, colloid);
+				else
+					colls = lappend_oid(colls, colloid);
 			}
+			/*
+			 * Required for e.g. custom types having multiple underlying
+			 * collations.  Note that none of the *_pattern_ops can be used in
+			 * such constructs.
+			 */
+			else
+			{
+				Form_pg_attribute att = TupleDescAttr(indexTupDesc, i);
+
+				Assert(i < indexTupDesc->natts);
+
+				colls = list_concat(colls,
+									GetTypeCollations(att->atttypid, false));
+			}
+		}
+
+		/* Check if any collation exist for both a *_pattern_ops opclass and
+		 * another one.  In that case, we have to create a single dependency
+		 * with version tracked.
+		 */
+		if (colls_pattern_ops != NIL && colls != NIL)
+			colls_pattern_ops = list_difference_oid(colls_pattern_ops, colls);
+
+		/*
+		 * Record the dependencies for collation declares with any of the
+		 * *_pattern_ops opclass, without version tracking.
+		 */
+		if (colls_pattern_ops != NIL)
+		{
+			recordDependencyOnCollations(&myself, colls_pattern_ops, false);
+
+			/*
+			 * Advance the command counter so that later calls to
+			 * recordMultipleDependencies calls can see the newly-entered
+			 * pg_depend catalog tuples for the index.
+			 */
+			CommandCounterIncrement();
+		}
+
+		/*
+		 * Then split the dependencies for collations that were not declared
+		 * with any of the *_pattern_ops opclass on whether they're
+		 * deterministic or not, removing any duplicates.
+		 */
+		foreach(lc, colls)
+		{
+			Oid			c = lfirst_oid(lc);
+
+			if (!OidIsValid(c))
+				continue;
+
+			if (get_collation_isdeterministic(c))
+				determ_colls = lappend_oid(determ_colls, c);
+			else
+				nondeterm_colls = lappend_oid(nondeterm_colls, c);
+		}
+
+		/*
+		 * For deterministic collation, we always track the dependency on the
+		 * collation but only track the version if the AM relies on a stable
+		 * ordering.
+		 */
+		if (determ_colls != NIL)
+		{
+			IndexAmRoutine *routine;
+			bool track_version;
+
+			routine = GetIndexAmRoutineByAmId(accessMethodObjectId, false);
+			track_version = !routine->amnostablecollorder;
+
+			recordDependencyOnCollations(&myself, determ_colls, track_version);
+
+			/*
+			 * Advance the command counter so that later calls to
+			 * recordMultipleDependencies calls can see the newly-entered
+			 * pg_depend catalog tuples for the index.
+			 */
+			CommandCounterIncrement();
+		}
+
+		/*
+		 * We always record the version for dependency on non-deterministic
+		 * collations.
+		 */
+		if (nondeterm_colls != NIL)
+		{
+			recordDependencyOnCollations(&myself, nondeterm_colls, true);
+
+			/*
+			 * Advance the command counter so that later calls to
+			 * recordMultipleDependencies calls can see the newly-entered
+			 * pg_depend catalog tuples for the index.
+			 */
+			CommandCounterIncrement();
 		}
 
 		/* Store dependency on operator classes */
@@ -1133,21 +1242,32 @@ index_create(Relation heapRelation,
 		/* Store dependencies on anything mentioned in index expressions */
 		if (indexInfo->ii_Expressions)
 		{
+			/*
+			 * recordDependencyOnSingleRelExpr gets rid of duplicated entries
+			 */
 			recordDependencyOnSingleRelExpr(&myself,
 											(Node *) indexInfo->ii_Expressions,
 											heapRelationId,
 											DEPENDENCY_NORMAL,
-											DEPENDENCY_AUTO, false);
+											DEPENDENCY_AUTO, false, true);
+
+			/*
+			 * Advance the command counter so that later
+			 * recordMultipleDependencies calls can see the newly-entered
+			 * pg_depend catalog tuples for the index.
+			 */
+			CommandCounterIncrement();
 		}
 
 		/* Store dependencies on anything mentioned in predicate */
 		if (indexInfo->ii_Predicate)
 		{
+			/* recordDependencyOnSingleRelExpr get rid of duplicated entries */
 			recordDependencyOnSingleRelExpr(&myself,
 											(Node *) indexInfo->ii_Predicate,
 											heapRelationId,
 											DEPENDENCY_NORMAL,
-											DEPENDENCY_AUTO, false);
+											DEPENDENCY_AUTO, false, true);
 		}
 	}
 	else
@@ -1224,6 +1344,108 @@ index_create(Relation heapRelation,
 	index_close(indexRelation, NoLock);
 
 	return indexRelationId;
+}
+
+/* index_check_collation_version
+ *		Raise a warning if the recorded and current collation version don't
+ *		match.
+*/
+static char *
+index_check_collation_version(const ObjectAddress *otherObject,
+							  const char *version,
+							  void *userdata)
+{
+	Oid			relid = *(Oid *) userdata;
+	char	   *current_version;
+
+	/* We only care about dependencies on collations. */
+	if (otherObject->classId != CollationRelationId)
+		return NULL;
+
+	/* Compare with the current version. */
+	current_version = get_collation_version_for_oid(otherObject->objectId);
+
+	/* XXX should we warn about "disappearing" versions? */
+	if (current_version)
+	{
+		/*
+		 * We now support versioning for the underlying collation library on
+		 * this system, or previous version is unknown.
+		 */
+		if (!version || (strcmp(version, "") == 0 && strcmp(current_version,
+															"") != 0))
+		{
+			ereport(WARNING,
+					(errmsg("index \"%s\" depends on collation \"%s\" with an unknown version, and the current version is \"%s\"",
+							get_rel_name(relid),
+							get_collation_name(otherObject->objectId),
+							current_version),
+					 errdetail("The index may be corrupted due to changes in sort order."),
+					 errhint("REINDEX to avoid the risk of corruption.")));
+		}
+		else if (strcmp(current_version, version) != 0)
+		{
+			ereport(WARNING,
+					(errmsg("index \"%s\" depends on collation \"%s\" version \"%s\", but the current version is \"%s\"",
+							get_rel_name(relid),
+							get_collation_name(otherObject->objectId),
+							version,
+							current_version),
+					 errdetail("The index may be corrupted due to changes in sort order."),
+					 errhint("REINDEX to avoid the risk of corruption.")));
+		}
+	}
+
+	return NULL;
+}
+
+/* index_check_collation_versions
+ *		Check the collation version for all dependencies on the given object.
+ */
+void
+index_check_collation_versions(Oid relid)
+{
+	ObjectAddress object;
+
+	object.classId = RelationRelationId;
+	object.objectId = relid;
+	object.objectSubId = 0;
+	visitDependentObjects(&object, &index_check_collation_version, &relid);
+}
+
+/* index_update_collation_version
+ *		Return the current collation version for the given object.
+ */
+static char *
+index_update_collation_version(const ObjectAddress *otherObject,
+							   const char *version,
+							   void *userdata)
+{
+	char	   *current_version = (char *) userdata;
+
+	/* We only care about dependencies on collations. */
+	if (otherObject->classId != CollationRelationId)
+		return NULL;
+
+	current_version = get_collation_version_for_oid(otherObject->objectId);
+	return current_version;
+}
+
+/* index_update_collation_versions
+ *		Record the current collation versions of all dependencies on the given
+ *		object.
+ */
+void
+index_update_collation_versions(Oid relid)
+{
+	ObjectAddress object;
+	NameData	current_version;
+
+	object.classId = RelationRelationId;
+	object.objectId = relid;
+	object.objectSubId = 0;
+	visitDependentObjects(&object, &index_update_collation_version,
+						  &current_version);
 }
 
 /*
@@ -3000,6 +3222,68 @@ index_build(Relation heapRelation,
 	SetUserIdAndSecContext(save_userid, save_sec_context);
 }
 
+char *
+index_force_collation_version(const ObjectAddress *otherObject,
+							  const char *version,
+							  void *userdata)
+{
+	NewCollationVersionDependency *forced_dependency;
+
+	forced_dependency = (NewCollationVersionDependency *) userdata;
+
+	/* We only care about dependencies on collations. */
+	if (otherObject->classId != CollationRelationId)
+		return NULL;
+
+	/*
+	 * We only care about dependencies on a specific collation if a valid Oid
+	 * was given.
+	 */
+	if (OidIsValid(forced_dependency->oid) &&
+		otherObject->objectId != forced_dependency->oid)
+		return NULL;
+
+	return forced_dependency->version;
+}
+
+/* index_force_collation_versions
+ *
+ * Override collation version dependencies for the given index.  If no
+ * collation identifier is specified, all dependent collation should be
+ * reset to an unknown version dependency, and no version should be provided
+ * either.
+ */
+void
+index_force_collation_versions(Oid indexid, Oid coll, char *version)
+{
+	Relation	index;
+	ObjectAddress object;
+	NewCollationVersionDependency forced_dependency;
+
+	Assert(version);
+
+	index = relation_open(indexid, AccessExclusiveLock);
+
+	if (index->rd_rel->relkind != RELKIND_INDEX)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 (errmsg("\"%s\" is not an index", get_rel_name(indexid)))));
+
+	forced_dependency.oid = InvalidOid;
+	forced_dependency.version = version;
+
+	object.classId = RelationRelationId;
+	object.objectId = indexid;
+	object.objectSubId = 0;
+	visitDependentObjects(&object, &index_force_collation_version,
+						  &forced_dependency);
+
+	/* Invalidate the index relcache */
+	CacheInvalidateRelcache(index);
+
+	relation_close(index, NoLock);
+}
+
 /*
  * IndexCheckExclusion - verify that a new exclusion constraint is satisfied
  *
@@ -3635,6 +3919,9 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 	/* Close rels, but keep locks */
 	index_close(iRel, NoLock);
 	table_close(heapRelation, NoLock);
+
+	/* Record the current versions of all depended-on collations. */
+	index_update_collation_versions(indexId);
 }
 
 /*

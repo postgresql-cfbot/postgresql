@@ -93,6 +93,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/partcache.h"
+#include "utils/pg_locale.h"
 #include "utils/relcache.h"
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
@@ -559,6 +560,7 @@ static void refuseDupeIndexAttach(Relation parentIdx, Relation partIdx,
 								  Relation partitionTbl);
 static List *GetParentedForeignKeyRefs(Relation partition);
 static void ATDetachCheckNoForeignKeyRefs(Relation partition);
+static void ATExecAlterCollationRefreshVersion(Relation rel, List *coll);
 
 
 /* ----------------------------------------------------------------
@@ -3983,6 +3985,10 @@ AlterTableGetLockLevel(List *cmds)
 				cmd_lockmode = AccessShareLock;
 				break;
 
+			case AT_AlterCollationRefreshVersion:
+				cmd_lockmode = AccessExclusiveLock;
+				break;
+
 			default:			/* oops */
 				elog(ERROR, "unrecognized alter table type: %d",
 					 (int) cmd->subtype);
@@ -4154,6 +4160,12 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		case AT_SetOptions:		/* ALTER COLUMN SET ( options ) */
 		case AT_ResetOptions:	/* ALTER COLUMN RESET ( options ) */
 			ATSimplePermissions(rel, ATT_TABLE | ATT_MATVIEW | ATT_INDEX | ATT_FOREIGN_TABLE);
+			/* This command never recurses */
+			pass = AT_PASS_MISC;
+			break;
+		case AT_AlterCollationRefreshVersion:	/* ALTER COLLATION ... REFRESH
+												 * VERSION */
+			ATSimplePermissions(rel, ATT_INDEX);
 			/* This command never recurses */
 			pass = AT_PASS_MISC;
 			break;
@@ -4732,6 +4744,11 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			/* ATPrepCmd ensures it must be a table */
 			Assert(rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
 			ATExecDetachPartition(rel, ((PartitionCmd *) cmd->def)->name);
+			break;
+		case AT_AlterCollationRefreshVersion:
+			/* ATPrepCmd ensured it must be an index */
+			Assert(rel->rd_rel->relkind == RELKIND_INDEX);
+			ATExecAlterCollationRefreshVersion(rel, cmd->object);
 			break;
 		default:				/* oops */
 			elog(ERROR, "unrecognized alter table type: %d",
@@ -17576,4 +17593,34 @@ ATDetachCheckNoForeignKeyRefs(Relation partition)
 
 		table_close(rel, NoLock);
 	}
+}
+
+/*
+ * ALTER INDEX ... ALTER COLLATION ... REFRESH VERSION
+ *
+ * This overrides an existing dependency on a specific collation for a specific
+ * index to depend on the current collation version.
+ */
+static void
+ATExecAlterCollationRefreshVersion(Relation rel, List *coll)
+{
+	ObjectAddress object;
+	NewCollationVersionDependency forced_dependency;
+
+	Assert(coll != NIL);
+	forced_dependency.oid = get_collation_oid(coll, false);
+
+	/* Retrieve the current version for the CURRENT VERSION case. */
+	Assert(OidIsValid(forced_dependency.oid));
+	forced_dependency.version =
+		get_collation_version_for_oid(forced_dependency.oid);
+
+	object.classId = RelationRelationId;
+	object.objectId = rel->rd_id;
+	object.objectSubId = 0;
+	visitDependentObjects(&object, &index_force_collation_version,
+						  &forced_dependency);
+
+	/* Invalidate the index relcache */
+	CacheInvalidateRelcache(rel);
 }

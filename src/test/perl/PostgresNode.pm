@@ -765,10 +765,14 @@ sub start
 		local %ENV = %ENV;
 		delete $ENV{PGAPPNAME};
 
+		my $options = "--cluster-name=$name";
+
+		$options .= ' -b' if ($params{binary_start});
+
 		# Note: We set the cluster_name here, not in postgresql.conf (in
 		# sub init) so that it does not get copied to standbys.
 		$ret = TestLib::system_log('pg_ctl', '-D', $self->data_dir, '-l',
-			$self->logfile, '-o', "--cluster-name=$name", 'start');
+			$self->logfile, '-o', $options, 'start');
 	}
 
 	if ($ret != 0)

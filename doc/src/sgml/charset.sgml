@@ -948,6 +948,41 @@ CREATE COLLATION ignore_accents (provider = icu, locale = 'und-u-ks-level1-kc-tr
     </tip>
    </sect3>
   </sect2>
+
+  <sect2 id="collation-versions">
+   <title>Collation Versions</title>
+
+   <para>
+    The ordering defined by a collation is not necessarily fixed over time.
+    If a collation changes for any reason, persistent data structures such as
+    b-trees that depend on a stable ordering of text might be corrupted.
+    <productname>PostgreSQL</productname> defends against this by recording
+    the current version of each referenced collation for any index that
+    depends on it in the
+    <link linkend="catalog-pg-depend"><structname>pg_depend</structname></link>
+    catalog, if the collation provider makes it available.  If the provider
+    later begins to report a different version, a warning will be issued
+    when the index is accessed, until either the <xref linkend="sql-reindex"/>
+    or the <xref linkend="sql-alterindex"/> command is used to update the
+    version.
+   </para>
+   <para>
+    Version information is available for collations from the
+    <literal>icu</literal> provider on all operating systems.  For the
+    <literal>libc</literal> provider, versions are currently only available
+    on systems using the GNU C library (most Linux systems).
+   </para>
+
+   <note>
+    <para>
+     When using the GNU C library for collations, the C library's version
+     is used as a proxy for the collation version.  Many Linux distributions
+     change collation definitions only when upgrading the C library, but this
+     approach is imperfect as maintainers are free to back-port newer
+     collation definitions to older C library releases.
+    </para>
+   </note>
+  </sect2>
  </sect1>
 
  <sect1 id="multibyte">

@@ -243,6 +243,8 @@ typedef struct IndexAmRoutine
 	bool		amcaninclude;
 	/* does AM use maintenance_work_mem? */
 	bool		amusemaintenanceworkmem;
+	/* does AM not rely on a stable ordering of deterministic collations? */
+	bool		amnostablecollorder;
 	/* OR of parallel vacuum flags.  See vacuum.h for flags. */
 	uint8		amparallelvacuumoptions;
 	/* type of data stored in index, or InvalidOid if variable */

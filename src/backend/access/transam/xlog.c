@@ -8577,9 +8577,9 @@ LogCheckpointEnd(bool restartpoint)
 						&sync_secs, &sync_usecs);
 
 	/* Accumulate checkpoint timing summary data, in milliseconds. */
-	BgWriterStats.m_checkpoint_write_time +=
+	BgWriterStats.checkpoint_write_time +=
 		write_secs * 1000 + write_usecs / 1000;
-	BgWriterStats.m_checkpoint_sync_time +=
+	BgWriterStats.checkpoint_sync_time +=
 		sync_secs * 1000 + sync_usecs / 1000;
 
 	/*

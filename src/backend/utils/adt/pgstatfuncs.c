@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * pgstatfuncs.c
- *	  Functions for accessing the statistics collector data
+ *	  Functions for accessing the activity statistics data
  *
  * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -34,9 +34,6 @@
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
 
 #define HAS_PGSTAT_PERMISSIONS(role)	 (is_member_of_role(GetUserId(), DEFAULT_ROLE_READ_ALL_STATS) || has_privs_of_role(GetUserId(), role))
-
-/* Global bgwriter statistics, from bgwriter.c */
-extern PgStat_MsgBgWriter bgwriterStats;
 
 Datum
 pg_stat_get_numscans(PG_FUNCTION_ARGS)
@@ -1267,7 +1264,7 @@ pg_stat_get_db_xact_commit(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_xact_commit);
+		result = (int64) (dbentry->counts.n_xact_commit);
 
 	PG_RETURN_INT64(result);
 }
@@ -1283,7 +1280,7 @@ pg_stat_get_db_xact_rollback(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_xact_rollback);
+		result = (int64) (dbentry->counts.n_xact_rollback);
 
 	PG_RETURN_INT64(result);
 }
@@ -1299,7 +1296,7 @@ pg_stat_get_db_blocks_fetched(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_blocks_fetched);
+		result = (int64) (dbentry->counts.n_blocks_fetched);
 
 	PG_RETURN_INT64(result);
 }
@@ -1315,7 +1312,7 @@ pg_stat_get_db_blocks_hit(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_blocks_hit);
+		result = (int64) (dbentry->counts.n_blocks_hit);
 
 	PG_RETURN_INT64(result);
 }
@@ -1331,7 +1328,7 @@ pg_stat_get_db_tuples_returned(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_tuples_returned);
+		result = (int64) (dbentry->counts.n_tuples_returned);
 
 	PG_RETURN_INT64(result);
 }
@@ -1347,7 +1344,7 @@ pg_stat_get_db_tuples_fetched(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_tuples_fetched);
+		result = (int64) (dbentry->counts.n_tuples_fetched);
 
 	PG_RETURN_INT64(result);
 }
@@ -1363,7 +1360,7 @@ pg_stat_get_db_tuples_inserted(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_tuples_inserted);
+		result = (int64) (dbentry->counts.n_tuples_inserted);
 
 	PG_RETURN_INT64(result);
 }
@@ -1379,7 +1376,7 @@ pg_stat_get_db_tuples_updated(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_tuples_updated);
+		result = (int64) (dbentry->counts.n_tuples_updated);
 
 	PG_RETURN_INT64(result);
 }
@@ -1395,7 +1392,7 @@ pg_stat_get_db_tuples_deleted(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_tuples_deleted);
+		result = (int64) (dbentry->counts.n_tuples_deleted);
 
 	PG_RETURN_INT64(result);
 }
@@ -1428,7 +1425,7 @@ pg_stat_get_db_temp_files(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = dbentry->n_temp_files;
+		result = dbentry->counts.n_temp_files;
 
 	PG_RETURN_INT64(result);
 }
@@ -1444,7 +1441,7 @@ pg_stat_get_db_temp_bytes(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = dbentry->n_temp_bytes;
+		result = dbentry->counts.n_temp_bytes;
 
 	PG_RETURN_INT64(result);
 }
@@ -1459,7 +1456,7 @@ pg_stat_get_db_conflict_tablespace(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_conflict_tablespace);
+		result = (int64) (dbentry->counts.n_conflict_tablespace);
 
 	PG_RETURN_INT64(result);
 }
@@ -1474,7 +1471,7 @@ pg_stat_get_db_conflict_lock(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_conflict_lock);
+		result = (int64) (dbentry->counts.n_conflict_lock);
 
 	PG_RETURN_INT64(result);
 }
@@ -1489,7 +1486,7 @@ pg_stat_get_db_conflict_snapshot(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_conflict_snapshot);
+		result = (int64) (dbentry->counts.n_conflict_snapshot);
 
 	PG_RETURN_INT64(result);
 }
@@ -1504,7 +1501,7 @@ pg_stat_get_db_conflict_bufferpin(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_conflict_bufferpin);
+		result = (int64) (dbentry->counts.n_conflict_bufferpin);
 
 	PG_RETURN_INT64(result);
 }
@@ -1519,7 +1516,7 @@ pg_stat_get_db_conflict_startup_deadlock(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_conflict_startup_deadlock);
+		result = (int64) (dbentry->counts.n_conflict_startup_deadlock);
 
 	PG_RETURN_INT64(result);
 }
@@ -1534,11 +1531,11 @@ pg_stat_get_db_conflict_all(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_conflict_tablespace +
-						  dbentry->n_conflict_lock +
-						  dbentry->n_conflict_snapshot +
-						  dbentry->n_conflict_bufferpin +
-						  dbentry->n_conflict_startup_deadlock);
+		result = (int64) (dbentry->counts.n_conflict_tablespace +
+						  dbentry->counts.n_conflict_lock +
+						  dbentry->counts.n_conflict_snapshot +
+						  dbentry->counts.n_conflict_bufferpin +
+						  dbentry->counts.n_conflict_startup_deadlock);
 
 	PG_RETURN_INT64(result);
 }
@@ -1553,7 +1550,7 @@ pg_stat_get_db_deadlocks(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_deadlocks);
+		result = (int64) (dbentry->counts.n_deadlocks);
 
 	PG_RETURN_INT64(result);
 }
@@ -1571,7 +1568,7 @@ pg_stat_get_db_checksum_failures(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (dbentry->n_checksum_failures);
+		result = (int64) (dbentry->counts.n_checksum_failures);
 
 	PG_RETURN_INT64(result);
 }
@@ -1608,7 +1605,7 @@ pg_stat_get_db_blk_read_time(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = ((double) dbentry->n_block_read_time) / 1000.0;
+		result = ((double) dbentry->counts.n_block_read_time) / 1000.0;
 
 	PG_RETURN_FLOAT8(result);
 }
@@ -1624,7 +1621,7 @@ pg_stat_get_db_blk_write_time(PG_FUNCTION_ARGS)
 	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
 		result = 0;
 	else
-		result = ((double) dbentry->n_block_write_time) / 1000.0;
+		result = ((double) dbentry->counts.n_block_write_time) / 1000.0;
 
 	PG_RETURN_FLOAT8(result);
 }
@@ -1710,7 +1707,7 @@ pg_stat_get_slru(PG_FUNCTION_ARGS)
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
 	int			i;
-	PgStat_SLRUStats *stats;
+	PgStat_StatSLRUEntry *stats;
 
 	/* check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
@@ -1744,7 +1741,7 @@ pg_stat_get_slru(PG_FUNCTION_ARGS)
 		/* for each row */
 		Datum		values[PG_STAT_GET_SLRU_COLS];
 		bool		nulls[PG_STAT_GET_SLRU_COLS];
-		PgStat_SLRUStats stat = stats[i];
+		PgStat_StatSLRUEntry	stat = stats[i];
 		const char *name;
 
 		name = pgstat_slru_name(i);

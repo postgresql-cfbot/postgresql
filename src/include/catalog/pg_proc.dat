@@ -5481,6 +5481,14 @@
   proname => 'pg_stat_get_buf_alloc', provolatile => 's', proparallel => 'r',
   prorettype => 'int8', proargtypes => '', prosrc => 'pg_stat_get_buf_alloc' },
 
+{ oid => '1136', descr => 'statistics: Number of times WAL data was written to the disk because wal_buffers got full',
+  proname => 'pg_stat_get_wal_buffers_full', provolatile => 's', proparallel => 'r',
+  prorettype => 'int8', proargtypes => '', prosrc => 'pg_stat_get_wal_buffers_full' },
+{ oid => '1137', descr => 'statistics: last reset for WAL activity',
+  proname => 'pg_stat_get_wal_stat_reset_time', provolatile => 's',
+  proparallel => 'r', prorettype => 'timestamptz', proargtypes => '',
+  prosrc => 'pg_stat_get_wal_stat_reset_time' },
+
 { oid => '2306', descr => 'statistics: information about SLRU caches',
   proname => 'pg_stat_get_slru', prorows => '100', proisstrict => 'f',
   proretset => 't', provolatile => 's', proparallel => 'r',

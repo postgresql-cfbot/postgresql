@@ -1697,6 +1697,18 @@ pg_stat_get_buf_alloc(PG_FUNCTION_ARGS)
 	PG_RETURN_INT64(pgstat_fetch_global()->buf_alloc);
 }
 
+Datum
+pg_stat_get_wal_buffers_full(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(pgstat_fetch_stat_wal()->wal_buffers_full);
+}
+
+Datum
+pg_stat_get_wal_stat_reset_time(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_TIMESTAMPTZ(pgstat_fetch_stat_wal()->stat_reset_timestamp);
+}
+
 /*
  * Returns statistics of SLRU caches.
  */

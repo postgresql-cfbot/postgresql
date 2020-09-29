@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "access/parallel.h"
+#include "access/xlog.h"
 #include "commands/async.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -92,7 +93,11 @@ static volatile ProcSignalSlot *MyProcSignalSlot = NULL;
 
 static bool CheckProcSignal(ProcSignalReason reason);
 static void CleanupProcSignalState(int status, Datum arg);
-static void ProcessBarrierPlaceholder(void);
+
+static void ProcessBarrierChecksumOnInProgress(void);
+static void ProcessBarrierChecksumOffInProgress(void);
+static void ProcessBarrierChecksumOn(void);
+static void ProcessBarrierChecksumOff(void);
 
 /*
  * ProcSignalShmemSize
@@ -495,8 +500,14 @@ ProcessProcSignalBarrier(void)
 	 * unconditionally, but it's more efficient to call only the ones that
 	 * might need us to do something based on the flags.
 	 */
-	if (BARRIER_SHOULD_CHECK(flags, PROCSIGNAL_BARRIER_PLACEHOLDER))
-		ProcessBarrierPlaceholder();
+	if (BARRIER_SHOULD_CHECK(flags, PROCSIGNAL_BARRIER_CHECKSUM_INPROGRESS_ON))
+		ProcessBarrierChecksumOnInProgress();
+	else if (BARRIER_SHOULD_CHECK(flags, PROCSIGNAL_BARRIER_CHECKSUM_ON))
+		ProcessBarrierChecksumOn();
+	else if (BARRIER_SHOULD_CHECK(flags, PROCSIGNAL_BARRIER_CHECKSUM_INPROGRESS_OFF))
+		ProcessBarrierChecksumOffInProgress();
+	else if (BARRIER_SHOULD_CHECK(flags, PROCSIGNAL_BARRIER_CHECKSUM_OFF))
+		ProcessBarrierChecksumOff();
 
 	/*
 	 * State changes related to all types of barriers that might have been
@@ -509,16 +520,27 @@ ProcessProcSignalBarrier(void)
 }
 
 static void
-ProcessBarrierPlaceholder(void)
+ProcessBarrierChecksumOn(void)
 {
-	/*
-	 * XXX. This is just a placeholder until the first real user of this
-	 * machinery gets committed. Rename PROCSIGNAL_BARRIER_PLACEHOLDER to
-	 * PROCSIGNAL_BARRIER_SOMETHING_ELSE where SOMETHING_ELSE is something
-	 * appropriately descriptive. Get rid of this function and instead have
-	 * ProcessBarrierSomethingElse. Most likely, that function should live in
-	 * the file pertaining to that subsystem, rather than here.
-	 */
+	AbsorbChecksumsOnBarrier();
+}
+
+static void
+ProcessBarrierChecksumOff(void)
+{
+	AbsorbChecksumsOffBarrier();
+}
+
+static void
+ProcessBarrierChecksumOnInProgress(void)
+{
+	AbsorbChecksumsOnInProgressBarrier();
+}
+
+static void
+ProcessBarrierChecksumOffInProgress(void)
+{
+	AbsorbChecksumsOffInProgressBarrier();
 }
 
 /*

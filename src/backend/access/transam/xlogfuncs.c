@@ -25,6 +25,7 @@
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "postmaster/datachecksumsworker.h"
 #include "pgstat.h"
 #include "replication/walreceiver.h"
 #include "storage/fd.h"
@@ -783,4 +784,82 @@ pg_promote(PG_FUNCTION_ARGS)
 	ereport(WARNING,
 			(errmsg("server did not promote within %d seconds", wait_seconds)));
 	PG_RETURN_BOOL(false);
+}
+
+/*
+ * Disables checksums for the cluster, unless already disabled.
+ *
+ * Has immediate effect - the checksums are set to off right away.
+ */
+Datum
+disable_data_checksums(PG_FUNCTION_ARGS)
+{
+	/*
+	 * Shutting down a concurrently running datachecksumsworker will not block
+	 * until the worker shuts down and exits, but we can continue turning off
+	 * checksums anyway since it will at most finish the block it had already
+	 * started and then abort.
+	 */
+	ShutdownDatachecksumsWorkerIfRunning();
+
+	SetDataChecksumsOff();
+
+	PG_RETURN_BOOL(true);
+}
+
+/*
+ * Enables checksums for the cluster, unless already enabled.
+ *
+ * Supports vacuum-like cost-based throttling, to limit system load.
+ * Starts a background worker that updates checksums on existing data.
+ */
+Datum
+enable_data_checksums(PG_FUNCTION_ARGS)
+{
+	int			cost_delay = PG_GETARG_INT32(0);
+	int			cost_limit = PG_GETARG_INT32(1);
+
+	if (cost_delay < 0)
+		ereport(ERROR,
+				(errmsg("cost delay cannot be less than zero")));
+
+	if (cost_limit <= 0)
+		ereport(ERROR,
+				(errmsg("cost limit must be a positive value")));
+
+	if (DataChecksumsWorkerStarted())
+		PG_RETURN_BOOL(false);
+
+	/*
+	 * Data checksums on -> on is not a valid state transition as there is
+	 * nothing to do.
+	 */
+	if (DataChecksumsNeedVerify())
+		PG_RETURN_BOOL(false);
+
+	/*
+	 * If the state is set to "inprogress-on" but the worker isn't running,
+	 * then the data checksumming was prematurely terminated. Attempt to
+	 * continue processing data pages where we left off based on state stored
+	 * in the catalog.
+	 */
+	if (DataChecksumsOnInProgress())
+	{
+		ereport(NOTICE,
+				(errmsg("data checksums partly enabled, continuing processing")));
+
+		StartDatachecksumsWorkerLauncher(ENABLE_CHECKSUMS, cost_delay, cost_limit);
+	}
+
+	/*
+	 * We are starting a checksumming process from scratch, and need to start
+	 * by clearing the state in pg_class in case checksums have ever been
+	 * enabled before (either fully or partly). As soon as we set the checksum
+	 * state to "inprogress-on", new relations will set relhaschecksums in
+	 * pg_class so it must be done first.
+	 */
+	else
+		StartDatachecksumsWorkerLauncher(RESET_STATE_AND_ENABLE_CHECKSUMS, cost_delay, cost_limit);
+
+	PG_RETURN_BOOL(true);
 }

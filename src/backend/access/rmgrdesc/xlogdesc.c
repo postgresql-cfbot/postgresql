@@ -18,6 +18,7 @@
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "catalog/pg_control.h"
+#include "storage/bufpage.h"
 #include "utils/guc.h"
 #include "utils/timestamp.h"
 
@@ -140,6 +141,20 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec.ThisTimeLineID, xlrec.PrevTimeLineID,
 						 timestamptz_to_str(xlrec.end_time));
 	}
+	else if (info == XLOG_CHECKSUMS)
+	{
+		xl_checksum_state xlrec;
+
+		memcpy(&xlrec, rec, sizeof(xl_checksum_state));
+		if (xlrec.new_checksumtype == PG_DATA_CHECKSUM_VERSION)
+			appendStringInfo(buf, "on");
+		else if (xlrec.new_checksumtype == PG_DATA_CHECKSUM_INPROGRESS_OFF_VERSION)
+			appendStringInfo(buf, "inprogress-off");
+		else if (xlrec.new_checksumtype == PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION)
+			appendStringInfo(buf, "inprogress-on");
+		else
+			appendStringInfo(buf, "off");
+	}
 }
 
 const char *
@@ -184,6 +199,9 @@ xlog_identify(uint8 info)
 			break;
 		case XLOG_FPI_FOR_HINT:
 			id = "FPI_FOR_HINT";
+			break;
+		case XLOG_CHECKSUMS:
+			id = "CHECKSUMS";
 			break;
 	}
 

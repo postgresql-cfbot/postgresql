@@ -1883,6 +1883,8 @@ formrdesc(const char *relationName, Oid relationReltype,
 	relation->rd_rel->relnatts = (int16) natts;
 	relation->rd_rel->relam = HEAP_TABLE_AM_OID;
 
+	relation->rd_rel->relhaschecksums = DataChecksumsNeedWrite();
+
 	/*
 	 * initialize attribute tuple form
 	 *
@@ -3490,6 +3492,8 @@ RelationBuildLocalRelation(const char *relname,
 		rel->rd_rel->relispopulated = false;
 	else
 		rel->rd_rel->relispopulated = true;
+
+	rel->rd_rel->relhaschecksums = DataChecksumsNeedWrite();
 
 	/* set replica identity -- system catalogs and non-tables don't have one */
 	if (!IsCatalogNamespace(relnamespace) &&

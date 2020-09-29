@@ -3770,6 +3770,12 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_CHECKPOINT_START:
 			event_name = "CheckpointStart";
 			break;
+		case WAIT_EVENT_CHECKSUM_ENABLE_STARTCONDITION:
+			event_name = "ChecksumEnableStartCondition";
+			break;
+		case WAIT_EVENT_CHECKSUM_ENABLE_FINISHCONDITION:
+			event_name = "ChecksumEnableFinishCondition";
+			break;
 		case WAIT_EVENT_EXECUTE_GATHER:
 			event_name = "ExecuteGather";
 			break;

@@ -18,6 +18,7 @@
 #include "pgstat.h"
 #include "port/atomics.h"
 #include "postmaster/bgworker_internals.h"
+#include "postmaster/datachecksumsworker.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
 #include "replication/logicallauncher.h"
@@ -128,6 +129,15 @@ static const struct
 	},
 	{
 		"ApplyWorkerMain", ApplyWorkerMain
+	},
+	{
+		"DatachecksumsWorkerLauncherMain", DatachecksumsWorkerLauncherMain
+	},
+	{
+		"DatachecksumsWorkerMain", DatachecksumsWorkerMain
+	},
+	{
+		"ResetDataChecksumsStateInDatabase", ResetDataChecksumsStateInDatabase
 	}
 };
 

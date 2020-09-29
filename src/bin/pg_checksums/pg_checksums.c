@@ -600,7 +600,7 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
-	if (ControlFile->data_checksum_version > 0 &&
+	if (ControlFile->data_checksum_version == DATA_CHECKSUMS_ON &&
 		mode == PG_MODE_ENABLE)
 	{
 		pg_log_error("data checksums are already enabled in cluster");

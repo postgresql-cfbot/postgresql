@@ -119,6 +119,9 @@ CATALOG(pg_class,1259,RelationRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83,Relat
 	/* is relation a partition? */
 	bool		relispartition BKI_DEFAULT(f);
 
+	/* does the relation have checksums enabled */
+	bool		relhaschecksums BKI_DEFAULT(f);
+
 	/* heap for rewrite during DDL, link to original rel */
 	Oid			relrewrite BKI_DEFAULT(0);
 

@@ -385,7 +385,10 @@ CompareOpclassOptions(Datum *opts1, Datum *opts2, int natts)
  * lazy VACUUMs, because they won't be fazed by missing index entries
  * either.  (Manual ANALYZEs, however, can't be excluded because they
  * might be within transactions that are going to do arbitrary operations
- * later.)
+ * later.)  Processes running CREATE INDEX CONCURRENTLY or REINDEX CONCURRENTLY
+ * on indexes that are neither expressional nor partial are also safe to
+ * ignore, since we know that those processes won't examine any data
+ * outside the table they're indexing.
  *
  * Also, GetCurrentVirtualXIDs never reports our own vxid, so we need not
  * check for that.
@@ -406,7 +409,8 @@ WaitForOlderSnapshots(TransactionId limitXmin, bool progress)
 	VirtualTransactionId *old_snapshots;
 
 	old_snapshots = GetCurrentVirtualXIDs(limitXmin, true, false,
-										  PROC_IS_AUTOVACUUM | PROC_IN_VACUUM,
+										  PROC_IS_AUTOVACUUM | PROC_IN_VACUUM
+										  | PROC_IN_SAFE_CIC,
 										  &n_old_snapshots);
 	if (progress)
 		pgstat_progress_update_param(PROGRESS_WAITFOR_TOTAL, n_old_snapshots);
@@ -426,7 +430,8 @@ WaitForOlderSnapshots(TransactionId limitXmin, bool progress)
 
 			newer_snapshots = GetCurrentVirtualXIDs(limitXmin,
 													true, false,
-													PROC_IS_AUTOVACUUM | PROC_IN_VACUUM,
+													PROC_IS_AUTOVACUUM | PROC_IN_VACUUM
+													| PROC_IN_SAFE_CIC,
 													&n_newer_snapshots);
 			for (j = i; j < n_old_snapshots; j++)
 			{
@@ -519,6 +524,7 @@ DefineIndex(Oid relationId,
 	bool		amcanorder;
 	amoptions_function amoptions;
 	bool		partitioned;
+	bool		safe_index;
 	Datum		reloptions;
 	int16	   *coloptions;
 	IndexInfo  *indexInfo;
@@ -1047,6 +1053,17 @@ DefineIndex(Oid relationId,
 	}
 
 	/*
+	 * When doing concurrent index builds, we can set a PGPROC flag to tell
+	 * concurrent VACUUM, CREATE INDEX CONCURRENTLY and REINDEX CONCURRENTLY
+	 * to ignore us when waiting for concurrent snapshots.  That can only be
+	 * done for indexes that don't execute any expressions.  Determine that.
+	 * (The flag is reset automatically at transaction end, so it must be
+	 * set for each transaction.)
+	 */
+	safe_index = indexInfo->ii_Expressions == NIL &&
+		indexInfo->ii_Predicate == NIL;
+
+	/*
 	 * Report index creation if appropriate (delay this till after most of the
 	 * error checks)
 	 */
@@ -1432,6 +1449,15 @@ DefineIndex(Oid relationId,
 	CommitTransactionCommand();
 	StartTransactionCommand();
 
+	/* Tell concurrent index builds to ignore us, if index qualifies */
+	if (safe_index)
+	{
+		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+		MyProc->vacuumFlags |= PROC_IN_SAFE_CIC;
+		ProcGlobal->vacuumFlags[MyProc->pgxactoff] = MyProc->vacuumFlags;
+		LWLockRelease(ProcArrayLock);
+	}
+
 	/*
 	 * The index is now visible, so we can report the OID.
 	 */
@@ -1491,6 +1517,15 @@ DefineIndex(Oid relationId,
 	CommitTransactionCommand();
 	StartTransactionCommand();
 
+	/* Tell concurrent index builds to ignore us, if index qualifies */
+	if (safe_index)
+	{
+		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+		MyProc->vacuumFlags |= PROC_IN_SAFE_CIC;
+		ProcGlobal->vacuumFlags[MyProc->pgxactoff] = MyProc->vacuumFlags;
+		LWLockRelease(ProcArrayLock);
+	}
+
 	/*
 	 * Phase 3 of concurrent index build
 	 *
@@ -1546,6 +1581,15 @@ DefineIndex(Oid relationId,
 	 */
 	CommitTransactionCommand();
 	StartTransactionCommand();
+
+	/* Tell concurrent index builds to ignore us, if index qualifies */
+	if (safe_index)
+	{
+		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+		MyProc->vacuumFlags |= PROC_IN_SAFE_CIC;
+		ProcGlobal->vacuumFlags[MyProc->pgxactoff] = MyProc->vacuumFlags;
+		LWLockRelease(ProcArrayLock);
+	}
 
 	/* We should now definitely not be advertising any xmin. */
 	Assert(MyProc->xmin == InvalidTransactionId);

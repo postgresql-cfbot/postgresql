@@ -23,7 +23,7 @@
  * ----------
  */
 #define MIN_XFN_CHARS	16
-#define MAX_XFN_CHARS	40
+#define MAX_XFN_CHARS	41
 #define VALID_XFN_CHARS "0123456789ABCDEF.history.backup.partial"
 
 /* ----------

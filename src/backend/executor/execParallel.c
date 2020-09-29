@@ -35,6 +35,7 @@
 #include "executor/nodeIncrementalSort.h"
 #include "executor/nodeIndexonlyscan.h"
 #include "executor/nodeIndexscan.h"
+#include "executor/nodeResultCache.h"
 #include "executor/nodeSeqscan.h"
 #include "executor/nodeSort.h"
 #include "executor/nodeSubplan.h"
@@ -293,6 +294,10 @@ ExecParallelEstimate(PlanState *planstate, ExecParallelEstimateContext *e)
 			/* even when not parallel-aware, for EXPLAIN ANALYZE */
 			ExecAggEstimate((AggState *) planstate, e->pcxt);
 			break;
+		case T_ResultCacheState:
+			/* even when not parallel-aware, for EXPLAIN ANALYZE */
+			ExecResultCacheEstimate((ResultCacheState *) planstate, e->pcxt);
+			break;
 		default:
 			break;
 	}
@@ -512,6 +517,10 @@ ExecParallelInitializeDSM(PlanState *planstate,
 		case T_AggState:
 			/* even when not parallel-aware, for EXPLAIN ANALYZE */
 			ExecAggInitializeDSM((AggState *) planstate, d->pcxt);
+			break;
+		case T_ResultCacheState:
+			/* even when not parallel-aware, for EXPLAIN ANALYZE */
+			ExecResultCacheInitializeDSM((ResultCacheState *) planstate, d->pcxt);
 			break;
 		default:
 			break;
@@ -989,6 +998,7 @@ ExecParallelReInitializeDSM(PlanState *planstate,
 		case T_HashState:
 		case T_SortState:
 		case T_IncrementalSortState:
+		case T_ResultCacheState:
 			/* these nodes have DSM state, but no reinitialization is required */
 			break;
 
@@ -1057,6 +1067,9 @@ ExecParallelRetrieveInstrumentation(PlanState *planstate,
 			break;
 		case T_AggState:
 			ExecAggRetrieveInstrumentation((AggState *) planstate);
+			break;
+		case T_ResultCacheState:
+			ExecResultCacheRetrieveInstrumentation((ResultCacheState *) planstate);
 			break;
 		default:
 			break;
@@ -1349,6 +1362,11 @@ ExecParallelInitializeWorker(PlanState *planstate, ParallelWorkerContext *pwcxt)
 		case T_AggState:
 			/* even when not parallel-aware, for EXPLAIN ANALYZE */
 			ExecAggInitializeWorker((AggState *) planstate, pwcxt);
+			break;
+		case T_ResultCacheState:
+			/* even when not parallel-aware, for EXPLAIN ANALYZE */
+			ExecResultCacheInitializeWorker((ResultCacheState *) planstate,
+											pwcxt);
 			break;
 		default:
 			break;

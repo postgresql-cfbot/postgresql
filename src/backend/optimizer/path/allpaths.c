@@ -4109,6 +4109,10 @@ print_path(PlannerInfo *root, Path *path, int indent)
 			ptype = "Material";
 			subpath = ((MaterialPath *) path)->subpath;
 			break;
+		case T_ResultCache:
+			ptype = "ResultCache";
+			subpath = ((ResultCachePath *) path)->subpath;
+			break;
 		case T_UniquePath:
 			ptype = "Unique";
 			subpath = ((UniquePath *) path)->subpath;

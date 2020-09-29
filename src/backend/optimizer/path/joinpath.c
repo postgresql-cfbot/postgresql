@@ -18,10 +18,13 @@
 
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"
+#include "nodes/nodeFuncs.h"
 #include "optimizer/cost.h"
+#include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
+#include "utils/typcache.h"
 
 /* Hook for plugins to get control in add_paths_to_joinrel() */
 set_join_pathlist_hook_type set_join_pathlist_hook = NULL;
@@ -52,6 +55,9 @@ static void try_partial_mergejoin_path(PlannerInfo *root,
 static void sort_inner_and_outer(PlannerInfo *root, RelOptInfo *joinrel,
 								 RelOptInfo *outerrel, RelOptInfo *innerrel,
 								 JoinType jointype, JoinPathExtraData *extra);
+static inline bool clause_sides_match_join(RestrictInfo *rinfo,
+										   RelOptInfo *outerrel,
+										   RelOptInfo *innerrel);
 static void match_unsorted_outer(PlannerInfo *root, RelOptInfo *joinrel,
 								 RelOptInfo *outerrel, RelOptInfo *innerrel,
 								 JoinType jointype, JoinPathExtraData *extra);
@@ -163,6 +169,11 @@ add_paths_to_joinrel(PlannerInfo *root,
 	{
 		case JOIN_SEMI:
 		case JOIN_ANTI:
+
+			/*
+			 * XXX it may be worth proving this to allow a ResultCache to be
+			 * considered for Nested Loop Semi/Anti Joins.
+			 */
 			extra.inner_unique = false; /* well, unproven */
 			break;
 		case JOIN_UNIQUE_INNER:
@@ -352,6 +363,195 @@ allow_star_schema_join(PlannerInfo *root,
 	 */
 	return (bms_overlap(inner_paramrels, outerrelids) &&
 			bms_nonempty_difference(inner_paramrels, outerrelids));
+}
+
+/*
+ * paraminfo_get_equal_hashops
+ *		Determine if it's valid to use a ResultCache node to cache inner rows.
+ *
+ * Additionally we also fetch outer side exprs and check for valid hashable
+ * equality operator for each outer expr.  Returns true and sets the
+ *'param_exprs' and 'operators' output parameters if the caching is possible.
+ */
+static bool
+paraminfo_get_equal_hashops(ParamPathInfo *param_info, List **param_exprs,
+							List **operators, RelOptInfo *outerrel,
+							RelOptInfo *innerrel)
+{
+	TypeCacheEntry *typentry;
+	ListCell   *lc;
+
+	/*
+	 * We can't use a result cache if there are volatile functions in the
+	 * inner rel's target list or restrict list.  A cache hit could reduce the
+	 * number of calls to these functions.
+	 *
+	 * XXX Think about this harder. Any other restrictions to add here?
+	 */
+	if (contain_volatile_functions((Node *) innerrel->reltarget->exprs))
+		return false;
+
+	foreach(lc, innerrel->baserestrictinfo)
+	{
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+
+		if (contain_volatile_functions((Node *) rinfo->clause))
+			return false;
+	}
+
+	*param_exprs = NIL;
+	*operators = NIL;
+
+
+	if (param_info != NULL)
+	{
+		List	   *clauses = param_info->ppi_clauses;
+
+		foreach(lc, clauses)
+		{
+			RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+			OpExpr	   *opexpr;
+			Node	   *expr;
+
+			opexpr = (OpExpr *) rinfo->clause;
+
+			/* ppi_clauses should always meet this requirement */
+			if (!IsA(opexpr, OpExpr) || list_length(opexpr->args) != 2 ||
+				!clause_sides_match_join(rinfo, outerrel, innerrel))
+			{
+				list_free(*operators);
+				list_free(*param_exprs);
+				return false;
+			}
+
+			if (rinfo->outer_is_left)
+				expr = (Node *) list_nth(opexpr->args, 0);
+			else
+				expr = (Node *) list_nth(opexpr->args, 1);
+
+			typentry = lookup_type_cache(exprType(expr),
+										 TYPECACHE_HASH_PROC | TYPECACHE_EQ_OPR);
+
+			/* XXX will eq_opr ever be invalid if hash_proc isn't? */
+			if (!OidIsValid(typentry->hash_proc) || !OidIsValid(typentry->eq_opr))
+			{
+				list_free(*operators);
+				list_free(*param_exprs);
+				return false;
+			}
+
+			*operators = lappend_oid(*operators, typentry->eq_opr);
+			*param_exprs = lappend(*param_exprs, expr);
+		}
+	}
+
+	/* Now add any lateral vars to the cache key too */
+	foreach(lc, innerrel->lateral_vars)
+	{
+		Node	   *expr = (Node *) lfirst(lc);
+		Relids		var_relids = NULL;
+
+		if (IsA(expr, Var))
+			var_relids = bms_make_singleton(((Var *) expr)->varno);
+		else if (IsA(expr, PlaceHolderVar))
+			var_relids = pull_varnos((Node *) ((PlaceHolderVar *) expr)->phexpr);
+		else
+			Assert(false);
+
+		/* No need for lateral vars that are from the innerrel itself */
+		/* XXX can this actually happen? */
+		if (bms_overlap(var_relids, innerrel->relids))
+		{
+			bms_free(var_relids);
+			continue;
+		}
+		bms_free(var_relids);
+
+		typentry = lookup_type_cache(exprType(expr),
+									 TYPECACHE_HASH_PROC | TYPECACHE_EQ_OPR);
+
+		/* XXX will eq_opr ever be invalid if hash_proc isn't? */
+		if (!OidIsValid(typentry->hash_proc) || !OidIsValid(typentry->eq_opr))
+		{
+			list_free(*operators);
+			list_free(*param_exprs);
+			return false;
+		}
+
+		*operators = lappend_oid(*operators, typentry->eq_opr);
+		*param_exprs = lappend(*param_exprs, expr);
+	}
+
+	/* We can hash, provided we found something to hash */
+	return (*operators != NIL);
+}
+
+/*
+ * get_resultcache_path
+ *		If possible,.make and return a Result Cache path atop of 'inner_path'.
+ *		Otherwise return NULL.
+ */
+static Path *
+get_resultcache_path(PlannerInfo *root, RelOptInfo *innerrel,
+					 RelOptInfo *outerrel, Path *inner_path,
+					 Path *outer_path, JoinType jointype,
+					 JoinPathExtraData *extra)
+{
+	List	   *param_exprs;
+	List	   *hash_operators;
+
+	/* Obviously not if it's disabled */
+	if (!enable_resultcache)
+		return NULL;
+
+	/*
+	 * We can safely not bother with all this unless we expect to perform more
+	 * than one inner scan.  The first scan is always going to be a cache
+	 * miss.  This would likely fail later anyway based on costs, so this is
+	 * really just to save some wasted effort.
+	 */
+	if (outer_path->parent->rows < 2)
+		return NULL;
+
+	/*
+	 * We can only have a result cache when there's some kind of cache key,
+	 * either parameterized path clauses or lateral Vars.
+	 */
+	if ((inner_path->param_info == NULL ||
+		 inner_path->param_info->ppi_clauses == NIL) &&
+		innerrel->lateral_vars == NIL)
+		return NULL;
+
+	/*
+	 * Currently we don't do this for SEMI and ANTI joins unless they're
+	 * marked as inner_unique.  This is because nested loop SEMI/ANTI joins
+	 * don't scan the inner node to completion, which will mean resultcache
+	 * cannot mark the cache entry as complete.
+	 *
+	 * XXX Currently we don't attempt to mark SEMI/ANTI joins as inner_unique
+	 * = true.  Should we?  See add_paths_to_joinrel()
+	 */
+	if (!extra->inner_unique && (jointype == JOIN_SEMI ||
+								 jointype == JOIN_ANTI))
+		return NULL;
+
+	/* Check if we have hash ops for each parameter to the path */
+	if (paraminfo_get_equal_hashops(inner_path->param_info,
+									&param_exprs,
+									&hash_operators,
+									outerrel,
+									innerrel))
+	{
+		return (Path *) create_resultcache_path(root,
+												innerrel,
+												inner_path,
+												param_exprs,
+												hash_operators,
+												extra->inner_unique,
+												outer_path->parent->rows);
+	}
+
+	return NULL;
 }
 
 /*
@@ -1471,6 +1671,7 @@ match_unsorted_outer(PlannerInfo *root,
 			foreach(lc2, innerrel->cheapest_parameterized_paths)
 			{
 				Path	   *innerpath = (Path *) lfirst(lc2);
+				Path	   *rcpath;
 
 				try_nestloop_path(root,
 								  joinrel,
@@ -1479,6 +1680,24 @@ match_unsorted_outer(PlannerInfo *root,
 								  merge_pathkeys,
 								  jointype,
 								  extra);
+
+				/*
+				 * Try generating a result cache path and see if that makes the
+				 * nested loop any cheaper.
+				 */
+				rcpath = get_resultcache_path(root, innerrel, outerrel,
+											  innerpath, outerpath, jointype,
+											  extra);
+				if (rcpath != NULL)
+				{
+					try_nestloop_path(root,
+									  joinrel,
+									  outerpath,
+									  rcpath,
+									  merge_pathkeys,
+									  jointype,
+									  extra);
+				}
 			}
 
 			/* Also consider materialized form of the cheapest inner path */
@@ -1633,6 +1852,7 @@ consider_parallel_nestloop(PlannerInfo *root,
 		foreach(lc2, innerrel->cheapest_parameterized_paths)
 		{
 			Path	   *innerpath = (Path *) lfirst(lc2);
+			Path	   *rcpath;
 
 			/* Can't join to an inner path that is not parallel-safe */
 			if (!innerpath->parallel_safe)
@@ -1657,6 +1877,20 @@ consider_parallel_nestloop(PlannerInfo *root,
 
 			try_partial_nestloop_path(root, joinrel, outerpath, innerpath,
 									  pathkeys, jointype, extra);
+
+			/*
+			 * Try generating a result cache path and see if that makes the
+			 * nested loop any cheaper.
+			 */
+			rcpath = get_resultcache_path(root, innerrel, outerrel,
+										  innerpath, outerpath, jointype,
+										  extra);
+			if (rcpath != NULL)
+			{
+				try_partial_nestloop_path(root, joinrel, outerpath, rcpath,
+										  pathkeys, jointype, extra);
+			}
+
 		}
 	}
 }

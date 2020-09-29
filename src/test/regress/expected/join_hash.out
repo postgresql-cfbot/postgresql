@@ -923,27 +923,42 @@ WHERE
          Output: hjtest_1.a, hjtest_1.tableoid, hjtest_1.id, hjtest_1.b
          Filter: ((SubPlan 4) < 50)
          SubPlan 4
-           ->  Result
-                 Output: (hjtest_1.b * 5)
+           ->  Result Cache
+                 Output: ((hjtest_1.b * 5))
+                 Cache Key: hjtest_1.b
+                 ->  Result
+                       Output: (hjtest_1.b * 5)
    ->  Hash
          Output: hjtest_2.a, hjtest_2.tableoid, hjtest_2.id, hjtest_2.c, hjtest_2.b
          ->  Seq Scan on public.hjtest_2
                Output: hjtest_2.a, hjtest_2.tableoid, hjtest_2.id, hjtest_2.c, hjtest_2.b
                Filter: ((SubPlan 5) < 55)
                SubPlan 5
+                 ->  Result Cache
+                       Output: ((hjtest_2.c * 5))
+                       Cache Key: hjtest_2.c
+                       ->  Result
+                             Output: (hjtest_2.c * 5)
+         SubPlan 1
+           ->  Result Cache
+                 Output: 1
+                 Cache Key: hjtest_2.id
+                 ->  Result
+                       Output: 1
+                       One-Time Filter: (hjtest_2.id = 1)
+         SubPlan 3
+           ->  Result Cache
+                 Output: ((hjtest_2.c * 5))
+                 Cache Key: hjtest_2.c
                  ->  Result
                        Output: (hjtest_2.c * 5)
-         SubPlan 1
-           ->  Result
-                 Output: 1
-                 One-Time Filter: (hjtest_2.id = 1)
-         SubPlan 3
-           ->  Result
-                 Output: (hjtest_2.c * 5)
    SubPlan 2
-     ->  Result
-           Output: (hjtest_1.b * 5)
-(28 rows)
+     ->  Result Cache
+           Output: ((hjtest_1.b * 5))
+           Cache Key: hjtest_1.b
+           ->  Result
+                 Output: (hjtest_1.b * 5)
+(43 rows)
 
 SELECT hjtest_1.a a1, hjtest_2.a a2,hjtest_1.tableoid::regclass t1, hjtest_2.tableoid::regclass t2
 FROM hjtest_1, hjtest_2
@@ -977,27 +992,42 @@ WHERE
          Output: hjtest_2.a, hjtest_2.tableoid, hjtest_2.id, hjtest_2.c, hjtest_2.b
          Filter: ((SubPlan 5) < 55)
          SubPlan 5
-           ->  Result
-                 Output: (hjtest_2.c * 5)
+           ->  Result Cache
+                 Output: ((hjtest_2.c * 5))
+                 Cache Key: hjtest_2.c
+                 ->  Result
+                       Output: (hjtest_2.c * 5)
    ->  Hash
          Output: hjtest_1.a, hjtest_1.tableoid, hjtest_1.id, hjtest_1.b
          ->  Seq Scan on public.hjtest_1
                Output: hjtest_1.a, hjtest_1.tableoid, hjtest_1.id, hjtest_1.b
                Filter: ((SubPlan 4) < 50)
                SubPlan 4
+                 ->  Result Cache
+                       Output: ((hjtest_1.b * 5))
+                       Cache Key: hjtest_1.b
+                       ->  Result
+                             Output: (hjtest_1.b * 5)
+         SubPlan 2
+           ->  Result Cache
+                 Output: ((hjtest_1.b * 5))
+                 Cache Key: hjtest_1.b
                  ->  Result
                        Output: (hjtest_1.b * 5)
-         SubPlan 2
-           ->  Result
-                 Output: (hjtest_1.b * 5)
    SubPlan 1
-     ->  Result
+     ->  Result Cache
            Output: 1
-           One-Time Filter: (hjtest_2.id = 1)
+           Cache Key: hjtest_2.id
+           ->  Result
+                 Output: 1
+                 One-Time Filter: (hjtest_2.id = 1)
    SubPlan 3
-     ->  Result
-           Output: (hjtest_2.c * 5)
-(28 rows)
+     ->  Result Cache
+           Output: ((hjtest_2.c * 5))
+           Cache Key: hjtest_2.c
+           ->  Result
+                 Output: (hjtest_2.c * 5)
+(43 rows)
 
 SELECT hjtest_1.a a1, hjtest_2.a a2,hjtest_1.tableoid::regclass t1, hjtest_2.tableoid::regclass t2
 FROM hjtest_2, hjtest_1

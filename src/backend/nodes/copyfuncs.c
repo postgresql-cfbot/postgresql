@@ -928,6 +928,33 @@ _copyMaterial(const Material *from)
 
 
 /*
+ * _copyResultCache
+ */
+static ResultCache *
+_copyResultCache(const ResultCache *from)
+{
+	ResultCache *newnode = makeNode(ResultCache);
+
+	/*
+	 * copy node superclass fields
+	 */
+	CopyPlanFields((const Plan *) from, (Plan *) newnode);
+
+	/*
+	 * copy remainder of node
+	 */
+	COPY_SCALAR_FIELD(numKeys);
+	COPY_POINTER_FIELD(hashOperators, sizeof(Oid) * from->numKeys);
+	COPY_POINTER_FIELD(collations, sizeof(Oid) * from->numKeys);
+	COPY_NODE_FIELD(param_exprs);
+	COPY_SCALAR_FIELD(singlerow);
+	COPY_SCALAR_FIELD(est_entries);
+
+	return newnode;
+}
+
+
+/*
  * CopySortFields
  *
  *		This function copies the fields of the Sort node.  It is used by
@@ -4935,6 +4962,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_Material:
 			retval = _copyMaterial(from);
+			break;
+		case T_ResultCache:
+			retval = _copyResultCache(from);
 			break;
 		case T_Sort:
 			retval = _copySort(from);

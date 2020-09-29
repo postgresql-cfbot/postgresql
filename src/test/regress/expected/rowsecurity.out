@@ -1477,18 +1477,20 @@ SELECT (SELECT x FROM s1 LIMIT 1) xx, * FROM s2 WHERE y like '%28%';
 (3 rows)
 
 EXPLAIN (COSTS OFF) SELECT (SELECT x FROM s1 LIMIT 1) xx, * FROM s2 WHERE y like '%28%';
-                               QUERY PLAN                                
--------------------------------------------------------------------------
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
  Seq Scan on s2
    Filter: (((x % 2) = 0) AND (y ~~ '%28%'::text))
    SubPlan 2
-     ->  Limit
-           ->  Seq Scan on s1
-                 Filter: (hashed SubPlan 1)
-                 SubPlan 1
-                   ->  Seq Scan on s2 s2_1
-                         Filter: (((x % 2) = 0) AND (y ~~ '%af%'::text))
-(9 rows)
+     ->  Result Cache
+           Cache Key: s2.x
+           ->  Limit
+                 ->  Seq Scan on s1
+                       Filter: (hashed SubPlan 1)
+                       SubPlan 1
+                         ->  Seq Scan on s2 s2_1
+                               Filter: (((x % 2) = 0) AND (y ~~ '%af%'::text))
+(11 rows)
 
 SET SESSION AUTHORIZATION regress_rls_alice;
 ALTER POLICY p2 ON s2 USING (x in (select a from s1 where b like '%d2%'));

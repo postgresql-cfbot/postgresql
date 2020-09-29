@@ -1552,6 +1552,55 @@ create_material_path(RelOptInfo *rel, Path *subpath)
 }
 
 /*
+ * create_resultcache_path
+ *	  Creates a path corresponding to a ResultCache plan, returning the
+ *	  pathnode.
+ */
+ResultCachePath *
+create_resultcache_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
+						List *param_exprs, List *hash_operators,
+						bool singlerow, double calls)
+{
+	ResultCachePath *pathnode = makeNode(ResultCachePath);
+
+	Assert(subpath->parent == rel);
+
+	pathnode->path.pathtype = T_ResultCache;
+	pathnode->path.parent = rel;
+	pathnode->path.pathtarget = rel->reltarget;
+	pathnode->path.param_info = subpath->param_info;
+	pathnode->path.parallel_aware = false;
+	pathnode->path.parallel_safe = rel->consider_parallel &&
+		subpath->parallel_safe;
+	pathnode->path.parallel_workers = subpath->parallel_workers;
+	pathnode->path.pathkeys = subpath->pathkeys;
+
+	pathnode->subpath = subpath;
+	pathnode->hash_operators = hash_operators;
+	pathnode->param_exprs = param_exprs;
+	pathnode->singlerow = singlerow;
+	pathnode->calls = calls;
+
+	/*
+	 * For now we set est_entries to 0.  The planner may choose to set this to
+	 * some better value, but if left at 0 then the executor will just use a
+	 * predefined hash table size for the cache.
+	 */
+	pathnode->est_entries = 0;
+
+	/*
+	 * Add a small additional charge for caching the first entry.  All the
+	 * harder calculations for rescans are performed in
+	 * cost_resultcache_rescan().
+	 */
+	pathnode->path.startup_cost = subpath->startup_cost + cpu_tuple_cost;
+	pathnode->path.total_cost = subpath->total_cost + cpu_tuple_cost;
+	pathnode->path.rows = subpath->rows;
+
+	return pathnode;
+}
+
+/*
  * create_unique_path
  *	  Creates a path representing elimination of distinct rows from the
  *	  input data.  Distinct-ness is defined according to the needs of the
@@ -1688,6 +1737,7 @@ create_unique_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	pathnode->path.rows = estimate_num_groups(root,
 											  sjinfo->semi_rhs_exprs,
 											  rel->rows,
+											  NULL,
 											  NULL);
 	numCols = list_length(sjinfo->semi_rhs_exprs);
 
@@ -3848,6 +3898,17 @@ reparameterize_path(PlannerInfo *root, Path *path,
 									   apath->partitioned_rels,
 									   -1);
 			}
+		case T_ResultCache:
+			{
+				ResultCachePath *rcpath = (ResultCachePath *) path;
+
+				return (Path *) create_resultcache_path(root, rel,
+														rcpath->subpath,
+														rcpath->param_exprs,
+														rcpath->hash_operators,
+														rcpath->singlerow,
+														rcpath->calls);
+			}
 		default:
 			break;
 	}
@@ -4063,6 +4124,16 @@ do { \
 				FLAT_COPY_PATH(apath, path, AppendPath);
 				REPARAMETERIZE_CHILD_PATH_LIST(apath->subpaths);
 				new_path = (Path *) apath;
+			}
+			break;
+
+		case T_ResultCachePath:
+			{
+				ResultCachePath *rcpath;
+
+				FLAT_COPY_PATH(rcpath, path, ResultCachePath);
+				REPARAMETERIZE_CHILD_PATH(rcpath->subpath);
+				new_path = (Path *) rcpath;
 			}
 			break;
 

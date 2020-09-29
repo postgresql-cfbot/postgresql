@@ -3241,6 +3241,7 @@ typedef struct
 	Node	   *var;			/* might be an expression, not just a Var */
 	RelOptInfo *rel;			/* relation it belongs to */
 	double		ndistinct;		/* # distinct values */
+	bool		isdefault;		/* true if DEFAULT_NUM_DISTINCT was used */
 } GroupVarInfo;
 
 static List *
@@ -3287,6 +3288,7 @@ add_unique_group_var(PlannerInfo *root, List *varinfos,
 	varinfo->var = var;
 	varinfo->rel = vardata->rel;
 	varinfo->ndistinct = ndistinct;
+	varinfo->isdefault = isdefault;
 	varinfos = lappend(varinfos, varinfo);
 	return varinfos;
 }
@@ -3310,6 +3312,11 @@ add_unique_group_var(PlannerInfo *root, List *varinfos,
  *		filter step
  *	pgset - NULL, or a List** pointing to a grouping set to filter the
  *		groupExprs against
+ *
+ * Outputs:
+ *	flags - When passed as non-NULL, the function sets bits in this
+ *		parameter to provide further details to callers about some
+ *		assumptions which were made when performing the estimation.
  *
  * Given the lack of any cross-correlation statistics in the system, it's
  * impossible to do anything really trustworthy with GROUP BY conditions
@@ -3358,13 +3365,17 @@ add_unique_group_var(PlannerInfo *root, List *varinfos,
  */
 double
 estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
-					List **pgset)
+					List **pgset, int *flags)
 {
 	List	   *varinfos = NIL;
 	double		srf_multiplier = 1.0;
 	double		numdistinct;
 	ListCell   *l;
 	int			i;
+
+	/* Zero the flags output parameter, if set */
+	if (flags != NULL)
+		*flags = 0;
 
 	/*
 	 * We don't ever want to return an estimate of zero groups, as that tends
@@ -3569,6 +3580,14 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 					if (relmaxndistinct < varinfo2->ndistinct)
 						relmaxndistinct = varinfo2->ndistinct;
 					relvarcount++;
+
+					/*
+					 * When varinfo2's isdefault is set then we'd better mark
+					 * that fact in the selectivity flags variable.
+					 */
+					if (flags != NULL && varinfo2->isdefault)
+						*flags |= SELFLAG_USED_DEFAULT;
+
 				}
 
 				/* we're done with this relation */

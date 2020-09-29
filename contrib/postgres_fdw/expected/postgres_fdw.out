@@ -27,29 +27,29 @@ CREATE SCHEMA "S 1";
 CREATE TABLE "S 1"."T 1" (
 	"C 1" int NOT NULL,
 	c2 int NOT NULL,
-	c3 text,
+	c3 text collate "C",
 	c4 timestamptz,
 	c5 timestamp,
-	c6 varchar(10),
-	c7 char(10),
+	c6 varchar(10) collate "C",
+	c7 char(10) collate "C",
 	c8 user_enum,
 	CONSTRAINT t1_pkey PRIMARY KEY ("C 1")
 );
 CREATE TABLE "S 1"."T 2" (
 	c1 int NOT NULL,
-	c2 text,
+	c2 text collate "C",
 	CONSTRAINT t2_pkey PRIMARY KEY (c1)
 );
 CREATE TABLE "S 1"."T 3" (
 	c1 int NOT NULL,
 	c2 int NOT NULL,
-	c3 text,
+	c3 text collate "C",
 	CONSTRAINT t3_pkey PRIMARY KEY (c1)
 );
 CREATE TABLE "S 1"."T 4" (
 	c1 int NOT NULL,
 	c2 int NOT NULL,
-	c3 text,
+	c3 text collate "C",
 	CONSTRAINT t4_pkey PRIMARY KEY (c1)
 );
 -- Disable autovacuum for these tables to avoid unexpected effects of that
@@ -89,16 +89,18 @@ ANALYZE "S 1"."T 3";
 ANALYZE "S 1"."T 4";
 -- ===================================================================
 -- create foreign tables
+-- Note: to ensure stable regression results, all collatable columns
+-- in these tables must have explicitly-specified collations.
 -- ===================================================================
 CREATE FOREIGN TABLE ft1 (
 	c0 int,
 	c1 int NOT NULL,
 	c2 int NOT NULL,
-	c3 text,
+	c3 text collate "C",
 	c4 timestamptz,
 	c5 timestamp,
-	c6 varchar(10),
-	c7 char(10) default 'ft1',
+	c6 varchar(10) collate "C",
+	c7 char(10) default 'ft1' collate "C",
 	c8 user_enum
 ) SERVER loopback;
 ALTER FOREIGN TABLE ft1 DROP COLUMN c0;
@@ -106,28 +108,28 @@ CREATE FOREIGN TABLE ft2 (
 	c1 int NOT NULL,
 	c2 int NOT NULL,
 	cx int,
-	c3 text,
+	c3 text collate "C",
 	c4 timestamptz,
 	c5 timestamp,
-	c6 varchar(10),
-	c7 char(10) default 'ft2',
+	c6 varchar(10) collate "C",
+	c7 char(10) default 'ft2' collate "C",
 	c8 user_enum
 ) SERVER loopback;
 ALTER FOREIGN TABLE ft2 DROP COLUMN cx;
 CREATE FOREIGN TABLE ft4 (
 	c1 int NOT NULL,
 	c2 int NOT NULL,
-	c3 text
+	c3 text collate "C"
 ) SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 3');
 CREATE FOREIGN TABLE ft5 (
 	c1 int NOT NULL,
 	c2 int NOT NULL,
-	c3 text
+	c3 text collate "C"
 ) SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 4');
 CREATE FOREIGN TABLE ft6 (
 	c1 int NOT NULL,
 	c2 int NOT NULL,
-	c3 text
+	c3 text collate "C"
 ) SERVER loopback2 OPTIONS (schema_name 'S 1', table_name 'T 4');
 -- ===================================================================
 -- tests for validator
@@ -277,7 +279,7 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft1 t1 ORDER BY t1.c3, t1.c1, t1.tabl
    Output: c1, c2, c3, c4, c5, c6, c7, c8, tableoid
    ->  Sort
          Output: c1, c2, c3, c4, c5, c6, c7, c8, tableoid
-         Sort Key: t1.c3, t1.c1, t1.tableoid
+         Sort Key: t1.c3 COLLATE "C", t1.c1, t1.tableoid
          ->  Foreign Scan on public.ft1 t1
                Output: c1, c2, c3, c4, c5, c6, c7, c8, tableoid
                Remote SQL: SELECT "C 1", c2, c3, c4, c5, c6, c7, c8 FROM "S 1"."T 1"
@@ -873,12 +875,12 @@ EXPLAIN (VERBOSE, COSTS OFF)
 (6 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT * FROM ft2 ORDER BY ft2.c1, ft2.c3 collate "C";
+	SELECT * FROM ft2 ORDER BY ft2.c1, ft2.c3 collate "POSIX";
                                   QUERY PLAN                                   
 -------------------------------------------------------------------------------
  Sort
    Output: c1, c2, c3, c4, c5, c6, c7, c8, ((c3)::text)
-   Sort Key: ft2.c1, ft2.c3 COLLATE "C"
+   Sort Key: ft2.c1, ft2.c3 COLLATE "POSIX"
    ->  Foreign Scan on public.ft2
          Output: c1, c2, c3, c4, c5, c6, c7, c8, c3
          Remote SQL: SELECT "C 1", c2, c3, c4, c5, c6, c7, c8 FROM "S 1"."T 1"
@@ -1800,7 +1802,7 @@ WITH t (c1_1, c1_3, c2_1) AS MATERIALIZED (SELECT t1.c1, t1.c3, t2.c1 FROM ft1 t
            Remote SQL: SELECT r1."C 1", r1.c3, r2."C 1" FROM ("S 1"."T 1" r1 INNER JOIN "S 1"."T 1" r2 ON (((r1."C 1" = r2."C 1"))))
    ->  Sort
          Output: t.c1_1, t.c2_1, t.c1_3
-         Sort Key: t.c1_3, t.c1_1
+         Sort Key: t.c1_3 COLLATE "C", t.c1_1
          ->  CTE Scan on t
                Output: t.c1_1, t.c2_1, t.c1_3
 (12 rows)
@@ -2000,7 +2002,7 @@ SELECT t1.c1, t2.c1 FROM ft1 t1 LEFT JOIN ft2 t2 ON (t1.c1 = t2.c1) WHERE t1.c8 
    Output: t1.c1, t2.c1, t1.c3
    ->  Sort
          Output: t1.c1, t2.c1, t1.c3
-         Sort Key: t1.c3, t1.c1
+         Sort Key: t1.c3 COLLATE "C", t1.c1
          ->  Hash Right Join
                Output: t1.c1, t2.c1, t1.c3
                Hash Cond: (t2.c1 = t1.c1)
@@ -2042,7 +2044,7 @@ SELECT t1.c1, t2.c1 FROM ft1 t1 JOIN ft2 t2 ON (t1.c1 = t2.c1) WHERE t1.c8 = t2.
    Output: t1.c1, t2.c1, t1.c3
    ->  Sort
          Output: t1.c1, t2.c1, t1.c3
-         Sort Key: t1.c3, t1.c1
+         Sort Key: t1.c3 COLLATE "C", t1.c1
          ->  Foreign Scan
                Output: t1.c1, t2.c1, t1.c3
                Filter: (t1.c8 = t2.c8)
@@ -3487,7 +3489,7 @@ select c2, c6, sum(c1) from ft1 where c2 < 3 group by grouping sets(c2, c6) orde
 ----------------------------------------------------------------------------------
  Sort
    Output: c2, c6, (sum(c1))
-   Sort Key: ft1.c2, ft1.c6
+   Sort Key: ft1.c2, ft1.c6 COLLATE "C"
    ->  HashAggregate
          Output: c2, c6, sum(c1)
          Hash Key: ft1.c2
@@ -3871,12 +3873,12 @@ EXPLAIN (VERBOSE, COSTS OFF) EXECUTE st6;
 
 PREPARE st7 AS INSERT INTO ft1 (c1,c2,c3) VALUES (1001,101,'foo');
 EXPLAIN (VERBOSE, COSTS OFF) EXECUTE st7;
-                                                                                           QUERY PLAN                                                                                            
--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                                 QUERY PLAN                                                                                                  
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Insert on public.ft1
    Remote SQL: INSERT INTO "S 1"."T 1"("C 1", c2, c3, c4, c5, c6, c7, c8) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
    ->  Result
-         Output: NULL::integer, 1001, 101, 'foo'::text, NULL::timestamp with time zone, NULL::timestamp without time zone, NULL::character varying, 'ft1       '::character(10), NULL::user_enum
+         Output: NULL::integer, 1001, 101, 'foo'::text, NULL::timestamp with time zone, NULL::timestamp without time zone, NULL::character varying COLLATE "C", 'ft1       '::character(10), NULL::user_enum
 (4 rows)
 
 ALTER TABLE "S 1"."T 1" RENAME TO "T 0";
@@ -3904,12 +3906,12 @@ EXECUTE st6;
 (9 rows)
 
 EXPLAIN (VERBOSE, COSTS OFF) EXECUTE st7;
-                                                                                           QUERY PLAN                                                                                            
--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                                 QUERY PLAN                                                                                                  
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Insert on public.ft1
    Remote SQL: INSERT INTO "S 1"."T 0"("C 1", c2, c3, c4, c5, c6, c7, c8) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
    ->  Result
-         Output: NULL::integer, 1001, 101, 'foo'::text, NULL::timestamp with time zone, NULL::timestamp without time zone, NULL::character varying, 'ft1       '::character(10), NULL::user_enum
+         Output: NULL::integer, 1001, 101, 'foo'::text, NULL::timestamp with time zone, NULL::timestamp without time zone, NULL::character varying COLLATE "C", 'ft1       '::character(10), NULL::user_enum
 (4 rows)
 
 ALTER TABLE "S 1"."T 0" RENAME TO "T 1";
@@ -4138,35 +4140,13 @@ explain (verbose, costs off) select * from ft3 where f1 COLLATE "C" = 'foo';
    Remote SQL: SELECT f1, f2, f3 FROM public.loct3 WHERE ((f1 = 'foo'::text))
 (3 rows)
 
-explain (verbose, costs off) select * from ft3 where f2 = 'foo';
+explain (verbose, costs off) select * from ft3 where f1 = 'foo' COLLATE "C";
                                   QUERY PLAN                                  
 ------------------------------------------------------------------------------
  Foreign Scan on public.ft3
    Output: f1, f2, f3
-   Remote SQL: SELECT f1, f2, f3 FROM public.loct3 WHERE ((f2 = 'foo'::text))
+   Remote SQL: SELECT f1, f2, f3 FROM public.loct3 WHERE ((f1 = 'foo'::text))
 (3 rows)
-
-explain (verbose, costs off) select * from ft3 where f3 = 'foo';
-                                  QUERY PLAN                                  
-------------------------------------------------------------------------------
- Foreign Scan on public.ft3
-   Output: f1, f2, f3
-   Remote SQL: SELECT f1, f2, f3 FROM public.loct3 WHERE ((f3 = 'foo'::text))
-(3 rows)
-
-explain (verbose, costs off) select * from ft3 f, loct3 l
-  where f.f3 = l.f3 and l.f1 = 'foo';
-                                            QUERY PLAN                                            
---------------------------------------------------------------------------------------------------
- Nested Loop
-   Output: f.f1, f.f2, f.f3, l.f1, l.f2, l.f3
-   ->  Index Scan using loct3_f1_key on public.loct3 l
-         Output: l.f1, l.f2, l.f3
-         Index Cond: (l.f1 = 'foo'::text)
-   ->  Foreign Scan on public.ft3 f
-         Output: f.f1, f.f2, f.f3
-         Remote SQL: SELECT f1, f2, f3 FROM public.loct3 WHERE (($1::character varying(10) = f3))
-(8 rows)
 
 -- can't be sent to remote
 explain (verbose, costs off) select * from ft3 where f1 COLLATE "POSIX" = 'foo';
@@ -4178,12 +4158,12 @@ explain (verbose, costs off) select * from ft3 where f1 COLLATE "POSIX" = 'foo';
    Remote SQL: SELECT f1, f2, f3 FROM public.loct3
 (4 rows)
 
-explain (verbose, costs off) select * from ft3 where f1 = 'foo' COLLATE "C";
+explain (verbose, costs off) select * from ft3 where f2 = 'foo';
                     QUERY PLAN                     
 ---------------------------------------------------
  Foreign Scan on public.ft3
    Output: f1, f2, f3
-   Filter: (ft3.f1 = 'foo'::text COLLATE "C")
+   Filter: (ft3.f2 = 'foo'::text)
    Remote SQL: SELECT f1, f2, f3 FROM public.loct3
 (4 rows)
 
@@ -4204,6 +4184,33 @@ explain (verbose, costs off) select * from ft3 where f2 = 'foo' COLLATE "C";
    Filter: (ft3.f2 = 'foo'::text COLLATE "C")
    Remote SQL: SELECT f1, f2, f3 FROM public.loct3
 (4 rows)
+
+explain (verbose, costs off) select * from ft3 where f3 = 'foo';
+                    QUERY PLAN                     
+---------------------------------------------------
+ Foreign Scan on public.ft3
+   Output: f1, f2, f3
+   Filter: ((ft3.f3)::text = 'foo'::text)
+   Remote SQL: SELECT f1, f2, f3 FROM public.loct3
+(4 rows)
+
+explain (verbose, costs off) select * from ft3 f, loct3 l
+  where f.f3 = l.f3 and l.f1 = 'foo';
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Hash Join
+   Output: f.f1, f.f2, f.f3, l.f1, l.f2, l.f3
+   Inner Unique: true
+   Hash Cond: ((f.f3)::text = (l.f3)::text)
+   ->  Foreign Scan on public.ft3 f
+         Output: f.f1, f.f2, f.f3
+         Remote SQL: SELECT f1, f2, f3 FROM public.loct3
+   ->  Hash
+         Output: l.f1, l.f2, l.f3
+         ->  Index Scan using loct3_f1_key on public.loct3 l
+               Output: l.f1, l.f2, l.f3
+               Index Cond: (l.f1 = 'foo'::text)
+(12 rows)
 
 explain (verbose, costs off) select * from ft3 f, loct3 l
   where f.f3 = l.f3 COLLATE "POSIX" and l.f1 = 'foo';
@@ -4228,12 +4235,12 @@ explain (verbose, costs off) select * from ft3 f, loct3 l
 -- ===================================================================
 EXPLAIN (verbose, costs off)
 INSERT INTO ft2 (c1,c2,c3) SELECT c1+1000,c2+100, c3 || c3 FROM ft2 LIMIT 20;
-                                                                                                                    QUERY PLAN                                                                                                                    
---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                                                          QUERY PLAN                                                                                                                          
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Insert on public.ft2
    Remote SQL: INSERT INTO "S 1"."T 1"("C 1", c2, c3, c4, c5, c6, c7, c8) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
    ->  Subquery Scan on "*SELECT*"
-         Output: "*SELECT*"."?column?", "*SELECT*"."?column?_1", NULL::integer, "*SELECT*"."?column?_2", NULL::timestamp with time zone, NULL::timestamp without time zone, NULL::character varying, 'ft2       '::character(10), NULL::user_enum
+         Output: "*SELECT*"."?column?", "*SELECT*"."?column?_1", NULL::integer, "*SELECT*"."?column?_2", NULL::timestamp with time zone, NULL::timestamp without time zone, NULL::character varying COLLATE "C", 'ft2       '::character(10), NULL::user_enum
          ->  Foreign Scan on public.ft2 ft2_1
                Output: (ft2_1.c1 + 1000), (ft2_1.c2 + 100), (ft2_1.c3 || ft2_1.c3)
                Remote SQL: SELECT "C 1", c2, c3 FROM "S 1"."T 1" LIMIT 20::bigint
@@ -5343,13 +5350,13 @@ SELECT c1,c2,c3,c4 FROM ft2 ORDER BY c1;
 
 EXPLAIN (verbose, costs off)
 INSERT INTO ft2 (c1,c2,c3) VALUES (1200,999,'foo') RETURNING tableoid::regclass;
-                                                                                           QUERY PLAN                                                                                            
--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                                 QUERY PLAN                                                                                                  
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Insert on public.ft2
    Output: (ft2.tableoid)::regclass
    Remote SQL: INSERT INTO "S 1"."T 1"("C 1", c2, c3, c4, c5, c6, c7, c8) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
    ->  Result
-         Output: 1200, 999, NULL::integer, 'foo'::text, NULL::timestamp with time zone, NULL::timestamp without time zone, NULL::character varying, 'ft2       '::character(10), NULL::user_enum
+         Output: 1200, 999, NULL::integer, 'foo'::text, NULL::timestamp with time zone, NULL::timestamp without time zone, NULL::character varying COLLATE "C", 'ft2       '::character(10), NULL::user_enum
 (5 rows)
 
 INSERT INTO ft2 (c1,c2,c3) VALUES (1200,999,'foo') RETURNING tableoid::regclass;
@@ -7564,12 +7571,12 @@ NOTICE:  drop cascades to foreign table bar2
 drop table loct1;
 drop table loct2;
 -- Test pushing down UPDATE/DELETE joins to the remote server
-create table parent (a int, b text);
-create table loct1 (a int, b text);
-create table loct2 (a int, b text);
-create foreign table remt1 (a int, b text)
+create table parent (a int, b text collate "C");
+create table loct1 (a int, b text collate "C");
+create table loct2 (a int, b text collate "C");
+create foreign table remt1 (a int, b text collate "C")
   server loopback options (table_name 'loct1');
-create foreign table remt2 (a int, b text)
+create foreign table remt2 (a int, b text collate "C")
   server loopback options (table_name 'loct2');
 alter foreign table remt1 inherit parent;
 insert into remt1 values (1, 'foo');
@@ -7768,10 +7775,10 @@ drop table itrtest;
 drop table loct1;
 drop table loct2;
 -- Test update tuple routing
-create table utrtest (a int, b text) partition by list (a);
-create table loct (a int check (a in (1)), b text);
-create foreign table remp (a int check (a in (1)), b text) server loopback options (table_name 'loct');
-create table locp (a int check (a in (2)), b text);
+create table utrtest (a int, b text collate "C") partition by list (a);
+create table loct (a int check (a in (1)), b text collate "C");
+create foreign table remp (a int check (a in (1)), b text collate "C") server loopback options (table_name 'loct');
+create table locp (a int check (a in (2)), b text collate "C");
 alter table utrtest attach partition remp for values in (1);
 alter table utrtest attach partition locp for values in (2);
 insert into utrtest values (1, 'foo');
@@ -7955,7 +7962,7 @@ alter table utrtest detach partition remp;
 drop foreign table remp;
 alter table loct drop constraint loct_a_check;
 alter table loct add check (a in (3));
-create foreign table remp (a int check (a in (3)), b text) server loopback options (table_name 'loct');
+create foreign table remp (a int check (a in (3)), b text collate "C") server loopback options (table_name 'loct');
 alter table utrtest attach partition remp for values in (3);
 insert into utrtest values (2, 'qux');
 insert into utrtest values (3, 'xyzzy');
@@ -8216,11 +8223,11 @@ drop table loc3;
 -- test IMPORT FOREIGN SCHEMA
 -- ===================================================================
 CREATE SCHEMA import_source;
-CREATE TABLE import_source.t1 (c1 int, c2 varchar NOT NULL);
-CREATE TABLE import_source.t2 (c1 int default 42, c2 varchar NULL, c3 text collate "POSIX");
-CREATE TYPE typ1 AS (m1 int, m2 varchar);
+CREATE TABLE import_source.t1 (c1 int, c2 varchar NOT NULL COLLATE "C");
+CREATE TABLE import_source.t2 (c1 int default 42, c2 varchar NULL COLLATE "C", c3 text collate "POSIX");
+CREATE TYPE typ1 AS (m1 int, m2 varchar COLLATE "C");
 CREATE TABLE import_source.t3 (c1 timestamptz default now(), c2 typ1);
-CREATE TABLE import_source."x 4" (c1 float8, "C 2" text, c3 varchar(42));
+CREATE TABLE import_source."x 4" (c1 float8, "C 2" text COLLATE "C", c3 varchar(42) COLLATE "C");
 CREATE TABLE import_source."x 5" (c1 float8);
 ALTER TABLE import_source."x 5" DROP COLUMN c1;
 CREATE TABLE import_source.t4 (c1 int) PARTITION BY RANGE (c1);
@@ -8245,7 +8252,7 @@ IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest1;
  Column |       Type        | Collation | Nullable | Default |    FDW options     
 --------+-------------------+-----------+----------+---------+--------------------
  c1     | integer           |           |          |         | (column_name 'c1')
- c2     | character varying |           | not null |         | (column_name 'c2')
+ c2     | character varying | C         | not null |         | (column_name 'c2')
 Server: loopback
 FDW options: (schema_name 'import_source', table_name 't1')
 
@@ -8253,7 +8260,7 @@ FDW options: (schema_name 'import_source', table_name 't1')
  Column |       Type        | Collation | Nullable | Default |    FDW options     
 --------+-------------------+-----------+----------+---------+--------------------
  c1     | integer           |           |          |         | (column_name 'c1')
- c2     | character varying |           |          |         | (column_name 'c2')
+ c2     | character varying | C         |          |         | (column_name 'c2')
  c3     | text              | POSIX     |          |         | (column_name 'c3')
 Server: loopback
 FDW options: (schema_name 'import_source', table_name 't2')
@@ -8277,8 +8284,8 @@ FDW options: (schema_name 'import_source', table_name 't4')
  Column |         Type          | Collation | Nullable | Default |     FDW options     
 --------+-----------------------+-----------+----------+---------+---------------------
  c1     | double precision      |           |          |         | (column_name 'c1')
- C 2    | text                  |           |          |         | (column_name 'C 2')
- c3     | character varying(42) |           |          |         | (column_name 'c3')
+ C 2    | text                  | C         |          |         | (column_name 'C 2')
+ c3     | character varying(42) | C         |          |         | (column_name 'c3')
 Server: loopback
 FDW options: (schema_name 'import_source', table_name 'x 4')
 
@@ -8309,7 +8316,7 @@ IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest2
  Column |       Type        | Collation | Nullable | Default |    FDW options     
 --------+-------------------+-----------+----------+---------+--------------------
  c1     | integer           |           |          |         | (column_name 'c1')
- c2     | character varying |           | not null |         | (column_name 'c2')
+ c2     | character varying | C         | not null |         | (column_name 'c2')
 Server: loopback
 FDW options: (schema_name 'import_source', table_name 't1')
 
@@ -8317,7 +8324,7 @@ FDW options: (schema_name 'import_source', table_name 't1')
  Column |       Type        | Collation | Nullable | Default |    FDW options     
 --------+-------------------+-----------+----------+---------+--------------------
  c1     | integer           |           |          | 42      | (column_name 'c1')
- c2     | character varying |           |          |         | (column_name 'c2')
+ c2     | character varying | C         |          |         | (column_name 'c2')
  c3     | text              | POSIX     |          |         | (column_name 'c3')
 Server: loopback
 FDW options: (schema_name 'import_source', table_name 't2')
@@ -8341,8 +8348,8 @@ FDW options: (schema_name 'import_source', table_name 't4')
  Column |         Type          | Collation | Nullable | Default |     FDW options     
 --------+-----------------------+-----------+----------+---------+---------------------
  c1     | double precision      |           |          |         | (column_name 'c1')
- C 2    | text                  |           |          |         | (column_name 'C 2')
- c3     | character varying(42) |           |          |         | (column_name 'c3')
+ C 2    | text                  | C         |          |         | (column_name 'C 2')
+ c3     | character varying(42) | C         |          |         | (column_name 'c3')
 Server: loopback
 FDW options: (schema_name 'import_source', table_name 'x 4')
 

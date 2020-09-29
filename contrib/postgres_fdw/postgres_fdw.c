@@ -18,6 +18,7 @@
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_collation.h"
 #include "commands/defrem.h"
 #include "commands/explain.h"
 #include "commands/vacuum.h"
@@ -4801,44 +4802,54 @@ postgresImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 		 * include a schema name for types/functions in other schemas, which
 		 * is what we want.
 		 */
+		appendStringInfoString(&buf,
+							   "SELECT relname, "
+							   "  attname, "
+							   "  format_type(atttypid, atttypmod), "
+							   "  attnotnull, "
+							   "  pg_get_expr(adbin, adrelid), ");
 		if (import_collate)
+			appendStringInfo(&buf,
+							 "  CASE WHEN coll.oid = '%u' THEN"
+							 " defcoll.collname ELSE coll.collname END, "
+							 "  CASE WHEN coll.oid = '%u' THEN"
+							 " defcoll.nspname ELSE collnsp.nspname END ",
+							 DEFAULT_COLLATION_OID,
+							 DEFAULT_COLLATION_OID);
+		else
+			appendStringInfoString(&buf, "  NULL, NULL ");
+		appendStringInfoString(&buf,
+							   "FROM pg_class c "
+							   "  JOIN pg_namespace n ON "
+							   "    relnamespace = n.oid "
+							   "  LEFT JOIN pg_attribute a ON "
+							   "    attrelid = c.oid AND attnum > 0 "
+							   "      AND NOT attisdropped "
+							   "  LEFT JOIN pg_attrdef ad ON "
+							   "    adrelid = c.oid AND adnum = attnum ");
+		if (import_collate)
+		{
 			appendStringInfoString(&buf,
-								   "SELECT relname, "
-								   "  attname, "
-								   "  format_type(atttypid, atttypmod), "
-								   "  attnotnull, "
-								   "  pg_get_expr(adbin, adrelid), "
-								   "  collname, "
-								   "  collnsp.nspname "
-								   "FROM pg_class c "
-								   "  JOIN pg_namespace n ON "
-								   "    relnamespace = n.oid "
-								   "  LEFT JOIN pg_attribute a ON "
-								   "    attrelid = c.oid AND attnum > 0 "
-								   "      AND NOT attisdropped "
-								   "  LEFT JOIN pg_attrdef ad ON "
-								   "    adrelid = c.oid AND adnum = attnum "
 								   "  LEFT JOIN pg_collation coll ON "
 								   "    coll.oid = attcollation "
 								   "  LEFT JOIN pg_namespace collnsp ON "
-								   "    collnsp.oid = collnamespace ");
-		else
+								   "    collnsp.oid = collnamespace "
+								   "  LEFT JOIN ("
+								   " SELECT cd.collname, nd.nspname FROM"
+								   " pg_collation cd, pg_namespace nd, pg_database d"
+								   " WHERE nd.oid = cd.collnamespace AND"
+								   " d.datname = current_database() AND");
+			/* collprovider is new as of v10 */
+			if (PQserverVersion(conn) >= 100000)
+				appendStringInfoString(&buf,
+									   " cd.collprovider = 'c' AND");
 			appendStringInfoString(&buf,
-								   "SELECT relname, "
-								   "  attname, "
-								   "  format_type(atttypid, atttypmod), "
-								   "  attnotnull, "
-								   "  pg_get_expr(adbin, adrelid), "
-								   "  NULL, NULL "
-								   "FROM pg_class c "
-								   "  JOIN pg_namespace n ON "
-								   "    relnamespace = n.oid "
-								   "  LEFT JOIN pg_attribute a ON "
-								   "    attrelid = c.oid AND attnum > 0 "
-								   "      AND NOT attisdropped "
-								   "  LEFT JOIN pg_attrdef ad ON "
-								   "    adrelid = c.oid AND adnum = attnum ");
-
+								   " cd.collcollate = d.datcollate AND"
+								   " cd.collctype = d.datctype AND"
+								   " cd.collencoding IN (d.encoding, -1)"
+								   " ORDER BY length(cd.collname) LIMIT 1 )"
+								   " defcoll ON TRUE ");
+		}
 		appendStringInfoString(&buf,
 							   "WHERE c.relkind IN ("
 							   CppAsString2(RELKIND_RELATION) ","

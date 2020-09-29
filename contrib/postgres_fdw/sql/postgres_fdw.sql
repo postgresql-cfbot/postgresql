@@ -31,29 +31,29 @@ CREATE SCHEMA "S 1";
 CREATE TABLE "S 1"."T 1" (
 	"C 1" int NOT NULL,
 	c2 int NOT NULL,
-	c3 text,
+	c3 text collate "C",
 	c4 timestamptz,
 	c5 timestamp,
-	c6 varchar(10),
-	c7 char(10),
+	c6 varchar(10) collate "C",
+	c7 char(10) collate "C",
 	c8 user_enum,
 	CONSTRAINT t1_pkey PRIMARY KEY ("C 1")
 );
 CREATE TABLE "S 1"."T 2" (
 	c1 int NOT NULL,
-	c2 text,
+	c2 text collate "C",
 	CONSTRAINT t2_pkey PRIMARY KEY (c1)
 );
 CREATE TABLE "S 1"."T 3" (
 	c1 int NOT NULL,
 	c2 int NOT NULL,
-	c3 text,
+	c3 text collate "C",
 	CONSTRAINT t3_pkey PRIMARY KEY (c1)
 );
 CREATE TABLE "S 1"."T 4" (
 	c1 int NOT NULL,
 	c2 int NOT NULL,
-	c3 text,
+	c3 text collate "C",
 	CONSTRAINT t4_pkey PRIMARY KEY (c1)
 );
 
@@ -97,16 +97,18 @@ ANALYZE "S 1"."T 4";
 
 -- ===================================================================
 -- create foreign tables
+-- Note: to ensure stable regression results, all collatable columns
+-- in these tables must have explicitly-specified collations.
 -- ===================================================================
 CREATE FOREIGN TABLE ft1 (
 	c0 int,
 	c1 int NOT NULL,
 	c2 int NOT NULL,
-	c3 text,
+	c3 text collate "C",
 	c4 timestamptz,
 	c5 timestamp,
-	c6 varchar(10),
-	c7 char(10) default 'ft1',
+	c6 varchar(10) collate "C",
+	c7 char(10) default 'ft1' collate "C",
 	c8 user_enum
 ) SERVER loopback;
 ALTER FOREIGN TABLE ft1 DROP COLUMN c0;
@@ -115,11 +117,11 @@ CREATE FOREIGN TABLE ft2 (
 	c1 int NOT NULL,
 	c2 int NOT NULL,
 	cx int,
-	c3 text,
+	c3 text collate "C",
 	c4 timestamptz,
 	c5 timestamp,
-	c6 varchar(10),
-	c7 char(10) default 'ft2',
+	c6 varchar(10) collate "C",
+	c7 char(10) default 'ft2' collate "C",
 	c8 user_enum
 ) SERVER loopback;
 ALTER FOREIGN TABLE ft2 DROP COLUMN cx;
@@ -127,19 +129,19 @@ ALTER FOREIGN TABLE ft2 DROP COLUMN cx;
 CREATE FOREIGN TABLE ft4 (
 	c1 int NOT NULL,
 	c2 int NOT NULL,
-	c3 text
+	c3 text collate "C"
 ) SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 3');
 
 CREATE FOREIGN TABLE ft5 (
 	c1 int NOT NULL,
 	c2 int NOT NULL,
-	c3 text
+	c3 text collate "C"
 ) SERVER loopback OPTIONS (schema_name 'S 1', table_name 'T 4');
 
 CREATE FOREIGN TABLE ft6 (
 	c1 int NOT NULL,
 	c2 int NOT NULL,
-	c3 text
+	c3 text collate "C"
 ) SERVER loopback2 OPTIONS (schema_name 'S 1', table_name 'T 4');
 
 -- ===================================================================
@@ -331,7 +333,7 @@ SELECT * FROM ft2 WHERE c1 = ANY (ARRAY(SELECT c1 FROM ft1 WHERE c1 < 5));
 EXPLAIN (VERBOSE, COSTS OFF)
 	SELECT * FROM ft2 ORDER BY ft2.c1, random();
 EXPLAIN (VERBOSE, COSTS OFF)
-	SELECT * FROM ft2 ORDER BY ft2.c1, ft2.c3 collate "C";
+	SELECT * FROM ft2 ORDER BY ft2.c1, ft2.c3 collate "POSIX";
 
 -- user-defined operator/function
 CREATE FUNCTION postgres_fdw_abs(int) RETURNS int AS $$
@@ -1138,15 +1140,15 @@ create foreign table ft3 (f1 text collate "C", f2 text, f3 varchar(10))
 -- can be sent to remote
 explain (verbose, costs off) select * from ft3 where f1 = 'foo';
 explain (verbose, costs off) select * from ft3 where f1 COLLATE "C" = 'foo';
+explain (verbose, costs off) select * from ft3 where f1 = 'foo' COLLATE "C";
+-- can't be sent to remote
+explain (verbose, costs off) select * from ft3 where f1 COLLATE "POSIX" = 'foo';
 explain (verbose, costs off) select * from ft3 where f2 = 'foo';
+explain (verbose, costs off) select * from ft3 where f2 COLLATE "C" = 'foo';
+explain (verbose, costs off) select * from ft3 where f2 = 'foo' COLLATE "C";
 explain (verbose, costs off) select * from ft3 where f3 = 'foo';
 explain (verbose, costs off) select * from ft3 f, loct3 l
   where f.f3 = l.f3 and l.f1 = 'foo';
--- can't be sent to remote
-explain (verbose, costs off) select * from ft3 where f1 COLLATE "POSIX" = 'foo';
-explain (verbose, costs off) select * from ft3 where f1 = 'foo' COLLATE "C";
-explain (verbose, costs off) select * from ft3 where f2 COLLATE "C" = 'foo';
-explain (verbose, costs off) select * from ft3 where f2 = 'foo' COLLATE "C";
 explain (verbose, costs off) select * from ft3 f, loct3 l
   where f.f3 = l.f3 COLLATE "POSIX" and l.f1 = 'foo';
 
@@ -1950,12 +1952,12 @@ drop table loct1;
 drop table loct2;
 
 -- Test pushing down UPDATE/DELETE joins to the remote server
-create table parent (a int, b text);
-create table loct1 (a int, b text);
-create table loct2 (a int, b text);
-create foreign table remt1 (a int, b text)
+create table parent (a int, b text collate "C");
+create table loct1 (a int, b text collate "C");
+create table loct2 (a int, b text collate "C");
+create foreign table remt1 (a int, b text collate "C")
   server loopback options (table_name 'loct1');
-create foreign table remt2 (a int, b text)
+create foreign table remt2 (a int, b text collate "C")
   server loopback options (table_name 'loct2');
 alter foreign table remt1 inherit parent;
 
@@ -2048,10 +2050,10 @@ drop table loct1;
 drop table loct2;
 
 -- Test update tuple routing
-create table utrtest (a int, b text) partition by list (a);
-create table loct (a int check (a in (1)), b text);
-create foreign table remp (a int check (a in (1)), b text) server loopback options (table_name 'loct');
-create table locp (a int check (a in (2)), b text);
+create table utrtest (a int, b text collate "C") partition by list (a);
+create table loct (a int check (a in (1)), b text collate "C");
+create foreign table remp (a int check (a in (1)), b text collate "C") server loopback options (table_name 'loct');
+create table locp (a int check (a in (2)), b text collate "C");
 alter table utrtest attach partition remp for values in (1);
 alter table utrtest attach partition locp for values in (2);
 
@@ -2128,7 +2130,7 @@ alter table utrtest detach partition remp;
 drop foreign table remp;
 alter table loct drop constraint loct_a_check;
 alter table loct add check (a in (3));
-create foreign table remp (a int check (a in (3)), b text) server loopback options (table_name 'loct');
+create foreign table remp (a int check (a in (3)), b text collate "C") server loopback options (table_name 'loct');
 alter table utrtest attach partition remp for values in (3);
 insert into utrtest values (2, 'qux');
 insert into utrtest values (3, 'xyzzy');
@@ -2331,11 +2333,11 @@ drop table loc3;
 -- ===================================================================
 
 CREATE SCHEMA import_source;
-CREATE TABLE import_source.t1 (c1 int, c2 varchar NOT NULL);
-CREATE TABLE import_source.t2 (c1 int default 42, c2 varchar NULL, c3 text collate "POSIX");
-CREATE TYPE typ1 AS (m1 int, m2 varchar);
+CREATE TABLE import_source.t1 (c1 int, c2 varchar NOT NULL COLLATE "C");
+CREATE TABLE import_source.t2 (c1 int default 42, c2 varchar NULL COLLATE "C", c3 text collate "POSIX");
+CREATE TYPE typ1 AS (m1 int, m2 varchar COLLATE "C");
 CREATE TABLE import_source.t3 (c1 timestamptz default now(), c2 typ1);
-CREATE TABLE import_source."x 4" (c1 float8, "C 2" text, c3 varchar(42));
+CREATE TABLE import_source."x 4" (c1 float8, "C 2" text COLLATE "C", c3 varchar(42) COLLATE "C");
 CREATE TABLE import_source."x 5" (c1 float8);
 ALTER TABLE import_source."x 5" DROP COLUMN c1;
 CREATE TABLE import_source.t4 (c1 int) PARTITION BY RANGE (c1);

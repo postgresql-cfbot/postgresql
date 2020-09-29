@@ -89,6 +89,12 @@
   need, surprising semantic anomalies may arise when types or collations do
   not match, due to the remote server interpreting <literal>WHERE</literal> clauses
   slightly differently from the local server.
+  Also, while you need not apply any explicit <literal>COLLATE</literal>
+  clause to a collatable column of a foreign table, not doing so will cause
+  the planner to assume that the remote column's collation does not match any
+  locally available collation.  This will generally result in not sending
+  <literal>WHERE</literal> clauses involving such a column to the remote
+  server, which may greatly degrade query performance.
  </para>
 
  <para>
@@ -423,6 +429,10 @@ OPTIONS (ADD password_required 'false');
        need to turn this off if the remote server has a different set of
        collation names than the local server does, which is likely to be the
        case if it's running on a different operating system.
+       (Note, however, that simply turning this off may result in
+       non-optimal plans for queries on the imported tables.  It's best to
+       find a way to label collatable columns with collations that match the
+       remote server's behavior.)
       </para>
      </listitem>
     </varlistentry>

@@ -1759,6 +1759,79 @@ deparseInsertSql(StringInfo buf, RangeTblEntry *rte,
 }
 
 /*
+ * deparse remote batch INSERT statement
+ *
+ * The statement text is appended to buf, and we also create an integer List
+ * of the columns being retrieved by WITH CHECK OPTION or RETURNING (if any),
+ * which is returned to *retrieved_attrs.
+ */
+void
+deparseBatchInsertSql(StringInfo buf, RangeTblEntry *rte,
+					  Index rtindex, Relation rel,
+					  List *targetAttrs, bool doNothing,
+					  List *withCheckOptionList, List *returningList,
+					  List **retrieved_attrs, int batchSize)
+{
+	AttrNumber	pindex;
+	bool		first;
+	ListCell   *lc;
+	int			i;
+
+	appendStringInfoString(buf, "INSERT INTO ");
+	deparseRelation(buf, rel);
+
+	if (targetAttrs)
+	{
+		appendStringInfoChar(buf, '(');
+
+		first = true;
+		foreach(lc, targetAttrs)
+		{
+			int			attnum = lfirst_int(lc);
+
+			if (!first)
+				appendStringInfoString(buf, ", ");
+			first = false;
+
+			deparseColumnRef(buf, rtindex, attnum, rte, false);
+		}
+
+		appendStringInfoString(buf, ") VALUES ");
+
+		pindex = 1;
+		for (i = 0; i < batchSize; i++)
+		{
+			if (i > 0)
+				appendStringInfoString(buf, ", ");
+
+			appendStringInfoString(buf, "(");
+
+			first = true;
+			foreach(lc, targetAttrs)
+			{
+				if (!first)
+					appendStringInfoString(buf, ", ");
+				first = false;
+
+				appendStringInfo(buf, "$%d", pindex);
+				pindex++;
+			}
+
+			appendStringInfoChar(buf, ')');
+		}
+	}
+	else
+		appendStringInfoString(buf, " DEFAULT VALUES");
+
+	if (doNothing)
+		appendStringInfoString(buf, " ON CONFLICT DO NOTHING");
+
+	deparseReturningList(buf, rte, rtindex, rel,
+						 rel->trigdesc && rel->trigdesc->trig_insert_after_row,
+						 withCheckOptionList, returningList, retrieved_attrs);
+}
+
+/*
  * deparse remote UPDATE statement
  *
  * The statement text is appended to buf, and we also create an integer List

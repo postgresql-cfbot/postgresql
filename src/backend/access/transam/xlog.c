@@ -77,6 +77,7 @@
 #include "utils/ps_status.h"
 #include "utils/relmapper.h"
 #include "utils/pg_rusage.h"
+#include "utils/mcxtfuncs.h"
 #include "utils/snapmgr.h"
 #include "utils/timestamp.h"
 
@@ -6984,6 +6985,12 @@ StartupXLOG(void)
 		 * Reset pgstat data, because it may be invalid after recovery.
 		 */
 		pgstat_reset_all();
+
+		/*
+		 * Reset dumped files in pg_memusage, because target processes do
+		 * not exist any more.
+		 */
+		pg_memusage_reset();
 
 		/*
 		 * If there was a backup label file, it's done its job and the info

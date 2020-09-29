@@ -7815,11 +7815,11 @@
 
 # memory context of local backend
 { oid => '2282', descr => 'information about all memory contexts of local backend',
-  proname => 'pg_get_backend_memory_contexts', prorows => '100', proretset => 't',
-  provolatile => 'v', proparallel => 'r', prorettype => 'record', proargtypes => '',
-  proallargtypes => '{text,text,text,int4,int8,int8,int8,int8,int8}',
-  proargmodes => '{o,o,o,o,o,o,o,o,o}',
-  proargnames => '{name, ident, parent, level, total_bytes, total_nblocks, free_bytes, free_chunks, used_bytes}',
+  proname => 'pg_get_backend_memory_contexts', prorows => '100', proisstrict => 'f',
+  proretset => 't', provolatile => 'v', proparallel => 'r', prorettype => 'record',
+  proargtypes => 'int4', proallargtypes => '{int4,text,text,text,int4,int8,int8,int8,int8,int8}',
+  proargmodes => '{i,o,o,o,o,o,o,o,o,o}',
+  proargnames => '{pid, name, ident, parent, level, total_bytes, total_nblocks, free_bytes, free_chunks, used_bytes}',
   prosrc => 'pg_get_backend_memory_contexts' },
 
 # non-persistent series generator

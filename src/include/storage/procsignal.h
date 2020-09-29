@@ -34,6 +34,7 @@ typedef enum
 	PROCSIG_PARALLEL_MESSAGE,	/* message from cooperating parallel backend */
 	PROCSIG_WALSND_INIT_STOPPING,	/* ask walsenders to prepare for shutdown  */
 	PROCSIG_BARRIER,			/* global barrier interrupt  */
+	PROCSIG_DUMP_MEMORY,		/* request dumping memory context interrupt */
 
 	/* Recovery conflict reasons */
 	PROCSIG_RECOVERY_CONFLICT_DATABASE,

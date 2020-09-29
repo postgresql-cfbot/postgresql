@@ -28,6 +28,7 @@
 #include "storage/shmem.h"
 #include "storage/sinval.h"
 #include "tcop/tcopprot.h"
+#include "utils/mcxtfuncs.h"
 
 /*
  * The SIGUSR1 signal is multiplexed to support signaling multiple event
@@ -566,6 +567,9 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 
 	if (CheckProcSignal(PROCSIG_BARRIER))
 		HandleProcSignalBarrierInterrupt();
+
+	if (CheckProcSignal(PROCSIG_DUMP_MEMORY))
+		HandleProcSignalDumpMemory();
 
 	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_DATABASE))
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_DATABASE);

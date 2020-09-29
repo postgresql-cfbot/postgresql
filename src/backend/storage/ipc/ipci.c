@@ -45,6 +45,7 @@
 #include "storage/procsignal.h"
 #include "storage/sinvaladt.h"
 #include "storage/spin.h"
+#include "utils/mcxtfuncs.h"
 #include "utils/snapmgr.h"
 
 /* GUCs */
@@ -267,6 +268,7 @@ CreateSharedMemoryAndSemaphores(void)
 	BTreeShmemInit();
 	SyncScanShmemInit();
 	AsyncShmemInit();
+	McxtDumpShmemInit();
 
 #ifdef EXEC_BACKEND
 

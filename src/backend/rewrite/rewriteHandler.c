@@ -1373,8 +1373,19 @@ rewriteValuesRTE(Query *parsetree, RangeTblEntry *rte, int rti,
 				Form_pg_attribute att_tup;
 				Node	   *new_expr;
 
+				/*
+				 * TLE was likely already removed for this generated column.
+				 * We do not have a good way to check it now,
+				 * but attrno should not be 0 anyway.
+				 */
 				if (attrno == 0)
-					elog(ERROR, "cannot set value in column %d to DEFAULT", i);
+				{
+					SetToDefault *std = (SetToDefault*) col;
+					new_expr = (Node*) makeNullConst(std->typeId, std->typeMod, std->collation);
+					newList = lappend(newList, new_expr);
+					continue;
+				}
+
 				att_tup = TupleDescAttr(target_relation->rd_att, attrno - 1);
 
 				if (!force_nulls && !att_tup->attisdropped)

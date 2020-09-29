@@ -3011,19 +3011,47 @@ expandNSItemVars(ParseNamespaceItem *nsitem,
 		if (colname[0])
 		{
 			Var		   *var;
+			ListCell   *lc2;
+			Node	   *std = NULL;
+			bool		all_default = true;
 
 			Assert(nscol->p_varno > 0);
-			var = makeVar(nscol->p_varno,
-						  nscol->p_varattno,
-						  nscol->p_vartype,
-						  nscol->p_vartypmod,
-						  nscol->p_varcollid,
-						  sublevels_up);
-			/* makeVar doesn't offer parameters for these, so set by hand: */
-			var->varnosyn = nscol->p_varnosyn;
-			var->varattnosyn = nscol->p_varattnosyn;
-			var->location = location;
-			result = lappend(result, var);
+			foreach(lc2, nsitem->p_rte->values_lists)
+			{
+				List *row = (List*) lfirst(lc2);
+				std = list_nth_node(Node, row, colindex);
+				if (!IsA(std, SetToDefault))
+				{
+					all_default = false;
+					break;
+				}
+			}
+
+			if (all_default && std)
+			{
+				/*
+				 * If all nodes for the column are SetToDefault, keep the marker
+				 * for later INSERT VALUES list rewriting where we remove
+				 * TLE and force NULL constant values node while rewriting VALUES RTE.
+				 * We cannot just remove values column
+				 * as attribute numbering will be off.
+				 */
+				result = lappend(result, std);
+			}
+			else
+			{
+				var = makeVar(nscol->p_varno,
+							  nscol->p_varattno,
+							  nscol->p_vartype,
+							  nscol->p_vartypmod,
+							  nscol->p_varcollid,
+							  sublevels_up);
+				/* makeVar doesn't offer parameters for these, so set by hand: */
+				var->varnosyn = nscol->p_varnosyn;
+				var->varattnosyn = nscol->p_varattnosyn;
+				var->location = location;
+				result = lappend(result, var);
+			}
 			if (colnames)
 				*colnames = lappend(*colnames, colnameval);
 		}

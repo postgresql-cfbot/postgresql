@@ -28,6 +28,7 @@
 #include "optimizer/optimizer.h"
 #include "optimizer/paramassign.h"
 #include "optimizer/pathnode.h"
+#include "optimizer/plancat.h"
 #include "optimizer/planmain.h"
 #include "optimizer/planner.h"
 #include "optimizer/prep.h"
@@ -914,6 +915,15 @@ SS_process_ctes(PlannerInfo *root)
 		 */
 		if (cte->cterefcount == 0 && cmdType == CMD_SELECT)
 		{
+			Query	   *query;
+
+			query = (Query *) cte->ctequery;
+
+			/*
+			 * Check and add filter clause to filter out historical data .
+			 */
+			add_history_data_filter(query);
+
 			/* Make a dummy entry in cte_plan_ids */
 			root->cte_plan_ids = lappend_int(root->cte_plan_ids, -1);
 			continue;
@@ -960,6 +970,15 @@ SS_process_ctes(PlannerInfo *root)
 			 !contain_outer_selfref(cte->ctequery)) &&
 			!contain_volatile_functions(cte->ctequery))
 		{
+			Query	   *query;
+
+			query = (Query *) cte->ctequery;
+
+			/*
+			 * Check and filter out historical data.
+			 */
+			add_history_data_filter(query);
+
 			inline_cte(root, cte);
 			/* Make a dummy entry in cte_plan_ids */
 			root->cte_plan_ids = lappend_int(root->cte_plan_ids, -1);

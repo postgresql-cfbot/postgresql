@@ -31,6 +31,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
 [ PARTITION BY { RANGE | LIST | HASH } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
 [ USING <replaceable class="parameter">method</replaceable> ]
 [ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
+[ WITH SYSTEM VERSIONING ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
 [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
 
@@ -67,8 +68,11 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
   DEFAULT <replaceable>default_expr</replaceable> |
   GENERATED ALWAYS AS ( <replaceable>generation_expr</replaceable> ) STORED |
   GENERATED { ALWAYS | BY DEFAULT } AS IDENTITY [ ( <replaceable>sequence_options</replaceable> ) ] |
+  GENERATED ALWAYS AS ROW START |
+  GENERATED ALWAYS AS ROW END |
   UNIQUE <replaceable class="parameter">index_parameters</replaceable> |
   PRIMARY KEY <replaceable class="parameter">index_parameters</replaceable> |
+  PERIOD FOR SYSTEM_TIME ( <replaceable class="parameter">row_start_time_column</replaceable>, <replaceable class="parameter">row_end_time_column</replaceable> ) |
   REFERENCES <replaceable class="parameter">reftable</replaceable> [ ( <replaceable class="parameter">refcolumn</replaceable> ) ] [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ]
     [ ON DELETE <replaceable class="parameter">referential_action</replaceable> ] [ ON UPDATE <replaceable class="parameter">referential_action</replaceable> ] }
 [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
@@ -875,6 +879,28 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
    </varlistentry>
 
    <varlistentry>
+    <term><literal>GENERATED ALWAYS AS ROW START</literal><indexterm><primary>generated column</primary></indexterm></term>
+    <listitem>
+     <para>
+      This clause creates the column as a <firstterm>generated
+      column</firstterm>.  The column cannot be written to, and when read the
+      row insertion time will be returned.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>GENERATED ALWAYS AS ROW END</literal><indexterm><primary>generated column</primary></indexterm></term>
+    <listitem>
+     <para>
+      This clause creates the column as a <firstterm>generated
+      column</firstterm>.  The column cannot be written to, and when read the
+      row deletion time will be returned.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>UNIQUE</literal> (column constraint)</term>
     <term><literal>UNIQUE ( <replaceable class="parameter">column_name</replaceable> [, ... ] )</literal>
     <optional> INCLUDE ( <replaceable class="parameter">column_name</replaceable> [, ...]) </optional> (table constraint)</term>
@@ -962,6 +988,16 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       the constraint still depends on them. Consequently, some operations on the
       included columns (e.g., <literal>DROP COLUMN</literal>) can cause cascaded
       constraint and index deletion.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>PRIMARY PERIOD FOR SYSTEM_TIME ( <replaceable class="parameter">row_start_time_column</replaceable>, <replaceable class="parameter">row_end_time_column</replaceable> )</literal></term>
+    <listitem>
+     <para>
+      It specifies a pair of column that hold the row start
+      time and row end time column name.
      </para>
     </listitem>
    </varlistentry>
@@ -1216,6 +1252,17 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       This is backward-compatible syntax for declaring a table
       <literal>WITHOUT OIDS</literal>, creating a table <literal>WITH
       OIDS</literal> is not supported anymore.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>WITH SYSTEM VERSIONING</literal></term>
+    <listitem>
+     <para>
+      It specifies the table is system versioned temporal table.
+      If period columns is not specified the default column for
+      system versioned is created which are StartTime and EndTime.
      </para>
     </listitem>
    </varlistentry>

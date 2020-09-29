@@ -34,6 +34,11 @@ typedef struct AlterTableUtilityContext
 	Oid			relid;			/* OID of ALTER's target table */
 	ParamListInfo params;		/* any parameters available to ALTER TABLE */
 	QueryEnvironment *queryEnv; /* execution environment for ALTER TABLE */
+	bool		isSystemVersioned;	/* true if table is system versioned */
+	char	   *startTimeColName;	/* name of row start time column */
+	char	   *endTimeColName; /* name of row end time column */
+	char	   *periodStart;	/* name of period  start time column */
+	char	   *periodEnd;		/* name of period end time column */
 } AlterTableUtilityContext;
 
 /*

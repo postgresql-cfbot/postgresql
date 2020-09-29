@@ -34,12 +34,14 @@
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "nodes/supportnodes.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/plancat.h"
 #include "optimizer/prep.h"
+#include "parser/parse_clause.h"
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
@@ -52,6 +54,7 @@
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "utils/memutils.h"
 
 /* GUC parameter */
 int			constraint_exclusion = CONSTRAINT_EXCLUSION_PARTITION;
@@ -79,6 +82,8 @@ static void set_baserel_partition_key_exprs(Relation relation,
 											RelOptInfo *rel);
 static void set_baserel_partition_constraint(Relation relation,
 											 RelOptInfo *rel);
+static bool check_system_versioned_column(Node *node, RangeTblEntry *rte);
+static bool check_system_versioned_table(RangeTblEntry *rte);
 
 
 /*
@@ -2341,4 +2346,193 @@ set_baserel_partition_constraint(Relation relation, RelOptInfo *rel)
 			ChangeVarNodes((Node *) partconstr, 1, rel->relid, 0);
 		rel->partition_qual = partconstr;
 	}
+}
+
+/*
+ * get_row_end_time_col_name
+ *
+ * Retrieve the row end time column name of the given relation.
+ */
+char *
+get_row_end_time_col_name(Relation rel)
+{
+	TupleDesc	tupdesc;
+	char	   *name = NULL;
+	int			natts;
+
+	tupdesc = RelationGetDescr(rel);
+	natts = tupdesc->natts;
+	for (int i = 0; i < natts; i++)
+	{
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
+
+		if (attr->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		{
+			name = NameStr(attr->attname);
+			break;
+		}
+	}
+
+	return name;
+}
+
+/*
+ * get_row_start_time_col_name
+ *
+ * Retrieve the row start time column name of the given relation.
+ */
+char *
+get_row_start_time_col_name(Relation rel)
+{
+	TupleDesc	tupdesc;
+	char	   *name = NULL;
+	int			natts;
+
+	tupdesc = RelationGetDescr(rel);
+	natts = tupdesc->natts;
+	for (int i = 0; i < natts; i++)
+	{
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
+
+		if (attr->attgenerated == ATTRIBUTE_ROW_START_TIME)
+		{
+			name = NameStr(attr->attname);
+			break;
+		}
+	}
+
+	return name;
+}
+
+/*
+ * add_history_data_filter
+ *
+ * Add history data filter clause to where clause specification
+ * if there are system versioned relation and where clause did not
+ * already contain filter condition involving system time column.
+ */
+void
+add_history_data_filter(Query *query)
+{
+	ListCell   *l;
+
+	foreach(l, query->rtable)
+	{
+		RangeTblEntry *rte = lfirst_node(RangeTblEntry, l);
+
+		if (!check_system_versioned_table(rte) ||
+			check_system_versioned_column(query->jointree->quals, rte))
+		{
+			continue;
+		}
+		else
+		{
+			Node	   *wClause;
+			Relation	relation;
+			ColumnRef  *c;
+			A_Const    *n;
+			ParseState *pstate;
+			ParseNamespaceItem *newnsitem;
+
+			relation = table_open(rte->relid, NoLock);
+			/*
+			 * Create a condition that filter history data and attach it to
+			 * the existing where clause.
+			 */
+			c = makeColumnRefFromName(get_row_end_time_col_name(relation));
+			n = makeNode(A_Const);
+			n->val.type = T_String;
+			n->val.val.str = "infinity";
+			n->location = -1;
+
+			wClause = (Node *) makeSimpleA_Expr(AEXPR_OP, "=", (Node *) c, (Node *) n, 0);
+
+			/*
+			 * Create a dummy ParseState and insert the target relation as its
+			 * sole rangetable entry.  We need a ParseState for transformExpr.
+			 */
+			pstate = make_parsestate(NULL);
+			newnsitem = addRangeTableEntryForRelation(pstate,
+													  relation,
+													  AccessShareLock,
+													  NULL,
+													  false,
+													  true);
+			addNSItemToQuery(pstate, newnsitem, false, true, true);
+			wClause = transformWhereClause(pstate,
+										   wClause,
+										   EXPR_KIND_WHERE,
+										   "WHERE");
+			if (query->jointree->quals != NULL)
+			{
+				query->jointree->quals = make_and_qual(query->jointree->quals, wClause);
+			}
+			else if (IsA((Node *) linitial(query->jointree->fromlist), JoinExpr))
+			{
+				JoinExpr   *j = (JoinExpr *) query->jointree->fromlist;
+
+				j->quals = make_and_qual(j->quals, wClause);
+			}
+			else
+			{
+				query->jointree->quals = wClause;
+			}
+
+			table_close(relation, NoLock);
+		}
+
+	}
+}
+
+/*
+ * Check for references to system versioned columns
+ */
+static bool
+check_system_versioned_column_walker(Node *node, RangeTblEntry *rte)
+{
+
+	if (node == NULL)
+		return false;
+	if (IsA(node, Var))
+	{
+		Var		   *var = (Var *) node;
+		Oid			relid;
+		AttrNumber	attnum;
+		char		result;
+
+		relid = rte->relid;
+		attnum = var->varattno;
+		result = get_attgenerated(relid, attnum);
+
+		if (OidIsValid(relid) && AttributeNumberIsValid(attnum) &&
+			(result == ATTRIBUTE_ROW_START_TIME || result == ATTRIBUTE_ROW_END_TIME))
+			return true;
+	}
+	return expression_tree_walker(node, check_system_versioned_column_walker,
+								  rte);
+}
+
+static bool
+check_system_versioned_column(Node *node, RangeTblEntry *rte)
+{
+	return check_system_versioned_column_walker(node, rte);
+}
+
+static bool
+check_system_versioned_table(RangeTblEntry *rte)
+{
+	Relation	rel;
+	TupleDesc	tupdesc;
+	bool		result = false;
+
+	if (rte->relid == 0)
+		return false;
+
+	rel = table_open(rte->relid, NoLock);
+	tupdesc = RelationGetDescr(rel);
+	result = tupdesc->constr && tupdesc->constr->is_system_versioned;
+
+	table_close(rel, NoLock);
+
+	return result;
 }

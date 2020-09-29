@@ -61,6 +61,7 @@
 #include "parser/parse_type.h"
 #include "parser/parse_utilcmd.h"
 #include "parser/parser.h"
+#include "optimizer/plancat.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
@@ -71,6 +72,8 @@
 #include "utils/syscache.h"
 #include "utils/typcache.h"
 
+
+#include <string.h>
 
 /* State shared by transformCreateStmt and its subroutines */
 typedef struct
@@ -95,6 +98,11 @@ typedef struct
 	bool		ispartitioned;	/* true if table is partitioned */
 	PartitionBoundSpec *partbound;	/* transformed FOR VALUES */
 	bool		ofType;			/* true if statement contains OF typename */
+	bool		isSystemVersioned;	/* true if table is system versioned */
+	char	   *startTimeColName;	/* name of row start time column */
+	char	   *endTimeColName; /* name of row end time column */
+	char	   *periodStart;	/* name of period start time column */
+	char	   *periodEnd;		/* name of period end time column */
 } CreateStmtContext;
 
 /* State shared by transformCreateSchemaStmt and its subroutines */
@@ -118,6 +126,8 @@ static void transformTableConstraint(CreateStmtContext *cxt,
 									 Constraint *constraint);
 static void transformTableLikeClause(CreateStmtContext *cxt,
 									 TableLikeClause *table_like_clause);
+static void transformPeriodColumn(CreateStmtContext *cxt,
+								  RowTime * cols);
 static void transformOfType(CreateStmtContext *cxt,
 							TypeName *ofTypename);
 static CreateStatsStmt *generateClonedExtStatsStmt(RangeVar *heapRel,
@@ -250,6 +260,10 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	cxt.ispartitioned = stmt->partspec != NULL;
 	cxt.partbound = stmt->partbound;
 	cxt.ofType = (stmt->ofTypename != NULL);
+	cxt.startTimeColName = NULL;
+	cxt.endTimeColName = NULL;
+	cxt.isSystemVersioned = false;
+
 
 	Assert(!stmt->ofTypename || !stmt->inhRelations);	/* grammar enforces */
 
@@ -285,12 +299,48 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 			case T_TableLikeClause:
 				transformTableLikeClause(&cxt, (TableLikeClause *) element);
 				break;
-
+			case T_RowTime:
+				transformPeriodColumn(&cxt, (RowTime *) element);
+				break;
 			default:
 				elog(ERROR, "unrecognized node type: %d",
 					 (int) nodeTag(element));
 				break;
 		}
+	}
+
+	/*
+	 * If there are no system time column and the user specified "WITH SYSTEM
+	 * VERSIONING", default system time columns is added to the table
+	 * definition.
+	 */
+	if (!cxt.isSystemVersioned && stmt->systemVersioned)
+	{
+		ColumnDef  *startCol;
+		ColumnDef  *endCol;
+
+		startCol = makeTemporalColumnDef("StartTime");
+		endCol = makeTemporalColumnDef("EndTime");
+		if (stmt->tableElts == NIL)
+			stmt->tableElts = list_make2(startCol, endCol);
+		else
+			stmt->tableElts = lappend(stmt->tableElts, list_make2(startCol, endCol));
+
+		transformColumnDefinition(&cxt, startCol);
+		transformColumnDefinition(&cxt, endCol);
+	}
+
+	if (cxt.isSystemVersioned)
+	{
+		if (!cxt.startTimeColName)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("period start time column not specified")));
+
+		if (!cxt.endTimeColName)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("period end time column not specified")));
 	}
 
 	/*
@@ -303,6 +353,26 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	cxt.alist = NIL;
 
 	Assert(stmt->constraints == NIL);
+
+	/*
+	 * End time column is added to primary and unique key constraint
+	 * implicitly to make history and current data co-exist.
+	 */
+	if (cxt.isSystemVersioned)
+	{
+		ListCell   *lc;
+
+		foreach(lc, cxt.ixconstraints)
+		{
+			Constraint *constraint = lfirst_node(Constraint, lc);
+
+			if ((constraint->contype == CONSTR_PRIMARY ||
+				 constraint->contype == CONSTR_UNIQUE) && constraint->keys != NIL)
+			{
+				constraint->keys = lappend(constraint->keys, makeString(cxt.endTimeColName));
+			}
+		}
+	}
 
 	/*
 	 * Postprocess constraints that give rise to index definitions.
@@ -726,6 +796,62 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 				Assert(constraint->cooked_expr == NULL);
 				saw_generated = true;
 				break;
+
+			case CONSTR_ROW_START_TIME:
+				{
+					Type		ctype;
+					Form_pg_type typform;
+					char	   *typname;
+
+					ctype = typenameType(cxt->pstate, column->typeName, NULL);
+					typform = (Form_pg_type) GETSTRUCT(ctype);
+					typname = NameStr(typform->typname);
+					ReleaseSysCache(ctype);
+
+					if (strcmp(typname, "timestamptz") != 0)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("the data type of row start time must be timestamptz ")));
+
+					if (cxt->startTimeColName)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("row start time can not be specified multiple time")));
+
+					column->generated = ATTRIBUTE_ROW_START_TIME;
+					cxt->startTimeColName = column->colname;
+					cxt->isSystemVersioned = true;
+					column->is_not_null = true;
+					break;
+				}
+
+			case CONSTR_ROW_END_TIME:
+				{
+					Type		ctype;
+					Form_pg_type typform;
+					char	   *typname;
+
+					ctype = typenameType(cxt->pstate, column->typeName, NULL);
+					typform = (Form_pg_type) GETSTRUCT(ctype);
+					typname = NameStr(typform->typname);
+					ReleaseSysCache(ctype);
+
+					if (strcmp(typname, "timestamptz") != 0)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("the data type of row end time must be timestamptz")));
+
+					if (cxt->endTimeColName)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("row end time can not be specified multiple time")));
+
+					column->generated = ATTRIBUTE_ROW_END_TIME;
+					cxt->endTimeColName = column->colname;
+					cxt->isSystemVersioned = true;
+					column->is_not_null = true;
+					break;
+				}
 
 			case CONSTR_CHECK:
 				cxt->ckconstraints = lappend(cxt->ckconstraints, constraint);
@@ -1404,6 +1530,35 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 	table_close(relation, NoLock);
 
 	return result;
+}
+
+/*
+ * transformPeriodColumn
+ *		transform a period node within CREATE TABLE
+ */
+static void
+transformPeriodColumn(CreateStmtContext *cxt, RowTime * col)
+{
+	cxt->periodStart = col->start_time;
+	cxt->periodEnd = col->end_time;
+
+	if (!cxt->startTimeColName)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("period start time column not specified")));
+	if (!cxt->endTimeColName)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("period end time column not specified")));
+
+	if (strcmp(cxt->periodStart, cxt->startTimeColName) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("period start time parameter must be the same as  the name of row start time column")));
+	if (strcmp(cxt->periodEnd, cxt->endTimeColName) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("period end time  parameter must be the same as the name of row end time column")));
 }
 
 static void
@@ -3146,7 +3301,7 @@ transformRuleStmt(RuleStmt *stmt, const char *queryString,
  */
 AlterTableStmt *
 transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
-						const char *queryString,
+						AlterTableUtilityContext *context,
 						List **beforeStmts, List **afterStmts)
 {
 	Relation	rel;
@@ -3173,7 +3328,7 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 
 	/* Set up pstate */
 	pstate = make_parsestate(NULL);
-	pstate->p_sourcetext = queryString;
+	pstate->p_sourcetext = context->queryString;
 	nsitem = addRangeTableEntryForRelation(pstate,
 										   rel,
 										   AccessShareLock,
@@ -3209,6 +3364,10 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 	cxt.ispartitioned = (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
 	cxt.partbound = NULL;
 	cxt.ofType = false;
+	cxt.startTimeColName = NULL;
+	cxt.endTimeColName = NULL;
+	cxt.isSystemVersioned = false;
+
 
 	/*
 	 * Transform ALTER subcommands that need it (most don't).  These largely
@@ -3243,6 +3402,14 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 					newcmds = lappend(newcmds, cmd);
 					break;
 				}
+			case AT_PerodColumn:
+				{
+					RowTime    *rtime = castNode(RowTime, cmd->def);
+
+					context->periodStart = rtime->start_time;
+					context->periodEnd = rtime->end_time;
+				}
+				break;
 
 			case AT_AddConstraint:
 			case AT_AddConstraintRecurse:
@@ -3252,6 +3419,23 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 				 */
 				if (IsA(cmd->def, Constraint))
 				{
+					Constraint *constraint = castNode(Constraint, cmd->def);
+
+					/*
+					 * End time column is added to primary and unique key
+					 * constraint implicitly to make history data and current
+					 * data co-exist.
+					 */
+					if ((rel->rd_att->constr &&
+						 rel->rd_att->constr->is_system_versioned) &&
+						(constraint->contype == CONSTR_PRIMARY || constraint->contype == CONSTR_UNIQUE))
+					{
+						char	   *endColNme;
+
+						endColNme = get_row_end_time_col_name(rel);
+						constraint->keys = lappend(constraint->keys, makeString(endColNme));
+					}
+
 					transformTableConstraint(&cxt, (Constraint *) cmd->def);
 					if (((Constraint *) cmd->def)->contype == CONSTR_FOREIGN)
 						skipValidation = false;
@@ -3419,6 +3603,21 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 		}
 	}
 
+	if (cxt.isSystemVersioned)
+	{
+		if (cxt.startTimeColName)
+		{
+			context->isSystemVersioned = cxt.isSystemVersioned;
+			context->startTimeColName = cxt.startTimeColName;
+		}
+
+		if (cxt.endTimeColName)
+		{
+			context->isSystemVersioned = cxt.isSystemVersioned;
+			context->endTimeColName = cxt.endTimeColName;
+		}
+	}
+
 	/*
 	 * Transfer anything we already have in cxt.alist into save_alist, to keep
 	 * it separate from the output of transformIndexConstraints.
@@ -3450,7 +3649,7 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 		{
 			IndexStmt  *idxstmt = (IndexStmt *) istmt;
 
-			idxstmt = transformIndexStmt(relid, idxstmt, queryString);
+			idxstmt = transformIndexStmt(relid, idxstmt, context->queryString);
 			newcmd = makeNode(AlterTableCmd);
 			newcmd->subtype = OidIsValid(idxstmt->indexOid) ? AT_AddIndexConstraint : AT_AddIndex;
 			newcmd->def = (Node *) idxstmt;

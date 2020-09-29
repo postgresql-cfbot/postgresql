@@ -1251,6 +1251,7 @@ _equalCreateStmt(const CreateStmt *a, const CreateStmt *b)
 	COMPARE_STRING_FIELD(tablespacename);
 	COMPARE_STRING_FIELD(accessMethod);
 	COMPARE_SCALAR_FIELD(if_not_exists);
+	COMPARE_SCALAR_FIELD(systemVersioned);
 
 	return true;
 }
@@ -2935,6 +2936,27 @@ _equalPartitionCmd(const PartitionCmd *a, const PartitionCmd *b)
 	return true;
 }
 
+static bool
+_equalRowTime(const RowTime * a, const RowTime * b)
+{
+	COMPARE_STRING_FIELD(start_time);
+	COMPARE_STRING_FIELD(end_time);
+
+	return true;
+}
+
+static bool
+_equalTemporalClause(const TemporalClause * a, const TemporalClause * b)
+{
+
+	COMPARE_SCALAR_FIELD(kind);
+	COMPARE_NODE_FIELD(from);
+	COMPARE_NODE_FIELD(to);
+	COMPARE_NODE_FIELD(relation);
+
+	return true;
+}
+
 /*
  * Stuff from pg_list.h
  */
@@ -3756,6 +3778,12 @@ equal(const void *a, const void *b)
 			break;
 		case T_PartitionCmd:
 			retval = _equalPartitionCmd(a, b);
+			break;
+		case T_RowTime:
+			retval = _equalRowTime(a, b);
+			break;
+		case T_TemporalClause:
+			retval = _equalTemporalClause(a, b);
 			break;
 
 		default:

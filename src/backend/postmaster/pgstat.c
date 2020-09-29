@@ -247,6 +247,12 @@ static int	pgStatXactCommit = 0;
 static int	pgStatXactRollback = 0;
 PgStat_Counter pgStatBlockReadTime = 0;
 PgStat_Counter pgStatBlockWriteTime = 0;
+static TimestampTz pgStatActiveStart = DT_NOBEGIN;
+static PgStat_Counter pgStatActiveTime = 0;
+static TimestampTz pgStatTransactionIdleStart = DT_NOBEGIN;
+static PgStat_Counter pgStatTransactionIdleTime = 0;
+static bool pgStatSessionReported = false;
+bool pgStatSessionDisconnected = false;
 
 /* Record that's written to 2PC state file when pgstat state is persisted */
 typedef struct TwoPhasePgStatRecord
@@ -326,6 +332,7 @@ static void pgstat_send_tabstat(PgStat_MsgTabstat *tsmsg);
 static void pgstat_send_funcstats(void);
 static void pgstat_send_slru(void);
 static HTAB *pgstat_collect_oids(Oid catalogid, AttrNumber anum_oid);
+static void pgstat_send_connstats(bool force);
 
 static PgStat_TableStatus *get_tabstat_entry(Oid rel_id, bool isshared);
 
@@ -359,6 +366,7 @@ static void pgstat_recv_funcpurge(PgStat_MsgFuncpurge *msg, int len);
 static void pgstat_recv_recoveryconflict(PgStat_MsgRecoveryConflict *msg, int len);
 static void pgstat_recv_deadlock(PgStat_MsgDeadlock *msg, int len);
 static void pgstat_recv_checksum_failure(PgStat_MsgChecksumFailure *msg, int len);
+static void pgstat_recv_connection(PgStat_MsgConn *msg, int len);
 static void pgstat_recv_tempfile(PgStat_MsgTempFile *msg, int len);
 
 /* ------------------------------------------------------------
@@ -851,7 +859,7 @@ pgstat_report_stat(bool force)
 	/* Don't expend a clock check if nothing to do */
 	if ((pgStatTabList == NULL || pgStatTabList->tsa_used == 0) &&
 		pgStatXactCommit == 0 && pgStatXactRollback == 0 &&
-		!have_function_stats)
+		!have_function_stats && !force)
 		return;
 
 	/*
@@ -937,6 +945,10 @@ pgstat_report_stat(bool force)
 
 	/* Now, send function statistics */
 	pgstat_send_funcstats();
+
+	/* for backends, send connection statistics */
+	if (MyBackendType == B_BACKEND)
+		pgstat_send_connstats(force);
 
 	/* Finally send SLRU statistics */
 	pgstat_send_slru();
@@ -1325,6 +1337,61 @@ pgstat_drop_relation(Oid relid)
 	pgstat_send(&msg, len);
 }
 #endif							/* NOT_USED */
+
+
+/* ----------
+ * pgstat_send_connstats() -
+ *
+ *	Tell the collector about session statistics.
+ *	The parameter "force" will be true when the session ends,
+ *	so we report total session time only if it is true.
+ * ----------
+ */
+static void
+pgstat_send_connstats(bool force)
+{
+	PgStat_MsgConn msg;
+
+	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+		return;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_CONNECTION);
+	msg.m_databaseid = MyDatabaseId;
+
+	if (force)
+	{
+		long secs;
+		int  usecs;
+
+		TimestampDifference(MyStartTimestamp,
+							GetCurrentTimestamp(),
+							&secs, &usecs);
+
+		msg.m_session_time = secs * 1000000 + usecs;
+		msg.m_aborted = pgStatSessionDisconnected ? 0 : 1;
+	}
+	else
+	{
+		msg.m_session_time = 0;
+		msg.m_aborted = 0;
+	}
+
+	msg.m_active_time = pgStatActiveTime;
+	pgStatActiveTime = 0;
+	msg.m_idle_in_xact_time = pgStatTransactionIdleTime;
+	pgStatTransactionIdleTime = 0;
+
+	/* report a new session only the first time */
+	if (pgStatSessionReported)
+		msg.m_count = 0;
+	else
+	{
+		msg.m_count = 1;
+		pgStatSessionReported = true;
+	}
+
+	pgstat_send(&msg, sizeof(PgStat_MsgConn));
+}
 
 
 /* ----------
@@ -3197,6 +3264,54 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 	}
 
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
+
+	/*
+	 * If the state has changed to "active" or "idle in transaction",
+	 * record the start time.
+	 * If the state has changed away from these, calculate the duration.
+	 */
+	if (state == STATE_RUNNING)
+	{
+		if (pgStatActiveStart == DT_NOBEGIN)
+			pgStatActiveStart = current_timestamp;
+	}
+	else
+	{
+		if (pgStatActiveStart != DT_NOBEGIN)
+		{
+			long secs;
+			int  usecs;
+
+			TimestampDifference(pgStatActiveStart,
+								GetCurrentTimestamp(),
+								&secs, &usecs);
+
+			pgStatActiveTime += secs * 1000000 + usecs;
+			pgStatActiveStart = DT_NOBEGIN;
+		}
+	}
+
+	if (state == STATE_IDLEINTRANSACTION ||
+		state == STATE_IDLEINTRANSACTION_ABORTED)
+	{
+		if (pgStatTransactionIdleStart == DT_NOBEGIN)
+			pgStatTransactionIdleStart = current_timestamp;
+	}
+	else
+	{
+		if (pgStatTransactionIdleStart != DT_NOBEGIN)
+		{
+			long secs;
+			int  usecs;
+
+			TimestampDifference(pgStatTransactionIdleStart,
+								GetCurrentTimestamp(),
+								&secs, &usecs);
+
+			pgStatTransactionIdleTime += secs * 1000000 + usecs;
+			pgStatTransactionIdleStart = DT_NOBEGIN;
+		}
+	}
 }
 
 /*-----------
@@ -4688,6 +4803,10 @@ PgstatCollectorMain(int argc, char *argv[])
 												 len);
 					break;
 
+				case PGSTAT_MTYPE_CONNECTION:
+					pgstat_recv_connection(&msg.msg_conn, len);
+					break;
+
 				default:
 					break;
 			}
@@ -4762,6 +4881,11 @@ reset_dbentry_counters(PgStat_StatDBEntry *dbentry)
 	dbentry->last_checksum_failure = 0;
 	dbentry->n_block_read_time = 0;
 	dbentry->n_block_write_time = 0;
+	dbentry->n_connections = 0;
+	dbentry->n_session_time = 0;
+	dbentry->n_active_time = 0;
+	dbentry->n_idle_in_xact_time = 0;
+	dbentry->n_aborted = 0;
 
 	dbentry->stat_reset_timestamp = GetCurrentTimestamp();
 	dbentry->stats_timestamp = 0;
@@ -6516,6 +6640,26 @@ pgstat_recv_checksum_failure(PgStat_MsgChecksumFailure *msg, int len)
 
 	dbentry->n_checksum_failures += msg->m_failurecount;
 	dbentry->last_checksum_failure = msg->m_failure_time;
+}
+
+/* ----------
+ * pgstat_recv_connection() -
+ *
+ *  Process connection information.
+ * ----------
+ */
+static void
+pgstat_recv_connection(PgStat_MsgConn *msg, int len)
+{
+	PgStat_StatDBEntry *dbentry;
+
+	dbentry = pgstat_get_db_entry(msg->m_databaseid, true);
+
+	dbentry->n_connections += msg->m_count;
+	dbentry->n_session_time += msg->m_session_time;
+	dbentry->n_active_time += msg->m_active_time;
+	dbentry->n_idle_in_xact_time += msg->m_idle_in_xact_time;
+	dbentry->n_aborted += msg->m_aborted;
 }
 
 /* ----------

@@ -1630,6 +1630,84 @@ pg_stat_get_db_blk_write_time(PG_FUNCTION_ARGS)
 }
 
 Datum
+pg_stat_get_db_session_time(PG_FUNCTION_ARGS)
+{
+	Oid			dbid = PG_GETARG_OID(0);
+	double		result;
+	PgStat_StatDBEntry *dbentry;
+
+	/* convert counter from microsec to millisec for display */
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+		result = 0;
+	else
+		result = ((double) dbentry->n_session_time) / 1000.0;
+
+	PG_RETURN_FLOAT8(result);
+}
+
+Datum
+pg_stat_get_db_active_time(PG_FUNCTION_ARGS)
+{
+	Oid			dbid = PG_GETARG_OID(0);
+	double		result;
+	PgStat_StatDBEntry *dbentry;
+
+	/* convert counter from microsec to millisec for display */
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+		result = 0;
+	else
+		result = ((double) dbentry->n_active_time) / 1000.0;
+
+	PG_RETURN_FLOAT8(result);
+}
+
+Datum
+pg_stat_get_db_idle_in_transaction_time(PG_FUNCTION_ARGS)
+{
+	Oid			dbid = PG_GETARG_OID(0);
+	double		result;
+	PgStat_StatDBEntry *dbentry;
+
+	/* convert counter from microsec to millisec for display */
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+		result = 0;
+	else
+		result = ((double) dbentry->n_idle_in_xact_time) / 1000.0;
+
+	PG_RETURN_FLOAT8(result);
+}
+
+Datum
+pg_stat_get_db_connections(PG_FUNCTION_ARGS)
+{
+	Oid			dbid = PG_GETARG_OID(0);
+	int64		result;
+	PgStat_StatDBEntry *dbentry;
+
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+		result = 0;
+	else
+		result = (int64) (dbentry->n_connections);
+
+	PG_RETURN_INT64(result);
+}
+
+Datum
+pg_stat_get_db_aborted_sessions(PG_FUNCTION_ARGS)
+{
+	Oid			dbid = PG_GETARG_OID(0);
+	int64		result;
+	PgStat_StatDBEntry *dbentry;
+
+	if ((dbentry = pgstat_fetch_stat_dbentry(dbid)) == NULL)
+		result = 0;
+	else
+		result = (int64) (dbentry->n_aborted);
+
+	PG_RETURN_INT64(result);
+}
+
+Datum
 pg_stat_get_bgwriter_timed_checkpoints(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_INT64(pgstat_fetch_global()->timed_checkpoints);

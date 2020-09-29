@@ -67,7 +67,8 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_RECOVERYCONFLICT,
 	PGSTAT_MTYPE_TEMPFILE,
 	PGSTAT_MTYPE_DEADLOCK,
-	PGSTAT_MTYPE_CHECKSUMFAILURE
+	PGSTAT_MTYPE_CHECKSUMFAILURE,
+	PGSTAT_MTYPE_CONNECTION
 } StatMsgType;
 
 /* ----------
@@ -574,6 +575,21 @@ typedef struct PgStat_MsgChecksumFailure
 	TimestampTz m_failure_time;
 } PgStat_MsgChecksumFailure;
 
+/* ----------
+ * PgStat_MsgConn			Sent by pgstat_connection to update connection statistics.
+ * ----------
+ */
+typedef struct PgStat_MsgConn
+{
+	PgStat_MsgHdr  m_hdr;
+	Oid			   m_databaseid;
+	PgStat_Counter m_count;
+	PgStat_Counter m_session_time;
+	PgStat_Counter m_active_time;
+	PgStat_Counter m_idle_in_xact_time;
+	PgStat_Counter m_aborted;
+} PgStat_MsgConn;
+
 
 /* ----------
  * PgStat_Msg					Union over all possible messages.
@@ -603,6 +619,7 @@ typedef union PgStat_Msg
 	PgStat_MsgDeadlock msg_deadlock;
 	PgStat_MsgTempFile msg_tempfile;
 	PgStat_MsgChecksumFailure msg_checksumfailure;
+	PgStat_MsgConn msg_conn;
 } PgStat_Msg;
 
 
@@ -645,6 +662,11 @@ typedef struct PgStat_StatDBEntry
 	TimestampTz last_checksum_failure;
 	PgStat_Counter n_block_read_time;	/* times in microseconds */
 	PgStat_Counter n_block_write_time;
+	PgStat_Counter n_connections;
+	PgStat_Counter n_session_time;
+	PgStat_Counter n_active_time;
+	PgStat_Counter n_idle_in_xact_time;
+	PgStat_Counter n_aborted;
 
 	TimestampTz stat_reset_timestamp;
 	TimestampTz stats_timestamp;	/* time of db stats file update */
@@ -1270,6 +1292,11 @@ extern PgStat_MsgBgWriter BgWriterStats;
  */
 extern PgStat_Counter pgStatBlockReadTime;
 extern PgStat_Counter pgStatBlockWriteTime;
+
+/*
+ * Updated in PostgresMain upon disconnect.
+ */
+extern bool pgStatSessionDisconnected;
 
 /* ----------
  * Functions called from postmaster

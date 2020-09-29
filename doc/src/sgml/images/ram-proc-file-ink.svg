@@ -1,0 +1,841 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   version="1.1"
+   width="900px"
+   height="600px"
+   viewBox="0 0 900 600"
+   id="svg306"
+   sodipodi:docname="ram-proc-file-ink.svg"
+   inkscape:version="0.92.3 (2405546, 2018-03-11)">
+  <metadata
+     id="metadata310">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title>PG Overall Server Architecture</dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <sodipodi:namedview
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1"
+     objecttolerance="10"
+     gridtolerance="10"
+     guidetolerance="10"
+     inkscape:pageopacity="0"
+     inkscape:pageshadow="2"
+     inkscape:window-width="1048"
+     inkscape:window-height="771"
+     id="namedview308"
+     showgrid="false"
+     inkscape:zoom="0.39333333"
+     inkscape:cx="450"
+     inkscape:cy="300"
+     inkscape:window-x="61"
+     inkscape:window-y="27"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg306" />
+  <title
+     id="title2">PG Overall Server Architecture</title>
+  <style
+     type="text/css"
+     id="style4">
+  .text_small   {font-style:normal;
+                 font-weight:normal;
+                 font-size:12px;
+                 font-family:&quot;Open Sans&quot;, sans-serif;
+                 fill:black;
+                }
+  .text_normal  {font-style:normal;
+                 font-weight:normal;
+                 font-size:16px;
+                 font-family:&quot;Open Sans&quot;, sans-serif;
+                 fill:black;
+                }
+  .text_big     {font-style:normal;
+                 font-weight:normal;
+                 font-size:24px;
+                 font-family:&quot;Open Sans&quot;, sans-serif;
+                 fill:black;
+                }
+  .text_comment {font-style:italic;
+                 font-weight:normal;
+                 font-size:16px;
+                 font-family:&quot;Open Sans&quot;, sans-serif;
+                 fill:black;
+                }
+  </style>
+  <defs
+     id="defs70">
+    <!-- Some notes in different sizes -->
+    <symbol
+       id="note_200x20"
+       stroke="black"
+       fill="lightyellow">
+      <title
+         id="title6">UML Note (200 x 20 px)</title>
+      <path
+         d="M 200,10 v 10 h -200 v -20 h 190 v 10 h 10 l -10,-10"
+         id="path8" />
+    </symbol>
+    <symbol
+       id="note_250x20"
+       stroke="black"
+       fill="lightyellow">
+      <title
+         id="title11">UML Note (250 x 20 px)</title>
+      <path
+         d="M 250,10 v 10 h -250 v -20 h 240 v 10 h 10 l -10,-10"
+         id="path13" />
+    </symbol>
+    <symbol
+       id="note_100x35"
+       stroke="black"
+       fill="lightyellow">
+      <title
+         id="title16">UML Note (100 x 35 px)</title>
+      <path
+         d="M 100,10 v 25 h -100 v -35 h 90 v 10 h 10 l -10,-10"
+         id="path18" />
+    </symbol>
+    <symbol
+       id="note_170x50"
+       stroke="black"
+       fill="lightyellow">
+      <title
+         id="title21">UML Note (170 x 50 px)</title>
+      <path
+         d="M 170,10 v 40 h -170 v -50 h 160 v 10 h 10 l -10,-10"
+         id="path23" />
+    </symbol>
+    <!-- UML states (used for buffers) -->
+    <symbol
+       id="state_300x120">
+      <title
+         id="title26">UML State (300x120)</title>
+      <rect
+         x="0"
+         y="0"
+         width="300"
+         height="120"
+         rx="10"
+         stroke="blue"
+         fill="none"
+         id="rect28" />
+    </symbol>
+    <symbol
+       id="state_350x120">
+      <title
+         id="title31">UML State (350x120)</title>
+      <rect
+         x="0"
+         y="0"
+         width="350"
+         height="120"
+         rx="10"
+         stroke="blue"
+         fill="none"
+         id="rect33" />
+    </symbol>
+    <!-- Discs -->
+    <symbol
+       id="disc"
+       stroke="blue"
+       fill="none">
+      <title
+         id="title36">Disc</title>
+      <ellipse
+         cx="51"
+         cy="13"
+         rx="50"
+         ry="12"
+         id="ellipse38" />
+      <!-- top -->
+      <path
+         d="M 1,13 v 60"
+         id="path40" />
+      <!-- left -->
+      <path
+         d="M 101,13 v 60"
+         id="path42" />
+      <!-- right -->
+      <path
+         d="M 1,73 A 50, 12, 0, 0, 0, 101,73"
+         id="path44" />
+      <!-- bottom -->
+    </symbol>
+    <!-- Laptop -->
+    <symbol
+       id="laptop"
+       stroke="black"
+       fill="none">
+      <title
+         id="title47">Laptop</title>
+      <path
+         d="M 20,40 v -40 h 54 v 40 l 15,15 h -84 l 15,-15 h 54"
+         id="path49" />
+      <rect
+         x="23"
+         y="3"
+         width="48"
+         height="34"
+         id="rect51" />
+      <!-- symbolize some lines -->
+      <path
+         d="M 30,10 h 20"
+         id="path53" />
+      <path
+         d="M 30,15 h 25"
+         id="path55" />
+      <path
+         d="M 30,20 h 10"
+         id="path57" />
+      <path
+         d="M 30,30 h 20"
+         id="path59" />
+      <!-- symbolize keyboard -->
+      <path
+         d="M 25,50 h 45 l 2,2 h -50 z "
+         id="path61" />
+    </symbol>
+    <!-- marker start/end -->
+    <marker
+       id="arrowhead_start"
+       markerWidth="10"
+       markerHeight="10"
+       refX="0"
+       refY="3"
+       orient="auto">
+      <path
+         d="M 6,0 l -6,3 l 6,3"
+         stroke="black"
+         fill="none"
+         id="path64" />
+    </marker>
+    <marker
+       id="arrowhead_end"
+       markerWidth="10"
+       markerHeight="10"
+       refX="6"
+       refY="3"
+       orient="auto">
+      <path
+         d="M 0,0 l 6,3 l -6,3"
+         stroke="black"
+         fill="none"
+         id="path67" />
+    </marker>
+  </defs>
+  <!-- start of rendering area -->
+  <!-- enclosing rectangle -->
+  <rect
+     x="1"
+     y="1"
+     rx="5"
+     width="99%"
+     height="99%"
+     stroke="black"
+     fill="none"
+     id="rect72" />
+  <!-- caption, client side -->
+  <text
+     x="15"
+     y="40"
+     class="text_big"
+     id="text74">Client</text>
+  <text
+     x="140"
+     y="40"
+     class="text_big"
+     id="text76">Server</text>
+  <use
+     xlink:href="#laptop"
+     x="5"
+     y="210"
+     id="use78" />
+  <!-- individual memory -->
+  <g
+     transform="translate(130, 70)"
+     id="g96">
+    <use
+       xlink:href="#state_350x120"
+       x="0"
+       y="0"
+       id="use80" />
+    <text
+       x="5"
+       y="20"
+       class="text_normal"
+       id="text82">maintenance_work_mem (per connection)</text>
+    <text
+       x="5"
+       y="45"
+       class="text_normal"
+       id="text84">work_mem (per query operation)</text>
+    <text
+       x="5"
+       y="70"
+       class="text_normal"
+       id="text86">autovacuum_work_mem (per worker process)</text>
+    <text
+       x="5"
+       y="95"
+       class="text_normal"
+       id="text88">temp_buffer (per connection)</text>
+    <text
+       x="5"
+       y="110"
+       class="text_normal"
+       id="text90">...</text>
+    <use
+       xlink:href="#note_200x20"
+       x="140"
+       y="-15"
+       id="use92" />
+    <text
+       x="150"
+       y="0"
+       class="text_comment"
+       id="text94">Individual Memory</text>
+  </g>
+  <!-- shared memory -->
+  <g
+     transform="translate(520, 70)"
+     id="g110">
+    <use
+       xlink:href="#state_300x120"
+       x="0"
+       y="0"
+       id="use98" />
+    <text
+       x="10"
+       y="30"
+       class="text_normal"
+       id="text100">shared_buffers (heap and index)</text>
+    <text
+       x="10"
+       y="70"
+       class="text_normal"
+       id="text102">wal_buffers (WAL records)</text>
+    <text
+       x="10"
+       y="100"
+       class="text_normal"
+       id="text104">...</text>
+    <use
+       xlink:href="#note_250x20"
+       x="40"
+       y="-15"
+       id="use106" />
+    <text
+       x="50"
+       y="0"
+       class="text_comment"
+       id="text108">Shared Memory (per Instance)</text>
+  </g>
+  <!-- postmaster -->
+  <g
+     transform="translate(180, 215)"
+     id="g116">
+    <rect
+       width="250"
+       height="30"
+       stroke="blue"
+       fill="none"
+       id="rect112" />
+    <text
+       x="10"
+       y="20"
+       class="text_normal"
+       id="text114">Postmaster</text>
+  </g>
+  <path
+     d="M 90,230 h 75"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path118" />
+  <g
+     transform="translate(140, 230)"
+     id="g124">
+    <circle
+       r="8"
+       stroke="black"
+       fill="lightyellow"
+       id="circle120" />
+    <text
+       x="-4"
+       y="4"
+       class="text_small"
+       id="text122">1</text>
+  </g>
+  <!-- backend processes -->
+  <g
+     transform="translate(150, 315)"
+     id="g134">
+    <rect
+       width="370"
+       height="30"
+       stroke="blue"
+       fill="none"
+       id="rect126" />
+    <text
+       x="10"
+       y="20"
+       class="text_normal"
+       id="text128">Backend processes (one per connection)</text>
+    <path
+       d="M 5,0 v -5 h 370 v 30 h -5"
+       stroke="blue"
+       fill="none"
+       id="path130" />
+    <path
+       d="M 10,-5 v -5 h 370 v 30 h -5"
+       stroke="blue"
+       fill="none"
+       id="path132" />
+  </g>
+  <path
+     d="M 90,240 153,303"
+     stroke="black"
+     fill="none"
+     marker-start="url(#arrowhead_start)"
+     marker-end="url(#arrowhead_end)"
+     id="path136" />
+  <g
+     transform="translate(140, 290)"
+     id="g142">
+    <circle
+       r="8"
+       stroke="black"
+       fill="lightyellow"
+       id="circle138" />
+    <text
+       x="-4"
+       y="4"
+       class="text_small"
+       id="text140">3</text>
+  </g>
+  <!-- connection between postmaster and backend processes -->
+  <path
+     d="M 360,250 v 50"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path144" />
+  <g
+     transform="translate(180, 255)"
+     id="g150">
+    <use
+       xlink:href="#note_250x20"
+       id="use146" />
+    <text
+       x="10"
+       y="15"
+       class="text_comment"
+       id="text148">Creates backend processes</text>
+  </g>
+  <g
+     transform="translate(360, 281)"
+     id="g156">
+    <circle
+       r="8"
+       stroke="black"
+       fill="lightyellow"
+       id="circle152" />
+    <text
+       x="-4"
+       y="4"
+       class="text_small"
+       id="text154">2</text>
+  </g>
+  <!-- backend process' access to individual memory -->
+  <path
+     d="M 460,300 v -100"
+     stroke="black"
+     fill="none"
+     marker-start="url(#arrowhead_start)"
+     marker-end="url(#arrowhead_end)"
+     id="path158" />
+  <!-- its access to shared buffers and WAL buffers -->
+  <path
+     d="M 498,300 v -205 h 30"
+     stroke="black"
+     fill="none"
+     marker-start="url(#arrowhead_start)"
+     marker-end="url(#arrowhead_end)"
+     id="path160" />
+  <path
+     d="M 508,300 v -165 h 20"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path162" />
+  <!-- WAL writer -->
+  <g
+     transform="translate(550, 220)"
+     id="g168">
+    <rect
+       width="120"
+       height="30"
+       stroke="blue"
+       fill="none"
+       id="rect164" />
+    <text
+       x="10"
+       y="20"
+       class="text_normal"
+       id="text166">WAL Writer</text>
+  </g>
+  <path
+     d="M 590,150 v 65"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path170" />
+  <path
+     d="M 590,255 v 230"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path172" />
+  <!-- Checkpoiner -->
+  <g
+     transform="translate(610, 340)"
+     id="g178">
+    <rect
+       width="140"
+       height="30"
+       stroke="blue"
+       fill="none"
+       id="rect174" />
+    <text
+       x="10"
+       y="20"
+       class="text_normal"
+       id="text176">Checkpointer</text>
+  </g>
+  <path
+     d="M 740,110 v 220"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path180" />
+  <path
+     d="M 605,355 h -130 v 130"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path182" />
+  <path
+     d="M 700,330 v -180"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path184" />
+  <g
+     transform="translate(570, 330)"
+     id="g192">
+    <use
+       xlink:href="#note_100x35"
+       x="50"
+       y="-50"
+       id="use186" />
+    <text
+       x="60"
+       y="-35"
+       class="text_comment"
+       id="text188">Checkpoint</text>
+    <text
+       x="60"
+       y="-20"
+       class="text_comment"
+       id="text190">Record</text>
+  </g>
+  <!-- BG writer -->
+  <g
+     transform="translate(610, 380)"
+     id="g198">
+    <rect
+       width="180"
+       height="30"
+       stroke="blue"
+       fill="none"
+       id="rect194" />
+    <text
+       x="10"
+       y="20"
+       class="text_normal"
+       id="text196">Background Writer</text>
+  </g>
+  <path
+     d="M 770,110 v 260"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path200" />
+  <path
+     d="M 605,395 h -120 v 90"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path202" />
+  <!-- Archiver -->
+  <g
+     transform="translate(610, 420)"
+     id="g208">
+    <rect
+       width="180"
+       height="30"
+       stroke="blue"
+       fill="none"
+       id="rect204" />
+    <text
+       x="10"
+       y="20"
+       class="text_normal"
+       id="text206">WAL Archiver</text>
+  </g>
+  <path
+     d="M 620,485 l 30,-30"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path210" />
+  <path
+     d="M 690,455 l 30, 30"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path212" />
+  <!-- Vacuum -->
+  <g
+     transform="translate(135, 380)"
+     id="g222">
+    <rect
+       width="120"
+       height="30"
+       stroke="blue"
+       fill="none"
+       id="rect214" />
+    <text
+       x="10"
+       y="20"
+       class="text_normal"
+       id="text216">Autovacuum</text>
+    <path
+       d="M 5,0 v -5 h 120 v 30 h -5"
+       stroke="blue"
+       fill="none"
+       id="path218" />
+    <path
+       d="M 10,-5 v -5 h 120 v 30 h -5"
+       stroke="blue"
+       fill="none"
+       id="path220" />
+  </g>
+  <!-- Log Writer -->
+  <g
+     transform="translate(135, 430)"
+     id="g228">
+    <rect
+       width="120"
+       height="30"
+       stroke="blue"
+       fill="none"
+       id="rect224" />
+    <text
+       x="10"
+       y="20"
+       class="text_normal"
+       id="text226">Logger</text>
+  </g>
+  <!-- Stats Collector -->
+  <g
+     transform="translate(290, 370)"
+     id="g234">
+    <rect
+       width="140"
+       height="30"
+       stroke="blue"
+       fill="none"
+       id="rect230" />
+    <text
+       x="10"
+       y="20"
+       class="text_normal"
+       id="text232">Stats Collector</text>
+  </g>
+  <!--       -->
+  <!-- files -->
+  <!--       -->
+  <g
+     transform="translate(145, 490)"
+     id="g244">
+    <use
+       xlink:href="#disc"
+       id="use236" />
+    <text
+       x="35"
+       y="45"
+       class="text_normal"
+       id="text238">Log</text>
+    <text
+       x="20"
+       y="60"
+       class="text_small"
+       id="text240">text lines,</text>
+    <text
+       x="20"
+       y="75"
+       class="text_small"
+       id="text242">sequential</text>
+  </g>
+  <path
+     d="M 195,465 v 20"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path246" />
+  <g
+     transform="translate(410, 490)"
+     id="g258">
+    <use
+       xlink:href="#disc"
+       id="use248" />
+    <text
+       x="10"
+       y="40"
+       class="text_normal"
+       id="text250">Heap and</text>
+    <text
+       x="25"
+       y="55"
+       class="text_normal"
+       id="text252">Index</text>
+    <text
+       x="15"
+       y="70"
+       class="text_small"
+       id="text254">binary blocks,</text>
+    <text
+       x="30"
+       y="80"
+       class="text_small"
+       id="text256">random</text>
+  </g>
+  <path
+     d="M 450,485 v -135"
+     stroke="black"
+     fill="none"
+     marker-end="url(#arrowhead_end)"
+     id="path260" />
+  <g
+     transform="translate(295, 420)"
+     id="g270">
+    <use
+       xlink:href="#note_170x50"
+       id="use262" />
+    <text
+       x="5"
+       y="15"
+       class="text_comment"
+       id="text264">Read heap and index</text>
+    <text
+       x="5"
+       y="30"
+       class="text_comment"
+       id="text266">pages and transfer</text>
+    <text
+       x="5"
+       y="45"
+       class="text_comment"
+       id="text268">them to shared_buffers</text>
+  </g>
+  <g
+     transform="translate(550, 490)"
+     id="g280">
+    <use
+       xlink:href="#disc"
+       id="use272" />
+    <text
+       x="30"
+       y="45"
+       class="text_normal"
+       id="text274">WAL</text>
+    <text
+       x="10"
+       y="60"
+       class="text_small"
+       id="text276">binary records,</text>
+    <text
+       x="20"
+       y="75"
+       class="text_small"
+       id="text278">sequential</text>
+  </g>
+  <g
+     transform="translate(690, 490)"
+     id="g288">
+    <use
+       xlink:href="#disc"
+       id="use282" />
+    <text
+       x="16"
+       y="45"
+       class="text_normal"
+       id="text284">Archived</text>
+    <text
+       x="36"
+       y="60"
+       class="text_normal"
+       id="text286">WAL</text>
+  </g>
+  <!-- boarder between client and server side -->
+  <path
+     d="M 110,20 v 550"
+     stroke="black"
+     fill="none"
+     id="path290" />
+  <g
+     transform="translate(123, 190) rotate(90)"
+     id="g296">
+    <use
+       xlink:href="#note_200x20"
+       id="use292" />
+    <text
+       class="text_comment"
+       x="10"
+       y="15"
+       id="text294">Via TCP/IP or socket</text>
+  </g>
+  <!-- right side -->
+  <g
+     transform="translate(850, 0) rotate(90)"
+     id="g304">
+    <text
+       class="text_big"
+       x="95"
+       id="text298">RAM</text>
+    <text
+       class="text_big"
+       x="250"
+       id="text300">PROCESSES</text>
+    <text
+       class="text_big"
+       x="500"
+       id="text302">FILES</text>
+  </g>
+</svg>

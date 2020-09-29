@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="850" height="150" viewBox="0 0 850 150">
+  <title>
+    MVCC
+  </title>
+  <style>
+    .text_small{font-style:normal;font-weight:400;font-size:10px;font-family:&quot;Open Sans&quot;,sans-serif;fill:#000}
+  </style>
+  <defs>
+    <marker id="triangle_1" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto" stroke="black" fill="none">
+      <path d="M0 0l10 5-10 5"/>
+    </marker>
+    <path id="arrow" d="M0 0q20-15 40 0" stroke="black" marker-end="url(#triangle_1)"/>
+    <g id="tuple" stroke="black">
+      <path d="M80 0H0v20h80M29 0v20M60 0v20"/>
+      <path d="M80 0h15M80 20h15" stroke-dasharray="2 1"/>
+    </g>
+  </defs>
+  <rect x="1" y="1" rx="5" width="99%" height="99%" stroke="black" fill="none"/>
+  <g fill="none">
+    <g transform="translate(20 40)">
+      <text class="text_small" transform="translate(0 -18)">
+        T <tspan dx="-3" dy="5" font-size="8">123</tspan> <tspan dx="-2" dy="-5">: INSERT</tspan>
+      </text>
+      <use xlink:href="#arrow" transform="translate(5)"/>
+      <use xlink:href="#tuple" transform="translate(60 70)"/>
+      <text class="text_small" transform="translate(65 83)" fill="#00f">
+        123
+      </text>
+      <text class="text_small" transform="translate(95 83)" fill="#00f">
+        0
+      </text>
+      <text class="text_small" transform="translate(125 83)" fill="#00f">
+        &apos;x&apos;
+      </text>
+    </g>
+    <g transform="translate(185 40)">
+      <text class="text_small" transform="translate(0 -18)">
+        T <tspan dx="-3" dy="5" font-size="8">135</tspan> <tspan dx="-2" dy="-5">: UPDATE</tspan>
+      </text>
+      <use xlink:href="#arrow" transform="translate(5)"/>
+      <use xlink:href="#tuple" transform="translate(60 40)"/>
+      <text class="text_small" transform="translate(65 53)" fill="#00f">
+        135
+      </text>
+      <text class="text_small" transform="translate(95 53)" fill="#00f">
+        0
+      </text>
+      <text class="text_small" transform="translate(125 53)" fill="#00f">
+        &apos;y&apos;
+      </text>
+      <use xlink:href="#tuple" transform="translate(60 70)"/>
+      <text class="text_small" transform="translate(65 83)">
+        123
+      </text>
+      <text class="text_small" transform="translate(95 83)" fill="#00f">
+        135
+      </text>
+      <text class="text_small" transform="translate(125 83)">
+        &apos;x&apos;
+      </text>
+    </g>
+    <g transform="translate(350 40)">
+      <text class="text_small" transform="translate(0 -18)">
+        T <tspan dx="-3" dy="5" font-size="8">142</tspan> <tspan dx="-2" dy="-5">: UPDATE</tspan>
+      </text>
+      <use xlink:href="#arrow" transform="translate(5)"/>
+      <use xlink:href="#tuple" transform="translate(60 10)"/>
+      <text class="text_small" transform="translate(65 23)" fill="#00f">
+        142
+      </text>
+      <text class="text_small" transform="translate(95 23)" fill="#00f">
+        0
+      </text>
+      <text class="text_small" transform="translate(125 23)" fill="#00f">
+        &apos;z&apos;
+      </text>
+      <use xlink:href="#tuple" transform="translate(60 40)"/>
+      <text class="text_small" transform="translate(65 53)">
+        135
+      </text>
+      <text class="text_small" transform="translate(95 53)" fill="#00f">
+        142
+      </text>
+      <text class="text_small" transform="translate(125 53)">
+        &apos;y&apos;
+      </text>
+      <use xlink:href="#tuple" transform="translate(60 70)"/>
+      <text class="text_small" transform="translate(65 83)">
+        123
+      </text>
+      <text class="text_small" transform="translate(95 83)">
+        135
+      </text>
+      <text class="text_small" transform="translate(125 83)">
+        &apos;x&apos;
+      </text>
+    </g>
+    <g transform="translate(515 40)">
+      <text class="text_small" transform="translate(0 -18)">
+        T <tspan dx="-3" dy="5" font-size="8">821</tspan> <tspan dx="-2" dy="-5">: DELTE</tspan>
+      </text>
+      <use xlink:href="#arrow" transform="translate(5)"/>
+      <use xlink:href="#tuple" transform="translate(60 10)"/>
+      <text class="text_small" transform="translate(65 23)">
+        142
+      </text>
+      <text class="text_small" transform="translate(95 23)" fill="#00f">
+        821
+      </text>
+      <text class="text_small" transform="translate(125 23)">
+        &apos;z&apos;
+      </text>
+      <use xlink:href="#tuple" transform="translate(60 40)"/>
+      <text class="text_small" transform="translate(65 53)">
+        135
+      </text>
+      <text class="text_small" transform="translate(95 53)">
+        142
+      </text>
+      <text class="text_small" transform="translate(125 53)">
+        &apos;y&apos;
+      </text>
+      <use xlink:href="#tuple" transform="translate(60 70)"/>
+      <text class="text_small" transform="translate(65 83)">
+        123
+      </text>
+      <text class="text_small" transform="translate(95 83)">
+        135
+      </text>
+      <text class="text_small" transform="translate(125 83)">
+        &apos;x&apos;
+      </text>
+    </g>
+    <g transform="translate(740 110)">
+      <path d="M102-20H-18v60" stroke="black"/>
+      <text font-weight="400" font-size="16" font-family="&quot;Open Sans&quot;,sans-serif" fill="#000">
+        Legend
+      </text>
+      <use xlink:href="#tuple" transform="translate(0 10)"/>
+      <text class="text_small" transform="translate(3 23)">
+        xmin
+      </text>
+      <text class="text_small" transform="translate(32 23)">
+        xmax
+      </text>
+      <text class="text_small" transform="translate(65 23)">
+        data
+      </text>
+    </g>
+  </g>
+</svg>

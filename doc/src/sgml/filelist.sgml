@@ -8,9 +8,10 @@
 <!ENTITY problems   SYSTEM "problems.sgml">
 
 <!-- tutorial -->
-<!ENTITY advanced   SYSTEM "advanced.sgml">
-<!ENTITY query      SYSTEM "query.sgml">
-<!ENTITY start      SYSTEM "start.sgml">
+<!ENTITY start         SYSTEM "start.sgml">
+<!ENTITY query         SYSTEM "query.sgml">
+<!ENTITY advanced      SYSTEM "advanced.sgml">
+<!ENTITY architecture  SYSTEM "architecture.sgml">
 
 <!-- user's guide -->
 <!ENTITY array      SYSTEM "array.sgml">

@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="900" height="640" viewBox="0 0 900 640">
+  <title>
+    Directory structure of a cluster
+  </title>
+  <style>
+    .text_normal{font-style:normal;font-weight:400;font-size:16px;font-family:&quot;Open Sans&quot;,sans-serif;fill:#000}
+  </style>
+  <defs>
+    <symbol id="directory" stroke="blue" stroke-width=".3" fill="aqua">
+      <title>
+        Directory
+      </title>
+      <path d="M0 10h110v20H0z"/>
+      <path d="M0 10V8l3-3h35l3 3v2"/>
+    </symbol>
+    <symbol id="file" stroke="black" fill="none">
+      <title>
+        File
+      </title>
+      <path stroke="blue" d="M0 0h40v50H0z"/>
+      <path d="M5 10h20" stroke-dasharray="4 2"/>
+      <path d="M5 17h15" stroke-dasharray="6 2"/>
+      <path d="M5 24h25" stroke-dasharray="4 2"/>
+      <path d="M5 31h20" stroke-dasharray="5 2"/>
+    </symbol>
+  </defs>
+  <rect x="1" y="1" rx="5" width="99%" height="99%" stroke="black" fill="none"/>
+  <text x="200" y="50" font-weight="400" font-size="24" font-family="&quot;Open Sans&quot;,sans-serif">
+    Directory Structure
+  </text>
+  <g transform="translate(20 100)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      ... /pg/
+    </text>
+    <text x="300" y="26" class="text_normal">
+      An arbitrary directory
+    </text>
+  </g>
+  <g transform="translate(70 130)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      data/
+    </text>
+    <text x="250" y="26" class="text_normal">
+      Root of cluster &apos;data&apos; (see: PGDATA)
+    </text>
+  </g>
+  <g transform="translate(120 160)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      base/
+    </text>
+    <text x="200" y="26" class="text_normal">
+      Subdirectory containing per-database subdirectories
+    </text>
+  </g>
+  <g transform="translate(170 190)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      1/
+    </text>
+    <text x="150" y="26" class="text_normal">
+      Subdirectory for data of first database &apos;template0&apos;
+    </text>
+  </g>
+  <g transform="translate(170 220)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      12992/
+    </text>
+    <text x="150" y="26" class="text_normal">
+      Subdirectory for data of second database &apos;template1&apos;
+    </text>
+  </g>
+  <g transform="translate(170 250)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      12999/
+    </text>
+    <text x="150" y="26" class="text_normal">
+      Subdirectory for data of third database &apos;postgres&apos;
+    </text>
+  </g>
+  <g transform="translate(170 280)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      nnnnn/
+    </text>
+    <text x="150" y="26" class="text_normal">
+      Optional: more subdirectories for databases, e.g. &apos;my_db&apos;
+    </text>
+  </g>
+  <g transform="translate(120 310)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      global/
+    </text>
+    <text x="200" y="26" class="text_normal">
+      Subdirectory with information about Global SQL Objects
+    </text>
+  </g>
+  <g transform="translate(120 340)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      pg_wal/
+    </text>
+    <text x="200" y="26" class="text_normal">
+      Subdirectory for Write Ahead Log files (&apos;pg_xlog&apos; before version 10)
+    </text>
+  </g>
+  <g transform="translate(120 370)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      pg_xact/
+    </text>
+    <text x="200" y="26" class="text_normal">
+      Subdirectory for transaction commit status (&apos;pg_clog&apos; before version 10)
+    </text>
+  </g>
+  <g transform="translate(120 400)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      pg_tblspc/
+    </text>
+    <text x="200" y="26" class="text_normal">
+      Subdirectory containing symbolic links to tablespaces
+    </text>
+  </g>
+  <g transform="translate(120 430)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      pg_... /
+    </text>
+    <text x="200" y="26" class="text_normal">
+      Some more subdirectories
+    </text>
+  </g>
+  <g transform="translate(120 465)">
+    <use xlink:href="#file"/>
+    <use xlink:href="#file" x="50"/>
+    <text x="200" y="26" class="text_normal">
+      &apos;postmaster.pid&apos; and other files with cluster-wide relevance
+    </text>
+  </g>
+  <g transform="translate(20 540)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      ... /xyz/
+    </text>
+    <text x="300" y="26" class="text_normal">
+      Same or another arbitrary directory
+    </text>
+  </g>
+  <g transform="translate(70 570)">
+    <use xlink:href="#directory"/>
+    <text x="10" y="26" class="text_normal">
+      cluster_2/
+    </text>
+    <text x="250" y="26" class="text_normal">
+      Root of another cluster &apos;cluster_2&apos;
+    </text>
+  </g>
+</svg>

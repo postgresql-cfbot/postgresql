@@ -53,7 +53,7 @@
 
 
   <sect1 id="tutorial-arch">
-   <title>Architectural Fundamentals</title>
+   <title>Client/Server Model</title>
 
    <para>
     Before we proceed, you should understand the basic
@@ -68,34 +68,55 @@
     client/server model.  A <productname>PostgreSQL</productname>
     session consists of the following cooperating processes
     (programs):
-
-    <itemizedlist>
-     <listitem>
-      <para>
-       A server process, which manages the database files, accepts
-       connections to the database from client applications, and
-       performs database actions on behalf of the clients.  The
-       database server program is called
-       <filename>postgres</filename>.
-       <indexterm><primary>postgres</primary></indexterm>
-      </para>
-     </listitem>
-
-     <listitem>
-      <para>
-       The user's client (frontend) application that wants to perform
-       database operations.  Client applications can be very diverse
-       in nature:  a client could be a text-oriented tool, a graphical
-       application, a web server that accesses the database to
-       display web pages, or a specialized database maintenance tool.
-       Some client applications are supplied with the
-       <productname>PostgreSQL</productname> distribution; most are
-       developed by users.
-      </para>
-     </listitem>
-
-    </itemizedlist>
    </para>
+
+   <itemizedlist>
+    <listitem>
+     <para>
+      A process at the server site with the name
+      <glossterm linkend="glossary-postmaster">Postmaster</glossterm>.
+      <indexterm><primary>postgres</primary></indexterm>
+      It accepts connection requests from client applications, starts
+      (<quote>forks</quote>) a new <glossterm linkend="glossary-backend">
+      Backend process</glossterm> for each of them, and passes
+      the connection to it. From that point on, the client and the new
+      <firstterm>Backend process</firstterm>
+      communicate directly without intervention by the original
+      <firstterm>postgres</firstterm> process. Thus, the
+      <firstterm>postgres</firstterm> process is always running, waiting
+      for new client connections, whereas clients and associated
+      <firstterm>Backend processes</firstterm> come and go.
+      (All of this is of course invisible to the user. We only mention it
+      here for completeness.)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      A group of processes at the server site, the <glossterm
+      linkend="glossary-instance">instance</glossterm>, to which also the
+      <firstterm>postgres</firstterm> process belongs. Their duties are
+      handling of central, common database activities like file access,
+      vacuum, <glossterm linkend="glossary-checkpoint">checkpoints</glossterm>,
+      replication, and more. The mentioned <firstterm>Backend processes</firstterm>
+      delegate those actions to the <firstterm>instance</firstterm>.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      The user's client (frontend) application that wants to perform
+      database operations.  Client applications can be very diverse
+      in nature:  a client could be a text-oriented tool, a graphical
+      application, a web server that accesses the database to
+      display web pages, or a specialized database maintenance tool.
+      Some client applications are supplied with the
+      <productname>PostgreSQL</productname> distribution; most are
+      developed by users.
+     </para>
+    </listitem>
+
+   </itemizedlist>
 
    <para>
     As is typical of client/server applications, the client and the

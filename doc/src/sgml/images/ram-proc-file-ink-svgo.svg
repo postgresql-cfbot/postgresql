@@ -1,0 +1,285 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="900" height="600" viewBox="0 0 900 600">
+  <title>
+    PG Overall Server Architecture
+  </title>
+  <style>
+    .text_big{font-style:normal}.text_big,.text_comment,.text_normal,.text_small{font-weight:400;font-family:&quot;Open Sans&quot;,sans-serif;fill:#000}.text_normal,.text_small{font-style:normal}.text_small{font-size:12px}.text_normal{font-size:16px}.text_big{font-size:24px}.text_comment{font-style:italic;font-size:16px}
+  </style>
+  <defs>
+    <symbol id="note_200x20" stroke="black" fill="lightyellow">
+      <title>
+        UML Note (200 x 20 px)
+      </title>
+      <path d="M200 10v10H0V0h190v10h10L190 0"/>
+    </symbol>
+    <symbol id="note_250x20" stroke="black" fill="lightyellow">
+      <title>
+        UML Note (250 x 20 px)
+      </title>
+      <path d="M250 10v10H0V0h240v10h10L240 0"/>
+    </symbol>
+    <symbol id="note_100x35" stroke="black" fill="lightyellow">
+      <title>
+        UML Note (100 x 35 px)
+      </title>
+      <path d="M100 10v25H0V0h90v10h10L90 0"/>
+    </symbol>
+    <symbol id="note_170x50" stroke="black" fill="lightyellow">
+      <title>
+        UML Note (170 x 50 px)
+      </title>
+      <path d="M170 10v40H0V0h160v10h10L160 0"/>
+    </symbol>
+    <symbol id="state_300x120">
+      <title>
+        UML State (300x120)
+      </title>
+      <rect width="300" height="120" rx="10" stroke="blue" fill="none"/>
+    </symbol>
+    <symbol id="state_350x120">
+      <title>
+        UML State (350x120)
+      </title>
+      <rect width="350" height="120" rx="10" stroke="blue" fill="none"/>
+    </symbol>
+    <symbol id="disc" stroke="blue" fill="none">
+      <title>
+        Disc
+      </title>
+      <ellipse cx="51" cy="13" rx="50" ry="12"/>
+      <path d="M1 13v60"/>
+      <path d="M101 13v60"/>
+      <path d="M1 73a50 12 0 00100 0"/>
+    </symbol>
+    <symbol id="laptop" stroke="black" fill="none">
+      <title>
+        Laptop
+      </title>
+      <path d="M20 40V0h54v40l15 15H5l15-15h54"/>
+      <path d="M23 3h48v34H23z"/>
+      <path d="M30 10h20"/>
+      <path d="M30 15h25"/>
+      <path d="M30 20h10"/>
+      <path d="M30 30h20"/>
+      <path d="M25 50h45l2 2H22z"/>
+    </symbol>
+    <marker id="arrowhead_start" markerWidth="10" markerHeight="10" refX="0" refY="3" orient="auto">
+      <path d="M6 0L0 3l6 3" stroke="black" fill="none"/>
+    </marker>
+    <marker id="arrowhead_end" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto">
+      <path d="M0 0l6 3-6 3" stroke="black" fill="none"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" rx="5" width="99%" height="99%" stroke="black" fill="none"/>
+  <text x="15" y="40" class="text_big">
+    Client
+  </text>
+  <text x="140" y="40" class="text_big">
+    Server
+  </text>
+  <use xlink:href="#laptop" x="5" y="210"/>
+  <g transform="translate(130 70)">
+    <use xlink:href="#state_350x120"/>
+    <text x="5" y="20" class="text_normal">
+      maintenance_work_mem (per connection)
+    </text>
+    <text x="5" y="45" class="text_normal">
+      work_mem (per query operation)
+    </text>
+    <text x="5" y="70" class="text_normal">
+      autovacuum_work_mem (per worker process)
+    </text>
+    <text x="5" y="95" class="text_normal">
+      temp_buffer (per connection)
+    </text>
+    <text x="5" y="110" class="text_normal">
+      ...
+    </text>
+    <use xlink:href="#note_200x20" x="140" y="-15"/>
+    <text x="150" class="text_comment">
+      Individual Memory
+    </text>
+  </g>
+  <g transform="translate(520 70)">
+    <use xlink:href="#state_300x120"/>
+    <text x="10" y="30" class="text_normal">
+      shared_buffers (heap and index)
+    </text>
+    <text x="10" y="70" class="text_normal">
+      wal_buffers (WAL records)
+    </text>
+    <text x="10" y="100" class="text_normal">
+      ...
+    </text>
+    <use xlink:href="#note_250x20" x="40" y="-15"/>
+    <text x="50" class="text_comment">
+      Shared Memory (per Instance)
+    </text>
+  </g>
+  <path stroke="blue" fill="none" d="M180 215h250v30H180z"/>
+  <text x="10" y="20" class="text_normal" transform="translate(180 215)">
+    Postmaster
+  </text>
+  <path d="M90 230h75" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <g transform="translate(140 230)">
+    <circle r="8" stroke="black" fill="lightyellow"/>
+    <text x="-4" y="4" class="text_small">
+      1
+    </text>
+  </g>
+  <path stroke="blue" fill="none" d="M150 315h370v30H150z"/>
+  <text x="10" y="20" class="text_normal" transform="translate(150 315)">
+    Backend processes (one per connection)
+  </text>
+  <path d="M155 315v-5h370v30h-5" stroke="blue" fill="none"/>
+  <path d="M160 310v-5h370v30h-5" stroke="blue" fill="none"/>
+  <path d="M90 240l63 63" stroke="black" fill="none" marker-start="url(#arrowhead_start)" marker-end="url(#arrowhead_end)"/>
+  <g transform="translate(140 290)">
+    <circle r="8" stroke="black" fill="lightyellow"/>
+    <text x="-4" y="4" class="text_small">
+      3
+    </text>
+  </g>
+  <path d="M360 250v50" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <g transform="translate(180 255)">
+    <use xlink:href="#note_250x20"/>
+    <text x="10" y="15" class="text_comment">
+      Creates backend processes
+    </text>
+  </g>
+  <g transform="translate(360 281)">
+    <circle r="8" stroke="black" fill="lightyellow"/>
+    <text x="-4" y="4" class="text_small">
+      2
+    </text>
+  </g>
+  <path d="M460 300V200" stroke="black" fill="none" marker-start="url(#arrowhead_start)" marker-end="url(#arrowhead_end)"/>
+  <path d="M498 300V95h30" stroke="black" fill="none" marker-start="url(#arrowhead_start)" marker-end="url(#arrowhead_end)"/>
+  <path d="M508 300V135h20" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <path stroke="blue" fill="none" d="M550 220h120v30H550z"/>
+  <text x="10" y="20" class="text_normal" transform="translate(550 220)">
+    WAL Writer
+  </text>
+  <path d="M590 150v65" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <path d="M590 255v230" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <path stroke="blue" fill="none" d="M610 340h140v30H610z"/>
+  <text x="10" y="20" class="text_normal" transform="translate(610 340)">
+    Checkpointer
+  </text>
+  <path d="M740 110v220" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <path d="M605 355H475v130" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <path d="M700 330V150" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <g transform="translate(570 330)">
+    <use xlink:href="#note_100x35" x="50" y="-50"/>
+    <text x="60" y="-35" class="text_comment">
+      Checkpoint
+    </text>
+    <text x="60" y="-20" class="text_comment">
+      Record
+    </text>
+  </g>
+  <path stroke="blue" fill="none" d="M610 380h180v30H610z"/>
+  <text x="10" y="20" class="text_normal" transform="translate(610 380)">
+    Background Writer
+  </text>
+  <path d="M770 110v260" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <path d="M605 395H485v90" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <path stroke="blue" fill="none" d="M610 420h180v30H610z"/>
+  <text x="10" y="20" class="text_normal" transform="translate(610 420)">
+    WAL Archiver
+  </text>
+  <path d="M620 485l30-30" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <path d="M690 455l30 30" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <path stroke="blue" fill="none" d="M135 380h120v30H135z"/>
+  <text x="10" y="20" class="text_normal" transform="translate(135 380)">
+    Autovacuum
+  </text>
+  <path d="M140 380v-5h120v30h-5" stroke="blue" fill="none"/>
+  <path d="M145 375v-5h120v30h-5" stroke="blue" fill="none"/>
+  <path stroke="blue" fill="none" d="M135 430h120v30H135z"/>
+  <text x="10" y="20" class="text_normal" transform="translate(135 430)">
+    Logger
+  </text>
+  <path stroke="blue" fill="none" d="M290 370h140v30H290z"/>
+  <text x="10" y="20" class="text_normal" transform="translate(290 370)">
+    Stats Collector
+  </text>
+  <g transform="translate(145 490)">
+    <use xlink:href="#disc"/>
+    <text x="35" y="45" class="text_normal">
+      Log
+    </text>
+    <text x="20" y="60" class="text_small">
+      text lines,
+    </text>
+    <text x="20" y="75" class="text_small">
+      sequential
+    </text>
+  </g>
+  <path d="M195 465v20" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <g transform="translate(410 490)">
+    <use xlink:href="#disc"/>
+    <text x="10" y="40" class="text_normal">
+      Heap and
+    </text>
+    <text x="25" y="55" class="text_normal">
+      Index
+    </text>
+    <text x="15" y="70" class="text_small">
+      binary blocks,
+    </text>
+    <text x="30" y="80" class="text_small">
+      random
+    </text>
+  </g>
+  <path d="M450 485V350" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  <g transform="translate(295 420)">
+    <use xlink:href="#note_170x50"/>
+    <text x="5" y="15" class="text_comment">
+      Read heap and index
+    </text>
+    <text x="5" y="30" class="text_comment">
+      pages and transfer
+    </text>
+    <text x="5" y="45" class="text_comment">
+      them to shared_buffers
+    </text>
+  </g>
+  <g transform="translate(550 490)">
+    <use xlink:href="#disc"/>
+    <text x="30" y="45" class="text_normal">
+      WAL
+    </text>
+    <text x="10" y="60" class="text_small">
+      binary records,
+    </text>
+    <text x="20" y="75" class="text_small">
+      sequential
+    </text>
+  </g>
+  <g transform="translate(690 490)">
+    <use xlink:href="#disc"/>
+    <text x="16" y="45" class="text_normal">
+      Archived
+    </text>
+    <text x="36" y="60" class="text_normal">
+      WAL
+    </text>
+  </g>
+  <path d="M110 20v550" stroke="black" fill="none"/>
+  <g transform="rotate(90 -33.5 156.5)">
+    <use xlink:href="#note_200x20"/>
+    <text class="text_comment" x="10" y="15">
+      Via TCP/IP or socket
+    </text>
+  </g>
+  <text class="text_big" x="95" transform="rotate(90 425 425)">
+    RAM
+  </text>
+  <text class="text_big" x="250" transform="rotate(90 425 425)">
+    PROCESSES
+  </text>
+  <text class="text_big" x="500" transform="rotate(90 425 425)">
+    FILES
+  </text>
+</svg>

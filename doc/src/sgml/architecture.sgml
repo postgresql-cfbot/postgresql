@@ -1,0 +1,1563 @@
+<!-- doc/src/sgml/architecture.sgml -->
+
+ <chapter id="tutorial-architecture">
+  <title>Architectural and implementational Cornerstones</title>
+
+  <para>
+   Every DBMS implements basic strategies for a fast and
+   robust system. This chapter provides an overview of what
+   techniques <productname>PostgreSQL</productname> uses to
+   achieve this.
+  </para>
+
+  <sect1 id="tutorial-ram-proc-file">
+   <title>Collaboration of Processes, RAM, and Files</title>
+   <para>
+    In a client/server architecture
+    clients do not have direct access to the database. Instead,
+    they send requests to the server and receive
+    the requested information. In the case of
+    <productname>PostgreSQL</productname>, at the server-side
+    there is one process per client, the so-called
+    <glossterm linkend="glossary-backend">Backend process</glossterm>.
+    It acts in close cooperation with the
+    <glossterm linkend="glossary-instance">instance</glossterm> which
+    is a group of tightly coupled server-side processes plus a
+    <glossterm linkend="glossary-shared-memory">Shared Memory</glossterm>
+    area.
+   </para>
+
+   <para>
+    At startup time, an <firstterm>instance</firstterm> is initiated by the
+    <glossterm linkend="glossary-postmaster">Postmaster</glossterm>.
+    The <firstterm>Postmaster</firstterm> process loads the
+    configuration files, allocates
+    <firstterm>Shared Memory</firstterm>,
+    and starts a network of processes:
+    <glossterm linkend="glossary-background-writer">Background Writer</glossterm>,
+    <glossterm linkend="glossary-checkpointer">Checkpointer</glossterm>,
+    <glossterm linkend="glossary-wal-writer">WAL Writer</glossterm>,
+    <glossterm linkend="glossary-wal-archiver">WAL Archiver</glossterm>,
+    <glossterm linkend="glossary-autovacuum">Autovacuum</glossterm>,
+    <glossterm linkend="glossary-stats-collector">Statistics Collector</glossterm>,
+    <glossterm linkend="glossary-logger">Logger</glossterm>, and more.
+    <xref linkend="tutorial-ram-proc-file-figure"/> visualizes
+    the main aspects of their collaboration.
+   </para>
+
+   <figure id="tutorial-ram-proc-file-figure">
+    <title>Architecture</title>
+    <mediaobject>
+     <imageobject role="html">
+      <!-- attribute 'width=..px' is necessary to keep font-size of SVG text
+           in correlation with font-size of surrounding HTML  -->
+      <imagedata fileref="images/ram-proc-file-raw.svg" format="SVG" width="900px" />
+     </imageobject>
+     <imageobject role="fo">
+      <!-- For PDF attribute 'width=100%' is necessary to keep complete SVG visible
+           on the page, which has a fixed width. Font sizes will be adopted.  -->
+      <imagedata fileref="images/ram-proc-file-raw.svg" format="SVG" width="100%" />
+     </imageobject>
+    </mediaobject>
+   </figure>
+
+   <para>
+    Whenever a client application tries to connect to a
+    <glossterm linkend="glossary-database">database</glossterm>,
+    this request is handled in a first step by the
+    <firstterm>Postmaster</firstterm> process. It checks authorization,
+    starts a new <firstterm>Backend process</firstterm>,
+    and instructs the client application to connect to it. All
+    further client requests go to this process and are handled
+    by it.
+   </para>
+
+   <para>
+    Client requests like <command>SELECT</command> or
+    <command>UPDATE</command> usually lead to the
+    necessity to read or write some data. In a first attempt
+    the client's <firstterm>Backend process</firstterm> tries
+    to get the information out of <firstterm>Shared
+    Memory</firstterm>. This <firstterm>Shared
+    Memory</firstterm> is a mirror of parts of the
+    <glossterm linkend="glossary-heap">heap</glossterm> and
+    <glossterm linkend="glossary-index">index</glossterm> files.
+    Because files are often larger than memory, it's likely that
+    the desired information is not (completely) available
+    in RAM. In this case the <firstterm>Backend process</firstterm>
+    must transfer additional file pages to
+    <firstterm>Shared Memory</firstterm>. Files are physically
+    organized in pages. Every transfer between files and
+    RAM is performed in units of complete pages; such transfers
+    do not change the size or layout of pages.
+   </para>
+
+   <para>
+    Reading file pages is much slower than reading
+    RAM. This is the primary motivation for the usage of
+    <firstterm>Shared Memory</firstterm>. As soon as one
+    of the <firstterm>Backend processes</firstterm> has
+    read pages into memory, those pages become available for all
+    other <firstterm>Backend processes</firstterm> for direct
+    access in RAM.
+   </para>
+
+   <para>
+    <firstterm>Shared Memory</firstterm> is limited in size.
+    Sooner or later, it becomes necessary to overwrite old RAM
+    pages. As long as the content of such pages hasn't
+    changed, this is not a problem. But in
+    <firstterm>Shared Memory</firstterm> also write
+    actions take place
+    &mdash; performed by any of the <firstterm>Backend
+    processes</firstterm> (or an
+    <firstterm>autovacuum</firstterm> process,
+    or other processes). Such modified pages are called
+    <firstterm>dirty pages</firstterm>.
+    Before <firstterm>dirty pages</firstterm> can be overwritten,
+    they must be written back to disk. This is a two-step process.
+   </para>
+
+   <para>
+    First, whenever the content of a page changes, a
+    <glossterm linkend="glossary-wal-record">WAL record</glossterm>
+    is created out
+    of the delta-information (difference between the old and
+    the new content) and stored in another area of
+    <firstterm>Shared Memory</firstterm>. These
+    <firstterm>WAL records</firstterm> are read by the
+    <firstterm>WAL Writer</firstterm> process,
+    which runs in parallel to the <firstterm>Backend
+    processes</firstterm> and other processes of
+    the <firstterm>Instance</firstterm>. It writes
+    the continuously arising <firstterm>WAL records</firstterm> to
+    the end of the current
+    <glossterm linkend="glossary-wal-record">WAL file</glossterm>.
+    Because this writing is sequential, it is much
+    faster than the more or less random access
+    to data files with <firstterm>heap</firstterm>
+    and <firstterm>index</firstterm> information.
+    As mentioned, this WAL-writing happens
+    in an independent process. All
+    <firstterm>WAL records</firstterm> created out of one
+    <firstterm>dirty page</firstterm> must be transferred
+    to disk before the <firstterm>dirty page</firstterm>
+    itself can be transferred to disk.
+   </para>
+
+   <para>
+    Second, the transfer of <firstterm>dirty buffers</firstterm>
+    from <firstterm>Shared Memory</firstterm> to file must
+    take place. This is the primary task of the
+    <firstterm>Background Writer</firstterm> process. Because
+    I/O activities can block other processes significantly,
+    it starts periodically and acts only for a short period.
+    Doing so, its expensive I/O activities are spread over
+    time, avoiding debilitating I/O peaks. Also, the <firstterm>
+    Checkpointer</firstterm> process transfers
+    <firstterm>dirty buffers</firstterm> to file &mdash;
+    see next paragraph.
+   </para>
+
+   <para>
+    The <firstterm>Checkpointer</firstterm> creates
+    <glossterm linkend="glossary-checkpoint">Checkpoints</glossterm>.
+    A <firstterm>Checkpoint</firstterm>
+    is a point in time when all older <firstterm>dirty buffers</firstterm>,
+    all older <firstterm>WAL records</firstterm>, and
+    finally a special <firstterm>Checkpoint record</firstterm>
+    have been written and flushed to disk.
+    After a <firstterm>Checkpoint</firstterm>, we say
+    data files and <firstterm>WAL files</firstterm> are in sync.
+    In case of a recovery (after a crash of the instance)
+    it can be relied upon that the information of all
+    <firstterm>WAL records</firstterm> preceding
+    the last <firstterm>Checkpoint record</firstterm>
+    were already integrated into the data files. This
+    speeds up the recovery.
+   </para>
+
+   <para>
+    As a result of data changes,
+    <firstterm>WAL records</firstterm> arise and get written
+    to <firstterm>WAL files</firstterm>.
+    Those <firstterm>WAL files</firstterm> &mdash; in combination with
+    a previously taken <firstterm>Base Backup</firstterm> &mdash;
+    are necessary to restore a database after a crash of the
+    disk on which data files have been stored. Therefore it is
+    recommended to transfer a copy of the
+    <firstterm> WAL files</firstterm>
+    to a second, independent place. The purpose of the
+    <firstterm>WAL Archiver</firstterm> process is to perform
+    this copy action.
+   </para>
+
+   <para>
+    The <firstterm>Statistics Collector</firstterm> collects
+    counters about accesses to <firstterm>SQL objects</firstterm>
+    like tables, rows, indexes, pages, and more. It stores the
+    obtained information in system tables.
+   </para>
+
+   <para>
+    The <firstterm>Logger</firstterm> writes
+    text lines about serious and less serious events which can happen
+    during database access, e.g. wrong password, no permission,
+    long-running queries, etc.
+   </para>
+
+  </sect1>
+
+  <sect1 id="tutorial-cluster-db-schema">
+   <title>The logical Perspective: Cluster, Database, Schema</title>
+
+   <para>
+    A <glossterm linkend="glossary-server">server</glossterm> contains one or more
+    <glossterm linkend="glossary-db-cluster">database clusters</glossterm>
+    (<glossterm linkend="glossary-db-cluster">clusters</glossterm>
+    for short). Each cluster contains three or more
+    <glossterm linkend="glossary-database">databases</glossterm>.
+    Each database can contain many
+    <glossterm linkend="glossary-schema">schemas</glossterm>.
+    A schema can contain
+    <glossterm linkend="glossary-table">tables</glossterm>,
+    <glossterm linkend="glossary-view">views</glossterm>, and a lot
+    of other objects. Each table or view belongs to a single schema
+    only; they cannot belong to another schema as well. The same is
+    true for the schema/database and database/cluster relation.
+    <xref linkend="tutorial-cluster-db-schema-figure"/> visualizes
+    this hierarchy.
+   </para>
+
+   <figure id="tutorial-cluster-db-schema-figure">
+    <title>Cluster, Database, Schema</title>
+    <mediaobject>
+     <imageobject role="html">
+      <!-- attribute 'width=..px' is necessary to keep font-size of SVG text
+           in correlation with font-size of surrounding HTML  -->
+      <imagedata fileref="images/cluster-db-schema-raw.svg" format="SVG" width="900px" />
+     </imageobject>
+     <imageobject role="fo">
+      <!-- For PDF attribute 'width=100%' is necessary to keep complete SVG visible
+           on the page, which has a fixed width. Font sizes will be adopted.  -->
+      <imagedata fileref="images/cluster-db-schema-raw.svg" format="SVG" width="100%" />
+     </imageobject>
+    </mediaobject>
+   </figure>
+
+   <para>
+    A cluster is the outer container for a
+    collection of databases. Clusters are created by the command
+    <xref linkend="app-initdb"/>.
+   </para>
+
+   <para>
+    <literal>template0</literal> is the very first
+    database of any cluster. Database <literal>template0</literal>
+    is created during the initialization phase of the cluster.
+    In a second step, database <literal>template1</literal> is generated
+    as a copy of <literal>template0</literal>, and finally database
+    <literal>postgres</literal> is generated as a copy of
+    <literal>template1</literal>. Any
+    <glossterm linkend="app-createdb">new databases</glossterm>
+    of the cluster that a user might need,
+    such as <literal>my_db</literal>, will be copied from the
+    <literal>template1</literal> database. Due to the unique
+    role of <literal>template0</literal> as the pristine original
+    of all other databases, no client
+    can connect to it.
+   </para>
+
+   <para>
+    Every database must contain <glossterm linkend="glossary-schema">
+    at least one schema</glossterm> because
+    schemas contain the other
+    <glossterm linkend="glossary-sql-object">SQL Objects</glossterm>.
+    Schemas are namespaces for
+    their SQL objects and ensure &mdash; with one
+    exception &mdash; that within their scope, names are used only once across all
+    types of SQL objects. E.g., it is not possible
+    to have a table <literal>employee</literal> and a view
+    <literal>employee</literal> within the same
+    schema. But it is possible to have
+    two tables <literal>employee</literal> in different
+    schemas. In this case, the two tables
+    are separate objects and independent of each
+    other. The only exception to this cross-type uniqueness is that
+    <glossterm linkend="glossary-unique-constraint">unique constraints
+    </glossterm> and the according <firstterm>unique index</firstterm>
+    use the same name.
+   </para>
+
+   <para>
+    Some schemas are predefined. <literal>public</literal>
+    acts as the default schema and contains all
+    <firstterm>SQL objects</firstterm> which are created
+    within <literal>public</literal> or without using an explicit schema
+    name. <literal>public</literal> should not contain user-defined
+    SQL objects. Instead, it is recommended to
+    create a separate schema that
+    holds individual objects like application-specific tables or
+    views. <literal>pg_catalog</literal> is a schema for all tables
+    and views of the <glossterm linkend="glossary-system-catalog">
+    System Catalog</glossterm>.
+    <literal>information_schema</literal> is a schema for several
+    tables and views of the <firstterm>System Catalog</firstterm>
+    in a way that conforms to the SQL standard.
+   </para>
+
+   <para>
+    There are many different SQL object
+    types: <firstterm>database, schema, table, view, materialized
+    view, index, constraint, sequence, function, procedure,
+    trigger, role, data type, operator, tablespace, extension,
+    foreign data wrapper</firstterm>, and more. A few of them, the
+    <firstterm>Global SQL Objects</firstterm>,
+    are outside of the strict hierarchy:
+    All database names, all tablespace names, and all role names
+    are automatically known and available throughout the
+    cluster, independent from
+    the database or schema in which they where defined originally.
+    <xref linkend="tutorial-internal-objects-hierarchy-figure"/>
+    shows the relation between the object types.
+   </para>
+
+   <figure id="tutorial-internal-objects-hierarchy-figure">
+    <title>Hierarchy of Internal Objects</title>
+    <mediaobject>
+     <imageobject role="html">
+      <!-- attribute 'width=..px' is necessary to keep font-size of SVG text
+           in correlation with font-size of surrounding HTML  -->
+      <imagedata fileref="images/internal-objects-hierarchy-raw.svg" format="SVG" width="720px" />
+     </imageobject>
+     <imageobject role="fo">
+      <!-- For PDF attribute 'width=100%' is necessary to keep complete SVG visible
+           on the page, which has a fixed width. Font sizes will be adopted.  -->
+      <imagedata fileref="images/internal-objects-hierarchy-raw.svg" format="SVG" width="100%" />
+     </imageobject>
+    </mediaobject>
+   </figure>
+
+  </sect1>
+
+  <sect1 id="tutorial-directories">
+   <title>The physical Perspective: Directories and Files</title>
+
+   <para>
+    <productname>PostgreSQL</productname> organizes long-lasting
+    data as well as volatile state information about transactions
+    or replication actions in the file system. Every
+    <firstterm>Cluster</firstterm> has its root directory
+    somewhere in the file system. In many cases, the environment
+    variable <literal>PGDATA</literal> points to this directory.
+    The example shown in
+    <xref linkend="tutorial-directories-figure"/> uses
+    <literal>data</literal> as the name of this root directory.
+   </para>
+
+   <figure id="tutorial-directories-figure">
+    <title>Directory Structure</title>
+    <mediaobject>
+     <imageobject role="html">
+      <!-- attribute 'width=..px' is necessary to keep font-size of SVG text
+           in correlation with font-size of surrounding HTML  -->
+      <imagedata fileref="images/directories-raw.svg" format="SVG" width="900px" />
+     </imageobject>
+     <imageobject role="fo">
+      <!-- For PDF attribute 'width=100%' is necessary to keep complete SVG visible
+           on the page, which has a fixed width. Font sizes will be adopted.  -->
+      <imagedata fileref="images/directories-raw.svg" format="SVG" width="100%" />
+     </imageobject>
+    </mediaobject>
+   </figure>
+
+   <para>
+    <literal>data</literal> contains many subdirectories and
+    some files, all of which are necessary to store long-lasting
+    as well as temporary data. The following paragraphs
+    describe the files and subdirectories in
+    <literal>data</literal>.
+   </para>
+
+   <para>
+    <literal>base</literal> is a subdirectory in which one
+    subdirectory per database exists. The names of those
+    subdirectories consist of numbers. These are the internal
+    Object Identifiers (OID), which are numbers to identify
+    the database definition in the
+    <glossterm linkend="glossary-system-catalog">System Catalog</glossterm>.
+   </para>
+
+   <para>
+    Within the database-specific
+    subdirectories, there are many files: one or more for
+    every table and every index to store heap and index
+    data. Those files are accompanied by files for the
+    <link linkend="storage-fsm">Free Space Maps</link>
+    (extension <literal>_fsm</literal>) and
+    <link linkend="storage-vm">Visibility Maps</link>
+    (extension <literal>_vm</literal>), which contain optimization information.
+   </para>
+
+   <para>
+    Another subdirectory is <literal>global</literal>.
+    In analogy to the database-specific
+    subdirectories, there are files containing information about
+    <glossterm linkend="glossary-sql-object">Global SQL Objects</glossterm>.
+    One type of such Global SQL Objects are
+    <firstterm>tablespaces</firstterm>. In
+    <literal>global</literal> there is information about
+    the tablespaces, not the tablespaces themselves.
+   </para>
+
+   <para>
+    The subdirectory <literal>pg_wal</literal> contains the
+    <glossterm linkend="glossary-wal-file">WAL files</glossterm>.
+    They arise and grow parallel to data changes in the
+    cluster and remain alive as long as
+    they are required for recovery, archiving, or replication.
+   </para>
+
+   <para>
+    The subdirectory <literal>pg_xact</literal> contains
+    information about the status of each transaction:
+    in_progress, committed, aborted, or sub_committed.
+   </para>
+
+   <para>
+    In <literal>pg_tblspc</literal>, there are symbolic links
+    that point to directories containing such<firstterm>
+    SQL objects</firstterm> that are created within
+    tablespaces.
+   </para>
+
+   <para>
+    In the root directory <literal>data</literal>
+    there are also some files. In many cases, the configuration
+    files of the cluster are stored here. As long as the
+    instance is up and running, the file
+    <literal>postmaster.pid</literal> exists here
+    and contains the process ID (pid) of the
+    Postmaster which has started the instance.
+   </para>
+
+   <para>
+    For more details about the physical implementation
+    of database objects, see <xref linkend="storage"/>.
+   </para>
+
+  </sect1>
+
+  <sect1 id="tutorial-mvcc">
+   <title>MVCC &mdash; Multiversion Concurrency Control</title>
+
+   <para>
+    In most cases, <productname>PostgreSQL</productname> based applications
+    support many clients at the same time. Therefore, it is necessary to
+    protect concurrently running requests from unwanted overwriting
+    of other's data as well as from reading inconsistent data. Imagine an
+    online shop offering the last copy of an article. Two clients have the
+    article displayed at their user interface. After a while, but at the same time,
+    both users decide to put it to their shopping cart or even to buy it.
+    Both have seen the article, but only one can be allowed to get it.
+    The database must bring the two requests in a row, permit the access
+    to one of them, block the other, and inform the blocked client
+    that the data was changed by a different process.
+   </para>
+
+   <para>
+    A first approach to implement protections against concurrent
+    accesses to the same data may be the locking of critical
+    rows. Two such techniques are:
+    <emphasis>Optimistic Concurrency Control</emphasis> (OCC)
+    and <emphasis>Two Phase Locking</emphasis> (2PL).
+    <productname>PostgreSQL</productname> implements a third, more
+    sophisticated technique: <firstterm>Multiversion Concurrency
+    Control</firstterm> (MVCC). The crucial advantage of MVCC
+    over other technologies gets evident in multiuser OLTP
+    environments with a massive number of concurrent write
+    actions. There, MVCC generally performs better than solutions
+    using locks. In a <productname>PostgreSQL</productname>
+    database reading never blocks writing and writing never
+    blocks reading, even in the strictest level of transaction
+    isolation.
+   </para>
+
+   <para>
+    Instead of locking rows, the <firstterm>MVCC</firstterm> technique creates
+    a new version of the row when a data-change takes place. To
+    distinguish between these two versions and to track the timeline
+    of the row, each of the versions contains, in addition to their user-defined
+    columns, two special system columns, which are not visible
+    for the usual <command>SELECT * FROM ...</command> command.
+    The column <literal>xmin</literal> contains the transaction ID (xid)
+    of the transaction, which created this version of the row. Accordingly,
+    <literal>xmax</literal> contains the xid of the transaction, which has
+    deleted this version, or zero, if the version is not
+    deleted. You can read both with the command
+    <command>SELECT xmin, xmax, * FROM ... </command>.
+   </para>
+
+   <para>
+    When we speak about transaction IDs, you need to know that xids are like
+    sequences. Every new transaction receives the next number as its ID.
+    Therefore, this flow of xids represents the flow of transaction
+    start events over time. But keep in mind that xids are independent of
+    any time measurement &mdash; in milliseconds or whatever. If you dive
+    deeper into <productname>PostgreSQL</productname>, you will recognize
+    parameters with names such as 'xxx_age'. Despite their names,
+    these '_age' parameters do not specify a period of time but represent
+    a certain number of transactions, e.g., 100 million.
+   </para>
+
+   <para>
+    The description in this chapter simplifies by omitting detail.
+    When many transactions are running simultaneously, things can
+    get complicated. Sometimes transactions get aborted via
+    <command>ROLLBACK</command> immediately or after a lot of other activities, sometimes
+    a single row is involved in more than one transaction, sometimes
+    a client crashes, sometimes the sequence of xids restarts
+    from zero, ... . Therefore, every version of a row contains more
+    system columns and flags, not only <literal>xmin</literal>
+    and <literal>xmax</literal>.
+   </para>
+
+   <para>
+    So, what's going on in detail when write accesses take place?
+    <xref linkend="tutorial-mvcc-figure"/> shows details concerning
+    <literal>xmin</literal>, <literal>xmax</literal>, and user data.
+   </para>
+
+   <figure id="tutorial-mvcc-figure">
+    <title>Multiversion Concurrency Control</title>
+    <mediaobject>
+     <imageobject role="html">
+      <imagedata fileref="images/mvcc-raw.svg" format="SVG" width="900px" />
+     </imageobject>
+     <imageobject role="fo">
+      <!-- For PDF attribute 'width=100%' is necessary to keep complete SVG visible
+           on the page, which has a fixed width. Font sizes will be adopted.  -->
+      <imagedata fileref="images/mvcc-raw.svg" format="SVG" width="100%" />
+     </imageobject>
+    </mediaobject>
+   </figure>
+
+   <para>
+    An <command>INSERT</command> command creates the first
+    version of a row. Besides its user data <literal>'x'</literal>,
+    this version contains the ID of the creating transaction
+    <literal>123</literal> in <literal>xmin</literal> and
+    <literal>0</literal> in <literal>xmax</literal>.
+    <literal>xmin</literal> indicates that the version
+    exists since transaction <literal>123</literal> and
+    <literal>xmax</literal> that it is currently not deleted.
+   </para>
+
+   <para>
+    Somewhat later, transaction <literal>135</literal>
+    executes an <command>UPDATE</command> of this row by
+    changing the user data from <literal>'x'</literal> to
+    <literal>'y'</literal>. According to the MVCC principles,
+    the data in the old version of the row does not change!
+    The value <literal>'x'</literal> remains as it was before.
+    Only <literal>xmax</literal> changes to <literal>135</literal>.
+    Now, this version is treated as valid exclusively for
+    transactions with xids from <literal>123</literal> to
+    <literal>134</literal>. As a substitute for the non-occurring
+    data change in the old version, the <command>UPDATE</command>
+    creates a new version of the row with its xid in
+    <literal>xmin</literal>, <literal>0</literal> in
+    <literal>xmax</literal>, and <literal>'y'</literal> in the
+    user data (plus all the other user data from the old version).
+    This version is now valid for all coming transactions.
+   </para>
+
+   <para>
+    All subsequent <command>UPDATE</command> commands behave
+    in the same way as the first one: they put their xid to
+    <literal>xmax</literal> of the current version, create
+    the next version with their xid in <literal>xmin</literal>,
+    <literal>0</literal> in <literal>xmax</literal>, and the
+    new user data.
+   </para>
+
+   <para>
+    Finally, a row may be deleted by a <command>DELETE</command>
+    command. Even in this case, all versions of the row remain as
+    before. Nothing is thrown away so far! Only <literal>xmax</literal>
+    of the last version changes to the xid of the <command>DELETE</command>
+    transaction, which indicates that it is only valid for
+    transactions with xids older than its own (from
+    <literal>142</literal> to <literal>820</literal> in this
+    example).
+   </para>
+
+   <para>
+    In summary, the MVCC technology creates more and more versions
+    of the same row in the table's heap file and leaves them there,
+    even after a <command>DELETE</command> command. Only the youngest
+    version is relevant for all future transactions. But the
+    system must also preserve some of the older ones for a
+    certain amount of time because the possibility exists that
+    they are or could become relevant for any pending
+    transactions. Over time, also the older ones get out of scope
+    for ALL transactions and therefore become unnecessary.
+    Nevertheless, they do exist physically on the disk and occupy
+   space.
+   </para>
+
+   <para>
+    Please keep in mind:
+   </para>
+   <itemizedlist>
+
+    <listitem>
+     <simpara>
+      <literal>xmin</literal> and <literal>xmax</literal>
+      indicate the range from where to where
+      row versions are valid (visible) for transactions.
+      This range doesn't imply any direct temporal meaning;
+      the sequence of xids reflects only the sequence of
+      transaction begin events. As
+      xids grow, old row versions get out of scope over time.
+      If an old row version is no longer valid for ALL existing
+      transactions, it's called <firstterm>dead</firstterm>. The
+      space occupied by all dead row versions is called
+      <glossterm linkend="glossary-bloat">bloat</glossterm>.
+     </simpara>
+    </listitem>
+
+    <listitem>
+     <simpara>
+      Internally, an <command>UPDATE</command> command acts in the
+      same way as a <command>DELETE</command> command followed by
+      an <command>INSERT</command> command.
+     </simpara>
+    </listitem>
+
+    <listitem>
+     <simpara>
+      Nothing gets wiped away &mdash; with the consequence that the database
+      occupies more and more disk space. It is obvious that
+      this behavior has to be corrected in some
+      way. The next chapter explains how <firstterm>autovacuum</firstterm>
+      fulfills this task.
+     </simpara>
+    </listitem>
+
+   </itemizedlist>
+
+  </sect1>
+
+  <sect1 id="tutorial-vacuum">
+   <title>Vacuum</title>
+
+   <para>
+    As we have seen in the previous chapter, the database
+    tends to occupy more and more disk space, the
+    <glossterm linkend="glossary-bloat">bloat</glossterm>.
+    This chapter explains how the SQL command
+    <command>VACUUM</command> and the automatically running
+    <firstterm>autovacuum</firstterm> processes clean up
+    by eliminating bloat.
+   </para>
+
+   <note>
+    <para>
+     <firstterm>Autovacuum</firstterm> runs automatically by
+     default. Its default parameters as well as such for
+     <command>VACUUM</command> fit well for most standard
+     situations. Therefore a novice database manager can
+     easily skip the rest of this chapter which explains
+     a lot of details.
+    </para>
+   </note>
+
+   <para>
+    Client processes can issue the SQL command <command>VACUUM</command> at arbitrary
+    points in time. DBAs do this when they recognize special situations,
+    or they start it in batch jobs which run periodically.
+    <firstterm>Autovacuum</firstterm> processes run as part of the
+    <link linkend="glossary-instance">instance</link> at the server.
+    There is a constantly running <firstterm>autovacuum</firstterm> daemon.
+    It permanently controls the state of all databases based on values that
+    are collected by the
+    <link linkend="glossary-stats-collector">Statistics Collector</link>
+    and starts <firstterm>autovacuum</firstterm> processes whenever it detects
+    certain situations. Thus, it's a dynamic behavior of
+    <productname>PostgreSQL</productname> with the intention to tidy
+    up &mdash; whenever it is appropriate.
+   </para>
+
+   <para>
+    <command>VACUUM</command>, as well as
+    <firstterm>autovacuum</firstterm>, don't just eliminate bloat.
+    They perform additional tasks for minimizing future
+    I/O activities of themselves as well as of other processes.
+    This extra work can be done in a very efficient way
+    since in most cases the expensive physical access to pages
+    has taken place anyway to eliminate bloat.
+    The additional operations are:
+   </para>
+
+   <itemizedlist>
+
+    <listitem>
+     <simpara>
+      <firstterm>Freeze</firstterm>: Mark the youngest row version
+      as frozen. This means that the version
+      is always treated as valid (visible) independent from
+      the <firstterm>wraparound problem</firstterm> (see below).
+     </simpara>
+    </listitem>
+
+    <listitem>
+     <simpara>
+      <firstterm>Visibility Map</firstterm> and
+      <firstterm>Free Space Map</firstterm>: Log information about
+      the state of the handled pages in two additional files, the
+      Visibility Map and the Free Space Map.
+     </simpara>
+    </listitem>
+
+    <listitem>
+     <simpara>
+      <emphasis>Statistics</emphasis>: Collect statistics about the
+      number of rows per table, the distribution of values, and so on,
+      as the basis for decisions of the query planner.
+     </simpara>
+    </listitem>
+
+   </itemizedlist>
+
+   <para>
+    The eagerness &mdash; you can call it 'aggression' &mdash; of the
+    operations <emphasis>eliminating bloat</emphasis> and
+    <emphasis>freeze</emphasis> is controlled by configuration
+    parameters, runtime flags, and in extreme situations by
+    the processes themselves. Because vacuum operations typically are I/O
+    intensive, which can hinder other activities, <firstterm>autovacuum</firstterm>
+    avoids performing many vacuum operations in bulk. Instead,
+    it carries out many small actions with time gaps in between.
+    The SQL command <command>VACUUM</command> runs immediately
+    and without any time gaps.
+   </para>
+
+   <bridgehead renderas="sect2">Eliminate Bloat</bridgehead>
+
+   <para>
+    To determine which of the row versions are superfluous, the
+    elimination operation must evaluate <literal>xmax</literal>
+    against several criteria which all must apply:
+   </para>
+   <itemizedlist>
+
+    <listitem>
+     <simpara>
+      <literal>xmax</literal> must be different from zero because a
+      value of zero indicates that the row version is still valid.
+     </simpara>
+    </listitem>
+
+    <listitem>
+     <simpara>
+      <literal>xmax</literal> must contain an xid which is older
+      than the oldest xid of all
+      currently running transactions (min(pg_stat_activity.backend_xmin)).
+      This criterion guarantees that no existing or upcoming transaction
+      will have read or write access to this row version.
+     </simpara>
+    </listitem>
+
+    <listitem>
+     <simpara>
+      The transaction of <literal>xmax</literal> must be committed. If it was rollback-ed,
+      this row version is treated as valid.
+     </simpara>
+    </listitem>
+
+    <listitem>
+     <simpara>
+      If there is the situation that the row version is part of
+      multiple transactions, special care and some more actions
+      must be taken, see: <xref linkend="vacuum-for-multixact-wraparound"/>.
+     </simpara>
+    </listitem>
+
+   </itemizedlist>
+
+   <para>
+    After the vacuum operation detects a superfluous row version, it
+    marks its space as free for future use of writing
+    actions. Only in rare situations (or in the case of <command>VACUUM FULL</command>),
+    is this space released to the operating system. In most cases,
+    it remains occupied by <productname>PostgreSQL</productname>
+    and will be used by future <command>INSERT</command> or
+    <command>UPDATE</command> commands concerning this row or a
+    completely different one.
+   </para>
+
+   <para>
+    Which actions start the elimination of bloat?
+
+    <itemizedlist>
+
+     <listitem>
+      <simpara>
+       When a client issues the SQL command <command>VACUUM</command>
+       in its default format, i.e., without any option. To boost performance,
+       in this and the next case <command>VACUUM</command> does not
+       read and act on all pages of the heap.
+       The Visibility Map, which is very compact and therefore has a small
+       size, contains information about pages, where bloat-candidates might
+       be found. Only such pages are processed.
+      </simpara>
+     </listitem>
+
+     <listitem>
+      <simpara>
+       When a client issues the SQL command <command>VACUUM</command>
+       with the option <command>FREEZE</command>. (In this case,
+       it undertakes much more actions, see
+       <link linkend="tutorial-freeze">Freeze Row Versions</link>.)
+      </simpara>
+     </listitem>
+
+     <listitem>
+      <simpara>
+       When a client issues the SQL command <command>VACUUM</command>
+       with the option <command>FULL</command>.
+       Also, in this mode, the bloat disappears, but the strategy used
+       is very different: In this case, the complete table is copied
+       to a different file skipping all outdated row versions. This
+       leads to a significant reduction of used disk space because
+       the new file contains only the actual data. The old file
+       is deleted.
+      </simpara>
+     </listitem>
+
+     <listitem>
+      <simpara>
+       When an <firstterm>autovacuum</firstterm> process acts. For optimization
+       purposes, it considers the Visibility Map in the same way as
+       <command>VACUUM</command>. Additionally, it ignores tables with few modifications;
+       see <xref linkend="guc-autovacuum-vacuum-threshold"/>,
+       which defaults to 50 rows and
+       <xref linkend="guc-autovacuum-vacuum-scale-factor"/>,
+       which defaults to 20%.
+      </simpara>
+     </listitem>
+
+    </itemizedlist>
+   </para>
+
+   <para>
+    This logic only applies to row versions of the heap. Index entries
+    don't use <literal>xmin/xmax</literal>. Nevertheless, such index
+    entries, which would lead to outdated row versions, are released
+    accordingly.       (??? more explanations ???)
+   </para>
+
+   <para>
+    The above descriptions omit the fact that xids on a real computer
+    have a limited size. They count up in the same way as sequences, and after
+    a certain number of new transactions they are forced to restart
+    from the beginning, which is called <firstterm>wraparound</firstterm>.
+    Therefore the terms 'old transaction' / 'young transaction' does
+    not always correlate with low / high values of xids. Near to the
+    wraparound point, there are cases where <literal>xmin</literal> has
+    a higher value than <literal>xmax</literal>, although their meaning
+    is said to be older than <literal>xmax</literal>.
+   </para>
+
+   <figure id="tutorial-wraparound-figure">
+    <title>Cyclic usage of XIDs</title>
+    <mediaobject>
+     <imageobject role="html">
+      <!-- attribute 'width=..px' is necessary to keep font-size of SVG text
+           in correlation with font-size of surrounding HTML  -->
+      <imagedata fileref="images/wraparound-raw.svg" format="SVG" width="850px" />
+     </imageobject>
+     <imageobject role="fo">
+      <!-- For PDF attribute 'width=100%' is necessary to keep complete SVG visible
+           on the page, which has a fixed width. Font sizes will be adopted.  -->
+      <imagedata fileref="images/wraparound-raw.svg" format="SVG" width="100%" />
+     </imageobject>
+    </mediaobject>
+   </figure>
+
+   <bridgehead renderas="sect2" id="tutorial-freeze">Freeze Row Versions</bridgehead>
+
+   <para>
+    The use of a limited range of IDs for transactions leads
+    to the necessity to restart the sequence sooner or later.
+    This does not only have the rare consequence previously
+    described that sometimes <literal>xmin</literal> is
+    higher than <literal>xmax</literal>. The far
+    more critical problem is that whenever the system has
+    to evaluate a WHERE condition, it must decide which row
+    version is valid (visible) from the perspective of the
+    transaction of this query. If a wraparound couldn't happen,
+    this decision would be relatively easy: the xid
+    must be between <literal>xmin</literal> and <literal>xmax</literal>,
+    and the corresponding transactions of <literal>xmin</literal>
+    and <literal>xmax</literal> must be committed. However,
+    <productname>PostgreSQL</productname> has to consider the
+    possibility of wraparounds.
+    Therefore the decision becomes more complex. The general
+    idea of the solution is to use the 'between
+    <literal>xmin</literal> and <literal>xmax</literal>'
+    comparison only during the youngest period of the row
+    versions lifetime and afterward replace it with a
+   'valid forever' flag in its header.
+   </para>
+
+   <itemizedlist>
+
+    <listitem>
+     <simpara>
+      As a first step, <productname>PostgreSQL</productname>
+      divides the complete range of
+      possible xids into two halves with the two split-points
+      'txid_current' and 'txid_current + 2^31'. The half behind
+      'txid_current' is considered to represent xids of the
+      'past' and the half ahead of 'txid_current' those of the
+      'future'. Those of the 'past' are valid (visible) and those
+      of the 'future' not.
+     </simpara>
+    </listitem>
+
+    <listitem>
+     <simpara>
+      With each newly created transaction the two split-points
+      move forward. When 'txid_current + 2^31' would reach a
+      row version with <literal>xmin</literal> equal to that value, it would
+      immediately jump from 'past' to 'future' and would be
+      no longer visible!
+     </simpara>
+    </listitem>
+
+    <listitem>
+     <simpara>
+      To avoid this unacceptable extinction of data, the vacuum
+      operation <firstterm>freeze</firstterm> clears the situation
+      long before the split-point is reached. It sets a flag
+      in the header of the row version, which completely eliminates
+      the future use of <literal>xmin/xmax</literal> and indicates
+      that the version is valid not only in the 'past'-half
+      but also in the 'future'-half as well as in all coming
+      <glossterm linkend="glossary-xid">epochs</glossterm>.
+     </simpara>
+    </listitem>
+   </itemizedlist>
+
+   <para>
+    Which row versions can be frozen by the vacuum operation?
+    Again, several criteria must be checked, and all must be met.
+
+    <itemizedlist>
+
+     <listitem>
+      <simpara>
+       <literal>xmax</literal> must be zero because only
+       non-deleted rows can be visible 'forever'.
+      </simpara>
+     </listitem>
+
+     <listitem>
+      <simpara>
+       <literal>xmin</literal> must be older than all currently
+       existing transactions. This guarantees that no existing
+       transaction can modify or delete the version.
+      </simpara>
+     </listitem>
+
+     <listitem>
+      <simpara>
+       The transaction of <literal>xmin</literal> must be committed.
+      </simpara>
+     </listitem>
+    </itemizedlist>
+   </para>
+
+   <para>
+    At what point in time does the freeze operation take place?
+
+    <itemizedlist>
+     <listitem>
+      <simpara>
+       When a client issues the SQL command <command>VACUUM</command>
+       with its <command>FREEZE</command> option. In this case, all
+       pages are processed that are marked in the Visibility Map
+       to potentially have unfrozen rows.
+      </simpara>
+     </listitem>
+     <listitem>
+      <simpara>
+       When a client issues the SQL command <command>VACUUM</command> without
+       any options but finds that there are xids older than
+       <xref linkend="guc-vacuum-freeze-table-age"/>
+       (default: 150 million) minus
+       <xref linkend="guc-vacuum-freeze-min-age"/>
+       (default: 50 million).
+       As before, all pages are processed that are
+       marked in the Visibility Map to potentially have unfrozen
+       rows.
+      </simpara>
+     </listitem>
+     <listitem>
+      <simpara>
+       When an <firstterm>autovacuum</firstterm> process runs. Such
+       a process acts in one of two modes:
+      </simpara>
+
+      <itemizedlist>
+       <listitem>
+        <simpara>
+         In the <emphasis>normal mode</emphasis>, it skips
+         pages with row versions that are younger than
+         <xref linkend="guc-vacuum-freeze-min-age"/>
+         (default: 50 million) and works only on pages where
+         all xids are older. The skipping of young xids prevents
+         work on such pages, which are likely to be changed
+         by one of the future SQL commands.
+        </simpara>
+       </listitem>
+       <listitem>
+        <simpara>
+         The process switches
+         to an <emphasis>aggressive mode</emphasis> if it recognizes
+         that for the processed table their oldest xid exceeds
+         <xref linkend="guc-autovacuum-freeze-max-age"/>
+         (default: 200 million). The value of the oldest unfrozen
+         xid is stored per table in <literal>pg_class.relfrozenxid</literal>.
+         In this <emphasis>aggressive mode</emphasis> <firstterm>autovacuum</firstterm>
+         processes all such pages of the selected table that are marked
+         in the Visibility Map to potentially have bloat or unfrozen rows.
+        </simpara>
+       </listitem>
+
+      </itemizedlist>
+     </listitem>
+    </itemizedlist>
+   </para>
+
+   <para>
+    In the first two cases and with <firstterm>autovacuum</firstterm> in
+    <emphasis>aggressive mode</emphasis>, the system knows
+    to which value the oldest unfrozen xid has moved forward and
+    logs the value in <literal>pg_class.relfrozenxid</literal>.
+    The distance between this value and the 'txid_current' split
+    point becomes smaller, and the distance to 'txid_current + 2^31'
+    becomes larger than before.
+   </para>
+
+   <figure id="tutorial-freeze-figure">
+    <title>Freeze</title>
+    <mediaobject>
+     <imageobject role="html">
+      <!-- attribute 'width=..px' is necessary to keep font-size of SVG text
+           in correlation with font-size of surrounding HTML  -->
+      <imagedata fileref="images/freeze-raw.svg" format="SVG" width="850px" />
+     </imageobject>
+     <imageobject role="fo">
+      <!-- For PDF attribute 'width=100%' is necessary to keep complete SVG visible
+           on the page, which has a fixed width. Font sizes will be adopted.  -->
+      <imagedata fileref="images/freeze-raw.svg" format="SVG" width="100%" />
+     </imageobject>
+    </mediaobject>
+   </figure>
+
+   <bridgehead renderas="sect2">Protection against Wraparound Failure</bridgehead>
+
+   <para>
+    The <firstterm>autovacuum</firstterm> processes are initiated by the
+    constantly running <firstterm>autovacuum</firstterm> daemon.
+    If the daemon detects that for a table
+    <firstterm>autovacuum_freeze_max_age</firstterm> is exceeded, it
+    starts an <firstterm>autovacuum</firstterm> process in
+    <emphasis>aggressive mode</emphasis>
+    (see above) &mdash; even if <firstterm>autovacuum</firstterm> is disabled.
+   </para>
+
+   <bridgehead renderas="sect2">Visibility Map and Free Space Map</bridgehead>
+
+   <para>
+    The <link linkend="glossary-vm">Visibility Map</link>
+    (VM) contains two flags &mdash; stored as
+    two bits &mdash; for each page of the heap. If the first bit
+    is set, that indicates that the associated page does not
+    contain any bloat. If the second one is set, that indicates
+    that the page contains only frozen rows.
+   </para>
+
+   <para>
+     Please consider two details. First, in most cases a page
+     contains many rows, some of them in many versions.
+     However, the flags are associated with the page,
+     not with a row or a row version. The flags are set
+     only under the condition that they are valid for ALL
+     row versions of the page. Second, since there
+     are only two bits per page, the VM is considerably
+     smaller than the heap. Therefore it is buffered
+     in RAM in almost all cases.
+   </para>
+
+   <para>
+    The setting of the flags is silently done by <command>VACUUM</command>
+    and <firstterm>autovacuum</firstterm> during their bloat and freeze operations.
+    This is done to speed up future vacuum actions,
+    regular accesses to heap pages, and some accesses to
+    the index. Every data-modifying operation on any row
+    version of the page clears the flags.
+   </para>
+
+   <para>
+    The <link linkend="glossary-fsm">Free Space Map</link>
+    (FSM) tracks the amount of free space per page. It is
+    organized as a highly condensed b-tree of (rounded) sizes.
+    As long as <command>VACUUM</command> or
+    <firstterm>autovacuum</firstterm> change the free space
+    on any processed page, they log the new values in
+    the FSM in the same way as all other writing
+    processes.
+   </para>
+
+   <bridgehead renderas="sect2">Statistics</bridgehead>
+
+   <para>
+    Statistic information helps the <link
+    linkend="planner-stats">Query Planner</link> to make optimal
+    decisions for the generation of execution plans. This
+    information can be gathered with the SQL commands
+    <command>ANALYZE</command> or <command>VACUUM ANALYZE</command>.
+    But <firstterm>autovacuum</firstterm> processes also gather
+    such information. Depending on the percentage of changed rows
+    per table <xref linkend="guc-autovacuum-analyze-scale-factor"/>,
+    the <firstterm>autovacuum</firstterm> daemon starts
+    <firstterm>autovacuum</firstterm> processes to collect
+    statistics per table. This dynamic invocation of analyze
+    operations allows <productname>PostgreSQL</productname> to
+    adopt queries to changing circumstances.
+   </para>
+
+   <para>
+    For more details about vacuum operations, especially for its
+    numerous parameters, see <xref linkend="routine-vacuuming"/>.
+   </para>
+
+  </sect1>
+
+  <sect1 id="tutorial-transactions-mvcc">
+   <title>Transactions</title>
+   <para>
+    <link linkend="tutorial-transactions">Transactions</link>
+    are a fundamental concept of relational database systems.
+    Their essential point is that they bundle multiple
+    read- or write-operations into a single all-or-nothing
+    operation. Furthermore, they separate and protect concurrent
+    actions of different connections from each other. Thereby
+    they implement the ACID paradigm.
+   </para>
+
+   <para>
+    In <productname>PostgreSQL</productname> there are two ways
+    to establish a transaction. The explicit way uses the keywords
+    <link linkend="sql-begin">BEGIN</link> and
+    <link linkend="sql-commit">COMMIT</link> (respectively
+    <link linkend="sql-rollback">ROLLBACK</link>) before
+    and after a sequence of SQL statements. The keywords mark
+    the transaction's start- and end-point. On the other hand, you
+    can omit the keywords. This is the implicit way, where
+    every single SQL command automatically establishes a new
+    transaction.
+
+    <programlisting>
+BEGIN; -- establish a new transaction
+UPDATE accounts SET balance = balance - 100.00 WHERE name = 'Alice';
+UPDATE accounts SET balance = balance + 100.00 WHERE name = 'Bob';
+COMMIT; -- finish the transaction
+
+-- this UPDATE runs as the only command of a separate transaction ...
+UPDATE accounts SET balance = balance - 100.00 WHERE name = 'Alice';
+
+-- ... and this one runs in another transaction
+UPDATE accounts SET balance = balance + 100.00 WHERE name = 'Bob';
+    </programlisting>
+   </para>
+
+   <para>
+    As mentioned, the primary property of a transaction is its
+    atomicity: either all or none of its operations succeed,
+    regardless of the fact that it may consist of a lot of
+    different write-operations, and each such operation may
+    affect thousands or millions of rows. As soon as one of the
+    operations fails, all previous operations fail also, which
+    means that all modified rows retain their values as of the
+    beginning of the transaction.
+   </para>
+
+   <para>
+    The atomicity also affects the visibility of changes. No
+    connections running simultaneously to a data modifying
+    transaction will ever see any change before the
+    transaction successfully executes a <command>COMMIT</command>
+    &mdash; even in the lowest
+    <link linkend="transaction-iso">isolation level</link>
+    of transactions. <productname>PostgreSQL</productname>
+    does never show uncommitted changes to other connections.
+   </para>
+
+   <para>
+    The situation regarding visibility is somewhat different
+    from the point of view of the modifying transaction.
+    <command>SELECT</command> commands issued inside a
+    transaction delivers all changes done so far by this
+    transaction.
+   </para>
+
+   <bridgehead renderas="sect2">How does it work?</bridgehead>
+
+   <para>
+    Every <command>INSERT</command>, <command>UPDATE</command>,
+    and <command>DELETE</command> command creates new row
+    versions &mdash; according to the MVCC rules. This
+    creates the risk that other transactions may see the
+    new row versions, and after a while and some more
+    activities of the modifying transaction they may see the
+    next row versions. Results would be a kind of 'moving
+    target' in absolute contrast to the all-or-nothing
+    principle.
+   </para>
+
+   <para>
+    <productname>PostgreSQL</productname> overcomes this
+    problem by showing only such row versions to other
+    transactions whose originating transaction is
+    successfully committed. It skips all row versions of
+    uncommitted transactions. And
+    <productname>PostgreSQL</productname> solves one more
+    problem. Even the single <command>COMMIT</command>
+    command needs a short time interval for its execution.
+    Therefore its critical 'dead-or-survival' phase
+    runs in a priviledged mode where it cannot be
+    interrupted by other processes.
+   </para>
+
+   <bridgehead renderas="sect2">What are the benefits?</bridgehead>
+
+   <para>
+    Transactions relieve applications from many standard
+    actions that must be implemented for nearly every use case.
+   </para>
+
+   <para>
+    Business logic often contains strong, but for a computer,
+    relative abstract requirements. The above example shows
+    the transfers of some money from one account to another.
+    It is obvious
+    that the decrease of the one and the increase of the
+    other must be indivisible. Nevertheless, there is no particular
+    need for an application to do something to ensure the
+    <glossterm linkend="glossary-atomicity">atomicity</glossterm>
+    of this behavior. It's enough to surround them with
+    <command>BEGIN</command> and <command>COMMIT</command>.
+   </para>
+
+   <para>
+    Applications often demand the feature of 'undoing'
+    previously taken actions under some application-specific
+    conditions. In such cases, the application simply issues a
+    <command>ROLLBACK</command> command instead of a
+    <command>COMMIT</command>. The <command>ROLLBACK</command>
+    cancels the transaction, and all changes made so far remain
+    invisible forever; it's like they never happened. There
+    is no need for the application to log its activities and
+    undo every step of the transaction separately.
+   </para>
+
+   <para>
+    Transactions ensure that the
+    <glossterm linkend="glossary-consistency">consistency</glossterm>
+    of the complete database always keeps valid. Declarative
+    rules like
+    <link linkend="ddl-constraints-primary-keys">primary</link>- or
+    <link linkend="ddl-constraints-fk">foreign keys</link>,
+    <link linkend="ddl-constraints-check-constraints">checks</link>,
+    other constraints, or
+    <link linkend="trigger-definition">triggers</link>
+    are part of the all-or-nothing nature of transactions.
+   </para>
+
+   <para>
+    Also, all self-evident &mdash; but possibly not obvious
+    &mdash; low-level demands on the database system are
+    ensured; e.g. index entries for rows must become
+    visible at the same moment as the rows themselves.
+   </para>
+
+   <para>
+    There is an additional feature which defines transactions'
+    <link linkend="transaction-iso">isolation level</link>
+    to each other in a declarative way. It automatically
+    prevents applications from some strange situations.
+   </para>
+
+   <para>
+    Lastly, it is worth to notice that changes done by a
+    committed transaction will survive all future application,
+    instance, or hardware failures. The next chapter
+    explains this
+    <glossterm linkend="glossary-durability">durability</glossterm>.
+   </para>
+  </sect1>
+
+  <sect1 id="tutorial-reliability">
+   <title>Reliability</title>
+
+   <para>
+    Nothing is perfect and failures inevitably happen.
+    However, the most common types of failure are
+    well known and <productname>PostgreSQL</productname>
+    implements strategies to overcome them.
+    Such strategies use parts of the previously presented
+    techniques MVCC and transaction-rollback, plus additional
+    features.
+   </para>
+
+   <bridgehead renderas="sect2">Failures at the client side</bridgehead>
+   <para>
+    A <glossterm linkend="glossary-client">client</glossterm>
+    can fail in different ways. Its hardware can get damaged,
+    the power supply can fail, the network connection to the
+    server can break, or the client application may run into
+    a severe software error like a null pointer exception.
+    Because <productname>PostgreSQL</productname> uses a
+    client/server architecture, no direct problem for the
+    database will occur. In all of this cases, the
+    <glossterm linkend="glossary-backend">Backend process</glossterm>,
+    which is the client's counterpart at the server-side,
+    may recognize that the network connection is no longer
+    working, or it may run into a timeout after a while. It
+    terminates, and there is no harm to the database. As
+    usual, uncommitted data changes initiated by this client
+    are not visible to any other client.
+   </para>
+
+   <bridgehead renderas="sect2">Failures at the server-side</bridgehead>
+
+   <bridgehead renderas="sect3">Instance failure</bridgehead>
+   <para>
+    The instance may suddenly fail because of <emphasis>power off</emphasis>
+    or other problems. This will affect all running processes, the RAM,
+    and possibly the consistency of disk files.
+   </para>
+   <para>
+    After a restart, <productname>PostgreSQL</productname>
+    automatically recognizes that the last shutdown of the
+    instance did not happen as expected: files might not be
+    closed properly and the <literal>postmaster.pid</literal>
+    file exists. <productname>PostgreSQL</productname>
+    tries to clean up the situation. This is possible because
+    all changes in the database are stored twice. First,
+    the WAL files contain them as a chronology of
+    <glossterm linkend="glossary-wal-record">WAL records</glossterm>,
+    which include the new data values and information about commit
+    actions. The WAL records are written first. Second,
+    the data itself shall exist in the heap and index files.
+    In opposite to the WAL records, this part may or may
+    not have been transferred entirely from Shared Memory
+    to the files.
+   </para>
+   <para>
+    The automatic recovery searches within the WAL files for
+    the latest
+    <glossterm linkend="glossary-checkpoint">checkpoint</glossterm>.
+    This checkpoint signals that the database files are in
+    a consistent state, especially that all WAL records up to
+    this point were successfully stored in heap and index. Starting
+    here, the recovery process copies the following WAL records
+    to heap and index. As a result, the files contain all
+    changes and reach a consistent state. Changes of committed
+    transactions are visible; those of uncommited transactions
+    are also in the files, but - as usual - they are never seen
+    by any of the following transactions because uncommited
+    changes are never shown. Such recovery actions run
+    completely automatically, it is not necessary that you
+    configure or start anything by yourself.
+   </para>
+
+   <bridgehead renderas="sect3">Disk crash</bridgehead>
+   <para>
+    If a disk crashes, the course of action described previously
+    cannot work. It is likely that the WAL files and/or the
+    data and index files are no longer available. You need
+    to take special actions to overcome such situations.
+   </para>
+   <para>
+    You obviously need a backup. How to take such a backup
+    and use it as a starting point for a recovery of the
+    cluster is explained in more detail in the next
+    <link linkend="tutorial-backup">chapter</link>.
+   </para>
+
+   <bridgehead renderas="sect3">Disk full</bridgehead>
+   <para>
+    It is conceivable that over time the disk gets full,
+    and there is no room for additional data. In this case,
+    <productname>PostgreSQL</productname> stops accepting
+    commands which change the data or even terminates
+    completely. No data loss or data corruption will
+    occur.
+   </para>
+   <para>
+    To come out of such a situation, you should remove
+    unused files from this disk. But you should never
+    delete files from the
+    <glossterm linkend="glossary-data-directory">data directory</glossterm>.
+    Nearly all of them are necessary for the consistency
+    of the database.
+   </para>
+
+   <bridgehead renderas="sect2">High availability</bridgehead>
+   <para>
+    Database servers can work together to allow a second
+    server to quickly take over the workload if the
+    primary server fails for whatever reason
+    (<link linkend="high-availability">high availability</link>),
+    or to allow several computers to serve the same data
+    for the purpose of load balancing.
+   </para>
+
+  </sect1>
+
+  <sect1 id="tutorial-backup">
+   <title>Backup</title>
+
+   <para>
+    Taking backups is a basic task of database maintenance.
+    <productname>PostgreSQL</productname> supports
+    three different strategies; each has its own
+    strengths and weaknesses.
+    <itemizedlist>
+     <listitem>
+      <simpara>
+       File system level backup
+      </simpara>
+     </listitem>
+     <listitem>
+      <simpara>
+       Logical backup via <command>pg_dump</command>
+      </simpara>
+     </listitem>
+     <listitem>
+      <simpara>
+       Continuous archiving based on <command>pg_basebackup</command>
+       and WAL files
+      </simpara>
+     </listitem>
+    </itemizedlist>
+   </para>
+
+   <bridgehead renderas="sect2">File system level backup</bridgehead>
+   <para>
+    You can use any appropriate OS tool to create a
+    <link linkend="backup-file">copy</link>
+    of the cluster's directory structure and files. In
+    case of severe problems such a copy can serve as
+    the source of recovery. But in order to get a
+    <emphasis>USABLE</emphasis> backup by this method,
+    the database server <emphasis>MUST</emphasis> be
+    shut down during the complete runtime of the copy
+    command!
+   </para>
+   <para>
+    The obvious disadvantage of this method is that there
+    is a downtime where no user interaction is possible.
+    The other two strategies run during regular operating
+    times.
+   </para>
+
+   <bridgehead renderas="sect2">Logical backup via pg_dump</bridgehead>
+   <para>
+    The tool <command>pg_dump</command> is able to take a
+    <link linkend="backup-dump">copy</link>
+    of the complete cluster or certain parts of it. It stores
+    the copy in the form of SQL <command>CREATE</command> and
+    <command>INSERT</command> commands. It runs in
+    parallel to other processes in its own transaction.
+   </para>
+   <para>
+    The output of <command>pg_dump</command> may be used as
+    input of <command>psql</command> to restore the data
+    (or to copy it to another database).
+   </para>
+   <para>
+    The main advantage over the other two methods is that it
+    can pick parts of the cluster, e.g. a single table or one
+    database. The other two methods work only at the level of
+    the complete cluster.
+   </para>
+
+   <bridgehead renderas="sect2">Continuous archiving based on pg_basebackup and WAL files</bridgehead>
+   <para>
+    <link linkend="continuous-archiving">This method</link>
+    is the most sophisticated and complex one. It
+    consists of two phases.
+   </para>
+   <para>
+    First, you need to create a so called
+    <firstterm>basebackup</firstterm> with the tool
+    <command>pg_basebackup</command>. The result is a
+    directory structure plus files which contains a
+    consistent copy of the original cluster.
+    <command>pg_basebackup</command> runs in
+    parallel to other processes in its own transaction.
+   </para>
+   <para>
+    The second step is recommended but not necessary. All
+    changes to the data are stored in WAL files. If you
+    continuously save such WAL files, you have the history
+    of the cluster. This history can be applied to a
+    basebackup in order to recreate
+    any state of the cluster between the time of
+    <command>pg_basebackup</command>'s start time and
+    any later point in time. This technique
+    is called 'Point-in-Time Recovery (PITR)'.
+   </para>
+   <para>
+    If configured, the
+    <glossterm linkend="glossary-wal-archiver">Archiver process</glossterm>
+    will automatically copy every single WAL file to a save location.
+    <link linkend="backup-archiving-wal">Its configuration</link>
+    consists mainly of a string, which contains a copy command
+    in the operating system's syntax. In order to protect your
+    data against a disk crash, the destination location
+    of a basebackup as well as of the
+    <firstterm>archived WAL files</firstterm> should be on a
+    disk which is different from the data disk.
+   </para>
+   <para>
+    If it gets necessary to restore the cluster, you have to
+    copy the basebackup and the
+    archived WAL files to
+    their original directories. The configuration of this
+    <link linkend="backup-pitr-recovery">recovery procedure</link>
+    contains a string with the reverse copy command: from
+    archive location to database location.
+   </para>
+
+  </sect1>
+
+<!-- ToDo: replication, index-types, extension mechanism, ...
+  <sect1 id="tutorial-replication">
+   <title>Replication</title>
+
+   <para>
+...
+   </para>
+
+  </sect1>
+-->
+
+ </chapter>

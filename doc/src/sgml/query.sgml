@@ -1,7 +1,7 @@
 <!-- doc/src/sgml/query.sgml -->
 
  <chapter id="tutorial-sql">
-  <title>The <acronym>SQL</acronym> Language</title>
+  <title>Fundamentals of the <acronym>SQL</acronym> Language</title>
 
   <sect1 id="tutorial-sql-intro">
    <title>Introduction</title>

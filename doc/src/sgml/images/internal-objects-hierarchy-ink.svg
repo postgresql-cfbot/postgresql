@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   version="1.1"
+   width="720px"
+   height="430px"
+   viewBox="0 0 720 430"
+   id="svg540"
+   sodipodi:docname="internal-objects-hierarchy-ink.svg"
+   inkscape:version="0.92.3 (2405546, 2018-03-11)">
+  <metadata
+     id="metadata546">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title>Hierarchy of Internal Objects</dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <defs
+     id="defs544" />
+  <sodipodi:namedview
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1"
+     objecttolerance="10"
+     gridtolerance="10"
+     guidetolerance="10"
+     inkscape:pageopacity="0"
+     inkscape:pageshadow="2"
+     inkscape:window-width="1050"
+     inkscape:window-height="838"
+     id="namedview542"
+     showgrid="false"
+     inkscape:zoom="0.51944444"
+     inkscape:cx="360"
+     inkscape:cy="215"
+     inkscape:window-x="61"
+     inkscape:window-y="27"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg540" />
+  <title
+     id="title460">Hierarchy of Internal Objects</title>
+  <!-- common text classes -->
+  <style
+     type="text/css"
+     id="style462">
+  .text_normal  {font-style:normal;
+                 font-weight:normal;
+                 font-size:16px;
+                 font-family:&quot;Open Sans&quot;, sans-serif;
+                 fill:black;
+                }
+  .text_big     {font-style:normal;
+                 font-weight:normal;
+                 font-size:24px;
+                 font-family:&quot;Open Sans&quot;, sans-serif;
+                 fill:black;
+                }
+  </style>
+  <!-- start of rendering area -->
+  <!-- enclosing rectangle -->
+  <rect
+     x="1"
+     y="1"
+     rx="5"
+     width="99%"
+     height="99%"
+     stroke="black"
+     fill="none"
+     id="rect464" />
+  <text
+     class="text_big"
+     x="200"
+     y="40"
+     id="text466">Hierarchy of internal Objects</text>
+  <!-- set centre of figure and default values -->
+  <g
+     transform="translate(350 240)"
+     fill="none"
+     id="g538">
+    <g
+       id="g504">
+      <ellipse
+         rx="320"
+         ry="170"
+         stroke="blue"
+         id="ellipse468" />
+      <text
+         class="text_normal"
+         x="-140"
+         y="-130"
+         id="text470">Cluster</text>
+      <g
+         transform="translate(40 -125)"
+         id="g476">
+        <ellipse
+           rx="80"
+           ry="20"
+           stroke="blue"
+           id="ellipse472" />
+        <text
+           class="text_normal"
+           x="-60"
+           y="5"
+           id="text474">Database Names</text>
+      </g>
+      <g
+         transform="translate(180 -70)"
+         id="g482">
+        <ellipse
+           rx="60"
+           ry="20"
+           stroke="blue"
+           id="ellipse478" />
+        <text
+           class="text_normal"
+           x="-40"
+           y="5"
+           id="text480">Tablespace</text>
+      </g>
+      <g
+         transform="translate(230 -5)"
+         id="g488">
+        <ellipse
+           rx="80"
+           ry="20"
+           stroke="blue"
+           id="ellipse484" />
+        <text
+           class="text_normal"
+           x="-70"
+           y="5"
+           id="text486">Replication Origins</text>
+      </g>
+      <g
+         transform="translate(200 70)"
+         id="g496">
+        <ellipse
+           rx="78"
+           ry="27"
+           stroke="blue"
+           id="ellipse490" />
+        <text
+           class="text_normal"
+           x="-60"
+           y="-3"
+           id="text492">Subscription for</text>
+        <text
+           class="text_normal"
+           x="-68"
+           y="10"
+           id="text494">Logical Replication</text>
+      </g>
+      <g
+         transform="translate(100 120)"
+         id="g502">
+        <ellipse
+           rx="40"
+           ry="20"
+           stroke="blue"
+           id="ellipse498" />
+        <text
+           class="text_normal"
+           x="-15"
+           y="5"
+           id="text500">Role</text>
+      </g>
+    </g>
+    <g
+       transform="translate(-80 10)"
+       id="g536">
+      <ellipse
+         rx="220"
+         ry="110"
+         stroke="blue"
+         stroke-width="2px"
+         id="ellipse506" />
+      <text
+         class="text_normal"
+         x="-60"
+         y="-80"
+         id="text508">Database</text>
+      <g
+         transform="translate(-120 -50)"
+         id="g534">
+        <g
+           transform="translate(-30 20)"
+           id="g514">
+          <ellipse
+             rx="50"
+             ry="20"
+             stroke="blue"
+             id="ellipse510" />
+          <text
+             class="text_normal"
+             x="-35"
+             y="5"
+             id="text512">Extension</text>
+        </g>
+        <g
+           transform="translate(-35 85)"
+           id="g520">
+          <ellipse
+             rx="40"
+             ry="20"
+             stroke="blue"
+             id="ellipse516" />
+          <text
+             class="text_normal"
+             x="-35"
+             y="5"
+             id="text518">Collation</text>
+        </g>
+        <g
+           transform="translate(150 70)"
+           id="g532">
+          <ellipse
+             rx="140"
+             ry="70"
+             stroke="blue"
+             id="ellipse522" />
+          <text
+             class="text_normal"
+             x="-80"
+             y="-35"
+             id="text524">Schema</text>
+          <g
+             transform="translate(20 10)"
+             id="g530">
+            <ellipse
+               rx="90"
+               ry="30"
+               stroke="blue"
+               id="ellipse526" />
+            <text
+               class="text_normal"
+               x="-50"
+               y="5"
+               id="text528">Table, View, ...</text>
+          </g>
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>

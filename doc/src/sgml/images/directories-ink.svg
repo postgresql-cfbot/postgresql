@@ -1,0 +1,397 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   version="1.1"
+   width="900px"
+   height="640px"
+   viewBox="0 0 900 640"
+   id="svg303"
+   sodipodi:docname="directories-ink.svg"
+   inkscape:version="0.92.3 (2405546, 2018-03-11)">
+  <metadata
+     id="metadata307">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title>Directory structure of a cluster</dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <sodipodi:namedview
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1"
+     objecttolerance="10"
+     gridtolerance="10"
+     guidetolerance="10"
+     inkscape:pageopacity="0"
+     inkscape:pageshadow="2"
+     inkscape:window-width="1083"
+     inkscape:window-height="808"
+     id="namedview305"
+     showgrid="false"
+     inkscape:zoom="0.36875"
+     inkscape:cx="450"
+     inkscape:cy="320"
+     inkscape:window-x="61"
+     inkscape:window-y="27"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg303" />
+  <title
+     id="title153">Directory structure of a cluster</title>
+  <style
+     type="text/css"
+     id="style155">
+  .text_normal  {font-style:normal;
+                 font-weight:normal;
+                 font-size:16px;
+                 font-family:&quot;Open Sans&quot;, sans-serif;
+                 fill:black;
+                }
+  .text_big     {font-style:normal;
+                 font-weight:normal;
+                 font-size:24px;
+                 font-family:&quot;Open Sans&quot;, sans-serif;
+                 fill:black;
+                }
+  </style>
+  <defs
+     id="defs177">
+    <!-- Directory -->
+    <symbol
+       id="directory"
+       stroke="blue"
+       stroke-width="0.3px"
+       fill="aqua">
+      <title
+         id="title157">Directory</title>
+      <rect
+         x="0"
+         y="10"
+         width="110"
+         height="20"
+         id="rect159" />
+      <path
+         d="M 0,10 l 0,-2 3,-3 35,0, 3,3  0,2"
+         id="path161" />
+    </symbol>
+    <!-- File -->
+    <symbol
+       id="file"
+       stroke="black"
+       fill="none">
+      <title
+         id="title164">File</title>
+      <rect
+         x="0"
+         y="0"
+         width="40"
+         height="50"
+         stroke="blue"
+         id="rect166" />
+      <path
+         d="M 5,10 h 20"
+         stroke-dasharray="4 2"
+         id="path168" />
+      <path
+         d="M 5,17 h 15"
+         stroke-dasharray="6 2"
+         id="path170" />
+      <path
+         d="M 5,24 h 25"
+         stroke-dasharray="4 2"
+         id="path172" />
+      <path
+         d="M 5,31 h 20"
+         stroke-dasharray="5 2"
+         id="path174" />
+    </symbol>
+  </defs>
+  <!-- start of rendering area -->
+  <!-- enclosing rectangle -->
+  <rect
+     x="1"
+     y="1"
+     rx="5"
+     width="99%"
+     height="99%"
+     stroke="black"
+     fill="none"
+     id="rect179" />
+  <!-- caption -->
+  <text
+     x="200"
+     y="50"
+     class="text_big"
+     id="text181">Directory Structure</text>
+  <!-- the directories -->
+  <g
+     transform="translate(20, 100)"
+     id="g189">
+    <use
+       xlink:href="#directory"
+       id="use183" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text185">... /pg/</text>
+    <text
+       x="300"
+       y="26"
+       class="text_normal"
+       id="text187">An arbitrary directory</text>
+  </g>
+  <g
+     transform="translate(70, 130)"
+     id="g197">
+    <use
+       xlink:href="#directory"
+       id="use191" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text193">data/</text>
+    <text
+       x="250"
+       y="26"
+       class="text_normal"
+       id="text195">Root of cluster 'data' (see: PGDATA)</text>
+  </g>
+  <g
+     transform="translate(120, 160)"
+     id="g205">
+    <use
+       xlink:href="#directory"
+       id="use199" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text201">base/</text>
+    <text
+       x="200"
+       y="26"
+       class="text_normal"
+       id="text203">Subdirectory containing per-database subdirectories</text>
+  </g>
+  <!--  -->
+  <g
+     transform="translate(170, 190)"
+     id="g213">
+    <use
+       xlink:href="#directory"
+       id="use207" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text209">1/</text>
+    <text
+       x="150"
+       y="26"
+       class="text_normal"
+       id="text211">Subdirectory for data of first database 'template0'</text>
+  </g>
+  <g
+     transform="translate(170, 220)"
+     id="g221">
+    <use
+       xlink:href="#directory"
+       id="use215" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text217">12992/</text>
+    <text
+       x="150"
+       y="26"
+       class="text_normal"
+       id="text219">Subdirectory for data of second database 'template1'</text>
+  </g>
+  <g
+     transform="translate(170, 250)"
+     id="g229">
+    <use
+       xlink:href="#directory"
+       id="use223" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text225">12999/</text>
+    <text
+       x="150"
+       y="26"
+       class="text_normal"
+       id="text227">Subdirectory for data of third database 'postgres'</text>
+  </g>
+  <g
+     transform="translate(170, 280)"
+     id="g237">
+    <use
+       xlink:href="#directory"
+       id="use231" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text233">nnnnn/</text>
+    <text
+       x="150"
+       y="26"
+       class="text_normal"
+       id="text235">Optional: more subdirectories for databases, e.g. 'my_db'</text>
+  </g>
+  <g
+     transform="translate(120, 310)"
+     id="g245">
+    <use
+       xlink:href="#directory"
+       id="use239" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text241">global/</text>
+    <text
+       x="200"
+       y="26"
+       class="text_normal"
+       id="text243">Subdirectory with information about Global SQL Objects</text>
+  </g>
+  <g
+     transform="translate(120, 340)"
+     id="g253">
+    <use
+       xlink:href="#directory"
+       id="use247" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text249">pg_wal/</text>
+    <text
+       x="200"
+       y="26"
+       class="text_normal"
+       id="text251">Subdirectory for Write Ahead Log files ('pg_xlog' before version 10)</text>
+  </g>
+  <g
+     transform="translate(120, 370)"
+     id="g261">
+    <use
+       xlink:href="#directory"
+       id="use255" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text257">pg_xact/</text>
+    <text
+       x="200"
+       y="26"
+       class="text_normal"
+       id="text259">Subdirectory for transaction commit status ('pg_clog' before version 10)</text>
+  </g>
+  <g
+     transform="translate(120, 400)"
+     id="g269">
+    <use
+       xlink:href="#directory"
+       id="use263" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text265">pg_tblspc/</text>
+    <text
+       x="200"
+       y="26"
+       class="text_normal"
+       id="text267">Subdirectory containing symbolic links to tablespaces</text>
+  </g>
+  <g
+     transform="translate(120, 430)"
+     id="g277">
+    <use
+       xlink:href="#directory"
+       id="use271" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text273">pg_... /</text>
+    <text
+       x="200"
+       y="26"
+       class="text_normal"
+       id="text275">Some more subdirectories</text>
+  </g>
+  <g
+     transform="translate(120, 465)"
+     id="g285">
+    <use
+       xlink:href="#file"
+       x="0"
+       y="0"
+       id="use279" />
+    <use
+       xlink:href="#file"
+       x="50"
+       y="0"
+       id="use281" />
+    <text
+       x="200"
+       y="26"
+       class="text_normal"
+       id="text283">'postmaster.pid' and other files with cluster-wide relevance</text>
+  </g>
+  <!-- next cluster -->
+  <g
+     transform="translate(20, 540)"
+     id="g293">
+    <use
+       xlink:href="#directory"
+       id="use287" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text289">... /xyz/</text>
+    <text
+       x="300"
+       y="26"
+       class="text_normal"
+       id="text291">Same or another arbitrary directory</text>
+  </g>
+  <g
+     transform="translate(70, 570)"
+     id="g301">
+    <use
+       xlink:href="#directory"
+       id="use295" />
+    <text
+       x="10"
+       y="26"
+       class="text_normal"
+       id="text297">cluster_2/</text>
+    <text
+       x="250"
+       y="26"
+       class="text_normal"
+       id="text299">Root of another cluster 'cluster_2'</text>
+  </g>
+</svg>

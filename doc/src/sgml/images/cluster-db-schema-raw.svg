@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:xlink="http://www.w3.org/1999/xlink"
+     version="1.1"
+     width="900px" height="685px"
+     viewBox="0 0 900 685" >
+
+  <title>Server (Hardware, Container, or VM)</title>
+
+  <!-- common text classes -->
+  <style type="text/css">
+  .text_small   {font-style:normal;
+                 font-weight:normal;
+                 font-size:12px;
+                 font-family:"Open Sans", sans-serif;
+                 fill:black;
+                }
+  .text_normal  {font-style:normal;
+                 font-weight:normal;
+                 font-size:16px;
+                 font-family:"Open Sans", sans-serif;
+                 fill:black;
+                }
+  .text_big     {font-style:normal;
+                 font-weight:normal;
+                 font-size:24px;
+                 font-family:"Open Sans", sans-serif;
+                 fill:black;
+                }
+  </style>
+
+  <defs>
+    <!-- a rectangle with rounded corners and inner definitions for schemas -->
+    <symbol id="rectangle_special_0">
+
+      <!-- the database -->
+      <rect width="225" height="155" rx="10" stroke="blue" fill="none"/>
+
+      <!-- schemas -->
+      <rect x="15" y="40" width="195" height="50" rx="10" stroke="blue" fill="none" stroke-dasharray="4 2" />
+      <text class="text_normal" x="20" y="60">schema 'public'</text>
+      <text class="text_small"  x="20" y="80">tables, views, ...</text>
+
+      <rect x="15" y="105" width="195" height="30" rx="10" stroke="blue" fill="none" stroke-dasharray="4 2" />
+      <text class="text_small"  x="20" y="125">(more system schemas)</text>
+    </symbol>
+
+    <!-- same as before, but one more schema -->
+    <symbol id="rectangle_special_1">
+      <!-- the database -->
+      <rect width="245" height="225" rx="10" stroke="blue" fill="none"/>
+
+      <!-- schemas -->
+      <rect x="15" y="40" width="205" height="50" rx="10" stroke="blue" fill="none" stroke-dasharray="4 2" />
+      <text class="text_normal" x="20" y="60">schema 'public'</text>
+      <text class="text_small"  x="20" y="80">tables, views, ...</text>
+
+      <rect x="15" y="105" width="205" height="50" rx="10" stroke="blue" fill="none" stroke-dasharray="4 2" />
+      <text class="text_normal" x="20" y="125">'my_schema' (optional)</text>
+      <text class="text_small"  x="20" y="145">tables, views, ...</text>
+
+      <rect x="15" y="170" width="205" height="30" rx="10" stroke="blue" fill="none" stroke-dasharray="4 2" />
+      <text class="text_small"  x="20" y="190">(more system schemas)</text>
+    </symbol>
+
+    <symbol id="note" stroke="black" fill="lightyellow">
+      <title>UML Note</title>
+      <path d="M 450,10 v 230 h -450 v -240 h 440 v 10 h 10 l -10,-10" />
+    </symbol>
+
+    <!-- marker start/end -->
+    <marker id="arrowhead_start"
+            markerWidth="10"
+            markerHeight="10"
+            refX="0"
+            refY="3"
+            orient="auto">
+      <path d="M 6,0 l -6,3 l 6,3" stroke="black" fill="none" />
+    </marker>
+    <marker id="arrowhead_end"
+            markerWidth="10"
+            markerHeight="10"
+            refX="6"
+            refY="3"
+            orient="auto">
+      <path d="M 0,0 l 6,3 l -6,3" stroke="black" fill="none" />
+    </marker>
+
+  </defs>
+
+
+  <!-- start of rendering area -->
+  <!-- enclosing rectangle -->
+  <rect x="1" y="1" rx="5" width="99%" height="99%" stroke="black" fill="none" />
+  <text class="text_big" x="270" y="40">Server (Hardware, Container, or VM)</text>
+
+  <!-- two clusters -->
+  <g transform="translate(20 110)">
+    <rect  x="0" y="0" width="790" height="555" stroke="blue" stroke-width="2px" fill="none" />
+    <text class="text_normal" x="180" y="25">cluster 'data' (default, managed by one instance)</text>
+  </g>
+  <g transform="translate(45 110)">
+    <path d="M 5,0 v -30 h 790 v 555 h -30" stroke="blue" stroke-width="2px" fill="none" />
+    <text class="text_normal" x="190" y="-10">cluster 'cluster_2' (optional, managed by a different instance)</text>
+  </g>
+
+
+  <!-- database template 0 -->
+  <g transform="translate(40 155)">
+    <use xlink:href="#rectangle_special_0" />
+    <text class="text_normal" x="10" y="25">database 'template0'</text>
+  </g>
+
+  <!-- database template 1 -->
+  <g transform="translate(290 155)">
+    <use xlink:href="#rectangle_special_0" />
+    <text class="text_normal" x="10" y="25">database 'template1'</text>
+  </g>
+
+  <!-- database postgres -->
+  <g transform="translate(540 155)">
+    <use xlink:href="#rectangle_special_1" />
+    <text class="text_normal" x="10" y="25">database 'postgres'</text>
+  </g>
+
+  <!-- database my_db -->
+  <g transform="translate(40 350)">
+    <use xlink:href="#rectangle_special_1" />
+    <text class="text_normal" x="10" y="25">database 'my_db' (optional)</text>
+  </g>
+
+  <!-- global objects -->
+  <g transform="translate(320 330)">
+    <rect x="0" y="0" width="180" height="45" rx="10" stroke="blue" fill="none" stroke-dasharray="10 4 4 4" />
+    <text class="text_normal" x="15" y="27">Global SQL objects</text>
+    <path d="M 0,5 l-65,-35" stroke="black" fill="none" marker-end="url(#arrowhead_end)" />
+    <path d="M 80,0 v-30" stroke="black" fill="none" marker-end="url(#arrowhead_end)" />
+    <path d="M 180,40 h50" stroke="black" fill="none" marker-end="url(#arrowhead_end)" />
+    <path d="M 0,40 l-45,20" stroke="black" fill="none" marker-end="url(#arrowhead_end)" />
+  </g>
+
+  <!-- Some comments -->
+  <g transform="translate(335 405)">
+    <use xlink:href="#note" x="0" y="0" />
+
+    <text class="text_small" x="10" y="20">1)</text>
+    <text class="text_small" x="30" y="20">By default, you work in the cluster 'data', database 'postgres',</text>
+    <text class="text_small" x="30" y="35">schema 'public'.</text>
+
+    <text class="text_small" x="10" y="55">2)</text>
+    <text class="text_small" x="30" y="55">More system schemas: pg_catalog, information_schema,</text>
+    <text class="text_small" x="30" y="70">pg_temp, pg_toast.</text>
+
+    <text class="text_small" x="10" y="90">3)</text>
+    <text class="text_small" x="30" y="90">Global SQL objects: Some SQL objects are automatically active</text>
+    <text class="text_small" x="30" y="105">and known database- or even cluster-wide.</text>
+
+    <text class="text_small" x="10" y="125">4)</text>
+    <text class="text_small" x="30" y="125">The command 'initdb' creates a new cluster with the three</text>
+    <text class="text_small" x="30" y="140">databases 'template0', 'template1', and 'postgres'. The command</text>
+    <text class="text_small" x="30" y="155">'createdb' creates a new database.</text>
+
+    <text class="text_small" x="10" y="175">5)</text>
+    <text class="text_small" x="30" y="175">If multiple clusters are active on one server at the same time,</text>
+    <text class="text_small" x="30" y="190">each one is managed by an individual instance. Each such instance</text>
+    <text class="text_small" x="30" y="205">uses a different port.</text>
+
+    <text class="text_small" x="10" y="225">6)</text>
+    <text class="text_small" x="30" y="225">No client application is allowed to connect to 'template0'.</text>
+
+  </g>
+
+</svg>

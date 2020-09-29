@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="850" height="320" viewBox="0 0 850 320">
+  <title>
+    Freeze
+  </title>
+  <style>
+    .text_normal{font-style:normal;font-weight:400;font-size:16px;font-family:&quot;Open Sans&quot;,sans-serif;fill:#000}
+  </style>
+  <defs>
+    <path id="Path_080" d="M-80 0A80 80 0 1180 0 80 80 0 11-80 0"/>
+    <path id="Path_095" d="M-95 0A95 95 0 1195 0 95 95 0 11-95 0"/>
+    <path id="Path_120" d="M-120 0a120 120 0 11240 0 120 120 0 11-240 0"/>
+    <circle id="frozenPoint" r="3" stroke="green" fill="green" transform="translate(-100)"/>
+    <circle id="unfrozenPoint" r="3" stroke="green" fill="none" transform="translate(-100)"/>
+  </defs>
+  <rect x="1" y="1" rx="5" width="99%" height="99%" stroke="black" fill="none"/>
+  <text x="70" y="40" font-weight="400" font-size="24" font-family="&quot;Open Sans&quot;,sans-serif,Helvetica">
+    <tspan font-style="italic" font-weight="700">Freeze</tspan> to keep visible
+  </text>
+  <g fill="none" transform="translate(170 190)">
+    <circle r="100" stroke="blue"/>
+    <text class="text_normal">
+      <textPath xlink:href="#Path_095" startOffset=".5%">|</textPath> <textPath xlink:href="#Path_120" startOffset="0%">(0)</textPath> <textPath xlink:href="#Path_080" startOffset="1%" stroke="blue" stroke-width=".5"> - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - &gt;</textPath> <textPath xlink:href="#Path_120" startOffset="11.2%">(1)</textPath> <textPath xlink:href="#Path_120" startOffset="61.2%">(5)</textPath> <textPath xlink:href="#Path_095" stroke="red" stroke-width="3" startOffset="34%">|</textPath> <textPath xlink:href="#Path_120" startOffset="34%">(2)</textPath> <textPath xlink:href="#Path_095" stroke="black" stroke-width="3" startOffset="45%">|</textPath> <textPath xlink:href="#Path_120" startOffset="45%">(3)</textPath> <textPath xlink:href="#Path_095" stroke="green" stroke-width="3" startOffset="55%">|</textPath> <textPath xlink:href="#Path_120" startOffset="55%">(4)</textPath>
+    </text>
+    <path d="M-80-80L80 80" stroke="black"/>
+    <text class="text_normal" letter-spacing="12" transform="rotate(45 40.78 -38.1)">
+      PAST
+    </text>
+    <text class="text_normal" letter-spacing="12" transform="rotate(-135 27.43 23.79)">
+      FUTURE
+    </text>
+    <use xlink:href="#frozenPoint" transform="rotate(10)"/>
+    <use xlink:href="#frozenPoint" transform="rotate(25)"/>
+    <use xlink:href="#frozenPoint" transform="rotate(40)"/>
+    <use xlink:href="#frozenPoint" transform="rotate(55)"/>
+    <use xlink:href="#frozenPoint" transform="rotate(70)"/>
+    <use xlink:href="#frozenPoint" transform="rotate(85)"/>
+    <use xlink:href="#frozenPoint" transform="rotate(100)"/>
+    <use xlink:href="#frozenPoint" transform="rotate(115)"/>
+    <use xlink:href="#frozenPoint" transform="rotate(130)"/>
+    <use xlink:href="#unfrozenPoint" transform="rotate(145)"/>
+    <use xlink:href="#frozenPoint" transform="rotate(160)"/>
+    <use xlink:href="#frozenPoint" transform="rotate(175)"/>
+    <use xlink:href="#unfrozenPoint" transform="rotate(190)"/>
+    <use xlink:href="#unfrozenPoint" transform="rotate(205)"/>
+    <use xlink:href="#unfrozenPoint" transform="rotate(220)"/>
+  </g>
+  <g class="text_normal" transform="translate(380 30)">
+    <text>
+      0: 0 .. 2 <tspan dy="-5">^</tspan> <tspan dy="5">32</tspan> - 1
+    </text>
+    <text y="25">
+      1: txid_current + 2 ^ 31 (split-point)
+    </text>
+    <text y="50">
+      2: autovacuum_freeze_max_age (200 mio.)
+    </text>
+    <text y="75">
+      3: vacuum_freeze_table_age (150 mio.)
+    </text>
+    <text y="100">
+      4: vacuum_freeze_min_age (50 mio.)
+    </text>
+    <text y="125">
+      5: txid_current (split-point, jungest xid)
+    </text>
+    <text y="155">
+      per table: pg_class.relfrozenxid <tspan font-weight="700">must</tspan> be between (1) and (5);
+    </text>
+    <text y="175" x="75">
+      normally it is between (3) and (4)
+    </text>
+    <use xlink:href="#unfrozenPoint" transform="translate(106 200)"/>
+    <text y="205" x="20">
+      Unfrozen xid
+    </text>
+    <use xlink:href="#frozenPoint" transform="translate(106 224)"/>
+    <text y="230" x="20">
+      Frozen xid
+    </text>
+    <text y="260">
+      (figure is out of scale)
+    </text>
+  </g>
+</svg>

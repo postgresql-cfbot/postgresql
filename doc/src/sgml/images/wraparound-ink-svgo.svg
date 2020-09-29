@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="850" height="280" viewBox="0 0 850 280">
+  <title>
+    Cyclic usage of XIDs
+  </title>
+  <style>
+    .text_normal{font-style:normal;font-weight:400;font-size:16px;font-family:&quot;Open Sans&quot;,sans-serif;fill:#000}
+  </style>
+  <defs>
+    <path id="Path_080" d="M-80 0A80 80 0 1180 0 80 80 0 11-80 0"/>
+    <path id="Path_095" d="M-95 0A95 95 0 1195 0 95 95 0 11-95 0"/>
+    <path id="Path_120" d="M-120 0a120 120 0 11240 0 120 120 0 11-240 0"/>
+  </defs>
+  <rect x="1" y="1" rx="5" width="99%" height="99%" stroke="black" fill="none"/>
+  <text x="370" y="40" font-weight="400" font-size="24" font-family="&quot;Open Sans&quot;,sans-serif,Helvetica">
+    Cyclic usage of XIDs modulo 2 <tspan dy="-5">^</tspan> <tspan dy="5">32</tspan>
+  </text>
+  <g fill="none" transform="translate(170 150)">
+    <circle r="100" stroke="blue"/>
+    <text class="text_normal">
+      <textPath xlink:href="#Path_095" startOffset=".5%">|</textPath> <textPath xlink:href="#Path_120" startOffset="0%">(0)</textPath> <textPath xlink:href="#Path_080" startOffset="1%" stroke="blue" stroke-width=".5"> - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - &gt;</textPath> <textPath xlink:href="#Path_095" startOffset="30.5%">|</textPath> <textPath xlink:href="#Path_120" startOffset="30%">(1)</textPath> <textPath xlink:href="#Path_095" startOffset="45.5%">|</textPath> <textPath xlink:href="#Path_120" startOffset="45%">(2)</textPath> <textPath xlink:href="#Path_095" startOffset="50.5%">|</textPath> <textPath xlink:href="#Path_120" startOffset="50%">(3)</textPath> <textPath xlink:href="#Path_095" startOffset="62.5%">|</textPath> <textPath xlink:href="#Path_120" startOffset="62%">(4)</textPath>
+    </text>
+  </g>
+  <g class="text_normal">
+    <text transform="translate(400 130)">
+      0: 0 .. 2 <tspan dy="-5">^</tspan> <tspan dy="5">32</tspan> - 1
+    </text>
+    <text y="25" transform="translate(400 130)">
+      1: oldest <tspan font-weight="700">active</tspan> xid (pg_stat_activity.backend_xmin)
+    </text>
+    <text y="50" transform="translate(400 130)">
+      2: xmin of one row version
+    </text>
+    <text y="75" transform="translate(400 130)">
+      3: xmax of the same row version
+    </text>
+    <text y="100" transform="translate(400 130)">
+      4: jungest xid (txid_current)
+    </text>
+  </g>
+</svg>

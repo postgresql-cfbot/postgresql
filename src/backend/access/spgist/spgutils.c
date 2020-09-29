@@ -31,7 +31,18 @@
 #include "utils/index_selfuncs.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
+#include "access/itup.h"
+#include "access/detoast.h"
+#include "access/toast_internals.h"
+#include "access/heaptoast.h"
+#include "utils/expandeddatum.h"
 
+/* Does att's datatype allow packing into the 1-byte-header varlena format? */
+#define ATT_IS_PACKABLE(att) \
+		((att)->attlen == -1 && (att)->attstorage != TYPSTORAGE_PLAIN)
+
+Size		spgIncludedDataSize(TupleDesc tupleDesc, Datum *values,
+								bool *isnull, Size start);
 
 /*
  * SP-GiST handler function: return IndexAmRoutine with access method parameters
@@ -49,7 +60,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amcanorderbyop = true;
 	amroutine->amcanbackward = false;
 	amroutine->amcanunique = false;
-	amroutine->amcanmulticol = false;
+	amroutine->amcanmulticol = true;
 	amroutine->amoptionalkey = true;
 	amroutine->amsearcharray = false;
 	amroutine->amsearchnulls = true;
@@ -57,7 +68,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amclusterable = false;
 	amroutine->ampredlocks = false;
 	amroutine->amcanparallel = false;
-	amroutine->amcaninclude = false;
+	amroutine->amcaninclude = true;
 	amroutine->amusemaintenanceworkmem = false;
 	amroutine->amparallelvacuumoptions =
 		VACUUM_OPTION_PARALLEL_BULKDEL | VACUUM_OPTION_PARALLEL_COND_CLEANUP;
@@ -105,6 +116,7 @@ SpGistCache *
 spgGetCache(Relation index)
 {
 	SpGistCache *cache;
+	int i;
 
 	if (index->rd_amcache == NULL)
 	{
@@ -117,14 +129,26 @@ spgGetCache(Relation index)
 		cache = MemoryContextAllocZero(index->rd_indexcxt,
 									   sizeof(SpGistCache));
 
-		/* SPGiST doesn't support multi-column indexes */
-		Assert(index->rd_att->natts == 1);
+		/*
+		 * SPGiST should have one key column and can also have INCLUDE
+		 * columns
+		 */
+		if (IndexRelationGetNumberOfKeyAttributes(index) != 1)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("SPGiST index can have only one key column")));
+		if (IndexRelationGetNumberOfAttributes(index) >= INDEX_MAX_KEYS)
+			ereport(ERROR,
+					(errcode(ERRCODE_TOO_MANY_COLUMNS),
+					errmsg("number of index columns (%d) exceeds limit (%d)",
+					IndexRelationGetNumberOfAttributes(index), INDEX_MAX_KEYS)));
 
 		/*
-		 * Get the actual data type of the indexed column from the index
-		 * tupdesc.  We pass this to the opclass config function so that
-		 * polymorphic opclasses are possible.
+		 * Get the actual data type of the key column from the index tupdesc.
+		 * We pass this to the opclass config function so that polymorphic
+		 * opclasses are possible.
 		 */
+
 		atttype = TupleDescAttr(index->rd_att, 0)->atttypid;
 
 		/* Call the config function to get config info for the opclass */
@@ -157,6 +181,7 @@ spgGetCache(Relation index)
 		fillTypeDesc(&cache->attPrefixType, cache->config.prefixType);
 		fillTypeDesc(&cache->attLabelType, cache->config.labelType);
 
+
 		/* Last, get the lastUsedPages data from the metapage */
 		metabuffer = ReadBuffer(index, SPGIST_METAPAGE_BLKNO);
 		LockBuffer(metabuffer, BUFFER_LOCK_SHARE);
@@ -179,6 +204,18 @@ spgGetCache(Relation index)
 		cache = (SpGistCache *) index->rd_amcache;
 	}
 
+	/* Form descriptor for INCLUDE columns if any */
+	cache->includeTupdesc = NULL;
+	for (i = 0; i < IndexRelationGetNumberOfAttributes(index) - 1; i++)
+	{
+		if (cache->includeTupdesc == NULL)
+			cache->includeTupdesc = CreateTemplateTupleDesc(
+				IndexRelationGetNumberOfAttributes(index) - 1);
+
+		TupleDescInitEntry(cache->includeTupdesc, i + 1, NULL,
+				TupleDescAttr(index->rd_att, i + 1)->atttypid, -1, 0);
+	}
+
 	return cache;
 }
 
@@ -191,6 +228,7 @@ initSpGistState(SpGistState *state, Relation index)
 	/* Get cached static information about index */
 	cache = spgGetCache(index);
 
+	state->includeTupdesc = cache->includeTupdesc;
 	state->config = cache->config;
 	state->attType = cache->attType;
 	state->attLeafType = cache->attLeafType;
@@ -604,8 +642,8 @@ spgoptions(Datum reloptions, bool validate)
 
 /*
  * Get the space needed to store a non-null datum of the indicated type.
- * Note the result is already rounded up to a MAXALIGN boundary.
- * Also, we follow the SPGiST convention that pass-by-val types are
+ * Note the result is not maxaligned and this should be done by the caller if
+ * needed. Also, we follow the SPGiST convention that pass-by-val types are
  * just stored in their Datum representation (compare memcpyDatum).
  */
 unsigned int
@@ -620,7 +658,7 @@ SpGistGetTypeSize(SpGistTypeDesc *att, Datum datum)
 	else
 		size = VARSIZE_ANY(datum);
 
-	return MAXALIGN(size);
+	return size;
 }
 
 /*
@@ -643,36 +681,197 @@ memcpyDatum(void *target, SpGistTypeDesc *att, Datum datum)
 }
 
 /*
- * Construct a leaf tuple containing the given heap TID and datum value
+ * Private version of heap_compute_data_size with start address not
+ * at MAXALIGN boundary. The reason is that start address (and alignment)
+ * influence alignment of each of next values and overall size of INCLUDE
+ * data area in SpGiST leaf tuple. MAXALINGing first INCLUDE attribute is
+ * avoided for not to introduce unnecessary gap before it.
+ */
+Size
+spgIncludedDataSize(TupleDesc tupleDesc,
+					Datum *values,
+					bool *isnull, Size start)
+{
+	Size		data_length = 0;
+	int			i;
+	int			numberOfAttributes = tupleDesc->natts;
+
+	data_length = start;
+	for (i = 0; i < numberOfAttributes; i++)
+	{
+		Datum		val;
+		Form_pg_attribute atti;
+
+		if (isnull[i])
+			continue;
+
+		val = values[i];
+		atti = TupleDescAttr(tupleDesc, i);
+
+		if (ATT_IS_PACKABLE(atti) &&
+			VARATT_CAN_MAKE_SHORT(DatumGetPointer(val)))
+		{
+			/*
+			 * we're anticipating converting to a short varlena header, so
+			 * adjust length and don't count any alignment
+			 */
+			data_length += VARATT_CONVERTED_SHORT_SIZE(DatumGetPointer(val));
+		}
+		else if (atti->attlen == -1 &&
+				 VARATT_IS_EXTERNAL_EXPANDED(DatumGetPointer(val)))
+		{
+			/*
+			 * we want to flatten the expanded value so that the constructed
+			 * tuple doesn't depend on it
+			 */
+			data_length = att_align_nominal(data_length, atti->attalign);
+			data_length += EOH_get_flat_size(DatumGetEOHP(val));
+		}
+		else
+		{
+			data_length = att_align_datum(data_length, atti->attalign,
+										  atti->attlen, val);
+			data_length = att_addlength_datum(data_length, atti->attlen,
+											  val);
+		}
+	}
+	return data_length - start;
+}
+
+/* Calculate overall leaf tuple size. SGLTHDRSZ is MAXALIGNed for backward
+ * compatibility and there might be a gap between header and key data. After
+ * key data there are no such gaps more than is is necessary for each value
+ * alignment. Overall result is MAXALIGNed which is anyway unavoidable
+ * when placing a tuple on a page.
+ */
+unsigned int
+spgLeafTupleSize(SpGistState *state, Datum *datum, bool *isnull)
+{
+	/* compute space needed, nullmask size and offset for INCLUDE attributes */
+	unsigned int size = SGLTHDRSZ;
+	unsigned int i;
+
+	if (!isnull[spgKeyColumn])
+		/* key attribute size (not maxaligned) */
+		size += SpGistGetTypeSize(&state->attLeafType, datum[spgKeyColumn]);
+
+	if (state->includeTupdesc)
+	{
+		Assert(state->includeTupdesc->natts);
+		Assert(state->includeTupdesc->natts + 1 <= INDEX_MAX_KEYS);
+		/* nullmask size */
+		for (i = 1; i <= state->includeTupdesc->natts; i++)
+		{
+			if (isnull[i])
+			{
+				size += (state->includeTupdesc->natts / 8) + 1;
+				break;
+			}
+		}
+		/* overall INCLUDE attributes size each with added proper alignment. */
+		size += spgIncludedDataSize(state->includeTupdesc, datum + 1, isnull + 1, size);
+	}
+	return MAXALIGN(size);
+}
+
+/*
+ * Construct a leaf tuple containing the given heap TID, key data and INCLUDE
+ * columns data. Key data starts from MAXALIGN boundary for backward compatibility.
+ * Nullmask apply only to INCLUDE attributes and is placed just after key data if
+ * there is at least one NULL among INCLUDE attributes. It doesn't need alignment.
+ * Then all INCLUDE columns data follow aligned by their typealign-s.
  */
 SpGistLeafTuple
 spgFormLeafTuple(SpGistState *state, ItemPointer heapPtr,
-				 Datum datum, bool isnull)
+				 Datum *datum, bool *isnull)
 {
 	SpGistLeafTuple tup;
-	unsigned int size;
-
-	/* compute space needed (note result is already maxaligned) */
-	size = SGLTHDRSZ;
-	if (!isnull)
-		size += SpGistGetTypeSize(&state->attLeafType, datum);
+	unsigned int size = SGLTHDRSZ;
+	unsigned int include_offset = 0;
+	unsigned int nullmask_size = 0;
+	unsigned int data_offset = 0;
+	unsigned int data_size = 0;
+	uint16		tupmask = 0;
+	int			i;
 
 	/*
-	 * Ensure that we can replace the tuple with a dead tuple later.  This
-	 * test is unnecessary when !isnull, but let's be safe.
+	 * Calculate space needed. If there are INCLUDE attributes also calculate
+	 * sizes and offsets needed for heap_fill_tuple
+	 */
+	if (!isnull[spgKeyColumn])
+		/* key attribute size (not maxaligned) */
+		size += SpGistGetTypeSize(&state->attLeafType, datum[spgKeyColumn]);
+
+	if (state->includeTupdesc)
+	{
+		Assert(state->includeTupdesc->natts);
+		Assert(state->includeTupdesc->natts + 1 <= INDEX_MAX_KEYS);
+
+		include_offset = size;
+
+		for (i = 1; i <= state->includeTupdesc->natts; i++)
+		{
+			if (isnull[i])
+			{
+				nullmask_size = (state->includeTupdesc->natts / 8) + 1;
+				size += nullmask_size;
+				break;
+			}
+		}
+
+		/*
+		 * Alignment of all INCLUDE attributes is counted inside data_size.
+		 * data_offset itself is not aligned.
+		 */
+		data_size = spgIncludedDataSize(state->includeTupdesc, datum + 1, isnull + 1, size);
+		data_offset = size;
+
+		size += data_size;
+	}
+
+	/*
+	 * Ensure that we can replace the tuple with a dead tuple later. This
+	 * test is unnecessary when !isnull[spgKeyColumn], but let's be safe.
 	 */
 	if (size < SGDTSIZE)
 		size = SGDTSIZE;
 
 	/* OK, form the tuple */
-	tup = (SpGistLeafTuple) palloc0(size);
+	tup = (SpGistLeafTuple) palloc0(MAXALIGN(size));
 
-	tup->size = size;
-	tup->nextOffset = InvalidOffsetNumber;
+	tup->size = MAXALIGN(size);
+	SGLT_SET_OFFSET(tup, InvalidOffsetNumber);
 	tup->heapPtr = *heapPtr;
-	if (!isnull)
-		memcpyDatum(SGLTDATAPTR(tup), &state->attLeafType, datum);
 
+	if (!isnull[spgKeyColumn])
+		memcpyDatum(SGLTDATAPTR(tup), &state->attLeafType, datum[spgKeyColumn]);
+
+	/* Add INCLUDE columns data to leaf tuple if any. */
+	if (state->includeTupdesc)
+	{
+		/*
+		 * The start of INCLUDE attributes tuple (include_offset) is next
+		 * byte after end of a key value and is not required to be aligned.
+		 * Nullmask is included without alignment and values alignment are
+		 * done by heap_fill_tuple() automatically.
+		 */
+		heap_fill_tuple(state->includeTupdesc, datum + 1, isnull + 1,
+						(char *) tup + data_offset,
+						data_size, &tupmask,
+						(nullmask_size ? (bits8 *) tup + include_offset : NULL));
+
+		if (nullmask_size)
+			SGLT_SET_CONTAINSNULLMASK(tup, true);
+
+		/*
+		 * We do this because heap_fill_tuple wants to initialize a "tupmask"
+		 * which is used for HeapTuples, but the only relevant info is the
+		 * "has variable attributes" field. We have already set the hasnull
+		 * bit above.
+		 */
+		if (tupmask & HEAP_HASVARWIDTH)
+			SGLT_SET_CONTAINSVARATT(tup, true);
+	}
 	return tup;
 }
 
@@ -689,10 +888,10 @@ spgFormNodeTuple(SpGistState *state, Datum label, bool isnull)
 	unsigned int size;
 	unsigned short infomask = 0;
 
-	/* compute space needed (note result is already maxaligned) */
+	/* compute space needed */
 	size = SGNTHDRSZ;
 	if (!isnull)
-		size += SpGistGetTypeSize(&state->attLabelType, label);
+		size += MAXALIGN(SpGistGetTypeSize(&state->attLabelType, label));
 
 	/*
 	 * Here we make sure that the size will fit in the field reserved for it
@@ -736,7 +935,7 @@ spgFormInnerTuple(SpGistState *state, bool hasPrefix, Datum prefix,
 
 	/* Compute size needed */
 	if (hasPrefix)
-		prefixSize = SpGistGetTypeSize(&state->attPrefixType, prefix);
+		prefixSize = MAXALIGN(SpGistGetTypeSize(&state->attPrefixType, prefix));
 	else
 		prefixSize = 0;
 
@@ -815,7 +1014,7 @@ spgFormDeadTuple(SpGistState *state, int tupstate,
 
 	tuple->tupstate = tupstate;
 	tuple->size = SGDTSIZE;
-	tuple->nextOffset = InvalidOffsetNumber;
+	tuple->t_info = InvalidOffsetNumber;
 
 	if (tupstate == SPGIST_REDIRECT)
 	{
@@ -1046,4 +1245,130 @@ spgproperty(Oid index_oid, int attno,
 	*isnull = false;
 
 	return true;
+}
+
+/*
+ * Convert an SpGist tuple into palloc'd Datum/isnull arrays.
+ *
+ */
+void
+spgDeformLeafTuple(SpGistLeafTuple tup, SpGistState *state, Datum *datum, bool *isnull,
+					  bool key_isnull)
+{
+	unsigned int include_offset;	/* offset of INCLUDE data */
+	int			off;
+	bits8	   *nullmask_ptr = NULL;	/* ptr to null bitmap in tuple */
+	char	   *tp;
+	bool		slow = false;	/* can we use/set attcacheoff? */
+	int			i;
+
+	if (key_isnull)
+	{
+		datum[spgKeyColumn] = (Datum) 0;
+		isnull[spgKeyColumn] = true;
+	}
+	else
+	{
+		datum[spgKeyColumn] = SGLTDATUM(tup, state);
+		isnull[spgKeyColumn] = false;
+	}
+
+	if (state->includeTupdesc)
+	{
+		Assert(state->includeTupdesc->natts);
+		Assert(state->includeTupdesc->natts + 1 <= INDEX_MAX_KEYS);
+
+		include_offset = key_isnull ? SGLTHDRSZ : SGLTHDRSZ + SpGistGetTypeSize(&state->attLeafType, datum[spgKeyColumn]);
+
+		tp = (char *) tup;
+		off = include_offset;
+
+		if (SGLT_GET_CONTAINSNULLMASK(tup))
+		{
+			nullmask_ptr = (bits8 *) tp + include_offset;
+			off += (state->includeTupdesc->natts) / 8 + 1;
+		}
+
+		if (state->attLeafType.attlen > 0 && !SGLT_GET_CONTAINSVARATT(tup) &&
+			!SGLT_GET_CONTAINSNULLMASK(tup))
+			/* can use attcacheoff for all attributes */
+		{
+			for (i = 1; i <= state->includeTupdesc->natts; i++)
+			{
+				Form_pg_attribute thisatt = TupleDescAttr(state->includeTupdesc, i - 1);
+
+				isnull[i] = false;
+				if (thisatt->attcacheoff >= 0)
+					off = thisatt->attcacheoff;
+				else
+				{
+					off = att_align_nominal(off, thisatt->attalign);
+					thisatt->attcacheoff = off;
+				}
+				datum[i] = fetchatt(thisatt, tp + off);
+				off = att_addlength_pointer(off, thisatt->attlen, tp + off);
+			}
+		}
+		else
+
+			/*
+			 * general case: can use cache until first null or varlen
+			 * attribute
+			 */
+		{
+			if (state->attLeafType.attlen <= 0)
+				slow = true;	/* can't use attcacheoff at all */
+
+			for (i = 1; i <= state->includeTupdesc->natts; i++)
+			{
+				Form_pg_attribute thisatt = TupleDescAttr(state->includeTupdesc, i - 1);
+
+				if (SGLT_GET_CONTAINSNULLMASK(tup))
+				{
+					if (att_isnull(i - 1, nullmask_ptr))
+					{
+						datum[i] = (Datum) 0;
+						isnull[i] = true;
+						slow = true;	/* can't use attcacheoff anymore */
+						continue;
+					}
+				}
+
+				isnull[i] = false;
+
+				if (!slow && thisatt->attcacheoff >= 0)
+					off = thisatt->attcacheoff;
+				else if (thisatt->attlen == -1)
+				{
+					/*
+					 * We can only cache the offset for a varlena attribute if
+					 * the offset is already suitably aligned, so that there
+					 * would be no pad bytes in any case: then the offset will
+					 * be valid for either an aligned or unaligned value.
+					 */
+					if (!slow && off == att_align_nominal(off, thisatt->attalign))
+						thisatt->attcacheoff = off;
+					else
+					{
+						off = att_align_pointer(off, thisatt->attalign, -1, tp + off);
+						slow = true;
+					}
+				}
+				else
+				{
+					/* not varlena, so safe to use att_align_nominal */
+					off = att_align_nominal(off, thisatt->attalign);
+
+					if (!slow)
+						thisatt->attcacheoff = off;
+				}
+
+				datum[i] = fetchatt(thisatt, tp + off);
+				off = att_addlength_pointer(off, thisatt->attlen, tp + off);
+
+				if (thisatt->attlen <= 0)
+					slow = true;	/* can't use attcacheoff anymore */
+			}
+		}
+	}
 }

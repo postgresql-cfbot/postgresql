@@ -73,9 +73,22 @@ Leaf tuple consists of:
     Example:
         radix tree - the rest of string (postfix)
         quad and k-d tree - the point itself
-
   ItemPointer to the heap
+  nextOffset number of next leaf tuple in a chain on a leaf page
+  optional nullmask for INCLUDE columns
+  optional INCLUDE columns values
 
+Leaf tuple layout changed since PostgreSQL version 14 to support INCLUDE
+columns but in a way that doesn't change the header and the key value
+placement in a tuple. So indexes created earlier remain fully supported.
+
+Also it is intended to be laid out with minimum possible gaps to make index
+smaller. I.e. first header of 12 bytes, then a key value starting from
+maxalign boundary, then just immediately nulls mask bytes, then INCLUDE
+attributes each starting from its typealign boundary. So in many cases,
+nullmask is stored free of charge and tuple occupy minimum possible space
+(with exception of gap before key value which starts from maxalign for
+compatibility).
 
 NULLS HANDLING
 
@@ -90,6 +103,10 @@ Insertions and searches in the nulls tree do not use any of the
 opclass-supplied functions, but just use hardwired logic comparable to
 AllTheSame cases in the normal tree.
 
+For INCLUDE attributes nulls are handled in ordinary per leaf-tuple way i.e.
+if null mask presence bit in a header is set, nullmask is added just after
+key value before the first INCLUDE attribute. Note that nullmask presence
+bit and nullmask itself apply only to INCLUDE attributes.
 
 INSERTION ALGORITHM
 

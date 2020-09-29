@@ -78,6 +78,7 @@ select * from tbl where (c1,c2,c3) < (2,5,1);
 select * from tbl where (c1,c2,c3) < (2,5,1);
 -- row comparison that compares high key at page boundary
 SET enable_seqscan = off;
+VACUUM ANALYZE tbl;
 explain (costs off)
 select * from tbl where (c1,c2,c3) < (262,1,1) limit 1;
 select * from tbl where (c1,c2,c3) < (262,1,1) limit 1;
@@ -182,7 +183,7 @@ SELECT indexdef FROM pg_indexes WHERE tablename = 'tbl' ORDER BY indexname;
 DROP TABLE tbl;
 
 /*
- * 7. Check various AMs. All but btree and gist must fail.
+ * 7. Check various AMs. All but btree, gist and spgist must fail.
  */
 CREATE TABLE tbl (c1 int,c2 int, c3 box, c4 box);
 CREATE INDEX on tbl USING brin(c1, c2) INCLUDE (c3, c4);

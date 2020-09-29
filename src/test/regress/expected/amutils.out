@@ -169,9 +169,9 @@ select amname, prop, pg_indexam_has_property(a.oid, prop) as p
  hash   | bogus         | 
  spgist | can_order     | f
  spgist | can_unique    | f
- spgist | can_multi_col | f
+ spgist | can_multi_col | t
  spgist | can_exclude   | t
- spgist | can_include   | f
+ spgist | can_include   | t
  spgist | bogus         | 
 (36 rows)
 

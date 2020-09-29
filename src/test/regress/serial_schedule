@@ -68,6 +68,7 @@ test: create_index_spgist
 test: create_view
 test: index_including
 test: index_including_gist
+test: index_including_spgist
 test: create_aggregate
 test: create_function_3
 test: create_cast

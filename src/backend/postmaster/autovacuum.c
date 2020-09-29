@@ -3200,7 +3200,7 @@ autovac_report_activity(autovac_table *tab)
 	/* Set statement_timestamp() to current time for pg_stat_activity */
 	SetCurrentStatementStartTimestamp();
 
-	pgstat_report_activity(STATE_RUNNING, activity);
+	pgstat_report_activity(STATE_RUNNING, activity, 0, 0);
 }
 
 /*
@@ -3239,7 +3239,7 @@ autovac_report_workitem(AutoVacuumWorkItem *workitem,
 	/* Set statement_timestamp() to current time for pg_stat_activity */
 	SetCurrentStatementStartTimestamp();
 
-	pgstat_report_activity(STATE_RUNNING, activity);
+	pgstat_report_activity(STATE_RUNNING, activity, 0, 0);
 }
 
 /*

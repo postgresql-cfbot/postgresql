@@ -112,7 +112,7 @@ initialize_worker_spi(worktable *table)
 	StartTransactionCommand();
 	SPI_connect();
 	PushActiveSnapshot(GetTransactionSnapshot());
-	pgstat_report_activity(STATE_RUNNING, "initializing worker_spi schema");
+	pgstat_report_activity(STATE_RUNNING, "initializing worker_spi schema", 0, 0);
 
 	/* XXX could we use CREATE SCHEMA IF NOT EXISTS? */
 	initStringInfo(&buf);
@@ -156,7 +156,7 @@ initialize_worker_spi(worktable *table)
 	SPI_finish();
 	PopActiveSnapshot();
 	CommitTransactionCommand();
-	pgstat_report_activity(STATE_IDLE, NULL);
+	pgstat_report_activity(STATE_IDLE, NULL, 0, 0);
 }
 
 void
@@ -262,7 +262,7 @@ worker_spi_main(Datum main_arg)
 		StartTransactionCommand();
 		SPI_connect();
 		PushActiveSnapshot(GetTransactionSnapshot());
-		pgstat_report_activity(STATE_RUNNING, buf.data);
+		pgstat_report_activity(STATE_RUNNING, buf.data, 0, 0);
 
 		/* We can now execute queries via SPI */
 		ret = SPI_execute(buf.data, false, 0);
@@ -292,7 +292,7 @@ worker_spi_main(Datum main_arg)
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 		pgstat_report_stat(false);
-		pgstat_report_activity(STATE_IDLE, NULL);
+		pgstat_report_activity(STATE_IDLE, NULL, 0, 0);
 	}
 
 	proc_exit(1);

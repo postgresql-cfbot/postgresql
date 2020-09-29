@@ -3530,7 +3530,7 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	/* Set debug_query_string for individual workers */
 	sharedquery = shm_toc_lookup(toc, PARALLEL_VACUUM_KEY_QUERY_TEXT, false);
 	debug_query_string = sharedquery;
-	pgstat_report_activity(STATE_RUNNING, debug_query_string);
+	pgstat_report_activity(STATE_RUNNING, debug_query_string, 0, 0);
 
 	/*
 	 * Open table.  The lock mode is the same as the leader process.  It's

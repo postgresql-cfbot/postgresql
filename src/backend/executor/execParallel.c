@@ -65,6 +65,7 @@
 #define PARALLEL_KEY_QUERY_TEXT		UINT64CONST(0xE000000000000008)
 #define PARALLEL_KEY_JIT_INSTRUMENTATION UINT64CONST(0xE000000000000009)
 #define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xE00000000000000A)
+#define PARALLEL_KEY_INDIVIDUAL_QUERY	UINT64CONST(0xE00000000000000B)
 
 #define PARALLEL_TUPLE_QUEUE_SIZE		65536
 
@@ -601,6 +602,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	Size		dsa_minsize = dsa_minimum_size();
 	char	   *query_string;
 	int			query_len;
+	PgStat_IndividualQuery *individual_query;
 
 	/*
 	 * Force any initplan outputs that we're going to pass to workers to be
@@ -636,6 +638,10 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	/* Estimate space for fixed-size state. */
 	shm_toc_estimate_chunk(&pcxt->estimator,
 						   sizeof(FixedParallelExecutorState));
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/* Estimate space for individual query. */
+	shm_toc_estimate_chunk(&pcxt->estimator, sizeof(PgStat_IndividualQuery));
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
 	/* Estimate space for query text. */
@@ -731,6 +737,12 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	fpes->eflags = estate->es_top_eflags;
 	fpes->jit_flags = estate->es_jit_flags;
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_EXECUTOR_FIXED, fpes);
+
+	/* individual query stmt_len and stmt_location*/
+	individual_query = shm_toc_allocate(pcxt->toc, sizeof(PgStat_IndividualQuery));
+	individual_query->stmt_len = estate->es_plannedstmt->stmt_len;
+	individual_query->stmt_location = estate->es_plannedstmt->stmt_location;
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_INDIVIDUAL_QUERY, individual_query);
 
 	/* Store query string */
 	query_string = shm_toc_allocate(pcxt->toc, query_len + 1);
@@ -1388,6 +1400,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	void	   *area_space;
 	dsa_area   *area;
 	ParallelWorkerContext pwcxt;
+	PgStat_IndividualQuery *individual_query;
 
 	/* Get fixed-size state. */
 	fpes = shm_toc_lookup(toc, PARALLEL_KEY_EXECUTOR_FIXED, false);
@@ -1403,9 +1416,10 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 
 	/* Setting debug_query_string for individual workers */
 	debug_query_string = queryDesc->sourceText;
+	individual_query = shm_toc_lookup(toc, PARALLEL_KEY_INDIVIDUAL_QUERY, false);
 
 	/* Report workers' query for monitoring purposes */
-	pgstat_report_activity(STATE_RUNNING, debug_query_string);
+	pgstat_report_activity(STATE_RUNNING, debug_query_string, individual_query->stmt_location, individual_query->stmt_len);
 
 	/* Attach to the dynamic shared memory area. */
 	area_space = shm_toc_lookup(toc, PARALLEL_KEY_DSA, false);

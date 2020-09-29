@@ -7234,7 +7234,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
        <para>
        Specifies the amount of memory reserved to store the text of the
        currently executing command for each active session, for the
-       <structname>pg_stat_activity</structname>.<structfield>query</structfield> field.
+       <structname>pg_stat_activity</structname>.<structfield>query</structfield> and <structfield>individual_query</structfield> fields.
        If this value is specified without units, it is taken as bytes.
        The default value is 1024 bytes.
        This parameter can only be set at server start.

@@ -118,6 +118,13 @@ typedef struct PgStat_TableCounts
 	PgStat_Counter t_blocks_hit;
 } PgStat_TableCounts;
 
+/* Individual Query location and length*/
+typedef struct PgStat_IndividualQuery
+{
+	int         stmt_location;
+	int         stmt_len;
+} PgStat_IndividualQuery;
+
 /* Possible targets for resetting cluster-wide shared values */
 typedef enum PgStat_Shared_Reset_Target
 {
@@ -1129,6 +1136,12 @@ typedef struct PgBackendStatus
 	char	   *st_activity_raw;
 
 	/*
+	 * Current individual command location and length
+	 */
+	int stmt_location;
+	int stmt_len;
+
+	/*
 	 * Command progress reporting.  Any command which wishes can advertise
 	 * that it is running by setting st_progress_command,
 	 * st_progress_command_target, and st_progress_param[].
@@ -1319,7 +1332,7 @@ extern void pgstat_report_checksum_failure(void);
 extern void pgstat_initialize(void);
 extern void pgstat_bestart(void);
 
-extern void pgstat_report_activity(BackendState state, const char *cmd_str);
+extern void pgstat_report_activity(BackendState state, const char *cmd_str, int stmt_location, int stmt_len);
 extern void pgstat_report_tempfile(size_t filesize);
 extern void pgstat_report_appname(const char *appname);
 extern void pgstat_report_xact_timestamp(TimestampTz tstamp);

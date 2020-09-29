@@ -998,15 +998,14 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
   <para>
    There is a simple variable-substitution facility for script files.
    Variable names must consist of letters (including non-Latin letters),
-   digits, and underscores.
+   digits (but not on the first character), and underscores.
    Variables can be set by the command-line <option>-D</option> option,
    explained above, or by the meta commands explained below.
    In addition to any variables preset by <option>-D</option> command-line options,
    there are a few variables that are preset automatically, listed in
    <xref linkend="pgbench-automatic-variables"/>. A value specified for these
    variables using <option>-D</option> takes precedence over the automatic presets.
-   Once set, a variable's
-   value can be inserted into a SQL command by writing
+   Once set, a variable's value can be inserted into a SQL command by writing
    <literal>:</literal><replaceable>variablename</replaceable>.  When running more than
    one client session, each session has its own set of variables.
    <application>pgbench</application> supports up to 255 variable uses in one

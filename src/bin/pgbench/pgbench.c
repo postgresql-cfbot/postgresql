@@ -120,12 +120,24 @@ typedef int pthread_attr_t;
 
 static int	pthread_create(pthread_t *thread, pthread_attr_t *attr, void *(*start_routine) (void *), void *arg);
 static int	pthread_join(pthread_t th, void **thread_return);
+
+typedef HANDLE pthread_mutex_t;
+static void pthread_mutex_init(pthread_mutex_t *pm, void *unused);
+static void pthread_mutex_lock(pthread_mutex_t *pm);
+static void pthread_mutex_unlock(pthread_mutex_t *pm);
+static void pthread_mutex_destroy(pthread_mutex_t *pm);
+
 #elif defined(ENABLE_THREAD_SAFETY)
 /* Use platform-dependent pthread capability */
 #include <pthread.h>
 #else
 /* No threads implementation, use none (-j 1) */
 #define pthread_t void *
+#define pthread_mutex_t void *
+#define pthread_mutex_init(m, p)
+#define pthread_mutex_lock(m)
+#define pthread_mutex_unlock(m)
+#define pthread_mutex_destroy(m)
 #endif
 
 
@@ -423,7 +435,7 @@ typedef struct
 	instr_time	txn_begin;		/* used for measuring schedule lag times */
 	instr_time	stmt_begin;		/* used for measuring statement latencies */
 
-	bool		prepared[MAX_SCRIPTS];	/* whether client prepared the script */
+	bool*		prepared[MAX_SCRIPTS];	/* whether client prepared the script commands */
 
 	/* per client collected stats */
 	int64		cnt;			/* client transaction count, for -t */
@@ -473,7 +485,7 @@ typedef struct
  */
 #define MAX_ARGS		256
 
-typedef enum MetaCommand
+typedef enum Meta
 {
 	META_NONE,					/* not a known meta-command */
 	META_SET,					/* \set */
@@ -504,6 +516,8 @@ static const char *QUERYMODE[] = {"simple", "extended", "prepared"};
  *
  * lines		The raw, possibly multi-line command text.  Variable substitution
  *				not applied.
+ * substituted	Whether command	:-variables were substituted for
+ *				QUERY_EXTENDED and QUERY_PREPARED
  * first_line	A short, single-line extract of 'lines', for error reporting.
  * type			SQL_COMMAND or META_COMMAND
  * meta			The type of meta-command, with META_NONE/GSET/ASET if command
@@ -518,10 +532,12 @@ static const char *QUERYMODE[] = {"simple", "extended", "prepared"};
  * aset			do gset on all possible queries of a combined query (\;).
  * expr			Parsed expression, if needed.
  * stats		Time spent in this command.
+ * mutex		For delayed initializations of SQL commands.
  */
 typedef struct Command
 {
 	PQExpBufferData lines;
+	bool		substituted;
 	char	   *first_line;
 	int			type;
 	MetaCommand meta;
@@ -530,6 +546,7 @@ typedef struct Command
 	char	   *varprefix;
 	PgBenchExpr *expr;
 	SimpleStats stats;
+	pthread_mutex_t	mutex;
 } Command;
 
 typedef struct ParsedScript
@@ -614,6 +631,7 @@ static void clear_socket_set(socket_set *sa);
 static void add_socket_to_set(socket_set *sa, int fd, int idx);
 static int	wait_on_socket_set(socket_set *sa, int64 usecs);
 static bool socket_has_input(socket_set *sa, int fd, int idx);
+static bool makeVariablesParameters(CState *st, Command *cmd);
 
 
 /* callback functions for our flex lexer */
@@ -1272,7 +1290,7 @@ lookupVariable(CState *st, char *name)
 
 /* Get the value of a variable, in string form; returns NULL if unknown */
 static char *
-getVariable(CState *st, char *name)
+getVariable(CState *st, char *name, bool *isnull)
 {
 	Variable   *var;
 	char		stringform[64];
@@ -1280,6 +1298,9 @@ getVariable(CState *st, char *name)
 	var = lookupVariable(st, name);
 	if (var == NULL)
 		return NULL;			/* not found */
+
+	if (isnull != NULL)
+		*isnull = var->value.type == PGBT_NULL;
 
 	if (var->svalue)
 		return var->svalue;		/* we have it in string form */
@@ -1376,6 +1397,9 @@ makeVariableValue(Variable *var)
  * "src/bin/pgbench/exprscan.l".  Also see parseVariable(), below.
  *
  * Note: this static function is copied from "src/bin/psql/variables.c"
+ * but changed to disallow variable names starting with a figure.
+ *
+ * FIXME does this change needs to be reverted?
  */
 static bool
 valid_variable_name(const char *name)
@@ -1386,6 +1410,15 @@ valid_variable_name(const char *name)
 	if (*ptr == '\0')
 		return false;
 
+	/* must not start with [0-9] */
+	if (IS_HIGHBIT_SET(*ptr) ||
+		strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZ" "abcdefghijklmnopqrstuvwxyz"
+			   "_", *ptr) != NULL)
+		ptr++;
+	else
+		return false;
+
+	/* remainder characters can include [0-9] */
 	while (*ptr)
 	{
 		if (IS_HIGHBIT_SET(*ptr) ||
@@ -1501,6 +1534,16 @@ putVariableInt(CState *st, const char *context, char *name, int64 value)
 	return putVariableValue(st, context, name, &val);
 }
 
+/* Assign variable to NULL, return false on bad name */
+static bool
+putVariableNull(CState *st, const char *context, char *name)
+{
+	PgBenchValue val;
+
+	setNullValue(&val);
+	return putVariableValue(st, context, name, &val);
+}
+
 /*
  * Parse a possible variable reference (:varname).
  *
@@ -1515,14 +1558,22 @@ parseVariable(const char *sql, int *eaten)
 	int			i = 0;
 	char	   *name;
 
-	do
-	{
+	/* skip ':' */
+	i++;
+
+	/* first char of name must be valid but not [0-9] */
+	if (IS_HIGHBIT_SET(sql[i]) ||
+		strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZ" "abcdefghijklmnopqrstuvwxyz"
+			   "_", sql[i]) != NULL)
 		i++;
-	} while (IS_HIGHBIT_SET(sql[i]) ||
-			 strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZ" "abcdefghijklmnopqrstuvwxyz"
-					"_0123456789", sql[i]) != NULL);
-	if (i == 1)
-		return NULL;			/* no valid variable name chars */
+	else
+		return NULL;
+
+	/* then proceed to check other chars */
+	while (IS_HIGHBIT_SET(sql[i]) ||
+		   strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZ" "abcdefghijklmnopqrstuvwxyz"
+				  "_0123456789", sql[i]) != NULL)
+		i++;
 
 	name = pg_malloc(i);
 	memcpy(name, &sql[1], i - 1);
@@ -1574,7 +1625,7 @@ assignVariables(CState *st, char *sql)
 			continue;
 		}
 
-		val = getVariable(st, name);
+		val = getVariable(st, name, NULL);
 		free(name);
 		if (val == NULL)
 		{
@@ -1591,10 +1642,12 @@ assignVariables(CState *st, char *sql)
 static void
 getQueryParams(CState *st, const Command *command, const char **params)
 {
-	int			i;
-
-	for (i = 0; i < command->argc - 1; i++)
-		params[i] = getVariable(st, command->argv[i + 1]);
+	for (int i = 0; i < command->argc - 1; i++)
+	{
+		bool	isnull;
+		char   *sval = getVariable(st, command->argv[i + 1], &isnull);
+		params[i] = isnull ? NULL : sval;
+	}
 }
 
 static char *
@@ -2534,7 +2587,7 @@ runShellCommand(CState *st, char *variable, char **argv, int argc)
 		{
 			arg = argv[i] + 1;	/* a string literal starting with colons */
 		}
-		else if ((arg = getVariable(st, argv[i] + 1)) == NULL)
+		else if ((arg = getVariable(st, argv[i] + 1, NULL)) == NULL)
 		{
 			pg_log_error("%s: undefined variable \"%s\"", argv[0], argv[i]);
 			return false;
@@ -2655,13 +2708,29 @@ sendCommand(CState *st, Command *command)
 	}
 	else if (querymode == QUERY_EXTENDED)
 	{
-		const char *sql = command->argv[0];
 		const char *params[MAX_ARGS];
+
+		/* do not try the mutex unless it will be necessary */
+		if (!command->substituted)
+		{
+			pthread_mutex_lock(&command->mutex);
+			if (!command->substituted)
+			{
+				if (!makeVariablesParameters(st, command))
+				{
+					pg_log_fatal("client %d script %s command %d pgbench variable substitution failed",
+								 st->id, sql_script[st->use_file].desc, st->command);
+					exit(1);
+				}
+				command->substituted = true;
+			}
+			pthread_mutex_unlock(&command->mutex);
+		}
 
 		getQueryParams(st, command, params);
 
-		pg_log_debug("client %d sending %s", st->id, sql);
-		r = PQsendQueryParams(st->con, sql, command->argc - 1,
+		pg_log_debug("client %d sending %s", st->id, command->argv[0]);
+		r = PQsendQueryParams(st->con, command->argv[0], command->argc - 1,
 							  NULL, params, NULL, NULL, 0);
 	}
 	else if (querymode == QUERY_PREPARED)
@@ -2669,30 +2738,41 @@ sendCommand(CState *st, Command *command)
 		char		name[MAX_PREPARE_NAME];
 		const char *params[MAX_ARGS];
 
-		if (!st->prepared[st->use_file])
+		/* do not try the mutex unless it will be necessary */
+		if (!command->substituted)
 		{
-			int			j;
-			Command   **commands = sql_script[st->use_file].commands;
-
-			for (j = 0; commands[j] != NULL; j++)
+			pthread_mutex_lock(&command->mutex);
+			if (!command->substituted)
 			{
-				PGresult   *res;
-				char		name[MAX_PREPARE_NAME];
-
-				if (commands[j]->type != SQL_COMMAND)
-					continue;
-				preparedStatementName(name, st->use_file, j);
-				res = PQprepare(st->con, name,
-								commands[j]->argv[0], commands[j]->argc - 1, NULL);
-				if (PQresultStatus(res) != PGRES_COMMAND_OK)
-					pg_log_error("%s", PQerrorMessage(st->con));
-				PQclear(res);
+				if (!makeVariablesParameters(st, command))
+				{
+					pg_log_fatal("client %d script %s command %d pgbench variable substitution failed",
+								 st->id, sql_script[st->use_file].desc, st->command);
+					exit(1);
+				}
+				command->substituted = true;
 			}
-			st->prepared[st->use_file] = true;
+			pthread_mutex_unlock(&command->mutex);
+		}
+
+		preparedStatementName(name, st->use_file, st->command);
+
+		/* each client must prepare each sql command once */
+		if (!st->prepared[st->use_file][st->command])
+		{
+			PGresult   *res;
+
+			res = PQprepare(st->con, name,
+							command->argv[0], command->argc - 1, NULL);
+			if (PQresultStatus(res) != PGRES_COMMAND_OK)
+				pg_log_error("%s", PQerrorMessage(st->con));
+
+			PQclear(res);
+
+			st->prepared[st->use_file][st->command] = true;
 		}
 
 		getQueryParams(st, command, params);
-		preparedStatementName(name, st->use_file, st->command);
 
 		pg_log_debug("client %d sending %s", st->id, name);
 		r = PQsendQueryPrepared(st->con, name, command->argc - 1,
@@ -2784,7 +2864,9 @@ readCommandResponse(CState *st, MetaCommand meta, char *varprefix)
 							varname = psprintf("%s%s", varprefix, varname);
 
 						/* store last row result as a string */
-						if (!putVariable(st, meta == META_ASET ? "aset" : "gset", varname,
+						if (PQgetisnull(res, ntuples - 1, fld) ?
+							!putVariableNull(st, meta == META_ASET ? "aset" : "gset", varname) :
+							!putVariable(st, meta == META_ASET ? "aset" : "gset", varname,
 										 PQgetvalue(res, ntuples - 1, fld)))
 						{
 							/* internal error */
@@ -2847,7 +2929,7 @@ evaluateSleep(CState *st, int argc, char **argv, int *usecs)
 
 	if (*argv[1] == ':')
 	{
-		if ((var = getVariable(st, argv[1] + 1)) == NULL)
+		if ((var = getVariable(st, argv[1] + 1, NULL)) == NULL)
 		{
 			pg_log_error("%s: undefined variable \"%s\"", argv[0], argv[1] + 1);
 			return false;
@@ -4300,11 +4382,15 @@ GetTableInfo(PGconn *con, bool scale_given)
 }
 
 /*
- * Replace :param with $n throughout the command's SQL text, which
+ * Roughly replace :param with $n throughout the command's SQL text, which
  * is a modifiable string in cmd->lines.
+ *
+ * Wherever :whatever is found, it is tried as a possible a variable name.
+ *
+ * FIXME should it do minimal lexing (in s/d quotes, ...)?
  */
 static bool
-parseQuery(Command *cmd)
+makeVariablesParameters(CState *st, Command *cmd)
 {
 	char	   *sql,
 			   *p;
@@ -4316,15 +4402,23 @@ parseQuery(Command *cmd)
 	{
 		char		var[13];
 		char	   *name;
+		char	   *val;
 		int			eaten;
 
 		name = parseVariable(p, &eaten);
 		if (name == NULL)
 		{
 			while (*p == ':')
-			{
 				p++;
-			}
+			continue;
+		}
+
+		/* skip if variable is undefined? */
+		val = getVariable(st, name, NULL);
+		if (val == NULL)
+		{
+			pg_free(name);
+			p++;
 			continue;
 		}
 
@@ -4448,6 +4542,7 @@ create_sql_command(PQExpBuffer buf, const char *source)
 	my_command = (Command *) pg_malloc(sizeof(Command));
 	initPQExpBuffer(&my_command->lines);
 	appendPQExpBufferStr(&my_command->lines, p);
+	my_command->substituted = false;
 	my_command->first_line = NULL;	/* this is set later */
 	my_command->type = SQL_COMMAND;
 	my_command->meta = META_NONE;
@@ -4455,6 +4550,7 @@ create_sql_command(PQExpBuffer buf, const char *source)
 	memset(my_command->argv, 0, sizeof(my_command->argv));
 	my_command->varprefix = NULL;	/* allocated later, if needed */
 	my_command->expr = NULL;
+	pthread_mutex_init(&my_command->mutex, NULL);
 	initSimpleStats(&my_command->stats);
 
 	return my_command;
@@ -4495,20 +4591,11 @@ postprocess_sql_command(Command *my_command)
 	buffer[strcspn(buffer, "\n\r")] = '\0';
 	my_command->first_line = pg_strdup(buffer);
 
-	/* parse query if necessary */
-	switch (querymode)
+	/* adjust argv[0] on simple query */
+	if (querymode == QUERY_SIMPLE)
 	{
-		case QUERY_SIMPLE:
-			my_command->argv[0] = my_command->lines.data;
-			my_command->argc++;
-			break;
-		case QUERY_EXTENDED:
-		case QUERY_PREPARED:
-			if (!parseQuery(my_command))
-				exit(1);
-			break;
-		default:
-			exit(1);
+		my_command->argv[0] = my_command->lines.data;
+		my_command->argc++;
 	}
 }
 
@@ -4890,6 +4977,15 @@ ParseScript(const char *script, const char *desc, int weight)
 	termPQExpBuffer(&line_buf);
 	psql_scan_finish(sstate);
 	psql_scan_destroy(sstate);
+}
+
+static int
+number_of_commands(ParsedScript *ps)
+{
+	int i = 0;
+	while (ps->commands[i] != NULL)
+		i++;
+	return i + 1;
 }
 
 /*
@@ -6017,6 +6113,9 @@ main(int argc, char **argv)
 	{
 		state[i].cstack = conditional_stack_create();
 		initRandomState(&state[i].cs_func_rs);
+		for (int s = 0; s < num_scripts; s++)
+			state[i].prepared[s] =
+				pg_malloc0(sizeof(bool) * number_of_commands(&sql_script[s]));
 	}
 
 	pg_log_debug("pghost: %s pgport: %s nclients: %d %s: %d dbName: %s",
@@ -6808,4 +6907,27 @@ pthread_join(pthread_t th, void **thread_return)
 	return 0;
 }
 
+static void
+pthread_mutex_init(pthread_mutex_t *pm, void *unused)
+{
+	*pm = CreateMutex(NULL, FALSE, NULL);
+}
+
+static void
+pthread_mutex_lock(pthread_mutex_t *pm)
+{
+	WaitForSingleObject(*pm, INFINITE);
+}
+
+static void
+pthread_mutex_unlock(pthread_mutex_t *pm)
+{
+	ReleaseMutex(*pm);
+}
+
+static void
+pthread_mutex_destroy(pthread_mutex_t *pm)
+{
+	CloseHandle(*pm);
+}
 #endif							/* WIN32 */

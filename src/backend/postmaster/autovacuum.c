@@ -153,6 +153,9 @@ static int	default_freeze_table_age;
 static int	default_multixact_freeze_min_age;
 static int	default_multixact_freeze_table_age;
 
+/* Counter to determine if statistics should be refreshed */
+static bool use_existing_stats = false;
+
 /* Memory context for long-lived data */
 static MemoryContext AutovacMemCxt;
 
@@ -2803,17 +2806,67 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	bool		wraparound;
 	AutoVacOpts *avopts;
 
-	/* use fresh stats */
-	autovac_refresh_stats();
-
-	shared = pgstat_fetch_stat_dbentry(InvalidOid);
-	dbentry = pgstat_fetch_stat_dbentry(MyDatabaseId);
-
 	/* fetch the relation's relcache entry */
 	classTup = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(classTup))
 		return NULL;
 	classForm = (Form_pg_class) GETSTRUCT(classTup);
+
+	/* 
+	 * Before stats refresh, check existing stats for avoiding
+ 	 * frequent reloading of pgstats.
+ 	 * In the case of very large numbers of tables, the cost of re-reading
+ 	 * the stats file can be significant, and the frequent calls to 
+ 	 * autovac_refresh_stats() can make certain autovacuum workers unable to work.
+ 	 * So if the last time we checked a table that was already VACUUMed after 
+ 	 * refres stats, check the current statistics before refreshing it.
+	 */
+	if (use_existing_stats)
+	{
+		shared = pgstat_fetch_stat_dbentry(InvalidOid);
+		dbentry = pgstat_fetch_stat_dbentry(MyDatabaseId);
+
+		/*
+	 	 * Get the applicable reloptions.  If it is a TOAST table, try to get the
+	 	 * main table reloptions if the toast table itself doesn't have.
+	 	 */
+		avopts = extract_autovac_opts(classTup, pg_class_desc);
+		if (classForm->relkind == RELKIND_TOASTVALUE &&
+			avopts == NULL && table_toast_map != NULL)
+		{
+			av_relation *hentry;
+			bool		found;
+
+			hentry = hash_search(table_toast_map, &relid, HASH_FIND, &found);
+			if (found && hentry->ar_hasrelopts)
+			avopts = &hentry->ar_reloptions;
+		}
+
+		/* fetch the pgstat table entry */
+		tabentry = get_pgstat_tabentry_relid(relid, classForm->relisshared,
+											 shared, dbentry);
+
+		relation_needs_vacanalyze(relid, avopts, classForm, tabentry,
+								  effective_multixact_freeze_max_age,
+								  &dovacuum, &doanalyze, &wraparound);
+
+		/* ignore ANALYZE for toast tables */
+		if (classForm->relkind == RELKIND_TOASTVALUE)
+			doanalyze = false;
+
+		/* someone has already issued vacuum, so exit quickly */
+		if (!doanalyze && !dovacuum)
+		{
+			heap_freetuple(classTup);
+			return NULL;
+		}
+	}
+
+	/* use fresh stats and recheck again */
+	autovac_refresh_stats();
+
+	shared = pgstat_fetch_stat_dbentry(InvalidOid);
+	dbentry = pgstat_fetch_stat_dbentry(MyDatabaseId);
 
 	/*
 	 * Get the applicable reloptions.  If it is a TOAST table, try to get the
@@ -2929,9 +2982,17 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		tab->at_dobalance =
 			!(avopts && (avopts->vacuum_cost_limit > 0 ||
 						 avopts->vacuum_cost_delay > 0));
-	}
 
-	heap_freetuple(classTup);
+		/* We might be better to refresh stats */
+		use_existing_stats = false;
+	}
+	else
+	{
+
+		heap_freetuple(classTup);
+		/* The relid has already vacuumed, so we might be better to use exiting stats */
+		use_existing_stats = true;
+	}
 
 	return tab;
 }

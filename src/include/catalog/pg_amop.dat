@@ -1110,7 +1110,7 @@
 
 # gist point_ops
 { amopfamily => 'gist/point_ops', amoplefttype => 'point',
-  amoprighttype => 'point', amopstrategy => '11', amopopr => '>^(point,point)',
+  amoprighttype => 'point', amopstrategy => '11', amopopr => '|>>(point,point)',
   amopmethod => 'gist' },
 { amopfamily => 'gist/point_ops', amoplefttype => 'point',
   amoprighttype => 'point', amopstrategy => '1', amopopr => '<<(point,point)',
@@ -1119,7 +1119,7 @@
   amoprighttype => 'point', amopstrategy => '5', amopopr => '>>(point,point)',
   amopmethod => 'gist' },
 { amopfamily => 'gist/point_ops', amoplefttype => 'point',
-  amoprighttype => 'point', amopstrategy => '10', amopopr => '<^(point,point)',
+  amoprighttype => 'point', amopstrategy => '10', amopopr => '<<|(point,point)',
   amopmethod => 'gist' },
 { amopfamily => 'gist/point_ops', amoplefttype => 'point',
   amoprighttype => 'point', amopstrategy => '6', amopopr => '~=(point,point)',
@@ -1381,7 +1381,7 @@
 
 # SP-GiST quad_point_ops
 { amopfamily => 'spgist/quad_point_ops', amoplefttype => 'point',
-  amoprighttype => 'point', amopstrategy => '11', amopopr => '>^(point,point)',
+  amoprighttype => 'point', amopstrategy => '11', amopopr => '|>>(point,point)',
   amopmethod => 'spgist' },
 { amopfamily => 'spgist/quad_point_ops', amoplefttype => 'point',
   amoprighttype => 'point', amopstrategy => '1', amopopr => '<<(point,point)',
@@ -1390,7 +1390,7 @@
   amoprighttype => 'point', amopstrategy => '5', amopopr => '>>(point,point)',
   amopmethod => 'spgist' },
 { amopfamily => 'spgist/quad_point_ops', amoplefttype => 'point',
-  amoprighttype => 'point', amopstrategy => '10', amopopr => '<^(point,point)',
+  amoprighttype => 'point', amopstrategy => '10', amopopr => '<<|(point,point)',
   amopmethod => 'spgist' },
 { amopfamily => 'spgist/quad_point_ops', amoplefttype => 'point',
   amoprighttype => 'point', amopstrategy => '6', amopopr => '~=(point,point)',
@@ -1405,7 +1405,7 @@
 
 # SP-GiST kd_point_ops
 { amopfamily => 'spgist/kd_point_ops', amoplefttype => 'point',
-  amoprighttype => 'point', amopstrategy => '11', amopopr => '>^(point,point)',
+  amoprighttype => 'point', amopstrategy => '11', amopopr => '|>>(point,point)',
   amopmethod => 'spgist' },
 { amopfamily => 'spgist/kd_point_ops', amoplefttype => 'point',
   amoprighttype => 'point', amopstrategy => '1', amopopr => '<<(point,point)',
@@ -1414,7 +1414,7 @@
   amoprighttype => 'point', amopstrategy => '5', amopopr => '>>(point,point)',
   amopmethod => 'spgist' },
 { amopfamily => 'spgist/kd_point_ops', amoplefttype => 'point',
-  amoprighttype => 'point', amopstrategy => '10', amopopr => '<^(point,point)',
+  amoprighttype => 'point', amopstrategy => '10', amopopr => '<<|(point,point)',
   amopmethod => 'spgist' },
 { amopfamily => 'spgist/kd_point_ops', amoplefttype => 'point',
   amoprighttype => 'point', amopstrategy => '6', amopopr => '~=(point,point)',

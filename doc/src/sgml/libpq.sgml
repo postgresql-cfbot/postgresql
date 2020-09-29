@@ -1711,10 +1711,12 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <listitem>
        <para>
         This parameter specifies the file name of the SSL certificate
-        revocation list (CRL).  Certificates listed in this file, if it
-        exists, will be rejected while attempting to authenticate the
+        revocation list (CRL) or the directory name that contains CRL files.
+        Certificates listed in this file or in the files in this directoty, if
+        it exists, will be rejected while attempting to authenticate the
         server's certificate.  The default is
-        <filename>~/.postgresql/root.crl</filename>.
+        <filename>~/.postgresql/root.crl</filename>. See
+        <xref linkend="ssl-crl-files"/> for details.
        </para>
       </listitem>
      </varlistentry>

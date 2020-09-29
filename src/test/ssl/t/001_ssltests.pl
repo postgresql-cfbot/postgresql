@@ -13,7 +13,7 @@ use SSLServer;
 
 if ($ENV{with_openssl} eq 'yes')
 {
-	plan tests => 93;
+	plan tests => 100;
 }
 else
 {
@@ -214,12 +214,24 @@ test_connect_fails(
 	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/client.crl",
 	qr/SSL error/,
 	"CRL belonging to a different CA");
+# The same for CRL directory, fails
+test_connect_fails(
+	$common_connstr,
+	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/client-crldir",
+	qr/SSL error/,
+	"directory CRL belonging to a different CA");
 
 # With the correct CRL, succeeds (this cert is not revoked)
 test_connect_ok(
 	$common_connstr,
 	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/root+server.crl",
 	"CRL with a non-revoked cert");
+
+# With the correct server CRL directory, succeeds (this cert is not revoked)
+test_connect_ok(
+	$common_connstr,
+	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/root+server-crldir",
+	"directory CRL with a non-revoked cert");
 
 # Check that connecting with verify-full fails, when the hostname doesn't
 # match the hostname in the server's certificate.
@@ -346,7 +358,12 @@ test_connect_fails(
 	$common_connstr,
 	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/root+server.crl",
 	qr/SSL error/,
-	"does not connect with client-side CRL");
+	"does not connect with client-side CRL file");
+test_connect_fails(
+	$common_connstr,
+	"sslrootcert=ssl/root+server_ca.crt sslmode=verify-ca sslcrl=ssl/root+server-crldir",
+	qr/SSL error/,
+	"does not connect with client-side CRL directory");
 
 # pg_stat_ssl
 command_like(
@@ -544,6 +561,16 @@ test_connect_ok(
 	"intermediate client certificate is provided by client");
 test_connect_fails($common_connstr, "sslmode=require sslcert=ssl/client.crt",
 	qr/SSL error/, "intermediate client certificate is missing");
+
+# test server-side CRL directory
+switch_server_cert($node, 'server-cn-only', undef, 'root+client-crldir');
+
+# revoked client cert
+test_connect_fails(
+	$common_connstr,
+	"user=ssltestuser sslcert=ssl/client-revoked.crt sslkey=ssl/client-revoked_tmp.key",
+	qr/SSL error/,
+	"certificate authorization fails with revoked client cert with server-side CRL directory");
 
 # clean up
 foreach my $key (@keys)

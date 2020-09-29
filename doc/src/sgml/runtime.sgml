@@ -2551,6 +2551,36 @@ openssl x509 -req -in server.csr -text -days 365 \
    </para>
   </sect2>
 
+  <sect2 id="ssl-crl-files">
+    <title>Certification Revocation List files</title>
+
+    <para> The server setting <xref linkend="guc-ssl-crl-file"/> and the
+    connection option <xref linkend="libpq-connect-sslcrl"/> specify either a
+    file containing one or more CRL, or a directory containing a separate file
+    for every CRL. In the first method, file method, the all CRLs in the file
+    is loaded at server start time or by reloading config file
+    (<command>pg_ctl reload</command>). In the second method, hashed directory
+    method, CRL files are loaded on-demand, that is, only the relevant CRL
+    files are loaded at connection time.
+    </para>
+    <para>
+    The CRL file used for the file method can contain multiple CRLs, like
+    certificates, by just concatenated if it is in PEM format.  In the hashed
+    directory method, every file in the directory has the name
+    with <parameter>hash</parameter>.r<parameter>N</parameter> format,
+    where <parameter>hash</parameter> is the hash value of the issuer of the
+    CRL and <parameter>N</parameter> is a sequence number that starts at
+    zero. The hash value is calculated using openssl command. In both cases
+    the CRLs from all CAs involved in a certificate chain are needed to verify
+    a certificate, even if some or all of them are empty.
+<programlisting>
+$ openssl crl -hash -noout -in foo.crl
+98668507
+$ cp foo.crl $PGDATA/crldir/98668507.r0
+</programlisting>
+    </para>
+  </sect2>
+
  </sect1>
 
  <sect1 id="gssapi-enc">

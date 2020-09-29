@@ -20,6 +20,8 @@
 #include "storage/predicate_internals.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "storage/procarray.h"
+#include "storage/proc.h"
 
 
 /*
@@ -537,6 +539,78 @@ pg_blocking_pids(PG_FUNCTION_ARGS)
 										  sizeof(int32), true, TYPALIGN_INT));
 }
 
+/*
+ * pg_lwlock_blocking_pid
+ *
+ * returns the waiting mode of the the specified process ID,
+ * the last process ID (and its holding mode) holding the LWLock, the number
+ * of process holding the LWLlock, or empty values if there is no such server process
+ * or it is not blocked.
+ */
+Datum
+pg_lwlock_blocking_pid(PG_FUNCTION_ARGS)
+{
+	int                     blocked_pid = PG_GETARG_INT32(0);
+	PGPROC     *proc = NULL;
+	Datum           values[4];
+	bool            nulls[4];
+	TupleDesc       tupdesc;
+	HeapTuple       htup;
+
+	/*
+	 * Construct a tuple descriptor for the result row.
+	 */
+	tupdesc = CreateTemplateTupleDesc(4);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "requested_mode",
+								TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "last_holder_pid",
+								INT4OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "last_holder_mode",
+								TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "nb_holders",
+								INT2OID, -1, 0);
+
+	tupdesc = BlessTupleDesc(tupdesc);
+	/*
+	 * Form tuple with appropriate data.
+	 */
+	MemSet(values, 0, sizeof(values));
+	MemSet(nulls, false, sizeof(nulls));
+
+	proc = BackendPidGetProc(blocked_pid);
+
+	if (proc != NULL && proc->lwWaiting) {
+		if (proc->lwWaitMode == 0)
+			values[0] = CStringGetTextDatum("LW_EXCLUSIVE");
+		else if (proc->lwWaitMode == 1)
+			values[0] = CStringGetTextDatum("LW_SHARED");
+		else if (proc->lwWaitMode == 2)
+			values[0] = CStringGetTextDatum("LW_WAIT_UNTIL_FREE");
+		else
+			values[0] = CStringGetTextDatum("N/A");
+
+		values[1] = Int32GetDatum(proc->lwLastHoldingPid);
+
+		if (proc->lwHolderMode == 0)
+			values[2] = CStringGetTextDatum("LW_EXCLUSIVE");
+		else if (proc->lwHolderMode == 1)
+			values[2] = CStringGetTextDatum("LW_SHARED");
+		else if (proc->lwHolderMode == 2)
+			values[2] = CStringGetTextDatum("LW_WAIT_UNTIL_FREE");
+		else
+			values[2] = CStringGetTextDatum("N/A");
+		values[3] = Int16GetDatum(proc->lwNbHolders);
+	} else {
+		nulls[0] = true;
+		nulls[1] = true;
+		nulls[2] = true;
+		nulls[3] = true;
+	}
+
+	htup = heap_form_tuple(tupdesc, values, nulls);
+
+	PG_RETURN_DATUM(HeapTupleGetDatum(htup));
+}
 
 /*
  * pg_safe_snapshot_blocking_pids - produce an array of the PIDs blocking

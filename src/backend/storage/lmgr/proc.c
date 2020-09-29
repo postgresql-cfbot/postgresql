@@ -398,6 +398,7 @@ InitProcess(void)
 	if (IsAutoVacuumWorkerProcess())
 		MyProc->vacuumFlags |= PROC_IS_AUTOVACUUM;
 	MyProc->lwWaiting = false;
+	MyProc->lwLastHoldingPid = 0;
 	MyProc->lwWaitMode = 0;
 	MyProc->waitLock = NULL;
 	MyProc->waitProcLock = NULL;
@@ -576,6 +577,7 @@ InitAuxiliaryProcess(void)
 	MyProc->delayChkpt = false;
 	MyProc->vacuumFlags = 0;
 	MyProc->lwWaiting = false;
+	MyProc->lwLastHoldingPid = 0;
 	MyProc->lwWaitMode = 0;
 	MyProc->waitLock = NULL;
 	MyProc->waitProcLock = NULL;

@@ -23,6 +23,15 @@
 
 struct PGPROC;
 
+typedef enum LWLockMode
+{
+	LW_EXCLUSIVE,
+	LW_SHARED,
+	LW_WAIT_UNTIL_FREE                      /* A special mode used in PGPROC->lwWaitMode,
+							* when waiting for lock to become free. Not
+							* to be used as LWLockAcquire argument */
+} LWLockMode;
+
 /*
  * Code outside of lwlock.c should not manipulate the contents of this
  * structure directly, but we have to declare it here to allow LWLocks to be
@@ -30,9 +39,12 @@ struct PGPROC;
  */
 typedef struct LWLock
 {
-	uint16		tranche;		/* tranche ID */
+	uint16		tranche;	/* tranche ID */
 	pg_atomic_uint32 state;		/* state of exclusive/nonexclusive lockers */
 	proclist_head waiters;		/* list of waiting PGPROCs */
+	int last_holding_pid;		/* last pid owner of the lock */
+	LWLockMode last_mode;		/* last holding mode of the last pid owner of the lock */
+	pg_atomic_uint32 nholders;	/* number of holders (could be >1 in case of LW_SHARED */
 #ifdef LOCK_DEBUG
 	pg_atomic_uint32 nwaiters;	/* number of waiters */
 	struct PGPROC *owner;		/* last exclusive owner of the lock */
@@ -126,16 +138,6 @@ extern PGDLLIMPORT int NamedLWLockTrancheRequests;
 	(LOCK_MANAGER_LWLOCK_OFFSET + NUM_LOCK_PARTITIONS)
 #define NUM_FIXED_LWLOCKS \
 	(PREDICATELOCK_MANAGER_LWLOCK_OFFSET + NUM_PREDICATELOCK_PARTITIONS)
-
-typedef enum LWLockMode
-{
-	LW_EXCLUSIVE,
-	LW_SHARED,
-	LW_WAIT_UNTIL_FREE			/* A special mode used in PGPROC->lwWaitMode,
-								 * when waiting for lock to become free. Not
-								 * to be used as LWLockAcquire argument */
-} LWLockMode;
-
 
 #ifdef LOCK_DEBUG
 extern bool Trace_lwlocks;

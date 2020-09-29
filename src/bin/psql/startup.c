@@ -1074,6 +1074,30 @@ histcontrol_hook(const char *newval)
 	return true;
 }
 
+static char *
+status_target_substitute_hook(char *newVal)
+{
+	if (newVal == NULL)
+		newVal = pg_strdup("result");
+	return newVal;
+}
+
+static bool
+status_target_hook(const char *newVal)
+{
+	Assert(newVal != NULL);
+	if (pg_strcasecmp(newVal, "stdout") == 0)
+		pset.status_target = PSQL_STATUS_STDOUT;
+	else if (pg_strcasecmp(newVal, "result") == 0)
+		pset.status_target = PSQL_STATUS_RESULT;
+	else
+	{
+		PsqlVarEnumError("STATUS_TARGET", newVal, "result, stdout");
+		return false;
+	}
+	return true;
+}
+
 static bool
 prompt1_hook(const char *newval)
 {
@@ -1226,4 +1250,7 @@ EstablishVariableSpace(void)
 	SetVariableHooks(pset.vars, "HIDE_TABLEAM",
 					 bool_substitute_hook,
 					 hide_tableam_hook);
+	SetVariableHooks(pset.vars, "STATUS_TARGET",
+					 status_target_substitute_hook,
+					 status_target_hook);
 }

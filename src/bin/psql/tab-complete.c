@@ -3927,6 +3927,8 @@ psql_completion(const char *text, int start, int end)
 			COMPLETE_WITH_CS("on", "off", "interactive");
 		else if (TailMatchesCS("SHOW_CONTEXT"))
 			COMPLETE_WITH_CS("never", "errors", "always");
+		else if (TailMatchesCS("STATUS_TARGET"))
+			COMPLETE_WITH_CS("result", "stdout");
 		else if (TailMatchesCS("VERBOSITY"))
 			COMPLETE_WITH_CS("default", "verbose", "terse", "sqlstate");
 	}

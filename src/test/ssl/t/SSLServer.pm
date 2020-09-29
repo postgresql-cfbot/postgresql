@@ -150,6 +150,8 @@ sub configure_test_server_for_ssl
 	copy_files("ssl/root+client_ca.crt", $pgdata);
 	copy_files("ssl/root_ca.crt",        $pgdata);
 	copy_files("ssl/root+client.crl",    $pgdata);
+	mkdir("$pgdata/root+client-crldir");
+	copy_files("ssl/root+client-crldir/*", "$pgdata/root+client-crldir/");
 
 	# Stop and restart server to load new listen_addresses.
 	$node->restart;
@@ -167,6 +169,7 @@ sub switch_server_cert
 	my $node     = $_[0];
 	my $certfile = $_[1];
 	my $cafile   = $_[2] || "root+client_ca";
+	my $crlfile  = $_[3] || "root+client.crl";
 	my $pgdata   = $node->data_dir;
 
 	open my $sslconf, '>', "$pgdata/sslconfig.conf";
@@ -174,7 +177,7 @@ sub switch_server_cert
 	print $sslconf "ssl_ca_file='$cafile.crt'\n";
 	print $sslconf "ssl_cert_file='$certfile.crt'\n";
 	print $sslconf "ssl_key_file='$certfile.key'\n";
-	print $sslconf "ssl_crl_file='root+client.crl'\n";
+	print $sslconf "ssl_crl_file='$crlfile'\n";
 	close $sslconf;
 
 	$node->restart;

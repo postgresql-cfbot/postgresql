@@ -289,8 +289,18 @@ be_tls_init(bool isServerStart)
 
 		if (cvstore)
 		{
+			char *filename = NULL;
+			char *dirname = NULL;
+			struct stat statbuf;
+
+			/* identify whether it is a file or a directoty */
+			if (stat(ssl_crl_file, &statbuf) == 0 && S_ISDIR(statbuf.st_mode))
+				dirname = ssl_crl_file;
+			else
+				filename = ssl_crl_file;
+
 			/* Set the flags to check against the complete CRL chain */
-			if (X509_STORE_load_locations(cvstore, ssl_crl_file, NULL) == 1)
+			if (X509_STORE_load_locations(cvstore, filename, dirname) == 1)
 			{
 				X509_STORE_set_flags(cvstore,
 									 X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);

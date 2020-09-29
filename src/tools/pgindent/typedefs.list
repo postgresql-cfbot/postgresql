@@ -102,6 +102,7 @@ AlterUserMappingStmt
 AlteredTableInfo
 AlternativeSubPlan
 AlternativeSubPlanState
+AmCheckSettings
 AnalyzeAttrComputeStatsFunc
 AnalyzeAttrFetchFunc
 AnalyzeForeignTable_function
@@ -403,6 +404,7 @@ ConfigData
 ConfigVariable
 ConnCacheEntry
 ConnCacheKey
+ConnectOptions
 ConnStatusType
 ConnType
 ConnectionStateEnum
@@ -1020,6 +1022,7 @@ HbaToken
 HeadlineJsonState
 HeadlineParsedText
 HeadlineWordEntry
+HeapCheckContext
 HeapScanDesc
 HeapTuple
 HeapTupleData
@@ -2285,6 +2288,7 @@ SimpleStringList
 SimpleStringListCell
 SingleBoundSortItem
 Size
+SkipPages
 SlabBlock
 SlabChunk
 SlabContext

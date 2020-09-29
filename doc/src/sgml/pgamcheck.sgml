@@ -1,0 +1,229 @@
+<!-- doc/src/sgml/pg_amcheck.sgml -->
+
+<sect1 id="pg_amcheck" xreflabel="pg_amcheck">
+ <title>pg_amcheck</title>
+
+ <indexterm zone="pg_amcheck">
+  <primary>pg_amcheck</primary>
+ </indexterm>
+
+ <para>
+  The <filename>pg_amcheck</filename> module provides a command line interface
+  to the <xref linkend="amcheck"/> corruption checking functionality.
+ </para>
+
+ <para>
+  <application>pg_amcheck</application> is a regular
+  <productname>PostgreSQL</productname> client application. You can perform
+  corruption checks from any remote host that has access to the database
+  connecting as a user with sufficient privileges to check tables and indexes.
+  Currently, this requires superuser privileges.
+ </para>
+
+<synopsis>
+pg_amcheck [OPTION]... [DBNAME [USERNAME]]
+  General options:
+    -V, --version                output version information, then exit
+    -?, --help                   show this help, then exit
+    -s, --strict-names           require include patterns to match at least one entity each
+    -o, --on-error-stop          stop checking at end of first corrupt page
+
+  Schema checking options:
+    -n, --schema=PATTERN         check relations in the specified schema(s) only
+    -N, --exclude-schema=PATTERN do NOT check relations in the specified schema(s)
+
+  Table checking options:
+    -t, --table=PATTERN          check the specified table(s) only
+    -T, --exclude-table=PATTERN  do NOT check the specified table(s)
+    -b, --startblock             begin checking table(s) at the given starting block number
+    -e, --endblock               check table(s) only up to the given ending block number
+    -f, --skip-all-frozen        do NOT check blocks marked as all frozen
+    -v, --skip-all-visible       do NOT check blocks marked as all visible
+
+  TOAST table checking options:
+    -z, --check-toast            check associated toast tables and toast indexes
+    -Z, --skip-toast             do NOT check associated toast tables and toast indexes
+    -B, --toast-startblock       begin checking toast table(s) at the given starting block
+    -E, --toast-endblock         check toast table(s) only up to the given ending block
+
+  Index checking options:
+    -x, --check-indexes          check btree indexes associated with tables being checked
+    -X, --skip-indexes           do NOT check any btree indexes
+    -i, --index=PATTERN          check the specified index(es) only
+    -I, --exclude-index=PATTERN  do NOT check the specified index(es)
+    -c, --check-corrupt          check indexes even if their associated table is corrupt
+    -C, --skip-corrupt           do NOT check indexes if their associated table is corrupt
+    -a, --heapallindexed         check index tuples against the table tuples
+    -A, --no-heapallindexed      do NOT check index tuples against the table tuples
+    -r, --rootdescend            search from the root page for each index tuple
+    -R, --no-rootdescend         do NOT search from the root page for each index tuple
+
+  Connection options:
+    -d, --dbname=DBNAME          database name to connect to
+    -h, --host=HOSTNAME          database server host or socket directory
+    -p, --port=PORT              database server port
+    -U, --username=USERNAME      database user name
+    -w, --no-password            never prompt for password
+    -W, --password               force password prompt (should happen automatically)
+</synopsis>
+
+ <sect2>
+  <title>Options</title>
+
+  <para>
+   To specify which database server <application>pg_amcheck</application> should
+   contact, use the command line options <option>-h</option> or
+   <option>--host</option> and <option>-p</option> or
+   <option>port</option>. The default host is the local host
+   or whatever your <envar>PGHOST</envar> environment variable specifies.
+   Similarly, the default port is indicated by the <envar>PGPORT</envar>
+   environment variable or, failing that, by the compiled-in default.
+  </para>
+ 
+  <para>
+   Like any other <productname>PostgreSQL</productname> client application,
+   <application>pg_amcheck</application> will by default connect with the
+   database user name that is equal to the current operating system user name.
+   To override this, either specify the <option>-U</option> option or set the
+   environment variable <envar>PGUSER</envar>. Remember that
+   <application>pg_amcheck</application> connections are subject to the normal
+   client authentication mechanisms (which are described in <xref
+   linkend="client-authentication"/>).
+  </para>
+ 
+  <para>
+   To restrict checking of tables and indexes to specific schemas, specify the
+   <option>-s</option> or <option>--schema</option> option with a pattern.
+   To exclude checking of tables and indexes within specific schemas, specify
+   the <option>-N</option> or <option>--exclude-schema</option> option with
+   a pattern.
+  </para>
+ 
+  <para>
+   To specify which tables are checked, specify the
+   <option>-t</option> or <option>--table</option> option with a pattern.
+   To exclude checking of tables, specify the
+   <option>-T</option> or <option>--exclude-table</option> option with a
+   pattern.
+  </para>
+ 
+  <para>
+   To check indexes associated with checked tables, specify the
+   <option>-i</option> or <option>--check-indexes</option> option.  Only
+   indexes on tables which are being checked will themselves be checked.  To
+   check all indexes in a database, all tables on which the indexes exist must
+   also be checked.  This restriction may be relaxed in the future.
+  </para>
+ 
+  <para>
+   To restrict the range of blocks within a table that are checked, specify the
+   <option>-b</option> or <option>--startblock</option> and/or
+   <option>-e</option> or <option>--endblock</option> options with numeric
+   values for the starting and ending block numbers.  Although these options
+   make the most sense when applied to a single table, if specified along with
+   options that select multiple tables, each table check will be restricted to
+   the specified blocks.  If <option>--startblock</option> is omitted, checking
+   begins with the first block. If <option>--endblock</option> is omitted,
+   checking continues to the end of the relation.
+  </para>
+ 
+  <para>
+   Some users may wish to periodically check tables without incurring the cost
+   of rechecking older table blocks, presumably because those blocks have
+   already been checked in the past.  There is at present no perfect way to do
+   this.  Although the <option>--startblock</option> and <option>--endblock</option>
+   options can be used to restrict blocks, the user is not expected to have
+   perfect knowledge of which blocks have already been checked, and in any
+   event, some blocks that were previously checked may have been subject to
+   modification since the last check.  As an approximation to the desired
+   functionality, one can specify the
+   <option>-f</option> or <option>--skip-all-frozen</option> option, or
+   alternatively the
+   <option>-v</option> or <option>--skip-all-visible</option> option to skip
+   blocks marked all frozen or all visible, respectively.
+  </para>
+ </sect2>
+
+ <sect2>
+  <title>Example Usage</title>
+
+  <para>
+   For table corruption, each detected corruption is reported on two lines, the
+   first line shows the location and the second line shows a message describing
+   the problem.
+  </para>
+
+  <para>
+   Checking an entire database which contains one corrupt table, "mytable",
+   along with the output:
+  </para>
+
+<screen>
+% pg_amcheck --check-toast --skip-indexes mydb
+(relname=mytable,blkno=0,offnum=1,attnum=)
+inserting transaction ID is from before freeze cutoff: 3 vs. 524
+(relname=mytable,blkno=0,offnum=2,attnum=)
+inserting transaction ID is from before freeze cutoff: 4026531839 vs. 524
+(relname=mytable,blkno=0,offnum=3,attnum=)
+updating transaction ID is from before relation cutoff: 4026531839 vs. 524
+(relname=mytable,blkno=0,offnum=4,attnum=)
+data begins at offset beyond the tuple length: 152 vs. 58
+(relname=mytable,blkno=0,offnum=4,attnum=)
+data offset differs from expected: 152 vs. 24 (3 attributes, no nulls)
+(relname=mytable,blkno=0,offnum=5,attnum=)
+data offset differs from expected: 27 vs. 24 (3 attributes, no nulls)
+(relname=mytable,blkno=0,offnum=6,attnum=)
+data offset differs from expected: 16 vs. 24 (3 attributes, no nulls)
+(relname=mytable,blkno=0,offnum=7,attnum=)
+data offset differs from expected: 21 vs. 24 (3 attributes, no nulls)
+(relname=mytable,blkno=0,offnum=8,attnum=)
+number of attributes exceeds maximum expected for table: 2047 vs. 3
+(relname=mytable,blkno=0,offnum=9,attnum=)
+data offset differs from expected: 24 vs. 280 (2047 attributes, has nulls)
+(relname=mytable,blkno=0,offnum=10,attnum=)
+number of attributes exceeds maximum expected for table: 67 vs. 3
+(relname=mytable,blkno=0,offnum=11,attnum=1)
+attribute ends at offset beyond total tuple length: 416848000 vs. 58 (attribute length 4294967295)
+(relname=mytable,blkno=0,offnum=12,attnum=2)
+final toast chunk number differs from expected value: 0 vs. 6
+(relname=mytable,blkno=0,offnum=12,attnum=2)
+toasted value missing from toast table
+(relname=mytable,blkno=0,offnum=13,attnum=)
+updating transaction ID marked incompatibly as keys updated and locked only
+(relname=mytable,blkno=0,offnum=14,attnum=)
+multitransaction ID is from before relation cutoff: 0 vs. 1
+</screen>
+
+  <para>
+   For index corruption, the output is more free-form, and may span more than
+   one line per corruption detected.
+  </para>
+
+  <para>
+   Checking an entire database which contains one corrupt index,
+   "corrupt_index", with corruption in the page header, along with the output:
+  </para>
+
+<screen>
+% pg_amcheck --check-toast --check-indexes --schema=public --table=table_with_corrupt_index mydb
+index check failed for index corrupt_index of table table_with_corrupt_index:
+ERROR:  XX002: index "corrupt_index" is not a btree
+LOCATION:  _bt_getmeta, nbtpage.c:152
+</screen>
+
+  <para>
+   Checking again after rebuilding the index but corrupting the contents,
+   along with the output:
+  </para>
+
+<screen>
+% pg_amcheck --check-toast --check-indexes --schema=public --table=table_with_corrupt_index mydb
+index check failed for index corrupt_index of table table_with_corrupt_index:
+ERROR:  XX002: index tuple size does not equal lp_len in index "corrupt_index"
+DETAIL:  Index tid=(39,49) tuple size=3373 lp_len=24 page lsn=0/2B548C0.
+HINT:  This could be a torn page problem.
+LOCATION:  bt_target_page_check, verify_nbtree.c:1125
+</screen>
+
+ </sect2>
+</sect1>

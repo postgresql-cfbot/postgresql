@@ -133,6 +133,7 @@ typedef struct CopyStateData
 	char	   *filename;		/* filename, or NULL for STDIN/STDOUT */
 	bool		is_program;		/* is 'filename' a program to popen? */
 	copy_data_source_cb data_source_cb; /* function for reading data */
+	copy_data_destination_cb data_destination_cb; /* function to write data */
 	bool		binary;			/* binary format? */
 	bool		freeze;			/* freeze rows on loading? */
 	bool		csv_mode;		/* Comma Separated Value format? */
@@ -363,11 +364,6 @@ static CopyState BeginCopy(ParseState *pstate, bool is_from, Relation rel,
 						   List *options);
 static void EndCopy(CopyState cstate);
 static void ClosePipeToProgram(CopyState cstate);
-static CopyState BeginCopyTo(ParseState *pstate, Relation rel, RawStmt *query,
-							 Oid queryRelId, const char *filename, bool is_program,
-							 List *attnamelist, List *options);
-static void EndCopyTo(CopyState cstate);
-static uint64 DoCopyTo(CopyState cstate);
 static uint64 CopyTo(CopyState cstate);
 static void CopyOneRowTo(CopyState cstate, TupleTableSlot *slot);
 static bool CopyReadLine(CopyState cstate);
@@ -595,7 +591,7 @@ CopySendEndOfRow(CopyState cstate)
 			(void) pq_putmessage('d', fe_msgbuf->data, fe_msgbuf->len);
 			break;
 		case COPY_CALLBACK:
-			Assert(false);		/* Not yet supported. */
+			cstate->data_destination_cb(fe_msgbuf->data, fe_msgbuf->len);
 			break;
 	}
 
@@ -1126,7 +1122,8 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 	{
 		cstate = BeginCopyTo(pstate, rel, query, relid,
 							 stmt->filename, stmt->is_program,
-							 stmt->attlist, stmt->options);
+							 stmt->attlist, stmt->options,
+							 NULL);
 		*processed = DoCopyTo(cstate);	/* copy from database to file */
 		EndCopyTo(cstate);
 	}
@@ -1868,7 +1865,7 @@ EndCopy(CopyState cstate)
 /*
  * Setup CopyState to read tuples from a table or a query for COPY TO.
  */
-static CopyState
+CopyState
 BeginCopyTo(ParseState *pstate,
 			Relation rel,
 			RawStmt *query,
@@ -1876,10 +1873,11 @@ BeginCopyTo(ParseState *pstate,
 			const char *filename,
 			bool is_program,
 			List *attnamelist,
-			List *options)
+			List *options,
+			copy_data_destination_cb data_destination_cb)
 {
 	CopyState	cstate;
-	bool		pipe = (filename == NULL);
+	bool		pipe = (filename == NULL) && (data_destination_cb == NULL);
 	MemoryContext oldcontext;
 
 	if (rel != NULL && rel->rd_rel->relkind != RELKIND_RELATION)
@@ -1924,7 +1922,12 @@ BeginCopyTo(ParseState *pstate,
 					   options);
 	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
 
-	if (pipe)
+	if (data_destination_cb)
+	{
+	    cstate->copy_dest = COPY_CALLBACK;
+	    cstate->data_destination_cb = data_destination_cb;
+	}
+	else if (pipe)
 	{
 		Assert(!is_program);	/* the grammar does not allow this */
 		if (whereToSendOutput != DestRemote)
@@ -2004,10 +2007,10 @@ BeginCopyTo(ParseState *pstate,
  * This intermediate routine exists mainly to localize the effects of setjmp
  * so we don't need to plaster a lot of variables with "volatile".
  */
-static uint64
+uint64
 DoCopyTo(CopyState cstate)
 {
-	bool		pipe = (cstate->filename == NULL);
+	bool		pipe = (cstate->filename == NULL) && (cstate->data_destination_cb == NULL);
 	bool		fe_copy = (pipe && whereToSendOutput == DestRemote);
 	uint64		processed;
 
@@ -2039,7 +2042,7 @@ DoCopyTo(CopyState cstate)
 /*
  * Clean up storage and release resources for COPY TO.
  */
-static void
+void
 EndCopyTo(CopyState cstate)
 {
 	if (cstate->queryDesc != NULL)

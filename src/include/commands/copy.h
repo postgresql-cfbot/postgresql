@@ -22,6 +22,7 @@
 /* CopyStateData is private in commands/copy.c */
 typedef struct CopyStateData *CopyState;
 typedef int (*copy_data_source_cb) (void *outbuf, int minread, int maxread);
+typedef void (*copy_data_destination_cb) (void *data, int len);
 
 extern void DoCopy(ParseState *state, const CopyStmt *stmt,
 				   int stmt_location, int stmt_len,
@@ -40,5 +41,11 @@ extern void CopyFromErrorCallback(void *arg);
 extern uint64 CopyFrom(CopyState cstate);
 
 extern DestReceiver *CreateCopyDestReceiver(void);
+
+extern CopyState BeginCopyTo(ParseState *pstate, Relation rel, RawStmt *query,
+	Oid queryRelId, const char *filename, bool is_program,
+	List *attnamelist, List *options, copy_data_destination_cb data_destination_cb);
+extern uint64 DoCopyTo(CopyState cstate);
+extern void EndCopyTo(CopyState cstate);
 
 #endif							/* COPY_H */

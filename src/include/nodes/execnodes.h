@@ -1944,6 +1944,10 @@ typedef struct HashJoinState
 	int			hj_JoinState;
 	bool		hj_MatchedOuter;
 	bool		hj_OuterNotEmpty;
+	/* Adaptive Hashjoin variables */
+	int			hj_CurNumOuterTuples;	/* number of outer tuples in a batch */
+	unsigned int hj_CurOuterMatchStatus;
+	int			hj_EmitOuterTupleId;
 } HashJoinState;
 
 
@@ -2372,6 +2376,7 @@ typedef struct HashInstrumentation
 	int			nbatch;			/* number of batches at end of execution */
 	int			nbatch_original;	/* planned number of batches */
 	Size		space_peak;		/* peak memory usage in bytes */
+	List	   *fallback_batches_stats; /* per hashjoin batch stats */
 } HashInstrumentation;
 
 /* ----------------

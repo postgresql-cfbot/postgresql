@@ -839,45 +839,26 @@ rollback to settings;
 -- the hash table)
 -- parallel with parallel-aware hash join (hits ExecParallelHashLoadTuple and
 -- sts_puttuple oversized tuple cases because it's multi-batch)
-savepoint settings;
-set max_parallel_workers_per_gather = 2;
-set enable_parallel_hash = on;
-set work_mem = '128kB';
-explain (costs off)
-  select length(max(s.t))
-  from wide left join (select id, coalesce(t, '') || '' as t from wide) s using (id);
-                           QUERY PLAN                           
-----------------------------------------------------------------
- Finalize Aggregate
-   ->  Gather
-         Workers Planned: 2
-         ->  Partial Aggregate
-               ->  Parallel Hash Left Join
-                     Hash Cond: (wide.id = wide_1.id)
-                     ->  Parallel Seq Scan on wide
-                     ->  Parallel Hash
-                           ->  Parallel Seq Scan on wide wide_1
-(9 rows)
-
-select length(max(s.t))
-from wide left join (select id, coalesce(t, '') || '' as t from wide) s using (id);
- length 
---------
- 320000
-(1 row)
-
-select final > 1 as multibatch
-  from hash_join_batches(
-$$
-  select length(max(s.t))
-  from wide left join (select id, coalesce(t, '') || '' as t from wide) s using (id);
-$$);
- multibatch 
-------------
- t
-(1 row)
-
-rollback to settings;
+-- savepoint settings;
+-- set max_parallel_workers_per_gather = 2;
+-- set enable_parallel_hash = on;
+-- TODO: throw an error when this happens: cannot set work_mem lower than the side of a single tuple
+-- TODO: ensure that oversize tuple code is still exercised (should be with some of the stub stuff below)
+-- TODO: commented this out since it would crash otherwise
+-- this test is no longer multi-batch, so, perhaps, it should be removed
+-- set work_mem = '128kB';
+-- explain (costs off)
+--   select length(max(s.t))
+--   from wide left join (select id, coalesce(t, '') || '' as t from wide) s using (id);
+-- select length(max(s.t))
+-- from wide left join (select id, coalesce(t, '') || '' as t from wide) s using (id);
+-- select final > 1 as multibatch
+--   from hash_join_batches(
+-- $$
+--   select length(max(s.t))
+--   from wide left join (select id, coalesce(t, '') || '' as t from wide) s using (id);
+-- $$);
+-- rollback to settings;
 rollback;
 -- Verify that hash key expressions reference the correct
 -- nodes. Hashjoin's hashkeys need to reference its outer plan, Hash's
@@ -1013,3 +994,1968 @@ WHERE
 (1 row)
 
 ROLLBACK;
+-- Serial Adaptive Hash Join
+BEGIN;
+CREATE TYPE stub AS (hash INTEGER, value CHAR(8090));
+CREATE FUNCTION stub_hash(item stub)
+RETURNS INTEGER AS $$
+DECLARE
+  batch_size INTEGER;
+BEGIN
+  batch_size := 4;
+  RETURN item.hash << (batch_size - 1);
+END; $$ LANGUAGE plpgsql IMMUTABLE LEAKPROOF STRICT PARALLEL SAFE;
+CREATE FUNCTION stub_eq(item1 stub, item2 stub)
+RETURNS BOOLEAN AS $$
+BEGIN
+  RETURN item1.hash = item2.hash AND item1.value = item2.value;
+END; $$ LANGUAGE plpgsql IMMUTABLE LEAKPROOF STRICT PARALLEL SAFE;
+CREATE OPERATOR = (
+  FUNCTION = stub_eq,
+  LEFTARG = stub,
+  RIGHTARG = stub,
+  COMMUTATOR = =,
+  HASHES, MERGES
+);
+CREATE OPERATOR CLASS stub_hash_ops
+DEFAULT FOR TYPE stub USING hash AS
+  OPERATOR 1 =(stub, stub),
+  FUNCTION 1 stub_hash(stub);
+CREATE TABLE probeside(a stub);
+ALTER TABLE probeside ALTER COLUMN a SET STORAGE PLAIN;
+-- non-fallback batch with unmatched outer tuple
+INSERT INTO probeside SELECT '(2, "")' FROM generate_series(1, 1);
+-- fallback batch unmatched outer tuple (in first stripe maybe)
+INSERT INTO probeside SELECT '(1, "unmatched outer tuple")' FROM generate_series(1, 1);
+-- fallback batch matched outer tuple
+INSERT INTO probeside SELECT '(1, "")' FROM generate_series(1, 5);
+-- fallback batch unmatched outer tuple (in last stripe maybe)
+-- When numbatches=4, hash 5 maps to batch 1, but after numbatches doubles to
+-- 8 batches hash 5 maps to batch 5.
+INSERT INTO probeside SELECT '(5, "")' FROM generate_series(1, 1);
+-- non-fallback batch matched outer tuple
+INSERT INTO probeside SELECT '(3, "")' FROM generate_series(1, 1);
+-- batch with 3 stripes where non-first/non-last stripe contains unmatched outer tuple
+INSERT INTO probeside SELECT '(6, "")' FROM generate_series(1, 5);
+INSERT INTO probeside SELECT '(6, "unmatched outer tuple")' FROM generate_series(1, 1);
+INSERT INTO probeside SELECT '(6, "")' FROM generate_series(1, 1);
+CREATE TABLE hashside_wide(a stub, id int);
+ALTER TABLE hashside_wide ALTER COLUMN a SET STORAGE PLAIN;
+-- falls back with an unmatched inner tuple that is in fist, middle, and last
+-- stripe
+INSERT INTO hashside_wide SELECT '(1, "unmatched inner tuple in first stripe")', 1 FROM generate_series(1, 1);
+INSERT INTO hashside_wide SELECT '(1, "")', 1 FROM generate_series(1, 9);
+INSERT INTO hashside_wide SELECT '(1, "unmatched inner tuple in middle stripe")', 1 FROM generate_series(1, 1);
+INSERT INTO hashside_wide SELECT '(1, "")', 1 FROM generate_series(1, 9);
+INSERT INTO hashside_wide SELECT '(1, "unmatched inner tuple in last stripe")', 1 FROM generate_series(1, 1);
+-- doesn't fall back -- matched tuple
+INSERT INTO hashside_wide SELECT '(3, "")', 3 FROM generate_series(1, 1);
+INSERT INTO hashside_wide SELECT '(6, "")', 6 FROM generate_series(1, 20);
+ANALYZE probeside, hashside_wide;
+SET enable_nestloop TO off;
+SET enable_mergejoin TO off;
+SET work_mem = 64;
+SELECT (probeside.a).hash, TRIM((probeside.a).value), hashside_wide.id, (hashside_wide.a).hash, TRIM((hashside_wide.a).value)
+FROM probeside
+LEFT OUTER JOIN hashside_wide USING (a)
+ORDER BY 1, 2, 3, 4, 5;
+ hash |         btrim         | id | hash | btrim 
+------+-----------------------+----+------+-------
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 | unmatched outer tuple |    |      | 
+    2 |                       |    |      | 
+    3 |                       |  3 |    3 | 
+    5 |                       |    |      | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 | unmatched outer tuple |    |      | 
+(215 rows)
+
+EXPLAIN (ANALYZE, summary off, timing off, costs off, usage off) SELECT * FROM probeside
+LEFT OUTER JOIN hashside_wide USING (a);
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Hash Left Join (actual rows=215 loops=1)
+   Hash Cond: (probeside.a = hashside_wide.a)
+   ->  Seq Scan on probeside (actual rows=16 loops=1)
+   ->  Hash (actual rows=42 loops=1)
+         Buckets: 8 (originally 8)  Batches: 32 (originally 8)
+         Batch: 1  Stripes: 3
+         Batch: 6  Stripes: 3
+         ->  Seq Scan on hashside_wide (actual rows=42 loops=1)
+(8 rows)
+
+SELECT (probeside.a).hash, TRIM((probeside.a).value), hashside_wide.id, (hashside_wide.a).hash, TRIM((hashside_wide.a).value)
+FROM probeside
+RIGHT OUTER JOIN hashside_wide USING (a)
+ORDER BY 1, 2, 3, 4, 5;
+ hash | btrim | id | hash |                 btrim                  
+------+-------+----+------+----------------------------------------
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    1 |       |  1 |    1 | 
+    3 |       |  3 |    3 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+    6 |       |  6 |    6 | 
+      |       |  1 |    1 | unmatched inner tuple in first stripe
+      |       |  1 |    1 | unmatched inner tuple in last stripe
+      |       |  1 |    1 | unmatched inner tuple in middle stripe
+(214 rows)
+
+EXPLAIN (ANALYZE, summary off, timing off, costs off, usage off) SELECT * FROM probeside
+RIGHT OUTER JOIN hashside_wide USING (a);
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Hash Right Join (actual rows=214 loops=1)
+   Hash Cond: (probeside.a = hashside_wide.a)
+   ->  Seq Scan on probeside (actual rows=16 loops=1)
+   ->  Hash (actual rows=42 loops=1)
+         Buckets: 8 (originally 8)  Batches: 32 (originally 8)
+         Batch: 1  Stripes: 3
+         Batch: 6  Stripes: 3
+         ->  Seq Scan on hashside_wide (actual rows=42 loops=1)
+(8 rows)
+
+SELECT (probeside.a).hash, TRIM((probeside.a).value), hashside_wide.id, (hashside_wide.a).hash, TRIM((hashside_wide.a).value)
+FROM probeside
+FULL OUTER JOIN hashside_wide USING (a)
+ORDER BY 1, 2, 3, 4, 5;
+ hash |         btrim         | id | hash |                 btrim                  
+------+-----------------------+----+------+----------------------------------------
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 | unmatched outer tuple |    |      | 
+    2 |                       |    |      | 
+    3 |                       |  3 |    3 | 
+    5 |                       |    |      | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 | unmatched outer tuple |    |      | 
+      |                       |  1 |    1 | unmatched inner tuple in first stripe
+      |                       |  1 |    1 | unmatched inner tuple in last stripe
+      |                       |  1 |    1 | unmatched inner tuple in middle stripe
+(218 rows)
+
+EXPLAIN (ANALYZE, summary off, timing off, costs off, usage off) SELECT * FROM probeside
+FULL OUTER JOIN hashside_wide USING (a);
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Hash Full Join (actual rows=218 loops=1)
+   Hash Cond: (probeside.a = hashside_wide.a)
+   ->  Seq Scan on probeside (actual rows=16 loops=1)
+   ->  Hash (actual rows=42 loops=1)
+         Buckets: 8 (originally 8)  Batches: 32 (originally 8)
+         Batch: 1  Stripes: 3
+         Batch: 6  Stripes: 3
+         ->  Seq Scan on hashside_wide (actual rows=42 loops=1)
+(8 rows)
+
+-- semi-join testcase
+EXPLAIN (ANALYZE, summary off, timing off, costs off, usage off)
+SELECT probeside.* FROM probeside WHERE EXISTS (SELECT * FROM hashside_wide WHERE probeside.a=a);
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Hash Semi Join (actual rows=12 loops=1)
+   Hash Cond: (probeside.a = hashside_wide.a)
+   ->  Seq Scan on probeside (actual rows=16 loops=1)
+   ->  Hash (actual rows=42 loops=1)
+         Buckets: 8 (originally 8)  Batches: 32 (originally 8)
+         Batch: 1  Stripes: 3
+         Batch: 6  Stripes: 3
+         ->  Seq Scan on hashside_wide (actual rows=42 loops=1)
+(8 rows)
+
+SELECT (probeside.a).hash, TRIM((probeside.a).value)
+FROM probeside WHERE EXISTS (SELECT * FROM hashside_wide WHERE probeside.a=a) ORDER BY 1, 2;
+ hash | btrim 
+------+-------
+    1 | 
+    1 | 
+    1 | 
+    1 | 
+    1 | 
+    3 | 
+    6 | 
+    6 | 
+    6 | 
+    6 | 
+    6 | 
+    6 | 
+(12 rows)
+
+-- anti-join testcase
+EXPLAIN (ANALYZE, summary off, timing off, costs off, usage off)
+SELECT probeside.* FROM probeside WHERE NOT EXISTS (SELECT * FROM hashside_wide WHERE probeside.a=a);
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Hash Anti Join (actual rows=4 loops=1)
+   Hash Cond: (probeside.a = hashside_wide.a)
+   ->  Seq Scan on probeside (actual rows=16 loops=1)
+   ->  Hash (actual rows=42 loops=1)
+         Buckets: 8 (originally 8)  Batches: 32 (originally 8)
+         Batch: 1  Stripes: 3
+         Batch: 6  Stripes: 3
+         ->  Seq Scan on hashside_wide (actual rows=42 loops=1)
+(8 rows)
+
+SELECT (probeside.a).hash, TRIM((probeside.a).value)
+FROM probeside WHERE NOT EXISTS (SELECT * FROM hashside_wide WHERE probeside.a=a) ORDER BY 1, 2;
+ hash |         btrim         
+------+-----------------------
+    1 | unmatched outer tuple
+    2 | 
+    5 | 
+    6 | unmatched outer tuple
+(4 rows)
+
+-- parallel LOJ test case with two batches falling back
+savepoint settings;
+set local max_parallel_workers_per_gather = 1;
+set local min_parallel_table_scan_size = 0;
+set local parallel_setup_cost = 0;
+set local enable_parallel_hash = on;
+EXPLAIN (ANALYZE, summary off, timing off, costs off, usage off) SELECT * FROM probeside
+LEFT OUTER JOIN hashside_wide USING (a);
+                                  QUERY PLAN                                   
+-------------------------------------------------------------------------------
+ Gather (actual rows=215 loops=1)
+   Workers Planned: 1
+   Workers Launched: 1
+   ->  Parallel Hash Left Join (actual rows=108 loops=2)
+         Hash Cond: (probeside.a = hashside_wide.a)
+         ->  Parallel Seq Scan on probeside (actual rows=16 loops=1)
+         ->  Parallel Hash (actual rows=21 loops=2)
+               Buckets: 8 (originally 8)  Batches: 128 (originally 8)
+               Batch: 1  Stripes: 3
+               Batch: 6  Stripes: 3
+               ->  Parallel Seq Scan on hashside_wide (actual rows=42 loops=1)
+(11 rows)
+
+SELECT (probeside.a).hash, TRIM((probeside.a).value), hashside_wide.id, (hashside_wide.a).hash, TRIM((hashside_wide.a).value)
+FROM probeside
+LEFT OUTER JOIN hashside_wide USING (a)
+ORDER BY 1, 2, 3, 4, 5;
+ hash |         btrim         | id | hash | btrim 
+------+-----------------------+----+------+-------
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 |                       |  1 |    1 | 
+    1 | unmatched outer tuple |    |      | 
+    2 |                       |    |      | 
+    3 |                       |  3 |    3 | 
+    5 |                       |    |      | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 |                       |  6 |    6 | 
+    6 | unmatched outer tuple |    |      | 
+(215 rows)
+
+rollback to settings;
+-- Test spill of batch 0 gives correct results.
+CREATE TABLE probeside_batch0(id int generated always as identity, a stub);
+ALTER TABLE probeside_batch0 ALTER COLUMN a SET STORAGE PLAIN;
+INSERT INTO probeside_batch0(a) SELECT '(0, "")' FROM generate_series(1, 13);
+INSERT INTO probeside_batch0(a) SELECT '(0, "unmatched outer")' FROM generate_series(1, 1);
+CREATE TABLE hashside_wide_batch0(id int generated always as identity, a stub);
+ALTER TABLE hashside_wide_batch0 ALTER COLUMN a SET STORAGE PLAIN;
+INSERT INTO hashside_wide_batch0(a) SELECT '(0, "")' FROM generate_series(1, 9);
+INSERT INTO hashside_wide_batch0(a) SELECT '(0, "")' FROM generate_series(1, 9);
+INSERT INTO hashside_wide_batch0(a) SELECT '(0, "")' FROM generate_series(1, 9);
+ANALYZE probeside_batch0, hashside_wide_batch0;
+SELECT
+       hashside_wide_batch0.id as hashside_id, 
+       (hashside_wide_batch0.a).hash as hashside_hash,
+        probeside_batch0.id as probeside_id, 
+       (probeside_batch0.a).hash as probeside_hash,
+        TRIM((probeside_batch0.a).value) as probeside_trimmed_value,
+        TRIM((hashside_wide_batch0.a).value) as hashside_trimmed_value 
+FROM probeside_batch0
+LEFT OUTER JOIN hashside_wide_batch0 USING (a)
+ORDER BY 1, 2, 3, 4, 5, 6;
+ hashside_id | hashside_hash | probeside_id | probeside_hash | probeside_trimmed_value | hashside_trimmed_value 
+-------------+---------------+--------------+----------------+-------------------------+------------------------
+           1 |             0 |            1 |              0 |                         | 
+           1 |             0 |            2 |              0 |                         | 
+           1 |             0 |            3 |              0 |                         | 
+           1 |             0 |            4 |              0 |                         | 
+           1 |             0 |            5 |              0 |                         | 
+           1 |             0 |            6 |              0 |                         | 
+           1 |             0 |            7 |              0 |                         | 
+           1 |             0 |            8 |              0 |                         | 
+           1 |             0 |            9 |              0 |                         | 
+           1 |             0 |           10 |              0 |                         | 
+           1 |             0 |           11 |              0 |                         | 
+           1 |             0 |           12 |              0 |                         | 
+           1 |             0 |           13 |              0 |                         | 
+           2 |             0 |            1 |              0 |                         | 
+           2 |             0 |            2 |              0 |                         | 
+           2 |             0 |            3 |              0 |                         | 
+           2 |             0 |            4 |              0 |                         | 
+           2 |             0 |            5 |              0 |                         | 
+           2 |             0 |            6 |              0 |                         | 
+           2 |             0 |            7 |              0 |                         | 
+           2 |             0 |            8 |              0 |                         | 
+           2 |             0 |            9 |              0 |                         | 
+           2 |             0 |           10 |              0 |                         | 
+           2 |             0 |           11 |              0 |                         | 
+           2 |             0 |           12 |              0 |                         | 
+           2 |             0 |           13 |              0 |                         | 
+           3 |             0 |            1 |              0 |                         | 
+           3 |             0 |            2 |              0 |                         | 
+           3 |             0 |            3 |              0 |                         | 
+           3 |             0 |            4 |              0 |                         | 
+           3 |             0 |            5 |              0 |                         | 
+           3 |             0 |            6 |              0 |                         | 
+           3 |             0 |            7 |              0 |                         | 
+           3 |             0 |            8 |              0 |                         | 
+           3 |             0 |            9 |              0 |                         | 
+           3 |             0 |           10 |              0 |                         | 
+           3 |             0 |           11 |              0 |                         | 
+           3 |             0 |           12 |              0 |                         | 
+           3 |             0 |           13 |              0 |                         | 
+           4 |             0 |            1 |              0 |                         | 
+           4 |             0 |            2 |              0 |                         | 
+           4 |             0 |            3 |              0 |                         | 
+           4 |             0 |            4 |              0 |                         | 
+           4 |             0 |            5 |              0 |                         | 
+           4 |             0 |            6 |              0 |                         | 
+           4 |             0 |            7 |              0 |                         | 
+           4 |             0 |            8 |              0 |                         | 
+           4 |             0 |            9 |              0 |                         | 
+           4 |             0 |           10 |              0 |                         | 
+           4 |             0 |           11 |              0 |                         | 
+           4 |             0 |           12 |              0 |                         | 
+           4 |             0 |           13 |              0 |                         | 
+           5 |             0 |            1 |              0 |                         | 
+           5 |             0 |            2 |              0 |                         | 
+           5 |             0 |            3 |              0 |                         | 
+           5 |             0 |            4 |              0 |                         | 
+           5 |             0 |            5 |              0 |                         | 
+           5 |             0 |            6 |              0 |                         | 
+           5 |             0 |            7 |              0 |                         | 
+           5 |             0 |            8 |              0 |                         | 
+           5 |             0 |            9 |              0 |                         | 
+           5 |             0 |           10 |              0 |                         | 
+           5 |             0 |           11 |              0 |                         | 
+           5 |             0 |           12 |              0 |                         | 
+           5 |             0 |           13 |              0 |                         | 
+           6 |             0 |            1 |              0 |                         | 
+           6 |             0 |            2 |              0 |                         | 
+           6 |             0 |            3 |              0 |                         | 
+           6 |             0 |            4 |              0 |                         | 
+           6 |             0 |            5 |              0 |                         | 
+           6 |             0 |            6 |              0 |                         | 
+           6 |             0 |            7 |              0 |                         | 
+           6 |             0 |            8 |              0 |                         | 
+           6 |             0 |            9 |              0 |                         | 
+           6 |             0 |           10 |              0 |                         | 
+           6 |             0 |           11 |              0 |                         | 
+           6 |             0 |           12 |              0 |                         | 
+           6 |             0 |           13 |              0 |                         | 
+           7 |             0 |            1 |              0 |                         | 
+           7 |             0 |            2 |              0 |                         | 
+           7 |             0 |            3 |              0 |                         | 
+           7 |             0 |            4 |              0 |                         | 
+           7 |             0 |            5 |              0 |                         | 
+           7 |             0 |            6 |              0 |                         | 
+           7 |             0 |            7 |              0 |                         | 
+           7 |             0 |            8 |              0 |                         | 
+           7 |             0 |            9 |              0 |                         | 
+           7 |             0 |           10 |              0 |                         | 
+           7 |             0 |           11 |              0 |                         | 
+           7 |             0 |           12 |              0 |                         | 
+           7 |             0 |           13 |              0 |                         | 
+           8 |             0 |            1 |              0 |                         | 
+           8 |             0 |            2 |              0 |                         | 
+           8 |             0 |            3 |              0 |                         | 
+           8 |             0 |            4 |              0 |                         | 
+           8 |             0 |            5 |              0 |                         | 
+           8 |             0 |            6 |              0 |                         | 
+           8 |             0 |            7 |              0 |                         | 
+           8 |             0 |            8 |              0 |                         | 
+           8 |             0 |            9 |              0 |                         | 
+           8 |             0 |           10 |              0 |                         | 
+           8 |             0 |           11 |              0 |                         | 
+           8 |             0 |           12 |              0 |                         | 
+           8 |             0 |           13 |              0 |                         | 
+           9 |             0 |            1 |              0 |                         | 
+           9 |             0 |            2 |              0 |                         | 
+           9 |             0 |            3 |              0 |                         | 
+           9 |             0 |            4 |              0 |                         | 
+           9 |             0 |            5 |              0 |                         | 
+           9 |             0 |            6 |              0 |                         | 
+           9 |             0 |            7 |              0 |                         | 
+           9 |             0 |            8 |              0 |                         | 
+           9 |             0 |            9 |              0 |                         | 
+           9 |             0 |           10 |              0 |                         | 
+           9 |             0 |           11 |              0 |                         | 
+           9 |             0 |           12 |              0 |                         | 
+           9 |             0 |           13 |              0 |                         | 
+          10 |             0 |            1 |              0 |                         | 
+          10 |             0 |            2 |              0 |                         | 
+          10 |             0 |            3 |              0 |                         | 
+          10 |             0 |            4 |              0 |                         | 
+          10 |             0 |            5 |              0 |                         | 
+          10 |             0 |            6 |              0 |                         | 
+          10 |             0 |            7 |              0 |                         | 
+          10 |             0 |            8 |              0 |                         | 
+          10 |             0 |            9 |              0 |                         | 
+          10 |             0 |           10 |              0 |                         | 
+          10 |             0 |           11 |              0 |                         | 
+          10 |             0 |           12 |              0 |                         | 
+          10 |             0 |           13 |              0 |                         | 
+          11 |             0 |            1 |              0 |                         | 
+          11 |             0 |            2 |              0 |                         | 
+          11 |             0 |            3 |              0 |                         | 
+          11 |             0 |            4 |              0 |                         | 
+          11 |             0 |            5 |              0 |                         | 
+          11 |             0 |            6 |              0 |                         | 
+          11 |             0 |            7 |              0 |                         | 
+          11 |             0 |            8 |              0 |                         | 
+          11 |             0 |            9 |              0 |                         | 
+          11 |             0 |           10 |              0 |                         | 
+          11 |             0 |           11 |              0 |                         | 
+          11 |             0 |           12 |              0 |                         | 
+          11 |             0 |           13 |              0 |                         | 
+          12 |             0 |            1 |              0 |                         | 
+          12 |             0 |            2 |              0 |                         | 
+          12 |             0 |            3 |              0 |                         | 
+          12 |             0 |            4 |              0 |                         | 
+          12 |             0 |            5 |              0 |                         | 
+          12 |             0 |            6 |              0 |                         | 
+          12 |             0 |            7 |              0 |                         | 
+          12 |             0 |            8 |              0 |                         | 
+          12 |             0 |            9 |              0 |                         | 
+          12 |             0 |           10 |              0 |                         | 
+          12 |             0 |           11 |              0 |                         | 
+          12 |             0 |           12 |              0 |                         | 
+          12 |             0 |           13 |              0 |                         | 
+          13 |             0 |            1 |              0 |                         | 
+          13 |             0 |            2 |              0 |                         | 
+          13 |             0 |            3 |              0 |                         | 
+          13 |             0 |            4 |              0 |                         | 
+          13 |             0 |            5 |              0 |                         | 
+          13 |             0 |            6 |              0 |                         | 
+          13 |             0 |            7 |              0 |                         | 
+          13 |             0 |            8 |              0 |                         | 
+          13 |             0 |            9 |              0 |                         | 
+          13 |             0 |           10 |              0 |                         | 
+          13 |             0 |           11 |              0 |                         | 
+          13 |             0 |           12 |              0 |                         | 
+          13 |             0 |           13 |              0 |                         | 
+          14 |             0 |            1 |              0 |                         | 
+          14 |             0 |            2 |              0 |                         | 
+          14 |             0 |            3 |              0 |                         | 
+          14 |             0 |            4 |              0 |                         | 
+          14 |             0 |            5 |              0 |                         | 
+          14 |             0 |            6 |              0 |                         | 
+          14 |             0 |            7 |              0 |                         | 
+          14 |             0 |            8 |              0 |                         | 
+          14 |             0 |            9 |              0 |                         | 
+          14 |             0 |           10 |              0 |                         | 
+          14 |             0 |           11 |              0 |                         | 
+          14 |             0 |           12 |              0 |                         | 
+          14 |             0 |           13 |              0 |                         | 
+          15 |             0 |            1 |              0 |                         | 
+          15 |             0 |            2 |              0 |                         | 
+          15 |             0 |            3 |              0 |                         | 
+          15 |             0 |            4 |              0 |                         | 
+          15 |             0 |            5 |              0 |                         | 
+          15 |             0 |            6 |              0 |                         | 
+          15 |             0 |            7 |              0 |                         | 
+          15 |             0 |            8 |              0 |                         | 
+          15 |             0 |            9 |              0 |                         | 
+          15 |             0 |           10 |              0 |                         | 
+          15 |             0 |           11 |              0 |                         | 
+          15 |             0 |           12 |              0 |                         | 
+          15 |             0 |           13 |              0 |                         | 
+          16 |             0 |            1 |              0 |                         | 
+          16 |             0 |            2 |              0 |                         | 
+          16 |             0 |            3 |              0 |                         | 
+          16 |             0 |            4 |              0 |                         | 
+          16 |             0 |            5 |              0 |                         | 
+          16 |             0 |            6 |              0 |                         | 
+          16 |             0 |            7 |              0 |                         | 
+          16 |             0 |            8 |              0 |                         | 
+          16 |             0 |            9 |              0 |                         | 
+          16 |             0 |           10 |              0 |                         | 
+          16 |             0 |           11 |              0 |                         | 
+          16 |             0 |           12 |              0 |                         | 
+          16 |             0 |           13 |              0 |                         | 
+          17 |             0 |            1 |              0 |                         | 
+          17 |             0 |            2 |              0 |                         | 
+          17 |             0 |            3 |              0 |                         | 
+          17 |             0 |            4 |              0 |                         | 
+          17 |             0 |            5 |              0 |                         | 
+          17 |             0 |            6 |              0 |                         | 
+          17 |             0 |            7 |              0 |                         | 
+          17 |             0 |            8 |              0 |                         | 
+          17 |             0 |            9 |              0 |                         | 
+          17 |             0 |           10 |              0 |                         | 
+          17 |             0 |           11 |              0 |                         | 
+          17 |             0 |           12 |              0 |                         | 
+          17 |             0 |           13 |              0 |                         | 
+          18 |             0 |            1 |              0 |                         | 
+          18 |             0 |            2 |              0 |                         | 
+          18 |             0 |            3 |              0 |                         | 
+          18 |             0 |            4 |              0 |                         | 
+          18 |             0 |            5 |              0 |                         | 
+          18 |             0 |            6 |              0 |                         | 
+          18 |             0 |            7 |              0 |                         | 
+          18 |             0 |            8 |              0 |                         | 
+          18 |             0 |            9 |              0 |                         | 
+          18 |             0 |           10 |              0 |                         | 
+          18 |             0 |           11 |              0 |                         | 
+          18 |             0 |           12 |              0 |                         | 
+          18 |             0 |           13 |              0 |                         | 
+          19 |             0 |            1 |              0 |                         | 
+          19 |             0 |            2 |              0 |                         | 
+          19 |             0 |            3 |              0 |                         | 
+          19 |             0 |            4 |              0 |                         | 
+          19 |             0 |            5 |              0 |                         | 
+          19 |             0 |            6 |              0 |                         | 
+          19 |             0 |            7 |              0 |                         | 
+          19 |             0 |            8 |              0 |                         | 
+          19 |             0 |            9 |              0 |                         | 
+          19 |             0 |           10 |              0 |                         | 
+          19 |             0 |           11 |              0 |                         | 
+          19 |             0 |           12 |              0 |                         | 
+          19 |             0 |           13 |              0 |                         | 
+          20 |             0 |            1 |              0 |                         | 
+          20 |             0 |            2 |              0 |                         | 
+          20 |             0 |            3 |              0 |                         | 
+          20 |             0 |            4 |              0 |                         | 
+          20 |             0 |            5 |              0 |                         | 
+          20 |             0 |            6 |              0 |                         | 
+          20 |             0 |            7 |              0 |                         | 
+          20 |             0 |            8 |              0 |                         | 
+          20 |             0 |            9 |              0 |                         | 
+          20 |             0 |           10 |              0 |                         | 
+          20 |             0 |           11 |              0 |                         | 
+          20 |             0 |           12 |              0 |                         | 
+          20 |             0 |           13 |              0 |                         | 
+          21 |             0 |            1 |              0 |                         | 
+          21 |             0 |            2 |              0 |                         | 
+          21 |             0 |            3 |              0 |                         | 
+          21 |             0 |            4 |              0 |                         | 
+          21 |             0 |            5 |              0 |                         | 
+          21 |             0 |            6 |              0 |                         | 
+          21 |             0 |            7 |              0 |                         | 
+          21 |             0 |            8 |              0 |                         | 
+          21 |             0 |            9 |              0 |                         | 
+          21 |             0 |           10 |              0 |                         | 
+          21 |             0 |           11 |              0 |                         | 
+          21 |             0 |           12 |              0 |                         | 
+          21 |             0 |           13 |              0 |                         | 
+          22 |             0 |            1 |              0 |                         | 
+          22 |             0 |            2 |              0 |                         | 
+          22 |             0 |            3 |              0 |                         | 
+          22 |             0 |            4 |              0 |                         | 
+          22 |             0 |            5 |              0 |                         | 
+          22 |             0 |            6 |              0 |                         | 
+          22 |             0 |            7 |              0 |                         | 
+          22 |             0 |            8 |              0 |                         | 
+          22 |             0 |            9 |              0 |                         | 
+          22 |             0 |           10 |              0 |                         | 
+          22 |             0 |           11 |              0 |                         | 
+          22 |             0 |           12 |              0 |                         | 
+          22 |             0 |           13 |              0 |                         | 
+          23 |             0 |            1 |              0 |                         | 
+          23 |             0 |            2 |              0 |                         | 
+          23 |             0 |            3 |              0 |                         | 
+          23 |             0 |            4 |              0 |                         | 
+          23 |             0 |            5 |              0 |                         | 
+          23 |             0 |            6 |              0 |                         | 
+          23 |             0 |            7 |              0 |                         | 
+          23 |             0 |            8 |              0 |                         | 
+          23 |             0 |            9 |              0 |                         | 
+          23 |             0 |           10 |              0 |                         | 
+          23 |             0 |           11 |              0 |                         | 
+          23 |             0 |           12 |              0 |                         | 
+          23 |             0 |           13 |              0 |                         | 
+          24 |             0 |            1 |              0 |                         | 
+          24 |             0 |            2 |              0 |                         | 
+          24 |             0 |            3 |              0 |                         | 
+          24 |             0 |            4 |              0 |                         | 
+          24 |             0 |            5 |              0 |                         | 
+          24 |             0 |            6 |              0 |                         | 
+          24 |             0 |            7 |              0 |                         | 
+          24 |             0 |            8 |              0 |                         | 
+          24 |             0 |            9 |              0 |                         | 
+          24 |             0 |           10 |              0 |                         | 
+          24 |             0 |           11 |              0 |                         | 
+          24 |             0 |           12 |              0 |                         | 
+          24 |             0 |           13 |              0 |                         | 
+          25 |             0 |            1 |              0 |                         | 
+          25 |             0 |            2 |              0 |                         | 
+          25 |             0 |            3 |              0 |                         | 
+          25 |             0 |            4 |              0 |                         | 
+          25 |             0 |            5 |              0 |                         | 
+          25 |             0 |            6 |              0 |                         | 
+          25 |             0 |            7 |              0 |                         | 
+          25 |             0 |            8 |              0 |                         | 
+          25 |             0 |            9 |              0 |                         | 
+          25 |             0 |           10 |              0 |                         | 
+          25 |             0 |           11 |              0 |                         | 
+          25 |             0 |           12 |              0 |                         | 
+          25 |             0 |           13 |              0 |                         | 
+          26 |             0 |            1 |              0 |                         | 
+          26 |             0 |            2 |              0 |                         | 
+          26 |             0 |            3 |              0 |                         | 
+          26 |             0 |            4 |              0 |                         | 
+          26 |             0 |            5 |              0 |                         | 
+          26 |             0 |            6 |              0 |                         | 
+          26 |             0 |            7 |              0 |                         | 
+          26 |             0 |            8 |              0 |                         | 
+          26 |             0 |            9 |              0 |                         | 
+          26 |             0 |           10 |              0 |                         | 
+          26 |             0 |           11 |              0 |                         | 
+          26 |             0 |           12 |              0 |                         | 
+          26 |             0 |           13 |              0 |                         | 
+          27 |             0 |            1 |              0 |                         | 
+          27 |             0 |            2 |              0 |                         | 
+          27 |             0 |            3 |              0 |                         | 
+          27 |             0 |            4 |              0 |                         | 
+          27 |             0 |            5 |              0 |                         | 
+          27 |             0 |            6 |              0 |                         | 
+          27 |             0 |            7 |              0 |                         | 
+          27 |             0 |            8 |              0 |                         | 
+          27 |             0 |            9 |              0 |                         | 
+          27 |             0 |           10 |              0 |                         | 
+          27 |             0 |           11 |              0 |                         | 
+          27 |             0 |           12 |              0 |                         | 
+          27 |             0 |           13 |              0 |                         | 
+             |               |           14 |              0 | unmatched outer         | 
+(352 rows)
+
+set local min_parallel_table_scan_size = 0;
+set local parallel_setup_cost = 0;
+set local enable_hashjoin = on;
+savepoint settings;
+set max_parallel_workers_per_gather = 1;
+set enable_parallel_hash = on;
+set work_mem = '64kB';
+INSERT INTO hashside_wide_batch0(a) SELECT '(0, "")' FROM generate_series(1, 9);
+EXPLAIN (ANALYZE, summary off, timing off, costs off, usage off) SELECT * FROM probeside_batch0
+LEFT OUTER JOIN hashside_wide_batch0 USING (a);
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Gather (actual rows=469 loops=1)
+   Workers Planned: 1
+   Workers Launched: 1
+   ->  Parallel Hash Left Join (actual rows=234 loops=2)
+         Hash Cond: (probeside_batch0.a = hashside_wide_batch0.a)
+         ->  Parallel Seq Scan on probeside_batch0 (actual rows=14 loops=1)
+         ->  Parallel Hash (actual rows=18 loops=2)
+               Buckets: 8 (originally 8)  Batches: 16 (originally 8)
+               Batch: 0  Stripes: 5
+               ->  Parallel Seq Scan on hashside_wide_batch0 (actual rows=36 loops=1)
+(10 rows)
+
+SELECT
+       hashside_wide_batch0.id as hashside_id, 
+       (hashside_wide_batch0.a).hash as hashside_hash,
+        probeside_batch0.id as probeside_id, 
+       (probeside_batch0.a).hash as probeside_hash,
+        TRIM((probeside_batch0.a).value) as probeside_trimmed_value,
+        TRIM((hashside_wide_batch0.a).value) as hashside_trimmed_value 
+FROM probeside_batch0
+LEFT OUTER JOIN hashside_wide_batch0 USING (a)
+ORDER BY 1, 2, 3, 4, 5, 6;
+ hashside_id | hashside_hash | probeside_id | probeside_hash | probeside_trimmed_value | hashside_trimmed_value 
+-------------+---------------+--------------+----------------+-------------------------+------------------------
+           1 |             0 |            1 |              0 |                         | 
+           1 |             0 |            2 |              0 |                         | 
+           1 |             0 |            3 |              0 |                         | 
+           1 |             0 |            4 |              0 |                         | 
+           1 |             0 |            5 |              0 |                         | 
+           1 |             0 |            6 |              0 |                         | 
+           1 |             0 |            7 |              0 |                         | 
+           1 |             0 |            8 |              0 |                         | 
+           1 |             0 |            9 |              0 |                         | 
+           1 |             0 |           10 |              0 |                         | 
+           1 |             0 |           11 |              0 |                         | 
+           1 |             0 |           12 |              0 |                         | 
+           1 |             0 |           13 |              0 |                         | 
+           2 |             0 |            1 |              0 |                         | 
+           2 |             0 |            2 |              0 |                         | 
+           2 |             0 |            3 |              0 |                         | 
+           2 |             0 |            4 |              0 |                         | 
+           2 |             0 |            5 |              0 |                         | 
+           2 |             0 |            6 |              0 |                         | 
+           2 |             0 |            7 |              0 |                         | 
+           2 |             0 |            8 |              0 |                         | 
+           2 |             0 |            9 |              0 |                         | 
+           2 |             0 |           10 |              0 |                         | 
+           2 |             0 |           11 |              0 |                         | 
+           2 |             0 |           12 |              0 |                         | 
+           2 |             0 |           13 |              0 |                         | 
+           3 |             0 |            1 |              0 |                         | 
+           3 |             0 |            2 |              0 |                         | 
+           3 |             0 |            3 |              0 |                         | 
+           3 |             0 |            4 |              0 |                         | 
+           3 |             0 |            5 |              0 |                         | 
+           3 |             0 |            6 |              0 |                         | 
+           3 |             0 |            7 |              0 |                         | 
+           3 |             0 |            8 |              0 |                         | 
+           3 |             0 |            9 |              0 |                         | 
+           3 |             0 |           10 |              0 |                         | 
+           3 |             0 |           11 |              0 |                         | 
+           3 |             0 |           12 |              0 |                         | 
+           3 |             0 |           13 |              0 |                         | 
+           4 |             0 |            1 |              0 |                         | 
+           4 |             0 |            2 |              0 |                         | 
+           4 |             0 |            3 |              0 |                         | 
+           4 |             0 |            4 |              0 |                         | 
+           4 |             0 |            5 |              0 |                         | 
+           4 |             0 |            6 |              0 |                         | 
+           4 |             0 |            7 |              0 |                         | 
+           4 |             0 |            8 |              0 |                         | 
+           4 |             0 |            9 |              0 |                         | 
+           4 |             0 |           10 |              0 |                         | 
+           4 |             0 |           11 |              0 |                         | 
+           4 |             0 |           12 |              0 |                         | 
+           4 |             0 |           13 |              0 |                         | 
+           5 |             0 |            1 |              0 |                         | 
+           5 |             0 |            2 |              0 |                         | 
+           5 |             0 |            3 |              0 |                         | 
+           5 |             0 |            4 |              0 |                         | 
+           5 |             0 |            5 |              0 |                         | 
+           5 |             0 |            6 |              0 |                         | 
+           5 |             0 |            7 |              0 |                         | 
+           5 |             0 |            8 |              0 |                         | 
+           5 |             0 |            9 |              0 |                         | 
+           5 |             0 |           10 |              0 |                         | 
+           5 |             0 |           11 |              0 |                         | 
+           5 |             0 |           12 |              0 |                         | 
+           5 |             0 |           13 |              0 |                         | 
+           6 |             0 |            1 |              0 |                         | 
+           6 |             0 |            2 |              0 |                         | 
+           6 |             0 |            3 |              0 |                         | 
+           6 |             0 |            4 |              0 |                         | 
+           6 |             0 |            5 |              0 |                         | 
+           6 |             0 |            6 |              0 |                         | 
+           6 |             0 |            7 |              0 |                         | 
+           6 |             0 |            8 |              0 |                         | 
+           6 |             0 |            9 |              0 |                         | 
+           6 |             0 |           10 |              0 |                         | 
+           6 |             0 |           11 |              0 |                         | 
+           6 |             0 |           12 |              0 |                         | 
+           6 |             0 |           13 |              0 |                         | 
+           7 |             0 |            1 |              0 |                         | 
+           7 |             0 |            2 |              0 |                         | 
+           7 |             0 |            3 |              0 |                         | 
+           7 |             0 |            4 |              0 |                         | 
+           7 |             0 |            5 |              0 |                         | 
+           7 |             0 |            6 |              0 |                         | 
+           7 |             0 |            7 |              0 |                         | 
+           7 |             0 |            8 |              0 |                         | 
+           7 |             0 |            9 |              0 |                         | 
+           7 |             0 |           10 |              0 |                         | 
+           7 |             0 |           11 |              0 |                         | 
+           7 |             0 |           12 |              0 |                         | 
+           7 |             0 |           13 |              0 |                         | 
+           8 |             0 |            1 |              0 |                         | 
+           8 |             0 |            2 |              0 |                         | 
+           8 |             0 |            3 |              0 |                         | 
+           8 |             0 |            4 |              0 |                         | 
+           8 |             0 |            5 |              0 |                         | 
+           8 |             0 |            6 |              0 |                         | 
+           8 |             0 |            7 |              0 |                         | 
+           8 |             0 |            8 |              0 |                         | 
+           8 |             0 |            9 |              0 |                         | 
+           8 |             0 |           10 |              0 |                         | 
+           8 |             0 |           11 |              0 |                         | 
+           8 |             0 |           12 |              0 |                         | 
+           8 |             0 |           13 |              0 |                         | 
+           9 |             0 |            1 |              0 |                         | 
+           9 |             0 |            2 |              0 |                         | 
+           9 |             0 |            3 |              0 |                         | 
+           9 |             0 |            4 |              0 |                         | 
+           9 |             0 |            5 |              0 |                         | 
+           9 |             0 |            6 |              0 |                         | 
+           9 |             0 |            7 |              0 |                         | 
+           9 |             0 |            8 |              0 |                         | 
+           9 |             0 |            9 |              0 |                         | 
+           9 |             0 |           10 |              0 |                         | 
+           9 |             0 |           11 |              0 |                         | 
+           9 |             0 |           12 |              0 |                         | 
+           9 |             0 |           13 |              0 |                         | 
+          10 |             0 |            1 |              0 |                         | 
+          10 |             0 |            2 |              0 |                         | 
+          10 |             0 |            3 |              0 |                         | 
+          10 |             0 |            4 |              0 |                         | 
+          10 |             0 |            5 |              0 |                         | 
+          10 |             0 |            6 |              0 |                         | 
+          10 |             0 |            7 |              0 |                         | 
+          10 |             0 |            8 |              0 |                         | 
+          10 |             0 |            9 |              0 |                         | 
+          10 |             0 |           10 |              0 |                         | 
+          10 |             0 |           11 |              0 |                         | 
+          10 |             0 |           12 |              0 |                         | 
+          10 |             0 |           13 |              0 |                         | 
+          11 |             0 |            1 |              0 |                         | 
+          11 |             0 |            2 |              0 |                         | 
+          11 |             0 |            3 |              0 |                         | 
+          11 |             0 |            4 |              0 |                         | 
+          11 |             0 |            5 |              0 |                         | 
+          11 |             0 |            6 |              0 |                         | 
+          11 |             0 |            7 |              0 |                         | 
+          11 |             0 |            8 |              0 |                         | 
+          11 |             0 |            9 |              0 |                         | 
+          11 |             0 |           10 |              0 |                         | 
+          11 |             0 |           11 |              0 |                         | 
+          11 |             0 |           12 |              0 |                         | 
+          11 |             0 |           13 |              0 |                         | 
+          12 |             0 |            1 |              0 |                         | 
+          12 |             0 |            2 |              0 |                         | 
+          12 |             0 |            3 |              0 |                         | 
+          12 |             0 |            4 |              0 |                         | 
+          12 |             0 |            5 |              0 |                         | 
+          12 |             0 |            6 |              0 |                         | 
+          12 |             0 |            7 |              0 |                         | 
+          12 |             0 |            8 |              0 |                         | 
+          12 |             0 |            9 |              0 |                         | 
+          12 |             0 |           10 |              0 |                         | 
+          12 |             0 |           11 |              0 |                         | 
+          12 |             0 |           12 |              0 |                         | 
+          12 |             0 |           13 |              0 |                         | 
+          13 |             0 |            1 |              0 |                         | 
+          13 |             0 |            2 |              0 |                         | 
+          13 |             0 |            3 |              0 |                         | 
+          13 |             0 |            4 |              0 |                         | 
+          13 |             0 |            5 |              0 |                         | 
+          13 |             0 |            6 |              0 |                         | 
+          13 |             0 |            7 |              0 |                         | 
+          13 |             0 |            8 |              0 |                         | 
+          13 |             0 |            9 |              0 |                         | 
+          13 |             0 |           10 |              0 |                         | 
+          13 |             0 |           11 |              0 |                         | 
+          13 |             0 |           12 |              0 |                         | 
+          13 |             0 |           13 |              0 |                         | 
+          14 |             0 |            1 |              0 |                         | 
+          14 |             0 |            2 |              0 |                         | 
+          14 |             0 |            3 |              0 |                         | 
+          14 |             0 |            4 |              0 |                         | 
+          14 |             0 |            5 |              0 |                         | 
+          14 |             0 |            6 |              0 |                         | 
+          14 |             0 |            7 |              0 |                         | 
+          14 |             0 |            8 |              0 |                         | 
+          14 |             0 |            9 |              0 |                         | 
+          14 |             0 |           10 |              0 |                         | 
+          14 |             0 |           11 |              0 |                         | 
+          14 |             0 |           12 |              0 |                         | 
+          14 |             0 |           13 |              0 |                         | 
+          15 |             0 |            1 |              0 |                         | 
+          15 |             0 |            2 |              0 |                         | 
+          15 |             0 |            3 |              0 |                         | 
+          15 |             0 |            4 |              0 |                         | 
+          15 |             0 |            5 |              0 |                         | 
+          15 |             0 |            6 |              0 |                         | 
+          15 |             0 |            7 |              0 |                         | 
+          15 |             0 |            8 |              0 |                         | 
+          15 |             0 |            9 |              0 |                         | 
+          15 |             0 |           10 |              0 |                         | 
+          15 |             0 |           11 |              0 |                         | 
+          15 |             0 |           12 |              0 |                         | 
+          15 |             0 |           13 |              0 |                         | 
+          16 |             0 |            1 |              0 |                         | 
+          16 |             0 |            2 |              0 |                         | 
+          16 |             0 |            3 |              0 |                         | 
+          16 |             0 |            4 |              0 |                         | 
+          16 |             0 |            5 |              0 |                         | 
+          16 |             0 |            6 |              0 |                         | 
+          16 |             0 |            7 |              0 |                         | 
+          16 |             0 |            8 |              0 |                         | 
+          16 |             0 |            9 |              0 |                         | 
+          16 |             0 |           10 |              0 |                         | 
+          16 |             0 |           11 |              0 |                         | 
+          16 |             0 |           12 |              0 |                         | 
+          16 |             0 |           13 |              0 |                         | 
+          17 |             0 |            1 |              0 |                         | 
+          17 |             0 |            2 |              0 |                         | 
+          17 |             0 |            3 |              0 |                         | 
+          17 |             0 |            4 |              0 |                         | 
+          17 |             0 |            5 |              0 |                         | 
+          17 |             0 |            6 |              0 |                         | 
+          17 |             0 |            7 |              0 |                         | 
+          17 |             0 |            8 |              0 |                         | 
+          17 |             0 |            9 |              0 |                         | 
+          17 |             0 |           10 |              0 |                         | 
+          17 |             0 |           11 |              0 |                         | 
+          17 |             0 |           12 |              0 |                         | 
+          17 |             0 |           13 |              0 |                         | 
+          18 |             0 |            1 |              0 |                         | 
+          18 |             0 |            2 |              0 |                         | 
+          18 |             0 |            3 |              0 |                         | 
+          18 |             0 |            4 |              0 |                         | 
+          18 |             0 |            5 |              0 |                         | 
+          18 |             0 |            6 |              0 |                         | 
+          18 |             0 |            7 |              0 |                         | 
+          18 |             0 |            8 |              0 |                         | 
+          18 |             0 |            9 |              0 |                         | 
+          18 |             0 |           10 |              0 |                         | 
+          18 |             0 |           11 |              0 |                         | 
+          18 |             0 |           12 |              0 |                         | 
+          18 |             0 |           13 |              0 |                         | 
+          19 |             0 |            1 |              0 |                         | 
+          19 |             0 |            2 |              0 |                         | 
+          19 |             0 |            3 |              0 |                         | 
+          19 |             0 |            4 |              0 |                         | 
+          19 |             0 |            5 |              0 |                         | 
+          19 |             0 |            6 |              0 |                         | 
+          19 |             0 |            7 |              0 |                         | 
+          19 |             0 |            8 |              0 |                         | 
+          19 |             0 |            9 |              0 |                         | 
+          19 |             0 |           10 |              0 |                         | 
+          19 |             0 |           11 |              0 |                         | 
+          19 |             0 |           12 |              0 |                         | 
+          19 |             0 |           13 |              0 |                         | 
+          20 |             0 |            1 |              0 |                         | 
+          20 |             0 |            2 |              0 |                         | 
+          20 |             0 |            3 |              0 |                         | 
+          20 |             0 |            4 |              0 |                         | 
+          20 |             0 |            5 |              0 |                         | 
+          20 |             0 |            6 |              0 |                         | 
+          20 |             0 |            7 |              0 |                         | 
+          20 |             0 |            8 |              0 |                         | 
+          20 |             0 |            9 |              0 |                         | 
+          20 |             0 |           10 |              0 |                         | 
+          20 |             0 |           11 |              0 |                         | 
+          20 |             0 |           12 |              0 |                         | 
+          20 |             0 |           13 |              0 |                         | 
+          21 |             0 |            1 |              0 |                         | 
+          21 |             0 |            2 |              0 |                         | 
+          21 |             0 |            3 |              0 |                         | 
+          21 |             0 |            4 |              0 |                         | 
+          21 |             0 |            5 |              0 |                         | 
+          21 |             0 |            6 |              0 |                         | 
+          21 |             0 |            7 |              0 |                         | 
+          21 |             0 |            8 |              0 |                         | 
+          21 |             0 |            9 |              0 |                         | 
+          21 |             0 |           10 |              0 |                         | 
+          21 |             0 |           11 |              0 |                         | 
+          21 |             0 |           12 |              0 |                         | 
+          21 |             0 |           13 |              0 |                         | 
+          22 |             0 |            1 |              0 |                         | 
+          22 |             0 |            2 |              0 |                         | 
+          22 |             0 |            3 |              0 |                         | 
+          22 |             0 |            4 |              0 |                         | 
+          22 |             0 |            5 |              0 |                         | 
+          22 |             0 |            6 |              0 |                         | 
+          22 |             0 |            7 |              0 |                         | 
+          22 |             0 |            8 |              0 |                         | 
+          22 |             0 |            9 |              0 |                         | 
+          22 |             0 |           10 |              0 |                         | 
+          22 |             0 |           11 |              0 |                         | 
+          22 |             0 |           12 |              0 |                         | 
+          22 |             0 |           13 |              0 |                         | 
+          23 |             0 |            1 |              0 |                         | 
+          23 |             0 |            2 |              0 |                         | 
+          23 |             0 |            3 |              0 |                         | 
+          23 |             0 |            4 |              0 |                         | 
+          23 |             0 |            5 |              0 |                         | 
+          23 |             0 |            6 |              0 |                         | 
+          23 |             0 |            7 |              0 |                         | 
+          23 |             0 |            8 |              0 |                         | 
+          23 |             0 |            9 |              0 |                         | 
+          23 |             0 |           10 |              0 |                         | 
+          23 |             0 |           11 |              0 |                         | 
+          23 |             0 |           12 |              0 |                         | 
+          23 |             0 |           13 |              0 |                         | 
+          24 |             0 |            1 |              0 |                         | 
+          24 |             0 |            2 |              0 |                         | 
+          24 |             0 |            3 |              0 |                         | 
+          24 |             0 |            4 |              0 |                         | 
+          24 |             0 |            5 |              0 |                         | 
+          24 |             0 |            6 |              0 |                         | 
+          24 |             0 |            7 |              0 |                         | 
+          24 |             0 |            8 |              0 |                         | 
+          24 |             0 |            9 |              0 |                         | 
+          24 |             0 |           10 |              0 |                         | 
+          24 |             0 |           11 |              0 |                         | 
+          24 |             0 |           12 |              0 |                         | 
+          24 |             0 |           13 |              0 |                         | 
+          25 |             0 |            1 |              0 |                         | 
+          25 |             0 |            2 |              0 |                         | 
+          25 |             0 |            3 |              0 |                         | 
+          25 |             0 |            4 |              0 |                         | 
+          25 |             0 |            5 |              0 |                         | 
+          25 |             0 |            6 |              0 |                         | 
+          25 |             0 |            7 |              0 |                         | 
+          25 |             0 |            8 |              0 |                         | 
+          25 |             0 |            9 |              0 |                         | 
+          25 |             0 |           10 |              0 |                         | 
+          25 |             0 |           11 |              0 |                         | 
+          25 |             0 |           12 |              0 |                         | 
+          25 |             0 |           13 |              0 |                         | 
+          26 |             0 |            1 |              0 |                         | 
+          26 |             0 |            2 |              0 |                         | 
+          26 |             0 |            3 |              0 |                         | 
+          26 |             0 |            4 |              0 |                         | 
+          26 |             0 |            5 |              0 |                         | 
+          26 |             0 |            6 |              0 |                         | 
+          26 |             0 |            7 |              0 |                         | 
+          26 |             0 |            8 |              0 |                         | 
+          26 |             0 |            9 |              0 |                         | 
+          26 |             0 |           10 |              0 |                         | 
+          26 |             0 |           11 |              0 |                         | 
+          26 |             0 |           12 |              0 |                         | 
+          26 |             0 |           13 |              0 |                         | 
+          27 |             0 |            1 |              0 |                         | 
+          27 |             0 |            2 |              0 |                         | 
+          27 |             0 |            3 |              0 |                         | 
+          27 |             0 |            4 |              0 |                         | 
+          27 |             0 |            5 |              0 |                         | 
+          27 |             0 |            6 |              0 |                         | 
+          27 |             0 |            7 |              0 |                         | 
+          27 |             0 |            8 |              0 |                         | 
+          27 |             0 |            9 |              0 |                         | 
+          27 |             0 |           10 |              0 |                         | 
+          27 |             0 |           11 |              0 |                         | 
+          27 |             0 |           12 |              0 |                         | 
+          27 |             0 |           13 |              0 |                         | 
+          28 |             0 |            1 |              0 |                         | 
+          28 |             0 |            2 |              0 |                         | 
+          28 |             0 |            3 |              0 |                         | 
+          28 |             0 |            4 |              0 |                         | 
+          28 |             0 |            5 |              0 |                         | 
+          28 |             0 |            6 |              0 |                         | 
+          28 |             0 |            7 |              0 |                         | 
+          28 |             0 |            8 |              0 |                         | 
+          28 |             0 |            9 |              0 |                         | 
+          28 |             0 |           10 |              0 |                         | 
+          28 |             0 |           11 |              0 |                         | 
+          28 |             0 |           12 |              0 |                         | 
+          28 |             0 |           13 |              0 |                         | 
+          29 |             0 |            1 |              0 |                         | 
+          29 |             0 |            2 |              0 |                         | 
+          29 |             0 |            3 |              0 |                         | 
+          29 |             0 |            4 |              0 |                         | 
+          29 |             0 |            5 |              0 |                         | 
+          29 |             0 |            6 |              0 |                         | 
+          29 |             0 |            7 |              0 |                         | 
+          29 |             0 |            8 |              0 |                         | 
+          29 |             0 |            9 |              0 |                         | 
+          29 |             0 |           10 |              0 |                         | 
+          29 |             0 |           11 |              0 |                         | 
+          29 |             0 |           12 |              0 |                         | 
+          29 |             0 |           13 |              0 |                         | 
+          30 |             0 |            1 |              0 |                         | 
+          30 |             0 |            2 |              0 |                         | 
+          30 |             0 |            3 |              0 |                         | 
+          30 |             0 |            4 |              0 |                         | 
+          30 |             0 |            5 |              0 |                         | 
+          30 |             0 |            6 |              0 |                         | 
+          30 |             0 |            7 |              0 |                         | 
+          30 |             0 |            8 |              0 |                         | 
+          30 |             0 |            9 |              0 |                         | 
+          30 |             0 |           10 |              0 |                         | 
+          30 |             0 |           11 |              0 |                         | 
+          30 |             0 |           12 |              0 |                         | 
+          30 |             0 |           13 |              0 |                         | 
+          31 |             0 |            1 |              0 |                         | 
+          31 |             0 |            2 |              0 |                         | 
+          31 |             0 |            3 |              0 |                         | 
+          31 |             0 |            4 |              0 |                         | 
+          31 |             0 |            5 |              0 |                         | 
+          31 |             0 |            6 |              0 |                         | 
+          31 |             0 |            7 |              0 |                         | 
+          31 |             0 |            8 |              0 |                         | 
+          31 |             0 |            9 |              0 |                         | 
+          31 |             0 |           10 |              0 |                         | 
+          31 |             0 |           11 |              0 |                         | 
+          31 |             0 |           12 |              0 |                         | 
+          31 |             0 |           13 |              0 |                         | 
+          32 |             0 |            1 |              0 |                         | 
+          32 |             0 |            2 |              0 |                         | 
+          32 |             0 |            3 |              0 |                         | 
+          32 |             0 |            4 |              0 |                         | 
+          32 |             0 |            5 |              0 |                         | 
+          32 |             0 |            6 |              0 |                         | 
+          32 |             0 |            7 |              0 |                         | 
+          32 |             0 |            8 |              0 |                         | 
+          32 |             0 |            9 |              0 |                         | 
+          32 |             0 |           10 |              0 |                         | 
+          32 |             0 |           11 |              0 |                         | 
+          32 |             0 |           12 |              0 |                         | 
+          32 |             0 |           13 |              0 |                         | 
+          33 |             0 |            1 |              0 |                         | 
+          33 |             0 |            2 |              0 |                         | 
+          33 |             0 |            3 |              0 |                         | 
+          33 |             0 |            4 |              0 |                         | 
+          33 |             0 |            5 |              0 |                         | 
+          33 |             0 |            6 |              0 |                         | 
+          33 |             0 |            7 |              0 |                         | 
+          33 |             0 |            8 |              0 |                         | 
+          33 |             0 |            9 |              0 |                         | 
+          33 |             0 |           10 |              0 |                         | 
+          33 |             0 |           11 |              0 |                         | 
+          33 |             0 |           12 |              0 |                         | 
+          33 |             0 |           13 |              0 |                         | 
+          34 |             0 |            1 |              0 |                         | 
+          34 |             0 |            2 |              0 |                         | 
+          34 |             0 |            3 |              0 |                         | 
+          34 |             0 |            4 |              0 |                         | 
+          34 |             0 |            5 |              0 |                         | 
+          34 |             0 |            6 |              0 |                         | 
+          34 |             0 |            7 |              0 |                         | 
+          34 |             0 |            8 |              0 |                         | 
+          34 |             0 |            9 |              0 |                         | 
+          34 |             0 |           10 |              0 |                         | 
+          34 |             0 |           11 |              0 |                         | 
+          34 |             0 |           12 |              0 |                         | 
+          34 |             0 |           13 |              0 |                         | 
+          35 |             0 |            1 |              0 |                         | 
+          35 |             0 |            2 |              0 |                         | 
+          35 |             0 |            3 |              0 |                         | 
+          35 |             0 |            4 |              0 |                         | 
+          35 |             0 |            5 |              0 |                         | 
+          35 |             0 |            6 |              0 |                         | 
+          35 |             0 |            7 |              0 |                         | 
+          35 |             0 |            8 |              0 |                         | 
+          35 |             0 |            9 |              0 |                         | 
+          35 |             0 |           10 |              0 |                         | 
+          35 |             0 |           11 |              0 |                         | 
+          35 |             0 |           12 |              0 |                         | 
+          35 |             0 |           13 |              0 |                         | 
+          36 |             0 |            1 |              0 |                         | 
+          36 |             0 |            2 |              0 |                         | 
+          36 |             0 |            3 |              0 |                         | 
+          36 |             0 |            4 |              0 |                         | 
+          36 |             0 |            5 |              0 |                         | 
+          36 |             0 |            6 |              0 |                         | 
+          36 |             0 |            7 |              0 |                         | 
+          36 |             0 |            8 |              0 |                         | 
+          36 |             0 |            9 |              0 |                         | 
+          36 |             0 |           10 |              0 |                         | 
+          36 |             0 |           11 |              0 |                         | 
+          36 |             0 |           12 |              0 |                         | 
+          36 |             0 |           13 |              0 |                         | 
+             |               |           14 |              0 | unmatched outer         | 
+(469 rows)
+
+rollback to settings;
+rollback;

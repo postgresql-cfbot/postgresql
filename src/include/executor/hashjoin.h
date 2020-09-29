@@ -19,6 +19,7 @@
 #include "storage/barrier.h"
 #include "storage/buffile.h"
 #include "storage/lwlock.h"
+#include "utils/sharedbits.h"
 
 /* ----------------------------------------------------------------
  *				hash-join hash table structures
@@ -143,6 +144,17 @@ typedef struct HashMemoryChunkData *HashMemoryChunk;
 #define HASH_CHUNK_THRESHOLD	(HASH_CHUNK_SIZE / 4)
 
 /*
+ * HashJoinTableData->curstripe the current stripe number
+ * The phantom stripe refers to the state of the inner side hashtable (empty)
+ * during the final scan of the outer batch file for a batch being processed
+ * using the hashloop fallback algorithm.
+ * In parallel-aware hash join, curstripe is in a detached state
+ * when the worker is not attached to the stripe_barrier.
+ */
+#define PHANTOM_STRIPE -2
+#define STRIPE_DETACHED -1
+
+/*
  * For each batch of a Parallel Hash Join, we have a ParallelHashJoinBatch
  * object in shared memory to coordinate access to it.  Since they are
  * followed by variable-sized objects, they are arranged in contiguous memory
@@ -152,13 +164,33 @@ typedef struct ParallelHashJoinBatch
 {
 	dsa_pointer buckets;		/* array of hash table buckets */
 	Barrier		batch_barrier;	/* synchronization for joining this batch */
+	Barrier		stripe_barrier; /* synchronization for stripes */
 
 	dsa_pointer chunks;			/* chunks of tuples loaded */
 	size_t		size;			/* size of buckets + chunks in memory */
 	size_t		estimated_size; /* size of buckets + chunks while writing */
-	size_t		ntuples;		/* number of tuples loaded */
+	 /* total number of tuples loaded into batch (in memory and spill files) */
+	size_t		ntuples;
 	size_t		old_ntuples;	/* number of tuples before repartitioning */
 	bool		space_exhausted;
+
+	/* Adaptive HashJoin */
+
+	/*
+	 * after finishing build phase, hashloop_fallback cannot change, and does
+	 * not require a lock to read
+	 */
+	pg_atomic_flag overflow_required;
+	bool		hashloop_fallback;
+	int			nstripes;		/* the number of stripes in the batch */
+	/* number of tuples loaded into the hashtable */
+	pg_atomic_uint64 ntuples_in_memory;
+
+	/*
+	 * Note that ntuples will reflect the total number of tuples in the batch
+	 * while ntuples_in_memory will reflect how many tuples are in memory
+	 */
+	LWLock		lock;
 
 	/*
 	 * Variable-sized SharedTuplestore objects follow this struct in memory.
@@ -177,10 +209,17 @@ typedef struct ParallelHashJoinBatch
 	 ((char *) ParallelHashJoinBatchInner(batch) +						\
 	  MAXALIGN(sts_estimate(nparticipants))))
 
+/* Accessor for sharedbits following a ParallelHashJoinBatch. */
+#define ParallelHashJoinBatchOuterBits(batch, nparticipants) \
+	((SharedBits *)												\
+	 ((char *) ParallelHashJoinBatchOuter(batch, nparticipants) +						\
+	  MAXALIGN(sts_estimate(nparticipants))))
+
 /* Total size of a ParallelHashJoinBatch and tuplestores. */
 #define EstimateParallelHashJoinBatch(hashtable)						\
 	(MAXALIGN(sizeof(ParallelHashJoinBatch)) +							\
-	 MAXALIGN(sts_estimate((hashtable)->parallel_state->nparticipants)) * 2)
+	 MAXALIGN(sts_estimate((hashtable)->parallel_state->nparticipants)) * 2 + \
+	 MAXALIGN(sb_estimate((hashtable)->parallel_state->nparticipants)))
 
 /* Accessor for the nth ParallelHashJoinBatch given the base. */
 #define NthParallelHashJoinBatch(base, n)								\
@@ -204,9 +243,19 @@ typedef struct ParallelHashJoinBatchAccessor
 	size_t		old_ntuples;	/* how many tuples before repartitioning? */
 	bool		at_least_one_chunk; /* has this backend allocated a chunk? */
 
-	bool		done;			/* flag to remember that a batch is done */
+	int			done;			/* flag to remember that a batch is done */
+	/* -1 for not done, 0 for tentatively done, 1 for done */
 	SharedTuplestoreAccessor *inner_tuples;
 	SharedTuplestoreAccessor *outer_tuples;
+	SharedBitsAccessor *sba;
+
+	/*
+	 * All participants except the last worker working on a batch which has
+	 * fallen back to hashloop processing save the stripe barrier phase and
+	 * detach to avoid the deadlock hazard of waiting on a barrier after
+	 * tuples have been emitted.
+	 */
+	int			last_participating_stripe_phase;
 } ParallelHashJoinBatchAccessor;
 
 /*
@@ -223,9 +272,27 @@ typedef enum ParallelHashGrowth
 	PHJ_GROWTH_NEED_MORE_BUCKETS,
 	/* The memory budget would be exhausted, so we need to repartition. */
 	PHJ_GROWTH_NEED_MORE_BATCHES,
-	/* Repartitioning didn't help last time, so don't try to do that again. */
-	PHJ_GROWTH_DISABLED
+
+	/*
+	 * While repartitioning or, if nbatches would overflow int, disable growth
+	 * in the number of batches
+	 */
+	PHJ_GROWTH_DISABLED,
+	PHJ_GROWTH_SPILL_BATCH0,
+	PHJ_GROWTH_LOADING
 } ParallelHashGrowth;
+
+typedef enum ParallelHashJoinBatchAccessorStatus
+{
+	/* No more useful work can be done on this batch by this worker */
+	PHJ_BATCH_ACCESSOR_DONE,
+
+	/*
+	 * The worker has not yet checked this batch to see if it can do useful
+	 * work
+	 */
+	PHJ_BATCH_ACCESSOR_NOT_DONE
+}			ParallelHashJoinBatchAccessorStatus;
 
 /*
  * The shared state used to coordinate a Parallel Hash Join.  This is stored
@@ -246,6 +313,8 @@ typedef struct ParallelHashJoinState
 	LWLock		lock;			/* lock protecting the above */
 
 	Barrier		build_barrier;	/* synchronization for the build phases */
+	Barrier		eviction_barrier;
+	Barrier		repartition_barrier;
 	Barrier		grow_batches_barrier;
 	Barrier		grow_buckets_barrier;
 	pg_atomic_uint32 distributor;	/* counter for load balancing */
@@ -263,9 +332,42 @@ typedef struct ParallelHashJoinState
 /* The phases for probing each batch, used by for batch_barrier. */
 #define PHJ_BATCH_ELECTING				0
 #define PHJ_BATCH_ALLOCATING			1
-#define PHJ_BATCH_LOADING				2
-#define PHJ_BATCH_PROBING				3
-#define PHJ_BATCH_DONE					4
+#define PHJ_BATCH_STRIPING				2
+#define PHJ_BATCH_DONE					3
+
+/* The phases for probing each stripe of each batch used with stripe barriers */
+#define PHJ_STRIPE_INVALID_PHASE        -1
+#define PHJ_STRIPE_ELECTING				0
+#define PHJ_STRIPE_RESETTING			1
+#define PHJ_STRIPE_LOADING				2
+#define PHJ_STRIPE_OVERFLOWING          3
+#define PHJ_STRIPE_PROBING				4
+#define PHJ_STRIPE_DONE				    5
+#define PHJ_STRIPE_NUMBER(n)            ((n) / 6)
+#define PHJ_STRIPE_PHASE(n)             ((n) % 6)
+
+#define PHJ_EVICT_ELECTING 0
+#define PHJ_EVICT_RESETTING 1
+#define PHJ_EVICT_SPILLING 2
+#define PHJ_EVICT_FINISHING 3
+#define PHJ_EVICT_DONE 4
+#define PHJ_EVICT_PHASE(n)          ((n) % 5)
+
+/*
+ * These phases are now required for repartitioning batch 0 since it can
+ * spill. First all tuples which were resident in the hashtable need to
+ * be relocated either back to the hashtable or to a spill file, if they
+ * would relocate to a batch 1+ given the new number of batches. After
+ * draining the chunk_work_queue, we must drain the batch 0 spill file,
+ * if it exists. Some tuples may have been relocated from the hashtable
+ * to other batches, in which case, space may have been freed up which
+ * the tuples from the batch 0 spill file can occupy. The tuples from the
+ * batch 0 spill file may go to 1) the hashtable, 2) back to the batch 0
+ * spill file in the new generation of batches, 3) to a batch file 1+
+ */
+#define PHJ_REPARTITION_BATCH0_DRAIN_QUEUE 0
+#define PHJ_REPARTITION_BATCH0_DRAIN_SPILL_FILE 1
+#define PHJ_REPARTITION_BATCH0_PHASE(n)  ((n) % 2)
 
 /* The phases of batch growth while hashing, for grow_batches_barrier. */
 #define PHJ_GROW_BATCHES_ELECTING		0
@@ -313,8 +415,6 @@ typedef struct HashJoinTableData
 	int			nbatch_original;	/* nbatch when we started inner scan */
 	int			nbatch_outstart;	/* nbatch when we started outer scan */
 
-	bool		growEnabled;	/* flag to shut off nbatch increases */
-
 	double		totalTuples;	/* # tuples obtained from inner plan */
 	double		partialTuples;	/* # tuples obtained from inner plan by me */
 	double		skewTuples;		/* # tuples inserted into skew tuples */
@@ -328,6 +428,18 @@ typedef struct HashJoinTableData
 	 */
 	BufFile   **innerBatchFile; /* buffered virtual temp file per batch */
 	BufFile   **outerBatchFile; /* buffered virtual temp file per batch */
+
+	/*
+	 * Adaptive hashjoin variables
+	 */
+	BufFile   **hashloopBatchFile;	/* outer match status files if fall back */
+	List	   *fallback_batches_stats; /* per hashjoin batch statistics */
+
+	/*
+	 * current stripe #; 0 during 1st pass, -1 (macro STRIPE_DETACHED) when
+	 * detached, -2 on phantom stripe (macro PHANTOM_STRIPE)
+	 */
+	int			curstripe;
 
 	/*
 	 * Info about the datatype-specific hash functions for the datatypes being

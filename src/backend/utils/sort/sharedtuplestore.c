@@ -47,19 +47,28 @@ typedef struct SharedTuplestoreChunk
 	char		data[FLEXIBLE_ARRAY_MEMBER];
 } SharedTuplestoreChunk;
 
+typedef enum SharedTuplestoreMode
+{
+	WRITING = 0,
+	READING = 1,
+	APPENDING = 2
+} SharedTuplestoreMode;
+
 /* Per-participant shared state. */
 typedef struct SharedTuplestoreParticipant
 {
 	LWLock		lock;
 	BlockNumber read_page;		/* Page number for next read. */
+	bool		rewound;
 	BlockNumber npages;			/* Number of pages written. */
-	bool		writing;		/* Used only for assertions. */
+	SharedTuplestoreMode mode;	/* Used only for assertions. */
 } SharedTuplestoreParticipant;
 
 /* The control object that lives in shared memory. */
 struct SharedTuplestore
 {
 	int			nparticipants;	/* Number of participants that can write. */
+	pg_atomic_uint32 ntuples;	/* Number of tuples in this tuplestore. */
 	int			flags;			/* Flag bits from SHARED_TUPLESTORE_XXX */
 	size_t		meta_data_size; /* Size of per-tuple header. */
 	char		name[NAMEDATALEN];	/* A name for this tuplestore. */
@@ -92,6 +101,8 @@ struct SharedTuplestoreAccessor
 	BlockNumber write_page;		/* The next page to write to. */
 	char	   *write_pointer;	/* Current write pointer within chunk. */
 	char	   *write_end;		/* One past the end of the current chunk. */
+	bool		participated;	/* Did the worker participate in writing this
+								 * STS at any point */
 };
 
 static void sts_filename(char *name, SharedTuplestoreAccessor *accessor,
@@ -137,6 +148,7 @@ sts_initialize(SharedTuplestore *sts, int participants,
 	Assert(my_participant_number < participants);
 
 	sts->nparticipants = participants;
+	pg_atomic_init_u32(&sts->ntuples, 1);
 	sts->meta_data_size = meta_data_size;
 	sts->flags = flags;
 
@@ -158,7 +170,8 @@ sts_initialize(SharedTuplestore *sts, int participants,
 		LWLockInitialize(&sts->participants[i].lock,
 						 LWTRANCHE_SHARED_TUPLESTORE);
 		sts->participants[i].read_page = 0;
-		sts->participants[i].writing = false;
+		sts->participants[i].rewound = false;
+		sts->participants[i].mode = READING;
 	}
 
 	accessor = palloc0(sizeof(SharedTuplestoreAccessor));
@@ -188,6 +201,7 @@ sts_attach(SharedTuplestore *sts,
 	accessor->sts = sts;
 	accessor->fileset = fileset;
 	accessor->context = CurrentMemoryContext;
+	accessor->participated = false;
 
 	return accessor;
 }
@@ -219,7 +233,9 @@ sts_end_write(SharedTuplestoreAccessor *accessor)
 		pfree(accessor->write_chunk);
 		accessor->write_chunk = NULL;
 		accessor->write_file = NULL;
-		accessor->sts->participants[accessor->participant].writing = false;
+		accessor->write_pointer = NULL;
+		accessor->write_end = NULL;
+		accessor->sts->participants[accessor->participant].mode = READING;
 	}
 }
 
@@ -263,7 +279,7 @@ sts_begin_parallel_scan(SharedTuplestoreAccessor *accessor)
 	 * files have stopped growing.
 	 */
 	for (i = 0; i < accessor->sts->nparticipants; ++i)
-		Assert(!accessor->sts->participants[i].writing);
+		Assert((accessor->sts->participants[i].mode == READING) || (accessor->sts->participants[i].mode == APPENDING));
 
 	/*
 	 * We will start out reading the file that THIS backend wrote.  There may
@@ -311,10 +327,11 @@ sts_puttuple(SharedTuplestoreAccessor *accessor, void *meta_data,
 		/* Create one.  Only this backend will write into it. */
 		sts_filename(name, accessor, accessor->participant);
 		accessor->write_file = BufFileCreateShared(accessor->fileset, name);
+		accessor->participated = true;
 
 		/* Set up the shared state for this backend's file. */
 		participant = &accessor->sts->participants[accessor->participant];
-		participant->writing = true;	/* for assertions only */
+		participant->mode = WRITING;	/* for assertions only */
 	}
 
 	/* Do we have space? */
@@ -513,6 +530,17 @@ sts_read_tuple(SharedTuplestoreAccessor *accessor, void *meta_data)
 	return tuple;
 }
 
+MinimalTuple
+sts_parallel_scan_chunk(SharedTuplestoreAccessor *accessor,
+						void *meta_data,
+						bool inner)
+{
+	Assert(accessor->read_file);
+	if (accessor->read_ntuples < accessor->read_ntuples_available)
+		return sts_read_tuple(accessor, meta_data);
+	return NULL;
+}
+
 /*
  * Get the next tuple in the current parallel scan.
  */
@@ -526,7 +554,13 @@ sts_parallel_scan_next(SharedTuplestoreAccessor *accessor, void *meta_data)
 	for (;;)
 	{
 		/* Can we read more tuples from the current chunk? */
-		if (accessor->read_ntuples < accessor->read_ntuples_available)
+		/*
+		 * Added a check for accessor->read_file being present here, as it
+		 * became relevant for adaptive hashjoin. TODO: Not sure if this has
+		 * other consequences for correctness
+		 */
+
+		if (accessor->read_ntuples < accessor->read_ntuples_available && accessor->read_file)
 			return sts_read_tuple(accessor, meta_data);
 
 		/* Find the location of a new chunk to read. */
@@ -616,6 +650,56 @@ sts_parallel_scan_next(SharedTuplestoreAccessor *accessor, void *meta_data)
 	}
 
 	return NULL;
+}
+
+uint32
+sts_increment_ntuples(SharedTuplestoreAccessor *accessor)
+{
+	return pg_atomic_fetch_add_u32(&accessor->sts->ntuples, 1);
+}
+
+uint32
+sts_get_tuplenum(SharedTuplestoreAccessor *accessor)
+{
+	return pg_atomic_read_u32(&accessor->sts->ntuples);
+}
+
+int
+sta_get_read_participant(SharedTuplestoreAccessor *accessor)
+{
+	return accessor->read_participant;
+}
+
+void
+sts_spill_leftover_tuples(SharedTuplestoreAccessor *accessor, MinimalTuple tuple, uint32 hashvalue)
+{
+	tupleMetadata metadata;
+	SharedTuplestoreParticipant *participant;
+	char		name[MAXPGPATH];
+
+	metadata.hashvalue = hashvalue;
+	participant = &accessor->sts->participants[accessor->participant];
+	participant->mode = APPENDING;	/* for assertions only */
+
+	sts_filename(name, accessor, accessor->participant);
+	if (!accessor->participated)
+	{
+		accessor->write_file = BufFileCreateShared(accessor->fileset, name);
+		accessor->participated = true;
+	}
+
+	else
+		accessor->write_file = BufFileOpenShared(accessor->fileset, name, O_WRONLY);
+
+	BufFileSeek(accessor->write_file, 0, -1, SEEK_END);
+	do
+	{
+		sts_puttuple(accessor, &metadata, tuple);
+	} while ((tuple = sts_parallel_scan_chunk(accessor, &metadata, true)));
+
+	accessor->read_ntuples = 0;
+	accessor->read_ntuples_available = 0;
+	sts_end_write(accessor);
 }
 
 /*

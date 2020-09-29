@@ -904,9 +904,19 @@ box_intersect(PG_FUNCTION_ARGS)
 
 	result = (BOX *) palloc(sizeof(BOX));
 
-	result->high.x = float8_min(box1->high.x, box2->high.x);
+	/* float8_min conceals NaN, check separately for NaNs */
+	if (unlikely(isnan(box1->high.x) || isnan(box2->high.x)))
+		result->high.x = get_float8_nan();
+	else
+		result->high.x = float8_min(box1->high.x, box2->high.x);
+
 	result->low.x = float8_max(box1->low.x, box2->low.x);
-	result->high.y = float8_min(box1->high.y, box2->high.y);
+
+	if (unlikely(isnan(box1->high.y) || isnan(box2->high.y)))
+		result->high.x = get_float8_nan();
+	else
+		result->high.y = float8_min(box1->high.y, box2->high.y);
+
 	result->low.y = float8_max(box1->low.y, box2->low.y);
 
 	PG_RETURN_BOX_P(result);
@@ -1061,6 +1071,21 @@ line_construct(LINE *result, Point *pt, float8 m)
 		result->A = -1.0;
 		result->B = 0.0;
 		result->C = pt->x;
+
+		/* Avoid creating a valid line from an invalid point */
+		if (unlikely(isnan(pt->y)))
+			result->C = get_float8_nan();
+	}
+	else if (m == 0.0)
+	{
+		/* use "mx - y + yinter = 0" */
+		result->A = 0.0;
+		result->B = -1.0;
+		result->C = pt->y;
+
+		/* Avoid creating a valid line from an invalid point */
+		if (unlikely(isnan(pt->x)))
+			result->C = get_float8_nan();
 	}
 	else
 	{
@@ -1084,6 +1109,7 @@ line_construct_pp(PG_FUNCTION_ARGS)
 	Point	   *pt2 = PG_GETARG_POINT_P(1);
 	LINE	   *result = (LINE *) palloc(sizeof(LINE));
 
+	/* NaNs are considered to be equal by point_eq_point */
 	if (point_eq_point(pt1, pt2))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1104,8 +1130,12 @@ line_intersect(PG_FUNCTION_ARGS)
 {
 	LINE	   *l1 = PG_GETARG_LINE_P(0);
 	LINE	   *l2 = PG_GETARG_LINE_P(1);
+	Point		xp;
 
-	PG_RETURN_BOOL(line_interpt_line(NULL, l1, l2));
+	if (line_interpt_line(&xp, l1, l2) && !isnan(xp.x) && !isnan(xp.y))
+		PG_RETURN_BOOL(true);
+	else
+		PG_RETURN_BOOL(false);
 }
 
 Datum
@@ -1123,14 +1153,17 @@ line_perp(PG_FUNCTION_ARGS)
 	LINE	   *l1 = PG_GETARG_LINE_P(0);
 	LINE	   *l2 = PG_GETARG_LINE_P(1);
 
+	if (unlikely(isnan(l1->C) || isnan(l2->C)))
+		return false;
+
 	if (FPzero(l1->A))
-		PG_RETURN_BOOL(FPzero(l2->B));
+		PG_RETURN_BOOL(FPzero(l2->B) && !isnan(l1->B) && !isnan(l2->A));
 	if (FPzero(l2->A))
-		PG_RETURN_BOOL(FPzero(l1->B));
+		PG_RETURN_BOOL(FPzero(l1->B) && !isnan(l2->B) && !isnan(l1->A));
 	if (FPzero(l1->B))
-		PG_RETURN_BOOL(FPzero(l2->A));
+		PG_RETURN_BOOL(FPzero(l2->A) && !isnan(l1->A) && !isnan(l2->B));
 	if (FPzero(l2->B))
-		PG_RETURN_BOOL(FPzero(l1->A));
+		PG_RETURN_BOOL(FPzero(l1->A) && !isnan(l2->A) && !isnan(l1->B));
 
 	PG_RETURN_BOOL(FPeq(float8_div(float8_mul(l1->A, l2->A),
 								   float8_mul(l1->B, l2->B)), -1.0));
@@ -1141,7 +1174,7 @@ line_vertical(PG_FUNCTION_ARGS)
 {
 	LINE	   *line = PG_GETARG_LINE_P(0);
 
-	PG_RETURN_BOOL(FPzero(line->B));
+	PG_RETURN_BOOL(FPzero(line->B) && !isnan(line->A) && !isnan(line->C));
 }
 
 Datum
@@ -1149,7 +1182,7 @@ line_horizontal(PG_FUNCTION_ARGS)
 {
 	LINE	   *line = PG_GETARG_LINE_P(0);
 
-	PG_RETURN_BOOL(FPzero(line->A));
+	PG_RETURN_BOOL(FPzero(line->A) && !isnan(line->B) && !isnan(line->C));
 }
 
 
@@ -1195,9 +1228,19 @@ static inline float8
 line_sl(LINE *line)
 {
 	if (FPzero(line->A))
+	{
+		/* C is likely to be NaN than B */
+		if (unlikely(isnan(line->C) || isnan(line->B)))
+			return get_float8_nan();
 		return 0.0;
+	}
 	if (FPzero(line->B))
+	{
+		/* C is likely to be NaN than A */
+		if (unlikely(isnan(line->C) || isnan(line->A)))
+			return get_float8_nan();
 		return DBL_MAX;
+	}
 	return float8_div(line->A, -line->B);
 }
 
@@ -1209,9 +1252,19 @@ static inline float8
 line_invsl(LINE *line)
 {
 	if (FPzero(line->A))
+	{
+		/* C is likely to be NaN than B */
+		if (unlikely(isnan(line->C) || isnan(line->B)))
+			return get_float8_nan();
 		return DBL_MAX;
+	}
 	if (FPzero(line->B))
+	{
+		/* C is likely to be NaN than A */
+		if (unlikely(isnan(line->C) || isnan(line->A)))
+			return get_float8_nan();
 		return 0.0;
+	}
 	return float8_div(line->B, line->A);
 }
 
@@ -1224,14 +1277,23 @@ line_distance(PG_FUNCTION_ARGS)
 {
 	LINE	   *l1 = PG_GETARG_LINE_P(0);
 	LINE	   *l2 = PG_GETARG_LINE_P(1);
+	Point		xp;
 	float8		ratio;
 
-	if (line_interpt_line(NULL, l1, l2))	/* intersecting? */
-		PG_RETURN_FLOAT8(0.0);
+	if (line_interpt_line(&xp, l1, l2))	/* intersecting? */
+	{
+		/* return NaN if NaN was involved */
+		if (isnan(xp.x) || isnan(xp.y))
+			PG_RETURN_FLOAT8(get_float8_nan());
 
-	if (!FPzero(l1->A) && !isnan(l1->A) && !FPzero(l2->A) && !isnan(l2->A))
+		PG_RETURN_FLOAT8(0.0);
+	}
+
+	if (unlikely(isnan(l1->A) || isnan(l1->B) || isnan(l2->A) || isnan(l2->B)))
+		ratio = get_float8_nan();
+	else if (!FPzero(l1->A) && !FPzero(l2->A))
 		ratio = float8_div(l1->A, l2->A);
-	else if (!FPzero(l1->B) && !isnan(l1->B) && !FPzero(l2->B) && !isnan(l2->B))
+	else if (!FPzero(l1->B) && !FPzero(l2->B))
 		ratio = float8_div(l1->B, l2->B);
 	else
 		ratio = 1.0;
@@ -1291,14 +1353,19 @@ line_interpt_line(Point *result, LINE *l1, LINE *l2)
 	}
 	else if (!FPzero(l2->B))
 	{
-		if (FPeq(l1->A, float8_mul(l2->A, float8_div(l1->B, l2->B))))
-			return false;
-
-		x = float8_div(float8_mi(float8_mul(l2->B, l1->C),
-								 float8_mul(l1->B, l2->C)),
-					   float8_mi(float8_mul(l2->A, l1->B),
-								 float8_mul(l1->A, l2->B)));
-		y = float8_div(-float8_pl(float8_mul(l2->A, x), l2->C), l2->B);
+		/*
+		 * We know that l1->B is zero, which means l1 is vertical. The lines
+		 * cannot be parallel and the x-coord of the cross point is -C/A of l1.
+		 */
+		x = -float8_div(l1->C, l1->A);
+		/*
+		 * When l2->A is zero, y is determined independently from x even if it
+		 * is Inf.
+		 */
+		if (FPzero(l2->A))
+			y = -float8_div(l2->C, l2->B);
+		else
+			y = float8_div(-float8_pl(float8_mul(l2->A, x), l2->C), l2->B);
 	}
 	else
 		return false;
@@ -1626,18 +1693,32 @@ path_inter(PG_FUNCTION_ARGS)
 	b1.high.y = b1.low.y = p1->p[0].y;
 	for (i = 1; i < p1->npts; i++)
 	{
+		/* float8_min conceals NaN, check separately for NaNs */
 		b1.high.x = float8_max(p1->p[i].x, b1.high.x);
 		b1.high.y = float8_max(p1->p[i].y, b1.high.y);
-		b1.low.x = float8_min(p1->p[i].x, b1.low.x);
+		if (unlikely(isnan(p1->p[i].x)))
+			b1.low.x = p1->p[i].x;
+		else
+			b1.low.x = float8_min(p1->p[i].x, b1.low.x);
+		if (unlikely(isnan(p1->p[i].y)))
+			b1.low.x = p1->p[i].y;
+		else
 		b1.low.y = float8_min(p1->p[i].y, b1.low.y);
 	}
 	b2.high.x = b2.low.x = p2->p[0].x;
 	b2.high.y = b2.low.y = p2->p[0].y;
 	for (i = 1; i < p2->npts; i++)
 	{
+		/* float8_min conceals NaN, check separately for NaNs */
 		b2.high.x = float8_max(p2->p[i].x, b2.high.x);
 		b2.high.y = float8_max(p2->p[i].y, b2.high.y);
-		b2.low.x = float8_min(p2->p[i].x, b2.low.x);
+		if (unlikely(isnan(p2->p[i].x)))
+			b2.low.x = p2->p[i].x;
+		else
+			b2.low.x = float8_min(p2->p[i].x, b2.low.x);
+		if (unlikely(isnan(p2->p[i].y)))
+			b2.low.y = p1->p[i].y;
+		else
 		b2.low.y = float8_min(p2->p[i].y, b2.low.y);
 	}
 	if (!box_ov(&b1, &b2))
@@ -1728,6 +1809,11 @@ path_distance(PG_FUNCTION_ARGS)
 			statlseg_construct(&seg2, &p2->p[jprev], &p2->p[j]);
 
 			tmp = lseg_closept_lseg(NULL, &seg1, &seg2);
+
+			/* return NULL immediately if NaN is involved */
+			if (isnan(tmp))
+				PG_RETURN_NULL();
+
 			if (!have_min || float8_lt(tmp, min))
 			{
 				min = tmp;
@@ -1980,9 +2066,17 @@ static inline float8
 point_sl(Point *pt1, Point *pt2)
 {
 	if (FPeq(pt1->x, pt2->x))
+	{
+		if (unlikely(isnan(pt1->y) || isnan(pt2->y)))
+			return get_float8_nan();
 		return DBL_MAX;
+	}
 	if (FPeq(pt1->y, pt2->y))
+	{
+		if (unlikely(isnan(pt1->x) || isnan(pt2->x)))
+			return get_float8_nan();
 		return 0.0;
+	}
 	return float8_div(float8_mi(pt1->y, pt2->y), float8_mi(pt1->x, pt2->x));
 }
 
@@ -1996,9 +2090,17 @@ static inline float8
 point_invsl(Point *pt1, Point *pt2)
 {
 	if (FPeq(pt1->x, pt2->x))
+	{
+		if (unlikely(isnan(pt1->y) || isnan(pt2->y)))
+			return get_float8_nan();
 		return 0.0;
+	}
 	if (FPeq(pt1->y, pt2->y))
+	{
+		if (unlikely(isnan(pt1->x) || isnan(pt2->x)))
+			return get_float8_nan();
 		return DBL_MAX;
+	}
 	return float8_div(float8_mi(pt1->x, pt2->x), float8_mi(pt2->y, pt1->y));
 }
 
@@ -2414,6 +2516,11 @@ dist_ppath_internal(Point *pt, PATH *path)
 
 		statlseg_construct(&lseg, &path->p[iprev], &path->p[i]);
 		tmp = lseg_closept_point(NULL, &lseg, pt);
+
+		/* return NaN if NaN is involved */
+		if (unlikely(isnan(tmp)))
+			return tmp;
+
 		if (!have_min || float8_lt(tmp, result))
 		{
 			result = tmp;
@@ -2645,6 +2752,8 @@ dist_ppoly_internal(Point *pt, POLYGON *poly)
 		d = lseg_closept_point(NULL, &seg, pt);
 		if (float8_lt(d, result))
 			result = d;
+		else if (unlikely(isnan(d)))
+			return get_float8_nan();
 	}
 
 	return result;
@@ -2674,7 +2783,8 @@ lseg_interpt_line(Point *result, LSEG *lseg, LINE *line)
 	 * intersection point, we are done.
 	 */
 	line_construct(&tmp, &lseg->p[0], lseg_sl(lseg));
-	if (!line_interpt_line(&interpt, &tmp, line))
+	if (!line_interpt_line(&interpt, &tmp, line) ||
+		unlikely(isnan(interpt.x) || isnan(interpt.y)))
 		return false;
 
 	/*
@@ -2803,6 +2913,7 @@ lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg)
 	Point		point;
 	float8		dist,
 				d;
+	bool		isnan = false;
 
 	/* First, we handle the case when the line segments are intersecting. */
 	if (lseg_interpt_lseg(result, on_lseg, to_lseg))
@@ -2814,6 +2925,7 @@ lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg)
 	 */
 	dist = lseg_closept_point(result, on_lseg, &to_lseg->p[0]);
 	d = lseg_closept_point(&point, on_lseg, &to_lseg->p[1]);
+	isnan |= (isnan(dist) || isnan(d));
 	if (float8_lt(d, dist))
 	{
 		dist = d;
@@ -2823,6 +2935,7 @@ lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg)
 
 	/* The closest point can still be one of the endpoints, so we test them. */
 	d = lseg_closept_point(NULL, to_lseg, &on_lseg->p[0]);
+	isnan |= isnan(d);
 	if (float8_lt(d, dist))
 	{
 		dist = d;
@@ -2830,6 +2943,7 @@ lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg)
 			*result = on_lseg->p[0];
 	}
 	d = lseg_closept_point(NULL, to_lseg, &on_lseg->p[1]);
+	isnan |= isnan(d);
 	if (float8_lt(d, dist))
 	{
 		dist = d;
@@ -2837,6 +2951,12 @@ lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg)
 			*result = on_lseg->p[1];
 	}
 
+	if (unlikely(isnan))
+	{
+		if (result != NULL)
+			result->x = result->y = get_float8_nan();
+		return get_float8_nan();
+	}
 	return dist;
 }
 
@@ -2873,6 +2993,7 @@ box_closept_point(Point *result, BOX *box, Point *pt)
 	Point		point,
 				closept;
 	LSEG		lseg;
+	bool		isnan = false;
 
 	if (box_contain_point(box, pt))
 	{
@@ -2887,9 +3008,10 @@ box_closept_point(Point *result, BOX *box, Point *pt)
 	point.y = box->high.y;
 	statlseg_construct(&lseg, &box->low, &point);
 	dist = lseg_closept_point(result, &lseg, pt);
-
+	isnan |= isnan(dist);
 	statlseg_construct(&lseg, &box->high, &point);
 	d = lseg_closept_point(&closept, &lseg, pt);
+	isnan |= isnan(d);
 	if (float8_lt(d, dist))
 	{
 		dist = d;
@@ -2901,6 +3023,7 @@ box_closept_point(Point *result, BOX *box, Point *pt)
 	point.y = box->low.y;
 	statlseg_construct(&lseg, &box->low, &point);
 	d = lseg_closept_point(&closept, &lseg, pt);
+	isnan |= isnan(d);
 	if (float8_lt(d, dist))
 	{
 		dist = d;
@@ -2910,11 +3033,19 @@ box_closept_point(Point *result, BOX *box, Point *pt)
 
 	statlseg_construct(&lseg, &box->high, &point);
 	d = lseg_closept_point(&closept, &lseg, pt);
+	isnan |= isnan(d);
 	if (float8_lt(d, dist))
 	{
 		dist = d;
 		if (result != NULL)
 			*result = closept;
+	}
+
+	if (unlikely(isnan))
+	{
+		if (result != NULL)
+			result->x = result->y = get_float8_nan();
+		return get_float8_nan();
 	}
 
 	return dist;
@@ -2988,6 +3119,7 @@ close_sl(PG_FUNCTION_ARGS)
  * even because of simple roundoff issues, there may not be a single closest
  * point.  We are likely to set the result to the second endpoint in these
  * cases.
+ * Returns Nan and stores {NaN,NaN} to result if NaN is involved,
  */
 static float8
 lseg_closept_line(Point *result, LSEG *lseg, LINE *line)
@@ -3010,6 +3142,14 @@ lseg_closept_line(Point *result, LSEG *lseg, LINE *line)
 	}
 	else
 	{
+		/* return NaN if any of the two is NaN */
+		if (unlikely(isnan(dist1) || isnan(dist2)))
+		{
+			if (result != NULL)
+				result->x = result->y = get_float8_nan();
+			return get_float8_nan();
+		}
+
 		if (result != NULL)
 			*result = lseg->p[1];
 
@@ -3436,6 +3576,12 @@ make_bound_box(POLYGON *poly)
 	y2 = y1 = poly->p[0].y;
 	for (i = 1; i < poly->npts; i++)
 	{
+		/* if NaN found, make an invalid boundbox */
+		if (unlikely(isnan(poly->p[i].x) || isnan(poly->p[i].y)))
+		{
+			x1 = x2 = y1 = y2 = get_float8_nan();
+			break;
+		}
 		if (float8_lt(poly->p[i].x, x1))
 			x1 = poly->p[i].x;
 		if (float8_gt(poly->p[i].x, x2))
@@ -3910,6 +4056,11 @@ lseg_inside_poly(Point *a, Point *b, POLYGON *poly, int start)
 	t.p[0] = *a;
 	t.p[1] = *b;
 	s.p[0] = poly->p[(start == 0) ? (poly->npts - 1) : (start - 1)];
+
+	/* Fast path. Check against boundbox. Also checks NaNs. */
+	if (!box_contain_point(&poly->boundbox, a) ||
+		!box_contain_point(&poly->boundbox, b))
+		return false;
 
 	for (i = start; i < poly->npts && res; i++)
 	{
@@ -5350,6 +5501,10 @@ point_inside(Point *p, int npts, Point *plist)
 	x0 = float8_mi(plist[0].x, p->x);
 	y0 = float8_mi(plist[0].y, p->y);
 
+	/* NaN makes the point cannot be inside the polygon */
+	if (unlikely(isnan(x0) || isnan(y0) || isnan(p->x) || isnan(p->y)))
+		return 0;
+
 	prev_x = x0;
 	prev_y = y0;
 	/* loop over polygon points and aggregate total_cross */
@@ -5358,6 +5513,10 @@ point_inside(Point *p, int npts, Point *plist)
 		/* compute next polygon point relative to single point */
 		x = float8_mi(plist[i].x, p->x);
 		y = float8_mi(plist[i].y, p->y);
+
+		/* NaN makes the point cannot be inside the polygon */
+		if (unlikely(isnan(x) || isnan(y)))
+			return 0;
 
 		/* compute previous to current point crossing */
 		if ((cross = lseg_crossing(x, y, prev_x, prev_y)) == POINT_ON_POLYGON)
@@ -5517,11 +5676,11 @@ pg_hypot(float8 x, float8 y)
 				result;
 
 	/* Handle INF and NaN properly */
-	if (isinf(x) || isinf(y))
-		return get_float8_infinity();
-
-	if (isnan(x) || isnan(y))
+	if (unlikely(isnan(x) || isnan(y)))
 		return get_float8_nan();
+
+	if (unlikely(isinf(x) || isinf(y)))
+		return get_float8_infinity();
 
 	/* Else, drop any minus signs */
 	x = fabs(x);

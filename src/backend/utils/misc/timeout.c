@@ -52,6 +52,13 @@ static volatile int num_active_timeouts = 0;
 static timeout_params *volatile active_timeouts[MAX_TIMEOUTS];
 
 /*
+ * State used to avoid installing a new timer interrupt when the previous one
+ * hasn't fired yet, but isn't too late.
+ */
+static TimestampTz sigalrm_due_at = PG_INT64_MAX;
+static volatile sig_atomic_t sigalrm_delivered = false;
+
+/*
  * Flag controlling whether the signal handler is allowed to do anything.
  * We leave this "false" when we're not expecting interrupts, just in case.
  *
@@ -195,12 +202,13 @@ schedule_alarm(TimestampTz now)
 		struct itimerval timeval;
 		long		secs;
 		int			usecs;
+		TimestampTz	nearest_timeout;
 
 		MemSet(&timeval, 0, sizeof(struct itimerval));
 
 		/* Get the time remaining till the nearest pending timeout */
-		TimestampDifference(now, active_timeouts[0]->fin_time,
-							&secs, &usecs);
+		nearest_timeout = active_timeouts[0]->fin_time;
+		TimestampDifference(now, nearest_timeout, &secs, &usecs);
 
 		/*
 		 * It's possible that the difference is less than a microsecond;
@@ -244,9 +252,18 @@ schedule_alarm(TimestampTz now)
 		 */
 		enable_alarm();
 
+		/*
+		 * Try to avoid having to set the interval timer, if we already know
+		 * that there is an undelivered signal due at the same time or sooner.
+		 */
+		if (nearest_timeout >= sigalrm_due_at && !sigalrm_delivered)
+			return;
+
 		/* Set the alarm timer */
 		if (setitimer(ITIMER_REAL, &timeval, NULL) != 0)
 			elog(FATAL, "could not enable SIGALRM timer: %m");
+		sigalrm_due_at = nearest_timeout;
+		sigalrm_delivered = false;
 	}
 }
 
@@ -265,6 +282,8 @@ static void
 handle_sig_alarm(SIGNAL_ARGS)
 {
 	int			save_errno = errno;
+
+	sigalrm_delivered = true;
 
 	/*
 	 * Bump the holdoff counter, to make sure nothing we call will process
@@ -591,8 +610,9 @@ disable_timeouts(const DisableTimeoutParams *timeouts, int count)
 }
 
 /*
- * Disable SIGALRM and remove all timeouts from the active list,
- * and optionally reset their timeout indicators.
+ * Remove all timeouts from the active list, and optionally reset their timeout
+ * indicators.  Leave any existing itimer installed, because it may allow us to
+ * avoid having to set it again soon.
  */
 void
 disable_all_timeouts(bool keep_indicators)
@@ -600,20 +620,6 @@ disable_all_timeouts(bool keep_indicators)
 	int			i;
 
 	disable_alarm();
-
-	/*
-	 * Only bother to reset the timer if we think it's active.  We could just
-	 * let the interrupt happen anyway, but it's probably a bit cheaper to do
-	 * setitimer() than to let the useless interrupt happen.
-	 */
-	if (num_active_timeouts > 0)
-	{
-		struct itimerval timeval;
-
-		MemSet(&timeval, 0, sizeof(struct itimerval));
-		if (setitimer(ITIMER_REAL, &timeval, NULL) != 0)
-			elog(FATAL, "could not disable SIGALRM timer: %m");
-	}
 
 	num_active_timeouts = 0;
 

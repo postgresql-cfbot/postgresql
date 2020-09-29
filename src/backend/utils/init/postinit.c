@@ -72,6 +72,7 @@ static void InitCommunication(void);
 static void ShutdownPostgres(int code, Datum arg);
 static void StatementTimeoutHandler(void);
 static void LockTimeoutHandler(void);
+static void IdleSessionTimeoutHandler(void);
 static void IdleInTransactionSessionTimeoutHandler(void);
 static bool ThereIsAtLeastOneRole(void);
 static void process_startup_options(Port *port, bool am_superuser);
@@ -629,6 +630,7 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		RegisterTimeout(DEADLOCK_TIMEOUT, CheckDeadLockAlert);
 		RegisterTimeout(STATEMENT_TIMEOUT, StatementTimeoutHandler);
 		RegisterTimeout(LOCK_TIMEOUT, LockTimeoutHandler);
+		RegisterTimeout(IDLE_SESSION_TIMEOUT, IdleSessionTimeoutHandler);
 		RegisterTimeout(IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
 						IdleInTransactionSessionTimeoutHandler);
 	}
@@ -1235,6 +1237,14 @@ LockTimeoutHandler(void)
 	kill(-MyProcPid, SIGINT);
 #endif
 	kill(MyProcPid, SIGINT);
+}
+
+static void
+IdleSessionTimeoutHandler(void)
+{
+	IdleSessionTimeoutPending = true;
+	InterruptPending = true;
+	SetLatch(MyLatch);
 }
 
 static void

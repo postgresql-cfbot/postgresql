@@ -8189,6 +8189,23 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-idle-session-timeout" xreflabel="idle_session_timeout">
+      <term><varname>idle_session_timeout</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>idle_session_timeout</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+       Terminate any session that has been idle for longer than the specified amount of time.
+       </para>
+       <para>
+       If this value is specified without units, it is taken as milliseconds.
+       A value of zero (the default) disables the timeout.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-idle-in-transaction-session-timeout" xreflabel="idle_in_transaction_session_timeout">
       <term><varname>idle_in_transaction_session_timeout</varname> (<type>integer</type>)
       <indexterm>

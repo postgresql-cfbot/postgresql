@@ -1977,6 +1977,79 @@ match_clause_to_partition_key(GeneratePruningStepsContext *context,
 
 		return PARTCLAUSE_MATCH_CLAUSE;
 	}
+	else if (IsA(clause, RowCompareExpr))
+	{
+		RowCompareExpr *rcexpr = (RowCompareExpr *) clause;
+		int			nopers = list_length(rcexpr->opnos);
+		ListCell   *l_left_expr,
+				   *l_right_expr,
+				   *l_opno,
+				   *l_opfamily,
+				   *l_inputcollid;
+		List	   *elem_clauses = NIL;
+
+		Assert(list_length(rcexpr->largs) == nopers);
+		Assert(list_length(rcexpr->rargs) == nopers);
+		Assert(list_length(rcexpr->opfamilies) == nopers);
+		Assert(list_length(rcexpr->inputcollids) == nopers);
+
+		/* Now generate a list of clauses */
+		forfive(l_left_expr, rcexpr->largs,
+				l_right_expr, rcexpr->rargs,
+				l_opno, rcexpr->opnos,
+				l_opfamily, rcexpr->opfamilies,
+				l_inputcollid, rcexpr->inputcollids)
+		{
+			Expr	   *left_expr = (Expr *) lfirst(l_left_expr);
+			Expr	   *right_expr = (Expr *) lfirst(l_right_expr);
+			Expr	   *elem_clause;
+			Oid			opno = lfirst_oid(l_opno);
+			Oid			inputcollid = lfirst_oid(l_inputcollid);
+
+			if (IsA(left_expr, RelabelType))
+				left_expr = ((RelabelType *) left_expr)->arg;
+			if (IsA(right_expr, RelabelType))
+				right_expr = ((RelabelType *) right_expr)->arg;
+
+			/* Collation must match, if relevant */
+			if (!PartCollMatchesExprColl(partcoll, inputcollid))
+				continue;
+
+			if (equal(left_expr, partkey) &&
+				!contain_volatile_functions((Node *) right_expr))
+			{
+				/* Ok, partkey is on left. */
+			}
+			else if (equal(right_expr, partkey) &&
+					 !contain_volatile_functions((Node *) left_expr))
+			{
+				/* partkey is on right, so commute the operator */
+				opno = get_commutator(opno);
+				if (opno == InvalidOid)
+					continue;
+			}
+			else
+				continue;
+
+			switch (get_op_opfamily_strategy(opno, partopfamily))
+			{
+				case BTLessStrategyNumber:
+				case BTLessEqualStrategyNumber:
+				case BTGreaterEqualStrategyNumber:
+				case BTGreaterStrategyNumber:
+					elem_clause = make_opclause(opno, BOOLOID, false,
+												left_expr, right_expr,
+												InvalidOid, inputcollid);
+					elem_clauses = lappend(elem_clauses, elem_clause);
+			}
+		}
+
+		/* Finally, generate steps */
+		*clause_steps = gen_partprune_steps_internal(context, elem_clauses);
+		if (*clause_steps == NIL)
+			return PARTCLAUSE_UNSUPPORTED;	/* step generation failed */
+		return PARTCLAUSE_MATCH_STEPS;
+	}
 	else if (IsA(clause, ScalarArrayOpExpr))
 	{
 		ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) clause;

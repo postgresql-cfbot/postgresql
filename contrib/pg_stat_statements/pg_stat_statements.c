@@ -78,9 +78,11 @@
 #include "storage/ipc.h"
 #include "storage/spin.h"
 #include "tcop/utility.h"
+#include "tcop/pquery.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
+#include "utils/plancache.h"
 
 PG_MODULE_MAGIC;
 
@@ -138,6 +140,8 @@ typedef enum pgssStoreKind
 	 */
 	PGSS_PLAN = 0,
 	PGSS_EXEC,
+	PGSS_EXEC_GENERAL,
+	PGSS_EXEC_CUSTOM,
 
 	PGSS_NUMKIND				/* Must be last value of this enum */
 } pgssStoreKind;
@@ -258,6 +262,13 @@ typedef struct pgssJumbleState
 	int			highest_extern_param_id;
 } pgssJumbleState;
 
+typedef enum pgssPlanType
+{
+	PGSS_PLAN_TYPE_NONE,
+	PGSS_PLAN_TYPE_GENERIC,
+	PGSS_PLAN_TYPE_CUSTOM,
+} pgssPlanType;
+
 /*---- Local variables ----*/
 
 /* Current nesting depth of ExecutorRun+ProcessUtility calls */
@@ -265,6 +276,9 @@ static int	exec_nested_level = 0;
 
 /* Current nesting depth of planner calls */
 static int	plan_nested_level = 0;
+
+/* Current plan type */
+static pgssPlanType	plantype = PGSS_PLAN_TYPE_NONE;
 
 /* Saved hook values in case of unload */
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
@@ -1014,6 +1028,20 @@ pgss_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	if (pgss_enabled(exec_nested_level) && queryDesc->plannedstmt->queryId != UINT64CONST(0))
 	{
 		/*
+		 * Since ActivePortal is not available at ExecutorEnd, We
+		 * preserve the plan type here.
+		 */
+		Assert(ActivePortal);
+
+		if (ActivePortal->cplan)
+		{
+			if (ActivePortal->cplan->is_generic)
+				plantype = PGSS_PLAN_TYPE_GENERIC;
+			else
+				plantype = PGSS_PLAN_TYPE_CUSTOM;
+		}
+
+		/*
 		 * Set up to track total elapsed time in ExecutorRun.  Make sure the
 		 * space is allocated in the per-query context so it will go away at
 		 * ExecutorEnd.
@@ -1100,6 +1128,8 @@ pgss_ExecutorEnd(QueryDesc *queryDesc)
 				   &queryDesc->totaltime->walusage,
 				   NULL);
 	}
+	/* Reset the plan type. */
+	plantype = PGSS_PLAN_TYPE_NONE;
 
 	if (prev_ExecutorEnd)
 		prev_ExecutorEnd(queryDesc);
@@ -1223,6 +1253,41 @@ pgss_hash_string(const char *str, int len)
 	return DatumGetUInt64(hash_any_extended((const unsigned char *) str,
 											len, 0));
 }
+
+/* Note: Caller must acquire SpinLock on pgssEntry before using this function. */
+static void
+kind_dependent_accumulation(volatile pgssEntry *e, pgssStoreKind kind, double total_time)
+{
+	e->counters.calls[kind] += 1;
+	e->counters.total_time[kind] += total_time;
+
+	if (e->counters.calls[kind] == 1)
+	{
+		e->counters.min_time[kind] = total_time;
+		e->counters.max_time[kind] = total_time;
+		e->counters.mean_time[kind] = total_time;
+	}
+	else
+	{
+		/*
+		 * Welford's method for accurately computing variance. See
+		 * <http://www.johndcook.com/blog/standard_deviation/>
+		 */
+		double		old_mean = e->counters.mean_time[kind];
+
+		e->counters.mean_time[kind] +=
+			(total_time - old_mean) / e->counters.calls[kind];
+		e->counters.sum_var_time[kind] +=
+			(total_time - old_mean) * (total_time - e->counters.mean_time[kind]);
+
+		/* calculate min and max time */
+		if (e->counters.min_time[kind] > total_time)
+			e->counters.min_time[kind] = total_time;
+		if (e->counters.max_time[kind] < total_time)
+			e->counters.max_time[kind] = total_time;
+	}
+}
+
 
 /*
  * Store some statistics for a statement.
@@ -1396,34 +1461,20 @@ pgss_store(const char *query, uint64 queryId,
 		if (IS_STICKY(e->counters))
 			e->counters.usage = USAGE_INIT;
 
-		e->counters.calls[kind] += 1;
-		e->counters.total_time[kind] += total_time;
+		kind_dependent_accumulation(e, kind, total_time);
 
-		if (e->counters.calls[kind] == 1)
+		/*
+		 * Accumulate information about general and custom plan.
+		 * TODO: It would be better to be optional.
+		 */
+		if (kind == PGSS_EXEC)
 		{
-			e->counters.min_time[kind] = total_time;
-			e->counters.max_time[kind] = total_time;
-			e->counters.mean_time[kind] = total_time;
+			if (plantype == PGSS_PLAN_TYPE_GENERIC)
+				kind_dependent_accumulation(e, PGSS_EXEC_GENERAL, total_time);
+			else if (plantype == PGSS_PLAN_TYPE_CUSTOM)
+				kind_dependent_accumulation(e, PGSS_EXEC_CUSTOM, total_time);
 		}
-		else
-		{
-			/*
-			 * Welford's method for accurately computing variance. See
-			 * <http://www.johndcook.com/blog/standard_deviation/>
-			 */
-			double		old_mean = e->counters.mean_time[kind];
 
-			e->counters.mean_time[kind] +=
-				(total_time - old_mean) / e->counters.calls[kind];
-			e->counters.sum_var_time[kind] +=
-				(total_time - old_mean) * (total_time - e->counters.mean_time[kind]);
-
-			/* calculate min and max time */
-			if (e->counters.min_time[kind] > total_time)
-				e->counters.min_time[kind] = total_time;
-			if (e->counters.max_time[kind] < total_time)
-				e->counters.max_time[kind] = total_time;
-		}
 		e->counters.rows += rows;
 		e->counters.shared_blks_hit += bufusage->shared_blks_hit;
 		e->counters.shared_blks_read += bufusage->shared_blks_read;
@@ -1488,8 +1539,8 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 #define PG_STAT_STATEMENTS_COLS_V1_1	18
 #define PG_STAT_STATEMENTS_COLS_V1_2	19
 #define PG_STAT_STATEMENTS_COLS_V1_3	23
-#define PG_STAT_STATEMENTS_COLS_V1_8	32
-#define PG_STAT_STATEMENTS_COLS			32	/* maximum of above */
+#define PG_STAT_STATEMENTS_COLS_V1_8	44
+#define PG_STAT_STATEMENTS_COLS			44	/* maximum of above */
 
 /*
  * Retrieve statement statistics.

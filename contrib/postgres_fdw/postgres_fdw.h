@@ -13,6 +13,7 @@
 #ifndef POSTGRES_FDW_H
 #define POSTGRES_FDW_H
 
+#include "access/fdwxact.h"
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"
 #include "libpq-fe.h"
@@ -131,12 +132,16 @@ extern void reset_transmission_modes(int nestlevel);
 /* in connection.c */
 extern PGconn *GetConnection(UserMapping *user, bool will_prep_stmt);
 extern void ReleaseConnection(PGconn *conn);
+extern void MarkConnectionModified(UserMapping *user);
 extern unsigned int GetCursorNumber(PGconn *conn);
 extern unsigned int GetPrepStmtNumber(PGconn *conn);
 extern PGresult *pgfdw_get_result(PGconn *conn, const char *query);
 extern PGresult *pgfdw_exec_query(PGconn *conn, const char *query);
 extern void pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
 							   bool clear, const char *sql);
+extern void postgresCommitForeignTransaction(FdwXactRslvState *frstate);
+extern void postgresRollbackForeignTransaction(FdwXactRslvState *frstate);
+extern void postgresPrepareForeignTransaction(FdwXactRslvState *frstate);
 
 /* in option.c */
 extern int	ExtractConnectionOptions(List *defelems,

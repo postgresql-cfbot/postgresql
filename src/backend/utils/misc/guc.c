@@ -30,6 +30,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
 #include "access/gin.h"
 #include "access/rmgr.h"
 #include "access/tableam.h"
@@ -482,6 +483,24 @@ const struct config_enum_entry ssl_protocol_versions_info[] = {
 	{NULL, 0, false}
 };
 
+/*
+ * Although only "required" and "disabled" are documented, we accept all
+ * the likely variants of "on" and "off".
+ */
+static const struct config_enum_entry foreign_twophase_commit_options[] = {
+	{"required", FOREIGN_TWOPHASE_COMMIT_REQUIRED, false},
+	{"disabled", FOREIGN_TWOPHASE_COMMIT_DISABLED, false},
+	{"on", FOREIGN_TWOPHASE_COMMIT_REQUIRED, false},
+	{"off", FOREIGN_TWOPHASE_COMMIT_DISABLED, false},
+	{"true", FOREIGN_TWOPHASE_COMMIT_REQUIRED, true},
+	{"false", FOREIGN_TWOPHASE_COMMIT_DISABLED, true},
+	{"yes", FOREIGN_TWOPHASE_COMMIT_REQUIRED, true},
+	{"no", FOREIGN_TWOPHASE_COMMIT_DISABLED, true},
+	{"1", FOREIGN_TWOPHASE_COMMIT_REQUIRED, true},
+	{"0", FOREIGN_TWOPHASE_COMMIT_DISABLED, true},
+	{NULL, 0, false}
+};
+
 StaticAssertDecl(lengthof(ssl_protocol_versions_info) == (PG_TLS1_3_VERSION + 2),
 				 "array length mismatch");
 
@@ -759,6 +778,10 @@ const char *const config_group_names[] =
 	gettext_noop("Client Connection Defaults / Other Defaults"),
 	/* LOCK_MANAGEMENT */
 	gettext_noop("Lock Management"),
+	/* FOREIGN_TRANSACTION */
+	gettext_noop("Foreign Transaction"),
+	/* FOREIGN_TRANSACTION_RESOLVER */
+	gettext_noop("Foreign Transaction / Resolver"),
 	/* COMPAT_OPTIONS */
 	gettext_noop("Version and Platform Compatibility"),
 	/* COMPAT_OPTIONS_PREVIOUS */
@@ -2455,6 +2478,49 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_prepared_xacts,
 		0, 0, MAX_BACKENDS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_prepared_foreign_transactions", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the maximum number of simultaneously prepared transactions on foreign servers."),
+			NULL
+		},
+		&max_prepared_foreign_xacts,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"foreign_transaction_resolver_timeout", PGC_SIGHUP, FOREIGN_TRANSACTION_RESOLVER,
+			gettext_noop("Sets the maximum time to wait for foreign transaction resolution."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&foreign_xact_resolver_timeout,
+		60 * 1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_foreign_transaction_resolvers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Maximum number of foreign transaction resolution processes."),
+			NULL
+		},
+		&max_foreign_xact_resolvers,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"foreign_transaction_resolution_retry_interval", PGC_SIGHUP, FOREIGN_TRANSACTION_RESOLVER,
+		 gettext_noop("Sets the time to wait before retrying to resolve foreign transaction "
+					  "after a failed attempt."),
+		 NULL,
+		 GUC_UNIT_MS
+		},
+		&foreign_xact_resolution_retry_interval,
+		5000, 1, INT_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -4607,6 +4673,16 @@ static struct config_enum ConfigureNamesEnum[] =
 		&synchronous_commit,
 		SYNCHRONOUS_COMMIT_ON, synchronous_commit_options,
 		NULL, assign_synchronous_commit, NULL
+	},
+
+	{
+		{"foreign_twophase_commit", PGC_USERSET, FOREIGN_TRANSACTION,
+		 gettext_noop("Use of foreign twophase commit for the current transaction."),
+			NULL
+		},
+		&foreign_twophase_commit,
+		FOREIGN_TWOPHASE_COMMIT_DISABLED, foreign_twophase_commit_options,
+		NULL, NULL, NULL
 	},
 
 	{

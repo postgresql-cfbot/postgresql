@@ -77,6 +77,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
 #include "access/htup_details.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
@@ -843,6 +844,34 @@ TwoPhaseGetGXact(TransactionId xid, bool lock_held)
 	cached_gxact = result;
 
 	return result;
+}
+
+/*
+ * TwoPhaseExists
+ *		Return true if there is a prepared transaction specified by XID
+ */
+bool
+TwoPhaseExists(TransactionId xid)
+{
+	int		i;
+	bool	found = false;
+
+	LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
+
+	for (i = 0; i < TwoPhaseState->numPrepXacts; i++)
+	{
+		GlobalTransaction gxact = TwoPhaseState->prepXacts[i];
+
+		if (gxact->xid == xid)
+		{
+			found = true;
+			break;
+		}
+	}
+
+	LWLockRelease(TwoPhaseStateLock);
+
+	return found;
 }
 
 /*
@@ -2188,6 +2217,14 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	XLogRecPtr	recptr;
 	TimestampTz committs = GetCurrentTimestamp();
 	bool		replorigin;
+	bool		need_fdwxact_commit;
+	bool		canceled = false;
+
+	/*
+	 * Prepare foreign transactions involving this prepared transaction
+	 * if exist.
+	 */
+	need_fdwxact_commit = CollectFdwXactParticipants(xid);
 
 	/*
 	 * Are we using the replication origins feature?  Or, in other words, are
@@ -2252,12 +2289,25 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	END_CRIT_SECTION();
 
 	/*
-	 * Wait for synchronous replication, if required.
+	 * Wait for both synchronous replication and foreign transaction
+	 * resolution, if required
 	 *
 	 * Note that at this stage we have marked clog, but still show as running
 	 * in the procarray and continue to hold locks.
 	 */
-	SyncRepWaitForLSN(recptr, true);
+	canceled = SyncRepWaitForLSN(XactLastRecEnd, true);
+
+	if (need_fdwxact_commit)
+	{
+		/* Set the collected foreign transaction participants */
+		SetFdwXactParticipants(xid);
+
+		if (!canceled)
+			FdwXactWaitForResolution(xid, true);
+
+		ForgetAllFdwXactParticipants();
+	}
+
 }
 
 /*
@@ -2277,6 +2327,14 @@ RecordTransactionAbortPrepared(TransactionId xid,
 							   const char *gid)
 {
 	XLogRecPtr	recptr;
+	bool		need_fdwxact_commit;
+	bool		canceled = false;
+
+	/*
+	 * Prepare foreign transactions involving this prepared transaction
+	 * if exist.
+	 */
+	need_fdwxact_commit = CollectFdwXactParticipants(xid);
 
 	/*
 	 * Catch the scenario where we aborted partway through
@@ -2311,12 +2369,24 @@ RecordTransactionAbortPrepared(TransactionId xid,
 	END_CRIT_SECTION();
 
 	/*
-	 * Wait for synchronous replication, if required.
+	 * Wait for both synchronous replication and foreign transaction
+	 * resolution, if required
 	 *
 	 * Note that at this stage we have marked clog, but still show as running
 	 * in the procarray and continue to hold locks.
 	 */
-	SyncRepWaitForLSN(recptr, false);
+	canceled = SyncRepWaitForLSN(XactLastRecEnd, true);
+
+	if (need_fdwxact_commit)
+	{
+		/* Set the collected foreign transaction participants */
+		SetFdwXactParticipants(xid);
+
+		if (!canceled)
+			FdwXactWaitForResolution(xid, false);
+
+		ForgetAllFdwXactParticipants();
+	}
 }
 
 /*

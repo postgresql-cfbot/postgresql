@@ -8984,6 +8984,6 @@ SELECT count(*) FROM ft1;
 
 -- error here
 PREPARE TRANSACTION 'fdw_tpc';
-ERROR:  cannot PREPARE a transaction that has operated on postgres_fdw foreign tables
+ERROR:  cannot PREPARE a distributed transaction which has operated on a foreign server not supporting two-phase commit protocol
 ROLLBACK;
 WARNING:  there is no transaction in progress

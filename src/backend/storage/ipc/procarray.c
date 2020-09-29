@@ -96,6 +96,8 @@ typedef struct ProcArrayStruct
 	TransactionId replication_slot_xmin;
 	/* oldest catalog xmin of any replication slot */
 	TransactionId replication_slot_catalog_xmin;
+	/* local transaction id of oldest unresolved distributed transaction */
+	TransactionId fdwxact_unresolved_xmin;
 
 	/* indexes into allProcs[], has PROCARRAY_MAXPROCS entries */
 	int			pgprocnos[FLEXIBLE_ARRAY_MEMBER];
@@ -184,11 +186,13 @@ typedef struct ComputeXidHorizonsResult
 	FullTransactionId latest_completed;
 
 	/*
-	 * The same for procArray->replication_slot_xmin and.
-	 * procArray->replication_slot_catalog_xmin.
+	 * The same for procArray->replication_slot_xmin,
+	 * procArray->replication_slot_catalog_xmin, and
+	 * procArray->fdwxact_unresolved_xmin.
 	 */
 	TransactionId slot_xmin;
 	TransactionId slot_catalog_xmin;
+	TransactionId fdwxact_unresolved_xmin;
 
 	/*
 	 * Oldest xid that any backend might still consider running. This needs to
@@ -207,8 +211,9 @@ typedef struct ComputeXidHorizonsResult
 	 * Oldest xid for which deleted tuples need to be retained in shared
 	 * tables.
 	 *
-	 * This includes the effects of replication slots. If that's not desired,
-	 * look at shared_oldest_nonremovable_raw;
+	 * This includes the effects of replication slots as unresolved
+	 * foreign transactions. If that's not desired, look at
+	 * shared_oldest_nonremovable_raw;
 	 */
 	TransactionId shared_oldest_nonremovable;
 
@@ -407,6 +412,7 @@ CreateSharedProcArray(void)
 		procArray->lastOverflowedXid = InvalidTransactionId;
 		procArray->replication_slot_xmin = InvalidTransactionId;
 		procArray->replication_slot_catalog_xmin = InvalidTransactionId;
+		procArray->fdwxact_unresolved_xmin = InvalidTransactionId;
 		ShmemVariableCache->xactCompletionCount = 1;
 	}
 
@@ -1677,6 +1683,7 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 	 */
 	h->slot_xmin = procArray->replication_slot_xmin;
 	h->slot_catalog_xmin = procArray->replication_slot_catalog_xmin;
+	h->fdwxact_unresolved_xmin = procArray->fdwxact_unresolved_xmin;
 
 	for (int index = 0; index < arrayP->numProcs; index++)
 	{
@@ -1796,6 +1803,12 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 		TransactionIdOlder(h->data_oldest_nonremovable, h->slot_xmin);
 
 	/*
+	 * Check whether there are unresolved distributed transaction requiring
+	 * an older xmin.
+	 */
+	h->shared_oldest_nonremovable =
+		TransactionIdOlder(h->data_oldest_nonremovable, h->fdwxact_unresolved_xmin);
+	/*
 	 * The only difference between catalog / data horizons is that the slot's
 	 * catalog xmin is applied to the catalog one (so catalogs can be accessed
 	 * for logical decoding). Initialize with data horizon, and then back up
@@ -1850,6 +1863,9 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h)
 	Assert(!TransactionIdIsValid(h->slot_catalog_xmin) ||
 		   TransactionIdPrecedesOrEquals(h->oldest_considered_running,
 										 h->slot_catalog_xmin));
+	Assert(!TransactionIdIsValid(h->fdwxact_unresolved_xmin) ||
+		   TransactionIdPrecedesOrEquals(h->oldest_considered_running,
+										 h->fdwxact_unresolved_xmin));
 
 	/* update approximate horizons with the computed horizons */
 	GlobalVisUpdateApply(h);
@@ -3739,6 +3755,38 @@ ProcArrayGetReplicationSlotXmin(TransactionId *xmin,
 		*catalog_xmin = procArray->replication_slot_catalog_xmin;
 
 	LWLockRelease(ProcArrayLock);
+}
+
+/*
+ * ProcArraySetFdwXactUnresolvedXmin
+ *
+ * Install limits to future computations of the xmin horizon to prevent
+ * vacuum clog from affected transactions needed by resolving distributed
+ * transaction.
+ */
+void
+ProcArraySetFdwXactUnresolvedXmin(TransactionId xmin)
+{
+	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	procArray->fdwxact_unresolved_xmin = xmin;
+	LWLockRelease(ProcArrayLock);
+}
+
+/*
+ * ProcArrayGetFdwXactUnresolvedXmin
+ *
+ * Return the current unresolved xmin limits.
+ */
+TransactionId
+ProcArrayGetFdwXactUnresolvedXmin(void)
+{
+	TransactionId xmin;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	xmin = procArray->fdwxact_unresolved_xmin;
+	LWLockRelease(ProcArrayLock);
+
+	return xmin;
 }
 
 /*

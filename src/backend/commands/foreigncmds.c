@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/fdwxact.h"
 #include "access/htup_details.h"
 #include "access/reloptions.h"
 #include "access/table.h"
@@ -1060,6 +1061,40 @@ AlterForeignServer(AlterForeignServerStmt *stmt)
 	return address;
 }
 
+/*
+ * Drop foreign server by OID
+ */
+void
+RemoveForeignServerById(Oid srvId)
+{
+	HeapTuple	tp;
+	Relation	rel;
+
+	rel = table_open(ForeignServerRelationId, RowExclusiveLock);
+
+	tp = SearchSysCache1(FOREIGNSERVEROID, ObjectIdGetDatum(srvId));
+
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for foreign server %u", srvId);
+
+	/*
+	 * We cannot drop the foreign server if there is a foreign prepared
+	 * transaction with this foreign server,
+	 */
+	if (FdwXactExists(MyDatabaseId, srvId, InvalidOid))
+	{
+		Form_pg_foreign_server srvForm = (Form_pg_foreign_server) GETSTRUCT(tp);
+		ereport(WARNING,
+				(errmsg("server \"%s\" has unresolved prepared transactions on it",
+						NameStr(srvForm->srvname))));
+	}
+
+	CatalogTupleDelete(rel, &tp->t_self);
+
+	ReleaseSysCache(tp);
+
+	table_close(rel, RowExclusiveLock);
+}
 
 /*
  * Common routine to check permission for user-mapping-related DDL
@@ -1375,6 +1410,15 @@ RemoveUserMapping(DropUserMappingStmt *stmt)
 	user_mapping_ddl_aclcheck(useId, srv->serverid, srv->servername);
 
 	/*
+	 * We cannot drop the user mapping if there is a foreign prepared
+	 * transaction with this user mapping.
+	 */
+	if (FdwXactExists(MyDatabaseId, srv->serverid,	useId))
+		ereport(WARNING,
+				(errmsg("server \"%s\" has unresolved prepared transaction for user \"%s\"",
+						srv->servername, MappingUserName(useId))));
+
+/*
 	 * Do the deletion
 	 */
 	object.classId = UserMappingRelationId;

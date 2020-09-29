@@ -3663,6 +3663,12 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_CHECKPOINTER_MAIN:
 			event_name = "CheckpointerMain";
 			break;
+		case WAIT_EVENT_FDWXACT_RESOLVER_MAIN:
+			event_name = "FdwXactResolverMain";
+			break;
+		case WAIT_EVENT_FDWXACT_LAUNCHER_MAIN:
+			event_name = "FdwXactLauncherMain";
+			break;
 		case WAIT_EVENT_LOGICAL_APPLY_MAIN:
 			event_name = "LogicalApplyMain";
 			break;
@@ -3772,6 +3778,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 			break;
 		case WAIT_EVENT_EXECUTE_GATHER:
 			event_name = "ExecuteGather";
+			break;
+		case WAIT_EVENT_FDWXACT_RESOLUTION:
+			event_name = "FdwXactResolution";
 			break;
 		case WAIT_EVENT_HASH_BATCH_ALLOCATE:
 			event_name = "HashBatchAllocate";
@@ -3990,6 +3999,15 @@ pgstat_get_wait_io(WaitEventIO w)
 			break;
 		case WAIT_EVENT_DSM_FILL_ZERO_WRITE:
 			event_name = "DSMFillZeroWrite";
+			break;
+		case WAIT_EVENT_FDWXACT_FILE_WRITE:
+			event_name = "FdwXactFileWrite";
+			break;
+		case WAIT_EVENT_FDWXACT_FILE_READ:
+			event_name = "FdwXactFileRead";
+			break;
+		case WAIT_EVENT_FDWXACT_FILE_SYNC:
+			event_name = "FdwXactFileSync";
 			break;
 		case WAIT_EVENT_LOCK_FILE_ADDTODATADIR_READ:
 			event_name = "LockFileAddToDataDirRead";

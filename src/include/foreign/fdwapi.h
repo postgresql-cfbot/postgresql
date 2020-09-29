@@ -13,6 +13,7 @@
 #define FDWAPI_H
 
 #include "access/parallel.h"
+#include "access/fdwxact.h"
 #include "nodes/execnodes.h"
 #include "nodes/pathnodes.h"
 
@@ -170,6 +171,12 @@ typedef List *(*ReparameterizeForeignPathByChild_function) (PlannerInfo *root,
 															List *fdw_private,
 															RelOptInfo *child_rel);
 
+typedef void (*PrepareForeignTransaction_function) (FdwXactRslvState *frstate);
+typedef void (*CommitForeignTransaction_function) (FdwXactRslvState *frstate);
+typedef void (*RollbackForeignTransaction_function) (FdwXactRslvState *frstate);
+typedef char *(*GetPrepareId_function) (TransactionId xid, Oid serverid,
+										Oid userid, int *prep_id_len);
+
 /*
  * FdwRoutine is the struct returned by a foreign-data wrapper's handler
  * function.  It provides pointers to the callback functions needed by the
@@ -246,6 +253,12 @@ typedef struct FdwRoutine
 
 	/* Support functions for path reparameterization. */
 	ReparameterizeForeignPathByChild_function ReparameterizeForeignPathByChild;
+
+	/* Support functions for transaction management */
+	CommitForeignTransaction_function CommitForeignTransaction;
+	RollbackForeignTransaction_function RollbackForeignTransaction;
+	PrepareForeignTransaction_function PrepareForeignTransaction;
+	GetPrepareId_function GetPrepareId;
 } FdwRoutine;
 
 
@@ -258,5 +271,9 @@ extern FdwRoutine *GetFdwRoutineForRelation(Relation relation, bool makecopy);
 extern bool IsImportableForeignTable(const char *tablename,
 									 ImportForeignSchemaStmt *stmt);
 extern Path *GetExistingLocalJoinPath(RelOptInfo *joinrel);
+
+/* Functions in fdwxact/fdwxact.c */
+extern void FdwXactRegisterXact(Oid serverid, Oid userid, bool modified);
+extern void FdwXactUnregisterXact(Oid serverid, Oid userid);
 
 #endif							/* FDWAPI_H */

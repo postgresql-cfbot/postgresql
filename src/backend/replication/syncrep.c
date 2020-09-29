@@ -143,13 +143,17 @@ static bool SyncRepQueueIsOrderedByLSN(int mode);
  * represents a commit record.  If it doesn't, then we wait only for the WAL
  * to be flushed if synchronous_commit is set to the higher level of
  * remote_apply, because only commit records provide apply feedback.
+ *
+ * This function return true if the wait is cancelelled due to an
+ * interruption.
  */
-void
+bool
 SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 {
 	char	   *new_status = NULL;
 	const char *old_status;
 	int			mode;
+	bool		canceled = false;
 
 	/*
 	 * This should be called while holding interrupts during a transaction
@@ -174,7 +178,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 	 */
 	if (!SyncRepRequested() ||
 		!((volatile WalSndCtlData *) WalSndCtl)->sync_standbys_defined)
-		return;
+		return false;
 
 	/* Cap the level for anything other than commit to remote flush only. */
 	if (commit)
@@ -200,7 +204,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		lsn <= WalSndCtl->lsn[mode])
 	{
 		LWLockRelease(SyncRepLock);
-		return;
+		return false;
 	}
 
 	/*
@@ -270,6 +274,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
 			whereToSendOutput = DestNone;
 			SyncRepCancelWait();
+			canceled = true;
 			break;
 		}
 
@@ -286,6 +291,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 					(errmsg("canceling wait for synchronous replication due to user request"),
 					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
 			SyncRepCancelWait();
+			canceled = true;
 			break;
 		}
 
@@ -305,6 +311,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 			ProcDiePending = true;
 			whereToSendOutput = DestNone;
 			SyncRepCancelWait();
+			canceled = true;
 			break;
 		}
 	}
@@ -328,6 +335,8 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		set_ps_display(new_status);
 		pfree(new_status);
 	}
+
+	return canceled;
 }
 
 /*

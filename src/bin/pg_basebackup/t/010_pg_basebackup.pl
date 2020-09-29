@@ -6,7 +6,7 @@ use File::Basename qw(basename dirname);
 use File::Path qw(rmtree);
 use PostgresNode;
 use TestLib;
-use Test::More tests => 109;
+use Test::More tests => 112;
 
 program_help_ok('pg_basebackup');
 program_version_ok('pg_basebackup');
@@ -527,6 +527,22 @@ $node->command_checks_all(
 	[qr/^WARNING.*checksum verification failed/s],
 	'pg_basebackup reports checksum mismatch');
 rmtree("$tempdir/backup_corrupt");
+
+# zero out the pageheader completely
+open $file, '+<', "$pgdata/$file_corrupt1";
+system_or_bail 'pg_ctl', '-D', $pgdata, 'stop';
+my $zero_data = "\0"x$pageheader_size;
+syswrite($file, $zero_data);
+close $file;
+system_or_bail 'pg_ctl', '-D', $pgdata, 'start';
+
+$node->command_checks_all(
+	[ 'pg_basebackup', '-D', "$tempdir/backup_corrupt1a" ],
+	1,
+	[qr{^$}],
+	[qr/^WARNING.*checksum verification failed/s],
+	"pg_basebackup reports checksum mismatch for zeroed pageheader");
+rmtree("$tempdir/backup_corrupt1a");
 
 # induce further corruption in 5 more blocks
 system_or_bail 'pg_ctl', '-D', $pgdata, 'stop';

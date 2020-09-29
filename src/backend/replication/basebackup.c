@@ -1746,6 +1746,36 @@ sendFile(const char *readfilename, const char *tarfilename,
 											"be reported", readfilename)));
 					}
 				}
+				else
+				{
+					/*
+					 * We skip completely new pages after checking they are
+					 * all-zero, since they don't have a checksum yet.
+					 */
+					if (PageIsNew(page) && !PageIsZero(page))
+					{
+						/*
+						 * pd_upper is zero, but the page is not all zero.  We
+						 * cannot run pg_checksum_page() on the page as it
+						 * would throw an assertion failure.  Consider this a
+						 * checksum failure.
+						 */
+						checksum_failures++;
+
+						if (checksum_failures <= 5)
+							ereport(WARNING,
+									(errmsg("checksum verification failed in "
+											"file \"%s\", block %d: pd_upper "
+											"is zero but page is not all-zero",
+											readfilename, blkno)));
+						if (checksum_failures == 5)
+							ereport(WARNING,
+									(errmsg("further checksum verification "
+											"failures in file \"%s\" will not "
+											"be reported", readfilename)));
+					}
+				}
+
 				block_retry = false;
 				blkno++;
 			}

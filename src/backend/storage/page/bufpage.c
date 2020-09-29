@@ -82,11 +82,8 @@ bool
 PageIsVerified(Page page, BlockNumber blkno)
 {
 	PageHeader	p = (PageHeader) page;
-	size_t	   *pagebytes;
-	int			i;
 	bool		checksum_failure = false;
 	bool		header_sane = false;
-	bool		all_zeroes = false;
 	uint16		checksum = 0;
 
 	/*
@@ -120,18 +117,7 @@ PageIsVerified(Page page, BlockNumber blkno)
 	}
 
 	/* Check all-zeroes case */
-	all_zeroes = true;
-	pagebytes = (size_t *) page;
-	for (i = 0; i < (BLCKSZ / sizeof(size_t)); i++)
-	{
-		if (pagebytes[i] != 0)
-		{
-			all_zeroes = false;
-			break;
-		}
-	}
-
-	if (all_zeroes)
+	if (PageIsZero(page))
 		return true;
 
 	/*
@@ -154,6 +140,25 @@ PageIsVerified(Page page, BlockNumber blkno)
 	return false;
 }
 
+/*
+ * PageIsZero
+ *		Check that the page consists only of zero bytes.
+ *
+ */
+bool
+PageIsZero(Page page)
+{
+	int			i;
+	size_t	   *pagebytes = (size_t *) page;
+
+	for (i = 0; i < (BLCKSZ / sizeof(size_t)); i++)
+	{
+		if (pagebytes[i] != 0)
+			return false;
+	}
+
+	return true;
+}
 
 /*
  *	PageAddItemExtended

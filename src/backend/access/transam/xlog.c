@@ -404,15 +404,13 @@ static XLogRecPtr RedoStartLSN = InvalidXLogRecPtr;
  * These structs are identical but are declared separately to indicate their
  * slightly different functions.
  *
- * To read XLogCtl->LogwrtResult, you must hold either info_lck or
- * WALWriteLock.  To update it, you need to hold both locks.  The point of
- * this arrangement is that the value can be examined by code that already
- * holds WALWriteLock without needing to grab info_lck as well.  In addition
- * to the shared variable, each backend has a private copy of LogwrtResult,
- * which is updated when convenient.
+ * To read/write XLogCtl->LogwrtResult, you must hold WALWriteResultLock.
+ * In addition to the shared variable, each backend has a private copy of
+ * LogwrtResult, which is updated when convenient.
  *
  * The request bookkeeping is simpler: there is a shared XLogCtl->LogwrtRqst
- * (protected by info_lck), but we don't need to cache any copies of it.
+ * (also protected by WALWriteResultLock), but we don't need to cache any
+ * copies of it.
  *
  * info_lck is only held long enough to read/update the protected variables,
  * so it's a plain spinlock.  The other locks are held longer (potentially
@@ -616,10 +614,7 @@ typedef struct XLogCtlData
 	pg_time_t	lastSegSwitchTime;
 	XLogRecPtr	lastSegSwitchLSN;
 
-	/*
-	 * Protected by info_lck and WALWriteLock (you must hold either lock to
-	 * read it, but both to update)
-	 */
+	/* Protected by WALWriteResultLock. */
 	XLogwrtResult LogwrtResult;
 
 	/*
@@ -1159,13 +1154,12 @@ XLogInsertRecord(XLogRecData *rdata,
 	 */
 	if (StartPos / XLOG_BLCKSZ != EndPos / XLOG_BLCKSZ)
 	{
-		SpinLockAcquire(&XLogCtl->info_lck);
 		/* advance global request to include new block(s) */
+		LWLockAcquire(WALWriteResultLock, LW_EXCLUSIVE);
 		if (XLogCtl->LogwrtRqst.Write < EndPos)
 			XLogCtl->LogwrtRqst.Write = EndPos;
-		/* update local result copy while I have the chance */
 		LogwrtResult = XLogCtl->LogwrtResult;
-		SpinLockRelease(&XLogCtl->info_lck);
+		LWLockRelease(WALWriteResultLock);
 	}
 
 	/*
@@ -2156,12 +2150,12 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, bool opportunistic)
 			if (opportunistic)
 				break;
 
-			/* Before waiting, get info_lck and update LogwrtResult */
-			SpinLockAcquire(&XLogCtl->info_lck);
+			/* Before waiting, update LogwrtResult */
+			LWLockAcquire(WALWriteResultLock, LW_EXCLUSIVE);
 			if (XLogCtl->LogwrtRqst.Write < OldPageRqstPtr)
 				XLogCtl->LogwrtRqst.Write = OldPageRqstPtr;
 			LogwrtResult = XLogCtl->LogwrtResult;
-			SpinLockRelease(&XLogCtl->info_lck);
+			LWLockRelease(WALWriteResultLock);
 
 			/*
 			 * Now that we have an up-to-date LogwrtResult value, see if we
@@ -2179,9 +2173,11 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, bool opportunistic)
 
 				WaitXLogInsertionsToFinish(OldPageRqstPtr);
 
-				LWLockAcquire(WALWriteLock, LW_EXCLUSIVE);
-
+				LWLockAcquire(WALWriteResultLock, LW_SHARED);
 				LogwrtResult = XLogCtl->LogwrtResult;
+				LWLockRelease(WALWriteResultLock);
+
+				LWLockAcquire(WALWriteLock, LW_EXCLUSIVE);
 				if (LogwrtResult.Write >= OldPageRqstPtr)
 				{
 					/* OK, someone wrote it already */
@@ -2427,7 +2423,9 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 	/*
 	 * Update local LogwrtResult (caller probably did this already, but...)
 	 */
+	LWLockAcquire(WALWriteResultLock, LW_SHARED);
 	LogwrtResult = XLogCtl->LogwrtResult;
+	LWLockRelease(WALWriteResultLock);
 
 	/*
 	 * Since successive pages in the xlog cache are consecutively allocated,
@@ -2664,13 +2662,14 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 	 * code in a couple of places.
 	 */
 	{
-		SpinLockAcquire(&XLogCtl->info_lck);
+		LWLockAcquire(WALWriteResultLock, LW_EXCLUSIVE);
 		XLogCtl->LogwrtResult = LogwrtResult;
+
 		if (XLogCtl->LogwrtRqst.Write < LogwrtResult.Write)
 			XLogCtl->LogwrtRqst.Write = LogwrtResult.Write;
 		if (XLogCtl->LogwrtRqst.Flush < LogwrtResult.Flush)
 			XLogCtl->LogwrtRqst.Flush = LogwrtResult.Flush;
-		SpinLockRelease(&XLogCtl->info_lck);
+		LWLockRelease(WALWriteResultLock);
 	}
 }
 
@@ -2685,8 +2684,10 @@ XLogSetAsyncXactLSN(XLogRecPtr asyncXactLSN)
 	XLogRecPtr	WriteRqstPtr = asyncXactLSN;
 	bool		sleeping;
 
-	SpinLockAcquire(&XLogCtl->info_lck);
+	LWLockAcquire(WALWriteResultLock, LW_SHARED);
 	LogwrtResult = XLogCtl->LogwrtResult;
+	LWLockRelease(WALWriteResultLock);
+	SpinLockAcquire(&XLogCtl->info_lck);
 	sleeping = XLogCtl->WalWriterSleeping;
 	if (XLogCtl->asyncXactLSN < asyncXactLSN)
 		XLogCtl->asyncXactLSN = asyncXactLSN;
@@ -2894,11 +2895,11 @@ XLogFlush(XLogRecPtr record)
 		XLogRecPtr	insertpos;
 
 		/* read LogwrtResult and update local state */
-		SpinLockAcquire(&XLogCtl->info_lck);
+		LWLockAcquire(WALWriteResultLock, LW_SHARED);
 		if (WriteRqstPtr < XLogCtl->LogwrtRqst.Write)
 			WriteRqstPtr = XLogCtl->LogwrtRqst.Write;
 		LogwrtResult = XLogCtl->LogwrtResult;
-		SpinLockRelease(&XLogCtl->info_lck);
+		LWLockRelease(WALWriteResultLock);
 
 		/* done already? */
 		if (record <= LogwrtResult.Flush)
@@ -2928,12 +2929,15 @@ XLogFlush(XLogRecPtr record)
 		}
 
 		/* Got the lock; recheck whether request is satisfied */
+		LWLockAcquire(WALWriteResultLock, LW_SHARED);
 		LogwrtResult = XLogCtl->LogwrtResult;
 		if (record <= LogwrtResult.Flush)
 		{
+			LWLockRelease(WALWriteResultLock);
 			LWLockRelease(WALWriteLock);
 			break;
 		}
+		LWLockRelease(WALWriteResultLock);
 
 		/*
 		 * Sleep before flush! By adding a delay here, we may give further
@@ -3044,10 +3048,10 @@ XLogBackgroundFlush(void)
 		return false;
 
 	/* read LogwrtResult and update local state */
-	SpinLockAcquire(&XLogCtl->info_lck);
+	LWLockAcquire(WALWriteResultLock, LW_SHARED);
 	LogwrtResult = XLogCtl->LogwrtResult;
 	WriteRqst = XLogCtl->LogwrtRqst;
-	SpinLockRelease(&XLogCtl->info_lck);
+	LWLockRelease(WALWriteResultLock);
 
 	/* back off to last completed page boundary */
 	WriteRqst.Write -= WriteRqst.Write % XLOG_BLCKSZ;
@@ -3129,7 +3133,9 @@ XLogBackgroundFlush(void)
 	/* now wait for any in-progress insertions to finish and get write lock */
 	WaitXLogInsertionsToFinish(WriteRqst.Write);
 	LWLockAcquire(WALWriteLock, LW_EXCLUSIVE);
+	LWLockAcquire(WALWriteResultLock, LW_SHARED);
 	LogwrtResult = XLogCtl->LogwrtResult;
+	LWLockRelease(WALWriteResultLock);
 	if (WriteRqst.Write > LogwrtResult.Write ||
 		WriteRqst.Flush > LogwrtResult.Flush)
 	{
@@ -3217,9 +3223,9 @@ XLogNeedsFlush(XLogRecPtr record)
 		return false;
 
 	/* read LogwrtResult and update local state */
-	SpinLockAcquire(&XLogCtl->info_lck);
+	LWLockAcquire(WALWriteResultLock, LW_SHARED);
 	LogwrtResult = XLogCtl->LogwrtResult;
-	SpinLockRelease(&XLogCtl->info_lck);
+	LWLockRelease(WALWriteResultLock);
 
 	/* check again */
 	if (record <= LogwrtResult.Flush)
@@ -7703,10 +7709,12 @@ StartupXLOG(void)
 
 	LogwrtResult.Write = LogwrtResult.Flush = EndOfLog;
 
+	LWLockAcquire(WALWriteResultLock, LW_EXCLUSIVE);
 	XLogCtl->LogwrtResult = LogwrtResult;
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
+	LWLockRelease(WALWriteResultLock);
 
 	/*
 	 * Update full_page_writes in shared memory and write an XLOG_FPW_CHANGE
@@ -8411,9 +8419,9 @@ GetInsertRecPtr(void)
 {
 	XLogRecPtr	recptr;
 
-	SpinLockAcquire(&XLogCtl->info_lck);
+	LWLockAcquire(WALWriteResultLock, LW_SHARED);
 	recptr = XLogCtl->LogwrtRqst.Write;
-	SpinLockRelease(&XLogCtl->info_lck);
+	LWLockRelease(WALWriteResultLock);
 
 	return recptr;
 }
@@ -8425,9 +8433,9 @@ GetInsertRecPtr(void)
 XLogRecPtr
 GetFlushRecPtr(void)
 {
-	SpinLockAcquire(&XLogCtl->info_lck);
+	LWLockAcquire(WALWriteResultLock, LW_SHARED);
 	LogwrtResult = XLogCtl->LogwrtResult;
-	SpinLockRelease(&XLogCtl->info_lck);
+	LWLockRelease(WALWriteResultLock);
 
 	return LogwrtResult.Flush;
 }
@@ -11522,9 +11530,9 @@ GetXLogInsertRecPtr(void)
 XLogRecPtr
 GetXLogWriteRecPtr(void)
 {
-	SpinLockAcquire(&XLogCtl->info_lck);
+	LWLockAcquire(WALWriteResultLock, LW_SHARED);
 	LogwrtResult = XLogCtl->LogwrtResult;
-	SpinLockRelease(&XLogCtl->info_lck);
+	LWLockRelease(WALWriteResultLock);
 
 	return LogwrtResult.Write;
 }

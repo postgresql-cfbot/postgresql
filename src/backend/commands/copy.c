@@ -2838,7 +2838,7 @@ CopyFrom(CopyState cstate)
 
 	ExecOpenIndices(resultRelInfo, false);
 
-	estate->es_result_relations = resultRelInfo;
+	estate->es_result_relations = &resultRelInfo;
 	estate->es_num_result_relations = 1;
 	estate->es_result_relation_info = resultRelInfo;
 
@@ -2852,7 +2852,7 @@ CopyFrom(CopyState cstate)
 	mtstate->ps.plan = NULL;
 	mtstate->ps.state = estate;
 	mtstate->operation = CMD_INSERT;
-	mtstate->resultRelInfo = estate->es_result_relations;
+	mtstate->resultRelInfo = resultRelInfo;
 
 	if (resultRelInfo->ri_FdwRoutine != NULL &&
 		resultRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
@@ -3117,32 +3117,14 @@ CopyFrom(CopyState cstate)
 			estate->es_result_relation_info = resultRelInfo;
 
 			/*
-			 * If we're capturing transition tuples, we might need to convert
-			 * from the partition rowtype to root rowtype.
+			 * If we're capturing transition tuples and there are no BEFORE
+			 * triggers on the partition which may change the tuple, we can
+			 * just remember the original unconverted tuple to avoid a
+			 * needless round trip conversion.
 			 */
 			if (cstate->transition_capture != NULL)
-			{
-				if (has_before_insert_row_trig)
-				{
-					/*
-					 * If there are any BEFORE triggers on the partition,
-					 * we'll have to be ready to convert their result back to
-					 * tuplestore format.
-					 */
-					cstate->transition_capture->tcs_original_insert_tuple = NULL;
-					cstate->transition_capture->tcs_map =
-						resultRelInfo->ri_PartitionInfo->pi_PartitionToRootMap;
-				}
-				else
-				{
-					/*
-					 * Otherwise, just remember the original unconverted
-					 * tuple, to avoid a needless round trip conversion.
-					 */
-					cstate->transition_capture->tcs_original_insert_tuple = myslot;
-					cstate->transition_capture->tcs_map = NULL;
-				}
-			}
+				cstate->transition_capture->tcs_original_insert_tuple =
+					!has_before_insert_row_trig ? myslot : NULL;
 
 			/*
 			 * We might need to convert from the root rowtype to the partition

@@ -828,35 +828,17 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	estate->es_plannedstmt = plannedstmt;
 
 	/*
-	 * Initialize ResultRelInfo data structures, and open the result rels.
+	 * Allocate space for ResultRelInfo pointers that will be filled later.
+	 * See ExecGetResultRelInfo() and ExecGetRootResultRelInfo().
 	 */
 	if (plannedstmt->resultRelations)
 	{
 		List	   *resultRelations = plannedstmt->resultRelations;
 		int			numResultRelations = list_length(resultRelations);
-		ResultRelInfo *resultRelInfos;
-		ResultRelInfo *resultRelInfo;
 
-		resultRelInfos = (ResultRelInfo *)
-			palloc(numResultRelations * sizeof(ResultRelInfo));
-		resultRelInfo = resultRelInfos;
-		foreach(l, resultRelations)
-		{
-			Index		resultRelationIndex = lfirst_int(l);
-			Relation	resultRelation;
-
-			resultRelation = ExecGetRangeTableRelation(estate,
-													   resultRelationIndex);
-			InitResultRelInfo(resultRelInfo,
-							  resultRelation,
-							  resultRelationIndex,
-							  NULL,
-							  estate->es_instrument);
-			resultRelInfo++;
-		}
-		estate->es_result_relations = resultRelInfos;
+		estate->es_result_relations =
+			palloc0(numResultRelations * sizeof(ResultRelInfo *));
 		estate->es_num_result_relations = numResultRelations;
-
 		/* es_result_relation_info is NULL except when within ModifyTable */
 		estate->es_result_relation_info = NULL;
 
@@ -869,25 +851,8 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		{
 			int			num_roots = list_length(plannedstmt->rootResultRelations);
 
-			resultRelInfos = (ResultRelInfo *)
-				palloc(num_roots * sizeof(ResultRelInfo));
-			resultRelInfo = resultRelInfos;
-			foreach(l, plannedstmt->rootResultRelations)
-			{
-				Index		resultRelIndex = lfirst_int(l);
-				Relation	resultRelDesc;
-
-				resultRelDesc = ExecGetRangeTableRelation(estate,
-														  resultRelIndex);
-				InitResultRelInfo(resultRelInfo,
-								  resultRelDesc,
-								  resultRelIndex,
-								  NULL,
-								  estate->es_instrument);
-				resultRelInfo++;
-			}
-
-			estate->es_root_result_relations = resultRelInfos;
+			estate->es_root_result_relations =
+				palloc0(num_roots * sizeof(ResultRelInfo *));
 			estate->es_num_root_result_relations = num_roots;
 		}
 		else
@@ -1358,24 +1323,18 @@ ExecGetTriggerResultRel(EState *estate, Oid relid)
 	MemoryContext oldcontext;
 
 	/* First, search through the query result relations */
-	rInfo = estate->es_result_relations;
-	nr = estate->es_num_result_relations;
-	while (nr > 0)
+	for (nr = 0; nr < estate->es_num_result_relations; nr++)
 	{
-		if (RelationGetRelid(rInfo->ri_RelationDesc) == relid)
+		rInfo = estate->es_result_relations[nr];
+		if (rInfo && RelationGetRelid(rInfo->ri_RelationDesc) == relid)
 			return rInfo;
-		rInfo++;
-		nr--;
 	}
 	/* Second, search through the root result relations, if any */
-	rInfo = estate->es_root_result_relations;
-	nr = estate->es_num_root_result_relations;
-	while (nr > 0)
+	for (nr = 0; nr < estate->es_num_root_result_relations; nr++)
 	{
-		if (RelationGetRelid(rInfo->ri_RelationDesc) == relid)
+		rInfo = estate->es_root_result_relations[nr];
+		if (rInfo && RelationGetRelid(rInfo->ri_RelationDesc) == relid)
 			return rInfo;
-		rInfo++;
-		nr--;
 	}
 
 	/*
@@ -1542,13 +1501,20 @@ ExecEndPlan(PlanState *planstate, EState *estate)
 
 	/*
 	 * close indexes of result relation(s) if any.  (Rels themselves get
-	 * closed next.)
+	 * closed next.)  Also, allow the FDWs to shut down.
 	 */
-	resultRelInfo = estate->es_result_relations;
-	for (i = estate->es_num_result_relations; i > 0; i--)
+	for (i = 0; i < estate->es_num_result_relations; i++)
 	{
-		ExecCloseIndices(resultRelInfo);
-		resultRelInfo++;
+		resultRelInfo = estate->es_result_relations[i];
+		if (resultRelInfo)
+		{
+			ExecCloseIndices(resultRelInfo);
+			if (!resultRelInfo->ri_usesFdwDirectModify &&
+				resultRelInfo->ri_FdwRoutine != NULL &&
+				resultRelInfo->ri_FdwRoutine->EndForeignModify != NULL)
+				resultRelInfo->ri_FdwRoutine->EndForeignModify(estate,
+															   resultRelInfo);
+		}
 	}
 
 	/*
@@ -2785,23 +2751,42 @@ EvalPlanQualStart(EPQState *epqstate, Plan *planTree)
 	{
 		int			numResultRelations = parentestate->es_num_result_relations;
 		int			numRootResultRels = parentestate->es_num_root_result_relations;
-		ResultRelInfo *resultRelInfos;
+		int			i;
+		ResultRelInfo *resultRelInfo;
 
-		resultRelInfos = (ResultRelInfo *)
-			palloc(numResultRelations * sizeof(ResultRelInfo));
-		memcpy(resultRelInfos, parentestate->es_result_relations,
-			   numResultRelations * sizeof(ResultRelInfo));
-		rcestate->es_result_relations = resultRelInfos;
+		rcestate->es_result_relations =
+			palloc0(numResultRelations * sizeof(ResultRelInfo *));
+		for (i = 0; i < numResultRelations; i++)
+		{
+			if (parentestate->es_result_relations[i])
+			{
+				resultRelInfo = makeNode(ResultRelInfo);
+				memcpy(resultRelInfo, parentestate->es_result_relations[i],
+					   sizeof(ResultRelInfo));
+			}
+			else
+				resultRelInfo = NULL;
+			rcestate->es_result_relations[i] = resultRelInfo;
+		}
 		rcestate->es_num_result_relations = numResultRelations;
 
 		/* Also transfer partitioned root result relations. */
 		if (numRootResultRels > 0)
 		{
-			resultRelInfos = (ResultRelInfo *)
-				palloc(numRootResultRels * sizeof(ResultRelInfo));
-			memcpy(resultRelInfos, parentestate->es_root_result_relations,
-				   numRootResultRels * sizeof(ResultRelInfo));
-			rcestate->es_root_result_relations = resultRelInfos;
+			rcestate->es_root_result_relations =
+				palloc0(numRootResultRels * sizeof(ResultRelInfo *));
+			for (i = 0; i < numRootResultRels; i++)
+			{
+				if (parentestate->es_root_result_relations[i])
+				{
+					resultRelInfo = makeNode(ResultRelInfo);
+					memcpy(resultRelInfo, parentestate->es_root_result_relations[i],
+						   sizeof(ResultRelInfo));
+				}
+				else
+					resultRelInfo = NULL;
+				rcestate->es_root_result_relations[i] = resultRelInfo;
+			}
 			rcestate->es_num_root_result_relations = numRootResultRels;
 		}
 	}

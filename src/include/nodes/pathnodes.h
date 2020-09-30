@@ -1814,7 +1814,9 @@ typedef struct ModifyTablePath
 	CmdType		operation;		/* INSERT, UPDATE, or DELETE */
 	bool		canSetTag;		/* do we set the command tag/es_processed? */
 	Index		nominalRelation;	/* Parent RT index for use of EXPLAIN */
-	Index		rootRelation;	/* Root RT index, if target is partitioned */
+	Index		rootRelation;	/* RT index of root partitioned target
+								 * relation; valid only for UPDATE or DELETE,
+								 * 0 for INSERT */
 	bool		partColsUpdated;	/* some part key in hierarchy updated */
 	List	   *resultRelations;	/* integer list of RT indexes */
 	List	   *subpaths;		/* Path(s) producing source data */

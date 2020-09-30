@@ -711,13 +711,13 @@ ExecCreateScanSlotFromOuterPlan(EState *estate,
 bool
 ExecRelationIsTargetRelation(EState *estate, Index scanrelid)
 {
-	ResultRelInfo *resultRelInfos;
+	ResultRelInfo **resultRelInfos;
 	int			i;
 
 	resultRelInfos = estate->es_result_relations;
 	for (i = 0; i < estate->es_num_result_relations; i++)
 	{
-		if (resultRelInfos[i].ri_RangeTableIndex == scanrelid)
+		if (resultRelInfos[i]->ri_RangeTableIndex == scanrelid)
 			return true;
 	}
 	return false;

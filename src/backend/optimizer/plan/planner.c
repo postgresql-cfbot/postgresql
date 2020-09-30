@@ -2328,20 +2328,10 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		 */
 		if (parse->commandType != CMD_SELECT && !inheritance_update)
 		{
-			Index		rootRelation;
+			Index		rootRelation = 0;
 			List	   *withCheckOptionLists;
 			List	   *returningLists;
 			List	   *rowMarks;
-
-			/*
-			 * If target is a partition root table, we need to mark the
-			 * ModifyTable node appropriately for that.
-			 */
-			if (rt_fetch(parse->resultRelation, parse->rtable)->relkind ==
-				RELKIND_PARTITIONED_TABLE)
-				rootRelation = parse->resultRelation;
-			else
-				rootRelation = 0;
 
 			/*
 			 * Set up the WITH CHECK OPTION and RETURNING lists-of-lists, if

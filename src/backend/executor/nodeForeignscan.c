@@ -221,10 +221,13 @@ ExecInitForeignScan(ForeignScan *node, EState *estate, int eflags)
 			ExecInitNode(outerPlan(node), estate, eflags);
 
 	/*
-	 * Tell the FDW to initialize the scan.
+	 * Tell the FDW to initialize the scan or the direct modification.
 	 */
 	if (node->operation != CMD_SELECT)
+	{
+		Assert(node->resultRelIndex >= 0);
 		fdwroutine->BeginDirectModify(scanstate, eflags);
+	}
 	else
 		fdwroutine->BeginForeignScan(scanstate, eflags);
 

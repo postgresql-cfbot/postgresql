@@ -1803,7 +1803,7 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 						  0);
 		resultRelInfo++;
 	}
-	estate->es_result_relations = resultRelInfos;
+	estate->es_result_relations = &resultRelInfos;
 	estate->es_num_result_relations = list_length(rels);
 
 	/*

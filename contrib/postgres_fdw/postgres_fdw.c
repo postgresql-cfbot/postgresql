@@ -200,6 +200,9 @@ typedef struct PgFdwDirectModifyState
 	Relation	rel;			/* relcache entry for the foreign table */
 	AttInMetadata *attinmeta;	/* attribute datatype conversion metadata */
 
+	int			resultRelIndex;	/* index of ResultRelInfo for the foreign table
+								 * in EState.es_result_relations */
+
 	/* extracted fdw_private data */
 	char	   *query;			/* text of UPDATE/DELETE command */
 	bool		has_returning;	/* is there a RETURNING clause? */
@@ -446,11 +449,12 @@ static List *build_remote_returning(Index rtindex, Relation rel,
 									List *returningList);
 static void rebuild_fdw_scan_tlist(ForeignScan *fscan, List *tlist);
 static void execute_dml_stmt(ForeignScanState *node);
-static TupleTableSlot *get_returning_data(ForeignScanState *node);
+static TupleTableSlot *get_returning_data(ForeignScanState *node, ResultRelInfo *resultRelInfo);
 static void init_returning_filter(PgFdwDirectModifyState *dmstate,
 								  List *fdw_scan_tlist,
 								  Index rtindex);
 static TupleTableSlot *apply_returning_filter(PgFdwDirectModifyState *dmstate,
+											  ResultRelInfo *relInfo,
 											  TupleTableSlot *slot,
 											  EState *estate);
 static void prepare_query_params(PlanState *node,
@@ -1938,7 +1942,7 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 	if (plan && plan->operation == CMD_UPDATE &&
 		(resultRelInfo->ri_usesFdwDirectModify ||
 		 resultRelInfo->ri_FdwState) &&
-		resultRelInfo > mtstate->resultRelInfo + mtstate->mt_whichplan)
+		 !list_member_int(mtstate->mt_done_rels, resultRelation))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot route tuples into foreign table to be updated \"%s\"",
@@ -1992,7 +1996,7 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 		 */
 		if (plan && plan->operation == CMD_UPDATE &&
 			resultRelation == plan->rootRelation)
-			resultRelation = mtstate->resultRelInfo[0].ri_RangeTableIndex;
+			resultRelation = linitial_int(plan->resultRelations);
 	}
 
 	/* Construct the SQL command string. */
@@ -2331,6 +2335,7 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 {
 	ForeignScan *fsplan = (ForeignScan *) node->ss.ps.plan;
 	EState	   *estate = node->ss.ps.state;
+	List	   *resultRelations = estate->es_plannedstmt->resultRelations;
 	PgFdwDirectModifyState *dmstate;
 	Index		rtindex;
 	RangeTblEntry *rte;
@@ -2355,7 +2360,9 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 	 * Identify which user to do the remote access as.  This should match what
 	 * ExecCheckRTEPerms() does.
 	 */
-	rtindex = estate->es_result_relation_info->ri_RangeTableIndex;
+	Assert(fsplan->resultRelIndex >= 0);
+	dmstate->resultRelIndex = fsplan->resultRelIndex;
+	rtindex = list_nth_int(resultRelations, fsplan->resultRelIndex);
 	rte = exec_rt_fetch(rtindex, estate);
 	userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
 
@@ -2450,7 +2457,10 @@ postgresIterateDirectModify(ForeignScanState *node)
 {
 	PgFdwDirectModifyState *dmstate = (PgFdwDirectModifyState *) node->fdw_state;
 	EState	   *estate = node->ss.ps.state;
-	ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
+	ResultRelInfo *resultRelInfo = estate->es_result_relations[dmstate->resultRelIndex];
+
+	/* The executor must have initialized the ResultRelInfo for us. */
+	Assert(resultRelInfo != NULL);
 
 	/*
 	 * If this is the first call after Begin, execute the statement.
@@ -2482,7 +2492,7 @@ postgresIterateDirectModify(ForeignScanState *node)
 	/*
 	 * Get the next RETURNING tuple.
 	 */
-	return get_returning_data(node);
+	return get_returning_data(node, resultRelInfo);
 }
 
 /*
@@ -4082,11 +4092,10 @@ execute_dml_stmt(ForeignScanState *node)
  * Get the result of a RETURNING clause.
  */
 static TupleTableSlot *
-get_returning_data(ForeignScanState *node)
+get_returning_data(ForeignScanState *node, ResultRelInfo *resultRelInfo)
 {
 	PgFdwDirectModifyState *dmstate = (PgFdwDirectModifyState *) node->fdw_state;
 	EState	   *estate = node->ss.ps.state;
-	ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
 	TupleTableSlot *resultSlot;
 
@@ -4141,7 +4150,8 @@ get_returning_data(ForeignScanState *node)
 		if (dmstate->rel)
 			resultSlot = slot;
 		else
-			resultSlot = apply_returning_filter(dmstate, slot, estate);
+			resultSlot = apply_returning_filter(dmstate, resultRelInfo, slot,
+												estate);
 	}
 	dmstate->next_tuple++;
 
@@ -4230,10 +4240,10 @@ init_returning_filter(PgFdwDirectModifyState *dmstate,
  */
 static TupleTableSlot *
 apply_returning_filter(PgFdwDirectModifyState *dmstate,
+					   ResultRelInfo *relInfo,
 					   TupleTableSlot *slot,
 					   EState *estate)
 {
-	ResultRelInfo *relInfo = estate->es_result_relation_info;
 	TupleDesc	resultTupType = RelationGetDescr(dmstate->resultRel);
 	TupleTableSlot *resultSlot;
 	Datum	   *values;

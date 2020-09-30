@@ -488,6 +488,14 @@ typedef struct ResultRelInfo
 
 	/* for use by copy.c when performing multi-inserts */
 	struct CopyMultiInsertBuffer *ri_CopyMultiInsertBuffer;
+
+	/*
+	 * Map to convert child result relation tuples to the format of the
+	 * table actually mentioned in the query (called "root").  Set only
+	 * if either transition tuple capture or update partition row
+	 * movement is active.
+	 */
+	TupleConversionMap *ri_ChildToRootMap;
 } ResultRelInfo;
 
 /* ----------------
@@ -519,7 +527,7 @@ typedef struct EState
 	CommandId	es_output_cid;
 
 	/* Info about target table(s) for insert/update/delete queries: */
-	ResultRelInfo *es_result_relations; /* array of ResultRelInfos */
+	ResultRelInfo **es_result_relations; /* array of ResultRelInfo pointers */
 	int			es_num_result_relations;	/* length of array */
 	ResultRelInfo *es_result_relation_info; /* currently active array elt */
 
@@ -529,7 +537,8 @@ typedef struct EState
 	 * es_result_relations, but we need access to the roots for firing
 	 * triggers and for runtime tuple routing.
 	 */
-	ResultRelInfo *es_root_result_relations;	/* array of ResultRelInfos */
+	ResultRelInfo **es_root_result_relations;	/* array of ResultRelInfo
+												 * pointers */
 	int			es_num_root_result_relations;	/* length of the array */
 	PartitionDirectory es_partition_directory;	/* for PartitionDesc lookup */
 
@@ -1156,6 +1165,8 @@ typedef struct ModifyTableState
 	PlanState **mt_plans;		/* subplans (one per target rel) */
 	int			mt_nplans;		/* number of plans in the array */
 	int			mt_whichplan;	/* which one is being executed (0..n-1) */
+	List	   *mt_done_rels;	/* RT indexes of result relations that have
+								 * been fully processed. */
 	TupleTableSlot **mt_scans;	/* input tuple corresponding to underlying
 								 * plans */
 	ResultRelInfo *resultRelInfo;	/* per-subplan target relations */
@@ -1179,9 +1190,6 @@ typedef struct ModifyTableState
 
 	/* controls transition table population for INSERT...ON CONFLICT UPDATE */
 	struct TransitionCaptureState *mt_oc_transition_capture;
-
-	/* Per plan map for tuple conversion from child to root */
-	TupleConversionMap **mt_per_subplan_tupconv_maps;
 } ModifyTableState;
 
 /* ----------------

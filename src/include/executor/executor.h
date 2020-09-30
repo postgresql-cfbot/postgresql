@@ -603,4 +603,8 @@ extern void CheckCmdReplicaIdentity(Relation rel, CmdType cmd);
 extern void CheckSubscriptionRelkind(char relkind, const char *nspname,
 									 const char *relname);
 
+/* prototypes from nodeModifyTable.c */
+extern ResultRelInfo *ExecGetResultRelInfo(ModifyTableState *mtstate, int resultRelIndex,
+					 bool create_it);
+
 #endif							/* EXECUTOR_H  */

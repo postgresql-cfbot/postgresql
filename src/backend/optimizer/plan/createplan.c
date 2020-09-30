@@ -5541,6 +5541,8 @@ make_foreignscan(List *qptlist,
 	node->fs_relids = NULL;
 	/* fsSystemCol will be filled in by create_foreignscan_plan */
 	node->fsSystemCol = false;
+	/* resultRelIndex will be set by make_modifytable(), if needed */
+	node->resultRelIndex = -1;
 
 	return node;
 }
@@ -6900,7 +6902,13 @@ make_modifytable(PlannerInfo *root,
 			!has_stored_generated_columns(subroot, rti))
 			direct_modify = fdwroutine->PlanDirectModify(subroot, node, rti, i);
 		if (direct_modify)
+		{
+			ForeignScan *fscan = (ForeignScan *) list_nth(subplans, i);
+
+			Assert(IsA(fscan, ForeignScan));
+			fscan->resultRelIndex = i;
 			direct_modify_plans = bms_add_member(direct_modify_plans, i);
+		}
 
 		if (!direct_modify &&
 			fdwroutine != NULL &&

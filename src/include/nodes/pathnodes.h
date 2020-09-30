@@ -1212,6 +1212,7 @@ typedef struct IndexPath
 	ScanDirection indexscandir;
 	Cost		indextotalcost;
 	Selectivity indexselectivity;
+	double		indexCorrelation;
 } IndexPath;
 
 /*
@@ -1292,6 +1293,7 @@ typedef struct BitmapAndPath
 	Path		path;
 	List	   *bitmapquals;	/* IndexPaths and BitmapOrPaths */
 	Selectivity bitmapselectivity;
+	double		bitmapcorrelation;
 } BitmapAndPath;
 
 /*
@@ -1305,6 +1307,7 @@ typedef struct BitmapOrPath
 	Path		path;
 	List	   *bitmapquals;	/* IndexPaths and BitmapAndPaths */
 	Selectivity bitmapselectivity;
+	double		bitmapcorrelation;
 } BitmapOrPath;
 
 /*

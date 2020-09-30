@@ -1589,6 +1589,11 @@ INSERT INTO b VALUES (0, 0), (1, NULL);
 SELECT * FROM b LEFT JOIN a ON (b.a_id = a.id) WHERE (a.id IS NULL OR a.id > 0);
 SELECT b.* FROM b LEFT JOIN a ON (b.a_id = a.id) WHERE (a.id IS NULL OR a.id > 0);
 
+explain (costs off)
+SELECT * FROM b LEFT JOIN a ON (b.a_id = a.id) WHERE (a.id IS NULL OR a.id > 0);
+
+explain (costs off)
+SELECT * FROM b RIGHT JOIN a ON (b.a_id = a.id) WHERE (a.id IS NULL OR a.id > 0);
 rollback;
 
 -- another join removal bug: this is not optimizable, either

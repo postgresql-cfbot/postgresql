@@ -536,6 +536,24 @@ pqDropConnection(PGconn *conn, bool flushInput)
 	}
 }
 
+/*
+ * PQfreeCommandQueue
+ * Free all the entries of PGcommandQueueEntry queue passed.
+ */
+static void
+PQfreeCommandQueue(PGcommandQueueEntry *queue)
+{
+
+	while (queue != NULL)
+	{
+		PGcommandQueueEntry *prev = queue;
+
+		queue = queue->next;
+		if (prev->query)
+			free(prev->query);
+		free(prev);
+	}
+}
 
 /*
  *		pqDropServerData
@@ -555,6 +573,7 @@ pqDropServerData(PGconn *conn)
 {
 	PGnotify   *notify;
 	pgParameterStatus *pstatus;
+	PGcommandQueueEntry *queue;
 
 	/* Forget pending notifies */
 	notify = conn->notifyHead;
@@ -566,6 +585,14 @@ pqDropServerData(PGconn *conn)
 		free(prev);
 	}
 	conn->notifyHead = conn->notifyTail = NULL;
+
+	queue = conn->cmd_queue_head;
+	PQfreeCommandQueue(queue);
+	conn->cmd_queue_head = conn->cmd_queue_tail = NULL;
+
+	queue = conn->cmd_queue_recycle;
+	PQfreeCommandQueue(queue);
+	conn->cmd_queue_recycle = NULL;
 
 	/* Reset ParameterStatus data, as well as variables deduced from it */
 	pstatus = conn->pstatus;

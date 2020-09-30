@@ -15,6 +15,10 @@
 #ifndef LIBPQ_FE_H
 #define LIBPQ_FE_H
 
+#ifdef WIN32
+#include <windows.h>
+#endif
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -97,7 +101,10 @@ typedef enum
 	PGRES_NONFATAL_ERROR,		/* notice or warning message */
 	PGRES_FATAL_ERROR,			/* query failed */
 	PGRES_COPY_BOTH,			/* Copy In/Out data transfer in progress */
-	PGRES_SINGLE_TUPLE			/* single tuple from larger resultset */
+	PGRES_SINGLE_TUPLE,			/* single tuple from larger resultset */
+	PGRES_BATCH_END,			/* end of a batch of commands */
+	PGRES_BATCH_ABORTED,		/* Command didn't run because of an abort
+								 * earlier in a batch */
 } ExecStatusType;
 
 typedef enum
@@ -136,6 +143,17 @@ typedef enum
 	PQPING_NO_RESPONSE,			/* could not establish connection */
 	PQPING_NO_ATTEMPT			/* connection not attempted (bad params) */
 } PGPing;
+
+/*
+ * PQBatchStatus - Current status of batch mode
+ */
+
+typedef enum
+{
+	PQBATCH_MODE_OFF,
+	PQBATCH_MODE_ON,
+	PQBATCH_MODE_ABORTED
+}	PQBatchStatus;
 
 /* PGconn encapsulates a connection to the backend.
  * The contents of this struct are not supposed to be known to applications.
@@ -434,6 +452,12 @@ extern PGresult *PQgetResult(PGconn *conn);
 /* Routines for managing an asynchronous query */
 extern int	PQisBusy(PGconn *conn);
 extern int	PQconsumeInput(PGconn *conn);
+
+/* Routines for batch mode management */
+extern int	PQbatchStatus(PGconn *conn);
+extern int	PQenterBatchMode(PGconn *conn);
+extern int	PQexitBatchMode(PGconn *conn);
+extern int	PQbatchSendQueue(PGconn *conn);
 
 /* LISTEN/NOTIFY support */
 extern PGnotify *PQnotifies(PGconn *conn);

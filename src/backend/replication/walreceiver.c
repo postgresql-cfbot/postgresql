@@ -473,12 +473,15 @@ WalReceiverMain(void)
 						else if (len < 0)
 						{
 							ereport(LOG,
-									(errmsg("replication terminated by primary server"),
-									 errdetail("End of WAL reached on timeline %u at %X/%X.",
+									(errmsg("replication terminated by primary server on timeline %u at %X/%X.",
 											   startpointTLI,
 											   (uint32) (LogstreamResult.Write >> 32), (uint32) LogstreamResult.Write)));
-							endofwal = true;
-							break;
+
+							/*
+							 * we have no longer anything to do on the broken
+							 * connection other than exiting.
+							 */
+							proc_exit(1);
 						}
 						len = walrcv_receive(wrconn, &buf, &wait_fd);
 					}

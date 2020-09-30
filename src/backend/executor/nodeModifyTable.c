@@ -75,6 +75,8 @@ static ResultRelInfo *getTargetResultRelInfo(ModifyTableState *node);
 static void ExecSetupChildParentMapForSubplan(ModifyTableState *mtstate);
 static TupleConversionMap *tupconv_map_for_subplan(ModifyTableState *node,
 												   int whichplan);
+/* guc */
+bool insert_in_bulk = false;
 
 /*
  * Verify that the tuples to be produced by INSERT or UPDATE match the
@@ -578,7 +580,7 @@ ExecInsert(ModifyTableState *mtstate,
 			table_tuple_insert_speculative(resultRelationDesc, slot,
 										   estate->es_output_cid,
 										   0,
-										   NULL,
+										   NULL, /* Bulk insert not supported */
 										   specToken);
 
 			/* insert index entries for tuple */
@@ -617,7 +619,7 @@ ExecInsert(ModifyTableState *mtstate,
 			/* insert the tuple normally */
 			table_tuple_insert(resultRelationDesc, slot,
 							   estate->es_output_cid,
-							   0, NULL);
+							   0, mtstate->bistate);
 
 			/* insert index entries for tuple */
 			if (resultRelInfo->ri_NumIndices > 0)
@@ -2332,6 +2334,17 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 	mtstate->mt_arowmarks = (List **) palloc0(sizeof(List *) * nplans);
 	mtstate->mt_nplans = nplans;
+	mtstate->bistate = NULL;
+	if (operation == CMD_INSERT &&
+			node->onConflictAction != ONCONFLICT_UPDATE &&
+			node->rootResultRelIndex < 0)
+	{
+		// Plan *p = linitial(node->plans);
+		Assert(nplans == 1);
+
+		if (insert_in_bulk)
+			mtstate->bistate = GetBulkInsertState();
+	}
 
 	/* set up epqstate with dummy subplan data for the moment */
 	EvalPlanQualInit(&mtstate->mt_epqstate, estate, NULL, NIL, node->epqParam);
@@ -2774,6 +2787,12 @@ ExecEndModifyTable(ModifyTableState *node)
 			resultRelInfo->ri_FdwRoutine->EndForeignModify != NULL)
 			resultRelInfo->ri_FdwRoutine->EndForeignModify(node->ps.state,
 														   resultRelInfo);
+	}
+
+	if (node->bistate)
+	{
+		FreeBulkInsertState(node->bistate);
+		table_finish_bulk_insert((getTargetResultRelInfo(node))->ri_RelationDesc, 0);
 	}
 
 	/*

@@ -29,6 +29,8 @@ typedef struct
 	/* Following the OID are zero to two bound values, then a flags byte */
 } RangeType;
 
+#define RANGE_EMPTY_LITERAL "empty"
+
 /* Use this macro in preference to fetching rangetypid field directly */
 #define RangeTypeGetOid(r)	((r)->rangetypid)
 
@@ -92,13 +94,21 @@ typedef struct
  * prototypes for functions defined in rangetypes.c
  */
 
-extern bool range_contains_elem_internal(TypeCacheEntry *typcache, const RangeType *r, Datum val);
-
 /* internal versions of the above */
+extern int	range_cmp_internal(TypeCacheEntry *typcache, const RangeType *r1,
+							   const RangeType *r2);
+extern uint32 hash_range_internal(TypeCacheEntry *typcache, const RangeType *r);
+extern uint64 hash_range_extended_internal(TypeCacheEntry *typcache, const RangeType *r,
+										   Datum seed);
+extern Datum range_lower_internal(TypeCacheEntry *typcache, const RangeType *r1,
+								  bool *isnull);
+extern Datum range_upper_internal(TypeCacheEntry *typcache, const RangeType *r1,
+								  bool *isnull);
 extern bool range_eq_internal(TypeCacheEntry *typcache, const RangeType *r1,
 							  const RangeType *r2);
 extern bool range_ne_internal(TypeCacheEntry *typcache, const RangeType *r1,
 							  const RangeType *r2);
+extern bool range_contains_elem_internal(TypeCacheEntry *typcache, const RangeType *r, Datum val);
 extern bool range_contains_internal(TypeCacheEntry *typcache, const RangeType *r1,
 									const RangeType *r2);
 extern bool range_contained_by_internal(TypeCacheEntry *typcache, const RangeType *r1,
@@ -115,8 +125,18 @@ extern bool range_overleft_internal(TypeCacheEntry *typcache, const RangeType *r
 									const RangeType *r2);
 extern bool range_overright_internal(TypeCacheEntry *typcache, const RangeType *r1,
 									 const RangeType *r2);
+extern RangeType *range_union_internal(TypeCacheEntry *typcache, RangeType *r1,
+									   RangeType *r2, bool strict);
+extern RangeType *range_minus_internal(TypeCacheEntry *typcache, RangeType *r1,
+									   RangeType *r2);
+extern RangeType *range_intersect_internal(TypeCacheEntry *typcache, const RangeType *r1,
+										   const RangeType *r2);
 
 /* assorted support functions */
+extern Size datum_compute_size(Size sz, Datum datum, bool typbyval,
+							   char typalign, int16 typlen, char typstorage);
+extern Pointer datum_write(Pointer ptr, Datum datum, bool typbyval,
+						   char typalign, int16 typlen, char typstorage);
 extern TypeCacheEntry *range_get_typcache(FunctionCallInfo fcinfo,
 										  Oid rngtypid);
 extern RangeType *range_serialize(TypeCacheEntry *typcache, RangeBound *lower,
@@ -125,6 +145,7 @@ extern void range_deserialize(TypeCacheEntry *typcache, const RangeType *range,
 							  RangeBound *lower, RangeBound *upper,
 							  bool *empty);
 extern char range_get_flags(const RangeType *range);
+extern bool range_has_flag(const RangeType *range, char flag);
 extern void range_set_contain_empty(RangeType *range);
 extern RangeType *make_range(TypeCacheEntry *typcache, RangeBound *lower,
 							 RangeBound *upper, bool empty);
@@ -132,8 +153,12 @@ extern int	range_cmp_bounds(TypeCacheEntry *typcache, const RangeBound *b1,
 							 const RangeBound *b2);
 extern int	range_cmp_bound_values(TypeCacheEntry *typcache, const RangeBound *b1,
 								   const RangeBound *b2);
+extern int	range_compare(const void *key1, const void *key2, void *arg);
 extern bool bounds_adjacent(TypeCacheEntry *typcache, RangeBound bound1,
 							RangeBound bound2);
 extern RangeType *make_empty_range(TypeCacheEntry *typcache);
+extern bool range_split_internal(TypeCacheEntry *typcache, const RangeType *r1,
+								 const RangeType *r2, RangeType **output1,
+								 RangeType **output2);
 
 #endif							/* RANGETYPES_H */

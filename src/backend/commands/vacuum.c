@@ -31,13 +31,16 @@
 #include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
+#include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
+#include "catalog/pg_tablespace.h"
 #include "commands/cluster.h"
 #include "commands/defrem.h"
 #include "commands/vacuum.h"
+#include "commands/tablespace.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "pgstat.h"
@@ -106,6 +109,10 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	bool		disable_page_skipping = false;
 	ListCell   *lc;
 
+	/* Tablespace to use for relations after VACUUM FULL. */
+	char		*tablespacename = NULL,
+				*idxtablespacename = NULL;
+
 	/* Set default value */
 	params.index_cleanup = VACOPT_TERNARY_DEFAULT;
 	params.truncate = VACOPT_TERNARY_DEFAULT;
@@ -142,6 +149,10 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 			params.index_cleanup = get_vacopt_ternary_value(opt);
 		else if (strcmp(opt->defname, "truncate") == 0)
 			params.truncate = get_vacopt_ternary_value(opt);
+		else if (strcmp(opt->defname, "tablespace") == 0)
+			tablespacename = defGetString(opt);
+		else if (strcmp(opt->defname, "index_tablespace") == 0)
+			idxtablespacename = defGetString(opt);
 		else if (strcmp(opt->defname, "parallel") == 0)
 		{
 			if (opt->arg == NULL)
@@ -201,6 +212,19 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("VACUUM FULL cannot be performed in parallel")));
+
+	if ((params.options & VACOPT_FULL) == 0 &&
+		(tablespacename || idxtablespacename))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("incompatible TABLESPACE option"),
+				errdetail("You can only use TABLESPACE with VACUUM FULL.")));
+
+	/* Get tablespace Oids to use. */
+	params.tablespace_oid = tablespacename ?
+		get_tablespace_oid(tablespacename, false) : InvalidOid;
+	params.idxtablespace_oid = idxtablespacename ?
+		get_tablespace_oid(idxtablespacename, false) : InvalidOid;
 
 	/*
 	 * Make sure VACOPT_ANALYZE is specified if any column lists are present.
@@ -1724,8 +1748,8 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 	LOCKMODE	lmode;
 	Relation	onerel;
 	LockRelId	onerelid;
-	Oid			toast_relid;
-	Oid			save_userid;
+	Oid			toast_relid,
+				save_userid;
 	int			save_sec_context;
 	int			save_nestlevel;
 
@@ -1862,6 +1886,22 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 	}
 
 	/*
+	 * We don't support moving system relations into different tablespaces
+	 * unless allow_system_table_mods=1.
+	 */
+	if (params->options & VACOPT_FULL &&
+		OidIsValid(params->tablespace_oid) &&
+		IsSystemRelation(onerel) && !allowSystemTableMods)
+	{
+		params->tablespace_oid = InvalidOid;
+		ereport(WARNING,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("skipping tablespace change of \"%s\"",
+						RelationGetRelationName(onerel)),
+				errdetail("Cannot move system relation, only VACUUM is performed.")));
+	}
+
+	/*
 	 * Get a session-level lock too. This will protect our access to the
 	 * relation across multiple transactions, so that we can vacuum the
 	 * relation's TOAST table (if any) secure in the knowledge that no one is
@@ -1930,7 +1970,8 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 			cluster_options |= CLUOPT_VERBOSE;
 
 		/* VACUUM FULL is now a variant of CLUSTER; see cluster.c */
-		cluster_rel(relid, InvalidOid, cluster_options, true);
+		cluster_rel(relid, InvalidOid, cluster_options, true,
+				params->tablespace_oid, params->idxtablespace_oid);
 	}
 	else
 		table_relation_vacuum(onerel, params, vac_strategy);

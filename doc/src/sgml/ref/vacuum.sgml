@@ -35,6 +35,8 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     INDEX_CLEANUP [ <replaceable class="parameter">boolean</replaceable> ]
     TRUNCATE [ <replaceable class="parameter">boolean</replaceable> ]
     PARALLEL <replaceable class="parameter">integer</replaceable>
+    TABLESPACE <replaceable class="parameter">new_tablespace</replaceable>
+    INDEX_TABLESPACE <replaceable class="parameter">new_tablespace</replaceable>
 
 <phrase>and <replaceable class="parameter">table_and_columns</replaceable> is:</phrase>
 
@@ -256,6 +258,24 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
    </varlistentry>
 
    <varlistentry>
+    <term><literal>TABLESPACE</literal></term>
+    <listitem>
+     <para>
+      Specifies that the relation will be rebuilt on a new tablespace.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>INDEX_TABLESPACE</literal></term>
+    <listitem>
+     <para>
+      Specifies that the relation's indexes will be rebuilt on a new tablespace.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><replaceable class="parameter">boolean</replaceable></term>
     <listitem>
      <para>
@@ -299,6 +319,16 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">new_tablespace</replaceable></term>
+    <listitem>
+     <para>
+      The tablespace where the relation or its indexes will be rebuilt.
+     </para>
+    </listitem>
+   </varlistentry>
+
   </variablelist>
  </refsect1>
 

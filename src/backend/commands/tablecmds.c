@@ -1887,7 +1887,7 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 			/*
 			 * Reconstruct the indexes to match, and we're done.
 			 */
-			reindex_relation(heap_relid, REINDEX_REL_PROCESS_TOAST, 0);
+			reindex_relation(heap_relid, REINDEX_REL_PROCESS_TOAST, 0, InvalidOid);
 		}
 
 		pgstat_count_truncate(rel);
@@ -5055,7 +5055,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 							 !OidIsValid(tab->newTableSpace),
 							 RecentXmin,
 							 ReadNextMultiXactId(),
-							 persistence);
+							 persistence, InvalidOid);
 		}
 		else
 		{
@@ -13155,8 +13155,9 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	if (RelationIsMapped(rel))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot move system relation \"%s\"",
-						RelationGetRelationName(rel))));
+				 errmsg("cannot change tablespace of mapped relation \"%s\"",
+					 RelationGetRelationName(rel))));
+
 
 	/* Can't move a non-shared relation into pg_global */
 	if (newTableSpace == GLOBALTABLESPACE_OID)

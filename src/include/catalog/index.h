@@ -80,6 +80,7 @@ extern Oid	index_create(Relation heapRelation,
 
 extern Oid	index_concurrently_create_copy(Relation heapRelation,
 										   Oid oldIndexId,
+										   Oid tablespaceOid,
 										   const char *newName);
 
 extern void index_concurrently_build(Oid heapRelationId,
@@ -134,7 +135,9 @@ extern void index_set_state_flags(Oid indexId, IndexStateFlagsAction action);
 extern Oid	IndexGetRelation(Oid indexId, bool missing_ok);
 
 extern void reindex_index(Oid indexId, bool skip_constraint_checks,
-						  char relpersistence, int options);
+						  char relpersistence, int options, Oid tablespaceOid);
+
+extern bool set_rel_tablespace(Oid reloid, Oid tablespaceOid);
 
 /* Flag bits for reindex_relation(): */
 #define REINDEX_REL_PROCESS_TOAST			0x01
@@ -143,7 +146,7 @@ extern void reindex_index(Oid indexId, bool skip_constraint_checks,
 #define REINDEX_REL_FORCE_INDEXES_UNLOGGED	0x08
 #define REINDEX_REL_FORCE_INDEXES_PERMANENT 0x10
 
-extern bool reindex_relation(Oid relid, int flags, int options);
+extern bool reindex_relation(Oid relid, int flags, int options, Oid tablespaceOid);
 
 extern bool ReindexIsProcessingHeap(Oid heapOid);
 extern bool ReindexIsProcessingIndex(Oid indexOid);

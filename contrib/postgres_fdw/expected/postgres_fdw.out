@@ -8987,3 +8987,58 @@ PREPARE TRANSACTION 'fdw_tpc';
 ERROR:  cannot PREPARE a transaction that has operated on postgres_fdw foreign tables
 ROLLBACK;
 WARNING:  there is no transaction in progress
+-- Retry cached connections at the beginning of the remote xact
+-- in case remote backend is killed.
+-- Let's use a different application name for remote connection,
+-- so that this test will not kill other backends wrongly.
+ALTER SERVER loopback OPTIONS (application_name 'fdw_retry_check');
+-- Generate a connection to remote. Local backend will cache it.
+SELECT 1 FROM ft1 LIMIT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+-- Retrieve pid of remote backend with application name fdw_retry_check
+-- and kill it intentionally here. Note that, local backend still has
+-- the remote connection/backend info in it's cache.
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE
+backend_type = 'client backend' AND application_name = 'fdw_retry_check';
+ pg_terminate_backend 
+----------------------
+ t
+(1 row)
+
+-- Next query using the same foreign server should succeed if connection
+-- retry works.
+SELECT 1 FROM ft1 LIMIT 1;
+ ?column? 
+----------
+        1
+(1 row)
+
+-- Subtransaction - remote backend is killed in the middle of a remote
+-- xact, and we don't do retry connection, hence the subsequent query
+-- using the same foreign server should fail.
+BEGIN;
+DECLARE c CURSOR FOR SELECT 1 FROM ft1 LIMIT 1;
+FETCH c;
+ ?column? 
+----------
+        1
+(1 row)
+
+SAVEPOINT s;
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE
+backend_type = 'client backend' AND application_name = 'fdw_retry_check';
+ pg_terminate_backend 
+----------------------
+ t
+(1 row)
+
+SELECT 1 FROM ft1 LIMIT 1;    -- should fail
+ERROR:  server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.
+CONTEXT:  remote SQL command: SAVEPOINT s2
+COMMIT;

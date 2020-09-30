@@ -2653,3 +2653,34 @@ SELECT count(*) FROM ft1;
 -- error here
 PREPARE TRANSACTION 'fdw_tpc';
 ROLLBACK;
+
+-- Retry cached connections at the beginning of the remote xact
+-- in case remote backend is killed.
+-- Let's use a different application name for remote connection,
+-- so that this test will not kill other backends wrongly.
+ALTER SERVER loopback OPTIONS (application_name 'fdw_retry_check');
+
+-- Generate a connection to remote. Local backend will cache it.
+SELECT 1 FROM ft1 LIMIT 1;
+
+-- Retrieve pid of remote backend with application name fdw_retry_check
+-- and kill it intentionally here. Note that, local backend still has
+-- the remote connection/backend info in it's cache.
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE
+backend_type = 'client backend' AND application_name = 'fdw_retry_check';
+
+-- Next query using the same foreign server should succeed if connection
+-- retry works.
+SELECT 1 FROM ft1 LIMIT 1;
+
+-- Subtransaction - remote backend is killed in the middle of a remote
+-- xact, and we don't do retry connection, hence the subsequent query
+-- using the same foreign server should fail.
+BEGIN;
+DECLARE c CURSOR FOR SELECT 1 FROM ft1 LIMIT 1;
+FETCH c;
+SAVEPOINT s;
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE
+backend_type = 'client backend' AND application_name = 'fdw_retry_check';
+SELECT 1 FROM ft1 LIMIT 1;    -- should fail
+COMMIT;

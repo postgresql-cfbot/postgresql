@@ -108,6 +108,7 @@ PGconn *
 GetConnection(UserMapping *user, bool will_prep_stmt)
 {
 	bool		found;
+	volatile bool retry_conn = false;
 	ConnCacheEntry *entry;
 	ConnCacheKey key;
 
@@ -159,22 +160,24 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 	/* Reject further use of connections which failed abort cleanup. */
 	pgfdw_reject_incomplete_xact_state_change(entry);
 
+retry:
 	/*
-	 * If the connection needs to be remade due to invalidation, disconnect as
-	 * soon as we're out of all transactions.
+	 * If the connection needs to be remade due to invalidation, disconnect
+	 * as soon as we're out of all transactions. Also, if previous attempt
+	 * to start new remote transaction failed on the cached connection,
+	 * disconnect it to retry a new connection.
 	 */
-	if (entry->conn != NULL && entry->invalidated && entry->xact_depth == 0)
+	if ((entry->conn != NULL && entry->invalidated &&
+		 entry->xact_depth == 0) || retry_conn)
 	{
-		elog(DEBUG3, "closing connection %p for option changes to take effect",
-			 entry->conn);
+		if (retry_conn)
+			elog(DEBUG3, "closing connection %p to reestablish a new one",
+				 entry->conn);
+		else
+			elog(DEBUG3, "closing connection %p for option changes to take effect",
+				 entry->conn);
 		disconnect_pg_server(entry);
 	}
-
-	/*
-	 * We don't check the health of cached connection here, because it would
-	 * require some overhead.  Broken connection will be detected when the
-	 * connection is actually used.
-	 */
 
 	/*
 	 * If cache entry doesn't have a connection, we have to establish a new
@@ -206,9 +209,37 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 	}
 
 	/*
-	 * Start a new transaction or subtransaction if needed.
+	 * We check the health of the cached connection here, while the remote
+	 * xact is going to begin.  Broken connection will be detected and the
+	 * connection is retried. We do this only once during each begin remote
+	 * xact call, if the connection is still broken after the retry attempt,
+	 * then the query will fail.
 	 */
-	begin_remote_xact(entry);
+	PG_TRY();
+	{
+		/* Start a new transaction or subtransaction if needed. */
+		begin_remote_xact(entry);
+		retry_conn = false;
+	}
+	PG_CATCH();
+	{
+		if (!entry->conn ||
+			PQstatus(entry->conn) != CONNECTION_BAD ||
+			entry->xact_depth > 0 ||
+			retry_conn)
+			PG_RE_THROW();
+		retry_conn = true;
+	}
+	PG_END_TRY();
+
+	if (retry_conn)
+	{
+		ereport(DEBUG3,
+				(errmsg("could not start remote transaction on connection %p",
+				 entry->conn)),
+				 errdetail_internal("%s", pchomp(PQerrorMessage(entry->conn))));
+		goto retry;
+	}
 
 	/* Remember if caller will prepare statements */
 	entry->have_prep_stmt |= will_prep_stmt;

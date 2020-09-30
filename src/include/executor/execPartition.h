@@ -145,6 +145,8 @@ extern ResultRelInfo *ExecFindPartition(ModifyTableState *mtstate,
 										PartitionTupleRouting *proute,
 										TupleTableSlot *slot,
 										EState *estate);
+extern bool checkMultiInsertMode(const ResultRelInfo *rri,
+								 const ResultRelInfo *parent);
 extern void ExecCleanupTupleRouting(ModifyTableState *mtstate,
 									PartitionTupleRouting *proute);
 extern PartitionPruneState *ExecCreatePartitionPruneState(PlanState *planstate,

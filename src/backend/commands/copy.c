@@ -86,16 +86,6 @@ typedef enum EolType
 } EolType;
 
 /*
- * Represents the heap insert method to be used during COPY FROM.
- */
-typedef enum CopyInsertMethod
-{
-	CIM_SINGLE,					/* use table_tuple_insert or fdw routine */
-	CIM_MULTI,					/* always use table_multi_insert */
-	CIM_MULTI_CONDITIONAL		/* use table_multi_insert only if valid */
-} CopyInsertMethod;
-
-/*
  * This struct contains all the state variables used throughout a COPY
  * operation. For simplicity, we use the same struct for all variants of COPY,
  * even though some fields are used in only some cases.
@@ -128,11 +118,14 @@ typedef struct CopyStateData
 
 	/* parameters from the COPY command */
 	Relation	rel;			/* relation to copy to or from */
+	TupleDesc	tupDesc;		/* COPY TO will be used for manual tuple copying
+								  * into the destination */
 	QueryDesc  *queryDesc;		/* executable query to copy from */
 	List	   *attnumlist;		/* integer list of attnums to copy */
 	char	   *filename;		/* filename, or NULL for STDIN/STDOUT */
 	bool		is_program;		/* is 'filename' a program to popen? */
 	copy_data_source_cb data_source_cb; /* function for reading data */
+	copy_data_dest_cb data_dest_cb;	/* function for writing data */
 	bool		binary;			/* binary format? */
 	bool		freeze;			/* freeze rows on loading? */
 	bool		csv_mode;		/* Comma Separated Value format? */
@@ -359,17 +352,12 @@ static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
 
 /* non-export function prototypes */
 static CopyState BeginCopy(ParseState *pstate, bool is_from, Relation rel,
-						   RawStmt *raw_query, Oid queryRelId, List *attnamelist,
-						   List *options);
+						   TupleDesc srcTupDesc, RawStmt *raw_query,
+						   Oid queryRelId, List *attnamelist, List *options);
 static void EndCopy(CopyState cstate);
 static void ClosePipeToProgram(CopyState cstate);
-static CopyState BeginCopyTo(ParseState *pstate, Relation rel, RawStmt *query,
-							 Oid queryRelId, const char *filename, bool is_program,
-							 List *attnamelist, List *options);
-static void EndCopyTo(CopyState cstate);
 static uint64 DoCopyTo(CopyState cstate);
 static uint64 CopyTo(CopyState cstate);
-static void CopyOneRowTo(CopyState cstate, TupleTableSlot *slot);
 static bool CopyReadLine(CopyState cstate);
 static bool CopyReadLineText(CopyState cstate);
 static int	CopyReadAttributesText(CopyState cstate);
@@ -595,7 +583,8 @@ CopySendEndOfRow(CopyState cstate)
 			(void) pq_putmessage('d', fe_msgbuf->data, fe_msgbuf->len);
 			break;
 		case COPY_CALLBACK:
-			Assert(false);		/* Not yet supported. */
+			CopySendChar(cstate, '\n');
+			cstate->data_dest_cb(fe_msgbuf->data, fe_msgbuf->len);
 			break;
 	}
 
@@ -1124,8 +1113,8 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 	}
 	else
 	{
-		cstate = BeginCopyTo(pstate, rel, query, relid,
-							 stmt->filename, stmt->is_program,
+		cstate = BeginCopyTo(pstate, rel, NULL, query, relid,
+							 stmt->filename, stmt->is_program, NULL,
 							 stmt->attlist, stmt->options);
 		*processed = DoCopyTo(cstate);	/* copy from database to file */
 		EndCopyTo(cstate);
@@ -1507,6 +1496,7 @@ static CopyState
 BeginCopy(ParseState *pstate,
 		  bool is_from,
 		  Relation rel,
+		  TupleDesc srcTupDesc,
 		  RawStmt *raw_query,
 		  Oid queryRelId,
 		  List *attnamelist,
@@ -1541,6 +1531,11 @@ BeginCopy(ParseState *pstate,
 		cstate->rel = rel;
 
 		tupDesc = RelationGetDescr(cstate->rel);
+	}
+	else if (srcTupDesc)
+	{
+		Assert(!raw_query && !is_from);
+		tupDesc = cstate->tupDesc = srcTupDesc;
 	}
 	else
 	{
@@ -1868,19 +1863,24 @@ EndCopy(CopyState cstate)
 /*
  * Setup CopyState to read tuples from a table or a query for COPY TO.
  */
-static CopyState
+CopyState
 BeginCopyTo(ParseState *pstate,
 			Relation rel,
+			TupleDesc tupDesc,
 			RawStmt *query,
 			Oid queryRelId,
 			const char *filename,
 			bool is_program,
+			copy_data_dest_cb data_dest_cb,
 			List *attnamelist,
 			List *options)
 {
 	CopyState	cstate;
-	bool		pipe = (filename == NULL);
+	bool		pipe = (filename == NULL) && (data_dest_cb == NULL);
 	MemoryContext oldcontext;
+
+	/* Impossible to mix CopyTo modes */
+	Assert(rel == NULL || tupDesc == NULL);
 
 	if (rel != NULL && rel->rd_rel->relkind != RELKIND_RELATION)
 	{
@@ -1920,8 +1920,9 @@ BeginCopyTo(ParseState *pstate,
 							RelationGetRelationName(rel))));
 	}
 
-	cstate = BeginCopy(pstate, false, rel, query, queryRelId, attnamelist,
-					   options);
+	cstate = BeginCopy(pstate, false, rel, tupDesc, query, queryRelId,
+					   attnamelist, options);
+
 	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
 
 	if (pipe)
@@ -1929,6 +1930,11 @@ BeginCopyTo(ParseState *pstate,
 		Assert(!is_program);	/* the grammar does not allow this */
 		if (whereToSendOutput != DestRemote)
 			cstate->copy_file = stdout;
+	}
+	else if (data_dest_cb)
+	{
+		cstate->copy_dest = COPY_CALLBACK;
+		cstate->data_dest_cb = data_dest_cb;
 	}
 	else
 	{
@@ -2016,7 +2022,9 @@ DoCopyTo(CopyState cstate)
 		if (fe_copy)
 			SendCopyBegin(cstate);
 
+		CopyToStart(cstate);
 		processed = CopyTo(cstate);
+		CopyToFinish(cstate);
 
 		if (fe_copy)
 			SendCopyEnd(cstate);
@@ -2039,7 +2047,7 @@ DoCopyTo(CopyState cstate)
 /*
  * Clean up storage and release resources for COPY TO.
  */
-static void
+void
 EndCopyTo(CopyState cstate)
 {
 	if (cstate->queryDesc != NULL)
@@ -2055,19 +2063,22 @@ EndCopyTo(CopyState cstate)
 	EndCopy(cstate);
 }
 
-/*
- * Copy from relation or query TO file.
+/* Start COPY TO operation.
+ * Separated to the routine to prevent duplicate operations in the case of
+ * manual mode, where tuples are copied to the destination one by one, by call of
+ * the CopyOneRowTo() routine.
  */
-static uint64
-CopyTo(CopyState cstate)
+void
+CopyToStart(CopyState cstate)
 {
 	TupleDesc	tupDesc;
 	int			num_phys_attrs;
 	ListCell   *cur;
-	uint64		processed;
 
 	if (cstate->rel)
 		tupDesc = RelationGetDescr(cstate->rel);
+	else if (cstate->tupDesc)
+		tupDesc = cstate->tupDesc;
 	else
 		tupDesc = cstate->queryDesc->tupDesc;
 	num_phys_attrs = tupDesc->natts;
@@ -2154,6 +2165,32 @@ CopyTo(CopyState cstate)
 			CopySendEndOfRow(cstate);
 		}
 	}
+}
+
+/*
+ * Finish COPY TO operation.
+ */
+void
+CopyToFinish(CopyState cstate)
+{
+	if (cstate->binary)
+	{
+		/* Generate trailer for a binary copy */
+		CopySendInt16(cstate, -1);
+		/* Need to flush out the trailer */
+		CopySendEndOfRow(cstate);
+	}
+
+	MemoryContextDelete(cstate->rowcontext);
+}
+
+/*
+ * Copy from relation or query TO file.
+ */
+static uint64
+CopyTo(CopyState cstate)
+{
+	uint64		processed;
 
 	if (cstate->rel)
 	{
@@ -2185,24 +2222,13 @@ CopyTo(CopyState cstate)
 		ExecutorRun(cstate->queryDesc, ForwardScanDirection, 0L, true);
 		processed = ((DR_copy *) cstate->queryDesc->dest)->processed;
 	}
-
-	if (cstate->binary)
-	{
-		/* Generate trailer for a binary copy */
-		CopySendInt16(cstate, -1);
-		/* Need to flush out the trailer */
-		CopySendEndOfRow(cstate);
-	}
-
-	MemoryContextDelete(cstate->rowcontext);
-
 	return processed;
 }
 
 /*
  * Emit one row during CopyTo().
  */
-static void
+void
 CopyOneRowTo(CopyState cstate, TupleTableSlot *slot)
 {
 	bool		need_delim = false;
@@ -2495,53 +2521,64 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 	cstate->line_buf_valid = false;
 	save_cur_lineno = cstate->cur_lineno;
 
-	/*
-	 * table_multi_insert may leak memory, so switch to short-lived memory
-	 * context before calling it.
-	 */
-	oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-	table_multi_insert(resultRelInfo->ri_RelationDesc,
-					   slots,
-					   nused,
-					   mycid,
-					   ti_options,
-					   buffer->bistate);
-	MemoryContextSwitchTo(oldcontext);
-
-	for (i = 0; i < nused; i++)
+	if (resultRelInfo->ri_RelationDesc->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+	{
+		/* Flush into foreign table or partition */
+		resultRelInfo->ri_FdwRoutine->ExecForeignCopy(resultRelInfo,
+														slots,
+														nused);
+	}
+	else
 	{
 		/*
-		 * If there are any indexes, update them for all the inserted tuples,
-		 * and run AFTER ROW INSERT triggers.
+		 * table_multi_insert may leak memory, so switch to short-lived memory
+		 * context before calling it.
 		 */
-		if (resultRelInfo->ri_NumIndices > 0)
+		oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+
+		table_multi_insert(resultRelInfo->ri_RelationDesc,
+						   slots,
+						   nused,
+						   mycid,
+						   ti_options,
+						   buffer->bistate);
+		MemoryContextSwitchTo(oldcontext);
+
+		for (i = 0; i < nused; i++)
 		{
-			List	   *recheckIndexes;
+			/*
+			 * If there are any indexes, update them for all the inserted tuples,
+			 * and run AFTER ROW INSERT triggers.
+			 */
+			if (resultRelInfo->ri_NumIndices > 0)
+			{
+				List	   *recheckIndexes;
 
-			cstate->cur_lineno = buffer->linenos[i];
-			recheckIndexes =
-				ExecInsertIndexTuples(buffer->slots[i], estate, false, NULL,
-									  NIL);
-			ExecARInsertTriggers(estate, resultRelInfo,
-								 slots[i], recheckIndexes,
-								 cstate->transition_capture);
-			list_free(recheckIndexes);
+				cstate->cur_lineno = buffer->linenos[i];
+				recheckIndexes =
+					ExecInsertIndexTuples(buffer->slots[i], estate, false, NULL,
+										  NIL);
+				ExecARInsertTriggers(estate, resultRelInfo,
+									 slots[i], recheckIndexes,
+									 cstate->transition_capture);
+				list_free(recheckIndexes);
+			}
+
+			/*
+			 * There's no indexes, but see if we need to run AFTER ROW INSERT
+			 * triggers anyway.
+			 */
+			else if (resultRelInfo->ri_TrigDesc != NULL &&
+					 (resultRelInfo->ri_TrigDesc->trig_insert_after_row ||
+					  resultRelInfo->ri_TrigDesc->trig_insert_new_table))
+			{
+				cstate->cur_lineno = buffer->linenos[i];
+				ExecARInsertTriggers(estate, resultRelInfo,
+									 slots[i], NIL, cstate->transition_capture);
+			}
+
+			ExecClearTuple(slots[i]);
 		}
-
-		/*
-		 * There's no indexes, but see if we need to run AFTER ROW INSERT
-		 * triggers anyway.
-		 */
-		else if (resultRelInfo->ri_TrigDesc != NULL &&
-				 (resultRelInfo->ri_TrigDesc->trig_insert_after_row ||
-				  resultRelInfo->ri_TrigDesc->trig_insert_new_table))
-		{
-			cstate->cur_lineno = buffer->linenos[i];
-			ExecARInsertTriggers(estate, resultRelInfo,
-								 slots[i], NIL, cstate->transition_capture);
-		}
-
-		ExecClearTuple(slots[i]);
 	}
 
 	/* Mark that all slots are free */
@@ -2715,12 +2752,10 @@ CopyFrom(CopyState cstate)
 	CommandId	mycid = GetCurrentCommandId(true);
 	int			ti_options = 0; /* start with default options for insert */
 	BulkInsertState bistate = NULL;
-	CopyInsertMethod insertMethod;
 	CopyMultiInsertInfo multiInsertInfo = {0};	/* pacify compiler */
 	uint64		processed = 0;
 	bool		has_before_insert_row_trig;
 	bool		has_instead_insert_row_trig;
-	bool		leafpart_use_multi_insert = false;
 
 	Assert(cstate->rel);
 
@@ -2833,6 +2868,33 @@ CopyFrom(CopyState cstate)
 					  0);
 	target_resultRelInfo = resultRelInfo;
 
+	Assert(target_resultRelInfo->ri_usesMultiInsert == false);
+
+	/*
+	 * It's generally more efficient to prepare a bunch of tuples for
+	 * insertion, and insert them in bulk, for example, with one
+	 * table_multi_insert() call than call table_tuple_insert() separately for
+	 * every tuple. However, there are a number of reasons why we might not be
+	 * able to do this.  For example, if there any volatile expressions in the
+	 * table's default values or in the statement's WHERE clause, which may
+	 * query the table we are inserting into, buffering tuples might produce
+	 * wrong results.  Also, the relation we are trying to insert into itself
+	 * may not be amenable to buffered inserts.
+	 *
+	 * Note: For partitions, this flag is set considering the target table's
+	 * flag that is being set here and partition's own properties which are
+	 * checked by calling ExecRelationAllowsMultiInsert().  It does not matter
+	 * whether partitions have any volatile default expressions as we use the
+	 * defaults from the target of the COPY command.
+	 * Also, the COPY command requires a non-zero input list of attributes.
+	 * Therefore, the length of the attribute list is checked here.
+	 */
+	if (!cstate->volatile_defexprs &&
+		list_length(cstate->attnumlist) > 0 &&
+		!contain_volatile_functions(cstate->whereClause) &&
+		ExecRelationAllowsMultiInsert(target_resultRelInfo, NULL))
+		target_resultRelInfo->ri_usesMultiInsert = true;
+
 	/* Verify the named relation is a valid target for INSERT */
 	CheckValidResultRel(resultRelInfo, CMD_INSERT);
 
@@ -2854,10 +2916,19 @@ CopyFrom(CopyState cstate)
 	mtstate->operation = CMD_INSERT;
 	mtstate->resultRelInfo = estate->es_result_relations;
 
-	if (resultRelInfo->ri_FdwRoutine != NULL &&
-		resultRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
-		resultRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate,
-														 resultRelInfo);
+	/*
+	 * Init COPY into foreign table. Initialization of copying into foreign
+-	 * partitions will be done later.
+	 */
+	if (target_resultRelInfo->ri_FdwRoutine != NULL)
+	{
+		if (target_resultRelInfo->ri_usesMultiInsert)
+			target_resultRelInfo->ri_FdwRoutine->BeginForeignCopy(mtstate,
+																  resultRelInfo);
+		else if (target_resultRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
+			target_resultRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate,
+																	resultRelInfo);
+	}
 
 	/* Prepare to catch AFTER triggers. */
 	AfterTriggerBeginQuery();
@@ -2886,83 +2957,9 @@ CopyFrom(CopyState cstate)
 		cstate->qualexpr = ExecInitQual(castNode(List, cstate->whereClause),
 										&mtstate->ps);
 
-	/*
-	 * It's generally more efficient to prepare a bunch of tuples for
-	 * insertion, and insert them in one table_multi_insert() call, than call
-	 * table_tuple_insert() separately for every tuple. However, there are a
-	 * number of reasons why we might not be able to do this.  These are
-	 * explained below.
-	 */
-	if (resultRelInfo->ri_TrigDesc != NULL &&
-		(resultRelInfo->ri_TrigDesc->trig_insert_before_row ||
-		 resultRelInfo->ri_TrigDesc->trig_insert_instead_row))
-	{
-		/*
-		 * Can't support multi-inserts when there are any BEFORE/INSTEAD OF
-		 * triggers on the table. Such triggers might query the table we're
-		 * inserting into and act differently if the tuples that have already
-		 * been processed and prepared for insertion are not there.
-		 */
-		insertMethod = CIM_SINGLE;
-	}
-	else if (proute != NULL && resultRelInfo->ri_TrigDesc != NULL &&
-			 resultRelInfo->ri_TrigDesc->trig_insert_new_table)
-	{
-		/*
-		 * For partitioned tables we can't support multi-inserts when there
-		 * are any statement level insert triggers. It might be possible to
-		 * allow partitioned tables with such triggers in the future, but for
-		 * now, CopyMultiInsertInfoFlush expects that any before row insert
-		 * and statement level insert triggers are on the same relation.
-		 */
-		insertMethod = CIM_SINGLE;
-	}
-	else if (resultRelInfo->ri_FdwRoutine != NULL ||
-			 cstate->volatile_defexprs)
-	{
-		/*
-		 * Can't support multi-inserts to foreign tables or if there are any
-		 * volatile default expressions in the table.  Similarly to the
-		 * trigger case above, such expressions may query the table we're
-		 * inserting into.
-		 *
-		 * Note: It does not matter if any partitions have any volatile
-		 * default expressions as we use the defaults from the target of the
-		 * COPY command.
-		 */
-		insertMethod = CIM_SINGLE;
-	}
-	else if (contain_volatile_functions(cstate->whereClause))
-	{
-		/*
-		 * Can't support multi-inserts if there are any volatile function
-		 * expressions in WHERE clause.  Similarly to the trigger case above,
-		 * such expressions may query the table we're inserting into.
-		 */
-		insertMethod = CIM_SINGLE;
-	}
-	else
-	{
-		/*
-		 * For partitioned tables, we may still be able to perform bulk
-		 * inserts.  However, the possibility of this depends on which types
-		 * of triggers exist on the partition.  We must disable bulk inserts
-		 * if the partition is a foreign table or it has any before row insert
-		 * or insert instead triggers (same as we checked above for the parent
-		 * table).  Since the partition's resultRelInfos are initialized only
-		 * when we actually need to insert the first tuple into them, we must
-		 * have the intermediate insert method of CIM_MULTI_CONDITIONAL to
-		 * flag that we must later determine if we can use bulk-inserts for
-		 * the partition being inserted into.
-		 */
-		if (proute)
-			insertMethod = CIM_MULTI_CONDITIONAL;
-		else
-			insertMethod = CIM_MULTI;
-
+	if (resultRelInfo->ri_usesMultiInsert)
 		CopyMultiInsertInfoInit(&multiInsertInfo, resultRelInfo, cstate,
 								estate, mycid, ti_options);
-	}
 
 	/*
 	 * If not using batch mode (which allocates slots as needed) set up a
@@ -2970,7 +2967,7 @@ CopyFrom(CopyState cstate)
 	 * one, even if we might batch insert, to read the tuple in the root
 	 * partition's form.
 	 */
-	if (insertMethod == CIM_SINGLE || insertMethod == CIM_MULTI_CONDITIONAL)
+	if (!resultRelInfo->ri_usesMultiInsert || proute)
 	{
 		singleslot = table_slot_create(resultRelInfo->ri_RelationDesc,
 									   &estate->es_tupleTable);
@@ -3013,7 +3010,7 @@ CopyFrom(CopyState cstate)
 		ResetPerTupleExprContext(estate);
 
 		/* select slot to (initially) load row into */
-		if (insertMethod == CIM_SINGLE || proute)
+		if (!target_resultRelInfo->ri_usesMultiInsert || proute)
 		{
 			myslot = singleslot;
 			Assert(myslot != NULL);
@@ -3021,7 +3018,6 @@ CopyFrom(CopyState cstate)
 		else
 		{
 			Assert(resultRelInfo == target_resultRelInfo);
-			Assert(insertMethod == CIM_MULTI);
 
 			myslot = CopyMultiInsertInfoNextFreeSlot(&multiInsertInfo,
 													 resultRelInfo);
@@ -3080,24 +3076,14 @@ CopyFrom(CopyState cstate)
 				has_instead_insert_row_trig = (resultRelInfo->ri_TrigDesc &&
 											   resultRelInfo->ri_TrigDesc->trig_insert_instead_row);
 
-				/*
-				 * Disable multi-inserts when the partition has BEFORE/INSTEAD
-				 * OF triggers, or if the partition is a foreign partition.
-				 */
-				leafpart_use_multi_insert = insertMethod == CIM_MULTI_CONDITIONAL &&
-					!has_before_insert_row_trig &&
-					!has_instead_insert_row_trig &&
-					resultRelInfo->ri_FdwRoutine == NULL;
-
 				/* Set the multi-insert buffer to use for this partition. */
-				if (leafpart_use_multi_insert)
+				if (resultRelInfo->ri_usesMultiInsert)
 				{
 					if (resultRelInfo->ri_CopyMultiInsertBuffer == NULL)
 						CopyMultiInsertInfoSetupBuffer(&multiInsertInfo,
 													   resultRelInfo);
 				}
-				else if (insertMethod == CIM_MULTI_CONDITIONAL &&
-						 !CopyMultiInsertInfoIsEmpty(&multiInsertInfo))
+				else if (!CopyMultiInsertInfoIsEmpty(&multiInsertInfo))
 				{
 					/*
 					 * Flush pending inserts if this partition can't use
@@ -3149,7 +3135,7 @@ CopyFrom(CopyState cstate)
 			 * rowtype.
 			 */
 			map = resultRelInfo->ri_PartitionInfo->pi_RootToPartitionMap;
-			if (insertMethod == CIM_SINGLE || !leafpart_use_multi_insert)
+			if (!resultRelInfo->ri_usesMultiInsert)
 			{
 				/* non batch insert */
 				if (map != NULL)
@@ -3167,9 +3153,6 @@ CopyFrom(CopyState cstate)
 				 * current partition.
 				 */
 				TupleTableSlot *batchslot;
-
-				/* no other path available for partitioned table */
-				Assert(insertMethod == CIM_MULTI_CONDITIONAL);
 
 				batchslot = CopyMultiInsertInfoNextFreeSlot(&multiInsertInfo,
 															resultRelInfo);
@@ -3241,7 +3224,7 @@ CopyFrom(CopyState cstate)
 					ExecPartitionCheck(resultRelInfo, myslot, estate, true);
 
 				/* Store the slot in the multi-insert buffer, when enabled. */
-				if (insertMethod == CIM_MULTI || leafpart_use_multi_insert)
+				if (resultRelInfo->ri_usesMultiInsert)
 				{
 					/*
 					 * The slot previously might point into the per-tuple
@@ -3316,11 +3299,8 @@ CopyFrom(CopyState cstate)
 	}
 
 	/* Flush any remaining buffered tuples */
-	if (insertMethod != CIM_SINGLE)
-	{
-		if (!CopyMultiInsertInfoIsEmpty(&multiInsertInfo))
-			CopyMultiInsertInfoFlush(&multiInsertInfo, NULL);
-	}
+	if (!CopyMultiInsertInfoIsEmpty(&multiInsertInfo))
+		CopyMultiInsertInfoFlush(&multiInsertInfo, NULL);
 
 	/* Done, clean up */
 	error_context_stack = errcallback.previous;
@@ -3346,14 +3326,19 @@ CopyFrom(CopyState cstate)
 	ExecResetTupleTable(estate->es_tupleTable, false);
 
 	/* Allow the FDW to shut down */
-	if (target_resultRelInfo->ri_FdwRoutine != NULL &&
-		target_resultRelInfo->ri_FdwRoutine->EndForeignInsert != NULL)
-		target_resultRelInfo->ri_FdwRoutine->EndForeignInsert(estate,
-															  target_resultRelInfo);
+	if (target_resultRelInfo->ri_FdwRoutine != NULL)
+	{
+		if (target_resultRelInfo->ri_usesMultiInsert &&
+			target_resultRelInfo->ri_FdwRoutine->EndForeignCopy != NULL)
+			target_resultRelInfo->ri_FdwRoutine->EndForeignCopy(estate,
+ 														target_resultRelInfo);
+		else if (target_resultRelInfo->ri_FdwRoutine->EndForeignInsert != NULL)
+			target_resultRelInfo->ri_FdwRoutine->EndForeignInsert(estate,
+														target_resultRelInfo);
+	}
 
 	/* Tear down the multi-insert buffer data */
-	if (insertMethod != CIM_SINGLE)
-		CopyMultiInsertInfoCleanup(&multiInsertInfo);
+	CopyMultiInsertInfoCleanup(&multiInsertInfo);
 
 	ExecCloseIndices(target_resultRelInfo);
 
@@ -3402,7 +3387,8 @@ BeginCopyFrom(ParseState *pstate,
 	MemoryContext oldcontext;
 	bool		volatile_defexprs;
 
-	cstate = BeginCopy(pstate, true, rel, NULL, InvalidOid, attnamelist, options);
+	cstate = BeginCopy(pstate, true, rel, NULL, NULL, InvalidOid, attnamelist,
+																	options);
 	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
 
 	/* Initialize state variables */

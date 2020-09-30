@@ -486,7 +486,14 @@ typedef struct ResultRelInfo
 	/* info for partition tuple routing (NULL if not set up yet) */
 	struct PartitionRoutingInfo *ri_PartitionInfo;
 
-	/* for use by copy.c when performing multi-inserts */
+	/*
+	 * The following fields are currently only relevant to copy.c.
+	 *
+	 * True if okay to use multi-insert on this relation
+	 */
+	bool ri_usesMultiInsert;
+
+	/* Buffer allocated to this relation when using multi-insert mode */
 	struct CopyMultiInsertBuffer *ri_CopyMultiInsertBuffer;
 } ResultRelInfo;
 

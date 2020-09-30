@@ -190,6 +190,8 @@ extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 							  Index resultRelationIndex,
 							  Relation partition_root,
 							  int instrument_options);
+extern bool ExecRelationAllowsMultiInsert(const ResultRelInfo *rri,
+							  const ResultRelInfo *partition_root);
 extern ResultRelInfo *ExecGetTriggerResultRel(EState *estate, Oid relid);
 extern void ExecCleanUpTriggerState(EState *estate);
 extern void ExecConstraints(ResultRelInfo *resultRelInfo,

@@ -2251,8 +2251,8 @@ _copyOnConflictExpr(const OnConflictExpr *from)
 /* ****************************************************************
  *						pathnodes.h copy functions
  *
- * We don't support copying RelOptInfo, IndexOptInfo, or Path nodes.
- * There are some subsidiary structs that are useful to copy, though.
+ * We don't support copying RelOptInfo, IndexOptInfo, RelAggInfo or Path
+ * nodes.  There are some subsidiary structs that are useful to copy, though.
  * ****************************************************************
  */
 
@@ -2391,6 +2391,19 @@ _copyPlaceHolderInfo(const PlaceHolderInfo *from)
 	COPY_BITMAPSET_FIELD(ph_lateral);
 	COPY_BITMAPSET_FIELD(ph_needed);
 	COPY_SCALAR_FIELD(ph_width);
+
+	return newnode;
+}
+
+static GroupedVarInfo *
+_copyGroupedVarInfo(const GroupedVarInfo *from)
+{
+	GroupedVarInfo *newnode = makeNode(GroupedVarInfo);
+
+	COPY_NODE_FIELD(gvexpr);
+	COPY_NODE_FIELD(agg_partial);
+	COPY_SCALAR_FIELD(sortgroupref);
+	COPY_SCALAR_FIELD(gv_eval_at);
 
 	return newnode;
 }
@@ -5165,6 +5178,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_PlaceHolderInfo:
 			retval = _copyPlaceHolderInfo(from);
+			break;
+		case T_GroupedVarInfo:
+			retval = _copyGroupedVarInfo(from);
 			break;
 
 			/*

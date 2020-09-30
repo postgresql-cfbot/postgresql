@@ -176,30 +176,18 @@ libpqProcessFileList(void)
 	/*
 	 * Create a recursive directory listing of the whole data directory.
 	 *
-	 * The WITH RECURSIVE part does most of the work. The second part gets the
-	 * targets of the symlinks in pg_tblspc directory.
+	 * Join to pg_tablespace to get the targets of the symlinks in
+	 * pg_tblspc directory.
 	 *
 	 * XXX: There is no backend function to get a symbolic link's target in
 	 * general, so if the admin has put any custom symbolic links in the data
 	 * directory, they won't be copied correctly.
 	 */
 	sql =
-		"WITH RECURSIVE files (path, filename, size, isdir) AS (\n"
-		"  SELECT '' AS path, filename, size, isdir FROM\n"
-		"  (SELECT pg_ls_dir('.', true, false) AS filename) AS fn,\n"
-		"        pg_stat_file(fn.filename, true) AS this\n"
-		"  UNION ALL\n"
-		"  SELECT parent.path || parent.filename || '/' AS path,\n"
-		"         fn, this.size, this.isdir\n"
-		"  FROM files AS parent,\n"
-		"       pg_ls_dir(parent.path || parent.filename, true, false) AS fn,\n"
-		"       pg_stat_file(parent.path || parent.filename || '/' || fn, true) AS this\n"
-		"       WHERE parent.isdir = 't'\n"
-		")\n"
-		"SELECT path || filename, size, isdir,\n"
+		"SELECT COALESCE(NULLIF(path,'.')||'/','')||filename, size, type='d' AS isdir,\n"
 		"       pg_tablespace_location(pg_tablespace.oid) AS link_target\n"
-		"FROM files\n"
-		"LEFT OUTER JOIN pg_tablespace ON files.path = 'pg_tblspc/'\n"
+		"FROM pg_ls_dir_recurse('.') files\n"
+		"LEFT OUTER JOIN pg_tablespace ON files.path = 'pg_tblspc'\n"
 		"                             AND oid::text = files.filename\n";
 	res = PQexec(conn, sql);
 

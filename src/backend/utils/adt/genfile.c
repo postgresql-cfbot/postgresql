@@ -36,6 +36,27 @@
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
 
+static char get_file_type(mode_t mode, const char *path);
+static void tuple_from_stat(struct stat *fst, const char *path, Datum *values,
+		bool *isnull);
+static Datum pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, int flags);
+
+#define	LS_DIR_TYPE				(1<<0) /* Show column: type */
+#define	LS_DIR_METADATA				(1<<1) /* Show columns: mtime, size */
+#define	LS_DIR_MISSING_OK			(1<<2) /* Ignore ENOENT if the toplevel dir is missing */
+#define	LS_DIR_SKIP_DOT_DIRS		(1<<3) /* Do not show . or .. */
+#define	LS_DIR_SKIP_HIDDEN			(1<<4) /* Do not show anything begining with . */
+#define	LS_DIR_SKIP_DIRS			(1<<5) /* Do not show directories */
+#define	LS_DIR_SKIP_SPECIAL			(1<<6) /* Do not show special file types */
+
+/*
+ * Shortcut for the historic behavior of the pg_ls_* functions (not including
+ * pg_ls_dir, which skips different files and doesn't show metadata.
+ */
+#define LS_DIR_HISTORIC				(LS_DIR_SKIP_DIRS|LS_DIR_SKIP_HIDDEN|LS_DIR_SKIP_SPECIAL|LS_DIR_METADATA)
+
+/* Shortcut for common behavior */
+#define LS_DIR_COMMON				(LS_DIR_SKIP_HIDDEN|LS_DIR_METADATA)
 
 /*
  * Convert a "text" filename argument to C string, and check it's allowable.
@@ -385,6 +406,65 @@ pg_read_binary_file_all(PG_FUNCTION_ARGS)
 	return pg_read_binary_file(fcinfo);
 }
 
+/* Return a character indicating the type of file, or '?' if unknown type */
+static char
+get_file_type(mode_t mode, const char *path)
+{
+	if (S_ISREG(mode))
+		return '-';
+
+	if (S_ISDIR(mode))
+		return 'd';
+#ifndef WIN32
+	if (S_ISLNK(mode))
+		return 'l';
+#else
+	if (pgwin32_is_junction(path))
+		return 'l';
+#endif
+
+#ifdef S_ISCHR
+	if (S_ISCHR(mode))
+		return 'c';
+#endif
+#ifdef S_ISBLK
+	if (S_ISBLK(mode))
+		return 'b';
+#endif
+#ifdef S_ISFIFO
+	if (S_ISFIFO(mode))
+		return 'p';
+#endif
+#ifdef S_ISSOCK
+	if (S_ISSOCK(mode))
+		return 's';
+#endif
+
+	return '?';
+}
+
+/*
+ * Populate values and isnull from fst and path.
+ * Used for pg_stat_file() and pg_stat_dir_files()
+ * isnull is assumed to have been zeroed.
+ */
+static void
+tuple_from_stat(struct stat *fst, const char *path, Datum *values, bool *isnull)
+{
+	values[0] = Int64GetDatum((int64) fst->st_size);
+	values[1] = TimestampTzGetDatum(time_t_to_timestamptz(fst->st_atime));
+	values[2] = TimestampTzGetDatum(time_t_to_timestamptz(fst->st_mtime));
+	/* Unix has file status change time, while Win32 has creation time */
+#if !defined(WIN32) && !defined(__CYGWIN__)
+	values[3] = TimestampTzGetDatum(time_t_to_timestamptz(fst->st_ctime));
+	isnull[4] = true;
+#else
+	isnull[3] = true;
+	values[4] = TimestampTzGetDatum(time_t_to_timestamptz(fst->st_ctime));
+#endif
+	values[5] = CharGetDatum(get_file_type(fst->st_mode, path));
+}
+
 /*
  * stat a file
  */
@@ -406,7 +486,7 @@ pg_stat_file(PG_FUNCTION_ARGS)
 
 	filename = convert_and_check_filename(filename_t);
 
-	if (stat(filename, &fst) < 0)
+	if (lstat(filename, &fst) < 0)
 	{
 		if (missing_ok && errno == ENOENT)
 			PG_RETURN_NULL();
@@ -432,24 +512,11 @@ pg_stat_file(PG_FUNCTION_ARGS)
 	TupleDescInitEntry(tupdesc, (AttrNumber) 5,
 					   "creation", TIMESTAMPTZOID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 6,
-					   "isdir", BOOLOID, -1, 0);
+					   "type", CHAROID, -1, 0);
 	BlessTupleDesc(tupdesc);
 
 	memset(isnull, false, sizeof(isnull));
-
-	values[0] = Int64GetDatum((int64) fst.st_size);
-	values[1] = TimestampTzGetDatum(time_t_to_timestamptz(fst.st_atime));
-	values[2] = TimestampTzGetDatum(time_t_to_timestamptz(fst.st_mtime));
-	/* Unix has file status change time, while Win32 has creation time */
-#if !defined(WIN32) && !defined(__CYGWIN__)
-	values[3] = TimestampTzGetDatum(time_t_to_timestamptz(fst.st_ctime));
-	isnull[4] = true;
-#else
-	isnull[3] = true;
-	values[4] = TimestampTzGetDatum(time_t_to_timestamptz(fst.st_ctime));
-#endif
-	values[5] = BoolGetDatum(S_ISDIR(fst.st_mode));
-
+	tuple_from_stat(&fst, filename, values, isnull);
 	tuple = heap_form_tuple(tupdesc, values, isnull);
 
 	pfree(filename);
@@ -476,79 +543,9 @@ pg_stat_file_1arg(PG_FUNCTION_ARGS)
 Datum
 pg_ls_dir(PG_FUNCTION_ARGS)
 {
-	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	char	   *location;
-	bool		missing_ok = false;
-	bool		include_dot_dirs = false;
-	bool		randomAccess;
-	TupleDesc	tupdesc;
-	Tuplestorestate *tupstore;
-	DIR		   *dirdesc;
-	struct dirent *de;
-	MemoryContext oldcontext;
-
-	location = convert_and_check_filename(PG_GETARG_TEXT_PP(0));
-
-	/* check the optional arguments */
-	if (PG_NARGS() == 3)
-	{
-		if (!PG_ARGISNULL(1))
-			missing_ok = PG_GETARG_BOOL(1);
-		if (!PG_ARGISNULL(2))
-			include_dot_dirs = PG_GETARG_BOOL(2);
-	}
-
-	/* check to see if caller supports us returning a tuplestore */
-	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("set-valued function called in context that cannot accept a set")));
-	if (!(rsinfo->allowedModes & SFRM_Materialize))
-		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("materialize mode required, but it is not allowed in this context")));
-
-	/* The tupdesc and tuplestore must be created in ecxt_per_query_memory */
-	oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
-
-	tupdesc = CreateTemplateTupleDesc(1);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "pg_ls_dir", TEXTOID, -1, 0);
-
-	randomAccess = (rsinfo->allowedModes & SFRM_Materialize_Random) != 0;
-	tupstore = tuplestore_begin_heap(randomAccess, false, work_mem);
-	rsinfo->returnMode = SFRM_Materialize;
-	rsinfo->setResult = tupstore;
-	rsinfo->setDesc = tupdesc;
-
-	MemoryContextSwitchTo(oldcontext);
-
-	dirdesc = AllocateDir(location);
-	if (!dirdesc)
-	{
-		/* Return empty tuplestore if appropriate */
-		if (missing_ok && errno == ENOENT)
-			return (Datum) 0;
-		/* Otherwise, we can let ReadDir() throw the error */
-	}
-
-	while ((de = ReadDir(dirdesc, location)) != NULL)
-	{
-		Datum		values[1];
-		bool		nulls[1];
-
-		if (!include_dot_dirs &&
-			(strcmp(de->d_name, ".") == 0 ||
-			 strcmp(de->d_name, "..") == 0))
-			continue;
-
-		values[0] = CStringGetTextDatum(de->d_name);
-		nulls[0] = false;
-
-		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
-	}
-
-	FreeDir(dirdesc);
-	return (Datum) 0;
+	text	*filename_t = PG_GETARG_TEXT_PP(0);
+	char	*filename = convert_and_check_filename(filename_t);
+	return pg_ls_dir_files(fcinfo, filename, LS_DIR_SKIP_DOT_DIRS);
 }
 
 /*
@@ -561,17 +558,19 @@ pg_ls_dir(PG_FUNCTION_ARGS)
 Datum
 pg_ls_dir_1arg(PG_FUNCTION_ARGS)
 {
-	return pg_ls_dir(fcinfo);
+	text	*filename_t = PG_GETARG_TEXT_PP(0);
+	char	*filename = convert_and_check_filename(filename_t);
+	return pg_ls_dir_files(fcinfo, filename, LS_DIR_SKIP_DOT_DIRS);
 }
 
 /*
- * Generic function to return a directory listing of files.
+ * Generic function to return a directory listing of files (and optionally dirs).
  *
  * If the directory isn't there, silently return an empty set if missing_ok.
  * Other unreadable-directory cases throw an error.
  */
 static Datum
-pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
+pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, int flags)
 {
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	bool		randomAccess;
@@ -580,6 +579,32 @@ pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
 	DIR		   *dirdesc;
 	struct dirent *de;
 	MemoryContext oldcontext;
+	TypeFuncClass	tuptype ;
+
+	/* type depends on metadata */
+	Assert(!(flags&LS_DIR_TYPE) || (flags&LS_DIR_METADATA));
+	/* Unreasonable to show type and skip dirs XXX */
+	Assert(!(flags&LS_DIR_TYPE) || !(flags&LS_DIR_SKIP_DIRS));
+
+	/* check the optional arguments */
+	if (PG_NARGS() == 3)
+	{
+		if (!PG_ARGISNULL(1))
+		{
+			if (PG_GETARG_BOOL(1))
+				flags |= LS_DIR_MISSING_OK;
+			else
+				flags &= ~LS_DIR_MISSING_OK;
+		}
+
+		if (!PG_ARGISNULL(2))
+		{
+			if (PG_GETARG_BOOL(2))
+				flags &= ~LS_DIR_SKIP_DOT_DIRS;
+			else
+				flags |= LS_DIR_SKIP_DOT_DIRS;
+		}
+	}
 
 	/* check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
@@ -594,8 +619,20 @@ pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
 	/* The tupdesc and tuplestore must be created in ecxt_per_query_memory */
 	oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
 
-	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
-		elog(ERROR, "return type must be a row type");
+	tuptype = get_call_result_type(fcinfo, NULL, &tupdesc);
+	if (flags & LS_DIR_METADATA)
+	{
+		if (tuptype != TYPEFUNC_COMPOSITE)
+			elog(ERROR, "return type must be a row type");
+	}
+	else
+	{
+		/* pg_ls_dir returns a simple scalar */
+		if (tuptype != TYPEFUNC_SCALAR)
+			elog(ERROR, "return type must be a scalar type");
+		tupdesc = CreateTemplateTupleDesc(1);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "column", TEXTOID, -1, 0);
+	}
 
 	randomAccess = (rsinfo->allowedModes & SFRM_Materialize_Random) != 0;
 	tupstore = tuplestore_begin_heap(randomAccess, false, work_mem);
@@ -614,25 +651,32 @@ pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
 	if (!dirdesc)
 	{
 		/* Return empty tuplestore if appropriate */
-		if (missing_ok && errno == ENOENT)
+		if (flags & LS_DIR_MISSING_OK && errno == ENOENT)
 			return (Datum) 0;
 		/* Otherwise, we can let ReadDir() throw the error */
 	}
 
 	while ((de = ReadDir(dirdesc, dir)) != NULL)
 	{
-		Datum		values[3];
-		bool		nulls[3];
+		Datum		values[7];
+		bool		nulls[7];
 		char		path[MAXPGPATH * 2];
 		struct stat attrib;
 
-		/* Skip hidden files */
-		if (de->d_name[0] == '.')
+		/* Skip dot dirs? */
+		if (flags & LS_DIR_SKIP_DOT_DIRS &&
+			(strcmp(de->d_name, ".") == 0 ||
+			 strcmp(de->d_name, "..") == 0))
+			continue;
+
+		/* Skip hidden files? */
+		if (flags & LS_DIR_SKIP_HIDDEN &&
+			de->d_name[0] == '.')
 			continue;
 
 		/* Get the file info */
 		snprintf(path, sizeof(path), "%s/%s", dir, de->d_name);
-		if (stat(path, &attrib) < 0)
+		if (lstat(path, &attrib) < 0)
 		{
 			/* Ignore concurrently-deleted files, else complain */
 			if (errno == ENOENT)
@@ -642,14 +686,22 @@ pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
 					 errmsg("could not stat file \"%s\": %m", path)));
 		}
 
-		/* Ignore anything but regular files */
-		if (!S_ISREG(attrib.st_mode))
-			continue;
+		/* Skip dirs or special files? */
+		if (S_ISDIR(attrib.st_mode))
+		{
+			if (flags & LS_DIR_SKIP_DIRS)
+				continue;
+		}
+		else if (!S_ISREG(attrib.st_mode))
+		{
+			if (flags & LS_DIR_SKIP_SPECIAL)
+				continue;
+		}
 
-		values[0] = CStringGetTextDatum(de->d_name);
-		values[1] = Int64GetDatum((int64) attrib.st_size);
-		values[2] = TimestampTzGetDatum(time_t_to_timestamptz(attrib.st_mtime));
 		memset(nulls, 0, sizeof(nulls));
+		values[0] = CStringGetTextDatum(de->d_name);
+		if (flags & LS_DIR_METADATA)
+			tuple_from_stat(&attrib, path, 1+values, 1+nulls);
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
@@ -662,14 +714,14 @@ pg_ls_dir_files(FunctionCallInfo fcinfo, const char *dir, bool missing_ok)
 Datum
 pg_ls_logdir(PG_FUNCTION_ARGS)
 {
-	return pg_ls_dir_files(fcinfo, Log_directory, false);
+	return pg_ls_dir_files(fcinfo, Log_directory, LS_DIR_COMMON | LS_DIR_MISSING_OK);
 }
 
 /* Function to return the list of files in the WAL directory */
 Datum
 pg_ls_waldir(PG_FUNCTION_ARGS)
 {
-	return pg_ls_dir_files(fcinfo, XLOGDIR, false);
+	return pg_ls_dir_files(fcinfo, XLOGDIR, LS_DIR_COMMON);
 }
 
 /*
@@ -687,7 +739,8 @@ pg_ls_tmpdir(FunctionCallInfo fcinfo, Oid tblspc)
 						tblspc)));
 
 	TempTablespacePath(path, tblspc);
-	return pg_ls_dir_files(fcinfo, path, true);
+	return pg_ls_dir_files(fcinfo, path,
+			LS_DIR_COMMON | LS_DIR_MISSING_OK);
 }
 
 /*
@@ -716,5 +769,33 @@ pg_ls_tmpdir_1arg(PG_FUNCTION_ARGS)
 Datum
 pg_ls_archive_statusdir(PG_FUNCTION_ARGS)
 {
-	return pg_ls_dir_files(fcinfo, XLOGDIR "/archive_status", true);
+	return pg_ls_dir_files(fcinfo, XLOGDIR "/archive_status",
+			LS_DIR_COMMON | LS_DIR_MISSING_OK);
+}
+
+/*
+ * Function to return the list of files and metadata in an arbitrary directory.
+ */
+Datum
+pg_ls_dir_metadata(PG_FUNCTION_ARGS)
+{
+	char	*dirname = convert_and_check_filename(PG_GETARG_TEXT_PP(0));
+
+	return pg_ls_dir_files(fcinfo, dirname,
+			LS_DIR_METADATA | LS_DIR_TYPE);
+}
+
+/*
+ * Function to return the list of files and metadata in an arbitrary directory.
+ * note: this wrapper is necessary to pass the sanity check in opr_sanity,
+ * which checks that all built-in functions that share the implementing C
+ * function take the same number of arguments.
+ */
+Datum
+pg_ls_dir_metadata_1arg(PG_FUNCTION_ARGS)
+{
+	char	*dirname = convert_and_check_filename(PG_GETARG_TEXT_PP(0));
+
+	return pg_ls_dir_files(fcinfo, dirname,
+			LS_DIR_METADATA | LS_DIR_TYPE);
 }

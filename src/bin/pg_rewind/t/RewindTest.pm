@@ -160,7 +160,12 @@ sub start_primary
 		GRANT EXECUTE ON function pg_catalog.pg_read_binary_file(text)
 		  TO rewind_user;
 		GRANT EXECUTE ON function pg_catalog.pg_read_binary_file(text, bigint, bigint, boolean)
-		  TO rewind_user;");
+		  TO rewind_user;
+		GRANT EXECUTE ON function pg_catalog.pg_ls_dir_metadata(text, bool, bool)
+		  TO rewind_user;
+		GRANT EXECUTE ON function pg_catalog.pg_ls_dir_recurse(text)
+		  TO rewind_user;
+		");
 
 	#### Now run the test-specific parts to initialize the primary before setting
 	# up standby

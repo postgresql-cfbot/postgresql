@@ -467,6 +467,8 @@ pgbench(
 		qr{command=98.: int 5432\b},                    # :random_seed
 		qr{command=99.: int -9223372036854775808\b},    # min int
 		qr{command=100.: int 9223372036854775807\b},    # max int
+		qr{command=101.: boolean false\b}, # var exists
+		qr{command=102.: boolean true\b},
 	],
 	'pgbench expressions',
 	{
@@ -594,6 +596,9 @@ SELECT :v0, :v1, :v2, :v3;
 -- minint constant parsing
 \set min debug(-9223372036854775808)
 \set max debug(-(:min + 1))
+-- test variable existence
+\set no debug(:{?no_such_variable})
+\set yes debug(:{?cs})
 }
 	});
 

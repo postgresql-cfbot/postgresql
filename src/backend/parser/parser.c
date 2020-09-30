@@ -26,7 +26,6 @@
 #include "parser/parser.h"
 #include "parser/scansup.h"
 
-static bool check_uescapechar(unsigned char escape);
 static char *str_udeescape(const char *str, char escape,
 						   int position, core_yyscan_t yyscanner);
 
@@ -276,44 +275,6 @@ base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner)
 	}
 
 	return cur_token;
-}
-
-/* convert hex digit (caller should have verified that) to value */
-static unsigned int
-hexval(unsigned char c)
-{
-	if (c >= '0' && c <= '9')
-		return c - '0';
-	if (c >= 'a' && c <= 'f')
-		return c - 'a' + 0xA;
-	if (c >= 'A' && c <= 'F')
-		return c - 'A' + 0xA;
-	elog(ERROR, "invalid hexadecimal digit");
-	return 0;					/* not reached */
-}
-
-/* is Unicode code point acceptable? */
-static void
-check_unicode_value(pg_wchar c)
-{
-	if (!is_valid_unicode_codepoint(c))
-		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("invalid Unicode escape value")));
-}
-
-/* is 'escape' acceptable as Unicode escape character (UESCAPE syntax) ? */
-static bool
-check_uescapechar(unsigned char escape)
-{
-	if (isxdigit(escape)
-		|| escape == '+'
-		|| escape == '\''
-		|| escape == '"'
-		|| scanner_isspace(escape))
-		return false;
-	else
-		return true;
 }
 
 /*

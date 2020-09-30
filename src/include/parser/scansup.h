@@ -15,6 +15,8 @@
 #ifndef SCANSUP_H
 #define SCANSUP_H
 
+#include "mb/pg_wchar.h"
+
 extern char *scanstr(const char *s);
 
 extern char *downcase_truncate_identifier(const char *ident, int len,
@@ -26,5 +28,11 @@ extern char *downcase_identifier(const char *ident, int len,
 extern void truncate_identifier(char *ident, int len, bool warn);
 
 extern bool scanner_isspace(char ch);
+
+extern unsigned int hexval(unsigned char c);
+
+extern void check_unicode_value(pg_wchar c);
+
+extern bool check_uescapechar(unsigned char escape);
 
 #endif							/* SCANSUP_H */

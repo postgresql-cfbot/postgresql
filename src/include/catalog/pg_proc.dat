@@ -10972,4 +10972,11 @@
   proname => 'is_normalized', prorettype => 'bool', proargtypes => 'text text',
   prosrc => 'unicode_is_normalized' },
 
+{ oid => '1136', descr => 'unescape Unicode chars in strings',
+  proname => 'unicode_unescape', prorettype => 'text', proargtypes => 'text text',
+  proisstrict => 'f', prosrc => 'unicode_uescape_with_escape_char' },
+
+{ oid => '1137', descr => 'unescape Unicode chars in strings',
+  proname => 'unicode_unescape', prorettype => 'text', proargtypes => 'text',
+  proisstrict => 't', prosrc => 'unicode_uescape' }
 ]

@@ -30,3 +30,16 @@ FROM
 ORDER BY num;
 
 SELECT is_normalized('abc', 'def');  -- run-time error
+
+SELECT unicode_unescape('\0441\043B\043E\043D');
+SELECT unicode_unescape('d!0061t!+000061', '!');
+SELECT unicode_unescape('d\u0061t\U00000061');
+
+-- run-time error
+SELECT unicode_unescape('wrong: \db99');
+SELECT unicode_unescape('wrong: \db99\0061');
+SELECT unicode_unescape('wrong: \+00db99\+000061');
+SELECT unicode_unescape('wrong: \+2FFFFF');
+SELECT unicode_unescape('wrong: \udb99\u0061');
+SELECT unicode_unescape('wrong: \U0000db99\U00000061');
+SELECT unicode_unescape('wrong: \U002FFFFF');

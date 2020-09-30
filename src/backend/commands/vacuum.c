@@ -829,6 +829,7 @@ expand_vacuum_rel(VacuumRelation *vrel, int options)
 				vacrels = lappend(vacrels, makeVacuumRelation(NULL,
 															  part_oid,
 															  vrel->va_cols));
+
 				MemoryContextSwitchTo(oldcontext);
 			}
 		}

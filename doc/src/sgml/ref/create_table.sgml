@@ -1322,8 +1322,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
     If a table parameter value is set and the
     equivalent <literal>toast.</literal> parameter is not, the TOAST table
     will use the table's parameter value.
-    Specifying these parameters for partitioned tables is not supported,
-    but you may specify them for individual leaf partitions.
    </para>
 
    <variablelist>

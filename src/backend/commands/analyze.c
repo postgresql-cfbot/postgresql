@@ -644,13 +644,11 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 	}
 
 	/*
-	 * Report ANALYZE to the stats collector, too.  However, if doing
-	 * inherited stats we shouldn't report, because the stats collector only
-	 * tracks per-table stats.  Reset the changes_since_analyze counter only
-	 * if we analyzed all columns; otherwise, there is still work for
-	 * auto-analyze to do.
+	 * Report ANALYZE to the stats collector, too.  Reset the
+	 * changes_since_analyze counter only if we analyzed all columns;
+	 * otherwise, there is still work for auto-analyze to do.
 	 */
-	if (!inh)
+	if (!inh || onerel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 		pgstat_report_analyze(onerel, totalrows, totaldeadrows,
 							  (va_cols == NIL));
 

@@ -117,6 +117,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	Relation	relation;
 	bool		hasindex;
 	List	   *indexinfos = NIL;
+	int			i;
 
 	/*
 	 * We need not lock the relation since it was already locked, either by
@@ -462,6 +463,15 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	 */
 	if (inhparent && relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 		set_relation_partition_info(root, rel, relation);
+
+	Assert(rel->notnullattrs == NULL);
+	for(i = 0; i < relation->rd_att->natts; i++)
+	{
+		FormData_pg_attribute attr = relation->rd_att->attrs[i];
+		if (attr.attnotnull)
+			rel->notnullattrs = bms_add_member(rel->notnullattrs,
+											   attr.attnum - FirstLowInvalidHeapAttributeNumber);
+	}
 
 	table_close(relation, NoLock);
 

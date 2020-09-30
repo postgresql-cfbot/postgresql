@@ -830,6 +830,16 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 		{
 			Node	   *qual = (Node *) lfirst(l);
 
+			/* Set the not null info now */
+			ListCell	*lc;
+			List		*non_nullable_vars = find_nonnullable_vars(qual);
+			foreach(lc, non_nullable_vars)
+			{
+				Var *var = lfirst_node(Var, lc);
+				RelOptInfo *rel = root->simple_rel_array[var->varno];
+				rel->notnullattrs = bms_add_member(rel->notnullattrs,
+												   var->varattno - FirstLowInvalidHeapAttributeNumber);
+			}
 			distribute_qual_to_rels(root, qual,
 									false, below_outer_join, JOIN_INNER,
 									root->qual_security_level,

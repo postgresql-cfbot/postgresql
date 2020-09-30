@@ -28,7 +28,7 @@ SELECT 'world' AS "text" \;
 COMMIT;
 
 -- compound with empty statements and spurious leading spacing
-\;\;   SELECT 3 + 3 \;\;\;   SELECT ' ' || ' !' \;\;   SELECT 1 + 4 \;;
+\;\;   SELECT 3 + 3 AS "+" \;\;\;   SELECT ' ' || ' !' AS "||" \;\;   SELECT 1 + 4 AS "+" \;;
 
 -- non ;-terminated statements
 SELECT 1 + 1 + 1 AS "add" \gset

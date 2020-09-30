@@ -1908,7 +1908,7 @@ build_reloptions(Datum reloptions, bool validate,
 	/* allocate and fill the structure */
 	rdopts = allocateReloptStruct(relopt_struct_size, options, numoptions);
 	fillRelOptions(rdopts, relopt_struct_size, options, numoptions,
-				   validate, relopt_elems, num_relopt_elems);
+				   false, relopt_elems, num_relopt_elems);
 
 	pfree(options);
 

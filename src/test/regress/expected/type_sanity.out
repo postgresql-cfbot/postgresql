@@ -67,13 +67,15 @@ WHERE p1.typtype not in ('c','d','p') AND p1.typname NOT LIKE E'\\_%'
     (SELECT 1 FROM pg_type as p2
      WHERE p2.typname = ('_' || p1.typname)::name AND
            p2.typelem = p1.oid and p1.typarray = p2.oid);
- oid  |     typname     
-------+-----------------
+ oid  |           typname            
+------+------------------------------
   194 | pg_node_tree
  3361 | pg_ndistinct
  3402 | pg_dependencies
  5017 | pg_mcv_list
-(4 rows)
+ 9034 | pg_brin_bloom_summary
+ 9039 | pg_brin_minmax_multi_summary
+(6 rows)
 
 -- Make sure typarray points to a varlena array type of our own base
 SELECT p1.oid, p1.typname as basetype, p2.typname as arraytype,

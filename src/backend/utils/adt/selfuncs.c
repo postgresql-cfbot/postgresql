@@ -98,6 +98,7 @@
 #include <math.h>
 
 #include "access/brin.h"
+#include "access/brin_internal.h"
 #include "access/brin_page.h"
 #include "access/gin.h"
 #include "access/table.h"
@@ -7350,7 +7351,8 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	double		minimalRanges;
 	double		estimatedRanges;
 	double		selec;
-	Relation	indexRel;
+	Relation	indexRel = NULL;
+	TupleDesc	tupdesc = NULL;
 	ListCell   *l;
 	VariableStatData vardata;
 
@@ -7372,6 +7374,7 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		 */
 		indexRel = index_open(index->indexoid, NoLock);
 		brinGetStats(indexRel, &statsData);
+		tupdesc = RelationGetDescr(indexRel);
 		index_close(indexRel, NoLock);
 
 		/* work out the actual number of ranges in the index */
@@ -7405,6 +7408,17 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	{
 		IndexClause *iclause = lfirst_node(IndexClause, l);
 		AttrNumber	attnum = index->indexkeys[iclause->indexcol];
+		FmgrInfo   *opcInfoFn;
+		BrinOpcInfo *opcInfo;
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, iclause->indexcol);
+		bool		ignore_correlation;
+
+		opcInfoFn = index_getprocinfo(indexRel, iclause->indexcol + 1, BRIN_PROCNUM_OPCINFO);
+
+		opcInfo = (BrinOpcInfo *)
+			DatumGetPointer(FunctionCall1(opcInfoFn, attr->atttypid));
+
+		ignore_correlation = opcInfo->oi_ignore_correlation;
 
 		/* attempt to lookup stats in relation for this index column */
 		if (attnum != 0)
@@ -7474,6 +7488,9 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 
 				if (sslot.nnumbers > 0)
 					varCorrelation = Abs(sslot.numbers[0]);
+
+				if (ignore_correlation)
+					varCorrelation = 1.0;
 
 				if (varCorrelation > *indexCorrelation)
 					*indexCorrelation = varCorrelation;

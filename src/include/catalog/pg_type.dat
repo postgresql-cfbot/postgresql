@@ -631,3 +631,17 @@
   typalign => 'd', typstorage => 'x' },
 
 ]
+
+{ oid => '9034', oid_symbol => 'BRINBLOOMSUMMARYOID',
+  descr => 'BRIN bloom summary',
+  typname => 'pg_brin_bloom_summary', typlen => '-1', typbyval => 'f', typcategory => 'S',
+  typinput => 'brin_bloom_summary_in', typoutput => 'brin_bloom_summary_out',
+  typreceive => 'brin_bloom_summary_recv', typsend => 'brin_bloom_summary_send',
+  typalign => 'i', typstorage => 'x', typcollation => 'default' },
+
+{ oid => '9039', oid_symbol => 'BRINMINMAXMULTISUMMARYOID',
+  descr => 'BRIN minmax-multi summary',
+  typname => 'pg_brin_minmax_multi_summary', typlen => '-1', typbyval => 'f', typcategory => 'S',
+  typinput => 'brin_minmax_multi_summary_in', typoutput => 'brin_minmax_multi_summary_out',
+  typreceive => 'brin_minmax_multi_summary_recv', typsend => 'brin_minmax_multi_summary_send',
+  typalign => 'i', typstorage => 'x', typcollation => 'default' },

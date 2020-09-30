@@ -1,0 +1,4 @@
+src/test/modules/test_libpq
+
+This directory is for test programs using libpq, not via psql, and their
+associated TAP tests.

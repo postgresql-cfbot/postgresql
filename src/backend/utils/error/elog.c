@@ -219,6 +219,17 @@ err_gettext(const char *str)
 #endif
 }
 
+/*
+ * errstart_cold
+ *              A simple wrapper around errstart, but hinted to be cold so that the
+ *              compiler is more likely to put error code in a cold area away from the
+ *              main function body.
+ */
+bool pg_attribute_cold
+errstart_cold(int elevel, const char *domain)
+{
+	return errstart(elevel, domain);
+}
 
 /*
  * errstart --- begin an error-reporting cycle

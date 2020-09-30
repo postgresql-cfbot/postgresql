@@ -124,7 +124,9 @@
 #define ereport_domain(elevel, domain, ...)	\
 	do { \
 		pg_prevent_errno_in_scope(); \
-		if (errstart(elevel, domain)) \
+		if (__builtin_constant_p(elevel) && (elevel) >= ERROR ? \
+			errstart_cold(elevel, domain) : \
+			errstart(elevel, domain)) \
 			__VA_ARGS__, errfinish(__FILE__, __LINE__, PG_FUNCNAME_MACRO); \
 		if (__builtin_constant_p(elevel) && (elevel) >= ERROR) \
 			pg_unreachable(); \
@@ -146,7 +148,9 @@
 
 #define TEXTDOMAIN NULL
 
+extern bool pg_attribute_cold errstart_cold(int elevel, const char *domain);
 extern bool errstart(int elevel, const char *domain);
+
 extern void errfinish(const char *filename, int lineno, const char *funcname);
 
 extern int	errcode(int sqlerrcode);

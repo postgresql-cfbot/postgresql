@@ -475,6 +475,9 @@ typedef struct PLpgSQL_stmt
 	 * per-statement metrics.
 	 */
 	unsigned int stmtid;
+
+	/* namespace chain visible to this statement */
+	PLpgSQL_nsitem *ns;
 } PLpgSQL_stmt;
 
 /*
@@ -515,6 +518,7 @@ typedef struct PLpgSQL_stmt_block
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	char	   *label;
 	List	   *body;			/* List of statements */
 	int			n_initvars;		/* Length of initvarnos[] */
@@ -530,6 +534,7 @@ typedef struct PLpgSQL_stmt_assign
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	int			varno;
 	PLpgSQL_expr *expr;
 } PLpgSQL_stmt_assign;
@@ -542,6 +547,7 @@ typedef struct PLpgSQL_stmt_perform
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	PLpgSQL_expr *expr;
 } PLpgSQL_stmt_perform;
 
@@ -553,6 +559,7 @@ typedef struct PLpgSQL_stmt_call
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	PLpgSQL_expr *expr;
 	bool		is_call;
 	PLpgSQL_variable *target;
@@ -566,6 +573,7 @@ typedef struct PLpgSQL_stmt_commit
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	bool		chain;
 } PLpgSQL_stmt_commit;
 
@@ -577,6 +585,7 @@ typedef struct PLpgSQL_stmt_rollback
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	bool		chain;
 } PLpgSQL_stmt_rollback;
 
@@ -588,6 +597,7 @@ typedef struct PLpgSQL_stmt_set
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	PLpgSQL_expr *expr;
 } PLpgSQL_stmt_set;
 
@@ -608,6 +618,7 @@ typedef struct PLpgSQL_stmt_getdiag
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	bool		is_stacked;		/* STACKED or CURRENT diagnostics area? */
 	List	   *diag_items;		/* List of PLpgSQL_diag_item */
 } PLpgSQL_stmt_getdiag;
@@ -620,6 +631,7 @@ typedef struct PLpgSQL_stmt_if
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	PLpgSQL_expr *cond;			/* boolean expression for THEN */
 	List	   *then_body;		/* List of statements */
 	List	   *elsif_list;		/* List of PLpgSQL_if_elsif structs */
@@ -644,6 +656,7 @@ typedef struct PLpgSQL_stmt_case
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	PLpgSQL_expr *t_expr;		/* test expression, or NULL if none */
 	int			t_varno;		/* var to store test expression value into */
 	List	   *case_when_list; /* List of PLpgSQL_case_when structs */
@@ -669,6 +682,7 @@ typedef struct PLpgSQL_stmt_loop
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	char	   *label;
 	List	   *body;			/* List of statements */
 } PLpgSQL_stmt_loop;
@@ -681,6 +695,7 @@ typedef struct PLpgSQL_stmt_while
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	char	   *label;
 	PLpgSQL_expr *cond;
 	List	   *body;			/* List of statements */
@@ -694,6 +709,7 @@ typedef struct PLpgSQL_stmt_fori
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	char	   *label;
 	PLpgSQL_var *var;
 	PLpgSQL_expr *lower;
@@ -713,6 +729,7 @@ typedef struct PLpgSQL_stmt_forq
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	char	   *label;
 	PLpgSQL_variable *var;		/* Loop variable (record or row) */
 	List	   *body;			/* List of statements */
@@ -726,6 +743,7 @@ typedef struct PLpgSQL_stmt_fors
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	char	   *label;
 	PLpgSQL_variable *var;		/* Loop variable (record or row) */
 	List	   *body;			/* List of statements */
@@ -741,6 +759,7 @@ typedef struct PLpgSQL_stmt_forc
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	char	   *label;
 	PLpgSQL_variable *var;		/* Loop variable (record or row) */
 	List	   *body;			/* List of statements */
@@ -757,6 +776,7 @@ typedef struct PLpgSQL_stmt_dynfors
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	char	   *label;
 	PLpgSQL_variable *var;		/* Loop variable (record or row) */
 	List	   *body;			/* List of statements */
@@ -773,6 +793,7 @@ typedef struct PLpgSQL_stmt_foreach_a
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	char	   *label;
 	int			varno;			/* loop target variable */
 	int			slice;			/* slice dimension, or 0 */
@@ -788,6 +809,7 @@ typedef struct PLpgSQL_stmt_open
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	int			curvar;
 	int			cursor_options;
 	PLpgSQL_expr *argquery;
@@ -804,6 +826,7 @@ typedef struct PLpgSQL_stmt_fetch
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	PLpgSQL_variable *target;	/* target (record or row) */
 	int			curvar;			/* cursor variable to fetch from */
 	FetchDirection direction;	/* fetch direction */
@@ -821,6 +844,7 @@ typedef struct PLpgSQL_stmt_close
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	int			curvar;
 } PLpgSQL_stmt_close;
 
@@ -832,6 +856,7 @@ typedef struct PLpgSQL_stmt_exit
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	bool		is_exit;		/* Is this an exit or a continue? */
 	char	   *label;			/* NULL if it's an unlabeled EXIT/CONTINUE */
 	PLpgSQL_expr *cond;
@@ -845,6 +870,7 @@ typedef struct PLpgSQL_stmt_return
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	PLpgSQL_expr *expr;
 	int			retvarno;
 } PLpgSQL_stmt_return;
@@ -857,6 +883,7 @@ typedef struct PLpgSQL_stmt_return_next
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	PLpgSQL_expr *expr;
 	int			retvarno;
 } PLpgSQL_stmt_return_next;
@@ -869,6 +896,7 @@ typedef struct PLpgSQL_stmt_return_query
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	PLpgSQL_expr *query;		/* if static query */
 	PLpgSQL_expr *dynquery;		/* if dynamic query (RETURN QUERY EXECUTE) */
 	List	   *params;			/* USING arguments for dynamic query */
@@ -882,6 +910,7 @@ typedef struct PLpgSQL_stmt_raise
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	int			elog_level;
 	char	   *condname;		/* condition name, SQLSTATE, or NULL */
 	char	   *message;		/* old-style message format literal, or NULL */
@@ -906,6 +935,7 @@ typedef struct PLpgSQL_stmt_assert
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	PLpgSQL_expr *cond;
 	PLpgSQL_expr *message;
 } PLpgSQL_stmt_assert;
@@ -918,6 +948,7 @@ typedef struct PLpgSQL_stmt_execsql
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	PLpgSQL_expr *sqlstmt;
 	bool		mod_stmt;		/* is the stmt INSERT/UPDATE/DELETE?  Note:
 								 * mod_stmt is set when we plan the query */
@@ -934,6 +965,7 @@ typedef struct PLpgSQL_stmt_dynexecute
 	PLpgSQL_stmt_type cmd_type;
 	int			lineno;
 	unsigned int stmtid;
+	PLpgSQL_nsitem *ns;
 	PLpgSQL_expr *query;		/* string expression */
 	bool		into;			/* INTO supplied? */
 	bool		strict;			/* INTO STRICT flag */
@@ -1142,8 +1174,11 @@ typedef struct PLpgSQL_execstate
  *
  * Also, immediately before any call to func_setup, PL/pgSQL fills in the
  * error_callback and assign_expr fields with pointers to its own
- * plpgsql_exec_error_callback and exec_assign_expr functions.  This is
- * a somewhat ad-hoc expedient to simplify life for debugger plugins.
+ * plpgsql_exec_error_callback and exec_assign_expr functions. eval_datum
+ * is assigned to function exec_eval_datum, and cast_value to function
+ * do_cast_value. With last two functions is easy to get content of
+ * any PLpgSQL_datum in any expected type. This is a somewhat ad-hoc
+ * expedient to simplify life for debugger plugins.
  */
 typedef struct PLpgSQL_plugin
 {
@@ -1158,6 +1193,13 @@ typedef struct PLpgSQL_plugin
 	void		(*error_callback) (void *arg);
 	void		(*assign_expr) (PLpgSQL_execstate *estate, PLpgSQL_datum *target,
 								PLpgSQL_expr *expr);
+	void		(*eval_datum) (PLpgSQL_execstate *estate, PLpgSQL_datum *datum,
+								Oid *typeid, int32 *typetypmod, Datum *value,
+								bool *isnull);
+	Datum		(*cast_value) (PLpgSQL_execstate *estate,
+								Datum value, bool *isnull,
+								Oid valtype, int32 valtypmod,
+								Oid reqtype, int32 reqtypmod);
 } PLpgSQL_plugin;
 
 /*

@@ -4628,6 +4628,7 @@ _copyPartitionSpec(const PartitionSpec *from)
 
 	COPY_STRING_FIELD(strategy);
 	COPY_NODE_FIELD(partParams);
+	COPY_NODE_FIELD(autopart);
 	COPY_LOCATION_FIELD(location);
 
 	return newnode;
@@ -4646,6 +4647,19 @@ _copyPartitionBoundSpec(const PartitionBoundSpec *from)
 	COPY_NODE_FIELD(lowerdatums);
 	COPY_NODE_FIELD(upperdatums);
 	COPY_LOCATION_FIELD(location);
+
+	return newnode;
+}
+
+static PartitionBoundAutoSpec *
+_copyPartitionBoundAutoSpec(const PartitionBoundAutoSpec *from)
+{
+	PartitionBoundAutoSpec *newnode = makeNode(PartitionBoundAutoSpec);
+
+	COPY_SCALAR_FIELD(strategy);
+	COPY_SCALAR_FIELD(modulus);
+	COPY_NODE_FIELD(listdatumsList);
+	COPY_NODE_FIELD(default_partition_rv);
 
 	return newnode;
 }
@@ -5698,6 +5712,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_PartitionBoundSpec:
 			retval = _copyPartitionBoundSpec(from);
+			break;
+		case T_PartitionBoundAutoSpec:
+			retval = _copyPartitionBoundAutoSpec(from);
 			break;
 		case T_PartitionRangeDatum:
 			retval = _copyPartitionRangeDatum(from);

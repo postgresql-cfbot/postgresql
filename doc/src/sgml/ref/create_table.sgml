@@ -29,6 +29,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
 ] )
 [ INHERITS ( <replaceable>parent_table</replaceable> [, ... ] ) ]
 [ PARTITION BY { RANGE | LIST | HASH } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
+[ CONFIGURATION ( <replaceable class="parameter">partition_bound_auto_spec</replaceable> ) ]
 [ USING <replaceable class="parameter">method</replaceable> ]
 [ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
@@ -41,6 +42,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
     [, ... ]
 ) ]
 [ PARTITION BY { RANGE | LIST | HASH } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
+[ CONFIGURATION ( <replaceable class="parameter">partition_bound_auto_spec</replaceable> ) ]
 [ USING <replaceable class="parameter">method</replaceable> ]
 [ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
@@ -53,6 +55,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
     [, ... ]
 ) ] { FOR VALUES <replaceable class="parameter">partition_bound_spec</replaceable> | DEFAULT }
 [ PARTITION BY { RANGE | LIST | HASH } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
+[ CONFIGURATION ( <replaceable class="parameter">partition_bound_auto_spec</replaceable> ) ]
 [ USING <replaceable class="parameter">method</replaceable> ]
 [ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
@@ -95,6 +98,11 @@ IN ( <replaceable class="parameter">partition_bound_expr</replaceable> [, ...] )
 FROM ( { <replaceable class="parameter">partition_bound_expr</replaceable> | MINVALUE | MAXVALUE } [, ...] )
   TO ( { <replaceable class="parameter">partition_bound_expr</replaceable> | MINVALUE | MAXVALUE } [, ...] ) |
 WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REMAINDER <replaceable class="parameter">numeric_literal</replaceable> )
+
+<phrase>and <replaceable class="parameter">partition_bound_auto_spec</replaceable> is:</phrase>
+
+VALUES IN ( <replaceable class="parameter">partition_bound_expr</replaceable> [, ...] ), [( <replaceable class="parameter">partition_bound_expr</replaceable> [, ...] )] [, ...] [DEFAULT PARTITION <replaceable class="parameter">defailt_part_name</replaceable>]
+MODULUS <replaceable class="parameter">numeric_literal</replaceable>
 
 <phrase><replaceable class="parameter">index_parameters</replaceable> in <literal>UNIQUE</literal>, <literal>PRIMARY KEY</literal>, and <literal>EXCLUDE</literal> constraints are:</phrase>
 
@@ -384,9 +392,46 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      </para>
 
      <para>
+      Range and list partitioning also support automatic creation of partitions
+      with an optional <literal>CONFIGURATION</literal> clause.
+    </para>
+
+     <para>
       See <xref linkend="ddl-partitioning"/> for more discussion on table
       partitioning.
      </para>
+
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>CONFIGURATION ( <replaceable class="parameter">partition_bound_auto_spec</replaceable> ) ] </literal></term>
+    <listitem>
+     <para>
+      The optional <literal>CONFIGURATION</literal> clause used together
+      with <literal>PARTITION BY</literal> specifies a rule of generating bounds
+      for partitions of the partitioned table. All partitions are created automatically
+      along with the parent table.
+  
+      Any indexes, constraints and user-defined row-level triggers that exist
+      in the parent table are cloned on the new partitions.
+     </para>
+    
+     <para>
+      The <replaceable class="parameter">partition_bound_auto_spec</replaceable>
+      must correspond to the partitioning method and partition key of the
+      parent table, and must not overlap with any existing partition of that
+      parent.  The form with <literal>VALUES IN</literal> is used for list partitioning 
+      and the form with <literal>MODULUS</literal> is used for hash partitioning.
+      List partitioning can also provide a default partition using 
+      <literal>DEFAULT PARTITION</literal>.
+     </para>
+
+     <para>
+     Automatic range partitioning is not supported yet.
+     </para>
+
+
 
     </listitem>
    </varlistentry>

@@ -2897,6 +2897,7 @@ _equalPartitionSpec(const PartitionSpec *a, const PartitionSpec *b)
 	COMPARE_STRING_FIELD(strategy);
 	COMPARE_NODE_FIELD(partParams);
 	COMPARE_LOCATION_FIELD(location);
+	COMPARE_NODE_FIELD(autopart);
 
 	return true;
 }
@@ -2915,6 +2916,19 @@ _equalPartitionBoundSpec(const PartitionBoundSpec *a, const PartitionBoundSpec *
 
 	return true;
 }
+
+static bool
+_equalPartitionBoundAutoSpec(const PartitionBoundAutoSpec *a,
+							 const PartitionBoundAutoSpec *b)
+{
+	COMPARE_SCALAR_FIELD(strategy);
+	COMPARE_SCALAR_FIELD(modulus);
+	COMPARE_NODE_FIELD(listdatumsList);
+	COMPARE_NODE_FIELD(default_partition_rv);
+
+	return true;
+}
+
 
 static bool
 _equalPartitionRangeDatum(const PartitionRangeDatum *a, const PartitionRangeDatum *b)
@@ -3750,6 +3764,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_PartitionBoundSpec:
 			retval = _equalPartitionBoundSpec(a, b);
+			break;
+		case T_PartitionBoundAutoSpec:
+			retval = _equalPartitionBoundAutoSpec(a, b);
 			break;
 		case T_PartitionRangeDatum:
 			retval = _equalPartitionRangeDatum(a, b);

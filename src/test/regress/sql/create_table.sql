@@ -971,3 +971,26 @@ create table part_column_drop_1_10 partition of
 \d part_column_drop
 \d part_column_drop_1_10
 drop table part_column_drop;
+
+-- Auto generated partitions
+
+-- must fail because of wrong configuration
+CREATE TABLE tbl_hash_fail (i int) PARTITION BY HASH (i)
+CONFIGURATION (values in (1, 2), (3, 4) default partition tbl_default);
+
+-- must fail because of wrong configuration
+CREATE TABLE tbl_list_fail (i int) PARTITION BY LIST (i)
+CONFIGURATION (values in (1, 2), (1, 3));
+
+CREATE TABLE tbl_list (i int) PARTITION BY LIST (i)
+CONFIGURATION (values in (1, 2), (3, 4) default partition tbl_default);
+
+\d+ tbl_list
+
+CREATE TABLE tbl_hash (i int) PARTITION BY HASH (i)
+CONFIGURATION (modulus 3);
+
+\d+ tbl_hash
+
+DROP TABLE tbl_list;
+DROP TABLE tbl_hash;

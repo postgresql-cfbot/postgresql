@@ -249,6 +249,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	PartitionElem		*partelem;
 	PartitionSpec		*partspec;
 	PartitionBoundSpec	*partboundspec;
+	PartitionBoundAutoSpec	*partboundautospec;
 	RoleSpec			*rolespec;
 	struct SelectLimit	*selectlimit;
 }
@@ -600,6 +601,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <partboundspec> PartitionBoundSpec
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
+
+%type <partboundautospec> OptPartitionBoundAutoSpec values_in_clause p_desc
+%type <range>		opt_default_partition_clause
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -3904,14 +3908,14 @@ OptPartitionSpec: PartitionSpec	{ $$ = $1; }
 			| /*EMPTY*/			{ $$ = NULL; }
 		;
 
-PartitionSpec: PARTITION BY ColId '(' part_params ')'
+PartitionSpec: PARTITION BY ColId '(' part_params ')' OptPartitionBoundAutoSpec
 				{
 					PartitionSpec *n = makeNode(PartitionSpec);
 
 					n->strategy = $3;
 					n->partParams = $5;
 					n->location = @1;
-
+					n->autopart = (Node *) $7;
 					$$ = n;
 				}
 		;
@@ -3954,6 +3958,80 @@ part_elem: ColId opt_collate opt_class
 					$$ = n;
 				}
 		;
+
+OptPartitionBoundAutoSpec:
+	CONFIGURATION '(' p_desc ')'
+	{
+		$$ = $3;
+	}
+	| /*EMPTY*/			{ $$ = NULL; }
+	;
+
+p_desc:
+	hash_partbound
+	{
+		ListCell   *lc;
+		PartitionBoundAutoSpec *n = makeNode(PartitionBoundAutoSpec);
+
+		n->modulus = -1;
+
+		foreach (lc, $1)
+		{
+			DefElem    *opt = lfirst_node(DefElem, lc);
+
+			if (strcmp(opt->defname, "modulus") == 0)
+			{
+				n->strategy = PARTITION_STRATEGY_HASH;
+				if (n->modulus != -1)
+					ereport(ERROR,
+							(errcode(ERRCODE_DUPLICATE_OBJECT),
+								errmsg("modulus for hash partition provided more than once"),
+								parser_errposition(opt->location)));
+				n->modulus = defGetInt32(opt);
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+							errmsg("unrecognized auto partition bound specification \"%s\"",
+								opt->defname),
+							parser_errposition(opt->location)));
+		}
+
+		$$ = (PartitionBoundAutoSpec *) n;
+	}
+	| values_in_clause opt_default_partition_clause
+	{
+		PartitionBoundAutoSpec *n = $1;
+		n->default_partition_rv = $2;
+		$$ = (PartitionBoundAutoSpec *) n;
+	}
+	;
+
+values_in_clause:
+	VALUES IN_P '(' expr_list ')'
+	{
+		PartitionBoundAutoSpec *n = makeNode(PartitionBoundAutoSpec);
+		n->strategy = PARTITION_STRATEGY_LIST;
+		n->listdatumsList = list_make1($4);
+		$$ = (PartitionBoundAutoSpec *) n;
+	}
+	| values_in_clause ',' '(' expr_list ')'
+	{
+			PartitionBoundAutoSpec *n = (PartitionBoundAutoSpec *) $1;
+			n->strategy = PARTITION_STRATEGY_LIST;
+			n->listdatumsList = lappend(n->listdatumsList, $4);
+			$$ = (PartitionBoundAutoSpec *) n;
+	}
+	;
+
+opt_default_partition_clause:
+	DEFAULT PARTITION qualified_name
+	{
+		$$ = $3;
+	}
+	| /* EMPTY */
+		{ $$ = NULL; }
+	;
 
 table_access_method_clause:
 			USING name							{ $$ = $2; }

@@ -1307,3 +1307,42 @@ Indexes:
     "part_column_drop_1_10_expr_idx1" btree ((d = 2))
 
 drop table part_column_drop;
+-- Auto generated partitions
+-- must fail because of wrong configuration
+CREATE TABLE tbl_hash_fail (i int) PARTITION BY HASH (i)
+CONFIGURATION (values in (1, 2), (3, 4) default partition tbl_default);
+ERROR:  invalid bound specification for a hash partition
+LINE 1: CREATE TABLE tbl_hash_fail (i int) PARTITION BY HASH (i)
+                                           ^
+-- must fail because of wrong configuration
+CREATE TABLE tbl_list_fail (i int) PARTITION BY LIST (i)
+CONFIGURATION (values in (1, 2), (1, 3));
+ERROR:  partition "tbl_list_fail_1" would overlap partition "tbl_list_fail_0"
+LINE 2: CONFIGURATION (values in (1, 2), (1, 3));
+                                          ^
+CREATE TABLE tbl_list (i int) PARTITION BY LIST (i)
+CONFIGURATION (values in (1, 2), (3, 4) default partition tbl_default);
+\d+ tbl_list
+                           Partitioned table "public.tbl_list"
+ Column |  Type   | Collation | Nullable | Default | Storage | Stats target | Description 
+--------+---------+-----------+----------+---------+---------+--------------+-------------
+ i      | integer |           |          |         | plain   |              | 
+Partition key: LIST (i)
+Partitions: tbl_list_0 FOR VALUES IN (1, 2),
+            tbl_list_1 FOR VALUES IN (3, 4),
+            tbl_default DEFAULT
+
+CREATE TABLE tbl_hash (i int) PARTITION BY HASH (i)
+CONFIGURATION (modulus 3);
+\d+ tbl_hash
+                           Partitioned table "public.tbl_hash"
+ Column |  Type   | Collation | Nullable | Default | Storage | Stats target | Description 
+--------+---------+-----------+----------+---------+---------+--------------+-------------
+ i      | integer |           |          |         | plain   |              | 
+Partition key: HASH (i)
+Partitions: tbl_hash_0 FOR VALUES WITH (modulus 3, remainder 0),
+            tbl_hash_1 FOR VALUES WITH (modulus 3, remainder 1),
+            tbl_hash_2 FOR VALUES WITH (modulus 3, remainder 2)
+
+DROP TABLE tbl_list;
+DROP TABLE tbl_hash;

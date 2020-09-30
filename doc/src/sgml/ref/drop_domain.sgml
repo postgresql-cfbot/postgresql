@@ -29,8 +29,11 @@ DROP DOMAIN [ IF EXISTS ] <replaceable class="parameter">name</replaceable> [, .
   <title>Description</title>
 
   <para>
-   <command>DROP DOMAIN</command> removes a domain.  Only the owner of
-   a domain can remove it.
+   <command>DROP DOMAIN</command> removes a domain type.
+   Only the owner of a domain can remove it.
+   This duplicates the functionality provided by 
+   <xref linkend="sql-droptype"/> but restricts
+   the type's type to domain.
   </para>
  </refsect1>
 
@@ -42,8 +45,11 @@ DROP DOMAIN [ IF EXISTS ] <replaceable class="parameter">name</replaceable> [, .
     <term><literal>IF EXISTS</literal></term>
     <listitem>
      <para>
-      Do not throw an error if the domain does not exist. A notice is issued
-      in this case.
+      This parameter instructs <productname>PostgreSQL</productname> to search 
+      for the first instance of any type with the provided name.
+      If no type is found a notice is issued and the command ends.
+      If a type is found then one of two things will happen:
+      if the type is a domain it is dropped, otherwise the command fails.      
      </para>
     </listitem>
    </varlistentry>
@@ -108,6 +114,7 @@ DROP DOMAIN box;
   <simplelist type="inline">
    <member><xref linkend="sql-createdomain"/></member>
    <member><xref linkend="sql-alterdomain"/></member>
+   <member><xref linkend="sql-droptype"/></member>
   </simplelist>
  </refsect1>
 

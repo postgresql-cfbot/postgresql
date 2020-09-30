@@ -72,8 +72,8 @@ CREATE TYPE <replaceable class="parameter">name</replaceable>
   <para>
    If a schema name is given then the type is created in the specified
    schema.  Otherwise it is created in the current schema.  The type
-   name must be distinct from the name of any existing type or domain
-   in the same schema.  (Because tables have associated data types,
+   name must be distinct from the name of any existing type (including
+   domains) in the same schema.  (Because tables have associated data types,
    the type name must also be distinct from the name of any existing
    table in the same schema.)
   </para>
@@ -83,7 +83,10 @@ CREATE TYPE <replaceable class="parameter">name</replaceable>
    syntax synopsis above.  They respectively create a <firstterm>composite
    type</firstterm>, an <firstterm>enum type</firstterm>, a <firstterm>range type</firstterm>, a
    <firstterm>base type</firstterm>, or a <firstterm>shell type</firstterm>.  The first four
-   of these are discussed in turn below.  A shell type is simply a placeholder
+   of these are discussed in turn below and represent four of the five types of data types,
+   with the fifth, a <firstterm>domain type</firstterm>, created using the
+   <xref linkend="sql-createdomain"/> command.
+   A shell type is simply a placeholder
    for a type to be defined later; it is created by issuing <command>CREATE
    TYPE</command> with no parameters except for the type name.  Shell types
    are needed as forward references when creating range types and base types,

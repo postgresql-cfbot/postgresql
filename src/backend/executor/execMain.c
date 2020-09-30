@@ -857,9 +857,6 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		estate->es_result_relations = resultRelInfos;
 		estate->es_num_result_relations = numResultRelations;
 
-		/* es_result_relation_info is NULL except when within ModifyTable */
-		estate->es_result_relation_info = NULL;
-
 		/*
 		 * In the partitioned result relation case, also build ResultRelInfos
 		 * for all the partitioned table roots, because we will need them to
@@ -903,7 +900,6 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		 */
 		estate->es_result_relations = NULL;
 		estate->es_num_result_relations = 0;
-		estate->es_result_relation_info = NULL;
 		estate->es_root_result_relations = NULL;
 		estate->es_num_root_result_relations = 0;
 	}
@@ -2805,7 +2801,6 @@ EvalPlanQualStart(EPQState *epqstate, Plan *planTree)
 			rcestate->es_num_root_result_relations = numRootResultRels;
 		}
 	}
-	/* es_result_relation_info must NOT be copied */
 	/* es_trig_target_relations must NOT be copied */
 	rcestate->es_top_eflags = parentestate->es_top_eflags;
 	rcestate->es_instrument = parentestate->es_instrument;

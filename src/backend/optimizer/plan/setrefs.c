@@ -966,6 +966,13 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 					rc->rti += rtoffset;
 					rc->prti += rtoffset;
 				}
+				/*
+				 * Caution: Do not change the relative ordering of this loop
+				 * and the statement below that adds the result relations to
+				 * root->glob->resultRelations, because we need to use the
+				 * current value of list_length(root->glob->resultRelations)
+				 * in some plans.
+				 */
 				foreach(l, splan->plans)
 				{
 					lfirst(l) = set_plan_refs(root,
@@ -1321,6 +1328,14 @@ set_foreignscan_references(PlannerInfo *root,
 	}
 
 	fscan->fs_relids = offset_relid_set(fscan->fs_relids, rtoffset);
+
+	/*
+	 * Adjust resultRelIndex if it's valid (note that we are called before
+	 * adding the RT indexes of ModifyTable result relations to the global
+	 * list)
+	 */
+	if (fscan->resultRelIndex >= 0)
+		fscan->resultRelIndex += list_length(root->glob->resultRelations);
 }
 
 /*

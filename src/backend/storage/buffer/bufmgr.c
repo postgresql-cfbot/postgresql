@@ -598,6 +598,46 @@ PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
 	}
 }
 
+/*
+ * ReadRecentBuffer -- try to refind a buffer that we suspect holds a given
+ *		block
+ *
+ * Return true if the buffer is valid, has the correct tag, and we managed
+ * to pin it.
+ */
+bool
+ReadRecentBuffer(RelFileNode rnode, ForkNumber forkNum, BlockNumber blockNum,
+				 Buffer recent_buffer)
+{
+	BufferDesc *bufHdr;
+	BufferTag	tag;
+
+	Assert(BufferIsValid(recent_buffer));
+
+	/* Look up the header by index, and try to pin if shared. */
+	if (BufferIsLocal(recent_buffer))
+		bufHdr = GetBufferDescriptor(-recent_buffer - 1);
+	else
+	{
+		bufHdr = GetBufferDescriptor(recent_buffer - 1);
+		ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
+		if (!PinBuffer(bufHdr, NULL))
+		{
+			/* Not valid, couldn't pin it. */
+			UnpinBuffer(bufHdr, true);
+			return false;
+		}
+	}
+
+	/* Does the tag match? */
+	INIT_BUFFERTAG(tag, rnode, forkNum, blockNum);
+	if (BUFFERTAGS_EQUAL(tag, bufHdr->tag))
+		return true;
+
+	/* Nope -- this isn't the block we seek. */
+	UnpinBuffer(bufHdr, true);
+	return false;
+}
 
 /*
  * ReadBuffer -- a shorthand for ReadBufferExtended, for reading from main

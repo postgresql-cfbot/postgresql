@@ -903,6 +903,7 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 {
 	int			startoff;
 	int			byteswritten;
+	WalRcvData *walrcv = WalRcv;
 
 	while (nbytes > 0)
 	{
@@ -994,7 +995,10 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 	}
 
 	/* Update shared-memory status */
-	pg_atomic_write_u64(&WalRcv->writtenUpto, LogstreamResult.Write);
+	SpinLockAcquire(&walrcv->mutex);
+	pg_atomic_write_u64(&walrcv->writtenUpto, LogstreamResult.Write);
+	walrcv->writtenTLI = ThisTimeLineID;
+	SpinLockRelease(&walrcv->mutex);
 }
 
 /*
@@ -1020,7 +1024,7 @@ XLogWalRcvFlush(bool dying)
 		{
 			walrcv->latestChunkStart = walrcv->flushedUpto;
 			walrcv->flushedUpto = LogstreamResult.Flush;
-			walrcv->receivedTLI = ThisTimeLineID;
+			walrcv->flushedTLI = ThisTimeLineID;
 		}
 		SpinLockRelease(&walrcv->mutex);
 
@@ -1360,7 +1364,7 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 	receive_start_tli = WalRcv->receiveStartTLI;
 	written_lsn = pg_atomic_read_u64(&WalRcv->writtenUpto);
 	flushed_lsn = WalRcv->flushedUpto;
-	received_tli = WalRcv->receivedTLI;
+	received_tli = WalRcv->flushedTLI;
 	last_send_time = WalRcv->lastMsgSendTime;
 	last_receipt_time = WalRcv->lastMsgReceiptTime;
 	latest_end_lsn = WalRcv->latestWalEnd;

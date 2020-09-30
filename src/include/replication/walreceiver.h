@@ -74,14 +74,25 @@ typedef struct
 	TimeLineID	receiveStartTLI;
 
 	/*
-	 * flushedUpto-1 is the last byte position that has already been received,
-	 * and receivedTLI is the timeline it came from.  At the first startup of
+	 * flushedUpto-1 is the last byte position that has already been flushed,
+	 * and flushedTLI is the timeline it came from.  At the first startup of
 	 * walreceiver, these are set to receiveStart and receiveStartTLI. After
 	 * that, walreceiver updates these whenever it flushes the received WAL to
 	 * disk.
 	 */
 	XLogRecPtr	flushedUpto;
-	TimeLineID	receivedTLI;
+	TimeLineID	flushedTLI;
+
+	/*
+	 * writtenUpto-1 is like as flushedUpto-1, except that it's updated
+	 * without waiting for the flush, after the data has been written to disk
+	 * and available for reading.  It is an atomic type so that we can read it
+	 * without locks.  We still acquire the spinlock in cases where it is
+	 * written or read along with the TLI, so that they can be accessed
+	 * together consistently.
+	 */
+	pg_atomic_uint64 writtenUpto;
+	TimeLineID	writtenTLI;
 
 	/*
 	 * latestChunkStart is the starting byte position of the current "batch"
@@ -141,14 +152,6 @@ typedef struct
 	Latch	   *latch;
 
 	slock_t		mutex;			/* locks shared variables shown above */
-
-	/*
-	 * Like flushedUpto, but advanced after writing and before flushing,
-	 * without the need to acquire the spin lock.  Data can be read by another
-	 * process up to this point, but shouldn't be used for data integrity
-	 * purposes.
-	 */
-	pg_atomic_uint64 writtenUpto;
 
 	/*
 	 * force walreceiver reply?  This doesn't need to be locked; memory
@@ -457,8 +460,9 @@ extern bool WalRcvRunning(void);
 extern void RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr,
 								 const char *conninfo, const char *slotname,
 								 bool create_temp_slot);
-extern XLogRecPtr GetWalRcvFlushRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI);
-extern XLogRecPtr GetWalRcvWriteRecPtr(void);
+extern XLogRecPtr GetWalRcvFlushRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *flushedTLI);
+extern XLogRecPtr GetWalRcvWriteRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *writtenTLI);
+extern XLogRecPtr GetWalRcvWriteRecPtrUnlocked(void);
 extern int	GetReplicationApplyDelay(void);
 extern int	GetReplicationTransferLatency(void);
 extern void WalRcvForceReply(void);

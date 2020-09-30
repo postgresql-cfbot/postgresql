@@ -390,6 +390,21 @@ pg_atomic_add_fetch_u32(volatile pg_atomic_uint32 *ptr, int32 add_)
 }
 
 /*
+ * pg_atomic_unlocked_add_fetch_u32 - atomically add to variable
+ *
+ * Like pg_atomic_unlocked_write_u32, guarantees only that partial values
+ * cannot be observed.
+ *
+ * No barrier semantics.
+ */
+static inline uint32
+pg_atomic_unlocked_add_fetch_u32(volatile pg_atomic_uint32 *ptr, int32 add_)
+{
+	AssertPointerAlignment(ptr, 4);
+	return pg_atomic_unlocked_add_fetch_u32_impl(ptr, add_);
+}
+
+/*
  * pg_atomic_sub_fetch_u32 - atomically subtract from variable
  *
  * Returns the value of ptr after the arithmetic operation. Note that sub_ may
@@ -517,6 +532,15 @@ pg_atomic_sub_fetch_u64(volatile pg_atomic_uint64 *ptr, int64 sub_)
 #endif
 	Assert(sub_ != PG_INT64_MIN);
 	return pg_atomic_sub_fetch_u64_impl(ptr, sub_);
+}
+
+static inline uint64
+pg_atomic_unlocked_add_fetch_u64(volatile pg_atomic_uint64 *ptr, int64 add_)
+{
+#ifndef PG_HAVE_ATOMIC_U64_SIMULATION
+	AssertPointerAlignment(ptr, 8);
+#endif
+	return pg_atomic_unlocked_add_fetch_u64_impl(ptr, add_);
 }
 
 #undef INSIDE_ATOMICS_H

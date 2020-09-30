@@ -131,6 +131,7 @@ extern int	recovery_min_apply_delay;
 extern char *PrimaryConnInfo;
 extern char *PrimarySlotName;
 extern bool wal_receiver_create_temp_slot;
+extern int	wal_decode_buffer_size;
 
 /* indirectly set via GUC system */
 extern TransactionId recoveryTargetXid;

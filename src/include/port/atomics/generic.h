@@ -234,6 +234,16 @@ pg_atomic_add_fetch_u32_impl(volatile pg_atomic_uint32 *ptr, int32 add_)
 }
 #endif
 
+#if !defined(PG_HAVE_ATOMIC_UNLOCKED_ADD_FETCH_U32)
+#define PG_HAVE_ATOMIC_UNLOCKED_ADD_FETCH_U32
+static inline uint32
+pg_atomic_unlocked_add_fetch_u32_impl(volatile pg_atomic_uint32 *ptr, int32 add_)
+{
+	ptr->value += add_;
+	return ptr->value;
+}
+#endif
+
 #if !defined(PG_HAVE_ATOMIC_SUB_FETCH_U32) && defined(PG_HAVE_ATOMIC_FETCH_SUB_U32)
 #define PG_HAVE_ATOMIC_SUB_FETCH_U32
 static inline uint32
@@ -398,4 +408,27 @@ pg_atomic_sub_fetch_u64_impl(volatile pg_atomic_uint64 *ptr, int64 sub_)
 {
 	return pg_atomic_fetch_sub_u64_impl(ptr, sub_) - sub_;
 }
+#endif
+
+#if defined(PG_HAVE_8BYTE_SINGLE_COPY_ATOMICITY) && \
+	!defined(PG_HAVE_ATOMIC_U64_SIMULATION)
+
+#ifndef PG_HAVE_ATOMIC_UNLOCKED_ADD_FETCH_U64
+#define PG_HAVE_ATOMIC_UNLOCKED_ADD_FETCH_U64
+static inline uint64
+pg_atomic_unlocked_add_fetch_u64_impl(volatile pg_atomic_uint64 *ptr, uint64 val)
+{
+	ptr->value += val;
+	return ptr->value;
+}
+#endif
+
+#else
+
+static inline uint64
+pg_atomic_unlocked_add_fetch_u64_impl(volatile pg_atomic_uint64 *ptr, uint64 val)
+{
+	return pg_atomic_add_fetch_u64_impl(ptr, val);
+}
+
 #endif

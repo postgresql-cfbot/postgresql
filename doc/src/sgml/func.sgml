@@ -20761,6 +20761,113 @@ SELECT * FROM pg_ls_dir('.') WITH ORDINALITY AS t(ls,n);
 
  </sect1>
 
+ <sect1 id="functions-cursor">
+  <title>Cursor Manipulation Functions</title>
+
+  <para>
+   This section describes functions that cursors to be manipulated
+   in normal <command>SELECT</command> queries.
+  </para>
+
+  <para>
+   The creation of cursors using <xref linkend="sql-declare"/>
+   or within a procedural language such as
+   <application>PL/pgSQL</application>
+   (see <xref linkend="plpgsql-cursor-declarations"/>), and other
+   manipulaton outside of a <command>SELECT</command> query is
+   described elsewhere in this manual.
+  </para>
+
+  <sect2>
+   <title><literal><function>ROWS_IN(<parameter>cursor</parameter>)</function></literal></title>
+
+  <indexterm zone="functions-cursor">
+   <primary>cursor manipulation functions</primary>
+   <secondary>functions</secondary>
+  </indexterm>
+
+  <indexterm>
+   <primary>rows_in</primary>
+  </indexterm>
+
+<synopsis>
+<function>ROWS_IN(<parameter>cursor</parameter> <type>REFCURSOR</type>)
+  RETURNS <type>SETOF RECORD</type></function>
+</synopsis>
+
+  <para>
+   <function>ROWS_IN</function> retrieves rows from a previously-created
+   cursor, or a <type>REFCURSOR</type> returned by a function. It may be
+   considered as equivalent to <command>FETCH ALL</command>, but able
+   to be integrated into a general query.
+  </para>
+
+  <para>
+   <function>ROWS_IN</function> would typically be placed in the
+   FROM clause. Since the columns specified in the
+   <type>REFCURSOR</type> may not be determinable at query plan
+   time, it is required to use a column definition list. For example:
+  </para>
+
+<programlisting>
+SELECT cur.i, cur.t
+  FROM 
+    ROWS_IN(fn(...)) AS cur(i int, t text);
+</programlisting>
+
+  <para>
+   The <type>REFCURSOR</type> must be open, and the query must be a
+   <command>SELECT</command> statement. If the <type>REFCURSOR</type>’s
+   output does not
+   correspond to that declared in the query, an error is raised at
+   query execution time. <command>UPDATE</command> and other DML
+   statements are not permitted, even if they return a set of rows.
+   Even if the <type>REFCURSOR</type> returns rows from a physical table, they may
+   not be <command>SELECT</command>ed <literal>FOR UPDATE</literal>.
+  </para>
+
+  <para>
+   It is also possible to place <function>ROWS_IN</function> in the
+   <command>SELECT</command> list. Tools to manipulate the results from an untyped
+   <type>RECORD</type> are relatively few, making its use limited in that context.
+   One exception is <function>row_to_json</function> (see
+   <xref linkend="functions-json-creation-table"/>).
+  </para>
+
+  <note>
+   <para>
+    It is acceptable to use multiple <function>ROWS_IN</function> constructs
+    referencing multiple <type>REFCURSOR</type>s in the same
+    query. If several references
+    are made to the same <type>REFCURSOR</type>, place the construction
+    inside a <literal>WITH</literal> subquery
+    marked <literal>MATERIALIZE ALWAYS</literal>.
+   </para>
+  </note>
+
+  <note>
+   <para>
+    When placed in the <literal>FROM</literal> clause,
+    <function>ROWS_IN</function> results are staged
+    before being processed by the executor. Do not rely upon this
+    behaviour as it may be changed in future. When placed in the
+    <command>SELECT</command> list, rows are always released one at a time.
+   </para>
+  </note>
+
+  <note>
+   <para>
+    When the <type>REFCURSOR</type> is returned from a <literal>VOLATILE</literal>
+    function, the query associated with the <type>REFCURSOR</type> is
+    always executed as is. When the <type>REFCURSOR</type> is returned
+    from a <literal>STABLE</literal> or <literal>IMMUTABLE</literal> function, in
+    future, the planner may be able to inline the <type>REFCURSOR</type>
+    query into the outer query.
+   </para>
+  </note>
+  </sect2>
+ </sect1>
+
  <sect1 id="functions-info">
   <title>System Information Functions and Operators</title>
 

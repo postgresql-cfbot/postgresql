@@ -156,6 +156,9 @@ static bool IsForInput;
 /* local state for LockBufferForCleanup */
 static BufferDesc *PinCountWaitBuf = NULL;
 
+static BufferDesc **truncatedBufs = NULL;
+static int numTruncatedBufs = 0;
+
 /*
  * Backend-Private refcount management:
  *
@@ -4199,6 +4202,9 @@ TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits)
 void
 AbortBufferIO(void)
 {
+	int	i;
+	uint32	buf_state;
+
 	BufferDesc *buf = InProgressBuf;
 
 	if (buf)
@@ -4243,6 +4249,22 @@ AbortBufferIO(void)
 			}
 		}
 		TerminateBufferIO(buf, false, BM_IO_ERROR);
+	}
+
+	if (numTruncatedBufs)
+	{
+		Assert(truncatedBufs);
+		for (i = 0; i < numTruncatedBufs; i++)
+		{
+			buf_state = LockBufHdr(truncatedBufs[i]);
+			Assert(buf_state & BM_IO_IN_PROGRESS);
+			buf_state &= ~BM_IO_IN_PROGRESS;
+			UnlockBufHdr(truncatedBufs[i], buf_state);
+		}
+
+		pfree(truncatedBufs);
+		numTruncatedBufs = 0;
+		truncatedBufs = NULL;
 	}
 }
 
@@ -4582,4 +4604,147 @@ TestForOldSnapshot_impl(Snapshot snapshot, Relation relation)
 		ereport(ERROR,
 				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
 				 errmsg("snapshot too old")));
+}
+
+/*
+ *		DropTruncatedBuffers
+ *
+ *		This function removes from the buffer pool all the pages from the
+ *		saved list of buffers that were marked as BM_IO_IN_PROGRESS just
+ * 		before the truncation. Dirty pages are simply dropped, without
+ *		bothering to write them	out first.
+ *
+ *		Currently, this is called only from smgr.c smgrtuncate() where the
+ *		underlying file was just truncated. It is the responsibility of
+ *		MarkTruncatedBuffers() ensure that the list of buffers truncated is
+ *		sane and point to the right set of buffers. It is also the responsibility
+ *		of higher-level code to ensure that no other process could be trying
+ *		to load more pages of the relation into buffers.
+ *
+ */
+void
+DropTruncatedBuffers(RelFileNodeBackend rnode, ForkNumber *forkNum,
+					   int nforks, BlockNumber *firstDelBlock)
+{
+	int			i;
+	int			j;
+
+	/* If it's a local relation, it's localbuf.c's problem. */
+	if (RelFileNodeBackendIsTemp(rnode))
+	{
+		if (rnode.backend == MyBackendId)
+		{
+			for (j = 0; j < nforks; j++)
+				DropRelFileNodeLocalBuffers(rnode.node, forkNum[j],
+											firstDelBlock[j]);
+		}
+		return;
+	}
+
+	if (!numTruncatedBufs)
+		return; /* Nothing to clean up */
+
+	for (i = 0; i < numTruncatedBufs; i++)
+	{
+		uint32		buf_state;
+
+		buf_state = LockBufHdr(truncatedBufs[i]);
+		Assert(buf_state & BM_IO_IN_PROGRESS);
+		InvalidateBuffer(truncatedBufs[i]);	/* releases spinlock */
+	}
+
+	pfree(truncatedBufs);
+	numTruncatedBufs = 0;
+	truncatedBufs = NULL;
+}
+
+/*
+ * Finds the buffers (pages) of a about to be truncated-file
+ * and prevent them from being written to disk by marking them
+ * as BM_IO_IN_PROGRESS. Though the buffers are marked for IO, they
+ * will never be written to disk but it prevents processes from
+ * doing IO.
+ *
+ * Note: Buffers might be marked for BM_IO_IN_PROGRES than usual
+ * time because of the extra code path to be exercised before we
+ * drop them, but there shouldn't be any regular backends waiting
+ * on these pages (as they are empty and getting the process of
+ * being discarded).
+ */
+void
+MarkTruncateBuffers(RelFileNodeBackend rnode, ForkNumber *forkNum,
+					   int nforks, BlockNumber *firstDelBlock)
+{
+	int	i;
+	int	j;
+
+	/* Do we care about local buffers i.e. Temp relation ? */
+
+
+	for (i = 0; i < NBuffers; i++)
+	{
+		BufferDesc *bufHdr = GetBufferDescriptor(i);
+		uint32		buf_state;
+
+		/*
+		 * Since we take AccessExclusiveLock on the relation during truncate,
+		 * it's safe to check without lock and will save lot of lock
+		 * acquisitions in typical cases.
+		 */
+		if (!RelFileNodeEquals(bufHdr->tag.rnode, rnode.node))
+			continue;
+
+		buf_state = LockBufHdr(bufHdr);
+		for (j = 0; j < nforks; j++)
+		{
+			if (RelFileNodeEquals(bufHdr->tag.rnode, rnode.node) &&
+				bufHdr->tag.forkNum == forkNum[j] &&
+				bufHdr->tag.blockNum >= firstDelBlock[j])
+			{
+retry:
+				if (buf_state & BM_IO_IN_PROGRESS)
+				{
+					UnlockBufHdr(bufHdr, buf_state);
+
+					WaitIO(bufHdr);
+
+					/* OK, now the flag is cleared, recheck */
+					buf_state = LockBufHdr(bufHdr);
+					goto retry;
+				}
+				else
+				{
+					/*
+					 * Easy path is to allocate NBuffers, but that
+					 * might to lead to wastage, start with 100 and
+					 * increase in increments of 100.
+					 */
+					if (!truncatedBufs)
+					{
+						truncatedBufs = (BufferDesc **)
+							palloc0(100 * sizeof(BufferDesc *));
+					}
+					else if ((numTruncatedBufs % 100) == 0)
+					{
+						truncatedBufs = (BufferDesc **)
+							repalloc(truncatedBufs,
+							(numTruncatedBufs + 100) * sizeof(BufferDesc *));
+					}
+
+					/*
+					 * Add to the list, this will be used either to
+					 * clean up (in an exception) or invalidate the
+					 * buffers after the truncate.
+					 */
+					truncatedBufs[numTruncatedBufs] =  bufHdr;
+					numTruncatedBufs++;
+					buf_state |= BM_IO_IN_PROGRESS;
+					UnlockBufHdr(bufHdr, buf_state);
+				}
+			}
+		}
+
+		if (j >= nforks)
+			UnlockBufHdr(bufHdr, buf_state);
+	}
 }

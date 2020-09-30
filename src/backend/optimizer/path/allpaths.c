@@ -41,6 +41,7 @@
 #include "optimizer/plancat.h"
 #include "optimizer/planner.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/subselect.h"
 #include "optimizer/tlist.h"
 #include "parser/parse_clause.h"
 #include "parser/parsetree.h"
@@ -766,6 +767,39 @@ static void
 set_plain_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 {
 	Relids		required_outer;
+
+	/*
+	 * We have known the size of the rel, if there is altPlan on this rel
+	 * we can choose now. In this demo, I just track the alt plan in targetlist.
+	 */
+	ListCell *lc;
+	bool recost = false;
+	foreach(lc, rel->reltarget->exprs)
+	{
+		if (IsA(lfirst(lc), PlaceHolderVar))
+		{
+			bool recost_expr = false;
+			PlaceHolderVar *phv = lfirst_node(PlaceHolderVar, lc);
+			if (bms_is_subset(phv->phrels, rel->relids) &&
+				IsA(phv->phexpr, AlternativeSubPlan))
+			{
+				phv->phexpr = (Expr *)choose_subplan((AlternativeSubPlan *)phv->phexpr,
+													 rel->rows,
+													 &recost_expr);
+				if (recost_expr)
+					recost = true;
+			}
+		}
+	}
+
+	if (recost)
+	{
+		set_rel_width(root, rel);
+	}
+
+	/*
+	 * TODO: we can also check subplan in other places
+	 */
 
 	/*
 	 * We don't support pushing join clauses into the quals of a seqscan, but

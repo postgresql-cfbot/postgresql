@@ -91,6 +91,7 @@
 #include "optimizer/plancat.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/planner.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
@@ -175,7 +176,6 @@ static Selectivity get_foreign_key_join_selectivity(PlannerInfo *root,
 													List **restrictlist);
 static Cost append_nonpartial_cost(List *subpaths, int numpaths,
 								   int parallel_workers);
-static void set_rel_width(PlannerInfo *root, RelOptInfo *rel);
 static double relation_byte_size(double tuples, int width);
 static double page_size(double tuples, int width);
 static double get_parallel_divisor(Path *path);
@@ -1774,7 +1774,7 @@ cost_tuplesort(Cost *startup_cost, Cost *run_cost,
 
 /*
  * cost_incremental_sort
- * 	Determines and returns the cost of sorting a relation incrementally, when
+ *	Determines and returns the cost of sorting a relation incrementally, when
  *  the input path is presorted by a prefix of the pathkeys.
  *
  * 'presorted_keys' is the number of leading pathkeys by which the input path
@@ -5451,7 +5451,7 @@ set_foreign_size_estimates(PlannerInfo *root, RelOptInfo *rel)
  * The per-attribute width estimates are cached for possible re-use while
  * building join relations or post-scan/join pathtargets.
  */
-static void
+void
 set_rel_width(PlannerInfo *root, RelOptInfo *rel)
 {
 	Oid			reloid = planner_rt_fetch(rel->relid, root)->relid;

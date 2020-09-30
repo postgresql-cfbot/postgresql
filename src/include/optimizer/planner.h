@@ -58,4 +58,5 @@ extern Path *get_cheapest_fractional_path(RelOptInfo *rel,
 
 extern Expr *preprocess_phv_expression(PlannerInfo *root, Expr *expr);
 
+extern void set_rel_width(PlannerInfo *root, RelOptInfo *rel);
 #endif							/* PLANNER_H */

@@ -2989,3 +2989,31 @@ SS_make_initplan_from_plan(PlannerInfo *root,
 	/* Set costs of SubPlan using info from the plan tree */
 	cost_subplan(subroot, node, plan);
 }
+
+
+/*
+ * Choose the subplan from AlternativeSubPlan as soon as possible.
+ */
+SubPlan *
+choose_subplan(AlternativeSubPlan *altplan, double num_calls, bool *recost)
+{
+
+	double cost1, cost2;
+	SubPlan *subplan1, *subplan2, *res;
+	subplan1 = linitial_node(SubPlan, altplan->subplans);
+	subplan2 = lsecond_node(SubPlan, altplan->subplans);
+	cost1 = subplan1->startup_cost + num_calls * subplan1->per_call_cost;
+	cost2 = subplan2->startup_cost + num_calls * subplan2->per_call_cost;
+
+	if (cost1 < cost2)
+	{
+		res = subplan1;
+		*recost = false;
+	}
+	else
+	{
+		res = subplan2;
+		*recost = true;
+	}
+	return res;
+}

@@ -201,3 +201,4 @@ test: explain
 test: event_trigger
 test: fast_default
 test: stats
+test: si_st_sm_sr

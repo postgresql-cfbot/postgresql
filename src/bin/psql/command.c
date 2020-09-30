@@ -50,7 +50,11 @@
 typedef enum EditableObjectType
 {
 	EditableFunction,
-	EditableView
+	EditableView,
+	EditableMatview,
+	EditableIndex,
+	EditableTrigger,
+	EditableTable
 } EditableObjectType;
 
 /* local function declarations */
@@ -118,8 +122,10 @@ static backslashResult exec_command_s(PsqlScanState scan_state, bool active_bran
 static backslashResult exec_command_set(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_setenv(PsqlScanState scan_state, bool active_branch,
 										   const char *cmd);
-static backslashResult exec_command_sf_sv(PsqlScanState scan_state, bool active_branch,
-										  const char *cmd, bool is_func);
+static backslashResult exec_command_sf_sv_sm_si_sr(PsqlScanState scan_state, bool active_branch,
+										  const char *cmd, EditableObjectType type);
+static backslashResult exec_command_st(PsqlScanState scan_state, bool active_branch,
+									   const char *cmd);
 static backslashResult exec_command_t(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_T(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_timing(PsqlScanState scan_state, bool active_branch);
@@ -155,6 +161,8 @@ static bool do_shell(const char *command);
 static bool do_watch(PQExpBuffer query_buf, double sleep);
 static bool lookup_object_oid(EditableObjectType obj_type, const char *desc,
 							  Oid *obj_oid);
+static bool lookup_trigger_oid(const char *table_name, const char *trigger_name,
+				  Oid *obj_oid);
 static bool get_create_object_cmd(EditableObjectType obj_type, Oid oid,
 								  PQExpBuffer buf);
 static int	strip_lineno_from_objdesc(char *obj);
@@ -382,9 +390,17 @@ exec_command(const char *cmd,
 	else if (strcmp(cmd, "setenv") == 0)
 		status = exec_command_setenv(scan_state, active_branch, cmd);
 	else if (strcmp(cmd, "sf") == 0 || strcmp(cmd, "sf+") == 0)
-		status = exec_command_sf_sv(scan_state, active_branch, cmd, true);
+		status = exec_command_sf_sv_sm_si_sr(scan_state, active_branch, cmd, EditableFunction);
 	else if (strcmp(cmd, "sv") == 0 || strcmp(cmd, "sv+") == 0)
-		status = exec_command_sf_sv(scan_state, active_branch, cmd, false);
+		status = exec_command_sf_sv_sm_si_sr(scan_state, active_branch, cmd, EditableView);
+	else if (strcmp(cmd, "sm") == 0 || strcmp(cmd, "sm+") == 0)
+		status = exec_command_sf_sv_sm_si_sr(scan_state, active_branch, cmd, EditableMatview);
+	else if (strcmp(cmd, "si") == 0 || strcmp(cmd, "si+") == 0)
+		status = exec_command_sf_sv_sm_si_sr(scan_state, active_branch, cmd, EditableIndex);
+	else if (strcmp(cmd, "st") == 0 || strcmp(cmd, "st+") == 0)
+		status = exec_command_st(scan_state, active_branch, cmd);
+	else if (strcmp(cmd, "sr") == 0 || strcmp(cmd, "sr+") == 0)
+		status = exec_command_sf_sv_sm_si_sr(scan_state, active_branch, cmd, EditableTable);
 	else if (strcmp(cmd, "t") == 0)
 		status = exec_command_t(scan_state, active_branch);
 	else if (strcmp(cmd, "T") == 0)
@@ -2320,11 +2336,11 @@ exec_command_setenv(PsqlScanState scan_state, bool active_branch,
 }
 
 /*
- * \sf/\sv -- show a function/view's source code
+ * \sf/\sv/\sm/\si/\sr -- show a function/view's/matview's/index/table's source code
  */
 static backslashResult
-exec_command_sf_sv(PsqlScanState scan_state, bool active_branch,
-				   const char *cmd, bool is_func)
+exec_command_sf_sv_sm_si_sr(PsqlScanState scan_state, bool active_branch,
+				   const char *cmd, EditableObjectType type)
 {
 	backslashResult status = PSQL_CMD_SKIP_LINE;
 
@@ -2334,39 +2350,60 @@ exec_command_sf_sv(PsqlScanState scan_state, bool active_branch,
 		PQExpBuffer buf;
 		char	   *obj_desc;
 		Oid			obj_oid = InvalidOid;
-		EditableObjectType eot = is_func ? EditableFunction : EditableView;
 
 		buf = createPQExpBuffer();
 		obj_desc = psql_scan_slash_option(scan_state,
 										  OT_WHOLE_LINE, NULL, true);
-		if (pset.sversion < (is_func ? 80400 : 70400))
+		if ((pset.sversion < 80400 && type == EditableFunction) || (pset.sversion < 70400 && type == EditableView))
 		{
 			char		sverbuf[32];
 
 			formatPGVersionNumber(pset.sversion, false,
 								  sverbuf, sizeof(sverbuf));
-			if (is_func)
-				pg_log_error("The server (version %s) does not support showing function source.",
-							 sverbuf);
-			else
-				pg_log_error("The server (version %s) does not support showing view definitions.",
-							 sverbuf);
+			switch (type)
+			{
+				case EditableFunction:
+					pg_log_error("The server (version %s) does not support showing function source.",
+								sverbuf);
+					break;
+				case EditableView:
+					pg_log_error("The server (version %s) does not support showing view definitions.",
+								sverbuf);
+				default:
+					break;
+			}
 			status = PSQL_CMD_ERROR;
 		}
 		else if (!obj_desc)
 		{
-			if (is_func)
-				pg_log_error("function name is required");
-			else
-				pg_log_error("view name is required");
+			switch (type)
+			{
+				case EditableFunction:
+					pg_log_error("function name is required");
+					break;
+				case EditableView:
+					pg_log_error("view name is required");
+					break;
+				case EditableMatview:
+					pg_log_error("matview name is required");
+					break;
+				case EditableIndex:
+					pg_log_error("index name is required");
+					break;
+				case EditableTable:
+					pg_log_error("table name is required");
+					break;
+				default:
+					break;
+			}
 			status = PSQL_CMD_ERROR;
 		}
-		else if (!lookup_object_oid(eot, obj_desc, &obj_oid))
+		else if (!lookup_object_oid(type, obj_desc, &obj_oid))
 		{
 			/* error already reported */
 			status = PSQL_CMD_ERROR;
 		}
-		else if (!get_create_object_cmd(eot, obj_oid, buf))
+		else if (!get_create_object_cmd(type, obj_oid, buf))
 		{
 			/* error already reported */
 			status = PSQL_CMD_ERROR;
@@ -2401,8 +2438,13 @@ exec_command_sf_sv(PsqlScanState scan_state, bool active_branch,
 				 * with "AS ", and that there can be no such line before the
 				 * real start of the function body.
 				 */
-				print_with_linenumbers(output, buf->data,
-									   is_func ? "AS " : NULL);
+				if (type == EditableFunction) {
+					print_with_linenumbers(output, buf->data, "AS ");
+				}
+				else
+				{
+					print_with_linenumbers(output, buf->data, NULL);
+				}
 			}
 			else
 			{
@@ -2417,6 +2459,106 @@ exec_command_sf_sv(PsqlScanState scan_state, bool active_branch,
 		if (obj_desc)
 			free(obj_desc);
 		destroyPQExpBuffer(buf);
+	}
+	else
+		ignore_slash_whole_line(scan_state);
+
+	return status;
+}
+
+/*
+ * \st -- show a trigger's source code
+ * the format of \st arguments is "table_name TRIGGER trigger_name",
+ * because different tables can have triggers with the same name
+ */
+static backslashResult
+exec_command_st(PsqlScanState scan_state, bool active_branch, const char *cmd)
+{
+	backslashResult status = PSQL_CMD_SKIP_LINE;
+
+	if (active_branch)
+	{
+		bool		show_linenumbers = (strcmp(cmd, "st+") == 0);
+		PQExpBuffer trigger_buf;
+		char 	   *table;
+		char 	   *tg_string;
+		char	   *trigger;
+		Oid			trigger_oid = InvalidOid;
+
+		trigger_buf = createPQExpBuffer();
+		table = psql_scan_slash_option(scan_state,
+										 OT_NORMAL, NULL, true);
+		tg_string = psql_scan_slash_option(scan_state,
+										 OT_NORMAL, NULL, true);
+		trigger = psql_scan_slash_option(scan_state,
+										 OT_NORMAL, NULL, true);
+
+		/*
+		 * TO-DO add version check
+		 */
+
+		if (!trigger)
+		{
+			pg_log_error("trigger name is required");
+			status = PSQL_CMD_ERROR;
+		}
+		else if (strcmp(tg_string, "TRIGGER") != 0) {
+			pg_log_error("wrong command format");
+			status = PSQL_CMD_ERROR;
+		}
+		else if (!table) {
+			pg_log_error("table name is required");
+			status = PSQL_CMD_ERROR;
+		}
+		else if (!lookup_trigger_oid(table, trigger, &trigger_oid))
+		{
+			/* error already reported */
+			status = PSQL_CMD_ERROR;
+		}
+		else if (!get_create_object_cmd(EditableTrigger, trigger_oid, trigger_buf))
+		{
+			/* error already reported */
+			status = PSQL_CMD_ERROR;
+		}
+		else
+		{
+			FILE	   *output;
+			bool		is_pager;
+
+			/* Select output stream: stdout, pager, or file */
+			if (pset.queryFout == stdout)
+			{
+				/* count lines in view to see if pager is needed */
+				int			lineno = count_lines_in_buf(trigger_buf);
+
+				output = PageOutput(lineno, &(pset.popt.topt));
+				is_pager = true;
+			}
+			else
+			{
+				/* use previously set output file, without pager */
+				output = pset.queryFout;
+				is_pager = false;
+			}
+
+			if (show_linenumbers)
+			{
+				/* add line numbers, numbering all lines */
+				print_with_linenumbers(output, trigger_buf->data, NULL);
+			}
+			else
+			{
+				/* just send the view definition to output */
+				fputs(trigger_buf->data, output);
+			}
+
+			if (is_pager)
+				ClosePager(output);
+		}
+
+		if (trigger)
+			free(trigger);
+		destroyPQExpBuffer(trigger_buf);
 	}
 	else
 		ignore_slash_whole_line(scan_state);
@@ -4807,16 +4949,32 @@ lookup_object_oid(EditableObjectType obj_type, const char *desc,
 			break;
 
 		case EditableView:
+		case EditableMatview:
+		case EditableIndex:
+		case EditableTable:
 
 			/*
-			 * Convert view name (possibly schema-qualified) to OID.  Note:
-			 * this code doesn't check if the relation is actually a view.
-			 * We'll detect that in get_create_object_cmd().
+			 * Convert name (possibly schema-qualified) to OID.  Note: this
+			 * code doesn't check if the relation is actually of the right
+			 * type. We'll detect that in get_create_object_cmd().
 			 */
 			appendPQExpBufferStr(query, "SELECT ");
 			appendStringLiteralConn(query, desc, pset.db);
 			appendPQExpBufferStr(query, "::pg_catalog.regclass::pg_catalog.oid");
 			break;
+
+		case EditableTrigger:
+
+			/*
+			 * Note: triggers of different databases can have the same name,
+			 * this function displays only the first result
+			 */
+			printfPQExpBuffer(query,
+							  "SELECT t.oid FROM pg_trigger t "
+							  "WHERE tgname = \'%s\' LIMIT 1",
+							  desc);
+			break;
+
 	}
 
 	if (!echo_hidden_command(query->data))
@@ -4829,7 +4987,61 @@ lookup_object_oid(EditableObjectType obj_type, const char *desc,
 		*obj_oid = atooid(PQgetvalue(res, 0, 0));
 	else
 	{
-		minimal_error_message(res);
+		if (obj_type == EditableTrigger)
+		{
+			/*
+			 * Printing error message for triggers
+			 */
+			pg_log_error("trigger does not exist");
+		}
+		else
+		{
+			minimal_error_message(res);
+		}
+		result = false;
+	}
+
+	PQclear(res);
+	destroyPQExpBuffer(query);
+
+	return result;
+}
+
+/*
+ * Triggers use a separate lookup_oid function, because
+ * trigger names are not unique and multiple tables can have
+ * a trigger of the same name, so we must also look up table's oid
+ */
+static bool
+lookup_trigger_oid(const char *table_name, const char *trigger_name,
+				  Oid *obj_oid)
+{
+	bool		result = true;
+	PQExpBuffer query = createPQExpBuffer();
+	PGresult   *res;
+	Oid			table_oid = InvalidOid;
+
+	if (!lookup_object_oid(EditableTable, table_name, &table_oid)) {
+		return false;
+	}
+
+	printfPQExpBuffer(query,
+					"SELECT t.oid FROM pg_trigger t "
+					"LEFT JOIN pg_class c ON t.tgrelid = c.oid "
+					"WHERE t.tgname = \'%s\' AND c.oid = %u",
+					trigger_name, table_oid);
+
+	if (!echo_hidden_command(query->data))
+	{
+		destroyPQExpBuffer(query);
+		return false;
+	}
+	res = PQexec(pset.db, query->data);
+	if (PQresultStatus(res) == PGRES_TUPLES_OK && PQntuples(res) == 1)
+		*obj_oid = atooid(PQgetvalue(res, 0, 0));
+	else
+	{
+		pg_log_error("trigger does not exist");
 		result = false;
 	}
 
@@ -4912,6 +5124,45 @@ get_create_object_cmd(EditableObjectType obj_type, Oid oid,
 								  oid);
 			}
 			break;
+		case EditableMatview:
+			printfPQExpBuffer(query,
+							  "SELECT m.definition, relname, relkind, amname, nspname, reloptions "
+							  "FROM pg_catalog.pg_class c "
+							  "LEFT JOIN pg_matviews m ON c.relname = m.matviewname "
+							  "LEFT JOIN pg_am a on c.relam = a.oid "
+							  "LEFT JOIN pg_namespace s ON c.relnamespace = s.oid "
+							  "WHERE c.oid = %u ",
+							  oid);
+			break;
+		case EditableIndex:
+			printfPQExpBuffer(query,
+							  "SELECT i.indexdef, relkind, relname "
+							  "FROM pg_catalog.pg_class c "
+							  "LEFT JOIN pg_indexes i ON c.relname = i.indexname "
+							  "WHERE c.oid = %u ",
+							  oid);
+			break;
+
+		case EditableTrigger:
+			printfPQExpBuffer(query,
+							  "SELECT pg_catalog.pg_get_triggerdef(%u)",
+							  oid);
+			break;
+
+		case EditableTable:
+			printfPQExpBuffer(query,
+							  "SELECT relname, relkind, nspname, spcname, reloptions, "
+							  "relnatts, relpersistence, reloftype, "
+							  "relispartition, pg_get_partkeydef(c.oid), "
+							  "pg_get_expr(c.relpartbound, c.oid, true), "
+							  "amname, typname "
+							  "FROM pg_class c LEFT JOIN pg_type t ON t.oid = c.reloftype "
+							  "LEFT JOIN pg_namespace s ON c.relnamespace = s.oid "
+							  "LEFT JOIN pg_am a on c.relam = a.oid "
+							  "LEFT JOIN pg_tablespace tbs on c.reltablespace = tbs.oid "
+							  "WHERE c.oid = %u",
+							  oid);
+			break;
 	}
 
 	if (!echo_hidden_command(query->data))
@@ -4926,7 +5177,79 @@ get_create_object_cmd(EditableObjectType obj_type, Oid oid,
 		switch (obj_type)
 		{
 			case EditableFunction:
+			case EditableTrigger:
 				appendPQExpBufferStr(buf, PQgetvalue(res, 0, 0));
+				break;
+			case EditableIndex:
+				{
+					char	   *indexdef = PQgetvalue(res, 0, 0);
+					char	   *relkind = PQgetvalue(res, 0, 1);
+					char	   *relname = PQgetvalue(res, 0, 2);
+
+					/*
+					 * Check if relation is an index
+					 */
+					if (relkind[0] != 'i' && relkind[0] != 'I')
+					{
+						pg_log_error("\"%s\" is not an index",
+									 relname);
+						result = false;
+						break;
+					}
+					appendPQExpBufferStr(buf, indexdef);
+					break;
+				}
+			case EditableMatview:
+				{
+					char	   *viewdef = PQgetvalue(res, 0, 0);
+					char	   *relname = PQgetvalue(res, 0, 1);
+					char	   *relkind = PQgetvalue(res, 0, 2);
+					char	   *amname = PQgetvalue(res, 0, 3);
+					char	   *spcname = PQgetvalue(res, 0, 4);
+					char	   *reloptions = PQgetvalue(res, 0, 5);
+
+					switch (relkind[0])
+					{
+						case RELKIND_MATVIEW:
+							appendPQExpBufferStr(buf, "CREATE MATERIALIZED VIEW ");
+							break;
+						default:
+							pg_log_error("\"%s\" is not a matview",
+										 relname);
+							result = false;
+							break;
+					}
+					appendPQExpBuffer(buf, "%s", relname);
+
+					/*
+					 * add access method
+					 */
+					if (!PQgetisnull(res, 0, 3))
+					{
+						appendPQExpBuffer(buf, "\n    USING %s", amname);
+					}
+
+					/* reloptions, if not an empty array "{}" */
+					if (reloptions != NULL && strlen(reloptions) > 2)
+					{
+						appendPQExpBufferStr(buf, "\n    WITH (");
+						if (!appendReloptionsArray(buf, reloptions, "",
+												   pset.encoding,
+												   standard_strings()))
+						{
+							pg_log_error("could not parse reloptions array");
+							result = false;
+						}
+						appendPQExpBufferChar(buf, ')');
+					}
+
+
+					if (!PQgetisnull(res, 0, 4))
+					{
+						appendPQExpBuffer(buf, "\n    TABLESPACE %s", spcname);
+					}
+					appendPQExpBuffer(buf, "\n    AS\n   %s", viewdef);
+				}
 				break;
 
 			case EditableView:
@@ -4948,7 +5271,7 @@ get_create_object_cmd(EditableObjectType obj_type, Oid oid,
 					{
 #ifdef NOT_USED
 						case RELKIND_MATVIEW:
-							appendPQExpBufferStr(buf, "CREATE OR REPLACE MATERIALIZED VIEW ");
+							appendPQExpBufferStr(buf, "CREATE MATERIALIZED VIEW ");
 							break;
 #endif
 						case RELKIND_VIEW:
@@ -4990,7 +5313,291 @@ get_create_object_cmd(EditableObjectType obj_type, Oid oid,
 										  checkoption);
 				}
 				break;
+			case EditableTable:
+				{
+					char	   *relname = PQgetvalue(res, 0, 0);
+					char	   *relkind = PQgetvalue(res, 0, 1);
+					char	   *nspname = PQgetvalue(res, 0, 2);
+					char	   *spcname = PQgetvalue(res, 0, 3);
+					char	   *reloptions = PQgetvalue(res, 0, 4);
+					int			relnatts = atoi(PQgetvalue(res, 0, 5));
+					char	   *relpersistence = PQgetvalue(res, 0, 6);
+					char	   *reloftype = PQgetvalue(res, 0, 7);
+					char	   *relispartition = PQgetvalue(res, 0, 8);
+					char	   *partkeydef = PQgetvalue(res, 0, 9);
+					char	   *relpartbound = PQgetvalue(res, 0, 10);
+					char	   *amname = PQgetvalue(res, 0, 11);
+					int			numParents;
+
+					PQExpBuffer column_info = createPQExpBuffer();
+					PQExpBuffer constraint_info = createPQExpBuffer();
+					PQExpBuffer parent_info = createPQExpBuffer();
+
+					PGresult   *colres;
+					PGresult   *conres;
+					PGresult   *parres;
+
+					/*
+					 * Check if relation is a table
+					 */
+					if (relkind[0] != 'r' && relkind[0] != 't' && relkind[0] != 'p')
+					{
+						pg_log_error("\"%s\" is not a table",
+									 relname);
+						result = false;
+						break;
+					}
+
+					/*
+					 * Constructing select statements for information about
+					 * columns, constraints and parents of a table
+					 */
+
+					printfPQExpBuffer(column_info,
+									  "SELECT attname, pg_catalog.format_type(atttypid, NULL), collname, attnotnull, atthasdef, pg_get_expr(d.adbin, d.adrelid) "
+									  "FROM pg_attribute a LEFT JOIN pg_type t on a.atttypid = t.oid "
+									  "LEFT JOIN pg_attrdef d "
+									  "ON d.adrelid = a.attrelid AND d.adnum = a.attnum "
+									  "LEFT JOIN pg_collation c ON a.attcollation = c.oid "
+									  "WHERE attrelid = %u AND attnum >= 1 "
+									  "ORDER BY attnum ASC ",
+									  oid);
+					if (!echo_hidden_command(column_info->data))
+					{
+						result = false;
+						break;
+					}
+
+					printfPQExpBuffer(constraint_info,
+									  "SELECT con.conname, pg_get_constraintdef(con.oid) "
+									  "FROM pg_catalog.pg_constraint con "
+									  "INNER JOIN pg_catalog.pg_class rel "
+									  "ON rel.oid = con.conrelid "
+									  "WHERE rel.oid = %u ;",
+									  oid);
+					if (!echo_hidden_command(constraint_info->data))
+					{
+						result = false;
+						break;
+					}
+
+					printfPQExpBuffer(parent_info,
+									  "SELECT relname, nspname "
+									  "FROM pg_class c LEFT JOIN pg_inherits i ON i.inhparent = c.oid "
+									  "LEFT JOIN pg_namespace n ON c.relnamespace = n.oid "
+									  "WHERE inhrelid = %u ORDER BY inhseqno ASC",
+									  oid);
+					if (!echo_hidden_command(parent_info->data))
+					{
+						result = false;
+						break;
+					}
+
+					colres = PQexec(pset.db, column_info->data);
+					conres = PQexec(pset.db, constraint_info->data);
+					parres = PQexec(pset.db, parent_info->data);
+
+					if (PQresultStatus(colres) != PGRES_TUPLES_OK)
+					{
+						minimal_error_message(colres);
+						result = false;
+						break;
+					}
+					if (PQresultStatus(conres) != PGRES_TUPLES_OK)
+					{
+						minimal_error_message(conres);
+						result = false;
+						break;
+					}
+					if (PQresultStatus(parres) != PGRES_TUPLES_OK)
+					{
+						minimal_error_message(parres);
+						result = false;
+						break;
+					}
+
+					numParents = PQntuples(parres);
+
+					appendPQExpBuffer(buf, "CREATE ");
+					switch (relpersistence[0])
+					{
+						case 'u':
+							appendPQExpBuffer(buf, "UNLOGGED ");
+							break;
+						case 't':
+							appendPQExpBuffer(buf, "TEMPORARY ");
+							break;
+						default:
+							break;
+					}
+					appendPQExpBuffer(buf, "TABLE %s.%s", nspname, relname);
+
+					/*
+					 * if typed, add type name
+					 */
+					if (strcmp(reloftype, "0") != 0)
+					{
+						char	   *typname = PQgetvalue(res, 0, 13);
+
+						appendPQExpBuffer(buf, "\n    OF %s", typname);
+					}
+
+					if (relispartition[0] == 't')
+					{
+
+						/*
+						 * Partition can only have one parent.
+						 */
+						if (numParents != 1)
+						{
+							pg_log_error("Invalid number of parents %d for table %s\n", numParents, relname);
+							result = false;
+						}
+
+						appendPQExpBuffer(buf, " PARTITION OF %s", PQgetvalue(parres, 0, 0));
+					}
+
+					/*
+					 * adding column info
+					 */
+
+					for (int column = 0; column < relnatts; column++)
+					{
+						char	   *column_name = PQgetvalue(colres, column, 0);
+						char	   *data_type = PQgetvalue(colres, column, 1);
+						char	   *collation_name = PQgetvalue(colres, column, 2);
+						char	   *not_null = PQgetvalue(colres, column, 3);
+						char	   *has_default = PQgetvalue(colres, column, 4);
+						char	   *default_value = PQgetvalue(colres, column, 5);
+
+						if (column == 0)
+							appendPQExpBuffer(buf, " (\n    ");
+						else
+							appendPQExpBuffer(buf, ",\n    ");
+						appendPQExpBuffer(buf, "%s", column_name);
+						if (strcmp(reloftype, "0") == 0)
+							appendPQExpBuffer(buf, " %s", data_type);
+
+						/*
+						 * check if not null
+						 */
+						if (strcmp(not_null, "t") == 0)
+							appendPQExpBuffer(buf, " NOT NULL");
+
+						/*
+						 * check for default value
+						 */
+						if (strcmp(has_default, "t") == 0)
+							appendPQExpBuffer(buf, " DEFAULT %s", default_value);
+						if (strcmp(collation_name, "default") != 0 && !PQgetisnull(colres, column, 2))
+							appendPQExpBuffer(buf, " COLLATE %s", collation_name);
+					}
+
+					/*
+					 * add constraints, if any
+					 */
+					if (PQntuples(conres))
+					{
+						appendPQExpBufferStr(buf, ",\n");
+					}
+					else
+					{
+						appendPQExpBufferStr(buf, "\n");
+					}
+					for (int i = 0; i < PQntuples(conres); i++)
+					{
+						char	   *constraint_name = PQgetvalue(conres, i, 0);
+						char	   *constraint_def = PQgetvalue(conres, i, 1);
+
+						appendPQExpBuffer(buf, "    CONSTRAINT %s %s", constraint_name, constraint_def);
+						if (i != PQntuples(conres) - 1)
+							appendPQExpBuffer(buf, ",");
+						appendPQExpBuffer(buf, "\n");
+					}
+					appendPQExpBufferStr(buf, " ) ");
+
+					/*
+					 * add patition bounds
+					 */
+					if (relispartition[0] == 't')
+					{
+						appendPQExpBuffer(buf, "%s", relpartbound);
+					}
+					appendPQExpBufferStr(buf, "\n");
+
+					/*
+					 * add parent info
+					 */
+					if (numParents > 0 && relispartition[0] == 'f')
+					{
+						appendPQExpBuffer(buf, "INHERITS ");
+						for (int i = 0; i < numParents; i++)
+						{
+							char	   *parent_name = PQgetvalue(parres, i, 0);
+							char	   *parent_namespace = PQgetvalue(parres, i, 1);
+
+							if (strcmp(nspname, parent_namespace) != 0)
+							{
+								appendPQExpBuffer(buf, "%s.", parent_namespace);
+							}
+							appendPQExpBuffer(buf, "%s", parent_name);
+							if (i != numParents - 1)
+							{
+								appendPQExpBuffer(buf, ", ");
+							}
+						}
+						appendPQExpBuffer(buf, "\n");
+					}
+
+					/*
+					 * if partitioned, add definition
+					 */
+					if (relkind[0] == 'p')
+					{
+						appendPQExpBuffer(buf, "PARTITION BY %s\n", partkeydef);
+					}
+
+					/*
+					 * add access method
+					 */
+					if (!PQgetisnull(res, 0, 12))
+					{
+						appendPQExpBuffer(buf, "USING %s\n", amname);
+					}
+
+					/*
+					 * reloptions, if not an empty array "{}"
+					 */
+					if (reloptions != NULL && strlen(reloptions) > 2)
+					{
+						appendPQExpBufferStr(buf, " WITH (");
+						if (!appendReloptionsArray(buf, reloptions, "",
+												   pset.encoding,
+												   standard_strings()))
+						{
+							pg_log_error("could not parse reloptions array\n");
+							result = false;
+						}
+						appendPQExpBufferStr(buf, ")\n");
+					}
+
+					if (!PQgetisnull(res, 0, 3))
+					{
+						appendPQExpBuffer(buf, " TABLESPACE %s\n", spcname);
+					}
+
+					PQclear(colres);
+					PQclear(conres);
+					PQclear(parres);
+
+					destroyPQExpBuffer(column_info);
+					destroyPQExpBuffer(constraint_info);
+					destroyPQExpBuffer(parent_info);
+
+				}
+				break;
 		}
+
 		/* Make sure result ends with a newline */
 		if (buf->len > 0 && buf->data[buf->len - 1] != '\n')
 			appendPQExpBufferChar(buf, '\n');
@@ -5006,6 +5613,7 @@ get_create_object_cmd(EditableObjectType obj_type, Oid oid,
 
 	return result;
 }
+
 
 /*
  * If the given argument of \ef or \ev ends with a line number, delete the line

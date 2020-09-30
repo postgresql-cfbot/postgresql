@@ -682,7 +682,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
-	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PLANS POLICY
+	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PERCENT PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
 
@@ -11560,12 +11560,28 @@ limit_clause:
 					n->limitOption = LIMIT_OPTION_COUNT;
 					$$ = n;
 				}
+			| FETCH first_or_next select_fetch_first_value PERCENT row_or_rows ONLY
+				{
+					SelectLimit *n = (SelectLimit *) palloc(sizeof(SelectLimit));
+					n->limitOffset = NULL;
+					n->limitCount = $3;
+					n->limitOption = LIMIT_OPTION_PERCENT;
+					$$ = n;
+				}
 			| FETCH first_or_next select_fetch_first_value row_or_rows WITH TIES
 				{
 					SelectLimit *n = (SelectLimit *) palloc(sizeof(SelectLimit));
 					n->limitOffset = NULL;
 					n->limitCount = $3;
 					n->limitOption = LIMIT_OPTION_WITH_TIES;
+					$$ = n;
+				}
+			| FETCH first_or_next select_fetch_first_value PERCENT row_or_rows WITH TIES
+				{
+					SelectLimit *n = (SelectLimit *) palloc(sizeof(SelectLimit));
+					n->limitOffset = NULL;
+					n->limitCount = $3;
+					n->limitOption = LIMIT_OPTION_PER_WITH_TIES;
 					$$ = n;
 				}
 			| FETCH first_or_next row_or_rows ONLY
@@ -15209,6 +15225,7 @@ unreserved_keyword:
 			| PARTITION
 			| PASSING
 			| PASSWORD
+			| PERCENT
 			| PLANS
 			| POLICY
 			| PRECEDING
@@ -15780,6 +15797,7 @@ bare_label_keyword:
 			| PARTITION
 			| PASSING
 			| PASSWORD
+			| PERCENT
 			| PLACING
 			| PLANS
 			| POLICY
@@ -16342,7 +16360,8 @@ insertSelectOptions(SelectStmt *stmt,
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("multiple limit options not allowed")));
-		if (!stmt->sortClause && limitClause->limitOption == LIMIT_OPTION_WITH_TIES)
+		if (!stmt->sortClause && (limitClause->limitOption == LIMIT_OPTION_WITH_TIES
+			|| limitClause->limitOption == LIMIT_OPTION_PER_WITH_TIES))
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("WITH TIES cannot be specified without ORDER BY clause")));

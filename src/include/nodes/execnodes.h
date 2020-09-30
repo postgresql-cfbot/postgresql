@@ -2488,6 +2488,11 @@ typedef struct LimitState
 	LimitOption limitOption;	/* limit specification type */
 	int64		offset;			/* current OFFSET value */
 	int64		count;			/* current COUNT, if any */
+	float8		percent;		/* percentage */
+	int64		backwardPosition;	/* the number of tuple returned in
+									 * backward scan */
+	bool		reachEnd;		/* if true, outerPlan executed until the end */
+	Tuplestorestate *tupleStore;	/* holds the returned tuple */
 	bool		noCount;		/* if true, ignore count */
 	LimitStateCond lstate;		/* state machine status, as above */
 	int64		position;		/* 1-based index of last tuple returned */

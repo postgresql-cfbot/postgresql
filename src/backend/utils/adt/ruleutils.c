@@ -5243,7 +5243,15 @@ get_select_query_def(Query *query, deparse_context *context,
 							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 0);
 		get_rule_expr(query->limitOffset, context, false);
 	}
-	if (query->limitCount != NULL)
+	if (query->limitOption == LIMIT_OPTION_PERCENT)
+	{
+		appendContextKeyword(context, " FETCH FIRST ",
+							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 0);
+		get_rule_expr(query->limitCount, context, false);
+		appendContextKeyword(context, " PERCENT ROWS ONLY ",
+							 -PRETTYINDENT_STD, PRETTYINDENT_STD, 0);
+	}
+	if (query->limitCount != NULL && query->limitOption != LIMIT_OPTION_PERCENT)
 	{
 		if (query->limitOption == LIMIT_OPTION_WITH_TIES)
 		{

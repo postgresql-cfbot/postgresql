@@ -1754,8 +1754,12 @@ transformLimitClause(ParseState *pstate, Node *clause,
 		return NULL;
 
 	qual = transformExpr(pstate, clause, exprKind);
+	if ((limitOption == LIMIT_OPTION_PERCENT || limitOption == LIMIT_OPTION_PER_WITH_TIES)
+		&& strcmp(constructName, "LIMIT") == 0)
 
-	qual = coerce_to_specific_type(pstate, qual, INT8OID, constructName);
+		qual = coerce_to_specific_type(pstate, qual, FLOAT8OID, constructName);
+	else
+		qual = coerce_to_specific_type(pstate, qual, INT8OID, constructName);
 
 	/* LIMIT can't refer to any variables of the current query */
 	checkExprIsVarFree(pstate, qual, constructName);

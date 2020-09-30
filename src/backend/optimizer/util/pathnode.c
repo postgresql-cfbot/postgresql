@@ -3665,7 +3665,7 @@ create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 	adjust_limit_rows_costs(&pathnode->path.rows,
 							&pathnode->path.startup_cost,
 							&pathnode->path.total_cost,
-							offset_est, count_est);
+							limitOption, offset_est, count_est);
 
 	return pathnode;
 }
@@ -3690,6 +3690,7 @@ void
 adjust_limit_rows_costs(double *rows,	/* in/out parameter */
 						Cost *startup_cost, /* in/out parameter */
 						Cost *total_cost,	/* in/out parameter */
+						LimitOption limitOption,
 						int64 offset_est,
 						int64 count_est)
 {

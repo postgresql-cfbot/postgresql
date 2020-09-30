@@ -31,6 +31,23 @@ SELECT ''::text AS five, unique1, unique2, stringu1
 		FROM onek
 		ORDER BY unique1 LIMIT 5 OFFSET 900;
 
+--
+-- PERCENT
+-- Check the PERCENT option of limit clause
+--
+SELECT ''::text AS two, unique1, unique2, stringu1
+		FROM onek WHERE unique1 > 50
+		ORDER BY unique1 FETCH FIRST 1 PERCENT ROWS ONLY;
+SELECT ''::text AS two, unique1, unique2, stringu1
+		FROM onek WHERE unique1 > 60 AND unique1 < 63
+		ORDER BY unique1 FETCH FIRST 50 PERCENT ROWS ONLY;
+SELECT ''::text AS three, unique1, unique2, stringu1
+		FROM onek WHERE unique1 > 100
+		ORDER BY unique1 FETCH FIRST 1 PERCENT ROWS ONLY OFFSET 20;
+SELECT ''::text AS eleven, unique1, unique2, stringu1
+		FROM onek WHERE unique1 < 50
+		ORDER BY unique1 DESC FETCH FIRST 10  PERCENT ROWS ONLY OFFSET 39;
+
 -- Test null limit and offset.  The planner would discard a simple null
 -- constant, so to ensure executor is exercised, do this:
 select * from int8_tbl limit (case when random() < 0.5 then null::bigint end);
@@ -38,7 +55,6 @@ select * from int8_tbl offset (case when random() < 0.5 then null::bigint end);
 
 -- Test assorted cases involving backwards fetch from a LIMIT plan node
 begin;
-
 declare c1 cursor for select * from int8_tbl limit 10;
 fetch all in c1;
 fetch 1 in c1;
@@ -80,6 +96,22 @@ fetch all in c5;
 fetch backward all in c5;
 fetch all in c5;
 fetch backward all in c5;
+
+declare c6 cursor for select * from int8_tbl fetch first 50 percent rows only;
+fetch all in c6;
+fetch 1 in c6;
+fetch backward 1 in c6;
+fetch backward all in c6;
+fetch backward 1 in c6;
+fetch all in c6;
+
+declare c7 cursor for select * from int8_tbl order by q1 fetch first 15 percent rows with ties;
+fetch all in c7;
+fetch 1 in c7;
+fetch backward 1 in c7;
+fetch backward all in c7;
+fetch backward 1 in c7;
+fetch all in c7;
 
 rollback;
 
@@ -172,6 +204,27 @@ SELECT  thousand
 SELECT  thousand
 		FROM onek WHERE thousand < 5
 		ORDER BY thousand FETCH FIRST 2 ROW ONLY;
+
+--
+-- FETCH FIRST
+-- Check the PERCENT WITH TIES clause
+--
+
+SELECT  thousand
+		FROM onek WHERE thousand < 5
+		ORDER BY thousand FETCH FIRST 2 PERCENT ROW ONLY;
+
+SELECT  thousand
+		FROM onek WHERE thousand < 5
+		ORDER BY thousand FETCH FIRST 2 PERCENT ROWS WITH TIES;
+
+SELECT  thousand
+		FROM onek WHERE thousand < 5
+		ORDER BY thousand FETCH FIRST 21 PERCENT ROW ONLY;
+
+SELECT  thousand
+		FROM onek WHERE thousand < 5
+		ORDER BY thousand FETCH FIRST 21 PERCENT ROW WITH TIES;
 
 -- should fail
 SELECT ''::text AS two, unique1, unique2, stringu1

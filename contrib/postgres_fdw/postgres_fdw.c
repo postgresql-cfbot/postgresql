@@ -3096,7 +3096,8 @@ estimate_path_cost_size(PlannerInfo *root,
 		if (fpextra && fpextra->has_limit)
 		{
 			adjust_limit_rows_costs(&rows, &startup_cost, &total_cost,
-									fpextra->offset_est, fpextra->count_est);
+									LIMIT_OPTION_COUNT, fpextra->offset_est,
+									fpextra->count_est);
 			retrieved_rows = rows;
 		}
 	}

@@ -7396,6 +7396,7 @@ StartupXLOG(void)
 			/*
 			 * end of main redo apply loop
 			 */
+			set_ps_display("");
 
 			if (reachedRecoveryTarget)
 			{
@@ -8887,6 +8888,13 @@ CreateCheckPoint(int flags)
 	if (log_checkpoints)
 		LogCheckpointStart(flags, false);
 
+	if (flags & CHECKPOINT_END_OF_RECOVERY)
+		set_ps_display("(end-of-recovery checkpoint)");
+	else if (flags & CHECKPOINT_IS_SHUTDOWN)
+		set_ps_display("(shutdown checkpoint)");
+	else
+		set_ps_display("(checkpoint)");
+
 	TRACE_POSTGRESQL_CHECKPOINT_START(flags);
 
 	/*
@@ -9101,6 +9109,7 @@ CreateCheckPoint(int flags)
 
 	/* Real work is done, but log and update stats before releasing lock. */
 	LogCheckpointEnd(false);
+	set_ps_display("");
 
 	TRACE_POSTGRESQL_CHECKPOINT_DONE(CheckpointStats.ckpt_bufs_written,
 									 NBuffers,
@@ -9356,6 +9365,11 @@ CreateRestartPoint(int flags)
 	if (log_checkpoints)
 		LogCheckpointStart(flags, true);
 
+	if (flags & CHECKPOINT_IS_SHUTDOWN)
+		set_ps_display("(shutdown restartpoint)");
+	else
+		set_ps_display("(restartpoint)");
+
 	CheckPointGuts(lastCheckPoint.redo, flags);
 
 	/*
@@ -9473,6 +9487,7 @@ CreateRestartPoint(int flags)
 
 	/* Real work is done, but log and update before releasing lock. */
 	LogCheckpointEnd(true);
+	set_ps_display("");
 
 	xtime = GetLatestXTime();
 	ereport((log_checkpoints ? LOG : DEBUG2),

@@ -2246,7 +2246,7 @@ include_dir 'conf.d'
          dirty data in the kernel's page cache, reducing the likelihood of
          stalls when an <function>fsync</function> is issued at the end of a checkpoint, or when
          the OS writes data back in larger batches in the background.  Often
-         that will result in greatly reduced transaction latency, but there
+         this feature will result in greatly reduced transaction latency, but there
          also are some cases, especially with workloads that are bigger than
          <xref linkend="guc-shared-buffers"/>, but smaller than the OS's page
          cache, where performance might degrade.  This setting may have no
@@ -2488,7 +2488,7 @@ include_dir 'conf.d'
          amount of dirty data in the kernel's page cache, reducing the
          likelihood of stalls when an <function>fsync</function> is issued at the end of a
          checkpoint, or when the OS writes data back in larger batches in the
-         background.  Often that will result in greatly reduced transaction
+         background.  Often this feature will result in greatly reduced transaction
          latency, but there also are some cases, especially with workloads
          that are bigger than <xref linkend="guc-shared-buffers"/>, but smaller
          than the OS's page cache, where performance might degrade.  This
@@ -3172,11 +3172,13 @@ include_dir 'conf.d'
         limit the amount of dirty data in the kernel's page cache, reducing
         the likelihood of stalls when an <function>fsync</function> is issued at the end of the
         checkpoint, or when the OS writes data back in larger batches in the
-        background.  Often that will result in greatly reduced transaction
+        background.  This feature will often result in greatly reduced transaction
         latency, but there also are some cases, especially with workloads
         that are bigger than <xref linkend="guc-shared-buffers"/>, but smaller
         than the OS's page cache, where performance might degrade.  This
         setting may have no effect on some platforms.
+        This setting also applies to the checkpoint written at the end of crash
+        recovery.
         If this value is specified without units, it is taken as blocks,
         that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
         The valid range is

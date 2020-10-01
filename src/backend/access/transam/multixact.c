@@ -73,6 +73,7 @@
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/twophase_rmgr.h"
+#include "access/walprohibit.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
@@ -1142,6 +1143,8 @@ GetNewMultiXactId(int nmembers, MultiXactOffset *offset)
 				 errhint("Execute a database-wide VACUUM in that database with reduced vacuum_multixact_freeze_min_age and vacuum_multixact_freeze_table_age settings.")));
 
 	ExtendMultiXactMember(nextOffset, nmembers);
+
+	CheckWALPermitted();
 
 	/*
 	 * Critical section from here until caller has written the data into the
@@ -2927,7 +2930,7 @@ TruncateMultiXact(MultiXactId newOldestMulti, Oid newOldestMultiDB)
 	mxtruncinfo trunc;
 	MultiXactId earliest;
 
-	Assert(!RecoveryInProgress());
+	Assert(XLogInsertAllowed());
 	Assert(MultiXactState->finishedStartup);
 
 	/*

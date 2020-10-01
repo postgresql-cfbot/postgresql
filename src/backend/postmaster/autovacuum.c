@@ -659,6 +659,10 @@ AutoVacLauncherMain(int argc, char *argv[])
 
 		HandleAutoVacLauncherInterrupts();
 
+		/* If the server is read only just go back to sleep. */
+		if (!XLogInsertAllowed())
+			continue;
+
 		/*
 		 * a worker finished, or postmaster signaled failure to start a worker
 		 */

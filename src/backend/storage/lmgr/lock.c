@@ -794,15 +794,15 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	if (lockmode <= 0 || lockmode > lockMethodTable->numLockModes)
 		elog(ERROR, "unrecognized lock mode: %d", lockmode);
 
-	if (RecoveryInProgress() && !InRecovery &&
+	if (!XLogInsertAllowed() && !InRecovery &&
 		(locktag->locktag_type == LOCKTAG_OBJECT ||
 		 locktag->locktag_type == LOCKTAG_RELATION) &&
 		lockmode > RowExclusiveLock)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("cannot acquire lock mode %s on database objects while recovery is in progress",
+				 errmsg("cannot acquire lock mode %s on database objects while system is read only",
 						lockMethodTable->lockModeNames[lockmode]),
-				 errhint("Only RowExclusiveLock or less can be acquired on database objects during recovery.")));
+				 errhint("Only RowExclusiveLock or less can be acquired on database objects while system is read only")));
 
 #ifdef LOCK_DEBUG
 	if (LOCK_DEBUG_ENABLED(locktag))

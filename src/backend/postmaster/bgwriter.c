@@ -278,7 +278,7 @@ BackgroundWriterMain(void)
 		 * Checkpointer, when active, is barely ever in its mainloop and thus
 		 * makes it hard to log regularly.
 		 */
-		if (XLogStandbyInfoActive() && !RecoveryInProgress())
+		if (XLogStandbyInfoActive() && XLogInsertAllowed())
 		{
 			TimestampTz timeout = 0;
 			TimestampTz now = GetCurrentTimestamp();

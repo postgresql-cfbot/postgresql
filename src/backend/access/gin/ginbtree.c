@@ -16,6 +16,7 @@
 
 #include "access/gin_private.h"
 #include "access/ginxlog.h"
+#include "access/walprohibit.h"
 #include "access/xloginsert.h"
 #include "miscadmin.h"
 #include "storage/predicate.h"
@@ -332,6 +333,7 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 {
 	Page		page = BufferGetPage(stack->buffer);
 	bool		result;
+	bool		needwal;
 	GinPlaceToPageRC rc;
 	uint16		xlflags = 0;
 	Page		childpage = NULL;
@@ -377,6 +379,7 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 								 insertdata, updateblkno,
 								 &ptp_workspace,
 								 &newlpage, &newrpage);
+	needwal = RelationNeedsWAL(btree->index) && !btree->isBuild;
 
 	if (rc == GPTP_NO_WORK)
 	{
@@ -385,10 +388,13 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 	}
 	else if (rc == GPTP_INSERT)
 	{
+		if (needwal)
+			CheckWALPermitted();
+
 		/* It will fit, perform the insertion */
 		START_CRIT_SECTION();
 
-		if (RelationNeedsWAL(btree->index) && !btree->isBuild)
+		if (needwal)
 		{
 			XLogBeginInsert();
 			XLogRegisterBuffer(0, stack->buffer, REGBUF_STANDARD);
@@ -409,7 +415,7 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 			MarkBufferDirty(childbuf);
 		}
 
-		if (RelationNeedsWAL(btree->index) && !btree->isBuild)
+		if (needwal)
 		{
 			XLogRecPtr	recptr;
 			ginxlogInsert xlrec;
@@ -547,6 +553,9 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 			}
 		}
 
+		if (needwal)
+			CheckWALPermitted();
+
 		/*
 		 * OK, we have the new contents of the left page in a temporary copy
 		 * now (newlpage), and likewise for the new contents of the
@@ -587,7 +596,7 @@ ginPlaceToPage(GinBtree btree, GinBtreeStack *stack,
 		}
 
 		/* write WAL record */
-		if (RelationNeedsWAL(btree->index) && !btree->isBuild)
+		if (needwal)
 		{
 			XLogRecPtr	recptr;
 

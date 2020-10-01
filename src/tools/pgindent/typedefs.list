@@ -87,6 +87,7 @@ AlterStatsStmt
 AlterSubscriptionStmt
 AlterSubscriptionType
 AlterSystemStmt
+AlterSystemWALProhibitState
 AlterTSConfigType
 AlterTSConfigurationStmt
 AlterTSDictionaryStmt
@@ -2670,6 +2671,7 @@ WALAvailability
 WALInsertLock
 WALInsertLockPadded
 WALOpenSegment
+WALProhibitStateData
 WALReadError
 WALSegmentCloseCB
 WALSegmentContext

@@ -3631,13 +3631,15 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 		{
 			/*
 			 * If we must not write WAL, due to a relfilenode-specific
-			 * condition or being in recovery, don't dirty the page.  We can
-			 * set the hint, just not dirty the page as a result so the hint
-			 * is lost when we evict the page or shutdown.
+			 * condition or in general, don't dirty the page.  We can
+			 * set the hint, but must not dirty the page as a result, lest
+			 * we trigger WAL generation. Unless the page is dirtied again
+			 * later, the hint will be lost when the page is evicted, or at
+			 * shutdown.
 			 *
 			 * See src/backend/storage/page/README for longer discussion.
 			 */
-			if (RecoveryInProgress() ||
+			if (!XLogInsertAllowed() ||
 				RelFileNodeSkippingWAL(bufHdr->tag.rnode))
 				return;
 

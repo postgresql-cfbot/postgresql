@@ -39,6 +39,7 @@
 #include <sys/time.h>
 #include <time.h>
 
+#include "access/walprohibit.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "libpq/pqsignal.h"
@@ -342,6 +343,7 @@ CheckpointerMain(void)
 		pg_time_t	now;
 		int			elapsed_secs;
 		int			cur_timeout;
+		uint32		wal_state_gen;
 
 		/* Clear any already-pending wakeups */
 		ResetLatch(MyLatch);
@@ -351,6 +353,30 @@ CheckpointerMain(void)
 		 */
 		AbsorbSyncRequests();
 		HandleCheckpointerInterrupts();
+
+		wal_state_gen = GetWALProhibitStateGen();
+
+		if (wal_state_gen & WALPROHIBIT_TRANSITION_IN_PROGRESS)
+		{
+			/* Complete WAL prohibit state change request */
+			CompleteWALProhibitChange(wal_state_gen);
+			continue;
+		}
+		else if (WALPROHIBIT_CURRENT_STATE(wal_state_gen) ==
+				 WALPROHIBIT_STATE_READ_ONLY)
+		{
+			/*
+			 * Don't do anything until someone wakes us up.  For example a
+			 * backend might later on request us to put the system back to
+			 * read-write wal prohibit sate.
+			 */
+			(void) WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, -1,
+							 WAIT_EVENT_CHECKPOINTER_MAIN);
+			continue;
+		}
+
+		Assert(WALPROHIBIT_CURRENT_STATE(wal_state_gen) ==
+			   WALPROHIBIT_STATE_READ_WRITE);
 
 		/*
 		 * Detect a pending checkpoint request by checking whether the flags
@@ -916,6 +942,10 @@ RequestCheckpoint(int flags)
 	int			old_failed,
 				old_started;
 
+	/* The checkpoint is allowed in recovery but not in WAL prohibit state */
+	if (!RecoveryInProgress())
+		CheckWALPermitted();
+
 	/*
 	 * If in a standalone backend, just do it ourselves.
 	 */
@@ -1332,4 +1362,17 @@ FirstCallSinceLastCheckpoint(void)
 	ckpt_done = new_done;
 
 	return FirstCall;
+}
+
+/*
+ * SendsSignalToCheckpointer allows a process to send a signal to the checkpoint process.
+ */
+void
+SendsSignalToCheckpointer(int signum)
+{
+	if (CheckpointerShmem->checkpointer_pid == 0)
+		elog(ERROR, "checkpointer is not running");
+
+	if (kill(CheckpointerShmem->checkpointer_pid, signum) != 0)
+		elog(ERROR, "could not signal checkpointer: %m");
 }

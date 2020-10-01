@@ -10964,6 +10964,10 @@
   proname => 'pg_partition_root', prorettype => 'regclass',
   proargtypes => 'regclass', prosrc => 'pg_partition_root' },
 
+{ oid => '4142', descr => 'alter system read only state',
+  proname => 'pg_alter_wal_prohibit_state', prorettype => 'void',
+  proargtypes => 'bool', prosrc => 'pg_alter_wal_prohibit_state' },
+
 { oid => '4350', descr => 'Unicode normalization',
   proname => 'normalize', prorettype => 'text', proargtypes => 'text text',
   prosrc => 'unicode_normalize_func' },

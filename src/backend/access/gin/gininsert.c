@@ -17,6 +17,7 @@
 #include "access/gin_private.h"
 #include "access/ginxlog.h"
 #include "access/tableam.h"
+#include "access/walprohibit.h"
 #include "access/xloginsert.h"
 #include "catalog/index.h"
 #include "miscadmin.h"
@@ -446,6 +447,9 @@ ginbuildempty(Relation index)
 	RootBuffer =
 		ReadBufferExtended(index, INIT_FORKNUM, P_NEW, RBM_NORMAL, NULL);
 	LockBuffer(RootBuffer, BUFFER_LOCK_EXCLUSIVE);
+
+	/* Building indexes will have an XID */
+	AssertWALPermittedHaveXID();
 
 	/* Initialize and xlog metabuffer and root buffer. */
 	START_CRIT_SECTION();

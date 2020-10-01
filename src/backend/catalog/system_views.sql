@@ -1485,6 +1485,8 @@ REVOKE EXECUTE ON FUNCTION pg_stat_file(text,boolean) FROM public;
 REVOKE EXECUTE ON FUNCTION pg_ls_dir(text) FROM public;
 REVOKE EXECUTE ON FUNCTION pg_ls_dir(text,boolean,boolean) FROM public;
 
+REVOKE EXECUTE ON FUNCTION pg_alter_wal_prohibit_state(bool) FROM public;
+
 --
 -- We also set up some things as accessible to standard roles.
 --

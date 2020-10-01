@@ -16,6 +16,7 @@
 
 #include "access/gin_private.h"
 #include "access/ginxlog.h"
+#include "access/walprohibit.h"
 #include "access/xloginsert.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
@@ -136,6 +137,7 @@ ginDeletePage(GinVacuumState *gvs, BlockNumber deleteBlkno, BlockNumber leftBlkn
 	Page		page,
 				parentPage;
 	BlockNumber rightlink;
+	bool		needwal;
 
 	/*
 	 * This function MUST be called only if someone of parent pages hold
@@ -158,6 +160,10 @@ ginDeletePage(GinVacuumState *gvs, BlockNumber deleteBlkno, BlockNumber leftBlkn
 	 * right sibling.
 	 */
 	PredicateLockPageCombine(gvs->index, deleteBlkno, rightlink);
+
+	needwal = RelationNeedsWAL(gvs->index);
+	if (needwal)
+		CheckWALPermitted();
 
 	START_CRIT_SECTION();
 
@@ -195,7 +201,7 @@ ginDeletePage(GinVacuumState *gvs, BlockNumber deleteBlkno, BlockNumber leftBlkn
 	MarkBufferDirty(lBuffer);
 	MarkBufferDirty(dBuffer);
 
-	if (RelationNeedsWAL(gvs->index))
+	if (needwal)
 	{
 		XLogRecPtr	recptr;
 		ginxlogDeletePage data;
@@ -650,6 +656,9 @@ ginbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 
 		if (resPage)
 		{
+			if (RelationNeedsWAL(gvs.index))
+				CheckWALPermitted();
+
 			START_CRIT_SECTION();
 			PageRestoreTempPage(resPage, page);
 			MarkBufferDirty(buffer);

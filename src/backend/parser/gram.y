@@ -479,6 +479,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <vsetstmt> generic_set set_rest set_rest_more generic_reset reset_rest
 				 SetResetClause FunctionSetResetClause
+%type <boolean> system_readonly_state
 
 %type <node>	TableElement TypedTableElement ConstraintElem TableFuncElement
 %type <node>	columnDef columnOptions
@@ -10173,8 +10174,20 @@ AlterSystemStmt:
 					n->setstmt = $4;
 					$$ = (Node *)n;
 				}
+			| ALTER SYSTEM_P system_readonly_state
+				{
+					AlterSystemWALProhibitState *n = makeNode(AlterSystemWALProhibitState);
+					n->walprohibited = $3;
+					$$ = (Node *)n;
+				}
 		;
 
+system_readonly_state:
+			 READ ONLY
+					{ $$ = true; }
+			| READ WRITE
+					{ $$ = false; }
+		;
 
 /*****************************************************************************
  *

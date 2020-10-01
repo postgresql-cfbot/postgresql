@@ -1864,9 +1864,11 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER SERVER <name> VERSION <version> */
 	else if (Matches("ALTER", "SERVER", MatchAny, "VERSION", MatchAny))
 		COMPLETE_WITH("OPTIONS");
-	/* ALTER SYSTEM SET, RESET, RESET ALL */
+	/* ALTER SYSTEM READ, SET, RESET, RESET ALL */
 	else if (Matches("ALTER", "SYSTEM"))
-		COMPLETE_WITH("SET", "RESET");
+		COMPLETE_WITH("SET", "RESET", "READ");
+	else if (Matches("ALTER", "SYSTEM", "READ"))
+		COMPLETE_WITH("ONLY", "WRITE");
 	else if (Matches("ALTER", "SYSTEM", "SET|RESET"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_alter_system_set_vars);
 	else if (Matches("ALTER", "SYSTEM", "SET", MatchAny))

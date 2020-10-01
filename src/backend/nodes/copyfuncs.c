@@ -4020,6 +4020,15 @@ _copyAlterSystemStmt(const AlterSystemStmt *from)
 	return newnode;
 }
 
+static AlterSystemWALProhibitState *
+_copyAlterSystemWALProhibitState(const AlterSystemWALProhibitState *from)
+{
+	AlterSystemWALProhibitState *newnode = makeNode(AlterSystemWALProhibitState);
+
+	COPY_SCALAR_FIELD(walprohibited);
+	return newnode;
+}
+
 static CreateSeqStmt *
 _copyCreateSeqStmt(const CreateSeqStmt *from)
 {
@@ -5404,6 +5413,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_AlterSystemStmt:
 			retval = _copyAlterSystemStmt(from);
+			break;
+		case T_AlterSystemWALProhibitState:
+			retval = _copyAlterSystemWALProhibitState(from);
 			break;
 		case T_CreateSeqStmt:
 			retval = _copyCreateSeqStmt(from);

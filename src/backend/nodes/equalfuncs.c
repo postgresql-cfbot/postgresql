@@ -1769,6 +1769,12 @@ _equalAlterSystemStmt(const AlterSystemStmt *a, const AlterSystemStmt *b)
 	return true;
 }
 
+static bool
+_equalAlterSystemWALProhibitState(const AlterSystemWALProhibitState *a, const AlterSystemWALProhibitState *b)
+{
+	COMPARE_SCALAR_FIELD(walprohibited);
+	return true;
+}
 
 static bool
 _equalCreateSeqStmt(const CreateSeqStmt *a, const CreateSeqStmt *b)
@@ -3456,6 +3462,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_AlterSystemStmt:
 			retval = _equalAlterSystemStmt(a, b);
+			break;
+		case T_AlterSystemWALProhibitState:
+			retval = _equalAlterSystemWALProhibitState(a, b);
 			break;
 		case T_CreateSeqStmt:
 			retval = _equalCreateSeqStmt(a, b);

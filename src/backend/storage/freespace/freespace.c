@@ -24,6 +24,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/walprohibit.h"
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "storage/freespace.h"
@@ -285,11 +286,18 @@ FreeSpaceMapPrepareTruncateRel(Relation rel, BlockNumber nblocks)
 	 */
 	if (first_removed_slot > 0)
 	{
+		bool needwal;
+
 		buf = fsm_readbuf(rel, first_removed_address, false);
 		if (!BufferIsValid(buf))
 			return InvalidBlockNumber;	/* nothing to do; the FSM was already
 										 * smaller */
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
+
+		needwal = (!InRecovery && RelationNeedsWAL(rel) && XLogHintBitIsNeeded());
+
+		if (needwal)
+			CheckWALPermitted();
 
 		/* NO EREPORT(ERROR) from here till changes are logged */
 		START_CRIT_SECTION();
@@ -305,7 +313,7 @@ FreeSpaceMapPrepareTruncateRel(Relation rel, BlockNumber nblocks)
 		 * during recovery.
 		 */
 		MarkBufferDirty(buf);
-		if (!InRecovery && RelationNeedsWAL(rel) && XLogHintBitIsNeeded())
+		if (needwal)
 			log_newpage_buffer(buf, false);
 
 		END_CRIT_SECTION();

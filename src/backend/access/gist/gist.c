@@ -16,6 +16,7 @@
 
 #include "access/gist_private.h"
 #include "access/gistscan.h"
+#include "access/walprohibit.h"
 #include "catalog/pg_collation.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
@@ -135,6 +136,9 @@ gistbuildempty(Relation index)
 	buffer = ReadBufferExtended(index, INIT_FORKNUM, P_NEW, RBM_NORMAL, NULL);
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
+	/* Building indexes will have an XID */
+	AssertWALPermittedHaveXID();
+
 	/* Initialize and xlog buffer */
 	START_CRIT_SECTION();
 	GISTInitBuffer(buffer, F_LEAF);
@@ -234,6 +238,7 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 	XLogRecPtr	recptr;
 	int			i;
 	bool		is_split;
+	bool		needwal = RelationNeedsWAL(rel);
 
 	/*
 	 * Refuse to modify a page that's incompletely split. This should not
@@ -465,8 +470,11 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 		 * insertion for that. NB: The number of pages and data segments
 		 * specified here must match the calculations in gistXLogSplit()!
 		 */
-		if (!is_build && RelationNeedsWAL(rel))
+		if (!is_build && needwal)
 			XLogEnsureRecordSpace(npage, 1 + npage * 2);
+
+		if (needwal)
+			CheckWALPermitted();
 
 		START_CRIT_SECTION();
 
@@ -500,7 +508,7 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 			recptr = GistBuildLSN;
 		else
 		{
-			if (RelationNeedsWAL(rel))
+			if (needwal)
 				recptr = gistXLogSplit(is_leaf,
 									   dist, oldrlink, oldnsn, leftchildbuf,
 									   markfollowright);
@@ -526,6 +534,9 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 	}
 	else
 	{
+		if (needwal)
+			CheckWALPermitted();
+
 		/*
 		 * Enough space.  We always get here if ntup==0.
 		 */
@@ -567,7 +578,7 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 			recptr = GistBuildLSN;
 		else
 		{
-			if (RelationNeedsWAL(rel))
+			if (needwal)
 			{
 				OffsetNumber ndeloffs = 0,
 							deloffs[1];
@@ -1641,6 +1652,7 @@ gistprunepage(Relation rel, Page page, Buffer buffer, Relation heapRel)
 	OffsetNumber offnum,
 				maxoff;
 	TransactionId latestRemovedXid = InvalidTransactionId;
+	bool		needwal = RelationNeedsWAL(rel);
 
 	Assert(GistPageIsLeaf(page));
 
@@ -1659,13 +1671,16 @@ gistprunepage(Relation rel, Page page, Buffer buffer, Relation heapRel)
 			deletable[ndeletable++] = offnum;
 	}
 
-	if (XLogStandbyInfoActive() && RelationNeedsWAL(rel))
+	if (XLogStandbyInfoActive() && needwal)
 		latestRemovedXid =
 			index_compute_xid_horizon_for_tuples(rel, heapRel, buffer,
 												 deletable, ndeletable);
 
 	if (ndeletable > 0)
 	{
+		if (needwal)
+			CheckWALPermitted();
+
 		START_CRIT_SECTION();
 
 		PageIndexMultiDelete(page, deletable, ndeletable);
@@ -1682,7 +1697,7 @@ gistprunepage(Relation rel, Page page, Buffer buffer, Relation heapRel)
 		MarkBufferDirty(buffer);
 
 		/* XLOG stuff */
-		if (RelationNeedsWAL(rel))
+		if (needwal)
 		{
 			XLogRecPtr	recptr;
 

@@ -1305,6 +1305,11 @@ generate_bitmap_or_paths(PlannerInfo *root, RelOptInfo *rel,
 				Assert(!restriction_is_or_clause(rinfo));
 				orargs = list_make1(rinfo);
 
+				/* Avoid scanning indexes using a scan condition which is
+				 * inconsistent with the partition constraint */
+				if (predicate_refuted_by(rel->partition_qual, orargs, false))
+					continue;
+
 				indlist = build_paths_for_OR(root, rel,
 											 orargs,
 											 all_clauses);

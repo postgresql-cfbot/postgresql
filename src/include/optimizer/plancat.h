@@ -39,6 +39,12 @@ extern int32 get_relation_data_width(Oid relid, int32 *attr_widths);
 extern bool relation_excluded_by_constraints(PlannerInfo *root,
 											 RelOptInfo *rel, RangeTblEntry *rte);
 
+extern List *get_relation_constraints(PlannerInfo *root,
+									  Oid relationObjectId, RelOptInfo *rel,
+									  bool include_noinherit,
+									  bool include_notnull,
+									  bool include_partition);
+
 extern List *build_physical_tlist(PlannerInfo *root, RelOptInfo *rel);
 
 extern bool has_unique_index(RelOptInfo *rel, AttrNumber attno);

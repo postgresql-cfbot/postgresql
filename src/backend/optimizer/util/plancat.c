@@ -64,11 +64,6 @@ static void get_relation_foreign_keys(PlannerInfo *root, RelOptInfo *rel,
 									  Relation relation, bool inhparent);
 static bool infer_collation_opclass_match(InferenceElem *elem, Relation idxRel,
 										  List *idxExprs);
-static List *get_relation_constraints(PlannerInfo *root,
-									  Oid relationObjectId, RelOptInfo *rel,
-									  bool include_noinherit,
-									  bool include_notnull,
-									  bool include_partition);
 static List *build_index_tlist(PlannerInfo *root, IndexOptInfo *index,
 							   Relation heapRelation);
 static List *get_relation_statistics(RelOptInfo *rel, Relation relation);
@@ -1165,7 +1160,7 @@ get_relation_data_width(Oid relid, int32 *attr_widths)
  * run, and in many cases it won't be invoked at all, so there seems no
  * point in caching the data in RelOptInfo.
  */
-static List *
+List *
 get_relation_constraints(PlannerInfo *root,
 						 Oid relationObjectId, RelOptInfo *rel,
 						 bool include_noinherit,

@@ -1046,6 +1046,13 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		}
 
 		/*
+		 * Ensure that rel->partition_qual is set, so we can use the information
+		 * to eliminate unnecessary index scans.
+		 */
+		if(childRTE->relid != InvalidOid)
+			get_relation_constraints(root, childRTE->relid, childrel, false, false, true);
+
+		/*
 		 * Constraint exclusion failed, so copy the parent's join quals and
 		 * targetlist to the child, with appropriate variable substitutions.
 		 *

@@ -1843,6 +1843,31 @@ SELECT count(*) FROM tenk1
     10
 (1 row)
 
+-- Check that indexes are not scanned for "arms" of an OR with a scan condition inconsistent with the partition constraint
+CREATE TABLE bitmapor (i int, j int) PARTITION BY RANGE(i);
+CREATE TABLE bitmapor1 PARTITION OF bitmapor FOR VALUES FROM (0) TO (10);
+CREATE TABLE bitmapor2 PARTITION OF bitmapor FOR VALUES FROM (10) TO (20);
+INSERT INTO bitmapor SELECT i%20, i%2 FROM generate_series(1,55555)i;
+VACUUM ANALYZE bitmapor;
+CREATE INDEX ON bitmapor(i);
+EXPLAIN (COSTS OFF) SELECT * FROM bitmapor WHERE (i=1 OR i=2 OR i=11);
+                       QUERY PLAN                       
+--------------------------------------------------------
+ Append
+   ->  Bitmap Heap Scan on bitmapor1 bitmapor_1
+         Recheck Cond: ((i = 1) OR (i = 2))
+         ->  BitmapOr
+               ->  Bitmap Index Scan on bitmapor1_i_idx
+                     Index Cond: (i = 1)
+               ->  Bitmap Index Scan on bitmapor1_i_idx
+                     Index Cond: (i = 2)
+   ->  Bitmap Heap Scan on bitmapor2 bitmapor_2
+         Recheck Cond: (i = 11)
+         ->  Bitmap Index Scan on bitmapor2_i_idx
+               Index Cond: (i = 11)
+(12 rows)
+
+DROP TABLE bitmapor;
 --
 -- Check behavior with duplicate index column contents
 --

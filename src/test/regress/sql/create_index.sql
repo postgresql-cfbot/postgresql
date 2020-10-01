@@ -703,6 +703,16 @@ SELECT count(*) FROM tenk1
 SELECT count(*) FROM tenk1
   WHERE hundred = 42 AND (thousand = 42 OR thousand = 99);
 
+-- Check that indexes are not scanned for "arms" of an OR with a scan condition inconsistent with the partition constraint
+CREATE TABLE bitmapor (i int, j int) PARTITION BY RANGE(i);
+CREATE TABLE bitmapor1 PARTITION OF bitmapor FOR VALUES FROM (0) TO (10);
+CREATE TABLE bitmapor2 PARTITION OF bitmapor FOR VALUES FROM (10) TO (20);
+INSERT INTO bitmapor SELECT i%20, i%2 FROM generate_series(1,55555)i;
+VACUUM ANALYZE bitmapor;
+CREATE INDEX ON bitmapor(i);
+EXPLAIN (COSTS OFF) SELECT * FROM bitmapor WHERE (i=1 OR i=2 OR i=11);
+DROP TABLE bitmapor;
+
 --
 -- Check behavior with duplicate index column contents
 --

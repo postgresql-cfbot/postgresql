@@ -70,6 +70,8 @@
 
 #define RELS_BSEARCH_THRESHOLD		20
 
+#define BUF_DROP_FULLSCAN_THRESHOLD		(uint32)(NBuffers / 512)
+
 typedef struct PrivateRefCountEntry
 {
 	Buffer		buffer;
@@ -2965,18 +2967,26 @@ BufferGetLSNAtomic(Buffer buffer)
  *		that no other process could be trying to load more pages of the
  *		relation into buffers.
  *
- *		XXX currently it sequentially searches the buffer pool, should be
- *		changed to more clever ways of searching.  However, this routine
- *		is used only in code paths that aren't very performance-critical,
- *		and we shouldn't slow down the hot paths to make it faster ...
+ *		XXX The relation might have extended before this, so this path is
+ *		only optimized during recovery when we can get a reliable cached
+ *		value of blocks for specified relation.  In addition, it is safe to
+ *		do this since there are no other processes but the startup process
+ *		that changes the relation size during recovery.  Otherwise, or if
+ *		not in recovery, proceed to usual invalidation process, where it
+ *		sequentially searches the buffer pool.
  * --------------------------------------------------------------------
  */
 void
-DropRelFileNodeBuffers(RelFileNodeBackend rnode, ForkNumber *forkNum,
+DropRelFileNodeBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 					   int nforks, BlockNumber *firstDelBlock)
 {
 	int			i;
 	int			j;
+	RelFileNodeBackend	rnode;
+	BufferDesc	*bufHdr;
+	uint32		buf_state;
+
+	rnode = smgr_reln->smgr_rnode;
 
 	/* If it's a local relation, it's localbuf.c's problem. */
 	if (RelFileNodeBackendIsTemp(rnode))
@@ -2990,10 +3000,72 @@ DropRelFileNodeBuffers(RelFileNodeBackend rnode, ForkNumber *forkNum,
 		return;
 	}
 
+	/* Enter optimization loop if blocks are valid, wherein the path is in recovery */
+	for (j = 0; j < nforks; j++)
+	{
+		BlockNumber	nTotalBlocks; /* total nblocks */
+		BlockNumber nBlocksToInvalidate; /* total nblocks to be invalidated */
+
+		/* Get the total number of blocks for the supplied relation's fork */
+		nTotalBlocks = smgrcachednblocks(smgr_reln, forkNum[j]);
+
+		/* If blocks are invalid, exit the optimization and execute full scan */
+		if (nTotalBlocks == InvalidBlockNumber)
+			break;
+
+		/* Get the total number of blocks to be invalidated for the specified fork */
+		nBlocksToInvalidate = nTotalBlocks - firstDelBlock[j];
+
+		/*
+		 * Do explicit hashtable probe if the blocks to be invalidated have not been
+		 * invalidated yet as well as if the ratio of total number of buffers to be
+		 * truncated against NBuffers is less than the threshold for full-scanning of
+		 * buffer pool. IOW, relation is small enough for its buffers to be removed.
+		 */
+		if (nBlocksToInvalidate < BUF_DROP_FULLSCAN_THRESHOLD)
+		{
+			BlockNumber		curBlock;
+
+			for (curBlock = firstDelBlock[j]; curBlock < nTotalBlocks; curBlock++)
+			{
+				uint32		newHash;		/* hash value for newTag */
+				BufferTag	newTag;			/* identity of requested block */
+				LWLock	   	*newPartitionLock;	/* buffer partition lock for it */
+				int		buf_id;
+
+				/* create a tag so we can lookup the buffer */
+				INIT_BUFFERTAG(newTag, rnode.node, forkNum[j], curBlock);
+
+				/* determine its hash code and partition lock ID */
+				newHash = BufTableHashCode(&newTag);
+				newPartitionLock = BufMappingPartitionLock(newHash);
+
+				/* Check that it is in the buffer pool. If not, do nothing */
+				LWLockAcquire(newPartitionLock, LW_SHARED);
+				buf_id = BufTableLookup(&newTag, newHash);
+				LWLockRelease(newPartitionLock);
+
+				if (buf_id < 0)
+					continue;
+
+				bufHdr = GetBufferDescriptor(buf_id);
+
+				buf_state = LockBufHdr(bufHdr);
+
+				if (RelFileNodeEquals(bufHdr->tag.rnode, rnode.node) &&
+					bufHdr->tag.forkNum == forkNum[j] &&
+					bufHdr->tag.blockNum == curBlock)
+					InvalidateBuffer(bufHdr);	/* releases spinlock */
+				else
+					UnlockBufHdr(bufHdr, buf_state);
+			}
+		}
+		else
+			break;
+	}
 	for (i = 0; i < NBuffers; i++)
 	{
-		BufferDesc *bufHdr = GetBufferDescriptor(i);
-		uint32		buf_state;
+		bufHdr = GetBufferDescriptor(i);
 
 		/*
 		 * We can make this a tad faster by prechecking the buffer tag before

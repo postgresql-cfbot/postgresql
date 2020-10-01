@@ -474,7 +474,14 @@ smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	if (reln->smgr_cached_nblocks[forknum] == blocknum)
 		reln->smgr_cached_nblocks[forknum] = blocknum + 1;
 	else
+	{
+		/*
+		 * DropRelFileNodeBuffers relies on the behavior that cached nblocks
+		 * won't be invalidated by file extension during recovery.
+		 */
+		Assert(!InRecovery);
 		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
+	}
 }
 
 /*
@@ -565,6 +572,27 @@ smgrnblocks(SMgrRelation reln, ForkNumber forknum)
 }
 
 /*
+ *	smgrcachednblocks() -- Calculate the number of blocks that are cached in
+ *					 the supplied relation.
+ *
+ * It is equivalent to calling smgrnblocks, but only used in recovery for now
+ * when DropRelFileNodeBuffers() is called.  This ensures that only cached value
+ * is used which is always valid in recovery, since there is no shared
+ * invalidation mechanism that is implemented yet for changes in file size.
+ *
+ * This returns an InvalidBlockNumber when smgr_cached_nblocks is not available
+ * and when not in recovery.
+ */
+BlockNumber
+smgrcachednblocks(SMgrRelation reln, ForkNumber forknum)
+{
+	if (InRecovery && reln->smgr_cached_nblocks[forknum] != InvalidBlockNumber)
+			return reln->smgr_cached_nblocks[forknum];
+
+	return InvalidBlockNumber;
+}
+
+/*
  *	smgrtruncate() -- Truncate the given forks of supplied relation to
  *					  each specified numbers of blocks
  *
@@ -583,7 +611,7 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 	 * Get rid of any buffers for the about-to-be-deleted blocks. bufmgr will
 	 * just drop them without bothering to write the contents.
 	 */
-	DropRelFileNodeBuffers(reln->smgr_rnode, forknum, nforks, nblocks);
+	DropRelFileNodeBuffers(reln, forknum, nforks, nblocks);
 
 	/*
 	 * Send a shared-inval message to force other backends to close any smgr

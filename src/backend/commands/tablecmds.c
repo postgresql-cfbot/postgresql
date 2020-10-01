@@ -757,8 +757,12 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		case RELKIND_PARTITIONED_TABLE:
 			(void) partitioned_table_reloptions(reloptions, true);
 			break;
-		default:
-			(void) heap_reloptions(relkind, reloptions, true);
+		case RELKIND_TOASTVALUE:
+			(void) toast_reloptions(reloptions, true);
+			break;
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+			(void) heap_reloptions(reloptions, true);
 	}
 
 	if (stmt->ofTypename)
@@ -12965,9 +12969,11 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 	switch (rel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:
-		case RELKIND_TOASTVALUE:
 		case RELKIND_MATVIEW:
-			(void) heap_reloptions(rel->rd_rel->relkind, newOptions, true);
+			(void) heap_reloptions( newOptions, true);
+			break;
+		case RELKIND_TOASTVALUE:
+			(void) toast_reloptions(newOptions, true);
 			break;
 		case RELKIND_PARTITIONED_TABLE:
 			(void) partitioned_table_reloptions(newOptions, true);
@@ -13079,7 +13085,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 										 defList, "toast", validnsps, false,
 										 operation == AT_ResetRelOptions);
 
-		(void) heap_reloptions(RELKIND_TOASTVALUE, newOptions, true);
+		(void) toast_reloptions(newOptions, true);
 
 		memset(repl_val, 0, sizeof(repl_val));
 		memset(repl_null, false, sizeof(repl_null));

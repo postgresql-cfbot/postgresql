@@ -1085,6 +1085,9 @@ ForceSyncCommit(void)
 static void
 AtStart_Cache(void)
 {
+	if (xactStartTimestamp != 0)
+		SetCatCacheClock(xactStartTimestamp);
+
 	AcceptInvalidationMessages();
 }
 

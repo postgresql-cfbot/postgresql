@@ -60,13 +60,23 @@
 #define CACHE_elog(...)
 #endif
 
+/*
+ * GUC variable to define the minimum age of entries that will be considered
+ * to be evicted in seconds. -1 to disable the feature.
+ */
+int catalog_cache_prune_min_age = 300;
+
 /* Cache management header --- pointer is NULL until created */
 static CatCacheHeader *CacheHdr = NULL;
 
-static inline HeapTuple SearchCatCacheInternal(CatCache *cache,
-											   int nkeys,
-											   Datum v1, Datum v2,
-											   Datum v3, Datum v4);
+/* Clock for the last accessed time of a catcache entry. */
+TimestampTz	catcacheclock = 0;
+
+/* basic catcache search functions */
+static inline HeapTuple SearchCatCacheInternalb(CatCache *cache,
+												int nkeys,
+												Datum v1, Datum v2,
+												Datum v3, Datum v4);
 
 static pg_noinline HeapTuple SearchCatCacheMiss(CatCache *cache,
 												int nkeys,
@@ -74,6 +84,32 @@ static pg_noinline HeapTuple SearchCatCacheMiss(CatCache *cache,
 												Index hashIndex,
 												Datum v1, Datum v2,
 												Datum v3, Datum v4);
+
+static HeapTuple SearchCatCacheb(CatCache *cache,
+								 Datum v1, Datum v2, Datum v3, Datum v4);
+static HeapTuple SearchCatCache1b(CatCache *cache, Datum v1);
+static HeapTuple SearchCatCache2b(CatCache *cache, Datum v1, Datum v2);
+static HeapTuple SearchCatCache3b(CatCache *cache,
+								  Datum v1, Datum v2, Datum v3);
+static HeapTuple SearchCatCache4b(CatCache *cache,
+								  Datum v1, Datum v2, Datum v3, Datum v4);
+
+/* catcache search functions with expiration feature */
+static inline HeapTuple SearchCatCacheInternale(CatCache *cache,
+												int nkeys,
+												Datum v1, Datum v2,
+												Datum v3, Datum v4);
+
+static HeapTuple SearchCatCachee(CatCache *cache,
+								 Datum v1, Datum v2, Datum v3, Datum v4);
+static HeapTuple SearchCatCache1e(CatCache *cache, Datum v1);
+static HeapTuple SearchCatCache2e(CatCache *cache, Datum v1, Datum v2);
+static HeapTuple SearchCatCache3e(CatCache *cache,
+								  Datum v1, Datum v2, Datum v3);
+static HeapTuple SearchCatCache4e(CatCache *cache,
+								  Datum v1, Datum v2, Datum v3, Datum v4);
+
+static bool CatCacheCleanupOldEntries(CatCache *cp);
 
 static uint32 CatalogCacheComputeHashValue(CatCache *cache, int nkeys,
 										   Datum v1, Datum v2, Datum v3, Datum v4);
@@ -99,6 +135,44 @@ static void CatCacheFreeKeys(TupleDesc tupdesc, int nkeys, int *attnos,
 static void CatCacheCopyKeys(TupleDesc tupdesc, int nkeys, int *attnos,
 							 Datum *srckeys, Datum *dstkeys);
 
+static SearchCatCacheFuncsType catcache_base = {
+	SearchCatCacheb,
+	SearchCatCache1b,
+	SearchCatCache2b,
+	SearchCatCache3b,
+	SearchCatCache4b
+};
+
+static SearchCatCacheFuncsType catcache_expire = {
+	SearchCatCachee,
+	SearchCatCache1e,
+	SearchCatCache2e,
+	SearchCatCache3e,
+	SearchCatCache4e
+};
+
+SearchCatCacheFuncsType *SearchCatCacheFuncs = NULL;
+
+/* set catcache function set according to guc variables */
+static void
+set_catcache_functions(void)
+{
+	if (catalog_cache_prune_min_age < 0)
+		SearchCatCacheFuncs = &catcache_base;
+	else
+		SearchCatCacheFuncs = &catcache_expire;
+}
+
+
+/* GUC assign function */
+void
+assign_catalog_cache_prune_min_age(int newval, void *extra)
+{
+	catalog_cache_prune_min_age = newval;
+
+	/* choose corresponding function set */
+	set_catcache_functions();
+}
 
 /*
  *					internal support functions
@@ -802,6 +876,9 @@ InitCatCache(int id,
 		CacheHdr = (CatCacheHeader *) palloc(sizeof(CatCacheHeader));
 		slist_init(&CacheHdr->ch_caches);
 		CacheHdr->ch_ntup = 0;
+
+		set_catcache_functions();
+
 #ifdef CATCACHE_STATS
 		/* set up to dump stats at backend exit */
 		on_proc_exit(CatCachePrintStats, 0);
@@ -862,6 +939,10 @@ RehashCatCache(CatCache *cp)
 	dlist_head *newbucket;
 	int			newnbuckets;
 	int			i;
+
+	/* try removing old entries before expanding hash */
+	if (CatCacheCleanupOldEntries(cp))
+		return;
 
 	elog(DEBUG1, "rehashing catalog cache id %d for %s; %d tups, %d buckets",
 		 cp->id, cp->cc_relname, cp->cc_ntup, cp->cc_nbuckets);
@@ -1143,14 +1224,14 @@ IndexScanOK(CatCache *cache, ScanKey cur_skey)
  * the caller need not go to the trouble of converting it to a fully
  * null-padded NAME.
  */
-HeapTuple
-SearchCatCache(CatCache *cache,
+static HeapTuple
+SearchCatCacheb(CatCache *cache,
 			   Datum v1,
 			   Datum v2,
 			   Datum v3,
 			   Datum v4)
 {
-	return SearchCatCacheInternal(cache, cache->cc_nkeys, v1, v2, v3, v4);
+	return SearchCatCacheInternalb(cache, cache->cc_nkeys, v1, v2, v3, v4);
 }
 
 
@@ -1160,47 +1241,47 @@ SearchCatCache(CatCache *cache,
  * bit faster than SearchCatCache().
  */
 
-HeapTuple
-SearchCatCache1(CatCache *cache,
+static HeapTuple
+SearchCatCache1b(CatCache *cache,
 				Datum v1)
 {
-	return SearchCatCacheInternal(cache, 1, v1, 0, 0, 0);
+	return SearchCatCacheInternalb(cache, 1, v1, 0, 0, 0);
 }
 
 
-HeapTuple
-SearchCatCache2(CatCache *cache,
+static HeapTuple
+SearchCatCache2b(CatCache *cache,
 				Datum v1, Datum v2)
 {
-	return SearchCatCacheInternal(cache, 2, v1, v2, 0, 0);
+	return SearchCatCacheInternalb(cache, 2, v1, v2, 0, 0);
 }
 
 
-HeapTuple
-SearchCatCache3(CatCache *cache,
+static HeapTuple
+SearchCatCache3b(CatCache *cache,
 				Datum v1, Datum v2, Datum v3)
 {
-	return SearchCatCacheInternal(cache, 3, v1, v2, v3, 0);
+	return SearchCatCacheInternalb(cache, 3, v1, v2, v3, 0);
 }
 
 
-HeapTuple
-SearchCatCache4(CatCache *cache,
+static HeapTuple
+SearchCatCache4b(CatCache *cache,
 				Datum v1, Datum v2, Datum v3, Datum v4)
 {
-	return SearchCatCacheInternal(cache, 4, v1, v2, v3, v4);
+	return SearchCatCacheInternalb(cache, 4, v1, v2, v3, v4);
 }
 
 /*
- * Work-horse for SearchCatCache/SearchCatCacheN.
+ * Work-horse for SearchCatCacheb/SearchCatCacheNb.
  */
 static inline HeapTuple
-SearchCatCacheInternal(CatCache *cache,
-					   int nkeys,
-					   Datum v1,
-					   Datum v2,
-					   Datum v3,
-					   Datum v4)
+SearchCatCacheInternalb(CatCache *cache,
+						int nkeys,
+						Datum v1,
+						Datum v2,
+						Datum v3,
+						Datum v4)
 {
 	Datum		arguments[CATCACHE_MAXKEYS];
 	uint32		hashValue;
@@ -1424,6 +1505,269 @@ SearchCatCacheMiss(CatCache *cache,
 
 	return &ct->tuple;
 }
+
+/*
+ *	SearchCatCache with entry pruning
+ *
+ *  These functions works the same way with SearchCatCacheNb() functions except
+ *  that less-used entries are removed following catalog_cache_prune_min_age
+ *  setting.
+ */
+static HeapTuple
+SearchCatCachee(CatCache *cache,
+			   Datum v1,
+			   Datum v2,
+			   Datum v3,
+			   Datum v4)
+{
+	return SearchCatCacheInternale(cache, cache->cc_nkeys, v1, v2, v3, v4);
+}
+
+
+/*
+ * SearchCatCacheN() are SearchCatCache() versions for a specific number of
+ * arguments. The compiler can inline the body and unroll loops, making them a
+ * bit faster than SearchCatCache().
+ */
+
+static HeapTuple
+SearchCatCache1e(CatCache *cache,
+				Datum v1)
+{
+	return SearchCatCacheInternale(cache, 1, v1, 0, 0, 0);
+}
+
+
+static HeapTuple
+SearchCatCache2e(CatCache *cache,
+				Datum v1, Datum v2)
+{
+	return SearchCatCacheInternale(cache, 2, v1, v2, 0, 0);
+}
+
+
+static HeapTuple
+SearchCatCache3e(CatCache *cache,
+				Datum v1, Datum v2, Datum v3)
+{
+	return SearchCatCacheInternale(cache, 3, v1, v2, v3, 0);
+}
+
+
+static HeapTuple
+SearchCatCache4e(CatCache *cache,
+				Datum v1, Datum v2, Datum v3, Datum v4)
+{
+	return SearchCatCacheInternale(cache, 4, v1, v2, v3, v4);
+}
+
+/*
+ * Work-horse for SearchCatCachee/SearchCatCacheNe.
+ */
+static inline HeapTuple
+SearchCatCacheInternale(CatCache *cache,
+						int nkeys,
+						Datum v1,
+						Datum v2,
+						Datum v3,
+						Datum v4)
+{
+	Datum		arguments[CATCACHE_MAXKEYS];
+	uint32		hashValue;
+	Index		hashIndex;
+	dlist_iter	iter;
+	dlist_head *bucket;
+	CatCTup    *ct;
+
+	/* Make sure we're in an xact, even if this ends up being a cache hit */
+	Assert(IsTransactionState());
+
+	Assert(cache->cc_nkeys == nkeys);
+
+	/*
+	 * one-time startup overhead for each cache
+	 */
+	if (unlikely(cache->cc_tupdesc == NULL))
+		CatalogCacheInitializeCache(cache);
+
+#ifdef CATCACHE_STATS
+	cache->cc_searches++;
+#endif
+
+	/* Initialize local parameter array */
+	arguments[0] = v1;
+	arguments[1] = v2;
+	arguments[2] = v3;
+	arguments[3] = v4;
+
+	/*
+	 * find the hash bucket in which to look for the tuple
+	 */
+	hashValue = CatalogCacheComputeHashValue(cache, nkeys, v1, v2, v3, v4);
+	hashIndex = HASH_INDEX(hashValue, cache->cc_nbuckets);
+
+	/*
+	 * scan the hash bucket until we find a match or exhaust our tuples
+	 *
+	 * Note: it's okay to use dlist_foreach here, even though we modify the
+	 * dlist within the loop, because we don't continue the loop afterwards.
+	 */
+	bucket = &cache->cc_bucket[hashIndex];
+	dlist_foreach(iter, bucket)
+	{
+		ct = dlist_container(CatCTup, cache_elem, iter.cur);
+
+		if (ct->dead)
+			continue;			/* ignore dead entries */
+
+		if (ct->hash_value != hashValue)
+			continue;			/* quickly skip entry if wrong hash val */
+
+		if (!CatalogCacheCompareTuple(cache, nkeys, ct->keys, arguments))
+			continue;
+
+		/*
+		 * We found a match in the cache.  Move it to the front of the list
+		 * for its hashbucket, in order to speed subsequent searches.  (The
+		 * most frequently accessed elements in any hashbucket will tend to be
+		 * near the front of the hashbucket's list.)
+		 */
+		dlist_move_head(bucket, &ct->cache_elem);
+
+		/*
+		 * Prolong life of this entry. Since we want run as less instructions
+		 * as possible and want the branch be stable for performance reasons,
+		 * we don't give a strict cap on the counter. All numbers above 1 will
+		 * be regarded as 2 in CatCacheCleanupOldEntries().
+		 */
+		ct->naccess++;
+		if (unlikely(ct->naccess == 0))
+			ct->naccess = 2;
+		ct->lastaccess = catcacheclock;
+
+		/*
+		 * If it's a positive entry, bump its refcount and return it. If it's
+		 * negative, we can report failure to the caller.
+		 */
+		if (!ct->negative)
+		{
+			ResourceOwnerEnlargeCatCacheRefs(CurrentResourceOwner);
+			ct->refcount++;
+			ResourceOwnerRememberCatCacheRef(CurrentResourceOwner, &ct->tuple);
+
+			CACHE_elog(DEBUG2, "SearchCatCache(%s): found in bucket %d",
+					   cache->cc_relname, hashIndex);
+
+#ifdef CATCACHE_STATS
+			cache->cc_hits++;
+#endif
+
+			return &ct->tuple;
+		}
+		else
+		{
+			CACHE_elog(DEBUG2, "SearchCatCache(%s): found neg entry in bucket %d",
+					   cache->cc_relname, hashIndex);
+
+#ifdef CATCACHE_STATS
+			cache->cc_neg_hits++;
+#endif
+
+			return NULL;
+		}
+	}
+
+	return SearchCatCacheMiss(cache, nkeys, hashValue, hashIndex, v1, v2, v3, v4);
+}
+
+/*
+ * CatCacheCleanupOldEntries - Remove infrequently-used entries
+ *
+ * Catcache entries happen to be left unused for a long time for several
+ * reasons. Remove such entries to prevent catcache from bloating. It is based
+ * on the similar algorithm with buffer eviction. Entries that are accessed
+ * several times in a certain period live longer than those that have had less
+ * access in the same duration.
+ */
+static bool
+CatCacheCleanupOldEntries(CatCache *cp)
+{
+	int		nremoved = 0;
+	int		i;
+	long	oldest_ts = catcacheclock;
+	long	age;
+	int		us;
+
+	/* Return immediately if disabled */
+	if (catalog_cache_prune_min_age < 0)
+		return false;
+
+	/* Don't scan the hash when we know we don't have prunable entries */
+	TimestampDifference(cp->cc_oldest_ts, catcacheclock, &age, &us);
+	if (age < catalog_cache_prune_min_age)
+		return false;
+
+	/* Scan over the whole hash to find entries to remove */
+	for (i = 0 ; i < cp->cc_nbuckets ; i++)
+	{
+		dlist_mutable_iter	iter;
+
+		dlist_foreach_modify(iter, &cp->cc_bucket[i])
+		{
+			CatCTup    *ct = dlist_container(CatCTup, cache_elem, iter.cur);
+
+			/* Don't remove referenced entries */
+			if (ct->refcount == 0 &&
+				(ct->c_list == NULL || ct->c_list->refcount == 0))
+			{
+				/*
+				 * Calculate the duration from the time from the last access
+				 * to the "current" time. catcacheclock is updated
+				 * per-statement basis and additionaly udpated periodically
+				 * during a long running query.
+				 */
+				TimestampDifference(ct->lastaccess, catcacheclock, &age, &us);
+
+				if (age > catalog_cache_prune_min_age)
+				{
+					/*
+					 * Entries that are not accessed after the last pruning
+					 * are removed in that seconds, and their lives are
+					 * prolonged according to how many times they are accessed
+					 * up to three times of the duration. We don't try shrink
+					 * buckets since pruning effectively caps catcache
+					 * expansion in the long term.
+					 */
+					if (ct->naccess > 2)
+						ct->naccess = 1;
+					else if (ct->naccess > 0)
+						ct->naccess--;
+					else
+					{
+						CatCacheRemoveCTup(cp, ct);
+						nremoved++;
+
+						/* don't update oldest_ts by removed entry */
+						continue;
+					}
+				}
+			}
+
+			/* update oldest timestamp if the entry remains alive */
+			if (ct->lastaccess < oldest_ts)
+				oldest_ts = ct->lastaccess;
+		}
+	}
+
+	cp->cc_oldest_ts = oldest_ts;
+
+	if (nremoved > 0)
+		elog(DEBUG1, "pruning catalog cache id=%d for %s: removed %d / %d",
+			 cp->id, cp->cc_relname, nremoved, cp->cc_ntup + nremoved);
+
+	return nremoved > 0;
+}
+
 
 /*
  *	ReleaseCatCache
@@ -1888,6 +2232,8 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 	ct->dead = false;
 	ct->negative = negative;
 	ct->hash_value = hashValue;
+	ct->naccess = 0;
+	ct->lastaccess = catcacheclock;
 
 	dlist_push_head(&cache->cc_bucket[hashIndex], &ct->cache_elem);
 

@@ -591,3 +591,39 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 
 	errno = save_errno;
 }
+
+extern const char *get_procsignal_reason_desc(ProcSignalReason reason)
+	{
+		const char *reasonDesc = "unknown reason";
+
+		switch (reason)
+		{
+			case PROCSIG_RECOVERY_CONFLICT_BUFFERPIN:
+				reasonDesc = "buffer pin";
+				break;
+			case PROCSIG_RECOVERY_CONFLICT_LOCK:
+				reasonDesc = "lock";
+				break;
+			case PROCSIG_RECOVERY_CONFLICT_TABLESPACE:
+				reasonDesc = "tablespace";
+				break;
+			case PROCSIG_RECOVERY_CONFLICT_SNAPSHOT:
+				reasonDesc = "snapshot";
+				break;
+			case PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK:
+				reasonDesc = "deadlock";
+				break;
+			case PROCSIG_RECOVERY_CONFLICT_DATABASE:
+				reasonDesc = "database";
+				break;
+			case PROCSIG_CATCHUP_INTERRUPT:
+			case PROCSIG_NOTIFY_INTERRUPT:
+			case PROCSIG_PARALLEL_MESSAGE:
+			case PROCSIG_WALSND_INIT_STOPPING:
+			case NUM_PROCSIGNALS:
+				break;
+			default:
+				break;
+		}
+	return reasonDesc;
+}

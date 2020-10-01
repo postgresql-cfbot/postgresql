@@ -6839,6 +6839,26 @@ log_line_prefix = '%m [%p] %q%u@%d/%a '
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-log-recovery-conflicts-resolution" xreflabel="log_recovery_conflicts_resolution">
+      <term><varname>log_recovery_conflicts_resolution</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>log_recovery_conflicts_resolution</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls whether detailed information is produced when conflict
+        resolution occurs during standby recovery.
+       </para>
+
+       <para>
+        This parameter can only be set in the <filename>postgresql.conf</filename>
+        file or on the server command line.
+        The default is <literal>off</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-log-parameter-max-length" xreflabel="log_parameter_max_length">
       <term><varname>log_parameter_max_length</varname> (<type>integer</type>)
       <indexterm>

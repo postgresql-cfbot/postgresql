@@ -71,5 +71,6 @@ extern void WaitForProcSignalBarrier(uint64 generation);
 extern void ProcessProcSignalBarrier(void);
 
 extern void procsignal_sigusr1_handler(SIGNAL_ARGS);
+extern const char *get_procsignal_reason_desc(ProcSignalReason reason);
 
 #endif							/* PROCSIGNAL_H */

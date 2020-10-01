@@ -39,6 +39,7 @@
 int			vacuum_defer_cleanup_age;
 int			max_standby_archive_delay = 30 * 1000;
 int			max_standby_streaming_delay = 30 * 1000;
+bool			log_recovery_conflicts_resolution = false;
 
 static HTAB *RecoveryLockLists;
 
@@ -216,6 +217,42 @@ WaitExceedsMaxStandbyDelay(uint32 wait_event_info)
 }
 
 /*
+ * Log the recovery conflict
+ */
+static void
+LogRecoveryConflict(VirtualTransactionId *waitlist, ProcSignalReason reason)
+{
+
+	VirtualTransactionId *vxids;
+	StringInfoData buf;
+	int count;
+
+	if (waitlist) {
+		vxids = waitlist;
+		count = 0;
+		initStringInfo(&buf);
+
+		while (VirtualTransactionIdIsValid(*vxids))
+		{
+			count++;
+			if (count > 1)
+				appendStringInfo(&buf,", ");
+
+			appendStringInfo(&buf,"%d/%u",vxids->backendId,vxids->localTransactionId);
+			vxids++;
+		}
+		ereport(LOG,
+			(errmsg("recovery is resolving recovery conflict on %s", get_procsignal_reason_desc(reason)),
+			(errdetail_log_plural("Conflicting virtual transaction id: %s.",
+						"Conflicting virtual transaction ids: %s.", count, buf.data))));
+		pfree(buf.data);
+	}
+	else
+		ereport(LOG,
+			(errmsg("recovery is resolving recovery conflict on %s", get_procsignal_reason_desc(reason))));
+}
+
+/*
  * This is the main executioner for any query backend that conflicts with
  * recovery processing. Judgement has already been passed on it within
  * a specific rmgr. Here we just issue the orders to the procs. The procs
@@ -232,6 +269,7 @@ ResolveRecoveryConflictWithVirtualXIDs(VirtualTransactionId *waitlist,
 {
 	TimestampTz waitStart = 0;
 	char	   *new_status;
+	bool logged = false;
 
 	/* Fast exit, to avoid a kernel call if there's no work to be done. */
 	if (!VirtualTransactionIdIsValid(*waitlist))
@@ -249,6 +287,12 @@ ResolveRecoveryConflictWithVirtualXIDs(VirtualTransactionId *waitlist,
 		/* wait until the virtual xid is gone */
 		while (!VirtualXactLock(*waitlist, false))
 		{
+			/* Log the recovery conflict */
+			if (log_recovery_conflicts_resolution && !logged
+					&& TimestampDifferenceExceeds(waitStart, GetCurrentTimestamp(), max_standby_streaming_delay)) {
+				LogRecoveryConflict(waitlist, reason);
+				logged = true;
+			}
 			/*
 			 * Report via ps if we have been waiting for more than 500 msec
 			 * (should that be configurable?)
@@ -370,6 +414,11 @@ ResolveRecoveryConflictWithDatabase(Oid dbid)
 	 * block during InitPostgres() and then disconnect when they see the
 	 * database has been removed.
 	 */
+
+	/* Log the recovery conflict */
+	if (log_recovery_conflicts_resolution)
+		LogRecoveryConflict(NULL, PROCSIG_RECOVERY_CONFLICT_DATABASE);
+
 	while (CountDBBackends(dbid) > 0)
 	{
 		CancelDBBackends(dbid, PROCSIG_RECOVERY_CONFLICT_DATABASE, true);
@@ -608,6 +657,10 @@ StandbyTimeoutHandler(void)
 {
 	/* forget any pending STANDBY_DEADLOCK_TIMEOUT request */
 	disable_timeout(STANDBY_DEADLOCK_TIMEOUT, false);
+
+	/* Log the recovery conflict */
+	if (log_recovery_conflicts_resolution)
+		LogRecoveryConflict(NULL, PROCSIG_RECOVERY_CONFLICT_BUFFERPIN);
 
 	SendRecoveryConflictWithBufferPin(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN);
 }

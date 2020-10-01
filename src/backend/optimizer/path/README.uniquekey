@@ -1,0 +1,131 @@
+1. What is UniqueKey?
+We can think UniqueKey is a set of exprs for a RelOptInfo, which we are insure
+that doesn't yields same result among all the rows. The simplest UniqueKey
+format is primary key.
+
+However we define the UnqiueKey as below.
+
+typedef struct UniqueKey
+{
+        NodeTag	type;
+        List	*exprs;
+        bool	multi_nullvals;
+} UniqueKey;
+
+exprs is a list of exprs which is unique on current RelOptInfo. exprs = NIL
+is a special case of UniqueKey, which means there is only one row in that
+relation.it has a stronger semantic than others. like SELECT uk FROM t; uk is
+normal unique key and may have different values. SELECT colx FROM t WHERE uk =
+const.  colx is unique AND we have only 1 value. This field can used for
+innerrel_is_unique. this logic is handled specially in add_uniquekey_for_onerow
+function.
+
+multi_nullvals: true means multi null values may exist in these exprs, so the
+uniqueness is not guaranteed in this case. This field is necessary for
+remove_useless_join & reduce_unique_semijoins where we don't mind these
+duplicated NULL values. It is set to true for 2 cases. One is a unique key
+from a unique index but the related column is nullable. The other one is for
+outer join. see populate_joinrel_uniquekeys for detail.
+
+
+The UniqueKey can be used at the following cases at least:
+1. remove_useless_joins.
+2. reduce_semianti_joins
+3. remove distinct node if distinct clause is unique.
+4. remove aggnode if group by clause is unique.
+5. Index Skip Scan (WIP)
+6. Aggregation Push Down without 2 phase aggregation if the join can't
+   duplicated the aggregated rows. (work in progress feature)
+
+2. How is it maintained?
+
+We have a set of populate_xxx_unqiuekeys functions to maintain the uniquekey on
+various cases. xxx includes baserel, joinrel, partitionedrel, distinctrel,
+groupedrel, unionrel. and we also need to convert the uniquekey from subquery
+to outer relation, which is what convert_subquery_uniquekeys does.
+
+1. The first part is about baserel. We handled 3 cases. suppose we have Unique
+Index on (a, b).
+
+1. SELECT a, b FROM t.  UniqueKey (a, b)
+2. SELECT a FROM t WHERE b = 1;  UniqueKey (a)
+3. SELECT .. FROM t WHERE a = 1 AND b = 1;  UniqueKey (NIL).  onerow case, every
+   column is Unique.
+
+2. The next part is joinrel, this part is most error-prone, we simplified the rules
+like below:
+1. If the relation's UniqueKey can't be duplicated after join,  then is will be
+   still valid for the join rel. The function we used here is
+   innerrel_keeps_unique. The basic idea is innerrel.any_col = outer.uk.
+
+2. If the UnqiueKey can't keep valid via the rule 1, the combination of the
+   UniqueKey from both sides are valid for sure.  We can prove this as: if the
+   unique exprs from rel1 is duplicated by rel2, the duplicated rows must
+   contains different unique exprs from rel2.
+
+More considerations about onerow:
+1. If relation with one row and it can't be duplicated, it is still possible
+   contains mulit_nullvas after outer join.
+2. If the either UniqueKey can be duplicated after join, the can get one row
+   only when both side is one row AND there is no outer join.
+3. Whenever the onerow UniqueKey is not a valid any more, we need to convert one
+   row UniqueKey to normal unique key since we don't store exprs for one-row
+   relation. get_exprs_from_uniquekeys will be used here.
+
+
+More considerations about multi_nullvals after join:
+1. If the original UnqiueKey has multi_nullvals, the final UniqueKey will have
+   mulit_nullvals in any case.
+2. If a unique key doesn't allow mulit_nullvals, after some outer join, it
+   allows some outer join.
+
+
+3. When we comes to subquery, we need to convert_subquery_unqiuekeys just like
+convert_subquery_pathkeys.  Only the UniqueKey insides subquery is referenced as
+a Var in outer relation will be reused. The relationship between the outerrel.Var
+and subquery.exprs is built with outerel->subroot->processed_tlist.
+
+
+4. As for the SRF functions, it will break the uniqueness of uniquekey, However it
+is handled in adjust_paths_for_srfs, which happens after the query_planner. so
+we will maintain the UniqueKey until there and reset it to NIL at that
+places. This can't help on distinct/group by elimination cases but probably help
+in some other cases, like reduce_unqiue_semijoins/remove_useless_joins and it is
+semantic correctly.
+
+
+5. As for inherit table, we first main the UnqiueKey on childrel as well. But for
+partitioned table we need to maintain 2 different kinds of
+UnqiueKey. 1). UniqueKey on the parent relation 2). UniqueKey on child
+relation for partition wise query.
+
+Example:
+CREATE TABLE p (a int not null, b int not null) partition by list (a);
+CREATE TABLE p0 partition of p for values in (1);
+CREATE TABLE p1 partition of p for values in (2);
+
+create unique index p0_b on p0(b);
+create unique index p1_b on p1(b);
+
+Now b is only unique on partition level, so the distinct can't be removed on
+the following cases. SELECT DISTINCT b FROM p;
+
+Another example is SELECT DISTINCT a, b FROM p WHERE a = 1; Since only one
+partition is chosen, the UniqueKey on child relation is same as the UniqueKey on
+parent relation.
+
+Another usage of UniqueKey on partition level is it be helpful for
+partition-wise join.
+
+As for the UniqueKey on parent table level, it comes with 2 different ways,
+1). the UniqueKey is also derived in UniqueKey index, but the index must be same
+in all the related children relations and the unique index must contains
+Partition Key in it. Example:
+
+CREATE UNIQUE INDEX p_ab ON p(a, b);  -- where a is the partition key.
+
+-- Query
+SELECT a, b FROM p; the (a, b) is a UniqueKey of p.
+
+2). If the parent relation has only one childrel, the UniqueKey on childrel is
+ the UniqueKey on parent as well.

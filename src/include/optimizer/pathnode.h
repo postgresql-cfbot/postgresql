@@ -27,6 +27,7 @@ extern int	compare_fractional_path_costs(Path *path1, Path *path2,
 										  double fraction);
 extern void set_cheapest(RelOptInfo *parent_rel);
 extern void add_path(RelOptInfo *parent_rel, Path *new_path);
+extern void add_unique_path(RelOptInfo *parent_rel, Path *new_path);
 extern bool add_path_precheck(RelOptInfo *parent_rel,
 							  Cost startup_cost, Cost total_cost,
 							  List *pathkeys, Relids required_outer);
@@ -206,6 +207,10 @@ extern UpperUniquePath *create_upper_unique_path(PlannerInfo *root,
 												 Path *subpath,
 												 int numCols,
 												 double numGroups);
+extern IndexPath *create_skipscan_unique_path(PlannerInfo *root,
+											  IndexOptInfo *index,
+											  Path *subpath,
+											  int prefix);
 extern AggPath *create_agg_path(PlannerInfo *root,
 								RelOptInfo *rel,
 								Path *subpath,

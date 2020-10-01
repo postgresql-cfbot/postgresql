@@ -32,4 +32,7 @@ extern Relids adjust_child_relids_multilevel(PlannerInfo *root, Relids relids,
 extern AppendRelInfo **find_appinfos_by_relids(PlannerInfo *root,
 											   Relids relids, int *nappinfos);
 
+extern AppendRelInfo *find_appinfo_by_child(PlannerInfo *root, Index child_index);
+extern Var *find_parent_var(AppendRelInfo *appinfo, Var *child_var);
+
 #endif							/* APPENDINFO_H */

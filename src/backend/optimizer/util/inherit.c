@@ -736,6 +736,7 @@ apply_child_basequals(PlannerInfo *root, RelOptInfo *parentrel,
 		{
 			Node	   *onecq = (Node *) lfirst(lc2);
 			bool		pseudoconstant;
+			RestrictInfo	*child_rinfo;
 
 			/* check for pseudoconstant (no Vars or volatile functions) */
 			pseudoconstant =
@@ -747,13 +748,14 @@ apply_child_basequals(PlannerInfo *root, RelOptInfo *parentrel,
 				root->hasPseudoConstantQuals = true;
 			}
 			/* reconstitute RestrictInfo with appropriate properties */
-			childquals = lappend(childquals,
-								 make_restrictinfo((Expr *) onecq,
-												   rinfo->is_pushed_down,
-												   rinfo->outerjoin_delayed,
-												   pseudoconstant,
-												   rinfo->security_level,
-												   NULL, NULL, NULL));
+			child_rinfo =  make_restrictinfo((Expr *) onecq,
+											 rinfo->is_pushed_down,
+											 rinfo->outerjoin_delayed,
+											 pseudoconstant,
+											 rinfo->security_level,
+											 NULL, NULL, NULL);
+			child_rinfo->mergeopfamilies = rinfo->mergeopfamilies;
+			childquals = lappend(childquals, child_rinfo);
 			/* track minimum security level among child quals */
 			cq_min_security = Min(cq_min_security, rinfo->security_level);
 		}

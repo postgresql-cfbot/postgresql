@@ -924,6 +924,8 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 
 	/* Apply partitionwise join technique, if possible. */
 	try_partitionwise_join(root, rel1, rel2, joinrel, sjinfo, restrictlist);
+
+	populate_joinrel_uniquekeys(root, joinrel, rel1, rel2, restrictlist, sjinfo->jointype);
 }
 
 

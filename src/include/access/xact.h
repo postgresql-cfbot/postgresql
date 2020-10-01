@@ -85,6 +85,9 @@ extern int	synchronous_commit;
 extern PGDLLIMPORT TransactionId CheckXidAlive;
 extern PGDLLIMPORT bool bsysscan;
 
+/* Allow cancelation of queries waiting for sync replication but commited locally */
+extern bool synchronous_commit_cancelation;
+
 /*
  * Miscellaneous flag bits to record events which occur on the top level
  * transaction. These flags are only persisted in MyXactFlags and are intended

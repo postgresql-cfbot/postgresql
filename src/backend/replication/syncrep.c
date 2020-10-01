@@ -264,13 +264,21 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		 */
 		if (ProcDiePending)
 		{
-			ereport(WARNING,
+			if (synchronous_commit_cancelation)
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_ADMIN_SHUTDOWN),
+						errmsg("canceling the wait for synchronous replication and terminating connection due to administrator command"),
+						errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
+				whereToSendOutput = DestNone;
+				SyncRepCancelWait();
+				break;
+			}
+
+			ereport(PANIC,
 					(errcode(ERRCODE_ADMIN_SHUTDOWN),
-					 errmsg("canceling the wait for synchronous replication and terminating connection due to administrator command"),
-					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
-			whereToSendOutput = DestNone;
-			SyncRepCancelWait();
-			break;
+					errmsg("canceling the wait for synchronous replication and terminating connection due to administrator command"),
+					errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
 		}
 
 		/*
@@ -282,11 +290,18 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		if (QueryCancelPending)
 		{
 			QueryCancelPending = false;
+			if (synchronous_commit_cancelation)
+			{
+				ereport(WARNING,
+						(errmsg("canceling wait for synchronous replication due to user request"),
+						 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
+				SyncRepCancelWait();
+				break;
+			}
+
 			ereport(WARNING,
-					(errmsg("canceling wait for synchronous replication due to user request"),
-					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
-			SyncRepCancelWait();
-			break;
+					(errmsg("canceling wait for synchronous replication due requested, but cancelation is not allowed"),
+					 errdetail("The COMMIT record has already flushed to WAL locally and might not have been replicated to the standby. We must wait here.")));
 		}
 
 		/*

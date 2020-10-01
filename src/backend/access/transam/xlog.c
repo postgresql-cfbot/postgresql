@@ -11762,9 +11762,23 @@ rm_redo_error_callback(void *arg)
 {
 	XLogReaderState *record = (XLogReaderState *) arg;
 	StringInfoData buf;
+	int block_id;
 
 	initStringInfo(&buf);
 	xlog_outdesc(&buf, record);
+
+	for (block_id = 0; block_id <= record->max_block_id; block_id++)
+	{
+		RelFileNode rnode;
+		ForkNumber forknum;
+		BlockNumber blknum;
+
+		if (XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blknum))
+			appendStringInfo(&buf,", blkref #%d: rel %u/%u/%u fork %s blk %u",
+						block_id, rnode.spcNode, rnode.dbNode,
+						rnode.relNode, forkNames[forknum],
+						blknum);
+	}
 
 	/* translator: %s is a WAL record description */
 	errcontext("WAL redo at %X/%X for %s",

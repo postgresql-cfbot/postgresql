@@ -167,6 +167,15 @@ typedef struct LVDeadTuples
 {
 	int			max_tuples;		/* # slots allocated in array */
 	int			num_tuples;		/* current # of entries */
+
+	/*
+	 * The boundaries of block numbers of recorded dead tuples.
+	 * min_blkno <= blk < max_blkno exists in the itemptrs array. These values are
+	 * InvalidBlockNumber if not set yet.
+	 */
+	BlockNumber	min_blkno;
+	BlockNumber	max_blkno;
+
 	/* List of TIDs of tuples we intend to delete */
 	/* NB: this list is ordered by TID address */
 	ItemPointerData itemptrs[FLEXIBLE_ARRAY_MEMBER];	/* array of
@@ -1051,6 +1060,9 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 				vmbuffer = InvalidBuffer;
 			}
 
+			/* Update the upper bound */
+			vacrelstats->dead_tuples->max_blkno = blkno;
+
 			/* Work on all the indexes, then the heap */
 			lazy_vacuum_all_indexes(onerel, Irel, indstats,
 									vacrelstats, lps, nindexes);
@@ -1071,6 +1083,10 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			 */
 			FreeSpaceMapVacuumRange(onerel, next_fsm_block_to_vacuum, blkno);
 			next_fsm_block_to_vacuum = blkno;
+
+			/* Reset both boundaries for next heap scan */
+			vacrelstats->dead_tuples->min_blkno = InvalidBlockNumber;
+			vacrelstats->dead_tuples->max_blkno = InvalidBlockNumber;
 
 			/* Report that we are once again scanning the heap */
 			pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
@@ -1704,6 +1720,10 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 	/* XXX put a threshold on min number of tuples here? */
 	if (dead_tuples->num_tuples > 0)
 	{
+		/* Update the upper bound */
+		vacrelstats->dead_tuples->max_blkno = blkno;
+		Assert(vacrelstats->dead_tuples->max_blkno == nblocks);
+
 		/* Work on all the indexes, and then the heap */
 		lazy_vacuum_all_indexes(onerel, Irel, indstats, vacrelstats,
 								lps, nindexes);
@@ -1789,6 +1809,8 @@ lazy_vacuum_all_indexes(Relation onerel, Relation *Irel,
 {
 	Assert(!IsParallelWorker());
 	Assert(nindexes > 0);
+	Assert(BlockNumberIsValid(vacrelstats->dead_tuples->min_blkno) &&
+			BlockNumberIsValid(vacrelstats->dead_tuples->max_blkno));
 
 	/* Log cleanup info before we touch indexes */
 	vacuum_log_cleanup_info(onerel, vacrelstats);
@@ -2899,6 +2921,8 @@ lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks)
 	dead_tuples = (LVDeadTuples *) palloc(SizeOfDeadTuples(maxtuples));
 	dead_tuples->num_tuples = 0;
 	dead_tuples->max_tuples = (int) maxtuples;
+	dead_tuples->min_blkno = InvalidBlockNumber;
+	dead_tuples->max_blkno = InvalidBlockNumber;
 
 	vacrelstats->dead_tuples = dead_tuples;
 }
@@ -2920,6 +2944,10 @@ lazy_record_dead_tuple(LVDeadTuples *dead_tuples, ItemPointer itemptr)
 		dead_tuples->num_tuples++;
 		pgstat_progress_update_param(PROGRESS_VACUUM_NUM_DEAD_TUPLES,
 									 dead_tuples->num_tuples);
+
+		/* Remember the lower bound */
+		if (!BlockNumberIsValid(dead_tuples->min_blkno))
+			dead_tuples->min_blkno = ItemPointerGetBlockNumberNoCheck(itemptr);
 	}
 }
 
@@ -2934,7 +2962,12 @@ static bool
 lazy_tid_reaped(ItemPointer itemptr, void *state)
 {
 	LVDeadTuples *dead_tuples = (LVDeadTuples *) state;
+	BlockNumber	blkno = ItemPointerGetBlockNumberNoCheck(itemptr);
 	ItemPointer res;
+
+	/* Boundary value check */
+	if (blkno < dead_tuples->min_blkno || blkno >= dead_tuples->max_blkno)
+		return false;
 
 	res = (ItemPointer) bsearch((void *) itemptr,
 								(void *) dead_tuples->itemptrs,

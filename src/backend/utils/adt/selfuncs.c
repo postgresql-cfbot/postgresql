@@ -6003,6 +6003,8 @@ genericcostestimate(PlannerInfo *root,
 					GenericCosts *costs)
 {
 	IndexOptInfo *index = path->indexinfo;
+	RelOptInfo *baserel = index->rel;
+	bool	    indexonly = (path->path.pathtype == T_IndexOnlyScan);
 	List	   *indexQuals = get_quals_from_indexclauses(path->indexclauses);
 	List	   *indexOrderBys = path->indexorderbys;
 	Cost		indexStartupCost;
@@ -6011,7 +6013,9 @@ genericcostestimate(PlannerInfo *root,
 	double		indexCorrelation;
 	double		numIndexPages;
 	double		numIndexTuples;
+	double	    spc_seq_page_cost;
 	double		spc_random_page_cost;
+	double	    index_random_page_cost;
 	double		num_sa_scans;
 	double		num_outer_scans;
 	double		num_scans;
@@ -6102,7 +6106,23 @@ genericcostestimate(PlannerInfo *root,
 	/* fetch estimated page cost for tablespace containing index */
 	get_tablespace_page_costs(index->reltablespace,
 							  &spc_random_page_cost,
-							  NULL);
+							  &spc_seq_page_cost);
+
+	/* If it is an index only scan, random page cost should be incurred for
+	 * the percentage of pages that need to be fetched from disk for the
+	 * relation. Considering that, random page cost should be adjusted such
+	 * that when no tuples are to be fetched from the table, we end up with a
+	 * sequential page cost, otherwise, we hover betwen that and random
+	 * page cost for the tablespace.
+	 *
+	 * Otherwise, we default to the random page cost for table space.
+	 */
+	if (indexonly)
+		index_random_page_cost = Min(spc_seq_page_cost +
+			spc_random_page_cost * (1.0 - baserel->allvisfrac),
+			spc_random_page_cost);
+	else
+		index_random_page_cost = spc_random_page_cost;
 
 	/*
 	 * Now compute the disk access costs.
@@ -6142,16 +6162,16 @@ genericcostestimate(PlannerInfo *root,
 		 * share for each outer scan.  (Don't pro-rate for ScalarArrayOpExpr,
 		 * since that's internal to the indexscan.)
 		 */
-		indexTotalCost = (pages_fetched * spc_random_page_cost)
+		indexTotalCost = (pages_fetched * index_random_page_cost)
 			/ num_outer_scans;
 	}
 	else
 	{
 		/*
-		 * For a single index scan, we just charge spc_random_page_cost per
+		 * For a single index scan, we just charge random page cost per
 		 * page touched.
 		 */
-		indexTotalCost = numIndexPages * spc_random_page_cost;
+		indexTotalCost = numIndexPages * index_random_page_cost;
 	}
 
 	/*

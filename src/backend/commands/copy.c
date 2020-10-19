@@ -3105,38 +3105,20 @@ CopyFrom(CopyState cstate)
 			}
 
 			/*
-			 * If we're capturing transition tuples, we might need to convert
-			 * from the partition rowtype to root rowtype.
+			 * If we're capturing transition tuples and there are no BEFORE
+			 * triggers on the partition which may change the tuple, we can
+			 * just remember the original unconverted tuple to avoid a
+			 * needless round trip conversion.
 			 */
 			if (cstate->transition_capture != NULL)
-			{
-				if (has_before_insert_row_trig)
-				{
-					/*
-					 * If there are any BEFORE triggers on the partition,
-					 * we'll have to be ready to convert their result back to
-					 * tuplestore format.
-					 */
-					cstate->transition_capture->tcs_original_insert_tuple = NULL;
-					cstate->transition_capture->tcs_map =
-						resultRelInfo->ri_PartitionInfo->pi_PartitionToRootMap;
-				}
-				else
-				{
-					/*
-					 * Otherwise, just remember the original unconverted
-					 * tuple, to avoid a needless round trip conversion.
-					 */
-					cstate->transition_capture->tcs_original_insert_tuple = myslot;
-					cstate->transition_capture->tcs_map = NULL;
-				}
-			}
+				cstate->transition_capture->tcs_original_insert_tuple =
+					!has_before_insert_row_trig ? myslot : NULL;
 
 			/*
 			 * We might need to convert from the root rowtype to the partition
 			 * rowtype.
 			 */
-			map = resultRelInfo->ri_PartitionInfo->pi_RootToPartitionMap;
+			map = resultRelInfo->ri_RootToPartitionMap;
 			if (insertMethod == CIM_SINGLE || !leafpart_use_multi_insert)
 			{
 				/* non batch insert */
@@ -3144,7 +3126,7 @@ CopyFrom(CopyState cstate)
 				{
 					TupleTableSlot *new_slot;
 
-					new_slot = resultRelInfo->ri_PartitionInfo->pi_PartitionTupleSlot;
+					new_slot = resultRelInfo->ri_PartitionTupleSlot;
 					myslot = execute_attr_map_slot(map->attrMap, myslot, new_slot);
 				}
 			}

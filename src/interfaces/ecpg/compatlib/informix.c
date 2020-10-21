@@ -944,7 +944,7 @@ rupshift(char *str)
 int
 byleng(char *str, int len)
 {
-	for (len--; str[len] && str[len] == ' '; len--);
+	for (len--; str[len] == ' '; len--);
 	return (len + 1);
 }
 

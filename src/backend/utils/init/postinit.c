@@ -924,11 +924,8 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		 * if we are bound to a specific database.  We do need to close the
 		 * transaction we started before returning.
 		 */
-		if (!bootstrap)
-		{
-			pgstat_bestart();
-			CommitTransactionCommand();
-		}
+		pgstat_bestart();
+		CommitTransactionCommand();
 		return;
 	}
 

@@ -4151,7 +4151,7 @@ ReorderBufferToastAppendChunk(ReorderBuffer *rb, ReorderBufferTXN *txn,
 			elog(ERROR, "got sequence entry %d for toast chunk %u instead of seq 0",
 				 chunk_seq, chunk_id);
 	}
-	else if (found && chunk_seq != ent->last_chunk_seq + 1)
+	else if (chunk_seq != ent->last_chunk_seq + 1)
 		elog(ERROR, "got sequence entry %d for toast chunk %u instead of seq %d",
 			 chunk_seq, chunk_id, ent->last_chunk_seq + 1);
 

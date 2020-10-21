@@ -1702,7 +1702,7 @@ transformMultiAssignRef(ParseState *pstate, MultiAssignRef *maref)
 		 */
 		if (maref->colno == maref->ncolumns)
 			pstate->p_multiassign_exprs =
-				list_delete_ptr(pstate->p_multiassign_exprs, tle);
+				list_delete_last(pstate->p_multiassign_exprs);
 
 		return result;
 	}

@@ -4819,7 +4819,7 @@ msgstr "nieprawidłowa etykieta enumeracji \"%s\""
 
 #: catalog/pg_enum.c:116 catalog/pg_enum.c:202 catalog/pg_enum.c:489
 #, c-format
-msgid "Labels must be %d characters or less."
+msgid "Labels must be %d bytes or less."
 msgstr "Etykieta musi posiadać %d znaków lub mniej."
 
 #: catalog/pg_enum.c:230

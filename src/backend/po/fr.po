@@ -4751,7 +4751,7 @@ msgstr "nom du label enum « %s » invalide"
 
 #: catalog/pg_enum.c:129 catalog/pg_enum.c:232 catalog/pg_enum.c:527
 #, c-format
-msgid "Labels must be %d characters or less."
+msgid "Labels must be %d bytes or less."
 msgstr "Les labels doivent avoir au plus %d caractères."
 
 #: catalog/pg_enum.c:260

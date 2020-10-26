@@ -5227,7 +5227,7 @@ msgstr "la etiqueta enum «%s» no es válida"
 
 #: catalog/pg_enum.c:128 catalog/pg_enum.c:231 catalog/pg_enum.c:526
 #, c-format
-msgid "Labels must be %d characters or less."
+msgid "Labels must be %d bytes or less."
 msgstr "Las etiquetas deben ser de %d caracteres o menos."
 
 #: catalog/pg_enum.c:259

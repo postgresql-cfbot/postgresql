@@ -4925,7 +4925,7 @@ msgstr "列挙ラベル\"%s\"は不正です"
 
 #: catalog/pg_enum.c:129 catalog/pg_enum.c:232 catalog/pg_enum.c:527
 #, c-format
-msgid "Labels must be %d characters or less."
+msgid "Labels must be %d bytes or less."
 msgstr "ラベルは%d文字数以内でなければなりません"
 
 #: catalog/pg_enum.c:260

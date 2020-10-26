@@ -5549,7 +5549,7 @@ msgstr "неверная метка в перечислении \"%s\""
 
 #: catalog/pg_enum.c:129 catalog/pg_enum.c:232 catalog/pg_enum.c:527
 #, c-format
-msgid "Labels must be %d characters or less."
+msgid "Labels must be %d bytes or less."
 msgstr "Длина метки не должна превышать %d байт."
 
 #: catalog/pg_enum.c:260

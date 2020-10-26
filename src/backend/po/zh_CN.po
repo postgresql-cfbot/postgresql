@@ -4800,7 +4800,7 @@ msgstr "无效的枚举类型标签 \"%s\""
 
 #: catalog/pg_enum.c:129 catalog/pg_enum.c:232 catalog/pg_enum.c:527
 #, c-format
-msgid "Labels must be %d characters or less."
+msgid "Labels must be %d bytes or less."
 msgstr "标签必需为 %d 个字符或更少"
 
 #: catalog/pg_enum.c:260

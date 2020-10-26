@@ -4745,7 +4745,7 @@ msgstr "etichetta enumerata non valida \"%s\""
 
 #: catalog/pg_enum.c:116 catalog/pg_enum.c:202 catalog/pg_enum.c:489
 #, c-format
-msgid "Labels must be %d characters or less."
+msgid "Labels must be %d bytes or less."
 msgstr "Le etichette devono essere lunghe %d caratteri o meno."
 
 #: catalog/pg_enum.c:230

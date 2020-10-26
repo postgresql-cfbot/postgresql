@@ -5345,7 +5345,7 @@ msgstr "\"%s\" 열거형 라벨이 잘못됨"
 
 #: catalog/pg_enum.c:129 catalog/pg_enum.c:232 catalog/pg_enum.c:527
 #, c-format
-msgid "Labels must be %d characters or less."
+msgid "Labels must be %d bytes or less."
 msgstr "라벨은 %d자 이하여야 합니다."
 
 #: catalog/pg_enum.c:260

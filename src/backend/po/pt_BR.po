@@ -3623,7 +3623,7 @@ msgstr "rótulo do enum \"%s\" é inválido"
 
 #: catalog/pg_enum.c:116 catalog/pg_enum.c:203
 #, c-format
-msgid "Labels must be %d characters or less."
+msgid "Labels must be %d bytes or less."
 msgstr "Rótulos devem conter %d caracteres ou menos."
 
 #: catalog/pg_enum.c:231

@@ -531,9 +531,9 @@ create_script_for_cluster_analyze(char **analyze_script_file_name)
 
 
 /*
- * A previous run of pg_upgrade might have failed and the new cluster
- * directory recreated, but they might have forgotten to remove
- * the new cluster's tablespace directories.  Therefore, check that
+ * A previous run of pg_upgrade might have failed.
+ * The admin might ahve recreated the new cluster directory, but forgotten to
+ * remove the new cluster's tablespace directories.  Therefore, check that
  * new cluster tablespace directories do not already exist.  If
  * they do, it would cause an error while restoring global objects.
  * This allows the failure to be detected at check time, rather than
@@ -554,15 +554,24 @@ check_for_new_tablespace_dir(ClusterInfo *new_cluster)
 
 	for (tblnum = 0; tblnum < os_info.num_old_tablespaces; tblnum++)
 	{
-		struct stat statbuf;
-
 		snprintf(new_tablespace_dir, MAXPGPATH, "%s%s",
 				os_info.old_tablespaces[tblnum],
 				new_cluster->tablespace_suffix);
 
-		if (stat(new_tablespace_dir, &statbuf) == 0 || errno != ENOENT)
-			pg_fatal("new cluster tablespace directory already exists: \"%s\"\n",
+		/*
+		 * New tablepace dirs are expected to not exist; if they
+		 * do exist but are empty, we avoid failing here, and remove them
+		 * before creating tablespaces while "restoring global objects".
+		 */
+		switch (pg_check_dir(new_tablespace_dir))
+		{
+			case 0: /* Nonextant */
+			case 1: /* Empty */
+				break;
+			default:
+				pg_fatal("new cluster tablespace directory already exists and nonempty\"%s\"\n",
 					 new_tablespace_dir);
+		}
 	}
 
 	check_ok();

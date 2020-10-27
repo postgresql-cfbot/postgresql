@@ -301,6 +301,19 @@ prepare_new_globals(void)
 	set_frozenxids(false);
 
 	/*
+	 * Remove any *empty* tablespace dirs left behind by a previous, failed
+	 * upgrade.
+	 */
+	for (int tblnum = 0; tblnum < os_info.num_old_tablespaces; tblnum++)
+	{
+		char	new_tablespace_dir[MAXPGPATH];
+		snprintf(new_tablespace_dir, MAXPGPATH, "%s%s",
+				os_info.old_tablespaces[tblnum],
+				new_cluster.tablespace_suffix);
+		(void) rmdir(new_tablespace_dir);
+	}
+
+	/*
 	 * Now restore global objects (roles and tablespaces).
 	 */
 	prep_status("Restoring global objects in the new cluster");

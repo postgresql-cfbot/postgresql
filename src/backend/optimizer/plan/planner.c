@@ -3877,6 +3877,11 @@ create_grouping_paths(PlannerInfo *root,
 		extra.havingQual = parse->havingQual;
 		extra.targetList = parse->targetList;
 		extra.partial_costs_set = false;
+		if (parse->groupClause != NIL &&
+			(gd == NULL || gd->rollups == NIL))
+			extra.hashable_groups = grouping_get_hashable(parse->groupClause);
+		else
+			extra.hashable_groups = NIL;
 
 		/*
 		 * Determine whether partitionwise aggregation is in theory possible.
@@ -4803,6 +4808,8 @@ create_distinct_paths(PlannerInfo *root,
 											  cheapest_input_path->rows,
 											  NULL);
 	}
+	distinct_rel->rows = numDistinctRows;
+	distinct_rel->reltarget = root->upper_targets[UPPERREL_DISTINCT];
 
 	/*
 	 * Consider sort-based implementations of DISTINCT, if possible.
@@ -4822,6 +4829,7 @@ create_distinct_paths(PlannerInfo *root,
 		 * the other.)
 		 */
 		List	   *needed_pathkeys;
+		List	   *hashable_clause;
 
 		if (parse->hasDistinctOn &&
 			list_length(root->distinct_pathkeys) <
@@ -4868,6 +4876,44 @@ create_distinct_paths(PlannerInfo *root,
 										  path,
 										  list_length(root->distinct_pathkeys),
 										  numDistinctRows));
+
+		/* add parallel unique */
+		if (distinct_rel->consider_parallel &&
+			input_rel->partial_pathlist != NIL &&
+			numDistinctRows >= BATCH_SORT_MIN_BATCHES &&
+			(hashable_clause = grouping_get_hashable(parse->distinctClause)) != NIL)
+		{
+			double	numPartialDistinctRows;
+			uint32	num_batchs = (uint32)numDistinctRows;
+			if (num_batchs > BATCH_SORT_MAX_BATCHES)
+			{
+				/*
+				 * too many batchs(files) it is not a good idea,
+				 * limit to BATCH_SORT_MAX_BATCHES
+				 */
+				num_batchs = BATCH_SORT_MAX_BATCHES;
+			}
+
+			foreach (lc, input_rel->partial_pathlist)
+			{
+				Path *path = (Path*)create_batchsort_path(root,
+														  distinct_rel,
+														  lfirst(lc),
+														  needed_pathkeys,
+														  hashable_clause,
+														  num_batchs,
+														  true);
+				numPartialDistinctRows = numDistinctRows / path->parallel_workers;
+				if (numPartialDistinctRows < 1.0)
+					numPartialDistinctRows = 1.0;
+				path = (Path*)create_upper_unique_path(root,
+													   distinct_rel,
+													   path,
+													   list_length(root->distinct_pathkeys),
+													   numPartialDistinctRows);
+				add_partial_path(distinct_rel, path);
+			}
+		}
 	}
 
 	/*
@@ -4904,6 +4950,8 @@ create_distinct_paths(PlannerInfo *root,
 								 NULL,
 								 numDistinctRows));
 	}
+
+	generate_useful_gather_paths(root, distinct_rel, false);
 
 	/* Give a helpful error if we failed to find any implementation */
 	if (distinct_rel->pathlist == NIL)
@@ -6656,6 +6704,54 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 			{
 				/* Other cases should have been handled above */
 				Assert(false);
+			}
+		}
+
+		/*
+		 * create simple agg using parallel
+		 */
+		if (grouped_rel->consider_parallel &&
+			extra->hashable_groups != NIL &&
+			input_rel->partial_pathlist != NIL &&
+			dNumGroups >= BATCH_SORT_MIN_BATCHES)
+		{
+			Path	   *path;
+			uint32		numBatches = (uint32)dNumGroups;
+			if (numBatches > BATCH_SORT_MAX_BATCHES)
+				numBatches = BATCH_SORT_MAX_BATCHES;
+			Assert(parse->groupingSets == NIL);
+			Assert(parse->groupClause != NIL);
+			foreach (lc, input_rel->partial_pathlist)
+			{
+				double numGroups = dNumGroups / numBatches;
+				if (numGroups < 1.0)
+					numGroups = 1.0;
+				path = (Path*)create_batchsort_path(root,
+													grouped_rel,
+													lfirst(lc),
+													root->group_pathkeys,
+													extra->hashable_groups,
+													numBatches,
+													true);
+				if (parse->hasAggs)
+					path = (Path*)create_agg_path(root,
+												  grouped_rel,
+												  path,
+												  grouped_rel->reltarget,
+												  AGG_SORTED,
+												  AGGSPLIT_SIMPLE,
+												  parse->groupClause,
+												  havingQual,
+												  agg_costs,
+												  numGroups);
+				else
+					path = (Path*)create_group_path(root,
+													grouped_rel,
+													path,
+													parse->groupClause,
+													havingQual,
+													numGroups);
+				add_partial_path(grouped_rel, path);
 			}
 		}
 

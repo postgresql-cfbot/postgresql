@@ -775,6 +775,18 @@ typedef struct Sort
 } Sort;
 
 /* ----------------
+ *		batch sort node
+ * ----------------
+ */
+typedef struct BatchSort
+{
+	Sort		sort;
+	int			numGroupCols;	/* number of group-key columns */
+	int			numBatches;		/* number of group */
+	AttrNumber *grpColIdx;		/* their indexes in the target list */
+}BatchSort;
+
+/* ----------------
  *		incremental sort node
  * ----------------
  */

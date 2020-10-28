@@ -855,6 +855,18 @@ _outSort(StringInfo str, const Sort *node)
 }
 
 static void
+_outBatchSort(StringInfo str, const BatchSort *node)
+{
+	WRITE_NODE_TYPE("BATCHSORT");
+
+	_outSortInfo(str, &node->sort);
+
+	WRITE_INT_FIELD(numGroupCols);
+	WRITE_INT_FIELD(numBatches);
+	WRITE_ATTRNUMBER_ARRAY(grpColIdx, node->numGroupCols);
+}
+
+static void
 _outIncrementalSort(StringInfo str, const IncrementalSort *node)
 {
 	WRITE_NODE_TYPE("INCREMENTALSORT");
@@ -3809,6 +3821,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_Sort:
 				_outSort(str, obj);
+				break;
+			case T_BatchSort:
+				_outBatchSort(str, obj);
 				break;
 			case T_IncrementalSort:
 				_outIncrementalSort(str, obj);

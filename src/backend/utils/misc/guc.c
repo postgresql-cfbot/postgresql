@@ -988,6 +988,15 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_batch_sort", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("enable batch sort method"),
+			NULL
+		},
+		&enable_batch_sort,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_incremental_sort", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of incremental sort steps."),
 			NULL

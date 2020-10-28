@@ -53,6 +53,7 @@ extern PGDLLIMPORT bool enable_indexonlyscan;
 extern PGDLLIMPORT bool enable_bitmapscan;
 extern PGDLLIMPORT bool enable_tidscan;
 extern PGDLLIMPORT bool enable_sort;
+extern PGDLLIMPORT bool enable_batch_sort;
 extern PGDLLIMPORT bool enable_incremental_sort;
 extern PGDLLIMPORT bool enable_hashagg;
 extern PGDLLIMPORT bool enable_nestloop;
@@ -102,6 +103,11 @@ extern void cost_sort(Path *path, PlannerInfo *root,
 					  List *pathkeys, Cost input_cost, double tuples, int width,
 					  Cost comparison_cost, int sort_mem,
 					  double limit_tuples);
+extern void cost_batchsort(Path *path, PlannerInfo *root,
+						   List *batchkeys, Cost input_cost,
+						   double tuples, int width,
+						   Cost comparison_cost, int sort_mem,
+						   uint32 numGroupCols, uint32 numBatchs);
 extern void cost_incremental_sort(Path *path,
 								  PlannerInfo *root, List *pathkeys, int presorted_keys,
 								  Cost input_startup_cost, Cost input_total_cost,

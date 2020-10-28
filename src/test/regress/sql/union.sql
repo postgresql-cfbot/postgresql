@@ -440,3 +440,18 @@ select * from
    union all
    select *, 1 as x from int8_tbl b) ss
 where (x = 0) or (q1 >= q2 and q1 <= q2);
+
+-- parallel union
+BEGIN;
+SET enable_batch_sort = ON;
+SET min_parallel_table_scan_size =0;
+SET parallel_tuple_cost = 0;
+SET parallel_setup_cost = 0;
+SET enable_indexonlyscan = OFF;
+EXPLAIN (costs off)
+SELECT count(*) FROM (SELECT unique2 FROM tenk1 UNION SELECT unique2 FROM tenk1) foo;
+SELECT count(*) FROM (SELECT unique2 FROM tenk1 UNION SELECT unique2 FROM tenk1) foo;
+EXPLAIN (costs off)
+SELECT count(*) FROM (SELECT unique2 FROM tenk1 UNION SELECT unique2 FROM tenk1) t1 INNER JOIN tenk1 USING(unique2);
+SELECT count(*) FROM (SELECT unique2 FROM tenk1 UNION SELECT unique2 FROM tenk1) t1 INNER JOIN tenk1 USING(unique2);
+ABORT;

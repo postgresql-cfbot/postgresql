@@ -593,6 +593,22 @@ grouping_is_hashable(List *groupClause)
 	return true;
 }
 
+List *
+grouping_get_hashable(List *groupClause)
+{
+	ListCell   *lc;
+	List	   *result = NIL;
+
+	foreach (lc, groupClause)
+	{
+		SortGroupClause *groupcl = lfirst_node(SortGroupClause, lc);
+
+		if (groupcl->hashable)
+			result = lappend(result, groupcl);
+	}
+
+	return result;
+}
 
 /*****************************************************************************
  *		PathTarget manipulation functions

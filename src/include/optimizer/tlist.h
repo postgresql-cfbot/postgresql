@@ -36,6 +36,7 @@ extern Oid *extract_grouping_collations(List *groupClause, List *tlist);
 extern AttrNumber *extract_grouping_cols(List *groupClause, List *tlist);
 extern bool grouping_is_sortable(List *groupClause);
 extern bool grouping_is_hashable(List *groupClause);
+extern List *grouping_get_hashable(List *groupClause);
 
 extern PathTarget *make_pathtarget_from_tlist(List *tlist);
 extern List *make_tlist_from_pathtarget(PathTarget *target);

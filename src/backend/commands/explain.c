@@ -1267,6 +1267,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Sort:
 			pname = sname = "Sort";
 			break;
+		case T_BatchSort:
+			pname = sname = "BatchSort";
+			break;
 		case T_IncrementalSort:
 			pname = sname = "Incremental Sort";
 			break;
@@ -1929,6 +1932,18 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Sort:
 			show_sort_keys(castNode(SortState, planstate), ancestors, es);
 			show_sort_info(castNode(SortState, planstate), es);
+			break;
+		case T_BatchSort:
+			{
+				BatchSort *bsort = (BatchSort*)plan;
+				show_sort_group_keys(planstate, "Sort Key",
+									 bsort->sort.numCols, 0, bsort->sort.sortColIdx,
+									 bsort->sort.sortOperators, bsort->sort.collations,
+									 bsort->sort.nullsFirst,
+									 ancestors, es);
+				if (es->verbose)
+					ExplainPropertyInteger("batches", NULL, bsort->numBatches, es);
+			}
 			break;
 		case T_IncrementalSort:
 			show_incremental_sort_keys(castNode(IncrementalSortState, planstate),

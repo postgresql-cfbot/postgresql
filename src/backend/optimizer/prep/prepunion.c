@@ -67,7 +67,7 @@ static List *plan_union_children(PlannerInfo *root,
 								 List *refnames_tlist,
 								 List **tlist_list);
 static Path *make_union_unique(SetOperationStmt *op, Path *path, List *tlist,
-							   PlannerInfo *root);
+							   PlannerInfo *root, List *groupList, List *sortKeys);
 static void postprocess_setop_rel(PlannerInfo *root, RelOptInfo *rel);
 static bool choose_hashed_setop(PlannerInfo *root, List *groupClauses,
 								Path *input_path,
@@ -354,6 +354,7 @@ recurse_set_operations(Node *setOp, PlannerInfo *root,
 			rel = generate_nonunion_paths(op, root,
 										  refnames_tlist,
 										  pTargetList);
+		generate_useful_gather_paths(root, rel, false);
 		if (pNumGroups)
 			*pNumGroups = rel->rows;
 
@@ -552,6 +553,8 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 	List	   *tlist_list;
 	List	   *tlist;
 	Path	   *path;
+	List	   *groupList = NIL;
+	List	   *sortKeys = NIL;
 
 	/*
 	 * If plain UNION, tell children to fetch all tuples.
@@ -586,6 +589,14 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 								  tlist_list, refnames_tlist);
 
 	*pTargetList = tlist;
+
+	if (!op->all)
+	{
+		/* Identify the grouping semantics */
+		groupList = generate_setop_grouplist(op, tlist);
+		if (grouping_is_sortable(groupList))
+			sortKeys = make_pathkeys_for_sortclauses(root, groupList, tlist);
+	}
 
 	/* Build path lists and relid set. */
 	foreach(lc, rellist)
@@ -627,7 +638,7 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 	 * node(s) to remove duplicates.
 	 */
 	if (!op->all)
-		path = make_union_unique(op, path, tlist, root);
+		path = make_union_unique(op, path, tlist, root, groupList, sortKeys);
 
 	add_path(result_rel, path);
 
@@ -646,6 +657,7 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 	{
 		Path	   *ppath;
 		ListCell   *lc;
+		List	   *hashable_list;
 		int			parallel_workers = 0;
 
 		/* Find the highest number of workers requested for any subpath. */
@@ -678,11 +690,35 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 							   NIL, NULL,
 							   parallel_workers, enable_parallel_append,
 							   NIL, -1);
+		if (!op->all &&
+			sortKeys != NIL &&
+			ppath->rows >= BATCH_SORT_MIN_BATCHES &&
+			(hashable_list = grouping_get_hashable(groupList)) != NIL)
+		{
+			Path   *partial_path;
+			uint32	numBatches = ppath->rows;
+			if (numBatches > BATCH_SORT_MAX_BATCHES)
+				numBatches = BATCH_SORT_MAX_BATCHES;
+			Assert(list_length(sortKeys) >= list_length(hashable_list));
+			partial_path = (Path*)create_batchsort_path(root,
+														result_rel,
+														ppath,
+														sortKeys,
+														hashable_list,
+														numBatches,
+														true);
+			partial_path = (Path*) create_upper_unique_path(root,
+															result_rel,
+															partial_path,
+															list_length(sortKeys),
+															partial_path->rows);
+			add_partial_path(result_rel, partial_path);
+		}
 		ppath = (Path *)
 			create_gather_path(root, result_rel, ppath,
 							   result_rel->reltarget, NULL, NULL);
 		if (!op->all)
-			ppath = make_union_unique(op, ppath, tlist, root);
+			ppath = make_union_unique(op, ppath, tlist, root, groupList, sortKeys);
 		add_path(result_rel, ppath);
 	}
 
@@ -933,14 +969,10 @@ plan_union_children(PlannerInfo *root,
  */
 static Path *
 make_union_unique(SetOperationStmt *op, Path *path, List *tlist,
-				  PlannerInfo *root)
+				  PlannerInfo *root, List *groupList, List *sortKeys)
 {
 	RelOptInfo *result_rel = fetch_upper_rel(root, UPPERREL_SETOP, NULL);
-	List	   *groupList;
 	double		dNumGroups;
-
-	/* Identify the grouping semantics */
-	groupList = generate_setop_grouplist(op, tlist);
 
 	/*
 	 * XXX for the moment, take the number of distinct groups as equal to the
@@ -976,9 +1008,7 @@ make_union_unique(SetOperationStmt *op, Path *path, List *tlist,
 				create_sort_path(root,
 								 result_rel,
 								 path,
-								 make_pathkeys_for_sortclauses(root,
-															   groupList,
-															   tlist),
+								 sortKeys,
 								 -1.0);
 		path = (Path *) create_upper_unique_path(root,
 												 result_rel,

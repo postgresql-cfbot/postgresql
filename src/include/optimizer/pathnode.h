@@ -17,6 +17,8 @@
 #include "nodes/bitmapset.h"
 #include "nodes/pathnodes.h"
 
+#define BATCH_SORT_MIN_BATCHES		2
+#define BATCH_SORT_MAX_BATCHES		512
 
 /*
  * prototypes for pathnode.c
@@ -195,6 +197,13 @@ extern SortPath *create_sort_path(PlannerInfo *root,
 								  Path *subpath,
 								  List *pathkeys,
 								  double limit_tuples);
+extern BatchSortPath *create_batchsort_path(PlannerInfo *root,
+											RelOptInfo *rel,
+											Path *subpath,
+											List *pathkeys,
+											List *groupClause,
+											uint32 numBatches,
+											bool parallel_sort);
 extern GroupPath *create_group_path(PlannerInfo *root,
 									RelOptInfo *rel,
 									Path *subpath,

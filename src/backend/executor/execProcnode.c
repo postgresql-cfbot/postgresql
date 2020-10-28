@@ -75,6 +75,7 @@
 #include "executor/executor.h"
 #include "executor/nodeAgg.h"
 #include "executor/nodeAppend.h"
+#include "executor/nodeBatchSort.h"
 #include "executor/nodeBitmapAnd.h"
 #include "executor/nodeBitmapHeapscan.h"
 #include "executor/nodeBitmapIndexscan.h"
@@ -312,6 +313,11 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 		case T_Sort:
 			result = (PlanState *) ExecInitSort((Sort *) node,
 												estate, eflags);
+			break;
+
+		case T_BatchSort:
+			result = (PlanState *) ExecInitBatchSort((BatchSort *) node,
+													 estate, eflags);
 			break;
 
 		case T_IncrementalSort:
@@ -697,6 +703,10 @@ ExecEndNode(PlanState *node)
 
 		case T_SortState:
 			ExecEndSort((SortState *) node);
+			break;
+
+		case T_BatchSortState:
+			ExecEndBatchSort((BatchSortState *) node);
 			break;
 
 		case T_IncrementalSortState:

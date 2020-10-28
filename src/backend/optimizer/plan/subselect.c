@@ -2752,6 +2752,7 @@ finalize_plan(PlannerInfo *root, Plan *plan,
 		case T_Hash:
 		case T_Material:
 		case T_Sort:
+		case T_BatchSort:
 		case T_IncrementalSort:
 		case T_Unique:
 		case T_SetOp:

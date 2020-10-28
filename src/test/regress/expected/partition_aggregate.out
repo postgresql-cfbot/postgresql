@@ -1516,3 +1516,76 @@ SELECT x, sum(y), avg(y), count(*) FROM pagg_tab_para GROUP BY x HAVING avg(y) <
  21 | 6000 | 6.0000000000000000 |  1000
 (6 rows)
 
+-- simple agg in parallel
+BEGIN;
+SET enable_batch_sort = ON;
+SET min_parallel_table_scan_size = 0;
+SET parallel_tuple_cost = 0;
+SET parallel_setup_cost = 0;
+SET enable_indexonlyscan = OFF;
+EXPLAIN (COSTS OFF)
+SELECT unique2,count(*) FROM tenk1 GROUP BY 1;
+                  QUERY PLAN                  
+----------------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  GroupAggregate
+         Group Key: unique2
+         ->  Parallel BatchSort
+               Sort Key: unique2
+               ->  Parallel Seq Scan on tenk1
+(7 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM (SELECT unique2,count(*) FROM tenk1 GROUP BY 1) foo;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Aggregate
+   ->  Gather
+         Workers Planned: 2
+         ->  GroupAggregate
+               Group Key: tenk1.unique2
+               ->  Parallel BatchSort
+                     Sort Key: tenk1.unique2
+                     ->  Parallel Seq Scan on tenk1
+(8 rows)
+
+SELECT count(*) FROM (SELECT unique2,count(*) FROM tenk1 GROUP BY 1) foo;
+ count 
+-------
+ 10000
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM
+  (SELECT unique2,count(*) id FROM tenk1 GROUP BY 1) t1
+    INNER JOIN
+  (SELECT unique2  id FROM tenk1) t2
+  USING(id);
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 2
+         ->  Partial Aggregate
+               ->  Nested Loop
+                     ->  GroupAggregate
+                           Group Key: tenk1_1.unique2
+                           ->  Parallel BatchSort
+                                 Sort Key: tenk1_1.unique2
+                                 ->  Parallel Seq Scan on tenk1 tenk1_1
+                     ->  Index Scan using tenk1_unique2 on tenk1
+                           Index Cond: (unique2 = (count(*)))
+(12 rows)
+
+SELECT count(*) FROM
+  (SELECT unique2,count(*) id FROM tenk1 GROUP BY 1) t1
+    INNER JOIN
+  (SELECT unique2  id FROM tenk1) t2
+  USING(id);
+ count 
+-------
+ 10000
+(1 row)
+
+ABORT;

@@ -4535,11 +4535,11 @@ XmlTableFetchRow(TableFuncScanState *state)
 	xtCxt = GetXmlTableBuilderPrivateData(state, "XmlTableFetchRow");
 
 	/*
-	 * XmlTable returns table - set of composite values. The error context, is
-	 * used for producement more values, between two calls, there can be
-	 * created and used another libxml2 error context. It is libxml2 global
-	 * value, so it should be refreshed any time before any libxml2 usage,
-	 * that is finished by returning some value.
+	 * XmlTable returns table-set of composite values. The error context is
+	 * used for providing more detail. Between two calls, other libxml2
+	 * error contexts might have been created and used ; since they're libxml2 
+	 * global values, they should be refreshed each time before any libxml2 usage
+	 * that finishes by returning some value.
 	 */
 	xmlSetStructuredErrorFunc((void *) xtCxt->xmlerrcxt, xml_errorHandler);
 

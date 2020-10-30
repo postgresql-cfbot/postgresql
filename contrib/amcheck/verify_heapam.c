@@ -1342,7 +1342,7 @@ fxid_in_cached_range(FullTransactionId fxid, const HeapCheckContext *ctx)
 }
 
 /*
- * Checks wheter a multitransaction ID is in the cached valid range, returning
+ * Checks whether a multitransaction ID is in the cached valid range, returning
  * the nature of the range violation, if any.
  */
 static XidBoundsViolation

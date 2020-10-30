@@ -53,7 +53,7 @@ int			wal_skip_threshold = 2048;	/* in kilobytes */
  * nesting level.
  *
  * NOTE: the list is kept in TopMemoryContext to be sure it won't disappear
- * unbetimes.  It'd probably be OK to keep it in TopTransactionContext,
+ * unbetimes???.  It'd probably be OK to keep it in TopTransactionContext,
  * but I'm being paranoid.
  */
 

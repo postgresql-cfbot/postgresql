@@ -1583,7 +1583,7 @@ exec_replication_command(const char *cmd_string)
 	 */
 	debug_query_string = cmd_string;
 
-	pgstat_report_activity(STATE_RUNNING, cmd_string);
+	pgstat_report_activity(STATE_RUNNING, cmd_string, 0, 0);
 
 	/*
 	 * Log replication command if log_replication_commands is enabled. Even

@@ -991,14 +991,6 @@ exec_simple_query(const char *query_string)
 	bool		use_implicit_block;
 	char		msec_str[32];
 
-	/*
-	 * Report query to various monitoring facilities.
-	 */
-	debug_query_string = query_string;
-
-	pgstat_report_activity(STATE_RUNNING, query_string);
-
-	TRACE_POSTGRESQL_QUERY_START(query_string);
 
 	/*
 	 * We use save_log_statement_stats so ShowUsage doesn't report incorrect
@@ -1075,6 +1067,15 @@ exec_simple_query(const char *query_string)
 		Portal		portal;
 		DestReceiver *receiver;
 		int16		format;
+
+		/*
+		 * Report query to various monitoring facilities.
+		 */
+		debug_query_string = query_string;
+
+		pgstat_report_activity(STATE_RUNNING, query_string, parsetree->stmt_location, parsetree->stmt_len);
+
+		TRACE_POSTGRESQL_QUERY_START(query_string);
 
 		/*
 		 * Get the command name for use in status display (it also becomes the
@@ -1366,7 +1367,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 	 */
 	debug_query_string = query_string;
 
-	pgstat_report_activity(STATE_RUNNING, query_string);
+	pgstat_report_activity(STATE_RUNNING, query_string, 0, 0);
 
 	set_ps_display("PARSE");
 
@@ -1657,7 +1658,7 @@ exec_bind_message(StringInfo input_message)
 	 */
 	debug_query_string = psrc->query_string;
 
-	pgstat_report_activity(STATE_RUNNING, psrc->query_string);
+	pgstat_report_activity(STATE_RUNNING, psrc->query_string, 0, 0);
 
 	set_ps_display("BIND");
 
@@ -2115,7 +2116,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 	 */
 	debug_query_string = sourceText;
 
-	pgstat_report_activity(STATE_RUNNING, sourceText);
+	pgstat_report_activity(STATE_RUNNING, sourceText, 0, 0);
 
 	set_ps_display(GetCommandTagName(portal->commandTag));
 
@@ -4190,7 +4191,7 @@ PostgresMain(int argc, char *argv[],
 			if (IsAbortedTransactionBlockState())
 			{
 				set_ps_display("idle in transaction (aborted)");
-				pgstat_report_activity(STATE_IDLEINTRANSACTION_ABORTED, NULL);
+				pgstat_report_activity(STATE_IDLEINTRANSACTION_ABORTED, NULL, 0, 0);
 
 				/* Start the idle-in-transaction timer */
 				if (IdleInTransactionSessionTimeout > 0)
@@ -4203,7 +4204,7 @@ PostgresMain(int argc, char *argv[],
 			else if (IsTransactionOrTransactionBlock())
 			{
 				set_ps_display("idle in transaction");
-				pgstat_report_activity(STATE_IDLEINTRANSACTION, NULL);
+				pgstat_report_activity(STATE_IDLEINTRANSACTION, NULL, 0, 0);
 
 				/* Start the idle-in-transaction timer */
 				if (IdleInTransactionSessionTimeout > 0)
@@ -4230,7 +4231,7 @@ PostgresMain(int argc, char *argv[],
 				pgstat_report_stat(false);
 
 				set_ps_display("idle");
-				pgstat_report_activity(STATE_IDLE, NULL);
+				pgstat_report_activity(STATE_IDLE, NULL, 0, 0);
 			}
 
 			ReadyForQuery(whereToSendOutput);
@@ -4378,7 +4379,7 @@ PostgresMain(int argc, char *argv[],
 				SetCurrentStatementStartTimestamp();
 
 				/* Report query to various monitoring facilities. */
-				pgstat_report_activity(STATE_FASTPATH, NULL);
+				pgstat_report_activity(STATE_FASTPATH, NULL, 0, 0);
 				set_ps_display("<FASTPATH>");
 
 				/* start an xact for this function invocation */

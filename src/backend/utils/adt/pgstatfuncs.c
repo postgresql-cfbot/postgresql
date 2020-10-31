@@ -567,7 +567,7 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_activity(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_ACTIVITY_COLS	30
+#define PG_STAT_GET_ACTIVITY_COLS	31
 	int			num_backends = pgstat_fetch_stat_numbackends();
 	int			curr_backend;
 	int			pid = PG_ARGISNULL(0) ? -1 : PG_GETARG_INT32(0);
@@ -631,6 +631,8 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 
 			nulls[5] = false;
 			values[5] = CStringGetTextDatum("<backend information not available>");
+			nulls[6] = false;
+			values[6] = CStringGetTextDatum("<backend information not available>");
 
 			tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 			continue;
@@ -661,20 +663,21 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 			nulls[3] = true;
 
 		if (TransactionIdIsValid(local_beentry->backend_xid))
-			values[15] = TransactionIdGetDatum(local_beentry->backend_xid);
-		else
-			nulls[15] = true;
-
-		if (TransactionIdIsValid(local_beentry->backend_xmin))
-			values[16] = TransactionIdGetDatum(local_beentry->backend_xmin);
+			values[16] = TransactionIdGetDatum(local_beentry->backend_xid);
 		else
 			nulls[16] = true;
+
+		if (TransactionIdIsValid(local_beentry->backend_xmin))
+			values[17] = TransactionIdGetDatum(local_beentry->backend_xmin);
+		else
+			nulls[17] = true;
 
 		/* Values only available to role member or pg_read_all_stats */
 		if (HAS_PGSTAT_PERMISSIONS(beentry->st_userid))
 		{
 			SockAddr	zero_clientaddr;
 			char	   *clipped_activity;
+			int		individual_len;
 
 			switch (beentry->st_state)
 			{
@@ -703,10 +706,32 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 
 			clipped_activity = pgstat_clip_activity(beentry->st_activity_raw);
 			values[5] = CStringGetTextDatum(clipped_activity);
+
+			if (clipped_activity[0] != '\0')
+			{
+			/* display individual query */
+				if ((beentry->stmt_len + beentry->stmt_location < pgstat_track_activity_query_size)
+					&& (beentry->stmt_len + 1 != strlen(clipped_activity))
+					&& (beentry->stmt_len + beentry->stmt_location != 0))
+				{
+					if (beentry->stmt_len ==  0)
+						individual_len = strlen(clipped_activity) - beentry->stmt_location;
+					else
+						individual_len = beentry->stmt_len + 1;
+
+					clipped_activity[beentry->stmt_location + individual_len] = '\0';
+					values[6] = CStringGetTextDatum(clipped_activity + beentry->stmt_location);
+				} else {
+					nulls[6] = true;
+				}
+			} else {
+				nulls[6] = true;
+			}
+
 			pfree(clipped_activity);
 
 			/* leader_pid */
-			nulls[29] = true;
+			nulls[30] = true;
 
 			proc = BackendPidGetProc(beentry->st_procpid);
 
@@ -743,20 +768,20 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 				 */
 				if (leader && leader->pid != beentry->st_procpid)
 				{
-					values[29] = Int32GetDatum(leader->pid);
-					nulls[29] = false;
+					values[30] = Int32GetDatum(leader->pid);
+					nulls[30] = false;
 				}
 			}
 
 			if (wait_event_type)
-				values[6] = CStringGetTextDatum(wait_event_type);
-			else
-				nulls[6] = true;
-
-			if (wait_event)
-				values[7] = CStringGetTextDatum(wait_event);
+				values[7] = CStringGetTextDatum(wait_event_type);
 			else
 				nulls[7] = true;
+
+			if (wait_event)
+				values[8] = CStringGetTextDatum(wait_event);
+			else
+				nulls[8] = true;
 
 			/*
 			 * Don't expose transaction time for walsenders; it confuses
@@ -765,33 +790,33 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 			 */
 			if (beentry->st_xact_start_timestamp != 0 &&
 				beentry->st_backendType != B_WAL_SENDER)
-				values[8] = TimestampTzGetDatum(beentry->st_xact_start_timestamp);
-			else
-				nulls[8] = true;
-
-			if (beentry->st_activity_start_timestamp != 0)
-				values[9] = TimestampTzGetDatum(beentry->st_activity_start_timestamp);
+				values[9] = TimestampTzGetDatum(beentry->st_xact_start_timestamp);
 			else
 				nulls[9] = true;
 
-			if (beentry->st_proc_start_timestamp != 0)
-				values[10] = TimestampTzGetDatum(beentry->st_proc_start_timestamp);
+			if (beentry->st_activity_start_timestamp != 0)
+				values[10] = TimestampTzGetDatum(beentry->st_activity_start_timestamp);
 			else
 				nulls[10] = true;
 
-			if (beentry->st_state_start_timestamp != 0)
-				values[11] = TimestampTzGetDatum(beentry->st_state_start_timestamp);
+			if (beentry->st_proc_start_timestamp != 0)
+				values[11] = TimestampTzGetDatum(beentry->st_proc_start_timestamp);
 			else
 				nulls[11] = true;
+
+			if (beentry->st_state_start_timestamp != 0)
+				values[12] = TimestampTzGetDatum(beentry->st_state_start_timestamp);
+			else
+				nulls[12] = true;
 
 			/* A zeroed client addr means we don't know */
 			memset(&zero_clientaddr, 0, sizeof(zero_clientaddr));
 			if (memcmp(&(beentry->st_clientaddr), &zero_clientaddr,
 					   sizeof(zero_clientaddr)) == 0)
 			{
-				nulls[12] = true;
 				nulls[13] = true;
 				nulls[14] = true;
+				nulls[15] = true;
 			}
 			else
 			{
@@ -815,20 +840,20 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 					if (ret == 0)
 					{
 						clean_ipv6_addr(beentry->st_clientaddr.addr.ss_family, remote_host);
-						values[12] = DirectFunctionCall1(inet_in,
+						values[13] = DirectFunctionCall1(inet_in,
 														 CStringGetDatum(remote_host));
 						if (beentry->st_clienthostname &&
 							beentry->st_clienthostname[0])
-							values[13] = CStringGetTextDatum(beentry->st_clienthostname);
+							values[14] = CStringGetTextDatum(beentry->st_clienthostname);
 						else
-							nulls[13] = true;
-						values[14] = Int32GetDatum(atoi(remote_port));
+							nulls[14] = true;
+						values[15] = Int32GetDatum(atoi(remote_port));
 					}
 					else
 					{
-						nulls[12] = true;
 						nulls[13] = true;
 						nulls[14] = true;
+						nulls[15] = true;
 					}
 				}
 				else if (beentry->st_clientaddr.addr.ss_family == AF_UNIX)
@@ -839,16 +864,16 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 					 * connections we have no permissions to view, or with
 					 * errors.
 					 */
-					nulls[12] = true;
 					nulls[13] = true;
-					values[14] = Int32GetDatum(-1);
+					nulls[14] = true;
+					values[15] = Int32GetDatum(-1);
 				}
 				else
 				{
 					/* Unknown address type, should never happen */
-					nulls[12] = true;
 					nulls[13] = true;
 					nulls[14] = true;
+					nulls[15] = true;
 				}
 			}
 			/* Add backend type */
@@ -858,59 +883,59 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 
 				bgw_type = GetBackgroundWorkerTypeByPid(beentry->st_procpid);
 				if (bgw_type)
-					values[17] = CStringGetTextDatum(bgw_type);
+					values[18] = CStringGetTextDatum(bgw_type);
 				else
-					nulls[17] = true;
+					nulls[18] = true;
 			}
 			else
-				values[17] =
+				values[18] =
 					CStringGetTextDatum(GetBackendTypeDesc(beentry->st_backendType));
 
 			/* SSL information */
 			if (beentry->st_ssl)
 			{
-				values[18] = BoolGetDatum(true);	/* ssl */
-				values[19] = CStringGetTextDatum(beentry->st_sslstatus->ssl_version);
-				values[20] = CStringGetTextDatum(beentry->st_sslstatus->ssl_cipher);
-				values[21] = Int32GetDatum(beentry->st_sslstatus->ssl_bits);
-				values[22] = BoolGetDatum(beentry->st_sslstatus->ssl_compression);
+				values[19] = BoolGetDatum(true);	/* ssl */
+				values[20] = CStringGetTextDatum(beentry->st_sslstatus->ssl_version);
+				values[21] = CStringGetTextDatum(beentry->st_sslstatus->ssl_cipher);
+				values[22] = Int32GetDatum(beentry->st_sslstatus->ssl_bits);
+				values[23] = BoolGetDatum(beentry->st_sslstatus->ssl_compression);
 
 				if (beentry->st_sslstatus->ssl_client_dn[0])
-					values[23] = CStringGetTextDatum(beentry->st_sslstatus->ssl_client_dn);
+					values[24] = CStringGetTextDatum(beentry->st_sslstatus->ssl_client_dn);
 				else
-					nulls[23] = true;
+					nulls[24] = true;
 
 				if (beentry->st_sslstatus->ssl_client_serial[0])
-					values[24] = DirectFunctionCall3(numeric_in,
+					values[25] = DirectFunctionCall3(numeric_in,
 													 CStringGetDatum(beentry->st_sslstatus->ssl_client_serial),
 													 ObjectIdGetDatum(InvalidOid),
 													 Int32GetDatum(-1));
 				else
-					nulls[24] = true;
+					nulls[25] = true;
 
 				if (beentry->st_sslstatus->ssl_issuer_dn[0])
-					values[25] = CStringGetTextDatum(beentry->st_sslstatus->ssl_issuer_dn);
+					values[26] = CStringGetTextDatum(beentry->st_sslstatus->ssl_issuer_dn);
 				else
-					nulls[25] = true;
+					nulls[26] = true;
 			}
 			else
 			{
-				values[18] = BoolGetDatum(false);	/* ssl */
-				nulls[19] = nulls[20] = nulls[21] = nulls[22] = nulls[23] = nulls[24] = nulls[25] = true;
+				values[19] = BoolGetDatum(false);	/* ssl */
+				nulls[20] = nulls[21] = nulls[22] = nulls[23] = nulls[24] = nulls[25] = nulls[26] = true;
 			}
 
 			/* GSSAPI information */
 			if (beentry->st_gss)
 			{
-				values[26] = BoolGetDatum(beentry->st_gssstatus->gss_auth); /* gss_auth */
-				values[27] = CStringGetTextDatum(beentry->st_gssstatus->gss_princ);
-				values[28] = BoolGetDatum(beentry->st_gssstatus->gss_enc);	/* GSS Encryption in use */
+				values[27] = BoolGetDatum(beentry->st_gssstatus->gss_auth); /* gss_auth */
+				values[28] = CStringGetTextDatum(beentry->st_gssstatus->gss_princ);
+				values[29] = BoolGetDatum(beentry->st_gssstatus->gss_enc);	/* GSS Encryption in use */
 			}
 			else
 			{
-				values[26] = BoolGetDatum(false);	/* gss_auth */
-				nulls[27] = true;	/* No GSS principal */
-				values[28] = BoolGetDatum(false);	/* GSS Encryption not in
+				values[27] = BoolGetDatum(false);	/* gss_auth */
+				nulls[28] = true;	/* No GSS principal */
+				values[29] = BoolGetDatum(false);	/* GSS Encryption not in
 													 * use */
 			}
 		}
@@ -918,8 +943,8 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 		{
 			/* No permissions to view data about this session */
 			values[5] = CStringGetTextDatum("<insufficient privilege>");
+			values[6] = CStringGetTextDatum("<insufficient privilege>");
 			nulls[4] = true;
-			nulls[6] = true;
 			nulls[7] = true;
 			nulls[8] = true;
 			nulls[9] = true;
@@ -928,7 +953,7 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 			nulls[12] = true;
 			nulls[13] = true;
 			nulls[14] = true;
-			nulls[17] = true;
+			nulls[15] = true;
 			nulls[18] = true;
 			nulls[19] = true;
 			nulls[20] = true;
@@ -941,6 +966,7 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 			nulls[27] = true;
 			nulls[28] = true;
 			nulls[29] = true;
+			nulls[30] = true;
 		}
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);

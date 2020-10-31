@@ -692,7 +692,7 @@ apply_handle_begin(StringInfo s)
 
 	in_remote_transaction = true;
 
-	pgstat_report_activity(STATE_RUNNING, NULL);
+	pgstat_report_activity(STATE_RUNNING, NULL, 0, 0);
 }
 
 /*
@@ -736,7 +736,7 @@ apply_handle_commit(StringInfo s)
 	/* Process any tables that are being synchronized in parallel. */
 	process_syncing_tables(commit_data.end_lsn);
 
-	pgstat_report_activity(STATE_IDLE, NULL);
+	pgstat_report_activity(STATE_IDLE, NULL, 0, 0);
 }
 
 /*
@@ -804,7 +804,7 @@ apply_handle_stream_start(StringInfo s)
 	if (!first_segment)
 		subxact_info_read(MyLogicalRepWorker->subid, stream_xid);
 
-	pgstat_report_activity(STATE_RUNNING, NULL);
+	pgstat_report_activity(STATE_RUNNING, NULL, 0, 0);
 }
 
 /*
@@ -833,7 +833,7 @@ apply_handle_stream_stop(StringInfo s)
 	/* Reset per-stream context */
 	MemoryContextReset(LogicalStreamingContext);
 
-	pgstat_report_activity(STATE_IDLE, NULL);
+	pgstat_report_activity(STATE_IDLE, NULL, 0 , 0);
 }
 
 /*
@@ -986,7 +986,7 @@ apply_handle_stream_commit(StringInfo s)
 	 * transaction.
 	 */
 	in_remote_transaction = true;
-	pgstat_report_activity(STATE_RUNNING, NULL);
+	pgstat_report_activity(STATE_RUNNING, NULL, 0 ,0);
 
 	/*
 	 * Read the entries one by one and pass them through the same logic as in
@@ -1074,7 +1074,7 @@ apply_handle_stream_commit(StringInfo s)
 	/* unlink the files with serialized changes and subxact info */
 	stream_cleanup_files(MyLogicalRepWorker->subid, xid);
 
-	pgstat_report_activity(STATE_IDLE, NULL);
+	pgstat_report_activity(STATE_IDLE, NULL, 0, 0);
 }
 
 /*
@@ -2075,7 +2075,7 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 													ALLOCSET_DEFAULT_SIZES);
 
 	/* mark as idle, before starting to loop */
-	pgstat_report_activity(STATE_IDLE, NULL);
+	pgstat_report_activity(STATE_IDLE, NULL, 0, 0);
 
 	/* This outer loop iterates once per wait. */
 	for (;;)

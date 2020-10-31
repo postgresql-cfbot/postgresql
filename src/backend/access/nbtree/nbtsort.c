@@ -1810,7 +1810,7 @@ _bt_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	debug_query_string = sharedquery;
 
 	/* Report the query string from leader */
-	pgstat_report_activity(STATE_RUNNING, debug_query_string);
+	pgstat_report_activity(STATE_RUNNING, debug_query_string, 0, 0);
 
 	/* Look up nbtree shared state */
 	btshared = shm_toc_lookup(toc, PARALLEL_KEY_BTREE_SHARED, false);

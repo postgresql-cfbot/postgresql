@@ -3275,7 +3275,7 @@ pgstat_beshutdown_hook(int code, Datum arg)
  * ----------
  */
 void
-pgstat_report_activity(BackendState state, const char *cmd_str)
+pgstat_report_activity(BackendState state, const char *cmd_str, int stmt_location, int stmt_len)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
 	TimestampTz start_timestamp;
@@ -3302,6 +3302,8 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 			beentry->st_state = STATE_DISABLED;
 			beentry->st_state_start_timestamp = 0;
 			beentry->st_activity_raw[0] = '\0';
+			beentry->stmt_location = 0;
+			beentry->stmt_len = 0;
 			beentry->st_activity_start_timestamp = 0;
 			/* st_xact_start_timestamp and wait_event_info are also disabled */
 			beentry->st_xact_start_timestamp = 0;
@@ -3324,7 +3326,11 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 		 * than computed every write.
 		 */
 		len = Min(strlen(cmd_str), pgstat_track_activity_query_size - 1);
+		/* Individual query */
+		beentry->stmt_location = stmt_location;
+		beentry->stmt_len = stmt_len;
 	}
+
 	current_timestamp = GetCurrentTimestamp();
 
 	/*

@@ -734,7 +734,7 @@ pglz_decompress(const char *source, int32 slen, char *dest,
 				/*
 				 * Now we copy the bytes specified by the tag from OUTPUT to
 				 * OUTPUT (copy len bytes from dp - off to dp). The copied
-				 * areas could overlap, to preven possible uncertainty, we
+				 * areas could overlap; to prevent possible uncertainty, we
 				 * copy only non-overlapping regions.
 				 */
 				len = Min(len, destend - dp);

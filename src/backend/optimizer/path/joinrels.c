@@ -16,6 +16,7 @@
 
 #include "miscadmin.h"
 #include "optimizer/appendinfo.h"
+#include "optimizer/cost.h"
 #include "optimizer/joininfo.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
@@ -1548,6 +1549,137 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		populate_joinrel_with_paths(root, child_rel1, child_rel2,
 									child_joinrel, child_sjinfo,
 									child_restrictlist);
+	}
+}
+
+static List *
+extract_asymmetric_partitionwise_subjoin(PlannerInfo *root,
+										 RelOptInfo *joinrel,
+										 AppendPath *append_path,
+										 RelOptInfo *inner_rel,
+										 JoinType jointype,
+										 JoinPathExtraData *extra)
+{
+	List		*result = NIL;
+	ListCell	*lc;
+
+	foreach (lc, append_path->subpaths)
+	{
+		Path			*child_path = lfirst(lc);
+		RelOptInfo		*child_rel = child_path->parent;
+		Relids			child_join_relids;
+		RelOptInfo		*child_join_rel;
+		SpecialJoinInfo	*child_sjinfo;
+		List			*child_restrictlist;
+		AppendRelInfo	**appinfos;
+		int				nappinfos;
+
+		child_join_relids = bms_union(child_rel->relids,
+									  inner_rel->relids);
+		appinfos = find_appinfos_by_relids(root, child_join_relids,
+										   &nappinfos);
+		child_sjinfo = build_child_join_sjinfo(root, extra->sjinfo,
+											   child_rel->relids,
+											   inner_rel->relids);
+		child_restrictlist = (List *)
+			adjust_appendrel_attrs(root, (Node *)extra->restrictlist,
+								   nappinfos, appinfos);
+		pfree(appinfos);
+
+		child_join_rel = find_join_rel(root, child_join_relids);
+		if (!child_join_rel)
+		{
+			child_join_rel = build_child_join_rel(root,
+												  child_rel,
+												  inner_rel,
+												  joinrel,
+												  child_restrictlist,
+												  child_sjinfo,
+												  jointype);
+			if (!child_join_rel)
+				return NIL;
+		}
+
+		populate_joinrel_with_paths(root,
+									child_rel,
+									inner_rel,
+									child_join_rel,
+									child_sjinfo,
+									child_restrictlist);
+
+		/* Give up if asymmetric partition-wise join is not available */
+		if (child_join_rel->pathlist == NIL)
+			return NIL;
+
+		set_cheapest(child_join_rel);
+		result = lappend(result, child_join_rel);
+	}
+	return result;
+}
+
+void
+try_asymmetric_partitionwise_join(PlannerInfo *root,
+								  RelOptInfo *joinrel,
+								  RelOptInfo *outer_rel,
+								  RelOptInfo *inner_rel,
+								  JoinType jointype,
+								  JoinPathExtraData *extra)
+{
+	ListCell *lc;
+
+	if (!enable_partitionwise_join)
+		return;
+
+	if (IS_OTHER_REL(outer_rel) || IS_OTHER_REL(inner_rel))
+		return;
+
+	if (jointype != JOIN_INNER && jointype != JOIN_LEFT)
+		return;
+
+	foreach (lc, outer_rel->pathlist)
+	{
+		AppendPath *append_path = lfirst(lc);
+
+		/*
+		 * MEMO: We assume this pathlist keeps at least one AppendPath that
+		 * represents partitioned table-scan, symmetric or asymmetric
+		 * partition-wise join. It is not correct right now, however, a hook
+		 * on add_path() to give additional decision for path removel allows
+		 * to retain this kind of AppendPath, regardless of its cost.
+		 */
+		if (IsA(append_path, AppendPath) &&
+			append_path->partitioned_rels != NIL)
+		{
+			List **join_rel_level_saved;
+			List *live_childrels = NIL;
+
+			join_rel_level_saved = root->join_rel_level;
+			PG_TRY();
+			{
+				/* temporary disables "dynamic programming" algorithm */
+				root->join_rel_level = NULL;
+
+				live_childrels =
+					extract_asymmetric_partitionwise_subjoin(root,
+															 joinrel,
+															 append_path,
+															 inner_rel,
+															 jointype,
+															 extra);
+			}
+			PG_CATCH();
+			{
+				root->join_rel_level = join_rel_level_saved;
+				PG_RE_THROW();
+			}
+			PG_END_TRY();
+			root->join_rel_level = join_rel_level_saved;
+
+			if (live_childrels != NIL)
+				add_paths_to_append_rel(root, joinrel, live_childrels,
+										append_path->partitioned_rels);
+			break;
+		}
 	}
 }
 

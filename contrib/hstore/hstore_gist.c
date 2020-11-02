@@ -517,8 +517,7 @@ ghstore_consistent(PG_FUNCTION_ARGS)
 
 	sign = GETSIGN(entry);
 
-	if (strategy == HStoreContainsStrategyNumber ||
-		strategy == HStoreOldContainsStrategyNumber)
+	if (strategy == HStoreContainsStrategyNumber)
 	{
 		HStore	   *query = PG_GETARG_HSTORE_P(1);
 		HEntry	   *qe = ARRPTR(query);

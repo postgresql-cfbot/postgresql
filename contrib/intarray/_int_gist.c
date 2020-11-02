@@ -87,12 +87,10 @@ g_int_consistent(PG_FUNCTION_ARGS)
 											query);
 			break;
 		case RTContainsStrategyNumber:
-		case RTOldContainsStrategyNumber:
 			retval = inner_int_contains((ArrayType *) DatumGetPointer(entry->key),
 										query);
 			break;
 		case RTContainedByStrategyNumber:
-		case RTOldContainedByStrategyNumber:
 
 			/*
 			 * This code is unreachable as of intarray 1.4, because the <@

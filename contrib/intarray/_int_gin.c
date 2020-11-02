@@ -78,7 +78,6 @@ ginint4_queryextract(PG_FUNCTION_ARGS)
 				*searchMode = GIN_SEARCH_MODE_DEFAULT;
 				break;
 			case RTContainedByStrategyNumber:
-			case RTOldContainedByStrategyNumber:
 				/* empty set is contained in everything */
 				*searchMode = GIN_SEARCH_MODE_INCLUDE_EMPTY;
 				break;
@@ -89,7 +88,6 @@ ginint4_queryextract(PG_FUNCTION_ARGS)
 					*searchMode = GIN_SEARCH_MODE_INCLUDE_EMPTY;
 				break;
 			case RTContainsStrategyNumber:
-			case RTOldContainsStrategyNumber:
 				if (*nentries > 0)
 					*searchMode = GIN_SEARCH_MODE_DEFAULT;
 				else			/* everything contains the empty set */
@@ -127,7 +125,6 @@ ginint4_consistent(PG_FUNCTION_ARGS)
 			res = true;
 			break;
 		case RTContainedByStrategyNumber:
-		case RTOldContainedByStrategyNumber:
 			/* we will need recheck */
 			*recheck = true;
 			/* at least one element in check[] is true, so result = true */
@@ -148,7 +145,6 @@ ginint4_consistent(PG_FUNCTION_ARGS)
 			}
 			break;
 		case RTContainsStrategyNumber:
-		case RTOldContainsStrategyNumber:
 			/* result is not lossy */
 			*recheck = false;
 			/* Must have all elements in check[] true */

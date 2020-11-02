@@ -60,8 +60,6 @@ typedef uint16 StrategyNumber;
 #define RTBelowStrategyNumber			10	/* for <<| */
 #define RTAboveStrategyNumber			11	/* for |>> */
 #define RTOverAboveStrategyNumber		12	/* for |&> */
-#define RTOldContainsStrategyNumber		13	/* for old spelling of @> */
-#define RTOldContainedByStrategyNumber	14	/* for old spelling of <@ */
 #define RTKNNSearchStrategyNumber		15	/* for <-> (distance) */
 #define RTContainsElemStrategyNumber	16	/* for range types @> elem */
 #define RTAdjacentStrategyNumber		17	/* for -|- */

@@ -457,11 +457,9 @@ gseg_leaf_consistent(Datum key, Datum query, StrategyNumber strategy)
 			retval = DirectFunctionCall2(seg_same, key, query);
 			break;
 		case RTContainsStrategyNumber:
-		case RTOldContainsStrategyNumber:
 			retval = DirectFunctionCall2(seg_contains, key, query);
 			break;
 		case RTContainedByStrategyNumber:
-		case RTOldContainedByStrategyNumber:
 			retval = DirectFunctionCall2(seg_contained, key, query);
 			break;
 		default:
@@ -504,12 +502,10 @@ gseg_internal_consistent(Datum key, Datum query, StrategyNumber strategy)
 			break;
 		case RTSameStrategyNumber:
 		case RTContainsStrategyNumber:
-		case RTOldContainsStrategyNumber:
 			retval =
 				DatumGetBool(DirectFunctionCall2(seg_contains, key, query));
 			break;
 		case RTContainedByStrategyNumber:
-		case RTOldContainedByStrategyNumber:
 			retval =
 				DatumGetBool(DirectFunctionCall2(seg_overlap, key, query));
 			break;

@@ -12,10 +12,3 @@ DROP OPERATOR 8 (_int4, _int4);
 ALTER OPERATOR FAMILY gist__intbig_ops USING gist
 DROP OPERATOR 8 (_int4, _int4);
 
--- Likewise for the old spelling ~.
-
-ALTER OPERATOR FAMILY gist__int_ops USING gist
-DROP OPERATOR 14 (_int4, _int4);
-
-ALTER OPERATOR FAMILY gist__intbig_ops USING gist
-DROP OPERATOR 14 (_int4, _int4);

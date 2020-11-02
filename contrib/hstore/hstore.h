@@ -181,7 +181,6 @@ extern Pairs *hstoreArrayToPairs(ArrayType *a, int *npairs);
 #define HStoreExistsStrategyNumber		9
 #define HStoreExistsAnyStrategyNumber	10
 #define HStoreExistsAllStrategyNumber	11
-#define HStoreOldContainsStrategyNumber 13	/* backwards compatibility */
 
 /*
  * defining HSTORE_POLLUTE_NAMESPACE=0 will prevent use of old function names;

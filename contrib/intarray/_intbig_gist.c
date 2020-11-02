@@ -527,12 +527,10 @@ g_intbig_consistent(PG_FUNCTION_ARGS)
 										  query, siglen);
 			break;
 		case RTContainsStrategyNumber:
-		case RTOldContainsStrategyNumber:
 			retval = _intbig_contains((GISTTYPE *) DatumGetPointer(entry->key),
 									  query, siglen);
 			break;
 		case RTContainedByStrategyNumber:
-		case RTOldContainedByStrategyNumber:
 
 			/*
 			 * This code is unreachable as of intarray 1.4, because the <@

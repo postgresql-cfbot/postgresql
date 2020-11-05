@@ -197,6 +197,7 @@ px_find_digest(const char *name, PX_MD **res)
 	ctx = EVP_MD_CTX_create();
 	if (!ctx)
 	{
+		EVP_MD_CTX_destroy(ctx);
 		pfree(digest);
 		return -1;
 	}

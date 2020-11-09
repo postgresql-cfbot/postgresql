@@ -427,13 +427,13 @@ explain (costs off) select * from t1 group by a,b,c,d;
 explain (costs off) select a,c from t1 group by a,c,d;
 
 -- Test removal across multiple relations
-explain (costs off) select *
+explain (costs off) select t2.*
 from t1 inner join t2 on t1.a = t2.x and t1.b = t2.y
-group by t1.a,t1.b,t1.c,t1.d,t2.x,t2.y,t2.z;
+group by t1.a,t1.c,t1.d,t2.x,t2.y,t2.z;
 
 -- Test case where t1 can be optimized but not t2
 explain (costs off) select t1.*,t2.x,t2.z
-from t1 inner join t2 on t1.a = t2.x and t1.b = t2.y
+from t1 right join t2 on t1.a = t2.x and t1.b = t2.y
 group by t1.a,t1.b,t1.c,t1.d,t2.x,t2.z;
 
 -- Cannot optimize when PK is deferrable
@@ -1216,6 +1216,21 @@ set work_mem to default;
   union all
 (select * from agg_group_4 except select * from agg_hash_4);
 
+create table agg_unique_1(pk int primary key,  b int);
+create table agg_unique_2(a int, unsortable_col xid);
+insert into agg_unique_2 values(1, '1'), (2, '2'), (2, '1');
+
+explain (costs off, verbose)  select pk, sum(b) from agg_unique_1
+group by pk;
+
+explain (costs off, verbose) select unsortable_col, count(*)
+from (select distinct unsortable_col from agg_unique_2) t
+group by unsortable_col;
+
+select unsortable_col, count(*)
+from (select distinct unsortable_col from agg_unique_2) t
+group by unsortable_col;
+
 drop table agg_group_1;
 drop table agg_group_2;
 drop table agg_group_3;
@@ -1224,3 +1239,5 @@ drop table agg_hash_1;
 drop table agg_hash_2;
 drop table agg_hash_3;
 drop table agg_hash_4;
+drop table agg_unique_1;
+drop table agg_unique_2;

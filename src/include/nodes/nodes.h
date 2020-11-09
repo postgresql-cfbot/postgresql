@@ -263,6 +263,7 @@ typedef enum NodeTag
 	T_EquivalenceMember,
 	T_PathKey,
 	T_PathTarget,
+	T_UniqueKey,
 	T_RestrictInfo,
 	T_IndexClause,
 	T_PlaceHolderVar,
@@ -759,7 +760,8 @@ typedef enum AggStrategy
 	AGG_PLAIN,					/* simple agg across all input rows */
 	AGG_SORTED,					/* grouped agg, input must be sorted */
 	AGG_HASHED,					/* grouped agg, use internal hashtable */
-	AGG_MIXED					/* grouped agg, hash and sort both used */
+	AGG_MIXED,					/* grouped agg, hash and sort both used */
+	AGG_UNIQUE					/* grouped agg, the group clause is unique */
 } AggStrategy;
 
 /*

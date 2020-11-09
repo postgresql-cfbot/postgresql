@@ -2271,6 +2271,16 @@ _copyPathKey(const PathKey *from)
 	return newnode;
 }
 
+static UniqueKey *
+_copyUniqueKey(const UniqueKey *from)
+{
+	UniqueKey	*newnode = makeNode(UniqueKey);
+
+	COPY_NODE_FIELD(exprs);
+	COPY_SCALAR_FIELD(multi_nullvals);
+
+	return newnode;
+}
 /*
  * _copyRestrictInfo
  */
@@ -5140,6 +5150,9 @@ copyObjectImpl(const void *from)
 			 */
 		case T_PathKey:
 			retval = _copyPathKey(from);
+			break;
+		case T_UniqueKey:
+			retval = _copyUniqueKey(from);
 			break;
 		case T_RestrictInfo:
 			retval = _copyRestrictInfo(from);

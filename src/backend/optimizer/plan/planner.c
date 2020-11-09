@@ -2385,6 +2385,8 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		add_path(final_rel, path);
 	}
 
+	simple_copy_uniquekeys(current_rel, final_rel);
+
 	/*
 	 * Generate partial paths for final_rel, too, if outer query levels might
 	 * be able to make use of them.
@@ -3806,7 +3808,27 @@ create_grouping_paths(PlannerInfo *root,
 {
 	Query	   *parse = root->parse;
 	RelOptInfo *grouped_rel;
+	bool	group_unique_input = false;
 	RelOptInfo *partially_grouped_rel;
+	List	*groupExprs = NIL;
+
+	if (root->parse->groupingSets == NIL)
+	{
+		groupExprs  = get_sortgrouplist_exprs(parse->groupClause,
+														parse->targetList);
+		/*
+		 * If the groupby clauses is unique already,  groupping node is not necessary
+		 * if there is no aggregation functions.
+		 */
+		group_unique_input = relation_has_uniquekeys_for(root, input_rel,
+														 groupExprs, false);
+		if (group_unique_input &&
+			groupExprs != NIL &&
+			!parse->hasAggs &&
+			!parse->hasWindowFuncs &&
+			parse->havingQual == NULL)
+			return input_rel;
+	}
 
 	/*
 	 * Create grouping relation to hold fully aggregated grouping and/or
@@ -3826,51 +3848,61 @@ create_grouping_paths(PlannerInfo *root,
 		int			flags = 0;
 		GroupPathExtraData extra;
 
-		/*
-		 * Determine whether it's possible to perform sort-based
-		 * implementations of grouping.  (Note that if groupClause is empty,
-		 * grouping_is_sortable() is trivially true, and all the
-		 * pathkeys_contained_in() tests will succeed too, so that we'll
-		 * consider every surviving input path.)
-		 *
-		 * If we have grouping sets, we might be able to sort some but not all
-		 * of them; in this case, we need can_sort to be true as long as we
-		 * must consider any sorted-input plan.
-		 */
-		if ((gd && gd->rollups != NIL)
-			|| grouping_is_sortable(parse->groupClause))
-			flags |= GROUPING_CAN_USE_SORT;
+		if (group_unique_input)
+		{
+			/* In this case we don't need to set other flags */
+			Assert(parse->groupClause != NIL);
+			Assert(gd == NULL);
+			flags |= GROUPING_INPUT_UNIQUE;
+		}
+		else
+		{
+			/*
+			 * Determine whether it's possible to perform sort-based
+			 * implementations of grouping.  (Note that if groupClause is empty,
+			 * grouping_is_sortable() is trivially true, and all the
+			 * pathkeys_contained_in() tests will succeed too, so that we'll
+			 * consider every surviving input path.)
+			 *
+			 * If we have grouping sets, we might be able to sort some but not all
+			 * of them; in this case, we need can_sort to be true as long as we
+			 * must consider any sorted-input plan.
+			 */
+			if ((gd && gd->rollups != NIL)
+				|| grouping_is_sortable(parse->groupClause))
+				flags |= GROUPING_CAN_USE_SORT;
 
-		/*
-		 * Determine whether we should consider hash-based implementations of
-		 * grouping.
-		 *
-		 * Hashed aggregation only applies if we're grouping. If we have
-		 * grouping sets, some groups might be hashable but others not; in
-		 * this case we set can_hash true as long as there is nothing globally
-		 * preventing us from hashing (and we should therefore consider plans
-		 * with hashes).
-		 *
-		 * Executor doesn't support hashed aggregation with DISTINCT or ORDER
-		 * BY aggregates.  (Doing so would imply storing *all* the input
-		 * values in the hash table, and/or running many sorts in parallel,
-		 * either of which seems like a certain loser.)  We similarly don't
-		 * support ordered-set aggregates in hashed aggregation, but that case
-		 * is also included in the numOrderedAggs count.
-		 *
-		 * Note: grouping_is_hashable() is much more expensive to check than
-		 * the other gating conditions, so we want to do it last.
-		 */
-		if ((parse->groupClause != NIL &&
-			 agg_costs->numOrderedAggs == 0 &&
-			 (gd ? gd->any_hashable : grouping_is_hashable(parse->groupClause))))
-			flags |= GROUPING_CAN_USE_HASH;
+			/*
+			 * Determine whether we should consider hash-based implementations of
+			 * grouping.
+			 *
+			 * Hashed aggregation only applies if we're grouping. If we have
+			 * grouping sets, some groups might be hashable but others not; in
+			 * this case we set can_hash true as long as there is nothing globally
+			 * preventing us from hashing (and we should therefore consider plans
+			 * with hashes).
+			 *
+			 * Executor doesn't support hashed aggregation with DISTINCT or ORDER
+			 * BY aggregates.  (Doing so would imply storing *all* the input
+			 * values in the hash table, and/or running many sorts in parallel,
+			 * either of which seems like a certain loser.)  We similarly don't
+			 * support ordered-set aggregates in hashed aggregation, but that case
+			 * is also included in the numOrderedAggs count.
+			 *
+			 * Note: grouping_is_hashable() is much more expensive to check than
+			 * the other gating conditions, so we want to do it last.
+			 */
+			if ((parse->groupClause != NIL &&
+				 agg_costs->numOrderedAggs == 0 &&
+				 (gd ? gd->any_hashable : grouping_is_hashable(parse->groupClause))))
+				flags |= GROUPING_CAN_USE_HASH;
 
-		/*
-		 * Determine whether partial aggregation is possible.
-		 */
-		if (can_partial_agg(root, agg_costs))
-			flags |= GROUPING_CAN_PARTIAL_AGG;
+			/*
+			 * Determine whether partial aggregation is possible.
+			 */
+			if (can_partial_agg(root, agg_costs))
+				flags |= GROUPING_CAN_PARTIAL_AGG;
+		}
 
 		extra.flags = flags;
 		extra.target_parallel_safe = target_parallel_safe;
@@ -3895,6 +3927,8 @@ create_grouping_paths(PlannerInfo *root,
 	}
 
 	set_cheapest(grouped_rel);
+
+	populate_grouprel_uniquekeys(root, grouped_rel, input_rel);
 	return grouped_rel;
 }
 
@@ -4615,7 +4649,7 @@ create_window_paths(PlannerInfo *root,
 
 	/* Now choose the best path(s) */
 	set_cheapest(window_rel);
-
+	simple_copy_uniquekeys(input_rel, window_rel);
 	return window_rel;
 }
 
@@ -4758,6 +4792,12 @@ create_distinct_paths(PlannerInfo *root,
 	bool		allow_hash;
 	Path	   *path;
 	ListCell   *lc;
+	List	   *distinctExprs =  get_sortgrouplist_exprs(parse->distinctClause,
+														 parse->targetList);
+
+	/* If the result is unique already, we just return the input_rel directly */
+	if (relation_has_uniquekeys_for(root, input_rel, distinctExprs, false))
+		return input_rel;
 
 	/* For now, do all work in the (DISTINCT, NULL) upperrel */
 	distinct_rel = fetch_upper_rel(root, UPPERREL_DISTINCT, NULL);
@@ -4795,10 +4835,6 @@ create_distinct_paths(PlannerInfo *root,
 		/*
 		 * Otherwise, the UNIQUE filter has effects comparable to GROUP BY.
 		 */
-		List	   *distinctExprs;
-
-		distinctExprs = get_sortgrouplist_exprs(parse->distinctClause,
-												parse->targetList);
 		numDistinctRows = estimate_num_groups(root, distinctExprs,
 											  cheapest_input_path->rows,
 											  NULL);
@@ -4929,7 +4965,7 @@ create_distinct_paths(PlannerInfo *root,
 
 	/* Now choose the best path(s) */
 	set_cheapest(distinct_rel);
-
+	populate_distinctrel_uniquekeys(root, input_rel, distinct_rel);
 	return distinct_rel;
 }
 
@@ -5189,6 +5225,8 @@ create_ordered_paths(PlannerInfo *root,
 	 * need us to do it.
 	 */
 	Assert(ordered_rel->pathlist != NIL);
+
+	simple_copy_uniquekeys(input_rel, ordered_rel);
 
 	return ordered_rel;
 }
@@ -6067,6 +6105,9 @@ adjust_paths_for_srfs(PlannerInfo *root, RelOptInfo *rel,
 	if (list_length(targets) == 1)
 		return;
 
+	/* UniqueKey is not valid after handling the SRF. */
+	rel->uniquekeys = NIL;
+
 	/*
 	 * Stack SRF-evaluation nodes atop each path for the rel.
 	 *
@@ -6509,9 +6550,40 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 	ListCell   *lc;
 	bool		can_hash = (extra->flags & GROUPING_CAN_USE_HASH) != 0;
 	bool		can_sort = (extra->flags & GROUPING_CAN_USE_SORT) != 0;
+	bool		group_input_unique = (extra->flags & GROUPING_INPUT_UNIQUE) != 0;
 	List	   *havingQual = (List *) extra->havingQual;
 	AggClauseCosts *agg_final_costs = &extra->agg_final_costs;
 
+	if (group_input_unique)
+	{
+		Path *path = input_rel->cheapest_total_path;
+		add_path(grouped_rel, (Path *) create_agg_path(root,
+													   grouped_rel,
+													   path,
+													   grouped_rel->reltarget,
+													   AGG_UNIQUE,
+													   AGGSPLIT_SIMPLE,
+													   parse->groupClause,
+													   havingQual,
+													   agg_costs,
+													   dNumGroups));
+
+		if (path != input_rel->cheapest_startup_path)
+		{
+			path = input_rel->cheapest_startup_path;
+			add_path(grouped_rel, (Path *) create_agg_path(root,
+														   grouped_rel,
+														   path,
+														   grouped_rel->reltarget,
+														   AGG_UNIQUE,
+														   AGGSPLIT_SIMPLE,
+														   parse->groupClause,
+														   havingQual,
+														   agg_costs,
+														   dNumGroups));
+		}
+		return;
+	}
 	if (can_sort)
 	{
 		/*

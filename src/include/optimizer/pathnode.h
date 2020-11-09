@@ -294,7 +294,8 @@ extern RelOptInfo *build_join_rel(PlannerInfo *root,
 								  RelOptInfo *outer_rel,
 								  RelOptInfo *inner_rel,
 								  SpecialJoinInfo *sjinfo,
-								  List **restrictlist_ptr);
+								  List **restrictlist_ptr,
+								  bool *innerrel_removed);
 extern Relids min_join_parameterization(PlannerInfo *root,
 										Relids joinrelids,
 										RelOptInfo *outer_rel,
@@ -321,4 +322,5 @@ extern RelOptInfo *build_child_join_rel(PlannerInfo *root,
 										RelOptInfo *parent_joinrel, List *restrictlist,
 										SpecialJoinInfo *sjinfo, JoinType jointype);
 
+extern size_t size_of_path(Path *path);
 #endif							/* PATHNODE_H */

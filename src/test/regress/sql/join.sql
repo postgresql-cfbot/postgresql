@@ -1479,11 +1479,11 @@ reset enable_nestloop;
 begin;
 
 CREATE TEMP TABLE a (id int PRIMARY KEY, b_id int);
-CREATE TEMP TABLE b (id int PRIMARY KEY, c_id int);
+CREATE TEMP TABLE b (id int PRIMARY KEY, c_id int, d int);
 CREATE TEMP TABLE c (id int PRIMARY KEY);
 CREATE TEMP TABLE d (a int, b int);
 INSERT INTO a VALUES (0, 0), (1, NULL);
-INSERT INTO b VALUES (0, 0), (1, NULL);
+INSERT INTO b VALUES (0, 0, 1), (1, NULL, 1);
 INSERT INTO c VALUES (0), (1);
 INSERT INTO d VALUES (1,3), (2,2), (3,1);
 
@@ -1512,17 +1512,15 @@ select d.* from d left join (select distinct * from b) s
   on d.a = s.id and d.b = s.c_id;
 
 -- join removal is not possible when the GROUP BY contains a column that is
--- not in the join condition.  (Note: as of 9.6, we notice that b.id is a
--- primary key and so drop b.c_id from the GROUP BY of the resulting plan;
--- but this happens too late for join removal in the outer plan level.)
+-- not in the join condition.
 explain (costs off)
-select d.* from d left join (select * from b group by b.id, b.c_id) s
-  on d.a = s.id;
+select d.* from d left join (select d, c_id from b group by b.d, b.c_id) s
+  on d.a = s.d;
 
 -- similarly, but keying off a DISTINCT clause
 explain (costs off)
-select d.* from d left join (select distinct * from b) s
-  on d.a = s.id;
+select d.* from d left join (select distinct c_id, d from b) s
+  on d.a = s.d;
 
 -- check join removal works when uniqueness of the join condition is enforced
 -- by a UNION
@@ -2200,3 +2198,29 @@ where exists (select 1 from j3
       and t1.unique1 < 1;
 
 drop table j3;
+
+create table m1 (a int primary key,  b int, c int);
+create table m2 (a int primary key,  b int, c int);
+create table m3 (a int primary key,  b int, c int);
+
+explain (verbose, costs off)
+select  t1.a
+from m3 t1
+left join (select m1.a from m1, m2 where m1.b = m2.a) t2
+on (t1.a = t2.a);
+
+explain (verbose, costs off)
+select m1.*
+from m1 left join m2
+on (m1.a = m2.a)
+and m1.b in (select b from m3);
+
+explain (verbose, costs off)
+select m1.*
+from m1 left join m2
+on m1.b = m2.a
+and m2.b in (select b from m3);
+
+drop table m1;
+drop table m2;
+drop table m3;

@@ -22,6 +22,7 @@
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/inherit.h"
+#include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/placeholder.h"
@@ -73,6 +74,11 @@ static void build_child_join_reltarget(PlannerInfo *root,
 									   int nappinfos,
 									   AppendRelInfo **appinfos);
 
+static bool join_canbe_removed(PlannerInfo *root,
+							   SpecialJoinInfo *sjinfo,
+							   RelOptInfo *joinrel,
+							   RelOptInfo *innerrel,
+							   List *restrictlist);
 
 /*
  * setup_simple_rel_arrays
@@ -578,7 +584,8 @@ build_join_rel(PlannerInfo *root,
 			   RelOptInfo *outer_rel,
 			   RelOptInfo *inner_rel,
 			   SpecialJoinInfo *sjinfo,
-			   List **restrictlist_ptr)
+			   List **restrictlist_ptr,
+			   bool *innerrel_removed)
 {
 	RelOptInfo *joinrel;
 	List	   *restrictlist;
@@ -716,6 +723,64 @@ build_join_rel(PlannerInfo *root,
 	 */
 	joinrel->has_eclass_joins = has_relevant_eclass_joinclause(root, joinrel);
 
+	if (join_canbe_removed(root, sjinfo,
+						   joinrel, inner_rel,
+						   restrictlist))
+	{
+		ListCell *lc;
+
+		joinrel->rows = outer_rel->rows;
+		joinrel->consider_startup = outer_rel->consider_param_startup;
+		joinrel->consider_param_startup = outer_rel->consider_param_startup;
+		joinrel->consider_parallel = outer_rel->consider_parallel;
+
+		/* Rely on the projection path to reduce the tlist. */
+		joinrel->reltarget = outer_rel->reltarget;
+
+		joinrel->direct_lateral_relids = outer_rel->direct_lateral_relids;
+		joinrel->lateral_relids = outer_rel->lateral_relids;
+
+		joinrel->unique_for_rels = outer_rel->unique_for_rels;
+		joinrel->non_unique_for_rels = outer_rel->non_unique_for_rels;
+		joinrel->baserestrictinfo = outer_rel->baserestrictinfo;
+		joinrel->baserestrictcost = outer_rel->baserestrictcost;
+		joinrel->baserestrict_min_security = outer_rel->baserestrict_min_security;
+		joinrel->uniquekeys = outer_rel->uniquekeys;
+		joinrel->consider_partitionwise_join = outer_rel->consider_partitionwise_join;
+		joinrel->top_parent_relids = outer_rel->top_parent_relids;
+
+		/* Some scan path need to know which base relation to scan, it uses the relid
+		 * field, so we have to use the outerrel->relid.
+		 */
+		joinrel->relid = outer_rel->relid;
+
+		/* Almost the same paths as above, it assert the rte_kind is RTE_RELATION, so
+		 * we need to set as same as outerrel as well
+		 */
+		joinrel->rtekind = RTE_RELATION;
+
+		/* Make sure the path->parent point to current joinrel, can't update it in-place. */
+		foreach(lc, outer_rel->pathlist)
+		{
+			Size sz = size_of_path(lfirst(lc));
+			Path *path = palloc(sz);
+			memcpy(path, lfirst(lc), sz);
+			path->parent = joinrel;
+			add_path(joinrel, path);
+		}
+
+		foreach(lc, joinrel->partial_pathlist)
+		{
+			Size sz = size_of_path(lfirst(lc));
+			Path *path = palloc(sz);
+			memcpy(path, lfirst(lc), sz);
+			path->parent = joinrel;
+			add_partial_path(joinrel, path);
+		}
+		*innerrel_removed = true;
+	}
+	else
+	{
 	/* Store the partition information. */
 	build_joinrel_partition_info(joinrel, outer_rel, inner_rel, restrictlist,
 								 sjinfo->jointype);
@@ -744,7 +809,7 @@ build_join_rel(PlannerInfo *root,
 		is_parallel_safe(root, (Node *) restrictlist) &&
 		is_parallel_safe(root, (Node *) joinrel->reltarget->exprs))
 		joinrel->consider_parallel = true;
-
+	}
 	/* Add the joinrel to the PlannerInfo. */
 	add_join_rel(root, joinrel);
 
@@ -757,10 +822,17 @@ build_join_rel(PlannerInfo *root,
 	if (root->join_rel_level)
 	{
 		Assert(root->join_cur_level > 0);
-		Assert(root->join_cur_level <= bms_num_members(joinrel->relids));
+	   // Assert(root->join_cur_level <= bms_num_members(joinrel->relids));
 		root->join_rel_level[root->join_cur_level] =
 			lappend(root->join_rel_level[root->join_cur_level], joinrel);
 	}
+
+	/* elog(INFO, "lev-%d Build JoinRel (%s) with %s and %s, inner is removed: %d", */
+	/*	 root->join_cur_level, */
+	/*	 bmsToString(joinrelids), */
+	/*	 bmsToString(outer_rel->relids), */
+	/*	 bmsToString(inner_rel->relids), */
+	/*	 joinrel->removed); */
 
 	return joinrel;
 }
@@ -2023,4 +2095,189 @@ build_child_join_reltarget(PlannerInfo *root,
 	childrel->reltarget->cost.startup = parentrel->reltarget->cost.startup;
 	childrel->reltarget->cost.per_tuple = parentrel->reltarget->cost.per_tuple;
 	childrel->reltarget->width = parentrel->reltarget->width;
+}
+
+static bool
+join_canbe_removed(PlannerInfo *root,
+				   SpecialJoinInfo *sjinfo,
+				   RelOptInfo *joinrel,
+				   RelOptInfo *innerrel,
+				   List *restrictlist)
+{
+	Bitmapset	*vars;
+	List	*exprs = NIL;
+	ListCell	*lc;
+	Bitmapset	*tmp;
+	bool	res;
+
+	if (sjinfo->jointype != JOIN_LEFT)
+		return false;
+
+	if (innerrel->uniquekeys == NIL)
+		return false;
+
+	/*
+	 * Check if there is any innerrel's cols can't be removed.
+	 */
+
+	vars = pull_varnos((Node*)joinrel->reltarget->exprs);
+	tmp = bms_intersect(vars, innerrel->relids);
+	if (!bms_is_empty(tmp))
+		return false;
+
+	foreach(lc, restrictlist)
+	{
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
+		if (rinfo->can_join)
+		{
+			if (rinfo->mergeopfamilies != NIL)
+			{
+				if (bms_is_subset(rinfo->left_relids, innerrel->relids))
+					exprs = lappend(exprs, get_leftop(rinfo->clause));
+				else if (bms_is_subset(rinfo->right_relids, innerrel->relids))
+					exprs = lappend(exprs, get_rightop(rinfo->clause));
+				else
+					Assert(false);
+			}
+			else
+				/* Not mergeable join clause, we have to keep it */
+				return false;
+		}
+		else
+		{
+			/*
+			 * If the rinfo is not joinable clause, and it is not pushed down to
+			 * baserelation's basicrestrictinfo. so it must be in ON clauses.
+			 * Example: SELECT .. FROM t1 left join t2 on t1.a = 10;
+			 * In this case we can't remove the inner join as well.
+			 */
+			return false;
+		}
+	}
+	res =  relation_has_uniquekeys_for(root, innerrel, exprs, true);
+	return res;
+}
+
+
+size_t
+size_of_path(Path *path)
+{
+	switch(path->type)
+	{
+		case T_Path:
+			return sizeof(Path);
+		case T_IndexPath:
+			return sizeof(IndexPath);
+		case T_BitmapHeapPath:
+			return sizeof(BitmapHeapPath);
+		case T_TidPath:
+			return sizeof(TidPath);
+		case T_SubqueryScanPath:
+			return sizeof(SubqueryScanPath);
+		case T_ForeignPath:
+			return sizeof(ForeignPath);
+		case T_CustomPath:
+			return sizeof(CustomPath);
+
+
+		case T_NestPath:
+			return sizeof(NestPath);
+
+
+		case T_MergePath:
+			return sizeof(MergePath);
+
+
+		case T_HashPath:
+			return sizeof(HashPath);
+
+
+		case T_AppendPath:
+			return sizeof(AppendPath);
+
+
+		case T_MergeAppendPath:
+			return sizeof(MergeAppendPath);
+
+
+		case T_GroupResultPath:
+			return sizeof(GroupResultPath);
+
+
+		case T_MaterialPath:
+			return sizeof(MaterialPath);
+
+
+		case T_UniquePath:
+			return sizeof(UniquePath);
+
+
+		case T_GatherPath:
+			return sizeof(GatherPath);
+
+
+		case T_GatherMergePath:
+			return sizeof(GatherMergePath);
+
+
+		case T_ProjectionPath:
+			return sizeof(ProjectionPath);
+
+
+		case T_ProjectSetPath:
+			return sizeof(ProjectSetPath);
+
+
+		case T_SortPath:
+			return sizeof(SortPath);
+
+
+		case T_IncrementalSortPath:
+			return sizeof(IncrementalSortPath);
+
+
+		case T_GroupPath:
+			return sizeof(GroupPath);
+
+
+		case T_UpperUniquePath:
+			return sizeof(UpperUniquePath);
+
+
+		case T_AggPath:
+			return sizeof(AggPath);
+
+
+		case T_GroupingSetsPath:
+			return sizeof(GroupingSetsPath);
+
+
+		case T_MinMaxAggPath:
+			return sizeof(MinMaxAggPath);
+
+
+		case T_WindowAggPath:
+			return sizeof(WindowAggPath);
+
+
+		case T_SetOpPath:
+			return sizeof(SetOpPath);
+
+
+		case T_RecursiveUnionPath:
+			return sizeof(RecursiveUnionPath);
+
+
+		case T_LockRowsPath:
+			return sizeof(LockRowsPath);
+		case T_ModifyTablePath:
+			return sizeof(ModifyTablePath);
+		case T_LimitPath:
+			return sizeof(LimitPath);
+		default:
+			elog(ERROR, "unrecognized path type: %s",
+				 nodeToString(&path->type));
+			break;
+	}
+	return 0;
 }

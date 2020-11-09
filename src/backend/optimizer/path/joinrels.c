@@ -691,6 +691,7 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2)
 	SpecialJoinInfo sjinfo_data;
 	RelOptInfo *joinrel;
 	List	   *restrictlist;
+	bool	innerrel_removed = false;
 
 	/* We should never try to join two overlapping sets of rels. */
 	Assert(!bms_overlap(rel1->relids, rel2->relids));
@@ -744,7 +745,7 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2)
 	 * goes with this particular joining.
 	 */
 	joinrel = build_join_rel(root, joinrelids, rel1, rel2, sjinfo,
-							 &restrictlist);
+							 &restrictlist, &innerrel_removed);
 
 	/*
 	 * If we've already proven this join is empty, we needn't consider any
@@ -756,9 +757,10 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2)
 		return joinrel;
 	}
 
+	if (!innerrel_removed)
 	/* Add paths to the join relation. */
-	populate_joinrel_with_paths(root, rel1, rel2, joinrel, sjinfo,
-								restrictlist);
+		populate_joinrel_with_paths(root, rel1, rel2, joinrel, sjinfo,
+									restrictlist);
 
 	bms_free(joinrelids);
 
@@ -924,6 +926,8 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 
 	/* Apply partitionwise join technique, if possible. */
 	try_partitionwise_join(root, rel1, rel2, joinrel, sjinfo, restrictlist);
+
+	populate_joinrel_uniquekeys(root, joinrel, rel1, rel2, restrictlist, sjinfo->jointype);
 }
 
 

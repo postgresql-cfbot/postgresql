@@ -1915,6 +1915,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			show_agg_keys(castNode(AggState, planstate), ancestors, es);
 			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
 			show_hashagg_info((AggState *) planstate, es);
+			if (es->format != EXPLAIN_FORMAT_TEXT ||
+				(es->verbose && ((Agg *) plan)->input_unique))
+				ExplainPropertyBool("Input Unique",
+									((Agg *) plan)->input_unique, es);
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);

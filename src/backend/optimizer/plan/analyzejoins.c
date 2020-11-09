@@ -439,6 +439,8 @@ remove_rel_from_query(PlannerInfo *root, int relid, Relids joinrelids)
 	 * There may be references to the rel in root->fkey_list, but if so,
 	 * match_foreign_keys_to_quals() will get rid of them.
 	 */
+
+	root->all_baserels = bms_del_member(root->all_baserels, relid);
 }
 
 /*
@@ -584,39 +586,7 @@ reduce_unique_semijoins(PlannerInfo *root)
 static bool
 rel_supports_distinctness(PlannerInfo *root, RelOptInfo *rel)
 {
-	/* We only know about baserels ... */
-	if (rel->reloptkind != RELOPT_BASEREL)
-		return false;
-	if (rel->rtekind == RTE_RELATION)
-	{
-		/*
-		 * For a plain relation, we only know how to prove uniqueness by
-		 * reference to unique indexes.  Make sure there's at least one
-		 * suitable unique index.  It must be immediately enforced, and if
-		 * it's a partial index, it must match the query.  (Keep these
-		 * conditions in sync with relation_has_unique_index_for!)
-		 */
-		ListCell   *lc;
-
-		foreach(lc, rel->indexlist)
-		{
-			IndexOptInfo *ind = (IndexOptInfo *) lfirst(lc);
-
-			if (ind->unique && ind->immediate &&
-				(ind->indpred == NIL || ind->predOK))
-				return true;
-		}
-	}
-	else if (rel->rtekind == RTE_SUBQUERY)
-	{
-		Query	   *subquery = root->simple_rte_array[rel->relid]->subquery;
-
-		/* Check if the subquery has any qualities that support distinctness */
-		if (query_supports_distinctness(subquery))
-			return true;
-	}
-	/* We have no proof rules for any other rtekinds. */
-	return false;
+	return rel->uniquekeys != NIL;
 }
 
 /*
@@ -640,83 +610,33 @@ rel_supports_distinctness(PlannerInfo *root, RelOptInfo *rel)
 static bool
 rel_is_distinct_for(PlannerInfo *root, RelOptInfo *rel, List *clause_list)
 {
-	/*
-	 * We could skip a couple of tests here if we assume all callers checked
-	 * rel_supports_distinctness first, but it doesn't seem worth taking any
-	 * risk for.
-	 */
-	if (rel->reloptkind != RELOPT_BASEREL)
-		return false;
-	if (rel->rtekind == RTE_RELATION)
-	{
-		/*
-		 * Examine the indexes to see if we have a matching unique index.
-		 * relation_has_unique_index_for automatically adds any usable
-		 * restriction clauses for the rel, so we needn't do that here.
-		 */
-		if (relation_has_unique_index_for(root, rel, clause_list, NIL, NIL))
-			return true;
-	}
-	else if (rel->rtekind == RTE_SUBQUERY)
-	{
-		Index		relid = rel->relid;
-		Query	   *subquery = root->simple_rte_array[relid]->subquery;
-		List	   *colnos = NIL;
-		List	   *opids = NIL;
-		ListCell   *l;
 
-		/*
-		 * Build the argument lists for query_is_distinct_for: a list of
-		 * output column numbers that the query needs to be distinct over, and
-		 * a list of equality operators that the output columns need to be
-		 * distinct according to.
-		 *
-		 * (XXX we are not considering restriction clauses attached to the
-		 * subquery; is that worth doing?)
-		 */
-		foreach(l, clause_list)
+	ListCell	*lc1, *lc2,  *lc3;
+	foreach(lc1,  rel->uniquekeys)
+	{
+		UniqueKey *uqk = lfirst_node(UniqueKey, lc1);
+		bool all_uqk_exprs_found = true;
+		foreach(lc2, uqk->exprs)
 		{
-			RestrictInfo *rinfo = lfirst_node(RestrictInfo, l);
-			Oid			op;
-			Var		   *var;
-
-			/*
-			 * Get the equality operator we need uniqueness according to.
-			 * (This might be a cross-type operator and thus not exactly the
-			 * same operator the subquery would consider; that's all right
-			 * since query_is_distinct_for can resolve such cases.)  The
-			 * caller's mergejoinability test should have selected only
-			 * OpExprs.
-			 */
-			op = castNode(OpExpr, rinfo->clause)->opno;
-
-			/* caller identified the inner side for us */
-			if (rinfo->outer_is_left)
-				var = (Var *) get_rightop(rinfo->clause);
-			else
-				var = (Var *) get_leftop(rinfo->clause);
-
-			/*
-			 * We may ignore any RelabelType node above the operand.  (There
-			 * won't be more than one, since eval_const_expressions() has been
-			 * applied already.)
-			 */
-			if (var && IsA(var, RelabelType))
-				var = (Var *) ((RelabelType *) var)->arg;
-
-			/*
-			 * If inner side isn't a Var referencing a subquery output column,
-			 * this clause doesn't help us.
-			 */
-			if (!var || !IsA(var, Var) ||
-				var->varno != relid || var->varlevelsup != 0)
-				continue;
-
-			colnos = lappend_int(colnos, var->varattno);
-			opids = lappend_oid(opids, op);
+			Node *uq_expr = lfirst(lc2);
+			bool find_uq_exprs_in_clause_list = false;
+			foreach(lc3, clause_list)
+			{
+				RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc3);
+				Node *clause_expr = rinfo->outer_is_left ? get_rightop(rinfo->clause): get_leftop(rinfo->clause) ;
+				if (equal(uq_expr, clause_expr))
+				{
+					find_uq_exprs_in_clause_list = true;
+					break;
+				}
+			}
+			if (!find_uq_exprs_in_clause_list)
+			{
+				all_uqk_exprs_found = false;
+				break;
+			}
 		}
-
-		if (query_is_distinct_for(subquery, colnos, opids))
+		if (all_uqk_exprs_found)
 			return true;
 	}
 	return false;
@@ -971,6 +891,9 @@ innerrel_is_unique(PlannerInfo *root,
 {
 	MemoryContext old_context;
 	ListCell   *lc;
+
+	if (relation_is_onerow(innerrel))
+		return true;
 
 	/* Certainly can't prove uniqueness when there are no joinclauses */
 	if (restrictlist == NIL)

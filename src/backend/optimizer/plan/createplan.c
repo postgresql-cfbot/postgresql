@@ -6357,7 +6357,7 @@ make_agg(List *tlist, List *qual,
 	/* Reduce to long, but 'ware overflow! */
 	numGroups = (long) Min(dNumGroups, (double) LONG_MAX);
 
-	node->aggstrategy = aggstrategy;
+	node->aggstrategy = aggstrategy == AGG_UNIQUE ? AGG_SORTED : aggstrategy;
 	node->aggsplit = aggsplit;
 	node->numCols = numGroupCols;
 	node->grpColIdx = grpColIdx;
@@ -6368,6 +6368,7 @@ make_agg(List *tlist, List *qual,
 	node->aggParams = NULL;		/* SS_finalize_plan() will fill this */
 	node->groupingSets = groupingSets;
 	node->chain = chain;
+	node->input_unique = aggstrategy == AGG_UNIQUE;
 
 	plan->qual = qual;
 	plan->targetlist = tlist;

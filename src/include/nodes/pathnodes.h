@@ -705,6 +705,8 @@ typedef struct RelOptInfo
 	PlannerInfo *subroot;		/* if subquery */
 	List	   *subplan_params; /* if subquery */
 	int			rel_parallel_workers;	/* wanted number of parallel workers */
+	/* Not null attrs, start from -FirstLowInvalidHeapAttributeNumber */
+	Bitmapset		*notnullattrs;
 
 	/* Information about foreign tables and foreign joins */
 	Oid			serverid;		/* identifies server for the table or join */
@@ -724,6 +726,7 @@ typedef struct RelOptInfo
 	QualCost	baserestrictcost;	/* cost of evaluating the above */
 	Index		baserestrict_min_security;	/* min security_level found in
 											 * baserestrictinfo */
+	List	   *uniquekeys;		/* List of UniqueKey */
 	List	   *joininfo;		/* RestrictInfo structures for join clauses
 								 * involving this rel */
 	bool		has_eclass_joins;	/* T means joininfo is incomplete */
@@ -1042,6 +1045,28 @@ typedef struct PathKey
 	bool		pk_nulls_first; /* do NULLs come before normal values? */
 } PathKey;
 
+
+/*
+ * UniqueKey
+ *
+ * Represents the unique properties held by a RelOptInfo.
+ *
+ * exprs is a list of exprs which is unique on current RelOptInfo. exprs = NIL
+ * is a special case of UniqueKey, which means there is only 1 row in that
+ * relation.
+ * multi_nullvals: true means multi null values may exist in these exprs, so the
+ * uniqueness is not guaranteed in this case. This field is necessary for
+ * remove_useless_join & reduce_unique_semijoins where we don't mind these
+ * duplicated NULL values. It is set to true for 2 cases. One is a unique key
+ * from a unique index but the related column is nullable. The other one is for
+ * outer join. see populate_joinrel_uniquekeys for detail.
+ */
+typedef struct UniqueKey
+{
+	NodeTag		type;
+	List	   *exprs;
+	bool		multi_nullvals;
+} UniqueKey;
 
 /*
  * PathTarget
@@ -2447,6 +2472,7 @@ typedef struct JoinPathExtraData
 #define GROUPING_CAN_USE_SORT       0x0001
 #define GROUPING_CAN_USE_HASH       0x0002
 #define GROUPING_CAN_PARTIAL_AGG	0x0004
+#define GROUPING_INPUT_UNIQUE		0x0008
 
 /*
  * What kind of partitionwise aggregation is in use?
@@ -2471,7 +2497,7 @@ typedef enum
  *
  * flags indicating what kinds of grouping are possible.
  * partial_costs_set is true if the agg_partial_costs and agg_final_costs
- * 		have been initialized.
+ *		have been initialized.
  * agg_partial_costs gives partial aggregation costs.
  * agg_final_costs gives finalization costs.
  * target_parallel_safe is true if target is parallel safe.
@@ -2501,8 +2527,8 @@ typedef struct
  * limit_tuples is an estimated bound on the number of output tuples,
  *		or -1 if no LIMIT or couldn't estimate.
  * count_est and offset_est are the estimated values of the LIMIT and OFFSET
- * 		expressions computed by preprocess_limit() (see comments for
- * 		preprocess_limit() for more information).
+ *		expressions computed by preprocess_limit() (see comments for
+ *		preprocess_limit() for more information).
  */
 typedef struct
 {

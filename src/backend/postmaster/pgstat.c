@@ -3925,8 +3925,20 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_HASH_BATCH_ELECT:
 			event_name = "HashBatchElect";
 			break;
-		case WAIT_EVENT_HASH_BATCH_LOAD:
-			event_name = "HashBatchLoad";
+		case WAIT_EVENT_HASH_STRIPE_ELECT:
+			event_name = "HashStripeElect";
+			break;
+		case WAIT_EVENT_HASH_STRIPE_RESET:
+			event_name = "HashStripeReset";
+			break;
+		case WAIT_EVENT_HASH_STRIPE_LOAD:
+			event_name = "HashStripeLoad";
+			break;
+		case WAIT_EVENT_HASH_STRIPE_OVERFLOW:
+			event_name = "HashStripeOverflow";
+			break;
+		case WAIT_EVENT_HASH_STRIPE_PROBE:
+			event_name = "HashStripeProbe";
 			break;
 		case WAIT_EVENT_HASH_BUILD_ALLOCATE:
 			event_name = "HashBuildAllocate";
@@ -3939,6 +3951,21 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 			break;
 		case WAIT_EVENT_HASH_BUILD_HASH_OUTER:
 			event_name = "HashBuildHashOuter";
+			break;
+		case WAIT_EVENT_HASH_EVICT_ELECT:
+			event_name = "HashEvictElect";
+			break;
+		case WAIT_EVENT_HASH_EVICT_RESET:
+			event_name = "HashEvictReset";
+			break;
+		case WAIT_EVENT_HASH_EVICT_SPILL:
+			event_name = "HashEvictSpill";
+			break;
+		case WAIT_EVENT_HASH_EVICT_FINISH:
+			event_name = "HashEvictFinish";
+			break;
+		case WAIT_EVENT_HASH_REPARTITION_BATCH0_DRAIN_QUEUE:
+			event_name = "HashRepartitionBatch0DrainQueue";
 			break;
 		case WAIT_EVENT_HASH_GROW_BATCHES_ALLOCATE:
 			event_name = "HashGrowBatchesAllocate";

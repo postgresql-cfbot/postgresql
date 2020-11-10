@@ -559,6 +559,7 @@ _outIndexScan(StringInfo str, const IndexScan *node)
 	WRITE_NODE_FIELD(indexorderbyorig);
 	WRITE_NODE_FIELD(indexorderbyops);
 	WRITE_ENUM_FIELD(indexorderdir, ScanDirection);
+	WRITE_INT_FIELD(indexskipprefixsize);
 }
 
 static void
@@ -573,6 +574,7 @@ _outIndexOnlyScan(StringInfo str, const IndexOnlyScan *node)
 	WRITE_NODE_FIELD(indexorderby);
 	WRITE_NODE_FIELD(indextlist);
 	WRITE_ENUM_FIELD(indexorderdir, ScanDirection);
+	WRITE_INT_FIELD(indexskipprefixsize);
 }
 
 static void
@@ -2427,6 +2429,14 @@ _outPathKey(StringInfo str, const PathKey *node)
 }
 
 static void
+_outUniqueKey(StringInfo str, const UniqueKey *node)
+{
+	WRITE_NODE_TYPE("UNIQUEKEY");
+	WRITE_NODE_FIELD(exprs);
+	WRITE_BOOL_FIELD(multi_nullvals);
+}
+
+static void
 _outPathTarget(StringInfo str, const PathTarget *node)
 {
 	WRITE_NODE_TYPE("PATHTARGET");
@@ -4125,6 +4135,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_PathKey:
 				_outPathKey(str, obj);
+				break;
+			case T_UniqueKey:
+				_outUniqueKey(str, obj);
 				break;
 			case T_PathTarget:
 				_outPathTarget(str, obj);

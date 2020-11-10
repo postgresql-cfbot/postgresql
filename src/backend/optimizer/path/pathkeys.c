@@ -29,11 +29,11 @@
 #include "utils/lsyscache.h"
 
 
+static bool pathkey_is_unique(PathKey *new_pathkey, List *pathkeys);
 static bool pathkey_is_redundant(PathKey *new_pathkey, List *pathkeys);
 static bool matches_boolean_partition_clause(RestrictInfo *rinfo,
 											 RelOptInfo *partrel,
 											 int partkeycol);
-static Var *find_var_for_subquery_tle(RelOptInfo *rel, TargetEntry *tle);
 static bool right_merge_direction(PlannerInfo *root, PathKey *pathkey);
 
 
@@ -94,6 +94,29 @@ make_canonical_pathkey(PlannerInfo *root,
 	MemoryContextSwitchTo(oldcontext);
 
 	return pk;
+}
+
+/*
+ * pathkey_is_unique
+ *	   Checks if the new pathkey's equivalence class is the same as that of
+ *     any existing member of the pathkey list.
+ */
+static bool
+pathkey_is_unique(PathKey *new_pathkey, List *pathkeys)
+{
+	EquivalenceClass *new_ec = new_pathkey->pk_eclass;
+	ListCell   *lc;
+
+	/* If same EC already is already in the list, then not unique */
+	foreach(lc, pathkeys)
+	{
+		PathKey    *old_pathkey = (PathKey *) lfirst(lc);
+
+		if (new_ec == old_pathkey->pk_eclass)
+			return false;
+	}
+
+	return true;
 }
 
 /*
@@ -500,6 +523,47 @@ get_cheapest_parallel_safe_total_inner(List *paths)
  ****************************************************************************/
 
 /*
+ * Find the prefix size for a specific path key in an index. For example, an
+ * index with (a,b,c) finding path key b will return prefix 2. Optionally
+ * pathkeys_positions can be provided, to specify at which position in the
+ * original pathkey list this particular key could be found (this is helpful
+ * when we deal with redundant pathkeys).
+ *
+ * Returns 0 when not found.
+ */
+int
+find_index_prefix_for_pathkey(List *index_pathkeys,
+							  List *pathkeys_positions,
+							  PathKey *target_pathkey)
+{
+	ListCell   *lc;
+	int			i;
+
+	i = 0;
+	foreach(lc, index_pathkeys)
+	{
+		PathKey    *cpathkey = (PathKey *) lfirst(lc);
+
+		if (cpathkey == target_pathkey)
+		{
+			/*
+			 * Prefix expected to start from 1, increment positions since
+			 * they're 0 based.
+			 */
+			if (pathkeys_positions != NIL &&
+				pathkeys_positions->length > i)
+				return list_nth_int(pathkeys_positions, i) + 1;
+			else
+				return i + 1;
+		}
+
+		i++;
+	}
+
+	return 0;
+}
+
+/*
  * build_index_pathkeys
  *	  Build a pathkeys list that describes the ordering induced by an index
  *	  scan using the given index.  (Note that an unordered index doesn't
@@ -511,7 +575,9 @@ get_cheapest_parallel_safe_total_inner(List *paths)
  * We iterate only key columns of covering indexes, since non-key columns
  * don't influence index ordering.  The result is canonical, meaning that
  * redundant pathkeys are removed; it may therefore have fewer entries than
- * there are key columns in the index.
+ * there are key columns in the index. Since by removing redundant pathkeys the
+ * information about original position is lost, return it via positions
+ * argument.
  *
  * Another reason for stopping early is that we may be able to tell that
  * an index column's sort order is uninteresting for this query.  However,
@@ -522,7 +588,8 @@ get_cheapest_parallel_safe_total_inner(List *paths)
 List *
 build_index_pathkeys(PlannerInfo *root,
 					 IndexOptInfo *index,
-					 ScanDirection scandir)
+					 ScanDirection scandir,
+					 List **positions)
 {
 	List	   *retval = NIL;
 	ListCell   *lc;
@@ -530,6 +597,8 @@ build_index_pathkeys(PlannerInfo *root,
 
 	if (index->sortopfamily == NULL)
 		return NIL;				/* non-orderable index */
+
+	*positions = NIL;
 
 	i = 0;
 	foreach(lc, index->indextlist)
@@ -584,7 +653,11 @@ build_index_pathkeys(PlannerInfo *root,
 			 * for this query.  Add it to list, unless it's redundant.
 			 */
 			if (!pathkey_is_redundant(cpathkey, retval))
+			{
 				retval = lappend(retval, cpathkey);
+				*positions = lappend_int(*positions,
+										 foreach_current_index(lc));
+			}
 		}
 		else
 		{
@@ -1035,7 +1108,7 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
  * We need this to ensure that we don't return pathkeys describing values
  * that are unavailable above the level of the subquery scan.
  */
-static Var *
+Var *
 find_var_for_subquery_tle(RelOptInfo *rel, TargetEntry *tle)
 {
 	ListCell   *lc;
@@ -1149,6 +1222,44 @@ make_pathkeys_for_sortclauses(PlannerInfo *root,
 		if (!pathkey_is_redundant(pathkey, pathkeys))
 			pathkeys = lappend(pathkeys, pathkey);
 	}
+	return pathkeys;
+}
+
+/*
+ * make_pathkeys_for_uniquekeyclauses
+ *		Generate a pathkeys list to be used for uniquekey clauses
+ */
+List *
+make_pathkeys_for_uniquekeys(PlannerInfo *root,
+							 List *sortclauses,
+							 List *tlist)
+{
+	List	   *pathkeys = NIL;
+	ListCell   *l;
+
+	foreach(l, sortclauses)
+	{
+		SortGroupClause *sortcl = (SortGroupClause *) lfirst(l);
+		Expr	   *sortkey;
+		PathKey    *pathkey;
+
+		sortkey = (Expr *) get_sortgroupclause_expr(sortcl, tlist);
+		Assert(OidIsValid(sortcl->sortop));
+		pathkey = make_pathkey_from_sortop(root,
+										   sortkey,
+										   root->nullable_baserels,
+										   sortcl->sortop,
+										   sortcl->nulls_first,
+										   sortcl->tleSortGroupRef,
+										   true);
+
+		if (EC_MUST_BE_REDUNDANT(pathkey->pk_eclass))
+			continue;
+
+		if (pathkey_is_unique(pathkey, pathkeys))
+			pathkeys = lappend(pathkeys, pathkey);
+	}
+
 	return pathkeys;
 }
 

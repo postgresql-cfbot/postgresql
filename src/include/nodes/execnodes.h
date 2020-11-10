@@ -1425,6 +1425,8 @@ typedef struct IndexScanState
 	ExprContext *iss_RuntimeContext;
 	Relation	iss_RelationDesc;
 	struct IndexScanDescData *iss_ScanDesc;
+	int         iss_SkipPrefixSize;
+	bool		iss_FirstTupleEmitted;
 
 	/* These are needed for re-checking ORDER BY expr ordering */
 	pairingheap *iss_ReorderQueue;
@@ -1454,6 +1456,8 @@ typedef struct IndexScanState
  *		TableSlot		   slot for holding tuples fetched from the table
  *		VMBuffer		   buffer in use for visibility map testing, if any
  *		PscanLen		   size of parallel index-only scan descriptor
+ *		SkipPrefixSize	   number of keys for skip-based DISTINCT
+ *		FirstTupleEmitted  has the first tuple been emitted
  * ----------------
  */
 typedef struct IndexOnlyScanState
@@ -1472,6 +1476,8 @@ typedef struct IndexOnlyScanState
 	struct IndexScanDescData *ioss_ScanDesc;
 	TupleTableSlot *ioss_TableSlot;
 	Buffer		ioss_VMBuffer;
+	int         ioss_SkipPrefixSize;
+	bool		ioss_FirstTupleEmitted;
 	Size		ioss_PscanLen;
 } IndexOnlyScanState;
 

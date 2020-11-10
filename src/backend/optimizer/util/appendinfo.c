@@ -746,3 +746,47 @@ find_appinfos_by_relids(PlannerInfo *root, Relids relids, int *nappinfos)
 	}
 	return appinfos;
 }
+
+/*
+ * find_appinfo_by_child
+ *
+ */
+AppendRelInfo *
+find_appinfo_by_child(PlannerInfo *root, Index child_index)
+{
+	ListCell	*lc;
+	foreach(lc, root->append_rel_list)
+	{
+		AppendRelInfo *appinfo = lfirst_node(AppendRelInfo, lc);
+		if (appinfo->child_relid == child_index)
+			return appinfo;
+	}
+	elog(ERROR, "parent relation cant be found");
+	return NULL;
+}
+
+/*
+ * find_parent_var
+ *
+ */
+Var *
+find_parent_var(AppendRelInfo *appinfo, Var *child_var)
+{
+	ListCell	*lc;
+	Var	*res = NULL;
+	Index attno = 1;
+	foreach(lc, appinfo->translated_vars)
+	{
+		Node *child_node = lfirst(lc);
+		if (equal(child_node, child_var))
+		{
+			res = copyObject(child_var);
+			res->varattno = attno;
+			res->varno = appinfo->parent_relid;
+		}
+		attno++;
+	}
+	if (res == NULL)
+		elog(ERROR, "parent var can't be found.");
+	return res;
+}

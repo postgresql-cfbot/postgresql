@@ -29,7 +29,9 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
+#include "storage/latch.h"
 #include "storage/pmsignal.h"
+#include "storage/proc.h"
 
 /*
  * Attempt to retrieve the specified file from off-line archival storage.
@@ -489,8 +491,8 @@ XLogArchiveNotify(const char *xlog)
 	}
 
 	/* Notify archiver that it's got something to do */
-	if (IsUnderPostmaster)
-		SendPostmasterSignal(PMSIGNAL_WAKEN_ARCHIVER);
+	if (IsUnderPostmaster && ProcGlobal->archiverLatch)
+		SetLatch(ProcGlobal->archiverLatch);
 }
 
 /*

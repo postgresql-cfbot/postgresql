@@ -2196,7 +2196,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, bool opportunistic)
 					WriteRqst.Flush = 0;
 					XLogWrite(WriteRqst, false);
 					LWLockRelease(WALWriteLock);
-					WalStats.m_wal_buffers_full++;
+					WalStats.wal_buffers_full++;
 					TRACE_POSTGRESQL_WAL_BUFFER_WRITE_DIRTY_DONE();
 				}
 				/* Re-acquire WALBufMappingLock and retry */
@@ -8578,9 +8578,9 @@ LogCheckpointEnd(bool restartpoint)
 						&sync_secs, &sync_usecs);
 
 	/* Accumulate checkpoint timing summary data, in milliseconds. */
-	BgWriterStats.m_checkpoint_write_time +=
+	CheckPointerStats.checkpoint_write_time +=
 		write_secs * 1000 + write_usecs / 1000;
-	BgWriterStats.m_checkpoint_sync_time +=
+	CheckPointerStats.checkpoint_sync_time +=
 		sync_secs * 1000 + sync_usecs / 1000;
 
 	/*

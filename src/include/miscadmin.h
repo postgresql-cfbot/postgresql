@@ -83,6 +83,8 @@ extern PGDLLIMPORT volatile sig_atomic_t QueryCancelPending;
 extern PGDLLIMPORT volatile sig_atomic_t ProcDiePending;
 extern PGDLLIMPORT volatile sig_atomic_t IdleInTransactionSessionTimeoutPending;
 extern PGDLLIMPORT volatile sig_atomic_t ProcSignalBarrierPending;
+extern PGDLLIMPORT volatile sig_atomic_t IdleStatsUpdateTimeoutPending;
+extern PGDLLIMPORT volatile sig_atomic_t ConfigReloadPending;
 
 extern PGDLLIMPORT volatile sig_atomic_t ClientConnectionLost;
 
@@ -321,7 +323,6 @@ typedef enum BackendType
 	B_WAL_SENDER,
 	B_WAL_WRITER,
 	B_ARCHIVER,
-	B_STATS_COLLECTOR,
 	B_LOGGER,
 } BackendType;
 
@@ -418,6 +419,7 @@ typedef enum
 	BootstrapProcess,
 	StartupProcess,
 	BgWriterProcess,
+	ArchiverProcess,
 	CheckpointerProcess,
 	WalWriterProcess,
 	WalReceiverProcess,
@@ -430,6 +432,7 @@ extern AuxProcType MyAuxProcType;
 #define AmBootstrapProcess()		(MyAuxProcType == BootstrapProcess)
 #define AmStartupProcess()			(MyAuxProcType == StartupProcess)
 #define AmBackgroundWriterProcess() (MyAuxProcType == BgWriterProcess)
+#define AmArchiverProcess()			(MyAuxProcType == ArchiverProcess)
 #define AmCheckpointerProcess()		(MyAuxProcType == CheckpointerProcess)
 #define AmWalWriterProcess()		(MyAuxProcType == WalWriterProcess)
 #define AmWalReceiverProcess()		(MyAuxProcType == WalReceiverProcess)

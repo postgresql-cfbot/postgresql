@@ -244,9 +244,9 @@ BackgroundWriterMain(void)
 		can_hibernate = BgBufferSync(&wb_context);
 
 		/*
-		 * Send off activity statistics to the stats collector
+		 * Send off activity statistics to the activity stats facility
 		 */
-		pgstat_send_bgwriter();
+		pgstat_report_bgwriter();
 
 		if (FirstCallSinceLastCheckpoint())
 		{

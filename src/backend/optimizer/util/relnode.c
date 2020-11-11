@@ -27,6 +27,7 @@
 #include "optimizer/placeholder.h"
 #include "optimizer/plancat.h"
 #include "optimizer/restrictinfo.h"
+#include "optimizer/subselect.h"
 #include "optimizer/tlist.h"
 #include "utils/hsearch.h"
 #include "utils/lsyscache.h"
@@ -726,6 +727,38 @@ build_join_rel(PlannerInfo *root,
 	set_joinrel_size_estimates(root, joinrel, outer_rel, inner_rel,
 							   sjinfo, restrictlist);
 
+	/* Fix the AlternativeSubPlans */
+	{
+		ListCell *lc;
+		bool recost = false;
+		foreach(lc, joinrel->reltarget->exprs)
+		{
+			if (IsA(lfirst(lc), PlaceHolderVar))
+			{
+				bool recost_expr = false;
+				PlaceHolderVar *phv = lfirst_node(PlaceHolderVar, lc);
+				if (bms_is_subset(phv->phrels, joinrel->relids) &&
+					IsA(phv->phexpr, AlternativeSubPlan))
+				{
+					phv->phexpr = (Expr *)choose_subplan((AlternativeSubPlan *)phv->phexpr,
+														 joinrel->rows,
+														 &recost_expr);
+					if(recost_expr)
+						recost = true;
+					/* track how many exprs are changed, old_ones (AlternativeSubplans)
+					 * and new_ones (SubPlans)
+					 */
+				}
+			}
+		}
+
+		if (recost)
+		{
+			/* get the delta cost by old_costs and new_costs, and then
+			 * modify the cost of the  path in outer_rel and inner_rel.
+			 */
+		}
+	}
 	/*
 	 * Set the consider_parallel flag if this joinrel could potentially be
 	 * scanned within a parallel worker.  If this flag is false for either

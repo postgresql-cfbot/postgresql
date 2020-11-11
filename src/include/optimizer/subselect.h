@@ -36,5 +36,7 @@ extern Param *SS_make_initplan_output_param(PlannerInfo *root,
 extern void SS_make_initplan_from_plan(PlannerInfo *root,
 									   PlannerInfo *subroot, Plan *plan,
 									   Param *prm);
-
+extern SubPlan *choose_subplan(AlternativeSubPlan *altplan,
+							   double num_calls,
+							   bool *recost);
 #endif							/* SUBSELECT_H */

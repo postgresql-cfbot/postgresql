@@ -7196,6 +7196,7 @@ getTables(Archive *fout, int *numTables)
 	int			i_relacl;
 	int			i_acldefault;
 	int			i_ispartition;
+	int			i_isivm;
 
 	/*
 	 * Find all the tables and table-like objects.
@@ -7285,6 +7286,13 @@ getTables(Archive *fout, int *numTables)
 
 	appendPQExpBufferStr(query,
 						 "c.relispartition AS ispartition ");
+
+	if (fout->remoteVersion >= 200000)
+		appendPQExpBufferStr(query,
+							 "c.relisivm AS isivm ");
+	else
+		appendPQExpBufferStr(query,
+							 "false AS isivm ");
 
 	/*
 	 * Left join to pg_depend to pick up dependency info linking sequences to
@@ -7396,6 +7404,7 @@ getTables(Archive *fout, int *numTables)
 	i_relacl = PQfnumber(res, "relacl");
 	i_acldefault = PQfnumber(res, "acldefault");
 	i_ispartition = PQfnumber(res, "ispartition");
+	i_isivm = PQfnumber(res, "isivm");
 
 	if (dopt->lockWaitTimeout)
 	{
@@ -7478,6 +7487,7 @@ getTables(Archive *fout, int *numTables)
 			tblinfo[i].amname = pg_strdup(PQgetvalue(res, i, i_amname));
 		tblinfo[i].is_identity_sequence = (strcmp(PQgetvalue(res, i, i_is_identity_sequence), "t") == 0);
 		tblinfo[i].ispartition = (strcmp(PQgetvalue(res, i, i_ispartition), "t") == 0);
+		tblinfo[i].isivm = (strcmp(PQgetvalue(res, i, i_isivm), "t") == 0);
 
 		if (tblinfo[i].relkind == RELKIND_PROPGRAPH &&
 			!(fout->remoteVersion >= 200000))
@@ -17233,10 +17243,12 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		 * PostgreSQL 18 has disabled UNLOGGED for partitioned tables, so
 		 * ignore it when dumping if it was set in this case.
 		 */
-		appendPQExpBuffer(q, "CREATE %s%s %s",
+		appendPQExpBuffer(q, "CREATE %s%s%s %s",
 						  (tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED &&
 						   tbinfo->relkind != RELKIND_PARTITIONED_TABLE) ?
 						  "UNLOGGED " : "",
+						  tbinfo->relkind == RELKIND_MATVIEW && tbinfo->isivm ?
+						  "INCREMENTAL " : "",
 						  reltypename,
 						  qualrelname);
 

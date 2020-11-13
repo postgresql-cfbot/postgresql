@@ -2357,3 +2357,123 @@ create trigger aft_row after insert or update on trigger_parted
 create table trigger_parted_p1 partition of trigger_parted for values in (1)
   partition by list (a);
 create table trigger_parted_p1_1 partition of trigger_parted_p1 for values in (1);
+
+--
+-- Test case for CREATE OR REPLACE TRIGGER
+--
+create table my_table (id integer);
+create function funcA() returns trigger as $$
+begin
+  raise notice 'hello from funcA';
+  return null;
+end; $$ language plpgsql;
+create function funcB() returns trigger as $$
+begin
+  raise notice 'hello from funcB';
+  return null;
+end; $$ language plpgsql;
+
+-- consider combination tests from 2 grammatical points
+-- (1) the trigger is a regular trigger or constraint trigger
+-- (2) OR REPLACE clause is used or not
+
+-- 1. Overwrite existing regular trigger with regular trigger (without OR REPLACE)
+create trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcA();
+create trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcB(); -- should fail
+
+-- 2. Overwrite existing regular trigger with regular trigger (with OR REPLACE)
+insert into my_table values (1);
+create or replace trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcB(); -- OK
+insert into my_table values (1);
+
+-- 3. Overwrite existing regular trigger with constraint trigger (without OR REPLACE)
+create constraint trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcA(); -- should fail
+
+-- 4. Overwrite existing regular trigger with constraint trigger (with OR REPLACE)
+create or replace constraint trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcA(); -- should fail
+drop trigger my_trig on my_table;
+
+-- 5. Overwrite existing constraint trigger with regular trigger (without OR REPLACE)
+create constraint trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcA();
+create trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcB(); -- should fail
+
+-- 6. Overwrite existing constraint trigger with regular trigger (with OR REPLACE)
+create or replace trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcB(); -- should fail
+
+-- 7. Overwrite existing constraint trigger with constraint trigger (without OR REPLACE)
+create constraint trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcB(); -- should fail
+
+-- 8. Overwrite existing constraint trigger with constraint trigger (with OR REPLACE)
+create or replace constraint trigger my_trig
+  after insert on my_table
+  for each row execute procedure funcB(); -- should fail
+
+-- cleanup
+drop trigger my_trig on my_table;
+drop table my_table;
+
+-- test CREATE OR REPLACE TRIGGER on partition table
+create table parted_trig (a int) partition by range (a);
+create table parted_trig_1 partition of parted_trig
+       for values from (0) to (1000) partition by range (a);
+create table parted_trig_1_1 partition of parted_trig_1 for values from (0) to (100);
+create table parted_trig_2 partition of parted_trig for values from (1000) to (2000);
+create table default_parted_trig partition of parted_trig default;
+
+-- test that trigger can be replaced by another one
+-- at the same level of partition table
+create or replace trigger my_trig
+  after insert on parted_trig
+  for each row execute procedure funcA();
+insert into parted_trig (a) values (50);
+create or replace trigger my_trig
+  after insert on parted_trig
+  for each row execute procedure funcB();
+insert into parted_trig (a) values (50);
+drop trigger my_trig on parted_trig;
+
+-- test that child trigger cannot be replaced directly
+create or replace trigger my_trig
+  after insert on parted_trig
+  for each row execute procedure funcA();
+insert into parted_trig (a) values (50);
+create or replace trigger my_trig
+  after insert on parted_trig_1
+  for each row execute procedure funcB(); -- should fail
+insert into parted_trig (a) values (50);
+drop trigger my_trig on parted_trig;
+
+-- test that trigger is overwritten by another one
+-- defined by upper level
+create or replace trigger my_trig
+  after insert on parted_trig_1
+  for each row execute procedure funcA();
+insert into parted_trig (a) values (50);
+create or replace trigger my_trig
+  after insert on parted_trig
+  for each row execute procedure funcB();
+insert into parted_trig (a) values (50);
+drop trigger my_trig on parted_trig;
+
+-- cleanup
+drop table parted_trig;
+drop function funcA();
+drop function funcB();

@@ -10550,6 +10550,8 @@ CreateFKCheckTrigger(Oid myRelOid, Oid refRelOid, Constraint *fkconstraint,
 	 * and "RI_ConstraintTrigger_c_NNNN" for the check triggers.
 	 */
 	fk_trigger = makeNode(CreateTrigStmt);
+	fk_trigger->replace = false;
+	fk_trigger->isconstraint = true;
 	fk_trigger->trigname = "RI_ConstraintTrigger_c";
 	fk_trigger->relation = NULL;
 	fk_trigger->row = true;
@@ -10570,7 +10572,6 @@ CreateFKCheckTrigger(Oid myRelOid, Oid refRelOid, Constraint *fkconstraint,
 	fk_trigger->columns = NIL;
 	fk_trigger->transitionRels = NIL;
 	fk_trigger->whenClause = NULL;
-	fk_trigger->isconstraint = true;
 	fk_trigger->deferrable = fkconstraint->deferrable;
 	fk_trigger->initdeferred = fkconstraint->initdeferred;
 	fk_trigger->constrrel = NULL;
@@ -10599,6 +10600,8 @@ createForeignKeyActionTriggers(Relation rel, Oid refRelOid, Constraint *fkconstr
 	 * DELETE action on the referenced table.
 	 */
 	fk_trigger = makeNode(CreateTrigStmt);
+	fk_trigger->replace = false;
+	fk_trigger->isconstraint = true;
 	fk_trigger->trigname = "RI_ConstraintTrigger_a";
 	fk_trigger->relation = NULL;
 	fk_trigger->row = true;
@@ -10607,7 +10610,6 @@ createForeignKeyActionTriggers(Relation rel, Oid refRelOid, Constraint *fkconstr
 	fk_trigger->columns = NIL;
 	fk_trigger->transitionRels = NIL;
 	fk_trigger->whenClause = NULL;
-	fk_trigger->isconstraint = true;
 	fk_trigger->constrrel = NULL;
 	switch (fkconstraint->fk_del_action)
 	{
@@ -10655,6 +10657,8 @@ createForeignKeyActionTriggers(Relation rel, Oid refRelOid, Constraint *fkconstr
 	 * UPDATE action on the referenced table.
 	 */
 	fk_trigger = makeNode(CreateTrigStmt);
+	fk_trigger->replace = false;
+	fk_trigger->isconstraint = true;
 	fk_trigger->trigname = "RI_ConstraintTrigger_a";
 	fk_trigger->relation = NULL;
 	fk_trigger->row = true;
@@ -10663,7 +10667,6 @@ createForeignKeyActionTriggers(Relation rel, Oid refRelOid, Constraint *fkconstr
 	fk_trigger->columns = NIL;
 	fk_trigger->transitionRels = NIL;
 	fk_trigger->whenClause = NULL;
-	fk_trigger->isconstraint = true;
 	fk_trigger->constrrel = NULL;
 	switch (fkconstraint->fk_upd_action)
 	{

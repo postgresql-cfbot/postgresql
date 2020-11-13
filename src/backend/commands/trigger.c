@@ -31,6 +31,7 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_depend.h"
 #include "commands/dbcommands.h"
 #include "commands/defrem.h"
 #include "commands/trigger.h"
@@ -168,15 +169,14 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	char	   *qual;
 	Datum		values[Natts_pg_trigger];
 	bool		nulls[Natts_pg_trigger];
+	bool		replaces[Natts_pg_trigger];
 	Relation	rel;
 	AclResult	aclresult;
 	Relation	tgrel;
-	SysScanDesc tgscan;
-	ScanKeyData key;
 	Relation	pgrel;
 	HeapTuple	tuple;
 	Oid			funcrettype;
-	Oid			trigoid;
+	Oid			trigoid = InvalidOid;
 	char		internaltrigname[NAMEDATALEN];
 	char	   *trigname;
 	Oid			constrrelid = InvalidOid;
@@ -185,6 +185,10 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	char	   *oldtablename = NULL;
 	char	   *newtablename = NULL;
 	bool		partition_recurse;
+	bool		was_replaced = false;
+	Oid			existing_constraint_oid = InvalidOid;
+	bool		trigger_exists = false;
+	bool		existing_isInternal = false;
 
 	if (OidIsValid(relOid))
 		rel = table_open(relOid, ShareRowExclusiveLock);
@@ -669,6 +673,85 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 		whenRtable = NIL;
 	}
 
+	/* Check if there is a pre-existing trigger of the same name */
+	tgrel = table_open(TriggerRelationId, RowExclusiveLock);
+	if (!isInternal)
+	{
+		ScanKeyData skeys[2];
+		SysScanDesc my_desc;
+
+		ScanKeyInit(&skeys[0],
+					Anum_pg_trigger_tgrelid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(RelationGetRelid(rel)));
+
+		ScanKeyInit(&skeys[1],
+					Anum_pg_trigger_tgname,
+					BTEqualStrategyNumber, F_NAMEEQ,
+					CStringGetDatum(stmt->trigname));
+
+		my_desc = systable_beginscan(tgrel, TriggerRelidNameIndexId, true,
+									 NULL, 2, skeys);
+
+		/* There should be at most one matching tuple */
+		if (HeapTupleIsValid(tuple = systable_getnext(my_desc)))
+		{
+			Form_pg_trigger pg_trigger = (Form_pg_trigger) GETSTRUCT(tuple);
+
+			tuple = heap_copytuple(tuple);
+			trigoid = pg_trigger->oid;
+			existing_constraint_oid = pg_trigger->tgconstraint;
+			existing_isInternal = pg_trigger->tgisinternal;
+			trigger_exists = true;
+		}
+		systable_endscan(my_desc);
+	}
+
+	/* Generate the trigger's oid because there was no same name trigger. */
+	if (!trigger_exists)
+		trigoid = GetNewOidWithIndex(tgrel, TriggerOidIndexId,
+									 Anum_pg_trigger_oid);
+	else
+	{
+		/*
+		 * without OR REPLACE clause, can't override the trigger with the same
+		 * name.
+		 */
+		if (!stmt->replace)
+			ereport(ERROR,
+					(errcode(ERRCODE_DUPLICATE_OBJECT),
+					 errmsg("trigger \"%s\" for relation \"%s\" already exists",
+							stmt->trigname, RelationGetRelationName(rel))));
+
+		/*
+		 * An internal trigger cannot be replaced by another user defined
+		 * trigger. This should exclude the case that internal trigger is
+		 * child trigger of partition table and needs to be rewritten when the
+		 * parent trigger is replaced by user.
+		 */
+		if (existing_isInternal && !isInternal && !in_partition)
+			ereport(ERROR,
+					(errcode(ERRCODE_DUPLICATE_OBJECT),
+					 errmsg("trigger \"%s\" for relation \"%s\" is an internal trigger",
+							stmt->trigname, RelationGetRelationName(rel))));
+
+		/*
+		 * It is not allowed to replace with a constraint trigger. The OR
+		 * REPLACE syntax is not available for constraint triggers (see
+		 * gram.y).
+		 */
+		Assert(!stmt->isconstraint);
+
+		/*
+		 * It is not allowed to replace an existing constraint trigger.
+		 */
+		if (OidIsValid(existing_constraint_oid))
+			ereport(ERROR,
+					(errcode(ERRCODE_DUPLICATE_OBJECT),
+					 errmsg("trigger \"%s\" for relation \"%s\" is a constraint trigger",
+							stmt->trigname, RelationGetRelationName(rel))));
+	}
+
 	/*
 	 * Find and validate the trigger function.
 	 */
@@ -728,15 +811,6 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	}
 
 	/*
-	 * Generate the trigger's OID now, so that we can use it in the name if
-	 * needed.
-	 */
-	tgrel = table_open(TriggerRelationId, RowExclusiveLock);
-
-	trigoid = GetNewOidWithIndex(tgrel, TriggerOidIndexId,
-								 Anum_pg_trigger_oid);
-
-	/*
 	 * If trigger is internally generated, modify the provided trigger name to
 	 * ensure uniqueness by appending the trigger OID.  (Callers will usually
 	 * supply a simple constant trigger name in these cases.)
@@ -751,37 +825,6 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	{
 		/* user-defined trigger; use the specified trigger name as-is */
 		trigname = stmt->trigname;
-	}
-
-	/*
-	 * Scan pg_trigger for existing triggers on relation.  We do this only to
-	 * give a nice error message if there's already a trigger of the same
-	 * name.  (The unique index on tgrelid/tgname would complain anyway.) We
-	 * can skip this for internally generated triggers, since the name
-	 * modification above should be sufficient.
-	 *
-	 * NOTE that this is cool only because we have ShareRowExclusiveLock on
-	 * the relation, so the trigger set won't be changing underneath us.
-	 */
-	if (!isInternal)
-	{
-		ScanKeyInit(&key,
-					Anum_pg_trigger_tgrelid,
-					BTEqualStrategyNumber, F_OIDEQ,
-					ObjectIdGetDatum(RelationGetRelid(rel)));
-		tgscan = systable_beginscan(tgrel, TriggerRelidNameIndexId, true,
-									NULL, 1, &key);
-		while (HeapTupleIsValid(tuple = systable_getnext(tgscan)))
-		{
-			Form_pg_trigger pg_trigger = (Form_pg_trigger) GETSTRUCT(tuple);
-
-			if (namestrcmp(&(pg_trigger->tgname), trigname) == 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_DUPLICATE_OBJECT),
-						 errmsg("trigger \"%s\" for relation \"%s\" already exists",
-								trigname, RelationGetRelationName(rel))));
-		}
-		systable_endscan(tgscan);
 	}
 
 	/*
@@ -910,12 +953,29 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	else
 		nulls[Anum_pg_trigger_tgnewtable - 1] = true;
 
-	tuple = heap_form_tuple(tgrel->rd_att, values, nulls);
-
 	/*
 	 * Insert tuple into pg_trigger.
 	 */
-	CatalogTupleInsert(tgrel, tuple);
+	if (!trigger_exists)
+	{
+		tuple = heap_form_tuple(tgrel->rd_att, values, nulls);
+		CatalogTupleInsert(tgrel, tuple);
+	}
+	else
+	{
+		TupleDesc	tupDesc;
+		HeapTuple	newtup;
+
+		tupDesc = RelationGetDescr(tgrel);
+		memset(replaces, true, sizeof(replaces));
+		replaces[Anum_pg_trigger_oid - 1] = false;
+		replaces[Anum_pg_trigger_tgrelid - 1] = false;
+		replaces[Anum_pg_trigger_tgname - 1] = false;
+		newtup = heap_modify_tuple(tuple, tupDesc, values, nulls, replaces);
+		CatalogTupleUpdate(tgrel, &tuple->t_self, newtup);
+		was_replaced = true;
+		heap_freetuple(newtup);
+	}
 
 	heap_freetuple(tuple);
 	table_close(tgrel, RowExclusiveLock);
@@ -959,6 +1019,15 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	myself.classId = TriggerRelationId;
 	myself.objectId = trigoid;
 	myself.objectSubId = 0;
+
+	/*
+	 * In order to replace trigger, trigger should not be dependent on old
+	 * referenced objects. Remove the old dependencies and then register new
+	 * ones. In this case, while the old referenced object gets dropped,
+	 * trigger will remain in the database.
+	 */
+	if (was_replaced)
+		deleteDependencyRecordsFor(myself.classId, myself.objectId, true);
 
 	referenced.classId = ProcedureRelationId;
 	referenced.objectId = funcoid;

@@ -1471,6 +1471,19 @@ text_position_get_match_pos(TextPositionState *state)
 	}
 }
 
+/*
+ * Resets to the initial state installed by text_position_setup.
+ * The next call to text_position_next will search from the beginning
+ * of the string.
+ */
+static void
+text_position_reset(TextPositionState *state)
+{
+	state->last_match = NULL;
+	state->refpoint = state->str1;
+	state->refpos = 0;
+}
+
 static void
 text_position_cleanup(TextPositionState *state)
 {
@@ -4582,7 +4595,7 @@ replace_text_regexp(text *src_text, void *regexp,
 /*
  * split_part
  * parse input string
- * return ord item (1 based)
+ * return ord item (1 based, negative counts from end)
  * based on provided field separator
  */
 Datum
@@ -4600,10 +4613,10 @@ split_part(PG_FUNCTION_ARGS)
 	bool		found;
 
 	/* field number is 1 based */
-	if (fldnum < 1)
+	if (fldnum == 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("field position must be greater than zero")));
+				 errmsg("field position must not be zero")));
 
 	inputstring_len = VARSIZE_ANY_EXHDR(inputstring);
 	fldsep_len = VARSIZE_ANY_EXHDR(fldsep);
@@ -4615,8 +4628,8 @@ split_part(PG_FUNCTION_ARGS)
 	/* empty field separator */
 	if (fldsep_len < 1)
 	{
-		/* if first field, return input string, else empty string */
-		if (fldnum == 1)
+		/* if first or last field, return input string, else empty string */
+		if (fldnum == 1 || fldnum == -1)
 			PG_RETURN_TEXT_P(inputstring);
 		else
 			PG_RETURN_TEXT_P(cstring_to_text(""));
@@ -4632,13 +4645,48 @@ split_part(PG_FUNCTION_ARGS)
 	if (!found)
 	{
 		text_position_cleanup(&state);
-		/* if field 1 requested, return input string, else empty string */
-		if (fldnum == 1)
+		/* if first or last field, return input string, else empty string */
+		if (fldnum == 1 || fldnum == -1)
 			PG_RETURN_TEXT_P(inputstring);
 		else
 			PG_RETURN_TEXT_P(cstring_to_text(""));
 	}
 	end_ptr = text_position_get_match_ptr(&state);
+
+	/*
+	 * negative fields count from the right
+	 * convert to positive field number by counting total number of fields
+	 */
+	if (fldnum < 0)
+	{
+		/* searching from the first match, so string has two fields to start */
+		int			fldlen = 2;
+
+		while (text_position_next(&state))
+			fldlen++;
+
+		/* special case of last field does not require extra pass */
+		if (fldnum == -1)
+		{
+			start_ptr = text_position_get_match_ptr(&state) + fldsep_len;
+			end_ptr = VARDATA_ANY(inputstring) + inputstring_len;
+			text_position_cleanup(&state);
+			PG_RETURN_TEXT_P(cstring_to_text_with_len(start_ptr,
+													  end_ptr - start_ptr));
+		}
+
+		/* nonexistent field, so return empty string */
+		if (-fldnum > fldlen)
+		{
+			text_position_cleanup(&state);
+			PG_RETURN_TEXT_P(cstring_to_text(""));
+		}
+
+		/* reset to pointing at first match, but now with positive fldnum */
+		fldnum += fldlen + 1;
+		text_position_reset(&state);
+		text_position_next(&state);
+	}
 
 	while (found && --fldnum > 0)
 	{

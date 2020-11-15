@@ -1569,20 +1569,23 @@ sendFile(const char *readfilename, const char *tarfilename,
 {
 	int			fd;
 	BlockNumber blkno = 0;
-	bool		block_retry = false;
+	int			block_attempts = 0;
 	char		buf[TAR_SEND_SIZE];
-	uint16		checksum;
 	int			checksum_failures = 0;
 	off_t		cnt;
 	int			i;
 	pgoff_t		len = 0;
 	char	   *page;
 	size_t		pad;
-	PageHeader	phdr;
 	int			segmentno = 0;
 	char	   *segmentpath;
 	bool		verify_checksum = false;
 	pg_checksum_context checksum_ctx;
+
+	/* Maximum number of checksum failures reported for this file */
+#define CHECKSUM_REPORT_THRESHOLD		5
+	/* maximum number of retries done for a single page */
+#define PAGE_RETRY_THRESHOLD			5
 
 	pg_checksum_init(&checksum_ctx, manifest->checksum_type);
 
@@ -1661,9 +1664,7 @@ sendFile(const char *readfilename, const char *tarfilename,
 		if (verify_checksum && (cnt % BLCKSZ != 0))
 		{
 			ereport(WARNING,
-					(errmsg("could not verify checksum in file \"%s\", block "
-							"%d: read buffer size %d and page size %d "
-							"differ",
+					(errmsg("could not verify checksum in file \"%s\", block %u: read buffer size %d and page size %d differ",
 							readfilename, blkno, (int) cnt, BLCKSZ)));
 			verify_checksum = false;
 		}
@@ -1675,78 +1676,75 @@ sendFile(const char *readfilename, const char *tarfilename,
 				page = buf + BLCKSZ * i;
 
 				/*
-				 * Only check pages which have not been modified since the
-				 * start of the base backup. Otherwise, they might have been
-				 * written only halfway and the checksum would not be valid.
-				 * However, replaying WAL would reinstate the correct page in
-				 * this case. We also skip completely new pages, since they
-				 * don't have a checksum yet.
+				 * Check on-disk pages with the same set of verification
+				 * conditions used before loading pages into shared buffers.
+				 * Note that PageIsVerifiedExtended() considers pages filled
+				 * only with zeros as valid, since they don't have a checksum
+				 * yet.  Failures are not reported to pgstat yet, as these are
+				 * reported in a single batch once a file is completed.  It
+				 * could be possible, that a page is written halfway while
+				 * doing this check, causing a false positive.  If that
+				 * happens, a page is retried multiple times, with an error
+				 * reported if the second attempt also fails.
 				 */
-				if (!PageIsNew(page) && PageGetLSN(page) < startptr)
+				if (PageIsVerifiedExtended(page, blkno, 0))
 				{
-					checksum = pg_checksum_page((char *) page, blkno + segmentno * RELSEG_SIZE);
-					phdr = (PageHeader) page;
-					if (phdr->pd_checksum != checksum)
+					/* success, move on to the next block */
+					blkno++;
+					block_attempts = 0;
+					continue;
+				}
+
+				/* The verification of a page has failed, retry again */
+				if (block_attempts < PAGE_RETRY_THRESHOLD)
+				{
+					int			reread_cnt;
+
+					/* Reread the failed block */
+					reread_cnt =
+						basebackup_read_file(fd, buf + BLCKSZ * i,
+											 BLCKSZ, len + BLCKSZ * i,
+											 readfilename,
+											 false);
+					if (reread_cnt == 0)
 					{
 						/*
-						 * Retry the block on the first failure.  It's
-						 * possible that we read the first 4K page of the
-						 * block just before postgres updated the entire block
-						 * so it ends up looking torn to us.  We only need to
-						 * retry once because the LSN should be updated to
-						 * something we can ignore on the next pass.  If the
-						 * error happens again then it is a true validation
-						 * failure.
+						 * If we hit end-of-file, a concurrent truncation must
+						 * have occurred, so break out of this loop just as if
+						 * the initial fread() returned 0. We'll drop through
+						 * to the same code that handles that case. (We must
+						 * fix up cnt first, though.)
 						 */
-						if (block_retry == false)
-						{
-							int			reread_cnt;
-
-							/* Reread the failed block */
-							reread_cnt =
-								basebackup_read_file(fd, buf + BLCKSZ * i,
-													 BLCKSZ, len + BLCKSZ * i,
-													 readfilename,
-													 false);
-							if (reread_cnt == 0)
-							{
-								/*
-								 * If we hit end-of-file, a concurrent
-								 * truncation must have occurred, so break out
-								 * of this loop just as if the initial fread()
-								 * returned 0. We'll drop through to the same
-								 * code that handles that case. (We must fix
-								 * up cnt first, though.)
-								 */
-								cnt = BLCKSZ * i;
-								break;
-							}
-
-							/* Set flag so we know a retry was attempted */
-							block_retry = true;
-
-							/* Reset loop to validate the block again */
-							i--;
-							continue;
-						}
-
-						checksum_failures++;
-
-						if (checksum_failures <= 5)
-							ereport(WARNING,
-									(errmsg("checksum verification failed in "
-											"file \"%s\", block %d: calculated "
-											"%X but expected %X",
-											readfilename, blkno, checksum,
-											phdr->pd_checksum)));
-						if (checksum_failures == 5)
-							ereport(WARNING,
-									(errmsg("further checksum verification "
-											"failures in file \"%s\" will not "
-											"be reported", readfilename)));
+						cnt = BLCKSZ * i;
+						break;
 					}
+
+					/* Set the counter so we know a retry was attempted */
+					block_attempts++;
+
+					/*
+					 * Wait for 100 ms to give some room to any parallel page
+					 * write that may have caused this retry to finish.
+					 */
+					pg_usleep(100000L);
+
+					/* Reset loop to validate the block again */
+					i--;
+					continue;
 				}
-				block_retry = false;
+
+				checksum_failures++;
+				if (checksum_failures <= CHECKSUM_REPORT_THRESHOLD)
+					ereport(WARNING,
+							(errmsg("checksum verification failed in block %u of file \"%s\"",
+									blkno, readfilename)));
+				if (checksum_failures == CHECKSUM_REPORT_THRESHOLD)
+					ereport(WARNING,
+							(errmsg("further checksum verification failures in file \"%s\" will not be reported",
+									readfilename)));
+
+				/* move to next block */
+				block_attempts = 0;
 				blkno++;
 			}
 		}

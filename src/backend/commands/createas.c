@@ -436,7 +436,6 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	List	   *attrList;
 	ObjectAddress intoRelationAddr;
 	Relation	intoRelationDesc;
-	RangeTblEntry *rte;
 	ListCell   *lc;
 	int			attnum;
 
@@ -507,23 +506,28 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	intoRelationDesc = table_open(intoRelationAddr.objectId, AccessExclusiveLock);
 
 	/*
-	 * Check INSERT permission on the constructed table.
-	 *
-	 * XXX: It would arguably make sense to skip this check if into->skipData
-	 * is true.
+	 * Check INSERT privilege on the constructed table. Skip this check if
+	 * WITH NO DATA is specified as we do not actually insert the tuples, we
+	 * just create the table. The insert privilege will be checked anyways
+	 * while inserting tuples into the table.
 	 */
-	rte = makeNode(RangeTblEntry);
-	rte->rtekind = RTE_RELATION;
-	rte->relid = intoRelationAddr.objectId;
-	rte->relkind = relkind;
-	rte->rellockmode = RowExclusiveLock;
-	rte->requiredPerms = ACL_INSERT;
+	if (!into->skipData)
+	{
+		RangeTblEntry *rte;
 
-	for (attnum = 1; attnum <= intoRelationDesc->rd_att->natts; attnum++)
-		rte->insertedCols = bms_add_member(rte->insertedCols,
-										   attnum - FirstLowInvalidHeapAttributeNumber);
+		rte = makeNode(RangeTblEntry);
+		rte->rtekind = RTE_RELATION;
+		rte->relid = intoRelationAddr.objectId;
+		rte->relkind = relkind;
+		rte->rellockmode = RowExclusiveLock;
+		rte->requiredPerms = ACL_INSERT;
 
-	ExecCheckRTPerms(list_make1(rte), true);
+		for (attnum = 1; attnum <= intoRelationDesc->rd_att->natts; attnum++)
+			rte->insertedCols = bms_add_member(rte->insertedCols,
+											attnum - FirstLowInvalidHeapAttributeNumber);
+
+		ExecCheckRTPerms(list_make1(rte), true);
+	}
 
 	/*
 	 * Make sure the constructed table does not have RLS enabled.
@@ -550,9 +554,15 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 */
 	myState->rel = intoRelationDesc;
 	myState->reladdr = intoRelationAddr;
-	myState->output_cid = GetCurrentCommandId(true);
 	myState->ti_options = TABLE_INSERT_SKIP_FSM;
-	myState->bistate = GetBulkInsertState();
+	myState->output_cid = GetCurrentCommandId(true);
+
+	/*
+	 * In case if WITH NO DATA is specified, we do not allocate bulk insert
+	 * state as we do not have tuples to insert.
+	 */
+	if (!into->skipData)
+		myState->bistate = GetBulkInsertState();
 
 	/*
 	 * Valid smgr_targblock implies something already wrote to the relation.
@@ -569,20 +579,23 @@ intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
 
-	/*
-	 * Note that the input slot might not be of the type of the target
-	 * relation. That's supported by table_tuple_insert(), but slightly less
-	 * efficient than inserting with the right slot - but the alternative
-	 * would be to copy into a slot of the right type, which would not be
-	 * cheap either. This also doesn't allow accessing per-AM data (say a
-	 * tuple's xmin), but since we don't do that here...
-	 */
-
-	table_tuple_insert(myState->rel,
-					   slot,
-					   myState->output_cid,
-					   myState->ti_options,
-					   myState->bistate);
+	/* Do not insert in case if WITH NO DATA is specified. */
+	if (!myState->into->skipData)
+	{
+		/*
+		 * Note that the input slot might not be of the type of the target
+		 * relation. That's supported by table_tuple_insert(), but slightly
+		 * less efficient than inserting with the right slot - but the
+		 * alternative would be to copy into a slot of the right type, which
+		 * would not be cheap either. This also doesn't allow accessing per-AM
+		 * data (say a tuple's xmin), but since we don't do that here...
+		 */
+		table_tuple_insert(myState->rel,
+						   slot,
+						   myState->output_cid,
+						   myState->ti_options,
+						   myState->bistate);
+	}
 
 	/* We know this is a newly created relation, so there are no indexes */
 
@@ -597,9 +610,15 @@ intorel_shutdown(DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
 
-	FreeBulkInsertState(myState->bistate);
-
-	table_finish_bulk_insert(myState->rel, myState->ti_options);
+	/*
+	 * In case if WITH NO DATA is specified, we do not allocate bulk insert
+	 * state as we do not have tuples to insert.
+	 */
+	if (!myState->into->skipData)
+	{
+		FreeBulkInsertState(myState->bistate);
+		table_finish_bulk_insert(myState->rel, myState->ti_options);
+	}
 
 	/* close rel, but keep lock until commit */
 	table_close(myState->rel, NoLock);

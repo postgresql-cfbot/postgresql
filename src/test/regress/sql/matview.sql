@@ -236,3 +236,29 @@ SELECT mvtest_func();
 SELECT * FROM mvtest1;
 SELECT * FROM mvtest2;
 ROLLBACK;
+
+-- Verfiy INSERT privilege, if owner is not allowed to insert.
+CREATE SCHEMA matview_schema;
+CREATE USER matview_user;
+ALTER DEFAULT PRIVILEGES FOR ROLE matview_user
+	  REVOKE INSERT ON TABLES FROM matview_user;
+GRANT ALL ON SCHEMA matview_schema TO public;
+
+SET SESSION AUTHORIZATION matview_user;
+EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+		CREATE MATERIALIZED VIEW matview_schema.mv_nodata1 (a) AS
+		SELECT oid FROM pg_class WHERE relname like '%c%' WITH NO DATA;	  -- OK
+CREATE MATERIALIZED VIEW matview_schema.mv_nodata2 (a) AS
+		SELECT oid FROM pg_class WHERE relname like '%c%' WITH NO DATA;   -- OK
+EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+		CREATE MATERIALIZED VIEW matview_schema.mv_nodata3 (a) AS
+		SELECT oid FROM pg_class WHERE relname like '%c%' WITH DATA;   -- Error
+CREATE MATERIALIZED VIEW matview_schema.mv_nodata4 (a) AS
+		SELECT oid FROM pg_class WHERE relname like '%c%' WITH DATA;   -- Error
+RESET SESSION AUTHORIZATION;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE matview_user
+	  GRANT INSERT ON TABLES TO matview_user;
+
+DROP SCHEMA matview_schema CASCADE;
+DROP USER matview_user;

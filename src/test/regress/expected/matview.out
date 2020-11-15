@@ -589,3 +589,36 @@ SELECT * FROM mvtest2;
 ERROR:  materialized view "mvtest2" has not been populated
 HINT:  Use the REFRESH MATERIALIZED VIEW command.
 ROLLBACK;
+-- Verfiy INSERT privilege, if owner is not allowed to insert.
+CREATE SCHEMA matview_schema;
+CREATE USER matview_user;
+ALTER DEFAULT PRIVILEGES FOR ROLE matview_user
+	  REVOKE INSERT ON TABLES FROM matview_user;
+GRANT ALL ON SCHEMA matview_schema TO public;
+SET SESSION AUTHORIZATION matview_user;
+EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+		CREATE MATERIALIZED VIEW matview_schema.mv_nodata1 (a) AS
+		SELECT oid FROM pg_class WHERE relname like '%c%' WITH NO DATA;	  -- OK
+              QUERY PLAN               
+---------------------------------------
+ Seq Scan on pg_class (never executed)
+   Filter: (relname ~~ '%c%'::text)
+(2 rows)
+
+CREATE MATERIALIZED VIEW matview_schema.mv_nodata2 (a) AS
+		SELECT oid FROM pg_class WHERE relname like '%c%' WITH NO DATA;   -- OK
+EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+		CREATE MATERIALIZED VIEW matview_schema.mv_nodata3 (a) AS
+		SELECT oid FROM pg_class WHERE relname like '%c%' WITH DATA;   -- Error
+ERROR:  permission denied for materialized view mv_nodata3
+CREATE MATERIALIZED VIEW matview_schema.mv_nodata4 (a) AS
+		SELECT oid FROM pg_class WHERE relname like '%c%' WITH DATA;   -- Error
+ERROR:  permission denied for materialized view mv_nodata4
+RESET SESSION AUTHORIZATION;
+ALTER DEFAULT PRIVILEGES FOR ROLE matview_user
+	  GRANT INSERT ON TABLES TO matview_user;
+DROP SCHEMA matview_schema CASCADE;
+NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to materialized view matview_schema.mv_nodata1
+drop cascades to materialized view matview_schema.mv_nodata2
+DROP USER matview_user;

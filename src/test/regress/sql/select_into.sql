@@ -34,6 +34,23 @@ SELECT oid AS clsoid, relname, relnatts + 10 AS x
 CREATE TABLE selinto_schema.tmp3 (a,b,c)
 	   AS SELECT oid,relname,relacl FROM pg_class
 	   WHERE relname like '%c%';	-- Error
+EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+		CREATE TABLE selinto_schema.tbl_nodata1 (a) AS
+		SELECT oid FROM pg_class WHERE relname like '%c%' WITH NO DATA;	 -- OK
+INSERT INTO selinto_schema.tbl_nodata1
+		SELECT oid FROM pg_class WHERE relname like '%c%'; -- Error
+CREATE TABLE selinto_schema.tbl_nodata2 (a) AS
+		SELECT oid FROM pg_class WHERE relname like '%c%' WITH NO DATA;  -- OK
+PREPARE nodata_sel AS
+		SELECT oid FROM pg_class WHERE relname like '%c%';
+EXPLAIN  (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+		CREATE TABLE selinto_schema.tbl_nodata3 (a) AS
+		EXECUTE nodata_sel WITH NO DATA;	-- OK
+CREATE TABLE selinto_schema.tbl_nodata4 (a) AS
+		EXECUTE nodata_sel WITH NO DATA;	-- OK
+EXPLAIN  (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
+		CREATE TABLE selinto_schema.tbl_nodata5 (a) AS
+		EXECUTE nodata_sel WITH DATA;	-- Error
 RESET SESSION AUTHORIZATION;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE regress_selinto_user

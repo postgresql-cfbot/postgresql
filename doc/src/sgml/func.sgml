@@ -20965,6 +20965,26 @@ SELECT * FROM pg_ls_dir('.') WITH ORDINALITY AS t(ls,n);
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>pg_lwlock_blocking_pid</primary>
+        </indexterm>
+        <function>pg_lwlock_blocking_pid</function> ( <type>integer</type> )
+        <returnvalue>integer[]</returnvalue>
+       </para>
+       <para>
+        Returns the waiting mode of the the specified process ID,
+        the last process ID (and its holding mode) holding the LWLock, the number
+        of process holding the LWLlock, or empty values if there is no such server process
+        or it is not blocked.
+       </para>
+       <para>
+        One server process blocks another if it holds a lwlock that
+        conflicts with the blocked process's lwlock request.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>pg_backend_pid</primary>
         </indexterm>
         <function>pg_backend_pid</function> ()

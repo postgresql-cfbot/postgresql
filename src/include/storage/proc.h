@@ -161,6 +161,9 @@ struct PGPROC
 	bool		lwWaiting;		/* true if waiting for an LW lock */
 	uint8		lwWaitMode;		/* lwlock mode being waited for */
 	proclist_node lwWaitLink;	/* position in LW lock wait list */
+	int lwLastHoldingPid;               /* last holder of the LW lock */
+	LWLockMode lwHolderMode; /* LW lock mode of last holder of the LW lock */
+	uint32 lwNbHolders; /* number of holders of the LW lock */
 
 	/* Support for condition variables. */
 	proclist_node cvWaitLink;	/* position in CV wait list */

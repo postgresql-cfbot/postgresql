@@ -250,7 +250,7 @@ su - postgres
 
     <listitem>
      <para>
-      You need <productname>OpenSSL</productname>, if you want to support
+      You need a supported <acronym>SSL</acronym> library, if you want to support
       encrypted client connections.  <productname>OpenSSL</productname> is
       also required for random number generation on platforms that do not
       have <filename>/dev/urandom</filename> (except Windows).  The minimum
@@ -967,6 +967,31 @@ build-postgresql:
       </varlistentry>
 
       <varlistentry>
+       <term><option>--with-nss</option>
+       <indexterm>
+        <primary>NSS</primary>
+        <secondary>NSPR</secondary>
+        <seealso>SSL</seealso>
+       </indexterm>
+       </term>
+       <listitem>
+        <para>
+         Build with support for <acronym>SSL</acronym> (encrypted)
+         connections using <productname>NSS</productname>. This requires the
+         <productname>NSS</productname> package to be installed. Additionally,
+         <productname>NSS</productname> requires <productname>NSPR</productname>
+         to be installed. <filename>configure</filename> will check for the
+         required header files and libraries to make sure that your
+         <productname>NSS</productname> installation is sufficient before
+         proceeding.
+        </para>
+        <para>
+         This option is incompatible with <literal>--with-openssl</literal>.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
        <term><option>--with-openssl</option>
        <indexterm>
         <primary>OpenSSL</primary>
@@ -981,6 +1006,9 @@ build-postgresql:
          for the required header files and libraries to make sure that
          your <productname>OpenSSL</productname> installation is sufficient
          before proceeding.
+        </para>
+        <para>
+         This option is incompatible with <literal>--with-nss</literal>.
         </para>
        </listitem>
       </varlistentry>

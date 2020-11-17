@@ -79,7 +79,7 @@ OBJS_COMMON = \
 	wait_error.o \
 	wchar.o
 
-ifeq ($(with_openssl),yes)
+ifeq ($(with_ssl),openssl)
 OBJS_COMMON += \
 	protocol_openssl.o \
 	sha2_openssl.o

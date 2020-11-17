@@ -355,6 +355,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 11, /* sizeof("read-write") = 11 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+	{"cert_database", NULL, NULL, NULL,
+		"CertificateDatabase", "", 64,
+	offsetof(struct pg_conn, cert_database)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}

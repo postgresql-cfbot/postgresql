@@ -45,10 +45,19 @@ OBJS = \
 	pqexpbuffer.o \
 	fe-auth.o
 
-ifeq ($(with_openssl),yes)
+ifneq ($(with_ssl),no)
 OBJS += \
-	fe-secure-common.o \
+	fe-secure-common.o
+endif
+
+ifeq ($(with_ssl),openssl)
+OBJS += \
 	fe-secure-openssl.o
+endif
+
+ifeq ($(with_ssl), nss)
+OBJS += \
+	fe-secure-nss.o
 endif
 
 ifeq ($(with_gssapi),yes)

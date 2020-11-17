@@ -853,15 +853,6 @@ AC_MSG_RESULT([$with_bonjour])
 
 
 #
-# OpenSSL
-#
-AC_MSG_CHECKING([whether to build with OpenSSL support])
-PGAC_ARG_BOOL(with, openssl, no, [build with OpenSSL support],
-              [AC_DEFINE([USE_OPENSSL], 1, [Define to build with OpenSSL support. (--with-openssl)])])
-AC_MSG_RESULT([$with_openssl])
-AC_SUBST(with_openssl)
-
-#
 # SELinux
 #
 AC_MSG_CHECKING([whether to build with SELinux support])
@@ -1209,7 +1200,21 @@ if test "$with_gssapi" = yes ; then
   fi
 fi
 
+#
+# SSL Library
+#
+# There are currently two supported SSL/TLS libraries, OpenSSL and NSS.
+#
+PGAC_ARG_REQ(with, ssl, [LIB], [use LIB for SSL/TLS support (openssl, nss)])
+if test x"$with_ssl" = x"" ; then
+  with_ssl=no
+fi
+PGAC_ARG_BOOL(with, openssl, no, [obsolete spelling of --with-ssl=openssl])
 if test "$with_openssl" = yes ; then
+  with_ssl=openssl
+fi
+
+if test "$with_ssl" = openssl ; then
   dnl Order matters!
   # Minimum required OpenSSL version is 1.0.1
   AC_DEFINE(OPENSSL_API_COMPAT, [0x10001000L],
@@ -1233,7 +1238,31 @@ if test "$with_openssl" = yes ; then
   # thread-safety. In 1.1.0, it's no longer required, and CRYPTO_lock()
   # function was removed.
   AC_CHECK_FUNCS([CRYPTO_lock])
+  AC_DEFINE([USE_OPENSSL], 1, [Define to 1 if you have OpenSSL support.])
+elif test "$with_ssl" = nss ; then
+  # TODO: fallback in case nss-config/nspr-config aren't found.
+  PGAC_PATH_PROGS(NSS_CONFIG, nss-config)
+  PGAC_PATH_PROGS(NSPR_CONFIG, nspr-config)
+  if test -n "$NSS_CONFIG"; then
+    NSS_LIBS=`$NSS_CONFIG --libs`
+	NSS_CFLAGS=`$NSS_CONFIG --cflags`
+  fi
+  if test -n "$NSPR_CONFIG"; then
+	NSPR_LIBS=`$NSPR_CONFIG --libs`
+	NSPR_CFLAGS=`$NSPR_CONFIG --cflags`
+  fi
+
+  LDFLAGS="$LDFLAGS $NSS_LIBS $NSPR_LIBS"
+  CFLAGS="$CFLAGS $NSS_CFLAGS $NSPR_CFLAGS"
+
+  AC_CHECK_LIB(nss3, NSS_InitContext, [], [AC_MSG_ERROR([library 'nss3' is required for NSS])])
+  AC_CHECK_LIB(nspr4, PR_GetDefaultIOMethods, [], [AC_MSG_ERROR([library 'nspr4' is required for NSS])])
+  AC_CHECK_LIB(ssl3, SSL_GetImplementedCiphers, [], [AC_MSG_ERROR([library 'ssl3' is required for NSS])])
+  AC_DEFINE([USE_NSS], 1, [Define to 1 if you have NSS support,])
+elif test "$with_ssl" != no ; then
+  AC_MSG_ERROR([--with-ssl must specify one of openssl or nss])
 fi
+AC_SUBST(with_ssl)
 
 if test "$with_pam" = yes ; then
   AC_CHECK_LIB(pam,    pam_start, [], [AC_MSG_ERROR([library 'pam' is required for PAM])])
@@ -1405,9 +1434,14 @@ if test "$with_gssapi" = yes ; then
 	[AC_CHECK_HEADERS(gssapi.h, [], [AC_MSG_ERROR([gssapi.h header file is required for GSSAPI])])])
 fi
 
-if test "$with_openssl" = yes ; then
+if test "$with_ssl" = openssl ; then
   AC_CHECK_HEADER(openssl/ssl.h, [], [AC_MSG_ERROR([header file <openssl/ssl.h> is required for OpenSSL])])
   AC_CHECK_HEADER(openssl/err.h, [], [AC_MSG_ERROR([header file <openssl/err.h> is required for OpenSSL])])
+fi
+
+if test "$with_ssl" = nss ; then
+  AC_CHECK_HEADER(nss/ssl.h, [], [AC_MSG_ERROR([header file <nss/ssl.h> is required for NSS])])
+  AC_CHECK_HEADER(nss/nss.h, [], [AC_MSG_ERROR([header file <nss/nss.h> is required for NSS])])
 fi
 
 if test "$with_pam" = yes ; then
@@ -2158,11 +2192,13 @@ fi
 # in the template or configure command line.
 
 # If not selected manually, try to select a source automatically.
-if test x"$USE_OPENSSL_RANDOM" = x"" && test x"$USE_WIN32_RANDOM" = x"" && test x"$USE_DEV_URANDOM" = x"" ; then
-  if test x"$with_openssl" = x"yes" ; then
+if test x"$USE_OPENSSL_RANDOM" = x"" && test x"$USE_WIN32_RANDOM" = x"" && test x"$USE_DEV_URANDOM" = x"" && test x"$USE_NSS_RANDOM" = x"" ; then
+  if test x"$with_ssl" = x"openssl" ; then
     USE_OPENSSL_RANDOM=1
   elif test "$PORTNAME" = "win32" ; then
     USE_WIN32_RANDOM=1
+  elif test x"$with_ssl" = x"nss" ; then
+    USE_NSS_RANDOM=1
   else
     AC_CHECK_FILE([/dev/urandom], [], [])
 
@@ -2179,13 +2215,16 @@ if test x"$USE_OPENSSL_RANDOM" = x"1" ; then
 elif test x"$USE_WIN32_RANDOM" = x"1" ; then
   AC_DEFINE(USE_WIN32_RANDOM, 1, [Define to use native Windows API for random number generation])
   AC_MSG_RESULT([Windows native])
+elif test x"$USE_NSS_RANDOM" = x"1" ; then
+  AC_DEFINE(USE_NSS_RANDOM, 1, [Define to use NSS for random number generation])
+  AC_MSG_RESULT([NSS])
 elif test x"$USE_DEV_URANDOM" = x"1" ; then
   AC_DEFINE(USE_DEV_URANDOM, 1, [Define to use /dev/urandom for random number generation])
   AC_MSG_RESULT([/dev/urandom])
 else
   AC_MSG_ERROR([
 no source of strong random numbers was found
-PostgreSQL can use OpenSSL or /dev/urandom as a source of random numbers.])
+PostgreSQL can use OpenSSL, NSS, Windows native RNG or /dev/urandom as a source of random numbers.])
 fi
 
 # If not set in template file, set bytes to use libc memset()

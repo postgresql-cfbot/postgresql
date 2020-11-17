@@ -30,6 +30,21 @@
 #ifdef USE_WIN32_RANDOM
 #include <wincrypt.h>
 #endif
+#ifdef USE_NSS_RANDOM
+#define pg_BITS_PER_BYTE BITS_PER_BYTE
+#undef BITS_PER_BYTE
+#define NO_NSPR_10_SUPPORT
+#include <nss/nss.h>
+#include <nss/pk11pub.h>
+#if defined(BITS_PER_BYTE)
+#if BITS_PER_BYTE != pg_BITS_PER_BYTE
+#error "incompatible byte widths between NSPR and postgres"
+#endif
+#else
+#define BITS_PER_BYTE pg_BITS_PER_BYTE
+#endif
+#undef pg_BITS_PER_BYTE
+#endif
 
 #ifdef USE_WIN32_RANDOM
 /*
@@ -114,6 +129,8 @@ pg_strong_random_init(void)
 #elif defined(USE_DEV_URANDOM)
 	/* no initialization needed for /dev/urandom */
 
+#elif defined(USE_NSS_RANDOM)
+	/* TODO: set up NSS context here */
 #else
 #error no source of random numbers configured
 #endif
@@ -200,6 +217,29 @@ pg_strong_random(void *buf, size_t len)
 		if (CryptGenRandom(hProvider, len, buf))
 			return true;
 	}
+	return false;
+
+#elif defined(USE_NSS_RANDOM)
+	NSSInitParameters params;
+	NSSInitContext *nss_context;
+	SECStatus	status;
+
+	memset(&params, 0, sizeof(params));
+	params.length = sizeof(params);
+	nss_context = NSS_InitContext("", "", "", "", &params,
+								  NSS_INIT_READONLY | NSS_INIT_NOCERTDB |
+								  NSS_INIT_NOMODDB | NSS_INIT_FORCEOPEN |
+								  NSS_INIT_NOROOTINIT | NSS_INIT_PK11RELOAD);
+
+	if (!nss_context)
+		return false;
+
+	status = PK11_GenerateRandom(buf, len);
+	NSS_ShutdownContext(nss_context);
+
+	if (status == SECSuccess)
+		return true;
+
 	return false;
 
 	/*

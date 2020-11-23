@@ -1009,6 +1009,7 @@ typedef struct RangeTblEntry
 	char		relkind;		/* relation kind (see pg_class.relkind) */
 	int			rellockmode;	/* lock level that query requires on the rel */
 	struct TableSampleClause *tablesample;	/* sampling info, or NULL */
+	bool		system_versioned;	/* is from relation system versioned? */
 
 	/*
 	 * Fields valid for a subquery RTE (else NULL):
@@ -1773,7 +1774,7 @@ typedef enum DropBehavior
 } DropBehavior;
 
 /* ----------------------
- *	Alter Table
+ *     Alter Table
  * ----------------------
  */
 typedef struct AlterTableStmt
@@ -1854,7 +1855,10 @@ typedef enum AlterTableType
 	AT_AddIdentity,				/* ADD IDENTITY */
 	AT_SetIdentity,				/* SET identity column options */
 	AT_DropIdentity,			/* DROP IDENTITY */
-	AT_AlterCollationRefreshVersion /* ALTER COLLATION ... REFRESH VERSION */
+	AT_AddSystemVersioning,		/* ADD system versioning */
+	AT_AlterCollationRefreshVersion, /* ALTER COLLATION ... REFRESH VERSION */
+	AT_DropSystemVersioning,	/* DROP system versioning */
+	AT_PerodColumn				/* Period column */
 } AlterTableType;
 
 typedef struct ReplicaIdentityStmt
@@ -2079,6 +2083,7 @@ typedef struct CreateStmt
 	char	   *tablespacename; /* table space to use, or NULL */
 	char	   *accessMethod;	/* table access method */
 	bool		if_not_exists;	/* just do nothing if it already exists? */
+	bool		systemVersioned;	/* true when it is system versioned table */
 } CreateStmt;
 
 /* ----------
@@ -2128,7 +2133,9 @@ typedef enum ConstrType			/* types of constraints */
 	CONSTR_ATTR_DEFERRABLE,		/* attributes for previous constraint node */
 	CONSTR_ATTR_NOT_DEFERRABLE,
 	CONSTR_ATTR_DEFERRED,
-	CONSTR_ATTR_IMMEDIATE
+	CONSTR_ATTR_IMMEDIATE,
+	CONSTR_ROW_START_TIME,
+	CONSTR_ROW_END_TIME
 } ConstrType;
 
 /* Foreign key action codes */
@@ -3568,5 +3575,32 @@ typedef struct DropSubscriptionStmt
 	bool		missing_ok;		/* Skip error if missing? */
 	DropBehavior behavior;		/* RESTRICT or CASCADE behavior */
 } DropSubscriptionStmt;
+
+typedef struct RowTime
+{
+	NodeTag		type;
+	char	   *start_time;		/* Row start time */
+	char	   *end_time;		/* Row end time */
+}			RowTime;
+
+typedef enum TemporalClauseType
+{
+	AS_OF,
+	BETWEEN_T,
+	BETWEEN_SYMMETRIC,
+	BETWEEN_ASYMMETRIC,
+	FROM_TO
+}			TemporalClauseType;
+
+
+typedef struct TemporalClause
+{
+	NodeTag		type;
+	TemporalClauseType kind;
+	Node	   *relation;
+	Node	   *from;			/* starting time */
+	Node	   *to;				/* ending time */
+}			TemporalClause;
+
 
 #endif							/* PARSENODES_H */

@@ -3202,6 +3202,11 @@ CopyFrom(CopyState cstate)
 					resultRelInfo->ri_RelationDesc->rd_att->constr)
 					ExecConstraints(resultRelInfo, myslot, estate);
 
+				/* Set system time columns */
+				if (resultRelInfo->ri_RelationDesc->rd_att->constr &&
+					resultRelInfo->ri_RelationDesc->rd_att->constr->is_system_versioned)
+					ExecSetRowStartTime(estate, myslot, resultRelInfo);
+
 				/*
 				 * Also check the tuple against the partition constraint, if
 				 * there is one; except that if we got here via tuple-routing,

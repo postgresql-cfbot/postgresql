@@ -1512,7 +1512,7 @@ psql_completion(const char *text, int start, int end)
 		"\\p", "\\password", "\\prompt", "\\pset",
 		"\\q", "\\qecho",
 		"\\r",
-		"\\s", "\\set", "\\setenv", "\\sf", "\\sv",
+		"\\s", "\\set", "\\setenv", "\\sf", "\\sv", "\\si", "\\sm", "\\sr", "\\st",
 		"\\t", "\\T", "\\timing",
 		"\\unset",
 		"\\x",
@@ -4017,6 +4017,21 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_routines, NULL);
 	else if (TailMatchesCS("\\sv*"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_views, NULL);
+	else if (TailMatchesCS("\\si*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_indexes, NULL);
+	else if (TailMatchesCS("\\sm*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_matviews, NULL);
+	else if (TailMatchesCS("\\sr*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
+	else if (TailMatchesCS("\\st*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
+	else if (MatchesCS("\\st*", MatchAny))
+		COMPLETE_WITH("TRIGGER");
+	else if (MatchesCS("\\st*", MatchAny, "TRIGGER"))
+	{
+		completion_info_charp = prev2_wd;
+		COMPLETE_WITH_QUERY(Query_for_trigger_of_table);
+	}
 	else if (TailMatchesCS("\\cd|\\e|\\edit|\\g|\\gx|\\i|\\include|"
 						   "\\ir|\\include_relative|\\o|\\out|"
 						   "\\s|\\w|\\write|\\lo_import"))

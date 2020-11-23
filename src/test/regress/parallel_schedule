@@ -121,3 +121,4 @@ test: fast_default
 
 # run stats by itself because its delay may be insufficient under heavy load
 test: stats
+test: si_st_sm_sr

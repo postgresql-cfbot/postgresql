@@ -861,7 +861,7 @@ rewriteTargetListIU(List *targetList,
 					if (!apply_default)
 						ereport(ERROR,
 								(errcode(ERRCODE_GENERATED_ALWAYS),
-								 errmsg("cannot insert into column \"%s\"",
+								 errmsg("cannot insert a non-DEFAULT value into column \"%s\"",
 										NameStr(att_tup->attname)),
 								 errdetail("Column \"%s\" is an identity column defined as GENERATED ALWAYS.",
 										   NameStr(att_tup->attname)),
@@ -900,7 +900,7 @@ rewriteTargetListIU(List *targetList,
 				if (!apply_default)
 					ereport(ERROR,
 							(errcode(ERRCODE_SYNTAX_ERROR),
-							 errmsg("cannot insert into column \"%s\"",
+							 errmsg("cannot insert a non-DEFAULT value into column \"%s\"",
 									NameStr(att_tup->attname)),
 							 errdetail("Column \"%s\" is a generated column.",
 									   NameStr(att_tup->attname))));

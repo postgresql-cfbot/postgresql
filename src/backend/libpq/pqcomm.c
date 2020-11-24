@@ -530,18 +530,20 @@ StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 		err = bind(fd, addr->ai_addr, addr->ai_addrlen);
 		if (err < 0)
 		{
+			int			saved_errno = errno;
+
 			ereport(LOG,
 					(errcode_for_socket_access(),
 			/* translator: first %s is IPv4, IPv6, or Unix */
 					 errmsg("could not bind %s address \"%s\": %m",
 							familyDesc, addrDesc),
-					 (IS_AF_UNIX(addr->ai_family)) ?
-					 errhint("Is another postmaster already running on port %d?"
-							 " If not, remove socket file \"%s\" and retry.",
-							 (int) portNumber, service) :
-					 errhint("Is another postmaster already running on port %d?"
-							 " If not, wait a few seconds and retry.",
-							 (int) portNumber)));
+					 saved_errno == EADDRINUSE ?
+					 (IS_AF_UNIX(addr->ai_family) ?
+					  errhint("Is another postmaster already running on port %d?",
+							  (int) portNumber) :
+					  errhint("Is another postmaster already running on port %d?"
+							  " If not, wait a few seconds and retry.",
+							  (int) portNumber)) : 0));
 			closesocket(fd);
 			continue;
 		}
@@ -611,6 +613,10 @@ StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 static int
 Lock_AF_UNIX(const char *unixSocketDir, const char *unixSocketPath)
 {
+	/* no lock file for abstract sockets */
+	if (unixSocketPath[0] == '@')
+		return STATUS_OK;
+
 	/*
 	 * Grab an interlock file associated with the socket file.
 	 *
@@ -642,6 +648,10 @@ Lock_AF_UNIX(const char *unixSocketDir, const char *unixSocketPath)
 static int
 Setup_AF_UNIX(const char *sock_path)
 {
+	/* no file system permissions for abstract sockets */
+	if (sock_path[0] == '@')
+		return STATUS_OK;
+
 	/*
 	 * Fix socket ownership/permission if requested.  Note we must do this
 	 * before we listen() to avoid a window where unwanted connections could

@@ -20,8 +20,10 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/table.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_constraint.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
@@ -39,6 +41,7 @@
 #include "optimizer/plancat.h"
 #include "optimizer/planmain.h"
 #include "parser/analyze.h"
+#include "parser/parsetree.h"
 #include "parser/parse_agg.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_func.h"
@@ -50,6 +53,7 @@
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/rel.h"
 #include "utils/syscache.h"
 #include "utils/typcache.h"
 
@@ -61,6 +65,14 @@ typedef struct
 	AggClauseCosts *costs;
 } get_agg_clause_costs_context;
 
+typedef struct check_null_side_state
+{
+	Relids		relids;			/* base relids within this subtree */
+	bool		contains_outer; /* does subtree contain outer join(s)? */
+	JoinType	jointype;		/* type of join */
+	List	   *sub_states;		/* List of states for subtree components */
+}			check_null_side_state;
+
 typedef struct
 {
 	ParamListInfo boundParams;
@@ -68,6 +80,7 @@ typedef struct
 	List	   *active_fns;
 	Node	   *case_val;
 	bool		estimate;
+	check_null_side_state *state;
 } eval_const_expressions_context;
 
 typedef struct
@@ -156,6 +169,9 @@ static Query *substitute_actual_srf_parameters(Query *expr,
 											   int nargs, List *args);
 static Node *substitute_actual_srf_parameters_mutator(Node *node,
 													  substitute_actual_srf_parameters_context *context);
+static bool check_null_side(PlannerInfo *root, int relid, eval_const_expressions_context *context);
+static check_null_side_state * collect_jointree_data(Node *jtnode);
+
 
 
 /*****************************************************************************
@@ -2296,6 +2312,7 @@ eval_const_expressions(PlannerInfo *root, Node *node)
 	context.active_fns = NIL;	/* nothing being recursively simplified */
 	context.case_val = NULL;	/* no CASE being examined */
 	context.estimate = false;	/* safe transformations only */
+	context.state= NULL;
 	return eval_const_expressions_mutator(node, &context);
 }
 
@@ -2626,6 +2643,7 @@ eval_const_expressions_mutator(Node *node,
 					{
 						has_null_input |= ((Const *) lfirst(arg))->constisnull;
 						all_null_input &= ((Const *) lfirst(arg))->constisnull;
+
 					}
 					else
 						has_nonconst_input = true;
@@ -3382,7 +3400,52 @@ eval_const_expressions_mutator(Node *node,
 
 					return makeBoolConst(result, false);
 				}
+				if (IsA(arg, Var) &&
+					((Var *) arg)->varlevelsup == 0 && context->root)
+				{
+					/*
+					 * Evaluate the test if it is on NOT NULL Constraint column and the
+					 * relation is not mentioned on nullable side of outer
+					 * join
+					 */
+					Var		   *var = (Var *) arg;
+					Query	   *parse = context->root->parse;
+					int			relid;
+					RangeTblEntry *rte;
 
+					relid = var->varno;
+					rte = rt_fetch(relid, parse->rtable);
+					if (rte->relkind ==RELKIND_RELATION)
+					{
+						Relation        rel;
+						Form_pg_attribute att;
+						rel = table_open(rte->relid, NoLock);
+						att = TupleDescAttr(rel->rd_att, var->varattno - 1);
+
+						if (att->attnotnull && !check_null_side(context->root, relid, context))
+						{
+							bool		result;
+
+							switch (ntest->nulltesttype)
+							{
+								case IS_NULL:
+									result = false;
+									break;
+								case IS_NOT_NULL:
+									result = true;
+									break;
+								default:
+									elog(ERROR, "unrecognized nulltesttype: %d",
+										 (int) ntest->nulltesttype);
+									result = false; /* keep compiler quiet */
+									break;
+							}
+							table_close(rel,NoLock);
+							return makeBoolConst(result, false);
+						}
+						table_close(rel,NoLock);
+					}
+				}
 				newntest = makeNode(NullTest);
 				newntest->arg = (Expr *) arg;
 				newntest->nulltesttype = ntest->nulltesttype;
@@ -3570,6 +3633,131 @@ eval_const_expressions_mutator(Node *node,
 	 * known to this routine.
 	 */
 	return ece_generic_processing(node);
+}
+
+/*
+ * Check a relation attributes on nullable side of the outer join.
+ */
+static bool
+check_null_side(PlannerInfo *root, int relid, eval_const_expressions_context *context)
+{
+	ListCell   *l;
+	check_null_side_state *state	 = context->state;
+
+	if (!state)
+	{
+		state = collect_jointree_data((Node *) root->parse->jointree);
+		context->state = state;
+	}
+
+	/* if no outer joins the relation is not on nullable side */
+	if (state == NULL || !state->contains_outer)
+		return false;
+
+	/* scan the state and check relation on nullable outer join side */
+	foreach(l, state->sub_states)
+	{
+		check_null_side_state *sub_state = (check_null_side_state *) lfirst(l);
+
+		if (sub_state->contains_outer)
+		{
+			if (sub_state->jointype == JOIN_LEFT)
+			{
+				check_null_side_state *right_state = (check_null_side_state *) lsecond(sub_state->sub_states);
+
+				if (bms_is_member(relid, right_state->relids))
+					return true;
+			}
+
+			if (sub_state->jointype == JOIN_RIGHT)
+			{
+				check_null_side_state *left_state = (check_null_side_state *) linitial(sub_state->sub_states);
+
+				if (bms_is_member(relid, left_state->relids))
+					return true;
+			}
+
+			if (sub_state->jointype == JOIN_FULL)
+			{
+				check_null_side_state *left_state = (check_null_side_state *) linitial(sub_state->sub_states);
+				check_null_side_state *right_state = (check_null_side_state *) lsecond(sub_state->sub_states);
+
+				if (bms_is_member(relid, left_state->relids) ||bms_is_member(relid, right_state->relids))
+					return true;
+			}
+
+		}
+	}
+	return false;
+}
+
+/*
+ * Collecting data about join. this function is similar to reduce_outer_joins_pass1
+ *
+ * Returns a state node describing the given jointree node.
+ */
+static check_null_side_state *
+collect_jointree_data(Node *jtnode)
+{
+	check_null_side_state *result;
+
+	result = (check_null_side_state *)
+		palloc(sizeof(check_null_side_state));
+	result->relids = NULL;
+	result->contains_outer = false;
+	result->sub_states = NIL;
+
+	if (jtnode == NULL)
+		return result;
+	if (IsA(jtnode, RangeTblRef))
+	{
+		int			varno = ((RangeTblRef *) jtnode)->rtindex;
+
+		result->relids = bms_make_singleton(varno);
+	}
+	else if (IsA(jtnode, FromExpr))
+	{
+		FromExpr   *f = (FromExpr *) jtnode;
+		ListCell   *l;
+
+		foreach(l, f->fromlist)
+		{
+			check_null_side_state *sub_state;
+
+			sub_state = collect_jointree_data(lfirst(l));
+			result->relids = bms_add_members(result->relids,
+											 sub_state->relids);
+			result->contains_outer |= sub_state->contains_outer;
+			result->sub_states = lappend(result->sub_states, sub_state);
+		}
+	}
+	else if (IsA(jtnode, JoinExpr))
+	{
+		JoinExpr   *j = (JoinExpr *) jtnode;
+		check_null_side_state *sub_state;
+
+		/* join's own RT index is not wanted in result->relids */
+		if (IS_OUTER_JOIN(j->jointype))
+			result->contains_outer = true;
+
+		sub_state = collect_jointree_data(j->larg);
+		result->jointype = j->jointype;
+		result->relids = bms_add_members(result->relids,
+										 sub_state->relids);
+		sub_state->contains_outer |= sub_state->contains_outer;
+		result->sub_states = lappend(result->sub_states, sub_state);
+
+		sub_state = collect_jointree_data(j->rarg);
+		result->jointype = j->jointype;
+		result->relids = bms_add_members(result->relids,
+										 sub_state->relids);
+		result->contains_outer |= sub_state->contains_outer;
+		result->sub_states = lappend(result->sub_states, sub_state);
+	}
+	else
+		elog(ERROR, "unrecognized node type: %d",
+			 (int) nodeTag(jtnode));
+	return result;
 }
 
 /*

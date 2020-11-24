@@ -903,6 +903,37 @@ select unique1, unique2 from onek2
        0 |     998
 (2 rows)
 
+CREATE TEMP TABLE a (id int PRIMARY KEY, name text NOT NULL);
+explain (costs off)
+SELECT * FROM a WHERE id IS NULL;
+        QUERY PLAN        
+--------------------------
+ Result
+   One-Time Filter: false
+(2 rows)
+
+explain (costs off)
+SELECT * FROM a WHERE id IS NOT NULL;
+  QUERY PLAN   
+---------------
+ Seq Scan on a
+(1 row)
+
+explain (costs off)
+SELECT * FROM a WHERE name IS NOT NULL;
+  QUERY PLAN   
+---------------
+ Seq Scan on a
+(1 row)
+
+explain (costs off)
+SELECT * FROM a WHERE name IS NULL;
+        QUERY PLAN        
+--------------------------
+ Result
+   One-Time Filter: false
+(2 rows)
+
 --
 -- Test some corner cases that have been known to confuse the planner
 --

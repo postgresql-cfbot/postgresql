@@ -47,7 +47,6 @@ typedef struct Tuplestorestate Tuplestorestate;
 extern Tuplestorestate *tuplestore_begin_heap(bool randomAccess,
 											  bool interXact,
 											  int maxKBytes);
-
 extern void tuplestore_set_eflags(Tuplestorestate *state, int eflags);
 
 extern void tuplestore_puttupleslot(Tuplestorestate *state,
@@ -72,8 +71,11 @@ extern bool tuplestore_in_memory(Tuplestorestate *state);
 
 extern bool tuplestore_gettupleslot(Tuplestorestate *state, bool forward,
 									bool copy, TupleTableSlot *slot);
+extern bool tuplestore_gettupleslot_heaptuple(Tuplestorestate *state, bool forward,
+											  bool copy, TupleTableSlot *slot);
 
 extern bool tuplestore_advance(Tuplestorestate *state, bool forward);
+
 
 extern bool tuplestore_skiptuples(Tuplestorestate *state,
 								  int64 ntuples, bool forward);

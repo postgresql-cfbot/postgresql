@@ -495,6 +495,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	row explicit_row implicit_row type_list array_expr_list
 %type <node>	case_expr case_arg when_clause case_default
 %type <list>	when_clause_list
+%type <node>	opt_search_clause opt_cycle_clause
 %type <ival>	sub_type opt_materialized
 %type <value>	NumericOnly
 %type <list>	NumericOnly_list
@@ -631,7 +632,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ASSERTION ASSIGNMENT ASYMMETRIC AT ATTACH ATTRIBUTE AUTHORIZATION
 
 	BACKWARD BEFORE BEGIN_P BETWEEN BIGINT BINARY BIT
-	BOOLEAN_P BOTH BY
+	BOOLEAN_P BOTH BREADTH BY
 
 	CACHE CALL CALLED CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
 	CHARACTER CHARACTERISTICS CHECK CHECKPOINT CLASS CLOSE
@@ -643,7 +644,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER CURSOR CYCLE
 
 	DATA_P DATABASE DAY_P DEALLOCATE DEC DECIMAL_P DECLARE DEFAULT DEFAULTS
-	DEFERRABLE DEFERRED DEFINER DELETE_P DELIMITER DELIMITERS DEPENDS DESC
+	DEFERRABLE DEFERRED DEFINER DELETE_P DELIMITER DELIMITERS DEPENDS DEPTH DESC
 	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
 	DOUBLE_P DROP
 
@@ -11338,8 +11339,6 @@ simple_select:
  * WITH [ RECURSIVE ] <query name> [ (<column>,...) ]
  *		AS (query) [ SEARCH or CYCLE clause ]
  *
- * We don't currently support the SEARCH or CYCLE clause.
- *
  * Recognizing WITH_LA here allows a CTE to be named TIME or ORDINALITY.
  */
 with_clause:
@@ -11371,13 +11370,15 @@ cte_list:
 		| cte_list ',' common_table_expr		{ $$ = lappend($1, $3); }
 		;
 
-common_table_expr:  name opt_name_list AS opt_materialized '(' PreparableStmt ')'
+common_table_expr:  name opt_name_list AS opt_materialized '(' PreparableStmt ')' opt_search_clause opt_cycle_clause
 			{
 				CommonTableExpr *n = makeNode(CommonTableExpr);
 				n->ctename = $1;
 				n->aliascolnames = $2;
 				n->ctematerialized = $4;
 				n->ctequery = $6;
+				n->search_clause = castNode(CTESearchClause, $8);
+				n->cycle_clause = castNode(CTECycleClause, $9);
 				n->location = @1;
 				$$ = (Node *) n;
 			}
@@ -11387,6 +11388,49 @@ opt_materialized:
 		MATERIALIZED							{ $$ = CTEMaterializeAlways; }
 		| NOT MATERIALIZED						{ $$ = CTEMaterializeNever; }
 		| /*EMPTY*/								{ $$ = CTEMaterializeDefault; }
+		;
+
+opt_search_clause:
+		SEARCH DEPTH FIRST_P BY columnList SET ColId
+			{
+				CTESearchClause *n = makeNode(CTESearchClause);
+				n->search_col_list = $5;
+				n->search_breadth_first = false;
+				n->search_seq_column = $7;
+				n->location = @1;
+				$$ = (Node *) n;
+			}
+		| SEARCH BREADTH FIRST_P BY columnList SET ColId
+			{
+				CTESearchClause *n = makeNode(CTESearchClause);
+				n->search_col_list = $5;
+				n->search_breadth_first = true;
+				n->search_seq_column = $7;
+				n->location = @1;
+				$$ = (Node *) n;
+			}
+		| /*EMPTY*/
+			{
+				$$ = NULL;
+			}
+		;
+
+opt_cycle_clause:
+		CYCLE columnList SET ColId TO AexprConst DEFAULT AexprConst USING ColId
+			{
+				CTECycleClause *n = makeNode(CTECycleClause);
+				n->cycle_col_list = $2;
+				n->cycle_mark_column = $4;
+				n->cycle_mark_value = $6;
+				n->cycle_mark_default = $8;
+				n->cycle_path_column = $10;
+				n->location = @1;
+				$$ = (Node *) n;
+			}
+		| /*EMPTY*/
+			{
+				$$ = NULL;
+			}
 		;
 
 opt_with_clause:
@@ -15157,6 +15201,7 @@ unreserved_keyword:
 			| BACKWARD
 			| BEFORE
 			| BEGIN_P
+			| BREADTH
 			| BY
 			| CACHE
 			| CALL
@@ -15201,6 +15246,7 @@ unreserved_keyword:
 			| DELIMITER
 			| DELIMITERS
 			| DEPENDS
+			| DEPTH
 			| DETACH
 			| DICTIONARY
 			| DISABLE_P
@@ -15668,6 +15714,7 @@ bare_label_keyword:
 			| BIT
 			| BOOLEAN_P
 			| BOTH
+			| BREADTH
 			| BY
 			| CACHE
 			| CALL
@@ -15732,6 +15779,7 @@ bare_label_keyword:
 			| DELIMITER
 			| DELIMITERS
 			| DEPENDS
+			| DEPTH
 			| DESC
 			| DETACH
 			| DICTIONARY

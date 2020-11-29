@@ -1568,29 +1568,68 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		double		startup_ms = 1000.0 * planstate->instrument->startup / nloops;
 		double		total_ms = 1000.0 * planstate->instrument->total / nloops;
 		double		rows = planstate->instrument->ntuples / nloops;
+		double		min_r = planstate->instrument->min_tuples;
+		double		max_r = planstate->instrument->max_tuples;
+		double		min_t_ms = 1000.0 * planstate->instrument->min_t;
+		double		max_t_ms = 1000.0 * planstate->instrument->max_t;
 
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 		{
-			if (es->timing)
-				appendStringInfo(es->str,
-								 " (actual time=%.3f..%.3f rows=%.0f loops=%.0f)",
-								 startup_ms, total_ms, rows, nloops);
+			if (nloops > 1 && es->verbose)
+			{
+				if (es->timing)
+					appendStringInfo(es->str,
+									 " (actual time=%.3f..%.3f min_time=%.3f max_time=%.3f min_rows=%.0f rows=%.0f max_rows=%.0f loops=%.0f)",
+									 startup_ms, total_ms, min_t_ms, max_t_ms, min_r, rows, max_r, nloops);
+				else
+					appendStringInfo(es->str,
+									 " (actual min_rows=%.0f rows=%.0f max_rows=%.0f loops=%.0f)",
+									 min_r, rows, max_r, nloops);
+			}
 			else
-				appendStringInfo(es->str,
-								 " (actual rows=%.0f loops=%.0f)",
-								 rows, nloops);
+			{
+				if (es->timing)
+					appendStringInfo(es->str,
+									 " (actual time=%.3f..%.3f rows=%.0f loops=%.0f)",
+									 startup_ms, total_ms, rows, nloops);
+				else
+					appendStringInfo(es->str,
+									 " (actual rows=%.0f loops=%.0f)",
+									 rows, nloops);
+			}
 		}
 		else
 		{
-			if (es->timing)
+			if (nloops > 1 && es->verbose)
 			{
-				ExplainPropertyFloat("Actual Startup Time", "s", startup_ms,
-									 3, es);
-				ExplainPropertyFloat("Actual Total Time", "s", total_ms,
-									 3, es);
+				if (es->timing)
+				{
+					ExplainPropertyFloat("Actual Startup Time", "s", startup_ms,
+										 3, es);
+					ExplainPropertyFloat("Actual Total Time", "s", total_ms,
+										 3, es);
+					ExplainPropertyFloat("Min Time", "s", min_t_ms,
+										 3, es);
+					ExplainPropertyFloat("Max Time", "s", max_t_ms,
+										 3, es);
+				}
+				ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+				ExplainPropertyFloat("Min Rows", NULL, rows, 0, es);
+				ExplainPropertyFloat("Max Rows", NULL, rows, 0, es);
+				ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
 			}
-			ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
-			ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
+			else
+			{
+				if (es->timing)
+				{
+					ExplainPropertyFloat("Actual Startup Time", "s", startup_ms,
+										 3, es);
+					ExplainPropertyFloat("Actual Total Time", "s", total_ms,
+										 3, es);
+				}
+				ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+				ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
+			}
 		}
 	}
 	else if (es->analyze)
@@ -1599,6 +1638,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			appendStringInfoString(es->str, " (never executed)");
 		else
 		{
+			/* without min and max values because actual result is 0 */
 			if (es->timing)
 			{
 				ExplainPropertyFloat("Actual Startup Time", "ms", 0.0, 3, es);
@@ -1624,39 +1664,82 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			double		nloops = instrument->nloops;
 			double		startup_ms;
 			double		total_ms;
+			double		min_t_ms;
+			double		max_t_ms;
 			double		rows;
+			double		min_r;
+			double		max_r;
 
 			if (nloops <= 0)
 				continue;
 			startup_ms = 1000.0 * instrument->startup / nloops;
 			total_ms = 1000.0 * instrument->total / nloops;
+			min_t_ms = 1000.0 * instrument->min_t;
+			max_t_ms = 1000.0 * instrument->max_t;
 			rows = instrument->ntuples / nloops;
+			min_r = instrument->min_tuples;
+			max_r = instrument->max_tuples;
 
 			ExplainOpenWorker(n, es);
 
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 			{
 				ExplainIndentText(es);
-				if (es->timing)
-					appendStringInfo(es->str,
-									 "actual time=%.3f..%.3f rows=%.0f loops=%.0f\n",
-									 startup_ms, total_ms, rows, nloops);
+				if (nloops > 1)
+				{
+					if (es->timing)
+						appendStringInfo(es->str,
+										 "actual time=%.3f..%.3f min_time=%.3f  max_time=%.3f min_rows=%.0f rows=%.0f max_rows=%.0f loops=%.0f\n",
+										 startup_ms, total_ms, min_t_ms, max_t_ms, min_r, rows, max_r, nloops);
+					else
+						appendStringInfo(es->str,
+										 "actual min_rows=%.0f rows=%.0f max_rows=%.0f loops=%.0f\n",
+										 min_r, rows, max_r, nloops);
+				}
 				else
-					appendStringInfo(es->str,
-									 "actual rows=%.0f loops=%.0f\n",
-									 rows, nloops);
+				{
+					if (es->timing)
+						appendStringInfo(es->str,
+										 "actual time=%.3f..%.3f rows=%.0f loops=%.0f\n",
+										 startup_ms, total_ms, rows, nloops);
+					else
+						appendStringInfo(es->str,
+										 "actual rows=%.0f loops=%.0f\n",
+										 rows, nloops);
+				}
 			}
 			else
 			{
-				if (es->timing)
+				if (nloops > 1)
 				{
-					ExplainPropertyFloat("Actual Startup Time", "ms",
-										 startup_ms, 3, es);
-					ExplainPropertyFloat("Actual Total Time", "ms",
-										 total_ms, 3, es);
+					if (es->timing)
+					{
+						ExplainPropertyFloat("Actual Startup Time", "ms",
+											 startup_ms, 3, es);
+						ExplainPropertyFloat("Actual Total Time", "ms",
+											 total_ms, 3, es);
+						ExplainPropertyFloat("Min Time", "ms",
+											 min_t_ms, 3, es);
+						ExplainPropertyFloat("Max Time", "ms",
+											 max_t_ms, 3, es);
+					}
+					ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+					ExplainPropertyFloat("Min Rows", NULL, rows, 0, es);
+					ExplainPropertyFloat("Max Rows", NULL, rows, 0, es);
+					ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
 				}
-				ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
-				ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
+				else
+				{
+					if (es->timing)
+					{
+						ExplainPropertyFloat("Actual Startup Time", "ms",
+											 startup_ms, 3, es);
+						ExplainPropertyFloat("Actual Total Time", "ms",
+											 total_ms, 3, es);
+					}
+					ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+					ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
+				}
 			}
 
 			ExplainCloseWorker(n, es);
@@ -3094,7 +3177,7 @@ show_hashagg_info(AggState *aggstate, ExplainState *es)
 			if (aggstate->hash_batches_used > 1)
 			{
 				appendStringInfo(es->str, "  Disk Usage: " UINT64_FORMAT "kB",
-					aggstate->hash_disk_used);
+								 aggstate->hash_disk_used);
 			}
 		}
 

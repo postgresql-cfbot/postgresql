@@ -95,4 +95,11 @@ extern void ResourceOwnerRememberJIT(ResourceOwner owner,
 extern void ResourceOwnerForgetJIT(ResourceOwner owner,
 								   Datum handle);
 
+/* support for EVP context management */
+extern void ResourceOwnerEnlargeEVP(ResourceOwner owner);
+extern void ResourceOwnerRememberEVP(ResourceOwner owner,
+									 Datum handle);
+extern void ResourceOwnerForgetEVP(ResourceOwner owner,
+								   Datum handle);
+
 #endif							/* RESOWNER_PRIVATE_H */

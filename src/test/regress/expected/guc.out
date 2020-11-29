@@ -776,3 +776,12 @@ set default_with_oids to f;
 -- Should not allow to set it to true.
 set default_with_oids to t;
 ERROR:  tables declared WITH OIDS are not supported
+-- check pg_setting_value_split()
+SELECT setting FROM pg_setting_value_split('foo,bar,"baz ,"');
+ setting 
+---------
+ foo
+ bar
+ baz ,
+(3 rows)
+

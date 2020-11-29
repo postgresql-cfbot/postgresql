@@ -296,3 +296,7 @@ reset check_function_bodies;
 set default_with_oids to f;
 -- Should not allow to set it to true.
 set default_with_oids to t;
+
+-- check pg_setting_value_split()
+
+SELECT setting FROM pg_setting_value_split('foo,bar,"baz ,"');

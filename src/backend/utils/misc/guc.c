@@ -9850,6 +9850,93 @@ show_all_file_settings(PG_FUNCTION_ARGS)
 	return (Datum) 0;
 }
 
+/*
+ * setting_value_split
+ *
+ * Given a GUC such as "shared_preload_libraries" which may contain a
+ * comma-separated list of values, split these into individual items
+ * using SplitDirectoriesString and return as a list.
+ */
+Datum
+setting_value_split(PG_FUNCTION_ARGS)
+{
+#define NUM_PG_SETTINGS_VALUE_SPLIT_ATTS 1
+	text	   *setting;
+	char	   *rawstring;
+	List	   *elemlist;
+	ListCell   *l;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+
+	/* Check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not " \
+						"allowed in this context")));
+
+	if (PG_ARGISNULL(0))
+		PG_RETURN_NULL();
+
+	setting = PG_GETARG_TEXT_PP(0);
+	rawstring = pstrdup(TextDatumGetCString(setting));
+
+	/* Parse string into list of filename paths */
+	if (!SplitDirectoriesString(rawstring, ',', &elemlist))
+	{
+		/* syntax error in list */
+		list_free_deep(elemlist);
+		pfree(rawstring);
+
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("invalid list syntax")));
+	}
+
+	/* Switch into long-lived context to construct returned data structures */
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	/* Build a tuple descriptor for our result type */
+	tupdesc = CreateTemplateTupleDesc(NUM_PG_SETTINGS_VALUE_SPLIT_ATTS);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "setting",
+					   TEXTOID, -1, 0);
+
+	/* Build a tuplestore to return our results in */
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	/* The rest can be done in short-lived context */
+	MemoryContextSwitchTo(oldcontext);
+
+	foreach(l, elemlist)
+	{
+		Datum		values[NUM_PG_SETTINGS_VALUE_SPLIT_ATTS];
+		bool		nulls[NUM_PG_SETTINGS_VALUE_SPLIT_ATTS];
+
+		memset(values, 0, sizeof(values));
+		memset(nulls, 0, sizeof(nulls));
+		values[0] = PointerGetDatum(cstring_to_text((char *) lfirst(l)));
+
+		/* Place row into tuplestore */
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+	tuplestore_donestoring(tupstore);
+	pfree(rawstring);
+
+	return (Datum) 0;
+}
+
 static char *
 _ShowOption(struct config_generic *record, bool use_units)
 {

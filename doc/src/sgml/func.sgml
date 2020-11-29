@@ -23865,6 +23865,55 @@ SELECT collation for ('foo' COLLATE "de_DE");
     </tgroup>
    </table>
 
+   <para>
+     <xref linkend="functions-admin-config-parse-table"/> shows the function
+     available to parse run-time configuration parameters.
+   </para>
+
+   <table id="functions-admin-config-parse-table">
+    <title>Configuration Parameter Parsing Function</title>
+    <tgroup cols="3">
+     <thead>
+      <row><entry>Name</entry> <entry>Return Type</entry> <entry>Description</entry></row>
+     </thead>
+     <tbody>
+      <row>
+       <entry>
+        <indexterm>
+         <primary>pg_setting_value_split</primary>
+        </indexterm>
+        <literal><function>pg_setting_value_split(<parameter>setting</parameter>)</function></literal>
+       </entry>
+       <entry><type>setof text</type></entry>
+       <entry>split a parameter value into a set of <type>text</type> columns</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+   <para>
+     The function <function>pg_setting_value_split</function> takes a comma-separated list of values
+     (as would be provided as library names for the configuration parameters
+     <parameter>local_preload_libraries</parameter>, <parameter>session_preload_libraries</parameter> and
+     <parameter>shared_preload_libraries</parameter>, or as directory names for the configuration
+     parameter <parameter>unix_socket_directories</parameter>) and returns them as a set of
+     <type>text</type> columns, in the order they occur in the list. An example:
+<programlisting>
+SELECT setting FROM pg_setting_value_split('foo,bar,"baz ,"');
+
+ setting
+---------
+ foo
+ bar
+ baz ,
+(3 rows)
+
+</programlisting>
+    This function parses the comma-separated list as it would be when PostgreSQL parses
+    the configuration file, and is a reliable way of determining the presence of a
+    particular item in the list.
+   </para>
+
+
   </sect2>
 
   <sect2 id="functions-admin-signal">

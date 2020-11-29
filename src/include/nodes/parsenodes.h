@@ -3347,10 +3347,11 @@ typedef struct ConstraintsSetStmt
  */
 
 /* Reindex options */
-#define REINDEXOPT_VERBOSE (1 << 0) /* print progress info */
+#define REINDEXOPT_VERBOSE	(1 << 0) /* print progress info */
 #define REINDEXOPT_REPORT_PROGRESS (1 << 1) /* report pgstat progress */
-#define REINDEXOPT_MISSING_OK (1 << 2)	/* skip missing relations */
-#define REINDEXOPT_CONCURRENTLY (1 << 3)	/* concurrent mode */
+#define REINDEXOPT_MISSING_OK	(1 << 2)	/* skip missing relations */
+#define REINDEXOPT_CONCURRENTLY	(1 << 3)	/* concurrent mode */
+#define REINDEXOPT_SKIPVALID	(1 << 4)	/* skip valid indexes */
 
 typedef enum ReindexObjectType
 {

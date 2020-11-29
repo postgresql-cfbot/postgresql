@@ -472,3 +472,12 @@ select jsonb_pretty(
 (1 row)
 
 rollback;
+set compute_queryid = on;
+select explain_filter('explain (verbose) select 1');
+             explain_filter             
+----------------------------------------
+ Result  (cost=N.N..N.N rows=N width=N)
+   Output: N
+ Query Identifier: -N
+(3 rows)
+

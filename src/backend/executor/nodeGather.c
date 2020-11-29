@@ -172,7 +172,8 @@ ExecGather(PlanState *pstate)
 												 estate,
 												 gather->initParam,
 												 gather->num_workers,
-												 node->tuples_needed);
+												 node->tuples_needed,
+												 pgstat_get_my_queryid());
 			else
 				ExecParallelReinitialize(node->ps.lefttree,
 										 node->pei,

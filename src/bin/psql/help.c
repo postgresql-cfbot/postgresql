@@ -238,7 +238,7 @@ slashUsage(unsigned short int pager)
 	fprintf(output, _("  \\dd[S]  [PATTERN]      show object descriptions not displayed elsewhere\n"));
 	fprintf(output, _("  \\dD[S+] [PATTERN]      list domains\n"));
 	fprintf(output, _("  \\ddp    [PATTERN]      list default privileges\n"));
-	fprintf(output, _("  \\dE[S+] [PATTERN]      list foreign tables\n"));
+	fprintf(output, _("  \\dE[S+] [PATTERN]      list foreign relations\n"));
 	fprintf(output, _("  \\det[+] [PATTERN]      list foreign tables\n"));
 	fprintf(output, _("  \\des[+] [PATTERN]      list foreign servers\n"));
 	fprintf(output, _("  \\deu[+] [PATTERN]      list user mappings\n"));

@@ -20,6 +20,10 @@
  */
 #include "postgres.h"
 
+#ifdef USE_OPENSSL
+#include <openssl/evp.h>
+#endif
+
 #include "common/hashfn.h"
 #include "jit/jit.h"
 #include "storage/bufmgr.h"
@@ -128,6 +132,7 @@ typedef struct ResourceOwnerData
 	ResourceArray filearr;		/* open temporary files */
 	ResourceArray dsmarr;		/* dynamic shmem segments */
 	ResourceArray jitarr;		/* JIT contexts */
+	ResourceArray evparr;		/* EVP contexts */
 
 	/* We can remember up to MAX_RESOWNER_LOCKS references to local locks. */
 	int			nlocks;			/* number of owned locks */
@@ -175,6 +180,7 @@ static void PrintTupleDescLeakWarning(TupleDesc tupdesc);
 static void PrintSnapshotLeakWarning(Snapshot snapshot);
 static void PrintFileLeakWarning(File file);
 static void PrintDSMLeakWarning(dsm_segment *seg);
+static void PrintEVPLeakWarning(Datum handle);
 
 
 /*****************************************************************************
@@ -444,6 +450,7 @@ ResourceOwnerCreate(ResourceOwner parent, const char *name)
 	ResourceArrayInit(&(owner->filearr), FileGetDatum(-1));
 	ResourceArrayInit(&(owner->dsmarr), PointerGetDatum(NULL));
 	ResourceArrayInit(&(owner->jitarr), PointerGetDatum(NULL));
+	ResourceArrayInit(&(owner->evparr), PointerGetDatum(NULL));
 
 	return owner;
 }
@@ -552,6 +559,17 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 			JitContext *context = (JitContext *) PointerGetDatum(foundres);
 
 			jit_release_context(context);
+		}
+
+		/* Ditto for EVP contexts */
+		while (ResourceArrayGetAny(&(owner->evparr), &foundres))
+		{
+			if (isCommit)
+				PrintEVPLeakWarning(foundres);
+#ifdef USE_OPENSSL
+			EVP_MD_CTX_destroy((EVP_MD_CTX *) DatumGetPointer(foundres));
+#endif
+			ResourceOwnerForgetEVP(owner, foundres);
 		}
 	}
 	else if (phase == RESOURCE_RELEASE_LOCKS)
@@ -725,6 +743,7 @@ ResourceOwnerDelete(ResourceOwner owner)
 	Assert(owner->filearr.nitems == 0);
 	Assert(owner->dsmarr.nitems == 0);
 	Assert(owner->jitarr.nitems == 0);
+	Assert(owner->evparr.nitems == 0);
 	Assert(owner->nlocks == 0 || owner->nlocks == MAX_RESOWNER_LOCKS + 1);
 
 	/*
@@ -752,6 +771,7 @@ ResourceOwnerDelete(ResourceOwner owner)
 	ResourceArrayFree(&(owner->filearr));
 	ResourceArrayFree(&(owner->dsmarr));
 	ResourceArrayFree(&(owner->jitarr));
+	ResourceArrayFree(&(owner->evparr));
 
 	pfree(owner);
 }
@@ -1369,4 +1389,49 @@ ResourceOwnerForgetJIT(ResourceOwner owner, Datum handle)
 	if (!ResourceArrayRemove(&(owner->jitarr), handle))
 		elog(ERROR, "JIT context %p is not owned by resource owner %s",
 			 DatumGetPointer(handle), owner->name);
+}
+
+/*
+ * Make sure there is room for at least one more entry in a ResourceOwner's
+ * EVP context reference array.
+ *
+ * This is separate from actually inserting an entry because if we run out of
+ * memory, it's critical to do so *before* acquiring the resource.
+ */
+void
+ResourceOwnerEnlargeEVP(ResourceOwner owner)
+{
+	ResourceArrayEnlarge(&(owner->evparr));
+}
+
+/*
+ * Remember that an EVP context is owned by a ResourceOwner
+ *
+ * Caller must have previously done ResourceOwnerEnlargeEVP()
+ */
+void
+ResourceOwnerRememberEVP(ResourceOwner owner, Datum handle)
+{
+	ResourceArrayAdd(&(owner->evparr), handle);
+}
+
+/*
+ * Forget that an EVP context is owned by a ResourceOwner
+ */
+void
+ResourceOwnerForgetEVP(ResourceOwner owner, Datum handle)
+{
+	if (!ResourceArrayRemove(&(owner->evparr), handle))
+		elog(ERROR, "EVP context %p is not owned by resource owner %s",
+			 DatumGetPointer(handle), owner->name);
+}
+
+/*
+ * Debugging subroutine
+ */
+static void
+PrintEVPLeakWarning(Datum handle)
+{
+	elog(WARNING, "EVP context reference leak: context %p still referenced",
+		 DatumGetPointer(handle));
 }

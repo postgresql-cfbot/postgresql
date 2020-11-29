@@ -38,6 +38,7 @@
 #include "px.h"
 #include "utils/memutils.h"
 #include "utils/resowner.h"
+#include "utils/resowner_private.h"
 
 /*
  * Max lengths we might want to handle.
@@ -49,66 +50,11 @@
  * Hashes
  */
 
-/*
- * To make sure we don't leak OpenSSL handles on abort, we keep OSSLDigest
- * objects in a linked list, allocated in TopMemoryContext. We use the
- * ResourceOwner mechanism to free them on abort.
- */
 typedef struct OSSLDigest
 {
 	const EVP_MD *algo;
 	EVP_MD_CTX *ctx;
-
-	ResourceOwner owner;
-	struct OSSLDigest *next;
-	struct OSSLDigest *prev;
 } OSSLDigest;
-
-static OSSLDigest *open_digests = NULL;
-static bool digest_resowner_callback_registered = false;
-
-static void
-free_openssl_digest(OSSLDigest *digest)
-{
-	EVP_MD_CTX_destroy(digest->ctx);
-	if (digest->prev)
-		digest->prev->next = digest->next;
-	else
-		open_digests = digest->next;
-	if (digest->next)
-		digest->next->prev = digest->prev;
-	pfree(digest);
-}
-
-/*
- * Close any open OpenSSL handles on abort.
- */
-static void
-digest_free_callback(ResourceReleasePhase phase,
-					 bool isCommit,
-					 bool isTopLevel,
-					 void *arg)
-{
-	OSSLDigest *curr;
-	OSSLDigest *next;
-
-	if (phase != RESOURCE_RELEASE_AFTER_LOCKS)
-		return;
-
-	next = open_digests;
-	while (next)
-	{
-		curr = next;
-		next = curr->next;
-
-		if (curr->owner == CurrentResourceOwner)
-		{
-			if (isCommit)
-				elog(WARNING, "pgcrypto digest reference leak: digest %p still referenced", curr);
-			free_openssl_digest(curr);
-		}
-	}
-}
 
 static unsigned
 digest_result_size(PX_MD *h)
@@ -155,7 +101,10 @@ digest_free(PX_MD *h)
 {
 	OSSLDigest *digest = (OSSLDigest *) h->p.ptr;
 
-	free_openssl_digest(digest);
+	EVP_MD_CTX_destroy(digest->ctx);
+	ResourceOwnerForgetEVP(CurrentResourceOwner,
+						   PointerGetDatum(digest->ctx));
+	pfree(digest);
 	pfree(h);
 }
 
@@ -177,42 +126,26 @@ px_find_digest(const char *name, PX_MD **res)
 		OpenSSL_add_all_algorithms();
 	}
 
-	if (!digest_resowner_callback_registered)
-	{
-		RegisterResourceReleaseCallback(digest_free_callback, NULL);
-		digest_resowner_callback_registered = true;
-	}
-
 	md = EVP_get_digestbyname(name);
 	if (md == NULL)
 		return PXE_NO_HASH;
 
-	/*
-	 * Create an OSSLDigest object, an OpenSSL MD object, and a PX_MD object.
-	 * The order is crucial, to make sure we don't leak anything on
-	 * out-of-memory or other error.
-	 */
-	digest = MemoryContextAlloc(TopMemoryContext, sizeof(*digest));
-
 	ctx = EVP_MD_CTX_create();
 	if (!ctx)
-	{
-		pfree(digest);
 		return -1;
-	}
+
 	if (EVP_DigestInit_ex(ctx, md, NULL) == 0)
 	{
 		EVP_MD_CTX_destroy(ctx);
-		pfree(digest);
 		return -1;
 	}
 
+	ResourceOwnerEnlargeEVP(CurrentResourceOwner);
+	ResourceOwnerRememberEVP(CurrentResourceOwner, PointerGetDatum(ctx));
+
+	digest = palloc(sizeof(*digest));
 	digest->algo = md;
 	digest->ctx = ctx;
-	digest->owner = CurrentResourceOwner;
-	digest->next = open_digests;
-	digest->prev = NULL;
-	open_digests = digest;
 
 	/* The PX_MD object is allocated in the current memory context. */
 	h = palloc(sizeof(*h));

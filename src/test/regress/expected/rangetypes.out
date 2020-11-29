@@ -378,6 +378,18 @@ select range_adjacent(numrange(2.0, 3.0, '(]'), numrange(1.0, 2.0, '(]'));
  t
 (1 row)
 
+select numrange(1.0, 2.0) -|- 2.0;
+ ?column? 
+----------
+ t
+(1 row)
+
+select 2.0 -|- numrange(2.0, 3.0,'()');
+ ?column? 
+----------
+ t
+(1 row)
+
 select numrange(1.1, 3.3) <@ numrange(0.1,10.1);
  ?column? 
 ----------
@@ -432,6 +444,18 @@ select numrange(1.0, 2.0) << numrange(3.0, 4.0);
  t
 (1 row)
 
+select numrange(1.0, 2.0) << 3.0;
+ ?column? 
+----------
+ t
+(1 row)
+
+select 2.0 << numrange(3.0, 4.0);
+ ?column? 
+----------
+ t
+(1 row)
+
 select numrange(1.0, 3.0,'[]') << numrange(3.0, 4.0,'[]');
  ?column? 
 ----------
@@ -450,7 +474,49 @@ select numrange(1.0, 2.0) >> numrange(3.0, 4.0);
  f
 (1 row)
 
+select numrange(1.0, 2.0) >> 3.0;
+ ?column? 
+----------
+ f
+(1 row)
+
+select 2.0 >> numrange(3.0, 4.0);
+ ?column? 
+----------
+ f
+(1 row)
+
 select numrange(3.0, 70.0) &< numrange(6.6, 100.0);
+ ?column? 
+----------
+ t
+(1 row)
+
+select numrange(3.0, 70.0) &< 6.6;
+ ?column? 
+----------
+ f
+(1 row)
+
+select 70.0 &< numrange(6.6, 100.0);
+ ?column? 
+----------
+ t
+(1 row)
+
+select numrange(3.0, 70.0) &> numrange(6.6, 100.0);
+ ?column? 
+----------
+ f
+(1 row)
+
+select numrange(3.0, 70.0) &> 6.6;
+ ?column? 
+----------
+ f
+(1 row)
+
+select 70.0 &> numrange(6.6, 100.0);
  ?column? 
 ----------
  t
@@ -819,10 +885,22 @@ select count(*) from test_range_gist where ir << int4range(100,500);
    189
 (1 row)
 
+select count(*) from test_range_gist where ir << 100;
+ count 
+-------
+   189
+(1 row)
+
 select count(*) from test_range_gist where ir >> int4range(100,500);
  count 
 -------
   3554
+(1 row)
+
+select count(*) from test_range_gist where ir >> 100;
+ count 
+-------
+  4791
 (1 row)
 
 select count(*) from test_range_gist where ir &< int4range(100,500);
@@ -831,7 +909,19 @@ select count(*) from test_range_gist where ir &< int4range(100,500);
   1029
 (1 row)
 
+select count(*) from test_range_gist where ir &< 100;
+ count 
+-------
+   189
+(1 row)
+
 select count(*) from test_range_gist where ir &> int4range(100,500);
+ count 
+-------
+  4794
+(1 row)
+
+select count(*) from test_range_gist where ir &> 100;
  count 
 -------
   4794
@@ -841,6 +931,12 @@ select count(*) from test_range_gist where ir -|- int4range(100,500);
  count 
 -------
      5
+(1 row)
+
+select count(*) from test_range_gist where ir -|- 100;
+ count 
+-------
+     6
 (1 row)
 
 -- now check same queries using index
@@ -889,10 +985,22 @@ select count(*) from test_range_gist where ir << int4range(100,500);
    189
 (1 row)
 
+select count(*) from test_range_gist where ir << 100;
+ count 
+-------
+   189
+(1 row)
+
 select count(*) from test_range_gist where ir >> int4range(100,500);
  count 
 -------
   3554
+(1 row)
+
+select count(*) from test_range_gist where ir >> 100;
+ count 
+-------
+  4791
 (1 row)
 
 select count(*) from test_range_gist where ir &< int4range(100,500);
@@ -901,7 +1009,19 @@ select count(*) from test_range_gist where ir &< int4range(100,500);
   1029
 (1 row)
 
+select count(*) from test_range_gist where ir &< 100;
+ count 
+-------
+   189
+(1 row)
+
 select count(*) from test_range_gist where ir &> int4range(100,500);
+ count 
+-------
+  4794
+(1 row)
+
+select count(*) from test_range_gist where ir &> 100;
  count 
 -------
   4794
@@ -911,6 +1031,12 @@ select count(*) from test_range_gist where ir -|- int4range(100,500);
  count 
 -------
      5
+(1 row)
+
+select count(*) from test_range_gist where ir -|- 100;
+ count 
+-------
+     6
 (1 row)
 
 -- now check same queries using a bulk-loaded index
@@ -958,10 +1084,22 @@ select count(*) from test_range_gist where ir << int4range(100,500);
    189
 (1 row)
 
+select count(*) from test_range_gist where ir << 100;
+ count 
+-------
+   189
+(1 row)
+
 select count(*) from test_range_gist where ir >> int4range(100,500);
  count 
 -------
   3554
+(1 row)
+
+select count(*) from test_range_gist where ir >> 100;
+ count 
+-------
+  4791
 (1 row)
 
 select count(*) from test_range_gist where ir &< int4range(100,500);
@@ -970,7 +1108,19 @@ select count(*) from test_range_gist where ir &< int4range(100,500);
   1029
 (1 row)
 
+select count(*) from test_range_gist where ir &< 100;
+ count 
+-------
+   189
+(1 row)
+
 select count(*) from test_range_gist where ir &> int4range(100,500);
+ count 
+-------
+  4794
+(1 row)
+
+select count(*) from test_range_gist where ir &> 100;
  count 
 -------
   4794
@@ -980,6 +1130,12 @@ select count(*) from test_range_gist where ir -|- int4range(100,500);
  count 
 -------
      5
+(1 row)
+
+select count(*) from test_range_gist where ir -|- 100;
+ count 
+-------
+     6
 (1 row)
 
 -- test SP-GiST index that's been built incrementally
@@ -1038,10 +1194,22 @@ select count(*) from test_range_spgist where ir << int4range(100,500);
    189
 (1 row)
 
+select count(*) from test_range_spgist where ir << 100;
+ count 
+-------
+   189
+(1 row)
+
 select count(*) from test_range_spgist where ir >> int4range(100,500);
  count 
 -------
   3554
+(1 row)
+
+select count(*) from test_range_spgist where ir >> 100;
+ count 
+-------
+  4791
 (1 row)
 
 select count(*) from test_range_spgist where ir &< int4range(100,500);
@@ -1050,7 +1218,19 @@ select count(*) from test_range_spgist where ir &< int4range(100,500);
   1029
 (1 row)
 
+select count(*) from test_range_spgist where ir &< 100;
+ count 
+-------
+   189
+(1 row)
+
 select count(*) from test_range_spgist where ir &> int4range(100,500);
+ count 
+-------
+  4794
+(1 row)
+
+select count(*) from test_range_spgist where ir &> 100;
  count 
 -------
   4794
@@ -1060,6 +1240,12 @@ select count(*) from test_range_spgist where ir -|- int4range(100,500);
  count 
 -------
      5
+(1 row)
+
+select count(*) from test_range_spgist where ir -|- 100;
+ count 
+-------
+     6
 (1 row)
 
 -- now check same queries using index
@@ -1108,10 +1294,22 @@ select count(*) from test_range_spgist where ir << int4range(100,500);
    189
 (1 row)
 
+select count(*) from test_range_spgist where ir << 100;
+ count 
+-------
+   189
+(1 row)
+
 select count(*) from test_range_spgist where ir >> int4range(100,500);
  count 
 -------
   3554
+(1 row)
+
+select count(*) from test_range_spgist where ir >> 100;
+ count 
+-------
+  4791
 (1 row)
 
 select count(*) from test_range_spgist where ir &< int4range(100,500);
@@ -1120,7 +1318,19 @@ select count(*) from test_range_spgist where ir &< int4range(100,500);
   1029
 (1 row)
 
+select count(*) from test_range_spgist where ir &< 100;
+ count 
+-------
+   189
+(1 row)
+
 select count(*) from test_range_spgist where ir &> int4range(100,500);
+ count 
+-------
+  4794
+(1 row)
+
+select count(*) from test_range_spgist where ir &> 100;
  count 
 -------
   4794
@@ -1130,6 +1340,12 @@ select count(*) from test_range_spgist where ir -|- int4range(100,500);
  count 
 -------
      5
+(1 row)
+
+select count(*) from test_range_spgist where ir -|- 100;
+ count 
+-------
+     6
 (1 row)
 
 -- now check same queries using a bulk-loaded index
@@ -1177,10 +1393,22 @@ select count(*) from test_range_spgist where ir << int4range(100,500);
    189
 (1 row)
 
+select count(*) from test_range_spgist where ir << 100;
+ count 
+-------
+   189
+(1 row)
+
 select count(*) from test_range_spgist where ir >> int4range(100,500);
  count 
 -------
   3554
+(1 row)
+
+select count(*) from test_range_spgist where ir >> 100;
+ count 
+-------
+  4791
 (1 row)
 
 select count(*) from test_range_spgist where ir &< int4range(100,500);
@@ -1189,7 +1417,19 @@ select count(*) from test_range_spgist where ir &< int4range(100,500);
   1029
 (1 row)
 
+select count(*) from test_range_spgist where ir &< 100;
+ count 
+-------
+   189
+(1 row)
+
 select count(*) from test_range_spgist where ir &> int4range(100,500);
+ count 
+-------
+  4794
+(1 row)
+
+select count(*) from test_range_spgist where ir &> 100;
  count 
 -------
   4794
@@ -1199,6 +1439,12 @@ select count(*) from test_range_spgist where ir -|- int4range(100,500);
  count 
 -------
      5
+(1 row)
+
+select count(*) from test_range_spgist where ir -|- 100;
+ count 
+-------
+     6
 (1 row)
 
 -- test index-only scans

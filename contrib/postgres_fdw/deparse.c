@@ -320,7 +320,9 @@ foreign_expr_walker(Node *node,
 
 				/*
 				 * If the Var is from the foreign table, we consider its
-				 * collation (if any) safe to use.  If it is from another
+				 * collation (if any) safe to use, *unless* it's
+				 * DEFAULT_COLLATION_OID.  We treat that as meaning "we don't
+				 * know which collation this is".  If it is from another
 				 * table, we treat its collation the same way as we would a
 				 * Param's collation, ie it's not safe for it to have a
 				 * non-default collation.
@@ -342,7 +344,12 @@ foreign_expr_walker(Node *node,
 
 					/* Else check the collation */
 					collation = var->varcollid;
-					state = OidIsValid(collation) ? FDW_COLLATE_SAFE : FDW_COLLATE_NONE;
+					if (collation == InvalidOid)
+						state = FDW_COLLATE_NONE;
+					else if (collation == DEFAULT_COLLATION_OID)
+						state = FDW_COLLATE_UNSAFE;
+					else
+						state = FDW_COLLATE_SAFE;
 				}
 				else
 				{
@@ -808,8 +815,24 @@ foreign_expr_walker(Node *node,
 
 	/*
 	 * Now, merge my collation information into my parent's state.
+	 *
+	 * If one branch of an expression derives a non-default collation safely
+	 * (that is, from a foreign Var) and another one derives the same
+	 * collation unsafely, we can consider the expression safe overall.  This
+	 * allows cases such as "foreign_var = ('foo' COLLATE x)" where x is the
+	 * same collation the foreign_var has anyway.  Note that we will not ship
+	 * any explicit COLLATE clause to the remote, but rely on it to re-derive
+	 * the correct collation based on the foreign_var.
 	 */
-	if (state > outer_cxt->state)
+	if (collation == outer_cxt->collation &&
+		((state == FDW_COLLATE_UNSAFE &&
+		  outer_cxt->state == FDW_COLLATE_SAFE) ||
+		 (state == FDW_COLLATE_SAFE &&
+		  outer_cxt->state == FDW_COLLATE_UNSAFE)))
+	{
+		outer_cxt->state = FDW_COLLATE_SAFE;
+	}
+	else if (state > outer_cxt->state)
 	{
 		/* Override previous parent state */
 		outer_cxt->collation = collation;

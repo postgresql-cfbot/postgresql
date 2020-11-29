@@ -1444,6 +1444,15 @@ tuplesort_free(Tuplesortstate *state)
 void
 tuplesort_end(Tuplesortstate *state)
 {
+	/*
+	 * Leader explicitly cleans up shared filesets.
+	 * This would normally be cleaned up by DestroyParallelContext(), but
+	 * doing it now avoids leaving files behind if an error/timeout happens
+	 * *during* cleanup.
+	 */
+	if (state->shared && state->shared->workersFinished == state->nParticipants)
+		SharedFileSetDeleteAll(&state->shared->fileset);
+
 	tuplesort_free(state);
 
 	/*

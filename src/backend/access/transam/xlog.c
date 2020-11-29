@@ -8694,6 +8694,7 @@ CreateCheckPoint(int flags)
 	XLogRecPtr	last_important_lsn;
 	VirtualTransactionId *vxids;
 	int			nvxids;
+	StringInfoData ps_status;
 
 	/*
 	 * An end-of-recovery checkpoint is really a shutdown checkpoint, just
@@ -8735,6 +8736,21 @@ CreateCheckPoint(int flags)
 	 */
 	MemSet(&CheckpointStats, 0, sizeof(CheckpointStats));
 	CheckpointStats.ckpt_start_t = GetCurrentTimestamp();
+
+
+	/*
+	 * Set string to use for the ps status display.  This cannot be
+	 * built within a critical section, and the display is set when
+	 * the checkpoint is really starting.
+	 */
+	initStringInfo(&ps_status);
+	appendStringInfoString(&ps_status, "running ");
+
+	if ((flags & CHECKPOINT_END_OF_RECOVERY) != 0)
+		appendStringInfoString(&ps_status, "end-of-recovery ");
+	if ((flags & CHECKPOINT_IS_SHUTDOWN) != 0)
+		appendStringInfoString(&ps_status, "shutdown ");
+	appendStringInfoString(&ps_status, "checkpoint");
 
 	/*
 	 * Use a critical section to force system panic if we have trouble.
@@ -8868,6 +8884,13 @@ CreateCheckPoint(int flags)
 	 */
 	if (log_checkpoints)
 		LogCheckpointStart(flags, false);
+
+	/*
+	 * Set ps display status, step postponed until now as the checkpoint
+	 * could have been skipped.
+	 */
+	set_ps_display(ps_status.data);
+	pfree(ps_status.data);
 
 	TRACE_POSTGRESQL_CHECKPOINT_START(flags);
 
@@ -9084,6 +9107,13 @@ CreateCheckPoint(int flags)
 	/* Real work is done, but log and update stats before releasing lock. */
 	LogCheckpointEnd(false);
 
+	/*
+	 * Reset the ps status display.  "idle" or similar is not used here
+	 * as this can be called in the startup process, which could be
+	 * confusing.
+	 */
+	set_ps_display("");
+
 	TRACE_POSTGRESQL_CHECKPOINT_DONE(CheckpointStats.ckpt_bufs_written,
 									 NBuffers,
 									 CheckpointStats.ckpt_segs_added,
@@ -9246,6 +9276,7 @@ CreateRestartPoint(int flags)
 	XLogRecPtr	endptr;
 	XLogSegNo	_logSegNo;
 	TimestampTz xtime;
+	StringInfoData ps_status;
 
 	/*
 	 * Acquire CheckpointLock to ensure only one restartpoint or checkpoint
@@ -9337,6 +9368,16 @@ CreateRestartPoint(int flags)
 
 	if (log_checkpoints)
 		LogCheckpointStart(flags, true);
+
+	/* Set ps status display for the process running the checkpoint */
+	initStringInfo(&ps_status);
+	appendStringInfoString(&ps_status, "running ");
+	if ((flags & CHECKPOINT_IS_SHUTDOWN) != 0)
+		appendStringInfoString(&ps_status, "shutdown ");
+	appendStringInfoString(&ps_status, "restartpoint");
+
+	set_ps_display(ps_status.data);
+	pfree(ps_status.data);
 
 	CheckPointGuts(lastCheckPoint.redo, flags);
 
@@ -9455,6 +9496,13 @@ CreateRestartPoint(int flags)
 
 	/* Real work is done, but log and update before releasing lock. */
 	LogCheckpointEnd(true);
+
+	/*
+	 * Reset the ps status display.  "idle" or similar is not used here
+	 * as this can be called in the startup process, which could be
+	 * confusing.
+	 */
+	set_ps_display("");
 
 	xtime = GetLatestXTime();
 	ereport((log_checkpoints ? LOG : DEBUG2),

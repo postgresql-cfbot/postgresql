@@ -89,9 +89,9 @@ static List *ChooseIndexColumnNames(List *indexElems);
 static void RangeVarCallbackForReindexIndex(const RangeVar *relation,
 											Oid relId, Oid oldRelId, void *arg);
 static void reindex_error_callback(void *args);
-static void ReindexPartitions(Oid relid, int options, bool isTopLevel);
-static void ReindexMultipleInternal(List *relids, int options);
-static bool ReindexRelationConcurrently(Oid relationOid, int options);
+static void ReindexPartitions(Oid relid, int options, bool isTopLevel, char *tablespace);
+static void ReindexMultipleInternal(List *relids, int options, Oid tablespaceOid);
+static bool ReindexRelationConcurrently(Oid relationOid, int options, Oid tablespaceOid);
 static void update_relispartition(Oid relationId, bool newval);
 static inline void set_indexsafe_procflags(void);
 
@@ -2454,10 +2454,12 @@ ChooseIndexColumnNames(List *indexElems)
  *		Recreate a specific index.
  */
 void
-ReindexIndex(RangeVar *indexRelation, int options, bool isTopLevel)
+ReindexIndex(RangeVar *indexRelation, int options, bool isTopLevel, char *tablespace)
 {
 	struct ReindexIndexCallbackState state;
 	Oid			indOid;
+	Oid			tablespaceOid = tablespace ?
+			get_tablespace_oid(tablespace, false) : InvalidOid;
 	char		persistence;
 	char		relkind;
 
@@ -2488,13 +2490,14 @@ ReindexIndex(RangeVar *indexRelation, int options, bool isTopLevel)
 	relkind = get_rel_relkind(indOid);
 
 	if (relkind == RELKIND_PARTITIONED_INDEX)
-		ReindexPartitions(indOid, options, isTopLevel);
+		ReindexPartitions(indOid, options, isTopLevel, tablespace);
 	else if ((options & REINDEXOPT_CONCURRENTLY) != 0 &&
 			 persistence != RELPERSISTENCE_TEMP)
-		ReindexRelationConcurrently(indOid, options);
+		ReindexRelationConcurrently(indOid, options, tablespaceOid);
 	else
 		reindex_index(indOid, false, persistence,
-					  options | REINDEXOPT_REPORT_PROGRESS);
+					  options | REINDEXOPT_REPORT_PROGRESS,
+					  tablespaceOid);
 }
 
 /*
@@ -2573,10 +2576,12 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
  *		Recreate all indexes of a table (and of its toast table, if any)
  */
 Oid
-ReindexTable(RangeVar *relation, int options, bool isTopLevel)
+ReindexTable(RangeVar *relation, int options, bool isTopLevel, char *tablespace)
 {
 	Oid			heapOid;
 	bool		result;
+	Oid 		tablespaceOid = tablespace ?
+		get_tablespace_oid(tablespace, false) : InvalidOid;
 
 	/*
 	 * The lock level used here should match reindex_relation().
@@ -2593,11 +2598,11 @@ ReindexTable(RangeVar *relation, int options, bool isTopLevel)
 									   RangeVarCallbackOwnsTable, NULL);
 
 	if (get_rel_relkind(heapOid) == RELKIND_PARTITIONED_TABLE)
-		ReindexPartitions(heapOid, options, isTopLevel);
+		ReindexPartitions(heapOid, options, isTopLevel, tablespace);
 	else if ((options & REINDEXOPT_CONCURRENTLY) != 0 &&
 			 get_rel_persistence(heapOid) != RELPERSISTENCE_TEMP)
 	{
-		result = ReindexRelationConcurrently(heapOid, options);
+		result = ReindexRelationConcurrently(heapOid, options, tablespaceOid);
 
 		if (!result)
 			ereport(NOTICE,
@@ -2609,7 +2614,8 @@ ReindexTable(RangeVar *relation, int options, bool isTopLevel)
 		result = reindex_relation(heapOid,
 								  REINDEX_REL_PROCESS_TOAST |
 								  REINDEX_REL_CHECK_CONSTRAINTS,
-								  options | REINDEXOPT_REPORT_PROGRESS);
+								  options | REINDEXOPT_REPORT_PROGRESS,
+								  tablespaceOid);
 		if (!result)
 			ereport(NOTICE,
 					(errmsg("table \"%s\" has no indexes to reindex",
@@ -2629,7 +2635,7 @@ ReindexTable(RangeVar *relation, int options, bool isTopLevel)
  */
 void
 ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
-					  int options)
+					  int options, char *tablespace)
 {
 	Oid			objectOid;
 	Relation	relationRelation;
@@ -2640,7 +2646,12 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 	MemoryContext old;
 	List	   *relids = NIL;
 	int			num_keys;
+
 	bool		concurrent_warning = false;
+	bool		tablespace_warning = false;
+	bool		mapped_warning = false;
+	Oid			tablespaceOid = tablespace ?
+		tablespaceOid = get_tablespace_oid(tablespace, false) : InvalidOid;
 
 	AssertArg(objectName);
 	Assert(objectKind == REINDEX_OBJECT_SCHEMA ||
@@ -2767,6 +2778,35 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 			continue;
 		}
 
+		if (OidIsValid(tablespaceOid) &&
+			IsSystemClass(relid, classtuple))
+		{
+			if (!allowSystemTableMods)
+			{
+				/* Skip all system relations, if not allowSystemTableMods */
+				if (!tablespace_warning)
+					ereport(WARNING,
+							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+							 errmsg("cannot change tablespace of indexes on system relations, skipping all")));
+				tablespace_warning = true;
+				continue;
+			}
+			else if (!OidIsValid(classtuple->relfilenode))
+			{
+				/*
+				 * Skip all mapped relations if TABLESPACE is specified.
+				 * OidIsValid(relfilenode) checks that, similar to
+				 * RelationIsMapped().
+				 */
+				if (!mapped_warning)
+					ereport(WARNING,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot change tablespace of indexes on mapped relations, skipping all")));
+				mapped_warning = true;
+				continue;
+			}
+		}
+
 		/* Save the list of relation OIDs in private context */
 		old = MemoryContextSwitchTo(private_context);
 
@@ -2791,7 +2831,7 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 	 * Process each relation listed in a separate transaction.  Note that this
 	 * commits and then starts a new transaction immediately.
 	 */
-	ReindexMultipleInternal(relids, options);
+	ReindexMultipleInternal(relids, options, tablespaceOid);
 
 	MemoryContextDelete(private_context);
 }
@@ -2822,7 +2862,7 @@ reindex_error_callback(void *arg)
  * by the caller.
  */
 static void
-ReindexPartitions(Oid relid, int options, bool isTopLevel)
+ReindexPartitions(Oid relid, int options, bool isTopLevel, char *tablespace)
 {
 	List	   *partitions = NIL;
 	char		relkind = get_rel_relkind(relid);
@@ -2833,6 +2873,8 @@ ReindexPartitions(Oid relid, int options, bool isTopLevel)
 	ListCell   *lc;
 	ErrorContextCallback errcallback;
 	ReindexErrorInfo errinfo;
+	Oid			tablespaceOid = tablespace ?
+		get_tablespace_oid(tablespace, false) : InvalidOid;
 
 	Assert(relkind == RELKIND_PARTITIONED_INDEX ||
 		   relkind == RELKIND_PARTITIONED_TABLE);
@@ -2880,9 +2922,27 @@ ReindexPartitions(Oid relid, int options, bool isTopLevel)
 		MemoryContext old_context;
 
 		/*
-		 * This discards partitioned tables, partitioned indexes and foreign
-		 * tables.
+		 * Foreign tables and partitioned relations are not themselves
+		 * reindexed - leaf partitions are processed directly.  But any
+		 * tablespace change is recorded in the catalog for partitioned
+		 * relations.
 		 */
+		if (partkind == RELKIND_PARTITIONED_INDEX)
+			(void) set_rel_tablespace(partoid, tablespaceOid);
+		else if (partkind == RELKIND_PARTITIONED_TABLE)
+		{
+			Relation rel = table_open(partoid, ShareLock);
+			List	*indexIds = RelationGetIndexList(rel);
+			ListCell *lc;
+
+			table_close(rel, NoLock);
+			foreach (lc, indexIds)
+			{
+				Oid indexid = lfirst_oid(lc);
+				(void) set_rel_tablespace(indexid, tablespaceOid);
+			}
+		}
+
 		if (!RELKIND_HAS_STORAGE(partkind))
 			continue;
 
@@ -2899,7 +2959,7 @@ ReindexPartitions(Oid relid, int options, bool isTopLevel)
 	 * Process each partition listed in a separate transaction.  Note that
 	 * this commits and then starts a new transaction immediately.
 	 */
-	ReindexMultipleInternal(partitions, options);
+	ReindexMultipleInternal(partitions, options, tablespaceOid);
 
 	/*
 	 * Clean up working storage --- note we must do this after
@@ -2917,7 +2977,7 @@ ReindexPartitions(Oid relid, int options, bool isTopLevel)
  * and starts a new transaction when finished.
  */
 static void
-ReindexMultipleInternal(List *relids, int options)
+ReindexMultipleInternal(List *relids, int options, Oid tablespaceOid)
 {
 	ListCell   *l;
 
@@ -2958,7 +3018,8 @@ ReindexMultipleInternal(List *relids, int options)
 		{
 			(void) ReindexRelationConcurrently(relid,
 											   options |
-											   REINDEXOPT_MISSING_OK);
+											   REINDEXOPT_MISSING_OK,
+											   tablespaceOid);
 			/* ReindexRelationConcurrently() does the verbose output */
 		}
 		else if (relkind == RELKIND_INDEX)
@@ -2966,7 +3027,7 @@ ReindexMultipleInternal(List *relids, int options)
 			reindex_index(relid, false, relpersistence,
 						  options |
 						  REINDEXOPT_REPORT_PROGRESS |
-						  REINDEXOPT_MISSING_OK);
+						  REINDEXOPT_MISSING_OK, tablespaceOid);
 			PopActiveSnapshot();
 			/* reindex_index() does the verbose output */
 		}
@@ -2979,7 +3040,8 @@ ReindexMultipleInternal(List *relids, int options)
 									  REINDEX_REL_CHECK_CONSTRAINTS,
 									  options |
 									  REINDEXOPT_REPORT_PROGRESS |
-									  REINDEXOPT_MISSING_OK);
+									  REINDEXOPT_MISSING_OK,
+									  tablespaceOid);
 
 			if (result && (options & REINDEXOPT_VERBOSE))
 				ereport(INFO,
@@ -3007,6 +3069,9 @@ ReindexMultipleInternal(List *relids, int options)
  * but including its associated toast table indexes.  For indexes, the index
  * itself will be rebuilt.
  *
+ * 'tablespaceOid' is the tablespace where the relation's indexes will be
+ * rebuilt.
+ *
  * The locks taken on parent tables and involved indexes are kept until the
  * transaction is committed, at which point a session lock is taken on each
  * relation.  Both of these protect against concurrent schema changes.
@@ -3021,7 +3086,7 @@ ReindexMultipleInternal(List *relids, int options)
  * anyway, and a non-concurrent reindex is more efficient.
  */
 static bool
-ReindexRelationConcurrently(Oid relationOid, int options)
+ReindexRelationConcurrently(Oid relationOid, int options, Oid tablespaceOid)
 {
 	List	   *heapRelationIds = NIL;
 	List	   *indexIds = NIL;
@@ -3276,6 +3341,13 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 		return false;
 	}
 
+	/* It's not a shared catalog, so refuse to move it to shared tablespace */
+	if (tablespaceOid == GLOBALTABLESPACE_OID)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot move non-shared relation to tablespace \"%s\"",
+					 get_tablespace_name(tablespaceOid))));
+
 	Assert(heapRelationIds != NIL);
 
 	/*-----
@@ -3339,6 +3411,7 @@ ReindexRelationConcurrently(Oid relationOid, int options)
 		/* Create new index definition based on given index */
 		newIndexId = index_concurrently_create_copy(heapRel,
 													indexId,
+													tablespaceOid,
 													concurrentName);
 
 		/*

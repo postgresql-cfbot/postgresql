@@ -512,6 +512,10 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 OR b = '
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 OR b = ''1'' OR c = 1 OR d IS NOT NULL');
 
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a > c');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a < c');
+
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IN (1, 2, 51, 52) AND b IN ( ''1'', ''2'')');
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IN (1, 2, 51, 52, NULL) AND b IN ( ''1'', ''2'', NULL)');
@@ -560,6 +564,10 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a <= 4 AND b <
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 4 >= a AND ''0'' >= b AND 4 >= c');
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 OR b = ''1'' OR c = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a > c');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a < c');
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IN (1, 2, 51, 52) AND b IN ( ''1'', ''2'')');
 
@@ -671,6 +679,8 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 OR b = '
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IS NULL AND (b = ''x'' OR d = ''x'')');
 
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE b = d');
+
 -- create statistics
 CREATE STATISTICS mcv_lists_stats (mcv) ON a, b, d FROM mcv_lists;
 
@@ -688,6 +698,8 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE b = ''x'' OR d
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 OR b = ''x'' OR d = ''x''');
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IS NULL AND (b = ''x'' OR d = ''x'')');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE b = d');
 
 -- mcv with pass-by-ref fixlen types, e.g. uuid
 CREATE TABLE mcv_lists_uuid (
@@ -764,6 +776,10 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a AND
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a AND b AND NOT c');
 
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a = b');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a = b AND b = c');
+
 CREATE STATISTICS mcv_lists_bool_stats (mcv) ON a, b, c
   FROM mcv_lists_bool;
 
@@ -776,6 +792,10 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a AND
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a AND NOT b AND c');
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a AND b AND NOT c');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a = b');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a = b AND b = c');
 
 -- check the ability to use multiple MCV lists
 CREATE TABLE mcv_lists_multi (
@@ -800,6 +820,9 @@ ANALYZE mcv_lists_multi;
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a = 0 AND b = 0');
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE c = 0 AND d = 0');
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a = 0 AND b = 0 AND c = 0 AND d = 0');
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a = b AND c = d');
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a < b');
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a <= b');
 
 -- create separate MCV statistics
 CREATE STATISTICS mcv_lists_multi_1 (mcv) ON a, b FROM mcv_lists_multi;
@@ -810,6 +833,9 @@ ANALYZE mcv_lists_multi;
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a = 0 AND b = 0');
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE c = 0 AND d = 0');
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a = 0 AND b = 0 AND c = 0 AND d = 0');
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a = b AND c = d');
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a < b');
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a <= b');
 
 DROP TABLE mcv_lists_multi;
 

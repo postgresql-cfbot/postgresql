@@ -987,14 +987,18 @@ statext_is_compatible_clause_internal(PlannerInfo *root, Node *clause,
 	{
 		RangeTblEntry *rte = root->simple_rte_array[relid];
 		OpExpr	   *expr = (OpExpr *) clause;
-		Var		   *var;
+		Var		   *var,
+				   *var2;
 
 		/* Only expressions with two arguments are considered compatible. */
 		if (list_length(expr->args) != 2)
 			return false;
 
-		/* Check if the expression has the right shape (one Var, one Const) */
-		if (!examine_clause_args(expr->args, &var, NULL, NULL))
+		/*
+		 * Check if the expression has the right shape (one Var and one Const,
+		 * or two Vars).
+		 */
+		if (!examine_clause_args(expr->args, &var, &var2, NULL, NULL))
 			return false;
 
 		/*
@@ -1034,7 +1038,20 @@ statext_is_compatible_clause_internal(PlannerInfo *root, Node *clause,
 			!get_func_leakproof(get_opcode(expr->opno)))
 			return false;
 
-		return statext_is_compatible_clause_internal(root, (Node *) var,
+		/*
+		 * Check compatibility of the first Var - we get this one for both
+		 * types of supported expressions (Var op Const) and (Var op Var).
+		 */
+		if (!statext_is_compatible_clause_internal(root, (Node *) var,
+												   relid, attnums))
+			return false;
+
+		/* For (Var op Const) we don't get the second Var, and we're done. */
+		if (!var2)
+			return true;
+
+		/* For (Var op Var) check compatibility of the second Var. */
+		return statext_is_compatible_clause_internal(root, (Node *) var2,
 													 relid, attnums);
 	}
 
@@ -1050,7 +1067,7 @@ statext_is_compatible_clause_internal(PlannerInfo *root, Node *clause,
 			return false;
 
 		/* Check if the expression has the right shape (one Var, one Const) */
-		if (!examine_clause_args(expr->args, &var, NULL, NULL))
+		if (!examine_clause_args(expr->args, &var, NULL, NULL, NULL))
 			return false;
 
 		/*
@@ -1446,22 +1463,24 @@ statext_clauselist_selectivity(PlannerInfo *root, List *clauses, int varRelid,
 }
 
 /*
- * examine_opclause_expression
+ * examine_clause_args
  *		Split expression into Var and Const parts.
  *
- * Attempts to match the arguments to either (Var op Const) or (Const op Var),
- * possibly with a RelabelType on top. When the expression matches this form,
- * returns true, otherwise returns false.
+ * Attempts to match the arguments to either (Var op Const) or (Const op Var)
+ * or (Var op Var), possibly with a RelabelType on top. When the expression
+ * matches this form, returns true, otherwise returns false.
  *
  * Optionally returns pointers to the extracted Var/Const nodes, when passed
  * non-null pointers (varp, cstp and varonleftp). The varonleftp flag specifies
  * on which side of the operator we found the Var node.
  */
 bool
-examine_clause_args(List *args, Var **varp, Const **cstp, bool *varonleftp)
+examine_clause_args(List *args, Var **var1p, Var **var2p, Const **cstp,
+					bool *varonleftp)
 {
-	Var		   *var;
-	Const	   *cst;
+	Var	   *var1 = NULL;
+	Var	   *var2 = NULL;
+	Const  *cst = NULL;
 	bool		varonleft;
 	Node	   *leftop,
 			   *rightop;
@@ -1481,22 +1500,38 @@ examine_clause_args(List *args, Var **varp, Const **cstp, bool *varonleftp)
 
 	if (IsA(leftop, Var) && IsA(rightop, Const))
 	{
-		var = (Var *) leftop;
+		var1 = (Var *) leftop;
 		cst = (Const *) rightop;
 		varonleft = true;
 	}
 	else if (IsA(leftop, Const) && IsA(rightop, Var))
 	{
-		var = (Var *) rightop;
+		var1 = (Var *) rightop;
 		cst = (Const *) leftop;
 		varonleft = false;
+	}
+	else if (IsA(leftop, Var) && IsA(rightop, Var))
+	{
+		var1 = (Var *) leftop;
+		var2 = (Var *) rightop;
+		varonleft = false;
+
+		/*
+		 * Both variables have to be for the same relation (otherwise it's
+		 * a join clause, and we don't deal with those yet.
+		 */
+		if (var1->varno != var2->varno)
+			return false;
 	}
 	else
 		return false;
 
 	/* return pointers to the extracted parts if requested */
-	if (varp)
-		*varp = var;
+	if (var1p)
+		*var1p = var1;
+
+	if (var2p)
+		*var2p = var2;
 
 	if (cstp)
 		*cstp = cst;

@@ -96,7 +96,7 @@ extern SortItem *build_sorted_items(int numrows, int *nitems, HeapTuple *rows,
 									TupleDesc tdesc, MultiSortSupport mss,
 									int numattrs, AttrNumber *attnums);
 
-extern bool examine_clause_args(List *args, Var **varp,
+extern bool examine_clause_args(List *args, Var **var1p, Var **var2p,
 								Const **cstp, bool *varonleftp);
 
 extern Selectivity mcv_clauselist_selectivity(PlannerInfo *root,

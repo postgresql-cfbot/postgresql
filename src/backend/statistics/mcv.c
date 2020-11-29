@@ -1583,13 +1583,17 @@ mcv_get_match_bitmap(PlannerInfo *root, List *clauses,
 
 			/* valid only after examine_clause_args returns true */
 			Var		   *var;
+			Var		   *var2;
 			Const	   *cst;
 			bool		varonleft;
 
 			fmgr_info(get_opcode(expr->opno), &opproc);
 
 			/* extract the var and const from the expression */
-			if (examine_clause_args(expr->args, &var, &cst, &varonleft))
+			if (!examine_clause_args(expr->args, &var, &var2, &cst, &varonleft))
+				continue;
+
+			if (cst)	/* Var op Const */
 			{
 				int			idx;
 
@@ -1653,6 +1657,68 @@ mcv_get_match_bitmap(PlannerInfo *root, List *clauses,
 					matches[i] = RESULT_MERGE(matches[i], is_or, match);
 				}
 			}
+			else	/* Var op Var */
+			{
+				int			idx;
+				int			idx2;
+
+				Assert(var2);
+
+				/* match the attribute to a dimension of the statistic */
+				idx = bms_member_index(keys, var->varattno);
+				idx2 = bms_member_index(keys, var2->varattno);
+
+				/*
+				 * Walk through the MCV items and evaluate the current clause.
+				 * We can skip items that were already ruled out, and
+				 * terminate if there are no remaining MCV items that might
+				 * possibly match.
+				 */
+				for (i = 0; i < mcvlist->nitems; i++)
+				{
+					bool		match = true;
+					MCVItem    *item = &mcvlist->items[i];
+
+					/*
+					 * When either of the MCV items is NULL we can treat this
+					 * as a mismatch. We must not call the operator because
+					 * of strictness.
+					 */
+					if (item->isnull[idx] || item->isnull[idx2])
+					{
+						matches[i] = RESULT_MERGE(matches[i], is_or, false);
+						continue;
+					}
+
+					/*
+					 * Skip MCV items that can't change result in the bitmap.
+					 * Once the value gets false for AND-lists, or true for
+					 * OR-lists, we don't need to look at more clauses.
+					 */
+					if (RESULT_IS_FINAL(matches[i], is_or))
+						continue;
+
+					/*
+					 * First check whether the constant is below the lower
+					 * boundary (in that case we can skip the bucket, because
+					 * there's no overlap).
+					 *
+					 * We don't store collations used to build the statistics,
+					 * but we can use the collation for the attribute itself,
+					 * as stored in varcollid. We do reset the statistics after
+					 * a type change (including collation change), so this is
+					 * OK. We may need to relax this after allowing extended
+					 * statistics on expressions.
+					 */
+					match = DatumGetBool(FunctionCall2Coll(&opproc,
+														   var->varcollid,
+														   item->values[idx],
+														   item->values[idx2]));
+
+					/* update the match bitmap with the result */
+					matches[i] = RESULT_MERGE(matches[i], is_or, match);
+				}
+			}
 		}
 		else if (IsA(clause, ScalarArrayOpExpr))
 		{
@@ -1667,7 +1733,7 @@ mcv_get_match_bitmap(PlannerInfo *root, List *clauses,
 			fmgr_info(get_opcode(expr->opno), &opproc);
 
 			/* extract the var and const from the expression */
-			if (examine_clause_args(expr->args, &var, &cst, &varonleft))
+			if (examine_clause_args(expr->args, &var, NULL, &cst, &varonleft))
 			{
 				int			idx;
 
@@ -1681,6 +1747,7 @@ mcv_get_match_bitmap(PlannerInfo *root, List *clauses,
 
 				/* ScalarArrayOpExpr has the Var always on the left */
 				Assert(varonleft);
+				Assert(cst);
 
 				if (!cst->constisnull)
 				{

@@ -363,12 +363,19 @@ main(int argc, char **argv)
 										restore_command);
 
 			/*
+			 * If the minimum recovery ending location is beyond the end of
+			 * the last checkpoint, that means there are WAL records beyond
+			 * the divergence point and a rewind is needed.
+			 */
+			if (ControlFile_target.minRecoveryPoint > chkptendrec)
+				rewind_needed = true;
+			/*
 			 * If the histories diverged exactly at the end of the shutdown
 			 * checkpoint record on the target, there are no WAL records in
 			 * the target that don't belong in the source's history, and no
 			 * rewind is needed.
 			 */
-			if (chkptendrec == divergerec)
+			else if (chkptendrec == divergerec)
 				rewind_needed = false;
 			else
 				rewind_needed = true;

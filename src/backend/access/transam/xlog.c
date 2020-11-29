@@ -73,6 +73,7 @@
 #include "storage/sync.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/mcxtfuncs.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/relmapper.h"
@@ -6980,6 +6981,12 @@ StartupXLOG(void)
 		 * Reset pgstat data, because it may be invalid after recovery.
 		 */
 		pgstat_reset_all();
+
+		/*
+		 * Reset dumped files in pg_memusage, because target processes do
+		 * not exist any more.
+		 */
+		RemoveMemcxtFile(0);
 
 		/*
 		 * If there was a backup label file, it's done its job and the info

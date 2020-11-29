@@ -4024,6 +4024,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_XACT_GROUP_UPDATE:
 			event_name = "XactGroupUpdate";
 			break;
+		case WAIT_EVENT_MEMORY_CONTEXT_DUMP:
+			event_name = "MemoryContextDump";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 

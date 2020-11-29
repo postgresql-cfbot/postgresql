@@ -6,7 +6,7 @@ use File::Basename qw(basename dirname);
 use File::Path qw(rmtree);
 use PostgresNode;
 use TestLib;
-use Test::More tests => 109;
+use Test::More tests => 110;
 
 program_help_ok('pg_basebackup');
 program_version_ok('pg_basebackup');
@@ -124,7 +124,7 @@ is_deeply(
 
 # Contents of these directories should not be copied.
 foreach my $dirname (
-	qw(pg_dynshmem pg_notify pg_replslot pg_serial pg_snapshots pg_stat_tmp pg_subtrans)
+	qw(pg_dynshmem pg_notify pg_replslot pg_serial pg_snapshots pg_stat_tmp pg_subtrans pg_memusage)
   )
 {
 	is_deeply(

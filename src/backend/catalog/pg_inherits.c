@@ -52,7 +52,8 @@ typedef struct SeenRelsEntry
  * against possible DROPs of child relations.
  */
 List *
-find_inheritance_children(Oid parentrelId, LOCKMODE lockmode)
+find_inheritance_children(Oid parentrelId, bool include_detached,
+						  LOCKMODE lockmode)
 {
 	List	   *list = NIL;
 	Relation	relation;
@@ -91,7 +92,13 @@ find_inheritance_children(Oid parentrelId, LOCKMODE lockmode)
 
 	while ((inheritsTuple = systable_getnext(scan)) != NULL)
 	{
+		/* skip detached at caller's request */
+		if (((Form_pg_inherits) GETSTRUCT(inheritsTuple))->inhdetached &&
+			!include_detached)
+			continue;
+
 		inhrelid = ((Form_pg_inherits) GETSTRUCT(inheritsTuple))->inhrelid;
+
 		if (numoids >= maxoids)
 		{
 			maxoids *= 2;
@@ -160,6 +167,9 @@ find_inheritance_children(Oid parentrelId, LOCKMODE lockmode)
  * given rel; caller should already have locked it).  If lockmode is NoLock
  * then no locks are acquired, but caller must beware of race conditions
  * against possible DROPs of child relations.
+ *
+ * NB - No current callers of this routine are interested in children being
+ * concurrently detached, so there's no provision to include them.
  */
 List *
 find_all_inheritors(Oid parentrelId, LOCKMODE lockmode, List **numparents)
@@ -200,7 +210,8 @@ find_all_inheritors(Oid parentrelId, LOCKMODE lockmode, List **numparents)
 		ListCell   *lc;
 
 		/* Get the direct children of this rel */
-		currentchildren = find_inheritance_children(currentrel, lockmode);
+		currentchildren = find_inheritance_children(currentrel, false,
+													lockmode);
 
 		/*
 		 * Add to the queue only those children not already seen. This avoids
@@ -429,6 +440,7 @@ StoreSingleInheritance(Oid relationId, Oid parentOid, int32 seqNumber)
 	values[Anum_pg_inherits_inhrelid - 1] = ObjectIdGetDatum(relationId);
 	values[Anum_pg_inherits_inhparent - 1] = ObjectIdGetDatum(parentOid);
 	values[Anum_pg_inherits_inhseqno - 1] = Int32GetDatum(seqNumber);
+	values[Anum_pg_inherits_inhdetached - 1] = BoolGetDatum(false);
 
 	memset(nulls, 0, sizeof(nulls));
 
@@ -448,10 +460,21 @@ StoreSingleInheritance(Oid relationId, Oid parentOid, int32 seqNumber)
  * as InvalidOid, in which case all tuples matching inhrelid are deleted;
  * otherwise only delete tuples with the specified inhparent.
  *
+ * 'detached' is the expected state of the inhdetached flag.  If the catalog
+ * row does not match that state, an error is raised.  When used on
+ * partitions, the partition name must be passed, for possible error messages.
+ *
+ * If allow_detached is passed false, then an error is raised if the child is
+ * already marked detached.  A name must be supplied in that case, for the
+ * error message.  This should only be used with table partitions.
+ * XXX the name bit is pretty weird and problematic for non-partition cases;
+ * what if the flag check fails?
+ *
  * Returns whether at least one row was deleted.
  */
 bool
-DeleteInheritsTuple(Oid inhrelid, Oid inhparent)
+DeleteInheritsTuple(Oid inhrelid, Oid inhparent, bool detached,
+					const char *childname)
 {
 	bool		found = false;
 	Relation	catalogRelation;
@@ -478,6 +501,28 @@ DeleteInheritsTuple(Oid inhrelid, Oid inhparent)
 		parent = ((Form_pg_inherits) GETSTRUCT(inheritsTuple))->inhparent;
 		if (!OidIsValid(inhparent) || parent == inhparent)
 		{
+			bool	inhdetached;
+
+			inhdetached = ((Form_pg_inherits) GETSTRUCT(inheritsTuple))->inhdetached;
+
+			/*
+			 * Raise error depending on state.  This should only happen for
+			 * partitions, but we have no way to cross-check.
+			 */
+			if (inhdetached && !detached)
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("cannot detach partition \"%s\"",
+								childname),
+						 errdetail("The partition is being detached concurrently or has an unfinished detach."),
+						 errhint("Use ALTER TABLE ... DETACH PARTITION ... FINALIZE to complete the pending detach operation")));
+			if (!inhdetached && detached)
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("cannot complete detaching partition \"%s\"",
+								childname),
+						 errdetail("There's no partial concurrent detach in progress.")));
+
 			CatalogTupleDelete(catalogRelation, &inheritsTuple->t_self);
 			found = true;
 		}

@@ -1305,6 +1305,7 @@ _readJoinExpr(void)
 	READ_NODE_FIELD(rarg);
 	READ_NODE_FIELD(usingClause);
 	READ_NODE_FIELD(quals);
+	READ_NODE_FIELD(join_using_alias);
 	READ_NODE_FIELD(alias);
 	READ_INT_FIELD(rtindex);
 
@@ -1407,6 +1408,7 @@ _readRangeTblEntry(void)
 			READ_NODE_FIELD(joinaliasvars);
 			READ_NODE_FIELD(joinleftcols);
 			READ_NODE_FIELD(joinrightcols);
+			READ_NODE_FIELD(join_using_alias);
 			break;
 		case RTE_FUNCTION:
 			READ_NODE_FIELD(functions);

@@ -1621,6 +1621,37 @@ SELECT '' AS "xxx", *
      | 4 | 1 | one   | 2
 (4 rows)
 
+-- test join using aliases
+SELECT * FROM J1_TBL JOIN J2_TBL USING (i) WHERE J1_TBL.t = 'one';  -- ok
+ i | j |  t  | k  
+---+---+-----+----
+ 1 | 4 | one | -1
+(1 row)
+
+SELECT * FROM J1_TBL JOIN J2_TBL USING (i) AS x WHERE J1_TBL.t = 'one';  -- ok
+ i | j |  t  | k  
+---+---+-----+----
+ 1 | 4 | one | -1
+(1 row)
+
+SELECT * FROM (J1_TBL JOIN J2_TBL USING (i)) AS x WHERE J1_TBL.t = 'one';  -- error
+ERROR:  invalid reference to FROM-clause entry for table "j1_tbl"
+LINE 1: ... * FROM (J1_TBL JOIN J2_TBL USING (i)) AS x WHERE J1_TBL.t =...
+                                                             ^
+HINT:  There is an entry for table "j1_tbl", but it cannot be referenced from this part of the query.
+SELECT * FROM J1_TBL JOIN J2_TBL USING (i) AS x WHERE x.i = 1;  -- ok
+ i | j |  t  | k  
+---+---+-----+----
+ 1 | 4 | one | -1
+(1 row)
+
+SELECT * FROM J1_TBL JOIN J2_TBL USING (i) AS x WHERE x.t = 'one';  -- error
+ERROR:  column reference "t" is invalid
+LINE 1: ...CT * FROM J1_TBL JOIN J2_TBL USING (i) AS x WHERE x.t = 'one...
+                                                             ^
+DETAIL:  The range variable "x" only contains columns in the USING clause.
+SELECT * FROM  J1_TBL a1 JOIN J2_TBL a2 USING (i) AS a1;  -- error
+ERROR:  table name "a1" specified more than once
 --
 -- NATURAL JOIN
 -- Inner equi-join on all columns with the same name

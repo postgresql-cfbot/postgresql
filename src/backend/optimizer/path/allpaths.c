@@ -2826,6 +2826,7 @@ get_useful_pathkeys_for_relation(PlannerInfo *root, RelOptInfo *rel)
 
 		foreach(lc, root->query_pathkeys)
 		{
+			Expr       *expr;
 			PathKey    *pathkey = (PathKey *) lfirst(lc);
 			EquivalenceClass *pathkey_ec = pathkey->pk_eclass;
 
@@ -2840,7 +2841,14 @@ get_useful_pathkeys_for_relation(PlannerInfo *root, RelOptInfo *rel)
 			 * enable not just an incremental sort on the entirety of
 			 * query_pathkeys but also incremental sort below a JOIN.
 			 */
-			if (!find_em_expr_usable_for_sorting_rel(pathkey_ec, rel))
+			if (!(expr = find_em_expr_usable_for_sorting_rel(pathkey_ec, rel)))
+				break;
+
+			/*
+			 * Also stop when the expression is not parallel-safe. We plan
+			 * to add all of this under a Gather node.
+			 */
+			if (!is_parallel_safe(root, (Node *) expr))
 				break;
 
 			npathkeys++;

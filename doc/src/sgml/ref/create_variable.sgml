@@ -1,0 +1,183 @@
+<!--
+doc/src/sgml/ref/create_variable.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-createvariable">
+ <indexterm zone="sql-createvariable">
+  <primary>CREATE VARIABLE</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>CREATE VARIABLE</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE VARIABLE</refname>
+  <refpurpose>define a new permissioned typed schema variable</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE [ { TEMPORARY | TEMP } ] [ IMMUTABLE ] VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable> ] [ COLLATE <replaceable class="parameter">collation</replaceable> ]
+    [ NOT NULL ] [ DEFAULT <replaceable class="parameter">default_expr</replaceable> ] [ { ON COMMIT DROP | ON TRANSACTION END RESET } ]
+</synopsis>
+ </refsynopsisdiv>
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   The <command>CREATE VARIABLE</command> command creates a new schema variable.
+   Schema variables, like relations, exist within a schema and their access is
+   controlled via <command>GRANT</command> and <command>REVOKE</command> commands.
+   Their changes are non-transactional by default.
+  </para>
+
+  <para>
+   The value of a schema variable is local to the current session. Retrieving
+   a variable's value returns either a NULL or a default value, unless its value
+   is set to something else in the current session with a LET command. By default,
+   the content of variable is not transactional, alike regular variables in PL languages.
+  </para>
+
+  <para>
+   Schema variables are retrieved by the regular <command>SELECT</command> SQL command.
+   Their value can be set with the <command>LET</command> SQL command.
+   Notably, while schema variables share properties with tables, they cannot be updated
+   with <command>UPDATE</command> commands.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>IMMUTABLE</literal></term>
+    <listitem>
+     <para>
+      The value of the variable cannot be changed.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>IF NOT EXISTS</literal></term>
+    <listitem>
+     <para>
+      Do not throw an error if the name already exists. A notice is issued in this case.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name (optionally schema-qualified) of the variable to create.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">data_type</replaceable></term>
+    <listitem>
+     <para>
+      The name (optionally schema-qualified) of the data type of the variable to be created.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>COLLATE <replaceable>collation</replaceable></literal></term>
+    <listitem>
+     <para>
+      The <literal>COLLATE</literal> clause assigns a collation to
+      the variable (which must be of a collatable data type).
+      If not specified, the variable data type's default collation is used.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>NOT NULL</literal></term>
+    <listitem>
+     <para>
+      The <literal>NOT NULL</literal> clause forbid to set the variable to
+      a null value. A variable created as NOT NULL and without an explicitely
+      declared default value cannot be read until it is initialized by a LET
+      command. This obliges the user to explicitely initialize the variable
+      content before reading it.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DEFAULT <replaceable>default_expr</replaceable></literal></term>
+    <listitem>
+     <para>
+      The <literal>DEFAULT</literal> clause assigns a default data to
+      schema variable.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ON COMMIT DROP</literal>, <literal>ON TRANSACTIONAL END RESET</literal></term>
+    <listitem>
+     <para>
+      The <literal>ON COMMIT DROP</literal> clause specifies the behaviour
+      of temporary schema variable at transaction commit. With this clause the
+      variable is dropped at commit time. The clause is only allowed
+      for temporary variables. The <literal>ON TRANSACTIONAL END RESET</literal>
+      clause enforces the variable to be reset to its default value when
+      the transaction is either commited or rolled back.
+     </para>
+    </listitem>
+   </varlistentry>
+
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Notes</title>
+
+  <para>
+   Use <command>DROP VARIABLE</command> command to remove a variable.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   Create an integer variable <literal>var1</literal>:
+<programlisting>
+CREATE VARIABLE var1 AS integer;
+SELECT var1;
+</programlisting>
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   The <command>CREATE VARIABLE</command> command is a PostgreSQL extension.
+   <!-- The choice of wording here seems to be left to personal preference... -->
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-altervariable"/></member>
+   <member><xref linkend="sql-dropvariable"/></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

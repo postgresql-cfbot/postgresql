@@ -55,17 +55,17 @@ static const int dbObjectTypePriority[] =
 	11,							/* DO_CONVERSION */
 	18,							/* DO_TABLE */
 	20,							/* DO_ATTRDEF */
-	28,							/* DO_INDEX */
-	29,							/* DO_INDEX_ATTACH */
-	30,							/* DO_STATSEXT */
-	31,							/* DO_RULE */
-	32,							/* DO_TRIGGER */
+	29,							/* DO_INDEX */
+	30,							/* DO_INDEX_ATTACH */
+	31,							/* DO_STATSEXT */
+	32,							/* DO_RULE */
+	33,							/* DO_TRIGGER */
 	27,							/* DO_CONSTRAINT */
-	33,							/* DO_FK_CONSTRAINT */
+	34,							/* DO_FK_CONSTRAINT */
 	2,							/* DO_PROCLANG */
 	10,							/* DO_CAST */
-	23,							/* DO_TABLE_DATA */
-	24,							/* DO_SEQUENCE_SET */
+	24,							/* DO_TABLE_DATA */
+	25,							/* DO_SEQUENCE_SET */
 	19,							/* DO_DUMMY_TYPE */
 	12,							/* DO_TSPARSER */
 	14,							/* DO_TSDICT */
@@ -84,10 +84,11 @@ static const int dbObjectTypePriority[] =
 	34,							/* DO_POLICY */
 	35,							/* DO_PUBLICATION */
 	36,							/* DO_PUBLICATION_REL */
-	37							/* DO_SUBSCRIPTION */
+	37,							/* DO_SUBSCRIPTION */
+	21							/* DO_VARIABLE */
 };
 
-StaticAssertDecl(lengthof(dbObjectTypePriority) == (DO_SUBSCRIPTION + 1),
+StaticAssertDecl(lengthof(dbObjectTypePriority) == (DO_VARIABLE + 1),
 				 "array length mismatch");
 
 static DumpId preDataBoundId;
@@ -1436,6 +1437,10 @@ describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
 					 "POST-DATA BOUNDARY  (ID %d)",
 					 obj->dumpId);
 			return;
+		case DO_VARIABLE:
+			snprintf(buf, bufsize,
+					 "VARIABLE %s  (ID %d OID %u)",
+					 obj->name, obj->dumpId, obj->catId.oid);
 	}
 	/* shouldn't get here */
 	snprintf(buf, bufsize,

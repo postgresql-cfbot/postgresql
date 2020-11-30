@@ -141,6 +141,7 @@ PrepareQuery(ParseState *pstate, PrepareStmt *stmt,
 	switch (query->commandType)
 	{
 		case CMD_SELECT:
+		case CMD_SELECT_UTILITY:
 		case CMD_INSERT:
 		case CMD_UPDATE:
 		case CMD_DELETE:

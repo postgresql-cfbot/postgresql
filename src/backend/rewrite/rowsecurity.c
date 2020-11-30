@@ -213,16 +213,17 @@ get_row_security_policies(Query *root, RangeTblEntry *rte, int rt_index,
 	}
 
 	/*
-	 * For SELECT, UPDATE and DELETE, add security quals to enforce the USING
-	 * policies.  These security quals control access to existing table rows.
-	 * Restrictive policies are combined together using AND, and permissive
-	 * policies are combined together using OR.
+	 * For SELECT, LET, UPDATE and DELETE, add security quals to enforce the
+	 * USING policies.  These security quals control access to existing table
+	 * rows. Restrictive policies are combined together using AND, and
+	 * permissive policies are combined together using OR.
 	 */
 
 	get_policies_for_relation(rel, commandType, user_id, &permissive_policies,
 							  &restrictive_policies);
 
 	if (commandType == CMD_SELECT ||
+		commandType == CMD_SELECT_UTILITY ||
 		commandType == CMD_UPDATE ||
 		commandType == CMD_DELETE)
 		add_security_quals(rt_index,
@@ -429,6 +430,7 @@ get_policies_for_relation(Relation relation, CmdType cmd, Oid user_id,
 			switch (cmd)
 			{
 				case CMD_SELECT:
+				case CMD_SELECT_UTILITY:
 					if (policy->polcmd == ACL_SELECT_CHR)
 						cmd_matches = true;
 					break;

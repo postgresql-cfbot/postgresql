@@ -78,6 +78,8 @@ typedef enum ParseExprKind
 	EXPR_KIND_CALL_ARGUMENT,	/* procedure argument in CALL */
 	EXPR_KIND_COPY_WHERE,		/* WHERE condition in COPY FROM */
 	EXPR_KIND_GENERATED_COLUMN, /* generation expression for a column */
+	EXPR_KIND_VARIABLE_DEFAULT, /* default value for schema variable */
+	EXPR_KIND_LET_TARGET		/* LET assignment (should be same like UPDATE) */
 } ParseExprKind;
 
 
@@ -208,6 +210,7 @@ struct ParseState
 	bool		p_hasTargetSRFs;
 	bool		p_hasSubLinks;
 	bool		p_hasModifyingCTE;
+	bool		p_hasSchemaVariables;
 
 	Node	   *p_last_srf;		/* most recent set-returning func/op found */
 

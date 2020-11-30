@@ -405,6 +405,11 @@
     in every database at least once every two billion transactions.
    </para>
 
+   <!-- This oversimplifies; there are (2^31)-1 XIDs in the past, the same
+   number in the future, and one incomparable.  (For each pair of incomparable
+   XIDs, TransactionIdPrecedes(a, b) and TransactionIdPrecedes(b, a) both
+   return true.)  None of that is important to the DBA, since xidStopLimit
+   intervenes long before. -->
    <para>
     The reason that periodic vacuuming solves the problem is that
     <command>VACUUM</command> will mark rows as <emphasis>frozen</emphasis>, indicating that

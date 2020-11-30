@@ -207,13 +207,13 @@ typedef struct QueuePosition
 
 /* choose logically smaller QueuePosition */
 #define QUEUE_POS_MIN(x,y) \
-	(asyncQueuePagePrecedes((x).page, (y).page) ? (x) : \
+	(asyncQueuePageDiff((x).page, (y).page) < 0 ? (x) : \
 	 (x).page != (y).page ? (y) : \
 	 (x).offset < (y).offset ? (x) : (y))
 
 /* choose logically larger QueuePosition */
 #define QUEUE_POS_MAX(x,y) \
-	(asyncQueuePagePrecedes((x).page, (y).page) ? (y) : \
+	(asyncQueuePageDiff((x).page, (y).page) < 0 ? (y) : \
 	 (x).page != (y).page ? (x) : \
 	 (x).offset > (y).offset ? (x) : (y))
 
@@ -436,8 +436,7 @@ static bool backendTryAdvanceTail = false;
 bool		Trace_notify = false;
 
 /* local function prototypes */
-static int	asyncQueuePageDiff(int p, int q);
-static bool asyncQueuePagePrecedes(int p, int q);
+static int32 asyncQueuePageDiff(int p, int q);
 static void queue_listen(ListenActionKind action, const char *channel);
 static void Async_UnlistenOnExit(int code, Datum arg);
 static void Exec_ListenPreCommit(void);
@@ -468,12 +467,16 @@ static void ClearPendingActionsAndNotifies(void);
 
 /*
  * Compute the difference between two queue page numbers (i.e., p - q),
- * accounting for wraparound.
+ * accounting for wraparound.  Since asyncQueueIsFull() blocks creation of a
+ * page that could precede any extant page, we need not assess entries within
+ * a page.
  */
-static int
+static int32
 asyncQueuePageDiff(int p, int q)
 {
-	int			diff;
+	int			diff_max = ((QUEUE_MAX_PAGE + 1) / 2) - 1,
+				diff;
+	int32		scale = INT_MAX / diff_max;
 
 	/*
 	 * We have to compare modulo (QUEUE_MAX_PAGE+1)/2.  Both inputs should be
@@ -487,14 +490,24 @@ asyncQueuePageDiff(int p, int q)
 		diff -= QUEUE_MAX_PAGE + 1;
 	else if (diff < -((QUEUE_MAX_PAGE + 1) / 2))
 		diff += QUEUE_MAX_PAGE + 1;
-	return diff;
+	return diff * scale;
 }
 
-/* Is p < q, accounting for wraparound? */
-static bool
-asyncQueuePagePrecedes(int p, int q)
+static void
+asyncQueuePageDiffUnitTests(void)
 {
-	return asyncQueuePageDiff(p, q) < 0;
+	int32		large_negative = INT_MIN / 1000 * 999,
+				large_positive = INT_MAX / 1000 * 999;
+	int			diff_min = -((QUEUE_MAX_PAGE + 1) / 2),
+				diff_max = ((QUEUE_MAX_PAGE + 1) / 2) - 1;
+
+	Assert(asyncQueuePageDiff(diff_max, diff_max) == 0);
+	Assert(asyncQueuePageDiff(diff_max, 0) > large_positive);
+	Assert(asyncQueuePageDiff(diff_max + 1, 0) < large_negative);
+	Assert(asyncQueuePageDiff(0, QUEUE_MAX_PAGE + diff_min + 1) <
+		   large_negative);
+	Assert(asyncQueuePageDiff(0, QUEUE_MAX_PAGE + diff_min + 2) >
+		   large_positive);
 }
 
 /*
@@ -556,10 +569,11 @@ AsyncShmemInit(void)
 	/*
 	 * Set up SLRU management of the pg_notify data.
 	 */
-	NotifyCtl->PagePrecedes = asyncQueuePagePrecedes;
+	NotifyCtl->PageDiff = asyncQueuePageDiff;
 	SimpleLruInit(NotifyCtl, "Notify", NUM_NOTIFY_BUFFERS, 0,
 				  NotifySLRULock, "pg_notify", LWTRANCHE_NOTIFY_BUFFER,
 				  SYNC_HANDLER_NONE);
+	asyncQueuePageDiffUnitTests();
 
 	if (!found)
 	{
@@ -1352,8 +1366,8 @@ asyncQueueIsFull(void)
 	 * logically precedes the current global tail pointer, ie, the head
 	 * pointer would wrap around compared to the tail.  We cannot create such
 	 * a head page for fear of confusing slru.c.  For safety we round the tail
-	 * pointer back to a segment boundary (compare the truncation logic in
-	 * asyncQueueAdvanceTail).
+	 * pointer back to a segment boundary (truncation logic in
+	 * asyncQueueAdvanceTail does not do this, so doing it here is optional).
 	 *
 	 * Note that this test is *not* dependent on how much space there is on
 	 * the current head page.  This is necessary because asyncQueueAddEntries
@@ -1364,7 +1378,7 @@ asyncQueueIsFull(void)
 		nexthead = 0;			/* wrap around */
 	boundary = QUEUE_STOP_PAGE;
 	boundary -= boundary % SLRU_PAGES_PER_SEGMENT;
-	return asyncQueuePagePrecedes(nexthead, boundary);
+	return asyncQueuePageDiff(nexthead, boundary) < 0;
 }
 
 /*
@@ -2224,7 +2238,7 @@ asyncQueueAdvanceTail(void)
 	 */
 	newtailpage = QUEUE_POS_PAGE(min);
 	boundary = newtailpage - (newtailpage % SLRU_PAGES_PER_SEGMENT);
-	if (asyncQueuePagePrecedes(oldtailpage, boundary))
+	if (asyncQueuePageDiff(oldtailpage, boundary) < 0)
 	{
 		/*
 		 * SimpleLruTruncate() will ask for NotifySLRULock but will also

@@ -3012,9 +3012,11 @@ index_build(Relation heapRelation,
 	 * only btree has support for parallel builds.
 	 *
 	 * Note that planner considers parallel safety for us.
+	 * In stand-alone mode, parallel index building should not be considered since
+	 * there is only one process.
 	 */
 	if (parallel && IsNormalProcessingMode() &&
-		indexRelation->rd_rel->relam == BTREE_AM_OID)
+		indexRelation->rd_rel->relam == BTREE_AM_OID && IsUnderPostmaster)
 		indexInfo->ii_ParallelWorkers =
 			plan_create_index_workers(RelationGetRelid(heapRelation),
 									  RelationGetRelid(indexRelation));

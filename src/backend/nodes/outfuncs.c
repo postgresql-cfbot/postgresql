@@ -3640,6 +3640,7 @@ _outPartitionSpec(StringInfo str, const PartitionSpec *node)
 
 	WRITE_STRING_FIELD(strategy);
 	WRITE_NODE_FIELD(partParams);
+	WRITE_NODE_FIELD(autopart);
 	WRITE_LOCATION_FIELD(location);
 }
 
@@ -3656,6 +3657,18 @@ _outPartitionBoundSpec(StringInfo str, const PartitionBoundSpec *node)
 	WRITE_NODE_FIELD(lowerdatums);
 	WRITE_NODE_FIELD(upperdatums);
 	WRITE_LOCATION_FIELD(location);
+}
+
+static void
+_outPartitionBoundAutoSpec(StringInfo str, const PartitionBoundAutoSpec *node)
+{
+	WRITE_NODE_TYPE("PARTITIONBOUNDAUTOSPEC");
+
+	WRITE_CHAR_FIELD(strategy);
+	WRITE_INT_FIELD(modulus);
+	WRITE_NODE_FIELD(listdatumsList);
+	WRITE_NODE_FIELD(default_partition_rv);
+
 }
 
 static void
@@ -4330,6 +4343,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_PartitionBoundSpec:
 				_outPartitionBoundSpec(str, obj);
+				break;
+			case T_PartitionBoundAutoSpec:
+				_outPartitionBoundAutoSpec(str, obj);
 				break;
 			case T_PartitionRangeDatum:
 				_outPartitionRangeDatum(str, obj);

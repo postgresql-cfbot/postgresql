@@ -2602,6 +2602,19 @@ _readPartitionBoundSpec(void)
 	READ_DONE();
 }
 
+static PartitionBoundAutoSpec *
+_readPartitionBoundAutoSpec(void)
+{
+	READ_LOCALS(PartitionBoundAutoSpec);
+
+	READ_CHAR_FIELD(strategy);
+	READ_INT_FIELD(modulus);
+	READ_NODE_FIELD(listdatumsList);
+	READ_NODE_FIELD(default_partition_rv);
+
+	READ_DONE();
+}
+
 /*
  * _readPartitionRangeDatum
  */
@@ -2880,6 +2893,8 @@ parseNodeString(void)
 		return_value = _readPartitionBoundSpec();
 	else if (MATCH("PARTITIONRANGEDATUM", 19))
 		return_value = _readPartitionRangeDatum();
+	else if (MATCH("PARTITIONBOUNDAUTOSPEC", 22))
+		return_value = _readPartitionBoundAutoSpec();
 	else
 	{
 		elog(ERROR, "badly formatted node string \"%.32s\"...", token);

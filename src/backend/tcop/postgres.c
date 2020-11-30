@@ -4502,6 +4502,11 @@ PostgresMain(int argc, char *argv[],
 				 * perform normal shutdown.
 				 */
 			case 'X':
+				/* report as normal client disconnection */
+				pgStatSessionDisconnectedNormally = true;
+
+				/* FALLTHROUGH */
+
 			case EOF:
 
 				/*

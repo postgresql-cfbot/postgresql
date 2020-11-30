@@ -31,6 +31,9 @@
 
 #include "postgres.h"
 
+#ifndef HAVE_OPENSSL_INIT_SSL
+#include <openssl/conf.h>
+#endif
 #include <openssl/evp.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
@@ -173,8 +176,18 @@ px_find_digest(const char *name, PX_MD **res)
 
 	if (!px_openssl_initialized)
 	{
-		px_openssl_initialized = 1;
+		/*
+		 * OpenSSL_add_all_algorithms is deprecated in OpenSSL 1.1.0 and no
+		 * longer required in 1.1.0 and later versions, as initialization is
+		 * performed automatically. We don't have macros for OpenSSL versions
+		 * since they collide with LibreSSL, OPENSSL_init_ssl was introduced
+		 * in 1.1.0 so we can use the corresponding HAVE_ macro.
+		 */
+#ifndef HAVE_OPENSSL_INIT_SSL
+		OPENSSL_config(NULL);
 		OpenSSL_add_all_algorithms();
+#endif
+		px_openssl_initialized = 1;
 	}
 
 	if (!digest_resowner_callback_registered)
@@ -368,6 +381,8 @@ gen_ossl_decrypt(PX_Cipher *c, const uint8 *data, unsigned dlen,
 	{
 		if (!EVP_DecryptInit_ex(od->evp_ctx, od->evp_ciph, NULL, NULL, NULL))
 			return PXE_CIPHER_INIT;
+		if (!EVP_CIPHER_CTX_set_padding(od->evp_ctx, 0))
+			return PXE_CIPHER_INIT;
 		if (!EVP_CIPHER_CTX_set_key_length(od->evp_ctx, od->klen))
 			return PXE_CIPHER_INIT;
 		if (!EVP_DecryptInit_ex(od->evp_ctx, NULL, NULL, od->key, od->iv))
@@ -391,6 +406,8 @@ gen_ossl_encrypt(PX_Cipher *c, const uint8 *data, unsigned dlen,
 	if (!od->init)
 	{
 		if (!EVP_EncryptInit_ex(od->evp_ctx, od->evp_ciph, NULL, NULL, NULL))
+			return PXE_CIPHER_INIT;
+		if (!EVP_CIPHER_CTX_set_padding(od->evp_ctx, 0))
 			return PXE_CIPHER_INIT;
 		if (!EVP_CIPHER_CTX_set_key_length(od->evp_ctx, od->klen))
 			return PXE_CIPHER_INIT;

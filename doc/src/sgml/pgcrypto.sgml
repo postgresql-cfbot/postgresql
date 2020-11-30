@@ -1234,6 +1234,12 @@ gen_random_uuid() returns uuid
    </table>
 
    <para>
+    When compiled against <productname>OpenSSL</productname> 3.0.0, the legacy
+    provider must be activated in the <filename>openssl.cnf</filename> file
+    in order to use older ciphers like MD5.
+   </para>
+
+   <para>
     Notes:
    </para>
 

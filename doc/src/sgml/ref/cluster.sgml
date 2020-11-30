@@ -172,6 +172,12 @@ CLUSTER [VERBOSE]
     are periodically reclustered.
    </para>
 
+   <para>
+    Clustering a partitioned table clusters each of its partitions using the
+    index partition of the given partitioned index or (if not specified) the
+    partitioned index marked as clustered.
+   </para>
+
  </refsect1>
 
  <refsect1>

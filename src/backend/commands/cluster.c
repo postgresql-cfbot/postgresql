@@ -32,7 +32,9 @@
 #include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
+#include "catalog/partition.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_inherits.h"
 #include "catalog/toasting.h"
 #include "commands/cluster.h"
 #include "commands/progress.h"
@@ -71,7 +73,11 @@ static void rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose);
 static void copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex,
 							bool verbose, bool *pSwapToastByContent,
 							TransactionId *pFreezeXid, MultiXactId *pCutoffMulti);
+static void set_indisclustered(Oid indexOid, bool isclustered, Relation pg_index);
 static List *get_tables_to_cluster(MemoryContext cluster_context);
+static List *get_tables_to_cluster_partitioned(MemoryContext cluster_context,
+		Oid indexOid);
+static void cluster_multiple_rels(List *rvs, int options);
 
 
 /*---------------------------------------------------------------------------
@@ -113,7 +119,7 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 											AccessExclusiveLock,
 											0,
 											RangeVarCallbackOwnsTable, NULL);
-		rel = table_open(tableOid, NoLock);
+		rel = table_open(tableOid, ShareUpdateExclusiveLock);
 
 		/*
 		 * Reject clustering a remote temp table ... their local buffer
@@ -123,14 +129,6 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot cluster temporary tables of other sessions")));
-
-		/*
-		 * Reject clustering a partitioned table.
-		 */
-		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot cluster a partitioned table")));
 
 		if (stmt->indexname == NULL)
 		{
@@ -169,8 +167,32 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 		/* close relation, keep lock till commit */
 		table_close(rel, NoLock);
 
-		/* Do the job. */
-		cluster_rel(tableOid, indexOid, stmt->options);
+		if (rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+		{
+			/* Do the job. */
+			cluster_rel(tableOid, indexOid, stmt->options);
+		}
+		else
+		{
+			List	   *rvs;
+			MemoryContext cluster_context;
+
+			/* Refuse to hold strong locks in a user transaction */
+			PreventInTransactionBlock(isTopLevel, "CLUSTER");
+
+			cluster_context = AllocSetContextCreate(PortalContext,
+												"Cluster",
+												ALLOCSET_DEFAULT_SIZES);
+
+			rvs = get_tables_to_cluster_partitioned(cluster_context, indexOid);
+			cluster_multiple_rels(rvs, stmt->options);
+
+			/* Start a new transaction for the cleanup work. */
+			StartTransactionCommand();
+
+			/* Clean up working storage */
+			MemoryContextDelete(cluster_context);
+		}
 	}
 	else
 	{
@@ -180,7 +202,6 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 		 */
 		MemoryContext cluster_context;
 		List	   *rvs;
-		ListCell   *rv;
 
 		/*
 		 * We cannot run this form of CLUSTER inside a user transaction block;
@@ -204,25 +225,7 @@ cluster(ClusterStmt *stmt, bool isTopLevel)
 		 */
 		rvs = get_tables_to_cluster(cluster_context);
 
-		/* Commit to get out of starting transaction */
-		PopActiveSnapshot();
-		CommitTransactionCommand();
-
-		/* Ok, now that we've got them all, cluster them one by one */
-		foreach(rv, rvs)
-		{
-			RelToCluster *rvtc = (RelToCluster *) lfirst(rv);
-
-			/* Start a new transaction for each relation. */
-			StartTransactionCommand();
-			/* functions in indexes may want a snapshot set */
-			PushActiveSnapshot(GetTransactionSnapshot());
-			/* Do the job. */
-			cluster_rel(rvtc->tableOid, rvtc->indexOid,
-						stmt->options | CLUOPT_RECHECK);
-			PopActiveSnapshot();
-			CommitTransactionCommand();
-		}
+		cluster_multiple_rels(rvs, stmt->options | CLUOPT_RECHECK_ISCLUSTERED);
 
 		/* Start a new transaction for the cleanup work. */
 		StartTransactionCommand();
@@ -328,9 +331,10 @@ cluster_rel(Oid tableOid, Oid indexOid, int options)
 			}
 
 			/*
-			 * Check that the index is still the one with indisclustered set.
+			 * Check that the index is still the one with indisclustered set, if needed.
 			 */
-			if (!get_index_isclustered(indexOid))
+			if ((options & CLUOPT_RECHECK_ISCLUSTERED) != 0 &&
+					!get_index_isclustered(indexOid))
 			{
 				relation_close(OldHeap, AccessExclusiveLock);
 				pgstat_progress_end_command();
@@ -374,7 +378,12 @@ cluster_rel(Oid tableOid, Oid indexOid, int options)
 
 	/* Check heap and index are valid to cluster on */
 	if (OidIsValid(indexOid))
+	{
 		check_index_is_clusterable(OldHeap, indexOid, recheck, AccessExclusiveLock);
+
+		/* Mark the index as clustered */
+		mark_index_clustered(OldHeap, indexOid, true);
+	}
 
 	/*
 	 * Quietly ignore the request if this is a materialized view which has not
@@ -385,6 +394,14 @@ cluster_rel(Oid tableOid, Oid indexOid, int options)
 	 */
 	if (OldHeap->rd_rel->relkind == RELKIND_MATVIEW &&
 		!RelationIsPopulated(OldHeap))
+	{
+		relation_close(OldHeap, AccessExclusiveLock);
+		pgstat_progress_end_command();
+		return;
+	}
+
+	/* For a partitioned rel, we're done. */
+	if (!RELKIND_HAS_STORAGE(get_rel_relkind(tableOid)))
 	{
 		relation_close(OldHeap, AccessExclusiveLock);
 		pgstat_progress_end_command();
@@ -459,6 +476,9 @@ check_index_is_clusterable(Relation OldHeap, Oid indexOid, bool recheck, LOCKMOD
 	 * the worst consequence of following broken HOT chains would be that we
 	 * might put recently-dead tuples out-of-order in the new table, and there
 	 * is little harm in that.)
+	 *
+	 * This also refuses to cluster on an "incomplete" partitioned index
+	 * created with "ON ONLY".
 	 */
 	if (!OldIndex->rd_index->indisvalid)
 		ereport(ERROR,
@@ -471,71 +491,108 @@ check_index_is_clusterable(Relation OldHeap, Oid indexOid, bool recheck, LOCKMOD
 }
 
 /*
+ * Helper for mark_index_clustered
+ * Mark a single index as clustered or not.
+ * pg_index is passed by caller to avoid repeatedly re-opening it.
+ */
+static void
+set_indisclustered(Oid indexOid, bool isclustered, Relation pg_index)
+{
+	HeapTuple	indexTuple;
+	Form_pg_index indexForm;
+
+	indexTuple = SearchSysCacheCopy1(INDEXRELID,
+									ObjectIdGetDatum(indexOid));
+	if (!HeapTupleIsValid(indexTuple))
+		elog(ERROR, "cache lookup failed for index %u", indexOid);
+	indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
+
+	/* this was checked earlier, but let's be real sure */
+	if (isclustered && !indexForm->indisvalid)
+		elog(ERROR, "cannot cluster on invalid index %u", indexOid);
+
+	indexForm->indisclustered = isclustered;
+	CatalogTupleUpdate(pg_index, &indexTuple->t_self, indexTuple);
+	heap_freetuple(indexTuple);
+}
+
+/*
  * mark_index_clustered: mark the specified index as the one clustered on
  *
- * With indexOid == InvalidOid, will mark all indexes of rel not-clustered.
+ * With indexOid == InvalidOid, mark all indexes of rel not-clustered.
+ * Otherwise, mark children of the clustered index as clustered, and parents of
+ * other indexes as unclustered.
+ * We wish to maintain the following properties:
+ * 1) Only one index on a relation can be marked clustered at once
+ * 2) If a partitioned index is clustered, then all its children must be
+ *     clustered.
  */
 void
 mark_index_clustered(Relation rel, Oid indexOid, bool is_internal)
 {
-	HeapTuple	indexTuple;
-	Form_pg_index indexForm;
-	Relation	pg_index;
-	ListCell   *index;
-
-	/* Disallow applying to a partitioned table */
-	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot mark index clustered in partitioned table")));
-
-	/*
-	 * If the index is already marked clustered, no need to do anything.
-	 */
-	if (OidIsValid(indexOid))
-	{
-		if (get_index_isclustered(indexOid))
-			return;
-	}
+	ListCell	*lc, *lc2;
+	List		*indexes;
+	Relation	pg_index = table_open(IndexRelationId, RowExclusiveLock);
+	List		*inh = find_all_inheritors(RelationGetRelid(rel), ShareRowExclusiveLock, NULL);
 
 	/*
 	 * Check each index of the relation and set/clear the bit as needed.
+	 * Iterate over the relation's children rather than the index's children
+	 * since we need to unset cluster for indexes on intermediate children,
+	 * too.
 	 */
-	pg_index = table_open(IndexRelationId, RowExclusiveLock);
-
-	foreach(index, RelationGetIndexList(rel))
+	foreach(lc, inh)
 	{
-		Oid			thisIndexOid = lfirst_oid(index);
+		Oid			inhrelid = lfirst_oid(lc);
+		Relation	thisrel = table_open(inhrelid, ShareRowExclusiveLock);
 
-		indexTuple = SearchSysCacheCopy1(INDEXRELID,
-										 ObjectIdGetDatum(thisIndexOid));
-		if (!HeapTupleIsValid(indexTuple))
-			elog(ERROR, "cache lookup failed for index %u", thisIndexOid);
-		indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
-
-		/*
-		 * Unset the bit if set.  We know it's wrong because we checked this
-		 * earlier.
-		 */
-		if (indexForm->indisclustered)
+		indexes = RelationGetIndexList(thisrel);
+		foreach (lc2, indexes)
 		{
-			indexForm->indisclustered = false;
-			CatalogTupleUpdate(pg_index, &indexTuple->t_self, indexTuple);
-		}
-		else if (thisIndexOid == indexOid)
-		{
-			/* this was checked earlier, but let's be real sure */
-			if (!indexForm->indisvalid)
-				elog(ERROR, "cannot cluster on invalid index %u", indexOid);
-			indexForm->indisclustered = true;
-			CatalogTupleUpdate(pg_index, &indexTuple->t_self, indexTuple);
+			bool	isclustered;
+			Oid		thisIndexOid = lfirst_oid(lc2);
+			List	*parentoids = get_rel_relispartition(thisIndexOid) ?
+				get_partition_ancestors(thisIndexOid) : NIL;
+
+			/*
+			 * A child of the clustered index must be set clustered;
+			 * indexes which are not children of the clustered index are
+			 * set unclustered
+			 */
+			isclustered = (thisIndexOid == indexOid) ||
+					list_member_oid(parentoids, indexOid);
+			Assert(OidIsValid(indexOid) || !isclustered);
+			set_indisclustered(thisIndexOid, isclustered, pg_index);
+
+			InvokeObjectPostAlterHookArg(IndexRelationId, thisIndexOid, 0,
+										 InvalidOid, is_internal);
 		}
 
-		InvokeObjectPostAlterHookArg(IndexRelationId, thisIndexOid, 0,
-									 InvalidOid, is_internal);
-
-		heap_freetuple(indexTuple);
+		list_free(indexes);
+		table_close(thisrel, ShareRowExclusiveLock);
 	}
+	list_free(inh);
+
+	/*
+	 * Set parent of all indexes as unclustered when a rel is unclustered; and,
+	 * when an index is clustered, set parents of all /other/ indexes as
+	 * unclustered.
+	 */
+	indexes = RelationGetIndexList(rel);
+	foreach (lc, indexes)
+	{
+		Oid	thisIndexOid = lfirst_oid(lc);
+
+		if (thisIndexOid == indexOid)
+			continue;
+
+		while (get_rel_relispartition(thisIndexOid))
+		{
+			thisIndexOid = get_partition_parent(thisIndexOid);
+			set_indisclustered(thisIndexOid, false, pg_index);
+		}
+	}
+	list_free(indexes);
 
 	table_close(pg_index, RowExclusiveLock);
 }
@@ -559,10 +616,6 @@ rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose)
 	bool		swap_toast_by_content;
 	TransactionId frozenXid;
 	MultiXactId cutoffMulti;
-
-	/* Mark the correct index as clustered */
-	if (OidIsValid(indexOid))
-		mark_index_clustered(OldHeap, indexOid, true);
 
 	/* Remember info about rel before closing OldHeap */
 	relpersistence = OldHeap->rd_rel->relpersistence;
@@ -1556,4 +1609,76 @@ get_tables_to_cluster(MemoryContext cluster_context)
 	relation_close(indRelation, AccessShareLock);
 
 	return rvs;
+}
+
+/*
+ * Return a List of tables and associated index, where each index is a
+ * partition of the given index
+ */
+static List *
+get_tables_to_cluster_partitioned(MemoryContext cluster_context, Oid indexOid)
+{
+	List		*inhoids;
+	ListCell	*lc;
+	List		*rvs = NIL;
+	MemoryContext	old_context;
+
+	inhoids = find_all_inheritors(indexOid, NoLock, NULL);
+
+	foreach(lc, inhoids)
+	{
+		Oid		indexrelid = lfirst_oid(lc);
+		Oid		relid = IndexGetRelation(indexrelid, false);
+		RelToCluster	*rvtc;
+
+		/*
+		 * Partitioned rels are also processed by cluster_rel, to
+		 * call check_index_is_clusterable() and mark_index_clustered().
+		 */
+
+		/*
+		 * We have to build the list in a different memory context so it will
+		 * survive the cross-transaction processing
+		 */
+		old_context = MemoryContextSwitchTo(cluster_context);
+
+		rvtc = (RelToCluster *) palloc(sizeof(RelToCluster));
+		rvtc->tableOid = relid;
+		rvtc->indexOid = indexrelid;
+		rvs = lappend(rvs, rvtc);
+
+		MemoryContextSwitchTo(old_context);
+	}
+
+	return rvs;
+}
+
+/* Cluster each relation in a separate transaction */
+static void
+cluster_multiple_rels(List *rvs, int options)
+{
+	ListCell *lc;
+
+	/* Commit to get out of starting transaction */
+	PopActiveSnapshot();
+	CommitTransactionCommand();
+
+	/* Ok, now that we've got them all, cluster them one by one */
+	foreach(lc, rvs)
+	{
+		RelToCluster *rvtc = (RelToCluster *) lfirst(lc);
+
+		/* Start a new transaction for each relation. */
+		StartTransactionCommand();
+
+		/* functions in indexes may want a snapshot set */
+		PushActiveSnapshot(GetTransactionSnapshot());
+
+		/* Do the job. */
+		cluster_rel(rvtc->tableOid, rvtc->indexOid,
+					options | CLUOPT_RECHECK);
+
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+	}
 }

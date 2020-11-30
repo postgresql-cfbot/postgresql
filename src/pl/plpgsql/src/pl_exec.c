@@ -594,6 +594,39 @@ plpgsql_exec_function(PLpgSQL_function *func, FunctionCallInfo fcinfo,
 	exec_set_found(&estate, false);
 
 	/*
+	 * Initialize promise winobject
+	 */
+	if (func->fn_prokind == PROKIND_WINDOW)
+	{
+		/* fcinfo is available in this function too */
+		WindowObjectProxy wop;
+		WindowObjectProxyMutable *mutable_data;
+		MemoryContext oldcontext;
+
+		oldcontext = MemoryContextSwitchTo(estate.datum_context);
+
+		wop = palloc(sizeof(WindowObjectProxyData));
+		SET_VARSIZE(wop, sizeof(WindowObjectProxyData));
+
+		wop->winobj = PG_WINDOW_OBJECT();
+
+		Assert(WindowObjectIsValid(wop->winobj));
+
+		mutable_data = palloc0(sizeof(WindowObjectProxyMutable));
+		mutable_data->isout = false;
+		mutable_data->last_argno = -1;
+
+		wop->mutable_data = mutable_data;
+		wop->fcinfo = fcinfo;
+
+		MemoryContextSwitchTo(oldcontext);
+
+		estate.winobjproxy = wop;
+	}
+	else
+		estate.winobjproxy = NULL;
+
+	/*
 	 * Let the instrumentation plugin peek at this function
 	 */
 	if (*plpgsql_plugin_ptr && (*plpgsql_plugin_ptr)->func_beg)
@@ -914,6 +947,11 @@ plpgsql_exec_trigger(PLpgSQL_function *func,
 	 */
 	plpgsql_estate_setup(&estate, func, NULL, NULL, NULL);
 	estate.trigdata = trigdata;
+
+	/*
+	 * Trigger function cannot be WINDOW function
+	 */
+	estate.winobjproxy = NULL;
 
 	/*
 	 * Setup error traceback support for ereport()
@@ -1293,11 +1331,13 @@ copy_plpgsql_datums(PLpgSQL_execstate *estate,
 		PLpgSQL_datum *indatum = indatums[i];
 		PLpgSQL_datum *outdatum;
 
+
 		/* This must agree with plpgsql_finish_datums on what is copiable */
 		switch (indatum->dtype)
 		{
 			case PLPGSQL_DTYPE_VAR:
 			case PLPGSQL_DTYPE_PROMISE:
+
 				outdatum = (PLpgSQL_datum *) ws_next;
 				memcpy(outdatum, indatum, sizeof(PLpgSQL_var));
 				ws_next += MAXALIGN(sizeof(PLpgSQL_var));
@@ -1484,6 +1524,17 @@ plpgsql_fulfill_promise(PLpgSQL_execstate *estate,
 			if (estate->evtrigdata == NULL)
 				elog(ERROR, "event trigger promise is not in an event trigger function");
 			assign_text_var(estate, var, GetCommandTagName(estate->evtrigdata->tag));
+			break;
+
+		case PLPGSQL_PROMISE_WINDOWOBJECT:
+			if (!estate->winobjproxy)
+				elog(ERROR, "windowobject promise is not in a window function");
+
+			assign_simple_var(estate,
+							  var,
+							  PointerGetDatum(estate->winobjproxy),
+							  false,
+							  false);
 			break;
 
 		default:
@@ -2521,6 +2572,17 @@ exec_stmt_getdiag(PLpgSQL_execstate *estate, PLpgSQL_stmt_getdiag *stmt)
 					MemoryContextSwitchTo(oldcontext);
 
 					exec_assign_c_string(estate, var, contextstackstr);
+				}
+				break;
+
+			case PLPGSQL_GETDIAG_VALUE_IS_OUT:
+				{
+					if (!estate->winobjproxy)
+						elog(ERROR, "function is not a window function");
+
+					exec_assign_value(estate, var,
+									  BoolGetDatum(estate->winobjproxy->mutable_data->isout),
+									  false, BOOLOID, -1);
 				}
 				break;
 

@@ -334,6 +334,17 @@ pg_node_tree_send(PG_FUNCTION_ARGS)
 PSEUDOTYPE_DUMMY_IO_FUNCS(pg_ddl_command);
 PSEUDOTYPE_DUMMY_BINARY_IO_FUNCS(pg_ddl_command);
 
+/*
+ * windowobjectproxy
+ *
+ * This type is pointer to WindowObjectProxyData. It is communication
+ * mechanism between PL environment and WinFuncArgs functions. Due
+ * performance reason I prefer using indirect result processing against
+ * using function returning polymorphic composite value. The indirect
+ * mechanism is implemented with proxy object represented by type
+ * WindowObjectProxyData.
+ */
+PSEUDOTYPE_DUMMY_IO_FUNCS(windowobjectproxy);
 
 /*
  * Dummy I/O functions for various other pseudotypes.

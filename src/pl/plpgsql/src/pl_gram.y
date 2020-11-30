@@ -325,6 +325,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %token <keyword>	K_PG_EXCEPTION_CONTEXT
 %token <keyword>	K_PG_EXCEPTION_DETAIL
 %token <keyword>	K_PG_EXCEPTION_HINT
+%token <keyword>	K_PG_VALUE_IS_OUT
 %token <keyword>	K_PRINT_STRICT_PARAMS
 %token <keyword>	K_PRIOR
 %token <keyword>	K_QUERY
@@ -1081,6 +1082,9 @@ getdiag_item :
 						else if (tok_is_keyword(tok, &yylval,
 												K_PG_EXCEPTION_CONTEXT, "pg_exception_context"))
 							$$ = PLPGSQL_GETDIAG_ERROR_CONTEXT;
+						else if (tok_is_keyword(tok, &yylval,
+												K_PG_VALUE_IS_OUT, "pg_value_is_out"))
+							$$ = PLPGSQL_GETDIAG_VALUE_IS_OUT;
 						else if (tok_is_keyword(tok, &yylval,
 												K_COLUMN_NAME, "column_name"))
 							$$ = PLPGSQL_GETDIAG_COLUMN_NAME;

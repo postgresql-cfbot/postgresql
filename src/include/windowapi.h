@@ -36,6 +36,34 @@
 /* this struct is private in nodeWindowAgg.c */
 typedef struct WindowObjectData *WindowObject;
 
+typedef struct WindowObjectProxyMutable
+{
+	/* true when request on winfuncarg doesn't return data */
+	bool		isout;
+
+	/* cache for type related data of Window arguments */
+	int			last_argno;
+	Oid			typid;
+	int16		typlen;
+	bool		typbyval;
+} WindowObjectProxyMutable;
+
+/*
+ * This type is used as proxy between PL variants of WinFuncArg
+ * functions and PL environment. The variables of windowobjectproxy
+ * type can be copied, so mutable content should be elsewhere.
+ */
+typedef struct WindowObjectProxyData
+{
+	int32		vl_len;			/* varlena header */
+
+	WindowObject winobj;
+	FunctionCallInfo	fcinfo;
+	WindowObjectProxyMutable *mutable_data;
+} WindowObjectProxyData;
+
+typedef WindowObjectProxyData *WindowObjectProxy;
+
 #define PG_WINDOW_OBJECT() ((WindowObject) fcinfo->context)
 
 #define WindowObjectIsValid(winobj) \

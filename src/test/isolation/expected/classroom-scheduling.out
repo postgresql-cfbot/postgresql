@@ -27,6 +27,7 @@ count
 step c1: COMMIT;
 step wx2: UPDATE room_reservation SET start_time = TIMESTAMP WITH TIME ZONE '2010-04-01 13:30', end_time = TIMESTAMP WITH TIME ZONE '2010-04-01 14:30' WHERE room_id = '101' AND start_time = TIMESTAMP WITH TIME ZONE '2010-04-01 10:00';
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx1 wy1 ry2 wx2 c1 c2
@@ -72,6 +73,7 @@ step wy1: INSERT INTO room_reservation VALUES ('101', TIMESTAMP WITH TIME ZONE '
 step c1: COMMIT;
 step wx2: UPDATE room_reservation SET start_time = TIMESTAMP WITH TIME ZONE '2010-04-01 13:30', end_time = TIMESTAMP WITH TIME ZONE '2010-04-01 14:30' WHERE room_id = '101' AND start_time = TIMESTAMP WITH TIME ZONE '2010-04-01 10:00';
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx1 ry2 wy1 wx2 c1 c2
@@ -147,6 +149,7 @@ step wx2: UPDATE room_reservation SET start_time = TIMESTAMP WITH TIME ZONE '201
 step c2: COMMIT;
 step wy1: INSERT INTO room_reservation VALUES ('101', TIMESTAMP WITH TIME ZONE '2010-04-01 13:00', TIMESTAMP WITH TIME ZONE '2010-04-01 14:00', 'Carol');
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: ry2 rx1 wy1 c1 wx2 c2
@@ -162,6 +165,7 @@ step wy1: INSERT INTO room_reservation VALUES ('101', TIMESTAMP WITH TIME ZONE '
 step c1: COMMIT;
 step wx2: UPDATE room_reservation SET start_time = TIMESTAMP WITH TIME ZONE '2010-04-01 13:30', end_time = TIMESTAMP WITH TIME ZONE '2010-04-01 14:30' WHERE room_id = '101' AND start_time = TIMESTAMP WITH TIME ZONE '2010-04-01 10:00';
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: ry2 rx1 wy1 wx2 c1 c2
@@ -237,6 +241,7 @@ step wx2: UPDATE room_reservation SET start_time = TIMESTAMP WITH TIME ZONE '201
 step c2: COMMIT;
 step wy1: INSERT INTO room_reservation VALUES ('101', TIMESTAMP WITH TIME ZONE '2010-04-01 13:00', TIMESTAMP WITH TIME ZONE '2010-04-01 14:00', 'Carol');
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: ry2 wx2 rx1 wy1 c1 c2
@@ -282,6 +287,7 @@ count
 step c2: COMMIT;
 step wy1: INSERT INTO room_reservation VALUES ('101', TIMESTAMP WITH TIME ZONE '2010-04-01 13:00', TIMESTAMP WITH TIME ZONE '2010-04-01 14:00', 'Carol');
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: ry2 wx2 c2 rx1 wy1 c1

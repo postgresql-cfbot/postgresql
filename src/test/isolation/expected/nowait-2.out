@@ -12,6 +12,7 @@ id             data
 step s2b: SELECT * FROM foo FOR UPDATE NOWAIT;
 ERROR:  could not obtain lock on row in relation "foo"
 step s1b: COMMIT;
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 
 starting permutation: s2a s1a s2b s1b s2c
@@ -26,6 +27,7 @@ id             data
 step s2b: SELECT * FROM foo FOR UPDATE NOWAIT;
 ERROR:  could not obtain lock on row in relation "foo"
 step s1b: COMMIT;
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 
 starting permutation: s2a s2b s1a s1b s2c
@@ -39,5 +41,6 @@ id             data
 1              x              
 step s1a: SELECT * FROM foo FOR SHARE NOWAIT;
 ERROR:  could not obtain lock on row in relation "foo"
+s1: ERROR:  current transaction failed, rolling back
 step s1b: COMMIT;
 step s2c: COMMIT;

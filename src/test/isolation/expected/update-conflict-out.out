@@ -10,6 +10,7 @@ step foo_commit: COMMIT;
 step trouble_update: UPDATE txn1 SET val = 'add physical version for "bar_select"' WHERE id = 7;
 step bar_select: SELECT * FROM txn1 WHERE id = 7;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+bar: ERROR:  current transaction failed, rolling back
 step bar_commit: COMMIT;
 step trouble_abort: ABORT;
 
@@ -23,5 +24,6 @@ step foo_commit: COMMIT;
 step trouble_delete: DELETE FROM txn1 WHERE id = 7;
 step bar_select: SELECT * FROM txn1 WHERE id = 7;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+bar: ERROR:  current transaction failed, rolling back
 step bar_commit: COMMIT;
 step trouble_abort: ABORT;

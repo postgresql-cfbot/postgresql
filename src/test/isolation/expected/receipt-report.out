@@ -266,6 +266,7 @@ receipt        12-23-2008
 step c1: COMMIT;
 step ry3: SELECT * FROM receipt WHERE deposit_date = DATE '2008-12-22';
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s3: ERROR:  current transaction failed, rolling back
 step c3: COMMIT;
 
 starting permutation: rxwy1 wx2 c2 rx3 ry3 c1 c3
@@ -1070,6 +1071,7 @@ receipt        12-23-2008
 step c1: COMMIT;
 step ry3: SELECT * FROM receipt WHERE deposit_date = DATE '2008-12-22';
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s3: ERROR:  current transaction failed, rolling back
 step c3: COMMIT;
 
 starting permutation: wx2 rxwy1 c2 rx3 ry3 c1 c3

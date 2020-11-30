@@ -7,6 +7,7 @@ step s1c: commit;
 step s2b: begin;
 step s2a: alter table pfk attach partition pfk1 for values in (1);
 ERROR:  insert or update on table "pfk1" violates foreign key constraint "pfk_a_fkey"
+s2: ERROR:  current transaction failed, rolling back
 step s2c: commit;
 
 starting permutation: s1b s1d s2b s1c s2a s2c
@@ -16,6 +17,7 @@ step s2b: begin;
 step s1c: commit;
 step s2a: alter table pfk attach partition pfk1 for values in (1);
 ERROR:  insert or update on table "pfk1" violates foreign key constraint "pfk_a_fkey"
+s2: ERROR:  current transaction failed, rolling back
 step s2c: commit;
 
 starting permutation: s1b s1d s2b s2a s1c s2c
@@ -26,6 +28,7 @@ step s2a: alter table pfk attach partition pfk1 for values in (1); <waiting ...>
 step s1c: commit;
 step s2a: <... completed>
 error in steps s1c s2a: ERROR:  insert or update on table "pfk1" violates foreign key constraint "pfk_a_fkey"
+s2: ERROR:  current transaction failed, rolling back
 step s2c: commit;
 
 starting permutation: s1b s2b s1d s1c s2a s2c
@@ -35,6 +38,7 @@ step s1d: delete from ppk1 where a = 1;
 step s1c: commit;
 step s2a: alter table pfk attach partition pfk1 for values in (1);
 ERROR:  insert or update on table "pfk1" violates foreign key constraint "pfk_a_fkey"
+s2: ERROR:  current transaction failed, rolling back
 step s2c: commit;
 
 starting permutation: s1b s2b s1d s2a s1c s2c
@@ -45,6 +49,7 @@ step s2a: alter table pfk attach partition pfk1 for values in (1); <waiting ...>
 step s1c: commit;
 step s2a: <... completed>
 error in steps s1c s2a: ERROR:  insert or update on table "pfk1" violates foreign key constraint "pfk_a_fkey"
+s2: ERROR:  current transaction failed, rolling back
 step s2c: commit;
 
 starting permutation: s1b s2b s2a s1d s2c s1c
@@ -55,6 +60,7 @@ step s1d: delete from ppk1 where a = 1; <waiting ...>
 step s2c: commit;
 step s1d: <... completed>
 error in steps s2c s1d: ERROR:  update or delete on table "ppk1" violates foreign key constraint "pfk_a_fkey1" on table "pfk"
+s1: ERROR:  current transaction failed, rolling back
 step s1c: commit;
 
 starting permutation: s1b s2b s2a s2c s1d s1c
@@ -64,6 +70,7 @@ step s2a: alter table pfk attach partition pfk1 for values in (1);
 step s2c: commit;
 step s1d: delete from ppk1 where a = 1;
 ERROR:  update or delete on table "ppk1" violates foreign key constraint "pfk_a_fkey1" on table "pfk"
+s1: ERROR:  current transaction failed, rolling back
 step s1c: commit;
 
 starting permutation: s2b s1b s1d s1c s2a s2c
@@ -73,6 +80,7 @@ step s1d: delete from ppk1 where a = 1;
 step s1c: commit;
 step s2a: alter table pfk attach partition pfk1 for values in (1);
 ERROR:  insert or update on table "pfk1" violates foreign key constraint "pfk_a_fkey"
+s2: ERROR:  current transaction failed, rolling back
 step s2c: commit;
 
 starting permutation: s2b s1b s1d s2a s1c s2c
@@ -83,6 +91,7 @@ step s2a: alter table pfk attach partition pfk1 for values in (1); <waiting ...>
 step s1c: commit;
 step s2a: <... completed>
 error in steps s1c s2a: ERROR:  insert or update on table "pfk1" violates foreign key constraint "pfk_a_fkey"
+s2: ERROR:  current transaction failed, rolling back
 step s2c: commit;
 
 starting permutation: s2b s1b s2a s1d s2c s1c
@@ -93,6 +102,7 @@ step s1d: delete from ppk1 where a = 1; <waiting ...>
 step s2c: commit;
 step s1d: <... completed>
 error in steps s2c s1d: ERROR:  update or delete on table "ppk1" violates foreign key constraint "pfk_a_fkey1" on table "pfk"
+s1: ERROR:  current transaction failed, rolling back
 step s1c: commit;
 
 starting permutation: s2b s1b s2a s2c s1d s1c
@@ -102,6 +112,7 @@ step s2a: alter table pfk attach partition pfk1 for values in (1);
 step s2c: commit;
 step s1d: delete from ppk1 where a = 1;
 ERROR:  update or delete on table "ppk1" violates foreign key constraint "pfk_a_fkey1" on table "pfk"
+s1: ERROR:  current transaction failed, rolling back
 step s1c: commit;
 
 starting permutation: s2b s2a s1b s1d s2c s1c
@@ -112,6 +123,7 @@ step s1d: delete from ppk1 where a = 1; <waiting ...>
 step s2c: commit;
 step s1d: <... completed>
 error in steps s2c s1d: ERROR:  update or delete on table "ppk1" violates foreign key constraint "pfk_a_fkey1" on table "pfk"
+s1: ERROR:  current transaction failed, rolling back
 step s1c: commit;
 
 starting permutation: s2b s2a s1b s2c s1d s1c
@@ -121,6 +133,7 @@ step s1b: begin;
 step s2c: commit;
 step s1d: delete from ppk1 where a = 1;
 ERROR:  update or delete on table "ppk1" violates foreign key constraint "pfk_a_fkey1" on table "pfk"
+s1: ERROR:  current transaction failed, rolling back
 step s1c: commit;
 
 starting permutation: s2b s2a s2c s1b s1d s1c
@@ -130,4 +143,5 @@ step s2c: commit;
 step s1b: begin;
 step s1d: delete from ppk1 where a = 1;
 ERROR:  update or delete on table "ppk1" violates foreign key constraint "pfk_a_fkey1" on table "pfk"
+s1: ERROR:  current transaction failed, rolling back
 step s1c: commit;

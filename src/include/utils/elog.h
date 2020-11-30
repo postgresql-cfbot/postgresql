@@ -40,17 +40,18 @@
 #define WARNING		19			/* Warnings.  NOTICE is for expected messages
 								 * like implicit sequence creation by SERIAL.
 								 * WARNING is for unexpected messages. */
-#define ERROR		20			/* user error - abort transaction; return to
+#define USER_ERROR	20
+#define ERROR		21			/* user error - abort transaction; return to
 								 * known state */
 /* Save ERROR value in PGERROR so it can be restored when Win32 includes
  * modify it.  We have to use a constant rather than ERROR because macros
  * are expanded only when referenced outside macros.
  */
 #ifdef WIN32
-#define PGERROR		20
+#define PGERROR		21
 #endif
-#define FATAL		21			/* fatal error - abort process */
-#define PANIC		22			/* take down the other backends with me */
+#define FATAL		22			/* fatal error - abort process */
+#define PANIC		23			/* take down the other backends with me */
 
  /* #define DEBUG DEBUG1 */	/* Backward compatibility with pre-7.3 */
 

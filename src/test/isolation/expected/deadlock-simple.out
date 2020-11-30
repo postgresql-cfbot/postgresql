@@ -8,4 +8,5 @@ step s2ae: LOCK TABLE a1 IN ACCESS EXCLUSIVE MODE;
 step s1ae: <... completed>
 error in steps s2ae s1ae: ERROR:  deadlock detected
 step s1c: COMMIT;
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;

@@ -52,6 +52,7 @@ step wy2: update test_t set val2 = 2 where val2 = 1 and id = 9;
 step c1: COMMIT;
 step rxy2: select * from test_t where val2 = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rxy1 wx1 wy2 rxy2 c1 c2
@@ -142,6 +143,7 @@ step wx1: update test_t set val2 = 2 where val2 = 1 and id = 10;
 step c1: COMMIT;
 step rxy2: select * from test_t where val2 = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rxy1 wy2 wx1 rxy2 c1 c2
@@ -312,6 +314,7 @@ id             val1           val2
 step c2: COMMIT;
 step wx1: update test_t set val2 = 2 where val2 = 1 and id = 10;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: wy2 rxy1 wx1 c1 rxy2 c2
@@ -334,6 +337,7 @@ step wx1: update test_t set val2 = 2 where val2 = 1 and id = 10;
 step c1: COMMIT;
 step rxy2: select * from test_t where val2 = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: wy2 rxy1 wx1 rxy2 c1 c2
@@ -504,6 +508,7 @@ id             val1           val2
 step c2: COMMIT;
 step wx1: update test_t set val2 = 2 where val2 = 1 and id = 10;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: wy2 rxy2 rxy1 wx1 c1 c2
@@ -606,6 +611,7 @@ id             val1           val2
 step c2: COMMIT;
 step wx1: update test_t set val2 = 2 where val2 = 1 and id = 10;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: wy2 rxy2 c2 rxy1 wx1 c1

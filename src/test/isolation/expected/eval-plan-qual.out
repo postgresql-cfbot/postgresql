@@ -552,6 +552,7 @@ step updwctefail: WITH doup AS (UPDATE accounts SET balance = balance + 1100 WHE
 step c1: COMMIT;
 step updwctefail: <... completed>
 error in steps c1 updwctefail: ERROR:  tuple to be updated was already modified by an operation triggered by the current command
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 step read: SELECT * FROM accounts ORDER BY accountid;
 accountid      balance        
@@ -585,6 +586,7 @@ step delwctefail: WITH doup AS (UPDATE accounts SET balance = balance + 1100 WHE
 step c1: COMMIT;
 step delwctefail: <... completed>
 error in steps c1 delwctefail: ERROR:  tuple to be deleted was already modified by an operation triggered by the current command
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 step read: SELECT * FROM accounts ORDER BY accountid;
 accountid      balance        
@@ -932,6 +934,7 @@ step complexpartupdate_route_err1:
 step c1: COMMIT;
 step complexpartupdate_route_err1: <... completed>
 error in steps c1 complexpartupdate_route_err1: ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: simplepartupdate_noroute complexpartupdate_route c1 c2

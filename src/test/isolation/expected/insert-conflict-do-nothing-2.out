@@ -32,6 +32,7 @@ step donothing2: INSERT INTO ints(key, val) VALUES(1, 'donothing2'), (1, 'donoth
 step c1: COMMIT;
 step donothing2: <... completed>
 error in steps c1 donothing2: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 step show: SELECT * FROM ints;
 key            val            
@@ -46,6 +47,7 @@ step donothing1: INSERT INTO ints(key, val) VALUES(1, 'donothing1') ON CONFLICT 
 step c2: COMMIT;
 step donothing1: <... completed>
 error in steps c2 donothing1: ERROR:  could not serialize access due to concurrent update
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 step show: SELECT * FROM ints;
 key            val            
@@ -84,6 +86,7 @@ step donothing2: INSERT INTO ints(key, val) VALUES(1, 'donothing2'), (1, 'donoth
 step c1: COMMIT;
 step donothing2: <... completed>
 error in steps c1 donothing2: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 step show: SELECT * FROM ints;
 key            val            
@@ -98,6 +101,7 @@ step donothing1: INSERT INTO ints(key, val) VALUES(1, 'donothing1') ON CONFLICT 
 step c2: COMMIT;
 step donothing1: <... completed>
 error in steps c2 donothing1: ERROR:  could not serialize access due to concurrent update
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 step show: SELECT * FROM ints;
 key            val            

@@ -20,6 +20,7 @@ step s8a1: LOCK TABLE a1; <waiting ...>
 step s8a1: <... completed>
 step s7a8: <... completed>
 error in steps s8a1 s7a8: ERROR:  deadlock detected
+s8: ERROR:  current transaction failed, rolling back
 step s8c: COMMIT;
 step s7c: COMMIT;
 step s6a7: <... completed>

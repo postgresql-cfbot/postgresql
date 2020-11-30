@@ -27,6 +27,7 @@ count
 step c1: COMMIT;
 step wx2: UPDATE person SET is_project_manager = false WHERE person_id = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx1 wy1 ry2 wx2 c1 c2
@@ -72,6 +73,7 @@ step wy1: INSERT INTO project VALUES (101, 'Build Great Wall', 1);
 step c1: COMMIT;
 step wx2: UPDATE person SET is_project_manager = false WHERE person_id = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx1 ry2 wy1 wx2 c1 c2
@@ -147,6 +149,7 @@ step wx2: UPDATE person SET is_project_manager = false WHERE person_id = 1;
 step c2: COMMIT;
 step wy1: INSERT INTO project VALUES (101, 'Build Great Wall', 1);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: ry2 rx1 wy1 c1 wx2 c2
@@ -162,6 +165,7 @@ step wy1: INSERT INTO project VALUES (101, 'Build Great Wall', 1);
 step c1: COMMIT;
 step wx2: UPDATE person SET is_project_manager = false WHERE person_id = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: ry2 rx1 wy1 wx2 c1 c2
@@ -237,6 +241,7 @@ step wx2: UPDATE person SET is_project_manager = false WHERE person_id = 1;
 step c2: COMMIT;
 step wy1: INSERT INTO project VALUES (101, 'Build Great Wall', 1);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: ry2 wx2 rx1 wy1 c1 c2
@@ -282,6 +287,7 @@ count
 step c2: COMMIT;
 step wy1: INSERT INTO project VALUES (101, 'Build Great Wall', 1);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: ry2 wx2 c2 rx1 wy1 c1

@@ -158,6 +158,7 @@ typedef struct CachedPlan
 	int			generation;		/* parent's generation number for this plan */
 	int			refcount;		/* count of live references to this struct */
 	MemoryContext context;		/* context containing this CachedPlan */
+	bool		is_generic;	/* is this plan generic or not? */
 } CachedPlan;
 
 /*

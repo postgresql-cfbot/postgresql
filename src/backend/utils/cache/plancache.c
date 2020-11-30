@@ -1217,12 +1217,14 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 		plan = BuildCachedPlan(plansource, qlist, boundParams, queryEnv);
 		/* Accumulate total costs of custom plans */
 		plansource->total_custom_cost += cached_plan_cost(plan, true);
+		plan->is_generic = false;
 
 		plansource->num_custom_plans++;
 	}
 	else
 	{
 		plansource->num_generic_plans++;
+		plan->is_generic = true;
 	}
 
 	Assert(plan != NULL);

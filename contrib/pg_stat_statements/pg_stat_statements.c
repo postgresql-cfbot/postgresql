@@ -81,6 +81,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
+#include "utils/timestamp.h"
 
 PG_MODULE_MAGIC;
 
@@ -199,6 +200,7 @@ typedef struct Counters
 typedef struct pgssGlobalStats
 {
 	int64		dealloc;		/* # of times entries were deallocated */
+	TimestampTz stats_reset;    		/* timestamp with all stats reset */
 } pgssGlobalStats;
 
 /*
@@ -565,6 +567,7 @@ pgss_shmem_startup(void)
 		pgss->n_writers = 0;
 		pgss->gc_count = 0;
 		pgss->stats.dealloc = 0;
+		pgss->stats.stats_reset = GetCurrentTimestamp();
 	}
 
 	memset(&info, 0, sizeof(info));
@@ -1510,6 +1513,7 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 #define PG_STAT_STATEMENTS_COLS_V1_3	23
 #define PG_STAT_STATEMENTS_COLS_V1_8	32
 #define PG_STAT_STATEMENTS_COLS			32	/* maximum of above */
+#define PG_STAT_STATEMENTS_INFO_COLS	2
 
 /*
  * Retrieve statement statistics.
@@ -1889,7 +1893,18 @@ Datum
 pg_stat_statements_info(PG_FUNCTION_ARGS)
 {
 	pgssGlobalStats stats;
+	TupleDesc	tupdesc;
+	HeapTuple	result_tuple;
+	Datum 		values[PG_STAT_STATEMENTS_INFO_COLS];
+	bool 		nulls[PG_STAT_STATEMENTS_INFO_COLS];
 
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	tupdesc = BlessTupleDesc(tupdesc);
+
+	MemSet(values, 0, sizeof(values));
+	MemSet(nulls, 0, sizeof(nulls));
 	/* Read global statistics for pg_stat_statements */
 	{
 		volatile pgssSharedState *s = (volatile pgssSharedState *) pgss;
@@ -1899,7 +1914,14 @@ pg_stat_statements_info(PG_FUNCTION_ARGS)
 		SpinLockRelease(&s->mutex);
 	}
 
-	PG_RETURN_INT64(stats.dealloc);
+	/* Read dealloc */
+	values[0] = Int64GetDatum(stats.dealloc);
+
+	/* Read stats_reset */
+	values[1] = stats.stats_reset;
+
+	result_tuple = heap_form_tuple(tupdesc, values, nulls);
+	return HeapTupleGetDatum(result_tuple);
 }
 
 /*
@@ -2507,6 +2529,7 @@ entry_reset(Oid userid, Oid dbid, uint64 queryid)
 	long		num_entries;
 	long		num_remove = 0;
 	pgssHashKey key;
+	TimestampTz reset_ts;
 
 	if (!pgss || !pgss_hash)
 		ereport(ERROR,
@@ -2553,12 +2576,14 @@ entry_reset(Oid userid, Oid dbid, uint64 queryid)
 			num_remove++;
 		}
 
+		reset_ts = GetCurrentTimestamp();
 		/* Reset global statistics for pg_stat_statements */
 		{
 			volatile pgssSharedState *s = (volatile pgssSharedState *) pgss;
 
 			SpinLockAcquire(&s->mutex);
 			s->stats.dealloc = 0;
+			s->stats.stats_reset = reset_ts;	/* reset execution time */
 			SpinLockRelease(&s->mutex);
 		}
 	}

@@ -523,6 +523,15 @@
        <varname>pg_stat_statements.max</varname> were observed
       </para></entry>
      </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>reset_exec_time</structfield> <type>timestamp with time zone</type>
+      </para>
+      <para>
+        Shows the time at which <function>pg_stat_statements_reset(0,0,0)</function> was last called.
+      </para></entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>

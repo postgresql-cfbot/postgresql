@@ -30,6 +30,7 @@
 #include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
 #include "utils/rangetypes.h"
+#include "utils/multirangetypes.h"
 
 static int	float8_qsort_cmp(const void *a1, const void *a2);
 static int	range_bound_qsort_cmp(const void *a1, const void *a2, void *arg);
@@ -48,6 +49,33 @@ range_typanalyze(PG_FUNCTION_ARGS)
 
 	/* Get information about range type; note column might be a domain */
 	typcache = range_get_typcache(fcinfo, getBaseType(stats->attrtypid));
+
+	if (attr->attstattarget < 0)
+		attr->attstattarget = default_statistics_target;
+
+	stats->compute_stats = compute_range_stats;
+	stats->extra_data = typcache;
+	/* same as in std_typanalyze */
+	stats->minrows = 300 * attr->attstattarget;
+
+	PG_RETURN_BOOL(true);
+}
+
+/*
+ * multirange_typanalyze -- typanalyze function for multirange columns
+ *
+ * We do the same analysis as for ranges, but on the smallest range that
+ * completely includes the multirange.
+ */
+Datum
+multirange_typanalyze(PG_FUNCTION_ARGS)
+{
+	VacAttrStats *stats = (VacAttrStats *) PG_GETARG_POINTER(0);
+	TypeCacheEntry *typcache;
+	Form_pg_attribute attr = stats->attr;
+
+	/* Get information about multirange type; note column might be a domain */
+	typcache = multirange_get_typcache(fcinfo, getBaseType(stats->attrtypid));
 
 	if (attr->attstattarget < 0)
 		attr->attstattarget = default_statistics_target;
@@ -98,7 +126,8 @@ compute_range_stats(VacAttrStats *stats, AnalyzeAttrFetchFunc fetchfunc,
 					int samplerows, double totalrows)
 {
 	TypeCacheEntry *typcache = (TypeCacheEntry *) stats->extra_data;
-	bool		has_subdiff = OidIsValid(typcache->rng_subdiff_finfo.fn_oid);
+	TypeCacheEntry *mltrng_typcache = NULL;
+	bool		has_subdiff;
 	int			null_cnt = 0;
 	int			non_null_cnt = 0;
 	int			non_empty_cnt = 0;
@@ -112,6 +141,15 @@ compute_range_stats(VacAttrStats *stats, AnalyzeAttrFetchFunc fetchfunc,
 			   *uppers;
 	double		total_width = 0;
 
+	if (typcache->typtype == TYPTYPE_MULTIRANGE)
+	{
+		mltrng_typcache = typcache;
+		typcache = typcache->rngtype;
+	}
+	else
+		Assert(typcache->typtype == TYPTYPE_RANGE);
+	has_subdiff = OidIsValid(typcache->rng_subdiff_finfo.fn_oid);
+
 	/* Allocate memory to hold range bounds and lengths of the sample ranges. */
 	lowers = (RangeBound *) palloc(sizeof(RangeBound) * samplerows);
 	uppers = (RangeBound *) palloc(sizeof(RangeBound) * samplerows);
@@ -123,6 +161,7 @@ compute_range_stats(VacAttrStats *stats, AnalyzeAttrFetchFunc fetchfunc,
 		Datum		value;
 		bool		isnull,
 					empty;
+		MultirangeType *multirange;
 		RangeType  *range;
 		RangeBound	lower,
 					upper;
@@ -145,7 +184,23 @@ compute_range_stats(VacAttrStats *stats, AnalyzeAttrFetchFunc fetchfunc,
 		total_width += VARSIZE_ANY(DatumGetPointer(value));
 
 		/* Get range and deserialize it for further analysis. */
-		range = DatumGetRangeTypeP(value);
+		if (mltrng_typcache != NULL)
+		{
+			/* Treat multiranges like a big range without gaps. */
+			multirange = DatumGetMultirangeTypeP(value);
+			if (MultirangeIsEmpty(multirange))
+				range = make_empty_range(typcache);
+			else
+			{
+				int	range_count;
+				RangeType **ranges;
+				multirange_deserialize(typcache, multirange, &range_count, &ranges);
+				range = range_union_internal(typcache, ranges[0],
+						ranges[range_count - 1], false);
+			}
+		}
+		else
+			range = DatumGetRangeTypeP(value);
 		range_deserialize(typcache, range, &lower, &upper, &empty);
 
 		if (!empty)
@@ -262,6 +317,13 @@ compute_range_stats(VacAttrStats *stats, AnalyzeAttrFetchFunc fetchfunc,
 			stats->stakind[slot_idx] = STATISTIC_KIND_BOUNDS_HISTOGRAM;
 			stats->stavalues[slot_idx] = bound_hist_values;
 			stats->numvalues[slot_idx] = num_hist;
+
+			/* Store ranges even if we're analyzing a multirange column */
+			stats->statypid[slot_idx] = typcache->type_id;
+			stats->statyplen[slot_idx] = typcache->typlen;
+			stats->statypbyval[slot_idx] = typcache->typbyval;
+			stats->statypalign[slot_idx] = 'd';
+
 			slot_idx++;
 		}
 

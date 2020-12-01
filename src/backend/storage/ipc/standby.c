@@ -39,6 +39,7 @@
 int			vacuum_defer_cleanup_age;
 int			max_standby_archive_delay = 30 * 1000;
 int			max_standby_streaming_delay = 30 * 1000;
+bool		log_recovery_conflict_waits = false;
 
 static HTAB *RecoveryLockLists;
 
@@ -49,6 +50,7 @@ static void ResolveRecoveryConflictWithVirtualXIDs(VirtualTransactionId *waitlis
 static void SendRecoveryConflictWithBufferPin(ProcSignalReason reason);
 static XLogRecPtr LogCurrentRunningXacts(RunningTransactions CurrRunningXacts);
 static void LogAccessExclusiveLocks(int nlocks, xl_standby_lock *locks);
+static const char *get_recovery_conflict_desc(ProcSignalReason reason);
 
 /*
  * Keep track of all the locks owned by a given transaction.
@@ -216,14 +218,74 @@ WaitExceedsMaxStandbyDelay(uint32 wait_event_info)
 }
 
 /*
+ * Log the recovery conflict.
+ *
+ * wait_start is the timestamp when the caller started to wait.
+ * cur_ts is the timestamp when this function has been called.
+ * This function also reports the details about the conflicting
+ * process ids if *wait_list is not NULL.
+ */
+void
+LogRecoveryConflict(ProcSignalReason reason, TimestampTz wait_start,
+					TimestampTz cur_ts, VirtualTransactionId *wait_list)
+{
+	long		secs;
+	int			usecs;
+	long		msecs;
+	StringInfoData buf;
+	int	nprocs = 0;
+
+	TimestampDifference(wait_start, cur_ts, &secs, &usecs);
+	msecs = secs * 1000 + usecs / 1000;
+	usecs = usecs % 1000;
+
+	initStringInfo(&buf);
+
+	if (wait_list)
+	{
+		VirtualTransactionId *vxids;
+
+
+		/* construct a string of list of the conflicted processes */
+		vxids = wait_list;
+		while (VirtualTransactionIdIsValid(*vxids))
+		{
+			PGPROC *proc = BackendIdGetProc(vxids->backendId);
+
+			if (proc)
+			{
+				if (nprocs == 0)
+					appendStringInfo(&buf, "%d", proc->pid);
+				else
+					appendStringInfo(&buf, ", %d", proc->pid);
+
+				nprocs++;
+			}
+
+			vxids++;
+		}
+
+	}
+
+	ereport(LOG,
+			errmsg("recovery still waiting after %ld.%03d ms: %s",
+					msecs, usecs, _(get_recovery_conflict_desc(reason))),
+			wait_list != NULL ? errdetail_log_plural("Conflicting process: %s.",
+													"Conflicting processes: %s.",
+													nprocs, buf.data) : 0);
+	pfree(buf.data);
+}
+
+/*
  * This is the main executioner for any query backend that conflicts with
  * recovery processing. Judgement has already been passed on it within
  * a specific rmgr. Here we just issue the orders to the procs. The procs
  * then throw the required error as instructed.
  *
- * If report_waiting is true, "waiting" is reported in PS display if necessary.
- * If the caller has already reported that, report_waiting should be false.
- * Otherwise, "waiting" is reported twice unexpectedly.
+ * If report_waiting is true, "waiting" is reported in PS display and log
+ * the waits for the recovery conflict if necessary.  If the caller has already
+ * reported that, report_waiting should be false.  Otherwise, both are reported
+ * twice unexpectedly.
  */
 static void
 ResolveRecoveryConflictWithVirtualXIDs(VirtualTransactionId *waitlist,
@@ -232,12 +294,14 @@ ResolveRecoveryConflictWithVirtualXIDs(VirtualTransactionId *waitlist,
 {
 	TimestampTz waitStart = 0;
 	char	   *new_status;
+	bool logged_recovery_conflict = false;
 
 	/* Fast exit, to avoid a kernel call if there's no work to be done. */
 	if (!VirtualTransactionIdIsValid(*waitlist))
 		return;
 
-	if (report_waiting)
+	/* Set the wait start timestamp for reporting */
+	if (report_waiting && (logged_recovery_conflict || update_process_title))
 		waitStart = GetCurrentTimestamp();
 	new_status = NULL;			/* we haven't changed the ps display */
 
@@ -249,23 +313,43 @@ ResolveRecoveryConflictWithVirtualXIDs(VirtualTransactionId *waitlist,
 		/* wait until the virtual xid is gone */
 		while (!VirtualXactLock(*waitlist, false))
 		{
-			/*
-			 * Report via ps if we have been waiting for more than 500 msec
-			 * (should that be configurable?)
-			 */
-			if (update_process_title && new_status == NULL && report_waiting &&
-				TimestampDifferenceExceeds(waitStart, GetCurrentTimestamp(),
-										   500))
+			if (waitStart > 0)
 			{
-				const char *old_status;
-				int			len;
+				TimestampTz cur_ts = 0;
+				bool maybe_log_conflict =
+					(log_recovery_conflict_waits && !logged_recovery_conflict);
+				bool maybe_update_pstitle =
+					(update_process_title && new_status == NULL);
 
-				old_status = get_ps_display(&len);
-				new_status = (char *) palloc(len + 8 + 1);
-				memcpy(new_status, old_status, len);
-				strcpy(new_status + len, " waiting");
-				set_ps_display(new_status);
-				new_status[len] = '\0'; /* truncate off " waiting" */
+				/* Get the current timestamp if not report yet */
+				if (maybe_log_conflict || maybe_update_pstitle)
+					cur_ts = GetCurrentTimestamp();
+
+				/* Log the recovery conflict if necessary */
+				if (maybe_log_conflict &&
+					TimestampDifferenceExceeds(waitStart, cur_ts, DeadlockTimeout))
+				{
+					LogRecoveryConflict(reason, waitStart, cur_ts, waitlist);
+					logged_recovery_conflict = true;
+				}
+
+				/*
+				 * Report via ps if we have been waiting for more than 500 msec
+				 * (should that be configurable?)
+				 */
+				if (maybe_update_pstitle &&
+					TimestampDifferenceExceeds(waitStart, cur_ts, 500))
+				{
+					const char *old_status;
+					int			len;
+
+					old_status = get_ps_display(&len);
+					new_status = (char *) palloc(len + 8 + 1);
+					memcpy(new_status, old_status, len);
+					strcpy(new_status + len, " waiting");
+					set_ps_display(new_status);
+					new_status[len] = '\0'; /* truncate off " waiting" */
+				}
 			}
 
 			/* Is it time to kill it? */
@@ -398,9 +482,12 @@ ResolveRecoveryConflictWithDatabase(Oid dbid)
  *
  * Deadlocks involving the Startup process and an ordinary backend process
  * will be detected by the deadlock detector within the ordinary backend.
+ *
+ * already_logged is used to set the deadlock timeout for logging purpose
+ * only when the message has not been logged yet.
  */
 void
-ResolveRecoveryConflictWithLock(LOCKTAG locktag)
+ResolveRecoveryConflictWithLock(LOCKTAG locktag, bool already_logged)
 {
 	TimestampTz ltime;
 
@@ -408,7 +495,35 @@ ResolveRecoveryConflictWithLock(LOCKTAG locktag)
 
 	ltime = GetStandbyLimitTime();
 
-	if (GetCurrentTimestamp() >= ltime)
+	if (ltime == 0 || GetCurrentTimestamp() < ltime)
+	{
+		EnableTimeoutParams timeouts[2];
+		int cnt = 0;
+
+		/*
+		 * Wait (or wait again) until ltime
+		 */
+		if (ltime != 0)
+		{
+			timeouts[cnt].id = STANDBY_LOCK_TIMEOUT;
+			timeouts[cnt].type = TMPARAM_AT;
+			timeouts[cnt].fin_time = ltime;
+			cnt++;
+		}
+
+		/* Also, set deadlock timeout for logging purpose if necessary */
+		if (log_recovery_conflict_waits && !already_logged)
+		{
+			timeouts[cnt].id = STANDBY_TIMEOUT;
+			timeouts[cnt].type = TMPARAM_AFTER;
+			timeouts[cnt].delay_ms = DeadlockTimeout;
+			cnt++;
+		}
+
+		if (cnt > 0)
+			enable_timeouts(timeouts, cnt);
+	}
+	else
 	{
 		/*
 		 * We're already behind, so clear a path as quickly as possible.
@@ -419,25 +534,14 @@ ResolveRecoveryConflictWithLock(LOCKTAG locktag)
 
 		/*
 		 * Prevent ResolveRecoveryConflictWithVirtualXIDs() from reporting
-		 * "waiting" in PS display by disabling its argument report_waiting
-		 * because the caller, WaitOnLock(), has already reported that.
+		 * "waiting" in PS display and logging recovery conflict by disabling
+		 * its argument report_waiting because the callers may have already
+		 * reported that.
 		 */
 		ResolveRecoveryConflictWithVirtualXIDs(backends,
 											   PROCSIG_RECOVERY_CONFLICT_LOCK,
 											   PG_WAIT_LOCK | locktag.locktag_type,
 											   false);
-	}
-	else
-	{
-		/*
-		 * Wait (or wait again) until ltime
-		 */
-		EnableTimeoutParams timeouts[1];
-
-		timeouts[0].id = STANDBY_LOCK_TIMEOUT;
-		timeouts[0].type = TMPARAM_AT;
-		timeouts[0].fin_time = ltime;
-		enable_timeouts(timeouts, 1);
 	}
 
 	/* Wait to be signaled by the release of the Relation Lock */
@@ -1115,4 +1219,37 @@ LogStandbyInvalidations(int nmsgs, SharedInvalidationMessage *msgs,
 	XLogRegisterData((char *) msgs,
 					 nmsgs * sizeof(SharedInvalidationMessage));
 	XLogInsert(RM_STANDBY_ID, XLOG_INVALIDATIONS);
+}
+
+/* Return the description of recovery conflict */
+static const char *
+get_recovery_conflict_desc(ProcSignalReason reason)
+{
+	const char *reasonDesc = gettext_noop("unknown reason");
+
+	switch (reason)
+	{
+		case PROCSIG_RECOVERY_CONFLICT_BUFFERPIN:
+			reasonDesc = gettext_noop("recovery conflict on buffer pin");
+			break;
+		case PROCSIG_RECOVERY_CONFLICT_LOCK:
+			reasonDesc = gettext_noop("recovery conflict on lock");
+			break;
+		case PROCSIG_RECOVERY_CONFLICT_TABLESPACE:
+			reasonDesc = gettext_noop("recovery conflict on tablespace");
+			break;
+		case PROCSIG_RECOVERY_CONFLICT_SNAPSHOT:
+			reasonDesc = gettext_noop("recovery conflict on snapshot");
+			break;
+		case PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK:
+			reasonDesc = gettext_noop("recovery conflict on buffer deadlock");
+			break;
+		case PROCSIG_RECOVERY_CONFLICT_DATABASE:
+			reasonDesc = gettext_noop("recovery conflict on database");
+			break;
+		default:
+			break;
+	}
+
+	return reasonDesc;
 }

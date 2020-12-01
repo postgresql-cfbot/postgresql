@@ -3810,6 +3810,8 @@ LockBufferForCleanup(Buffer buffer)
 {
 	BufferDesc *bufHdr;
 	char	   *new_status = NULL;
+	TimestampTz waitStart = 0;
+	bool        logged_recovery_conflict = false;
 
 	Assert(BufferIsPinned(buffer));
 	Assert(PinCountWaitBuf == NULL);
@@ -3830,6 +3832,10 @@ LockBufferForCleanup(Buffer buffer)
 			 GetPrivateRefCount(buffer));
 
 	bufHdr = GetBufferDescriptor(buffer - 1);
+
+	/* Set wait start timestamp if logging is enabled */
+	if (log_recovery_conflict_waits)
+		waitStart = GetCurrentTimestamp();
 
 	for (;;)
 	{
@@ -3883,6 +3889,18 @@ LockBufferForCleanup(Buffer buffer)
 				new_status[len] = '\0'; /* truncate off " waiting" */
 			}
 
+			if (waitStart > 0 && !logged_recovery_conflict)
+			{
+				TimestampTz cur_ts = GetCurrentTimestamp();
+				if (TimestampDifferenceExceeds(waitStart, cur_ts,
+										   DeadlockTimeout))
+				{
+					Assert(log_recovery_conflict_waits);
+					LogRecoveryConflict(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN,
+										waitStart, cur_ts, NULL);
+					logged_recovery_conflict = true;
+				}
+			}
 			/* Publish the bufid that Startup process waits on */
 			SetStartupBufferPinWaitBufId(buffer - 1);
 			/* Set alarm and then wait to be signaled by UnpinBuffer() */

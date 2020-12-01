@@ -1063,8 +1063,10 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 	LWLock	   *partitionLock = LockHashPartitionLock(hashcode);
 	PROC_QUEUE *waitQueue = &(lock->waitProcs);
 	LOCKMASK	myHeldLocks = MyProc->heldLocks;
+	TimestampTz standbyWaitStart = 0;
 	bool		early_deadlock = false;
 	bool		allow_autovacuum_cancel = true;
+	bool        logged_recovery_conflict = false;
 	ProcWaitStatus myWaitStatus;
 	PGPROC	   *proc;
 	PGPROC	   *leader = MyProc->lockGroupLeader;
@@ -1260,6 +1262,11 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 		else
 			enable_timeout_after(DEADLOCK_TIMEOUT, DeadlockTimeout);
 	}
+	else if (log_recovery_conflict_waits)
+	{
+		/* Set wait start timestamp if logging is enabled */
+		standbyWaitStart = GetCurrentTimestamp();
+	}
 
 	/*
 	 * If somebody wakes us between LWLockRelease and WaitLatch, the latch
@@ -1280,7 +1287,33 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 		if (InHotStandby)
 		{
 			/* Set a timer and wait for that or for the Lock to be granted */
-			ResolveRecoveryConflictWithLock(locallock->tag.lock);
+			ResolveRecoveryConflictWithLock(locallock->tag.lock, logged_recovery_conflict);
+
+			if (standbyWaitStart > 0 && !logged_recovery_conflict)
+			{
+				TimestampTz cur_ts = GetCurrentTimestamp();
+				if (TimestampDifferenceExceeds(standbyWaitStart, cur_ts,
+										   DeadlockTimeout))
+				{
+					VirtualTransactionId *vxids;
+					int	cnt;
+
+					Assert(log_recovery_conflict_waits);
+					vxids =	GetLockConflicts(&locallock->tag.lock,
+											 AccessExclusiveLock, &cnt);
+
+					/*
+					 * Log the recovery conflict if there is still virtual transaction
+					 * conflicting with the lock.
+					 */
+					if (cnt > 0)
+					{
+						LogRecoveryConflict(PROCSIG_RECOVERY_CONFLICT_LOCK,
+											standbyWaitStart, cur_ts, vxids);
+						logged_recovery_conflict = true;
+					}
+				}
+			}
 		}
 		else
 		{

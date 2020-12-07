@@ -1290,6 +1290,16 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"libpq_compression", PGC_SIGHUP, CLIENT_CONN_OTHER,
+			gettext_noop("Compress client-server traffic."),
+			NULL
+		},
+		&libpq_compression,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"log_checkpoints", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("Logs each checkpoint."),
 			NULL

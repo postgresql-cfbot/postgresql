@@ -1000,6 +1000,13 @@ PGAC_ARG_BOOL(with, zlib, yes,
 AC_SUBST(with_zlib)
 
 #
+# Zstd
+#
+PGAC_ARG_BOOL(with, zstd, no,
+              [use zstd])
+AC_SUBST(with_zstd)
+
+#
 # Assignments
 #
 
@@ -1184,6 +1191,13 @@ if test "$with_zlib" = yes; then
 If you have zlib already installed, see config.log for details on the
 failure.  It is possible the compiler isn't looking in the proper directory.
 Use --without-zlib to disable zlib support.])])
+fi
+
+if test "$with_zstd" = yes; then
+  AC_CHECK_LIB(zstd, ZSTD_decompressStream, [],
+               [AC_MSG_ERROR([zstd library not found
+If you have zstd already installed, see config.log for details on the
+failure.  It is possible the compiler isn't looking in the proper directory.])])
 fi
 
 if test "$enable_spinlocks" = yes; then
@@ -1398,6 +1412,13 @@ if test "$with_zlib" = yes; then
 If you have zlib already installed, see config.log for details on the
 failure.  It is possible the compiler isn't looking in the proper directory.
 Use --without-zlib to disable zlib support.])])
+fi
+
+if test "$with_zstd" = yes; then
+  AC_CHECK_HEADER(zstd.h, [], [AC_MSG_ERROR([zstd header not found
+If you have zstd already installed, see config.log for details on the
+failure.  It is possible the compiler isn't looking in the proper directory.
+Use --without-zstd to disable zstd support.])])
 fi
 
 if test "$with_gssapi" = yes ; then

@@ -92,6 +92,15 @@
    such as <command>COPY</command>.
   </para>
 
+  <para>
+    It is possible to compress protocol data to reduce traffic and speed-up client-server interaction.
+    Compression is especially useful for importing/exporting data to/from database using COPY command
+    and for replication (both physical and logical). Also compression can reduce server response time
+    in case of queries returning large amount of data (for example returning JSON, BLOBs, text,...)
+    Right now two libraries are supported: zlib (default) and zstd (if Postgres was
+    configured with --with-zstd option).
+  </para>
+
  <sect2 id="protocol-message-concepts">
   <title>Messaging Overview</title>
 
@@ -258,6 +267,27 @@
        <para>
         The connection attempt has been rejected.
         The server then immediately closes the connection.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>CompressionAck</term>
+      <listitem>
+       <para>
+         Server acknowledges using compression for client-server communication protocol.
+         Compression can be requested by client by including "compression" option in connection string.
+         It can be just boolean values enabling or disabling compression
+         ("true"/"false", "on"/"off", "yes"/"no", "1"/"0"), "auto" or explicit list of compression algorithms
+         separated by comma with optional specification of compression level: "zlib,zstd:5".
+         If compression algorithm is not explicitly specified the most efficient one supported both by
+         client and server is chosen. Client sends to the server list of compression algorithms,
+         supported by client library.
+         If server supports one of this algorithms, then it acknowledges use of this algorithm and
+         all subsequent libpq messages send both from client to server and
+         visa versa will be compressed. Server selects most efficient algorithm among list specified by client and returns to the client
+         index of chosen algorithm in this list. If server is not supporting any of the suggested algorithms, then it replies with -1
+         and it is up to the client whether to continue work without compression or report error.
        </para>
       </listitem>
      </varlistentry>
@@ -3400,6 +3430,57 @@ following:
 </listitem>
 </varlistentry>
 
+<varlistentry>
+<term>
+CompressionAck (B)
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('z')
+</term>
+<listitem>
+<para>
+  Acknowledge use of compression for protocol data. Client sends to the server list of compression algorithms, supported by client library.
+  If server supports one of this algorithms, then it acknowledges use of this algorithm and all subsequent libpq messages send both from client to server and
+  visa versa will be compressed. Server selects most efficient algorithm among list specified by client and returns to the client
+  index of chosen algorithm in this list. If server is not supporting any of the suggested algorithms, then it replies with -1
+  and it is up to the client whether to continue work without compression or report error.
+  After receiving this message with algorithm index other than -1, both server and client are switched to compression mode
+  and exchange compressed messages.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Length of message contents in bytes, including self.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Byte1
+</term>
+<listitem>
+<para>
+        Index of algorithm in the list of supported algotihms specified by client or -1 if none of them is supported.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+
+</para>
+</listitem>
+</varlistentry>
+
+
 
 <varlistentry>
 <term>
@@ -5963,6 +6044,22 @@ StartupMessage (F)
                         <literal>database</literal>, and the default is
                         <literal>false</literal>. See
                         <xref linkend="protocol-replication"/> for details.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+                <literal>_pq_.compression</literal>
+</term>
+<listitem>
+<para>
+                        Request compression of libpq traffic. Value is list of compression algorithms supported by client with optional
+                        specification of compression level: <literal>"zlib,zstd:5"</literal>.
+                        When connecting to an older backend, which does not support compression, or in case when the backend support compression
+                        but for some reason wants to disable it, the backend will just ignore the _pq_.compression parameter and won’t send
+                        the compressionAck message to the frontend.
+                        By default compression is disabled. Please notice that using compression together with SSL may add extra vulnerabilities:
+                        <ulink url="https://en.wikipedia.org/wiki/CRIME">CRIME</ulink>.
 </para>
 </listitem>
 </varlistentry>

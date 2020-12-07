@@ -996,6 +996,24 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-libpq-compression" xreflabel="libpq_compression">
+      <term><varname>libpq_compression</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>libpq_compression</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        When this parameter is <literal>on</literal> (default), the <productname>PostgreSQL</productname>
+        server can switch on compression of traffic between server and client if it is requested by client.
+        Client sends to the server list of compression algorithms supported by frontend library,
+        server chooses one which is supported by backend library and sends it in compression acknowledgement message
+        to the client. This option allows to reject compression request even if it is supported by server
+        (due to security, CPU consumption or whatever else reasons...).
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
 

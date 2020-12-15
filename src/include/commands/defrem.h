@@ -129,6 +129,7 @@ extern ObjectAddress CreateForeignDataWrapper(CreateFdwStmt *stmt);
 extern ObjectAddress AlterForeignDataWrapper(AlterFdwStmt *stmt);
 extern ObjectAddress CreateForeignServer(CreateForeignServerStmt *stmt);
 extern ObjectAddress AlterForeignServer(AlterForeignServerStmt *stmt);
+extern void RemoveForeignServerById(Oid srvId);
 extern ObjectAddress CreateUserMapping(CreateUserMappingStmt *stmt);
 extern ObjectAddress AlterUserMapping(AlterUserMappingStmt *stmt);
 extern Oid	RemoveUserMapping(DropUserMappingStmt *stmt);

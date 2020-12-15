@@ -1427,6 +1427,117 @@ ReparameterizeForeignPathByChild(PlannerInfo *root, List *fdw_private,
     </para>
    </sect2>
 
+   <sect2 id="fdw-callbacks-transaction-management">
+    <title>FDW Routines For Transaction Management</title>
+
+    <para>
+     Transaction management callbacks are used to commit, rollback, and
+     prepare the foreign transaction. If an FDW wishes that its foreign
+     transaction is managed by <productname>PostgreSQL</productname>'s global
+     transaction manager it must provide both
+     <function>CommitForeignTransaction</function> and
+     <function>RollbackForeignTransaction</function>. In addition, if an FDW
+     wishes to support <firstterm>atomic commit</firstterm> (as described in
+     <xref linkend="fdw-transaction-managements"/>), it must provide
+     <function>PrepareForeignTransaction</function> as well and can provide
+     <function>GetPrepareId</function> callback optionally.
+    </para>
+
+    <para>
+<programlisting>
+void
+PrepareForeignTransaction(FdwXactRslvState *frstate);
+</programlisting>
+    Prepare the transaction on the foreign server. This function is called at the
+    pre-commit phase of the local transactions if foreign twophase commit is
+    required. This function is used only for distributed transaction management
+    (see <xref linkend="distributed-transaction"/>).
+    </para>
+
+    <para>
+     Note that this callback function is always executed by backend processes.
+    </para>
+    <para>
+<programlisting>
+bool
+CommitForeignTransaction(FdwXactRslvState *frstate);
+</programlisting>
+    Commit the foreign transaction. This function is called either at
+    the pre-commit phase of the local transaction if the transaction
+    can be committed in one-phase or at the post-commit phase if
+    two-phase commit is required. If <literal>frstate-&gt;flag</literal> has
+    the flag <literal>FDW_XACT_FLAG_ONEPHASE</literal> the transaction
+    can be committed in one-phase, this function must commit the prepared
+    transaction identified by <literal>frstate-&gt;fdwxact_id</literal>.
+    </para>
+
+    <para>
+     Note that all cases except for calling <function>pg_resolve_fdwxact</function>
+     SQL function, this callback function is executed by foreign transaction
+     resolver processes.
+    </para>
+    <para>
+<programlisting>
+bool
+RollbackForeignTransaction(FdwXactRslvState *frstate);
+</programlisting>
+    Rollback the foreign transaction. This function is called either at
+    the end of the local transaction after rolled back locally. The foreign
+    transactions are rolled back when user requested rollbacking or when
+    any error occurs during the transaction. This function must be tolerate to
+    being called recursively if any error occurs during rollback the foreign
+    transaction. So you would need to track recursion and prevent being called
+    infinitely. If <literal>frstate-&gt;flag</literal> has the flag
+    <literal>FDW_XACT_FLAG_ONEPHASE</literal> the transaction can be rolled
+    back in one-phase, otherwise this function must rollback the prepared
+    transaction identified by <literal>frstate-&gt;fdwxact_id</literal>.
+    </para>
+
+    <para>
+     The foreign transaction identified by <literal>frstate-&gt;fdwxact_id</literal>
+     might not exist on the foreign servers. This can happen when, for instance,
+     there is failure during preparing the foreign tranasction. Therefore, this
+     function needs to tolerate the undefined object error
+     (<literal>ERRCODE_UNDEFINED_OBJECT</literal>) rather than raising an error.
+    </para>
+
+    <para>
+     Note that all cases except for calling <function>pg_resolve_fdwxact</function>
+     SQL function, this callback function is executed by foreign transaction
+     resolver processes.
+    </para>
+    <para>
+<programlisting>
+char *
+GetPrepareId(TransactionId xid, Oid serverid, Oid userid, int *prep_id_len);
+</programlisting>
+    Return null terminated string that represents prepared transaction identifier
+    with its length <varname>*prep_id_len</varname>.
+    This optional function is called during executor startup for once per the
+    foreign server. Note that the transaction identifier must be string literal,
+    less than <symbol>NAMEDATALEN</symbol> bytes long and should not be same
+    as any other concurrent prepared transaction id. If this callback routine
+    is not supported, <productname>PostgreSQL</productname>'s  distributed
+    transaction manager generates an unique identifier with in the form of
+    <literal>fx_&lt;random value up to 2<superscript>31</superscript>&gt;_&lt;server oid&gt;_&lt;user oid&gt;</literal>.
+    </para>
+
+    <para>
+     Note that this callback function is always executed by backend processes.
+    </para>
+
+    <note>
+     <para>
+      Functions <function>PrepareForeignTransaction</function>,
+      <function>CommitForeignTransaction</function> and
+      <function>RolblackForeignTransaction</function> are called
+      at outside of a valid transaction state. So please note that
+      you cannot use functions that use the system catalog cache
+      such as Foreign Data Wrapper helper functions described in
+      <xref linkend="fdw-helpers"/>.
+     </para>
+    </note>
+   </sect2>
    </sect1>
 
    <sect1 id="fdw-helpers">
@@ -1906,4 +2017,147 @@ GetForeignServerByName(const char *name, bool missing_ok);
 
   </sect1>
 
+  <sect1 id="fdw-transaction-managements">
+   <title>Transaction managements for Foreign Data Wrappers</title>
+   <para>
+    If a FDW's server supports transaction, it is usually worthwhile for the
+    FDW to manage transaction opened on the foreign server. The FDW callback
+    function <literal>CommitForeignTransaction</literal>,
+    <literal>RollbackForeignTransaction</literal> and
+    <literal>PrepareForeignTransaction</literal> are used for transaction
+    management and must fit into the working of the
+    <productname>PostgreSQL</productname> transaction processing.
+   </para>
+
+   <para>
+    The information in <literal>FdwXactRslvState</literal> can be used to get
+    information of foreign server being processed such as server name, OID of
+    server, user and user mapping. The <literal>flags</literal> has contains flag
+    bit describing the foreign transaction state for transaction management.
+   </para>
+
+   <sect2 id="fdw-transaction-registration">
+    <title> Foreign Transaction Registration and Unregistration</title>
+    <para>
+     Foreign transaction needs to be registered to
+     <productname>PostgreSQL</productname> global transaction manager.
+     Registration and unregistration are done by calling
+     <function>FdwXactRegisterXact</function> and
+     <function>FdwXactUnregisterXact</function> respectively.
+     The FDW can pass a boolean <literal>modified</literal> along with
+     OIDs of server and user to <function>FdwXactRegisterXact</function>
+     indicating writes are going to happen on the foreign server.  Such foreign
+     servers are taken into account for the decision of two-phase commit
+     protocol being required or not.
+    </para>
+   </sect2>
+
+   <sect2 id="fdw-transaction-commit-rollback">
+    <title>Commit and Rollback Single Foreign Transaction</title>
+    <para>
+     The FDW callback function <function>CommitForeignTransaction</function>
+     and <function>RollbackForeignTransaction</function> can be used to commit
+     and rollback the foreign transaction. During transaction commit, the core
+     transaction manager calls <function>CommitForeignTransaction</function> function
+     in the pre-commit phase and calls
+     <function>RollbackForeignTransaction</function> function in the post-rollback
+     phase.
+    </para>
+   </sect2>
+
+   <sect2 id="fdw-transaction-distributed-transaction-commit">
+    <title>Atomic Commit and Rollback Distributed Transaction</title>
+    <para>
+     In addition to simply commit and rollback foreign transactions described at
+     <xref linkend="fdw-transaction-commit-rollback"/>,
+     <productname>PostgreSQL</productname> global transaction manager enables
+     distributed transactions to atomically commit and rollback among all foreign
+     servers, which is as known as atomic commit in literature. To achieve atomic
+     commit, <productname>PostgreSQL</productname> employs two-phase commit
+     protocol, which is a type of atomic commitment protocol. Every FDWs that wish
+     to support two-phase commit protocol are required to have the FDW callback
+     function <function>PrepareForeignTransaction</function> and optionally
+     <function>GetPrepareId</function>, in addition to
+     <function>CommitForeignTransaction</function> and
+     <function>RollbackForeignTransaction</function>
+     (see <xref linkend="fdw-callbacks-transaction-management"/> for details).
+    </para>
+
+    <para>
+     An example of distributed transaction is as follows
+<programlisting>
+BEGIN;
+UPDATE ft1 SET col = 'a';
+UPDATE ft2 SET col = 'b';
+COMMIT;
+</programlisting>
+    ft1 and ft2 are foreign tables on different foreign servers may be using different
+    Foreign Data Wrappers.
+    </para>
+
+    <para>
+     When the core executor access the foreign servers, foreign servers whose FDW
+     supports transaction management callback routines is registered as a participant.
+     During registration, <function>GetPrepareId</function> is called if provided to
+     generate an unique transaction identifer.
+    </para>
+
+    <para>
+     During pre-commit phase of local transaction, the foreign transaction manager
+     persists the foreign transaction information to the disk and WAL, and then
+     prepare all foreign transaction by calling
+     <function>PrepareForeignTransaction</function> if two-phase commit protocol
+     is required. Two-phase commit is required when the transaction modified data
+     on more than one servers including the local server itself and user requests
+     foreign twophase commit (see <xref linkend="guc-foreign-twophase-commit"/>).
+    </para>
+
+    <para>
+     <productname>PostgreSQL</productname> can commit locally and go to the next
+     step if and only if all foreign transactions are prepared successfully.
+     If any failure happens or user requests to cancel during preparation,
+     the distributed transaction manager changes over rollback and calls
+     <function>RollbackForeignTransaction</function>.
+    </para>
+
+    <para>
+     When changing over rollback due to any failure, it calls
+     <function>RollbackForeignTransaction</function> with
+     <literal>FDWXACT_FLAG_ONEPHASE</literal> for foreign transactions which are not
+     closed yet, and calls <function>RollbackForeignTransaction</function> without
+     that flag for foreign transactions which are already prepared.  For foreign
+     transactions which are being prepared, it does both because it's not sure that
+     the preeparation has been completed on the foreign server. Therefore,
+     <function>RollbackForeignTransaction</function> needs to tolerate the undefined
+     object error.
+    </para>
+
+    <para>
+     Note that when <literal>(frstate-&gt;flags &amp; FDWXACT_FLAG_ONEPHASE)</literal>
+     is true, both <literal>CommitForeignTransaction</literal> function and
+     <literal>RollbackForeignTransaction</literal> function should commit and
+     rollback directly, rather than processing prepared transactions. This can
+     happen when two-phase commit is not required or foreign server is not
+     modified with in the transaction.
+    </para>
+
+    <para>
+     Once all foreign transaction is prepared, the core transaction manager commits
+     locally. After that the transaction commit waits for all prepared foreign
+     transaction to be committed before completetion. After all prepared foreign
+     transactions are resolved the transaction commit completes.
+    </para>
+
+    <para>
+     One foreign transaction resolver process is responsible for foreign
+     transaction resolution on a database. Foreign transaction resolver process
+     calls either <function>CommitForeignTransaction</function> or
+     <function>RollbackForeignTransaction</function> to resolve foreign
+     transaction identified by <literal>frstate-&gt;fdwxact_id</literal>. If failed
+     to resolve, resolver process will exit with an error message. The foreign
+     transaction launcher will launch the resolver process again at
+     <xref linkend="guc-foreign-transaction-resolution-rety-interval"/> interval.
+    </para>
+   </sect2>
+  </sect1>
  </chapter>

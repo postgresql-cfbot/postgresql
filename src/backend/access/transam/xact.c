@@ -21,6 +21,8 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
+#include "access/fdwxact_launcher.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/subtrans.h"
@@ -1455,6 +1457,9 @@ RecordTransactionCommit(void)
 	if (wrote_xlog && markXidCommitted)
 		SyncRepWaitForLSN(XactLastRecEnd, true);
 
+	if (FdwXactIsForeignTwophaseCommitRequired())
+		FdwXactLaunchOrWakeupResolver();
+
 	/* remember end of last commit record */
 	XactLastCommitEnd = XactLastRecEnd;
 
@@ -2122,6 +2127,9 @@ CommitTransaction(void)
 	 * the transaction-abort path.
 	 */
 
+	/* Pre-commit step for foreign transactions */
+	PreCommit_FdwXact();
+
 	CallXactCallbacks(is_parallel_worker ? XACT_EVENT_PARALLEL_PRE_COMMIT
 					  : XACT_EVENT_PRE_COMMIT);
 
@@ -2229,6 +2237,9 @@ CommitTransaction(void)
 
 	CallXactCallbacks(is_parallel_worker ? XACT_EVENT_PARALLEL_COMMIT
 					  : XACT_EVENT_COMMIT);
+
+	/* Commit foreign transaction if any */
+	AtEOXact_FdwXact(true);
 
 	ResourceOwnerRelease(TopTransactionResourceOwner,
 						 RESOURCE_RELEASE_BEFORE_LOCKS,
@@ -2368,6 +2379,9 @@ PrepareTransaction(void)
 	 * of this stuff could still throw an error, which would switch us into
 	 * the transaction-abort path.
 	 */
+
+	/* Prepare foreign trasactions */
+	PrePrepare_FdwXact();
 
 	/* Shut down the deferred-trigger manager */
 	AfterTriggerEndXact(true);
@@ -2561,6 +2575,7 @@ PrepareTransaction(void)
 	PostPrepare_Twophase();
 
 	/* PREPARE acts the same as COMMIT as far as GUC is concerned */
+	AtEOXact_FdwXact(true);
 	AtEOXact_GUC(true, 1);
 	AtEOXact_SPI(true);
 	AtEOXact_Enum();
@@ -2755,6 +2770,9 @@ AbortTransaction(void)
 			CallXactCallbacks(XACT_EVENT_PARALLEL_ABORT);
 		else
 			CallXactCallbacks(XACT_EVENT_ABORT);
+
+		/* Rollback foreign transactions if any */
+		AtEOXact_FdwXact(false);
 
 		ResourceOwnerRelease(TopTransactionResourceOwner,
 							 RESOURCE_RELEASE_BEFORE_LOCKS,

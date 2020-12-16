@@ -343,7 +343,7 @@ extern void RemovePromoteSignalFiles(void);
 
 extern bool PromoteIsTriggered(void);
 extern bool CheckPromoteSignal(void);
-extern void WakeupRecovery(void);
+extern void WakeupRecovery(bool use_lock);
 extern void SetWalWriterSleeping(bool sleeping);
 
 extern void StartupRequestWalReceiverRestart(void);

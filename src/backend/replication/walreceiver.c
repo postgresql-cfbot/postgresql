@@ -655,7 +655,7 @@ WalRcvWaitForStartPosition(XLogRecPtr *startpoint, TimeLineID *startpointTLI)
 	 * nudge startup process to notice that we've stopped streaming and are
 	 * now waiting for instructions.
 	 */
-	WakeupRecovery();
+	WakeupRecovery(false);
 	for (;;)
 	{
 		ResetLatch(MyLatch);
@@ -792,7 +792,7 @@ WalRcvDie(int code, Datum arg)
 		walrcv_disconnect(wrconn);
 
 	/* Wake up the startup process to notice promptly that we're gone */
-	WakeupRecovery();
+	WakeupRecovery(true);
 }
 
 /*
@@ -992,7 +992,7 @@ XLogWalRcvFlush(bool dying)
 		SpinLockRelease(&walrcv->mutex);
 
 		/* Signal the startup process and walsender that new WAL has arrived */
-		WakeupRecovery();
+		WakeupRecovery(false);
 		if (AllowCascadeReplication())
 			WalSndWakeup();
 

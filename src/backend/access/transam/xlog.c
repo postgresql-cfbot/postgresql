@@ -7484,11 +7484,15 @@ StartupXLOG(void)
 		ResetUnloggedRelations(UNLOGGED_RELATION_INIT);
 
 	/*
-	 * We don't need the latch anymore. It's not strictly necessary to reset
-	 * it to NULL, but let's do it for the sake of tidiness.
+	 * Reset recoveryWakeupLatch to NULL to prevent us from leaving it
+	 * pointing to the latch that might belong to other process later.
 	 */
 	if (ArchiveRecoveryRequested)
+	{
+		SpinLockAcquire(&XLogCtl->info_lck);
 		XLogCtl->recoveryWakeupLatch = NULL;
+		SpinLockRelease(&XLogCtl->info_lck);
+	}
 
 	/*
 	 * We are now done reading the xlog from stream. Turn off streaming
@@ -12731,12 +12735,24 @@ CheckPromoteSignal(void)
 /*
  * Wake up startup process to replay newly arrived WAL, or to notice that
  * failover has been requested.
+ *
+ * use_lock: if true, acquire spinlock to fetch the latch pointer. This
+ * should be true if walreceiver has already been marked as inactive.
+ * Because the startup process might reset the latch to NULL concurrently
+ * in that case.
  */
 void
-WakeupRecovery(void)
+WakeupRecovery(bool use_lock)
 {
-	if (XLogCtl->recoveryWakeupLatch)
-		SetLatch(XLogCtl->recoveryWakeupLatch);
+	Latch	   *latch;
+
+	if (use_lock)
+		SpinLockAcquire(&XLogCtl->info_lck);
+	latch = XLogCtl->recoveryWakeupLatch;
+	if (use_lock)
+		SpinLockRelease(&XLogCtl->info_lck);
+	if (latch)
+		SetLatch(latch);
 }
 
 /*

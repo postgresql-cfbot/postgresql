@@ -626,6 +626,7 @@ ExecutorStart_hook_type
 ExpandedArrayHeader
 ExpandedObjectHeader
 ExpandedObjectMethods
+ExpandedMultirangeHeader
 ExpandedRecordFieldInfo
 ExpandedRecordHeader
 ExplainDirectModify_function
@@ -1395,6 +1396,9 @@ MultiXactMember
 MultiXactOffset
 MultiXactStateData
 MultiXactStatus
+MultirangeIOData
+MultirangeParseState
+MultirangeType
 NDBOX
 NODE
 NUMCacheEntry
@@ -2276,6 +2280,7 @@ ShellTypeInfo
 ShippableCacheEntry
 ShippableCacheKey
 ShmemIndexEnt
+ShortRangeType
 ShutdownForeignScan_function
 ShutdownInformation
 ShutdownMode

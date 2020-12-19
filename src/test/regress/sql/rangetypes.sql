@@ -87,6 +87,9 @@ select numrange(2.0, 3.0, '[]') -|- numrange(3.0, 4.0, '()');
 select numrange(1.0, 2.0) -|- numrange(2.0, 3.0,'[]');
 select range_adjacent(numrange(2.0, 3.0, '(]'), numrange(1.0, 2.0, '(]'));
 
+select numrange(1.0, 2.0) -|- 2.0;
+select 2.0 -|- numrange(2.0, 3.0,'()');
+
 select numrange(1.1, 3.3) <@ numrange(0.1,10.1);
 select numrange(0.1, 10.1) <@ numrange(1.1,3.3);
 
@@ -98,10 +101,19 @@ select range_minus(numrange(10.1,12.2,'[]'), numrange(0.0,120.2,'(]'));
 
 select numrange(4.5, 5.5, '[]') && numrange(5.5, 6.5);
 select numrange(1.0, 2.0) << numrange(3.0, 4.0);
+select numrange(1.0, 2.0) << 3.0;
+select 2.0 << numrange(3.0, 4.0);
 select numrange(1.0, 3.0,'[]') << numrange(3.0, 4.0,'[]');
 select numrange(1.0, 3.0,'()') << numrange(3.0, 4.0,'()');
 select numrange(1.0, 2.0) >> numrange(3.0, 4.0);
+select numrange(1.0, 2.0) >> 3.0;
+select 2.0 >> numrange(3.0, 4.0);
 select numrange(3.0, 70.0) &< numrange(6.6, 100.0);
+select numrange(3.0, 70.0) &< 6.6;
+select 70.0 &< numrange(6.6, 100.0);
+select numrange(3.0, 70.0) &> numrange(6.6, 100.0);
+select numrange(3.0, 70.0) &> 6.6;
+select 70.0 &> numrange(6.6, 100.0);
 
 select numrange(1.1, 2.2) < numrange(1.0, 200.2);
 select numrange(1.1, 2.2) < numrange(1.1, 1.2);
@@ -222,10 +234,15 @@ select count(*) from test_range_gist where ir @> int4range(10,20);
 select count(*) from test_range_gist where ir && int4range(10,20);
 select count(*) from test_range_gist where ir <@ int4range(10,50);
 select count(*) from test_range_gist where ir << int4range(100,500);
+select count(*) from test_range_gist where ir << 100;
 select count(*) from test_range_gist where ir >> int4range(100,500);
+select count(*) from test_range_gist where ir >> 100;
 select count(*) from test_range_gist where ir &< int4range(100,500);
+select count(*) from test_range_gist where ir &< 100;
 select count(*) from test_range_gist where ir &> int4range(100,500);
+select count(*) from test_range_gist where ir &> 100;
 select count(*) from test_range_gist where ir -|- int4range(100,500);
+select count(*) from test_range_gist where ir -|- 100;
 
 -- now check same queries using index
 SET enable_seqscan    = f;
@@ -239,10 +256,15 @@ select count(*) from test_range_gist where ir @> int4range(10,20);
 select count(*) from test_range_gist where ir && int4range(10,20);
 select count(*) from test_range_gist where ir <@ int4range(10,50);
 select count(*) from test_range_gist where ir << int4range(100,500);
+select count(*) from test_range_gist where ir << 100;
 select count(*) from test_range_gist where ir >> int4range(100,500);
+select count(*) from test_range_gist where ir >> 100;
 select count(*) from test_range_gist where ir &< int4range(100,500);
+select count(*) from test_range_gist where ir &< 100;
 select count(*) from test_range_gist where ir &> int4range(100,500);
+select count(*) from test_range_gist where ir &> 100;
 select count(*) from test_range_gist where ir -|- int4range(100,500);
+select count(*) from test_range_gist where ir -|- 100;
 
 -- now check same queries using a bulk-loaded index
 drop index test_range_gist_idx;
@@ -255,10 +277,15 @@ select count(*) from test_range_gist where ir @> int4range(10,20);
 select count(*) from test_range_gist where ir && int4range(10,20);
 select count(*) from test_range_gist where ir <@ int4range(10,50);
 select count(*) from test_range_gist where ir << int4range(100,500);
+select count(*) from test_range_gist where ir << 100;
 select count(*) from test_range_gist where ir >> int4range(100,500);
+select count(*) from test_range_gist where ir >> 100;
 select count(*) from test_range_gist where ir &< int4range(100,500);
+select count(*) from test_range_gist where ir &< 100;
 select count(*) from test_range_gist where ir &> int4range(100,500);
+select count(*) from test_range_gist where ir &> 100;
 select count(*) from test_range_gist where ir -|- int4range(100,500);
+select count(*) from test_range_gist where ir -|- 100;
 
 -- test SP-GiST index that's been built incrementally
 create table test_range_spgist(ir int4range);
@@ -284,10 +311,15 @@ select count(*) from test_range_spgist where ir @> int4range(10,20);
 select count(*) from test_range_spgist where ir && int4range(10,20);
 select count(*) from test_range_spgist where ir <@ int4range(10,50);
 select count(*) from test_range_spgist where ir << int4range(100,500);
+select count(*) from test_range_spgist where ir << 100;
 select count(*) from test_range_spgist where ir >> int4range(100,500);
+select count(*) from test_range_spgist where ir >> 100;
 select count(*) from test_range_spgist where ir &< int4range(100,500);
+select count(*) from test_range_spgist where ir &< 100;
 select count(*) from test_range_spgist where ir &> int4range(100,500);
+select count(*) from test_range_spgist where ir &> 100;
 select count(*) from test_range_spgist where ir -|- int4range(100,500);
+select count(*) from test_range_spgist where ir -|- 100;
 
 -- now check same queries using index
 SET enable_seqscan    = f;
@@ -301,10 +333,15 @@ select count(*) from test_range_spgist where ir @> int4range(10,20);
 select count(*) from test_range_spgist where ir && int4range(10,20);
 select count(*) from test_range_spgist where ir <@ int4range(10,50);
 select count(*) from test_range_spgist where ir << int4range(100,500);
+select count(*) from test_range_spgist where ir << 100;
 select count(*) from test_range_spgist where ir >> int4range(100,500);
+select count(*) from test_range_spgist where ir >> 100;
 select count(*) from test_range_spgist where ir &< int4range(100,500);
+select count(*) from test_range_spgist where ir &< 100;
 select count(*) from test_range_spgist where ir &> int4range(100,500);
+select count(*) from test_range_spgist where ir &> 100;
 select count(*) from test_range_spgist where ir -|- int4range(100,500);
+select count(*) from test_range_spgist where ir -|- 100;
 
 -- now check same queries using a bulk-loaded index
 drop index test_range_spgist_idx;
@@ -317,10 +354,15 @@ select count(*) from test_range_spgist where ir @> int4range(10,20);
 select count(*) from test_range_spgist where ir && int4range(10,20);
 select count(*) from test_range_spgist where ir <@ int4range(10,50);
 select count(*) from test_range_spgist where ir << int4range(100,500);
+select count(*) from test_range_spgist where ir << 100;
 select count(*) from test_range_spgist where ir >> int4range(100,500);
+select count(*) from test_range_spgist where ir >> 100;
 select count(*) from test_range_spgist where ir &< int4range(100,500);
+select count(*) from test_range_spgist where ir &< 100;
 select count(*) from test_range_spgist where ir &> int4range(100,500);
+select count(*) from test_range_spgist where ir &> 100;
 select count(*) from test_range_spgist where ir -|- int4range(100,500);
+select count(*) from test_range_spgist where ir -|- 100;
 
 -- test index-only scans
 explain (costs off)

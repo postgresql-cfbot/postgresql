@@ -17996,6 +17996,34 @@ SELECT NULLIF(value, '(none)') ...
 
       <row>
        <entry role="func_table_entry"><para role="func_signature">
+        <type>anyrange</type> <literal>&lt;&lt;</literal> <type>anyelement</type>
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Is the range strictly left of the element?
+       </para>
+       <para>
+        <literal>int8range(1,10) &lt;&lt; 100::int8</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <type>anyelement</type> <literal>&lt;&lt;</literal> <type>anyrange</type>
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Is the element strictly left of the range?
+       </para>
+       <para>
+        <literal>10::int8 &lt;&lt; int8range(100,110)</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
         <type>anyrange</type> <literal>&gt;&gt;</literal> <type>anyrange</type>
         <returnvalue>boolean</returnvalue>
        </para>
@@ -18004,6 +18032,34 @@ SELECT NULLIF(value, '(none)') ...
        </para>
        <para>
         <literal>int8range(50,60) &gt;&gt; int8range(20,30)</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <type>anyrange</type> <literal>&gt;&gt;</literal> <type>anyelement</type>
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Is the range strictly right of the element?
+       </para>
+       <para>
+        <literal>int8range(50,60) &gt;&gt; 20::int8</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <type>anyelement</type> <literal>&gt;&gt;</literal> <type>anyrange</type>
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Is the element strictly right of the element?
+       </para>
+       <para>
+        <literal>60::int8 &gt;&gt; int8range(20,30)</literal>
         <returnvalue>t</returnvalue>
        </para></entry>
       </row>
@@ -18024,6 +18080,34 @@ SELECT NULLIF(value, '(none)') ...
 
       <row>
        <entry role="func_table_entry"><para role="func_signature">
+        <type>anyrange</type> <literal>&amp;&lt;</literal> <type>anyelement</type>
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Does the range not extend to the right of the element?
+       </para>
+       <para>
+        <literal>int8range(1,20) &amp;&lt; 20::int8</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <type>anyelement</type> <literal>&amp;&lt;</literal> <type>anyrange</type>
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Does the element not extend to the right of the range?
+       </para>
+       <para>
+        <literal>20::int8 &amp;&lt; int8range(18,20)</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
         <type>anyrange</type> <literal>&amp;&gt;</literal> <type>anyrange</type>
         <returnvalue>boolean</returnvalue>
        </para>
@@ -18038,6 +18122,34 @@ SELECT NULLIF(value, '(none)') ...
 
       <row>
        <entry role="func_table_entry"><para role="func_signature">
+        <type>anyrange</type> <literal>&amp;&gt;</literal> <type>anyelement</type>
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Does the range not extend to the left of the element?
+       </para>
+       <para>
+        <literal>int8range(7,20) &amp;&gt; 5::int8</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <type>anyelement</type> <literal>&amp;&gt;</literal> <type>anyrange</type>
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Does the element not extend to the left of the range?
+       </para>
+       <para>
+        <literal>7::int8 &amp;&gt; int8range(5,10)</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
         <type>anyrange</type> <literal>-|-</literal> <type>anyrange</type>
         <returnvalue>boolean</returnvalue>
        </para>
@@ -18046,6 +18158,34 @@ SELECT NULLIF(value, '(none)') ...
        </para>
        <para>
         <literal>numrange(1.1,2.2) -|- numrange(2.2,3.3)</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <type>anyrange</type> <literal>-|-</literal> <type>anyelement</type>
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Is the range adjacent to the element?
+       </para>
+       <para>
+        <literal>numrange(1.1,2.2) -|- 2.2</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <type>anyelement</type> <literal>-|-</literal> <type>anyrange</type>
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Is the element adjacent to the range?
+       </para>
+       <para>
+        <literal>2.2 -|- numrange(2.2,3.3,'(]')</literal>
         <returnvalue>t</returnvalue>
        </para></entry>
       </row>

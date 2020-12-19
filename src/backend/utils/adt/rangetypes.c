@@ -536,6 +536,323 @@ range_contains_elem(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(range_contains_elem_internal(typcache, r, val));
 }
 
+/* strictly left of element? (internal version) */
+bool
+range_before_elem_internal(TypeCacheEntry *typcache, RangeType *r, Datum val)
+{
+	RangeBound	lower,
+				upper;
+	bool		empty;
+	int32		cmp;
+
+	range_deserialize(typcache, r, &lower, &upper, &empty);
+
+	/* An empty range is neither left nor right any other range */
+	if (empty)
+		return false;
+
+	if (!upper.infinite)
+	{
+		cmp = DatumGetInt32(FunctionCall2Coll(&typcache->rng_cmp_proc_finfo,
+											  typcache->rng_collation,
+											  upper.val, val));
+		if (cmp < 0 ||
+			(cmp == 0 && !upper.inclusive))
+			return true;
+	}
+
+	return false;
+}
+
+/* strictly left of element? */
+Datum
+range_before_elem(PG_FUNCTION_ARGS)
+{
+	RangeType  *r = PG_GETARG_RANGE_P(0);
+	Datum		val = PG_GETARG_DATUM(1);
+	TypeCacheEntry *typcache;
+
+	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r));
+
+	PG_RETURN_BOOL(range_before_elem_internal(typcache, r, val));
+}
+
+/* does not extend to right of element? (internal version) */
+bool
+range_overleft_elem_internal(TypeCacheEntry *typcache, RangeType *r, Datum val)
+{
+	RangeBound	lower,
+				upper;
+	bool		empty;
+
+	range_deserialize(typcache, r, &lower, &upper, &empty);
+
+	/* An empty range is neither left nor right any element */
+	if (empty)
+		return false;
+
+	if (!upper.infinite)
+	{
+		if (DatumGetInt32(FunctionCall2Coll(&typcache->rng_cmp_proc_finfo,
+											typcache->rng_collation,
+											upper.val, val)) <= 0)
+			return true;
+	}
+
+	return false;
+}
+
+/* does not extend to right of element? */
+Datum
+range_overleft_elem(PG_FUNCTION_ARGS)
+{
+	RangeType  *r = PG_GETARG_RANGE_P(0);
+	Datum		val = PG_GETARG_DATUM(1);
+	TypeCacheEntry *typcache;
+
+	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r));
+
+	PG_RETURN_BOOL(range_overleft_elem_internal(typcache, r, val));
+}
+
+/* strictly right of element? (internal version) */
+bool
+range_after_elem_internal(TypeCacheEntry *typcache, RangeType *r, Datum val)
+{
+	RangeBound	lower,
+				upper;
+	bool		empty;
+	int32		cmp;
+
+	range_deserialize(typcache, r, &lower, &upper, &empty);
+
+	/* An empty range is neither left nor right any other range */
+	if (empty)
+		return false;
+
+	if (!lower.infinite)
+	{
+		cmp = DatumGetInt32(FunctionCall2Coll(&typcache->rng_cmp_proc_finfo,
+											  typcache->rng_collation,
+											  lower.val, val));
+		if (cmp > 0 ||
+			(cmp == 0 && !lower.inclusive))
+			return true;
+	}
+
+	return false;
+}
+
+/* strictly right of element? */
+Datum
+range_after_elem(PG_FUNCTION_ARGS)
+{
+	RangeType  *r = PG_GETARG_RANGE_P(0);
+	Datum		val = PG_GETARG_DATUM(1);
+	TypeCacheEntry *typcache;
+
+	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r));
+
+	PG_RETURN_BOOL(range_after_elem_internal(typcache, r, val));
+}
+
+/* does not extend to left of element? (internal version) */
+bool
+range_overright_elem_internal(TypeCacheEntry *typcache, RangeType *r, Datum val)
+{
+	RangeBound	lower,
+				upper;
+	bool		empty;
+
+	range_deserialize(typcache, r, &lower, &upper, &empty);
+
+	/* An empty range is neither left nor right any element */
+	if (empty)
+		return false;
+
+	if (!lower.infinite)
+	{
+		if (DatumGetInt32(FunctionCall2Coll(&typcache->rng_cmp_proc_finfo,
+											typcache->rng_collation,
+											lower.val, val)) >= 0)
+			return true;
+	}
+
+	return false;
+}
+
+/* does not extend to left of element? */
+Datum
+range_overright_elem(PG_FUNCTION_ARGS)
+{
+	RangeType  *r = PG_GETARG_RANGE_P(0);
+	Datum		val = PG_GETARG_DATUM(1);
+	TypeCacheEntry *typcache;
+
+	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r));
+
+	PG_RETURN_BOOL(range_overright_elem_internal(typcache, r, val));
+}
+
+/* adjacent to element (but not overlapping)? (internal version) */
+bool
+range_adjacent_elem_internal(TypeCacheEntry *typcache, RangeType *r, Datum val)
+{
+	RangeBound	lower,
+				upper;
+	bool		empty;
+	RangeBound 	elembound;
+	bool		isadj;
+
+	range_deserialize(typcache, r, &lower, &upper, &empty);
+
+	/* An empty range is not adjacent to any element */
+	if (empty)
+		return false;
+
+	/*
+	 * A range A..B and a value V are adjacent if and only if
+	 * B is adjacent to V, or V is adjacent to A.
+	 */
+	elembound.val = val;
+	elembound.infinite = false;
+	elembound.inclusive = true;
+	elembound.lower = true;
+	isadj = bounds_adjacent(typcache, upper, elembound);
+	elembound.lower = false;
+	return (isadj || bounds_adjacent(typcache, elembound, lower));
+}
+
+/* adjacent to element (but not overlapping)? */
+Datum
+range_adjacent_elem(PG_FUNCTION_ARGS)
+{
+	RangeType  *r = PG_GETARG_RANGE_P(0);
+	Datum		val = PG_GETARG_DATUM(1);
+	TypeCacheEntry *typcache;
+
+	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r));
+
+	PG_RETURN_BOOL(range_adjacent_elem_internal(typcache, r, val));
+}
+
+/******************************************************************************/
+
+/* element strictly left of? */
+Datum
+elem_before_range(PG_FUNCTION_ARGS)
+{
+	Datum		val = PG_GETARG_DATUM(0);
+	RangeType  *r = PG_GETARG_RANGE_P(1);
+	TypeCacheEntry *typcache;
+
+	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r));
+
+	PG_RETURN_BOOL(range_after_elem_internal(typcache, r, val));
+}
+
+/* element does not extend to right of? (internal version) */
+bool
+elem_overleft_range_internal(TypeCacheEntry *typcache, Datum val, RangeType *r)
+{
+	RangeBound	lower,
+				upper;
+	bool		empty;
+
+	range_deserialize(typcache, r, &lower, &upper, &empty);
+
+	/* An empty range is neither left nor right any element */
+	if (empty)
+		return false;
+
+	if (!upper.infinite)
+	{
+		if (DatumGetInt32(FunctionCall2Coll(&typcache->rng_cmp_proc_finfo,
+											typcache->rng_collation,
+											val, upper.val)) <= 0)
+			return true;
+	}
+
+	return false;
+}
+
+/* element does not extend to right of? */
+Datum
+elem_overleft_range(PG_FUNCTION_ARGS)
+{
+	Datum		val = PG_GETARG_DATUM(0);
+	RangeType  *r = PG_GETARG_RANGE_P(1);
+	TypeCacheEntry *typcache;
+
+	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r));
+
+	PG_RETURN_BOOL(elem_overleft_range_internal(typcache, val, r));
+}
+
+/* element strictly right of? */
+Datum
+elem_after_range(PG_FUNCTION_ARGS)
+{
+	Datum		val = PG_GETARG_DATUM(0);
+	RangeType  *r = PG_GETARG_RANGE_P(1);
+	TypeCacheEntry *typcache;
+
+	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r));
+
+	PG_RETURN_BOOL(range_before_elem_internal(typcache, r, val));
+}
+
+/* element does not extend to left of? (internal version) */
+bool
+elem_overright_range_internal(TypeCacheEntry *typcache, Datum val, RangeType *r)
+{
+	RangeBound	lower,
+				upper;
+	bool		empty;
+
+	range_deserialize(typcache, r, &lower, &upper, &empty);
+
+	/* An empty range is neither left nor right any element */
+	if (empty)
+		return false;
+
+	if (!lower.infinite)
+	{
+		if (DatumGetInt32(FunctionCall2Coll(&typcache->rng_cmp_proc_finfo,
+											typcache->rng_collation,
+											val, lower.val)) >= 0)
+			return true;
+	}
+
+	return false;
+}
+
+/* element does not extend the left of? */
+Datum
+elem_overright_range(PG_FUNCTION_ARGS)
+{
+	Datum		val = PG_GETARG_DATUM(0);
+	RangeType  *r = PG_GETARG_RANGE_P(1);
+	TypeCacheEntry *typcache;
+
+	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r));
+
+	PG_RETURN_BOOL(elem_overright_range_internal(typcache, val, r));
+}
+
+/* element adjacent to? */
+Datum
+elem_adjacent_range(PG_FUNCTION_ARGS)
+{
+	Datum		val = PG_GETARG_DATUM(0);
+	RangeType  *r = PG_GETARG_RANGE_P(1);
+	TypeCacheEntry *typcache;
+
+	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r));
+
+	PG_RETURN_BOOL(range_adjacent_elem_internal(typcache, r, val));
+}
+
 /* contained by? */
 Datum
 elem_contained_by_range(PG_FUNCTION_ARGS)
@@ -548,7 +865,6 @@ elem_contained_by_range(PG_FUNCTION_ARGS)
 
 	PG_RETURN_BOOL(range_contains_elem_internal(typcache, r, val));
 }
-
 
 /* range, range -> bool functions */
 

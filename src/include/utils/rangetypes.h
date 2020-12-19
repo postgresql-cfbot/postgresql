@@ -93,6 +93,13 @@ typedef struct
  */
 
 extern bool range_contains_elem_internal(TypeCacheEntry *typcache, const RangeType *r, Datum val);
+extern bool range_before_elem_internal(TypeCacheEntry *typcache, RangeType *r, Datum val);
+extern bool range_overleft_elem_internal(TypeCacheEntry *typcache, RangeType *r, Datum val);
+extern bool range_after_elem_internal(TypeCacheEntry *typcache, RangeType *r, Datum val);
+extern bool range_overright_elem_internal(TypeCacheEntry *typcache, RangeType *r, Datum val);
+extern bool range_adjacent_elem_internal(TypeCacheEntry *typcache, RangeType *r, Datum val);
+extern bool elem_overleft_range_internal(TypeCacheEntry *typcache, Datum val, RangeType *r);
+extern bool elem_overright_range_internal(TypeCacheEntry *typcache, Datum val, RangeType *r);
 
 /* internal versions of the above */
 extern bool range_eq_internal(TypeCacheEntry *typcache, const RangeType *r1,

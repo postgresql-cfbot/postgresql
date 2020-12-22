@@ -50,6 +50,7 @@ typedef enum CopyDest
 	COPY_FILE,					/* to file (or a piped program) */
 	COPY_OLD_FE,				/* to frontend (2.0 protocol) */
 	COPY_NEW_FE,				/* to frontend (3.0 protocol) */
+	COPY_CALLBACK				/* to callback function */
 } CopyDest;
 
 /*
@@ -80,11 +81,14 @@ typedef struct CopyToStateData
 
 	/* parameters from the COPY command */
 	Relation	rel;			/* relation to copy to */
+	TupleDesc	tupDesc;		/* COPY TO will be used for manual tuple copying
+								  * into the destination */
 	QueryDesc  *queryDesc;		/* executable query to copy from */
 	List	   *attnumlist;		/* integer list of attnums to copy */
 	char	   *filename;		/* filename, or NULL for STDOUT */
 	bool		is_program;		/* is 'filename' a program to popen? */
 
+	copy_data_dest_cb data_dest_cb;	/* function for writing data */
 	CopyFormatOptions opts;
 	Node	   *whereClause;	/* WHERE condition (or NULL) */
 
@@ -114,7 +118,6 @@ static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
 static void EndCopy(CopyToState cstate);
 static void ClosePipeToProgram(CopyToState cstate);
 static uint64 CopyTo(CopyToState cstate);
-static void CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot);
 static void CopyAttributeOutText(CopyToState cstate, char *string);
 static void CopyAttributeOutCSV(CopyToState cstate, char *string,
 								bool use_quote, bool single_attr);
@@ -286,6 +289,14 @@ CopySendEndOfRow(CopyToState cstate)
 			/* Dump the accumulated row as one CopyData message */
 			(void) pq_putmessage('d', fe_msgbuf->data, fe_msgbuf->len);
 			break;
+		case COPY_CALLBACK:
+			Assert(!cstate->binary);
+#ifndef WIN32
+			CopySendChar(cstate, '\n');
+#else
+			CopySendString(cstate, "\r\n");
+#endif
+			cstate->data_dest_cb(fe_msgbuf->data, fe_msgbuf->len);
 	}
 
 	resetStringInfo(fe_msgbuf);
@@ -373,18 +384,23 @@ EndCopy(CopyToState cstate)
 CopyToState
 BeginCopyTo(ParseState *pstate,
 			Relation rel,
+			TupleDesc srcTupDesc,
 			RawStmt *raw_query,
 			Oid queryRelId,
 			const char *filename,
 			bool is_program,
+			copy_data_dest_cb data_dest_cb,
 			List *attnamelist,
 			List *options)
 {
 	CopyToState	cstate;
-	bool		pipe = (filename == NULL);
+	bool		pipe = (filename == NULL) && (data_dest_cb == NULL);
 	TupleDesc	tupDesc;
 	int			num_phys_attrs;
 	MemoryContext oldcontext;
+
+	/* Impossible to mix CopyTo modes */
+	Assert(rel == NULL || srcTupDesc == NULL);
 
 	if (rel != NULL && rel->rd_rel->relkind != RELKIND_RELATION)
 	{
@@ -449,6 +465,11 @@ BeginCopyTo(ParseState *pstate,
 		cstate->rel = rel;
 
 		tupDesc = RelationGetDescr(cstate->rel);
+	}
+	else if (srcTupDesc)
+	{
+		Assert(!raw_query && !is_from);
+		tupDesc = cstate->tupDesc = srcTupDesc;
 	}
 	else
 	{
@@ -695,6 +716,11 @@ BeginCopyTo(ParseState *pstate,
 		if (whereToSendOutput != DestRemote)
 			cstate->copy_file = stdout;
 	}
+	else if (data_dest_cb)
+	{
+		cstate->copy_dest = COPY_CALLBACK;
+		cstate->data_dest_cb = data_dest_cb;
+	}
 	else
 	{
 		cstate->filename = pstrdup(filename);
@@ -772,7 +798,7 @@ BeginCopyTo(ParseState *pstate,
 uint64
 DoCopyTo(CopyToState cstate)
 {
-	bool		pipe = (cstate->filename == NULL);
+	bool		pipe = (cstate->filename == NULL) && (cstate->data_dest_cb == NULL);
 	bool		fe_copy = (pipe && whereToSendOutput == DestRemote);
 	uint64		processed;
 
@@ -781,7 +807,9 @@ DoCopyTo(CopyToState cstate)
 		if (fe_copy)
 			SendCopyBegin(cstate);
 
+		CopyToStart(cstate);
 		processed = CopyTo(cstate);
+		CopyToFinish(cstate);
 
 		if (fe_copy)
 			SendCopyEnd(cstate);
@@ -821,18 +849,22 @@ EndCopyTo(CopyToState cstate)
 }
 
 /*
- * Copy from relation or query TO file.
+ * Start COPY TO operation.
+ * Separated to the routine to prevent duplicate operations in the case of
+ * manual mode, where tuples are copied to the destination one by one, by call of
+ * the CopyOneRowTo() routine.
  */
-static uint64
-CopyTo(CopyToState cstate)
+void
+CopyToStart(CopyToState cstate)
 {
 	TupleDesc	tupDesc;
 	int			num_phys_attrs;
 	ListCell   *cur;
-	uint64		processed;
 
 	if (cstate->rel)
 		tupDesc = RelationGetDescr(cstate->rel);
+	else if (cstate->tupDesc)
+		tupDesc = cstate->tupDesc;
 	else
 		tupDesc = cstate->queryDesc->tupDesc;
 	num_phys_attrs = tupDesc->natts;
@@ -919,6 +951,32 @@ CopyTo(CopyToState cstate)
 			CopySendEndOfRow(cstate);
 		}
 	}
+}
+
+/*
+ * Finish COPY TO operation.
+ */
+void
+CopyToFinish(CopyToState cstate)
+{
+	if (cstate->opts.binary)
+	{
+		/* Generate trailer for a binary copy */
+		CopySendInt16(cstate, -1);
+		/* Need to flush out the trailer */
+		CopySendEndOfRow(cstate);
+	}
+
+	MemoryContextDelete(cstate->rowcontext);
+}
+
+/*
+ * Copy from relation or query TO file.
+ */
+static uint64
+CopyTo(CopyToState cstate)
+{
+	uint64		processed;
 
 	if (cstate->rel)
 	{
@@ -951,23 +1009,13 @@ CopyTo(CopyToState cstate)
 		processed = ((DR_copy *) cstate->queryDesc->dest)->processed;
 	}
 
-	if (cstate->opts.binary)
-	{
-		/* Generate trailer for a binary copy */
-		CopySendInt16(cstate, -1);
-		/* Need to flush out the trailer */
-		CopySendEndOfRow(cstate);
-	}
-
-	MemoryContextDelete(cstate->rowcontext);
-
 	return processed;
 }
 
 /*
  * Emit one row during CopyTo().
  */
-static void
+void
 CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 {
 	bool		need_delim = false;

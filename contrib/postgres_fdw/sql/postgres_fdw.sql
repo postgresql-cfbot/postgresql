@@ -2212,6 +2212,23 @@ alter table loc2 drop constraint loc2_f1positive;
 
 delete from rem2;
 
+create table foo (a int) partition by list (a);
+create table foo1 (like foo);
+create foreign table ffoo1 partition of foo for values in (1)
+	server loopback options (table_name 'foo1');
+create table foo2 (like foo);
+create foreign table ffoo2 partition of foo for values in (2)
+	server loopback options (table_name 'foo2');
+create function print_new_row() returns trigger language plpgsql as $$
+	begin raise notice '%', new; return new; end; $$;
+create trigger ffoo1_br_trig before insert on ffoo1
+	for each row execute function print_new_row();
+
+copy foo from stdin;
+1
+2
+\.
+
 -- Test local triggers
 create trigger trig_stmt_before before insert on rem2
 	for each statement execute procedure trigger_func();
@@ -2311,6 +2328,34 @@ drop trigger rem2_trig_row_after on rem2;
 drop trigger loc2_trig_row_before_insert on loc2;
 
 delete from rem2;
+
+alter table loc2 drop column f1;
+alter table loc2 drop column f2;
+copy rem2 from stdin;
+1	foo
+2	bar
+\.
+
+alter table loc2 add column f1 int;
+alter table loc2 add column f2 int;
+select * from rem2;
+
+-- dropped columns locally and on the foreign server
+alter table rem2 drop column f1;
+alter table rem2 drop column f2;
+copy rem2 from stdin;
+
+
+\.
+select * from rem2;
+
+alter table loc2 drop column f1;
+alter table loc2 drop column f2;
+copy rem2 from stdin;
+
+
+\.
+select * from rem2;
 
 -- test COPY FROM with foreign table created in the same transaction
 create table loc3 (f1 int, f2 text);

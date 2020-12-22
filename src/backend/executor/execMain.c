@@ -1248,6 +1248,62 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	resultRelInfo->ri_PartitionTupleSlot = NULL;	/* ditto */
 	resultRelInfo->ri_ChildToRootMap = NULL;
 	resultRelInfo->ri_CopyMultiInsertBuffer = NULL;
+
+	/* Define multi-insert mode possibility later if needed */
+	resultRelInfo->ri_usesMultiInsert = false;
+}
+
+/*
+ * ExecSetRelationUsesMultiInsert
+ *		Does this relation allow caller to use multi-insert mode when
+ *		inserting rows into it?
+ */
+bool
+ExecSetRelationUsesMultiInsert(const ResultRelInfo *rri,
+							  const ResultRelInfo *partition_root)
+{
+	Assert(rri->ri_usesMultiInsert == false);
+
+	/*
+	 * If a partition's root parent isn't allowed to use it, neither is the
+	 * partition.
+	 */
+	if (partition_root && !partition_root->ri_usesMultiInsert)
+		return false;
+
+	/*
+	 * Can't support multi-inserts when there are any BEFORE/INSTEAD OF
+	 * triggers on the table. Such triggers might query the table we're
+	 * inserting into and act differently if the tuples that have already
+	 * been processed and prepared for insertion are not there.
+	 */
+	if (rri->ri_TrigDesc != NULL &&
+		(rri->ri_TrigDesc->trig_insert_before_row ||
+		 rri->ri_TrigDesc->trig_insert_instead_row))
+		return false;
+
+	/*
+	 * For partitioned tables we can't support multi-inserts when there are
+	 * any statement level insert triggers. It might be possible to allow
+	 * partitioned tables with such triggers in the future, but for now,
+	 * CopyMultiInsertInfoFlush expects that any before row insert and
+	 * statement level insert triggers are on the same relation.
+	 */
+	if (rri->ri_RelationDesc->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
+		rri->ri_TrigDesc != NULL &&
+		rri->ri_TrigDesc->trig_insert_new_table)
+		return false;
+
+	if (rri->ri_FdwRoutine != NULL &&
+		rri->ri_FdwRoutine->ExecForeignCopy == NULL)
+		/*
+		 * Foreign tables don't support multi-inserts, unless their FDW
+		 * provides the necessary COPY interface.
+		 */
+		return false;
+
+	/* OK, caller can use multi-insert on this relation. */
+	return true;
 }
 
 /*

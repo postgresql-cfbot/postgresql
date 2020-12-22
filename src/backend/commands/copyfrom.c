@@ -307,61 +307,63 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 	ResultRelInfo *resultRelInfo = buffer->resultRelInfo;
 	TupleTableSlot **slots = buffer->slots;
 
-	/*
-	 * Print error context information correctly, if one of the operations
-	 * below fail.
-	 */
-	cstate->line_buf_valid = false;
-	save_cur_lineno = cstate->cur_lineno;
-
-	/*
-	 * table_multi_insert may leak memory, so switch to short-lived memory
-	 * context before calling it.
-	 */
-	oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-	table_multi_insert(resultRelInfo->ri_RelationDesc,
-					   slots,
-					   nused,
-					   mycid,
-					   ti_options,
-					   buffer->bistate);
-	MemoryContextSwitchTo(oldcontext);
-
-	for (i = 0; i < nused; i++)
+	if (resultRelInfo->ri_RelationDesc->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+	{
+		/* Flush into foreign table or partition */
+		resultRelInfo->ri_FdwRoutine->ExecForeignCopy(resultRelInfo,
+														slots,
+														nused);
+	}
+	else
 	{
 		/*
-		 * If there are any indexes, update them for all the inserted tuples,
-		 * and run AFTER ROW INSERT triggers.
+		 * table_multi_insert may leak memory, so switch to short-lived memory
+		 * context before calling it.
 		 */
-		if (resultRelInfo->ri_NumIndices > 0)
+		oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+		table_multi_insert(resultRelInfo->ri_RelationDesc,
+						   slots,
+						   nused,
+						   mycid,
+						   ti_options,
+						   buffer->bistate);
+		MemoryContextSwitchTo(oldcontext);
+
+		for (i = 0; i < nused; i++)
 		{
-			List	   *recheckIndexes;
+			/*
+			 * If there are any indexes, update them for all the inserted tuples,
+			 * and run AFTER ROW INSERT triggers.
+			 */
+			if (resultRelInfo->ri_NumIndices > 0)
+			{
+				List	   *recheckIndexes;
 
-			cstate->cur_lineno = buffer->linenos[i];
-			recheckIndexes =
-				ExecInsertIndexTuples(resultRelInfo,
-									  buffer->slots[i], estate, false, NULL,
-									  NIL);
-			ExecARInsertTriggers(estate, resultRelInfo,
-								 slots[i], recheckIndexes,
-								 cstate->transition_capture);
-			list_free(recheckIndexes);
+				cstate->cur_lineno = buffer->linenos[i];
+				recheckIndexes =
+					ExecInsertIndexTuples(resultRelInfo, buffer->slots[i],
+										  estate, false, NULL, NIL);
+				ExecARInsertTriggers(estate, resultRelInfo,
+									 slots[i], recheckIndexes,
+									 cstate->transition_capture);
+				list_free(recheckIndexes);
+			}
+
+			/*
+			 * There's no indexes, but see if we need to run AFTER ROW INSERT
+			 * triggers anyway.
+			 */
+			else if (resultRelInfo->ri_TrigDesc != NULL &&
+					 (resultRelInfo->ri_TrigDesc->trig_insert_after_row ||
+					  resultRelInfo->ri_TrigDesc->trig_insert_new_table))
+			{
+				cstate->cur_lineno = buffer->linenos[i];
+				ExecARInsertTriggers(estate, resultRelInfo,
+									 slots[i], NIL, cstate->transition_capture);
+			}
+
+			ExecClearTuple(slots[i]);
 		}
-
-		/*
-		 * There's no indexes, but see if we need to run AFTER ROW INSERT
-		 * triggers anyway.
-		 */
-		else if (resultRelInfo->ri_TrigDesc != NULL &&
-				 (resultRelInfo->ri_TrigDesc->trig_insert_after_row ||
-				  resultRelInfo->ri_TrigDesc->trig_insert_new_table))
-		{
-			cstate->cur_lineno = buffer->linenos[i];
-			ExecARInsertTriggers(estate, resultRelInfo,
-								 slots[i], NIL, cstate->transition_capture);
-		}
-
-		ExecClearTuple(slots[i]);
 	}
 
 	/* Mark that all slots are free */
@@ -535,12 +537,10 @@ CopyFrom(CopyFromState cstate)
 	CommandId	mycid = GetCurrentCommandId(true);
 	int			ti_options = 0; /* start with default options for insert */
 	BulkInsertState bistate = NULL;
-	CopyInsertMethod insertMethod;
 	CopyMultiInsertInfo multiInsertInfo = {0};	/* pacify compiler */
 	uint64		processed = 0;
 	bool		has_before_insert_row_trig;
 	bool		has_instead_insert_row_trig;
-	bool		leafpart_use_multi_insert = false;
 
 	Assert(cstate->rel);
 	Assert(list_length(cstate->range_table) == 1);
@@ -650,6 +650,33 @@ CopyFrom(CopyFromState cstate)
 	resultRelInfo = target_resultRelInfo = makeNode(ResultRelInfo);
 	ExecInitResultRelation(estate, resultRelInfo, 1);
 
+	Assert(target_resultRelInfo->ri_usesMultiInsert == false);
+
+	/*
+	 * It's generally more efficient to prepare a bunch of tuples for
+	 * insertion, and insert them in bulk, for example, with one
+	 * table_multi_insert() call than call table_tuple_insert() separately for
+	 * every tuple. However, there are a number of reasons why we might not be
+	 * able to do this.  For example, if there any volatile expressions in the
+	 * table's default values or in the statement's WHERE clause, which may
+	 * query the table we are inserting into, buffering tuples might produce
+	 * wrong results.  Also, the relation we are trying to insert into itself
+	 * may not be amenable to buffered inserts.
+	 *
+	 * Note: For partitions, this flag is set considering the target table's
+	 * flag that is being set here and partition's own properties which are
+	 * checked by calling ExecSetRelationUsesMultiInsert().  It does not matter
+	 * whether partitions have any volatile default expressions as we use the
+	 * defaults from the target of the COPY command.
+	 * Also, the COPY command requires a non-zero input list of attributes.
+	 * Therefore, the length of the attribute list is checked here.
+	 */
+	if (!cstate->volatile_defexprs &&
+		list_length(cstate->attnumlist) > 0 &&
+		!contain_volatile_functions(cstate->whereClause))
+		target_resultRelInfo->ri_usesMultiInsert =
+					ExecSetRelationUsesMultiInsert(target_resultRelInfo, NULL);
+
 	/* Verify the named relation is a valid target for INSERT */
 	CheckValidResultRel(resultRelInfo, CMD_INSERT);
 
@@ -665,10 +692,22 @@ CopyFrom(CopyFromState cstate)
 	mtstate->operation = CMD_INSERT;
 	mtstate->resultRelInfo = resultRelInfo;
 
-	if (resultRelInfo->ri_FdwRoutine != NULL &&
-		resultRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
-		resultRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate,
-														 resultRelInfo);
+	/*
+	 * Init copying process into foreign table. Initialization of copying into
+	 * foreign partitions will be done later.
+	 */
+	if (target_resultRelInfo->ri_FdwRoutine != NULL)
+	{
+		if (target_resultRelInfo->ri_usesMultiInsert)
+		{
+			Assert(target_resultRelInfo->ri_FdwRoutine->BeginForeignCopy != NULL);
+			target_resultRelInfo->ri_FdwRoutine->BeginForeignCopy(mtstate,
+																  resultRelInfo);
+		}
+		else if (target_resultRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
+			target_resultRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate,
+																	resultRelInfo);
+	}
 
 	/* Prepare to catch AFTER triggers. */
 	AfterTriggerBeginQuery();
@@ -697,83 +736,9 @@ CopyFrom(CopyFromState cstate)
 		cstate->qualexpr = ExecInitQual(castNode(List, cstate->whereClause),
 										&mtstate->ps);
 
-	/*
-	 * It's generally more efficient to prepare a bunch of tuples for
-	 * insertion, and insert them in one table_multi_insert() call, than call
-	 * table_tuple_insert() separately for every tuple. However, there are a
-	 * number of reasons why we might not be able to do this.  These are
-	 * explained below.
-	 */
-	if (resultRelInfo->ri_TrigDesc != NULL &&
-		(resultRelInfo->ri_TrigDesc->trig_insert_before_row ||
-		 resultRelInfo->ri_TrigDesc->trig_insert_instead_row))
-	{
-		/*
-		 * Can't support multi-inserts when there are any BEFORE/INSTEAD OF
-		 * triggers on the table. Such triggers might query the table we're
-		 * inserting into and act differently if the tuples that have already
-		 * been processed and prepared for insertion are not there.
-		 */
-		insertMethod = CIM_SINGLE;
-	}
-	else if (proute != NULL && resultRelInfo->ri_TrigDesc != NULL &&
-			 resultRelInfo->ri_TrigDesc->trig_insert_new_table)
-	{
-		/*
-		 * For partitioned tables we can't support multi-inserts when there
-		 * are any statement level insert triggers. It might be possible to
-		 * allow partitioned tables with such triggers in the future, but for
-		 * now, CopyMultiInsertInfoFlush expects that any before row insert
-		 * and statement level insert triggers are on the same relation.
-		 */
-		insertMethod = CIM_SINGLE;
-	}
-	else if (resultRelInfo->ri_FdwRoutine != NULL ||
-			 cstate->volatile_defexprs)
-	{
-		/*
-		 * Can't support multi-inserts to foreign tables or if there are any
-		 * volatile default expressions in the table.  Similarly to the
-		 * trigger case above, such expressions may query the table we're
-		 * inserting into.
-		 *
-		 * Note: It does not matter if any partitions have any volatile
-		 * default expressions as we use the defaults from the target of the
-		 * COPY command.
-		 */
-		insertMethod = CIM_SINGLE;
-	}
-	else if (contain_volatile_functions(cstate->whereClause))
-	{
-		/*
-		 * Can't support multi-inserts if there are any volatile function
-		 * expressions in WHERE clause.  Similarly to the trigger case above,
-		 * such expressions may query the table we're inserting into.
-		 */
-		insertMethod = CIM_SINGLE;
-	}
-	else
-	{
-		/*
-		 * For partitioned tables, we may still be able to perform bulk
-		 * inserts.  However, the possibility of this depends on which types
-		 * of triggers exist on the partition.  We must disable bulk inserts
-		 * if the partition is a foreign table or it has any before row insert
-		 * or insert instead triggers (same as we checked above for the parent
-		 * table).  Since the partition's resultRelInfos are initialized only
-		 * when we actually need to insert the first tuple into them, we must
-		 * have the intermediate insert method of CIM_MULTI_CONDITIONAL to
-		 * flag that we must later determine if we can use bulk-inserts for
-		 * the partition being inserted into.
-		 */
-		if (proute)
-			insertMethod = CIM_MULTI_CONDITIONAL;
-		else
-			insertMethod = CIM_MULTI;
-
+	if (resultRelInfo->ri_usesMultiInsert)
 		CopyMultiInsertInfoInit(&multiInsertInfo, resultRelInfo, cstate,
 								estate, mycid, ti_options);
-	}
 
 	/*
 	 * If not using batch mode (which allocates slots as needed) set up a
@@ -781,7 +746,7 @@ CopyFrom(CopyFromState cstate)
 	 * one, even if we might batch insert, to read the tuple in the root
 	 * partition's form.
 	 */
-	if (insertMethod == CIM_SINGLE || insertMethod == CIM_MULTI_CONDITIONAL)
+	if (!resultRelInfo->ri_usesMultiInsert || proute)
 	{
 		singleslot = table_slot_create(resultRelInfo->ri_RelationDesc,
 									   &estate->es_tupleTable);
@@ -824,7 +789,7 @@ CopyFrom(CopyFromState cstate)
 		ResetPerTupleExprContext(estate);
 
 		/* select slot to (initially) load row into */
-		if (insertMethod == CIM_SINGLE || proute)
+		if (!target_resultRelInfo->ri_usesMultiInsert || proute)
 		{
 			myslot = singleslot;
 			Assert(myslot != NULL);
@@ -832,7 +797,6 @@ CopyFrom(CopyFromState cstate)
 		else
 		{
 			Assert(resultRelInfo == target_resultRelInfo);
-			Assert(insertMethod == CIM_MULTI);
 
 			myslot = CopyMultiInsertInfoNextFreeSlot(&multiInsertInfo,
 													 resultRelInfo);
@@ -891,24 +855,14 @@ CopyFrom(CopyFromState cstate)
 				has_instead_insert_row_trig = (resultRelInfo->ri_TrigDesc &&
 											   resultRelInfo->ri_TrigDesc->trig_insert_instead_row);
 
-				/*
-				 * Disable multi-inserts when the partition has BEFORE/INSTEAD
-				 * OF triggers, or if the partition is a foreign partition.
-				 */
-				leafpart_use_multi_insert = insertMethod == CIM_MULTI_CONDITIONAL &&
-					!has_before_insert_row_trig &&
-					!has_instead_insert_row_trig &&
-					resultRelInfo->ri_FdwRoutine == NULL;
-
 				/* Set the multi-insert buffer to use for this partition. */
-				if (leafpart_use_multi_insert)
+				if (resultRelInfo->ri_usesMultiInsert)
 				{
 					if (resultRelInfo->ri_CopyMultiInsertBuffer == NULL)
 						CopyMultiInsertInfoSetupBuffer(&multiInsertInfo,
 													   resultRelInfo);
 				}
-				else if (insertMethod == CIM_MULTI_CONDITIONAL &&
-						 !CopyMultiInsertInfoIsEmpty(&multiInsertInfo))
+				else if (!CopyMultiInsertInfoIsEmpty(&multiInsertInfo))
 				{
 					/*
 					 * Flush pending inserts if this partition can't use
@@ -938,7 +892,7 @@ CopyFrom(CopyFromState cstate)
 			 * rowtype.
 			 */
 			map = resultRelInfo->ri_RootToPartitionMap;
-			if (insertMethod == CIM_SINGLE || !leafpart_use_multi_insert)
+			if (!resultRelInfo->ri_usesMultiInsert)
 			{
 				/* non batch insert */
 				if (map != NULL)
@@ -956,9 +910,6 @@ CopyFrom(CopyFromState cstate)
 				 * current partition.
 				 */
 				TupleTableSlot *batchslot;
-
-				/* no other path available for partitioned table */
-				Assert(insertMethod == CIM_MULTI_CONDITIONAL);
 
 				batchslot = CopyMultiInsertInfoNextFreeSlot(&multiInsertInfo,
 															resultRelInfo);
@@ -1031,7 +982,7 @@ CopyFrom(CopyFromState cstate)
 					ExecPartitionCheck(resultRelInfo, myslot, estate, true);
 
 				/* Store the slot in the multi-insert buffer, when enabled. */
-				if (insertMethod == CIM_MULTI || leafpart_use_multi_insert)
+				if (resultRelInfo->ri_usesMultiInsert)
 				{
 					/*
 					 * The slot previously might point into the per-tuple
@@ -1107,11 +1058,8 @@ CopyFrom(CopyFromState cstate)
 	}
 
 	/* Flush any remaining buffered tuples */
-	if (insertMethod != CIM_SINGLE)
-	{
-		if (!CopyMultiInsertInfoIsEmpty(&multiInsertInfo))
-			CopyMultiInsertInfoFlush(&multiInsertInfo, NULL);
-	}
+	if (!CopyMultiInsertInfoIsEmpty(&multiInsertInfo))
+		CopyMultiInsertInfoFlush(&multiInsertInfo, NULL);
 
 	/* Done, clean up */
 	error_context_stack = errcallback.previous;
@@ -1137,14 +1085,19 @@ CopyFrom(CopyFromState cstate)
 	ExecResetTupleTable(estate->es_tupleTable, false);
 
 	/* Allow the FDW to shut down */
-	if (target_resultRelInfo->ri_FdwRoutine != NULL &&
-		target_resultRelInfo->ri_FdwRoutine->EndForeignInsert != NULL)
-		target_resultRelInfo->ri_FdwRoutine->EndForeignInsert(estate,
-															  target_resultRelInfo);
+	if (target_resultRelInfo->ri_FdwRoutine != NULL)
+	{
+		if (target_resultRelInfo->ri_usesMultiInsert &&
+			target_resultRelInfo->ri_FdwRoutine->EndForeignCopy != NULL)
+			target_resultRelInfo->ri_FdwRoutine->EndForeignCopy(estate,
+														target_resultRelInfo);
+		else if (target_resultRelInfo->ri_FdwRoutine->EndForeignInsert != NULL)
+			target_resultRelInfo->ri_FdwRoutine->EndForeignInsert(estate,
+														target_resultRelInfo);
+	}
 
 	/* Tear down the multi-insert buffer data */
-	if (insertMethod != CIM_SINGLE)
-		CopyMultiInsertInfoCleanup(&multiInsertInfo);
+	CopyMultiInsertInfoCleanup(&multiInsertInfo);
 
 	/* Close all the partitioned tables, leaf partitions, and their indices */
 	if (proute)

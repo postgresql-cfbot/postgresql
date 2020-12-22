@@ -193,6 +193,8 @@ extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 							  Index resultRelationIndex,
 							  Relation partition_root,
 							  int instrument_options);
+extern bool ExecSetRelationUsesMultiInsert(const ResultRelInfo *rri,
+										  const ResultRelInfo *partition_root);
 extern ResultRelInfo *ExecGetTriggerResultRel(EState *estate, Oid relid);
 extern void ExecConstraints(ResultRelInfo *resultRelInfo,
 							TupleTableSlot *slot, EState *estate);

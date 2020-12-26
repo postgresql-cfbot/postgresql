@@ -2196,11 +2196,11 @@ where oid = 'test_storage'::regclass;
 create index test_storage_idx on test_storage (b, a);
 alter table test_storage alter column a set storage external;
 \d+ test_storage
-                                Table "public.test_storage"
- Column |  Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+---------+-----------+----------+---------+----------+--------------+-------------
- a      | text    |           |          |         | external |              | 
- b      | integer |           |          | 0       | plain    |              | 
+                                       Table "public.test_storage"
+ Column |  Type   | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+---------+-----------+----------+---------+----------+-------------+--------------+-------------
+ a      | text    |           |          |         | external | pglz        |              | 
+ b      | integer |           |          | 0       | plain    |             |              | 
 Indexes:
     "test_storage_idx" btree (b, a)
 

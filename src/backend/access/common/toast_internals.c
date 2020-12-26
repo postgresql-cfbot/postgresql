@@ -44,46 +44,74 @@ static bool toastid_valueid_exists(Oid toastrelid, Oid valueid);
  * ----------
  */
 Datum
-toast_compress_datum(Datum value)
+toast_compress_datum(Datum value, Oid cmoid, List *cmoptions)
 {
-	struct varlena *tmp;
-	int32		valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
-	int32		len;
+	struct varlena *tmp = NULL;
+	int32		valsize;
+	void	   *options = NULL;
+	bool		isCustomCompression = false;
+	const CompressionAmRoutine *cmroutine = NULL;
 
 	Assert(!VARATT_IS_EXTERNAL(DatumGetPointer(value)));
 	Assert(!VARATT_IS_COMPRESSED(DatumGetPointer(value)));
 
-	/*
-	 * No point in wasting a palloc cycle if value size is out of the allowed
-	 * range for compression
-	 */
-	if (valsize < PGLZ_strategy_default->min_input_size ||
-		valsize > PGLZ_strategy_default->max_input_size)
+	Assert(OidIsValid(cmoid));
+
+	/* Get the handler routines for the compression method */
+	switch (cmoid)
+	{
+		case PGLZ_COMPRESSION_AM_OID:
+			cmroutine = &pglz_compress_methods;
+			break;
+		case LZ4_COMPRESSION_AM_OID:
+			cmroutine = &lz4_compress_methods;
+			break;
+		default:
+			isCustomCompression = true;
+			cmroutine = GetCompressionAmRoutineByAmId(cmoid);
+			break;
+	}
+
+	if (cmroutine->datum_initstate)
+		options = cmroutine->datum_initstate(cmoptions);
+
+	/* Call the actual compression function */
+	tmp = cmroutine->datum_compress((const struct varlena *)value,
+									isCustomCompression ?
+									TOAST_CUSTOM_COMPRESS_HDRSZ :
+									TOAST_COMPRESS_HDRSZ, options);
+	if (options != NULL)
+	{
+		pfree(options);
+		list_free(cmoptions);
+	}
+
+	if (!tmp)
 		return PointerGetDatum(NULL);
 
-	tmp = (struct varlena *) palloc(PGLZ_MAX_OUTPUT(valsize) +
-									TOAST_COMPRESS_HDRSZ);
-
 	/*
-	 * We recheck the actual size even if pglz_compress() reports success,
-	 * because it might be satisfied with having saved as little as one byte
-	 * in the compressed data --- which could turn into a net loss once you
-	 * consider header and alignment padding.  Worst case, the compressed
-	 * format might require three padding bytes (plus header, which is
-	 * included in VARSIZE(tmp)), whereas the uncompressed format would take
-	 * only one header byte and no padding if the value is short enough.  So
-	 * we insist on a savings of more than 2 bytes to ensure we have a gain.
+	 * We recheck the actual size even if compression reports success, because
+	 * it might be satisfied with having saved as little as one byte in the
+	 * compressed data --- which could turn into a net loss once you consider
+	 * header and alignment padding.  Worst case, the compressed format might
+	 * require three padding bytes (plus header, which is included in
+	 * VARSIZE(tmp)), whereas the uncompressed format would take only one
+	 * header byte and no padding if the value is short enough.  So we insist
+	 * on a savings of more than 2 bytes to ensure we have a gain.
 	 */
-	len = pglz_compress(VARDATA_ANY(DatumGetPointer(value)),
-						valsize,
-						TOAST_COMPRESS_RAWDATA(tmp),
-						PGLZ_strategy_default);
-	if (len >= 0 &&
-		len + TOAST_COMPRESS_HDRSZ < valsize - 2)
+	valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
+
+	if (VARSIZE(tmp) < valsize - 2)
 	{
-		TOAST_COMPRESS_SET_RAWSIZE(tmp, valsize);
-		SET_VARSIZE_COMPRESSED(tmp, len + TOAST_COMPRESS_HDRSZ);
 		/* successful compression */
+		TOAST_COMPRESS_SET_SIZE_AND_METHOD(tmp, valsize, isCustomCompression ?
+										   CUSTOM_COMPRESSION_ID :
+										   CompressionOidToId(cmoid));
+
+		/* For custom compression, set the oid of the compression method */
+		if (isCustomCompression)
+			TOAST_COMPRESS_SET_CMOID(tmp, cmoid);
+
 		return PointerGetDatum(tmp);
 	}
 	else

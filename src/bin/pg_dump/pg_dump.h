@@ -326,6 +326,8 @@ typedef struct _tableInfo
 	bool		needs_override; /* has GENERATED ALWAYS AS IDENTITY */
 	char	   *amname;			/* relation access method */
 
+	char	   **attcmnames; /* per-attribute current compression method */
+
 	/*
 	 * Stuff computed only for dumpable tables.
 	 */

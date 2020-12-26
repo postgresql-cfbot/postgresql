@@ -3762,6 +3762,8 @@ CREATE TABLE measurement (
        <productname>PostgreSQL</productname>
        tables (or, possibly, foreign tables).  It is possible to specify a
        tablespace and storage parameters for each partition separately.
+       Partitions inherits the compression method of the parent for each column
+       however we can set different compression method for each partition.
       </para>
 
       <para>

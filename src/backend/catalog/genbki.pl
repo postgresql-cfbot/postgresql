@@ -181,6 +181,9 @@ my $C_COLLATION_OID =
 my $PG_CATALOG_NAMESPACE =
   Catalog::FindDefinedSymbolFromData($catalog_data{pg_namespace},
 	'PG_CATALOG_NAMESPACE');
+my $PGLZ_COMPRESSION_AM_OID =
+  Catalog::FindDefinedSymbolFromData($catalog_data{pg_am},
+	'PGLZ_COMPRESSION_AM_OID');
 
 
 # Fill in pg_class.relnatts by looking at the referenced catalog's schema.
@@ -807,6 +810,9 @@ sub morph_row_for_pgattr
 	# collation-aware catalog columns must use C collation
 	$row->{attcollation} =
 	  $type->{typcollation} ne '0' ? $C_COLLATION_OID : 0;
+
+	$row->{attcompression} =
+	  $type->{typstorage} ne 'p' && $type->{typstorage} ne 'e' ? $PGLZ_COMPRESSION_AM_OID : 0;
 
 	if (defined $attr->{forcenotnull})
 	{

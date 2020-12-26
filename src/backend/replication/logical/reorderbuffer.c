@@ -87,6 +87,7 @@
 #include "access/detoast.h"
 #include "access/heapam.h"
 #include "access/rewriteheap.h"
+#include "access/toast_internals.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"

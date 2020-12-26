@@ -81,6 +81,7 @@ extern Oid	heap_create_with_catalog(const char *relname,
 									 bool allow_system_table_mods,
 									 bool is_internal,
 									 Oid relrewrite,
+									 Datum *acoptions,
 									 ObjectAddress *typaddress);
 
 extern void heap_drop_with_catalog(Oid relid);
@@ -97,6 +98,7 @@ extern void InsertPgAttributeTuples(Relation pg_attribute_rel,
 									TupleDesc tupdesc,
 									Oid new_rel_oid,
 									Datum *attoptions,
+									Datum *attcmoptions,
 									CatalogIndexState indstate);
 
 extern void InsertPgClassTuple(Relation pg_class_desc,

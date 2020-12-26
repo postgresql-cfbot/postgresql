@@ -170,10 +170,12 @@ describeAccessMethods(const char *pattern, bool verbose)
 					  "  CASE amtype"
 					  " WHEN 'i' THEN '%s'"
 					  " WHEN 't' THEN '%s'"
+					  " WHEN 'c' THEN '%s'"
 					  " END AS \"%s\"",
 					  gettext_noop("Name"),
 					  gettext_noop("Index"),
 					  gettext_noop("Table"),
+					  gettext_noop("Compression"),
 					  gettext_noop("Type"));
 
 	if (verbose)
@@ -1475,7 +1477,8 @@ describeOneTableDetails(const char *schemaname,
 				fdwopts_col = -1,
 				attstorage_col = -1,
 				attstattarget_col = -1,
-				attdescr_col = -1;
+				attdescr_col = -1,
+				attcompression_col = -1;
 	int			numrows;
 	struct
 	{
@@ -1892,6 +1895,20 @@ describeOneTableDetails(const char *schemaname,
 		appendPQExpBufferStr(&buf, ",\n  a.attstorage");
 		attstorage_col = cols++;
 
+		/* compresssion info */
+		if (pset.sversion >= 120000 &&
+			(tableinfo.relkind == RELKIND_RELATION ||
+			 tableinfo.relkind == RELKIND_PARTITIONED_TABLE ||
+			 tableinfo.relkind == RELKIND_MATVIEW))
+		{
+			appendPQExpBufferStr(&buf, ",\n  CASE WHEN attcompression = 0 THEN NULL ELSE "
+								 " (SELECT am.amname "
+								 "  FROM pg_catalog.pg_am am "
+								 "  WHERE am.oid = a.attcompression) "
+								 " END AS attcompression");
+			attcompression_col = cols++;
+		}
+
 		/* stats target, if relevant to relkind */
 		if (tableinfo.relkind == RELKIND_RELATION ||
 			tableinfo.relkind == RELKIND_INDEX ||
@@ -2018,6 +2035,8 @@ describeOneTableDetails(const char *schemaname,
 		headers[cols++] = gettext_noop("FDW options");
 	if (attstorage_col >= 0)
 		headers[cols++] = gettext_noop("Storage");
+	if (attcompression_col >= 0)
+		headers[cols++] = gettext_noop("Compression");
 	if (attstattarget_col >= 0)
 		headers[cols++] = gettext_noop("Stats target");
 	if (attdescr_col >= 0)
@@ -2095,6 +2114,27 @@ describeOneTableDetails(const char *schemaname,
 										(storage[0] == 'e' ? "external" :
 										 "???")))),
 							  false, false);
+		}
+
+		/* Column compression. */
+		if (attcompression_col >= 0)
+		{
+			bool		mustfree = false;
+			const int	trunclen = 100;
+			char *val = PQgetvalue(res, i, attcompression_col);
+
+			/* truncate the options if they're too long */
+			if (strlen(val) > trunclen + 3)
+			{
+				char *trunc = pg_malloc0(trunclen + 4);
+				strncpy(trunc, val, trunclen);
+				strncpy(trunc + trunclen, "...", 4);
+
+				val = trunc;
+				mustfree = true;
+			}
+
+			printTableAddCell(&cont, val, false, mustfree);
 		}
 
 		/* Statistics target, if the relkind supports this feature */

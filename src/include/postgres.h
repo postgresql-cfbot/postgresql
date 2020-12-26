@@ -55,9 +55,9 @@
 /*
  * struct varatt_external is a traditional "TOAST pointer", that is, the
  * information needed to fetch a Datum stored out-of-line in a TOAST table.
- * The data is compressed if and only if va_extsize < va_rawsize - VARHDRSZ.
- * This struct must not contain any padding, because we sometimes compare
- * these pointers using memcmp.
+ * The data is compressed if and only if size in
+ * va_extinfo < va_rawsize - VARHDRSZ.  This struct must not contain any
+ * padding, because we sometimes compare these pointers using memcmp.
  *
  * Note that this information is stored unaligned within actual tuples, so
  * you need to memcpy from the tuple into a local struct variable before
@@ -145,7 +145,8 @@ typedef union
 	struct						/* Compressed-in-line format */
 	{
 		uint32		va_header;
-		uint32		va_rawsize; /* Original data size (excludes header) */
+		uint32		va_info;	/* Original data size (excludes header) and
+								 * flags */
 		char		va_data[FLEXIBLE_ARRAY_MEMBER]; /* Compressed data */
 	}			va_compressed;
 } varattrib_4b;
@@ -280,8 +281,11 @@ typedef struct
 #define VARDATA_1B(PTR)		(((varattrib_1b *) (PTR))->va_data)
 #define VARDATA_1B_E(PTR)	(((varattrib_1b_e *) (PTR))->va_data)
 
+/* va_info in va_compress contains raw size of datum and optional flags */
 #define VARRAWSIZE_4B_C(PTR) \
-	(((varattrib_4b *) (PTR))->va_compressed.va_rawsize)
+	(((varattrib_4b *) (PTR))->va_compressed.va_info & 0x3FFFFFFF)
+#define VARFLAGS_4B_C(PTR) \
+	(((varattrib_4b *) (PTR))->va_compressed.va_info >> 30)
 
 /* Externally visible macros */
 

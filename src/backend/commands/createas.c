@@ -559,6 +559,13 @@ intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 	if (!myState->into->skipData)
 	{
 		/*
+		 * Compare the compression method of the compressed attribute in the
+		 * source tuple with target attribute and if those are different then
+		 * decompress those attributes.
+		 */
+		CompareCompressionMethodAndDecompress(slot, myState->rel->rd_att);
+
+		/*
 		 * Note that the input slot might not be of the type of the target
 		 * relation. That's supported by table_tuple_insert(), but slightly
 		 * less efficient than inserting with the right slot - but the

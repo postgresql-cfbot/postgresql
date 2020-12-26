@@ -346,6 +346,9 @@
 /* Define to 1 if you have the `z' library (-lz). */
 #undef HAVE_LIBZ
 
+/* Define to 1 if you have the `lz4' library (-llz4). */
+#undef HAVE_LIBLZ4
+
 /* Define to 1 if you have the `link' function. */
 #undef HAVE_LINK
 

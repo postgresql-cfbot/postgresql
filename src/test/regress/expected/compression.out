@@ -1,0 +1,330 @@
+-- test creating table with compression method
+CREATE TABLE cmdata(f1 text COMPRESSION pglz);
+CREATE INDEX idx ON cmdata(f1);
+INSERT INTO cmdata VALUES(repeat('1234567890',1000));
+\d+ cmdata
+                                        Table "public.cmdata"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | pglz        |              | 
+Indexes:
+    "idx" btree (f1)
+
+CREATE TABLE cmdata1(f1 TEXT COMPRESSION lz4);
+INSERT INTO cmdata1 VALUES(repeat('1234567890',1004));
+\d+ cmdata1
+                                        Table "public.cmdata1"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | lz4         |              | 
+
+-- try setting compression for incompressible data type
+CREATE TABLE cmdata2 (f1 int COMPRESSION pglz);
+ERROR:  column data type integer does not support compression
+-- verify stored compression method
+SELECT pg_column_compression(f1) FROM cmdata;
+ pg_column_compression 
+-----------------------
+ pglz
+(1 row)
+
+SELECT pg_column_compression(f1) FROM cmdata1;
+ pg_column_compression 
+-----------------------
+ lz4
+(1 row)
+
+-- decompress data slice
+SELECT SUBSTR(f1, 200, 5) FROM cmdata;
+ substr 
+--------
+ 01234
+(1 row)
+
+SELECT SUBSTR(f1, 2000, 50) FROM cmdata1;
+                       substr                       
+----------------------------------------------------
+ 01234567890123456789012345678901234567890123456789
+(1 row)
+
+-- copy with table creation
+SELECT * INTO cmmove1 FROM cmdata;
+SELECT pg_column_compression(f1) FROM cmmove1;
+ pg_column_compression 
+-----------------------
+ pglz
+(1 row)
+
+-- update using datum from different table
+CREATE TABLE cmmove2(f1 text COMPRESSION pglz);
+INSERT INTO cmmove2 VALUES (repeat('1234567890',1004));
+SELECT pg_column_compression(f1) FROM cmmove2;
+ pg_column_compression 
+-----------------------
+ pglz
+(1 row)
+
+UPDATE cmmove2 SET f1 = cmdata.f1 FROM cmdata;
+SELECT pg_column_compression(f1) FROM cmmove2;
+ pg_column_compression 
+-----------------------
+ pglz
+(1 row)
+
+UPDATE cmmove2 SET f1 = cmdata1.f1 FROM cmdata1;
+SELECT pg_column_compression(f1) FROM cmmove2;
+ pg_column_compression 
+-----------------------
+ pglz
+(1 row)
+
+-- copy to existing table
+CREATE TABLE cmmove3(f1 text COMPRESSION pglz);
+INSERT INTO cmmove3 SELECT * FROM cmdata;
+INSERT INTO cmmove3 SELECT * FROM cmdata1;
+SELECT pg_column_compression(f1) FROM cmmove2;
+ pg_column_compression 
+-----------------------
+ pglz
+(1 row)
+
+-- test LIKE INCLUDING COMPRESSION
+CREATE TABLE cmdata2 (LIKE cmdata1 INCLUDING COMPRESSION);
+\d+ cmdata2
+                                        Table "public.cmdata2"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | lz4         |              | 
+
+-- test compression with materialized view
+CREATE MATERIALIZED VIEW mv(x) AS SELECT * FROM cmdata1;
+\d+ mv
+                                    Materialized view "public.mv"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ x      | text |           |          |         | extended | pglz        |              | 
+View definition:
+ SELECT cmdata1.f1 AS x
+   FROM cmdata1;
+
+SELECT pg_column_compression(f1) FROM cmdata1;
+ pg_column_compression 
+-----------------------
+ lz4
+(1 row)
+
+SELECT pg_column_compression(x) FROM mv;
+ pg_column_compression 
+-----------------------
+ pglz
+(1 row)
+
+-- test compression with partition
+CREATE TABLE cmpart(f1 text COMPRESSION lz4) PARTITION BY HASH(f1);
+CREATE TABLE cmpart1 PARTITION OF cmpart FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+CREATE TABLE cmpart2(f1 text COMPRESSION pglz);
+ALTER TABLE cmpart ATTACH PARTITION cmpart2 FOR VALUES WITH (MODULUS 2, REMAINDER 1);
+INSERT INTO cmpart VALUES (repeat('123456789',1004));
+INSERT INTO cmpart VALUES (repeat('123456789',4004));
+SELECT pg_column_compression(f1) FROM cmpart;
+ pg_column_compression 
+-----------------------
+ lz4
+ pglz
+(2 rows)
+
+-- test compression with inheritence, error
+CREATE TABLE cminh() INHERITS(cmdata, cmdata1);
+NOTICE:  merging multiple inherited definitions of column "f1"
+ERROR:  column "f1" has a compression method conflict
+DETAIL:  pglz versus lz4
+CREATE TABLE cminh(f1 TEXT COMPRESSION lz4) INHERITS(cmdata);
+NOTICE:  merging column "f1" with inherited definition
+ERROR:  column "f1" has a compression method conflict
+DETAIL:  pglz versus lz4
+-- test alter compression method with rewrite
+ALTER TABLE cmdata ALTER COLUMN f1 SET COMPRESSION lz4;
+\d+ cmdata
+                                        Table "public.cmdata"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | lz4         |              | 
+Indexes:
+    "idx" btree (f1)
+
+SELECT pg_column_compression(f1) FROM cmdata;
+ pg_column_compression 
+-----------------------
+ lz4
+(1 row)
+
+-- test alter compression method for the materialized view
+ALTER TABLE cmdata1 ALTER COLUMN f1 SET COMPRESSION pglz;
+ALTER MATERIALIZED VIEW mv ALTER COLUMN x SET COMPRESSION lz4;
+REFRESH MATERIALIZED VIEW mv;
+\d+ mv
+                                    Materialized view "public.mv"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ x      | text |           |          |         | extended | lz4         |              | 
+View definition:
+ SELECT cmdata1.f1 AS x
+   FROM cmdata1;
+
+SELECT pg_column_compression(f1) FROM cmdata1;
+ pg_column_compression 
+-----------------------
+ pglz
+(1 row)
+
+SELECT pg_column_compression(x) FROM mv;
+ pg_column_compression 
+-----------------------
+ lz4
+(1 row)
+
+-- test alter compression method for the partioned table
+ALTER TABLE cmpart ALTER COLUMN f1 SET COMPRESSION pglz;
+SELECT pg_column_compression(f1) FROM cmpart;
+ pg_column_compression 
+-----------------------
+ lz4
+ pglz
+(2 rows)
+
+ALTER TABLE cmpart1 ALTER COLUMN f1 SET COMPRESSION pglz;
+ALTER TABLE cmpart2 ALTER COLUMN f1 SET COMPRESSION lz4;
+SELECT pg_column_compression(f1) FROM cmpart;
+ pg_column_compression 
+-----------------------
+ pglz
+ lz4
+(2 rows)
+
+-- preserve old compression method
+ALTER TABLE cmdata ALTER COLUMN f1 SET COMPRESSION pglz PRESERVE (lz4);
+INSERT INTO cmdata VALUES (repeat('1234567890',1004));
+\d+ cmdata
+                                        Table "public.cmdata"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | pglz        |              | 
+Indexes:
+    "idx" btree (f1)
+
+SELECT pg_column_compression(f1) FROM cmdata;
+ pg_column_compression 
+-----------------------
+ lz4
+ pglz
+(2 rows)
+
+\d+ cmdata
+                                        Table "public.cmdata"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | pglz        |              | 
+Indexes:
+    "idx" btree (f1)
+
+ALTER TABLE cmdata ALTER COLUMN f1 SET COMPRESSION lz4 PRESERVE ALL;
+SELECT pg_column_compression(f1) FROM cmdata;
+ pg_column_compression 
+-----------------------
+ lz4
+ pglz
+(2 rows)
+
+-- create compression method
+CREATE ACCESS METHOD pglz2 TYPE COMPRESSION HANDLER pglzhandler;
+ALTER TABLE cmdata ALTER COLUMN f1 SET COMPRESSION pglz2 PRESERVE ALL;
+INSERT INTO cmdata VALUES (repeat('1234567890',1004));
+\d+ cmdata
+                                        Table "public.cmdata"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | pglz2       |              | 
+Indexes:
+    "idx" btree (f1)
+
+SELECT pg_column_compression(f1) FROM cmdata;
+ pg_column_compression 
+-----------------------
+ lz4
+ pglz
+ pglz2
+(3 rows)
+
+ALTER TABLE cmdata ALTER COLUMN f1 SET COMPRESSION lz4 PRESERVE (pglz2);
+SELECT pg_column_compression(f1) FROM cmdata;
+ pg_column_compression 
+-----------------------
+ lz4
+ lz4
+ pglz2
+(3 rows)
+
+\d+ cmdata
+                                        Table "public.cmdata"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | lz4         |              | 
+Indexes:
+    "idx" btree (f1)
+
+-- compression options
+DROP TABLE cmmove1;
+CREATE TABLE cmmove1(f1 TEXT COMPRESSION pglz WITH (min_input_size '100'));
+CREATE INDEX idx1 ON cmdata(f1);
+INSERT INTO cmmove1 VALUES(repeat('1234567890',1000));
+ALTER TABLE cmmove1 ALTER COLUMN f1 SET COMPRESSION lz4 WITH (acceleration '50');
+INSERT INTO cmmove1 VALUES(repeat('1234567890',1004));
+ALTER TABLE cmmove1 ALTER COLUMN f1 SET COMPRESSION pglz WITH (min_input_size '200') PRESERVE (lz4);
+INSERT INTO cmmove1 VALUES(repeat('1234567890',1008));
+SELECT pg_column_compression(f1) FROM cmmove1;
+ pg_column_compression 
+-----------------------
+ lz4
+ lz4
+ pglz
+(3 rows)
+
+-- check data is ok
+SELECT length(f1) FROM cmdata;
+ length 
+--------
+  10000
+  10040
+  10040
+(3 rows)
+
+SELECT length(f1) FROM cmdata1;
+ length 
+--------
+  10040
+(1 row)
+
+SELECT length(f1) FROM cmmove1;
+ length 
+--------
+  10000
+  10040
+  10080
+(3 rows)
+
+SELECT length(f1) FROM cmmove2;
+ length 
+--------
+  10040
+(1 row)
+
+SELECT length(f1) FROM cmmove3;
+ length 
+--------
+  10000
+  10040
+(2 rows)
+
+DROP MATERIALIZED VIEW mv;
+DROP TABLE cmdata, cmdata1, cmmove1, cmmove2, cmmove3, cmpart;
+DROP ACCESS METHOD pglz2;

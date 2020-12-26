@@ -883,6 +883,12 @@ static const SchemaQuery Query_for_list_of_statistics = {
 "  WHERE substring(pg_catalog.quote_ident(amname),1,%d)='%s' AND "\
 "   amtype=" CppAsString2(AMTYPE_TABLE)
 
+#define Query_for_list_of_compression_access_methods \
+" SELECT pg_catalog.quote_ident(amname) "\
+"   FROM pg_catalog.pg_am "\
+"  WHERE substring(pg_catalog.quote_ident(amname),1,%d)='%s' AND "\
+"   amtype=" CppAsString2(AMTYPE_COMPRESSION)
+
 /* the silly-looking length condition is just to eat up the current word */
 #define Query_for_list_of_arguments \
 "SELECT pg_catalog.oidvectortypes(proargtypes)||')' "\
@@ -2093,11 +2099,18 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET */
 	else if (Matches("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET") ||
 			 Matches("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET"))
-		COMPLETE_WITH("(", "DEFAULT", "NOT NULL", "STATISTICS", "STORAGE");
+		COMPLETE_WITH("(", "COMPRESSION", "DEFAULT", "NOT NULL", "STATISTICS", "STORAGE");
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET ( */
 	else if (Matches("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "(") ||
 			 Matches("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "("))
 		COMPLETE_WITH("n_distinct", "n_distinct_inherited");
+	/* ALTER TABLE ALTER [COLUMN] <foo> SET COMPRESSION */
+	else if (Matches("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "COMPRESSION", MatchAny) ||
+			 Matches("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "COMPRESSION", MatchAny))
+		COMPLETE_WITH("PRESERVE");
+	else if (Matches("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "COMPRESSION", MatchAny, "PRESERVE") ||
+			 Matches("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "COMPRESSION", MatchAny, "PRESERVE"))
+		COMPLETE_WITH("( ", "ALL");
 	/* ALTER TABLE ALTER [COLUMN] <foo> SET STORAGE */
 	else if (Matches("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny, "SET", "STORAGE") ||
 			 Matches("ALTER", "TABLE", MatchAny, "ALTER", MatchAny, "SET", "STORAGE"))

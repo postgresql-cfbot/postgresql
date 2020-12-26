@@ -1000,6 +1000,13 @@ PGAC_ARG_BOOL(with, zlib, yes,
 AC_SUBST(with_zlib)
 
 #
+# lz4
+#
+PGAC_ARG_BOOL(with, lz4, yes,
+              [do not use lz4])
+AC_SUBST(with_lz4)
+
+#
 # Assignments
 #
 
@@ -1184,6 +1191,14 @@ if test "$with_zlib" = yes; then
 If you have zlib already installed, see config.log for details on the
 failure.  It is possible the compiler isn't looking in the proper directory.
 Use --without-zlib to disable zlib support.])])
+fi
+
+if test "$with_lz4" = yes; then
+  AC_CHECK_LIB(lz4, LZ4_compress, [],
+               [AC_MSG_ERROR([lz4 library not found
+If you have lz4 already installed, see config.log for details on the
+failure.  It is possible the compiler isn't looking in the proper directory.
+Use --without-lz4 to disable lz4 support.])])
 fi
 
 if test "$enable_spinlocks" = yes; then
@@ -1398,6 +1413,13 @@ if test "$with_zlib" = yes; then
 If you have zlib already installed, see config.log for details on the
 failure.  It is possible the compiler isn't looking in the proper directory.
 Use --without-zlib to disable zlib support.])])
+fi
+
+if test "$with_lz4" = yes; then
+  AC_CHECK_HEADER(lz4.h, [], [AC_MSG_ERROR([lz4 header not found
+If you have lz4 already installed, see config.log for details on the
+failure.  It is possible the compiler isn't looking in the proper directory.
+Use --without-lz4 to disable lz4 support.])])
 fi
 
 if test "$with_gssapi" = yes ; then

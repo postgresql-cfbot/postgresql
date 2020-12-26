@@ -33,5 +33,10 @@
 { oid => '3580', oid_symbol => 'BRIN_AM_OID',
   descr => 'block range index (BRIN) access method',
   amname => 'brin', amhandler => 'brinhandler', amtype => 'i' },
-
+{ oid => '4225', oid_symbol => 'PGLZ_COMPRESSION_AM_OID',
+  descr => 'pglz compression access method',
+  amname => 'pglz', amhandler => 'pglzhandler', amtype => 'c' },
+{ oid => '4226', oid_symbol => 'LZ4_COMPRESSION_AM_OID',
+  descr => 'lz4 compression access method',
+  amname => 'lz4', amhandler => 'lz4handler', amtype => 'c' },  
 ]

@@ -17,6 +17,7 @@
 #include "access/genam.h"
 #include "access/htup_details.h"
 #include "access/table.h"
+#include "catalog/pg_am.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_collation.h"
@@ -125,6 +126,12 @@ recordMultipleDependencies(const ObjectAddress *depender,
 				if (referenced->objectId == DEFAULT_COLLATION_OID)
 					ignore_systempin = true;
 			}
+			/*
+			 * Record the dependency on compression access method for handling
+			 * preserve.
+			 */
+			if (referenced->classId == AccessMethodRelationId)
+				ignore_systempin = true;
 		}
 		else
 			Assert(!version);

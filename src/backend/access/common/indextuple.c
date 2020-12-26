@@ -16,11 +16,13 @@
 
 #include "postgres.h"
 
+#include "access/compressamapi.h"
 #include "access/detoast.h"
 #include "access/heaptoast.h"
 #include "access/htup_details.h"
 #include "access/itup.h"
 #include "access/toast_internals.h"
+#include "commands/defrem.h"
 
 /*
  * This enables de-toasting of index entries.  Needed until VACUUM is
@@ -103,7 +105,9 @@ index_form_tuple(TupleDesc tupleDescriptor,
 			(att->attstorage == TYPSTORAGE_EXTENDED ||
 			 att->attstorage == TYPSTORAGE_MAIN))
 		{
-			Datum		cvalue = toast_compress_datum(untoasted_values[i]);
+			List	   *acoption = GetAttributeCompressionOptions(att);
+			Datum		cvalue = toast_compress_datum(untoasted_values[i],
+													  att->attcompression, acoption);
 
 			if (DatumGetPointer(cvalue) != NULL)
 			{

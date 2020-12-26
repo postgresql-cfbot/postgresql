@@ -160,6 +160,7 @@ typedef struct _dumpOptions
 	int			no_subscriptions;
 	int			no_synchronized_snapshots;
 	int			no_unlogged_table_data;
+	int			no_compression_methods;
 	int			serializable_deferrable;
 	int			disable_triggers;
 	int			outputNoTablespaces;

@@ -220,6 +220,11 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid,
 	TupleDescAttr(tupdesc, 1)->attstorage = TYPSTORAGE_PLAIN;
 	TupleDescAttr(tupdesc, 2)->attstorage = TYPSTORAGE_PLAIN;
 
+	/* Toast field should not be compressed */
+	TupleDescAttr(tupdesc, 0)->attcompression = InvalidOid;
+	TupleDescAttr(tupdesc, 1)->attcompression = InvalidOid;
+	TupleDescAttr(tupdesc, 2)->attcompression = InvalidOid;
+
 	/*
 	 * Toast tables for regular relations go in pg_toast; those for temp
 	 * relations go into the per-backend temp-toast-table namespace.
@@ -255,6 +260,7 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid,
 										   true,
 										   true,
 										   InvalidOid,
+										   NULL,
 										   NULL);
 	Assert(toast_relid != InvalidOid);
 

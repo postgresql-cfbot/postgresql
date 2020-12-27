@@ -125,5 +125,6 @@ extern PartitionPruneState *ExecCreatePartitionPruneState(PlanState *planstate,
 extern Bitmapset *ExecFindMatchingSubPlans(PartitionPruneState *prunestate);
 extern Bitmapset *ExecFindInitialMatchingSubPlans(PartitionPruneState *prunestate,
 												  int nsubplans);
+extern ResultRelInfo **ExecGetTouchedPartitions(PartitionTupleRouting *proute, int *count);
 
 #endif							/* EXECPARTITION_H */

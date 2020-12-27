@@ -58,6 +58,13 @@
 #include "utils/rel.h"
 
 
+static void ExecBatchInsert(ModifyTableState *mtstate,
+								 ResultRelInfo *resultRelInfo,
+								 TupleTableSlot **slots,
+								 TupleTableSlot **planSlots,
+								 int numSlots,
+								 EState *estate,
+								 bool canSetTag);
 static bool ExecOnConflictUpdate(ModifyTableState *mtstate,
 								 ResultRelInfo *resultRelInfo,
 								 ItemPointer conflictTid,
@@ -389,6 +396,7 @@ ExecInsert(ModifyTableState *mtstate,
 	ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
 	OnConflictAction onconflict = node->onConflictAction;
 	PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
+	MemoryContext oldContext;
 
 	/*
 	 * If the input result relation is a partitioned table, find the leaf
@@ -440,6 +448,60 @@ ExecInsert(ModifyTableState *mtstate,
 			resultRelationDesc->rd_att->constr->has_generated_stored)
 			ExecComputeStoredGenerated(resultRelInfo, estate, slot,
 									   CMD_INSERT);
+
+		/*
+		 * If the FDW supports batch insert, accumulate tuples and insert them
+		 * in bulk
+		 */
+		if (resultRelInfo->ri_FdwRoutine->GetModifyBatchSize &&
+			resultRelInfo->ri_BatchSize == 0)
+			resultRelInfo->ri_BatchSize =
+				resultRelInfo->ri_FdwRoutine->GetModifyBatchSize(resultRelInfo);
+		if (resultRelInfo->ri_BatchSize > 1 &&
+			resultRelInfo->ri_FdwRoutine->ExecForeignBatchInsert &&
+			resultRelInfo->ri_projectReturning == NULL)
+		{
+			/*
+			 * If a certain number of tuples have already been accumulated,
+			 * or	a tuple has come for a different relation than that for
+			 * the accumulated tuples, perform the batch insert
+			 */
+			if (resultRelInfo->ri_NumSlots == resultRelInfo->ri_BatchSize)
+			{
+				ExecBatchInsert(mtstate, resultRelInfo,
+							   resultRelInfo->ri_Slots,
+							   resultRelInfo->ri_PlanSlots,
+							   resultRelInfo->ri_NumSlots,
+							   estate, canSetTag);
+				resultRelInfo->ri_NumSlots = 0;
+			}
+
+			oldContext = MemoryContextSwitchTo(estate->es_query_cxt);
+
+			if (resultRelInfo->ri_Slots == NULL)
+			{
+				resultRelInfo->ri_Slots = palloc(sizeof(TupleTableSlot *) *
+										   resultRelInfo->ri_BatchSize);
+				resultRelInfo->ri_PlanSlots = palloc(sizeof(TupleTableSlot *) *
+										   resultRelInfo->ri_BatchSize);
+			}
+
+			resultRelInfo->ri_Slots[resultRelInfo->ri_NumSlots] =
+				MakeSingleTupleTableSlot(slot->tts_tupleDescriptor,
+										 slot->tts_ops);
+			ExecCopySlot(resultRelInfo->ri_Slots[resultRelInfo->ri_NumSlots],
+						 slot);
+			resultRelInfo->ri_PlanSlots[resultRelInfo->ri_NumSlots] =
+				MakeSingleTupleTableSlot(planSlot->tts_tupleDescriptor,
+										 planSlot->tts_ops);
+			ExecCopySlot(resultRelInfo->ri_PlanSlots[resultRelInfo->ri_NumSlots],
+						 planSlot);
+
+			resultRelInfo->ri_NumSlots++;
+
+			MemoryContextSwitchTo(oldContext);
+			return NULL;
+		}
 
 		/*
 		 * insert into foreign table: let the FDW do it
@@ -696,6 +758,73 @@ ExecInsert(ModifyTableState *mtstate,
 		result = ExecProcessReturning(resultRelInfo, slot, planSlot);
 
 	return result;
+}
+
+/* ----------------------------------------------------------------
+ *		ExecBatchInsert
+ *
+ *		Insert multiple tuples in an efficient way.
+ *		Currently, this handles inserting into a foreign table without
+ *		RETURNING clause.
+ * ----------------------------------------------------------------
+ */
+static void
+ExecBatchInsert(ModifyTableState *mtstate,
+		   ResultRelInfo *resultRelInfo,
+		   TupleTableSlot **slots,
+		   TupleTableSlot **planSlots,
+		   int numSlots,
+		   EState *estate,
+		   bool canSetTag)
+{
+	int			i;
+	int			numInserted = numSlots;
+	TupleTableSlot *slot = NULL;
+	TupleTableSlot **rslots;
+
+	/*
+	 * insert into foreign table: let the FDW do it
+	 */
+	rslots = resultRelInfo->ri_FdwRoutine->ExecForeignBatchInsert(estate,
+																 resultRelInfo,
+																 slots,
+																 planSlots,
+																 &numInserted);
+
+	for (i = 0; i < numInserted; i++)
+	{
+		slot = rslots[i];
+
+		/*
+		 * AFTER ROW Triggers or RETURNING expressions might reference the
+		 * tableoid column, so (re-)initialize tts_tableOid before evaluating
+		 * them.
+		 */
+		slot->tts_tableOid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+
+		/* AFTER ROW INSERT Triggers */
+		ExecARInsertTriggers(estate, resultRelInfo, slot, NIL,
+							 mtstate->mt_transition_capture);
+
+		/*
+		 * Check any WITH CHECK OPTION constraints from parent views.  See the
+		 * comment in ExecInsert.
+		 */
+		if (resultRelInfo->ri_WithCheckOptions != NIL)
+			ExecWithCheckOptions(WCO_VIEW_CHECK, resultRelInfo, slot, estate);
+	}
+
+	if (canSetTag && numInserted > 0)
+	{
+		estate->es_processed += numInserted;
+		setLastTid(&slot->tts_tid);
+	}
+
+	for (i = 0; i < numSlots; i++)
+	{
+		ExecDropSingleTupleTableSlot(slots[i]);
+		ExecDropSingleTupleTableSlot(planSlots[i]);
+	}
 }
 
 /* ----------------------------------------------------------------
@@ -1937,6 +2066,9 @@ ExecModifyTable(PlanState *pstate)
 	ItemPointerData tuple_ctid;
 	HeapTupleData oldtupdata;
 	HeapTuple	oldtuple;
+	PartitionTupleRouting *proute = node->mt_partition_tuple_routing;
+	ResultRelInfo **resultRelInfos;
+	int			num_partitions;
 
 	CHECK_FOR_INTERRUPTS();
 
@@ -2150,6 +2282,27 @@ ExecModifyTable(PlanState *pstate)
 		 */
 		if (slot)
 			return slot;
+	}
+
+	/*
+	 * Insert remaining tuples for batch insert.
+	 */
+	if (proute)
+		resultRelInfos = ExecGetTouchedPartitions(proute, &num_partitions);
+	else
+	{
+		resultRelInfos = &resultRelInfo;
+		num_partitions = 1;
+	}
+	for (int i = 0; i < num_partitions; i++)
+	{
+		resultRelInfo = resultRelInfos[i];
+		if (resultRelInfo->ri_NumSlots > 0)
+			ExecBatchInsert(node, resultRelInfo,
+						   resultRelInfo->ri_Slots,
+						   resultRelInfo->ri_PlanSlots,
+						   resultRelInfo->ri_NumSlots,
+						   estate, node->canSetTag);
 	}
 
 	/*

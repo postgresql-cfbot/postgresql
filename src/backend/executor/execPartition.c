@@ -2192,3 +2192,14 @@ find_matching_subplans_recurse(PartitionPruningData *prunedata,
 		}
 	}
 }
+
+/*
+ * ExecGetTouchedPartitions -- Get the partitions touched by
+ * this routing
+ */
+ResultRelInfo **
+ExecGetTouchedPartitions(PartitionTupleRouting *proute, int *count)
+{
+	*count = proute->num_partitions;
+	return proute->partitions;
+}

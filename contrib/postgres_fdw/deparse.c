@@ -1711,7 +1711,7 @@ deparseInsertSql(StringInfo buf, RangeTblEntry *rte,
 				 Index rtindex, Relation rel,
 				 List *targetAttrs, bool doNothing,
 				 List *withCheckOptionList, List *returningList,
-				 List **retrieved_attrs)
+				 List **retrieved_attrs, int *values_end_len)
 {
 	AttrNumber	pindex;
 	bool		first;
@@ -1754,6 +1754,7 @@ deparseInsertSql(StringInfo buf, RangeTblEntry *rte,
 	}
 	else
 		appendStringInfoString(buf, " DEFAULT VALUES");
+	*values_end_len = buf->len;
 
 	if (doNothing)
 		appendStringInfoString(buf, " ON CONFLICT DO NOTHING");
@@ -1761,6 +1762,46 @@ deparseInsertSql(StringInfo buf, RangeTblEntry *rte,
 	deparseReturningList(buf, rte, rtindex, rel,
 						 rel->trigdesc && rel->trigdesc->trig_insert_after_row,
 						 withCheckOptionList, returningList, retrieved_attrs);
+}
+
+/*
+ * rebuild remote INSERT statement
+ *
+ */
+void
+rebuildInsertSql(StringInfo buf, char *orig_query,
+				 int values_end_len, int num_cols,
+				 int num_rows)
+{
+	int			i, j;
+	int			pindex;
+	bool		first;
+
+	/* Copy up to the end of the first record from the original query */
+	appendBinaryStringInfo(buf, orig_query, values_end_len);
+
+	/* Add records to VALUES clause */
+	pindex = num_cols + 1;
+	for (i = 0; i < num_rows; i++)
+	{
+		appendStringInfoString(buf, ", (");
+
+		first = true;
+		for (j = 0; j < num_cols; j++)
+		{
+			if (!first)
+				appendStringInfoString(buf, ", ");
+			first = false;
+
+			appendStringInfo(buf, "$%d", pindex);
+			pindex++;
+		}
+
+		appendStringInfoChar(buf, ')');
+	}
+
+	/* Copy stuff after VALUES clause from the original query */
+	appendStringInfoString(buf, orig_query + values_end_len);
 }
 
 /*

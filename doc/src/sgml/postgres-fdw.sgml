@@ -477,6 +477,111 @@ OPTIONS (ADD password_required 'false');
    </para>
 
   </sect3>
+
+  <sect3>
+   <title>Connection Management Options</title>
+
+   <para>
+    By default the foreign server connections made with
+    <filename>postgres_fdw</filename> are kept in local session for re-use.
+    This may be overridden using the following
+    <xref linkend="sql-createserver"/> option:
+   </para>
+
+   <variablelist>
+
+    <varlistentry>
+     <term><literal>keep_connection</literal></term>
+     <listitem>
+      <para>
+       This option controls whether <filename>postgres_fdw</filename> keeps the
+       server connection that is made with a specific foreign server. It can be
+       specified for a foreign server. Default is <literal>on</literal>. When
+       set to <literal>off</literal>, the associated foreign server connection
+       is discarded at the end of the transaction.
+      </para>
+
+     </listitem>
+    </varlistentry>
+
+   </variablelist>
+  </sect3>
+
+ </sect2>
+
+<sect2>
+  <title>Functions</title>
+
+  <para>
+   <function>postgres_fdw_get_connections</function> ( ) which takes no input.
+   When called in the local session, it returns an array of the foreign server
+   names of all the open connections that are previously made to the foreign
+   servers. If there are no open connections, then <literal>NULL</literal> is
+   returned.
+  </para>
+
+  <para>
+   <function>postgres_fdw_disconnect</function> ( <parameter>servername</parameter> <type>text</type> )
+   which takes foreign server name as input. When called in the local session,
+   it discards the open connection previously made to the foreign server and
+   returns <literal>true</literal>. If there is no associated connection exists
+   for the given foreign server, then <literal>false</literal> is returned. If
+   no foreign server exists with the given name, then an error is emitted.
+  </para>
+  
+  <para>
+   <function>postgres_fdw_disconnect</function> ( ) which takes no input.
+   When called in the local session, it discards all the open connections that
+   are previously made to the foreign servers and returns <literal>true</literal>.
+   If there are no open connections, then <literal>false</literal> is returned.
+  </para>
+ 
+</sect2>
+
+ <sect2>
+  <title>Configuration Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+
+    <term>
+     <varname>postgres_fdw.keep_connections</varname> (<type>boolean</type>)
+     <indexterm>
+      <primary><varname>postgres_fdw.keep_connections</varname> configuration parameter</primary>
+     </indexterm>
+    </term>
+
+    <listitem>
+
+     <para>
+      Allows <filename>postgres_fdw</filename> to keep or discard the
+      connection made to the foreign server by the local session. Default is
+      <literal>on</literal>. When set to <literal>off</literal> the local
+      session doesn't keep the connections made to the foreign servers. Each
+      connection is discarded at the end of transaction in which it is used.
+     </para>
+
+     <para>
+      <varname>postgres_fdw.keep_connections</varname> configuration parameter
+      overrides the server level <literal>keep_connection</literal> option.
+      Which means that when the configuration parameter is set to
+      <literal>on</literal>, irrespective of the server option
+      <literal>keep_connection</literal> setting, the connections are discarded.
+     </para>
+
+     <para>
+      Note that setting <varname>postgres_fdw.keep_connections</varname> to
+      <literal>off</literal> does not discard any previously made and still open
+      connections immediately. They will be closed only at the end of future
+      transactions, which operated on them. To close all connections
+      immediately use <function>postgres_fdw_disconnect</function> function.
+     </para>
+
+    </listitem>
+
+   </varlistentry>
+  </variablelist>
+
  </sect2>
 
  <sect2>
@@ -489,6 +594,33 @@ OPTIONS (ADD password_required 'false');
    re-used for subsequent queries in the same session.  However, if
    multiple user identities (user mappings) are used to access the foreign
    server, a connection is established for each user mapping.
+  </para>
+
+  <para>
+   Since the <filename>postgres_fdw</filename> keeps the connections to remote
+   servers in the local session, the corresponding sessions that are opened on
+   the remote servers are kept idle until they are re-used by the local session.
+   This may waste resources if those connections are not frequently used by the
+   local session. To address this, the <filename>postgres_fdw</filename>
+   provides following ways to remove the connections to the remote servers and
+   so the remote sessions:
+    
+   A server level option, <literal>keep_connection</literal> that is used with
+   <xref linkend="sql-createserver"/>. Default being <literal>on</literal>,
+   when set to <literal>off</literal> the local session doesn't keep remote
+   connection associated with the foreign server. The connection is
+   discarded at the end of the transaction.
+  
+   A configuration parameter, <varname>postgres_fdw.keep_connections</varname>,
+   default being <literal>on</literal>, when set to <literal>off</literal>, the
+   local session doesn't keep remote connections that are made to the foreign
+   servers. Each connection is discarded at the end of transaction in which it
+   is used.
+  
+   <function>postgres_fdw_disconnect()</function> to discard all the
+   connections or <function>postgres_fdw_disconnect(text)</function>
+   to discard the connection associated with the given foreign server.
+  
   </para>
  </sect2>
 

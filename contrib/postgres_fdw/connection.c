@@ -14,6 +14,7 @@
 
 #include "access/htup_details.h"
 #include "access/xact.h"
+#include "catalog/pg_foreign_server.h"
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
 #include "mb/pg_wchar.h"
@@ -22,6 +23,7 @@
 #include "postgres_fdw.h"
 #include "storage/fd.h"
 #include "storage/latch.h"
+#include "utils/builtins.h"
 #include "utils/datetime.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
@@ -59,6 +61,8 @@ typedef struct ConnCacheEntry
 	bool		invalidated;	/* true if reconnect is pending */
 	uint32		server_hashvalue;	/* hash value of foreign server OID */
 	uint32		mapping_hashvalue;	/* hash value of user mapping OID */
+	/* Keep or discard this connection at the end of xact */
+	bool            keep_connection;
 } ConnCacheEntry;
 
 /*
@@ -72,6 +76,12 @@ static unsigned int prep_stmt_number = 0;
 
 /* tracks whether any work is needed in callback functions */
 static bool xact_got_connection = false;
+
+/*
+ * SQL functions
+ */
+PG_FUNCTION_INFO_V1(postgres_fdw_get_connections);
+PG_FUNCTION_INFO_V1(postgres_fdw_disconnect);
 
 /* prototypes of private functions */
 static void make_new_connection(ConnCacheEntry *entry, UserMapping *user);
@@ -94,6 +104,7 @@ static bool pgfdw_exec_cleanup_query(PGconn *conn, const char *query,
 static bool pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime,
 									 PGresult **result);
 static bool UserMappingPasswordRequired(UserMapping *user);
+static bool disconnect_cached_connections(uint32 hashvalue, bool all);
 
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
@@ -113,6 +124,8 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 	ConnCacheEntry *entry;
 	ConnCacheKey key;
 	MemoryContext ccxt = CurrentMemoryContext;
+	ListCell   *lc;
+	ForeignServer *server;
 
 	/* First time through, initialize connection cache hashtable */
 	if (ConnectionHash == NULL)
@@ -250,6 +263,15 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 		begin_remote_xact(entry);
 	}
 
+	server = GetForeignServer(user->serverid);
+	foreach(lc, server->options)
+	{
+		DefElem    *def = (DefElem *) lfirst(lc);
+
+		if (strcmp(def->defname, "keep_connection") == 0)
+			entry->keep_connection = defGetBoolean(def);
+	}
+
 	/* Remember if caller will prepare statements */
 	entry->have_prep_stmt |= will_prep_stmt;
 
@@ -273,6 +295,7 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 	entry->have_error = false;
 	entry->changing_xact_state = false;
 	entry->invalidated = false;
+	entry->keep_connection = true;
 	entry->server_hashvalue =
 		GetSysCacheHashValue1(FOREIGNSERVEROID,
 							  ObjectIdGetDatum(server->serverid));
@@ -797,6 +820,7 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
 	{
 		PGresult   *res;
+		bool		used_in_current_xact = false;
 
 		/* Ignore cache entry if no open connection right now */
 		if (entry->conn == NULL)
@@ -806,6 +830,8 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 		if (entry->xact_depth > 0)
 		{
 			bool		abort_cleanup_failure = false;
+
+			used_in_current_xact = true;
 
 			elog(DEBUG3, "closing remote transaction on connection %p",
 				 entry->conn);
@@ -940,15 +966,23 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 		entry->xact_depth = 0;
 
 		/*
-		 * If the connection isn't in a good idle state, discard it to
-		 * recover. Next GetConnection will open a new connection.
+		 * If the connection isn't in a good idle state, discard it to recover.
+		 * Next GetConnection will open a new connection when required.
+		 *
+		 * Also discard the connection if it is used in current xact and if the
+		 * GUC is set to off or if the GUC is on but the server level option is
+		 * set to off. Note that keep_connections GUC overrides the server
+		 * level keep_connection option.
 		 */
-		if (PQstatus(entry->conn) != CONNECTION_OK ||
+		if ((PQstatus(entry->conn) != CONNECTION_OK ||
 			PQtransactionStatus(entry->conn) != PQTRANS_IDLE ||
-			entry->changing_xact_state)
+			entry->changing_xact_state) ||
+			(used_in_current_xact &&
+			(!keep_connections || !entry->keep_connection)))
 		{
 			elog(DEBUG3, "discarding connection %p", entry->conn);
 			disconnect_pg_server(entry);
+			used_in_current_xact = false;
 		}
 	}
 
@@ -1321,4 +1355,159 @@ exit:	;
 	else
 		*result = last_res;
 	return timed_out;
+}
+
+/*
+ * List all cached connections by corresponding foreign server names.
+ *
+ * Takes no paramaters as input. Returns an array of all foreign server names
+ * with which connections exist. Returns NULL, in case there are no cached
+ * connections at all.
+ */
+Datum
+postgres_fdw_get_connections(PG_FUNCTION_ARGS)
+{
+	ArrayBuildState *astate = NULL;
+
+	if (ConnectionHash)
+	{
+		HASH_SEQ_STATUS	scan;
+		ConnCacheEntry	*entry;
+
+		hash_seq_init(&scan, ConnectionHash);
+		while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+		{
+			Form_pg_user_mapping umap;
+			HeapTuple	umaptup;
+			Form_pg_foreign_server fsrv;
+			HeapTuple	fsrvtup;
+
+			/* We only look for active and open remote connections. */
+			if (entry->invalidated || !entry->conn)
+				continue;
+
+			umaptup = SearchSysCache1(USERMAPPINGOID,
+									  ObjectIdGetDatum(entry->key));
+
+			if (!HeapTupleIsValid(umaptup))
+				elog(ERROR, "cache lookup failed for user mapping with OID %u",
+					 entry->key);
+
+			umap = (Form_pg_user_mapping) GETSTRUCT(umaptup);
+
+			fsrvtup = SearchSysCache1(FOREIGNSERVEROID,
+									  ObjectIdGetDatum(umap->umserver));
+
+			if (!HeapTupleIsValid(fsrvtup))
+				elog(ERROR, "cache lookup failed for foreign server with OID %u",
+					 umap->umserver);
+
+			fsrv = (Form_pg_foreign_server) GETSTRUCT(fsrvtup);
+
+			/* stash away current value */
+			astate = accumArrayResult(astate,
+									  CStringGetTextDatum(NameStr(fsrv->srvname)),
+									  false, TEXTOID, CurrentMemoryContext);
+
+			ReleaseSysCache(umaptup);
+			ReleaseSysCache(fsrvtup);
+		}
+	}
+
+	if (astate)
+		PG_RETURN_ARRAYTYPE_P(makeArrayResult(astate,
+											  CurrentMemoryContext));
+	else
+		PG_RETURN_NULL();
+}
+
+/*
+ * Disconnects the cached connections.
+ *
+ * If server name is provided as input, it disconnects the associated cached
+ * connections. Otherwise all the cached connections are disconnected and the
+ * cache is destroyed.
+ *
+ * Returns false if the cache is empty or if the cache is non empty and server
+ * name is provided and it exists but it has no associated entry in the cache.
+ * An error is emitted when the given foreign server does not exist.
+ * In all other cases true is returned.
+ */
+Datum
+postgres_fdw_disconnect(PG_FUNCTION_ARGS)
+{
+	bool	result = false;
+
+	if (PG_NARGS() == 1)
+	{
+		char			*servername = NULL;
+		ForeignServer	*server = NULL;
+
+		servername = text_to_cstring(PG_GETARG_TEXT_PP(0));
+		server = GetForeignServerByName(servername, true);
+
+		if (server)
+		{
+			uint32	hashvalue;
+
+			hashvalue =
+				GetSysCacheHashValue1(FOREIGNSERVEROID,
+									  ObjectIdGetDatum(server->serverid));
+
+			if (ConnectionHash)
+				result = disconnect_cached_connections(hashvalue, false);
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_CONNECTION_DOES_NOT_EXIST),
+					 errmsg("foreign server \"%s\" does not exist", servername)));
+	}
+	else
+	{
+		if (ConnectionHash)
+			result = disconnect_cached_connections(0, true);
+	}
+
+	PG_RETURN_BOOL(result);
+}
+
+/*
+ * Workhorse to disconnect the cached connections.
+ *
+ * If all is true, all the cached connections are disconnected and cache is
+ * destroyed. Otherwise, the entries with the given hashvalue are disconnected.
+ *
+ * Returns true in the following cases: either the cache is destroyed now or
+ * at least a single entry with the given hashvalue exists. In all other cases
+ * false is returned.
+ */
+bool disconnect_cached_connections(uint32 hashvalue, bool all)
+{
+	bool			result = false;
+	HASH_SEQ_STATUS	scan;
+	ConnCacheEntry	*entry;
+
+	/*
+	 * We do not come here if the ConnectionHash is NULL. We handle it in the
+	 * caller.
+	 */
+	hash_seq_init(&scan, ConnectionHash);
+	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+	{
+		if ((all || entry->server_hashvalue == hashvalue) &&
+			entry->conn)
+		{
+			disconnect_pg_server(entry);
+			result = true;
+		}
+	}
+
+	if (all)
+	{
+		hash_destroy(ConnectionHash);
+		ConnectionHash = NULL;
+		result = true;
+	}
+
+	return result;
 }

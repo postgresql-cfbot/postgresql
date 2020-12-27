@@ -2697,3 +2697,121 @@ COMMIT;
 
 -- Clean up
 DROP PROCEDURE terminate_backend_and_wait(text);
+
+-- ===================================================================
+-- disconnect connections that are cached/kept by the local session
+-- ===================================================================
+
+-- postgres_fdw_get_connections returns an array with elements in a
+-- machine-dependent ordering, so we must resort to unnesting and sorting for a
+-- stable result.
+CREATE FUNCTION fdw_unnest(anyarray) RETURNS SETOF anyelement
+LANGUAGE SQL STRICT IMMUTABLE AS $$
+SELECT $1[i] FROM generate_series(array_lower($1,1), array_upper($1,1)) AS i
+$$;
+
+-- Change application names of remote connections to special ones so that we
+-- can easily check for their existence.
+ALTER SERVER loopback OPTIONS (SET application_name 'fdw_disconnect_cached_conn_1');
+ALTER SERVER loopback2 OPTIONS (application_name 'fdw_disconnect_cached_conn_2');
+
+-- By default, the connections associated with foreign server are cached i.e.
+-- keep_connection option is on. Set it to off.
+ALTER SERVER loopback OPTIONS (keep_connection 'off');
+
+-- loopback server connection is closed by the local session at the end of xact
+-- as the keep_connection was set to off.
+SELECT 1 FROM ft1 LIMIT 1;
+
+-- Connection should not exist.
+SELECT application_name FROM pg_stat_activity
+	WHERE application_name = 'fdw_disconnect_cached_conn_1';
+
+-- loopback2 server connection is cached by the local session as the
+-- keep_connection is on.
+SELECT 1 FROM ft6 LIMIT 1;
+
+-- Connection should exist.
+SELECT application_name FROM pg_stat_activity
+	WHERE application_name = 'fdw_disconnect_cached_conn_2';
+
+-- By default, keep_connections GUC is on i.e. local session caches all the
+-- foreign server connections.
+SHOW postgres_fdw.keep_connections;
+
+-- Set it off i.e. the cached connections which are used after this setting are
+-- disconnected at the end of respective xacts.
+SET postgres_fdw.keep_connections TO off;
+
+-- loopback2 server connection is closed at the end of xact.
+SELECT 1 FROM ft6 LIMIT 1;
+
+-- Connection should not exist.
+SELECT application_name FROM pg_stat_activity
+	WHERE application_name = 'fdw_disconnect_cached_conn_2';
+
+-- Connections from hereafter are cached.
+SET postgres_fdw.keep_connections TO on;
+
+-- loopback server connection is cached.
+ALTER SERVER loopback OPTIONS (SET keep_connection 'on');
+
+-- Connections are cached.
+SELECT 1 FROM ft1 LIMIT 1;
+SELECT 1 FROM ft6 LIMIT 1;
+
+-- List all the existing cached connections. Should return loopback and
+-- loopback2.
+SELECT * FROM fdw_unnest(postgres_fdw_get_connections()) ORDER BY 1;
+
+-- loopback server connection is disconnected and true is returned. loopback2
+-- server connection still exists.
+SELECT postgres_fdw_disconnect('loopback');
+
+-- Connection should not exist.
+SELECT application_name FROM pg_stat_activity
+	WHERE application_name = 'fdw_disconnect_cached_conn_1';
+
+-- Connection should exist.
+SELECT application_name FROM pg_stat_activity
+	WHERE application_name = 'fdw_disconnect_cached_conn_2';
+
+-- List all the existing cached connections. Should return loopback2.
+SELECT * FROM fdw_unnest(postgres_fdw_get_connections()) ORDER BY 1;
+
+-- Cache exists, but the loopback server connection is not present in it,
+-- so false is returned.
+SELECT postgres_fdw_disconnect('loopback');
+
+-- Make loopback server connection again. Now, both loopback and loopback2
+-- server connections exist in the local session.
+SELECT 1 FROM ft1 LIMIT 1;
+
+-- Connection should exist.
+SELECT application_name FROM pg_stat_activity
+	WHERE application_name = 'fdw_disconnect_cached_conn_1';
+
+-- Discard all the connections. True is returned.
+SELECT postgres_fdw_disconnect();
+
+-- Both the connections should not exist.
+SELECT application_name FROM pg_stat_activity
+	WHERE application_name = 'fdw_disconnect_cached_conn_1';
+SELECT application_name FROM pg_stat_activity
+	WHERE application_name = 'fdw_disconnect_cached_conn_2';
+
+-- Cache does not exist. Try to discard, false is returned.
+SELECT postgres_fdw_disconnect();
+
+-- List all the existing cached connections. Should return NULL, as there are
+-- none exist.
+SELECT * FROM postgres_fdw_get_connections();
+
+-- Cache does not exist, but the loopback server exists, so false is returned.
+SELECT postgres_fdw_disconnect('loopback');
+
+-- The server name provided doesn't exist, an error is expected.
+SELECT postgres_fdw_disconnect('unknownserver');
+
+-- Clean up
+DROP FUNCTION fdw_unnest;

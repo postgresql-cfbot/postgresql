@@ -107,7 +107,8 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 		 * Validate option value, when we can do so without any context.
 		 */
 		if (strcmp(def->defname, "use_remote_estimate") == 0 ||
-			strcmp(def->defname, "updatable") == 0)
+			strcmp(def->defname, "updatable") == 0 ||
+			strcmp(def->defname, "keep_connection") == 0)
 		{
 			/* these accept only boolean values */
 			(void) defGetBoolean(def);
@@ -212,6 +213,12 @@ InitPgFdwOptions(void)
 		 */
 		{"sslcert", UserMappingRelationId, true},
 		{"sslkey", UserMappingRelationId, true},
+
+		/*
+		 * If true, cache the connection associated with this server, otherwise
+		 * remove it at the end of the xact. Default is true.
+		 */
+		{"keep_connection", ForeignServerRelationId, false},
 
 		{NULL, InvalidOid, false}
 	};

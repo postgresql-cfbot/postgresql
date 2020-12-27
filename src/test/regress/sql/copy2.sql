@@ -171,7 +171,7 @@ COPY y TO stdout (FORMAT CSV, FORCE_QUOTE *);
 
 --test that we read consecutive LFs properly
 
-CREATE TEMP TABLE testnl (a int, b text, c int);
+CREATE TABLE testnl (a int, b text, c int);
 
 COPY testnl FROM stdin CSV;
 1,"a field with two LFs
@@ -179,10 +179,26 @@ COPY testnl FROM stdin CSV;
 inside",2
 \.
 
+COPY testnl FROM stdin WITH (FORMAT 'csv', PARALLEL 1);
+1,"a field with two LFs
+
+inside",2
+\.
+
+SELECT * FROM testnl;
+
 -- test end of copy marker
-CREATE TEMP TABLE testeoc (a text);
+CREATE TABLE testeoc (a text);
 
 COPY testeoc FROM stdin CSV;
+a\.
+\.b
+c\.d
+"\."
+\.
+
+TRUNCATE testeoc;
+COPY testeoc FROM stdin WITH (FORMAT 'csv', PARALLEL 1);
 a\.
 \.b
 c\.d
@@ -193,12 +209,20 @@ COPY testeoc TO stdout CSV;
 
 -- test handling of nonstandard null marker that violates escaping rules
 
-CREATE TEMP TABLE testnull(a int, b text);
+CREATE TABLE testnull(a int, b text);
 INSERT INTO testnull VALUES (1, E'\\0'), (NULL, NULL);
 
 COPY testnull TO stdout WITH NULL AS E'\\0';
 
 COPY testnull FROM stdin WITH NULL AS E'\\0';
+42	\\0
+\0	\0
+\.
+
+SELECT * FROM testnull;
+
+TRUNCATE testnull;
+COPY testnull FROM stdin WITH (NULL E'\\0', PARALLEL 1);
 42	\\0
 \0	\0
 \.
@@ -240,6 +264,23 @@ SELECT * FROM vistest;
 SAVEPOINT s1;
 TRUNCATE vistest;
 COPY vistest FROM stdin CSV FREEZE;
+d2
+e
+\.
+SELECT * FROM vistest;
+COMMIT;
+SELECT * FROM vistest;
+
+BEGIN;
+TRUNCATE vistest;
+COPY vistest FROM stdin WITH (FORMAT 'csv', FREEZE, PARALLEL 1);
+a2
+b
+\.
+SELECT * FROM vistest;
+SAVEPOINT s1;
+TRUNCATE vistest;
+COPY vistest FROM stdin WITH (FORMAT 'csv', FREEZE, PARALLEL 1);
 d2
 e
 \.
@@ -298,7 +339,7 @@ SELECT * FROM vistest;
 COMMIT;
 SELECT * FROM vistest;
 -- Test FORCE_NOT_NULL and FORCE_NULL options
-CREATE TEMP TABLE forcetest (
+CREATE TABLE forcetest (
     a INT NOT NULL,
     b TEXT NOT NULL,
     c TEXT,
@@ -311,11 +352,19 @@ BEGIN;
 COPY forcetest (a, b, c) FROM STDIN WITH (FORMAT csv, FORCE_NOT_NULL(b), FORCE_NULL(c));
 1,,""
 \.
+TRUNCATE forcetest;
+COPY forcetest (a, b, c) FROM STDIN WITH (FORMAT csv, FORCE_NOT_NULL(b), FORCE_NULL(c), PARALLEL 1);
+1,,""
+\.
 COMMIT;
 SELECT b, c FROM forcetest WHERE a = 1;
 -- should succeed, FORCE_NULL and FORCE_NOT_NULL can be both specified
 BEGIN;
 COPY forcetest (a, b, c, d) FROM STDIN WITH (FORMAT csv, FORCE_NOT_NULL(c,d), FORCE_NULL(c,d));
+2,'a',,""
+\.
+TRUNCATE forcetest;
+COPY forcetest (a, b, c, d) FROM STDIN WITH (FORMAT csv, FORCE_NOT_NULL(c,d), FORCE_NULL(c,d), PARALLEL 1);
 2,'a',,""
 \.
 COMMIT;
@@ -350,6 +399,16 @@ copy check_con_tbl from stdin;
 \N
 \.
 copy check_con_tbl from stdin;
+0
+\.
+select * from check_con_tbl;
+\d+ check_con_tbl
+truncate check_con_tbl;
+copy check_con_tbl from stdin with (parallel 1);
+1
+\N
+\.
+copy check_con_tbl from stdin with (parallel 1);
 0
 \.
 select * from check_con_tbl;
@@ -454,10 +513,312 @@ test1
 SELECT * FROM instead_of_insert_tbl;
 COMMIT;
 
+-- Parallel copy tests.
+CREATE TABLE test_parallel_copy (
+        a INT,
+        b INT,
+        c TEXT not null default 'stuff',
+        d TEXT,
+        e TEXT
+) ;
+
+COPY test_parallel_copy (a, b, c, d, e) FROM stdin WITH (PARALLEL 1);
+1	11	test_c1	test_d1	test_e1
+2	12	test_c2	test_d2	test_e2
+\.
+
+COPY test_parallel_copy (b, d) FROM stdin WITH (PARALLEL 1);
+3	test_d3
+\.
+
+COPY test_parallel_copy (b, d) FROM stdin WITH (PARALLEL 1);
+4	test_d4
+5	test_d5
+\.
+
+COPY test_parallel_copy (b, d) FROM stdin WITH (PARALLEL 1, FORMAT 'csv', HEADER);
+b	d
+\.
+
+-- zero workers: should perform non-parallel copy
+COPY test_parallel_copy (b, d) FROM stdin WITH (PARALLEL 0);
+
+-- referencing table: should perform non-parallel copy
+CREATE TABLE test_copy_pk(c1 INT PRIMARY KEY);
+INSERT INTO test_copy_pk VALUES(10);
+CREATE TABLE test_copy_ri(c1 INT REFERENCES test_copy_pk(c1));
+COPY test_copy_ri FROM stdin WITH (FORMAT csv, DELIMITER ',', PARALLEL 1);
+10
+\.
+
+-- expressions: should perform non-parallel copy
+CREATE TABLE test_copy_expr (index INT, height REAL, weight REAL);
+
+COPY test_copy_expr FROM STDIN WITH (FORMAT csv, DELIMITER ',', PARALLEL 1) WHERE height > random() * 65;
+60,60,60
+\.
+
+-- serial data: should perform non-parallel copy
+CREATE TABLE testserial (index SERIAL, height REAL);
+
+COPY testserial(height) FROM STDIN WITH (FORMAT csv, DELIMITER ',', PARALLEL 1);
+60
+\.
+
+-- temporary table copy: should perform non-parallel copy
+CREATE TEMPORARY TABLE temp_test(
+        a int
+) ;
+
+COPY temp_test (a) FROM stdin WITH (PARALLEL 1);
+10
+\.
+
+-- non-existent column in column list: should fail
+COPY test_parallel_copy (xyz) FROM stdin WITH (PARALLEL 1);
+
+-- too many columns in column list: should fail
+COPY test_parallel_copy (a, b, c, d, e, d, c) FROM stdin WITH (PARALLEL 1);
+
+-- missing data: should fail
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1);
+
+\.
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1);
+2000	230	23	23
+\.
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1);
+2001	231	\N	\N
+\.
+
+-- extra data: should fail
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1);
+2002	232	40	50	60	70	80
+\.
+
+-- various COPY options: delimiters, oids, NULL string, encoding
+COPY test_parallel_copy (b, c, d, e) FROM stdin WITH (DELIMITER ',', null 'x', PARALLEL 1) ;
+x,45,80,90
+x,\x,\\x,\\\x
+x,\,,\\\,,\\
+\.
+
+COPY test_parallel_copy FROM stdin WITH (DELIMITER ';', NULL '', PARALLEL 1);
+3000;;c;;
+\.
+
+COPY test_parallel_copy FROM stdin WITH (DELIMITER ':', NULL E'\\X', ENCODING 'sql_ascii', PARALLEL 1);
+4000:\X:C:\X:\X
+4001:1:empty::
+4002:2:null:\X:\X
+4003:3:Backslash:\\:\\
+4004:4:BackslashX:\\X:\\X
+4005:5:N:\N:\N
+4006:6:BackslashN:\\N:\\N
+4007:7:XX:\XX:\XX
+4008:8:Delimiter:\::\:
+\.
+
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1) WHERE a = 50004;
+50003	24	34	44	54
+50004	25	35	45 	55
+50005	26	36	46	56
+\.
+
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1) WHERE a > 60003;
+60001	22	32	42	52
+60002	23	33	43	53
+60003	24	34	44	54
+60004	25	35	45	55
+60005	26	36	46	56
+\.
+
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1) WHERE f > 60003;
+
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1) WHERE a = max(x.b);
+
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1) WHERE a IN (SELECT 1 FROM x);
+
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1) WHERE a IN (generate_series(1,5));
+
+COPY test_parallel_copy FROM stdin WITH(PARALLEL 1) WHERE a = row_number() over(b);
+
+-- check results of copy in
+SELECT * FROM test_parallel_copy ORDER BY 1;
+
+-- parallel copy test for unlogged tables. should execute in parallel worker
+CREATE UNLOGGED TABLE test_parallel_copy_unlogged(
+        a INT,
+        b INT,
+        c TEXT default 'stuff',
+        d TEXT,
+        e TEXT
+);
+
+COPY test_parallel_copy_unlogged FROM stdin WITH (PARALLEL 1);
+1	1	test_c1	test_d1	test_e1
+2	2	test_c2	test_d2	test_e2
+\.
+
+SELECT count(*) FROM test_parallel_copy_unlogged;
+
+-- parallel copy test for various trigger types
+TRUNCATE test_parallel_copy;
+
+-- parallel safe trigger function
+CREATE OR REPLACE FUNCTION parallel_copy_trig_func() RETURNS TRIGGER
+LANGUAGE plpgsql PARALLEL SAFE AS $$
+BEGIN
+  RETURN NEW;
+END;
+$$;
+
+-- before insert row trigger
+CREATE TRIGGER parallel_copy_trig
+BEFORE INSERT ON test_parallel_copy
+FOR EACH ROW
+EXECUTE PROCEDURE parallel_copy_trig_func();
+
+-- no parallelism should be picked
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1);
+1	1	test_c1	test_d1	test_e1
+2	2	test_c2	test_d2	test_e2
+\.
+
+DROP TRIGGER parallel_copy_trig ON test_parallel_copy;
+
+-- after insert row trigger
+CREATE TRIGGER parallel_copy_trig
+AFTER INSERT ON test_parallel_copy
+FOR EACH ROW
+EXECUTE PROCEDURE parallel_copy_trig_func();
+
+-- no parallelism should be picked
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1);
+1	1	test_c1	test_d1	test_e1
+2	2	test_c2	test_d2	test_e2
+\.
+
+DROP TRIGGER parallel_copy_trig ON test_parallel_copy;
+
+-- before insert statement trigger
+CREATE TRIGGER parallel_copy_trig
+BEFORE INSERT ON test_parallel_copy
+FOR EACH STATEMENT
+EXECUTE PROCEDURE parallel_copy_trig_func();
+
+-- parallelism should be picked, since the trigger function is parallel safe
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1);
+1	1	test_c1	test_d1	test_e1
+2	2	test_c2	test_d2	test_e2
+\.
+
+DROP TRIGGER parallel_copy_trig ON test_parallel_copy;
+
+-- after insert statement trigger
+CREATE TRIGGER parallel_copy_trig
+AFTER INSERT ON test_parallel_copy
+FOR EACH STATEMENT
+EXECUTE PROCEDURE parallel_copy_trig_func();
+
+-- no parallelism should be picked
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1);
+1	1	test_c1	test_d1	test_e1
+2	2	test_c2	test_d2	test_e2
+\.
+
+DROP TRIGGER parallel_copy_trig ON test_parallel_copy;
+
+-- transition table is involved
+CREATE TRIGGER parallel_copy_trig
+AFTER INSERT ON test_parallel_copy REFERENCING NEW TABLE AS new_table
+FOR EACH STATEMENT
+EXECUTE PROCEDURE parallel_copy_trig_func();
+
+-- no parallelism should be picked
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1);
+1	1	test_c1	test_d1	test_e1
+2	2	test_c2	test_d2	test_e2
+\.
+
+DROP TRIGGER parallel_copy_trig ON test_parallel_copy;
+
+-- make trigger function parallel unsafe
+ALTER FUNCTION parallel_copy_trig_func PARALLEL UNSAFE;
+
+-- before statement trigger has a parallel unsafe function
+CREATE TRIGGER parallel_copy_trig
+BEFORE INSERT ON test_parallel_copy
+FOR EACH STATEMENT
+EXECUTE PROCEDURE parallel_copy_trig_func();
+
+-- no parallelism should be picked
+COPY test_parallel_copy FROM stdin WITH (PARALLEL 1);
+1	1	test_c1	test_d1	test_e1
+2	2	test_c2	test_d2	test_e2
+\.
+
+SELECT count(*) FROM test_parallel_copy;
+
+DROP TRIGGER parallel_copy_trig ON test_parallel_copy;
+
+-- instead of insert trigger, no parallelism should be picked
+COPY instead_of_insert_tbl_view FROM stdin WITH(PARALLEL 1);;
+test1
+\.
+
+SELECT count(*) FROM instead_of_insert_tbl_view;
+
+-- parallel copy test for a partitioned table with a before insert trigger on
+-- one of the partition
+ALTER FUNCTION parallel_copy_trig_func PARALLEL SAFE;
+
+CREATE TABLE test_parallel_copy_part (
+        a INT,
+        b INT,
+        c TEXT default 'stuff',
+        d TEXT,
+        e TEXT
+) PARTITION BY LIST (b);
+
+CREATE TABLE test_parallel_copy_part_a1 (c TEXT, b INT, a INT, e TEXT, d TEXT);
+
+CREATE TABLE test_parallel_copy_part_a2 (a INT, c TEXT, b INT, d TEXT, e TEXT);
+
+ALTER TABLE test_parallel_copy_part ATTACH PARTITION test_parallel_copy_part_a1 FOR VALUES IN(1);
+
+ALTER TABLE test_parallel_copy_part ATTACH PARTITION test_parallel_copy_part_a2 FOR VALUES IN(2);
+
+CREATE TRIGGER parallel_copy_trig
+BEFORE INSERT ON test_parallel_copy_part_a2
+FOR EACH ROW
+EXECUTE PROCEDURE parallel_copy_trig_func();
+
+-- Verify that sequential copy is choosen by checking error in not from a parallel worker.
+COPY test_parallel_copy_part FROM stdin WITH (PARALLEL 1);
+1	1	test_c1	test_d1	test_e1
+2	2	test_c2	test_d2	test_e2	test_ne2
+\.
+
+SELECT count(*) FROM test_parallel_copy_part;
+
+DROP TRIGGER parallel_copy_trig ON test_parallel_copy_part_a2;
+
 -- clean up
+DROP TABLE test_copy_ri;
+DROP TABLE test_copy_pk;
+DROP TABLE test_copy_expr;
+DROP TABLE testeoc;
+DROP TABLE testnl;
 DROP TABLE forcetest;
+DROP TABLE test_parallel_copy;
+DROP TABLE test_parallel_copy_unlogged;
+DROP TABLE test_parallel_copy_part;
+DROP TABLE testserial;
+DROP TABLE testnull;
 DROP TABLE vistest;
 DROP FUNCTION truncate_in_subxact();
+DROP FUNCTION parallel_copy_trig_func();
 DROP TABLE x, y;
 DROP TABLE rls_t1 CASCADE;
 DROP ROLE regress_rls_copy_user;

@@ -15,6 +15,13 @@ DELETE FROM onek;
 
 COPY onek FROM '@abs_builddir@/results/onek.data';
 
+-- test parallel copy
+COPY tenk1 FROM '@abs_srcdir@/data/tenk.data' WITH (parallel 2);
+
+SELECT COUNT(*) FROM tenk1;
+
+TRUNCATE tenk1;
+
 COPY tenk1 FROM '@abs_srcdir@/data/tenk.data';
 
 COPY slow_emp4000 FROM '@abs_srcdir@/data/rect.data';
@@ -158,6 +165,30 @@ copy (select * from parted_copytest order by a) to '@abs_builddir@/results/parte
 truncate parted_copytest;
 
 copy parted_copytest from '@abs_builddir@/results/parted_copytest.csv';
+
+-- Test parallel copy from with a partitioned table.
+truncate parted_copytest;
+
+copy parted_copytest from '@abs_builddir@/results/parted_copytest.csv' with (parallel 2);
+
+-- Test parallel copy from for toast table with csv and binary format file
+create table test_parallel_copy_toast(a1 int, b1 text, c1 text default null);
+
+insert into test_parallel_copy_toast select i, (repeat(md5(i::text), 100000)) FROM generate_series(1,2) AS i;
+
+copy test_parallel_copy_toast to '@abs_builddir@/results/parallelcopytoast.csv' with(format csv);
+
+copy test_parallel_copy_toast to '@abs_builddir@/results/parallelcopytoast.dat' with(format binary);
+
+truncate test_parallel_copy_toast;
+
+copy test_parallel_copy_toast from '@abs_builddir@/results/parallelcopytoast.csv' with(format csv, parallel 2);
+
+copy test_parallel_copy_toast from '@abs_builddir@/results/parallelcopytoast.dat' with(format binary, parallel 2);
+
+select count(*) from test_parallel_copy_toast;
+
+drop table test_parallel_copy_toast;
 
 -- Ensure COPY FREEZE errors for partitioned tables.
 begin;

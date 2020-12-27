@@ -18,11 +18,13 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+#include "access/parallel.h"
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "access/xact.h"
 #include "catalog/pg_authid.h"
 #include "commands/copy.h"
+#include "commands/copyfrom_internal.h"
 #include "commands/defrem.h"
 #include "executor/executor.h"
 #include "mb/pg_wchar.h"
@@ -33,6 +35,7 @@
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
 #include "parser/parse_relation.h"
+#include "postmaster/bgworker_internals.h"
 #include "rewrite/rewriteHandler.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
@@ -286,6 +289,7 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 	if (is_from)
 	{
 		CopyFromState cstate;
+		ParallelContext *pcxt = NULL;
 
 		Assert(rel);
 
@@ -296,7 +300,46 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 		cstate = BeginCopyFrom(pstate, rel, whereClause,
 							   stmt->filename, stmt->is_program,
 							   NULL, stmt->attlist, stmt->options);
-		*processed = CopyFrom(cstate);	/* copy from file to database */
+		cstate->is_parallel = false;
+
+		/*
+		 * User chosen parallel copy. Determine if the parallel copy is
+		 * actually allowed. If not, go with the non-parallel mode.
+		 */
+		if (cstate->opts.nworkers > 0 && IsParallelCopyAllowed(cstate, relid))
+			pcxt = BeginParallelCopy(cstate, stmt->attlist, relid);
+
+		if (pcxt)
+		{
+			int			i;
+
+			ParallelCopyFrom(cstate);
+
+			/* Wait for all copy workers to finish */
+			WaitForParallelWorkersToFinish(pcxt);
+
+			/*
+			 * Next, accumulate WAL usage.  (This must wait for the workers to
+			 * finish, or we might get incomplete data.)
+			 */
+			for (i = 0; i < pcxt->nworkers_launched; i++)
+				InstrAccumParallelQuery(&cstate->pcdata->bufferusage[i],
+										&cstate->pcdata->walusage[i]);
+
+			*processed = pg_atomic_read_u64(&cstate->pcdata->pcshared_info->processed);
+			EndParallelCopy(pcxt);
+		}
+		else
+		{
+			/*
+			 * Reset nworkers to -1 here. This is useful in cases where user
+			 * specifies parallel workers, but, no worker is picked up, so go
+			 * back to non parallel mode value of nworkers.
+			 */
+			cstate->opts.nworkers = -1;
+			*processed = CopyFrom(cstate);	/* copy from file to database */
+		}
+
 		EndCopyFrom(cstate);
 	}
 	else
@@ -346,6 +389,7 @@ ProcessCopyOptions(ParseState *pstate,
 		opts_out = (CopyFormatOptions *) palloc0(sizeof(CopyFormatOptions));
 
 	opts_out->file_encoding = -1;
+	opts_out->nworkers = -1;
 
 	/* Extract options from the statement node tree */
 	foreach(option, options)
@@ -515,6 +559,31 @@ ProcessCopyOptions(ParseState *pstate,
 						 errmsg("argument to option \"%s\" must be a valid encoding name",
 								defel->defname),
 						 parser_errposition(pstate, defel->location)));
+		}
+		else if (strcmp(defel->defname, "parallel") == 0)
+		{
+			int			val;
+
+			if (!is_from)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("parallel option is supported only for copy from"),
+						 parser_errposition(pstate, defel->location)));
+			if (opts_out->nworkers >= 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
+
+			val = defGetInt32(defel);
+			if (val < 1 || val > MAX_PARALLEL_WORKER_LIMIT)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("value %d out of bounds for option \"%s\"",
+								val, defel->defname),
+						 errdetail("Valid values are between \"%d\" and \"%d\".",
+								   1, MAX_PARALLEL_WORKER_LIMIT)));
+			opts_out->nworkers = val;
 		}
 		else
 			ereport(ERROR,

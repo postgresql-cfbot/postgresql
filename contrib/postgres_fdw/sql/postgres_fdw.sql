@@ -2695,5 +2695,57 @@ SELECT 1 FROM ft1 LIMIT 1;    -- should fail
 \set VERBOSITY default
 COMMIT;
 
+-- parallel copy related tests.
+CREATE TABLE test_parallel_copy (
+        a INT,
+        b INT,
+        c TEXT default 'stuff',
+        d TEXT,
+        e TEXT
+) ;
+
+CREATE FOREIGN TABLE test_parallel_copy_ft (
+        a INT,
+        b INT,
+        c TEXT default 'stuff',
+        d TEXT,
+        e TEXT
+) SERVER loopback OPTIONS (table_name 'test_parallel_copy') ;
+
+-- parallel copy into foreign table, parallelism must not be picked up.
+COPY test_parallel_copy_ft FROM stdin WITH (PARALLEL 1);
+1	1	test_c1	test_d1	test_e1
+2	2	test_c2	test_d2	test_e2
+\.
+
+SELECT count(*) FROM test_parallel_copy_ft;
+
+-- parallel copy into a table with foreign partition.
+CREATE TABLE part_test_parallel_copy (
+        a INT,
+        b INT,
+        c TEXT default 'stuff',
+        d TEXT,
+        e TEXT
+) PARTITION BY LIST (b);
+
+CREATE FOREIGN TABLE part_test_parallel_copy_a1 (c TEXT, b INT, a INT, e TEXT, d TEXT) SERVER loopback;
+
+CREATE TABLE part_test_parallel_copy_a2 (a INT, c TEXT, b INT, d TEXT, e TEXT);
+
+ALTER TABLE part_test_parallel_copy ATTACH PARTITION part_test_parallel_copy_a1 FOR VALUES IN(1);
+
+ALTER TABLE part_test_parallel_copy ATTACH PARTITION part_test_parallel_copy_a2 FOR VALUES IN(2);
+
+-- Verify that sequential copy is choosen by checking error in not from a parallel worker.
+COPY part_test_parallel_copy FROM stdin WITH (PARALLEL 1);
+1	1	test_c1	test_d1	test_e1	test_nonexistent1
+\.
+
+SELECT count(*) FROM part_test_parallel_copy WHERE b = 2;
+
 -- Clean up
 DROP PROCEDURE terminate_backend_and_wait(text);
+DROP FOREIGN TABLE test_parallel_copy_ft;
+DROP TABLE test_parallel_copy;
+DROP TABLE part_test_parallel_copy;

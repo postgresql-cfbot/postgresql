@@ -96,6 +96,8 @@ typedef struct CopyMultiInsertInfo
 static char *limit_printout_length(const char *str);
 
 static void ClosePipeFromProgram(CopyFromState cstate);
+void		PopulateCommonCStateInfo(CopyFromState cstate, TupleDesc tup_desc,
+									 List *attnamelist);
 
 /*
  * error context callback for COPY FROM
@@ -516,32 +518,13 @@ CopyMultiInsertInfoStore(CopyMultiInsertInfo *miinfo, ResultRelInfo *rri,
 }
 
 /*
- * Copy FROM file to relation.
+ * CheckTargetRelValidity
+ *
+ * Check if the relation specified in copy from is valid.
  */
-uint64
-CopyFrom(CopyFromState cstate)
+void
+CheckTargetRelValidity(CopyFromState cstate)
 {
-	ResultRelInfo *resultRelInfo;
-	ResultRelInfo *target_resultRelInfo;
-	ResultRelInfo *prevResultRelInfo = NULL;
-	EState	   *estate = CreateExecutorState(); /* for ExecConstraints() */
-	ModifyTableState *mtstate;
-	ExprContext *econtext;
-	TupleTableSlot *singleslot = NULL;
-	MemoryContext oldcontext = CurrentMemoryContext;
-
-	PartitionTupleRouting *proute = NULL;
-	ErrorContextCallback errcallback;
-	CommandId	mycid = GetCurrentCommandId(true);
-	int			ti_options = 0; /* start with default options for insert */
-	BulkInsertState bistate = NULL;
-	CopyInsertMethod insertMethod;
-	CopyMultiInsertInfo multiInsertInfo = {0};	/* pacify compiler */
-	uint64		processed = 0;
-	bool		has_before_insert_row_trig;
-	bool		has_instead_insert_row_trig;
-	bool		leafpart_use_multi_insert = false;
-
 	Assert(cstate->rel);
 	Assert(list_length(cstate->range_table) == 1);
 
@@ -579,27 +562,6 @@ CopyFrom(CopyFromState cstate)
 							RelationGetRelationName(cstate->rel))));
 	}
 
-	/*
-	 * If the target file is new-in-transaction, we assume that checking FSM
-	 * for free space is a waste of time.  This could possibly be wrong, but
-	 * it's unlikely.
-	 */
-	if (RELKIND_HAS_STORAGE(cstate->rel->rd_rel->relkind) &&
-		(cstate->rel->rd_createSubid != InvalidSubTransactionId ||
-		 cstate->rel->rd_firstRelfilenodeSubid != InvalidSubTransactionId))
-		ti_options |= TABLE_INSERT_SKIP_FSM;
-
-	/*
-	 * Optimize if new relfilenode was created in this subxact or one of its
-	 * committed children and we won't see those rows later as part of an
-	 * earlier scan or command. The subxact test ensures that if this subxact
-	 * aborts then the frozen rows won't be visible after xact cleanup.  Note
-	 * that the stronger test of exactly which subtransaction created it is
-	 * crucial for correctness of this optimization. The test for an earlier
-	 * scan or command tolerates false negatives. FREEZE causes other sessions
-	 * to see rows they would not see under MVCC, and a false negative merely
-	 * spreads that anomaly to the current session.
-	 */
 	if (cstate->opts.freeze)
 	{
 		/*
@@ -637,7 +599,72 @@ CopyFrom(CopyFromState cstate)
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					 errmsg("cannot perform COPY FREEZE because the table was not created or truncated in the current subtransaction")));
+	}
+}
 
+/*
+ * Copy FROM file to relation.
+ */
+uint64
+CopyFrom(CopyFromState cstate)
+{
+	ResultRelInfo *resultRelInfo;
+	ResultRelInfo *target_resultRelInfo;
+	ResultRelInfo *prevResultRelInfo = NULL;
+	EState	   *estate = CreateExecutorState(); /* for ExecConstraints() */
+	ModifyTableState *mtstate;
+	ExprContext *econtext;
+	TupleTableSlot *singleslot = NULL;
+	MemoryContext oldcontext = CurrentMemoryContext;
+
+	PartitionTupleRouting *proute = NULL;
+	ErrorContextCallback errcallback;
+	CommandId	mycid;
+	int			ti_options = 0; /* start with default options for insert */
+	BulkInsertState bistate = NULL;
+	CopyInsertMethod insertMethod;
+	CopyMultiInsertInfo multiInsertInfo = {0};	/* pacify compiler */
+	uint64		processed = 0;
+	bool		has_before_insert_row_trig;
+	bool		has_instead_insert_row_trig;
+	bool		leafpart_use_multi_insert = false;
+
+	/*
+	 * Perform this check if it is not parallel copy. In case of parallel
+	 * copy, this check is done by the leader, so that if any invalid case
+	 * exist the copy from command will error out from the leader itself,
+	 * avoiding launching workers, just to throw error.
+	 */
+	if (!IsParallelCopy())
+		CheckTargetRelValidity(cstate);
+	else
+		SetCurrentCommandIdUsedForWorker();
+
+	mycid = GetCurrentCommandId(!IsParallelCopy());
+
+	/*
+	 * If the target file is new-in-transaction, we assume that checking FSM
+	 * for free space is a waste of time.  This could possibly be wrong, but
+	 * it's unlikely.
+	 */
+	if (RELKIND_HAS_STORAGE(cstate->rel->rd_rel->relkind) &&
+		(cstate->rel->rd_createSubid != InvalidSubTransactionId ||
+		 cstate->rel->rd_firstRelfilenodeSubid != InvalidSubTransactionId))
+		ti_options |= TABLE_INSERT_SKIP_FSM;
+
+	/*
+	 * Optimize if new relfilenode was created in this subxact or one of its
+	 * committed children and we won't see those rows later as part of an
+	 * earlier scan or command. The subxact test ensures that if this subxact
+	 * aborts then the frozen rows won't be visible after xact cleanup.  Note
+	 * that the stronger test of exactly which subtransaction created it is
+	 * crucial for correctness of this optimization. The test for an earlier
+	 * scan or command tolerates false negatives. FREEZE causes other sessions
+	 * to see rows they would not see under MVCC, and a false negative merely
+	 * spreads that anomaly to the current session.
+	 */
+	if (cstate->opts.freeze)
+	{
 		ti_options |= TABLE_INSERT_FROZEN;
 	}
 
@@ -651,7 +678,8 @@ CopyFrom(CopyFromState cstate)
 	ExecInitResultRelation(estate, resultRelInfo, 1);
 
 	/* Verify the named relation is a valid target for INSERT */
-	CheckValidResultRel(resultRelInfo, CMD_INSERT);
+	if (!IsParallelCopy())
+		CheckValidResultRel(resultRelInfo, CMD_INSERT);
 
 	ExecOpenIndices(resultRelInfo, false);
 
@@ -794,13 +822,17 @@ CopyFrom(CopyFromState cstate)
 	has_instead_insert_row_trig = (resultRelInfo->ri_TrigDesc &&
 								   resultRelInfo->ri_TrigDesc->trig_insert_instead_row);
 
-	/*
-	 * Check BEFORE STATEMENT insertion triggers. It's debatable whether we
-	 * should do this for COPY, since it's not really an "INSERT" statement as
-	 * such. However, executing these triggers maintains consistency with the
-	 * EACH ROW triggers that we already fire on COPY.
-	 */
-	ExecBSInsertTriggers(estate, resultRelInfo);
+	if (!IsParallelCopy())
+	{
+		/*
+		 * Check BEFORE STATEMENT insertion triggers. It's debatable whether
+		 * we should do this for COPY, since it's not really an "INSERT"
+		 * statement as such. However, executing these triggers maintains
+		 * consistency with the EACH ROW triggers that we already fire on
+		 * COPY.
+		 */
+		ExecBSInsertTriggers(estate, resultRelInfo);
+	}
 
 	econtext = GetPerTupleExprContext(estate);
 
@@ -1102,7 +1134,11 @@ CopyFrom(CopyFromState cstate)
 			 * or FDW; this is the same definition used by nodeModifyTable.c
 			 * for counting tuples inserted by an INSERT command.
 			 */
-			processed++;
+			if (!IsParallelCopy())
+				processed++;
+			else
+				pg_atomic_add_fetch_u64(&cstate->pcdata->pcshared_info->processed, 1);
+
 		}
 	}
 
@@ -1125,7 +1161,7 @@ CopyFrom(CopyFromState cstate)
 	 * In the old protocol, tell pqcomm that we can process normal protocol
 	 * messages again.
 	 */
-	if (cstate->copy_src == COPY_OLD_FE)
+	if (cstate->copy_src == COPY_OLD_FE && !IsParallelCopy())
 		pq_endmsgread();
 
 	/* Execute AFTER STATEMENT insertion triggers */
@@ -1156,7 +1192,108 @@ CopyFrom(CopyFromState cstate)
 
 	FreeExecutorState(estate);
 
-	return processed;
+	if (!IsParallelCopy())
+		return processed;
+	else
+		return pg_atomic_read_u64(&cstate->pcdata->pcshared_info->processed);
+}
+
+/*
+ * PopulateCStateCatalogInfo
+ *
+ * Populate the cstate catalog information.
+ */
+void
+PopulateCStateCatalogInfo(CopyFromState cstate)
+{
+	TupleDesc	tupDesc;
+	AttrNumber	num_phys_attrs,
+				num_defaults;
+	FmgrInfo   *in_functions;
+	Oid		   *typioparams;
+	int			attnum;
+	Oid			in_func_oid;
+	int		   *defmap;
+	ExprState **defexprs;
+	bool		volatile_defexprs;
+
+	tupDesc = RelationGetDescr(cstate->rel);
+	num_phys_attrs = tupDesc->natts;
+	num_defaults = 0;
+	volatile_defexprs = false;
+
+	/*
+	 * Pick up the required catalog information for each attribute in the
+	 * relation, including the input function, the element type (to pass to
+	 * the input function), and info about defaults and constraints. (Which
+	 * input function we use depends on text/binary format choice.)
+	 */
+	in_functions = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
+	typioparams = (Oid *) palloc(num_phys_attrs * sizeof(Oid));
+	defmap = (int *) palloc(num_phys_attrs * sizeof(int));
+	defexprs = (ExprState **) palloc(num_phys_attrs * sizeof(ExprState *));
+
+	for (attnum = 1; attnum <= num_phys_attrs; attnum++)
+	{
+		Form_pg_attribute att = TupleDescAttr(tupDesc, attnum - 1);
+
+		/* We don't need info for dropped attributes */
+		if (att->attisdropped)
+			continue;
+
+		/* Fetch the input function and typioparam info */
+		if (cstate->opts.binary)
+			getTypeBinaryInputInfo(att->atttypid,
+								   &in_func_oid, &typioparams[attnum - 1]);
+		else
+			getTypeInputInfo(att->atttypid,
+							 &in_func_oid, &typioparams[attnum - 1]);
+		fmgr_info(in_func_oid, &in_functions[attnum - 1]);
+
+		/* Get default info if needed */
+		if (!list_member_int(cstate->attnumlist, attnum) && !att->attgenerated)
+		{
+			/* attribute is NOT to be copied from input */
+			/* use default value if one exists */
+			Expr	   *defexpr = (Expr *) build_column_default(cstate->rel,
+																attnum);
+
+			if (defexpr != NULL)
+			{
+				/* Run the expression through planner */
+				defexpr = expression_planner(defexpr);
+
+				/* Initialize executable expression in copycontext */
+				defexprs[num_defaults] = ExecInitExpr(defexpr, NULL);
+				defmap[num_defaults] = attnum - 1;
+				num_defaults++;
+
+				/*
+				 * If a default expression looks at the table being loaded,
+				 * then it could give the wrong answer when using
+				 * multi-insert. Since database access can be dynamic this is
+				 * hard to test for exactly, so we use the much wider test of
+				 * whether the default expression is volatile. We allow for
+				 * the special case of when the default expression is the
+				 * nextval() of a sequence which in this specific case is
+				 * known to be safe for use with the multi-insert
+				 * optimization. Hence we use this special case function
+				 * checker rather than the standard check for
+				 * contain_volatile_functions().
+				 */
+				if (!volatile_defexprs)
+					volatile_defexprs = contain_volatile_functions_not_nextval((Node *) defexpr);
+			}
+		}
+	}
+
+	/* We keep those variables in cstate. */
+	cstate->in_functions = in_functions;
+	cstate->typioparams = typioparams;
+	cstate->defmap = defmap;
+	cstate->defexprs = defexprs;
+	cstate->volatile_defexprs = volatile_defexprs;
+	cstate->num_defaults = num_defaults;
 }
 
 /*
@@ -1182,19 +1319,10 @@ BeginCopyFrom(ParseState *pstate,
 			  List *attnamelist,
 			  List *options)
 {
-	CopyFromState	cstate;
+	CopyFromState cstate;
 	bool		pipe = (filename == NULL);
 	TupleDesc	tupDesc;
-	AttrNumber	num_phys_attrs,
-				num_defaults;
-	FmgrInfo   *in_functions;
-	Oid		   *typioparams;
-	int			attnum;
-	Oid			in_func_oid;
-	int		   *defmap;
-	ExprState **defexprs;
 	MemoryContext oldcontext;
-	bool		volatile_defexprs;
 
 	/* Allocate workspace and zero all fields */
 	cstate = (CopyFromStateData *) palloc0(sizeof(CopyFromStateData));
@@ -1210,7 +1338,7 @@ BeginCopyFrom(ParseState *pstate,
 	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
 
 	/* Extract options from the statement node tree */
-	ProcessCopyOptions(pstate, &cstate->opts, true /* is_from */, options);
+	ProcessCopyOptions(pstate, &cstate->opts, true /* is_from */ , options);
 
 	/* Process the target relation */
 	cstate->rel = rel;
@@ -1218,6 +1346,133 @@ BeginCopyFrom(ParseState *pstate,
 	tupDesc = RelationGetDescr(cstate->rel);
 
 	/* process commmon options or initialization */
+	PopulateCommonCStateInfo(cstate, tupDesc, attnamelist);
+
+	cstate->copy_src = COPY_FILE;	/* default */
+
+	cstate->whereClause = whereClause;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
+
+	/* Initialize state variables */
+	cstate->reached_eof = false;
+	cstate->eol_type = EOL_UNKNOWN;
+	cstate->cur_relname = RelationGetRelationName(cstate->rel);
+	cstate->cur_lineno = 0;
+	cstate->cur_attname = NULL;
+	cstate->cur_attval = NULL;
+
+	/*
+	 * Set up variables to avoid per-attribute overhead.  attribute_buf and
+	 * raw_buf are used in both text and binary modes, but we use line_buf
+	 * only in text mode.
+	 */
+	initStringInfo(&cstate->attribute_buf);
+	cstate->raw_buf = (char *) palloc(RAW_BUF_SIZE + 1);
+	cstate->raw_buf_index = cstate->raw_buf_len = 0;
+	if (!cstate->opts.binary)
+	{
+		initStringInfo(&cstate->line_buf);
+		cstate->line_buf_converted = false;
+	}
+
+	/* Assign range table, we'll need it in CopyFrom. */
+	if (pstate)
+		cstate->range_table = pstate->p_rtable;
+
+	PopulateCStateCatalogInfo(cstate);
+	cstate->is_program = is_program;
+
+	if (data_source_cb)
+	{
+		cstate->copy_src = COPY_CALLBACK;
+		cstate->data_source_cb = data_source_cb;
+	}
+	else if (pipe)
+	{
+		Assert(!is_program);	/* the grammar does not allow this */
+		if (whereToSendOutput == DestRemote)
+			ReceiveCopyBegin(cstate);
+		else
+			cstate->copy_file = stdin;
+	}
+	else
+	{
+		cstate->filename = pstrdup(filename);
+
+		if (cstate->is_program)
+		{
+			cstate->copy_file = OpenPipeStream(cstate->filename, PG_BINARY_R);
+			if (cstate->copy_file == NULL)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not execute command \"%s\": %m",
+								cstate->filename)));
+		}
+		else
+		{
+			struct stat st;
+
+			cstate->copy_file = AllocateFile(cstate->filename, PG_BINARY_R);
+			if (cstate->copy_file == NULL)
+			{
+				/* copy errno because ereport subfunctions might change it */
+				int			save_errno = errno;
+
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not open file \"%s\" for reading: %m",
+								cstate->filename),
+						 (save_errno == ENOENT || save_errno == EACCES) ?
+						 errhint("COPY FROM instructs the PostgreSQL server process to read a file. "
+								 "You may want a client-side facility such as psql's \\copy.") : 0));
+			}
+
+			if (fstat(fileno(cstate->copy_file), &st))
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not stat file \"%s\": %m",
+								cstate->filename)));
+
+			if (S_ISDIR(st.st_mode))
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("\"%s\" is a directory", cstate->filename)));
+		}
+	}
+
+	if (cstate->opts.binary)
+	{
+		/* Read and verify binary header */
+		ReceiveCopyBinaryHeader(cstate);
+	}
+
+	/* create workspace for CopyReadAttributes results */
+	if (!cstate->opts.binary)
+	{
+		AttrNumber	attr_count = list_length(cstate->attnumlist);
+
+		cstate->max_fields = attr_count;
+		cstate->raw_fields = (char **) palloc(attr_count * sizeof(char *));
+	}
+
+	MemoryContextSwitchTo(oldcontext);
+
+	return cstate;
+}
+
+/*
+ * PopulateCommonCStateInfo
+ *
+ * Populates the common variables required for copy from operation. This is a
+ * helper function for BeginCopy & InitializeParallelCopyInfo function.
+ */
+void
+PopulateCommonCStateInfo(CopyFromState cstate, TupleDesc tupDesc, List *attnamelist)
+{
+	int			num_phys_attrs;
 
 	/* Generate or convert list of attributes to process */
 	cstate->attnumlist = CopyGetAttnums(tupDesc, cstate->rel, attnamelist);
@@ -1310,196 +1565,6 @@ BeginCopyFrom(ParseState *pstate,
 		 pg_database_encoding_max_length() > 1);
 	/* See Multibyte encoding comment above */
 	cstate->encoding_embeds_ascii = PG_ENCODING_IS_CLIENT_ONLY(cstate->file_encoding);
-
-	cstate->copy_src = COPY_FILE;	/* default */
-
-	cstate->whereClause = whereClause;
-
-	MemoryContextSwitchTo(oldcontext);
-
-	oldcontext = MemoryContextSwitchTo(cstate->copycontext);
-
-	/* Initialize state variables */
-	cstate->reached_eof = false;
-	cstate->eol_type = EOL_UNKNOWN;
-	cstate->cur_relname = RelationGetRelationName(cstate->rel);
-	cstate->cur_lineno = 0;
-	cstate->cur_attname = NULL;
-	cstate->cur_attval = NULL;
-
-	/*
-	 * Set up variables to avoid per-attribute overhead.  attribute_buf and
-	 * raw_buf are used in both text and binary modes, but we use line_buf
-	 * only in text mode.
-	 */
-	initStringInfo(&cstate->attribute_buf);
-	cstate->raw_buf = (char *) palloc(RAW_BUF_SIZE + 1);
-	cstate->raw_buf_index = cstate->raw_buf_len = 0;
-	if (!cstate->opts.binary)
-	{
-		initStringInfo(&cstate->line_buf);
-		cstate->line_buf_converted = false;
-	}
-
-	/* Assign range table, we'll need it in CopyFrom. */
-	if (pstate)
-		cstate->range_table = pstate->p_rtable;
-
-	tupDesc = RelationGetDescr(cstate->rel);
-	num_phys_attrs = tupDesc->natts;
-	num_defaults = 0;
-	volatile_defexprs = false;
-
-	/*
-	 * Pick up the required catalog information for each attribute in the
-	 * relation, including the input function, the element type (to pass to
-	 * the input function), and info about defaults and constraints. (Which
-	 * input function we use depends on text/binary format choice.)
-	 */
-	in_functions = (FmgrInfo *) palloc(num_phys_attrs * sizeof(FmgrInfo));
-	typioparams = (Oid *) palloc(num_phys_attrs * sizeof(Oid));
-	defmap = (int *) palloc(num_phys_attrs * sizeof(int));
-	defexprs = (ExprState **) palloc(num_phys_attrs * sizeof(ExprState *));
-
-	for (attnum = 1; attnum <= num_phys_attrs; attnum++)
-	{
-		Form_pg_attribute att = TupleDescAttr(tupDesc, attnum - 1);
-
-		/* We don't need info for dropped attributes */
-		if (att->attisdropped)
-			continue;
-
-		/* Fetch the input function and typioparam info */
-		if (cstate->opts.binary)
-			getTypeBinaryInputInfo(att->atttypid,
-								   &in_func_oid, &typioparams[attnum - 1]);
-		else
-			getTypeInputInfo(att->atttypid,
-							 &in_func_oid, &typioparams[attnum - 1]);
-		fmgr_info(in_func_oid, &in_functions[attnum - 1]);
-
-		/* Get default info if needed */
-		if (!list_member_int(cstate->attnumlist, attnum) && !att->attgenerated)
-		{
-			/* attribute is NOT to be copied from input */
-			/* use default value if one exists */
-			Expr	   *defexpr = (Expr *) build_column_default(cstate->rel,
-																attnum);
-
-			if (defexpr != NULL)
-			{
-				/* Run the expression through planner */
-				defexpr = expression_planner(defexpr);
-
-				/* Initialize executable expression in copycontext */
-				defexprs[num_defaults] = ExecInitExpr(defexpr, NULL);
-				defmap[num_defaults] = attnum - 1;
-				num_defaults++;
-
-				/*
-				 * If a default expression looks at the table being loaded,
-				 * then it could give the wrong answer when using
-				 * multi-insert. Since database access can be dynamic this is
-				 * hard to test for exactly, so we use the much wider test of
-				 * whether the default expression is volatile. We allow for
-				 * the special case of when the default expression is the
-				 * nextval() of a sequence which in this specific case is
-				 * known to be safe for use with the multi-insert
-				 * optimization. Hence we use this special case function
-				 * checker rather than the standard check for
-				 * contain_volatile_functions().
-				 */
-				if (!volatile_defexprs)
-					volatile_defexprs = contain_volatile_functions_not_nextval((Node *) defexpr);
-			}
-		}
-	}
-
-	/* We keep those variables in cstate. */
-	cstate->in_functions = in_functions;
-	cstate->typioparams = typioparams;
-	cstate->defmap = defmap;
-	cstate->defexprs = defexprs;
-	cstate->volatile_defexprs = volatile_defexprs;
-	cstate->num_defaults = num_defaults;
-	cstate->is_program = is_program;
-
-	if (data_source_cb)
-	{
-		cstate->copy_src = COPY_CALLBACK;
-		cstate->data_source_cb = data_source_cb;
-	}
-	else if (pipe)
-	{
-		Assert(!is_program);	/* the grammar does not allow this */
-		if (whereToSendOutput == DestRemote)
-			ReceiveCopyBegin(cstate);
-		else
-			cstate->copy_file = stdin;
-	}
-	else
-	{
-		cstate->filename = pstrdup(filename);
-
-		if (cstate->is_program)
-		{
-			cstate->copy_file = OpenPipeStream(cstate->filename, PG_BINARY_R);
-			if (cstate->copy_file == NULL)
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not execute command \"%s\": %m",
-								cstate->filename)));
-		}
-		else
-		{
-			struct stat st;
-
-			cstate->copy_file = AllocateFile(cstate->filename, PG_BINARY_R);
-			if (cstate->copy_file == NULL)
-			{
-				/* copy errno because ereport subfunctions might change it */
-				int			save_errno = errno;
-
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not open file \"%s\" for reading: %m",
-								cstate->filename),
-						 (save_errno == ENOENT || save_errno == EACCES) ?
-						 errhint("COPY FROM instructs the PostgreSQL server process to read a file. "
-								 "You may want a client-side facility such as psql's \\copy.") : 0));
-			}
-
-			if (fstat(fileno(cstate->copy_file), &st))
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not stat file \"%s\": %m",
-								cstate->filename)));
-
-			if (S_ISDIR(st.st_mode))
-				ereport(ERROR,
-						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("\"%s\" is a directory", cstate->filename)));
-		}
-	}
-
-	if (cstate->opts.binary)
-	{
-		/* Read and verify binary header */
-		ReceiveCopyBinaryHeader(cstate);
-	}
-
-	/* create workspace for CopyReadAttributes results */
-	if (!cstate->opts.binary)
-	{
-		AttrNumber	attr_count = list_length(cstate->attnumlist);
-
-		cstate->max_fields = attr_count;
-		cstate->raw_fields = (char **) palloc(attr_count * sizeof(char *));
-	}
-
-	MemoryContextSwitchTo(oldcontext);
-
-	return cstate;
 }
 
 /*

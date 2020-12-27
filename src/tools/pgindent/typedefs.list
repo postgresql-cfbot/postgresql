@@ -1707,6 +1707,13 @@ ParallelBitmapHeapState
 ParallelBlockTableScanDesc
 ParallelCompletionPtr
 ParallelContext
+ParallelCopyLineBoundaries
+ParallelCopyLineBoundary
+ParallelCopyData
+ParallelCopyDataBlock
+ParallelCopyLineBuf
+ParallelCopyLineState
+ParallelCopyShmInfo
 ParallelExecutorInfo
 ParallelHashGrowth
 ParallelHashJoinBatch
@@ -2229,6 +2236,7 @@ SerCommitSeqNo
 SerialControl
 SerializableXactHandle
 SerializedActiveRelMaps
+SerializedListToStrCState
 SerializedReindexState
 SerializedSnapshotData
 SerializedTransactionState

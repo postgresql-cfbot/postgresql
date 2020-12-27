@@ -52,5 +52,6 @@ extern void CommuteOpExpr(OpExpr *clause);
 
 extern Query *inline_set_returning_function(PlannerInfo *root,
 											RangeTblEntry *rte);
+extern char MaxParallelHazardForModify(Oid relid);
 
 #endif							/* CLAUSES_H */

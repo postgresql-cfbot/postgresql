@@ -48,6 +48,7 @@ typedef struct CopyFormatOptions
 	bool	   *force_null_flags;	/* per-column CSV FN flags */
 	bool		convert_selectively;	/* do selective binary conversion? */
 	List	   *convert_select; /* list of column names (can be NIL) */
+	int			nworkers;		/* number of workers for parallel copy */
 } CopyFormatOptions;
 
 /* These are private in commands/copy[from|to].c */
@@ -60,7 +61,7 @@ extern void DoCopy(ParseState *state, const CopyStmt *stmt,
 				   int stmt_location, int stmt_len,
 				   uint64 *processed);
 
-extern void ProcessCopyOptions(ParseState *pstate, CopyFormatOptions *ops_out, bool is_from, List *options);
+extern void ProcessCopyOptions(ParseState *pstate, CopyFormatOptions * ops_out, bool is_from, List *options);
 extern CopyFromState BeginCopyFrom(ParseState *pstate, Relation rel, Node *whereClause,
 							   const char *filename,
 							   bool is_program, copy_data_source_cb data_source_cb, List *attnamelist, List *options);

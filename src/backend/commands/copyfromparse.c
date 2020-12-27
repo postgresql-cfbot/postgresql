@@ -82,9 +82,13 @@ if (1) \
 { \
 	if (raw_buf_ptr > cstate->raw_buf_index) \
 	{ \
-		appendBinaryStringInfo(&cstate->line_buf, \
-							 cstate->raw_buf + cstate->raw_buf_index, \
-							   raw_buf_ptr - cstate->raw_buf_index); \
+		if (!IsParallelCopy()) \
+			appendBinaryStringInfo(&cstate->line_buf, \
+								   cstate->raw_buf + cstate->raw_buf_index, \
+								   raw_buf_ptr - cstate->raw_buf_index); \
+		else \
+			line_size +=  raw_buf_ptr - cstate->raw_buf_index; \
+		\
 		cstate->raw_buf_index = raw_buf_ptr; \
 	} \
 } else ((void) 0)
@@ -102,7 +106,7 @@ static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
 
 
 /* non-export function prototypes */
-static bool CopyReadLine(CopyFromState cstate);
+bool CopyReadLine(CopyFromState cstate);
 static bool CopyReadLineText(CopyFromState cstate);
 static int	CopyReadAttributesText(CopyFromState cstate);
 static int	CopyReadAttributesCSV(CopyFromState cstate);
@@ -112,12 +116,15 @@ static Datum CopyReadBinaryAttribute(CopyFromState cstate, FmgrInfo *flinfo,
 
 
 /* Low-level communications functions */
-static int	CopyGetData(CopyFromState cstate, void *databuf,
+int			CopyGetData(CopyFromState cstate, void *databuf,
 						int minread, int maxread);
 static inline bool CopyGetInt32(CopyFromState cstate, int32 *val);
 static inline bool CopyGetInt16(CopyFromState cstate, int16 *val);
 static bool CopyLoadRawBuf(CopyFromState cstate);
-static int	CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes);
+int			CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes);
+static void ClearEOLFromCopiedData(CopyFromState cstate, char *copy_line_data,
+								   int copy_line_pos, int *copy_line_size);
+void ConvertToServerEncoding(CopyFromState cstate);
 
 void
 ReceiveCopyBegin(CopyFromState cstate)
@@ -162,7 +169,7 @@ ReceiveCopyBinaryHeader(CopyFromState cstate)
 	int32		tmp;
 
 	/* Signature */
-	if (CopyReadBinaryData(cstate, readSig, 11) != 11 ||
+	if (CopyGetData(cstate, readSig, 11, 11) != 11 ||
 		memcmp(readSig, BinarySignature, 11) != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
@@ -190,7 +197,7 @@ ReceiveCopyBinaryHeader(CopyFromState cstate)
 	/* Skip extension header, if present */
 	while (tmp-- > 0)
 	{
-		if (CopyReadBinaryData(cstate, readSig, 1) != 1)
+		if (CopyGetData(cstate, readSig, 1, 1) != 1)
 			ereport(ERROR,
 					(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
 					 errmsg("invalid COPY file header (wrong length)")));
@@ -210,7 +217,7 @@ ReceiveCopyBinaryHeader(CopyFromState cstate)
  *
  * NB: no data conversion is applied here.
  */
-static int
+int
 CopyGetData(CopyFromState cstate, void *databuf, int minread, int maxread)
 {
 	int			bytesread = 0;
@@ -331,10 +338,25 @@ CopyGetInt32(CopyFromState cstate, int32 *val)
 {
 	uint32		buf;
 
-	if (CopyReadBinaryData(cstate, (char *) &buf, sizeof(buf)) != sizeof(buf))
+	/*
+	 * For parallel copy, avoid reading data to raw buf, read directly from
+	 * file, later the data will be read to parallel copy data buffers.
+	 */
+	if (cstate->opts.nworkers > 0)
 	{
-		*val = 0;				/* suppress compiler warning */
-		return false;
+		if (CopyGetData(cstate, &buf, sizeof(buf), sizeof(buf)) != sizeof(buf))
+		{
+			*val = 0;			/* suppress compiler warning */
+			return false;
+		}
+	}
+	else
+	{
+		if (CopyReadBinaryData(cstate, (char *) &buf, sizeof(buf)) != sizeof(buf))
+		{
+			*val = 0;			/* suppress compiler warning */
+			return false;
+		}
 	}
 	*val = (int32) pg_ntoh32(buf);
 	return true;
@@ -370,11 +392,11 @@ CopyGetInt16(CopyFromState cstate, int16 *val)
 static bool
 CopyLoadRawBuf(CopyFromState cstate)
 {
-	int			nbytes = RAW_BUF_BYTES(cstate);
+	int			nbytes = (!IsParallelCopy()) ? RAW_BUF_BYTES(cstate) : cstate->raw_buf_len;
 	int			inbytes;
 
 	/* Copy down the unprocessed data if any. */
-	if (nbytes > 0)
+	if (nbytes > 0 && !IsParallelCopy())
 		memmove(cstate->raw_buf, cstate->raw_buf + cstate->raw_buf_index,
 				nbytes);
 
@@ -382,7 +404,9 @@ CopyLoadRawBuf(CopyFromState cstate)
 						  1, RAW_BUF_SIZE - nbytes);
 	nbytes += inbytes;
 	cstate->raw_buf[nbytes] = '\0';
-	cstate->raw_buf_index = 0;
+	if (!IsParallelCopy())
+		cstate->raw_buf_index = 0;
+
 	cstate->raw_buf_len = nbytes;
 	return (inbytes > 0);
 }
@@ -394,7 +418,7 @@ CopyLoadRawBuf(CopyFromState cstate)
  * and writes them to 'dest'.  Returns the number of bytes read (which
  * would be less than 'nbytes' only if we reach EOF).
  */
-static int
+int
 CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes)
 {
 	int			copied_bytes = 0;
@@ -455,26 +479,35 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 	/* only available for text or csv input */
 	Assert(!cstate->opts.binary);
 
-	/* on input just throw the header line away */
-	if (cstate->cur_lineno == 0 && cstate->opts.header_line)
+	if (IsParallelCopy())
 	{
-		cstate->cur_lineno++;
-		if (CopyReadLine(cstate))
-			return false;		/* done */
+		done = GetWorkerLine(cstate);
+		if (done && cstate->line_buf.len == 0)
+			return false;
 	}
+	else
+	{
+		/* on input just throw the header line away */
+		if (cstate->cur_lineno == 0 && cstate->opts.header_line)
+		{
+			cstate->cur_lineno++;
+			if (CopyReadLine(cstate))
+				return false;	/* done */
+		}
 
-	cstate->cur_lineno++;
+		cstate->cur_lineno++;
 
-	/* Actually read the line into memory here */
-	done = CopyReadLine(cstate);
+		/* Actually read the line into memory here */
+		done = CopyReadLine(cstate);
 
-	/*
-	 * EOF at start of line means we're done.  If we see EOF after some
-	 * characters, we act as though it was newline followed by EOF, ie,
-	 * process the line and then exit loop on next iteration.
-	 */
-	if (done && cstate->line_buf.len == 0)
-		return false;
+		/*
+		 * EOF at start of line means we're done.  If we see EOF after some
+		 * characters, we act as though it was newline followed by EOF, ie,
+		 * process the line and then exit loop on next iteration.
+		 */
+		if (done && cstate->line_buf.len == 0)
+			return false;
+	}
 
 	/* Parse the line into de-escaped field values */
 	if (cstate->opts.csv_mode)
@@ -601,60 +634,44 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 	else
 	{
 		/* binary */
-		int16		fld_count;
-		ListCell   *cur;
-
 		cstate->cur_lineno++;
+		cstate->max_fields = list_length(cstate->attnumlist);
 
-		if (!CopyGetInt16(cstate, &fld_count))
+		if (!IsParallelCopy())
 		{
-			/* EOF detected (end of file, or protocol-level EOF) */
-			return false;
+			int16		fld_count;
+			ListCell   *cur;
+
+			if (!CopyGetInt16(cstate, &fld_count))
+			{
+				/* EOF detected (end of file, or protocol-level EOF) */
+				return false;
+			}
+
+			CHECK_FIELD_COUNT;
+
+			foreach(cur, cstate->attnumlist)
+			{
+				int			attnum = lfirst_int(cur);
+				int			m = attnum - 1;
+				Form_pg_attribute att = TupleDescAttr(tupDesc, m);
+
+				cstate->cur_attname = NameStr(att->attname);
+				values[m] = CopyReadBinaryAttribute(cstate,
+													&in_functions[m],
+													typioparams[m],
+													att->atttypmod,
+													&nulls[m]);
+				cstate->cur_attname = NULL;
+			}
 		}
-
-		if (fld_count == -1)
+		else
 		{
-			/*
-			 * Received EOF marker.  In a V3-protocol copy, wait for the
-			 * protocol-level EOF, and complain if it doesn't come
-			 * immediately.  This ensures that we correctly handle CopyFail,
-			 * if client chooses to send that now.
-			 *
-			 * Note that we MUST NOT try to read more data in an old-protocol
-			 * copy, since there is no protocol-level EOF marker then.  We
-			 * could go either way for copy from file, but choose to throw
-			 * error if there's data after the EOF marker, for consistency
-			 * with the new-protocol case.
-			 */
-			char		dummy;
+			bool		eof = false;
 
-			if (cstate->copy_src != COPY_OLD_FE &&
-				CopyReadBinaryData(cstate, &dummy, 1) > 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-						 errmsg("received copy data after EOF marker")));
-			return false;
-		}
-
-		if (fld_count != attr_count)
-			ereport(ERROR,
-					(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-					 errmsg("row field count is %d, expected %d",
-							(int) fld_count, attr_count)));
-
-		foreach(cur, cstate->attnumlist)
-		{
-			int			attnum = lfirst_int(cur);
-			int			m = attnum - 1;
-			Form_pg_attribute att = TupleDescAttr(tupDesc, m);
-
-			cstate->cur_attname = NameStr(att->attname);
-			values[m] = CopyReadBinaryAttribute(cstate,
-												&in_functions[m],
-												typioparams[m],
-												att->atttypmod,
-												&nulls[m]);
-			cstate->cur_attname = NULL;
+			eof = CopyReadBinaryTupleWorker(cstate, values, nulls);
+			if (eof)
+				return false;
 		}
 	}
 
@@ -687,7 +704,7 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
  * by newline.  The terminating newline or EOF marker is not included
  * in the final value of line_buf.
  */
-static bool
+bool
 CopyReadLine(CopyFromState cstate)
 {
 	bool		result;
@@ -710,48 +727,89 @@ CopyReadLine(CopyFromState cstate)
 		 */
 		if (cstate->copy_src == COPY_NEW_FE)
 		{
+			bool		bIsFirst = true;
+
 			do
 			{
-				cstate->raw_buf_index = cstate->raw_buf_len;
+				if (!IsParallelCopy())
+					cstate->raw_buf_index = cstate->raw_buf_len;
+				else
+				{
+					/*
+					 * Get a new block if it is the first time, From the
+					 * subsequent time, reset the index and re-use the same
+					 * block.
+					 */
+					if (bIsFirst)
+					{
+						ParallelCopyShmInfo *pcshared_info = cstate->pcdata->pcshared_info;
+						uint32		block_pos = WaitGetFreeCopyBlock(pcshared_info);
+
+						cstate->raw_buf = pcshared_info->data_blocks[block_pos].data;
+						bIsFirst = false;
+					}
+
+					cstate->raw_buf_index = cstate->raw_buf_len = 0;
+				}
 			} while (CopyLoadRawBuf(cstate));
 		}
 	}
-	else
-	{
-		/*
-		 * If we didn't hit EOF, then we must have transferred the EOL marker
-		 * to line_buf along with the data.  Get rid of it.
-		 */
-		switch (cstate->eol_type)
-		{
-			case EOL_NL:
-				Assert(cstate->line_buf.len >= 1);
-				Assert(cstate->line_buf.data[cstate->line_buf.len - 1] == '\n');
-				cstate->line_buf.len--;
-				cstate->line_buf.data[cstate->line_buf.len] = '\0';
-				break;
-			case EOL_CR:
-				Assert(cstate->line_buf.len >= 1);
-				Assert(cstate->line_buf.data[cstate->line_buf.len - 1] == '\r');
-				cstate->line_buf.len--;
-				cstate->line_buf.data[cstate->line_buf.len] = '\0';
-				break;
-			case EOL_CRNL:
-				Assert(cstate->line_buf.len >= 2);
-				Assert(cstate->line_buf.data[cstate->line_buf.len - 2] == '\r');
-				Assert(cstate->line_buf.data[cstate->line_buf.len - 1] == '\n');
-				cstate->line_buf.len -= 2;
-				cstate->line_buf.data[cstate->line_buf.len] = '\0';
-				break;
-			case EOL_UNKNOWN:
-				/* shouldn't get here */
-				Assert(false);
-				break;
-		}
-	}
 
+	ConvertToServerEncoding(cstate);
+	return result;
+}
+
+/*
+ * ClearEOLFromCopiedData
+ *
+ * Clear EOL from the copied data.
+ */
+static void
+ClearEOLFromCopiedData(CopyFromState cstate, char *copy_line_data,
+					   int copy_line_pos, int *copy_line_size)
+{
+	/*
+	 * If we didn't hit EOF, then we must have transferred the EOL marker to
+	 * line_buf along with the data.  Get rid of it.
+	 */
+	switch (cstate->eol_type)
+	{
+		case EOL_NL:
+			Assert(*copy_line_size >= 1);
+			Assert(copy_line_data[copy_line_pos - 1] == '\n');
+			copy_line_data[copy_line_pos - 1] = '\0';
+			(*copy_line_size)--;
+			break;
+		case EOL_CR:
+			Assert(*copy_line_size >= 1);
+			Assert(copy_line_data[copy_line_pos - 1] == '\r');
+			copy_line_data[copy_line_pos - 1] = '\0';
+			(*copy_line_size)--;
+			break;
+		case EOL_CRNL:
+			Assert(*copy_line_size >= 2);
+			Assert(copy_line_data[copy_line_pos - 2] == '\r');
+			Assert(copy_line_data[copy_line_pos - 1] == '\n');
+			copy_line_data[copy_line_pos - 2] = '\0';
+			*copy_line_size -= 2;
+			break;
+		case EOL_UNKNOWN:
+			/* shouldn't get here */
+			Assert(false);
+			break;
+	}
+}
+
+/*
+ * ConvertToServerEncoding
+ *
+ * Convert contents to server encoding.
+ */
+void
+ConvertToServerEncoding(CopyFromState cstate)
+{
 	/* Done reading the line.  Convert it to server encoding. */
-	if (cstate->need_transcoding)
+	if (cstate->need_transcoding && (!IsParallelCopy() || IsWorker()))
 	{
 		char	   *cvt;
 
@@ -769,8 +827,6 @@ CopyReadLine(CopyFromState cstate)
 
 	/* Now it's safe to use the buffer in error messages */
 	cstate->line_buf_converted = true;
-
-	return result;
 }
 
 /*
@@ -793,6 +849,12 @@ CopyReadLineText(CopyFromState cstate)
 				last_was_esc = false;
 	char		quotec = '\0';
 	char		escapec = '\0';
+
+	/* For parallel copy */
+	int			line_size = 0;
+	uint32		line_pos = 0;
+
+	cstate->eol_type = EOL_UNKNOWN;
 
 	if (cstate->opts.csv_mode)
 	{
@@ -848,6 +910,10 @@ CopyReadLineText(CopyFromState cstate)
 		if (raw_buf_ptr >= copy_buf_len || need_data)
 		{
 			REFILL_LINEBUF;
+			if ((copy_buf_len == DATA_BLOCK_SIZE || copy_buf_len == 0) &&
+				IsParallelCopy())
+				SetRawBufForLoad(cstate, line_size, copy_buf_len, raw_buf_ptr,
+								 &copy_raw_buf);
 
 			/*
 			 * Try to read some more data.  This will certainly reset
@@ -855,14 +921,14 @@ CopyReadLineText(CopyFromState cstate)
 			 */
 			if (!CopyLoadRawBuf(cstate))
 				hit_eof = true;
-			raw_buf_ptr = 0;
+			raw_buf_ptr = (IsParallelCopy()) ? cstate->raw_buf_index : 0;
 			copy_buf_len = cstate->raw_buf_len;
 
 			/*
 			 * If we are completely out of data, break out of the loop,
 			 * reporting EOF.
 			 */
-			if (copy_buf_len <= 0)
+			if (RAW_BUF_BYTES(cstate) <= 0)
 			{
 				result = true;
 				break;
@@ -1072,9 +1138,15 @@ CopyReadLineText(CopyFromState cstate)
 				 * discard the data and the \. sequence.
 				 */
 				if (prev_raw_ptr > cstate->raw_buf_index)
-					appendBinaryStringInfo(&cstate->line_buf,
-										   cstate->raw_buf + cstate->raw_buf_index,
-										   prev_raw_ptr - cstate->raw_buf_index);
+				{
+					if (!IsParallelCopy())
+						appendBinaryStringInfo(&cstate->line_buf,
+											   cstate->raw_buf + cstate->raw_buf_index,
+											   prev_raw_ptr - cstate->raw_buf_index);
+					else
+						line_size += prev_raw_ptr - cstate->raw_buf_index;
+				}
+
 				cstate->raw_buf_index = raw_buf_ptr;
 				result = true;	/* report EOF */
 				break;
@@ -1126,6 +1198,22 @@ not_end_of_copy:
 			IF_NEED_REFILL_AND_EOF_BREAK(mblen - 1);
 			raw_buf_ptr += mblen - 1;
 		}
+
+		/*
+		 * Skip the header line. Update the line here, this cannot be done at
+		 * the beginning, as there is a possibility that file contains empty
+		 * lines.
+		 */
+		if (IsParallelCopy() && first_char_in_line && !IsHeaderLine())
+		{
+			ParallelCopyShmInfo *pcshared_info = cstate->pcdata->pcshared_info;
+
+			line_pos = UpdateSharedLineInfo(cstate,
+											pcshared_info->cur_block_pos,
+											cstate->raw_buf_index, -1,
+											LINE_LEADER_POPULATING, -1);
+		}
+
 		first_char_in_line = false;
 	}							/* end of outer loop */
 
@@ -1133,7 +1221,17 @@ not_end_of_copy:
 	 * Transfer any still-uncopied data to line_buf.
 	 */
 	REFILL_LINEBUF;
+	if (!result && !IsHeaderLine())
+	{
+		if (IsParallelCopy())
+			ClearEOLFromCopiedData(cstate, cstate->raw_buf, raw_buf_ptr,
+								   &line_size);
+		else
+			ClearEOLFromCopiedData(cstate, cstate->line_buf.data,
+								   cstate->line_buf.len, &cstate->line_buf.len);
+	}
 
+	EndLineParallelCopy(cstate, line_pos, line_size, raw_buf_ptr);
 	return result;
 }
 
@@ -1574,18 +1672,14 @@ CopyReadBinaryAttribute(CopyFromState cstate, FmgrInfo *flinfo,
 	Datum		result;
 
 	if (!CopyGetInt32(cstate, &fld_size))
-		ereport(ERROR,
-				(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-				 errmsg("unexpected EOF in COPY data")));
+		EOF_ERROR;
+
 	if (fld_size == -1)
 	{
 		*isnull = true;
 		return ReceiveFunctionCall(flinfo, NULL, typioparam, typmod);
 	}
-	if (fld_size < 0)
-		ereport(ERROR,
-				(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-				 errmsg("invalid field size")));
+	CHECK_FIELD_SIZE(fld_size);
 
 	/* reset attribute_buf to empty, and load raw data in it */
 	resetStringInfo(&cstate->attribute_buf);
@@ -1593,9 +1687,7 @@ CopyReadBinaryAttribute(CopyFromState cstate, FmgrInfo *flinfo,
 	enlargeStringInfo(&cstate->attribute_buf, fld_size);
 	if (CopyReadBinaryData(cstate, cstate->attribute_buf.data,
 						   fld_size) != fld_size)
-		ereport(ERROR,
-				(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-				 errmsg("unexpected EOF in COPY data")));
+		EOF_ERROR;
 
 	cstate->attribute_buf.len = fld_size;
 	cstate->attribute_buf.data[fld_size] = '\0';

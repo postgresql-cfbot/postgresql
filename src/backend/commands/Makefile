@@ -26,6 +26,7 @@ OBJS = \
 	copy.o \
 	copyfrom.o \
 	copyfromparse.o \
+	copyparallel.o \
 	copyto.o \
 	createas.o \
 	dbcommands.o \

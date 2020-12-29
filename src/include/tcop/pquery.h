@@ -15,10 +15,12 @@
 #define PQUERY_H
 
 #include "nodes/parsenodes.h"
+#include "utils/guc.h"
 #include "utils/portal.h"
 
 
 extern PGDLLIMPORT Portal ActivePortal;
+extern char *result_format_auto_binary_types;
 
 
 extern PortalStrategy ChoosePortalStrategy(List *stmts);
@@ -29,6 +31,9 @@ extern List *FetchStatementTargetList(Node *stmt);
 
 extern void PortalStart(Portal portal, ParamListInfo params,
 						int eflags, Snapshot snapshot);
+
+extern bool check_result_format_auto_binary_types(char **newval, void **extra, GucSource source);
+extern void assign_result_format_auto_binary_types(const char *newval, void *extra);
 
 extern void PortalSetResultFormat(Portal portal, int nFormats,
 								  int16 *formats);

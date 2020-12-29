@@ -18,14 +18,19 @@
 #include <limits.h>
 
 #include "access/xact.h"
+#include "catalog/namespace.h"
 #include "commands/prepare.h"
 #include "executor/tstoreReceiver.h"
 #include "miscadmin.h"
+#include "parser/parse_type.h"
+#include "parser/scansup.h"
 #include "pg_trace.h"
 #include "tcop/pquery.h"
 #include "tcop/utility.h"
+#include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 
 
 /*
@@ -598,6 +603,235 @@ PortalStart(Portal portal, ParamListInfo params,
 }
 
 /*
+ * Support for result_format_auto_binary_types setting
+ *
+ * Interpreting this setting requires catalog access, so we cannot do most of
+ * the work in the usual check or assign hooks.  Instead, we do it the first
+ * time it is used.
+ */
+
+/* GUC variable */
+char *result_format_auto_binary_types;
+
+/* remembers whether the internal representation is up to date */
+static bool result_format_auto_binary_types_internal_valid = false;
+
+/*
+ * SplitGUCTypeList() --- parse a list of types
+ *
+ * Similar to SplitIdentifierString() etc., but does not strip quotes or alter
+ * the list elements in any way, since this is done by parseTypeString()
+ * later.  It only checks for comma as a separator and keeps track of balanced
+ * double quotes.
+ */
+static bool
+SplitGUCTypeList(char *rawstring, List **namelist)
+{
+	const char separator = ',';
+	char	   *nextp = rawstring;
+	bool		done = false;
+
+	*namelist = NIL;
+
+	while (scanner_isspace(*nextp))
+		nextp++;				/* skip leading whitespace */
+
+	if (*nextp == '\0')
+		return true;			/* allow empty string */
+
+	/* At the top of the loop, we are at start of a new list element. */
+	do
+	{
+		char	   *curname;
+		char	   *endp;
+		bool		in_quote = false;
+
+		curname = nextp;
+
+		while (*nextp)
+		{
+			if (!*nextp)
+				break;
+
+			if (*nextp == '"')
+				in_quote = !in_quote;
+
+			if (*nextp == separator && !in_quote)
+				break;
+
+			nextp++;
+		}
+
+		endp = nextp;
+		if (curname == nextp)
+			return false;	/* empty element not allowed */
+
+		if (*nextp == separator)
+			nextp++;
+		else if (*nextp == '\0')
+		{
+			if (in_quote)
+				return false;
+			done = true;
+		}
+		else
+			return false;		/* invalid syntax */
+
+		/* Now safe to overwrite separator with a null */
+		*endp = '\0';
+
+		/*
+		 * Finished isolating current name --- add it to list
+		 */
+		*namelist = lappend(*namelist, curname);
+
+		/* Loop back if we didn't reach end of string */
+	} while (!done);
+
+	return true;
+}
+
+bool
+check_result_format_auto_binary_types(char **newval, void **extra, GucSource source)
+{
+	char       *rawstring;
+	List       *elemlist;
+
+	rawstring = pstrdup(*newval);
+	if (!SplitGUCTypeList(rawstring, &elemlist))
+	{
+		GUC_check_errdetail("List syntax is invalid.");
+		pfree(rawstring);
+		list_free(elemlist);
+		return false;
+	}
+
+	pfree(rawstring);
+	list_free(elemlist);
+
+	return true;
+}
+
+/*
+ * GUC assign hook invalidates internal representation when the setting changes
+ */
+void
+assign_result_format_auto_binary_types(const char *newval, void *extra)
+{
+	result_format_auto_binary_types_internal_valid = false;
+}
+
+/*
+ * Invalidate when anything relevant in the system catalogs changes
+ */
+static void
+invalidate_result_format_auto_binary_types_internal(Datum arg, int cacheid, uint32 hashvalue)
+{
+	result_format_auto_binary_types_internal_valid = false;
+}
+
+/*
+ * Error context callback, so the error messages are clearer, since they
+ * happen as part of query processing, not GUC processing.
+ */
+static void
+_parse_rfabt_error_callback(void *arg)
+{
+	const char *value = (const char *) arg;
+
+	errcontext("parsing %s element \"%s\"",
+			   "result_format_auto_binary_types",
+			   value);
+}
+
+/*
+ * Subroutine for PortalSetResultFormat(): Return format code for type by
+ * using result_format_auto_binary_types setting.
+ */
+static int16
+resolve_result_format(Oid typeid)
+{
+	static List *result_format_auto_binary_types_internal = NIL;	/* type OID list */
+	static bool syscache_callback_set = false;
+
+	if (!syscache_callback_set)
+	{
+		CacheRegisterSyscacheCallback(TYPEOID, invalidate_result_format_auto_binary_types_internal, (Datum) 0);
+		syscache_callback_set = true;
+	}
+
+	if (!result_format_auto_binary_types_internal_valid)
+	{
+		MemoryContext oldcontext;
+		char	   *rawstring;
+		List	   *elemlist;
+		ListCell   *lc;
+
+		rawstring = pstrdup(result_format_auto_binary_types);
+		if (!SplitGUCTypeList(rawstring, &elemlist))
+		{
+			pfree(rawstring);
+			list_free(elemlist);
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("invalid list syntax in parameter \"%s\"",
+							"result_format_auto_binary_types")));
+		}
+
+		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+
+		list_free(result_format_auto_binary_types_internal);
+		result_format_auto_binary_types_internal = NIL;
+
+		foreach(lc, elemlist)
+		{
+			char	   *str = lfirst(lc);
+			ErrorContextCallback myerrcontext;
+			OverrideSearchPath temppath = { .addCatalog = true };
+			Oid			typeid;
+
+			myerrcontext.callback = _parse_rfabt_error_callback;
+			myerrcontext.arg = str;
+			myerrcontext.previous = error_context_stack;
+			error_context_stack = &myerrcontext;
+
+			/* use pg_catalog-only search_path */
+			PushOverrideSearchPath(&temppath);
+
+			parseTypeString(str, &typeid, NULL, true);
+
+			PopOverrideSearchPath();
+
+			if (typeid)
+				result_format_auto_binary_types_internal =
+					list_append_unique_oid(result_format_auto_binary_types_internal,
+										   typeid);
+			else
+				/*
+				 * We ignore nonexisting types, so that one setting can be
+				 * shared between different databases that might have
+				 * different extensions installed.  But we should diagnose
+				 * that we are ignoring a type, otherwise typos and similar
+				 * might never get noticed.
+				 */
+				ereport(LOG,
+						errmsg("type %s does not exist", str));
+
+			error_context_stack = myerrcontext.previous;
+		}
+
+		MemoryContextSwitchTo(oldcontext);
+
+		pfree(rawstring);
+		list_free(elemlist);
+
+		result_format_auto_binary_types_internal_valid = true;
+	}
+
+	return list_member_oid(result_format_auto_binary_types_internal, typeid) ? 1 : 0;
+}
+
+/*
  * PortalSetResultFormat
  *		Select the format codes for a portal's output.
  *
@@ -628,7 +862,11 @@ PortalSetResultFormat(Portal portal, int nFormats, int16 *formats)
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
 					 errmsg("bind message has %d result formats but query has %d columns",
 							nFormats, natts)));
-		memcpy(portal->formats, formats, natts * sizeof(int16));
+
+		for (i = 0; i < natts; i++)
+			portal->formats[i] = (formats[i] == -1
+								  ? resolve_result_format(TupleDescAttr(portal->tupDesc, i)->atttypid)
+								  : formats[i]);
 	}
 	else if (nFormats > 0)
 	{
@@ -636,11 +874,13 @@ PortalSetResultFormat(Portal portal, int nFormats, int16 *formats)
 		int16		format1 = formats[0];
 
 		for (i = 0; i < natts; i++)
-			portal->formats[i] = format1;
+			portal->formats[i] = (format1 == -1
+								  ? resolve_result_format(TupleDescAttr(portal->tupDesc, i)->atttypid)
+								  : format1);
 	}
 	else
 	{
-		/* use default format for all columns */
+		/* by default use text format for all columns */
 		for (i = 0; i < natts; i++)
 			portal->formats[i] = 0;
 	}

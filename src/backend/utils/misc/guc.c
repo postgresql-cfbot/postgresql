@@ -482,6 +482,13 @@ const struct config_enum_entry ssl_protocol_versions_info[] = {
 	{NULL, 0, false}
 };
 
+const struct config_enum_entry xx_vacuum_options[] = {
+	{"array", VACUUM_ARRAY, false},
+	{"intset", VACUUM_INTSET, false},
+	{"array-minmax", VACUUM_ARRAY_MINMAX, false},
+	{NULL, 0, false}
+};
+
 StaticAssertDecl(lengthof(ssl_protocol_versions_info) == (PG_TLS1_3_VERSION + 2),
 				 "array length mismatch");
 
@@ -4447,6 +4454,15 @@ static struct config_string ConfigureNamesString[] =
 
 static struct config_enum ConfigureNamesEnum[] =
 {
+	{
+		{"xx_vacuum", PGC_USERSET, RESOURCES,
+			gettext_noop("vacuum strategy."),
+		},
+		&xx_vacuum,
+		VACUUM_ARRAY, xx_vacuum_options,
+		NULL, NULL, NULL
+	},
+
 	{
 		{"backslash_quote", PGC_USERSET, COMPAT_OPTIONS_PREVIOUS,
 			gettext_noop("Sets whether \"\\'\" is allowed in string literals."),

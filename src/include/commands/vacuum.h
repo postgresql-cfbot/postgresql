@@ -23,6 +23,13 @@
 #include "storage/lock.h"
 #include "utils/relcache.h"
 
+enum xx_vacuum_options
+{
+	VACUUM_ARRAY = 0,
+	VACUUM_INTSET,
+	VACUUM_ARRAY_MINMAX
+};
+
 /*
  * Flags for amparallelvacuumoptions to control the participation of bulkdelete
  * and vacuumcleanup in parallel vacuum.
@@ -243,6 +250,7 @@ extern pg_atomic_uint32 *VacuumSharedCostBalance;
 extern pg_atomic_uint32 *VacuumActiveNWorkers;
 extern int	VacuumCostBalanceLocal;
 
+extern int xx_vacuum;
 
 /* in commands/vacuum.c */
 extern void ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel);

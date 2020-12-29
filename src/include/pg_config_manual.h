@@ -6,8 +6,15 @@
  * for developers.  If you edit any of these, be sure to do a *full*
  * rebuild (and an initdb if noted).
  *
+ * You can define these by editing pg_config_manual.h but it's usually
+ * sufficient to pass CFLAGS to configure, e.g.
+ *
+ *     ./configure --enable-debug --enable-cassert CFLAGS="-DUSE_VALGRIND"
+ *
+ * The flags are persisted in Makefile.global so they will be correctly
+ * applied to extensions, including those built by PGXS.
+ *
  * Portions Copyright (c) 1996-2020, PostgreSQL Global Development Group
- * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/pg_config_manual.h
  *------------------------------------------------------------------------
@@ -280,7 +287,8 @@
  * percentage points even when not run under Valgrind.
  *
  * You should normally use MEMORY_CONTEXT_CHECKING with USE_VALGRIND;
- * instrumentation of repalloc() is inferior without it.
+ * instrumentation of repalloc() is inferior without it. So it's defined
+ * automatically for USE_VALGRIND builds.
  */
 /* #define USE_VALGRIND */
 
@@ -308,6 +316,62 @@
  * memory.  Caution: this is horrendously expensive.
  */
 /* #define RANDOMIZE_ALLOCATED_MEMORY */
+
+/*
+ * For cache invalidation debugging purposes define CLOBBER_CACHE_ENABLED to
+ * enable use of the debug_clobber_cache_depth GUC to aggressively flush
+ * syscache/relcache entries whenever it's possible to deliver invalidations.
+ * See AcceptInvalidationMessages() in src/backend/utils/cache/inval.c for
+ * details.
+ *
+ * USE_ASSERT_CHECKING builds default to enabling the use of
+ * debug_clobber_cache_depth but set it to 0 by default unless overridden by
+ * DEFAULT_CLOBBER_CACHE_DEPTH or the backwards-compatibility macros defined
+ * below.
+ *
+ * It's possible to use CLOBBER_CACHE_ENABLED without a cassert build and the
+ * implied CLOBBER_FREED_MEMORY and MEMORY_CONTEXT_CHECKING options but it's
+ * unlikely to be as effective at identifying problems. Just use an assert
+ * build.
+ */
+/* #define CLOBBER_CACHE_ENABLED */
+
+#if defined(USE_ASSERT_CHECKING) && !defined(CLOBBER_CACHE_ENABLED)
+#define CLOBBER_CACHE_ENABLED
+#endif
+
+/*
+ * Backwards compatibility for the older compile-time-only
+ * cache clobber macros.
+ */
+#if defined(CLOBBER_CACHE_RECURSIVELY) && !defined(CLOBBER_CACHE_ALWAYS)
+#define CLOBBER_CACHE_ALWAYS
+#endif
+#if defined(CLOBBER_CACHE_ALWAYS) && !defined(CLOBBER_CACHE_ENABLED)
+#define CLOBBER_CACHE_ENABLED
+#endif
+#if defined(CLOBBER_CACHE_RECURSIVELY) && !defined(DEFAULT_CLOBBER_CACHE_DEPTH)
+#define DEFAULT_CLOBBER_CACHE_DEPTH 3
+#endif
+#if defined(CLOBBER_CACHE_ALWAYS) && !defined(DEFAULT_CLOBBER_CACHE_DEPTH)
+#define DEFAULT_CLOBBER_CACHE_DEPTH 1
+#endif
+#ifndef DEFAULT_CLOBBER_CACHE_DEPTH
+#define DEFAULT_CLOBBER_CACHE_DEPTH 0
+#endif
+
+/*
+ * Recover memory used for relcache entries when invalidated. See
+ * RelationBuildDescr in src/backend/utils/cache/relcache.c .
+ *
+ * This is active automatically for clobber cache builds when clobbering is
+ * active, but can be overridden here by explicitly defining
+ * RECOVER_RELATION_BUILD_MEMORY. Define to 1 to always free relation cache
+ * memory even when clobber is off, or to 0 to never free relation cache memory
+ * even when clobbering is on.
+ */
+/* #define RECOVER_RELATION_BUILD_MEMORY 0 */ /* Force disable */
+/* #define RECOVER_RELATION_BUILD_MEMORY 1 */ /* Force enable */
 
 /*
  * Define this to force all parse and plan trees to be passed through

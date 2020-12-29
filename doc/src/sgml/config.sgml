@@ -10441,6 +10441,40 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-debug-clobber-cache-depth" xreflabel="debug_clobber_cache_depth">
+      <term><varname>debug_clobber_cache_depth</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>debug_cobber_cache_depth</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This advanced developer setting for cache invalidation debugging is not
+        supported in production PostgreSQL builds. Its value will always be
+        <literal>0</literal> on production builds and attempts to set it will
+        raise an error.
+       </para>
+       <para>
+        It is supported but off by default (0) on assert-enabled builds
+        (<xref linkend="guc-debug-assertions"/>) or when <symbol>CLOBBER_CACHE_ENABLED</symbol>
+        was defined at compile time.
+       </para>
+       <para>
+        When set to 1, each cache lookup for a PostgreSQL system catalog entry
+        is invalidated at the first possible opportunity, irrespective of
+        whether anything that would render it invalid really occurred. Caching
+        of PostgreSQL system catalogs is effectively disabled as a result, so
+        the server will run extremely slowly. This option can be very helful when
+        trying to trigger hard-to-reproduce bugs involving concurrency and catalog
+        changes but is otherwise rarely needed.
+       </para>
+       <para>
+        See the source code files <filename>inval.c</filename> and
+        <filename>pg_config_manual.h</filename> for details.
+       </para>
+      </listitem>
+     </varlistentry>
+
     </variablelist>
   </sect1>
   <sect1 id="runtime-config-short">

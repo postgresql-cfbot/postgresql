@@ -91,6 +91,25 @@ make MAX_CONNECTIONS=10 check
 </screen>
     runs no more than ten tests concurrently.
    </para>
+
+   <para>
+    Custom server settings to use when running a regression test suite may
+    be set by supplying a pre-written <filename>postgresql.conf</filename>:
+<screen>
+# Using a config file:
+echo 'log_checkpoints = on' > test_postgresql.conf
+echo 'work_mem = 50MB' >> test_postgresql.conf
+make EXTRA_REGRESS_OPTS="--temp-config=test_postgresql.conf" check
+</screen>
+    or by setting them in the <varname>PGOPTIONS</varname>
+    environment variable:
+<screen>
+PGOPTIONS="-c log_checkpoints=on -c work_mem=50MB" make check
+</screen>
+    This can be useful to enable additional logging, adjust resource limits,
+    or enable extra runtime checks like <xref linkend="guc-debug-clobber-cache-depth"/>.
+   </para>
+
   </sect2>
 
   <sect2>

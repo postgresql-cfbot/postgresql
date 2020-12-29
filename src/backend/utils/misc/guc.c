@@ -99,6 +99,7 @@
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 #include "utils/tzparser.h"
+#include "utils/inval.h"
 #include "utils/varlena.h"
 #include "utils/xml.h"
 
@@ -225,6 +226,7 @@ static bool check_recovery_target_lsn(char **newval, void **extra, GucSource sou
 static void assign_recovery_target_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
+static bool check_debug_clobber_cache_depth(int *newval, void **extra, GucSource source);
 
 /* Private functions in guc-file.l that need to be called from guc.c */
 static ConfigVariable *ProcessConfigFileInternal(GucContext context,
@@ -3387,6 +3389,17 @@ static struct config_int ConfigureNamesInt[] =
 		&huge_page_size,
 		0, 0, INT_MAX,
 		check_huge_page_size, NULL, NULL
+	},
+
+	{
+		{"debug_clobber_cache_depth", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Auto-flush catalog caches for debugging purposes."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&debug_clobber_cache_depth,
+		DEFAULT_CLOBBER_CACHE_DEPTH, 0, 5,
+		check_debug_clobber_cache_depth, NULL, NULL
 	},
 
 	/* End-of-list marker */
@@ -12122,6 +12135,20 @@ check_default_with_oids(bool *newval, void **extra, GucSource source)
 		return false;
 	}
 
+	return true;
+}
+
+static bool
+check_debug_clobber_cache_depth(int *newval, void **extra, GucSource source)
+{
+#ifndef CLOBBER_CACHE_ENABLED
+	if (*newval)
+	{
+		GUC_check_errcode(ERRCODE_FEATURE_NOT_SUPPORTED);
+		GUC_check_errmsg("debug_clobber_cache_depth support was not enabled at compile time");
+		return false;
+	}
+#endif
 	return true;
 }
 

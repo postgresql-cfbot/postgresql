@@ -419,8 +419,8 @@ without a backend's cached page also being detected as invalidated, but
 only when we happen to recycle a block that once again gets recycled as the
 rightmost leaf page.
 
-On-the-Fly Deletion Of Index Tuples
------------------------------------
+On-the-Fly deletion of LP_DEAD-bit-set index tuples
+---------------------------------------------------
 
 If a process visits a heap tuple and finds that it's dead and removable
 (ie, dead to all open transactions, not only that process), then we can
@@ -439,19 +439,26 @@ from the index immediately; since index scans only stop "between" pages,
 no scan can lose its place from such a deletion.  We separate the steps
 because we allow LP_DEAD to be set with only a share lock (it's exactly
 like a hint bit for a heap tuple), but physically removing tuples requires
-exclusive lock.  In the current code we try to remove LP_DEAD tuples when
-we are otherwise faced with having to split a page to do an insertion (and
-hence have exclusive lock on it already).  Deduplication can also prevent
-a page split, but removing LP_DEAD tuples is the preferred approach.
-(Note that posting list tuples can only have their LP_DEAD bit set when
-every table TID within the posting list is known dead.)
+exclusive lock.  Also, delaying the deletion often allows us to pick up
+extra index tuples that weren't initially safe for index scans to mark
+LP_DEAD.  Live index tuples that are close to LP_DEAD-marked tuples in
+time and space are usually highly likely to become dead-to-all shortly.
+This makes workloads that greatly benefit from the LP_DEAD optimization
+resilient against intermittent disruption from long running transactions
+that hold open an MVCC snapshot (compared to the behavior prior to
+PostgreSQL 14, the version that taught the LP_DEAD deletion process to
+check if nearby index tuples are safe to delete in passing).
 
-This leaves the index in a state where it has no entry for a dead tuple
-that still exists in the heap.  This is not a problem for the current
-implementation of VACUUM, but it could be a problem for anything that
-explicitly tries to find index entries for dead tuples.  (However, the
-same situation is created by REINDEX, since it doesn't enter dead
-tuples into the index.)
+We only try to delete LP_DEAD tuples (and nearby tuples) when we are
+otherwise faced with having to split a page to do an insertion (and hence
+have exclusive lock on it already).  Deduplication and bottom-up index
+deletion can also prevent a page split, but removing LP_DEAD tuples is
+always the preferred approach.  (Note that posting list tuples can only
+have their LP_DEAD bit set when every table TID within the posting list is
+known dead.  This isn't much of a problem because LP_DEAD deletion can
+often still do granular deletion of TIDs from a posting list.  This will
+happen when the posting list tuple's TIDs point to a table block that some
+LP_DEAD-marked index tuple happens to point to.)
 
 It's sufficient to have an exclusive lock on the index page, not a
 super-exclusive lock, to do deletion of LP_DEAD items.  It might seem
@@ -468,6 +475,87 @@ drops its pin in the meantime.  It must conservatively also remember the
 LSN of the page, and only act to set LP_DEAD bits when the LSN has not
 changed at all. (Avoiding dropping the pin entirely also makes it safe, of
 course.)
+
+Bottom-Up deletion
+------------------
+
+We attempt to delete whatever duplicates happen to be present on the page
+when the duplicates are suspected to be caused by version churn from
+successive UPDATEs.  This only happens when we receive an executor hint
+indicating that optimizations like heapam's HOT have not worked out for
+the index -- the incoming tuple must be a logically unchanged duplicate
+which is needed for MVCC purposes, suggesting that that might well be the
+dominant source of new index tuples on the leaf page in question.  (Also,
+bottom-up deletion is triggered within unique indexes in cases with
+continual INSERT and DELETE related churn, since that is easy to detect
+without any external hint.)
+
+On-the-fly deletion of LP_DEAD-bit-set items (which can include deletion
+of other close by index tuples) will already have failed to prevent a page
+split when a bottom-up deletion pass takes place (often because no LP_DEAD
+bits were ever set on the page).  The two mechanisms have closely related
+implementations.  The same WAL records are used for each operation, and
+the same tableam infrastructure is used to determine what TIDs/tuples are
+actually safe to delete.  The implementations only differ in how they pick
+TIDs to consider for deletion, and whether or not the tableam will give up
+before accessing all table blocks (bottom-up deletion lives with the
+uncertainty of its success by keeping the cost of failure low).  Even
+still, the two mechanisms are clearly distinct at the conceptual level.
+
+Bottom-up index deletion is driven entirely by heuristics (whereas
+on-the-fly deletion is guaranteed to delete at least those index tuples
+that are already LP_DEAD marked).  We have no certainty that we'll find
+even one index tuple to delete.  That's why we access as few tableam
+blocks as possible, and only commit to accessing the next table block in
+line when a positive outcome for the operation as a whole still looks
+likely.  This means that the tableam needs to have a fairly good idea of
+how much space it has freed on the leaf page, to keep the costs and
+benefits in balance per operation (and even across successive operations
+affecting the same leaf page).
+
+Bottom-up index deletion can be thought of as a backstop mechanism against
+unnecessary version-driven page splits.  It is based in part on an idea
+from generational garbage collection: the "generational hypothesis".  This
+is the empirical observation that "most objects die young".  Within
+nbtree, new index tuples often quickly appear in the same place, and then
+quickly become garbage.  There can be intense concentrations of garbage in
+relatively few leaf pages (or there would be without the intervention of
+bottom-up deletion).  This occurs with workloads that consist of skewed
+UPDATEs.  There is little to lose and much to gain by spending a few
+cycles to become reasonably sure that a page split is truly necessary
+(when it seems like there is some chance of that) -- page splits are
+expensive, and practically irreversible.
+
+We expect to find a reasonably large number of tuples that are safe to
+delete within each bottom-up pass.  If we don't then we won't need to
+consider the question of bottom-up deletion for the same leaf page for
+quite a while (usually because the page splits, which resolves the
+situation, at least for a while).  We expect to perform regular bottom-up
+deletion operations against pages that are at constant risk of unnecessary
+page splits caused only by version churn.  When the mechanism works well
+we'll constantly be "on the verge" of having version-churn-driven page
+splits, but never actually have even one.
+
+Our duplicate heuristics work well despite being fairly simple.
+Unnecessary page splits only occur when there are truly pathological
+levels of version churn (in theory a small amount of version churn could
+make a page split occur earlier than strictly necessary, but that's pretty
+harmless).  We don't have to understand the underlying workload; we only
+have to understand the general nature of the pathology that we target.
+Version churn is easy to spot when it is truly pathological.  Affected
+leaf pages are homogeneous.
+
+If version churn hasn't become a real problem then we don't actually want
+to do anything about it anyway (we should be lazy about cleaning it up, at
+least).  All that really matters is that garbage does not become
+concentrated in any one part of the key space (the number of physical
+versions accessed by queries to read any given logical row should remain
+low over time and across all parts of the key space).  Remaining garbage
+tuples can be thought of as "floating garbage" that VACUUM will eventually
+get around to removing (VACUUM can be thought of as a top-down mechanism
+that bottom-up garbage collection complements).  The absolute number of
+garbage tuples (and even the proportion of all index tuples that are
+garbage) is generally much less important.
 
 WAL Considerations
 ------------------
@@ -767,9 +855,10 @@ into a single physical tuple with a posting list (a simple array of heap
 TIDs with the standard item pointer format).  Deduplication is always
 applied lazily, at the point where it would otherwise be necessary to
 perform a page split.  It occurs only when LP_DEAD items have been
-removed, as our last line of defense against splitting a leaf page.  We
-can set the LP_DEAD bit with posting list tuples, though only when all
-TIDs are known dead.
+removed, as our last line of defense against splitting a leaf page
+(bottom-up index deletion may be attempted first, as our second last line
+of defense).  We can set the LP_DEAD bit with posting list tuples, though
+only when all TIDs are known dead.
 
 Our lazy approach to deduplication allows the page space accounting used
 during page splits to have absolutely minimal special case logic for
@@ -825,6 +914,16 @@ okay because our ultimate goal is to delay leaf page splits _indefinitely_
 delay a split that is probably inevitable anyway.  This allows us to avoid
 the overhead of attempting to deduplicate with unique indexes that always
 have few or no duplicates.
+
+Note: Avoiding "unnecessary" page splits driven by version churn is also
+the goal of bottom-up index deletion, which was added to PostgreSQL 14.
+Bottom-up index deletion is now the preferred way to deal with this
+problem (with all kinds of indexes, though especially with unique
+indexes).  Still, deduplication can sometimes augment bottom-up index
+deletion.  When deletion cannot free tuples (due to an old snapshot
+holding up cleanup), falling back on deduplication provides additional
+capacity.  Delaying the page split by deduplicating can allow a future
+bottom-up deletion pass of the same page to succeed.
 
 Posting list splits
 -------------------

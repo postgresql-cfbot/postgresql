@@ -207,9 +207,9 @@ table_beginscan_parallel(Relation relation, ParallelTableScanDesc parallel_scan)
 /*
  * To perform that check simply start an index scan, create the necessary
  * slot, do the heap lookup, and shut everything down again. This could be
- * optimized, but is unlikely to matter from a performance POV. If there
- * frequently are live index pointers also matching a unique index key, the
- * CPU overhead of this routine is unlikely to matter.
+ * optimized, but is unlikely to matter from a performance POV. Note that
+ * table_compute_delete_for_tuples() is optimized in this way, since it is
+ * designed as a batch operation.
  *
  * Note that *tid may be modified when we return true if the AM supports
  * storing multiple row versions reachable via a single index entry (like

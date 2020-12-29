@@ -19,6 +19,8 @@
 #include "miscadmin.h"
 #include "utils/rel.h"
 
+static void _bt_bottomup_finish_pending(Page page, TM_IndexDeleteOp *delstate,
+										BTDedupState state);
 static bool _bt_do_singleval(Relation rel, Page page, BTDedupState state,
 							 OffsetNumber minoff, IndexTuple newitem);
 static void _bt_singleval_fillfactor(Page page, BTDedupState state,
@@ -268,6 +270,161 @@ _bt_dedup_pass(Relation rel, Buffer buf, Relation heapRel, IndexTuple newitem,
 }
 
 /*
+ * Perform bottom-up index deletion pass.
+ *
+ * See if duplicate index tuples are eligible to be deleted by accessing
+ * visibility information from the tableam.  Give up if we have to access more
+ * than a few tableam blocks.  Caller tries to avoid "unnecessary" page splits
+ * (splits driven only by version churn) by calling here when it looks like
+ * that's about to happen.  It's normal for there to be a lot of calls here
+ * for pages that are constantly at risk of an unnecessary split.
+ *
+ * Each failure to delete a duplicate/promising tuple here is a kind of
+ * learning experience.  It results in caller falling back on splitting the
+ * page (or on a deduplication pass), discouraging future calls back here for
+ * the same key space range covered by a failed page (or at least discouraging
+ * processing the original duplicates in case where caller falls back on a
+ * successful deduplication pass).  We converge on the most effective strategy
+ * for each page in the index over time.
+ *
+ * Returns true on success, in which case caller can assume page split will be
+ * avoided for a reasonable amount of time.  Returns false when caller should
+ * deduplicate the page (if possible at all).
+ *
+ * Note: occasionally a true return value does not actually indicate that any
+ * items could be deleted.  It might just indicate that caller should not go
+ * on to perform a deduplication pass.  Caller is not expected to care about
+ * the difference.
+ *
+ * Note: Caller should have already deleted all existing items with their
+ * LP_DEAD bits set.
+ */
+bool
+_bt_bottomup_pass(Relation rel, Buffer buf, Relation heapRel, Size newitemsz)
+{
+	OffsetNumber offnum,
+				minoff,
+				maxoff;
+	Page		page = BufferGetPage(buf);
+	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	BTDedupState state;
+	TM_IndexDeleteOp delstate;
+	bool		neverdedup;
+	int			nkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
+
+	/* Passed-in newitemsz is MAXALIGNED but does not include line pointer */
+	newitemsz += sizeof(ItemIdData);
+
+	/* Initialize deduplication state */
+	state = (BTDedupState) palloc(sizeof(BTDedupStateData));
+	state->deduplicate = true;
+	state->nmaxitems = 0;
+	state->maxpostingsize = BLCKSZ; /* "posting list size" not a concern */
+	state->base = NULL;
+	state->baseoff = InvalidOffsetNumber;
+	state->basetupsize = 0;
+	state->htids = palloc(state->maxpostingsize);
+	state->nhtids = 0;
+	state->nitems = 0;
+	state->phystupsize = 0;
+	state->nintervals = 0;
+
+	/*
+	 * Initialize tableam state that describes bottom-up index deletion
+	 * operation.
+	 *
+	 * We will ask tableam to free 1/16 of BLCKSZ.  We don't usually expect to
+	 * have to free much space each call here in order to avoid page splits.
+	 * We don't want to be too aggressive since in general the tableam will
+	 * have to access more table blocks when we ask for more free space.  In
+	 * general we try to be conservative about what we ask for (though not too
+	 * conservative), while leaving it up to the tableam to ramp up the number
+	 * of tableam blocks accessed when conditions in the table structure
+	 * happen to favor it.
+	 *
+	 * We expect to end up back here again and again for any leaf page that is
+	 * more or less constantly at risk of unnecessary page splits -- in fact
+	 * that's what happens when bottom-up deletion really helps.  We must
+	 * avoid thrashing when this becomes very frequent at the level of an
+	 * individual page.  Our free space target helps with that.  It balances
+	 * the costs and benefits over time and across related bottom-up deletion
+	 * passes.
+	 */
+	delstate.bottomup = true;	/* Only visit promising table blocks */
+	delstate.bottomupfreespace = Max(BLCKSZ / 16, newitemsz);
+
+	/* Now mutable state */
+	delstate.ndeltids = 0;
+	delstate.deltids = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexDelete));
+	delstate.status = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexStatus));
+
+	minoff = P_FIRSTDATAKEY(opaque);
+	maxoff = PageGetMaxOffsetNumber(page);
+	for (offnum = minoff;
+		 offnum <= maxoff;
+		 offnum = OffsetNumberNext(offnum))
+	{
+		ItemId		itemid = PageGetItemId(page, offnum);
+		IndexTuple	itup = (IndexTuple) PageGetItem(page, itemid);
+
+		Assert(!ItemIdIsDead(itemid));
+
+		if (offnum == minoff)
+		{
+			_bt_dedup_start_pending(state, itup, offnum);
+		}
+		else if (_bt_keep_natts_fast(rel, state->base, itup) > nkeyatts &&
+				 _bt_dedup_save_htid(state, itup))
+		{
+			/* Tuple is equal; just added its TIDs to pending interval */
+		}
+		else
+		{
+			/* Finalize interval -- move its TIDs to delete state */
+			_bt_bottomup_finish_pending(page, &delstate, state);
+
+			/* itup starts new pending interval */
+			_bt_dedup_start_pending(state, itup, offnum);
+		}
+	}
+	/* Finalize final interval -- move its TIDs to delete state */
+	_bt_bottomup_finish_pending(page, &delstate, state);
+
+	/*
+	 * The tableam uses its own heuristics.  They can influence the table
+	 * blocks that it visits, especially when promising tuples are not
+	 * concentrated in just a few table blocks.  This is why we don't give up
+	 * now in the event of having few (or even zero) promising tuples for the
+	 * tableam.
+	 *
+	 * When there are no duplicates on the page at all we tell our caller to
+	 * not attempt deduplication (by "reporting success").  Having zero
+	 * duplicates/promising tuples should be rare, but when it happens we
+	 * might as well save a few cycles.
+	 */
+	neverdedup = false;
+	if (state->nintervals == 0)
+		neverdedup = true;
+
+	/* Done with dedup state */
+	pfree(state->htids);
+	pfree(state);
+
+	/* Confirm which TIDs are dead-to-all, then physically delete */
+	_bt_delitems_delete_check(rel, buf, heapRel, &delstate);
+
+	/* Done with deletion state */
+	pfree(delstate.deltids);
+	pfree(delstate.status);
+
+	if (neverdedup)
+		return true;
+
+	/* Don't dedup when we won't end up back here any time soon anyway */
+	return PageGetExactFreeSpace(page) >= Max(BLCKSZ / 24, newitemsz);
+}
+
+/*
  * Create a new pending posting list tuple based on caller's base tuple.
  *
  * Every tuple processed by deduplication either becomes the base tuple for a
@@ -453,6 +610,165 @@ _bt_dedup_finish_pending(Page newpage, BTDedupState state)
 }
 
 /*
+ * Finalize interval during bottom-up index deletion.
+ *
+ * Adds TIDs to delstate for later processing.  Also determines which TIDs are
+ * to be marked promising, based on heuristics.
+ */
+static void
+_bt_bottomup_finish_pending(Page page, TM_IndexDeleteOp *delstate,
+							BTDedupState state)
+{
+	bool		dupinterval = (state->nitems > 1);
+
+	Assert(state->nitems > 0);
+	Assert(state->nitems <= state->nhtids);
+	Assert(state->intervals[state->nintervals].baseoff == state->baseoff);
+
+	/*
+	 * All TIDs from all tuples are at least recording in state.  Tuples are
+	 * marked promising when they're duplicates (i.e. when they appear in an
+	 * interval with more than one item, as when we expect create a new
+	 * posting list tuple in the deduplication case).
+	 *
+	 * It's easy to see what this means in the plain non-pivot tuple case:
+	 * TIDs from duplicate plain tuples are promising.  Posting list tuples
+	 * are more subtle.  We ought to do something with posting list tuples,
+	 * though plain tuples tend to be more promising targets.  (Plain tuples
+	 * are the most likely to be dead/deletable because they suggest version
+	 * churn.  And they allow us to free more space when we actually succeed).
+	 */
+	for (int i = 0; i < state->nitems; i++)
+	{
+		OffsetNumber offnum = state->baseoff + i;
+		ItemId		itemid = PageGetItemId(page, offnum);
+		IndexTuple	itup = (IndexTuple) PageGetItem(page, itemid);
+		TM_IndexDelete *cdeltid;
+		TM_IndexStatus *dstatus;
+
+		cdeltid = &delstate->deltids[delstate->ndeltids];
+		dstatus = &delstate->status[delstate->ndeltids];
+
+		if (!BTreeTupleIsPosting(itup))
+		{
+			/* Easy case: A plain non-pivot tuple's TID */
+			cdeltid->tid = itup->t_tid;
+			cdeltid->id = delstate->ndeltids;
+			dstatus->idxoffnum = offnum;
+			dstatus->ispromising = dupinterval;
+			dstatus->deleteitup = false;	/* for now */
+			dstatus->tupsize =
+				ItemIdGetLength(itemid) + sizeof(ItemIdData);
+			delstate->ndeltids++;
+		}
+		else
+		{
+			/*
+			 * Harder case: A posting list tuple's TIDs (multiple TIDs).
+			 *
+			 * Only a single TID from a posting list tuple may be promising,
+			 * and only when it appears in a duplicate tuple (just like plain
+			 * tuple case).  In general there is a good chance that the
+			 * posting list tuple relates to multiple logical rows, rather
+			 * than multiple versions of just one logical row.  (It can only
+			 * be the latter case when a previous bottom-up deletion pass
+			 * failed, necessitating a deduplication pass, which isn't all
+			 * that common.)
+			 *
+			 * There is a pretty good chance that at least one of the logical
+			 * rows from the posting list was updated, and so had a successor
+			 * version (about as good a chance as it is in the regular tuple
+			 * case, at least).  We should at least try to follow the regular
+			 * tuple case while making the conservative assumption that there
+			 * can only be one affected logical row per posting list tuple. We
+			 * do that by picking one TID when it appears to be from the
+			 * predominant tableam block in the posting list (if any one
+			 * tableam block predominates).  The approach we take is to either
+			 * choose the first or last TID in the posting list (if any at
+			 * all).  We go with whichever one is on the same tableam block at
+			 * the middle tuple (and only the first TID when both the first
+			 * and last TIDs relate to the same tableam block -- we could
+			 * easily be too aggressive here).
+			 *
+			 * If it turns out that there are multiple old versions of a
+			 * single logical table row, we still have a pretty good chance of
+			 * being able to delete them this way.  We don't want to give too
+			 * strong a signal to the tableam.  But we should always try to
+			 * give some useful hints.  Even cases with considerable
+			 * uncertainty can consistently avoid an unnecessary page split,
+			 * in part because the tableam will have tricks of its own for
+			 * figuring out where to look in marginal cases.
+			 */
+			int			nitem = BTreeTupleGetNPosting(itup);
+			bool		firstpromise = false;
+			bool		lastpromise = false;
+
+			Assert(_bt_posting_valid(itup));
+
+			if (dupinterval)
+			{
+				/* Figure out if there really should be promising TIDs */
+				BlockNumber minblocklist,
+							midblocklist,
+							maxblocklist;
+				ItemPointer mintid,
+							midtid,
+							maxtid;
+
+				mintid = BTreeTupleGetHeapTID(itup);
+				midtid = BTreeTupleGetPostingN(itup, nitem / 2);
+				maxtid = BTreeTupleGetMaxHeapTID(itup);
+				minblocklist = ItemPointerGetBlockNumber(mintid);
+				midblocklist = ItemPointerGetBlockNumber(midtid);
+				maxblocklist = ItemPointerGetBlockNumber(maxtid);
+
+				firstpromise = (minblocklist == midblocklist);
+				lastpromise = (!firstpromise && midblocklist == maxblocklist);
+			}
+
+			/* No more than one TID from itup can be promising */
+			Assert(!(firstpromise && lastpromise));
+
+			for (int p = 0; p < nitem; p++)
+			{
+				ItemPointer htid = BTreeTupleGetPostingN(itup, p);
+
+				cdeltid->tid = *htid;
+				cdeltid->id = delstate->ndeltids;
+				dstatus->idxoffnum = offnum;
+				dstatus->ispromising = false;
+
+				if ((firstpromise && p == 0) ||
+					(lastpromise && p == nitem - 1))
+					dstatus->ispromising = true;
+
+				dstatus->deleteitup = false;	/* for now */
+				dstatus->tupsize = sizeof(ItemPointerData) + 1;
+				delstate->ndeltids++;
+
+				cdeltid++;
+				dstatus++;
+			}
+		}
+	}
+
+	if (dupinterval)
+	{
+		/*
+		 * Maintain interval state for consistency with true deduplication
+		 * case
+		 */
+		state->intervals[state->nintervals].nitems = state->nitems;
+		state->nintervals++;
+	}
+
+	/* Reset state for next interval */
+	state->nhtids = 0;
+	state->nitems = 0;
+	state->phystupsize = 0;
+}
+
+/*
  * Determine if page non-pivot tuples (data items) are all duplicates of the
  * same value -- if they are, deduplication's "single value" strategy should
  * be applied.  The general goal of this strategy is to ensure that
@@ -622,8 +938,8 @@ _bt_form_posting(IndexTuple base, ItemPointer htids, int nhtids)
  * Generate a replacement tuple by "updating" a posting list tuple so that it
  * no longer has TIDs that need to be deleted.
  *
- * Used by VACUUM.  Caller's vacposting argument points to the existing
- * posting list tuple to be updated.
+ * Used by both VACUUM and index deletion.  Caller's vacposting argument
+ * points to the existing posting list tuple to be updated.
  *
  * On return, caller's vacposting argument will point to final "updated"
  * tuple, which will be palloc()'d in caller's memory context.

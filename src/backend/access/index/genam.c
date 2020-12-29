@@ -278,9 +278,16 @@ BuildIndexValueDescription(Relation indexRelation,
  * Get the latestRemovedXid from the table entries pointed at by the index
  * tuples being deleted.
  *
- * Note: index access methods that don't consistently use the standard
- * IndexTuple + heap TID item pointer representation will need to provide
- * their own version of this function.
+ * This is a table_compute_delete_for_tuples() shim for index access methods
+ * that have simple needs.  If there isn't a natural opportunity to ask
+ * tableam about "extra" TIDs, simply call here with dead-to-all tuple offset
+ * numbers.
+ *
+ * It's okay to skip calling here with indexes/tables that don't need a
+ * latestRemovedXid value.
+ *
+ * Note: We assume that index access method uses standard IndexTuple + table
+ * TID item pointer representation.
  */
 TransactionId
 index_compute_xid_horizon_for_tuples(Relation irel,
@@ -289,11 +296,16 @@ index_compute_xid_horizon_for_tuples(Relation irel,
 									 OffsetNumber *itemnos,
 									 int nitems)
 {
-	ItemPointerData *ttids =
-	(ItemPointerData *) palloc(sizeof(ItemPointerData) * nitems);
+	TM_IndexDeleteOp delstate;
 	TransactionId latestRemovedXid = InvalidTransactionId;
 	Page		ipage = BufferGetPage(ibuf);
 	IndexTuple	itup;
+
+	delstate.bottomup = false;		/* Visit all LP_DEAD-related blocks */
+	delstate.bottomupfreespace = 0;	/* Visiting all table blocks anyway */
+	delstate.ndeltids = 0;
+	delstate.deltids = palloc(nitems * sizeof(TM_IndexDelete));
+	delstate.status = palloc(nitems * sizeof(TM_IndexStatus));
 
 	/* identify what the index tuples about to be deleted point to */
 	for (int i = 0; i < nitems; i++)
@@ -303,14 +315,25 @@ index_compute_xid_horizon_for_tuples(Relation irel,
 		iitemid = PageGetItemId(ipage, itemnos[i]);
 		itup = (IndexTuple) PageGetItem(ipage, iitemid);
 
-		ItemPointerCopy(&itup->t_tid, &ttids[i]);
+		Assert(ItemIdIsDead(iitemid));
+
+		ItemPointerCopy(&itup->t_tid, &delstate.deltids[i].tid);
+		delstate.deltids[i].id = i;
+		delstate.status[i].idxoffnum = InvalidOffsetNumber;
+		delstate.status[i].tupsize = 0; /* irrelevant */
+		delstate.status[i].ispromising = false; /* irrelevant */
+		delstate.status[i].deleteitup = true; /* LP_DEAD-marked */
+		delstate.ndeltids++;
 	}
 
 	/* determine the actual xid horizon */
-	latestRemovedXid =
-		table_compute_xid_horizon_for_tuples(hrel, ttids, nitems);
+	latestRemovedXid = table_compute_delete_for_tuples(hrel, &delstate);
 
-	pfree(ttids);
+	/* assert tableam agrees that all items are deletable */
+	Assert(delstate.ndeltids == nitems);
+
+	pfree(delstate.deltids);
+	pfree(delstate.status);
 
 	return latestRemovedXid;
 }

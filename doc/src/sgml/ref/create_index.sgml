@@ -435,6 +435,22 @@ CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class=
     </listitem>
    </varlistentry>
 
+   <varlistentry id="index-reloption-delete-items" xreflabel="delete_items">
+    <term><literal>delete_items</literal> (<type>boolean</type>)
+     <indexterm>
+      <primary><varname>delete_items</varname> storage parameter</primary>
+     </indexterm>
+    </term>
+    <listitem>
+    <para>
+     Controls usage of the B-tree bottom-up index deletion technique
+     described in <xref linkend="btree-deletion"/>.  Set to
+     <literal>ON</literal> or <literal>OFF</literal> to enable or
+     disable the optimization.  The default is <literal>ON</literal>.
+    </para>
+    </listitem>
+   </varlistentry>
+
    <varlistentry id="index-reloption-vacuum-cleanup-index-scale-factor" xreflabel="vacuum_cleanup_index_scale_factor">
     <term><literal>vacuum_cleanup_index_scale_factor</literal> (<type>floating point</type>)
      <indexterm>

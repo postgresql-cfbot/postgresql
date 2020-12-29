@@ -629,6 +629,86 @@ options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns
   </para>
  </sect2>
 
+ <sect2 id="btree-deletion">
+  <title>Bottom-up index deletion</title>
+  <para>
+   B-Tree indexes are not directly aware that under MVCC, there might
+   be multiple extant versions of the same logical table row; to an
+   index, each tuple is an independent object that needs its own index
+   entry.  <quote>Version churn</quote> tuples may sometimes
+   accumulate and adversely affect query latency and throughput.  This
+   typically occurs with <command>UPDATE</command>-heavy workloads
+   where most individual updates cannot apply the
+   <acronym>HOT</acronym> optimization.  Changing the value of only
+   one column covered by one index during an <command>UPDATE</command>
+   <emphasis>always</emphasis> necessitates a new set of index tuples
+   &mdash; one for <emphasis>each and every</emphasis> index on the
+   table.  Note in particular that this includes indexes that were not
+   <quote>logically modified</quote> by the <command>UPDATE</command>.
+   All indexes will need a successor physical index tuple that points
+   to the latest version in the table.  Each new tuple within each
+   index will generally need to coexist with the original
+   <quote>updated</quote> tuple for a short period of time (typically
+   until some time after the <command>UPDATE</command> transaction
+   commits).  This process produces the majority of all garbage index
+   tuples in some scenarios.
+  </para>
+  <para>
+   <firstterm>Bottom-up index deletion</firstterm> targets this
+   particular variety of index tuple garbage.  It effectively enforces
+   a soft limit on how many versions there can be in each index for
+   any given logical row.  It is generally very effective provided
+   there are no long lived snapshots that hold back cleanup.
+   Bottom-up index deletion complements the <quote>top-down</quote>
+   index cleanup performed by <command>VACUUM</command>.  It targets
+   leaf pages that are disproportionately affected by the accumulation
+   of garbage index tuples, while leaving it up to
+   <command>VACUUM</command> to perform infrequent clean sweeps of all
+   indexes.  A bottom-up deletion pass takes place when a leaf page
+   does not have enough free space to fit an incoming tuple, though
+   only when the incoming tuple originates from an
+   <command>UPDATE</command> that did not logically change any of the
+   columns covered by the index in question.
+  </para>
+  <para>
+   The deletion process must closely cooperate with the table access
+   method.  Despite the lack of convenient access to
+   <emphasis>authoritative</emphasis> information about how index
+   tuples represent versions or are related to each other, it is
+   possible for the B-Tree implementation to target garbage index
+   tuples using relatively simple heuristics.  These heuristics decide
+   on which table blocks to visit based on where dead tuples seem most
+   likely to be concentrated.  Some number of table blocks must be
+   accessed to get the required authoritative information, but it
+   isn't necessary to access very many table blocks each time.  Also,
+   each table block access has to actually enable the implementation
+   to delete at least one additional index tuple.  The whole process
+   ends when any single table block access fails to yield any index
+   tuples deletes.
+  </para>
+  <para>
+   The <literal>delete_items</literal> storage parameter can be used
+   to disable bottom-up index deletion within individual indexes.
+   Disabling bottom-up index deletion isn't usually helpful.
+  </para>
+  <note>
+   <para>
+    It's also possible for index tuple deletion to take place
+    following opportunistic setting of <literal>LP_DEAD</literal>
+    status bits.  This avoids a relatively expensive bottom-up
+    deletion pass, which must access table blocks directly.
+   </para>
+   <para>
+    <literal>LP_DEAD</literal> status bits are set when passing index
+    scans happen to notice that an index tuple is dead to every
+    possible MVCC snapshot (not just their own).
+    <literal>LP_DEAD</literal>-set tuples are already known to be safe
+    to delete, so it isn't necessary to access the table blocks
+    directly.
+   </para>
+  </note>
+ </sect2>
+
  <sect2 id="btree-deduplication">
   <title>Deduplication</title>
   <para>
@@ -702,25 +782,16 @@ options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns
    deduplication isn't usually helpful.
   </para>
   <para>
-   B-Tree indexes are not directly aware that under MVCC, there might
-   be multiple extant versions of the same logical table row; to an
-   index, each tuple is an independent object that needs its own index
-   entry.  <quote>Version duplicates</quote> may sometimes accumulate
-   and adversely affect query latency and throughput.  This typically
-   occurs with <command>UPDATE</command>-heavy workloads where most
-   individual updates cannot apply the <acronym>HOT</acronym>
-   optimization (often because at least one indexed column gets
-   modified, necessitating a new set of index tuple versions &mdash;
-   one new tuple for <emphasis>each and every</emphasis> index).  In
-   effect, B-Tree deduplication ameliorates index bloat caused by
-   version churn.  Note that even the tuples from a unique index are
-   not necessarily <emphasis>physically</emphasis> unique when stored
-   on disk due to version churn.  The deduplication optimization is
-   selectively applied within unique indexes.  It targets those pages
-   that appear to have version duplicates.  The high level goal is to
-   give <command>VACUUM</command> more time to run before an
-   <quote>unnecessary</quote> page split caused by version churn can
-   take place.
+   It is sometimes possible for unique indexes (as well as unique
+   constraints) to use deduplication.  This allows leaf pages to
+   temporarily <quote>absorb</quote> extra version churn duplicates.
+   Deduplication in unique indexes augments bottom-up index deletion,
+   especially in cases where a long-running transactions holds a
+   snapshot that blocks garbage collection.  The goal is to buy time
+   for the bottom-up index deletion strategy to become effective
+   again.  Delaying page splits until a single long-running
+   transaction naturally goes away can allow a bottom-up deletion pass
+   to succeed where an earlier deletion pass failed.
   </para>
   <tip>
    <para>

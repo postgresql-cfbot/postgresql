@@ -168,6 +168,16 @@ static relopt_bool boolRelOpts[] =
 		},
 		true
 	},
+	{
+		{
+			"delete_items",
+			"Enables \"bottom-up index deletion\" feature for this btree index",
+			RELOPT_KIND_BTREE,
+			ShareUpdateExclusiveLock	/* since it applies only to later
+										 * inserts */
+		},
+		true
+	},
 	/* list terminator */
 	{{NULL}}
 };

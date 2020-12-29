@@ -128,6 +128,123 @@ typedef struct TM_FailureData
 	bool		traversed;
 } TM_FailureData;
 
+/*
+ * State representing call to table_compute_delete_for_tuples(), which checks
+ * TID status with tableam for index deletion purposes.
+ *
+ * Index am caller provides a TM_IndexDeleteOp, which points to two palloc()'d
+ * arrays.  Each array has one entry per TID that the tableam is asked to
+ * consider (typically these are all of the TIDs from a single index page, so
+ * there could be hundreds or even thousand of entries in arrays).  ndeltids
+ * tracks the current number of entries, and is set by index AM initially.
+ *
+ * The two arrays are conceptually one single variable-sized array.  Two
+ * arrays/structs are used for performance reasons.  (We really need to keep
+ * the TM_IndexDelete struct small so that the tableam can do an initial sort
+ * by TID as quickly as possible.)
+ *
+ * Regular deletion callers and bottom-up deletion callers:
+ *
+ * Most index AM callers specify bottomup = false, and include only known-dead
+ * deltids.  These known-dead entries are marked deleteitup = true directly
+ * (typically these are TIDs from LP_DEAD-marked index tuples).  Callers that
+ * only call table_compute_delete_for_tuples() to get a latestRemovedXid
+ * transaction ID can take this simple approach, and don't need to do anything
+ * with the final array (the call can even be skipped entirely with an
+ * unlogged index).  This usage is all that the previous interface (the old
+ * compute_xid_horizon_for_tuples() routine) ever supported in prior versions
+ * (those before PostgreSQL 14).
+ *
+ * Callers that specify bottomup = true are "bottom-up index deletion"
+ * callers.  The considerations here are somewhat more subtle.  Most of the
+ * complexity of the current interface exists to support bottom-up deletion.
+ *
+ * The final contents of the array are always interesting to bottom-up
+ * callers, because they need to consult it to determine which index tuples
+ * are actually safe to delete.  Entries for a bottom-up caller must always be
+ * initially marked deleteitup = false, leaving it up to the tableam to
+ * determine which entries are safely deletable.  Which index tuples to get
+ * deltids entries from in the first place is up to the index AM, but it's
+ * expected that index AMs take TIDs from version churn index tuple
+ * duplicates.  The index AM should cast a wide net (for example by including
+ * all TIDs on a given index page), and leave it up to the tableam to worry
+ * about the cost of checking transaction status information.  See also: notes
+ * below about "promising" tuples.
+ *
+ * Some regular deletion callers (!bottomup callers) may also have to look at
+ * the final deltids array to decide exactly what to delete.  This happens
+ * with !bottomup callers that speculatively ask table to check extra TIDs in
+ * passing, somewhat like the bottom-up deletion case (though tableam does not
+ * access whole table blocks speculatively here).  The table blocks are blocks
+ * that tableam is expected to visit anyway, so there is no reason to not be
+ * open to the possibility of finding extra deletable entries.  This works by
+ * having !bottomup caller include deltids that are initially marked
+ * deleteitup = false (extra etnries that go along with the usual known
+ * dead-to-all etnries).  It may be possible for the caller to ultimate delete
+ * these extra TIDs, but if it isn't then it's no great loss.
+ *
+ * The convention is that index AM caller takes TIDs whose block number
+ * happens to match any single including deltid that is already known
+ * dead-to-all.  This makes it cheap to check in passing, at least with
+ * heap-style tableams.  (A tableam that wants to opt out can simply ignore
+ * entries marked deleteitup = false.  In general the tableam is entitled to
+ * do nothing at all with any deleteitup = false deltid, based on
+ * tableam-local performance considerations.)
+ *
+ * The index AM can keep track of which index tuple relates to which deltid by
+ * setting idxoffnum (and/or relying on each entry being uniquely identifiable
+ * using tid).  That's how callers that care about the final deltids array
+ * (both bottom-up callers and regular deletion callers that include "extra"
+ * deletions) can relocate the required deltid for each index tuple.  Such a
+ * system must be necessary because a table_compute_delete_for_tuples()
+ * implementation can change the sort order of deltids, and can even reduce
+ * the number of deltids by modifying ndeltids.  Bottom-up callers may even
+ * find that ndeltids is set to 0 for them (which means that they cannot
+ * proceed with any deletions).
+ *
+ * Bottom-up deletion, index tuple space savings, and promising tuples:
+ *
+ * Index AM requests an amount of target free space bottomupfreespace.  They
+ * must also specify the amount of space freed by each deltid by setting
+ * tupsize (this includes line pointer overhead).  This information enables
+ * intelligent managements of costs within the tableam.  The tableam drives
+ * the progress of bottom-up index deletion, and ramps up as needed.  All
+ * !bottomup callers set these to zero, since there isn't any question about
+ * which table blocks will be visited.
+ *
+ * The index AM also provides strong hints about where to look to the tableam
+ * by marking some entries as "promising".  Index AM does this with duplicate
+ * index tuples that are strongly suspected to be old versions left behind by
+ * UPDATEs that did not logically changed any indexed values.  Index AM may
+ * find it helpful to only mark TIDs/entries as promising when they're thought
+ * to have been affected by such an UPDATE in the recent past.  Again, this
+ * isn't useful to !bottomup callers.
+ */
+typedef struct TM_IndexDelete
+{
+	ItemPointerData tid;		/* table TID from index tuple */
+	int16		id;				/* Offset into TM_IndexStatus array */
+} TM_IndexDelete;
+
+typedef struct TM_IndexStatus
+{
+	OffsetNumber idxoffnum;		/* Index am page offset number */
+	int16		tupsize;		/* Space freed in index if tuple deleted */
+	bool		ispromising;	/* Duplicate in index? */
+	bool		deleteitup;		/* Known dead-to-all? */
+} TM_IndexStatus;
+
+typedef struct TM_IndexDeleteOp
+{
+	bool		bottomup;			/* Bottom-up deletion/opportunistic? */
+	int			bottomupfreespace;	/* Space target for tableam */
+
+	/* Mutable state follows */
+	int			ndeltids;		/* Number of deltids/status for op */
+	TM_IndexDelete *deltids;
+	TM_IndexStatus *status;
+} TM_IndexDeleteOp;
+
 /* "options" flag bits for table_tuple_insert */
 /* TABLE_INSERT_SKIP_WAL was 0x0001; RelationNeedsWAL() now governs */
 #define TABLE_INSERT_SKIP_FSM		0x0002
@@ -342,10 +459,9 @@ typedef struct TableAmRoutine
 											 TupleTableSlot *slot,
 											 Snapshot snapshot);
 
-	/* see table_compute_xid_horizon_for_tuples() */
-	TransactionId (*compute_xid_horizon_for_tuples) (Relation rel,
-													 ItemPointerData *items,
-													 int nitems);
+	/* see table_compute_delete_for_tuples() */
+	TransactionId (*compute_delete_for_tuples) (Relation rel,
+												TM_IndexDeleteOp *delstate);
 
 
 	/* ------------------------------------------------------------------------
@@ -1122,16 +1238,21 @@ table_tuple_satisfies_snapshot(Relation rel, TupleTableSlot *slot,
 }
 
 /*
- * Compute the newest xid among the tuples pointed to by items. This is used
- * to compute what snapshots to conflict with when replaying WAL records for
- * page-level index vacuums.
+ * Compute which index tuples are safe to delete, and the newest xid among the
+ * tuples that caller finds it is able to delete.
+ *
+ * Sets deletable tuples in entries from caller's TM_IndexDeleteOp state that
+ * are found to point to dead-to-all tuples in the table.  See the
+ * TM_IndexDeleteOp struct for full details.
+ *
+ * Returns a latestRemovedXid transaction ID that index AM must use to
+ * generate a recovery conflict when required.  This is the newest xid among
+ * the tuples pointed to by deltids TIDs that caller can delete.
  */
 static inline TransactionId
-table_compute_xid_horizon_for_tuples(Relation rel,
-									 ItemPointerData *items,
-									 int nitems)
+table_compute_delete_for_tuples(Relation rel, TM_IndexDeleteOp *delstate)
 {
-	return rel->rd_tableam->compute_xid_horizon_for_tuples(rel, items, nitems);
+	return rel->rd_tableam->compute_delete_for_tuples(rel, delstate);
 }
 
 

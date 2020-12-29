@@ -55,6 +55,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/atomics.h"
+#include "port/pg_bitutils.h"
 #include "storage/bufmgr.h"
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
@@ -102,6 +103,8 @@ static void MultiXactIdWait(MultiXactId multi, MultiXactStatus status, uint16 in
 							int *remaining);
 static bool ConditionalMultiXactIdWait(MultiXactId multi, MultiXactStatus status,
 									   uint16 infomask, Relation rel, int *remaining);
+static void heap_delete_sort(TM_IndexDeleteOp *delstate);
+static int	heap_delete_bottomup_sort_and_shrink(TM_IndexDeleteOp *delstate);
 static XLogRecPtr log_heap_new_cid(Relation relation, HeapTuple tup);
 static HeapTuple ExtractReplicaIdentity(Relation rel, HeapTuple tup, bool key_changed,
 										bool *copy);
@@ -166,17 +169,32 @@ static const struct
 
 #ifdef USE_PREFETCH
 /*
- * heap_compute_xid_horizon_for_tuples and xid_horizon_prefetch_buffer use
- * this structure to coordinate prefetching activity.
+ * heap_compute_delete_for_tuples and compute_delete_prefetch_buffer use this
+ * structure to coordinate prefetching activity
  */
 typedef struct
 {
 	BlockNumber cur_hblkno;
 	int			next_item;
-	int			nitems;
-	ItemPointerData *tids;
-} XidHorizonPrefetchState;
+	int			ndeltids;
+	TM_IndexDelete *deltids;
+} TidPrefetchState;
 #endif
+
+/* Bottom-up index deletion limits */
+#define BOTTOMUP_FAVORABLE_STRIDE	3
+#define BOTTOMUP_MAX_HEAP_BLOCKS	6
+
+/*
+ * heap_compute_delete_for_tuples uses this structure to determine which heap
+ * pages to visit, and in what order for bottom-up index deletion check
+ */
+typedef struct IndexDeleteCounts
+{
+	int16		npromisingtids;
+	int16		ntids;
+	int16		ideltids;
+} IndexDeleteCounts;
 
 /*
  * This table maps tuple lock strength values for each particular
@@ -6936,28 +6954,32 @@ HeapTupleHeaderAdvanceLatestRemovedXid(HeapTupleHeader tuple,
 
 #ifdef USE_PREFETCH
 /*
- * Helper function for heap_compute_xid_horizon_for_tuples.  Issue prefetch
+ * Helper function for heap_compute_delete_for_tuples.  Issue prefetch
  * requests for the number of buffers indicated by prefetch_count.  The
  * prefetch_state keeps track of all the buffers that we can prefetch and
  * which ones have already been prefetched; each call to this function picks
  * up where the previous call left off.
+ *
+ * Note: we expect the deltids array to be sorted in an order that groups TIDs
+ * by heap block, with all TIDs for each block appearing together in exactly
+ * one group.
  */
 static void
-xid_horizon_prefetch_buffer(Relation rel,
-							XidHorizonPrefetchState *prefetch_state,
-							int prefetch_count)
+compute_delete_prefetch_buffer(Relation rel,
+							   TidPrefetchState *prefetch_state,
+							   int prefetch_count)
 {
 	BlockNumber cur_hblkno = prefetch_state->cur_hblkno;
 	int			count = 0;
 	int			i;
-	int			nitems = prefetch_state->nitems;
-	ItemPointerData *tids = prefetch_state->tids;
+	int			ndeltids = prefetch_state->ndeltids;
+	TM_IndexDelete *deltids = prefetch_state->deltids;
 
 	for (i = prefetch_state->next_item;
-		 i < nitems && count < prefetch_count;
+		 i < ndeltids && count < prefetch_count;
 		 i++)
 	{
-		ItemPointer htid = &tids[i];
+		ItemPointer htid = &deltids[i].tid;
 
 		if (cur_hblkno == InvalidBlockNumber ||
 			ItemPointerGetBlockNumber(htid) != cur_hblkno)
@@ -6978,49 +7000,68 @@ xid_horizon_prefetch_buffer(Relation rel,
 #endif
 
 /*
- * Get the latestRemovedXid from the heap pages pointed at by the index
- * tuples being deleted.
+ * Determine which heap tuples from a list of TIDs provided by index AM caller
+ * are dead.  It is safe to delete index tuples that point to these dead heap
+ * tuples.  Callers can mark deltids entries as deletable, or leave it to us
+ * to determine if they're deletable (though bottom-up deletion callers are
+ * not allowed to mark deltids entries as already dead-to-all).
  *
- * We used to do this during recovery rather than on the primary, but that
- * approach now appears inferior.  It meant that the primary could generate
- * a lot of work for the standby without any back-pressure to slow down the
- * primary, and it required the standby to have reached consistency, whereas
- * we want to have correct information available even before that point.
+ * Bottom-up index deletion callers ask us to perform the same steps, but are
+ * much more uncertain about the likelihood of success.  We'll have to keep
+ * the costs and benefits in balance for these callers to manage this
+ * uncertainty.  Many heap blocks that are pointed to by deltids entries will
+ * never be visited on each bottom-up call here.
  *
- * It's possible for this to generate a fair amount of I/O, since we may be
- * deleting hundreds of tuples from a single index block.  To amortize that
- * cost to some degree, this uses prefetching and combines repeat accesses to
- * the same block.
+ * Returns the latestRemovedXid from the heap tuples pointed to by index
+ * tuples whose deltids entries are marked safe to delete.
  */
 TransactionId
-heap_compute_xid_horizon_for_tuples(Relation rel,
-									ItemPointerData *tids,
-									int nitems)
+heap_compute_delete_for_tuples(Relation rel, TM_IndexDeleteOp *delstate)
 {
 	TransactionId latestRemovedXid = InvalidTransactionId;
 	BlockNumber hblkno;
 	Buffer		buf = InvalidBuffer;
 	Page		hpage;
 #ifdef USE_PREFETCH
-	XidHorizonPrefetchState prefetch_state;
+	TidPrefetchState prefetch_state;
 	int			prefetch_distance;
 #endif
+	SnapshotData SnapshotNonVacuumable;
+	TM_IndexDelete *deltids = delstate->deltids;
+	TM_IndexStatus *status = delstate->status;
+	int			bottomupfreespace = delstate->bottomupfreespace;
+	int			finalndeltids = 0,
+				nblocksaccessed = 0;
+	/* Bottom-up deletion state */
+	int			nblocksfavorable = 0,
+				spacefreed = 0,
+				spacefreedlast = 0;
+	bool		bottomup_final_hpage = false;
+
+	InitNonVacuumableSnapshot(SnapshotNonVacuumable, GlobalVisTestFor(rel));
+
+	/* Sort caller's deltids array by TID for further processing */
+	heap_delete_sort(delstate);
 
 	/*
-	 * Sort to avoid repeated lookups for the same page, and to make it more
-	 * likely to access items in an efficient order. In particular, this
-	 * ensures that if there are multiple pointers to the same page, they all
-	 * get processed looking up and locking the page just once.
+	 * Bottom-up case: Resort deltids array in an order attuned to where the
+	 * greatest number of promising TIDs are to be found, and determine how
+	 * many blocks from the start of sorted array should be considered
+	 * favorable.
+	 *
+	 * Note: This will usually shrink deltids array, capping the number of
+	 * heap blocks accessed to BOTTOMUP_MAX_HEAP_BLOCKS.  This helps to avoid
+	 * unnecessary bottom-up case prefetching.
 	 */
-	qsort((void *) tids, nitems, sizeof(ItemPointerData),
-		  (int (*) (const void *, const void *)) ItemPointerCompare);
+	if (delstate->bottomup)
+		nblocksfavorable = heap_delete_bottomup_sort_and_shrink(delstate);
 
 #ifdef USE_PREFETCH
 	/* Initialize prefetch state. */
 	prefetch_state.cur_hblkno = InvalidBlockNumber;
 	prefetch_state.next_item = 0;
-	prefetch_state.nitems = nitems;
-	prefetch_state.tids = tids;
+	prefetch_state.ndeltids = delstate->ndeltids;
+	prefetch_state.deltids = deltids;
 
 	/*
 	 * Compute the prefetch distance that we will attempt to maintain.
@@ -7035,26 +7076,93 @@ heap_compute_xid_horizon_for_tuples(Relation rel,
 		prefetch_distance =
 			get_tablespace_maintenance_io_concurrency(rel->rd_rel->reltablespace);
 
+	/* Cap initial prefetch distance for bottom-up deletion caller */
+	if (delstate->bottomup)
+	{
+		Assert(nblocksfavorable >= 1);
+		prefetch_distance = Min(prefetch_distance, nblocksfavorable);
+	}
+
 	/* Start prefetching. */
-	xid_horizon_prefetch_buffer(rel, &prefetch_state, prefetch_distance);
+	compute_delete_prefetch_buffer(rel, &prefetch_state, prefetch_distance);
 #endif
 
-	/* Iterate over all tids, and check their horizon */
+	/* Iterate over deltids, determine which to delete, check their horizon */
 	hblkno = InvalidBlockNumber;
 	hpage = NULL;
-	for (int i = 0; i < nitems; i++)
+	Assert(delstate->ndeltids > 0);
+	for (int i = 0; i < delstate->ndeltids; i++)
 	{
-		ItemPointer htid = &tids[i];
+		ItemPointer htid = &deltids[i].tid;
+		TM_IndexStatus *dstatus = status + deltids[i].id;
 		ItemId		hitemid;
 		OffsetNumber hoffnum;
 
 		/*
-		 * Read heap buffer, but avoid refetching if it's the same block as
-		 * required for the last tid.
+		 * Read heap buffer, and perform required extra steps each time a new
+		 * heap block is encountered.  Avoid refetching if it's the same heap
+		 * block as the one from the last htid.
 		 */
 		if (hblkno == InvalidBlockNumber ||
 			ItemPointerGetBlockNumber(htid) != hblkno)
 		{
+			/*
+			 * Consider giving up early for bottom-up index deletion caller
+			 * first. (Only prefetch next-next heap block afterwards, when it
+			 * becomes clear that we're at least going to access the next heap
+			 * block in line.)
+			 *
+			 * Sometimes the first heap block frees so much space for
+			 * bottom-up caller that the deletion process can end without
+			 * accessing any more heap blocks.  It is usually necessary to
+			 * access 2 or 3 blocks per bottom-up deletion operation, though.
+			 */
+			if (delstate->bottomup)
+			{
+				/*
+				 * We usually do a little "extra" work on the final heap page
+				 * after caller's target free space is reached.  We finish off
+				 * the entire final heap page because it's cheap to do so.
+				 * Check if it's time to stop now.
+				 */
+				if (bottomup_final_hpage)
+					break;
+
+				/*
+				 * Give up when we didn't enable our caller to free any
+				 * additional space as a result of processing the heap page
+				 * that we just finished with.  Insist on making steady
+				 * progress in all cases.  Being patient is probably
+				 * unhelpful.
+				 */
+				if (nblocksaccessed >= 1 && spacefreed == spacefreedlast)
+					break;
+				spacefreedlast = spacefreed;	/* For next time */
+
+				/*
+				 * We will access next heap page in line.  Decay the target
+				 * free space from bottom-up deletion caller here, so that we
+				 * don't behave too aggressively when that's unlikely to be of
+				 * much use.
+				 *
+				 * The number of favorable blocks (physically contiguous
+				 * blocks) is tested as a gating condition that delays when we
+				 * first apply a decay.  They allow bottom-up deletion to hang
+				 * on for a little longer when heap blocks only allow index AM
+				 * caller to free relatively small (though still non-zero)
+				 * amounts of free space.
+				 *
+				 * Handle steps for that now: decrement the number of
+				 * favorable blocks (if any remain), or else decay target
+				 * space (if we're out of favorable blocks).
+				 */
+				Assert(nblocksaccessed > 0 || nblocksfavorable > 0);
+				if (nblocksfavorable > 0)
+					nblocksfavorable--;
+				else
+					bottomupfreespace /= 2;
+			}
+
 			/* release old buffer */
 			if (BufferIsValid(buf))
 			{
@@ -7065,6 +7173,9 @@ heap_compute_xid_horizon_for_tuples(Relation rel,
 			hblkno = ItemPointerGetBlockNumber(htid);
 
 			buf = ReadBuffer(rel, hblkno);
+			nblocksaccessed++;
+			Assert(!delstate->bottomup ||
+				   nblocksaccessed <= BOTTOMUP_MAX_HEAP_BLOCKS);
 
 #ifdef USE_PREFETCH
 
@@ -7072,12 +7183,45 @@ heap_compute_xid_horizon_for_tuples(Relation rel,
 			 * To maintain the prefetch distance, prefetch one more page for
 			 * each page we read.
 			 */
-			xid_horizon_prefetch_buffer(rel, &prefetch_state, 1);
+			compute_delete_prefetch_buffer(rel, &prefetch_state, 1);
 #endif
 
 			hpage = BufferGetPage(buf);
 
 			LockBuffer(buf, BUFFER_LOCK_SHARE);
+		}
+
+		if (!dstatus->deleteitup)
+		{
+			ItemPointerData tmp;
+			bool		all_dead,
+						found;
+			HeapTupleData heapTuple;
+
+			tmp = *htid;		/* Don't modify htid */
+			all_dead = false;	/* Check that whole HOT chain is vacuumable */
+			found = heap_hot_search_buffer(&tmp, rel, buf,
+										   &SnapshotNonVacuumable, &heapTuple,
+										   &all_dead, true);
+
+			if (found || !all_dead)
+				continue;
+		}
+		else
+			Assert(!delstate->bottomup);
+
+		/* Caller can delete this TID from index */
+		finalndeltids = i + 1;
+		dstatus->deleteitup = true;
+		spacefreed += dstatus->tupsize;
+
+		if (delstate->bottomup && spacefreed >= bottomupfreespace)
+		{
+			/*
+			 * Bottom-up deletion caller's free space target (or a decayed
+			 * value based on caller's value) has been reached
+			 */
+			bottomup_final_hpage = true;
 		}
 
 		hoffnum = ItemPointerGetOffsetNumber(htid);
@@ -7126,6 +7270,9 @@ heap_compute_xid_horizon_for_tuples(Relation rel,
 		ReleaseBuffer(buf);
 	}
 
+	/* Make final array only include known-dead items */
+	delstate->ndeltids = finalndeltids;
+
 	/*
 	 * If all heap tuples were LP_DEAD then we will be returning
 	 * InvalidTransactionId here, which avoids conflicts. This matches
@@ -7135,6 +7282,319 @@ heap_compute_xid_horizon_for_tuples(Relation rel,
 	 */
 
 	return latestRemovedXid;
+}
+
+/*
+ * Specialized inlineable comparison function for heap_delete_sort()
+ */
+static inline int
+heap_delete_sort_cmp(TM_IndexDelete *deltid1, TM_IndexDelete *deltid2)
+{
+	ItemPointer		tid1 = &deltid1->tid;
+	ItemPointer		tid2 = &deltid2->tid;
+
+	{
+		BlockNumber blk1 = ItemPointerGetBlockNumber(tid1);
+		BlockNumber blk2 = ItemPointerGetBlockNumber(tid2);
+
+		if (blk1 != blk2)
+			return (blk1 < blk2) ? -1 : 1;
+	}
+	{
+		OffsetNumber pos1 = ItemPointerGetOffsetNumber(tid1);
+		OffsetNumber pos2 = ItemPointerGetOffsetNumber(tid2);
+
+		if (pos1 != pos2)
+			return (pos1 < pos2) ? -1 : 1;
+	}
+
+	pg_unreachable();
+
+	return 0;
+}
+
+/*
+ * Sort deltids array from delstate by TID.  This prepares it for further
+ * processing.
+ *
+ * This operation becomes a noticeable consumer of CPU cycles with some
+ * workloads. This is especially likely with bottom-up index deletion heavy
+ * workloads, especially when B-Tree deduplication is also used and we might
+ * well have over a thousand TIDs/deltids (even with default BLCKSZ).  This
+ * justifies a specialized sort routine.
+ *
+ * We use shellsort because it's easy to specialize, compiles to relatively
+ * few instructions, and is adaptive to presorted inputs/subsets (which are
+ * typical here).  The TM_IndexDelete struct is only 8 bytes, so swap
+ * operations are expected to be cheap here.
+ */
+static void
+heap_delete_sort(TM_IndexDeleteOp *delstate)
+{
+	TM_IndexDelete *deltids = delstate->deltids;
+	int				ndeltids = delstate->ndeltids;
+	int				low = 0;
+
+	/*
+	 * Shellsort gap sequence (taken from Sedgewick-Incerpi paper).
+	 *
+	 * This implementation is fast with array sizes up to ~4500.  This covers
+	 * all supported BLCKSZ values.
+	 */
+	const int		gaps[9] = {1968, 861, 336, 112, 48, 21, 7, 3, 1};
+
+	/* Think carefully before changing anything here */
+	StaticAssertStmt(sizeof(TM_IndexDelete) <= 8,
+					 "element size exceeds 8 bytes");
+
+	for (int g = 0; g < lengthof(gaps); g++)
+	{
+		for (int hi = gaps[g], i = low + hi; i < ndeltids; i++)
+		{
+			TM_IndexDelete d = deltids[i];
+			int			   j = i;
+
+			while (j >= hi && heap_delete_sort_cmp(&deltids[j - hi], &d) >= 0)
+			{
+				deltids[j] = deltids[j - hi];
+				j -= hi;
+			}
+			deltids[j] = d;
+		}
+	}
+}
+
+/*
+ * Determine how many favorable blocks are among blocks we'll access (which
+ * should be in their final bottom-up deletion order when we're called).
+ *
+ * Favorable blocks are contiguous heap blocks, which are likely to have
+ * relatively many dead items.  These blocks are cheaper to access together
+ * all at once.  Having many favorable blocks is common with low cardinality
+ * index tuples, where heap locality will have a relatively large influence on
+ * which heap blocks we visit (and the order they're processed in).
+ *
+ * Being more aggressive with favorable blocks is slightly more expensive in
+ * the short term, but less expensive in the long term, when there are many
+ * closely related calls to heap_compute_delete_for_tuples().
+ *
+ * Returns number of favorable blocks, starting from (and including) the first
+ * block in line for processing.  See heap_compute_delete_for_tuples() for
+ * details on how the value is applied.
+ */
+static int
+top_block_groups_favorable(IndexDeleteCounts *blockcounts, int nblockgroups,
+						   TM_IndexDelete *deltids)
+{
+	int			nblocksfavorable = 0;
+	BlockNumber lastblock = InvalidBlockNumber;
+
+	for (int b = 0; b < nblockgroups; b++)
+	{
+		IndexDeleteCounts *blockgroup = blockcounts + b;
+		TM_IndexDelete *firstgroup = deltids + blockgroup->ideltids;
+		BlockNumber thisblock = ItemPointerGetBlockNumber(&firstgroup->tid);
+
+		if (BlockNumberIsValid(lastblock) &&
+			(thisblock < lastblock ||
+			 thisblock > lastblock + BOTTOMUP_FAVORABLE_STRIDE))
+			break;
+
+		nblocksfavorable++;
+		lastblock = Min(thisblock,
+						MaxBlockNumber - BOTTOMUP_FAVORABLE_STRIDE);
+	}
+
+	/*
+	 * We always indicate that there is at least 1 favorable block (the first
+	 * in line to process).  The first block must always be in sorted order
+	 * because the ordering is relative to the first (or previous) block.
+	 * (heap_compute_delete_for_tuples() is okay with this degenerate case
+	 * because it is supposed to always visit the first heap page in line.)
+	 */
+	Assert(nblocksfavorable >= 1);
+
+	return nblocksfavorable;
+}
+
+/*
+ * qsort comparison function for heap_delete_bottomup_sort_and_shrink()
+ */
+static int
+heap_delete_bottomup_sort_and_shrink_cmp(const void *arg1, const void *arg2)
+{
+	const IndexDeleteCounts *count1 = (const IndexDeleteCounts *) arg1;
+	const IndexDeleteCounts *count2 = (const IndexDeleteCounts *) arg2;
+
+	/* Caller normalizes non-zero npromisingtids values into powers-of-two */
+	Assert(count1->npromisingtids == 0 ||
+		   ((count1->npromisingtids - 1) & count1->npromisingtids) == 0);
+	Assert(count2->npromisingtids == 0 ||
+		   ((count2->npromisingtids - 1) & count2->npromisingtids) == 0);
+
+	/*
+	 * Most significant field is npromisingtids (which we invert the order of
+	 * so as to sort in desc order)
+	 */
+	if (count1->npromisingtids > count2->npromisingtids)
+		return -1;
+	if (count1->npromisingtids < count2->npromisingtids)
+		return 1;
+
+	/*
+	 * Tiebreak: desc ntids sort order.
+	 *
+	 * We cannot expect power-of-two values for ntids fields.  We should
+	 * behave as if they were already rounded up for us instead.
+	 */
+	if (count1->ntids != count2->ntids)
+	{
+		uint32	ntids1 = pg_nextpower2_32((uint32) count1->ntids);
+		uint32	ntids2 = pg_nextpower2_32((uint32) count2->ntids);
+
+		if (ntids1 > ntids2)
+			return -1;
+		if (ntids1 < ntids2)
+			return 1;
+	}
+
+	/*
+	 * Tiebreak: asc offset-into-deltids-for-block (offset to first TID for
+	 * block in deltids array) order.
+	 *
+	 * This is equivalent to sorting in ascending heap block number order
+	 * (among otherwise equal subsets of the array).  This approach allows us
+	 * to avoid accessing the out-of-line TID.  (We rely on the assumption
+	 * that the deltids array was sorted in ascending heap TID order when
+	 * these offsets to the first TID from each heap block group were formed.)
+	 */
+	if (count1->ideltids > count2->ideltids)
+		return 1;
+	if (count1->ideltids < count2->ideltids)
+		return -1;
+
+	pg_unreachable();
+
+	return 0;
+}
+
+/*
+ * heap_compute_delete_for_tuples() helper function for bottom-up deletion
+ * callers.
+ *
+ * Sorts deltids array in the order needed for useful processing by bottom-up
+ * deletion.  The array should already be sorted in TID order when we're
+ * called.  The sort process groups heap TIDs from deltids into heap block
+ * number groupings.  Earlier/more-promising groups/blocks are those that are
+ * known to have the most "promising" TIDs.
+ *
+ * Sets new size of deltids array (ndeltids) in state.  deltids will only have
+ * TIDs from the BOTTOMUP_MAX_HEAP_BLOCKS most promising heap blocks when we
+ * return (which is usually far fewer than what we started with).
+ *
+ * Returns number of "favorable" blocks.
+ */
+static int
+heap_delete_bottomup_sort_and_shrink(TM_IndexDeleteOp *delstate)
+{
+	IndexDeleteCounts *blockcounts;
+	TM_IndexDelete *reordereddeltids;
+	BlockNumber curblock = InvalidBlockNumber;
+	int			nblockgroups = 0;
+	int			ncopied = 0;
+	int			nblocksfavorable = 0;
+
+	Assert(delstate->bottomup);
+	Assert(delstate->ndeltids > 0);
+
+	/* Calculate per-heap-block count of TIDs */
+	blockcounts = palloc(sizeof(IndexDeleteCounts) * delstate->ndeltids);
+	for (int i = 0; i < delstate->ndeltids; i++)
+	{
+		ItemPointer deltid = &delstate->deltids[i].tid;
+		TM_IndexStatus *dstatus = delstate->status + delstate->deltids[i].id;
+		bool		ispromising = dstatus->ispromising;
+
+		if (curblock != ItemPointerGetBlockNumber(deltid))
+		{
+			/* New block group */
+			nblockgroups++;
+
+			Assert(curblock < ItemPointerGetBlockNumber(deltid) ||
+				   !BlockNumberIsValid(curblock));
+
+			curblock = ItemPointerGetBlockNumber(deltid);
+			blockcounts[nblockgroups - 1].ideltids = i;
+			blockcounts[nblockgroups - 1].ntids = 1;
+			blockcounts[nblockgroups - 1].npromisingtids = 0;
+		}
+		else
+		{
+			blockcounts[nblockgroups - 1].ntids++;
+		}
+
+		if (ispromising)
+			blockcounts[nblockgroups - 1].npromisingtids++;
+	}
+
+	/*
+	 * We're about ready to sort block groups to determine the optimal order
+	 * for visiting heap pages.  But before we do, round the number of
+	 * promising tuples for each block group up to the nearest power-of-two
+	 * (unless there are zero promising tuples).
+	 *
+	 * This scheme usefully divides heap pages into buckets.  Each bucket
+	 * contains heap pages that are approximately equally promising, that we
+	 * want to treat as exactly equivalent (at least initially).  We should
+	 * not let the most promising heap pages win or lose (get accessed or not
+	 * accessed by bottom-up deletion) on the basis of _relatively_ small
+	 * differences in the total number of promising tuples.
+	 *
+	 * Note that we effectively have the same power-of-two bucketing scheme
+	 * with the ntids field (which is compared after npromisingtids).  The
+	 * only reason that we don't fix nhtids here is that the original values
+	 * will be needed when copying the final TIDs from winning block groups
+	 * back into caller's deltids array.
+	 */
+	for (int b = 0; b < nblockgroups; b++)
+	{
+		IndexDeleteCounts *blockgroup = blockcounts + b;
+
+		if (blockgroup->npromisingtids != 0)
+			blockgroup->npromisingtids =
+				pg_nextpower2_32((uint32) blockgroup->npromisingtids);
+	}
+
+	/* Sort groups and rearrange caller's deltids array */
+	qsort(blockcounts, nblockgroups, sizeof(IndexDeleteCounts),
+		  heap_delete_bottomup_sort_and_shrink_cmp);
+	reordereddeltids = palloc(delstate->ndeltids * sizeof(TM_IndexDelete));
+
+	nblockgroups = Min(BOTTOMUP_MAX_HEAP_BLOCKS, nblockgroups);
+	/* Determine number of favorable blocks at the start of array */
+	nblocksfavorable = top_block_groups_favorable(blockcounts, nblockgroups,
+												  delstate->deltids);
+
+	for (int b = 0; b < nblockgroups; b++)
+	{
+		IndexDeleteCounts *blockgroup = blockcounts + b;
+		TM_IndexDelete *firstgroup = delstate->deltids + blockgroup->ideltids;
+
+		memcpy(reordereddeltids + ncopied, firstgroup,
+			   sizeof(TM_IndexDelete) * blockgroup->ntids);
+		ncopied += blockgroup->ntids;
+	}
+
+	/* Copy final grouped and sorted TIDs back into start of caller's array */
+	memcpy(delstate->deltids, reordereddeltids,
+		   sizeof(TM_IndexDelete) * ncopied);
+	delstate->ndeltids = ncopied;
+
+	/* be tidy */
+	pfree(reordereddeltids);
+	pfree(blockcounts);
+
+	return nblocksfavorable;
 }
 
 /*

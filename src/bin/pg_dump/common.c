@@ -261,7 +261,9 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 
 /* flagInhTables -
  *	 Fill in parent link fields of tables for which we need that information,
- *	 and mark parents of target tables as interesting
+ *	 mark parents of target tables as interesting, and create
+ *	 TableAttachInfo objects for partitioned tables with appropriate
+ *	 dependency links.
  *
  * Note that only direct ancestors of targets are marked interesting.
  * This is sufficient; we don't much care whether they inherited their
@@ -319,6 +321,35 @@ flagInhTables(Archive *fout, TableInfo *tblinfo, int numTables,
 
 			for (j = 0; j < numParents; j++)
 				parents[j]->interesting = true;
+		}
+
+		/* Dump ALTER TABLE .. ATTACH PARTITION */
+		if (tblinfo[i].dobj.dump && tblinfo[i].ispartition)
+		{
+			/* We don't even need to store this anywhere, but maybe there's
+			 * some utility in making a single, large allocation earlier ? */
+			TableAttachInfo *attachinfo = palloc(sizeof(*attachinfo));
+
+			attachinfo->dobj.objType = DO_TABLE_ATTACH;
+			attachinfo->dobj.catId.tableoid = 0;
+			attachinfo->dobj.catId.oid = 0;
+			AssignDumpId(&attachinfo->dobj);
+			attachinfo->dobj.name = pg_strdup(tblinfo[i].dobj.name);
+			attachinfo->dobj.namespace = tblinfo[i].dobj.namespace;
+			attachinfo->parentTbl = tblinfo[i].parents[0];
+			attachinfo->partitionTbl = &tblinfo[i];
+
+			/*
+			 * We must state the DO_TABLE_ATTACH object's dependencies
+			 * explicitly, since it will not match anything in pg_depend.
+			 *
+			 * Give it dependencies on both the partition table and the parent
+			 * table, so that it will not be executed till both of those
+			 * exist.  (There's no need to care what order those are created
+			 * in.)
+			 */
+			addObjectDependency(&attachinfo->dobj, tblinfo[i].dobj.dumpId);
+			addObjectDependency(&attachinfo->dobj, tblinfo[i].parents[0]->dobj.dumpId);
 		}
 	}
 }

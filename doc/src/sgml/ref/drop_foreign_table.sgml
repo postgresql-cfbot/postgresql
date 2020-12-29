@@ -42,8 +42,11 @@ DROP FOREIGN TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceabl
     <term><literal>IF EXISTS</literal></term>
     <listitem>
      <para>
-      Do not throw an error if the foreign table does not exist.
-      A notice is issued in this case.
+      This parameter instructs <productname>PostgreSQL</productname> to search 
+      for the first instance of any relation with the provided name.
+      If no relations are found a notice is issued and the command ends.
+      If a relation is found then one of two things will happen:
+      if the relation is a foreign table it is dropped, otherwise the command fails.
      </para>
     </listitem>
    </varlistentry>

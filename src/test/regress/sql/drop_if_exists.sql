@@ -296,6 +296,104 @@ DROP ROUTINE IF EXISTS test_ambiguous_procname;
 DROP PROCEDURE test_ambiguous_procname(int);
 DROP PROCEDURE test_ambiguous_procname(text);
 
+-- ============== Demonstrate namespace collision behavior =======
+CREATE SCHEMA test_if_exists_first;
+CREATE SCHEMA test_if_exists_second;
+SET search_path TO test_if_exists_first, test_if_exists_second;
+
+DROP TABLE test_if_exists_second.test_rel_exists;
+DROP TABLE IF EXISTS test_if_exists_second.test_rel_exists;
+CREATE TABLE test_if_exists_second.test_rel_exists (a int, b text);
+CREATE TABLE test_if_exists_first.test_rel_with_index (ai int, bi text);
+
+CREATE TABLE IF NOT EXISTS test_rel_exists (c text, d int); -- IF NOT EXISTS checks only the first schema
+DROP TABLE IF EXISTS test_rel_exists; -- Two matches but only the first is dropped
+
+-- A role is not a relation so this shouldn't be affected
+DROP ROLE IF EXISTS test_rel_exists;
+
+-- Table presence in the second schema causes a failure here
+-- even though a corresponding non-schema-qualified create
+-- statement would succeed.
+DROP VIEW IF EXISTS test_rel_exists;
+DROP INDEX IF EXISTS test_rel_exists;
+DROP SEQUENCE IF EXISTS test_rel_exists;
+DROP MATERIALIZED VIEW IF EXISTS test_rel_exists;
+DROP FOREIGN TABLE IF EXISTS test_rel_exists;
+
+CREATE VIEW test_if_exists_first.test_rel_exists AS
+    SELECT 1::bigint AS d, 'e'::text AS e;
+DROP TABLE test_rel_exists;
+DROP VIEW test_rel_exists;
+
+CREATE INDEX test_rel_exists ON test_if_exists_first.test_rel_with_index (ai);
+DROP TABLE test_rel_exists;
+DROP INDEX test_rel_exists;
+
+CREATE SEQUENCE test_rel_exists;
+DROP TABLE test_rel_exists;
+DROP SEQUENCE test_rel_exists;
+
+CREATE MATERIALIZED VIEW test_if_exists_first.test_rel_exists AS
+    SELECT 1::bigint AS d, 'e'::text AS e;
+DROP TABLE test_rel_exists;
+
+DROP TABLE test_if_exists_second.test_rel_exists;
+DROP MATERIALIZED VIEW test_rel_exists;
+DROP TABLE test_if_exists_first.test_rel_with_index;
+
+-- Type & Domain behavior is thus:
+-- If Exists Behavior
+DROP DOMAIN IF EXISTS test_rel_exists;
+DROP TYPE IF EXISTS test_rel_exists;
+
+CREATE TABLE test_if_exists_second.test_rel_exists (a int, b text);
+DROP DOMAIN IF EXISTS test_rel_exists;
+CREATE DOMAIN test_rel_exists int4;
+DROP TABLE test_rel_exists;
+DROP DOMAIN test_rel_exists;
+
+-- Test with domain first and type second; plus table tests
+CREATE TABLE test_if_exists_second.test_rel_exists (a int, b text);
+CREATE TYPE test_if_exists_second.test_rel_exists AS (c int, d text); -- type with same name exists as table creation creates a composite type
+CREATE DOMAIN test_if_exists_second.test_rel_exists int4; -- domain creation with same name as table fails as auto-generated type conflicts
+DROP TYPE IF EXISTS test_if_exists_second.test_rel_exists; -- cannot independently drop a composite type associated with a table
+DROP TABLE test_if_exists_second.test_rel_exists;
+
+CREATE TYPE test_if_exists_second.test_rel_exists AS (c int, d text);
+CREATE TABLE test_if_exists_second.test_rel_exists (a int, b text); -- auto-created type prevents table from being created
+DROP TABLE test_if_exists_second.test_rel_exists; -- a standalone composite type cannot be dropped using the drop table command
+
+DROP DOMAIN IF EXISTS test_if_exists_second.test_rel_exists;
+CREATE DOMAIN test_rel_exists int4;
+DROP TYPE IF EXISTS test_rel_exists; -- DROP TYPE Drops the Domain
+DROP DOMAIN IF EXISTS test_if_exists_second.test_rel_exists;
+DROP DOMAIN test_rel_exists; -- double-checking the domain doesn't exist
+DROP TYPE test_rel_exists;
+
+-- Test with domain second and type first
+CREATE TYPE test_if_exists_first.test_rel_exists AS (c int, d text);
+CREATE DOMAIN test_if_exists_second.test_rel_exists int4;
+DROP DOMAIN IF EXISTS test_rel_exists;
+DROP TYPE IF EXISTS test_rel_exists;
+DROP TYPE IF EXISTS test_if_exists_second.test_rel_exists;
+
+DROP DOMAIN IF EXISTS test_rel_exists;
+-- /Type & Domain
+
+-- Bug # 16492 - this script produces an error, arguably it should not
+CREATE TABLE test_if_exists_first.test_rel_exists (a int, b text);
+DROP TABLE IF EXISTS test_if_exists_first.test_rel_exists;
+DROP VIEW IF EXISTS test_if_exists_first.test_rel_exists;
+CREATE VIEW test_if_exists_first.test_rel_exists AS
+    SELECT 1::int AS a, 'one'::text AS b;
+DROP TABLE IF EXISTS test_if_exists_first.test_rel_exists;
+DROP VIEW IF EXISTS test_if_exists_first.test_rel_exists;
+CREATE VIEW test_if_exists_first.test_rel_exists AS
+    SELECT 1::int AS a, 'one'::text AS b;
+DROP VIEW test_if_exists_first.test_rel_exists;
+-- /Bug # 16492
+
 -- This test checks both the functionality of 'if exists' and the syntax
 -- of the drop database command.
 drop database test_database_exists (force);

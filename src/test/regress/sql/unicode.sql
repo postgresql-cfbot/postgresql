@@ -30,3 +30,15 @@ FROM
 ORDER BY num;
 
 SELECT is_normalized('abc', 'def');  -- run-time error
+
+SELECT unistr('\0441\043B\043E\043D');
+SELECT unistr('d\u0061t\U00000061');
+
+-- run-time error
+SELECT unistr('wrong: \db99');
+SELECT unistr('wrong: \db99\0061');
+SELECT unistr('wrong: \+00db99\+000061');
+SELECT unistr('wrong: \+2FFFFF');
+SELECT unistr('wrong: \udb99\u0061');
+SELECT unistr('wrong: \U0000db99\U00000061');
+SELECT unistr('wrong: \U002FFFFF');

@@ -3228,6 +3228,16 @@ ProcessInterrupts(void)
 
 	}
 
+	if (IdleSessionTimeoutPending)
+	{
+		if (IdleSessionTimeout > 0)
+			ereport(FATAL,
+					(errcode(ERRCODE_IDLE_SESSION_TIMEOUT),
+					 errmsg("terminating connection due to idle-session timeout")));
+		else
+			IdleSessionTimeoutPending = false;
+	}
+
 	if (ProcSignalBarrierPending)
 		ProcessProcSignalBarrier();
 
@@ -3803,6 +3813,7 @@ PostgresMain(int argc, char *argv[],
 	sigjmp_buf	local_sigjmp_buf;
 	volatile bool send_ready_for_query = true;
 	bool		disable_idle_in_transaction_timeout = false;
+	bool		disable_idle_session_timeout = false;
 
 	/* Initialize startup process environment if necessary. */
 	if (!IsUnderPostmaster)
@@ -4251,6 +4262,14 @@ PostgresMain(int argc, char *argv[],
 
 				set_ps_display("idle");
 				pgstat_report_activity(STATE_IDLE, NULL);
+
+				/* Start the idle-session timer */
+				if (IdleSessionTimeout > 0)
+				{
+					disable_idle_session_timeout = true;
+					enable_timeout_after(IDLE_SESSION_TIMEOUT,
+										 IdleSessionTimeout);
+				}
 			}
 
 			/* Report any recently-changed GUC options */
@@ -4286,12 +4305,18 @@ PostgresMain(int argc, char *argv[],
 		DoingCommandRead = false;
 
 		/*
-		 * (5) turn off the idle-in-transaction timeout
+		 * (5) turn off the idle-in-transaction and idle-session timeouts
 		 */
 		if (disable_idle_in_transaction_timeout)
 		{
 			disable_timeout(IDLE_IN_TRANSACTION_SESSION_TIMEOUT, false);
 			disable_idle_in_transaction_timeout = false;
+		}
+
+		if (disable_idle_session_timeout)
+		{
+			disable_timeout(IDLE_SESSION_TIMEOUT, false);
+			disable_idle_session_timeout = false;
 		}
 
 		/*

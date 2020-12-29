@@ -209,6 +209,7 @@ static bool check_cluster_name(char **newval, void **extra, GucSource source);
 static const char *show_unix_socket_permissions(void);
 static const char *show_log_file_mode(void);
 static const char *show_data_directory_mode(void);
+static const char *show_in_hot_standby(void);
 static bool check_backtrace_functions(char **newval, void **extra, GucSource source);
 static void assign_backtrace_functions(const char *newval, void *extra);
 static bool check_recovery_target_timeline(char **newval, void **extra, GucSource source);
@@ -607,6 +608,8 @@ static int	max_identifier_length;
 static int	block_size;
 static int	segment_size;
 static int	wal_block_size;
+static bool in_hot_standby;
+static bool last_reported_in_hot_standby;
 static bool data_checksums;
 static bool integer_datetimes;
 static bool assert_enabled;
@@ -1618,7 +1621,7 @@ static struct config_bool ConfigureNamesBool[] =
 		{"transaction_read_only", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the current transaction's read-only status."),
 			NULL,
-			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_REPORT | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&XactReadOnly,
 		false,
@@ -1842,6 +1845,17 @@ static struct config_bool ConfigureNamesBool[] =
 		&hot_standby_feedback,
 		false,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"in_hot_standby", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Shows whether hot standby is currently active."),
+			NULL,
+			GUC_REPORT | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&in_hot_standby,
+		false,
+		NULL, NULL, show_in_hot_standby
 	},
 
 	{
@@ -6257,6 +6271,9 @@ BeginReportingGUCOptions(void)
 			ReportGUCOption(conf);
 	}
 
+	/* Hack for in_hot_standby: remember the value we just sent */
+	last_reported_in_hot_standby = in_hot_standby;
+
 	report_needed = false;
 }
 
@@ -6279,6 +6296,23 @@ ReportChangedGUCOptions(void)
 	/* Quick exit if not (yet) enabled */
 	if (!reporting_enabled)
 		return;
+
+	/*
+	 * Since in_hot_standby isn't actually changed by normal GUC actions, we
+	 * need a hack to check whether a new value needs to be reported to the
+	 * client.  For speed, we rely on the assumption that it can never
+	 * transition from false to true.
+	 */
+	if (last_reported_in_hot_standby && !RecoveryInProgress())
+	{
+		struct config_generic *record;
+
+		record = find_option("in_hot_standby", false, ERROR);
+		Assert(record != NULL);
+		record->status |= GUC_NEEDS_REPORT;
+		report_needed = true;
+		last_reported_in_hot_standby = false;
+	}
 
 	/* Quick exit if no values have been changed */
 	if (!report_needed)
@@ -11771,6 +11805,18 @@ show_data_directory_mode(void)
 
 	snprintf(buf, sizeof(buf), "%04o", data_directory_mode);
 	return buf;
+}
+
+static const char *
+show_in_hot_standby(void)
+{
+	/*
+	 * Unlike most show hooks, this has a side-effect of updating the dummy
+	 * GUC variable to contain the value last shown.  See confederate code in
+	 * BeginReportingGUCOptions and ReportChangedGUCOptions.
+	 */
+	in_hot_standby = RecoveryInProgress();
+	return in_hot_standby ? "on" : "off";
 }
 
 /*

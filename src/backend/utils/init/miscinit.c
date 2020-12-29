@@ -275,6 +275,12 @@ GetBackendTypeDesc(BackendType backendType)
 		case B_LOGGER:
 			backendDesc = "logger";
 			break;
+		case B_DATACHECKSUMSWORKER_LAUNCHER:
+			backendDesc = "datachecksumsworker launcher";
+			break;
+		case B_DATACHECKSUMSWORKER_WORKER:
+			backendDesc = "datachecksumsworker worker";
+			break;
 	}
 
 	return backendDesc;

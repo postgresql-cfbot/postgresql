@@ -198,6 +198,9 @@ typedef PageHeaderData *PageHeader;
  */
 #define PG_PAGE_LAYOUT_VERSION		4
 #define PG_DATA_CHECKSUM_VERSION	1
+#define PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION		2
+#define PG_DATA_CHECKSUM_INPROGRESS_OFF_VERSION		3
+
 
 /* ----------------------------------------------------------------
  *						page support macros

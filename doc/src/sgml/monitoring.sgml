@@ -3693,8 +3693,7 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
       </para>
       <para>
        Number of data page checksum failures detected in this
-       database (or on a shared object), or NULL if data checksums are not
-       enabled.
+       database.
       </para></entry>
      </row>
 
@@ -3704,8 +3703,7 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
       </para>
       <para>
        Time at which the last data page checksum failure was detected in
-       this database (or on a shared object), or NULL if data checksums are not
-       enabled.
+       this database (or on a shared object).
       </para></entry>
      </row>
 

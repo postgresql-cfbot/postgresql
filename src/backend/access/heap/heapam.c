@@ -7262,7 +7262,7 @@ log_heap_freeze(Relation reln, Buffer buffer, TransactionId cutoff_xid,
  * and dirtied.
  *
  * If checksums are enabled, we also generate a full-page image of
- * heap_buffer, if necessary.
+ * heap_buffer.
  */
 XLogRecPtr
 log_heap_visible(RelFileNode rnode, Buffer heap_buffer, Buffer vm_buffer,
@@ -7283,11 +7283,13 @@ log_heap_visible(RelFileNode rnode, Buffer heap_buffer, Buffer vm_buffer,
 	XLogRegisterBuffer(0, vm_buffer, 0);
 
 	flags = REGBUF_STANDARD;
+	HOLD_INTERRUPTS();
 	if (!XLogHintBitIsNeeded())
 		flags |= REGBUF_NO_IMAGE;
 	XLogRegisterBuffer(1, heap_buffer, flags);
 
 	recptr = XLogInsert(RM_HEAP2_ID, XLOG_HEAP2_VISIBLE);
+	RESUME_INTERRUPTS();
 
 	return recptr;
 }

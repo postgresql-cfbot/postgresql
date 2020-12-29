@@ -15,6 +15,14 @@
 
 #include "storage/block.h"
 
+typedef enum ChecksumType
+{
+	DATA_CHECKSUMS_OFF = 0,
+	DATA_CHECKSUMS_ON,
+	DATA_CHECKSUMS_INPROGRESS_ON,
+	DATA_CHECKSUMS_INPROGRESS_OFF
+}			ChecksumType;
+
 /*
  * Compute the checksum for a Postgres page.  The page must be aligned on a
  * 4-byte boundary.

@@ -323,6 +323,8 @@ typedef enum BackendType
 	B_ARCHIVER,
 	B_STATS_COLLECTOR,
 	B_LOGGER,
+	B_DATACHECKSUMSWORKER_LAUNCHER,
+	B_DATACHECKSUMSWORKER_WORKER,
 } BackendType;
 
 extern BackendType MyBackendType;

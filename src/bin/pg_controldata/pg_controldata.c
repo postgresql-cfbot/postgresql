@@ -74,6 +74,8 @@ wal_level_str(WalLevel wal_level)
 {
 	switch (wal_level)
 	{
+		case WAL_LEVEL_NONE:
+			return "none";
 		case WAL_LEVEL_MINIMAL:
 			return "minimal";
 		case WAL_LEVEL_REPLICA:

@@ -449,6 +449,16 @@ XLogInsert(RmgrId rmid, uint8 info)
 		return EndPos;
 	}
 
+	/* Issues only limited types of WAL for XLOG resources and transaction */
+	if (wal_level == WAL_LEVEL_NONE &&
+		!((rmid == RM_XLOG_ID && info == XLOG_CHECKPOINT_SHUTDOWN) ||
+		  (rmid == RM_XLOG_ID && info == XLOG_PARAMETER_CHANGE) ||
+		  (rmid == RM_XACT_ID && info == XLOG_XACT_PREPARE)))
+	{
+		XLogResetInsertion();
+		return GetXLogInsertRecPtr();
+	}
+
 	do
 	{
 		XLogRecPtr	RedoRecPtr;

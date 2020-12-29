@@ -161,7 +161,8 @@ extern int	XLogArchiveMode;
 /* WAL levels */
 typedef enum WalLevel
 {
-	WAL_LEVEL_MINIMAL = 0,
+	WAL_LEVEL_NONE = 0,
+	WAL_LEVEL_MINIMAL,
 	WAL_LEVEL_REPLICA,
 	WAL_LEVEL_LOGICAL
 } WalLevel;

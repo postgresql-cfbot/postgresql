@@ -368,7 +368,7 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
 	 * within 3M transactions of data loss.  This leaves lots of room for the
 	 * DBA to fool around fixing things in a standalone backend, while not
 	 * being significant compared to total XID space. (VACUUM requires an XID
-	 * if it truncates at wal_level!=minimal.  "VACUUM (ANALYZE)", which a DBA
+	 * if it truncates at wal_level<=minimal.  "VACUUM (ANALYZE)", which a DBA
 	 * might do by reflex, assigns an XID.  Hence, we had better be sure
 	 * there's lots of XIDs left...)  Also, at default BLCKSZ, this leaves two
 	 * completely-idle segments.  In the event of edge-case bugs involving

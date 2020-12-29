@@ -1059,24 +1059,16 @@ pg_GSS_recvauth(Port *port)
 		/*
 		 * Set default Kerberos keytab file for the Krb5 mechanism.
 		 *
-		 * setenv("KRB5_KTNAME", pg_krb_server_keyfile, 0); except setenv()
-		 * not always available.
+		 * We don't overwrite any existing environment variable ... is that
+		 * really a sane choice?
 		 */
-		if (getenv("KRB5_KTNAME") == NULL)
+		if (setenv("KRB5_KTNAME", pg_krb_server_keyfile, 0) != 0)
 		{
-			size_t		kt_len = strlen(pg_krb_server_keyfile) + 14;
-			char	   *kt_path = malloc(kt_len);
-
-			if (!kt_path ||
-				snprintf(kt_path, kt_len, "KRB5_KTNAME=%s",
-						 pg_krb_server_keyfile) != kt_len - 2 ||
-				putenv(kt_path) != 0)
-			{
-				ereport(LOG,
-						(errcode(ERRCODE_OUT_OF_MEMORY),
-						 errmsg("out of memory")));
-				return STATUS_ERROR;
-			}
+			/* We assume the error must be "out of memory" */
+			ereport(LOG,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory")));
+			return STATUS_ERROR;
 		}
 	}
 

@@ -3780,10 +3780,24 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 							  gettext_noop("Access Method"));
 
 		/*
+		 * As of PostgreSQL 14, do not use pg_table_size() for indexes and
+		 * sequences as it does not behave sanely for those.
+		 *
 		 * As of PostgreSQL 9.0, use pg_table_size() to show a more accurate
 		 * size of a table, including FSM, VM and TOAST tables.
 		 */
-		if (pset.sversion >= 90000)
+		if (pset.sversion >= 140000)
+			appendPQExpBuffer(&buf,
+							  ",\n CASE"
+							  " WHEN c.relkind in ("CppAsString2(RELKIND_INDEX)", "
+													CppAsString2(RELKIND_PARTITIONED_INDEX)", "
+													CppAsString2(RELKIND_SEQUENCE)") THEN"
+							  " 	pg_catalog.pg_size_pretty(pg_catalog.pg_relation_size(c.oid))"
+							  " ELSE"
+							  " 	pg_catalog.pg_size_pretty(pg_catalog.pg_table_size(c.oid))"
+							  " END as \"%s\"",
+							  gettext_noop("Size"));
+		else if (pset.sversion >= 90000)
 			appendPQExpBuffer(&buf,
 							  ",\n  pg_catalog.pg_size_pretty(pg_catalog.pg_table_size(c.oid)) as \"%s\"",
 							  gettext_noop("Size"));

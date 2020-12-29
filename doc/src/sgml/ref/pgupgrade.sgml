@@ -231,6 +231,20 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--no-scripts</option></term>
+      <listitem>
+       <para>
+        By default, <command>pg_upgrade</command> will write instructions and
+        scripts for how to delete the old cluster at the end of its
+        output. This option causes those scripts and instructions to be left
+        out. This is primarily intended for use by tools that wrap
+        <command>pg_upgrade</command> in platform specific behavior, where
+        those instructions are likely to be incorrect.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-?</option></term>
       <term><option>--help</option></term>
       <listitem><para>show help, then exit</para></listitem>

@@ -175,7 +175,10 @@ main(int argc, char **argv)
 			  new_cluster.pgdata);
 	check_ok();
 
-	create_script_for_old_cluster_deletion(&deletion_script_file_name);
+	if (!user_opts.noscripts)
+	{
+		create_script_for_old_cluster_deletion(&deletion_script_file_name);
+	}
 
 	issue_warnings_and_set_wal_level();
 
@@ -184,7 +187,10 @@ main(int argc, char **argv)
 		   "Upgrade Complete\n"
 		   "----------------\n");
 
-	output_completion_banner(deletion_script_file_name);
+	if (!user_opts.noscripts)
+	{
+		output_completion_banner(deletion_script_file_name);
+	}
 
 	pg_free(deletion_script_file_name);
 

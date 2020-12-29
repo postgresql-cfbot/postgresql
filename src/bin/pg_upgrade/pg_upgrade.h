@@ -293,6 +293,7 @@ typedef struct
 	int			jobs;			/* number of processes/threads to use */
 	char	   *socketdir;		/* directory to use for Unix sockets */
 	bool		ind_coll_unknown;	/* mark unknown index collation versions */
+	bool		noscripts;		/* don't generate scripts for next steps */
 } UserOpts;
 
 typedef struct

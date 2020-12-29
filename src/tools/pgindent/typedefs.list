@@ -214,6 +214,7 @@ BackgroundWorkerHandle
 BackgroundWorkerSlot
 Barrier
 BaseBackupCmd
+BatchInsertStep
 BeginDirectModify_function
 BeginForeignInsert_function
 BeginForeignModify_function
@@ -1547,6 +1548,7 @@ PG_Locale_Strategy
 PG_Lock_Status
 PG_init_t
 PGcancel
+PGcommandQueueEntry
 PGconn
 PGdataValue
 PGlobjfuncs
@@ -1659,6 +1661,7 @@ PMSignalReason
 PMState
 POLYGON
 PQArgBlock
+PQBatchStatus
 PQEnvironmentOption
 PQExpBuffer
 PQExpBufferData

@@ -351,7 +351,8 @@ typedef enum
 	 *
 	 * CSTATE_START_COMMAND starts the execution of a command.  On a SQL
 	 * command, the command is sent to the server, and we move to
-	 * CSTATE_WAIT_RESULT state.  On a \sleep meta-command, the timer is set,
+	 * CSTATE_WAIT_RESULT state unless in batch mode.
+	 * On a \sleep meta-command, the timer is set,
 	 * and we enter the CSTATE_SLEEP state to wait for it to expire. Other
 	 * meta-commands are executed immediately.  If the command about to start
 	 * is actually beyond the end of the script, advance to CSTATE_END_TX.
@@ -485,7 +486,9 @@ typedef enum MetaCommand
 	META_IF,					/* \if */
 	META_ELIF,					/* \elif */
 	META_ELSE,					/* \else */
-	META_ENDIF					/* \endif */
+	META_ENDIF,					/* \endif */
+	META_BEGINBATCH,			/* \beginbatch */
+	META_ENDBATCH				/* \endbatch */
 } MetaCommand;
 
 typedef enum QueryMode
@@ -2492,6 +2495,10 @@ getMetaCommand(const char *cmd)
 		mc = META_GSET;
 	else if (pg_strcasecmp(cmd, "aset") == 0)
 		mc = META_ASET;
+	else if (pg_strcasecmp(cmd, "beginbatch") == 0)
+		mc = META_BEGINBATCH;
+	else if (pg_strcasecmp(cmd, "endbatch") == 0)
+		mc = META_ENDBATCH;
 	else
 		mc = META_NONE;
 	return mc;
@@ -2681,11 +2688,24 @@ sendCommand(CState *st, Command *command)
 				if (commands[j]->type != SQL_COMMAND)
 					continue;
 				preparedStatementName(name, st->use_file, j);
-				res = PQprepare(st->con, name,
-								commands[j]->argv[0], commands[j]->argc - 1, NULL);
-				if (PQresultStatus(res) != PGRES_COMMAND_OK)
-					pg_log_error("%s", PQerrorMessage(st->con));
-				PQclear(res);
+				if (PQbatchStatus(st->con) == PQBATCH_MODE_OFF)
+				{
+					res = PQprepare(st->con, name,
+									commands[j]->argv[0], commands[j]->argc - 1, NULL);
+					if (PQresultStatus(res) != PGRES_COMMAND_OK)
+						pg_log_error("%s", PQerrorMessage(st->con));
+					PQclear(res);
+				}
+				else
+				{
+					/*
+					 * In batch mode, we use asynchronous functions. If a server-side
+					 * error occurs, it will be processed later among the other results.
+					 */
+					if (!PQsendPrepare(st->con, name,
+									   commands[j]->argv[0], commands[j]->argc - 1, NULL))
+						pg_log_error("%s", PQerrorMessage(st->con));
+				}
 			}
 			st->prepared[st->use_file] = true;
 		}
@@ -2797,6 +2817,12 @@ readCommandResponse(CState *st, MetaCommand meta, char *varprefix)
 					}
 				}
 				/* otherwise the result is simply thrown away by PQclear below */
+				break;
+
+			case PGRES_BATCH_END:
+				pg_log_debug("client %d batch ending", st->id);
+				if (PQexitBatchMode(st->con) != 1)
+					pg_log_error("client %d failed to exit batch mode", st->id);
 				break;
 
 			default:
@@ -3057,13 +3083,27 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				/* Execute the command */
 				if (command->type == SQL_COMMAND)
 				{
+					if ((command->meta == META_GSET || command->meta == META_ASET)
+						&& PQbatchStatus(st->con) != PQBATCH_MODE_OFF)
+					{
+						commandFailed(st, "SQL", "\\gset and \\aset are not allowed in a batch section");
+						st->state = CSTATE_ABORTED;
+						break;
+					}
+
 					if (!sendCommand(st, command))
 					{
 						commandFailed(st, "SQL", "SQL command send failed");
 						st->state = CSTATE_ABORTED;
 					}
 					else
-						st->state = CSTATE_WAIT_RESULT;
+					{
+						/* Wait for results, unless in batch mode */
+						if (PQbatchStatus(st->con) == PQBATCH_MODE_OFF)
+							st->state = CSTATE_WAIT_RESULT;
+						else
+							st->state = CSTATE_END_COMMAND;
+					}
 				}
 				else if (command->type == META_COMMAND)
 				{
@@ -3184,6 +3224,7 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				}
 				break;
 
+
 				/*
 				 * Wait for the current SQL command to complete
 				 */
@@ -3203,7 +3244,14 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				if (readCommandResponse(st,
 										sql_script[st->use_file].commands[st->command]->meta,
 										sql_script[st->use_file].commands[st->command]->varprefix))
-					st->state = CSTATE_END_COMMAND;
+				{
+					/*
+					 * outside of batch mode: stop reading results.
+					 * batch mode: continue reading results until an end of batch response.
+					 */
+					if (PQbatchStatus(st->con) != PQBATCH_MODE_ON)
+						st->state = CSTATE_END_COMMAND;
+				}
 				else
 					st->state = CSTATE_ABORTED;
 				break;
@@ -3446,6 +3494,45 @@ executeMetaCommand(CState *st, instr_time *now)
 			commandFailed(st, "shell", "execution of meta-command failed");
 			return CSTATE_ABORTED;
 		}
+	}
+	else if (command->meta == META_BEGINBATCH)
+	{
+		/*
+		 * In batch mode, we use a workflow based on libpq batch
+		 * functions.
+		 */
+		if (querymode == QUERY_SIMPLE)
+		{
+			commandFailed(st, "beginbatch", "cannot use batch mode with the simple query protocol");
+			st->state = CSTATE_ABORTED;
+			return CSTATE_ABORTED;
+		}
+
+		if (PQbatchStatus(st->con) != PQBATCH_MODE_OFF)
+		{
+			commandFailed(st, "beginbatch", "already in batch mode");
+			return CSTATE_ABORTED;
+		}
+		if (PQenterBatchMode(st->con) == 0)
+		{
+			commandFailed(st, "beginbatch", "failed to start a batch");
+			return CSTATE_ABORTED;
+		}
+	}
+	else if (command->meta == META_ENDBATCH)
+	{
+		if (PQbatchStatus(st->con) != PQBATCH_MODE_ON)
+		{
+			commandFailed(st, "endbatch", "not in batch mode");
+			return CSTATE_ABORTED;
+		}
+		if (!PQbatchSendQueue(st->con))
+		{
+			commandFailed(st, "endbatch", "failed to end the batch");
+			return CSTATE_ABORTED;
+		}
+		/* collect pending results before getting out of batch mode */
+		return CSTATE_WAIT_RESULT;
 	}
 
 	/*
@@ -4685,6 +4772,12 @@ process_backslash_command(PsqlScanState sstate, const char *source)
 		if (my_command->argc > 2)
 			syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
 						 "too many arguments", NULL, -1);
+	}
+	else if (my_command->meta == META_BEGINBATCH || my_command->meta == META_ENDBATCH)
+	{
+		if (my_command->argc != 1)
+			syntax_error(source, lineno, my_command->first_line, my_command->argv[0],
+						 "unexpected argument", NULL, -1);
 	}
 	else
 	{

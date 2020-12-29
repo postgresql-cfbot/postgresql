@@ -35,6 +35,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogarchive.h"
 #include "access/xloginsert.h"
+#include "access/xlogprefetch.h"
 #include "access/xlogreader.h"
 #include "access/xlogutils.h"
 #include "catalog/catversion.h"
@@ -109,6 +110,7 @@ int			CommitDelay = 0;	/* precommit delay in microseconds */
 int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
+int			wal_decode_buffer_size = 512 * 1024;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -211,7 +213,8 @@ static XLogRecPtr LastRec;
 
 /* Local copy of WalRcv->flushedUpto */
 static XLogRecPtr flushedUpto = 0;
-static TimeLineID receiveTLI = 0;
+static XLogRecPtr writtenUpto = 0;
+static TimeLineID writtenTLI = 0;
 
 /*
  * During recovery, lastFullPageWrites keeps track of full_page_writes that
@@ -921,9 +924,11 @@ static int	XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 						 XLogSource source, bool notfoundOk);
 static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source);
 static int	XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
-						 int reqLen, XLogRecPtr targetRecPtr, char *readBuf);
+						 int reqLen, XLogRecPtr targetRecPtr, char *readBuf,
+						 bool nowait);
 static bool WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
-										bool fetching_ckpt, XLogRecPtr tliRecPtr);
+										bool fetching_ckpt, XLogRecPtr tliRecPtr,
+										bool nowait);
 static int	emode_for_corrupt_record(int emode, XLogRecPtr RecPtr);
 static void XLogFileClose(void);
 static void PreallocXlogFiles(XLogRecPtr endptr);
@@ -1427,7 +1432,7 @@ checkXLogConsistency(XLogReaderState *record)
 
 	Assert((XLogRecGetInfo(record) & XLR_CHECK_CONSISTENCY) != 0);
 
-	for (block_id = 0; block_id <= record->max_block_id; block_id++)
+	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 	{
 		Buffer		buf;
 		Page		page;
@@ -1458,7 +1463,7 @@ checkXLogConsistency(XLogReaderState *record)
 		 * temporary page.
 		 */
 		buf = XLogReadBufferExtended(rnode, forknum, blkno,
-									 RBM_NORMAL_NO_LOG);
+									 RBM_NORMAL_NO_LOG, InvalidBuffer);
 		if (!BufferIsValid(buf))
 			continue;
 
@@ -3694,7 +3699,6 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 			snprintf(activitymsg, sizeof(activitymsg), "waiting for %s",
 					 xlogfname);
 			set_ps_display(activitymsg);
-
 			restoredFromArchive = RestoreArchivedFile(path, xlogfname,
 													  "RECOVERYXLOG",
 													  wal_segment_size,
@@ -4358,6 +4362,7 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 		record = XLogReadRecord(xlogreader, &errormsg);
 		ReadRecPtr = xlogreader->ReadRecPtr;
 		EndRecPtr = xlogreader->EndRecPtr;
+
 		if (record == NULL)
 		{
 			if (readFile >= 0)
@@ -4401,6 +4406,42 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 
 		if (record)
 		{
+			if (readSource == XLOG_FROM_STREAM)
+			{
+				/*
+				 * In streaming mode, we allow ourselves to read records that
+				 * have been written but not yet flushed, for increased
+				 * concurrency.  We still have to wait until the record has
+				 * been flushed before allowing it to be replayed.
+				 *
+				 * XXX This logic preserves the traditional behaviour where we
+				 * didn't replay records until the walreceiver flushed them,
+				 * except that now we read and decode them sooner.  Could it
+				 * be relaxed even more?  Isn't the real data integrity
+				 * requirement for _writeback_ to stall until the WAL is
+				 * durable, not recovery, just as on a primary?
+				 *
+				 * XXX Are there any circumstances in which this should be
+				 * interruptible?
+				 *
+				 * XXX We don't replicate the XLogReceiptTime etc logic from
+				 * WaitForWALToBecomeAvailable() here...  probably need to
+				 * refactor/share code?
+				 */
+				if (EndRecPtr < flushedUpto)
+				{
+					while (EndRecPtr < (flushedUpto = GetWalRcvFlushRecPtr(NULL, NULL)))
+					{
+						(void) WaitLatch(&XLogCtl->recoveryWakeupLatch,
+										 WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
+										 -1,
+										 WAIT_EVENT_RECOVERY_WAL_FLUSH);
+						CHECK_FOR_INTERRUPTS();
+						ResetLatch(&XLogCtl->recoveryWakeupLatch);
+					}
+				}
+			}
+
 			/* Great, got a record */
 			return record;
 		}
@@ -6502,6 +6543,12 @@ StartupXLOG(void)
 	xlogreader->system_identifier = ControlFile->system_identifier;
 
 	/*
+	 * Set the WAL decode buffer size.  This limits how far ahead we can read
+	 * in the WAL.
+	 */
+	XLogReaderSetDecodeBuffer(xlogreader, NULL, wal_decode_buffer_size);
+
+	/*
 	 * Allocate two page buffers dedicated to WAL consistency checks.  We do
 	 * it this way, rather than just making static arrays, for two reasons:
 	 * (1) no need to waste the storage in most instantiations of the backend;
@@ -7178,6 +7225,7 @@ StartupXLOG(void)
 		{
 			ErrorContextCallback errcallback;
 			TimestampTz xtime;
+			XLogPrefetchState prefetch;
 			PGRUsage	ru0;
 
 			pg_rusage_init(&ru0);
@@ -7187,6 +7235,9 @@ StartupXLOG(void)
 			ereport(LOG,
 					(errmsg("redo starts at %X/%X",
 							(uint32) (ReadRecPtr >> 32), (uint32) ReadRecPtr)));
+
+			/* Prepare to prefetch, if configured. */
+			XLogPrefetchBegin(&prefetch, xlogreader);
 
 			/*
 			 * main redo apply loop
@@ -7216,6 +7267,9 @@ StartupXLOG(void)
 
 				/* Handle interrupt signals of startup process */
 				HandleStartupProcInterrupts();
+
+				/* Perform WAL prefetching, if enabled. */
+				XLogPrefetch(&prefetch, xlogreader->ReadRecPtr);
 
 				/*
 				 * Pause WAL replay, if requested by a hot-standby session via
@@ -7388,6 +7442,9 @@ StartupXLOG(void)
 					 */
 					if (AllowCascadeReplication())
 						WalSndWakeup();
+
+					/* Reset the prefetcher. */
+					XLogPrefetchReconfigure();
 				}
 
 				/* Exit loop if we reached inclusive recovery target */
@@ -7404,6 +7461,7 @@ StartupXLOG(void)
 			/*
 			 * end of main redo apply loop
 			 */
+			XLogPrefetchEnd(&prefetch);
 
 			if (reachedRecoveryTarget)
 			{
@@ -10208,7 +10266,7 @@ xlog_redo(XLogReaderState *record)
 		 * XLOG_FPI and XLOG_FPI_FOR_HINT records, they use a different info
 		 * code just to distinguish them for statistics purposes.
 		 */
-		for (uint8 block_id = 0; block_id <= record->max_block_id; block_id++)
+		for (uint8 block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 		{
 			Buffer		buffer;
 
@@ -10344,7 +10402,7 @@ xlog_block_info(StringInfo buf, XLogReaderState *record)
 	int			block_id;
 
 	/* decode block references */
-	for (block_id = 0; block_id <= record->max_block_id; block_id++)
+	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 	{
 		RelFileNode rnode;
 		ForkNumber	forknum;
@@ -11966,7 +12024,7 @@ CancelBackup(void)
  */
 static int
 XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
-			 XLogRecPtr targetRecPtr, char *readBuf)
+			 XLogRecPtr targetRecPtr, char *readBuf, bool nowait)
 {
 	XLogPageReadPrivate *private =
 	(XLogPageReadPrivate *) xlogreader->private_data;
@@ -11979,6 +12037,15 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 	targetPageOff = XLogSegmentOffset(targetPagePtr, wal_segment_size);
 
 	/*
+	 * If streaming and asked not to wait, return as quickly as possible if
+	 * the data we want isn't available immediately.  Use an unlocked read of
+	 * the latest written position.
+	 */
+	if (readSource == XLOG_FROM_STREAM && nowait &&
+		GetWalRcvWriteRecPtrUnlocked() < targetPagePtr + reqLen)
+		return -1;
+
+	/*
 	 * See if we need to switch to a new segment because the requested record
 	 * is not in the currently open one.
 	 */
@@ -11988,6 +12055,9 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 		/*
 		 * Request a restartpoint if we've replayed too much xlog since the
 		 * last one.
+		 *
+		 * XXX Why is this here?  Move it to recovery loop, since it's based
+		 * on replay position, not read position?
 		 */
 		if (bgwriterLaunched)
 		{
@@ -12010,12 +12080,13 @@ retry:
 	/* See if we need to retrieve more data */
 	if (readFile < 0 ||
 		(readSource == XLOG_FROM_STREAM &&
-		 flushedUpto < targetPagePtr + reqLen))
+		 writtenUpto < targetPagePtr + reqLen))
 	{
 		if (!WaitForWALToBecomeAvailable(targetPagePtr + reqLen,
 										 private->randAccess,
 										 private->fetching_ckpt,
-										 targetRecPtr))
+										 targetRecPtr,
+										 nowait))
 		{
 			if (readFile >= 0)
 				close(readFile);
@@ -12041,10 +12112,10 @@ retry:
 	 */
 	if (readSource == XLOG_FROM_STREAM)
 	{
-		if (((targetPagePtr) / XLOG_BLCKSZ) != (flushedUpto / XLOG_BLCKSZ))
+		if (((targetPagePtr) / XLOG_BLCKSZ) != (writtenUpto / XLOG_BLCKSZ))
 			readLen = XLOG_BLCKSZ;
 		else
-			readLen = XLogSegmentOffset(flushedUpto, wal_segment_size) -
+			readLen = XLogSegmentOffset(writtenUpto, wal_segment_size) -
 				targetPageOff;
 	}
 	else
@@ -12164,7 +12235,8 @@ next_record_is_invalid:
  */
 static bool
 WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
-							bool fetching_ckpt, XLogRecPtr tliRecPtr)
+							bool fetching_ckpt, XLogRecPtr tliRecPtr,
+							bool nowait)
 {
 	static TimestampTz last_fail_time = 0;
 	TimestampTz now;
@@ -12248,6 +12320,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 */
 					currentSource = XLOG_FROM_STREAM;
 					startWalReceiver = true;
+					XLogPrefetchReconfigure();
 					break;
 
 				case XLOG_FROM_STREAM:
@@ -12266,6 +12339,10 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * streamed, so it's unlikely that it helps, but one can
 					 * hope...
 					 */
+
+					/* If we were asked not to wait, give up immediately. */
+					if (nowait)
+						return false;
 
 					/*
 					 * We should be able to move to XLOG_FROM_STREAM only in
@@ -12383,6 +12460,10 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 				if (readFile >= 0)
 					return true;	/* success! */
 
+				/* If we were asked not to wait, give up immediately. */
+				if (nowait)
+					return false;
+
 				/*
 				 * Nope, not found in archive or pg_wal.
 				 */
@@ -12460,7 +12541,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						RequestXLogStreaming(tli, ptr, PrimaryConnInfo,
 											 PrimarySlotName,
 											 wal_receiver_create_temp_slot);
-						flushedUpto = 0;
+						writtenUpto = 0;
 					}
 
 					/*
@@ -12483,15 +12564,16 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * be updated on each cycle. When we are behind,
 					 * XLogReceiptTime will not advance, so the grace time
 					 * allotted to conflicting queries will decrease.
+					 *
 					 */
-					if (RecPtr < flushedUpto)
+					if (RecPtr < writtenUpto)
 						havedata = true;
 					else
 					{
 						XLogRecPtr	latestChunkStart;
 
-						flushedUpto = GetWalRcvFlushRecPtr(&latestChunkStart, &receiveTLI);
-						if (RecPtr < flushedUpto && receiveTLI == curFileTLI)
+						writtenUpto = GetWalRcvWriteRecPtr(&latestChunkStart, &writtenTLI);
+						if (RecPtr < writtenUpto && writtenTLI == curFileTLI)
 						{
 							havedata = true;
 							if (latestChunkStart <= RecPtr)
@@ -12503,6 +12585,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						else
 							havedata = false;
 					}
+
 					if (havedata)
 					{
 						/*
@@ -12517,9 +12600,9 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						if (readFile < 0)
 						{
 							if (!expectedTLEs)
-								expectedTLEs = readTimeLineHistory(receiveTLI);
+								expectedTLEs = readTimeLineHistory(writtenTLI);
 							readFile = XLogFileRead(readSegNo, PANIC,
-													receiveTLI,
+													writtenTLI,
 													XLOG_FROM_STREAM, false);
 							Assert(readFile >= 0);
 						}
@@ -12532,6 +12615,10 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						}
 						break;
 					}
+
+					/* If we were asked not to wait, give up immediately. */
+					if (nowait)
+						return false;
 
 					/*
 					 * Data not here yet. Check for trigger, then wait for
@@ -12569,6 +12656,8 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * Wait for more WAL to arrive. Time out after 5 seconds
 					 * to react to a trigger file promptly and to check if the
 					 * WAL receiver is still active.
+					 *
+					 * XXX This is signalled on *flush*, not on write.  Oops.
 					 */
 					(void) WaitLatch(&XLogCtl->recoveryWakeupLatch,
 									 WL_LATCH_SET | WL_TIMEOUT |

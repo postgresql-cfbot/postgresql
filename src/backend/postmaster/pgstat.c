@@ -38,6 +38,7 @@
 #include "access/transam.h"
 #include "access/twophase_rmgr.h"
 #include "access/xact.h"
+#include "access/xlogprefetch.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_proc.h"
 #include "common/ip.h"
@@ -296,6 +297,7 @@ static PgStat_WalStats walStats;
 static PgStat_SLRUStats slruStats[SLRU_NUM_ELEMENTS];
 static PgStat_ReplSlotStats *replSlotStats;
 static int	nReplSlotStats;
+static PgStat_RecoveryPrefetchStats recoveryPrefetchStats;
 
 /*
  * List of OIDs of databases we need to write out.  If an entry is InvalidOid,
@@ -373,6 +375,7 @@ static void pgstat_recv_archiver(PgStat_MsgArchiver *msg, int len);
 static void pgstat_recv_bgwriter(PgStat_MsgBgWriter *msg, int len);
 static void pgstat_recv_wal(PgStat_MsgWal *msg, int len);
 static void pgstat_recv_slru(PgStat_MsgSLRU *msg, int len);
+static void pgstat_recv_recoveryprefetch(PgStat_MsgRecoveryPrefetch *msg, int len);
 static void pgstat_recv_funcstat(PgStat_MsgFuncstat *msg, int len);
 static void pgstat_recv_funcpurge(PgStat_MsgFuncpurge *msg, int len);
 static void pgstat_recv_recoveryconflict(PgStat_MsgRecoveryConflict *msg, int len);
@@ -1396,11 +1399,20 @@ pgstat_reset_shared_counters(const char *target)
 		msg.m_resettarget = RESET_BGWRITER;
 	else if (strcmp(target, "wal") == 0)
 		msg.m_resettarget = RESET_WAL;
+	else if (strcmp(target, "prefetch_recovery") == 0)
+	{
+		/*
+		 * We can't ask the stats collector to do this for us as it is not
+		 * attached to shared memory.
+		 */
+		XLogPrefetchRequestResetStats();
+		return;
+	}
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("unrecognized reset target: \"%s\"", target),
-				 errhint("Target must be \"archiver\", \"bgwriter\" or \"wal\".")));
+				 errhint("Target must be \"archiver\", \"bgwriter\", \"wal\" or \"prefetch_recovery\".")));
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETSHAREDCOUNTER);
 	pgstat_send(&msg, sizeof(msg));
@@ -2846,6 +2858,22 @@ pgstat_fetch_replslot(int *nslots_p)
 	return replSlotStats;
 }
 
+/*
+ * ---------
+ * pgstat_fetch_recoveryprefetch() -
+ *
+ *	Support function for restoring the counters managed by xlogprefetch.c.
+ * ---------
+ */
+PgStat_RecoveryPrefetchStats *
+pgstat_fetch_recoveryprefetch(void)
+{
+	backend_read_statsfile();
+
+	return &recoveryPrefetchStats;
+}
+
+
 /* ------------------------------------------------------------
  * Functions for management of the shared-memory PgBackendStatus array
  * ------------------------------------------------------------
@@ -4030,6 +4058,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_RECOVERY_PAUSE:
 			event_name = "RecoveryPause";
 			break;
+		case WAIT_EVENT_RECOVERY_WAL_FLUSH:
+			event_name = "RecoveryWalFlush";
+			break;
 		case WAIT_EVENT_REPLICATION_ORIGIN_DROP:
 			event_name = "ReplicationOriginDrop";
 			break;
@@ -4677,6 +4708,23 @@ pgstat_send_slru(void)
 
 
 /* ----------
+ * pgstat_send_recoveryprefetch() -
+ *
+ *		Send recovery prefetch statistics to the collector
+ * ----------
+ */
+void
+pgstat_send_recoveryprefetch(PgStat_RecoveryPrefetchStats *stats)
+{
+	PgStat_MsgRecoveryPrefetch msg;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RECOVERYPREFETCH);
+	msg.m_stats = *stats;
+	pgstat_send(&msg, sizeof(msg));
+}
+
+
+/* ----------
  * PgstatCollectorMain() -
  *
  *	Start up the statistics collector process.  This is the body of the
@@ -4887,6 +4935,10 @@ PgstatCollectorMain(int argc, char *argv[])
 
 				case PGSTAT_MTYPE_SLRU:
 					pgstat_recv_slru(&msg.msg_slru, len);
+					break;
+
+				case PGSTAT_MTYPE_RECOVERYPREFETCH:
+					pgstat_recv_recoveryprefetch(&msg.msg_recoveryprefetch, len);
 					break;
 
 				case PGSTAT_MTYPE_FUNCSTAT:
@@ -5171,6 +5223,13 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 	(void) rc;					/* we'll check for error with ferror */
 
 	/*
+	 * Write recovery prefetch stats struct
+	 */
+	rc = fwrite(&recoveryPrefetchStats, sizeof(recoveryPrefetchStats), 1,
+				fpout);
+	(void) rc;					/* we'll check for error with ferror */
+
+	/*
 	 * Walk through the database table.
 	 */
 	hash_seq_init(&hstat, pgStatDBHash);
@@ -5443,6 +5502,7 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 	memset(&archiverStats, 0, sizeof(archiverStats));
 	memset(&walStats, 0, sizeof(walStats));
 	memset(&slruStats, 0, sizeof(slruStats));
+	memset(&recoveryPrefetchStats, 0, sizeof(recoveryPrefetchStats));
 
 	/*
 	 * Set the current timestamp (will be kept only in case we can't load an
@@ -5545,6 +5605,18 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 		ereport(pgStatRunningInCollector ? LOG : WARNING,
 				(errmsg("corrupted statistics file \"%s\"", statfile)));
 		memset(&slruStats, 0, sizeof(slruStats));
+		goto done;
+	}
+
+	/*
+	 * Read recoveryPrefetchStats struct
+	 */
+	if (fread(&recoveryPrefetchStats, 1, sizeof(recoveryPrefetchStats),
+			  fpin) != sizeof(recoveryPrefetchStats))
+	{
+		ereport(pgStatRunningInCollector ? LOG : WARNING,
+				(errmsg("corrupted statistics file \"%s\"", statfile)));
+		memset(&recoveryPrefetchStats, 0, sizeof(recoveryPrefetchStats));
 		goto done;
 	}
 
@@ -5866,6 +5938,7 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 	PgStat_WalStats myWalStats;
 	PgStat_SLRUStats mySLRUStats[SLRU_NUM_ELEMENTS];
 	PgStat_ReplSlotStats myReplSlotStats;
+	PgStat_RecoveryPrefetchStats myRecoveryPrefetchStats;
 	FILE	   *fpin;
 	int32		format_id;
 	const char *statfile = permanent ? PGSTAT_STAT_PERMANENT_FILENAME : pgstat_stat_filename;
@@ -5935,6 +6008,18 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 	 * Read SLRU stats struct
 	 */
 	if (fread(mySLRUStats, 1, sizeof(mySLRUStats), fpin) != sizeof(mySLRUStats))
+	{
+		ereport(pgStatRunningInCollector ? LOG : WARNING,
+				(errmsg("corrupted statistics file \"%s\"", statfile)));
+		FreeFile(fpin);
+		return false;
+	}
+
+	/*
+	 * Read recovery prefetch stats struct
+	 */
+	if (fread(&myRecoveryPrefetchStats, 1, sizeof(myRecoveryPrefetchStats),
+			  fpin) != sizeof(myRecoveryPrefetchStats))
 	{
 		ereport(pgStatRunningInCollector ? LOG : WARNING,
 				(errmsg("corrupted statistics file \"%s\"", statfile)));
@@ -6123,6 +6208,13 @@ backend_read_statsfile(void)
 
 		/* Normal acceptance case: file is not older than cutoff time */
 		if (ok && file_ts >= min_ts)
+			break;
+
+		/*
+		 * If we're in crash recovery, the collector may not even be running,
+		 * so work with what we have.
+		 */
+		if (InRecovery)
 			break;
 
 		/* Not there or too old, so kick the collector and wait a bit */
@@ -6819,6 +6911,18 @@ pgstat_recv_slru(PgStat_MsgSLRU *msg, int len)
 	slruStats[msg->m_index].blocks_exists += msg->m_blocks_exists;
 	slruStats[msg->m_index].flush += msg->m_flush;
 	slruStats[msg->m_index].truncate += msg->m_truncate;
+}
+
+/* ----------
+ * pgstat_recv_recoveryprefetch() -
+ *
+ *	Process a recovery prefetch message.
+ * ----------
+ */
+static void
+pgstat_recv_recoveryprefetch(PgStat_MsgRecoveryPrefetch *msg, int len)
+{
+	recoveryPrefetchStats = msg->m_stats;
 }
 
 /* ----------

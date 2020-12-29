@@ -24,6 +24,7 @@
 #include "common/logging.h"
 #include "getopt_long.h"
 #include "rmgrdesc.h"
+#include "catalog/pg_control.h"
 
 static const char *progname;
 
@@ -66,6 +67,7 @@ typedef struct Stats
 typedef struct XLogDumpStats
 {
 	uint64		count;
+	uint32		junk_size;
 	Stats		rmgr_stats[RM_NEXT_ID];
 	Stats		record_stats[RM_NEXT_ID][MAX_XLINFO_TYPES];
 } XLogDumpStats;
@@ -416,12 +418,21 @@ XLogDumpCountRecord(XLogDumpConfig *config, XLogDumpStats *stats,
 	uint8		recid;
 	uint32		rec_len;
 	uint32		fpi_len;
+	uint8		info;
 
 	stats->count++;
 
 	rmid = XLogRecGetRmid(record);
+	info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
 
 	XLogDumpRecordLen(record, &rec_len, &fpi_len);
+	/* Add junk-space stats for XLOG_SWITCH  */
+	if(rmid == RM_XLOG_ID && info == XLOG_SWITCH)
+	{
+		uint32 junk_len = xlog_switch_junk_len(record);
+
+		stats->junk_size += junk_len;
+	}
 
 	/* Update per-rmgr statistics */
 
@@ -622,6 +633,7 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogDumpStats *stats)
 		total_rec_len += stats->rmgr_stats[ri].rec_len;
 		total_fpi_len += stats->rmgr_stats[ri].fpi_len;
 	}
+	total_rec_len += stats->junk_size;
 	total_len = total_rec_len + total_fpi_len;
 
 	/*
@@ -652,12 +664,20 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogDumpStats *stats)
 			XLogDumpStatsRow(desc->rm_name,
 							 count, total_count, rec_len, total_rec_len,
 							 fpi_len, total_fpi_len, tot_len, total_len);
+			if(ri == RM_XLOG_ID)
+			{
+				XLogDumpStatsRow(psprintf("XLOGSwitchJunk"),
+								0, total_count, stats->junk_size, total_rec_len,
+								0, total_fpi_len, stats->junk_size, total_len);
+			}
+
 		}
 		else
 		{
 			for (rj = 0; rj < MAX_XLINFO_TYPES; rj++)
 			{
 				const char *id;
+				uint8		info;
 
 				count = stats->record_stats[ri][rj].count;
 				rec_len = stats->record_stats[ri][rj].rec_len;
@@ -676,6 +696,12 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogDumpStats *stats)
 				XLogDumpStatsRow(psprintf("%s/%s", desc->rm_name, id),
 								 count, total_count, rec_len, total_rec_len,
 								 fpi_len, total_fpi_len, tot_len, total_len);
+				info = (rj << 4) & ~XLR_INFO_MASK;
+				if(info == XLOG_SWITCH)
+					XLogDumpStatsRow(psprintf("XLOG/SWITCH_JUNK"),
+									0, total_count, stats->junk_size, total_rec_len,
+									0, total_fpi_len, stats->junk_size, total_len);
+
 			}
 		}
 	}

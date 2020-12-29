@@ -74,6 +74,13 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 		memcpy(&nextOid, rec, sizeof(Oid));
 		appendStringInfo(buf, "%u", nextOid);
 	}
+	else if (info == XLOG_SWITCH)
+	{
+		uint32	junk_len;
+		junk_len = xlog_switch_junk_len(record);
+
+		appendStringInfo(buf, "trailing-bytes: %u", junk_len);
+	}
 	else if (info == XLOG_RESTORE_POINT)
 	{
 		xl_restore_point *xlrec = (xl_restore_point *) rec;
@@ -140,6 +147,33 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec.ThisTimeLineID, xlrec.PrevTimeLineID,
 						 timestamptz_to_str(xlrec.end_time));
 	}
+}
+
+uint32
+xlog_switch_junk_len(XLogReaderState *record)
+{
+	uint32 		junk_len;
+	XLogSegNo	startSegNo;
+	XLogSegNo	endSegNo;
+
+	XLByteToSeg(record->ReadRecPtr, startSegNo, record->segcxt.ws_segsize);
+	XLByteToPrevSeg(record->EndRecPtr, endSegNo, record->segcxt.ws_segsize);
+
+	junk_len = record->EndRecPtr - record->ReadRecPtr -
+											XLogRecGetTotalLen(record);
+	/*
+	 * If the wal switch record spread on two pages, we should extra minus
+	 * the page head, be careful if it's page at the top of a wal segment.
+	 */
+	if(startSegNo != endSegNo)
+		junk_len -= SizeOfXLogLongPHD;
+	else if(record->ReadRecPtr / XLOG_BLCKSZ !=
+				(record->EndRecPtr - 1) / XLOG_BLCKSZ)
+		junk_len -= SizeOfXLogShortPHD;
+
+	Assert(junk_len >= 0);
+
+	return junk_len;
 }
 
 const char *

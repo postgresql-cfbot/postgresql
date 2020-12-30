@@ -3995,6 +3995,9 @@ PostmasterStateMachine(void)
 		ereport(LOG,
 				(errmsg("all server processes terminated; reinitializing")));
 
+		/* remove leftover temporary files after a crash */
+		RemovePgTempFiles();
+
 		/* allow background workers to immediately restart */
 		ResetBackgroundWorkerCrashTimes();
 

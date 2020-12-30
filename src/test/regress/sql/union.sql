@@ -540,3 +540,40 @@ select * from
    union all
    select *, 1 as x from int8_tbl b) ss
 where (x = 0) or (q1 >= q2 and q1 <= q2);
+
+-- Test handling of appendrel with different types which disables the path flattening and
+-- forces a subquery node. for the subquery node ensure the rowcounts are correct.
+create function check_estimated_rows(text) returns table (estimated int)
+language plpgsql as
+$$
+declare
+    ln text;
+    tmp text[];
+    first_row bool := true;
+begin
+    for ln in
+        execute format('explain %s', $1)
+    loop
+        tmp := regexp_match(ln, 'rows=(\d*)');
+        return query select tmp[1]::int;
+    end loop;
+end;
+$$;
+
+set min_parallel_table_scan_size = 0;
+set parallel_setup_cost = 0;
+set parallel_tuple_cost = 0;
+set default_statistics_target = 1000;
+
+explain (costs off)
+select *, 0::int from tenk1 a
+union all
+select *, 1::bigint from tenk1 b;
+
+select check_estimated_rows('select *, 0::int from tenk1 a union all select *, 1::bigint from tenk1 b;');
+
+reset parallel_setup_cost;
+reset parallel_tuple_cost;
+reset min_parallel_table_scan_size;
+reset default_statistics_target;
+drop function check_estimated_rows(text);

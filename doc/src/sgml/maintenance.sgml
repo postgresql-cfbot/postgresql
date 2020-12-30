@@ -159,7 +159,17 @@
     concurrency control (<acronym>MVCC</acronym>, see <xref linkend="mvcc"/>): the row version
     must not be deleted while it is still potentially visible to other
     transactions. But eventually, an outdated or deleted row version is no
-    longer of interest to any transaction. The space it occupies must then be
+    longer of interest to any transaction.
+    <footnote>
+     <para>
+      Note that <command>VACUUM</literal> needs to retain tuples that are
+      nominally visible to transactions running
+      <command>CREATE INDEX CONCURRENTLY</command> or
+      <command>REINDEX CONCURRENTLY</command>, even when run on tables
+      other than the tables being indexed.
+     </para>
+    </footnote>
+    The space it occupies must then be
     reclaimed for reuse by new rows, to avoid unbounded growth of disk
     space requirements. This is done by running <command>VACUUM</command>.
    </para>

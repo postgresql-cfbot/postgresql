@@ -119,6 +119,7 @@ CREATE EXTENSION <replaceable>module_name</replaceable>;
  &oldsnapshot;
  &pageinspect;
  &passwordcheck;
+ &pgamcheck;
  &pgbuffercache;
  &pgcrypto;
  &pgfreespacemap;

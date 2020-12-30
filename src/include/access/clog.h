@@ -11,23 +11,10 @@
 #ifndef CLOG_H
 #define CLOG_H
 
+#include "access/clogdefs.h"
 #include "access/xlogreader.h"
 #include "storage/sync.h"
 #include "lib/stringinfo.h"
-
-/*
- * Possible transaction statuses --- note that all-zeroes is the initial
- * state.
- *
- * A "subcommitted" transaction is a committed subtransaction whose parent
- * hasn't committed or aborted yet.
- */
-typedef int XidStatus;
-
-#define TRANSACTION_STATUS_IN_PROGRESS		0x00
-#define TRANSACTION_STATUS_COMMITTED		0x01
-#define TRANSACTION_STATUS_ABORTED			0x02
-#define TRANSACTION_STATUS_SUB_COMMITTED	0x03
 
 typedef struct xl_clog_truncate
 {
@@ -38,7 +25,8 @@ typedef struct xl_clog_truncate
 
 extern void TransactionIdSetTreeStatus(TransactionId xid, int nsubxids,
 									   TransactionId *subxids, XidStatus status, XLogRecPtr lsn);
-extern XidStatus TransactionIdGetStatus(TransactionId xid, XLogRecPtr *lsn);
+extern XidStatus TransactionIdGetStatus(TransactionId xid, XLogRecPtr *lsn,
+										bool throwError);
 
 extern Size CLOGShmemBuffers(void);
 extern Size CLOGShmemSize(void);

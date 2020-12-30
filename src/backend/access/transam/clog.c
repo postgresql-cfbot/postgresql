@@ -357,7 +357,7 @@ TransactionIdSetPageStatusInternal(TransactionId xid, int nsubxids,
 	 * write-busy, since we don't care if the update reaches disk sooner than
 	 * we think.
 	 */
-	slotno = SimpleLruReadPage(XactCtl, pageno, XLogRecPtrIsInvalid(lsn), xid);
+	slotno = SimpleLruReadPage(XactCtl, pageno, XLogRecPtrIsInvalid(lsn), xid, true);
 
 	/*
 	 * Set the main transaction id, if any.
@@ -631,7 +631,7 @@ TransactionIdSetStatusBit(TransactionId xid, XidStatus status, XLogRecPtr lsn, i
  * for most uses; TransactionLogFetch() in transam.c is the intended caller.
  */
 XidStatus
-TransactionIdGetStatus(TransactionId xid, XLogRecPtr *lsn)
+TransactionIdGetStatus(TransactionId xid, XLogRecPtr *lsn, bool throwError)
 {
 	int			pageno = TransactionIdToPage(xid);
 	int			byteno = TransactionIdToByte(xid);
@@ -643,13 +643,18 @@ TransactionIdGetStatus(TransactionId xid, XLogRecPtr *lsn)
 
 	/* lock is acquired by SimpleLruReadPage_ReadOnly */
 
-	slotno = SimpleLruReadPage_ReadOnly(XactCtl, pageno, xid);
-	byteptr = XactCtl->shared->page_buffer[slotno] + byteno;
+	slotno = SimpleLruReadPage_ReadOnly(XactCtl, pageno, xid, throwError);
+	if (slotno == InvalidSlotNo)
+		status = TRANSACTION_STATUS_UNKNOWN;
+	else
+	{
+		byteptr = XactCtl->shared->page_buffer[slotno] + byteno;
 
-	status = (*byteptr >> bshift) & CLOG_XACT_BITMASK;
+		status = (*byteptr >> bshift) & CLOG_XACT_BITMASK;
 
-	lsnindex = GetLSNIndex(slotno, xid);
-	*lsn = XactCtl->shared->group_lsn[lsnindex];
+		lsnindex = GetLSNIndex(slotno, xid);
+		*lsn = XactCtl->shared->group_lsn[lsnindex];
+	}
 
 	LWLockRelease(XactSLRULock);
 
@@ -796,7 +801,7 @@ TrimCLOG(void)
 		int			slotno;
 		char	   *byteptr;
 
-		slotno = SimpleLruReadPage(XactCtl, pageno, false, xid);
+		slotno = SimpleLruReadPage(XactCtl, pageno, false, xid, true);
 		byteptr = XactCtl->shared->page_buffer[slotno] + byteno;
 
 		/* Zero so-far-unused positions in the current byte */

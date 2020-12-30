@@ -14,6 +14,7 @@
 #ifndef TRANSAM_H
 #define TRANSAM_H
 
+#include "access/clogdefs.h"
 #include "access/xlogdefs.h"
 
 
@@ -264,6 +265,8 @@ extern PGDLLIMPORT VariableCache ShmemVariableCache;
 /*
  * prototypes for functions in transam/transam.c
  */
+extern XidStatus TransactionIdResolveStatus(TransactionId transactionId,
+											bool throwError);
 extern bool TransactionIdDidCommit(TransactionId transactionId);
 extern bool TransactionIdDidAbort(TransactionId transactionId);
 extern bool TransactionIdIsKnownCompleted(TransactionId transactionId);

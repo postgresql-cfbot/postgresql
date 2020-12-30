@@ -1,0 +1,5 @@
+# pg_amcheck extension
+comment = 'command-line tool for verifying relation integrity'
+default_version = '1.3'
+module_pathname = '$libdir/pg_amcheck'
+relocatable = true

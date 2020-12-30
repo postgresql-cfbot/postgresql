@@ -101,6 +101,7 @@ AlterUserMappingStmt
 AlteredTableInfo
 AlternativeSubPlan
 AlternativeSubPlanState
+AmCheckSettings
 AnalyzeAttrComputeStatsFunc
 AnalyzeAttrFetchFunc
 AnalyzeForeignTable_function
@@ -402,6 +403,7 @@ ConfigData
 ConfigVariable
 ConnCacheEntry
 ConnCacheKey
+ConnectOptions
 ConnStatusType
 ConnType
 ConnectionStateEnum
@@ -2799,7 +2801,6 @@ XactCallbackItem
 XactEvent
 XactLockTableWaitInfo
 XidBoundsViolation
-XidCommitStatus
 XidHorizonPrefetchState
 XidStatus
 XmlExpr

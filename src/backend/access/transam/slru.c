@@ -385,14 +385,15 @@ SimpleLruWaitIO(SlruCtl ctl, int slotno)
  * The passed-in xid is used only for error reporting, and may be
  * InvalidTransactionId if no specific xid is associated with the action.
  *
- * Return value is the shared-buffer slot number now holding the page.
- * The buffer's LRU access info is updated.
+ * On error, when throwError is false, the return value is negative.
+ * Otherwise, return value is the shared-buffer slot number now holding the
+ * page, and the buffer's LRU access info is updated.
  *
  * Control lock must be held at entry, and will be held at exit.
  */
 int
 SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
-				  TransactionId xid)
+				  TransactionId xid, bool throwError)
 {
 	SlruShared	shared = ctl->shared;
 
@@ -465,7 +466,11 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
 
 		/* Now it's okay to ereport if we failed */
 		if (!ok)
-			SlruReportIOError(ctl, pageno, xid);
+		{
+			if (throwError)
+				SlruReportIOError(ctl, pageno, xid);
+			return InvalidSlotNo;
+		}
 
 		SlruRecentlyUsed(shared, slotno);
 
@@ -484,14 +489,16 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
  * The passed-in xid is used only for error reporting, and may be
  * InvalidTransactionId if no specific xid is associated with the action.
  *
- * Return value is the shared-buffer slot number now holding the page.
- * The buffer's LRU access info is updated.
+ * On error, when throwError is false, the return value is negative.
+ * Otherwise, return value is the shared-buffer slot number now holding the
+ * page, and the buffer's LRU access info is updated.
  *
  * Control lock must NOT be held at entry, but will be held at exit.
  * It is unspecified whether the lock will be shared or exclusive.
  */
 int
-SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
+SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid,
+						   bool throwError)
 {
 	SlruShared	shared = ctl->shared;
 	int			slotno;
@@ -520,7 +527,7 @@ SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
 	LWLockRelease(shared->ControlLock);
 	LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
 
-	return SimpleLruReadPage(ctl, pageno, true, xid);
+	return SimpleLruReadPage(ctl, pageno, true, xid, throwError);
 }
 
 /*

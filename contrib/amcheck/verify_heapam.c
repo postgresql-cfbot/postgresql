@@ -10,6 +10,7 @@
  */
 #include "postgres.h"
 
+#include "access/clogdefs.h"
 #include "access/detoast.h"
 #include "access/genam.h"
 #include "access/heapam.h"
@@ -22,6 +23,7 @@
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/procarray.h"
+#include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 
@@ -42,13 +44,6 @@ typedef enum XidBoundsViolation
 	XID_PRECEDES_RELMIN,
 	XID_BOUNDS_OK
 } XidBoundsViolation;
-
-typedef enum XidCommitStatus
-{
-	XID_COMMITTED,
-	XID_IN_PROGRESS,
-	XID_ABORTED
-} XidCommitStatus;
 
 typedef enum SkipPages
 {
@@ -83,7 +78,7 @@ typedef struct HeapCheckContext
 	 * Cached copies of the most recently checked xid and its status.
 	 */
 	TransactionId cached_xid;
-	XidCommitStatus cached_status;
+	XidStatus	cached_status;
 
 	/* Values concerning the heap relation being checked */
 	Relation	rel;
@@ -148,7 +143,7 @@ static XidBoundsViolation check_mxid_valid_in_rel(MultiXactId mxid,
 												  HeapCheckContext *ctx);
 static XidBoundsViolation get_xid_status(TransactionId xid,
 										 HeapCheckContext *ctx,
-										 XidCommitStatus *status);
+										 XidStatus *status);
 
 /*
  * Scan and report corruption in heap pages, optionally reconciling toasted
@@ -484,6 +479,8 @@ verify_heapam(PG_FUNCTION_ARGS)
 static void
 sanity_check_relation(Relation rel)
 {
+	AclResult	aclresult;
+
 	if (rel->rd_rel->relkind != RELKIND_RELATION &&
 		rel->rd_rel->relkind != RELKIND_MATVIEW &&
 		rel->rd_rel->relkind != RELKIND_TOASTVALUE)
@@ -495,6 +492,11 @@ sanity_check_relation(Relation rel)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("only heap AM is supported")));
+	aclresult = pg_class_aclcheck(rel->rd_id, GetUserId(), ACL_SELECT);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult,
+					   get_relkind_objtype(rel->rd_rel->relkind),
+					   RelationGetRelationName(rel));
 }
 
 /*
@@ -675,7 +677,7 @@ check_tuple_header_and_visibilty(HeapTupleHeader tuphdr, HeapCheckContext *ctx)
 		else if (infomask & HEAP_MOVED_OFF ||
 				 infomask & HEAP_MOVED_IN)
 		{
-			XidCommitStatus status;
+			XidStatus	status;
 			TransactionId xvac = HeapTupleHeaderGetXvac(tuphdr);
 
 			switch (get_xid_status(xvac, ctx, &status))
@@ -710,17 +712,25 @@ check_tuple_header_and_visibilty(HeapTupleHeader tuphdr, HeapCheckContext *ctx)
 				case XID_BOUNDS_OK:
 					switch (status)
 					{
-						case XID_IN_PROGRESS:
+						case TRANSACTION_STATUS_IN_PROGRESS:
 							return true;	/* HEAPTUPLE_DELETE_IN_PROGRESS */
-						case XID_COMMITTED:
-						case XID_ABORTED:
+						case TRANSACTION_STATUS_COMMITTED:
+						case TRANSACTION_STATUS_ABORTED:
 							return false;	/* HEAPTUPLE_DEAD */
+						case TRANSACTION_STATUS_UNKNOWN:
+							report_corruption(ctx,
+											  psprintf("old-style VACUUM FULL transaction ID %u transaction status is lost",
+													   xvac));
+							return false;	/* corruption */
+						case TRANSACTION_STATUS_SUB_COMMITTED:
+							elog(ERROR, "get_xid_status failed to resolve parent transaction status");
+							return false;	/* not reached */
 					}
 			}
 		}
 		else
 		{
-			XidCommitStatus status;
+			XidStatus	status;
 
 			switch (get_xid_status(raw_xmin, ctx, &status))
 			{
@@ -752,12 +762,20 @@ check_tuple_header_and_visibilty(HeapTupleHeader tuphdr, HeapCheckContext *ctx)
 				case XID_BOUNDS_OK:
 					switch (status)
 					{
-						case XID_COMMITTED:
+						case TRANSACTION_STATUS_COMMITTED:
 							break;
-						case XID_IN_PROGRESS:
+						case TRANSACTION_STATUS_IN_PROGRESS:
 							return true;	/* insert or delete in progress */
-						case XID_ABORTED:
+						case TRANSACTION_STATUS_ABORTED:
 							return false;	/* HEAPTUPLE_DEAD */
+						case TRANSACTION_STATUS_UNKNOWN:
+							report_corruption(ctx,
+											  psprintf("raw xmin %u transaction status is lost",
+													   raw_xmin));
+							return false;	/* corruption */
+						case TRANSACTION_STATUS_SUB_COMMITTED:
+							elog(ERROR, "get_xid_status failed to resolve parent transaction status");
+							return false;	/* not reached */
 					}
 			}
 		}
@@ -767,7 +785,7 @@ check_tuple_header_and_visibilty(HeapTupleHeader tuphdr, HeapCheckContext *ctx)
 	{
 		if (infomask & HEAP_XMAX_IS_MULTI)
 		{
-			XidCommitStatus status;
+			XidStatus	status;
 			TransactionId xmax = HeapTupleGetUpdateXid(tuphdr);
 
 			switch (get_xid_status(xmax, ctx, &status))
@@ -801,12 +819,20 @@ check_tuple_header_and_visibilty(HeapTupleHeader tuphdr, HeapCheckContext *ctx)
 				case XID_BOUNDS_OK:
 					switch (status)
 					{
-						case XID_IN_PROGRESS:
+						case TRANSACTION_STATUS_IN_PROGRESS:
 							return true;	/* HEAPTUPLE_DELETE_IN_PROGRESS */
-						case XID_COMMITTED:
-						case XID_ABORTED:
+						case TRANSACTION_STATUS_COMMITTED:
+						case TRANSACTION_STATUS_ABORTED:
 							return false;	/* HEAPTUPLE_RECENTLY_DEAD or
 											 * HEAPTUPLE_DEAD */
+						case TRANSACTION_STATUS_UNKNOWN:
+							report_corruption(ctx,
+											  psprintf("xmax %u transaction status is lost",
+													   xmax));
+							return false;	/* corruption */
+						case TRANSACTION_STATUS_SUB_COMMITTED:
+							elog(ERROR, "get_xid_status failed to resolve parent transaction status");
+							return false;	/* not reached */
 					}
 			}
 
@@ -1401,7 +1427,7 @@ check_mxid_valid_in_rel(MultiXactId mxid, HeapCheckContext *ctx)
  */
 static XidBoundsViolation
 get_xid_status(TransactionId xid, HeapCheckContext *ctx,
-			   XidCommitStatus *status)
+			   XidStatus *status)
 {
 	FullTransactionId fxid;
 	FullTransactionId clog_horizon;
@@ -1412,7 +1438,7 @@ get_xid_status(TransactionId xid, HeapCheckContext *ctx,
 	else if (xid == BootstrapTransactionId || xid == FrozenTransactionId)
 	{
 		if (status != NULL)
-			*status = XID_COMMITTED;
+			*status = TRANSACTION_STATUS_COMMITTED;
 		return XID_BOUNDS_OK;
 	}
 
@@ -1447,7 +1473,7 @@ get_xid_status(TransactionId xid, HeapCheckContext *ctx,
 		return XID_BOUNDS_OK;
 	}
 
-	*status = XID_COMMITTED;
+	*status = TRANSACTION_STATUS_COMMITTED;
 	LWLockAcquire(XactTruncationLock, LW_SHARED);
 	clog_horizon =
 		FullTransactionIdFromXidAndCtx(ShmemVariableCache->oldestClogXid,
@@ -1455,13 +1481,9 @@ get_xid_status(TransactionId xid, HeapCheckContext *ctx,
 	if (FullTransactionIdPrecedesOrEquals(clog_horizon, fxid))
 	{
 		if (TransactionIdIsCurrentTransactionId(xid))
-			*status = XID_IN_PROGRESS;
-		else if (TransactionIdDidCommit(xid))
-			*status = XID_COMMITTED;
-		else if (TransactionIdDidAbort(xid))
-			*status = XID_ABORTED;
+			*status = TRANSACTION_STATUS_IN_PROGRESS;
 		else
-			*status = XID_IN_PROGRESS;
+			*status = TransactionIdResolveStatus(xid, false);
 	}
 	LWLockRelease(XactTruncationLock);
 	ctx->cached_xid = xid;

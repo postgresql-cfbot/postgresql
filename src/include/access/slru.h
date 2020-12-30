@@ -133,6 +133,8 @@ typedef struct SlruCtlData
 
 typedef SlruCtlData *SlruCtl;
 
+#define InvalidSlotNo ((int) -1)
+
 
 extern Size SimpleLruShmemSize(int nslots, int nlsns);
 extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
@@ -140,9 +142,9 @@ extern void SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 						  SyncRequestHandler sync_handler);
 extern int	SimpleLruZeroPage(SlruCtl ctl, int pageno);
 extern int	SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
-							  TransactionId xid);
+							  TransactionId xid, bool throwError);
 extern int	SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno,
-									   TransactionId xid);
+									   TransactionId xid, bool throwError);
 extern void SimpleLruWritePage(SlruCtl ctl, int slotno);
 extern void SimpleLruWriteAll(SlruCtl ctl, bool allow_redirtied);
 extern void SimpleLruTruncate(SlruCtl ctl, int cutoffPage);

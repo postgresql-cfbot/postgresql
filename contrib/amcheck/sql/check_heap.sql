@@ -41,6 +41,13 @@ RESET ROLE;
 
 GRANT EXECUTE ON FUNCTION verify_heapam(regclass, boolean, boolean, text, bigint, bigint) TO regress_heaptest_role;
 
+-- verify permissions are checked (error due to no select privileges on relation)
+SET ROLE regress_heaptest_role;
+SELECT * FROM verify_heapam(relation := 'heaptest');
+RESET ROLE;
+
+GRANT SELECT ON heaptest TO regress_heaptest_role;
+
 -- verify permissions are now sufficient
 SET ROLE regress_heaptest_role;
 SELECT * FROM verify_heapam(relation := 'heaptest');

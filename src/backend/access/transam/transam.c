@@ -35,7 +35,8 @@ static XidStatus cachedFetchXidStatus;
 static XLogRecPtr cachedCommitLSN;
 
 /* Local functions */
-static XidStatus TransactionLogFetch(TransactionId transactionId);
+static XidStatus TransactionLogFetch(TransactionId transactionId,
+									 bool throwError);
 
 
 /* ----------------------------------------------------------------
@@ -49,7 +50,7 @@ static XidStatus TransactionLogFetch(TransactionId transactionId);
  * TransactionLogFetch --- fetch commit status of specified transaction id
  */
 static XidStatus
-TransactionLogFetch(TransactionId transactionId)
+TransactionLogFetch(TransactionId transactionId, bool throwError)
 {
 	XidStatus	xidstatus;
 	XLogRecPtr	xidlsn;
@@ -76,14 +77,16 @@ TransactionLogFetch(TransactionId transactionId)
 	/*
 	 * Get the transaction status.
 	 */
-	xidstatus = TransactionIdGetStatus(transactionId, &xidlsn);
+	xidstatus = TransactionIdGetStatus(transactionId, &xidlsn, throwError);
 
 	/*
 	 * Cache it, but DO NOT cache status for unfinished or sub-committed
 	 * transactions!  We only cache status that is guaranteed not to change.
+	 * Likewise, DO NOT cache when the status is unknown.
 	 */
 	if (xidstatus != TRANSACTION_STATUS_IN_PROGRESS &&
-		xidstatus != TRANSACTION_STATUS_SUB_COMMITTED)
+		xidstatus != TRANSACTION_STATUS_SUB_COMMITTED &&
+		xidstatus != TRANSACTION_STATUS_UNKNOWN)
 	{
 		cachedFetchXid = transactionId;
 		cachedFetchXidStatus = xidstatus;
@@ -96,6 +99,7 @@ TransactionLogFetch(TransactionId transactionId)
 /* ----------------------------------------------------------------
  *						Interface functions
  *
+ *		TransactionIdResolveStatus
  *		TransactionIdDidCommit
  *		TransactionIdDidAbort
  *		========
@@ -115,24 +119,17 @@ TransactionLogFetch(TransactionId transactionId)
  */
 
 /*
- * TransactionIdDidCommit
- *		True iff transaction associated with the identifier did commit.
- *
- * Note:
- *		Assumes transaction identifier is valid and exists in clog.
+ * TransactionIdResolveStatus
+ * 		Returns the status of the transaction associated with the identifer,
+ *		recursively resolving sub-committed transaction status by checking
+ *		the parent transaction.
  */
-bool							/* true if given transaction committed */
-TransactionIdDidCommit(TransactionId transactionId)
+XidStatus
+TransactionIdResolveStatus(TransactionId transactionId, bool throwError)
 {
 	XidStatus	xidstatus;
 
-	xidstatus = TransactionLogFetch(transactionId);
-
-	/*
-	 * If it's marked committed, it's committed.
-	 */
-	if (xidstatus == TRANSACTION_STATUS_COMMITTED)
-		return true;
+	xidstatus = TransactionLogFetch(transactionId, throwError);
 
 	/*
 	 * If it's marked subcommitted, we have to check the parent recursively.
@@ -153,21 +150,31 @@ TransactionIdDidCommit(TransactionId transactionId)
 		TransactionId parentXid;
 
 		if (TransactionIdPrecedes(transactionId, TransactionXmin))
-			return false;
+			return TRANSACTION_STATUS_ABORTED;
 		parentXid = SubTransGetParent(transactionId);
 		if (!TransactionIdIsValid(parentXid))
 		{
 			elog(WARNING, "no pg_subtrans entry for subcommitted XID %u",
 				 transactionId);
-			return false;
+			return TRANSACTION_STATUS_ABORTED;
 		}
-		return TransactionIdDidCommit(parentXid);
+		return TransactionIdResolveStatus(parentXid, throwError);
 	}
+	return xidstatus;
+}
 
-	/*
-	 * It's not committed.
-	 */
-	return false;
+/*
+ * TransactionIdDidCommit
+ *		True iff transaction associated with the identifier did commit.
+ *
+ * Note:
+ *		Assumes transaction identifier is valid and exists in clog.
+ */
+bool							/* true if given transaction committed */
+TransactionIdDidCommit(TransactionId transactionId)
+{
+	return (TransactionIdResolveStatus(transactionId, true) ==
+			TRANSACTION_STATUS_COMMITTED);
 }
 
 /*
@@ -180,43 +187,8 @@ TransactionIdDidCommit(TransactionId transactionId)
 bool							/* true if given transaction aborted */
 TransactionIdDidAbort(TransactionId transactionId)
 {
-	XidStatus	xidstatus;
-
-	xidstatus = TransactionLogFetch(transactionId);
-
-	/*
-	 * If it's marked aborted, it's aborted.
-	 */
-	if (xidstatus == TRANSACTION_STATUS_ABORTED)
-		return true;
-
-	/*
-	 * If it's marked subcommitted, we have to check the parent recursively.
-	 * However, if it's older than TransactionXmin, we can't look at
-	 * pg_subtrans; instead assume that the parent crashed without cleaning up
-	 * its children.
-	 */
-	if (xidstatus == TRANSACTION_STATUS_SUB_COMMITTED)
-	{
-		TransactionId parentXid;
-
-		if (TransactionIdPrecedes(transactionId, TransactionXmin))
-			return true;
-		parentXid = SubTransGetParent(transactionId);
-		if (!TransactionIdIsValid(parentXid))
-		{
-			/* see notes in TransactionIdDidCommit */
-			elog(WARNING, "no pg_subtrans entry for subcommitted XID %u",
-				 transactionId);
-			return true;
-		}
-		return TransactionIdDidAbort(parentXid);
-	}
-
-	/*
-	 * It's not aborted.
-	 */
-	return false;
+	return (TransactionIdResolveStatus(transactionId, true) ==
+			TRANSACTION_STATUS_ABORTED);
 }
 
 /*
@@ -419,7 +391,7 @@ TransactionIdGetCommitLSN(TransactionId xid)
 	/*
 	 * Get the transaction status.
 	 */
-	(void) TransactionIdGetStatus(xid, &result);
+	(void) TransactionIdGetStatus(xid, &result, true);
 
 	return result;
 }

@@ -398,6 +398,7 @@ pg_truncate_visibility_map(PG_FUNCTION_ARGS)
 	if (BlockNumberIsValid(block))
 	{
 		fork = VISIBILITYMAP_FORKNUM;
+		MarkTruncateBuffers(rel->rd_smgr->smgr_rnode, &fork, 1, &block);
 		smgrtruncate(rel->rd_smgr, &fork, 1, &block);
 	}
 

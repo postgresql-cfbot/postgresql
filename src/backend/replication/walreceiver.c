@@ -50,6 +50,7 @@
 #include "postgres.h"
 
 #include <unistd.h>
+#include <libpmem.h>
 
 #include "access/htup_details.h"
 #include "access/timeline.h"
@@ -100,7 +101,7 @@ WalReceiverFunctionsType *WalReceiverFunctions = NULL;
  * but for walreceiver to write the XLOG. recvFileTLI is the TimeLineID
  * corresponding the filename of recvFile.
  */
-static int	recvFile = -1;
+static void *recvFile = NULL;
 static TimeLineID recvFileTLI = 0;
 static XLogSegNo recvSegNo = 0;
 
@@ -602,7 +603,7 @@ WalReceiverMain(void)
 
 			XLogWalRcvFlush(false);
 			XLogFileName(xlogfname, recvFileTLI, recvSegNo, wal_segment_size);
-			if (close(recvFile) != 0)
+			if (pmem_unmap(recvFile, wal_segment_size) != 0)
 				ereport(PANIC,
 						(errcode_for_file_access(),
 						 errmsg("could not close log segment %s: %m",
@@ -617,7 +618,7 @@ WalReceiverMain(void)
 			else
 				XLogArchiveNotify(xlogfname);
 		}
-		recvFile = -1;
+		recvFile = NULL;
 
 		elog(DEBUG1, "walreceiver ended streaming and awaits new instructions");
 		WalRcvWaitForStartPosition(&startpoint, &startpointTLI);
@@ -896,7 +897,7 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 				 * process soon, so we don't advise the OS to release cache
 				 * pages associated with the file like XLogFileClose() does.
 				 */
-				if (close(recvFile) != 0)
+				if (pmem_unmap(recvFile, wal_segment_size) != 0)
 					ereport(PANIC,
 							(errcode_for_file_access(),
 							 errmsg("could not close log segment %s: %m",
@@ -911,7 +912,7 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 				else
 					XLogArchiveNotify(xlogfname);
 			}
-			recvFile = -1;
+			recvFile = NULL;
 
 			/* Create/use new log file */
 			XLByteToSeg(recptr, recvSegNo, wal_segment_size);
@@ -931,7 +932,10 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 		/* OK to write the logs */
 		errno = 0;
 
-		byteswritten = pg_pwrite(recvFile, buf, segbytes, (off_t) startoff);
+		// byteswritten = pg_pwrite(recvFile, buf, segbytes, (off_t) startoff);
+		pmem_memcpy_nodrain((char *) recvFile + startoff, buf, segbytes);
+		byteswritten = segbytes;
+
 		if (byteswritten <= 0)
 		{
 			char		xlogfname[MAXFNAMELEN];

@@ -936,6 +936,10 @@ initialize_SSL(PGconn *conn)
 
 		if ((cvstore = SSL_CTX_get_cert_store(SSL_context)) != NULL)
 		{
+			char *filename = NULL;
+			char *dirname = NULL;
+			struct stat statbuf;
+
 			if (conn->sslcrl && strlen(conn->sslcrl) > 0)
 				strlcpy(fnbuf, conn->sslcrl, sizeof(fnbuf));
 			else if (have_homedir)
@@ -943,9 +947,15 @@ initialize_SSL(PGconn *conn)
 			else
 				fnbuf[0] = '\0';
 
+			/* Identify whether it is a file or a directory */
+			if (stat(fnbuf, &statbuf) == 0 && S_ISDIR(statbuf.st_mode))
+				dirname = fnbuf;
+			else
+				filename = fnbuf;
+
 			/* Set the flags to check against the complete CRL chain */
 			if (fnbuf[0] != '\0' &&
-				X509_STORE_load_locations(cvstore, fnbuf, NULL) == 1)
+				X509_STORE_load_locations(cvstore, filename, dirname) == 1)
 			{
 				X509_STORE_set_flags(cvstore,
 									 X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);

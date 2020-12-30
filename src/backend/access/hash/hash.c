@@ -22,6 +22,7 @@
 #include "access/hash_xlog.h"
 #include "access/relscan.h"
 #include "access/tableam.h"
+#include "access/walprohibit.h"
 #include "catalog/index.h"
 #include "commands/progress.h"
 #include "commands/vacuum.h"
@@ -467,6 +468,7 @@ hashbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	Buffer		metabuf = InvalidBuffer;
 	HashMetaPage metap;
 	HashMetaPage cachedmetap;
+	bool		needwal;
 
 	tuples_removed = 0;
 	num_index_tuples = 0;
@@ -573,6 +575,10 @@ loop_top:
 		goto loop_top;
 	}
 
+	needwal = RelationNeedsWAL(rel);
+	if (needwal)
+		CheckWALPermitted();
+
 	/* Okay, we're really done.  Update tuple count in metapage. */
 	START_CRIT_SECTION();
 
@@ -603,7 +609,7 @@ loop_top:
 	MarkBufferDirty(metabuf);
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(rel))
+	if (needwal)
 	{
 		xl_hash_update_meta_page xlrec;
 		XLogRecPtr	recptr;
@@ -690,6 +696,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 	Buffer		buf;
 	Bucket		new_bucket PG_USED_FOR_ASSERTS_ONLY = InvalidBucket;
 	bool		bucket_dirty = false;
+	bool		needwal = RelationNeedsWAL(rel);
 
 	blkno = bucket_blkno;
 	buf = bucket_buf;
@@ -788,6 +795,9 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 		 */
 		if (ndeletable > 0)
 		{
+			if (needwal)
+				CheckWALPermitted();
+
 			/* No ereport(ERROR) until changes are logged */
 			START_CRIT_SECTION();
 
@@ -809,7 +819,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 			MarkBufferDirty(buf);
 
 			/* XLOG stuff */
-			if (RelationNeedsWAL(rel))
+			if (needwal)
 			{
 				xl_hash_delete xlrec;
 				XLogRecPtr	recptr;
@@ -883,6 +893,9 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 		page = BufferGetPage(bucket_buf);
 		bucket_opaque = (HashPageOpaque) PageGetSpecialPointer(page);
 
+		if (needwal)
+			CheckWALPermitted();
+
 		/* No ereport(ERROR) until changes are logged */
 		START_CRIT_SECTION();
 
@@ -890,7 +903,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 		MarkBufferDirty(bucket_buf);
 
 		/* XLOG stuff */
-		if (RelationNeedsWAL(rel))
+		if (needwal)
 		{
 			XLogRecPtr	recptr;
 

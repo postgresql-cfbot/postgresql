@@ -14,6 +14,7 @@
 #include "access/brin_pageops.h"
 #include "access/brin_revmap.h"
 #include "access/brin_xlog.h"
+#include "access/walprohibit.h"
 #include "access/xloginsert.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
@@ -65,6 +66,7 @@ brin_doupdate(Relation idxrel, BlockNumber pagesPerRange,
 	Buffer		newbuf;
 	BlockNumber newblk = InvalidBlockNumber;
 	bool		extended;
+	bool		needwal = RelationNeedsWAL(idxrel);
 
 	Assert(newsz == MAXALIGN(newsz));
 
@@ -176,13 +178,16 @@ brin_doupdate(Relation idxrel, BlockNumber pagesPerRange,
 	if (((BrinPageFlags(oldpage) & BRIN_EVACUATE_PAGE) == 0) &&
 		brin_can_do_samepage_update(oldbuf, origsz, newsz))
 	{
+		if (needwal)
+			CheckWALPermitted();
+
 		START_CRIT_SECTION();
 		if (!PageIndexTupleOverwrite(oldpage, oldoff, (Item) unconstify(BrinTuple *, newtup), newsz))
 			elog(ERROR, "failed to replace BRIN tuple");
 		MarkBufferDirty(oldbuf);
 
 		/* XLOG stuff */
-		if (RelationNeedsWAL(idxrel))
+		if (needwal)
 		{
 			xl_brin_samepage_update xlrec;
 			XLogRecPtr	recptr;
@@ -240,6 +245,9 @@ brin_doupdate(Relation idxrel, BlockNumber pagesPerRange,
 
 		revmapbuf = brinLockRevmapPageForUpdate(revmap, heapBlk);
 
+		if (needwal)
+			CheckWALPermitted();
+
 		START_CRIT_SECTION();
 
 		/*
@@ -267,7 +275,7 @@ brin_doupdate(Relation idxrel, BlockNumber pagesPerRange,
 		MarkBufferDirty(revmapbuf);
 
 		/* XLOG stuff */
-		if (RelationNeedsWAL(idxrel))
+		if (needwal)
 		{
 			xl_brin_update xlrec;
 			XLogRecPtr	recptr;
@@ -351,6 +359,7 @@ brin_doinsert(Relation idxrel, BlockNumber pagesPerRange,
 	Buffer		revmapbuf;
 	ItemPointerData tid;
 	bool		extended;
+	bool		needwal;
 
 	Assert(itemsz == MAXALIGN(itemsz));
 
@@ -405,6 +414,10 @@ brin_doinsert(Relation idxrel, BlockNumber pagesPerRange,
 	page = BufferGetPage(*buffer);
 	blk = BufferGetBlockNumber(*buffer);
 
+	needwal = RelationNeedsWAL(idxrel);
+	if (needwal)
+		CheckWALPermitted();
+
 	/* Execute the actual insertion */
 	START_CRIT_SECTION();
 	if (extended)
@@ -424,7 +437,7 @@ brin_doinsert(Relation idxrel, BlockNumber pagesPerRange,
 	MarkBufferDirty(revmapbuf);
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(idxrel))
+	if (needwal)
 	{
 		xl_brin_insert xlrec;
 		XLogRecPtr	recptr;
@@ -880,6 +893,8 @@ brin_initialize_empty_new_buffer(Relation idxrel, Buffer buffer)
 	BRIN_elog((DEBUG2,
 			   "brin_initialize_empty_new_buffer: initializing blank page %u",
 			   BufferGetBlockNumber(buffer)));
+
+	CheckWALPermitted();
 
 	START_CRIT_SECTION();
 	page = BufferGetPage(buffer);

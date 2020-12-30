@@ -2554,6 +2554,19 @@ _readAlternativeSubPlan(void)
 }
 
 /*
+ * _readAlterSystemWALProhibitState
+ */
+static AlterSystemWALProhibitState *
+_readAlterSystemWALProhibitState(void)
+{
+	READ_LOCALS(AlterSystemWALProhibitState);
+
+	READ_BOOL_FIELD(walprohibited);
+
+	READ_DONE();
+}
+
+/*
  * _readExtensibleNode
  */
 static ExtensibleNode *
@@ -2875,6 +2888,8 @@ parseNodeString(void)
 		return_value = _readSubPlan();
 	else if (MATCH("ALTERNATIVESUBPLAN", 18))
 		return_value = _readAlternativeSubPlan();
+	else if (MATCH("ALTERSYSTEMWALPROHIBITSTATE", 27))
+		return_value = _readAlterSystemWALProhibitState();
 	else if (MATCH("EXTENSIBLENODE", 14))
 		return_value = _readExtensibleNode();
 	else if (MATCH("PARTITIONBOUNDSPEC", 18))

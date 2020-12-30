@@ -182,6 +182,9 @@ typedef struct ControlFileData
 	int			max_locks_per_xact;
 	bool		track_commit_timestamp;
 
+	/* WAL prohibited determines if the WAL insert is allowed or not. */
+	bool		wal_prohibited;
+
 	/*
 	 * This data is used to check for hardware-architecture compatibility of
 	 * the database and the backend executable.  We need not check endianness

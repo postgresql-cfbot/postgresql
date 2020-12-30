@@ -1,0 +1,5 @@
+# barrier extension
+comment = 'emit ProcSignalBarrier for test purposes'
+default_version = '1.0'
+module_pathname = '$libdir/barrier'
+relocatable = true

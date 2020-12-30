@@ -26,6 +26,7 @@
 #include "access/brin_tuple.h"
 #include "access/brin_xlog.h"
 #include "access/rmgr.h"
+#include "access/walprohibit.h"
 #include "access/xloginsert.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
@@ -340,6 +341,7 @@ brinRevmapDesummarizeRange(Relation idxrel, BlockNumber heapBlk)
 	OffsetNumber revmapOffset;
 	OffsetNumber regOffset;
 	ItemId		lp;
+	bool		needwal;
 
 	revmap = brinRevmapInitialize(idxrel, &pagesPerRange, NULL);
 
@@ -404,6 +406,10 @@ brinRevmapDesummarizeRange(Relation idxrel, BlockNumber heapBlk)
 	 * crashed or aborted summarization; remove them silently.
 	 */
 
+	needwal = RelationNeedsWAL(idxrel);
+	if (needwal)
+		CheckWALPermitted();
+
 	START_CRIT_SECTION();
 
 	ItemPointerSetInvalid(&invalidIptr);
@@ -415,7 +421,7 @@ brinRevmapDesummarizeRange(Relation idxrel, BlockNumber heapBlk)
 	MarkBufferDirty(regBuf);
 	MarkBufferDirty(revmapBuf);
 
-	if (RelationNeedsWAL(idxrel))
+	if (needwal)
 	{
 		xl_brin_desummarize xlrec;
 		XLogRecPtr	recptr;
@@ -612,6 +618,8 @@ revmap_physical_extend(BrinRevmap *revmap)
 		/* have caller start over */
 		return;
 	}
+
+	AssertWALPermittedHaveXID();
 
 	/*
 	 * Ok, we have now locked the metapage and the target block. Re-initialize

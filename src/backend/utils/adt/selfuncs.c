@@ -3292,7 +3292,10 @@ add_unique_group_var(PlannerInfo *root, List *varinfos,
 }
 
 /*
- * estimate_num_groups		- Estimate number of groups in a grouped query
+ * estimate_num_groups/estimate_num_groups_incremental
+ *		- Estimate number of groups in a grouped query.
+ *		  _incremental variant is performance optimization for
+ *		  case of adding one-by-one column
  *
  * Given a query having a GROUP BY clause, estimate how many groups there
  * will be --- ie, the number of distinct combinations of the GROUP BY
@@ -3360,11 +3363,20 @@ double
 estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 					List **pgset)
 {
-	List	   *varinfos = NIL;
+	return estimate_num_groups_incremental(root, groupExprs,
+										   input_rows, pgset, NULL, 0);
+}
+
+double
+estimate_num_groups_incremental(PlannerInfo *root, List *groupExprs,
+					double input_rows,
+					List **pgset, List **cache_varinfos, int prevNExprs)
+{
+	List	   *varinfos = (cache_varinfos) ? *cache_varinfos : NIL;
 	double		srf_multiplier = 1.0;
 	double		numdistinct;
 	ListCell   *l;
-	int			i;
+	int			i, j;
 
 	/*
 	 * We don't ever want to return an estimate of zero groups, as that tends
@@ -3391,7 +3403,7 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 	 */
 	numdistinct = 1.0;
 
-	i = 0;
+	i = j = 0;
 	foreach(l, groupExprs)
 	{
 		Node	   *groupexpr = (Node *) lfirst(l);
@@ -3399,6 +3411,14 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 		VariableStatData vardata;
 		List	   *varshere;
 		ListCell   *l2;
+
+		/* was done on previous call */
+		if (cache_varinfos && j++ < prevNExprs)
+		{
+			if (pgset)
+				i++; /* to keep in sync with lines below */
+			continue;
+		}
 
 		/* is expression in this grouping set? */
 		if (pgset && !list_member_int(*pgset, i++))
@@ -3461,7 +3481,11 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 		if (varshere == NIL)
 		{
 			if (contain_volatile_functions(groupexpr))
+			{
+				if (cache_varinfos)
+					*cache_varinfos = varinfos;
 				return input_rows;
+			}
 			continue;
 		}
 
@@ -3477,6 +3501,9 @@ estimate_num_groups(PlannerInfo *root, List *groupExprs, double input_rows,
 			ReleaseVariableStats(vardata);
 		}
 	}
+
+	if (cache_varinfos)
+		*cache_varinfos = varinfos;
 
 	/*
 	 * If now no Vars, we must have an all-constant or all-boolean GROUP BY

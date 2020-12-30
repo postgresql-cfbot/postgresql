@@ -4044,6 +4044,8 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 			break;
 		case WAIT_EVENT_XACT_GROUP_UPDATE:
 			event_name = "XactGroupUpdate";
+		case WAIT_EVENT_WAIT_NEXT_MXMEMBERS:
+			event_name = "MultiXactWaitNextMembers";
 			break;
 			/* no default case, so that compiler will warn */
 	}

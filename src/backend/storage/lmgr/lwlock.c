@@ -1066,6 +1066,8 @@ LWLockWakeup(LWLock *lock)
 static void
 LWLockQueueSelf(LWLock *lock, LWLockMode mode)
 {
+	Assert(mode != LW_NONE);
+
 	/*
 	 * If we don't have a PGPROC structure, there's no way to wait. This
 	 * should never occur, since MyProc should only be null during shared
@@ -1826,6 +1828,7 @@ LWLockRelease(LWLock *lock)
 		elog(ERROR, "lock %s is not held", T_NAME(lock));
 
 	mode = held_lwlocks[i].mode;
+	Assert(mode == LW_EXCLUSIVE || mode == LW_SHARED);
 
 	num_held_lwlocks--;
 	for (; i < num_held_lwlocks; i++)

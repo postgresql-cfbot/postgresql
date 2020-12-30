@@ -924,6 +924,7 @@ SerialGetMinConflictCommitSeqNo(TransactionId xid)
 	TransactionId tailXid;
 	SerCommitSeqNo val;
 	int			slotno;
+	LWLockMode	lockmode = LW_NONE;
 
 	Assert(TransactionIdIsValid(xid));
 
@@ -946,8 +947,9 @@ SerialGetMinConflictCommitSeqNo(TransactionId xid)
 	 * but will return with that lock held, which must then be released.
 	 */
 	slotno = SimpleLruReadPage_ReadOnly(SerialSlruCtl,
-										SerialPage(xid), xid);
+										SerialPage(xid), xid, &lockmode);
 	val = SerialValue(slotno, xid);
+	Assert(lockmode != LW_NONE);
 	LWLockRelease(SerialSLRULock);
 	return val;
 }

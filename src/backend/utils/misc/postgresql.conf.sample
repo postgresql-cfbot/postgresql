@@ -189,6 +189,14 @@
 					# (change requires restart)
 #backend_flush_after = 0		# measured in pages, 0 disables
 
+# - MultiXact Buffers -
+
+#multixact_offsets_slru_buffers = 8	# memory used for MultiXact offsets
+					# (change requires restart)
+#multixact_members_slru_buffers = 16	# memory used for MultiXact members
+					# (change requires restart)
+#multixact_local_cache_entries = 256	# number of cached MultiXact by backend
+					# (change requires restart)
 
 #------------------------------------------------------------------------------
 # WRITE-AHEAD LOG

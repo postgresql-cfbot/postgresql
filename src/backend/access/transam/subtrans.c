@@ -113,6 +113,7 @@ SubTransGetParent(TransactionId xid)
 	int			slotno;
 	TransactionId *ptr;
 	TransactionId parent;
+	LWLockMode	lockmode = LW_NONE;
 
 	/* Can't ask about stuff that might not be around anymore */
 	Assert(TransactionIdFollowsOrEquals(xid, TransactionXmin));
@@ -123,12 +124,13 @@ SubTransGetParent(TransactionId xid)
 
 	/* lock is acquired by SimpleLruReadPage_ReadOnly */
 
-	slotno = SimpleLruReadPage_ReadOnly(SubTransCtl, pageno, xid);
+	slotno = SimpleLruReadPage_ReadOnly(SubTransCtl, pageno, xid, &lockmode);
 	ptr = (TransactionId *) SubTransCtl->shared->page_buffer[slotno];
 	ptr += entryno;
 
 	parent = *ptr;
 
+	Assert(lockmode != LW_NONE);
 	LWLockRelease(SubtransSLRULock);
 
 	return parent;

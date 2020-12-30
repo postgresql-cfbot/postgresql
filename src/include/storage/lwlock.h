@@ -129,6 +129,8 @@ extern PGDLLIMPORT int NamedLWLockTrancheRequests;
 
 typedef enum LWLockMode
 {
+	LW_NONE,					/* Not a lock mode. Indicates that there is no
+								 * lock. */
 	LW_EXCLUSIVE,
 	LW_SHARED,
 	LW_WAIT_UNTIL_FREE			/* A special mode used in PGPROC->lwWaitMode,

@@ -58,6 +58,7 @@ typedef enum PgBenchExprType
 {
 	ENODE_CONSTANT,
 	ENODE_VARIABLE,
+	ENODE_VAREXISTS,
 	ENODE_FUNCTION
 } PgBenchExprType;
 

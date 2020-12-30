@@ -1,0 +1,40 @@
+--
+--  Test decode function
+--
+CREATE EXTENSION decode;
+SELECT decode(1, 1, 5, 0);
+ decode 
+--------
+      5
+(1 row)
+
+SELECT decode(2, 1, 5, 0);
+ decode 
+--------
+      0
+(1 row)
+
+SELECT decode(1, 1, 5, 0.5);
+ decode 
+--------
+      5
+(1 row)
+
+SELECT decode(2, 1, 5, 0.5);
+ decode 
+--------
+    0.5
+(1 row)
+
+SELECT decode(1, 1, 'Ahoj', 'Nazdar');
+ decode 
+--------
+ Ahoj
+(1 row)
+
+SELECT decode(2, 1, 'Ahoj', 'Nazdar');
+ decode 
+--------
+ Nazdar
+(1 row)
+

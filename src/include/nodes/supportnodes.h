@@ -239,4 +239,25 @@ typedef struct SupportRequestIndexCondition
 								 * equivalent of the function call */
 } SupportRequestIndexCondition;
 
+/*
+ * The SupportRequestRettype request type allows to calculate result type for
+ * functions that returns "any" type. It is designed for procedural specification
+ * return type.
+ */
+typedef struct SupportRequestRettype
+{
+	NodeTag		type;
+
+	/* Input fields */
+	List	   *funcname;
+	List	   *fargs;
+	Oid		   *actual_arg_types;
+	Oid		   *declared_arg_types;
+	int			nargs;
+
+	/* Output fields */
+	Oid			rettype;
+
+} SupportRequestRettype;
+
 #endif							/* SUPPORTNODES_H */

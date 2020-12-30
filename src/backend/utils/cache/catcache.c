@@ -38,6 +38,7 @@
 #include "utils/rel.h"
 #include "utils/resowner_private.h"
 #include "utils/syscache.h"
+#include "utils/timestamp.h"
 
 
  /* #define CACHEDEBUG */	/* turns DEBUG elogs on */
@@ -60,8 +61,18 @@
 #define CACHE_elog(...)
 #endif
 
+/*
+ * GUC variable to define the minimum age of entries that will be considered
+ * to be evicted in seconds. -1 to disable the feature.
+ */
+int catalog_cache_prune_min_age = -1;
+uint64	prune_min_age_us;
+
 /* Cache management header --- pointer is NULL until created */
 static CatCacheHeader *CacheHdr = NULL;
+
+/* Clock for the last accessed time of a catcache entry. */
+uint64	catcacheclock = 0;
 
 static inline HeapTuple SearchCatCacheInternal(CatCache *cache,
 											   int nkeys,
@@ -74,6 +85,7 @@ static pg_noinline HeapTuple SearchCatCacheMiss(CatCache *cache,
 												Index hashIndex,
 												Datum v1, Datum v2,
 												Datum v3, Datum v4);
+static bool CatCacheCleanupOldEntries(CatCache *cp);
 
 static uint32 CatalogCacheComputeHashValue(CatCache *cache, int nkeys,
 										   Datum v1, Datum v2, Datum v3, Datum v4);
@@ -99,6 +111,15 @@ static void CatCacheFreeKeys(TupleDesc tupdesc, int nkeys, int *attnos,
 static void CatCacheCopyKeys(TupleDesc tupdesc, int nkeys, int *attnos,
 							 Datum *srckeys, Datum *dstkeys);
 
+/* GUC assign function */
+void
+assign_catalog_cache_prune_min_age(int newval, void *extra)
+{
+	if (newval < 0)
+		prune_min_age_us = UINT64_MAX;
+	else
+		prune_min_age_us = ((uint64) newval) * USECS_PER_SEC;
+}
 
 /*
  *					internal support functions
@@ -459,6 +480,13 @@ CatCacheRemoveCTup(CatCache *cache, CatCTup *ct)
 	Assert(ct->refcount == 0);
 	Assert(ct->my_cache == cache);
 
+	/* delink from linked list if not yet */
+	if (ct->cache_elem.prev)
+	{
+		dlist_delete(&ct->cache_elem);
+		ct->cache_elem.prev = NULL;
+	}
+
 	if (ct->c_list)
 	{
 		/*
@@ -466,13 +494,9 @@ CatCacheRemoveCTup(CatCache *cache, CatCTup *ct)
 		 * which will recurse back to me, and the recursive call will do the
 		 * work.  Set the "dead" flag to make sure it does recurse.
 		 */
-		ct->dead = true;
 		CatCacheRemoveCList(cache, ct->c_list);
 		return;					/* nothing left to do */
 	}
-
-	/* delink from linked list */
-	dlist_delete(&ct->cache_elem);
 
 	/*
 	 * Free keys when we're dealing with a negative entry, normal entries just
@@ -513,7 +537,7 @@ CatCacheRemoveCList(CatCache *cache, CatCList *cl)
 		/* if the member is dead and now has no references, remove it */
 		if (
 #ifndef CATCACHE_FORCE_RELEASE
-			ct->dead &&
+			ct->cache_elem.prev == NULL &&
 #endif
 			ct->refcount == 0)
 			CatCacheRemoveCTup(cache, ct);
@@ -588,7 +612,9 @@ CatCacheInvalidate(CatCache *cache, uint32 hashValue)
 			if (ct->refcount > 0 ||
 				(ct->c_list && ct->c_list->refcount > 0))
 			{
-				ct->dead = true;
+				dlist_delete(&ct->cache_elem);
+				ct->cache_elem.prev = NULL;
+
 				/* list, if any, was marked dead above */
 				Assert(ct->c_list == NULL || ct->c_list->dead);
 			}
@@ -667,7 +693,8 @@ ResetCatalogCache(CatCache *cache)
 			if (ct->refcount > 0 ||
 				(ct->c_list && ct->c_list->refcount > 0))
 			{
-				ct->dead = true;
+				dlist_delete(&ct->cache_elem);
+				ct->cache_elem.prev = NULL;
 				/* list, if any, was marked dead above */
 				Assert(ct->c_list == NULL || ct->c_list->dead);
 			}
@@ -739,6 +766,39 @@ CatalogCacheFlushCatalog(Oid catId)
 
 	CACHE_elog(DEBUG2, "end of CatalogCacheFlushCatalog call");
 }
+
+
+/* FUNCTION FOR BENCHMARKING */
+void
+CatalogCacheFlushCatalog2(Oid catId)
+{
+	slist_iter	iter;
+
+	CACHE_elog(DEBUG2, "CatalogCacheFlushCatalog called for %u", catId);
+
+	slist_foreach(iter, &CacheHdr->ch_caches)
+	{
+		CatCache   *cache = slist_container(CatCache, cc_next, iter.cur);
+
+		/* Does this cache store tuples of the target catalog? */
+		if (cache->cc_reloid == catId)
+		{
+			/* Yes, so flush all its contents */
+			ResetCatalogCache(cache);
+
+			/* Tell inval.c to call syscache callbacks for this cache */
+			CallSyscacheCallbacks(cache->id, 0);
+
+			cache->cc_nbuckets = 128;
+			pfree(cache->cc_bucket);
+			cache->cc_bucket = palloc0(128 * sizeof(dlist_head));
+			elog(LOG, "Catcache reset");
+		}
+	}
+
+	CACHE_elog(DEBUG2, "end of CatalogCacheFlushCatalog call");
+}
+/* END: FUNCTION FOR BENCHMARKING */
 
 /*
  *		InitCatCache
@@ -1247,9 +1307,6 @@ SearchCatCacheInternal(CatCache *cache,
 	{
 		ct = dlist_container(CatCTup, cache_elem, iter.cur);
 
-		if (ct->dead)
-			continue;			/* ignore dead entries */
-
 		if (ct->hash_value != hashValue)
 			continue;			/* quickly skip entry if wrong hash val */
 
@@ -1263,6 +1320,9 @@ SearchCatCacheInternal(CatCache *cache,
 		 * near the front of the hashbucket's list.)
 		 */
 		dlist_move_head(bucket, &ct->cache_elem);
+
+		/* Record the last access timestamp */
+		ct->lastaccess = catcacheclock;
 
 		/*
 		 * If it's a positive entry, bump its refcount and return it. If it's
@@ -1426,6 +1486,61 @@ SearchCatCacheMiss(CatCache *cache,
 }
 
 /*
+ * CatCacheCleanupOldEntries - Remove infrequently-used entries
+ *
+ * Catcache entries happen to be left unused for a long time for several
+ * reasons. Remove such entries to prevent catcache from bloating. It is based
+ * on the similar algorithm with buffer eviction. Entries that are accessed
+ * several times in a certain period live longer than those that have had less
+ * access in the same duration.
+ */
+static bool
+CatCacheCleanupOldEntries(CatCache *cp)
+{
+	int		nremoved = 0;
+	int		i;
+	long	oldest_ts = catcacheclock;
+	uint64	prune_threshold = catcacheclock - prune_min_age_us;
+
+	/* Scan over the whole hash to find entries to remove */
+	for (i = 0 ; i < cp->cc_nbuckets ; i++)
+	{
+		dlist_mutable_iter	iter;
+
+		dlist_foreach_modify(iter, &cp->cc_bucket[i])
+		{
+			CatCTup    *ct = dlist_container(CatCTup, cache_elem, iter.cur);
+
+			/* Don't remove referenced entries */
+			if (ct->refcount == 0 &&
+				(ct->c_list == NULL || ct->c_list->refcount == 0))
+			{
+				if (ct->lastaccess < prune_threshold)
+				{
+					CatCacheRemoveCTup(cp, ct);
+					nremoved++;
+
+					/* don't let the removed entry update oldest_ts */
+					continue;
+				}
+			}
+
+			/* update the oldest timestamp if the entry remains alive */
+			if (ct->lastaccess < oldest_ts)
+				oldest_ts = ct->lastaccess;
+		}
+	}
+
+	cp->cc_oldest_ts = oldest_ts;
+
+	if (nremoved > 0)
+		elog(DEBUG1, "pruning catalog cache id=%d for %s: removed %d / %d",
+			 cp->id, cp->cc_relname, nremoved, cp->cc_ntup + nremoved);
+
+	return nremoved > 0;
+}
+
+/*
  *	ReleaseCatCache
  *
  *	Decrement the reference count of a catcache entry (releasing the
@@ -1443,7 +1558,6 @@ ReleaseCatCache(HeapTuple tuple)
 								  offsetof(CatCTup, tuple));
 
 	/* Safety checks to ensure we were handed a cache entry */
-	Assert(ct->ct_magic == CT_MAGIC);
 	Assert(ct->refcount > 0);
 
 	ct->refcount--;
@@ -1451,7 +1565,7 @@ ReleaseCatCache(HeapTuple tuple)
 
 	if (
 #ifndef CATCACHE_FORCE_RELEASE
-		ct->dead &&
+		ct->cache_elem.prev == NULL &&
 #endif
 		ct->refcount == 0 &&
 		(ct->c_list == NULL || ct->c_list->refcount == 0))
@@ -1658,8 +1772,8 @@ SearchCatCacheList(CatCache *cache,
 			{
 				ct = dlist_container(CatCTup, cache_elem, iter.cur);
 
-				if (ct->dead || ct->negative)
-					continue;	/* ignore dead and negative entries */
+				if (ct->negative)
+					continue;	/* ignore negative entries */
 
 				if (ct->hash_value != hashValue)
 					continue;	/* quickly skip entry if wrong hash val */
@@ -1720,14 +1834,13 @@ SearchCatCacheList(CatCache *cache,
 	{
 		foreach(ctlist_item, ctlist)
 		{
+			Assert (ct->cache_elem.prev != NULL);
+
 			ct = (CatCTup *) lfirst(ctlist_item);
 			Assert(ct->c_list == NULL);
 			Assert(ct->refcount > 0);
 			ct->refcount--;
 			if (
-#ifndef CATCACHE_FORCE_RELEASE
-				ct->dead &&
-#endif
 				ct->refcount == 0 &&
 				(ct->c_list == NULL || ct->c_list->refcount == 0))
 				CatCacheRemoveCTup(cache, ct);
@@ -1755,9 +1868,6 @@ SearchCatCacheList(CatCache *cache,
 		/* release the temporary refcount on the member */
 		Assert(ct->refcount > 0);
 		ct->refcount--;
-		/* mark list dead if any members already dead */
-		if (ct->dead)
-			cl->dead = true;
 	}
 	Assert(i == nmembers);
 
@@ -1881,13 +1991,12 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 	 * Finish initializing the CatCTup header, and add it to the cache's
 	 * linked list and counts.
 	 */
-	ct->ct_magic = CT_MAGIC;
 	ct->my_cache = cache;
 	ct->c_list = NULL;
 	ct->refcount = 0;			/* for the moment */
-	ct->dead = false;
 	ct->negative = negative;
 	ct->hash_value = hashValue;
+	ct->lastaccess = catcacheclock;
 
 	dlist_push_head(&cache->cc_bucket[hashIndex], &ct->cache_elem);
 
@@ -1899,7 +2008,12 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 	 * arbitrarily, we enlarge when fill factor > 2.
 	 */
 	if (cache->cc_ntup > cache->cc_nbuckets * 2)
-		RehashCatCache(cache);
+	{
+		/* try removing old entries before expanding hash */
+		if (catcacheclock - cache->cc_oldest_ts < prune_min_age_us ||
+			!CatCacheCleanupOldEntries(cache))
+			RehashCatCache(cache);
+	}
 
 	return ct;
 }
@@ -2072,9 +2186,6 @@ PrintCatCacheLeakWarning(HeapTuple tuple)
 {
 	CatCTup    *ct = (CatCTup *) (((char *) tuple) -
 								  offsetof(CatCTup, tuple));
-
-	/* Safety check to ensure we were handed a cache entry */
-	Assert(ct->ct_magic == CT_MAGIC);
 
 	elog(WARNING, "cache reference leak: cache %s (%d), tuple %u/%u has count %d",
 		 ct->my_cache->cc_relname, ct->my_cache->id,

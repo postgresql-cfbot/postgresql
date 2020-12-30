@@ -22,6 +22,7 @@
 
 #include "access/htup.h"
 #include "access/skey.h"
+#include "datatype/timestamp.h"
 #include "lib/ilist.h"
 #include "utils/relcache.h"
 
@@ -61,6 +62,7 @@ typedef struct catcache
 	slist_node	cc_next;		/* list link */
 	ScanKeyData cc_skey[CATCACHE_MAXKEYS];	/* precomputed key info for heap
 											 * scans */
+	uint64		cc_oldest_ts;	/* timestamp (us) of the oldest tuple */
 
 	/*
 	 * Keep these at the end, so that compiling catcache.c with CATCACHE_STATS
@@ -85,9 +87,6 @@ typedef struct catcache
 
 typedef struct catctup
 {
-	int			ct_magic;		/* for identifying CatCTup entries */
-#define CT_MAGIC   0x57261502
-
 	uint32		hash_value;		/* hash value for this tuple's keys */
 
 	/*
@@ -104,21 +103,15 @@ typedef struct catctup
 	dlist_node	cache_elem;		/* list member of per-bucket list */
 
 	/*
-	 * A tuple marked "dead" must not be returned by subsequent searches.
-	 * However, it won't be physically deleted from the cache until its
-	 * refcount goes to zero.  (If it's a member of a CatCList, the list's
-	 * refcount must go to zero, too; also, remember to mark the list dead at
-	 * the same time the tuple is marked.)
-	 *
 	 * A negative cache entry is an assertion that there is no tuple matching
 	 * a particular key.  This is just as useful as a normal entry so far as
 	 * avoiding catalog searches is concerned.  Management of positive and
 	 * negative entries is identical.
 	 */
 	int			refcount;		/* number of active references */
-	bool		dead;			/* dead but not yet removed? */
 	bool		negative;		/* negative cache entry? */
 	HeapTupleData tuple;		/* tuple management header */
+	uint64		lastaccess;		/* timestamp in us of the last usage */
 
 	/*
 	 * The tuple may also be a member of at most one CatCList.  (If a single
@@ -188,6 +181,22 @@ typedef struct catcacheheader
 
 /* this extern duplicates utils/memutils.h... */
 extern PGDLLIMPORT MemoryContext CacheMemoryContext;
+
+
+/* for guc.c, not PGDLLPMPORT'ed */
+extern int catalog_cache_prune_min_age;
+
+/* source clock for access timestamp of catcache entries */
+extern uint64 catcacheclock;
+
+/* SetCatCacheClock - set catcache timestamp source clock */
+static inline void
+SetCatCacheClock(TimestampTz ts)
+{
+	catcacheclock = (uint64) ts;
+}
+
+extern void assign_catalog_cache_prune_min_age(int newval, void *extra);
 
 extern void CreateCacheMemoryContext(void);
 

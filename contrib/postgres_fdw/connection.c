@@ -59,6 +59,7 @@ typedef struct ConnCacheEntry
 	bool		invalidated;	/* true if reconnect is pending */
 	uint32		server_hashvalue;	/* hash value of foreign server OID */
 	uint32		mapping_hashvalue;	/* hash value of user mapping OID */
+	PgFdwConnState state;		/* extra per-connection state */
 } ConnCacheEntry;
 
 /*
@@ -106,7 +107,7 @@ static bool UserMappingPasswordRequired(UserMapping *user);
  * (not even on error), we need this flag to cue manual cleanup.
  */
 PGconn *
-GetConnection(UserMapping *user, bool will_prep_stmt)
+GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 {
 	bool		found;
 	bool		retry = false;
@@ -253,6 +254,10 @@ GetConnection(UserMapping *user, bool will_prep_stmt)
 	/* Remember if caller will prepare statements */
 	entry->have_prep_stmt |= will_prep_stmt;
 
+	/* If caller needs access to the per-connection state, return it. */
+	if (state)
+		*state = &entry->state;
+
 	return entry->conn;
 }
 
@@ -279,6 +284,7 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 	entry->mapping_hashvalue =
 		GetSysCacheHashValue1(USERMAPPINGOID,
 							  ObjectIdGetDatum(user->umid));
+	memset(&entry->state, 0, sizeof(entry->state));
 
 	/* Now try to make the connection */
 	entry->conn = connect_pg_server(server, user);

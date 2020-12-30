@@ -130,6 +130,11 @@ typedef struct Plan
 	bool		parallel_safe;	/* OK to use as part of parallel plan? */
 
 	/*
+	 * information needed for asynchronous execution
+	 */
+	bool		async_aware; 	/* engage async-aware logic? */
+
+	/*
 	 * Common structural data for all Plan types.
 	 */
 	int			plan_node_id;	/* unique across entire final plan tree */
@@ -245,6 +250,7 @@ typedef struct Append
 	Plan		plan;
 	Bitmapset  *apprelids;		/* RTIs of appendrel(s) formed by this node */
 	List	   *appendplans;
+	int			nasyncplans;	/* # of async plans, always at start of list */
 
 	/*
 	 * All 'appendplans' preceding this index are non-partial plans. All

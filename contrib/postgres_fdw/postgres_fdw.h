@@ -16,6 +16,7 @@
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"
 #include "libpq-fe.h"
+#include "nodes/execnodes.h"
 #include "nodes/pathnodes.h"
 #include "utils/relcache.h"
 
@@ -124,12 +125,22 @@ typedef struct PgFdwRelationInfo
 	int			relation_index;
 } PgFdwRelationInfo;
 
+/*
+ * Extra control information relating to a connection.
+ */
+typedef struct PgFdwConnState
+{
+	ForeignScanState *curr_node;	/* currently activated ForeignScan node */
+	bool async_query_sent;		/* has an asynchronous query been sent? */
+} PgFdwConnState;
+
 /* in postgres_fdw.c */
 extern int	set_transmission_modes(void);
 extern void reset_transmission_modes(int nestlevel);
 
 /* in connection.c */
-extern PGconn *GetConnection(UserMapping *user, bool will_prep_stmt);
+extern PGconn *GetConnection(UserMapping *user, bool will_prep_stmt,
+							 PgFdwConnState **state);
 extern void ReleaseConnection(PGconn *conn);
 extern unsigned int GetCursorNumber(PGconn *conn);
 extern unsigned int GetPrepStmtNumber(PGconn *conn);

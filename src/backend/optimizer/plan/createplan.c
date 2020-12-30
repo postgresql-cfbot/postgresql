@@ -81,6 +81,7 @@ static List *get_gating_quals(PlannerInfo *root, List *quals);
 static Plan *create_gating_plan(PlannerInfo *root, Path *path, Plan *plan,
 								List *gating_quals);
 static Plan *create_join_plan(PlannerInfo *root, JoinPath *best_path);
+static bool is_async_capable_path(Path *path);
 static Plan *create_append_plan(PlannerInfo *root, AppendPath *best_path,
 								int flags);
 static Plan *create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
@@ -1067,6 +1068,30 @@ create_join_plan(PlannerInfo *root, JoinPath *best_path)
 }
 
 /*
+ * is_projection_capable_path
+ *		Check whether a given Path node is async-capable.
+ */
+static bool
+is_async_capable_path(Path *path)
+{
+	switch (nodeTag(path))
+	{
+		case T_ForeignPath:
+			{
+				FdwRoutine *fdwroutine = path->parent->fdwroutine;
+
+				Assert(fdwroutine != NULL);
+				if (fdwroutine->IsForeignPathAsyncCapable != NULL &&
+					fdwroutine->IsForeignPathAsyncCapable((ForeignPath *) path))
+					return true;
+			}
+		default:
+			break;
+	}
+	return false;
+}
+
+/*
  * create_append_plan
  *	  Create an Append plan for 'best_path' and (recursively) plans
  *	  for its subpaths.
@@ -1083,6 +1108,7 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 	List	   *pathkeys = best_path->path.pathkeys;
 	List	   *subplans = NIL;
 	ListCell   *subpaths;
+	int			nasyncplans = 0;
 	RelOptInfo *rel = best_path->path.parent;
 	PartitionPruneInfo *partpruneinfo = NULL;
 	int			nodenumsortkeys = 0;
@@ -1220,6 +1246,17 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 		}
 
 		subplans = lappend(subplans, subplan);
+
+		if (enable_async_append)
+		{
+			/* Determine whether the subplan can be executed asynchronously */
+			if (pathkeys == NIL && !best_path->path.parallel_safe &&
+				is_async_capable_path(subpath))
+			{
+				subplan->async_aware = true;
+				++nasyncplans;
+			}
+		}
 	}
 
 	/*
@@ -1254,6 +1291,7 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 	}
 
 	plan->appendplans = subplans;
+	plan->nasyncplans = nasyncplans;
 	plan->first_partial_plan = best_path->first_partial_path;
 	plan->part_prune_info = partpruneinfo;
 

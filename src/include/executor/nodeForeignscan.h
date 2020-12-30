@@ -31,4 +31,9 @@ extern void ExecForeignScanInitializeWorker(ForeignScanState *node,
 											ParallelWorkerContext *pwcxt);
 extern void ExecShutdownForeignScan(ForeignScanState *node);
 
+extern void ExecAsyncForeignScanBegin(AsyncRequest *areq);
+extern void ExecAsyncForeignScanConfigureWait(AsyncRequest *areq);
+extern void ExecAsyncForeignScanNotify(AsyncRequest *areq);
+extern void ExecAsyncForeignScanRequest(AsyncRequest *areq);
+
 #endif							/* NODEFOREIGNSCAN_H */

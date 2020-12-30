@@ -170,6 +170,16 @@ typedef List *(*ReparameterizeForeignPathByChild_function) (PlannerInfo *root,
 															List *fdw_private,
 															RelOptInfo *child_rel);
 
+typedef bool (*IsForeignPathAsyncCapable_function) (ForeignPath *path);
+
+typedef void (*ForeignAsyncBegin_function) (AsyncRequest *areq);
+
+typedef void (*ForeignAsyncConfigureWait_function) (AsyncRequest *areq);
+
+typedef void (*ForeignAsyncNotify_function) (AsyncRequest *areq);
+
+typedef void (*ForeignAsyncRequest_function) (AsyncRequest *areq);
+
 /*
  * FdwRoutine is the struct returned by a foreign-data wrapper's handler
  * function.  It provides pointers to the callback functions needed by the
@@ -246,6 +256,13 @@ typedef struct FdwRoutine
 
 	/* Support functions for path reparameterization. */
 	ReparameterizeForeignPathByChild_function ReparameterizeForeignPathByChild;
+
+	/* Support functions for asynchronous execution */
+	IsForeignPathAsyncCapable_function IsForeignPathAsyncCapable;
+	ForeignAsyncBegin_function ForeignAsyncBegin;
+	ForeignAsyncConfigureWait_function ForeignAsyncConfigureWait;
+	ForeignAsyncNotify_function ForeignAsyncNotify;
+	ForeignAsyncRequest_function ForeignAsyncRequest;
 } FdwRoutine;
 
 

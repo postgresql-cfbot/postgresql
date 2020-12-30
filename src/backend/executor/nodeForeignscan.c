@@ -391,3 +391,67 @@ ExecShutdownForeignScan(ForeignScanState *node)
 	if (fdwroutine->ShutdownForeignScan)
 		fdwroutine->ShutdownForeignScan(node);
 }
+
+/* ----------------------------------------------------------------
+ *		ExecAsyncForeignScanBegin
+ *
+ *		Begin execution of a designed async-aware node
+ * ----------------------------------------------------------------
+ */
+void
+ExecAsyncForeignScanBegin(AsyncRequest *areq)
+{
+	ForeignScanState *node = (ForeignScanState *) areq->requestee;
+	FdwRoutine *fdwroutine = node->fdwroutine;
+
+	Assert(fdwroutine->ForeignAsyncBegin != NULL);
+	fdwroutine->ForeignAsyncBegin(areq);
+}
+
+/* ----------------------------------------------------------------
+ *		ExecAsyncForeignScanConfigureWait
+ *
+ *		In async mode, configure for a wait
+ * ----------------------------------------------------------------
+ */
+void
+ExecAsyncForeignScanConfigureWait(AsyncRequest *areq)
+{
+	ForeignScanState *node = (ForeignScanState *) areq->requestee;
+	FdwRoutine *fdwroutine = node->fdwroutine;
+
+	Assert(fdwroutine->ForeignAsyncConfigureWait != NULL);
+	fdwroutine->ForeignAsyncConfigureWait(areq);
+}
+
+/* ----------------------------------------------------------------
+ *		ExecAsyncForeignScanNotify
+ *
+ *		Callback invoked when a relevant event has occurred
+ * ----------------------------------------------------------------
+ */
+void
+ExecAsyncForeignScanNotify(AsyncRequest *areq)
+{
+	ForeignScanState *node = (ForeignScanState *) areq->requestee;
+	FdwRoutine *fdwroutine = node->fdwroutine;
+
+	Assert(fdwroutine->ForeignAsyncNotify != NULL);
+	fdwroutine->ForeignAsyncNotify(areq);
+}
+
+/* ----------------------------------------------------------------
+ *		ExecAsyncForeignScanRequest
+ *
+ *		Request a tuple asynchronously
+ * ----------------------------------------------------------------
+ */
+void
+ExecAsyncForeignScanRequest(AsyncRequest *areq)
+{
+	ForeignScanState *node = (ForeignScanState *) areq->requestee;
+	FdwRoutine *fdwroutine = node->fdwroutine;
+
+	Assert(fdwroutine->ForeignAsyncRequest != NULL);
+	fdwroutine->ForeignAsyncRequest(areq);
+}

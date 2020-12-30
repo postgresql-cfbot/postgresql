@@ -1290,6 +1290,15 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"synchronous_commit_cancelation", PGC_USERSET, WAL_SETTINGS,
+			gettext_noop("Allow to cancel waiting for replication of transaction commited localy."),
+			NULL
+		},
+		&synchronous_commit_cancelation,
+		true, NULL, NULL, NULL
+	},
+
+	{
 		{"log_checkpoints", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("Logs each checkpoint."),
 			NULL

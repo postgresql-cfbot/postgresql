@@ -693,9 +693,9 @@ DROP TABLE onek_with_null;
 
 EXPLAIN (COSTS OFF)
 SELECT * FROM tenk1
-  WHERE thousand = 42 AND (tenthous = 1 OR tenthous = 3 OR tenthous = 42);
+  WHERE thousand = 42 AND (tenthous = 1 OR tenthous = 42);
 SELECT * FROM tenk1
-  WHERE thousand = 42 AND (tenthous = 1 OR tenthous = 3 OR tenthous = 42);
+  WHERE thousand = 42 AND (tenthous = 1 OR tenthous = 42);
 
 EXPLAIN (COSTS OFF)
 SELECT count(*) FROM tenk1

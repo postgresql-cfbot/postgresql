@@ -817,6 +817,18 @@ analyze threshold = analyze base threshold + analyze scale factor * number of tu
    </para>
 
    <para>
+    For declaratively partitioned tables, only analyze is supported.
+    The same <quote>analyze threshold</quote> defined above is used,
+    but the number of tuples is sum of their childrens'
+    <structname>pg_class</structname>.<structfield>reltuples</structfield>.
+    Also, total number of tuples inserted, updated, or deleted since the last
+    <command>ANALYZE</command> compared with the threshold is calculated by adding up
+    childrens' number of tuples analyzed in the previous <command>ANALYZE</command>.
+    This is because partitioned tables don't have any data.  So analyze on partitioned
+    tables are one lap behind their children.
+   </para>
+
+   <para>
     Temporary tables cannot be accessed by autovacuum.  Therefore,
     appropriate vacuum and analyze operations should be performed via
     session SQL commands.

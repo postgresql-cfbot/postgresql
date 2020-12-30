@@ -2631,14 +2631,14 @@ XLogSendPhysical(void)
 		/*
 		 * Streaming the current timeline on a primary.
 		 *
-		 * Attempt to send all data that's already been written out and
-		 * fsync'd to disk.  We cannot go further than what's been written out
-		 * given the current implementation of WALRead().  And in any case
-		 * it's unsafe to send WAL that is not securely down to disk on the
-		 * primary: if the primary subsequently crashes and restarts, standbys
-		 * must not have applied any WAL that got lost on the primary.
+		 * Attempt to send all data that's can be replicated.  We cannot go
+		 * further than what's been written out given the current
+		 * implementation of WALRead().  And in any case it's unsafe to send
+		 * WAL that is not securely down to disk on the primary: if the primary
+		 * subsequently crashes and restarts, standbys must not have applied
+		 * any WAL that got lost on the primary.
 		 */
-		SendRqstPtr = GetFlushRecPtr();
+		SendRqstPtr = GetReplicationTargetRecPtr();
 	}
 
 	/*

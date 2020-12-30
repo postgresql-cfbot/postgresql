@@ -1,0 +1,81 @@
+/* contrib/pageinspect/pageinspect--1.8--1.9.sql */
+
+-- complain if script is sourced in psql, rather than via ALTER EXTENSION
+\echo Use "ALTER EXTENSION pageinspect UPDATE TO '1.9'" to load this file. \quit
+
+--
+-- get_raw_page()
+--
+DROP FUNCTION get_raw_page(text, int4);
+CREATE FUNCTION get_raw_page(text, int8)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'get_raw_page'
+LANGUAGE C STRICT PARALLEL SAFE;
+
+DROP FUNCTION get_raw_page(text, text, int4);
+CREATE FUNCTION get_raw_page(text, text, int8)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'get_raw_page_fork'
+LANGUAGE C STRICT PARALLEL SAFE;
+
+--
+-- page_checksum()
+--
+DROP FUNCTION page_checksum(IN page bytea, IN blkno int4);
+CREATE FUNCTION page_checksum(IN page bytea, IN blkno int8)
+RETURNS smallint
+AS 'MODULE_PATHNAME', 'page_checksum'
+LANGUAGE C STRICT PARALLEL SAFE;
+
+--
+-- bt_page_stats()
+--
+DROP FUNCTION bt_page_stats(text, int4);
+CREATE FUNCTION bt_page_stats(IN relname text, IN blkno int8,
+    OUT blkno int8,
+    OUT type "char",
+    OUT live_items int4,
+    OUT dead_items int4,
+    OUT avg_item_size int4,
+    OUT page_size int4,
+    OUT free_size int4,
+    OUT btpo_prev int8,
+    OUT btpo_next int8,
+    OUT btpo int4,
+    OUT btpo_flags int4)
+AS 'MODULE_PATHNAME', 'bt_page_stats'
+LANGUAGE C STRICT PARALLEL SAFE;
+
+--
+-- bt_page_items()
+--
+DROP FUNCTION bt_page_items(text, int4);
+CREATE FUNCTION bt_page_items(IN relname text, IN blkno int8,
+    OUT itemoffset smallint,
+    OUT ctid tid,
+    OUT itemlen smallint,
+    OUT nulls bool,
+    OUT vars bool,
+    OUT data text,
+    OUT dead boolean,
+    OUT htid tid,
+    OUT tids tid[])
+RETURNS SETOF record
+AS 'MODULE_PATHNAME', 'bt_page_items'
+LANGUAGE C STRICT PARALLEL SAFE;
+
+--
+-- brin_page_items()
+--
+DROP FUNCTION brin_page_items(IN page bytea, IN index_oid regclass);
+CREATE FUNCTION brin_page_items(IN page bytea, IN index_oid regclass,
+    OUT itemoffset int,
+    OUT blknum int8,
+    OUT attnum int,
+    OUT allnulls bool,
+    OUT hasnulls bool,
+    OUT placeholder bool,
+    OUT value text)
+RETURNS SETOF record
+AS 'MODULE_PATHNAME', 'brin_page_items'
+LANGUAGE C STRICT PARALLEL SAFE;

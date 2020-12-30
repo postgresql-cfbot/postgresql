@@ -46,7 +46,7 @@ Datum
 get_raw_page(PG_FUNCTION_ARGS)
 {
 	text	   *relname = PG_GETARG_TEXT_PP(0);
-	uint32		blkno = PG_GETARG_UINT32(1);
+	int64		blkno = PG_GETARG_INT64(1);
 	bytea	   *raw_page;
 
 	/*
@@ -58,6 +58,11 @@ get_raw_page(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errmsg("wrong number of arguments to get_raw_page()"),
 				 errhint("Run the updated pageinspect.sql script.")));
+
+	if (blkno < 0 || blkno > MaxBlockNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid block number")));
 
 	raw_page = get_raw_page_internal(relname, MAIN_FORKNUM, blkno);
 
@@ -76,11 +81,16 @@ get_raw_page_fork(PG_FUNCTION_ARGS)
 {
 	text	   *relname = PG_GETARG_TEXT_PP(0);
 	text	   *forkname = PG_GETARG_TEXT_PP(1);
-	uint32		blkno = PG_GETARG_UINT32(2);
+	int64		blkno = PG_GETARG_INT64(2);
 	bytea	   *raw_page;
 	ForkNumber	forknum;
 
 	forknum = forkname_to_number(text_to_cstring(forkname));
+
+	if (blkno < 0 || blkno > MaxBlockNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid block number")));
 
 	raw_page = get_raw_page_internal(relname, forknum, blkno);
 
@@ -298,7 +308,7 @@ Datum
 page_checksum(PG_FUNCTION_ARGS)
 {
 	bytea	   *raw_page = PG_GETARG_BYTEA_P(0);
-	uint32		blkno = PG_GETARG_INT32(1);
+	int64		blkno = PG_GETARG_INT64(1);
 	int			raw_page_size;
 	PageHeader	page;
 
@@ -306,6 +316,11 @@ page_checksum(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("must be superuser to use raw page functions")));
+
+	if (blkno < 0 || blkno > MaxBlockNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid block number")));
 
 	raw_page_size = VARSIZE(raw_page) - VARHDRSZ;
 

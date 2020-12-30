@@ -252,7 +252,7 @@ brin_page_items(PG_FUNCTION_ARGS)
 			int			att = attno - 1;
 
 			values[0] = UInt16GetDatum(offset);
-			values[1] = UInt32GetDatum(dtup->bt_blkno);
+			values[1] = Int64GetDatum((int64) dtup->bt_blkno);
 			values[2] = UInt16GetDatum(attno);
 			values[3] = BoolGetDatum(dtup->bt_columns[att].bv_allnulls);
 			values[4] = BoolGetDatum(dtup->bt_columns[att].bv_hasnulls);

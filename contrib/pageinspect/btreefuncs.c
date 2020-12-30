@@ -164,7 +164,7 @@ Datum
 bt_page_stats(PG_FUNCTION_ARGS)
 {
 	text	   *relname = PG_GETARG_TEXT_PP(0);
-	uint32		blkno = PG_GETARG_UINT32(1);
+	int64		blkno = PG_GETARG_INT64(1);
 	Buffer		buffer;
 	Relation	rel;
 	RangeVar   *relrv;
@@ -197,8 +197,15 @@ bt_page_stats(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot access temporary tables of other sessions")));
 
+	if (blkno < 0 || blkno > MaxBlockNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid block number")));
+
 	if (blkno == 0)
-		elog(ERROR, "block 0 is a meta page");
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("block 0 is a meta page")));
 
 	CHECK_RELATION_BLOCK_RANGE(rel, blkno);
 
@@ -219,16 +226,16 @@ bt_page_stats(PG_FUNCTION_ARGS)
 		elog(ERROR, "return type must be a row type");
 
 	j = 0;
-	values[j++] = psprintf("%d", stat.blkno);
+	values[j++] = psprintf("%u", stat.blkno);
 	values[j++] = psprintf("%c", stat.type);
-	values[j++] = psprintf("%d", stat.live_items);
-	values[j++] = psprintf("%d", stat.dead_items);
-	values[j++] = psprintf("%d", stat.avg_item_size);
-	values[j++] = psprintf("%d", stat.page_size);
-	values[j++] = psprintf("%d", stat.free_size);
-	values[j++] = psprintf("%d", stat.btpo_prev);
-	values[j++] = psprintf("%d", stat.btpo_next);
-	values[j++] = psprintf("%d", (stat.type == 'd') ? stat.btpo.xact : stat.btpo.level);
+	values[j++] = psprintf("%u", stat.live_items);
+	values[j++] = psprintf("%u", stat.dead_items);
+	values[j++] = psprintf("%u", stat.avg_item_size);
+	values[j++] = psprintf("%u", stat.page_size);
+	values[j++] = psprintf("%u", stat.free_size);
+	values[j++] = psprintf("%u", stat.btpo_prev);
+	values[j++] = psprintf("%u", stat.btpo_next);
+	values[j++] = psprintf("%u", (stat.type == 'd') ? stat.btpo.xact : stat.btpo.level);
 	values[j++] = psprintf("%d", stat.btpo_flags);
 
 	tuple = BuildTupleFromCStrings(TupleDescGetAttInMetadata(tupleDesc),
@@ -409,7 +416,7 @@ Datum
 bt_page_items(PG_FUNCTION_ARGS)
 {
 	text	   *relname = PG_GETARG_TEXT_PP(0);
-	uint32		blkno = PG_GETARG_UINT32(1);
+	int64		blkno = PG_GETARG_INT64(1);
 	Datum		result;
 	FuncCallContext *fctx;
 	MemoryContext mctx;
@@ -447,8 +454,15 @@ bt_page_items(PG_FUNCTION_ARGS)
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot access temporary tables of other sessions")));
 
+		if (blkno < 0 || blkno > MaxBlockNumber)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("invalid block number")));
+
 		if (blkno == 0)
-			elog(ERROR, "block 0 is a meta page");
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("block 0 is a meta page")));
 
 		CHECK_RELATION_BLOCK_RANGE(rel, blkno);
 

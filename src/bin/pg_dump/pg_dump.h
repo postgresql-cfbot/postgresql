@@ -720,8 +720,7 @@ extern void processExtensionTables(Archive *fout, ExtensionInfo extinfo[],
 extern EventTriggerInfo *getEventTriggers(Archive *fout, int *numEventTriggers);
 extern void getPolicies(Archive *fout, TableInfo tblinfo[], int numTables);
 extern void getPublications(Archive *fout);
-extern void getPublicationTables(Archive *fout, TableInfo tblinfo[],
-								 int numTables);
+extern void getPublicationTables(Archive *fout);
 extern void getSubscriptions(Archive *fout);
 
 #endif							/* PG_DUMP_H */

@@ -520,10 +520,11 @@ BeginForeignModify(ModifyTableState *mtstate,
                    int eflags);
 </programlisting>
 
-     Begin executing a foreign table modification operation.  This routine is
-     called during executor startup.  It should perform any initialization
-     needed prior to the actual table modifications.  Subsequently,
-     <function>ExecForeignInsert</function>, <function>ExecForeignUpdate</function> or
+     Begin executing a foreign table modification operation. This is called
+     right before executing the subplan to fetch the tuples to be modified.
+     It should perform any initialization needed prior to the actual table
+     modifications.  Subsequently, <function>ExecForeignInsert</function>,
+     <function>ExecForeignUpdate</function> or
      <function>ExecForeignDelete</function> will be called for each tuple to be
      inserted, updated, or deleted.
     </para>
@@ -890,9 +891,10 @@ BeginDirectModify(ForeignScanState *node,
 </programlisting>
 
      Prepare to execute a direct modification on the remote server.
-     This is called during executor startup.  It should perform any
-     initialization needed prior to the direct modification (that should be
-     done upon the first call to <function>IterateDirectModify</function>).
+     This is called right before the first time <function>IterateDirectModify</function>
+     is called on the node.  It should perform any initialization needed prior to the
+     direct modification (that should be done upon the first call to
+     <function>IterateDirectModify</function>).
      The <structname>ForeignScanState</structname> node has already been created, but
      its <structfield>fdw_state</structfield> field is still NULL.  Information about
      the table to modify is accessible through the

@@ -191,7 +191,7 @@ extern void CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
 extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 							  Relation resultRelationDesc,
 							  Index resultRelationIndex,
-							  Relation partition_root,
+							  Relation rootTargetDesc,
 							  int instrument_options);
 extern ResultRelInfo *ExecGetTriggerResultRel(EState *estate, Oid relid);
 extern void ExecConstraints(ResultRelInfo *resultRelInfo,
@@ -551,7 +551,7 @@ exec_rt_fetch(Index rti, EState *estate)
 
 extern Relation ExecGetRangeTableRelation(EState *estate, Index rti);
 extern void ExecInitResultRelation(EState *estate, ResultRelInfo *resultRelInfo,
-								   Index rti);
+								   Index rti, Relation rootTargetDesc);
 
 extern int	executor_errposition(EState *estate, int location);
 
@@ -573,6 +573,7 @@ extern int	ExecCleanTargetListLength(List *targetlist);
 extern TupleTableSlot *ExecGetTriggerOldSlot(EState *estate, ResultRelInfo *relInfo);
 extern TupleTableSlot *ExecGetTriggerNewSlot(EState *estate, ResultRelInfo *relInfo);
 extern TupleTableSlot *ExecGetReturningSlot(EState *estate, ResultRelInfo *relInfo);
+extern TupleConversionMap *ExecGetChildToRootMap(ResultRelInfo *resultRelInfo);
 
 /*
  * prototypes from functions in execIndexing.c
@@ -615,5 +616,9 @@ extern void CheckCmdReplicaIdentity(Relation rel, CmdType cmd);
 
 extern void CheckSubscriptionRelkind(char relkind, const char *nspname,
 									 const char *relname);
+
+/* prototypes from nodeModifyTable.c */
+extern ResultRelInfo *ExecGetResultRelation(ModifyTableState *mtstate, int whichrel,
+					  Relation rootTargetDesc);
 
 #endif							/* EXECUTOR_H  */

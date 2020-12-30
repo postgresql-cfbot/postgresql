@@ -831,7 +831,7 @@ ExecGetRangeTableRelation(EState *estate, Index rti)
  */
 void
 ExecInitResultRelation(EState *estate, ResultRelInfo *resultRelInfo,
-					   Index rti)
+					   Index rti, Relation rootTargetDesc)
 {
 	Relation	resultRelationDesc;
 
@@ -839,7 +839,7 @@ ExecInitResultRelation(EState *estate, ResultRelInfo *resultRelInfo,
 	InitResultRelInfo(resultRelInfo,
 					  resultRelationDesc,
 					  rti,
-					  NULL,
+					  rootTargetDesc,
 					  estate->es_instrument);
 
 	if (estate->es_result_relations == NULL)
@@ -1222,4 +1222,25 @@ ExecGetReturningSlot(EState *estate, ResultRelInfo *relInfo)
 	}
 
 	return relInfo->ri_ReturningSlot;
+}
+
+/*
+ * Returns the map needed to convert given child relation's tuples to the
+ * root relation's format, possibly initializing if not already done.
+ */
+TupleConversionMap *
+ExecGetChildToRootMap(ResultRelInfo *resultRelInfo)
+{
+	if (!resultRelInfo->ri_ChildToRootMapValid)
+	{
+		Relation	relation = resultRelInfo->ri_RelationDesc;
+		Relation	targetRel = resultRelInfo->ri_RootTargetDesc;
+
+		resultRelInfo->ri_ChildToRootMap =
+			convert_tuples_by_name(RelationGetDescr(relation),
+								   RelationGetDescr(targetRel));
+		resultRelInfo->ri_ChildToRootMapValid = true;
+	}
+
+	return resultRelInfo->ri_ChildToRootMap;
 }

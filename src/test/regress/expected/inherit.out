@@ -2458,7 +2458,7 @@ ERROR:  new row for relation "errtst_child_plaindef" violates check constraint "
 DETAIL:  Failing row contains (10, 1, 10).
 INSERT INTO errtst_parent(partid, shdata, data) VALUES ('20', '1', '10');
 ERROR:  new row for relation "errtst_child_reorder" violates check constraint "errtst_child_reorder_data_check"
-DETAIL:  Failing row contains (20, 1, 10).
+DETAIL:  Failing row contains (10, 1, 20).
 -- insert with child not null constraint error
 INSERT INTO errtst_parent(partid, shdata, data) VALUES ( '0', '1', NULL);
 ERROR:  null value in column "data" of relation "errtst_child_fastdef" violates not-null constraint
@@ -2468,7 +2468,7 @@ ERROR:  null value in column "data" of relation "errtst_child_plaindef" violates
 DETAIL:  Failing row contains (10, 1, null).
 INSERT INTO errtst_parent(partid, shdata, data) VALUES ('20', '1', NULL);
 ERROR:  null value in column "data" of relation "errtst_child_reorder" violates not-null constraint
-DETAIL:  Failing row contains (20, 1, null).
+DETAIL:  Failing row contains (null, 1, 20).
 -- insert with shared check constraint error
 INSERT INTO errtst_parent(partid, shdata, data) VALUES ( '0', '5', '5');
 ERROR:  new row for relation "errtst_child_fastdef" violates check constraint "shdata_small"
@@ -2478,7 +2478,7 @@ ERROR:  new row for relation "errtst_child_plaindef" violates check constraint "
 DETAIL:  Failing row contains (10, 5, 5).
 INSERT INTO errtst_parent(partid, shdata, data) VALUES ('20', '5', '5');
 ERROR:  new row for relation "errtst_child_reorder" violates check constraint "shdata_small"
-DETAIL:  Failing row contains (20, 5, 5).
+DETAIL:  Failing row contains (5, 5, 20).
 -- within partition update without child check constraint violation
 BEGIN;
 UPDATE errtst_parent SET data = data + 1 WHERE partid = 0;
@@ -2523,7 +2523,7 @@ ERROR:  new row for relation "errtst_child_plaindef" violates check constraint "
 DETAIL:  Failing row contains (10, 1, 15).
 UPDATE errtst_parent SET partid = 20, data = data + 10 WHERE partid = 10;
 ERROR:  new row for relation "errtst_child_reorder" violates check constraint "errtst_child_reorder_data_check"
-DETAIL:  Failing row contains (20, 1, 15).
+DETAIL:  Failing row contains (15, 1, 20).
 UPDATE errtst_parent SET partid = 0, data = data + 10 WHERE partid = 20;
 ERROR:  new row for relation "errtst_child_fastdef" violates check constraint "errtest_child_fastdef_data_check"
 DETAIL:  Failing row contains (0, 1, 15).

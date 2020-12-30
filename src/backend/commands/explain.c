@@ -18,6 +18,7 @@
 #include "commands/createas.h"
 #include "commands/defrem.h"
 #include "commands/prepare.h"
+#include "executor/executor.h"
 #include "executor/nodeHash.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
@@ -3654,6 +3655,8 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 	int			j;
 	List	   *idxNames = NIL;
 	ListCell   *lst;
+	ResultRelInfo *firstResultRel;
+	Relation	rootTargetDesc;
 
 	switch (node->operation)
 	{
@@ -3675,17 +3678,22 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 			break;
 	}
 
+	Assert(mtstate->rootResultRelInfo != NULL);
+	rootTargetDesc = mtstate->rootResultRelInfo->ri_RelationDesc;
+	firstResultRel = ExecGetResultRelation(mtstate, 0, rootTargetDesc);
+
 	/* Should we explicitly label target relations? */
 	labeltargets = (mtstate->mt_nplans > 1 ||
 					(mtstate->mt_nplans == 1 &&
-					 mtstate->resultRelInfo->ri_RangeTableIndex != node->nominalRelation));
+					 firstResultRel->ri_RangeTableIndex != node->nominalRelation));
 
 	if (labeltargets)
 		ExplainOpenGroup("Target Tables", "Target Tables", false, es);
 
 	for (j = 0; j < mtstate->mt_nplans; j++)
 	{
-		ResultRelInfo *resultRelInfo = mtstate->resultRelInfo + j;
+		ResultRelInfo *resultRelInfo = ExecGetResultRelation(mtstate, j,
+															 rootTargetDesc);
 		FdwRoutine *fdwroutine = resultRelInfo->ri_FdwRoutine;
 
 		if (labeltargets)

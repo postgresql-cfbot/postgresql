@@ -93,11 +93,10 @@ static bool ExecCheckRTEPermsModified(Oid relOid, Oid userid,
 									  Bitmapset *modifiedCols,
 									  AclMode requiredPerms);
 static void ExecCheckXactReadOnly(PlannedStmt *plannedstmt);
-static char *ExecBuildSlotValueDescription(Oid reloid,
-										   TupleTableSlot *slot,
-										   TupleDesc tupdesc,
-										   Bitmapset *modifiedCols,
-										   int maxfieldlen);
+static char *ExecBuildSlotValueDescription(EState *estate,
+							  ResultRelInfo *resultRelInfo,
+							  TupleTableSlot *slot,
+							  int maxfieldlen);
 static void EvalPlanQualStart(EPQState *epqstate, Plan *planTree);
 
 /*
@@ -1196,13 +1195,14 @@ void
 InitResultRelInfo(ResultRelInfo *resultRelInfo,
 				  Relation resultRelationDesc,
 				  Index resultRelationIndex,
-				  Relation partition_root,
+				  Relation rootTargetDesc,
 				  int instrument_options)
 {
 	MemSet(resultRelInfo, 0, sizeof(ResultRelInfo));
 	resultRelInfo->type = T_ResultRelInfo;
 	resultRelInfo->ri_RangeTableIndex = resultRelationIndex;
 	resultRelInfo->ri_RelationDesc = resultRelationDesc;
+	resultRelInfo->ri_RootTargetDesc = rootTargetDesc;
 	resultRelInfo->ri_NumIndices = 0;
 	resultRelInfo->ri_IndexRelationDescs = NULL;
 	resultRelInfo->ri_IndexRelationInfo = NULL;
@@ -1242,11 +1242,11 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	resultRelInfo->ri_ReturningSlot = NULL;
 	resultRelInfo->ri_TrigOldSlot = NULL;
 	resultRelInfo->ri_TrigNewSlot = NULL;
-	resultRelInfo->ri_PartitionRoot = partition_root;
 	resultRelInfo->ri_RootToPartitionMap = NULL;	/* set by
 													 * ExecInitRoutingInfo */
 	resultRelInfo->ri_PartitionTupleSlot = NULL;	/* ditto */
 	resultRelInfo->ri_ChildToRootMap = NULL;
+	resultRelInfo->ri_ChildToRootMapValid = false;
 	resultRelInfo->ri_CopyMultiInsertBuffer = NULL;
 }
 
@@ -1321,7 +1321,7 @@ ExecGetTriggerResultRel(EState *estate, Oid relid)
 	InitResultRelInfo(rInfo,
 					  rel,
 					  0,		/* dummy rangetable index */
-					  NULL,
+					  rel,
 					  estate->es_instrument);
 	estate->es_trig_target_relations =
 		lappend(estate->es_trig_target_relations, rInfo);
@@ -1440,6 +1440,11 @@ ExecCloseResultRelations(EState *estate)
 		ResultRelInfo *resultRelInfo = lfirst(l);
 
 		ExecCloseIndices(resultRelInfo);
+		if (!resultRelInfo->ri_usesFdwDirectModify &&
+			resultRelInfo->ri_FdwRoutine != NULL &&
+			resultRelInfo->ri_FdwRoutine->EndForeignModify != NULL)
+			resultRelInfo->ri_FdwRoutine->EndForeignModify(estate,
+														   resultRelInfo);
 	}
 
 	/* Close any relations that have been opened by ExecGetTriggerResultRel(). */
@@ -1733,50 +1738,11 @@ ExecPartitionCheckEmitError(ResultRelInfo *resultRelInfo,
 							TupleTableSlot *slot,
 							EState *estate)
 {
-	Oid			root_relid;
-	TupleDesc	tupdesc;
 	char	   *val_desc;
-	Bitmapset  *modifiedCols;
 
-	/*
-	 * If the tuple has been routed, it's been converted to the partition's
-	 * rowtype, which might differ from the root table's.  We must convert it
-	 * back to the root table's rowtype so that val_desc in the error message
-	 * matches the input tuple.
-	 */
-	if (resultRelInfo->ri_PartitionRoot)
-	{
-		TupleDesc	old_tupdesc;
-		AttrMap    *map;
-
-		root_relid = RelationGetRelid(resultRelInfo->ri_PartitionRoot);
-		tupdesc = RelationGetDescr(resultRelInfo->ri_PartitionRoot);
-
-		old_tupdesc = RelationGetDescr(resultRelInfo->ri_RelationDesc);
-		/* a reverse map */
-		map = build_attrmap_by_name_if_req(old_tupdesc, tupdesc);
-
-		/*
-		 * Partition-specific slot's tupdesc can't be changed, so allocate a
-		 * new one.
-		 */
-		if (map != NULL)
-			slot = execute_attr_map_slot(map, slot,
-										 MakeTupleTableSlot(tupdesc, &TTSOpsVirtual));
-	}
-	else
-	{
-		root_relid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
-		tupdesc = RelationGetDescr(resultRelInfo->ri_RelationDesc);
-	}
-
-	modifiedCols = bms_union(GetInsertedColumns(resultRelInfo, estate),
-							 GetUpdatedColumns(resultRelInfo, estate));
-
-	val_desc = ExecBuildSlotValueDescription(root_relid,
+	val_desc = ExecBuildSlotValueDescription(estate,
+											 resultRelInfo,
 											 slot,
-											 tupdesc,
-											 modifiedCols,
 											 64);
 	ereport(ERROR,
 			(errcode(ERRCODE_CHECK_VIOLATION),
@@ -1804,9 +1770,6 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	TupleDesc	tupdesc = RelationGetDescr(rel);
 	TupleConstr *constr = tupdesc->constr;
-	Bitmapset  *modifiedCols;
-	Bitmapset  *insertedCols;
-	Bitmapset  *updatedCols;
 
 	Assert(constr);				/* we should not be called otherwise */
 
@@ -1821,52 +1784,20 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 
 			if (att->attnotnull && slot_attisnull(slot, attrChk))
 			{
-				char	   *val_desc;
-				Relation	orig_rel = rel;
-				TupleDesc	orig_tupdesc = RelationGetDescr(rel);
+				char   *val_desc;
 
-				/*
-				 * If the tuple has been routed, it's been converted to the
-				 * partition's rowtype, which might differ from the root
-				 * table's.  We must convert it back to the root table's
-				 * rowtype so that val_desc shown error message matches the
-				 * input tuple.
-				 */
-				if (resultRelInfo->ri_PartitionRoot)
-				{
-					AttrMap    *map;
-
-					rel = resultRelInfo->ri_PartitionRoot;
-					tupdesc = RelationGetDescr(rel);
-					/* a reverse map */
-					map = build_attrmap_by_name_if_req(orig_tupdesc,
-													   tupdesc);
-
-					/*
-					 * Partition-specific slot's tupdesc can't be changed, so
-					 * allocate a new one.
-					 */
-					if (map != NULL)
-						slot = execute_attr_map_slot(map, slot,
-													 MakeTupleTableSlot(tupdesc, &TTSOpsVirtual));
-				}
-
-				insertedCols = GetInsertedColumns(resultRelInfo, estate);
-				updatedCols = GetUpdatedColumns(resultRelInfo, estate);
-				modifiedCols = bms_union(insertedCols, updatedCols);
-				val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
+				val_desc = ExecBuildSlotValueDescription(estate,
+														 resultRelInfo,
 														 slot,
-														 tupdesc,
-														 modifiedCols,
 														 64);
 
 				ereport(ERROR,
 						(errcode(ERRCODE_NOT_NULL_VIOLATION),
 						 errmsg("null value in column \"%s\" of relation \"%s\" violates not-null constraint",
 								NameStr(att->attname),
-								RelationGetRelationName(orig_rel)),
+								RelationGetRelationName(rel)),
 						 val_desc ? errdetail("Failing row contains %s.", val_desc) : 0,
-						 errtablecol(orig_rel, attrChk)));
+						 errtablecol(rel, attrChk)));
 			}
 		}
 	}
@@ -1878,43 +1809,16 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 		if ((failed = ExecRelCheck(resultRelInfo, slot, estate)) != NULL)
 		{
 			char	   *val_desc;
-			Relation	orig_rel = rel;
 
-			/* See the comment above. */
-			if (resultRelInfo->ri_PartitionRoot)
-			{
-				TupleDesc	old_tupdesc = RelationGetDescr(rel);
-				AttrMap    *map;
-
-				rel = resultRelInfo->ri_PartitionRoot;
-				tupdesc = RelationGetDescr(rel);
-				/* a reverse map */
-				map = build_attrmap_by_name_if_req(old_tupdesc,
-												   tupdesc);
-
-				/*
-				 * Partition-specific slot's tupdesc can't be changed, so
-				 * allocate a new one.
-				 */
-				if (map != NULL)
-					slot = execute_attr_map_slot(map, slot,
-												 MakeTupleTableSlot(tupdesc, &TTSOpsVirtual));
-			}
-
-			insertedCols = GetInsertedColumns(resultRelInfo, estate);
-			updatedCols = GetUpdatedColumns(resultRelInfo, estate);
-			modifiedCols = bms_union(insertedCols, updatedCols);
-			val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
+			val_desc = ExecBuildSlotValueDescription(estate, resultRelInfo,
 													 slot,
-													 tupdesc,
-													 modifiedCols,
 													 64);
 			ereport(ERROR,
 					(errcode(ERRCODE_CHECK_VIOLATION),
 					 errmsg("new row for relation \"%s\" violates check constraint \"%s\"",
-							RelationGetRelationName(orig_rel), failed),
+							RelationGetRelationName(rel), failed),
 					 val_desc ? errdetail("Failing row contains %s.", val_desc) : 0,
-					 errtableconstraint(orig_rel, failed)));
+					 errtableconstraint(rel, failed)));
 		}
 	}
 }
@@ -1932,8 +1836,6 @@ void
 ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 					 TupleTableSlot *slot, EState *estate)
 {
-	Relation	rel = resultRelInfo->ri_RelationDesc;
-	TupleDesc	tupdesc = RelationGetDescr(rel);
 	ExprContext *econtext;
 	ListCell   *l1,
 			   *l2;
@@ -1971,9 +1873,6 @@ ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 		if (!ExecQual(wcoExpr, econtext))
 		{
 			char	   *val_desc;
-			Bitmapset  *modifiedCols;
-			Bitmapset  *insertedCols;
-			Bitmapset  *updatedCols;
 
 			switch (wco->kind)
 			{
@@ -1987,34 +1886,9 @@ ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 					 * USING policy.
 					 */
 				case WCO_VIEW_CHECK:
-					/* See the comment in ExecConstraints(). */
-					if (resultRelInfo->ri_PartitionRoot)
-					{
-						TupleDesc	old_tupdesc = RelationGetDescr(rel);
-						AttrMap    *map;
-
-						rel = resultRelInfo->ri_PartitionRoot;
-						tupdesc = RelationGetDescr(rel);
-						/* a reverse map */
-						map = build_attrmap_by_name_if_req(old_tupdesc,
-														   tupdesc);
-
-						/*
-						 * Partition-specific slot's tupdesc can't be changed,
-						 * so allocate a new one.
-						 */
-						if (map != NULL)
-							slot = execute_attr_map_slot(map, slot,
-														 MakeTupleTableSlot(tupdesc, &TTSOpsVirtual));
-					}
-
-					insertedCols = GetInsertedColumns(resultRelInfo, estate);
-					updatedCols = GetUpdatedColumns(resultRelInfo, estate);
-					modifiedCols = bms_union(insertedCols, updatedCols);
-					val_desc = ExecBuildSlotValueDescription(RelationGetRelid(rel),
+					val_desc = ExecBuildSlotValueDescription(estate,
+															 resultRelInfo,
 															 slot,
-															 tupdesc,
-															 modifiedCols,
 															 64);
 
 					ereport(ERROR,
@@ -2077,10 +1951,9 @@ ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
  * columns they are.
  */
 static char *
-ExecBuildSlotValueDescription(Oid reloid,
+ExecBuildSlotValueDescription(EState *estate,
+							  ResultRelInfo *resultRelInfo,
 							  TupleTableSlot *slot,
-							  TupleDesc tupdesc,
-							  Bitmapset *modifiedCols,
 							  int maxfieldlen)
 {
 	StringInfoData buf;
@@ -2091,6 +1964,9 @@ ExecBuildSlotValueDescription(Oid reloid,
 	AclResult	aclresult;
 	bool		table_perm = false;
 	bool		any_perm = false;
+	Oid			reloid = RelationGetRelid(resultRelInfo->ri_RelationDesc);
+	TupleDesc	tupdesc = RelationGetDescr(resultRelInfo->ri_RelationDesc);
+	Bitmapset  *modifiedCols;
 
 	/*
 	 * Check if RLS is enabled and should be active for the relation; if so,
@@ -2099,6 +1975,9 @@ ExecBuildSlotValueDescription(Oid reloid,
 	 */
 	if (check_enable_rls(reloid, InvalidOid, true) == RLS_ENABLED)
 		return NULL;
+
+	modifiedCols = bms_union(GetInsertedColumns(resultRelInfo, estate),
+							 GetUpdatedColumns(resultRelInfo, estate));
 
 	initStringInfo(&buf);
 

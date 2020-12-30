@@ -49,7 +49,31 @@ ForeignNext(ForeignScanState *node)
 	/* Call the Iterate function in short-lived context */
 	oldcontext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
 	if (plan->operation != CMD_SELECT)
+	{
+		/*
+		 * For FDW's convenience, look up the result relation info and set
+		 * ForeignScanState.resultRelInfo if not already done.  This is also
+		 * a good time to call BeginDirectModify().
+		 */
+		Assert(plan->resultRelation > 0);
+		if (node->resultRelInfo == NULL)
+		{
+			EState   *estate = node->ss.ps.state;
+			ResultRelInfo *rInfo = estate->es_result_relations[plan->resultRelation - 1];
+
+			/* ExecInitModifyTable() must have initialized one already. */
+			Assert(rInfo != NULL);
+			node->resultRelInfo = rInfo;
+
+			oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
+			Assert(rInfo->ri_FdwRoutine != NULL &&
+				   rInfo->ri_FdwRoutine->BeginDirectModify != NULL);
+			rInfo->ri_FdwRoutine->BeginDirectModify(node,
+													estate->es_top_eflags);
+			MemoryContextSwitchTo(oldcontext);
+		}
 		slot = node->fdwroutine->IterateDirectModify(node);
+	}
 	else
 		slot = node->fdwroutine->IterateForeignScan(node);
 	MemoryContextSwitchTo(oldcontext);
@@ -215,24 +239,17 @@ ExecInitForeignScan(ForeignScan *node, EState *estate, int eflags)
 	scanstate->fdwroutine = fdwroutine;
 	scanstate->fdw_state = NULL;
 
-	/*
-	 * For the FDW's convenience, look up the modification target relation's.
-	 * ResultRelInfo.
-	 */
-	if (node->resultRelation > 0)
-		scanstate->resultRelInfo = estate->es_result_relations[node->resultRelation - 1];
-
 	/* Initialize any outer plan. */
 	if (outerPlan(node))
 		outerPlanState(scanstate) =
 			ExecInitNode(outerPlan(node), estate, eflags);
 
 	/*
-	 * Tell the FDW to initialize the scan.
+	 * Tell the FDW to initialize the scan.  For modify operations, any
+	 * additional initializations are performed right before calling
+	 * IterateDirectModify() for the first time.
 	 */
-	if (node->operation != CMD_SELECT)
-		fdwroutine->BeginDirectModify(scanstate, eflags);
-	else
+	if (node->operation == CMD_SELECT)
 		fdwroutine->BeginForeignScan(scanstate, eflags);
 
 	return scanstate;

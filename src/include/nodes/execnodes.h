@@ -411,6 +411,9 @@ typedef struct ResultRelInfo
 	/* relation descriptor for result relation */
 	Relation	ri_RelationDesc;
 
+	/* relation descriptor of the original target relation */
+	Relation	ri_RootTargetDesc;
+
 	/* # of indices existing on result relation */
 	int			ri_NumIndices;
 
@@ -487,7 +490,6 @@ typedef struct ResultRelInfo
 	 * ExecInitRoutingInfo, are non-NULL if partition has a different tuple
 	 * format than the root table.
 	 */
-	Relation	ri_PartitionRoot;
 	TupleConversionMap *ri_RootToPartitionMap;
 	TupleTableSlot *ri_PartitionTupleSlot;
 
@@ -497,6 +499,7 @@ typedef struct ResultRelInfo
 	 * transition tuple capture or update partition row movement is active.
 	 */
 	TupleConversionMap *ri_ChildToRootMap;
+	bool		ri_ChildToRootMapValid;	/* has the map been initialized? */
 
 	/* for use by copyfrom.c when performing multi-inserts */
 	struct CopyMultiInsertBuffer *ri_CopyMultiInsertBuffer;

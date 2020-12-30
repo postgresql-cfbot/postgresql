@@ -4402,6 +4402,106 @@ listEventTriggers(const char *pattern, bool verbose)
 }
 
 /*
+ * \dX
+ *
+ * Briefly describes extended statistics.
+ */
+bool
+listExtendedStats(const char *pattern, bool verbose)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+
+	if (pset.sversion < 100000)
+	{
+		char		sverbuf[32];
+
+		pg_log_error("The server (version %s) does not support extended statistics.",
+					 formatPGVersionNumber(pset.sversion, false,
+										   sverbuf, sizeof(sverbuf)));
+		return true;
+	}
+
+	initPQExpBuffer(&buf);
+	printfPQExpBuffer(&buf,
+					  "SELECT \n"
+					  "es.stxnamespace::pg_catalog.regnamespace::text AS \"%s\", \n"
+					  "es.stxname AS \"%s\", \n"
+					  "pg_catalog.format('%%s FROM %%s', \n"
+					  "  (SELECT pg_catalog.string_agg(pg_catalog.quote_ident(a.attname),', ') \n"
+					  "   FROM pg_catalog.unnest(es.stxkeys) s(attnum) \n"
+					  "   JOIN pg_catalog.pg_attribute a \n"
+					  "   ON (es.stxrelid = a.attrelid \n"
+					  "   AND a.attnum = s.attnum \n"
+					  "   AND NOT a.attisdropped)), \n"
+					  "es.stxrelid::regclass) AS \"%s\", \n"
+					  "CASE WHEN esd.stxdndistinct IS NOT NULL THEN 'built' \n"
+					  "     WHEN 'd' = any(es.stxkind) THEN 'defined' \n"
+					  "END AS \"%s\", \n"
+					  "CASE WHEN esd.stxddependencies IS NOT NULL THEN 'built' \n"
+					  "     WHEN 'f' = any(es.stxkind) THEN 'defined' \n"
+					  "END AS \"%s\", \n"
+					  "CASE WHEN esd.stxdmcv IS NOT NULL THEN 'built' \n"
+					  "     WHEN 'm' = any(es.stxkind) THEN 'defined' \n"
+					  "END AS \"%s\"",
+					  gettext_noop("Schema"),
+					  gettext_noop("Name"),
+					  gettext_noop("Definition"),
+					  gettext_noop("Ndistinct"),
+					  gettext_noop("Dependencies"),
+					  gettext_noop("MCV"));
+
+	if (verbose)
+	{
+		appendPQExpBuffer(&buf,
+						  ",\nCASE WHEN esd.stxdndistinct IS NOT NULL THEN \n"
+						  "          pg_catalog.pg_size_pretty(pg_catalog.length(stxdndistinct)::bigint) \n"
+						  "     WHEN 'd' = any(stxkind) THEN '0 bytes' \n"
+						  "END AS \"%s\", \n"
+						  "CASE WHEN esd.stxddependencies IS NOT NULL THEN \n"
+						  "          pg_catalog.pg_size_pretty(pg_catalog.length(stxddependencies)::bigint) \n"
+						  "     WHEN 'f' = any(stxkind) THEN '0 bytes' \n"
+						  "END AS \"%s\", \n"
+						  "CASE WHEN esd.stxdmcv IS NOT NULL THEN \n"
+						  "          pg_catalog.pg_size_pretty(pg_catalog.length(stxdmcv)::bigint) \n"
+						  "     WHEN 'm' = any(stxkind) THEN '0 bytes' \n"
+						  "END AS \"%s\" ",
+						  gettext_noop("Ndistinct_size"),
+						  gettext_noop("Dependencies_size"),
+						  gettext_noop("MCV_size"));
+	}
+
+	appendPQExpBufferStr(&buf,
+						 " \nFROM pg_catalog.pg_statistic_ext es \n"
+						 "LEFT JOIN pg_catalog.pg_statistic_ext_data esd \n"
+						 "ON es.oid = esd.stxoid \n"
+						 "INNER JOIN pg_catalog.pg_class c \n"
+						 "ON es.stxrelid = c.oid \n");
+
+	processSQLNamePattern(pset.db, &buf, pattern, false,
+						  false, NULL,
+						  "stxname", NULL,
+						  NULL);
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1, 2;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("List of extended statistics");
+	myopt.translate_header = true;
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+/*
  * \dC
  *
  * Describes casts.

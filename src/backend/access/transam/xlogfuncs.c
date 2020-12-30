@@ -538,7 +538,10 @@ pg_wal_replay_pause(PG_FUNCTION_ARGS)
 				 errhint("%s cannot be executed after promotion is triggered.",
 						 "pg_wal_replay_pause()")));
 
-	SetRecoveryPause(true);
+	SetRecoveryPause(RECOVERY_PAUSE_REQUESTED);
+
+	/* wake up the recovery process so that it can process the pause request */
+	WakeupRecovery();
 
 	PG_RETURN_VOID();
 }
@@ -565,13 +568,17 @@ pg_wal_replay_resume(PG_FUNCTION_ARGS)
 				 errhint("%s cannot be executed after promotion is triggered.",
 						 "pg_wal_replay_resume()")));
 
-	SetRecoveryPause(false);
+	SetRecoveryPause(RECOVERY_IN_PROGRESS);
 
 	PG_RETURN_VOID();
 }
 
 /*
  * pg_is_wal_replay_paused
+ *
+ * If replay pause is requested using pg_wal_replay_pause then this will wait
+ * for recovery to actually get paused and once recovery is paused it will
+ * return true.  Return false if replay pause is not requested.
  */
 Datum
 pg_is_wal_replay_paused(PG_FUNCTION_ARGS)
@@ -582,7 +589,31 @@ pg_is_wal_replay_paused(PG_FUNCTION_ARGS)
 				 errmsg("recovery is not in progress"),
 				 errhint("Recovery control functions can only be executed during recovery.")));
 
-	PG_RETURN_BOOL(RecoveryIsPaused());
+	if (!RecoveryPauseRequested())
+		PG_RETURN_BOOL(false);
+
+	/* loop until the recovery is actually paused */
+	while(!RecoveryIsPaused())
+	{
+		pg_usleep(10000L);	/* wait for 10 msec */
+
+		/* meanwhile if recovery is resume requested then return false */
+		if (!RecoveryPauseRequested())
+			PG_RETURN_BOOL(false);
+
+		/*
+		 * If recovery is not in progress anymore then report an error this
+		 * could happen if the standby is promoted while we were waiting for
+		 * recovery to get paused.
+		 */
+		if (!RecoveryInProgress())
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("recovery is not in progress"),
+					errhint("Recovery control functions can only be executed during recovery.")));
+	}
+
+	PG_RETURN_BOOL(true);
 }
 
 /*

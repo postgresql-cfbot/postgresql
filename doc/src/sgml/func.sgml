@@ -25153,7 +25153,10 @@ postgres=# SELECT * FROM pg_walfile_name_offset(pg_stop_backup());
         <returnvalue>boolean</returnvalue>
        </para>
        <para>
-        Returns true if recovery is paused.
+        If replay pause is requested using <function>pg_wal_replay_pause</function>
+        then this will wait for recovery to actually get paused and once
+        recovery is paused it will return true.  Return false if replay pause
+        is not requested.
        </para></entry>
       </row>
 

@@ -724,8 +724,8 @@ typedef struct XLogCtlData
 	 * only relevant for replication or archive recovery
 	 */
 	TimestampTz currentChunkStartTime;
-	/* Are we requested to pause recovery? */
-	bool		recoveryPause;
+	/* Recovery pause state */
+	RecoveryPauseState		recoveryPause;
 
 	/*
 	 * lastFpwDisableRecPtr points to the start of the last replayed
@@ -6005,6 +6005,16 @@ recoveryStopsAfter(XLogReaderState *record)
 	return false;
 }
 
+static void
+CheckAndSetRecoveryPause(void)
+{
+	/* If recovery pause is requested then set it paused */
+	SpinLockAcquire(&XLogCtl->info_lck);
+	if (XLogCtl->recoveryPause == RECOVERY_PAUSE_REQUESTED)
+		XLogCtl->recoveryPause = RECOVERY_PAUSED;
+	SpinLockRelease(&XLogCtl->info_lck);
+}
+
 /*
  * Wait until shared recoveryPause flag is cleared.
  *
@@ -6036,12 +6046,20 @@ recoveryPausesHere(bool endOfRecovery)
 				(errmsg("recovery has paused"),
 				 errhint("Execute pg_wal_replay_resume() to continue.")));
 
-	while (RecoveryIsPaused())
+	while (RecoveryPauseRequested())
 	{
+
 		HandleStartupProcInterrupts();
+
 		if (CheckForStandbyTrigger())
 			return;
 		pgstat_report_wait_start(WAIT_EVENT_RECOVERY_PAUSE);
+
+		/*
+		 * While we are in the loop, user might resume and pause again so set
+		 * this everytime.
+		 */
+		CheckAndSetRecoveryPause();
 		pg_usleep(1000000L);	/* 1000 ms */
 		pgstat_report_wait_end();
 	}
@@ -6050,17 +6068,29 @@ recoveryPausesHere(bool endOfRecovery)
 bool
 RecoveryIsPaused(void)
 {
+	bool	recoveryPause;
+
+	SpinLockAcquire(&XLogCtl->info_lck);
+	recoveryPause = (XLogCtl->recoveryPause == RECOVERY_PAUSED) ? true : false;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	return recoveryPause;
+}
+
+bool
+RecoveryPauseRequested(void)
+{
 	bool		recoveryPause;
 
 	SpinLockAcquire(&XLogCtl->info_lck);
-	recoveryPause = XLogCtl->recoveryPause;
+	recoveryPause = (XLogCtl->recoveryPause != RECOVERY_IN_PROGRESS) ? true : false;
 	SpinLockRelease(&XLogCtl->info_lck);
 
 	return recoveryPause;
 }
 
 void
-SetRecoveryPause(bool recoveryPause)
+SetRecoveryPause(RecoveryPauseState recoveryPause)
 {
 	SpinLockAcquire(&XLogCtl->info_lck);
 	XLogCtl->recoveryPause = recoveryPause;
@@ -7429,7 +7459,7 @@ StartupXLOG(void)
 						proc_exit(3);
 
 					case RECOVERY_TARGET_ACTION_PAUSE:
-						SetRecoveryPause(true);
+						SetRecoveryPause(RECOVERY_PAUSE_REQUESTED);
 						recoveryPausesHere(true);
 
 						/* drop into promote */
@@ -12581,6 +12611,12 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 			default:
 				elog(ERROR, "unexpected WAL source %d", currentSource);
 		}
+
+		/* test for recovery pause if user has requested the pause */
+		if (((volatile XLogCtlData *) XLogCtl)->recoveryPause)
+			recoveryPausesHere(false);
+
+		now = GetCurrentTimestamp();
 
 		/*
 		 * This possibly-long loop needs to handle interrupts of startup

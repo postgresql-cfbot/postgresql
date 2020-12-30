@@ -770,6 +770,7 @@ _equalTargetEntry(const TargetEntry *a, const TargetEntry *b)
 	COMPARE_SCALAR_FIELD(resorigtbl);
 	COMPARE_SCALAR_FIELD(resorigcol);
 	COMPARE_SCALAR_FIELD(resjunk);
+	COMPARE_SCALAR_FIELD(isdefault);
 
 	return true;
 }

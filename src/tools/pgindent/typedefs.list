@@ -422,8 +422,6 @@ ConvertRowtypeExpr
 CookedConstraint
 CopyDest
 CopyInsertMethod
-CopyMultiInsertBuffer
-CopyMultiInsertInfo
 CopyState
 CopyStateData
 CopyStmt
@@ -1388,6 +1386,8 @@ ModifyTableState
 MorphOpaque
 MsgType
 MultiAssignRef
+MultiInsertBuffer
+MultiInsertInfo
 MultiSortSupport
 MultiSortSupportData
 MultiXactId

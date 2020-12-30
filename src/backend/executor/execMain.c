@@ -1247,7 +1247,7 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 													 * ExecInitRoutingInfo */
 	resultRelInfo->ri_PartitionTupleSlot = NULL;	/* ditto */
 	resultRelInfo->ri_ChildToRootMap = NULL;
-	resultRelInfo->ri_CopyMultiInsertBuffer = NULL;
+	resultRelInfo->ri_MultiInsertBuffer = NULL;
 }
 
 /*

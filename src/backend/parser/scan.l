@@ -364,6 +364,8 @@ less_equals		"<="
 greater_equals	">="
 less_greater	"<>"
 not_equals		"!="
+plus_equals		"+="
+minus_equals	"-="
 
 /*
  * "self" is the set of chars that should be returned as single-character
@@ -853,6 +855,16 @@ other			.
 					return NOT_EQUALS;
 				}
 
+{plus_equals}	{
+					SET_YYLLOC();
+					return PLUS_EQUALS;
+				}
+
+{minus_equals}	{
+					SET_YYLLOC();
+					return MINUS_EQUALS;
+				}
+
 {self}			{
 					SET_YYLLOC();
 					return yytext[0];
@@ -933,10 +945,9 @@ other			.
 							strchr(",()[].;:+-*/%^<>=", yytext[0]))
 							return yytext[0];
 						/*
-						 * Likewise, if what we have left is two chars, and
-						 * those match the tokens ">=", "<=", "=>", "<>" or
-						 * "!=", then we must return the appropriate token
-						 * rather than the generic Op.
+						 * Likewise, if what we have left is two chars,
+						 * there may be a more specific matching token
+						 * to return.
 						 */
 						if (nchars == 2)
 						{
@@ -950,6 +961,10 @@ other			.
 								return NOT_EQUALS;
 							if (yytext[0] == '!' && yytext[1] == '=')
 								return NOT_EQUALS;
+							if (yytext[0] == '+' && yytext[1] == '=')
+								return PLUS_EQUALS;
+							if (yytext[0] == '-' && yytext[1] == '=')
+								return MINUS_EQUALS;
 						}
 					}
 

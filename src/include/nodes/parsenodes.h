@@ -2030,7 +2030,9 @@ typedef enum
 	VAR_SET_CURRENT,			/* SET var FROM CURRENT */
 	VAR_SET_MULTI,				/* special case for SET TRANSACTION ... */
 	VAR_RESET,					/* RESET var */
-	VAR_RESET_ALL				/* RESET ALL */
+	VAR_RESET_ALL,				/* RESET ALL */
+	VAR_ADD_VALUE,				/* SET var += value */
+	VAR_SUBTRACT_VALUE			/* SET var -= value */
 } VariableSetKind;
 
 typedef struct VariableSetStmt

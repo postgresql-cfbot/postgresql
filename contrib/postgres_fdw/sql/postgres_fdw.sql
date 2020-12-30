@@ -2056,7 +2056,6 @@ alter table utrtest attach partition remp for values in (1);
 alter table utrtest attach partition locp for values in (2);
 
 insert into utrtest values (1, 'foo');
-insert into utrtest values (2, 'qux');
 
 select tableoid::regclass, * FROM utrtest;
 select tableoid::regclass, * FROM remp;
@@ -2065,8 +2064,11 @@ select tableoid::regclass, * FROM locp;
 -- It's not allowed to move a row from a partition that is foreign to another
 update utrtest set a = 2 where b = 'foo' returning *;
 
--- But the reverse is allowed
+-- But the reverse is allowed provided the target foreign partition is itself
+-- not an UPDATE target
+insert into utrtest values (2, 'qux');
 update utrtest set a = 1 where b = 'qux' returning *;
+update utrtest set a = 1 where a = 2 returning *;
 
 select tableoid::regclass, * FROM utrtest;
 select tableoid::regclass, * FROM remp;
@@ -2081,68 +2083,12 @@ create trigger loct_br_insert_trigger before insert on loct
 
 delete from utrtest;
 insert into utrtest values (2, 'qux');
-
--- Check case where the foreign partition is a subplan target rel
-explain (verbose, costs off)
-update utrtest set a = 1 where a = 1 or a = 2 returning *;
--- The new values are concatenated with ' triggered !'
-update utrtest set a = 1 where a = 1 or a = 2 returning *;
-
-delete from utrtest;
-insert into utrtest values (2, 'qux');
-
--- Check case where the foreign partition isn't a subplan target rel
 explain (verbose, costs off)
 update utrtest set a = 1 where a = 2 returning *;
 -- The new values are concatenated with ' triggered !'
 update utrtest set a = 1 where a = 2 returning *;
 
 drop trigger loct_br_insert_trigger on loct;
-
--- We can move rows to a foreign partition that has been updated already,
--- but can't move rows to a foreign partition that hasn't been updated yet
-
-delete from utrtest;
-insert into utrtest values (1, 'foo');
-insert into utrtest values (2, 'qux');
-
--- Test the former case:
--- with a direct modification plan
-explain (verbose, costs off)
-update utrtest set a = 1 returning *;
-update utrtest set a = 1 returning *;
-
-delete from utrtest;
-insert into utrtest values (1, 'foo');
-insert into utrtest values (2, 'qux');
-
--- with a non-direct modification plan
-explain (verbose, costs off)
-update utrtest set a = 1 from (values (1), (2)) s(x) where a = s.x returning *;
-update utrtest set a = 1 from (values (1), (2)) s(x) where a = s.x returning *;
-
--- Change the definition of utrtest so that the foreign partition get updated
--- after the local partition
-delete from utrtest;
-alter table utrtest detach partition remp;
-drop foreign table remp;
-alter table loct drop constraint loct_a_check;
-alter table loct add check (a in (3));
-create foreign table remp (a int check (a in (3)), b text) server loopback options (table_name 'loct');
-alter table utrtest attach partition remp for values in (3);
-insert into utrtest values (2, 'qux');
-insert into utrtest values (3, 'xyzzy');
-
--- Test the latter case:
--- with a direct modification plan
-explain (verbose, costs off)
-update utrtest set a = 3 returning *;
-update utrtest set a = 3 returning *; -- ERROR
-
--- with a non-direct modification plan
-explain (verbose, costs off)
-update utrtest set a = 3 from (values (2), (3)) s(x) where a = s.x returning *;
-update utrtest set a = 3 from (values (2), (3)) s(x) where a = s.x returning *; -- ERROR
 
 drop table utrtest;
 drop table loct;

@@ -30,6 +30,7 @@
 #include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "optimizer/planmain.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
 #include "utils/lsyscache.h"
@@ -3386,7 +3387,7 @@ check_index_predicates(PlannerInfo *root, RelOptInfo *rel)
 	 * and pass them through to EvalPlanQual via a side channel; but for now,
 	 * we just don't remove implied quals at all for target relations.
 	 */
-	is_target_rel = (rel->relid == root->parse->resultRelation ||
+	is_target_rel = (is_result_relation(rel->relid, root) ||
 					 get_plan_rowmark(root->rowMarks, rel->relid) != NULL);
 
 	/*

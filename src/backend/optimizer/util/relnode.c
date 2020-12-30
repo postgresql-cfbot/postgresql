@@ -183,6 +183,15 @@ expand_planner_arrays(PlannerInfo *root, int add_size)
 			palloc0(sizeof(AppendRelInfo *) * new_size);
 	}
 
+	if (root->inherit_result_rel_array)
+	{
+		root->inherit_result_rel_array = (InheritResultRelInfo **)
+			repalloc(root->inherit_result_rel_array,
+					 sizeof(InheritResultRelInfo *) * new_size);
+		MemSet(root->inherit_result_rel_array + root->simple_rel_array_size,
+			   0, sizeof(InheritResultRelInfo *) * add_size);
+	}
+
 	root->simple_rel_array_size = new_size;
 }
 

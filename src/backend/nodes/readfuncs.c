@@ -1366,6 +1366,7 @@ _readAppendRelInfo(void)
 	READ_OID_FIELD(parent_reltype);
 	READ_OID_FIELD(child_reltype);
 	READ_NODE_FIELD(translated_vars);
+	READ_NODE_FIELD(translated_fake_vars);
 	READ_INT_FIELD(num_child_cols);
 	READ_ATTRNUMBER_ARRAY(parent_colnos, local_node->num_child_cols);
 	READ_OID_FIELD(parent_reloid);
@@ -1641,9 +1642,10 @@ _readModifyTable(void)
 	READ_UINT_FIELD(rootRelation);
 	READ_BOOL_FIELD(partColsUpdated);
 	READ_NODE_FIELD(resultRelations);
-	READ_NODE_FIELD(plans);
+	READ_NODE_FIELD(subplan);
 	READ_NODE_FIELD(withCheckOptionLists);
 	READ_NODE_FIELD(returningLists);
+	READ_NODE_FIELD(updateTargetLists);
 	READ_NODE_FIELD(fdwPrivLists);
 	READ_BITMAPSET_FIELD(fdwDirectModifyPlans);
 	READ_NODE_FIELD(rowMarks);

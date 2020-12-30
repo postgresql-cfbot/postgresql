@@ -30,6 +30,8 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_sequence.h"
 #include "catalog/pg_type.h"
+#include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "commands/defrem.h"
 #include "commands/sequence.h"
 #include "commands/tablecmds.h"
@@ -108,6 +110,7 @@ static void init_params(ParseState *pstate, List *options, bool for_identity,
 						List **owned_by);
 static void do_setval(Oid relid, int64 next, bool iscalled);
 static void process_owned_by(Relation seqrel, List *owned_by, bool for_identity);
+int64 get_seqence_start_value(Oid seqid);
 
 
 /*
@@ -275,8 +278,6 @@ ResetSequence(Oid seq_relid)
 	Buffer		buf;
 	HeapTupleData seqdatatuple;
 	HeapTuple	tuple;
-	HeapTuple	pgstuple;
-	Form_pg_sequence pgsform;
 	int64		startv;
 
 	/*
@@ -287,12 +288,7 @@ ResetSequence(Oid seq_relid)
 	init_sequence(seq_relid, &elm, &seq_rel);
 	(void) read_seq_tuple(seq_rel, &buf, &seqdatatuple);
 
-	pgstuple = SearchSysCache1(SEQRELID, ObjectIdGetDatum(seq_relid));
-	if (!HeapTupleIsValid(pgstuple))
-		elog(ERROR, "cache lookup failed for sequence %u", seq_relid);
-	pgsform = (Form_pg_sequence) GETSTRUCT(pgstuple);
-	startv = pgsform->seqstart;
-	ReleaseSysCache(pgstuple);
+	startv = get_seqence_start_value(seq_relid);
 
 	/*
 	 * Copy the existing sequence tuple.
@@ -450,6 +446,15 @@ AlterSequence(ParseState *pstate, AlterSeqStmt *stmt)
 	}
 
 	init_sequence(relid, &elm, &seqrel);
+
+	if (RELATION_IS_GLOBAL_TEMP(seqrel))
+	{
+		if (is_other_backend_use_gtt(RelationGetRelid(seqrel)))
+			ereport(ERROR,
+				(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
+				 errmsg("cannot alter global temporary sequence %s when other backend attached it.",
+						RelationGetRelationName(seqrel))));
+	}
 
 	rel = table_open(SequenceRelationId, RowExclusiveLock);
 	seqtuple = SearchSysCacheCopy1(SEQRELID,
@@ -611,7 +616,7 @@ nextval_internal(Oid relid, bool check_permissions)
 						RelationGetRelationName(seqrel))));
 
 	/* read-only transactions may only modify temp sequences */
-	if (!seqrel->rd_islocaltemp)
+	if (!RELATION_IS_TEMP_ON_CURRENT_SESSION(seqrel))
 		PreventCommandIfReadOnly("nextval()");
 
 	/*
@@ -936,7 +941,7 @@ do_setval(Oid relid, int64 next, bool iscalled)
 	ReleaseSysCache(pgstuple);
 
 	/* read-only transactions may only modify temp sequences */
-	if (!seqrel->rd_islocaltemp)
+	if (!RELATION_IS_TEMP_ON_CURRENT_SESSION(seqrel))
 		PreventCommandIfReadOnly("setval()");
 
 	/*
@@ -1153,6 +1158,14 @@ init_sequence(Oid relid, SeqTable *p_elm, Relation *p_rel)
 	/* Return results */
 	*p_elm = elm;
 	*p_rel = seqrel;
+
+	/* Initializes the storage for sequence which the global temporary table belongs. */
+	if (RELATION_IS_GLOBAL_TEMP(seqrel) &&
+		!gtt_storage_attached(RelationGetRelid(seqrel)))
+	{
+		RelationCreateStorage(seqrel->rd_node, RELPERSISTENCE_GLOBAL_TEMP, seqrel);
+		gtt_init_seq(seqrel);
+	}
 }
 
 
@@ -1953,3 +1966,51 @@ seq_mask(char *page, BlockNumber blkno)
 
 	mask_unused_space(page);
 }
+
+/*
+ * Get the startValue of the sequence from syscache.
+ */
+int64
+get_seqence_start_value(Oid seqid)
+{
+	HeapTuple	seqtuple;
+	Form_pg_sequence	seqform;
+	int64		start;
+
+	seqtuple = SearchSysCache1(SEQRELID, ObjectIdGetDatum(seqid));
+	if (!HeapTupleIsValid(seqtuple))
+		elog(ERROR, "cache lookup failed for sequence %u",
+			 seqid);
+
+	seqform = (Form_pg_sequence) GETSTRUCT(seqtuple);
+	start = seqform->seqstart;
+	ReleaseSysCache(seqtuple);
+
+	return start;
+}
+
+/*
+ * Initialize sequence which global temporary table belongs.
+ */
+void
+gtt_init_seq(Relation rel)
+{
+	Datum		value[SEQ_COL_LASTCOL] = {0};
+	bool		null[SEQ_COL_LASTCOL] = {false};
+	HeapTuple	tuple;
+	int64		startv = get_seqence_start_value(RelationGetRelid(rel));
+
+	/*
+	 * last_value from pg_sequence.seqstart
+	 * log_cnt = 0
+	 * is_called = false
+	 */
+	value[SEQ_COL_LASTVAL-1] = Int64GetDatumFast(startv); /* start sequence with 1 */
+
+	tuple = heap_form_tuple(RelationGetDescr(rel), value, null);
+	fill_seq_with_data(rel, tuple);
+	heap_freetuple(tuple);
+
+	return;
+}
+

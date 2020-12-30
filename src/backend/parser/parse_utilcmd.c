@@ -457,6 +457,13 @@ generateSerialExtraStmts(CreateStmtContext *cxt, ColumnDef *column,
 	seqstmt->options = seqoptions;
 
 	/*
+	 * If a sequence is bound to a global temporary table, then the sequence
+	 * must been "global temporary"
+	 */
+	if (cxt->relation->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		seqstmt->sequence->relpersistence = cxt->relation->relpersistence;
+
+	/*
 	 * If a sequence data type was specified, add it to the options.  Prepend
 	 * to the list rather than append; in case a user supplied their own AS
 	 * clause, the "redundant options" error will point to their occurrence,
@@ -3222,6 +3229,8 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 		cxt.isforeign = false;
 	}
 	cxt.relation = stmt->relation;
+	/* Sets the table persistence to the context */
+	cxt.relation->relpersistence = RelationGetRelPersistence(rel);
 	cxt.rel = rel;
 	cxt.inhRelations = NIL;
 	cxt.isalter = true;

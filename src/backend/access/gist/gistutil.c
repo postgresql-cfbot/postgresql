@@ -1026,7 +1026,7 @@ gistproperty(Oid index_oid, int attno,
 XLogRecPtr
 gistGetFakeLSN(Relation rel)
 {
-	if (rel->rd_rel->relpersistence == RELPERSISTENCE_TEMP)
+	if (RELATION_IS_TEMP(rel))
 	{
 		/*
 		 * Temporary relations are only accessible in our session, so a simple

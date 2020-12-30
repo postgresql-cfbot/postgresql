@@ -156,6 +156,8 @@ struct PGPROC
 	Oid			tempNamespaceId;	/* OID of temp schema this backend is
 									 * using */
 
+	TransactionId backend_gtt_frozenxid;	/* backend level global temp table relfrozenxid */
+
 	bool		isBackgroundWorker; /* true if background worker. */
 
 	/*

@@ -2111,6 +2111,14 @@ do_autovacuum(void)
 			}
 			continue;
 		}
+		else if (classForm->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		{
+			/*
+			 * Aotuvacuum cannot vacuum the private data stored in each backend
+			 * that belongs to global temporary table, so skip them.
+			 */
+			continue;
+		}
 
 		/* Fetch reloptions and the pgstat entry for this table */
 		relopts = extract_autovac_opts(tuple, pg_class_desc);
@@ -2177,7 +2185,7 @@ do_autovacuum(void)
 		/*
 		 * We cannot safely process other backends' temp tables, so skip 'em.
 		 */
-		if (classForm->relpersistence == RELPERSISTENCE_TEMP)
+		if (RelpersistenceTsTemp(classForm->relpersistence))
 			continue;
 
 		relid = classForm->oid;

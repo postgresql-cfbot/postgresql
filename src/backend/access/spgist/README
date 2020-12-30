@@ -76,6 +76,19 @@ Leaf tuple consists of:
 
   ItemPointer to the heap
 
+  nextOffset number of next leaf tuple in a chain on a leaf page
+  optional nullmask
+  optional INCLUDE columns values
+
+Leaf tuple layout changed since PostgreSQL version 14 to support INCLUDE
+columns but in a way that doesn't change the header and the key value
+placement for a tuple without INCLUDE columns. So indexes created earlier
+remain fully supported.
+
+Nullmask is added only if there are INCLUDE columns and nulls in a tuple.
+It is added without alignment and 64-bit architectures has a good chance
+to fit alignment gap before first value which makes its storage free of
+charge.
 
 NULLS HANDLING
 
@@ -90,6 +103,10 @@ Insertions and searches in the nulls tree do not use any of the
 opclass-supplied functions, but just use hardwired logic comparable to
 AllTheSame cases in the normal tree.
 
+For INCLUDE attributes nulls are handled in ordinary per leaf-tuple way i.e.
+if null mask presence bit in a header is set, nullmask is added to tuple.
+If there is nullmask it covers all attributes, key attribute as well. It is
+redundant but allows to use index tuple code to operate SpGistLeafTuple.
 
 INSERTION ALGORITHM
 

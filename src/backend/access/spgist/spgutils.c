@@ -31,7 +31,11 @@
 #include "utils/index_selfuncs.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
-
+#include "access/itup.h"
+#include "access/detoast.h"
+#include "access/toast_internals.h"
+#include "access/heaptoast.h"
+#include "utils/expandeddatum.h"
 
 /*
  * SP-GiST handler function: return IndexAmRoutine with access method parameters
@@ -57,7 +61,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amclusterable = false;
 	amroutine->ampredlocks = false;
 	amroutine->amcanparallel = false;
-	amroutine->amcaninclude = false;
+	amroutine->amcaninclude = true;
 	amroutine->amusemaintenanceworkmem = false;
 	amroutine->amparallelvacuumoptions =
 		VACUUM_OPTION_PARALLEL_BULKDEL | VACUUM_OPTION_PARALLEL_COND_CLEANUP;
@@ -105,6 +109,8 @@ SpGistCache *
 spgGetCache(Relation index)
 {
 	SpGistCache *cache;
+	int i;
+	int natts = IndexRelationGetNumberOfAttributes(index);
 
 	if (index->rd_amcache == NULL)
 	{
@@ -113,18 +119,42 @@ spgGetCache(Relation index)
 		FmgrInfo   *procinfo;
 		Buffer		metabuffer;
 		SpGistMetaPageData *metadata;
+		TupleDesc 	tmpTupleDescriptor;
+		/*
+		 * SPGiST should have one key column and can also have INCLUDE
+		 * columns
+		 */
+		if (IndexRelationGetNumberOfKeyAttributes(index) != 1)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("SPGiST index can have only one key column")));
+		if (natts >= INDEX_MAX_KEYS)
+			ereport(ERROR,
+					(errcode(ERRCODE_TOO_MANY_COLUMNS),
+					errmsg("number of index columns (%d) exceeds limit (%d)",
+					natts, INDEX_MAX_KEYS)));
+
+		/* Form a tuple descriptor for all columns */
+		tmpTupleDescriptor = CreateTemplateTupleDesc(natts);
+
+		for (i = spgKeyColumn; i < natts; i++)
+			TupleDescInitEntry(tmpTupleDescriptor, i + 1, NULL,
+					TupleDescAttr(index->rd_att, i)->atttypid, -1, 0);
 
 		cache = MemoryContextAllocZero(index->rd_indexcxt,
-									   sizeof(SpGistCache));
+				offsetof(struct SpGistCache, tupleDescriptor) +
+				TupleDescSize(tmpTupleDescriptor));
 
-		/* SPGiST doesn't support multi-column indexes */
-		Assert(index->rd_att->natts == 1);
+		memcpy(&cache->tupleDescriptor, tmpTupleDescriptor,
+				TupleDescSize(tmpTupleDescriptor));
+		pfree(tmpTupleDescriptor);
 
 		/*
-		 * Get the actual data type of the indexed column from the index
-		 * tupdesc.  We pass this to the opclass config function so that
-		 * polymorphic opclasses are possible.
+		 * Get the actual data type of the key column from the index tupdesc.
+		 * We pass this to the opclass config function so that polymorphic
+		 * opclasses are possible.
 		 */
+
 		atttype = TupleDescAttr(index->rd_att, 0)->atttypid;
 
 		/* Call the config function to get config info for the opclass */
@@ -196,6 +226,7 @@ initSpGistState(SpGistState *state, Relation index)
 	state->attLeafType = cache->attLeafType;
 	state->attPrefixType = cache->attPrefixType;
 	state->attLabelType = cache->attLabelType;
+	state->tupleDescriptor = &cache->tupleDescriptor;
 
 	/* Make workspace for constructing dead tuples */
 	state->deadTupleStorage = palloc0(SGDTSIZE);
@@ -205,6 +236,7 @@ initSpGistState(SpGistState *state, Relation index)
 
 	/* Assume we're not in an index build (spgbuild will override) */
 	state->isBuild = false;
+
 }
 
 /*
@@ -604,8 +636,8 @@ spgoptions(Datum reloptions, bool validate)
 
 /*
  * Get the space needed to store a non-null datum of the indicated type.
- * Note the result is already rounded up to a MAXALIGN boundary.
- * Also, we follow the SPGiST convention that pass-by-val types are
+ * Note the result is not maxaligned and this should be done by the caller if
+ * needed. Also, we follow the SPGiST convention that pass-by-val types are
  * just stored in their Datum representation (compare memcpyDatum).
  */
 unsigned int
@@ -620,7 +652,7 @@ SpGistGetTypeSize(SpGistTypeDesc *att, Datum datum)
 	else
 		size = VARSIZE_ANY(datum);
 
-	return MAXALIGN(size);
+	return size;
 }
 
 /*
@@ -642,38 +674,85 @@ memcpyDatum(void *target, SpGistTypeDesc *att, Datum datum)
 	}
 }
 
-/*
- * Construct a leaf tuple containing the given heap TID and datum value
- */
-SpGistLeafTuple
-spgFormLeafTuple(SpGistState *state, ItemPointer heapPtr,
-				 Datum datum, bool isnull)
+Size
+spgNullmaskSize(int natts, bool *isnull)
 {
-	SpGistLeafTuple tup;
-	unsigned int size;
+	int i;
 
-	/* compute space needed (note result is already maxaligned) */
-	size = SGLTHDRSZ;
-	if (!isnull)
-		size += SpGistGetTypeSize(&state->attLeafType, datum);
+	Assert(natts > 0);
+	Assert(natts <= INDEX_MAX_KEYS);
 
 	/*
-	 * Ensure that we can replace the tuple with a dead tuple later.  This
-	 * test is unnecessary when !isnull, but let's be safe.
+	 * If there is only a key attribute (natts == 1), nullmask will not be inserted
+	 * (even inside the tuples, which have NULL key value). This ensures compatibility
+	 * with the previous versions tuple layout.
 	 */
-	if (size < SGDTSIZE)
-		size = SGDTSIZE;
+	if (natts == 1)
+		return 0;
 
-	/* OK, form the tuple */
-	tup = (SpGistLeafTuple) palloc0(size);
+	for (i = spgKeyColumn; i < natts; i++)
+	{
+	   /*
+		* If there is at least one null, then nullmask will be sized to contain a key
+		* attribute and all INCLUDE attributes.
+		*/
+		if (isnull[i])
+			return ((natts - 1) / 8) + 1;
+	}
+	return 0;
+}
 
-	tup->size = size;
-	tup->nextOffset = InvalidOffsetNumber;
-	tup->heapPtr = *heapPtr;
-	if (!isnull)
-		memcpyDatum(SGLTDATAPTR(tup), &state->attLeafType, datum);
+/*
+ * Construct a leaf tuple containing the given heap TID, datums and isnulls arrays.
+ * Nullmask apply only to INCLUDE attribute and is placed just after header if
+ * there is at least one NULL among INCLUDE attributes. It doesn't need alignment.
+ * Then all attributes data follow starting from MAXALIGN.
+ */
+SpGistLeafTuple
+spgFormLeafTuple(TupleDesc tupleDescriptor, ItemPointer heapPtr,
+				 Datum *datum, bool *isnull)
+{
+	SpGistLeafTuple tuple;
+	uint16	tupmask = 0;
+	Size 	data_size = heap_compute_data_size(tupleDescriptor, datum, isnull);
+	Size 	nullmask_size = spgNullmaskSize(tupleDescriptor->natts, isnull);
+	Size 	hoff = MAXALIGN(sizeof(SpGistLeafTupleData) + nullmask_size);
+	Size 	size = MAXALIGN(hoff + data_size);
+	char       *tp;	/* ptr to tuple data */
 
-	return tup;
+	/*
+	 * Ensure that we can replace the tuple with a dead tuple later. This
+	 * test is unnecessary when !isnull[spgKeyColumn], but let's be safe.
+	 */
+	size = size < SGDTSIZE ? SGDTSIZE : MAXALIGN(size);
+
+	tuple = (SpGistLeafTuple) palloc0(size);
+	tuple->size = size;
+	SGLT_SET_OFFSET(tuple, InvalidOffsetNumber);
+	tuple->heapPtr = *heapPtr;
+	tp = (char *) tuple + hoff;
+
+	if (nullmask_size)
+	{
+		bits8      *bp;	/* ptr to null bitmap in tuple */
+
+		/* Set nullmask presence bit in SpGistLeafTuple header if needed */
+		SGLT_SET_CONTAINSNULLMASK(tuple, true);
+		/* Fill nullmask and data part of a tuple */
+		bp = (bits8 *) ((char *)tuple + sizeof(SpGistLeafTupleData));
+		heap_fill_tuple(tupleDescriptor, datum, isnull, tp, data_size, &tupmask, bp);
+	}
+	else if ( tupleDescriptor->natts > 1 || isnull[0] == false )
+		/*
+		 * Prevent filling nullmask in the tuple in case there should be
+		 * no nullmask.
+		 */
+		heap_fill_tuple(tupleDescriptor, datum, isnull, tp, data_size, &tupmask,
+					(bits8 *) NULL);
+
+	/* Single-column tuple with NULL value doesn't need filling data portion*/
+
+	return tuple;
 }
 
 /*
@@ -689,10 +768,10 @@ spgFormNodeTuple(SpGistState *state, Datum label, bool isnull)
 	unsigned int size;
 	unsigned short infomask = 0;
 
-	/* compute space needed (note result is already maxaligned) */
+	/* compute space needed */
 	size = SGNTHDRSZ;
 	if (!isnull)
-		size += SpGistGetTypeSize(&state->attLabelType, label);
+		size += MAXALIGN(SpGistGetTypeSize(&state->attLabelType, label));
 
 	/*
 	 * Here we make sure that the size will fit in the field reserved for it
@@ -736,7 +815,7 @@ spgFormInnerTuple(SpGistState *state, bool hasPrefix, Datum prefix,
 
 	/* Compute size needed */
 	if (hasPrefix)
-		prefixSize = SpGistGetTypeSize(&state->attPrefixType, prefix);
+		prefixSize = MAXALIGN(SpGistGetTypeSize(&state->attPrefixType, prefix));
 	else
 		prefixSize = 0;
 
@@ -815,7 +894,7 @@ spgFormDeadTuple(SpGistState *state, int tupstate,
 
 	tuple->tupstate = tupstate;
 	tuple->size = SGDTSIZE;
-	tuple->nextOffset = InvalidOffsetNumber;
+	tuple->t_info = InvalidOffsetNumber;
 
 	if (tupstate == SPGIST_REDIRECT)
 	{
@@ -1046,4 +1125,48 @@ spgproperty(Oid index_oid, int attno,
 	*isnull = false;
 
 	return true;
+}
+
+/*
+ * Convert an SpGist tuple into palloc'd Datum/isnull arrays.
+ */
+void
+spgDeformLeafTuple(SpGistLeafTuple tup, TupleDesc tupleDescriptor,
+				   Datum *values, bool *isnull, bool keyColumnIsNull)
+{
+	bool		hasNullsMask = SGLT_GET_CONTAINSNULLMASK(tup);
+	char	   *tp; 						/* ptr to tuple data */
+	bits8      *bp;                         /* ptr to null bitmap in tuple */
+
+	if (keyColumnIsNull && tupleDescriptor->natts == 1)
+	{
+		/* Trivial case: there is only key attribute and we're in a nulls tree.
+		 * hasNullsMask bit in a tuple header should not be set for single
+		 * attribute case even if it has NULL value (for compatibility with
+		 * pre-v14 SpGist tuple format) We should not call
+		 * index_deform_anyheader_tuple() in this trivial case as it expects
+		 * nullmask in a tuple present in this case.
+		 */
+		Assert (hasNullsMask == 0);
+
+		isnull[spgKeyColumn] = true;
+		values[spgKeyColumn] = (Datum) 0;
+		return;
+	}
+	else if (hasNullsMask)
+		tp = (char *) tup + MAXALIGN(sizeof(SpGistLeafTupleData) +
+									 ((tupleDescriptor->natts - 1) / 8 + 1));
+	else
+		tp = (char *) tup + MAXALIGN(sizeof(SpGistLeafTupleData));
+
+	bp = (bits8 *) ((char *) tup + sizeof(SpGistLeafTupleData));
+
+	index_deform_anyheader_tuple((char *) tup, tupleDescriptor,
+								 values, isnull,
+								 bp, tp, hasNullsMask);
+
+	/* Key column isnull value from a tuple should be consistent with keyColumnIsNull
+	 * got from the caller
+	 */
+	Assert (keyColumnIsNull == isnull[spgKeyColumn]);
 }

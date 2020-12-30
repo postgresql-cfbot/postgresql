@@ -421,35 +421,54 @@ nocache_index_getattr(IndexTuple tup,
 	return fetchatt(TupleDescAttr(tupleDesc, attnum), tp + off);
 }
 
+/* Convert index tuple into Datum/isnull arrays */
+void index_deform_tuple(IndexTuple tup, TupleDesc tupleDescriptor,
+						Datum *values, bool *isnull)
+{
+	bits8      *bp;                         /* ptr to null bitmap in tuple */
+	char       *tp;                         /* ptr to tuple data */
+
+	bp = (bits8 *) ((char *) tup + sizeof(IndexTupleData));
+	tp = (char *) tup + IndexInfoFindDataOffset(tup->t_info);
+
+	index_deform_anyheader_tuple((char *) tup, tupleDescriptor,
+								 values, isnull,
+								 bp, tp,
+								 (bool) IndexTupleHasNulls(tup));
+}
+
 /*
- * Convert an index tuple into Datum/isnull arrays.
+ * Convert an index-like tuples but with arbitrary header length into
+ * Datum/isnull arrays.
  *
  * The caller must allocate sufficient storage for the output arrays.
  * (INDEX_MAX_KEYS entries should be enough.)
  *
- * This is nearly the same as heap_deform_tuple(), but for IndexTuples.
- * One difference is that the tuple should never have any missing columns.
+ * This is nearly the same as heap_deform_tuple(), but for IndexTuples and
+ * SpGistLeafTuples. One difference is that the tuple should never have any
+ * missing columns.
+ *
+ * Callers are expected to provide pointer to null bitmap, MAXALIGN-ed
+ * pointer to tuple data and hasnulls bit got from the header.
  */
 void
-index_deform_tuple(IndexTuple tup, TupleDesc tupleDescriptor,
-				   Datum *values, bool *isnull)
+index_deform_anyheader_tuple(char *tup, TupleDesc tupleDescriptor,
+							 Datum *values, bool *isnull,
+							 bits8 *bp, char *tp, bool hasnulls)
 {
-	int			hasnulls = IndexTupleHasNulls(tup);
 	int			natts = tupleDescriptor->natts; /* number of atts to extract */
 	int			attnum;
-	char	   *tp;				/* ptr to tuple data */
-	int			off;			/* offset in tuple data */
-	bits8	   *bp;				/* ptr to null bitmap in tuple */
+	int			off = 0;		/* offset in tuple data */
 	bool		slow = false;	/* can we use/set attcacheoff? */
 
 	/* Assert to protect callers who allocate fixed-size arrays */
 	Assert(natts <= INDEX_MAX_KEYS);
 
-	/* XXX "knows" t_bits are just after fixed tuple header! */
-	bp = (bits8 *) ((char *) tup + sizeof(IndexTupleData));
+	/* If has hulls, null mask should be present in a tuple */
+	Assert(hasnulls == false || ((char*) bp < tp));
 
-	tp = (char *) tup + IndexInfoFindDataOffset(tup->t_info);
-	off = 0;
+	/* Tuple data should start from MAXALIGN */
+	Assert(tp == (char *) MAXALIGN(tp));
 
 	for (attnum = 0; attnum < natts; attnum++)
 	{

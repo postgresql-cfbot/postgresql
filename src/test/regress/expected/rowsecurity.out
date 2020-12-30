@@ -1057,10 +1057,10 @@ NOTICE:  f_leak => awesome science fiction
 (4 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM part_document WHERE f_leak(dtitle);
-                          QUERY PLAN                          
---------------------------------------------------------------
+                     QUERY PLAN                     
+----------------------------------------------------
  Seq Scan on part_document_fiction part_document
-   Filter: ((cid < 55) AND (dlevel <= $0) AND f_leak(dtitle))
+   Filter: ((dlevel <= $0) AND f_leak(dtitle))
    InitPlan 1 (returns $0)
      ->  Index Scan using uaccount_pkey on uaccount
            Index Cond: (pguser = CURRENT_USER)
@@ -1135,10 +1135,10 @@ NOTICE:  f_leak => awesome science fiction
 (4 rows)
 
 EXPLAIN (COSTS OFF) SELECT * FROM part_document WHERE f_leak(dtitle);
-                          QUERY PLAN                          
---------------------------------------------------------------
+                     QUERY PLAN                     
+----------------------------------------------------
  Seq Scan on part_document_fiction part_document
-   Filter: ((cid < 55) AND (dlevel <= $0) AND f_leak(dtitle))
+   Filter: ((dlevel <= $0) AND f_leak(dtitle))
    InitPlan 1 (returns $0)
      ->  Index Scan using uaccount_pkey on uaccount
            Index Cond: (pguser = CURRENT_USER)

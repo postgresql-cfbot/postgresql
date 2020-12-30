@@ -1,55 +1,164 @@
-Parsed test spec with 2 sessions
+Parsed test spec with 3 sessions
 
-starting permutation: s1f1 s1sleep s1f2 s2u
+starting permutation: t00 s2vis1 s1f1 t01 s2u s2vis2 s1f2 t10 s2vac1 s2vis3 s1f3 t12 s1f4 s2vac2 s2vis4
+step t00: SELECT test_sto_clobber_snapshot_timestamp('3000-01-01 00:00:00Z');
+test_sto_clobber_snapshot_timestamp
+
+               
+step s2vis1: SELECT EVERY(all_visible) FROM pg_visibility_map('sto1'::regclass);
+every          
+
+t              
 step s1f1: SELECT c FROM sto1 ORDER BY c LIMIT 1;
 c              
 
 1              
-step s1sleep: SELECT setting, pg_sleep(6) FROM pg_settings WHERE name = 'old_snapshot_threshold';
-setting        pg_sleep       
+step t01: SELECT test_sto_clobber_snapshot_timestamp('3000-01-01 00:01:00Z');
+test_sto_clobber_snapshot_timestamp
 
-0                             
+               
+step s2u: UPDATE sto1 SET c = 1001 WHERE c = 1;
+step s2vis2: SELECT EVERY(all_visible) FROM pg_visibility_map('sto1'::regclass);
+every          
+
+f              
 step s1f2: SELECT c FROM sto1 ORDER BY c LIMIT 1;
 c              
 
 1              
-step s2u: UPDATE sto1 SET c = 1001 WHERE c = 1;
+step t10: SELECT test_sto_clobber_snapshot_timestamp('3000-01-01 00:10:00Z');
+test_sto_clobber_snapshot_timestamp
 
-starting permutation: s1f1 s1sleep s2u s1f2
-step s1f1: SELECT c FROM sto1 ORDER BY c LIMIT 1;
+               
+step s2vac1: VACUUM sto1;
+step s2vis3: SELECT EVERY(all_visible) FROM pg_visibility_map('sto1'::regclass);
+every          
+
+f              
+step s1f3: SELECT c FROM sto1 ORDER BY c LIMIT 1;
 c              
 
 1              
-step s1sleep: SELECT setting, pg_sleep(6) FROM pg_settings WHERE name = 'old_snapshot_threshold';
-setting        pg_sleep       
+step t12: SELECT test_sto_clobber_snapshot_timestamp('3000-01-01 00:12:00Z');
+test_sto_clobber_snapshot_timestamp
 
-0                             
-step s2u: UPDATE sto1 SET c = 1001 WHERE c = 1;
-step s1f2: SELECT c FROM sto1 ORDER BY c LIMIT 1;
+               
+step s1f4: SELECT c FROM sto1 ORDER BY c LIMIT 1;
 ERROR:  snapshot too old
+step s2vac2: VACUUM sto1;
+step s2vis4: SELECT EVERY(all_visible) FROM pg_visibility_map('sto1'::regclass);
+every          
 
-starting permutation: s1f1 s2u s1sleep s1f2
+t              
+test_sto_reset_all_state
+
+               
+
+starting permutation: t00 s2vis1 s1f1 t01 s2u s2vis2 s1f2 t10 s2vac1 s2vis3 s1f3 t12 s2vac2 s2vis4 s1f4
+step t00: SELECT test_sto_clobber_snapshot_timestamp('3000-01-01 00:00:00Z');
+test_sto_clobber_snapshot_timestamp
+
+               
+step s2vis1: SELECT EVERY(all_visible) FROM pg_visibility_map('sto1'::regclass);
+every          
+
+t              
 step s1f1: SELECT c FROM sto1 ORDER BY c LIMIT 1;
 c              
 
 1              
-step s2u: UPDATE sto1 SET c = 1001 WHERE c = 1;
-step s1sleep: SELECT setting, pg_sleep(6) FROM pg_settings WHERE name = 'old_snapshot_threshold';
-setting        pg_sleep       
+step t01: SELECT test_sto_clobber_snapshot_timestamp('3000-01-01 00:01:00Z');
+test_sto_clobber_snapshot_timestamp
 
-0                             
+               
+step s2u: UPDATE sto1 SET c = 1001 WHERE c = 1;
+step s2vis2: SELECT EVERY(all_visible) FROM pg_visibility_map('sto1'::regclass);
+every          
+
+f              
 step s1f2: SELECT c FROM sto1 ORDER BY c LIMIT 1;
-ERROR:  snapshot too old
+c              
 
-starting permutation: s2u s1f1 s1sleep s1f2
-step s2u: UPDATE sto1 SET c = 1001 WHERE c = 1;
+1              
+step t10: SELECT test_sto_clobber_snapshot_timestamp('3000-01-01 00:10:00Z');
+test_sto_clobber_snapshot_timestamp
+
+               
+step s2vac1: VACUUM sto1;
+step s2vis3: SELECT EVERY(all_visible) FROM pg_visibility_map('sto1'::regclass);
+every          
+
+f              
+step s1f3: SELECT c FROM sto1 ORDER BY c LIMIT 1;
+c              
+
+1              
+step t12: SELECT test_sto_clobber_snapshot_timestamp('3000-01-01 00:12:00Z');
+test_sto_clobber_snapshot_timestamp
+
+               
+step s2vac2: VACUUM sto1;
+step s2vis4: SELECT EVERY(all_visible) FROM pg_visibility_map('sto1'::regclass);
+every          
+
+t              
+step s1f4: SELECT c FROM sto1 ORDER BY c LIMIT 1;
+ERROR:  snapshot too old
+test_sto_reset_all_state
+
+               
+
+starting permutation: t00 s2vis1 s1f1 t01 s2vis2 s1f2 t10 s2vac1 s2vis3 s1f3 t12 s2vac2 s2vis4 s1f4
+step t00: SELECT test_sto_clobber_snapshot_timestamp('3000-01-01 00:00:00Z');
+test_sto_clobber_snapshot_timestamp
+
+               
+step s2vis1: SELECT EVERY(all_visible) FROM pg_visibility_map('sto1'::regclass);
+every          
+
+t              
 step s1f1: SELECT c FROM sto1 ORDER BY c LIMIT 1;
 c              
 
-2              
-step s1sleep: SELECT setting, pg_sleep(6) FROM pg_settings WHERE name = 'old_snapshot_threshold';
-setting        pg_sleep       
+1              
+step t01: SELECT test_sto_clobber_snapshot_timestamp('3000-01-01 00:01:00Z');
+test_sto_clobber_snapshot_timestamp
 
-0                             
+               
+step s2vis2: SELECT EVERY(all_visible) FROM pg_visibility_map('sto1'::regclass);
+every          
+
+t              
 step s1f2: SELECT c FROM sto1 ORDER BY c LIMIT 1;
-ERROR:  snapshot too old
+c              
+
+1              
+step t10: SELECT test_sto_clobber_snapshot_timestamp('3000-01-01 00:10:00Z');
+test_sto_clobber_snapshot_timestamp
+
+               
+step s2vac1: VACUUM sto1;
+step s2vis3: SELECT EVERY(all_visible) FROM pg_visibility_map('sto1'::regclass);
+every          
+
+t              
+step s1f3: SELECT c FROM sto1 ORDER BY c LIMIT 1;
+c              
+
+1              
+step t12: SELECT test_sto_clobber_snapshot_timestamp('3000-01-01 00:12:00Z');
+test_sto_clobber_snapshot_timestamp
+
+               
+step s2vac2: VACUUM sto1;
+step s2vis4: SELECT EVERY(all_visible) FROM pg_visibility_map('sto1'::regclass);
+every          
+
+t              
+step s1f4: SELECT c FROM sto1 ORDER BY c LIMIT 1;
+c              
+
+1              
+test_sto_reset_all_state
+
+               

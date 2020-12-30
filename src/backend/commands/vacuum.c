@@ -1673,6 +1673,9 @@ vac_truncate_clog(TransactionId frozenXID,
 	 */
 	AdvanceOldestCommitTsXid(frozenXID);
 
+	/* Make sure snapshot_too_old drops old XIDs. */
+	TruncateOldSnapshotTimeMapping(frozenXID);
+
 	/*
 	 * Truncate CLOG, multixact and CommitTs to the oldest computed value.
 	 */

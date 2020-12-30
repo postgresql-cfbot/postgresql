@@ -1,0 +1,5 @@
+# test_sto test module
+comment = 'functions for internal testing of snapshot too old errors'
+default_version = '1.0'
+module_pathname = '$libdir/test_sto'
+relocatable = true

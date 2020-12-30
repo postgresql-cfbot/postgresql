@@ -141,6 +141,7 @@ extern bool TransactionIdLimitedForOldSnapshots(TransactionId recentXmin,
 extern void SetOldSnapshotThresholdTimestamp(TimestampTz ts, TransactionId xlimit);
 extern void MaintainOldSnapshotTimeMapping(TimestampTz whenTaken,
 										   TransactionId xmin);
+extern void TruncateOldSnapshotTimeMapping(TransactionId frozenXID);
 
 extern char *ExportSnapshot(Snapshot snapshot);
 

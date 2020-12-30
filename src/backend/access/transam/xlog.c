@@ -6012,7 +6012,7 @@ recoveryStopsAfter(XLogReaderState *record)
  * the paused state starts at the end of recovery because of
  * recovery_target_action=pause, and false otherwise.
  *
- * XXX Could also be done with shared latch, avoiding the pg_usleep loop.
+ * XXX Could also be done with shared latch, avoiding the WL_TIMEOUT loop.
  * Probably not worth the trouble though.  This state shouldn't be one that
  * anyone cares about server power consumption in.
  */
@@ -6041,9 +6041,8 @@ recoveryPausesHere(bool endOfRecovery)
 		HandleStartupProcInterrupts();
 		if (CheckForStandbyTrigger())
 			return;
-		pgstat_report_wait_start(WAIT_EVENT_RECOVERY_PAUSE);
-		pg_usleep(1000000L);	/* 1000 ms */
-		pgstat_report_wait_end();
+		(void) WaitLatch(NULL, WL_TIMEOUT | WL_EXIT_ON_PM_DEATH, 1000,
+						 WAIT_EVENT_RECOVERY_PAUSE);
 	}
 }
 

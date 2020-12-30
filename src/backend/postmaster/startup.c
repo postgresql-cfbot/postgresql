@@ -134,6 +134,10 @@ StartupRereadConfig(void)
 void
 HandleStartupProcInterrupts(void)
 {
+#ifndef USE_POSTMASTER_DEATH_SIGNAL
+	static int	count = 0;
+#endif
+
 	/*
 	 * Process any requests or signals received recently.
 	 */
@@ -151,9 +155,17 @@ HandleStartupProcInterrupts(void)
 
 	/*
 	 * Emergency bailout if postmaster has died.  This is to avoid the
-	 * necessity for manual cleanup of all postmaster children.
+	 * necessity for manual cleanup of all postmaster children.  Do this less
+	 * frequently on systems for which we don't have signals to make that
+	 * cheap.  Any loop that sleeps should be using WaitLatch or similar and
+	 * handling postmaster death that way; the check here is intended only to
+	 * deal with CPU-bound loops such as the main redo loop.
 	 */
-	if (IsUnderPostmaster && !PostmasterIsAlive())
+	if (IsUnderPostmaster &&
+#ifndef USE_POSTMASTER_DEATH_SIGNAL
+		count++ % 1024 == 0 &&
+#endif
+		!PostmasterIsAlive())
 		exit(1);
 
 	/* Process barrier events */

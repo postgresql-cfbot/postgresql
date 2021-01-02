@@ -1775,6 +1775,7 @@ makeRangeConstructors(const char *name, Oid namespace,
 								 F_FMGR_INTERNAL_VALIDATOR, /* language validator */
 								 prosrc[i], /* prosrc */
 								 NULL,	/* probin */
+								 NULL,	/* prosqlbody */
 								 PROKIND_FUNCTION,
 								 false, /* security_definer */
 								 false, /* leakproof */

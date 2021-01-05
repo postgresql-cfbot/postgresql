@@ -60,6 +60,7 @@
 int			DeadlockTimeout = 1000;
 int			StatementTimeout = 0;
 int			LockTimeout = 0;
+int			IdleSessionTimeout = 0;
 int			IdleInTransactionSessionTimeout = 0;
 bool		log_lock_waits = false;
 

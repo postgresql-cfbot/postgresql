@@ -48,6 +48,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_parameter_acl.h"
+#include "catalog/pg_period.h"
 #include "catalog/pg_policy.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_publication.h"
@@ -621,6 +622,15 @@ findDependentObjects(const ObjectAddress *object,
 						ReleaseDeletionLock(object);
 						return;
 					}
+
+					/*
+					 * If a table attribute is an internal part of something else
+					 * (e.g. the GENERATED column used by a PERIOD),
+					 * and we are deleting the whole table,
+					 * then it's okay.
+					 */
+					if (foundDep->objsubid && !object->objectSubId)
+						break;
 
 					/*
 					 * We postpone actually issuing the error message until
@@ -1398,6 +1408,10 @@ doDeletion(const ObjectAddress *object, int flags)
 
 		case AttrDefaultRelationId:
 			RemoveAttrDefaultById(object->objectId);
+			break;
+
+		case PeriodRelationId:
+			RemovePeriodById(object->objectId);
 			break;
 
 		case LargeObjectRelationId:

@@ -6058,6 +6058,8 @@ CopyForPortionOfState(ForPortionOfState *src)
 		dst->fp_rangeName = pstrdup(src->fp_rangeName);
 		dst->fp_rangeType = src->fp_rangeType;
 		dst->fp_rangeAttno = src->fp_rangeAttno;
+		dst->fp_periodStartAttno = src->fp_periodStartAttno;
+		dst->fp_periodEndAttno = src->fp_periodEndAttno;
 
 		r = DatumGetRangeTypeP(src->fp_targetRange);
 		typcache = lookup_type_cache(RangeTypeGetOid(r), TYPECACHE_RANGE_INFO);

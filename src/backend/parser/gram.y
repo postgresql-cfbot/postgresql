@@ -598,7 +598,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <keyword> col_name_keyword reserved_keyword
 %type <keyword> bare_label_keyword
 
-%type <node>	DomainConstraint TableConstraint TableLikeClause
+%type <node>	DomainConstraint TableConstraint TableLikeClause TablePeriod
 %type <ival>	TableLikeOptionList TableLikeOption
 %type <str>		column_compression opt_column_compression column_storage opt_column_storage
 %type <list>	ColQualList
@@ -2661,6 +2661,24 @@ alter_table_cmd:
 					n->def = (Node *) $4;
 					$$ = (Node *) n;
 				}
+			/* ALTER TABLE <name> ADD PERIOD FOR <name> (<name>, <name>) */
+			| ADD_P TablePeriod
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_AddPeriod;
+					n->def = $2;
+					$$ = (Node *)n;
+				}
+			/* ALTER TABLE <name> DROP PERIOD FOR <name> [RESTRICT|CASCADE] */
+			| DROP PERIOD FOR name opt_drop_behavior
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DropPeriod;
+					n->name = $4;
+					n->behavior = $5;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
 			/* ALTER TABLE <name> ADD CONSTRAINT ... */
 			| ADD_P TableConstraint
 				{
@@ -3791,7 +3809,9 @@ TableElement:
 			columnDef							{ $$ = $1; }
 			| TableLikeClause					{ $$ = $1; }
 			| TableConstraint					{ $$ = $1; }
+			| TablePeriod						{ $$ = $1; }
 		;
+
 
 TypedTableElement:
 			columnOptions						{ $$ = $1; }
@@ -4140,6 +4160,19 @@ TableLikeOption:
 				| ALL				{ $$ = CREATE_TABLE_LIKE_ALL; }
 		;
 
+
+TablePeriod:
+			PERIOD FOR name '(' name ',' name ')' opt_definition
+				{
+					PeriodDef *n = makeNode(PeriodDef);
+					n->periodname = $3;
+					n->startcolname = $5;
+					n->endcolname = $7;
+					n->options = $9;
+					n->location = @1;
+					$$ = (Node *) n;
+				}
+		;
 
 /* ConstraintElem specifies constraint syntax which is not embedded into
  *	a column definition. ColConstraintElem specifies the embedded form.
@@ -7234,6 +7267,14 @@ CommentStmt:
 					n->objtype = OBJECT_OPFAMILY;
 					n->object = (Node *) lcons(makeString($7), $5);
 					n->comment = $9;
+					$$ = (Node *) n;
+				}
+			| COMMENT ON PERIOD any_name IS comment_text
+				{
+					CommentStmt *n = makeNode(CommentStmt);
+					n->objtype = OBJECT_PERIOD;
+					n->object = (Node *) $4;
+					n->comment = $6;
 					$$ = (Node *) n;
 				}
 			| COMMENT ON LARGE_P OBJECT_P NumericOnly IS comment_text
@@ -17839,7 +17880,6 @@ unreserved_keyword:
 			| PASSING
 			| PASSWORD
 			| PATH
-			| PERIOD
 			| PLAN
 			| PLANS
 			| POLICY
@@ -18143,6 +18183,7 @@ reserved_keyword:
 			| ONLY
 			| OR
 			| ORDER
+			| PERIOD
 			| PLACING
 			| PRIMARY
 			| REFERENCES

@@ -117,6 +117,10 @@ extern List *AddRelationNewConstraints(Relation rel,
 extern void RelationClearMissing(Relation rel);
 extern void SetAttrMissing(Oid relid, char *attname, char *value);
 
+extern Oid StorePeriod(Relation rel, const char *period,
+					   AttrNumber startnum, AttrNumber endnum,
+					   AttrNumber rangenum, Oid conoid);
+
 extern Node *cookDefault(ParseState *pstate,
 						 Node *raw_default,
 						 Oid atttypid,

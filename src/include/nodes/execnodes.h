@@ -442,9 +442,11 @@ typedef struct ForPortionOfState
 {
 	NodeTag		type;
 
-	char   *fp_rangeName;		/* the column named in FOR PORTION OF */
+	char   *fp_rangeName;		/* the column/PERIOD named in FOR PORTION OF */
 	Oid		fp_rangeType;		/* the type of the FOR PORTION OF expression */
-	int		fp_rangeAttno;		/* the attno of the range column */
+	int		fp_rangeAttno;		/* the attno of the range column (or 0 for a PERIOD) */
+	int		fp_periodStartAttno;	/* the attno of the PERIOD start column (or 0 for a range) */
+	int		fp_periodEndAttno;		/* the attno of the PERIOD end column (or 0 for a range) */
 	Datum	fp_targetRange;		/* the range from FOR PORTION OF */
 	TypeCacheEntry *fp_leftoverstypcache;	/* type cache entry of the range */
 	TupleTableSlot *fp_Existing;		/* slot to store old tuple */

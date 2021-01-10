@@ -2303,6 +2303,7 @@ typedef enum ObjectType
 	OBJECT_OPERATOR,
 	OBJECT_OPFAMILY,
 	OBJECT_PARAMETER_ACL,
+	OBJECT_PERIOD,
 	OBJECT_POLICY,
 	OBJECT_PROCEDURE,
 	OBJECT_PUBLICATION,
@@ -2391,6 +2392,8 @@ typedef enum AlterTableType
 	AT_ValidateConstraint,		/* validate constraint */
 	AT_AddIndexConstraint,		/* add constraint using existing index */
 	AT_DropConstraint,			/* drop constraint */
+	AT_AddPeriod,				/* ADD PERIOD */
+	AT_DropPeriod,				/* DROP PERIOD */
 	AT_ReAddComment,			/* internal to commands/tablecmds.c */
 	AT_AlterColumnType,			/* alter column type */
 	AT_AlterColumnGenericOptions,	/* alter column OPTIONS (...) */
@@ -2672,11 +2675,11 @@ typedef struct VariableShowStmt
 /* ----------------------
  *		Create Table Statement
  *
- * NOTE: in the raw gram.y output, ColumnDef and Constraint nodes are
- * intermixed in tableElts, and constraints is NIL.  After parse analysis,
- * tableElts contains just ColumnDefs, and constraints contains just
- * Constraint nodes (in fact, only CONSTR_CHECK nodes, in the present
- * implementation).
+ * NOTE: in the raw gram.y output, ColumnDef, PeriodDef, and Constraint nodes are
+ * intermixed in tableElts; periods and constraints are NIL.  After parse analysis,
+ * tableElts contains just ColumnDefs, periods contains just PeriodDefs, and
+ * constraints contains just Constraint nodes (in fact, only CONSTR_CHECK nodes,
+ * in the present implementation).
  * ----------------------
  */
 
@@ -2685,6 +2688,7 @@ typedef struct CreateStmt
 	NodeTag		type;
 	RangeVar   *relation;		/* relation to create */
 	List	   *tableElts;		/* column definitions (list of ColumnDef) */
+	List	   *periods;		/* periods (list of PeriodDef nodes) */
 	List	   *inhRelations;	/* relations to inherit from (list of
 								 * RangeVar) */
 	PartitionBoundSpec *partbound;	/* FOR VALUES clause */
@@ -2697,6 +2701,31 @@ typedef struct CreateStmt
 	char	   *accessMethod;	/* table access method */
 	bool		if_not_exists;	/* just do nothing if it already exists? */
 } CreateStmt;
+
+
+/* ----------
+ * Definitions for periods in CreateStmt
+ * ----------
+ */
+
+typedef struct PeriodDef
+{
+	NodeTag		type;
+	Oid			oid;			/* period oid, once it's transformed */
+	char	   *periodname;		/* period name */
+	char	   *startcolname;	/* name of start column */
+	char	   *endcolname;		/* name of end column */
+	AttrNumber	startattnum;	/* attnum of the start column */
+	AttrNumber	endattnum;		/* attnum of the end column */
+	AttrNumber	rngattnum;		/* attnum of the GENERATED range column */
+	List	   *options;		/* options from WITH clause */
+	char	   *constraintname;	/* name of the CHECK constraint */
+	char	   *rangetypename;	/* name of the range type */
+	Oid			coltypid;		/* the start/end col type */
+	Oid			rngtypid;		/* the range type to use */
+	bool		colexists;		/* use an existing GENERATED column */
+	int			location;		/* token location, or -1 if unknown */
+} PeriodDef;
 
 /* ----------
  * Definitions for constraints in CreateStmt
@@ -3391,6 +3420,7 @@ typedef struct IndexStmt
 	List	   *indexParams;	/* columns to index: a list of IndexElem */
 	List	   *indexIncludingParams;	/* additional columns to index: a list
 										 * of IndexElem */
+	PeriodDef  *period;			/* The period included in the index */
 	List	   *options;		/* WITH clause options: a list of DefElem */
 	Node	   *whereClause;	/* qualification (partial-index predicate) */
 	List	   *excludeOpNames; /* exclusion operator names, or NIL if none */

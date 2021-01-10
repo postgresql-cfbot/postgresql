@@ -54,7 +54,8 @@ UPDATE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
   </para>
 
   <para>
-   If the table has a range or multirange column,
+   If the table has a range or multirange column, or a
+   <link linkend="ddl-periods-application-periods"><literal>PERIOD</literal></link>,
    you may supply a <literal>FOR PORTION OF</literal> clause, and your update will
    only affect rows that overlap the given interval. Furthermore, if a row's span
    extends outside the <literal>FOR PORTION OF</literal> bounds, then your update

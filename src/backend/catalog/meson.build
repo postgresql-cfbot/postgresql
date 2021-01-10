@@ -26,6 +26,7 @@ backend_sources += files(
   'pg_namespace.c',
   'pg_operator.c',
   'pg_parameter_acl.c',
+  'pg_period.c',
   'pg_proc.c',
   'pg_publication.c',
   'pg_range.c',

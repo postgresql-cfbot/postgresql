@@ -28,6 +28,7 @@
 #include "access/stratnum.h"
 #include "access/sysattr.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_period.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
@@ -1271,7 +1272,11 @@ transformForPortionOfClause(ParseState *pstate,
 	char *range_name = forPortionOf->range_name;
 	char *range_type_namespace = NULL;
 	char *range_type_name = NULL;
-	int range_attno = InvalidAttrNumber;
+	AttrNumber range_attno = InvalidAttrNumber;
+	AttrNumber start_attno = InvalidAttrNumber;
+	AttrNumber end_attno = InvalidAttrNumber;
+	char *startcolname = NULL;
+	char *endcolname = NULL;
 	Form_pg_attribute attr;
 	Oid	opclass;
 	Oid opfamily;
@@ -1315,6 +1320,53 @@ transformForPortionOfClause(ParseState *pstate,
 	if (!get_typname_and_namespace(attr->atttypid, &range_type_name, &range_type_namespace))
 		elog(ERROR, "cache lookup failed for type %u", attr->atttypid);
 
+	/*
+	 * If we are using a PERIOD, we need the start & end columns.
+	 * If the attribute it not a GENERATED column, we needn't query pg_period.
+	 */
+	if (attr->attgenerated == ATTRIBUTE_GENERATED_STORED)
+	{
+		HeapTuple perTuple = SearchSysCache2(PERIODNAME,
+											 ObjectIdGetDatum(RelationGetRelid(targetrel)),
+											 PointerGetDatum(range_name));
+		if (HeapTupleIsValid(perTuple))
+		{
+			Form_pg_period per = (Form_pg_period) GETSTRUCT(perTuple);
+			Form_pg_attribute perattr;
+
+			start_attno = per->perstart;
+			end_attno = per->perend;
+
+			perattr = TupleDescAttr(targetrel->rd_att, start_attno - 1);
+			startcolname = NameStr(perattr->attname);
+
+			result->startVar = makeVar(
+					rtindex,
+					start_attno,
+					perattr->atttypid,
+					perattr->atttypmod,
+					perattr->attcollation,
+					0);
+
+			perattr = TupleDescAttr(targetrel->rd_att, end_attno - 1);
+			endcolname = NameStr(perattr->attname);
+			result->endVar = makeVar(
+					rtindex,
+					end_attno,
+					perattr->atttypid,
+					perattr->atttypmod,
+					perattr->attcollation,
+					0);
+
+			ReleaseSysCache(perTuple);
+		}
+	}
+
+	if (start_attno == InvalidAttrNumber)
+	{
+		result->startVar = NULL;
+		result->endVar = NULL;
+	}
 
 	if (forPortionOf->target)
 		/*
@@ -1382,7 +1434,10 @@ transformForPortionOfClause(ParseState *pstate,
 	{
 		/*
 		 * Now make sure we update the start/end time of the record.
-		 * For a range col (r) this is `r = r * targetRange`.
+		 * For a range/etc col (r) this is `r = r * targetRange`.
+		 * For a PERIOD with cols (s, e) this is `s = lower(tsrange(s, e) * targetRange)`
+		 * and `e = upper(tsrange(s, e) * targetRange` (of course not necessarily with
+		 * tsrange, but with whatever range type is used there).
 		 */
 		Oid funcnamespace;
 		char *funcname;
@@ -1411,12 +1466,44 @@ transformForPortionOfClause(ParseState *pstate,
 				list_make2(copyObject(rangeVar), targetExpr),
 				COERCE_EXPLICIT_CALL,
 				forPortionOf->location);
-		rangeTLEExpr = (Expr *) transformExpr(pstate, (Node *) rangeTLEExpr, EXPR_KIND_UPDATE_PORTION);
 
-		/* Make a TLE to set the range column */
+		/* Make a TLE to set the range column or start/end columns */
 		result->rangeTargetList = NIL;
-		tle = makeTargetEntry(rangeTLEExpr, range_attno, range_name, false);
-		result->rangeTargetList = lappend(result->rangeTargetList, tle);
+
+		if (result->startVar)
+		{
+			Expr *boundTLEExpr;
+
+			/* set the start column */
+			boundTLEExpr = (Expr *) makeFuncCall(SystemFuncName("lower"),
+					list_make1(rangeTLEExpr),
+					COERCE_EXPLICIT_CALL,
+					forPortionOf->location);
+			boundTLEExpr = (Expr *) transformExpr(pstate, (Node *) boundTLEExpr, EXPR_KIND_UPDATE_PORTION);
+			tle = makeTargetEntry(boundTLEExpr, start_attno, startcolname, false);
+			result->rangeTargetList = lappend(result->rangeTargetList, tle);
+
+			/* set the end column */
+			boundTLEExpr = (Expr *) makeFuncCall(SystemFuncName("upper"),
+					list_make1(rangeTLEExpr),
+					COERCE_EXPLICIT_CALL,
+					forPortionOf->location);
+			boundTLEExpr = (Expr *) transformExpr(pstate, (Node *) boundTLEExpr, EXPR_KIND_UPDATE_PORTION);
+			tle = makeTargetEntry(boundTLEExpr, end_attno, endcolname, false);
+			result->rangeTargetList = lappend(result->rangeTargetList, tle);
+
+			/* Mark the start/end columns as requiring update permissions */
+			target_perminfo->updatedCols = bms_add_member(target_perminfo->updatedCols,
+														  start_attno - FirstLowInvalidHeapAttributeNumber);
+			target_perminfo->updatedCols = bms_add_member(target_perminfo->updatedCols,
+														  end_attno - FirstLowInvalidHeapAttributeNumber);
+		}
+		else
+		{
+			rangeTLEExpr = (Expr *) transformExpr(pstate, (Node *) rangeTLEExpr, EXPR_KIND_UPDATE_PORTION);
+			tle = makeTargetEntry(rangeTLEExpr, range_attno, range_name, false);
+			result->rangeTargetList = lappend(result->rangeTargetList, tle);
+		}
 
 		/* Mark the range column as requiring update permissions */
 		target_perminfo->updatedCols = bms_add_member(target_perminfo->updatedCols,

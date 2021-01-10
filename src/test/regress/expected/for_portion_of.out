@@ -639,6 +639,44 @@ SELECT * FROM for_portion_of_test2 ORDER BY id, valid_at;
 (6 rows)
 
 DROP TABLE for_portion_of_test2;
+-- Test with PERIODs
+CREATE TABLE for_portion_of_test2 (
+  id int4range NOT NULL,
+  valid_from date,
+  valid_til date,
+  name text NOT NULL,
+  PERIOD FOR valid_at (valid_from, valid_til),
+  CONSTRAINT for_portion_of_test2_pk PRIMARY KEY (id, valid_at WITHOUT OVERLAPS)
+);
+INSERT INTO for_portion_of_test2
+VALUES
+('[1,2)', '2018-01-02', '2018-02-03', 'one'),
+('[1,2)', '2018-02-04', '2018-03-03', 'one'),
+('[1,2)', '2018-03-03', '2018-04-04', 'one'),
+('[2,3)', '2018-01-01', '2018-05-01', 'two'),
+('[3,4)', '2018-01-01', null, 'three');
+;
+UPDATE for_portion_of_test2
+FOR PORTION OF valid_at FROM '2018-01-10' TO '2018-02-10'
+SET name = 'one^1'
+WHERE id = '[1,2)';
+DELETE FROM for_portion_of_test2
+FOR PORTION OF valid_at FROM '2018-01-15' TO '2018-02-15'
+WHERE id = '[2,3)';
+SELECT * FROM for_portion_of_test2 ORDER BY id, valid_at;
+  id   | valid_from | valid_til  | name  
+-------+------------+------------+-------
+ [1,2) | 2018-01-02 | 2018-01-10 | one
+ [1,2) | 2018-01-10 | 2018-02-03 | one^1
+ [1,2) | 2018-02-04 | 2018-02-10 | one^1
+ [1,2) | 2018-02-10 | 2018-03-03 | one
+ [1,2) | 2018-03-03 | 2018-04-04 | one
+ [2,3) | 2018-01-01 | 2018-01-15 | two
+ [2,3) | 2018-02-15 | 2018-05-01 | two
+ [3,4) | 2018-01-01 |            | three
+(8 rows)
+
+DROP TABLE for_portion_of_test2;
 -- Test with a custom range type
 CREATE TYPE mydaterange AS range(subtype=date);
 CREATE TABLE for_portion_of_test2 (

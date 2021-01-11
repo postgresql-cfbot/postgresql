@@ -813,7 +813,11 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 											  NULL,
 											  0,
 											  ' ',
+											  NULL,
+											  0,
 											  ' ',
+											  NULL,
+											  0,
 											  ' ',
 											  NULL, /* no exclusion */
 											  NULL, /* no check constraint */

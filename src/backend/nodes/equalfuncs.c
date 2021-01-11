@@ -2643,7 +2643,9 @@ _equalConstraint(const Constraint *a, const Constraint *b)
 	COMPARE_NODE_FIELD(pk_attrs);
 	COMPARE_SCALAR_FIELD(fk_matchtype);
 	COMPARE_SCALAR_FIELD(fk_upd_action);
+	COMPARE_NODE_FIELD(fk_upd_set_cols);
 	COMPARE_SCALAR_FIELD(fk_del_action);
+	COMPARE_NODE_FIELD(fk_del_set_cols);
 	COMPARE_NODE_FIELD(old_conpfeqop);
 	COMPARE_SCALAR_FIELD(old_pktable_oid);
 	COMPARE_SCALAR_FIELD(skip_validation);

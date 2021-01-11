@@ -2456,7 +2456,11 @@ StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 							  NULL,
 							  0,
 							  ' ',
+							  NULL,
+							  0,
 							  ' ',
+							  NULL,
+							  0,
 							  ' ',
 							  NULL, /* not an exclusion constraint */
 							  expr, /* Tree form of check constraint */

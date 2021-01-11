@@ -2788,6 +2788,42 @@ _outPLAssignStmt(StringInfo str, const PLAssignStmt *node)
 }
 
 static void
+_outAlterTableStmt(StringInfo str, const AlterTableStmt *node)
+{
+  WRITE_NODE_TYPE("ALTERTABLE");
+
+  WRITE_NODE_FIELD(relation);
+  WRITE_NODE_FIELD(cmds);
+  WRITE_ENUM_FIELD(objtype, ObjectType);
+  WRITE_BOOL_FIELD(missing_ok);
+}
+
+static void
+_outAlterTableCmd(StringInfo str, const AlterTableCmd *node)
+{
+  WRITE_NODE_TYPE("ALTERTABLE_CMD");
+
+  WRITE_ENUM_FIELD(subtype, AlterTableType);
+  WRITE_STRING_FIELD(name);
+  WRITE_NODE_FIELD(object);
+  WRITE_INT_FIELD(num);
+  WRITE_NODE_FIELD(newowner);
+  WRITE_NODE_FIELD(def);
+  WRITE_ENUM_FIELD(behavior, DropBehavior);
+  WRITE_BOOL_FIELD(missing_ok);
+}
+
+static void
+_outRoleSpec(StringInfo str, const RoleSpec *node)
+{
+  WRITE_NODE_TYPE("ROLE_SPEC");
+
+  WRITE_ENUM_FIELD(roletype, RoleSpecType);
+  WRITE_STRING_FIELD(rolename);
+  WRITE_INT_FIELD(location);
+}
+
+static void
 _outFuncCall(StringInfo str, const FuncCall *node)
 {
 	WRITE_NODE_TYPE("FUNCCALL");
@@ -3604,7 +3640,9 @@ _outConstraint(StringInfo str, const Constraint *node)
 			WRITE_NODE_FIELD(pk_attrs);
 			WRITE_CHAR_FIELD(fk_matchtype);
 			WRITE_CHAR_FIELD(fk_upd_action);
+			WRITE_NODE_FIELD(fk_upd_set_cols);
 			WRITE_CHAR_FIELD(fk_del_action);
+			WRITE_NODE_FIELD(fk_del_set_cols);
 			WRITE_NODE_FIELD(old_conpfeqop);
 			WRITE_OID_FIELD(old_pktable_oid);
 			WRITE_BOOL_FIELD(skip_validation);
@@ -4225,6 +4263,15 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_PLAssignStmt:
 				_outPLAssignStmt(str, obj);
+				break;
+			case T_AlterTableStmt:
+				_outAlterTableStmt(str, obj);
+				break;
+			case T_AlterTableCmd:
+				_outAlterTableCmd(str, obj);
+				break;
+			case T_RoleSpec:
+				_outRoleSpec(str, obj);
 				break;
 			case T_ColumnDef:
 				_outColumnDef(str, obj);

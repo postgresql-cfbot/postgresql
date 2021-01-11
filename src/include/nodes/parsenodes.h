@@ -2204,7 +2204,10 @@ typedef struct Constraint
 	List	   *pk_attrs;		/* Corresponding attrs in PK table */
 	char		fk_matchtype;	/* FULL, PARTIAL, SIMPLE */
 	char		fk_upd_action;	/* ON UPDATE action */
+	List	   *fk_upd_set_cols;	/* ON UPDATE SET NULL/DEFAULT (col1, col2) */
 	char		fk_del_action;	/* ON DELETE action */
+	List	   *fk_del_set_cols;	/* ON DELETE SET NULL/DEFAULT (col1, col2) */
+
 	List	   *old_conpfeqop;	/* pg_constraint.conpfeqop of my former self */
 	Oid			old_pktable_oid;	/* pg_constraint.confrelid of my former
 									 * self */

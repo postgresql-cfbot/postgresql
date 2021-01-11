@@ -134,6 +134,18 @@ CATALOG(pg_constraint,2606,ConstraintRelationId)
 	Oid			conffeqop[1];
 
 	/*
+	 * If a foreign key with a ON UPDATE SET NULL/DEFAULT action, the subset
+	 * of conkey to updated. If empty, all columns should be updated.
+	 */
+	Oid			confupdsetcols[1];
+
+	/*
+	 * If a foreign key with a ON DELETE SET NULL/DEFAULT action, the subset
+	 * of conkey to updated. If empty, all columns should be updated.
+	 */
+	Oid			confdelsetcols[1];
+
+	/*
 	 * If an exclusion constraint, the OIDs of the exclusion operators for
 	 * each column of the constraint
 	 */
@@ -215,7 +227,11 @@ extern Oid	CreateConstraintEntry(const char *constraintName,
 								  const Oid *ffEqOp,
 								  int foreignNKeys,
 								  char foreignUpdateType,
+								  const int16 *fkUpdateSetCols,
+								  int numFkUpdateSetCols,
 								  char foreignDeleteType,
+								  const int16 *fkDeleteSetCols,
+								  int numFkDeleteSetCols,
 								  char foreignMatchType,
 								  const Oid *exclOp,
 								  Node *conExpr,
@@ -250,7 +266,9 @@ extern Bitmapset *get_primary_key_attnos(Oid relid, bool deferrableOk,
 										 Oid *constraintOid);
 extern void DeconstructFkConstraintRow(HeapTuple tuple, int *numfks,
 									   AttrNumber *conkey, AttrNumber *confkey,
-									   Oid *pf_eq_oprs, Oid *pp_eq_oprs, Oid *ff_eq_oprs);
+									   Oid *pf_eq_oprs, Oid *pp_eq_oprs, Oid *ff_eq_oprs,
+									   int *num_fk_upd_set_cols, AttrNumber *fk_upd_set_cols,
+									   int *num_fk_del_set_cols, AttrNumber *fk_del_set_cols);
 
 extern bool check_functional_grouping(Oid relid,
 									  Index varno, Index varlevelsup,

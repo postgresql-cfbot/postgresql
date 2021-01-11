@@ -1657,7 +1657,12 @@ AlterDatabaseSet(AlterDatabaseSetStmt *stmt)
 	 */
 	shdepLockAndCheckObject(DatabaseRelationId, datid);
 
-	if (!pg_database_ownercheck(datid, GetUserId()))
+	/*
+	 * Only allow the database owner or a member of the
+	 * pg_change_role_settings default role to change database settings.
+	 */
+	if (!pg_database_ownercheck(datid, GetUserId()) &&
+		!is_member_of_role(GetUserId(), DEFAULT_ROLE_CHANGE_ROLE_SETTINGS))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_DATABASE,
 					   stmt->dbname);
 

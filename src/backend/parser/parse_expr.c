@@ -1723,6 +1723,7 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 		case EXPR_KIND_RETURNING:
 		case EXPR_KIND_VALUES:
 		case EXPR_KIND_VALUES_SINGLE:
+		case EXPR_KIND_TRIGGER_WHEN:
 			/* okay */
 			break;
 		case EXPR_KIND_CHECK_CONSTRAINT:
@@ -1744,9 +1745,6 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 			break;
 		case EXPR_KIND_EXECUTE_PARAMETER:
 			err = _("cannot use subquery in EXECUTE parameter");
-			break;
-		case EXPR_KIND_TRIGGER_WHEN:
-			err = _("cannot use subquery in trigger WHEN condition");
 			break;
 		case EXPR_KIND_PARTITION_BOUND:
 			err = _("cannot use subquery in partition bound");

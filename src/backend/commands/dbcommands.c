@@ -970,6 +970,9 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	 */
 	DropDatabaseBuffers(db_id);
 
+	/* Drop SMGR relations. */
+	smgrdropdb(db_id);
+
 	/*
 	 * Tell the stats collector to forget it immediately, too.
 	 */

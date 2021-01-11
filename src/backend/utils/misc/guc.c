@@ -82,6 +82,7 @@
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
 #include "storage/proc.h"
+#include "storage/smgr.h"
 #include "storage/standby.h"
 #include "tcop/tcopprot.h"
 #include "tsearch/ts_cache.h"
@@ -2453,6 +2454,16 @@ static struct config_int ConfigureNamesInt[] =
 			NULL
 		},
 		&max_files_per_process,
+		1000, 64, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"smgr_shared_relations", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared relation objects in memory at one time."),
+			NULL
+		},
+		&smgr_shared_relations,
 		1000, 64, INT_MAX,
 		NULL, NULL, NULL
 	},

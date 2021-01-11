@@ -61,11 +61,8 @@ lo_open(PGconn *conn, Oid lobjId, int mode)
 	PQArgBlock	argv[2];
 	PGresult   *res;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return -1;
-	}
+	if (lo_initialize(conn) < 0)
+		return -1;
 
 	argv[0].isint = 1;
 	argv[0].len = 4;
@@ -103,11 +100,8 @@ lo_close(PGconn *conn, int fd)
 	int			retval;
 	int			result_len;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return -1;
-	}
+	if (lo_initialize(conn) < 0)
+		return -1;
 
 	argv[0].isint = 1;
 	argv[0].len = 4;
@@ -141,16 +135,13 @@ lo_truncate(PGconn *conn, int fd, size_t len)
 	int			retval;
 	int			result_len;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return -1;
-	}
+	if (lo_initialize(conn) < 0)
+		return -1;
 
 	/* Must check this on-the-fly because it's not there pre-8.3 */
 	if (conn->lobjfuncs->fn_lo_truncate == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function lo_truncate\n"));
 		return -1;
 	}
@@ -166,7 +157,7 @@ lo_truncate(PGconn *conn, int fd, size_t len)
 	 */
 	if (len > (size_t) INT_MAX)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("argument of lo_truncate exceeds integer range\n"));
 		return -1;
 	}
@@ -209,15 +200,12 @@ lo_truncate64(PGconn *conn, int fd, pg_int64 len)
 	int			retval;
 	int			result_len;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return -1;
-	}
+	if (lo_initialize(conn) < 0)
+		return -1;
 
 	if (conn->lobjfuncs->fn_lo_truncate64 == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function lo_truncate64\n"));
 		return -1;
 	}
@@ -261,11 +249,8 @@ lo_read(PGconn *conn, int fd, char *buf, size_t len)
 	PGresult   *res;
 	int			result_len;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return -1;
-	}
+	if (lo_initialize(conn) < 0)
+		return -1;
 
 	/*
 	 * Long ago, somebody thought it'd be a good idea to declare this function
@@ -275,7 +260,7 @@ lo_read(PGconn *conn, int fd, char *buf, size_t len)
 	 */
 	if (len > (size_t) INT_MAX)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("argument of lo_read exceeds integer range\n"));
 		return -1;
 	}
@@ -316,11 +301,8 @@ lo_write(PGconn *conn, int fd, const char *buf, size_t len)
 	int			result_len;
 	int			retval;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return -1;
-	}
+	if (lo_initialize(conn) < 0)
+		return -1;
 
 	/*
 	 * Long ago, somebody thought it'd be a good idea to declare this function
@@ -330,7 +312,7 @@ lo_write(PGconn *conn, int fd, const char *buf, size_t len)
 	 */
 	if (len > (size_t) INT_MAX)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("argument of lo_write exceeds integer range\n"));
 		return -1;
 	}
@@ -369,11 +351,8 @@ lo_lseek(PGconn *conn, int fd, int offset, int whence)
 	int			retval;
 	int			result_len;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return -1;
-	}
+	if (lo_initialize(conn) < 0)
+		return -1;
 
 	argv[0].isint = 1;
 	argv[0].len = 4;
@@ -413,15 +392,12 @@ lo_lseek64(PGconn *conn, int fd, pg_int64 offset, int whence)
 	pg_int64	retval;
 	int			result_len;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return -1;
-	}
+	if (lo_initialize(conn) < 0)
+		return -1;
 
 	if (conn->lobjfuncs->fn_lo_lseek64 == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function lo_lseek64\n"));
 		return -1;
 	}
@@ -469,11 +445,8 @@ lo_creat(PGconn *conn, int mode)
 	int			retval;
 	int			result_len;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return InvalidOid;
-	}
+	if (lo_initialize(conn) < 0)
+		return InvalidOid;
 
 	argv[0].isint = 1;
 	argv[0].len = 4;
@@ -508,16 +481,13 @@ lo_create(PGconn *conn, Oid lobjId)
 	int			retval;
 	int			result_len;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return InvalidOid;
-	}
+	if (lo_initialize(conn) < 0)
+		return InvalidOid;
 
 	/* Must check this on-the-fly because it's not there pre-8.1 */
 	if (conn->lobjfuncs->fn_lo_create == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function lo_create\n"));
 		return InvalidOid;
 	}
@@ -552,11 +522,8 @@ lo_tell(PGconn *conn, int fd)
 	PGresult   *res;
 	int			result_len;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return -1;
-	}
+	if (lo_initialize(conn) < 0)
+		return -1;
 
 	argv[0].isint = 1;
 	argv[0].len = 4;
@@ -588,15 +555,12 @@ lo_tell64(PGconn *conn, int fd)
 	PGresult   *res;
 	int			result_len;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return -1;
-	}
+	if (lo_initialize(conn) < 0)
+		return -1;
 
 	if (conn->lobjfuncs->fn_lo_tell64 == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function lo_tell64\n"));
 		return -1;
 	}
@@ -632,11 +596,8 @@ lo_unlink(PGconn *conn, Oid lobjId)
 	int			result_len;
 	int			retval;
 
-	if (conn == NULL || conn->lobjfuncs == NULL)
-	{
-		if (lo_initialize(conn) < 0)
-			return -1;
-	}
+	if (lo_initialize(conn) < 0)
+		return -1;
 
 	argv[0].isint = 1;
 	argv[0].len = 4;
@@ -696,13 +657,19 @@ lo_import_internal(PGconn *conn, const char *filename, Oid oid)
 	int			lobj;
 	char		sebuf[PG_STRERROR_R_BUFLEN];
 
+	if (conn == NULL)
+		return InvalidOid;
+
+	/* Since this is the beginning of a query cycle, reset the error buffer */
+	resetPQExpBuffer(&conn->errorMessage);
+
 	/*
 	 * open the file to be read in
 	 */
 	fd = open(filename, O_RDONLY | PG_BINARY, 0666);
 	if (fd < 0)
 	{							/* error */
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("could not open file \"%s\": %s\n"),
 						  filename, strerror_r(errno, sebuf, sizeof(sebuf)));
 		return InvalidOid;
@@ -757,6 +724,7 @@ lo_import_internal(PGconn *conn, const char *filename, Oid oid)
 
 		(void) lo_close(conn, lobj);
 		(void) close(fd);
+		/* deliberately overwrite any error from lo_close */
 		printfPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("could not read from file \"%s\": %s\n"),
 						  filename,
@@ -811,6 +779,7 @@ lo_export(PGconn *conn, Oid lobjId, const char *filename)
 		int			save_errno = errno;
 
 		(void) lo_close(conn, lobj);
+		/* deliberately overwrite any error from lo_close */
 		printfPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("could not open file \"%s\": %s\n"),
 						  filename,
@@ -831,6 +800,7 @@ lo_export(PGconn *conn, Oid lobjId, const char *filename)
 
 			(void) lo_close(conn, lobj);
 			(void) close(fd);
+			/* deliberately overwrite any error from lo_close */
 			printfPQExpBuffer(&conn->errorMessage,
 							  libpq_gettext("could not write to file \"%s\": %s\n"),
 							  filename,
@@ -855,7 +825,7 @@ lo_export(PGconn *conn, Oid lobjId, const char *filename)
 	/* if we already failed, don't overwrite that msg with a close error */
 	if (close(fd) != 0 && result >= 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("could not write to file \"%s\": %s\n"),
 						  filename, strerror_r(errno, sebuf, sizeof(sebuf)));
 		result = -1;
@@ -868,9 +838,11 @@ lo_export(PGconn *conn, Oid lobjId, const char *filename)
 /*
  * lo_initialize
  *
- * Initialize the large object interface for an existing connection.
- * We ask the backend about the functions OID's in pg_proc for all
- * functions that are required for large object operations.
+ * Initialize for a new large-object operation on an existing connection.
+ * Return 0 if OK, -1 on failure.
+ *
+ * If we haven't previously done so, we collect the function OIDs from
+ * pg_proc for all functions that are required for large object operations.
  */
 static int
 lo_initialize(PGconn *conn)
@@ -882,16 +854,25 @@ lo_initialize(PGconn *conn)
 	const char *fname;
 	Oid			foid;
 
-	if (!conn)
+	/* Nothing we can do with no connection */
+	if (conn == NULL)
 		return -1;
 
+	/* Since this is the beginning of a query cycle, reset the error buffer */
+	resetPQExpBuffer(&conn->errorMessage);
+
+	/* Nothing else to do if we already collected info */
+	if (conn->lobjfuncs != NULL)
+		return 0;
+
 	/*
-	 * Allocate the structure to hold the functions OID's
+	 * Allocate the structure to hold the function OIDs.  We don't store it
+	 * into the PGconn until it's successfully filled.
 	 */
 	lobjfuncs = (PGlobjfuncs *) malloc(sizeof(PGlobjfuncs));
 	if (lobjfuncs == NULL)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("out of memory\n"));
 		return -1;
 	}
@@ -942,7 +923,7 @@ lo_initialize(PGconn *conn)
 	{
 		free(lobjfuncs);
 		PQclear(res);
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("query to initialize large object functions did not return data\n"));
 		return -1;
 	}
@@ -991,56 +972,56 @@ lo_initialize(PGconn *conn)
 	 */
 	if (lobjfuncs->fn_lo_open == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function lo_open\n"));
 		free(lobjfuncs);
 		return -1;
 	}
 	if (lobjfuncs->fn_lo_close == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function lo_close\n"));
 		free(lobjfuncs);
 		return -1;
 	}
 	if (lobjfuncs->fn_lo_creat == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function lo_creat\n"));
 		free(lobjfuncs);
 		return -1;
 	}
 	if (lobjfuncs->fn_lo_unlink == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function lo_unlink\n"));
 		free(lobjfuncs);
 		return -1;
 	}
 	if (lobjfuncs->fn_lo_lseek == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function lo_lseek\n"));
 		free(lobjfuncs);
 		return -1;
 	}
 	if (lobjfuncs->fn_lo_tell == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function lo_tell\n"));
 		free(lobjfuncs);
 		return -1;
 	}
 	if (lobjfuncs->fn_lo_read == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function loread\n"));
 		free(lobjfuncs);
 		return -1;
 	}
 	if (lobjfuncs->fn_lo_write == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("cannot determine OID of function lowrite\n"));
 		free(lobjfuncs);
 		return -1;

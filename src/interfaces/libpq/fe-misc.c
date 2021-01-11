@@ -379,7 +379,7 @@ pqCheckOutBufferSpace(size_t bytes_needed, PGconn *conn)
 	}
 
 	/* realloc failed. Probably out of memory */
-	printfPQExpBuffer(&conn->errorMessage,
+	appendPQExpBuffer(&conn->errorMessage,
 					  "cannot allocate memory for output buffer\n");
 	return EOF;
 }
@@ -473,7 +473,7 @@ pqCheckInBufferSpace(size_t bytes_needed, PGconn *conn)
 	}
 
 	/* realloc failed. Probably out of memory */
-	printfPQExpBuffer(&conn->errorMessage,
+	appendPQExpBuffer(&conn->errorMessage,
 					  "cannot allocate memory for input buffer\n");
 	return EOF;
 }
@@ -619,7 +619,7 @@ pqReadData(PGconn *conn)
 
 	if (conn->sock == PGINVALID_SOCKET)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("connection not open\n"));
 		return -1;
 	}
@@ -798,7 +798,7 @@ retry4:
 	 * means the connection has been closed.  Cope.
 	 */
 definitelyEOF:
-	printfPQExpBuffer(&conn->errorMessage,
+	appendPQExpBuffer(&conn->errorMessage,
 					  libpq_gettext("server closed the connection unexpectedly\n"
 									"\tThis probably means the server terminated abnormally\n"
 									"\tbefore or while processing the request.\n"));
@@ -836,6 +836,7 @@ pqSendSome(PGconn *conn, int len)
 {
 	char	   *ptr = conn->outBuffer;
 	int			remaining = conn->outCount;
+	int			oldmsglen = conn->errorMessage.len;
 	int			result = 0;
 
 	/*
@@ -862,13 +863,10 @@ pqSendSome(PGconn *conn, int len)
 
 	if (conn->sock == PGINVALID_SOCKET)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
-						  libpq_gettext("connection not open\n"));
 		conn->write_failed = true;
-		/* Transfer error message to conn->write_err_msg, if possible */
+		/* Insert error message into conn->write_err_msg, if possible */
 		/* (strdup failure is OK, we'll cope later) */
-		conn->write_err_msg = strdup(conn->errorMessage.data);
-		resetPQExpBuffer(&conn->errorMessage);
+		conn->write_err_msg = strdup(libpq_gettext("connection not open\n"));
 		/* Discard queued data; no chance it'll ever be sent */
 		conn->outCount = 0;
 		return 0;
@@ -915,14 +913,16 @@ pqSendSome(PGconn *conn, int len)
 					 * Transfer error message to conn->write_err_msg, if
 					 * possible (strdup failure is OK, we'll cope later).
 					 *
-					 * Note: this assumes that pqsecure_write and its children
-					 * will overwrite not append to conn->errorMessage.  If
-					 * that's ever changed, we could remember the length of
-					 * conn->errorMessage at entry to this routine, and then
-					 * save and delete just what was appended.
+					 * We only want to transfer whatever has been appended to
+					 * conn->errorMessage since we entered this routine.
 					 */
-					conn->write_err_msg = strdup(conn->errorMessage.data);
-					resetPQExpBuffer(&conn->errorMessage);
+					if (!PQExpBufferBroken(&conn->errorMessage))
+					{
+						conn->write_err_msg = strdup(conn->errorMessage.data +
+													 oldmsglen);
+						conn->errorMessage.len = oldmsglen;
+						conn->errorMessage.data[oldmsglen] = '\0';
+					}
 
 					/* Discard queued data; no chance it'll ever be sent */
 					conn->outCount = 0;
@@ -1056,7 +1056,7 @@ pqWaitTimed(int forRead, int forWrite, PGconn *conn, time_t finish_time)
 
 	if (result == 0)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("timeout expired\n"));
 		return 1;
 	}
@@ -1101,7 +1101,7 @@ pqSocketCheck(PGconn *conn, int forRead, int forWrite, time_t end_time)
 		return -1;
 	if (conn->sock == PGINVALID_SOCKET)
 	{
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("invalid socket\n"));
 		return -1;
 	}
@@ -1124,7 +1124,7 @@ pqSocketCheck(PGconn *conn, int forRead, int forWrite, time_t end_time)
 	{
 		char		sebuf[PG_STRERROR_R_BUFLEN];
 
-		printfPQExpBuffer(&conn->errorMessage,
+		appendPQExpBuffer(&conn->errorMessage,
 						  libpq_gettext("select() failed: %s\n"),
 						  SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 	}

@@ -250,7 +250,7 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 	getPublications(fout);
 
 	pg_log_info("reading publication membership");
-	getPublicationTables(fout, tblinfo, numTables);
+	getPublicationTables(fout);
 
 	pg_log_info("reading subscriptions");
 	getSubscriptions(fout);

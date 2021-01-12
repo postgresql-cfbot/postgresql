@@ -4064,7 +4064,7 @@ dumpPublication(Archive *fout, PublicationInfo *pubinfo)
  *	  get information about publication membership for dumpable tables.
  */
 void
-getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
+getPublicationTables(Archive *fout)
 {
 	PQExpBuffer query;
 	PGresult   *res;
@@ -4073,8 +4073,8 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 	int			i_tableoid;
 	int			i_oid;
 	int			i_pubname;
+	int			i_relid;
 	int			i,
-				j,
 				ntups;
 
 	if (dopt->no_publications || fout->remoteVersion < 100000)
@@ -4082,73 +4082,50 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 
 	query = createPQExpBuffer();
 
-	for (i = 0; i < numTables; i++)
+	appendPQExpBuffer(query,
+						"SELECT pr.tableoid, pr.oid, pr.prrelid, p.pubname "
+						"FROM pg_publication_rel pr, pg_publication p "
+						"WHERE p.oid = pr.prpubid");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	pubrinfo = pg_malloc(ntups * sizeof(PublicationRelInfo));
+	for (i = 0; i < ntups; i++)
 	{
-		TableInfo  *tbinfo = &tblinfo[i];
-
-		/*
-		 * Only regular and partitioned tables can be added to publications.
-		 */
-		if (tbinfo->relkind != RELKIND_RELATION &&
-			tbinfo->relkind != RELKIND_PARTITIONED_TABLE)
-			continue;
-
-		/*
-		 * Ignore publication membership of tables whose definitions are not
-		 * to be dumped.
-		 */
-		if (!(tbinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
-			continue;
-
-		pg_log_info("reading publication membership for table \"%s.%s\"",
-					tbinfo->dobj.namespace->dobj.name,
-					tbinfo->dobj.name);
-
-		resetPQExpBuffer(query);
-
-		/* Get the publication membership for the table. */
-		appendPQExpBuffer(query,
-						  "SELECT pr.tableoid, pr.oid, p.pubname "
-						  "FROM pg_publication_rel pr, pg_publication p "
-						  "WHERE pr.prrelid = '%u'"
-						  "  AND p.oid = pr.prpubid",
-						  tbinfo->dobj.catId.oid);
-		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
-
-		ntups = PQntuples(res);
-
-		if (ntups == 0)
-		{
-			/*
-			 * Table is not member of any publications. Clean up and return.
-			 */
-			PQclear(res);
-			continue;
-		}
+		TableInfo *tbInfo;
+		Oid tbRelid;
 
 		i_tableoid = PQfnumber(res, "tableoid");
 		i_oid = PQfnumber(res, "oid");
 		i_pubname = PQfnumber(res, "pubname");
+		i_relid = PQfnumber(res, "prrelid");
+		tbRelid = atooid(PQgetvalue(res, i, i_relid));
 
-		pubrinfo = pg_malloc(ntups * sizeof(PublicationRelInfo));
+		tbInfo = findTableByOid(tbRelid);
 
-		for (j = 0; j < ntups; j++)
-		{
-			pubrinfo[j].dobj.objType = DO_PUBLICATION_REL;
-			pubrinfo[j].dobj.catId.tableoid =
-				atooid(PQgetvalue(res, j, i_tableoid));
-			pubrinfo[j].dobj.catId.oid = atooid(PQgetvalue(res, j, i_oid));
-			AssignDumpId(&pubrinfo[j].dobj);
-			pubrinfo[j].dobj.namespace = tbinfo->dobj.namespace;
-			pubrinfo[j].dobj.name = tbinfo->dobj.name;
-			pubrinfo[j].pubname = pg_strdup(PQgetvalue(res, j, i_pubname));
-			pubrinfo[j].pubtable = tbinfo;
+		if (tbInfo == NULL)
+			continue;
 
-			/* Decide whether we want to dump it */
-			selectDumpablePublicationTable(&(pubrinfo[j].dobj), fout);
-		}
-		PQclear(res);
+		if (!(tbInfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
+			continue;
+
+		pubrinfo[i].dobj.objType = DO_PUBLICATION_REL;
+		pubrinfo[i].dobj.catId.tableoid =
+			atooid(PQgetvalue(res, i, i_tableoid));
+		pubrinfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
+		AssignDumpId(&pubrinfo[i].dobj);
+		pubrinfo[i].dobj.namespace = tbInfo->dobj.namespace;
+		pubrinfo[i].dobj.name = tbInfo->dobj.name;
+		pubrinfo[i].pubname = pg_strdup(PQgetvalue(res, i, i_pubname));
+		pubrinfo[i].pubtable = tbInfo;
+
+		/* Decide whether we want to dump it */
+		selectDumpablePublicationTable(&(pubrinfo[i].dobj), fout);
 	}
+
+	PQclear(res);
 	destroyPQExpBuffer(query);
 }
 

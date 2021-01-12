@@ -23,6 +23,8 @@
 #include "utils/expandedrecord.h"
 #include "utils/typcache.h"
 
+#include "windowapi.h"
+
 
 /**********************************************************************
  * Definitions
@@ -83,7 +85,8 @@ typedef enum PLpgSQL_promise_type
 	PLPGSQL_PROMISE_TG_NARGS,
 	PLPGSQL_PROMISE_TG_ARGV,
 	PLPGSQL_PROMISE_TG_EVENT,
-	PLPGSQL_PROMISE_TG_TAG
+	PLPGSQL_PROMISE_TG_TAG,
+	PLPGSQL_PROMISE_WINDOWOBJECT
 } PLpgSQL_promise_type;
 
 /*
@@ -158,7 +161,8 @@ typedef enum PLpgSQL_getdiag_kind
 	PLPGSQL_GETDIAG_DATATYPE_NAME,
 	PLPGSQL_GETDIAG_MESSAGE_TEXT,
 	PLPGSQL_GETDIAG_TABLE_NAME,
-	PLPGSQL_GETDIAG_SCHEMA_NAME
+	PLPGSQL_GETDIAG_SCHEMA_NAME,
+	PLPGSQL_GETDIAG_VALUE_IS_OUT
 } PLpgSQL_getdiag_kind;
 
 /*
@@ -599,6 +603,17 @@ typedef struct PLpgSQL_stmt_getdiag
 } PLpgSQL_stmt_getdiag;
 
 /*
+ * GET PG_WINDOW_CONTEXT statement
+ */
+typedef struct PLpgSQL_stmt_getwincxt
+{
+	PLpgSQL_stmt_type cmd_type;
+	int			lineno;
+	unsigned int stmtid;
+	List	   *items;
+} PLpgSQL_stmt_getwincxt;
+
+/*
  * IF statement
  */
 typedef struct PLpgSQL_stmt_if
@@ -1035,6 +1050,8 @@ typedef struct PLpgSQL_execstate
 	TriggerData *trigdata;		/* if regular trigger, data about firing */
 	EventTriggerData *evtrigdata;	/* if event trigger, data about firing */
 
+	WindowObjectProxy winobjproxy;	/* for window function we need proxy
+									 * object between PL and WinFucArg funcions */
 	Datum		retval;
 	bool		retisnull;
 	Oid			rettype;		/* type of current retval */

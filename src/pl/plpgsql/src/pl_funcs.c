@@ -321,6 +321,8 @@ plpgsql_getdiag_kindname(PLpgSQL_getdiag_kind kind)
 			return "CONSTRAINT_NAME";
 		case PLPGSQL_GETDIAG_DATATYPE_NAME:
 			return "PG_DATATYPE_NAME";
+		case PLPGSQL_GETDIAG_VALUE_IS_OUT:
+			return "PG_VALUE_IS_OUT";
 		case PLPGSQL_GETDIAG_MESSAGE_TEXT:
 			return "MESSAGE_TEXT";
 		case PLPGSQL_GETDIAG_TABLE_NAME:

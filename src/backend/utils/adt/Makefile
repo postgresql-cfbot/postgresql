@@ -105,6 +105,7 @@ OBJS = \
 	tsvector.o \
 	tsvector_op.o \
 	tsvector_parser.o \
+	typedvalue.o \
 	uuid.o \
 	varbit.o \
 	varchar.o \

@@ -133,10 +133,8 @@ typedef struct TM_FailureData
  *
  * Represents the status of table tuples, referenced by table TID and taken by
  * index AM from index tuples.  State consists of high level parameters of the
- * deletion operation, plus two mutable palloc()'d arrays for information
- * about the status of individual table tuples.  These are conceptually one
- * single array.  Using two arrays keeps the TM_IndexDelete struct small,
- * which makes sorting the first array (the deltids array) fast.
+ * deletion operation, plus a mutable palloc()'d arrays for information about
+ * the status of individual table tuples.
  *
  * Some index AM callers perform simple index tuple deletion (by specifying
  * bottomup = false), and include only known-dead deltids.  These known-dead
@@ -167,8 +165,8 @@ typedef struct TM_FailureData
  * "extra" TIDs, but a block-based AM should always manage to do so in
  * practice.
  *
- * The final contents of the deltids/status arrays are interesting to callers
- * that ask tableam to perform speculative work (i.e. when _any_ items have
+ * The final contents of the deltids array is interesting to callers that ask
+ * tableam to perform speculative work (i.e. when _any_ items have
  * knowndeletable set to false up front).  These index AM callers will
  * naturally need to consult final state to determine which index tuples are
  * in fact deletable.
@@ -186,18 +184,14 @@ typedef struct TM_FailureData
 typedef struct TM_IndexDelete
 {
 	ItemPointerData tid;		/* table TID from index tuple */
-	int16		id;				/* Offset into TM_IndexStatus array */
-} TM_IndexDelete;
 
-typedef struct TM_IndexStatus
-{
 	OffsetNumber idxoffnum;		/* Index am page offset number */
 	bool		knowndeletable; /* Currently known to be deletable? */
 
 	/* Bottom-up index deletion specific fields follow */
 	bool		promising;		/* Promising (duplicate) index tuple? */
 	int16		freespace;		/* Space freed in index if deleted */
-} TM_IndexStatus;
+} TM_IndexDelete;
 
 /*
  * Index AM/tableam coordination is central to the design of bottom-up index
@@ -223,9 +217,8 @@ typedef struct TM_IndexDeleteOp
 	int			bottomupfreespace;	/* Bottom-up space target */
 
 	/* Mutable per-TID information follows (index AM initializes entries) */
-	int			ndeltids;		/* Current # of deltids/status elements */
+	int			ndeltids;		/* Current # of deltids elements */
 	TM_IndexDelete *deltids;
-	TM_IndexStatus *status;
 } TM_IndexDeleteOp;
 
 /* "options" flag bits for table_tuple_insert */

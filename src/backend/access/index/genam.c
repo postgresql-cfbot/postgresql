@@ -305,7 +305,6 @@ index_compute_xid_horizon_for_tuples(Relation irel,
 	delstate.bottomupfreespace = 0;
 	delstate.ndeltids = 0;
 	delstate.deltids = palloc(nitems * sizeof(TM_IndexDelete));
-	delstate.status = palloc(nitems * sizeof(TM_IndexStatus));
 
 	/* identify what the index tuples about to be deleted point to */
 	for (int i = 0; i < nitems; i++)
@@ -318,11 +317,10 @@ index_compute_xid_horizon_for_tuples(Relation irel,
 		Assert(ItemIdIsDead(iitemid));
 
 		ItemPointerCopy(&itup->t_tid, &delstate.deltids[i].tid);
-		delstate.deltids[i].id = delstate.ndeltids;
-		delstate.status[i].idxoffnum = InvalidOffsetNumber; /* unused */
-		delstate.status[i].knowndeletable = true;	/* LP_DEAD-marked */
-		delstate.status[i].promising = false;	/* unused */
-		delstate.status[i].freespace = 0;	/* unused */
+		delstate.deltids[i].idxoffnum = InvalidOffsetNumber; /* unused */
+		delstate.deltids[i].knowndeletable = true;	/* LP_DEAD-marked */
+		delstate.deltids[i].promising = false;	/* unused */
+		delstate.deltids[i].freespace = 0;	/* unused */
 
 		delstate.ndeltids++;
 	}
@@ -334,7 +332,6 @@ index_compute_xid_horizon_for_tuples(Relation irel,
 	Assert(delstate.ndeltids == nitems);
 
 	pfree(delstate.deltids);
-	pfree(delstate.status);
 
 	return latestRemovedXid;
 }

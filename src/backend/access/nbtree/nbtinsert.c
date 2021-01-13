@@ -2801,7 +2801,6 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 	delstate.bottomupfreespace = 0;
 	delstate.ndeltids = 0;
 	delstate.deltids = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexDelete));
-	delstate.status = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexStatus));
 
 	for (offnum = minoff;
 		 offnum <= maxoff;
@@ -2810,7 +2809,6 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 		ItemId		itemid = PageGetItemId(page, offnum);
 		IndexTuple	itup = (IndexTuple) PageGetItem(page, itemid);
 		TM_IndexDelete *odeltid = &delstate.deltids[delstate.ndeltids];
-		TM_IndexStatus *ostatus = &delstate.status[delstate.ndeltids];
 		BlockNumber tidblock;
 		void	   *match;
 
@@ -2831,11 +2829,10 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 			 * LP_DEAD-bit set tuples on page -- add TID to deltids
 			 */
 			odeltid->tid = itup->t_tid;
-			odeltid->id = delstate.ndeltids;
-			ostatus->idxoffnum = offnum;
-			ostatus->knowndeletable = ItemIdIsDead(itemid);
-			ostatus->promising = false; /* unused */
-			ostatus->freespace = 0; /* unused */
+			odeltid->idxoffnum = offnum;
+			odeltid->knowndeletable = ItemIdIsDead(itemid);
+			odeltid->promising = false; /* unused */
+			odeltid->freespace = 0; /* unused */
 
 			delstate.ndeltids++;
 		}
@@ -2862,14 +2859,12 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 				 * from LP_DEAD-bit set tuples on page -- add TID to deltids
 				 */
 				odeltid->tid = *tid;
-				odeltid->id = delstate.ndeltids;
-				ostatus->idxoffnum = offnum;
-				ostatus->knowndeletable = ItemIdIsDead(itemid);
-				ostatus->promising = false; /* unused */
-				ostatus->freespace = 0; /* unused */
+				odeltid->idxoffnum = offnum;
+				odeltid->knowndeletable = ItemIdIsDead(itemid);
+				odeltid->promising = false; /* unused */
+				odeltid->freespace = 0; /* unused */
 
 				odeltid++;
-				ostatus++;
 				delstate.ndeltids++;
 			}
 		}
@@ -2883,7 +2878,6 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 	_bt_delitems_delete_check(rel, buffer, heapRel, &delstate);
 
 	pfree(delstate.deltids);
-	pfree(delstate.status);
 }
 
 /*

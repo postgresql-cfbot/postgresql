@@ -1442,14 +1442,12 @@ _bt_delitems_cmp(const void *a, const void *b)
 	TM_IndexDelete *indexdelete1 = (TM_IndexDelete *) a;
 	TM_IndexDelete *indexdelete2 = (TM_IndexDelete *) b;
 
-	if (indexdelete1->id > indexdelete2->id)
+	if (indexdelete1->idxoffnum > indexdelete2->idxoffnum)
 		return 1;
-	if (indexdelete1->id < indexdelete2->id)
+	if (indexdelete1->idxoffnum < indexdelete2->idxoffnum)
 		return -1;
 
-	Assert(false);
-
-	return 0;
+	return ItemPointerCompare(&indexdelete1->tid, &indexdelete2->tid);
 }
 
 /*
@@ -1478,17 +1476,6 @@ _bt_delitems_cmp(const void *a, const void *b)
  * without expecting that tableam will check most of them.  The tableam has
  * considerable discretion around which entries/blocks it checks.  Our role in
  * costing the bottom-up deletion operation is strictly advisory.
- *
- * Note: Caller must have added deltids entries (i.e. entries that go in
- * delstate's main array) in leaf-page-wise order: page offset number order,
- * TID order among entries taken from the same posting list tuple (tiebreak on
- * TID).  This order is convenient to work with here.
- *
- * Note: We also rely on the id field of each deltids element "capturing" this
- * original leaf-page-wise order.  That is, we expect to be able to get back
- * to the original leaf-page-wise order just by sorting deltids on the id
- * field (tableam will sort deltids for its own reasons, so we'll need to put
- * it back in leaf-page-wise order afterwards).
  */
 void
 _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
@@ -1531,7 +1518,7 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 	/* We definitely have to delete at least one index tuple (or one TID) */
 	for (int i = 0; i < delstate->ndeltids; i++)
 	{
-		TM_IndexStatus *dstatus = delstate->status + delstate->deltids[i].id;
+		TM_IndexDelete  *dstatus = &delstate->deltids[i];
 		OffsetNumber idxoffnum = dstatus->idxoffnum;
 		ItemId		itemid = PageGetItemId(page, idxoffnum);
 		IndexTuple	itup = (IndexTuple) PageGetItem(page, itemid);
@@ -1590,15 +1577,14 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 			for (; nestedi < delstate->ndeltids; nestedi++)
 			{
 				TM_IndexDelete *tcdeltid = &delstate->deltids[nestedi];
-				TM_IndexStatus *tdstatus = (delstate->status + tcdeltid->id);
 
 				/* Stop once we get past all itup related deltids entries */
-				Assert(tdstatus->idxoffnum >= idxoffnum);
-				if (tdstatus->idxoffnum != idxoffnum)
+				Assert(tcdeltid->idxoffnum >= idxoffnum);
+				if (tcdeltid->idxoffnum != idxoffnum)
 					break;
 
 				/* Skip past non-deletable itup related entries up front */
-				if (!tdstatus->knowndeletable)
+				if (!tcdeltid->knowndeletable)
 					continue;
 
 				/* Entry is first partial ptid match (or an exact match)? */

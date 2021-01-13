@@ -7088,7 +7088,6 @@ heap_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
 	for (int i = 0; i < delstate->ndeltids; i++)
 	{
 		TM_IndexDelete *ideltid = &delstate->deltids[i];
-		TM_IndexStatus *istatus = delstate->status + ideltid->id;
 		ItemPointer htid = &ideltid->tid;
 		OffsetNumber offnum;
 
@@ -7192,8 +7191,8 @@ heap_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
 			maxoff = PageGetMaxOffsetNumber(page);
 		}
 
-		if (istatus->knowndeletable)
-			Assert(!delstate->bottomup && !istatus->promising);
+		if (ideltid->knowndeletable)
+			Assert(!delstate->bottomup && !ideltid->promising);
 		else
 		{
 			ItemPointerData tmp = *htid;
@@ -7205,13 +7204,13 @@ heap_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
 				continue;		/* can't delete entry */
 
 			/* Caller will delete, since whole HOT chain is vacuumable */
-			istatus->knowndeletable = true;
+			ideltid->knowndeletable = true;
 
 			/* Maintain index free space info for bottom-up deletion case */
 			if (delstate->bottomup)
 			{
-				Assert(istatus->freespace > 0);
-				actualfreespace += istatus->freespace;
+				Assert(ideltid->freespace > 0);
+				actualfreespace += ideltid->freespace;
 				if (actualfreespace >= curtargetfreespace)
 					bottomup_final_block = true;
 			}
@@ -7305,11 +7304,13 @@ heap_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
 }
 
 /*
- * Specialized inlineable comparison function for index_delete_sort()
+ * qsort comparison function for index_delete_sort()
  */
-static inline int
-index_delete_sort_cmp(TM_IndexDelete *deltid1, TM_IndexDelete *deltid2)
+static int
+index_delete_sort_cmp(const void *arg1, const void *arg2)
 {
+	TM_IndexDelete *deltid1 = (TM_IndexDelete *) arg1;
+	TM_IndexDelete *deltid2 = (TM_IndexDelete *) arg2;
 	ItemPointer tid1 = &deltid1->tid;
 	ItemPointer tid2 = &deltid2->tid;
 
@@ -7336,47 +7337,14 @@ index_delete_sort_cmp(TM_IndexDelete *deltid1, TM_IndexDelete *deltid2)
 /*
  * Sort deltids array from delstate by TID.  This prepares it for further
  * processing by heap_index_delete_tuples().
- *
- * This operation becomes a noticeable consumer of CPU cycles with some
- * workloads, so we go to the trouble of specialization/micro optimization.
- * We use shellsort for this because it's easy to specialize, compiles to
- * relatively few instructions, and is adaptive to presorted inputs/subsets
- * (which are typical here).
  */
 static void
 index_delete_sort(TM_IndexDeleteOp *delstate)
 {
 	TM_IndexDelete *deltids = delstate->deltids;
-	int			ndeltids = delstate->ndeltids;
-	int			low = 0;
+	int				ndeltids = delstate->ndeltids;
 
-	/*
-	 * Shellsort gap sequence (taken from Sedgewick-Incerpi paper).
-	 *
-	 * This implementation is fast with array sizes up to ~4500.  This covers
-	 * all supported BLCKSZ values.
-	 */
-	const int	gaps[9] = {1968, 861, 336, 112, 48, 21, 7, 3, 1};
-
-	/* Think carefully before changing anything here -- keep swaps cheap */
-	StaticAssertStmt(sizeof(TM_IndexDelete) <= 8,
-					 "element size exceeds 8 bytes");
-
-	for (int g = 0; g < lengthof(gaps); g++)
-	{
-		for (int hi = gaps[g], i = low + hi; i < ndeltids; i++)
-		{
-			TM_IndexDelete d = deltids[i];
-			int			j = i;
-
-			while (j >= hi && index_delete_sort_cmp(&deltids[j - hi], &d) >= 0)
-			{
-				deltids[j] = deltids[j - hi];
-				j -= hi;
-			}
-			deltids[j] = d;
-		}
-	}
+	qsort(deltids, ndeltids, sizeof(TM_IndexDelete), index_delete_sort_cmp);
 }
 
 /*
@@ -7574,9 +7542,8 @@ bottomup_sort_and_shrink(TM_IndexDeleteOp *delstate)
 	for (int i = 0; i < delstate->ndeltids; i++)
 	{
 		TM_IndexDelete *ideltid = &delstate->deltids[i];
-		TM_IndexStatus *istatus = delstate->status + ideltid->id;
 		ItemPointer htid = &ideltid->tid;
-		bool		promising = istatus->promising;
+		bool		promising = ideltid->promising;
 
 		if (curblock != ItemPointerGetBlockNumber(htid))
 		{

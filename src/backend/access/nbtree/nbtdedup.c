@@ -346,7 +346,6 @@ _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 	delstate.bottomupfreespace = Max(BLCKSZ / 16, newitemsz);
 	delstate.ndeltids = 0;
 	delstate.deltids = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexDelete));
-	delstate.status = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexStatus));
 
 	minoff = P_FIRSTDATAKEY(opaque);
 	maxoff = PageGetMaxOffsetNumber(page);
@@ -400,7 +399,6 @@ _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 	_bt_delitems_delete_check(rel, buf, heapRel, &delstate);
 
 	pfree(delstate.deltids);
-	pfree(delstate.status);
 
 	/* Report "success" to caller unconditionally to avoid deduplication */
 	if (neverdedup)
@@ -647,17 +645,15 @@ _bt_bottomupdel_finish_pending(Page page, BTDedupState state,
 		ItemId		itemid = PageGetItemId(page, offnum);
 		IndexTuple	itup = (IndexTuple) PageGetItem(page, itemid);
 		TM_IndexDelete *ideltid = &delstate->deltids[delstate->ndeltids];
-		TM_IndexStatus *istatus = &delstate->status[delstate->ndeltids];
 
 		if (!BTreeTupleIsPosting(itup))
 		{
 			/* Simple case: A plain non-pivot tuple */
 			ideltid->tid = itup->t_tid;
-			ideltid->id = delstate->ndeltids;
-			istatus->idxoffnum = offnum;
-			istatus->knowndeletable = false;	/* for now */
-			istatus->promising = dupinterval;	/* simple rule */
-			istatus->freespace = ItemIdGetLength(itemid) + sizeof(ItemIdData);
+			ideltid->idxoffnum = offnum;
+			ideltid->knowndeletable = false;	/* for now */
+			ideltid->promising = dupinterval;	/* simple rule */
+			ideltid->freespace = ItemIdGetLength(itemid) + sizeof(ItemIdData);
 
 			delstate->ndeltids++;
 		}
@@ -711,17 +707,15 @@ _bt_bottomupdel_finish_pending(Page page, BTDedupState state,
 				ItemPointer htid = BTreeTupleGetPostingN(itup, p);
 
 				ideltid->tid = *htid;
-				ideltid->id = delstate->ndeltids;
-				istatus->idxoffnum = offnum;
-				istatus->knowndeletable = false;	/* for now */
-				istatus->promising = false;
+				ideltid->idxoffnum = offnum;
+				ideltid->knowndeletable = false;	/* for now */
+				ideltid->promising = false;
 				if ((firstpromising && p == 0) ||
 					(lastpromising && p == nitem - 1))
-					istatus->promising = true;
-				istatus->freespace = sizeof(ItemPointerData);	/* at worst */
+					ideltid->promising = true;
+				ideltid->freespace = sizeof(ItemPointerData);	/* at worst */
 
 				ideltid++;
-				istatus++;
 				delstate->ndeltids++;
 			}
 		}

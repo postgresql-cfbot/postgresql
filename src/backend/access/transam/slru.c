@@ -487,17 +487,23 @@ SimpleLruReadPage(SlruCtl ctl, int pageno, bool write_ok,
  * Return value is the shared-buffer slot number now holding the page.
  * The buffer's LRU access info is updated.
  *
- * Control lock must NOT be held at entry, but will be held at exit.
- * It is unspecified whether the lock will be shared or exclusive.
+ * Control lock must be held in *lock_mode mode, which may be LW_NONE.  Control
+ * lock will be held at exit in at least shared mode.  Resulting control lock
+ * mode is set to *lock_mode.
  */
 int
-SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
+SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid,
+						   LWLockMode *lock_mode)
 {
 	SlruShared	shared = ctl->shared;
 	int			slotno;
 
 	/* Try to find the page while holding only shared lock */
-	LWLockAcquire(shared->ControlLock, LW_SHARED);
+	if (*lock_mode == LW_NONE)
+	{
+		LWLockAcquire(shared->ControlLock, LW_SHARED);
+		*lock_mode = LW_SHARED;
+	}
 
 	/* See if page is already in a buffer */
 	for (slotno = 0; slotno < shared->num_slots; slotno++)
@@ -517,8 +523,13 @@ SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
 	}
 
 	/* No luck, so switch to normal exclusive lock and do regular read */
-	LWLockRelease(shared->ControlLock);
-	LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
+	if (*lock_mode != LW_EXCLUSIVE)
+	{
+		Assert(*lock_mode == LW_NONE);
+		LWLockRelease(shared->ControlLock);
+		LWLockAcquire(shared->ControlLock, LW_EXCLUSIVE);
+		*lock_mode = LW_EXCLUSIVE;
+	}
 
 	return SimpleLruReadPage(ctl, pageno, true, xid);
 }

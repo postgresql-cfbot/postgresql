@@ -288,6 +288,7 @@ TransactionIdGetCommitTsData(TransactionId xid, TimestampTz *ts,
 	CommitTimestampEntry entry;
 	TransactionId oldestCommitTsXid;
 	TransactionId newestCommitTsXid;
+	LWLockMode	lockmode = LW_NONE;
 
 	if (!TransactionIdIsValid(xid))
 		ereport(ERROR,
@@ -342,7 +343,7 @@ TransactionIdGetCommitTsData(TransactionId xid, TimestampTz *ts,
 	}
 
 	/* lock is acquired by SimpleLruReadPage_ReadOnly */
-	slotno = SimpleLruReadPage_ReadOnly(CommitTsCtl, pageno, xid);
+	slotno = SimpleLruReadPage_ReadOnly(CommitTsCtl, pageno, xid, &lockmode);
 	memcpy(&entry,
 		   CommitTsCtl->shared->page_buffer[slotno] +
 		   SizeOfCommitTimestampEntry * entryno,
@@ -352,6 +353,7 @@ TransactionIdGetCommitTsData(TransactionId xid, TimestampTz *ts,
 	if (nodeid)
 		*nodeid = entry.nodeid;
 
+	Assert(lockmode != LW_NONE);
 	LWLockRelease(CommitTsSLRULock);
 	return *ts != 0;
 }

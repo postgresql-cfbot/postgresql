@@ -854,8 +854,9 @@ ExplainPrintJIT(ExplainState *es, int jit_flags, JitInstrumentation *ji)
 {
 	instr_time	total_time;
 
-	/* don't print information if no JITing happened */
-	if (!ji || ji->created_functions == 0)
+	/* don't print information if JITing wasn't done at planning time */
+	if (!ji || (ji->created_functions == 0 &&
+			es->format == EXPLAIN_FORMAT_TEXT))
 		return;
 
 	/* calculate total time */

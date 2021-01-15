@@ -57,6 +57,7 @@ parseCommandLine(int argc, char *argv[])
 		{"verbose", no_argument, NULL, 'v'},
 		{"clone", no_argument, NULL, 1},
 		{"index-collation-versions-unknown", no_argument, NULL, 2},
+		{"no-scripts", no_argument, NULL, 3},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -68,6 +69,7 @@ parseCommandLine(int argc, char *argv[])
 	time_t		run_time = time(NULL);
 
 	user_opts.transfer_mode = TRANSFER_MODE_COPY;
+	user_opts.noscripts = false;
 
 	os_info.progname = get_progname(argv[0]);
 
@@ -208,6 +210,10 @@ parseCommandLine(int argc, char *argv[])
 				user_opts.ind_coll_unknown = true;
 				break;
 
+			case 3:
+				user_opts.noscripts = true;
+				break;
+
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 						os_info.progname);
@@ -314,6 +320,7 @@ usage(void)
 	printf(_("  --clone                       clone instead of copying files to new cluster\n"));
 	printf(_("  --index-collation-versions-unknown\n"));
 	printf(_("                                mark text indexes as needing to be rebuilt\n"));
+	printf(_("  --no-scripts                  do not generate scripts for next steps\n"));
 	printf(_("  -?, --help                    show this help, then exit\n"));
 	printf(_("\n"
 			 "Before running pg_upgrade you must:\n"

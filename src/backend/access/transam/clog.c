@@ -53,7 +53,7 @@
  * and CLOG segment numbering at
  * 0xFFFFFFFF/CLOG_XACTS_PER_PAGE/SLRU_PAGES_PER_SEGMENT.  We need take no
  * explicit notice of that fact in this module, except when comparing segment
- * and page numbers in TruncateCLOG (see CLOGPagePrecedes).
+ * and page numbers in TruncateCLOG (see CLOGPageDiff).
  */
 
 /* We need two bits per xact, so four xacts fit in a byte */
@@ -90,7 +90,7 @@ static SlruCtlData XactCtlData;
 
 
 static int	ZeroCLOGPage(int pageno, bool writeXlog);
-static bool CLOGPagePrecedes(int page1, int page2);
+static int32 CLOGPageDiff(int page1, int page2);
 static void WriteZeroPageXlogRec(int pageno);
 static void WriteTruncateXlogRec(int pageno, TransactionId oldestXact,
 								 Oid oldestXactDb);
@@ -690,10 +690,11 @@ CLOGShmemSize(void)
 void
 CLOGShmemInit(void)
 {
-	XactCtl->PagePrecedes = CLOGPagePrecedes;
+	XactCtl->PageDiff = CLOGPageDiff;
 	SimpleLruInit(XactCtl, "Xact", CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE,
 				  XactSLRULock, "pg_xact", LWTRANCHE_XACT_BUFFER,
 				  SYNC_HANDLER_CLOG);
+	SlruPageDiffUnitTests(XactCtl, CLOG_XACTS_PER_PAGE);
 }
 
 /*
@@ -886,7 +887,7 @@ TruncateCLOG(TransactionId oldestXact, Oid oldestxid_datoid)
 	cutoffPage = TransactionIdToPage(oldestXact);
 
 	/* Check to see if there's any files that could be removed */
-	if (!SlruScanDirectory(XactCtl, SlruScanDirCbReportPresence, &cutoffPage))
+	if (!SlruScanDirectory(XactCtl, SlruScanDirCbWouldTruncate, &cutoffPage))
 		return;					/* nothing to remove */
 
 	/*
@@ -912,26 +913,37 @@ TruncateCLOG(TransactionId oldestXact, Oid oldestxid_datoid)
 
 
 /*
- * Decide which of two CLOG page numbers is "older" for truncation purposes.
+ * Diff CLOG page numbers for truncation purposes.
  *
- * We need to use comparison of TransactionIds here in order to do the right
- * thing with wraparound XID arithmetic.  However, if we are asked about
- * page number zero, we don't want to hand InvalidTransactionId to
- * TransactionIdPrecedes: it'll get weird about permanent xact IDs.  So,
- * offset both xids by FirstNormalTransactionId to avoid that.
+ * To do the right thing with wraparound XID arithmetic, this mirrors
+ * TransactionIdPrecedes().  The Max() operation ensures we return a positive
+ * value when the wrap point may fall inside these pages.  (When it does, some
+ * pairs of entries have a positive diff, and other pairs have a negative
+ * diff.)  Only the predicate.c SLRU needs the Max() operation; to avoid
+ * having even more corner cases to understand, all XID-indexed SLRUs do it.
+ *
+ * The page containing oldestXact-2^31 is the important edge case.  The
+ * portion of that page equaling or following oldestXact-2^31 is expendable,
+ * but the portion preceding oldestXact-2^31 is not.  When oldestXact-2^31 is
+ * the first XID of a page and segment, the entire page and segment is
+ * expendable, and we could truncate the segment.  Recognizing that case would
+ * require making oldestXact, not just the page containing oldestXact,
+ * available to this callback.  slru.c wouldn't delete the page, anyway.
  */
-static bool
-CLOGPagePrecedes(int page1, int page2)
+static int32
+CLOGPageDiff(int page1, int page2)
 {
 	TransactionId xid1;
 	TransactionId xid2;
+	int32		diff_head;
+	int32		diff_tail;
 
 	xid1 = ((TransactionId) page1) * CLOG_XACTS_PER_PAGE;
-	xid1 += FirstNormalTransactionId;
 	xid2 = ((TransactionId) page2) * CLOG_XACTS_PER_PAGE;
-	xid2 += FirstNormalTransactionId;
 
-	return TransactionIdPrecedes(xid1, xid2);
+	diff_head = xid1 - xid2;
+	diff_tail = xid1 - (xid2 + CLOG_XACTS_PER_PAGE - 1);
+	return Max(diff_head, diff_tail);
 }
 
 

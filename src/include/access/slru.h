@@ -29,7 +29,7 @@
  * xxxx is CLOG or SUBTRANS, respectively), and segment numbering at
  * 0xFFFFFFFF/xxxx_XACTS_PER_PAGE/SLRU_PAGES_PER_SEGMENT.  We need
  * take no explicit notice of that fact in slru.c, except when comparing
- * segment and page numbers in SimpleLruTruncate (see PagePrecedes()).
+ * segment and page numbers in SimpleLruTruncate (see PageDiff()).
  */
 #define SLRU_PAGES_PER_SEGMENT	32
 
@@ -118,11 +118,18 @@ typedef struct SlruCtlData
 	SyncRequestHandler sync_handler;
 
 	/*
-	 * Decide which of two page numbers is "older" for truncation purposes. We
-	 * need to use comparison of TransactionIds here in order to do the right
-	 * thing with wraparound XID arithmetic.
+	 * Compute distance between two page numbers, for truncation and as a hint
+	 * for evicting pages in LRU order.  Callbacks shall distribute return
+	 * values uniformly in [INT_MIN,INT_MAX].  If PageDiff(P, oldest_needed)
+	 * is negative but not close to INT_MIN, that implies data in page P is
+	 * obsolete.  The exception for values close to INT_MIN permits
+	 * implementations to return such values for edge cases where the answer
+	 * changes mid-page from INT_MIN to INT_MAX.  Use SlruPageDiffUnitTests()
+	 * in SLRUs meeting its criteria.  For SLRUs using SimpleLruTruncate(),
+	 * this must use modular arithmetic.  (For others, the behavior of this
+	 * callback has no functional implications.)
 	 */
-	bool		(*PagePrecedes) (int, int);
+	int32		(*PageDiff) (int, int);
 
 	/*
 	 * Dir is set during SimpleLruInit and does not change thereafter. Since
@@ -145,6 +152,11 @@ extern int	SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno,
 									   TransactionId xid);
 extern void SimpleLruWritePage(SlruCtl ctl, int slotno);
 extern void SimpleLruWriteAll(SlruCtl ctl, bool allow_redirtied);
+#ifdef USE_ASSERT_CHECKING
+extern void SlruPageDiffUnitTests(SlruCtl ctl, int per_page);
+#else
+#define SlruPageDiffUnitTests(ctl, per_page) do {} while (0)
+#endif
 extern void SimpleLruTruncate(SlruCtl ctl, int cutoffPage);
 extern bool SimpleLruDoesPhysicalPageExist(SlruCtl ctl, int pageno);
 
@@ -156,8 +168,8 @@ extern void SlruDeleteSegment(SlruCtl ctl, int segno);
 extern int	SlruSyncFileTag(SlruCtl ctl, const FileTag *ftag, char *path);
 
 /* SlruScanDirectory public callbacks */
-extern bool SlruScanDirCbReportPresence(SlruCtl ctl, char *filename,
-										int segpage, void *data);
+extern bool SlruScanDirCbWouldTruncate(SlruCtl ctl, char *filename,
+									   int segpage, void *data);
 extern bool SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage,
 								   void *data);
 

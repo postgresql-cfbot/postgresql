@@ -21,7 +21,11 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CHECKPOINT
+CHECKPOINT [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ]
+
+<phrase>where <replaceable class="parameter">option</replaceable> can be one of:</phrase>
+
+    SPREAD [ <replaceable class="parameter">boolean</replaceable> ]
 </synopsis>
  </refsynopsisdiv>
 
@@ -37,7 +41,7 @@ CHECKPOINT
   </para>
 
   <para>
-   The <command>CHECKPOINT</command> command forces an immediate
+   The <command>CHECKPOINT</command> command forces a
    checkpoint when the command is issued, without waiting for a
    regular checkpoint scheduled by the system (controlled by the settings in
    <xref linkend="runtime-config-wal-checkpoints"/>).
@@ -52,8 +56,50 @@ CHECKPOINT
   </para>
 
   <para>
+   Note that the server may consolidate concurrently requested checkpoints or
+   restartpoints.  Such consolidated requests will contain a combined set of
+   options.  For example, if one session requested a spread checkpoint and
+   another session requested a fast checkpoint, the server may combine these
+   requests and perform one fast checkpoint.
+  </para>
+
+  <para>
    Only superusers can call <command>CHECKPOINT</command>.
   </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>SPREAD</literal></term>
+    <listitem>
+     <para>
+      Specifies that checkpoint activity should be throttled based on the
+      setting for the <xref linkend="guc-checkpoint-completion-target"/>
+      parameter.  If the option is turned off, <command>CHECKPOINT</command>
+      creates a checkpoint or restartpoint as fast as possible.  By default,
+      <literal>SPREAD</literal> is turned off, and the checkpoint activity is
+      not throttled.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">boolean</replaceable></term>
+    <listitem>
+     <para>
+      Specifies whether the selected option should be turned on or off.
+      You can write <literal>TRUE</literal>, <literal>ON</literal>, or
+      <literal>1</literal> to enable the option, and <literal>FALSE</literal>,
+      <literal>OFF</literal>, or <literal>0</literal> to disable it.  The
+      <replaceable class="parameter">boolean</replaceable> value can also
+      be omitted, in which case <literal>TRUE</literal> is assumed.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
  </refsect1>
 
  <refsect1>

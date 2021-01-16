@@ -15,6 +15,7 @@
 #ifndef _BGWRITER_H
 #define _BGWRITER_H
 
+#include "parser/parse_node.h"
 #include "storage/block.h"
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
@@ -30,6 +31,7 @@ extern double CheckPointCompletionTarget;
 extern void BackgroundWriterMain(void) pg_attribute_noreturn();
 extern void CheckpointerMain(void) pg_attribute_noreturn();
 
+extern void ExecCheckPoint(ParseState *pstate, CheckPointStmt *stmt);
 extern void RequestCheckpoint(int flags);
 extern void CheckpointWriteDelay(int flags, double progress);
 

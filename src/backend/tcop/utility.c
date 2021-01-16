@@ -907,13 +907,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			break;
 
 		case T_CheckPointStmt:
-			if (!superuser())
-				ereport(ERROR,
-						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-						 errmsg("must be superuser to do CHECKPOINT")));
-
-			RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_WAIT |
-							  (RecoveryInProgress() ? 0 : CHECKPOINT_FORCE));
+			ExecCheckPoint(pstate, (CheckPointStmt *) parsetree);
 			break;
 
 		case T_ReindexStmt:

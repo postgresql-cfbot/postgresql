@@ -41,6 +41,7 @@
 
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
+#include "commands/defrem.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -893,6 +894,48 @@ CheckpointerShmemInit(void)
 		ConditionVariableInit(&CheckpointerShmem->start_cv);
 		ConditionVariableInit(&CheckpointerShmem->done_cv);
 	}
+}
+
+/*
+ * ExecCheckPoint
+ *		Primary entry point for CHECKPOINT commands
+ */
+void
+ExecCheckPoint(ParseState *pstate, CheckPointStmt *stmt)
+{
+	ListCell *lc;
+	bool spread = false;
+	int flags;
+
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("must be superuser to do CHECKPOINT")));
+
+	foreach(lc, stmt->options)
+	{
+		DefElem *opt = (DefElem *) lfirst(lc);
+
+		if (strcmp(opt->defname, "spread") == 0)
+			spread = defGetBoolean(opt);
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("unrecognized CHECKPOINT option \"%s\"", opt->defname),
+					 parser_errposition(pstate, opt->location)));
+	}
+
+	/*
+	 * CHECKPOINT_IMMEDIATE is set unless the SPREAD option is enabled.
+	 * CHECKPOINT_WAIT is always set so that CHECKPOINT blocks until the
+	 * checkpoint or restartpoint completes.  CHECKPOINT_FORCE is set unless we
+	 * are in recovery, because it is not possible to force a restartpoint.
+	 */
+	flags = CHECKPOINT_WAIT |
+			(RecoveryInProgress() ? 0 : CHECKPOINT_FORCE) |
+			(spread ? 0 : CHECKPOINT_IMMEDIATE);
+
+	RequestCheckpoint(flags);
 }
 
 /*

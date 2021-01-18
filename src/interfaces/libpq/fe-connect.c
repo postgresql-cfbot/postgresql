@@ -24,6 +24,7 @@
 #include "common/ip.h"
 #include "common/link-canary.h"
 #include "common/scram-common.h"
+#include "common/zpq_stream.h"
 #include "common/string.h"
 #include "fe-auth.h"
 #include "libpq-fe.h"
@@ -350,6 +351,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Replication", "D", 5,
 	offsetof(struct pg_conn, replication)},
 
+	{"compression", "PGCOMPRESSION", NULL, NULL,
+		"Libpq-compression", "", 16,
+	offsetof(struct pg_conn, compression)},
+
 	{"target_session_attrs", "PGTARGETSESSIONATTRS",
 		DefaultTargetSessionAttrs, NULL,
 		"Target-Session-Attrs", "", 11, /* sizeof("read-write") = 11 */
@@ -458,6 +463,10 @@ pgthreadlock_t pg_g_threadlock = default_threadlock;
 void
 pqDropConnection(PGconn *conn, bool flushInput)
 {
+	/* Release compression streams */
+	zpq_free(conn->zstream);
+	conn->zstream = NULL;
+
 	/* Drop any SSL state */
 	pqsecure_close(conn);
 
@@ -2152,6 +2161,12 @@ connectDBComplete(PGconn *conn)
 				return 1;		/* success! */
 
 			case PGRES_POLLING_READING:
+			    /* if there is some buffered RX data in ZpqStream
+			     * then don't proceed to pqWaitTimed */
+			    if (zpq_buffered_rx(conn->zstream)) {
+			        break;
+			    }
+
 				ret = pqWaitTimed(1, 0, conn, finish_time);
 				if (ret == -1)
 				{
@@ -3188,11 +3203,79 @@ keep_going:						/* We will come back to here until there is
 				 */
 				conn->inCursor = conn->inStart;
 
-				/* Read type byte */
-				if (pqGetc(&beresp, conn))
+				while (1)
 				{
-					/* We'll come back when there is more data */
-					return PGRES_POLLING_READING;
+					/* Read type byte */
+					if (pqGetc(&beresp, conn))
+					{
+						/* We'll come back when there is more data */
+						return PGRES_POLLING_READING;
+					}
+
+					if (beresp == 'z') /* Switch on compression */
+					{
+						int index;
+						char resp;
+						/* Read message length word */
+						if (pqGetInt(&msgLength, 4, conn))
+						{
+							/* We'll come back when there is more data */
+							return PGRES_POLLING_READING;
+						}
+						if (msgLength != 5)
+						{
+							appendPQExpBuffer(&conn->errorMessage,
+											  libpq_gettext(
+												  "expected compression algorithm specification message length is 5 bytes, but %d is received\n"),
+											  msgLength);
+							goto error_return;
+						}
+						pqGetc(&resp, conn);
+						index = resp;
+						if (index == (char)-1)
+						{
+							appendPQExpBuffer(&conn->errorMessage,
+											  libpq_gettext(
+												  "server does not support requested compression algorithms %s\n"),
+											  conn->compression);
+							goto error_return;
+						}
+						/* Use unigned comparison to handle negative values */
+						if ((unsigned)index >= conn->n_compressors)
+						{
+							appendPQExpBuffer(&conn->errorMessage,
+											  libpq_gettext(
+												  "server returns incorrect compression aslogirhm  index: %d\n"),
+											  index);
+							goto error_return;
+						}
+						Assert(!conn->zstream);
+						conn->zstream = zpq_create(conn->compressors[index].impl,
+												   conn->compressors[index].level,
+                                                   conn->compressors[index].impl,
+												   (zpq_tx_func)pqsecure_write, (zpq_rx_func)pqsecure_read, conn,
+												   &conn->inBuffer[conn->inCursor], conn->inEnd-conn->inCursor);
+						if (!conn->zstream)
+						{
+							char** supported_algorithms = zpq_get_supported_algorithms();
+							appendPQExpBuffer(&conn->errorMessage,
+											  libpq_gettext(
+												  "failed to initialize compressor %s\n"),
+											  supported_algorithms[conn->compressors[index].impl]);
+							free(supported_algorithms);
+							goto error_return;
+						}
+						/* reset buffer */
+						conn->inStart = conn->inCursor = conn->inEnd = 0;
+					}
+					else if (conn->n_compressors != 0 && beresp == 'v') /* negotiate protocol version */
+					{
+						appendPQExpBuffer(&conn->errorMessage,
+										  libpq_gettext(
+											  "server is not supporting libpq compression\n"));
+						goto error_return;
+					} else
+						break;
 				}
 
 				/*
@@ -3963,6 +4046,8 @@ freePGconn(PGconn *conn)
 		free(conn->dbName);
 	if (conn->replication)
 		free(conn->replication);
+	if (conn->compression)
+		free(conn->compression);
 	if (conn->pguser)
 		free(conn->pguser);
 	if (conn->pgpass)
@@ -6485,6 +6570,22 @@ PQuser(const PGconn *conn)
 	if (!conn)
 		return NULL;
 	return conn->pguser;
+}
+
+char *
+PQcompressor(const PGconn *conn)
+{
+	if (!conn || !conn->zstream)
+		return NULL;
+	return (char*)zpq_compress_algorithm_name(conn->zstream);
+}
+
+char *
+PQdecompressor(const PGconn *conn)
+{
+	if (!conn || !conn->zstream)
+		return NULL;
+	return (char*)zpq_decompress_algorithm_name(conn->zstream);
 }
 
 char *

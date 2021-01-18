@@ -325,10 +325,10 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
      </varlistentry>
 
      <varlistentry>
-      <term><option>--index-tablespace=<replaceable>index_tablespace</replaceable></option></term>
+      <term><option>--index-tablespace=<replaceable>TABLESPACE</replaceable></option></term>
       <listitem>
        <para>
-        Create indexes in the specified tablespace, rather than the default
+        Create indexes in the specified <replaceable>TABLESPACE</replaceable>, rather than the default
         tablespace.
        </para>
       </listitem>
@@ -360,10 +360,19 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
      </varlistentry>
 
      <varlistentry>
-      <term><option>--tablespace=<replaceable>tablespace</replaceable></option></term>
+      <term><option>--table-access-method=<replaceable>TABLEAM</replaceable></option></term>
       <listitem>
        <para>
-        Create tables in the specified tablespace, rather than the default
+        Create tables with specified table access method, rather than the default.
+       </para>
+      </listitem>
+     </varlistentry>
+     
+     <varlistentry>
+      <term><option>--tablespace=<replaceable>TABLESPACE</replaceable></option></term>
+      <listitem>
+       <para>
+        Create tables in the specified <replaceable>TABLESPACE</replaceable>, rather than the default
         tablespace.
        </para>
       </listitem>

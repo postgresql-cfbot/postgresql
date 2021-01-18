@@ -184,10 +184,11 @@ double		throttle_delay = 0;
 int64		latency_limit = 0;
 
 /*
- * tablespace selection
+ * tablespace and table access method selection
  */
 char	   *tablespace = NULL;
 char	   *index_tablespace = NULL;
+char	   *table_access_method = NULL;
 
 /*
  * Number of "pgbench_accounts" partitions.  0 is the default and means no
@@ -641,6 +642,9 @@ usage(void)
 		   "  --partition-method=(range|hash)\n"
 		   "                           partition pgbench_accounts with this method (default: range)\n"
 		   "  --partitions=NUM         partition pgbench_accounts into NUM parts (default: 0)\n"
+		   "  --table-access-method=TABLEAM\n"
+		   "                           create tables with specified table access method,\n"
+		   "                           rather than the default.\n"
 		   "  --tablespace=TABLESPACE  create tables in the specified tablespace\n"
 		   "  --unlogged-tables        create tables as unlogged tables\n"
 		   "\nOptions to select what to run:\n"
@@ -3761,6 +3765,20 @@ initCreateTables(PGconn *con)
 
 	fprintf(stderr, "creating tables...\n");
 
+	if (table_access_method != NULL)
+	{
+		char	   *escaped_table_access_method;
+
+		initPQExpBuffer(&query);
+		escaped_table_access_method = PQescapeIdentifier(con,
+				table_access_method, strlen(table_access_method));
+		appendPQExpBuffer(&query, "set default_table_access_method to %s;\n",
+				escaped_table_access_method);
+		PQfreemem(escaped_table_access_method);
+		executeStatement(con, query.data);
+		termPQExpBuffer(&query);
+	}
+
 	initPQExpBuffer(&query);
 
 	for (i = 0; i < lengthof(DDLs); i++)
@@ -5433,6 +5451,7 @@ main(int argc, char **argv)
 		{"show-script", required_argument, NULL, 10},
 		{"partitions", required_argument, NULL, 11},
 		{"partition-method", required_argument, NULL, 12},
+		{"table-access-method", required_argument, NULL, 13},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -5805,6 +5824,10 @@ main(int argc, char **argv)
 								 optarg);
 					exit(1);
 				}
+				break;
+			case 13:			/* table access method*/
+				initialization_option_set = true;
+				table_access_method = pg_strdup(optarg);
 				break;
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);

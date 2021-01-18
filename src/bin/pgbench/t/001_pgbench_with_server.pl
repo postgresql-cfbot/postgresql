@@ -100,6 +100,16 @@ pgbench(
 	[qr{Perhaps you need to do initialization}],
 	'run without init');
 
+pgbench(
+        '-i --table-access-method=no-such-table-am',
+        1,
+        [qr{^$}],
+        [
+                qr{invalid value for parameter "default_table_access_method"},
+                qr{DETAIL:  Table access method "no-such-table-am" does not exist}
+        ],
+        'no such table access method');
+
 # Initialize pgbench tables scale 1
 pgbench(
 	'-i', 0,
@@ -145,6 +155,18 @@ pgbench(
 		qr{done in \d+\.\d\d s }
 	],
 	'pgbench --init-steps');
+
+# Test interaction of --table-access-method
+pgbench(
+	'--initialize --table-access-method=heap',
+	0,
+	[qr{^$}],
+	[
+		qr{dropping old tables},
+		qr{creating tables},
+		qr{done in \d+\.\d\d s }
+	],
+	'pgbench --table-access-method');
 
 # Run all builtin scripts, for a few transactions each
 pgbench(

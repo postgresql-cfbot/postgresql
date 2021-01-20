@@ -43,12 +43,14 @@
 #include "access/xact.h"
 #include "catalog/catalog.h"
 #include "commands/trigger.h"
+#include "commands/copy.h"
 #include "executor/execPartition.h"
 #include "executor/executor.h"
 #include "executor/nodeModifyTable.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "optimizer/optimizer.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
@@ -72,6 +74,8 @@ static TupleTableSlot *ExecPrepareTupleRouting(ModifyTableState *mtstate,
 											   ResultRelInfo *targetRelInfo,
 											   TupleTableSlot *slot,
 											   ResultRelInfo **partRelInfo);
+/* guc */
+int bulk_insert_ntuples = 1000;
 
 /*
  * Verify that the tuples to be produced by INSERT or UPDATE match the
@@ -389,6 +393,8 @@ ExecInsert(ModifyTableState *mtstate,
 	ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
 	OnConflictAction onconflict = node->onConflictAction;
 	PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
+	TupleTableSlot *batchslot = NULL;
+	bool	use_multi_insert = false;
 
 	/*
 	 * If the input result relation is a partitioned table, find the leaf
@@ -407,6 +413,66 @@ ExecInsert(ModifyTableState *mtstate,
 	ExecMaterializeSlot(slot);
 
 	resultRelationDesc = resultRelInfo->ri_RelationDesc;
+
+	/* Use bulk insert after a threshold number of tuples */
+	// XXX: maybe this should only be done if it's not a partitioned table or
+	// if the partitions don't support miinfo, which uses its own bistates
+	mtstate->ntuples++;
+	if (mtstate->bistate == NULL &&
+			mtstate->operation == CMD_INSERT &&
+			mtstate->ntuples > bulk_insert_ntuples &&
+			bulk_insert_ntuples >= 0)
+	{
+		elog(DEBUG1, "enabling bulk insert");
+		mtstate->bistate = GetBulkInsertState();
+	}
+
+	if (!mtstate->miinfo)
+	{
+		/*
+		 * If multi-inserts aren't possible for this statement at all, so don't
+		 * check further
+		 */
+	} else if (proute == NULL)
+	{
+		if (mtstate->miinfo->ntuples++ >= bulk_insert_ntuples &&
+			bulk_insert_ntuples >= 0)
+			use_multi_insert = true;
+	}
+	else
+	{
+		/*
+		 * If a partitioned table itself allows multi-insert, and bistate
+		 * indicates we've inserted the threshold number of tuples, check if
+		 * the partition also supports it.
+		 */
+
+		/* Determine which triggers exist on this partition */
+		// XXX copyfrom.c only checks triggers when the partition changes,
+		// so maybe use_multi_insert should be in mtstate ?
+		bool has_before_insert_row_trig = (resultRelInfo->ri_TrigDesc &&
+				resultRelInfo->ri_TrigDesc->trig_insert_before_row);
+
+		bool has_instead_insert_row_trig = (resultRelInfo->ri_TrigDesc &&
+				resultRelInfo->ri_TrigDesc->trig_insert_instead_row);
+
+		/*
+		 * Disable multi-inserts when the partition has BEFORE/INSTEAD
+		 * OF triggers, or if the partition is a foreign partition.
+		 * The number of tuples eligible for multi-insert is tracked separately
+		 * from the total number of tuples in case it's not supported for some
+		 * partitions.
+		 */
+		if (!has_before_insert_row_trig &&
+			!has_instead_insert_row_trig &&
+			resultRelInfo->ri_FdwRoutine == NULL &&
+			mtstate->miinfo->ntuples++ >= bulk_insert_ntuples &&
+			bulk_insert_ntuples >= 0)
+			use_multi_insert = true;
+	}
+
+	if (use_multi_insert && mtstate->miinfo->ntuples - 1 == bulk_insert_ntuples)
+		elog(DEBUG1, "enabling multi insert");
 
 	/*
 	 * BEFORE ROW INSERT Triggers.
@@ -594,7 +660,7 @@ ExecInsert(ModifyTableState *mtstate,
 			table_tuple_insert_speculative(resultRelationDesc, slot,
 										   estate->es_output_cid,
 										   0,
-										   NULL,
+										   mtstate->bistate,
 										   specToken);
 
 			/* insert index entries for tuple */
@@ -629,12 +695,45 @@ ExecInsert(ModifyTableState *mtstate,
 
 			/* Since there was no insertion conflict, we're done */
 		}
+		else if (use_multi_insert)
+		{
+			if (resultRelInfo->ri_MultiInsertBuffer == NULL)
+				MultiInsertInfoSetupBuffer(mtstate->miinfo, resultRelInfo);
+
+			batchslot = MultiInsertInfoNextFreeSlot(mtstate->miinfo, resultRelInfo);
+			ExecCopySlot(batchslot, slot);
+
+			MultiInsertInfoStore(mtstate->miinfo, resultRelInfo, batchslot,
+					// sizeof(void*) * batchslot->tts_nvalid, /* tuple size - underestimate */
+					MemoryContextMemAllocated(batchslot->tts_mcxt, true), /* tuple size */
+					mtstate->ntuples); /* lineno */
+
+			elog(DEBUG2, "bufferedBytes %d; tuples %ld",
+					mtstate->miinfo->bufferedBytes, mtstate->ntuples);
+
+			if (MultiInsertInfoIsFull(mtstate->miinfo))
+				MultiInsertInfoFlush(mtstate->miinfo, resultRelInfo);
+		}
 		else
 		{
+			if (proute && mtstate->prevResultRelInfo != resultRelInfo)
+			{
+				if (mtstate->bistate)
+					ReleaseBulkInsertStatePin(mtstate->bistate);
+				mtstate->prevResultRelInfo = resultRelInfo;
+			}
+
+			/*
+			 * Flush pending inserts if this partition can't use
+			 * batching, so rows are visible to triggers etc.
+			 */
+			if (mtstate->miinfo)
+				MultiInsertInfoFlush(mtstate->miinfo, resultRelInfo);
+
 			/* insert the tuple normally */
 			table_tuple_insert(resultRelationDesc, slot,
 							   estate->es_output_cid,
-							   0, NULL);
+							   0, mtstate->bistate);
 
 			/* insert index entries for tuple */
 			if (resultRelInfo->ri_NumIndices > 0)
@@ -647,32 +746,36 @@ ExecInsert(ModifyTableState *mtstate,
 	if (canSetTag)
 		(estate->es_processed)++;
 
-	/*
-	 * If this insert is the result of a partition key update that moved the
-	 * tuple to a new partition, put this row into the transition NEW TABLE,
-	 * if there is one. We need to do this separately for DELETE and INSERT
-	 * because they happen on different tables.
-	 */
-	ar_insert_trig_tcs = mtstate->mt_transition_capture;
-	if (mtstate->operation == CMD_UPDATE && mtstate->mt_transition_capture
-		&& mtstate->mt_transition_capture->tcs_update_new_table)
+	/* Triggers were already run in the batch insert case */
+	if (batchslot == NULL)
 	{
-		ExecARUpdateTriggers(estate, resultRelInfo, NULL,
-							 NULL,
-							 slot,
-							 NULL,
-							 mtstate->mt_transition_capture);
-
 		/*
-		 * We've already captured the NEW TABLE row, so make sure any AR
-		 * INSERT trigger fired below doesn't capture it again.
+		 * If this insert is the result of a partition key update that moved the
+		 * tuple to a new partition, put this row into the transition NEW TABLE,
+		 * if there is one. We need to do this separately for DELETE and INSERT
+		 * because they happen on different tables.
 		 */
-		ar_insert_trig_tcs = NULL;
-	}
+		ar_insert_trig_tcs = mtstate->mt_transition_capture;
+		if (mtstate->operation == CMD_UPDATE && mtstate->mt_transition_capture
+			&& mtstate->mt_transition_capture->tcs_update_new_table)
+		{
+			ExecARUpdateTriggers(estate, resultRelInfo, NULL,
+								 NULL,
+								 slot,
+								 NULL,
+								 mtstate->mt_transition_capture);
 
-	/* AFTER ROW INSERT Triggers */
-	ExecARInsertTriggers(estate, resultRelInfo, slot, recheckIndexes,
-						 ar_insert_trig_tcs);
+			/*
+			 * We've already captured the NEW TABLE row, so make sure any AR
+			 * INSERT trigger fired below doesn't capture it again.
+			 */
+			ar_insert_trig_tcs = NULL;
+		}
+
+		/* AFTER ROW INSERT Triggers */
+		ExecARInsertTriggers(estate, resultRelInfo, slot, recheckIndexes,
+							 ar_insert_trig_tcs);
+	}
 
 	list_free(recheckIndexes);
 
@@ -2162,6 +2265,61 @@ ExecModifyTable(PlanState *pstate)
 	return NULL;
 }
 
+/*
+ * Determine if a table has volatile column defaults which are used by a given
+ * planned statement (if the column is not specified or specified as DEFAULT).
+ * This works only for INSERT.
+ */
+static bool
+has_volatile_defaults(ResultRelInfo *resultRelInfo, ModifyTable *node)
+{
+	TupleDesc	tupDesc = RelationGetDescr(resultRelInfo->ri_RelationDesc);
+	Plan		*plan;
+
+	Assert(list_length(node->plans) == 1);
+	plan = linitial(node->plans);
+
+	for (int attnum = 1; attnum <= tupDesc->natts; attnum++)
+	{
+		Form_pg_attribute att = TupleDescAttr(tupDesc, attnum - 1);
+		Expr		*defexpr;
+		TargetEntry	*tle;
+
+		/* We don't need to check dropped/generated attributes */
+		if (att->attisdropped || att->attgenerated)
+			continue;
+
+		tle = list_nth(plan->targetlist, attnum - 1);
+		Assert(tle != NULL);
+		Assert(tle->resno == attnum);
+
+		/*
+		 * If the column was specified with a non-default value, then don't
+		 * check the volatility of its default
+		 */
+		if (!tle->isdefault)
+			continue;
+
+		/* Check the column's default value if one exists */
+		defexpr = (Expr *) build_column_default(resultRelInfo->ri_RelationDesc, attnum);
+		if (defexpr == NULL)
+			continue;
+
+		/* Run the expression through planner */
+		// defexpr = expression_planner(defexpr);
+		// (void) ExecInitExpr(defexpr, NULL);
+		expression_planner(defexpr);
+
+		if (contain_volatile_functions_not_nextval((Node *) defexpr))
+		{
+			elog(DEBUG1, "found volatile att %d", attnum);
+			return true;
+		}
+	}
+
+	return false;
+}
+
 /* ----------------------------------------------------------------
  *		ExecInitModifyTable
  * ----------------------------------------------------------------
@@ -2229,6 +2387,45 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 	mtstate->mt_arowmarks = (List **) palloc0(sizeof(List *) * nplans);
 	mtstate->mt_nplans = nplans;
+	mtstate->bistate = NULL;
+
+	/*
+	 * Set miinfo if it can support multi-insert. This is the equivalent of
+	 * CIM_MULTI_* et al in copyfrom.c
+	 */
+
+	if (operation != CMD_INSERT ||
+			node->onConflictAction != ONCONFLICT_NONE)
+		mtstate->miinfo = NULL;
+	else if (mtstate->rootResultRelInfo->ri_TrigDesc != NULL &&
+			(mtstate->rootResultRelInfo->ri_TrigDesc->trig_insert_before_row ||
+			 // mtstate->rootResultRelInfo->ri_TrigDesc->trig_insert_after_row || // XXX or any row level triggers at all?
+			 mtstate->rootResultRelInfo->ri_TrigDesc->trig_insert_instead_row))
+		/*
+		 * Can't support multi-inserts when there are any BEFORE/INSTEAD OF
+		 * triggers on the table.
+		 */
+		mtstate->miinfo = NULL;
+	else if (node->rootRelation > 0 &&
+			mtstate->rootResultRelInfo->ri_TrigDesc != NULL &&
+			 mtstate->rootResultRelInfo->ri_TrigDesc->trig_insert_new_table)
+		/*
+		 * For partitioned tables we can't support multi-inserts when there
+		 * are any statement level insert triggers.
+		 */
+		mtstate->miinfo = NULL;
+	else if (mtstate->rootResultRelInfo->ri_FdwRoutine != NULL ||
+			has_volatile_defaults(mtstate->rootResultRelInfo, node))
+		/* Can't support multi-inserts to foreign tables or if there are any
+		 * volatile default expressions in the table. */
+		mtstate->miinfo = NULL;
+	else
+	{
+		mtstate->miinfo = calloc(sizeof(*mtstate->miinfo), 1);
+		MultiInsertInfoInit(mtstate->miinfo, mtstate->rootResultRelInfo,
+				mtstate->mt_transition_capture,
+				estate, GetCurrentCommandId(true), 0);
+	}
 
 	/* set up epqstate with dummy subplan data for the moment */
 	EvalPlanQualInit(&mtstate->mt_epqstate, estate, NULL, NIL, node->epqParam);
@@ -2691,6 +2888,19 @@ ExecEndModifyTable(ModifyTableState *node)
 			resultRelInfo->ri_FdwRoutine->EndForeignModify != NULL)
 			resultRelInfo->ri_FdwRoutine->EndForeignModify(node->ps.state,
 														   resultRelInfo);
+	}
+
+	if (node->bistate)
+	{
+		FreeBulkInsertState(node->bistate);
+		table_finish_bulk_insert(node->rootResultRelInfo->ri_RelationDesc, 0);
+	}
+
+	if (node->miinfo)
+	{
+		if (!MultiInsertInfoIsEmpty(node->miinfo))
+			 MultiInsertInfoFlush(node->miinfo, node->resultRelInfo); // root ?
+		MultiInsertInfoCleanup(node->miinfo);
 	}
 
 	/*

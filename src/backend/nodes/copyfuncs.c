@@ -2178,6 +2178,7 @@ _copyTargetEntry(const TargetEntry *from)
 	COPY_SCALAR_FIELD(resorigtbl);
 	COPY_SCALAR_FIELD(resorigcol);
 	COPY_SCALAR_FIELD(resjunk);
+	COPY_SCALAR_FIELD(isdefault);
 
 	return newnode;
 }

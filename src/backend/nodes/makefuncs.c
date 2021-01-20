@@ -254,6 +254,7 @@ makeTargetEntry(Expr *expr,
 	tle->ressortgroupref = 0;
 	tle->resorigtbl = InvalidOid;
 	tle->resorigcol = 0;
+	tle->isdefault = false;
 
 	tle->resjunk = resjunk;
 

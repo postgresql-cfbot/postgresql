@@ -1437,6 +1437,8 @@ typedef struct TargetEntry
 	AttrNumber	resorigcol;		/* column's number in source table */
 	bool		resjunk;		/* set to true to eliminate the attribute from
 								 * final target list */
+	bool		isdefault;		/* true if using the column default, either
+								 * by "DEFAULT" or omission of the column */
 } TargetEntry;
 
 

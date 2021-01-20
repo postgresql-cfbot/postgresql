@@ -54,6 +54,7 @@
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "optimizer/cost.h"
+#include "executor/nodeModifyTable.h"
 #include "optimizer/geqo.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/paths.h"
@@ -3443,6 +3444,15 @@ static struct config_int ConfigureNamesInt[] =
 		0, 0, 0,
 #endif	/* not CLOBBER_CACHE_ENABLED */
 		NULL, NULL, NULL
+	},
+
+	{
+		{"bulk_insert_ntuples", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Enable bulk insertions after this number of tuples."),
+			gettext_noop("A ring buffer of limited size will be used and updates done in batch"),
+		},
+		&bulk_insert_ntuples,
+		1000, -1, INT_MAX,
 	},
 
 	/* End-of-list marker */

@@ -462,6 +462,49 @@ Partitions: part_aa_bb FOR VALUES IN ('aa', 'bb'),
             part_xx_yy FOR VALUES IN ('xx', 'yy'), PARTITIONED,
             part_default DEFAULT, PARTITIONED
 
+-- bulk inserts
+truncate hash_parted;
+begin;
+create index on hash_parted(a);
+-- make sure small inserts are flushed
+insert into hash_parted values(11);
+insert into hpart0 values(12);
+select * from hash_parted;
+ a  
+----
+ 12
+ 11
+(2 rows)
+
+-- exercise bulk insert to partitions
+SET client_min_messages=debug1;
+insert into hash_parted select generate_series(1,9999);
+DEBUG:  enabling bulk insert
+DEBUG:  enabling multi insert
+RESET client_min_messages;
+select count(1) from hash_parted;
+ count 
+-------
+ 10001
+(1 row)
+
+commit;
+-- test that index was updated
+vacuum analyze hash_parted;
+explain(costs off)
+select * from hash_parted where a=13;
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Index Only Scan using hpart1_a_idx on hpart1 hash_parted
+   Index Cond: (a = 13)
+(2 rows)
+
+select * from hash_parted where a=13;
+ a  
+----
+ 13
+(1 row)
+
 -- cleanup
 drop table range_parted, list_parted;
 drop table hash_parted;

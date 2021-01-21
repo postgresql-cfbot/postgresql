@@ -58,7 +58,7 @@
  * These lines processed by genbki.pl to create the statements
  * the bootstrap parser will turn into DefineIndex calls.
  *
- * The keyword is DECLARE_INDEX or DECLARE_UNIQUE_INDEX.  The first two
+ * The keyword is DECLARE_INDEX or DECLARE_UNIQUE_INDEX or DECLARE_UNIQUE_INDEX_PKEY.  The first two
  * arguments are the index name and OID, the rest is much like a standard
  * 'create index' SQL command.
  *
@@ -70,6 +70,7 @@
  */
 #define DECLARE_INDEX(name,oid,decl) extern int no_such_variable
 #define DECLARE_UNIQUE_INDEX(name,oid,decl) extern int no_such_variable
+#define DECLARE_UNIQUE_INDEX_PKEY(name,oid,decl) extern int no_such_variable
 
 /* The following are never defined; they are here only for documentation. */
 

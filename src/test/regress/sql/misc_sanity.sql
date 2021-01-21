@@ -94,3 +94,24 @@ WHERE c.oid < 16384 AND
       relkind = 'r' AND
       attstorage != 'p'
 ORDER BY 1, 2;
+
+
+-- system catalogs without primary keys
+--
+-- Current exceptions:
+-- * pg_depend, pg_shdepend don't have a unique key
+SELECT relname
+FROM pg_class
+WHERE relnamespace = 'pg_catalog'::regnamespace AND relkind = 'r'
+      AND pg_class.oid NOT IN (SELECT indrelid FROM pg_index WHERE indisprimary)
+ORDER BY 1;
+
+
+-- system catalog unique indexes not wrapped in a constraint
+-- (There should be none.)
+SELECT relname
+FROM pg_class c JOIN pg_index i ON c.oid = i.indexrelid
+WHERE relnamespace = 'pg_catalog'::regnamespace AND relkind = 'i'
+      AND i.indisunique
+      AND c.oid NOT IN (SELECT conindid FROM pg_constraint)
+ORDER BY 1;

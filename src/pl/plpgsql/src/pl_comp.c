@@ -368,6 +368,8 @@ do_compile(FunctionCallInfo fcinfo,
 
 	function->fn_prokind = procStruct->prokind;
 
+	function->require_local_resowner = false;
+
 	function->nstatements = 0;
 
 	/*

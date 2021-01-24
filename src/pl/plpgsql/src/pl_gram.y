@@ -951,6 +951,9 @@ stmt_call		: K_CALL
 						new->expr = read_sql_stmt();
 						new->is_call = true;
 
+						/* This statement can require local resource owner */
+						plpgsql_curr_compile->require_local_resowner = true;
+
 						$$ = (PLpgSQL_stmt *)new;
 
 					}
@@ -966,6 +969,9 @@ stmt_call		: K_CALL
 						plpgsql_push_back_token(K_DO);
 						new->expr = read_sql_stmt();
 						new->is_call = false;
+
+						/* This statement can require local resource owner */
+						plpgsql_curr_compile->require_local_resowner = true;
 
 						$$ = (PLpgSQL_stmt *)new;
 

@@ -67,7 +67,7 @@ static void _SPI_prepare_oneshot_plan(const char *src, SPIPlanPtr plan);
 static int	_SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 							  Snapshot snapshot, Snapshot crosscheck_snapshot,
 							  bool read_only, bool fire_triggers, uint64 tcount,
-							  DestReceiver *caller_dest);
+							  DestReceiver *caller_dest, ResourceOwner owner);
 
 static ParamListInfo _SPI_convert_params(int nargs, Oid *argtypes,
 										 Datum *Values, const char *Nulls);
@@ -521,7 +521,7 @@ SPI_execute(const char *src, bool read_only, long tcount)
 
 	res = _SPI_execute_plan(&plan, NULL,
 							InvalidSnapshot, InvalidSnapshot,
-							read_only, true, tcount, NULL);
+							read_only, true, tcount, NULL, NULL);
 
 	_SPI_end_call(true);
 	return res;
@@ -555,7 +555,7 @@ SPI_execute_plan(SPIPlanPtr plan, Datum *Values, const char *Nulls,
 							_SPI_convert_params(plan->nargs, plan->argtypes,
 												Values, Nulls),
 							InvalidSnapshot, InvalidSnapshot,
-							read_only, true, tcount, NULL);
+							read_only, true, tcount, NULL, NULL);
 
 	_SPI_end_call(true);
 	return res;
@@ -573,21 +573,15 @@ int
 SPI_execute_plan_with_paramlist(SPIPlanPtr plan, ParamListInfo params,
 								bool read_only, long tcount)
 {
-	int			res;
+	SPIExecuteOptions opts;
 
-	if (plan == NULL || plan->magic != _SPI_PLAN_MAGIC || tcount < 0)
-		return SPI_ERROR_ARGUMENT;
+	opts.dest = NULL;
+	opts.owner = NULL;
 
-	res = _SPI_begin_call(true);
-	if (res < 0)
-		return res;
-
-	res = _SPI_execute_plan(plan, params,
-							InvalidSnapshot, InvalidSnapshot,
-							read_only, true, tcount, NULL);
-
-	_SPI_end_call(true);
-	return res;
+	return SPI_execute_plan_extended(plan,
+									 params,
+									 read_only, tcount,
+									 &opts);
 }
 
 /*
@@ -602,6 +596,27 @@ SPI_execute_plan_with_receiver(SPIPlanPtr plan,
 							   bool read_only, long tcount,
 							   DestReceiver *dest)
 {
+	SPIExecuteOptions opts;
+
+	opts.dest = dest;
+	opts.owner = NULL;
+
+	return SPI_execute_plan_extended(plan,
+									 params,
+									 read_only, tcount,
+									 &opts);
+}
+
+/*
+ * Execute a previously prepared plan with possibility to
+ * specify other options.
+ */
+int
+SPI_execute_plan_extended(SPIPlanPtr plan,
+						  ParamListInfo params,
+						  bool read_only, long tcount,
+						  SPIExecuteOptions *options)
+{
 	int			res;
 
 	if (plan == NULL || plan->magic != _SPI_PLAN_MAGIC || tcount < 0)
@@ -613,7 +628,8 @@ SPI_execute_plan_with_receiver(SPIPlanPtr plan,
 
 	res = _SPI_execute_plan(plan, params,
 							InvalidSnapshot, InvalidSnapshot,
-							read_only, true, tcount, dest);
+							read_only, true, tcount,
+							options->dest, options->owner);
 
 	_SPI_end_call(true);
 	return res;
@@ -654,7 +670,7 @@ SPI_execute_snapshot(SPIPlanPtr plan,
 							_SPI_convert_params(plan->nargs, plan->argtypes,
 												Values, Nulls),
 							snapshot, crosscheck_snapshot,
-							read_only, fire_triggers, tcount, NULL);
+							read_only, fire_triggers, tcount, NULL, NULL);
 
 	_SPI_end_call(true);
 	return res;
@@ -702,7 +718,7 @@ SPI_execute_with_args(const char *src,
 
 	res = _SPI_execute_plan(&plan, paramLI,
 							InvalidSnapshot, InvalidSnapshot,
-							read_only, true, tcount, NULL);
+							read_only, true, tcount, NULL, NULL);
 
 	_SPI_end_call(true);
 	return res;
@@ -746,7 +762,7 @@ SPI_execute_with_receiver(const char *src,
 
 	res = _SPI_execute_plan(&plan, params,
 							InvalidSnapshot, InvalidSnapshot,
-							read_only, true, tcount, dest);
+							read_only, true, tcount, dest, NULL);
 
 	_SPI_end_call(true);
 	return res;
@@ -1554,7 +1570,7 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 	 */
 
 	/* Replan if needed, and increment plan refcount for portal */
-	cplan = GetCachedPlan(plansource, paramLI, false, _SPI_current->queryEnv);
+	cplan = GetCachedPlan(plansource, paramLI, NULL, _SPI_current->queryEnv);
 	stmt_list = cplan->stmt_list;
 
 	if (!plan->saved)
@@ -1568,7 +1584,7 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 		oldcontext = MemoryContextSwitchTo(portal->portalContext);
 		stmt_list = copyObject(stmt_list);
 		MemoryContextSwitchTo(oldcontext);
-		ReleaseCachedPlan(cplan, false);
+		ReleaseCachedPlan(cplan, NULL);
 		cplan = NULL;			/* portal shouldn't depend on cplan */
 	}
 
@@ -1984,7 +2000,8 @@ SPI_plan_get_cached_plan(SPIPlanPtr plan)
 	error_context_stack = &spierrcontext;
 
 	/* Get the generic plan for the query */
-	cplan = GetCachedPlan(plansource, NULL, plan->saved,
+	cplan = GetCachedPlan(plansource, NULL,
+						  plan->saved ? CurrentResourceOwner : NULL,
 						  _SPI_current->queryEnv);
 	Assert(cplan == plansource->gplan);
 
@@ -2269,12 +2286,15 @@ _SPI_prepare_oneshot_plan(const char *src, SPIPlanPtr plan)
  *		false means any AFTER triggers are postponed to end of outer query
  * tcount: execution tuple-count limit, or 0 for none
  * caller_dest: DestReceiver to receive output, or NULL for normal SPI output
+ * called_owner: ResourceOwner that will be used as cached plan's owner. When
+ *		NULL is passed and resource owner is necessary because plan is cached
+ *		plan, then CurrentResourceOwner is used.
  */
 static int
 _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 				  Snapshot snapshot, Snapshot crosscheck_snapshot,
 				  bool read_only, bool fire_triggers, uint64 tcount,
-				  DestReceiver *caller_dest)
+				  DestReceiver *caller_dest, ResourceOwner caller_owner)
 {
 	int			my_res = 0;
 	uint64		my_processed = 0;
@@ -2284,6 +2304,7 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 	SPICallbackArg spicallbackarg;
 	ErrorContextCallback spierrcontext;
 	CachedPlan *cplan = NULL;
+	ResourceOwner plan_owner = NULL;
 	ListCell   *lc1;
 
 	/*
@@ -2332,6 +2353,14 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 			pushed_active_snap = true;
 		}
 	}
+
+	/* Saved plan requires resource owner */
+	if (!plan->saved)
+		plan_owner = NULL;
+	else if (caller_owner)
+		plan_owner = caller_owner;
+	else
+		plan_owner = CurrentResourceOwner;
 
 	foreach(lc1, plan->plancache_list)
 	{
@@ -2388,9 +2417,13 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 
 		/*
 		 * Replan if needed, and increment plan refcount.  If it's a saved
-		 * plan, the refcount must be backed by the CurrentResourceOwner.
+		 * plan, the refcount must be backed by the plan_owner.
 		 */
-		cplan = GetCachedPlan(plansource, paramLI, plan->saved, _SPI_current->queryEnv);
+		cplan = GetCachedPlan(plansource,
+							  paramLI,
+							  plan_owner,
+							  _SPI_current->queryEnv);
+
 		stmt_list = cplan->stmt_list;
 
 		/*
@@ -2586,7 +2619,7 @@ _SPI_execute_plan(SPIPlanPtr plan, ParamListInfo paramLI,
 		}
 
 		/* Done with this plan, so release refcount */
-		ReleaseCachedPlan(cplan, plan->saved);
+		ReleaseCachedPlan(cplan, plan_owner);
 		cplan = NULL;
 
 		/*
@@ -2606,7 +2639,7 @@ fail:
 
 	/* We no longer need the cached plan refcount, if any */
 	if (cplan)
-		ReleaseCachedPlan(cplan, plan->saved);
+		ReleaseCachedPlan(cplan, plan_owner);
 
 	/*
 	 * Pop the error context stack

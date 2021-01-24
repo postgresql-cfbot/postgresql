@@ -1004,6 +1004,7 @@ typedef struct PLpgSQL_function
 	PLpgSQL_resolve_option resolve_option;
 
 	bool		print_strict_params;
+	bool		require_local_resowner;
 
 	/* extra checks */
 	int			extra_warnings;
@@ -1080,6 +1081,9 @@ typedef struct PLpgSQL_execstate
 	/* EState and resowner to use for "simple" expression evaluation */
 	EState	   *simple_eval_estate;
 	ResourceOwner simple_eval_resowner;
+
+	/* routine execution resource owner */
+	ResourceOwner local_resowner;
 
 	/* lookup table to use for executing type casts */
 	HTAB	   *cast_hash;
@@ -1265,6 +1269,7 @@ extern Datum plpgsql_exec_function(PLpgSQL_function *func,
 								   FunctionCallInfo fcinfo,
 								   EState *simple_eval_estate,
 								   ResourceOwner simple_eval_resowner,
+								   ResourceOwner local_resowner,
 								   bool atomic);
 extern HeapTuple plpgsql_exec_trigger(PLpgSQL_function *func,
 									  TriggerData *trigdata);

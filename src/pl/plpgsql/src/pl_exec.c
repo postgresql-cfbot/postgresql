@@ -329,8 +329,7 @@ static void plpgsql_estate_setup(PLpgSQL_execstate *estate,
 static void exec_eval_cleanup(PLpgSQL_execstate *estate);
 
 static void exec_prepare_plan(PLpgSQL_execstate *estate,
-							  PLpgSQL_expr *expr, int cursorOptions,
-							  bool keepplan);
+							  PLpgSQL_expr *expr, int cursorOptions);
 static void exec_simple_check_plan(PLpgSQL_execstate *estate, PLpgSQL_expr *expr);
 static void exec_save_simple_expr(PLpgSQL_expr *expr, CachedPlan *cplan);
 static void exec_check_rw_parameter(PLpgSQL_expr *expr);
@@ -446,7 +445,8 @@ static char *format_expr_params(PLpgSQL_execstate *estate,
 								const PLpgSQL_expr *expr);
 static char *format_preparedparamsdata(PLpgSQL_execstate *estate,
 									   ParamListInfo paramLI);
-
+static PLpgSQL_variable *make_callstmt_target(PLpgSQL_execstate *estate,
+											  PLpgSQL_expr *expr);
 
 /* ----------
  * plpgsql_exec_function	Called by the call handler for
@@ -460,12 +460,18 @@ static char *format_preparedparamsdata(PLpgSQL_execstate *estate,
  * shared_simple_eval_resowner.  (When using a private simple_eval_estate,
  * we must also use a private cast hashtable, but that's taken care of
  * within plpgsql_estate_setup.)
+ * local_resowner is used only when function is executed as non atomic
+ * and it is created by and passed by caller. It is used like cached plan
+ * owner for CALL statements instead CurrentResourceOwner, than cannot be
+ * used safely, because it is transaction limited. local_resowner is
+ * assigned with routine execution.
  * ----------
  */
 Datum
 plpgsql_exec_function(PLpgSQL_function *func, FunctionCallInfo fcinfo,
 					  EState *simple_eval_estate,
 					  ResourceOwner simple_eval_resowner,
+					  ResourceOwner local_resowner,
 					  bool atomic)
 {
 	PLpgSQL_execstate estate;
@@ -479,6 +485,7 @@ plpgsql_exec_function(PLpgSQL_function *func, FunctionCallInfo fcinfo,
 	plpgsql_estate_setup(&estate, func, (ReturnSetInfo *) fcinfo->resultinfo,
 						 simple_eval_estate, simple_eval_resowner);
 	estate.atomic = atomic;
+	estate.local_resowner = local_resowner;
 
 	/*
 	 * Setup error traceback support for ereport()
@@ -2150,230 +2157,66 @@ static int
 exec_stmt_call(PLpgSQL_execstate *estate, PLpgSQL_stmt_call *stmt)
 {
 	PLpgSQL_expr *expr = stmt->expr;
-	SPIPlanPtr	orig_plan = expr->plan;
-	bool		local_plan;
-	PLpgSQL_variable *volatile cur_target = stmt->target;
-	volatile LocalTransactionId before_lxid;
+	LocalTransactionId before_lxid;
 	LocalTransactionId after_lxid;
-	volatile bool pushed_active_snap = false;
+	bool pushed_active_snap = false;
 	volatile int rc;
+	ParamListInfo paramLI;
+	SPIExecuteOptions opts;
 
 	/*
-	 * If not in atomic context, we make a local plan that we'll just use for
-	 * this invocation, and will free at the end.  Otherwise, transaction ends
-	 * would cause errors about plancache leaks.
-	 *
-	 * XXX This would be fixable with some plancache/resowner surgery
-	 * elsewhere, but for now we'll just work around this here.
+	 * Make a plan if we don't have one, or if we need a local one.  Note
+	 * that we'll overwrite expr->plan either way; the PG_TRY block will
+	 * ensure we undo that on the way out, if the plan is local.
 	 */
-	local_plan = !estate->atomic;
-
-	/* PG_TRY to ensure we clear the plan link, if needed, on failure */
-	PG_TRY();
+	if (expr->plan == NULL)
 	{
-		SPIPlanPtr	plan = expr->plan;
-		ParamListInfo paramLI;
+		/* Don't let SPI save the plan if it's going to be local */
+		exec_prepare_plan(estate, expr, 0);
 
 		/*
-		 * Make a plan if we don't have one, or if we need a local one.  Note
-		 * that we'll overwrite expr->plan either way; the PG_TRY block will
-		 * ensure we undo that on the way out, if the plan is local.
+		 * A CALL or DO can never be a simple expression.  (If it could
+		 * be, we'd have to worry about saving/restoring the previous
+		 * values of the related expr fields, not just expr->plan.)
 		 */
-		if (plan == NULL || local_plan)
-		{
-			/* Don't let SPI save the plan if it's going to be local */
-			exec_prepare_plan(estate, expr, 0, !local_plan);
-			plan = expr->plan;
+		Assert(!expr->expr_simple_expr);
 
-			/*
-			 * A CALL or DO can never be a simple expression.  (If it could
-			 * be, we'd have to worry about saving/restoring the previous
-			 * values of the related expr fields, not just expr->plan.)
-			 */
-			Assert(!expr->expr_simple_expr);
-
-			/*
-			 * The procedure call could end transactions, which would upset
-			 * the snapshot management in SPI_execute*, so don't let it do it.
-			 * Instead, we set the snapshots ourselves below.
-			 */
-			plan->no_snapshots = true;
-
-			/*
-			 * Force target to be recalculated whenever the plan changes, in
-			 * case the procedure's argument list has changed.
-			 */
-			stmt->target = NULL;
-			cur_target = NULL;
-		}
+		/*
+		 * The procedure call could end transactions, which would upset
+		 * the snapshot management in SPI_execute*, so don't let it do it.
+		 * Instead, we set the snapshots ourselves below.
+		 */
+		expr->plan->no_snapshots = true;
 
 		/*
 		 * We construct a DTYPE_ROW datum representing the plpgsql variables
 		 * associated with the procedure's output arguments.  Then we can use
 		 * exec_move_row() to do the assignments.
-		 *
-		 * If we're using a local plan, also make a local target; otherwise,
-		 * since the above code will force a new plan each time through, we'd
-		 * repeatedly leak the memory for the target.  (Note: we also leak the
-		 * target when a plan change is forced, but that isn't so likely to
-		 * cause excessive memory leaks.)
 		 */
-		if (stmt->is_call && cur_target == NULL)
-		{
-			Node	   *node;
-			FuncExpr   *funcexpr;
-			HeapTuple	func_tuple;
-			List	   *funcargs;
-			Oid		   *argtypes;
-			char	  **argnames;
-			char	   *argmodes;
-			MemoryContext oldcontext;
-			PLpgSQL_row *row;
-			int			nfields;
-			int			i;
-			ListCell   *lc;
-
-			/* Use stmt_mcontext for any cruft accumulated here */
-			oldcontext = MemoryContextSwitchTo(get_stmt_mcontext(estate));
-
-			/*
-			 * Get the parsed CallStmt, and look up the called procedure
-			 */
-			node = linitial_node(Query,
-								 ((CachedPlanSource *) linitial(plan->plancache_list))->query_list)->utilityStmt;
-			if (node == NULL || !IsA(node, CallStmt))
-				elog(ERROR, "query for CALL statement is not a CallStmt");
-
-			funcexpr = ((CallStmt *) node)->funcexpr;
-
-			func_tuple = SearchSysCache1(PROCOID,
-										 ObjectIdGetDatum(funcexpr->funcid));
-			if (!HeapTupleIsValid(func_tuple))
-				elog(ERROR, "cache lookup failed for function %u",
-					 funcexpr->funcid);
-
-			/*
-			 * Extract function arguments, and expand any named-arg notation
-			 */
-			funcargs = expand_function_arguments(funcexpr->args,
-												 funcexpr->funcresulttype,
-												 func_tuple);
-
-			/*
-			 * Get the argument names and modes, too
-			 */
-			get_func_arg_info(func_tuple, &argtypes, &argnames, &argmodes);
-
-			ReleaseSysCache(func_tuple);
-
-			/*
-			 * Begin constructing row Datum; keep it in fn_cxt if it's to be
-			 * long-lived.
-			 */
-			if (!local_plan)
-				MemoryContextSwitchTo(estate->func->fn_cxt);
-
-			row = (PLpgSQL_row *) palloc0(sizeof(PLpgSQL_row));
-			row->dtype = PLPGSQL_DTYPE_ROW;
-			row->refname = "(unnamed row)";
-			row->lineno = -1;
-			row->varnos = (int *) palloc(sizeof(int) * list_length(funcargs));
-
-			if (!local_plan)
-				MemoryContextSwitchTo(get_stmt_mcontext(estate));
-
-			/*
-			 * Examine procedure's argument list.  Each output arg position
-			 * should be an unadorned plpgsql variable (Datum), which we can
-			 * insert into the row Datum.
-			 */
-			nfields = 0;
-			i = 0;
-			foreach(lc, funcargs)
-			{
-				Node	   *n = lfirst(lc);
-
-				if (argmodes &&
-					(argmodes[i] == PROARGMODE_INOUT ||
-					 argmodes[i] == PROARGMODE_OUT))
-				{
-					if (IsA(n, Param))
-					{
-						Param	   *param = (Param *) n;
-
-						/* paramid is offset by 1 (see make_datum_param()) */
-						row->varnos[nfields++] = param->paramid - 1;
-					}
-					else
-					{
-						/* report error using parameter name, if available */
-						if (argnames && argnames[i] && argnames[i][0])
-							ereport(ERROR,
-									(errcode(ERRCODE_SYNTAX_ERROR),
-									 errmsg("procedure parameter \"%s\" is an output parameter but corresponding argument is not writable",
-											argnames[i])));
-						else
-							ereport(ERROR,
-									(errcode(ERRCODE_SYNTAX_ERROR),
-									 errmsg("procedure parameter %d is an output parameter but corresponding argument is not writable",
-											i + 1)));
-					}
-				}
-				i++;
-			}
-
-			row->nfields = nfields;
-
-			cur_target = (PLpgSQL_variable *) row;
-
-			/* We can save and re-use the target datum, if it's not local */
-			if (!local_plan)
-				stmt->target = cur_target;
-
-			MemoryContextSwitchTo(oldcontext);
-		}
-
-		paramLI = setup_param_list(estate, expr);
-
-		before_lxid = MyProc->lxid;
-
-		/*
-		 * Set snapshot only for non-read-only procedures, similar to SPI
-		 * behavior.
-		 */
-		if (!estate->readonly_func)
-		{
-			PushActiveSnapshot(GetTransactionSnapshot());
-			pushed_active_snap = true;
-		}
-
-		rc = SPI_execute_plan_with_paramlist(expr->plan, paramLI,
-											 estate->readonly_func, 0);
+		if (stmt->is_call)
+			stmt->target = make_callstmt_target(estate, expr);
 	}
-	PG_CATCH();
-	{
-		/*
-		 * If we are using a local plan, restore the old plan link.
-		 */
-		if (local_plan)
-			expr->plan = orig_plan;
-		PG_RE_THROW();
-	}
-	PG_END_TRY();
+
+	paramLI = setup_param_list(estate, expr);
+
+	before_lxid = MyProc->lxid;
 
 	/*
-	 * If we are using a local plan, restore the old plan link; then free the
-	 * local plan to avoid memory leaks.  (Note that the error exit path above
-	 * just clears the link without risking calling SPI_freeplan; we expect
-	 * that xact cleanup will take care of the mess in that case.)
+	 * Set snapshot only for non-read-only procedures, similar to SPI
+	 * behavior.
 	 */
-	if (local_plan)
+	if (!estate->readonly_func)
 	{
-		SPIPlanPtr	plan = expr->plan;
-
-		expr->plan = orig_plan;
-		SPI_freeplan(plan);
+		PushActiveSnapshot(GetTransactionSnapshot());
+		pushed_active_snap = true;
 	}
+
+	opts.dest = NULL;
+	opts.owner = estate->local_resowner;
+
+	rc = SPI_execute_plan_extended(expr->plan, paramLI,
+									   estate->readonly_func, 0,
+									   &opts);
 
 	if (rc < 0)
 		elog(ERROR, "SPI_execute_plan_with_paramlist failed executing query \"%s\": %s",
@@ -2410,10 +2253,10 @@ exec_stmt_call(PLpgSQL_execstate *estate, PLpgSQL_stmt_call *stmt)
 	{
 		SPITupleTable *tuptab = SPI_tuptable;
 
-		if (!cur_target)
+		if (!stmt->is_call)
 			elog(ERROR, "DO statement returned a row");
 
-		exec_move_row(estate, cur_target, tuptab->vals[0], tuptab->tupdesc);
+		exec_move_row(estate, stmt->target, tuptab->vals[0], tuptab->tupdesc);
 	}
 	else if (SPI_processed > 1)
 		elog(ERROR, "procedure call returned more than one row");
@@ -2422,6 +2265,121 @@ exec_stmt_call(PLpgSQL_execstate *estate, PLpgSQL_stmt_call *stmt)
 	SPI_freetuptable(SPI_tuptable);
 
 	return PLPGSQL_RC_OK;
+}
+
+/*
+ * We construct a DTYPE_ROW datum representing the plpgsql variables
+ * associated with the procedure's output arguments.  Then we can use
+ * exec_move_row() to do the assignments.
+ */
+static PLpgSQL_variable *
+make_callstmt_target(PLpgSQL_execstate *estate, PLpgSQL_expr *expr)
+{
+	Node	   *node;
+	FuncExpr   *funcexpr;
+	HeapTuple	func_tuple;
+	List	   *funcargs;
+	Oid		   *argtypes;
+	char	  **argnames;
+	char	   *argmodes;
+	MemoryContext oldcontext;
+	PLpgSQL_row *row;
+	int			nfields;
+	int			i;
+	ListCell   *lc;
+
+	/* Use eval_mcontext for any cruft accumulated here */
+	oldcontext = MemoryContextSwitchTo(get_eval_mcontext(estate));
+
+	/*
+	 * Get the parsed CallStmt, and look up the called procedure
+	 */
+	node = linitial_node(Query,
+						 ((CachedPlanSource *) linitial(expr->plan->plancache_list))->query_list)->utilityStmt;
+	if (node == NULL || !IsA(node, CallStmt))
+		elog(ERROR, "query for CALL statement is not a CallStmt");
+
+	funcexpr = ((CallStmt *) node)->funcexpr;
+
+	func_tuple = SearchSysCache1(PROCOID,
+								 ObjectIdGetDatum(funcexpr->funcid));
+	if (!HeapTupleIsValid(func_tuple))
+		elog(ERROR, "cache lookup failed for function %u",
+			 funcexpr->funcid);
+
+	/*
+	 * Extract function arguments, and expand any named-arg notation
+	 */
+	funcargs = expand_function_arguments(funcexpr->args,
+										 funcexpr->funcresulttype,
+										 func_tuple);
+
+	/*
+	 * Get the argument names and modes, too
+	 */
+	get_func_arg_info(func_tuple, &argtypes, &argnames, &argmodes);
+
+	ReleaseSysCache(func_tuple);
+
+	/*
+	 * Begin constructing row Datum; keep it in fn_cxt if it's to be
+	 * long-lived.
+	 */
+	MemoryContextSwitchTo(estate->func->fn_cxt);
+
+	row = (PLpgSQL_row *) palloc0(sizeof(PLpgSQL_row));
+	row->dtype = PLPGSQL_DTYPE_ROW;
+	row->refname = "(unnamed row)";
+	row->lineno = -1;
+	row->varnos = (int *) palloc(sizeof(int) * list_length(funcargs));
+
+	MemoryContextSwitchTo(get_eval_mcontext(estate));
+
+	/*
+	 * Examine procedure's argument list.  Each output arg position
+	 * should be an unadorned plpgsql variable (Datum), which we can
+	 * insert into the row Datum.
+	 */
+	nfields = 0;
+	i = 0;
+	foreach(lc, funcargs)
+	{
+		Node	   *n = lfirst(lc);
+
+		if (argmodes &&
+			(argmodes[i] == PROARGMODE_INOUT ||
+			 argmodes[i] == PROARGMODE_OUT))
+		{
+			if (IsA(n, Param))
+			{
+				Param	   *param = (Param *) n;
+
+				/* paramid is offset by 1 (see make_datum_param()) */
+				row->varnos[nfields++] = param->paramid - 1;
+			}
+			else
+			{
+				/* report error using parameter name, if available */
+				if (argnames && argnames[i] && argnames[i][0])
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("procedure parameter \"%s\" is an output parameter but corresponding argument is not writable",
+									argnames[i])));
+				else
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("procedure parameter %d is an output parameter but corresponding argument is not writable",
+									i + 1)));
+			}
+		}
+		i++;
+	}
+
+	row->nfields = nfields;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	return (PLpgSQL_variable *) row;
 }
 
 /* ----------
@@ -2960,7 +2918,7 @@ exec_stmt_forc(PLpgSQL_execstate *estate, PLpgSQL_stmt_forc *stmt)
 	Assert(query);
 
 	if (query->plan == NULL)
-		exec_prepare_plan(estate, query, curvar->cursor_options, true);
+		exec_prepare_plan(estate, query, curvar->cursor_options);
 
 	/*
 	 * Set up ParamListInfo for this query
@@ -3612,7 +3570,7 @@ exec_stmt_return_query(PLpgSQL_execstate *estate,
 		 * On the first call for this expression generate the plan.
 		 */
 		if (expr->plan == NULL)
-			exec_prepare_plan(estate, expr, CURSOR_OPT_PARALLEL_OK, true);
+			exec_prepare_plan(estate, expr, CURSOR_OPT_PARALLEL_OK);
 
 		/*
 		 * Set up ParamListInfo to pass to executor
@@ -4091,6 +4049,8 @@ plpgsql_estate_setup(PLpgSQL_execstate *estate,
 	else
 		estate->simple_eval_resowner = shared_simple_eval_resowner;
 
+	estate->local_resowner = NULL;
+
 	/*
 	 * We start with no stmt_mcontext; one will be created only if needed.
 	 * That context will be a direct child of the function's main execution
@@ -4159,8 +4119,7 @@ exec_eval_cleanup(PLpgSQL_execstate *estate)
  */
 static void
 exec_prepare_plan(PLpgSQL_execstate *estate,
-				  PLpgSQL_expr *expr, int cursorOptions,
-				  bool keepplan)
+				  PLpgSQL_expr *expr, int cursorOptions)
 {
 	SPIPlanPtr	plan;
 	SPIPrepareOptions options;
@@ -4183,8 +4142,8 @@ exec_prepare_plan(PLpgSQL_execstate *estate,
 	if (plan == NULL)
 		elog(ERROR, "SPI_prepare_extended failed for \"%s\": %s",
 			 expr->query, SPI_result_code_string(SPI_result));
-	if (keepplan)
-		SPI_keepplan(plan);
+
+	SPI_keepplan(plan);
 	expr->plan = plan;
 
 	/* Check to see if it's a simple expression */
@@ -4222,7 +4181,7 @@ exec_stmt_execsql(PLpgSQL_execstate *estate,
 	{
 		ListCell   *l;
 
-		exec_prepare_plan(estate, expr, CURSOR_OPT_PARALLEL_OK, true);
+		exec_prepare_plan(estate, expr, CURSOR_OPT_PARALLEL_OK);
 		stmt->mod_stmt = false;
 		foreach(l, SPI_plan_get_plan_sources(expr->plan))
 		{
@@ -4681,7 +4640,7 @@ exec_stmt_open(PLpgSQL_execstate *estate, PLpgSQL_stmt_open *stmt)
 		 */
 		query = stmt->query;
 		if (query->plan == NULL)
-			exec_prepare_plan(estate, query, stmt->cursor_options, true);
+			exec_prepare_plan(estate, query, stmt->cursor_options);
 	}
 	else if (stmt->dynquery != NULL)
 	{
@@ -4752,7 +4711,7 @@ exec_stmt_open(PLpgSQL_execstate *estate, PLpgSQL_stmt_open *stmt)
 
 		query = curvar->cursor_explicit_expr;
 		if (query->plan == NULL)
-			exec_prepare_plan(estate, query, curvar->cursor_options, true);
+			exec_prepare_plan(estate, query, curvar->cursor_options);
 	}
 
 	/*
@@ -4989,7 +4948,7 @@ exec_stmt_set(PLpgSQL_execstate *estate, PLpgSQL_stmt_set *stmt)
 
 	if (expr->plan == NULL)
 	{
-		exec_prepare_plan(estate, expr, 0, true);
+		exec_prepare_plan(estate, expr, 0);
 		expr->plan->no_snapshots = true;
 	}
 
@@ -5032,14 +4991,13 @@ exec_assign_expr(PLpgSQL_execstate *estate, PLpgSQL_datum *target,
 		else
 			expr->target_param = -1;	/* should be that already */
 
-		exec_prepare_plan(estate, expr, 0, true);
+		exec_prepare_plan(estate, expr, 0);
 	}
 
 	value = exec_eval_expr(estate, expr, &isnull, &valtype, &valtypmod);
 	exec_assign_value(estate, target, value, isnull, valtype, valtypmod);
 	exec_eval_cleanup(estate);
 }
-
 
 /* ----------
  * exec_assign_c_string		Put a C string into a text variable.
@@ -5697,7 +5655,7 @@ exec_eval_expr(PLpgSQL_execstate *estate,
 	 * If first time through, create a plan for this expression.
 	 */
 	if (expr->plan == NULL)
-		exec_prepare_plan(estate, expr, CURSOR_OPT_PARALLEL_OK, true);
+		exec_prepare_plan(estate, expr, CURSOR_OPT_PARALLEL_OK);
 
 	/*
 	 * If this is a simple expression, bypass SPI and use the executor
@@ -5783,7 +5741,7 @@ exec_run_select(PLpgSQL_execstate *estate,
 	 */
 	if (expr->plan == NULL)
 		exec_prepare_plan(estate, expr,
-						  portalP == NULL ? CURSOR_OPT_PARALLEL_OK : 0, true);
+						  portalP == NULL ? CURSOR_OPT_PARALLEL_OK : 0);
 
 	/*
 	 * Set up ParamListInfo to pass to executor
@@ -6056,11 +6014,7 @@ exec_eval_simple_expr(PLpgSQL_execstate *estate,
 		 */
 		if (expr->expr_simple_plan_lxid == curlxid)
 		{
-			ResourceOwner saveResourceOwner = CurrentResourceOwner;
-
-			CurrentResourceOwner = estate->simple_eval_resowner;
-			ReleaseCachedPlan(expr->expr_simple_plan, true);
-			CurrentResourceOwner = saveResourceOwner;
+			ReleaseCachedPlan(expr->expr_simple_plan, estate->simple_eval_resowner);
 			expr->expr_simple_plan = NULL;
 			expr->expr_simple_plan_lxid = InvalidLocalTransactionId;
 		}
@@ -6094,7 +6048,7 @@ exec_eval_simple_expr(PLpgSQL_execstate *estate,
 		else
 		{
 			/* Release SPI_plan_get_cached_plan's refcount */
-			ReleaseCachedPlan(cplan, true);
+			ReleaseCachedPlan(cplan, CurrentResourceOwner);
 			/* Mark expression as non-simple, and fail */
 			expr->expr_simple_expr = NULL;
 			expr->expr_rw_param = NULL;
@@ -6105,7 +6059,7 @@ exec_eval_simple_expr(PLpgSQL_execstate *estate,
 		 * SPI_plan_get_cached_plan acquired a plan refcount stored in the
 		 * active resowner.  We don't need that anymore, so release it.
 		 */
-		ReleaseCachedPlan(cplan, true);
+		ReleaseCachedPlan(cplan, CurrentResourceOwner);
 
 		/* Extract desired scalar expression from cached plan */
 		exec_save_simple_expr(expr, cplan);
@@ -8023,7 +7977,7 @@ exec_simple_check_plan(PLpgSQL_execstate *estate, PLpgSQL_expr *expr)
 	 * Release the plan refcount obtained by SPI_plan_get_cached_plan.  (This
 	 * refcount is held by the wrong resowner, so we can't just repurpose it.)
 	 */
-	ReleaseCachedPlan(cplan, true);
+	ReleaseCachedPlan(cplan, CurrentResourceOwner);
 }
 
 /*

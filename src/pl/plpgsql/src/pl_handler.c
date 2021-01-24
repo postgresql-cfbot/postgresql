@@ -225,6 +225,7 @@ plpgsql_call_handler(PG_FUNCTION_ARGS)
 	PLpgSQL_function *func;
 	PLpgSQL_execstate *save_cur_estate;
 	Datum		retval;
+	ResourceOwner local_resowner = NULL;
 	int			rc;
 
 	nonatomic = fcinfo->context &&
@@ -246,6 +247,11 @@ plpgsql_call_handler(PG_FUNCTION_ARGS)
 	/* Mark the function as busy, so it can't be deleted from under us */
 	func->use_count++;
 
+	/* Create local resource owner only for nonatomic mode */
+	if (nonatomic && func->require_local_resowner)
+		local_resowner = ResourceOwnerCreate(NULL,
+											 "PL/pgSQL local resource owner");
+
 	PG_TRY();
 	{
 		/*
@@ -264,6 +270,7 @@ plpgsql_call_handler(PG_FUNCTION_ARGS)
 		else
 			retval = plpgsql_exec_function(func, fcinfo,
 										   NULL, NULL,
+										   local_resowner,
 										   !nonatomic);
 	}
 	PG_FINALLY();
@@ -271,6 +278,12 @@ plpgsql_call_handler(PG_FUNCTION_ARGS)
 		/* Decrement use-count, restore cur_estate */
 		func->use_count--;
 		func->cur_estate = save_cur_estate;
+
+		if (local_resowner)
+		{
+			ResourceOwnerReleaseAllPlanCacheRefs(local_resowner);
+			ResourceOwnerDelete(local_resowner);
+		}
 	}
 	PG_END_TRY();
 
@@ -300,7 +313,9 @@ plpgsql_inline_handler(PG_FUNCTION_ARGS)
 	FmgrInfo	flinfo;
 	EState	   *simple_eval_estate;
 	ResourceOwner simple_eval_resowner;
+	ResourceOwner local_resowner = NULL;
 	Datum		retval;
+	bool		nonatomic;
 	int			rc;
 
 	/*
@@ -338,13 +353,20 @@ plpgsql_inline_handler(PG_FUNCTION_ARGS)
 	simple_eval_resowner =
 		ResourceOwnerCreate(NULL, "PL/pgSQL DO block simple expressions");
 
+	nonatomic = !codeblock->atomic;
+
+	if (nonatomic)
+		local_resowner = ResourceOwnerCreate(NULL,
+											 "PL/pgSQL local resource owner");
+
 	/* And run the function */
 	PG_TRY();
 	{
 		retval = plpgsql_exec_function(func, fake_fcinfo,
 									   simple_eval_estate,
 									   simple_eval_resowner,
-									   codeblock->atomic);
+									   local_resowner,
+									   !nonatomic);
 	}
 	PG_CATCH();
 	{
@@ -371,6 +393,13 @@ plpgsql_inline_handler(PG_FUNCTION_ARGS)
 		ResourceOwnerReleaseAllPlanCacheRefs(simple_eval_resowner);
 		ResourceOwnerDelete(simple_eval_resowner);
 
+		/* Clean local resource owner */
+		if (nonatomic)
+		{
+			ResourceOwnerReleaseAllPlanCacheRefs(local_resowner);
+			ResourceOwnerDelete(local_resowner);
+		}
+
 		/* Function should now have no remaining use-counts ... */
 		func->use_count--;
 		Assert(func->use_count == 0);
@@ -387,6 +416,13 @@ plpgsql_inline_handler(PG_FUNCTION_ARGS)
 	FreeExecutorState(simple_eval_estate);
 	ResourceOwnerReleaseAllPlanCacheRefs(simple_eval_resowner);
 	ResourceOwnerDelete(simple_eval_resowner);
+
+	/* Clean local resource owner */
+	if (!codeblock->atomic)
+	{
+		ResourceOwnerReleaseAllPlanCacheRefs(local_resowner);
+		ResourceOwnerDelete(local_resowner);
+	}
 
 	/* Function should now have no remaining use-counts ... */
 	func->use_count--;

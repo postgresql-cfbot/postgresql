@@ -1722,6 +1722,138 @@ int SPI_execute_plan(SPIPlanPtr <parameter>plan</parameter>, Datum * <parameter>
 
 <!-- *********************************************** -->
 
+<refentry id="spi-spi-execute-plan-extended">
+ <indexterm><primary>SPI_execute_plan_extended</primary></indexterm>
+
+ <refmeta>
+  <refentrytitle>SPI_execute_plan_extended</refentrytitle>
+  <manvolnum>3</manvolnum>
+ </refmeta>
+
+ <refnamediv>
+  <refname>SPI_execute_plan_extended</refname>
+  <refpurpose>execute a statement prepared by <function>SPI_prepare</function></refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+int SPI_execute_plan_extended(SPIPlanPtr <parameter>plan</parameter>,
+                              ParamListInfo <parameter>params</parameter>,
+                              bool <parameter>read_only</parameter>,
+                              long <parameter>count</parameter>,
+                              const SPIExecuteOptions * <parameter>options</parameter>)
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <function>SPI_execute_plan_extended</function> executes a statement
+   prepared by <function>SPI_prepare</function>.
+   This function is equivalent to <function>SPI_execute_plan_with_paramlist</function>,
+   but allows to pass additional options.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Arguments</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>SPIPlanPtr <parameter>plan</parameter></literal></term>
+    <listitem>
+     <para>
+      prepared statement (returned by <function>SPI_prepare</function>)
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ParamListInfo <parameter>params</parameter></literal></term>
+    <listitem>
+     <para>
+      data structure containing parameter types and values; NULL if none
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>bool <parameter>read_only</parameter></literal></term>
+    <listitem>
+     <para><literal>true</literal> for read-only execution</para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>long <parameter>count</parameter></literal></term>
+    <listitem>
+     <para>
+      maximum number of rows to return,
+      or <literal>0</literal> for no limit
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>const SPIPExecuteOptions * <parameter>options</parameter></literal></term>
+    <listitem>
+     <para>
+      struct containing optional arguments
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+
+  <para>
+   Callers should always zero out the entire <parameter>options</parameter>
+   struct, then fill whichever fields they want to set.  This ensures forward
+   compatibility of code, since any fields that are added to the struct in
+   future will be defined to behave backwards-compatibly if they are zero.
+   The currently available <parameter>options</parameter> fields are:
+  </para>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>DestReceiver * <parameter>dest</parameter></literal></term>
+    <listitem>
+     <para>
+      Query target
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ResourceOwner <parameter>owner</parameter></literal></term>
+    <listitem>
+     <para>
+      The resource owner that will be used for plan execution. Now it is used
+      as cached query plan owner only. This resource owner should to have longer
+      life cycle than executed command. Current resource owner is used when
+      this option is NULL.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Return Value</title>
+
+  <para>
+   The return value is the same as for <function>SPI_execute_plan</function>.
+  </para>
+
+  <para>
+   <varname>SPI_processed</varname> and
+   <varname>SPI_tuptable</varname> are set as in
+   <function>SPI_execute_plan</function> if successful.
+  </para>
+ </refsect1>
+</refentry>
+
+<!-- *********************************************** -->
+
 <refentry id="spi-spi-execute-plan-with-paramlist">
  <indexterm><primary>SPI_execute_plan_with_paramlist</primary></indexterm>
 

@@ -78,13 +78,14 @@
 #include "storage/smgr.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/catcache.h"
 #include "utils/datum.h"
 #include "utils/fmgroids.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/relmapper.h"
-#include "utils/resowner_private.h"
+#include "utils/resowner.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
@@ -2078,6 +2079,24 @@ RelationIdGetRelation(Oid relationId)
  * ----------------------------------------------------------------
  */
 
+/* ResourceOwner callbacks to track relcache references */
+static void ResOwnerReleaseRelation(Datum res);
+static void ResOwnerPrintRelCacheLeakWarning(Datum res);
+
+static ResourceOwnerFuncs relref_resowner_funcs =
+{
+	.name = "relcache reference",
+	.phase = RESOURCE_RELEASE_BEFORE_LOCKS,
+	.ReleaseResource = ResOwnerReleaseRelation,
+	.PrintLeakWarning = ResOwnerPrintRelCacheLeakWarning
+};
+
+/* Convenience wrappers over ResourceOwnerRemember/Forget */
+#define ResourceOwnerRememberRelationRef(owner, rel) \
+	ResourceOwnerRemember(owner, PointerGetDatum(rel), &relref_resowner_funcs)
+#define ResourceOwnerForgetRelationRef(owner, rel) \
+	ResourceOwnerForget(owner, PointerGetDatum(rel), &relref_resowner_funcs)
+
 /*
  * RelationIncrementReferenceCount
  *		Increments relation reference count.
@@ -2089,7 +2108,7 @@ RelationIdGetRelation(Oid relationId)
 void
 RelationIncrementReferenceCount(Relation rel)
 {
-	ResourceOwnerEnlargeRelationRefs(CurrentResourceOwner);
+	ResourceOwnerEnlarge(CurrentResourceOwner);
 	rel->rd_refcnt += 1;
 	if (!IsBootstrapProcessingMode())
 		ResourceOwnerRememberRelationRef(CurrentResourceOwner, rel);
@@ -6416,4 +6435,22 @@ unlink_initfile(const char *initfilename, int elevel)
 					 errmsg("could not remove cache file \"%s\": %m",
 							initfilename)));
 	}
+}
+
+/*
+ * ResourceOwner callbacks
+ */
+static void
+ResOwnerPrintRelCacheLeakWarning(Datum res)
+{
+	Relation rel = (Relation) res;
+
+	elog(WARNING, "relcache reference leak: relation \"%s\" not closed",
+		 RelationGetRelationName(rel));
+}
+
+static void
+ResOwnerReleaseRelation(Datum res)
+{
+	RelationClose((Relation) res);
 }

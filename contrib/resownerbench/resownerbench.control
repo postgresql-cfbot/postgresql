@@ -1,0 +1,6 @@
+# resownerbench
+
+comment = 'benchmark for ResourceOwners'
+default_version = '1.0'
+module_pathname = '$libdir/resownerbench'
+relocatable = true

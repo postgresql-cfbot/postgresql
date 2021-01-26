@@ -2188,6 +2188,43 @@ ALTER TABLE logged1 SET UNLOGGED; -- silently do nothing
 DROP TABLE logged3;
 DROP TABLE logged2;
 DROP TABLE logged1;
+-- set partitioned table logged/unlogged
+CREATE TABLE part_logged_parent (key integer PRIMARY KEY, val text)
+	PARTITION BY RANGE (key);
+CREATE TABLE part_logged_child1 PARTITION OF part_logged_parent
+	FOR VALUES FROM (1) TO (10);
+CREATE TABLE part_logged_child2 PARTITION OF part_logged_parent
+	FOR VALUES FROM (11) TO (20);
+ALTER TABLE part_logged_parent SET UNLOGGED; -- children become unlogged
+CREATE TABLE part_logged_child3 (LIKE part_logged_parent);
+ALTER TABLE part_logged_parent ATTACH PARTITION part_logged_child3
+	FOR VALUES FROM (21) TO (30); -- child3 remains logged
+-- check relpersistence
+SELECT relname, relkind, relpersistence FROM pg_class WHERE relname ~ '^part_logged'
+UNION ALL
+SELECT 'toast table for ' || r.relname, t.relkind, t.relpersistence FROM pg_class r JOIN pg_class t ON t.oid = r.reltoastrelid WHERE r.relname ~ '^part_logged'
+UNION ALL
+SELECT 'toast index for ' || r.relname, ri.relkind, ri.relpersistence FROM pg_class r join pg_class t ON t.oid = r.reltoastrelid JOIN pg_index i ON i.indrelid = t.oid JOIN pg_class ri ON ri.oid = i.indexrelid WHERE r.relname ~ '^part_logged'
+ORDER BY relname;
+ALTER TABLE part_logged_parent SET LOGGED; -- children become logged
+-- check relpersistence
+SELECT relname, relkind, relpersistence FROM pg_class WHERE relname ~ '^part_logged'
+UNION ALL
+SELECT 'toast table for ' || r.relname, t.relkind, t.relpersistence FROM pg_class r JOIN pg_class t ON t.oid = r.reltoastrelid WHERE r.relname ~ '^part_logged'
+UNION ALL
+SELECT 'toast index for ' || r.relname, ri.relkind, ri.relpersistence FROM pg_class r join pg_class t ON t.oid = r.reltoastrelid JOIN pg_index i ON i.indrelid = t.oid JOIN pg_class ri ON ri.oid = i.indexrelid WHERE r.relname ~ '^part_logged'
+ORDER BY relname;
+CREATE TABLE logged_fk_child (key integer PRIMARY KEY, fk integer REFERENCES part_logged_child2);
+ALTER TABLE part_logged_parent SET UNLOGGED; -- fails because logged table references a child
+-- check relpersistence
+SELECT relname, relkind, relpersistence FROM pg_class WHERE relname ~ '^part_logged'
+UNION ALL
+SELECT 'toast table for ' || r.relname, t.relkind, t.relpersistence FROM pg_class r JOIN pg_class t ON t.oid = r.reltoastrelid WHERE r.relname ~ '^part_logged'
+UNION ALL
+SELECT 'toast index for ' || r.relname, ri.relkind, ri.relpersistence FROM pg_class r join pg_class t ON t.oid = r.reltoastrelid JOIN pg_index i ON i.indrelid = t.oid JOIN pg_class ri ON ri.oid = i.indexrelid WHERE r.relname ~ '^part_logged'
+ORDER BY relname;
+DROP TABLE logged_fk_child;
+DROP TABLE part_logged_parent;
 
 -- test ADD COLUMN IF NOT EXISTS
 CREATE TABLE test_add_column(c1 integer);

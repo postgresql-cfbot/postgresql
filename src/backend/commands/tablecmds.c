@@ -4258,6 +4258,8 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 				tab->rewrite |= AT_REWRITE_ALTER_PERSISTENCE;
 				tab->newrelpersistence = RELPERSISTENCE_PERMANENT;
 			}
+			if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+				ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode, context);
 			pass = AT_PASS_MISC;
 			break;
 		case AT_SetUnLogged:	/* SET UNLOGGED */
@@ -4273,6 +4275,8 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 				tab->rewrite |= AT_REWRITE_ALTER_PERSISTENCE;
 				tab->newrelpersistence = RELPERSISTENCE_UNLOGGED;
 			}
+			if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+				ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode, context);
 			pass = AT_PASS_MISC;
 			break;
 		case AT_DropOids:		/* SET WITHOUT OIDS */
@@ -5730,6 +5734,14 @@ ATSimpleRecursion(List **wqueue, Relation rel,
 				continue;
 			/* find_all_inheritors already got lock */
 			childrel = relation_open(childrelid, NoLock);
+			/* Skip foreign partitions when SET LOGGED/UNLOGGED */
+			if ((cmd->subtype == AT_SetLogged ||
+				 cmd->subtype == AT_SetUnLogged) &&
+				childrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+			{
+				relation_close(childrel, NoLock);
+				continue;
+			}
 			CheckTableNotInUse(childrel, "ALTER TABLE");
 			ATPrepCmd(wqueue, childrel, cmd, false, true, lockmode, context);
 			relation_close(childrel, NoLock);

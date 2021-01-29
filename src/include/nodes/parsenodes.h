@@ -357,6 +357,7 @@ typedef struct FuncCall
 	bool		agg_distinct;	/* arguments were labeled DISTINCT */
 	bool		func_variadic;	/* last argument was labeled VARIADIC */
 	CoercionForm funcformat;	/* how to display this node */
+	NullTreatment	win_null_treatment;	/* IGNORE NULLS or RESPECT NULLS? */
 	int			location;		/* token location, or -1 if unknown */
 } FuncCall;
 

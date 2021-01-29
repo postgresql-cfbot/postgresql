@@ -28,6 +28,7 @@ CREATE [ OR REPLACE ] FUNCTION
   { LANGUAGE <replaceable class="parameter">lang_name</replaceable>
     | TRANSFORM { FOR TYPE <replaceable class="parameter">type_name</replaceable> } [, ... ]
     | WINDOW
+    | TREAT NULLS
     | IMMUTABLE | STABLE | VOLATILE | [ NOT ] LEAKPROOF
     | CALLED ON NULL INPUT | RETURNS NULL ON NULL INPUT | STRICT
     | [ EXTERNAL ] SECURITY INVOKER | [ EXTERNAL ] SECURITY DEFINER
@@ -289,6 +290,17 @@ CREATE [ OR REPLACE ] FUNCTION
        This is currently only useful for functions written in C.
        The <literal>WINDOW</literal> attribute cannot be changed when
        replacing an existing function definition.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>TREAT NULLS</literal></term>
+
+     <listitem>
+      <para><literal>TREAT NULLS</literal> indicates that the function is able
+      to handle the <literal>RESPECT NULLS</literal> and <literal>IGNORE
+      NULLS</literal> options.  Only window functions may specify this.
       </para>
      </listitem>
     </varlistentry>

@@ -584,6 +584,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	window_clause window_definition_list opt_partition_clause
 %type <windef>	window_definition over_clause window_specification
 				opt_frame_clause frame_extent frame_bound
+%type <ival>	null_treatment
 %type <ival>	opt_window_exclusion_clause
 %type <str>		opt_existing_window_name
 %type <boolean> opt_if_not_exists
@@ -652,7 +653,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	HANDLER HAVING HEADER_P HOLD HOUR_P
 
-	IDENTITY_P IF_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P INCLUDE
+	IDENTITY_P IF_P IGNORE_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P INCLUDE
 	INCLUDING INCREMENT INDEX INDEXES INHERIT INHERITS INITIALLY INLINE_P
 	INNER_P INOUT INPUT_P INSENSITIVE INSERT INSTEAD INT_P INTEGER
 	INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
@@ -684,7 +685,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	RANGE READ REAL REASSIGN RECHECK RECURSIVE REF REFERENCES REFERENCING
 	REFRESH REINDEX RELATIVE_P RELEASE RENAME REPEATABLE REPLACE REPLICA
-	RESET RESTART RESTRICT RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
+	RESET RESPECT RESTART RESTRICT RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROUTINE ROUTINES ROW ROWS RULE
 
 	SAVEPOINT SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SELECT SEQUENCE SEQUENCES
@@ -7849,6 +7850,10 @@ createfunc_opt_item:
 				{
 					$$ = makeDefElem("window", (Node *)makeInteger(true), @1);
 				}
+			| TREAT NULLS_P
+				{
+					$$ = makeDefElem("null_treatment", (Node *)makeInteger(true), @1);
+				}
 			| common_func_opt_item
 				{
 					$$ = $1;
@@ -13736,6 +13741,14 @@ func_expr: func_application within_group_clause filter_clause over_clause
 					}
 					n->agg_filter = $3;
 					n->over = $4;
+					n->win_null_treatment = NULL_TREATMENT_NONE;
+					$$ = (Node *) n;
+				}
+			| func_application null_treatment over_clause
+				{
+					FuncCall *n = (FuncCall *) $1;
+					n->over = $3;
+					n->win_null_treatment = $2;
 					$$ = (Node *) n;
 				}
 			| func_expr_common_subexpr
@@ -14154,6 +14167,11 @@ window_definition:
 					n->name = $1;
 					$$ = n;
 				}
+		;
+
+null_treatment:
+			IGNORE_P NULLS_P	{ $$ = NULL_TREATMENT_IGNORE; }
+			| RESPECT NULLS_P	{ $$ = NULL_TREATMENT_RESPECT; }
 		;
 
 over_clause: OVER window_specification
@@ -15304,6 +15322,7 @@ unreserved_keyword:
 			| HOUR_P
 			| IDENTITY_P
 			| IF_P
+			| IGNORE_P
 			| IMMEDIATE
 			| IMMUTABLE
 			| IMPLICIT_P
@@ -15410,6 +15429,7 @@ unreserved_keyword:
 			| REPLACE
 			| REPLICA
 			| RESET
+			| RESPECT
 			| RESTART
 			| RESTRICT
 			| RETURNS

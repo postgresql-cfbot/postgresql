@@ -697,6 +697,7 @@ compute_function_attributes(ParseState *pstate,
 							bool *windowfunc_p,
 							char *volatility_p,
 							bool *strict_p,
+							bool *null_treatment_p,
 							bool *security_definer,
 							bool *leakproof_p,
 							ArrayType **proconfig,
@@ -710,6 +711,7 @@ compute_function_attributes(ParseState *pstate,
 	DefElem    *language_item = NULL;
 	DefElem    *transform_item = NULL;
 	DefElem    *windowfunc_item = NULL;
+	DefElem    *nulltreatment_item = NULL;
 	DefElem    *volatility_item = NULL;
 	DefElem    *strict_item = NULL;
 	DefElem    *security_item = NULL;
@@ -765,6 +767,20 @@ compute_function_attributes(ParseState *pstate,
 						 parser_errposition(pstate, defel->location)));
 			windowfunc_item = defel;
 		}
+		else if (strcmp(defel->defname, "null_treatment") == 0)
+		{
+			if (nulltreatment_item)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options"),
+						 parser_errposition(pstate, defel->location)));
+			if (is_procedure)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+						 errmsg("invalid attribute in procedure definition"),
+						 parser_errposition(pstate, defel->location)));
+			nulltreatment_item = defel;
+		}
 		else if (compute_common_attribute(pstate,
 										  is_procedure,
 										  defel,
@@ -816,6 +832,14 @@ compute_function_attributes(ParseState *pstate,
 		*volatility_p = interpret_func_volatility(volatility_item);
 	if (strict_item)
 		*strict_p = intVal(strict_item->arg);
+	if (nulltreatment_item)
+	{
+		*null_treatment_p = intVal(nulltreatment_item->arg);
+		if (*null_treatment_p && !*windowfunc_p)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+					 errmsg("cannot set null treatment on a non-window function")));
+	}
 	if (security_item)
 		*security_definer = intVal(security_item->arg);
 	if (leakproof_item)
@@ -941,6 +965,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 				isStrict,
 				security,
 				isLeakProof;
+	bool		null_treatment;
 	char		volatility;
 	ArrayType  *proconfig;
 	float4		procost;
@@ -964,6 +989,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	/* Set default attributes */
 	isWindowFunc = false;
 	isStrict = false;
+	null_treatment = false;
 	security = false;
 	isLeakProof = false;
 	volatility = PROVOLATILE_VOLATILE;
@@ -979,7 +1005,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 								stmt->options,
 								&as_clause, &language, &transformDefElem,
 								&isWindowFunc, &volatility,
-								&isStrict, &security, &isLeakProof,
+								&isStrict, &null_treatment, &security, &isLeakProof,
 								&proconfig, &procost, &prorows,
 								&prosupport, &parallel);
 
@@ -1159,6 +1185,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 						   security,
 						   isLeakProof,
 						   isStrict,
+						   null_treatment,
 						   volatility,
 						   parallel,
 						   parameterTypes,

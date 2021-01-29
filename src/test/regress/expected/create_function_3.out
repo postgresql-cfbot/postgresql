@@ -123,6 +123,12 @@ SELECT proname, prosecdef FROM pg_proc
 (3 rows)
 
 --
+-- TREAT NULLS
+--
+CREATE FUNCTION functest_D_1(integer) RETURNS integer LANGUAGE 'sql'
+       TREAT NULLS AS 'SELECT $1';
+ERROR:  cannot set null treatment on a non-window function
+--
 -- LEAKPROOF
 --
 CREATE FUNCTION functest_E_1(int) RETURNS bool LANGUAGE 'sql'
@@ -298,6 +304,8 @@ CREATE FUNCTION functest1(a int) RETURNS int LANGUAGE SQL AS 'SELECT $1';
 CREATE OR REPLACE FUNCTION functest1(a int) RETURNS int LANGUAGE SQL WINDOW AS 'SELECT $1';
 ERROR:  cannot change routine kind
 DETAIL:  "functest1" is a function.
+CREATE OR REPLACE FUNCTION functest1(a int) RETURNS int LANGUAGE SQL TREAT NULLS AS 'SELECT $1';
+ERROR:  cannot set null treatment on a non-window function
 CREATE OR REPLACE PROCEDURE functest1(a int) LANGUAGE SQL AS 'SELECT $1';
 ERROR:  cannot change routine kind
 DETAIL:  "functest1" is a function.

@@ -97,6 +97,7 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 	bool		agg_distinct = (fn ? fn->agg_distinct : false);
 	bool		func_variadic = (fn ? fn->func_variadic : false);
 	CoercionForm funcformat = (fn ? fn->funcformat : COERCE_EXPLICIT_CALL);
+	NullTreatment	win_null_treatment = (fn ? fn->win_null_treatment : NULL_TREATMENT_NONE);
 	bool		could_be_projection;
 	Oid			rettype;
 	Oid			funcid;
@@ -108,6 +109,7 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 	Oid		   *declared_arg_types;
 	List	   *argnames;
 	List	   *argdefaults;
+	bool		null_treatment;
 	Node	   *retval;
 	bool		retset;
 	int			nvargs;
@@ -267,7 +269,8 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 							   !func_variadic, true,
 							   &funcid, &rettype, &retset,
 							   &nvargs, &vatype,
-							   &declared_arg_types, &argdefaults);
+							   &declared_arg_types, &argdefaults,
+							   &null_treatment);
 
 	cancel_parser_errposition_callback(&pcbstate);
 
@@ -507,6 +510,13 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 						 errmsg("%s is not an ordered-set aggregate, so it cannot have WITHIN GROUP",
 								NameListToString(funcname)),
 						 parser_errposition(pstate, location)));
+
+			/* It also can't treat nulls as a window function */
+			if (over && win_null_treatment != NULL_TREATMENT_NONE)
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("aggregate functions do not accept RESPECT/IGNORE NULLS"),
+						 parser_errposition(pstate, location)));
 		}
 	}
 	else if (fdresult == FUNCDETAIL_WINDOWFUNC)
@@ -525,6 +535,13 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("window function %s cannot have WITHIN GROUP",
+							NameListToString(funcname)),
+					 parser_errposition(pstate, location)));
+
+		if (!null_treatment && win_null_treatment != NULL_TREATMENT_NONE)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("window function %s does not accept RESPECT/IGNORE NULLS",
 							NameListToString(funcname)),
 					 parser_errposition(pstate, location)));
 	}
@@ -826,6 +843,7 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 		wfunc->winstar = agg_star;
 		wfunc->winagg = (fdresult == FUNCDETAIL_AGGREGATE);
 		wfunc->aggfilter = agg_filter;
+		wfunc->winnulltreatment = win_null_treatment;
 		wfunc->location = location;
 
 		/*
@@ -1396,7 +1414,8 @@ func_get_detail(List *funcname,
 				int *nvargs,	/* return value */
 				Oid *vatype,	/* return value */
 				Oid **true_typeids, /* return value */
-				List **argdefaults) /* optional return value */
+				List **argdefaults, /* optional return value */
+				bool *null_treatment) /* optional return value */
 {
 	FuncCandidateList raw_candidates;
 	FuncCandidateList best_candidate;
@@ -1410,6 +1429,8 @@ func_get_detail(List *funcname,
 	*true_typeids = NULL;
 	if (argdefaults)
 		*argdefaults = NIL;
+	if (null_treatment)
+		*null_treatment = NULL_TREATMENT_NONE;
 
 	/* Get list of possible candidates from namespace search */
 	raw_candidates = FuncnameGetCandidates(funcname, nargs, fargnames,
@@ -1687,6 +1708,8 @@ func_get_detail(List *funcname,
 				*argdefaults = defaults;
 			}
 		}
+		if (null_treatment)
+			*null_treatment = pform->pronulltreatment;
 
 		switch (pform->prokind)
 		{

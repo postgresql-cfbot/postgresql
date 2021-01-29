@@ -1184,6 +1184,7 @@ _outWindowFunc(StringInfo str, const WindowFunc *node)
 	WRITE_UINT_FIELD(winref);
 	WRITE_BOOL_FIELD(winstar);
 	WRITE_BOOL_FIELD(winagg);
+	WRITE_INT_FIELD(winnulltreatment);
 	WRITE_LOCATION_FIELD(location);
 }
 
@@ -2802,6 +2803,7 @@ _outFuncCall(StringInfo str, const FuncCall *node)
 	WRITE_BOOL_FIELD(agg_distinct);
 	WRITE_BOOL_FIELD(func_variadic);
 	WRITE_ENUM_FIELD(funcformat, CoercionForm);
+	WRITE_BOOL_FIELD(win_null_treatment);
 	WRITE_LOCATION_FIELD(location);
 }
 

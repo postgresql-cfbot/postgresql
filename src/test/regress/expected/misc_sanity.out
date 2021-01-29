@@ -109,3 +109,13 @@ ORDER BY 1, 2;
  pg_largeobject_metadata | lomacl        | aclitem[]
 (11 rows)
 
+-- **************** pg_class ****************
+-- Look for non-window functions with null treatment (there should be none)
+SELECT proname, prokind, pronulltreatment
+FROM pg_proc
+WHERE pronulltreatment AND prokind <> 'w'
+ORDER BY oid;
+ proname | prokind | pronulltreatment 
+---------+---------+------------------
+(0 rows)
+

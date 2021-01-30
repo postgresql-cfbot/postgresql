@@ -650,7 +650,7 @@ CopyFrom(CopyFromState cstate)
 	 */
 	ExecInitRangeTable(estate, cstate->range_table);
 	resultRelInfo = target_resultRelInfo = makeNode(ResultRelInfo);
-	ExecInitResultRelation(estate, resultRelInfo, 1);
+	ExecInitResultRelation(estate, resultRelInfo, 1, cstate->rel);
 
 	/* Verify the named relation is a valid target for INSERT */
 	CheckValidResultRel(resultRelInfo, CMD_INSERT);

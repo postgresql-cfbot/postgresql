@@ -2648,7 +2648,7 @@ select tableoid::regclass, * from uv_pt;
 create view uv_ptv_wco as select * from uv_pt where a = 0 with check option;
 insert into uv_ptv_wco values (1, 2);
 ERROR:  new row violates check option for view "uv_ptv_wco"
-DETAIL:  Failing row contains (1, 2, null).
+DETAIL:  Failing row contains (2, null, 1).
 drop view uv_ptv, uv_ptv_wco;
 drop table uv_pt, uv_pt1, uv_pt11;
 -- check that wholerow vars appearing in WITH CHECK OPTION constraint expressions
@@ -2674,7 +2674,7 @@ with check option;
 -- rowtype after tuple-routing
 insert into wcowrtest_v2 values (2, 'no such row in sometable');
 ERROR:  new row violates check option for view "wcowrtest_v2"
-DETAIL:  Failing row contains (2, no such row in sometable).
+DETAIL:  Failing row contains (no such row in sometable, 2).
 drop view wcowrtest_v, wcowrtest_v2;
 drop table wcowrtest, sometable;
 -- Check INSERT .. ON CONFLICT DO UPDATE works correctly when the view's

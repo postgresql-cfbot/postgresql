@@ -1181,7 +1181,7 @@ apply_handle_insert(StringInfo s)
 										RelationGetDescr(rel->localrel),
 										&TTSOpsVirtual);
 	resultRelInfo = makeNode(ResultRelInfo);
-	InitResultRelInfo(resultRelInfo, rel->localrel, 1, NULL, 0);
+	InitResultRelInfo(resultRelInfo, rel->localrel, 1, rel->localrel, 0);
 
 	/* Input functions may need an active snapshot, so get one */
 	PushActiveSnapshot(GetTransactionSnapshot());
@@ -1306,7 +1306,7 @@ apply_handle_update(StringInfo s)
 										RelationGetDescr(rel->localrel),
 										&TTSOpsVirtual);
 	resultRelInfo = makeNode(ResultRelInfo);
-	InitResultRelInfo(resultRelInfo, rel->localrel, 1, NULL, 0);
+	InitResultRelInfo(resultRelInfo, rel->localrel, 1, rel->localrel, 0);
 
 	/*
 	 * Populate updatedCols so that per-column triggers can fire, and so
@@ -1463,7 +1463,7 @@ apply_handle_delete(StringInfo s)
 										RelationGetDescr(rel->localrel),
 										&TTSOpsVirtual);
 	resultRelInfo = makeNode(ResultRelInfo);
-	InitResultRelInfo(resultRelInfo, rel->localrel, 1, NULL, 0);
+	InitResultRelInfo(resultRelInfo, rel->localrel, 1, rel->localrel, 0);
 
 	PushActiveSnapshot(GetTransactionSnapshot());
 

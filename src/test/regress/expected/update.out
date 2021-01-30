@@ -341,8 +341,8 @@ DETAIL:  Failing row contains (105, 85, null, b, 15).
 -- fail, no partition key update, so no attempt to move tuple,
 -- but "a = 'a'" violates partition constraint enforced by root partition)
 UPDATE part_b_10_b_20 set a = 'a';
-ERROR:  new row for relation "part_c_1_100" violates partition constraint
-DETAIL:  Failing row contains (null, 1, 96, 12, a).
+ERROR:  new row for relation "part_b_10_b_20" violates partition constraint
+DETAIL:  Failing row contains (null, 96, a, 12, 1).
 -- ok, partition key update, no constraint violation
 UPDATE range_parted set d = d - 10 WHERE d > 10;
 -- ok, no partition key update, no constraint violation
@@ -372,8 +372,8 @@ UPDATE part_b_10_b_20 set c = c + 20 returning c, b, a;
 
 -- fail, row movement happens only within the partition subtree.
 UPDATE part_b_10_b_20 set b = b - 6 WHERE c > 116 returning *;
-ERROR:  new row for relation "part_d_1_15" violates partition constraint
-DETAIL:  Failing row contains (2, 117, 2, b, 7).
+ERROR:  new row for relation "part_b_10_b_20" violates partition constraint
+DETAIL:  Failing row contains (2, 117, b, 7, 2).
 -- ok, row movement, with subset of rows moved into different partition.
 UPDATE range_parted set b = b - 6 WHERE c > 116 returning a, b + c;
  a | ?column? 
@@ -409,7 +409,7 @@ DETAIL:  Failing row contains (a, 4, 120, 1, 1).
 -- fail, row movement with check option violation
 UPDATE upview set a = 'b', b = 15, c = 120 WHERE b = 4;
 ERROR:  new row violates check option for view "upview"
-DETAIL:  Failing row contains (b, 15, 120, 1, 1).
+DETAIL:  Failing row contains (1, 120, 1, b, 15).
 -- ok, row movement, check option passes
 UPDATE upview set a = 'b', b = 15 WHERE b = 4;
 :show_data;
@@ -814,8 +814,8 @@ INSERT into sub_parted VALUES (1,2,10);
 -- Test partition constraint violation when intermediate ancestor is used and
 -- constraint is inherited from upper root.
 UPDATE sub_parted set a = 2 WHERE c = 10;
-ERROR:  new row for relation "sub_part2" violates partition constraint
-DETAIL:  Failing row contains (2, 10, 2).
+ERROR:  new row for relation "sub_parted" violates partition constraint
+DETAIL:  Failing row contains (2, 2, 10).
 -- Test update-partition-key, where the unpruned partitions do not have their
 -- partition keys updated.
 SELECT tableoid::regclass::text, * FROM list_parted WHERE a = 2 ORDER BY 1;

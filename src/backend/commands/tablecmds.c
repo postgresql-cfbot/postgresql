@@ -1804,7 +1804,7 @@ ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
 		InitResultRelInfo(resultRelInfo,
 						  rel,
 						  0,	/* dummy rangetable index */
-						  NULL,
+						  rel,
 						  0);
 		estate->es_opened_result_relations =
 			lappend(estate->es_opened_result_relations, resultRelInfo);

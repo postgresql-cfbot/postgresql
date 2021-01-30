@@ -323,8 +323,9 @@ int
 find_other_exec(const char *argv0, const char *target,
 				const char *versionstr, char *retpath)
 {
-	char		cmd[MAXPGPATH];
+	char		cmd[MAXPGPATH * 2];
 	char		line[MAXPGPATH];
+	char	   *dlp = getenv("DYLD_LIBRARY_PATH");
 
 	if (find_my_exec(argv0, retpath) < 0)
 		return -1;
@@ -340,7 +341,11 @@ find_other_exec(const char *argv0, const char *target,
 	if (validate_exec(retpath) != 0)
 		return -1;
 
-	snprintf(cmd, sizeof(cmd), "\"%s\" -V", retpath);
+	if (dlp)
+		snprintf(cmd, sizeof(cmd), "DYLD_LIBRARY_PATH=\"%s\" \"%s\" -V",
+				 dlp, retpath);
+	else
+		snprintf(cmd, sizeof(cmd), "\"%s\" -V", retpath);
 
 	if (!pipe_read_line(cmd, line, sizeof(line)))
 		return -1;

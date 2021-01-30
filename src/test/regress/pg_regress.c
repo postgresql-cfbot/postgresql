@@ -77,6 +77,7 @@ bool		debug = false;
 char	   *inputdir = ".";
 char	   *outputdir = ".";
 char	   *bindir = PGBINDIR;
+char	   *setlibpath = NULL;
 char	   *launcher = NULL;
 static _stringlist *loadextension = NULL;
 static int	max_connections = 0;
@@ -270,7 +271,8 @@ stop_postmaster(void)
 		fflush(stderr);
 
 		snprintf(buf, sizeof(buf),
-				 "\"%s%spg_ctl\" stop -D \"%s/data\" -s",
+				 "%s\"%s%spg_ctl\" stop -D \"%s/data\" -s",
+				 setlibpath,
 				 bindir ? bindir : "",
 				 bindir ? "/" : "",
 				 temp_instance);
@@ -1135,7 +1137,8 @@ psql_command(const char *database, const char *query,...)
 
 	/* And now we can build and execute the shell command */
 	snprintf(psql_cmd, sizeof(psql_cmd),
-			 "\"%s%spsql\" -X -c \"%s\" \"%s\"",
+			 "%s\"%s%spsql\" -X -c \"%s\" \"%s\"",
+			 setlibpath,
 			 bindir ? bindir : "",
 			 bindir ? "/" : "",
 			 query_escaped,
@@ -1187,7 +1190,7 @@ spawn_process(const char *cmdline)
 		 */
 		char	   *cmdline2;
 
-		cmdline2 = psprintf("exec %s", cmdline);
+		cmdline2 = psprintf("%sexec %s", setlibpath, cmdline);
 		execl(shellprog, shellprog, "-c", cmdline2, (char *) NULL);
 		fprintf(stderr, _("%s: could not exec \"%s\": %s\n"),
 				progname, shellprog, strerror(errno));
@@ -2299,6 +2302,15 @@ regression_main(int argc, char *argv[],
 	unlimit_core_size();
 #endif
 
+	{
+		char   *dlp = getenv("DYLD_LIBRARY_PATH");
+
+		if (dlp)
+			setlibpath = psprintf("DYLD_LIBRARY_PATH=\"%s\" ", dlp);
+		else
+			setlibpath = "";
+	}
+
 	if (temp_instance)
 	{
 		FILE	   *pg_conf;
@@ -2333,7 +2345,8 @@ regression_main(int argc, char *argv[],
 		/* initdb */
 		header(_("initializing database system"));
 		snprintf(buf, sizeof(buf),
-				 "\"%s%sinitdb\" -D \"%s/data\" --no-clean --no-sync%s%s > \"%s/log/initdb.log\" 2>&1",
+				 "%s\"%s%sinitdb\" -D \"%s/data\" --no-clean --no-sync%s%s > \"%s/log/initdb.log\" 2>&1",
+				 setlibpath,
 				 bindir ? bindir : "",
 				 bindir ? "/" : "",
 				 temp_instance,
@@ -2406,7 +2419,8 @@ regression_main(int argc, char *argv[],
 		 * Check if there is a postmaster running already.
 		 */
 		snprintf(buf2, sizeof(buf2),
-				 "\"%s%spsql\" -X postgres <%s 2>%s",
+				 "%s\"%s%spsql\" -X postgres <%s 2>%s",
+				 setlibpath,
 				 bindir ? bindir : "",
 				 bindir ? "/" : "",
 				 DEVNULL, DEVNULL);

@@ -148,6 +148,36 @@ typedef struct
 } RelInfoArr;
 
 /*
+ * Information about database object needed to check
+ * if its signature has changed between versions.
+ * We need it to generate a statement to adjust privileges
+ * if necessary.
+ */
+typedef struct
+{
+	char	   *obj_type;		/* object type */
+	char	   *obj_ident;		/* complete object identity */
+
+	/* object namespace, parent name (table name for 'column' objects)
+	 * and name. Store them separately from identity to simplify 
+	 * parsing and qouting.
+	 */
+	char	   *obj_namespace;
+	char	   *obj_parent_name;
+	char	   *obj_name;
+
+	bool		is_relation;	/* if the object is relation */
+	char	   *role_names;		/* list of role names which have permissions
+								 * on the object */
+} AclInfo;
+
+typedef struct
+{
+	AclInfo	   *aclinfos;
+	int			nacls;
+} AclInfoArr;
+
+/*
  * The following structure represents a relation mapping.
  */
 typedef struct
@@ -183,6 +213,8 @@ typedef struct
 	char	   *db_ctype;
 	int			db_encoding;
 	RelInfoArr	rel_arr;		/* array of all user relinfos */
+	AclInfoArr	non_def_acl_arr;	/* array of objects info with non default
+									 * ACL */
 } DbInfo;
 
 typedef struct
@@ -389,6 +421,7 @@ FileNameMap *gen_db_file_maps(DbInfo *old_db,
 							  DbInfo *new_db, int *nmaps, const char *old_pgdata,
 							  const char *new_pgdata);
 void		get_db_and_rel_infos(ClusterInfo *cluster);
+void		get_non_default_acl_infos(ClusterInfo *cluster);
 void		print_maps(FileNameMap *maps, int n,
 					   const char *db_name);
 

@@ -35,6 +35,9 @@
 #include "utils/rel.h"
 
 
+/* Hook for plugins to get control in expand_inherited_rtentry() */
+expand_inherited_rtentry_hook_type expand_inherited_rtentry_hook = NULL;
+
 static void expand_partitioned_rtentry(PlannerInfo *root, RelOptInfo *relinfo,
 									   RangeTblEntry *parentrte,
 									   Index parentRTindex, Relation parentrel,

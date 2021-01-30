@@ -233,9 +233,8 @@ extern void *build_reloptions(Datum reloptions, bool validate,
 extern void *build_local_reloptions(local_relopts *relopts, Datum options,
 									bool validate);
 
-extern bytea *default_reloptions(Datum reloptions, bool validate,
-								 relopt_kind kind);
-extern bytea *heap_reloptions(char relkind, Datum reloptions, bool validate);
+extern bytea *toast_reloptions(Datum reloptions, bool validate);
+extern bytea *heap_reloptions(Datum reloptions, bool validate);
 extern bytea *view_reloptions(Datum reloptions, bool validate);
 extern bytea *partitioned_table_reloptions(Datum reloptions, bool validate);
 extern bytea *index_reloptions(amoptions_function amoptions, Datum reloptions,

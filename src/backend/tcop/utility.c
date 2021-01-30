@@ -1152,9 +1152,7 @@ ProcessUtilitySlow(ParseState *pstate,
 																validnsps,
 																true,
 																false);
-							(void) heap_reloptions(RELKIND_TOASTVALUE,
-												   toast_options,
-												   true);
+							(void) toast_reloptions(toast_options, true);
 
 							NewRelationCreateToastTable(address.objectId,
 														toast_options);

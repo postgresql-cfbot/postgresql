@@ -59,7 +59,8 @@ OBJS = \
 	snprintf.o \
 	strerror.o \
 	tar.o \
-	thread.o
+	thread.o \
+	pthread.o
 
 # libpgport.a, libpgport_shlib.a, and libpgport_srv.a contain the same files
 # foo.o, foo_shlib.o, and foo_srv.o are all built from foo.c

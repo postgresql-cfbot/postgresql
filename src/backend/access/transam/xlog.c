@@ -530,6 +530,13 @@ typedef enum ExclusiveBackupState
  */
 static SessionBackupState sessionBackupState = SESSION_BACKUP_NONE;
 
+/* entries for RecordBoundaryMap, used to mark segments ready for archival */
+typedef struct RecordBoundaryEntry
+{
+	XLogSegNo seg;	/* must be first */
+	XLogRecPtr pos;
+} RecordBoundaryEntry;
+
 /*
  * Shared state data for WAL insertion.
  */
@@ -730,6 +737,11 @@ typedef struct XLogCtlData
 	 */
 	XLogRecPtr	lastFpwDisableRecPtr;
 
+	/*
+	 * The last segment we've marked ready for archival.  Protected by info_lck.
+	 */
+	XLogSegNo lastNotifiedSeg;
+
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
 
@@ -742,6 +754,12 @@ static WALInsertLockPadded *WALInsertLocks = NULL;
  * We maintain an image of pg_control in shared memory.
  */
 static ControlFileData *ControlFile = NULL;
+
+/*
+ * Record boundary map, used for marking segments as ready for archival.
+ * Protected by ArchNotifyLock.
+ */
+static HTAB *RecordBoundaryMap = NULL;
 
 /*
  * Calculate the amount of space left on the page after 'endptr'. Beware
@@ -972,6 +990,10 @@ static XLogRecPtr XLogBytePosToRecPtr(uint64 bytepos);
 static XLogRecPtr XLogBytePosToEndRecPtr(uint64 bytepos);
 static uint64 XLogRecPtrToBytePos(XLogRecPtr ptr);
 static void checkXLogConsistency(XLogReaderState *record);
+static void RegisterRecordBoundaryEntry(XLogSegNo seg, XLogRecPtr pos);
+static void NotifySegmentsReadyForArchive(void);
+static XLogSegNo GetLastNotifiedSegment(void);
+static void SetLastNotifiedSegment(XLogSegNo seg);
 
 static void WALInsertLockAcquire(void);
 static void WALInsertLockAcquireExclusive(void);
@@ -1019,6 +1041,8 @@ XLogInsertRecord(XLogRecData *rdata,
 							   info == XLOG_SWITCH);
 	XLogRecPtr	StartPos;
 	XLogRecPtr	EndPos;
+	XLogSegNo	StartSeg;
+	XLogSegNo	EndSeg;
 	bool		prevDoPageWrites = doPageWrites;
 
 	/* we assume that all of the record header is in the first chunk */
@@ -1178,6 +1202,31 @@ XLogInsertRecord(XLogRecData *rdata,
 	}
 
 	/*
+	 * Record the record boundary if we crossed the segment boundary.  This is
+	 * used to ensure that segments are not marked ready for archival before the
+	 * entire record has been flushed to disk.
+	 *
+	 * Note that we do not use XLByteToPrevSeg() for determining the ending
+	 * segment.  This is done so that a record that fits perfectly into the end
+	 * of the segment is marked ready for archival as soon as the flushed
+	 * pointer jumps to the next segment.
+	 */
+	XLByteToSeg(StartPos, StartSeg, wal_segment_size);
+	XLByteToSeg(EndPos, EndSeg, wal_segment_size);
+
+	if (StartSeg != EndSeg &&
+		XLogArchivingActive())
+	{
+		RegisterRecordBoundaryEntry(EndSeg, EndPos);
+
+		/*
+		 * There's a chance that the record was already flushed to disk and we
+		 * missed marking segments as ready for archive, so try to do that now.
+		 */
+		NotifySegmentsReadyForArchive();
+	}
+
+	/*
 	 * If this was an XLOG_SWITCH record, flush the record and the empty
 	 * padding space that fills the rest of the segment, and perform
 	 * end-of-segment actions (eg, notifying archiver).
@@ -1273,6 +1322,139 @@ XLogInsertRecord(XLogRecData *rdata,
 	}
 
 	return EndPos;
+}
+
+/*
+ * RegisterRecordBoundaryEntry
+ *
+ * This enters a new entry into the record boundary map, which is used for
+ * determing when it is safe to mark a segment as ready for archival.  An entry
+ * with the given key (the segment number) must not already exist in the map.
+ * Also, the caller is responsible for ensuring that XLByteToSeg() would return
+ * the same segment number for the given record pointer.
+ */
+static void
+RegisterRecordBoundaryEntry(XLogSegNo seg, XLogRecPtr pos)
+{
+	RecordBoundaryEntry *entry;
+	bool found;
+
+	LWLockAcquire(ArchNotifyLock, LW_EXCLUSIVE);
+
+	entry = (RecordBoundaryEntry *) hash_search(RecordBoundaryMap,
+												(void *) &seg, HASH_ENTER,
+												&found);
+	if (found)
+		elog(ERROR, "record boundary entry for segment already exists");
+
+	entry->pos = pos;
+
+	LWLockRelease(ArchNotifyLock);
+}
+
+/*
+ * NotifySegmentsReadyForArchive
+ *
+ * This function marks segments as ready for archival, given that it is safe to
+ * do so.  It is safe to call this function repeatedly, even if nothing has
+ * changed since the last time it was called.
+ */
+static void
+NotifySegmentsReadyForArchive(void)
+{
+	XLogRecPtr flushed;
+	XLogSegNo flushed_seg;
+	XLogSegNo latest_boundary = 0;
+	bool found = false;
+	XLogSegNo last_notified;
+
+	/*
+	 * We first do a quick sanity check to see if we can bail out without taking
+	 * the ArchNotifyLock at all.  It is expected that this function will run
+	 * frequently and that it will need to do nothing the vast majority of the
+	 * time.
+	 *
+	 * Specifically, we bail out if we've already marked the segment prior to
+	 * the segment that contains "flushed" as ready for archival.  We
+	 * intentionally use XLByteToSeg() instead of XLByteToPrevSeg() so that we
+	 * don't skip notifying when a record fits perfectly into the end of a
+	 * segment.  ("flushed" should point to the first byte of the record _after_
+	 * the one that is known to be flushed to disk.)
+	 */
+	SpinLockAcquire(&XLogCtl->info_lck);
+	last_notified = XLogCtl->lastNotifiedSeg;
+	flushed = XLogCtl->LogwrtResult.Flush;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	XLByteToSeg(flushed, flushed_seg, wal_segment_size);
+	if (last_notified >= flushed_seg - 1)
+		return;
+
+	LWLockAcquire(ArchNotifyLock, LW_EXCLUSIVE);
+
+	/*
+	 * Retrieve the last notified segment again, as someone else might have
+	 * changed it before we got the lock.
+	 */
+	last_notified = GetLastNotifiedSegment();
+
+	/*
+	 * Find the latest record boundary so that we know which segments we can
+	 * safely mark ready for archival.
+	 */
+	for (XLogSegNo i = flushed_seg; i > last_notified; i--)
+	{
+		RecordBoundaryEntry *entry;
+
+		entry = (RecordBoundaryEntry *) hash_search(RecordBoundaryMap,
+													(void *) &i, HASH_FIND,
+													NULL);
+		if (entry != NULL && flushed >= entry->pos)
+		{
+			found = true;
+			latest_boundary = entry->seg;
+			break;
+		}
+	}
+
+	/*
+	 * Mark the segments as ready for archive and clear out any corresponding
+	 * entries in the record boundary map.
+	 */
+	if (found)
+	{
+		for (XLogSegNo i = last_notified + 1; i < latest_boundary; i++)
+		{
+			XLogArchiveNotifySeg(i);
+			(void) hash_search(RecordBoundaryMap, (void *) &i, HASH_REMOVE,
+							   NULL);
+		}
+
+		/* update the last notified segment in shared memory */
+		SetLastNotifiedSegment(latest_boundary - 1);
+	}
+
+	LWLockRelease(ArchNotifyLock);
+}
+
+static XLogSegNo
+GetLastNotifiedSegment(void)
+{
+	XLogSegNo seg;
+
+	SpinLockAcquire(&XLogCtl->info_lck);
+	seg = XLogCtl->lastNotifiedSeg;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	return seg;
+}
+
+static void
+SetLastNotifiedSegment(XLogSegNo seg)
+{
+	SpinLockAcquire(&XLogCtl->info_lck);
+	XLogCtl->lastNotifiedSeg = seg;
+	SpinLockRelease(&XLogCtl->info_lck);
 }
 
 /*
@@ -2594,9 +2776,6 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 
 				LogwrtResult.Flush = LogwrtResult.Write;	/* end of page */
 
-				if (XLogArchivingActive())
-					XLogArchiveNotifySeg(openLogSegNo);
-
 				XLogCtl->lastSegSwitchTime = (pg_time_t) time(NULL);
 				XLogCtl->lastSegSwitchLSN = LogwrtResult.Flush;
 
@@ -2683,6 +2862,9 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			XLogCtl->LogwrtRqst.Flush = LogwrtResult.Flush;
 		SpinLockRelease(&XLogCtl->info_lck);
 	}
+
+	if (XLogArchivingActive())
+		NotifySegmentsReadyForArchive();
 }
 
 /*
@@ -5096,6 +5278,9 @@ XLOGShmemSize(void)
 	/* and the buffers themselves */
 	size = add_size(size, mul_size(XLOG_BLCKSZ, XLOGbuffers));
 
+	/* stuff for marking segments as ready for archival */
+	size = add_size(size, hash_estimate_size(16, sizeof(RecordBoundaryEntry)));
+
 	/*
 	 * Note: we don't count ControlFileData, it comes out of the "slop factor"
 	 * added by CreateSharedMemoryAndSemaphores.  This lets us use this
@@ -5113,6 +5298,7 @@ XLOGShmemInit(void)
 	char	   *allocptr;
 	int			i;
 	ControlFileData *localControlFile;
+	HASHCTL		info;
 
 #ifdef WAL_DEBUG
 
@@ -5210,6 +5396,13 @@ XLOGShmemInit(void)
 	SpinLockInit(&XLogCtl->info_lck);
 	SpinLockInit(&XLogCtl->ulsn_lck);
 	InitSharedLatch(&XLogCtl->recoveryWakeupLatch);
+
+	/* Initialize stuff for marking segments as ready for archival. */
+	memset(&info, 0, sizeof(info));
+	info.keysize = sizeof(XLogSegNo);
+	info.entrysize = sizeof(RecordBoundaryEntry);
+	RecordBoundaryMap = ShmemInitHash("Record Boundary Table", 16, 16, &info,
+									  HASH_ELEM | HASH_BLOBS);
 }
 
 /*
@@ -7783,6 +7976,16 @@ StartupXLOG(void)
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
+
+	/*
+	 * Assume that we have archived up to the previous segment.
+	 */
+	if (XLogArchivingActive())
+	{
+		XLogSegNo endLogSegNo;
+		XLByteToSeg(EndOfLog, endLogSegNo, wal_segment_size);
+		XLogCtl->lastNotifiedSeg = endLogSegNo - 1;
+	}
 
 	/*
 	 * Update full_page_writes in shared memory and write an XLOG_FPW_CHANGE

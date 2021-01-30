@@ -596,7 +596,7 @@ hostnogssenc  <replaceable>database</replaceable>  <replaceable>user</replaceabl
       </para>
 
       <para>
-       In addition to the method-specific options listed below, there is one
+       In addition to the method-specific options listed below, there is a
        method-independent authentication option <literal>clientcert</literal>, which
        can be specified in any <literal>hostssl</literal> record.
        This option can be set to <literal>verify-ca</literal> or
@@ -609,6 +609,19 @@ hostnogssenc  <replaceable>database</replaceable>  <replaceable>user</replaceabl
        method (see <xref linkend="auth-cert"/>) but enables pairing
        the verification of client certificates with any authentication
        method that supports <literal>hostssl</literal> entries.
+      </para>
+      <para>
+       On any record using client certificate authentication, that is one
+       using the <literal>cert</literal> authentication method or one
+       using the <literal>clientcert</literal> option, you can specify
+       which part of the client certificate credentials to match using
+       the <literal>clientname</literal> option. This option can have one
+       of two values. If you specify <literal>clientname=CN</literal>, which
+       is the default, the username is matched against the certificate's
+       <literal>Common Name (CN)</literal>. If instead you specify
+       <literal>clientname=DN</literal> the username is matched against the
+       entire <literal>Distinguished Name (DN)</literal> of the certificate.
+       This option is probably best used in comjunction with a username map.
       </para>
      </listitem>
     </varlistentry>

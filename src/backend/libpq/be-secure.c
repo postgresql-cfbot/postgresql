@@ -120,7 +120,7 @@ secure_open_server(Port *port)
 
 	ereport(DEBUG2,
 			(errmsg("SSL connection from \"%s\"",
-					port->peer_cn ? port->peer_cn : "(anonymous)")));
+					port->peer_dn ? port->peer_dn : "(anonymous)")));
 #endif
 
 	return r;

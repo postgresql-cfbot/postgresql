@@ -523,22 +523,25 @@ aloop:
 	/* Get client certificate, if available. */
 	port->peer = SSL_get_peer_certificate(port->ssl);
 
-	/* and extract the Common Name from it. */
+	/* and extract the Common Name / Distinguished Name from it. */
 	port->peer_cn = NULL;
+	port->peer_dn = NULL;
 	port->peer_cert_valid = false;
 	if (port->peer != NULL)
 	{
 		int			len;
+		X509_NAME  *x509name = X509_get_subject_name(port->peer);
+		char	   *peer_cn;
+		char	   *peer_dn;
+		BIO		   *bio = NULL;
+		BUF_MEM    *bio_buf = NULL;
 
-		len = X509_NAME_get_text_by_NID(X509_get_subject_name(port->peer),
-										NID_commonName, NULL, 0);
+		len = X509_NAME_get_text_by_NID(x509name, NID_commonName, NULL, 0);
 		if (len != -1)
 		{
-			char	   *peer_cn;
-
 			peer_cn = MemoryContextAlloc(TopMemoryContext, len + 1);
-			r = X509_NAME_get_text_by_NID(X509_get_subject_name(port->peer),
-										  NID_commonName, peer_cn, len + 1);
+			r = X509_NAME_get_text_by_NID(x509name, NID_commonName, peer_cn,
+										  len + 1);
 			peer_cn[len] = '\0';
 			if (r != len)
 			{
@@ -562,6 +565,36 @@ aloop:
 
 			port->peer_cn = peer_cn;
 		}
+
+		bio = BIO_new(BIO_s_mem());
+		if (!bio)
+		{
+			pfree(port->peer_cn);
+			port->peer_cn = NULL;
+			return -1;
+		}
+		/* use commas instead of slashes */
+		X509_NAME_print_ex(bio, x509name, 0, XN_FLAG_RFC2253);
+		BIO_get_mem_ptr(bio, &bio_buf);
+		peer_dn = MemoryContextAlloc(TopMemoryContext, bio_buf->length + 1);
+		memcpy(peer_dn, bio_buf->data, bio_buf->length);
+		peer_dn[bio_buf->length] = '\0';
+		if (bio_buf->length != strlen(peer_dn))
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("SSL certificate's distinguished name contains embedded null")));
+			BIO_free(bio);
+			pfree(peer_dn);
+			pfree(port->peer_cn);
+			port->peer_cn = NULL;
+			return -1;
+		}
+
+		BIO_free(bio);
+
+		port->peer_dn = peer_dn;
+
 		port->peer_cert_valid = true;
 	}
 
@@ -589,6 +622,12 @@ be_tls_close(Port *port)
 	{
 		pfree(port->peer_cn);
 		port->peer_cn = NULL;
+	}
+
+	if (port->peer_dn)
+	{
+		pfree(port->peer_dn);
+		port->peer_dn = NULL;
 	}
 }
 

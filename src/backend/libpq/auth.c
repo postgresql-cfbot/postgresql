@@ -2848,12 +2848,15 @@ static int
 CheckCertAuth(Port *port)
 {
 	int			status_check_usermap = STATUS_ERROR;
+	char	   *peer_username;
 
 	Assert(port->ssl);
 
 	/* Make sure we have received a username in the certificate */
-	if (port->peer_cn == NULL ||
-		strlen(port->peer_cn) <= 0)
+	peer_username = port->hba->clientcertname == clientCertCN ? port->peer_cn : port->peer_dn;
+
+	if (peer_username == NULL ||
+		strlen(peer_username) <= 0)
 	{
 		ereport(LOG,
 				(errmsg("certificate authentication failed for user \"%s\": client certificate contains no user name",
@@ -2861,8 +2864,8 @@ CheckCertAuth(Port *port)
 		return STATUS_ERROR;
 	}
 
-	/* Just pass the certificate cn to the usermap check */
-	status_check_usermap = check_usermap(port->hba->usermap, port->user_name, port->peer_cn, false);
+	/* Just pass the certificate cn/dn to the usermap check */
+	status_check_usermap = check_usermap(port->hba->usermap, port->user_name, peer_username, false);
 	if (status_check_usermap != STATUS_OK)
 	{
 		/*
@@ -2873,7 +2876,7 @@ CheckCertAuth(Port *port)
 		if (port->hba->clientcert == clientCertFull && port->hba->auth_method != uaCert)
 		{
 			ereport(LOG,
-					(errmsg("certificate validation (clientcert=verify-full) failed for user \"%s\": CN mismatch",
+					(errmsg("certificate validation (clientcert=verify-full) failed for user \"%s\": CN/DN mismatch",
 							port->user_name)));
 		}
 	}

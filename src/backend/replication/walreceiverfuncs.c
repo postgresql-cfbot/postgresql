@@ -23,8 +23,10 @@
 #include <signal.h>
 
 #include "access/xlog_internal.h"
+#include "pgstat.h"
 #include "postmaster/startup.h"
 #include "replication/walreceiver.h"
+#include "storage/latch.h"
 #include "storage/pmsignal.h"
 #include "storage/shmem.h"
 #include "utils/timestamp.h"
@@ -207,8 +209,8 @@ ShutdownWalRcv(void)
 		 * process.
 		 */
 		HandleStartupProcInterrupts();
-
-		pg_usleep(100000);		/* 100ms */
+		(void) WaitLatch(NULL, WL_TIMEOUT | WL_EXIT_ON_PM_DEATH, 100,
+						 WAIT_EVENT_WALRCV_EXIT);
 	}
 }
 

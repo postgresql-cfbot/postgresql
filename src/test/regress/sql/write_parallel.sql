@@ -32,6 +32,10 @@ explain (costs off) create materialized view parallel_mat_view as
     select length(stringu1) from tenk1 group by length(stringu1);
 create materialized view parallel_mat_view as
     select length(stringu1) from tenk1 group by length(stringu1);
+-- Allow parallel planning of the underlying query for refresh materialized
+-- view. We can be ensured that parallelism will be picked because of the
+-- enforcement done at the beginning of the test.
+refresh materialized view parallel_mat_view;
 drop materialized view parallel_mat_view;
 
 prepare prep_stmt as select length(stringu1) from tenk1 group by length(stringu1);

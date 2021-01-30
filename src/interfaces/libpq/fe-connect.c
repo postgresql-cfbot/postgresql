@@ -536,6 +536,23 @@ pqDropConnection(PGconn *conn, bool flushInput)
 	}
 }
 
+/*
+ * pqFreeCommandQueue
+ * Free all the entries of PGcommandQueueEntry queue passed.
+ */
+static void
+pqFreeCommandQueue(PGcommandQueueEntry *queue)
+{
+	while (queue != NULL)
+	{
+		PGcommandQueueEntry *cur = queue;
+
+		queue = cur->next;
+		if (cur->query)
+			free(cur->query);
+		free(cur);
+	}
+}
 
 /*
  *		pqDropServerData
@@ -566,6 +583,12 @@ pqDropServerData(PGconn *conn)
 		free(prev);
 	}
 	conn->notifyHead = conn->notifyTail = NULL;
+
+	pqFreeCommandQueue(conn->cmd_queue_head);
+	conn->cmd_queue_head = conn->cmd_queue_tail = NULL;
+
+	pqFreeCommandQueue(conn->cmd_queue_recycle);
+	conn->cmd_queue_recycle = NULL;
 
 	/* Reset ParameterStatus data, as well as variables deduced from it */
 	pstatus = conn->pstatus;
@@ -6654,6 +6677,15 @@ PQbackendPID(const PGconn *conn)
 	if (!conn || conn->status != CONNECTION_OK)
 		return 0;
 	return conn->be_pid;
+}
+
+int
+PQbatchStatus(const PGconn *conn)
+{
+	if (!conn)
+		return false;
+
+	return conn->batch_status;
 }
 
 int

@@ -1068,6 +1068,20 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
   </para>
 
   <variablelist>
+   <varlistentry id='pgbench-metacommand-batch'>
+    <term><literal>\beginbatch</literal></term>
+    <term><literal>\endbatch</literal></term>
+
+    <listitem>
+      <para>
+        These commands delimit the start and end of a batch of SQL statements.
+        In a batch, statements are sent to server without waiting for the results
+        of previous statements (see <xref linkend="libpq-batch-mode"/>).
+        Batching requires the extended query protocol.
+     </para>
+    </listitem>
+   </varlistentry>
+
    <varlistentry id='pgbench-metacommand-gset'>
     <term>
      <literal>\gset [<replaceable>prefix</replaceable>]</literal>
@@ -1094,6 +1108,12 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       if provided. If a query returns no row, no assignment is made and the variable
       can be tested for existence to detect this. If a query returns more than one
       row, the last value is kept.
+     </para>
+
+     <para>
+      <literal>\gset</literal> and <literal>\aset</literal> cannot be used
+      inside a batch section, since query results are not immediately
+      fetched in this mode.
      </para>
 
      <para>

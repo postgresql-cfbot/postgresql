@@ -92,6 +92,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
 #include "parser/parsetree.h"
+#include "partitioning/partprune.h"
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
 #include "utils/spccache.h"
@@ -2036,14 +2037,76 @@ append_nonpartial_cost(List *subpaths, int numpaths, int parallel_workers)
 	return costarr[max_index];
 }
 
+
+/*
+ * find_partitioned_rel_offset
+ *   Given a relid from a subpath, return the offset in partitioned_rel which its
+ * parent in.
+ */
+static int
+find_partitioned_rel_offset(PlannerInfo *root, List *partitioned_rel,  int relid)
+{
+	int i = 0;
+	ListCell *lc;
+	int parent_relid = -1;
+	if (root->append_rel_array[relid] != NULL)
+		parent_relid = root->append_rel_array[relid]->parent_relid;
+	else
+		return -1;
+	foreach(lc,  partitioned_rel)
+	{
+		Relids relids = (Relids)lfirst(lc);
+		if (bms_is_member(parent_relid, relids))
+			return i;
+		i++;
+	}
+	return -1;
+}
+
+
 /*
  * cost_append
  *	  Determines and returns the cost of an Append node.
  */
 void
-cost_append(AppendPath *apath)
+cost_append(AppendPath *apath, PlannerInfo *root)
 {
 	ListCell   *l;
+	RelOptInfo *rel = apath->path.parent;
+	List	*partitioned_rels = apath->partitioned_rels;
+	double	*part_live_ratio = NULL;
+	int len;
+	bool can_runtime_prune;
+
+	/*
+	 * Check if we can have run-time prune, if so, we should reduce
+	 * some cost because of that.
+	 */
+	can_runtime_prune = enable_partition_pruning
+		&& rel->reloptkind == RELOPT_BASEREL
+		&& partitioned_rels != NIL
+		&& apath->subpaths != NIL
+		/* This is just for easy test, should be removed in the final patch */
+		&& enable_geqo;
+
+
+	if (can_runtime_prune)
+	{
+		int i = 0;
+		ListCell	*lc;
+		len = list_length(partitioned_rels);
+		part_live_ratio = palloc0(sizeof(double) * len);
+
+		foreach(lc, partitioned_rels)
+		{
+			part_live_ratio[i++] = est_runtime_part_prune(root,
+														  rel,
+														  (Relids) lfirst(lc),
+														  apath->path.param_info ?
+														  apath->path.param_info->ppi_clauses : NIL);
+
+		}
+	}
 
 	apath->path.startup_cost = 0;
 	apath->path.total_cost = 0;
@@ -2055,14 +2118,17 @@ cost_append(AppendPath *apath)
 	if (!apath->path.parallel_aware)
 	{
 		List	   *pathkeys = apath->path.pathkeys;
-
+		int			offset;
 		if (pathkeys == NIL)
 		{
 			Path	   *subpath = (Path *) linitial(apath->subpaths);
 
 			/*
 			 * For an unordered, non-parallel-aware Append we take the startup
-			 * cost as the startup cost of the first subpath.
+			 * cost as the startup cost of the first subpath when run time partition
+			 * would not happen. However when run time partition prune happens
+			 * we can't know which partition will survived, so still keep the
+			 * startup as the first path's startup_cost.
 			 */
 			apath->path.startup_cost = subpath->startup_cost;
 
@@ -2070,9 +2136,25 @@ cost_append(AppendPath *apath)
 			foreach(l, apath->subpaths)
 			{
 				Path	   *subpath = (Path *) lfirst(l);
-
-				apath->path.rows += subpath->rows;
-				apath->path.total_cost += subpath->total_cost;
+				if (can_runtime_prune)
+				{
+					offset = find_partitioned_rel_offset(root, partitioned_rels, subpath->parent->relid);
+					if (offset != -1)
+					{
+						apath->path.rows += subpath->rows * part_live_ratio[offset];
+						apath->path.total_cost += subpath->total_cost * part_live_ratio[offset];
+					}
+					else
+					{
+						apath->path.rows += subpath->rows;
+						apath->path.total_cost += subpath->total_cost;
+					}
+				}
+				else
+				{
+					apath->path.rows += subpath->rows;
+					apath->path.total_cost += subpath->total_cost;
+				}
 			}
 		}
 		else
@@ -2099,6 +2181,7 @@ cost_append(AppendPath *apath)
 			{
 				Path	   *subpath = (Path *) lfirst(l);
 				Path		sort_path;	/* dummy for result of cost_sort */
+				int			relid = subpath->parent->relid;
 
 				if (!pathkeys_contained_in(pathkeys, subpath->pathkeys))
 				{
@@ -2119,10 +2202,28 @@ cost_append(AppendPath *apath)
 							  apath->limit_tuples);
 					subpath = &sort_path;
 				}
-
-				apath->path.rows += subpath->rows;
-				apath->path.startup_cost += subpath->startup_cost;
-				apath->path.total_cost += subpath->total_cost;
+				if (can_runtime_prune)
+				{
+					offset = find_partitioned_rel_offset(root, partitioned_rels, relid);
+					if (offset != -1)
+					{
+						apath->path.rows += subpath->rows * part_live_ratio[offset];
+						apath->path.total_cost += subpath->total_cost * part_live_ratio[offset];
+						apath->path.startup_cost += subpath->startup_cost * part_live_ratio[offset];
+					}
+					else
+					{
+						apath->path.rows += subpath->rows;
+						apath->path.startup_cost += subpath->startup_cost;
+						apath->path.total_cost += subpath->total_cost;
+					}
+				}
+				else
+				{
+					apath->path.rows += subpath->rows;
+					apath->path.startup_cost += subpath->startup_cost;
+					apath->path.total_cost += subpath->total_cost;
+				}
 			}
 		}
 	}

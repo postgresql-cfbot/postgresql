@@ -49,6 +49,7 @@
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
+#include "optimizer/restrictinfo.h"
 #include "parser/parsetree.h"
 #include "partitioning/partbounds.h"
 #include "partitioning/partprune.h"
@@ -321,6 +322,44 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	return pruneinfo;
 }
 
+
+static List *
+translate_appendrel_vars(PlannerInfo *root,
+						 RelOptInfo *topmostrel,
+						 RelOptInfo *subpart,
+						 RelOptInfo **currel,
+						 List **prunequal)
+{
+	if (!*currel)
+	{
+		*currel = subpart;
+		if (!bms_equal(topmostrel->relids, subpart->relids))
+		{
+			int			nappinfos;
+			AppendRelInfo **appinfos = find_appinfos_by_relids(root,
+															   subpart->relids,
+															   &nappinfos);
+
+			*prunequal = (List *) adjust_appendrel_attrs(root, (Node *)
+														 *prunequal,
+														 nappinfos,
+														 appinfos);
+
+			pfree(appinfos);
+		}
+		return *prunequal;
+	}
+	else
+	{
+		return (List *)	adjust_appendrel_attrs_multilevel(root,
+														  (Node *)(*prunequal),
+														  subpart->relids,
+														  (*currel)->relids);
+	}
+	return NIL;
+}
+
+
 /*
  * make_partitionedrel_pruneinfo
  *		Build a List of PartitionedRelPruneInfos, one for each partitioned
@@ -387,53 +426,11 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		Assert(rti < root->simple_rel_array_size);
 		relid_subpart_map[rti] = i++;
 
-		/*
-		 * Translate pruning qual, if necessary, for this partition.
-		 *
-		 * The first item in the list is the target partitioned relation.
-		 */
-		if (!targetpart)
-		{
-			targetpart = subpart;
-
-			/*
-			 * The prunequal is presented to us as a qual for 'parentrel'.
-			 * Frequently this rel is the same as targetpart, so we can skip
-			 * an adjust_appendrel_attrs step.  But it might not be, and then
-			 * we have to translate.  We update the prunequal parameter here,
-			 * because in later iterations of the loop for child partitions,
-			 * we want to translate from parent to child variables.
-			 */
-			if (!bms_equal(parentrel->relids, subpart->relids))
-			{
-				int			nappinfos;
-				AppendRelInfo **appinfos = find_appinfos_by_relids(root,
-																   subpart->relids,
-																   &nappinfos);
-
-				prunequal = (List *) adjust_appendrel_attrs(root, (Node *)
-															prunequal,
-															nappinfos,
-															appinfos);
-
-				pfree(appinfos);
-			}
-
-			partprunequal = prunequal;
-		}
-		else
-		{
-			/*
-			 * For sub-partitioned tables the columns may not be in the same
-			 * order as the parent, so we must translate the prunequal to make
-			 * it compatible with this relation.
-			 */
-			partprunequal = (List *)
-				adjust_appendrel_attrs_multilevel(root,
-												  (Node *) prunequal,
-												  subpart->relids,
-												  targetpart->relids);
-		}
+		partprunequal = translate_appendrel_vars(root,
+											  parentrel,
+											  subpart,
+											  &targetpart,
+											  &prunequal);
 
 		/*
 		 * Convert pruning qual to pruning steps.  We may need to do this
@@ -3591,4 +3588,280 @@ partkey_datum_from_expr(PartitionPruneContext *context,
 		ectx = context->planstate->ps_ExprContext;
 		*value = ExecEvalExprSwitchContext(exprstate, ectx, isnull);
 	}
+}
+
+/*
+ * get_clause_strategy_num
+ *
+ *	Given a clause and check if it is OK to be used to run time partition prune
+ * estimation. If yes, return the StrategyNumber. It is possible that a clause
+ * can be used as partition prune but can't be used as partition prune estimation
+ * at the current implementation since we have to put more effort on such cases
+ * and we don't know how to estimate it well even so.  So it is still tuned to
+ * support such case or not.
+ */
+static int
+get_clause_strategy_num(RelOptInfo *rel, Expr *clause, Expr *partkey, int partkeyidx)
+{
+	PartitionScheme part_scheme = rel->part_scheme;
+	Oid			partopfamily = part_scheme->partopfamily[partkeyidx],
+		partcoll = part_scheme->partcollation[partkeyidx];
+
+	Expr *leftop, *rightop;
+	Oid			opno,
+		op_lefttype,
+		op_righttype,
+		negator = InvalidOid;
+	int			op_strategy = InvalidStrategy;
+	bool		is_opne_listp = false;
+
+	if (IsA(clause, OpExpr))
+	{
+		OpExpr *opexpr = (OpExpr *)clause;
+		leftop = (Expr *) get_leftop(clause);
+		if (IsA(leftop, RelabelType))
+			leftop = ((RelabelType *) leftop)->arg;
+		rightop = (Expr *) get_rightop(clause);
+		if (IsA(rightop, RelabelType))
+			rightop = ((RelabelType *) rightop)->arg;
+		opno = opexpr->opno;
+
+		/* I don't care about the expr actually */
+		if (!equal(leftop, partkey) && !equal(rightop, partkey))
+			return InvalidStrategy;
+
+		/* collation mismatch */
+		if (!PartCollMatchesExprColl(partcoll, opexpr->inputcollid))
+			return InvalidStrategy;
+
+		if (op_in_opfamily(opno, partopfamily))
+		{
+			get_op_opfamily_properties(opno, partopfamily,
+									   false, &op_strategy,
+									   &op_lefttype, &op_righttype);
+		}
+		else
+		{
+			if (part_scheme->strategy != PARTITION_STRATEGY_LIST)
+				return InvalidStrategy;
+
+			/* See if the negator is equality */
+			negator = get_negator(opno);
+			if (OidIsValid(negator) && op_in_opfamily(negator, partopfamily))
+			{
+				get_op_opfamily_properties(negator, partopfamily, false,
+										   &op_strategy, &op_lefttype,
+										   &op_righttype);
+				if (op_strategy == BTEqualStrategyNumber)
+					is_opne_listp = true;	/* bingo */
+			}
+
+			if (!is_opne_listp)
+				return InvalidStrategy;
+		}
+
+		if (!op_strict(opno))
+			return InvalidStrategy;
+
+		return op_strategy;
+	}
+	else if (IsA(clause, ScalarArrayOpExpr))
+	{
+		/* still tuned */
+	}
+
+	else
+	{
+		/* still tuned */
+	}
+
+	return InvalidStrategy;
+}
+
+
+/*
+ * gen_partitioned_rel_quals
+ *
+ *	We have got the translated quals for a partitioned rel, now we will match it
+ * partkey and return a PartitionedRelPruneQual for run-time partition prune
+ * estimation.
+ */
+static PartitionedRelPruneQual *
+gen_partitioned_rel_quals(RelOptInfo *rel, List *all_quals)
+{
+	int *strategy_nums = NULL;
+	ListCell *lc;
+	PartitionScheme part_scheme = rel->part_scheme;
+	int i;
+	PartitionedRelPruneQual *res;
+	foreach(lc, all_quals)
+	{
+		Expr	*clause = (Expr *) lfirst(lc);
+
+		if (IsA(clause, RestrictInfo))
+			clause = ((RestrictInfo *) clause)->clause;
+
+		for (i = 0;  i < part_scheme->partnatts; i++)
+		{
+			Expr	   *partkey = linitial(rel->partexprs[i]);
+			int op_strategy = get_clause_strategy_num(rel, clause, partkey, i);
+			if (op_strategy != InvalidStrategy)
+			{
+				if (strategy_nums == NULL)
+				{
+					strategy_nums = palloc0(part_scheme->partnatts * sizeof(int));
+				}
+				strategy_nums[i] = op_strategy;
+				break;
+			}
+		}
+	}
+
+	res = makeNode(PartitionedRelPruneQual);
+	res->rtindex = rel->relid;
+	res->strategy_number = strategy_nums;
+	return res;
+}
+
+
+/*
+ * get_lived_partition
+ *	 Given PartitionedRelPruneQual and RelOptInfo, we estimate how many
+ * partition will survive after run time prune. use `double` here just
+ * because it is a estimated value and double is more accurate than int.
+ * All the cases that I made it as 0.75 * total_parts is still tuned. But
+ * if we decide more complex cases to handle, the definition of PartitionedRelPruneQual
+ * probably need an enhancement. Replace the 0.75 with 1 will work same as the current situation.
+ * return live_parts and total_parts rather than a ratio because that
+ * will make the sub-partition estimation easier.
+ */
+static double
+get_lived_partition(struct PlannerInfo *root,
+					PartitionedRelPruneQual *prinfo,
+					double *total_parts,
+					RelOptInfo *rel)
+{
+	/* All the partition key have a BTEqualStrategyNumber is perfect */
+	bool	is_perfect = true;
+	int i;
+	Assert(IS_PARTITIONED_REL(rel));
+
+	/*
+	 * The total partition here is all the lived partition after plan time
+	 * partition prune.  It has some issue in the following example,
+	 * but I think the impact would be OK.
+	 * partition by (partkey1, partkey2), query is where partkey1 = Const.
+	 * In this case, we already have some plan time partition prune for partkey1
+	 * but we will count the partition prune info again here. However for the common
+	 * case like partkey1 = Const1 and partkey2 = Const2. or partkey1 = $1 and
+	 * partkey2 = $2, there is no impact at all.
+	 * And I can't use the total partition from partition definition since the
+	 * we use the calculate the prune_ratio which impacts on the total_cost/rows
+	 * which is from the partitions after the plan time partition prune.
+	 */
+	*total_parts = bms_num_members(rel->all_partrels);
+
+	/* No partkey quals at all. */
+	if (prinfo->strategy_number == NULL)
+		return *total_parts;
+
+	for (i = 0; i < rel->part_scheme->partnatts; i++)
+	{
+		if (prinfo->strategy_number[i] != BTEqualStrategyNumber)
+		{
+			is_perfect = false;
+			break;
+		}
+	}
+
+	/*
+	 * If we replace the 0.75 with 1 below, the behavior will be same as before
+	 * for such case.
+	 */
+	return is_perfect ? 1 : 0.75 * (*total_parts);
+}
+
+
+/*
+ * est_runtime_part_prune_internal
+ *
+ *	Given a list of PartitionedRelPruneQual, we estimate a prune factor
+ * for the partitioned rel.
+ */
+static double
+est_runtime_part_prune_internal(struct PlannerInfo *root,
+								List *prune_quals)
+{
+	ListCell *lc;
+	RelOptInfo *rel = NULL;
+	double total_parent_parts = 0, total_sub_parts = 0,
+		live_parent_parts = 0, live_sub_parts = 0;
+	double parent_live_ratio;
+	if (prune_quals == NIL)
+		return 1;
+	foreach(lc, prune_quals)
+	{
+		PartitionedRelPruneQual *pinfo = lfirst_node(PartitionedRelPruneQual, lc);
+		double live_parts, total_parts;
+		rel = find_base_rel(root, pinfo->rtindex);
+		Assert(IS_PARTITIONED_REL(rel));
+		live_parts = get_lived_partition(root, pinfo, &total_parts, rel);
+
+		if (rel->reloptkind == RELOPT_BASEREL)
+		{
+			Assert(total_parent_parts == 0);
+			Assert(live_parent_parts == 0);
+			total_parent_parts = total_parts;
+			live_parent_parts = live_parts;
+		}
+		else
+		{
+			total_sub_parts += total_parts;
+			live_sub_parts += live_parts;
+		}
+	}
+	if (total_parent_parts)
+	{
+		parent_live_ratio = live_parent_parts * 1.0 / total_parent_parts;		
+	}
+	else
+		parent_live_ratio = 1;
+
+	if (total_sub_parts > 0)
+		return live_sub_parts * 1.0 / total_sub_parts * parent_live_ratio;
+	return parent_live_ratio;
+}
+
+/*
+ * est_runtime_part_prune
+ *	estimate a runtime partition prune ratio for a partitioned_rel.
+ */
+double
+est_runtime_part_prune(struct PlannerInfo *root,
+					   struct RelOptInfo *topmostrel,
+					   Relids partitioned_rel,
+					   List *prmquals)
+{
+	List	*prunequal;
+	RelOptInfo *currel = NULL;
+	List	*rel_prune_quals = NIL;
+	int rti = -1;
+
+	prunequal = extract_actual_clauses(topmostrel->baserestrictinfo, false);
+	prunequal = list_concat(prunequal, prmquals);
+
+	while((rti = bms_next_member(partitioned_rel, rti)) >= 0)
+	{
+		RelOptInfo *subpart = find_base_rel(root, rti);
+		List *translated_quals = translate_appendrel_vars(root,
+														  topmostrel,
+														  subpart,
+														  &currel,
+														  &prunequal);
+		PartitionedRelPruneQual* partqual  = gen_partitioned_rel_quals(subpart,
+																	   translated_quals);
+		rel_prune_quals = lappend(rel_prune_quals, partqual);
+	}
+
+	return est_runtime_part_prune_internal(root, rel_prune_quals);
 }

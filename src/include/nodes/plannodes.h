@@ -1122,9 +1122,35 @@ typedef struct PartitionPruneInfo
 	Bitmapset  *other_subplans;
 } PartitionPruneInfo;
 
+
+
+/*
+ * PartitionedRelPruneQual
+ *   Used to estimate the run time partition prune ratio for a given partitioned
+ * rel's qual.
+ *
+ * strategy_number is a array of `int` for now, indexed by partattrno.  it is OK
+ * for most of the cases,
+ * however it can't represent some more complex cases, like partkey between
+ * $1 and $2. OR (partkey = $1 or partkey = $2).  Since even when know this,
+ * we still can't estimate a good number for that, so I am not sure if it worth
+ * the trouble.  If we need that, we can change `int` to a struct which can include
+ * more info, so still tuned.
+ */
+
+typedef struct PartitionedRelPruneQual
+{
+	NodeTag		type;
+	int			rtindex;
+	int		*strategy_number;
+} PartitionedRelPruneQual;
+
+
 /*
  * PartitionedRelPruneInfo - Details required to allow the executor to prune
- * partitions for a single partitioned table.
+ * partitions for a single partitioned table or allow planner to estimate
+ * how many partition can survive after run time partition prune. In the
+ * later case, only part of the fields are set, see est_runtime_part_prune
  *
  * subplan_map[] and subpart_map[] are indexed by partition index of the
  * partitioned table referenced by 'rtindex', the partition index being the

@@ -20,6 +20,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogreader.h"
 #include "access/xlogrecord.h"
+#include "catalog/pg_control.h"
 #include "common/fe_memutils.h"
 #include "common/logging.h"
 #include "getopt_long.h"
@@ -66,6 +67,7 @@ typedef struct Stats
 typedef struct XLogDumpStats
 {
 	uint64		count;
+	uint32		junk_size;
 	Stats		rmgr_stats[RM_NEXT_ID];
 	Stats		record_stats[RM_NEXT_ID][MAX_XLINFO_TYPES];
 } XLogDumpStats;
@@ -416,12 +418,21 @@ XLogDumpCountRecord(XLogDumpConfig *config, XLogDumpStats *stats,
 	uint8		recid;
 	uint32		rec_len;
 	uint32		fpi_len;
+	uint8		info;
 
 	stats->count++;
 
 	rmid = XLogRecGetRmid(record);
+	info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
 
 	XLogDumpRecordLen(record, &rec_len, &fpi_len);
+	/* Add junk-space stats for XLOG_SWITCH  */
+	if (rmid == RM_XLOG_ID && info == XLOG_SWITCH)
+	{
+		uint32 junk_len = xlog_switch_junk_len(record);
+
+		stats->junk_size += junk_len;
+	}
 
 	/* Update per-rmgr statistics */
 
@@ -595,6 +606,38 @@ XLogDumpStatsRow(const char *name,
 		   tot_len, tot_len_pct);
 }
 
+static void
+XLogDumpStatsRow_junk(bool detail,
+				 uint64 rec_len, uint64 total_rec_len,
+				 uint64 tot_len, uint64 total_len)
+{
+	double		rec_len_pct,
+				tot_len_pct;
+	char		*name = NULL;
+	char		pad = '-';
+
+	if (detail)
+		name = "XLOG/SWITCH_JUNK";
+	else
+		name = "XLOGSwitchJunk";
+
+	rec_len_pct = 0;
+	if (total_rec_len != 0)
+		rec_len_pct = 100 * (double) rec_len / total_rec_len;
+
+	tot_len_pct = 0;
+	if (total_len != 0)
+		tot_len_pct = 100 * (double) tot_len / total_len;
+
+	printf("%-27s "
+		   "%20c (%6c) "
+		   "%20" INT64_MODIFIER "u (%6.02f) "
+		   "%20c (%6c) "
+		   "%20" INT64_MODIFIER "u (%6.02f)\n",
+		   name, pad, pad, rec_len, rec_len_pct, pad, pad,
+		   tot_len, tot_len_pct);
+}
+
 
 /*
  * Display summary statistics about the records seen so far.
@@ -622,6 +665,7 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogDumpStats *stats)
 		total_rec_len += stats->rmgr_stats[ri].rec_len;
 		total_fpi_len += stats->rmgr_stats[ri].fpi_len;
 	}
+	total_rec_len += stats->junk_size;
 	total_len = total_rec_len + total_fpi_len;
 
 	/*
@@ -652,12 +696,22 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogDumpStats *stats)
 			XLogDumpStatsRow(desc->rm_name,
 							 count, total_count, rec_len, total_rec_len,
 							 fpi_len, total_fpi_len, tot_len, total_len);
+			if (ri == RM_XLOG_ID)
+			{
+				XLogDumpStatsRow_junk(false,
+								stats->junk_size, total_rec_len,
+								stats->junk_size, total_len);
+			}
+
 		}
 		else
 		{
+			bool	getswitch = false;
+
 			for (rj = 0; rj < MAX_XLINFO_TYPES; rj++)
 			{
 				const char *id;
+				uint8		info;
 
 				count = stats->record_stats[ri][rj].count;
 				rec_len = stats->record_stats[ri][rj].rec_len;
@@ -676,7 +730,15 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogDumpStats *stats)
 				XLogDumpStatsRow(psprintf("%s/%s", desc->rm_name, id),
 								 count, total_count, rec_len, total_rec_len,
 								 fpi_len, total_fpi_len, tot_len, total_len);
+				info = (rj << 4) & ~XLR_INFO_MASK;
+				if (ri == RM_XLOG_ID && info == XLOG_SWITCH)
+					getswitch = true;
+
 			}
+			if (getswitch)
+				XLogDumpStatsRow_junk(true,
+									stats->junk_size, total_rec_len,
+									stats->junk_size, total_len);
 		}
 	}
 

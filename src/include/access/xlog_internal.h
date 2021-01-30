@@ -315,6 +315,7 @@ extern XLogRecPtr RequestXLogSwitch(bool mark_unimportant);
 
 extern void GetOldestRestartPoint(XLogRecPtr *oldrecptr, TimeLineID *oldtli);
 
+extern uint32 xlog_switch_junk_len(XLogReaderState *record);
 /*
  * Exported for the functions in timeline.c and xlogarchive.c.  Only valid
  * in the startup process.

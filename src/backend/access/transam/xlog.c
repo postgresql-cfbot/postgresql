@@ -7518,6 +7518,29 @@ StartupXLOG(void)
 					(errmsg("redo done at %X/%X system usage: %s",
 							(uint32) (ReadRecPtr >> 32), (uint32) ReadRecPtr,
 							pg_rusage_show(&ru0))));
+			if (!InArchiveRecovery)
+			{
+				if (!INSTR_TIME_IS_ZERO(pgBufferUsage.blk_read_time))
+					ereport(LOG,
+						(errmsg("crash recovery complete: wrote %ld buffers (%.1f%%) (%0.3f ms); "
+								"dirtied %ld buffers; read %ld buffers (%0.3f ms)",
+								pgBufferUsage.shared_blks_written,
+								(double) pgBufferUsage.shared_blks_written * 100 / NBuffers,
+								INSTR_TIME_GET_MILLISEC(pgBufferUsage.blk_write_time),
+								pgBufferUsage.shared_blks_dirtied,
+								pgBufferUsage.shared_blks_read,
+								INSTR_TIME_GET_MILLISEC(pgBufferUsage.blk_read_time)
+								)));
+				else
+					ereport(LOG,
+						(errmsg("crash recovery complete: wrote %ld buffers (%.1f%%); "
+								"dirtied %ld buffers; read %ld buffers",
+								pgBufferUsage.shared_blks_written,
+								(double) pgBufferUsage.shared_blks_written * 100 / NBuffers,
+								pgBufferUsage.shared_blks_dirtied,
+								pgBufferUsage.shared_blks_read
+								)));
+			}
 			xtime = GetLatestXTime();
 			if (xtime)
 				ereport(LOG,

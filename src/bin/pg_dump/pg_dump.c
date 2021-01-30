@@ -208,6 +208,7 @@ static void dumpSequence(Archive *fout, TableInfo *tbinfo);
 static void dumpSequenceData(Archive *fout, TableDataInfo *tdinfo);
 static void dumpIndex(Archive *fout, IndxInfo *indxinfo);
 static void dumpIndexAttach(Archive *fout, IndexAttachInfo *attachinfo);
+static void dumpIndexClusterOn(Archive *fout, IndexClusterInfo *clusterinfo);
 static void dumpStatisticsExt(Archive *fout, StatsExtInfo *statsextinfo);
 static void dumpConstraint(Archive *fout, ConstraintInfo *coninfo);
 static void dumpTableConstraintComment(Archive *fout, ConstraintInfo *coninfo);
@@ -7092,6 +7093,11 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 				i_inddependcollversions;
 	int			ntups;
 
+	int	ncluster = 0;
+	IndexClusterInfo *clusterinfo;
+	clusterinfo = (IndexClusterInfo *)
+		pg_malloc0(numTables * sizeof(IndexClusterInfo));
+
 	for (i = 0; i < numTables; i++)
 	{
 		TableInfo  *tbinfo = &tblinfo[i];
@@ -7470,6 +7476,27 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 			{
 				/* Plain secondary index */
 				indxinfo[j].indexconstraint = 0;
+			}
+
+			/* Record each table's CLUSTERed index, if any */
+			if (indxinfo[j].indisclustered)
+			{
+				IndxInfo   *index = &indxinfo[j];
+				IndexClusterInfo *cluster = &clusterinfo[ncluster];
+
+				cluster->dobj.objType = DO_INDEX_CLUSTER_ON;
+				cluster->dobj.catId.tableoid = 0;
+				cluster->dobj.catId.oid = 0;
+				AssignDumpId(&cluster->dobj);
+				cluster->dobj.name = pg_strdup(index->dobj.name);
+				cluster->dobj.namespace = index->indextable->dobj.namespace;
+				cluster->index = index;
+				cluster->indextable = &tblinfo[i];
+
+				/* The CLUSTER ON depends on its index.. */
+				addObjectDependency(&cluster->dobj, index->dobj.dumpId);
+
+				ncluster++;
 			}
 		}
 
@@ -10295,6 +10322,9 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 			break;
 		case DO_SUBSCRIPTION:
 			dumpSubscription(fout, (SubscriptionInfo *) dobj);
+			break;
+		case DO_INDEX_CLUSTER_ON:
+			dumpIndexClusterOn(fout, (IndexClusterInfo *) dobj);
 			break;
 		case DO_PRE_DATA_BOUNDARY:
 		case DO_POST_DATA_BOUNDARY:
@@ -16517,6 +16547,41 @@ getAttrName(int attrnum, TableInfo *tblInfo)
 }
 
 /*
+ * dumpIndexClusterOn
+ *	  record that the index is clustered.
+ */
+static void
+dumpIndexClusterOn(Archive *fout, IndexClusterInfo *clusterinfo)
+{
+	DumpOptions *dopt = fout->dopt;
+	TableInfo	*tbinfo = clusterinfo->indextable;
+	char		*qindxname;
+	PQExpBuffer	q;
+
+	if (dopt->dataOnly)
+		return;
+
+	q = createPQExpBuffer();
+	qindxname = pg_strdup(fmtId(clusterinfo->dobj.name));
+
+	/* index name is not qualified in this syntax */
+	appendPQExpBuffer(q, "\nALTER TABLE %s CLUSTER ON %s;\n",
+					  fmtQualifiedDumpable(tbinfo), qindxname);
+
+	if (clusterinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
+		ArchiveEntry(fout, clusterinfo->dobj.catId, clusterinfo->dobj.dumpId,
+					 ARCHIVE_OPTS(.tag = clusterinfo->dobj.name,
+								  .namespace = tbinfo->dobj.namespace->dobj.name,
+								  .owner = tbinfo->rolname,
+								  .description = "INDEX CLUSTER ON",
+								  .section = SECTION_POST_DATA,
+								  .createStmt = q->data));
+
+	destroyPQExpBuffer(q);
+	free(qindxname);
+}
+
+/*
  * dumpIndex
  *	  write out to fout a user-defined index
  */
@@ -16569,16 +16634,6 @@ dumpIndex(Archive *fout, IndxInfo *indxinfo)
 		 * only have ALTER TABLE syntax for.  Keep this in sync with the
 		 * similar code in dumpConstraint!
 		 */
-
-		/* If the index is clustered, we need to record that. */
-		if (indxinfo->indisclustered)
-		{
-			appendPQExpBuffer(q, "\nALTER TABLE %s CLUSTER",
-							  fmtQualifiedDumpable(tbinfo));
-			/* index name is not qualified in this syntax */
-			appendPQExpBuffer(q, " ON %s;\n",
-							  qindxname);
-		}
 
 		/*
 		 * If the index has any statistics on some of its columns, generate
@@ -16905,16 +16960,6 @@ dumpConstraint(Archive *fout, ConstraintInfo *coninfo)
 		 * only have ALTER TABLE syntax for.  Keep this in sync with the
 		 * similar code in dumpIndex!
 		 */
-
-		/* If the index is clustered, we need to record that. */
-		if (indxinfo->indisclustered)
-		{
-			appendPQExpBuffer(q, "\nALTER TABLE %s CLUSTER",
-							  fmtQualifiedDumpable(tbinfo));
-			/* index name is not qualified in this syntax */
-			appendPQExpBuffer(q, " ON %s;\n",
-							  fmtId(indxinfo->dobj.name));
-		}
 
 		/* If the index defines identity, we need to record that. */
 		if (indxinfo->indisreplident)
@@ -18421,6 +18466,7 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 				break;
 			case DO_INDEX:
 			case DO_INDEX_ATTACH:
+			case DO_INDEX_CLUSTER_ON:
 			case DO_STATSEXT:
 			case DO_REFRESH_MATVIEW:
 			case DO_TRIGGER:

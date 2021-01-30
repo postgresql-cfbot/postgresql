@@ -25,6 +25,7 @@
 #include "catalog/catalog.h"
 #include "catalog/index.h"
 #include "catalog/indexing.h"
+#include "catalog/partition.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_inherits.h"
@@ -32,6 +33,7 @@
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_type.h"
+#include "commands/cluster.h"
 #include "commands/comment.h"
 #include "commands/dbcommands.h"
 #include "commands/defrem.h"
@@ -4003,6 +4005,27 @@ IndexSetParentIndex(Relation partitionIdx, Oid parentOid)
 
 	/* set relispartition correctly on the partition */
 	update_relispartition(partRelid, OidIsValid(parentOid));
+
+	/*
+	 * If the attached index is not clustered, invalidate cluster mark on
+	 * any parents
+	 */
+	if ((OidIsValid(parentOid) && get_index_isclustered(parentOid)) ||
+			get_index_isclustered(partRelid))
+	{
+		Relation indrel;
+
+		/* Make relispartition visible */
+		CommandCounterIncrement();
+
+		indrel = table_open(IndexGetRelation(partRelid, false),
+				ShareUpdateExclusiveLock);
+		mark_index_clustered(indrel,
+				get_index_isclustered(partRelid) ? partRelid : InvalidOid,
+				true);
+		table_close(indrel, ShareUpdateExclusiveLock);
+
+	}
 
 	if (fix_dependencies)
 	{

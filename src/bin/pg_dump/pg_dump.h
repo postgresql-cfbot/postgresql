@@ -54,6 +54,7 @@ typedef enum
 	DO_ATTRDEF,
 	DO_INDEX,
 	DO_INDEX_ATTACH,
+	DO_INDEX_CLUSTER_ON,
 	DO_STATSEXT,
 	DO_RULE,
 	DO_TRIGGER,
@@ -385,6 +386,13 @@ typedef struct _indxInfo
 	/* if there is an associated constraint object, its dumpId: */
 	DumpId		indexconstraint;
 } IndxInfo;
+
+typedef struct _indexClusterInfo
+{
+	DumpableObject dobj;
+	TableInfo  *indextable;		/* link to table the index is for */
+	IndxInfo   *index;		/* link to index itself */
+} IndexClusterInfo;
 
 typedef struct _indexAttachInfo
 {

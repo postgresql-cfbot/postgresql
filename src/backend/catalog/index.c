@@ -603,7 +603,7 @@ UpdateIndexRelation(Oid indexoid,
 	values[Anum_pg_index_indisprimary - 1] = BoolGetDatum(primary);
 	values[Anum_pg_index_indisexclusion - 1] = BoolGetDatum(isexclusion);
 	values[Anum_pg_index_indimmediate - 1] = BoolGetDatum(immediate);
-	values[Anum_pg_index_indisclustered - 1] = BoolGetDatum(false);
+	values[Anum_pg_index_indisclustered - 1] = BoolGetDatum(OidIsValid(parentIndexId) && get_index_isclustered(parentIndexId));
 	values[Anum_pg_index_indisvalid - 1] = BoolGetDatum(isvalid);
 	values[Anum_pg_index_indcheckxmin - 1] = BoolGetDatum(false);
 	values[Anum_pg_index_indisready - 1] = BoolGetDatum(isready);

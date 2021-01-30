@@ -20,6 +20,7 @@
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_database.h"
 #include "catalog/pg_event_trigger.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
@@ -43,10 +44,13 @@
 #include "utils/builtins.h"
 #include "utils/evtcache.h"
 #include "utils/fmgroids.h"
+#include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+
+bool enable_client_connection_trigger;
 
 typedef struct EventTriggerQueryState
 {
@@ -130,6 +134,7 @@ CreateEventTrigger(CreateEventTrigStmt *stmt)
 	if (strcmp(stmt->eventname, "ddl_command_start") != 0 &&
 		strcmp(stmt->eventname, "ddl_command_end") != 0 &&
 		strcmp(stmt->eventname, "sql_drop") != 0 &&
+		strcmp(stmt->eventname, "client_connection") != 0 &&
 		strcmp(stmt->eventname, "table_rewrite") != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
@@ -292,6 +297,23 @@ insert_event_trigger_tuple(const char *trigname, const char *eventname, Oid evtO
 	tuple = heap_form_tuple(tgrel->rd_att, values, nulls);
 	CatalogTupleInsert(tgrel, tuple);
 	heap_freetuple(tuple);
+
+	if (strcmp(eventname, "client_connection") == 0)
+	{
+		Form_pg_database db;
+		Relation pg_db = table_open(DatabaseRelationId, RowExclusiveLock);
+		/* Set dathaslogontriggers flag in pg_database */
+		tuple = SearchSysCacheCopy1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
+		db = (Form_pg_database) GETSTRUCT(tuple);
+		if (!db->dathaslogontriggers)
+		{
+			db->dathaslogontriggers = true;
+			CatalogTupleUpdate(pg_db, &tuple->t_self, tuple);
+		}
+		table_close(pg_db, RowExclusiveLock);
+	}
 
 	/* Depend on owner. */
 	recordDependencyOnOwner(EventTriggerRelationId, trigoid, evtOwner);
@@ -562,6 +584,9 @@ EventTriggerCommonSetup(Node *parsetree,
 	ListCell   *lc;
 	List	   *runlist = NIL;
 
+	/* Get the command tag. */
+	tag = parsetree ? CreateCommandTag(parsetree) : CMDTAG_CONNECT;
+
 	/*
 	 * We want the list of command tags for which this procedure is actually
 	 * invoked to match up exactly with the list that CREATE EVENT TRIGGER
@@ -577,22 +602,18 @@ EventTriggerCommonSetup(Node *parsetree,
 	 * relevant command tag.
 	 */
 #ifdef USE_ASSERT_CHECKING
+	if (event == EVT_DDLCommandStart ||
+		event == EVT_DDLCommandEnd ||
+		event == EVT_SQLDrop ||
+		event == EVT_Connect)
 	{
-		CommandTag	dbgtag;
-
-		dbgtag = CreateCommandTag(parsetree);
-		if (event == EVT_DDLCommandStart ||
-			event == EVT_DDLCommandEnd ||
-			event == EVT_SQLDrop)
-		{
-			if (!command_tag_event_trigger_ok(dbgtag))
-				elog(ERROR, "unexpected command tag \"%s\"", GetCommandTagName(dbgtag));
-		}
-		else if (event == EVT_TableRewrite)
-		{
-			if (!command_tag_table_rewrite_ok(dbgtag))
-				elog(ERROR, "unexpected command tag \"%s\"", GetCommandTagName(dbgtag));
-		}
+		if (!command_tag_event_trigger_ok(tag))
+			elog(ERROR, "unexpected command tag \"%s\"", GetCommandTagName(tag));
+	}
+	else if (event == EVT_TableRewrite)
+	{
+		if (!command_tag_table_rewrite_ok(tag))
+			elog(ERROR, "unexpected command tag \"%s\"", GetCommandTagName(tag));
 	}
 #endif
 
@@ -600,9 +621,6 @@ EventTriggerCommonSetup(Node *parsetree,
 	cachelist = EventCacheLookup(event);
 	if (cachelist == NIL)
 		return NIL;
-
-	/* Get the command tag. */
-	tag = CreateCommandTag(parsetree);
 
 	/*
 	 * Filter list of event triggers by command tag, and copy them into our
@@ -798,6 +816,117 @@ EventTriggerSQLDrop(Node *parsetree)
 
 	/* Cleanup. */
 	list_free(runlist);
+}
+
+static bool
+DatabaseHasLogonTriggers(void)
+{
+	bool has_logon_triggers;
+	HeapTuple tuple = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
+
+	has_logon_triggers = ((Form_pg_database) GETSTRUCT(tuple))->dathaslogontriggers;
+	ReleaseSysCache(tuple);
+	return has_logon_triggers;
+}
+
+/*
+ * Fire connect triggers.
+ */
+void
+EventTriggerOnConnect(void)
+{
+	List	   *runlist;
+	EventTriggerData trigdata;
+
+	/*
+	 * See EventTriggerDDLCommandStart for a discussion about why event
+	 * triggers are disabled in single user mode.
+	 */
+	if (!IsUnderPostmaster
+		|| !OidIsValid(MyDatabaseId)
+		|| !enable_client_connection_trigger)
+		return;
+
+	StartTransactionCommand();
+
+	if (DatabaseHasLogonTriggers())
+	{
+		runlist = EventTriggerCommonSetup(NULL,
+										  EVT_Connect, "connect",
+										  &trigdata);
+
+		if (runlist != NIL)
+		{
+			MemoryContext old_context = CurrentMemoryContext;
+			bool is_superuser = superuser();
+			/*
+			 * Make sure anything the main command did will be visible to the event
+			 * triggers.
+			 */
+			CommandCounterIncrement();
+
+			/* Run the triggers. */
+			PG_TRY();
+			{
+				EventTriggerInvoke(runlist, &trigdata);
+				list_free(runlist);
+			}
+			PG_CATCH();
+			{
+				ErrorData* error;
+				/*
+				 * Try to ignore error for superuser to make it possible to login even in case of errors
+				 * during trigger execution
+				 */
+				if (!is_superuser)
+					PG_RE_THROW();
+
+				MemoryContextSwitchTo(old_context);
+				error = CopyErrorData();
+				FlushErrorState();
+				elog(NOTICE, "client_connection trigger failed with message: %s", error->message);
+				AbortCurrentTransaction();
+				return;
+			}
+			PG_END_TRY();
+		}
+		else
+		{
+			/* Runtlist is empty: clear dathaslogontriggers flag
+			 */
+			Relation pg_db = table_open(DatabaseRelationId, RowExclusiveLock);
+			HeapTuple tuple = SearchSysCacheCopy1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+			Form_pg_database db;
+
+			if (!HeapTupleIsValid(tuple))
+				elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
+
+			db = (Form_pg_database) GETSTRUCT(tuple);
+			if (db->dathaslogontriggers)
+			{
+				db->dathaslogontriggers = false;
+				CatalogTupleUpdate(pg_db, &tuple->t_self, tuple);
+				/*
+				 * There can be race condition: event trigger may be added after we have scanned
+				 * pg_event_trigger table. Repeat this test nuder  pg_database table lock.
+				 */
+				AcceptInvalidationMessages();
+				runlist = EventTriggerCommonSetup(NULL,
+												  EVT_Connect, "connect",
+												  &trigdata);
+				if (runlist != NULL) /* if list is not empty, then restore the flag */
+				{
+					db->dathaslogontriggers = true;
+					CatalogTupleUpdate(pg_db, &tuple->t_self, tuple);
+				}
+			}
+			table_close(pg_db, RowExclusiveLock);
+		}
+	}
+	CommitTransactionCommand();
 }
 
 

@@ -998,6 +998,24 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-enable-client-connection-trigger" xreflabel="enable_client_connection_trigger">
+      <term><varname>enable_client_connection_trigger</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>enable_client_connection_trigger</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Enables firing the <literal>client_connection</literal>
+        trigger when a client connects. This parameter is switched on by default.
+        Errors in trigger code can prevent user to login to the system.
+        In this case disabling this parameter in connection string can solve the problem:
+        <literal>psql "dbname=postgres options='-c enable_client_connection_trigger=false'".</literal>
+        Only superuser can change this variable.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
 

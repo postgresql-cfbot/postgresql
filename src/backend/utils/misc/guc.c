@@ -43,6 +43,7 @@
 #include "commands/async.h"
 #include "commands/prepare.h"
 #include "commands/trigger.h"
+#include "commands/event_trigger.h"
 #include "commands/user.h"
 #include "commands/vacuum.h"
 #include "commands/variable.h"
@@ -930,6 +931,18 @@ static const unit_conversion time_unit_conversion_table[] =
 
 static struct config_bool ConfigureNamesBool[] =
 {
+	{
+		{"enable_client_connection_trigger", PGC_SU_BACKEND, DEVELOPER_OPTIONS,
+			gettext_noop("Enables the client_connection event trigger."),
+			gettext_noop("In case of errors in the ON client_connection EVENT TRIGGER procedure, "
+						 "this parameter can be used to disable trigger activation "
+						 "and provide access to the database."),
+			GUC_EXPLAIN
+		},
+		&enable_client_connection_trigger,
+		true,
+		NULL, NULL, NULL
+	},
 	{
 		{"enable_seqscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of sequential-scan plans."),

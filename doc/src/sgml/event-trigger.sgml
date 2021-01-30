@@ -28,11 +28,35 @@
      An event trigger fires whenever the event with which it is associated
      occurs in the database in which it is defined. Currently, the only
      supported events are
+     <literal>client_connection</literal>,
      <literal>ddl_command_start</literal>,
      <literal>ddl_command_end</literal>,
      <literal>table_rewrite</literal>
      and <literal>sql_drop</literal>.
      Support for additional events may be added in future releases.
+   </para>
+
+   <para>
+     The <literal>client_connection</literal> event occurs when a client connection
+     to the server is established.
+     There are two mechanisms for dealing with any bugs in a trigger procedure for
+     this event which might prevent successful login to the system:
+     <itemizedlist>
+      <listitem>
+       <para>
+         The configuration parameter <literal>enable_client_connection_trigger</literal>
+         makes it possible to disable firing the <literal>client_connection</literal>
+         trigger when a client connects.
+       </para>
+      </listitem>
+      <listitem>
+       <para>
+         Errors in the <literal>client_connection</literal> trigger procedure are
+         ignored for superuser. An error message is delivered to the client as
+         <literal>NOTICE</literal> in this case.
+       </para>
+      </listitem>
+     </itemizedlist>
    </para>
 
    <para>

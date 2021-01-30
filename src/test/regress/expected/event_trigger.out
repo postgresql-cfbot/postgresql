@@ -536,3 +536,40 @@ NOTICE:  DROP POLICY - ddl_command_end
 DROP EVENT TRIGGER start_rls_command;
 DROP EVENT TRIGGER end_rls_command;
 DROP EVENT TRIGGER sql_drop_command;
+-- On session start triggers
+create table connects(id serial, who text);
+create function on_login_proc() returns event_trigger as $$
+begin
+  insert into connects (who) values ('I am');
+  raise notice 'You are welcome!';
+end;
+$$ language plpgsql;
+create event trigger on_login_trigger on client_connection execute procedure on_login_proc();
+alter event trigger on_login_trigger enable always;
+\c
+NOTICE:  You are welcome!
+select * from connects;
+ id | who  
+----+------
+  1 | I am
+(1 row)
+
+\c
+NOTICE:  You are welcome!
+select * from connects;
+ id | who  
+----+------
+  1 | I am
+  2 | I am
+(2 rows)
+
+-- Test handing exeptions in client_connection trigger
+drop table connects;
+-- superuser should ignore error
+\c
+NOTICE:  client_connection trigger failed with message: relation "connects" does not exist
+-- suppress trigger firing
+\c "dbname=regression options='-c enable_client_connection_trigger=false'"
+-- Cleanup
+drop event trigger on_login_trigger;
+drop function on_login_proc();

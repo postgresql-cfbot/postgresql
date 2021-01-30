@@ -2728,6 +2728,7 @@ dumpDatabase(Archive *fout)
 				i_datacl,
 				i_rdatacl,
 				i_datistemplate,
+				i_dathaslogontriggers,
 				i_datconnlimit,
 				i_tablespace;
 	CatalogId	dbCatId;
@@ -2740,6 +2741,7 @@ dumpDatabase(Archive *fout)
 			   *datacl,
 			   *rdatacl,
 			   *datistemplate,
+			   *dathaslogontriggers,
 			   *datconnlimit,
 			   *tablespace;
 	uint32		frozenxid,
@@ -2758,7 +2760,7 @@ dumpDatabase(Archive *fout)
 	 * (pg_init_privs) are not supported on databases, so this logic cannot
 	 * make use of buildACLQueries().
 	 */
-	if (fout->remoteVersion >= 90600)
+	if (fout->remoteVersion >= 140000)
 	{
 		appendPQExpBuffer(dbQry, "SELECT tableoid, oid, datname, "
 						  "(%s datdba) AS dba, "
@@ -2784,7 +2786,41 @@ dumpDatabase(Archive *fout)
 						  "       AS permp(orig_acl) "
 						  "     WHERE acl = orig_acl)) AS rdatacls) "
 						  " AS rdatacl, "
-						  "datistemplate, datconnlimit, "
+						  "datistemplate, datconnlimit, dathaslogontriggers, "
+						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = dattablespace) AS tablespace, "
+						  "shobj_description(oid, 'pg_database') AS description "
+
+						  "FROM pg_database "
+						  "WHERE datname = current_database()",
+						  username_subquery);
+	}
+	else if (fout->remoteVersion >= 90600)
+	{
+		appendPQExpBuffer(dbQry, "SELECT tableoid, oid, datname, "
+						  "(%s datdba) AS dba, "
+						  "pg_encoding_to_char(encoding) AS encoding, "
+						  "datcollate, datctype, datfrozenxid, datminmxid, "
+						  "(SELECT array_agg(acl ORDER BY row_n) FROM "
+						  "  (SELECT acl, row_n FROM "
+						  "     unnest(coalesce(datacl,acldefault('d',datdba))) "
+						  "     WITH ORDINALITY AS perm(acl,row_n) "
+						  "   WHERE NOT EXISTS ( "
+						  "     SELECT 1 "
+						  "     FROM unnest(acldefault('d',datdba)) "
+						  "       AS init(init_acl) "
+						  "     WHERE acl = init_acl)) AS datacls) "
+						  " AS datacl, "
+						  "(SELECT array_agg(acl ORDER BY row_n) FROM "
+						  "  (SELECT acl, row_n FROM "
+						  "     unnest(acldefault('d',datdba)) "
+						  "     WITH ORDINALITY AS initp(acl,row_n) "
+						  "   WHERE NOT EXISTS ( "
+						  "     SELECT 1 "
+						  "     FROM unnest(coalesce(datacl,acldefault('d',datdba))) "
+						  "       AS permp(orig_acl) "
+						  "     WHERE acl = orig_acl)) AS rdatacls) "
+						  " AS rdatacl, "
+						  "datistemplate, datconnlimit, false as dathaslogontriggers, "
 						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = dattablespace) AS tablespace, "
 						  "shobj_description(oid, 'pg_database') AS description "
 
@@ -2798,7 +2834,7 @@ dumpDatabase(Archive *fout)
 						  "(%s datdba) AS dba, "
 						  "pg_encoding_to_char(encoding) AS encoding, "
 						  "datcollate, datctype, datfrozenxid, datminmxid, "
-						  "datacl, '' as rdatacl, datistemplate, datconnlimit, "
+						  "datacl, '' as rdatacl, datistemplate, datconnlimit, false as dathaslogontriggers"
 						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = dattablespace) AS tablespace, "
 						  "shobj_description(oid, 'pg_database') AS description "
 
@@ -2812,7 +2848,7 @@ dumpDatabase(Archive *fout)
 						  "(%s datdba) AS dba, "
 						  "pg_encoding_to_char(encoding) AS encoding, "
 						  "datcollate, datctype, datfrozenxid, 0 AS datminmxid, "
-						  "datacl, '' as rdatacl, datistemplate, datconnlimit, "
+						  "datacl, '' as rdatacl, datistemplate, datconnlimit, false as dathaslogontriggers, "
 						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = dattablespace) AS tablespace, "
 						  "shobj_description(oid, 'pg_database') AS description "
 
@@ -2826,7 +2862,7 @@ dumpDatabase(Archive *fout)
 						  "(%s datdba) AS dba, "
 						  "pg_encoding_to_char(encoding) AS encoding, "
 						  "NULL AS datcollate, NULL AS datctype, datfrozenxid, 0 AS datminmxid, "
-						  "datacl, '' as rdatacl, datistemplate, datconnlimit, "
+						  "datacl, '' as rdatacl, datistemplate, datconnlimit, false as dathaslogontriggers, "
 						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = dattablespace) AS tablespace, "
 						  "shobj_description(oid, 'pg_database') AS description "
 
@@ -2841,7 +2877,7 @@ dumpDatabase(Archive *fout)
 						  "pg_encoding_to_char(encoding) AS encoding, "
 						  "NULL AS datcollate, NULL AS datctype, datfrozenxid, 0 AS datminmxid, "
 						  "datacl, '' as rdatacl, datistemplate, "
-						  "-1 as datconnlimit, "
+						  "-1 as datconnlimit, false as dathaslogontriggers, "
 						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = dattablespace) AS tablespace "
 						  "FROM pg_database "
 						  "WHERE datname = current_database()",
@@ -2863,6 +2899,7 @@ dumpDatabase(Archive *fout)
 	i_rdatacl = PQfnumber(res, "rdatacl");
 	i_datistemplate = PQfnumber(res, "datistemplate");
 	i_datconnlimit = PQfnumber(res, "datconnlimit");
+	i_dathaslogontriggers = PQfnumber(res, "dathaslogontriggers");
 	i_tablespace = PQfnumber(res, "tablespace");
 
 	dbCatId.tableoid = atooid(PQgetvalue(res, 0, i_tableoid));
@@ -2877,6 +2914,7 @@ dumpDatabase(Archive *fout)
 	datacl = PQgetvalue(res, 0, i_datacl);
 	rdatacl = PQgetvalue(res, 0, i_rdatacl);
 	datistemplate = PQgetvalue(res, 0, i_datistemplate);
+	dathaslogontriggers = PQgetvalue(res, 0, i_dathaslogontriggers);
 	datconnlimit = PQgetvalue(res, 0, i_datconnlimit);
 	tablespace = PQgetvalue(res, 0, i_tablespace);
 
@@ -3048,6 +3086,14 @@ dumpDatabase(Archive *fout)
 							 "SET datistemplate = false WHERE datname = ");
 		appendStringLiteralAH(delQry, datname, fout);
 		appendPQExpBufferStr(delQry, ";\n");
+	}
+
+	if (strcmp(dathaslogontriggers, "t") == 0)
+	{
+		appendPQExpBufferStr(creaQry, "UPDATE pg_catalog.pg_database "
+							 "SET dathaslogontriggers = true WHERE datname = ");
+		appendStringLiteralAH(creaQry, datname, fout);
+		appendPQExpBufferStr(creaQry, ";\n");
 	}
 
 	/* Add database-specific SET options */

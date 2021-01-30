@@ -118,7 +118,8 @@ static int	CopyGetData(CopyFromState cstate, void *databuf,
 						int minread, int maxread);
 static inline bool CopyGetInt32(CopyFromState cstate, int32 *val);
 static inline bool CopyGetInt16(CopyFromState cstate, int16 *val);
-static bool CopyLoadRawBuf(CopyFromState cstate);
+static bool CopyLoadRawBufText(CopyFromState cstate);
+static bool CopyLoadRawBufBinary(CopyFromState cstate);
 static int	CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes);
 
 void
@@ -359,6 +360,65 @@ CopyGetInt16(CopyFromState cstate, int16 *val)
 	return true;
 }
 
+/*
+ * Convert input data from 'conversion_buf', writing it into
+ * 'raw_buf'.
+ *
+ * 'conversion_buf' mustn't be empty.
+ */
+static void
+CopyConvertBuf(CopyFromState cstate)
+{
+	int			convertedbytes;
+	int			srclen;
+	int			dstlen;
+
+	Assert(cstate->raw_buf_index == 0);
+
+	srclen = cstate->conversion_buf_len - cstate->conversion_buf_index;
+	dstlen = RAW_BUF_SIZE - cstate->raw_buf_len + 1;
+
+	/*
+	 * Do the conversion. This might stop short, if there is an invalid byte
+	 * sequence in the input. We'll convert as much as we can in that case.
+	 *
+	 * Note: Even if we hit an invalid byte sequence, we don't report the error
+	 * until all the valid bytes have been consumed. The input might contain
+	 * an end-of-input marker (\.), and we don't want to report an error if
+	 * the invalid byte sequence is after the end-of-input marker. We might
+	 * still convert extra data after the end-of-input marker if it's valid
+	 * for the encoding, but that's harmless.
+	 */
+	convertedbytes = pg_do_encoding_conversion_buf(cstate->conversion_proc,
+												   cstate->file_encoding,
+												   GetDatabaseEncoding(),
+												   (unsigned char *) cstate->conversion_buf + cstate->conversion_buf_index,
+												   srclen,
+												   (unsigned char *) cstate->raw_buf + cstate->raw_buf_len,
+												   dstlen,
+												   true);
+	if (convertedbytes == 0)
+	{
+		/*
+		 * No more valid input in the buffer, and we have hit an invalid byte sequence.
+		 * Let the conversion function throw the error.
+		 */
+		convertedbytes = pg_do_encoding_conversion_buf(cstate->conversion_proc,
+													   cstate->file_encoding,
+													   GetDatabaseEncoding(),
+													   (unsigned char *) cstate->conversion_buf + cstate->conversion_buf_index,
+													   srclen,
+													   (unsigned char *) cstate->raw_buf + cstate->raw_buf_len,
+													   dstlen,
+													   false);
+		/* pg_do_encoding_conversion_buf should've reported the error */
+		Assert(convertedbytes == 0);
+		elog(ERROR, "conversion error");
+	}
+	cstate->conversion_buf_index += convertedbytes;
+	cstate->raw_buf_len += strlen(cstate->raw_buf + cstate->raw_buf_len);
+	cstate->valid_raw_buf_len = cstate->raw_buf_len;
+}
 
 /*
  * CopyLoadRawBuf loads some more data into raw_buf
@@ -370,7 +430,96 @@ CopyGetInt16(CopyFromState cstate, int16 *val)
  * when a multibyte character crosses a bufferload boundary.
  */
 static bool
-CopyLoadRawBuf(CopyFromState cstate)
+CopyLoadRawBufText(CopyFromState cstate)
+{
+	int			nbytes = RAW_BUF_BYTES(cstate);
+	int			inbytes;
+
+	/* Copy down the unprocessed data if any. */
+	if (nbytes > 0)
+	{
+		memmove(cstate->raw_buf, cstate->raw_buf + cstate->raw_buf_index,
+				nbytes);
+	}
+	cstate->raw_buf_index = 0;
+	cstate->raw_buf_len = nbytes;
+
+	if (cstate->need_transcoding)
+	{
+		for (;;)
+		{
+			/* If we still have a good amount of unconverted data left, convert it. */
+			nbytes = cstate->conversion_buf_len - cstate->conversion_buf_index;
+			if (nbytes >= MAX_CONVERSION_GROWTH)
+			{
+				CopyConvertBuf(cstate);
+				return true;
+			}
+
+			/* Load more raw bytes to the conversion buffer */
+			if (nbytes > 0 && cstate->conversion_buf_index > 0)
+			{
+				memmove(cstate->conversion_buf, cstate->conversion_buf + cstate->conversion_buf_index,
+						nbytes);
+			}
+			cstate->conversion_buf_index = 0;
+			cstate->conversion_buf_len = nbytes;
+			inbytes = CopyGetData(cstate, cstate->conversion_buf + cstate->conversion_buf_len,
+								  1, CONVERSION_BUF_SIZE - cstate->conversion_buf_len);
+			cstate->conversion_buf_len += inbytes;
+
+			cstate->bytes_processed += inbytes;
+			pgstat_progress_update_param(PROGRESS_COPY_BYTES_PROCESSED, cstate->bytes_processed);
+
+			if (inbytes == 0)
+			{
+				/* Hit EOF. If we have any unconverted bytes left, convert them now */
+				if (cstate->conversion_buf_index < cstate->conversion_buf_len)
+				{
+					CopyConvertBuf(cstate);
+					return true;
+				}
+
+				/* truly hit EOF */
+				cstate->valid_raw_buf_len = 0;
+				return false;
+			}
+		}
+	}
+	else
+	{
+		/*
+		 * No encoding conversion required. But we still need to verify that the input is
+		 * valid.
+		 *
+		 * XXX: for single-byte encoding, the verification only needs to check that the
+		 * input doesn't contain any zero bytes. Could we skip that altogether?
+		 */
+		int			validbytes;
+
+		inbytes = CopyGetData(cstate, cstate->raw_buf + nbytes,
+							  1, RAW_BUF_SIZE - nbytes);
+		nbytes += inbytes;
+		cstate->raw_buf[nbytes] = '\0';
+		cstate->raw_buf_len = nbytes;
+
+		cstate->bytes_processed += inbytes;
+		pgstat_progress_update_param(PROGRESS_COPY_BYTES_PROCESSED, cstate->bytes_processed);
+
+		validbytes = pg_encoding_verifymbstr(cstate->file_encoding, cstate->raw_buf, nbytes);
+		if (validbytes == 0 && nbytes > 0)
+		{
+			report_invalid_encoding(cstate->file_encoding, cstate->raw_buf, nbytes);
+		}
+
+		cstate->valid_raw_buf_len = validbytes;
+	}
+
+	return (inbytes > 0);
+}
+
+static bool
+CopyLoadRawBufBinary(CopyFromState cstate)
 {
 	int			nbytes = RAW_BUF_BYTES(cstate);
 	int			inbytes;
@@ -386,8 +535,10 @@ CopyLoadRawBuf(CopyFromState cstate)
 	cstate->raw_buf[nbytes] = '\0';
 	cstate->raw_buf_index = 0;
 	cstate->raw_buf_len = nbytes;
+
 	cstate->bytes_processed += nbytes;
 	pgstat_progress_update_param(PROGRESS_COPY_BYTES_PROCESSED, cstate->bytes_processed);
+
 	return (inbytes > 0);
 }
 
@@ -423,7 +574,7 @@ CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes)
 			/* Load more data if buffer is empty. */
 			if (RAW_BUF_BYTES(cstate) == 0)
 			{
-				if (!CopyLoadRawBuf(cstate))
+				if (!CopyLoadRawBufBinary(cstate))
 					break;		/* EOF */
 			}
 
@@ -699,9 +850,6 @@ CopyReadLine(CopyFromState cstate)
 	resetStringInfo(&cstate->line_buf);
 	cstate->line_buf_valid = true;
 
-	/* Mark that encoding conversion hasn't occurred yet */
-	cstate->line_buf_converted = false;
-
 	/* Parse data and transfer into line_buf */
 	result = CopyReadLineText(cstate);
 
@@ -714,10 +862,13 @@ CopyReadLine(CopyFromState cstate)
 		 */
 		if (cstate->copy_src == COPY_NEW_FE)
 		{
+			int			inbytes;
+
 			do
 			{
-				cstate->raw_buf_index = cstate->raw_buf_len;
-			} while (CopyLoadRawBuf(cstate));
+				inbytes = CopyGetData(cstate, cstate->raw_buf,
+									  1, RAW_BUF_SIZE);
+			} while (inbytes > 0);
 		}
 	}
 	else
@@ -754,26 +905,6 @@ CopyReadLine(CopyFromState cstate)
 		}
 	}
 
-	/* Done reading the line.  Convert it to server encoding. */
-	if (cstate->need_transcoding)
-	{
-		char	   *cvt;
-
-		cvt = pg_any_to_server(cstate->line_buf.data,
-							   cstate->line_buf.len,
-							   cstate->file_encoding);
-		if (cvt != cstate->line_buf.data)
-		{
-			/* transfer converted data back to line_buf */
-			resetStringInfo(&cstate->line_buf);
-			appendBinaryStringInfo(&cstate->line_buf, cvt, strlen(cvt));
-			pfree(cvt);
-		}
-	}
-
-	/* Now it's safe to use the buffer in error messages */
-	cstate->line_buf_converted = true;
-
 	return result;
 }
 
@@ -789,7 +920,6 @@ CopyReadLineText(CopyFromState cstate)
 	bool		need_data = false;
 	bool		hit_eof = false;
 	bool		result = false;
-	char		mblen_str[2];
 
 	/* CSV variables */
 	bool		first_char_in_line = true;
@@ -806,8 +936,6 @@ CopyReadLineText(CopyFromState cstate)
 		if (quotec == escapec)
 			escapec = '\0';
 	}
-
-	mblen_str[1] = '\0';
 
 	/*
 	 * The objective of this loop is to transfer the entire next input line
@@ -832,7 +960,7 @@ CopyReadLineText(CopyFromState cstate)
 	 */
 	copy_raw_buf = cstate->raw_buf;
 	raw_buf_ptr = cstate->raw_buf_index;
-	copy_buf_len = cstate->raw_buf_len;
+	copy_buf_len = cstate->valid_raw_buf_len;
 
 	for (;;)
 	{
@@ -857,10 +985,10 @@ CopyReadLineText(CopyFromState cstate)
 			 * Try to read some more data.  This will certainly reset
 			 * raw_buf_index to zero, and raw_buf_ptr must go with it.
 			 */
-			if (!CopyLoadRawBuf(cstate))
+			if (!CopyLoadRawBufText(cstate))
 				hit_eof = true;
 			raw_buf_ptr = 0;
-			copy_buf_len = cstate->raw_buf_len;
+			copy_buf_len = cstate->valid_raw_buf_len;
 
 			/*
 			 * If we are completely out of data, break out of the loop,
@@ -1106,30 +1234,6 @@ CopyReadLineText(CopyFromState cstate)
 		 * value, while in non-CSV mode, \. cannot be a data value.
 		 */
 not_end_of_copy:
-
-		/*
-		 * Process all bytes of a multi-byte character as a group.
-		 *
-		 * We only support multi-byte sequences where the first byte has the
-		 * high-bit set, so as an optimization we can avoid this block
-		 * entirely if it is not set.
-		 */
-		if (cstate->encoding_embeds_ascii && IS_HIGHBIT_SET(c))
-		{
-			int			mblen;
-
-			/*
-			 * It is enough to look at the first byte in all our encodings, to
-			 * get the length.  (GB18030 is a bit special, but still works for
-			 * our purposes; see comment in pg_gb18030_mblen())
-			 */
-			mblen_str[0] = c;
-			mblen = pg_encoding_mblen(cstate->file_encoding, mblen_str);
-
-			IF_NEED_REFILL_AND_NOT_EOF_CONTINUE(mblen - 1);
-			IF_NEED_REFILL_AND_EOF_BREAK(mblen - 1);
-			raw_buf_ptr += mblen - 1;
-		}
 		first_char_in_line = false;
 	}							/* end of outer loop */
 

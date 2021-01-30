@@ -23,6 +23,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "catalog/namespace.h"
 #include "commands/copy.h"
 #include "commands/copyfrom_internal.h"
 #include "commands/progress.h"
@@ -149,15 +150,9 @@ CopyFromErrorCallback(void *arg)
 			/*
 			 * Error is relevant to a particular line.
 			 *
-			 * If line_buf still contains the correct line, and it's already
-			 * transcoded, print it. If it's still in a foreign encoding, it's
-			 * quite likely that the error is precisely a failure to do
-			 * encoding conversion (ie, bad data). We dare not try to convert
-			 * it, and at present there's no way to regurgitate it without
-			 * conversion. So we have to punt and just report the line number.
+			 * If line_buf still contains the correct line, print it.
 			 */
-			if (cstate->line_buf_valid &&
-				(cstate->line_buf_converted || !cstate->need_transcoding))
+			if (cstate->line_buf_valid)
 			{
 				char	   *lineval;
 
@@ -1305,15 +1300,22 @@ BeginCopyFrom(ParseState *pstate,
 		cstate->file_encoding = cstate->opts.file_encoding;
 
 	/*
-	 * Set up encoding conversion info.  Even if the file and server encodings
-	 * are the same, we must apply pg_any_to_server() to validate data in
-	 * multibyte encodings.
+	 * Set up encoding conversion info.  If the file and server encodings are
+	 * the same, no conversion is required by we must still validate that the
+	 * data is valid for the encoding.
 	 */
-	cstate->need_transcoding =
-		(cstate->file_encoding != GetDatabaseEncoding() ||
-		 pg_database_encoding_max_length() > 1);
-	/* See Multibyte encoding comment above */
-	cstate->encoding_embeds_ascii = PG_ENCODING_IS_CLIENT_ONLY(cstate->file_encoding);
+	if (cstate->file_encoding == GetDatabaseEncoding() ||
+		cstate->file_encoding == PG_SQL_ASCII ||
+		GetDatabaseEncoding() == PG_SQL_ASCII)
+	{
+		cstate->need_transcoding = false;
+	}
+	else
+	{
+		cstate->need_transcoding = true;
+		cstate->conversion_proc = FindDefaultConversionProc(cstate->file_encoding,
+															GetDatabaseEncoding());
+	}
 
 	cstate->copy_src = COPY_FILE;	/* default */
 
@@ -1342,7 +1344,12 @@ BeginCopyFrom(ParseState *pstate,
 	if (!cstate->opts.binary)
 	{
 		initStringInfo(&cstate->line_buf);
-		cstate->line_buf_converted = false;
+
+		if (cstate->need_transcoding)
+		{
+			cstate->conversion_buf = palloc(CONVERSION_BUF_SIZE + 1);
+			cstate->conversion_buf_index = cstate->conversion_buf_len = 0;
+		}
 	}
 
 	/* Assign range table, we'll need it in CopyFrom. */

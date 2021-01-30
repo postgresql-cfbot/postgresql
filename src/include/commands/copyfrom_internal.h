@@ -77,7 +77,7 @@ typedef struct CopyFromStateData
 	EolType		eol_type;		/* EOL type of input */
 	int			file_encoding;	/* file or remote side's character encoding */
 	bool		need_transcoding;	/* file encoding diff from server? */
-	bool		encoding_embeds_ascii;	/* ASCII can be non-first byte? */
+	Oid			conversion_proc;
 
 	/* parameters from the COPY command */
 	Relation	rel;			/* relation to copy from */
@@ -139,24 +139,41 @@ typedef struct CopyFromStateData
 	 * line_buf is not used.)
 	 */
 	StringInfoData line_buf;
-	bool		line_buf_converted; /* converted to server encoding? */
 	bool		line_buf_valid; /* contains the row being processed? */
 
 	/*
-	 * Finally, raw_buf holds raw data read from the data source (file or
-	 * client connection).  In text mode, CopyReadLine parses this data
+	 * conversion_buf holds raw input data read from the data source (file or
+	 * client connection), not yet converted to the database encoding.
+	 *
+	 * If the encoding conversion is not required, the input data is read
+	 * directly into 'raw_buf', and conversion_buf is not used.
+	 */
+#define CONVERSION_BUF_SIZE 65536		/* we palloc CONVERSION_BUF_SIZE+1 bytes */
+	char	   *conversion_buf;
+	int			conversion_buf_index;
+	int			conversion_buf_len;
+
+	/*
+	 * raw_buf holds input data, already converted to database encoding.
+	 *
+	 * In text mode, CopyReadLine parses this data
 	 * sufficiently to locate line boundaries, then transfers the data to
-	 * line_buf and converts it.  In binary mode, CopyReadBinaryData fetches
+	 * line_buf.  In binary mode, CopyReadBinaryData fetches
 	 * appropriate amounts of data from this buffer.  In both modes, we
 	 * guarantee that there is a \0 at raw_buf[raw_buf_len].
+	 *
+	 * XXX: 'raw_buf' is a bit of a misnomer, since the data in 'conversion_buf'
+	 * is more raw than this.
 	 */
 #define RAW_BUF_SIZE 65536		/* we palloc RAW_BUF_SIZE+1 bytes */
 	char	   *raw_buf;
 	int			raw_buf_index;	/* next byte to process */
 	int			raw_buf_len;	/* total # of bytes stored */
-	uint64		bytes_processed;/* number of bytes processed so far */
+	int			valid_raw_buf_len;
 	/* Shorthand for number of unconsumed bytes available in raw_buf */
 #define RAW_BUF_BYTES(cstate) ((cstate)->raw_buf_len - (cstate)->raw_buf_index)
+
+	uint64		bytes_processed; /* number of bytes processed so far */
 } CopyFromStateData;
 
 extern void ReceiveCopyBegin(CopyFromState cstate);

@@ -154,8 +154,8 @@ static PartitionPruneStep *gen_prune_step_op(GeneratePruningStepsContext *contex
 static PartitionPruneStep *gen_prune_step_combine(GeneratePruningStepsContext *context,
 												  List *source_stepids,
 												  PartitionPruneCombineOp combineOp);
-static PartitionPruneStep *gen_prune_steps_from_opexps(GeneratePruningStepsContext *context,
-													   List **keyclauses, Bitmapset *nullkeys);
+static List *gen_prune_steps_from_opexps(GeneratePruningStepsContext *context,
+							List **keyclauses, Bitmapset *nullkeys);
 static PartClauseMatchStatus match_clause_to_partition_key(GeneratePruningStepsContext *context,
 														   Expr *clause, Expr *partkey, int partkeyidx,
 														   bool *clause_is_not_null,
@@ -1155,12 +1155,11 @@ gen_partprune_steps_internal(GeneratePruningStepsContext *context,
 	}
 	else if (generate_opsteps)
 	{
-		PartitionPruneStep *step;
+		List   *opsteps;
 
 		/* Strategy 2 */
-		step = gen_prune_steps_from_opexps(context, keyclauses, nullkeys);
-		if (step != NULL)
-			result = lappend(result, step);
+		opsteps = gen_prune_steps_from_opexps(context, keyclauses, nullkeys);
+		result = list_concat(result, opsteps);
 	}
 	else if (bms_num_members(notnullkeys) == part_scheme->partnatts)
 	{
@@ -1173,12 +1172,13 @@ gen_partprune_steps_internal(GeneratePruningStepsContext *context,
 	}
 
 	/*
-	 * Finally, results from all entries appearing in result should be
-	 * combined using an INTERSECT combine step, if more than one.
+	 * Finally, if there are multiple steps, add an INTERSECT step to combine
+	 * the partition sets resulting from them.
 	 */
 	if (list_length(result) > 1)
 	{
 		List	   *step_ids = NIL;
+		PartitionPruneStep *step;
 
 		foreach(lc, result)
 		{
@@ -1187,14 +1187,9 @@ gen_partprune_steps_internal(GeneratePruningStepsContext *context,
 			step_ids = lappend_int(step_ids, step->step_id);
 		}
 
-		if (step_ids != NIL)
-		{
-			PartitionPruneStep *step;
-
-			step = gen_prune_step_combine(context, step_ids,
-										  PARTPRUNE_COMBINE_INTERSECT);
-			result = lappend(result, step);
-		}
+		step = gen_prune_step_combine(context, step_ids,
+									  PARTPRUNE_COMBINE_INTERSECT);
+		result = lappend(result, step);
 	}
 
 	return result;
@@ -1265,8 +1260,11 @@ gen_prune_step_combine(GeneratePruningStepsContext *context,
  * cases, (depending on the type of partitioning being used) if we didn't
  * find clauses for a given key, we discard clauses that may have been
  * found for any subsequent keys; see specific notes below.
+ *
+ * Partition sets obtained by executing each of the returned steps must be
+ * combined by the caller using an additional INTERSECT step.
  */
-static PartitionPruneStep *
+static List *
 gen_prune_steps_from_opexps(GeneratePruningStepsContext *context,
 							List **keyclauses, Bitmapset *nullkeys)
 {
@@ -1299,7 +1297,7 @@ gen_prune_steps_from_opexps(GeneratePruningStepsContext *context,
 		 */
 		if (part_scheme->strategy == PARTITION_STRATEGY_HASH &&
 			clauselist == NIL && !bms_is_member(i, nullkeys))
-			return NULL;
+			return NIL;
 
 		foreach(lc, clauselist)
 		{
@@ -1630,27 +1628,7 @@ gen_prune_steps_from_opexps(GeneratePruningStepsContext *context,
 			break;
 	}
 
-	/* Lastly, add a combine step to mutually AND these op steps, if needed */
-	if (list_length(opsteps) > 1)
-	{
-		List	   *opstep_ids = NIL;
-
-		foreach(lc, opsteps)
-		{
-			PartitionPruneStep *step = lfirst(lc);
-
-			opstep_ids = lappend_int(opstep_ids, step->step_id);
-		}
-
-		if (opstep_ids != NIL)
-			return gen_prune_step_combine(context, opstep_ids,
-										  PARTPRUNE_COMBINE_INTERSECT);
-		return NULL;
-	}
-	else if (opsteps != NIL)
-		return linitial(opsteps);
-
-	return NULL;
+	return opsteps;
 }
 
 /*

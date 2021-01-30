@@ -1219,10 +1219,12 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 		plansource->total_custom_cost += cached_plan_cost(plan, true);
 
 		plansource->num_custom_plans++;
+		plan->is_generic = false;
 	}
 	else
 	{
 		plansource->num_generic_plans++;
+		plan->is_generic = true;
 	}
 
 	Assert(plan != NULL);

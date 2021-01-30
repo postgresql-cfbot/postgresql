@@ -77,10 +77,12 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/spin.h"
+#include "tcop/pquery.h"
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
+#include "utils/plancache.h"
 #include "utils/timestamp.h"
 
 PG_MODULE_MAGIC;
@@ -192,6 +194,7 @@ typedef struct Counters
 	int64		wal_records;	/* # of WAL records generated */
 	int64		wal_fpi;		/* # of WAL full page images generated */
 	uint64		wal_bytes;		/* total amount of WAL generated in bytes */
+	int64		generic_calls;	/* # of times generic plans executed */
 } Counters;
 
 /*
@@ -276,6 +279,9 @@ static int	exec_nested_level = 0;
 
 /* Current nesting depth of planner calls */
 static int	plan_nested_level = 0;
+
+/* Current plan type */
+static bool	is_plan_type_generic = false;
 
 /* Saved hook values in case of unload */
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
@@ -1035,6 +1041,20 @@ pgss_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	if (pgss_enabled(exec_nested_level) && queryDesc->plannedstmt->queryId != UINT64CONST(0))
 	{
 		/*
+		 * Since ActivePortal is not available at ExecutorEnd, we preserve
+		 * the plan type here.
+		 */
+		Assert(ActivePortal);
+
+		if (ActivePortal->cplan)
+		{
+			if (ActivePortal->cplan->is_generic)
+				is_plan_type_generic = true;
+			else
+				is_plan_type_generic = false;
+		}
+
+		/*
 		 * Set up to track total elapsed time in ExecutorRun.  Make sure the
 		 * space is allocated in the per-query context so it will go away at
 		 * ExecutorEnd.
@@ -1427,6 +1447,8 @@ pgss_store(const char *query, uint64 queryId,
 			e->counters.max_time[kind] = total_time;
 			e->counters.mean_time[kind] = total_time;
 		}
+		else if (kind == PGSS_EXEC && is_plan_type_generic)
+			e->counters.generic_calls += 1;
 		else
 		{
 			/*
@@ -1510,8 +1532,8 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 #define PG_STAT_STATEMENTS_COLS_V1_1	18
 #define PG_STAT_STATEMENTS_COLS_V1_2	19
 #define PG_STAT_STATEMENTS_COLS_V1_3	23
-#define PG_STAT_STATEMENTS_COLS_V1_8	32
-#define PG_STAT_STATEMENTS_COLS			32	/* maximum of above */
+#define PG_STAT_STATEMENTS_COLS_V1_8	33
+#define PG_STAT_STATEMENTS_COLS			33	/* maximum of above */
 
 /*
  * Retrieve statement statistics.
@@ -1863,6 +1885,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 											ObjectIdGetDatum(0),
 											Int32GetDatum(-1));
 			values[i++] = wal_bytes;
+			values[i++] = Int64GetDatumFast(tmp.generic_calls);
 		}
 
 		Assert(i == (api_version == PGSS_V1_0 ? PG_STAT_STATEMENTS_COLS_V1_0 :

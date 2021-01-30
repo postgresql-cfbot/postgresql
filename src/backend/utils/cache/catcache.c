@@ -38,6 +38,7 @@
 #include "utils/rel.h"
 #include "utils/resowner_private.h"
 #include "utils/syscache.h"
+#include "utils/timestamp.h"
 
 
  /* #define CACHEDEBUG */	/* turns DEBUG elogs on */
@@ -60,8 +61,17 @@
 #define CACHE_elog(...)
 #endif
 
+/*
+ * GUC variable to define the minimum age of entries that are the candidates
+ * for evictetion in seconds. -1 to disable the feature.
+ */
+int catalog_cache_prune_min_age = -1;
+
 /* Cache management header --- pointer is NULL until created */
 static CatCacheHeader *CacheHdr = NULL;
+
+/* Clock for the last accessed time of catcache entry. */
+TimestampTz	catcacheclock = 0;
 
 static inline HeapTuple SearchCatCacheInternal(CatCache *cache,
 											   int nkeys,
@@ -74,6 +84,7 @@ static pg_noinline HeapTuple SearchCatCacheMiss(CatCache *cache,
 												Index hashIndex,
 												Datum v1, Datum v2,
 												Datum v3, Datum v4);
+static bool CatCacheCleanupOldEntries(CatCache *cp);
 
 static uint32 CatalogCacheComputeHashValue(CatCache *cache, int nkeys,
 										   Datum v1, Datum v2, Datum v3, Datum v4);
@@ -833,6 +844,7 @@ InitCatCache(int id,
 	cp->cc_nkeys = nkeys;
 	for (i = 0; i < nkeys; ++i)
 		cp->cc_keyno[i] = key[i];
+	cp->cc_oldest_ts = catcacheclock;
 
 	/*
 	 * new cache is initialized as far as we can go for now. print some
@@ -1264,6 +1276,9 @@ SearchCatCacheInternal(CatCache *cache,
 		 */
 		dlist_move_head(bucket, &ct->cache_elem);
 
+		/* Record the last access timestamp */
+		ct->lastaccess = catcacheclock;
+
 		/*
 		 * If it's a positive entry, bump its refcount and return it. If it's
 		 * negative, we can report failure to the caller.
@@ -1423,6 +1438,69 @@ SearchCatCacheMiss(CatCache *cache,
 #endif
 
 	return &ct->tuple;
+}
+
+/*
+ * CatCacheCleanupOldEntries - Remove infrequently-used entries
+ *
+ * Removes entries that has been left alone for a certain period to prevent
+ * catcache bloat.
+ */
+static bool
+CatCacheCleanupOldEntries(CatCache *cp)
+{
+	int			nremoved = 0;
+	int			i;
+	TimestampTz oldest_ts = catcacheclock;
+	TimestampTz prune_threshold;
+
+	if (catalog_cache_prune_min_age < 0)
+		return false;
+
+	/* entries older than this time would be removed */
+	prune_threshold = catcacheclock -
+		((int64) catalog_cache_prune_min_age) * USECS_PER_SEC;
+
+	/* return if we know we have no entry to remove */
+	if (cp->cc_oldest_ts > prune_threshold)
+		return false;
+
+	/* Scan over the whole hash to find entries to remove */
+	for (i = 0 ; i < cp->cc_nbuckets ; i++)
+	{
+		dlist_mutable_iter	iter;
+
+		dlist_foreach_modify(iter, &cp->cc_bucket[i])
+		{
+			CatCTup    *ct = dlist_container(CatCTup, cache_elem, iter.cur);
+
+			/* Don't remove referenced entries */
+			if (ct->refcount == 0 &&
+				(ct->c_list == NULL || ct->c_list->refcount == 0))
+			{
+				if (ct->lastaccess <= prune_threshold)
+				{
+					CatCacheRemoveCTup(cp, ct);
+					nremoved++;
+
+					/* don't let the removed entry update oldest_ts */
+					continue;
+				}
+			}
+
+			/* update the oldest timestamp if the entry remains alive */
+			if (ct->lastaccess < oldest_ts)
+				oldest_ts = ct->lastaccess;
+		}
+	}
+
+	cp->cc_oldest_ts = oldest_ts;
+
+	if (nremoved > 0)
+		elog(DEBUG1, "pruning catalog cache id=%d for %s: removed %d / %d",
+			 cp->id, cp->cc_relname, nremoved, cp->cc_ntup + nremoved);
+
+	return nremoved > 0;
 }
 
 /*
@@ -1888,6 +1966,7 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 	ct->dead = false;
 	ct->negative = negative;
 	ct->hash_value = hashValue;
+	ct->lastaccess = catcacheclock;
 
 	dlist_push_head(&cache->cc_bucket[hashIndex], &ct->cache_elem);
 
@@ -1899,7 +1978,11 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 	 * arbitrarily, we enlarge when fill factor > 2.
 	 */
 	if (cache->cc_ntup > cache->cc_nbuckets * 2)
-		RehashCatCache(cache);
+	{
+		/* try removing old entries before expanding hash */
+		if (!CatCacheCleanupOldEntries(cache))
+			RehashCatCache(cache);
+	}
 
 	return ct;
 }

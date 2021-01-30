@@ -198,6 +198,9 @@ extern void mergejoinscansel(PlannerInfo *root, Node *clause,
 
 extern double estimate_num_groups(PlannerInfo *root, List *groupExprs,
 								  double input_rows, List **pgset);
+extern double estimate_num_groups_incremental(PlannerInfo *root, List *groupExprs,
+					double input_rows, List **pgset,
+					List **cache_varinfos, int prevNExprs);
 
 extern void estimate_hash_bucket_stats(PlannerInfo *root,
 									   Node *hashkey, double nbuckets,

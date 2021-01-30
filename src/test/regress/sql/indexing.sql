@@ -92,8 +92,7 @@ create table idxpart (a int) partition by range (a);
 create index on idxpart (a);
 create table idxpart1 partition of idxpart for values from (0) to (10);
 drop index idxpart1_a_idx;	-- no way
-drop index concurrently idxpart_a_idx;	-- unsupported
-drop index idxpart_a_idx;	-- both indexes go away
+drop index concurrently idxpart_a_idx;
 select relname, relkind from pg_class
   where relname like 'idxpart%' order by relname;
 create index on idxpart (a);

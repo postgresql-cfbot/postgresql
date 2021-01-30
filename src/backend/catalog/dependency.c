@@ -360,6 +360,50 @@ performDeletion(const ObjectAddress *object,
 }
 
 /*
+ * Concurrently drop a partitioned index.
+ */
+void
+performDeleteParentIndexConcurrent(const ObjectAddress *object,
+				DropBehavior behavior, int flags)
+{
+	Relation	depRel;
+	ObjectAddresses *targetObjects;
+	ObjectAddressExtra extra = {
+		.flags = DEPFLAG_AUTO,
+		.dependee = *object,
+	};
+
+	/*
+	 * Concurrently dropping partitioned index is special: it must avoid
+	 * calling AcquireDeletionLock
+	 */
+
+	Assert((flags & PERFORM_DELETION_CONCURRENTLY) != 0);
+	Assert(object->classId == RelationRelationId);
+	Assert(get_rel_relkind(object->objectId) == RELKIND_PARTITIONED_INDEX);
+
+	targetObjects = new_object_addresses();
+	add_exact_object_address_extra(object, &extra, targetObjects);
+
+	reportDependentObjects(targetObjects,
+						   behavior,
+						   flags,
+						   object);
+
+	/*
+	 * do the deed
+	 * note that index_drop specially deletes dependencies of child indexes
+	 */
+
+	depRel = table_open(DependRelationId, RowExclusiveLock);
+	deleteObjectsInList(targetObjects, &depRel, flags);
+	table_close(depRel, RowExclusiveLock);
+
+	/* And clean up */
+	free_object_addresses(targetObjects);
+}
+
+/*
  * performMultipleDeletions: Similar to performDeletion, but act on multiple
  * objects at once.
  *
@@ -1360,11 +1404,6 @@ DropObjectById(const ObjectAddress *object)
 static void
 deleteOneObject(const ObjectAddress *object, Relation *depRel, int flags)
 {
-	ScanKeyData key[3];
-	int			nkeys;
-	SysScanDesc scan;
-	HeapTuple	tup;
-
 	/* DROP hook of the objects being removed */
 	InvokeObjectDropHookArg(object->classId, object->objectId,
 							object->objectSubId, flags);
@@ -1393,6 +1432,32 @@ deleteOneObject(const ObjectAddress *object, Relation *depRel, int flags)
 	 */
 	if (flags & PERFORM_DELETION_CONCURRENTLY)
 		*depRel = table_open(DependRelationId, RowExclusiveLock);
+
+	deleteOneDepends(object, depRel, flags);
+
+	/*
+	 * CommandCounterIncrement here to ensure that preceding changes are all
+	 * visible to the next deletion step.
+	 */
+	CommandCounterIncrement();
+
+	/*
+	 * And we're done!
+	 */
+}
+
+/*
+ * deleteOneDepends: delete dependencies and other 2ndary data for a single object
+ *
+ * *depRel is the already-open pg_depend relation.
+ */
+void
+deleteOneDepends(const ObjectAddress *object, Relation *depRel, int flags)
+{
+	ScanKeyData key[3];
+	int			nkeys;
+	SysScanDesc scan;
+	HeapTuple	tup;
 
 	/*
 	 * Now remove any pg_depend records that link from this object to others.
@@ -1446,16 +1511,6 @@ deleteOneObject(const ObjectAddress *object, Relation *depRel, int flags)
 	DeleteComments(object->objectId, object->classId, object->objectSubId);
 	DeleteSecurityLabel(object);
 	DeleteInitPrivs(object);
-
-	/*
-	 * CommandCounterIncrement here to ensure that preceding changes are all
-	 * visible to the next deletion step.
-	 */
-	CommandCounterIncrement();
-
-	/*
-	 * And we're done!
-	 */
 }
 
 /*

@@ -1198,7 +1198,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 
 	/* Also update the sent position status in shared memory */
 	SpinLockAcquire(&MyWalSnd->mutex);
-	MyWalSnd->sentPtr = MyReplicationSlot->data.restart_lsn;
+	MyWalSnd->sentPtr = MyReplicationSlot->data.confirmed_flush;
 	SpinLockRelease(&MyWalSnd->mutex);
 
 	replication_active = true;
@@ -2930,7 +2930,8 @@ WalSndDone(WalSndSendDataCallback send_data)
 	replicatedPtr = XLogRecPtrIsInvalid(MyWalSnd->flush) ?
 		MyWalSnd->write : MyWalSnd->flush;
 
-	if (WalSndCaughtUp && sentPtr == replicatedPtr &&
+	if (WalSndCaughtUp &&
+		sentPtr == replicatedPtr &&
 		!pq_is_send_pending())
 	{
 		QueryCompletion qc;

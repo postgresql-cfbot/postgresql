@@ -106,6 +106,9 @@ typedef enum TM_Result
  * because the target tuple is already outdated, they fill in this struct to
  * provide information to the caller about what happened.
  *
+ * result is the reason for the failure.  It's set to TM_Ok when there is no
+ * failure.
+ *
  * ctid is the target's ctid link: it is the same as the target's TID if the
  * target was deleted, or the location of the replacement tuple if the target
  * was updated.
@@ -119,12 +122,17 @@ typedef enum TM_Result
  * tuple); otherwise cmax is zero.  (We make this restriction because
  * HeapTupleHeaderGetCmax doesn't work for tuples outdated in other
  * transactions.)
+ *
+ * lockmode is only relevant for callers of heap_update() and is the mode which
+ * the caller should use in case it needs to lock the updated tuple.
  */
 typedef struct TM_FailureData
 {
+	TM_Result	result;
 	ItemPointerData ctid;
 	TransactionId xmax;
 	CommandId	cmax;
+	LockTupleMode lockmode;
 	bool		traversed;
 } TM_FailureData;
 

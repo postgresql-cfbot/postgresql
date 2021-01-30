@@ -25,6 +25,7 @@ extern void AcquireRewriteLocks(Query *parsetree,
 extern Node *build_column_default(Relation rel, int attrno);
 extern void rewriteTargetListUD(Query *parsetree, RangeTblEntry *target_rte,
 								Relation target_relation);
+extern void rewriteTargetListMerge(Query *parsetree, Relation target_relation);
 
 extern void fill_extraUpdatedCols(RangeTblEntry *target_rte,
 								  Relation target_relation);

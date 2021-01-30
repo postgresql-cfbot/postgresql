@@ -1378,6 +1378,8 @@ MemoryContextCounters
 MemoryContextData
 MemoryContextMethods
 MemoryStatsPrintFunc
+MergeAction
+MergeActionState
 MergeAppend
 MergeAppendPath
 MergeAppendState
@@ -1386,6 +1388,9 @@ MergeJoinClause
 MergeJoinState
 MergePath
 MergeScanSelCache
+MergeState
+MergeStmt
+MergeWhenClause
 MetaCommand
 MinMaxAggInfo
 MinMaxAggPath
@@ -2074,6 +2079,7 @@ RelInfo
 RelInfoArr
 RelMapFile
 RelMapping
+RelMergeActionState
 RelOptInfo
 RelOptKind
 RelToCheck

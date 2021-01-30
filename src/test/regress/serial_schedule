@@ -134,6 +134,7 @@ test: alter_operator
 test: misc
 test: async
 test: dbsize
+test: merge
 test: misc_functions
 test: sysviews
 test: tsrf

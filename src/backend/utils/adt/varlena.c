@@ -2318,6 +2318,11 @@ varstrfastcmp_locale(char *a1p, int len1, char *a2p, int len2, SortSupport ssup)
 	int			result;
 	bool		arg1_match;
 
+	if (len1 < 0 || len2 < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("invalid string length")));
+
 	/* Fast pre-check for equality, as discussed in varstr_cmp() */
 	if (len1 == len2 && memcmp(a1p, a2p, len1) == 0)
 	{
@@ -2505,6 +2510,11 @@ varstr_abbrev_convert(Datum original, SortSupport ssup)
 	/* memset(), so any non-overwritten bytes are NUL */
 	memset(pres, 0, sizeof(Datum));
 	len = VARSIZE_ANY_EXHDR(authoritative);
+
+	if (len < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("invalid string length")));
 
 	/* Get number of bytes, ignoring trailing spaces */
 	if (sss->typid == BPCHAROID)
@@ -3256,11 +3266,10 @@ bytea_catenate(bytea *t1, bytea *t2)
 	len1 = VARSIZE_ANY_EXHDR(t1);
 	len2 = VARSIZE_ANY_EXHDR(t2);
 
-	/* paranoia ... probably should throw error instead? */
-	if (len1 < 0)
-		len1 = 0;
-	if (len2 < 0)
-		len2 = 0;
+	if (len1 < 0 || len2 < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("invalid string length")));
 
 	len = len1 + len2 + VARHDRSZ;
 	result = (bytea *) palloc(len);

@@ -828,6 +828,24 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 		/* exclRelTlist contains only Vars, so no preprocessing needed */
 	}
 
+	foreach(l, parse->mergeActionList)
+	{
+		MergeAction *action = (MergeAction *) lfirst(l);
+
+		action->targetList = (List *)
+			preprocess_expression(root,
+								  (Node *) action->targetList,
+								  EXPRKIND_TARGET);
+		action->qual =
+			preprocess_expression(root,
+								  (Node *) action->qual,
+								  EXPRKIND_QUAL);
+	}
+
+	parse->mergeSourceTargetList = (List *)
+		preprocess_expression(root, (Node *) parse->mergeSourceTargetList,
+							  EXPRKIND_TARGET);
+
 	root->append_rel_list = (List *)
 		preprocess_expression(root, (Node *) root->append_rel_list,
 							  EXPRKIND_APPINFO);
@@ -1696,6 +1714,7 @@ inheritance_planner(PlannerInfo *root)
 									 subroot->parse->returningList);
 
 		Assert(!parse->onConflict);
+		Assert(parse->mergeActionList == NIL);
 	}
 
 	/* Result path must go into outer query's FINAL upperrel */
@@ -1786,11 +1805,14 @@ inheritance_planner(PlannerInfo *root)
 									 rootRelation,
 									 root->partColsUpdated,
 									 resultRelations,
+									 0,
 									 subpaths,
 									 subroots,
 									 withCheckOptionLists,
 									 returningLists,
 									 rowMarks,
+									 NULL,
+									 NULL,
 									 NULL,
 									 assign_special_exec_param(root)));
 }
@@ -2307,8 +2329,8 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		}
 
 		/*
-		 * If this is an INSERT/UPDATE/DELETE, and we're not being called from
-		 * inheritance_planner, add the ModifyTable node.
+		 * If this is an INSERT/UPDATE/DELETE/MERGE, and we're not being
+		 * called from inheritance_planner, add the ModifyTable node.
 		 */
 		if (parse->commandType != CMD_SELECT && !inheritance_update)
 		{
@@ -2359,12 +2381,15 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 										rootRelation,
 										false,
 										list_make1_int(parse->resultRelation),
+										parse->mergeTarget_relation,
 										list_make1(path),
 										list_make1(root),
 										withCheckOptionLists,
 										returningLists,
 										rowMarks,
 										parse->onConflict,
+										parse->mergeSourceTargetList,
+										parse->mergeActionList,
 										assign_special_exec_param(root));
 		}
 

@@ -1568,9 +1568,11 @@ from tenk1 t, generate_series(1, 1000);
                      ->  Parallel Index Only Scan using tenk1_unique1 on tenk1 t
                      ->  Function Scan on generate_series
                SubPlan 1
-                 ->  Index Only Scan using tenk1_unique1 on tenk1
-                       Index Cond: (unique1 = t.unique1)
-(11 rows)
+                 ->  Result Cache
+                       Cache Key: t.unique1
+                       ->  Index Only Scan using tenk1_unique1 on tenk1
+                             Index Cond: (unique1 = t.unique1)
+(13 rows)
 
 explain (costs off) select
   unique1,
@@ -1587,9 +1589,11 @@ order by 1, 2;
                ->  Parallel Index Only Scan using tenk1_unique1 on tenk1 t
                ->  Function Scan on generate_series
          SubPlan 1
-           ->  Index Only Scan using tenk1_unique1 on tenk1
-                 Index Cond: (unique1 = t.unique1)
-(10 rows)
+           ->  Result Cache
+                 Cache Key: t.unique1
+                 ->  Index Only Scan using tenk1_unique1 on tenk1
+                       Index Cond: (unique1 = t.unique1)
+(12 rows)
 
 -- Parallel sort but with expression not available until the upper rel.
 explain (costs off) select distinct sub.unique1, stringu1 || random()::text

@@ -59,6 +59,7 @@
 
 #include "access/table.h"
 #include "access/tableam.h"
+#include "access/twophase.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "catalog/catalog.h"
@@ -169,6 +170,9 @@ bool		in_streamed_transaction = false;
 
 static TransactionId stream_xid = InvalidTransactionId;
 
+/* for skipping prepared transaction */
+bool        skip_prepared_txn = false;
+
 /*
  * Hash table for storing the streaming xid information along with shared file
  * set for streaming and subxact files.
@@ -245,6 +249,8 @@ static void apply_handle_tuple_routing(ResultRelInfo *relinfo,
 									   LogicalRepTupleData *newtup,
 									   LogicalRepRelMapEntry *relmapentry,
 									   CmdType operation);
+
+static int	apply_spooled_messages(TransactionId xid, XLogRecPtr lsn);
 
 /*
  * Should this worker apply changes for given relation.
@@ -688,6 +694,12 @@ apply_handle_begin(StringInfo s)
 {
 	LogicalRepBeginData begin_data;
 
+	/*
+	 * We don't expect any other transaction data while skipping a prepared
+	 * xact.
+	 */
+	Assert(!skip_prepared_txn);
+
 	logicalrep_read_begin(s, &begin_data);
 
 	remote_final_lsn = begin_data.final_lsn;
@@ -707,6 +719,12 @@ apply_handle_commit(StringInfo s)
 {
 	LogicalRepCommitData commit_data;
 
+	/*
+	 * We don't expect any other transaction data while skipping a prepared
+	 * xact.
+	 */
+	Assert(!skip_prepared_txn);
+
 	logicalrep_read_commit(s, &commit_data);
 
 	Assert(commit_data.commit_lsn == remote_final_lsn);
@@ -715,6 +733,263 @@ apply_handle_commit(StringInfo s)
 
 	/* Process any tables that are being synchronized in parallel. */
 	process_syncing_tables(commit_data.end_lsn);
+
+	pgstat_report_activity(STATE_IDLE, NULL);
+}
+
+/*
+ * Handle BEGIN message.
+ */
+static void
+apply_handle_begin_prepare(StringInfo s)
+{
+	LogicalRepBeginPrepareData begin_data;
+
+	logicalrep_read_begin_prepare(s, &begin_data);
+
+	if (LookupGXact(begin_data.gid, begin_data.end_lsn, begin_data.committime))
+	{
+		/*
+		 * If this gid has already been prepared then we don't want to apply
+		 * this txn again. This can happen after restart where upstream can
+		 * send the prepared transaction again. See
+		 * ReorderBufferFinishPrepared. Don't update remote_final_lsn.
+		 */
+		skip_prepared_txn = true;
+		return;
+	}
+
+	remote_final_lsn = begin_data.final_lsn;
+
+	in_remote_transaction = true;
+
+	pgstat_report_activity(STATE_RUNNING, NULL);
+}
+
+/*
+ * Handle PREPARE message.
+ */
+static void
+apply_handle_prepare(StringInfo s)
+{
+	LogicalRepPreparedTxnData prepare_data;
+
+	logicalrep_read_prepare(s, &prepare_data);
+
+	if (skip_prepared_txn)
+	{
+		/*
+		 * If we are skipping this transaction because it was previously
+		 * prepared, ignore it and reset the flag.
+		 */
+		Assert(LookupGXact(prepare_data.gid, prepare_data.end_lsn,
+						   prepare_data.preparetime));
+		skip_prepared_txn = false;
+		return;
+	}
+
+	Assert(prepare_data.prepare_lsn == remote_final_lsn);
+
+	if (IsTransactionState())
+	{
+		/*
+		 * BeginTransactionBlock is necessary to balance the
+		 * EndTransactionBlock called within the PrepareTransactionBlock
+		 * below.
+		 */
+		BeginTransactionBlock();
+		CommitTransactionCommand();
+
+		/*
+		 * Update origin state so we can restart streaming from correct
+		 * position in case of crash.
+		 */
+		replorigin_session_origin_lsn = prepare_data.end_lsn;
+		replorigin_session_origin_timestamp = prepare_data.preparetime;
+
+		PrepareTransactionBlock(prepare_data.gid);
+		CommitTransactionCommand();
+		pgstat_report_stat(false);
+
+		store_flush_position(prepare_data.end_lsn);
+	}
+	else
+	{
+		/* Process any invalidation messages that might have accumulated. */
+		AcceptInvalidationMessages();
+		maybe_reread_subscription();
+	}
+
+	in_remote_transaction = false;
+
+	/* Process any tables that are being synchronized in parallel. */
+	process_syncing_tables(prepare_data.end_lsn);
+
+	pgstat_report_activity(STATE_IDLE, NULL);
+}
+
+/*
+ * Handle a COMMIT PREPARED of a previously PREPARED transaction.
+ */
+static void
+apply_handle_commit_prepared(StringInfo s)
+{
+	LogicalRepPreparedTxnData prepare_data;
+
+	/*
+	 * We don't expect any other transaction data while skipping a prepared
+	 * xact.
+	 */
+	Assert(!skip_prepared_txn);
+
+	logicalrep_read_commit_prepared(s, &prepare_data);
+
+	/* there is no transaction when COMMIT PREPARED is called */
+	ensure_transaction();
+
+	/*
+	 * Update origin state so we can restart streaming from correct position
+	 * in case of crash.
+	 */
+	replorigin_session_origin_lsn = prepare_data.end_lsn;
+	replorigin_session_origin_timestamp = prepare_data.preparetime;
+
+	FinishPreparedTransaction(prepare_data.gid, true);
+	CommitTransactionCommand();
+	pgstat_report_stat(false);
+
+	store_flush_position(prepare_data.end_lsn);
+	in_remote_transaction = false;
+
+	/* Process any tables that are being synchronized in parallel. */
+	process_syncing_tables(prepare_data.end_lsn);
+
+	pgstat_report_activity(STATE_IDLE, NULL);
+}
+
+/*
+ * Handle a ROLLBACK PREPARED of a previously PREPARED TRANSACTION.
+ */
+static void
+apply_handle_rollback_prepared(StringInfo s)
+{
+	LogicalRepRollbackPreparedTxnData rollback_data;
+
+	/*
+	 * We don't expect any other transaction data while skipping a prepared
+	 * xact.
+	 */
+	Assert(!skip_prepared_txn);
+
+	logicalrep_read_rollback_prepared(s, &rollback_data);
+
+	/*
+	 * It is possible that we haven't received prepare because it occurred
+	 * before walsender reached a consistent point in which case we need to
+	 * skip rollback prepared.
+	 */
+	if (LookupGXact(rollback_data.gid, rollback_data.prepare_end_lsn,
+					rollback_data.preparetime))
+	{
+		/*
+		 * Update origin state so we can restart streaming from correct position
+		 * in case of crash.
+		 */
+		replorigin_session_origin_lsn = rollback_data.rollback_end_lsn;
+		replorigin_session_origin_timestamp = rollback_data.rollbacktime;
+
+		/* there is no transaction when ABORT/ROLLBACK PREPARED is called */
+		ensure_transaction();
+		FinishPreparedTransaction(rollback_data.gid, false);
+		CommitTransactionCommand();
+	}
+
+	pgstat_report_stat(false);
+
+	store_flush_position(rollback_data.rollback_end_lsn);
+	in_remote_transaction = false;
+
+	/* Process any tables that are being synchronized in parallel. */
+	process_syncing_tables(rollback_data.rollback_end_lsn);
+
+	pgstat_report_activity(STATE_IDLE, NULL);
+}
+
+/*
+ * Handle STREAM PREPARE.
+ *
+ * Logic is in two parts:
+ * 1. Replay all the spooled operations
+ * 2. Mark the transaction as prepared
+ */
+static void
+apply_handle_stream_prepare(StringInfo s)
+{
+	int			nchanges = 0;
+	LogicalRepPreparedTxnData prepare_data;
+	TransactionId xid;
+
+	Assert(!in_streamed_transaction);
+
+	/*
+	 * We don't expect any other transaction data while skipping a prepared
+	 * xact.
+	 */
+	Assert(!skip_prepared_txn);
+
+	xid = logicalrep_read_stream_prepare(s, &prepare_data);
+	elog(DEBUG1, "received prepare for streamed transaction %u", xid);
+
+	/*
+	 *
+	 * --------------------------------------------------------------------------
+	 * 1. Replay all the spooled operations - Similar code as for
+	 * apply_handle_stream_commit (i.e. non two-phase stream commit)
+	 * --------------------------------------------------------------------------
+	 */
+
+	ensure_transaction();
+
+	/*
+	 * BeginTransactionBlock is necessary to balance the EndTransactionBlock
+	 * called within the PrepareTransactionBlock below.
+	 */
+	BeginTransactionBlock();
+	CommitTransactionCommand();
+
+	nchanges = apply_spooled_messages(xid, prepare_data.prepare_lsn);
+
+	/*
+	 *
+	 * --------------------------------------------------------------------------
+	 * 2. Mark the transaction as prepared. - Similar code as for
+	 * apply_handle_prepare (i.e. two-phase non-streamed prepare)
+	 * --------------------------------------------------------------------------
+	 */
+
+	/*
+	 * Update origin state so we can restart streaming from correct position
+	 * in case of crash.
+	 */
+	replorigin_session_origin_lsn = prepare_data.end_lsn;
+	replorigin_session_origin_timestamp = prepare_data.preparetime;
+
+	PrepareTransactionBlock(prepare_data.gid);
+	CommitTransactionCommand();
+
+	pgstat_report_stat(false);
+
+	store_flush_position(prepare_data.end_lsn);
+
+	elog(DEBUG1, "apply_handle_stream_prepare_txn: replayed %d (all) changes.", nchanges);
+
+	in_remote_transaction = false;
+
+	/* unlink the files with serialized changes and subxact info */
+	stream_cleanup_files(MyLogicalRepWorker->subid, xid);
+
+	/* Process any tables that are being synchronized in parallel. */
+	process_syncing_tables(prepare_data.end_lsn);
 
 	pgstat_report_activity(STATE_IDLE, NULL);
 }
@@ -749,6 +1024,12 @@ apply_handle_stream_start(StringInfo s)
 	HASHCTL		hash_ctl;
 
 	Assert(!in_streamed_transaction);
+
+	/*
+	 * We don't expect any other transaction data while skipping a prepared
+	 * xact.
+	 */
+	Assert(!skip_prepared_txn);
 
 	/*
 	 * Start a transaction on stream start, this transaction will be committed
@@ -798,6 +1079,12 @@ apply_handle_stream_stop(StringInfo s)
 	Assert(in_streamed_transaction);
 
 	/*
+	 * We don't expect any other transaction data while skipping a prepared
+	 * xact.
+	 */
+	Assert(!skip_prepared_txn);
+
+	/*
 	 * Close the file with serialized changes, and serialize information about
 	 * subxacts for the toplevel transaction.
 	 */
@@ -807,12 +1094,8 @@ apply_handle_stream_stop(StringInfo s)
 	/* We must be in a valid transaction state */
 	Assert(IsTransactionState());
 
-	/* The synchronization worker runs in single transaction. */
-	if (!am_tablesync_worker())
-	{
-		/* Commit the per-stream transaction */
-		CommitTransactionCommand();
-	}
+	/* Commit the per-stream transaction */
+	CommitTransactionCommand();
 
 	in_streamed_transaction = false;
 
@@ -832,6 +1115,12 @@ apply_handle_stream_abort(StringInfo s)
 	TransactionId subxid;
 
 	Assert(!in_streamed_transaction);
+
+	/*
+	 * We don't expect any other transaction data while skipping a prepared
+	 * xact.
+	 */
+	Assert(!skip_prepared_txn);
 
 	logicalrep_read_stream_abort(s, &xid, &subxid);
 
@@ -889,9 +1178,7 @@ apply_handle_stream_abort(StringInfo s)
 			/* Cleanup the subxact info */
 			cleanup_subxact_info();
 
-			/* The synchronization worker runs in single transaction */
-			if (!am_tablesync_worker())
-				CommitTransactionCommand();
+			CommitTransactionCommand();
 			return;
 		}
 
@@ -918,35 +1205,25 @@ apply_handle_stream_abort(StringInfo s)
 		/* write the updated subxact list */
 		subxact_info_write(MyLogicalRepWorker->subid, xid);
 
-		if (!am_tablesync_worker())
-			CommitTransactionCommand();
+		CommitTransactionCommand();
 	}
 }
 
 /*
- * Handle STREAM COMMIT message.
+ * Common spoolfile processing.
+ * Returns how many changes were applied.
  */
-static void
-apply_handle_stream_commit(StringInfo s)
+static int
+apply_spooled_messages(TransactionId xid, XLogRecPtr lsn)
 {
-	TransactionId xid;
 	StringInfoData s2;
 	int			nchanges;
 	char		path[MAXPGPATH];
 	char	   *buffer = NULL;
 	bool		found;
-	LogicalRepCommitData commit_data;
 	StreamXidHash *ent;
 	MemoryContext oldcxt;
 	BufFile    *fd;
-
-	Assert(!in_streamed_transaction);
-
-	xid = logicalrep_read_stream_commit(s, &commit_data);
-
-	elog(DEBUG1, "received commit for streamed transaction %u", xid);
-
-	ensure_transaction();
 
 	/*
 	 * Allocate file handle and memory required to process all the messages in
@@ -955,7 +1232,7 @@ apply_handle_stream_commit(StringInfo s)
 	 */
 	oldcxt = MemoryContextSwitchTo(TopTransactionContext);
 
-	/* open the spool file for the committed transaction */
+	/* open the spool file for the committed/prepared transaction */
 	changes_filename(path, MyLogicalRepWorker->subid, xid);
 	elog(DEBUG1, "replaying changes from file \"%s\"", path);
 	ent = (StreamXidHash *) hash_search(xidhash,
@@ -970,7 +1247,7 @@ apply_handle_stream_commit(StringInfo s)
 
 	MemoryContextSwitchTo(oldcxt);
 
-	remote_final_lsn = commit_data.commit_lsn;
+	remote_final_lsn = lsn;
 
 	/*
 	 * Make sure the handle apply_dispatch methods are aware we're in a remote
@@ -1045,6 +1322,37 @@ apply_handle_stream_commit(StringInfo s)
 	elog(DEBUG1, "replayed %d (all) changes from file \"%s\"",
 		 nchanges, path);
 
+	return nchanges;
+}
+
+/*
+ * Handle STREAM COMMIT message.
+ */
+static void
+apply_handle_stream_commit(StringInfo s)
+{
+	TransactionId xid;
+	LogicalRepCommitData commit_data;
+	int			nchanges = 0;
+
+	Assert(!in_streamed_transaction);
+
+	/*
+	 * We don't expect any other transaction data while skipping a prepared
+	 * xact.
+	 */
+	Assert(!skip_prepared_txn);
+
+	xid = logicalrep_read_stream_commit(s, &commit_data);
+
+	elog(DEBUG1, "received commit for streamed transaction %u", xid);
+
+	ensure_transaction();
+
+	nchanges = apply_spooled_messages(xid, commit_data.commit_lsn);
+
+	elog(DEBUG1, "apply_handle_stream_commit: replayed %d (all) changes.", nchanges);
+
 	apply_handle_commit_internal(s, &commit_data);
 
 	/* unlink the files with serialized changes and subxact info */
@@ -1062,8 +1370,7 @@ apply_handle_stream_commit(StringInfo s)
 static void
 apply_handle_commit_internal(StringInfo s, LogicalRepCommitData *commit_data)
 {
-	/* The synchronization worker runs in single transaction. */
-	if (IsTransactionState() && !am_tablesync_worker())
+	if (IsTransactionState())
 	{
 		/*
 		 * Update origin state so we can restart streaming from correct
@@ -1157,6 +1464,9 @@ apply_handle_insert(StringInfo s)
 	EState	   *estate;
 	TupleTableSlot *remoteslot;
 	MemoryContext oldctx;
+
+	if (skip_prepared_txn)
+		return;
 
 	if (handle_streamed_transaction(LOGICAL_REP_MSG_INSERT, s))
 		return;
@@ -1278,6 +1588,9 @@ apply_handle_update(StringInfo s)
 	TupleTableSlot *remoteslot;
 	RangeTblEntry *target_rte;
 	MemoryContext oldctx;
+
+	if (skip_prepared_txn)
+		return;
 
 	if (handle_streamed_transaction(LOGICAL_REP_MSG_UPDATE, s))
 		return;
@@ -1436,6 +1749,9 @@ apply_handle_delete(StringInfo s)
 	EState	   *estate;
 	TupleTableSlot *remoteslot;
 	MemoryContext oldctx;
+
+	if (skip_prepared_txn)
+		return;
 
 	if (handle_streamed_transaction(LOGICAL_REP_MSG_DELETE, s))
 		return;
@@ -1806,6 +2122,9 @@ apply_handle_truncate(StringInfo s)
 	List	   *relids_logged = NIL;
 	ListCell   *lc;
 
+	if (skip_prepared_txn)
+		return;
+
 	if (handle_streamed_transaction(LOGICAL_REP_MSG_TRUNCATE, s))
 		return;
 
@@ -1961,6 +2280,26 @@ apply_dispatch(StringInfo s)
 
 		case LOGICAL_REP_MSG_STREAM_COMMIT:
 			apply_handle_stream_commit(s);
+			return;
+
+		case LOGICAL_REP_MSG_BEGIN_PREPARE:
+			apply_handle_begin_prepare(s);
+			return;
+
+		case LOGICAL_REP_MSG_PREPARE:
+			apply_handle_prepare(s);
+			return;
+
+		case LOGICAL_REP_MSG_COMMIT_PREPARED:
+			apply_handle_commit_prepared(s);
+			return;
+
+		case LOGICAL_REP_MSG_ROLLBACK_PREPARED:
+			apply_handle_rollback_prepared(s);
+			return;
+
+		case LOGICAL_REP_MSG_STREAM_PREPARE:
+			apply_handle_stream_prepare(s);
 			return;
 	}
 
@@ -2448,6 +2787,7 @@ maybe_reread_subscription(void)
 		strcmp(newsub->slotname, MySubscription->slotname) != 0 ||
 		newsub->binary != MySubscription->binary ||
 		newsub->stream != MySubscription->stream ||
+		newsub->twophase != MySubscription->twophase ||
 		!equal(newsub->publications, MySubscription->publications))
 	{
 		ereport(LOG,
@@ -3094,6 +3434,7 @@ ApplyWorkerMain(Datum main_arg)
 	options.proto.logical.publication_names = MySubscription->publications;
 	options.proto.logical.binary = MySubscription->binary;
 	options.proto.logical.streaming = MySubscription->stream;
+	options.proto.logical.twophase = MySubscription->twophase;
 
 	/* Start normal logical streaming replication. */
 	walrcv_startstreaming(wrconn, &options);
@@ -3111,4 +3452,13 @@ bool
 IsLogicalWorker(void)
 {
 	return MyLogicalRepWorker != NULL;
+}
+
+/*
+ * Is current process a logical replication tablesync worker?
+ */
+bool
+IsLogicalWorkerTablesync(void)
+{
+	return am_tablesync_worker();
 }

@@ -34,6 +34,7 @@
 #include "nodes/makefuncs.h"
 #include "replication/logicallauncher.h"
 #include "replication/origin.h"
+#include "replication/slot.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "replication/worker_internal.h"
@@ -64,7 +65,8 @@ parse_subscription_options(List *options,
 						   char **synchronous_commit,
 						   bool *refresh,
 						   bool *binary_given, bool *binary,
-						   bool *streaming_given, bool *streaming)
+						   bool *streaming_given, bool *streaming,
+						   bool *twophase_given, bool *twophase)
 {
 	ListCell   *lc;
 	bool		connect_given = false;
@@ -104,6 +106,11 @@ parse_subscription_options(List *options,
 	{
 		*streaming_given = false;
 		*streaming = false;
+	}
+	if (twophase)
+	{
+		*twophase_given = false;
+		*twophase = false;
 	}
 
 	/* Parse options */
@@ -209,6 +216,15 @@ parse_subscription_options(List *options,
 
 			*streaming_given = true;
 			*streaming = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "two_phase") == 0 && twophase)
+		{
+			if (*twophase_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			*twophase_given = true;
+			*twophase = defGetBoolean(defel);
 		}
 		else
 			ereport(ERROR,
@@ -355,6 +371,8 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	bool		copy_data;
 	bool		streaming;
 	bool		streaming_given;
+	bool		twophase;
+	bool		twophase_given;
 	char	   *synchronous_commit;
 	char	   *conninfo;
 	char	   *slotname;
@@ -379,7 +397,8 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 							   &synchronous_commit,
 							   NULL,	/* no "refresh" */
 							   &binary_given, &binary,
-							   &streaming_given, &streaming);
+							   &streaming_given, &streaming,
+							   &twophase_given, &twophase);
 
 	/*
 	 * Since creating a replication slot is not transactional, rolling back
@@ -447,6 +466,7 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	values[Anum_pg_subscription_subenabled - 1] = BoolGetDatum(enabled);
 	values[Anum_pg_subscription_subbinary - 1] = BoolGetDatum(binary);
 	values[Anum_pg_subscription_substream - 1] = BoolGetDatum(streaming);
+	values[Anum_pg_subscription_subtwophase - 1] = BoolGetDatum(twophase);
 	values[Anum_pg_subscription_subconninfo - 1] =
 		CStringGetTextDatum(conninfo);
 	if (slotname)
@@ -720,6 +740,8 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 				bool		binary;
 				bool		streaming_given;
 				bool		streaming;
+				bool		twophase_given;
+				bool		twophase;
 
 				parse_subscription_options(stmt->options,
 										   NULL,	/* no "connect" */
@@ -730,7 +752,8 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 										   &synchronous_commit,
 										   NULL,	/* no "refresh" */
 										   &binary_given, &binary,
-										   &streaming_given, &streaming);
+										   &streaming_given, &streaming,
+										   &twophase_given, &twophase);
 
 				if (slotname_given)
 				{
@@ -769,6 +792,13 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 					replaces[Anum_pg_subscription_substream - 1] = true;
 				}
 
+				if (twophase_given)
+				{
+					values[Anum_pg_subscription_subtwophase - 1] =
+						BoolGetDatum(twophase);
+					replaces[Anum_pg_subscription_subtwophase - 1] = true;
+				}
+
 				update_tuple = true;
 				break;
 			}
@@ -787,7 +817,8 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 										   NULL,	/* no "synchronous_commit" */
 										   NULL,	/* no "refresh" */
 										   NULL, NULL,	/* no "binary" */
-										   NULL, NULL); /* no streaming */
+										   NULL, NULL,	/* no "streaming" */
+										   NULL, NULL);	/* no "two_phase" */
 				Assert(enabled_given);
 
 				if (!sub->slotname && enabled)
@@ -832,7 +863,8 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 										   NULL,	/* no "synchronous_commit" */
 										   &refresh,
 										   NULL, NULL,	/* no "binary" */
-										   NULL, NULL); /* no "streaming" */
+										   NULL, NULL,	/* no "streaming" */
+										   NULL, NULL);	/* no "two_phase" */
 				values[Anum_pg_subscription_subpublications - 1] =
 					publicationListToArray(stmt->publication);
 				replaces[Anum_pg_subscription_subpublications - 1] = true;
@@ -875,7 +907,8 @@ AlterSubscription(AlterSubscriptionStmt *stmt)
 										   NULL,	/* no "synchronous_commit" */
 										   NULL,	/* no "refresh" */
 										   NULL, NULL,	/* no "binary" */
-										   NULL, NULL); /* no "streaming" */
+										   NULL, NULL,	/* no "streaming" */
+										   NULL, NULL);	/* no "two_phase" */
 
 				AlterSubscription_refresh(sub, copy_data);
 
@@ -928,7 +961,6 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	char	   *err = NULL;
 	RepOriginId originid;
 	WalReceiverConn *wrconn = NULL;
-	StringInfoData cmd;
 	Form_pg_subscription form;
 
 	/*
@@ -1015,73 +1047,95 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 
 	ReleaseSysCache(tup);
 
-	/*
-	 * Stop all the subscription workers immediately.
-	 *
-	 * This is necessary if we are dropping the replication slot, so that the
-	 * slot becomes accessible.
-	 *
-	 * It is also necessary if the subscription is disabled and was disabled
-	 * in the same transaction.  Then the workers haven't seen the disabling
-	 * yet and will still be running, leading to hangs later when we want to
-	 * drop the replication origin.  If the subscription was disabled before
-	 * this transaction, then there shouldn't be any workers left, so this
-	 * won't make a difference.
-	 *
-	 * New workers won't be started because we hold an exclusive lock on the
-	 * subscription till the end of the transaction.
-	 */
-	LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
-	subworkers = logicalrep_workers_find(subid, false);
-	LWLockRelease(LogicalRepWorkerLock);
-	foreach(lc, subworkers)
+	PG_TRY();
 	{
-		LogicalRepWorker *w = (LogicalRepWorker *) lfirst(lc);
+		/*
+		 * Stop all the subscription workers immediately.
+		 *
+		 * This is necessary if we are dropping the replication slot, so that
+		 * the slot becomes accessible.
+		 *
+		 * It is also necessary if the subscription is disabled and was
+		 * disabled in the same transaction.  Then the workers haven't seen
+		 * the disabling yet and will still be running, leading to hangs later
+		 * when we want to drop the replication origin.  If the subscription
+		 * was disabled before this transaction, then there shouldn't be any
+		 * workers left, so this won't make a difference.
+		 *
+		 * New workers won't be started because we hold an exclusive lock on
+		 * the subscription till the end of the transaction.
+		 */
+		LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
+		subworkers = logicalrep_workers_find(subid, false);
+		LWLockRelease(LogicalRepWorkerLock);
+		foreach(lc, subworkers)
+		{
+			LogicalRepWorker *w = (LogicalRepWorker *) lfirst(lc);
 
-		logicalrep_worker_stop(w->subid, w->relid);
+			logicalrep_worker_stop(w->subid, w->relid);
+		}
+		list_free(subworkers);
+
+		/* Clean up dependencies. */
+		deleteSharedDependencyRecordsFor(SubscriptionRelationId, subid, 0);
+
+		/* Remove any associated relation synchronization states. */
+		RemoveSubscriptionRel(subid, InvalidOid);
+
+		/* Remove the origin tracking if exists. */
+		snprintf(originname, sizeof(originname), "pg_%u", subid);
+		originid = replorigin_by_name(originname, true);
+		if (originid != InvalidRepOriginId)
+			replorigin_drop(originid, false);
+
+		/*
+		 * If there is a slot associated with the subscription, then drop the
+		 * replication slot at the publisher node using the replication
+		 * connection.
+		 */
+		if (slotname)
+		{
+			load_file("libpqwalreceiver", false);
+
+			wrconn = walrcv_connect(conninfo, true, subname, &err);
+			if (wrconn == NULL)
+				ereport(ERROR,
+						(errmsg("could not connect to publisher when attempting to "
+								"drop the replication slot \"%s\"", slotname),
+						 errdetail("The error was: %s", err),
+				/* translator: %s is an SQL ALTER command */
+						 errhint("Use %s to disassociate the subscription from the slot.",
+								 "ALTER SUBSCRIPTION ... SET (slot_name = NONE)")));
+
+			ReplicationSlotDropAtPubNode(wrconn, slotname, false);
+		}
 	}
-	list_free(subworkers);
-
-	/* Clean up dependencies */
-	deleteSharedDependencyRecordsFor(SubscriptionRelationId, subid, 0);
-
-	/* Remove any associated relation synchronization states. */
-	RemoveSubscriptionRel(subid, InvalidOid);
-
-	/* Remove the origin tracking if exists. */
-	snprintf(originname, sizeof(originname), "pg_%u", subid);
-	originid = replorigin_by_name(originname, true);
-	if (originid != InvalidRepOriginId)
-		replorigin_drop(originid, false);
-
-	/*
-	 * If there is no slot associated with the subscription, we can finish
-	 * here.
-	 */
-	if (!slotname)
+	PG_FINALLY();
 	{
+		if (wrconn)
+			walrcv_disconnect(wrconn);
+
 		table_close(rel, NoLock);
-		return;
 	}
+	PG_END_TRY();
+}
 
-	/*
-	 * Otherwise drop the replication slot at the publisher node using the
-	 * replication connection.
-	 */
+/*
+ * Drop the replication slot at the publisher node using the replication connection.
+ *
+ * missing_ok - if true then only issue WARNING message if the slot cannot be deleted.
+ */
+void
+ReplicationSlotDropAtPubNode(WalReceiverConn *wrconn, char *slotname, bool missing_ok)
+{
+	StringInfoData cmd;
+
+	Assert(wrconn);
+
 	load_file("libpqwalreceiver", false);
 
 	initStringInfo(&cmd);
 	appendStringInfo(&cmd, "DROP_REPLICATION_SLOT %s WAIT", quote_identifier(slotname));
-
-	wrconn = walrcv_connect(conninfo, true, subname, &err);
-	if (wrconn == NULL)
-		ereport(ERROR,
-				(errmsg("could not connect to publisher when attempting to "
-						"drop the replication slot \"%s\"", slotname),
-				 errdetail("The error was: %s", err),
-		/* translator: %s is an SQL ALTER command */
-				 errhint("Use %s to disassociate the subscription from the slot.",
-						 "ALTER SUBSCRIPTION ... SET (slot_name = NONE)")));
 
 	PG_TRY();
 	{
@@ -1089,27 +1143,37 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 
 		res = walrcv_exec(wrconn, cmd.data, 0, NULL);
 
-		if (res->status != WALRCV_OK_COMMAND)
+		if (res->status == WALRCV_OK_COMMAND)
+		{
+			/* NOTICE. Success. */
+			ereport(NOTICE,
+					(errmsg("dropped replication slot \"%s\" on publisher",
+							slotname)));
+		}
+		else if (res->status == WALRCV_ERROR && missing_ok)
+		{
+			/* WARNING. Error, but missing_ok = true. */
+			ereport(WARNING,
+					(errmsg("could not drop the replication slot \"%s\" on publisher",
+							slotname),
+					 errdetail("The error was: %s", res->err)));
+		}
+		else
+		{
+			/* ERROR. */
 			ereport(ERROR,
 					(errmsg("could not drop the replication slot \"%s\" on publisher",
 							slotname),
 					 errdetail("The error was: %s", res->err)));
-		else
-			ereport(NOTICE,
-					(errmsg("dropped replication slot \"%s\" on publisher",
-							slotname)));
+		}
 
 		walrcv_clear_result(res);
 	}
 	PG_FINALLY();
 	{
-		walrcv_disconnect(wrconn);
+		pfree(cmd.data);
 	}
 	PG_END_TRY();
-
-	pfree(cmd.data);
-
-	table_close(rel, NoLock);
 }
 
 /*

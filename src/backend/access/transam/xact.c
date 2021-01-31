@@ -5720,8 +5720,7 @@ XactLogAbortRecord(TimestampTz abort_time,
 
 	/* dump transaction origin information only for abort prepared */
 	if ((replorigin_session_origin != InvalidRepOriginId) &&
-		TransactionIdIsValid(twophase_xid) &&
-		XLogLogicalInfoActive())
+		TransactionIdIsValid(twophase_xid))
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_ORIGIN;
 
@@ -5927,7 +5926,8 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
  * because subtransaction commit is never WAL logged.
  */
 static void
-xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid)
+xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid,
+				XLogRecPtr lsn, RepOriginId origin_id)
 {
 	TransactionId max_xid;
 
@@ -5976,6 +5976,13 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid)
 			StandbyReleaseLockTree(xid, parsed->nsubxacts, parsed->subxacts);
 	}
 
+	if (parsed->xinfo & XACT_XINFO_HAS_ORIGIN)
+	{
+		/* recover apply progress */
+		replorigin_advance(origin_id, parsed->origin_lsn, lsn,
+						   false /* backward */, false /* WAL */);
+	}
+
 	/* Make sure files supposed to be dropped are dropped */
 	DropRelationFiles(parsed->xnodes, parsed->nrels, true);
 }
@@ -6017,7 +6024,8 @@ xact_redo(XLogReaderState *record)
 		xl_xact_parsed_abort parsed;
 
 		ParseAbortRecord(XLogRecGetInfo(record), xlrec, &parsed);
-		xact_redo_abort(&parsed, XLogRecGetXid(record));
+		xact_redo_abort(&parsed, XLogRecGetXid(record),
+						record->EndRecPtr, XLogRecGetOrigin(record));
 	}
 	else if (info == XLOG_XACT_ABORT_PREPARED)
 	{
@@ -6025,7 +6033,8 @@ xact_redo(XLogReaderState *record)
 		xl_xact_parsed_abort parsed;
 
 		ParseAbortRecord(XLogRecGetInfo(record), xlrec, &parsed);
-		xact_redo_abort(&parsed, parsed.twophase_xid);
+		xact_redo_abort(&parsed, parsed.twophase_xid,
+						record->EndRecPtr, XLogRecGetOrigin(record));
 
 		/* Delete TwoPhaseState gxact entry and/or 2PC file. */
 		LWLockAcquire(TwoPhaseStateLock, LW_EXCLUSIVE);

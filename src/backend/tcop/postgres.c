@@ -3086,9 +3086,15 @@ ProcessInterrupts(void)
 					(errcode(ERRCODE_ADMIN_SHUTDOWN),
 					 errmsg("terminating autovacuum process due to administrator command")));
 		else if (IsLogicalWorker())
+		{
+			/* Tablesync workers do their own cleanups. */
+			if (IsLogicalWorkerTablesync())
+				tablesync_cleanup_at_interrupt(); /* does not return. */
+
 			ereport(FATAL,
 					(errcode(ERRCODE_ADMIN_SHUTDOWN),
 					 errmsg("terminating logical replication worker due to administrator command")));
+		}
 		else if (IsLogicalLauncher())
 		{
 			ereport(DEBUG1,

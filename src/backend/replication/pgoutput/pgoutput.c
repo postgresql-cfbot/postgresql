@@ -47,6 +47,16 @@ static void pgoutput_truncate(LogicalDecodingContext *ctx,
 							  ReorderBufferChange *change);
 static bool pgoutput_origin_filter(LogicalDecodingContext *ctx,
 								   RepOriginId origin_id);
+static void pgoutput_begin_prepare_txn(LogicalDecodingContext *ctx,
+									   ReorderBufferTXN *txn);
+static void pgoutput_prepare_txn(LogicalDecodingContext *ctx,
+								 ReorderBufferTXN *txn, XLogRecPtr prepare_lsn);
+static void pgoutput_commit_prepared_txn(LogicalDecodingContext *ctx,
+										 ReorderBufferTXN *txn, XLogRecPtr commit_lsn);
+static void pgoutput_rollback_prepared_txn(LogicalDecodingContext *ctx,
+										   ReorderBufferTXN *txn,
+										   XLogRecPtr prepare_end_lsn,
+										   TimestampTz prepare_time);
 static void pgoutput_stream_start(struct LogicalDecodingContext *ctx,
 								  ReorderBufferTXN *txn);
 static void pgoutput_stream_stop(struct LogicalDecodingContext *ctx,
@@ -57,6 +67,8 @@ static void pgoutput_stream_abort(struct LogicalDecodingContext *ctx,
 static void pgoutput_stream_commit(struct LogicalDecodingContext *ctx,
 								   ReorderBufferTXN *txn,
 								   XLogRecPtr commit_lsn);
+static void pgoutput_stream_prepare_txn(LogicalDecodingContext *ctx,
+										ReorderBufferTXN *txn, XLogRecPtr prepare_lsn);
 
 static bool publications_valid;
 static bool in_streaming;
@@ -66,6 +78,9 @@ static void publication_invalidation_cb(Datum arg, int cacheid,
 										uint32 hashvalue);
 static void send_relation_and_attrs(Relation relation, TransactionId xid,
 									LogicalDecodingContext *ctx);
+static void send_repl_origin(LogicalDecodingContext* ctx,
+							 RepOriginId origin_id, XLogRecPtr origin_lsn,
+							 bool send_origin);
 
 /*
  * Entry in the map used to remember which relation schemas we sent.
@@ -143,6 +158,11 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->change_cb = pgoutput_change;
 	cb->truncate_cb = pgoutput_truncate;
 	cb->commit_cb = pgoutput_commit_txn;
+
+	cb->begin_prepare_cb = pgoutput_begin_prepare_txn;
+	cb->prepare_cb = pgoutput_prepare_txn;
+	cb->commit_prepared_cb = pgoutput_commit_prepared_txn;
+	cb->rollback_prepared_cb = pgoutput_rollback_prepared_txn;
 	cb->filter_by_origin_cb = pgoutput_origin_filter;
 	cb->shutdown_cb = pgoutput_shutdown;
 
@@ -153,18 +173,22 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->stream_commit_cb = pgoutput_stream_commit;
 	cb->stream_change_cb = pgoutput_change;
 	cb->stream_truncate_cb = pgoutput_truncate;
+	/* transaction streaming - two-phase commit */
+	cb->stream_prepare_cb = pgoutput_stream_prepare_txn;
 }
 
 static void
 parse_output_parameters(List *options, uint32 *protocol_version,
 						List **publication_names, bool *binary,
-						bool *enable_streaming)
+						bool *enable_streaming,
+						bool *enable_twophase)
 {
 	ListCell   *lc;
 	bool		protocol_version_given = false;
 	bool		publication_names_given = false;
 	bool		binary_option_given = false;
 	bool		streaming_given = false;
+	bool		twophase_given = false;
 
 	*binary = false;
 
@@ -232,6 +256,16 @@ parse_output_parameters(List *options, uint32 *protocol_version,
 
 			*enable_streaming = defGetBoolean(defel);
 		}
+		else if (strcmp(defel->defname, "two_phase") == 0)
+		{
+			if (twophase_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			twophase_given = true;
+
+			*enable_twophase = defGetBoolean(defel);
+		}
 		else
 			elog(ERROR, "unrecognized pgoutput option: %s", defel->defname);
 	}
@@ -245,6 +279,7 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 				 bool is_init)
 {
 	bool		enable_streaming = false;
+	bool		enable_twophase = false;
 	PGOutputData *data = palloc0(sizeof(PGOutputData));
 
 	/* Create our memory context for private allocations. */
@@ -269,7 +304,8 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 								&data->protocol_version,
 								&data->publication_names,
 								&data->binary,
-								&enable_streaming);
+								&enable_streaming,
+								&enable_twophase);
 
 		/* Check if we support requested protocol */
 		if (data->protocol_version > LOGICALREP_PROTO_MAX_VERSION_NUM)
@@ -310,6 +346,24 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 		/* Also remember we're currently not streaming any transaction. */
 		in_streaming = false;
 
+		/*
+		 * Decide whether to enable two-phase commit. It is disabled by default, in
+		 * which case we just update the flag in decoding context. Otherwise
+		 * we only allow it with sufficient version of the protocol, and when
+		 * the output plugin supports it.
+		 */
+		if (!enable_twophase)
+			ctx->twophase = false;
+		else if (data->protocol_version < LOGICALREP_PROTO_2PC_VERSION_NUM)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("requested proto_version=%d does not support two-phase commit, need %d or higher",
+							data->protocol_version, LOGICALREP_PROTO_2PC_VERSION_NUM)));
+		else if (!ctx->twophase)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("two-phase commit requested, but not supported by output plugin")));
+
 		/* Init publication state. */
 		data->publications = NIL;
 		publications_valid = false;
@@ -322,8 +376,12 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 	}
 	else
 	{
-		/* Disable the streaming during the slot initialization mode. */
+		/*
+		 * Disable the streaming and prepared transactions during the slot
+		 * initialization mode.
+		 */
 		ctx->streaming = false;
+		ctx->twophase = false;
 	}
 }
 
@@ -338,27 +396,8 @@ pgoutput_begin_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
 	OutputPluginPrepareWrite(ctx, !send_replication_origin);
 	logicalrep_write_begin(ctx->out, txn);
 
-	if (send_replication_origin)
-	{
-		char	   *origin;
-
-		/* Message boundary */
-		OutputPluginWrite(ctx, false);
-		OutputPluginPrepareWrite(ctx, true);
-
-		/*----------
-		 * XXX: which behaviour do we want here?
-		 *
-		 * Alternatives:
-		 *	- don't send origin message if origin name not found
-		 *	  (that's what we do now)
-		 *	- throw error - that will break replication, not good
-		 *	- send some special "unknown" origin
-		 *----------
-		 */
-		if (replorigin_by_oid(txn->origin_id, true, &origin))
-			logicalrep_write_origin(ctx->out, origin, txn->origin_lsn);
-	}
+	send_repl_origin(ctx, txn->origin_id, txn->origin_lsn,
+					 send_replication_origin);
 
 	OutputPluginWrite(ctx, true);
 }
@@ -374,6 +413,68 @@ pgoutput_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_commit(ctx->out, txn, commit_lsn);
+	OutputPluginWrite(ctx, true);
+}
+
+/*
+ * BEGIN PREPARE callback
+ */
+static void
+pgoutput_begin_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
+{
+	bool        send_replication_origin = txn->origin_id != InvalidRepOriginId;
+
+	OutputPluginPrepareWrite(ctx, !send_replication_origin);
+	logicalrep_write_begin_prepare(ctx->out, txn);
+
+	send_repl_origin(ctx, txn->origin_id, txn->origin_lsn,
+					 send_replication_origin);
+
+	OutputPluginWrite(ctx, true);
+}
+
+/*
+ * PREPARE callback
+ */
+static void
+pgoutput_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					 XLogRecPtr prepare_lsn)
+{
+	OutputPluginUpdateProgress(ctx);
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_prepare(ctx->out, txn, prepare_lsn);
+	OutputPluginWrite(ctx, true);
+}
+
+/*
+ * COMMIT PREPARED callback
+ */
+static void
+pgoutput_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+							 XLogRecPtr commit_lsn)
+{
+	OutputPluginUpdateProgress(ctx);
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_commit_prepared(ctx->out, txn, commit_lsn);
+	OutputPluginWrite(ctx, true);
+}
+
+/*
+ * ROLLBACK PREPARED callback
+ */
+static void
+pgoutput_rollback_prepared_txn(LogicalDecodingContext *ctx,
+							   ReorderBufferTXN *txn,
+							   XLogRecPtr prepare_end_lsn,
+							   TimestampTz prepare_time)
+{
+	OutputPluginUpdateProgress(ctx);
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_rollback_prepared(ctx->out, txn, prepare_end_lsn,
+									   prepare_time);
 	OutputPluginWrite(ctx, true);
 }
 
@@ -776,17 +877,8 @@ pgoutput_stream_start(struct LogicalDecodingContext *ctx,
 	OutputPluginPrepareWrite(ctx, !send_replication_origin);
 	logicalrep_write_stream_start(ctx->out, txn->xid, !rbtxn_is_streamed(txn));
 
-	if (send_replication_origin)
-	{
-		char	   *origin;
-
-		/* Message boundary */
-		OutputPluginWrite(ctx, false);
-		OutputPluginPrepareWrite(ctx, true);
-
-		if (replorigin_by_oid(txn->origin_id, true, &origin))
-			logicalrep_write_origin(ctx->out, origin, InvalidXLogRecPtr);
-	}
+	send_repl_origin(ctx, txn->origin_id, InvalidXLogRecPtr,
+					 send_replication_origin);
 
 	OutputPluginWrite(ctx, true);
 
@@ -864,6 +956,24 @@ pgoutput_stream_commit(struct LogicalDecodingContext *ctx,
 	OutputPluginWrite(ctx, true);
 
 	cleanup_rel_sync_cache(txn->xid, true);
+}
+
+/*
+ * PREPARE callback (for streaming two-phase commit).
+ *
+ * Notify the downstream to prepare the transaction.
+ */
+static void
+pgoutput_stream_prepare_txn(LogicalDecodingContext *ctx,
+							ReorderBufferTXN *txn,
+							XLogRecPtr prepare_lsn)
+{
+	Assert(rbtxn_is_streamed(txn));
+
+	OutputPluginUpdateProgress(ctx);
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_stream_prepare(ctx->out, txn, prepare_lsn);
+	OutputPluginWrite(ctx, true);
 }
 
 /*
@@ -1190,5 +1300,33 @@ rel_sync_cache_publication_cb(Datum arg, int cacheid, uint32 hashvalue)
 		entry->pubactions.pubupdate = false;
 		entry->pubactions.pubdelete = false;
 		entry->pubactions.pubtruncate = false;
+	}
+}
+
+/* Send Replication origin */
+static void
+send_repl_origin(LogicalDecodingContext *ctx, RepOriginId origin_id,
+				 XLogRecPtr	origin_lsn, bool send_origin)
+{
+	if (send_origin)
+	{
+		char *origin;
+
+		/* Message boundary */
+		OutputPluginWrite(ctx, false);
+		OutputPluginPrepareWrite(ctx, true);
+
+		/*----------
+		 * XXX: which behaviour do we want here?
+		 *
+		 * Alternatives:
+		 *  - don't send origin message if origin name not found
+		 *    (that's what we do now)
+		 *  - throw error - that will break replication, not good
+		 *  - send some special "unknown" origin
+		 *----------
+		 */
+		if (replorigin_by_oid(origin_id, true, &origin))
+			logicalrep_write_origin(ctx->out, origin, origin_lsn);
 	}
 }

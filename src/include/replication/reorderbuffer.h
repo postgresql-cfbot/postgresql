@@ -247,6 +247,18 @@ typedef struct ReorderBufferChange
 	((txn)->txn_flags & RBTXN_SKIPPED_PREPARE) != 0 \
 )
 
+/* Has this prepared transaction been committed? */
+#define rbtxn_commit_prepared(txn) \
+( \
+	((txn)->txn_flags & RBTXN_COMMIT_PREPARED) != 0 \
+)
+
+/* Has this prepared transaction been rollbacked? */
+#define rbtxn_rollback_prepared(txn) \
+( \
+	((txn)->txn_flags & RBTXN_ROLLBACK_PREPARED) != 0 \
+)
+
 typedef struct ReorderBufferTXN
 {
 	/* See above */

@@ -67,6 +67,7 @@ GetSubscription(Oid subid, bool missing_ok)
 	sub->enabled = subform->subenabled;
 	sub->binary = subform->subbinary;
 	sub->stream = subform->substream;
+	sub->twophase = subform->subtwophase;
 
 	/* Get conninfo */
 	datum = SysCacheGetAttr(SUBSCRIPTIONOID,

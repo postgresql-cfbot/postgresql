@@ -2489,6 +2489,11 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 			curtxn->concurrent_abort = true;
 
 			/* Reset the TXN so that it is allowed to stream remaining data. */
+			if (rbtxn_prepared(txn))
+				elog(LOG, "stop decoding of prepared txn %s (%u)",
+					 txn->gid != NULL ? txn->gid : "", txn->xid);
+			else
+				elog(LOG, "stop decoding of txn %u", txn->xid);
 			ReorderBufferResetTXN(rb, txn, snapshot_now,
 								  command_id, prev_lsn,
 								  specinsert);

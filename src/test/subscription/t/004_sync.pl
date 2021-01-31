@@ -3,7 +3,9 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 7;
+use Test::More tests => 10;
+use Time::HiRes qw(usleep);
+use Scalar::Util qw(looks_like_number);
 
 # Initialize publisher node
 my $node_publisher = get_new_node('publisher');
@@ -149,7 +151,99 @@ $result = $node_subscriber->safe_psql('postgres',
 is($result, qq(20),
 	'changes for table added after subscription initialized replicated');
 
+##
+## slot integrity
+##
+## Manually create a slot with the same name that tablesync will want.
+## Expect tablesync ERROR when clash is detected.
+## Then remove the slot so tablesync can proceed.
+## Expect tablesync can now finish normally.
+##
+
+# drop the subscription
+$node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION tap_sub");
+
+# empty the table tab_rep
+$node_subscriber->safe_psql('postgres', "DELETE FROM tab_rep;");
+
+# empty the table tab_rep_next
+$node_subscriber->safe_psql('postgres', "DELETE FROM tab_rep_next;");
+
+# recreate the subscription again, but leave it disabled so that we can get the OID
+$node_subscriber->safe_psql('postgres',
+	"CREATE SUBSCRIPTION tap_sub CONNECTION '$publisher_connstr' PUBLICATION tap_pub
+	with (enabled = false)"
+);
+
+# need to create the name of the tablesync slot, for this we need the subscription OID
+# and the table OID.
+my $subid = $node_subscriber->safe_psql('postgres',
+	"SELECT oid FROM pg_subscription WHERE subname = 'tap_sub';");
+is(looks_like_number($subid), qq(1), 'get the subscription OID');
+
+my $relid = $node_subscriber->safe_psql('postgres',
+	"SELECT 'tab_rep_next'::regclass::oid");
+is(looks_like_number($relid), qq(1), 'get the table OID');
+
+# name of the tablesync slot is pg_'suboid'_sync_'tableoid'.
+my $slotname = 'pg_' . $subid . '_' . 'sync_' . $relid;
+
+# temporarily, create a slot having the same name of the tablesync slot.
+$node_publisher->safe_psql('postgres',
+	"SELECT 'init' FROM pg_create_logical_replication_slot('$slotname', 'pgoutput', false);");
+
+# enable the subscription
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub ENABLE"
+);
+
+# check for occurrence of the expected error
+poll_output_until("replication slot \"$slotname\" already exists")
+    or die "no error stop for the pre-existing origin";
+
+# now drop the offending slot, the tablesync should recover.
+$node_publisher->safe_psql('postgres',
+	"SELECT pg_drop_replication_slot('$slotname');");
+
+# wait for sync to finish
+$node_subscriber->poll_query_until('postgres', $synced_query)
+  or die "Timed out while waiting for subscriber to synchronize data";
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT count(*) FROM tab_rep_next");
+is($result, qq(20),
+	'data for table added after subscription initialized are now synced');
+
+# Cleanup
 $node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION tap_sub");
 
 $node_subscriber->stop('fast');
 $node_publisher->stop('fast');
+
+sub poll_output_until
+{
+    my ($expected) = @_;
+
+    $expected = 'xxxxxx' unless defined($expected); # default junk value
+
+    my $max_attempts = 10 * 10;
+    my $attempts     = 0;
+
+    my $output_file = '';
+    while ($attempts < $max_attempts)
+    {
+        $output_file = slurp_file($node_subscriber->logfile());
+
+        if ($output_file =~ $expected)
+        {
+            return 1;
+        }
+
+        # Wait 0.1 second before retrying.
+        usleep(100_000);
+        $attempts++;
+    }
+
+    # The output result didn't change in 180 seconds. Give up
+    return 0;
+}

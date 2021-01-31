@@ -13,6 +13,7 @@
 #ifndef LOGICAL_PROTO_H
 #define LOGICAL_PROTO_H
 
+#include "access/xact.h"
 #include "replication/reorderbuffer.h"
 #include "utils/rel.h"
 
@@ -27,10 +28,14 @@
  *
  * LOGICALREP_PROTO_STREAM_VERSION_NUM is the minimum protocol version with
  * support for streaming large transactions.
+ *
+ * LOGICALREP_PROTO_2PC_VERSION_NUM is the minimum protocol version with
+ * support for two-phase commit PREPARE decoding.
  */
 #define LOGICALREP_PROTO_MIN_VERSION_NUM 1
 #define LOGICALREP_PROTO_VERSION_NUM 1
 #define LOGICALREP_PROTO_STREAM_VERSION_NUM 2
+#define LOGICALREP_PROTO_2PC_VERSION_NUM 2
 #define LOGICALREP_PROTO_MAX_VERSION_NUM LOGICALREP_PROTO_STREAM_VERSION_NUM
 
 /*
@@ -54,10 +59,15 @@ typedef enum LogicalRepMsgType
 	LOGICAL_REP_MSG_TRUNCATE = 'T',
 	LOGICAL_REP_MSG_RELATION = 'R',
 	LOGICAL_REP_MSG_TYPE = 'Y',
+	LOGICAL_REP_MSG_BEGIN_PREPARE = 'b',
+	LOGICAL_REP_MSG_PREPARE = 'P',
+	LOGICAL_REP_MSG_COMMIT_PREPARED = 'K',
+	LOGICAL_REP_MSG_ROLLBACK_PREPARED = 'r',
 	LOGICAL_REP_MSG_STREAM_START = 'S',
 	LOGICAL_REP_MSG_STREAM_END = 'E',
 	LOGICAL_REP_MSG_STREAM_COMMIT = 'c',
-	LOGICAL_REP_MSG_STREAM_ABORT = 'A'
+	LOGICAL_REP_MSG_STREAM_ABORT = 'A',
+	LOGICAL_REP_MSG_STREAM_PREPARE = 'p'
 } LogicalRepMsgType;
 
 /*
@@ -114,12 +124,55 @@ typedef struct LogicalRepBeginData
 	TransactionId xid;
 } LogicalRepBeginData;
 
+/* Commit (and abort) information */
 typedef struct LogicalRepCommitData
 {
 	XLogRecPtr	commit_lsn;
 	XLogRecPtr	end_lsn;
 	TimestampTz committime;
 } LogicalRepCommitData;
+
+
+/* Begin Prepare */
+typedef struct LogicalRepBeginPrepareData
+{
+	XLogRecPtr	final_lsn;
+	XLogRecPtr	end_lsn;
+	TimestampTz committime;
+	TransactionId xid;
+	char		gid[GIDSIZE];
+} LogicalRepBeginPrepareData;
+
+/*
+ * Prepared transaction protocol information. This same structure is used to
+ * hold the information for prepare, and commit prepared transaction.
+ * prepare_lsn and preparetime are used to store commit lsn and
+ * commit time for commit prepared.
+ */
+typedef struct LogicalRepPreparedTxnData
+{
+	XLogRecPtr	prepare_lsn;
+	XLogRecPtr	end_lsn;
+	TimestampTz preparetime;
+	char		gid[GIDSIZE];
+} LogicalRepPreparedTxnData;
+
+/*
+ * Rollback Prepared transaction protocol information. The prepare information
+ * prepare_end_lsn and prepare_time are used to check if the downstream has
+ * received this prepared transaction in which case it can apply the rollback,
+ * otherwise, it can skip the rollback operation. The gid alone is not
+ * sufficient because the downstream node can have a prepared transaction with
+ * same identifier.
+ */
+typedef struct LogicalRepRollbackPreparedTxnData
+{
+	XLogRecPtr	prepare_end_lsn;
+	XLogRecPtr	rollback_end_lsn;
+	TimestampTz preparetime;
+	TimestampTz rollbacktime;
+	char		gid[GIDSIZE];
+} LogicalRepRollbackPreparedTxnData;
 
 extern void logicalrep_write_begin(StringInfo out, ReorderBufferTXN *txn);
 extern void logicalrep_read_begin(StringInfo in,
@@ -128,6 +181,24 @@ extern void logicalrep_write_commit(StringInfo out, ReorderBufferTXN *txn,
 									XLogRecPtr commit_lsn);
 extern void logicalrep_read_commit(StringInfo in,
 								   LogicalRepCommitData *commit_data);
+extern void logicalrep_write_begin_prepare(StringInfo out, ReorderBufferTXN *txn);
+extern void logicalrep_read_begin_prepare(StringInfo in,
+										  LogicalRepBeginPrepareData *begin_data);
+extern void logicalrep_write_prepare(StringInfo out, ReorderBufferTXN *txn,
+									 XLogRecPtr prepare_lsn);
+extern void logicalrep_read_prepare(StringInfo in,
+									LogicalRepPreparedTxnData *prepare_data);
+extern void logicalrep_write_commit_prepared(StringInfo out, ReorderBufferTXN* txn,
+											 XLogRecPtr commit_lsn);
+extern void logicalrep_read_commit_prepared(StringInfo in,
+											LogicalRepPreparedTxnData *prepare_data);
+extern void logicalrep_write_rollback_prepared(StringInfo out, ReorderBufferTXN *txn,
+											   XLogRecPtr prepare_end_lsn,
+											   TimestampTz prepare_time);
+extern void logicalrep_read_rollback_prepared(StringInfo in,
+											  LogicalRepRollbackPreparedTxnData *rollback_data);
+
+
 extern void logicalrep_write_origin(StringInfo out, const char *origin,
 									XLogRecPtr origin_lsn);
 extern char *logicalrep_read_origin(StringInfo in, XLogRecPtr *origin_lsn);
@@ -170,5 +241,11 @@ extern void logicalrep_write_stream_abort(StringInfo out, TransactionId xid,
 										  TransactionId subxid);
 extern void logicalrep_read_stream_abort(StringInfo in, TransactionId *xid,
 										 TransactionId *subxid);
+
+extern void logicalrep_write_stream_prepare(StringInfo out, ReorderBufferTXN *txn,
+											XLogRecPtr prepare_lsn);
+extern TransactionId logicalrep_read_stream_prepare(StringInfo in,
+													LogicalRepPreparedTxnData *prepare_data);
+
 
 #endif							/* LOGICAL_PROTO_H */

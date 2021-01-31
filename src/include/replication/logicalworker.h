@@ -15,5 +15,7 @@
 extern void ApplyWorkerMain(Datum main_arg);
 
 extern bool IsLogicalWorker(void);
+extern bool IsLogicalWorkerTablesync(void);
+extern void tablesync_cleanup_at_interrupt(void);
 
 #endif							/* LOGICALWORKER_H */

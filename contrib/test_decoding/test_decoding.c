@@ -11,11 +11,13 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
+#include "miscadmin.h"
 
 #include "catalog/pg_type.h"
 
 #include "replication/logical.h"
 #include "replication/origin.h"
+#include "storage/procarray.h"
 
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
@@ -35,6 +37,7 @@ typedef struct
 	bool		include_timestamp;
 	bool		skip_empty_xacts;
 	bool		only_local;
+	TransactionId check_xid_aborted;	/* track abort of this txid */
 } TestDecodingData;
 
 /*
@@ -174,6 +177,7 @@ pg_decode_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 	data->include_timestamp = false;
 	data->skip_empty_xacts = false;
 	data->only_local = false;
+	data->check_xid_aborted = InvalidTransactionId;
 
 	ctx->output_plugin_private = data;
 
@@ -274,6 +278,24 @@ pg_decode_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("could not parse value \"%s\" for parameter \"%s\"",
 								strVal(elem->arg), elem->defname)));
+		}
+		else if (strcmp(elem->defname, "check-xid-aborted") == 0)
+		{
+			if (elem->arg == NULL)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("check-xid-aborted needs an input value")));
+			else
+			{
+				errno = 0;
+				data->check_xid_aborted = (TransactionId)strtoul(strVal(elem->arg), NULL, 0);
+
+				if (errno || !TransactionIdIsValid(data->check_xid_aborted))
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("check-xid-aborted is not a valid xid: \"%s\"",
+									strVal(elem->arg))));
+			}
 		}
 		else
 		{
@@ -471,6 +493,30 @@ pg_decode_filter(LogicalDecodingContext *ctx,
 	return false;
 }
 
+static void
+test_concurrent_aborts(TestDecodingData *data)
+{
+	/*
+	 * If check_xid_aborted is a valid xid, then it was passed in as an option
+	 * to check if the transaction having this xid would be aborted. This is
+	 * to test concurrent aborts.
+	 */
+	if (TransactionIdIsValid(data->check_xid_aborted))
+	{
+		elog(LOG, "waiting for %u to abort", data->check_xid_aborted);
+		while (TransactionIdIsInProgress(data->check_xid_aborted))
+		{
+			CHECK_FOR_INTERRUPTS();
+			pg_usleep(10000L);
+		}
+		if (!TransactionIdIsInProgress(data->check_xid_aborted) &&
+				!TransactionIdDidCommit(data->check_xid_aborted))
+			elog(LOG, "%u aborted", data->check_xid_aborted);
+
+		Assert(TransactionIdDidAbort(data->check_xid_aborted));
+	}
+}
+
 /*
  * Print literal `outputstr' already represented as string of type `typid'
  * into stringbuf `s'.
@@ -620,6 +666,9 @@ pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	}
 	txndata->xact_wrote_changes = true;
 
+	/* For testing concurrent  aborts */
+	test_concurrent_aborts(data);
+
 	class_form = RelationGetForm(relation);
 	tupdesc = RelationGetDescr(relation);
 
@@ -705,6 +754,9 @@ pg_decode_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		pg_output_begin(ctx, data, txn, false);
 	}
 	txndata->xact_wrote_changes = true;
+
+	/* For testing concurrent  aborts */
+	test_concurrent_aborts(data);
 
 	/* Avoid leaking memory by using and resetting our own context */
 	old = MemoryContextSwitchTo(data->context);
@@ -918,6 +970,9 @@ pg_decode_stream_change(LogicalDecodingContext *ctx,
 	}
 	txndata->xact_wrote_changes = txndata->stream_wrote_changes = true;
 
+	/* Test for concurrent aborts */
+	test_concurrent_aborts(data);
+
 	OutputPluginPrepareWrite(ctx, true);
 	if (data->include_xids)
 		appendStringInfo(ctx->out, "streaming change for TXN %u", txn->xid);
@@ -970,6 +1025,9 @@ pg_decode_stream_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		pg_output_stream_start(ctx, data, txn, false);
 	}
 	txndata->xact_wrote_changes = txndata->stream_wrote_changes = true;
+
+	/* For testing concurrent  aborts */
+	test_concurrent_aborts(data);
 
 	OutputPluginPrepareWrite(ctx, true);
 	if (data->include_xids)

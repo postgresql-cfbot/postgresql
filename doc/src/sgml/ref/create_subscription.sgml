@@ -239,6 +239,21 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
          </para>
         </listitem>
        </varlistentry>
+       <varlistentry>
+        <term><literal>two_phase</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies whether two-phase commit is enabled for this subscription.
+          The default is <literal>false</literal>.
+         </para>
+
+         <para>
+          When two-phase commit is enabled then the decoded transactions are sent
+          to the subscriber on the PREPARE TRANSACTION. By default, the transaction
+          preapred on publisher is decoded as normal transaction at commit.
+         </para>
+        </listitem>
+       </varlistentry>
       </variablelist></para>
     </listitem>
    </varlistentry>

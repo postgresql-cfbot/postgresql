@@ -31,8 +31,10 @@
  *		 table state to INIT.
  *	   - Tablesync worker starts; changes table state from INIT to DATASYNC while
  *		 copying.
- *	   - Tablesync worker finishes the copy and sets table state to SYNCWAIT;
- *		 waits for state change.
+ *	   - Tablesync worker does initial table copy; there is a FINISHEDCOPY state to
+ *		 indicate when the copy phase has completed, so if the worker crashes
+ *		 before reaching SYNCDONE the copy will not be re-attempted.
+ *	   - Tablesync worker then sets table state to SYNCWAIT; waits for state change.
  *	   - Apply worker periodically checks for tables in SYNCWAIT state.  When
  *		 any appear, it sets the table state to CATCHUP and starts loop-waiting
  *		 until either the table state is set to SYNCDONE or the sync worker
@@ -48,8 +50,8 @@
  *		 point it sets state to READY and stops tracking.  Again, there might
  *		 be zero changes in between.
  *
- *	  So the state progression is always: INIT -> DATASYNC -> SYNCWAIT ->
- *	  CATCHUP -> SYNCDONE -> READY.
+ *	  So the state progression is always: INIT -> DATASYNC ->
+ *	  (sync worker FINISHEDCOPY) -> SYNCWAIT -> CATCHUP -> SYNCDONE -> READY.
  *
  *	  The catalog pg_subscription_rel is used to keep information about
  *	  subscribed tables and their state.  Some transient state during data
@@ -59,6 +61,7 @@
  *	  Example flows look like this:
  *	   - Apply is in front:
  *		  sync:8
+ *			-> set in catalog FINISHEDCOPY
  *			-> set in memory SYNCWAIT
  *		  apply:10
  *			-> set in memory CATCHUP
@@ -74,6 +77,7 @@
  *
  *	   - Sync is in front:
  *		  sync:10
+ *			-> set in catalog FINISHEDCOPY
  *			-> set in memory SYNCWAIT
  *		  apply:8
  *			-> set in memory CATCHUP
@@ -98,11 +102,16 @@
 #include "miscadmin.h"
 #include "parser/parse_relation.h"
 #include "pgstat.h"
+#include "postmaster/interrupt.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalrelation.h"
+#include "replication/logicalworker.h"
 #include "replication/walreceiver.h"
 #include "replication/worker_internal.h"
+#include "replication/slot.h"
+#include "replication/origin.h"
 #include "storage/ipc.h"
+#include "storage/lmgr.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -260,6 +269,92 @@ invalidate_syncing_table_states(Datum arg, int cacheid, uint32 hashvalue)
 }
 
 /*
+ * The sync worker cleans up any slot / origin resources it may have created.
+ * This function is called from ProcessInterrupts() as result of tablesync being
+ * signalled.
+ */
+void
+tablesync_cleanup_at_interrupt(void)
+{
+	bool		drop_slot_needed;
+	char		originname[NAMEDATALEN] = {0};
+	RepOriginId originid;
+	TimeLineID	tli;
+	Oid			subid = MySubscription->oid;
+	Oid			relid = MyLogicalRepWorker->relid;
+
+	elog(DEBUG1,
+		 "tablesync_cleanup_at_interrupt for relid = %d",
+		 MyLogicalRepWorker->relid);
+
+	/*
+	 * Cleanup the tablesync slot, if needed.
+	 *
+	 * If state is SYNCDONE or READY then the slot has already been dropped.
+	 */
+	drop_slot_needed =
+		wrconn != NULL &&
+		MyLogicalRepWorker->relstate != SUBREL_STATE_SYNCDONE &&
+		MyLogicalRepWorker->relstate != SUBREL_STATE_READY;
+
+	if (drop_slot_needed)
+	{
+		char		syncslotname[NAMEDATALEN] = {0};
+		bool		missing_ok = true;	/* no ERROR if slot is missing. */
+
+		/*
+		 * End wal streaming so the wrconn can be re-used to drop the slot.
+		 */
+		PG_TRY();
+		{
+			walrcv_endstreaming(wrconn, &tli);
+		}
+		PG_CATCH();
+		{
+			/*
+			 * It is possible that the walrcv_startstreaming was not yet
+			 * called (e.g. the interrupt initiating this cleanup may have
+			 * happened during the table COPY phase) so suppress any error
+			 * here to cope with that scenario.
+			 */
+		}
+		PG_END_TRY();
+
+		ReplicationSlotNameForTablesync(subid, relid, syncslotname);
+
+		ReplicationSlotDropAtPubNode(wrconn, syncslotname, missing_ok);
+	}
+
+	/*
+	 * Remove the tablesync's origin tracking if exists.
+	 *
+	 * The origin APIS must be called within a transaction, and this
+	 * transaction will be ended within the finish_sync_worker().
+	 */
+	if (!IsTransactionState())
+	{
+		StartTransactionCommand();
+	}
+	snprintf(originname, sizeof(originname), "pg_%u_%u", subid, relid);
+	originid = replorigin_by_name(originname, true);
+	if (originid != InvalidRepOriginId)
+	{
+		replorigin_drop(originid, false);
+
+		/*
+		 * CommitTransactionCommand would normally attempt to advance the
+		 * origin, but now that the origin has been dropped that would fail,
+		 * so we need to reset the replorigin_session here to prevent this
+		 * error happening.
+		 */
+		replorigin_session_reset();
+		replorigin_session_origin = InvalidRepOriginId;
+	}
+
+	finish_sync_worker();		/* doesn't return. */
+}
+
+/*
  * Handle table synchronization cooperation from the synchronization
  * worker.
  *
@@ -270,30 +365,58 @@ invalidate_syncing_table_states(Datum arg, int cacheid, uint32 hashvalue)
 static void
 process_syncing_tables_for_sync(XLogRecPtr current_lsn)
 {
-	Assert(IsTransactionState());
+	bool		sync_done = false;
+	Oid			subid = MySubscription->oid;
+	Oid			relid = MyLogicalRepWorker->relid;
 
 	SpinLockAcquire(&MyLogicalRepWorker->relmutex);
+	sync_done = MyLogicalRepWorker->relstate == SUBREL_STATE_CATCHUP &&
+		current_lsn >= MyLogicalRepWorker->relstate_lsn;
+	SpinLockRelease(&MyLogicalRepWorker->relmutex);
 
-	if (MyLogicalRepWorker->relstate == SUBREL_STATE_CATCHUP &&
-		current_lsn >= MyLogicalRepWorker->relstate_lsn)
+	if (sync_done)
 	{
 		TimeLineID	tli;
+		char		syncslotname[NAMEDATALEN] = {0};
 
+		/* End wal streaming so wrconn can be re-used to drop the slot. */
+		walrcv_endstreaming(wrconn, &tli);
+
+		/*
+		 * Cleanup the tablesync slot.
+		 */
+		ReplicationSlotNameForTablesync(subid, relid, syncslotname);
+
+		elog(DEBUG1,
+			 "process_syncing_tables_for_sync: dropping the tablesync slot \"%s\".",
+			 syncslotname);
+		ReplicationSlotDropAtPubNode(wrconn, syncslotname, false);
+
+		/*
+		 * Change state to SYNCDONE.
+		 */
+		SpinLockAcquire(&MyLogicalRepWorker->relmutex);
 		MyLogicalRepWorker->relstate = SUBREL_STATE_SYNCDONE;
 		MyLogicalRepWorker->relstate_lsn = current_lsn;
 
 		SpinLockRelease(&MyLogicalRepWorker->relmutex);
+
+		/*
+		 * UpdateSubscriptionRelState must be called within a transaction.
+		 * That transaction will be ended within the finish_sync_worker().
+		 */
+		if (!IsTransactionState())
+		{
+			StartTransactionCommand();
+		}
 
 		UpdateSubscriptionRelState(MyLogicalRepWorker->subid,
 								   MyLogicalRepWorker->relid,
 								   MyLogicalRepWorker->relstate,
 								   MyLogicalRepWorker->relstate_lsn);
 
-		walrcv_endstreaming(wrconn, &tli);
 		finish_sync_worker();
 	}
-	else
-		SpinLockRelease(&MyLogicalRepWorker->relmutex);
 }
 
 /*
@@ -412,6 +535,33 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 					started_tx = true;
 				}
 
+				/*
+				 * Remove the tablesync origin tracking if exists.
+				 *
+				 * The normal case origin drop is done here instead of in the
+				 * process_syncing_tables_for_sync function because if the
+				 * tablesync worker process attempted to call drop its own
+				 * orign then would prevent the origin from advancing properly
+				 * on commit TX.
+				 */
+				{
+					char		originname[NAMEDATALEN];
+					RepOriginId originid;
+
+					snprintf(originname, sizeof(originname), "pg_%u_%u", MyLogicalRepWorker->subid, rstate->relid);
+					originid = replorigin_by_name(originname, true);
+					if (OidIsValid(originid))
+					{
+						elog(DEBUG1,
+							 "process_syncing_tables_for_apply: dropping tablesync origin tracking for \"%s\".",
+							 originname);
+						replorigin_drop(originid, false);
+					}
+				}
+
+				/*
+				 * Update the state only after the origin cleanup.
+				 */
 				UpdateSubscriptionRelState(MyLogicalRepWorker->subid,
 										   rstate->relid, rstate->state,
 										   rstate->lsn);
@@ -808,6 +958,30 @@ copy_table(Relation rel)
 }
 
 /*
+ * Determine the tablesync slot name.
+ *
+ * The name must not exceed NAMEDATALEN -1 because of remote node constraints on
+ * slot name length.
+ *
+ * The returned slot name is either returned in the supplied buffer or
+ * palloc'ed in current memory context (if NULL buffer).
+ */
+char *
+ReplicationSlotNameForTablesync(Oid suboid, Oid relid, char *syncslotname)
+{
+	if (syncslotname)
+	{
+		sprintf(syncslotname, "pg_%u_sync_%u", suboid, relid);
+	}
+	else
+	{
+		syncslotname = psprintf("pg_%u_sync_%u", suboid, relid);
+	}
+
+	return syncslotname;
+}
+
+/*
  * Start syncing the table in the sync worker.
  *
  * If nothing needs to be done to sync the table, we exit the worker without
@@ -824,6 +998,8 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	XLogRecPtr	relstate_lsn;
 	Relation	rel;
 	WalRcvExecResult *res;
+	char		originname[NAMEDATALEN];
+	RepOriginId originid;
 
 	/* Check the state of the table synchronization. */
 	StartTransactionCommand();
@@ -849,19 +1025,11 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 			finish_sync_worker();	/* doesn't return */
 	}
 
-	/*
-	 * To build a slot name for the sync work, we are limited to NAMEDATALEN -
-	 * 1 characters.  We cut the original slot name to NAMEDATALEN - 28 chars
-	 * and append _%u_sync_%u (1 + 10 + 6 + 10 + '\0').  (It's actually the
-	 * NAMEDATALEN on the remote that matters, but this scheme will also work
-	 * reasonably if that is different.)
-	 */
-	StaticAssertStmt(NAMEDATALEN >= 32, "NAMEDATALEN too small");	/* for sanity */
-	slotname = psprintf("%.*s_%u_sync_%u",
-						NAMEDATALEN - 28,
-						MySubscription->slotname,
-						MySubscription->oid,
-						MyLogicalRepWorker->relid);
+	/* Calculate the name of the tablesync slot. */
+	slotname = ReplicationSlotNameForTablesync(
+											   MySubscription->oid,
+											   MyLogicalRepWorker->relid,
+											   NULL);	/* use palloc */
 
 	/*
 	 * Here we use the slot name instead of the subscription name as the
@@ -874,7 +1042,30 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 				(errmsg("could not connect to the publisher: %s", err)));
 
 	Assert(MyLogicalRepWorker->relstate == SUBREL_STATE_INIT ||
-		   MyLogicalRepWorker->relstate == SUBREL_STATE_DATASYNC);
+		   MyLogicalRepWorker->relstate == SUBREL_STATE_DATASYNC ||
+		   MyLogicalRepWorker->relstate == SUBREL_STATE_FINISHEDCOPY);
+
+	/* Assign the origin tracking record name. */
+	snprintf(originname, sizeof(originname), "pg_%u_%u", MySubscription->oid, MyLogicalRepWorker->relid);
+
+	if (MyLogicalRepWorker->relstate == SUBREL_STATE_FINISHEDCOPY)
+	{
+		/*
+		 * The COPY phase was previously done, but tablesync then crashed/etc
+		 * before it was able to finish normally.
+		 */
+		StartTransactionCommand();
+
+		/*
+		 * The origin tracking name must already exist (missing_ok=false).
+		 */
+		originid = replorigin_by_name(originname, false);
+		replorigin_session_setup(originid);
+		replorigin_session_origin = originid;
+		*origin_startpos = replorigin_session_get_progress(false);
+
+		goto copy_table_done;
+	}
 
 	SpinLockAcquire(&MyLogicalRepWorker->relmutex);
 	MyLogicalRepWorker->relstate = SUBREL_STATE_DATASYNC;
@@ -890,9 +1081,6 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	CommitTransactionCommand();
 	pgstat_report_stat(false);
 
-	/*
-	 * We want to do the table data sync in a single transaction.
-	 */
 	StartTransactionCommand();
 
 	/*
@@ -918,29 +1106,99 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	walrcv_clear_result(res);
 
 	/*
-	 * Create a new temporary logical decoding slot.  This slot will be used
+	 * Create a new permanent logical decoding slot. This slot will be used
 	 * for the catchup phase after COPY is done, so tell it to use the
 	 * snapshot to make the final data consistent.
 	 */
-	walrcv_create_slot(wrconn, slotname, true,
+	walrcv_create_slot(wrconn, slotname, false,
 					   CRS_USE_SNAPSHOT, origin_startpos);
 
-	/* Now do the initial data copy */
-	PushActiveSnapshot(GetTransactionSnapshot());
-	copy_table(rel);
-	PopActiveSnapshot();
+	/*
+	 * Be sure to remove the newly created tablesync slot if the COPY fails.
+	 */
+	PG_TRY();
+	{
+		/* Now do the initial data copy */
+		PushActiveSnapshot(GetTransactionSnapshot());
+		copy_table(rel);
+		PopActiveSnapshot();
 
-	res = walrcv_exec(wrconn, "COMMIT", 0, NULL);
-	if (res->status != WALRCV_OK_COMMAND)
+		res = walrcv_exec(wrconn, "COMMIT", 0, NULL);
+		if (res->status != WALRCV_OK_COMMAND)
+			ereport(ERROR,
+					(errmsg("table copy could not finish transaction on publisher"),
+					 errdetail("The error was: %s", res->err)));
+		walrcv_clear_result(res);
+
+		table_close(rel, NoLock);
+
+		/* Make the copy visible. */
+		CommandCounterIncrement();
+	}
+	PG_CATCH();
+	{
+		/*
+		 * If something failed during copy table then cleanup the created
+		 * slot.
+		 */
+		elog(DEBUG1,
+			 "LogicalRepSyncTableStart: tablesync copy failed. Dropping the tablesync slot \"%s\".",
+			 slotname);
+		ReplicationSlotDropAtPubNode(wrconn, slotname, false);
+
+		pfree(slotname);
+		slotname = NULL;
+
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	/* Setup replication origin tracking. */
+	originid = replorigin_by_name(originname, true);
+	if (!OidIsValid(originid))
+	{
+		/*
+		 * Origin tracking does not exist, so create it now.
+		 *
+		 * Then advance to the LSN got from walrcv_create_slot. This is WAL
+		 * logged for for the purpose of recovery. Locks are to prevent the
+		 * replication origin from vanishing while advancing.
+		 */
+		LockRelationOid(ReplicationOriginRelationId, RowExclusiveLock);
+		originid = replorigin_create(originname);
+		replorigin_advance(originid, *origin_startpos, InvalidXLogRecPtr,
+						   true /* go backward */ , true /* WAL log */ );
+		UnlockRelationOid(ReplicationOriginRelationId, RowExclusiveLock);
+
+		replorigin_session_setup(originid);
+		replorigin_session_origin = originid;
+	}
+	else
+	{
 		ereport(ERROR,
-				(errmsg("table copy could not finish transaction on publisher"),
-				 errdetail("The error was: %s", res->err)));
-	walrcv_clear_result(res);
+				(errcode(ERRCODE_DUPLICATE_OBJECT),
+				 errmsg("replication origin \"%s\" already exists",
+						originname)));
+	}
 
-	table_close(rel, NoLock);
+	/*
+	 * Update the persisted state to indicate the COPY phase is done; make it
+	 * visible to others.
+	 */
+	UpdateSubscriptionRelState(MyLogicalRepWorker->subid,
+							   MyLogicalRepWorker->relid,
+							   SUBREL_STATE_FINISHEDCOPY,
+							   MyLogicalRepWorker->relstate_lsn);
 
-	/* Make the copy visible. */
-	CommandCounterIncrement();
+copy_table_done:
+
+	elog(DEBUG1,
+		 "LogicalRepSyncTableStart: '%s' origin_startpos lsn %X/%X",
+		 originname,
+		 (uint32) (*origin_startpos >> 32),
+		 (uint32) *origin_startpos);
+
+	CommitTransactionCommand();
 
 	/*
 	 * We are done with the initial data synchronization, update the state.

@@ -30,6 +30,7 @@
 #include "catalog/catalog.h"
 #include "catalog/index.h"
 #include "catalog/indexing.h"
+#include "catalog/partition.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
@@ -38,6 +39,7 @@
 #include "commands/progress.h"
 #include "commands/tablecmds.h"
 #include "commands/vacuum.h"
+#include "common/hashfn.h"
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
@@ -107,6 +109,45 @@ static void update_attstats(Oid relid, bool inh,
 static Datum std_fetch_func(VacAttrStatsP stats, int rownum, bool *isNull);
 static Datum ind_fetch_func(VacAttrStatsP stats, int rownum, bool *isNull);
 
+typedef struct analyze_oident
+{
+	Oid oid;
+	char status;
+} analyze_oident;
+
+StaticAssertDecl(sizeof(Oid) == 4, "oid is not compatible with uint32");
+#define SH_PREFIX analyze_oids
+#define SH_ELEMENT_TYPE analyze_oident
+#define SH_KEY_TYPE Oid
+#define SH_KEY oid
+#define SH_HASH_KEY(tb, key) hash_bytes_uint32(key)
+#define SH_EQUAL(tb, a, b) (a == b)
+#define SH_SCOPE static inline
+#define SH_DEFINE
+#define SH_DECLARE
+#include "lib/simplehash.h"
+
+#define ANALYZED_OIDS_HASH_SIZE 128
+analyze_oids_hash *analyzed_reloids = NULL;
+
+void
+analyze_init_status(void)
+{
+	if (analyzed_reloids)
+		analyze_oids_destroy(analyzed_reloids);
+
+	analyzed_reloids = analyze_oids_create(CurrentMemoryContext,
+										   ANALYZED_OIDS_HASH_SIZE, NULL);
+}
+
+void
+analyze_destroy_status(void)
+{
+	if (analyzed_reloids)
+		analyze_oids_destroy(analyzed_reloids);
+
+	analyzed_reloids = NULL;
+}
 
 /*
  *	analyze_rel() -- analyze one relation
@@ -312,6 +353,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 	Oid			save_userid;
 	int			save_sec_context;
 	int			save_nestlevel;
+	bool        found;
 
 	if (inh)
 		ereport(elevel,
@@ -644,15 +686,70 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 	}
 
 	/*
-	 * Report ANALYZE to the stats collector, too.  However, if doing
-	 * inherited stats we shouldn't report, because the stats collector only
-	 * tracks per-table stats.  Reset the changes_since_analyze counter only
-	 * if we analyzed all columns; otherwise, there is still work for
-	 * auto-analyze to do.
+	 * Report ANALYZE to the stats collector, too.  Regarding inherited stats,
+	 * we report only in the case of declarative partitioning.  Reset the
+	 * changes_since_analyze counter only if we analyzed all columns;
+	 * otherwise, there is still work for auto-analyze to do.
 	 */
-	if (!inh)
+	if (!inh || onerel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		List     *ancestors;
+		ListCell *lc;
+		Datum	oiddatum = ObjectIdGetDatum(RelationGetRelid(onerel));
+		Datum	countdatum;
+		int64	change_count;
+
+		if (onerel->rd_rel->relispartition &&
+			!(onerel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE))
+		{
+
+			/* collect all ancestors of this relation */
+			ancestors = get_partition_ancestors(RelationGetRelid(onerel));
+
+			/*
+			 * Read current value of n_mod_since_analyze of this relation.  This
+			 * might be a bit stale but we don't need such correctness here.
+			 */
+			countdatum =
+				DirectFunctionCall1(pg_stat_get_mod_since_analyze, oiddatum);
+			change_count = DatumGetInt64(countdatum);
+
+			/*
+			 * To let partitioned relations be analyzed, we need to update
+			 * change_since_analyze also for partitioned relations, which don't
+			 * have storage.  We move the count of leaf-relations to ancestors
+			 * before resetting.  We could instead bump up the counter of all
+			 * ancestors every time leaf relations are updated but that is too
+			 * complex.
+			 */
+			foreach (lc, ancestors)
+			{
+				Oid toreloid = lfirst_oid(lc);
+
+				/*
+				 * Don't propagate the count to anscestors that have already been
+				 * analyzed in this analyze command or this iteration of
+				 * autoanalyze.
+				 */
+				if (analyze_oids_lookup(analyzed_reloids, toreloid) == NULL)
+				{
+					Relation rel;
+
+					rel = table_open(toreloid, AccessShareLock);
+					pgstat_report_partchanges(rel, change_count);
+					table_close(rel, AccessShareLock);
+				}
+
+			}
+			list_free(ancestors);
+		}
 		pgstat_report_analyze(onerel, totalrows, totaldeadrows,
 							  (va_cols == NIL));
+	}
+
+	/* Record this relation as "analyzed"  */
+	analyze_oids_insert(analyzed_reloids, onerel->rd_id, &found);
+
 
 	/* If this isn't part of VACUUM ANALYZE, let index AMs do cleanup */
 	if (!(params->options & VACOPT_VACUUM))

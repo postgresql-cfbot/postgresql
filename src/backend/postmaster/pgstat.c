@@ -373,6 +373,7 @@ static void pgstat_recv_resetreplslotcounter(PgStat_MsgResetreplslotcounter *msg
 static void pgstat_recv_autovac(PgStat_MsgAutovacStart *msg, int len);
 static void pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len);
 static void pgstat_recv_analyze(PgStat_MsgAnalyze *msg, int len);
+static void pgstat_recv_partchanges(PgStat_MsgPartChanges *msg, int len);
 static void pgstat_recv_archiver(PgStat_MsgArchiver *msg, int len);
 static void pgstat_recv_bgwriter(PgStat_MsgBgWriter *msg, int len);
 static void pgstat_recv_wal(PgStat_MsgWal *msg, int len);
@@ -1622,6 +1623,9 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
  *
  * Caller must provide new live- and dead-tuples estimates, as well as a
  * flag indicating whether to reset the changes_since_analyze counter.
+ * Exceptional support only changes_since_analyze for partitioned tables,
+ * though they don't have any data.  This counter will tell us whether
+ * partitioned tables need autoanalyze or not.
  * --------
  */
 void
@@ -1642,22 +1646,29 @@ pgstat_report_analyze(Relation rel,
 	 * off these counts from what we send to the collector now, else they'll
 	 * be double-counted after commit.  (This approach also ensures that the
 	 * collector ends up with the right numbers if we abort instead of
-	 * committing.)
+	 * committing.)  However, for partitioned tables, we will not report both
+	 * livetuples and deadtuples because those tables don't have any data.
 	 */
 	if (rel->pgstat_info != NULL)
 	{
 		PgStat_TableXactStatus *trans;
 
-		for (trans = rel->pgstat_info->trans; trans; trans = trans->upper)
+		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+			/* If this rel is partitioned, skip modifying */
+			livetuples = deadtuples = 0;
+		else
 		{
-			livetuples -= trans->tuples_inserted - trans->tuples_deleted;
-			deadtuples -= trans->tuples_updated + trans->tuples_deleted;
+			for (trans = rel->pgstat_info->trans; trans; trans = trans->upper)
+			{
+				livetuples -= trans->tuples_inserted - trans->tuples_deleted;
+				deadtuples -= trans->tuples_updated + trans->tuples_deleted;
+			}
+			/* count stuff inserted by already-aborted subxacts, too */
+			deadtuples -= rel->pgstat_info->t_counts.t_delta_dead_tuples;
+			/* Since ANALYZE's counts are estimates, we could have underflowed */
+			livetuples = Max(livetuples, 0);
+			deadtuples = Max(deadtuples, 0);
 		}
-		/* count stuff inserted by already-aborted subxacts, too */
-		deadtuples -= rel->pgstat_info->t_counts.t_delta_dead_tuples;
-		/* Since ANALYZE's counts are estimates, we could have underflowed */
-		livetuples = Max(livetuples, 0);
-		deadtuples = Max(deadtuples, 0);
 	}
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_ANALYZE);
@@ -1670,6 +1681,30 @@ pgstat_report_analyze(Relation rel,
 	msg.m_dead_tuples = deadtuples;
 	pgstat_send(&msg, sizeof(msg));
 }
+
+/* --------
+ * pgstat_report_partchanges() -
+ *
+ *
+ *  Called when a leaf partition is analyzed to tell the collector about
+ *  its parent's changed_tuples.
+ * --------
+ */
+void
+pgstat_report_partchanges(Relation rel, PgStat_Counter changed_tuples)
+{
+	PgStat_MsgPartChanges  msg;
+
+	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+		return;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_PARTCHANGES);
+	msg.m_databaseid = rel->rd_rel->relisshared ? InvalidOid : MyDatabaseId;
+	msg.m_tableoid = RelationGetRelid(rel);
+	msg.m_changed_tuples = changed_tuples;
+	pgstat_send(&msg, sizeof(msg));
+}
+
 
 /* --------
  * pgstat_report_recovery_conflict() -
@@ -1986,7 +2021,8 @@ pgstat_initstats(Relation rel)
 	char		relkind = rel->rd_rel->relkind;
 
 	/* We only count stats for things that have storage */
-	if (!RELKIND_HAS_STORAGE(relkind))
+	if (!RELKIND_HAS_STORAGE(relkind) &&
+		relkind != RELKIND_PARTITIONED_TABLE)
 	{
 		rel->pgstat_info = NULL;
 		return;
@@ -4953,6 +4989,10 @@ PgstatCollectorMain(int argc, char *argv[])
 					pgstat_recv_analyze(&msg.msg_analyze, len);
 					break;
 
+				case PGSTAT_MTYPE_PARTCHANGES:
+					pgstat_recv_partchanges(&msg.msg_partchanges, len);
+					break;
+
 				case PGSTAT_MTYPE_ARCHIVER:
 					pgstat_recv_archiver(&msg.msg_archiver, len);
 					break;
@@ -6830,6 +6870,18 @@ pgstat_recv_analyze(PgStat_MsgAnalyze *msg, int len)
 	}
 }
 
+static void
+pgstat_recv_partchanges(PgStat_MsgPartChanges *msg, int len)
+{
+	PgStat_StatDBEntry   *dbentry;
+	PgStat_StatTabEntry  *tabentry;
+
+	dbentry = pgstat_get_db_entry(msg->m_databaseid, true);
+
+	tabentry = pgstat_get_tab_entry(dbentry, msg->m_tableoid, true);
+
+	tabentry->changes_since_analyze += msg->m_changed_tuples;
+}
 
 /* ----------
  * pgstat_recv_archiver() -

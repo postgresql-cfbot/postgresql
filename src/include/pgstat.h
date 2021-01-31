@@ -70,6 +70,7 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_AUTOVAC_START,
 	PGSTAT_MTYPE_VACUUM,
 	PGSTAT_MTYPE_ANALYZE,
+	PGSTAT_MTYPE_PARTCHANGES,
 	PGSTAT_MTYPE_ARCHIVER,
 	PGSTAT_MTYPE_BGWRITER,
 	PGSTAT_MTYPE_WAL,
@@ -430,6 +431,18 @@ typedef struct PgStat_MsgAnalyze
 	PgStat_Counter m_dead_tuples;
 } PgStat_MsgAnalyze;
 
+/* ----------
+ * PgStat_MsgPartChanges			Sent by the autovacuum deamon
+ *                                  after ANALYZE of leaf partitions
+ * ----------
+ */
+typedef struct PgStat_MsgPartChanges
+{
+	PgStat_MsgHdr m_hdr;
+	Oid           m_databaseid;
+	Oid           m_tableoid;
+	PgStat_Counter m_changed_tuples;
+} PgStat_MsgPartChanges;
 
 /* ----------
  * PgStat_MsgArchiver			Sent by the archiver to update statistics.
@@ -669,6 +682,7 @@ typedef union PgStat_Msg
 	PgStat_MsgAutovacStart msg_autovacuum_start;
 	PgStat_MsgVacuum msg_vacuum;
 	PgStat_MsgAnalyze msg_analyze;
+	PgStat_MsgPartChanges msg_partchanges;
 	PgStat_MsgArchiver msg_archiver;
 	PgStat_MsgBgWriter msg_bgwriter;
 	PgStat_MsgWal msg_wal;
@@ -1433,7 +1447,7 @@ extern void pgstat_report_vacuum(Oid tableoid, bool shared,
 extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter);
-
+extern void pgstat_report_partchanges(Relation rel, PgStat_Counter changed_tuples);
 extern void pgstat_report_recovery_conflict(int reason);
 extern void pgstat_report_deadlock(void);
 extern void pgstat_report_checksum_failures_in_db(Oid dboid, int failurecount);

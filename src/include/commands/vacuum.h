@@ -279,6 +279,8 @@ extern Relation vacuum_open_relation(Oid relid, RangeVar *relation,
 									 LOCKMODE lmode);
 
 /* in commands/analyze.c */
+extern void analyze_init_status(void);
+extern void analyze_destroy_status(void);
 extern void analyze_rel(Oid relid, RangeVar *relation,
 						VacuumParams *params, List *va_cols, bool in_outer_xact,
 						BufferAccessStrategy bstrategy);

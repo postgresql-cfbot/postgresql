@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "access/attmap.h"
+#include "access/compressamapi.h"
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/heapam_xlog.h"
@@ -528,6 +529,10 @@ static void ATExecGenericOptions(Relation rel, List *options);
 static void ATExecEnableRowSecurity(Relation rel);
 static void ATExecDisableRowSecurity(Relation rel);
 static void ATExecForceNoForceRowSecurity(Relation rel, bool force_rls);
+static ObjectAddress ATExecSetCompression(AlteredTableInfo *tab, Relation rel,
+										  const char *column,
+										  ColumnCompression *compression,
+										  LOCKMODE lockmode);
 
 static void index_copy_data(Relation rel, RelFileNode newrnode);
 static const char *storage_name(char c);
@@ -560,7 +565,6 @@ static List *GetParentedForeignKeyRefs(Relation partition);
 static void ATDetachCheckNoForeignKeyRefs(Relation partition);
 static void ATExecAlterCollationRefreshVersion(Relation rel, List *coll);
 
-
 /* ----------------------------------------------------------------
  *		DefineRelation
  *				Creates a new relation.
@@ -584,6 +588,7 @@ ObjectAddress
 DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 			   ObjectAddress *typaddress, const char *queryString)
 {
+	int			i;
 	char		relname[NAMEDATALEN];
 	Oid			namespaceId;
 	Oid			relationId;
@@ -604,6 +609,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	LOCKMODE	parentLockmode;
 	const char *accessMethod = NULL;
 	Oid			accessMethodId = InvalidOid;
+	Datum	   *acoptions;
 
 	/*
 	 * Truncate relname to appropriate length (probably a waste of time, as
@@ -808,6 +814,8 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	cookedDefaults = NIL;
 	attnum = 0;
 
+	acoptions = (Datum *) palloc0(sizeof(Datum) * descriptor->natts);
+
 	foreach(listptr, stmt->tableElts)
 	{
 		ColumnDef  *colDef = lfirst(listptr);
@@ -853,6 +861,19 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 
 		if (colDef->generated)
 			attr->attgenerated = colDef->generated;
+
+		/*
+		 * lookup attribute's compression method and store its Oid in the
+		 * attr->attcompression.
+		 */
+		if (relkind == RELKIND_RELATION ||
+			relkind == RELKIND_PARTITIONED_TABLE ||
+			relkind == RELKIND_MATVIEW)
+			attr->attcompression = GetAttributeCompression(attr,
+												colDef->compression,
+												&acoptions[attnum - 1], NULL);
+		else
+			attr->attcompression = InvalidOid;
 	}
 
 	/*
@@ -904,7 +925,10 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 										  allowSystemTableMods,
 										  false,
 										  InvalidOid,
+										  acoptions,
 										  typaddress);
+
+	pfree(acoptions);
 
 	/*
 	 * We must bump the command counter to make the newly-created relation
@@ -919,6 +943,20 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 * complaining about deadlock risks.
 	 */
 	rel = relation_open(relationId, AccessExclusiveLock);
+
+	/*
+	 * Add the dependency on the respective compression AM for the relation
+	 * attributes.
+	 */
+	for (i = 0; i < (RelationGetDescr(rel))->natts; i++)
+	{
+		Form_pg_attribute attr;
+
+		attr = TupleDescAttr(RelationGetDescr(rel), i);
+		if (OidIsValid(attr->attcompression))
+			add_column_compression_dependency(attr->attrelid, attr->attnum,
+											  attr->attcompression);
+	}
 
 	/*
 	 * Now add any newly specified column default and generation expressions
@@ -2397,6 +2435,20 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 									   storage_name(def->storage),
 									   storage_name(attribute->attstorage))));
 
+				/* Copy/check compression parameter */
+				if (OidIsValid(attribute->attcompression))
+				{
+					ColumnCompression *compression =
+											MakeColumnCompression(attribute);
+
+					if (!def->compression)
+						def->compression = compression;
+					else
+						CheckCompressionMismatch(def->compression,
+												 compression,
+												 attributeName);
+				}
+
 				def->inhcount++;
 				/* Merge of NOT NULL constraints = OR 'em together */
 				def->is_not_null |= attribute->attnotnull;
@@ -2431,6 +2483,7 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				def->collOid = attribute->attcollation;
 				def->constraints = NIL;
 				def->location = -1;
+				def->compression = MakeColumnCompression(attribute);
 				inhSchema = lappend(inhSchema, def);
 				newattmap->attnums[parent_attno - 1] = ++child_attno;
 			}
@@ -2675,6 +2728,14 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 							 errdetail("%s versus %s",
 									   storage_name(def->storage),
 									   storage_name(newdef->storage))));
+
+				/* Copy compression parameter */
+				if (!def->compression)
+					def->compression = newdef->compression;
+				else if (newdef->compression)
+					CheckCompressionMismatch(def->compression,
+											 newdef->compression,
+											 attributeName);
 
 				/* Mark the column as locally defined */
 				def->is_local = true;
@@ -3926,6 +3987,7 @@ AlterTableGetLockLevel(List *cmds)
 				 */
 			case AT_GenericOptions:
 			case AT_AlterColumnGenericOptions:
+			case AT_SetCompression:
 				cmd_lockmode = AccessExclusiveLock;
 				break;
 
@@ -4453,7 +4515,8 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		case AT_DisableRowSecurity:
 		case AT_ForceRowSecurity:
 		case AT_NoForceRowSecurity:
-			ATSimplePermissions(rel, ATT_TABLE);
+		case AT_SetCompression:
+			ATSimplePermissions(rel, ATT_TABLE | ATT_MATVIEW);
 			/* These commands never recurse */
 			/* No command-specific prep needed */
 			pass = AT_PASS_MISC;
@@ -4860,6 +4923,11 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			/* ATPrepCmd ensured it must be an index */
 			Assert(rel->rd_rel->relkind == RELKIND_INDEX);
 			ATExecAlterCollationRefreshVersion(rel, cmd->object);
+			break;
+		case AT_SetCompression:
+			address = ATExecSetCompression(tab, rel, cmd->name,
+										   (ColumnCompression *) cmd->def,
+										   lockmode);
 			break;
 		default:				/* oops */
 			elog(ERROR, "unrecognized alter table type: %d",
@@ -5484,6 +5552,9 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 				/* Extract data from old tuple */
 				slot_getallattrs(oldslot);
 				ExecClearTuple(newslot);
+
+				if (tab->rewrite & AT_REWRITE_ALTER_COMPRESSION)
+					CompareCompressionMethodAndDecompress(oldslot, newTupDesc);
 
 				/* copy attributes */
 				memcpy(newslot->tts_values, oldslot->tts_values,
@@ -6187,6 +6258,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	AclResult	aclresult;
 	ObjectAddress address;
 	TupleDesc	tupdesc;
+	Datum		acoptions = PointerGetDatum(NULL);
 	FormData_pg_attribute *aattr[] = {&attribute};
 
 	/* At top level, permission check was done in ATPrepCmd, else do it */
@@ -6341,13 +6413,27 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	attribute.attislocal = colDef->is_local;
 	attribute.attinhcount = colDef->inhcount;
 	attribute.attcollation = collOid;
+
+	/*
+	 * lookup attribute's compression method and store its Oid in the
+	 * attr->attcompression.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_RELATION ||
+		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		attribute.attcompression = GetAttributeCompression(&attribute,
+														   colDef->compression,
+														   &acoptions,
+														   NULL);
+	else
+		attribute.attcompression = InvalidOid;
+
 	/* attribute.attacl is handled by InsertPgAttributeTuples() */
 
 	ReleaseSysCache(typeTuple);
 
 	tupdesc = CreateTupleDesc(lengthof(aattr), (FormData_pg_attribute **) &aattr);
 
-	InsertPgAttributeTuples(attrdesc, tupdesc, myrelid, NULL, NULL);
+	InsertPgAttributeTuples(attrdesc, tupdesc, myrelid, NULL, &acoptions, NULL);
 
 	table_close(attrdesc, RowExclusiveLock);
 
@@ -6512,6 +6598,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	 */
 	add_column_datatype_dependency(myrelid, newattnum, attribute.atttypid);
 	add_column_collation_dependency(myrelid, newattnum, attribute.attcollation);
+	add_column_compression_dependency(myrelid, newattnum, attribute.attcompression);
 
 	/*
 	 * Propagate to children as appropriate.  Unlike most other ALTER
@@ -6657,6 +6744,28 @@ add_column_collation_dependency(Oid relid, int32 attnum, Oid collid)
 		referenced.objectSubId = 0;
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 	}
+}
+
+/*
+ * Install a dependency for compression on its column.
+ *
+ * This is used for identifying all the supported compression methods
+ * (current and preserved) for a attribute.
+ *
+ * If dependency is already there the whole thing is skipped.
+ */
+void
+add_column_compression_dependency(Oid relid, int32 attnum, Oid cmoid)
+{
+	ObjectAddress acref,
+		attref;
+
+	Assert(relid > 0 && attnum > 0);
+
+	ObjectAddressSet(acref, AccessMethodRelationId, cmoid);
+	ObjectAddressSubSet(attref, RelationRelationId, relid, attnum);
+
+	recordMultipleDependencies(&attref, &acref, 1, DEPENDENCY_NORMAL, true);
 }
 
 /*
@@ -7714,6 +7823,100 @@ ATExecSetOptions(Relation rel, const char *colName, Node *options,
 }
 
 /*
+ * Helper function for ATExecSetStorage and ATExecSetCompression
+ *
+ * Set the attcompression or attstorage for the respective index attribute.  If
+ * attcompression is a valid oid then it will update the attcompression for the
+ * index attribute otherwise it will update the attstorage.
+ */
+static void
+ApplyChangesToIndexes(Relation rel, Relation attrel, AttrNumber attnum,
+					  Oid newcompression, char newstorage, Datum acoptions,
+					  LOCKMODE lockmode)
+{
+	HeapTuple	tuple;
+	ListCell   *lc;
+	Form_pg_attribute attrtuple;
+
+	/*
+	 * Compression option can only be valid if we are updating the compression
+	 * method.
+	 */
+	Assert(DatumGetPointer(acoptions) == NULL || OidIsValid(newcompression));
+
+	foreach(lc, RelationGetIndexList(rel))
+	{
+		Oid			indexoid = lfirst_oid(lc);
+		Relation	indrel;
+		AttrNumber	indattnum = 0;
+
+		indrel = index_open(indexoid, lockmode);
+
+		for (int i = 0; i < indrel->rd_index->indnatts; i++)
+		{
+			if (indrel->rd_index->indkey.values[i] == attnum)
+			{
+				indattnum = i + 1;
+				break;
+			}
+		}
+
+		if (indattnum == 0)
+		{
+			index_close(indrel, lockmode);
+			continue;
+		}
+
+		tuple = SearchSysCacheCopyAttNum(RelationGetRelid(indrel), indattnum);
+
+		if (HeapTupleIsValid(tuple))
+		{
+			attrtuple = (Form_pg_attribute) GETSTRUCT(tuple);
+
+			/*
+			 * If a valid compression method Oid is passed then update the
+			 * attcompression, otherwise update the attstorage.
+			 */
+			if (OidIsValid(newcompression))
+				attrtuple->attcompression = newcompression;
+			else
+				attrtuple->attstorage = newstorage;
+
+			if (DatumGetPointer(acoptions) != NULL)
+			{
+				Datum	values[Natts_pg_attribute];
+				bool	nulls[Natts_pg_attribute];
+				bool	replace[Natts_pg_attribute];
+				HeapTuple	newtuple;
+
+				/* Initialize buffers for new tuple values */
+				memset(values, 0, sizeof(values));
+				memset(nulls, false, sizeof(nulls));
+				memset(replace, false, sizeof(replace));
+
+				values[Anum_pg_attribute_attcmoptions - 1] = acoptions;
+				replace[Anum_pg_attribute_attcmoptions - 1] = true;
+
+				newtuple = heap_modify_tuple(tuple, RelationGetDescr(attrel),
+											 values, nulls, replace);
+				CatalogTupleUpdate(attrel, &newtuple->t_self, newtuple);
+
+				heap_freetuple(newtuple);
+			}
+			else
+				CatalogTupleUpdate(attrel, &tuple->t_self, tuple);
+
+			InvokeObjectPostAlterHook(RelationRelationId,
+									  RelationGetRelid(rel),
+									  attrtuple->attnum);
+
+			heap_freetuple(tuple);
+		}
+
+		index_close(indrel, lockmode);
+	}
+}
+/*
  * ALTER TABLE ALTER COLUMN SET STORAGE
  *
  * Return value is the address of the modified column
@@ -7728,7 +7931,6 @@ ATExecSetStorage(Relation rel, const char *colName, Node *newValue, LOCKMODE loc
 	Form_pg_attribute attrtuple;
 	AttrNumber	attnum;
 	ObjectAddress address;
-	ListCell   *lc;
 
 	Assert(IsA(newValue, String));
 	storagemode = strVal(newValue);
@@ -7792,47 +7994,8 @@ ATExecSetStorage(Relation rel, const char *colName, Node *newValue, LOCKMODE loc
 	 * Apply the change to indexes as well (only for simple index columns,
 	 * matching behavior of index.c ConstructTupleDescriptor()).
 	 */
-	foreach(lc, RelationGetIndexList(rel))
-	{
-		Oid			indexoid = lfirst_oid(lc);
-		Relation	indrel;
-		AttrNumber	indattnum = 0;
-
-		indrel = index_open(indexoid, lockmode);
-
-		for (int i = 0; i < indrel->rd_index->indnatts; i++)
-		{
-			if (indrel->rd_index->indkey.values[i] == attnum)
-			{
-				indattnum = i + 1;
-				break;
-			}
-		}
-
-		if (indattnum == 0)
-		{
-			index_close(indrel, lockmode);
-			continue;
-		}
-
-		tuple = SearchSysCacheCopyAttNum(RelationGetRelid(indrel), indattnum);
-
-		if (HeapTupleIsValid(tuple))
-		{
-			attrtuple = (Form_pg_attribute) GETSTRUCT(tuple);
-			attrtuple->attstorage = newstorage;
-
-			CatalogTupleUpdate(attrelation, &tuple->t_self, tuple);
-
-			InvokeObjectPostAlterHook(RelationRelationId,
-									  RelationGetRelid(rel),
-									  attrtuple->attnum);
-
-			heap_freetuple(tuple);
-		}
-
-		index_close(indrel, lockmode);
-	}
+	ApplyChangesToIndexes(rel, attrelation, attnum, InvalidOid, newstorage,
+						  PointerGetDatum(NULL), lockmode);
 
 	table_close(attrelation, RowExclusiveLock);
 
@@ -11769,7 +11932,8 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 			  foundDep->refobjid == attTup->attcollation) &&
 			!(foundDep->refclassid == RelationRelationId &&
 			  foundDep->refobjid == RelationGetRelid(rel) &&
-			  foundDep->refobjsubid != 0)
+			  foundDep->refobjsubid != 0) &&
+			  foundDep->refclassid != AccessMethodRelationId
 			)
 			elog(ERROR, "found unexpected dependency for column: %s",
 				 getObjectDescription(&foundObject, false));
@@ -11860,6 +12024,22 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 
 	ReleaseSysCache(typeTuple);
 
+	/* Setup attribute compression */
+	if (rel->rd_rel->relkind == RELKIND_RELATION ||
+		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		/*
+		 * InvalidOid for the plain/external storage otherwise default
+		 * compression id.
+		 */
+		if (!IsStorageCompressible(tform->typstorage))
+			attTup->attcompression = InvalidOid;
+		else if (!OidIsValid(attTup->attcompression))
+			attTup->attcompression = DefaultCompressionOid;
+	}
+	else
+		attTup->attcompression = InvalidOid;
+
 	CatalogTupleUpdate(attrelation, &heapTup->t_self, heapTup);
 
 	table_close(attrelation, RowExclusiveLock);
@@ -11867,6 +12047,11 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 	/* Install dependencies on new datatype and collation */
 	add_column_datatype_dependency(RelationGetRelid(rel), attnum, targettype);
 	add_column_collation_dependency(RelationGetRelid(rel), attnum, targetcollid);
+
+	/* Create dependency for new attribute compression */
+	if (OidIsValid(attTup->attcompression))
+		add_column_compression_dependency(RelationGetRelid(rel), attnum,
+										  attTup->attcompression);
 
 	/*
 	 * Drop any pg_statistic entry for the column, since it's now wrong type
@@ -14962,6 +15147,108 @@ ATExecGenericOptions(Relation rel, List *options)
 
 	heap_freetuple(tuple);
 }
+
+/*
+ * ALTER TABLE ALTER COLUMN SET COMPRESSION
+ *
+ * Return value is the address of the modified column
+ */
+static ObjectAddress
+ATExecSetCompression(AlteredTableInfo *tab,
+					 Relation rel,
+					 const char *column,
+					 ColumnCompression *compression,
+					 LOCKMODE lockmode)
+{
+	Relation	attrel;
+	HeapTuple	tuple;
+	Form_pg_attribute atttableform;
+	AttrNumber	attnum;
+	char		typstorage;
+	Oid			cmoid;
+	bool		need_rewrite;
+	HeapTuple	newtuple;
+	Datum		values[Natts_pg_attribute];
+	bool		nulls[Natts_pg_attribute];
+	bool		replace[Natts_pg_attribute];
+	Datum		acoptions;
+	ObjectAddress address;
+
+	attrel = table_open(AttributeRelationId, RowExclusiveLock);
+
+	tuple = SearchSysCacheAttName(RelationGetRelid(rel), column);
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("column \"%s\" of relation \"%s\" does not exist",
+						column, RelationGetRelationName(rel))));
+
+	/* Prevent them from altering a system attribute */
+	atttableform = (Form_pg_attribute) GETSTRUCT(tuple);
+	attnum = atttableform->attnum;
+	if (attnum <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot alter system column \"%s\"", column)));
+
+	typstorage = get_typstorage(atttableform->atttypid);
+
+	/* Prevent from setting compression methods for uncompressible type */
+	if (!IsStorageCompressible(typstorage))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("column data type %s does not support compression",
+						format_type_be(atttableform->atttypid))));
+
+	/* Initialize buffers for new tuple values */
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+	memset(replace, false, sizeof(replace));
+
+	/* Get the attribute compression method. */
+	cmoid = GetAttributeCompression(atttableform, compression, &acoptions,
+									&need_rewrite);
+
+	if (atttableform->attcompression != cmoid)
+		add_column_compression_dependency(atttableform->attrelid,
+										  atttableform->attnum, cmoid);
+	if (need_rewrite)
+		tab->rewrite |= AT_REWRITE_ALTER_COMPRESSION;
+
+	atttableform->attcompression = cmoid;
+
+	/* update an existing entry */
+	if (acoptions)
+	{
+		values[Anum_pg_attribute_attcmoptions - 1] = acoptions;
+		replace[Anum_pg_attribute_attcmoptions - 1] = true;
+		newtuple = heap_modify_tuple(tuple, RelationGetDescr(attrel),
+									 values, nulls, replace);
+		CatalogTupleUpdate(attrel, &newtuple->t_self, newtuple);
+	}
+	else
+		CatalogTupleUpdate(attrel, &tuple->t_self, tuple);
+
+	InvokeObjectPostAlterHook(RelationRelationId,
+							  RelationGetRelid(rel),
+							  atttableform->attnum);
+
+	ReleaseSysCache(tuple);
+
+	/* Apply the change to indexes as well */
+	ApplyChangesToIndexes(rel, attrel, attnum, cmoid, '\0', acoptions,
+						  lockmode);
+
+	table_close(attrel, RowExclusiveLock);
+
+	/* make changes visible */
+	CommandCounterIncrement();
+
+	ObjectAddressSubSet(address, RelationRelationId,
+						RelationGetRelid(rel), atttableform->attnum);
+	return address;
+}
+
 
 /*
  * Preparation phase for SET LOGGED/UNLOGGED

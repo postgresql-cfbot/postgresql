@@ -1,0 +1,5 @@
+# cm_lz4 extension
+comment = 'cmzlib compression method'
+default_version = '1.0'
+module_pathname = '$libdir/cmzlib'
+relocatable = true

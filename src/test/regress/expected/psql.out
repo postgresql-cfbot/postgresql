@@ -2813,34 +2813,34 @@ CREATE TABLE tbl_heap(f1 int, f2 char(100)) using heap;
 CREATE VIEW view_heap_psql AS SELECT f1 from tbl_heap_psql;
 CREATE MATERIALIZED VIEW mat_view_heap_psql USING heap_psql AS SELECT f1 from tbl_heap_psql;
 \d+ tbl_heap_psql
-                              Table "tableam_display.tbl_heap_psql"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+                                     Table "tableam_display.tbl_heap_psql"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 
 \d+ tbl_heap
-                                 Table "tableam_display.tbl_heap"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+                                        Table "tableam_display.tbl_heap"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 
 \set HIDE_TABLEAM off
 \d+ tbl_heap_psql
-                              Table "tableam_display.tbl_heap_psql"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+                                     Table "tableam_display.tbl_heap_psql"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 Access method: heap_psql
 
 \d+ tbl_heap
-                                 Table "tableam_display.tbl_heap"
- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+----------------+-----------+----------+---------+----------+--------------+-------------
- f1     | integer        |           |          |         | plain    |              | 
- f2     | character(100) |           |          |         | extended |              | 
+                                        Table "tableam_display.tbl_heap"
+ Column |      Type      | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+----------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | integer        |           |          |         | plain    |             |              | 
+ f2     | character(100) |           |          |         | extended | pglz        |              | 
 Access method: heap
 
 -- AM is displayed for tables, indexes and materialized views.
@@ -4898,8 +4898,8 @@ Indexes:
 -- check printing info about access methods
 \dA
 List of access methods
-  Name  | Type  
---------+-------
+  Name  |    Type     
+--------+-------------
  brin   | Index
  btree  | Index
  gin    | Index
@@ -4907,13 +4907,15 @@ List of access methods
  hash   | Index
  heap   | Table
  heap2  | Table
+ lz4    | Compression
+ pglz   | Compression
  spgist | Index
-(8 rows)
+(10 rows)
 
 \dA *
 List of access methods
-  Name  | Type  
---------+-------
+  Name  |    Type     
+--------+-------------
  brin   | Index
  btree  | Index
  gin    | Index
@@ -4921,8 +4923,10 @@ List of access methods
  hash   | Index
  heap   | Table
  heap2  | Table
+ lz4    | Compression
+ pglz   | Compression
  spgist | Index
-(8 rows)
+(10 rows)
 
 \dA h*
 List of access methods
@@ -4947,32 +4951,36 @@ List of access methods
 
 \dA: extra argument "bar" ignored
 \dA+
-                             List of access methods
-  Name  | Type  |       Handler        |              Description               
---------+-------+----------------------+----------------------------------------
- brin   | Index | brinhandler          | block range index (BRIN) access method
- btree  | Index | bthandler            | b-tree index access method
- gin    | Index | ginhandler           | GIN index access method
- gist   | Index | gisthandler          | GiST index access method
- hash   | Index | hashhandler          | hash index access method
- heap   | Table | heap_tableam_handler | heap table access method
- heap2  | Table | heap_tableam_handler | 
- spgist | Index | spghandler           | SP-GiST index access method
-(8 rows)
+                                List of access methods
+  Name  |    Type     |       Handler        |              Description               
+--------+-------------+----------------------+----------------------------------------
+ brin   | Index       | brinhandler          | block range index (BRIN) access method
+ btree  | Index       | bthandler            | b-tree index access method
+ gin    | Index       | ginhandler           | GIN index access method
+ gist   | Index       | gisthandler          | GiST index access method
+ hash   | Index       | hashhandler          | hash index access method
+ heap   | Table       | heap_tableam_handler | heap table access method
+ heap2  | Table       | heap_tableam_handler | 
+ lz4    | Compression | lz4handler           | lz4 compression access method
+ pglz   | Compression | pglzhandler          | pglz compression access method
+ spgist | Index       | spghandler           | SP-GiST index access method
+(10 rows)
 
 \dA+ *
-                             List of access methods
-  Name  | Type  |       Handler        |              Description               
---------+-------+----------------------+----------------------------------------
- brin   | Index | brinhandler          | block range index (BRIN) access method
- btree  | Index | bthandler            | b-tree index access method
- gin    | Index | ginhandler           | GIN index access method
- gist   | Index | gisthandler          | GiST index access method
- hash   | Index | hashhandler          | hash index access method
- heap   | Table | heap_tableam_handler | heap table access method
- heap2  | Table | heap_tableam_handler | 
- spgist | Index | spghandler           | SP-GiST index access method
-(8 rows)
+                                List of access methods
+  Name  |    Type     |       Handler        |              Description               
+--------+-------------+----------------------+----------------------------------------
+ brin   | Index       | brinhandler          | block range index (BRIN) access method
+ btree  | Index       | bthandler            | b-tree index access method
+ gin    | Index       | ginhandler           | GIN index access method
+ gist   | Index       | gisthandler          | GiST index access method
+ hash   | Index       | hashhandler          | hash index access method
+ heap   | Table       | heap_tableam_handler | heap table access method
+ heap2  | Table       | heap_tableam_handler | 
+ lz4    | Compression | lz4handler           | lz4 compression access method
+ pglz   | Compression | pglzhandler          | pglz compression access method
+ spgist | Index       | spghandler           | SP-GiST index access method
+(10 rows)
 
 \dA+ h*
                      List of access methods

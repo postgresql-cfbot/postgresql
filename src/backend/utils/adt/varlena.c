@@ -17,9 +17,11 @@
 #include <ctype.h>
 #include <limits.h>
 
+#include "access/toast_internals.h"
 #include "access/detoast.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
+#include "commands/defrem.h"
 #include "common/hashfn.h"
 #include "common/hex.h"
 #include "common/int.h"
@@ -5297,6 +5299,47 @@ pg_column_size(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_INT32(result);
+}
+
+/*
+ * Return the compression method stored in the compressed attribute.  Return
+ * NULL for non varlena type or the uncompressed data.
+ */
+Datum
+pg_column_compression(PG_FUNCTION_ARGS)
+{
+	Datum		value = PG_GETARG_DATUM(0);
+	int			typlen;
+	struct varlena *varvalue;
+
+	/* On first call, get the input type's typlen, and save at *fn_extra */
+	if (fcinfo->flinfo->fn_extra == NULL)
+	{
+		/* Lookup the datatype of the supplied argument */
+		Oid			argtypeid = get_fn_expr_argtype(fcinfo->flinfo, 0);
+
+		typlen = get_typlen(argtypeid);
+		if (typlen == 0)		/* should not happen */
+			elog(ERROR, "cache lookup failed for type %u", argtypeid);
+
+		fcinfo->flinfo->fn_extra = MemoryContextAlloc(fcinfo->flinfo->fn_mcxt,
+													  sizeof(int));
+		*((int *) fcinfo->flinfo->fn_extra) = typlen;
+	}
+	else
+		typlen = *((int *) fcinfo->flinfo->fn_extra);
+
+	/*
+	 * If it is not a varlena type or the attribute is not compressed then
+	 * return NULL.
+	 */
+	if ((typlen != -1) || !VARATT_IS_COMPRESSED(value))
+		PG_RETURN_NULL();
+
+	varvalue = (struct varlena *) DatumGetPointer(value);
+
+	PG_RETURN_TEXT_P(cstring_to_text(get_am_name(
+								toast_get_compression_oid(varvalue))));
 }
 
 /*

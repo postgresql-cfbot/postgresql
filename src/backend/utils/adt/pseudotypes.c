@@ -383,6 +383,7 @@ PSEUDOTYPE_DUMMY_IO_FUNCS(language_handler);
 PSEUDOTYPE_DUMMY_IO_FUNCS(fdw_handler);
 PSEUDOTYPE_DUMMY_IO_FUNCS(table_am_handler);
 PSEUDOTYPE_DUMMY_IO_FUNCS(index_am_handler);
+PSEUDOTYPE_DUMMY_IO_FUNCS(compression_am_handler);
 PSEUDOTYPE_DUMMY_IO_FUNCS(tsm_handler);
 PSEUDOTYPE_DUMMY_IO_FUNCS(internal);
 PSEUDOTYPE_DUMMY_IO_FUNCS(anyelement);

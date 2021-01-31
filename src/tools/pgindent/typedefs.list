@@ -395,6 +395,7 @@ CompositeIOData
 CompositeTypeStmt
 CompoundAffixFlag
 CompressionAlgorithm
+CompressionAmRoutine
 CompressorState
 ComputeXidHorizonsResult
 ConditionVariable

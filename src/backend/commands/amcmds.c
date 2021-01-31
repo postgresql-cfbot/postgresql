@@ -34,6 +34,8 @@
 static Oid	lookup_am_handler_func(List *handler_name, char amtype);
 static const char *get_am_type_string(char amtype);
 
+/* Set by pg_upgrade_support functions */
+Oid		binary_upgrade_next_pg_am_oid = InvalidOid;
 
 /*
  * CreateAccessMethod
@@ -83,7 +85,19 @@ CreateAccessMethod(CreateAmStmt *stmt)
 	memset(values, 0, sizeof(values));
 	memset(nulls, false, sizeof(nulls));
 
-	amoid = GetNewOidWithIndex(rel, AmOidIndexId, Anum_pg_am_oid);
+	if (IsBinaryUpgrade  && OidIsValid(binary_upgrade_next_pg_am_oid))
+	{
+		/* acoid should be found in some cases */
+		if (binary_upgrade_next_pg_am_oid < FirstNormalObjectId &&
+			(!OidIsValid(amoid) || binary_upgrade_next_pg_am_oid != amoid))
+			elog(ERROR, "could not link to built-in attribute compression");
+
+		amoid = binary_upgrade_next_pg_am_oid;
+		binary_upgrade_next_pg_am_oid = InvalidOid;
+	}
+	else
+		amoid = GetNewOidWithIndex(rel, AmOidIndexId, Anum_pg_am_oid);
+
 	values[Anum_pg_am_oid - 1] = ObjectIdGetDatum(amoid);
 	values[Anum_pg_am_amname - 1] =
 		DirectFunctionCall1(namein, CStringGetDatum(stmt->amname));
@@ -176,6 +190,16 @@ get_table_am_oid(const char *amname, bool missing_ok)
 }
 
 /*
+ * get_compression_am_oid - given an access method name, look up its OID
+ *		and verify it corresponds to an compression AM.
+ */
+Oid
+get_compression_am_oid(const char *amname, bool missing_ok)
+{
+	return get_am_type_oid(amname, AMTYPE_COMPRESSION, missing_ok);
+}
+
+/*
  * get_am_oid - given an access method name, look up its OID.
  *		The type is not checked.
  */
@@ -217,6 +241,8 @@ get_am_type_string(char amtype)
 			return "INDEX";
 		case AMTYPE_TABLE:
 			return "TABLE";
+		case AMTYPE_COMPRESSION:
+			return "TABLE";
 		default:
 			/* shouldn't happen */
 			elog(ERROR, "invalid access method type '%c'", amtype);
@@ -253,6 +279,9 @@ lookup_am_handler_func(List *handler_name, char amtype)
 			break;
 		case AMTYPE_TABLE:
 			expectedType = TABLE_AM_HANDLEROID;
+			break;
+		case AMTYPE_COMPRESSION:
+			expectedType = COMPRESSION_AM_HANDLEROID;
 			break;
 		default:
 			elog(ERROR, "unrecognized access method type \"%c\"", amtype);

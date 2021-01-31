@@ -46,14 +46,14 @@ GetIndexAmRoutine(Oid amhandler)
 }
 
 /*
- * GetIndexAmRoutineByAmId - look up the handler of the index access method
- * with the given OID, and get its IndexAmRoutine struct.
+ * GetAmHandlerByAmId - look up the handler of the index/compression access
+ * method with the given OID, and get its handler function.
  *
- * If the given OID isn't a valid index access method, returns NULL if
- * noerror is true, else throws error.
+ * If the given OID isn't a valid index/compression access method, returns
+ * Invalid Oid if noerror is true, else throws error.
  */
-IndexAmRoutine *
-GetIndexAmRoutineByAmId(Oid amoid, bool noerror)
+regproc
+GetAmHandlerByAmId(Oid amoid, char amtype, bool noerror)
 {
 	HeapTuple	tuple;
 	Form_pg_am	amform;
@@ -64,24 +64,25 @@ GetIndexAmRoutineByAmId(Oid amoid, bool noerror)
 	if (!HeapTupleIsValid(tuple))
 	{
 		if (noerror)
-			return NULL;
+			return InvalidOid;
 		elog(ERROR, "cache lookup failed for access method %u",
 			 amoid);
 	}
 	amform = (Form_pg_am) GETSTRUCT(tuple);
 
 	/* Check if it's an index access method as opposed to some other AM */
-	if (amform->amtype != AMTYPE_INDEX)
+	if (amform->amtype != amtype)
 	{
 		if (noerror)
 		{
 			ReleaseSysCache(tuple);
-			return NULL;
+			return InvalidOid;
 		}
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("access method \"%s\" is not of type %s",
-						NameStr(amform->amname), "INDEX")));
+						NameStr(amform->amname), (amtype == AMTYPE_INDEX ?
+						"INDEX" : "COMPRESSION"))));
 	}
 
 	amhandler = amform->amhandler;
@@ -92,15 +93,40 @@ GetIndexAmRoutineByAmId(Oid amoid, bool noerror)
 		if (noerror)
 		{
 			ReleaseSysCache(tuple);
-			return NULL;
+			return InvalidOid;
 		}
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("index access method \"%s\" does not have a handler",
+				 errmsg("access method \"%s\" does not have a handler",
 						NameStr(amform->amname))));
 	}
 
 	ReleaseSysCache(tuple);
+
+	return amhandler;
+}
+
+/*
+ * GetIndexAmRoutineByAmId - look up the handler of the index access method
+ * with the given OID, and get its IndexAmRoutine struct.
+ *
+ * If the given OID isn't a valid index access method, returns NULL if
+ * noerror is true, else throws error.
+ */
+IndexAmRoutine *
+GetIndexAmRoutineByAmId(Oid amoid, bool noerror)
+{
+	regproc		amhandler;
+
+	/* Get handler function OID for the access method */
+	amhandler = GetAmHandlerByAmId(amoid, AMTYPE_INDEX, noerror);
+
+	/* Complain if handler OID is invalid */
+	if (!OidIsValid(amhandler))
+	{
+		Assert(noerror);
+		return NULL;
+	}
 
 	/* And finally, call the handler function to get the API struct. */
 	return GetIndexAmRoutine(amhandler);

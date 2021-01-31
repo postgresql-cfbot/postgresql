@@ -156,6 +156,14 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
 	/* attribute's collation */
 	Oid			attcollation;
 
+	/*
+	 * Oid of the compression method that will be used for compressing the value
+	 * for this attribute.  For the compressible atttypid this must always be a
+	 * valid Oid irrespective of what is the current value of the attstorage.
+	 * And for the incompressible atttypid this must always be an invalid Oid.
+	 */
+	Oid			attcompression BKI_DEFAULT(0);
+
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	/* NOTE: The following fields are not present in tuple descriptors. */
 
@@ -167,6 +175,9 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
 
 	/* Column-level FDW options */
 	text		attfdwoptions[1] BKI_DEFAULT(_null_);
+
+	/* current compression options */
+	text		attcmoptions[1] BKI_DEFAULT(_null_);
 
 	/*
 	 * Missing value for added columns. This is a one element array which lets
@@ -183,7 +194,7 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
  * can access fields beyond attcollation except in a real tuple!
  */
 #define ATTRIBUTE_FIXED_PART_SIZE \
-	(offsetof(FormData_pg_attribute,attcollation) + sizeof(Oid))
+	(offsetof(FormData_pg_attribute,attcompression) + sizeof(Oid))
 
 /* ----------------
  *		Form_pg_attribute corresponds to a pointer to a tuple with

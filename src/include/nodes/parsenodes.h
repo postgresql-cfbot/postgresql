@@ -624,6 +624,21 @@ typedef struct RangeTableSample
 } RangeTableSample;
 
 /*
+ * ColumnCompression - compression parameters for some attribute
+ *
+ * This represents compression information defined using clause:
+ * .. COMPRESSION <compression method> PRESERVE <compression methods>
+ */
+typedef struct ColumnCompression
+{
+	NodeTag		type;
+	char	   *cmname;
+	bool		preserve_all;
+	List	   *options;
+	List	   *preserve;
+} ColumnCompression;
+
+/*
  * ColumnDef - column definition (used in various creates)
  *
  * If the column has a default value, we may have the value expression
@@ -646,6 +661,7 @@ typedef struct ColumnDef
 	NodeTag		type;
 	char	   *colname;		/* name of column */
 	TypeName   *typeName;		/* type of column */
+	ColumnCompression *compression;	/* column compression */
 	int			inhcount;		/* number of times column is inherited */
 	bool		is_local;		/* column has local (non-inherited) def'n */
 	bool		is_not_null;	/* NOT NULL constraint specified? */
@@ -685,6 +701,7 @@ typedef enum TableLikeOption
 	CREATE_TABLE_LIKE_INDEXES = 1 << 5,
 	CREATE_TABLE_LIKE_STATISTICS = 1 << 6,
 	CREATE_TABLE_LIKE_STORAGE = 1 << 7,
+	CREATE_TABLE_LIKE_COMPRESSION = 1 << 8,
 	CREATE_TABLE_LIKE_ALL = PG_INT32_MAX
 } TableLikeOption;
 
@@ -1873,7 +1890,8 @@ typedef enum AlterTableType
 	AT_AddIdentity,				/* ADD IDENTITY */
 	AT_SetIdentity,				/* SET identity column options */
 	AT_DropIdentity,			/* DROP IDENTITY */
-	AT_AlterCollationRefreshVersion /* ALTER COLLATION ... REFRESH VERSION */
+	AT_AlterCollationRefreshVersion, /* ALTER COLLATION ... REFRESH VERSION */
+	AT_SetCompression			/* SET COMPRESSION */
 } AlterTableType;
 
 typedef struct ReplicaIdentityStmt

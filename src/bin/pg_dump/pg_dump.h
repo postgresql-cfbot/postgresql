@@ -327,6 +327,10 @@ typedef struct _tableInfo
 	bool		needs_override; /* has GENERATED ALWAYS AS IDENTITY */
 	char	   *amname;			/* relation access method */
 
+	char	   **attcmnames; /* per-attribute current compression method */
+	char       **attcmoptions;      /* per-attribute current compression
+									options */
+	struct _attrCompressionInfo **attcompression; /* per-attribute all compression data */
 	/*
 	 * Stuff computed only for dumpable tables.
 	 */
@@ -354,6 +358,18 @@ typedef struct _attrDefInfo
 	char	   *adef_expr;		/* decompiled DEFAULT expression */
 	bool		separate;		/* true if must dump as separate item */
 } AttrDefInfo;
+
+typedef struct _attrCompressionItem
+{
+	Oid			amoid;			/* attribute compression oid */
+	char	   *amname;			/* compression access method name */
+} AttrCompressionItem;
+
+typedef struct _attrCompressionInfo
+{
+	int			nitems;
+	AttrCompressionItem	**items;
+} AttrCompressionInfo;
 
 typedef struct _tableDataInfo
 {

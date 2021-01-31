@@ -21,6 +21,7 @@ OBJS = \
 	cluster.o \
 	collationcmds.o \
 	comment.o \
+	compressioncmds.o \
 	constraint.o \
 	conversioncmds.o \
 	copy.o \

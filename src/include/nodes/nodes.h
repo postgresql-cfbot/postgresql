@@ -479,6 +479,7 @@ typedef enum NodeTag
 	T_PartitionBoundSpec,
 	T_PartitionRangeDatum,
 	T_PartitionCmd,
+	T_ColumnCompression,
 	T_VacuumRelation,
 
 	/*
@@ -510,6 +511,7 @@ typedef enum NodeTag
 	T_IndexAmRoutine,			/* in access/amapi.h */
 	T_TableAmRoutine,			/* in access/tableam.h */
 	T_TsmRoutine,				/* in access/tsmapi.h */
+	T_CompressionAmRoutine,		/* in access/compressamapi.h */
 	T_ForeignKeyCacheInfo,		/* in utils/rel.h */
 	T_CallContext,				/* in nodes/parsenodes.h */
 	T_SupportRequestSimplify,	/* in nodes/supportnodes.h */

@@ -285,6 +285,7 @@ typedef struct IndexAmRoutine
 
 /* Functions in access/index/amapi.c */
 extern IndexAmRoutine *GetIndexAmRoutine(Oid amhandler);
+extern regproc GetAmHandlerByAmId(Oid amoid, char amtype, bool noerror);
 extern IndexAmRoutine *GetIndexAmRoutineByAmId(Oid amoid, bool noerror);
 
 #endif							/* AMAPI_H */

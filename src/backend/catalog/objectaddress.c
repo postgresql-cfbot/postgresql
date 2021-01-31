@@ -15,6 +15,7 @@
 
 #include "postgres.h"
 
+#include "access/compressamapi.h"
 #include "access/genam.h"
 #include "access/htup_details.h"
 #include "access/relation.h"

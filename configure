@@ -698,6 +698,7 @@ with_gnu_ld
 LD
 LDFLAGS_SL
 LDFLAGS_EX
+with_lz4
 with_zlib
 with_system_tzdata
 with_libxslt
@@ -865,6 +866,7 @@ with_libxml
 with_libxslt
 with_system_tzdata
 with_zlib
+with_lz4
 with_gnu_ld
 enable_largefile
 '
@@ -1569,6 +1571,7 @@ Optional Packages:
   --with-system-tzdata=DIR
                           use system time zone data in DIR
   --without-zlib          do not use Zlib
+  --without-lz4           do not use lz4
   --with-gnu-ld           assume the C compiler uses GNU ld [default=no]
 
 Some influential environment variables:
@@ -8597,6 +8600,35 @@ fi
 
 
 #
+# lz4
+#
+
+
+
+# Check whether --with-lz4 was given.
+if test "${with_lz4+set}" = set; then :
+  withval=$with_lz4;
+  case $withval in
+    yes)
+      :
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-lz4 option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_lz4=yes
+
+fi
+
+
+
+
+#
 # Assignments
 #
 
@@ -12087,6 +12119,59 @@ fi
 
 fi
 
+if test "$with_lz4" = yes; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for LZ4_compress in -llz4" >&5
+$as_echo_n "checking for LZ4_compress in -llz4... " >&6; }
+if ${ac_cv_lib_lz4_LZ4_compress+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-llz4  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char LZ4_compress ();
+int
+main ()
+{
+return LZ4_compress ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_lz4_LZ4_compress=yes
+else
+  ac_cv_lib_lz4_LZ4_compress=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_lz4_LZ4_compress" >&5
+$as_echo "$ac_cv_lib_lz4_LZ4_compress" >&6; }
+if test "x$ac_cv_lib_lz4_LZ4_compress" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBLZ4 1
+_ACEOF
+
+  LIBS="-llz4 $LIBS"
+
+else
+  as_fn_error $? "lz4 library not found
+If you have lz4 already installed, see config.log for details on the
+failure.  It is possible the compiler isn't looking in the proper directory.
+Use --without-lz4 to disable lz4 support." "$LINENO" 5
+fi
+
+fi
+
 if test "$enable_spinlocks" = yes; then
 
 $as_echo "#define HAVE_SPINLOCKS 1" >>confdefs.h
@@ -13287,6 +13372,20 @@ else
 If you have zlib already installed, see config.log for details on the
 failure.  It is possible the compiler isn't looking in the proper directory.
 Use --without-zlib to disable zlib support." "$LINENO" 5
+fi
+
+
+fi
+
+if test "$with_lz4" = yes; then
+  ac_fn_c_check_header_mongrel "$LINENO" "lz4.h" "ac_cv_header_lz4_h" "$ac_includes_default"
+if test "x$ac_cv_header_lz4_h" = xyes; then :
+
+else
+  as_fn_error $? "lz4 header not found
+If you have lz4 already installed, see config.log for details on the
+failure.  It is possible the compiler isn't looking in the proper directory.
+Use --without-lz4 to disable lz4 support." "$LINENO" 5
 fi
 
 

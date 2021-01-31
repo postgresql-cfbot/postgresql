@@ -558,7 +558,8 @@ CREATE VIEW pg_backend_memory_contexts AS
     SELECT * FROM pg_get_backend_memory_contexts();
 
 REVOKE ALL ON pg_backend_memory_contexts FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION pg_get_backend_memory_contexts() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pg_get_backend_memory_contexts FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pg_get_target_backend_memory_contexts FROM PUBLIC;
 
 -- Statistics views
 

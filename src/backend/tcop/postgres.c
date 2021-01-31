@@ -76,6 +76,7 @@
 #include "tcop/tcopprot.h"
 #include "tcop/utility.h"
 #include "utils/lsyscache.h"
+#include "utils/mcxtfuncs.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/snapmgr.h"
@@ -540,6 +541,10 @@ ProcessClientReadInterrupt(bool blocked)
 		/* Process notify interrupts, if any */
 		if (notifyInterruptPending)
 			ProcessNotifyInterrupt();
+
+		/* Process memory contexts dump interrupts, if any */
+		if (ProcSignalDumpMemoryContextPending)
+			ProcessDumpMemoryContextInterrupt();
 	}
 	else if (ProcDiePending)
 	{

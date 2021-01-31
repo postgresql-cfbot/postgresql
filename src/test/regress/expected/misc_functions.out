@@ -157,8 +157,8 @@ select count(*) > 0 as ok from (select pg_ls_waldir()) ss;
 
 -- Test not-run-to-completion cases.
 select * from pg_ls_waldir() limit 0;
- name | size | modification 
-------+------+--------------
+ name | size | access | modification | change | creation | type 
+------+------+--------+--------------+--------+----------+------
 (0 rows)
 
 select count(*) > 0 as ok from (select * from pg_ls_waldir() limit 1) ss;
@@ -200,6 +200,74 @@ select count(*) > 0 from
 ----------
  t
 (1 row)
+
+select * from (select pg_ls_dir('.', false, true) as name) as ls where ls.name='.'; -- include_dot_dirs=true
+ name 
+------
+ .
+(1 row)
+
+select * from (select pg_ls_dir('.', false, false) as name) as ls where ls.name='.'; -- include_dot_dirs=false
+ name 
+------
+(0 rows)
+
+select pg_ls_dir('does not exist', true, false); -- ok with missingok=true
+ pg_ls_dir 
+-----------
+(0 rows)
+
+select pg_ls_dir('does not exist'); -- fails with missingok=false
+ERROR:  could not open directory "does not exist": No such file or directory
+-- Check that expected columns are present
+select * from pg_stat_file('.') limit 0;
+ size | access | modification | change | creation | isdir | type 
+------+--------+--------------+--------+----------+-------+------
+(0 rows)
+
+-- This tests the missing_ok parameter, which causes pg_ls_tmpdir to succeed even if the tmpdir doesn't exist yet
+-- The name='' condition is never true, so the function runs to completion but returns zero rows.
+select * from pg_ls_tmpdir() where name='Does not exist';
+ name | size | access | modification | change | creation | type 
+------+------+--------+--------------+--------+----------+------
+(0 rows)
+
+select filename, type from pg_ls_dir_metadata('.') where filename='.';
+ filename | type 
+----------+------
+ .        | d
+(1 row)
+
+select filename, type from pg_ls_dir_metadata('.', false, false, false) where filename='.'; -- include_dot_dirs=false
+ filename | type 
+----------+------
+(0 rows)
+
+-- Check that expected columns are present
+select * from pg_ls_dir_metadata('.') limit 0;
+ filename | size | access | modification | change | creation | type | path 
+----------+------+--------+--------------+--------+----------+------+------
+(0 rows)
+
+-- Exercise recursion
+select lower(path), filename, type from pg_ls_dir_metadata('.', true, false, true) where
+path in ('base', 'base/pgsql_tmp', 'global', 'global/pg_control', 'global/pg_filenode.map', 'PG_VERSION', 'pg_multixact', 'pg_multixact/members', 'pg_multixact/offsets', 'pg_wal', 'pg_wal/archive_status')
+-- (type='d' or path~'^(global/.*|PG_VERSION|postmaster\.opts|postmaster\.pid|pg_logical/replorigin_checkpoint)$') and filename!~'[0-9]'
+order by 1;
+         lower          |    filename     | type 
+------------------------+-----------------+------
+ base                   | base            | d
+ base/pgsql_tmp         | pgsql_tmp       | d
+ global                 | global          | d
+ global/pg_control      | pg_control      | -
+ global/pg_filenode.map | pg_filenode.map | -
+ pg_multixact           | pg_multixact    | d
+ pg_multixact/members   | members         | d
+ pg_multixact/offsets   | offsets         | d
+ pg_version             | PG_VERSION      | -
+ pg_wal                 | pg_wal          | d
+ pg_wal/archive_status  | archive_status  | d
+(11 rows)
 
 --
 -- Test adding a support function to a subject function

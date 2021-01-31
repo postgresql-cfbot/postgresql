@@ -60,6 +60,31 @@ select count(*) > 0 from
    where spcname = 'pg_default') pts
   join pg_database db on pts.pts = db.oid;
 
+select * from (select pg_ls_dir('.', false, true) as name) as ls where ls.name='.'; -- include_dot_dirs=true
+select * from (select pg_ls_dir('.', false, false) as name) as ls where ls.name='.'; -- include_dot_dirs=false
+select pg_ls_dir('does not exist', true, false); -- ok with missingok=true
+select pg_ls_dir('does not exist'); -- fails with missingok=false
+
+-- Check that expected columns are present
+select * from pg_stat_file('.') limit 0;
+
+-- This tests the missing_ok parameter, which causes pg_ls_tmpdir to succeed even if the tmpdir doesn't exist yet
+-- The name='' condition is never true, so the function runs to completion but returns zero rows.
+select * from pg_ls_tmpdir() where name='Does not exist';
+
+select filename, type from pg_ls_dir_metadata('.') where filename='.';
+
+select filename, type from pg_ls_dir_metadata('.', false, false, false) where filename='.'; -- include_dot_dirs=false
+
+-- Check that expected columns are present
+select * from pg_ls_dir_metadata('.') limit 0;
+
+-- Exercise recursion
+select lower(path), filename, type from pg_ls_dir_metadata('.', true, false, true) where
+path in ('base', 'base/pgsql_tmp', 'global', 'global/pg_control', 'global/pg_filenode.map', 'PG_VERSION', 'pg_multixact', 'pg_multixact/members', 'pg_multixact/offsets', 'pg_wal', 'pg_wal/archive_status')
+-- (type='d' or path~'^(global/.*|PG_VERSION|postmaster\.opts|postmaster\.pid|pg_logical/replorigin_checkpoint)$') and filename!~'[0-9]'
+order by 1;
+
 --
 -- Test adding a support function to a subject function
 --

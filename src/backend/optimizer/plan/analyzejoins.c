@@ -22,6 +22,7 @@
  */
 #include "postgres.h"
 
+#include "catalog/pg_class.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/clauses.h"
 #include "optimizer/joininfo.h"
@@ -29,8 +30,12 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
+#include "optimizer/restrictinfo.h"
 #include "optimizer/tlist.h"
 #include "utils/lsyscache.h"
+#include "utils/memutils.h"
+
+bool enable_self_join_removal;
 
 /* local functions */
 static bool join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo);
@@ -47,6 +52,7 @@ static bool is_innerrel_unique_for(PlannerInfo *root,
 								   RelOptInfo *innerrel,
 								   JoinType jointype,
 								   List *restrictlist);
+static void change_rinfo(RestrictInfo* rinfo, Index from, Index to);
 
 
 /*
@@ -1117,4 +1123,1184 @@ is_innerrel_unique_for(PlannerInfo *root,
 
 	/* Let rel_is_distinct_for() do the hard work */
 	return rel_is_distinct_for(root, innerrel, clause_list);
+}
+
+typedef struct
+{
+	Index oldRelid;
+	Index newRelid;
+} ChangeVarnoContext;
+
+
+static bool
+change_varno_walker(Node *node, ChangeVarnoContext *context)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Var))
+	{
+		Var* var = (Var*)node;
+		if (var->varno == context->oldRelid)
+		{
+			var->varno = context->newRelid;
+			var->varnosyn = context->newRelid;
+			var->location = -1;
+		}
+		else if (var->varno == context->newRelid)
+			var->location = -1;
+
+		return false;
+	}
+	if (IsA(node, RestrictInfo))
+	{
+		change_rinfo((RestrictInfo*)node, context->oldRelid, context->newRelid);
+		return false;
+	}
+	return expression_tree_walker(node, change_varno_walker, context);
+}
+
+/*
+ * For all Vars in the expression that have varno = oldRelid, set
+ * varno = newRelid.
+ */
+static void
+change_varno(Expr *expr, Index oldRelid, Index newRelid)
+{
+	ChangeVarnoContext context;
+
+	context.oldRelid = oldRelid;
+	context.newRelid = newRelid;
+	change_varno_walker((Node *) expr, &context);
+}
+
+/*
+ * Substitute newId for oldId in relids.
+ */
+static void
+change_relid(Relids *relids, Index oldId, Index newId)
+{
+	if (bms_is_member(oldId, *relids))
+		*relids = bms_add_member(bms_del_member(bms_copy(*relids), oldId), newId);
+}
+
+static void
+change_rinfo(RestrictInfo* rinfo, Index from, Index to)
+{
+	bool is_req_equal =
+		(rinfo->required_relids == rinfo->clause_relids) ? true : false;
+
+	change_varno(rinfo->clause, from, to);
+	change_varno(rinfo->orclause, from, to);
+	change_relid(&rinfo->clause_relids, from, to);
+	if (is_req_equal)
+		rinfo->required_relids = rinfo->clause_relids;
+	else
+		change_relid(&rinfo->required_relids, from, to);
+	change_relid(&rinfo->left_relids, from, to);
+	change_relid(&rinfo->right_relids, from, to);
+	change_relid(&rinfo->outer_relids, from, to);
+	change_relid(&rinfo->nullable_relids, from, to);
+}
+
+/*
+ * Update EC members to point to the remaining relation instead of the removed
+ * one, removing duplicates.
+ */
+static void
+update_ec_members(EquivalenceClass *ec, Index toRemove, Index toKeep)
+{
+	int			counter;
+
+	for (counter = 0; counter < list_length(ec->ec_members); )
+	{
+		ListCell			*cell = list_nth_cell(ec->ec_members, counter);
+		EquivalenceMember	*em = lfirst(cell);
+		int					counter1;
+
+		if (!bms_is_member(toRemove, em->em_relids))
+		{
+			counter++;
+			continue;
+		}
+
+		change_relid(&em->em_relids, toRemove, toKeep);
+		/* We only process inner joins */
+		change_varno(em->em_expr, toRemove, toKeep);
+
+		/*
+		 * After we switched the equivalence member to the remaining relation,
+		 * check that it is not the same as the existing member, and if it
+		 * is, delete it.
+		 */
+		for (counter1 = 0; counter1 < list_length(ec->ec_members); counter1++)
+		{
+			EquivalenceMember	*other;
+
+			if (counter1 == counter)
+				continue;
+
+			other = castNode(EquivalenceMember, list_nth(ec->ec_members, counter1));
+
+			if (equal(other->em_expr, em->em_expr))
+				break;
+		}
+
+		if (counter1 < list_length(ec->ec_members))
+			ec->ec_members = list_delete_cell(ec->ec_members, cell);
+		else
+			counter++;
+	}
+}
+
+/*
+ * Update EC sources to point to the remaining relation instead of the
+ * removed one.
+ */
+static void
+update_ec_sources(List **sources, Index toRemove, Index toKeep)
+{
+	int			counter;
+	int cc=0;
+
+	for (counter = 0; counter < list_length(*sources); )
+	{
+		ListCell		*cell = list_nth_cell(*sources, counter);
+		RestrictInfo	*rinfo = castNode(RestrictInfo, lfirst(cell));
+		int				counter1;
+
+		if (!bms_is_member(toRemove, rinfo->required_relids))
+		{
+			counter++;
+			continue;
+		}
+
+		change_varno(rinfo->clause, toRemove, toKeep);
+
+		/*
+		 * After switching the clause to the remaining relation, check it for
+		 * redundancy with existing ones. We don't have to check for
+		 * redundancy with derived clauses, because we've just deleted them.
+		 */
+		for (counter1 = 0; counter1 < list_length(*sources); counter1++)
+		{
+			RestrictInfo *other;
+
+			if (counter1 == counter)
+				continue;
+
+			other = castNode(RestrictInfo, list_nth(*sources, counter1));
+			if (equal(rinfo->clause, other->clause))
+				break;
+		}
+
+		if (counter1 < list_length(*sources))
+		{
+			*sources = list_delete_cell(*sources, cell);
+			cc++;
+		}
+		else
+		{
+			counter++;
+
+			/* We will keep this RestrictInfo, correct its relids. */
+			change_rinfo(rinfo, toRemove, toKeep);
+		}
+	}
+}
+
+/*
+ * Scratch space for the unique self join removal code.
+ */
+typedef struct
+{
+	PlannerInfo *root;
+
+	/* Temporary array for relation ids. */
+	Index *relids;
+
+	/* Array of row marks indexed by relid. */
+	PlanRowMark **row_marks;
+
+	/* Bitmapset for join relids that is used to avoid reallocation. */
+	Relids joinrelids;
+} UsjScratch;
+
+/*
+ * Remove a relation after we have proven that it participates only in an
+ * unneeded unique self join.
+ *
+ * The joinclauses list is destructively changed.
+ */
+static void
+remove_self_join_rel(UsjScratch *scratch, Relids joinrelids, List *joinclauses,
+					 RelOptInfo *toKeep, RelOptInfo *toRemove)
+{
+	PlannerInfo *root = scratch->root;
+	ListCell *cell;
+	int i;
+	List *joininfos = NIL;
+
+	/*
+	 * Include all eclass mentions of removed relation into the eclass mentions
+	 * of kept relation.
+	 */
+	toKeep->eclass_indexes = bms_add_members(toRemove->eclass_indexes,
+														toKeep->eclass_indexes);
+
+	/*
+	 * Transfer join and restriction clauses from the removed relation to the
+	 * remaining one. We change the Vars of the clause to point to the
+	 * remaining relation instead of the removed one. The clauses that require
+	 * a subset of joinrelids become restriction clauses of the remaining
+	 * relation, and others remain join clauses. We append them to
+	 * baserestrictinfo and joininfo respectively, trying not to introduce
+	 * duplicates.
+	 *
+	 * We also have to process the 'joinclauses' list here, because it
+	 * contains EC-derived join clauses which must become filter clauses. It
+	 * is not enough to just correct the ECs, because the EC-derived
+	 * restrictions are generated before join removal (see
+	 * generate_base_implied_equalities).
+	 */
+
+	/* Replace removed relation in joininfo */
+	foreach(cell, toKeep->joininfo)
+	{
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, cell);
+
+		change_rinfo(rinfo, toRemove->relid, toKeep->relid);
+
+		/*
+		 * If this clause is a mergejoinable equality clause that compares a
+		 * variable to itself, i.e., has the form of "X=X", replace it with
+		 * null test.
+		 */
+		if (rinfo->mergeopfamilies && IsA(rinfo->clause, OpExpr))
+		{
+			Expr *leftOp;
+			Expr *rightOp;
+
+			leftOp = (Expr *) get_leftop(rinfo->clause);
+			rightOp = (Expr *) get_rightop(rinfo->clause);
+
+			if (leftOp != NULL && equal(leftOp, rightOp))
+			{
+				NullTest *nullTest = makeNode(NullTest);
+				nullTest->arg = leftOp;
+				nullTest->nulltesttype = IS_NOT_NULL;
+				nullTest->argisrow = false;
+				nullTest->location = -1;
+				rinfo->clause = (Expr *) nullTest;
+			}
+		}
+	}
+
+	/* Replace removed relation in joinclauses.
+	 * It is similar with code above but also adds substituted null-tests to
+	 * baserestrict list of kept relation.
+	 * joinclauses contains all restrictions, include general expressions like
+	 * f(a'.x1..a'.xN, a''.x1..a''.xN) op g(a'.x1..a'.xN, a''.x1..a''.xN)
+	 * that couldn't fall into the EC.
+	 */
+	foreach(cell, joinclauses)
+	{
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, cell);
+
+		change_rinfo(rinfo, toRemove->relid, toKeep->relid);
+
+		/*
+		 * If this clause is a mergejoinable equality clause that compares a
+		 * variable to itself, i.e., has the form of "X=X", replace it with
+		 * null test.
+		 */
+		if (rinfo->mergeopfamilies && IsA(rinfo->clause, OpExpr))
+		{
+			Expr *leftOp;
+			Expr *rightOp;
+			ListCell *otherCell;
+			List **target = &toKeep->baserestrictinfo;
+
+			leftOp = (Expr *) get_leftop(rinfo->clause);
+			rightOp = (Expr *) get_rightop(rinfo->clause);
+
+			if (leftOp != NULL && equal(leftOp, rightOp))
+			{
+				NullTest *nullTest = makeNode(NullTest);
+				nullTest->arg = leftOp;
+				nullTest->nulltesttype = IS_NOT_NULL;
+				nullTest->argisrow = false;
+				nullTest->location = -1;
+				rinfo->clause = (Expr *) nullTest;
+			}
+
+			foreach(otherCell, *target)
+			{
+				RestrictInfo *other = lfirst_node(RestrictInfo, otherCell);
+
+				if (other == rinfo ||
+					(rinfo->parent_ec != NULL
+					 && other->parent_ec == rinfo->parent_ec)
+					|| equal(rinfo->clause, other->clause))
+				{
+					break;
+				}
+			}
+
+			if (otherCell != NULL)
+				continue;
+
+			/*
+			 * XXX: In the case of clauses:
+			 * toKeep.x = toRemove.y and toKeep.y = toRemove.x
+			 * we pass into baserestrictinfo both as:
+			 * toKeep.x = toKeep.y and toKeep.y = toKeep.x
+			 * that is may be not fine, but correct.
+			 */
+			toKeep->baserestrictinfo = lappend(toKeep->baserestrictinfo, rinfo);
+		}
+	}
+
+	/* Tranfer removed relation baserestrictinfo clauses to kept relation */
+	foreach(cell, toRemove->baserestrictinfo)
+	{
+		ListCell *otherCell;
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, cell);
+		List **target = &toKeep->baserestrictinfo;
+
+		/*
+		 * Replace the references to the removed relation with references to
+		 * the remaining one. We won't necessarily add this clause, because
+		 * it may be already present in the joininfo or baserestrictinfo.
+		 * Still, we have to switch it to point to the remaining relation.
+		 * This is important for join clauses that reference both relations,
+		 * because they are included in both joininfos.
+		 */
+		change_rinfo(rinfo, toRemove->relid, toKeep->relid);
+
+		/*
+		 * Don't add the clause if it is already present in the list, or
+		 * derived from the same equivalence class, or is the same as another
+		 * clause.
+		 */
+		foreach (otherCell, *target)
+		{
+			RestrictInfo *other = lfirst_node(RestrictInfo, otherCell);
+
+			if (other == rinfo ||
+				(rinfo->parent_ec != NULL
+				 && other->parent_ec == rinfo->parent_ec)
+				|| equal(rinfo->clause, other->clause))
+			{
+				break;
+			}
+		}
+
+		/* We can't have an EC-derived clause that joins to some third relation */
+		if (otherCell != NULL)
+			continue;
+
+		/*
+		 * During replacing relids in joininfo some restrictions could change
+		 * semantic from join to baserestrict info, for example:
+		 * a1.x = a2.y => a1.x = a1.y
+		 * If we already have restriction in the baserestrictinfo list:
+		 * a1.x = a1.y, here we will remove duplicates.
+		 */
+		target = &toKeep->joininfo;
+		foreach (otherCell, *target)
+		{
+			RestrictInfo *other = lfirst_node(RestrictInfo, otherCell);
+
+			if (equal(rinfo->clause, other->clause))
+				break;
+		}
+
+		if (otherCell != NULL)
+			/* Duplicate found */
+			continue;
+
+		*target = lappend(*target, rinfo);
+	}
+
+	/* Transfer removed relation join-clauses to kept relation.
+	 * It is similar with code above but also substituted redundant quals with
+	 * null-tests.
+	 */
+	foreach(cell, toRemove->joininfo)
+	{
+		ListCell *otherCell;
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, cell);
+		List **target = &toKeep->joininfo;
+
+		/*
+		 * Replace the references to the removed relation with references to
+		 * the remaining one. We won't necessarily add this clause, because
+		 * it may be already present in the joininfo or baserestrictinfo.
+		 * Still, we have to switch it to point to the remaining relation.
+		 * This is important for join clauses that reference both relations,
+		 * because they are included in both joininfos.
+		 */
+		change_rinfo(rinfo, toRemove->relid, toKeep->relid);
+
+		/*
+		 * Don't add the clause if it is already present in the list, or
+		 * derived from the same equivalence class, or is the same as another
+		 * clause.
+		 */
+		foreach (otherCell, *target)
+		{
+			RestrictInfo *other = lfirst_node(RestrictInfo, otherCell);
+
+			if (other == rinfo ||
+				(rinfo->parent_ec != NULL
+				 && other->parent_ec == rinfo->parent_ec)
+				|| equal(rinfo->clause, other->clause))
+			{
+				break;
+			}
+		}
+
+		if (otherCell != NULL)
+			continue;
+
+		/*
+		 * If this clause is a mergejoinable equality clause that compares a
+		 * variable to itself, i.e., has the form of "X=X", replace it with
+		 * null test.
+		 */
+		if (rinfo->mergeopfamilies && IsA(rinfo->clause, OpExpr))
+		{
+			Expr *leftOp, *rightOp;
+
+			Assert(IsA(rinfo->clause, OpExpr));
+
+			leftOp = (Expr *) get_leftop(rinfo->clause);
+			rightOp = (Expr *) get_rightop(rinfo->clause);
+
+			if (leftOp != NULL && equal(leftOp, rightOp))
+			{
+				NullTest *nullTest = makeNode(NullTest);
+				nullTest->arg = leftOp;
+				nullTest->nulltesttype = IS_NOT_NULL;
+				nullTest->argisrow = false;
+				nullTest->location = -1;
+				rinfo->clause = (Expr*)nullTest;
+			}
+		}
+
+		*target = lappend(*target, rinfo);
+		toKeep->baserestrict_min_security =	Min(toKeep->baserestrict_min_security, rinfo->security_level);
+	}
+
+	/*
+	 * Now the state of the joininfo list of the toKeep relation is changed:
+	 * some of clauses can be removed, some need to move into baserestrictinfo.
+	 * To do this use the same technique as the remove_rel_from_query() routine.
+	 */
+	joininfos = list_copy(toKeep->joininfo);
+	foreach(cell, joininfos)
+	{
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(cell);
+
+		remove_join_clause_from_rels(root, rinfo, rinfo->required_relids);
+
+		if (RINFO_IS_PUSHED_DOWN(rinfo, joinrelids))
+		{
+			/* Recheck that qual doesn't actually reference the target rel */
+			Assert(!bms_is_member(toRemove->relid, rinfo->clause_relids));
+
+			/*
+			 * The required_relids probably aren't shared with anything else,
+			 * but let's copy them just to be sure.
+			 */
+			rinfo->required_relids = bms_copy(rinfo->required_relids);
+			rinfo->required_relids = bms_del_member(rinfo->required_relids,
+													toRemove->relid);
+			distribute_restrictinfo_to_rels(root, rinfo);
+		}
+	}
+
+	/*
+	 * Transfer the targetlist and attr_needed flags.
+	 */
+	Assert(toRemove->reltarget->sortgrouprefs == 0);
+
+	foreach (cell, toRemove->reltarget->exprs)
+	{
+		Expr *node = lfirst(cell);
+		change_varno(node, toRemove->relid, toKeep->relid);
+		if (!list_member(toKeep->reltarget->exprs, node))
+			toKeep->reltarget->exprs = lappend(toKeep->reltarget->exprs, node);
+	}
+
+	for (i = toKeep->min_attr; i <= toKeep->max_attr; i++)
+	{
+		int attno = i - toKeep->min_attr;
+		toKeep->attr_needed[attno] = bms_add_members(toKeep->attr_needed[attno],
+													 toRemove->attr_needed[attno]);
+	}
+
+	/*
+	 * If the removed relation has a row mark, transfer it to the remaining
+	 * one.
+	 *
+	 * If both rels have row marks, just keep the one corresponding to the
+	 * remaining relation, because we verified earlier that they have the same
+	 * strength.
+	 *
+	 * Also make sure that the scratch->row_marks cache is up to date, because
+	 * we are going to use it for further join removals.
+	 */
+	if (scratch->row_marks[toRemove->relid])
+	{
+		PlanRowMark **markToRemove = &scratch->row_marks[toRemove->relid];
+		PlanRowMark **markToKeep = &scratch->row_marks[toKeep->relid];
+
+		if (*markToKeep)
+		{
+			Assert((*markToKeep)->markType == (*markToRemove)->markType);
+
+			root->rowMarks = list_delete_ptr(root->rowMarks, *markToKeep);
+			*markToKeep = NULL;
+		}
+		else
+		{
+			*markToKeep = *markToRemove;
+			*markToRemove = NULL;
+
+			/* Shouldn't have inheritance children here. */
+			Assert((*markToKeep)->rti == (*markToKeep)->prti);
+
+			(*markToKeep)->rti = toKeep->relid;
+			(*markToKeep)->prti = toKeep->relid;
+		}
+	}
+
+	/*
+	 * Likewise replace references in SpecialJoinInfo data structures.
+	 *
+	 * This is relevant in case the join we're deleting is nested inside some
+	 * special joins: the upper joins' relid sets have to be adjusted.
+	 */
+	foreach (cell, root->join_info_list)
+	{
+		SpecialJoinInfo *sjinfo = (SpecialJoinInfo *) lfirst(cell);
+
+		change_relid(&sjinfo->min_lefthand, toRemove->relid, toKeep->relid);
+		change_relid(&sjinfo->min_righthand, toRemove->relid, toKeep->relid);
+		change_relid(&sjinfo->syn_lefthand, toRemove->relid, toKeep->relid);
+		change_relid(&sjinfo->syn_righthand, toRemove->relid, toKeep->relid);
+		change_varno((Expr*)sjinfo->semi_rhs_exprs, toRemove->relid, toKeep->relid);
+	}
+
+	/*
+	 * Likewise update references in PlaceHolderVar data structures.
+	 */
+	foreach(cell, root->placeholder_list)
+	{
+		PlaceHolderInfo *phinfo = (PlaceHolderInfo *) lfirst(cell);
+
+		/*
+		 * We are at an inner join of two base relations. A placeholder can't
+		 * be needed here or evaluated here.
+		 */
+		Assert(!bms_is_subset(phinfo->ph_eval_at, joinrelids));
+		Assert(!bms_is_subset(phinfo->ph_needed, joinrelids));
+
+		change_relid(&phinfo->ph_eval_at, toRemove->relid, toKeep->relid);
+		change_relid(&phinfo->ph_needed, toRemove->relid, toKeep->relid);
+		change_relid(&phinfo->ph_lateral, toRemove->relid, toKeep->relid);
+		change_relid(&phinfo->ph_var->phrels, toRemove->relid, toKeep->relid);
+	}
+
+	/*
+	 * Update the equivalence classes that reference the removed relations.
+	 */
+	foreach(cell, root->eq_classes)
+	{
+		EquivalenceClass *ec = lfirst(cell);
+
+		if (!bms_is_member(toRemove->relid, ec->ec_relids))
+		{
+			/*
+			 * This EC doesn't reference the removed relation, nothing to be
+			 * done for it.
+			 */
+			continue;
+		}
+
+		/*
+		 * Update the EC members to reference the remaining relation instead
+		 * of the removed one.
+		 */
+		update_ec_members(ec, toRemove->relid, toKeep->relid);
+		change_relid(&ec->ec_relids, toRemove->relid, toKeep->relid);
+
+		/*
+		 * We will now update source and derived clauses of the EC.
+		 *
+		 * Restriction clauses for base relations are already distributed to
+		 * the respective baserestrictinfo lists (see
+		 * generate_implied_equalities). The above code has already processed
+		 * this list, and updated these clauses to reference the remaining
+		 * relation, so we can skip them here based on their relids.
+		 *
+		 * Likewise, we have already processed the join clauses that join the
+		 * removed relation to the remaining one.
+		 *
+		 * Finally, there are join clauses that join the removed relation to
+		 * some third relation. We can't just delete the source clauses and
+		 * regenerate them from the EC, because the corresponding equality
+		 * operators might be missing (see the handling of ec_broken).
+		 * Therefore, we will update the references in the source clauses.
+		 *
+		 * Derived clauses can be generated again, so it is simpler to just
+		 * delete them.
+		 */
+		list_free(ec->ec_derives);
+		ec->ec_derives = NULL;
+		update_ec_sources(&ec->ec_sources, toRemove->relid, toKeep->relid);
+	}
+
+	/*
+	 * Mark the rel as "dead" to show it is no longer part of the join tree.
+	 * (Removing it from the baserel array altogether seems too risky.)
+	 */
+	toRemove->reloptkind = RELOPT_DEADREL;
+
+	/*
+	 * Update references to the removed relation from other baserels.
+	 */
+	for (i = 1; i < root->simple_rel_array_size; i++)
+	{
+		RelOptInfo *otherrel = root->simple_rel_array[i];
+		int			attroff;
+
+		/* no point in processing target rel itself */
+		if (i == toRemove->relid)
+			continue;
+
+		/* there may be empty slots corresponding to non-baserel RTEs */
+		if (otherrel == NULL)
+			continue;
+
+		Assert(otherrel->relid == i); /* sanity check on array */
+
+		/* Update attr_needed arrays. */
+		for (attroff = otherrel->max_attr - otherrel->min_attr;
+			 attroff >= 0; attroff--)
+		{
+			change_relid(&otherrel->attr_needed[attroff], toRemove->relid,
+						 toKeep->relid);
+		}
+
+		/* Update lateral references. */
+		change_varno((Expr*)otherrel->lateral_vars, toRemove->relid, toKeep->relid);
+	}
+
+	/*
+	 * Change varno in some special cases with non-trivial RangeTblEntry
+	 */
+	foreach(cell, root->parse->rtable)
+	{
+		RangeTblEntry *rte	= lfirst(cell);
+
+		switch(rte->rtekind)
+		{
+			case RTE_FUNCTION:
+				change_varno((Expr*)rte->functions, toRemove->relid, toKeep->relid);
+				break;
+			case RTE_TABLEFUNC:
+				change_varno((Expr*)rte->tablefunc, toRemove->relid, toKeep->relid);
+				break;
+			case RTE_VALUES:
+				change_varno((Expr*)rte->values_lists, toRemove->relid, toKeep->relid);
+				break;
+			default:
+				/* no op */
+				break;
+		}
+	}
+}
+
+/*
+ * split_selfjoin_quals
+ *		Processes 'joinquals' building two lists, one with a list of quals
+ *		where the columns/exprs on either side of the join match and another
+ *		list containing the remaining quals.
+ *
+ * 'joinquals' must only contain quals for a RTE_RELATION being joined to
+ * itself.
+ */
+static void
+split_selfjoin_quals(PlannerInfo *root, List *joinquals, List **selfjoinquals,
+					 List **otherjoinquals)
+{
+	ListCell *lc;
+	List	 *sjoinquals = NIL;
+	List	 *rjoinquals = NIL;
+
+	foreach(lc, joinquals)
+	{
+		RestrictInfo	*rinfo = (RestrictInfo *) lfirst(lc);
+		OpExpr			*expr;
+		Expr			*leftexpr;
+		Expr			*rightexpr;
+
+		if (bms_num_members(rinfo->clause_relids) != 2 ||
+			bms_num_members(rinfo->left_relids) != 1 ||
+			bms_num_members(rinfo->right_relids) != 1)
+		{
+			rjoinquals = lappend(rjoinquals, rinfo);
+			continue;
+		}
+
+		expr = (OpExpr *) rinfo->clause;
+
+		if (!IsA(expr, OpExpr) || list_length(expr->args) != 2)
+		{
+			rjoinquals = lappend(rjoinquals, rinfo);
+			continue;
+		}
+
+		leftexpr = (Expr *) copyObject(get_leftop(rinfo->clause));
+		rightexpr = (Expr *) copyObject(get_rightop(rinfo->clause));
+
+		/* Can't match of the exprs are not of the same type */
+		if (leftexpr->type != rightexpr->type)
+		{
+			rjoinquals = lappend(rjoinquals, rinfo);
+			continue;
+		}
+
+		change_varno(rightexpr,
+					 bms_next_member(rinfo->right_relids, -1),
+					 bms_next_member(rinfo->left_relids, -1));
+
+		if (equal(leftexpr, rightexpr))
+			sjoinquals = lappend(sjoinquals, rinfo);
+		else
+			rjoinquals = lappend(rjoinquals, rinfo);
+	}
+
+	*selfjoinquals = sjoinquals;
+	*otherjoinquals = rjoinquals;
+}
+
+static bool
+tlist_contains_rel_exprs(PlannerInfo *root, Relids relids, RelOptInfo *rel)
+{
+	ListCell   *vars;
+
+	foreach(vars, rel->reltarget->exprs)
+	{
+		Var		   *var = (Var *) lfirst(vars);
+		RelOptInfo *baserel;
+		int			ndx;
+
+		/*
+		 * Ignore PlaceHolderVars in the input tlists; we'll make our own
+		 * decisions about whether to copy them.
+		 */
+		if (IsA(var, PlaceHolderVar))
+			return true;
+
+		/*
+		 * Otherwise, anything in a baserel or joinrel targetlist ought to be
+		 * a Var.  (More general cases can only appear in appendrel child
+		 * rels, which will never be seen here.)
+		 */
+		if (!IsA(var, Var))
+			elog(ERROR, "unexpected node type in rel targetlist: %d",
+				 (int) nodeTag(var));
+
+		/* Get the Var's original base rel */
+		baserel = find_base_rel(root, var->varno);
+
+		/* Is it still needed above this joinrel? */
+		ndx = var->varattno - baserel->min_attr;
+		if (bms_nonempty_difference(baserel->attr_needed[ndx], relids))
+			return true;
+	}
+	return false;
+}
+
+/*
+ * Find and remove unique self joins in a group of base relations that have
+ * the same Oid.
+ *
+ * Returns a set of relids that were removed.
+ */
+static Relids
+remove_self_joins_one_group(UsjScratch *scratch, Index *relids, int n)
+{
+	PlannerInfo *root = scratch->root;
+	Relids joinrelids = scratch->joinrelids;
+	Relids result = NULL;
+	int i, o;
+
+	if (n < 2)
+		return NULL;
+
+	for (o = 0; o < n; o++)
+	{
+		RelOptInfo *outer = root->simple_rel_array[relids[o]];
+
+		for (i = o + 1; i < n; i++)
+		{
+			RelOptInfo	*inner = root->simple_rel_array[relids[i]];
+			List	   *restrictlist;
+			List	   *selfjoinquals;
+			List	   *otherjoinquals;
+			ListCell	*lc;
+			bool		jinfo_check = true;
+
+			/* A sanity check: the relations have the same Oid. */
+			Assert(root->simple_rte_array[relids[i]]->relid
+					== root->simple_rte_array[relids[o]]->relid);
+
+			/*
+			 * It is impossible to optimize two relations if they belong to
+			 * different rules of order restriction. Otherwise planner can't
+			 * be able to find any variants of correct query plan.
+			 */
+			foreach(lc, root->join_info_list)
+			{
+				SpecialJoinInfo *info = (SpecialJoinInfo *) lfirst(lc);
+
+				if (bms_is_member(relids[i], info->syn_lefthand) &&
+					!bms_is_member(relids[o], info->syn_lefthand))
+					jinfo_check = false;
+
+				if (bms_is_member(relids[i], info->syn_righthand) &&
+					!bms_is_member(relids[o], info->syn_righthand))
+					jinfo_check = false;
+
+				if (bms_is_member(relids[o], info->syn_lefthand) &&
+					!bms_is_member(relids[i], info->syn_lefthand))
+					jinfo_check = false;
+
+				if (bms_is_member(relids[o], info->syn_righthand) &&
+					!bms_is_member(relids[i], info->syn_righthand))
+					jinfo_check = false;
+
+				if (!jinfo_check)
+					break;
+			}
+
+			if (!jinfo_check)
+				continue;
+
+			/* Reuse joinrelids bitset to avoid reallocation. */
+			joinrelids = bms_del_members(joinrelids, joinrelids);
+
+			/*
+			 * We only deal with base rels here, so their relids bitset
+			 * contains only one member -- their relid.
+			 */
+			joinrelids = bms_add_member(joinrelids, relids[o]);
+			joinrelids = bms_add_member(joinrelids, relids[i]);
+
+			/* Is it a unique self join? */
+			restrictlist = build_joinrel_restrictlist(root, joinrelids, outer,
+													  inner);
+
+			/*
+			 * Process restrictlist to seperate out the self join quals from
+			 * the other quals. e.g x = x goes to selfjoinquals and a = b to
+			 * otherjoinquals.
+			 */
+			split_selfjoin_quals(root, restrictlist, &selfjoinquals,
+								 &otherjoinquals);
+
+			if (list_length(selfjoinquals) == 0)
+			{
+				/*
+				 * Have a chance to remove join if target list contains vars from
+				 * the only one relation.
+				 */
+				if (list_length(otherjoinquals) == 0)
+				{
+					/* Can't determine uniqueness without any quals. */
+					continue;
+
+				}
+				else if (!tlist_contains_rel_exprs(root, joinrelids, inner))
+				{
+					/*
+					 * TODO:
+					 * In this case, we only have a chance in the case of a
+					 * foreign key reference.
+					 */
+					continue;
+				}
+				else
+					/*
+					 * The target list contains vars from both inner and outer
+					 * relations.
+					 */
+					continue;
+			}
+			/*
+			 * Determine if the inner table can duplicate outer rows.  We must
+			 * bypass the unique rel cache here since we're possibly using a
+			 * subset of join quals. We can use 'force_cache' = true when all
+			 * join quals are selfjoin quals.  Otherwise we could end up
+			 * putting false negatives in the cache.
+			 */
+			else if (!innerrel_is_unique(root, joinrelids, outer->relids,
+										 inner, JOIN_INNER, selfjoinquals,
+										 list_length(otherjoinquals) == 0))
+				continue;
+
+			/*
+			 * We can't remove the join if the relations have row marks of
+			 * different strength (e.g. one is locked FOR UPDATE and another
+			 * just has ROW_MARK_REFERENCE for EvalPlanQual rechecking).
+			 */
+			if (scratch->row_marks[relids[i]] && scratch->row_marks[relids[o]]
+				&& scratch->row_marks[relids[i]]->markType
+					!= scratch->row_marks[relids[o]]->markType)
+			{
+				continue;
+			}
+
+			/*
+			 * Be safe to do not remove table participated in complicated PH
+			 */
+			foreach(lc, root->placeholder_list)
+			{
+				PlaceHolderInfo *phinfo = (PlaceHolderInfo *) lfirst(lc);
+
+				/* there isn't any other place to eval PHV */
+				if (bms_is_subset(phinfo->ph_eval_at, joinrelids) ||
+					bms_is_subset(phinfo->ph_needed, joinrelids))
+					break;
+			}
+
+			if (lc)
+				continue;
+
+			/*
+			 * We can remove either relation, so remove the outer one, to
+			 * simplify this loop.
+			 */
+			remove_self_join_rel(scratch, joinrelids, restrictlist, inner, outer);
+			result = bms_add_member(result, relids[o]);
+
+			/*
+			 * Replace varno in root targetlist and HAVING clause.
+			 */
+			change_varno((Expr *) root->processed_tlist, relids[o], relids[i]);
+			change_varno((Expr *) root->parse->havingQual, relids[o], relids[i]);
+
+			/* We removed the outer relation, try the next one. */
+			break;
+		}
+	}
+
+	scratch->joinrelids = joinrelids;
+	return result;
+}
+
+/*
+ * A qsort comparator to sort the relids by the relation Oid.
+ */
+static int
+compare_rte(const Index *left, const Index *right, PlannerInfo *root)
+{
+	Oid l = root->simple_rte_array[*left]->relid;
+	Oid r = root->simple_rte_array[*right]->relid;
+
+	return l < r ? 1 : (l == r ? 0 : -1);
+}
+
+/*
+ * Find and remove unique self joins on a particular level of the join tree.
+ *
+ * We sort the relations by Oid and then examine each group with the same Oid.
+ * If we removed any relation, remove it from joinlist as well.
+ */
+static Relids
+remove_self_joins_one_level(UsjScratch *scratch, List *joinlist,
+														Relids relidsToRemove)
+{
+	ListCell *lc;
+	Oid groupOid;
+	int groupStart;
+	int i;
+	int n = 0;
+	Index *relid_ascending = scratch->relids;
+	PlannerInfo *root = scratch->root;
+
+	/*
+	 * Collect the ids of base relations at this level of the join tree.
+	 */
+	foreach (lc, joinlist)
+	{
+		RangeTblEntry *rte;
+		RelOptInfo *rel;
+		RangeTblRef *ref = (RangeTblRef *) lfirst(lc);
+		if (!IsA(ref, RangeTblRef))
+			continue;
+
+		rte = root->simple_rte_array[ref->rtindex];
+		rel = root->simple_rel_array[ref->rtindex];
+
+		/* We only care about base relations from which we select something. */
+		if (rte->rtekind != RTE_RELATION || rte->relkind != RELKIND_RELATION
+			|| rel == NULL)
+		{
+			continue;
+		}
+
+		relid_ascending[n++] = ref->rtindex;
+
+		/*
+		 * Limit the number of joins we process to control the quadratic
+		 * behavior.
+		 */
+		if (n > join_collapse_limit)
+			break;
+	}
+
+	if (n < 2)
+		return relidsToRemove;
+
+	/*
+	 * Find and process the groups of relations that have same Oid.
+	 */
+	qsort_arg(relid_ascending, n, sizeof(*relid_ascending),
+			  (qsort_arg_comparator) compare_rte, root);
+	groupOid = root->simple_rte_array[relid_ascending[0]]->relid;
+	groupStart = 0;
+	for (i = 1; i < n; i++)
+	{
+		RangeTblEntry *rte = root->simple_rte_array[relid_ascending[i]];
+		Assert(rte->relid != InvalidOid);
+		if (rte->relid != groupOid)
+		{
+			relidsToRemove = bms_add_members(relidsToRemove,
+				remove_self_joins_one_group(scratch, &relid_ascending[groupStart],
+					i - groupStart));
+			groupOid = rte->relid;
+			groupStart = i;
+		}
+	}
+	Assert(groupOid != InvalidOid);
+	Assert(groupStart < n);
+	relidsToRemove = bms_add_members(relidsToRemove,
+		remove_self_joins_one_group(scratch, &relid_ascending[groupStart],
+			n - groupStart));
+
+	return relidsToRemove;
+}
+
+/*
+ * Find and remove unique self joins on a single level of a join tree, and
+ * recurse to handle deeper levels.
+ */
+static Relids
+remove_self_joins_recurse(UsjScratch *scratch, List *joinlist,
+														Relids relidsToRemove)
+{
+	ListCell *lc;
+
+	foreach (lc, joinlist)
+	{
+		switch (((Node *) lfirst(lc))->type)
+		{
+			case T_List:
+				relidsToRemove = remove_self_joins_recurse(
+														scratch,
+														(List *) lfirst(lc),
+														relidsToRemove);
+				break;
+			case T_RangeTblRef:
+				break;
+			default:
+				Assert(false);
+		}
+	}
+	return remove_self_joins_one_level(scratch, joinlist, relidsToRemove);
+}
+
+/*
+ * Find and remove useless self joins.
+ *
+ * We search for joins where the same relation is joined to itself on all
+ * columns of some unique index. If this condition holds, then, for
+ * each outer row, only one inner row matches, and it is the same row
+ * of the same relation. This allows us to remove the join and replace
+ * it with a scan that combines WHERE clauses from both sides. The join
+ * clauses themselves assume the form of X = X and can be replaced with
+ * NOT NULL clauses.
+ *
+ * For the sake of simplicity, we don't apply this optimization to special
+ * joins. Here is a list of what we could do in some particular cases:
+ * 'a a1 semi join a a2': is reduced to inner by reduce_unique_semijoins,
+ * and then removed normally.
+ * 'a a1 anti join a a2': could simplify to a scan with 'outer quals AND
+ * (IS NULL on join columns OR NOT inner quals)'.
+ * 'a a1 left join a a2': could simplify to a scan like inner, but without
+ * NOT NULL conditions on join columns.
+ * 'a a1 left join (a a2 join b)': can't simplify this, because join to b
+ * can both remove rows and introduce duplicates.
+ *
+ * To search for removable joins, we order all the relations on their Oid,
+ * go over each set with the same Oid, and consider each pair of relations
+ * in this set. We check that both relation are made unique by the same
+ * unique index with the same clauses.
+ *
+ * To remove the join, we mark one of the participating relation as
+ * dead, and rewrite all references to it to point to the remaining
+ * relation. This includes modifying RestrictInfos, EquivalenceClasses and
+ * EquivalenceMembers. We also have to modify the row marks. The join clauses
+ * of the removed relation become either restriction or join clauses, based on
+ * whether they reference any relations not participating in the removed join.
+ *
+ * 'targetlist' is the top-level targetlist of query. If it has any references
+ * to the removed relations, we update them to point to the remaining ones.
+ */
+List *
+remove_useless_self_joins(PlannerInfo *root, List *joinlist)
+{
+	ListCell *lc;
+	UsjScratch scratch;
+	Relids relidsToRemove = NULL;
+	int relid = -1;
+
+	if (!enable_self_join_removal)
+		return joinlist;
+
+	scratch.root = root;
+	scratch.relids = palloc(root->simple_rel_array_size * sizeof(Index));
+	scratch.row_marks = palloc0(root->simple_rel_array_size * sizeof(PlanRowMark *));
+	scratch.joinrelids = NULL;
+
+	/* Collect row marks. */
+	foreach (lc, root->rowMarks)
+	{
+		PlanRowMark *rowMark = (PlanRowMark *) lfirst(lc);
+
+		/* Can't have more than one row mark for a relation. */
+		Assert(scratch.row_marks[rowMark->rti] == NULL);
+
+		scratch.row_marks[rowMark->rti] = rowMark;
+	}
+
+	/* Finally, remove the joins. */
+	relidsToRemove = remove_self_joins_recurse(&scratch,
+												joinlist,
+												relidsToRemove);
+	while ((relid = bms_next_member(relidsToRemove, relid)) >= 0)
+	{
+		int nremoved = 0;
+		joinlist = remove_rel_from_joinlist(joinlist, relid, &nremoved);
+	}
+
+	pfree(scratch.relids);
+	pfree(scratch.row_marks);
+	return joinlist;
 }

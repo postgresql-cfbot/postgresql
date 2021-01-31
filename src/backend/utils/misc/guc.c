@@ -1645,6 +1645,15 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"transaction_cleanup", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Whether session cleanup occurs immediately following transaction completion."),
+			NULL
+		},
+		&transaction_cleanup,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"transaction_deferrable", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Whether to defer a read-only serializable transaction until it can be executed with no possible serialization failures."),
 			NULL,

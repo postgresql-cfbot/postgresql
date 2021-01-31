@@ -35,6 +35,8 @@
 #include "catalog/pg_enum.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/prepare.h"
+#include "commands/sequence.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
 #include "executor/spi.h"
@@ -79,6 +81,8 @@ bool		XactReadOnly;
 
 bool		DefaultXactDeferrable = false;
 bool		XactDeferrable;
+
+bool		transaction_cleanup = false;
 
 int			synchronous_commit = SYNCHRONOUS_COMMIT_ON;
 
@@ -335,6 +339,8 @@ static void CheckTransactionBlock(bool isTopLevel, bool throwError,
 static void CommitTransaction(void);
 static TransactionId RecordTransactionAbort(bool isSubXact);
 static void StartTransaction(void);
+
+static void PostXactSessionCleanup(void);
 
 static void StartSubTransaction(void);
 static void CommitSubTransaction(void);
@@ -2132,11 +2138,23 @@ CommitTransaction(void)
 	/* Shut down the deferred-trigger manager */
 	AfterTriggerEndXact(true);
 
-	/*
-	 * Let ON COMMIT management do its thing (must happen after closing
-	 * cursors, to avoid dangling-reference problems)
-	 */
-	PreCommit_on_commit_actions();
+	/* Apply cleanup consistently across all end of xact actions */
+	if (transaction_cleanup && !IsBootstrapProcessingMode())
+	{
+		MyXactFlags |= XACT_FLAGS_CLEANUP_AT_XACT_END;
+
+		/* Closing portals might run user-defined code, so do that first. */
+		PortalHashTableDeleteAll();
+		ResetTempTableNamespace();
+	}
+	else
+	{
+		/*
+		 * Let ON COMMIT management do its thing (must happen after closing
+		 * cursors, to avoid dangling-reference problems)
+		 */
+		PreCommit_on_commit_actions();
+	}
 
 	/*
 	 * Synchronize files that are created and not WAL-logged during this
@@ -2372,11 +2390,23 @@ PrepareTransaction(void)
 	/* Shut down the deferred-trigger manager */
 	AfterTriggerEndXact(true);
 
-	/*
-	 * Let ON COMMIT management do its thing (must happen after closing
-	 * cursors, to avoid dangling-reference problems)
-	 */
-	PreCommit_on_commit_actions();
+	/* Apply cleanup consistently across all end of xact actions */
+	if (transaction_cleanup && !IsBootstrapProcessingMode())
+	{
+		MyXactFlags |= XACT_FLAGS_CLEANUP_AT_XACT_END;
+
+		/* Closing portals might run user-defined code, so do that first. */
+		PortalHashTableDeleteAll();
+		ResetTempTableNamespace();
+	}
+	else
+	{
+		/*
+		 * Let ON COMMIT management do its thing (must happen after closing
+		 * cursors, to avoid dangling-reference problems)
+		 */
+		PreCommit_on_commit_actions();
+	}
 
 	/*
 	 * Synchronize files that are created and not WAL-logged during this
@@ -2413,11 +2443,12 @@ PrepareTransaction(void)
 	 * We must check this after executing any ON COMMIT actions, because they
 	 * might still access a temp relation.
 	 *
-	 * XXX In principle this could be relaxed to allow some useful special
-	 * cases, such as a temp table created and dropped all within the
-	 * transaction.  That seems to require much more bookkeeping though.
+	 * This can be relaxed if we are using transaction_cleanup since we know
+	 * that any temp tables will have been created and dropped all within the
+	 * transaction.
 	 */
-	if ((MyXactFlags & XACT_FLAGS_ACCESSEDTEMPNAMESPACE))
+	if ((MyXactFlags & XACT_FLAGS_ACCESSEDTEMPNAMESPACE) &&
+		!(MyXactFlags & XACT_FLAGS_CLEANUP_AT_XACT_END))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot PREPARE a transaction that has operated on temporary objects")));
@@ -2841,6 +2872,25 @@ CleanupTransaction(void)
 }
 
 /*
+ * Perform same actions as DISCARD ALL, but don't try to execute that
+ * directly since it expects to be inside a new transaction.
+ */
+static void
+PostXactSessionCleanup(void)
+{
+	if ((MyXactFlags & XACT_FLAGS_CLEANUP_AT_XACT_END))
+	{
+		SetPGVariable("session_authorization", NIL, false);
+		ResetAllOptions();
+		DropAllPreparedStatements();
+		LockReleaseAll(USER_LOCKMETHOD, true);
+		ResetPlanCache();
+		ResetSequenceCaches();
+	}
+}
+
+
+/*
  *	StartTransactionCommand
  */
 void
@@ -3010,6 +3060,8 @@ CommitTransactionCommand(void)
 				s->chain = false;
 				RestoreTransactionCharacteristics();
 			}
+			else
+				PostXactSessionCleanup();
 			break;
 
 			/*
@@ -3036,6 +3088,8 @@ CommitTransactionCommand(void)
 				s->chain = false;
 				RestoreTransactionCharacteristics();
 			}
+			else
+				PostXactSessionCleanup();
 			break;
 
 			/*
@@ -3054,6 +3108,8 @@ CommitTransactionCommand(void)
 				s->chain = false;
 				RestoreTransactionCharacteristics();
 			}
+			else
+				PostXactSessionCleanup();
 			break;
 
 			/*
@@ -3062,6 +3118,7 @@ CommitTransactionCommand(void)
 			 */
 		case TBLOCK_PREPARE:
 			PrepareTransaction();
+			PostXactSessionCleanup();
 			s->blockState = TBLOCK_DEFAULT;
 			break;
 

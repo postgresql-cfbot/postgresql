@@ -160,13 +160,14 @@ SELECT relname FROM pg_class WHERE relname = 'reset_test';
 -- Test DISCARD ALL
 --
 
+CREATE ROLE regress_guc_user;
+
 -- do changes
 DECLARE foo CURSOR WITH HOLD FOR SELECT 1;
 PREPARE foo AS SELECT 1;
 LISTEN foo_event;
 SET vacuum_cost_delay = 13;
 CREATE TEMP TABLE tmp_foo (data text) ON COMMIT DELETE ROWS;
-CREATE ROLE regress_guc_user;
 SET SESSION AUTHORIZATION regress_guc_user;
 -- look changes
 SELECT pg_listening_channels();
@@ -184,6 +185,32 @@ SELECT name FROM pg_cursors;
 SHOW vacuum_cost_delay;
 SELECT relname from pg_class where relname = 'tmp_foo';
 SELECT current_user = 'regress_guc_user';
+
+-- do changes, with cleanup
+SET transaction_cleanup = on;
+BEGIN;
+DECLARE foo CURSOR WITH HOLD FOR SELECT 1;
+PREPARE foo AS SELECT 1;
+LISTEN foo_event;
+SET vacuum_cost_delay = 13;
+CREATE TEMP TABLE tmp_foo (data text) ON COMMIT DELETE ROWS;
+SET SESSION AUTHORIZATION regress_guc_user;
+-- look changes
+SELECT name FROM pg_prepared_statements;
+SELECT name FROM pg_cursors;
+SHOW vacuum_cost_delay;
+SELECT relname from pg_class where relname = 'tmp_foo';
+SELECT current_user = 'regress_guc_user';
+COMMIT;
+SET transaction_cleanup = off;
+-- look again, should be same as DISCARD ALL
+SELECT pg_listening_channels();
+SELECT name FROM pg_prepared_statements;
+SELECT name FROM pg_cursors;
+SHOW vacuum_cost_delay;
+SELECT relname from pg_class where relname = 'tmp_foo';
+SELECT current_user = 'regress_guc_user';
+
 DROP ROLE regress_guc_user;
 
 --

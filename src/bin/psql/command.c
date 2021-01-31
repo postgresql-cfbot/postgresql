@@ -151,7 +151,7 @@ static void copy_previous_query(PQExpBuffer query_buf, PQExpBuffer previous_buf)
 static bool do_connect(enum trivalue reuse_previous_specification,
 					   char *dbname, char *user, char *host, char *port);
 static bool do_edit(const char *filename_arg, PQExpBuffer query_buf,
-					int lineno, bool *edited);
+					int lineno, bool *edited, bool discard_on_quit);
 static bool do_shell(const char *command);
 static bool do_watch(PQExpBuffer query_buf, double sleep);
 static bool lookup_object_oid(EditableObjectType obj_type, const char *desc,
@@ -1003,6 +1003,13 @@ exec_command_edit(PsqlScanState scan_state, bool active_branch,
 			}
 			if (status != PSQL_CMD_ERROR)
 			{
+				/*
+				 * If the query buffer is empty, we'll edit the previous query.
+				 * But in that case, we don't want to keep that if the editor
+				 * is quit.
+				 */
+				bool discard_on_quit = (query_buf->len == 0);
+
 				expand_tilde(&fname);
 				if (fname)
 					canonicalize_path(fname);
@@ -1010,7 +1017,7 @@ exec_command_edit(PsqlScanState scan_state, bool active_branch,
 				/* If query_buf is empty, recall previous query for editing */
 				copy_previous_query(query_buf, previous_buf);
 
-				if (do_edit(fname, query_buf, lineno, NULL))
+				if (do_edit(fname, query_buf, lineno, NULL, discard_on_quit))
 					status = PSQL_CMD_NEWEDIT;
 				else
 					status = PSQL_CMD_ERROR;
@@ -1133,11 +1140,9 @@ exec_command_ef_ev(PsqlScanState scan_state, bool active_branch,
 		{
 			bool		edited = false;
 
-			if (!do_edit(NULL, query_buf, lineno, &edited))
+			if (!do_edit(NULL, query_buf, lineno, &edited, true))
 				status = PSQL_CMD_ERROR;
-			else if (!edited)
-				puts(_("No changes"));
-			else
+			else if (edited)
 				status = PSQL_CMD_NEWEDIT;
 		}
 
@@ -3626,12 +3631,7 @@ UnsyncVariables(void)
 }
 
 
-/*
- * do_edit -- handler for \e
- *
- * If you do not specify a filename, the current query buffer will be copied
- * into a temporary one.
- */
+/* helper for do_edit() */
 static bool
 editFile(const char *fname, int lineno)
 {
@@ -3699,10 +3699,18 @@ editFile(const char *fname, int lineno)
 }
 
 
-/* call this one */
+/*
+ * do_edit -- handler for \e
+ *
+ * If you do not specify a filename, the current query buffer will be copied
+ * into a temporary one.
+ * "edited" will be set to true if the file is modified.
+ * If "discard_on_quit" is true, discard the query buffer if the file was
+ * not modified.
+ */
 static bool
 do_edit(const char *filename_arg, PQExpBuffer query_buf,
-		int lineno, bool *edited)
+		int lineno, bool *edited, bool discard_on_quit)
 {
 	char		fnametmp[MAXPGPATH];
 	FILE	   *stream = NULL;
@@ -3838,6 +3846,13 @@ do_edit(const char *filename_arg, PQExpBuffer query_buf,
 
 			fclose(stream);
 		}
+	}
+	else
+	{
+		if (discard_on_quit)
+			resetPQExpBuffer(query_buf);
+		else
+			puts(_("No changes"));
 	}
 
 	/* remove temp file */

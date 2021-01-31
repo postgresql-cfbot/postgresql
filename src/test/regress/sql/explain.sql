@@ -105,3 +105,6 @@ select jsonb_pretty(
 );
 
 rollback;
+
+set compute_queryid = on;
+select explain_filter('explain (verbose) select 1');

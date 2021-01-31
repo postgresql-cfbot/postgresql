@@ -540,6 +540,7 @@
 					#   %t = timestamp without milliseconds
 					#   %m = timestamp with milliseconds
 					#   %n = timestamp with milliseconds (as a Unix epoch)
+					#   %Q = query ID (0 if none or not computed)
 					#   %i = command tag
 					#   %e = SQL state
 					#   %c = session ID
@@ -592,6 +593,7 @@
 
 # - Monitoring -
 
+#compute_queryid = off
 #log_parser_stats = off
 #log_planner_stats = off
 #log_executor_stats = off

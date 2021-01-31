@@ -512,6 +512,7 @@ extern const struct config_enum_entry dynamic_shared_memory_options[];
 /*
  * GUC option variables that are exported from this module
  */
+bool		compute_queryid = false;
 bool		log_duration = false;
 bool		Debug_print_plan = false;
 bool		Debug_print_parse = false;
@@ -1405,6 +1406,15 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&Debug_pretty_print,
 		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"compute_queryid", PGC_SUSET, STATS_MONITORING,
+			gettext_noop("Compute query identifiers."),
+			NULL
+		},
+		&compute_queryid,
+		false,
 		NULL, NULL, NULL
 	},
 	{

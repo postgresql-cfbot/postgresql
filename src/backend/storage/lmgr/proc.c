@@ -402,6 +402,7 @@ InitProcess(void)
 	MyProc->lwWaitMode = 0;
 	MyProc->waitLock = NULL;
 	MyProc->waitProcLock = NULL;
+	MyProc->waitStart = 0;
 #ifdef USE_ASSERT_CHECKING
 	{
 		int			i;
@@ -1262,6 +1263,8 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 		}
 		else
 			enable_timeout_after(DEADLOCK_TIMEOUT, DeadlockTimeout);
+
+		MyProc->waitStart = get_timeout_start_time(DEADLOCK_TIMEOUT);
 	}
 	else if (log_recovery_conflict_waits)
 	{
@@ -1678,6 +1681,7 @@ ProcWakeup(PGPROC *proc, ProcWaitStatus waitStatus)
 	proc->waitLock = NULL;
 	proc->waitProcLock = NULL;
 	proc->waitStatus = waitStatus;
+	proc->waitStart = 0;
 
 	/* And awaken it */
 	SetLatch(&proc->procLatch);

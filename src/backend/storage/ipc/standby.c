@@ -539,13 +539,17 @@ ResolveRecoveryConflictWithDatabase(Oid dbid)
 void
 ResolveRecoveryConflictWithLock(LOCKTAG locktag, bool logging_conflict)
 {
-	TimestampTz ltime;
+	TimestampTz ltime, now;
 
 	Assert(InHotStandby);
 
 	ltime = GetStandbyLimitTime();
+	now = GetCurrentTimestamp();
 
-	if (GetCurrentTimestamp() >= ltime && ltime != 0)
+	if (MyProc->waitStart == 0)
+		MyProc->waitStart = now;
+
+	if (now >= ltime && ltime != 0)
 	{
 		/*
 		 * We're already behind, so clear a path as quickly as possible.

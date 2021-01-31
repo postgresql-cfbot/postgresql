@@ -39,6 +39,7 @@
 #include "pg_backup_archiver.h"
 #include "pg_backup_tar.h"
 #include "pg_backup_utils.h"
+#include "compress_io.h"
 #include "pgtar.h"
 
 static void _ArchiveEntry(ArchiveHandle *AH, TocEntry *te);
@@ -65,12 +66,7 @@ static void _EndBlobs(ArchiveHandle *AH, TocEntry *te);
 
 typedef struct
 {
-#ifdef HAVE_LIBZ
-	gzFile		zFH;
-#else
-	FILE	   *zFH;
-#endif
-	FILE	   *nFH;
+	cfp			*FH;
 	FILE	   *tarFH;
 	FILE	   *tmpFH;
 	char	   *targetFile;
@@ -190,16 +186,16 @@ InitArchiveFmt_Tar(ArchiveHandle *AH)
 		 * Make unbuffered since we will dup() it, and the buffers screw each
 		 * other
 		 */
-		/* setvbuf(ctx->tarFH, NULL, _IONBF, 0); */
+		// setvbuf(ctx->tarFH, NULL, _IONBF, 0);
 
 		ctx->hasSeek = checkSeek(ctx->tarFH);
 
 		/*
 		 * We don't support compression because reading the files back is not
-		 * possible since gzdopen uses buffered IO which totally screws file
+		 * possible since gzdopen uses buffered IO which totally screws file XXX
 		 * positioning.
 		 */
-		if (AH->compression != 0)
+		if (AH->compression.alg != COMPR_ALG_NONE)
 			fatal("compression is not supported by tar archive format");
 	}
 	else
@@ -222,7 +218,7 @@ InitArchiveFmt_Tar(ArchiveHandle *AH)
 		 * Make unbuffered since we will dup() it, and the buffers screw each
 		 * other
 		 */
-		/* setvbuf(ctx->tarFH, NULL, _IONBF, 0); */
+		setvbuf(ctx->tarFH, NULL, _IONBF, 0);
 
 		ctx->tarFHpos = 0;
 
@@ -254,14 +250,8 @@ _ArchiveEntry(ArchiveHandle *AH, TocEntry *te)
 	ctx = (lclTocEntry *) pg_malloc0(sizeof(lclTocEntry));
 	if (te->dataDumper != NULL)
 	{
-#ifdef HAVE_LIBZ
-		if (AH->compression == 0)
-			sprintf(fn, "%d.dat", te->dumpId);
-		else
-			sprintf(fn, "%d.dat.gz", te->dumpId);
-#else
-		sprintf(fn, "%d.dat", te->dumpId);
-#endif
+		const char *suffix = compress_suffix(&AH->compression);
+		sprintf(fn, "%d.dat%s", te->dumpId, suffix);
 		ctx->filename = pg_strdup(fn);
 	}
 	else
@@ -326,10 +316,6 @@ tarOpen(ArchiveHandle *AH, const char *filename, char mode)
 	lclContext *ctx = (lclContext *) AH->formatData;
 	TAR_MEMBER *tm;
 
-#ifdef HAVE_LIBZ
-	char		fmode[14];
-#endif
-
 	if (mode == 'r')
 	{
 		tm = _tarPositionTo(AH, filename);
@@ -350,16 +336,10 @@ tarOpen(ArchiveHandle *AH, const char *filename, char mode)
 			}
 		}
 
-#ifdef HAVE_LIBZ
-
-		if (AH->compression == 0)
-			tm->nFH = ctx->tarFH;
+		if (AH->compression.alg == COMPR_ALG_NONE)
+			tm->FH = cfdopen(dup(fileno(ctx->tarFH)), "rb", &AH->compression);
 		else
 			fatal("compression is not supported by tar archive format");
-		/* tm->zFH = gzdopen(dup(fileno(ctx->tarFH)), "rb"); */
-#else
-		tm->nFH = ctx->tarFH;
-#endif
 	}
 	else
 	{
@@ -411,21 +391,11 @@ tarOpen(ArchiveHandle *AH, const char *filename, char mode)
 
 		umask(old_umask);
 
-#ifdef HAVE_LIBZ
-
-		if (AH->compression != 0)
-		{
-			sprintf(fmode, "wb%d", AH->compression);
-			tm->zFH = gzdopen(dup(fileno(tm->tmpFH)), fmode);
-			if (tm->zFH == NULL)
-				fatal("could not open temporary file");
-		}
-		else
-			tm->nFH = tm->tmpFH;
-#else
-
-		tm->nFH = tm->tmpFH;
-#endif
+		tm->FH = cfdopen(dup(fileno(tm->tmpFH)),
+				mode == 'r' ? "r" : "w",
+				&AH->compression);
+		if (tm->FH == NULL)
+			fatal("could not open temporary file");
 
 		tm->AH = AH;
 		tm->targetFile = pg_strdup(filename);
@@ -440,12 +410,14 @@ tarOpen(ArchiveHandle *AH, const char *filename, char mode)
 static void
 tarClose(ArchiveHandle *AH, TAR_MEMBER *th)
 {
+	int	res;
+
 	/*
 	 * Close the GZ file since we dup'd. This will flush the buffers.
 	 */
-	if (AH->compression != 0)
-		if (GZCLOSE(th->zFH) != 0)
-			fatal("could not close tar member");
+	res = cfclose(th->FH);
+	if (res != 0)
+		fatal("could not close tar member");
 
 	if (th->mode == 'w')
 		_tarAddFile(AH, th);	/* This will close the temp file */
@@ -458,8 +430,7 @@ tarClose(ArchiveHandle *AH, TAR_MEMBER *th)
 	if (th->targetFile)
 		free(th->targetFile);
 
-	th->nFH = NULL;
-	th->zFH = NULL;
+	th->FH = NULL;
 }
 
 #ifdef __NOT_USED__
@@ -545,29 +516,9 @@ _tarReadRaw(ArchiveHandle *AH, void *buf, size_t len, TAR_MEMBER *th, FILE *fh)
 		}
 		else if (th)
 		{
-			if (th->zFH)
-			{
-				res = GZREAD(&((char *) buf)[used], 1, len, th->zFH);
-				if (res != len && !GZEOF(th->zFH))
-				{
-#ifdef HAVE_LIBZ
-					int			errnum;
-					const char *errmsg = gzerror(th->zFH, &errnum);
-
-					fatal("could not read from input file: %s",
-						  errnum == Z_ERRNO ? strerror(errno) : errmsg);
-#else
-					fatal("could not read from input file: %s",
-						  strerror(errno));
-#endif
-				}
-			}
-			else
-			{
-				res = fread(&((char *) buf)[used], 1, len, th->nFH);
-				if (res != len && !feof(th->nFH))
-					READ_ERROR_EXIT(th->nFH);
-			}
+			res = cfread(&((char *) buf)[used], len, th->FH);
+			if (res != len && !cfeof(th->FH))
+				fatal("could not read from input file: %m");
 		}
 	}
 
@@ -599,10 +550,7 @@ tarWrite(const void *buf, size_t len, TAR_MEMBER *th)
 {
 	size_t		res;
 
-	if (th->zFH != NULL)
-		res = GZWRITE(buf, 1, len, th->zFH);
-	else
-		res = fwrite(buf, 1, len, th->nFH);
+	res = cfwrite(buf, len, th->FH);
 
 	th->pos += res;
 	return res;
@@ -868,7 +816,7 @@ _CloseArchive(ArchiveHandle *AH)
 		memcpy(ropt, AH->public.ropt, sizeof(RestoreOptions));
 		ropt->filename = NULL;
 		ropt->dropSchema = 1;
-		ropt->compression = 0;
+		ropt->compression.alg = COMPR_ALG_NONE;
 		ropt->superuser = NULL;
 		ropt->suppressDumpWarnings = true;
 
@@ -952,16 +900,12 @@ _StartBlob(ArchiveHandle *AH, TocEntry *te, Oid oid)
 	lclContext *ctx = (lclContext *) AH->formatData;
 	lclTocEntry *tctx = (lclTocEntry *) te->formatData;
 	char		fname[255];
-	char	   *sfx;
+	const char *sfx;
 
 	if (oid == 0)
 		fatal("invalid OID for large object (%u)", oid);
 
-	if (AH->compression != 0)
-		sfx = ".gz";
-	else
-		sfx = "";
-
+	sfx = compress_suffix(&AH->compression);
 	sprintf(fname, "blob_%u.dat%s", oid, sfx);
 
 	tarPrintf(ctx->blobToc, "%u %s\n", oid, fname);
@@ -1280,12 +1224,14 @@ _tarGetHeader(ArchiveHandle *AH, TAR_MEMBER *th)
 
 	if (chk != sum)
 	{
-		char		posbuf[32];
+		off_t		off = ftello(ctx->tarFH);
 
-		snprintf(posbuf, sizeof(posbuf), UINT64_FORMAT,
-				 (uint64) ftello(ctx->tarFH));
-		fatal("corrupt tar header found in %s (expected %d, computed %d) file position %s",
-			  tag, sum, chk, posbuf);
+		if (off == -1)
+			fatal("corrupt tar header found in %s (expected %d, computed %d)",
+				  tag, sum, chk);
+		else
+			fatal("corrupt tar header found in %s (expected %d, computed %d) file position " UINT64_FORMAT,
+				  tag, sum, chk, off);
 	}
 
 	th->targetFile = pg_strdup(tag);

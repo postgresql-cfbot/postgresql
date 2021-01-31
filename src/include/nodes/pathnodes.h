@@ -1654,6 +1654,16 @@ typedef struct SortPath
 	Path	   *subpath;		/* path representing input source */
 } SortPath;
 
+typedef struct BatchSortPath
+{
+	Path		path;
+	Path	   *subpath;		/* path representing input source */
+	List	   *batchkeys;		/* our result is not all ordered, only for each batch,
+								 * so we can not use Path::pathkeys */
+	List	   *batchgroup;		/* a list of SortGroupClause for hash */
+	uint32		numBatches;
+}BatchSortPath;
+
 /*
  * IncrementalSortPath represents an incremental sort step
  *
@@ -2500,6 +2510,7 @@ typedef struct
 	bool		target_parallel_safe;
 	Node	   *havingQual;
 	List	   *targetList;
+	List	   *hashable_groups;
 	PartitionwiseAggregateType patype;
 } GroupPathExtraData;
 

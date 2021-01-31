@@ -266,6 +266,7 @@ extern Size tuplesort_estimate_shared(int nworkers);
 extern void tuplesort_initialize_shared(Sharedsort *shared, int nWorkers,
 										dsm_segment *seg);
 extern void tuplesort_attach_shared(Sharedsort *shared, dsm_segment *seg);
+extern void tuplesort_reset_shared(Sharedsort *shared);
 
 /*
  * These routines may only be called if randomAccess was specified 'true'.

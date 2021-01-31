@@ -30,6 +30,7 @@
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/paramassign.h"
+#include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/placeholder.h"
 #include "optimizer/plancat.h"
@@ -98,6 +99,7 @@ static Plan *create_projection_plan(PlannerInfo *root,
 									int flags);
 static Plan *inject_projection_plan(Plan *subplan, List *tlist, bool parallel_safe);
 static Sort *create_sort_plan(PlannerInfo *root, SortPath *best_path, int flags);
+static BatchSort *create_batchsort_plan(PlannerInfo *root, BatchSortPath *best_path, int flags);
 static IncrementalSort *create_incrementalsort_plan(PlannerInfo *root,
 													IncrementalSortPath *best_path, int flags);
 static Group *create_group_plan(PlannerInfo *root, GroupPath *best_path);
@@ -467,6 +469,11 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 			plan = (Plan *) create_sort_plan(root,
 											 (SortPath *) best_path,
 											 flags);
+			break;
+		case T_BatchSort:
+			plan = (Plan *) create_batchsort_plan(root,
+												  (BatchSortPath*) best_path,
+												  flags);
 			break;
 		case T_IncrementalSort:
 			plan = (Plan *) create_incrementalsort_plan(root,
@@ -2009,6 +2016,40 @@ create_sort_plan(PlannerInfo *root, SortPath *best_path, int flags)
 	return plan;
 }
 
+static BatchSort *create_batchsort_plan(PlannerInfo *root, BatchSortPath *best_path, int flags)
+{
+	BatchSort	   *plan;
+	Plan		   *subplan;
+
+	subplan = create_plan_recurse(root, best_path->subpath,
+								  flags | CP_SMALL_TLIST);
+
+	plan = makeNode(BatchSort);
+	subplan = prepare_sort_from_pathkeys(subplan,
+										 best_path->batchkeys,
+										 IS_OTHER_REL(best_path->subpath->parent) ?
+											 best_path->path.parent->relids : NULL,
+										 NULL,
+										 false,
+										 &plan->sort.numCols,
+										 &plan->sort.sortColIdx,
+										 &plan->sort.sortOperators,
+										 &plan->sort.collations,
+										 &plan->sort.nullsFirst);
+	plan->sort.plan.targetlist = subplan->targetlist;
+	plan->sort.plan.qual = NIL;
+	outerPlan(plan) = subplan;
+	innerPlan(plan) = NULL;
+	plan->numBatches = best_path->numBatches;
+	plan->numGroupCols = list_length(best_path->batchgroup);
+	plan->gather_param = -1;
+	plan->grpColIdx = extract_grouping_cols(best_path->batchgroup,
+											subplan->targetlist);
+
+	copy_generic_path_info(&plan->sort.plan, &best_path->path);
+	return plan;
+}
+
 /*
  * create_incrementalsort_plan
  *
@@ -2085,6 +2126,12 @@ create_upper_unique_plan(PlannerInfo *root, UpperUniquePath *best_path, int flag
 {
 	Unique	   *plan;
 	Plan	   *subplan;
+	List	   *pathkeys;
+
+	if (IsA(best_path->subpath, BatchSortPath))
+		pathkeys = ((BatchSortPath*)best_path->subpath)->batchkeys;
+	else
+		pathkeys = best_path->path.pathkeys;
 
 	/*
 	 * Unique doesn't project, so tlist requirements pass through; moreover we
@@ -2094,7 +2141,7 @@ create_upper_unique_plan(PlannerInfo *root, UpperUniquePath *best_path, int flag
 								  flags | CP_LABEL_TLIST);
 
 	plan = make_unique_from_pathkeys(subplan,
-									 best_path->path.pathkeys,
+									 pathkeys,
 									 best_path->numkeys);
 
 	copy_generic_path_info(&plan->plan, (Path *) best_path);
@@ -2282,7 +2329,9 @@ create_groupingsets_plan(PlannerInfo *root, GroupingSetsPath *best_path)
 			if (!rollup->is_hashed)
 				is_first_sort = false;
 
-			if (rollup->is_hashed)
+			if (best_path->aggstrategy == AGG_BATCH_HASH)
+				strat = AGG_BATCH_HASH;
+			else if (rollup->is_hashed)
 				strat = AGG_HASHED;
 			else if (list_length(linitial(rollup->gsets)) == 0)
 				strat = AGG_PLAIN;
@@ -6373,11 +6422,19 @@ make_agg(List *tlist, List *qual,
 	node->aggParams = NULL;		/* SS_finalize_plan() will fill this */
 	node->groupingSets = groupingSets;
 	node->chain = chain;
+	node->gatherParam = -1;
 
 	plan->qual = qual;
 	plan->targetlist = tlist;
 	plan->lefttree = lefttree;
 	plan->righttree = NULL;
+
+	if (aggstrategy == AGG_BATCH_HASH)
+	{
+		node->numBatches = (int32)numGroups;
+		if (node->numBatches > max_hashagg_batches)
+			node->numBatches = max_hashagg_batches;
+	}
 
 	return node;
 }

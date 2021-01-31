@@ -43,9 +43,14 @@ extern SharedTuplestoreAccessor *sts_attach(SharedTuplestore *sts,
 											int my_participant_number,
 											SharedFileSet *fileset);
 
+extern SharedTuplestoreAccessor *sts_attach_read_only(SharedTuplestore *sts,
+													  SharedFileSet *fileset);
+
 extern void sts_end_write(SharedTuplestoreAccessor *accessor);
 
 extern void sts_reinitialize(SharedTuplestoreAccessor *accessor);
+
+extern void sts_clear(SharedTuplestoreAccessor *accessor);
 
 extern void sts_begin_parallel_scan(SharedTuplestoreAccessor *accessor);
 
@@ -57,5 +62,14 @@ extern void sts_puttuple(SharedTuplestoreAccessor *accessor,
 
 extern MinimalTuple sts_parallel_scan_next(SharedTuplestoreAccessor *accessor,
 										   void *meta_data);
+
+extern void sts_begin_scan(SharedTuplestoreAccessor *accessor);
+
+extern void sts_end_scan(SharedTuplestoreAccessor *accessor);
+
+extern MinimalTuple sts_scan_next(SharedTuplestoreAccessor *accessor,
+								  void *meta_data);
+
+extern void sts_detach(SharedTuplestoreAccessor *accessor);
 
 #endif							/* SHAREDTUPLESTORE_H */

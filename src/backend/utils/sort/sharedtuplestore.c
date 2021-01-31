@@ -24,9 +24,10 @@
 #include "access/htup.h"
 #include "access/htup_details.h"
 #include "miscadmin.h"
+#include "port/atomics.h"
 #include "storage/buffile.h"
-#include "storage/lwlock.h"
 #include "storage/sharedfileset.h"
+#include "utils/memutils.h"
 #include "utils/sharedtuplestore.h"
 
 /*
@@ -50,8 +51,7 @@ typedef struct SharedTuplestoreChunk
 /* Per-participant shared state. */
 typedef struct SharedTuplestoreParticipant
 {
-	LWLock		lock;
-	BlockNumber read_page;		/* Page number for next read. */
+	pg_atomic_uint32 read_page;	/* Page number for next read. */
 	BlockNumber npages;			/* Number of pages written. */
 	bool		writing;		/* Used only for assertions. */
 } SharedTuplestoreParticipant;
@@ -72,6 +72,8 @@ struct SharedTuplestore
 struct SharedTuplestoreAccessor
 {
 	int			participant;	/* My participant number. */
+	bool		is_read_only;	/* is read only attach? */
+	bool		is_normal_scan;	/* is not parallel scan? */
 	SharedTuplestore *sts;		/* The shared state. */
 	SharedFileSet *fileset;		/* The SharedFileSet holding files. */
 	MemoryContext context;		/* Memory context for buffers. */
@@ -155,9 +157,8 @@ sts_initialize(SharedTuplestore *sts, int participants,
 
 	for (i = 0; i < participants; ++i)
 	{
-		LWLockInitialize(&sts->participants[i].lock,
-						 LWTRANCHE_SHARED_TUPLESTORE);
-		sts->participants[i].read_page = 0;
+		pg_atomic_init_u32(&sts->participants[i].read_page, 0);
+		sts->participants[i].npages = 0;
 		sts->participants[i].writing = false;
 	}
 
@@ -185,6 +186,27 @@ sts_attach(SharedTuplestore *sts,
 
 	accessor = palloc0(sizeof(SharedTuplestoreAccessor));
 	accessor->participant = my_participant_number;
+	accessor->sts = sts;
+	accessor->fileset = fileset;
+	accessor->context = CurrentMemoryContext;
+
+	return accessor;
+}
+
+/*
+ * Like function sts_attach, but only for read, can't write any tuple
+ */
+SharedTuplestoreAccessor *
+sts_attach_read_only(SharedTuplestore *sts,
+					 SharedFileSet *fileset)
+{
+	SharedTuplestoreAccessor *accessor;
+
+	Assert(sts->nparticipants > 0);
+
+	accessor = palloc0(sizeof(SharedTuplestoreAccessor));
+	accessor->is_read_only = true;
+	accessor->participant = 0;
 	accessor->sts = sts;
 	accessor->fileset = fileset;
 	accessor->context = CurrentMemoryContext;
@@ -242,8 +264,40 @@ sts_reinitialize(SharedTuplestoreAccessor *accessor)
 	 */
 	for (i = 0; i < accessor->sts->nparticipants; ++i)
 	{
-		accessor->sts->participants[i].read_page = 0;
+		pg_atomic_init_u32(&accessor->sts->participants[i].read_page, 0);
 	}
+}
+
+/*
+ * Delete all the contents of shared tuplestore, and reset read page to the start
+ */
+void
+sts_clear(SharedTuplestoreAccessor *accessor)
+{
+	int					i;
+	char				name[MAXPGPATH];
+	SharedTuplestore   *sts = accessor->sts;
+
+	/* Must not in read and write */
+	Assert(accessor->read_file == NULL &&
+		   accessor->write_file == NULL);
+
+	/* Delete all created files */
+	for (i=0;i<sts->nparticipants;++i)
+	{
+		Assert(sts->participants[i].writing == false);
+		if (sts->participants[i].npages > 0)
+		{
+			sts_filename(name, accessor, i);
+			BufFileDeleteShared(accessor->fileset, name);
+			pg_atomic_write_u32(&sts->participants[i].read_page, 0);
+			sts->participants[i].npages = 0;
+		}
+	}
+
+	accessor->write_page = 0;
+	accessor->write_pointer = NULL;
+	accessor->write_end = NULL;
 }
 
 /*
@@ -272,6 +326,8 @@ sts_begin_parallel_scan(SharedTuplestoreAccessor *accessor)
 	accessor->read_participant = accessor->participant;
 	accessor->read_file = NULL;
 	accessor->read_next_page = 0;
+	accessor->read_ntuples = 0;
+	accessor->read_ntuples_available = 0;
 }
 
 /*
@@ -302,15 +358,23 @@ sts_puttuple(SharedTuplestoreAccessor *accessor, void *meta_data,
 {
 	size_t		size;
 
+	if (unlikely(accessor->is_read_only))
+	{
+		ereport(ERROR,
+				(errmsg("shard tuplestore is attached read only")));
+	}
+
 	/* Do we have our own file yet? */
 	if (accessor->write_file == NULL)
 	{
 		SharedTuplestoreParticipant *participant;
-		char		name[MAXPGPATH];
+		char			name[MAXPGPATH];
+		MemoryContext	oldcontext = MemoryContextSwitchTo(accessor->context);
 
 		/* Create one.  Only this backend will write into it. */
 		sts_filename(name, accessor, accessor->participant);
 		accessor->write_file = BufFileCreateShared(accessor->fileset, name);
+		MemoryContextSwitchTo(oldcontext);
 
 		/* Set up the shared state for this backend's file. */
 		participant = &accessor->sts->participants[accessor->participant];
@@ -532,20 +596,36 @@ sts_parallel_scan_next(SharedTuplestoreAccessor *accessor, void *meta_data)
 		/* Find the location of a new chunk to read. */
 		p = &accessor->sts->participants[accessor->read_participant];
 
-		LWLockAcquire(&p->lock, LW_EXCLUSIVE);
-		/* We can skip directly past overflow pages we know about. */
-		if (p->read_page < accessor->read_next_page)
-			p->read_page = accessor->read_next_page;
-		eof = p->read_page >= p->npages;
-		if (!eof)
+		if (accessor->is_normal_scan)
+		{
+			eof = accessor->read_next_page >= p->npages;
+			if (!eof)
+			{
+				read_page = accessor->read_next_page;
+				accessor->read_next_page += STS_CHUNK_PAGES;
+			}
+		}else
 		{
 			/* Claim the next chunk. */
-			read_page = p->read_page;
-			/* Advance the read head for the next reader. */
-			p->read_page += STS_CHUNK_PAGES;
-			accessor->read_next_page = p->read_page;
+			read_page = pg_atomic_read_u32(&p->read_page);
+			/* We can skip directly past overflow pages we know about. */
+			while (read_page < accessor->read_next_page)
+			{
+				if (pg_atomic_compare_exchange_u32(&p->read_page,
+												   &read_page,
+												   accessor->read_next_page))
+					break;
+			}
+			while ((eof = read_page >= p->npages) == false)
+			{
+				/* Advance the read head for the next reader. */
+				accessor->read_next_page = read_page + STS_CHUNK_PAGES;
+				if (pg_atomic_compare_exchange_u32(&p->read_page,
+												   &read_page,
+												   accessor->read_next_page))
+					break;
+			}
 		}
-		LWLockRelease(&p->lock);
 
 		if (!eof)
 		{
@@ -556,10 +636,12 @@ sts_parallel_scan_next(SharedTuplestoreAccessor *accessor, void *meta_data)
 			if (accessor->read_file == NULL)
 			{
 				char		name[MAXPGPATH];
+				MemoryContext oldcontext = MemoryContextSwitchTo(accessor->context);
 
 				sts_filename(name, accessor, accessor->read_participant);
 				accessor->read_file =
 					BufFileOpenShared(accessor->fileset, name, O_RDONLY);
+				MemoryContextSwitchTo(oldcontext);
 			}
 
 			/* Seek and load the chunk header. */
@@ -625,4 +707,47 @@ static void
 sts_filename(char *name, SharedTuplestoreAccessor *accessor, int participant)
 {
 	snprintf(name, MAXPGPATH, "%s.p%d", accessor->sts->name, participant);
+}
+
+/*
+ * Begin scanning the contents.
+ */
+void
+sts_begin_scan(SharedTuplestoreAccessor *accessor)
+{
+	sts_begin_parallel_scan(accessor);
+	accessor->is_normal_scan = true;
+}
+
+/*
+ * Finish a normal scan, freeing associated backend-local resources.
+ */
+void
+sts_end_scan(SharedTuplestoreAccessor *accessor)
+{
+	Assert(accessor->is_normal_scan);
+	sts_end_parallel_scan(accessor);
+	accessor->is_normal_scan = false;
+}
+
+/*
+ * Get the next tuple in the current normal scan.
+ */
+MinimalTuple
+sts_scan_next(SharedTuplestoreAccessor *accessor,
+					   void *meta_data)
+{
+	Assert(accessor->is_normal_scan);
+	return sts_parallel_scan_next(accessor, meta_data);
+}
+
+/*
+ * Detach SharedTuplestore and freeing associated backend-local resources.
+ */
+void
+sts_detach(SharedTuplestoreAccessor *accessor)
+{
+	sts_end_write(accessor);
+	sts_end_parallel_scan(accessor);
+	pfree(accessor);
 }

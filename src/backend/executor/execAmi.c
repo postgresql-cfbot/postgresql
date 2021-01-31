@@ -17,6 +17,7 @@
 #include "executor/execdebug.h"
 #include "executor/nodeAgg.h"
 #include "executor/nodeAppend.h"
+#include "executor/nodeBatchSort.h"
 #include "executor/nodeBitmapAnd.h"
 #include "executor/nodeBitmapHeapscan.h"
 #include "executor/nodeBitmapIndexscan.h"
@@ -251,6 +252,10 @@ ExecReScan(PlanState *node)
 
 		case T_SortState:
 			ExecReScanSort((SortState *) node);
+			break;
+
+		case T_BatchSortState:
+			ExecReScanBatchSort((BatchSortState *)node);
 			break;
 
 		case T_IncrementalSortState:

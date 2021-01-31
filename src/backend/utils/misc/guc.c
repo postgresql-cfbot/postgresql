@@ -3423,6 +3423,32 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"max_sort_batches", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Sets the maximum number of batches for sort"),
+			NULL
+		},
+		&max_sort_batches,
+		/* boot and min value 0 mean is disable */
+		0, 0,
+		/* I think too many batches will make each batch not enough working memory when sorting */
+		MAX_PARALLEL_WORKER_LIMIT * 3,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_hashagg_batches", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Sets the maximum number of batches for hash aggregate"),
+			NULL
+		},
+		&max_hashagg_batches,
+		/* boot and min value 0 mean is disable, I think max_files_per_process/2 is a good value */
+		0, 0,
+		/* I think too many batches will make FD will open and close files frequently, this is guessed-at value */
+		10000,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"debug_invalidate_system_caches_always", PGC_SUSET, DEVELOPER_OPTIONS,
 			gettext_noop("Aggressively invalidate system caches for debugging purposes."),
 			NULL,

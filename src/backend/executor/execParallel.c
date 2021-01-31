@@ -27,6 +27,7 @@
 #include "executor/executor.h"
 #include "executor/nodeAgg.h"
 #include "executor/nodeAppend.h"
+#include "executor/nodeBatchSort.h"
 #include "executor/nodeBitmapHeapscan.h"
 #include "executor/nodeCustom.h"
 #include "executor/nodeForeignscan.h"
@@ -284,6 +285,10 @@ ExecParallelEstimate(PlanState *planstate, ExecParallelEstimateContext *e)
 			/* even when not parallel-aware, for EXPLAIN ANALYZE */
 			ExecSortEstimate((SortState *) planstate, e->pcxt);
 			break;
+		case T_BatchSortState:
+			if (planstate->plan->parallel_aware)
+				ExecBatchSortEstimate((BatchSortState*)planstate, e->pcxt);
+			break;
 		case T_IncrementalSortState:
 			/* even when not parallel-aware, for EXPLAIN ANALYZE */
 			ExecIncrementalSortEstimate((IncrementalSortState *) planstate, e->pcxt);
@@ -503,6 +508,10 @@ ExecParallelInitializeDSM(PlanState *planstate,
 		case T_SortState:
 			/* even when not parallel-aware, for EXPLAIN ANALYZE */
 			ExecSortInitializeDSM((SortState *) planstate, d->pcxt);
+			break;
+		case T_BatchSortState:
+			if (planstate->plan->parallel_aware)
+				ExecBatchSortInitializeDSM((BatchSortState*)planstate, d->pcxt);
 			break;
 		case T_IncrementalSortState:
 			/* even when not parallel-aware, for EXPLAIN ANALYZE */
@@ -990,6 +999,10 @@ ExecParallelReInitializeDSM(PlanState *planstate,
 		case T_IncrementalSortState:
 			/* these nodes have DSM state, but no reinitialization is required */
 			break;
+		case T_BatchSortState:
+			if (planstate->plan->parallel_aware)
+				ExecBatchSortReInitializeDSM((BatchSortState*)planstate, pcxt);
+			break;
 
 		default:
 			break;
@@ -1339,6 +1352,10 @@ ExecParallelInitializeWorker(PlanState *planstate, ParallelWorkerContext *pwcxt)
 		case T_SortState:
 			/* even when not parallel-aware, for EXPLAIN ANALYZE */
 			ExecSortInitializeWorker((SortState *) planstate, pwcxt);
+			break;
+		case T_BatchSortState:
+			if (planstate->plan->parallel_aware)
+				ExecBatchSortInitializeWorker((BatchSortState*)planstate, pwcxt);
 			break;
 		case T_IncrementalSortState:
 			/* even when not parallel-aware, for EXPLAIN ANALYZE */

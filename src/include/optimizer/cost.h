@@ -66,6 +66,8 @@ extern PGDLLIMPORT bool enable_parallel_append;
 extern PGDLLIMPORT bool enable_parallel_hash;
 extern PGDLLIMPORT bool enable_partition_pruning;
 extern PGDLLIMPORT int constraint_exclusion;
+extern PGDLLIMPORT int max_sort_batches;
+extern PGDLLIMPORT int max_hashagg_batches;
 
 extern double index_pages_fetched(double tuples_fetched, BlockNumber pages,
 								  double index_pages, PlannerInfo *root);
@@ -102,6 +104,11 @@ extern void cost_sort(Path *path, PlannerInfo *root,
 					  List *pathkeys, Cost input_cost, double tuples, int width,
 					  Cost comparison_cost, int sort_mem,
 					  double limit_tuples);
+extern void cost_batchsort(Path *path, PlannerInfo *root,
+						   List *batchkeys, Cost input_cost,
+						   double tuples, int width,
+						   Cost comparison_cost, int sort_mem,
+						   uint32 numGroupCols, uint32 numBatchs);
 extern void cost_incremental_sort(Path *path,
 								  PlannerInfo *root, List *pathkeys, int presorted_keys,
 								  Cost input_startup_cost, Cost input_total_cost,

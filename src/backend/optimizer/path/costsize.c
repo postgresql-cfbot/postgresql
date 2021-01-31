@@ -147,6 +147,8 @@ bool		enable_partitionwise_aggregate = false;
 bool		enable_parallel_append = true;
 bool		enable_parallel_hash = true;
 bool		enable_partition_pruning = true;
+int			max_sort_batches = 0;
+int			max_hashagg_batches = 0;
 
 typedef struct
 {
@@ -1958,6 +1960,84 @@ cost_sort(Path *path, PlannerInfo *root,
 	path->total_cost = startup_cost + run_cost;
 }
 
+void cost_batchsort(Path *path, PlannerInfo *root,
+					List *batchkeys, Cost input_cost,
+					double tuples, int width,
+					Cost comparison_cost, int sort_mem,
+					uint32 numGroupCols, uint32 numBatches)
+{
+	Cost		startup_cost = input_cost;
+	Cost		run_cost = 0;
+	double		input_bytes = relation_byte_size(tuples, width);
+	double		batch_bytes = input_bytes / numBatches;
+	double		batch_tuples = tuples / numBatches;
+	long		sort_mem_bytes = sort_mem * 1024L;
+
+	if (sort_mem_bytes < (64*1024))
+		sort_mem_bytes = (64*1024);
+
+	/* hash cost */
+	startup_cost += cpu_operator_cost * numGroupCols * tuples;
+
+	path->rows = tuples;
+
+	/*
+	 * We want to be sure the cost of a sort is never estimated as zero, even
+	 * if passed-in tuple count is zero.  Besides, mustn't do log(0)...
+	 */
+	if (tuples < 2.0)
+		tuples = 2.0;
+
+	if (batch_bytes > sort_mem_bytes)
+	{
+		/*
+		 * We'll have to use a disk-based sort of all the tuples
+		 */
+		double		npages = ceil(batch_bytes / BLCKSZ);
+		double		nruns = batch_bytes / sort_mem_bytes;
+		double		mergeorder = tuplesort_merge_order(sort_mem_bytes);
+		double		log_runs;
+		double		npageaccesses;
+
+		/*
+		 * CPU costs
+		 *
+		 * Assume about N log2 N comparisons
+		 */
+		startup_cost += comparison_cost * batch_tuples * LOG2(batch_tuples) * numBatches;
+
+		/* Disk costs */
+
+		/* Compute logM(r) as log(r) / log(M) */
+		if (nruns > mergeorder)
+			log_runs = ceil(log(nruns) / log(mergeorder));
+		else
+			log_runs = 1.0;
+		npageaccesses = 2.0 * npages * log_runs;
+		/* Assume 3/4ths of accesses are sequential, 1/4th are not */
+		startup_cost += npageaccesses * numBatches *
+			(seq_page_cost * 0.75 + random_page_cost * 0.25);
+
+	}else
+	{
+		/* We'll use plain quicksort on all the input tuples */
+		startup_cost += comparison_cost * tuples * LOG2(tuples);
+	}
+
+	/*
+	 * Also charge a small amount (arbitrarily set equal to operator cost) per
+	 * extracted tuple.  We don't charge cpu_tuple_cost because a Sort node
+	 * doesn't do qual-checking or projection, so it has less overhead than
+	 * most plan nodes.  Note it's correct to use tuples not output_tuples
+	 * here --- the upper LIMIT will pro-rate the run cost so we'd be double
+	 * counting the LIMIT otherwise.
+	 */
+	run_cost += cpu_operator_cost * tuples;
+
+	path->startup_cost = startup_cost;
+	path->total_cost = startup_cost + run_cost;
+}
+
 /*
  * append_nonpartial_cost
  *	  Estimate the cost of the non-partial paths in a Parallel Append.
@@ -2332,7 +2412,7 @@ cost_agg(Path *path, PlannerInfo *root,
 	/* Use all-zero per-aggregate costs if NULL is passed */
 	if (aggcosts == NULL)
 	{
-		Assert(aggstrategy == AGG_HASHED);
+		Assert(aggstrategy == AGG_HASHED || aggstrategy == AGG_BATCH_HASH);
 		MemSet(&dummy_aggcosts, 0, sizeof(AggClauseCosts));
 		aggcosts = &dummy_aggcosts;
 	}
@@ -2391,10 +2471,13 @@ cost_agg(Path *path, PlannerInfo *root,
 	}
 	else
 	{
-		/* must be AGG_HASHED */
+		/* must be AGG_HASHED or AGG_BATCH_HASH */
+		Assert(aggstrategy == AGG_HASHED || max_hashagg_batches > 0);
 		startup_cost = input_total_cost;
-		if (!enable_hashagg)
+		if (aggstrategy == AGG_HASHED && !enable_hashagg)
+		{
 			startup_cost += disable_cost;
+		}
 		startup_cost += aggcosts->transCost.startup;
 		startup_cost += aggcosts->transCost.per_tuple * input_tuples;
 		/* cost of computing hash value */
@@ -2406,6 +2489,15 @@ cost_agg(Path *path, PlannerInfo *root,
 		/* cost of retrieving from hash table */
 		total_cost += cpu_tuple_cost * numGroups;
 		output_tuples = numGroups;
+
+		if (aggstrategy == AGG_BATCH_HASH)
+		{
+			double	nbytes = relation_byte_size(input_tuples, input_width);
+			double	npages = ceil(nbytes / BLCKSZ);
+			double	material_cost = (seq_page_cost * npages);
+			startup_cost += material_cost;
+			total_cost += material_cost;
+		}
 	}
 
 	/*
@@ -2421,7 +2513,9 @@ cost_agg(Path *path, PlannerInfo *root,
 	 * Accrue writes (spilled tuples) to startup_cost and to total_cost;
 	 * accrue reads only to total_cost.
 	 */
-	if (aggstrategy == AGG_HASHED || aggstrategy == AGG_MIXED)
+	if (aggstrategy == AGG_HASHED ||
+		aggstrategy == AGG_BATCH_HASH ||
+		aggstrategy == AGG_MIXED)
 	{
 		double		pages;
 		double		pages_written = 0.0;
@@ -2433,6 +2527,14 @@ cost_agg(Path *path, PlannerInfo *root,
 		uint64		ngroups_limit;
 		int			num_partitions;
 		int			depth;
+
+		if (aggstrategy == AGG_BATCH_HASH &&
+			numGroups > max_hashagg_batches)
+		{
+			numGroups /= max_hashagg_batches;
+			if (numGroups < 1.0)
+				numGroups = 1.0;
+		}
 
 		/*
 		 * Estimate number of batches based on the computed limits. If less

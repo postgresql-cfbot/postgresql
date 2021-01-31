@@ -331,3 +331,48 @@ RESET parallel_setup_cost;
 EXPLAIN (COSTS OFF)
 SELECT x, sum(y), avg(y), count(*) FROM pagg_tab_para GROUP BY x HAVING avg(y) < 7 ORDER BY 1, 2, 3;
 SELECT x, sum(y), avg(y), count(*) FROM pagg_tab_para GROUP BY x HAVING avg(y) < 7 ORDER BY 1, 2, 3;
+
+-- simple agg in parallel
+BEGIN;
+SET max_sort_batches = 6;
+SET min_parallel_table_scan_size = 0;
+SET parallel_tuple_cost = 0;
+SET parallel_setup_cost = 0;
+SET enable_indexonlyscan = OFF;
+-- using batch sort
+EXPLAIN (COSTS OFF)
+SELECT unique2,count(*) FROM tenk1 GROUP BY 1;
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM (SELECT unique2,count(*) FROM tenk1 GROUP BY 1) foo;
+SELECT count(*) FROM (SELECT unique2,count(*) FROM tenk1 GROUP BY 1) foo;
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM
+  (SELECT unique2,count(*) id FROM tenk1 GROUP BY 1) t1
+    INNER JOIN
+  (SELECT unique2  id FROM tenk1) t2
+  USING(id);
+SELECT count(*) FROM
+  (SELECT unique2,count(*) id FROM tenk1 GROUP BY 1) t1
+    INNER JOIN
+  (SELECT unique2  id FROM tenk1) t2
+  USING(id);
+-- using batch hash
+SET max_sort_batches = 0;
+SET max_hashagg_batches = 512;
+EXPLAIN (COSTS OFF)
+SELECT unique2,count(*) FROM tenk1 GROUP BY 1;
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM (SELECT unique2,count(*) FROM tenk1 GROUP BY 1) foo;
+SELECT count(*) FROM (SELECT unique2,count(*) FROM tenk1 GROUP BY 1) foo;
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM
+  (SELECT unique2,count(*) id FROM tenk1 GROUP BY 1) t1
+    INNER JOIN
+  (SELECT unique2  id FROM tenk1) t2
+  USING(id);
+SELECT count(*) FROM
+  (SELECT unique2,count(*) id FROM tenk1 GROUP BY 1) t1
+    INNER JOIN
+  (SELECT unique2  id FROM tenk1) t2
+  USING(id);
+ABORT;

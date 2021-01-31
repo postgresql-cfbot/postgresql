@@ -959,6 +959,23 @@ _copySort(const Sort *from)
 	return newnode;
 }
 
+/*
+ * _copyBatchSort
+ */
+static BatchSort *
+_copyBatchSort(const BatchSort *from)
+{
+	BatchSort	   *newnode = makeNode(BatchSort);
+
+	CopySortFields(&from->sort, &newnode->sort);
+
+	COPY_SCALAR_FIELD(numGroupCols);
+	COPY_SCALAR_FIELD(numBatches);
+	COPY_SCALAR_FIELD(gather_param);
+	COPY_POINTER_FIELD(grpColIdx, from->numGroupCols * sizeof(AttrNumber));
+
+	return newnode;
+}
 
 /*
  * _copyIncrementalSort
@@ -1024,6 +1041,8 @@ _copyAgg(const Agg *from)
 	COPY_BITMAPSET_FIELD(aggParams);
 	COPY_NODE_FIELD(groupingSets);
 	COPY_NODE_FIELD(chain);
+	COPY_SCALAR_FIELD(numBatches);
+	COPY_SCALAR_FIELD(gatherParam);
 
 	return newnode;
 }
@@ -4948,6 +4967,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_Sort:
 			retval = _copySort(from);
+			break;
+		case T_BatchSort:
+			retval = _copyBatchSort(from);
 			break;
 		case T_IncrementalSort:
 			retval = _copyIncrementalSort(from);

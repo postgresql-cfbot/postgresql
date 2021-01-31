@@ -74,6 +74,7 @@ typedef enum NodeTag
 	T_HashJoin,
 	T_Material,
 	T_Sort,
+	T_BatchSort,
 	T_IncrementalSort,
 	T_Group,
 	T_Agg,
@@ -131,6 +132,7 @@ typedef enum NodeTag
 	T_HashJoinState,
 	T_MaterialState,
 	T_SortState,
+	T_BatchSortState,
 	T_IncrementalSortState,
 	T_GroupState,
 	T_AggState,
@@ -245,6 +247,7 @@ typedef enum NodeTag
 	T_ProjectionPath,
 	T_ProjectSetPath,
 	T_SortPath,
+	T_BatchSortPath,
 	T_IncrementalSortPath,
 	T_GroupPath,
 	T_UpperUniquePath,
@@ -759,7 +762,8 @@ typedef enum AggStrategy
 	AGG_PLAIN,					/* simple agg across all input rows */
 	AGG_SORTED,					/* grouped agg, input must be sorted */
 	AGG_HASHED,					/* grouped agg, use internal hashtable */
-	AGG_MIXED					/* grouped agg, hash and sort both used */
+	AGG_MIXED,					/* grouped agg, hash and sort both used */
+	AGG_BATCH_HASH				/* grouped agg, use batch hash */
 } AggStrategy;
 
 /*

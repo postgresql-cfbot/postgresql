@@ -306,3 +306,80 @@ SELECT null IS NOT DISTINCT FROM null as "yes";
  t
 (1 row)
 
+-- parallel distinct
+BEGIN;
+SET max_sort_batches = 6;
+SET min_parallel_table_scan_size =0;
+SET parallel_tuple_cost = 0;
+SET parallel_setup_cost = 0;
+SET enable_indexonlyscan = OFF;
+-- using batch sort
+EXPLAIN (costs off)
+SELECT COUNT(*) FROM (SELECT DISTINCT unique2 FROM tenk1) foo;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Aggregate
+   ->  Gather
+         Workers Planned: 2
+         ->  Unique
+               ->  Parallel BatchSort
+                     Sort Key: tenk1.unique2
+                     ->  Parallel Seq Scan on tenk1
+(7 rows)
+
+SELECT COUNT(*) FROM (SELECT DISTINCT unique2 FROM tenk1) foo;
+ count 
+-------
+ 10000
+(1 row)
+
+explain (costs off)
+SELECT DISTINCT * FROM (SELECT DISTINCT unique2 FROM tenk1) foo;
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  Unique
+         ->  Parallel BatchSort
+               Sort Key: tenk1.unique2
+               ->  Unique
+                     ->  Parallel BatchSort
+                           Sort Key: tenk1.unique2
+                           ->  Parallel Seq Scan on tenk1
+(9 rows)
+
+-- using batch hash
+SET max_sort_batches = 0;
+SET max_hashagg_batches = 512;
+EXPLAIN (costs off)
+SELECT COUNT(*) FROM (SELECT DISTINCT unique2 FROM tenk1) foo;
+                  QUERY PLAN                  
+----------------------------------------------
+ Aggregate
+   ->  Gather
+         Workers Planned: 2
+         ->  Parallel BatchHashAggregate
+               Group Key: tenk1.unique2
+               ->  Parallel Seq Scan on tenk1
+(6 rows)
+
+SELECT COUNT(*) FROM (SELECT DISTINCT unique2 FROM tenk1) foo;
+ count 
+-------
+ 10000
+(1 row)
+
+explain (costs off)
+SELECT DISTINCT * FROM (SELECT DISTINCT unique2 FROM tenk1) foo;
+                  QUERY PLAN                  
+----------------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  Parallel BatchHashAggregate
+         Group Key: tenk1.unique2
+         ->  Parallel BatchHashAggregate
+               Group Key: tenk1.unique2
+               ->  Parallel Seq Scan on tenk1
+(7 rows)
+
+ABORT;

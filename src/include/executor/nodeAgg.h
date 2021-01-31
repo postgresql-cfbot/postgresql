@@ -310,6 +310,8 @@ typedef struct AggStatePerHashData
 	int			largestGrpColIdx;	/* largest col required for hashing */
 	AttrNumber *hashGrpColIdxInput; /* hash col indices in input slot */
 	AttrNumber *hashGrpColIdxHash;	/* indices in hash table tuples */
+	Bitmapset  *colnos_needed;	/* all columns needed from the outer plan */
+	struct BatchStoreData *batch_store;	/* grouping set batch store hash */
 	Agg		   *aggnode;		/* original Agg node, for numGroups etc. */
 }			AggStatePerHashData;
 

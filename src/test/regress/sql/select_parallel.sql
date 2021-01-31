@@ -312,6 +312,38 @@ select * from
    from tenk1 group by string4 order by string4) ss
   right join (values (1),(2),(3)) v(x) on true;
 
+--test rescan for batch sort
+SET max_sort_batches = 12;
+
+explain (costs off)
+select * from
+  (select string4, count(unique2)
+   from tenk1 group by string4) ss
+  right join (values (1),(2),(3)) v(x) on true order by 3,1;
+
+select * from
+  (select string4, count(unique2)
+   from tenk1 group by string4) ss
+  right join (values (1),(2),(3)) v(x) on true order by 3,1;
+
+reset max_sort_batches;
+
+--test rescan for batch hash agg
+SET max_hashagg_batches = 512;
+
+explain (costs off)
+select * from
+  (select string4, count(unique2)
+   from tenk1 group by string4) ss
+  right join (values (1),(2),(3)) v(x) on true order by 3,1;
+
+select * from
+  (select string4, count(unique2)
+   from tenk1 group by string4) ss
+  right join (values (1),(2),(3)) v(x) on true order by 3,1;
+
+reset max_hashagg_batches;
+
 reset enable_material;
 
 reset enable_hashagg;

@@ -195,6 +195,13 @@ extern IncrementalSortPath *create_incremental_sort_path(PlannerInfo *root,
 														 List *pathkeys,
 														 int presorted_keys,
 														 double limit_tuples);
+extern BatchSortPath *create_batchsort_path(PlannerInfo *root,
+											RelOptInfo *rel,
+											Path *subpath,
+											List *pathkeys,
+											List *groupClause,
+											uint32 numBatches,
+											bool parallel_sort);
 extern GroupPath *create_group_path(PlannerInfo *root,
 									RelOptInfo *rel,
 									Path *subpath,

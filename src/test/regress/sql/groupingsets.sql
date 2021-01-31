@@ -529,4 +529,14 @@ set work_mem to default;
 drop table gs_group_1;
 drop table gs_hash_1;
 
+-- parallel grouping sets
+BEGIN;
+set max_hashagg_batches = 512;
+set min_parallel_table_scan_size = 0;
+set parallel_setup_cost = 10;
+explain (costs off)
+select sum(unique1),count(unique1),two,four,ten,twenty from tenk1 group by grouping sets(two,four,ten,(two,twenty),()) order by 3,4,5,6;
+select sum(unique1),count(unique1),two,four,ten,twenty from tenk1 group by grouping sets(two,four,ten,(two,twenty),()) order by 3,4,5,6;
+ABORT;
+
 -- end

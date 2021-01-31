@@ -2018,6 +2018,22 @@ typedef struct SortState
 } SortState;
 
 /* ----------------
+ *	 BatchSortState information
+ * ----------------
+ */
+typedef struct BatchSortState
+{
+	PlanState	ps;				/* its first field is NodeTag */
+	struct Tuplesortstate
+			  **batches;		/* private state of tuplesort.c */
+	List	   *groupFuns;		/* hash function call info for each group-key */
+	struct ParallelBatchSort
+			   *parallel;		/* parallel info, private in nodeBatchSort.c */
+	int			curBatch;		/* current batch index */
+	bool		sort_Done;		/* sort completed yet? */
+}BatchSortState;
+
+/* ----------------
  *	 Instrumentation information for IncrementalSort
  * ----------------
  */
@@ -2208,6 +2224,9 @@ typedef struct AggState
 										 * ->hash_pergroup */
 	ProjectionInfo *combinedproj;	/* projection machinery */
 	SharedAggInfo *shared_info; /* one entry per worker */
+	struct Barrier *batch_barrier;		/* for parallel batch */
+	int			current_batch_set;		/* current batch grouping set */
+	bool		batch_filled;			/* is all batches filled? */
 } AggState;
 
 /* ----------------

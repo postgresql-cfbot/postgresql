@@ -785,6 +785,8 @@ _outAgg(StringInfo str, const Agg *node)
 	WRITE_BITMAPSET_FIELD(aggParams);
 	WRITE_NODE_FIELD(groupingSets);
 	WRITE_NODE_FIELD(chain);
+	WRITE_INT_FIELD(numBatches);
+	WRITE_INT_FIELD(gatherParam);
 }
 
 static void
@@ -852,6 +854,19 @@ _outSort(StringInfo str, const Sort *node)
 	WRITE_NODE_TYPE("SORT");
 
 	_outSortInfo(str, node);
+}
+
+static void
+_outBatchSort(StringInfo str, const BatchSort *node)
+{
+	WRITE_NODE_TYPE("BATCHSORT");
+
+	_outSortInfo(str, &node->sort);
+
+	WRITE_INT_FIELD(numGroupCols);
+	WRITE_INT_FIELD(numBatches);
+	WRITE_INT_FIELD(gather_param);
+	WRITE_ATTRNUMBER_ARRAY(grpColIdx, node->numGroupCols);
 }
 
 static void
@@ -3835,6 +3850,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_Sort:
 				_outSort(str, obj);
+				break;
+			case T_BatchSort:
+				_outBatchSort(str, obj);
 				break;
 			case T_IncrementalSort:
 				_outIncrementalSort(str, obj);

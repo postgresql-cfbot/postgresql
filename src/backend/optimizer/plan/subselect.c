@@ -2698,6 +2698,8 @@ finalize_plan(PlannerInfo *root, Plan *plan,
 										  &aggcontext);
 					agg->aggParams = aggcontext.paramids;
 				}
+
+				agg->gatherParam = gather_param;
 			}
 			break;
 
@@ -2757,6 +2759,10 @@ finalize_plan(PlannerInfo *root, Plan *plan,
 		case T_SetOp:
 		case T_Group:
 			/* no node-type-specific fields need fixing */
+			break;
+
+		case T_BatchSort:
+			((BatchSort*)plan)->gather_param = gather_param;
 			break;
 
 		default:

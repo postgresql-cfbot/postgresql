@@ -775,6 +775,19 @@ typedef struct Sort
 } Sort;
 
 /* ----------------
+ *		batch sort node
+ * ----------------
+ */
+typedef struct BatchSort
+{
+	Sort		sort;
+	int			numGroupCols;	/* number of group-key columns */
+	int			numBatches;		/* number of group */
+	int			gather_param;	/* ID of Param of plan Gather or GatherMerge */
+	AttrNumber *grpColIdx;		/* their indexes in the target list */
+}BatchSort;
+
+/* ----------------
  *		incremental sort node
  * ----------------
  */
@@ -828,6 +841,8 @@ typedef struct Agg
 	/* Note: planner provides numGroups & aggParams only in HASHED/MIXED case */
 	List	   *groupingSets;	/* grouping sets to use */
 	List	   *chain;			/* chained Agg/Sort nodes */
+	int			numBatches;		/* valid in AGG_BATCH_HASH */
+	int			gatherParam;	/* param of gather */
 } Agg;
 
 /* ----------------

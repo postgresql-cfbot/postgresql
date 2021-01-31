@@ -175,6 +175,12 @@ static void consider_groupingsets_paths(PlannerInfo *root,
 										grouping_sets_data *gd,
 										const AggClauseCosts *agg_costs,
 										double dNumGroups);
+static void consider_parallel_hash_groupingsets_paths(PlannerInfo *root,
+													  RelOptInfo *grouped_rel,
+													  Path *path,
+													  grouping_sets_data *gd,
+													  const AggClauseCosts *agg_costs,
+													  double dNumGroups);
 static RelOptInfo *create_window_paths(PlannerInfo *root,
 									   RelOptInfo *input_rel,
 									   PathTarget *input_target,
@@ -3866,6 +3872,11 @@ create_grouping_paths(PlannerInfo *root,
 		extra.havingQual = parse->havingQual;
 		extra.targetList = parse->targetList;
 		extra.partial_costs_set = false;
+		if (parse->groupClause != NIL &&
+			(gd == NULL || gd->rollups == NIL))
+			extra.hashable_groups = grouping_get_hashable(parse->groupClause);
+		else
+			extra.hashable_groups = NIL;
 
 		/*
 		 * Determine whether partitionwise aggregation is in theory possible.
@@ -4522,6 +4533,78 @@ consider_groupingsets_paths(PlannerInfo *root,
 										  dNumGroups));
 }
 
+static void
+consider_parallel_hash_groupingsets_paths(PlannerInfo *root,
+										  RelOptInfo *grouped_rel,
+										  Path *path,
+										  grouping_sets_data *gd,
+										  const AggClauseCosts *agg_costs,
+										  double dNumGroups)
+{
+	int			hash_mem = get_hash_mem();
+	List	   *new_rollups = NIL;
+	List	   *sets_data;
+	ListCell   *lc;
+	RollupData *rollup;
+	GroupingSetData *gs;
+	double		hashsize;
+	double		numGroups;
+
+	sets_data = list_copy(gd->unsortable_sets);
+	foreach (lc, gd->rollups)
+	{
+		rollup = lfirst_node(RollupData, lc);
+		if (rollup->hashable == false)
+		{
+			list_free(sets_data);
+			return;
+		}
+		sets_data = list_concat(sets_data, rollup->gsets_data);
+	}
+	foreach (lc, sets_data)
+	{
+		gs = lfirst_node(GroupingSetData, lc);
+		numGroups = gs->numGroups / max_hashagg_batches;
+		if (numGroups < 1.0)
+			numGroups = 1.0;
+		hashsize = estimate_hashagg_tablesize(root,
+											  path,
+											  agg_costs,
+											  numGroups);
+		if (hashsize > hash_mem * 1024L)
+		{
+			list_free(sets_data);
+			list_free_deep(new_rollups);
+			return;
+		}
+
+		rollup = makeNode(RollupData);
+		rollup->groupClause = preprocess_groupclause(root, gs->set);
+		rollup->gsets_data = list_make1(gs);
+		rollup->gsets = remap_to_groupclause_idx(rollup->groupClause,
+												 rollup->gsets_data,
+												 gd->tleref_to_colnum_map);
+		rollup->numGroups = gs->numGroups;
+		rollup->hashable = true;
+		rollup->is_hashed = true;
+		new_rollups = lappend(new_rollups, rollup);
+	}
+
+	numGroups = dNumGroups / path->parallel_workers;
+	if (numGroups < list_length(new_rollups))
+		numGroups = list_length(new_rollups);
+	path = (Path*)create_groupingsets_path(root,
+										   grouped_rel,
+										   path,
+										   (List*) root->parse->havingQual,
+										   AGG_BATCH_HASH,
+										   new_rollups,
+										   agg_costs,
+										   numGroups);
+	path->parallel_aware = true;
+	add_partial_path(grouped_rel, path);
+}
+
 /*
  * create_window_paths
  *
@@ -4795,6 +4878,8 @@ create_distinct_paths(PlannerInfo *root,
 											  cheapest_input_path->rows,
 											  NULL);
 	}
+	distinct_rel->rows = numDistinctRows;
+	distinct_rel->reltarget = root->upper_targets[UPPERREL_DISTINCT];
 
 	/*
 	 * Consider sort-based implementations of DISTINCT, if possible.
@@ -4814,6 +4899,7 @@ create_distinct_paths(PlannerInfo *root,
 		 * the other.)
 		 */
 		List	   *needed_pathkeys;
+		List	   *hashable_clause;
 
 		if (parse->hasDistinctOn &&
 			list_length(root->distinct_pathkeys) <
@@ -4860,6 +4946,39 @@ create_distinct_paths(PlannerInfo *root,
 										  path,
 										  list_length(root->distinct_pathkeys),
 										  numDistinctRows));
+
+		/* add parallel unique */
+		if (max_sort_batches > 0 &&
+			distinct_rel->consider_parallel &&
+			input_rel->partial_pathlist != NIL &&
+			numDistinctRows >= 2.0 &&
+			(hashable_clause = grouping_get_hashable(parse->distinctClause)) != NIL)
+		{
+			double	numPartialDistinctRows;
+			uint32	num_batchs = (uint32)numDistinctRows;
+			if (num_batchs > max_sort_batches)
+				num_batchs = max_sort_batches;
+
+			foreach (lc, input_rel->partial_pathlist)
+			{
+				Path *path = (Path*)create_batchsort_path(root,
+														  distinct_rel,
+														  lfirst(lc),
+														  needed_pathkeys,
+														  hashable_clause,
+														  num_batchs,
+														  true);
+				numPartialDistinctRows = numDistinctRows / path->parallel_workers;
+				if (numPartialDistinctRows < 1.0)
+					numPartialDistinctRows = 1.0;
+				path = (Path*)create_upper_unique_path(root,
+													   distinct_rel,
+													   path,
+													   list_length(root->distinct_pathkeys),
+													   numPartialDistinctRows);
+				add_partial_path(distinct_rel, path);
+			}
+		}
 	}
 
 	/*
@@ -4895,7 +5014,33 @@ create_distinct_paths(PlannerInfo *root,
 								 NIL,
 								 NULL,
 								 numDistinctRows));
+
+		/* Generate parallel batch hashed aggregate path */
+		if (max_hashagg_batches > 0 &&
+			distinct_rel->consider_parallel &&
+			input_rel->partial_pathlist != NIL &&
+			numDistinctRows > 1.0)
+		{
+			Path *path = linitial(input_rel->partial_pathlist);
+			double numRows = numDistinctRows / path->parallel_workers;
+			if (numRows < 1.0)
+				numRows = 1.0;
+			path = (Path *)create_agg_path(root,
+										   distinct_rel,
+										   path,
+										   path->pathtarget,
+										   AGG_BATCH_HASH,
+										   AGGSPLIT_SIMPLE,
+										   parse->distinctClause,
+										   NIL,
+										   NULL,
+										   numRows);
+			path->parallel_aware = true;
+			add_partial_path(distinct_rel, path);
+		}
 	}
+
+	generate_useful_gather_paths(root, distinct_rel, false);
 
 	/* Give a helpful error if we failed to find any implementation */
 	if (distinct_rel->pathlist == NIL)
@@ -6655,6 +6800,58 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 		}
 
 		/*
+		 * create simple agg using parallel
+		 */
+		if (max_sort_batches > 0 &&
+			grouped_rel->consider_parallel &&
+			extra->hashable_groups != NIL &&
+			input_rel->partial_pathlist != NIL &&
+			dNumGroups >= 2.0)
+		{
+			Path	   *path;
+			double		numGroups;
+			uint32		numBatches = (uint32)dNumGroups;
+
+			if (numBatches > max_sort_batches)
+				numBatches = max_sort_batches;
+			numGroups = dNumGroups / numBatches;
+			if (numGroups < 1.0)
+				numGroups = 1.0;
+
+			Assert(parse->groupingSets == NIL);
+			Assert(parse->groupClause != NIL);
+			foreach (lc, input_rel->partial_pathlist)
+			{
+				path = (Path*)create_batchsort_path(root,
+													grouped_rel,
+													lfirst(lc),
+													root->group_pathkeys,
+													extra->hashable_groups,
+													numBatches,
+													true);
+				if (parse->hasAggs)
+					path = (Path*)create_agg_path(root,
+												  grouped_rel,
+												  path,
+												  grouped_rel->reltarget,
+												  AGG_SORTED,
+												  AGGSPLIT_SIMPLE,
+												  parse->groupClause,
+												  havingQual,
+												  agg_costs,
+												  numGroups);
+				else
+					path = (Path*)create_group_path(root,
+													grouped_rel,
+													path,
+													parse->groupClause,
+													havingQual,
+													numGroups);
+				add_partial_path(grouped_rel, path);
+			}
+		}
+
+		/*
 		 * Instead of operating directly on the input relation, we can
 		 * consider finalizing a partially aggregated path.
 		 */
@@ -6757,6 +6954,56 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 											   havingQual,
 											   dNumGroups));
 			}
+
+			/* create parallel batch sort aggregate paths */
+			if (max_sort_batches > 0 &&
+				grouped_rel->consider_parallel &&
+				extra->hashable_groups != NIL &&
+				partially_grouped_rel->partial_pathlist != NIL &&
+				dNumGroups >= 2.0)
+			{
+				Path	   *path;
+				double		numGroups;
+				uint32		numBatches = (uint32)dNumGroups;
+
+				if (numBatches > max_sort_batches)
+					numBatches = max_sort_batches;
+				numGroups = dNumGroups / numBatches;
+				if (numGroups < 1.0)
+					numGroups = 1.0;
+
+				Assert(parse->groupingSets == NIL);
+				Assert(parse->groupClause != NIL);
+				foreach (lc, partially_grouped_rel->partial_pathlist)
+				{
+					path = (Path*)create_batchsort_path(root,
+														grouped_rel,
+														lfirst(lc),
+														root->group_pathkeys,
+														extra->hashable_groups,
+														numBatches,
+														true);
+					if (parse->hasAggs)
+						path = (Path*)create_agg_path(root,
+													  grouped_rel,
+													  path,
+													  grouped_rel->reltarget,
+													  AGG_SORTED,
+													  AGGSPLIT_FINAL_DESERIAL,
+													  parse->groupClause,
+													  havingQual,
+													  agg_costs,
+													  numGroups);
+					else
+						path = (Path*)create_group_path(root,
+														grouped_rel,
+														path,
+														parse->groupClause,
+														havingQual,
+														numGroups);
+					add_partial_path(grouped_rel, path);
+				}
+			}
 		}
 	}
 
@@ -6770,6 +7017,15 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 			consider_groupingsets_paths(root, grouped_rel,
 										cheapest_path, false, true,
 										gd, agg_costs, dNumGroups);
+			if (max_hashagg_batches > 0 &&
+				grouped_rel->consider_parallel &&
+				input_rel->partial_pathlist != NIL)
+				consider_parallel_hash_groupingsets_paths(root,
+														  grouped_rel,
+														  linitial(input_rel->partial_pathlist),
+														  gd,
+														  agg_costs,
+														  dNumGroups);
 		}
 		else
 		{
@@ -6787,6 +7043,29 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 									 havingQual,
 									 agg_costs,
 									 dNumGroups));
+
+			if (max_hashagg_batches > 0 &&
+				grouped_rel->consider_parallel &&
+				input_rel->partial_pathlist != NIL &&
+				dNumGroups >= 2.0)
+			{
+				Path   *path = linitial(input_rel->partial_pathlist);
+				double	numGroups = dNumGroups / path->parallel_workers;
+				if (numGroups < 1.0)
+					numGroups = 1.0;
+				path = (Path*)create_agg_path(root,
+											  grouped_rel,
+											  path,
+											  grouped_rel->reltarget,
+											  AGG_BATCH_HASH,
+											  AGGSPLIT_SIMPLE,
+											  parse->groupClause,
+											  havingQual,
+											  agg_costs,
+											  numGroups);
+				path->parallel_aware = true;
+				add_partial_path(grouped_rel, path);
+			}
 		}
 
 		/*
@@ -6808,6 +7087,32 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 									 havingQual,
 									 agg_final_costs,
 									 dNumGroups));
+		}
+
+		/*
+		 * Generate a Finalize BatchHashAgg
+		 */
+		if (max_hashagg_batches > 0 &&
+			dNumGroups >= 2.0 &&
+			partially_grouped_rel &&
+			partially_grouped_rel->partial_pathlist)
+		{
+			Path   *path = linitial(partially_grouped_rel->partial_pathlist);
+			double	numGroups = dNumGroups / path->parallel_workers;
+			if (numGroups < 1.0)
+				numGroups = 1.0;
+			path = (Path*)create_agg_path(root,
+										  grouped_rel,
+										  path,
+										  grouped_rel->reltarget,
+										  AGG_BATCH_HASH,
+										  AGGSPLIT_FINAL_DESERIAL,
+										  parse->groupClause,
+										  havingQual,
+										  agg_final_costs,
+										  numGroups);
+			path->parallel_aware = true;
+			add_partial_path(grouped_rel, path);
 		}
 	}
 

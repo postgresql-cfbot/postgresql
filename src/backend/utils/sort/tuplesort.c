@@ -4574,6 +4574,26 @@ tuplesort_initialize_shared(Sharedsort *shared, int nWorkers, dsm_segment *seg)
 }
 
 /*
+ * tuplesort_reset_shared - reset shared tuplesort state
+ *
+ * Must be called from leader process before workers are launched,
+ * can be reuse after this call
+ */
+void
+tuplesort_reset_shared(Sharedsort *shared)
+{
+	int			i;
+
+	shared->currentWorker = 0;
+	shared->workersFinished = 0;
+	SharedFileSetDeleteAll(&shared->fileset);
+	for (i = 0; i < shared->nTapes; i++)
+	{
+		shared->tapes[i].firstblocknumber = 0L;
+	}
+}
+
+/*
  * tuplesort_attach_shared - attach to shared tuplesort state
  *
  * Must be called by all worker processes.

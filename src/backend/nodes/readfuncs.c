@@ -2182,6 +2182,21 @@ _readSort(void)
 	READ_DONE();
 }
 
+static BatchSort *
+_readBatchSort(void)
+{
+	READ_LOCALS(BatchSort);
+
+	ReadCommonSort(&local_node->sort);
+
+	READ_INT_FIELD(numGroupCols);
+	READ_INT_FIELD(numBatches);
+	READ_INT_FIELD(gather_param);
+	READ_ATTRNUMBER_ARRAY(grpColIdx, local_node->numGroupCols);
+
+	READ_DONE();
+}
+
 /*
  * _readIncrementalSort
  */
@@ -2236,6 +2251,8 @@ _readAgg(void)
 	READ_BITMAPSET_FIELD(aggParams);
 	READ_NODE_FIELD(groupingSets);
 	READ_NODE_FIELD(chain);
+	READ_INT_FIELD(numBatches);
+	READ_INT_FIELD(gatherParam);
 
 	READ_DONE();
 }
@@ -2835,6 +2852,8 @@ parseNodeString(void)
 		return_value = _readMaterial();
 	else if (MATCH("SORT", 4))
 		return_value = _readSort();
+	else if (MATCH("BATCHSORT", 9))
+		return_value = _readBatchSort();
 	else if (MATCH("INCREMENTALSORT", 15))
 		return_value = _readIncrementalSort();
 	else if (MATCH("GROUP", 5))

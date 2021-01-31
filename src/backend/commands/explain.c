@@ -1283,6 +1283,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Sort:
 			pname = sname = "Sort";
 			break;
+		case T_BatchSort:
+			pname = sname = "BatchSort";
+			break;
 		case T_IncrementalSort:
 			pname = sname = "Incremental Sort";
 			break;
@@ -1311,6 +1314,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 					case AGG_MIXED:
 						pname = "MixedAggregate";
 						strategy = "Mixed";
+						break;
+					case AGG_BATCH_HASH:
+						pname = "BatchHashAggregate";
+						strategy = "BatchHashed";
 						break;
 					default:
 						pname = "Aggregate ???";
@@ -1945,6 +1952,18 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Sort:
 			show_sort_keys(castNode(SortState, planstate), ancestors, es);
 			show_sort_info(castNode(SortState, planstate), es);
+			break;
+		case T_BatchSort:
+			{
+				BatchSort *bsort = (BatchSort*)plan;
+				show_sort_group_keys(planstate, "Sort Key",
+									 bsort->sort.numCols, 0, bsort->sort.sortColIdx,
+									 bsort->sort.sortOperators, bsort->sort.collations,
+									 bsort->sort.nullsFirst,
+									 ancestors, es);
+				if (es->verbose)
+					ExplainPropertyInteger("batches", NULL, bsort->numBatches, es);
+			}
 			break;
 		case T_IncrementalSort:
 			show_incremental_sort_keys(castNode(IncrementalSortState, planstate),
@@ -3054,6 +3073,7 @@ show_hashagg_info(AggState *aggstate, ExplainState *es)
 	int64		memPeakKb = (aggstate->hash_mem_peak + 1023) / 1024;
 
 	if (agg->aggstrategy != AGG_HASHED &&
+		agg->aggstrategy != AGG_BATCH_HASH &&
 		agg->aggstrategy != AGG_MIXED)
 		return;
 

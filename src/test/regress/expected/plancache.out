@@ -311,12 +311,14 @@ select name, generic_plans, custom_plans from pg_prepared_statements
 -- force generic plan
 set plan_cache_mode to force_generic_plan;
 explain (costs off) execute test_mode_pp(2);
-         QUERY PLAN          
------------------------------
+                    QUERY PLAN                    
+--------------------------------------------------
  Aggregate
-   ->  Seq Scan on test_mode
-         Filter: (a = $1)
-(3 rows)
+   ->  Bitmap Heap Scan on test_mode
+         Recheck Cond: (a = $1)
+         ->  Bitmap Index Scan on test_mode_a_idx
+               Index Cond: (a = $1)
+(5 rows)
 
 select name, generic_plans, custom_plans from pg_prepared_statements
   where  name = 'test_mode_pp';
@@ -373,12 +375,14 @@ select name, generic_plans, custom_plans from pg_prepared_statements
 
 -- we should now get a really bad plan
 explain (costs off) execute test_mode_pp(2);
-         QUERY PLAN          
------------------------------
+                    QUERY PLAN                    
+--------------------------------------------------
  Aggregate
-   ->  Seq Scan on test_mode
-         Filter: (a = $1)
-(3 rows)
+   ->  Bitmap Heap Scan on test_mode
+         Recheck Cond: (a = $1)
+         ->  Bitmap Index Scan on test_mode_a_idx
+               Index Cond: (a = $1)
+(5 rows)
 
 -- but we can force a custom plan
 set plan_cache_mode to force_custom_plan;

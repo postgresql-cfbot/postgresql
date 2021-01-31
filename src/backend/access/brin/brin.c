@@ -33,6 +33,7 @@
 #include "postmaster/autovacuum.h"
 #include "storage/bufmgr.h"
 #include "storage/freespace.h"
+#include "storage/lmgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/index_selfuncs.h"
@@ -887,21 +888,35 @@ brin_summarize_range(PG_FUNCTION_ARGS)
 
 	/*
 	 * We must lock table before index to avoid deadlocks.  However, if the
-	 * passed indexoid isn't an index then IndexGetRelation() will fail.
-	 * Rather than emitting a not-very-helpful error message, postpone
-	 * complaining, expecting that the is-it-an-index test below will fail.
+	 * passed indexoid isn't an index, then IndexGetRelation(false) would
+	 * emit a not-very-helpful error message.  Instead, postpone complaining
+	 * until the is-it-an-index test, below.
 	 */
 	heapoid = IndexGetRelation(indexoid, true);
-	if (OidIsValid(heapoid))
-		heapRel = table_open(heapoid, ShareUpdateExclusiveLock);
-	else
-		heapRel = NULL;
+	if (heapoid != InvalidOid)
+		LockRelationOid(heapoid, ShareUpdateExclusiveLock);
 
-	indexRel = index_open(indexoid, ShareUpdateExclusiveLock);
+	/* Now we can open the index; silently skip if it's gone. */
+	indexRel = try_relation_open(indexoid, ShareUpdateExclusiveLock);
+	if (!indexRel)
+	{
+		if (heapoid != InvalidOid)
+			UnlockRelationOid(heapoid, ShareUpdateExclusiveLock);
+		PG_RETURN_INT32(0);
+	}
+
+	/* If passed a non-index, fail noisily */
+	if (indexRel->rd_rel->relkind != RELKIND_INDEX)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("\"%s\" is not an index",
+						RelationGetRelationName(indexRel))));
+
+	/* Now we can open the table */
+	heapRel = table_open(heapoid, NoLock);
 
 	/* Must be a BRIN index */
-	if (indexRel->rd_rel->relkind != RELKIND_INDEX ||
-		indexRel->rd_rel->relam != BRIN_AM_OID)
+	if (indexRel->rd_rel->relam != BRIN_AM_OID)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is not a BRIN index",
@@ -917,7 +932,7 @@ brin_summarize_range(PG_FUNCTION_ARGS)
 	 * barely possible that a race against an index drop/recreation could have
 	 * netted us the wrong table.  Recheck.
 	 */
-	if (heapRel == NULL || heapoid != IndexGetRelation(indexoid, false))
+	if (heapoid != IndexGetRelation(indexoid, false))
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_TABLE),
 				 errmsg("could not open parent table of index %s",

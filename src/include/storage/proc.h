@@ -79,6 +79,14 @@ struct XidCache
  */
 #define INVALID_PGPROCNO		PG_INT32_MAX
 
+/* type for PGPROC.delayChkpt */
+typedef enum DelayChkptType
+{
+	DELAY_CHKPT_NONE = 0,
+	DELAY_CHKPT_START,
+	DELAY_CHKPT_COMPLETE
+} DelayChkptType;
+
 typedef enum
 {
 	PROC_WAIT_STATUS_OK,
@@ -182,7 +190,8 @@ struct PGPROC
 	LOCKMASK	heldLocks;		/* bitmask for lock types already held on this
 								 * lock object by this backend */
 
-	bool		delayChkpt;		/* true if this proc delays checkpoint start */
+	DelayChkptType	delayChkpt;	/* if this proc delays checkpoint start and/or
+								 * completion.  */
 
 	uint8		statusFlags;	/* this backend's status flags, see PROC_*
 								 * above. mirrored in

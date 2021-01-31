@@ -87,7 +87,7 @@ class="parameter">referential_action</replaceable> ] [ ON UPDATE <replaceable cl
 
 <phrase>and <replaceable class="parameter">like_option</replaceable> is:</phrase>
 
-{ INCLUDING | EXCLUDING } { COMMENTS | CONSTRAINTS | DEFAULTS | GENERATED | IDENTITY | INDEXES | STATISTICS | STORAGE | ALL }
+{ INCLUDING | EXCLUDING } { COMMENTS | CONSTRAINTS | DEFAULTS | GENERATED | IDENTITY | INDEXES | STATISTICS | STORAGE | TABLE ACCESS METHOD | ALL }
 
 <phrase>and <replaceable class="parameter">partition_bound_spec</replaceable> is:</phrase>
 
@@ -685,6 +685,16 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
           in the new table having type-specific default settings.  For more on
           <literal>STORAGE</literal> settings, see <xref
           linkend="storage-toast"/>.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><literal>INCLUDING TABLE ACCESS METHOD</literal></term>
+        <listitem>
+         <para>
+          The table's access method will be copied.  By default, the
+          <literal>default_table_access_method</literal> is used.
          </para>
         </listitem>
        </varlistentry>

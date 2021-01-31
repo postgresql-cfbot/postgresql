@@ -165,6 +165,14 @@ CREATE TABLE ctlt_all (LIKE ctlt1 INCLUDING ALL);
 SELECT c.relname, objsubid, description FROM pg_description, pg_index i, pg_class c WHERE classoid = 'pg_class'::regclass AND objoid = i.indexrelid AND c.oid = i.indexrelid AND i.indrelid = 'ctlt_all'::regclass ORDER BY c.relname, objsubid;
 SELECT s.stxname, objsubid, description FROM pg_description, pg_statistic_ext s WHERE classoid = 'pg_statistic_ext'::regclass AND objoid = s.oid AND s.stxrelid = 'ctlt_all'::regclass ORDER BY s.stxname, objsubid;
 
+CREATE ACCESS METHOD heapdup TYPE TABLE HANDLER heap_tableam_handler;
+CREATE TABLE likeam() USING heapdup;
+CREATE TABLE likeamlike(LIKE likeam INCLUDING ALL);
+-- pg_regress helpfully hides the Access Method output, which we need:
+SELECT a.amname FROM pg_class c JOIN pg_am a ON c.relam=a.oid WHERE c.oid='likeamlike'::regclass;
+DROP TABLE likeam, likeamlike;
+DROP ACCESS METHOD heapdup;
+
 CREATE TABLE inh_error1 () INHERITS (ctlt1, ctlt4);
 CREATE TABLE inh_error2 (LIKE ctlt4 INCLUDING STORAGE) INHERITS (ctlt1);
 

@@ -429,6 +429,18 @@ SELECT s.stxname, objsubid, description FROM pg_description, pg_statistic_ext s 
  ctlt_all_a_b_stat |        0 | ab stats
 (1 row)
 
+CREATE ACCESS METHOD heapdup TYPE TABLE HANDLER heap_tableam_handler;
+CREATE TABLE likeam() USING heapdup;
+CREATE TABLE likeamlike(LIKE likeam INCLUDING ALL);
+-- pg_regress helpfully hides the Access Method output, which we need:
+SELECT a.amname FROM pg_class c JOIN pg_am a ON c.relam=a.oid WHERE c.oid='likeamlike'::regclass;
+ amname  
+---------
+ heapdup
+(1 row)
+
+DROP TABLE likeam, likeamlike;
+DROP ACCESS METHOD heapdup;
 CREATE TABLE inh_error1 () INHERITS (ctlt1, ctlt4);
 NOTICE:  merging multiple inherited definitions of column "a"
 ERROR:  inherited column "a" has a storage parameter conflict

@@ -1831,7 +1831,7 @@ index_concurrently_swap(Oid newIndexId, Oid oldIndexId, const char *oldName)
 		List	   *ancestors = get_partition_ancestors(oldIndexId);
 		Oid			parentIndexRelid = linitial_oid(ancestors);
 
-		DeleteInheritsTuple(oldIndexId, parentIndexRelid);
+		DeleteInheritsTuple(oldIndexId, parentIndexRelid, false, NULL);
 		StoreSingleInheritance(newIndexId, parentIndexRelid, 1);
 
 		list_free(ancestors);
@@ -2425,7 +2425,7 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	/*
 	 * fix INHERITS relation
 	 */
-	DeleteInheritsTuple(indexId, InvalidOid);
+	DeleteInheritsTuple(indexId, InvalidOid, false, NULL);
 
 	/*
 	 * We are presently too lazy to attempt to compute the new correct value

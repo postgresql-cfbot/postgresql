@@ -32,7 +32,7 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
-static Oid	get_partition_parent_worker(Relation inhRel, Oid relid);
+static Oid	get_partition_parent_worker(Relation inhRel, Oid relid, bool *detached);
 static void get_partition_ancestors_worker(Relation inhRel, Oid relid,
 										   List **ancestors);
 
@@ -41,6 +41,9 @@ static void get_partition_ancestors_worker(Relation inhRel, Oid relid,
  *		Obtain direct parent of given relation
  *
  * Returns inheritance parent of a partition by scanning pg_inherits
+ *
+ * If the partition is in the process of being detached, InvalidOid is
+ * returned and no error is thrown.
  *
  * Note: Because this function assumes that the relation whose OID is passed
  * as an argument will have precisely one parent, it should only be called
@@ -51,12 +54,15 @@ get_partition_parent(Oid relid)
 {
 	Relation	catalogRelation;
 	Oid			result;
+	bool		detached;
 
 	catalogRelation = table_open(InheritsRelationId, AccessShareLock);
 
-	result = get_partition_parent_worker(catalogRelation, relid);
+	result = get_partition_parent_worker(catalogRelation, relid, &detached);
 
-	if (!OidIsValid(result))
+	if (detached)
+		result = InvalidOid;
+	else if (!OidIsValid(result))
 		elog(ERROR, "could not find tuple for parent of relation %u", relid);
 
 	table_close(catalogRelation, AccessShareLock);
@@ -70,12 +76,14 @@ get_partition_parent(Oid relid)
  *		given relation
  */
 static Oid
-get_partition_parent_worker(Relation inhRel, Oid relid)
+get_partition_parent_worker(Relation inhRel, Oid relid, bool *detached)
 {
 	SysScanDesc scan;
 	ScanKeyData key[2];
 	Oid			result = InvalidOid;
 	HeapTuple	tuple;
+
+	*detached = false;
 
 	ScanKeyInit(&key[0],
 				Anum_pg_inherits_inhrelid,
@@ -93,7 +101,14 @@ get_partition_parent_worker(Relation inhRel, Oid relid)
 	{
 		Form_pg_inherits form = (Form_pg_inherits) GETSTRUCT(tuple);
 
-		result = form->inhparent;
+		/* A partition being detached has no parent */
+		if (form->inhdetached)
+		{
+			*detached = true;
+			result = InvalidOid;
+		}
+		else
+			result = form->inhparent;
 	}
 
 	systable_endscan(scan);
@@ -134,9 +149,10 @@ static void
 get_partition_ancestors_worker(Relation inhRel, Oid relid, List **ancestors)
 {
 	Oid			parentOid;
+	bool		detached;
 
 	/* Recursion ends at the topmost level, ie., when there's no parent */
-	parentOid = get_partition_parent_worker(inhRel, relid);
+	parentOid = get_partition_parent_worker(inhRel, relid, &detached);
 	if (parentOid == InvalidOid)
 		return;
 

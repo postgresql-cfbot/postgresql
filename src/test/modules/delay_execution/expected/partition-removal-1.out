@@ -1,0 +1,79 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3lock s1b s1exec s2remp s3unlock s1c
+step s3lock: SELECT pg_advisory_lock(12543);
+pg_advisory_lock
+
+               
+step s1b: BEGIN;
+step s1exec: SELECT * FROM partrem WHERE a <> 1 AND a <> (SELECT 3); <waiting ...>
+step s2remp: ALTER TABLE partrem DETACH PARTITION partrem2 CONCURRENTLY; <waiting ...>
+step s3unlock: SELECT pg_advisory_unlock(12543);
+pg_advisory_unlock
+
+t              
+step s1exec: <... completed>
+a              b              
+
+2              JKL            
+step s1c: COMMIT;
+step s2remp: <... completed>
+
+starting permutation: s3lock s1brr s1exec s2remp s3unlock s1c
+step s3lock: SELECT pg_advisory_lock(12543);
+pg_advisory_lock
+
+               
+step s1brr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1exec: SELECT * FROM partrem WHERE a <> 1 AND a <> (SELECT 3); <waiting ...>
+step s2remp: ALTER TABLE partrem DETACH PARTITION partrem2 CONCURRENTLY; <waiting ...>
+step s3unlock: SELECT pg_advisory_unlock(12543);
+pg_advisory_unlock
+
+t              
+step s1exec: <... completed>
+a              b              
+
+2              JKL            
+step s1c: COMMIT;
+step s2remp: <... completed>
+
+starting permutation: s3lock s1b s1exec2 s2remp s3unlock s1c
+step s3lock: SELECT pg_advisory_lock(12543);
+pg_advisory_lock
+
+               
+step s1b: BEGIN;
+step s1exec2: SELECT * FROM partrem WHERE a <> (SELECT 2); <waiting ...>
+step s2remp: ALTER TABLE partrem DETACH PARTITION partrem2 CONCURRENTLY; <waiting ...>
+step s3unlock: SELECT pg_advisory_unlock(12543);
+pg_advisory_unlock
+
+t              
+step s1exec2: <... completed>
+a              b              
+
+1              ABC            
+3              DEF            
+step s1c: COMMIT;
+step s2remp: <... completed>
+
+starting permutation: s3lock s1brr s1exec2 s2remp s3unlock s1c
+step s3lock: SELECT pg_advisory_lock(12543);
+pg_advisory_lock
+
+               
+step s1brr: BEGIN ISOLATION LEVEL REPEATABLE READ;
+step s1exec2: SELECT * FROM partrem WHERE a <> (SELECT 2); <waiting ...>
+step s2remp: ALTER TABLE partrem DETACH PARTITION partrem2 CONCURRENTLY; <waiting ...>
+step s3unlock: SELECT pg_advisory_unlock(12543);
+pg_advisory_unlock
+
+t              
+step s1exec2: <... completed>
+a              b              
+
+1              ABC            
+3              DEF            
+step s1c: COMMIT;
+step s2remp: <... completed>

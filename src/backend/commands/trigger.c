@@ -1127,7 +1127,7 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 	 */
 	if (partition_recurse)
 	{
-		PartitionDesc partdesc = RelationGetPartitionDesc(rel);
+		PartitionDesc partdesc = RelationGetPartitionDesc(rel, false);
 		List	   *idxs = NIL;
 		List	   *childTbls = NIL;
 		ListCell   *l;
@@ -1149,7 +1149,8 @@ CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 			ListCell   *l;
 			List	   *idxs = NIL;
 
-			idxs = find_inheritance_children(indexOid, ShareRowExclusiveLock);
+			idxs = find_inheritance_children(indexOid, false,
+											 ShareRowExclusiveLock);
 			foreach(l, idxs)
 				childTbls = lappend_oid(childTbls,
 										IndexGetRelation(lfirst_oid(l),

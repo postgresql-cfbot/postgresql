@@ -645,7 +645,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN EXPRESSION
 	EXTENSION EXTERNAL EXTRACT
 
-	FALSE_P FAMILY FETCH FILTER FIRST_P FLOAT_P FOLLOWING FOR
+	FALSE_P FAMILY FETCH FILTER FINALIZE FIRST_P FLOAT_P FOLLOWING FOR
 	FORCE FOREIGN FORWARD FREEZE FROM FULL FUNCTION FUNCTIONS
 
 	GENERATED GLOBAL GRANT GRANTED GREATEST GROUP_P GROUPING GROUPS
@@ -2095,12 +2095,13 @@ partition_cmd:
 					n->subtype = AT_AttachPartition;
 					cmd->name = $3;
 					cmd->bound = $4;
+					cmd->concurrent = false;
 					n->def = (Node *) cmd;
 
 					$$ = (Node *) n;
 				}
-			/* ALTER TABLE <name> DETACH PARTITION <partition_name> */
-			| DETACH PARTITION qualified_name
+			/* ALTER TABLE <name> DETACH PARTITION <partition_name> [CONCURRENTLY] */
+			| DETACH PARTITION qualified_name opt_concurrently
 				{
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 					PartitionCmd *cmd = makeNode(PartitionCmd);
@@ -2108,8 +2109,21 @@ partition_cmd:
 					n->subtype = AT_DetachPartition;
 					cmd->name = $3;
 					cmd->bound = NULL;
+					cmd->concurrent = $4;
 					n->def = (Node *) cmd;
 
+					$$ = (Node *) n;
+				}
+			| DETACH PARTITION qualified_name FINALIZE
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					PartitionCmd *cmd = makeNode(PartitionCmd);
+
+					n->subtype = AT_DetachPartitionFinalize;
+					cmd->name = $3;
+					cmd->bound = NULL;
+					cmd->concurrent = false;
+					n->def = (Node *) cmd;
 					$$ = (Node *) n;
 				}
 		;
@@ -2124,6 +2138,7 @@ index_partition_cmd:
 					n->subtype = AT_AttachPartition;
 					cmd->name = $3;
 					cmd->bound = NULL;
+					cmd->concurrent = false;
 					n->def = (Node *) cmd;
 
 					$$ = (Node *) n;
@@ -15291,6 +15306,7 @@ unreserved_keyword:
 			| EXTERNAL
 			| FAMILY
 			| FILTER
+			| FINALIZE
 			| FIRST_P
 			| FOLLOWING
 			| FORCE
@@ -15829,6 +15845,7 @@ bare_label_keyword:
 			| EXTRACT
 			| FALSE_P
 			| FAMILY
+			| FINALIZE
 			| FIRST_P
 			| FLOAT_P
 			| FOLLOWING

@@ -2430,6 +2430,34 @@ eval_const_expressions_mutator(Node *node,
 				newexpr->location = expr->location;
 				return (Node *) newexpr;
 			}
+		case T_NullIfExpr:
+			{
+				/*
+				 * Since NullIf is not common enough to deserve specially
+				 * optimized code, use ece_generic_processing and
+				 * ece_evaluate_expr to simplify the code as much as possible.
+				 */
+				NullIfExpr	   *expr;
+				ListCell	   *arg;
+				bool			has_nonconst_input = false;
+
+				/* Copy the node and const-simplify its arguments */
+				expr = (NullIfExpr *) ece_generic_processing(node);
+
+				/* If either argument is NULL they can't be equal */
+				foreach(arg, expr->args)
+				{
+					if (!IsA(lfirst(arg), Const))
+						has_nonconst_input = true;
+					else if (((Const *) lfirst(arg))->constisnull)
+						return (Node *) linitial(expr->args);
+				}
+
+				if (!has_nonconst_input)
+					return ece_evaluate_expr(expr);
+
+				return (Node *) expr;
+			}
 		case T_ScalarArrayOpExpr:
 			{
 				ScalarArrayOpExpr *saop;

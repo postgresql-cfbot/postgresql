@@ -59,6 +59,7 @@
 #include "access/parallel.h"
 #include "access/transam.h"
 #include "access/visibilitymap.h"
+#include "access/walprohibit.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/storage.h"
@@ -758,6 +759,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 	BlockNumber nblocks,
 				blkno;
 	HeapTupleData tuple;
+	bool		needwal = RelationNeedsWAL(onerel);
 	TransactionId relfrozenxid = onerel->rd_rel->relfrozenxid;
 	TransactionId relminmxid = onerel->rd_rel->relminmxid;
 	BlockNumber empty_pages,
@@ -1200,6 +1202,9 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			 */
 			if (!PageIsAllVisible(page))
 			{
+				if (needwal)
+					CheckWALPermitted();
+
 				START_CRIT_SECTION();
 
 				/* mark buffer dirty before writing a WAL record */
@@ -1215,7 +1220,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 				 * page has been previously WAL-logged, and if not, do that
 				 * now.
 				 */
-				if (RelationNeedsWAL(onerel) &&
+				if (needwal &&
 					PageGetLSN(page) == InvalidXLogRecPtr)
 					log_newpage_buffer(buf, true);
 
@@ -1481,6 +1486,9 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 		 */
 		if (nfrozen > 0)
 		{
+			if (needwal)
+				CheckWALPermitted();
+
 			START_CRIT_SECTION();
 
 			MarkBufferDirty(buf);
@@ -1498,7 +1506,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 			}
 
 			/* Now WAL-log freezing if necessary */
-			if (RelationNeedsWAL(onerel))
+			if (needwal)
 			{
 				XLogRecPtr	recptr;
 
@@ -1931,12 +1939,16 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 	TransactionId visibility_cutoff_xid;
 	bool		all_frozen;
 	LVSavedErrInfo saved_err_info;
+	bool		needwal = RelationNeedsWAL(onerel);
 
 	pgstat_progress_update_param(PROGRESS_VACUUM_HEAP_BLKS_VACUUMED, blkno);
 
 	/* Update error traceback information */
 	update_vacuum_error_info(vacrelstats, &saved_err_info, VACUUM_ERRCB_PHASE_VACUUM_HEAP,
 							 blkno, InvalidOffsetNumber);
+
+	if (needwal)
+		CheckWALPermitted();
 
 	START_CRIT_SECTION();
 
@@ -1963,7 +1975,7 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 	MarkBufferDirty(buffer);
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(onerel))
+	if (needwal)
 	{
 		XLogRecPtr	recptr;
 

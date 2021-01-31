@@ -19,6 +19,7 @@
 
 #include "postgres.h"
 
+#include "access/walprohibit.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
@@ -126,9 +127,14 @@ XLogBeginInsert(void)
 	Assert(mainrdata_last == (XLogRecData *) &mainrdata_head);
 	Assert(mainrdata_len == 0);
 
+	/*
+	 * WAL permission must have checked before entering the critical section.
+	 * Otherwise, WAL prohibited error will force system panic.
+	 */
+	Assert(walpermit_checked_state != WALPERMIT_UNCHECKED || !CritSectionCount);
+
 	/* cross-check on whether we should be here or not */
-	if (!XLogInsertAllowed())
-		elog(ERROR, "cannot make new WAL entries during recovery");
+	CheckWALPermitted();
 
 	if (begininsert_called)
 		elog(ERROR, "XLogBeginInsert was already called");
@@ -210,6 +216,9 @@ XLogResetInsertion(void)
 	mainrdata_last = (XLogRecData *) &mainrdata_head;
 	curinsert_flags = 0;
 	begininsert_called = false;
+
+	/* Reset walpermit_checked flag */
+	RESET_WALPERMIT_CHECKED_STATE();
 }
 
 /*

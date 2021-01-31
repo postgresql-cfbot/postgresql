@@ -26,6 +26,7 @@
 #include "access/nbtxlog.h"
 #include "access/tableam.h"
 #include "access/transam.h"
+#include "access/walprohibit.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "miscadmin.h"
@@ -185,6 +186,7 @@ _bt_update_meta_cleanup_info(Relation rel, TransactionId oldestBtpoXact,
 	BTMetaPageData *metad;
 	bool		needsRewrite = false;
 	XLogRecPtr	recptr;
+	bool		needwal;
 
 	/* read the metapage and check if it needs rewrite */
 	metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_READ);
@@ -208,6 +210,10 @@ _bt_update_meta_cleanup_info(Relation rel, TransactionId oldestBtpoXact,
 	_bt_unlockbuf(rel, metabuf);
 	_bt_lockbuf(rel, metabuf, BT_WRITE);
 
+	needwal = RelationNeedsWAL(rel);
+	if (needwal)
+		CheckWALPermitted();
+
 	START_CRIT_SECTION();
 
 	/* upgrade meta-page if needed */
@@ -220,7 +226,7 @@ _bt_update_meta_cleanup_info(Relation rel, TransactionId oldestBtpoXact,
 	MarkBufferDirty(metabuf);
 
 	/* write wal record if needed */
-	if (RelationNeedsWAL(rel))
+	if (needwal)
 	{
 		xl_btree_metadata md;
 
@@ -338,6 +344,7 @@ _bt_getroot(Relation rel, int access)
 	if (metad->btm_root == P_NONE)
 	{
 		Page		metapg;
+		bool		needwal;
 
 		/* If access = BT_READ, caller doesn't want us to create root yet */
 		if (access == BT_READ)
@@ -383,6 +390,10 @@ _bt_getroot(Relation rel, int access)
 		/* Get raw page pointer for metapage */
 		metapg = BufferGetPage(metabuf);
 
+		needwal = RelationNeedsWAL(rel);
+		if (needwal)
+			CheckWALPermitted();
+
 		/* NO ELOG(ERROR) till meta is updated */
 		START_CRIT_SECTION();
 
@@ -401,7 +412,7 @@ _bt_getroot(Relation rel, int access)
 		MarkBufferDirty(metabuf);
 
 		/* XLOG stuff */
-		if (RelationNeedsWAL(rel))
+		if (needwal)
 		{
 			xl_btree_newroot xlrec;
 			XLogRecPtr	recptr;
@@ -1148,6 +1159,9 @@ _bt_delitems_vacuum(Relation rel, Buffer buf,
 										 updatedoffsets, &updatedbuflen,
 										 needswal);
 
+	if (needswal)
+		CheckWALPermitted();
+
 	/* No ereport(ERROR) until changes are logged */
 	START_CRIT_SECTION();
 
@@ -1278,6 +1292,8 @@ _bt_delitems_delete(Relation rel, Buffer buf, TransactionId latestRemovedXid,
 		updatedbuf = _bt_delitems_update(updatable, nupdatable,
 										 updatedoffsets, &updatedbuflen,
 										 needswal);
+
+	AssertWALPermittedHaveXID();
 
 	/* No ereport(ERROR) until changes are logged */
 	START_CRIT_SECTION();
@@ -2065,6 +2081,7 @@ _bt_mark_page_halfdead(Relation rel, Buffer leafbuf, BTStack stack)
 	OffsetNumber nextoffset;
 	IndexTuple	itup;
 	IndexTupleData trunctuple;
+	bool		needwal;
 
 	page = BufferGetPage(leafbuf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -2153,6 +2170,10 @@ _bt_mark_page_halfdead(Relation rel, Buffer leafbuf, BTStack stack)
 	 */
 	PredicateLockPageCombine(rel, leafblkno, leafrightsib);
 
+	needwal = RelationNeedsWAL(rel);
+	if (needwal)
+		CheckWALPermitted();
+
 	/* No ereport(ERROR) until changes are logged */
 	START_CRIT_SECTION();
 
@@ -2204,7 +2225,7 @@ _bt_mark_page_halfdead(Relation rel, Buffer leafbuf, BTStack stack)
 	MarkBufferDirty(leafbuf);
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(rel))
+	if (needwal)
 	{
 		xl_btree_mark_page_halfdead xlrec;
 		XLogRecPtr	recptr;
@@ -2297,6 +2318,7 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, BlockNumber scanblkno,
 	int			targetlevel;
 	IndexTuple	leafhikey;
 	BlockNumber nextchild;
+	bool		needwal;
 
 	page = BufferGetPage(leafbuf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -2511,6 +2533,10 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, BlockNumber scanblkno,
 	 * Here we begin doing the deletion.
 	 */
 
+	needwal = RelationNeedsWAL(rel);
+	if (needwal)
+		CheckWALPermitted();
+
 	/* No ereport(ERROR) until changes are logged */
 	START_CRIT_SECTION();
 
@@ -2590,7 +2616,7 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, BlockNumber scanblkno,
 		MarkBufferDirty(leafbuf);
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(rel))
+	if (needwal)
 	{
 		xl_btree_unlink_page xlrec;
 		xl_btree_metadata xlmeta;

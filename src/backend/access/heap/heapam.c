@@ -47,6 +47,7 @@
 #include "access/transam.h"
 #include "access/valid.h"
 #include "access/visibilitymap.h"
+#include "access/walprohibit.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
@@ -1957,6 +1958,8 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	 */
 	CheckForSerializableConflictIn(relation, NULL, InvalidBlockNumber);
 
+	AssertWALPermittedHaveXID();
+
 	/* NO EREPORT(ERROR) from here till changes are logged */
 	START_CRIT_SECTION();
 
@@ -2279,6 +2282,8 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 
 		if (starting_with_empty_page && (options & HEAP_INSERT_FROZEN))
 			all_frozen_set = true;
+
+		AssertWALPermittedHaveXID();
 
 		/* NO EREPORT(ERROR) from here till changes are logged */
 		START_CRIT_SECTION();
@@ -2840,6 +2845,8 @@ l1:
 							  tp.t_data->t_infomask, tp.t_data->t_infomask2,
 							  xid, LockTupleExclusive, true,
 							  &new_xmax, &new_infomask, &new_infomask2);
+
+	AssertWALPermittedHaveXID();
 
 	START_CRIT_SECTION();
 
@@ -3593,6 +3600,8 @@ l2:
 
 		Assert(HEAP_XMAX_IS_LOCKED_ONLY(infomask_lock_old_tuple));
 
+		AssertWALPermittedHaveXID();
+
 		START_CRIT_SECTION();
 
 		/* Clear obsolete visibility flags ... */
@@ -3765,6 +3774,8 @@ l2:
 	old_key_tuple = ExtractReplicaIdentity(relation, &oldtup,
 										   bms_overlap(modified_attrs, id_attrs),
 										   &old_key_copied);
+
+	AssertWALPermittedHaveXID();
 
 	/* NO EREPORT(ERROR) from here till changes are logged */
 	START_CRIT_SECTION();
@@ -4699,6 +4710,8 @@ failed:
 							  GetCurrentTransactionId(), mode, false,
 							  &xid, &new_infomask, &new_infomask2);
 
+	AssertWALPermittedHaveXID();
+
 	START_CRIT_SECTION();
 
 	/*
@@ -5490,6 +5503,8 @@ l4:
 								VISIBILITYMAP_ALL_FROZEN))
 			cleared_all_frozen = true;
 
+		AssertWALPermittedHaveXID();
+
 		START_CRIT_SECTION();
 
 		/* ... and set them */
@@ -5648,6 +5663,8 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
 	StaticAssertStmt(MaxOffsetNumber < SpecTokenOffsetNumber,
 					 "invalid speculative token constant");
 
+	AssertWALPermittedHaveXID();
+
 	/* NO EREPORT(ERROR) from here till changes are logged */
 	START_CRIT_SECTION();
 
@@ -5755,6 +5772,8 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 	if (!(IsToastRelation(relation) || HeapTupleHeaderIsSpeculative(tp.t_data)))
 		elog(ERROR, "attempted to kill a non-speculative tuple");
 	Assert(!HeapTupleHeaderIsHeapOnly(tp.t_data));
+
+	AssertWALPermittedHaveXID();
 
 	/*
 	 * No need to check for serializable conflicts here.  There is never a
@@ -5876,6 +5895,7 @@ heap_inplace_update(Relation relation, HeapTuple tuple)
 	HeapTupleHeader htup;
 	uint32		oldlen;
 	uint32		newlen;
+	bool		needwal;
 
 	/*
 	 * For now, we don't allow parallel updates.  Unlike a regular update,
@@ -5906,6 +5926,10 @@ heap_inplace_update(Relation relation, HeapTuple tuple)
 	if (oldlen != newlen || htup->t_hoff != tuple->t_data->t_hoff)
 		elog(ERROR, "wrong tuple length");
 
+	needwal = RelationNeedsWAL(relation);
+	if (needwal)
+		CheckWALPermitted();
+
 	/* NO EREPORT(ERROR) from here till changes are logged */
 	START_CRIT_SECTION();
 
@@ -5916,7 +5940,7 @@ heap_inplace_update(Relation relation, HeapTuple tuple)
 	MarkBufferDirty(buffer);
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(relation))
+	if (needwal)
 	{
 		xl_heap_inplace xlrec;
 		XLogRecPtr	recptr;

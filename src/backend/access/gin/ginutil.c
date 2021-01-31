@@ -17,6 +17,7 @@
 #include "access/gin_private.h"
 #include "access/ginxlog.h"
 #include "access/reloptions.h"
+#include "access/walprohibit.h"
 #include "access/xloginsert.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
@@ -659,11 +660,17 @@ ginUpdateStats(Relation index, const GinStatsData *stats, bool is_build)
 	Buffer		metabuffer;
 	Page		metapage;
 	GinMetaPageData *metadata;
+	bool		needwal;
 
 	metabuffer = ReadBuffer(index, GIN_METAPAGE_BLKNO);
 	LockBuffer(metabuffer, GIN_EXCLUSIVE);
 	metapage = BufferGetPage(metabuffer);
 	metadata = GinPageGetMeta(metapage);
+
+	needwal = RelationNeedsWAL(index) && !is_build;
+
+	if (needwal)
+		CheckWALPermitted();
 
 	START_CRIT_SECTION();
 
@@ -684,7 +691,7 @@ ginUpdateStats(Relation index, const GinStatsData *stats, bool is_build)
 
 	MarkBufferDirty(metabuffer);
 
-	if (RelationNeedsWAL(index) && !is_build)
+	if (needwal)
 	{
 		XLogRecPtr	recptr;
 		ginxlogUpdateMeta data;

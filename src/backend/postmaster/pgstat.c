@@ -4307,6 +4307,12 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_REPLICATION_SLOT_WRITE:
 			event_name = "ReplicationSlotWrite";
 			break;
+		case WAIT_EVENT_WALPROHIBIT_STATE:
+			event_name = "SystemWALProhibitState";
+			break;
+		case WAIT_EVENT_WALPROHIBIT_STATE_CHANGE:
+			event_name = "SystemWALProhibitStateChange";
+			break;
 		case WAIT_EVENT_SLRU_FLUSH_SYNC:
 			event_name = "SLRUFlushSync";
 			break;

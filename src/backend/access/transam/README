@@ -442,8 +442,8 @@ to be modified.
 2. START_CRIT_SECTION()  (Any error during the next three steps must cause a
 PANIC because the shared buffers will contain unlogged changes, which we
 have to ensure don't get to disk.  Obviously, you should check conditions
-such as whether there's enough free space on the page before you start the
-critical section.)
+such as whether there's WAL write permission and enough free space on the page
+before you start the critical section.)
 
 3. Apply the required changes to the shared buffer(s).
 
@@ -484,6 +484,54 @@ interrupted before writing the second WAL record.  The search algorithm works
 with the intermediate state as normal, but if an insertion encounters a page
 with the incomplete-split flag set, it will finish the interrupted split by
 inserting the key to the parent, before proceeding.
+
+
+Read only system state
+----------------------
+
+The system state when it is not currently possible to insert write-ahead log
+records, either because the system is still in recovery or because the system
+forced to WAL prohibited by executing ALTER SYSTEM READ ONLY.  We have a
+lower-level defense in XLogBeginInsert() and elsewhere to stop us from modifying
+data during recovery when !XLogInsertAllowed(), but if XLogBeginInsert() is
+inside the critical section we must not depend on it to report an error.
+Otherwise, it will cause PANIC as mentioned previously.
+
+We do not reach the point where we try to write WAL during recovery but ALTER
+SYSTEM READ ONLY can be executed anytime by the user to stop WAL writing.  Any
+backends which receive read-only system state transition barrier interrupt need
+to stop WAL writing immediately.  For barrier absorption the backed(s) will kill
+the running transaction which has valid XID indicates that the transaction has
+performed and/or planning WAL write.  The transaction which doesn't acquire
+valid XID yet or operation such VACUUM or CONCURRENT CREATE INDEX which not
+necessary have valid XID for WAL will not be prevented while barrier processing,
+and those might hit the error from XLogBeginInsert() while trying to write WAL
+in read only system state.  To prevent such error from XLogBeginInsert() inside
+the critical section the WAL write permission has to check before
+START_CRIT_SECTION().
+
+To enforce the practice to check WAL permission before entering into critical
+section for the WAL write, we have added an assert check flag that indicates
+permission has been checked before calling XLogBeginInsert().  If not,
+XLogBeginInsert() will have assertion failure.  WAL permission check is not
+mandatory if the XLogBeginInsert() is not inside the critical section where
+throwing the error is acceptable.  To get permission check flag set either
+CheckWALPermitted(), AssertWALPermitted_HaveXID(), or AssertWALPermitted()
+should be called before START_CRIT_SECTION().  This flag automatically resets
+while exiting from the critical section.  The rule to place either of permission
+check routines will be:
+
+	The places where WAL write operation in critical can be expected without
+	having valid XID (e.g vacuum) need to protect by CheckWALPermitted(), so
+	that error can be reported outside before critical section.
+
+	The places where INSERT and UPDATE are expected which are never happened
+	without valid XID can be checked using AssertWALPermitted_HaveXID.  So that
+	non-assert build will not have the checking overhead.
+
+	The places we know that we cannot be reached in the read-only state and may
+	or may not have XID, but need to ensure the permission has been checked on
+	assert enabled build should use AssertWALPermitted().
 
 
 Constructing a WAL record
@@ -531,7 +579,8 @@ Details of the API functions:
 
 void XLogBeginInsert(void)
 
-    Must be called before XLogRegisterBuffer and XLogRegisterData.
+	Must be called before XLogRegisterBuffer and XLogRegisterData.  WAL
+	permission must be check before calling it in a critical section.
 
 void XLogResetInsertion(void)
 
@@ -638,8 +687,9 @@ MarkBufferDirtyHint() to mark the block dirty.
 If the buffer is clean and checksums are in use then MarkBufferDirtyHint()
 inserts an XLOG_FPI_FOR_HINT record to ensure that we take a full page image
 that includes the hint. We do this to avoid a partial page write, when we
-write the dirtied page. WAL is not written during recovery, so we simply skip
-dirtying blocks because of hints when in recovery.
+write the dirtied page. WAL is not written while in read only (i.e. during
+recovery or in WAL prohibit state), so we simply skip dirtying blocks because of
+hints when in recovery.
 
 If you do decide to optimise away a WAL record, then any calls to
 MarkBufferDirty() must be replaced by MarkBufferDirtyHint(),

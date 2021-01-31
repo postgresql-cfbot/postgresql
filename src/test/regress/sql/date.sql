@@ -329,8 +329,8 @@ select isfinite('infinity'::date), isfinite('-infinity'::date), isfinite('today'
 --
 -- oscillating fields from non-finite date/timestamptz:
 --
-SELECT EXTRACT(HOUR FROM DATE 'infinity');      -- NULL
-SELECT EXTRACT(HOUR FROM DATE '-infinity');     -- NULL
+SELECT EXTRACT(DAY  FROM DATE 'infinity');      -- NULL
+SELECT EXTRACT(DAY  FROM DATE '-infinity');     -- NULL
 SELECT EXTRACT(HOUR FROM TIMESTAMP   'infinity');      -- NULL
 SELECT EXTRACT(HOUR FROM TIMESTAMP   '-infinity');     -- NULL
 SELECT EXTRACT(HOUR FROM TIMESTAMPTZ 'infinity');      -- NULL
@@ -371,7 +371,7 @@ SELECT EXTRACT(EPOCH      FROM DATE 'infinity');    --  Infinity
 --
 -- wrong fields from non-finite date:
 --
-SELECT EXTRACT(MICROSEC  FROM DATE 'infinity');     -- ERROR:  timestamp units "microsec" not recognized
+SELECT EXTRACT(MICROSEC  FROM DATE 'infinity');     -- error
 
 -- test constructors
 select make_date(2013, 7, 15);

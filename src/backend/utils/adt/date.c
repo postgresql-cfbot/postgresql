@@ -31,6 +31,7 @@
 #include "utils/builtins.h"
 #include "utils/date.h"
 #include "utils/datetime.h"
+#include "utils/numeric.h"
 #include "utils/sortsupport.h"
 
 /*
@@ -1063,6 +1064,180 @@ in_range_date_interval(PG_FUNCTION_ARGS)
 }
 
 
+/* extract_date()
+ * Extract specified field from date type.
+ */
+Datum
+extract_date(PG_FUNCTION_ARGS)
+{
+	text	   *units = PG_GETARG_TEXT_PP(0);
+	DateADT		date = PG_GETARG_DATEADT(1);
+	int64		result;
+	int			type,
+				val;
+	char	   *lowunits;
+	int			year, mon, mday;
+
+	lowunits = downcase_truncate_identifier(VARDATA_ANY(units),
+											VARSIZE_ANY_EXHDR(units),
+											false);
+
+	type = DecodeUnits(0, lowunits, &val);
+	if (type == UNKNOWN_FIELD)
+		type = DecodeSpecial(0, lowunits, &val);
+
+	if (DATE_NOT_FINITE(date) && (type == UNITS || type == RESERV))
+	{
+		switch (val)
+		{
+			/* Oscillating units */
+			case DTK_DAY:
+			case DTK_MONTH:
+			case DTK_QUARTER:
+			case DTK_WEEK:
+			case DTK_DOW:
+			case DTK_ISODOW:
+			case DTK_DOY:
+				PG_RETURN_NULL();
+				break;
+
+			/* Monotonically-increasing units */
+			case DTK_YEAR:
+			case DTK_DECADE:
+			case DTK_CENTURY:
+			case DTK_MILLENNIUM:
+			case DTK_JULIAN:
+			case DTK_ISOYEAR:
+			case DTK_EPOCH:
+				if (DATE_IS_NOBEGIN(date))
+					PG_RETURN_NUMERIC(DatumGetNumeric(DirectFunctionCall3(numeric_in,
+																		  CStringGetDatum("-Infinity"),
+																		  ObjectIdGetDatum(InvalidOid),
+																		  Int32GetDatum(-1))));
+				else
+					PG_RETURN_NUMERIC(DatumGetNumeric(DirectFunctionCall3(numeric_in,
+																		  CStringGetDatum("Infinity"),
+																		  ObjectIdGetDatum(InvalidOid),
+																		  Int32GetDatum(-1))));
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("date units \"%s\" not supported",
+								lowunits)));
+		}
+	}
+	else if (type == UNITS)
+	{
+		j2date(date + POSTGRES_EPOCH_JDATE, &year, &mon, &mday);
+
+		switch (val)
+		{
+			case DTK_DAY:
+				result = mday;
+				break;
+
+			case DTK_MONTH:
+				result = mon;
+				break;
+
+			case DTK_QUARTER:
+				result = (mon - 1) / 3 + 1;
+				break;
+
+			case DTK_WEEK:
+				result = date2isoweek(year, mon, mday);
+				break;
+
+			case DTK_YEAR:
+				if (year > 0)
+					result = year;
+				else
+					/* there is no year 0, just 1 BC and 1 AD */
+					result = year - 1;
+				break;
+
+			case DTK_DECADE:
+				/* see comments in timestamp_part */
+				if (year >= 0)
+					result = year / 10;
+				else
+					result = -((8 - (year - 1)) / 10);
+				break;
+
+			case DTK_CENTURY:
+				/* see comments in timestamp_part */
+				if (year > 0)
+					result = (year + 99) / 100;
+				else
+					result = -((99 - (year - 1)) / 100);
+				break;
+
+			case DTK_MILLENNIUM:
+				/* see comments in timestamp_part */
+				if (year > 0)
+					result = (year + 999) / 1000;
+				else
+					result = -((999 - (year - 1)) / 1000);
+				break;
+
+			case DTK_JULIAN:
+				result = date + POSTGRES_EPOCH_JDATE;
+				break;
+
+			case DTK_ISOYEAR:
+				result = date2isoyear(year, mon, mday);
+				/* Adjust BC years */
+				if (result <= 0)
+					result -= 1;
+				break;
+
+			case DTK_DOW:
+			case DTK_ISODOW:
+				result = j2day(date + POSTGRES_EPOCH_JDATE);
+				if (val == DTK_ISODOW && result == 0)
+					result = 7;
+				break;
+
+			case DTK_DOY:
+				result = date2j(year, mon, mday) - date2j(year, 1, 1) + 1;
+				break;
+
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("date units \"%s\" not supported",
+								lowunits)));
+				result = 0;
+		}
+	}
+	else if (type == RESERV)
+	{
+		switch (val)
+		{
+			case DTK_EPOCH:
+				result = ((int64) date + POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY;
+				break;
+
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("date units \"%s\" not supported",
+								lowunits)));
+				result = 0;
+		}
+	}
+	else
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("date units \"%s\" not recognized", lowunits)));
+		result = 0;
+	}
+
+	PG_RETURN_NUMERIC(int64_to_numeric(result));
+}
+
+
 /* Add an interval to a date, giving a new date.
  * Must handle both positive and negative intervals.
  *
@@ -2036,6 +2211,114 @@ time_part(PG_FUNCTION_ARGS)
 }
 
 
+/* extract_time()
+ * Extract specified field from time type.
+ */
+Datum
+extract_time(PG_FUNCTION_ARGS)
+{
+	text	   *units = PG_GETARG_TEXT_PP(0);
+	TimeADT		time = PG_GETARG_TIMEADT(1);
+	Numeric		result;
+	int			type,
+				val;
+	char	   *lowunits;
+
+	lowunits = downcase_truncate_identifier(VARDATA_ANY(units),
+											VARSIZE_ANY_EXHDR(units),
+											false);
+
+	type = DecodeUnits(0, lowunits, &val);
+	if (type == UNKNOWN_FIELD)
+		type = DecodeSpecial(0, lowunits, &val);
+
+	if (type == UNITS)
+	{
+		fsec_t		fsec;
+		struct pg_tm tt,
+				   *tm = &tt;
+
+		time2tm(time, tm, &fsec);
+
+		switch (val)
+		{
+			case DTK_MICROSEC:
+				result = int64_to_numeric(tm->tm_sec * 1000000 + fsec);
+				break;
+
+			case DTK_MILLISEC:
+				/* tm->tm_sec * 1000 + fsec / 1000 */
+				result = numeric_add_opt_error(int64_to_numeric(tm->tm_sec * 1000),
+											   numeric_div_opt_error(int64_to_numeric(fsec),
+																	 int64_to_numeric(1000),
+																	 NULL),
+											   NULL);
+				result = DatumGetNumeric(DirectFunctionCall2(numeric_round,
+															 NumericGetDatum(result),
+															 Int32GetDatum(3)));
+				break;
+
+			case DTK_SECOND:
+				/* tm->tm_sec + fsec / 1000000 */
+				result = numeric_add_opt_error(int64_to_numeric(tm->tm_sec),
+											   numeric_div_opt_error(int64_to_numeric(fsec),
+																	 int64_to_numeric(1000000),
+																	 NULL),
+											   NULL);
+				result = DatumGetNumeric(DirectFunctionCall2(numeric_round,
+															 NumericGetDatum(result),
+															 Int32GetDatum(6)));
+				break;
+
+			case DTK_MINUTE:
+				result = int64_to_numeric(tm->tm_min);
+				break;
+
+			case DTK_HOUR:
+				result = int64_to_numeric(tm->tm_hour);
+				break;
+
+			case DTK_TZ:
+			case DTK_TZ_MINUTE:
+			case DTK_TZ_HOUR:
+			case DTK_DAY:
+			case DTK_MONTH:
+			case DTK_QUARTER:
+			case DTK_YEAR:
+			case DTK_DECADE:
+			case DTK_CENTURY:
+			case DTK_MILLENNIUM:
+			case DTK_ISOYEAR:
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("\"time\" units \"%s\" not recognized",
+								lowunits)));
+				result = 0;
+		}
+	}
+	else if (type == RESERV && val == DTK_EPOCH)
+	{
+		result = numeric_div_opt_error(int64_to_numeric(time),
+									   int64_to_numeric(1000000),
+									   NULL);
+		result = DatumGetNumeric(DirectFunctionCall2(numeric_round,
+													 NumericGetDatum(result),
+													 Int32GetDatum(6)));
+	}
+	else
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("\"time\" units \"%s\" not recognized",
+						lowunits)));
+		result = 0;
+	}
+
+	PG_RETURN_NUMERIC(result);
+}
+
+
 /*****************************************************************************
  *	 Time With Time Zone ADT
  *****************************************************************************/
@@ -2784,6 +3067,130 @@ timetz_part(PG_FUNCTION_ARGS)
 
 	PG_RETURN_FLOAT8(result);
 }
+
+
+/* timetz_part()
+ * Extract specified field from time type.
+ */
+Datum
+extract_timetz(PG_FUNCTION_ARGS)
+{
+	text	   *units = PG_GETARG_TEXT_PP(0);
+	TimeTzADT  *time = PG_GETARG_TIMETZADT_P(1);
+	Numeric		result;
+	int			type,
+				val;
+	char	   *lowunits;
+
+	lowunits = downcase_truncate_identifier(VARDATA_ANY(units),
+											VARSIZE_ANY_EXHDR(units),
+											false);
+
+	type = DecodeUnits(0, lowunits, &val);
+	if (type == UNKNOWN_FIELD)
+		type = DecodeSpecial(0, lowunits, &val);
+
+	if (type == UNITS)
+	{
+		int			tz;
+		fsec_t		fsec;
+		struct pg_tm tt,
+				   *tm = &tt;
+
+		timetz2tm(time, tm, &fsec, &tz);
+
+		switch (val)
+		{
+			case DTK_TZ:
+				result = int64_to_numeric(-tz);
+				break;
+
+			case DTK_TZ_MINUTE:
+				/* trunc(-tz / 60) % 60 */
+				result = numeric_mod_opt_error(int64_to_numeric(-tz / SECS_PER_MINUTE),
+											   int64_to_numeric(SECS_PER_MINUTE),
+											   NULL);
+				break;
+
+			case DTK_TZ_HOUR:
+				result = int64_to_numeric(-tz / SECS_PER_HOUR);
+				break;
+
+			case DTK_MICROSEC:
+				result = int64_to_numeric(tm->tm_sec * 1000000 + fsec);
+				break;
+
+			case DTK_MILLISEC:
+				/* tm->tm_sec * 1000 + fsec / 1000 */
+				result = numeric_add_opt_error(int64_to_numeric(tm->tm_sec * 1000),
+											   numeric_div_opt_error(int64_to_numeric(fsec),
+																	 int64_to_numeric(1000),
+																	 NULL),
+											   NULL);
+				result = DatumGetNumeric(DirectFunctionCall2(numeric_round,
+															 NumericGetDatum(result),
+															 Int32GetDatum(3)));
+				break;
+
+			case DTK_SECOND:
+				/* tm->tm_sec + fsec / 1000000 */
+				result = numeric_add_opt_error(int64_to_numeric(tm->tm_sec),
+											   numeric_div_opt_error(int64_to_numeric(fsec),
+																	 int64_to_numeric(1000000),
+																	 NULL),
+											   NULL);
+				result = DatumGetNumeric(DirectFunctionCall2(numeric_round,
+															 NumericGetDatum(result),
+															 Int32GetDatum(6)));
+				break;
+
+			case DTK_MINUTE:
+				result = int64_to_numeric(tm->tm_min);
+				break;
+
+			case DTK_HOUR:
+				result = int64_to_numeric(tm->tm_hour);
+				break;
+
+			case DTK_DAY:
+			case DTK_MONTH:
+			case DTK_QUARTER:
+			case DTK_YEAR:
+			case DTK_DECADE:
+			case DTK_CENTURY:
+			case DTK_MILLENNIUM:
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("\"time with time zone\" units \"%s\" not recognized",
+								lowunits)));
+				result = 0;
+		}
+	}
+	else if (type == RESERV && val == DTK_EPOCH)
+	{
+		/* time->time / 1000000.0 + time->zone */
+		result = numeric_add_opt_error(numeric_div_opt_error(int64_to_numeric(time->time),
+															 int64_to_numeric(1000000),
+															 NULL),
+									   int64_to_numeric(time->zone),
+									   NULL);
+		result = DatumGetNumeric(DirectFunctionCall2(numeric_round,
+													 NumericGetDatum(result),
+													 Int32GetDatum(6)));
+	}
+	else
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("\"time with time zone\" units \"%s\" not recognized",
+						lowunits)));
+		result = 0;
+	}
+
+	PG_RETURN_NUMERIC(result);
+}
+
 
 /* timetz_zone()
  * Encode time with time zone type with specified time zone.

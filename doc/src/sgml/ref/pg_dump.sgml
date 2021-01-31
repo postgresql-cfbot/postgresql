@@ -957,6 +957,42 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--options-file=<replaceable class="parameter">filename</replaceable></option></term>
+      <listitem>
+       <para>
+        Read options from file (one option per line). Short or long options
+        are supported. If you use "-" as a filename, the filters are read
+        from stdin.
+       </para>
+
+       <para>
+        With the following options file, the dump would include table
+        <literal>mytable1</literal> and data from foreign tables of
+        <literal>some_foreign_server</literal> foreign server, but exclude data
+        from table <literal>mytable2</literal>.
+<programlisting>
+-t mytable1
+--include-foreign-data=some_foreign_server
+--exclude-table-data=mytable2
+</programlisting>
+       </para>
+
+       <para>
+        The text after symbol <literal>#</literal> is ignored. This can
+        be used for comments, notes. Empty lines are ignored too.
+       </para>
+
+       <para>
+        The option <option>--options-file</option> can be used more times,
+        and the nesting is allowed. The options from options files are
+        processed first, other options from command line later. Any option
+        file is processed only one time. In next time the processing is
+        ignored.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--quote-all-identifiers</option></term>
       <listitem>
        <para>

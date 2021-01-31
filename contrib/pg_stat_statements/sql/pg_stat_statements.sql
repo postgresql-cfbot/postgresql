@@ -364,4 +364,143 @@ SELECT query, plans, calls, rows FROM pg_stat_statements ORDER BY query COLLATE 
 SELECT pg_stat_statements_reset();
 SELECT dealloc FROM pg_stat_statements_info;
 
+--
+-- Consts merging
+--
+SET pg_stat_statements.merge_threshold = 5;
+CREATE TABLE test_merge (id int, data int);
+
+-- IN queries
+
+-- Normal
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- On the merge threshold
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- With gaps on the threshold
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- test constants after merge
+SELECT pg_stat_statements_reset();
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) and data = 2;
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- test prepared statement
+SELECT pg_stat_statements_reset();
+
+PREPARE query AS
+SELECT * FROM test_merge WHERE id IN ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+EXECUTE query (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- VALUES queries
+
+-- Normal
+SELECT pg_stat_statements_reset();
+SELECT * FROM (VALUES (1), (2), (3)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5), (6)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5), (6), (7)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9)) q;
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT pg_stat_statements_reset();
+SELECT * FROM (VALUES (1, 1), (2, 2), (3, 3)) q;
+SELECT * FROM (VALUES (1, 1), (2, 2), (3, 3), (4, 4)) q;
+SELECT * FROM (VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, 5)) q;
+SELECT * FROM (VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)) q;
+SELECT * FROM (VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7)) q;
+SELECT * FROM (VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)) q;
+SELECT * FROM (VALUES (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8), (9, 9)) q;
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- On the merge threshold
+SELECT pg_stat_statements_reset();
+SELECT * FROM (VALUES (1), (2), (3), (4)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5), (6)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5), (6), (7)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9)) q;
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- With gaps on the treshold
+SELECT pg_stat_statements_reset();
+SELECT * FROM (VALUES (1), (2), (3), (4)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9)) q;
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT pg_stat_statements_reset();
+SELECT * FROM (VALUES (1), (2), (3), (4), (5)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9)) q;
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT pg_stat_statements_reset();
+SELECT * FROM (VALUES (1), (2), (3), (4), (5), (6)) q;
+SELECT * FROM (VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9)) q;
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
 DROP EXTENSION pg_stat_statements;

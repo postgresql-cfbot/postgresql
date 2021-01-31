@@ -242,6 +242,8 @@ typedef struct pgssLocationLen
 {
 	int			location;		/* start offset in query text */
 	int			length;			/* length in bytes, or -1 to ignore */
+	bool		merged;			/* whether or not the location was marked as
+								   duplicate */
 } pgssLocationLen;
 
 /*
@@ -256,7 +258,10 @@ typedef struct pgssJumbleState
 	/* Number of bytes used in jumble[] */
 	Size		jumble_len;
 
-	/* Array of locations of constants that should be removed */
+	/*
+	 * Array of locations of constants that should be removed, or parameters
+	 * that are already replaced, but could be also processed to be merged
+	 */
 	pgssLocationLen *clocations;
 
 	/* Allocated length of clocations array */
@@ -310,6 +315,7 @@ static const struct config_enum_entry track_options[] =
 
 static int	pgss_max;			/* max # statements to track */
 static int	pgss_track;			/* tracking level */
+static int	pgss_merge_threshold;	/* minumum number of consts for merge */
 static bool pgss_track_utility; /* whether to track utility commands */
 static bool pgss_track_planning;	/* whether to track planning duration */
 static bool pgss_save;			/* whether to save stats across shutdown */
@@ -386,7 +392,9 @@ static void JumbleQuery(pgssJumbleState *jstate, Query *query);
 static void JumbleRangeTable(pgssJumbleState *jstate, List *rtable);
 static void JumbleRowMarks(pgssJumbleState *jstate, List *rowMarks);
 static void JumbleExpr(pgssJumbleState *jstate, Node *node);
-static void RecordConstLocation(pgssJumbleState *jstate, int location);
+static bool JumbleExprList(pgssJumbleState *jstate, Node *node);
+static void RecordConstLocation(pgssJumbleState *jstate, int location,
+								bool merged);
 static char *generate_normalized_query(pgssJumbleState *jstate, const char *query,
 									   int query_loc, int *query_len_p);
 static void fill_in_constant_lengths(pgssJumbleState *jstate, const char *query,
@@ -471,6 +479,19 @@ _PG_init(void)
 							 NULL,
 							 NULL,
 							 NULL);
+
+	DefineCustomIntVariable("pg_stat_statements.merge_threshold",
+							"After this number of duplicate constants start to merge them.",
+							NULL,
+							&pgss_merge_threshold,
+							5,
+							1,
+							INT_MAX,
+							PGC_SUSET,
+							0,
+							NULL,
+							NULL,
+							NULL);
 
 	EmitWarningsOnPlaceholders("pg_stat_statements");
 
@@ -884,7 +905,7 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query)
 	jstate.jumble_len = 0;
 	jstate.clocations_buf_size = 32;
 	jstate.clocations = (pgssLocationLen *)
-		palloc(jstate.clocations_buf_size * sizeof(pgssLocationLen));
+		palloc0(jstate.clocations_buf_size * sizeof(pgssLocationLen));
 	jstate.clocations_count = 0;
 	jstate.highest_extern_param_id = 0;
 
@@ -2740,7 +2761,7 @@ JumbleRangeTable(pgssJumbleState *jstate, List *rtable)
 				JumbleExpr(jstate, (Node *) rte->tablefunc);
 				break;
 			case RTE_VALUES:
-				JumbleExpr(jstate, (Node *) rte->values_lists);
+				JumbleExprList(jstate, (Node *) rte->values_lists);
 				break;
 			case RTE_CTE:
 
@@ -2782,6 +2803,203 @@ JumbleRowMarks(pgssJumbleState *jstate, List *rowMarks)
 			APP_JUMB(rowmark->waitPolicy);
 		}
 	}
+}
+
+static bool
+JumbleExprList(pgssJumbleState *jstate, Node *node)
+{
+	ListCell   *temp;
+	Node	   *firstExpr = NULL;
+	bool		merged = false;
+	bool		allConst = true;
+	int 		currentExprIdx;
+	int 		lastExprLenght = 0;
+
+	if (node == NULL)
+		return merged;
+
+	Assert(IsA(node, List));
+	firstExpr = (Node *) lfirst(list_head((List *) node));
+
+	/* Guard against stack overflow due to overly complex expressions */
+	check_stack_depth();
+
+	/*
+	 * We always emit the node's NodeTag, then any additional fields that are
+	 * considered significant, and then we recurse to any child nodes.
+	 */
+	APP_JUMB(node->type);
+
+	/*
+	 * If the first expression is a constant or a list of constants, try to
+	 * merge the following if they're constants as well. Otherwise do
+	 * JumbleExpr as usual.
+	 */
+	switch (nodeTag(firstExpr))
+	{
+		case T_List:
+			currentExprIdx = 0;
+
+			foreach(temp, (List *) node)
+			{
+				List 		*expr = (List *) lfirst(temp);
+				ListCell 	*lc;
+
+				foreach(lc, expr)
+				{
+					Node * subExpr = (Node *) lfirst(lc);
+
+					if (!IsA(subExpr, Const))
+					{
+						allConst = false;
+						break;
+					}
+				}
+
+				if (!equal(expr, firstExpr) && allConst &&
+					currentExprIdx >= pgss_merge_threshold - 1)
+				{
+					merged = true;
+
+					/*
+					 * This hash is going to accumulate the following merged
+					 * statements
+					 */
+					if (currentExprIdx == pgss_merge_threshold - 1)
+					{
+						JumbleExpr(jstate, (Node *) expr);
+
+						/*
+						 * An expr consisting of constants is already found,
+						 * JumbleExpr must record it. Mark all the constants as
+						 * merged, they will be the first merged but still
+						 * present in the statement query.
+						 */
+						Assert(jstate->clocations_count > lastExprLenght - 1);
+						for (int i = 1; i < lastExprLenght + 1; i++)
+						{
+							pgssLocationLen *loc;
+							loc = &jstate->clocations[jstate->clocations_count - i];
+							loc->merged = true;
+						}
+						currentExprIdx++;
+					}
+					else
+						foreach(lc, expr)
+						{
+							Const *c = (Const *) lfirst(lc);
+							RecordConstLocation(jstate, c->location, true);
+						}
+
+					continue;
+				}
+
+				JumbleExpr(jstate, (Node *) expr);
+				currentExprIdx++;
+				lastExprLenght = expr->length;
+			}
+			break;
+
+		case T_Const:
+			currentExprIdx = 0;
+
+			foreach(temp, (List *) node)
+			{
+				Node *expr = (Node *) lfirst(temp);
+
+				if (!equal(expr, firstExpr) && IsA(expr, Const) &&
+					currentExprIdx >= pgss_merge_threshold - 1)
+				{
+					merged = true;
+
+					/*
+					 * This hash is going to accumulate the following merged
+					 * statements
+					 */
+					if (currentExprIdx == pgss_merge_threshold - 1)
+					{
+						JumbleExpr(jstate, expr);
+
+						/*
+						 * A const expr is already found, so JumbleExpr must
+						 * record it. Mark it as merged, it will be the first
+						 * merged but still present in the statement query.
+						 */
+						Assert(jstate->clocations_count > 0);
+						jstate->clocations[jstate->clocations_count - 1].merged = true;
+						currentExprIdx++;
+					}
+					else
+					{
+						Const *c = (Const *) expr;
+						RecordConstLocation(jstate, c->location, true);
+					}
+
+					continue;
+				}
+
+				JumbleExpr(jstate, expr);
+				currentExprIdx++;
+			}
+			break;
+
+		case T_Param:
+			currentExprIdx = 0;
+
+			foreach(temp, (List *) node)
+			{
+				Node *expr = (Node *) lfirst(temp);
+				Param *p = (Param *) expr;
+
+				if (!equal(expr, firstExpr) && IsA(expr, Param) &&
+					currentExprIdx >= pgss_merge_threshold - 1)
+				{
+
+					merged = true;
+
+					/*
+					 * This hash is going to accumulate the following merged
+					 * statements
+					 */
+					if (currentExprIdx == pgss_merge_threshold - 1)
+					{
+						JumbleExpr(jstate, expr);
+
+						/*
+						 * A const expr is already found, so JumbleExpr must
+						 * record it. Mark it as merged, it will be the first
+						 * merged but still present in the statement query.
+						 */
+						Assert(jstate->clocations_count > 0);
+						jstate->clocations[jstate->clocations_count - 1].merged = true;
+						currentExprIdx++;
+					}
+					else
+						RecordConstLocation(jstate, p->location, true);
+
+					continue;
+				}
+
+				JumbleExpr(jstate, expr);
+
+				/*
+				 * To allow merging of parameters as well in
+				 * generate_normalized_query, remember it as a constant.
+				 */
+				RecordConstLocation(jstate, p->location, false);
+				currentExprIdx++;
+			}
+			break;
+
+		default:
+			foreach(temp, (List *) node)
+			{
+				JumbleExpr(jstate, (Node *) lfirst(temp));
+			}
+			break;
+	}
+
+	return merged;
 }
 
 /*
@@ -2833,7 +3051,7 @@ JumbleExpr(pgssJumbleState *jstate, Node *node)
 				/* We jumble only the constant's type, not its value */
 				APP_JUMB(c->consttype);
 				/* Also, record its parse location for query normalization */
-				RecordConstLocation(jstate, c->location);
+				RecordConstLocation(jstate, c->location, false);
 			}
 			break;
 		case T_Param:
@@ -3021,7 +3239,7 @@ JumbleExpr(pgssJumbleState *jstate, Node *node)
 			}
 			break;
 		case T_ArrayExpr:
-			JumbleExpr(jstate, (Node *) ((ArrayExpr *) node)->elements);
+			JumbleExprList(jstate, (Node *) ((ArrayExpr *) node)->elements);
 			break;
 		case T_RowExpr:
 			JumbleExpr(jstate, (Node *) ((RowExpr *) node)->args);
@@ -3274,11 +3492,11 @@ JumbleExpr(pgssJumbleState *jstate, Node *node)
 }
 
 /*
- * Record location of constant within query string of query tree
+ * Record location of constant or a parameter within query string of query tree
  * that is currently being walked.
  */
 static void
-RecordConstLocation(pgssJumbleState *jstate, int location)
+RecordConstLocation(pgssJumbleState *jstate, int location, bool merged)
 {
 	/* -1 indicates unknown or undefined location */
 	if (location >= 0)
@@ -3295,6 +3513,8 @@ RecordConstLocation(pgssJumbleState *jstate, int location)
 		jstate->clocations[jstate->clocations_count].location = location;
 		/* initialize lengths to -1 to simplify fill_in_constant_lengths */
 		jstate->clocations[jstate->clocations_count].length = -1;
+		jstate->clocations[jstate->clocations_count].merged = merged;
+
 		jstate->clocations_count++;
 	}
 }
@@ -3331,6 +3551,7 @@ generate_normalized_query(pgssJumbleState *jstate, const char *query,
 				n_quer_loc = 0, /* Normalized query byte location */
 				last_off = 0,	/* Offset from start for previous tok */
 				last_tok_len = 0;	/* Length (in bytes) of that tok */
+	bool		merge = false;
 
 	/*
 	 * Get constants' lengths (core system only gives us locations).  Note
@@ -3369,12 +3590,27 @@ generate_normalized_query(pgssJumbleState *jstate, const char *query,
 		len_to_wrt -= last_tok_len;
 
 		Assert(len_to_wrt >= 0);
-		memcpy(norm_query + n_quer_loc, query + quer_loc, len_to_wrt);
-		n_quer_loc += len_to_wrt;
 
-		/* And insert a param symbol in place of the constant token */
-		n_quer_loc += sprintf(norm_query + n_quer_loc, "$%d",
-							  i + 1 + jstate->highest_extern_param_id);
+		if (!jstate->clocations[i].merged)
+		{
+			memcpy(norm_query + n_quer_loc, query + quer_loc, len_to_wrt);
+			n_quer_loc += len_to_wrt;
+
+			/* And insert a param symbol in place of the constant token */
+			n_quer_loc += sprintf(norm_query + n_quer_loc, "$%d",
+								  i + 1 + jstate->highest_extern_param_id);
+			if (merge)
+				merge = false;
+		}
+		else if (!merge)
+		{
+			memcpy(norm_query + n_quer_loc, query + quer_loc, len_to_wrt);
+			n_quer_loc += len_to_wrt;
+
+			/* Merge until a non merged constant appear */
+			merge = true;
+			n_quer_loc += sprintf(norm_query + n_quer_loc, "...");
+		}
 
 		quer_loc = off + tok_len;
 		last_off = off;

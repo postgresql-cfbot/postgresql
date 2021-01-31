@@ -2624,7 +2624,16 @@ include_dir 'conf.d'
         data to support WAL archiving and replication, including running
         read-only queries on a standby server. <literal>minimal</literal> removes all
         logging except the information required to recover from a crash or
-        immediate shutdown.  Finally,
+        immediate shutdown.  <literal>none</literal> generates strictly limited types of WAL.
+        Those are WAL for transaction, transaction resources, GIST and generic WAL record type.
+        This means that the amount of WAL during <literal>none</literal>
+        is much less than that of <literal>minimal</literal> for ordinal operation.
+        Intrinsically, the purpose of <literal>none</literal>
+        is to accelerate data bulk loading at the expense of recovery. Accordingly, note that
+        any kind of accidental server stoppage during <literal>none</literal> makes the whole cluster
+        corrupted and never start up again. Therefore, never use this mode unless the operation
+        during this mode is repeatable and the cluster can be backed up before and after the operation.
+        Thus, this mode requires careful planning and preparation. Finally,
         <literal>logical</literal> adds information necessary to support logical
         decoding.  Each level includes the information logged at all lower
         levels.  This parameter can only be set at server start.
@@ -2648,6 +2657,12 @@ include_dir 'conf.d'
         data from a base backup and the WAL logs, so <literal>replica</literal> or
         higher must be used to enable WAL archiving
         (<xref linkend="guc-archive-mode"/>) and streaming replication.
+        In the same way, <literal>none</literal> does not create almost all types of WAL logs in principle.
+        Therefore, this <varname>wal_level</varname> can be used to maximize the speed of data loading.
+        For example, bulk data loading or version upgrade using pg_dumpall.
+        On the other hand, an unexpected crash of the server makes the database cluster
+        inconsistent and never able to restart. For that reason, before and after utilizing this level,
+        get a full backup of the whole cluster.
        </para>
        <para>
         In <literal>logical</literal> level, the same information is logged as
@@ -3405,7 +3420,8 @@ include_dir 'conf.d'
         changed without leaving archiving mode.
         This parameter can only be set at server start.
         <varname>archive_mode</varname> cannot be enabled when
-        <varname>wal_level</varname> is set to <literal>minimal</literal>.
+        <varname>wal_level</varname> is set to <literal>none</literal> or
+        <literal>minimal</literal>.
        </para>
       </listitem>
      </varlistentry>

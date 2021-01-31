@@ -1741,10 +1741,17 @@ SELECT * FROM x, y, a, b, c WHERE something AND somethingelse;
     new base backup after the load has completed than to process a large
     amount of incremental WAL data.  To prevent incremental WAL logging
     while loading, disable archiving and streaming replication, by setting
-    <xref linkend="guc-wal-level"/> to <literal>minimal</literal>,
+    <xref linkend="guc-wal-level"/> to either <literal>none</literal>
+    or <literal>minimal</literal>,
     <xref linkend="guc-archive-mode"/> to <literal>off</literal>, and
     <xref linkend="guc-max-wal-senders"/> to zero.
-    But note that changing these settings requires a server restart.
+    Changing <literal>wal_level</literal> to <literal>none</literal>
+    is extremely performance-oriented feature. Therefore, paying
+    a careful attention that a crash or server stoppage during the data loading causes
+    corruption of the whole cluster is needed. When it happens,
+    the server will not restart again any more. Thus, the administrator
+    needs to set up the cluster from the full backup taken just before
+    the operation. Also, note that changing these settings requires a server restart.
    </para>
 
    <para>
@@ -1810,7 +1817,7 @@ SELECT * FROM x, y, a, b, c WHERE something AND somethingelse;
        If using WAL archiving or streaming replication, consider disabling
        them during the restore. To do that, set <varname>archive_mode</varname>
        to <literal>off</literal>,
-       <varname>wal_level</varname> to <literal>minimal</literal>, and
+       <varname>wal_level</varname> to <literal>minimal</literal> or <literal>none</literal>, and
        <varname>max_wal_senders</varname> to zero before loading the dump.
        Afterwards, set them back to the right values and take a fresh
        base backup.

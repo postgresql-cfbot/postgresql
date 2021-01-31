@@ -561,7 +561,8 @@ typedef struct ViewOptions
  * RelFileNode" in src/backend/access/transam/README.
  */
 #define RelationNeedsWAL(relation)										\
-	((relation)->rd_rel->relpersistence == RELPERSISTENCE_PERMANENT &&	\
+	(wal_level != WAL_LEVEL_NONE &&                                     \
+	(relation)->rd_rel->relpersistence == RELPERSISTENCE_PERMANENT &&	\
 	 (XLogIsNeeded() ||													\
 	  (relation->rd_createSubid == InvalidSubTransactionId &&			\
 	   relation->rd_firstRelfilenodeSubid == InvalidSubTransactionId)))

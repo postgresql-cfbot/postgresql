@@ -6329,11 +6329,11 @@ CheckRequiredParameterValues(void)
 	 * For archive recovery, the WAL must be generated with at least 'replica'
 	 * wal_level.
 	 */
-	if (ArchiveRecoveryRequested && ControlFile->wal_level == WAL_LEVEL_MINIMAL)
+	if (ArchiveRecoveryRequested && ControlFile->wal_level <= WAL_LEVEL_MINIMAL)
 	{
 		ereport(WARNING,
-				(errmsg("WAL was generated with wal_level=minimal, data may be missing"),
-				 errhint("This happens if you temporarily set wal_level=minimal without taking a new base backup.")));
+				(errmsg("WAL was generated with wal_level<=minimal, data may be missing"),
+				 errhint("This happens if you temporarily set wal_level<=minimal without taking a new base backup.")));
 	}
 
 	/*
@@ -6460,6 +6460,15 @@ StartupXLOG(void)
 			ereport(FATAL,
 					(errmsg("control file contains invalid database cluster state")));
 	}
+
+	/*
+	 * Detect if the server previously crashed under wal_level='none' or not.
+	 */
+	if (ControlFile->wal_level == WAL_LEVEL_NONE &&
+		(ControlFile->state != DB_SHUTDOWNED && ControlFile->state != DB_SHUTDOWNED_IN_RECOVERY))
+		ereport(ERROR,
+				(errmsg("detected an unexpected server shutdown when WAL logging was disabled"),
+				 errhint("It looks like you need to deploy a new cluster from your full backup again.")));
 
 	/* This is just to allow attaching to startup process with a debugger */
 #ifdef XLOG_REPLAY_DELAY
@@ -9110,9 +9119,13 @@ CreateCheckPoint(int flags)
 	 */
 	XLogBeginInsert();
 	XLogRegisterData((char *) (&checkPoint), sizeof(checkPoint));
-	recptr = XLogInsert(RM_XLOG_ID,
-						shutdown ? XLOG_CHECKPOINT_SHUTDOWN :
-						XLOG_CHECKPOINT_ONLINE);
+	if (shutdown)
+	{
+		XLogSetRecordFlags(XLOG_MARK_ESSENTIAL);
+		recptr = XLogInsert(RM_XLOG_ID, XLOG_CHECKPOINT_SHUTDOWN);
+	}
+	else
+		recptr = XLogInsert(RM_XLOG_ID, XLOG_CHECKPOINT_ONLINE);
 
 	XLogFlush(recptr);
 
@@ -9882,7 +9895,7 @@ XLogReportParameters(void)
 
 			XLogBeginInsert();
 			XLogRegisterData((char *) &xlrec, sizeof(xlrec));
-
+			XLogSetRecordFlags(XLOG_MARK_ESSENTIAL);
 			recptr = XLogInsert(RM_XLOG_ID, XLOG_PARAMETER_CHANGE);
 			XLogFlush(recptr);
 		}

@@ -19,6 +19,7 @@
 
 #include "postgres.h"
 
+#include "access/gistxlog.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
@@ -399,6 +400,8 @@ XLogRegisterBufData(uint8 block_id, char *data, int len)
  * - XLOG_MARK_UNIMPORTANT, to signal that the record is not important for
  *	 durability, which allows to avoid triggering WAL archiving and other
  *	 background activity.
+ * - XLOG_MARK_ESSENTIAL, to issue limited types of crucial WAL even when
+ **	 WAL logging is off.
  */
 void
 XLogSetRecordFlags(uint8 flags)
@@ -447,6 +450,14 @@ XLogInsert(RmgrId rmid, uint8 info)
 		XLogResetInsertion();
 		EndPos = SizeOfXLogLongPHD; /* start of 1st chkpt record */
 		return EndPos;
+	}
+
+	/* Issues only limited types of WAL when wal logging is disabled */
+	if (wal_level == WAL_LEVEL_NONE &&
+		!(curinsert_flags & XLOG_MARK_ESSENTIAL))
+	{
+		XLogResetInsertion();
+		return GetXLogInsertRecPtr();
 	}
 
 	do

@@ -1438,8 +1438,17 @@ ExecCloseResultRelations(EState *estate)
 	foreach(l, estate->es_opened_result_relations)
 	{
 		ResultRelInfo *resultRelInfo = lfirst(l);
+		ListCell *lc;
 
 		ExecCloseIndices(resultRelInfo);
+		foreach(lc, resultRelInfo->ri_ancestorResultRels)
+		{
+			ResultRelInfo *rInfo = lfirst(lc);
+
+			/* Only close those we opened in GetAncestorResultRels(). */
+			if (rInfo->ri_RangeTableIndex == 0)
+				table_close(rInfo->ri_RelationDesc, NoLock);
+		}
 	}
 
 	/* Close any relations that have been opened by ExecGetTriggerResultRel(). */

@@ -1259,11 +1259,20 @@ RI_FKey_fk_upd_check_required(Trigger *trigger, Relation fk_rel,
 	 * not do anything; so we had better do the UPDATE check.  (We could skip
 	 * this if we knew the INSERT trigger already fired, but there is no easy
 	 * way to know that.)
+	 *
+	 * Skip the check and just ask to fire the trigger if the FK relation is
+	 * a partitioned table, because we can't inspect system columns of the
+	 * tuple in that case.
 	 */
-	xminDatum = slot_getsysattr(oldslot, MinTransactionIdAttributeNumber, &isnull);
-	Assert(!isnull);
-	xmin = DatumGetTransactionId(xminDatum);
-	if (TransactionIdIsCurrentTransactionId(xmin))
+	if (fk_rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+	{
+		xminDatum = slot_getsysattr(oldslot, MinTransactionIdAttributeNumber, &isnull);
+		Assert(!isnull);
+		xmin = DatumGetTransactionId(xminDatum);
+		if (TransactionIdIsCurrentTransactionId(xmin))
+			return true;
+	}
+	else
 		return true;
 
 	/* If all old and new key values are equal, no check is needed */

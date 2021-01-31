@@ -503,9 +503,13 @@ typedef struct ResultRelInfo
 	 * transition tuple capture or update partition row movement is active.
 	 */
 	TupleConversionMap *ri_ChildToRootMap;
+	bool				ri_ChildToRootMapValid;
 
 	/* for use by copyfrom.c when performing multi-inserts */
 	struct CopyMultiInsertBuffer *ri_CopyMultiInsertBuffer;
+
+	/* Used during cross-partition updates on partitioned tables. */
+	List	   *ri_ancestorResultRels;
 } ResultRelInfo;
 
 /* ----------------

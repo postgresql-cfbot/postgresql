@@ -154,7 +154,10 @@ extern ObjectAddress CreateTrigger(CreateTrigStmt *stmt, const char *queryString
 								   Oid relOid, Oid refRelOid, Oid constraintOid, Oid indexOid,
 								   Oid funcoid, Oid parentTriggerOid, Node *whenClause,
 								   bool isInternal, bool in_partition);
-
+extern void TriggerSetParentTrigger(Relation trigRel,
+						Oid childTrigId,
+						Oid parentTrigId,
+						Oid childTableId);
 extern void RemoveTriggerById(Oid trigOid);
 extern Oid	get_trigger_oid(Oid relid, const char *name, bool missing_ok);
 
@@ -202,6 +205,7 @@ extern bool ExecBRDeleteTriggers(EState *estate,
 								 HeapTuple fdw_trigtuple,
 								 TupleTableSlot **epqslot);
 extern void ExecARDeleteTriggers(EState *estate,
+								 ModifyTableState *mtstate,
 								 ResultRelInfo *relinfo,
 								 ItemPointer tupleid,
 								 HeapTuple fdw_trigtuple,
@@ -221,6 +225,7 @@ extern bool ExecBRUpdateTriggers(EState *estate,
 								 HeapTuple fdw_trigtuple,
 								 TupleTableSlot *slot);
 extern void ExecARUpdateTriggers(EState *estate,
+								 ModifyTableState *mtstate,
 								 ResultRelInfo *relinfo,
 								 ItemPointer tupleid,
 								 HeapTuple fdw_trigtuple,

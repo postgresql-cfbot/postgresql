@@ -7961,7 +7961,25 @@ getTriggers(Archive *fout, TableInfo tblinfo[], int numTables)
 					tbinfo->dobj.name);
 
 		resetPQExpBuffer(query);
-		if (fout->remoteVersion >= 90000)
+		if (fout->remoteVersion >= 130000)
+		{
+			/*
+			 * NB: think not to use pretty=true in pg_get_triggerdef.  It
+			 * could result in non-forward-compatible dumps of WHEN clauses
+			 * due to under-parenthesization.
+			 */
+			appendPQExpBuffer(query,
+							  "SELECT tgname, "
+							  "tgfoid::pg_catalog.regproc AS tgfname, "
+							  "pg_catalog.pg_get_triggerdef(oid, false) AS tgdef, "
+							  "tgenabled, tableoid, oid "
+							  "FROM pg_catalog.pg_trigger t "
+							  "WHERE tgrelid = '%u'::pg_catalog.oid "
+							  "AND NOT tgisinternal "
+							  "AND tgparentid = 0",
+							  tbinfo->dobj.catId.oid);
+		}
+		else if (fout->remoteVersion >= 90000)
 		{
 			/*
 			 * NB: think not to use pretty=true in pg_get_triggerdef.  It

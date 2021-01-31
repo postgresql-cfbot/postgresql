@@ -42,6 +42,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
+#include "catalog/partition.h"
 #include "commands/trigger.h"
 #include "executor/execPartition.h"
 #include "executor/executor.h"
@@ -387,7 +388,9 @@ ExecInsert(ModifyTableState *mtstate,
 		   TupleTableSlot *slot,
 		   TupleTableSlot *planSlot,
 		   EState *estate,
-		   bool canSetTag)
+		   bool canSetTag,
+		   TupleTableSlot **inserted_tuple,
+		   ResultRelInfo **insert_destrel)
 {
 	Relation	resultRelationDesc;
 	List	   *recheckIndexes = NIL;
@@ -714,7 +717,7 @@ ExecInsert(ModifyTableState *mtstate,
 	if (mtstate->operation == CMD_UPDATE && mtstate->mt_transition_capture
 		&& mtstate->mt_transition_capture->tcs_update_new_table)
 	{
-		ExecARUpdateTriggers(estate, resultRelInfo, NULL,
+		ExecARUpdateTriggers(estate, mtstate, resultRelInfo, NULL,
 							 NULL,
 							 slot,
 							 NULL,
@@ -751,6 +754,11 @@ ExecInsert(ModifyTableState *mtstate,
 	/* Process RETURNING if present */
 	if (resultRelInfo->ri_projectReturning)
 		result = ExecProcessReturning(resultRelInfo, slot, planSlot);
+
+	if (inserted_tuple)
+		*inserted_tuple = slot;
+	if (insert_destrel)
+		*insert_destrel = resultRelInfo;
 
 	return result;
 }
@@ -1110,7 +1118,7 @@ ldelete:;
 	if (mtstate->operation == CMD_UPDATE && mtstate->mt_transition_capture
 		&& mtstate->mt_transition_capture->tcs_update_old_table)
 	{
-		ExecARUpdateTriggers(estate, resultRelInfo,
+		ExecARUpdateTriggers(estate, mtstate, resultRelInfo,
 							 tupleid,
 							 oldtuple,
 							 NULL,
@@ -1125,7 +1133,7 @@ ldelete:;
 	}
 
 	/* AFTER ROW DELETE Triggers */
-	ExecARDeleteTriggers(estate, resultRelInfo, tupleid, oldtuple,
+	ExecARDeleteTriggers(estate, mtstate, resultRelInfo, tupleid, oldtuple,
 						 ar_delete_trig_tcs);
 
 	/* Process RETURNING if present and if requested */
@@ -1197,7 +1205,9 @@ ExecCrossPartitionUpdate(ModifyTableState *mtstate,
 						 TupleTableSlot *slot, TupleTableSlot *planSlot,
 						 EPQState *epqstate, bool canSetTag,
 						 TupleTableSlot **retry_slot,
-						 TupleTableSlot **inserted_tuple)
+						 TupleTableSlot **returning_slot,
+						 TupleTableSlot **inserted_tuple,
+						 ResultRelInfo **insert_destrel)
 {
 	EState	   *estate = mtstate->ps.state;
 	PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
@@ -1286,8 +1296,9 @@ ExecCrossPartitionUpdate(ModifyTableState *mtstate,
 									 mtstate->mt_root_tuple_slot);
 
 	/* Tuple routing starts from the root table. */
-	*inserted_tuple = ExecInsert(mtstate, mtstate->rootResultRelInfo, slot,
-								 planSlot, estate, canSetTag);
+	*returning_slot = ExecInsert(mtstate, mtstate->rootResultRelInfo, slot,
+								 planSlot, estate, canSetTag, inserted_tuple,
+								 insert_destrel);
 
 	/*
 	 * Reset the transition state that may possibly have been written by
@@ -1298,6 +1309,180 @@ ExecCrossPartitionUpdate(ModifyTableState *mtstate,
 
 	/* We're done moving. */
 	return true;
+}
+
+/*
+ * Returns tuple table slot that the caller can use to store the tuples in the
+ * the root target relation's format, creating it if not already done.
+ */
+static TupleTableSlot *
+GetRootTupleSlot(ModifyTableState *mtstate)
+{
+	if (mtstate->mt_root_tuple_slot == NULL)
+	{
+		Relation	rootrel = mtstate->rootResultRelInfo->ri_RelationDesc;
+
+		mtstate->mt_root_tuple_slot = table_slot_create(rootrel, NULL);
+	}
+
+	return mtstate->mt_root_tuple_slot;
+}
+
+/*
+ * Returns a map to convert the tuples of a given leaf partition result
+ * relation into the tuples of the root target relation, creating it if not
+ * already done.
+ */
+static TupleConversionMap *
+GetChildToRootMap(ResultRelInfo *resultRelInfo, ModifyTableState *mtstate)
+{
+	if (!resultRelInfo->ri_ChildToRootMapValid)
+	{
+		Relation	relation = resultRelInfo->ri_RelationDesc;
+		Relation	rootRel = mtstate->rootResultRelInfo->ri_RelationDesc;
+
+		resultRelInfo->ri_ChildToRootMap =
+			convert_tuples_by_name(RelationGetDescr(relation),
+								   RelationGetDescr(rootRel));
+		resultRelInfo->ri_ChildToRootMapValid = true;
+	}
+
+	return resultRelInfo->ri_ChildToRootMap;
+}
+
+/*
+ * Return the ancestor relations of a given leaf partition result relation
+ * up to and including the query's root target relation.
+ */
+static List *
+GetAncestorResultRels(ResultRelInfo *resultRelInfo,
+					  ModifyTableState *mtstate)
+{
+	Relation	partRel = resultRelInfo->ri_RelationDesc;
+	Relation	rootRel = mtstate->rootResultRelInfo->ri_RelationDesc;
+
+	if (!partRel->rd_rel->relispartition)
+		elog(ERROR, "cannot find ancestors of a non-partition result relation");
+	if (resultRelInfo->ri_ancestorResultRels == NIL)
+	{
+		ListCell *lc;
+		List   *oids = get_partition_ancestors(RelationGetRelid(partRel));
+		Oid		rootRelOid = RelationGetRelid(rootRel);
+		List   *ancResultRels = NIL;
+
+		foreach(lc, oids)
+		{
+			Oid		ancOid = lfirst_oid(lc);
+			Relation	ancRel;
+			ResultRelInfo *rInfo;
+
+			/* We use mtstate->rootResultRelInfo for the root relation. */
+			if (ancOid == rootRelOid)
+				break;
+
+			/*
+			 * All ancestors up to the root target relation must have been
+			 * locked by the planner or AcquireExecutorLocks().
+			 */
+			ancRel = table_open(ancOid, NoLock);
+			rInfo = makeNode(ResultRelInfo);
+
+			/*
+			 * Pass 0 for RangeTableIndex to distinguish the relations that
+			 * are opened here.
+			 */
+			InitResultRelInfo(rInfo, ancRel, 0, NULL, 0);
+			ancResultRels = lappend(ancResultRels, rInfo);
+		}
+		ancResultRels = lappend(ancResultRels, mtstate->rootResultRelInfo);
+		resultRelInfo->ri_ancestorResultRels = ancResultRels;
+	}
+
+	return resultRelInfo->ri_ancestorResultRels;
+}
+
+/*
+ * Queues up trigger events necessary to check that a cross-partition update
+ * of the target partitioned table hasn't broken any foreign keys pointing
+ * to it.
+ */
+static void
+ExecCrossPartitionUpdateForeignKey(ResultRelInfo *sourcePartInfo,
+								   ItemPointer tupleid,
+								   TupleTableSlot *oldslot,
+								   TupleTableSlot *newslot,
+								   ModifyTableState *mtstate,
+								   EState *estate)
+{
+	ListCell *lc;
+	HeapTuple		oldtuple;
+	TupleTableSlot *rootslot;
+	TupleConversionMap *map;
+	ResultRelInfo *rootInfo = mtstate->rootResultRelInfo;
+	Relation	sourcePartRelDesc = sourcePartInfo->ri_RelationDesc;
+	List   *ancestorRels = GetAncestorResultRels(sourcePartInfo, mtstate);
+
+	/*
+	 * There better not be any foreign keys that point directly to a non-root
+	 * ancestor of the target source partition, because we can't enforce them.
+	 */
+	foreach(lc, ancestorRels)
+	{
+		ResultRelInfo *rInfo = lfirst(lc);
+		TriggerDesc *trigdesc = rInfo->ri_TrigDesc;
+		bool	has_noncloned_fkey = false;
+
+		if (rInfo == mtstate->rootResultRelInfo)
+			break;
+
+		if (trigdesc && trigdesc->trig_update_after_row)
+		{
+			int		i;
+
+			for (i = 0; i < trigdesc->numtriggers; i++)
+			{
+				Trigger *trig = &trigdesc->triggers[i];
+
+				if (!trig->tgisclone &&
+					RI_FKey_trigger_type(trig->tgfoid) == RI_TRIGGER_PK)
+				{
+					has_noncloned_fkey = true;
+					break;
+				}
+			}
+		}
+
+		if (has_noncloned_fkey)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot move tuple across partitions when non-root ancestor is directly referenced in a foreign key"),
+					 errdetail("A foreign key points to ancestor \"%s\", but not the root ancestor \"%s\".",
+							   RelationGetRelationName(rInfo->ri_RelationDesc),
+							   RelationGetRelationName(rootInfo->ri_RelationDesc)),
+					 errhint("Consider defining the foreign key on \"%s\".",
+							   RelationGetRelationName(rootInfo->ri_RelationDesc))));
+	}
+
+	/*
+	 * Copy the inserted "new" tuple into the root table's slot, after
+	 * converting it if needed.
+	 */
+	rootslot = GetRootTupleSlot(mtstate);
+	map = GetChildToRootMap(sourcePartInfo, mtstate);
+	if (newslot != oldslot && map)
+		newslot = execute_attr_map_slot(map->attrMap, newslot, rootslot);
+	else
+		newslot = ExecCopySlot(rootslot, newslot);
+
+	/* Get "old" HeapTuple from the source partition. */
+	if (!table_tuple_fetch_row_version(sourcePartRelDesc, tupleid,
+									   SnapshotAny, oldslot))
+		elog(ERROR, "failed to fetch old tuple from source partition");
+	oldtuple = ExecFetchSlotHeapTuple(oldslot, true, NULL);
+
+	/* Perform the root table's triggers. */
+	ExecARUpdateTriggers(estate, mtstate, rootInfo, NULL, oldtuple,
+						 newslot, NIL, NULL);
 }
 
 /* ----------------------------------------------------------------
@@ -1453,9 +1638,12 @@ lreplace:;
 		 */
 		if (partition_constraint_failed)
 		{
-			TupleTableSlot *inserted_tuple,
+			TupleTableSlot *oldslot = slot,
+					   *inserted_tuple,
+					   *returning_slot = NULL,
 					   *retry_slot;
 			bool		retry;
+			ResultRelInfo *insert_destrel = NULL;
 
 			/*
 			 * ExecCrossPartitionUpdate will first DELETE the row from the
@@ -1467,14 +1655,38 @@ lreplace:;
 			retry = !ExecCrossPartitionUpdate(mtstate, resultRelInfo, tupleid,
 											  oldtuple, slot, planSlot,
 											  epqstate, canSetTag,
-											  &retry_slot, &inserted_tuple);
+											  &retry_slot, &returning_slot,
+											  &inserted_tuple,
+											  &insert_destrel);
 			if (retry)
 			{
 				slot = retry_slot;
 				goto lreplace;
 			}
 
-			return inserted_tuple;
+			/*
+			 * If the partitioned table being updated is referenced in foreign
+			 * keys, queue up trigger events to check that none of them were
+			 * violated.  No special treatment is needed in non-cross-partition
+			 * update situations, because the leaf partition's AR update
+			 * triggers will take care of that.  During cross-partition
+			 * updates implemented as delete on the source partition followed
+			 * by insert on the destination partition, AR update triggers of
+			 * the root table (that is, the table mentioned in the query) must
+			 * be fired.
+			 *
+			 * NULL insert_destrel means that the move failed to occur, that
+			 * is, the update failed, so no need to anything in that case.
+			 */
+			if (insert_destrel &&
+				resultRelInfo->ri_TrigDesc &&
+				resultRelInfo->ri_TrigDesc->trig_update_after_row)
+				ExecCrossPartitionUpdateForeignKey(resultRelInfo,
+												   tupleid, oldslot,
+												   inserted_tuple,
+												   mtstate, estate);
+
+			return returning_slot;
 		}
 
 		/*
@@ -1640,7 +1852,8 @@ lreplace:;
 		(estate->es_processed)++;
 
 	/* AFTER ROW UPDATE Triggers */
-	ExecARUpdateTriggers(estate, resultRelInfo, tupleid, oldtuple, slot,
+	ExecARUpdateTriggers(estate, mtstate, resultRelInfo, tupleid, oldtuple,
+						 slot,
 						 recheckIndexes,
 						 mtstate->operation == CMD_INSERT ?
 						 mtstate->mt_oc_transition_capture :
@@ -2248,7 +2461,7 @@ ExecModifyTable(PlanState *pstate)
 		{
 			case CMD_INSERT:
 				slot = ExecInsert(node, resultRelInfo, slot, planSlot,
-								  estate, node->canSetTag);
+								  estate, node->canSetTag, NULL, NULL);
 				break;
 			case CMD_UPDATE:
 				slot = ExecUpdate(node, resultRelInfo, tupleid, oldtuple, slot,

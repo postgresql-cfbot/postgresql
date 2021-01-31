@@ -1738,3 +1738,87 @@ DELETE FROM fkpart9.pk WHERE a=35;
 SELECT * FROM fkpart9.pk;
 SELECT * FROM fkpart9.fk;
 DROP SCHEMA fkpart9 CASCADE;
+
+-- verify foreign keys are enforced during cross-partition updates,
+-- especially on the PK side
+CREATE SCHEMA fkpart10
+  CREATE TABLE pk (a INT PRIMARY KEY) PARTITION BY LIST (a)
+  CREATE TABLE fk (
+    a INT,
+    CONSTRAINT fkey FOREIGN KEY (a) REFERENCES pk(a) ON UPDATE CASCADE ON DELETE CASCADE
+  )
+  CREATE TABLE fk_parted (
+    a INT PRIMARY KEY,
+    CONSTRAINT fkey FOREIGN KEY (a) REFERENCES pk(a) ON UPDATE CASCADE ON DELETE CASCADE
+  ) PARTITION BY LIST (a)
+  CREATE TABLE fk_another (
+    a INT,
+    CONSTRAINT fkey FOREIGN KEY (a) REFERENCES fk_parted (a) ON UPDATE CASCADE ON DELETE CASCADE
+  )
+  CREATE TABLE pk1 PARTITION OF pk FOR VALUES IN (1, 2) PARTITION BY LIST (a)
+  CREATE TABLE pk11 PARTITION OF pk1 FOR VALUES IN (1)
+  CREATE TABLE pk12 PARTITION OF pk1 FOR VALUES IN (2)
+  CREATE TABLE pk2 PARTITION OF pk FOR VALUES IN (3)
+  CREATE TABLE pk3 PARTITION OF pk FOR VALUES IN (4)
+  CREATE TABLE fk1 PARTITION OF fk_parted FOR VALUES IN (1, 2)
+  CREATE TABLE fk2 PARTITION OF fk_parted FOR VALUES IN (3)
+  CREATE TABLE fk3 PARTITION OF fk_parted FOR VALUES IN (4);
+INSERT INTO fkpart10.pk VALUES (1), (3);
+INSERT INTO fkpart10.fk VALUES (1), (3);
+INSERT INTO fkpart10.fk_parted VALUES (1), (3);
+INSERT INTO fkpart10.fk_another VALUES (1), (3);
+-- moves 2 rows from one leaf partition to another, with both updates being
+-- cascaded to fk and fk_parted.  Updates of fk_parted, of which one is
+-- cross-partition (3 -> 4), are further cascaded to fk_another.
+UPDATE fkpart10.pk SET a = a + 1 RETURNING tableoid::pg_catalog.regclass, *;
+SELECT tableoid::pg_catalog.regclass, * FROM fkpart10.fk;
+SELECT tableoid::pg_catalog.regclass, * FROM fkpart10.fk_parted;
+SELECT tableoid::pg_catalog.regclass, * FROM fkpart10.fk_another;
+
+-- let's try with the foreign key pointing at tables in the partition tree
+-- that are not the same as the query's target table
+
+-- 1. foreign key pointing into a non-root ancestor
+--
+-- A cross-partition update on the root table will fail, because we currently
+-- can't enforce the foreign keys pointing into a non-leaf partition
+ALTER TABLE fkpart10.fk DROP CONSTRAINT fkey;
+DELETE FROM fkpart10.fk WHERE a = 4;
+ALTER TABLE fkpart10.fk ADD CONSTRAINT fkey FOREIGN KEY (a) REFERENCES fkpart10.pk1 (a) ON UPDATE CASCADE ON DELETE CASCADE;
+UPDATE fkpart10.pk SET a = a - 1;
+-- it's okay though if the non-leaf partition is updated directly
+UPDATE fkpart10.pk1 SET a = a - 1;
+SELECT tableoid::pg_catalog.regclass, * FROM fkpart10.pk;
+SELECT tableoid::pg_catalog.regclass, * FROM fkpart10.fk;
+SELECT tableoid::pg_catalog.regclass, * FROM fkpart10.fk_parted;
+SELECT tableoid::pg_catalog.regclass, * FROM fkpart10.fk_another;
+
+-- 2. foreign key pointing into a single leaf partition
+--
+-- A cross-partition update that deletes from the pointed-to leaf partition
+-- is allowed to succeed
+ALTER TABLE fkpart10.fk DROP CONSTRAINT fkey;
+ALTER TABLE fkpart10.fk ADD CONSTRAINT fkey FOREIGN KEY (a) REFERENCES fkpart10.pk11 (a) ON UPDATE CASCADE ON DELETE CASCADE;
+-- will delete (1) from p11 which is cascaded to fk
+UPDATE fkpart10.pk SET a = a + 1 WHERE a = 1;
+SELECT tableoid::pg_catalog.regclass, * FROM fkpart10.fk;
+DROP TABLE fkpart10.fk;
+
+-- check that regular and deferrable AR triggers on the PK tables
+-- still work as expected
+CREATE FUNCTION fkpart10.print_row () RETURNS TRIGGER LANGUAGE plpgsql AS $$
+  BEGIN
+    RAISE NOTICE 'TABLE: %, OP: %, OLD: %, NEW: %', TG_RELNAME, TG_OP, OLD, NEW;
+    RETURN NULL;
+  END;
+$$;
+CREATE TRIGGER trig_upd_pk AFTER UPDATE ON fkpart10.pk FOR EACH ROW EXECUTE FUNCTION fkpart10.print_row();
+CREATE TRIGGER trig_del_pk AFTER DELETE ON fkpart10.pk FOR EACH ROW EXECUTE FUNCTION fkpart10.print_row();
+CREATE TRIGGER trig_ins_pk AFTER INSERT ON fkpart10.pk FOR EACH ROW EXECUTE FUNCTION fkpart10.print_row();
+CREATE CONSTRAINT TRIGGER trig_upd_fk_parted AFTER UPDATE ON fkpart10.fk_parted INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fkpart10.print_row();
+CREATE CONSTRAINT TRIGGER trig_del_fk_parted AFTER DELETE ON fkpart10.fk_parted INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fkpart10.print_row();
+CREATE CONSTRAINT TRIGGER trig_ins_fk_parted AFTER INSERT ON fkpart10.fk_parted INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION fkpart10.print_row();
+UPDATE fkpart10.pk SET a = 3 WHERE a = 4;
+UPDATE fkpart10.pk SET a = 1 WHERE a = 2;
+
+DROP SCHEMA fkpart10 CASCADE;

@@ -17,6 +17,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/relation.h"
 #include "access/reloptions.h"
 #include "access/twophase.h"
 #include "access/xact.h"
@@ -59,7 +60,9 @@
 #include "commands/vacuum.h"
 #include "commands/view.h"
 #include "miscadmin.h"
+#include "nodes/makefuncs.h"
 #include "parser/parse_utilcmd.h"
+#include "optimizer/plancat.h"
 #include "postmaster/bgwriter.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rewriteRemove.h"
@@ -1236,6 +1239,10 @@ ProcessUtilitySlow(ParseState *pstate,
 					AlterTableStmt *atstmt = (AlterTableStmt *) parsetree;
 					Oid			relid;
 					LOCKMODE	lockmode;
+					ListCell   *s;
+					Relation	rel;
+					bool		hasSystemVersioning = false;
+					TupleDesc	tupdesc;
 
 					/*
 					 * Figure out lock mode, and acquire lock.  This also does
@@ -1245,6 +1252,83 @@ ProcessUtilitySlow(ParseState *pstate,
 					 */
 					lockmode = AlterTableGetLockLevel(atstmt->cmds);
 					relid = AlterTableLookupRelation(atstmt, lockmode);
+
+					/*
+					 * Change add and remove system versioning to individual
+					 * ADD and DROP column command
+					 */
+					foreach(s, atstmt->cmds)
+					{
+						AlterTableCmd *cmd = (AlterTableCmd *) lfirst(s);
+
+						if (cmd->subtype == AT_AddSystemVersioning)
+						{
+							ColumnDef  *startTimeCol;
+							ColumnDef  *endTimeCol;
+
+							rel = relation_open(relid, NoLock);
+							tupdesc = RelationGetDescr(rel);
+							hasSystemVersioning = tupdesc->constr && tupdesc->constr->has_system_versioning;
+							if (hasSystemVersioning)
+								ereport(ERROR,
+										(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+										 errmsg("table is already defined with system versioning")));
+
+							/*
+							 * TODO create composite primary key
+							 */
+							if (RelationGetPrimaryKeyIndex(rel) != InvalidOid)
+								ereport(ERROR,
+										(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+										 errmsg("can not add system versioning to table with primary key")));
+
+							/*
+							 * we use defualt column names for system
+							 * versioning in ALTER TABLE ADD system versioning statement
+							 */
+							startTimeCol = makeTemporalColumnDef(SYSTEM_VERSIONING_DEFAULT_START_NAME);
+							endTimeCol = makeTemporalColumnDef(SYSTEM_VERSIONING_DEFAULT_END_NAME);
+
+							/*
+							 * create alter table add column cmd and append to the end
+							 * of alter table commands.
+							 */
+							atstmt->cmds = lappend(atstmt->cmds, (Node *) makeAddColCmd(startTimeCol));
+							atstmt->cmds = lappend(atstmt->cmds, (Node *) makeAddColCmd(endTimeCol));
+
+							/*
+							 * delete current listCell
+							 */
+							atstmt->cmds = list_delete_cell(atstmt->cmds, s);
+							relation_close(rel, NoLock);
+
+						}
+
+						if (cmd->subtype == AT_DropSystemVersioning)
+						{
+							rel = relation_open(relid, NoLock);
+							tupdesc = RelationGetDescr(rel);
+							hasSystemVersioning = tupdesc->constr && tupdesc->constr->has_system_versioning;
+							if (!hasSystemVersioning)
+								ereport(ERROR,
+										(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+										 errmsg("table is not defined with system versioning")));
+
+							/*
+							 * create alter table drop column cmd and append to the ende
+							 * of alter table commands.
+							 */
+							atstmt->cmds = lappend(atstmt->cmds, makeDropColCmd(get_row_end_time_col_name(rel)));
+							atstmt->cmds = lappend(atstmt->cmds, makeDropColCmd(get_row_start_time_col_name(rel)));
+
+							/*
+							 * delete current listCell because we don't need
+							 * it anymore
+							 */
+							atstmt->cmds = list_delete_cell(atstmt->cmds, s);
+							relation_close(rel, NoLock);
+						}
+					}
 
 					if (OidIsValid(relid))
 					{
@@ -1256,6 +1340,11 @@ ProcessUtilitySlow(ParseState *pstate,
 						atcontext.relid = relid;
 						atcontext.params = params;
 						atcontext.queryEnv = queryEnv;
+						atcontext.startTimeColName = NULL;
+						atcontext.endTimeColName = NULL;
+						atcontext.periodEnd = NULL;
+						atcontext.periodStart = NULL;
+						atcontext.hasSystemVersioning = false;
 
 						/* ... ensure we have an event trigger context ... */
 						EventTriggerAlterTableStart(parsetree);

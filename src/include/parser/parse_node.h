@@ -199,7 +199,7 @@ struct ParseState
 										 * with FOR UPDATE/FOR SHARE */
 	bool		p_resolve_unknowns; /* resolve unknown-type SELECT outputs as
 									 * type text */
-
+	Node	   *p_tempwhere;	/* temporal where clause so far */
 	QueryEnvironment *p_queryEnv;	/* curr env, incl refs to enclosing env */
 
 	/* Flags telling about things found in the query: */

@@ -1014,6 +1014,11 @@ CopyFrom(CopyFromState cstate)
 					ExecComputeStoredGenerated(resultRelInfo, estate, myslot,
 											   CMD_INSERT);
 
+				/* Set system time columns */
+				if (resultRelInfo->ri_RelationDesc->rd_att->constr &&
+					resultRelInfo->ri_RelationDesc->rd_att->constr->has_system_versioning)
+					ExecSetRowStartTime(estate, myslot, resultRelInfo);
+
 				/*
 				 * If the target is a plain table, check the constraints of
 				 * the tuple.

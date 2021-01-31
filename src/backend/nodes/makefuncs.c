@@ -815,3 +815,126 @@ makeVacuumRelation(RangeVar *relation, Oid oid, List *va_cols)
 	v->va_cols = va_cols;
 	return v;
 }
+
+Node *
+makeAndExpr(Node *lexpr, Node *rexpr, int location)
+{
+	/* Flatten "a AND b AND c ..." to a single BoolExpr on sight */
+	if (IsA(lexpr, BoolExpr))
+	{
+		BoolExpr *blexpr = (BoolExpr *) lexpr;
+
+		if (blexpr->boolop == AND_EXPR)
+		{
+			blexpr->args = lappend(blexpr->args, rexpr);
+			return (Node *) blexpr;
+		}
+	}
+	return (Node *) makeBoolExpr(AND_EXPR, list_make2(lexpr, rexpr), location);
+}
+
+Node *
+makeTypeCast(Node *arg, TypeName *typename, int location)
+{
+	TypeCast   *n = makeNode(TypeCast);
+
+	n->arg = arg;
+	n->typeName = typename;
+	n->location = location;
+	return (Node *) n;
+}
+
+/*
+ * makeColumnRefFromName -
+ *	  creates a ColumnRef node using column name
+ */
+ColumnRef *
+makeColumnRefFromName(char *colname)
+{
+	ColumnRef  *c = makeNode(ColumnRef);
+
+	c->location = -1;
+	c->fields = lcons(makeString(colname), NIL);
+
+	return c;
+}
+
+/*
+ * makeTemporalColumnDef -
+ *       create a ColumnDef node for system time column
+ */
+ColumnDef *
+makeTemporalColumnDef(char *name)
+{
+	ColumnDef  *n = makeNode(ColumnDef);
+
+	if (strcmp(name, SYSTEM_VERSIONING_DEFAULT_START_NAME) == 0)
+	{
+		Constraint *c = makeNode(Constraint);
+
+		c->contype = CONSTR_ROW_START_TIME;
+		c->raw_expr = NULL;
+		c->cooked_expr = NULL;
+		c->location = -1;
+		n->colname = SYSTEM_VERSIONING_DEFAULT_START_NAME;
+		n->constraints = list_make1((Node *) c);
+	}
+	else if (strcmp(name, SYSTEM_VERSIONING_DEFAULT_END_NAME) == 0)
+	{
+		Constraint *c = makeNode(Constraint);
+
+		c->contype = CONSTR_ROW_END_TIME;
+		c->raw_expr = NULL;
+		c->cooked_expr = NULL;
+		c->location = -1;
+
+		n->colname = SYSTEM_VERSIONING_DEFAULT_END_NAME;
+		n->constraints = list_make1((Node *) c);
+	}
+	else
+		elog(ERROR, "unexpected temporal column name");
+	n->typeName = makeTypeNameFromNameList(list_make2(makeString("pg_catalog"),
+													  makeString("timestamptz")));
+	n->inhcount = 0;
+	n->is_local = true;
+	n->is_from_type = false;
+	n->storage = 0;
+	n->raw_default = NULL;
+	n->cooked_default = NULL;
+	n->collOid = InvalidOid;
+	n->location = -1;
+
+	return n;
+}
+
+/*
+ * makeAddColCmd -
+ *       create add column AlterTableCmd node
+ */
+AlterTableCmd *
+makeAddColCmd(ColumnDef *coldef)
+{
+	AlterTableCmd *n = makeNode(AlterTableCmd);
+
+	n->subtype = AT_AddColumn;
+	n->def = (Node *) coldef;
+	n->missing_ok = false;
+
+	return n;
+}
+
+/*
+ * makeDropColCmd -
+ *       create drop column AlterTableCmd node
+ */
+AlterTableCmd *
+makeDropColCmd(char *name)
+{
+	AlterTableCmd *n = makeNode(AlterTableCmd);
+
+	n->subtype = AT_DropColumn;
+	n->name = name;
+	n->missing_ok = false;
+
+	return n;
+}

@@ -105,5 +105,16 @@ extern DefElem *makeDefElemExtended(char *nameSpace, char *name, Node *arg,
 extern GroupingSet *makeGroupingSet(GroupingSetKind kind, List *content, int location);
 
 extern VacuumRelation *makeVacuumRelation(RangeVar *relation, Oid oid, List *va_cols);
+extern Node *makeAndExpr(Node *lexpr, Node *rexpr, int location);
+extern Node *makeTypeCast(Node *arg, TypeName *typename, int location);
+extern ColumnRef *makeColumnRefFromName(char *colname);
+extern ColumnDef *makeTemporalColumnDef(char *name);
+
+#define SYSTEM_VERSIONING_DEFAULT_START_NAME "start_timestamp"
+#define SYSTEM_VERSIONING_DEFAULT_END_NAME "end_timestamp"
+
+extern AlterTableCmd *makeDropColCmd(char *name);
+extern AlterTableCmd *makeAddColCmd(ColumnDef *coldef);
+
 
 #endif							/* MAKEFUNC_H */

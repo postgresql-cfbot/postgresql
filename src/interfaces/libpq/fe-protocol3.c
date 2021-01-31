@@ -156,7 +156,12 @@ pqParseInput3(PGconn *conn)
 		{
 			/* If not IDLE state, just wait ... */
 			if (conn->asyncStatus != PGASYNC_IDLE)
+			{
+				/* Terminate a half-finished logging message */
+				if (conn->Pfdebug)
+					pqTraceForcelyBreakLine(msgLength, conn);
 				return;
+			}
 
 			/*
 			 * Unexpected message in IDLE state; need to recover somehow.
@@ -283,6 +288,9 @@ pqParseInput3(PGconn *conn)
 						 * the data till we get to the end of the query.
 						 */
 						conn->inCursor += msgLength;
+						/* Terminate a half-finished logging message */
+						if (conn->Pfdebug)
+							pqTraceForcelyBreakLine(msgLength, conn);
 					}
 					else if (conn->result == NULL ||
 							 conn->queryclass == PGQUERY_DESCRIBE)
@@ -357,6 +365,9 @@ pqParseInput3(PGconn *conn)
 						 * tuples till we get to the end of the query.
 						 */
 						conn->inCursor += msgLength;
+						/* Terminate a half-finished logging message */
+						if (conn->Pfdebug)
+							pqTraceForcelyBreakLine(msgLength, conn);
 					}
 					else
 					{
@@ -366,6 +377,9 @@ pqParseInput3(PGconn *conn)
 						pqSaveErrorResult(conn);
 						/* Discard the unexpected message */
 						conn->inCursor += msgLength;
+						/* Terminate a half-finished logging message */
+						if (conn->Pfdebug)
+							pqTraceForcelyBreakLine(msgLength, conn);
 					}
 					break;
 				case 'G':		/* Start Copy In */
@@ -393,6 +407,9 @@ pqParseInput3(PGconn *conn)
 					 * early.
 					 */
 					conn->inCursor += msgLength;
+						/* Terminate a half-finished logging message */
+						if (conn->Pfdebug)
+							pqTraceForcelyBreakLine(msgLength, conn);
 					break;
 				case 'c':		/* Copy Done */
 
@@ -454,6 +471,9 @@ handleSyncLoss(PGconn *conn, char id, int msgLength)
 	/* flush input data since we're giving up on processing it */
 	pqDropConnection(conn, true);
 	conn->status = CONNECTION_BAD;	/* No more connection to backend */
+	/* Terminate a half-finished logging message */
+	if (conn->Pfdebug)
+		pqTraceForcelyBreakLine(msgLength, conn);
 }
 
 /*
@@ -1620,6 +1640,9 @@ getCopyDataMessage(PGconn *conn)
 					return 0;
 				break;
 			case 'd':			/* Copy Data, pass it back to caller */
+				/* Terminate a half-finished logging message */
+				if (conn->Pfdebug)
+					pqTraceForcelyBreakLine(msgLength, conn);
 				return msgLength;
 			case 'c':
 

@@ -155,6 +155,14 @@ typedef struct
 	void	   *noticeProcArg;
 } PGNoticeHooks;
 
+/*
+ * Logging
+ */
+
+/* Forward declarations */
+struct pqBackendMessage;
+struct pqFrontendMessage;
+
 typedef struct PGEvent
 {
 	PGEventProc proc;			/* the function to call on events */
@@ -375,6 +383,11 @@ struct pg_conn
 
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
+	int			traceFlags;
+
+	/* pending protocol trace messages */
+	struct pqBackendMessage *be_msg;
+	struct pqFrontendMessage *fe_msg;
 
 	/* Callback procedures for notice message processing */
 	PGNoticeHooks noticeHooks;
@@ -672,6 +685,9 @@ extern int	pqPutInt(int value, size_t bytes, PGconn *conn);
 extern int	pqPutMsgStart(char msg_type, bool force_len, PGconn *conn);
 extern int	pqPutMsgEnd(PGconn *conn);
 extern int	pqReadData(PGconn *conn);
+extern bool pqTraceInit(PGconn *conn, int flags);
+extern void pqTraceUninit(PGconn *conn);
+extern void pqTraceForcelyBreakLine(int size, PGconn *conn);
 extern int	pqFlush(PGconn *conn);
 extern int	pqWait(int forRead, int forWrite, PGconn *conn);
 extern int	pqWaitTimed(int forRead, int forWrite, PGconn *conn,

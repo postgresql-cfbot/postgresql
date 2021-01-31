@@ -6761,12 +6761,28 @@ PQsetErrorContextVisibility(PGconn *conn, PGContextVisibility show_context)
 }
 
 void
-PQtrace(PGconn *conn, FILE *debug_port)
+PQtrace(PGconn *conn, FILE *debug_port, int flags)
 {
 	if (conn == NULL)
 		return;
+	/* Protocol 2.0 is not supported. */
+	if (PG_PROTOCOL_MAJOR(conn->pversion) < 3)
+		return;
+
 	PQuntrace(conn);
-	conn->Pfdebug = debug_port;
+	if (!debug_port)
+		return;
+	if (pqTraceInit(conn, flags))
+	{
+		setvbuf(debug_port, NULL, _IOLBF, 0);
+		conn->Pfdebug = debug_port;
+	}
+	else
+	{
+		fprintf(debug_port, "Failed to initialize trace support: out of memory\n");
+		fflush(debug_port);
+		conn->Pfdebug = NULL;
+	}
 }
 
 void
@@ -6779,6 +6795,8 @@ PQuntrace(PGconn *conn)
 		fflush(conn->Pfdebug);
 		conn->Pfdebug = NULL;
 	}
+	pqTraceUninit(conn);
+	conn->traceFlags = 0;
 }
 
 PQnoticeReceiver

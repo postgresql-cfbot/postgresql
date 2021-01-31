@@ -51,13 +51,169 @@
 #include "libpq-int.h"
 #include "mb/pg_wchar.h"
 #include "pg_config_paths.h"
+#include "pgtime.h"
 #include "port/pg_bswap.h"
+
+/* Log message source */
+typedef enum
+{
+	MSGDIR_FROM_BACKEND,
+	MSGDIR_FROM_FRONTEND
+} PGCommSource;
+
+/* Messages from backend */
+typedef enum PGLogState
+{
+	LOG_FIRST_BYTE,				/* logging the first byte identifying the
+								 * protocol message type */
+	LOG_LENGTH,					/* logging protocol message length */
+	LOG_CONTENTS				/* logging protocol message contents */
+} PGLogState;
+
+typedef struct pqBackendMessage
+{
+	PGLogState	state;			/* state of logging message state machine */
+	int			length;			/* protocol message length */
+	char		command;		/* first one byte of protocol message */
+} pqBackendMessage;
+
+/* Messages from frontend */
+typedef enum
+{
+	LOG_BYTE1,
+	LOG_STRING,
+	LOG_NCHAR,
+	LOG_INT16,
+	LOG_INT32
+} PGLogMsgDataType;
+
+typedef struct pqFrontendMessageField
+{
+	PGLogMsgDataType type;
+	int			offset_in_buffer;
+	int			length;
+} pqFrontendMessageField;
+
+typedef struct pqFrontendMessage
+{
+	char		msg_type;
+	int			num_fields;		/* array used size */
+	int			max_fields;		/* array allocated size */
+	pqFrontendMessageField fields[FLEXIBLE_ARRAY_MEMBER];
+} pqFrontendMessage;
+#define DEF_FE_MSGFIELDS 256	/* initial fields allocation quantum */
+#define INT_MAX	(2048/2)		/* maximum array size */
+
+/*
+ * protocol message types:
+ *
+ * protocol_message_type_b[]: message types sent by a backend
+ * protocol_message_type_f[]: message types sent by a frontend
+ */
+static const char *const protocol_message_type_b[] = {
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* \x00 ... \x0f */
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* \x10 ... \x1f */
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* \x20 ... \x2f */
+	0,							/* 0 */
+	"ParseComplete",			/* 1 */
+	"BindComplete",				/* 2 */
+	"CloseComplete",			/* 3 */
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* \x34 ... \x3f */
+	0,							/* @ */
+	"NotificationResponse",		/* A */
+	0,							/* B */
+	"CommandComplete",			/* C */
+	"DataRow",					/* D */
+	"ErrorResponse",			/* E */
+	0,							/* F */
+	"CopyInResponse",			/* G */
+	"CopyOutResponse",			/* H */
+	"EmptyQueryResponse",		/* I */
+	0,							/* J */
+	"BackendKeyData",			/* K */
+	0,							/* L */
+	0,							/* M */
+	"NoticeResponse",			/* N */
+	0,							/* O */
+	0,							/* P */
+	0,							/* Q */
+	"Authentication",			/* R */
+	"ParameterStatus",			/* S */
+	"RowDescription",			/* T */
+	0,							/* U */
+	"FunctionCallResponse",		/* V */
+	"CopyBothResponse",			/* W */
+	0,							/* X */
+	0,							/* Y */
+	"ReadyForQuery",			/* Z */
+	0, 0, 0, 0, 0,				/* \x5b ... \x5f */
+	0,							/* ` */
+	0,							/* a */
+	0,							/* b */
+	"CopyDone",					/* c */
+	"CopyData",					/* d */
+	0, 0, 0, 0, 0, 0, 0, 0,	0,	/* \x65 ... \0x6d */
+	"NoData",					/* n */
+	0,							/* o */
+	0,							/* p */
+	0,							/* q */
+	0,							/* r */
+	"PortalSuspended",			/* s */
+	"ParameterDescription",		/* t */
+	0,							/* u */
+	"NegotiateProtocolVersion", /* v */
+};
+
+static const char *const protocol_message_type_f[] = {
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* \x00 ... \x0f */
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* \x10 ... \x1f */
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* \x20 ... \x2f */
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* \x30 ... \x3f */
+	0,							/* @ */
+	0,							/* A */
+	"Bind",						/* B */
+	"Close",					/* C */
+	"Describe",					/* D */
+	"Execute",					/* E */
+	"FunctionCall",				/* F */
+	0,							/* G */
+	"Flush",					/* H */
+	0, 0, 0, 0, 0, 0, 0,		/* I ... O */
+	"Parse",					/* P */
+	"Query",					/* Q */
+	0,							/* R */
+	"Sync",						/* S */
+	0, 0, 0, 0,					/* T ... W */
+	"Terminate",				/* X */
+	0, 0, 0, 0, 0, 0, 0,		/* \x59 ... \x5f */
+	0,							/* ` */
+	0,							/* a */
+	0,							/* b */
+	"CopyDone",					/* c */
+	"CopyData",					/* d */
+	0,							/* e */
+	"CopyFail",					/* f */
+	0, 0, 0, 0, 0, 0, 0, 0, 0,	/* g ... o */
+	"AuthenticationResponse",	/* p */
+};
 
 static int	pqPutMsgBytes(const void *buf, size_t len, PGconn *conn);
 static int	pqSendSome(PGconn *conn, int len);
 static int	pqSocketCheck(PGconn *conn, int forRead, int forWrite,
 						  time_t end_time);
 static int	pqSocketPoll(int sock, int forRead, int forWrite, time_t end_time);
+static void pqStoreFrontendMsg(PGconn *conn, PGLogMsgDataType type, int length);
+static void pqStoreFeMsgStart(PGconn *conn, char type);
+static void pqLogFrontendMsg(PGconn *conn, int msgLen);
+static void pqTraceMaybeBreakLine(int size, PGconn *conn);
+static void pqLogMessageByte1(PGconn *conn, char v);
+static void pqLogMessageInt(PGconn *conn, int v, int length);
+static void pqLogMessageString(PGconn *conn, const char *v, int length,
+							   PGCommSource commsource);
+static void pqLogBinaryMsg(PGconn *conn, const char *v, int length,
+						   PGCommSource commsource);
+static void pqLogMessagenchar(PGconn *conn, const char *v, int length,
+							  PGCommSource commsource);
 
 /*
  * PQlibVersion: return the libpq version number
@@ -85,7 +241,7 @@ pqGetc(char *result, PGconn *conn)
 	*result = conn->inBuffer[conn->inCursor++];
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "From backend> %c\n", *result);
+		pqLogMessageByte1(conn, *result);
 
 	return 0;
 }
@@ -101,7 +257,7 @@ pqPutc(char c, PGconn *conn)
 		return EOF;
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> %c\n", c);
+		pqStoreFrontendMsg(conn, LOG_BYTE1, 1);
 
 	return 0;
 }
@@ -139,8 +295,7 @@ pqGets_internal(PQExpBuffer buf, PGconn *conn, bool resetbuffer)
 	conn->inCursor = ++inCursor;
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "From backend> \"%s\"\n",
-				buf->data);
+		pqLogMessageString(conn, buf->data, buf->len + 1, MSGDIR_FROM_BACKEND);
 
 	return 0;
 }
@@ -157,18 +312,19 @@ pqGets_append(PQExpBuffer buf, PGconn *conn)
 	return pqGets_internal(buf, conn, false);
 }
 
-
 /*
  * pqPuts: write a null-terminated string to the current message
  */
 int
 pqPuts(const char *s, PGconn *conn)
 {
-	if (pqPutMsgBytes(s, strlen(s) + 1, conn))
+	int			length = strlen(s) + 1;
+
+	if (pqPutMsgBytes(s, length, conn))
 		return EOF;
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> \"%s\"\n", s);
+		pqStoreFrontendMsg(conn, LOG_STRING, length);
 
 	return 0;
 }
@@ -189,11 +345,7 @@ pqGetnchar(char *s, size_t len, PGconn *conn)
 	conn->inCursor += len;
 
 	if (conn->Pfdebug)
-	{
-		fprintf(conn->Pfdebug, "From backend (%lu)> ", (unsigned long) len);
-		fwrite(s, 1, len, conn->Pfdebug);
-		fprintf(conn->Pfdebug, "\n");
-	}
+		pqLogMessagenchar(conn, s, len, MSGDIR_FROM_BACKEND);
 
 	return 0;
 }
@@ -213,12 +365,8 @@ pqSkipnchar(size_t len, PGconn *conn)
 		return EOF;
 
 	if (conn->Pfdebug)
-	{
-		fprintf(conn->Pfdebug, "From backend (%lu)> ", (unsigned long) len);
-		fwrite(conn->inBuffer + conn->inCursor, 1, len, conn->Pfdebug);
-		fprintf(conn->Pfdebug, "\n");
-	}
-
+		pqLogMessagenchar(conn, conn->inBuffer + conn->inCursor, len,
+						  MSGDIR_FROM_BACKEND);
 	conn->inCursor += len;
 
 	return 0;
@@ -235,11 +383,7 @@ pqPutnchar(const char *s, size_t len, PGconn *conn)
 		return EOF;
 
 	if (conn->Pfdebug)
-	{
-		fprintf(conn->Pfdebug, "To backend> ");
-		fwrite(s, 1, len, conn->Pfdebug);
-		fprintf(conn->Pfdebug, "\n");
-	}
+		pqStoreFrontendMsg(conn, LOG_NCHAR, len);
 
 	return 0;
 }
@@ -279,7 +423,7 @@ pqGetInt(int *result, size_t bytes, PGconn *conn)
 	}
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "From backend (#%lu)> %d\n", (unsigned long) bytes, *result);
+		pqLogMessageInt(conn, *result, (unsigned int) bytes);
 
 	return 0;
 }
@@ -294,15 +438,18 @@ pqPutInt(int value, size_t bytes, PGconn *conn)
 {
 	uint16		tmp2;
 	uint32		tmp4;
+	PGLogMsgDataType type;
 
 	switch (bytes)
 	{
 		case 2:
+			type = LOG_INT16;
 			tmp2 = pg_hton16((uint16) value);
 			if (pqPutMsgBytes((const char *) &tmp2, 2, conn))
 				return EOF;
 			break;
 		case 4:
+			type = LOG_INT32;
 			tmp4 = pg_hton32((uint32) value);
 			if (pqPutMsgBytes((const char *) &tmp4, 4, conn))
 				return EOF;
@@ -315,7 +462,7 @@ pqPutInt(int value, size_t bytes, PGconn *conn)
 	}
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend (%lu#)> %d\n", (unsigned long) bytes, value);
+		pqStoreFrontendMsg(conn, type, (unsigned int) bytes);
 
 	return 0;
 }
@@ -473,8 +620,8 @@ pqCheckInBufferSpace(size_t bytes_needed, PGconn *conn)
 	}
 
 	/* realloc failed. Probably out of memory */
-	appendPQExpBufferStr(&conn->errorMessage,
-						 "cannot allocate memory for input buffer\n");
+	appendPQExpBuffer(&conn->errorMessage,
+					  "cannot allocate memory for input buffer\n");
 	return EOF;
 }
 
@@ -535,8 +682,7 @@ pqPutMsgStart(char msg_type, bool force_len, PGconn *conn)
 	/* length word, if needed, will be filled in by pqPutMsgEnd */
 
 	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> Msg %c\n",
-				msg_type ? msg_type : ' ');
+		pqStoreFeMsgStart(conn, msg_type);
 
 	return 0;
 }
@@ -572,14 +718,13 @@ pqPutMsgBytes(const void *buf, size_t len, PGconn *conn)
 int
 pqPutMsgEnd(PGconn *conn)
 {
-	if (conn->Pfdebug)
-		fprintf(conn->Pfdebug, "To backend> Msg complete, length %u\n",
-				conn->outMsgEnd - conn->outCount);
-
 	/* Fill in length word if needed */
 	if (conn->outMsgStart >= 0)
 	{
 		uint32		msgLen = conn->outMsgEnd - conn->outMsgStart;
+
+		if (conn->Pfdebug)
+			pqLogFrontendMsg(conn, msgLen);
 
 		msgLen = pg_hton32(msgLen);
 		memcpy(conn->outBuffer + conn->outMsgStart, &msgLen, 4);
@@ -598,6 +743,465 @@ pqPutMsgEnd(PGconn *conn)
 	}
 
 	return 0;
+}
+
+/* -------------------------
+ * FE/BE trace support
+ *
+ * We accumulate frontend message pieces in an array as the libpq code writes
+ * them, and log the complete message when pqLogFrontendMsg is called.
+ * For backend, we print the pieces as soon as we receive them from the server.
+ * -------------------------
+ */
+
+/*
+ * Set up state so that we can trace. NB -- this might be called multiple
+ * times in a process; make sure it's idempotent.
+ */
+bool
+pqTraceInit(PGconn *conn, int flags)
+{
+	conn->traceFlags = flags;
+
+	if (conn->be_msg == NULL)
+	{
+		conn->be_msg = malloc(sizeof(pqBackendMessage));
+		if (conn->be_msg == NULL)
+			return false;
+	}
+
+	if (conn->fe_msg == NULL)
+	{
+		conn->fe_msg = malloc(offsetof(pqFrontendMessage, fields) +
+							  DEF_FE_MSGFIELDS * sizeof(pqFrontendMessageField));
+		if (conn->fe_msg == NULL)
+		{
+			free(conn->be_msg);
+			/* NULL out for the case that fe_msg malloc fails */
+			conn->be_msg = NULL;
+			return false;
+		}
+		conn->fe_msg->max_fields = DEF_FE_MSGFIELDS;
+	}
+
+	conn->fe_msg->num_fields = 0;
+	conn->be_msg->state = LOG_FIRST_BYTE;
+	conn->be_msg->length = 0;
+	conn->be_msg->command = '\0';
+
+	return true;
+}
+
+/*
+ * Deallocate FE/BE message tracking memory.  We only do this because
+ * FE message can grow arbitrarily large, and skip it in the initial state,
+ * because it's likely pointless.
+ */
+void
+pqTraceUninit(PGconn *conn)
+{
+	if (conn->fe_msg &&
+		conn->fe_msg->num_fields != DEF_FE_MSGFIELDS)
+	{
+		free(conn->fe_msg);
+		conn->fe_msg = NULL;
+	}
+	if (conn->be_msg)
+	{
+		free(conn->be_msg);
+		conn->be_msg = NULL;
+	}
+}
+
+/*
+ * pqGetProtocolMsgType:
+ *		Get a protocol type from first byte identifier
+ */
+static const char *
+pqGetProtocolMsgType(unsigned char c, PGCommSource commsource)
+{
+	if (commsource == MSGDIR_FROM_BACKEND &&
+		c < lengthof(protocol_message_type_b) &&
+		protocol_message_type_b[c] != NULL)
+		return protocol_message_type_b[c];
+
+	if (commsource == MSGDIR_FROM_FRONTEND &&
+		c < lengthof(protocol_message_type_f) &&
+		protocol_message_type_f[c] != NULL)
+		return protocol_message_type_f[c];
+
+	return "UnknownMessage";
+}
+
+/* pqTraceResetBeMsg: Initialize backend message */
+static void
+pqTraceResetBeMsg(PGconn *conn)
+{
+	conn->be_msg->state = LOG_FIRST_BYTE;
+	conn->be_msg->length = 0;
+}
+
+/* pqLogInvalidProtocol: Print that the protocol message is invalid */
+static void
+pqLogInvalidProtocol(PGconn *conn, PGCommSource commsource)
+{
+	fprintf(conn->Pfdebug,
+			"%s\t:::Invalid Protocol\n",
+			commsource == MSGDIR_FROM_BACKEND ? "<" : ">");
+	conn->be_msg->state = LOG_FIRST_BYTE;
+}
+
+/*
+ * pqTraceMaybeBreakLine:
+ *		Check whether the backend message is complete. If so, print a line
+ *		break and reset the buffer.
+ */
+static void
+pqTraceMaybeBreakLine(int size, PGconn *conn)
+{
+	conn->be_msg->length -= size;
+	if (conn->be_msg->length <= 0)
+	{
+		fprintf(conn->Pfdebug, "\n");
+		pqTraceResetBeMsg(conn);
+	}
+	else
+		fprintf(conn->Pfdebug, " ");
+}
+
+/*
+ * pqTraceForcelyBreakLine:
+ * 		If message is not completed, print a line break and reset.
+ */
+void
+pqTraceForcelyBreakLine(int size, PGconn *conn)
+{
+	fprintf(conn->Pfdebug, "\n");
+	pqTraceResetBeMsg(conn);
+}
+
+static void
+pqStoreFeMsgStart(PGconn *conn, char type)
+{
+	if (PG_PROTOCOL_MAJOR(conn->pversion) >= 3)
+		conn->fe_msg->msg_type = type;
+}
+
+/*
+ * pqStoreFrontendMsg
+ *		Keep track of a from-frontend message that was just written to the
+ *		output buffer.
+ *
+ * Frontend messages are constructed piece by piece, and the message length
+ * is determined at the end, but sent to the server first; so for tracing
+ * purposes we store everything in memory and print to the trace file when
+ * the message is complete.
+ */
+static void
+pqStoreFrontendMsg(PGconn *conn, PGLogMsgDataType type, int length)
+{
+	/* realloc if we've exceeded available space */
+	if (conn->fe_msg->num_fields >= conn->fe_msg->max_fields)
+	{
+		if (conn->fe_msg->max_fields > INT_MAX)
+		{
+			fprintf(conn->Pfdebug, "abandoning trace: field message overflow\n");
+			PQuntrace(conn);
+		}
+		conn->fe_msg =
+			realloc(conn->fe_msg,
+					sizeof(pqFrontendMessage) +
+					2 * conn->fe_msg->max_fields * sizeof(pqFrontendMessageField));
+		if (conn->fe_msg == NULL)
+		{
+			fprintf(conn->Pfdebug, "abandoning trace: out of memory\n");
+			PQuntrace(conn);
+		}
+		conn->fe_msg->max_fields *= 2;
+	}
+
+	conn->fe_msg->fields[conn->fe_msg->num_fields].type = type;
+	conn->fe_msg->fields[conn->fe_msg->num_fields].offset_in_buffer = conn->outMsgEnd - length;
+	conn->fe_msg->fields[conn->fe_msg->num_fields].length = length;
+	conn->fe_msg->num_fields++;
+}
+
+/*
+ * Print the current time, with milliseconds, into a caller-supplied
+ * buffer.  Used for PQtrace() purposes.
+ * Cribbed from setup_formatted_log_time, but much simpler.
+ */
+static char *
+pqLogFormatTimestamp(char *timestr)
+{
+	struct timeval tval;
+	pg_time_t	stamp_time;
+
+	gettimeofday(&tval, NULL);
+	stamp_time = (pg_time_t) tval.tv_sec;
+
+#define FORMATTED_TS_LEN 128
+	strftime(timestr, FORMATTED_TS_LEN,
+				"%Y-%m-%d %H:%M:%S",
+				localtime(&stamp_time));
+	/* append milliseconds */
+	sprintf(timestr + strlen(timestr), ".%03d", (int) (tval.tv_usec / 1000));
+
+	return timestr;
+}
+
+/*
+ * pqLogFrontendMsg
+ *		Print accumulated frontend message pieces to the trace file.
+ */
+static void
+pqLogFrontendMsg(PGconn *conn, int msgLen)
+{
+	if ((conn->traceFlags & PQTRACE_SUPPRESS_TIMESTAMPS) == 0)
+	{
+		char		timestr[128];
+
+		fprintf(conn->Pfdebug, "%s\t>\t%s\t%d",
+				pqLogFormatTimestamp(timestr),
+				pqGetProtocolMsgType(conn->fe_msg->msg_type,
+									 MSGDIR_FROM_FRONTEND),
+				msgLen);
+	}
+	else
+		fprintf(conn->Pfdebug, ">\t%s\t%d",
+				pqGetProtocolMsgType(conn->fe_msg->msg_type,
+									 MSGDIR_FROM_FRONTEND),
+				msgLen);
+
+	for (int i = 0; i < conn->fe_msg->num_fields; i++)
+	{
+		int			message_addr;
+		int			length;
+		char		v;
+
+		message_addr = conn->fe_msg->fields[i].offset_in_buffer;
+		length = conn->fe_msg->fields[i].length;
+
+		fprintf(conn->Pfdebug, " ");
+
+		switch (conn->fe_msg->fields[i].type)
+		{
+			case LOG_BYTE1:
+				v = *(conn->outBuffer + message_addr);
+
+				if (isprint(v))
+					fprintf(conn->Pfdebug, "%c", v);
+				else
+					fprintf(conn->Pfdebug, "\\x%02x", v);
+				break;
+
+			case LOG_STRING:
+				pqLogMessageString(conn, conn->outBuffer + message_addr,
+								   length, MSGDIR_FROM_FRONTEND);
+				break;
+
+			case LOG_NCHAR:
+				pqLogMessagenchar(conn, conn->outBuffer + message_addr,
+								  length, MSGDIR_FROM_FRONTEND);
+				break;
+
+			case LOG_INT16:
+				{
+					uint16		result16;
+
+					memcpy(&result16, conn->outBuffer + message_addr, length);
+					result16 = pg_ntoh16(result16);
+					fprintf(conn->Pfdebug, "#%d", result16);
+					break;
+				}
+
+			case LOG_INT32:
+				{
+					uint32		result32;
+
+					memcpy(&result32, conn->outBuffer + message_addr, length);
+					result32 = pg_ntoh32(result32);
+					fprintf(conn->Pfdebug, "%d", result32);
+					break;
+				}
+		}
+	}
+	conn->fe_msg->num_fields = 0;
+
+	fprintf(conn->Pfdebug, "\n");
+}
+
+/*
+ * pqLogMessageByte1: output 1 char from-backend message to the log
+ */
+static void
+pqLogMessageByte1(PGconn *conn, char v)
+{
+	switch (conn->be_msg->state)
+	{
+		case LOG_FIRST_BYTE:
+			if ((conn->traceFlags & PQTRACE_SUPPRESS_TIMESTAMPS) == 0)
+			{
+				char		timestr[128];
+
+				fprintf(conn->Pfdebug, "%s\t<\t",
+						pqLogFormatTimestamp(timestr));
+			}
+			else
+				fprintf(conn->Pfdebug, "<\t");
+
+			/*
+				* True type of message tagged '\0' is known when next 4 bytes
+				* is checked. So we delay printing message type to
+				* pqLogMessageInt()
+				*/
+			if (v != '\0')
+				fprintf(conn->Pfdebug, "%s\t",
+						pqGetProtocolMsgType((unsigned char) v,
+												MSGDIR_FROM_BACKEND));
+			/* Next, log the message length */
+			conn->be_msg->state = LOG_LENGTH;
+			conn->be_msg->command = v;
+			break;
+
+		case LOG_CONTENTS:
+
+			/*
+				* Show non-printable data in hex format, including the
+				* terminating \0 that completes ErrorResponse and
+				* NoticeResponse messages.
+				*/
+			if (!isprint(v))
+				fprintf(conn->Pfdebug, "\\x%02x", v);
+			else
+				fprintf(conn->Pfdebug, "%c", v);
+			pqTraceMaybeBreakLine(1, conn);
+			break;
+
+		default:
+			pqLogInvalidProtocol(conn, MSGDIR_FROM_BACKEND);
+			break;
+	}
+}
+
+/*
+ * pqLogMessageInt: output a 2- or 4-byte integer from-backend msg to the log
+ */
+static void
+pqLogMessageInt(PGconn *conn, int v, int length)
+{
+	char	   *prefix = length == 4 ? "" : "#";
+
+	switch (conn->be_msg->state)
+	{
+		case LOG_LENGTH:
+			if (conn->be_msg->command == '\0')
+			{
+				char	   *message_type;
+
+				/*
+					* We delayed printing message type for special messages;
+					* they are complete now, so print them.
+					*/
+				if (conn->fe_msg->num_fields > 0)
+				{
+					int			message_addr;
+					uint32		result32;
+					int			result;
+
+					message_addr = conn->fe_msg->fields[0].offset_in_buffer;
+					memcpy(&result32, conn->outBuffer + message_addr, 4);
+					result = (int) pg_ntoh32(result32);
+
+					if (result == NEGOTIATE_SSL_CODE)
+						message_type = "SSLRequest";
+					else if (result == NEGOTIATE_GSS_CODE)
+						message_type = "GSSRequest";
+					else
+						message_type = "StartupMessage";
+				}
+				else
+					message_type = "UnknownMessage";
+				fprintf(conn->Pfdebug, "%s ", message_type);
+			}
+			fprintf(conn->Pfdebug, "%d", v);
+			conn->be_msg->length = v - length;
+			/* Next, log the message contents */
+			conn->be_msg->state = LOG_CONTENTS;
+			pqTraceMaybeBreakLine(0, conn);
+			break;
+
+		case LOG_CONTENTS:
+			fprintf(conn->Pfdebug, "%s%d", prefix, v);
+			pqTraceMaybeBreakLine(length, conn);
+			break;
+
+		default:
+			pqLogInvalidProtocol(conn, MSGDIR_FROM_BACKEND);
+			break;
+	}
+}
+
+
+/*
+ * pqLogMessageString: output a null-terminated string to the log
+ */
+static void
+pqLogMessageString(PGconn *conn, const char *v, int length, PGCommSource source)
+{
+	if (source == MSGDIR_FROM_BACKEND && conn->be_msg->state != LOG_CONTENTS)
+	{
+		pqLogInvalidProtocol(conn, MSGDIR_FROM_BACKEND);
+		return;	/* XXX ??? */
+	}
+
+	fprintf(conn->Pfdebug, "\"%s\"", v);
+	if (source == MSGDIR_FROM_BACKEND)
+		pqTraceMaybeBreakLine(length, conn);
+}
+
+/*
+ * pqLogBinaryMsg: output a string possibly consisting of non-printable
+ * characters. Hex representation is used for such chars; others are
+ * printed normally.
+ */
+static void
+pqLogBinaryMsg(PGconn *conn, const char *v, int length, PGCommSource source)
+{
+	int			i,
+				pin;
+
+	if (source == MSGDIR_FROM_BACKEND && conn->be_msg->state != LOG_CONTENTS)
+	{
+		pqLogInvalidProtocol(conn, MSGDIR_FROM_BACKEND);
+		return;	/* XXX ??? */
+	}
+
+	for (pin = i = 0; i < length; ++i)
+	{
+		if (isprint(v[i]))
+			continue;
+		else
+		{
+			fwrite(v + pin, 1, i - pin, conn->Pfdebug);
+			fprintf(conn->Pfdebug, "\\x%02x", v[i]);
+			pin = i + 1;
+		}
+	}
+	if (pin < length)
+		fwrite(v + pin, 1, length - pin, conn->Pfdebug);
+}
+
+/*
+ * pqLogMessagenchar: output a string of exactly len bytes message to the log
+ */
+static void
+pqLogMessagenchar(PGconn *conn, const char *v, int len, PGCommSource commsource)
+{
+	fprintf(conn->Pfdebug, "\'");
+	pqLogBinaryMsg(conn, v, len, commsource);
+	fprintf(conn->Pfdebug, "\'");
+	pqTraceMaybeBreakLine(len, conn);
 }
 
 /* ----------
@@ -1011,11 +1615,16 @@ pqSendSome(PGconn *conn, int len)
 int
 pqFlush(PGconn *conn)
 {
-	if (conn->Pfdebug)
-		fflush(conn->Pfdebug);
-
 	if (conn->outCount > 0)
+	{
+		/* XXX comment */
+		if (conn->Pfdebug)
+		{
+			pqLogFrontendMsg(conn, -1);
+			fflush(conn->Pfdebug);
+		}
 		return pqSendSome(conn, conn->outCount);
+	}
 
 	return 0;
 }

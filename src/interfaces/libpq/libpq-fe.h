@@ -363,7 +363,8 @@ extern PGContextVisibility PQsetErrorContextVisibility(PGconn *conn,
 													   PGContextVisibility show_context);
 
 /* Enable/disable tracing */
-extern void PQtrace(PGconn *conn, FILE *debug_port);
+#define PQTRACE_SUPPRESS_TIMESTAMPS		1
+extern void PQtrace(PGconn *conn, FILE *debug_port, int flags);
 extern void PQuntrace(PGconn *conn);
 
 /* Override default notice handling routines */

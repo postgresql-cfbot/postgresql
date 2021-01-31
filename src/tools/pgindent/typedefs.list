@@ -1522,6 +1522,7 @@ PGAlignedXLogBlock
 PGAsyncStatusType
 PGCALL2
 PGChecksummablePage
+PGCommSource
 PGContextVisibility
 PGEvent
 PGEventConnDestroy
@@ -1537,6 +1538,8 @@ PGFileType
 PGFunction
 PGLZ_HistEntry
 PGLZ_Strategy
+PGLogMsgDataType
+PGLogState
 PGMessageField
 PGModuleMagicFunction
 PGNoticeHooks
@@ -3272,6 +3275,9 @@ pointer
 polymorphic_actuals
 pos_trgm
 post_parse_analyze_hook_type
+pqBackendMessage
+pqFrontendMessage
+pqFrontendMessageField
 pqbool
 pqsigfunc
 printQueryOpt

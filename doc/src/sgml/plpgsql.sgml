@@ -894,7 +894,7 @@ SELECT <replaceable>expression</replaceable>
 </synopsis>
      to the main SQL engine.  While forming the <command>SELECT</command> command,
      any occurrences of <application>PL/pgSQL</application> variable names
-     are replaced by parameters, as discussed in detail in
+     are replaced by query parameters, as discussed in detail in
      <xref linkend="plpgsql-var-subst"/>.
      This allows the query plan for the <command>SELECT</command> to
      be prepared just once and then reused for subsequent
@@ -997,15 +997,23 @@ complex_array[n].realpart = 12.3;
     <title>Executing a Command with No Result</title>
 
     <para>
-     For any SQL command that does not return rows, for example
-     <command>INSERT</command> without a <literal>RETURNING</literal> clause, you can
-     execute the command within a <application>PL/pgSQL</application> function
-     just by writing the command.
+     The utility SQL commands, which are incapable of returning results,
+     (e.g., DDL commands like CREATE TABLE and DROP TYPE,
+     and the environment changing command SET), are executed just by
+     writing the command.
     </para>
 
     <para>
-     Any <application>PL/pgSQL</application> variable name appearing
-     in the command text is treated as a parameter, and then the
+     You can also execute a <command>DELETE</command>, <command>INSERT</command>,
+     or <command>UPDATE</command> SQL command, without a <literal>RETURNING</literal>
+     clause, just by writing the command.  Adding the <literal>RETURNING</literal>
+     makes the command behave like <command>SELECT</command>, which is described
+     in the next section.
+    </para>
+
+    <para>
+     For the non-utility commands, any <application>PL/pgSQL</application> variables
+     appearing in the command text are replaced by query parameters, and then the
      current value of the variable is provided as the parameter value
      at run time.  This is exactly like the processing described earlier
      for expressions; for details see <xref linkend="plpgsql-var-subst"/>.
@@ -2566,7 +2574,7 @@ $$ LANGUAGE plpgsql;
     </para>
 
     <para>
-     <application>PL/pgSQL</application> variables are substituted into the query text,
+     <application>PL/pgSQL</application> variables are converted into query parameters,
      and the query plan is cached for possible re-use, as discussed in
      detail in <xref linkend="plpgsql-var-subst"/> and
      <xref linkend="plpgsql-plan-caching"/>.
@@ -4642,9 +4650,10 @@ CREATE EVENT TRIGGER snitch ON ddl_command_start EXECUTE FUNCTION snitch();
     SQL statements and expressions within a <application>PL/pgSQL</application> function
     can refer to variables and parameters of the function.  Behind the scenes,
     <application>PL/pgSQL</application> substitutes query parameters for such references.
-    Parameters will only be substituted in places where a parameter or
-    column reference is syntactically allowed.  As an extreme case, consider
-    this example of poor programming style:
+    Query parameters will only be substituted in places where syntactically allowed
+    (in particular, SQL identifiers - such as schema, table, and column names - can never
+    be replaced with a query parameter.)
+    As an extreme case, consider this example of poor programming style:
 <programlisting>
 INSERT INTO foo (foo) VALUES (foo);
 </programlisting>
@@ -4655,13 +4664,6 @@ INSERT INTO foo (foo) VALUES (foo);
     third occurrence is a candidate to be a reference to the function's
     variable.
    </para>
-
-   <note>
-    <para>
-     <productname>PostgreSQL</productname> versions before 9.0 would try
-     to substitute the variable in all three cases, leading to syntax errors.
-    </para>
-   </note>
 
    <para>
     Since the names of variables are syntactically no different from the names
@@ -5312,13 +5314,14 @@ HINT:  Make sure the query returns the exact list of columns.
     <itemizedlist>
      <listitem>
       <para>
-       If a name used in a SQL command could be either a column name of a
-       table or a reference to a variable of the function,
-       <application>PL/SQL</application> treats it as a column name.  This corresponds
-       to <application>PL/pgSQL</application>'s
+       If a name used in a SQL command matches a known column name and also
+       a named variable within the function,
+       <application>PL/SQL</application> treats it as a column name.
+       By default, <application>PL/pgSQL</application> will treat it as a variable,
+       but one can specify  
        <literal>plpgsql.variable_conflict</literal> = <literal>use_column</literal>
-       behavior, which is not the default,
-       as explained in <xref linkend="plpgsql-var-subst"/>.
+       (see <xref linkend="plpgsql-var-subst"/> for specifics)
+       to change the behavior to match <application>PL/SQL</application>.
        It's often best to avoid such ambiguities in the first place,
        but if you have to port a large amount of code that depends on
        this behavior, setting <literal>variable_conflict</literal> may be the

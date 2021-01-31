@@ -11969,6 +11969,7 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 	char	   *prorows;
 	char	   *prosupport;
 	char	   *proparallel;
+	int			prodynres;
 	char	   *lanname;
 	char	   *rettypename;
 	int			nallargs;
@@ -12063,10 +12064,17 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 
 	if (fout->remoteVersion >= 120000)
 		appendPQExpBufferStr(query,
-							 "prosupport\n");
+							 "prosupport,\n");
 	else
 		appendPQExpBufferStr(query,
-							 "'-' AS prosupport\n");
+							 "'-' AS prosupport,\n");
+
+	if (fout->remoteVersion >= 140000)
+		appendPQExpBufferStr(query,
+							 "prodynres\n");
+	else
+		appendPQExpBufferStr(query,
+							 "0 AS prodynres\n");
 
 	appendPQExpBuffer(query,
 					  "FROM pg_catalog.pg_proc "
@@ -12106,6 +12114,7 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 	prorows = PQgetvalue(res, 0, PQfnumber(res, "prorows"));
 	prosupport = PQgetvalue(res, 0, PQfnumber(res, "prosupport"));
 	proparallel = PQgetvalue(res, 0, PQfnumber(res, "proparallel"));
+	prodynres = atoi(PQgetvalue(res, 0, PQfnumber(res, "prodynres")));
 	lanname = PQgetvalue(res, 0, PQfnumber(res, "lanname"));
 
 	/*
@@ -12281,6 +12290,9 @@ dumpFunc(Archive *fout, FuncInfo *finfo)
 
 	if (proisstrict[0] == 't')
 		appendPQExpBufferStr(q, " STRICT");
+
+	if (prodynres > 0)
+		appendPQExpBuffer(q, " DYNAMIC RESULT SETS %d", prodynres);
 
 	if (prosecdef[0] == 't')
 		appendPQExpBufferStr(q, " SECURITY DEFINER");

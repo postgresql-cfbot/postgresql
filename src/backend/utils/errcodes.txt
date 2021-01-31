@@ -83,6 +83,7 @@ Section: Class 01 - Warning
 # do not use this class for failure conditions
 01000    W    ERRCODE_WARNING                                                warning
 0100C    W    ERRCODE_WARNING_DYNAMIC_RESULT_SETS_RETURNED                   dynamic_result_sets_returned
+0100E    W    ERRCODE_WARNING_ATTEMPT_TO_RETURN_TOO_MANY_RESULT_SETS         attempt_to_return_too_many_result_sets
 01008    W    ERRCODE_WARNING_IMPLICIT_ZERO_BIT_PADDING                      implicit_zero_bit_padding
 01003    W    ERRCODE_WARNING_NULL_VALUE_ELIMINATED_IN_SET_FUNCTION          null_value_eliminated_in_set_function
 01007    W    ERRCODE_WARNING_PRIVILEGE_NOT_GRANTED                          privilege_not_granted

@@ -131,6 +131,16 @@ typedef struct PortalData
 	SubTransactionId createSubid;	/* the creating subxact */
 	SubTransactionId activeSubid;	/* the last subxact with activity */
 
+	/*
+	 * Procedure that created this portal.  Used for returnable cursors.
+	 */
+	Oid				procId;
+	/*
+	 * Command ID where the portal was created.  Used for sorting returnable
+	 * cursors into creation order.
+	 */
+	CommandId		createCid;
+
 	/* The query or queries the portal will execute */
 	const char *sourceText;		/* text of query (as of 8.4, never NULL) */
 	CommandTag	commandTag;		/* command tag for original query */
@@ -159,6 +169,8 @@ typedef struct PortalData
 	TupleDesc	tupDesc;		/* descriptor for result tuples */
 	/* and these are the format codes to use for the columns: */
 	int16	   *formats;		/* a format code for each column */
+	/* Format code for dynamic result sets */
+	int16		dynamic_format;
 
 	/*
 	 * Where we store tuples for a held cursor or a PORTAL_ONE_RETURNING or
@@ -237,5 +249,7 @@ extern void PortalCreateHoldStore(Portal portal);
 extern void PortalHashTableDeleteAll(void);
 extern bool ThereAreNoReadyPortals(void);
 extern void HoldPinnedPortals(void);
+extern List *GetReturnableCursors(void);
+extern void CloseOtherReturnableCursors(Oid procid);
 
 #endif							/* PORTAL_H */

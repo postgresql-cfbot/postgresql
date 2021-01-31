@@ -167,11 +167,39 @@ ALTER ROUTINE ptest1a RENAME TO ptest1;
 DROP ROUTINE cp_testfunc1(int);
 
 
+-- dynamic result sets
+
+CREATE TABLE cp_test2 (a int);
+INSERT INTO cp_test2 VALUES (1), (2), (3);
+CREATE TABLE cp_test3 (x text, y text);
+INSERT INTO cp_test3 VALUES ('abc', 'def'), ('foo', 'bar');
+
+CREATE PROCEDURE pdrstest1()
+LANGUAGE SQL
+DYNAMIC RESULT SETS 2
+AS $$
+DECLARE c1 CURSOR WITH RETURN FOR SELECT * FROM cp_test2;
+DECLARE c2 CURSOR WITH RETURN FOR SELECT * FROM cp_test3;
+$$;
+
+CALL pdrstest1();
+
+CREATE PROCEDURE pdrstest2()
+LANGUAGE SQL
+DYNAMIC RESULT SETS 1
+AS $$
+CALL pdrstest1();
+DECLARE c3 CURSOR WITH RETURN FOR SELECT * FROM cp_test2 WHERE a < 2;
+$$;
+
+CALL pdrstest2();
+
+
 -- cleanup
 
 DROP PROCEDURE ptest1;
 DROP PROCEDURE ptest2;
 
-DROP TABLE cp_test;
+DROP TABLE cp_test, cp_test2, cp_test3;
 
 DROP USER regress_cp_user1;

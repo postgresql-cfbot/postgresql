@@ -2701,7 +2701,8 @@ create_limit_plan(PlannerInfo *root, LimitPath *best_path, int flags)
 	subplan = create_plan_recurse(root, best_path->subpath, flags);
 
 	/* Extract information necessary for comparing rows for WITH TIES. */
-	if (best_path->limitOption == LIMIT_OPTION_WITH_TIES)
+	if (best_path->limitOption == LIMIT_OPTION_WITH_TIES ||
+		best_path->limitOption == LIMIT_OPTION_PER_WITH_TIES)
 	{
 		Query	   *parse = root->parse;
 		ListCell   *l;

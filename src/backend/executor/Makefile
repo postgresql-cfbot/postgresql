@@ -73,6 +73,7 @@ OBJS = \
 	nodeWindowAgg.o \
 	nodeWorktablescan.o \
 	spi.o \
+	svariableReceiver.o \
 	tqueue.o \
 	tstoreReceiver.o
 

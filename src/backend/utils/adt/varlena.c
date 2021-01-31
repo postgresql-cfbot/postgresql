@@ -6315,3 +6315,202 @@ unicode_is_normalized(PG_FUNCTION_ARGS)
 
 	PG_RETURN_BOOL(result);
 }
+
+/*
+ * First four chars should be hexnum digits
+ */
+static bool
+isxdigit_four(const char *instr)
+{
+	return isxdigit((unsigned char)  instr[0]) &&
+			isxdigit((unsigned char) instr[1]) &&
+			isxdigit((unsigned char) instr[2]) &&
+			isxdigit((unsigned char) instr[3]);
+}
+
+/*
+ * Translate string with hexadecimal digits to number
+ */
+static long int
+hexval_four(const char *instr)
+{
+	return (hexval(instr[0]) << 12) +
+			(hexval(instr[1]) << 8) +
+			(hexval(instr[2]) << 4) +
+			 hexval(instr[3]);
+}
+
+/*
+ * Replaces unicode escape sequences by unicode chars
+ */
+Datum
+unistr(PG_FUNCTION_ARGS)
+{
+	StringInfoData		str;
+	text	   *input_text;
+	text	   *result;
+	pg_wchar	pair_first = 0;
+	char		cbuf[MAX_UNICODE_EQUIVALENT_STRING + 1];
+	char	   *instr;
+	int			len;
+
+	/* when input string is NULL, then result is NULL too */
+	if (PG_ARGISNULL(0))
+		PG_RETURN_NULL();
+
+	input_text = PG_GETARG_TEXT_PP(0);
+	instr = VARDATA_ANY(input_text);
+	len = VARSIZE_ANY_EXHDR(input_text);
+
+	initStringInfo(&str);
+
+	while (len > 0)
+	{
+		if (instr[0] == '\\')
+		{
+			if (len >= 2 &&
+				instr[1] == '\\')
+			{
+				if (pair_first)
+					goto invalid_pair;
+				appendStringInfoChar(&str, '\\');
+				instr += 2;
+				len -= 2;
+			}
+			else if ((len >= 5 && isxdigit_four(&instr[1])) ||
+					 (len >= 6 && instr[1] == 'u' && isxdigit_four(&instr[2])))
+			{
+				pg_wchar	unicode;
+				int			offset = instr[1] == 'u' ? 2 : 1;
+
+				unicode = hexval_four(instr + offset);
+
+				check_unicode_value(unicode);
+
+				if (pair_first)
+				{
+					if (is_utf16_surrogate_second(unicode))
+					{
+						unicode = surrogate_pair_to_codepoint(pair_first, unicode);
+						pair_first = 0;
+					}
+					else
+						goto invalid_pair;
+				}
+				else if (is_utf16_surrogate_second(unicode))
+					goto invalid_pair;
+
+				if (is_utf16_surrogate_first(unicode))
+					pair_first = unicode;
+				else
+				{
+					pg_unicode_to_server(unicode, (unsigned char *) cbuf);
+					appendStringInfoString(&str, cbuf);
+				}
+
+				instr += 4 + offset;
+				len -= 4 + offset;
+			}
+			else if (len >= 8 &&
+					 instr[1] == '+' &&
+					 isxdigit_four(&instr[2]) &&
+					 isxdigit((unsigned char) instr[6]) &&
+					 isxdigit((unsigned char) instr[7]))
+			{
+				pg_wchar	unicode;
+
+				unicode = (hexval_four(&instr[2]) << 8) +
+								(hexval(instr[6]) << 4) +
+								 hexval(instr[7]);
+
+				check_unicode_value(unicode);
+
+				if (pair_first)
+				{
+					if (is_utf16_surrogate_second(unicode))
+					{
+						unicode = surrogate_pair_to_codepoint(pair_first, unicode);
+						pair_first = 0;
+					}
+					else
+						goto invalid_pair;
+				}
+				else if (is_utf16_surrogate_second(unicode))
+					goto invalid_pair;
+
+				if (is_utf16_surrogate_first(unicode))
+					pair_first = unicode;
+				else
+				{
+					pg_unicode_to_server(unicode, (unsigned char *) cbuf);
+					appendStringInfoString(&str, cbuf);
+				}
+
+				instr += 8;
+				len -= 8;
+			}
+			else if (len >= 10 &&
+					 instr[1] == 'U' &&
+					 isxdigit_four(&instr[2]) &&
+					 isxdigit_four(&instr[6]))
+			{
+				pg_wchar	unicode;
+
+				unicode = (hexval_four(&instr[2]) << 16) + hexval_four(&instr[6]);
+
+				check_unicode_value(unicode);
+
+				if (pair_first)
+				{
+					if (is_utf16_surrogate_second(unicode))
+					{
+						unicode = surrogate_pair_to_codepoint(pair_first, unicode);
+						pair_first = 0;
+					}
+					else
+						goto invalid_pair;
+				}
+				else if (is_utf16_surrogate_second(unicode))
+					goto invalid_pair;
+
+				if (is_utf16_surrogate_first(unicode))
+					pair_first = unicode;
+				else
+				{
+					pg_unicode_to_server(unicode, (unsigned char *) cbuf);
+					appendStringInfoString(&str, cbuf);
+				}
+
+				instr += 10;
+				len -= 10;
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("invalid Unicode escape"),
+						 errhint("Unicode escapes must be \\XXXX, \\+XXXXXX, \\uXXXX or \\UXXXXXXXX.")));
+		}
+		else
+		{
+			if (pair_first)
+				goto invalid_pair;
+
+			appendStringInfoChar(&str, *instr++);
+			len--;
+		}
+	}
+
+	/* unfinished surrogate pair? */
+	if (pair_first)
+		goto invalid_pair;
+
+	result = cstring_to_text_with_len(str.data, str.len);
+	pfree(str.data);
+
+	PG_RETURN_TEXT_P(result);
+
+invalid_pair:
+	ereport(ERROR,
+			(errcode(ERRCODE_SYNTAX_ERROR),
+			 errmsg("invalid Unicode surrogate pair")));
+}

@@ -11375,4 +11375,7 @@
   proname => 'is_normalized', prorettype => 'bool', proargtypes => 'text text',
   prosrc => 'unicode_is_normalized' },
 
+{ oid => '9822', descr => 'unescape Unicode chars in strings',
+  proname => 'unistr', prorettype => 'text', proargtypes => 'text',
+  proisstrict => 't', prosrc => 'unistr' }
 ]

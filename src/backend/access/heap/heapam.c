@@ -1391,6 +1391,138 @@ heap_getnextslot(TableScanDesc sscan, ScanDirection direction, TupleTableSlot *s
 	return true;
 }
 
+bool
+heap_getnextslot_inrange(TableScanDesc sscan, ScanDirection direction,
+						 TupleTableSlot *slot, ItemPointer mintid,
+						 ItemPointer maxtid)
+{
+	HeapScanDesc scan = (HeapScanDesc) sscan;
+
+	if (!scan->rs_inited)
+	{
+		BlockNumber startBlk;
+		BlockNumber numBlks;
+		ItemPointerData highestItem;
+		ItemPointerData lowestItem;
+
+		/* A relation with zero blocks won't have any tuples */
+		if (scan->rs_nblocks == 0)
+			return false;
+
+		/*
+		 * Set up some ItemPointers which point to the first and last possible
+		 * tuples in the heap.
+		 */
+		ItemPointerSet(&highestItem, scan->rs_nblocks - 1, MaxOffsetNumber);
+		ItemPointerSet(&lowestItem, 0, FirstOffsetNumber);
+
+		/*
+		 * If the given maximum TID is below the highest possible TID in the
+		 * relation, then restrict the range to that, otherwise we scan to the
+		 * end of the relation.
+		 */
+		if (ItemPointerCompare(maxtid, &highestItem) < 0)
+			ItemPointerCopy(maxtid, &highestItem);
+
+		/*
+		 * If the given minimum TID is above the lowest possible TID in the
+		 * relation, then restrict the range to only scan for TIDs above that.
+		 */
+		if (ItemPointerCompare(mintid, &lowestItem) > 0)
+			ItemPointerCopy(mintid, &lowestItem);
+
+		/*
+		 * Check for an empty range and protect from would be negative results
+		 * from the numBlks to scan calculation below.
+		 */
+		if (ItemPointerCompare(&highestItem, &lowestItem) < 0)
+			return false;
+
+		/*
+		 * Calculate the first block and the number of blocks we must scan.
+		 * We could be more aggressive here and perform some more validation
+		 * to try and further narrow the scope of blocks to scan by checking
+		 * if the lowerItem has an offset above MaxOffsetNumber.  In this
+		 * case, we could advance startBlk by one.  Likewise if highestItem
+		 * has an offset of 0 we could scan one fewer blocks.  However, such
+		 * an optimization does not seem worth troubling over, currently.
+		 */
+		startBlk = ItemPointerGetBlockNumberNoCheck(&lowestItem);
+
+		numBlks = ItemPointerGetBlockNumberNoCheck(&highestItem) -
+				  ItemPointerGetBlockNumberNoCheck(&lowestItem) + 1;
+
+		/* Set the start block and number of blocks to scan */
+		heap_setscanlimits(sscan, startBlk, numBlks);
+	}
+
+	/* Note: no locking manipulations needed */
+	for (;;)
+	{
+
+		if (sscan->rs_flags & SO_ALLOW_PAGEMODE)
+			heapgettup_pagemode(scan, direction, sscan->rs_nkeys, sscan->rs_key);
+		else
+			heapgettup(scan, direction, sscan->rs_nkeys, sscan->rs_key);
+
+		if (scan->rs_ctup.t_data == NULL)
+		{
+			ExecClearTuple(slot);
+			return false;
+		}
+
+		/*
+		 * We've used heap_setscanlimits above so we only look at pages that
+		 * are likely to contain tuples we're interested in.  We must still
+		 * filter out tuples in the first page that are less than mintid.
+		 */
+		if (ItemPointerCompare(&scan->rs_ctup.t_self, mintid) < 0)
+		{
+			ExecClearTuple(slot);
+
+			/*
+			 * When scanning backwards, the TIDs will be in descending order.
+			 * Future tuples in this direction will be lower still, so we can
+			 * just return false to indicate there will be no more tuples.
+			 */
+			if (ScanDirectionIsBackward(direction))
+				return false;
+
+			continue;
+		}
+
+		/*
+		 * Likewise for the final page, we must filter out tids greater than
+		 * maxtid.
+		 */
+		if (ItemPointerCompare(&scan->rs_ctup.t_self, maxtid) > 0)
+		{
+			ExecClearTuple(slot);
+
+			/*
+			 * When scanning forward, the TIDs will be in ascending order.
+			 * Future tuples in this direction will be higher still, so we can
+			 * just return false to indicate there will be no more tuples.
+			 */
+			if (ScanDirectionIsForward(direction))
+				return false;
+			continue;
+		}
+
+		break;
+	}
+
+	/*
+	 * if we get here it means we have a new current scan tuple, so point to
+	 * the proper return buffer and return the tuple.
+	 */
+
+	pgstat_count_heap_getnext(scan->rs_base.rs_rd);
+
+	ExecStoreBufferHeapTuple(&scan->rs_ctup, slot, scan->rs_cbuf);
+	return true;
+}
+
 /*
  *	heap_fetch		- retrieve tuple with given tid
  *

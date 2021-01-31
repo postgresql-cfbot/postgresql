@@ -467,6 +467,10 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	/* Collect info about relation's foreign keys, if relevant */
 	get_relation_foreign_keys(root, rel, relation, inhparent);
 
+	/* Collect info about functions implemented by the rel's table AM. */
+	if (relation->rd_tableam && relation->rd_tableam->scan_getnextslot_inrange != NULL)
+		rel->amflags |= AMFLAG_HAS_TID_RANGE;
+
 	/*
 	 * Collect info about relation's partitioning scheme, if any. Only
 	 * inheritance parents may be partitioned.

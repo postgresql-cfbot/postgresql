@@ -325,6 +325,26 @@ typedef struct TableAmRoutine
 									 ScanDirection direction,
 									 TupleTableSlot *slot);
 
+	/*
+	 * Return next tuple from `scan` where TID is within the defined range.
+	 * This behaves like scan_getnextslot but only returns tuples from the
+	 * given range of TIDs.  Ranges are inclusive.  This function is optional
+	 * and may be set to NULL if TID range scans are not supported by the AM.
+	 *
+	 * Implementations of this function must themselves handle ItemPointers
+	 * of any value. i.e, they must handle each of the following:
+	 *
+	 * 1) mintid or maxtid is beyond the end of the table; and
+	 * 2) mintid is above maxtid; and
+	 * 3) item offset for mintid or maxtid is beyond the maximum offset
+	 * allowed by the AM.
+	 */
+	bool		(*scan_getnextslot_inrange) (TableScanDesc scan,
+											 ScanDirection direction,
+											 TupleTableSlot *slot,
+											 ItemPointer mintid,
+											 ItemPointer maxtid);
+
 
 	/* ------------------------------------------------------------------------
 	 * Parallel table scan related functions.
@@ -1015,6 +1035,36 @@ table_scan_getnextslot(TableScanDesc sscan, ScanDirection direction, TupleTableS
 	return sscan->rs_rd->rd_tableam->scan_getnextslot(sscan, direction, slot);
 }
 
+/*
+ * Return next tuple from defined TID range from `scan` and store in slot.
+ */
+static inline bool
+table_scan_getnextslot_inrange(TableScanDesc sscan, ScanDirection direction,
+							   TupleTableSlot *slot, ItemPointer mintid,
+							   ItemPointer maxtid)
+{
+	/*
+	 * The planner should never make a plan which uses this function when the
+	 * table AM has not defined any function for this callback.
+	 */
+	Assert(sscan->rs_rd->rd_tableam->scan_getnextslot_inrange != NULL);
+
+	slot->tts_tableOid = RelationGetRelid(sscan->rs_rd);
+
+	/*
+	 * We don't expect direct calls to table_scan_getnextslot_inrange with
+	 * valid CheckXidAlive for catalog or regular tables.  See detailed
+	 * comments in xact.c where these variables are declared.
+	 */
+	if (unlikely(TransactionIdIsValid(CheckXidAlive) && !bsysscan))
+		elog(ERROR, "unexpected table_scan_getnextslot_inrange call during logical decoding");
+
+	return sscan->rs_rd->rd_tableam->scan_getnextslot_inrange(sscan,
+															  direction,
+															  slot,
+															  mintid,
+															  maxtid);
+}
 
 /* ----------------------------------------------------------------------------
  * Parallel table scan related functions.

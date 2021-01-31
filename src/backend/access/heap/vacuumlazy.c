@@ -937,7 +937,8 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 		OffsetNumber offnum,
 					maxoff;
 		bool		tupgone,
-					hastup;
+					hastup,
+					will_freeze = false;
 		int			prev_dead_count;
 		int			nfrozen;
 		Size		freespace;
@@ -1144,6 +1145,8 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 					vacrelstats->nonempty_pages = blkno + 1;
 				continue;
 			}
+			else
+				will_freeze = true;
 			LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 			LockBufferForCleanup(buf);
 			/* drop through to normal processing */
@@ -1240,6 +1243,15 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 										 InvalidTransactionId, 0,
 										 &vacrelstats->latestRemovedXid,
 										 &vacrelstats->offnum);
+
+		/*
+		 * Check to see if we need to freeze, based on the user requested
+		 * cutoff values. If we are going to freeze then we freeze
+		 * every tuple visible to all, using OldestXmin.
+		 */
+		if (!will_freeze &&
+			lazy_check_needs_freeze(buf, &hastup, vacrelstats))
+				will_freeze = true;
 
 		/*
 		 * Now scan the page to collect vacuumable items and check for tuples
@@ -1445,7 +1457,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 				tups_vacuumed += 1;
 				has_dead_tuples = true;
 			}
-			else
+			else if (will_freeze)
 			{
 				bool		tuple_totally_frozen;
 
@@ -1458,7 +1470,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 				 */
 				if (heap_prepare_freeze_tuple(tuple.t_data,
 											  relfrozenxid, relminmxid,
-											  FreezeLimit, MultiXactCutoff,
+											  OldestXmin, MultiXactCutoff,
 											  &frozen[nfrozen],
 											  &tuple_totally_frozen))
 					frozen[nfrozen++].offset = offnum;
@@ -1567,7 +1579,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 		{
 			uint8		flags = VISIBILITYMAP_ALL_VISIBLE;
 
-			if (all_frozen)
+			if (nfrozen > 0 && all_frozen)
 				flags |= VISIBILITYMAP_ALL_FROZEN;
 
 			/*
@@ -1636,6 +1648,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 		 * all_visible is true, so we must check both.
 		 */
 		else if (all_visible_according_to_vm && all_visible && all_frozen &&
+				 nfrozen > 0 &&
 				 !VM_ALL_FROZEN(onerel, blkno, &vmbuffer))
 		{
 			/*

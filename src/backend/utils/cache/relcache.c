@@ -271,7 +271,8 @@ static void write_relcache_init_file(bool shared);
 static void write_item(const void *data, Size len, FILE *fp);
 
 static void formrdesc(const char *relationName, Oid relationReltype,
-					  bool isshared, int natts, const FormData_pg_attribute *attrs);
+					  bool isshared, int natts, const FormData_pg_attribute *attrs,
+					  bool haschecksums);
 
 static HeapTuple ScanPgRelation(Oid targetRelId, bool indexOK, bool force_non_historic);
 static Relation AllocateRelationDesc(Form_pg_class relp);
@@ -1828,7 +1829,8 @@ RelationInitTableAccessMethod(Relation relation)
 static void
 formrdesc(const char *relationName, Oid relationReltype,
 		  bool isshared,
-		  int natts, const FormData_pg_attribute *attrs)
+		  int natts, const FormData_pg_attribute *attrs,
+		  bool haschecksums)
 {
 	Relation	relation;
 	int			i;
@@ -1895,6 +1897,8 @@ formrdesc(const char *relationName, Oid relationReltype,
 	relation->rd_rel->relkind = RELKIND_RELATION;
 	relation->rd_rel->relnatts = (int16) natts;
 	relation->rd_rel->relam = HEAP_TABLE_AM_OID;
+
+	relation->rd_rel->relhaschecksums = haschecksums;
 
 	/*
 	 * initialize attribute tuple form
@@ -3549,6 +3553,27 @@ RelationBuildLocalRelation(const char *relname,
 		RelationInitTableAccessMethod(rel);
 
 	/*
+	 * Set the data checksum state. Since the data checksum state can change
+	 * at any time, the fetched value might be out of date by the time the
+	 * relation is built.  DataChecksumsNeedWrite returns true when data
+	 * checksums are: enabled; are in the process of being enabled (state:
+	 * "inprogress-on"); are in the process of being disabled (state:
+	 * "inprogress-off"). Since relhaschecksums is only used to track progress
+	 * when data checksums are being enabled, and going from disabled to
+	 * enabled will clear relhaschecksums before starting, it is safe to use
+	 * this value for a concurrent state transition to off.
+	 *
+	 * If DataChecksumsNeedWrite returns false, and is concurrently changed to
+	 * true then that implies that checksums are being enabled. Worst case,
+	 * this will lead to the relation being processed for checksums even
+	 * though each page written will have them already.  Performing this last
+	 * shortens the window, but doesn't avoid it.
+	 */
+	HOLD_INTERRUPTS();
+	rel->rd_rel->relhaschecksums = DataChecksumsNeedWrite();
+	RESUME_INTERRUPTS();
+
+	/*
 	 * Okay to insert into the relcache hash table.
 	 *
 	 * Ordinarily, there should certainly not be an existing hash entry for
@@ -3813,6 +3838,7 @@ void
 RelationCacheInitializePhase2(void)
 {
 	MemoryContext oldcxt;
+	bool		haschecksums;
 
 	/*
 	 * relation mapper needs initialized too
@@ -3837,16 +3863,24 @@ RelationCacheInitializePhase2(void)
 	 */
 	if (!load_relcache_init_file(true))
 	{
+		/*
+		 * Our local state can't change at this point, so we can cache the
+		 * checksum state.
+		 */
+		HOLD_INTERRUPTS();
+		haschecksums = DataChecksumsNeedWrite();
+		RESUME_INTERRUPTS();
+
 		formrdesc("pg_database", DatabaseRelation_Rowtype_Id, true,
-				  Natts_pg_database, Desc_pg_database);
+				  Natts_pg_database, Desc_pg_database, haschecksums);
 		formrdesc("pg_authid", AuthIdRelation_Rowtype_Id, true,
-				  Natts_pg_authid, Desc_pg_authid);
+				  Natts_pg_authid, Desc_pg_authid, haschecksums);
 		formrdesc("pg_auth_members", AuthMemRelation_Rowtype_Id, true,
-				  Natts_pg_auth_members, Desc_pg_auth_members);
+				  Natts_pg_auth_members, Desc_pg_auth_members, haschecksums);
 		formrdesc("pg_shseclabel", SharedSecLabelRelation_Rowtype_Id, true,
-				  Natts_pg_shseclabel, Desc_pg_shseclabel);
+				  Natts_pg_shseclabel, Desc_pg_shseclabel, haschecksums);
 		formrdesc("pg_subscription", SubscriptionRelation_Rowtype_Id, true,
-				  Natts_pg_subscription, Desc_pg_subscription);
+				  Natts_pg_subscription, Desc_pg_subscription, haschecksums);
 
 #define NUM_CRITICAL_SHARED_RELS	5	/* fix if you change list above */
 	}
@@ -3875,6 +3909,7 @@ RelationCacheInitializePhase3(void)
 	RelIdCacheEnt *idhentry;
 	MemoryContext oldcxt;
 	bool		needNewCacheFile = !criticalSharedRelcachesBuilt;
+	bool		haschecksums;
 
 	/*
 	 * relation mapper needs initialized too
@@ -3895,15 +3930,18 @@ RelationCacheInitializePhase3(void)
 		!load_relcache_init_file(false))
 	{
 		needNewCacheFile = true;
+		HOLD_INTERRUPTS();
+		haschecksums = DataChecksumsNeedWrite();
+		RESUME_INTERRUPTS();
 
 		formrdesc("pg_class", RelationRelation_Rowtype_Id, false,
-				  Natts_pg_class, Desc_pg_class);
+				  Natts_pg_class, Desc_pg_class, haschecksums);
 		formrdesc("pg_attribute", AttributeRelation_Rowtype_Id, false,
-				  Natts_pg_attribute, Desc_pg_attribute);
+				  Natts_pg_attribute, Desc_pg_attribute, haschecksums);
 		formrdesc("pg_proc", ProcedureRelation_Rowtype_Id, false,
-				  Natts_pg_proc, Desc_pg_proc);
+				  Natts_pg_proc, Desc_pg_proc, haschecksums);
 		formrdesc("pg_type", TypeRelation_Rowtype_Id, false,
-				  Natts_pg_type, Desc_pg_type);
+				  Natts_pg_type, Desc_pg_type, haschecksums);
 
 #define NUM_CRITICAL_LOCAL_RELS 4	/* fix if you change list above */
 	}

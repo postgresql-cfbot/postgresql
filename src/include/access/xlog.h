@@ -198,8 +198,11 @@ extern PGDLLIMPORT int wal_level;
  * individual bits on a page, it's still consistent no matter what combination
  * of the bits make it to disk, but the checksum wouldn't match.  Also WAL-log
  * them if forced by wal_log_hints=on.
+ *
+ * Since XLogHintBitIsNeeded calls DataChecksumsNeedWrite, interrupts must be
+ * held off during this call.
  */
-#define XLogHintBitIsNeeded() (DataChecksumsEnabled() || wal_log_hints)
+#define XLogHintBitIsNeeded() (wal_log_hints || DataChecksumsNeedWrite())
 
 /* Do we need to WAL-log information required only for Hot Standby and logical replication? */
 #define XLogStandbyInfoActive() (wal_level >= WAL_LEVEL_REPLICA)
@@ -318,7 +321,19 @@ extern TimestampTz GetCurrentChunkReplayStartTime(void);
 extern void UpdateControlFile(void);
 extern uint64 GetSystemIdentifier(void);
 extern char *GetMockAuthenticationNonce(void);
-extern bool DataChecksumsEnabled(void);
+extern bool DataChecksumsNeedWrite(void);
+extern bool DataChecksumsNeedVerify(void);
+extern bool DataChecksumsOnInProgress(void);
+extern bool DataChecksumsOffInProgress(void);
+extern void SetDataChecksumsOnInProgress(void);
+extern void SetDataChecksumsOn(void);
+extern void SetDataChecksumsOff(void);
+extern bool AbsorbChecksumsOnInProgressBarrier(void);
+extern bool AbsorbChecksumsOffInProgressBarrier(void);
+extern bool AbsorbChecksumsOnBarrier(void);
+extern bool AbsorbChecksumsOffBarrier(void);
+extern const char *show_data_checksums(void);
+extern void InitLocalControldata(void);
 extern XLogRecPtr GetFakeLSNForUnloggedRel(void);
 extern Size XLOGShmemSize(void);
 extern void XLOGShmemInit(void);

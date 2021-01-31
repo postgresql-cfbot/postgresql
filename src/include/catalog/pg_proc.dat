@@ -11301,6 +11301,22 @@
   proname => 'raw_array_subscript_handler', prorettype => 'internal',
   proargtypes => 'internal', prosrc => 'raw_array_subscript_handler' },
 
+{ oid => '9258',
+  descr => 'disable data checksums',
+  proname => 'pg_disable_data_checksums', provolatile => 'v', prorettype => 'void',
+  proparallel => 'r',
+  proargtypes => '',
+  prosrc => 'disable_data_checksums' },
+
+{ oid => '9257',
+  descr => 'enable data checksums',
+  proname => 'pg_enable_data_checksums', provolatile => 'v', prorettype => 'void',
+  proparallel => 'r',
+  proargtypes => 'int4 int4', proallargtypes => '{int4,int4}',
+  proargmodes => '{i,i}',
+  proargnames => '{cost_delay,cost_limit}',
+  prosrc => 'enable_data_checksums' },
+
 # collation management functions
 { oid => '3445', descr => 'import collations from operating system',
   proname => 'pg_import_system_collations', procost => '100',

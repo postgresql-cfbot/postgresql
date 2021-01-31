@@ -974,10 +974,17 @@ InsertPgClassTuple(Relation pg_class_desc,
 	/* relpartbound is set by updating this tuple, if necessary */
 	nulls[Anum_pg_class_relpartbound - 1] = true;
 
+	/*
+	 * Hold off interrupts to ensure that the observed data checksum state
+	 * cannot change as we form and insert the tuple.
+	 */
+	HOLD_INTERRUPTS();
+	values[Anum_pg_class_relhaschecksums - 1] = BoolGetDatum(DataChecksumsNeedWrite());
 	tup = heap_form_tuple(RelationGetDescr(pg_class_desc), values, nulls);
 
 	/* finally insert the new tuple, update the indexes, and clean up */
 	CatalogTupleInsert(pg_class_desc, tup);
+	RESUME_INTERRUPTS();
 
 	heap_freetuple(tup);
 }

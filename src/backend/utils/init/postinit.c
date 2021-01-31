@@ -606,6 +606,11 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 	if (MyBackendId > MaxBackends || MyBackendId <= 0)
 		elog(FATAL, "bad backend ID: %d", MyBackendId);
 
+	/*
+	 * Set up backend local cache of Controldata values.
+	 */
+	InitLocalControldata();
+
 	/* Now that we have a BackendId, we can participate in ProcSignal */
 	ProcSignalInit(MyBackendId);
 

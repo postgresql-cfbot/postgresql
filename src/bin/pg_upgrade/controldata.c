@@ -672,6 +672,15 @@ check_control_data(ControlData *oldctrl,
 	 */
 
 	/*
+	 * If checksums have been turned on in the old cluster, but the
+	 * datachecksumsworker have yet to finish, then disallow upgrading. The
+	 * user should either let the process finish, or turn off checksums,
+	 * before retrying.
+	 */
+	if (oldctrl->data_checksum_version == 2)
+		pg_fatal("checksum enabling in old cluster is in progress\n");
+
+	/*
 	 * We might eventually allow upgrades from checksum to no-checksum
 	 * clusters.
 	 */

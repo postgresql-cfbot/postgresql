@@ -2944,8 +2944,13 @@ BufferGetLSNAtomic(Buffer buffer)
 	/*
 	 * If we don't need locking for correctness, fastpath out.
 	 */
+	HOLD_INTERRUPTS();
 	if (!XLogHintBitIsNeeded() || BufferIsLocal(buffer))
+	{
+		RESUME_INTERRUPTS();
 		return PageGetLSN(page);
+	}
+	RESUME_INTERRUPTS();
 
 	/* Make sure we've got a real buffer, and that we hold a pin on it. */
 	Assert(BufferIsValid(buffer));

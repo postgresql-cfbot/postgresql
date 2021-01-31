@@ -24728,7 +24728,7 @@ SELECT collation for ('foo' COLLATE "de_DE");
         <indexterm>
          <primary>pg_terminate_backend</primary>
         </indexterm>
-        <function>pg_terminate_backend</function> ( <parameter>pid</parameter> <type>integer</type> )
+        <function>pg_terminate_backend</function> ( <parameter>pid</parameter> <type>integer</type>, <parameter>wait</parameter> <type>boolean</type>, <parameter>timeout</parameter> <type>bigint</type> <literal>DEFAULT</literal> <literal>100</literal> )
         <returnvalue>boolean</returnvalue>
        </para>
        <para>
@@ -24736,7 +24736,31 @@ SELECT collation for ('foo' COLLATE "de_DE");
         specified process ID.  This is also allowed if the calling role
         is a member of the role whose backend is being terminated or the
         calling role has been granted <literal>pg_signal_backend</literal>,
-        however only superusers can terminate superuser backends.
+        however only superusers can terminate superuser backends. When no
+        <parameter>wait</parameter> and <parameter>timeout</parameter> are
+        provided, <function>pg_terminate_backend</function> sends SIGTERM to
+        the backend with the given process ID without waiting for its
+        termination. But the backend may still exist. With <parameter>wait</parameter> specified as
+        <literal>true</literal>, the function waits for the backend termination
+        until the given <parameter>timeout</parameter> or the default 100
+        milliseconds. On timeout <literal>false</literal> is returned.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_wait_backend</primary>
+        </indexterm>
+        <function>pg_wait_backend</function> ( <parameter>pid</parameter> <type>integer</type>, <parameter>timeout</parameter> <type>bigint</type> <literal>DEFAULT</literal> <literal>100</literal> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Check the existence of the session whose backend process has the
+        specified process ID. On success return <literal>true</literal>. This
+        function waits until the given <parameter>timeout</parameter> or the
+        default 100 milliseconds. On timeout <literal>false</literal> is
+        returned.
        </para></entry>
       </row>
      </tbody>

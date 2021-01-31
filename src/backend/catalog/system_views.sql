@@ -1264,6 +1264,16 @@ CREATE OR REPLACE FUNCTION
   RETURNS boolean STRICT VOLATILE LANGUAGE INTERNAL AS 'pg_promote'
   PARALLEL SAFE;
 
+CREATE OR REPLACE FUNCTION
+  pg_terminate_backend(pid integer, wait boolean, timeout int8 DEFAULT 100)
+  RETURNS boolean STRICT VOLATILE LANGUAGE INTERNAL AS 'pg_terminate_backend_and_wait'
+  PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION
+  pg_wait_backend(pid integer, timeout int8 DEFAULT 100)
+  RETURNS boolean STRICT VOLATILE LANGUAGE INTERNAL AS 'pg_wait_backend'
+  PARALLEL SAFE;
+
 -- legacy definition for compatibility with 9.3
 CREATE OR REPLACE FUNCTION
   json_populate_record(base anyelement, from_json json, use_json_as_text boolean DEFAULT false)

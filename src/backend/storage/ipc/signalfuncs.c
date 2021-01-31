@@ -18,6 +18,7 @@
 
 #include "catalog/pg_authid.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "postmaster/syslogger.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
@@ -147,6 +148,142 @@ pg_terminate_backend(PG_FUNCTION_ARGS)
 				 errmsg("must be a member of the role whose process is being terminated or member of pg_signal_backend")));
 
 	PG_RETURN_BOOL(r == SIGNAL_BACKEND_SUCCESS);
+}
+
+/*
+ * Wait until there is no backend process with the given PID or timeout. On
+ * timeout, a warning is thrown to the user.
+ */
+static bool
+pg_wait_until_termination(int pid, int64 timeout)
+{
+	/*
+	 * Wait in steps of waittime milliseconds until this function exits or
+	 * timeout.
+	 */
+	int64	waittime = 10;
+	/*
+	 * Initially remaining time is the entire timeout specified by the user.
+	 */
+	int64	remainingtime = timeout;
+
+	/*
+	 * Check the backend existence. If doesn't exist, then check for the errno
+	 * ESRCH that confirms it and return true. If still exist, then wait for
+	 * waittime milliseconds, again check for the existence. Repeat until
+	 * timeout or an error occurs or a pending interrupt such as query cancel
+	 * is processed.
+	 */
+	for (;;)
+	{
+		if (remainingtime < waittime)
+			waittime = remainingtime;
+
+		if (kill(pid, 0) == -1)
+		{
+			if (errno == ESRCH)
+				return true;
+			else
+			{
+				ereport(WARNING,
+						(errmsg("could not check the existence of the backend with PID %d: %m",
+								pid)));
+				return false;
+			}
+		}
+
+		/* Process interrupts, if any, before going for wait. */
+		CHECK_FOR_INTERRUPTS();
+
+		(void) WaitLatch(MyLatch,
+						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 waittime,
+						 WAIT_EVENT_BACKEND_TERMINATION);
+
+		remainingtime -= waittime;
+
+		if (remainingtime <= 0)
+			break;
+	}
+
+	ereport(WARNING,
+			(errmsg("could not wait for the termination of the backend with PID %d within %lld milliseconds",
+					pid, (long long int) timeout)));
+
+	return false;
+}
+
+/*
+ * Signal termination of a backend process, wait until timeout or no backend
+ * has the given PID. If the wait input argument is false, this function
+ * behaviour is same as pg_terminate_backend. On timeout, a warning is thrown
+ * to the user. Self termination is allowed but waiting is not, because once
+ * the backend is self terminated there is no point in waiting for it to go
+ * away.
+ */
+Datum
+pg_terminate_backend_and_wait(PG_FUNCTION_ARGS)
+{
+	int 	pid = PG_GETARG_INT32(0);
+	bool	wait = PG_GETARG_BOOL(1);
+	int64	timeout = PG_GETARG_INT64(2);
+	bool	r = false;
+
+	if (timeout < 1)
+	{
+		ereport(WARNING,
+				(errmsg("timeout cannot be negative or zero: %lld",
+						(long long int) timeout)));
+		PG_RETURN_BOOL(r);
+	}
+
+	/* Self termination is allowed but waiting is not after that. */
+	if (pid == MyProcPid && wait)
+		wait = false;
+
+	r = DatumGetBool(DirectFunctionCall1(pg_terminate_backend, pid));
+
+	/* Wait only if requested and the termination is successful. */
+	if (wait && r)
+		r = pg_wait_until_termination(pid, timeout);
+
+	PG_RETURN_BOOL(r);
+}
+
+/*
+ * This function waits for a backend with the given PID to be terminated or
+ * until the timeout occurs. If the PID is of the backend which issued this
+ * function, either timeout can occur or the function can succeed if the
+ * backend gets terminated by some other process, say postmaster.
+ */
+Datum
+pg_wait_backend(PG_FUNCTION_ARGS)
+{
+	int		pid = PG_GETARG_INT32(0);
+	int64  	timeout = PG_GETARG_INT64(1);
+	PGPROC	*proc = NULL;
+	bool	r = false;
+
+	if (timeout < 1)
+	{
+		ereport(WARNING,
+				(errmsg("timeout cannot be negative or zero: %lld",
+						(long long int) timeout)));
+		PG_RETURN_BOOL(r);
+	}
+
+	proc = BackendPidGetProc(pid);
+
+	if (proc == NULL)
+	{
+		ereport(WARNING,
+				(errmsg("PID %d is not a PostgreSQL server process", pid)));
+		PG_RETURN_BOOL(r);
+	}
+
+	r = pg_wait_until_termination(pid, timeout);
+
+	PG_RETURN_BOOL(r);
 }
 
 /*

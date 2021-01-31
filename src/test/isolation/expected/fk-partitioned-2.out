@@ -8,6 +8,7 @@ step s2i: insert into pfk values (1); <waiting ...>
 step s1c: commit;
 step s2i: <... completed>
 error in steps s1c s2i: ERROR:  insert or update on table "pfk1" violates foreign key constraint "pfk_a_fkey"
+s2: ERROR:  current transaction failed, rolling back
 step s2c: commit;
 
 starting permutation: s1b s1d s2bs s2i s1c s2c
@@ -21,6 +22,7 @@ step s2i: insert into pfk values (1); <waiting ...>
 step s1c: commit;
 step s2i: <... completed>
 error in steps s1c s2i: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: commit;
 
 starting permutation: s1b s2b s1d s2i s1c s2c
@@ -31,6 +33,7 @@ step s2i: insert into pfk values (1); <waiting ...>
 step s1c: commit;
 step s2i: <... completed>
 error in steps s1c s2i: ERROR:  insert or update on table "pfk1" violates foreign key constraint "pfk_a_fkey"
+s2: ERROR:  current transaction failed, rolling back
 step s2c: commit;
 
 starting permutation: s1b s2bs s1d s2i s1c s2c
@@ -44,6 +47,7 @@ step s2i: insert into pfk values (1); <waiting ...>
 step s1c: commit;
 step s2i: <... completed>
 error in steps s1c s2i: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: commit;
 
 starting permutation: s1b s2b s2i s1d s2c s1c
@@ -54,6 +58,7 @@ step s1d: delete from ppk where a = 1; <waiting ...>
 step s2c: commit;
 step s1d: <... completed>
 error in steps s2c s1d: ERROR:  update or delete on table "ppk1" violates foreign key constraint "pfk_a_fkey1" on table "pfk"
+s1: ERROR:  current transaction failed, rolling back
 step s1c: commit;
 
 starting permutation: s1b s2bs s2i s1d s2c s1c
@@ -67,4 +72,5 @@ step s1d: delete from ppk where a = 1; <waiting ...>
 step s2c: commit;
 step s1d: <... completed>
 error in steps s2c s1d: ERROR:  update or delete on table "ppk1" violates foreign key constraint "pfk_a_fkey1" on table "pfk"
+s1: ERROR:  current transaction failed, rolling back
 step s1c: commit;

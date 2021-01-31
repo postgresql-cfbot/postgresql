@@ -702,16 +702,19 @@ insert into selfconflict values (4,1), (4,2) on conflict(f1) do update set f2 = 
 ERROR:  ON CONFLICT DO UPDATE command cannot affect row a second time
 HINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.
 commit;
+ERROR:  current transaction failed, rolling back
 begin transaction isolation level repeatable read;
 insert into selfconflict values (5,1), (5,2) on conflict(f1) do update set f2 = 0;
 ERROR:  ON CONFLICT DO UPDATE command cannot affect row a second time
 HINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.
 commit;
+ERROR:  current transaction failed, rolling back
 begin transaction isolation level serializable;
 insert into selfconflict values (6,1), (6,2) on conflict(f1) do update set f2 = 0;
 ERROR:  ON CONFLICT DO UPDATE command cannot affect row a second time
 HINT:  Ensure that no rows proposed for insertion within the same command have duplicate constrained values.
 commit;
+ERROR:  current transaction failed, rolling back
 select * from selfconflict;
  f1 | f2 
 ----+----

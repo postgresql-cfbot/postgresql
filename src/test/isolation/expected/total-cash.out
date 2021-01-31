@@ -24,6 +24,7 @@ step wy2: UPDATE accounts SET balance = balance - 200 WHERE accountid = 'savings
 step c1: COMMIT;
 step rxy2: SELECT SUM(balance) FROM accounts;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: wx1 rxy1 wy2 rxy2 c1 c2
@@ -66,6 +67,7 @@ sum
 step c1: COMMIT;
 step rxy2: SELECT SUM(balance) FROM accounts;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: wx1 wy2 rxy1 rxy2 c1 c2
@@ -138,6 +140,7 @@ sum
 step c2: COMMIT;
 step rxy1: SELECT SUM(balance) FROM accounts;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: wy2 wx1 rxy1 c1 rxy2 c2
@@ -150,6 +153,7 @@ sum
 step c1: COMMIT;
 step rxy2: SELECT SUM(balance) FROM accounts;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: wy2 wx1 rxy1 rxy2 c1 c2
@@ -222,6 +226,7 @@ sum
 step c2: COMMIT;
 step rxy1: SELECT SUM(balance) FROM accounts;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: wy2 rxy2 wx1 rxy1 c1 c2
@@ -264,6 +269,7 @@ step wx1: UPDATE accounts SET balance = balance - 200 WHERE accountid = 'checkin
 step c2: COMMIT;
 step rxy1: SELECT SUM(balance) FROM accounts;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: wy2 rxy2 c2 wx1 rxy1 c1

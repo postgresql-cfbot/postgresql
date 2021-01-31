@@ -15,5 +15,6 @@ pg_advisory_unlock
 t              
 step s1a: <... completed>
 error in steps s2e s1a: ERROR:  could not obtain lock on row in relation "foo"
+s1: ERROR:  current transaction failed, rolling back
 step s1b: COMMIT;
 step s2f: COMMIT;

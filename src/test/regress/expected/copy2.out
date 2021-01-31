@@ -414,6 +414,7 @@ SAVEPOINT s1;
 COPY vistest FROM stdin CSV FREEZE;
 ERROR:  cannot perform COPY FREEZE because the table was not created or truncated in the current subtransaction
 COMMIT;
+ERROR:  current transaction failed, rolling back
 BEGIN;
 INSERT INTO vistest VALUES ('z');
 SAVEPOINT s1;
@@ -422,6 +423,7 @@ ROLLBACK TO SAVEPOINT s1;
 COPY vistest FROM stdin CSV FREEZE;
 ERROR:  cannot perform COPY FREEZE because the table was not created or truncated in the current subtransaction
 COMMIT;
+ERROR:  current transaction failed, rolling back
 CREATE FUNCTION truncate_in_subxact() RETURNS VOID AS
 $$
 BEGIN

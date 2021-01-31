@@ -53,6 +53,7 @@ SELECT * FROM writetest; -- ok
 SET TRANSACTION READ WRITE; --fail
 ERROR:  transaction read-write mode must be set before any query
 COMMIT;
+ERROR:  current transaction failed, rolling back
 BEGIN;
 SET TRANSACTION READ ONLY; -- ok
 SET TRANSACTION READ WRITE; -- ok
@@ -73,6 +74,7 @@ SET TRANSACTION READ ONLY; -- ok
 SET TRANSACTION READ WRITE; --fail
 ERROR:  cannot set transaction read-write mode inside a read-only transaction
 COMMIT;
+ERROR:  current transaction failed, rolling back
 BEGIN;
 SET TRANSACTION READ WRITE; -- ok
 SAVEPOINT x;
@@ -87,6 +89,7 @@ SET TRANSACTION READ ONLY; -- ok
 SET TRANSACTION READ WRITE; --fail
 ERROR:  cannot set transaction read-write mode inside a read-only transaction
 COMMIT;
+ERROR:  current transaction failed, rolling back
 BEGIN;
 SET TRANSACTION READ WRITE; -- ok
 SAVEPOINT x;
@@ -271,6 +274,7 @@ ERROR:  column "trans_foo" does not exist
 LINE 1: SELECT trans_foo;
                ^
 COMMIT;
+ERROR:  current transaction failed, rolling back
 SELECT * FROM savepoints;
  a 
 ---
@@ -456,6 +460,7 @@ ERROR:  portal "c" cannot be run
 	FETCH 10 FROM c;
 ERROR:  portal "c" cannot be run
 COMMIT;
+ERROR:  current transaction failed, rolling back
 --
 -- Check that "stable" functions are really stable.  They should not be
 -- able to see the partial results of the calling query.  (Ideally we would
@@ -586,6 +591,7 @@ rollback to x;
 fetch from foo;
 ERROR:  cursor "foo" does not exist
 commit;
+ERROR:  current transaction failed, rolling back
 begin;
 create table abc (a int);
 insert into abc values (5);
@@ -657,6 +663,7 @@ FETCH ok;  -- should work
 FETCH ctt; -- must be rejected
 ERROR:  portal "ctt" cannot be run
 COMMIT;
+ERROR:  current transaction failed, rolling back
 DROP FUNCTION create_temp_tab();
 DROP FUNCTION invert(x float8);
 -- Tests for AND CHAIN
@@ -710,6 +717,7 @@ LINE 1: INSERT INTO abc VALUES ('error');
 INSERT INTO abc VALUES (3);  -- check it's really aborted
 ERROR:  current transaction is aborted, commands ignored until end of transaction block
 COMMIT AND CHAIN;  -- TBLOCK_ABORT_END
+ERROR:  current transaction failed, rolling back
 SHOW transaction_isolation;
  transaction_isolation 
 -----------------------
@@ -755,6 +763,7 @@ ERROR:  invalid input syntax for type integer: "error"
 LINE 1: INSERT INTO abc VALUES ('error');
                                 ^
 COMMIT AND CHAIN;  -- TBLOCK_ABORT_PENDING
+ERROR:  current transaction failed, rolling back
 SHOW transaction_isolation;
  transaction_isolation 
 -----------------------

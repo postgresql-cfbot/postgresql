@@ -193,6 +193,7 @@ pg_advisory_unlock
 t              
 step s2l: <... completed>
 error in steps s1ul s2l: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 pg_advisory_unlock_all
 
@@ -217,6 +218,7 @@ pg_advisory_unlock
 t              
 step s2l: <... completed>
 error in steps s1ul s2l: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 pg_advisory_unlock_all
 
@@ -241,6 +243,7 @@ step s2l: SELECT * FROM lcku_table WHERE pg_advisory_lock(578902068) IS NOT NULL
 step s1c: COMMIT;
 step s2l: <... completed>
 error in steps s1c s2l: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 pg_advisory_unlock_all
 
@@ -270,6 +273,7 @@ pg_advisory_unlock
 t              
 step s2l: <... completed>
 error in steps s1ul s2l: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 pg_advisory_unlock_all
 
@@ -299,6 +303,7 @@ pg_advisory_unlock
 t              
 step s2l: <... completed>
 error in steps s1ul s2l: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 pg_advisory_unlock_all
 
@@ -328,6 +333,7 @@ id             value
 
 1              one            
 2              two            
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 pg_advisory_unlock_all
 
@@ -352,6 +358,7 @@ pg_advisory_unlock
 t              
 step s2l: <... completed>
 error in steps s1ul s2l: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 pg_advisory_unlock_all
 
@@ -376,6 +383,7 @@ pg_advisory_unlock
 t              
 step s2l: <... completed>
 error in steps s1ul s2l: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 pg_advisory_unlock_all
 
@@ -400,6 +408,7 @@ step s2l: SELECT * FROM lcku_table WHERE pg_advisory_lock(578902068) IS NOT NULL
 step s1c: COMMIT;
 step s2l: <... completed>
 error in steps s1c s2l: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 pg_advisory_unlock_all
 
@@ -429,6 +438,7 @@ pg_advisory_unlock
 t              
 step s2l: <... completed>
 error in steps s1ul s2l: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 pg_advisory_unlock_all
 
@@ -458,6 +468,7 @@ pg_advisory_unlock
 t              
 step s2l: <... completed>
 error in steps s1ul s2l: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 pg_advisory_unlock_all
 
@@ -487,6 +498,7 @@ id             value
 
 1              one            
 2              two            
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 pg_advisory_unlock_all
 

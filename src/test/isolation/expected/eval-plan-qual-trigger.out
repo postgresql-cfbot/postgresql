@@ -610,6 +610,7 @@ step s2_ins_a: INSERT INTO trigtest VALUES ('key-a', 'val-a-s2') RETURNING *; <w
 step s1_c: COMMIT;
 step s2_ins_a: <... completed>
 error in steps s1_c s2_ins_a: ERROR:  duplicate key value violates unique constraint "trigtest_pkey"
+s2: ERROR:  current transaction failed, rolling back
 step s2_c: COMMIT;
 step s0_rep: SELECT * FROM trigtest ORDER BY key, data
 key            data           
@@ -2024,6 +2025,7 @@ step s2_upd_a_data:
 step s1_c: COMMIT;
 step s2_upd_a_data: <... completed>
 error in steps s1_c s2_upd_a_data: ERROR:  could not serialize access due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2_c: COMMIT;
 step s0_rep: SELECT * FROM trigtest ORDER BY key, data
 key            data           
@@ -2137,6 +2139,7 @@ step s2_upd_a_data:
 step s1_c: COMMIT;
 step s2_upd_a_data: <... completed>
 error in steps s1_c s2_upd_a_data: ERROR:  could not serialize access due to concurrent delete
+s2: ERROR:  current transaction failed, rolling back
 step s2_c: COMMIT;
 step s0_rep: SELECT * FROM trigtest ORDER BY key, data
 key            data           

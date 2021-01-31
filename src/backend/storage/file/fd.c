@@ -3024,15 +3024,15 @@ CleanupTempFiles(bool isCommit, bool isProcExit)
  * remove any leftover files created by OpenTemporaryFile and any leftover
  * temporary relation files created by mdcreate.
  *
- * NOTE: we could, but don't, call this during a post-backend-crash restart
- * cycle.  The argument for not doing it is that someone might want to examine
- * the temp files for debugging purposes.  This does however mean that
- * OpenTemporaryFile had better allow for collision with an existing temp
- * file name.
+ * This is also called during a post-backend-crash restart cycle. The argument
+ * for not doing it is that crashes of queries using temp files can result in
+ * useless storage usage that can only be reclaimed by a service restart.
  *
  * NOTE: this function and its subroutines generally report syscall failures
  * with ereport(LOG) and keep going.  Removing temp files is not so critical
  * that we should fail to start the database when we can't do it.
+ * Because this routine is not strict, OpenTemporaryFile allows for collision
+ * with an existing temp file name.
  */
 void
 RemovePgTempFiles(void)

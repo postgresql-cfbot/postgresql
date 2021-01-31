@@ -154,6 +154,9 @@ extern Datum nocache_index_getattr(IndexTuple tup, int attnum,
 								   TupleDesc tupleDesc);
 extern void index_deform_tuple(IndexTuple tup, TupleDesc tupleDescriptor,
 							   Datum *values, bool *isnull);
+extern void index_deform_anyheader_tuple(char *tup, TupleDesc tupleDescriptor,
+							   Datum *values, bool *isnull,
+							   bits8 *bp, char *tp, bool hasnulls);
 extern IndexTuple CopyIndexTuple(IndexTuple source);
 extern IndexTuple index_truncate_tuple(TupleDesc sourceDescriptor,
 									   IndexTuple source, int leavenatts);

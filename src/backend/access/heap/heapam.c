@@ -67,6 +67,7 @@
 #include "utils/datum.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
+#include "utils/memutils.h"
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"
 #include "utils/spccache.h"
@@ -2520,6 +2521,211 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		slots[i]->tts_tid = heaptuples[i]->t_self;
 
 	pgstat_count_heap_insert(relation, ntuples);
+}
+
+/*
+ * heap_insert_begin - allocate and initialize TableInsertState
+ *
+ * For single inserts:
+ *  1) Specify is_multi as false, then multi insert state will be NULL.
+ *
+ * For multi inserts:
+ *  1) Specify is_multi as true, then multi insert state will be allocated and
+ * 	   initialized.
+ *
+ *  Other input parameters i.e. relation, command id, options are common for
+ *  both single and multi inserts.
+ */
+TableInsertState*
+heap_insert_begin(Relation rel, CommandId cid, int options, bool is_multi)
+{
+	TableInsertState *state;
+
+	state = palloc0(sizeof(TableInsertState));
+	state->rel = rel;
+	state->cid = cid;
+	state->options = options;
+	/* Below parameters are not used for single inserts. */
+	state->mistate = NULL;
+	state->clear_mi_slots = false;
+	state->flushed = false;
+
+	if (is_multi)
+	{
+		HeapMultiInsertState *mistate;
+
+		mistate = palloc0(sizeof(HeapMultiInsertState));
+		mistate->slots =
+				palloc0(sizeof(TupleTableSlot *) * MAX_BUFFERED_TUPLES);
+		mistate->max_slots = MAX_BUFFERED_TUPLES;
+		mistate->max_size = MAX_BUFFERED_BYTES;
+		mistate->cur_slots = 0;
+		mistate->cur_size = 0;
+		/*
+		 * Create a temporary memory context so that we can reset once per
+		 * multi insert batch.
+		 */
+		mistate->context = AllocSetContextCreate(CurrentMemoryContext,
+												 "heap_multi_insert",
+												 ALLOCSET_DEFAULT_SIZES);
+		state->mistate = mistate;
+		state->clear_mi_slots = true;
+		state->flushed	= false;
+	}
+
+	return state;
+}
+
+/*
+ * heap_insert_v2 - insert single tuple into a heap
+ *
+ * Insert tuple from the slot into table. This is like heap_insert(). The only
+ * difference is that the parameters are inside table insert state structure.
+ */
+void
+heap_insert_v2(TableInsertState *state, TupleTableSlot *slot)
+{
+	bool		shouldFree = true;
+	HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, true, &shouldFree);
+
+	/* Update the tuple with table oid */
+	slot->tts_tableOid = RelationGetRelid(state->rel);
+	tuple->t_tableOid = slot->tts_tableOid;
+
+	/* Perform the insertion, and copy the resulting ItemPointer */
+	heap_insert(state->rel, tuple, state->cid, state->options, state->bistate);
+	ItemPointerCopy(&tuple->t_self, &slot->tts_tid);
+
+	if (shouldFree)
+		pfree(tuple);
+}
+
+/*
+ * heap_multi_insert_v2 - insert multiple tuples into a heap
+ *
+ * Compute the size of the tuple, store it into the buffered slots and insert
+ * the tuples(flush) from the buffered slots one at a time into the table.
+ *
+ * Flush can happen:
+ *  1) either if all the slots are filled up
+ *  2) or if the total tuple size of the currently buffered slots are >=
+ *     max_size.
+ */
+void
+heap_multi_insert_v2(TableInsertState *state, TupleTableSlot *slot)
+{
+	TupleTableSlot  *batchslot;
+	HeapMultiInsertState *mistate = (HeapMultiInsertState *)state->mistate;
+	Size sz;
+
+	Assert(mistate && mistate->slots);
+
+	if (mistate->slots[mistate->cur_slots] == NULL)
+		mistate->slots[mistate->cur_slots] =
+									table_slot_create(state->rel, NULL);
+
+	batchslot = mistate->slots[mistate->cur_slots];
+
+	ExecCopySlot(batchslot, slot);
+
+	/* Reset the flush state if previously set. */
+	if (state->flushed)
+		state->flushed = false;
+
+	/*
+	 * Calculate the tuple size after the original slot is copied, because the
+	 * copied slot type and the tuple size may change.
+	 */
+	sz = GetTupleSize(batchslot, mistate->max_size);
+
+	Assert(sz > 0);
+
+	mistate->cur_slots++;
+	mistate->cur_size += sz;
+
+	if (mistate->cur_slots >= mistate->max_slots ||
+		mistate->cur_size >= mistate->max_size)
+		heap_multi_insert_flush(state);
+}
+
+/*
+ * heap_multi_insert_flush - flush the tuples from buffered slots if any
+ *
+ * Flush the buffered tuples, indicate the caller that the flushing happened
+ * and clear the slots if they are not required outside. Reset the parameters.
+ */
+void
+heap_multi_insert_flush(TableInsertState *state)
+{
+	HeapMultiInsertState *mistate = (HeapMultiInsertState *)state->mistate;
+	MemoryContext oldcontext;
+
+	Assert(mistate && mistate->slots && mistate->cur_slots >= 0 &&
+		   mistate->context);
+
+	if (mistate->cur_slots == 0)
+	{
+		state->flushed = false;
+		return;
+	}
+
+	oldcontext = MemoryContextSwitchTo(mistate->context);
+
+	heap_multi_insert(state->rel, mistate->slots, mistate->cur_slots,
+					  state->cid, state->options, state->bistate);
+
+	MemoryContextReset(mistate->context);
+	MemoryContextSwitchTo(oldcontext);
+
+	/*
+	 * Do not clear the slots always. Sometimes callers may want the slots for
+	 * index insertions or after row trigger executions in which case they have
+	 * to clear the tuples before using for the next insert batch.
+	 */
+	if (state->clear_mi_slots)
+	{
+		int i;
+
+		for (i = 0; i < mistate->cur_slots; i++)
+			ExecClearTuple(mistate->slots[i]);
+	}
+
+	mistate->cur_slots = 0;
+	mistate->cur_size = 0;
+	state->flushed = true;
+}
+
+/*
+ * heap_insert_end - clean up the TableInsertState
+ *
+ * For multi inserts, ensure to flush all the remaining buffers with
+ * heap_multi_insert_flush before calling this function. Buffered slots are
+ * dropped, short-lived memory context is deleted and mistate is freed up.
+ *
+ * And finally free up TableInsertState.
+ */
+void
+heap_insert_end(TableInsertState *state)
+{
+	if (state->mistate)
+	{
+		HeapMultiInsertState *mistate = (HeapMultiInsertState *)state->mistate;
+		int i;
+
+		/* Ensure that the buffers have been flushed before. */
+		Assert(mistate->slots && mistate->cur_slots == 0 &&
+			   mistate->context);
+
+		for (i = 0; i < mistate->max_slots && mistate->slots[i] != NULL; i++)
+			ExecDropSingleTupleTableSlot(mistate->slots[i]);
+
+		MemoryContextDelete(mistate->context);
+
+		pfree(mistate->slots);
+		pfree(mistate);
+	}
+
+	pfree(state);
 }
 
 /*

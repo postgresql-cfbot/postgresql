@@ -228,6 +228,38 @@ typedef struct TM_IndexDeleteOp
 	TM_IndexStatus *status;
 } TM_IndexDeleteOp;
 
+/* Holds the table insert state. */
+typedef struct TableInsertState
+{
+	Relation	rel;
+	/* Bulk insert state if requested, otherwise NULL. */
+	struct BulkInsertStateData     *bistate;
+	CommandId	cid;
+	int		options;
+	/* Multi insert state if requested, otherwise NULL. */
+	void	*mistate;
+	/*
+	 * Valid only for multi inserts that is when mistate is non NULL.
+	 * Whether to clear the buffered slots after each flush? If the relation
+	 * has indexes or after row triggers, the buffered slots are required
+	 * outside multi insert AM, in which case, clean them in the caller using
+	 * ExecClearTuple() outside the multi insert AM. If true, which is default,
+	 * multi insert AM will clear the slots.
+	 *
+	 * It is good to set this flag by looking at whether the table is having
+	 * any indexes or after row triggers at the beginning of multi insert
+	 * operation, precisely after calling begin insert AM.
+	 */
+	bool	clear_mi_slots;
+	/*
+	 * Valid only for multi inserts that is when mistate is non NULL.
+	 * Initially false, set to true by multi insert AM whenever it flushes the
+	 * buffered slots. Caller can use this flag to insert into indexes or
+	 * execute after row triggers and so on if any.
+	 */
+	bool	flushed;
+}TableInsertState;
+
 /* "options" flag bits for table_tuple_insert */
 /* TABLE_INSERT_SKIP_WAL was 0x0001; RelationNeedsWAL() now governs */
 #define TABLE_INSERT_SKIP_FSM		0x0002
@@ -474,6 +506,17 @@ typedef struct TableAmRoutine
 	/* see table_multi_insert() for reference about parameters */
 	void		(*multi_insert) (Relation rel, TupleTableSlot **slots, int nslots,
 								 CommandId cid, int options, struct BulkInsertStateData *bistate);
+
+	TableInsertState* (*tuple_insert_begin) (Relation rel, CommandId cid,
+											 int options, bool is_multi);
+
+	void (*tuple_insert_v2) (TableInsertState *state, TupleTableSlot *slot);
+
+	void (*multi_insert_v2) (TableInsertState *state, TupleTableSlot *slot);
+
+	void (*multi_insert_flush) (TableInsertState *state);
+
+	void (*tuple_insert_end) (TableInsertState *state);
 
 	/* see table_tuple_delete() for reference about parameters */
 	TM_Result	(*tuple_delete) (Relation rel,
@@ -822,6 +865,8 @@ typedef struct TableAmRoutine
 } TableAmRoutine;
 
 
+typedef struct BulkInsertStateData *BulkInsertState;
+
 /* ----------------------------------------------------------------------------
  * Slot functions.
  * ----------------------------------------------------------------------------
@@ -840,6 +885,10 @@ extern const TupleTableSlotOps *table_slot_callbacks(Relation rel);
  */
 extern TupleTableSlot *table_slot_create(Relation rel, List **reglist);
 
+/* Bulk insert state functions. */
+extern BulkInsertState GetBulkInsertState(void);
+extern void FreeBulkInsertState(BulkInsertState);
+extern void ReleaseBulkInsertStatePin(BulkInsertState bistate);
 
 /* ----------------------------------------------------------------------------
  * Table scan functions.
@@ -1341,6 +1390,50 @@ table_multi_insert(Relation rel, TupleTableSlot **slots, int nslots,
 {
 	rel->rd_tableam->multi_insert(rel, slots, nslots,
 								  cid, options, bistate);
+}
+
+static inline TableInsertState*
+table_insert_begin(Relation rel, CommandId cid, int options,
+				   bool alloc_bistate, bool is_multi)
+{
+	TableInsertState *state = rel->rd_tableam->tuple_insert_begin(rel, cid,
+										options, is_multi);
+
+	/* Allocate bulk insert state here, since it's AM independent. */
+	if (alloc_bistate)
+		state->bistate = GetBulkInsertState();
+	else
+		state->bistate = NULL;
+
+	return state;
+}
+
+static inline void
+table_insert_v2(TableInsertState *state, TupleTableSlot *slot)
+{
+	state->rel->rd_tableam->tuple_insert_v2(state, slot);
+}
+
+static inline void
+table_multi_insert_v2(TableInsertState *state, TupleTableSlot *slot)
+{
+	state->rel->rd_tableam->multi_insert_v2(state, slot);
+}
+
+static inline void
+table_multi_insert_flush(TableInsertState *state)
+{
+	state->rel->rd_tableam->multi_insert_flush(state);
+}
+
+static inline void
+table_insert_end(TableInsertState *state)
+{
+	/* Deallocate bulk insert state here, since it's AM independent. */
+	if (state->bistate)
+		FreeBulkInsertState(state->bistate);
+
+	state->rel->rd_tableam->tuple_insert_end(state);
 }
 
 /*

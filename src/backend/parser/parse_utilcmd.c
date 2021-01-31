@@ -75,6 +75,7 @@
 /* State shared by transformCreateStmt and its subroutines */
 typedef struct
 {
+	CreateStmt *stmt;			/* initial statement */
 	ParseState *pstate;			/* overall parser state */
 	const char *stmtType;		/* "CREATE [FOREIGN] TABLE" or "ALTER TABLE" */
 	RangeVar   *relation;		/* relation to create */
@@ -146,6 +147,8 @@ static Const *transformPartitionBoundValue(ParseState *pstate, Node *con,
 										   const char *colName, Oid colType, int32 colTypmod,
 										   Oid partCollation);
 
+static CreateStmt* initAutoPartitionCreateStmt(CreateStmtContext *cxt, char *part_relname);
+static void transformPartitionAutoCreate(CreateStmtContext *cxt, PartitionSpec* partspec);
 
 /*
  * transformCreateStmt -
@@ -236,6 +239,7 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 		cxt.stmtType = "CREATE TABLE";
 		cxt.isforeign = false;
 	}
+	cxt.stmt = stmt;
 	cxt.relation = stmt->relation;
 	cxt.rel = NULL;
 	cxt.inhRelations = stmt->inhRelations;
@@ -339,6 +343,10 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	 * Postprocess extended statistics.
 	 */
 	transformExtendedStatistics(&cxt);
+
+	/* Process partition definitions */
+	if (stmt->partspec && stmt->partspec->autopart)
+		transformPartitionAutoCreate(&cxt, stmt->partspec);
 
 	/*
 	 * Output results.
@@ -4263,4 +4271,145 @@ transformPartitionBoundValue(ParseState *pstate, Node *val,
 	((Const *) value)->location = exprLocation(val);
 
 	return (Const *) value;
+}
+
+
+/* init basic fields of auto generated partition */
+static CreateStmt*
+initAutoPartitionCreateStmt(CreateStmtContext *cxt, char *part_relname)
+{
+	CreateStmt  *part;
+
+	part = copyObject(cxt->stmt);
+
+	part->relation = makeRangeVar(cxt->relation->schemaname,
+						part_relname, cxt->relation->location);
+
+	/* inherit persistence from parent relation */
+	part->relation->relpersistence = cxt->relation->relpersistence;
+	/* set parent table as a parent */
+	part->inhRelations = lappend(part->inhRelations, cxt->relation);
+
+	/*
+	 * child table is not partitioned itself, at least now
+	 * while we do not support multilevel auto partitioning
+	 */
+	part->partspec = NULL;
+
+	/*
+	 * Partition doesn't need a list of column definitions and constraints.
+	 * They will be inherited from parent.
+	 */
+	part->tableElts = NIL;
+	part->constraints = NIL;
+
+	return part;
+}
+
+/*
+ * Transform configuration into a set of partition bounds.
+ * Generate extra statements to create partition tables.
+ */
+static void
+transformPartitionAutoCreate(CreateStmtContext *cxt, PartitionSpec* partspec)
+{
+	CreateStmt  *part;
+	List	    *partlist = NIL;
+	int			i = 0;
+	PartitionBoundAutoSpec *bound = (PartitionBoundAutoSpec *) partspec->autopart;
+
+	elog(DEBUG1, "transformPartitionAutoCreate \n %s \n ",  nodeToString(bound));
+
+	/*
+	 * Generate regular partbounds based on autopart rule.
+	 * and form create table statements from these partbounds
+	 */
+	if (pg_strcasecmp(partspec->strategy, "hash") == 0)
+	{
+		if (bound->strategy != PARTITION_STRATEGY_HASH)
+			ereport(ERROR,
+			(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+				errmsg("invalid bound specification for a hash partition"),
+				parser_errposition(cxt->pstate, exprLocation((Node *) partspec))));
+
+		for (i = 0; i < bound->modulus; i++)
+		{
+			char *part_relname;
+
+			/*
+			 * Generate partition name in the format:
+			 * $relname_$partnum
+			 * All checks of name validity will be made afterwards in DefineRelation()
+			 */
+			part_relname = psprintf("%s_%d", cxt->relation->relname, i);
+			part = initAutoPartitionCreateStmt(cxt, part_relname);
+
+			/* Actual partbound generation happens here */
+			part->partbound = makeNode(PartitionBoundSpec);
+			part->partbound->strategy = PARTITION_STRATEGY_HASH;
+			part->partbound->modulus = bound->modulus;
+			part->partbound->remainder = i;
+			part->partbound->is_default = false;
+
+			elog(DEBUG1,"stransformPartitionAutoCreate HASH i %d MODULUS %d \n %s\n",
+						 i, bound->modulus, nodeToString(part));
+
+			partlist = lappend(partlist, part);
+		}
+	}
+	else if (pg_strcasecmp(partspec->strategy, "list") == 0)
+	{
+
+		int n_list_parts = list_length(bound->listdatumsList);
+
+		if (bound->strategy != PARTITION_STRATEGY_LIST)
+			ereport(ERROR,
+			(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+				errmsg("invalid bound specification for a list partition"),
+				parser_errposition(cxt->pstate, exprLocation((Node *) partspec))));
+
+		for (i = 0; i < n_list_parts; i++)
+		{
+			char *part_relname;
+			List *listdatums = (List *)
+					list_nth(bound->listdatumsList, i);
+
+			part_relname = psprintf("%s_%d", cxt->relation->relname, i);
+			part = initAutoPartitionCreateStmt(cxt, part_relname);
+
+			/* Actual partbound generation happens here */
+			part->partbound = makeNode(PartitionBoundSpec);
+			part->partbound->strategy = PARTITION_STRATEGY_LIST;
+			part->partbound->listdatums = list_copy(listdatums);
+			part->partbound->is_default = false;
+
+			elog(DEBUG1,"Debug transformPartitionAutoCreate LIST i %d \n %s\n",
+						 i, nodeToString(part));
+
+			partlist = lappend(partlist, part);
+		}
+
+		if (bound->default_partition_rv)
+		{
+
+			char *part_relname = bound->default_partition_rv->relname;
+			part = initAutoPartitionCreateStmt(cxt, part_relname);
+
+			/* TODO: Should we use fields from default_partition_rv, other than relname? */
+
+			/* Actual partbound generation happens here */
+			part->partbound = makeNode(PartitionBoundSpec);
+			part->partbound->strategy = PARTITION_STRATEGY_LIST;
+			part->partbound->listdatums = NULL;
+			part->partbound->is_default = true;
+
+			elog(DEBUG1,"Debug transformPartitionAutoCreate LIST default partition \n %s\n",
+						 nodeToString(part));
+
+			partlist = lappend(partlist, part);
+		}
+	}
+
+	/* Add statements to create each partition after we create parent table */
+	cxt->alist = list_concat(cxt->alist, partlist);
 }

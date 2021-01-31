@@ -64,8 +64,6 @@ static bool reconsider_outer_join_clause(PlannerInfo *root,
 										 bool outer_on_left);
 static bool reconsider_full_join_clause(PlannerInfo *root,
 										RestrictInfo *rinfo);
-static Bitmapset *get_eclass_indexes_for_relids(PlannerInfo *root,
-												Relids relids);
 static Bitmapset *get_common_eclass_indexes(PlannerInfo *root, Relids relids1,
 											Relids relids2);
 
@@ -3036,7 +3034,7 @@ is_redundant_with_indexclauses(RestrictInfo *rinfo, List *indexclauses)
  *		Build and return a Bitmapset containing the indexes into root's
  *		eq_classes list for all eclasses that mention any of these relids
  */
-static Bitmapset *
+Bitmapset *
 get_eclass_indexes_for_relids(PlannerInfo *root, Relids relids)
 {
 	Bitmapset  *ec_indexes = NULL;

@@ -498,6 +498,7 @@ typedef struct
 {
 	int			rt_index;
 	int			new_index;
+	int			new_attno;
 	int			sublevels_up;
 } ChangeVarNodes_context;
 
@@ -514,6 +515,11 @@ ChangeVarNodes_walker(Node *node, ChangeVarNodes_context *context)
 			var->varno == context->rt_index)
 		{
 			var->varno = context->new_index;
+			if (context->new_attno != MaxAttrNumber + 1)
+			{
+				var->varattno = context->new_attno;
+				var->varattnosyn = context->new_attno;  /* Question. */
+			}
 			/* If the syntactic referent is same RTE, fix it too */
 			if (var->varnosyn == context->rt_index)
 				var->varnosyn = context->new_index;
@@ -606,13 +612,20 @@ ChangeVarNodes_walker(Node *node, ChangeVarNodes_context *context)
 								  (void *) context);
 }
 
+
 void
 ChangeVarNodes(Node *node, int rt_index, int new_index, int sublevels_up)
+{
+	return ChangeVarNodesExtend(node, rt_index, new_index, MaxAttrNumber + 1, sublevels_up);
+}
+void
+ChangeVarNodesExtend(Node *node, int rt_index, int new_index, int new_attno, int sublevels_up)
 {
 	ChangeVarNodes_context context;
 
 	context.rt_index = rt_index;
 	context.new_index = new_index;
+	context.new_attno = new_attno;
 	context.sublevels_up = sublevels_up;
 
 	/*

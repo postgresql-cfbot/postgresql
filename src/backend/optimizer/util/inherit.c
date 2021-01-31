@@ -327,21 +327,12 @@ expand_partitioned_rtentry(PlannerInfo *root, RelOptInfo *relinfo,
 	 * that survive pruning.  Below, we will initialize child objects for the
 	 * surviving partitions.
 	 */
-	live_parts = prune_append_rel_partitions(relinfo);
+	live_parts = prune_append_rel_partitions(root, relinfo);
 
 	/* Expand simple_rel_array and friends to hold child objects. */
 	num_live_parts = bms_num_members(live_parts);
 	if (num_live_parts > 0)
 		expand_planner_arrays(root, num_live_parts);
-
-	/*
-	 * We also store partition RelOptInfo pointers in the parent relation.
-	 * Since we're palloc0'ing, slots corresponding to pruned partitions will
-	 * contain NULL.
-	 */
-	Assert(relinfo->part_rels == NULL);
-	relinfo->part_rels = (RelOptInfo **)
-		palloc0(relinfo->nparts * sizeof(RelOptInfo *));
 
 	/*
 	 * Create a child RTE for each live partition.  Note that unlike

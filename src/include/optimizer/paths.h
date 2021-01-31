@@ -165,6 +165,8 @@ extern void add_child_join_rel_equivalences(PlannerInfo *root,
 											AppendRelInfo **appinfos,
 											RelOptInfo *parent_rel,
 											RelOptInfo *child_rel);
+extern Bitmapset *get_eclass_indexes_for_relids(PlannerInfo *root,
+												Relids relids);
 extern List *generate_implied_equalities_for_column(PlannerInfo *root,
 													RelOptInfo *rel,
 													ec_matches_callback_type callback,

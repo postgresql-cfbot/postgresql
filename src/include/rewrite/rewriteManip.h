@@ -44,6 +44,8 @@ typedef enum ReplaceVarsNoMatchOption
 extern void OffsetVarNodes(Node *node, int offset, int sublevels_up);
 extern void ChangeVarNodes(Node *node, int old_varno, int new_varno,
 						   int sublevels_up);
+extern void ChangeVarNodesExtend(Node *node, int rt_index, int new_index,
+								int new_attno, int sublevels_up);
 extern void IncrementVarSublevelsUp(Node *node, int delta_sublevels_up,
 									int min_sublevels_up);
 extern void IncrementVarSublevelsUp_rtable(List *rtable,

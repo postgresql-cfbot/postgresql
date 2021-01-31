@@ -2103,19 +2103,7 @@ select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on 
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (actual rows=N loops=N)
                                  Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (never executed)
-                                 Index Cond: (a = a.a)
-(27 rows)
+(15 rows)
 
 -- Ensure the same partitions are pruned when we make the nested loop
 -- parameter an Expr rather than a plain Param.
@@ -2170,19 +2158,13 @@ select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on 
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (actual rows=N loops=N)
                                  Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)
+                           ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_4 (actual rows=N loops=N)
                                  Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)
+                           ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_5 (actual rows=N loops=N)
                                  Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)
+                           ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_6 (actual rows=N loops=N)
                                  Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (actual rows=N loops=N)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (actual rows=N loops=N)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (actual rows=N loops=N)
-                                 Index Cond: (a = a.a)
-(27 rows)
+(21 rows)
 
 select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on ab.a = a.a where a.a in(1, 0, 0)');
                                         explain_parallel_append                                         
@@ -2203,19 +2185,7 @@ select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on 
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (actual rows=N loops=N)
                                  Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (never executed)
-                                 Index Cond: (a = a.a)
-(28 rows)
+(16 rows)
 
 delete from lprt_a where a = 1;
 select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on ab.a = a.a where a.a in(1, 0, 0)');
@@ -2237,19 +2207,7 @@ select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on 
                                  Index Cond: (a = a.a)
                            ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (never executed)
                                  Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (never executed)
-                                 Index Cond: (a = a.a)
-                           ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (never executed)
-                                 Index Cond: (a = a.a)
-(28 rows)
+(16 rows)
 
 reset enable_hashjoin;
 reset enable_mergejoin;
@@ -3902,3 +3860,330 @@ explain (costs off) select * from hp_contradict_test where a === 1 and b === 1 a
 drop table hp_contradict_test;
 drop operator class part_test_int4_ops2 using hash;
 drop operator ===(int4, int4);
+create table p (a int, b int, c character varying(8)) partition by list(c);
+create table p1  partition of p for values in ('000001');
+create table p2  partition of p for values in ('000002');
+create table p3  partition of p for values in ('000003');
+create table q (a int, c character varying(8), b int) partition by list(c);
+create table q1  partition of q for values in ('000001');
+create table q2  partition of q for values in ('000002');
+create table q3  partition of q for values in ('000003');
+create table o (a int, c character varying(8), b int) partition by list(c);
+create table o1  partition of o for values in ('000001');
+create table o2 partition of o for values in ('000002');
+create table o3  partition of o for values in ('000003');
+analyze p;
+analyze q;
+analyze o;
+set plan_cache_mode to force_generic_plan ;
+-- inner join
+prepare s as select * from p, q where (q.c = $1 or q.c = $2) and p.c = q.c;
+explain (costs off) execute s('000001', '000002');
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Nested Loop
+   Join Filter: ((p.c)::text = (q.c)::text)
+   ->  Append
+         Subplans Removed: 1
+         ->  Seq Scan on p1 p_1
+         ->  Seq Scan on p2 p_2
+   ->  Append
+         Subplans Removed: 1
+         ->  Seq Scan on q1 q_1
+               Filter: (((c)::text = $1) OR ((c)::text = $2))
+         ->  Seq Scan on q2 q_2
+               Filter: (((c)::text = $1) OR ((c)::text = $2))
+(12 rows)
+
+prepare s2 as select * from p inner join q on (q.c = $1 or q.c = $2) and p.c = q.c;
+explain (costs off) execute s2('000001', '000002');
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Nested Loop
+   Join Filter: ((p.c)::text = (q.c)::text)
+   ->  Append
+         Subplans Removed: 1
+         ->  Seq Scan on p1 p_1
+         ->  Seq Scan on p2 p_2
+   ->  Append
+         Subplans Removed: 1
+         ->  Seq Scan on q1 q_1
+               Filter: (((c)::text = $1) OR ((c)::text = $2))
+         ->  Seq Scan on q2 q_2
+               Filter: (((c)::text = $1) OR ((c)::text = $2))
+(12 rows)
+
+-- left join
+-- q can have the init partititon prune, but p can't since it is the outer join.
+prepare s3 as select * from p left join q on (q.c = $1 or q.c = $2) and p.c = q.c;
+explain (costs off) execute s3('000001', '000002');
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Nested Loop Left Join
+   Join Filter: ((p.c)::text = (q.c)::text)
+   ->  Append
+         ->  Seq Scan on p1 p_1
+         ->  Seq Scan on p2 p_2
+         ->  Seq Scan on p3 p_3
+   ->  Append
+         Subplans Removed: 1
+         ->  Seq Scan on q1 q_1
+               Filter: (((c)::text = $1) OR ((c)::text = $2))
+         ->  Seq Scan on q2 q_2
+               Filter: (((c)::text = $1) OR ((c)::text = $2))
+(12 rows)
+
+-- p can't do the init partition prune since it is the outer join. so p can't as well.
+prepare s4 as select * from p left join q on (p.c = $1 or p.c = $2) and p.c = q.c;
+explain (costs off) execute s4('000001', '000002');
+                                         QUERY PLAN                                          
+---------------------------------------------------------------------------------------------
+ Nested Loop Left Join
+   Join Filter: (((p.c)::text = (q.c)::text) AND (((p.c)::text = $1) OR ((p.c)::text = $2)))
+   ->  Append
+         ->  Seq Scan on p1 p_1
+         ->  Seq Scan on p2 p_2
+         ->  Seq Scan on p3 p_3
+   ->  Append
+         ->  Seq Scan on q1 q_1
+         ->  Seq Scan on q2 q_2
+         ->  Seq Scan on q3 q_3
+(10 rows)
+
+-- left join is reduced to inner join, so both p and q can do the pruning.
+prepare s5 as select * from p left join q on p.c = q.c where (q.c = $1 or q.c = $2);
+explain (costs off) execute s5('000001', '000002');
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Nested Loop
+   Join Filter: ((p.c)::text = (q.c)::text)
+   ->  Append
+         Subplans Removed: 1
+         ->  Seq Scan on p1 p_1
+         ->  Seq Scan on p2 p_2
+   ->  Append
+         Subplans Removed: 1
+         ->  Seq Scan on q1 q_1
+               Filter: (((c)::text = $1) OR ((c)::text = $2))
+         ->  Seq Scan on q2 q_2
+               Filter: (((c)::text = $1) OR ((c)::text = $2))
+(12 rows)
+
+-- left join can't be reduced to inner join, but p.c is not in ON clause so q can.
+-- and q is right table in left join, so it can as well.
+prepare s6 as select * from p left join q on p.c = q.c where (p.c = $1 or p.c = $2);
+explain (costs off) execute s6('000001', '000002');
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Nested Loop Left Join
+   Join Filter: ((p.c)::text = (q.c)::text)
+   ->  Append
+         Subplans Removed: 1
+         ->  Seq Scan on p1 p_1
+               Filter: (((c)::text = $1) OR ((c)::text = $2))
+         ->  Seq Scan on p2 p_2
+               Filter: (((c)::text = $1) OR ((c)::text = $2))
+   ->  Append
+         Subplans Removed: 1
+         ->  Seq Scan on q1 q_1
+         ->  Seq Scan on q2 q_2
+(12 rows)
+
+-- full outer join.
+-- both p & q can't do the init partition prune.
+prepare s7 as select * from p full join q on p.c = q.c and (p.c = $1 or p.c = $2);
+explain (costs off) execute s7('000001', '000002');
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Hash Full Join
+   Hash Cond: ((p.c)::text = (q.c)::text)
+   Join Filter: (((p.c)::text = $1) OR ((p.c)::text = $2))
+   ->  Append
+         ->  Seq Scan on p1 p_1
+         ->  Seq Scan on p2 p_2
+         ->  Seq Scan on p3 p_3
+   ->  Hash
+         ->  Append
+               ->  Seq Scan on q1 q_1
+               ->  Seq Scan on q2 q_2
+               ->  Seq Scan on q3 q_3
+(12 rows)
+
+-- can be reduced to p left join q, so both can.
+prepare s8 as select * from p full join q on p.c = q.c where (p.c = $1 or p.c = $2);
+explain (costs off) execute s8('000001', '000002');
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Nested Loop Left Join
+   Join Filter: ((p.c)::text = (q.c)::text)
+   ->  Append
+         Subplans Removed: 1
+         ->  Seq Scan on p1 p_1
+               Filter: (((c)::text = $1) OR ((c)::text = $2))
+         ->  Seq Scan on p2 p_2
+               Filter: (((c)::text = $1) OR ((c)::text = $2))
+   ->  Append
+         Subplans Removed: 1
+         ->  Seq Scan on q1 q_1
+         ->  Seq Scan on q2 q_2
+(12 rows)
+
+deallocate s;
+deallocate s2;
+deallocate s3;
+deallocate s4;
+deallocate s5;
+deallocate s6;
+deallocate s7;
+deallocate s8;
+set plan_cache_mode to force_custom_plan;
+-- inner join
+prepare s as select * from p, q where (q.c = $1 or q.c = $2) and p.c = q.c;
+explain (costs off) execute s('000001', '000002');
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Nested Loop
+   Join Filter: ((p.c)::text = (q.c)::text)
+   ->  Append
+         ->  Seq Scan on p1 p_1
+         ->  Seq Scan on p2 p_2
+   ->  Append
+         ->  Seq Scan on q1 q_1
+               Filter: (((c)::text = '000001'::text) OR ((c)::text = '000002'::text))
+         ->  Seq Scan on q2 q_2
+               Filter: (((c)::text = '000001'::text) OR ((c)::text = '000002'::text))
+(10 rows)
+
+prepare s2 as select * from p inner join q on (q.c = $1 or q.c = $2) and p.c = q.c;
+explain (costs off) execute s2('000001', '000002');
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Nested Loop
+   Join Filter: ((p.c)::text = (q.c)::text)
+   ->  Append
+         ->  Seq Scan on p1 p_1
+         ->  Seq Scan on p2 p_2
+   ->  Append
+         ->  Seq Scan on q1 q_1
+               Filter: (((c)::text = '000001'::text) OR ((c)::text = '000002'::text))
+         ->  Seq Scan on q2 q_2
+               Filter: (((c)::text = '000001'::text) OR ((c)::text = '000002'::text))
+(10 rows)
+
+-- left join
+-- q can have the planning partititon prune, but p can't since it is the outer join.
+prepare s3 as select * from p left join q on (q.c = $1 or q.c = $2) and p.c = q.c;
+explain (costs off) execute s3('000001', '000002');
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Nested Loop Left Join
+   Join Filter: ((p.c)::text = (q.c)::text)
+   ->  Append
+         ->  Seq Scan on p1 p_1
+         ->  Seq Scan on p2 p_2
+         ->  Seq Scan on p3 p_3
+   ->  Append
+         ->  Seq Scan on q1 q_1
+               Filter: (((c)::text = '000001'::text) OR ((c)::text = '000002'::text))
+         ->  Seq Scan on q2 q_2
+               Filter: (((c)::text = '000001'::text) OR ((c)::text = '000002'::text))
+(11 rows)
+
+-- p can't do the planning partition prune since it is the outer join. so p can't as well.
+prepare s4 as select * from p left join q on (p.c = $1 or p.c = $2) and p.c = q.c;
+explain (costs off) execute s4('000001', '000002');
+                                                     QUERY PLAN                                                      
+---------------------------------------------------------------------------------------------------------------------
+ Nested Loop Left Join
+   Join Filter: (((p.c)::text = (q.c)::text) AND (((p.c)::text = '000001'::text) OR ((p.c)::text = '000002'::text)))
+   ->  Append
+         ->  Seq Scan on p1 p_1
+         ->  Seq Scan on p2 p_2
+         ->  Seq Scan on p3 p_3
+   ->  Append
+         ->  Seq Scan on q1 q_1
+         ->  Seq Scan on q2 q_2
+         ->  Seq Scan on q3 q_3
+(10 rows)
+
+-- left join is reduced to inner join, so both p and q can do the pruning.
+prepare s5 as select * from p left join q on p.c = q.c where (q.c = $1 or q.c = $2);
+explain (costs off) execute s5('000001', '000002');
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Nested Loop
+   Join Filter: ((p.c)::text = (q.c)::text)
+   ->  Append
+         ->  Seq Scan on p1 p_1
+         ->  Seq Scan on p2 p_2
+   ->  Append
+         ->  Seq Scan on q1 q_1
+               Filter: (((c)::text = '000001'::text) OR ((c)::text = '000002'::text))
+         ->  Seq Scan on q2 q_2
+               Filter: (((c)::text = '000001'::text) OR ((c)::text = '000002'::text))
+(10 rows)
+
+-- left join can't be reduced to inner join, but p.c is not in ON clause so q can.
+-- and q is right table in left join, so it can as well.
+prepare s6 as select * from p left join q on p.c = q.c where (p.c = $1 or p.c = $2);
+explain (costs off) execute s6('000001', '000002');
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Nested Loop Left Join
+   Join Filter: ((p.c)::text = (q.c)::text)
+   ->  Append
+         ->  Seq Scan on p1 p_1
+               Filter: (((c)::text = '000001'::text) OR ((c)::text = '000002'::text))
+         ->  Seq Scan on p2 p_2
+               Filter: (((c)::text = '000001'::text) OR ((c)::text = '000002'::text))
+   ->  Append
+         ->  Seq Scan on q1 q_1
+         ->  Seq Scan on q2 q_2
+(10 rows)
+
+-- full outer join.
+-- both p & q can't do the planning partition prune.
+prepare s7 as select * from p full join q on p.c = q.c and (p.c = $1 or p.c = $2);
+explain (costs off) execute s7('000001', '000002');
+                                    QUERY PLAN                                     
+-----------------------------------------------------------------------------------
+ Hash Full Join
+   Hash Cond: ((p.c)::text = (q.c)::text)
+   Join Filter: (((p.c)::text = '000001'::text) OR ((p.c)::text = '000002'::text))
+   ->  Append
+         ->  Seq Scan on p1 p_1
+         ->  Seq Scan on p2 p_2
+         ->  Seq Scan on p3 p_3
+   ->  Hash
+         ->  Append
+               ->  Seq Scan on q1 q_1
+               ->  Seq Scan on q2 q_2
+               ->  Seq Scan on q3 q_3
+(12 rows)
+
+-- can be reduced to p left join q, so both can.
+prepare s8 as select * from p full join q on p.c = q.c where (p.c = $1 or p.c = $2);
+explain (costs off) execute s8('000001', '000002');
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Nested Loop Left Join
+   Join Filter: ((p.c)::text = (q.c)::text)
+   ->  Append
+         ->  Seq Scan on p1 p_1
+               Filter: (((c)::text = '000001'::text) OR ((c)::text = '000002'::text))
+         ->  Seq Scan on p2 p_2
+               Filter: (((c)::text = '000001'::text) OR ((c)::text = '000002'::text))
+   ->  Append
+         ->  Seq Scan on q1 q_1
+         ->  Seq Scan on q2 q_2
+(10 rows)
+
+deallocate s;
+deallocate s2;
+deallocate s3;
+deallocate s4;
+deallocate s5;
+deallocate s6;
+deallocate s7;
+deallocate s8;
+reset plan_cache_mode;

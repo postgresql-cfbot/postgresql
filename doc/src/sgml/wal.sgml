@@ -663,7 +663,9 @@
    the <acronym>WAL</acronym> buffers in shared memory. If there is no
    space for the new record, <function>XLogInsertRecord</function> will have
    to write (move to kernel cache) a few filled <acronym>WAL</acronym>
-   buffers. This is undesirable because <function>XLogInsertRecord</function>
+   buffers. The number of times it happend is counted as 
+   <literal>wal_buffers_full</literal> in <xref linkend="pg-stat-wal-view"/>.
+   This is undesirable because <function>XLogInsertRecord</function> 
    is used on every database low level modification (for example, row
    insertion) at a time when an exclusive lock is held on affected
    data pages, so the operation needs to be as fast as possible.  What
@@ -672,8 +674,12 @@
    time. Normally, <acronym>WAL</acronym> buffers should be written
    and flushed by an <function>XLogFlush</function> request, which is
    made, for the most part, at transaction commit time to ensure that
-   transaction records are flushed to permanent storage. On systems
-   with high log output, <function>XLogFlush</function> requests might
+   transaction records are flushed to permanent storage. 
+   <function>XLogFlush</function> calls <function>XLogWrite</function> to write 
+   and <function>issue_xlog_fsync</function> to flush them, which are counted as 
+   <literal>wal_write</literal> and <literal>wal_sync</literal> in 
+   <xref linkend="pg-stat-wal-view"/>. On systems with high log output, 
+   <function>XLogFlush</function> requests might
    not occur often enough to prevent <function>XLogInsertRecord</function>
    from having to do writes.  On such systems
    one should increase the number of <acronym>WAL</acronym> buffers by

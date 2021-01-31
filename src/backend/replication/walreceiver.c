@@ -485,7 +485,11 @@ WalReceiverMain(void)
 
 				/* Check if we need to exit the streaming loop. */
 				if (endofwal)
+				{
+					/* Send WAL statistics to the stats collector */
+					pgstat_send_wal();
 					break;
+				}
 
 				/*
 				 * Ideally we would reuse a WaitEventSet object repeatedly
@@ -550,8 +554,13 @@ WalReceiverMain(void)
 														wal_receiver_timeout);
 
 						if (now >= timeout)
+						{
+							/* Send WAL statistics to the stats collector before terminating */
+							pgstat_send_wal();
+
 							ereport(ERROR,
 									(errmsg("terminating walreceiver due to timeout")));
+						}
 
 						/*
 						 * We didn't receive anything new, for half of
@@ -874,6 +883,7 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 	while (nbytes > 0)
 	{
 		int			segbytes;
+		instr_time	start;
 
 		if (recvFile < 0 || !XLByteInSeg(recptr, recvSegNo, wal_segment_size))
 		{
@@ -910,6 +920,13 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 					XLogArchiveForceDone(xlogfname);
 				else
 					XLogArchiveNotify(xlogfname);
+
+				/*
+				 * Send WAL statistics to the stats collector when finishing the
+				 * current WAL segment file to avoid overloading it.
+				 */
+				pgstat_send_wal();
+
 			}
 			recvFile = -1;
 
@@ -931,7 +948,27 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 		/* OK to write the logs */
 		errno = 0;
 
+		/* Measure I/O timing to write WAL data */
+		if (track_wal_io_timing)
+			INSTR_TIME_SET_CURRENT(start);
+
 		byteswritten = pg_pwrite(recvFile, buf, segbytes, (off_t) startoff);
+
+		/* 
+		 * Increment the I/O timing and the number of times 
+		 * WAL data were written out to disk.
+		 */
+		if (track_wal_io_timing)
+		{
+			instr_time	duration;
+
+			INSTR_TIME_SET_CURRENT(duration);
+			INSTR_TIME_SUBTRACT(duration, start);
+			WalStats.m_wal_write_time = INSTR_TIME_GET_MICROSEC(duration);
+		}
+
+		WalStats.m_wal_write++;
+
 		if (byteswritten <= 0)
 		{
 			char		xlogfname[MAXFNAMELEN];

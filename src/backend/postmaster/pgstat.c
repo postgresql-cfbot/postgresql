@@ -6892,6 +6892,10 @@ pgstat_recv_wal(PgStat_MsgWal *msg, int len)
 	walStats.wal_fpi += msg->m_wal_fpi;
 	walStats.wal_bytes += msg->m_wal_bytes;
 	walStats.wal_buffers_full += msg->m_wal_buffers_full;
+	walStats.wal_write += msg->m_wal_write;
+	walStats.wal_write_time += msg->m_wal_write_time;
+	walStats.wal_sync += msg->m_wal_sync;
+	walStats.wal_sync_time += msg->m_wal_sync_time;
 }
 
 /* ----------

@@ -110,6 +110,7 @@ int			CommitDelay = 0;	/* precommit delay in microseconds */
 int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
+bool		track_wal_io_timing = false;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -2536,6 +2537,7 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			Size		nbytes;
 			Size		nleft;
 			int			written;
+			instr_time	start;
 
 			/* OK to write the page(s) */
 			from = XLogCtl->pages + startidx * (Size) XLOG_BLCKSZ;
@@ -2544,9 +2546,30 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			do
 			{
 				errno = 0;
+
+				/* Measure I/O timing to write WAL data */
+				if (track_wal_io_timing)
+					INSTR_TIME_SET_CURRENT(start);
+
 				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
 				written = pg_pwrite(openLogFile, from, nleft, startoffset);
 				pgstat_report_wait_end();
+
+				/* 
+				 * Increment the I/O timing and the number of times 
+				 * WAL data were written out to disk.
+				 */
+				if (track_wal_io_timing)
+				{
+					instr_time	duration;
+
+					INSTR_TIME_SET_CURRENT(duration);
+					INSTR_TIME_SUBTRACT(duration, start);
+					WalStats.m_wal_write_time = INSTR_TIME_GET_MICROSEC(duration);
+				}
+
+				WalStats.m_wal_write++;
+
 				if (written <= 0)
 				{
 					char		xlogfname[MAXFNAMELEN];
@@ -10542,7 +10565,22 @@ assign_xlog_sync_method(int new_sync_method, void *extra)
 void
 issue_xlog_fsync(int fd, XLogSegNo segno)
 {
-	char	   *msg = NULL;
+	char		*msg = NULL;
+	bool		issue_fsync = false;
+	instr_time	start;
+
+	/* Check whether the WAL file was synced to disk right now */
+	if (enableFsync &&
+		(sync_method == SYNC_METHOD_FSYNC ||
+		 sync_method == SYNC_METHOD_FSYNC_WRITETHROUGH ||
+		 sync_method == SYNC_METHOD_FDATASYNC))
+	{
+		/* Measure I/O timing to sync the WAL file */
+		if (track_wal_io_timing)
+			INSTR_TIME_SET_CURRENT(start);
+
+		issue_fsync = true;
+	}
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_SYNC);
 	switch (sync_method)
@@ -10587,6 +10625,25 @@ issue_xlog_fsync(int fd, XLogSegNo segno)
 	}
 
 	pgstat_report_wait_end();
+
+	/*
+	 * Increment the I/O timing and the number of times WAL files were synced.
+	 *
+	 * Check whether the WAL file was synced to disk right now because
+	 * statistics must be incremented when syncing really occurred.
+	 */
+	if (issue_fsync)
+	{
+		if (track_wal_io_timing)
+		{
+			instr_time duration;
+
+			INSTR_TIME_SET_CURRENT(duration);
+			INSTR_TIME_SUBTRACT(duration, start);
+			WalStats.m_wal_sync_time = INSTR_TIME_GET_MICROSEC(duration);
+		}
+		WalStats.m_wal_sync++;
+	}
 }
 
 /*

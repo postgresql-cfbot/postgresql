@@ -474,6 +474,10 @@ typedef struct PgStat_MsgWal
 	PgStat_Counter m_wal_fpi;
 	uint64		m_wal_bytes;
 	PgStat_Counter m_wal_buffers_full;
+	PgStat_Counter m_wal_write;
+	PgStat_Counter m_wal_write_time;	/* time spend writing wal records in micro seconds */
+	PgStat_Counter m_wal_sync;
+	PgStat_Counter m_wal_sync_time;		/* time spend syncing wal records in micro seconds */
 } PgStat_MsgWal;
 
 /* ----------
@@ -839,6 +843,10 @@ typedef struct PgStat_WalStats
 	PgStat_Counter wal_fpi;
 	uint64		wal_bytes;
 	PgStat_Counter wal_buffers_full;
+	PgStat_Counter wal_write;
+	PgStat_Counter wal_write_time;
+	PgStat_Counter wal_sync;
+	PgStat_Counter wal_sync_time;
 	TimestampTz stat_reset_timestamp;
 } PgStat_WalStats;
 

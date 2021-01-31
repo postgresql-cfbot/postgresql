@@ -22,6 +22,8 @@ extern AppendRelInfo *make_append_rel_info(Relation parentrel,
 										   Index parentRTindex, Index childRTindex);
 extern Node *adjust_appendrel_attrs(PlannerInfo *root, Node *node,
 									int nappinfos, AppendRelInfo **appinfos);
+extern Node *adjust_target_appendrel_attrs(PlannerInfo *root, Node *node,
+									AppendRelInfo *appinfo);
 extern Node *adjust_appendrel_attrs_multilevel(PlannerInfo *root, Node *node,
 											   Relids child_relids,
 											   Relids top_parent_relids);
@@ -31,5 +33,6 @@ extern Relids adjust_child_relids_multilevel(PlannerInfo *root, Relids relids,
 											 Relids child_relids, Relids top_parent_relids);
 extern AppendRelInfo **find_appinfos_by_relids(PlannerInfo *root,
 											   Relids relids, int *nappinfos);
+extern Node *translate_fake_parent_var(Var *var, AppendRelInfo *appinfo);
 
 #endif							/* APPENDINFO_H */

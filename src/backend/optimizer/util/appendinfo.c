@@ -29,6 +29,7 @@ typedef struct
 	PlannerInfo *root;
 	int			nappinfos;
 	AppendRelInfo **appinfos;
+	bool		need_parent_wholerow;
 } adjust_appendrel_attrs_context;
 
 static void make_inh_translation_list(Relation oldrelation,
@@ -37,8 +38,6 @@ static void make_inh_translation_list(Relation oldrelation,
 									  AppendRelInfo *appinfo);
 static Node *adjust_appendrel_attrs_mutator(Node *node,
 											adjust_appendrel_attrs_context *context);
-static List *adjust_inherited_tlist(List *tlist,
-									AppendRelInfo *context);
 
 
 /*
@@ -200,42 +199,42 @@ adjust_appendrel_attrs(PlannerInfo *root, Node *node, int nappinfos,
 	context.root = root;
 	context.nappinfos = nappinfos;
 	context.appinfos = appinfos;
+	context.need_parent_wholerow = true;
 
 	/* If there's nothing to adjust, don't call this function. */
 	Assert(nappinfos >= 1 && appinfos != NULL);
 
-	/*
-	 * Must be prepared to start with a Query or a bare expression tree.
-	 */
-	if (node && IsA(node, Query))
-	{
-		Query	   *newnode;
-		int			cnt;
+	/* Should never be translating a Query tree. */
+	Assert (node == NULL || !IsA(node, Query));
+	result = adjust_appendrel_attrs_mutator(node, &context);
 
-		newnode = query_tree_mutator((Query *) node,
-									 adjust_appendrel_attrs_mutator,
-									 (void *) &context,
-									 QTW_IGNORE_RC_SUBQUERIES);
-		for (cnt = 0; cnt < nappinfos; cnt++)
-		{
-			AppendRelInfo *appinfo = appinfos[cnt];
+	return result;
+}
 
-			if (newnode->resultRelation == appinfo->parent_relid)
-			{
-				newnode->resultRelation = appinfo->child_relid;
-				/* Fix tlist resnos too, if it's inherited UPDATE */
-				if (newnode->commandType == CMD_UPDATE)
-					newnode->targetList =
-						adjust_inherited_tlist(newnode->targetList,
-											   appinfo);
-				break;
-			}
-		}
+/*
+ * adjust_target_appendrel_attrs
+ *		like adjust_appendrel_attrs, but treats wholerow Vars a bit
+ *		differently in that it doesn't convert any child table
+ *		wholerows contained in 'node' back to the parent reltype.
+ */
+Node *
+adjust_target_appendrel_attrs(PlannerInfo *root, Node *node,
+							  AppendRelInfo *appinfo)
+{
+	Node	   *result;
+	adjust_appendrel_attrs_context context;
 
-		result = (Node *) newnode;
-	}
-	else
-		result = adjust_appendrel_attrs_mutator(node, &context);
+	context.root = root;
+	context.nappinfos = 1;
+	context.appinfos = &appinfo;
+	context.need_parent_wholerow = false;
+
+	/* If there's nothing to adjust, don't call this function. */
+	Assert(appinfo != NULL);
+
+	/* Should never be translating a Query tree. */
+	Assert (node == NULL || !IsA(node, Query));
+	result = adjust_appendrel_attrs_mutator(node, &context);
 
 	return result;
 }
@@ -277,11 +276,16 @@ adjust_appendrel_attrs_mutator(Node *node,
 			{
 				Node	   *newnode;
 
+				/*
+				 * If this Var appears to have a unusual attno assigned, it
+				 * must be one of the "fake" vars added to a parent target
+				 * relation's reltarget; see add_inherit_junk_var().
+				 */
 				if (var->varattno > list_length(appinfo->translated_vars))
-					elog(ERROR, "attribute %d of relation \"%s\" does not exist",
-						 var->varattno, get_rel_name(appinfo->parent_reloid));
-				newnode = copyObject(list_nth(appinfo->translated_vars,
-											  var->varattno - 1));
+					newnode = translate_fake_parent_var(var, appinfo);
+				else
+					newnode = copyObject(list_nth(appinfo->translated_vars,
+												  var->varattno - 1));
 				if (newnode == NULL)
 					elog(ERROR, "attribute %d of relation \"%s\" does not exist",
 						 var->varattno, get_rel_name(appinfo->parent_reloid));
@@ -298,7 +302,10 @@ adjust_appendrel_attrs_mutator(Node *node,
 				if (OidIsValid(appinfo->child_reltype))
 				{
 					Assert(var->vartype == appinfo->parent_reltype);
-					if (appinfo->parent_reltype != appinfo->child_reltype)
+					/* Make sure the Var node has the right type ID, too */
+					var->vartype = appinfo->child_reltype;
+					if (appinfo->parent_reltype != appinfo->child_reltype &&
+						context->need_parent_wholerow)
 					{
 						ConvertRowtypeExpr *r = makeNode(ConvertRowtypeExpr);
 
@@ -306,8 +313,6 @@ adjust_appendrel_attrs_mutator(Node *node,
 						r->resulttype = appinfo->parent_reltype;
 						r->convertformat = COERCE_IMPLICIT_CAST;
 						r->location = -1;
-						/* Make sure the Var node has the right type ID, too */
-						var->vartype = appinfo->child_reltype;
 						return (Node *) r;
 					}
 				}
@@ -360,44 +365,6 @@ adjust_appendrel_attrs_mutator(Node *node,
 			}
 		}
 		return (Node *) cexpr;
-	}
-	if (IsA(node, RangeTblRef))
-	{
-		RangeTblRef *rtr = (RangeTblRef *) copyObject(node);
-
-		for (cnt = 0; cnt < nappinfos; cnt++)
-		{
-			AppendRelInfo *appinfo = appinfos[cnt];
-
-			if (rtr->rtindex == appinfo->parent_relid)
-			{
-				rtr->rtindex = appinfo->child_relid;
-				break;
-			}
-		}
-		return (Node *) rtr;
-	}
-	if (IsA(node, JoinExpr))
-	{
-		/* Copy the JoinExpr node with correct mutation of subnodes */
-		JoinExpr   *j;
-		AppendRelInfo *appinfo;
-
-		j = (JoinExpr *) expression_tree_mutator(node,
-												 adjust_appendrel_attrs_mutator,
-												 (void *) context);
-		/* now fix JoinExpr's rtindex (probably never happens) */
-		for (cnt = 0; cnt < nappinfos; cnt++)
-		{
-			appinfo = appinfos[cnt];
-
-			if (j->rtindex == appinfo->parent_relid)
-			{
-				j->rtindex = appinfo->child_relid;
-				break;
-			}
-		}
-		return (Node *) j;
 	}
 	if (IsA(node, PlaceHolderVar))
 	{
@@ -486,6 +453,10 @@ adjust_appendrel_attrs_mutator(Node *node,
 	 */
 	Assert(!IsA(node, SubLink));
 	Assert(!IsA(node, Query));
+
+	/* We should never see these Query substructures. */
+	Assert(!IsA(node, RangeTblRef));
+	Assert(!IsA(node, JoinExpr));
 
 	return expression_tree_mutator(node, adjust_appendrel_attrs_mutator,
 								   (void *) context);
@@ -618,103 +589,6 @@ adjust_child_relids_multilevel(PlannerInfo *root, Relids relids,
 	pfree(appinfos);
 
 	return result;
-}
-
-/*
- * Adjust the targetlist entries of an inherited UPDATE operation
- *
- * The expressions have already been fixed, but we have to make sure that
- * the target resnos match the child table (they may not, in the case of
- * a column that was added after-the-fact by ALTER TABLE).  In some cases
- * this can force us to re-order the tlist to preserve resno ordering.
- * (We do all this work in special cases so that preptlist.c is fast for
- * the typical case.)
- *
- * The given tlist has already been through expression_tree_mutator;
- * therefore the TargetEntry nodes are fresh copies that it's okay to
- * scribble on.
- *
- * Note that this is not needed for INSERT because INSERT isn't inheritable.
- */
-static List *
-adjust_inherited_tlist(List *tlist, AppendRelInfo *context)
-{
-	bool		changed_it = false;
-	ListCell   *tl;
-	List	   *new_tlist;
-	bool		more;
-	int			attrno;
-
-	/* This should only happen for an inheritance case, not UNION ALL */
-	Assert(OidIsValid(context->parent_reloid));
-
-	/* Scan tlist and update resnos to match attnums of child rel */
-	foreach(tl, tlist)
-	{
-		TargetEntry *tle = (TargetEntry *) lfirst(tl);
-		Var		   *childvar;
-
-		if (tle->resjunk)
-			continue;			/* ignore junk items */
-
-		/* Look up the translation of this column: it must be a Var */
-		if (tle->resno <= 0 ||
-			tle->resno > list_length(context->translated_vars))
-			elog(ERROR, "attribute %d of relation \"%s\" does not exist",
-				 tle->resno, get_rel_name(context->parent_reloid));
-		childvar = (Var *) list_nth(context->translated_vars, tle->resno - 1);
-		if (childvar == NULL || !IsA(childvar, Var))
-			elog(ERROR, "attribute %d of relation \"%s\" does not exist",
-				 tle->resno, get_rel_name(context->parent_reloid));
-
-		if (tle->resno != childvar->varattno)
-		{
-			tle->resno = childvar->varattno;
-			changed_it = true;
-		}
-	}
-
-	/*
-	 * If we changed anything, re-sort the tlist by resno, and make sure
-	 * resjunk entries have resnos above the last real resno.  The sort
-	 * algorithm is a bit stupid, but for such a seldom-taken path, small is
-	 * probably better than fast.
-	 */
-	if (!changed_it)
-		return tlist;
-
-	new_tlist = NIL;
-	more = true;
-	for (attrno = 1; more; attrno++)
-	{
-		more = false;
-		foreach(tl, tlist)
-		{
-			TargetEntry *tle = (TargetEntry *) lfirst(tl);
-
-			if (tle->resjunk)
-				continue;		/* ignore junk items */
-
-			if (tle->resno == attrno)
-				new_tlist = lappend(new_tlist, tle);
-			else if (tle->resno > attrno)
-				more = true;
-		}
-	}
-
-	foreach(tl, tlist)
-	{
-		TargetEntry *tle = (TargetEntry *) lfirst(tl);
-
-		if (!tle->resjunk)
-			continue;			/* here, ignore non-junk items */
-
-		tle->resno = attrno;
-		new_tlist = lappend(new_tlist, tle);
-		attrno++;
-	}
-
-	return new_tlist;
 }
 
 /*

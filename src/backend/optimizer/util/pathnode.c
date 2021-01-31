@@ -3521,8 +3521,8 @@ create_lockrows_path(PlannerInfo *root, RelOptInfo *rel,
  * 'partColsUpdated' is true if any partitioning columns are being updated,
  *		either from the target relation or a descendent partitioned table.
  * 'resultRelations' is an integer list of actual RT indexes of target rel(s)
- * 'subpaths' is a list of Path(s) producing source data (one per rel)
- * 'subroots' is a list of PlannerInfo structs (one per rel)
+ * 'subpath' is a Path producing source data
+ * 'updateTargetLists' is a list of UPDATE targetlists.
  * 'withCheckOptionLists' is a list of WCO lists (one per rel)
  * 'returningLists' is a list of RETURNING tlists (one per rel)
  * 'rowMarks' is a list of PlanRowMarks (non-locking only)
@@ -3534,18 +3534,15 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 						CmdType operation, bool canSetTag,
 						Index nominalRelation, Index rootRelation,
 						bool partColsUpdated,
-						List *resultRelations, List *subpaths,
-						List *subroots,
+						List *resultRelations, Path *subpath,
+						List *updateTargetLists,
 						List *withCheckOptionLists, List *returningLists,
 						List *rowMarks, OnConflictExpr *onconflict,
 						int epqParam)
 {
 	ModifyTablePath *pathnode = makeNode(ModifyTablePath);
 	double		total_size;
-	ListCell   *lc;
 
-	Assert(list_length(resultRelations) == list_length(subpaths));
-	Assert(list_length(resultRelations) == list_length(subroots));
 	Assert(withCheckOptionLists == NIL ||
 		   list_length(resultRelations) == list_length(withCheckOptionLists));
 	Assert(returningLists == NIL ||
@@ -3576,18 +3573,13 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->path.total_cost = 0;
 	pathnode->path.rows = 0;
 	total_size = 0;
-	foreach(lc, subpaths)
-	{
-		Path	   *subpath = (Path *) lfirst(lc);
 
-		if (lc == list_head(subpaths))	/* first node? */
-			pathnode->path.startup_cost = subpath->startup_cost;
-		pathnode->path.total_cost += subpath->total_cost;
-		if (returningLists != NIL)
-		{
-			pathnode->path.rows += subpath->rows;
-			total_size += subpath->pathtarget->width * subpath->rows;
-		}
+	pathnode->path.startup_cost = subpath->startup_cost;
+	pathnode->path.total_cost += subpath->total_cost;
+	if (returningLists != NIL)
+	{
+		pathnode->path.rows += subpath->rows;
+		total_size += subpath->pathtarget->width * subpath->rows;
 	}
 
 	/*
@@ -3606,8 +3598,8 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->rootRelation = rootRelation;
 	pathnode->partColsUpdated = partColsUpdated;
 	pathnode->resultRelations = resultRelations;
-	pathnode->subpaths = subpaths;
-	pathnode->subroots = subroots;
+	pathnode->subpath = subpath;
+	pathnode->updateTargetLists = updateTargetLists;
 	pathnode->withCheckOptionLists = withCheckOptionLists;
 	pathnode->returningLists = returningLists;
 	pathnode->rowMarks = rowMarks;

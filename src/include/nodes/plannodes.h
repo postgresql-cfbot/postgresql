@@ -196,7 +196,7 @@ typedef struct ProjectSet
 
 /* ----------------
  *	 ModifyTable node -
- *		Apply rows produced by subplan(s) to result table(s),
+ *		Apply rows produced by subplan to result table(s),
  *		by inserting, updating, or deleting.
  *
  * If the originally named target table is a partitioned table, both
@@ -218,9 +218,10 @@ typedef struct ModifyTable
 	Index		rootRelation;	/* Root RT index, if target is partitioned */
 	bool		partColsUpdated;	/* some part key in hierarchy updated */
 	List	   *resultRelations;	/* integer list of RT indexes */
-	List	   *plans;			/* plan(s) producing source data */
+	Plan	   *subplan;		/* plan producing source data */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */
 	List	   *returningLists; /* per-target-table RETURNING tlists */
+	List	   *updateTargetLists;	/* per-target-table UPDATE tlists */
 	List	   *fdwPrivLists;	/* per-target-table FDW private data lists */
 	Bitmapset  *fdwDirectModifyPlans;	/* indices of FDW DM plans */
 	List	   *rowMarks;		/* PlanRowMarks (non-locking only) */

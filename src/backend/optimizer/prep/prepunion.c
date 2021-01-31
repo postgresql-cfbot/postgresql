@@ -678,6 +678,10 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 							   NIL, NULL,
 							   parallel_workers, enable_parallel_append,
 							   NIL, -1);
+
+		if (op->all && enable_parallel_append)
+			add_partial_path(result_rel, ppath);
+
 		ppath = (Path *)
 			create_gather_path(root, result_rel, ppath,
 							   result_rel->reltarget, NULL, NULL);

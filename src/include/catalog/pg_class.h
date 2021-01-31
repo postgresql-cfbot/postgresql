@@ -38,7 +38,7 @@ CATALOG(pg_class,1259,RelationRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83,Relat
 	NameData	relname;
 
 	/* OID of namespace containing this class */
-	Oid			relnamespace BKI_DEFAULT(PGNSP);
+	Oid			relnamespace BKI_DEFAULT(PGNSP) BKI_LOOKUP(pg_namespace);
 
 	/* OID of entry in pg_type for table's implicit row type */
 	Oid			reltype BKI_LOOKUP(pg_type);
@@ -47,7 +47,7 @@ CATALOG(pg_class,1259,RelationRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83,Relat
 	Oid			reloftype BKI_DEFAULT(0) BKI_LOOKUP(pg_type);
 
 	/* class owner */
-	Oid			relowner BKI_DEFAULT(PGUID);
+	Oid			relowner BKI_DEFAULT(PGUID) BKI_LOOKUP(pg_authid);
 
 	/* access method; 0 if not a table / index */
 	Oid			relam BKI_DEFAULT(heap) BKI_LOOKUP(pg_am);
@@ -69,7 +69,7 @@ CATALOG(pg_class,1259,RelationRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83,Relat
 	int32		relallvisible BKI_DEFAULT(0);
 
 	/* OID of toast table; 0 if none */
-	Oid			reltoastrelid BKI_DEFAULT(0);
+	Oid			reltoastrelid BKI_DEFAULT(0) BKI_LOOKUP(pg_class);
 
 	/* T if has (or has had) any indexes */
 	bool		relhasindex BKI_DEFAULT(f);
@@ -120,7 +120,7 @@ CATALOG(pg_class,1259,RelationRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83,Relat
 	bool		relispartition BKI_DEFAULT(f);
 
 	/* heap for rewrite during DDL, link to original rel */
-	Oid			relrewrite BKI_DEFAULT(0);
+	Oid			relrewrite BKI_DEFAULT(0) BKI_LOOKUP(pg_class);
 
 	/* all Xids < this are frozen in this rel */
 	TransactionId relfrozenxid BKI_DEFAULT(3);	/* FirstNormalTransactionId */

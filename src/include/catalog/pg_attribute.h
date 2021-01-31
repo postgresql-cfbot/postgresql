@@ -36,7 +36,8 @@
  */
 CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,AttributeRelation_Rowtype_Id) BKI_SCHEMA_MACRO
 {
-	Oid			attrelid;		/* OID of relation containing this attribute */
+	Oid			attrelid BKI_LOOKUP(pg_class);	/* OID of relation containing
+												 * this attribute */
 	NameData	attname;		/* name of attribute */
 
 	/*
@@ -46,7 +47,7 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
 	 * attributes of this instance, so they had better match or Postgres will
 	 * fail.
 	 */
-	Oid			atttypid;
+	Oid			atttypid BKI_LOOKUP(pg_type);
 
 	/*
 	 * attstattarget is the target number of statistics datapoints to collect
@@ -154,7 +155,7 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
 	int32		attinhcount BKI_DEFAULT(0);
 
 	/* attribute's collation */
-	Oid			attcollation;
+	Oid			attcollation BKI_LOOKUP(pg_collation);
 
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	/* NOTE: The following fields are not present in tuple descriptors. */

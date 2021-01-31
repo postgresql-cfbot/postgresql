@@ -38,7 +38,7 @@ CATALOG(pg_range,3541,RangeRelationId)
 	Oid			rngmultitypid BKI_LOOKUP(pg_type);
 
 	/* collation for this range type, or 0 */
-	Oid			rngcollation BKI_DEFAULT(0);
+	Oid			rngcollation BKI_DEFAULT(0) BKI_LOOKUP(pg_collation);
 
 	/* subtype's btree opclass */
 	Oid			rngsubopc BKI_LOOKUP(pg_opclass);

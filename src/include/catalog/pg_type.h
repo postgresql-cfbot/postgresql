@@ -41,10 +41,10 @@ CATALOG(pg_type,1247,TypeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71,TypeRelati
 	NameData	typname;
 
 	/* OID of namespace containing this type */
-	Oid			typnamespace BKI_DEFAULT(PGNSP);
+	Oid			typnamespace BKI_DEFAULT(PGNSP) BKI_LOOKUP(pg_namespace);
 
 	/* type owner */
-	Oid			typowner BKI_DEFAULT(PGUID);
+	Oid			typowner BKI_DEFAULT(PGUID) BKI_LOOKUP(pg_authid);
 
 	/*
 	 * For a fixed-size type, typlen is the number of bytes we use to
@@ -205,7 +205,7 @@ CATALOG(pg_type,1247,TypeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71,TypeRelati
 	 * Domains use typbasetype to show the base (or domain) type that the
 	 * domain is based on.  Zero if the type is not a domain.
 	 */
-	Oid			typbasetype BKI_DEFAULT(0);
+	Oid			typbasetype BKI_DEFAULT(0) BKI_LOOKUP(pg_type);
 
 	/*
 	 * Domains use typtypmod to record the typmod to be applied to their base

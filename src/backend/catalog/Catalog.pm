@@ -105,6 +105,16 @@ sub ParseHeader
 				index_decl => $5
 			  };
 		}
+		elsif (/^DECLARE_(ARRAY_)?FOREIGN_KEY\(\s*\(([^)]+)\),\s*(\w+),\s*\(([^)]+)\)\)/)
+		{
+			push @{ $catalog{foreign_keys} },
+			  {
+				is_array => $1 ? 1 : 0,
+				fk_cols  => $2,
+				pk_table => $3,
+				pk_cols  => $4
+			  };
+		}
 		elsif (/^CATALOG\((\w+),(\d+),(\w+)\)/)
 		{
 			$catalog{catname}            = $1;
@@ -200,6 +210,17 @@ sub ParseHeader
 					elsif ($attopt =~ /BKI_LOOKUP\((\w+)\)/)
 					{
 						$column{lookup} = $1;
+						# BKI_LOOKUP implicitly makes an FK reference
+						push @{ $catalog{foreign_keys} },
+						  {
+							is_array =>
+							  ($atttype eq 'oidvector' || $atttype eq '_oid')
+							? 1
+							: 0,
+							fk_cols  => $attname,
+							pk_table => $1,
+							pk_cols  => 'oid'
+						  };
 					}
 					else
 					{

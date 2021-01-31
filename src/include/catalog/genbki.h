@@ -75,6 +75,29 @@
 #define DECLARE_UNIQUE_INDEX(name,oid,decl) extern int no_such_variable
 #define DECLARE_UNIQUE_INDEX_PKEY(name,oid,decl) extern int no_such_variable
 
+/*
+ * These lines are processed by genbki.pl to create a table for use
+ * by the pg_get_catalog_foreign_keys() function.  We do not have any
+ * mechanism that actually enforces foreign-key relationships in the
+ * system catalogs, but it is still useful to record the intended
+ * relationships in a machine-readable form.
+ *
+ * The keyword is DECLARE_FOREIGN_KEY or DECLARE_ARRAY_FOREIGN_KEY.
+ * The first argument is a parenthesized list of the referencing columns;
+ * the second, the name of the referenced table; the third, a parenthesized
+ * list of the referenced columns.  Use of the ARRAY macro means that the
+ * last referencing column is an array, each of whose elements is supposed
+ * to match some entry in the last referenced column.
+ *
+ * Columns that are marked with a BKI_LOOKUP rule do not need an explicit
+ * DECLARE_FOREIGN_KEY macro, as genbki.pl can infer the FK relationship
+ * from that.  Thus, these macros are only needed in special cases.
+ *
+ * The macro definitions are just to keep the C compiler from spitting up.
+ */
+#define DECLARE_FOREIGN_KEY(cols,reftbl,refcols) extern int no_such_variable
+#define DECLARE_ARRAY_FOREIGN_KEY(cols,reftbl,refcols) extern int no_such_variable
+
 /* The following are never defined; they are here only for documentation. */
 
 /*

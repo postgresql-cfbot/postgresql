@@ -1228,3 +1228,56 @@ drop role regress_partitioning_role;
 \dAo * pg_catalog.jsonb_path_ops
 \dAp+ btree float_ops
 \dAp * pg_catalog.uuid_ops
+
+-- list specific functions of the same name but different args
+
+create function mtest(int) returns int as $$ select 1; $$ language sql;
+create function mtest(int,text) returns int as $$ select 1; $$ language sql;
+create function mtest(bool,character(10),varchar(10)) returns int as $$ select 1; $$ language sql;
+create function mtest(float,float,bigint) returns int as $$ select 1; $$ language sql;
+create function mtest(bool,time,timetz) returns int as $$ select 1; $$ language sql;
+create function mtest(timestamp,timestamptz) returns int as $$ select 1; $$ language sql;
+create function mtest(varbit,int,smallint) returns int as $$ select 1; $$ language sql;
+
+-- With no arguments, all functions are shown
+\df mtest
+
+-- An invalid argument type matches nothing
+\df mtest mint
+
+-- A single argument type matches all functions starting with that type
+\df mtest integer
+
+-- Two argument types match up
+\df mtest integer text
+
+-- int -> integer
+\df mtest int text
+
+-- A single argument type only matches a single argument if a closing paren is added
+\df mtest (integer)
+
+-- Allowed abbreviations: bool->boolean, char -> character, varchar -> character varying
+\df mtest bool,char,varchar
+
+-- Allowed abbreviations: double -> double precision, float - double precision, int8 -> bigint
+\df mtest double float int8
+
+-- Allowed abbreviations: time -> time without time zone, timetz -> time with time zone
+\df mtest (bool time timetz)
+
+-- Allowed abbreviations: timestamp -> timestamp without time zone, timestamptz -> timestamp with time zone
+\df mtest timestamp timestamptz
+
+-- Allowed abbreviations: varbit -> bit varying, int4 -> integer, int2 -> smallint
+\df mtest varbit int4 int2
+
+drop function mtest(int);
+drop function mtest(int,text);
+drop function mtest(bool,char,varchar);
+drop function mtest(float,float,bigint);
+drop function mtest(bool,time,timetz);
+drop function mtest(timestamp,timestamptz);
+drop function mtest(varbit,int,smallint);
+
+\df mtest

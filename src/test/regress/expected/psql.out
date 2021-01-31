@@ -5076,3 +5076,118 @@ List of access methods
  hash  | uuid_ops        | uuid                 | uuid                  |      2 | uuid_hash_extended
 (5 rows)
 
+-- list specific functions of the same name but different args
+create function mtest(int) returns int as $$ select 1; $$ language sql;
+create function mtest(int,text) returns int as $$ select 1; $$ language sql;
+create function mtest(bool,character(10),varchar(10)) returns int as $$ select 1; $$ language sql;
+create function mtest(float,float,bigint) returns int as $$ select 1; $$ language sql;
+create function mtest(bool,time,timetz) returns int as $$ select 1; $$ language sql;
+create function mtest(timestamp,timestamptz) returns int as $$ select 1; $$ language sql;
+create function mtest(varbit,int,smallint) returns int as $$ select 1; $$ language sql;
+-- With no arguments, all functions are shown
+\df mtest
+                                        List of functions
+ Schema | Name  | Result data type |                  Argument data types                  | Type 
+--------+-------+------------------+-------------------------------------------------------+------
+ public | mtest | integer          | bit varying, integer, smallint                        | func
+ public | mtest | integer          | boolean, character, character varying                 | func
+ public | mtest | integer          | boolean, time without time zone, time with time zone  | func
+ public | mtest | integer          | double precision, double precision, bigint            | func
+ public | mtest | integer          | integer                                               | func
+ public | mtest | integer          | integer, text                                         | func
+ public | mtest | integer          | timestamp without time zone, timestamp with time zone | func
+(7 rows)
+
+-- An invalid argument type matches nothing
+\df mtest mint
+                       List of functions
+ Schema | Name | Result data type | Argument data types | Type 
+--------+------+------------------+---------------------+------
+(0 rows)
+
+-- A single argument type matches all functions starting with that type
+\df mtest integer
+                       List of functions
+ Schema | Name  | Result data type | Argument data types | Type 
+--------+-------+------------------+---------------------+------
+ public | mtest | integer          | integer             | func
+ public | mtest | integer          | integer, text       | func
+(2 rows)
+
+-- Two argument types match up
+\df mtest integer text
+                       List of functions
+ Schema | Name  | Result data type | Argument data types | Type 
+--------+-------+------------------+---------------------+------
+ public | mtest | integer          | integer, text       | func
+(1 row)
+
+-- int -> integer
+\df mtest int text
+                       List of functions
+ Schema | Name  | Result data type | Argument data types | Type 
+--------+-------+------------------+---------------------+------
+ public | mtest | integer          | integer, text       | func
+(1 row)
+
+-- A single argument type only matches a single argument if a closing paren is added
+\df mtest (integer)
+                       List of functions
+ Schema | Name  | Result data type | Argument data types | Type 
+--------+-------+------------------+---------------------+------
+ public | mtest | integer          | integer             | func
+(1 row)
+
+-- Allowed abbreviations: bool->boolean, char -> character, varchar -> character varying
+\df mtest bool,char,varchar
+                                List of functions
+ Schema | Name  | Result data type |          Argument data types          | Type 
+--------+-------+------------------+---------------------------------------+------
+ public | mtest | integer          | boolean, character, character varying | func
+(1 row)
+
+-- Allowed abbreviations: double -> double precision, float - double precision, int8 -> bigint
+\df mtest double float int8
+                                   List of functions
+ Schema | Name  | Result data type |            Argument data types             | Type 
+--------+-------+------------------+--------------------------------------------+------
+ public | mtest | integer          | double precision, double precision, bigint | func
+(1 row)
+
+-- Allowed abbreviations: time -> time without time zone, timetz -> time with time zone
+\df mtest (bool time timetz)
+                                        List of functions
+ Schema | Name  | Result data type |                 Argument data types                  | Type 
+--------+-------+------------------+------------------------------------------------------+------
+ public | mtest | integer          | boolean, time without time zone, time with time zone | func
+(1 row)
+
+-- Allowed abbreviations: timestamp -> timestamp without time zone, timestamptz -> timestamp with time zone
+\df mtest timestamp timestamptz
+                                        List of functions
+ Schema | Name  | Result data type |                  Argument data types                  | Type 
+--------+-------+------------------+-------------------------------------------------------+------
+ public | mtest | integer          | timestamp without time zone, timestamp with time zone | func
+(1 row)
+
+-- Allowed abbreviations: varbit -> bit varying, int4 -> integer, int2 -> smallint
+\df mtest varbit int4 int2
+                             List of functions
+ Schema | Name  | Result data type |      Argument data types       | Type 
+--------+-------+------------------+--------------------------------+------
+ public | mtest | integer          | bit varying, integer, smallint | func
+(1 row)
+
+drop function mtest(int);
+drop function mtest(int,text);
+drop function mtest(bool,char,varchar);
+drop function mtest(float,float,bigint);
+drop function mtest(bool,time,timetz);
+drop function mtest(timestamp,timestamptz);
+drop function mtest(varbit,int,smallint);
+\df mtest
+                       List of functions
+ Schema | Name | Result data type | Argument data types | Type 
+--------+------+------------------+---------------------+------
+(0 rows)
+

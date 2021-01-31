@@ -26,6 +26,7 @@
 #include "fe_utils/print.h"
 #include "fe_utils/string_utils.h"
 #include "settings.h"
+#include "stringutils.h"
 #include "variables.h"
 
 static bool describeOneTableDetails(const char *schemaname,
@@ -312,7 +313,7 @@ describeTablespaces(const char *pattern, bool verbose)
  * and you can mix and match these in any order.
  */
 bool
-describeFunctions(const char *functypes, const char *pattern, bool verbose, bool showSystem)
+describeFunctions(const char *functypes, const char *pattern, bool verbose, bool showSystem, const char *funcargs)
 {
 	bool		showAggregate = strchr(functypes, 'a') != NULL;
 	bool		showNormal = strchr(functypes, 'n') != NULL;
@@ -625,6 +626,70 @@ describeFunctions(const char *functypes, const char *pattern, bool verbose, bool
 	processSQLNamePattern(pset.db, &buf, pattern, have_where, false,
 						  "n.nspname", "p.proname", NULL,
 						  "pg_catalog.pg_function_is_visible(p.oid)");
+
+	/*
+	 * Check for any additional arguments to narrow down which functions are
+	 * desired
+	 */
+	if (funcargs)
+	{
+
+		bool		is_initial_run = true;
+		bool		found_abbreviation;
+		int			argoffset = 0;
+		char	   *functoken;
+
+		static const char *type_abbreviations[] = {
+			"bool", "boolean", "bool[]", "boolean[]",
+			"char", "character", "char[]", "character[]",
+			"double", "double precision", "double[]", "double precision[]",
+			"float", "double precision", "float[]", "double precision[]",
+			"int", "integer", "int[]", "integer[]",
+			"int2", "smallint", "int2[]", "smallint[]",
+			"int4", "integer", "int4[]", "integer[]",
+			"int8", "bigint", "int8[]", "bigint[]",
+			"time", "time without time zone", "time[]", "time without time zone[]",
+			"timetz", "time with time zone", "timetz[]", "time with time zone[]",
+			"timestamp", "timestamp without time zone", "timestamp[]", "timestamp without time zone[]",
+			"timestamptz", "timestamp with time zone", "timestamptz[]", "timestamp with time zone[]",
+			"varbit", "bit varying", "varbit[]", "bit varying[]",
+			"varchar", "character varying", "varchar[]", "character varying[]",
+			NULL
+		};
+
+		while ((functoken = strtokx(is_initial_run ? funcargs : NULL, " \t\n\r", ".,();", "\"", 0, false, true, pset.encoding)))
+		{
+			is_initial_run = false;
+			found_abbreviation = false;
+
+			if (isalpha(functoken[0]))
+			{
+				appendPQExpBuffer(&buf, "  AND p.proargtypes[%d]::regtype::text = ", argoffset++);
+				for (int i = 0; NULL != *(type_abbreviations + i); i += 2)
+				{
+					const char *shortname = *(type_abbreviations + i);
+					const char *longname = *(type_abbreviations + i + 1);
+
+					if (pg_strcasecmp(functoken, shortname) == 0)
+					{
+						appendPQExpBuffer(&buf, "LOWER('%s')::text\n", longname);
+						found_abbreviation = true;
+						break;
+					}
+				}
+				if (!found_abbreviation)
+				{
+					appendPQExpBuffer(&buf, "LOWER(%s)::text\n", PQescapeLiteral(pset.db, functoken, strlen(functoken)));
+				}
+
+			}
+			else if (functoken[0] == ')' && argoffset)
+			{					/* Force limit the number of args */
+				appendPQExpBuffer(&buf, "  AND p.pronargs = %d\n", argoffset);
+				break;
+			}
+		}
+	}
 
 	if (!showSystem && !pattern)
 		appendPQExpBufferStr(&buf, "      AND n.nspname <> 'pg_catalog'\n"

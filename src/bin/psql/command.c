@@ -789,8 +789,15 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 					case 'p':
 					case 't':
 					case 'w':
-						success = describeFunctions(&cmd[2], pattern, show_verbose, show_system);
-						break;
+						{
+							char	   *funcargs;
+
+
+							funcargs = psql_scan_slash_option(scan_state, OT_WHOLE_LINE, NULL, true);
+							success = describeFunctions(&cmd[2], pattern, show_verbose, show_system, funcargs);
+							free(funcargs);
+							break;
+						}
 					default:
 						status = PSQL_CMD_UNKNOWN;
 						break;

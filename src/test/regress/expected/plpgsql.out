@@ -5701,3 +5701,34 @@ END; $$ LANGUAGE plpgsql;
 ERROR:  "x" is not a scalar variable
 LINE 3:   GET DIAGNOSTICS x = ROW_COUNT;
                           ^
+--
+-- Check root namespace renaming (routine_label option)
+--
+CREATE OR REPLACE FUNCTION test_root_namespace_rename(arg1 int)
+RETURNS void AS $$
+#ROUTINE_LABEL argsns
+BEGIN
+  RAISE NOTICE '% %', arg1, argsns.arg1;
+END;
+$$ LANGUAGE plpgsql;
+SELECT test_root_namespace_rename(10);
+NOTICE:  10 10
+ test_root_namespace_rename 
+----------------------------
+ 
+(1 row)
+
+CREATE OR REPLACE FUNCTION test_root_namespace_rename(arg1 int)
+RETURNS void AS $$
+#ROUTINE_LABEL argsns
+BEGIN
+  -- should to fail, original name is overwritten
+  RAISE NOTICE '% %', arg1, test_root_namespace_rename.arg1;
+END;
+$$ LANGUAGE plpgsql;
+SELECT test_root_namespace_rename(10);
+ERROR:  missing FROM-clause entry for table "test_root_namespace_rename"
+LINE 1: test_root_namespace_rename.arg1
+        ^
+QUERY:  test_root_namespace_rename.arg1
+CONTEXT:  PL/pgSQL function test_root_namespace_rename(integer) line 5 at RAISE

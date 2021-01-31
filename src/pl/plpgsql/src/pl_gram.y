@@ -333,6 +333,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %token <keyword>	K_RETURNED_SQLSTATE
 %token <keyword>	K_REVERSE
 %token <keyword>	K_ROLLBACK
+%token <keyword>	K_ROUTINE_LABEL
 %token <keyword>	K_ROW_COUNT
 %token <keyword>	K_ROWTYPE
 %token <keyword>	K_SCHEMA
@@ -392,6 +393,11 @@ comp_option		: '#' K_OPTION K_DUMP
 				| '#' K_VARIABLE_CONFLICT K_USE_COLUMN
 					{
 						plpgsql_curr_compile->resolve_option = PLPGSQL_RESOLVE_COLUMN;
+					}
+				| '#' K_ROUTINE_LABEL any_identifier
+					{
+						plpgsql_ns_replace_root_label(plpgsql_curr_compile->root_ns,
+													  pstrdup($3));
 					}
 				;
 

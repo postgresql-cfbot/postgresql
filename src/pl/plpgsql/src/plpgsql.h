@@ -52,7 +52,8 @@ typedef enum PLpgSQL_label_type
 {
 	PLPGSQL_LABEL_BLOCK,		/* DECLARE/BEGIN block */
 	PLPGSQL_LABEL_LOOP,			/* looping construct */
-	PLPGSQL_LABEL_OTHER			/* anything else */
+	PLPGSQL_LABEL_OTHER,		/* anything else */
+	PLPGSQL_LABEL_REPLACED,		/* replaced label */
 } PLpgSQL_label_type;
 
 /*
@@ -1024,6 +1025,9 @@ typedef struct PLpgSQL_function
 	/* these fields change when the function is used */
 	struct PLpgSQL_execstate *cur_estate;
 	unsigned long use_count;
+
+	/* routine level namespace entry */
+	struct PLpgSQL_nsitem *root_ns;
 } PLpgSQL_function;
 
 /*
@@ -1294,6 +1298,7 @@ extern void plpgsql_ns_push(const char *label,
 extern void plpgsql_ns_pop(void);
 extern PLpgSQL_nsitem *plpgsql_ns_top(void);
 extern void plpgsql_ns_additem(PLpgSQL_nsitem_type itemtype, int itemno, const char *name);
+extern void plpgsql_ns_replace_root_label(PLpgSQL_nsitem *nse, const char *name);
 extern PLpgSQL_nsitem *plpgsql_ns_lookup(PLpgSQL_nsitem *ns_cur, bool localmode,
 										 const char *name1, const char *name2,
 										 const char *name3, int *names_used);

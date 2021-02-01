@@ -4621,6 +4621,49 @@ RelationGetIndexList(Relation relation)
 }
 
 /*
+ * RelationGetIndexListFiltered -- get a filtered list of indexes on this
+ * relation.
+ *
+ * Calls RelationGetIndexList and filters out the result as required by the
+ * caller.  The filters are cumulative, although for now the only supported
+ * filter is for indexes that don't depend on deprecated collation version.
+ */
+List *
+RelationGetIndexListFiltered(Relation relation, bits32 options)
+{
+	List	   *result,
+			   *full_list;
+	ListCell   *lc;
+
+	full_list = RelationGetIndexList(relation);
+
+	/* Fast exit if no filtering was asked, or if the list if empty. */
+	if (!reindexHasFilter(options) || full_list == NIL)
+		return full_list;
+
+	result = NIL;
+	foreach(lc, full_list)
+	{
+		Oid		indexOid = lfirst_oid(lc);
+
+		/*
+		 * The caller wants to discard indexes that don't depend on a
+		 * deprecated collation version.
+		 */
+		if ((options & REINDEXOPT_COLL_NOT_CURRENT) != 0)
+		{
+			if (!index_has_deprecated_collation(indexOid))
+				continue;
+		}
+
+		/* Index passed all filters, keep it */
+		result = lappend_oid(result, indexOid);
+	}
+
+	return result;
+}
+
+/*
  * RelationGetStatExtList
  *		get a list of OIDs of statistics objects on this relation
  *

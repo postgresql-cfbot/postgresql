@@ -2474,6 +2474,7 @@ ExecReindex(ParseState *pstate, ReindexStmt *stmt, bool isTopLevel)
 	ListCell   *lc;
 	bool		concurrently = false;
 	bool		verbose = false;
+	bool		coll_filter = false;
 
 	/* Parse option list */
 	foreach(lc, stmt->params)
@@ -2484,6 +2485,9 @@ ExecReindex(ParseState *pstate, ReindexStmt *stmt, bool isTopLevel)
 			verbose = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "concurrently") == 0)
 			concurrently = defGetBoolean(opt);
+		else if ((strcmp(opt->defname, "collation") == 0)
+				 && (strcmp(defGetString(opt), "not_current") == 0))
+			coll_filter = true;
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -2498,7 +2502,8 @@ ExecReindex(ParseState *pstate, ReindexStmt *stmt, bool isTopLevel)
 
 	params.options =
 		(verbose ? REINDEXOPT_VERBOSE : 0) |
-		(concurrently ? REINDEXOPT_CONCURRENTLY : 0);
+		(concurrently ? REINDEXOPT_CONCURRENTLY : 0) |
+		(coll_filter ? REINDEXOPT_COLL_NOT_CURRENT : 0);
 
 	switch (stmt->kind)
 	{
@@ -3211,7 +3216,8 @@ ReindexRelationConcurrently(Oid relationOid, ReindexParams *params)
 											  ShareUpdateExclusiveLock);
 
 				/* Add all the valid indexes of relation to list */
-				foreach(lc, RelationGetIndexList(heapRelation))
+				foreach(lc, RelationGetIndexListFiltered(heapRelation,
+														 params->options))
 				{
 					Oid			cellOid = lfirst_oid(lc);
 					Relation	indexRelation = index_open(cellOid,
@@ -3263,7 +3269,8 @@ ReindexRelationConcurrently(Oid relationOid, ReindexParams *params)
 
 					MemoryContextSwitchTo(oldcontext);
 
-					foreach(lc2, RelationGetIndexList(toastRelation))
+					foreach(lc2, RelationGetIndexListFiltered(toastRelation,
+															  params->options))
 					{
 						Oid			cellOid = lfirst_oid(lc2);
 						Relation	indexRelation = index_open(cellOid,

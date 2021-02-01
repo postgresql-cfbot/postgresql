@@ -99,6 +99,12 @@ typedef struct
 	Oid			pendingReindexedIndexes[FLEXIBLE_ARRAY_MEMBER];
 } SerializedReindexState;
 
+typedef struct
+{
+	Oid relid;	/* targetr index oid */
+	bool deprecated;	/* depends on at least on deprected collation? */
+} IndexHasDeprecatedColl;
+
 /* non-export function prototypes */
 static bool relationHasPrimaryKey(Relation rel);
 static TupleDesc ConstructTupleDescriptor(Relation heapRelation,
@@ -1347,6 +1353,57 @@ index_check_collation_versions(Oid relid)
 	visitDependenciesOf(&object, &do_collation_version_check, &context);
 
 	list_free(context.warned_colls);
+}
+
+/*
+ * Detect if an index depends on at least one deprecated collation.
+ * This is a callback for visitDependenciesOf().
+ */
+static bool
+do_check_index_has_deprecated_collation(const ObjectAddress *otherObject,
+										const char *version,
+										char **new_version,
+										void *data)
+{
+	IndexHasDeprecatedColl *context = data;
+	char *current_version;
+
+	/* We only care about dependencies on collations. */
+	if (otherObject->classId != CollationRelationId)
+		return false;
+
+	/* Fast exit if we already found a deprecated collation version. */
+	if (context->deprecated)
+		return false;
+
+	/* Ask the provider for the current version.  Give up if unsupported. */
+	current_version = get_collation_version_for_oid(otherObject->objectId);
+	if (!current_version)
+		return false;
+
+	if (!version || strcmp(version, current_version) != 0)
+		context->deprecated = true;
+
+	return false;
+}
+
+bool
+index_has_deprecated_collation(Oid relid)
+{
+	ObjectAddress object;
+	IndexHasDeprecatedColl context;
+
+	object.classId = RelationRelationId;
+	object.objectId = relid;
+	object.objectSubId = 0;
+
+	context.relid = relid;
+	context.deprecated = false;
+
+	visitDependenciesOf(&object, &do_check_index_has_deprecated_collation,
+						&context);
+
+	return context.deprecated;
 }
 
 /*
@@ -3886,7 +3943,7 @@ reindex_relation(Oid relid, int flags, ReindexParams *params)
 	 * relcache to get this with a sequential scan if ignoring system
 	 * indexes.)
 	 */
-	indexIds = RelationGetIndexList(rel);
+	indexIds = RelationGetIndexListFiltered(rel, params->options);
 
 	if (flags & REINDEX_REL_SUPPRESS_INDEX_USE)
 	{

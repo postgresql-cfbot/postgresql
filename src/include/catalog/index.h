@@ -40,6 +40,9 @@ typedef struct ReindexParams
 #define REINDEXOPT_REPORT_PROGRESS 0x02 /* report pgstat progress */
 #define REINDEXOPT_MISSING_OK 	0x04	/* skip missing relations */
 #define REINDEXOPT_CONCURRENTLY	0x08	/* concurrent mode */
+#define REINDEXOPT_COLL_NOT_CURRENT 0x10/* outdated collation only */
+
+#define reindexHasFilter(x)		((x & REINDEXOPT_COLL_NOT_CURRENT) != 0)
 
 /* state info for validate_index bulkdelete callback */
 typedef struct ValidateIndexState
@@ -134,6 +137,7 @@ extern void FormIndexDatum(IndexInfo *indexInfo,
 						   bool *isnull);
 
 extern void index_check_collation_versions(Oid relid);
+extern bool index_has_deprecated_collation(Oid relid);
 extern void index_update_collation_versions(Oid relid, Oid coll);
 
 extern void index_build(Relation heapRelation,

@@ -791,6 +791,16 @@ REINDEX (VERBOSE) TABLE reindex_verbose;
 DROP TABLE reindex_verbose;
 
 --
+-- REINDEX (COLLATION 'not_current')
+--
+CREATE TABLE reindex_coll(id integer primary key);
+\set VERBOSITY terse \\ -- suppress machine-dependent details
+-- no suitable index should be found
+REINDEX (COLLATION 'not_current') TABLE reindex_coll;
+\set VERBOSITY default
+DROP TABLE reindex_coll;
+
+--
 -- REINDEX CONCURRENTLY
 --
 CREATE TABLE concur_reindex_tab (c1 int);

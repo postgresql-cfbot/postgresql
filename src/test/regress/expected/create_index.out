@@ -2018,6 +2018,16 @@ INFO:  index "reindex_verbose_pkey" was reindexed
 \set VERBOSITY default
 DROP TABLE reindex_verbose;
 --
+-- REINDEX (COLLATION 'not_current')
+--
+CREATE TABLE reindex_coll(id integer primary key);
+\set VERBOSITY terse \\ -- suppress machine-dependent details
+-- no suitable index should be found
+REINDEX (COLLATION 'not_current') TABLE reindex_coll;
+NOTICE:  table "reindex_coll" has no indexes to reindex
+\set VERBOSITY default
+DROP TABLE reindex_coll;
+--
 -- REINDEX CONCURRENTLY
 --
 CREATE TABLE concur_reindex_tab (c1 int);

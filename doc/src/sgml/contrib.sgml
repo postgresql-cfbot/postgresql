@@ -185,6 +185,7 @@ pages.
   </para>
 
  &oid2name;
+ &pgamcheck;
  &vacuumlo;
  </sect1>
 

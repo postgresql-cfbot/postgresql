@@ -1,0 +1,1004 @@
+<!-- doc/src/sgml/pgamcheck.sgml -->
+
+<refentry id="pgamcheck">
+ <indexterm zone="pgamcheck">
+  <primary>pg_amcheck</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle><application>pg_amcheck</application></refentrytitle>
+  <manvolnum>1</manvolnum>
+  <refmiscinfo>Application</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>pg_amcheck</refname>
+  <refpurpose>checks for corruption in one or more <productname>PostgreSQL</productname> databases</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+  <cmdsynopsis>
+   <command>pg_amcheck</command>
+   <arg rep="repeat"><replaceable>option</replaceable></arg>
+   <arg rep="repeat"><replaceable>dbname</replaceable></arg>
+  </cmdsynopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <application>pg_amcheck</application> supports running
+   <xref linkend="amcheck"/>'s corruption checking functions against one or more
+   databases, with options to select which schemas, tables and indexes to check,
+   which kinds of checking to perform, and whether to perform the checks in
+   parallel, and if so, the number of parallel connections to establish and use.
+  </para>
+
+  <para>
+   Only table relations and btree indexes are currently supported.  Other
+   relation types are silently skipped.
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Usage</title>
+
+  <refsect2>
+   <title>Parallelism Options</title>
+
+   <para>
+    <variablelist>
+     <varlistentry>
+      <term><literal>pg_amcheck --jobs=20 --all</literal></term>
+      <listitem>
+       <para>
+        Check all databases one after another, but for each database checked,
+        use up to 20 simultaneous connections to check relations in parallel.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck --jobs=8 mydb yourdb</literal></term>
+      <listitem>
+       <para>
+        Check databases <literal>mydb</literal> and <literal>yourdb</literal>
+        one after another, using up to 8 simultaneous connections to check
+        relations in parallel.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+  </refsect2>
+    
+  <refsect2>
+   <title>Checking Option Specification</title>
+
+   <para>
+    If no checking options are specified, by default all table relation checks
+    and default level btree index checks are performed.  A variety of options
+    exist to change the set of checks performed on whichever relations are
+    being checked.  They are briefly mentioned here in the following examples,
+    but see their full descriptions below.
+   </para>
+   
+   <para>
+    <variablelist>
+     <varlistentry>
+      <term><literal>pg_amcheck --parent-check --heapallindexed</literal></term>
+      <listitem>
+       <para>
+        For each btree index checked, performs more extensive checks.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck --exclude-toast-pointers</literal></term>
+      <listitem>
+       <para>
+        For each table relation checked, do not check toast pointers against
+        the toast relation.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck --on-error-stop</literal></term>
+      <listitem>
+       <para>
+        For each table relation checked, do not continue checking pages after
+        the first page where corruption is encountered.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck --skip="all-frozen"</literal></term>
+      <listitem>
+       <para>
+        For each table relation checked, skips over blocks marked as all
+        frozen.  Note that "all-visible" may also be specified.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck --startblock=3000 --endblock=4000</literal></term>
+      <listitem>
+       <para>
+        For each table relation checked, check only blocks in the given block
+        range.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+  </refsect2>
+
+  <refsect2>
+   <title>Relation Specification</title>
+
+   <para>
+    If no relations are explicitly listed, by default all relations will be
+    checked, but there are options to specify which relations to check.
+   </para>
+   <para>
+    <variablelist>
+     <varlistentry>
+      <term><literal>pg_amcheck -r mytable -r yourtable</literal></term>
+      <listitem>
+       <para>
+        If one or more relations are explicitly given, they are interpreted as
+        an exhaustive list of all relations to be checked, with one caveat:
+        for all such relations, associated toast relations and indexes are by
+        default included in the list of relations to check.
+       </para>
+       <para>
+        Assuming <literal>mytable</literal> is an ordinary table, and that it
+        is indexed by <literal>mytable_idx</literal> and has an associated
+        toast table <literal>pg_toast_12345</literal>, checking will be
+        performed on <literal>mytable</literal>,
+        <literal>mytable_idx</literal>, and <literal>pg_toast_12345</literal>.
+       </para>
+       <para>
+        Likewise for <literal>yourtable</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck -r mytable --no-dependents</literal></term>
+      <listitem>
+       <para>
+        This restricts the list of relations checked to just
+        <literal>mytable</literal>, without pulling in the corresponding
+        indexes or toast, but see also
+        <option>--exclude-toast-pointers</option>.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck -t mytable -i myindex</literal></term>
+      <listitem>
+       <para>
+        The <option>-r</option> (<option>--relation</option>) will match any
+        relation, but <option>-t</option> (<option>--table</option>) and
+        <option>-i</option> (<option>--index</option>) may be used to avoid
+        matching objects of the other type.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck -r="my*" -R="mytemp*"</literal></term>
+      <listitem>
+       <para>
+        Relations may be included (<option>-r</option>) or excluded
+        (<option>-R</option>) using shell-style patterns.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck -r="my*" -I="myanmar"</literal></term>
+      <listitem>
+       <para>
+        Table and index inclusion and exclusion patterns may be used
+        equivalently with <option>-t</option>, <option>-T</option>,
+        <option>-i</option> and <option>-I</option>.  The above example checks
+        all tables and indexes starting with <literal>my</literal> except for
+        indexes starting with <literal>myanmar</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck -R="india" -T="laos" -I="myanmar"</literal></term>
+      <listitem>
+       <para>
+        Unlike specifying one ore more <option>--relation</option> options, which
+        disables the default behavior of checking all relations, specifying one or
+        more of <option>-R</option>, <option>-T</option> or <option>-I</option> does not.
+        The above command will check all relations not named
+        <literal>india</literal>, not a table named
+        <literal>laos</literal>, nor an index named <literal>myanmar</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+  </refsect2>
+
+  <refsect2>
+   <title>Schema Specification</title>
+
+   <para>
+    If no schemas are explicitly listed, by default all schemas except
+    <literal>pg_catalog</literal> and <literal>pg_toast</literal> will be
+    checked.
+   </para>
+   <para>
+    <variablelist>
+     <varlistentry>
+      <term><literal>pg_amcheck -s s1 -s s2 -r mytable</literal></term>
+      <listitem>
+       <para>
+        If one or more schemas are listed with <option>-s</option>, unqualified
+        relation names will be checked only in the given schemas.  The above
+        command will check tables <literal>s1.mytable</literal> and
+        <literal>s2.mytable</literal> but not tables named
+        <literal>mytable</literal> in other schemas.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck -S s1 -S s2 -r mytable</literal></term>
+      <listitem>
+       <para>
+        As with relations, schemas may be excluded.  The above command will
+        check any table named <literal>mytable</literal> not in schemas
+        <literal>s1</literal> and <literal>s2</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck -S s1 -S s2 -r mytable -t s1.stuff</literal></term>
+      <listitem>
+       <para>
+        Relations may be included or excluded with a schema-qualified name
+        without interference from the <option>-s</option> or
+        <option>-S</option> options.  Even though schema <literal>s1</literal>
+        has been excluded, the table <literal>s1.stuff</literal> will be
+        checked.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+  </refsect2>
+
+  <refsect2>
+   <title>Database Specification</title>
+
+   <para>
+    If no databases are explicitly listed, the database to check is obtained
+    from environment variables in the usual way.  Otherwise, when one or more
+    databases are explicitly given, they are interpreted as an exhaustive list
+    of all databases to be checked.  This list of databases to check may
+    contain patterns, but because any such patterns need to be reconciled
+    against a list of all databases to find the matching database names, at
+    least one database specified must be a literal database name and not merely
+    a pattern, and the one so specified must be in a location where
+    <application>pg_amcheck</application> expects to find it.
+   </para>
+   <para>
+    For example:
+   </para>
+   <para>
+    <variablelist>
+     <varlistentry>
+      <term><literal>pg_amcheck --all --maintenance-db=foo</literal></term>
+      <listitem>
+       <para>
+        If the <option>--maintenance-db</option> option is given, it will be
+        used to look up the matching databases, though it will not itself be
+        added to the list of databases for checking.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck foo bar baz</literal></term>
+      <listitem>
+       <para>
+        Otherwise, if one or more plain database name arguments not preceded by
+        <option>-d</option> or <option>--dbname</option> are given, the first
+        one will be used for this purpose, and it will also be included in the
+        list of databases to check.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck -d foo -d bar baz</literal></term>
+      <listitem>
+       <para>
+        If a mixture of plain database names and databases preceded with
+        <option>-d</option> or <option>--dbname</option> are given, the first
+        plain database name will be used for this purpose.  In the above
+        example, <literal>baz</literal> will be used.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck --dbname=foo --dbname="bar*"</literal></term>
+      <listitem>
+       <para>
+        Otherwise, if one or more databases are given with the
+        <option>-d</option> or <option>--dbname</option> option, the first one
+        will be used and must be a literal database name.  In this example,
+        <literal>foo</literal> will be used.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>pg_amcheck --relation="accounts_*.*.*"</literal></term>
+      <listitem>
+       <para>
+        Otherwise, the environment will be consulted for the database to be
+        used.  In the example above, the default database will be queried to
+        find all databases with names that begin with
+        <literal>accounts_</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+
+   <para>
+    As discussed above for schema-qualified relations, a database-qualified
+    relation name or pattern may also be given.
+<programlisting>
+pg_amcheck mydb \
+           --schema="t*" \
+           --exclude-schema="tmp*" \
+           --relation=baz \
+           --relation=bar.baz \
+           --relation=foo.bar.baz \
+           --relation="f*".a.b \
+           --exclude-relation=foo.a.b
+</programlisting>
+    will check relations in database <literal>mydb</literal> using the schema
+    resolution rules discussed above, but additionally will check all relations
+    named <literal>a.b</literal> in all databases with names starting with
+    <literal>f</literal> except database <literal>foo</literal>.
+   </para>
+
+  </refsect2>
+ </refsect1>
+
+ <refsect1>
+  <title>Options</title>
+
+  <para>
+   <application>pg_amcheck</application> accepts the following command-line arguments:
+  </para>
+
+  <refsect2>
+   <title>Help and Version Information Options</title>
+
+   <variablelist>
+    <varlistentry>
+     <term><option>-?</option></term>
+     <term><option>--help</option></term>
+     <listitem>
+      <para>
+       Show help about <application>pg_amcheck</application> command line
+       arguments, and exit.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>-V</option></term>
+     <term><option>--version</option></term>
+     <listitem>
+      <para>
+       Print the <application>pg_amcheck</application> version and exit.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>-e</option></term>
+     <term><option>--echo</option></term>
+     <listitem>
+      <para>
+       Print to stdout all commands and queries being executed against the
+       server.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>-q</option></term>
+     <term><option>--quiet</option></term>
+     <listitem>
+      <para>
+       Do not write additional messages beyond those about corruption.
+      </para>
+      <para>
+       This option does not quiet any output specifically due to the use of
+       the <option>-e</option> <option>--echo</option> option.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>-v</option></term>
+     <term><option>--verbose</option></term>
+     <listitem>
+      <para>
+       Increases the log level verbosity.  This option may be given more than
+       once.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </refsect2>
+
+  <refsect2>
+   <title>Database Connection and Concurrent Connection Options</title>
+
+   <variablelist>
+    <varlistentry>
+     <term><option>-h</option></term>
+     <term><option>--host=HOSTNAME</option></term>
+     <listitem>
+      <para>
+       Specifies the host name of the machine on which the server is running.
+       If the value begins with a slash, it is used as the directory for the
+       Unix domain socket.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>-p</option></term>
+     <term><option>--port=PORT</option></term>
+     <listitem>
+      <para>
+       Specifies the TCP port or local Unix domain socket file extension on
+       which the server is listening for connections.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>-U</option></term>
+     <term><option>--username=USERNAME</option></term>
+     <listitem>
+      <para>
+       User name to connect as.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>-w</option></term>
+     <term><option>--no-password</option></term>
+     <listitem>
+      <para>
+       Never issue a password prompt.  If the server requires password
+       authentication and a password is not available by other means such as
+       a <filename>.pgpass</filename> file, the connection attempt will fail.
+       This option can be useful in batch jobs and scripts where no user is
+       present to enter a password.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>-W</option></term>
+     <term><option>--password</option></term>
+     <listitem>
+      <para>
+       Force <application>pg_amcheck</application> to prompt for a password
+       before connecting to a database.
+      </para>
+      <para>
+       This option is never essential, since
+       <application>pg_amcheck</application> will automatically prompt for a
+       password if the server demands password authentication.  However,
+       <application>pg_amcheck</application> will waste a connection attempt
+       finding out that the server wants a password.  In some cases it is
+       worth typing <option>-W</option> to avoid the extra connection attempt.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>--maintenance-db=DBNAME</option></term>
+     <listitem>
+      <para>
+       Specifies the name of the database to connect to when querying the
+       list of all databases.  If not specified, the
+       <literal>postgres</literal> database will be used; if that does not
+       exist <literal>template1</literal> will be used.  This can be a
+       <link linkend="libpq-connstring">connection string</link>.  If so,
+       connection string parameters will override any conflicting command
+       line options.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>-j</option></term>
+     <term><option>--jobs=NUM</option></term>
+     <listitem>
+      <para>
+       Use the specified number of concurrent connections to the server, or
+       one per object to be checked, whichever number is smaller.
+      </para>
+      <para>
+       When used in conjunction with the <option>-a</option>
+       <option>--all</option> option, the total number of objects to check,
+       and correspondingly the number of concurrent connections to use, is
+       recalculated per database.  If the number of objects to check differs
+       from one database to the next and is less than the concurrency level
+       specified, the number of concurrent connections open to the server
+       will fluctuate to meet the needs of each database processed.
+      </para>
+      <para>
+       The default is to use a single connection.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </refsect2>
+
+  <refsect2>
+   <title>Options Controlling Index Checking Functions</title>
+
+   <variablelist>
+    <varlistentry>
+     <term><option>-P</option></term>
+     <term><option>--parent-check</option></term>
+     <listitem>
+      <para>
+       For each btree index checked, use <xref linkend="amcheck"/>'s
+       <function>bt_index_parent_check</function> function, which performs
+       additional checks of parent/child relationships during index checking.
+      </para>
+      <para>
+       The default is to use <application>amcheck</application>'s
+       <function>bt_index_check</function> function, but note that use of the
+       <option>--rootdescend</option> option implicitly
+       selects <function>bt_index_parent_check</function>.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>-H</option></term>
+     <term><option>--heapallindexed</option></term>
+     <listitem>
+      <para>
+       For each index checked, verify the presence of all heap tuples as index
+       tuples in the index using <application>amcheck</application>'s
+       <option>heapallindexed</option> option.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>--rootdescend</option></term>
+     <listitem>
+      <para>
+       For each index checked, re-find tuples on the leaf level by performing
+       a new search from the root page for each tuple using
+       <xref linkend="amcheck"/>'s <option>rootdescend</option> option.
+      </para>
+      <para>
+       Use of this option implicitly also selects the <option>-P</option>
+       <option>--parent-check</option> option.
+      </para>
+      <para>
+       This form of verification was originally written to help in the
+       development of btree index features.  It may be of limited use or even
+       of no use in helping detect the kinds of corruption that occur in
+       practice.  It may also cause corruption checking to take considerably
+       longer and consume considerably more resources on the server.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </refsect2>
+
+  <refsect2>
+   <title>Options Controlling Table Checking Functions</title>
+
+   <variablelist>
+    <varlistentry>
+     <term><option>--exclude-toast-pointers</option></term>
+     <listitem>
+      <para>
+       When checking main relations, do not look up entries in toast tables
+       corresponding to toast pointers in the main releation.
+      </para>
+      <para>
+       The default behavior checks each toast pointer encountered in the main
+       table to verify, as much as possible, that the pointer points at
+       something in the toast table that is reasonable.  Toast pointers which
+       point beyond the end of the toast table, or to the middle (rather than
+       the beginning) of a toast entry, are identified as corrupt.
+      </para>
+      <para>
+       The process by which <xref linkend="amcheck"/>'s
+       <function>verify_heapam</function> function checks each toast pointer
+       is slow and may be improved in a future release.  Some users may wish
+       to disable this check to save time.
+      </para>
+      <para>
+       Note that, despite their similar names, this option is unrelated to the
+       <option>--exclude-toast</option> option.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>--on-error-stop</option></term>
+     <listitem>
+      <para>
+       After reporting all corruptions on the first page of a table where
+       corruptions are found, stop processing that table relation and move on
+       to the next table or index.
+      </para>
+      <para>
+       Note that index checking always stops after the first corrupt page.
+       This option only has meaning relative to table relations.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>--skip=OPTION</option></term>
+     <listitem>
+      <para>
+       If <literal>"all-frozen"</literal> is given, table corruption checks
+       will skip over pages in all tables that are marked as all frozen.
+      </para>
+      <para>
+       If <literal>"all-visible"</literal> is given, table corruption checks
+       will skip over pages in all tables that are marked as all visible.
+      </para>
+      <para>
+       By default, no pages are skipped.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>--startblock=BLOCK</option></term>
+     <listitem>
+      <para>
+       Skip (do not check) pages prior to the given starting block.
+      </para>
+      <para>
+       By default, no pages are skipped.  This option will be applied to all
+       table relations that are checked, including toast tables.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><option>--endblock=BLOCK</option></term>
+     <listitem>
+      <para>
+       Skip (do not check) all pages after the given ending block.
+      </para>
+      <para>
+       By default, no pages are skipped.  This option will be applied to all
+       table relations that are checked, including toast tables.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </refsect2>
+
+  <refsect2>
+   <title>Corruption Checking Target Options</title>
+
+   <para>
+    Objects to be checked may span schemas in more than one database.  Options
+    for restricting the list of databases, schemas, tables and indexes are
+    described below.  In each place where a name may be specified, a
+    <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link>
+    may also be used.
+   </para>
+
+   <para>
+    <variablelist>
+     <varlistentry>
+      <term><option>--all</option></term>
+        <listitem>
+       <para>
+        Perform checking in all databases.
+       </para>
+       <para>
+        In the absence of any other options, selects all objects across all
+        schemas and databases.
+       </para>
+       <para>
+        Option <option>-D</option> <option>--exclude-db</option> takes
+        precedence over <option>--all</option>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-d</option></term>
+      <term><option>--dbname</option></term>
+      <listitem>
+       <para>
+        Perform checking in the specified database.
+       </para>
+       <para>
+        This option may be specified multiple times to list more than one
+        database (or database pattern) for checking.  By default, all objects in
+        the matching database(s) will be checked.
+       </para>
+       <para>
+        If no <option>maintenance-db</option> argument is given nor is any
+        database name given as a command line argument, the first argument
+        specified with <option>-d</option> <option>--dbname</option> will be
+        used for the initial connection.  If that argument is not a literal
+        database name, the attempt to connect will fail.
+       </para>
+       <para>
+        If <option>--all</option> is also specified, <option>-d</option>
+        <option>--dbname</option> does not affect which databases are checked,
+        but may be used to specify the database for the initial connection.
+       </para>
+       <para>
+        Option <option>-D</option> <option>--exclude-db</option> takes
+        precedence over <option>-d</option> <option>--dbname</option>.
+       </para>
+       <para>
+        Examples:
+        <simplelist>
+         <member><literal>--dbname=africa</literal></member>
+         <member><literal>--dbname="a*"</literal></member>
+         <member><literal>--dbname="africa|asia|europe"</literal></member>
+        </simplelist>
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-D</option></term>
+      <term><option>--exclude-db</option></term>
+      <listitem>
+       <para>
+        Do not perform checking in the specified database.
+       </para>
+       <para>
+        This option may be specified multiple times to list more than one
+        database (or database pattern) for exclusion.
+       </para>
+       <para>
+        If a database which is included using <option>--all</option> or
+        <option>-d</option> <option>--dbname</option> is also excluded using
+        <option>-D</option> <option>--exclude-db</option>, the database will be
+        excluded.
+       </para>
+       <para>
+        Examples:
+        <simplelist>
+         <member><literal>--exclude-db=america</literal></member>
+         <member><literal>--exclude-db="*pacific*"</literal></member>
+        </simplelist>
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-s</option></term>
+      <term><option>--schema</option></term>
+      <listitem>
+       <para>
+        Perform checking in the specified schema(s).
+       </para>
+       <para>
+        This option may be specified multiple times to list more than one
+        schema (or schema pattern) for checking.  By default, all objects in
+        the matching schema(s) will be checked.
+       </para>
+       <para>
+        Option <option>-S</option> <option>--exclude-schema</option> takes
+        precedence over <option>-s</option> <option>--schema</option>.
+       </para>
+       <para>
+        Examples:
+        <simplelist>
+         <member><literal>--schema=corp</literal></member>
+         <member><literal>--schema="corp|llc|npo"</literal></member>
+        </simplelist>
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-S</option></term>
+      <term><option>--exclude-schema</option></term>
+      <listitem>
+       <para>
+        Do not perform checking in the specified schema.
+       </para>
+       <para>
+        This option may be specified multiple times to list more than one
+        schema (or schema pattern) for exclusion.
+       </para>
+       <para>
+        If a schema which is included using
+        <option>-s</option> <option>--schema</option> is also excluded using
+        <option>-S</option> <option>--exclude-schema</option>, the schema will be
+        excluded.
+       </para>
+       <para>
+        Examples:
+        <simplelist>
+         <member><literal>-S corp -S llc</literal></member>
+         <member><literal>--exclude-schema="*c*"</literal></member>
+        </simplelist>
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-r</option></term>
+      <term><option>--relation</option></term>
+      <listitem>
+       <para>
+        Perform checking on the specified relation(s).
+       </para>
+       <para>
+        This option may be specified multiple times to list more than one
+        relation (or relation pattern) for checking.
+       </para>
+       <para>
+        Option <option>-R</option> <option>--exclude-relation</option> takes
+        precedence over <option>-r</option> <option>--relation</option>.
+       </para>
+       <para>
+        If the relation is not schema qualified, database and schema
+        inclusion/exclusion lists will determine in which databases or schemas
+        matching relations will be checked.
+       </para>
+       <para>
+        Examples:
+        <simplelist>
+         <member><literal>--relation=accounts_idx</literal></member>
+         <member><literal>--relation="llc.accounts_idx"</literal></member>
+         <member><literal>--relation="asia|africa.corp|llc.accounts_idx"</literal></member>
+        </simplelist>
+       </para>
+       <para>
+        The first example, <literal>--relation=accounts_idx</literal>, checks
+        relations named <literal>accounts_idx</literal> in all selected schemas
+        and databases.
+       </para>
+       <para>
+        The second example, <literal>--relation="llc.accounts_idx"</literal>,
+        checks relations named <literal>accounts_idx</literal> in schema
+        <literal>llc</literal> in all selected databases. 
+       </para>
+       <para>
+        The third example,
+        <literal>--relation="asia|africa.corp|llc.accounts_idx"</literal>,
+        checks relations named <literal>accounts_idx</literal> in
+        schemas <literal>corp</literal> and <literal>llc</literal> in databases
+        <literal>asia</literal> and <literal>africa</literal>.
+       </para>
+       <para>
+        Note that if a database is implicated in a relation pattern, such as
+        <literal>asia</literal> and <literal>africa</literal> in the third
+        example above, the database need not be otherwise given in the command
+        arguments for the relation to be checked.  As an extreme example of
+        this:
+        <simplelist>
+         <member><literal>pg_amcheck --relation="*.*.*" mydb</literal></member>
+        </simplelist>
+        will check all relations in all databases.  The <literal>mydb</literal>
+        argument only serves to tell <application>pg_amcheck</application> the
+        name of the database to use for querying the list of all databases.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-R</option></term>
+      <term><option>--exclude-relation</option></term>
+      <listitem>
+       <para>
+        Exclude checks on the specified relation(s).
+       </para>
+       <para>
+        Option <option>-R</option> <option>--exclude-relation</option> takes
+        precedence over <option>-r</option> <option>--relation</option>,
+        <option>-t</option> <option>--table</option> and <option>-i</option>
+        <option>--index</option>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-t</option></term>
+      <term><option>--table</option></term>
+      <listitem>
+       <para>
+        Perform checks on the specified tables(s).  This is an alias for the
+        <option>-r</option> <option>--relation</option> option, except that it
+        applies only to tables, not indexes.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-T</option></term>
+      <term><option>--exclude-table</option></term>
+      <listitem>
+       <para>
+        Exclude checks on the specified tables(s).  This is an alias for the
+        <option>-R</option> <option>--exclude-relation</option> option, except
+        that it applies only to tables, not indexes.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-i</option></term>
+      <term><option>--index</option></term>
+      <listitem>
+       <para>
+        Perform checks on the specified index(es).  This is an alias for the
+        <option>-r</option> <option>--relation</option> option, except that it
+        applies only to indexes, not tables.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-I</option></term>
+      <term><option>--exclude-index</option></term>
+      <listitem>
+       <para>
+        Exclude checks on the specified index(es).  This is an alias for the
+        <option>-R</option> <option>--exclude-relation</option> option, except
+        that it applies only to indexes, not tables.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--no-dependents</option></term>
+      <listitem>
+       <para>
+        When calculating the list of objects to be checked, do not automatically
+        expand the list to include associated indexes and toast tables of
+        elements otherwise in the list.
+       </para>
+       <para>
+        By default, for each main table relation checked, any associated toast
+        table and all associated indexes are also checked, unless explicitly
+        excluded.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+  </refsect2>
+ </refsect1>
+
+ <refsect1>
+  <title>Notes</title>
+
+  <para>
+   <application>pg_amcheck</application> is designed to work with
+   <productname>PostgreSQL</productname> 14.0 and later.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Author</title>
+
+  <para>
+   Mark Dilger <email>mark.dilger@enterprisedb.com</email>
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="amcheck"/></member>
+  </simplelist>
+ </refsect1>
+</refentry>

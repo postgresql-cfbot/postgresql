@@ -7,6 +7,7 @@ include $(top_builddir)/src/Makefile.global
 SUBDIRS = \
 		  brin \
 		  commit_ts \
+		  corruption \
 		  delay_execution \
 		  dummy_index_am \
 		  dummy_seclabel \

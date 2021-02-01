@@ -2225,6 +2225,269 @@ sub pg_recvlogical_upto
 
 =back
 
+=head1 DATABASE CORRUPTION METHODS
+
+=over
+
+These routines are able to corrupt a PostgreSQL node.
+
+=item $node->relfile_snapshot_repository()
+
+The path to the parent directory of all directories storing snapshots of
+relation backing files.
+
+=cut
+
+sub relfile_snapshot_repository
+{
+	my ($self) = @_;
+	my $snaprepo = join('/', $self->basedir, 'snapshot');
+	unless (-d $snaprepo)
+	{
+		mkdir $snaprepo
+			or $!{EEXIST}
+			or BAIL_OUT("could not create snapshot repository directory \"$snaprepo\": $!");
+	}
+	return $snaprepo;
+}
+
+=pod
+
+=item $node->relfile_snapshot_directory(snapname)
+
+The path to the directory for storing the named snapshot.
+
+=cut
+
+sub relfile_snapshot_directory
+{
+	my ($self, $snapname) = @_;
+
+	join("/", $self->relfile_snapshot_repository(), $snapname);
+}
+
+=pod
+
+=item $node->take_relfile_snapshot($self, $dbname, $snapname, @relnames)
+
+Makes a copy of the files backing the relations B<@relname>, the associated
+toast relations (if any), and all associated indexes (if any).  No attempt is
+made to flush these files to disk, meaning the snapshot taken could be stale
+unless the caller ensures these files have been flushed prior to calling.
+
+Dies on failure to invoke psql.
+
+Dies on missing relations.
+
+Dies if the given B<$snapname> is already in use.
+
+=cut
+
+=pod
+
+=item $node->take_relfile_snapshot_minimal($self, $dbname, $snapname, @relnames)
+
+Makes a copy of the files backing the relations B<@relnames>.  No attempt is made
+to flush these files to disk, meaning the snapshot taken could be stale unless the
+caller ensures these files have been flushed prior to calling.
+
+Dies on failure to invoke psql.
+
+Dies on missing relation.
+
+Dies if the given B<$snapname> is already in use.
+
+=cut
+
+sub take_relfile_snapshot
+{
+	my ($self, $dbname, $snapname, @relnames) = @_;
+	$self->take_relfile_snapshot_helper($dbname, $snapname, 1, @relnames);
+}
+
+sub take_relfile_snapshot_minimal
+{
+	my ($self, $dbname, $snapname, @relnames) = @_;
+	$self->take_relfile_snapshot_helper($dbname, $snapname, 0, @relnames);
+}
+
+sub take_relfile_snapshot_helper
+{
+	my ($self, $dbname, $snapname, $extended, @relnames) = @_;
+
+	croak "dbname must be specified" unless defined $dbname;
+	croak "relnames must be defined" unless scalar(grep { defined $_ } @relnames);
+	croak "snapname must be specified" unless defined $snapname;
+	croak "snapname must be unique" if exists $self->{snapshot}->{$snapname};
+
+	my $pgdata = $self->data_dir;
+	my $snapdir = $self->relfile_snapshot_directory($snapname);
+	croak "snapname directory name already in use: $snapdir" if (-e $snapdir);
+	mkdir $snapdir
+		or BAIL_OUT("could not create snapshot directory \"$snapdir\": $!");
+
+	my @relpaths = map {
+		$self->safe_psql($dbname,
+			qq(SELECT pg_relation_filepath('$_')));
+	} @relnames;
+
+	my (@toastpaths, @idxpaths);
+	if ($extended)
+	{
+		for my $relname (@relnames)
+		{
+			push (@toastpaths, grep /\w/, split(/(?:\s*\r?\n\s*)+/, $self->safe_psql($dbname,
+				qq(SELECT pg_relation_filepath(c.reltoastrelid)
+					FROM pg_catalog.pg_class c
+					WHERE c.oid = '$relname'::regclass
+					AND c.reltoastrelid != 0::oid))));
+			push (@idxpaths, grep /\w/, split(/(?:\s*\r?\n\s*)+/, $self->safe_psql($dbname,
+				qq(SELECT pg_relation_filepath(i.indexrelid)
+					FROM pg_catalog.pg_index i
+					WHERE i.indrelid = '$relname'::regclass))));
+		}
+	}
+
+	$self->{snapshot}->{$snapname} = {};
+	for my $path (@relpaths, grep { defined($_) } @toastpaths, @idxpaths)
+	{
+		croak "file backing relation is missing: $pgdata/$path" unless -f "$pgdata/$path";
+		copy_file($snapdir, $pgdata, 0, $path);
+		$self->{snapshot}->{$snapname}->{$path} = 1;
+	}
+}
+
+=pod
+
+=item $node->revert_to_snapshot($self, $snapname)
+
+Overwrites the database's relation files with files previously saved in
+B<$snapname>.
+
+Dies if the given B<$snapname> does not exist.
+
+=cut
+
+=pod
+
+=item $node->revert_to_torn_relfile_snapshot($self, $snapname, $bytes)
+
+Partially overwrites the database's relation files using prefixes of the given
+number of bytes from the files saved in B<$snapname>.  If B<$bytes> is
+negative, uses suffixes of the given byte length rather than prefixes.
+
+If B<$bytes> is null, replaces the database's relation files using the saved
+files in the B<$snapname>, which unlike for non-undef values, means the file
+may become shorter if the saved file is shorter than the current file.
+
+=cut
+
+sub revert_to_snapshot
+{
+	my ($self, $snapname) = @_;
+	$self->revert_to_torn_relfile_snapshot($snapname, undef);
+}
+
+sub revert_to_torn_relfile_snapshot
+{
+	my ($self, $snapname, $bytes) = @_;
+
+	croak "no such snapshot" unless exists $self->{snapshot}->{$snapname};
+
+	my $pgdata = $self->data_dir;
+	my $snaprepo = join('/', $self->relfile_snapshot_repository, $snapname);
+	croak "snapname directory missing: $snaprepo" unless (-d $snaprepo);
+
+	if (defined $bytes)
+	{
+		tear_file($pgdata, $snaprepo, $bytes, $_)
+			for (keys %{$self->{snapshot}->{$snapname}});
+	}
+	else
+	{
+		copy_file($pgdata, $snaprepo, 1, $_)
+			for (keys %{$self->{snapshot}->{$snapname}});
+	}
+}
+
+sub copy_file
+{
+	my ($dstdir, $srcdir, $overwrite, $path) = @_;
+
+	croak "No such directory: $dstdir" unless -d $dstdir;
+	croak "No such directory: $srcdir" unless -d $srcdir;
+
+	foreach my $part (split(m{/}, $path))
+	{
+		my $srcpart = "$srcdir/$part";
+		my $dstpart = "$dstdir/$part";
+
+		if (-d $srcpart)
+		{
+			$srcdir = $srcpart;
+			$dstdir = $dstpart;
+			die "$dstdir is in the way" if (-e $dstdir && ! -d $dstdir);
+			unless (-d $dstdir)
+			{
+				mkdir $dstdir
+					or BAIL_OUT("could not create directory \"$dstdir\": $!");
+			}
+		}
+		elsif (-f $srcpart)
+		{
+			die "$dstdir/$part is in the way" if (!$overwrite && -e "$dstdir/$part");
+
+			File::Copy::copy($srcpart, "$dstdir/$part");
+		}
+	}
+}
+
+sub tear_file
+{
+	my ($dstdir, $srcdir, $bytes, $path) = @_;
+
+	croak "No such directory: $dstdir" unless -d $dstdir;
+	croak "No such directory: $srcdir" unless -d $srcdir;
+
+	my $srcfile = "$srcdir/$path";
+	my $dstfile = "$dstdir/$path";
+
+	croak "No such file: $srcfile" unless -f $srcfile;
+	croak "No such file: $dstfile" unless -f $dstfile;
+
+	my ($srcfh, $dstfh);
+	open($srcfh, '<', $srcfile) or die "Cannot read $srcfile: $!";
+	open($dstfh, '+<', $dstfile) or die "Cannot modify $dstfile: $!";
+	binmode($srcfh);
+	binmode($dstfh);
+
+	my $buffer;
+	if ($bytes < 0)
+	{
+		$bytes *= -1;		# Easier to use positive value
+		my $srcsize = (stat($srcfh))[7];
+		my $offset = $srcsize - $bytes;
+		seek($srcfh, $offset, 0);
+		seek($dstfh, $offset, 0);
+		sysread($srcfh, $buffer, $bytes);
+		syswrite($dstfh, $buffer, $bytes);
+	}
+	else
+	{
+		seek($srcfh, 0, 0);
+		seek($dstfh, 0, 0);
+		sysread($srcfh, $buffer, $bytes);
+		syswrite($dstfh, $buffer, $bytes);
+	}
+
+	close($srcfh);
+	close($dstfh);
+}
+
+=pod
+
+=back
+
 =cut
 
 1;

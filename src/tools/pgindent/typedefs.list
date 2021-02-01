@@ -336,6 +336,8 @@ CheckPointStmt
 CheckpointStatsData
 CheckpointerRequest
 CheckpointerShmemStruct
+CheckType
+CheckTypeFilter
 Chromosome
 CkptSortItem
 CkptTsStatus
@@ -403,6 +405,7 @@ ConfigData
 ConfigVariable
 ConnCacheEntry
 ConnCacheKey
+ConnParams
 ConnStatusType
 ConnType
 ConnectionStateEnum
@@ -2846,6 +2849,8 @@ ambuildempty_function
 ambuildphasename_function
 ambulkdelete_function
 amcanreturn_function
+amcheckObjects
+amcheckOptions
 amcostestimate_function
 amendscan_function
 amestimateparallelscan_function

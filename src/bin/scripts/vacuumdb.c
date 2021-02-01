@@ -18,9 +18,11 @@
 #include "common/connect.h"
 #include "common/logging.h"
 #include "fe_utils/cancel.h"
+#include "fe_utils/option_utils.h"
+#include "fe_utils/parallel_slot.h"
+#include "fe_utils/query_utils.h"
 #include "fe_utils/simple_list.h"
 #include "fe_utils/string_utils.h"
-#include "scripts_parallel.h"
 
 
 /* vacuum options controlled by user flags */
@@ -711,6 +713,7 @@ vacuum_one_database(const ConnParams *cparams,
 		 * Execute the vacuum.  All errors are handled in processQueryResult
 		 * through ParallelSlotsGetIdle.
 		 */
+		ParallelSlotSetHandler(free_slot, TableCommandSlotHandler, NULL);
 		run_vacuum_command(free_slot->connection, sql.data,
 						   echo, tabname);
 

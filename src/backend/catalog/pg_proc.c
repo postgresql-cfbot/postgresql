@@ -34,6 +34,7 @@
 #include "nodes/nodeFuncs.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_type.h"
+#include "storage/lmgr.h"
 #include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
@@ -55,7 +56,7 @@ static int	match_prosrc_to_query(const char *prosrc, const char *queryText,
 								  int cursorpos);
 static bool match_prosrc_to_literal(const char *prosrc, const char *literal,
 									int cursorpos, int *newcursorpos);
-
+static ObjectAddress ObjectAddressSetWithShareLock(Oid classId, Oid objectId);
 
 /* ----------------------------------------------------------------
  *		ProcedureCreate
@@ -115,6 +116,7 @@ ProcedureCreate(const char *procedureName,
 	int			i;
 	Oid			trfid;
 	ObjectAddresses *addrs;
+	List *types_locked = NIL;
 
 	/*
 	 * sanity checks
@@ -600,11 +602,28 @@ ProcedureCreate(const char *procedureName,
 	add_exact_object_address(&referenced, addrs);
 
 	/* dependency on implementation language */
-	ObjectAddressSet(referenced, LanguageRelationId, languageObjectId);
+	if (languageObjectId > FirstBootstrapObjectId)
+		/*
+		 * at the same time apply an AccessSharedLock as the language
+		 * could be dropped before our transaction commits
+		 */
+		referenced = ObjectAddressSetWithShareLock(LanguageRelationId, languageObjectId);
+	else
+		ObjectAddressSet(referenced, LanguageRelationId, languageObjectId);
 	add_exact_object_address(&referenced, addrs);
 
 	/* dependency on return type */
-	ObjectAddressSet(referenced, TypeRelationId, returnType);
+	if (returnType > FirstBootstrapObjectId)
+	{
+		/*
+		 * at the same time apply an AccessSharedLock as the returned
+		 * data type could be dropped before our transaction commits
+		 */
+		referenced = ObjectAddressSetWithShareLock(TypeRelationId, returnType);
+		types_locked = lappend(types_locked, (Oid *) &returnType);
+	}
+	else
+		ObjectAddressSet(referenced, TypeRelationId, returnType);
 	add_exact_object_address(&referenced, addrs);
 
 	/* dependency on transform used by return type, if any */
@@ -617,7 +636,30 @@ ProcedureCreate(const char *procedureName,
 	/* dependency on parameter types */
 	for (i = 0; i < allParamCount; i++)
 	{
-		ObjectAddressSet(referenced, TypeRelationId, allParams[i]);
+		ListCell *lc;
+		bool nolocked = true;
+		/* do not lock twice a parameter type or if it below FirstBootstrapObjectId */
+		foreach(lc, types_locked)
+		{
+			Oid *savedId = (Oid *) lfirst(lc);
+
+			if (*savedId < FirstBootstrapObjectId || *savedId == allParams[i])
+			{
+				nolocked = false;
+				break;
+			}
+		}	
+		if (nolocked)
+		{
+			/*
+			 * at the same time apply an AccessSharedLock as the parameter
+			 * data type could be dropped before our transaction commits
+			 */
+			referenced = ObjectAddressSetWithShareLock(TypeRelationId, allParams[i]);
+			types_locked = lappend(types_locked, (Oid *) &allParams[i]);
+		}
+		else
+			ObjectAddressSet(referenced, TypeRelationId, allParams[i]);
 		add_exact_object_address(&referenced, addrs);
 
 		/* dependency on transform used by parameter type, if any */
@@ -626,7 +668,11 @@ ProcedureCreate(const char *procedureName,
 			ObjectAddressSet(referenced, TransformRelationId, trfid);
 			add_exact_object_address(&referenced, addrs);
 		}
+		/* lock parameter type to avoid concurrent drop */
+		if (allParams[i] != returnType)
+			LockDatabaseObject(TypeRelationId, allParams[i], 0, AccessShareLock);
 	}
+	list_free(types_locked);
 
 	/* dependency on support function, if any */
 	if (OidIsValid(prosupport))
@@ -1149,4 +1195,37 @@ oid_array_to_list(Datum datum)
 	for (i = 0; i < nelems; i++)
 		result = lappend_oid(result, values[i]);
 	return result;
+}
+
+/*
+ * Return an ObjectAddress for the object after we take an AccessShareLock
+ * on the object to guard against concurrent DDL operations. Without this,
+ * the object could be dropped before our transaction commits leaving behind
+ * relations with object id pointing to a no-longer-existent object.
+ *
+ * Used in ProcedureCreate() to protect from concuttent drop of type used
+ * in function parameters or returned type, as well as language.
+ */
+static ObjectAddress
+ObjectAddressSetWithShareLock(Oid classId, Oid objectId)
+{
+	ObjectAddress referenced;
+
+	switch (classId)
+	{
+		case LanguageRelationId:
+		case TypeRelationId:
+			/* lock object */
+			LockDatabaseObject(classId, objectId, 0, AccessShareLock);
+			break;
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					 errmsg("this class of object %d can not be locked here.", classId)));
+			break;
+	}
+
+	ObjectAddressSet(referenced, classId, objectId);
+
+	return referenced;
 }

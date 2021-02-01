@@ -442,6 +442,28 @@
    </varlistentry>
 
    <varlistentry>
+    <term><acronym>NSPR</acronym></term>
+    <listitem>
+     <para>
+      <ulink
+      url="https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSPR">
+      Netscape Portable Runtime</ulink>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><acronym>NSS</acronym></term>
+    <listitem>
+     <para>
+      <ulink
+      url="https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS">
+      Network Security Services</ulink>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><acronym>ODBC</acronym></term>
     <listitem>
      <para>
@@ -535,6 +557,17 @@
      <para>
       <link linkend="continuous-archiving">Point-In-Time
       Recovery</link> (Continuous Archiving)
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><acronym>PKCS#12</acronym></term>
+    <listitem>
+     <para>
+      <ulink
+      url="https://en.wikipedia.org/wiki/PKCS_12">
+      Public-Key Cryptography Standards #12</ulink>
      </para>
     </listitem>
    </varlistentry>
@@ -680,6 +713,16 @@
     <listitem>
      <para>
       <link linkend="datatype-oid">Tuple Identifier</link>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><acronym>TLS</acronym></term>
+    <listitem>
+     <para>
+      <ulink url="https://en.wikipedia.org/wiki/Transport_Layer_Security">
+      Transport Layer Security</ulink>
      </para>
     </listitem>
    </varlistentry>

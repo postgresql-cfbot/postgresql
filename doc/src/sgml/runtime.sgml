@@ -2185,15 +2185,21 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
 
   <indexterm zone="ssl-tcp">
    <primary>SSL</primary>
+   <secondary>TLS</secondary>
   </indexterm>
 
   <para>
    <productname>PostgreSQL</productname> has native support for using
    <acronym>SSL</acronym> connections to encrypt client/server communications
    for increased security. This requires that
-   <productname>OpenSSL</productname> is installed on both client and
+   a supported TLS library is installed on both client and
    server systems and that support in <productname>PostgreSQL</productname> is
    enabled at build time (see <xref linkend="installation"/>).
+   Supported libraries are <productname>OpenSSL</productname> and
+   <productname>NSS</productname>. The terms <acronym>SSL</acronym> and
+   <acronym>TLS</acronym> are often used interchangeably to mean a secure
+   connection using a <acronym>TLS</acronym> protocol, even though
+   <acronym>SSL</acronym> protocols are no longer supported.
   </para>
 
   <sect2 id="ssl-setup">
@@ -2213,8 +2219,13 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   </para>
 
   <para>
-   To start in <acronym>SSL</acronym> mode, files containing the server certificate
-   and private key must exist.  By default, these files are expected to be
+   To start in <acronym>SSL</acronym> mode, a server certificate
+   and private key must exist. The below sections on the different libraries
+   will discuss how to configure these.
+  </para>
+   
+  <para>
+   By default, these files are expected to be
    named <filename>server.crt</filename> and <filename>server.key</filename>, respectively, in
    the server's data directory, but other names and locations can be specified
    using the configuration parameters <xref linkend="guc-ssl-cert-file"/>
@@ -2304,6 +2315,18 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   </note>
   </sect2>
 
+  <sect2 id="ssl-nss-config">
+   <title>NSS Configuration</title>
+
+  <para>
+   <productname>PostgreSQL</productname> will look for certificates and keys
+   in the <productname>NSS</productname> database specified by the parameter
+   <xref linkend="guc-ssl-database"/> in <filename>postgresql.conf</filename>.
+   The parameters for certificate and key filenames are used to identify the
+   nicknames in the database.
+  </para>
+  </sect2>
+
   <sect2 id="ssl-client-certificates">
    <title>Using Client Certificates</title>
 
@@ -2378,7 +2401,7 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   </sect2>
 
   <sect2 id="ssl-server-files">
-   <title>SSL Server File Usage</title>
+   <title>SSL Server File Parameter Usage</title>
 
    <para>
     <xref linkend="ssl-file-usage"/> summarizes the files that are
@@ -2425,6 +2448,14 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
       <entry>client certificate must not be on this list</entry>
      </row>
 
+     <row>
+      <entry><xref linkend="guc-ssl-database"/></entry>
+      <entry>certificate database</entry>
+      <entry>contains server certificates, keys and revocation lists; only
+      used when <productname>PostgreSQL</productname> is built with support
+      for <productname>NSS</productname>.</entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>
@@ -2448,7 +2479,7 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   </sect2>
 
   <sect2 id="ssl-certificate-creation">
-   <title>Creating Certificates</title>
+   <title>Creating Certificates with OpenSSL</title>
 
    <para>
      To create a simple self-signed certificate for the server, valid for 365
@@ -2550,6 +2581,88 @@ openssl x509 -req -in server.csr -text -days 365 \
     <filename>root.key</filename> and <filename>intermediate.key</filename>
     should be stored offline for use in creating future certificates.
    </para>
+  </sect2>
+
+  <sect2 id="nss-certificate-database">
+   <title>NSS Certificate Databases</title>
+
+   <para>
+    When using <productname>NSS</productname>, all certificates and keys must
+    be loaded into an <productname>NSS</productname> certificate database.
+   </para>
+
+   <para>
+    To create a new <productname>NSS</productname> certificate database and
+    load the certificates created in <xref linkend="ssl-certificate-creation" />,
+    use the following <productname>NSS</productname> commands:
+<programlisting>
+certutil -d "sql:server.db" -N --empty-password
+certutil -d "sql:server.db" -A -n server.crt -i server.crt -t "CT,C,C"
+certutil -d "sql:server.db" -A -n root.crt -i root.crt -t "CT,C,C"
+</programlisting>
+    This will give the certificate the filename as the nickname identifier in
+    the database which is created as <filename>server.db</filename>.
+   </para>
+   <para>
+    Then load the server key, which require converting it to
+    <acronym>PKCS#12</acronym> format using the
+    <productname>OpenSSL</productname> tools:
+<programlisting>
+openssl pkcs12 -export -out server.pfx -inkey server.key -in server.crt \
+  -certfile root.crt -passout pass:
+pk12util -i server.pfx -d server.db -W ''
+</programlisting>
+   </para>
+   <para>
+    Finally a certificate revocation list can be loaded with the following
+    commands:
+<programlisting>
+crlutil -I -i server.crl -d server.db -B
+</programlisting>
+   </para>
+  </sect2>
+
+  <sect2 id="nss-ssl-certificate-creation" />
+   <title>Creating Certificates with NSS</title>
+
+   <para>
+    To create a simple self-signed CA and certificate for the server, use the
+    following NSS commands. Replace
+    <replaceable>*.yourdomain.com</replaceable> with the server's host
+    name. Remove <replaceable>--empty-password</replaceable> in order to set
+    a password protecting the databases. The password can be passed to
+    <application>certutil</certutil> with the <literal>-f</literal> parameter.
+    First create a self-signed CA. To use a different certificate validity
+    time than the default, use <replaceable>-v</replaceable> to specify the
+    number of months of validity.
+<programlisting>
+mkdir root_ca.db
+certutil -N -d "sql:root_ca.db/" --empty-password
+certutil -S -d "sql:root_ca.db/" -n root_ca -s "CN=<replaceable>ca.yourdomain.com</replaceable>" \
+  -x -k rsa -g 2048 -m <replaceable>5432</replaceable> -t CTu,CTu,CTu \
+  --keyUsage certSigning -2 --nsCertType sslCA,smimeCA,objectSigningCA \
+  -Z SHA256
+certutil -L -d "sql:root_ca.db/" -n root_ca -a > root_ca.pem
+</programlisting>
+    Now create a server certificate database, and create a certificate signing
+    request for the CA. Then sign the request with the already created CA and
+    insert the certificate chain into the certificate database.
+<programlisting>
+mkdir server_cert.db
+certutil -N -d "sql:server_cert.db/" --empty-password
+certutil -R -d "sql:server_cert.db/" -s "CN=dbhost.yourdomain.com" \
+  -o server_cert.csr -g 2048 -Z SHA256
+
+certutil -C -d "sql:root_ca.db/" -c root_ca -i server_cert.csr \
+  -o server_cert.der -m <replaceable>5433</replaceable> \
+  --keyUsage keyEncipherment,dataEncipherment,digitalSignature \
+  --nsCertType sslServer -Z SHA256
+
+certutil -A -d "sql:server_cert.db/" -n root_ca -t CTu,CTu,CTu -a -i root_ca.pem
+certutil -A -d "sql:server_cert.db/" -n server_cert -t CTu,CTu,CTu -i server_cert.der
+</programlisting>
+    The server certificate is loaded into the certificate database as well as
+    the CA certificate in order to provide the chain of certificates.
   </sect2>
 
  </sect1>

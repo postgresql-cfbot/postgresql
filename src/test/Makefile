@@ -28,7 +28,7 @@ ifneq (,$(filter ldap,$(PG_TEST_EXTRA)))
 SUBDIRS += ldap
 endif
 endif
-ifeq ($(with_openssl),yes)
+ifneq ($(with_ssl),no)
 ifneq (,$(filter ssl,$(PG_TEST_EXTRA)))
 SUBDIRS += ssl
 endif

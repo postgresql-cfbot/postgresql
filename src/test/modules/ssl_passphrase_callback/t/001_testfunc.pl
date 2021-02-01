@@ -7,9 +7,9 @@ use TestLib;
 use Test::More;
 use PostgresNode;
 
-unless (($ENV{with_openssl} || 'no') eq 'yes')
+if ($ENV{with_ssl} eq 'no')
 {
-	plan skip_all => 'SSL not supported by this build';
+	plan skip_all => 'OpenSSL not supported by this build';
 }
 
 my $clearpass = "FooBaR1";

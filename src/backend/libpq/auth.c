@@ -2849,7 +2849,14 @@ CheckCertAuth(Port *port)
 {
 	int			status_check_usermap = STATUS_ERROR;
 
+#if defined(USE_OPENSSL)
 	Assert(port->ssl);
+#elif defined(USE_NSS)
+	/* TODO: should we rename pr_fd to ssl, to keep consistency? */
+	Assert(port->pr_fd);
+#else
+	Assert(false);
+#endif
 
 	/* Make sure we have received a username in the certificate */
 	if (port->peer_cn == NULL ||

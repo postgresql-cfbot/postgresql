@@ -4308,7 +4308,11 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&ssl_library,
 #ifdef USE_SSL
+#if defined(USE_OPENSSL)
 		"OpenSSL",
+#elif defined(USE_NSS)
+		"NSS",
+#endif
 #else
 		"",
 #endif
@@ -4366,6 +4370,18 @@ static struct config_string ConfigureNamesString[] =
 		check_canonical_path, assign_pgstat_temp_directory, NULL
 	},
 
+#ifdef USE_NSS
+	{
+		{"ssl_database", PGC_SIGHUP, CONN_AUTH_SSL,
+			gettext_noop("Location of the NSS certificate database."),
+			NULL
+		},
+		&ssl_database,
+		"",
+		NULL, NULL, NULL
+	},
+#endif
+
 	{
 		{"synchronous_standby_names", PGC_SIGHUP, REPLICATION_PRIMARY,
 			gettext_noop("Number of synchronous standbys and list of names of potential synchronous ones."),
@@ -4394,8 +4410,10 @@ static struct config_string ConfigureNamesString[] =
 			GUC_SUPERUSER_ONLY
 		},
 		&SSLCipherSuites,
-#ifdef USE_OPENSSL
+#if defined(USE_OPENSSL)
 		"HIGH:MEDIUM:+3DES:!aNULL",
+#elif defined (USE_NSS)
+		"",
 #else
 		"none",
 #endif

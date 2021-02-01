@@ -4080,6 +4080,7 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 	int			i_oid;
 	int			i_prpubid;
 	int			i_prrelid;
+	int			i_prrelqual;
 	int			i,
 				j,
 				ntups;
@@ -4091,7 +4092,8 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 
 	/* Collect all publication membership info. */
 	appendPQExpBufferStr(query,
-						 "SELECT tableoid, oid, prpubid, prrelid "
+						 "SELECT tableoid, oid, prpubid, prrelid, "
+						 "pg_catalog.pg_get_expr(prqual, prrelid) AS prrelqual "
 						 "FROM pg_catalog.pg_publication_rel");
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 
@@ -4101,6 +4103,7 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 	i_oid = PQfnumber(res, "oid");
 	i_prpubid = PQfnumber(res, "prpubid");
 	i_prrelid = PQfnumber(res, "prrelid");
+	i_prrelqual = PQfnumber(res, "prrelqual");
 
 	/* this allocation may be more than we need */
 	pubrinfo = pg_malloc(ntups * sizeof(PublicationRelInfo));
@@ -4141,6 +4144,10 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 		pubrinfo[j].dobj.name = tbinfo->dobj.name;
 		pubrinfo[j].publication = pubinfo;
 		pubrinfo[j].pubtable = tbinfo;
+		if (PQgetisnull(res, i, i_prrelqual))
+			pubrinfo[j].pubrelqual = NULL;
+		else
+			pubrinfo[j].pubrelqual = pg_strdup(PQgetvalue(res, i, i_prrelqual));
 
 		/* Decide whether we want to dump it */
 		selectDumpablePublicationTable(&(pubrinfo[j].dobj), fout);
@@ -4173,8 +4180,11 @@ dumpPublicationTable(Archive *fout, PublicationRelInfo *pubrinfo)
 
 	appendPQExpBuffer(query, "ALTER PUBLICATION %s ADD TABLE ONLY",
 					  fmtId(pubinfo->dobj.name));
-	appendPQExpBuffer(query, " %s;\n",
+	appendPQExpBuffer(query, " %s",
 					  fmtQualifiedDumpable(tbinfo));
+	if (pubrinfo->pubrelqual)
+		appendPQExpBuffer(query, " WHERE %s", pubrinfo->pubrelqual);
+	appendPQExpBufferStr(query, ";\n");
 
 	/*
 	 * There is no point in creating a drop query as the drop is done by table

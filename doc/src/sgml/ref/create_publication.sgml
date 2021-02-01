@@ -22,7 +22,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
-    [ FOR TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [, ...]
+    [ FOR TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ WHERE ( <replaceable class="parameter">expression</replaceable> ) ] [, ...]
       | FOR ALL TABLES ]
     [ WITH ( <replaceable class="parameter">publication_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
 </synopsis>
@@ -71,6 +71,10 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
       This does not apply to a partitioned table, however.  The partitions of
       a partitioned table are always implicitly considered part of the
       publication, so they are never explicitly added to the publication.
+      If the optional <literal>WHERE</literal> clause is specified, rows that do 
+      not satisfy the <replaceable class="parameter">expression</replaceable> 
+      will not be published. Note that parentheses are required around the 
+      expression.
      </para>
 
      <para>
@@ -131,9 +135,15 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
           on its partitions) contained in the publication will be published
           using the identity and schema of the partitioned table rather than
           that of the individual partitions that are actually changed; the
-          latter is the default.  Enabling this allows the changes to be
-          replicated into a non-partitioned table or a partitioned table
-          consisting of a different set of partitions.
+          latter is the default (<literal>false</literal>).  Enabling this
+          allows the changes to be replicated into a non-partitioned table or a
+          partitioned table consisting of a different set of partitions.
+         </para>
+
+         <para>
+          If this parameter is <literal>false</literal>, it uses the 
+          <literal>WHERE</literal> clause from the partition; otherwise,the 
+          <literal>WHERE</literal> clause from the partitioned table is used.
          </para>
 
          <para>
@@ -183,6 +193,13 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
   </para>
 
   <para>
+  Columns used in the <literal>WHERE</literal> clause must be part of the
+  primary key or be covered by <literal>REPLICA IDENTITY</literal> otherwise
+  <command>UPDATE</command> and <command>DELETE</command> operations will not
+  be replicated.
+  </para>
+
+  <para>
    For an <command>INSERT ... ON CONFLICT</command> command, the publication will
    publish the operation that actually results from the command.  So depending
    of the outcome, it may be published as either <command>INSERT</command> or
@@ -197,6 +214,11 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
   <para>
    <acronym>DDL</acronym> operations are not published.
   </para>
+
+  <para>
+  The <literal>WHERE</literal> clause expression is executed with the role used
+  for the replication connection.
+  </para>
  </refsect1>
 
  <refsect1>
@@ -206,6 +228,13 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
    Create a publication that publishes all changes in two tables:
 <programlisting>
 CREATE PUBLICATION mypublication FOR TABLE users, departments;
+</programlisting>
+  </para>
+
+  <para>
+   Create a publication that publishes all changes from active departments:
+<programlisting>
+CREATE PUBLICATION active_departments FOR TABLE departments WHERE (active IS TRUE);
 </programlisting>
   </para>
 

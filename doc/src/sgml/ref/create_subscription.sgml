@@ -102,7 +102,13 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
          <para>
           Specifies whether the existing data in the publications that are
           being subscribed to should be copied once the replication starts.
-          The default is <literal>true</literal>.
+          The default is <literal>true</literal>. If any table in the
+          publications has a <literal>WHERE</literal> clause, rows that do not
+          satisfy the <replaceable class="parameter">expression</replaceable>
+          will not be copied. If the subscription has several publications in
+          which a table has been published with different
+          <literal>WHERE</literal> clauses, rows must satisfy all expressions
+          to be copied.
          </para>
         </listitem>
        </varlistentry>

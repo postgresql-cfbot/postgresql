@@ -372,6 +372,28 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 
 	Assert(list_length(stmt->tables) > 0);
 
+	/*
+	 * Although ALTER PUBLICATION grammar allows WHERE clause to be specified
+	 * for DROP TABLE action, it doesn't make sense to allow it. We implement
+	 * this restriction here, instead of complicating the grammar to enforce
+	 * it.
+	 */
+	if (stmt->tableAction == DEFELEM_DROP)
+	{
+		ListCell   *lc;
+
+		foreach(lc, stmt->tables)
+		{
+			PublicationTable *t = lfirst(lc);
+
+			if (t->whereClause)
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("cannot use a WHERE clause when removing table from publication \"%s\"",
+								NameStr(pubform->pubname))));
+		}
+	}
+
 	rels = OpenTableList(stmt->tables);
 
 	if (stmt->tableAction == DEFELEM_ADD)
@@ -389,27 +411,22 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 		foreach(oldlc, oldrelids)
 		{
 			Oid			oldrelid = lfirst_oid(oldlc);
-			ListCell   *newlc;
-			bool		found = false;
+			PublicationRelationQual *oldrel;
 
-			foreach(newlc, rels)
-			{
-				Relation	newrel = (Relation) lfirst(newlc);
+			/*
+			 * Remove all publication-table mappings.  We could possibly
+			 * remove (i) tables that are not found in the new table list and
+			 * (ii) tables that are being re-added with a different qual
+			 * expression. For (ii), simply updating the existing tuple is not
+			 * enough, because of qual expression dependencies.
+			 */
+			oldrel = palloc(sizeof(PublicationRelationQual));
+			oldrel->relid = oldrelid;
+			oldrel->whereClause = NULL;
+			oldrel->relation = table_open(oldrel->relid,
+										  ShareUpdateExclusiveLock);
 
-				if (RelationGetRelid(newrel) == oldrelid)
-				{
-					found = true;
-					break;
-				}
-			}
-
-			if (!found)
-			{
-				Relation	oldrel = table_open(oldrelid,
-												ShareUpdateExclusiveLock);
-
-				delrels = lappend(delrels, oldrel);
-			}
+			delrels = lappend(delrels, oldrel);
 		}
 
 		/* And drop them. */
@@ -509,13 +526,15 @@ OpenTableList(List *tables)
 	List	   *relids = NIL;
 	List	   *rels = NIL;
 	ListCell   *lc;
+	PublicationRelationQual *prq;
 
 	/*
 	 * Open, share-lock, and check all the explicitly-specified relations
 	 */
 	foreach(lc, tables)
 	{
-		RangeVar   *rv = castNode(RangeVar, lfirst(lc));
+		PublicationTable *t = lfirst(lc);
+		RangeVar   *rv = castNode(RangeVar, t->relation);
 		bool		recurse = rv->inh;
 		Relation	rel;
 		Oid			myrelid;
@@ -538,8 +557,11 @@ OpenTableList(List *tables)
 			table_close(rel, ShareUpdateExclusiveLock);
 			continue;
 		}
-
-		rels = lappend(rels, rel);
+		prq = palloc(sizeof(PublicationRelationQual));
+		prq->relid = myrelid;
+		prq->relation = rel;
+		prq->whereClause = t->whereClause;
+		rels = lappend(rels, prq);
 		relids = lappend_oid(relids, myrelid);
 
 		/*
@@ -572,7 +594,12 @@ OpenTableList(List *tables)
 
 				/* find_all_inheritors already got lock */
 				rel = table_open(childrelid, NoLock);
-				rels = lappend(rels, rel);
+				prq = palloc(sizeof(PublicationRelationQual));
+				prq->relid = childrelid;
+				prq->relation = rel;
+				/* child inherits WHERE clause from parent */
+				prq->whereClause = t->whereClause;
+				rels = lappend(rels, prq);
 				relids = lappend_oid(relids, childrelid);
 			}
 		}
@@ -593,10 +620,12 @@ CloseTableList(List *rels)
 
 	foreach(lc, rels)
 	{
-		Relation	rel = (Relation) lfirst(lc);
+		PublicationRelationQual *prq = (PublicationRelationQual *) lfirst(lc);
 
-		table_close(rel, NoLock);
+		table_close(prq->relation, NoLock);
 	}
+
+	list_free_deep(rels);
 }
 
 /*
@@ -612,15 +641,15 @@ PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
 
 	foreach(lc, rels)
 	{
-		Relation	rel = (Relation) lfirst(lc);
+		PublicationRelationQual *prq = (PublicationRelationQual *) lfirst(lc);
 		ObjectAddress obj;
 
 		/* Must be owner of the table or superuser. */
-		if (!pg_class_ownercheck(RelationGetRelid(rel), GetUserId()))
-			aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(rel->rd_rel->relkind),
-						   RelationGetRelationName(rel));
+		if (!pg_class_ownercheck(prq->relid, GetUserId()))
+			aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(prq->relation->rd_rel->relkind),
+						   RelationGetRelationName(prq->relation));
 
-		obj = publication_add_relation(pubid, rel, if_not_exists);
+		obj = publication_add_relation(pubid, prq, if_not_exists);
 		if (stmt)
 		{
 			EventTriggerCollectSimpleCommand(obj, InvalidObjectAddress,
@@ -644,11 +673,10 @@ PublicationDropTables(Oid pubid, List *rels, bool missing_ok)
 
 	foreach(lc, rels)
 	{
-		Relation	rel = (Relation) lfirst(lc);
-		Oid			relid = RelationGetRelid(rel);
+		PublicationRelationQual *prq = (PublicationRelationQual *) lfirst(lc);
 
 		prid = GetSysCacheOid2(PUBLICATIONRELMAP, Anum_pg_publication_rel_oid,
-							   ObjectIdGetDatum(relid),
+							   ObjectIdGetDatum(prq->relid),
 							   ObjectIdGetDatum(pubid));
 		if (!OidIsValid(prid))
 		{
@@ -658,7 +686,7 @@ PublicationDropTables(Oid pubid, List *rels, bool missing_ok)
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
 					 errmsg("relation \"%s\" is not part of the publication",
-							RelationGetRelationName(rel))));
+							RelationGetRelationName(prq->relation))));
 		}
 
 		ObjectAddressSet(obj, PublicationRelRelationId, prid);

@@ -31,6 +31,10 @@ CATALOG(pg_publication_rel,6106,PublicationRelRelationId)
 	Oid			oid;			/* oid */
 	Oid			prpubid;		/* Oid of the publication */
 	Oid			prrelid;		/* Oid of the relation */
+
+#ifdef	CATALOG_VARLEN			/* variable-length fields start here */
+	pg_node_tree prqual;		/* qualifications */
+#endif
 } FormData_pg_publication_rel;
 
 /* ----------------
@@ -39,6 +43,8 @@ CATALOG(pg_publication_rel,6106,PublicationRelRelationId)
  * ----------------
  */
 typedef FormData_pg_publication_rel *Form_pg_publication_rel;
+
+DECLARE_TOAST(pg_publication_rel, 8287, 8288);
 
 DECLARE_UNIQUE_INDEX_PKEY(pg_publication_rel_oid_index, 6112, on pg_publication_rel using btree(oid oid_ops));
 #define PublicationRelObjectIndexId 6112

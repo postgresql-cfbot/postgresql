@@ -1167,6 +1167,7 @@ JsonParseContext
 JsonParseErrorType
 JsonPath
 JsonPathBool
+JsonPathEncodingContext
 JsonPathExecContext
 JsonPathExecResult
 JsonPathGinAddPathItemFunc

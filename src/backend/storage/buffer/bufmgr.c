@@ -37,6 +37,7 @@
 #include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "executor/instrument.h"
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
@@ -2860,6 +2861,16 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 BlockNumber
 RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forkNum)
 {
+	/*
+	 * Returns 0 if this global temporary table is not initialized in current
+	 * backend.
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(relation) &&
+		!gtt_storage_attached(RelationGetRelid(relation)))
+	{
+		return 0;
+	}
+
 	switch (relation->rd_rel->relkind)
 	{
 		case RELKIND_SEQUENCE:

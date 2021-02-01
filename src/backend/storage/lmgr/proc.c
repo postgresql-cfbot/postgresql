@@ -392,6 +392,7 @@ InitProcess(void)
 	MyProc->databaseId = InvalidOid;
 	MyProc->roleId = InvalidOid;
 	MyProc->tempNamespaceId = InvalidOid;
+	MyProc->backend_gtt_frozenxid = InvalidTransactionId;	/* init backend level gtt frozenxid */
 	MyProc->isBackgroundWorker = IsBackgroundWorker;
 	MyProc->delayChkpt = false;
 	MyProc->statusFlags = 0;
@@ -573,6 +574,7 @@ InitAuxiliaryProcess(void)
 	MyProc->databaseId = InvalidOid;
 	MyProc->roleId = InvalidOid;
 	MyProc->tempNamespaceId = InvalidOid;
+	MyProc->backend_gtt_frozenxid = InvalidTransactionId;	/* init backend level gtt frozenxid */
 	MyProc->isBackgroundWorker = IsBackgroundWorker;
 	MyProc->delayChkpt = false;
 	MyProc->statusFlags = 0;

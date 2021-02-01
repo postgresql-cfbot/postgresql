@@ -6958,6 +6958,16 @@ StartupXLOG(void)
 		int			rmid;
 
 		/*
+		 * When some backend processes crash, those storage files that belong to
+		 * global temporary tables will not be cleaned up and remain in the data
+		 * directory.
+		 * These data files no longer belong to any session and will be cleaned up
+		 * during the recovery.
+		 */
+		if (max_active_gtt > 0)
+			RemovePgTempFiles();
+
+		/*
 		 * Update pg_control to show that we are recovering and to show the
 		 * selected checkpoint as the place we are starting from. We also mark
 		 * pg_control with any minimum recovery stop point obtained from a

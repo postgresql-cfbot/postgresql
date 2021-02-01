@@ -42,6 +42,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
+#include "catalog/storage_gtt.h"
 #include "commands/trigger.h"
 #include "executor/execPartition.h"
 #include "executor/executor.h"
@@ -2428,6 +2429,9 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 			resultRelInfo->ri_IndexRelationDescs == NULL)
 			ExecOpenIndices(resultRelInfo,
 							node->onConflictAction != ONCONFLICT_NONE);
+
+		/* Init storage for global temporary table in current backend */
+		init_gtt_storage(operation, resultRelInfo);
 
 		/*
 		 * If this is an UPDATE and a BEFORE UPDATE trigger is present, the

@@ -19,13 +19,19 @@
 
 #include "postgres.h"
 
+#include "access/genam.h"
 #include "access/htup_details.h"
+#include "access/table.h"
+#include "access/xact.h"
+#include "catalog/index.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_constraint.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "commands/trigger.h"
 #include "executor/executor.h"
 #include "executor/functions.h"
 #include "funcapi.h"
@@ -43,6 +49,8 @@
 #include "parser/parse_agg.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_func.h"
+#include "parser/parsetree.h"
+#include "partitioning/partdesc.h"
 #include "rewrite/rewriteManip.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
@@ -51,6 +59,8 @@
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/partcache.h"
+#include "utils/rel.h"
 #include "utils/syscache.h"
 #include "utils/typcache.h"
 
@@ -148,6 +158,14 @@ static Query *substitute_actual_srf_parameters(Query *expr,
 static Node *substitute_actual_srf_parameters_mutator(Node *node,
 													  substitute_actual_srf_parameters_context *context);
 
+static bool trigger_max_parallel_hazard_for_modify(TriggerDesc *trigdesc,
+												   max_parallel_hazard_context *context);
+static bool index_expr_max_parallel_hazard_for_modify(Relation rel,
+													  max_parallel_hazard_context *context);
+static bool domain_max_parallel_hazard_for_modify(Oid typid, max_parallel_hazard_context *context);
+static bool rel_max_parallel_hazard_for_modify(Relation rel,
+											   CmdType command_type,
+											   max_parallel_hazard_context *context);
 
 /*****************************************************************************
  *		Aggregate-function clause manipulation
@@ -553,6 +571,18 @@ max_parallel_hazard(Query *parse)
 	context.max_interesting = PROPARALLEL_UNSAFE;
 	context.safe_param_ids = NIL;
 	(void) max_parallel_hazard_walker((Node *) parse, &context);
+
+	/*
+	 * Additional parallel-mode safety checks are required in order to
+	 * allow an underlying parallel query to be used for a
+	 * table-modification command that is supported in parallel-mode.
+	 */
+
+	if (context.max_hazard != PROPARALLEL_UNSAFE &&
+		IsModifySupportedInParallelMode(parse->commandType))
+	{
+		context.max_hazard = max_parallel_hazard_for_modify(parse, context.max_hazard);
+	}
 	return context.max_hazard;
 }
 
@@ -786,6 +816,440 @@ max_parallel_hazard_walker(Node *node, max_parallel_hazard_context *context)
 								  context);
 }
 
+/*
+ * trigger_max_parallel_hazard_for_modify
+ *
+ * Finds the maximum parallel-mode hazard level for the specified trigger data.
+ */
+static bool
+trigger_max_parallel_hazard_for_modify(TriggerDesc *trigdesc,
+									   max_parallel_hazard_context *context)
+{
+	int			i;
+
+	for (i = 0; i < trigdesc->numtriggers; i++)
+	{
+		int			trigtype;
+		Trigger    *trigger = &trigdesc->triggers[i];
+
+		if (max_parallel_hazard_test(func_parallel(trigger->tgfoid), context))
+			return true;
+
+		/*
+		 * If the trigger type is RI_TRIGGER_FK, this indicates a FK exists in
+		 * the relation, and this would result in creation of new CommandIds
+		 * on insert/update/delete and this isn't supported in a parallel
+		 * worker (but is safe in the parallel leader).
+		 */
+		trigtype = RI_FKey_trigger_type(trigger->tgfoid);
+		if (trigtype == RI_TRIGGER_FK)
+		{
+			if (max_parallel_hazard_test(PROPARALLEL_RESTRICTED, context))
+				return true;
+		}
+	}
+
+	return false;
+}
+
+/*
+ * index_expr_max_parallel_hazard_for_modify
+ *
+ * Finds the maximum parallel-mode hazard level for any existing index
+ * expressions of a specified relation.
+ */
+static bool
+index_expr_max_parallel_hazard_for_modify(Relation rel,
+										  max_parallel_hazard_context *context)
+{
+	List		*index_oid_list;
+	ListCell	*lc;
+	bool		found_max_hazard = false;
+	LOCKMODE	lockmode = AccessShareLock;
+
+	index_oid_list = RelationGetIndexList(rel);
+	foreach(lc, index_oid_list)
+	{
+		Relation		index_rel;
+		Form_pg_index	indexStruct;
+		List			*ii_Expressions;
+		Oid				index_oid = lfirst_oid(lc);
+
+		index_rel = index_open(index_oid, lockmode);
+
+		indexStruct = index_rel->rd_index;
+		ii_Expressions = RelationGetIndexExpressions(index_rel);
+
+		if (ii_Expressions != NIL)
+		{
+			int			i;
+			ListCell	*index_expr_item = list_head(ii_Expressions);
+
+			for (i = 0; i < indexStruct->indnatts; i++)
+			{
+				int			keycol = indexStruct->indkey.values[i];
+
+				if (keycol == 0)
+				{
+					/* Found an index expression */
+
+					Node	   *index_expr;
+
+					Assert(index_expr_item != NULL);
+					if (index_expr_item == NULL)	/* shouldn't happen */
+					{
+						elog(WARNING, "too few entries in indexprs list");
+						context->max_hazard = PROPARALLEL_UNSAFE;
+						found_max_hazard = true;
+						break;
+					}
+
+					index_expr = (Node *) lfirst(index_expr_item);
+
+					if (max_parallel_hazard_walker(index_expr, context))
+					{
+						found_max_hazard = true;
+						break;
+					}
+
+					index_expr_item = lnext(ii_Expressions, index_expr_item);
+				}
+			}
+		}
+		index_close(index_rel, lockmode);
+	}
+	list_free(index_oid_list);
+
+	return found_max_hazard;
+}
+
+/*
+ * domain_max_parallel_hazard_for_modify
+ *
+ * Finds the maximum parallel-mode hazard level for the specified DOMAIN type.
+ * Only any CHECK expressions are examined for parallel safety.
+ * DEFAULT values of DOMAIN-type columns in the target-list are already
+ * being checked for parallel-safety in the max_parallel_hazard() scan of the
+ * query tree in standard_planner().
+ *
+ */
+static bool
+domain_max_parallel_hazard_for_modify(Oid typid, max_parallel_hazard_context *context)
+{
+	Relation	con_rel;
+	ScanKeyData key[1];
+	SysScanDesc scan;
+	HeapTuple	tup;
+	bool		found_max_hazard = false;
+
+	LOCKMODE	lockmode = AccessShareLock;
+
+	con_rel = table_open(ConstraintRelationId, lockmode);
+
+	ScanKeyInit(&key[0],
+				Anum_pg_constraint_contypid, BTEqualStrategyNumber,
+				F_OIDEQ, ObjectIdGetDatum(typid));
+	scan = systable_beginscan(con_rel, ConstraintTypidIndexId, true,
+							  NULL, 1, key);
+
+	while (HeapTupleIsValid((tup = systable_getnext(scan))))
+	{
+		Form_pg_constraint con = (Form_pg_constraint) GETSTRUCT(tup);
+
+		if (con->contype == CONSTRAINT_CHECK)
+		{
+			char	   *conbin;
+			Datum		val;
+			bool		isnull;
+			Expr	   *check_expr;
+
+			val = SysCacheGetAttr(CONSTROID, tup,
+								  Anum_pg_constraint_conbin, &isnull);
+			Assert(!isnull);
+			if (isnull)
+			{
+				/*
+				 * This shouldn't ever happen, but if it does, log a WARNING
+				 * and return UNSAFE, rather than erroring out.
+				 */
+				elog(WARNING, "null conbin for constraint %u", con->oid);
+				context->max_hazard = PROPARALLEL_UNSAFE;
+				found_max_hazard = true;
+				break;
+			}
+			conbin = TextDatumGetCString(val);
+			check_expr = stringToNode(conbin);
+			pfree(conbin);
+			if (max_parallel_hazard_walker((Node *) check_expr, context))
+			{
+				found_max_hazard = true;
+				break;
+			}
+		}
+	}
+
+	systable_endscan(scan);
+	table_close(con_rel, lockmode);
+	return found_max_hazard;
+}
+
+/*
+ * rel_max_parallel_hazard_for_modify
+ *
+ * Determines the maximum parallel-mode hazard level for modification
+ * of a specified relation.
+ */
+static bool
+rel_max_parallel_hazard_for_modify(Relation rel,
+								   CmdType command_type,
+								   max_parallel_hazard_context *context)
+{
+	TupleDesc	tupdesc;
+	int			attnum;
+
+	/* Currently only CMD_INSERT is supported */
+	Assert(command_type == CMD_INSERT);
+
+	/*
+	 * We can't support table modification in a parallel worker if it's a
+	 * foreign table/partition (no FDW API for supporting parallel access) or a
+	 * temporary table.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
+		RelationUsesLocalBuffers(rel))
+	{
+		if (max_parallel_hazard_test(PROPARALLEL_RESTRICTED, context))
+		{
+			return true;
+		}
+	}
+
+	/*
+	 * If a partitioned table, check that each partition is safe for
+	 * modification in parallel-mode.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		int			i;
+		PartitionDesc pdesc;
+		PartitionKey pkey;
+		ListCell   *partexprs_item;
+		int			partnatts;
+		List	   *partexprs;
+
+		pkey = RelationGetPartitionKey(rel);
+
+		partnatts = get_partition_natts(pkey);
+		partexprs = get_partition_exprs(pkey);
+
+		partexprs_item = list_head(partexprs);
+		for (i = 0; i < partnatts; i++)
+		{
+			/* Check parallel-safety of partition key support functions */
+			if (OidIsValid(pkey->partsupfunc[i].fn_oid))
+			{
+				if (max_parallel_hazard_test(func_parallel(pkey->partsupfunc[i].fn_oid), context))
+				{
+					return true;
+				}
+			}
+
+			/* Check parallel-safety of any expressions in the partition key */
+			if (get_partition_col_attnum(pkey, i) == 0)
+			{
+				Node	   *check_expr = (Node *) lfirst(partexprs_item);
+
+				if (max_parallel_hazard_walker(check_expr, context))
+				{
+					return true;
+				}
+
+				partexprs_item = lnext(partexprs, partexprs_item);
+			}
+		}
+
+		/* Recursively check each partition ... */
+		pdesc = RelationGetPartitionDesc(rel);
+		for (i = 0; i < pdesc->nparts; i++)
+		{
+			bool		max_hazard_found;
+			Relation	part_rel;
+
+			part_rel = table_open(pdesc->oids[i], AccessShareLock);
+			max_hazard_found = rel_max_parallel_hazard_for_modify(part_rel,
+														command_type,
+														context);
+			table_close(part_rel, AccessShareLock);
+			if (max_hazard_found)
+			{
+				return true;
+			}
+		}
+	}
+
+	/*
+	 * If there are any index expressions, check that they are parallel-mode
+	 * safe.
+	 */
+	if (index_expr_max_parallel_hazard_for_modify(rel, context))
+	{
+		return true;
+	}
+
+	/*
+	 * If any triggers exist, check that they are parallel safe.
+	 */
+	if (rel->trigdesc != NULL)
+	{
+		if (trigger_max_parallel_hazard_for_modify(rel->trigdesc, context))
+		{
+			return true;
+		}
+	}
+
+	/*
+	 * Column default expressions and check constraints are only applicable to
+	 * INSERT and UPDATE, but since only INSERT is currently supported, only
+	 * command_type==CMD_INSERT is checked here.
+	 */
+	if (command_type == CMD_INSERT)
+	{
+		/*
+		 * Column default expressions for columns in the target-list are
+		 * already being checked for parallel-safety in the
+		 * max_parallel_hazard() scan of the query tree in standard_planner().
+		 */
+
+		tupdesc = RelationGetDescr(rel);
+		for (attnum = 0; attnum < tupdesc->natts; attnum++)
+		{
+			Form_pg_attribute att = TupleDescAttr(tupdesc, attnum);
+
+			/* We don't need info for dropped or generated attributes */
+			if (att->attisdropped || att->attgenerated)
+				continue;
+
+			/*
+			 * If the column is of a DOMAIN type, determine whether that
+			 * domain has any CHECK expressions that are not parallel-mode
+			 * safe.
+			 */
+			if (get_typtype(att->atttypid) == TYPTYPE_DOMAIN)
+			{
+				if (domain_max_parallel_hazard_for_modify(att->atttypid, context))
+				{
+					return true;
+				}
+			}
+		}
+
+		/*
+		 * Check if there are any CHECK constraints which are not
+		 * parallel-safe.
+		 */
+		if (tupdesc->constr != NULL && tupdesc->constr->num_check > 0)
+		{
+			int			i;
+
+			ConstrCheck *check = tupdesc->constr->check;
+
+			for (i = 0; i < tupdesc->constr->num_check; i++)
+			{
+				Expr	   *check_expr = stringToNode(check->ccbin);
+
+				if (max_parallel_hazard_walker((Node *) check_expr, context))
+				{
+					return true;
+				}
+			}
+		}
+	}
+
+	return false;
+}
+
+/*
+ * max_parallel_hazard_for_modify
+ *
+ * Determines the worst parallel-mode hazard level for the specified
+ * table-modification statement, based on the statement attributes and
+ * target table. An initial max parallel hazard level may optionally be
+ * supplied. The search returns the earliest in the following list:
+ * PROPARALLEL_UNSAFE, PROPARALLEL_RESTRICTED, PROPARALLEL_SAFE
+ */
+char
+max_parallel_hazard_for_modify(Query *parse, char initial_max_parallel_hazard)
+{
+	RangeTblEntry *rte;
+	ListCell *lc;
+	bool hasSubQueryOnRelation;
+	max_parallel_hazard_context context;
+	Relation rel;
+
+
+	/*
+	 * UPDATE is not currently supported in parallel-mode, so prohibit
+	 * INSERT...ON CONFLICT...DO UPDATE...
+	 * In order to support update, even if only in the leader, some
+	 * further work would need to be done. A mechanism would be needed
+	 * for sharing combo-cids between leader and workers during
+	 * parallel-mode, since for example, the leader might generate a
+	 * combo-cid and it needs to be propagated to the workers.
+	 */
+	if (parse->onConflict != NULL && parse->onConflict->action == ONCONFLICT_UPDATE)
+		return PROPARALLEL_UNSAFE;
+
+	/*
+	 * If there is no underlying query on a relation, a parallel
+	 * table-modification operation is not possible (nor desirable).
+	 */
+	hasSubQueryOnRelation = false;
+	foreach(lc, parse->rtable)
+	{
+		rte = lfirst_node(RangeTblEntry, lc);
+		if (rte->rtekind == RTE_SUBQUERY)
+		{
+			RangeTblEntry	*rteSub;
+			ListCell		*lcSub;
+
+			foreach(lcSub, rte->subquery->rtable)
+			{
+				rteSub = lfirst_node(RangeTblEntry, lcSub);
+				if (rteSub->rtekind == RTE_RELATION)
+				{
+					hasSubQueryOnRelation = true;
+					break;
+				}
+			}
+			if (hasSubQueryOnRelation)
+				break;
+		}
+	}
+	if (!hasSubQueryOnRelation)
+		return PROPARALLEL_UNSAFE;
+
+	/*
+	 * Setup the context used in finding the max parallel-mode hazard.
+	 */
+	Assert(initial_max_parallel_hazard == 0 ||
+		   initial_max_parallel_hazard == PROPARALLEL_SAFE ||
+		   initial_max_parallel_hazard == PROPARALLEL_RESTRICTED);
+	context.max_hazard = initial_max_parallel_hazard == 0 ?
+		PROPARALLEL_SAFE : initial_max_parallel_hazard;
+	context.max_interesting = PROPARALLEL_UNSAFE;
+	context.safe_param_ids = NIL;
+
+	rte = rt_fetch(parse->resultRelation, parse->rtable);
+
+	/*
+	 * The target table is already locked by the caller (this is done in the
+	 * parse/analyze phase).
+	 */
+	rel = table_open(rte->relid, NoLock);
+	(void) rel_max_parallel_hazard_for_modify(rel, parse->commandType, &context);
+	table_close(rel, NoLock);
+	return context.max_hazard;
+}
 
 /*****************************************************************************
  *		Check clauses for nonstrict functions

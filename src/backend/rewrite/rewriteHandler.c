@@ -4143,6 +4143,63 @@ RewriteQuery(Query *parsetree, List *rewrite_events)
 
 
 /*
+ * Determine if the specified query has a modifying-CTE.
+ */
+static bool
+queryHasModifyingCTE(Query *parsetree)
+{
+	bool hasModifyingCTE = false;
+
+	if (parsetree->querySource == QSRC_ORIGINAL)
+	{
+		/* Assume original queries have hasModifyingCTE set correctly */
+		if (parsetree->hasModifyingCTE)
+			hasModifyingCTE = true;
+	}
+
+	if (!hasModifyingCTE)
+	{
+		int		rt_index;
+
+		/* Recursively check subqueries */
+		rt_index = 0;
+		while (rt_index < list_length(parsetree->rtable))
+		{
+			RangeTblEntry *rte;
+			++rt_index;
+			rte = rt_fetch(rt_index, parsetree->rtable);
+			if (rte->rtekind == RTE_SUBQUERY)
+			{
+				hasModifyingCTE = queryHasModifyingCTE(rte->subquery);
+				if (hasModifyingCTE)
+					break;
+			}
+		}
+
+		if (!hasModifyingCTE)
+		{
+			ListCell	*lc;
+
+			/* Check for INSERT/UPDATE/DELETE CTEs */
+			foreach(lc, parsetree->cteList)
+			{
+				CommonTableExpr *cte = (CommonTableExpr *) lfirst(lc);
+				Query	 *ctequery = castNode(Query, cte->ctequery);
+
+				if (ctequery->commandType != CMD_SELECT)
+				{
+					hasModifyingCTE = true;
+					break;
+				}
+			}
+		}
+	}
+
+	return hasModifyingCTE;
+}
+
+
+/*
  * QueryRewrite -
  *	  Primary entry point to the query rewriter.
  *	  Rewrite one query via query rewrite system, possibly returning 0
@@ -4207,8 +4264,9 @@ QueryRewrite(Query *parsetree)
 	 * default tag based on the original un-rewritten query.)
 	 *
 	 * The Asserts verify that at most one query in the result list is marked
-	 * canSetTag.  If we aren't checking asserts, we can fall out of the loop
-	 * as soon as we find the original query.
+	 * canSetTag. While we're processing each query, if it's not the original
+	 * query, determine if the query contains a modifying CTE and set
+	 * hasModifyingCTE accordingly.
 	 */
 	origCmdType = parsetree->commandType;
 	foundOriginalQuery = false;
@@ -4223,17 +4281,17 @@ QueryRewrite(Query *parsetree)
 			Assert(query->canSetTag);
 			Assert(!foundOriginalQuery);
 			foundOriginalQuery = true;
-#ifndef USE_ASSERT_CHECKING
-			break;
-#endif
 		}
 		else
 		{
 			Assert(!query->canSetTag);
-			if (query->commandType == origCmdType &&
+			if (!foundOriginalQuery &&
+				query->commandType == origCmdType &&
 				(query->querySource == QSRC_INSTEAD_RULE ||
 				 query->querySource == QSRC_QUAL_INSTEAD_RULE))
 				lastInstead = query;
+
+			query->hasModifyingCTE = queryHasModifyingCTE(query);
 		}
 	}
 

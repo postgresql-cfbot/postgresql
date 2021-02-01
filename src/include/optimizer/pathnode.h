@@ -264,7 +264,8 @@ extern ModifyTablePath *create_modifytable_path(PlannerInfo *root,
 												List *subroots,
 												List *withCheckOptionLists, List *returningLists,
 												List *rowMarks, OnConflictExpr *onconflict,
-												int epqParam);
+												int epqParam,
+												int parallel_workers);
 extern LimitPath *create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 									Path *subpath,
 									Node *limitOffset, Node *limitCount,

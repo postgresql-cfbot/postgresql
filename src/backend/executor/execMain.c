@@ -790,7 +790,8 @@ ExecCheckXactReadOnly(PlannedStmt *plannedstmt)
 		PreventCommandIfReadOnly(CreateCommandName((Node *) plannedstmt));
 	}
 
-	if (plannedstmt->commandType != CMD_SELECT || plannedstmt->hasModifyingCTE)
+	if ((plannedstmt->commandType != CMD_SELECT &&
+		 !IsModifySupportedInParallelMode(plannedstmt->commandType)) || plannedstmt->hasModifyingCTE)
 		PreventCommandIfParallelMode(CreateCommandName((Node *) plannedstmt));
 }
 
@@ -1526,7 +1527,13 @@ ExecutePlan(EState *estate,
 
 	estate->es_use_parallel_mode = use_parallel_mode;
 	if (use_parallel_mode)
+	{
+		bool		isParallelModifyLeader = IsA(planstate, GatherState) &&
+												IsA(outerPlanState(planstate), ModifyTableState);
+
+		PrepareParallelModePlanExec(estate->es_plannedstmt->commandType, isParallelModifyLeader);
 		EnterParallelMode();
+	}
 
 	/*
 	 * Loop until we've processed the proper number of tuples from the plan.

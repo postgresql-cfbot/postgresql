@@ -141,12 +141,16 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
   <itemizedlist>
     <listitem>
       <para>
-        The query writes any data or locks any database rows. If a query
-        contains a data-modifying operation either at the top level or within
-        a CTE, no parallel plans for that query will be generated.  As an
-        exception, the commands <literal>CREATE TABLE ... AS</literal>, <literal>SELECT
-        INTO</literal>, and <literal>CREATE MATERIALIZED VIEW</literal> which create a new
-        table and populate it can use a parallel plan.
+        The query locks any database rows, or writes data within a CTE or using
+        a parallel-unsupported data-modifying operation. Currently, the only
+        parallel-supported data-modifying operations are
+        <literal>INSERT INTO ... SELECT ...</literal>, and the table creation
+        and population commands <literal>CREATE TABLE ... AS</literal>,
+        <literal>SELECT INTO</literal>, and
+        <literal>CREATE MATERIALIZED VIEW</literal>. If a query contains a
+        parallel-unsupported data-modifying operation at the top level, or any
+        data-modifying operation within a CTE, no parallel plans for that query
+        will be generated.
       </para>
     </listitem>
 
@@ -421,6 +425,71 @@ EXPLAIN SELECT * FROM pgbench_accounts WHERE filler LIKE '%x%';
   <para>
     <xref linkend="guc-enable-parallel-append" /> can be used to disable
     this feature.
+  </para>
+ </sect2>
+
+ <sect2 id="parallel-insert">
+  <title>Parallel Insert</title>
+
+  <para>
+    When an <literal>INSERT</literal> statement uses an underlying
+    <literal>SELECT</literal> query to supply the rows to be inserted, a
+    parallel query plan may be generated for which the work of both data
+    retrieval and data insertion is divided amongst the workers. In this
+    case, each worker handles insertion of its portion of the rows retrieved
+    by the underlying <literal>SELECT</literal> query.
+  </para>
+
+  <para>
+    Parallel <literal>INSERT</literal> is not supported in all situations. The
+    operations invoked by the <literal>INSERT</literal> statement must be
+    parallel-safe, including those that are invoked as a result of certain
+    features of the target table.
+  </para>
+
+  <para>
+    For example, any of the following will prevent the use of parallel
+    <literal>INSERT</literal> in the query plan:
+  </para>
+
+  <itemizedlist>
+    <listitem>
+      <para>
+        A parallel query plan can't be generated for the underlying
+        <literal>SELECT</literal>, because, for example, the
+        <literal>SELECT</literal> statement uses a parallel-unsafe function.
+      </para>
+    </listitem>
+    <listitem>
+      <para>
+        The INSERT statement uses an ON CONFLICT DO UPDATE clause.
+      </para>
+    </listitem>
+    <listitem>
+      <para>
+        The target table is a foreign or temporary table.
+      </para>
+    </listitem>
+    <listitem>
+      <para>
+        The target table has a foreign key, or has a parallel-unsafe trigger,
+        index expression, column default expression or check constraint.
+      </para>
+    </listitem>
+    <listitem>
+      <para>
+        The target table is a partitioned table with a parallel-unsafe partition
+        key expression or support function.
+      </para>
+    </listitem>
+  </itemizedlist>
+
+  <para>
+    Where the above target table features are determined to be, at worst,
+    parallel-restricted, rather than parallel-unsafe, at least a parallel table
+    scan may be used in the query plan for the <literal>INSERT</literal>
+    statement. For more information about Parallel Safety, see
+    <xref linkend="parallel-safety"/>.
   </para>
  </sect2>
 

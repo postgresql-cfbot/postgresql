@@ -3528,6 +3528,7 @@ create_lockrows_path(PlannerInfo *root, RelOptInfo *rel,
  * 'rowMarks' is a list of PlanRowMarks (non-locking only)
  * 'onconflict' is the ON CONFLICT clause, or NULL
  * 'epqParam' is the ID of Param for EvalPlanQual re-eval
+ * 'parallelWorkers' is the no. of parallel workers to use
  */
 ModifyTablePath *
 create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
@@ -3538,10 +3539,10 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 						List *subroots,
 						List *withCheckOptionLists, List *returningLists,
 						List *rowMarks, OnConflictExpr *onconflict,
-						int epqParam)
+						int epqParam,
+						int parallelWorkers)
 {
 	ModifyTablePath *pathnode = makeNode(ModifyTablePath);
-	double		total_size;
 	ListCell   *lc;
 
 	Assert(list_length(resultRelations) == list_length(subpaths));
@@ -3558,47 +3559,22 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	/* For now, assume we are above any joins, so no parameterization */
 	pathnode->path.param_info = NULL;
 	pathnode->path.parallel_aware = false;
-	pathnode->path.parallel_safe = false;
-	pathnode->path.parallel_workers = 0;
-	pathnode->path.pathkeys = NIL;
-
-	/*
-	 * Compute cost & rowcount as sum of subpath costs & rowcounts.
-	 *
-	 * Currently, we don't charge anything extra for the actual table
-	 * modification work, nor for the WITH CHECK OPTIONS or RETURNING
-	 * expressions if any.  It would only be window dressing, since
-	 * ModifyTable is always a top-level node and there is no way for the
-	 * costs to change any higher-level planning choices.  But we might want
-	 * to make it look better sometime.
-	 */
-	pathnode->path.startup_cost = 0;
-	pathnode->path.total_cost = 0;
-	pathnode->path.rows = 0;
-	total_size = 0;
-	foreach(lc, subpaths)
+	pathnode->path.parallel_safe = rel->consider_parallel && parallelWorkers > 0;
+	if (pathnode->path.parallel_safe)
 	{
-		Path	   *subpath = (Path *) lfirst(lc);
-
-		if (lc == list_head(subpaths))	/* first node? */
-			pathnode->path.startup_cost = subpath->startup_cost;
-		pathnode->path.total_cost += subpath->total_cost;
-		if (returningLists != NIL)
+		foreach(lc, subpaths)
 		{
-			pathnode->path.rows += subpath->rows;
-			total_size += subpath->pathtarget->width * subpath->rows;
+			Path	   *sp = (Path *) lfirst(lc);
+
+			if (!sp->parallel_safe)
+			{
+				pathnode->path.parallel_safe = false;
+				break;
+			}
 		}
 	}
-
-	/*
-	 * Set width to the average width of the subpath outputs.  XXX this is
-	 * totally wrong: we should return an average of the RETURNING tlist
-	 * widths.  But it's what happened historically, and improving it is a task
-	 * for another day.
-	 */
-	if (pathnode->path.rows > 0)
-		total_size /= pathnode->path.rows;
-	pathnode->path.pathtarget->width = rint(total_size);
+	pathnode->path.parallel_workers = parallelWorkers;
+	pathnode->path.pathkeys = NIL;
 
 	pathnode->operation = operation;
 	pathnode->canSetTag = canSetTag;
@@ -3613,6 +3589,8 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->rowMarks = rowMarks;
 	pathnode->onconflict = onconflict;
 	pathnode->epqParam = epqParam;
+
+	cost_modifytable(pathnode);
 
 	return pathnode;
 }

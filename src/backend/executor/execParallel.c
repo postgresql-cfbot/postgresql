@@ -23,6 +23,7 @@
 
 #include "postgres.h"
 
+#include "access/xact.h"
 #include "executor/execParallel.h"
 #include "executor/executor.h"
 #include "executor/nodeAgg.h"
@@ -65,6 +66,7 @@
 #define PARALLEL_KEY_QUERY_TEXT		UINT64CONST(0xE000000000000008)
 #define PARALLEL_KEY_JIT_INSTRUMENTATION UINT64CONST(0xE000000000000009)
 #define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xE00000000000000A)
+#define PARALLEL_KEY_PROCESSED_COUNT	UINT64CONST(0xE00000000000000B)
 
 #define PARALLEL_TUPLE_QUEUE_SIZE		65536
 
@@ -173,9 +175,11 @@ ExecSerializePlan(Plan *plan, EState *estate)
 	 * PlannedStmt to start the executor.
 	 */
 	pstmt = makeNode(PlannedStmt);
-	pstmt->commandType = CMD_SELECT;
+	Assert(estate->es_plannedstmt->commandType == CMD_SELECT ||
+		   IsModifySupportedInParallelMode(estate->es_plannedstmt->commandType));
+	pstmt->commandType = IsA(plan, ModifyTable) ? castNode(ModifyTable, plan)->operation : CMD_SELECT;
 	pstmt->queryId = UINT64CONST(0);
-	pstmt->hasReturning = false;
+	pstmt->hasReturning = estate->es_plannedstmt->hasReturning;
 	pstmt->hasModifyingCTE = false;
 	pstmt->canSetTag = true;
 	pstmt->transientPlan = false;
@@ -183,7 +187,7 @@ ExecSerializePlan(Plan *plan, EState *estate)
 	pstmt->parallelModeNeeded = false;
 	pstmt->planTree = plan;
 	pstmt->rtable = estate->es_range_table;
-	pstmt->resultRelations = NIL;
+	pstmt->resultRelations = estate->es_plannedstmt->resultRelations;
 	pstmt->appendRelations = NIL;
 
 	/*
@@ -675,6 +679,14 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 						   mul_size(PARALLEL_TUPLE_QUEUE_SIZE, pcxt->nworkers));
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
+	if (IsA(planstate->plan, ModifyTable))
+	{
+		/* Estimate space for returned "# of tuples processed" count. */
+		shm_toc_estimate_chunk(&pcxt->estimator,
+							   mul_size(sizeof(uint64), pcxt->nworkers));
+		shm_toc_estimate_keys(&pcxt->estimator, 1);
+	}
+
 	/*
 	 * Give parallel-aware nodes a chance to add to the estimates, and get a
 	 * count of how many PlanState nodes there are.
@@ -763,6 +775,19 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 
 	/* We don't need the TupleQueueReaders yet, though. */
 	pei->reader = NULL;
+
+	if (IsA(planstate->plan, ModifyTable))
+	{
+		/*
+		 * Allocate space for each worker's returned "# of tuples processed"
+		 * count.
+		 */
+		pei->processed_count = shm_toc_allocate(pcxt->toc,
+												 mul_size(sizeof(uint64), pcxt->nworkers));
+		shm_toc_insert(pcxt->toc, PARALLEL_KEY_PROCESSED_COUNT, pei->processed_count);
+	}
+	else
+		pei->processed_count = NULL;
 
 	/*
 	 * If instrumentation options were supplied, allocate space for the data.
@@ -1152,6 +1177,15 @@ ExecParallelFinish(ParallelExecutorInfo *pei)
 	for (i = 0; i < nworkers; i++)
 		InstrAccumParallelQuery(&pei->buffer_usage[i], &pei->wal_usage[i]);
 
+	/*
+	 * Update total # of tuples processed, using counts from each worker.
+	 */
+	if (pei->processed_count != NULL)
+	{
+		for (i = 0; i < nworkers; i++)
+			pei->planstate->state->es_processed += pei->processed_count[i];
+	}
+
 	pei->finished = true;
 }
 
@@ -1379,6 +1413,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	FixedParallelExecutorState *fpes;
 	BufferUsage *buffer_usage;
 	WalUsage   *wal_usage;
+	uint64	   *processed_count;
 	DestReceiver *receiver;
 	QueryDesc  *queryDesc;
 	SharedExecutorInstrumentation *instrumentation;
@@ -1399,6 +1434,16 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	jit_instrumentation = shm_toc_lookup(toc, PARALLEL_KEY_JIT_INSTRUMENTATION,
 										 true);
 	queryDesc = ExecParallelGetQueryDesc(toc, receiver, instrument_options);
+
+	Assert(queryDesc->operation == CMD_SELECT || IsModifySupportedInParallelMode(queryDesc->operation));
+	if (IsModifySupportedInParallelMode(queryDesc->operation))
+	{
+		/*
+		 * Record that the CurrentCommandId is used, at the start of the
+		 * parallel operation.
+		 */
+		SetCurrentCommandIdUsedForWorker();
+	}
 
 	/* Setting debug_query_string for individual workers */
 	debug_query_string = queryDesc->sourceText;
@@ -1457,6 +1502,16 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	wal_usage = shm_toc_lookup(toc, PARALLEL_KEY_WAL_USAGE, false);
 	InstrEndParallelQuery(&buffer_usage[ParallelWorkerNumber],
 						  &wal_usage[ParallelWorkerNumber]);
+
+	if (IsModifySupportedInParallelMode(queryDesc->operation))
+	{
+		/*
+		 * Report the # of tuples processed during execution of a parallel
+		 * table-modification command.
+		 */
+		processed_count = shm_toc_lookup(toc, PARALLEL_KEY_PROCESSED_COUNT, false);
+		processed_count[ParallelWorkerNumber] = queryDesc->estate->es_processed;
+	}
 
 	/* Report instrumentation data if any instrumentation options are set. */
 	if (instrumentation != NULL)

@@ -35,6 +35,7 @@
 #include "executor/execdebug.h"
 #include "executor/execParallel.h"
 #include "executor/nodeGather.h"
+#include "executor/nodeModifyTable.h"
 #include "executor/nodeSubplan.h"
 #include "executor/tqueue.h"
 #include "miscadmin.h"
@@ -60,6 +61,7 @@ ExecInitGather(Gather *node, EState *estate, int eflags)
 	GatherState *gatherstate;
 	Plan	   *outerNode;
 	TupleDesc	tupDesc;
+	Index		varno;
 
 	/* Gather node doesn't have innerPlan node. */
 	Assert(innerPlan(node) == NULL);
@@ -104,7 +106,9 @@ ExecInitGather(Gather *node, EState *estate, int eflags)
 	 * Initialize result type and projection.
 	 */
 	ExecInitResultTypeTL(&gatherstate->ps);
-	ExecConditionalAssignProjectionInfo(&gatherstate->ps, tupDesc, OUTER_VAR);
+	varno = (IsA(outerNode, ModifyTable) && castNode(ModifyTable, outerNode)->returningLists != NULL) ?
+		castNode(ModifyTableState, outerPlanState(gatherstate))->resultRelInfo->ri_RangeTableIndex : OUTER_VAR;
+	ExecConditionalAssignProjectionInfo(&gatherstate->ps, tupDesc, varno);
 
 	/*
 	 * Without projections result slot type is not trivially known, see
@@ -144,8 +148,18 @@ ExecGather(PlanState *pstate)
 	GatherState *node = castNode(GatherState, pstate);
 	TupleTableSlot *slot;
 	ExprContext *econtext;
+	ModifyTableState *nodeModifyTableState = NULL;
+	bool		isModify = false;
+	bool		isModifyWithReturning = false;
 
 	CHECK_FOR_INTERRUPTS();
+
+	if (IsA(outerPlanState(pstate), ModifyTableState))
+	{
+		nodeModifyTableState = castNode(ModifyTableState, outerPlanState(pstate));
+		isModify = IsModifySupportedInParallelMode(nodeModifyTableState->operation);
+		isModifyWithReturning = isModify && nodeModifyTableState->ps.plan->targetlist != NIL;
+	}
 
 	/*
 	 * Initialize the parallel context and workers on first execution. We do
@@ -178,6 +192,16 @@ ExecGather(PlanState *pstate)
 										 node->pei,
 										 gather->initParam);
 
+			if (isModify)
+			{
+				/*
+				 * For a supported parallel table-modification command, if
+				 * there are BEFORE STATEMENT triggers, these must be fired by
+				 * the leader, not by the parallel workers.
+				 */
+				fireBSTriggersInLeader(nodeModifyTableState);
+			}
+
 			/*
 			 * Register backend workers. We might not get as many as we
 			 * requested, or indeed any at all.
@@ -188,7 +212,7 @@ ExecGather(PlanState *pstate)
 			node->nworkers_launched = pcxt->nworkers_launched;
 
 			/* Set up tuple queue readers to read the results. */
-			if (pcxt->nworkers_launched > 0)
+			if (pcxt->nworkers_launched > 0 && (!isModify || isModifyWithReturning))
 			{
 				ExecParallelCreateReaders(node->pei);
 				/* Make a working array showing the active readers */
@@ -200,7 +224,11 @@ ExecGather(PlanState *pstate)
 			}
 			else
 			{
-				/* No workers?	Then never mind. */
+				/*
+				 * No workers were launched, or this is a supported parallel
+				 * table-modification command without a RETURNING clause - no
+				 * readers are required.
+				 */
 				node->nreaders = 0;
 				node->reader = NULL;
 			}
@@ -208,7 +236,7 @@ ExecGather(PlanState *pstate)
 		}
 
 		/* Run plan locally if no workers or enabled and not single-copy. */
-		node->need_to_scan_locally = (node->nreaders == 0)
+		node->need_to_scan_locally = (node->nworkers_launched <= 0)
 			|| (!gather->single_copy && parallel_leader_participation);
 		node->initialized = true;
 	}
@@ -229,7 +257,7 @@ ExecGather(PlanState *pstate)
 		return NULL;
 
 	/* If no projection is required, we're done. */
-	if (node->ps.ps_ProjInfo == NULL)
+	if (node->ps.ps_ProjInfo == NULL || isModifyWithReturning)
 		return slot;
 
 	/*
@@ -418,14 +446,35 @@ ExecShutdownGatherWorkers(GatherState *node)
 void
 ExecShutdownGather(GatherState *node)
 {
+	bool		isModify;
+
+	/*
+	 * If the parallel context has already been destroyed, this function must
+	 * have been previously called, so just return.
+	 */
+	if (node->pei == NULL)
+		return;
+
+	isModify = IsA(outerPlanState(node), ModifyTableState) &&
+	IsModifySupportedInParallelMode(castNode(ModifyTableState, outerPlanState(node))->operation);
+
+	if (isModify)
+	{
+		/*
+		 * For a supported parallel table-modification command, if there are
+		 * AFTER STATEMENT triggers, these must be fired by the leader, not by
+		 * the parallel workers.
+		 */
+		ModifyTableState *nodeModifyTableState = castNode(ModifyTableState, outerPlanState(node));
+
+		fireASTriggersInLeader(nodeModifyTableState);
+	}
+
 	ExecShutdownGatherWorkers(node);
 
 	/* Now destroy the parallel context. */
-	if (node->pei != NULL)
-	{
-		ExecParallelCleanup(node->pei);
-		node->pei = NULL;
-	}
+	ExecParallelCleanup(node->pei);
+	node->pei = NULL;
 }
 
 /* ----------------------------------------------------------------

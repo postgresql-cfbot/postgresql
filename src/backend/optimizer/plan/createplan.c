@@ -339,7 +339,7 @@ create_plan(PlannerInfo *root, Path *best_path)
 	 * top-level tlist seen at execution time.  However, ModifyTable plan
 	 * nodes don't have a tlist matching the querytree targetlist.
 	 */
-	if (!IsA(plan, ModifyTable))
+	if (!IsA(plan, ModifyTable) && !(IsA(plan, Gather) && IsA(outerPlan(plan), ModifyTable)))
 		apply_tlist_labeling(plan->targetlist, root->processed_tlist);
 
 	/*

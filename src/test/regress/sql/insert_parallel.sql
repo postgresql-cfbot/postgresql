@@ -1,0 +1,571 @@
+--
+-- PARALLEL
+--
+
+--
+-- START: setup some tables and data needed by the tests.
+--
+
+-- Setup - index expressions test
+
+-- For testing purposes, we'll mark this function as parallel-unsafe
+create or replace function fullname_parallel_unsafe(f text, l text) returns text as $$
+    begin
+        return f || l;
+    end;
+$$ language plpgsql immutable parallel unsafe;
+
+create or replace function fullname_parallel_safe(f text, l text) returns text as $$
+    begin
+        return f || l;
+    end;
+$$ language plpgsql immutable parallel safe;
+
+create or replace function fullname_parallel_restricted(f text, l text) returns text as $$
+    begin
+        return f || l;
+    end;
+$$ language plpgsql immutable parallel restricted;
+
+create table names(index int, first_name text, last_name text);
+create table names2(index int, first_name text, last_name text);
+create index names2_fullname_idx on names2 (fullname_parallel_unsafe(first_name, last_name));
+create table names3(index int, first_name text, last_name text);
+create index names3_fullname_idx on names3 (fullname_parallel_safe(first_name, last_name));
+create table names4(index int, first_name text, last_name text);
+create index names4_fullname_idx on names4 (fullname_parallel_restricted(first_name, last_name));
+
+insert into names values
+	(1, 'albert', 'einstein'),
+	(2, 'niels', 'bohr'),
+	(3, 'erwin', 'schrodinger'),
+	(4, 'leonhard', 'euler'),
+	(5, 'stephen', 'hawking'),
+	(6, 'isaac', 'newton'),
+	(7, 'alan', 'turing'),
+	(8, 'richard', 'feynman');
+
+-- Setup - column default tests
+
+create or replace function bdefault_unsafe ()
+returns int language plpgsql parallel unsafe as $$
+begin
+	RETURN 5;
+end $$;
+
+create or replace function cdefault_restricted ()
+returns int language plpgsql parallel restricted as $$
+begin
+	RETURN 10;
+end $$;
+
+create or replace function ddefault_safe ()
+returns int language plpgsql parallel safe as $$
+begin
+	RETURN 20;
+end $$;
+
+create table testdef(a int, b int default bdefault_unsafe(), c int default cdefault_restricted(), d int default ddefault_safe());
+
+create table test_data(a int);
+insert into test_data select * from generate_series(1,10);
+
+--
+-- END: setup some tables and data needed by the tests.
+--
+
+-- Serializable isolation would disable parallel query, so explicitly use an
+-- arbitrary other level.
+begin isolation level repeatable read;
+
+-- encourage use of parallel plans
+set parallel_setup_cost=0;
+set parallel_tuple_cost=0;
+set min_parallel_table_scan_size=0;
+set max_parallel_workers_per_gather=4;
+
+create table para_insert_p1 (
+	unique1		int4	PRIMARY KEY,
+	stringu1	name
+);
+
+create table para_insert_f1 (
+	unique1		int4	REFERENCES para_insert_p1(unique1),
+	stringu1	name
+);
+
+
+--
+-- Test INSERT with underlying query.
+-- (should create plan with parallel INSERT+SELECT, Gather parent node)
+--
+explain(costs off) insert into para_insert_p1 select unique1, stringu1 from tenk1;
+insert into para_insert_p1 select unique1, stringu1 from tenk1;
+-- select some values to verify that the parallel insert worked
+select count(*), sum(unique1) from para_insert_p1;
+select * from para_insert_p1 where unique1 >= 9990 order by unique1;
+-- verify that the same transaction has been used by all parallel workers
+select count(*) from (select distinct cmin,xmin from para_insert_p1) as dt;
+
+--
+-- Test INSERT with ordered underlying query.
+-- (should create plan with INSERT + parallel SELECT, GatherMerge parent node)
+--
+truncate para_insert_p1 cascade;
+explain(costs off) insert into para_insert_p1 select unique1, stringu1 from tenk1 order by unique1;
+insert into para_insert_p1 select unique1, stringu1 from tenk1 order by unique1;
+-- select some values to verify that the parallel insert worked
+select count(*), sum(unique1) from para_insert_p1;
+select * from para_insert_p1 where unique1 >= 9990 order by unique1;
+-- verify that the same transaction has been used by all parallel workers
+select count(*) from (select distinct cmin,xmin from para_insert_p1) as dt;
+
+--
+-- Test INSERT into a table with a foreign key.
+-- (Insert into a table with a foreign key is parallel-restricted,
+--  as doing this in a parallel worker would create a new commandId
+--  and within a worker this is not currently supported)
+--
+explain(costs off) insert into para_insert_f1 select unique1, stringu1 from tenk1;
+insert into para_insert_f1 select unique1, stringu1 from tenk1;
+-- select some values to verify that the insert worked
+select count(*), sum(unique1) from para_insert_f1;
+select * from para_insert_f1 where unique1 >= 9990 order by unique1;
+
+--
+-- Test INSERT with underlying query, leader participation disabled
+--
+set parallel_leader_participation = off;
+truncate para_insert_p1 cascade;
+explain(costs off) insert into para_insert_p1 select unique1, stringu1 from tenk1 where unique1 <= 2500;
+insert into para_insert_p1 select unique1, stringu1 from tenk1 where unique1 <= 2500;
+select count(*), sum(unique1) from para_insert_p1;
+select * from para_insert_p1 where unique1 >= 2490 order by unique1;
+
+--
+-- Test INSERT with underlying query, leader participation disabled
+--  and no workers available
+set max_parallel_workers=0;
+truncate para_insert_p1 cascade;
+explain(costs off) insert into para_insert_p1 select unique1, stringu1 from tenk1 where unique1 <= 2500;
+insert into para_insert_p1 select unique1, stringu1 from tenk1 where unique1 <= 2500;
+select count(*), sum(unique1) from para_insert_p1;
+select * from para_insert_p1 where unique1 >= 2490 order by unique1;
+
+reset parallel_leader_participation;
+reset max_parallel_workers;
+
+--
+-- Test INSERT with ON CONFLICT ... DO UPDATE ...
+-- (should not create a parallel plan)
+--
+create table test_data2(like test_data);
+insert into test_data2 select i from generate_series(1,10000) i;
+create table test_conflict_table(id serial primary key, somedata int);
+explain (costs off) insert into test_conflict_table(id, somedata) select a, a from test_data;
+insert into test_conflict_table(id, somedata) select a, a from test_data;
+explain (costs off) insert into test_conflict_table(id, somedata) select a, a from test_data ON CONFLICT(id) DO UPDATE SET somedata = EXCLUDED.somedata + 1;
+insert into test_conflict_table(id, somedata) select a, a from test_data ON CONFLICT(id) DO UPDATE SET somedata = EXCLUDED.somedata + 1;
+
+--
+-- Test INSERT with parallelized aggregate
+--
+create table tenk1_avg_data(count int, avg_unique1 int, avg_stringu1_len int);
+explain (costs off) insert into tenk1_avg_data select count(*), avg(unique1), avg(length(stringu1)) from tenk1;
+insert into tenk1_avg_data select count(*), avg(unique1), avg(length(stringu1)) from tenk1;
+select * from tenk1_avg_data;
+
+--
+-- Test INSERT with parallel bitmap heap scan
+--
+set enable_seqscan to off;
+set enable_indexscan to off;
+truncate para_insert_p1 cascade;
+explain(costs off) insert into para_insert_p1 select unique1, stringu1 from tenk1 where unique1 >= 7500;
+insert into para_insert_p1 select unique1, stringu1 from tenk1 where unique1 >= 7500;
+-- select some values to verify that the insert worked
+select * from para_insert_p1 where unique1 >= 9990 order by unique1;
+reset enable_seqscan;
+reset enable_indexscan;
+
+--
+-- Test INSERT with parallel append
+--
+create table a_star_data(aa int);
+explain (costs off) insert into a_star_data select aa from a_star where aa > 10;
+insert into a_star_data select aa from a_star where aa > 10;
+select count(aa), sum(aa) from a_star_data;
+
+--
+-- Test INSERT with parallel index scan
+--
+set enable_seqscan to off;
+set enable_bitmapscan to off;
+set min_parallel_index_scan_size=0;
+
+truncate para_insert_p1 cascade;
+explain(costs off) insert into para_insert_p1 select unique1, stringu1 from tenk1 where unique1 >= 500;
+insert into para_insert_p1 select unique1, stringu1 from tenk1 where unique1 >= 500;
+-- select some values to verify that the parallel insert worked
+select count(*), sum(unique1) from para_insert_p1;
+select * from para_insert_p1 where unique1 >= 9990 order by unique1;
+
+--
+-- Test INSERT with parallel index-only scan
+--
+truncate para_insert_p1 cascade;
+explain(costs off) insert into para_insert_p1 select unique1 from tenk1 where unique1 >= 500;
+insert into para_insert_p1 select unique1 from tenk1 where unique1 >= 500;
+-- select some values to verify that the parallel insert worked
+select count(*), sum(unique1) from para_insert_p1;
+select unique1 from para_insert_p1 where unique1 >= 9990 order by unique1;
+
+reset min_parallel_index_scan_size;
+reset enable_seqscan;
+reset enable_bitmapscan;
+
+--
+-- Test INSERT with parallel-safe index expression
+-- (should create a parallel plan)
+--
+explain (costs off) insert into names3 select * from names;
+insert into names3 select * from names;
+select * from names3 order by fullname_parallel_safe(first_name, last_name);
+
+--
+-- Test INSERT with parallel-unsafe index expression
+-- (should not create a parallel plan)
+--
+explain (costs off) insert into names2 select * from names;
+insert into names2 select * from names;
+select * from names2 order by fullname_parallel_unsafe(first_name, last_name);
+
+--
+-- Test INSERT with parallel-restricted index expression
+-- (should create a parallel plan)
+--
+explain (costs off) insert into names4 select * from names;
+insert into names4 select * from names;
+select * from names4 order by fullname_parallel_restricted(first_name, last_name);
+
+--
+-- Test INSERT with underlying query - and RETURNING (no projection)
+-- (should create a parallel plan; parallel INSERT+SELECT)
+--
+create table names5 (like names);
+explain (costs off) insert into names5 select * from names returning *;
+
+--
+-- Test INSERT with underlying ordered query - and RETURNING (no projection)
+-- (should create a parallel plan; INSERT + parallel SELECT)
+--
+create table names6 (like names);
+explain (costs off) insert into names6 select * from names order by last_name returning *;
+insert into names6 select * from names order by last_name returning *;
+
+--
+-- Test INSERT with underlying ordered query - and RETURNING (with projection)
+-- (should create a parallel plan; INSERT + parallel SELECT)
+--
+create table names7 (like names);
+explain (costs off) insert into names7 select * from names order by last_name returning last_name || ', ' || first_name as last_name_then_first_name;
+insert into names7 select * from names order by last_name returning last_name || ', ' || first_name as last_name_then_first_name;
+
+--
+-- Test INSERT into temporary table with underlying query.
+-- (should not use a parallel plan)
+--
+create temporary table temp_names (like names);
+explain (costs off) insert into temp_names select * from names;
+insert into temp_names select * from names;
+
+--
+-- Test INSERT with column defaults
+--
+--
+-- a: no default
+-- b: unsafe default
+-- c: restricted default
+-- d: safe default
+--
+
+--
+-- No column defaults, should use parallel INSERT+SELECT
+--
+explain (costs off) insert into testdef(a,b,c,d) select a,a*2,a*4,a*8 from test_data;
+insert into testdef(a,b,c,d) select a,a*2,a*4,a*8 from test_data;
+select * from testdef order by a;
+truncate testdef;
+
+--
+-- Parallel unsafe column default, should not use a parallel plan
+--
+explain (costs off) insert into testdef(a,c,d) select a,a*4,a*8 from test_data;
+insert into testdef(a,c,d) select a,a*4,a*8 from test_data;
+select * from testdef order by a;
+truncate testdef;
+
+--
+-- Parallel restricted column default, should use INSERT + parallel SELECT
+--
+explain (costs off) insert into testdef(a,b,d) select a,a*2,a*8 from test_data;
+insert into testdef(a,b,d) select a,a*2,a*8 from test_data;
+select * from testdef order by a;
+truncate testdef;
+
+--
+-- Parallel safe column default, should use parallel INSERT+SELECT
+--
+explain (costs off) insert into testdef(a,b,c) select a,a*2,a*4 from test_data;
+insert into testdef(a,b,c) select a,a*2,a*4 from test_data;
+select * from testdef order by a;
+truncate testdef;
+
+--
+-- Parallel restricted and unsafe column defaults, should not use a parallel plan
+--
+explain (costs off) insert into testdef(a,d) select a,a*8 from test_data;
+insert into testdef(a,d) select a,a*8 from test_data;
+select * from testdef order by a;
+truncate testdef;
+
+--
+-- Test INSERT into partition with underlying query.
+--
+create table parttable1 (a int, b name) partition by range (a);
+create table parttable1_1 partition of parttable1 for values from (0) to (5000);
+create table parttable1_2 partition of parttable1 for values from (5000) to (10000);
+
+explain (costs off) insert into parttable1 select unique1,stringu1 from tenk1;
+insert into parttable1 select unique1,stringu1 from tenk1;
+select count(*) from parttable1_1;
+select count(*) from parttable1_2;
+
+--
+-- Test INSERT into partition with parallel-unsafe partition key support function
+-- (should not create a parallel plan)
+--
+create function my_int4_sort(int4,int4) returns int language sql
+  as $$ select case when $1 = $2 then 0 when $1 > $2 then 1 else -1 end; $$;
+
+create operator class test_int4_ops for type int4 using btree as
+  operator 1 < (int4,int4), operator 2 <= (int4,int4),
+  operator 3 = (int4,int4), operator 4 >= (int4,int4),
+  operator 5 > (int4,int4), function 1 my_int4_sort(int4,int4);
+
+create table partkey_unsafe_key_supp_fn_t (a int4, b name) partition by range (a test_int4_ops);
+create table partkey_unsafe_key_supp_fn_t_1 partition of partkey_unsafe_key_supp_fn_t for values from (0) to (5000);
+create table partkey_unsafe_key_supp_fn_t_2 partition of partkey_unsafe_key_supp_fn_t for values from (5000) to (10000);
+
+explain (costs off) insert into partkey_unsafe_key_supp_fn_t select unique1, stringu1 from tenk1;
+
+--
+-- Test INSERT into partition with parallel-unsafe partition key expression
+-- (should not create a parallel plan)
+--
+create table partkey_unsafe_key_expr_t (a int4, b name) partition by range ((fullname_parallel_unsafe('',a::varchar)));
+explain (costs off) insert into partkey_unsafe_key_expr_t select unique1, stringu1 from tenk1;
+
+--
+-- Test INSERT into table with parallel-safe check constraint
+-- (should create a parallel plan)
+--
+create or replace function check_a(a int4) returns boolean as $$
+    begin
+        return (a >= 0 and a <= 9999);
+    end;
+$$ language plpgsql parallel safe;
+
+create table table_check_a(a int4 check (check_a(a)), b name);
+explain (costs off) insert into table_check_a select unique1, stringu1 from tenk1;
+insert into table_check_a select unique1, stringu1 from tenk1;
+select count(*), sum(a) from table_check_a;
+
+--
+-- Test INSERT into table with parallel-unsafe check constraint
+-- (should not create a parallel plan)
+--
+create or replace function check_b_unsafe(b name) returns boolean as $$
+    begin
+        return (b <> 'XXXXXX');
+    end;
+$$ language plpgsql parallel unsafe;
+
+create table table_check_b(a int4, b name check (check_b_unsafe(b)), c name);
+explain (costs off) insert into table_check_b(a,b,c) select unique1, unique2, stringu1 from tenk1;
+insert into table_check_b(a,b,c) select unique1, stringu1, stringu2 from tenk1;
+select count(*), sum(a) from table_check_b;
+
+--
+-- Test INSERT into table with before+after parallel-safe stmt-level triggers
+-- (should create a parallel INSERT+SELECT plan;
+--  stmt-level before+after triggers should fire)
+--
+create table names_with_safe_trigger (like names);
+create or replace function insert_before_trigger_safe() returns trigger as $$
+    begin
+        raise notice 'hello from insert_before_trigger_safe';
+		return new;
+    end;
+$$ language plpgsql parallel safe;
+create or replace function insert_after_trigger_safe() returns trigger as $$
+    begin
+        raise notice 'hello from insert_after_trigger_safe';
+		return new;
+    end;
+$$ language plpgsql parallel safe;
+create trigger insert_before_trigger_safe before insert on names_with_safe_trigger
+    for each statement execute procedure insert_before_trigger_safe();
+create trigger insert_after_trigger_safe after insert on names_with_safe_trigger
+    for each statement execute procedure insert_after_trigger_safe();
+explain (costs off) insert into names_with_safe_trigger select * from names;
+insert into names_with_safe_trigger select * from names;
+
+--
+-- Test INSERT into table with before+after parallel-unsafe stmt-level triggers
+-- (should not create a parallel plan;
+--  stmt-level before+after triggers should fire)
+--
+create table names_with_unsafe_trigger (like names);
+create or replace function insert_before_trigger_unsafe() returns trigger as $$
+    begin
+        raise notice 'hello from insert_before_trigger_unsafe';
+		return new;
+    end;
+$$ language plpgsql parallel unsafe;
+create or replace function insert_after_trigger_unsafe() returns trigger as $$
+    begin
+        raise notice 'hello from insert_after_trigger_unsafe';
+		return new;
+    end;
+$$ language plpgsql parallel unsafe;
+create trigger insert_before_trigger_unsafe before insert on names_with_unsafe_trigger
+    for each statement execute procedure insert_before_trigger_unsafe();
+create trigger insert_after_trigger_unsafe after insert on names_with_unsafe_trigger
+    for each statement execute procedure insert_after_trigger_unsafe();
+explain (costs off) insert into names_with_unsafe_trigger select * from names;
+insert into names_with_unsafe_trigger select * from names;
+
+--
+-- Test INSERT into table with before+after parallel-restricted stmt-level trigger
+-- (should create a parallel plan with INSERT + parallel SELECT;
+--  stmt-level before+after triggers should fire)
+--
+create table names_with_restricted_trigger (like names);
+create or replace function insert_before_trigger_restricted() returns trigger as $$
+    begin
+        raise notice 'hello from insert_before_trigger_restricted';
+		return new;
+    end;
+$$ language plpgsql parallel restricted;
+create or replace function insert_after_trigger_restricted() returns trigger as $$
+    begin
+        raise notice 'hello from insert_after_trigger_restricted';
+		return new;
+    end;
+$$ language plpgsql parallel restricted;
+create trigger insert_before_trigger_restricted before insert on names_with_restricted_trigger
+    for each statement execute procedure insert_before_trigger_restricted();
+create trigger insert_after_trigger_restricted after insert on names_with_restricted_trigger
+    for each statement execute procedure insert_after_trigger_restricted();
+explain (costs off) insert into names_with_restricted_trigger select * from names;
+insert into names_with_restricted_trigger select * from names;
+
+--
+-- Test INSERT into partition with parallel-unsafe trigger
+-- (should not create a parallel plan)
+--
+
+create table part_unsafe_trigger (a int4, b name) partition by range (a);
+create table part_unsafe_trigger_1 partition of part_unsafe_trigger for values from (0) to (5000);
+create table part_unsafe_trigger_2 partition of part_unsafe_trigger for values from (5000) to (10000);
+create trigger insert_before_trigger_unsafe before insert on part_unsafe_trigger_1
+    for each statement execute procedure insert_before_trigger_unsafe();
+
+explain (costs off) insert into part_unsafe_trigger select unique1, stringu1 from tenk1;
+
+--
+-- Test INSERT into table with TOAST column
+--
+create table insert_toast_table(index int4, data text);
+create table insert_toast_table_data (like insert_toast_table);
+insert into insert_toast_table_data select i, rpad('T', 16384, 'ABCDEFGH') from generate_series(1,20) as i;
+explain (costs off) insert into insert_toast_table select index, data from insert_toast_table_data;
+insert into insert_toast_table select index, data from insert_toast_table_data;
+select count(*) as row_count, sum(length(data)) as total_data_length from insert_toast_table;
+truncate insert_toast_table;
+
+--
+-- Test INSERT into table having a DOMAIN column with a CHECK constraint
+--
+create function sql_is_distinct_from_u(anyelement, anyelement)
+returns boolean language sql parallel unsafe
+as 'select $1 is distinct from $2 limit 1';
+
+create or replace function sql_is_distinct_from_r(a anyelement, b anyelement) returns boolean as $$
+    begin
+        return (a <> b);
+    end;
+$$ language plpgsql parallel restricted;
+
+create or replace function sql_is_distinct_from_s(a anyelement, b anyelement) returns boolean as $$
+    begin
+        return (a <> b);
+    end;
+$$ language plpgsql parallel safe;
+
+create domain inotnull_u int
+  check (sql_is_distinct_from_u(value, null));
+
+create domain inotnull_r int
+  check (sql_is_distinct_from_r(value, null));
+
+create domain inotnull_s int
+  check (sql_is_distinct_from_s(value, null));
+
+create table dom_table_u (x inotnull_u, y int);
+create table dom_table_r (x inotnull_r, y int);
+create table dom_table_s (x inotnull_s, y int);
+
+
+-- Test INSERT into table having a DOMAIN column with parallel-unsafe CHECK constraint
+explain (costs off) insert into dom_table_u select unique1, unique2 from tenk1;
+insert into dom_table_u select unique1, unique2 from tenk1;
+select count(*), sum(x) as sum_x, sum(y) as sum_y from dom_table_u;
+
+-- Test INSERT into table having a DOMAIN column with parallel-restricted CHECK constraint
+explain (costs off) insert into dom_table_r select unique1, unique2 from tenk1;
+insert into dom_table_r select unique1, unique2 from tenk1;
+select count(*), sum(x) as sum_x, sum(y) as sum_y from dom_table_r;
+
+-- Test INSERT into table having a DOMAIN column with parallel-safe CHECK constraint
+-- NOTE: Currently max_parallel_hazard() regards CoerceToDomain as parallel-restricted
+explain (costs off) insert into dom_table_s select unique1, unique2 from tenk1;
+insert into dom_table_s select unique1, unique2 from tenk1;
+select count(*), sum(x) as sum_x, sum(y) as sum_y from dom_table_s;
+
+
+
+
+rollback;
+
+--
+-- Clean up anything not created in the transaction
+--
+
+drop table names;
+drop index names2_fullname_idx;
+drop table names2;
+drop index names3_fullname_idx;
+drop table names3;
+drop index names4_fullname_idx;
+drop table names4;
+drop table testdef;
+drop table test_data;
+
+drop function bdefault_unsafe;
+drop function cdefault_restricted;
+drop function ddefault_safe;
+drop function fullname_parallel_unsafe;
+drop function fullname_parallel_safe;
+drop function fullname_parallel_restricted;

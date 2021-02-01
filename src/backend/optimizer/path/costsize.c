@@ -213,6 +213,52 @@ clamp_row_est(double nrows)
 
 
 /*
+ * cost_modifytable
+ *    Determines and returns the cost of a ModifyTable node.
+ */
+void
+cost_modifytable(ModifyTablePath *path)
+{
+	double		total_size;
+	ListCell   *lc;
+
+	/*
+	 * Compute cost & rowcount as sum of subpath costs & rowcounts.
+	 *
+	 * Currently, we don't charge anything extra for the actual table
+	 * modification work, nor for the WITH CHECK OPTIONS or RETURNING
+	 * expressions if any.
+	 */
+	path->path.startup_cost = 0;
+	path->path.total_cost = 0;
+	path->path.rows = 0;
+	total_size = 0;
+	foreach(lc, path->subpaths)
+	{
+		Path	   *subpath = (Path *) lfirst(lc);
+
+		if (lc == list_head(path->subpaths))	/* first node? */
+			path->path.startup_cost = subpath->startup_cost;
+		path->path.total_cost += subpath->total_cost;
+		if (path->returningLists != NIL)
+		{
+			path->path.rows += subpath->rows;
+			total_size += subpath->pathtarget->width * subpath->rows;
+		}
+	}
+
+	/*
+	 * Set width to the average width of the subpath outputs.  XXX this is
+	 * totally wrong: we should return an average of the RETURNING tlist
+	 * widths.  But it's what happened historically, and improving it is a
+	 * task for another day.
+	 */
+	if (path->path.rows > 0)
+		total_size /= path->path.rows;
+	path->path.pathtarget->width = rint(total_size);
+}
+
+/*
  * cost_seqscan
  *	  Determines and returns the cost of scanning a relation sequentially.
  *

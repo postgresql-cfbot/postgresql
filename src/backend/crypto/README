@@ -1,0 +1,65 @@
+Cluster File Encryption
+=======================
+
+This directory contains support functions and sample scripts to be used
+for cluster file encryption.
+
+Architecture
+------------
+
+Fundamentally, cluster file encryption must store data in a file system
+in such a way that the keys required to decrypt the file system data can
+only be accessed using somewhere outside of the file system itself.  The
+external requirement can be someone typing in a passphrase, getting a
+key from a key management server (KMS), or decrypting a key stored in
+the file system using a hardware security module (HSM).  The current
+architecture supports all of these methods, and includes sample scripts
+for them.
+
+The simplest method for accessing data keys using some external
+requirement would be to retrieve all data encryption keys from a KMS.
+However, retrieved keys would still need to be verified as valid.  This
+method also introduces unacceptable complexity for simpler use-cases,
+like user-supplied passphrases or HSM usage.  External key rotation
+would also be very hard since it would require re-encrypting all the
+file system data with the new externally-stored keys.
+
+For these reason, a two-tiered architecture is used, which uses two
+types of encryption keys: a key encryption key (KEK) and data encryption
+keys (DEK). The KEK should not be present unencrypted in the file system
+--- it should be supplied the user, stored externally (e.g., in a KMS)
+or stored in the file system encrypted with a HSM (e.g., PIV device).
+The DEK is used to encrypt database files and is stored in the same file
+system as the database but is encrypted using the KEK.  Because the DEK
+is encrypted, its storage in the file system is no more of a security
+weakness and the storage of the encrypted database files in the same
+file system.
+
+Implementation
+--------------
+
+To enable cluster file encryption, the initdb option
+--cluster-key-command must be used, which specifies a command to
+retrieve the KEK.  initdb records the cluster_key_command in
+postgresql.conf.  Every time the KEK is needed, the command is run and
+must return 64 hex characters which are decoded into the KEK.  The
+command is called twice during initdb, and every time the server starts.
+initdb also sets the encryption method in controldata during server
+bootstrap.
+
+initdb runs "postgres --boot", which calls function
+kmgr.c::BootStrapKmgr(), which calls the cluster key command.  The
+cluster key command returns a KEK which is used to encrypt random bytes
+for each DEK and writes them to the file system by
+kmgr.c::KmgrWriteCryptoKeys() (unless --copy-encryption-keys is used).
+Currently the DEK files are 0 and 1 and are stored in
+$PGDATA/pg_cryptokeys/live.  The wrapped DEK files use Key Wrapping with
+Padding which verifies the validity of the KEK.
+
+initdb also does a non-boot backend start which calls
+kmgr.c::InitializeKmgr(), which calls the cluster key command a second
+time.  This decrypts/unwraps the DEK keys and stores them in the shared
+memory structure KmgrShmem. This step also happens every time the server
+starts. Later patches will use the keys stored in KmgrShmem to
+encrypt/decrypt database files.  KmgrShmem is erased via
+explicit_bzero() on server shutdown.

@@ -29,10 +29,16 @@ typedef enum
 	INDEX_DROP_SET_DEAD
 } IndexStateFlagsAction;
 
-/* options for REINDEX */
+/*
+ * Options for REINDEX
+ *
+ * "tablespaceOid" is the tablespace where indexes will be rebuilt,
+ * or InvalidOid to keep each index on its current tablespace.
+ */
 typedef struct ReindexParams
 {
 	bits32		options;		/* bitmask of REINDEXOPT_* */
+	Oid  tablespaceOid;			/* tablespace to rebuild index */
 } ReindexParams;
 
 /* flag bits for ReindexParams->flags */
@@ -92,6 +98,7 @@ extern Oid	index_create(Relation heapRelation,
 
 extern Oid	index_concurrently_create_copy(Relation heapRelation,
 										   Oid oldIndexId,
+										   Oid tablespaceOid,
 										   const char *newName);
 
 extern void index_concurrently_build(Oid heapRelationId,

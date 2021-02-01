@@ -27,6 +27,7 @@ REINDEX [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] { IN
 
     CONCURRENTLY [ <replaceable class="parameter">boolean</replaceable> ]
     VERBOSE [ <replaceable class="parameter">boolean</replaceable> ]
+    TABLESPACE <replaceable class="parameter">new_tablespace</replaceable>
 </synopsis>
  </refsynopsisdiv>
 
@@ -188,6 +189,21 @@ REINDEX [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] { IN
    </varlistentry>
 
    <varlistentry>
+    <term><literal>TABLESPACE</literal></term>
+    <listitem>
+     <para>
+      Specifies that indexes will be rebuilt on a new tablespace.
+      Cannot be used with "mapped" or (unless <varname>allow_system_table_mods</varname>)
+      system relations. If <literal>SCHEMA</literal>,
+      <literal>DATABASE</literal> or <literal>SYSTEM</literal> are specified,
+      then all "mapped" and system relations will be skipped and a single
+      <literal>WARNING</literal> will be generated. Indexes on TOAST tables
+      are reindexed, but not moved to the new tablespace.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>VERBOSE</literal></term>
     <listitem>
      <para>
@@ -210,6 +226,14 @@ REINDEX [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] { IN
     </listitem>
    </varlistentry>
 
+   <varlistentry>
+    <term><replaceable class="parameter">new_tablespace</replaceable></term>
+    <listitem>
+     <para>
+      The tablespace where indexes will be rebuilt.
+     </para>
+    </listitem>
+   </varlistentry>
   </variablelist>
  </refsect1>
 
@@ -292,7 +316,12 @@ REINDEX [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] { IN
    with <command>REINDEX INDEX</command> or <command>REINDEX TABLE</command>,
    respectively. Each partition of the specified partitioned relation is
    reindexed in a separate transaction. Those commands cannot be used inside
-   a transaction block when working on a partitioned table or index.
+   a transaction block when working on a partitioned table or index. If
+   a <command>REINDEX</command> command fails when run on a partitioned
+   relation, and <literal>TABLESPACE</literal> was specified, then it may have
+   moved indexes on some partitions to the new tablespace.  Re-running the command
+   will reindex all partitions and move previously-unprocessed indexes to the new
+   tablespace.
   </para>
 
   <refsect2 id="sql-reindex-concurrently" xreflabel="Rebuilding Indexes Concurrently">

@@ -17,6 +17,97 @@ ALTER TABLESPACE regress_tblspace SET (some_nonexistent_parameter = true);  -- f
 ALTER TABLESPACE regress_tblspace RESET (random_page_cost = 2.0); -- fail
 ALTER TABLESPACE regress_tblspace RESET (random_page_cost, effective_io_concurrency); -- ok
 
+-- create table (with TOAST) to test REINDEX with TABLESPACE change
+CREATE TABLE regress_tblspace_test_tbl (num1 bigint, num2 double precision, t text);
+INSERT INTO regress_tblspace_test_tbl (num1, num2, t)
+  SELECT round(random()*100), random(), 'text'
+  FROM generate_series(1, 10) s(i);
+CREATE INDEX regress_tblspace_test_tbl_idx ON regress_tblspace_test_tbl (num1);
+CREATE TABLE regress_tblspace_test_pt(col1 int, col2 int) PARTITION BY HASH (col1);
+CREATE TABLE regress_tblspace_test_pt_1
+  PARTITION OF regress_tblspace_test_pt
+  FOR VALUES WITH (modulus 2, remainder 0)
+  PARTITION BY HASH (col2);
+CREATE INDEX regress_tblspace_test_pt_idx_1 ON regress_tblspace_test_pt (col1);
+CREATE INDEX regress_tblspace_test_pt_idx_2 ON regress_tblspace_test_pt (col2);
+
+-- first, check a no-op case
+REINDEX (TABLESPACE pg_default) INDEX regress_tblspace_test_tbl_idx;
+REINDEX (TABLESPACE pg_default) TABLE regress_tblspace_test_tbl;
+REINDEX (TABLESPACE pg_default) INDEX regress_tblspace_test_pt_idx_2;
+REINDEX (TABLESPACE pg_default) TABLE regress_tblspace_test_pt;
+
+-- check that REINDEX with TABLESPACE change is transactional
+BEGIN;
+REINDEX (TABLESPACE regress_tblspace) INDEX regress_tblspace_test_tbl_idx;
+REINDEX (TABLESPACE regress_tblspace) TABLE regress_tblspace_test_tbl;
+ROLLBACK;
+SELECT relname FROM pg_class
+WHERE reltablespace=(SELECT oid FROM pg_tablespace WHERE spcname='regress_tblspace');
+
+-- reindex and move the entire database, after that return everything back
+REINDEX (TABLESPACE regress_tblspace) DATABASE regression; -- ok with warning
+REINDEX (TABLESPACE pg_default) DATABASE regression; -- ok with warning
+SELECT relname FROM pg_class
+WHERE reltablespace=(SELECT oid FROM pg_tablespace WHERE spcname='regress_tblspace');
+
+-- partitioned indexes are not directly reindexed, but we still have to set proper
+-- tablespace in pg_class for them
+REINDEX (TABLESPACE regress_tblspace) TABLE regress_tblspace_test_pt; -- ok
+REINDEX (TABLESPACE regress_tblspace) INDEX regress_tblspace_test_pt_idx_1; -- ok
+REINDEX (TABLESPACE regress_tblspace) INDEX regress_tblspace_test_pt_idx_2; -- ok
+SELECT relname FROM pg_class
+WHERE reltablespace=(SELECT oid FROM pg_tablespace WHERE spcname='regress_tblspace');
+
+-- indexes for new partitions should be created in the new tablespace
+CREATE TABLE regress_tblspace_test_pt_2
+  PARTITION OF regress_tblspace_test_pt
+  FOR VALUES WITH (modulus 2, remainder 1);
+CREATE TABLE regress_tblspace_test_pt_1_1
+  PARTITION OF regress_tblspace_test_pt_1
+  FOR VALUES WITH (modulus 2, remainder 0);
+SELECT relname FROM pg_class
+WHERE reltablespace=(SELECT oid FROM pg_tablespace WHERE spcname='regress_tblspace');
+
+-- check REINDEX with TABLESPACE change
+REINDEX (TABLESPACE regress_tblspace) INDEX regress_tblspace_test_tbl_idx; -- ok
+REINDEX (TABLESPACE regress_tblspace) TABLE regress_tblspace_test_tbl; -- ok
+REINDEX (TABLESPACE regress_tblspace) TABLE pg_authid; -- fail
+REINDEX (TABLESPACE regress_tblspace) SYSTEM CONCURRENTLY postgres; -- fail
+REINDEX (TABLESPACE regress_tblspace) TABLE CONCURRENTLY pg_am; -- fail
+REINDEX (TABLESPACE pg_global) INDEX regress_tblspace_test_tbl_idx; -- fail
+REINDEX (TABLESPACE regress_tblspace) TABLE pg_am; -- fail
+
+-- check that all relations moved to new tablespace
+SELECT relname FROM pg_class
+WHERE reltablespace=(SELECT oid FROM pg_tablespace WHERE spcname='regress_tblspace')
+ORDER BY relname;
+
+CREATE TEMP TABLE old_reindex_info AS SELECT relname, relfilenode FROM pg_class
+WHERE relname IN (SELECT relid::name FROM pg_partition_tree('regress_tblspace_test_pt_idx_1'::regclass) WHERE isleaf = true);
+INSERT INTO old_reindex_info SELECT relname, relfilenode FROM pg_class
+WHERE relname IN (SELECT relid::name FROM pg_partition_tree('regress_tblspace_test_pt_idx_2'::regclass) WHERE isleaf = true);
+INSERT INTO old_reindex_info SELECT relname, relfilenode FROM pg_class
+WHERE relname = 'regress_tblspace_test_tbl_idx';
+
+-- move indexes back to pg_default tablespace
+REINDEX (TABLESPACE pg_default) TABLE CONCURRENTLY regress_tblspace_test_tbl; -- ok
+REINDEX (TABLESPACE pg_default) TABLE regress_tblspace_test_pt; -- ok
+
+-- check that all relations moved back to pg_default
+SELECT relname FROM pg_class
+WHERE reltablespace=(SELECT oid FROM pg_tablespace WHERE spcname='regress_tblspace');
+
+CREATE TEMP TABLE new_reindex_info AS SELECT relname, relfilenode FROM pg_class
+WHERE relname IN (SELECT relid::name FROM pg_partition_tree('regress_tblspace_test_pt_idx_1'::regclass) WHERE isleaf = true);
+INSERT INTO new_reindex_info SELECT relname, relfilenode FROM pg_class
+WHERE relname IN (SELECT relid::name FROM pg_partition_tree('regress_tblspace_test_pt_idx_2'::regclass) WHERE isleaf = true);
+INSERT INTO new_reindex_info SELECT relname, relfilenode FROM pg_class
+WHERE relname = 'regress_tblspace_test_tbl_idx';
+
+SELECT * FROM new_reindex_info JOIN old_reindex_info ON new_reindex_info.relname = old_reindex_info.relname
+WHERE new_reindex_info.relfilenode = old_reindex_info.relfilenode;
+
 -- create a schema we can use
 CREATE SCHEMA testschema;
 
@@ -95,6 +186,14 @@ SELECT relname, spcname FROM pg_catalog.pg_tablespace t, pg_catalog.pg_class c
 \d+ testschema.part1
 \d testschema.part_a_idx
 \d+ testschema.part_a_idx
+
+-- REINDEX partitioned indexes to new tablespace
+REINDEX (TABLESPACE pg_default) TABLE testschema.part;
+\d testschema.part
+\d testschema.part1
+REINDEX (CONCURRENTLY, TABLESPACE regress_tblspace) INDEX testschema.part_a_idx;
+\d testschema.part
+\d testschema.part1
 
 -- partitioned rels cannot specify the default tablespace.  These fail:
 CREATE TABLE testschema.dflt (a int PRIMARY KEY) PARTITION BY LIST (a) TABLESPACE pg_default;
@@ -268,6 +367,10 @@ ALTER TABLE testschema.tablespace_acl OWNER TO regress_tablespace_user2;
 
 SET SESSION ROLE regress_tablespace_user2;
 CREATE TABLE tablespace_table (i int) TABLESPACE regress_tblspace; -- fail
+
+REINDEX (TABLESPACE regress_tblspace) TABLE CONCURRENTLY regress_tblspace_test_tbl; -- fail
+REINDEX (TABLESPACE regress_tblspace) INDEX regress_tblspace_test_pt_idx; -- fail
+
 ALTER TABLE testschema.tablespace_acl ALTER c TYPE bigint;
 RESET ROLE;
 
@@ -281,6 +384,9 @@ ALTER TABLE ALL IN TABLESPACE regress_tblspace_renamed SET TABLESPACE pg_default
 
 -- Should succeed
 DROP TABLESPACE regress_tblspace_renamed;
+
+DROP TABLE regress_tblspace_test_tbl;
+DROP TABLE regress_tblspace_test_pt;
 
 DROP SCHEMA testschema CASCADE;
 

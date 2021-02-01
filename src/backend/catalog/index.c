@@ -57,6 +57,7 @@
 #include "commands/event_trigger.h"
 #include "commands/progress.h"
 #include "commands/tablecmds.h"
+#include "commands/tablespace.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
@@ -1394,9 +1395,12 @@ index_update_collation_versions(Oid relid, Oid coll)
  * Create concurrently an index based on the definition of the one provided by
  * caller.  The index is inserted into catalogs and needs to be built later
  * on.  This is called during concurrent reindex processing.
+ *
+ * "tablespaceOid" is the tablespace to use for this index.
  */
 Oid
-index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId, const char *newName)
+index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
+							   Oid tablespaceOid, const char *newName)
 {
 	Relation	indexRelation;
 	IndexInfo  *oldInfo,
@@ -1526,7 +1530,7 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId, const char
 							  newInfo,
 							  indexColNames,
 							  indexRelation->rd_rel->relam,
-							  indexRelation->rd_rel->reltablespace,
+							  tablespaceOid,
 							  indexRelation->rd_indcollation,
 							  indclass->values,
 							  indcoloptions->values,
@@ -3603,6 +3607,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 	volatile bool skipped_constraint = false;
 	PGRUsage	ru0;
 	bool		progress = ((params->options & REINDEXOPT_REPORT_PROGRESS) != 0);
+	bool		set_tablespace = OidIsValid(params->tablespaceOid);
 
 	pg_rusage_init(&ru0);
 
@@ -3654,14 +3659,20 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 			 get_namespace_name(RelationGetNamespace(iRel)),
 			 RelationGetRelationName(iRel));
 
+	if (set_tablespace)
+		set_tablespace = CheckRelationTableSpaceMove(iRel,
+													 params->tablespaceOid);
+
 	/*
-	 * Don't allow reindex on temp tables of other backends ... their local
-	 * buffer manager is not going to cope.
+	 * We don't support moving system relations into different tablespaces
+	 * unless allow_system_table_mods=1.
 	 */
-	if (RELATION_IS_OTHER_TEMP(iRel))
+	if (set_tablespace &&
+		!allowSystemTableMods && IsSystemRelation(iRel))
 		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot reindex temporary tables of other sessions")));
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("permission denied: \"%s\" is a system catalog",
+						RelationGetRelationName(iRel))));
 
 	/*
 	 * Don't allow reindex of an invalid index on TOAST table.  This is a
@@ -3679,6 +3690,24 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 	 * don't want to reindex underneath an open indexscan.
 	 */
 	CheckTableNotInUse(iRel, "REINDEX INDEX");
+
+	/* Set new tablespace, if requested. */
+	if (set_tablespace)
+	{
+		SetRelationTableSpace(iRel, params->tablespaceOid, InvalidOid);
+
+		/*
+		 * Mark the relation as ready to be dropped at transaction commit,
+		 * before making visible the new tablespace change so as this won't
+		 * miss things.
+		 */
+		RelationDropStorage(iRel);
+
+		RelationAssumeNewRelfilenode(iRel);
+
+		/* Make sure the reltablespace change is visible */
+		CommandCounterIncrement();
+	}
 
 	/*
 	 * All predicate locks on the index are about to be made invalid. Promote
@@ -3964,10 +3993,14 @@ reindex_relation(Oid relid, int flags, ReindexParams *params)
 		/*
 		 * Note that this should fail if the toast relation is missing, so
 		 * reset REINDEXOPT_MISSING_OK.
+		 *
+		 * Even if table's indexes were moved to a new tablespace, the index
+		 * on its toast table is not moved implicitly.
 		 */
 		ReindexParams newparams = *params;
 
 		newparams.options &= ~(REINDEXOPT_MISSING_OK);
+		newparams.tablespaceOid = InvalidOid;
 		result |= reindex_relation(toast_relid, flags, &newparams);
 	}
 

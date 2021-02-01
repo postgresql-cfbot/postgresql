@@ -2217,12 +2217,13 @@ HINT:  You can then restart the server after making the necessary configuration 
    </para>
 
    <para>
-    The statistics collector is active during recovery. All scans, reads, blocks,
-    index usage, etc., will be recorded normally on the standby. Replayed
-    actions will not duplicate their effects on primary, so replaying an
-    insert will not increment the Inserts column of pg_stat_user_tables.
-    The stats file is deleted at the start of recovery, so stats from primary
-    and standby will differ; this is considered a feature, not a bug.
+    The activity statistics is collected during recovery. All scans, reads,
+    blocks, index usage, etc., will be recorded normally on the
+    standby. Replayed actions will not duplicate their effects on primary, so
+    replaying an insert will not increment the Inserts column of
+    pg_stat_user_tables.  The activity statistics is reset at the start of
+    recovery, so stats from primary and standby will differ; this is
+    considered a feature, not a bug.
    </para>
 
    <para>

@@ -971,7 +971,7 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	DropDatabaseBuffers(db_id);
 
 	/*
-	 * Tell the stats collector to forget it immediately, too.
+	 * Tell the active stats facility to forget it immediately, too.
 	 */
 	pgstat_drop_database(db_id);
 

@@ -319,8 +319,8 @@ vacuum(List *relations, VacuumParams *params,
 				 errmsg("VACUUM option DISABLE_PAGE_SKIPPING cannot be used with FULL")));
 
 	/*
-	 * Send info about dead objects to the statistics collector, unless we are
-	 * in autovacuum --- autovacuum.c does this for itself.
+	 * Send info about dead objects to the activity statistics facility, unless
+	 * we are in autovacuum --- autovacuum.c does this for itself.
 	 */
 	if ((params->options & VACOPT_VACUUM) && !IsAutoVacuumWorkerProcess())
 		pgstat_vacuum_stat();

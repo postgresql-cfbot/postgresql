@@ -48,6 +48,7 @@
 #include "storage/latch.h"
 #include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
+#include "storage/procsignal.h"
 #include "utils/guc.h"
 #include "utils/ps_status.h"
 
@@ -78,13 +79,11 @@
  * Local data
  * ----------
  */
-static time_t last_pgarch_start_time;
 static time_t last_sigterm_time = 0;
 
 /*
  * Flags set by interrupt handlers for later service in the main loop.
  */
-static volatile sig_atomic_t wakened = false;
 static volatile sig_atomic_t ready_to_stop = false;
 
 /* ----------
@@ -95,8 +94,6 @@ static volatile sig_atomic_t ready_to_stop = false;
 static pid_t pgarch_forkexec(void);
 #endif
 
-NON_EXEC_STATIC void PgArchiverMain(int argc, char *argv[]) pg_attribute_noreturn();
-static void pgarch_waken(SIGNAL_ARGS);
 static void pgarch_waken_stop(SIGNAL_ARGS);
 static void pgarch_MainLoop(void);
 static void pgarch_ArchiverCopyLoop(void);
@@ -109,75 +106,6 @@ static void pgarch_archiveDone(char *xlog);
  * Public functions called from postmaster follow
  * ------------------------------------------------------------
  */
-
-/*
- * pgarch_start
- *
- *	Called from postmaster at startup or after an existing archiver
- *	died.  Attempt to fire up a fresh archiver process.
- *
- *	Returns PID of child process, or 0 if fail.
- *
- *	Note: if fail, we will be called again from the postmaster main loop.
- */
-int
-pgarch_start(void)
-{
-	time_t		curtime;
-	pid_t		pgArchPid;
-
-	/*
-	 * Do nothing if no archiver needed
-	 */
-	if (!XLogArchivingActive())
-		return 0;
-
-	/*
-	 * Do nothing if too soon since last archiver start.  This is a safety
-	 * valve to protect against continuous respawn attempts if the archiver is
-	 * dying immediately at launch. Note that since we will be re-called from
-	 * the postmaster main loop, we will get another chance later.
-	 */
-	curtime = time(NULL);
-	if ((unsigned int) (curtime - last_pgarch_start_time) <
-		(unsigned int) PGARCH_RESTART_INTERVAL)
-		return 0;
-	last_pgarch_start_time = curtime;
-
-#ifdef EXEC_BACKEND
-	switch ((pgArchPid = pgarch_forkexec()))
-#else
-	switch ((pgArchPid = fork_process()))
-#endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork archiver: %m")));
-			return 0;
-
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
-
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
-
-			/* Drop our connection to postmaster's shared memory, as well */
-			dsm_detach_all();
-			PGSharedMemoryDetach();
-
-			PgArchiverMain(0, NULL);
-			break;
-#endif
-
-		default:
-			return (int) pgArchPid;
-	}
-
-	/* shouldn't get here */
-	return 0;
-}
 
 /* ------------------------------------------------------------
  * Local functions called by archiver follow
@@ -212,14 +140,9 @@ pgarch_forkexec(void)
 #endif							/* EXEC_BACKEND */
 
 
-/*
- * PgArchiverMain
- *
- *	The argc/argv parameters are valid only in EXEC_BACKEND case.  However,
- *	since we don't use 'em, it hardly matters...
- */
-NON_EXEC_STATIC void
-PgArchiverMain(int argc, char *argv[])
+/* Main entry point for archiver process */
+void
+PgArchiverMain(void)
 {
 	/*
 	 * Ignore all signals usually bound to some action in the postmaster,
@@ -231,31 +154,24 @@ PgArchiverMain(int argc, char *argv[])
 	/* SIGQUIT handler was already set up by InitPostmasterChild */
 	pqsignal(SIGALRM, SIG_IGN);
 	pqsignal(SIGPIPE, SIG_IGN);
-	pqsignal(SIGUSR1, pgarch_waken);
+	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
 	pqsignal(SIGUSR2, pgarch_waken_stop);
+
 	/* Reset some signals that are accepted by postmaster but not here */
 	pqsignal(SIGCHLD, SIG_DFL);
+
+	/* Unblock signals (they were blocked when the postmaster forked us) */
 	PG_SETMASK(&UnBlockSig);
 
-	MyBackendType = B_ARCHIVER;
-	init_ps_display(NULL);
+	/*
+	 * Advertise our latch that backends can use to wake us up while we're
+	 * sleeping.
+	 */
+	ProcGlobal->archiverLatch = &MyProc->procLatch;
 
 	pgarch_MainLoop();
 
 	exit(0);
-}
-
-/* SIGUSR1 signal handler for archiver process */
-static void
-pgarch_waken(SIGNAL_ARGS)
-{
-	int			save_errno = errno;
-
-	/* set flag that there is work to be done */
-	wakened = true;
-	SetLatch(MyLatch);
-
-	errno = save_errno;
 }
 
 /* SIGUSR2 signal handler for archiver process */
@@ -281,14 +197,6 @@ pgarch_MainLoop(void)
 {
 	pg_time_t	last_copy_time = 0;
 	bool		time_to_stop;
-
-	/*
-	 * We run the copy loop immediately upon entry, in case there are
-	 * unarchived files left over from a previous database run (or maybe the
-	 * archiver died unexpectedly).  After that we wait for a signal or
-	 * timeout before doing more.
-	 */
-	wakened = true;
 
 	/*
 	 * There shouldn't be anything for the archiver to do except to wait for a
@@ -328,12 +236,8 @@ pgarch_MainLoop(void)
 		}
 
 		/* Do what we're here for */
-		if (wakened || time_to_stop)
-		{
-			wakened = false;
-			pgarch_ArchiverCopyLoop();
-			last_copy_time = time(NULL);
-		}
+		pgarch_ArchiverCopyLoop();
+		last_copy_time = time(NULL);
 
 		/*
 		 * Sleep until a signal is received, or until a poll is forced by
@@ -354,13 +258,9 @@ pgarch_MainLoop(void)
 							   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
 							   timeout * 1000L,
 							   WAIT_EVENT_ARCHIVER_MAIN);
-				if (rc & WL_TIMEOUT)
-					wakened = true;
 				if (rc & WL_POSTMASTER_DEATH)
 					time_to_stop = true;
 			}
-			else
-				wakened = true;
 		}
 
 		/*
@@ -472,20 +372,20 @@ pgarch_ArchiverCopyLoop(void)
 				pgarch_archiveDone(xlog);
 
 				/*
-				 * Tell the collector about the WAL file that we successfully
-				 * archived
+				 * Tell the activity statistics facility about the WAL file
+				 * that we successfully archived
 				 */
-				pgstat_send_archiver(xlog, false);
+				pgstat_report_archiver(xlog, false);
 
 				break;			/* out of inner retry loop */
 			}
 			else
 			{
 				/*
-				 * Tell the collector about the WAL file that we failed to
-				 * archive
+				 * Tell the activity statistics facility about the WAL file
+				 * that we failed to archive
 				 */
-				pgstat_send_archiver(xlog, true);
+				pgstat_report_archiver(xlog, true);
 
 				if (++failures >= NUM_ARCHIVE_RETRIES)
 				{

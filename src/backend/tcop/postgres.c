@@ -3274,6 +3274,12 @@ ProcessInterrupts(void)
 
 	if (ParallelMessagePending)
 		HandleParallelMessages();
+
+	if (IdleStatsUpdateTimeoutPending)
+	{
+		IdleStatsUpdateTimeoutPending = false;
+		pgstat_report_stat(true);
+	}
 }
 
 
@@ -3845,6 +3851,7 @@ PostgresMain(int argc, char *argv[],
 	volatile bool send_ready_for_query = true;
 	bool		idle_in_transaction_timeout_enabled = false;
 	bool		idle_session_timeout_enabled = false;
+	bool		idle_stats_update_timeout_enabled = false;
 
 	/* Initialize startup process environment if necessary. */
 	if (!IsUnderPostmaster)
@@ -4241,11 +4248,12 @@ PostgresMain(int argc, char *argv[],
 		 * Note: this includes fflush()'ing the last of the prior output.
 		 *
 		 * This is also a good time to send collected statistics to the
-		 * collector, and to update the PS stats display.  We avoid doing
-		 * those every time through the message loop because it'd slow down
-		 * processing of batched messages, and because we don't want to report
-		 * uncommitted updates (that confuses autovacuum).  The notification
-		 * processor wants a call too, if we are not in a transaction block.
+		 * activity statistics, and to update the PS stats display.  We avoid
+		 * doing those every time through the message loop because it'd slow
+		 * down processing of batched messages, and because we don't want to
+		 * report uncommitted updates (that confuses autovacuum).  The
+		 * notification processor wants a call too, if we are not in a
+		 * transaction block.
 		 *
 		 * Also, if an idle timeout is enabled, start the timer for that.
 		 */
@@ -4279,6 +4287,8 @@ PostgresMain(int argc, char *argv[],
 			}
 			else
 			{
+				long stats_timeout;
+
 				/* Send out notify signals and transmit self-notifies */
 				ProcessCompletedNotifies();
 
@@ -4291,8 +4301,14 @@ PostgresMain(int argc, char *argv[],
 				if (notifyInterruptPending)
 					ProcessNotifyInterrupt();
 
-				pgstat_report_stat(false);
-
+				/* Start the idle-stats-update timer */
+				stats_timeout = pgstat_report_stat(false);
+				if (stats_timeout > 0)
+				{
+					idle_stats_update_timeout_enabled = true;
+					enable_timeout_after(IDLE_STATS_UPDATE_TIMEOUT,
+										 stats_timeout);
+				}
 				set_ps_display("idle");
 				pgstat_report_activity(STATE_IDLE, NULL);
 
@@ -4326,9 +4342,9 @@ PostgresMain(int argc, char *argv[],
 		firstchar = ReadCommand(&input_message);
 
 		/*
-		 * (4) turn off the idle-in-transaction and idle-session timeouts, if
-		 * active.  We do this before step (5) so that any last-moment timeout
-		 * is certain to be detected in step (5).
+		 * (4) turn off the idle-in-transaction, idle-session and
+		 * idle-state-update timeouts if active.  We do this before step (5) so
+		 * that any last-moment timeout is certain to be detected in step (5).
 		 *
 		 * At most one of these timeouts will be active, so there's no need to
 		 * worry about combining the timeout.c calls into one.
@@ -4342,6 +4358,11 @@ PostgresMain(int argc, char *argv[],
 		{
 			disable_timeout(IDLE_SESSION_TIMEOUT, false);
 			idle_session_timeout_enabled = false;
+		}
+		if (idle_stats_update_timeout_enabled)
+		{
+			disable_timeout(IDLE_STATS_UPDATE_TIMEOUT, false);
+			idle_stats_update_timeout_enabled = false;
 		}
 
 		/*

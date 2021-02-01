@@ -1460,6 +1460,10 @@ LANGUAGE internal
 STRICT IMMUTABLE PARALLEL SAFE
 AS 'unicode_is_normalized';
 
+CREATE OR REPLACE PROCEDURE
+  pg_waitlsn(wait_lsn pg_lsn, timeout integer DEFAULT -1)
+  LANGUAGE internal AS 'pg_waitlsn';
+
 --
 -- The default permissions for functions mean that anyone can execute them.
 -- A number of functions shouldn't be executable by just anyone, but rather

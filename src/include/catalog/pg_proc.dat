@@ -11379,4 +11379,8 @@
   proname => 'is_normalized', prorettype => 'bool', proargtypes => 'text text',
   prosrc => 'unicode_is_normalized' },
 
+{ oid => '9313', descr => 'wait for LSN to be replayed',
+  proname => 'pg_waitlsn',  prokind => 'p',prorettype => 'void', proargtypes => 'pg_lsn int4',
+  proargnames => '{wait_lsn,timeout}',
+  prosrc => 'pg_waitlsn' }
 ]

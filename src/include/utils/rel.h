@@ -638,6 +638,20 @@ typedef struct ViewOptions
 	 RelationNeedsWAL(relation) && \
 	 !IsCatalogRelation(relation))
 
+static inline bool
+contains_whole_row_col(Bitmapset *cols)
+{
+	return bms_is_member(0, cols);
+}
+
+static inline Bitmapset *
+get_ordinal_attnos(Relation rel)
+{
+	Bitmapset *attnos = NULL;
+	attnos = bms_add_range(attnos, 1, RelationGetDescr(rel)->natts);
+	return attnos;
+}
+
 /* routines in utils/cache/relcache.c */
 extern void RelationIncrementReferenceCount(Relation rel);
 extern void RelationDecrementReferenceCount(Relation rel);

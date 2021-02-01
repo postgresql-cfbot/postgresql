@@ -174,6 +174,14 @@ typedef enum RecoveryState
 	RECOVERY_STATE_DONE			/* currently in production */
 } RecoveryState;
 
+/* Recovery pause states */
+typedef enum RecoveryPauseState
+{
+	RECOVERY_NOT_PAUSED = 0,		/* pause not requested */
+	RECOVERY_PAUSE_REQUESTED = 1,	/* pause requested, but yet paused */
+	RECOVERY_PAUSED = 2				/* recovery is paused */
+} RecoveryPauseState;
+
 extern PGDLLIMPORT int wal_level;
 
 /* Is WAL archiving enabled (always or only while server is running normally)? */
@@ -310,8 +318,8 @@ extern void GetXLogReceiptTime(TimestampTz *rtime, bool *fromStream);
 extern XLogRecPtr GetXLogReplayRecPtr(TimeLineID *replayTLI);
 extern XLogRecPtr GetXLogInsertRecPtr(void);
 extern XLogRecPtr GetXLogWriteRecPtr(void);
-extern bool RecoveryIsPaused(void);
-extern void SetRecoveryPause(bool recoveryPause);
+extern RecoveryPauseState GetRecoveryPauseState(void);
+extern void SetRecoveryPause(RecoveryPauseState state);
 extern TimestampTz GetLatestXTime(void);
 extern TimestampTz GetCurrentChunkReplayStartTime(void);
 

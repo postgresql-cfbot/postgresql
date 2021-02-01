@@ -519,6 +519,25 @@ pg_atomic_sub_fetch_u64(volatile pg_atomic_uint64 *ptr, int64 sub_)
 	return pg_atomic_sub_fetch_u64_impl(ptr, sub_);
 }
 
+static inline void
+pg_atomic_monotonic_advance_u64(volatile pg_atomic_uint64 *ptr, uint64 target_)
+{
+#ifndef PG_HAVE_ATOMIC_U64_SIMULATION
+	AssertPointerAlignment(ptr, 8);
+#endif
+	/* FIXME is this algorithm correct if we have u64 simulation? */
+	while (true)
+	{
+		uint64		currval;
+
+		currval = pg_atomic_read_u64(ptr);
+		if (currval > target_)
+			break;	/* already done by somebody else */
+		if (pg_atomic_compare_exchange_u64(ptr, &currval, target_))
+			break;	/* successfully done */
+	}
+}
+
 #undef INSIDE_ATOMICS_H
 
 #endif							/* ATOMICS_H */

@@ -49,6 +49,7 @@
 <!ENTITY wal           SYSTEM "wal.sgml">
 <!ENTITY logical-replication    SYSTEM "logical-replication.sgml">
 <!ENTITY jit    SYSTEM "jit.sgml">
+<!ENTITY distributed-transaction    SYSTEM "distributed-transaction.sgml">
 
 <!-- programmer's guide -->
 <!ENTITY bgworker   SYSTEM "bgworker.sgml">

@@ -1,0 +1,134 @@
+src/backend/access/transam/README.fdwxact
+
+Atomic Commit for Distributed Transactions
+===========================================
+
+The atomic commit feature enables us to commit and rollback either all of
+foreign servers or nothing. This ensures that the database data is always left
+in a conssitent state in term of federated database.
+
+
+Commit Sequence of Global Transactions
+--------------------------------
+
+We employee two-phase commit protocol to achieve commit among all foreign
+servers atomically. The sequence of distributed transaction commit consisnts
+of the following four steps:
+
+1. Foriegn Server Registration
+During executor node initialization, accessed foreign servers are registered
+to the list FdwXactParticipant, which is maintained by PostgreSQL's the global
+transaction manager (GTM), as a distributed transaction participant The
+registered foreign transactions are tracked until the end of transaction.
+
+2. Pre-Commit phase (1st phase of two-phase commit)
+we record the corresponding WAL indicating that the foreign server is involved
+with the current transaction before doing PREPARE all foreign transactions.
+Thus, in case we loose connectivity to the foreign server or crash ourselves,
+we will remember that we might have prepared tranascation on the foreign
+server, and try to resolve it when connectivity is restored or after crash
+recovery.
+
+The two-phase commit is required only if the transaction modified two or more
+servers including the local node.
+
+After that we prepare all foreign transactions by calling
+PrepareForeignTransaction() API. If we failed on any of them we change to
+rollback, therefore at this time some participants might be prepared whereas
+some are not prepared. The former foreign transactions are resolved by
+the resolver process asynchronusly or can be resolved using by
+pg_resolve_foreign_xact() manually, and the latter ends transaction
+in one-phase by calling RollbackForeignTransaction() API.
+
+3. Commit locally
+Once we've prepared all of them, commit the transaction locally.
+
+4. Post-Commit Phase (2nd phase of two-phase commit)
+The steps so far are done by the backend process committing the transaction but
+this resolution step(commit or rollback) is done by the foreign transaction
+resolver process.
+
+
+Identifying Foreign Transactions In GTM
+---------------------------------------
+
+To identify foreign transaction participants (as well as FdwXact entries) there
+are two ways: using {server OID, user OID} and using user mapping OID. The same
+is true for FDWs to identify the connections (and transactions upon) to the
+foreign server. We need to consider the case where the way to identify the
+transactions is not matched between GTM and FDWs, because the problem might occur
+when the user modifies the same foreign server by different roles within the
+transaction. For example, consider the following execution:
+
+BEGIN;
+SET ROLE user_A;
+INSERT INTO ft1 VALUES (1);
+SET ROLE user_B;
+INSERT INTO ft1 VALUES (1);
+COMMIT;
+
+For example, suppose that an FDW identifies the connection by {server OID, user OID}
+and GTM identifies the transactions by user mapping OID, and user_A and user_B use
+the public user mapping to connect server_X. In the FDW, there are two
+connections: {user_A, sever_X} and {user_B, server_X}, and therefore opens two
+transactions on each connection, while GTM has only one FdwXact entry because the two
+connections refer to the same user mapping OID. As a result, at the end of the
+transaction, GTM ends only one foreign transaction, leaving another one.
+
+On the other hand, suppose that an FDW identifies the connection by user mapping OID
+and GTM does that by {server OID, user OID}, the FDW uses only one connection and opens
+a transaction since both users refer to the same user mapping OID (we expect FDWs
+not to register the foreign transaction when not starting a new transaction on the
+foreign server). Since GTM also has one entry it can end the foreign transaciton
+properly. The downside would be that the user OID of FdwXact (i.g., FdwXact->userid)
+is the user who registered the foreign transaction for the first time, necessarily
+not the user who executed COMMIT.  For example in the above case, FdwXact->userid
+will be user_A, not user_B. But it’s not big problem in practice.
+
+Therefore, in fdwxact.c, we identify the foreign transaction by
+{server OID, user OID}.
+
+Foreign Transactions Status
+----------------------------
+
+Every foreign transaction has an FdwXact entry. When preparing a foreign
+transaction a FdwXact entry of which status starts from FDWXACT_STATUS_PREPARING
+are created with WAL logging. The status changes to FDWXACT_STATUS_PREPARED
+after the foreign transaction is prepared. And the status changes to
+FDWXACT_STATUS_COMMITTING and FDWXACT_STATUS_ABORTING before committing and
+aborting respectively. FdwXact entry is removed with WAL logging after resolved.
+
+FdwXact entries recovered during the recovery are marked as in-doubt if the
+corresponding local transaction is not prepared transaction. The initial
+status for those entries is FDWXACT_STATUS_PREPARED if they are recovered
+from WAL. Because we WAL logs only when preparing the foreign transaction we
+cannot know the exact fate of the foreign transaction from the recovery.
+
+The foreign transaction status transition is illustrated by the following
+graph describing the FdwXact->status:
+
+ +----------------------------------------------------+
+ |                      INVALID                       |
+ +----------------------------------------------------+
+    |                      |                       |
+    |                      v                       |
+    |           +---------------------+            |
+   (*1)         |      PREPARING      |           (*1)
+    |           +---------------------+            |
+    |                      |                       |
+    v                      v                       v
+ +----------------------------------------------------+
+ |                      PREPARED                      |
+ +----------------------------------------------------+
+           |                               |
+           v                               v
+ +--------------------+          +--------------------+
+ |     COMMITTING     |          |      ABORTING      |
+ +--------------------+          +--------------------+
+           |                               |
+           v                               v
+ +----------------------------------------------------+
+ |                        END                         |
+ +----------------------------------------------------+
+
+(*1) Paths for recovered FdwXact entries

@@ -1352,6 +1352,13 @@ pg_file_settings| SELECT a.sourcefile,
     a.applied,
     a.error
    FROM pg_show_all_file_settings() a(sourcefile, sourceline, seqno, name, setting, applied, error);
+pg_foreign_xacts| SELECT f.xid,
+    f.serverid,
+    f.userid,
+    f.state,
+    f.identifier,
+    f.locker_pid
+   FROM pg_foreign_xacts() f(xid, serverid, userid, state, identifier, locker_pid);
 pg_group| SELECT pg_authid.rolname AS groname,
     pg_authid.oid AS grosysid,
     ARRAY( SELECT pg_auth_members.member

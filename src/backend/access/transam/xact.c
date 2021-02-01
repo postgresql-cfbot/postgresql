@@ -21,6 +21,8 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/fdwxact.h"
+#include "access/fdwxact_launcher.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/subtrans.h"
@@ -1455,6 +1457,9 @@ RecordTransactionCommit(void)
 	if (wrote_xlog && markXidCommitted)
 		SyncRepWaitForLSN(XactLastRecEnd, true);
 
+	if (FdwXactIsForeignTwophaseCommitRequired())
+		FdwXactLaunchOrWakeupResolver();
+
 	/* remember end of last commit record */
 	XactLastCommitEnd = XactLastRecEnd;
 
@@ -2125,6 +2130,9 @@ CommitTransaction(void)
 	CallXactCallbacks(is_parallel_worker ? XACT_EVENT_PARALLEL_PRE_COMMIT
 					  : XACT_EVENT_PRE_COMMIT);
 
+	/* Pre-commit step for foreign transactions */
+	PreCommit_FdwXact();
+
 	/* If we might have parallel workers, clean them up now. */
 	if (IsInParallelMode())
 		AtEOXact_Parallel(true);
@@ -2203,6 +2211,13 @@ CommitTransaction(void)
 	}
 
 	TRACE_POSTGRESQL_TRANSACTION_COMMIT(MyProc->lxid);
+
+	/*
+	 * Commit foreign transactions if any.  This needs to be done before marking
+	 * this transaction as not running since FDW's transaction callbacks might
+	 * assume this transaction is still in progress.
+	 */
+	AtEOXact_FdwXact(true);
 
 	/*
 	 * Let others know about no transaction in progress by me. Note that this
@@ -2368,6 +2383,9 @@ PrepareTransaction(void)
 	 * of this stuff could still throw an error, which would switch us into
 	 * the transaction-abort path.
 	 */
+
+	/* Process foreign trasactions */
+	AtPrepare_FdwXact();
 
 	/* Shut down the deferred-trigger manager */
 	AfterTriggerEndXact(true);
@@ -2561,6 +2579,7 @@ PrepareTransaction(void)
 	PostPrepare_Twophase();
 
 	/* PREPARE acts the same as COMMIT as far as GUC is concerned */
+	AtEOXact_FdwXact(true);
 	AtEOXact_GUC(true, 1);
 	AtEOXact_SPI(true);
 	AtEOXact_Enum();
@@ -2736,6 +2755,13 @@ AbortTransaction(void)
 	}
 
 	TRACE_POSTGRESQL_TRANSACTION_ABORT(MyProc->lxid);
+
+	/*
+	 * Abort foreign transactions if any.  This needs to be done before marking
+	 * this transaction as not running since FDW's transaction callbacks might
+	 * assume this transaction is still in progress.
+	 */
+	AtEOXact_FdwXact(false);
 
 	/*
 	 * Let others know about no transaction in progress by me. Note that this

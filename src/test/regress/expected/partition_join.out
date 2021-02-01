@@ -218,14 +218,13 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT * FROM prt1 WHERE a < 450) t1 LEFT JO
                ->  Seq Scan on prt2_p2 prt2_1
                      Filter: (b > 250)
                ->  Seq Scan on prt2_p3 prt2_2
-                     Filter: (b > 250)
          ->  Hash
                ->  Append
                      ->  Seq Scan on prt1_p1 prt1_1
-                           Filter: ((a < 450) AND (b = 0))
+                           Filter: (b = 0)
                      ->  Seq Scan on prt1_p2 prt1_2
                            Filter: ((a < 450) AND (b = 0))
-(15 rows)
+(14 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT * FROM prt1 WHERE a < 450) t1 LEFT JOIN (SELECT * FROM prt2 WHERE b > 250) t2 ON t1.a = t2.b WHERE t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -253,7 +252,6 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT * FROM prt1 WHERE a < 450) t1 FULL JO
          Filter: ((prt1.b = 0) OR (prt2.a = 0))
          ->  Append
                ->  Seq Scan on prt1_p1 prt1_1
-                     Filter: (a < 450)
                ->  Seq Scan on prt1_p2 prt1_2
                      Filter: (a < 450)
          ->  Hash
@@ -261,8 +259,7 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT * FROM prt1 WHERE a < 450) t1 FULL JO
                      ->  Seq Scan on prt2_p2 prt2_1
                            Filter: (b > 250)
                      ->  Seq Scan on prt2_p3 prt2_2
-                           Filter: (b > 250)
-(16 rows)
+(14 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT * FROM prt1 WHERE a < 450) t1 FULL JOIN (SELECT * FROM prt2 WHERE b > 250) t2 ON t1.a = t2.b WHERE t1.b = 0 OR t2.a = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -1181,7 +1178,7 @@ SELECT t1.a, t2.b FROM (SELECT * FROM prt1 WHERE a < 450) t1 LEFT JOIN (SELECT *
                Sort Key: prt1.a
                ->  Append
                      ->  Seq Scan on prt1_p1 prt1_1
-                           Filter: ((a < 450) AND (b = 0))
+                           Filter: (b = 0)
                      ->  Seq Scan on prt1_p2 prt1_2
                            Filter: ((a < 450) AND (b = 0))
          ->  Sort
@@ -1190,8 +1187,7 @@ SELECT t1.a, t2.b FROM (SELECT * FROM prt1 WHERE a < 450) t1 LEFT JOIN (SELECT *
                      ->  Seq Scan on prt2_p2 prt2_1
                            Filter: (b > 250)
                      ->  Seq Scan on prt2_p3 prt2_2
-                           Filter: (b > 250)
-(18 rows)
+(17 rows)
 
 SELECT t1.a, t2.b FROM (SELECT * FROM prt1 WHERE a < 450) t1 LEFT JOIN (SELECT * FROM prt2 WHERE b > 250) t2 ON t1.a = t2.b WHERE t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  b  
@@ -2197,7 +2193,7 @@ where not exists (select 1 from prtx2
  Append
    ->  Nested Loop Anti Join
          ->  Seq Scan on prtx1_1
-               Filter: ((a < 20) AND (c = 120))
+               Filter: (c = 120)
          ->  Bitmap Heap Scan on prtx2_1
                Recheck Cond: ((b = prtx1_1.b) AND (c = 123))
                Filter: (a = prtx1_1.a)
@@ -2238,7 +2234,7 @@ where not exists (select 1 from prtx2
  Append
    ->  Nested Loop Anti Join
          ->  Seq Scan on prtx1_1
-               Filter: ((a < 20) AND (c = 91))
+               Filter: (c = 91)
          ->  Bitmap Heap Scan on prtx2_1
                Recheck Cond: ((b = (prtx1_1.b + 1)) OR (c = 99))
                Filter: (a = prtx1_1.a)
@@ -3102,8 +3098,8 @@ INSERT INTO prt2_adv SELECT i % 25, i, to_char(i, 'FM0000') FROM generate_series
 ANALYZE prt2_adv;
 EXPLAIN (COSTS OFF)
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.a < 300 AND t1.b = 0 ORDER BY t1.a, t2.b;
-                        QUERY PLAN                         
------------------------------------------------------------
+                      QUERY PLAN                      
+------------------------------------------------------
  Sort
    Sort Key: t1.a
    ->  Append
@@ -3112,13 +3108,13 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a =
                ->  Seq Scan on prt2_adv_p1 t2_1
                ->  Hash
                      ->  Seq Scan on prt1_adv_p1 t1_1
-                           Filter: ((a < 300) AND (b = 0))
+                           Filter: (b = 0)
          ->  Hash Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
                ->  Hash
                      ->  Seq Scan on prt1_adv_p2 t1_2
-                           Filter: ((a < 300) AND (b = 0))
+                           Filter: (b = 0)
 (15 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.a < 300 AND t1.b = 0 ORDER BY t1.a, t2.b;
@@ -3141,8 +3137,8 @@ CREATE TABLE prt2_adv_default PARTITION OF prt2_adv DEFAULT;
 ANALYZE prt2_adv;
 EXPLAIN (COSTS OFF)
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.a >= 100 AND t1.a < 300 AND t1.b = 0 ORDER BY t1.a, t2.b;
-                                QUERY PLAN                                
---------------------------------------------------------------------------
+                      QUERY PLAN                      
+------------------------------------------------------
  Sort
    Sort Key: t1.a
    ->  Append
@@ -3151,13 +3147,13 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a =
                ->  Seq Scan on prt2_adv_p1 t2_1
                ->  Hash
                      ->  Seq Scan on prt1_adv_p1 t1_1
-                           Filter: ((a >= 100) AND (a < 300) AND (b = 0))
+                           Filter: (b = 0)
          ->  Hash Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
                ->  Hash
                      ->  Seq Scan on prt1_adv_p2 t1_2
-                           Filter: ((a >= 100) AND (a < 300) AND (b = 0))
+                           Filter: (b = 0)
 (15 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.a >= 100 AND t1.a < 300 AND t1.b = 0 ORDER BY t1.a, t2.b;
@@ -4456,7 +4452,7 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
                ->  Seq Scan on plt2_adv_p3 t2_1
                ->  Hash
                      ->  Seq Scan on plt1_adv_p3 t1_1
-                           Filter: ((b < 10) AND (c = ANY ('{0003,0004,0005}'::text[])))
+                           Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p4 t2_2
@@ -4509,7 +4505,7 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
                ->  Seq Scan on plt2_adv_p3 t2_1
                ->  Hash
                      ->  Seq Scan on plt1_adv_p3 t1_1
-                           Filter: ((b < 10) AND (c = ANY ('{0003,0004,0005}'::text[])))
+                           Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p4 t2_2
@@ -4699,7 +4695,7 @@ SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.b = t2
          ->  Hash Join
                Hash Cond: ((t1_1.a = t2_1.a) AND (t1_1.b = t2_1.b))
                ->  Seq Scan on alpha_neg_p1 t1_1
-                     Filter: ((b >= 125) AND (b < 225))
+                     Filter: (b >= 125)
                ->  Hash
                      ->  Seq Scan on beta_neg_p1 t2_1
          ->  Hash Join
@@ -4707,7 +4703,7 @@ SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.b = t2
                ->  Seq Scan on beta_neg_p2 t2_2
                ->  Hash
                      ->  Seq Scan on alpha_neg_p2 t1_2
-                           Filter: ((b >= 125) AND (b < 225))
+                           Filter: (b < 225)
          ->  Hash Join
                Hash Cond: ((t2_4.a = t1_4.a) AND (t2_4.b = t1_4.b))
                ->  Append
@@ -4771,8 +4767,8 @@ SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.b = t2
 
 EXPLAIN (COSTS OFF)
 SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE ((t1.b >= 100 AND t1.b < 110) OR (t1.b >= 200 AND t1.b < 210)) AND ((t2.b >= 100 AND t2.b < 110) OR (t2.b >= 200 AND t2.b < 210)) AND t1.c IN ('0004', '0009') ORDER BY t1.a, t1.b, t2.b;
-                                                              QUERY PLAN                                                              
---------------------------------------------------------------------------------------------------------------------------------------
+                                                           QUERY PLAN                                                           
+--------------------------------------------------------------------------------------------------------------------------------
  Sort
    Sort Key: t1.a, t1.b, t2.b
    ->  Append
@@ -4780,15 +4776,15 @@ SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.c = t2
                Hash Cond: ((t1_2.a = t2_2.a) AND (t1_2.c = t2_2.c))
                ->  Append
                      ->  Seq Scan on alpha_neg_p1 t1_2
-                           Filter: ((c = ANY ('{0004,0009}'::text[])) AND (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210))))
+                           Filter: ((b >= 100) AND (b < 110) AND (c = ANY ('{0004,0009}'::text[])))
                      ->  Seq Scan on alpha_neg_p2 t1_3
-                           Filter: ((c = ANY ('{0004,0009}'::text[])) AND (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210))))
+                           Filter: ((b >= 200) AND (b < 210) AND (c = ANY ('{0004,0009}'::text[])))
                ->  Hash
                      ->  Append
                            ->  Seq Scan on beta_neg_p1 t2_2
-                                 Filter: (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210)))
+                                 Filter: ((b >= 100) AND (b < 110))
                            ->  Seq Scan on beta_neg_p2 t2_3
-                                 Filter: (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210)))
+                                 Filter: ((b >= 200) AND (b < 210))
          ->  Nested Loop
                Join Filter: ((t1_4.a = t2_4.a) AND (t1_4.c = t2_4.c))
                ->  Seq Scan on alpha_pos_p2 t1_4
@@ -4834,17 +4830,17 @@ SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.b = t2
          ->  Hash Join
                Hash Cond: ((t1_1.a = t2_1.a) AND (t1_1.b = t2_1.b) AND (t1_1.c = t2_1.c))
                ->  Seq Scan on alpha_neg_p1 t1_1
-                     Filter: ((c = ANY ('{0004,0009}'::text[])) AND (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210))))
+                     Filter: ((b >= 100) AND (b < 110) AND (c = ANY ('{0004,0009}'::text[])))
                ->  Hash
                      ->  Seq Scan on beta_neg_p1 t2_1
-                           Filter: (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210)))
+                           Filter: ((b >= 100) AND (b < 110))
          ->  Hash Join
                Hash Cond: ((t1_2.a = t2_2.a) AND (t1_2.b = t2_2.b) AND (t1_2.c = t2_2.c))
                ->  Seq Scan on alpha_neg_p2 t1_2
-                     Filter: ((c = ANY ('{0004,0009}'::text[])) AND (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210))))
+                     Filter: ((b >= 200) AND (b < 210) AND (c = ANY ('{0004,0009}'::text[])))
                ->  Hash
                      ->  Seq Scan on beta_neg_p2 t2_2
-                           Filter: (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210)))
+                           Filter: ((b >= 200) AND (b < 210))
          ->  Nested Loop
                Join Filter: ((t1_3.a = t2_3.a) AND (t1_3.b = t2_3.b) AND (t1_3.c = t2_3.c))
                ->  Seq Scan on alpha_pos_p2 t1_3

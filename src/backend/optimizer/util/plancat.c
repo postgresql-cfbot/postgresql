@@ -34,12 +34,14 @@
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "nodes/supportnodes.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/plancat.h"
 #include "optimizer/prep.h"
+#include "optimizer/restrictinfo.h"
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
@@ -69,6 +71,8 @@ static List *get_relation_constraints(PlannerInfo *root,
 									  bool include_noinherit,
 									  bool include_notnull,
 									  bool include_partition);
+static void remove_restrictions_implied_by_constraints(RelOptInfo *rel,
+													   List *given_clauses);
 static List *build_index_tlist(PlannerInfo *root, IndexOptInfo *index,
 							   Relation heapRelation);
 static List *get_relation_statistics(RelOptInfo *rel, Relation relation);
@@ -1278,13 +1282,16 @@ get_relation_constraints(PlannerInfo *root,
 	}
 
 	/*
-	 * Add partitioning constraints, if requested.
+	 * If the table is a partition, make sure we have the partition qual, and
+	 * add it to the result if requested.  (But even if it's not requested,
+	 * fetch it while we have the relcache entry open.)
 	 */
-	if (include_partition && relation->rd_rel->relispartition)
+	if (relation->rd_rel->relispartition)
 	{
 		/* make sure rel->partition_qual is set */
 		set_baserel_partition_constraint(relation, rel);
-		result = list_concat(result, rel->partition_qual);
+		if (include_partition)
+			result = list_concat(result, rel->partition_qual);
 	}
 
 	table_close(relation, NoLock);
@@ -1388,6 +1395,14 @@ get_relation_statistics(RelOptInfo *rel, Relation relation)
  * Detect whether the relation need not be scanned because it has either
  * self-inconsistent restrictions, or restrictions inconsistent with the
  * relation's applicable constraints.
+ *
+ * Even if the relation does need to be scanned, we may be able to remove
+ * or simplify some of its baserestrictinfo clauses on the basis that
+ * they can be proven true, or some OR arms can be proven false, using
+ * the relation's applicable constraints.  Hence, this function may also
+ * update rel->baserestrictinfo.  (It's a bit hackish to include that in
+ * this function's responsibilities, but it saves fetching the constraint
+ * expressions twice.)
  *
  * Note: this examines only rel->relid, rel->reloptkind, and
  * rel->baserestrictinfo; therefore it can be called before filling in
@@ -1564,7 +1579,169 @@ relation_excluded_by_constraints(PlannerInfo *root,
 	if (predicate_refuted_by(safe_constraints, rel->baserestrictinfo, false))
 		return true;
 
+	/*
+	 * OK, we do need to scan the relation, but we might be able to simplify
+	 * its baserestrictinfo list.  For this purpose, we may use its partition
+	 * constraint even if that was deemed duplicative above.
+	 * (get_relation_constraints() will have set rel->partition_qual for us.)
+	 *
+	 * Unfortunately, we *cannot* use regular CHECK constraints here, because
+	 * we can only assume that those are not-FALSE, not that they are surely
+	 * TRUE.  (Partitioning constraints are constructed to be either TRUE or
+	 * FALSE, so we can make the needed proofs with them.)  We could use
+	 * attnotnull constraints, but it's not clear that those would add enough
+	 * to be worth another relcache visit.
+	 */
+	if (rel->partition_qual)
+		remove_restrictions_implied_by_constraints(rel, rel->partition_qual);
+
 	return false;
+}
+
+/*
+ * Remove or simplify any rel->baserestrictinfo clauses that are implied
+ * or refuted by the given_clauses.  Note that we assume the given
+ * clauses are known TRUE, not just that they are known not-FALSE.
+ */
+static void
+remove_restrictions_implied_by_constraints(RelOptInfo *rel,
+										   List *given_clauses)
+{
+	List	   *new_restrictions = NIL;
+	ListCell   *lc;
+
+	foreach(lc, rel->baserestrictinfo)
+	{
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
+
+		if (!restriction_is_or_clause(rinfo))
+		{
+			/*
+			 * Simple clause: see if we can prove it redundant.  There's no
+			 * need to try to refute it though; we should not have got here if
+			 * that were possible.  Note: predicate_implied_by expects us to
+			 * verify that its first argument contains no volatile functions.
+			 */
+			if (contain_mutable_functions((Node *) rinfo->clause) ||
+				!predicate_implied_by(list_make1(rinfo->clause),
+									  given_clauses,
+									  false))
+				new_restrictions = lappend(new_restrictions, rinfo);
+		}
+		else
+		{
+			/*
+			 * OR clause: try to prove or refute each OR arm individually.
+			 * Refuted arms can be dropped.  If we prove any one arm true, the
+			 * whole OR is true and can be dropped in toto.
+			 */
+			List	   *or_args = ((BoolExpr *) rinfo->clause)->args;
+			List	   *new_or_args = NIL;
+			bool		or_is_true = false;
+			ListCell   *lc2;
+
+			foreach(lc2, or_args)
+			{
+				Node	   *orarg = (Node *) lfirst(lc2);
+
+				if (contain_mutable_functions(orarg))
+				{
+					/* mutable, so no proof possible */
+					new_or_args = lappend(new_or_args, orarg);
+				}
+				else if (predicate_implied_by(list_make1(orarg),
+											  given_clauses,
+											  false))
+				{
+					/* orarg is provably true, therefore the OR is as well */
+					or_is_true = true;
+					break;
+				}
+				else if (predicate_refuted_by(list_make1(orarg),
+											  given_clauses,
+											  true))
+				{
+					/* orarg is provably false-or-null, drop it */
+					continue;
+				}
+				else
+					new_or_args = lappend(new_or_args, orarg);
+			}
+
+			/* Drop constant-true OR clauses from baserestrictinfo */
+			if (or_is_true)
+				continue;
+
+			if (list_length(new_or_args) == list_length(or_args))
+			{
+				/* Needn't rebuild the RestrictInfo if we eliminated nothing */
+				new_restrictions = lappend(new_restrictions, rinfo);
+			}
+			else if (new_or_args == NIL)
+			{
+				/*
+				 * Hmm, we refuted all the arms, making the OR constant-false.
+				 * This case should be unreachable, because if this is
+				 * provable then relation_excluded_by_constraints should have
+				 * excluded the rel altogether.  Hence, don't work hard here;
+				 * if we do somehow get here, just re-use the RestrictInfo.
+				 */
+				new_restrictions = lappend(new_restrictions, rinfo);
+			}
+			else
+			{
+				/* Otherwise, build RestrictInfo(s) from the surviving arms */
+				Expr	   *newclause;
+				RestrictInfo *newrinfo;
+
+				/* Build valid clause, with OR only if needed */
+				if (list_length(new_or_args) == 1)
+					newclause = (Expr *) linitial(new_or_args);
+				else
+					newclause = make_orclause(new_or_args);
+
+				if (is_andclause(newclause))
+				{
+					/*
+					 * We must manually flatten this AND-below-OR, now that
+					 * we've removed all its sibling OR arms.  In principle,
+					 * we could now try to prune these clauses individually,
+					 * but it doesn't seem likely to be worth the effort.
+					 */
+					ListCell   *lc3;
+
+					foreach(lc3, ((BoolExpr *) newclause)->args)
+					{
+						Expr	   *andarm = (Expr *) lfirst(lc3);
+
+						newrinfo = make_restrictinfo(andarm,
+													 rinfo->is_pushed_down,
+													 rinfo->outerjoin_delayed,
+													 false,
+													 rinfo->security_level,
+													 NULL,
+													 rinfo->outer_relids,
+													 rinfo->nullable_relids);
+						new_restrictions = lappend(new_restrictions, newrinfo);
+					}
+				}
+				else
+				{
+					newrinfo = make_restrictinfo(newclause,
+												 rinfo->is_pushed_down,
+												 rinfo->outerjoin_delayed,
+												 false,
+												 rinfo->security_level,
+												 NULL,
+												 rinfo->outer_relids,
+												 rinfo->nullable_relids);
+					new_restrictions = lappend(new_restrictions, newrinfo);
+				}
+			}
+		}
+	}
+
+	rel->baserestrictinfo = new_restrictions;
 }
 
 

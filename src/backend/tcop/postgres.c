@@ -19,6 +19,7 @@
 
 #include "postgres.h"
 
+#include <execinfo.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
@@ -2921,6 +2922,36 @@ FloatExceptionHandler(SIGNAL_ARGS)
 }
 
 /*
+ * LogBackTrace
+ *
+ * Get the backtrace and log the backtrace to log file.
+ */
+void
+LogBackTrace(void)
+{
+	int			save_errno = errno;
+
+	void	   *buf[100];
+	int			nframes;
+	char	  **strfrms;
+	StringInfoData errtrace;
+
+	nframes = backtrace(buf, lengthof(buf));
+	strfrms = backtrace_symbols(buf, nframes);
+	if (strfrms == NULL)
+		return;
+
+	initStringInfo(&errtrace);
+	for (int i = 0; i < nframes; i++)
+		appendStringInfo(&errtrace, "\n%s", strfrms[i]);
+	free(strfrms);
+
+	elog(LOG_SERVER_ONLY, "current backtrace:%s", errtrace.data);
+
+	errno = save_errno;
+}
+
+/*
  * RecoveryConflictInterrupt: out-of-line portion of recovery conflict
  * handling following receipt of SIGUSR1. Designed to be similar to die()
  * and StatementCancelHandler(). Called only by a normal user backend
@@ -3274,6 +3305,13 @@ ProcessInterrupts(void)
 
 	if (ParallelMessagePending)
 		HandleParallelMessages();
+
+	/* Process printing back trace */
+	if (PrintBacktracePending)
+	{
+		PrintBacktracePending = false;
+		LogBackTrace();
+	}
 }
 
 

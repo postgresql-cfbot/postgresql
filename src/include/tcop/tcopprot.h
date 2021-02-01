@@ -71,6 +71,7 @@ extern void RecoveryConflictInterrupt(ProcSignalReason reason); /* called from S
 extern void ProcessClientReadInterrupt(bool blocked);
 extern void ProcessClientWriteInterrupt(bool blocked);
 
+extern void LogBackTrace(void); /* log the backtrace to log file */
 extern void process_postgres_switches(int argc, char *argv[],
 									  GucContext ctx, const char **dbname);
 extern void PostgresMain(int argc, char *argv[],

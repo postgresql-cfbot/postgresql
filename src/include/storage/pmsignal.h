@@ -42,6 +42,8 @@ typedef enum
 	PMSIGNAL_START_WALRECEIVER, /* start a walreceiver */
 	PMSIGNAL_ADVANCE_STATE_MACHINE, /* advance postmaster's state machine */
 
+	PMSIGNAL_BACKTRACE_EMIT,	/* send PROCSIG_BACKTRACE_PRINT to backend */
+
 	NUM_PMSIGNALS				/* Must be last value of enum! */
 } PMSignalReason;
 

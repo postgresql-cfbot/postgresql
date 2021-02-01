@@ -22,6 +22,7 @@
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "tcop/tcopprot.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 
@@ -41,11 +42,13 @@
  * the caller.
  */
 #define SIGNAL_BACKEND_SUCCESS 0
+#define BACKEND_VALIDATION_SUCCESS 0
 #define SIGNAL_BACKEND_ERROR 1
 #define SIGNAL_BACKEND_NOPERMISSION 2
 #define SIGNAL_BACKEND_NOSUPERUSER 3
+
 static int
-pg_signal_backend(int pid, int sig)
+validate_backend_pid(int pid)
 {
 	PGPROC	   *proc = BackendPidGetProc(pid);
 
@@ -76,6 +79,17 @@ pg_signal_backend(int pid, int sig)
 	if (!has_privs_of_role(GetUserId(), proc->roleId) &&
 		!has_privs_of_role(GetUserId(), DEFAULT_ROLE_SIGNAL_BACKENDID))
 		return SIGNAL_BACKEND_NOPERMISSION;
+
+	return BACKEND_VALIDATION_SUCCESS;
+}
+
+static int
+pg_signal_backend(int pid, int sig)
+{
+	int			ret = validate_backend_pid(pid);
+
+	if (ret != BACKEND_VALIDATION_SUCCESS)
+		return ret;
 
 	/*
 	 * Can the process we just validated above end, followed by the pid being
@@ -214,4 +228,55 @@ pg_rotate_logfile_v2(PG_FUNCTION_ARGS)
 
 	SendPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE);
 	PG_RETURN_BOOL(true);
+}
+
+/*
+ * pg_print_backtrace - print backtrace of backend process.
+ *
+ * Permission checking for this function is managed through the normal
+ * GRANT system.
+ */
+Datum
+pg_print_backtrace(PG_FUNCTION_ARGS)
+{
+	int			bt_pid = PG_ARGISNULL(0) ? -1 : PG_GETARG_INT32(0);
+
+#ifdef HAVE_BACKTRACE_SYMBOLS
+	{
+		bool 		result = false;
+		int			r = validate_backend_pid(bt_pid);
+
+		if (r == SIGNAL_BACKEND_NOSUPERUSER)
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("must be a superuser to print backtrace of superuser process")));
+
+		if (r == SIGNAL_BACKEND_NOPERMISSION)
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("must be a member of the role whose backtrace is being logged or member of pg_signal_backend")));
+
+		if (r == BACKEND_VALIDATION_SUCCESS)
+		{
+			/*
+			 * Send SIGUSR1 to postgres backend whose pid matches bt_pid by
+			 * setting PROCSIG_BACKTRACE_PRINT, the backend process will print
+			 * the backtrace once the signal is received.
+			 */
+			if (!SendProcSignal(bt_pid, PROCSIG_BACKTRACE_PRINT, InvalidBackendId))
+				PG_RETURN_BOOL(true);
+			else
+				ereport(WARNING,
+						(errmsg("failed to send signal to postmaster: %m")));
+		}
+
+		PG_RETURN_BOOL(result);
+	}
+#else
+	{
+		ereport(WARNING,
+				(errmsg("backtrace generation is not supported by this installation")));
+		PG_RETURN_BOOL(false);
+	}
+#endif
 }

@@ -92,6 +92,8 @@ extern PGDLLIMPORT volatile uint32 InterruptHoldoffCount;
 extern PGDLLIMPORT volatile uint32 QueryCancelHoldoffCount;
 extern PGDLLIMPORT volatile uint32 CritSectionCount;
 
+extern PGDLLIMPORT volatile sig_atomic_t PrintBacktracePending;
+
 /* in tcop/postgres.c */
 extern void ProcessInterrupts(void);
 

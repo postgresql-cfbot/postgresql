@@ -836,6 +836,13 @@ HandleAutoVacLauncherInterrupts(void)
 	if (ProcSignalBarrierPending)
 		ProcessProcSignalBarrier();
 
+	/* Process printing back trace */
+	if (PrintBacktracePending)
+	{
+		PrintBacktracePending = false;
+		LogBackTrace();
+	}
+
 	/* Process sinval catchup interrupts that happened while sleeping */
 	ProcessCatchupInterrupt();
 }

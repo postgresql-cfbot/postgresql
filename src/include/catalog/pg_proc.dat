@@ -11379,4 +11379,9 @@
   proname => 'is_normalized', prorettype => 'bool', proargtypes => 'text text',
   prosrc => 'unicode_is_normalized' },
 
+# function to get the backtrace of server process
+{ oid => '6105', descr => 'print backtrace of process',
+  proname => 'pg_print_backtrace', provolatile => 'v', prorettype => 'bool',
+  proargtypes => 'int4', prosrc => 'pg_print_backtrace' },
+
 ]

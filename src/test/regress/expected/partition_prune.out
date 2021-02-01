@@ -1957,6 +1957,8 @@ begin
     loop
         ln := regexp_replace(ln, 'Workers Launched: \d+', 'Workers Launched: N');
         ln := regexp_replace(ln, 'actual rows=\d+ loops=\d+', 'actual rows=N loops=N');
+        ln := regexp_replace(ln, 'actual min_rows=\d+ rows=\d+ max_rows=\d+ loops=\d+',
+				 'actual min_rows=N rows=N max_rows=N loops=N');
         ln := regexp_replace(ln, 'Rows Removed by Filter: \d+', 'Rows Removed by Filter: N');
         return next ln;
     end loop;

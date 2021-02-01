@@ -47,6 +47,10 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
+/* Parameters for loop count notification in GetNewOidWithIndex() function */
+#define GETNEWOID_NOTIFICATION_INTERVAL_FACTOR 1000000
+#define GETNEWOID_NOTIFICATION_LIMIT 16000000
+
 /*
  * IsSystemRelation
  *		True iff the relation is either a system catalog or a toast table.
@@ -318,6 +322,8 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
 	SysScanDesc scan;
 	ScanKeyData key;
 	bool		collides;
+	uint64		retry_count;
+	uint64		next_notify;
 
 	/* Only system relations are supported */
 	Assert(IsSystemRelation(relation));
@@ -335,6 +341,8 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
 	Assert(!IsBinaryUpgrade || RelationGetRelid(relation) != TypeRelationId);
 
 	/* Generate new OIDs until we find one not in the table */
+	retry_count = 0;
+	next_notify = GETNEWOID_NOTIFICATION_INTERVAL_FACTOR; /* next notify interval */
 	do
 	{
 		CHECK_FOR_INTERRUPTS();
@@ -353,7 +361,26 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
 		collides = HeapTupleIsValid(systable_getnext(scan));
 
 		systable_endscan(scan);
+
+		/* retry count and notification limit check */
+		if (retry_count == next_notify && next_notify <= GETNEWOID_NOTIFICATION_LIMIT)
+		{
+			ereport(LOG,
+				(errmsg("failed to assign new OID in relation \"%s\" after "UINT64_FORMAT" retries", 
+					RelationGetRelationName(relation), retry_count)));
+			next_notify *= 2; /* double it for the next notification */
+		}
+		retry_count++;
+
 	} while (collides);
+
+	/* if the retry log is output, the OID generation completion log is also output */
+	if (retry_count >= GETNEWOID_NOTIFICATION_INTERVAL_FACTOR)
+	{
+		ereport(LOG,
+			(errmsg("the new OID has been assigned in relation \"%s\" after "UINT64_FORMAT" retries",
+				RelationGetRelationName(relation), retry_count)));
+	}
 
 	return newOid;
 }

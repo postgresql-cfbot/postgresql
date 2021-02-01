@@ -37,11 +37,13 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
 
   <para>
    <command>CREATE TABLE AS</command> creates a table and fills it
-   with data computed by a <command>SELECT</command> command.
-   The table columns have the
-   names and data types associated with the output columns of the
-   <command>SELECT</command> (except that you can override the column
-   names by giving an explicit list of new column names).
+   with data computed by a <command>SELECT</command> command. When the
+   node at the top of the <command>SELECT</command> plan is
+   <literal>Gather</literal> and there are no projections to be performed
+   by it, then the created table can be filled by the workers in parallel.
+   The table columns have the names and data types associated with the output
+   columns of the <command>SELECT</command> (except that you can override the
+   column names by giving an explicit list of new column names).
   </para>
 
   <para>
@@ -297,6 +299,25 @@ PREPARE recentfilms(date) AS
 CREATE TEMP TABLE films_recent ON COMMIT DROP AS
   EXECUTE recentfilms('2002-01-01');
 </programlisting></para>
+
+  <para>
+   Here is an example of a query plan when the data into the created table can
+   be filled by the workers in parallel:
+
+<programlisting>
+EXPLAIN CREATE TABLE bar AS SELECT * FROM foo WHERE i > 5;
+
+                             QUERY PLAN
+-------------------------------------------------------------------&zwsp;--
+Gather  (cost=0.00..23.28 rows=850 width=4)
+   Workers Planned: 2
+ ->  Create bar
+   ->  Parallel Seq Scan on foo  (cost=0.00..23.28 rows=354 width=4)
+         Filter: (i > 5)
+(5 rows)
+</programlisting>
+  </para>
+
  </refsect1>
 
  <refsect1>

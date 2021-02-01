@@ -216,7 +216,9 @@ ExecGatherMerge(PlanState *pstate)
 												 estate,
 												 gm->initParam,
 												 gm->num_workers,
-												 node->tuples_needed);
+												 node->tuples_needed,
+												 0,
+												 NULL);
 			else
 				ExecParallelReinitialize(node->ps.lefttree,
 										 node->pei,

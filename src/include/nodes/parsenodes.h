@@ -180,6 +180,8 @@ typedef struct Query
 	 */
 	int			stmt_location;	/* start location, or -1 if unknown */
 	int			stmt_len;		/* length in bytes; 0 means "rest of string" */
+	/* Parallel insertion tuple cost options. */
+	uint8 		parallelInsCmdTupleCostOpt;
 } Query;
 
 

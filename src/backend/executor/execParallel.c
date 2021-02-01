@@ -23,6 +23,7 @@
 
 #include "postgres.h"
 
+#include "commands/createas.h"
 #include "executor/execParallel.h"
 #include "executor/executor.h"
 #include "executor/nodeAgg.h"
@@ -65,6 +66,7 @@
 #define PARALLEL_KEY_QUERY_TEXT		UINT64CONST(0xE000000000000008)
 #define PARALLEL_KEY_JIT_INSTRUMENTATION UINT64CONST(0xE000000000000009)
 #define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xE00000000000000A)
+#define PARALLEL_KEY_INTO_CLAUSE		UINT64CONST(0xE00000000000000B)
 
 #define PARALLEL_TUPLE_QUEUE_SIZE		65536
 
@@ -77,6 +79,10 @@ typedef struct FixedParallelExecutorState
 	dsa_pointer param_exec;
 	int			eflags;
 	int			jit_flags;
+	ParallelInsertCmdKind ins_cmd_type; /* parallel insertion command type */
+	Oid			objectid;		/* used by workers to open relation */
+	/* Number of tuples inserted by all the workers. */
+	pg_atomic_uint64	processed;
 } FixedParallelExecutorState;
 
 /*
@@ -135,9 +141,25 @@ static bool ExecParallelReInitializeDSM(PlanState *planstate,
 										ParallelContext *pcxt);
 static bool ExecParallelRetrieveInstrumentation(PlanState *planstate,
 												SharedExecutorInstrumentation *instrumentation);
+static void ParallelInsCmdEstimate(ParallelContext *pcxt,
+								   ParallelInsertCmdKind ins_cmd,
+								   void *ins_info);
+static void SaveParallelInsCmdFixedInfo(ParallelExecutorInfo *pei,
+										FixedParallelExecutorState *fpes,
+										ParallelInsertCmdKind ins_cmd,
+										void *ins_info);
+static void SaveParallelInsCmdInfo(ParallelContext *pcxt,
+								   ParallelInsertCmdKind ins_cmd,
+								   void *ins_info);
+static bool PushDownParallelInsertState(DestReceiver *dest, PlanState *ps,
+										ParallelInsertCmdKind ins_cmd,
+										bool *gather_exists);
 
-/* Helper function that runs in the parallel worker. */
+/* Helper functions that run in the parallel worker. */
 static DestReceiver *ExecParallelGetReceiver(dsm_segment *seg, shm_toc *toc);
+
+static DestReceiver *ExecParallelGetInsReceiver(shm_toc *toc,
+												FixedParallelExecutorState *fpes);
 
 /*
  * Create a serialized representation of the plan to be sent to each worker.
@@ -578,7 +600,9 @@ ExecParallelSetupTupleQueues(ParallelContext *pcxt, bool reinitialize)
 ParallelExecutorInfo *
 ExecInitParallelPlan(PlanState *planstate, EState *estate,
 					 Bitmapset *sendParams, int nworkers,
-					 int64 tuples_needed)
+					 int64 tuples_needed,
+					 ParallelInsertCmdKind parallel_ins_cmd,
+					 void *parallel_ins_info)
 {
 	ParallelExecutorInfo *pei;
 	ParallelContext *pcxt;
@@ -712,6 +736,10 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	shm_toc_estimate_chunk(&pcxt->estimator, dsa_minsize);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
+	/* Estimate space for parallel insertions. */
+	if (parallel_ins_info)
+		ParallelInsCmdEstimate(pcxt, parallel_ins_cmd, parallel_ins_info);
+
 	/* Everyone's had a chance to ask for space, so now create the DSM. */
 	InitializeParallelDSM(pcxt);
 
@@ -729,6 +757,20 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	fpes->param_exec = InvalidDsaPointer;
 	fpes->eflags = estate->es_top_eflags;
 	fpes->jit_flags = estate->es_jit_flags;
+
+	if (parallel_ins_info)
+	{
+		/* Save parallel insertion fixed info into DSA. */
+		SaveParallelInsCmdFixedInfo(pei, fpes, parallel_ins_cmd,
+									parallel_ins_info);
+	}
+	else
+	{
+		pei->processed = NULL;
+		fpes->ins_cmd_type = PARALLEL_INSERT_CMD_UNDEF;
+		fpes->objectid = InvalidOid;
+	}
+
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_EXECUTOR_FIXED, fpes);
 
 	/* Store query string */
@@ -758,8 +800,22 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_WAL_USAGE, walusage_space);
 	pei->wal_usage = walusage_space;
 
-	/* Set up the tuple queues that the workers will write into. */
-	pei->tqueue = ExecParallelSetupTupleQueues(pcxt, false);
+	if (parallel_ins_info)
+	{
+		/* Save parallel insertion info into DSA. */
+		SaveParallelInsCmdInfo(pcxt, parallel_ins_cmd, parallel_ins_info);
+
+		/*
+		 * Tuple queues are not required in case of parallel insertions by the
+		 * workers, because Gather node will not receive any tuples.
+		 */
+		pei->tqueue = NULL;
+	}
+	else
+	{
+		/* Set up the tuple queues that the workers will write into. */
+		pei->tqueue = ExecParallelSetupTupleQueues(pcxt, false);
+	}
 
 	/* We don't need the TupleQueueReaders yet, though. */
 	pei->reader = NULL;
@@ -1391,8 +1447,13 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	/* Get fixed-size state. */
 	fpes = shm_toc_lookup(toc, PARALLEL_KEY_EXECUTOR_FIXED, false);
 
-	/* Set up DestReceiver, SharedExecutorInstrumentation, and QueryDesc. */
-	receiver = ExecParallelGetReceiver(seg, toc);
+	/* Set up DestReceiver. */
+	if (fpes->ins_cmd_type != PARALLEL_INSERT_CMD_UNDEF)
+		receiver = ExecParallelGetInsReceiver(toc, fpes);
+	else
+		receiver = ExecParallelGetReceiver(seg, toc);
+
+	/* Set up SharedExecutorInstrumentation, and QueryDesc. */
 	instrumentation = shm_toc_lookup(toc, PARALLEL_KEY_INSTRUMENTATION, true);
 	if (instrumentation != NULL)
 		instrument_options = instrumentation->instrument_options;
@@ -1471,6 +1532,13 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 			queryDesc->estate->es_jit->instr;
 	}
 
+	/*
+	 * Write out the number of tuples this worker has inserted. Leader will use
+	 * it to inform the end client.
+	 */
+	if (fpes->ins_cmd_type != PARALLEL_INSERT_CMD_UNDEF)
+		pg_atomic_add_fetch_u64(&fpes->processed, queryDesc->estate->es_processed);
+
 	/* Must do this after capturing instrumentation. */
 	ExecutorEnd(queryDesc);
 
@@ -1478,4 +1546,328 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	dsa_detach(area);
 	FreeQueryDesc(queryDesc);
 	receiver->rDestroy(receiver);
+}
+
+/*
+ * Estimate space required for sending parallel insert information to workers
+ * in commands such as CTAS.
+ */
+static void
+ParallelInsCmdEstimate(ParallelContext *pcxt, ParallelInsertCmdKind ins_cmd,
+					   void *ins_info)
+{
+	Assert(pcxt && ins_info &&
+		   (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS));
+
+	if (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS)
+	{
+		ParallelInsertCTASInfo 	*info = NULL;
+		char 					*intoclause_str = NULL;
+		int						 intoclause_len = 0;
+
+		info = (ParallelInsertCTASInfo *) ins_info;
+		intoclause_str = nodeToString(info->intoclause);
+		intoclause_len = strlen(intoclause_str) + 1;
+
+		shm_toc_estimate_chunk(&pcxt->estimator, intoclause_len);
+		shm_toc_estimate_keys(&pcxt->estimator, 1);
+	}
+}
+
+/*
+ * Save fixed state information required by workers for parallel inserts in
+ * commands such as CTAS.
+ */
+static void
+SaveParallelInsCmdFixedInfo(ParallelExecutorInfo *pei,
+							FixedParallelExecutorState *fpes,
+							ParallelInsertCmdKind ins_cmd,
+							void *ins_info)
+{
+	Assert(pei && fpes && ins_info &&
+		   (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS));
+
+	pg_atomic_init_u64(&fpes->processed, 0);
+	fpes->ins_cmd_type = ins_cmd;
+	pei->processed = &fpes->processed;
+
+	if (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS)
+	{
+		ParallelInsertCTASInfo	*info = NULL;
+
+		info = (ParallelInsertCTASInfo *) ins_info;
+		fpes->objectid = info->objectid;
+	}
+}
+
+/*
+ * Save variable state information required by workers for parallel inserts in
+ * commands such as CTAS.
+ */
+static void
+SaveParallelInsCmdInfo(ParallelContext *pcxt, ParallelInsertCmdKind ins_cmd,
+					   void *ins_info)
+{
+	Assert(pcxt && ins_info &&
+		   (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS));
+
+	if (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS)
+	{
+		ParallelInsertCTASInfo	*info = NULL;
+		char 					*intoclause_str = NULL;
+		int						 intoclause_len;
+		char 					*intoclause_space = NULL;
+
+		info = (ParallelInsertCTASInfo *)ins_info;
+		intoclause_str = nodeToString(info->intoclause);
+		intoclause_len = strlen(intoclause_str) + 1;
+		intoclause_space = shm_toc_allocate(pcxt->toc, intoclause_len);
+
+		memcpy(intoclause_space, intoclause_str, intoclause_len);
+		shm_toc_insert(pcxt->toc, PARALLEL_KEY_INTO_CLAUSE, intoclause_space);
+	}
+}
+
+/*
+ * Create a DestReceiver to write produced tuples to target relation in case of
+ * parallel insertions.
+ */
+static DestReceiver *
+ExecParallelGetInsReceiver(shm_toc *toc, FixedParallelExecutorState *fpes)
+{
+	ParallelInsertCmdKind	 ins_cmd;
+	DestReceiver 			*receiver;
+
+	Assert(fpes && toc &&
+		   (fpes->ins_cmd_type == PARALLEL_INSERT_CMD_CREATE_TABLE_AS));
+
+	ins_cmd = fpes->ins_cmd_type;
+
+	if (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS)
+	{
+		char		*intoclause_str = NULL;
+		IntoClause	*intoclause = NULL;
+
+		intoclause_str = shm_toc_lookup(toc, PARALLEL_KEY_INTO_CLAUSE, true);
+
+		/*
+		 * If the worker is for parallel insert in CTAS, then use the proper
+		 * dest receiver.
+		 */
+		intoclause = (IntoClause *) stringToNode(intoclause_str);
+		receiver = CreateIntoRelDestReceiver(intoclause);
+
+		((DR_intorel *)receiver)->is_parallel_worker = true;
+		((DR_intorel *)receiver)->object_id = fpes->objectid;
+	}
+
+	return receiver;
+}
+
+/*
+ * Given a DestReceiver, return the command type if parallelism is allowed.
+ */
+ParallelInsertCmdKind
+GetParallelInsertCmdType(DestReceiver *dest)
+{
+	if (!dest)
+		return PARALLEL_INSERT_CMD_UNDEF;
+
+	if (dest->mydest == DestIntoRel &&
+		((DR_intorel *) dest)->is_parallel)
+		return PARALLEL_INSERT_CMD_CREATE_TABLE_AS;
+
+	return PARALLEL_INSERT_CMD_UNDEF;
+}
+
+/*
+ * Given a DestReceiver, allocate and fill parallel insert info structure
+ * corresponding to command type.
+ *
+ * Note that the memory allocated here for the info structure has to be freed
+ * up in caller.
+ */
+void *
+GetParallelInsertCmdInfo(DestReceiver *dest, ParallelInsertCmdKind ins_cmd)
+{
+	void 	*parallel_ins_info = NULL;
+
+	Assert(dest && (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS));
+
+	if (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS)
+	{
+		ParallelInsertCTASInfo	*ctas_info = NULL;
+
+		ctas_info = (ParallelInsertCTASInfo *)
+									palloc0(sizeof(ParallelInsertCTASInfo));
+		ctas_info->intoclause = ((DR_intorel *) dest)->into;
+		ctas_info->objectid = ((DR_intorel *) dest)->object_id;
+		parallel_ins_info = ctas_info;
+	}
+
+	return parallel_ins_info;
+}
+
+/*
+ * Check if parallel insertion is allowed in commands such as CTAS.
+ *
+ * Return true if allowed, otherwise false.
+ */
+bool
+IsParallelInsertionAllowed(ParallelInsertCmdKind ins_cmd, void *ins_info)
+{
+	Assert(ins_info && (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS));
+
+	/*
+	 * For CTAS, do not allow parallel inserts if target table is temporary. As
+	 * the temporary tables are backend local, workers can not know about them.
+	 *
+	 * Return false either if the into clause is NULL or if the table is
+	 * temporary, otherwise true.
+	 */
+	if (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS)
+	{
+		ParallelInsertCTASInfo	*ctas_info = NULL;
+		IntoClause 				*into = NULL;
+
+		ctas_info = (ParallelInsertCTASInfo *) ins_info;
+		into = ctas_info->intoclause;
+
+		/* Below check may hit in case this function is called from explain.c. */
+		if (!(into && IsA(into, IntoClause)))
+			return false;
+
+		/*
+		 * Currently, CTAS supports creation of normal(logged), temporary and
+		 * unlogged tables. It does not support foreign or partition table
+		 * creation. Hence the check for temporary table is enough here.
+		 */
+		if (into->rel && into->rel->relpersistence == RELPERSISTENCE_TEMP)
+			return false;
+
+		return true;
+	}
+
+	return false;
+}
+
+/*
+ * Push the dest receiver to Gather node when it is either at the top of the
+ * plan or under top Append node and if it does not have any projections to do.
+ * Required information from the pushed dest receiver is sent to workers so
+ * that they can perform parallel insertions into the target table.
+ *
+ * If the top node is Append, then this function recursively checks the sub
+ * plans for Gather nodes, when found one(and if it does not have projections),
+ * then sets the dest receiver information.
+ *
+ * In this function we only care about Append and Gather nodes. This function
+ * returns true if at least one Gather node can allow parallel insertions by
+ * the workers. Otherwise returns false. It also sets gather_exists to true if
+ * at least one Gather node exists.
+ */
+static bool
+PushDownParallelInsertState(DestReceiver *dest, PlanState *ps,
+							ParallelInsertCmdKind ins_cmd, bool *gather_exists)
+{
+	bool parallel = false;
+
+	if (ps == NULL)
+		return parallel;
+
+	if (IsA(ps, AppendState))
+	{
+		AppendState *aps = (AppendState *) ps;
+
+		for (int i = 0; i < aps->as_nplans; i++)
+		{
+			parallel |= PushDownParallelInsertState(dest, aps->appendplans[i],
+													ins_cmd, gather_exists);
+		}
+	}
+	else if (IsA(ps, GatherState))
+	{
+		GatherState *gstate = (GatherState *) ps;
+
+		/*
+		 * Set to true if there exists at least one Gather node either at the
+		 * top of the plan or as a direct sub node under Append node.
+		 */
+		 *gather_exists |= true;
+
+		if (!gstate->ps.ps_ProjInfo)
+		{
+			parallel = true;
+
+			/* Okay to parallelize inserts, so mark it. */
+			if (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS)
+				((DR_intorel *) dest)->is_parallel = true;
+
+			/*
+			 * For parallelizing inserts in CTAS we must send information such
+			 * as into clause (to build separate dest receiver), object id (to
+			 * open the created table) to each workers. Since this information
+			 * is available in the CTAS dest receiver, store a reference to it
+			 * in the Gather state so that it will be used in
+			 * ExecInitParallelPlan to pick the required information.
+			 */
+			gstate->dest = dest;
+		}
+		else
+		{
+			/*
+			 * Gather node has projections, so parallel insertions are not
+			 * allowed.
+			 */
+			if (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS)
+				((DR_intorel *) dest)->is_parallel = false;
+
+			gstate->dest = NULL;
+		}
+	}
+
+	return parallel;
+}
+
+/*
+ * Set the parallel insert state, if the upper node is Gather and it doesn't
+ * have any projections. The parallel insert state includes information such as
+ * a flag in the dest receiver and also a dest receiver reference in the Gather
+ * node so that the required information will be picked and sent to workers.
+ */
+void
+SetParallelInsertState(ParallelInsertCmdKind ins_cmd, QueryDesc *queryDesc,
+					   uint8 *tuple_cost_opts)
+{
+	bool allow = false;
+	bool gather_exists = false;
+
+	Assert(queryDesc && (ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS));
+
+	allow = PushDownParallelInsertState(queryDesc->dest, queryDesc->planstate,
+										ins_cmd, &gather_exists);
+
+	/*
+	 * If parallel insertion is allowed or not allowed due to non-existence of
+	 * Gather node, then return from here without going for below assertion
+	 * check.
+	 */
+	if (allow || !gather_exists)
+		return;
+
+	/*
+	 * When parallel insertion is not allowed but Gather node exists, before
+	 * returning ensure that we have not done wrong parallel tuple cost
+	 * enforcement in the planner. Main reason for this assertion is to check
+	 * if we enforced the planner to ignore the parallel tuple cost (with the
+	 * intention of choosing parallel inserts) due to which the parallel plan
+	 * may have been chosen, but we do not allow the parallel inserts now.
+	 *
+	 * If we have correctly ignored parallel tuple cost in the planner while
+	 * creating Gather path, then this assertion failure should not occur. In
+	 * case it occurs, that means the planner may have chosen this parallel
+	 * plan because of our wrong enforcement. So let's try to catch that here.
+	 */
+	Assert(!allow && gather_exists && tuple_cost_opts && !(*tuple_cost_opts &
+		   PARALLEL_INSERT_TUP_COST_IGNORED));
 }

@@ -76,6 +76,7 @@
 #include "access/amapi.h"
 #include "access/htup_details.h"
 #include "access/tsmapi.h"
+#include "executor/execParallel.h"
 #include "executor/executor.h"
 #include "executor/nodeAgg.h"
 #include "executor/nodeHash.h"
@@ -393,7 +394,22 @@ cost_gather(GatherPath *path, PlannerInfo *root,
 
 	/* Parallel setup and communication cost. */
 	startup_cost += parallel_setup_cost;
-	run_cost += parallel_tuple_cost * path->path.rows;
+
+	/*
+	 * Do not consider tuple cost in case of we intend to perform parallel
+	 * inserts by workers. We would have turned on the ignore flag in
+	 * apply_scanjoin_target_to_paths before generating Gather path for the
+	 * upper level SELECT part of the query.
+	 */
+	if ((root->parse->parallelInsCmdTupleCostOpt &
+		 PARALLEL_INSERT_CAN_IGN_TUP_COST))
+	{
+		/* We are ignoring the parallel tuple cost, so mark it. */
+		root->parse->parallelInsCmdTupleCostOpt |=
+											PARALLEL_INSERT_TUP_COST_IGNORED;
+	}
+	else
+		run_cost += parallel_tuple_cost * path->path.rows;
 
 	path->path.startup_cost = startup_cost;
 	path->path.total_cost = (startup_cost + run_cost);

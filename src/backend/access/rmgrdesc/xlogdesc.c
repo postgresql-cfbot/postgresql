@@ -89,8 +89,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 		XLogRecPtr	startpoint;
 
 		memcpy(&startpoint, rec, sizeof(XLogRecPtr));
-		appendStringInfo(buf, "%X/%X",
-						 (uint32) (startpoint >> 32), (uint32) startpoint);
+		appendStringInfo(buf, LSN_FORMAT, LSN_FORMAT_ARG(startpoint));
 	}
 	else if (info == XLOG_PARAMETER_CHANGE)
 	{

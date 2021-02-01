@@ -80,6 +80,7 @@
 #include "utils/pg_rusage.h"
 #include "utils/snapmgr.h"
 #include "utils/timestamp.h"
+#include "utils/pg_lsn.h"
 
 extern uint32 bootstrap_data_checksum_version;
 
@@ -5911,15 +5912,16 @@ recoveryStopsAfter(XLogReaderState *record)
 		recoveryTargetInclusive &&
 		record->ReadRecPtr >= recoveryTargetLSN)
 	{
+		char		buf[MAXPG_LSNLEN + 1];
+
 		recoveryStopAfter = true;
 		recoveryStopXid = InvalidTransactionId;
 		recoveryStopLSN = record->ReadRecPtr;
 		recoveryStopTime = 0;
 		recoveryStopName[0] = '\0';
 		ereport(LOG,
-				(errmsg("recovery stopping after WAL location (LSN) \"%X/%X\"",
-						(uint32) (recoveryStopLSN >> 32),
-						(uint32) recoveryStopLSN)));
+				(errmsg("recovery stopping after WAL location (LSN) \"%s\"",
+						pg_lsn_out_buffer(recoveryStopLSN, buf))));
 		return true;
 	}
 

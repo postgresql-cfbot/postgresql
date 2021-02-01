@@ -26,4 +26,7 @@
 
 extern XLogRecPtr pg_lsn_in_internal(const char *str, bool *have_error);
 
+extern char *pg_lsn_out_internal(XLogRecPtr lsn);
+extern char *pg_lsn_out_buffer(XLogRecPtr lsn, char *buf);
+
 #endif							/* PG_LSN_H */

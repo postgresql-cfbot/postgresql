@@ -19,7 +19,6 @@
 #include "utils/numeric.h"
 #include "utils/pg_lsn.h"
 
-#define MAXPG_LSNLEN			17
 #define MAXPG_LSNCOMPONENT	8
 
 /*----------------------------------------------------------
@@ -81,18 +80,7 @@ Datum
 pg_lsn_out(PG_FUNCTION_ARGS)
 {
 	XLogRecPtr	lsn = PG_GETARG_LSN(0);
-	char		buf[MAXPG_LSNLEN + 1];
-	char	   *result;
-	uint32		id,
-				off;
-
-	/* Decode ID and offset */
-	id = (uint32) (lsn >> 32);
-	off = (uint32) lsn;
-
-	snprintf(buf, sizeof buf, "%X/%X", id, off);
-	result = pstrdup(buf);
-	PG_RETURN_CSTRING(result);
+	PG_RETURN_CSTRING(pg_lsn_out_internal(lsn));
 }
 
 Datum
@@ -316,4 +304,39 @@ pg_lsn_mii(PG_FUNCTION_ARGS)
 
 	/* Convert to pg_lsn */
 	return DirectFunctionCall1(numeric_pg_lsn, res);
+}
+
+/*
+ * pg_lsn_out_internal
+ *
+ * Returns palloc'ed string representation of an LSN. Used by pg_lsn_out() but
+ * is useful to print LSN in non-performance critical paths. The caller may
+ * pfree the returned memory chunk.
+ */
+char *
+pg_lsn_out_internal(XLogRecPtr lsn)
+{
+	char		buf[MAXPG_LSNLEN + 1];
+
+	snprintf(buf, sizeof(buf), LSN_FORMAT, LSN_FORMAT_ARG(lsn));
+
+	return pstrdup(buf);
+}
+
+/*
+ * pg_lsn_out_buffer
+ *
+ * Similar to the above function but saves the string representation of LSN in
+ * the given buffer which is expected to be at least MAXPG_LSNLEN long. It can
+ * be used in performance critical paths to avoid expensive memory allocation.
+ *
+ * The function returns pointer to the input buffer so that it can be used in
+ * printf variants.
+ */
+char *
+pg_lsn_out_buffer(XLogRecPtr lsn, char *buf)
+{
+	snprintf(buf, sizeof(buf), LSN_FORMAT, LSN_FORMAT_ARG(lsn));
+
+	return buf;
 }

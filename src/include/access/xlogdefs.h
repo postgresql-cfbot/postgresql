@@ -35,6 +35,13 @@ typedef uint64 XLogRecPtr;
  */
 #define FirstNormalUnloggedLSN	((XLogRecPtr) 1000)
 
+/* Handy macros to print LSN */
+#define LSN_FORMAT "%X/%X"
+#define LSN_FORMAT_ARG(lsn) (uint32) ((lsn) >> 32), (uint32) (lsn)
+
+/* Maximum length of string representation of an LSN */
+#define MAXPG_LSNLEN			17
+
 /*
  * XLogSegNo - physical log file sequence number.
  */

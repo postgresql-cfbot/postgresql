@@ -509,6 +509,22 @@ typedef struct ResultRelInfo
 } ResultRelInfo;
 
 /* ----------------
+ *	  AsyncRequest
+ *
+ * State for an asynchronous tuple request.
+ * ----------------
+ */
+typedef struct AsyncRequest
+{
+	struct PlanState *requestor;	/* Node that wants a tuple */
+	struct PlanState *requestee;	/* Node from which a tuple is wanted */
+	int			request_index;	/* Scratch space for requestor */
+	bool		callback_pending;	/* Callback is needed */
+	bool		request_complete;	/* Request complete, result valid */
+	TupleTableSlot *result;		/* Result (NULL if no more tuples) */
+} AsyncRequest;
+
+/* ----------------
  *	  EState information
  *
  * Working state for an Executor invocation
@@ -1213,12 +1229,23 @@ struct AppendState
 	PlanState **appendplans;	/* array of PlanStates for my inputs */
 	int			as_nplans;
 	int			as_whichplan;
+	bool		as_syncdone;	/* all synchronous plans done? */
+	Bitmapset  *as_asyncplans;	/* asynchronous plans indexes */
+	int			as_nasyncplans;	/* # of asynchronous plans */
+	AsyncRequest **as_asyncrequests;	/* array of AsyncRequests */
+	TupleTableSlot **as_asyncresults;	/* unreturned results of async plans */
+	int			as_nasyncresults;	/* # of valid entries in as_asyncresults */
+	int			as_nasyncremain;	/* # of remaining async plans */
+	Bitmapset  *as_needrequest;	/* async plans ready for a request */
+	struct WaitEventSet *as_eventset;	/* WaitEventSet used to configure
+										 * file descriptor wait events */
 	int			as_first_partial_plan;	/* Index of 'appendplans' containing
 										 * the first partial plan */
 	ParallelAppendState *as_pstate; /* parallel coordination info */
 	Size		pstate_len;		/* size of parallel coordination info */
 	struct PartitionPruneState *as_prune_state;
 	Bitmapset  *as_valid_subplans;
+	Bitmapset  *as_valid_asyncplans;
 	bool		(*choose_next_subplan) (AppendState *);
 };
 

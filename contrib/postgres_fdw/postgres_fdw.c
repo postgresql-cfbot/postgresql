@@ -21,6 +21,7 @@
 #include "commands/defrem.h"
 #include "commands/explain.h"
 #include "commands/vacuum.h"
+#include "executor/execAsync.h"
 #include "foreign/fdwapi.h"
 #include "funcapi.h"
 #include "miscadmin.h"
@@ -37,6 +38,7 @@
 #include "optimizer/tlist.h"
 #include "parser/parsetree.h"
 #include "postgres_fdw.h"
+#include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/float.h"
 #include "utils/guc.h"
@@ -158,6 +160,11 @@ typedef struct PgFdwScanState
 	/* batch-level state, for optimizing rewinds and avoiding useless fetch */
 	int			fetch_ct_2;		/* Min(# of fetches done, 2) */
 	bool		eof_reached;	/* true if last fetch reached EOF */
+
+	/* for asynchronous execution */
+	bool		async_capable; 	/* engage asynchronous-capable logic? */
+	PgFdwConnState *conn_state;	/* extra per-connection state */
+	ForeignScanState *next_node;	/* next ForeignScan node to activate */
 
 	/* working memory contexts */
 	MemoryContext batch_cxt;	/* context holding current batch of tuples */
@@ -408,6 +415,10 @@ static void postgresGetForeignUpperPaths(PlannerInfo *root,
 										 RelOptInfo *input_rel,
 										 RelOptInfo *output_rel,
 										 void *extra);
+static bool postgresIsForeignPathAsyncCapable(ForeignPath *path);
+static void postgresForeignAsyncRequest(AsyncRequest *areq);
+static void postgresForeignAsyncConfigureWait(AsyncRequest *areq);
+static void postgresForeignAsyncNotify(AsyncRequest *areq);
 
 /*
  * Helper functions
@@ -436,6 +447,7 @@ static bool ec_member_matches_foreign(PlannerInfo *root, RelOptInfo *rel,
 									  EquivalenceClass *ec, EquivalenceMember *em,
 									  void *arg);
 static void create_cursor(ForeignScanState *node);
+static void fetch_more_data_begin(ForeignScanState *node);
 static void fetch_more_data(ForeignScanState *node);
 static void close_cursor(PGconn *conn, unsigned int cursor_number);
 static PgFdwModifyState *create_foreign_modify(EState *estate,
@@ -491,6 +503,7 @@ static int	postgresAcquireSampleRowsFunc(Relation relation, int elevel,
 										  double *totaldeadrows);
 static void analyze_row_processor(PGresult *res, int row,
 								  PgFdwAnalyzeState *astate);
+static void request_tuple_asynchronously(AsyncRequest *areq);
 static HeapTuple make_tuple_from_result_row(PGresult *res,
 											int row,
 											Relation rel,
@@ -582,6 +595,12 @@ postgres_fdw_handler(PG_FUNCTION_ARGS)
 
 	/* Support functions for upper relation push-down */
 	routine->GetForeignUpperPaths = postgresGetForeignUpperPaths;
+
+	/* Support functions for asynchronous execution */
+	routine->IsForeignPathAsyncCapable = postgresIsForeignPathAsyncCapable;
+	routine->ForeignAsyncRequest = postgresForeignAsyncRequest;
+	routine->ForeignAsyncConfigureWait = postgresForeignAsyncConfigureWait;
+	routine->ForeignAsyncNotify = postgresForeignAsyncNotify;
 
 	PG_RETURN_POINTER(routine);
 }
@@ -1458,7 +1477,7 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 	 * Get connection to the foreign server.  Connection manager will
 	 * establish new connection if necessary.
 	 */
-	fsstate->conn = GetConnection(user, false);
+	fsstate->conn = GetConnection(user, false, &fsstate->conn_state);
 
 	/* Assign a unique ID for my cursor */
 	fsstate->cursor_number = GetCursorNumber(fsstate->conn);
@@ -1509,6 +1528,12 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 							 &fsstate->param_flinfo,
 							 &fsstate->param_exprs,
 							 &fsstate->param_values);
+
+	/* Initialize async state */
+	fsstate->async_capable = node->ss.ps.plan->async_capable;
+	fsstate->conn_state->activated = NULL;
+	fsstate->conn_state->async_query_sent = false;
+	fsstate->next_node = NULL;
 }
 
 /*
@@ -1523,8 +1548,10 @@ postgresIterateForeignScan(ForeignScanState *node)
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
 
 	/*
-	 * If this is the first call after Begin or ReScan, we need to create the
-	 * cursor on the remote side.
+	 * In sync mode, if this is the first call after Begin or ReScan, we need
+	 * to create the cursor on the remote side.  In async mode, we would have
+	 * aready created the cursor before we get here, even if this is the first
+	 * call after Begin or ReScan.
 	 */
 	if (!fsstate->cursor_exists)
 		create_cursor(node);
@@ -1534,6 +1561,9 @@ postgresIterateForeignScan(ForeignScanState *node)
 	 */
 	if (fsstate->next_tuple >= fsstate->num_tuples)
 	{
+		/* In async mode, just clear tuple slot. */
+		if (fsstate->async_capable)
+			return ExecClearTuple(slot);
 		/* No point in another fetch if we already detected EOF, though. */
 		if (!fsstate->eof_reached)
 			fetch_more_data(node);
@@ -1562,6 +1592,14 @@ postgresReScanForeignScan(ForeignScanState *node)
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
 	char		sql[64];
 	PGresult   *res;
+
+	/* Reset async state */
+	if (fsstate->async_capable)
+	{
+		fsstate->conn_state->activated = NULL;
+		fsstate->conn_state->async_query_sent = false;
+		fsstate->next_node = NULL;
+	}
 
 	/* If we haven't created the cursor yet, nothing to do. */
 	if (!fsstate->cursor_exists)
@@ -1620,6 +1658,14 @@ postgresEndForeignScan(ForeignScanState *node)
 	/* if fsstate is NULL, we are in EXPLAIN; nothing to do */
 	if (fsstate == NULL)
 		return;
+
+	/*
+	 * If we're ending before we've collected a response from an asynchronous
+	 * query, we have to consume the response.
+	 */
+	if (fsstate->conn_state->activated == node &&
+		fsstate->conn_state->async_query_sent)
+		fetch_more_data(node);
 
 	/* Close the cursor if open, to prevent accumulation of cursors */
 	if (fsstate->cursor_exists)
@@ -2481,7 +2527,7 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 	 * Get connection to the foreign server.  Connection manager will
 	 * establish new connection if necessary.
 	 */
-	dmstate->conn = GetConnection(user, false);
+	dmstate->conn = GetConnection(user, false, NULL);
 
 	/* Update the foreign-join-related fields. */
 	if (fsplan->scan.scanrelid == 0)
@@ -2862,7 +2908,7 @@ estimate_path_cost_size(PlannerInfo *root,
 								false, &retrieved_attrs, NULL);
 
 		/* Get the remote estimate */
-		conn = GetConnection(fpinfo->user, false);
+		conn = GetConnection(fpinfo->user, false, NULL);
 		get_remote_estimate(sql.data, conn, &rows, &width,
 							&startup_cost, &total_cost);
 		ReleaseConnection(conn);
@@ -3491,6 +3537,34 @@ create_cursor(ForeignScanState *node)
 }
 
 /*
+ * Begin an asynchronous data fetch.
+ * fetch_more_data must be called to fetch the results..
+ */
+static void
+fetch_more_data_begin(ForeignScanState *node)
+{
+	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	PGconn	   *conn = fsstate->conn;
+	char		sql[64];
+
+	Assert(fsstate->conn_state->activated == node);
+	Assert(!fsstate->conn_state->async_query_sent);
+
+	/* Create the cursor synchronously. */
+	if (!fsstate->cursor_exists)
+		create_cursor(node);
+
+	/* We will send this query, but not wait for the response. */
+	snprintf(sql, sizeof(sql), "FETCH %d FROM c%u",
+			 fsstate->fetch_size, fsstate->cursor_number);
+
+	if (PQsendQuery(conn, sql) < 0)
+		pgfdw_report_error(ERROR, NULL, conn, false, fsstate->query);
+
+	fsstate->conn_state->async_query_sent = true;
+}
+
+/*
  * Fetch some more rows from the node's cursor.
  */
 static void
@@ -3512,17 +3586,36 @@ fetch_more_data(ForeignScanState *node)
 	PG_TRY();
 	{
 		PGconn	   *conn = fsstate->conn;
-		char		sql[64];
 		int			numrows;
 		int			i;
 
-		snprintf(sql, sizeof(sql), "FETCH %d FROM c%u",
-				 fsstate->fetch_size, fsstate->cursor_number);
+		if (fsstate->async_capable)
+		{
+			Assert(fsstate->conn_state->activated == node);
+			Assert(fsstate->conn_state->async_query_sent);
 
-		res = pgfdw_exec_query(conn, sql);
-		/* On error, report the original query, not the FETCH. */
-		if (PQresultStatus(res) != PGRES_TUPLES_OK)
-			pgfdw_report_error(ERROR, res, conn, false, fsstate->query);
+			/*
+			 * The query was already sent by an earlier call to
+			 * fetch_more_data_begin.  So now we just fetch the result.
+			 */
+			res = PQgetResult(conn);
+			/* On error, report the original query, not the FETCH. */
+			if (PQresultStatus(res) != PGRES_TUPLES_OK)
+				pgfdw_report_error(ERROR, res, conn, false, fsstate->query);
+		}
+		else
+		{
+			char		sql[64];
+
+			/* This is a regular synchronous fetch. */
+			snprintf(sql, sizeof(sql), "FETCH %d FROM c%u",
+					 fsstate->fetch_size, fsstate->cursor_number);
+
+			res = pgfdw_exec_query(conn, sql);
+			/* On error, report the original query, not the FETCH. */
+			if (PQresultStatus(res) != PGRES_TUPLES_OK)
+				pgfdw_report_error(ERROR, res, conn, false, fsstate->query);
+		}
 
 		/* Convert the data into HeapTuples */
 		numrows = PQntuples(res);
@@ -3549,6 +3642,15 @@ fetch_more_data(ForeignScanState *node)
 
 		/* Must be EOF if we didn't get as many tuples as we asked for. */
 		fsstate->eof_reached = (numrows < fsstate->fetch_size);
+
+		/* If this was the second part of an async request, we must fetch until NULL. */
+		if (fsstate->async_capable)
+		{
+			/* call once and raise error if not NULL as expected? */
+			while (PQgetResult(conn) != NULL)
+				;
+			fsstate->conn_state->async_query_sent = false;
+		}
 	}
 	PG_FINALLY();
 	{
@@ -3674,7 +3776,7 @@ create_foreign_modify(EState *estate,
 	user = GetUserMapping(userid, table->serverid);
 
 	/* Open connection; report that we'll create a prepared statement. */
-	fmstate->conn = GetConnection(user, true);
+	fmstate->conn = GetConnection(user, true, NULL);
 	fmstate->p_name = NULL;		/* prepared statement not made yet */
 
 	/* Set up remote query information. */
@@ -4608,7 +4710,7 @@ postgresAnalyzeForeignTable(Relation relation,
 	 */
 	table = GetForeignTable(RelationGetRelid(relation));
 	user = GetUserMapping(relation->rd_rel->relowner, table->serverid);
-	conn = GetConnection(user, false);
+	conn = GetConnection(user, false, NULL);
 
 	/*
 	 * Construct command to get page count for relation.
@@ -4694,7 +4796,7 @@ postgresAcquireSampleRowsFunc(Relation relation, int elevel,
 	table = GetForeignTable(RelationGetRelid(relation));
 	server = GetForeignServer(table->serverid);
 	user = GetUserMapping(relation->rd_rel->relowner, table->serverid);
-	conn = GetConnection(user, false);
+	conn = GetConnection(user, false, NULL);
 
 	/*
 	 * Construct cursor that retrieves whole rows from remote.
@@ -4922,7 +5024,7 @@ postgresImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 	 */
 	server = GetForeignServer(serverOid);
 	mapping = GetUserMapping(GetUserId(), server->serverid);
-	conn = GetConnection(mapping, false);
+	conn = GetConnection(mapping, false, NULL);
 
 	/* Don't attempt to import collation if remote server hasn't got it */
 	if (PQserverVersion(conn) < 90100)
@@ -6467,6 +6569,177 @@ add_foreign_final_paths(PlannerInfo *root, RelOptInfo *input_rel,
 
 	/* and add it to the final_rel */
 	add_path(final_rel, (Path *) final_path);
+}
+
+/*
+ * postgresIsForeignPathAsyncCapable
+ *		Check whether a given ForeignPath node is async-capable.
+ */
+static bool
+postgresIsForeignPathAsyncCapable(ForeignPath *path)
+{
+	return true;
+}
+
+/*
+ * postgresForeignAsyncRequest
+ *		Asynchronously request next tuple from a foreign PostgreSQL table.
+ */
+static void
+postgresForeignAsyncRequest(AsyncRequest *areq)
+{
+	ForeignScanState *node = (ForeignScanState *) areq->requestee;
+	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+
+	/*
+	 * If this is the first call after Begin or ReScan, mark the connection
+	 * as used by the ForeignScan node.
+	 */
+	if (fsstate->conn_state->activated == NULL)
+		fsstate->conn_state->activated = node;
+
+	/*
+	 * If the connection has already been used by a ForeignScan node, put it
+	 * at the end of the chain of waiting ForeignScan nodes, and then return.
+	 */
+	if (node != fsstate->conn_state->activated)
+	{
+		ForeignScanState *curr_node = fsstate->conn_state->activated;
+		PgFdwScanState *curr_fsstate = (PgFdwScanState *) curr_node->fdw_state;
+
+		/* Scan down the chain ... */
+		while (curr_fsstate->next_node)
+		{
+			curr_node = curr_fsstate->next_node;
+			Assert(node != curr_node);
+			curr_fsstate = (PgFdwScanState *) curr_node->fdw_state;
+		}
+		/* Update the chain linking */
+		curr_fsstate->next_node = node;
+		/* Mark the request as needing a callback */
+		areq->callback_pending = true;
+		areq->request_complete = false;
+		return;
+	}
+
+	request_tuple_asynchronously(areq);
+}
+
+/*
+ * postgresForeignAsyncConfigureWait
+ *		Configure a file descriptor event for which we wish to wait.
+ */
+static void
+postgresForeignAsyncConfigureWait(AsyncRequest *areq)
+{
+	ForeignScanState *node = (ForeignScanState *) areq->requestee;
+	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	AppendState *requestor = (AppendState *) areq->requestor;
+	WaitEventSet *set = requestor->as_eventset;
+
+	/* This function should not be called unless callback_pending */
+	Assert(areq->callback_pending);
+
+	/* If the ForeignScan node isn't activated yet, nothing to do */
+	if (fsstate->conn_state->activated != node)
+		return;
+
+	AddWaitEventToSet(set, WL_SOCKET_READABLE, PQsocket(fsstate->conn),
+					  NULL, areq);
+}
+
+/*
+ * postgresForeignAsyncNotify
+ *		Fetch some more tuples from a file descriptor that becomes ready,
+ *		requesting next tuple.
+ */
+static void
+postgresForeignAsyncNotify(AsyncRequest *areq)
+{
+	ForeignScanState *node = (ForeignScanState *) areq->requestee;
+
+	/* The core code would have initialized the callback_pending flag */
+	Assert(!areq->callback_pending);
+
+	fetch_more_data(node);
+
+	request_tuple_asynchronously(areq);
+}
+
+/*
+ * Asynchronously request next tuple from a foreign PostgreSQL table.
+ */
+static void
+request_tuple_asynchronously(AsyncRequest *areq)
+{
+	ForeignScanState *node = (ForeignScanState *) areq->requestee;
+	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	TupleTableSlot *result;
+
+	/* Request some more tuples, if we've run out */
+	if (fsstate->next_tuple >= fsstate->num_tuples)
+	{
+		/* No point in another fetch if we already detected EOF, though */
+		if (!fsstate->eof_reached)
+		{
+			/* Begin another fetch */
+			fetch_more_data_begin(node);
+			/* Mark the request as needing a callback */
+			areq->callback_pending = true;
+			areq->request_complete = false;
+			return;
+		}
+		fsstate->conn_state->activated = NULL;
+
+		/* Activate the next ForeignScan node if any */
+		if (fsstate->next_node)
+		{
+			/* Mark the connection as used by the next ForeignScan node */
+			fsstate->conn_state->activated = fsstate->next_node;
+			Assert(!fsstate->conn_state->async_query_sent);
+			/* Begin an asynchronous fetch for that node */
+			fetch_more_data_begin(fsstate->next_node);
+		}
+
+		/* There's nothing more to do; just return a NULL pointer */
+		result = NULL;
+		/* Mark the request as complete */
+		ExecAsyncRequestDone(areq, result);
+		return;
+	}
+
+	/* Get a tuple from the ForeignScan node */
+	result = ExecProcNode((PlanState *) node);
+
+	if (TupIsNull(result))
+	{
+		Assert(fsstate->next_tuple >= fsstate->num_tuples);
+
+		/* Request some more tuples, if we've not detected EOF yet */
+		if (!fsstate->eof_reached)
+		{
+			/* Begin another fetch */
+			fetch_more_data_begin(node);
+			/* Mark the request as needing a callback */
+			areq->callback_pending = true;
+			areq->request_complete = false;
+			return;
+		}
+		fsstate->conn_state->activated = NULL;
+
+		/* Activate the next ForeignScan node if any */
+		if (fsstate->next_node)
+		{
+			/* Mark the connection as used by the next ForeignScan node */
+			fsstate->conn_state->activated = fsstate->next_node;
+			Assert(!fsstate->conn_state->async_query_sent);
+			/* Begin an asynchronous fetch for that node */
+			fetch_more_data_begin(fsstate->next_node);
+		}
+	}
+
+	/* Mark the request as complete */
+	ExecAsyncRequestDone(areq, result);
 }
 
 /*

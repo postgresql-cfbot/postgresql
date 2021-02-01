@@ -284,10 +284,12 @@ RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr, const char *conninfo,
 	 * If this is the first startup of walreceiver (on this timeline),
 	 * initialize flushedUpto and latestChunkStart to the starting point.
 	 */
-	if (walrcv->receiveStart == 0 || walrcv->receivedTLI != tli)
+	if (walrcv->receiveStart == 0 || walrcv->flushedTLI != tli)
 	{
+		pg_atomic_write_u64(&walrcv->writtenUpto, recptr);
+		walrcv->writtenTLI = tli;
 		walrcv->flushedUpto = recptr;
-		walrcv->receivedTLI = tli;
+		walrcv->flushedTLI = tli;
 		walrcv->latestChunkStart = recptr;
 	}
 	walrcv->receiveStart = recptr;
@@ -309,10 +311,10 @@ RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr, const char *conninfo,
  * Optionally, returns the previous chunk start, that is the first byte
  * written in the most recent walreceiver flush cycle.  Callers not
  * interested in that value may pass NULL for latestChunkStart. Same for
- * receiveTLI.
+ * flushedTLI.
  */
 XLogRecPtr
-GetWalRcvFlushRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI)
+GetWalRcvFlushRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *flushedTLI)
 {
 	WalRcvData *walrcv = WalRcv;
 	XLogRecPtr	recptr;
@@ -321,8 +323,8 @@ GetWalRcvFlushRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI)
 	recptr = walrcv->flushedUpto;
 	if (latestChunkStart)
 		*latestChunkStart = walrcv->latestChunkStart;
-	if (receiveTLI)
-		*receiveTLI = walrcv->receivedTLI;
+	if (flushedTLI)
+		*flushedTLI = walrcv->flushedTLI;
 	SpinLockRelease(&walrcv->mutex);
 
 	return recptr;
@@ -330,14 +332,35 @@ GetWalRcvFlushRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *receiveTLI)
 
 /*
  * Returns the last+1 byte position that walreceiver has written.
- * This returns a recently written value without taking a lock.
+ *
+ * The other arguments are similar to GetWalRcvFlushRecPtr()'s.
  */
 XLogRecPtr
-GetWalRcvWriteRecPtr(void)
+GetWalRcvWriteRecPtr(XLogRecPtr *latestChunkStart, TimeLineID *writtenTLI)
 {
 	WalRcvData *walrcv = WalRcv;
+	XLogRecPtr	recptr;
 
-	return pg_atomic_read_u64(&walrcv->writtenUpto);
+	SpinLockAcquire(&walrcv->mutex);
+	recptr = pg_atomic_read_u64(&walrcv->writtenUpto);
+	if (latestChunkStart)
+		*latestChunkStart = walrcv->latestChunkStart;
+	if (writtenTLI)
+		*writtenTLI = walrcv->writtenTLI;
+	SpinLockRelease(&walrcv->mutex);
+
+	return recptr;
+}
+
+/*
+ * For callers that don't need a consistent LSN, TLI pair, and that don't mind
+ * a potentially slightly out of date value in exchange for speed, this
+ * version provides an unlocked view of the latest written location.
+ */
+XLogRecPtr
+GetWalRcvWriteRecPtrUnlocked(void)
+{
+	return pg_atomic_read_u64(&WalRcv->writtenUpto);
 }
 
 /*

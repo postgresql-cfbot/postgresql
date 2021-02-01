@@ -61,6 +61,7 @@
 #include "access/visibilitymap.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "catalog/index.h"
 #include "catalog/storage.h"
 #include "commands/dbcommands.h"
 #include "commands/progress.h"
@@ -365,7 +366,7 @@ static BlockNumber count_nondeletable_pages(Relation onerel,
 static void lazy_space_alloc(LVRelStats *vacrelstats, BlockNumber relblocks);
 static void lazy_record_dead_tuple(LVDeadTuples *dead_tuples,
 								   ItemPointer itemptr);
-static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
+static inline bool lazy_tid_reaped(ItemPointer itemptr, void *state);
 static int	vac_cmp_itemptr(const void *left, const void *right);
 static bool heap_page_is_all_visible(Relation rel, Buffer buf,
 									 LVRelStats *vacrelstats,
@@ -2917,11 +2918,25 @@ lazy_record_dead_tuple(LVDeadTuples *dead_tuples, ItemPointer itemptr)
  *
  *		Assumes dead_tuples array is in sorted order.
  */
-static bool
+static inline bool
 lazy_tid_reaped(ItemPointer itemptr, void *state)
 {
 	LVDeadTuples *dead_tuples = (LVDeadTuples *) state;
+	int64 litem, ritem, item;
 	ItemPointer res;
+
+	litem = itemptr_encode(&(dead_tuples->itemptrs[0]));
+	ritem = itemptr_encode(&(dead_tuples->itemptrs[dead_tuples->num_tuples - 1]));
+	item = itemptr_encode(itemptr);
+
+	/*
+	 * Bound check. Since this function is called for every index tuples
+	 * it needs to be fast. Doing bound check before bsearch is effective
+	 * to avoid extra cost by bsearch especially if dead tuples on the
+	 * heap are concentrated a certain range.
+	 */
+	if (item < litem || item > ritem)
+		return false;
 
 	res = (ItemPointer) bsearch((void *) itemptr,
 								(void *) dead_tuples->itemptrs,

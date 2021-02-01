@@ -37,7 +37,8 @@
 #include "utils/typcache.h"
 
 static double ndistinct_for_combination(double totalrows, int numrows,
-										HeapTuple *rows, VacAttrStats **stats,
+										HeapTuple *rows, ExprInfo *exprs,
+										int nattrs, VacAttrStats **stats,
 										int k, int *combination);
 static double estimate_ndistinct(double totalrows, int numrows, int d, int f1);
 static int	n_choose_k(int n, int k);
@@ -81,16 +82,21 @@ static void generate_combinations(CombinationGenerator *state);
  *
  * This computes the ndistinct estimate using the same estimator used
  * in analyze.c and then computes the coefficient.
+ *
+ * To handle expressions easily, we treat them as special attributes with
+ * attnums above MaxHeapAttributeNumber, and we assume the expressions are
+ * placed after all simple attributes.
  */
 MVNDistinct *
 statext_ndistinct_build(double totalrows, int numrows, HeapTuple *rows,
-						Bitmapset *attrs, VacAttrStats **stats)
+						ExprInfo *exprs, Bitmapset *attrs,
+						VacAttrStats **stats)
 {
 	MVNDistinct *result;
 	int			k;
 	int			itemcnt;
 	int			numattrs = bms_num_members(attrs);
-	int			numcombs = num_combinations(numattrs);
+	int			numcombs = num_combinations(numattrs + exprs->nexprs);
 
 	result = palloc(offsetof(MVNDistinct, items) +
 					numcombs * sizeof(MVNDistinctItem));
@@ -98,14 +104,20 @@ statext_ndistinct_build(double totalrows, int numrows, HeapTuple *rows,
 	result->type = STATS_NDISTINCT_TYPE_BASIC;
 	result->nitems = numcombs;
 
+	/* treat expressions as special attributes with high attnums */
+	attrs = add_expressions_to_attributes(attrs, exprs->nexprs);
+
+	/* make sure there were no clashes */
+	Assert(bms_num_members(attrs) == numattrs + exprs->nexprs);
+
 	itemcnt = 0;
-	for (k = 2; k <= numattrs; k++)
+	for (k = 2; k <= bms_num_members(attrs); k++)
 	{
 		int		   *combination;
 		CombinationGenerator *generator;
 
 		/* generate combinations of K out of N elements */
-		generator = generator_init(numattrs, k);
+		generator = generator_init(bms_num_members(attrs), k);
 
 		while ((combination = generator_next(generator)))
 		{
@@ -114,10 +126,32 @@ statext_ndistinct_build(double totalrows, int numrows, HeapTuple *rows,
 
 			item->attrs = NULL;
 			for (j = 0; j < k; j++)
-				item->attrs = bms_add_member(item->attrs,
-											 stats[combination[j]]->attr->attnum);
+			{
+				AttrNumber attnum = InvalidAttrNumber;
+
+				/*
+				 * The simple attributes are before expressions, so have
+				 * indexes below numattrs.
+				 * */
+				if (combination[j] < numattrs)
+					attnum = stats[combination[j]]->attr->attnum;
+				else
+				{
+					/* make sure the expression index is valid */
+					Assert((combination[j] - numattrs) >= 0);
+					Assert((combination[j] - numattrs) < exprs->nexprs);
+
+					attnum = EXPRESSION_ATTNUM(combination[j] - numattrs);
+				}
+
+				Assert(attnum != InvalidAttrNumber);
+
+				item->attrs = bms_add_member(item->attrs, attnum);
+			}
+
 			item->ndistinct =
 				ndistinct_for_combination(totalrows, numrows, rows,
+										  exprs, numattrs,
 										  stats, k, combination);
 
 			itemcnt++;
@@ -153,7 +187,7 @@ statext_ndistinct_load(Oid mvoid)
 							Anum_pg_statistic_ext_data_stxdndistinct, &isnull);
 	if (isnull)
 		elog(ERROR,
-			 "requested statistic kind \"%c\" is not yet built for statistics object %u",
+			 "requested statistics kind \"%c\" is not yet built for statistics object %u",
 			 STATS_EXT_NDISTINCT, mvoid);
 
 	result = statext_ndistinct_deserialize(DatumGetByteaPP(ndist));
@@ -428,6 +462,7 @@ pg_ndistinct_send(PG_FUNCTION_ARGS)
  */
 static double
 ndistinct_for_combination(double totalrows, int numrows, HeapTuple *rows,
+						  ExprInfo *exprs, int nattrs,
 						  VacAttrStats **stats, int k, int *combination)
 {
 	int			i,
@@ -467,25 +502,57 @@ ndistinct_for_combination(double totalrows, int numrows, HeapTuple *rows,
 	 */
 	for (i = 0; i < k; i++)
 	{
-		VacAttrStats *colstat = stats[combination[i]];
+		Oid				typid;
 		TypeCacheEntry *type;
+		AttrNumber		attnum = InvalidAttrNumber;
+		TupleDesc		tdesc = NULL;
+		Oid				collid = InvalidOid;
 
-		type = lookup_type_cache(colstat->attrtypid, TYPECACHE_LT_OPR);
+		if (combination[i] < nattrs)
+		{
+			VacAttrStats *colstat = stats[combination[i]];
+			typid = colstat->attrtypid;
+			attnum = colstat->attr->attnum;
+			collid = colstat->attrcollid;
+			tdesc = colstat->tupDesc;
+		}
+		else
+		{
+			typid = exprs->types[combination[i] - nattrs];
+			collid = exprs->collations[combination[i] - nattrs];
+		}
+
+		type = lookup_type_cache(typid, TYPECACHE_LT_OPR);
 		if (type->lt_opr == InvalidOid) /* shouldn't happen */
 			elog(ERROR, "cache lookup failed for ordering operator for type %u",
-				 colstat->attrtypid);
+				 typid);
 
 		/* prepare the sort function for this dimension */
-		multi_sort_add_dimension(mss, i, type->lt_opr, colstat->attrcollid);
+		multi_sort_add_dimension(mss, i, type->lt_opr, collid);
 
 		/* accumulate all the data for this dimension into the arrays */
 		for (j = 0; j < numrows; j++)
 		{
-			items[j].values[i] =
-				heap_getattr(rows[j],
-							 colstat->attr->attnum,
-							 colstat->tupDesc,
-							 &items[j].isnull[i]);
+			/*
+			 * The first nattrs indexes identify simple attributes, higher
+			 * indexes are expressions.
+			 */
+			if (combination[i] < nattrs)
+				items[j].values[i] =
+					heap_getattr(rows[j],
+								 attnum,
+								 tdesc,
+								 &items[j].isnull[i]);
+			else
+			{
+				int idx = (combination[i] - nattrs);
+
+				/* make sure the expression index is valid */
+				Assert((idx >= 0) && (idx < exprs->nexprs));
+
+				items[j].values[i] = exprs->values[idx][j];
+				items[j].isnull[i] = exprs->nulls[idx][j];
+			}
 		}
 	}
 

@@ -915,8 +915,9 @@ typedef struct StatisticExtInfo
 
 	Oid			statOid;		/* OID of the statistics row */
 	RelOptInfo *rel;			/* back-link to statistic's table */
-	char		kind;			/* statistic kind of this entry */
+	char		kind;			/* statistics kind of this entry */
 	Bitmapset  *keys;			/* attnums of the columns covered */
+	List	   *exprs;			/* expressions */
 } StatisticExtInfo;
 
 /*

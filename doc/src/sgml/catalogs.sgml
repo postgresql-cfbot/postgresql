@@ -7350,7 +7350,7 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        <structfield>stxkind</structfield> <type>char[]</type>
       </para>
       <para>
-       An array containing codes for the enabled statistic kinds;
+       An array containing codes for the enabled statistics kinds;
        valid values are:
        <literal>d</literal> for n-distinct statistics,
        <literal>f</literal> for functional dependency statistics, and
@@ -9397,6 +9397,11 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
      <row>
       <entry><link linkend="view-pg-stats-ext"><structname>pg_stats_ext</structname></link></entry>
       <entry>extended planner statistics</entry>
+     </row>
+
+     <row>
+      <entry><link linkend="view-pg-stats-ext-exprs"><structname>pg_stats_ext_exprs</structname></link></entry>
+      <entry>extended planner statistics for expressions</entry>
      </row>
 
      <row>
@@ -12956,6 +12961,237 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
    The maximum number of entries in the array fields can be controlled on a
    column-by-column basis using the <link linkend="sql-altertable"><command>ALTER
    TABLE SET STATISTICS</command></link> command, or globally by setting the
+   <xref linkend="guc-default-statistics-target"/> run-time parameter.
+  </para>
+
+ </sect1>
+
+ <sect1 id="view-pg-stats-ext-exprs">
+  <title><structname>pg_stats_ext_exprs</structname></title>
+
+  <indexterm zone="view-pg-stats-ext-exprs">
+   <primary>pg_stats_ext_exprs</primary>
+  </indexterm>
+
+  <para>
+   The view <structname>pg_stats_ext_exprs</structname> provides access to
+   the information stored in the <link
+   linkend="catalog-pg-statistic-ext"><structname>pg_statistic_ext</structname></link>
+   and <link linkend="catalog-pg-statistic-ext-data"><structname>pg_statistic_ext_data</structname></link>
+   catalogs.  This view allows access only to rows of
+   <link linkend="catalog-pg-statistic-ext"><structname>pg_statistic_ext</structname></link> and <link linkend="catalog-pg-statistic-ext-data"><structname>pg_statistic_ext_data</structname></link>
+   that correspond to tables the user has permission to read, and therefore
+   it is safe to allow public read access to this view.
+  </para>
+
+  <para>
+   <structname>pg_stats_ext_exprs</structname> is also designed to present
+   the information in a more readable format than the underlying catalogs
+   &mdash; at the cost that its schema must be extended whenever the structure
+   of statistics in <link linkend="catalog-pg-statistic"><structname>pg_statistic</structname></link> changes.
+  </para>
+
+  <table>
+   <title><structname>pg_stats_ext_exprs</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>schemaname</structfield> <type>name</type>
+       (references <link linkend="catalog-pg-namespace"><structname>pg_namespace</structname></link>.<structfield>nspname</structfield>)
+      </para>
+      <para>
+       Name of schema containing table
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>tablename</structfield> <type>name</type>
+       (references <link linkend="catalog-pg-class"><structname>pg_class</structname></link>.<structfield>relname</structfield>)
+      </para>
+      <para>
+       Name of table
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>statistics_schemaname</structfield> <type>name</type>
+       (references <link linkend="catalog-pg-namespace"><structname>pg_namespace</structname></link>.<structfield>nspname</structfield>)
+      </para>
+      <para>
+       Name of schema containing extended statistic
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>statistics_name</structfield> <type>name</type>
+       (references <link linkend="catalog-pg-statistic-ext"><structname>pg_statistic_ext</structname></link>.<structfield>stxname</structfield>)
+      </para>
+      <para>
+       Name of extended statistics
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>statistics_owner</structfield> <type>name</type>
+       (references <link linkend="catalog-pg-authid"><structname>pg_authid</structname></link>.<structfield>rolname</structfield>)
+      </para>
+      <para>
+       Owner of the extended statistics
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>expr</structfield> <type>text</type>
+      </para>
+      <para>
+       Expression the extended statistics is defined on
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>null_frac</structfield> <type>float4</type>
+      </para>
+      <para>
+       Fraction of column entries that are null
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>avg_width</structfield> <type>int4</type>
+      </para>
+      <para>
+       Average width in bytes of column's entries
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>n_distinct</structfield> <type>float4</type>
+      </para>
+      <para>
+       If greater than zero, the estimated number of distinct values in the
+       column.  If less than zero, the negative of the number of distinct
+       values divided by the number of rows.  (The negated form is used when
+       <command>ANALYZE</command> believes that the number of distinct values is
+       likely to increase as the table grows; the positive form is used when
+       the column seems to have a fixed number of possible values.)  For
+       example, -1 indicates a unique column in which the number of distinct
+       values is the same as the number of rows.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>most_common_vals</structfield> <type>anyarray</type>
+      </para>
+      <para>
+       A list of the most common values in the column. (Null if
+       no values seem to be more common than any others.)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>most_common_freqs</structfield> <type>float4[]</type>
+      </para>
+      <para>
+       A list of the frequencies of the most common values,
+       i.e., number of occurrences of each divided by total number of rows.
+       (Null when <structfield>most_common_vals</structfield> is.)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>histogram_bounds</structfield> <type>anyarray</type>
+      </para>
+      <para>
+       A list of values that divide the column's values into groups of
+       approximately equal population.  The values in
+       <structfield>most_common_vals</structfield>, if present, are omitted from this
+       histogram calculation.  (This column is null if the column data type
+       does not have a <literal>&lt;</literal> operator or if the
+       <structfield>most_common_vals</structfield> list accounts for the entire
+       population.)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>correlation</structfield> <type>float4</type>
+      </para>
+      <para>
+       Statistical correlation between physical row ordering and
+       logical ordering of the column values.  This ranges from -1 to +1.
+       When the value is near -1 or +1, an index scan on the column will
+       be estimated to be cheaper than when it is near zero, due to reduction
+       of random access to the disk.  (This column is null if the column data
+       type does not have a <literal>&lt;</literal> operator.)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>most_common_elems</structfield> <type>anyarray</type>
+      </para>
+      <para>
+       A list of non-null element values most often appearing within values of
+       the column. (Null for scalar types.)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>most_common_elem_freqs</structfield> <type>float4[]</type>
+      </para>
+      <para>
+       A list of the frequencies of the most common element values, i.e., the
+       fraction of rows containing at least one instance of the given value.
+       Two or three additional values follow the per-element frequencies;
+       these are the minimum and maximum of the preceding per-element
+       frequencies, and optionally the frequency of null elements.
+       (Null when <structfield>most_common_elems</structfield> is.)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>elem_count_histogram</structfield> <type>float4[]</type>
+      </para>
+      <para>
+       A histogram of the counts of distinct non-null element values within the
+       values of the column, followed by the average number of distinct
+       non-null elements.  (Null for scalar types.)
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The maximum number of entries in the array fields can be controlled on a
+   column-by-column basis using the <link linkend="sql-altertable"><command>ALTER
+   TABLE SET STATISTICS</command></link>
+   command, or globally by setting the
    <xref linkend="guc-default-statistics-target"/> run-time parameter.
   </para>
 

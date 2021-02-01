@@ -232,6 +232,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	WindowDef			*windef;
 	JoinExpr			*jexpr;
 	IndexElem			*ielem;
+	StatsElem			*selem;
 	Alias				*alias;
 	RangeVar			*range;
 	IntoClause			*into;
@@ -396,7 +397,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				old_aggr_definition old_aggr_list
 				oper_argtypes RuleActionList RuleActionMulti
 				opt_column_list columnList opt_name_list
-				sort_clause opt_sort_clause sortby_list index_params
+				sort_clause opt_sort_clause sortby_list index_params stats_params
 				opt_include opt_c_include index_including_params
 				name_list role_list from_clause from_list opt_array_bounds
 				qualified_name_list any_name any_name_list type_name_list
@@ -501,6 +502,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	func_alias_clause
 %type <sortby>	sortby
 %type <ielem>	index_elem index_elem_options
+%type <selem>	stats_param
 %type <node>	table_ref
 %type <jexpr>	joined_table
 %type <range>	relation_expr
@@ -4050,7 +4052,7 @@ ExistingIndex:   USING INDEX name					{ $$ = $3; }
 
 CreateStatsStmt:
 			CREATE STATISTICS any_name
-			opt_name_list ON expr_list FROM from_list
+			opt_name_list ON stats_params FROM from_list
 				{
 					CreateStatsStmt *n = makeNode(CreateStatsStmt);
 					n->defnames = $3;
@@ -4062,7 +4064,7 @@ CreateStatsStmt:
 					$$ = (Node *)n;
 				}
 			| CREATE STATISTICS IF_P NOT EXISTS any_name
-			opt_name_list ON expr_list FROM from_list
+			opt_name_list ON stats_params FROM from_list
 				{
 					CreateStatsStmt *n = makeNode(CreateStatsStmt);
 					n->defnames = $6;
@@ -4075,6 +4077,36 @@ CreateStatsStmt:
 				}
 			;
 
+/*
+ * Statistics attributes can be either simple column references, or arbitrary
+ * expressions in parens.  For compatibility with index attributes permitted
+ * in CREATE INDEX, we allow an expression that's just a function call to be
+ * written without parens.
+ */
+
+stats_params:	stats_param							{ $$ = list_make1($1); }
+			| stats_params ',' stats_param			{ $$ = lappend($1, $3); }
+		;
+
+stats_param:	ColId
+				{
+					$$ = makeNode(StatsElem);
+					$$->name = $1;
+					$$->expr = NULL;
+				}
+			| func_expr_windowless
+				{
+					$$ = makeNode(StatsElem);
+					$$->name = NULL;
+					$$->expr = $1;
+				}
+			| '(' a_expr ')'
+				{
+					$$ = makeNode(StatsElem);
+					$$->name = NULL;
+					$$->expr = $2;
+				}
+		;
 
 /*****************************************************************************
  *

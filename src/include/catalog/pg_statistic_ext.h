@@ -52,6 +52,9 @@ CATALOG(pg_statistic_ext,3381,StatisticExtRelationId)
 #ifdef CATALOG_VARLEN
 	char		stxkind[1] BKI_FORCE_NOT_NULL;	/* statistics kinds requested
 												 * to build */
+	pg_node_tree stxexprs;		/* A list of expression trees for stats
+								 * attributes that are not simple column
+								 * references. */
 #endif
 
 } FormData_pg_statistic_ext;
@@ -77,6 +80,7 @@ DECLARE_INDEX(pg_statistic_ext_relid_index, 3379, on pg_statistic_ext using btre
 #define STATS_EXT_NDISTINCT			'd'
 #define STATS_EXT_DEPENDENCIES		'f'
 #define STATS_EXT_MCV				'm'
+#define STATS_EXT_EXPRESSIONS		'e'
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */
 

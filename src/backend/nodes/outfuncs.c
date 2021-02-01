@@ -2933,6 +2933,15 @@ _outIndexElem(StringInfo str, const IndexElem *node)
 }
 
 static void
+_outStatsElem(StringInfo str, const StatsElem *node)
+{
+	WRITE_NODE_TYPE("STATSELEM");
+
+	WRITE_STRING_FIELD(name);
+	WRITE_NODE_FIELD(expr);
+}
+
+static void
 _outQuery(StringInfo str, const Query *node)
 {
 	WRITE_NODE_TYPE("QUERY");
@@ -4240,6 +4249,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_IndexElem:
 				_outIndexElem(str, obj);
+				break;
+			case T_StatsElem:
+				_outStatsElem(str, obj);
 				break;
 			case T_Query:
 				_outQuery(str, obj);

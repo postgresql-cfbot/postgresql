@@ -2831,7 +2831,23 @@ typedef struct CreateStatsStmt
 	List	   *relations;		/* rels to build stats on (list of RangeVar) */
 	char	   *stxcomment;		/* comment to apply to stats, or NULL */
 	bool		if_not_exists;	/* do nothing if stats name already exists */
+	bool		transformed;	/* true when transformStatsStmt is finished */
 } CreateStatsStmt;
+
+/*
+ * StatsElem - statistics parameters (used in CREATE STATISTICS)
+ *
+ * For a plain attribute, 'name' is the name of the referenced table column
+ * and 'expr' is NULL.  For an expression, 'name' is NULL and 'expr' is the
+ * expression tree.
+ */
+typedef struct StatsElem
+{
+	NodeTag		type;
+	char	   *name;			/* name of attribute to index, or NULL */
+	Node	   *expr;			/* expression to index, or NULL */
+} StatsElem;
+
 
 /* ----------------------
  *		Alter Statistics Statement

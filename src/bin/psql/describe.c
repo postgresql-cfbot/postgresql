@@ -2680,15 +2680,16 @@ describeOneTableDetails(const char *schemaname,
 		/* print any extended statistics */
 		if (pset.sversion >= 100000)
 		{
+			/*
+			 * FIXME this needs to be version-dependent, because older
+			 * versions don't have pg_get_statisticsobjdef_columns.
+			 */
 			printfPQExpBuffer(&buf,
 							  "SELECT oid, "
 							  "stxrelid::pg_catalog.regclass, "
 							  "stxnamespace::pg_catalog.regnamespace AS nsp, "
 							  "stxname,\n"
-							  "  (SELECT pg_catalog.string_agg(pg_catalog.quote_ident(attname),', ')\n"
-							  "   FROM pg_catalog.unnest(stxkeys) s(attnum)\n"
-							  "   JOIN pg_catalog.pg_attribute a ON (stxrelid = a.attrelid AND\n"
-							  "        a.attnum = s.attnum AND NOT attisdropped)) AS columns,\n"
+							  "pg_get_statisticsobjdef_columns(oid) AS columns,\n"
 							  "  'd' = any(stxkind) AS ndist_enabled,\n"
 							  "  'f' = any(stxkind) AS deps_enabled,\n"
 							  "  'm' = any(stxkind) AS mcv_enabled,\n");
@@ -2715,33 +2716,60 @@ describeOneTableDetails(const char *schemaname,
 				for (i = 0; i < tuples; i++)
 				{
 					bool		gotone = false;
+					bool		has_ndistinct;
+					bool		has_dependencies;
+					bool		has_mcv;
+					bool		has_all;
+					bool		has_some;
+
+					has_ndistinct = (strcmp(PQgetvalue(result, i, 5), "t") == 0);
+					has_dependencies = (strcmp(PQgetvalue(result, i, 6), "t") == 0);
+					has_mcv = (strcmp(PQgetvalue(result, i, 7), "t") == 0);
 
 					printfPQExpBuffer(&buf, "    ");
 
 					/* statistics object name (qualified with namespace) */
-					appendPQExpBuffer(&buf, "\"%s\".\"%s\" (",
+					appendPQExpBuffer(&buf, "\"%s\".\"%s\"",
 									  PQgetvalue(result, i, 2),
 									  PQgetvalue(result, i, 3));
 
-					/* options */
-					if (strcmp(PQgetvalue(result, i, 5), "t") == 0)
+					/*
+					 * When printing kinds we ignore expression statistics, which
+					 * is used only internally and can't be specified by user.
+					 * We don't print the kinds when either none are specified
+					 * (in which case it has to be statistics on a single expr)
+					 * or when all are specified (in which case we assume it's
+					 * expanded by CREATE STATISTICS).
+					 */
+					has_all = (has_ndistinct && has_dependencies && has_mcv);
+					has_some = (has_ndistinct || has_dependencies || has_mcv);
+
+					if (has_some && !has_all)
 					{
-						appendPQExpBufferStr(&buf, "ndistinct");
-						gotone = true;
+						appendPQExpBuffer(&buf, " (");
+
+						/* options */
+						if (has_ndistinct)
+						{
+							appendPQExpBufferStr(&buf, "ndistinct");
+							gotone = true;
+						}
+
+						if (has_dependencies)
+						{
+							appendPQExpBuffer(&buf, "%sdependencies", gotone ? ", " : "");
+							gotone = true;
+						}
+
+						if (has_mcv)
+						{
+							appendPQExpBuffer(&buf, "%smcv", gotone ? ", " : "");
+						}
+
+						appendPQExpBuffer(&buf, ")");
 					}
 
-					if (strcmp(PQgetvalue(result, i, 6), "t") == 0)
-					{
-						appendPQExpBuffer(&buf, "%sdependencies", gotone ? ", " : "");
-						gotone = true;
-					}
-
-					if (strcmp(PQgetvalue(result, i, 7), "t") == 0)
-					{
-						appendPQExpBuffer(&buf, "%smcv", gotone ? ", " : "");
-					}
-
-					appendPQExpBuffer(&buf, ") ON %s FROM %s",
+					appendPQExpBuffer(&buf, " ON %s FROM %s",
 									  PQgetvalue(result, i, 4),
 									  PQgetvalue(result, i, 1));
 

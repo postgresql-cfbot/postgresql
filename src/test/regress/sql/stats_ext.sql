@@ -28,16 +28,21 @@ end;
 $$;
 
 -- Verify failures
-CREATE TABLE ext_stats_test (x int, y int, z int);
+CREATE TABLE ext_stats_test (x text, y int, z int);
 CREATE STATISTICS tst;
 CREATE STATISTICS tst ON a, b;
 CREATE STATISTICS tst FROM sometab;
 CREATE STATISTICS tst ON a, b FROM nonexistent;
 CREATE STATISTICS tst ON a, b FROM ext_stats_test;
 CREATE STATISTICS tst ON x, x, y FROM ext_stats_test;
-CREATE STATISTICS tst ON x + y FROM ext_stats_test;
-CREATE STATISTICS tst ON (x, y) FROM ext_stats_test;
+CREATE STATISTICS tst ON x, x, y, x, x, y, x, x, y FROM ext_stats_test;
+CREATE STATISTICS tst ON x, x, y, x, x, (x || 'x'), (y + 1), (x || 'x'), (x || 'x'), (y + 1) FROM ext_stats_test;
+CREATE STATISTICS tst ON (x || 'x'), (x || 'x'), (y + 1), (x || 'x'), (x || 'x'), (y + 1), (x || 'x'), (x || 'x'), (y + 1) FROM ext_stats_test;
+CREATE STATISTICS tst ON (x || 'x'), (x || 'x'), y FROM ext_stats_test;
 CREATE STATISTICS tst (unrecognized) ON x, y FROM ext_stats_test;
+-- incorrect expressions
+CREATE STATISTICS tst ON y + z FROM ext_stats_test; -- missing parentheses
+CREATE STATISTICS tst ON (x, y) FROM ext_stats_test; -- tuple expression
 DROP TABLE ext_stats_test;
 
 -- Ensure stats are dropped sanely, and test IF NOT EXISTS while at it
@@ -96,6 +101,36 @@ INSERT INTO ab1 VALUES (1,1);
 CREATE STATISTICS ab1_a_b_stats ON a, b FROM ab1;
 ANALYZE ab1;
 DROP TABLE ab1 CASCADE;
+
+-- basic test for statistics on expressions
+CREATE TABLE ab1 (a INTEGER, b INTEGER, c TIMESTAMP, d TIMESTAMPTZ);
+
+-- expression stats may be built on a single expression column
+CREATE STATISTICS ab1_exprstat_1 ON (a+b) FROM ab1;
+
+-- with a single expression, we only enable expression statistics
+CREATE STATISTICS ab1_exprstat_2 ON (a+b) FROM ab1;
+SELECT stxkind FROM pg_statistic_ext WHERE stxname = 'ab1_exprstat_2';
+
+-- adding anything to the expression builds all statistics kinds
+CREATE STATISTICS ab1_exprstat_3 ON (a+b), a FROM ab1;
+SELECT stxkind FROM pg_statistic_ext WHERE stxname = 'ab1_exprstat_3';
+
+-- date_trunc on timestamptz is not immutable, but that should not matter
+CREATE STATISTICS ab1_exprstat_4 ON date_trunc('day', d) FROM ab1;
+
+-- date_trunc on timestamp is immutable
+CREATE STATISTICS ab1_exprstat_5 ON date_trunc('day', c) FROM ab1;
+
+-- insert some data and run analyze, to test that these cases build properly
+INSERT INTO ab1
+SELECT
+    generate_series(1,10),
+    generate_series(1,10),
+    generate_series('2020-10-01'::timestamp, '2020-10-10'::timestamp, interval '1 day'),
+    generate_series('2020-10-01'::timestamptz, '2020-10-10'::timestamptz, interval '1 day');
+ANALYZE ab1;
+DROP TABLE ab1;
 
 -- Verify supported object types for extended statistics
 CREATE schema tststats;
@@ -267,6 +302,29 @@ ANALYZE functional_dependencies;
 SELECT * FROM check_estimated_rows('SELECT * FROM functional_dependencies WHERE a = 1 AND b = ''1''');
 
 SELECT * FROM check_estimated_rows('SELECT * FROM functional_dependencies WHERE a = 1 AND b = ''1'' AND c = 1');
+
+-- a => b, a => c, b => c
+TRUNCATE functional_dependencies;
+DROP STATISTICS func_deps_stat;
+
+-- now do the same thing, but with expressions
+INSERT INTO functional_dependencies (a, b, c, filler1)
+     SELECT i, i, i, i FROM generate_series(1,5000) s(i);
+
+ANALYZE functional_dependencies;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM functional_dependencies WHERE mod(a, 11) = 1 AND mod(b::int, 13) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM functional_dependencies WHERE mod(a, 11) = 1 AND mod(b::int, 13) = 1 AND mod(c, 7) = 1');
+
+-- create statistics
+CREATE STATISTICS func_deps_stat (dependencies) ON (mod(a,11)), (mod(b::int, 13)), (mod(c, 7)) FROM functional_dependencies;
+
+ANALYZE functional_dependencies;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM functional_dependencies WHERE mod(a, 11) = 1 AND mod(b::int, 13) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM functional_dependencies WHERE mod(a, 11) = 1 AND mod(b::int, 13) = 1 AND mod(c, 7) = 1');
 
 -- a => b, a => c, b => c
 TRUNCATE functional_dependencies;
@@ -479,6 +537,28 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 AND b = 
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 AND b = ''1'' AND c = 1');
 
+TRUNCATE mcv_lists;
+DROP STATISTICS mcv_lists_stats;
+
+-- random data (no MCV list), but with expression
+INSERT INTO mcv_lists (a, b, c, filler1)
+     SELECT i, i, i, i FROM generate_series(1,5000) s(i);
+
+ANALYZE mcv_lists;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,37) = 1 AND mod(b::int,41) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,37) = 1 AND mod(b::int,41) = 1 AND mod(c,47) = 1');
+
+-- create statistics
+CREATE STATISTICS mcv_lists_stats (mcv) ON (mod(a,37)), (mod(b::int,41)), (mod(c,47)) FROM mcv_lists;
+
+ANALYZE mcv_lists;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,37) = 1 AND mod(b::int,41) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,37) = 1 AND mod(b::int,41) = 1 AND mod(c,47) = 1');
+
 -- 100 distinct combinations, all in the MCV list
 TRUNCATE mcv_lists;
 DROP STATISTICS mcv_lists_stats;
@@ -565,6 +645,8 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 OR b = '
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 OR b = ''1'' OR c = 1 OR d IS NOT NULL');
 
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 OR b = ''1'' OR c = 1 OR d IS NOT NULL');
+
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IN (1, 2, 51, 52) AND b IN ( ''1'', ''2'')');
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IN (1, 2, 51, 52, NULL) AND b IN ( ''1'', ''2'', NULL)');
@@ -601,6 +683,180 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 AND b = 
 ANALYZE mcv_lists;
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 AND b = ''1''');
+
+
+-- 100 distinct combinations, all in the MCV list, but with expressions
+TRUNCATE mcv_lists;
+DROP STATISTICS mcv_lists_stats;
+
+INSERT INTO mcv_lists (a, b, c, filler1)
+     SELECT i, i, i, i FROM generate_series(1,5000) s(i);
+
+ANALYZE mcv_lists;
+
+-- without any stats on the expressions, we have to use default selectivities, which
+-- is why the estimates here are different from the pre-computed case above
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 AND mod(b::int,50) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 1 = mod(a,100) AND 1 = mod(b::int,50)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < 1 AND mod(b::int,50) < 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 1 > mod(a,100) AND 1 > mod(b::int,50)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) <= 0 AND mod(b::int,50) <= 0');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 0 >= mod(a,100) AND 0 >= mod(b::int,50)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 AND mod(b::int,50) = 1 AND mod(c,25) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < 5 AND mod(b::int,50) < 1 AND mod(c,25) < 5');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < 5 AND 1 > mod(b::int,50) AND 5 > mod(c,25)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) <= 4 AND mod(b::int,50) <= 0 AND mod(c,25) <= 4');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 4 >= mod(a,100) AND 0 >= mod(b::int,50) AND 4 >= mod(c,25)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 OR mod(b::int,50) = 1 OR mod(c,25) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 OR mod(b::int,50) = 1 OR mod(c,25) = 1 OR d IS NOT NULL');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) IN (1, 2, 51, 52) AND mod(b::int,50) IN ( 1, 2)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) IN (1, 2, 51, 52, NULL) AND mod(b::int,50) IN ( 1, 2, NULL)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = ANY (ARRAY[1, 2, 51, 52]) AND mod(b::int,50) = ANY (ARRAY[1, 2])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = ANY (ARRAY[NULL, 1, 2, 51, 52]) AND mod(b::int,50) = ANY (ARRAY[1, 2, NULL])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) <= ANY (ARRAY[1, 2, 3]) AND mod(b::int,50) IN (1, 2, 3)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) <= ANY (ARRAY[1, NULL, 2, 3]) AND mod(b::int,50) IN (1, 2, NULL, 3)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < ALL (ARRAY[4, 5]) AND mod(c,25) > ANY (ARRAY[1, 2, 3])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < ALL (ARRAY[4, 5]) AND mod(c,25) > ANY (ARRAY[1, 2, 3, NULL])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < ALL (ARRAY[4, 5]) AND mod(b::int,50) IN (1, 2, 3) AND mod(c,25) > ANY (ARRAY[1, 2, 3])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < ALL (ARRAY[4, 5]) AND mod(b::int,50) IN (1, 2, NULL, 3) AND mod(c,25) > ANY (ARRAY[1, 2, NULL, 3])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 OR mod(b::int,50) = 1 OR mod(c,25) = 1 OR d IS NOT NULL');
+
+-- create statistics with expressions only (we create three separate stats, in order not to build more complex extended stats)
+CREATE STATISTICS mcv_lists_stats_1 ON (mod(a,100)) FROM mcv_lists;
+CREATE STATISTICS mcv_lists_stats_2 ON (mod(b::int,50)) FROM mcv_lists;
+CREATE STATISTICS mcv_lists_stats_3 ON (mod(c,25)) FROM mcv_lists;
+
+ANALYZE mcv_lists;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 AND mod(b::int,50) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 1 = mod(a,100) AND 1 = mod(b::int,50)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < 1 AND mod(b::int,50) < 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 1 > mod(a,100) AND 1 > mod(b::int,50)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) <= 0 AND mod(b::int,50) <= 0');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 0 >= mod(a,100) AND 0 >= mod(b::int,50)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 AND mod(b::int,50) = 1 AND mod(c,25) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < 5 AND mod(b::int,50) < 1 AND mod(c,25) < 5');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < 5 AND 1 > mod(b::int,50) AND 5 > mod(c,25)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) <= 4 AND mod(b::int,50) <= 0 AND mod(c,25) <= 4');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 4 >= mod(a,100) AND 0 >= mod(b::int,50) AND 4 >= mod(c,25)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 OR mod(b::int,50) = 1 OR mod(c,25) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 OR mod(b::int,50) = 1 OR mod(c,25) = 1 OR d IS NOT NULL');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) IN (1, 2, 51, 52) AND mod(b::int,50) IN ( 1, 2)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) IN (1, 2, 51, 52, NULL) AND mod(b::int,50) IN ( 1, 2, NULL)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = ANY (ARRAY[1, 2, 51, 52]) AND mod(b::int,50) = ANY (ARRAY[1, 2])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = ANY (ARRAY[NULL, 1, 2, 51, 52]) AND mod(b::int,50) = ANY (ARRAY[1, 2, NULL])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) <= ANY (ARRAY[1, 2, 3]) AND mod(b::int,50) IN (1, 2, 3)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) <= ANY (ARRAY[1, NULL, 2, 3]) AND mod(b::int,50) IN (1, 2, NULL, 3)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < ALL (ARRAY[4, 5]) AND mod(c,25) > ANY (ARRAY[1, 2, 3])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < ALL (ARRAY[4, 5]) AND mod(c,25) > ANY (ARRAY[1, 2, 3, NULL])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < ALL (ARRAY[4, 5]) AND mod(b::int,50) IN (1, 2, 3) AND mod(c,25) > ANY (ARRAY[1, 2, 3])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < ALL (ARRAY[4, 5]) AND mod(b::int,50) IN (1, 2, NULL, 3) AND mod(c,25) > ANY (ARRAY[1, 2, NULL, 3])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 OR mod(b::int,50) = 1 OR mod(c,25) = 1 OR d IS NOT NULL');
+
+DROP STATISTICS mcv_lists_stats_1;
+DROP STATISTICS mcv_lists_stats_2;
+DROP STATISTICS mcv_lists_stats_3;
+
+-- create statistics with both MCV and expressions
+CREATE STATISTICS mcv_lists_stats (mcv) ON (mod(a,100)), (mod(b::int,50)), (mod(c,25)) FROM mcv_lists;
+
+ANALYZE mcv_lists;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 AND mod(b::int,50) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 1 = mod(a,100) AND 1 = mod(b::int,50)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < 1 AND mod(b::int,50) < 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 1 > mod(a,100) AND 1 > mod(b::int,50)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) <= 0 AND mod(b::int,50) <= 0');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 0 >= mod(a,100) AND 0 >= mod(b::int,50)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 AND mod(b::int,50) = 1 AND mod(c,25) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < 5 AND mod(b::int,50) < 1 AND mod(c,25) < 5');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < 5 AND 1 > mod(b::int,50) AND 5 > mod(c,25)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) <= 4 AND mod(b::int,50) <= 0 AND mod(c,25) <= 4');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE 4 >= mod(a,100) AND 0 >= mod(b::int,50) AND 4 >= mod(c,25)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 OR mod(b::int,50) = 1 OR mod(c,25) = 1');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 OR mod(b::int,50) = 1 OR mod(c,25) = 1 OR d IS NOT NULL');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) IN (1, 2, 51, 52) AND mod(b::int,50) IN ( 1, 2)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) IN (1, 2, 51, 52, NULL) AND mod(b::int,50) IN ( 1, 2, NULL)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = ANY (ARRAY[1, 2, 51, 52]) AND mod(b::int,50) = ANY (ARRAY[1, 2])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = ANY (ARRAY[NULL, 1, 2, 51, 52]) AND mod(b::int,50) = ANY (ARRAY[1, 2, NULL])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) <= ANY (ARRAY[1, 2, 3]) AND mod(b::int,50) IN (1, 2, 3)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) <= ANY (ARRAY[1, NULL, 2, 3]) AND mod(b::int,50) IN (1, 2, NULL, 3)');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < ALL (ARRAY[4, 5]) AND mod(c,25) > ANY (ARRAY[1, 2, 3])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < ALL (ARRAY[4, 5]) AND mod(c,25) > ANY (ARRAY[1, 2, 3, NULL])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < ALL (ARRAY[4, 5]) AND mod(b::int,50) IN (1, 2, 3) AND mod(c,25) > ANY (ARRAY[1, 2, 3])');
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) < ALL (ARRAY[4, 5]) AND mod(b::int,50) IN (1, 2, NULL, 3) AND mod(c,25) > ANY (ARRAY[1, 2, NULL, 3])');
+
+-- we can't use the statistic for OR clauses that are not fully covered (missing 'd' attribute)
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE mod(a,100) = 1 OR mod(b::int,50) = 1 OR mod(c,25) = 1 OR d IS NOT NULL');
 
 -- 100 distinct combinations with NULL values, all in the MCV list
 TRUNCATE mcv_lists;
@@ -893,6 +1149,57 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE (a = 0 A
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a = 0 OR b = 0 OR c = 0 OR d = 0');
 
 DROP TABLE mcv_lists_multi;
+
+
+-- statistics on integer expressions
+CREATE TABLE expr_stats (a int, b int, c int);
+INSERT INTO expr_stats SELECT mod(i,10), mod(i,10), mod(i,10) FROM generate_series(1,10000) s(i);
+ANALYZE expr_stats;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE (2*a) = 0 AND (3*b) = 0');
+SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE (a+b) = 0 AND (a-b) = 0');
+
+CREATE STATISTICS expr_stats_1 (mcv) ON (a+b), (a-b), (2*a), (3*b) FROM expr_stats;
+ANALYZE expr_stats;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE (2*a) = 0 AND (3*b) = 0');
+SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE (a+b) = 0 AND (a-b) = 0');
+
+DROP STATISTICS expr_stats_1;
+DROP TABLE expr_stats;
+
+-- statistics on a mix columns and expressions
+CREATE TABLE expr_stats (a int, b int, c int);
+INSERT INTO expr_stats SELECT mod(i,10), mod(i,10), mod(i,10) FROM generate_series(1,10000) s(i);
+ANALYZE expr_stats;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE a = 0 AND (2*a) = 0 AND (3*b) = 0');
+SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE a = 3 AND b = 3 AND (a-b) = 0');
+SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE a = 0 AND b = 1 AND (a-b) = 0');
+
+CREATE STATISTICS expr_stats_1 (mcv) ON a, b, (2*a), (3*b), (a+b), (a-b) FROM expr_stats;
+ANALYZE expr_stats;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE a = 0 AND (2*a) = 0 AND (3*b) = 0');
+SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE a = 3 AND b = 3 AND (a-b) = 0');
+SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE a = 0 AND b = 1 AND (a-b) = 0');
+
+DROP TABLE expr_stats;
+
+-- statistics on expressions with different data types
+CREATE TABLE expr_stats (a int, b name, c text);
+INSERT INTO expr_stats SELECT mod(i,10), md5(mod(i,10)::text), md5(mod(i,10)::text) FROM generate_series(1,10000) s(i);
+ANALYZE expr_stats;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE a = 0 AND (b || c) <= ''z'' AND (c || b) >= ''0''');
+
+CREATE STATISTICS expr_stats_1 (mcv) ON a, b, (b || c), (c || b) FROM expr_stats;
+ANALYZE expr_stats;
+
+SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE a = 0 AND (b || c) <= ''z'' AND (c || b) >= ''0''');
+
+DROP TABLE expr_stats;
+
 
 -- Permission tests. Users should not be able to see specific data values in
 -- the extended statistics, if they lack permission to see those values in

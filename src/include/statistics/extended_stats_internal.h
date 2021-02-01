@@ -57,19 +57,35 @@ typedef struct SortItem
 	int			count;
 } SortItem;
 
+/*
+ * Used to pass pre-computed information about expressions the stats
+ * object is defined on.
+ */
+typedef struct ExprInfo
+{
+	int			nexprs;			/* number of expressions */
+	Oid		   *collations;		/* collation for each expression */
+	Oid		   *types;			/* type of each expression */
+	Datum	  **values;			/* values for each expression */
+	bool	  **nulls;			/* nulls for each expression */
+} ExprInfo;
+
 extern MVNDistinct *statext_ndistinct_build(double totalrows,
 											int numrows, HeapTuple *rows,
-											Bitmapset *attrs, VacAttrStats **stats);
+											ExprInfo *exprs, Bitmapset *attrs,
+											VacAttrStats **stats);
 extern bytea *statext_ndistinct_serialize(MVNDistinct *ndistinct);
 extern MVNDistinct *statext_ndistinct_deserialize(bytea *data);
 
 extern MVDependencies *statext_dependencies_build(int numrows, HeapTuple *rows,
-												  Bitmapset *attrs, VacAttrStats **stats);
+												  ExprInfo *exprs, Bitmapset *attrs,
+												  VacAttrStats **stats);
 extern bytea *statext_dependencies_serialize(MVDependencies *dependencies);
 extern MVDependencies *statext_dependencies_deserialize(bytea *data);
 
 extern MCVList *statext_mcv_build(int numrows, HeapTuple *rows,
-								  Bitmapset *attrs, VacAttrStats **stats,
+								  ExprInfo *exprs, Bitmapset *attrs,
+								  VacAttrStats **stats,
 								  double totalrows, int stattarget);
 extern bytea *statext_mcv_serialize(MCVList *mcv, VacAttrStats **stats);
 extern MCVList *statext_mcv_deserialize(bytea *data);
@@ -93,11 +109,12 @@ extern void *bsearch_arg(const void *key, const void *base,
 extern AttrNumber *build_attnums_array(Bitmapset *attrs, int *numattrs);
 
 extern SortItem *build_sorted_items(int numrows, int *nitems, HeapTuple *rows,
-									TupleDesc tdesc, MultiSortSupport mss,
+									ExprInfo *exprs, TupleDesc tdesc,
+									MultiSortSupport mss,
 									int numattrs, AttrNumber *attnums);
 
-extern bool examine_clause_args(List *args, Var **varp,
-								Const **cstp, bool *varonleftp);
+extern bool examine_opclause_args(List *args, Node **exprp,
+								  Const **cstp, bool *expronleftp);
 
 extern Selectivity mcv_combine_selectivities(Selectivity simple_sel,
 											 Selectivity mcv_sel,
@@ -123,5 +140,14 @@ extern Selectivity mcv_clause_selectivity_or(PlannerInfo *root,
 											 Selectivity *overlap_mcvsel,
 											 Selectivity *overlap_basesel,
 											 Selectivity *totalsel);
+
+extern Bitmapset *add_expressions_to_attributes(Bitmapset *attrs, int nexprs);
+
+/* translate 0-based expression index to attnum and back */
+#define	EXPRESSION_ATTNUM(index)	\
+	(MaxHeapAttributeNumber + (index) + 1)
+
+#define	EXPRESSION_INDEX(attnum)	\
+	((attnum) - MaxHeapAttributeNumber - 1)
 
 #endif							/* EXTENDED_STATS_INTERNAL_H */

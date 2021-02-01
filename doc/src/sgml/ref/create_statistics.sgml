@@ -22,8 +22,12 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">statistics_name</replaceable>
+    ON ( <replaceable class="parameter">expression</replaceable> )
+    FROM <replaceable class="parameter">table_name</replaceable>
+
+CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">statistics_name</replaceable>
     [ ( <replaceable class="parameter">statistics_kind</replaceable> [, ... ] ) ]
-    ON <replaceable class="parameter">column_name</replaceable>, <replaceable class="parameter">column_name</replaceable> [, ...]
+    ON { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [, ...]
     FROM <replaceable class="parameter">table_name</replaceable>
 </synopsis>
 
@@ -37,6 +41,16 @@ CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">statistics_na
    object tracking data about the specified table, foreign table or
    materialized view.  The statistics object will be created in the current
    database and will be owned by the user issuing the command.
+  </para>
+
+  <para>
+   The <command>CREATE STATISTICS</command> command has two basic forms. The
+   simple variant allows building statistics for a single expression, does
+   not allow specifying any statistics kinds and provides benefits similar
+   to an expression index. The full variant allows defining statistics objects
+   on multiple columns and expressions, and selecting which statistics kinds will
+   be built. The per-expression statistics are built automatically when there
+   is at least one expression.
   </para>
 
   <para>
@@ -86,7 +100,9 @@ CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">statistics_na
       dependency statistics, and <literal>mcv</literal> which enables
       most-common values lists.
       If this clause is omitted, all supported statistics kinds are
-      included in the statistics object.
+      included in the statistics object. Expression statistics are built
+      automatically when the statistics definition includes complex
+      expressions and not just simple column references.
       For more information, see <xref linkend="planner-stats-extended"/>
       and <xref linkend="multivariate-statistics-examples"/>.
      </para>
@@ -100,6 +116,17 @@ CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">statistics_na
       The name of a table column to be covered by the computed statistics.
       At least two column names must be given;  the order of the column names
       is insignificant.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">expression</replaceable></term>
+    <listitem>
+     <para>
+      The expression to be covered by the computed statistics. In this case
+      only a single expression is required, in which case only statistics
+      for the expression are built.
      </para>
     </listitem>
    </varlistentry>
@@ -124,6 +151,13 @@ CREATE STATISTICS [ IF NOT EXISTS ] <replaceable class="parameter">statistics_na
    You must be the owner of a table to create a statistics object
    reading it.  Once created, however, the ownership of the statistics
    object is independent of the underlying table(s).
+  </para>
+
+  <para>
+   Expression statistics are per-expression and are similar to creating an
+   index on the expression, except that they avoid the overhead of index
+   maintenance. Expression statistics are built automatically when there
+   is at least one expression in the statistics object definition.
   </para>
  </refsect1>
 
@@ -194,6 +228,66 @@ EXPLAIN ANALYZE SELECT * FROM t2 WHERE (a = 1) AND (b = 2);
    specific values that commonly appear in the table, as well as an upper
    bound on the selectivities of combinations of values that do not appear
    in the table, allowing it to generate better estimates in both cases.
+  </para>
+
+  <para>
+   Create table <structname>t3</structname> with a single timestamp column,
+   and run a query using an expression on that column.  Without extended
+   statistics, the planner has no information about data distribution for
+   results of those expression, and uses default estimates as illustrated
+   by the first query.  The planner also does not realize that the value of
+   the second column fully defines the value of the other column, because
+   date truncated to day still identifies the month. Then expression and
+   ndistinct statistics are built on those two columns:
+
+<programlisting>
+CREATE TABLE t3 (
+    a   timestamp
+);
+
+INSERT INTO t3 SELECT i FROM generate_series('2020-01-01'::timestamp,
+                                             '2020-12-31'::timestamp,
+                                             '1 minute'::interval) s(i);
+
+ANALYZE t3;
+
+-- the number of matching rows will be drastically underestimated:
+EXPLAIN ANALYZE SELECT * FROM t3
+  WHERE date_trunc('month', a) = '2020-01-01'::timestamp;
+
+EXPLAIN ANALYZE SELECT * FROM t3
+  WHERE date_trunc('day', a) BETWEEN '2020-01-01'::timestamp
+                                 AND '2020-06-30'::timestamp;
+
+EXPLAIN ANALYZE SELECT date_trunc('month', a), date_trunc('day', a)
+   FROM t3 GROUP BY 1, 2;
+
+-- per-expression statistics are built automatically
+CREATE STATISTICS s3 (ndistinct) ON date_trunc('month', a), date_trunc('day', a) FROM t3;
+
+ANALYZE t1;
+
+-- now the row count estimates are more accurate:
+EXPLAIN ANALYZE SELECT * FROM t3
+  WHERE date_trunc('month', a) = '2020-01-01'::timestamp;
+
+EXPLAIN ANALYZE SELECT * FROM t3
+  WHERE date_trunc('day', a) BETWEEN '2020-01-01'::timestamp
+                                 AND '2020-06-30'::timestamp;
+
+EXPLAIN ANALYZE SELECT date_trunc('month', a), date_trunc('day', a)
+   FROM t3 GROUP BY 1, 2;
+</programlisting>
+
+   Without expression and ndistinct statistics, the planner would assume
+   that the two <literal>WHERE</literal> and <literal>GROUP BY</literal>
+   conditions are independent, and would multiply their selectivities
+   together to arrive at a much-too-small row count estimate in the first
+   two queries, and a much-too-high group count estimate in the aggregate
+   query. This is further exacerbated by the lack of accurate statistics
+   for the expressions, forcing the planner to use default selectivities.
+   With such statistics, the planner recognizes that the conditions are
+   correlated and arrives at much more accurate estimates.
   </para>
 
  </refsect1>

@@ -115,6 +115,7 @@ _bt_restore_meta(XLogReaderState *record, uint8 block_id)
 	md->btm_oldest_btpo_xact = xlrec->oldest_btpo_xact;
 	md->btm_last_cleanup_num_heap_tuples = xlrec->last_cleanup_num_heap_tuples;
 	md->btm_allequalimage = xlrec->allequalimage;
+	md->btm_last_deletion_nblocks = xlrec->last_deletion_nblocks;
 
 	pageop = (BTPageOpaque) PageGetSpecialPointer(metapg);
 	pageop->btpo_flags = BTP_META;

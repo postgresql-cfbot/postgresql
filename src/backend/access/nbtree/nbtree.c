@@ -133,6 +133,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->ambuild = btbuild;
 	amroutine->ambuildempty = btbuildempty;
 	amroutine->aminsert = btinsert;
+	amroutine->amvacuumstrategy = btvacuumstrategy;
 	amroutine->ambulkdelete = btbulkdelete;
 	amroutine->amvacuumcleanup = btvacuumcleanup;
 	amroutine->amcanreturn = btcanreturn;
@@ -822,6 +823,18 @@ _bt_vacuum_needs_cleanup(IndexVacuumInfo *info)
 		 */
 		result = true;
 	}
+	else if (!info->vacuumcleanup_requested)
+	{
+		/*
+		 * Skip cleanup if INDEX_CLEANUP is set to false, even if there might
+		 * be a deleted page that can be recycled. If INDEX_CLEANUP continues
+		 * to be disabled, recyclable pages could be left by XID wraparound.
+		 * But in practice it's not so harmful since such workload doesn't need
+		 * to delete and recycle pages in any case and deletion of btree index
+		 * pages is relatively rare.
+		 */
+		result = false;
+	}
 	else if (TransactionIdIsValid(metad->btm_oldest_btpo_xact) &&
 			 GlobalVisCheckRemovableXid(NULL, metad->btm_oldest_btpo_xact))
 	{
@@ -865,6 +878,42 @@ _bt_vacuum_needs_cleanup(IndexVacuumInfo *info)
 }
 
 /*
+ * Choose the vacuum strategy. Do bulk-deletion or nothing
+ */
+IndexVacuumStrategy
+btvacuumstrategy(IndexVacuumInfo *info, VacuumParams *params)
+{
+	Buffer		metabuf;
+	Page		metapg;
+	BTMetaPageData *metad;
+	BlockNumber	nblocks;
+	IndexVacuumStrategy result = INDEX_VACUUM_STRATEGY_NONE;
+
+	/*
+	 * Don't want to do bulk-deletion if index cleanup is disabled
+	 * by the user request.
+	 */
+	if (params->index_cleanup == VACOPT_TERNARY_DISABLED)
+		return INDEX_VACUUM_STRATEGY_NONE;
+
+	metabuf = _bt_getbuf(info->index, BTREE_METAPAGE, BT_READ);
+	metapg = BufferGetPage(metabuf);
+	metad = BTPageGetMeta(metapg);
+	nblocks = RelationGetNumberOfBlocks(info->index);
+
+	/*
+	 * Do deletion if the index grows since the last deletion by
+	 * even one block or for the first time.
+	 */
+	if (metad->btm_last_deletion_nblocks == P_NONE ||
+		nblocks > metad->btm_last_deletion_nblocks)
+		result = INDEX_VACUUM_STRATEGY_BULKDELETE;
+
+	_bt_relbuf(info->index, metabuf);
+	return result;
+}
+
+/*
  * Bulk deletion of all index entries pointing to a set of heap tuples.
  * The set of target tuples is specified via a callback routine that tells
  * whether any given heap tuple (identified by ItemPointer) is being deleted.
@@ -877,6 +926,14 @@ btbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 {
 	Relation	rel = info->index;
 	BTCycleId	cycleid;
+
+	/*
+	 * Skip deleting index entries if the corresponding heap tuples will
+	 * not be deleted and we want to skip it.
+	 */
+	if (!info->will_vacuum_heap &&
+		info->indvac_strategy == INDEX_VACUUM_STRATEGY_NONE)
+		return stats;
 
 	/* allocate stats if first time through, else re-use existing struct */
 	if (stats == NULL)

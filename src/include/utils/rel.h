@@ -295,6 +295,20 @@ typedef struct AutoVacOpts
 	float8		analyze_scale_factor;
 } AutoVacOpts;
 
+/*
+ * A ternary value used by vacuum parameters. This value also is used
+ * for VACUUM command options.
+ *
+ * DEFAULT value is used to determine the value based on other
+ * configurations, e.g. reloptions.
+ */
+typedef enum VacOptTernaryValue
+{
+	VACOPT_TERNARY_DEFAULT = 0,
+	VACOPT_TERNARY_DISABLED,
+	VACOPT_TERNARY_ENABLED,
+} VacOptTernaryValue;
+
 typedef struct StdRdOptions
 {
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
@@ -304,7 +318,8 @@ typedef struct StdRdOptions
 	AutoVacOpts autovacuum;		/* autovacuum-related options */
 	bool		user_catalog_table; /* use as an additional catalog relation */
 	int			parallel_workers;	/* max number of parallel workers */
-	bool		vacuum_index_cleanup;	/* enables index vacuuming and cleanup */
+	VacOptTernaryValue	vacuum_index_cleanup;	/* enables index vacuuming
+												 * and cleanup */
 	bool		vacuum_truncate;	/* enables vacuum to truncate a relation */
 } StdRdOptions;
 

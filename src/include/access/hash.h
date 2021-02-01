@@ -372,6 +372,8 @@ extern IndexScanDesc hashbeginscan(Relation rel, int nkeys, int norderbys);
 extern void hashrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 					   ScanKey orderbys, int norderbys);
 extern void hashendscan(IndexScanDesc scan);
+extern IndexVacuumStrategy hashvacuumstrategy(IndexVacuumInfo *info,
+											  struct VacuumParams *params);
 extern IndexBulkDeleteResult *hashbulkdelete(IndexVacuumInfo *info,
 											 IndexBulkDeleteResult *stats,
 											 IndexBulkDeleteCallback callback,

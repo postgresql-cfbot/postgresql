@@ -110,6 +110,9 @@ typedef struct BTMetaPageData
 	float8		btm_last_cleanup_num_heap_tuples;	/* number of heap tuples
 													 * during last cleanup */
 	bool		btm_allequalimage;	/* are all columns "equalimage"? */
+	BlockNumber	btm_last_deletion_nblocks;	/* number of blocks during last
+											 * bulk-deletion. P_NONE if not
+											 * set. */
 } BTMetaPageData;
 
 #define BTPageGetMeta(p) \
@@ -1011,6 +1014,8 @@ extern void btparallelrescan(IndexScanDesc scan);
 extern void btendscan(IndexScanDesc scan);
 extern void btmarkpos(IndexScanDesc scan);
 extern void btrestrpos(IndexScanDesc scan);
+extern IndexVacuumStrategy btvacuumstrategy(IndexVacuumInfo *info,
+											struct VacuumParams *params);
 extern IndexBulkDeleteResult *btbulkdelete(IndexVacuumInfo *info,
 										   IndexBulkDeleteResult *stats,
 										   IndexBulkDeleteCallback callback,

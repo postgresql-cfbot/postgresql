@@ -21,8 +21,9 @@
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
 
-/* We don't want this file to depend on execnodes.h. */
+/* We don't want this file to depend on execnodes.h and vacuum.h. */
 struct IndexInfo;
+struct VacuumParams;
 
 /*
  * Struct for statistics returned by ambuild
@@ -33,8 +34,17 @@ typedef struct IndexBuildResult
 	double		index_tuples;	/* # of tuples inserted into index */
 } IndexBuildResult;
 
+/* Result value for amvacuumstrategy */
+typedef enum IndexVacuumStrategy
+{
+	INDEX_VACUUM_STRATEGY_NONE,			/* No-op, skip bulk-deletion in this
+										 * vacuum cycle */
+	INDEX_VACUUM_STRATEGY_BULKDELETE	/* Do ambulkdelete */
+} IndexVacuumStrategy;
+
 /*
- * Struct for input arguments passed to ambulkdelete and amvacuumcleanup
+ * Struct for input arguments passed to amvacuumstrategy, ambulkdelete
+ * and amvacuumcleanup
  *
  * num_heap_tuples is accurate only when estimated_count is false;
  * otherwise it's just an estimate (currently, the estimate is the
@@ -50,6 +60,26 @@ typedef struct IndexVacuumInfo
 	int			message_level;	/* ereport level for progress messages */
 	double		num_heap_tuples;	/* tuples remaining in heap */
 	BufferAccessStrategy strategy;	/* access strategy for reads */
+
+	/*
+	 * True if lazy vacuum delete the collected garbage tuples from the
+	 * heap.  If it's false, the index AM can skip index bulk-deletion
+	 * safely.  This field is used only for ambulkdelete.
+	 */
+	bool		will_vacuum_heap;
+
+	/*
+	 * The answer to amvacuumstrategy asked before executing ambulkdelete.
+	 * This field is used only for ambulkdelete.
+	 */
+	IndexVacuumStrategy indvac_strategy;
+
+	/*
+	 * amvacuumcleanup is requested by lazy vacuum. If false, the index AM
+	 * can skip index cleanup. This can be false if INDEX_CLEANUP vacuum option
+	 * is set to false. This field is used only for amvacuumcleanup.
+	 */
+	bool		vacuumcleanup_requested;
 } IndexVacuumInfo;
 
 /*
@@ -174,6 +204,8 @@ extern bool index_getnext_slot(IndexScanDesc scan, ScanDirection direction,
 							   struct TupleTableSlot *slot);
 extern int64 index_getbitmap(IndexScanDesc scan, TIDBitmap *bitmap);
 
+extern IndexVacuumStrategy index_vacuum_strategy(IndexVacuumInfo *info,
+												 struct VacuumParams *params);
 extern IndexBulkDeleteResult *index_bulk_delete(IndexVacuumInfo *info,
 												IndexBulkDeleteResult *stats,
 												IndexBulkDeleteCallback callback,

@@ -81,6 +81,7 @@ hashhandler(PG_FUNCTION_ARGS)
 	amroutine->ambuild = hashbuild;
 	amroutine->ambuildempty = hashbuildempty;
 	amroutine->aminsert = hashinsert;
+	amroutine->amvacuumstrategy = hashvacuumstrategy;
 	amroutine->ambulkdelete = hashbulkdelete;
 	amroutine->amvacuumcleanup = hashvacuumcleanup;
 	amroutine->amcanreturn = NULL;
@@ -445,6 +446,19 @@ hashendscan(IndexScanDesc scan)
 }
 
 /*
+ * Choose the vacuum strategy. Do bulk-deletion unless index cleanup
+ * is specified to off.
+ */
+IndexVacuumStrategy
+hashvacuumstrategy(IndexVacuumInfo *info, VacuumParams *params)
+{
+	if (params->index_cleanup == VACOPT_TERNARY_DISABLED)
+		return INDEX_VACUUM_STRATEGY_NONE;
+	else
+		return INDEX_VACUUM_STRATEGY_BULKDELETE;
+}
+
+/*
  * Bulk deletion of all index entries pointing to a set of heap tuples.
  * The set of target tuples is specified via a callback routine that tells
  * whether any given heap tuple (identified by ItemPointer) is being deleted.
@@ -468,6 +482,14 @@ hashbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	Buffer		metabuf = InvalidBuffer;
 	HashMetaPage metap;
 	HashMetaPage cachedmetap;
+
+	/*
+	 * Skip deleting index entries if the corresponding heap tuples will
+	 * not be deleted and we want to skip it.
+	 */
+	if (!info->will_vacuum_heap &&
+		info->indvac_strategy == INDEX_VACUUM_STRATEGY_NONE)
+		return stats;
 
 	tuples_removed = 0;
 	num_index_tuples = 0;

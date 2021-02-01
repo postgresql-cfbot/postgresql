@@ -895,6 +895,19 @@ spgvacuumscan(spgBulkDeleteState *bds)
 }
 
 /*
+ * Choose the vacuum strategy. Do bulk-deletion unless index cleanup
+ * is specified to off.
+ */
+IndexVacuumStrategy
+spgvacuumstrategy(IndexVacuumInfo *info, VacuumParams *params)
+{
+	if (params->index_cleanup == VACOPT_TERNARY_DISABLED)
+		return INDEX_VACUUM_STRATEGY_NONE;
+	else
+		return INDEX_VACUUM_STRATEGY_BULKDELETE;
+}
+
+/*
  * Bulk deletion of all index entries pointing to a set of heap tuples.
  * The set of target tuples is specified via a callback routine that tells
  * whether any given heap tuple (identified by ItemPointer) is being deleted.
@@ -906,6 +919,13 @@ spgbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			  IndexBulkDeleteCallback callback, void *callback_state)
 {
 	spgBulkDeleteState bds;
+
+	/*
+	 * Skip deleting index entries if the corresponding heap tuples will
+	 * not be deleted.
+	 */
+	if (!info->will_vacuum_heap)
+		return NULL;
 
 	/* allocate stats if first time through, else re-use existing struct */
 	if (stats == NULL)
@@ -937,8 +957,11 @@ spgvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 {
 	spgBulkDeleteState bds;
 
-	/* No-op in ANALYZE ONLY mode */
-	if (info->analyze_only)
+	/*
+	 * No-op in ANALYZE ONLY mode or when user requests to disable index
+	 * cleanup.
+	 */
+	if (info->analyze_only || !info->vacuumcleanup_requested)
 		return stats;
 
 	/*

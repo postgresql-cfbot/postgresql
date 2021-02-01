@@ -212,6 +212,8 @@ extern bool spggettuple(IndexScanDesc scan, ScanDirection dir);
 extern bool spgcanreturn(Relation index, int attno);
 
 /* spgvacuum.c */
+extern IndexVacuumStrategy spgvacuumstrategy(IndexVacuumInfo *info,
+											 struct VacuumParams *params);
 extern IndexBulkDeleteResult *spgbulkdelete(IndexVacuumInfo *info,
 											IndexBulkDeleteResult *stats,
 											IndexBulkDeleteCallback callback,

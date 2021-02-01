@@ -22,29 +22,29 @@
 
 /*
  * For encoding purposes, item pointers are represented as 64-bit unsigned
- * integers. The lowest 11 bits represent the offset number, and the next
- * lowest 32 bits are the block number. That leaves 21 bits unused, i.e.
- * only 43 low bits are used.
+ * integers. The lowest 12 bits represent the offset number, and the next
+ * lowest 32 bits are the block number. That leaves 20 bits unused, i.e.
+ * only 44 low bits are used.
  *
- * 11 bits is enough for the offset number, because MaxHeapTuplesPerPage <
- * 2^11 on all supported block sizes. We are frugal with the bits, because
+ * 12 bits is enough for the offset number, because MaxHeapTuplesPerPage <
+ * 2^12 on all supported block sizes. We are frugal with the bits, because
  * smaller integers use fewer bytes in the varbyte encoding, saving disk
  * space. (If we get a new table AM in the future that wants to use the full
  * range of possible offset numbers, we'll need to change this.)
  *
- * These 43-bit integers are encoded using varbyte encoding. In each byte,
+ * These 44-bit integers are encoded using varbyte encoding. In each byte,
  * the 7 low bits contain data, while the highest bit is a continuation bit.
  * When the continuation bit is set, the next byte is part of the same
- * integer, otherwise this is the last byte of this integer. 43 bits need
+ * integer, otherwise this is the last byte of this integer. 44 bits need
  * at most 7 bytes in this encoding:
  *
  * 0XXXXXXX
- * 1XXXXXXX 0XXXXYYY
- * 1XXXXXXX 1XXXXYYY 0YYYYYYY
- * 1XXXXXXX 1XXXXYYY 1YYYYYYY 0YYYYYYY
- * 1XXXXXXX 1XXXXYYY 1YYYYYYY 1YYYYYYY 0YYYYYYY
- * 1XXXXXXX 1XXXXYYY 1YYYYYYY 1YYYYYYY 1YYYYYYY 0YYYYYYY
- * 1XXXXXXX 1XXXXYYY 1YYYYYYY 1YYYYYYY 1YYYYYYY 1YYYYYYY 0uuuuuuY
+ * 1XXXXXXX 0XXXXXYY
+ * 1XXXXXXX 1XXXXXYY 0YYYYYYY
+ * 1XXXXXXX 1XXXXXYY 1YYYYYYY 0YYYYYYY
+ * 1XXXXXXX 1XXXXXYY 1YYYYYYY 1YYYYYYY 0YYYYYYY
+ * 1XXXXXXX 1XXXXXYY 1YYYYYYY 1YYYYYYY 1YYYYYYY 0YYYYYYY
+ * 1XXXXXXX 1XXXXXYY 1YYYYYYY 1YYYYYYY 1YYYYYYY 1YYYYYYY 0uuuuuYY
  *
  * X = bits used for offset number
  * Y = bits used for block number
@@ -73,12 +73,12 @@
 
 /*
  * How many bits do you need to encode offset number? OffsetNumber is a 16-bit
- * integer, but you can't fit that many items on a page. 11 ought to be more
+ * integer, but you can't fit that many items on a page. 12 ought to be more
  * than enough. It's tempting to derive this from MaxHeapTuplesPerPage, and
  * use the minimum number of bits, but that would require changing the on-disk
  * format if MaxHeapTuplesPerPage changes. Better to leave some slack.
  */
-#define MaxHeapTuplesPerPageBits		11
+#define MaxHeapTuplesPerPageBits		12
 
 /* Max. number of bytes needed to encode the largest supported integer. */
 #define MaxBytesPerInteger				7

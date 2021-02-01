@@ -112,6 +112,7 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->ambuild = brinbuild;
 	amroutine->ambuildempty = brinbuildempty;
 	amroutine->aminsert = brininsert;
+	amroutine->amvacuumstrategy = NULL;
 	amroutine->ambulkdelete = brinbulkdelete;
 	amroutine->amvacuumcleanup = brinvacuumcleanup;
 	amroutine->amcanreturn = NULL;
@@ -800,8 +801,11 @@ brinvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 {
 	Relation	heapRel;
 
-	/* No-op in ANALYZE ONLY mode */
-	if (info->analyze_only)
+	/*
+	 * No-op in ANALYZE ONLY mode or when user requests to disable index
+	 * cleanup.
+	 */
+	if (info->analyze_only || !info->vacuumcleanup_requested)
 		return stats;
 
 	if (!stats)

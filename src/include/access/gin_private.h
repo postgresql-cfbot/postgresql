@@ -397,6 +397,8 @@ extern int64 gingetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
 extern void ginInitConsistentFunction(GinState *ginstate, GinScanKey key);
 
 /* ginvacuum.c */
+extern IndexVacuumStrategy ginvacuumstrategy(IndexVacuumInfo *info,
+											 struct VacuumParams *params);
 extern IndexBulkDeleteResult *ginbulkdelete(IndexVacuumInfo *info,
 											IndexBulkDeleteResult *stats,
 											IndexBulkDeleteCallback callback,

@@ -22,8 +22,9 @@
 struct PlannerInfo;
 struct IndexPath;
 
-/* Likewise, this file shouldn't depend on execnodes.h. */
+/* Likewise, this file shouldn't depend on execnodes.h and vacuum.h. */
 struct IndexInfo;
+struct VacuumParams;
 
 
 /*
@@ -112,6 +113,9 @@ typedef bool (*aminsert_function) (Relation indexRelation,
 								   IndexUniqueCheck checkUnique,
 								   bool indexUnchanged,
 								   struct IndexInfo *indexInfo);
+/* vacuum strategy */
+typedef IndexVacuumStrategy (*amvacuumstrategy_function) (IndexVacuumInfo *info,
+														  struct VacuumParams *params);
 
 /* bulk delete */
 typedef IndexBulkDeleteResult *(*ambulkdelete_function) (IndexVacuumInfo *info,
@@ -259,6 +263,7 @@ typedef struct IndexAmRoutine
 	ambuild_function ambuild;
 	ambuildempty_function ambuildempty;
 	aminsert_function aminsert;
+	amvacuumstrategy_function amvacuumstrategy;
 	ambulkdelete_function ambulkdelete;
 	amvacuumcleanup_function amvacuumcleanup;
 	amcanreturn_function amcanreturn;	/* can be NULL */

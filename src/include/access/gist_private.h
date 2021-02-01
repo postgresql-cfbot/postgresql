@@ -533,6 +533,8 @@ extern void gistMakeUnionKey(GISTSTATE *giststate, int attno,
 extern XLogRecPtr gistGetFakeLSN(Relation rel);
 
 /* gistvacuum.c */
+extern IndexVacuumStrategy gistvacuumstrategy(IndexVacuumInfo *info,
+											  struct VacuumParams *params);
 extern IndexBulkDeleteResult *gistbulkdelete(IndexVacuumInfo *info,
 											 IndexBulkDeleteResult *stats,
 											 IndexBulkDeleteCallback callback,

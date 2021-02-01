@@ -653,7 +653,7 @@ bt_metap(PG_FUNCTION_ARGS)
 	BTMetaPageData *metad;
 	TupleDesc	tupleDesc;
 	int			j;
-	char	   *values[9];
+	char	   *values[10];
 	Buffer		buffer;
 	Page		page;
 	HeapTuple	tuple;
@@ -726,12 +726,14 @@ bt_metap(PG_FUNCTION_ARGS)
 		values[j++] = psprintf("%u", metad->btm_oldest_btpo_xact);
 		values[j++] = psprintf("%f", metad->btm_last_cleanup_num_heap_tuples);
 		values[j++] = metad->btm_allequalimage ? "t" : "f";
+		values[j++] = psprintf(INT64_FORMAT, (int64) metad->btm_last_deletion_nblocks);
 	}
 	else
 	{
 		values[j++] = "0";
 		values[j++] = "-1";
 		values[j++] = "f";
+		values[j++] = "0";
 	}
 
 	tuple = BuildTupleFromCStrings(TupleDescGetAttInMetadata(tupleDesc),

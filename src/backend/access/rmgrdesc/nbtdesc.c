@@ -110,9 +110,10 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 
 				xlrec = (xl_btree_metadata *) XLogRecGetBlockData(record, 0,
 																  NULL);
-				appendStringInfo(buf, "oldest_btpo_xact %u; last_cleanup_num_heap_tuples: %f",
+				appendStringInfo(buf, "oldest_btpo_xact %u; last_cleanup_num_heap_tuples: %f; last_deletion_nblocks: %u",
 								 xlrec->oldest_btpo_xact,
-								 xlrec->last_cleanup_num_heap_tuples);
+								 xlrec->last_cleanup_num_heap_tuples,
+								 xlrec->last_deletion_nblocks);
 				break;
 			}
 	}

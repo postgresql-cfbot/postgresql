@@ -135,6 +135,7 @@ typedef struct IndexAmRoutine
     ambuild_function ambuild;
     ambuildempty_function ambuildempty;
     aminsert_function aminsert;
+    amvacuumstrategy_function amvacuumstrategy;
     ambulkdelete_function ambulkdelete;
     amvacuumcleanup_function amvacuumcleanup;
     amcanreturn_function amcanreturn;   /* can be NULL */
@@ -342,6 +343,30 @@ aminsert (Relation indexRelation,
    in <literal>indexInfo-&gt;ii_Context</literal> and store a pointer to the
    data in <literal>indexInfo-&gt;ii_AmCache</literal> (which will be NULL
    initially).
+  </para>
+
+  <para>
+<programlisting>
+IndexVacuumStrategy
+amvacuumstrategy (IndexVacuumInfo *info);
+</programlisting>
+   Tell <command>VACUUM</command> whether or not the index is willing to
+   delete index tuples.  This callback is called before
+   <function>ambulkdelete</function>.  Possible return values are
+   <literal>INDEX_VACUUM_STRATEGY_NONE</literal> and
+   <literal>INDEX_VACUUM_STRATEGY_BULKDELETE</literal>.  From the index
+   pont of view, if the index doesn't need to delete index tuple, it
+   must return <literal>INDEX_VACUUM_STRATEGY_NONE</literal>.  The returned
+   value can be referred  when <function>ambulkdelete</function> by checking
+   <literal>info-&gt;indvac_strategy</literal>.
+  </para>
+  <para>
+   <command>VACUUM</command> will decide whether or not to delete garbage tuples
+   from the heap based on these returned values from each index and several other
+   factors.  Therefore, if the index refers to heap TID and <command>VACUUM</command>
+   decides to delete garbage tuples from the heap, please note that the index also
+   must delete index tuples even if it returned
+   <literal>INDEX_VACUUM_STRATEGY_NONE</literal>.
   </para>
 
   <para>

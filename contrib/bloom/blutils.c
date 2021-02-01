@@ -131,6 +131,7 @@ blhandler(PG_FUNCTION_ARGS)
 	amroutine->ambuild = blbuild;
 	amroutine->ambuildempty = blbuildempty;
 	amroutine->aminsert = blinsert;
+	amroutine->amvacuumstrategy = blvacuumstrategy;
 	amroutine->ambulkdelete = blbulkdelete;
 	amroutine->amvacuumcleanup = blvacuumcleanup;
 	amroutine->amcanreturn = NULL;

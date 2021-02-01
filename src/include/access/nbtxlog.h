@@ -55,6 +55,7 @@ typedef struct xl_btree_metadata
 	TransactionId oldest_btpo_xact;
 	float8		last_cleanup_num_heap_tuples;
 	bool		allequalimage;
+	BlockNumber last_deletion_nblocks;
 } xl_btree_metadata;
 
 /*

@@ -66,6 +66,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->ambuild = spgbuild;
 	amroutine->ambuildempty = spgbuildempty;
 	amroutine->aminsert = spginsert;
+	amroutine->amvacuumstrategy = spgvacuumstrategy;
 	amroutine->ambulkdelete = spgbulkdelete;
 	amroutine->amvacuumcleanup = spgvacuumcleanup;
 	amroutine->amcanreturn = spgcanreturn;

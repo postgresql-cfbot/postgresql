@@ -563,17 +563,24 @@ do { \
 /*
  * MaxHeapTuplesPerPage is an upper bound on the number of tuples that can
  * fit on one heap page.  (Note that indexes could have more, because they
- * use a smaller tuple header.)  We arrive at the divisor because each tuple
- * must be maxaligned, and it must have an associated line pointer.
+ * use a smaller tuple header.)
  *
- * Note: with HOT, there could theoretically be more line pointers (not actual
- * tuples) than this on a heap page.  However we constrain the number of line
- * pointers to this anyway, to avoid excessive line-pointer bloat and not
- * require increases in the size of work arrays.
+ * We used to constrain the number of line pointers to avlid excessive
+ * line-pointer bloat and not require increases in the size of work arrays,
+ * calculating it using by the size of aligned heap tuple header. But since
+ * index vacuum strategy had entered the picture, accumulating LP_DEAD line
+ * pointers in a heap page has a value for skipping index deletion. So we
+ * relaxed the limitation by considering a certain number of line pointers in
+ * a heap page that don't have heap tuples, calculating it using by 1
+ * MAXALIGN() quantum instead of the aligned size of heap tuple header, 3
+ * MAXALIGN() quantums.
+ *
+ * Please note that increasing this values also affects TID bitmap. There
+ * might be a risk of intrducing performance regression affecting bitmap scans.
  */
 #define MaxHeapTuplesPerPage	\
 	((int) ((BLCKSZ - SizeOfPageHeaderData) / \
-			(MAXALIGN(SizeofHeapTupleHeader) + sizeof(ItemIdData))))
+			(MAXIMUM_ALIGNOF + sizeof(ItemIdData))))
 
 /*
  * MaxAttrSize is a somewhat arbitrary upper limit on the declared size of

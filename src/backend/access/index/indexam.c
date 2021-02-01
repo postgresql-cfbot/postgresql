@@ -679,6 +679,28 @@ index_getbitmap(IndexScanDesc scan, TIDBitmap *bitmap)
 }
 
 /* ----------------
+ *		index_vacuum_strategy - ask index vacuum strategy
+ *
+ * This callback routine is called just before vacuuming the heap.
+ * Returns IndexVacuumStrategy value to tell the lazy vacuum whether to
+ * do index deletion.
+ * ----------------
+ */
+IndexVacuumStrategy
+index_vacuum_strategy(IndexVacuumInfo *info, struct VacuumParams *params)
+{
+	Relation	indexRelation = info->index;
+
+	RELATION_CHECKS;
+
+	/* amvacuumstrategy is optional; assume do bulk-deletion */
+	if (indexRelation->rd_indam->amvacuumstrategy == NULL)
+		return INDEX_VACUUM_STRATEGY_BULKDELETE;
+
+	return indexRelation->rd_indam->amvacuumstrategy(info, params);
+}
+
+/* ----------------
  *		index_bulk_delete - do mass deletion of index entries
  *
  *		callback routine tells whether a given main-heap tuple is

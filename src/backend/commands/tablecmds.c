@@ -3063,9 +3063,12 @@ CheckRelationTableSpaceMove(Relation rel, Oid newTableSpaceId)
 
 	/*
 	 * We cannot support moving mapped relations into different tablespaces.
-	 * (In particular this eliminates all shared catalogs.)
+	 * (In particular this eliminates all shared catalogs.).  If this is
+	 * a system relation this is forbidden unless allow_system_table_mods is
+	 * enabled.
 	 */
-	if (RelationIsMapped(rel))
+	if (RelationIsMapped(rel) ||
+		(!allowSystemTableMods && IsSystemRelation(rel)))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot move system relation \"%s\"",

@@ -2474,6 +2474,7 @@ ExecReindex(ParseState *pstate, ReindexStmt *stmt, bool isTopLevel)
 	ListCell   *lc;
 	bool		concurrently = false;
 	bool		verbose = false;
+	char	   *tablespacename = NULL;
 
 	/* Parse option list */
 	foreach(lc, stmt->params)
@@ -2484,6 +2485,8 @@ ExecReindex(ParseState *pstate, ReindexStmt *stmt, bool isTopLevel)
 			verbose = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "concurrently") == 0)
 			concurrently = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "tablespace") == 0)
+			tablespacename = defGetString(opt);
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -2499,6 +2502,30 @@ ExecReindex(ParseState *pstate, ReindexStmt *stmt, bool isTopLevel)
 	params.options =
 		(verbose ? REINDEXOPT_VERBOSE : 0) |
 		(concurrently ? REINDEXOPT_CONCURRENTLY : 0);
+
+	/*
+	 * Assign the tablespace OID to move indexes to, with InvalidOid
+	 * to do nothing.
+	 */
+	if (tablespacename != NULL)
+	{
+		params.tablespaceOid = get_tablespace_oid(tablespacename, false);
+
+		/* Check permissions except when moving to database's default */
+		if (OidIsValid(params.tablespaceOid) &&
+			params.tablespaceOid != MyDatabaseTableSpace)
+		{
+			AclResult	aclresult;
+
+			aclresult = pg_tablespace_aclcheck(params.tablespaceOid,
+											   GetUserId(), ACL_CREATE);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, OBJECT_TABLESPACE,
+							   get_tablespace_name(params.tablespaceOid));
+		}
+	}
+	else
+		params.tablespaceOid = InvalidOid;
 
 	switch (stmt->kind)
 	{
@@ -2730,6 +2757,7 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 	List	   *relids = NIL;
 	int			num_keys;
 	bool		concurrent_warning = false;
+	bool		tablespace_warning = false;
 
 	AssertArg(objectName);
 	Assert(objectKind == REINDEX_OBJECT_SCHEMA ||
@@ -2854,6 +2882,40 @@ ReindexMultipleTables(const char *objectName, ReindexObjectType objectKind,
 						 errmsg("cannot reindex system catalogs concurrently, skipping all")));
 			concurrent_warning = true;
 			continue;
+		}
+
+		/*
+		 * If a new tablespace is set, check if this relation has to be
+		 * skipped.
+		 */
+		if (OidIsValid(params->tablespaceOid))
+		{
+			bool	skip_rel = false;
+
+			/*
+			 * Mapped relations cannot be moved to different tablespaces (in
+			 * particular this eliminates all shared catalogs.).
+			 */
+			if (RELKIND_HAS_STORAGE(classtuple->relkind) &&
+				!OidIsValid(classtuple->relfilenode))
+				skip_rel = true;
+
+			/*
+			 * A system relation is skipped unless allow_system_table_mods
+			 * is enabled.
+			 */
+			if (!allowSystemTableMods && IsSystemClass(relid, classtuple))
+				skip_rel = true;
+
+			if (skip_rel)
+			{
+				if (!tablespace_warning)
+					ereport(WARNING,
+							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+							 errmsg("cannot move system relations, skipping all")));
+				tablespace_warning = true;
+				continue;
+			}
 		}
 
 		/* Save the list of relation OIDs in private context */
@@ -3030,6 +3092,24 @@ ReindexMultipleInternal(List *relids, ReindexParams *params)
 			PopActiveSnapshot();
 			CommitTransactionCommand();
 			continue;
+		}
+
+		/*
+		 * Check permissions except when moving to database's default
+		 * if a new tablespace is chosen.  Note that this check also
+		 * happens in ExecReindex(), but we do an extra check here as
+		 * this runs across multiple transactions.
+		 */
+		if (OidIsValid(params->tablespaceOid) &&
+			params->tablespaceOid != MyDatabaseTableSpace)
+		{
+			AclResult	aclresult;
+
+			aclresult = pg_tablespace_aclcheck(params->tablespaceOid,
+											   GetUserId(), ACL_CREATE);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, OBJECT_TABLESPACE,
+							get_tablespace_name(params->tablespaceOid));
 		}
 
 		relkind = get_rel_relkind(relid);
@@ -3390,6 +3470,13 @@ ReindexRelationConcurrently(Oid relationOid, ReindexParams *params)
 		return false;
 	}
 
+	/* It's not a shared catalog, so refuse to move it to shared tablespace */
+	if (params->tablespaceOid == GLOBALTABLESPACE_OID)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot move non-shared relation to tablespace \"%s\"",
+					 get_tablespace_name(params->tablespaceOid))));
+
 	Assert(heapRelationIds != NIL);
 
 	/*-----
@@ -3461,6 +3548,9 @@ ReindexRelationConcurrently(Oid relationOid, ReindexParams *params)
 		/* Create new index definition based on given index */
 		newIndexId = index_concurrently_create_copy(heapRel,
 													idx->indexId,
+													OidIsValid(params->tablespaceOid) ?
+														params->tablespaceOid :
+														indexRel->rd_rel->reltablespace,
 													concurrentName);
 
 		/*

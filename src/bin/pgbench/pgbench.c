@@ -62,6 +62,7 @@
 #include "common/string.h"
 #include "fe_utils/cancel.h"
 #include "fe_utils/conditional.h"
+#include "fe_utils/socket_utils.h"
 #include "getopt_long.h"
 #include "libpq-fe.h"
 #include "pgbench.h"
@@ -6704,7 +6705,7 @@ clear_socket_set(socket_set *sa)
 static void
 add_socket_to_set(socket_set *sa, int fd, int idx)
 {
-	if (fd < 0 || fd >= FD_SETSIZE)
+	if (fd < 0 || !check_fd_set_size(fd, &sa->fds))
 	{
 		/*
 		 * Doing a hard exit here is a bit grotty, but it doesn't seem worth

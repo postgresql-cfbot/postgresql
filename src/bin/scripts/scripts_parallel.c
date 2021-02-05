@@ -25,6 +25,7 @@
 #include "common.h"
 #include "common/logging.h"
 #include "fe_utils/cancel.h"
+#include "fe_utils/socket_utils.h"
 #include "scripts_parallel.h"
 
 static void init_slot(ParallelSlot *slot, PGconn *conn);
@@ -144,6 +145,16 @@ ParallelSlotsGetIdle(ParallelSlot *slots, int numslots)
 			if (sock < 0)
 				continue;
 
+			/*
+			 * Fail and exit immediately if trying to use a socket in an
+			 * unsupported range.
+			 */
+			if (!check_fd_set_size(sock, &slotset))
+			{
+				pg_log_fatal("too many jobs for this platform -- try %d", i);
+				exit(1);
+			}
+
 			FD_SET(sock, &slotset);
 			if (sock > maxFd)
 				maxFd = sock;
@@ -221,18 +232,6 @@ ParallelSlotsSetup(const ConnParams *cparams,
 		for (i = 1; i < numslots; i++)
 		{
 			conn = connectDatabase(cparams, progname, echo, false, true);
-
-			/*
-			 * Fail and exit immediately if trying to use a socket in an
-			 * unsupported range.  POSIX requires open(2) to use the lowest
-			 * unused file descriptor and the hint given relies on that.
-			 */
-			if (PQsocket(conn) >= FD_SETSIZE)
-			{
-				pg_log_fatal("too many jobs for this platform -- try %d", i);
-				exit(1);
-			}
-
 			init_slot(slots + i, conn);
 		}
 	}

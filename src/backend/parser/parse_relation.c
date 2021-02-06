@@ -700,6 +700,18 @@ scanNSItemForColumn(ParseState *pstate, ParseNamespaceItem *nsitem,
 						colname),
 				 parser_errposition(pstate, location)));
 
+	/*
+	 * In MERGE WHEN AND condition, no system column is allowed except
+	 * tableOid
+	 */
+	if (pstate->p_expr_kind == EXPR_KIND_MERGE_WHEN_AND &&
+		attnum < InvalidAttrNumber && attnum != TableOidAttributeNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
+				 errmsg("cannot use system column \"%s\" in WHEN AND condition",
+						colname),
+				 parser_errposition(pstate, location)));
+
 	/* Found a valid match, so build a Var */
 	if (attnum > InvalidAttrNumber)
 	{

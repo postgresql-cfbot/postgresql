@@ -235,6 +235,7 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 		case CMD_INSERT:
 		case CMD_DELETE:
 		case CMD_UPDATE:
+		case CMD_MERGE:
 			estate->es_output_cid = GetCurrentCommandId(true);
 			break;
 
@@ -1242,6 +1243,12 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	resultRelInfo->ri_ReturningSlot = NULL;
 	resultRelInfo->ri_TrigOldSlot = NULL;
 	resultRelInfo->ri_TrigNewSlot = NULL;
+
+	resultRelInfo->ri_mergeTargetRTI = 0;
+	resultRelInfo->ri_matchedMergeAction = NIL;
+	resultRelInfo->ri_notMatchedMergeAction = NIL;
+	resultRelInfo->ri_mergeTuple = NULL;
+
 	resultRelInfo->ri_PartitionRoot = partition_root;
 	resultRelInfo->ri_RootToPartitionMap = NULL;	/* set by
 													 * ExecInitRoutingInfo */
@@ -2035,6 +2042,19 @@ ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 						ereport(ERROR,
 								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 								 errmsg("new row violates row-level security policy for table \"%s\"",
+										wco->relname)));
+					break;
+				case WCO_RLS_MERGE_UPDATE_CHECK:
+				case WCO_RLS_MERGE_DELETE_CHECK:
+					if (wco->polname != NULL)
+						ereport(ERROR,
+								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+								 errmsg("target row violates row-level security policy \"%s\" (USING expression) for table \"%s\"",
+										wco->polname, wco->relname)));
+					else
+						ereport(ERROR,
+								(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+								 errmsg("target row violates row-level security policy (USING expression) for table \"%s\"",
 										wco->relname)));
 					break;
 				case WCO_RLS_CONFLICT_CHECK:

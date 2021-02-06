@@ -206,6 +206,7 @@ _copyModifyTable(const ModifyTable *from)
 	COPY_SCALAR_FIELD(rootRelation);
 	COPY_SCALAR_FIELD(partColsUpdated);
 	COPY_NODE_FIELD(resultRelations);
+	COPY_SCALAR_FIELD(mergeTargetRelation);
 	COPY_NODE_FIELD(plans);
 	COPY_NODE_FIELD(withCheckOptionLists);
 	COPY_NODE_FIELD(returningLists);
@@ -219,6 +220,8 @@ _copyModifyTable(const ModifyTable *from)
 	COPY_NODE_FIELD(onConflictWhere);
 	COPY_SCALAR_FIELD(exclRelRTI);
 	COPY_NODE_FIELD(exclRelTlist);
+	COPY_NODE_FIELD(mergeSourceTargetList);
+	COPY_NODE_FIELD(mergeActionList);
 
 	return newnode;
 }
@@ -2249,6 +2252,21 @@ _copyOnConflictExpr(const OnConflictExpr *from)
 	return newnode;
 }
 
+static MergeAction *
+_copyMergeAction(const MergeAction *from)
+{
+	MergeAction *newnode = makeNode(MergeAction);
+
+	COPY_SCALAR_FIELD(matched);
+	COPY_SCALAR_FIELD(commandType);
+	COPY_SCALAR_FIELD(override);
+	COPY_NODE_FIELD(qual);
+	COPY_NODE_FIELD(targetList);
+
+	return newnode;
+}
+
+
 /* ****************************************************************
  *						pathnodes.h copy functions
  *
@@ -3125,6 +3143,9 @@ _copyQuery(const Query *from)
 	COPY_NODE_FIELD(setOperations);
 	COPY_NODE_FIELD(constraintDeps);
 	COPY_NODE_FIELD(withCheckOptions);
+	COPY_SCALAR_FIELD(mergeTarget_relation);
+	COPY_NODE_FIELD(mergeSourceTargetList);
+	COPY_NODE_FIELD(mergeActionList);
 	COPY_LOCATION_FIELD(stmt_location);
 	COPY_SCALAR_FIELD(stmt_len);
 
@@ -3185,6 +3206,35 @@ _copyUpdateStmt(const UpdateStmt *from)
 	COPY_NODE_FIELD(returningList);
 	COPY_NODE_FIELD(withClause);
 
+	return newnode;
+}
+
+static MergeStmt *
+_copyMergeStmt(const MergeStmt *from)
+{
+	MergeStmt  *newnode = makeNode(MergeStmt);
+
+	COPY_NODE_FIELD(relation);
+	COPY_NODE_FIELD(source_relation);
+	COPY_NODE_FIELD(join_condition);
+	COPY_NODE_FIELD(mergeWhenClauses);
+	COPY_NODE_FIELD(withClause);
+
+	return newnode;
+}
+
+static MergeWhenClause *
+_copyMergeWhenClause(const MergeWhenClause *from)
+{
+	MergeWhenClause *newnode = makeNode(MergeWhenClause);
+
+	COPY_SCALAR_FIELD(matched);
+	COPY_SCALAR_FIELD(commandType);
+	COPY_NODE_FIELD(condition);
+	COPY_NODE_FIELD(targetList);
+	COPY_NODE_FIELD(cols);
+	COPY_NODE_FIELD(values);
+	COPY_SCALAR_FIELD(override);
 	return newnode;
 }
 
@@ -5188,6 +5238,9 @@ copyObjectImpl(const void *from)
 		case T_OnConflictExpr:
 			retval = _copyOnConflictExpr(from);
 			break;
+		case T_MergeAction:
+			retval = _copyMergeAction(from);
+			break;
 
 			/*
 			 * RELATION NODES
@@ -5262,6 +5315,12 @@ copyObjectImpl(const void *from)
 			break;
 		case T_UpdateStmt:
 			retval = _copyUpdateStmt(from);
+			break;
+		case T_MergeStmt:
+			retval = _copyMergeStmt(from);
+			break;
+		case T_MergeWhenClause:
+			retval = _copyMergeWhenClause(from);
 			break;
 		case T_SelectStmt:
 			retval = _copySelectStmt(from);

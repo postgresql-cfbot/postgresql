@@ -1691,6 +1691,54 @@ rewriteTargetListUD(Query *parsetree, RangeTblEntry *target_rte,
 	}
 }
 
+void
+rewriteTargetListMerge(Query *parsetree, Relation target_relation)
+{
+	Var		   *var = NULL;
+	TargetEntry *tle;
+
+	Assert(target_relation->rd_rel->relkind == RELKIND_RELATION ||
+		   target_relation->rd_rel->relkind == RELKIND_MATVIEW ||
+		   target_relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
+
+	/*
+	 * Emit CTID so that executor can find the row to update or delete.
+	 */
+	var = makeVar(parsetree->mergeTarget_relation,
+				  SelfItemPointerAttributeNumber,
+				  TIDOID,
+				  -1,
+				  InvalidOid,
+				  0);
+
+	tle = makeTargetEntry((Expr *) var,
+						  list_length(parsetree->targetList) + 1,
+						  pstrdup("ctid"),
+						  true);
+
+	parsetree->targetList = lappend(parsetree->targetList, tle);
+
+	/*
+	 * If we are dealing with partitioned table, then emit a wholerow junk
+	 * attribute so that executor can find the partition the row belongs to.
+	 */
+	if (target_relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		var = makeWholeRowVar(rt_fetch(parsetree->mergeTarget_relation,
+									   parsetree->rtable),
+							  parsetree->mergeTarget_relation,
+							  0,
+							  false);
+
+		tle = makeTargetEntry((Expr *) var,
+							  list_length(parsetree->targetList) + 1,
+							  pstrdup("wholerow"),
+							  true);
+
+		parsetree->targetList = lappend(parsetree->targetList, tle);
+	}
+}
+
 /*
  * Record in target_rte->extraUpdatedCols the indexes of any generated columns
  * that depend on any columns mentioned in target_rte->updatedCols.
@@ -1726,7 +1774,6 @@ fill_extraUpdatedCols(RangeTblEntry *target_rte, Relation target_relation)
 		}
 	}
 }
-
 
 /*
  * matchLocks -
@@ -3856,6 +3903,7 @@ RewriteQuery(Query *parsetree, List *rewrite_events)
 		}
 		else if (event == CMD_UPDATE)
 		{
+			Assert(parsetree->override == OVERRIDING_NOT_SET);
 			parsetree->targetList =
 				rewriteTargetListIU(parsetree->targetList,
 									parsetree->commandType,
@@ -3866,6 +3914,39 @@ RewriteQuery(Query *parsetree, List *rewrite_events)
 
 			/* Also populate extraUpdatedCols (for generated columns) */
 			fill_extraUpdatedCols(rt_entry, rt_entry_relation);
+		}
+		else if (event == CMD_MERGE)
+		{
+			Assert(parsetree->override == OVERRIDING_NOT_SET);
+
+			/*
+			 * Rewrite each action targetlist separately
+			 */
+			foreach(lc1, parsetree->mergeActionList)
+			{
+				MergeAction *action = (MergeAction *) lfirst(lc1);
+
+				switch (action->commandType)
+				{
+					case CMD_NOTHING:
+					case CMD_DELETE:	/* Nothing to do here */
+						break;
+					case CMD_UPDATE:
+					case CMD_INSERT:
+						/* XXX is it possible to have a VALUES clause? */
+						action->targetList =
+							rewriteTargetListIU(action->targetList,
+												action->commandType,
+												action->override,
+												rt_entry_relation,
+												parsetree->resultRelation,
+												NULL, 0, NULL);
+						break;
+					default:
+						elog(ERROR, "unrecognized commandType: %d", action->commandType);
+						break;
+				}
+			}
 		}
 		else if (event == CMD_DELETE)
 		{
@@ -3880,13 +3961,20 @@ RewriteQuery(Query *parsetree, List *rewrite_events)
 		locks = matchLocks(event, rt_entry_relation->rd_rules,
 						   result_relation, parsetree, &hasUpdate);
 
-		product_queries = fireRules(parsetree,
-									result_relation,
-									event,
-									locks,
-									&instead,
-									&returning,
-									&qual_product);
+		/*
+		 * XXX MERGE doesn't support write rules because they would violate
+		 * the SQL Standard spec and would be unclear how they should work.
+		 */
+		if (event == CMD_MERGE)
+			product_queries = NIL;
+		else
+			product_queries = fireRules(parsetree,
+										result_relation,
+										event,
+										locks,
+										&instead,
+										&returning,
+										&qual_product);
 
 		/*
 		 * If we have a VALUES RTE with any remaining untouched DEFAULT items,

@@ -487,6 +487,7 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 		case EXPR_KIND_INSERT_TARGET:
 		case EXPR_KIND_UPDATE_SOURCE:
 		case EXPR_KIND_UPDATE_TARGET:
+		case EXPR_KIND_MERGE_WHEN_AND:
 		case EXPR_KIND_GROUP_BY:
 		case EXPR_KIND_ORDER_BY:
 		case EXPR_KIND_DISTINCT_ON:
@@ -1716,6 +1717,7 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 		case EXPR_KIND_INSERT_TARGET:
 		case EXPR_KIND_UPDATE_SOURCE:
 		case EXPR_KIND_UPDATE_TARGET:
+		case EXPR_KIND_MERGE_WHEN_AND:
 		case EXPR_KIND_GROUP_BY:
 		case EXPR_KIND_ORDER_BY:
 		case EXPR_KIND_DISTINCT_ON:
@@ -3005,6 +3007,8 @@ ParseExprKindName(ParseExprKind exprKind)
 		case EXPR_KIND_UPDATE_SOURCE:
 		case EXPR_KIND_UPDATE_TARGET:
 			return "UPDATE";
+		case EXPR_KIND_MERGE_WHEN_AND:
+			return "MERGE WHEN AND";
 		case EXPR_KIND_GROUP_BY:
 			return "GROUP BY";
 		case EXPR_KIND_ORDER_BY:

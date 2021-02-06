@@ -241,14 +241,14 @@ ExecSetupPartitionTupleRouting(EState *estate, ModifyTableState *mtstate,
 								  NULL, 0);
 
 	/*
-	 * If performing an UPDATE with tuple routing, we can reuse partition
-	 * sub-plan result rels.  We build a hash table to map the OIDs of
-	 * partitions present in mtstate->resultRelInfo to their ResultRelInfos.
-	 * Every time a tuple is routed to a partition that we've yet to set the
-	 * ResultRelInfo for, before we go to the trouble of making one, we check
-	 * for a pre-made one in the hash table.
+	 * If performing an UPDATE/MERGE with tuple routing, we can reuse
+	 * partition sub-plan result rels.  We build a hash table to map the OIDs
+	 * of partitions present in mtstate->resultRelInfo to their
+	 * ResultRelInfos. Every time a tuple is routed to a partition that we've
+	 * yet to set the ResultRelInfo for, before we go to the trouble of making
+	 * one, we check for a pre-made one in the hash table.
 	 */
-	if (node && node->operation == CMD_UPDATE)
+	if (node && (node->operation == CMD_UPDATE || node->operation == CMD_MERGE))
 		ExecHashSubPlanResultRelsByOid(mtstate, proute);
 
 	return proute;
@@ -914,7 +914,8 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 	 * Also, if transition capture is required, store a map to convert tuples
 	 * from partition's rowtype to the root partition table's.
 	 */
-	if (mtstate->mt_transition_capture || mtstate->mt_oc_transition_capture)
+	if (mtstate->mt_transition_capture || mtstate->mt_oc_transition_capture ||
+		mtstate->operation == CMD_MERGE)
 		leaf_part_rri->ri_ChildToRootMap =
 			convert_tuples_by_name(RelationGetDescr(leaf_part_rri->ri_RelationDesc),
 								   RelationGetDescr(leaf_part_rri->ri_PartitionRoot));
@@ -932,6 +933,91 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 		lappend(estate->es_tuple_routing_result_relations,
 				leaf_part_rri);
 
+	/*
+	 * Initialize information about this partition that's needed to handle
+	 * MERGE.
+	 */
+	if (node && node->operation == CMD_MERGE)
+	{
+		TupleConversionMap *map = leaf_part_rri->ri_RootToPartitionMap;
+		int			firstVarno = mtstate->resultRelInfo[0].ri_RangeTableIndex;
+		ResultRelInfo *firstResultRelInfo = &mtstate->resultRelInfo[0];
+
+		/*
+		 * If the root parent and partition have the same tuple descriptor,
+		 * just reuse the original MERGE state for partition.
+		 */
+		if (map == NULL)
+		{
+			leaf_part_rri->ri_mergeTuple = firstResultRelInfo->ri_mergeTuple;
+			leaf_part_rri->ri_matchedMergeAction = firstResultRelInfo->ri_matchedMergeAction;
+			leaf_part_rri->ri_notMatchedMergeAction = firstResultRelInfo->ri_notMatchedMergeAction;
+		}
+		else
+		{
+			/* Convert expressions contain partition's attnos. */
+			ListCell   *lc;
+			List	  **list;
+
+			leaf_part_rri->ri_mergeTuple =
+				ExecInitExtraTupleSlot(mtstate->ps.state,
+									   RelationGetDescr(partrel),
+									   &TTSOpsBufferHeapTuple);
+
+			foreach(lc, mtstate->mt_mergeState->actionStates)
+			{
+				MergeActionState *mastate = lfirst_node(MergeActionState, lc);
+				MergeAction *action = mastate->mas_action;
+				RelMergeActionState *relstate;
+				List	   *conv_tl;
+				List	   *conv_qual;
+				TupleDesc	tupdesc;
+
+				conv_tl = map_partition_varattnos((List *) action->targetList,
+												  firstVarno,
+												  partrel, firstResultRel);
+				conv_tl = adjust_partition_tlist(conv_tl, map);
+				tupdesc = ExecTypeFromTL(conv_tl);
+				/* XXX gotta pfree conv_tl and tupdesc? */
+
+				/* Generate the action's state for this relation */
+				relstate = makeNode(RelMergeActionState);
+				relstate->rmas_global = mastate;
+
+				relstate->rmas_mergeslot =
+					ExecInitExtraTupleSlot(mtstate->ps.state, tupdesc, &TTSOpsVirtual);
+
+				relstate->rmas_proj =
+					ExecBuildProjectionInfo(conv_tl, mtstate->ps.ps_ExprContext,
+											relstate->rmas_mergeslot,
+											&mtstate->ps,
+											NULL);
+
+				conv_qual = map_partition_varattnos((List *) action->qual,
+													firstVarno,
+													partrel, firstResultRel);
+				relstate->rmas_whenqual = ExecInitQual(conv_qual,
+													   &mtstate->ps);
+
+
+				/* And put the action in the appropriate list */
+				if (action->matched)
+					list = &leaf_part_rri->ri_matchedMergeAction;
+				else
+					list = &leaf_part_rri->ri_notMatchedMergeAction;
+				*list = lappend(*list, relstate);
+			}
+		}
+
+		/*
+		 * get_partition_dispatch_recurse() and expand_partitioned_rtentry()
+		 * fetch the leaf OIDs in the same order. So we can safely derive the
+		 * index of the merge target relation corresponding to this partition
+		 * by simply adding partidx + 1 to the root's merge target relation.
+		 */
+		leaf_part_rri->ri_mergeTargetRTI = node->mergeTargetRelation +
+			partidx + 1;
+	}
 	MemoryContextSwitchTo(oldcxt);
 
 	return leaf_part_rri;

@@ -120,7 +120,7 @@ EXEC SQL CONNECT TO <replaceable>target</replaceable> <optional>AS <replaceable>
 
     <listitem>
      <simpara>
-      <literal>unix:postgresql://<replaceable>hostname</replaceable><optional>:<replaceable>port</replaceable></optional><optional>/<replaceable>dbname</replaceable></optional><optional>?<replaceable>options</replaceable></optional></literal>
+      <literal>unix:postgresql://localhost<optional>:<replaceable>port</replaceable></optional><optional>/<replaceable>dbname</replaceable></optional><optional>?<replaceable>options</replaceable></optional></literal>
      </simpara>
     </listitem>
 
@@ -199,6 +199,10 @@ EXEC SQL CONNECT TO <replaceable>target</replaceable> <optional>AS <replaceable>
    any <replaceable>keyword</replaceable> or <replaceable>value</replaceable>,
    though not within or after one.  Note that there is no way to
    write <literal>&amp;</literal> within a <replaceable>value</replaceable>.
+   The host part of the unix: method URI is fixed, use
+   the <varname>host</varname> option in case of using a non-default socket
+   directory.  Since a directory path contains slashes, the whole target
+   should be an SQL string literal.
   </para>
 
   <para>

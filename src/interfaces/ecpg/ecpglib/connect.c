@@ -360,8 +360,7 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 
 				/*------
 				 * new style:
-				 *	<tcp|unix>:postgresql://server[:port|:/unixsocket/path:]
-				 *	[/db-name][?options]
+				 *	<tcp|unix>:postgresql://server[:port][/db-name][?options]
 				 *------
 				 */
 				offset += strlen("postgresql://");
@@ -385,41 +384,11 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 				}
 
 				tmp = strrchr(dbname + offset, ':');
-				if (tmp != NULL)	/* port number or Unix socket path given */
+				if (tmp != NULL)	/* port number given */
 				{
-					char	   *tmp2;
-
 					*tmp = '\0';
-					if ((tmp2 = strchr(tmp + 1, ':')) != NULL)
-					{
-						*tmp2 = '\0';
-						host = ecpg_strdup(tmp + 1, lineno);
-						connect_params++;
-						if (strncmp(dbname, "unix:", 5) != 0)
-						{
-							ecpg_log("ECPGconnect: socketname %s given for TCP connection on line %d\n", host, lineno);
-							ecpg_raise(lineno, ECPG_CONNECT, ECPG_SQLSTATE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION, realname ? realname : ecpg_gettext("<DEFAULT>"));
-							if (host)
-								ecpg_free(host);
-
-							/*
-							 * port not set yet if (port) ecpg_free(port);
-							 */
-							if (options)
-								ecpg_free(options);
-							if (realname)
-								ecpg_free(realname);
-							if (dbname)
-								ecpg_free(dbname);
-							free(this);
-							return false;
-						}
-					}
-					else
-					{
-						port = ecpg_strdup(tmp + 1, lineno);
-						connect_params++;
-					}
+					port = ecpg_strdup(tmp + 1, lineno);
+					connect_params++;
 				}
 
 				if (strncmp(dbname, "unix:", 5) == 0)

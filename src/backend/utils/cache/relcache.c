@@ -2261,6 +2261,7 @@ RelationReloadIndexInfo(Relation relation)
 		relation->rd_index->indcheckxmin = index->indcheckxmin;
 		relation->rd_index->indisready = index->indisready;
 		relation->rd_index->indislive = index->indislive;
+		relation->rd_index->induniqvalid = index->induniqvalid;
 
 		/* Copy xmin too, as that is needed to make sense of indcheckxmin */
 		HeapTupleHeaderSetXmin(relation->rd_indextuple->t_data,
@@ -4580,7 +4581,7 @@ RelationGetIndexList(Relation relation)
 		 * so don't check them.
 		 */
 		if (!index->indisvalid || !index->indisunique ||
-			!index->indimmediate ||
+			!index->indimmediate || !index->induniqvalid ||
 			!heap_attisnull(htup, Anum_pg_index_indpred, NULL))
 			continue;
 
@@ -5060,7 +5061,10 @@ restart:
 		else
 			indexPredicate = NULL;
 
-		/* Can this index be referenced by a foreign key? */
+		/*
+		 * Can this index be referenced by a foreign key?
+		 * Yes, even if uniqueness is not yet valid (!induniqvalid)
+		 */
 		isKey = indexDesc->rd_index->indisunique &&
 			indexExpressions == NULL &&
 			indexPredicate == NULL;

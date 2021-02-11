@@ -559,6 +559,7 @@ static void refuseDupeIndexAttach(Relation parentIdx, Relation partIdx,
 static List *GetParentedForeignKeyRefs(Relation partition);
 static void ATDetachCheckNoForeignKeyRefs(Relation partition);
 static void ATExecAlterCollationRefreshVersion(Relation rel, List *coll);
+static void ATExecAlterIndex(Relation rel, bool unique, bool valid);
 
 
 /* ----------------------------------------------------------------
@@ -3898,6 +3899,7 @@ AlterTableGetLockLevel(List *cmds)
 				 */
 			case AT_DropConstraint: /* as DROP INDEX */
 			case AT_DropNotNull:	/* may change some SQL plans */
+			case AT_SetIndexNotUnique:
 				cmd_lockmode = AccessExclusiveLock;
 				break;
 
@@ -3940,6 +3942,8 @@ AlterTableGetLockLevel(List *cmds)
 			case AT_DisableTrig:
 			case AT_DisableTrigAll:
 			case AT_DisableTrigUser:
+			case AT_SetIndexUnique:
+			case AT_SetIndexUniqueNotValid:
 				cmd_lockmode = ShareRowExclusiveLock;
 				break;
 
@@ -4061,6 +4065,7 @@ AlterTableGetLockLevel(List *cmds)
 				break;
 
 			case AT_ValidateConstraint: /* Uses MVCC in getConstraints() */
+			case AT_ValidateIndexUnique:
 				cmd_lockmode = ShareUpdateExclusiveLock;
 				break;
 
@@ -4473,6 +4478,26 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			/* No command-specific prep needed */
 			pass = AT_PASS_MISC;
 			break;
+		case AT_SetIndexNotUnique:
+			ATSimplePermissions(rel, ATT_INDEX);
+			/* No command-specific prep needed */
+			pass = AT_PASS_MISC;
+			break;
+		case AT_SetIndexUnique:
+			ATSimplePermissions(rel, ATT_INDEX);
+			/* No command-specific prep needed */
+			pass = AT_PASS_MISC;
+			break;
+		case AT_SetIndexUniqueNotValid:
+			ATSimplePermissions(rel, ATT_INDEX);
+			/* No command-specific prep needed */
+			pass = AT_PASS_MISC;
+			break;
+		case AT_ValidateIndexUnique:
+			ATSimplePermissions(rel, ATT_INDEX);
+			/* No command-specific prep needed */
+			pass = AT_PASS_MISC;
+			break;
 		default:				/* oops */
 			elog(ERROR, "unrecognized alter table type: %d",
 				 (int) cmd->subtype);
@@ -4860,6 +4885,17 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			/* ATPrepCmd ensured it must be an index */
 			Assert(rel->rd_rel->relkind == RELKIND_INDEX);
 			ATExecAlterCollationRefreshVersion(rel, cmd->object);
+			break;
+		case AT_SetIndexNotUnique:
+			ATExecAlterIndex(rel, false, true);
+			break;
+		case AT_SetIndexUnique:
+			ATExecAlterIndex(rel, true, true);
+			break;
+		case AT_SetIndexUniqueNotValid:
+			ATExecAlterIndex(rel, true, false);
+			break;
+		case AT_ValidateIndexUnique:
 			break;
 		default:				/* oops */
 			elog(ERROR, "unrecognized alter table type: %d",
@@ -10403,7 +10439,7 @@ transformFkeyCheckAttrs(Relation pkrel,
 		/*
 		 * Must have the right number of columns; must be unique and not a
 		 * partial index; forget it if there are any expressions, too. Invalid
-		 * indexes are out as well.
+		 * indexes are out as well. Doesn't matter is uniqueness is valid yet.
 		 */
 		if (indexStruct->indnkeyatts == numattrs &&
 			indexStruct->indisunique &&
@@ -14747,7 +14783,8 @@ ATExecReplicaIdentity(Relation rel, ReplicaIdentityStmt *stmt, LOCKMODE lockmode
 						RelationGetRelationName(rel))));
 	/* The AM must support uniqueness, and the index must in fact be unique. */
 	if (!indexRel->rd_indam->amcanunique ||
-		!indexRel->rd_index->indisunique)
+		!indexRel->rd_index->indisunique ||
+		!indexRel->rd_index->induniqvalid)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cannot use non-unique index \"%s\" as replica identity",
@@ -17664,4 +17701,40 @@ ATExecAlterCollationRefreshVersion(Relation rel, List *coll)
 {
 	index_update_collation_versions(rel->rd_id, get_collation_oid(coll, false));
 	CacheInvalidateRelcache(rel);
+}
+
+static void
+ATExecAlterIndex(Relation rel, bool unique, bool valid)
+{
+	Relation	pg_index;
+	HeapTuple	pg_index_tuple;
+	Form_pg_index pg_index_form;
+	bool		dirty = false;
+
+	pg_index = table_open(IndexRelationId, RowExclusiveLock);
+	pg_index_tuple = SearchSysCacheCopy1(INDEXRELID,
+											 ObjectIdGetDatum(RelationGetRelid(rel)));
+	if (!HeapTupleIsValid(pg_index_tuple))
+		elog(ERROR, "cache lookup failed for index %u", RelationGetRelid(rel));
+	pg_index_form = (Form_pg_index) GETSTRUCT(pg_index_tuple);
+
+	if (pg_index_form->indisunique != unique)
+	{
+		pg_index_form->indisunique = unique;
+		dirty = true;
+
+		if (unique && valid)
+			Assert(true); // Call validation
+		pg_index_form->induniqvalid = valid;
+	}
+
+	if (dirty)
+	{
+		CatalogTupleUpdate(pg_index, &pg_index_tuple->t_self, pg_index_tuple);
+		InvokeObjectPostAlterHookArg(IndexRelationId, RelationGetRelid(rel), 0,
+									 InvalidOid, true);
+	}
+
+	heap_freetuple(pg_index_tuple);
+	table_close(pg_index, RowExclusiveLock);
 }

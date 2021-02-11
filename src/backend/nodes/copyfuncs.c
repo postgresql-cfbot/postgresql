@@ -3566,6 +3566,7 @@ _copyIndexStmt(const IndexStmt *from)
 	COPY_SCALAR_FIELD(oldCreateSubid);
 	COPY_SCALAR_FIELD(oldFirstRelfilenodeSubid);
 	COPY_SCALAR_FIELD(unique);
+	COPY_SCALAR_FIELD(uniquevalid);
 	COPY_SCALAR_FIELD(primary);
 	COPY_SCALAR_FIELD(isconstraint);
 	COPY_SCALAR_FIELD(deferrable);

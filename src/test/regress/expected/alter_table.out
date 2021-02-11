@@ -228,6 +228,11 @@ ALTER INDEX IF EXISTS __attmp_onek_unique1 RENAME TO onek_unique1;
 NOTICE:  relation "__attmp_onek_unique1" does not exist, skipping
 ALTER INDEX onek_unique1 RENAME TO attmp_onek_unique1;
 ALTER INDEX attmp_onek_unique1 RENAME TO onek_unique1;
+ALTER INDEX onek_unique1 SET NOT UNIQUE;
+ALTER INDEX onek_unique1 SET UNIQUE NOT VALID;
+ALTER INDEX onek_unique1 VALIDATE UNIQUE;
+ALTER INDEX onek_unique1 SET NOT UNIQUE;
+ALTER INDEX onek_unique1 SET UNIQUE;
 SET ROLE regress_alter_table_user1;
 ALTER INDEX onek_unique1 RENAME TO fail;  -- permission denied
 ERROR:  must be owner of index onek_unique1

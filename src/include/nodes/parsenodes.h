@@ -1899,7 +1899,11 @@ typedef enum AlterTableType
 	AT_AddIdentity,				/* ADD IDENTITY */
 	AT_SetIdentity,				/* SET identity column options */
 	AT_DropIdentity,			/* DROP IDENTITY */
-	AT_AlterCollationRefreshVersion /* ALTER COLLATION ... REFRESH VERSION */
+	AT_AlterCollationRefreshVersion, /* ALTER COLLATION ... REFRESH VERSION */
+	AT_SetIndexNotUnique,		/* ALTER INDEX SET NOT UNIQUE */
+	AT_SetIndexUnique,			/* ALTER INDEX SET UNIQUE */
+	AT_SetIndexUniqueNotValid,	/* ALTER INDEX SET UNIQUE NOT VALID */
+	AT_ValidateIndexUnique		/* ALTER INDEX VALIDATE UNIQUE */
 } AlterTableType;
 
 typedef struct ReplicaIdentityStmt
@@ -2833,6 +2837,7 @@ typedef struct IndexStmt
 	SubTransactionId oldFirstRelfilenodeSubid;	/* rd_firstRelfilenodeSubid of
 												 * oldNode */
 	bool		unique;			/* is index unique? */
+	bool		uniquevalid;	/* is index uniqueness valid? */
 	bool		primary;		/* is index a primary key? */
 	bool		isconstraint;	/* is it for a pkey/unique constraint? */
 	bool		deferrable;		/* is the constraint DEFERRABLE? */

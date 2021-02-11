@@ -875,6 +875,7 @@ is_usable_unique_index(Relation indexRel)
 	 * operators.
 	 */
 	if (indexStruct->indisunique &&
+		indexStruct->induniqvalid &&
 		indexStruct->indimmediate &&
 		indexRel->rd_rel->relam == BTREE_AM_OID &&
 		indexStruct->indisvalid &&

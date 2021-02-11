@@ -43,6 +43,7 @@ CATALOG(pg_index,2610,IndexRelationId) BKI_SCHEMA_MACRO
 	bool		indisready;		/* is this index ready for inserts? */
 	bool		indislive;		/* is this index alive at all? */
 	bool		indisreplident; /* is this index the identity for replication? */
+	bool		induniqvalid;	/* is uniqueness valid for use by queries? */
 
 	/* variable-length fields start here, but we allow direct access to indkey */
 	int2vector	indkey BKI_FORCE_NOT_NULL;	/* column numbers of indexed cols,

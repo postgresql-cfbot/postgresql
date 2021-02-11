@@ -1056,6 +1056,7 @@ InitCatCachePhase2(CatCache *cache, bool touch_index)
 		 * about the pg_am indexes not getting tested.
 		 */
 		Assert(idesc->rd_index->indisunique &&
+			   idesc->rd_index->induniqvalid &&
 			   idesc->rd_index->indimmediate);
 
 		index_close(idesc, AccessShareLock);

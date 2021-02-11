@@ -342,6 +342,7 @@ Boot_DeclareUniqueIndexStmt:
 					stmt->oldCreateSubid = InvalidSubTransactionId;
 					stmt->oldFirstRelfilenodeSubid = InvalidSubTransactionId;
 					stmt->unique = true;
+					stmt->uniquevalid = true;
 					stmt->primary = false;
 					stmt->isconstraint = false;
 					stmt->deferrable = false;

@@ -397,6 +397,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			info->indrestrictinfo = NIL;	/* set later, in indxpath.c */
 			info->predOK = false;	/* set later, in indxpath.c */
 			info->unique = index->indisunique;
+			info->uniquevalid = index->induniqvalid;
 			info->immediate = index->indimmediate;
 			info->hypothetical = false;
 
@@ -727,7 +728,8 @@ infer_arbiter_indexes(PlannerInfo *root)
 		 * Note that we do not perform a check against indcheckxmin (like e.g.
 		 * get_relation_info()) here to eliminate candidates, because
 		 * uniqueness checking only cares about the most recently committed
-		 * tuple versions.
+		 * tuple versions. So we allow an index that is defined as unique
+		 * even if the uniqueness is not yet valid.
 		 */
 
 		/*

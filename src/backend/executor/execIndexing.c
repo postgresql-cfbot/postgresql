@@ -392,6 +392,8 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 		 *
 		 * For a speculative insertion (used by INSERT ... ON CONFLICT), do
 		 * the same as for a deferrable unique index.
+		 *
+		 * It doesn't matter here whether uniqueness is valid or not.
 		 */
 		if (!indexRelation->rd_index->indisunique)
 			checkUnique = UNIQUE_CHECK_NO;

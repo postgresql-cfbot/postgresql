@@ -300,7 +300,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <ival>	add_drop opt_asc_desc opt_nulls_order
 
 %type <node>	alter_table_cmd alter_type_cmd opt_collate_clause
-	   replica_identity partition_cmd index_partition_cmd
+	   replica_identity partition_cmd index_partition_cmd alter_index_cmd
 %type <list>	alter_table_cmds alter_type_cmds
 %type <list>    alter_identity_column_option_list
 %type <defelt>  alter_identity_column_option
@@ -1963,6 +1963,15 @@ AlterTableStmt:
 					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
+		|	ALTER INDEX qualified_name alter_index_cmd
+				{
+					AlterTableStmt *n = makeNode(AlterTableStmt);
+					n->relation = $3;
+					n->cmds = list_make1($4);
+					n->objtype = OBJECT_INDEX;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
 		|	ALTER INDEX ALL IN_P TABLESPACE name SET TABLESPACE name opt_nowait
 				{
 					AlterTableMoveAllStmt *n =
@@ -2128,6 +2137,38 @@ index_partition_cmd:
 					n->def = (Node *) cmd;
 
 					$$ = (Node *) n;
+				}
+		;
+
+alter_index_cmd:
+			/* ALTER INDEX <name> SET [NOT] UNIQUE [NOT VALID] */
+			SET NOT UNIQUE
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+
+					n->subtype = AT_SetIndexNotUnique;
+					$$ = (Node *)n;
+				}
+			| SET UNIQUE
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+
+					n->subtype = AT_SetIndexUnique;
+					$$ = (Node *)n;
+				}
+			| SET UNIQUE NOT VALID
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+
+					n->subtype = AT_SetIndexUniqueNotValid;
+					$$ = (Node *)n;
+				}
+			| VALIDATE UNIQUE
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+
+					n->subtype = AT_ValidateIndexUnique;
+					$$ = (Node *)n;
 				}
 		;
 
@@ -7229,6 +7270,7 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_index_name
 				{
 					IndexStmt *n = makeNode(IndexStmt);
 					n->unique = $2;
+					n->uniquevalid = $2;
 					n->concurrent = $4;
 					n->idxname = $5;
 					n->relation = $7;
@@ -7259,6 +7301,7 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_index_name
 				{
 					IndexStmt *n = makeNode(IndexStmt);
 					n->unique = $2;
+					n->uniquevalid = $2;
 					n->concurrent = $4;
 					n->idxname = $8;
 					n->relation = $10;

@@ -853,6 +853,7 @@ struct IndexOptInfo
 
 	bool		predOK;			/* true if index predicate matches query */
 	bool		unique;			/* true if a unique index */
+	bool		uniquevalid;	/* true if uniqueness has been validated */
 	bool		immediate;		/* is uniqueness enforced immediately? */
 	bool		hypothetical;	/* true if index doesn't really exist */
 

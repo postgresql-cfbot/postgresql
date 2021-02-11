@@ -1570,6 +1570,7 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 	index->oldCreateSubid = InvalidSubTransactionId;
 	index->oldFirstRelfilenodeSubid = InvalidSubTransactionId;
 	index->unique = idxrec->indisunique;
+	index->uniquevalid = idxrec->induniqvalid;
 	index->primary = idxrec->indisprimary;
 	index->transformed = true;	/* don't need transformIndexStmt */
 	index->concurrent = false;
@@ -2114,6 +2115,7 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 	index = makeNode(IndexStmt);
 
 	index->unique = (constraint->contype != CONSTR_EXCLUSION);
+	index->uniquevalid = true;
 	index->primary = (constraint->contype == CONSTR_PRIMARY);
 	if (index->primary)
 	{

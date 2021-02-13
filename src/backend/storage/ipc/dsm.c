@@ -771,8 +771,10 @@ dsm_detach(dsm_segment *seg)
 	/*
 	 * Invoke registered callbacks.  Just in case one of those callbacks
 	 * throws a further error that brings us back here, pop the callback
-	 * before invoking it, to avoid infinite error recursion.
+	 * before invoking it, to avoid infinite error recursion.  Don't allow
+	 * interrupts to prevent cleanup from running to completion.
 	 */
+	HOLD_INTERRUPTS();
 	while (!slist_is_empty(&seg->on_detach))
 	{
 		slist_node *node;
@@ -788,6 +790,7 @@ dsm_detach(dsm_segment *seg)
 
 		function(seg, arg);
 	}
+	RESUME_INTERRUPTS();
 
 	/*
 	 * Try to remove the mapping, if one exists.  Normally, there will be, but

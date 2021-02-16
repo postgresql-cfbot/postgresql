@@ -238,6 +238,10 @@ bt_page_stats_internal(PG_FUNCTION_ARGS, enum pageinspect_version ext_version)
 	values[j++] = psprintf("%u", stat.btpo_prev);
 	values[j++] = psprintf("%u", stat.btpo_next);
 	values[j++] = psprintf("%u", (stat.type == 'd') ? stat.btpo.xact : stat.btpo.level);
+	if (stat.type == 'd')
+		values[j++] = psprintf(XID_FMT, stat.btpo.xact);
+	else
+		values[j++] = psprintf("%u", stat.btpo.level);
 	values[j++] = psprintf("%d", stat.btpo_flags);
 
 	tuple = BuildTupleFromCStrings(TupleDescGetAttInMetadata(tupleDesc),

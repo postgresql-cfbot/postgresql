@@ -38,10 +38,17 @@ xidin(PG_FUNCTION_ARGS)
 Datum
 xidout(PG_FUNCTION_ARGS)
 {
+
+#if XID_BITS == 32
 	TransactionId transactionId = PG_GETARG_TRANSACTIONID(0);
 	char	   *result = (char *) palloc(16);
-
 	snprintf(result, 16, "%lu", (unsigned long) transactionId);
+#else
+	FullTransactionId transactionId = PG_GETARG_TRANSACTIONID(0);
+	char	   *result = (char *) palloc(32);
+	snprintf(result, 32, XID_FMT, (unsigned long long) transactionId);
+#endif
+
 	PG_RETURN_CSTRING(result);
 }
 

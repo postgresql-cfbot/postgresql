@@ -5839,14 +5839,14 @@ recoveryStopsBefore(XLogReaderState *record)
 		if (isCommit)
 		{
 			ereport(LOG,
-					(errmsg("recovery stopping before commit of transaction %u, time %s",
+					(errmsg("recovery stopping before commit of transaction " XID_FMT ", time %s",
 							recoveryStopXid,
 							timestamptz_to_str(recoveryStopTime))));
 		}
 		else
 		{
 			ereport(LOG,
-					(errmsg("recovery stopping before abort of transaction %u, time %s",
+					(errmsg("recovery stopping before abort of transaction " XID_FMT ", time %s",
 							recoveryStopXid,
 							timestamptz_to_str(recoveryStopTime))));
 		}
@@ -5985,7 +5985,7 @@ recoveryStopsAfter(XLogReaderState *record)
 				xact_info == XLOG_XACT_COMMIT_PREPARED)
 			{
 				ereport(LOG,
-						(errmsg("recovery stopping after commit of transaction %u, time %s",
+						(errmsg("recovery stopping after commit of transaction " XID_FMT ", time %s",
 								recoveryStopXid,
 								timestamptz_to_str(recoveryStopTime))));
 			}
@@ -5993,7 +5993,7 @@ recoveryStopsAfter(XLogReaderState *record)
 					 xact_info == XLOG_XACT_ABORT_PREPARED)
 			{
 				ereport(LOG,
-						(errmsg("recovery stopping after abort of transaction %u, time %s",
+						(errmsg("recovery stopping after abort of transaction " XID_FMT ", time %s",
 								recoveryStopXid,
 								timestamptz_to_str(recoveryStopTime))));
 			}
@@ -6518,7 +6518,7 @@ StartupXLOG(void)
 					(errmsg("entering standby mode")));
 		else if (recoveryTarget == RECOVERY_TARGET_XID)
 			ereport(LOG,
-					(errmsg("starting point-in-time recovery to XID %u",
+					(errmsg("starting point-in-time recovery to XID " XID_FMT "",
 							recoveryTargetXid)));
 		else if (recoveryTarget == RECOVERY_TARGET_TIME)
 			ereport(LOG,
@@ -7672,7 +7672,7 @@ StartupXLOG(void)
 		 */
 		if (recoveryTarget == RECOVERY_TARGET_XID)
 			snprintf(reason, sizeof(reason),
-					 "%s transaction %u",
+					 "%s transaction " XID_FMT,
 					 recoveryStopAfter ? "after" : "before",
 					 recoveryStopXid);
 		else if (recoveryTarget == RECOVERY_TARGET_TIME)

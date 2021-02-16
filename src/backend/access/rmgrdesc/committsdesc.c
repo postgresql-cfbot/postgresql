@@ -26,16 +26,16 @@ commit_ts_desc(StringInfo buf, XLogReaderState *record)
 
 	if (info == COMMIT_TS_ZEROPAGE)
 	{
-		int			pageno;
+		ClogPageNumber		pageno;
 
-		memcpy(&pageno, rec, sizeof(int));
-		appendStringInfo(buf, "%d", pageno);
+		memcpy(&pageno, rec, sizeof(ClogPageNumber));
+		appendStringInfo(buf, CLOG_PAGENO_FMT, pageno);
 	}
 	else if (info == COMMIT_TS_TRUNCATE)
 	{
 		xl_commit_ts_truncate *trunc = (xl_commit_ts_truncate *) rec;
 
-		appendStringInfo(buf, "pageno %d, oldestXid %u",
+		appendStringInfo(buf, "pageno " CLOG_PAGENO_FMT ", oldestXid " XID_FMT,
 						 trunc->pageno, trunc->oldestXid);
 	}
 	else if (info == COMMIT_TS_SETTS)
@@ -43,7 +43,7 @@ commit_ts_desc(StringInfo buf, XLogReaderState *record)
 		xl_commit_ts_set *xlrec = (xl_commit_ts_set *) rec;
 		int			nsubxids;
 
-		appendStringInfo(buf, "set %s/%d for: %u",
+		appendStringInfo(buf, "set %s/%d for: " XID_FMT,
 						 timestamptz_to_str(xlrec->timestamp),
 						 xlrec->nodeid,
 						 xlrec->mainxid);
@@ -59,7 +59,7 @@ commit_ts_desc(StringInfo buf, XLogReaderState *record)
 				   XLogRecGetData(record) + SizeOfCommitTsSet,
 				   sizeof(TransactionId) * nsubxids);
 			for (i = 0; i < nsubxids; i++)
-				appendStringInfo(buf, ", %u", subxids[i]);
+				appendStringInfo(buf, ", " XID_FMT, subxids[i]);
 			pfree(subxids);
 		}
 	}

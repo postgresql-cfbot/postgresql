@@ -760,23 +760,23 @@ PrintControlValues(bool guessed)
 		   XidFromFullTransactionId(ControlFile.checkPointCopy.nextXid));
 	printf(_("Latest checkpoint's NextOID:          %u\n"),
 		   ControlFile.checkPointCopy.nextOid);
-	printf(_("Latest checkpoint's NextMultiXactId:  %u\n"),
+	printf(_("Latest checkpoint's NextMultiXactId:  " XID_FMT "\n"),
 		   ControlFile.checkPointCopy.nextMulti);
-	printf(_("Latest checkpoint's NextMultiOffset:  %u\n"),
+	printf(_("Latest checkpoint's NextMultiOffset:  " XID_FMT "\n"),
 		   ControlFile.checkPointCopy.nextMultiOffset);
-	printf(_("Latest checkpoint's oldestXID:        %u\n"),
+	printf(_("Latest checkpoint's oldestXID:        " XID_FMT "\n"),
 		   ControlFile.checkPointCopy.oldestXid);
 	printf(_("Latest checkpoint's oldestXID's DB:   %u\n"),
 		   ControlFile.checkPointCopy.oldestXidDB);
-	printf(_("Latest checkpoint's oldestActiveXID:  %u\n"),
+	printf(_("Latest checkpoint's oldestActiveXID:  " XID_FMT "\n"),
 		   ControlFile.checkPointCopy.oldestActiveXid);
-	printf(_("Latest checkpoint's oldestMultiXid:   %u\n"),
+	printf(_("Latest checkpoint's oldestMultiXid:   " XID_FMT "\n"),
 		   ControlFile.checkPointCopy.oldestMulti);
 	printf(_("Latest checkpoint's oldestMulti's DB: %u\n"),
 		   ControlFile.checkPointCopy.oldestMultiDB);
-	printf(_("Latest checkpoint's oldestCommitTsXid:%u\n"),
+	printf(_("Latest checkpoint's oldestCommitTsXid:" XID_FMT "\n"),
 		   ControlFile.checkPointCopy.oldestCommitTsXid);
-	printf(_("Latest checkpoint's newestCommitTsXid:%u\n"),
+	printf(_("Latest checkpoint's newestCommitTsXid:" XID_FMT "\n"),
 		   ControlFile.checkPointCopy.newestCommitTsXid);
 	printf(_("Maximum data alignment:               %u\n"),
 		   ControlFile.maxAlign);
@@ -824,9 +824,9 @@ PrintNewControlValues(void)
 
 	if (set_mxid != 0)
 	{
-		printf(_("NextMultiXactId:                      %u\n"),
+		printf(_("NextMultiXactId:                      " XID_FMT "\n"),
 			   ControlFile.checkPointCopy.nextMulti);
-		printf(_("OldestMultiXid:                       %u\n"),
+		printf(_("OldestMultiXid:                       " XID_FMT "\n"),
 			   ControlFile.checkPointCopy.oldestMulti);
 		printf(_("OldestMulti's DB:                     %u\n"),
 			   ControlFile.checkPointCopy.oldestMultiDB);
@@ -834,7 +834,7 @@ PrintNewControlValues(void)
 
 	if (set_mxoff != -1)
 	{
-		printf(_("NextMultiOffset:                      %u\n"),
+		printf(_("NextMultiOffset:                      " XID_FMT "\n"),
 			   ControlFile.checkPointCopy.nextMultiOffset);
 	}
 

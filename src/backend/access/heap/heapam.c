@@ -5033,7 +5033,7 @@ l5:
 				 * TransactionIdIsInProgress() should have returned false.  We
 				 * assume it's no longer locked in this case.
 				 */
-				elog(WARNING, "LOCK_ONLY found for Xid in progress %u", xmax);
+				elog(WARNING, "LOCK_ONLY found for Xid in progress " XID_FMT, xmax);
 				old_infomask |= HEAP_XMAX_INVALID;
 				old_infomask &= ~HEAP_XMAX_LOCK_ONLY;
 				goto l5;
@@ -6009,7 +6009,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 	else if (MultiXactIdPrecedes(multi, relminmxid))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg_internal("found multixact %u from before relminmxid %u",
+				 errmsg_internal("found multixact " XID_FMT " from before relminmxid " XID_FMT,
 								 multi, relminmxid)));
 	else if (MultiXactIdPrecedes(multi, cutoff_multi))
 	{
@@ -6023,7 +6023,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 								 HEAP_XMAX_IS_LOCKED_ONLY(t_infomask)))
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg_internal("multixact %u from before cutoff %u found to be still running",
+					 errmsg_internal("multixact " XID_FMT " from before cutoff " XID_FMT " found to be still running",
 									 multi, cutoff_multi)));
 
 		if (HEAP_XMAX_IS_LOCKED_ONLY(t_infomask))
@@ -6042,7 +6042,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 			if (TransactionIdPrecedes(xid, relfrozenxid))
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_CORRUPTED),
-						 errmsg_internal("found update xid %u from before relfrozenxid %u",
+						 errmsg_internal("found update xid " XID_FMT " from before relfrozenxid " XID_FMT,
 										 xid, relfrozenxid)));
 
 			/*
@@ -6054,7 +6054,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 				if (TransactionIdDidCommit(xid))
 					ereport(ERROR,
 							(errcode(ERRCODE_DATA_CORRUPTED),
-							 errmsg_internal("cannot freeze committed update xid %u", xid)));
+							 errmsg_internal("cannot freeze committed update xid " XID_FMT, xid)));
 				*flags |= FRM_INVALIDATE_XMAX;
 				xid = InvalidTransactionId; /* not strictly necessary */
 			}
@@ -6130,7 +6130,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 			if (TransactionIdPrecedes(xid, relfrozenxid))
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_CORRUPTED),
-						 errmsg_internal("found update xid %u from before relfrozenxid %u",
+						 errmsg_internal("found update xid " XID_FMT " from before relfrozenxid " XID_FMT,
 										 xid, relfrozenxid)));
 
 			/*
@@ -6180,7 +6180,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 				TransactionIdPrecedes(update_xid, cutoff_xid))
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_CORRUPTED),
-						 errmsg_internal("found update xid %u from before xid cutoff %u",
+						 errmsg_internal("found update xid " XID_FMT " from before xid cutoff " XID_FMT,
 										 update_xid, cutoff_xid)));
 
 			/*
@@ -6319,7 +6319,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 			if (!TransactionIdDidCommit(xid))
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_CORRUPTED),
-						 errmsg_internal("uncommitted xmin %u from before xid cutoff %u needs to be frozen",
+						 errmsg_internal("uncommitted xmin " XID_FMT " from before xid cutoff " XID_FMT " needs to be frozen",
 										 xid, cutoff_xid)));
 
 			frz->t_infomask |= HEAP_XMIN_FROZEN;
@@ -6391,7 +6391,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 		if (TransactionIdPrecedes(xid, relfrozenxid))
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg_internal("found xmax %u from before relfrozenxid %u",
+					 errmsg_internal("found xmax " XID_FMT " from before relfrozenxid " XID_FMT,
 									 xid, relfrozenxid)));
 
 		if (TransactionIdPrecedes(xid, cutoff_xid))
@@ -6406,7 +6406,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 				TransactionIdDidCommit(xid))
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_CORRUPTED),
-						 errmsg_internal("cannot freeze committed xmax %u",
+						 errmsg_internal("cannot freeze committed xmax " XID_FMT,
 										 xid)));
 			freeze_xmax = true;
 		}

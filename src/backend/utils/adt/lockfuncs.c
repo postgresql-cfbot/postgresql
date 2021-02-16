@@ -77,9 +77,9 @@ VXIDGetDatum(BackendId bid, LocalTransactionId lxid)
 	 * The representation is "<bid>/<lxid>", decimal and unsigned decimal
 	 * respectively.  Note that elog.c also knows how to format a vxid.
 	 */
-	char		vxidstr[32];
+	char		vxidstr[32];  // TODO: Change to 64 or replace 32 with SIZEOF_XID
 
-	snprintf(vxidstr, sizeof(vxidstr), "%d/%u", bid, lxid);
+	snprintf(vxidstr, sizeof(vxidstr), "%d/" XID_FMT, bid, lxid);
 
 	return CStringGetTextDatum(vxidstr);
 }

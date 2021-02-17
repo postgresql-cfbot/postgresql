@@ -1243,7 +1243,7 @@ WalSndPrepareWrite(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xi
 	pq_sendint64(ctx->out, lsn);	/* walEnd */
 
 	/*
-	 * Fill out the sendtime later, just as it's done in XLogSendPhysical, but
+	 * Fill out the sendtime later, just as it's done in WalSndWriteData, but
 	 * reserve space here.
 	 */
 	pq_sendint64(ctx->out, 0);	/* sendtime */

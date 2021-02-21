@@ -36,6 +36,13 @@ typedef uint64 XLogRecPtr;
 #define FirstNormalUnloggedLSN	((XLogRecPtr) 1000)
 
 /*
+ * Handy macro for printing XLogRecPtr in conventional format, e.g.,
+ *
+ * printf("%X/%X", LSN_FORMAT_ARGS(lsn));
+ */
+#define LSN_FORMAT_ARGS(lsn) (AssertVariableIsOfTypeMacro((lsn), XLogRecPtr), (unsigned) ((lsn) >> 32)), ((unsigned) (lsn))
+
+/*
  * XLogSegNo - physical log file sequence number.
  */
 typedef uint64 XLogSegNo;

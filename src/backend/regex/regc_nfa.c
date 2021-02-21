@@ -65,6 +65,8 @@ newnfa(struct vars *v,
 	nfa->v = v;
 	nfa->bos[0] = nfa->bos[1] = COLORLESS;
 	nfa->eos[0] = nfa->eos[1] = COLORLESS;
+	nfa->flags = 0;
+	nfa->minmatchall = nfa->maxmatchall = -1;
 	nfa->parent = parent;		/* Precedes newfstate so parent is valid. */
 	nfa->post = newfstate(nfa, '@');	/* number 0 */
 	nfa->pre = newfstate(nfa, '>'); /* number 1 */
@@ -271,6 +273,11 @@ destroystate(struct nfa *nfa,
  *
  * This function checks to make sure that no duplicate arcs are created.
  * In general we never want duplicates.
+ *
+ * However: in principle, a RAINBOW arc is redundant with any plain arc
+ * (unless that arc is for a pseudocolor).  But we don't try to recognize
+ * that redundancy, either here or in allied operations such as moveins().
+ * The pseudocolor consideration makes that more costly than it seems worth.
  */
 static void
 newarc(struct nfa *nfa,
@@ -1170,6 +1177,9 @@ copyouts(struct nfa *nfa,
 
 /*
  * cloneouts - copy out arcs of a state to another state pair, modifying type
+ *
+ * This is only used to convert PLAIN arcs to AHEAD/BEHIND arcs, which share
+ * the same interpretation of "co".  It wouldn't be sensible with LACONs.
  */
 static void
 cloneouts(struct nfa *nfa,
@@ -1181,9 +1191,13 @@ cloneouts(struct nfa *nfa,
 	struct arc *a;
 
 	assert(old != from);
+	assert(type == AHEAD || type == BEHIND);
 
 	for (a = old->outs; a != NULL; a = a->outchain)
+	{
+		assert(a->type == PLAIN);
 		newarc(nfa, type, a->co, from, to);
+	}
 }
 
 /*
@@ -1597,7 +1611,7 @@ pull(struct nfa *nfa,
 	for (a = from->ins; a != NULL && !NISERR(); a = nexta)
 	{
 		nexta = a->inchain;
-		switch (combine(con, a))
+		switch (combine(nfa, con, a))
 		{
 			case INCOMPATIBLE:	/* destroy the arc */
 				freearc(nfa, a);
@@ -1622,6 +1636,10 @@ pull(struct nfa *nfa,
 				}
 				cparc(nfa, con, a->from, s);
 				cparc(nfa, a, s, to);
+				freearc(nfa, a);
+				break;
+			case REPLACEARC:	/* replace arc's color */
+				newarc(nfa, a->type, con->co, a->from, to);
 				freearc(nfa, a);
 				break;
 			default:
@@ -1764,7 +1782,7 @@ push(struct nfa *nfa,
 	for (a = to->outs; a != NULL && !NISERR(); a = nexta)
 	{
 		nexta = a->outchain;
-		switch (combine(con, a))
+		switch (combine(nfa, con, a))
 		{
 			case INCOMPATIBLE:	/* destroy the arc */
 				freearc(nfa, a);
@@ -1791,6 +1809,10 @@ push(struct nfa *nfa,
 				cparc(nfa, a, from, s);
 				freearc(nfa, a);
 				break;
+			case REPLACEARC:	/* replace arc's color */
+				newarc(nfa, a->type, con->co, from, a->to);
+				freearc(nfa, a);
+				break;
 			default:
 				assert(NOTREACHED);
 				break;
@@ -1810,9 +1832,11 @@ push(struct nfa *nfa,
  * #def INCOMPATIBLE	1	// destroys arc
  * #def SATISFIED		2	// constraint satisfied
  * #def COMPATIBLE		3	// compatible but not satisfied yet
+ * #def REPLACEARC		4	// replace arc's color with constraint color
  */
 static int
-combine(struct arc *con,
+combine(struct nfa *nfa,
+		struct arc *con,
 		struct arc *a)
 {
 #define  CA(ct,at)	 (((ct)<<CHAR_BIT) | (at))
@@ -1827,14 +1851,46 @@ combine(struct arc *con,
 		case CA(BEHIND, PLAIN):
 			if (con->co == a->co)
 				return SATISFIED;
+			if (con->co == RAINBOW)
+			{
+				/* con is satisfied unless arc's color is a pseudocolor */
+				if (!(nfa->cm->cd[a->co].flags & PSEUDO))
+					return SATISFIED;
+			}
+			else if (a->co == RAINBOW)
+			{
+				/* con is incompatible if it's for a pseudocolor */
+				if (nfa->cm->cd[con->co].flags & PSEUDO)
+					return INCOMPATIBLE;
+				/* otherwise, constraint constrains arc to be only its color */
+				return REPLACEARC;
+			}
 			return INCOMPATIBLE;
 			break;
 		case CA('^', '^'):		/* collision, similar constraints */
 		case CA('$', '$'):
-		case CA(AHEAD, AHEAD):
+			if (con->co == a->co)	/* true duplication */
+				return SATISFIED;
+			return INCOMPATIBLE;
+			break;
+		case CA(AHEAD, AHEAD):	/* collision, similar constraints */
 		case CA(BEHIND, BEHIND):
 			if (con->co == a->co)	/* true duplication */
 				return SATISFIED;
+			if (con->co == RAINBOW)
+			{
+				/* con is satisfied unless arc's color is a pseudocolor */
+				if (!(nfa->cm->cd[a->co].flags & PSEUDO))
+					return SATISFIED;
+			}
+			else if (a->co == RAINBOW)
+			{
+				/* con is incompatible if it's for a pseudocolor */
+				if (nfa->cm->cd[con->co].flags & PSEUDO)
+					return INCOMPATIBLE;
+				/* otherwise, constraint constrains arc to be only its color */
+				return REPLACEARC;
+			}
 			return INCOMPATIBLE;
 			break;
 		case CA('^', BEHIND):	/* collision, dissimilar constraints */
@@ -2821,13 +2877,295 @@ analyze(struct nfa *nfa)
 	if (NISERR())
 		return 0;
 
+	/* Detect whether NFA can't match anything */
 	if (nfa->pre->outs == NULL)
 		return REG_UIMPOSSIBLE;
+
+	/* Detect whether NFA matches all strings (possibly with length bounds) */
+	checkmatchall(nfa);
+
+	/* Detect whether NFA can possibly match a zero-length string */
 	for (a = nfa->pre->outs; a != NULL; a = a->outchain)
 		for (aa = a->to->outs; aa != NULL; aa = aa->outchain)
 			if (aa->to == nfa->post)
 				return REG_UEMPTYMATCH;
 	return 0;
+}
+
+/*
+ * checkmatchall - does the NFA represent no more than a string length test?
+ *
+ * If so, set nfa->minmatchall and nfa->maxmatchall correctly (they are -1
+ * to begin with) and set the MATCHALL bit in nfa->flags.
+ *
+ * To succeed, we require all arcs to be PLAIN RAINBOW arcs, except for those
+ * for pseudocolors (i.e., BOS/BOL/EOS/EOL).  We must be able to reach the
+ * post state via RAINBOW arcs, and if there are any loops in the graph, they
+ * must be loop-to-self arcs, ensuring that each loop iteration consumes
+ * exactly one character.  (Longer loops are problematic because they create
+ * non-consecutive possible match lengths; we have no good way to represent
+ * that situation for lengths beyond the DUPINF limit.)
+ *
+ * Pseudocolor arcs complicate things a little.  We know that they can only
+ * appear as pre-state outarcs (for BOS/BOL) or post-state inarcs (for
+ * EOS/EOL).  There, they must exactly replicate the parallel RAINBOW arcs,
+ * e.g. if the pre state has one RAINBOW outarc to state 2, it must have BOS
+ * and BOL outarcs to state 2, and no others.  Missing or extra pseudocolor
+ * arcs can occur, meaning that the NFA involves some constraint on the
+ * adjacent characters, which makes it not a matchall NFA.
+ */
+static void
+checkmatchall(struct nfa *nfa)
+{
+	bool		hasmatch[DUPINF + 1];
+	int			minmatch,
+				maxmatch,
+				morematch;
+
+	/*
+	 * hasmatch[i] will be set true if a match of length i is feasible, for i
+	 * from 0 to DUPINF-1.  hasmatch[DUPINF] will be set true if every match
+	 * length of DUPINF or more is feasible.
+	 */
+	memset(hasmatch, 0, sizeof(hasmatch));
+
+	/*
+	 * Recursively search the graph for all-RAINBOW paths to the "post" state,
+	 * starting at the "pre" state.  The -1 initial depth accounts for the
+	 * fact that transitions out of the "pre" state are not part of the
+	 * matched string.  We likewise don't count the final transition to the
+	 * "post" state as part of the match length.  (But we still insist that
+	 * those transitions have RAINBOW arcs, otherwise there are lookbehind or
+	 * lookahead constraints at the start/end of the pattern.)
+	 */
+	if (!checkmatchall_recurse(nfa, nfa->pre, false, -1, hasmatch))
+		return;
+
+	/*
+	 * We found some all-RAINBOW paths, and not anything that we couldn't
+	 * handle.  Now verify that pseudocolor arcs adjacent to the pre and post
+	 * states match the RAINBOW arcs there.  (We could do this while
+	 * recursing, but it's expensive and unlikely to fail, so do it last.)
+	 */
+	if (!check_out_colors_match(nfa->pre, RAINBOW, nfa->bos[0]) ||
+		!check_out_colors_match(nfa->pre, nfa->bos[0], RAINBOW) ||
+		!check_out_colors_match(nfa->pre, RAINBOW, nfa->bos[1]) ||
+		!check_out_colors_match(nfa->pre, nfa->bos[1], RAINBOW))
+		return;
+	if (!check_in_colors_match(nfa->post, RAINBOW, nfa->eos[0]) ||
+		!check_in_colors_match(nfa->post, nfa->eos[0], RAINBOW) ||
+		!check_in_colors_match(nfa->post, RAINBOW, nfa->eos[1]) ||
+		!check_in_colors_match(nfa->post, nfa->eos[1], RAINBOW))
+		return;
+
+	/*
+	 * hasmatch[] now represents the set of possible match lengths; but we
+	 * want to reduce that to a min and max value, because it doesn't seem
+	 * worth complicating regexec.c to deal with nonconsecutive possible match
+	 * lengths.  Find min and max of first run of lengths, then verify there
+	 * are no nonconsecutive lengths.
+	 */
+	for (minmatch = 0; minmatch <= DUPINF; minmatch++)
+	{
+		if (hasmatch[minmatch])
+			break;
+	}
+	assert(minmatch <= DUPINF); /* else checkmatchall_recurse lied */
+	for (maxmatch = minmatch; maxmatch < DUPINF; maxmatch++)
+	{
+		if (!hasmatch[maxmatch + 1])
+			break;
+	}
+	for (morematch = maxmatch + 1; morematch <= DUPINF; morematch++)
+	{
+		if (hasmatch[morematch])
+			return;				/* fail, there are nonconsecutive lengths */
+	}
+
+	/* Success, so record the info */
+	nfa->minmatchall = minmatch;
+	nfa->maxmatchall = maxmatch;
+	nfa->flags |= MATCHALL;
+}
+
+/*
+ * checkmatchall_recurse - recursive search for checkmatchall
+ *
+ * s is the current state
+ * foundloop is true if any predecessor state has a loop-to-self
+ * depth is the current recursion depth (starting at -1)
+ * hasmatch[] is the output area for recording feasible match lengths
+ *
+ * We return true if there is at least one all-RAINBOW path to the "post"
+ * state and no non-matchall paths; otherwise false.  Note we assume that
+ * any dead-end paths have already been removed, else we might return
+ * false unnecessarily.
+ */
+static bool
+checkmatchall_recurse(struct nfa *nfa, struct state *s,
+					  bool foundloop, int depth,
+					  bool *hasmatch)
+{
+	bool		result = false;
+	struct arc *a;
+
+	/*
+	 * Since this is recursive, it could be driven to stack overflow.  But we
+	 * need not treat that as a hard failure; just deem the NFA non-matchall.
+	 */
+	if (STACK_TOO_DEEP(nfa->v->re))
+		return false;
+
+	/*
+	 * Likewise, if we get to a depth too large to represent correctly in
+	 * maxmatchall, fail quietly.
+	 */
+	if (depth >= DUPINF)
+		return false;
+
+	/*
+	 * Scan the outarcs to detect cases we can't handle, and to see if there
+	 * is a loop-to-self here.  We need to know about any such loop before we
+	 * recurse, so it's hard to avoid making two passes over the outarcs.  In
+	 * any case, checking for showstoppers before we recurse is probably best.
+	 */
+	for (a = s->outs; a != NULL; a = a->outchain)
+	{
+		if (a->type != PLAIN)
+			return false;		/* any LACONs make it non-matchall */
+		if (a->co != RAINBOW)
+		{
+			if (nfa->cm->cd[a->co].flags & PSEUDO)
+			{
+				/*
+				 * Pseudocolor arc: verify it's in a valid place (this seems
+				 * quite unlikely to fail, but let's be sure).
+				 */
+				if (s == nfa->pre &&
+					(a->co == nfa->bos[0] || a->co == nfa->bos[1]))
+					 /* okay BOS/BOL arc */ ;
+				else if (a->to == nfa->post &&
+						 (a->co == nfa->eos[0] || a->co == nfa->eos[1]))
+					 /* okay EOS/EOL arc */ ;
+				else
+					return false;	/* unexpected pseudocolor arc */
+				/* We'll finish checking these arcs after the recursion */
+				continue;
+			}
+			return false;		/* any other color makes it non-matchall */
+		}
+		if (a->to == s)
+		{
+			/*
+			 * We found a cycle of length 1, so remember that to pass down to
+			 * successor states.  (It doesn't matter if there was also such a
+			 * loop at a predecessor state.)
+			 */
+			foundloop = true;
+		}
+		else if (a->to->tmp)
+		{
+			/* We found a cycle of length > 1, so fail. */
+			return false;
+		}
+	}
+
+	/* We need to recurse, so mark state as under consideration */
+	assert(s->tmp == NULL);
+	s->tmp = s;
+
+	for (a = s->outs; a != NULL; a = a->outchain)
+	{
+		if (a->co != RAINBOW)
+			continue;			/* ignore pseudocolor arcs */
+		if (a->to == nfa->post)
+		{
+			/* We found an all-RAINBOW path to the post state */
+			result = true;
+			/* Record potential match lengths */
+			assert(depth >= 0);
+			hasmatch[depth] = true;
+			if (foundloop)
+			{
+				/* A predecessor loop makes all larger lengths match, too */
+				int			i;
+
+				for (i = depth + 1; i <= DUPINF; i++)
+					hasmatch[i] = true;
+			}
+		}
+		else if (a->to != s)
+		{
+			/* This is a new path forward; recurse to investigate */
+			result = checkmatchall_recurse(nfa, a->to,
+										   foundloop, depth + 1,
+										   hasmatch);
+			/* Fail if any recursive path fails */
+			if (!result)
+				break;
+		}
+	}
+
+	s->tmp = NULL;
+	return result;
+}
+
+/*
+ * check_out_colors_match - subroutine for checkmatchall
+ *
+ * Check if every s outarc of color co1 has a matching outarc of color co2.
+ * (checkmatchall_recurse already verified that all of the outarcs are PLAIN,
+ * so we need not examine arc types here.  Also, since it verified that there
+ * are only RAINBOW and pseudocolor arcs, there shouldn't be enough arcs for
+ * this brute-force O(N^2) implementation to cause problems.)
+ */
+static bool
+check_out_colors_match(struct state *s, color co1, color co2)
+{
+	struct arc *a1;
+	struct arc *a2;
+
+	for (a1 = s->outs; a1 != NULL; a1 = a1->outchain)
+	{
+		if (a1->co != co1)
+			continue;
+		for (a2 = s->outs; a2 != NULL; a2 = a2->outchain)
+		{
+			if (a2->co == co2 && a2->to == a1->to)
+				break;
+		}
+		if (a2 == NULL)
+			return false;
+	}
+	return true;
+}
+
+/*
+ * check_in_colors_match - subroutine for checkmatchall
+ *
+ * Check if every s inarc of color co1 has a matching inarc of color co2.
+ * (For paranoia's sake, ignore any non-PLAIN arcs here.  But we're still
+ * not expecting very many arcs.)
+ */
+static bool
+check_in_colors_match(struct state *s, color co1, color co2)
+{
+	struct arc *a1;
+	struct arc *a2;
+
+	for (a1 = s->ins; a1 != NULL; a1 = a1->inchain)
+	{
+		if (a1->type != PLAIN || a1->co != co1)
+			continue;
+		for (a2 = s->ins; a2 != NULL; a2 = a2->inchain)
+		{
+			if (a2->type == PLAIN && a2->co == co2 && a2->from == a1->from)
+				break;
+		}
+		if (a2 == NULL)
+			return false;
+	}
+	return true;
 }
 
 /*
@@ -2876,7 +3214,9 @@ compact(struct nfa *nfa,
 	cnfa->eos[0] = nfa->eos[0];
 	cnfa->eos[1] = nfa->eos[1];
 	cnfa->ncolors = maxcolor(nfa->cm) + 1;
-	cnfa->flags = 0;
+	cnfa->flags = nfa->flags;
+	cnfa->minmatchall = nfa->minmatchall;
+	cnfa->maxmatchall = nfa->maxmatchall;
 
 	ca = cnfa->arcs;
 	for (s = nfa->states; s != NULL; s = s->next)
@@ -2895,6 +3235,7 @@ compact(struct nfa *nfa,
 					break;
 				case LACON:
 					assert(s->no != cnfa->pre);
+					assert(a->co >= 0);
 					ca->co = (color) (cnfa->ncolors + a->co);
 					ca->to = a->to->no;
 					ca++;
@@ -2979,6 +3320,11 @@ dumpnfa(struct nfa *nfa,
 		fprintf(f, ", eos [%ld]", (long) nfa->eos[0]);
 	if (nfa->eos[1] != COLORLESS)
 		fprintf(f, ", eol [%ld]", (long) nfa->eos[1]);
+	if (nfa->flags & HASLACONS)
+		fprintf(f, ", haslacons");
+	if (nfa->flags & MATCHALL)
+		fprintf(f, ", minmatchall %d, maxmatchall %d",
+				nfa->minmatchall, nfa->maxmatchall);
 	fprintf(f, "\n");
 	for (s = nfa->states; s != NULL; s = s->next)
 	{
@@ -3068,13 +3414,22 @@ dumparc(struct arc *a,
 	switch (a->type)
 	{
 		case PLAIN:
-			fprintf(f, "[%ld]", (long) a->co);
+			if (a->co == RAINBOW)
+				fprintf(f, "[*]");
+			else
+				fprintf(f, "[%ld]", (long) a->co);
 			break;
 		case AHEAD:
-			fprintf(f, ">%ld>", (long) a->co);
+			if (a->co == RAINBOW)
+				fprintf(f, ">*>");
+			else
+				fprintf(f, ">%ld>", (long) a->co);
 			break;
 		case BEHIND:
-			fprintf(f, "<%ld<", (long) a->co);
+			if (a->co == RAINBOW)
+				fprintf(f, "<*<");
+			else
+				fprintf(f, "<%ld<", (long) a->co);
 			break;
 		case LACON:
 			fprintf(f, ":%ld:", (long) a->co);
@@ -3137,6 +3492,9 @@ dumpcnfa(struct cnfa *cnfa,
 		fprintf(f, ", eol [%ld]", (long) cnfa->eos[1]);
 	if (cnfa->flags & HASLACONS)
 		fprintf(f, ", haslacons");
+	if (cnfa->flags & MATCHALL)
+		fprintf(f, ", minmatchall %d, maxmatchall %d",
+				cnfa->minmatchall, cnfa->maxmatchall);
 	fprintf(f, "\n");
 	for (st = 0; st < cnfa->nstates; st++)
 		dumpcstate(st, cnfa, f);
@@ -3161,7 +3519,9 @@ dumpcstate(int st,
 	pos = 1;
 	for (ca = cnfa->states[st]; ca->co != COLORLESS; ca++)
 	{
-		if (ca->co < cnfa->ncolors)
+		if (ca->co == RAINBOW)
+			fprintf(f, "\t[*]->%d", ca->to);
+		else if (ca->co < cnfa->ncolors)
 			fprintf(f, "\t[%ld]->%d", (long) ca->co, ca->to);
 		else
 			fprintf(f, "\t:%ld:->%d", (long) (ca->co - cnfa->ncolors), ca->to);

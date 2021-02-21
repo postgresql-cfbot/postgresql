@@ -58,6 +58,29 @@ longest(struct vars *v,
 	if (hitstopp != NULL)
 		*hitstopp = 0;
 
+	/* fast path for matchall NFAs */
+	if (d->cnfa->flags & MATCHALL)
+	{
+		size_t		nchr = stop - start;
+		size_t		maxmatchall = d->cnfa->maxmatchall;
+
+		if (nchr < d->cnfa->minmatchall)
+			return NULL;
+		if (maxmatchall == DUPINF)
+		{
+			if (stop == v->stop && hitstopp != NULL)
+				*hitstopp = 1;
+		}
+		else
+		{
+			if (stop == v->stop && nchr <= maxmatchall + 1 && hitstopp != NULL)
+				*hitstopp = 1;
+			if (nchr > maxmatchall)
+				return start + maxmatchall;
+		}
+		return stop;
+	}
+
 	/* initialize */
 	css = initialize(v, d, start);
 	if (css == NULL)
@@ -187,6 +210,24 @@ shortest(struct vars *v,
 	if (hitstopp != NULL)
 		*hitstopp = 0;
 
+	/* fast path for matchall NFAs */
+	if (d->cnfa->flags & MATCHALL)
+	{
+		size_t		nchr = min - start;
+
+		if (d->cnfa->maxmatchall != DUPINF &&
+			nchr > d->cnfa->maxmatchall)
+			return NULL;
+		if ((max - start) < d->cnfa->minmatchall)
+			return NULL;
+		if (nchr < d->cnfa->minmatchall)
+			min = start + d->cnfa->minmatchall;
+		if (coldp != NULL)
+			*coldp = start;
+		/* there is no case where we should set *hitstopp */
+		return min;
+	}
+
 	/* initialize */
 	css = initialize(v, d, start);
 	if (css == NULL)
@@ -311,6 +352,22 @@ matchuntil(struct vars *v,
 	struct sset *css = *lastcss;
 	struct sset *ss;
 	struct colormap *cm = d->cm;
+
+	/* fast path for matchall NFAs */
+	if (d->cnfa->flags & MATCHALL)
+	{
+		size_t		nchr = probe - v->start;
+
+		/*
+		 * It might seem that we should check maxmatchall too, but the .* at
+		 * the front of the pattern absorbs any extra characters (and it was
+		 * tacked on *after* computing minmatchall/maxmatchall).  Thus, we
+		 * should match if there are at least minmatchall characters.
+		 */
+		if (nchr < d->cnfa->minmatchall)
+			return 0;
+		return 1;
+	}
 
 	/* initialize and startup, or restart, if necessary */
 	if (cp == NULL || cp > probe)
@@ -612,6 +669,7 @@ miss(struct vars *v,
 	unsigned	h;
 	struct carc *ca;
 	struct sset *p;
+	int			ispseudocolor;
 	int			ispost;
 	int			noprogress;
 	int			gotstate;
@@ -643,13 +701,15 @@ miss(struct vars *v,
 	 */
 	for (i = 0; i < d->wordsper; i++)
 		d->work[i] = 0;			/* build new stateset bitmap in d->work */
+	ispseudocolor = d->cm->cd[co].flags & PSEUDO;
 	ispost = 0;
 	noprogress = 1;
 	gotstate = 0;
 	for (i = 0; i < d->nstates; i++)
 		if (ISBSET(css->states, i))
 			for (ca = cnfa->states[i]; ca->co != COLORLESS; ca++)
-				if (ca->co == co)
+				if (ca->co == co ||
+					(ca->co == RAINBOW && !ispseudocolor))
 				{
 					BSET(d->work, ca->to);
 					gotstate = 1;
@@ -765,12 +825,12 @@ lacon(struct vars *v,
 	d = getladfa(v, n);
 	if (d == NULL)
 		return 0;
-	if (LATYPE_IS_AHEAD(sub->subno))
+	if (LATYPE_IS_AHEAD(sub->latype))
 	{
 		/* used to use longest() here, but shortest() could be much cheaper */
 		end = shortest(v, d, cp, cp, v->stop,
 					   (chr **) NULL, (int *) NULL);
-		satisfied = LATYPE_IS_POS(sub->subno) ? (end != NULL) : (end == NULL);
+		satisfied = LATYPE_IS_POS(sub->latype) ? (end != NULL) : (end == NULL);
 	}
 	else
 	{
@@ -783,7 +843,7 @@ lacon(struct vars *v,
 		 * nominal match.
 		 */
 		satisfied = matchuntil(v, d, cp, &v->lblastcss[n], &v->lblastcp[n]);
-		if (!LATYPE_IS_POS(sub->subno))
+		if (!LATYPE_IS_POS(sub->latype))
 			satisfied = !satisfied;
 	}
 	FDEBUG(("=== lacon %d satisfied %d\n", n, satisfied));

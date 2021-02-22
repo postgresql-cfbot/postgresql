@@ -981,6 +981,11 @@ static const SchemaQuery Query_for_list_of_statistics = {
 "   FROM pg_catalog.pg_cursors "\
 "  WHERE substring(pg_catalog.quote_ident(name),1,%d)='%s'"
 
+#define Query_for_list_of_collations \
+" SELECT pg_catalog.quote_ident(collname) "\
+"   FROM pg_catalog.pg_collation "\
+"  WHERE collencoding IN (-1, pg_catalog.pg_char_to_encoding(pg_catalog.getdatabaseencoding())) AND substring(pg_catalog.quote_ident(collname),1,%d)='%s'"
+
 /*
  * These object types were introduced later than our support cutoff of
  * server version 7.4.  We use the VersionedQuery infrastructure so that
@@ -1031,7 +1036,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"AGGREGATE", NULL, NULL, Query_for_list_of_aggregates},
 	{"CAST", NULL, NULL, NULL}, /* Casts have complex structures for names, so
 								 * skip it */
-	{"COLLATION", "SELECT pg_catalog.quote_ident(collname) FROM pg_catalog.pg_collation WHERE collencoding IN (-1, pg_catalog.pg_char_to_encoding(pg_catalog.getdatabaseencoding())) AND substring(pg_catalog.quote_ident(collname),1,%d)='%s'"},
+	{"COLLATION", Query_for_list_of_collations},
 
 	/*
 	 * CREATE CONSTRAINT TRIGGER is not supported here because it is designed
@@ -2432,6 +2437,22 @@ psql_completion(const char *text, int start, int end)
 	/* Complete "CREATE ACCESS METHOD <name> TYPE <type>" */
 	else if (Matches("CREATE", "ACCESS", "METHOD", MatchAny, "TYPE", MatchAny))
 		COMPLETE_WITH("HANDLER");
+
+	/* CREATE COLLATION */
+	else if (Matches("CREATE", "COLLATION", MatchAny))
+		COMPLETE_WITH("(", "FROM");
+	else if (Matches("CREATE", "COLLATION", MatchAny, "FROM"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_collations);
+	else if (HeadMatches("CREATE", "COLLATION", MatchAny, "(*"))
+	{
+		if (TailMatches("(|*,"))
+			COMPLETE_WITH("LOCALE =", "LC_COLLATE =", "LC_CTYPE =",
+						  "PROVIDER =", "DETERMINISTIC =");
+		else if (TailMatches("PROVIDER", "="))
+			COMPLETE_WITH("libc", "icu");
+		else if (TailMatches("DETERMINISTIC", "="))
+			COMPLETE_WITH("true", "false");
+	}
 
 	/* CREATE DATABASE */
 	else if (Matches("CREATE", "DATABASE", MatchAny))

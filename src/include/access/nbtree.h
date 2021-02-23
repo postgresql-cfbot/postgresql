@@ -78,6 +78,7 @@ typedef BTPageOpaqueData *BTPageOpaque;
 #define BTP_SPLIT_END	(1 << 5)	/* rightmost page of split group */
 #define BTP_HAS_GARBAGE (1 << 6)	/* page has LP_DEAD tuples (deprecated) */
 #define BTP_INCOMPLETE_SPLIT (1 << 7)	/* right sibling's downlink is missing */
+#define BTP_LP_SAFE_ON_STANDBY (1 << 8) /* LP bits are safe to use on standby */
 
 /*
  * The max allowed value of a cycle ID is a bit less than 64K.  This is
@@ -220,6 +221,7 @@ typedef struct BTMetaPageData
 #define P_IGNORE(opaque)		(((opaque)->btpo_flags & (BTP_DELETED|BTP_HALF_DEAD)) != 0)
 #define P_HAS_GARBAGE(opaque)	(((opaque)->btpo_flags & BTP_HAS_GARBAGE) != 0)
 #define P_INCOMPLETE_SPLIT(opaque)	(((opaque)->btpo_flags & BTP_INCOMPLETE_SPLIT) != 0)
+#define P_LP_SAFE_ON_STANDBY(opaque) (((opaque)->btpo_flags & BTP_LP_SAFE_ON_STANDBY) != 0)
 
 /*
  *	Lehman and Yao's algorithm requires a ``high key'' on every non-rightmost

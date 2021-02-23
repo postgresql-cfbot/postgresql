@@ -472,6 +472,20 @@ gist_xlog_cleanup(void)
 }
 
 /*
+ * Mask a Gist page that LP_DEAD bits are not safe for the standby.
+ */
+void
+gist_fpi_mask(char *pagedata, BlockNumber blkno)
+{
+	Page		page = (Page) pagedata;
+
+	if (GistPageIsLeaf(page))
+	{
+		GistClearPageHasLpSafeOnStandby(page);
+	}
+}
+
+/*
  * Mask a Gist page before running consistency checks on it.
  */
 void
@@ -479,6 +493,7 @@ gist_mask(char *pagedata, BlockNumber blkno)
 {
 	Page		page = (Page) pagedata;
 
+	gist_fpi_mask(pagedata, blkno);
 	mask_page_lsn_and_checksum(page);
 
 	mask_page_hint_bits(page);

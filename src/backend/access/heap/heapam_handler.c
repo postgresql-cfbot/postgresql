@@ -113,7 +113,8 @@ heapam_index_fetch_tuple(struct IndexFetchTableData *scan,
 						 ItemPointer tid,
 						 Snapshot snapshot,
 						 TupleTableSlot *slot,
-						 bool *call_again, bool *all_dead)
+						 bool *call_again,
+						 TupleDeadnessData *deadness)
 {
 	IndexFetchHeapData *hscan = (IndexFetchHeapData *) scan;
 	BufferHeapTupleTableSlot *bslot = (BufferHeapTupleTableSlot *) slot;
@@ -145,7 +146,7 @@ heapam_index_fetch_tuple(struct IndexFetchTableData *scan,
 											hscan->xs_cbuf,
 											snapshot,
 											&bslot->base.tupdata,
-											all_dead,
+											deadness,
 											!*call_again);
 	bslot->base.tupdata.t_self = *tid;
 	LockBuffer(hscan->xs_cbuf, BUFFER_LOCK_UNLOCK);

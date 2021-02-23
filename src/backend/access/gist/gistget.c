@@ -14,6 +14,7 @@
  */
 #include "postgres.h"
 
+#include "access/bufmask.h"
 #include "access/genam.h"
 #include "access/gist_private.h"
 #include "access/relscan.h"
@@ -45,6 +46,7 @@ gistkillitems(IndexScanDesc scan)
 	ItemId		iid;
 	int			i;
 	bool		killedsomething = false;
+	bool		dirty = false;
 
 	Assert(so->curBlkno != InvalidBlockNumber);
 	Assert(!XLogRecPtrIsInvalid(so->curPageLSN));
@@ -71,6 +73,22 @@ gistkillitems(IndexScanDesc scan)
 	}
 
 	Assert(GistPageIsLeaf(page));
+	if (GistPageHasLpSafeOnStandby(page) && !scan->xactStartedInRecovery)
+	{
+		/* Seems like server was promoted some time ago,
+		 * clear the flag just for accuracy. */
+		GistClearPageHasLpSafeOnStandby(page);
+		dirty = true;
+	}
+	else if (!GistPageHasLpSafeOnStandby(page) && scan->xactStartedInRecovery)
+	{
+		/* LP_DEAD flags were set by primary. We need to clear them,
+		 * and allow standby to set own. */
+		mask_lp_flags(page);
+		pg_memory_barrier();
+		GistMarkPageHasLpSafeOnStandby(page);
+		dirty = true;
+	}
 
 	/*
 	 * Mark all killedItems as dead. We need no additional recheck, because,
@@ -81,12 +99,15 @@ gistkillitems(IndexScanDesc scan)
 		offnum = so->killedItems[i];
 		iid = PageGetItemId(page, offnum);
 		ItemIdMarkDead(iid);
-		killedsomething = true;
+		killedsomething = dirty = true;
 	}
 
 	if (killedsomething)
 	{
 		GistMarkPageHasGarbage(page);
+	}
+	if (dirty)
+	{
 		MarkBufferDirtyHint(buffer, true);
 	}
 
@@ -338,6 +359,7 @@ gistScanPage(IndexScanDesc scan, GISTSearchItem *pageItem,
 	OffsetNumber maxoff;
 	OffsetNumber i;
 	MemoryContext oldcxt;
+	bool ignore_killed_tuples;
 
 	Assert(!GISTSearchItemIsHeap(*pageItem));
 
@@ -412,6 +434,9 @@ gistScanPage(IndexScanDesc scan, GISTSearchItem *pageItem,
 	 * check all tuples on page
 	 */
 	maxoff = PageGetMaxOffsetNumber(page);
+	/* Check whether is it allowed to see LP_DEAD bits - always true for primary,
+	 * on secondary we should avoid flags that were set by primary. */
+	ignore_killed_tuples = !scan->xactStartedInRecovery || GistPageHasLpSafeOnStandby(page);
 	for (i = FirstOffsetNumber; i <= maxoff; i = OffsetNumberNext(i))
 	{
 		ItemId		iid = PageGetItemId(page, i);
@@ -424,7 +449,7 @@ gistScanPage(IndexScanDesc scan, GISTSearchItem *pageItem,
 		 * If the scan specifies not to return killed tuples, then we treat a
 		 * killed tuple as not passing the qual.
 		 */
-		if (scan->ignore_killed_tuples && ItemIdIsDead(iid))
+		if (ignore_killed_tuples && ItemIdIsDead(iid))
 			continue;
 
 		it = (IndexTuple) PageGetItem(page, iid);
@@ -651,7 +676,9 @@ gistgettuple(IndexScanDesc scan, ScanDirection dir)
 		{
 			if (so->curPageData < so->nPageData)
 			{
-				if (scan->kill_prior_tuple && so->curPageData > 0)
+				if (scan->kill_prior_tuple && so->curPageData > 0 &&
+					(XLogRecPtrIsInvalid(scan->kill_prior_tuple_min_lsn) ||
+						scan->kill_prior_tuple_min_lsn < so->curPageLSN))
 				{
 
 					if (so->killedItems == NULL)
@@ -688,7 +715,9 @@ gistgettuple(IndexScanDesc scan, ScanDirection dir)
 			 */
 			if (scan->kill_prior_tuple
 				&& so->curPageData > 0
-				&& so->curPageData == so->nPageData)
+				&& so->curPageData == so->nPageData
+				&& (XLogRecPtrIsInvalid(scan->kill_prior_tuple_min_lsn) ||
+						scan->kill_prior_tuple_min_lsn < so->curPageLSN))
 			{
 
 				if (so->killedItems == NULL)

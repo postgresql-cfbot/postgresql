@@ -682,17 +682,23 @@ lax about how same-level locks are acquired during recovery (most kinds
 of readers could still move right to recover if we didn't couple
 same-level locks), but we prefer to be conservative here.
 
-During recovery all index scans start with ignore_killed_tuples = false
-and we never set kill_prior_tuple. We do this because the oldest xmin
-on the standby server can be older than the oldest xmin on the primary
-server, which means tuples can be marked LP_DEAD even when they are
-still visible on the standby. We don't WAL log tuple LP_DEAD bits, but
-they can still appear in the standby because of full page writes. So
-we must always ignore them in standby, and that means it's not worth
-setting them either.  (When LP_DEAD-marked tuples are eventually deleted
-on the primary, the deletion is WAL-logged.  Queries that run on a
-standby therefore get much of the benefit of any LP_DEAD setting that
-takes place on the primary.)
+There is some complexity in using LP_DEAD bits during recovery. Generally,
+bits could be set and read by scan, but there is a possibility to meet
+the bit applied on the primary. We don't WAL log tuple LP_DEAD bits, but
+they can still appear on the standby because of the full-page writes. Such
+a cause could cause MVCC failures because the oldest xmin on the standby
+server can be older than the oldest xmin on the primary server, which means
+tuples can be marked LP_DEAD even when they are still visible on the standby.
+
+To prevent such failure, we mark pages with LP_DEAD bits set by standy with
+special hint. In the case of FPI from primary - hint is always cleared before
+applying the fill page write.
+
+Also, there is a restriction on settings LP_DEAD bits by the standby. It is not
+allowed to set bits on the page if the commit record of latestRemovedXid is more
+than maximum of minRecoveryPoint and index page LSN. If the latestRemovedXid is
+invalid (happens if tuples were cleared by XLOG_HEAP2_CLEAN) - we need to check
+the current LSN of the page with the same rules.
 
 Note that we talk about scans that are started during recovery. We go to
 a little trouble to allow a scan to start during recovery and end during

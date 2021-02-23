@@ -612,9 +612,15 @@ _hash_load_qualified_items(IndexScanDesc scan, Page page,
 	IndexTuple	itup;
 	int			itemIndex;
 	OffsetNumber maxoff;
+	bool		ignore_killed_tuples;
+	HashPageOpaque bucket_opaque;
 
 	maxoff = PageGetMaxOffsetNumber(page);
+	bucket_opaque = (HashPageOpaque) PageGetSpecialPointer(page);
 
+	/* Check whether is it allowed to see LP_DEAD bits, always true for primary,
+	 * on secondary we should avoid flags that were set by primary. */
+	ignore_killed_tuples = !scan->xactStartedInRecovery || H_LP_SAFE_ON_STANDBY(bucket_opaque);
 	if (ScanDirectionIsForward(dir))
 	{
 		/* load items[] in ascending order */
@@ -632,8 +638,7 @@ _hash_load_qualified_items(IndexScanDesc scan, Page page,
 			 */
 			if ((so->hashso_buc_populated && !so->hashso_buc_split &&
 				 (itup->t_info & INDEX_MOVED_BY_SPLIT_MASK)) ||
-				(scan->ignore_killed_tuples &&
-				 (ItemIdIsDead(PageGetItemId(page, offnum)))))
+				(ignore_killed_tuples && (ItemIdIsDead(PageGetItemId(page, offnum)))))
 			{
 				offnum = OffsetNumberNext(offnum);	/* move forward */
 				continue;
@@ -678,8 +683,7 @@ _hash_load_qualified_items(IndexScanDesc scan, Page page,
 			 */
 			if ((so->hashso_buc_populated && !so->hashso_buc_split &&
 				 (itup->t_info & INDEX_MOVED_BY_SPLIT_MASK)) ||
-				(scan->ignore_killed_tuples &&
-				 (ItemIdIsDead(PageGetItemId(page, offnum)))))
+				(ignore_killed_tuples && (ItemIdIsDead(PageGetItemId(page, offnum)))))
 			{
 				offnum = OffsetNumberPrev(offnum);	/* move back */
 				continue;

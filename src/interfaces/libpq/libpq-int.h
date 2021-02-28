@@ -317,6 +317,29 @@ typedef struct pg_conn_host
 								 * found in password file. */
 } pg_conn_host;
 
+/* Target server type to connect to */
+typedef enum
+{
+	SERVER_TYPE_ANY = 0,		/* Any server (default) */
+	SERVER_TYPE_READ_WRITE,		/* Read-write server */
+	SERVER_TYPE_READ_ONLY,		/* Read-only server */
+	SERVER_TYPE_PRIMARY,		/* Primary server */
+	SERVER_TYPE_PREFER_STANDBY, /* Prefer Standby server */
+	SERVER_TYPE_STANDBY			/* Standby server */
+} TargetServerType;
+
+/*
+ * State of certain bool GUCs used by libpq, which are determined
+ * either by the GUC_REPORT mechanism (where supported by the server
+ * version) or by lazy evaluation (using a query sent to the server).
+ */
+typedef enum
+{
+	GUC_BOOL_UNKNOWN = 0,		/* Currently unknown	*/
+	GUC_BOOL_YES,				/* Yes (true)			*/
+	GUC_BOOL_NO					/* No (false)			*/
+} GucBoolState;
+
 /*
  * PGconn stores all the state data associated with a single connection
  * to a backend.
@@ -371,8 +394,16 @@ struct pg_conn
 	char	   *ssl_min_protocol_version;	/* minimum TLS protocol version */
 	char	   *ssl_max_protocol_version;	/* maximum TLS protocol version */
 
-	/* Type of connection to make.  Possible values: any, read-write. */
+	/*
+	 * Type of connection to make.  Possible values: "any", "read-write",
+	 * "read-only", "primary", "prefer-standby", "standby".
+	 */
 	char	   *target_session_attrs;
+
+	/*
+	 * The requested server type, derived from target_session_attrs.
+	 */
+	TargetServerType requested_server_type;
 
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
@@ -407,6 +438,21 @@ struct pg_conn
 	pg_conn_host *connhost;		/* details about each named host */
 	char	   *connip;			/* IP address for current network connection */
 
+	/*
+	 * Index of the first primary host encountered (if any) in the connection
+	 * string. This is used during processing of requested server connection
+	 * type SERVER_TYPE_PREFER_STANDBY.
+	 *
+	 * The initial value is -1, indicating that no primary host has yet been
+	 * found. It is then set to the index of the first primary host, if one is
+	 * found in the connection string during processing. If a second
+	 * connection attempt is later made to that primary host (because no
+	 * connection to a standby server could be made), which_primary_host is
+	 * then set to -2 to avoid recursion during subsequent processing (and
+	 * whichhost is set to the primary host index).
+	 */
+	int			which_primary_host;
+
 	/* Connection data */
 	pgsocket	sock;			/* FD for socket, PGINVALID_SOCKET if
 								 * unconnected */
@@ -437,6 +483,10 @@ struct pg_conn
 	pgParameterStatus *pstatus; /* ParameterStatus data */
 	int			client_encoding;	/* encoding id */
 	bool		std_strings;	/* standard_conforming_strings */
+	GucBoolState default_transaction_read_only; /* default_transaction_read_only
+												 * GUC report variable state */
+	GucBoolState in_hot_standby;	/* in_hot_standby GUC report variable
+									 * state */
 	PGVerbosity verbosity;		/* error/notice message verbosity */
 	PGContextVisibility show_context;	/* whether to show CONTEXT field */
 	PGlobjfuncs *lobjfuncs;		/* private state for large-object access fns */

@@ -1700,14 +1700,14 @@ synchronous_standby_names = 'ANY 2 (s1, s2, s3)'
    </para>
 
    <para>
-    During hot standby, the parameter <varname>transaction_read_only</varname> is always
-    true and may not be changed.  But as long as no attempt is made to modify
-    the database, connections during hot standby will act much like any other
-    database connection.  If failover or switchover occurs, the database will
-    switch to normal processing mode.  Sessions will remain connected while the
-    server changes mode.  Once hot standby finishes, it will be possible to
-    initiate read-write transactions (even from a session begun during
-    hot standby).
+    During hot standby, the parameter <varname>in_hot_standby</varname> and
+    <varname>transaction_read_only</varname> are always true and may not be
+    changed.  But as long as no attempt is made to modify the database,
+    connections during hot standby will act much like any other database
+    connection.  If failover or switchover occurs, the database will switch to
+    normal processing mode.  Sessions will remain connected while the server
+    changes mode.  Once hot standby finishes, it will be possible to initiate
+    read-write transactions (even from a session begun during hot standby).
    </para>
 
    <para>

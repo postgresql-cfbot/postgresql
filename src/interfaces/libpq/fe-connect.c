@@ -356,7 +356,7 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 
 	{"target_session_attrs", "PGTARGETSESSIONATTRS",
 		DefaultTargetSessionAttrs, NULL,
-		"Target-Session-Attrs", "", 11, /* sizeof("read-write") = 11 */
+		"Target-Session-Attrs", "", 15, /* sizeof("prefer-standby") = 15 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
 	/* Terminating entry --- MUST BE LAST */
@@ -1010,6 +1010,33 @@ parse_comma_separated_list(char **startptr, bool *more)
 }
 
 /*
+ *		validateAndGetTargetServerType
+ *
+ * Validate a given target_session_attrs value and get the requested server type.
+ *
+ * Returns true if OK, false if the specified option value is invalid.
+ */
+static bool
+validateAndGetTargetServerType(const char *optionValue, TargetServerType *requestedServerType)
+{
+	if (strcmp(optionValue, "any") == 0)
+		*requestedServerType = SERVER_TYPE_ANY;
+	else if (strcmp(optionValue, "primary") == 0)
+		*requestedServerType = SERVER_TYPE_PRIMARY;
+	else if (strcmp(optionValue, "read-write") == 0)
+		*requestedServerType = SERVER_TYPE_READ_WRITE;
+	else if (strcmp(optionValue, "read-only") == 0)
+		*requestedServerType = SERVER_TYPE_READ_ONLY;
+	else if (strcmp(optionValue, "prefer-standby") == 0)
+		*requestedServerType = SERVER_TYPE_PREFER_STANDBY;
+	else if (strcmp(optionValue, "standby") == 0)
+		*requestedServerType = SERVER_TYPE_STANDBY;
+	else
+		return false;
+	return true;
+}
+
+/*
  *		connectOptions2
  *
  * Compute derived connection options after absorbing all user-supplied info.
@@ -1405,13 +1432,12 @@ connectOptions2(PGconn *conn)
 	 */
 	if (conn->target_session_attrs)
 	{
-		if (strcmp(conn->target_session_attrs, "any") != 0
-			&& strcmp(conn->target_session_attrs, "read-write") != 0)
+		if (!validateAndGetTargetServerType(conn->target_session_attrs, &conn->requested_server_type))
 		{
 			conn->status = CONNECTION_BAD;
 			appendPQExpBuffer(&conn->errorMessage,
 							  libpq_gettext("invalid %s value: \"%s\"\n"),
-							  "target_settion_attrs",
+							  "target_session_attrs",
 							  conn->target_session_attrs);
 			return false;
 		}
@@ -2196,6 +2222,68 @@ connectDBComplete(PGconn *conn)
 	}
 }
 
+/*
+ * Internal helper function used for rejecting (and closing) a connection that
+ * doesn't satisfy the requested server type (read-write/read-only).
+ * The connection state is set to try the next host (if any).
+ */
+static void
+rejectCheckedReadOrWriteConnection(PGconn *conn)
+{
+	if (conn->requested_server_type == SERVER_TYPE_READ_WRITE)
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("could not make a writable "
+										   "connection to server\n"));
+	else
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("could not make a readonly "
+										   "connection to server\n"));
+
+	/* Close connection politely. */
+	conn->status = CONNECTION_OK;
+	sendTerminateConn(conn);
+
+	/*
+	 * Try next host if any, but we don't want to consider additional
+	 * addresses for this host.
+	 */
+	conn->try_next_host = true;
+}
+
+/*
+ * Internal helper function used for rejecting (and closing) a connection that
+ * doesn't satisfy the requested server type (for standby). The connection state
+ * is set to try the next host (if any).
+ * In the case of SERVER_TYPE_PREFER_STANDBY, if the primary host-index hasn't
+ * been set, then it is set to the index of this connection's host, so that a
+ * connection to this host can be made again in the event that no connection to
+ * a standby host could be made after the first host scan.
+ */
+static void
+rejectCheckedStandbyConnection(PGconn *conn)
+{
+	if (conn->requested_server_type == SERVER_TYPE_PRIMARY)
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("server is in hot standby mode\n"));
+	else
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("server is not in hot standby mode\n"));
+
+	/* Close connection politely. */
+	conn->status = CONNECTION_OK;
+	sendTerminateConn(conn);
+
+	/* Record primary host index */
+	if (conn->requested_server_type == SERVER_TYPE_PREFER_STANDBY && conn->which_primary_host == -1)
+		conn->which_primary_host = conn->whichhost;
+
+	/*
+	 * Try next host if any, but we don't want to consider additional
+	 * addresses for this host.
+	 */
+	conn->try_next_host = true;
+}
+
 /* ----------------
  *		PQconnectPoll
  *
@@ -2277,6 +2365,7 @@ PQconnectPoll(PGconn *conn)
 		case CONNECTION_CHECK_WRITABLE:
 		case CONNECTION_CONSUME:
 		case CONNECTION_GSS_STARTUP:
+		case CONNECTION_CHECK_STANDBY:
 			break;
 
 		default:
@@ -2313,13 +2402,33 @@ keep_going:						/* We will come back to here until there is
 
 		if (conn->whichhost + 1 >= conn->nconnhost)
 		{
-			/*
-			 * Oops, no more hosts.  An appropriate error message is already
-			 * set up, so just set the right status.
-			 */
-			goto error_return;
+			if (conn->which_primary_host >= 0)
+			{
+				/*
+				 * Getting here means we failed to connect to standby servers
+				 * and should now try to re-connect to a
+				 * previously-connected-to primary server, whose host index is
+				 * recorded in which_primary_host.
+				 */
+				conn->whichhost = conn->which_primary_host;
+
+				/*
+				 * Reset the host index value to avoid recursion during the
+				 * second connection attempt.
+				 */
+				conn->which_primary_host = -2;
+			}
+			else
+			{
+				/*
+				 * Oops, no more hosts.  An appropriate error message is
+				 * already set up, so just set the right status.
+				 */
+				goto error_return;
+			}
 		}
-		conn->whichhost++;
+		else
+			conn->whichhost++;
 
 		/* Drop any address info for previous host */
 		release_conn_addrinfo(conn);
@@ -3549,30 +3658,174 @@ keep_going:						/* We will come back to here until there is
 
 		case CONNECTION_CHECK_TARGET:
 			{
-				/*
-				 * If a read-write connection is required, see if we have one.
-				 *
-				 * Servers before 7.4 lack the transaction_read_only GUC, but
-				 * by the same token they don't have any read-only mode, so we
-				 * may just skip the test in that case.
-				 */
-				if (conn->sversion >= 70400 &&
-					conn->target_session_attrs != NULL &&
-					strcmp(conn->target_session_attrs, "read-write") == 0)
+				if (conn->requested_server_type != SERVER_TYPE_ANY)
 				{
 					/*
-					 * We use PQsendQueryContinue so that conn->errorMessage
-					 * does not get cleared.  We need to preserve any error
-					 * messages related to previous hosts we have tried and
-					 * failed to connect to.
+					 * If a read-write or read-only connection is required,
+					 * see if we have one.
+					 *
+					 * Servers before 7.4 lack the
+					 * default_transaction_read_only & in_hot_standby GUC, but
+					 * by the same token they don't have any read-only mode,
+					 * so we may just skip the test in that case.
 					 */
-					conn->status = CONNECTION_OK;
-					if (!PQsendQueryContinue(conn,
-											 "SHOW transaction_read_only"))
-						goto error_return;
-					conn->status = CONNECTION_CHECK_WRITABLE;
-					return PGRES_POLLING_READING;
+
+					if (conn->sversion >= 70400 &&
+						(conn->requested_server_type == SERVER_TYPE_READ_WRITE ||
+						 conn->requested_server_type == SERVER_TYPE_READ_ONLY))
+					{
+						/*
+						 * For servers which don't have
+						 * "default_transaction_read_only" or "in_hot_standby"
+						 * as a GUC_REPORT variable, it in necessary to
+						 * determine if they are read-only by sending the
+						 * query "SHOW transaction_read_only".
+						 */
+						if (conn->default_transaction_read_only == GUC_BOOL_UNKNOWN ||
+							conn->in_hot_standby == GUC_BOOL_UNKNOWN)
+						{
+							/*
+							 * We use PQsendQueryContinue so that
+							 * conn->errorMessage does not get cleared.  We
+							 * need to preserve any error messages related to
+							 * previous hosts we have tried and failed to
+							 * connect to.
+							 */
+							conn->status = CONNECTION_OK;
+							if (!PQsendQueryContinue(conn, "SHOW transaction_read_only"))
+								goto error_return;
+
+							conn->status = CONNECTION_CHECK_WRITABLE;
+							return PGRES_POLLING_READING;
+						}
+						else if (((conn->default_transaction_read_only == GUC_BOOL_YES ||
+								   conn->in_hot_standby == GUC_BOOL_YES) &&
+								  conn->requested_server_type == SERVER_TYPE_READ_WRITE) ||
+								 (conn->default_transaction_read_only == GUC_BOOL_NO &&
+								  conn->in_hot_standby == GUC_BOOL_NO &&
+								  conn->requested_server_type == SERVER_TYPE_READ_ONLY))
+						{
+							/*
+							 * Server is read-only but requested read-write,
+							 * or server is read-write but requested
+							 * read-only, reject and continue to process any
+							 * further hosts ...
+							 */
+							rejectCheckedReadOrWriteConnection(conn);
+							goto keep_going;
+						}
+
+						/* obtained the requested type, consume it */
+						goto consume_checked_target_connection;
+					}
+
+					/*
+					 * Servers before 9.0 don't support standby mode, skip the
+					 * check when the requested type of connection is primary,
+					 * prefer-standby or standby.
+					 */
+					else if ((conn->sversion >= 90000 &&
+							  (conn->requested_server_type == SERVER_TYPE_PRIMARY ||
+							   conn->requested_server_type == SERVER_TYPE_PREFER_STANDBY ||
+							   conn->requested_server_type == SERVER_TYPE_STANDBY)))
+					{
+						/*
+						 * For servers which don't have the "in_hot_standby"
+						 * GUC_REPORT variable, it in necessary to determine
+						 * if they are in hot standby mode by sending the
+						 * query "SELECT pg_is_in_recovery()".
+						 */
+						if (conn->in_hot_standby == GUC_BOOL_UNKNOWN)
+						{
+							/*
+							 * We use PQsendQueryContinue so that
+							 * conn->errorMessage does not get cleared.  We
+							 * need to preserve any error messages related to
+							 * previous hosts we have tried and failed to
+							 * connect to.
+							 */
+							conn->status = CONNECTION_OK;
+							if (!PQsendQueryContinue(conn, "SELECT pg_is_in_recovery()"))
+								goto error_return;
+
+							conn->status = CONNECTION_CHECK_STANDBY;
+							return PGRES_POLLING_READING;
+						}
+						else if ((conn->in_hot_standby == GUC_BOOL_YES &&
+								  conn->requested_server_type == SERVER_TYPE_PRIMARY) ||
+								 (conn->in_hot_standby == GUC_BOOL_NO &&
+								  (conn->requested_server_type == SERVER_TYPE_PREFER_STANDBY ||
+								   conn->requested_server_type == SERVER_TYPE_STANDBY)))
+						{
+							/*
+							 * Server is in standby but requested primary, or
+							 * server is not in standby but requested
+							 * prefer-standby/standby, reject and continue to
+							 * process any further hosts ...
+							 */
+							if (conn->which_primary_host == -2)
+							{
+								/*
+								 * This scenario is possible only for the
+								 * prefer-standby type for the next pass of
+								 * the list of connections, as it couldn't
+								 * find any servers that are in standby mode.
+								 */
+								goto consume_checked_target_connection;
+							}
+
+							rejectCheckedStandbyConnection(conn);
+							goto keep_going;
+						}
+
+						/* obtained the requested type, consume it */
+						goto consume_checked_target_connection;
+					}
+
+					/*
+					 * If the requested type is prefer-standby, then record
+					 * this host index and try any others before considering
+					 * it later. If the requested type of connection is
+					 * read-only or standby, ignore this connection, as
+					 * servers of this version don't support this type of
+					 * connection.
+					 */
+					if (conn->requested_server_type == SERVER_TYPE_PREFER_STANDBY ||
+						conn->requested_server_type == SERVER_TYPE_READ_ONLY ||
+						conn->requested_server_type == SERVER_TYPE_STANDBY)
+					{
+						if (conn->which_primary_host == -2)
+						{
+							/*
+							 * This scenario is possible only for the
+							 * prefer-standby type for the next pass of the
+							 * list of connections, as it couldn't find any
+							 * servers that are in standby mode.
+							 */
+							goto consume_checked_target_connection;
+						}
+
+						/* Close connection politely. */
+						conn->status = CONNECTION_OK;
+						sendTerminateConn(conn);
+
+						/* Record host index */
+						if (conn->requested_server_type == SERVER_TYPE_PREFER_STANDBY)
+						{
+							if (conn->which_primary_host == -1)
+								conn->which_primary_host = conn->whichhost;
+						}
+
+						/*
+						 * Try the next host, if any, but we don't want to
+						 * consider additional addresses for this host.
+						 */
+						conn->try_next_host = true;
+						goto keep_going;
+					}
 				}
+
+		consume_checked_target_connection:
 
 				/* We can release the address list now. */
 				release_conn_addrinfo(conn);
@@ -3645,6 +3898,7 @@ keep_going:						/* We will come back to here until there is
 				conn->status = CONNECTION_OK;
 				return PGRES_POLLING_OK;
 			}
+
 		case CONNECTION_CHECK_WRITABLE:
 			{
 				conn->status = CONNECTION_OK;
@@ -3662,30 +3916,28 @@ keep_going:						/* We will come back to here until there is
 					PQntuples(res) == 1)
 				{
 					char	   *val;
+					bool		readonly_server;
 
 					val = PQgetvalue(res, 0, 0);
-					if (strncmp(val, "on", 2) == 0)
+					readonly_server = (strncmp(val, "on", 2) == 0);
+
+					/*
+					 * Server is read-only and requested server type is
+					 * read-write, ignore this connection. Server is
+					 * read-write and requested type is read-only, ignore this
+					 * connection.
+					 */
+					if ((readonly_server &&
+						 (conn->requested_server_type == SERVER_TYPE_READ_WRITE)) ||
+						(!readonly_server &&
+						 (conn->requested_server_type == SERVER_TYPE_READ_ONLY)))
 					{
-						/* Not writable; fail this connection. */
+						/* Not a requested type; fail this connection. */
 						PQclear(res);
-
-						/* Append error report to conn->errorMessage. */
-						appendPQExpBufferStr(&conn->errorMessage,
-											 libpq_gettext("session is read-only\n"));
-
-						/* Close connection politely. */
-						conn->status = CONNECTION_OK;
-						sendTerminateConn(conn);
-
-						/*
-						 * Try next host if any, but we don't want to consider
-						 * additional addresses for this host.
-						 */
-						conn->try_next_host = true;
+						rejectCheckedReadOrWriteConnection(conn);
 						goto keep_going;
 					}
-
-					/* Session is read-write, so we're good. */
+					/* Session is requested type, so we're good. */
 					PQclear(res);
 
 					/*
@@ -3716,6 +3968,89 @@ keep_going:						/* We will come back to here until there is
 				goto keep_going;
 			}
 
+		case CONNECTION_CHECK_STANDBY:
+			{
+				conn->status = CONNECTION_OK;
+				if (!PQconsumeInput(conn))
+				{
+					goto error_return;
+				}
+
+				if (PQisBusy(conn))
+				{
+					conn->status = CONNECTION_CHECK_STANDBY;
+					return PGRES_POLLING_READING;
+				}
+
+				res = PQgetResult(conn);
+				if (res && (PQresultStatus(res) == PGRES_TUPLES_OK) &&
+					PQntuples(res) == 1)
+				{
+					char	   *val;
+					bool		standby_server;
+
+					val = PQgetvalue(res, 0, 0);
+					standby_server = (strncmp(val, "t", 1) == 0);
+
+					/*
+					 * Server is in standby mode and requested mode is
+					 * primary, ignore it. Server is not in standby mode and
+					 * requested mode is prefer-standby, record it for the
+					 * first time and try to consume in the next scan (it
+					 * means no standby server was found in the first scan).
+					 */
+					if ((standby_server &&
+						 conn->requested_server_type == SERVER_TYPE_PRIMARY) ||
+						(!standby_server &&
+						 (conn->requested_server_type == SERVER_TYPE_PREFER_STANDBY ||
+						  conn->requested_server_type == SERVER_TYPE_STANDBY)))
+					{
+						/*
+						 * The following scenario is possible only for the
+						 * prefer-standby mode for the next pass of the list
+						 * of connections, as it couldn't find any servers
+						 * that are in standby mode.
+						 */
+						if (conn->which_primary_host == -2)
+							goto consume_checked_standby_connection;
+
+						/* Not a requested type; fail this connection. */
+						PQclear(res);
+
+						rejectCheckedStandbyConnection(conn);
+						goto keep_going;
+					}
+			consume_checked_standby_connection:
+					/* Session is requested type, so we're good. */
+					PQclear(res);
+
+					/*
+					 * Finish reading any remaining messages before being
+					 * considered as ready.
+					 */
+					conn->status = CONNECTION_CONSUME;
+					goto keep_going;
+				}
+
+				/*
+				 * Something went wrong with "SELECT pg_is_in_recovery()". We
+				 * should try next addresses.
+				 */
+				if (res)
+					PQclear(res);
+
+				/* Append error report to conn->errorMessage. */
+				appendPQExpBufferStr(&conn->errorMessage,
+									 libpq_gettext("test \"SELECT pg_is_in_recovery()\" failed\n"));
+
+				/* Close connection politely. */
+				conn->status = CONNECTION_OK;
+				sendTerminateConn(conn);
+
+				/* Try next address */
+				conn->try_next_addr = true;
+				goto keep_going;
+			}
 		default:
 			appendPQExpBuffer(&conn->errorMessage,
 							  libpq_gettext("invalid connection state %d, "
@@ -3859,9 +4194,14 @@ makeEmptyPGconn(void)
 	conn->setenv_state = SETENV_STATE_IDLE;
 	conn->client_encoding = PG_SQL_ASCII;
 	conn->std_strings = false;	/* unless server says differently */
+	conn->default_transaction_read_only = GUC_BOOL_UNKNOWN;
+	conn->in_hot_standby = GUC_BOOL_UNKNOWN;
 	conn->verbosity = PQERRORS_DEFAULT;
 	conn->show_context = PQSHOW_CONTEXT_ERRORS;
 	conn->sock = PGINVALID_SOCKET;
+
+	conn->requested_server_type = SERVER_TYPE_ANY;
+	conn->which_primary_host = -1;
 
 	/*
 	 * We try to send at least 8K at a time, which is the usual size of pipe

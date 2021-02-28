@@ -1877,18 +1877,66 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>target_session_attrs</literal></term>
       <listitem>
        <para>
-        If this parameter is set to <literal>read-write</literal>, only a
-        connection in which read-write transactions are accepted by default
-        is considered acceptable.  The query
-        <literal>SHOW transaction_read_only</literal> will be sent upon any
-        successful connection; if it returns <literal>on</literal>, the connection
-        will be closed.  If multiple hosts were specified in the connection
-        string, any remaining servers will be tried just as if the connection
-        attempt had failed.  The default value of this parameter,
-        <literal>any</literal>, regards all connections as acceptable.
-      </para>
+        The supported options for this parameter are <literal>any</literal>,
+        <literal>read-write</literal>, <literal>read-only</literal>,
+        <literal>primary</literal>, <literal>standby</literal> and
+        <literal>prefer-standby</literal>.
+        The default value of this parameter, <literal>any</literal>, regards
+        all connections as acceptable. If multiple hosts are specified in the
+        connection string, each host is tried in the order given until a connection
+        is successful.
+       </para>
+
+       <para>
+        The support of read-write transactions is determined by the values of
+        the <varname>default_transaction_read_only</varname> and
+        <varname>in_hot_standby</varname> configuration parameters, that are 
+        reported by the server (if supported) upon successful connection.  If
+        the value of either of these parameters is <literal>on</literal>, it
+        means the server doesn't support read-write transactions. If
+        either/both of these parameters are not reported, then the support of
+        read-write transactions is determined by an explicit query, by sending
+        <literal>SHOW transaction_read_only</literal> after successful
+        connection; if it returns <literal>on</literal>, it means the server
+        doesn't support read-write transactions. The standby mode state is
+        determined by either the value of the <varname>in_hot_standby</varname>
+        configuration parameter, that is reported by the server (if supported)
+        upon successful connection, or is otherwise explicitly queried by
+        sending <literal>SELECT pg_is_in_recovery()</literal> after successful
+        connection; if it returns <literal>t</literal>, it means the server is
+        in hot standby mode.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>read-write</literal>, only a connection in
+        which read-write transactions are accepted by default is considered acceptable.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>read-only</literal>, only a connection in
+        which read-only transactions are accepted by default is considered acceptable.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>primary</literal>, then only a connection in
+        which the server is not in hot standby mode is considered acceptable.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>standby</literal>, then only a connection in
+        which the server is in hot standby mode is considered acceptable.
+       </para>
+
+       <para>
+        If this parameter is set to <literal>prefer-standby</literal>, then a connection
+        in which the server is in hot standby mode is preferred. Otherwise, if no such
+        connections can be found, then a connection in which the server is not in hot
+        standby mode will be considered.
+       </para>
+
       </listitem>
-    </varlistentry>
+     </varlistentry>
+
     </variablelist>
    </para>
   </sect2>
@@ -2191,6 +2239,7 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
        <varname>server_encoding</varname>,
        <varname>client_encoding</varname>,
        <varname>application_name</varname>,
+       <varname>default_transaction_read_only</varname>,
        <varname>in_hot_standby</varname>,
        <varname>is_superuser</varname>,
        <varname>session_authorization</varname>,
@@ -2206,6 +2255,7 @@ const char *PQparameterStatus(const PGconn *conn, const char *paramName);
        <varname>IntervalStyle</varname> was not reported by releases before 8.4;
        <varname>application_name</varname> was not reported by releases before
        9.0;
+       <varname>default_transaction_read_only</varname>  and
        <varname>in_hot_standby</varname> was not reported by releases before
        14.)
        Note that
@@ -7309,6 +7359,7 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
       linkend="libpq-connect-target-session-attrs"/> connection parameter.
      </para>
     </listitem>
+
    </itemizedlist>
   </para>
 

@@ -950,6 +950,7 @@ GroupingSetsPath
 GucAction
 GucBoolAssignHook
 GucBoolCheckHook
+GucBoolState
 GucContext
 GucEnumAssignHook
 GucEnumCheckHook
@@ -2512,6 +2513,7 @@ TapeShare
 TarMethodData
 TarMethodFile
 TargetEntry
+TargetServerType
 TclExceptionNameMap
 Tcl_DString
 Tcl_FileProc

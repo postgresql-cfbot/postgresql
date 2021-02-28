@@ -86,6 +86,8 @@ extern int	synchronous_commit;
 extern PGDLLIMPORT TransactionId CheckXidAlive;
 extern PGDLLIMPORT bool bsysscan;
 
+extern bool transaction_cleanup;
+
 /*
  * Miscellaneous flag bits to record events which occur on the top level
  * transaction. These flags are only persisted in MyXactFlags and are intended
@@ -106,6 +108,8 @@ extern int	MyXactFlags;
  * logged any Access Exclusive Locks.
  */
 #define XACT_FLAGS_ACQUIREDACCESSEXCLUSIVELOCK	(1U << 1)
+
+#define XACT_FLAGS_CLEANUP_AT_XACT_END			(1U << 2)
 
 /*
  *	start- and end-of-transaction callbacks for dynamically loaded modules

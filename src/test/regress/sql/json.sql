@@ -59,6 +59,24 @@ SELECT 'trues'::json;			-- ERROR, not a keyword
 SELECT ''::json;				-- ERROR, no value
 SELECT '    '::json;			-- ERROR, no value
 
+-- Multi-line JSON input to check ERROR reporting
+SELECT jsonb_pretty('{
+		"one": 1,
+		"two":"two",
+		"three":
+			true}'::jsonb); -- OK
+SELECT jsonb_pretty('{
+		"one": 1,
+		"two":,"two", -- ERROR extraneous comma before field "two" value, line 3
+		"three":
+			true}'::jsonb);
+SELECT jsonb_pretty('{
+		"one": 1,
+		"two":"two",
+		"three":
+			}'::jsonb); -- ERROR missing value for field "three", line 5
+-- ERROR is on line 5 because a LF \n is legal whitespace at end of line 4, so the missing syntax is on line 5
+
 --constructors
 -- array_to_json
 

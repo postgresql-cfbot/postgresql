@@ -272,6 +272,42 @@ LINE 1: SELECT '    '::json;
                ^
 DETAIL:  The input string ended unexpectedly.
 CONTEXT:  JSON data, line 1:     
+-- Multi-line JSON input to check ERROR reporting
+SELECT jsonb_pretty('{
+		"one": 1,
+		"two":"two",
+		"three":
+			true}'::jsonb); -- OK
+   jsonb_pretty    
+-------------------
+ {                +
+     "one": 1,    +
+     "two": "two",+
+     "three": true+
+ }
+(1 row)
+
+SELECT jsonb_pretty('{
+		"one": 1,
+		"two":,"two", -- ERROR extraneous comma before field "two" value, line 3
+		"three":
+			true}'::jsonb);
+ERROR:  invalid input syntax for type json
+LINE 1: SELECT jsonb_pretty('{
+                            ^
+DETAIL:  Expected JSON value, but found ",".
+CONTEXT:  JSON data, line 3: 		"two":,...
+SELECT jsonb_pretty('{
+		"one": 1,
+		"two":"two",
+		"three":
+			}'::jsonb); -- ERROR missing value for field "three", line 5
+ERROR:  invalid input syntax for type json
+LINE 1: SELECT jsonb_pretty('{
+                            ^
+DETAIL:  Expected JSON value, but found "}".
+CONTEXT:  JSON data, line 5: 			}
+-- ERROR is on line 5 because a LF \n is legal whitespace at end of line 4, so the missing syntax is on line 5
 --constructors
 -- array_to_json
 SELECT array_to_json(array(select 1 as a));

@@ -79,6 +79,7 @@ typedef struct JsonLexContext
 	char	   *prev_token_terminator;
 	JsonTokenType token_type;
 	int			lex_level;
+	int			last_linestart;
 	int			line_number;
 	char	   *line_start;
 	StringInfo	strval;

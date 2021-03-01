@@ -158,6 +158,7 @@ makeJsonLexContextCstringLen(char *json, int len, int encoding, bool need_escape
 
 	lex->input = lex->token_terminator = lex->line_start = json;
 	lex->line_number = 1;
+	lex->last_linestart = 0;
 	lex->input_length = len;
 	lex->input_encoding = encoding;
 	if (need_escapes)
@@ -536,7 +537,10 @@ json_lex(JsonLexContext *lex)
 		   (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r'))
 	{
 		if (*s == '\n')
+		{
 			++lex->line_number;
+			lex->last_linestart = len + 1;
+		}
 		++s;
 		++len;
 	}

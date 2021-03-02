@@ -1674,6 +1674,11 @@
   proname => 'arraycontjoinsel', provolatile => 's', prorettype => 'float8',
   proargtypes => 'internal oid internal int2 internal',
   prosrc => 'arraycontjoinsel' },
+{ oid => '8819',
+  descr => 'trim an array down to n elements',
+  proname => 'trim_array', proisstrict => 't', provolatile => 'i',
+  prorettype => 'anyarray', proargtypes => 'anyarray int4',
+  prosrc => 'trim_array' },
 
 { oid => '764', descr => 'large object import',
   proname => 'lo_import', provolatile => 'v', proparallel => 'u',

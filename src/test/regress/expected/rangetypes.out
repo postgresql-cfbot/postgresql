@@ -181,6 +181,78 @@ select '(a,a)'::textrange;
  empty
 (1 row)
 
+select lower('[a,a)'::textrange);
+ lower 
+-------
+ 
+(1 row)
+
+select lower('(a,a]'::textrange);
+ lower 
+-------
+ 
+(1 row)
+
+select lower('(a,a)'::textrange);
+ lower 
+-------
+ 
+(1 row)
+
+select upper('[a,a)'::textrange);
+ upper 
+-------
+ 
+(1 row)
+
+select upper('(a,a]'::textrange);
+ upper 
+-------
+ 
+(1 row)
+
+select upper('(a,a)'::textrange);
+ upper 
+-------
+ 
+(1 row)
+
+select range_start('[a,a)'::textrange);
+ range_start 
+-------------
+ a
+(1 row)
+
+select range_start('(a,a]'::textrange);
+ range_start 
+-------------
+ a
+(1 row)
+
+select range_start('(a,a)'::textrange);
+ range_start 
+-------------
+ a
+(1 row)
+
+select range_end('[a,a)'::textrange);
+ range_end 
+-----------
+ a
+(1 row)
+
+select range_end('(a,a]'::textrange);
+ range_end 
+-----------
+ a
+(1 row)
+
+select range_end('(a,a)'::textrange);
+ range_end 
+-----------
+ a
+(1 row)
+
 --
 -- create some test data and test the operators
 --

@@ -40,18 +40,14 @@ typedef struct
 #define RANGE_UB_INC		0x04	/* upper bound is inclusive */
 #define RANGE_LB_INF		0x08	/* lower bound is -infinity */
 #define RANGE_UB_INF		0x10	/* upper bound is +infinity */
-#define RANGE_LB_NULL		0x20	/* lower bound is null (NOT USED) */
-#define RANGE_UB_NULL		0x40	/* upper bound is null (NOT USED) */
+#define RANGE_LB_NULL		0x20	/* lower bound is null */
+#define RANGE_UB_NULL		0x40	/* upper bound is null */
 #define RANGE_CONTAIN_EMPTY 0x80	/* marks a GiST internal-page entry whose
 									 * subtree contains some empty ranges */
 
-#define RANGE_HAS_LBOUND(flags) (!((flags) & (RANGE_EMPTY | \
-											  RANGE_LB_NULL | \
-											  RANGE_LB_INF)))
+#define RANGE_HAS_LBOUND(flags) (!((flags) & (RANGE_LB_NULL | RANGE_LB_INF)))
 
-#define RANGE_HAS_UBOUND(flags) (!((flags) & (RANGE_EMPTY | \
-											  RANGE_UB_NULL | \
-											  RANGE_UB_INF)))
+#define RANGE_HAS_UBOUND(flags) (!((flags) & (RANGE_UB_NULL | RANGE_UB_INF)))
 
 #define RangeIsEmpty(r)  ((range_get_flags(r) & RANGE_EMPTY) != 0)
 #define RangeIsOrContainsEmpty(r)  \

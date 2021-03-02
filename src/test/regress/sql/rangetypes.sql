@@ -41,6 +41,18 @@ select '[a,a]'::textrange;
 select '[a,a)'::textrange;
 select '(a,a]'::textrange;
 select '(a,a)'::textrange;
+select lower('[a,a)'::textrange);
+select lower('(a,a]'::textrange);
+select lower('(a,a)'::textrange);
+select upper('[a,a)'::textrange);
+select upper('(a,a]'::textrange);
+select upper('(a,a)'::textrange);
+select range_start('[a,a)'::textrange);
+select range_start('(a,a]'::textrange);
+select range_start('(a,a)'::textrange);
+select range_end('[a,a)'::textrange);
+select range_end('(a,a]'::textrange);
+select range_end('(a,a)'::textrange);
 
 --
 -- create some test data and test the operators

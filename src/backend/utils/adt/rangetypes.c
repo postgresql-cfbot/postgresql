@@ -183,8 +183,10 @@ range_recv(PG_FUNCTION_ARGS)
 	flags &= (RANGE_EMPTY |
 			  RANGE_LB_INC |
 			  RANGE_LB_INF |
+			  RANGE_LB_NULL |
 			  RANGE_UB_INC |
-			  RANGE_UB_INF);
+			  RANGE_UB_INF |
+			  RANGE_UB_NULL);
 
 	/* receive the bounds ... */
 	if (RANGE_HAS_LBOUND(flags))
@@ -444,6 +446,27 @@ range_lower(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(lower.val);
 }
 
+Datum
+range_start(PG_FUNCTION_ARGS)
+{
+	RangeType  *r1 = PG_GETARG_RANGE_P(0);
+	TypeCacheEntry *typcache;
+	RangeBound	lower;
+	RangeBound	upper;
+	bool		empty;
+	char		flags = range_get_flags(r1);
+
+	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r1));
+
+	range_deserialize(typcache, r1, &lower, &upper, &empty);
+
+	/* Return NULL if there's no finite lower bound */
+	if (!RANGE_HAS_LBOUND(flags))
+		PG_RETURN_NULL();
+
+	PG_RETURN_DATUM(lower.val);
+}
+
 /* extract upper bound value */
 Datum
 range_upper(PG_FUNCTION_ARGS)
@@ -460,6 +483,27 @@ range_upper(PG_FUNCTION_ARGS)
 
 	/* Return NULL if there's no finite upper bound */
 	if (empty || upper.infinite)
+		PG_RETURN_NULL();
+
+	PG_RETURN_DATUM(upper.val);
+}
+
+Datum
+range_end(PG_FUNCTION_ARGS)
+{
+	RangeType  *r1 = PG_GETARG_RANGE_P(0);
+	TypeCacheEntry *typcache;
+	RangeBound	lower;
+	RangeBound	upper;
+	bool		empty;
+	char		flags = range_get_flags(r1);
+
+	typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r1));
+
+	range_deserialize(typcache, r1, &lower, &upper, &empty);
+
+	/* Return NULL if there's no finite upper bound */
+	if (!RANGE_HAS_UBOUND(flags))
 		PG_RETURN_NULL();
 
 	PG_RETURN_DATUM(upper.val);
@@ -1677,7 +1721,7 @@ range_serialize(TypeCacheEntry *typcache, RangeBound *lower, RangeBound *upper,
 	Assert(!upper->lower);
 
 	if (empty)
-		flags |= RANGE_EMPTY;
+		flags |= RANGE_EMPTY | RANGE_LB_NULL | RANGE_UB_NULL;
 	else
 	{
 		cmp = range_cmp_bound_values(typcache, lower, upper);
@@ -2188,7 +2232,7 @@ range_parse(const char *string, char *flags, char **lbound_str,
 	if (pg_strncasecmp(ptr, RANGE_EMPTY_LITERAL,
 					   strlen(RANGE_EMPTY_LITERAL)) == 0)
 	{
-		*flags = RANGE_EMPTY;
+		*flags = RANGE_EMPTY | RANGE_LB_NULL | RANGE_UB_NULL;
 		*lbound_str = NULL;
 		*ubound_str = NULL;
 

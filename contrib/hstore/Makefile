@@ -12,6 +12,7 @@ OBJS = \
 
 EXTENSION = hstore
 DATA = hstore--1.4.sql \
+	hstore--1.8--1.9.sql \
 	hstore--1.7--1.8.sql \
 	hstore--1.6--1.7.sql \
 	hstore--1.5--1.6.sql \

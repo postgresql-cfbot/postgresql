@@ -13,6 +13,7 @@
 #include "access/gist.h"
 #include "access/stratnum.h"
 #include "cubedata.h"
+#include "libpq/pqformat.h"
 #include "utils/array.h"
 #include "utils/float.h"
 
@@ -31,6 +32,8 @@ PG_FUNCTION_INFO_V1(cube_in);
 PG_FUNCTION_INFO_V1(cube_a_f8_f8);
 PG_FUNCTION_INFO_V1(cube_a_f8);
 PG_FUNCTION_INFO_V1(cube_out);
+PG_FUNCTION_INFO_V1(cube_send);
+PG_FUNCTION_INFO_V1(cube_recv);
 PG_FUNCTION_INFO_V1(cube_f8);
 PG_FUNCTION_INFO_V1(cube_f8_f8);
 PG_FUNCTION_INFO_V1(cube_c_f8);
@@ -319,6 +322,61 @@ cube_out(PG_FUNCTION_ARGS)
 	PG_RETURN_CSTRING(buf.data);
 }
 
+/*
+ * cube_send - a binary output handler for cube type
+ */
+Datum
+cube_send(PG_FUNCTION_ARGS)
+{
+	NDBOX	   *cube = PG_GETARG_NDBOX_P(0);
+	StringInfoData buf;
+	int32		i, nitems = DIM(cube);
+
+	pq_begintypsend(&buf);
+	pq_sendint32(&buf, cube->header);
+	for (i=0; i < nitems; i++)
+	{
+		pq_sendfloat8(&buf, LL_COORD(cube, i));
+	}
+	if (!cube_is_point_internal(cube))
+	{
+		for (i=0; i < nitems; i++)
+		{
+			pq_sendfloat8(&buf, UR_COORD(cube, i));
+		}
+	}
+	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+}
+
+/*
+ * cube_recv - a binary input handler for cube type
+ */
+Datum
+cube_recv(PG_FUNCTION_ARGS)
+{
+	StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
+	int32		header;
+	int32		i, nitems;
+	NDBOX	   *cube;
+
+	header = pq_getmsgint(buf, sizeof(int32));
+	nitems = (header & DIM_MASK);
+	if (nitems > CUBE_MAX_DIM)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("cube dimension too large"),
+				 errdetail("A cube cannot have more than %d dimensions.",
+						   CUBE_MAX_DIM)));
+	if ((header & POINT_BIT) == 0)
+		nitems += nitems;
+	cube = palloc(offsetof(NDBOX, x) + sizeof(double) * nitems);
+	SET_VARSIZE(cube, offsetof(NDBOX, x) + sizeof(double) * nitems);
+	cube->header = header;
+	for (i=0; i < nitems; i++)
+		cube->x[i] = pq_getmsgfloat8(buf);
+
+	PG_RETURN_NDBOX_P(cube);
+}
 
 /*****************************************************************************
  *						   GiST functions

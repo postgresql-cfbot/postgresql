@@ -2375,6 +2375,9 @@ xcode-select --install
     You may or may not wish to also install Xcode.
    </para>
 
+   <sect3 id="installation-notes-macos-sysroot">
+    <title>Sysroot</title>
+    
    <para>
     On recent <productname>macOS</productname> releases, it's necessary to
     embed the <quote>sysroot</quote> path in the include switches used to
@@ -2419,6 +2422,10 @@ xcrun --show-sdk-path
     to build with a non-Apple compiler, but beware that that case is not
     tested or supported by the PostgreSQL developers.
    </para>
+   </sect3>
+
+   <sect3 id="installation-notes-macos-sip">
+    <title>System Integrity Protection</title>
 
    <para>
     <productname>macOS</productname>'s <quote>System Integrity
@@ -2429,6 +2436,25 @@ xcrun --show-sdk-path
     install</literal> before <literal>make check</literal>.
     Most PostgreSQL developers just turn off SIP, though.
    </para>
+
+   <para>
+    To disable SIP, boot into recovery mode, open a terminal, and run
+<programlisting>
+csrutil disable
+</programlisting>
+   and reboot.  In macOS version 10.14 and later, it is sufficient to disable
+   the <quote>Debugging</quote> part of SIP, by running
+<programlisting>
+csrutil enable --without debug
+</programlisting>
+    instead.  The status of SIP can be shown using
+<programlisting>
+csrutil status
+</programlisting>
+    Note that that status display does not reflect changes until after a
+    reboot.
+   </para>
+   </sect3>
   </sect2>
 
   <sect2 id="installation-notes-mingw">

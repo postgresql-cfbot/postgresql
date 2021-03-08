@@ -268,8 +268,8 @@ extern PGconn *PQsetdbLogin(const char *pghost, const char *pgport,
 							const char *dbName,
 							const char *login, const char *pwd);
 
-#define PQsetdb(M_PGHOST,M_PGPORT,M_PGOPT,M_PGTTY,M_DBNAME)  \
-	PQsetdbLogin(M_PGHOST, M_PGPORT, M_PGOPT, M_PGTTY, M_DBNAME, NULL, NULL)
+#define PQsetdb(M_PGHOST,M_PGPORT,M_PGOPT,M_UNUSED,M_DBNAME)  \
+	PQsetdbLogin(M_PGHOST, M_PGPORT, M_PGOPT, NULL, M_DBNAME, NULL, NULL)
 
 /* close the current connection and free the PGconn data structure */
 extern void PQfinish(PGconn *conn);

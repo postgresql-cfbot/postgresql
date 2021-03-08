@@ -3070,8 +3070,9 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
        <structfield>compression</structfield> <type>boolean</type>
       </para>
       <para>
-       True if SSL compression is in use, false if not,
-       or NULL if SSL is not in use on this connection
+       SSL compression is deprecated, this field is always false. This field
+       will be removed in a future version of
+       <productname>PostgreSQL</productname>
       </para></entry>
      </row>
 

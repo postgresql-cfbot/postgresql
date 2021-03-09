@@ -18,6 +18,7 @@
 #include "port/atomics.h"
 #include "storage/buf.h"
 #include "storage/bufmgr.h"
+#include "storage/condition_variable.h"
 #include "storage/latch.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
@@ -181,10 +182,10 @@ typedef struct BufferDesc
 
 	/* state of the tag, containing flags, refcount and usagecount */
 	pg_atomic_uint32 state;
+	ConditionVariable io_cv;	/* fires when BM_IO_IN_PROGRESS is cleared */
 
 	int			wait_backend_pid;	/* backend PID of pin-count waiter */
 	int			freeNext;		/* link in freelist chain */
-
 	LWLock		content_lock;	/* to lock access to buffer contents */
 } BufferDesc;
 
@@ -221,12 +222,8 @@ typedef union BufferDescPadded
 
 #define BufferDescriptorGetBuffer(bdesc) ((bdesc)->buf_id + 1)
 
-#define BufferDescriptorGetIOLock(bdesc) \
-	(&(BufferIOLWLockArray[(bdesc)->buf_id]).lock)
 #define BufferDescriptorGetContentLock(bdesc) \
 	((LWLock*) (&(bdesc)->content_lock))
-
-extern PGDLLIMPORT LWLockMinimallyPadded *BufferIOLWLockArray;
 
 /*
  * The freeNext field is either the index of the next freelist entry,

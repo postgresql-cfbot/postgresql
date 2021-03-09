@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "access/parallel.h"
+#include "access/xlog.h"
 #include "port/pg_bitutils.h"
 #include "commands/async.h"
 #include "miscadmin.h"
@@ -100,7 +101,6 @@ static ProcSignalSlot *MyProcSignalSlot = NULL;
 static bool CheckProcSignal(ProcSignalReason reason);
 static void CleanupProcSignalState(int status, Datum arg);
 static void ResetProcSignalBarrierBits(uint32 flags);
-static bool ProcessBarrierPlaceholder(void);
 
 /*
  * ProcSignalShmemSize
@@ -526,8 +526,17 @@ ProcessProcSignalBarrier(void)
 				type = (ProcSignalBarrierType) pg_rightmost_one_pos32(flags);
 				switch (type)
 				{
-					case PROCSIGNAL_BARRIER_PLACEHOLDER:
-						processed = ProcessBarrierPlaceholder();
+					case PROCSIGNAL_BARRIER_CHECKSUM_INPROGRESS_ON:
+						processed = AbsorbChecksumsOnInProgressBarrier();
+						break;
+					case PROCSIGNAL_BARRIER_CHECKSUM_ON:
+						processed = AbsorbChecksumsOnBarrier();
+						break;
+					case PROCSIGNAL_BARRIER_CHECKSUM_INPROGRESS_OFF:
+						processed = AbsorbChecksumsOffInProgressBarrier();
+						break;
+					case PROCSIGNAL_BARRIER_CHECKSUM_OFF:
+						processed = AbsorbChecksumsOffBarrier();
 						break;
 				}
 
@@ -591,24 +600,6 @@ ResetProcSignalBarrierBits(uint32 flags)
 	pg_atomic_fetch_or_u32(&MyProcSignalSlot->pss_barrierCheckMask, flags);
 	ProcSignalBarrierPending = true;
 	InterruptPending = true;
-}
-
-static bool
-ProcessBarrierPlaceholder(void)
-{
-	/*
-	 * XXX. This is just a placeholder until the first real user of this
-	 * machinery gets committed. Rename PROCSIGNAL_BARRIER_PLACEHOLDER to
-	 * PROCSIGNAL_BARRIER_SOMETHING_ELSE where SOMETHING_ELSE is something
-	 * appropriately descriptive. Get rid of this function and instead have
-	 * ProcessBarrierSomethingElse. Most likely, that function should live in
-	 * the file pertaining to that subsystem, rather than here.
-	 *
-	 * The return value should be 'true' if the barrier was successfully
-	 * absorbed and 'false' if not. Note that returning 'false' can lead to
-	 * very frequent retries, so try hard to make that an uncommon case.
-	 */
-	return true;
 }
 
 /*

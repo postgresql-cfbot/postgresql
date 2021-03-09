@@ -247,9 +247,10 @@
   <para>
    Checksums are normally enabled when the cluster is initialized using <link
    linkend="app-initdb-data-checksums"><application>initdb</application></link>.
-   They can also be enabled or disabled at a later time as an offline
-   operation. Data checksums are enabled or disabled at the full cluster
-   level, and cannot be specified individually for databases or tables.
+   They can also be enabled or disabled at a later time either as an offline
+   operation or online in a running cluster allowing concurrent access. Data
+   checksums are enabled or disabled at the full cluster level, and cannot be
+   specified individually for databases or tables.
   </para>
 
   <para>
@@ -266,13 +267,61 @@
   </para>
 
   <sect2 id="checksums-offline-enable-disable">
-   <title>Off-line Enabling of Checksums</title>
+   <title>Offline Enabling of Checksums</title>
 
    <para>
     The <link linkend="app-pgchecksums"><application>pg_checksums</application></link>
     application can be used to enable or disable data checksums, as well as 
     verify checksums, on an offline cluster.
    </para>
+
+  </sect2>
+
+  <sect2 id="checksums-online-enable-disable">
+   <title>Online Enabling of Checksums</title>
+
+   <para>
+    Checksums can be enabled or disabled online, by calling the appropriate
+    <link linkend="functions-admin-checksum">functions</link>.
+   </para>
+
+   <para>
+    Enabling checksums will put the cluster checksum mode in
+    <literal>inprogress-on</literal> mode.  During this time, checksums will be
+    written but not verified. In addition to this, a background worker process
+    is started that enables checksums on all existing data in the cluster. Once
+    this worker has completed processing all databases in the cluster, the
+    checksum mode will automatically switch to <literal>on</literal>. The
+    processing will consume a background worker process, make sure that
+    <varname>max_worker_processes</varname> allows for at least one more
+    additional process.
+   </para>
+
+   <para>
+    The process will initially wait for all open transactions to finish before
+    it starts, so that it can be certain that there are no tables that have been
+    created inside a transaction that has not committed yet and thus would not
+    be visible to the process enabling checksums. It will also, for each database,
+    wait for all pre-existing temporary tables to get removed before it finishes.
+    If long-lived temporary tables are used in the application it may be necessary
+    to terminate these application connections to allow the process to complete.
+   </para>
+
+   <para>
+    If the cluster is stopped while in <literal>inprogress-on</literal> mode, for
+    any reason, then this process must be restarted manually. To do this,
+    re-execute the function <function>pg_enable_data_checksums()</function>
+    once the cluster has been restarted. The background worker will attempt
+    to resume the work from where it was interrupted.
+   </para>
+
+   <note>
+    <para>
+     Enabling checksums can cause significant I/O to the system, as most of the
+     database pages will need to be rewritten, and will be written both to the
+     data files and the WAL.
+    </para>
+   </note>
 
   </sect2>
  </sect1>

@@ -637,10 +637,12 @@ fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 
 	while (fsm_nblocks_now < fsm_nblocks)
 	{
+		HOLD_INTERRUPTS();
 		PageSetChecksumInplace((Page) pg.data, fsm_nblocks_now);
 
 		smgrextend(rel->rd_smgr, FSM_FORKNUM, fsm_nblocks_now,
 				   pg.data, false);
+		RESUME_INTERRUPTS();
 		fsm_nblocks_now++;
 	}
 

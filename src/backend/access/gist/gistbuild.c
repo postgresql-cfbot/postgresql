@@ -452,9 +452,11 @@ gist_indexsortbuild(GISTBuildState *state)
 	/* Write out the root */
 	RelationOpenSmgr(state->indexrel);
 	PageSetLSN(pagestate->page, GistBuildLSN);
+	HOLD_INTERRUPTS();
 	PageSetChecksumInplace(pagestate->page, GIST_ROOT_BLKNO);
 	smgrwrite(state->indexrel->rd_smgr, MAIN_FORKNUM, GIST_ROOT_BLKNO,
 			  pagestate->page, true);
+	RESUME_INTERRUPTS();
 	if (RelationNeedsWAL(state->indexrel))
 		log_newpage(&state->indexrel->rd_node, MAIN_FORKNUM, GIST_ROOT_BLKNO,
 					pagestate->page, true);
@@ -574,8 +576,10 @@ gist_indexsortbuild_flush_ready_pages(GISTBuildState *state)
 			elog(ERROR, "unexpected block number to flush GiST sorting build");
 
 		PageSetLSN(page, GistBuildLSN);
+		HOLD_INTERRUPTS();
 		PageSetChecksumInplace(page, blkno);
 		smgrextend(state->indexrel->rd_smgr, MAIN_FORKNUM, blkno, page, true);
+		RESUME_INTERRUPTS();
 
 		state->pages_written++;
 	}

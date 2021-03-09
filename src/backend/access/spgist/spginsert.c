@@ -168,27 +168,33 @@ spgbuildempty(Relation index)
 	 * of their existing content when the corresponding create records are
 	 * replayed.
 	 */
+	HOLD_INTERRUPTS();
 	PageSetChecksumInplace(page, SPGIST_METAPAGE_BLKNO);
 	smgrwrite(index->rd_smgr, INIT_FORKNUM, SPGIST_METAPAGE_BLKNO,
 			  (char *) page, true);
+	RESUME_INTERRUPTS();
 	log_newpage(&index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
 				SPGIST_METAPAGE_BLKNO, page, true);
 
 	/* Likewise for the root page. */
 	SpGistInitPage(page, SPGIST_LEAF);
 
+	HOLD_INTERRUPTS();
 	PageSetChecksumInplace(page, SPGIST_ROOT_BLKNO);
 	smgrwrite(index->rd_smgr, INIT_FORKNUM, SPGIST_ROOT_BLKNO,
 			  (char *) page, true);
+	RESUME_INTERRUPTS();
 	log_newpage(&index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
 				SPGIST_ROOT_BLKNO, page, true);
 
 	/* Likewise for the null-tuples root page. */
 	SpGistInitPage(page, SPGIST_LEAF | SPGIST_NULLS);
 
+	HOLD_INTERRUPTS();
 	PageSetChecksumInplace(page, SPGIST_NULL_BLKNO);
 	smgrwrite(index->rd_smgr, INIT_FORKNUM, SPGIST_NULL_BLKNO,
 			  (char *) page, true);
+	RESUME_INTERRUPTS();
 	log_newpage(&index->rd_smgr->smgr_rnode.node, INIT_FORKNUM,
 				SPGIST_NULL_BLKNO, page, true);
 

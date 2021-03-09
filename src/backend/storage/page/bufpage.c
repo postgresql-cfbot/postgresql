@@ -100,7 +100,7 @@ PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
 	 */
 	if (!PageIsNew(page))
 	{
-		if (DataChecksumsEnabled())
+		if (DataChecksumsNeedVerify())
 		{
 			checksum = pg_checksum_page((char *) page, blkno);
 
@@ -1394,10 +1394,6 @@ PageSetChecksumCopy(Page page, BlockNumber blkno)
 {
 	static char *pageCopy = NULL;
 
-	/* If we don't need a checksum, just return the passed-in data */
-	if (PageIsNew(page) || !DataChecksumsEnabled())
-		return (char *) page;
-
 	/*
 	 * We allocate the copy space once and use it over on each subsequent
 	 * call.  The point of palloc'ing here, rather than having a static char
@@ -1406,6 +1402,10 @@ PageSetChecksumCopy(Page page, BlockNumber blkno)
 	 */
 	if (pageCopy == NULL)
 		pageCopy = MemoryContextAlloc(TopMemoryContext, BLCKSZ);
+
+	/* If we don't need a checksum, just return the passed-in data */
+	if (PageIsNew(page) || !DataChecksumsNeedWrite())
+		return (char *) page;
 
 	memcpy(pageCopy, (char *) page, BLCKSZ);
 	((PageHeader) pageCopy)->pd_checksum = pg_checksum_page(pageCopy, blkno);
@@ -1422,7 +1422,7 @@ void
 PageSetChecksumInplace(Page page, BlockNumber blkno)
 {
 	/* If we don't need a checksum, just return */
-	if (PageIsNew(page) || !DataChecksumsEnabled())
+	if (PageIsNew(page) || !DataChecksumsNeedWrite())
 		return;
 
 	((PageHeader) page)->pd_checksum = pg_checksum_page((char *) page, blkno);

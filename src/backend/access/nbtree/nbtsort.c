@@ -664,6 +664,8 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 				   true);
 	}
 
+	HOLD_INTERRUPTS();
+
 	PageSetChecksumInplace(page, blkno);
 
 	/*
@@ -683,6 +685,8 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 		smgrwrite(wstate->index->rd_smgr, MAIN_FORKNUM, blkno,
 				  (char *) page, true);
 	}
+
+	RESUME_INTERRUPTS();
 
 	pfree(page);
 }

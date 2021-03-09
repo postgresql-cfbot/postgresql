@@ -18,6 +18,7 @@
 #include "access/parallel.h"
 #include "catalog/catalog.h"
 #include "executor/instrument.h"
+#include "miscadmin.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "utils/guc.h"
@@ -217,6 +218,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		/* Find smgr relation for buffer */
 		oreln = smgropen(bufHdr->tag.rnode, MyBackendId);
 
+		HOLD_INTERRUPTS();
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
 		/* And write... */
@@ -225,6 +227,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 				  bufHdr->tag.blockNum,
 				  localpage,
 				  false);
+		RESUME_INTERRUPTS();
 
 		/* Mark not-dirty now in case we error out below */
 		buf_state &= ~BM_DIRTY;

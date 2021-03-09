@@ -441,6 +441,13 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 		/* If we got a cancel signal during the copy of the data, quit */
 		CHECK_FOR_INTERRUPTS();
 
+		/*
+		 * Hold interrupts for the duration of the IO operation to ensure
+		 * that the data checksums state cannot change and thus risking a
+		 * false positive or negative.
+		 */
+		HOLD_INTERRUPTS();
+
 		smgrread(src, forkNum, blkno, buf.data);
 
 		if (!PageIsVerifiedExtended(page, blkno,
@@ -469,6 +476,8 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 		 * ourselves below.
 		 */
 		smgrextend(dst, forkNum, blkno, buf.data, true);
+
+		RESUME_INTERRUPTS();
 	}
 
 	/*

@@ -13,7 +13,7 @@ top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
 
 SUBDIRS = perl regress isolation modules authentication recovery subscription \
-	  locale
+	  locale checksum
 
 # Test suites that are not safe by default but can be run if selected
 # by the user via the whitespace-separated list in variable

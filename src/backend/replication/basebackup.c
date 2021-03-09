@@ -1612,7 +1612,7 @@ sendFile(const char *readfilename, const char *tarfilename,
 
 	_tarWriteHeader(tarfilename, NULL, statbuf, false);
 
-	if (!noverify_checksums && DataChecksumsEnabled())
+	if (!noverify_checksums)
 	{
 		char	   *filename;
 
@@ -1698,7 +1698,14 @@ sendFile(const char *readfilename, const char *tarfilename,
 				 */
 				if (!PageIsNew(page) && PageGetLSN(page) < startptr)
 				{
+					HOLD_INTERRUPTS();
+					if (!DataChecksumsNeedVerify())
+					{
+						RESUME_INTERRUPTS();
+						continue;
+					}
 					checksum = pg_checksum_page((char *) page, blkno + segmentno * RELSEG_SIZE);
+					RESUME_INTERRUPTS();
 					phdr = (PageHeader) page;
 					if (phdr->pd_checksum != checksum)
 					{

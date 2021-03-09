@@ -919,6 +919,8 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			if (track_io_timing)
 				INSTR_TIME_SET_CURRENT(io_start);
 
+			HOLD_INTERRUPTS();
+
 			smgrread(smgr, forkNum, blockNum, (char *) bufBlock);
 
 			if (track_io_timing)
@@ -949,6 +951,8 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 									blockNum,
 									relpath(smgr->smgr_rnode, forkNum))));
 			}
+
+			RESUME_INTERRUPTS();
 		}
 	}
 
@@ -2809,6 +2813,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 * buffer, other processes might be updating hint bits in it, so we must
 	 * copy the page to private storage if we do checksumming.
 	 */
+	HOLD_INTERRUPTS();
 	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
 
 	if (track_io_timing)
@@ -2822,6 +2827,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 			  buf->tag.blockNum,
 			  bufToWrite,
 			  false);
+	RESUME_INTERRUPTS();
 
 	if (track_io_timing)
 	{
@@ -2944,8 +2950,13 @@ BufferGetLSNAtomic(Buffer buffer)
 	/*
 	 * If we don't need locking for correctness, fastpath out.
 	 */
+	HOLD_INTERRUPTS();
 	if (!XLogHintBitIsNeeded() || BufferIsLocal(buffer))
+	{
+		RESUME_INTERRUPTS();
 		return PageGetLSN(page);
+	}
+	RESUME_INTERRUPTS();
 
 	/* Make sure we've got a real buffer, and that we hold a pin on it. */
 	Assert(BufferIsValid(buffer));
@@ -3468,6 +3479,7 @@ FlushRelationBuffers(Relation rel)
 				errcallback.previous = error_context_stack;
 				error_context_stack = &errcallback;
 
+				HOLD_INTERRUPTS();
 				PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
 				smgrwrite(rel->rd_smgr,
@@ -3475,6 +3487,7 @@ FlushRelationBuffers(Relation rel)
 						  bufHdr->tag.blockNum,
 						  localpage,
 						  false);
+				RESUME_INTERRUPTS();
 
 				buf_state &= ~(BM_DIRTY | BM_JUST_DIRTIED);
 				pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);

@@ -95,13 +95,19 @@
  * RI_ConstraintInfo
  *
  * Information extracted from an FK pg_constraint entry.  This is cached in
- * ri_constraint_cache.
+ * ri_constraint_cache with constraint_root_id as a part of the hash key.
  */
 typedef struct RI_ConstraintInfo
 {
-	Oid			constraint_id;	/* OID of pg_constraint entry (hash key) */
+	Oid			constraint_id;	/* OID of pg_constraint entry */
+	Oid			constraint_root_id;	/* OID of the constraint in some ancestor
+									 * of the partition (most commonly root
+									 * ancestor) from which this constraint is
+									 * inherited; same as constraint_id if the
+									 * constraint is non-inherited */
 	bool		valid;			/* successfully initialized? */
-	uint32		oidHashValue;	/* hash value of pg_constraint OID */
+	uint32		oidHashValue;	/* hash value of constraint_id */
+	uint32		rootHashValue;	/* hash value of constraint_root_id */
 	NameData	conname;		/* name of the FK constraint */
 	Oid			pk_relid;		/* referenced relation */
 	Oid			fk_relid;		/* referencing relation */
@@ -221,6 +227,7 @@ static void ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 							   Relation pk_rel, Relation fk_rel,
 							   TupleTableSlot *violatorslot, TupleDesc tupdesc,
 							   int queryno, bool partgone) pg_attribute_noreturn();
+static Oid get_ri_constraint_root_recurse(Oid constrOid);
 
 
 /*
@@ -1892,7 +1899,7 @@ ri_GenerateQualCollation(StringInfo buf, Oid collation)
  *	Construct a hashtable key for a prepared SPI plan of an FK constraint.
  *
  *		key: output argument, *key is filled in based on the other arguments
- *		riinfo: info from pg_constraint entry
+ *		riinfo: info derived from pg_constraint entry
  *		constr_queryno: an internal number identifying the query type
  *			(see RI_PLAN_XXX constants at head of file)
  * ----------
@@ -1902,10 +1909,26 @@ ri_BuildQueryKey(RI_QueryKey *key, const RI_ConstraintInfo *riinfo,
 				 int32 constr_queryno)
 {
 	/*
+	 * All queries except RI_PLAN_CHECK_LOOKUPPK_FROM_PK can be shared among
+	 * partitions that inherit a given FK constraint (to be precise, the
+	 * constraint's check and action triggers) because they contain the same
+	 * target table to scan, which is the other table involved in the
+	 * constraint.  So we use the root constraint's OID as the key into
+	 * ri_query_cache such that the SPI plan for those queries can likewise
+	 * be shared between partitions.  We must a keep a separate instance of
+	 * the RI_PLAN_CHECK_LOOKUPPK_FROM_PK query for each partition because
+	 * it scans the same table as the table on which the trigger is fired.
+	 * Note that we still maintain a separate RI_ConstraintInfo for each
+	 * partition, because the contents of pk_attnums, fk_attnums arrays
+	 * can be different between partitions.
+	 *
 	 * We assume struct RI_QueryKey contains no padding bytes, else we'd need
 	 * to use memset to clear them.
 	 */
-	key->constr_id = riinfo->constraint_id;
+	if (constr_queryno != RI_PLAN_CHECK_LOOKUPPK_FROM_PK)
+		key->constr_id = riinfo->constraint_root_id;
+	else
+		key->constr_id = riinfo->constraint_id;
 	key->constr_queryno = constr_queryno;
 }
 
@@ -2010,6 +2033,27 @@ ri_FetchConstraintInfo(Trigger *trigger, Relation trig_rel, bool rel_is_pk)
 }
 
 /*
+ * get_ri_constraint_root_recurse
+ *		Recursively finds and returns the OID of the constraint's root parent
+ */
+static Oid
+get_ri_constraint_root_recurse(Oid constrOid)
+{
+	HeapTuple	tuple;
+	Oid			constrParentOid;
+
+	tuple = SearchSysCache1(CONSTROID, ObjectIdGetDatum(constrOid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for constraint %u", constrOid);
+	constrParentOid = ((Form_pg_constraint) GETSTRUCT(tuple))->conparentid;
+	ReleaseSysCache(tuple);
+	if (OidIsValid(constrParentOid))
+		return get_ri_constraint_root_recurse(constrParentOid);
+
+	return constrOid;
+}
+
+/*
  * Fetch or create the RI_ConstraintInfo struct for an FK constraint.
  */
 static const RI_ConstraintInfo *
@@ -2051,8 +2095,15 @@ ri_LoadConstraintInfo(Oid constraintOid)
 
 	/* And extract data */
 	Assert(riinfo->constraint_id == constraintOid);
+	if (OidIsValid(conForm->conparentid))
+		riinfo->constraint_root_id =
+			get_ri_constraint_root_recurse(constraintOid);
+	else
+		riinfo->constraint_root_id = constraintOid;
 	riinfo->oidHashValue = GetSysCacheHashValue1(CONSTROID,
 												 ObjectIdGetDatum(constraintOid));
+	riinfo->rootHashValue = GetSysCacheHashValue1(CONSTROID,
+												  ObjectIdGetDatum(riinfo->constraint_root_id));
 	memcpy(&riinfo->conname, &conForm->conname, sizeof(NameData));
 	riinfo->pk_relid = conForm->confrelid;
 	riinfo->fk_relid = conForm->conrelid;
@@ -2117,7 +2168,16 @@ InvalidateConstraintCacheCallBack(Datum arg, int cacheid, uint32 hashvalue)
 		RI_ConstraintInfo *riinfo = dlist_container(RI_ConstraintInfo,
 													valid_link, iter.cur);
 
-		if (hashvalue == 0 || riinfo->oidHashValue == hashvalue)
+		/*
+		 * We look for changes to two specific pg_constraint entries here --
+		 * the one matching the constraint given by riinfo->constraint_id and
+		 * also the one given by riinfo->constraint_root_id.  The latter too
+		 * because if its parent is updated, it is no longer the root
+		 * constraint.
+		 */
+		if (hashvalue == 0 ||
+			riinfo->oidHashValue == hashvalue ||
+			riinfo->rootHashValue == hashvalue)
 		{
 			riinfo->valid = false;
 			/* Remove invalidated entries from the list, too */

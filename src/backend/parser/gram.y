@@ -595,6 +595,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <partboundspec> PartitionBoundSpec
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
+%type <ival>    set_operation
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -612,6 +613,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %token <ival>	ICONST PARAM
 %token			TYPECAST DOT_DOT COLON_EQUALS EQUALS_GREATER
 %token			LESS_EQUALS GREATER_EQUALS NOT_EQUALS
+%token			PLUS_EQUALS MINUS_EQUALS
 
 /*
  * If you want to make any keyword changes, update the keyword table in
@@ -749,6 +751,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %right		NOT
 %nonassoc	IS ISNULL NOTNULL	/* IS sets precedence for IS NULL, etc */
 %nonassoc	'<' '>' '=' LESS_EQUALS GREATER_EQUALS NOT_EQUALS
+%nonassoc	PLUS_EQUALS MINUS_EQUALS
 %nonassoc	BETWEEN IN_P LIKE ILIKE SIMILAR NOT_LA
 %nonassoc	ESCAPE			/* ESCAPE must be just above LIKE/ILIKE/SIMILAR */
 /*
@@ -1492,6 +1495,17 @@ set_rest:
 			| set_rest_more
 			;
 
+set_operation:
+			PLUS_EQUALS
+				{
+					$$ = VAR_ADD_VALUE;
+				}
+			| MINUS_EQUALS
+				{
+					$$ = VAR_SUBTRACT_VALUE;
+				}
+			;
+
 generic_set:
 			var_name TO var_list
 				{
@@ -1506,6 +1520,14 @@ generic_set:
 					VariableSetStmt *n = makeNode(VariableSetStmt);
 					n->kind = VAR_SET_VALUE;
 					n->name = $1;
+					n->args = $3;
+					$$ = n;
+				}
+			| var_name set_operation var_list
+				{
+					VariableSetStmt *n = makeNode(VariableSetStmt);
+					n->name = $1;
+					n->kind = $2;
 					n->args = $3;
 					$$ = n;
 				}

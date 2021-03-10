@@ -22,6 +22,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 SET [ SESSION | LOCAL ] <replaceable class="parameter">configuration_parameter</replaceable> { TO | = } { <replaceable class="parameter">value</replaceable> | '<replaceable class="parameter">value</replaceable>' | DEFAULT }
+SET [ SESSION | LOCAL ] <replaceable class="parameter">configuration_parameter</replaceable> { += | -= } { <replaceable class="parameter">value</replaceable> | '<replaceable class="parameter">value</replaceable>' }
 SET [ SESSION | LOCAL ] TIME ZONE { <replaceable class="parameter">timezone</replaceable> | LOCAL | DEFAULT }
 </synopsis>
  </refsynopsisdiv>
@@ -38,6 +39,20 @@ SET [ SESSION | LOCAL ] TIME ZONE { <replaceable class="parameter">timezone</rep
    be changed after server or session start.)
    <command>SET</command> only affects the value used by the current
    session.
+  </para>
+
+  <para>
+   For configuration parameters that accept a list of values, such as
+   <varname>search_path</varname>, you can modify the existing setting by adding
+   or removing individual elements with the <literal>+=</literal> and
+   <literal>-=</literal> syntax. The former will add a value if it is not
+   already present, while the latter will remove an existing value.
+  </para>
+
+  <para>
+   You can also use <literal>+=</literal> and <literal>-=</literal> to change
+   numeric configuration parameters, such as <varname>cpu_tuple_cost</varname>
+   or <varname>effective_cache_size</varname>.
   </para>
 
   <para>
@@ -281,6 +296,15 @@ SELECT setseed(<replaceable>value</replaceable>);
    Set the schema search path:
 <programlisting>
 SET search_path TO my_schema, public;
+</programlisting>
+  </para>
+
+  <para>
+   Modify the contents of the existing search path:
+<programlisting>
+SET search_path += some_schema;
+SET search_path += other_schema, yetanother_schema;
+SET search_path -= some_schema, my_schema;
 </programlisting>
   </para>
 

@@ -999,6 +999,28 @@ btree_xlog_newroot(XLogReaderState *record)
  * the PGPROC->xmin > limitXmin test inside GetConflictingVirtualXIDs().
  * Consequently, one XID value achieves the same exclusion effect on primary
  * and standby.
+ *
+ * XXX It would make a great deal more sense if each nbtree index's FSM (or
+ * some equivalent structure) was completely crash-safe.  Importantly, this
+ * would enable page recycling's REDO side to work in a way that naturally
+ * matches original execution.
+ *
+ * Page deletion has to be crash safe already, plus xl_btree_reuse_page
+ * records are logged any time a backend has to recycle -- full crash safety
+ * is unlikely to add much overhead, and has clear efficiency benefits.  It
+ * would also simplify things by more explicitly decoupling page deletion and
+ * page recycling.  The benefits for REDO all follow from that.
+ *
+ * Under this scheme, the whole question of recycle safety could be moved from
+ * VACUUM to the consumer side.  That is, VACUUM would no longer have to defer
+ * placing a page that it deletes in the FSM until BTPageIsRecyclable() starts
+ * to return true -- _bt_getbut() would handle all details of safely deferring
+ * recycling instead.  _bt_getbut() would use the improved/crash-safe FSM to
+ * explicitly find a free page whose safexid is sufficiently old for recycling
+ * to be safe from the point of view of backends that run during original
+ * execution.  That just leaves the REDO side.  Instead of xl_btree_reuse_page
+ * records, we'd have FSM "consume/recycle page from the FSM" records that are
+ * associated with FSM page buffers/blocks.
  */
 static void
 btree_xlog_reuse_page(XLogReaderState *record)

@@ -2677,6 +2677,46 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, BlockNumber scanblkno,
 	if (target <= scanblkno)
 		stats->pages_deleted++;
 
+	/*
+	 * Maintain array of pages that were deleted during current btvacuumscan()
+	 * call.  We may well be able to recycle them in a separate pass at the
+	 * end of the current btvacuumscan().
+	 *
+	 * Need to respect work_mem/maxndeletedspace limitation on size of deleted
+	 * array.  Our strategy when the array can no longer grow within the
+	 * bounds of work_mem is simple: keep earlier entries (which are likelier
+	 * to be recyclable in the end), but stop saving new entries.
+	 */
+	if (vstate->full)
+		return true;
+
+	if (vstate->ndeleted >= vstate->ndeletedspace)
+	{
+		uint64 newndeletedspace;
+
+		if (!vstate->grow)
+		{
+			vstate->full = true;
+			return true;
+		}
+
+		newndeletedspace = vstate->ndeletedspace * 2;
+		if (newndeletedspace > vstate->maxndeletedspace)
+		{
+			newndeletedspace = vstate->maxndeletedspace;
+			vstate->grow = false;
+		}
+		vstate->ndeletedspace = newndeletedspace;
+
+		vstate->deleted =
+			repalloc(vstate->deleted,
+					 sizeof(BTPendingRecycle) * vstate->ndeletedspace);
+	}
+
+	vstate->deleted[vstate->ndeleted].blkno = target;
+	vstate->deleted[vstate->ndeleted].safexid = safexid;
+	vstate->ndeleted++;
+
 	return true;
 }
 

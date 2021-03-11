@@ -430,6 +430,37 @@ whenever it is subsequently taken from the FSM for reuse.  The deleted
 page's contents will be overwritten by the split operation (it will become
 the new right sibling page).
 
+Prior to PostgreSQL 14, VACUUM was only able to recycle pages that were
+deleted by a previous VACUUM operation (VACUUM typically placed all pages
+deleted by the last VACUUM into the FSM, though there were and are no
+certainties here).  This had the obvious disadvantage of creating
+uncertainty about when and how pages get recycled, especially with bursty
+workloads.  It was naive, even within the constraints of the design, since
+there is no reason to think that it will take long for a deleted page to
+become recyclable.  It's convenient to use XIDs to implement the drain
+technique, but that is totally unrelated to any of the other things that
+VACUUM needs to do with XIDs.
+
+VACUUM operations now consider if it's possible to recycle any pages that
+the same operation deleted after the physical scan of the index, the last
+point it's convenient to do one last check.  This changes nothing about
+the basic design, and so it might still not be possible to recycle any
+pages at that time (e.g., there might not even be one single new
+transactions after an index page deletion, but before VACUUM ends).  But
+we have little to lose and plenty to gain by trying.  We only need to keep
+around a little information about recently deleted pages in local memory.
+We don't even have to access the deleted pages a second time.
+
+Currently VACUUM delays considering the possibility of recycling its own
+recently deleted page until the end of its btbulkdelete scan (or until the
+end of btvacuumcleanup in cases where there were no tuples to delete in
+the index).  It would be slightly more effective if btbulkdelete page
+deletions were deferred until btvacuumcleanup, simply because more time
+will have passed.  Our current approach works well enough in practice,
+especially in cases where it really matters: cases where we're vacuuming a
+large index, where recycling pages sooner rather than later is
+particularly likely to matter.
+
 Fastpath For Index Insertion
 ----------------------------
 

@@ -279,7 +279,8 @@ BTPageGetDeleteXid(Page page)
  * Is an existing page recyclable?
  *
  * This exists to centralize the policy on which deleted pages are now safe to
- * re-use.
+ * re-use.  The _bt_newly_deleted_pages_recycle() optimization behaves more
+ * aggressively, though that has certain known limitations.
  *
  * Note: PageIsNew() pages are always safe to recycle, but we can't deal with
  * them here (caller is responsible for that case themselves).  Caller might
@@ -316,14 +317,33 @@ BTPageIsRecyclable(Page page)
  * BTVacState is private nbtree.c state used during VACUUM.  It is exported
  * for use by page deletion related code in nbtpage.c.
  */
+typedef struct BTPendingRecycle
+{
+	BlockNumber blkno;
+	FullTransactionId safexid;
+} BTPendingRecycle;
+
 typedef struct BTVacState
 {
+	/*
+	 * VACUUM operation state
+	 */
 	IndexVacuumInfo *info;
 	IndexBulkDeleteResult *stats;
 	IndexBulkDeleteCallback callback;
 	void	   *callback_state;
 	BTCycleId	cycleid;
+
+	/*
+	 * Page deletion state for VACUUM
+	 */
 	MemoryContext pagedelcontext;
+	BTPendingRecycle *deleted;
+	bool		grow;
+	bool		full;
+	uint32		ndeletedspace;
+	uint64		maxndeletedspace;
+	uint32		ndeleted;
 } BTVacState;
 
 /*

@@ -23,8 +23,10 @@
 #include <signal.h>
 
 #include "access/xlog_internal.h"
+#include "pgstat.h"
 #include "postmaster/startup.h"
 #include "replication/walreceiver.h"
+#include "storage/latch.h"
 #include "storage/pmsignal.h"
 #include "storage/shmem.h"
 #include "utils/timestamp.h"
@@ -62,6 +64,7 @@ WalRcvShmemInit(void)
 		/* First time through, so initialize */
 		MemSet(WalRcv, 0, WalRcvShmemSize());
 		WalRcv->walRcvState = WALRCV_STOPPED;
+		ConditionVariableInit(&WalRcv->walRcvStateChanged);
 		SpinLockInit(&WalRcv->mutex);
 		pg_atomic_init_u64(&WalRcv->writtenUpto, 0);
 		WalRcv->latch = NULL;
@@ -95,12 +98,18 @@ WalRcvRunning(void)
 
 		if ((now - startTime) > WALRCV_STARTUP_TIMEOUT)
 		{
+			bool		state_changed = false;
+
 			SpinLockAcquire(&walrcv->mutex);
-
 			if (walrcv->walRcvState == WALRCV_STARTING)
+			{
 				state = walrcv->walRcvState = WALRCV_STOPPED;
-
+				state_changed = true;
+			}
 			SpinLockRelease(&walrcv->mutex);
+
+			if (state_changed)
+				ConditionVariableBroadcast(&walrcv->walRcvStateChanged);
 		}
 	}
 
@@ -140,12 +149,18 @@ WalRcvStreaming(void)
 
 		if ((now - startTime) > WALRCV_STARTUP_TIMEOUT)
 		{
+			bool		state_changed = false;
+
 			SpinLockAcquire(&walrcv->mutex);
-
 			if (walrcv->walRcvState == WALRCV_STARTING)
+			{
 				state = walrcv->walRcvState = WALRCV_STOPPED;
-
+				state_changed = true;
+			}
 			SpinLockRelease(&walrcv->mutex);
+
+			if (state_changed)
+				ConditionVariableBroadcast(&walrcv->walRcvStateChanged);
 		}
 	}
 
@@ -191,6 +206,8 @@ ShutdownWalRcv(void)
 	}
 	SpinLockRelease(&walrcv->mutex);
 
+	ConditionVariableBroadcast(&walrcv->walRcvStateChanged);
+
 	/*
 	 * Signal walreceiver process if it was still running.
 	 */
@@ -199,18 +216,13 @@ ShutdownWalRcv(void)
 
 	/*
 	 * Wait for walreceiver to acknowledge its death by setting state to
-	 * WALRCV_STOPPED.
+	 * WALRCV_STOPPED.  This wait contains a standard CHECK_FOR_INTERRUPTS().
 	 */
+	ConditionVariablePrepareToSleep(&walrcv->walRcvStateChanged);
 	while (WalRcvRunning())
-	{
-		/*
-		 * This possibly-long loop needs to handle interrupts of startup
-		 * process.
-		 */
-		HandleStartupProcInterrupts();
-
-		pg_usleep(100000);		/* 100ms */
-	}
+		ConditionVariableSleep(&walrcv->walRcvStateChanged,
+							   WAIT_EVENT_WALRCV_EXIT);
+	ConditionVariableCancelSleep();
 }
 
 /*
@@ -297,6 +309,8 @@ RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr, const char *conninfo,
 	latch = walrcv->latch;
 
 	SpinLockRelease(&walrcv->mutex);
+
+	ConditionVariableBroadcast(&walrcv->walRcvStateChanged);
 
 	if (launch)
 		SendPostmasterSignal(PMSIGNAL_START_WALRECEIVER);

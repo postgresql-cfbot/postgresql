@@ -724,6 +724,7 @@ typedef struct XLogCtlData
 	TimestampTz currentChunkStartTime;
 	/* Are we requested to pause recovery? */
 	bool		recoveryPause;
+	ConditionVariable recoveryPauseChanged;
 
 	/*
 	 * lastFpwDisableRecPtr points to the start of the last replayed
@@ -5227,6 +5228,7 @@ XLOGShmemInit(void)
 	SpinLockInit(&XLogCtl->info_lck);
 	SpinLockInit(&XLogCtl->ulsn_lck);
 	InitSharedLatch(&XLogCtl->recoveryWakeupLatch);
+	ConditionVariableInit(&XLogCtl->recoveryPauseChanged);
 }
 
 /*
@@ -6039,10 +6041,6 @@ recoveryStopsAfter(XLogReaderState *record)
  * endOfRecovery is true if the recovery target is reached and
  * the paused state starts at the end of recovery because of
  * recovery_target_action=pause, and false otherwise.
- *
- * XXX Could also be done with shared latch, avoiding the pg_usleep loop.
- * Probably not worth the trouble though.  This state shouldn't be one that
- * anyone cares about server power consumption in.
  */
 static void
 recoveryPausesHere(bool endOfRecovery)
@@ -6064,15 +6062,22 @@ recoveryPausesHere(bool endOfRecovery)
 				(errmsg("recovery has paused"),
 				 errhint("Execute pg_wal_replay_resume() to continue.")));
 
+	ConditionVariablePrepareToSleep(&XLogCtl->recoveryPauseChanged);
 	while (RecoveryIsPaused())
 	{
 		HandleStartupProcInterrupts();
 		if (CheckForStandbyTrigger())
-			return;
-		pgstat_report_wait_start(WAIT_EVENT_RECOVERY_PAUSE);
-		pg_usleep(1000000L);	/* 1000 ms */
-		pgstat_report_wait_end();
+			break;
+
+		/*
+		 * We wait on a condition variable that will wake us as soon as the
+		 * pause ends, but we use a timeout so we can check the above exit
+		 * condition periodically too.
+		 */
+		ConditionVariableTimedSleep(&XLogCtl->recoveryPauseChanged, 1000,
+									WAIT_EVENT_RECOVERY_PAUSE);
 	}
+	ConditionVariableCancelSleep();
 }
 
 bool
@@ -6093,6 +6098,8 @@ SetRecoveryPause(bool recoveryPause)
 	SpinLockAcquire(&XLogCtl->info_lck);
 	XLogCtl->recoveryPause = recoveryPause;
 	SpinLockRelease(&XLogCtl->info_lck);
+
+	ConditionVariableBroadcast(&XLogCtl->recoveryPauseChanged);
 }
 
 /*

@@ -207,6 +207,8 @@ WalReceiverMain(void)
 
 		case WALRCV_STOPPED:
 			SpinLockRelease(&walrcv->mutex);
+			/* We might have changed state and fallen through above. */
+			ConditionVariableBroadcast(&walrcv->walRcvStateChanged);
 			proc_exit(1);
 			break;
 
@@ -248,6 +250,8 @@ WalReceiverMain(void)
 	walrcv->latch = &MyProc->procLatch;
 
 	SpinLockRelease(&walrcv->mutex);
+
+	ConditionVariableBroadcast(&walrcv->walRcvStateChanged);
 
 	pg_atomic_write_u64(&WalRcv->writtenUpto, 0);
 
@@ -647,6 +651,8 @@ WalRcvWaitForStartPosition(XLogRecPtr *startpoint, TimeLineID *startpointTLI)
 	walrcv->receiveStartTLI = 0;
 	SpinLockRelease(&walrcv->mutex);
 
+	ConditionVariableBroadcast(&walrcv->walRcvStateChanged);
+
 	set_ps_display("idle");
 
 	/*
@@ -675,6 +681,8 @@ WalRcvWaitForStartPosition(XLogRecPtr *startpoint, TimeLineID *startpointTLI)
 			*startpointTLI = walrcv->receiveStartTLI;
 			walrcv->walRcvState = WALRCV_STREAMING;
 			SpinLockRelease(&walrcv->mutex);
+
+			ConditionVariableBroadcast(&walrcv->walRcvStateChanged);
 			break;
 		}
 		if (walrcv->walRcvState == WALRCV_STOPPING)
@@ -783,6 +791,8 @@ WalRcvDie(int code, Datum arg)
 	walrcv->ready_to_display = false;
 	walrcv->latch = NULL;
 	SpinLockRelease(&walrcv->mutex);
+
+	ConditionVariableBroadcast(&walrcv->walRcvStateChanged);
 
 	/* Terminate the connection gracefully. */
 	if (wrconn != NULL)

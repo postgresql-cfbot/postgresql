@@ -905,6 +905,10 @@
   proname => 'heap_tableam_handler', provolatile => 'v',
   prorettype => 'table_am_handler', proargtypes => 'internal',
   prosrc => 'heap_tableam_handler' },
+{ oid => '8382', descr => 'no_storage access method handler',
+  proname => 'no_storage_tableam_handler', provolatile => 'v',
+  prorettype => 'table_am_handler', proargtypes => 'internal',
+  prosrc => 'no_storage_tableam_handler' },
 
 # Index access method handlers
 { oid => '330', descr => 'btree index access method handler',

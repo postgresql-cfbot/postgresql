@@ -1,0 +1,9 @@
+src/backend/access/no_storage/README
+
+No-Storage Table Access method
+==============================
+
+no_storage is a table access method used as a default fallback for relation
+types that have no physical storage, issuing an error if there is an attempt
+to access this layer of the system.  This prevents rd_tableam to be NULL for
+a relation cache entry.

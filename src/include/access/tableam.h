@@ -861,7 +861,11 @@ typedef struct TableAmRoutine
  * for the relation.  Works for tables, views, foreign tables and partitioned
  * tables.
  */
-extern const TupleTableSlotOps *table_slot_callbacks(Relation rel);
+static inline const TupleTableSlotOps *
+table_slot_callbacks(Relation rel)
+{
+	return rel->rd_tableam->slot_callbacks(rel);
+}
 
 /*
  * Returns slot using the callbacks returned by table_slot_callbacks(), and

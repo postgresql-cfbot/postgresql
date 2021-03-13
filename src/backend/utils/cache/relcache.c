@@ -1214,6 +1214,7 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 		case RELKIND_FOREIGN_TABLE:
 		case RELKIND_PARTITIONED_TABLE:
 			Assert(relation->rd_rel->relam == InvalidOid);
+			RelationInitTableAccessMethod(relation);
 			break;
 	}
 
@@ -1767,7 +1768,23 @@ RelationInitTableAccessMethod(Relation relation)
 	HeapTuple	tuple;
 	Form_pg_am	aform;
 
-	if (relation->rd_rel->relkind == RELKIND_SEQUENCE)
+	/* nothing to do for indexes */
+	if (relation->rd_rel->relkind == RELKIND_INDEX ||
+		relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+		return;
+
+	if (relation->rd_rel->relkind == RELKIND_VIEW ||
+		relation->rd_rel->relkind == RELKIND_COMPOSITE_TYPE ||
+		relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
+		relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		/*
+		 * Relations without storage fall back to their specific to avoid a
+		 * NULL rd_amhandler.
+		 */
+		relation->rd_amhandler = F_NO_STORAGE_TABLEAM_HANDLER;
+	}
+	else if (relation->rd_rel->relkind == RELKIND_SEQUENCE)
 	{
 		/*
 		 * Sequences are currently accessed like heap tables, but it doesn't
@@ -3542,11 +3559,7 @@ RelationBuildLocalRelation(const char *relname,
 
 	rel->rd_rel->relam = accessmtd;
 
-	if (relkind == RELKIND_RELATION ||
-		relkind == RELKIND_SEQUENCE ||
-		relkind == RELKIND_TOASTVALUE ||
-		relkind == RELKIND_MATVIEW)
-		RelationInitTableAccessMethod(rel);
+	RelationInitTableAccessMethod(rel);
 
 	/*
 	 * Okay to insert into the relcache hash table.
@@ -4106,10 +4119,8 @@ RelationCacheInitializePhase3(void)
 
 		/* Reload tableam data if needed */
 		if (relation->rd_tableam == NULL &&
-			(relation->rd_rel->relkind == RELKIND_RELATION ||
-			 relation->rd_rel->relkind == RELKIND_SEQUENCE ||
-			 relation->rd_rel->relkind == RELKIND_TOASTVALUE ||
-			 relation->rd_rel->relkind == RELKIND_MATVIEW))
+			relation->rd_rel->relkind != RELKIND_INDEX &&
+			relation->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
 		{
 			RelationInitTableAccessMethod(relation);
 			Assert(relation->rd_tableam != NULL);
@@ -5883,11 +5894,7 @@ load_relcache_init_file(bool shared)
 				nailed_rels++;
 
 			/* Load table AM data */
-			if (rel->rd_rel->relkind == RELKIND_RELATION ||
-				rel->rd_rel->relkind == RELKIND_SEQUENCE ||
-				rel->rd_rel->relkind == RELKIND_TOASTVALUE ||
-				rel->rd_rel->relkind == RELKIND_MATVIEW)
-				RelationInitTableAccessMethod(rel);
+			RelationInitTableAccessMethod(rel);
 
 			Assert(rel->rd_index == NULL);
 			Assert(rel->rd_indextuple == NULL);

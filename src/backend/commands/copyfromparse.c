@@ -28,6 +28,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/pg_bswap.h"
+#include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -425,12 +426,53 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 	/* only available for text or csv input */
 	Assert(!cstate->opts.binary);
 
-	/* on input just throw the header line away */
-	if (cstate->cur_lineno == 0 && cstate->opts.header_line)
+	/* on input check that the header line is correct if needed */
+	if (cstate->cur_lineno == 0 && cstate->opts.header_line != COPY_HEADER_ABSENT)
 	{
+		ListCell   *cur;
+		TupleDesc   tupDesc;
+
+		tupDesc = RelationGetDescr(cstate->rel);
+
 		cstate->cur_lineno++;
-		if (CopyReadLine(cstate))
-			return false;		/* done */
+		done = CopyReadLine(cstate);
+
+		if (cstate->opts.header_line == COPY_HEADER_MATCH)
+		{
+			if (cstate->opts.csv_mode)
+				fldct = CopyReadAttributesCSV(cstate);
+			else
+				fldct = CopyReadAttributesText(cstate);
+
+			if (fldct < list_length(cstate->attnumlist))
+				ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("missing header")));
+			else if (fldct > list_length(cstate->attnumlist))
+				ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("extra data after last expected header")));
+
+			foreach(cur, cstate->attnumlist)
+			{
+				int                             attnum = lfirst_int(cur);
+				char              *colName = cstate->raw_fields[attnum - 1];
+				Form_pg_attribute attr = TupleDescAttr(tupDesc, attnum - 1);
+
+				if (colName == NULL)
+					colName = cstate->opts.null_print;
+
+				if (namestrcmp(&attr->attname, colName) != 0) {
+					ereport(ERROR,
+							(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+							 errmsg("wrong header for column \"%s\": got \"%s\"",
+									NameStr(attr->attname), colName)));
+				}
+			}
+		}
+
+		if (done)
+			return false;
 	}
 
 	cstate->cur_lineno++;

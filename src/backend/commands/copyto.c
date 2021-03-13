@@ -854,7 +854,7 @@ DoCopyTo(CopyToState cstate)
 														 cstate->file_encoding);
 
 		/* if a header has been requested send the line */
-		if (cstate->opts.header_line)
+		if (cstate->opts.header_line != COPY_HEADER_ABSENT)
 		{
 			bool		hdr_delim = false;
 
@@ -869,8 +869,11 @@ DoCopyTo(CopyToState cstate)
 
 				colname = NameStr(TupleDescAttr(tupDesc, attnum - 1)->attname);
 
-				CopyAttributeOutCSV(cstate, colname, false,
+				if (cstate->opts.csv_mode)
+					CopyAttributeOutCSV(cstate, colname, false,
 									list_length(cstate->attnumlist) == 1);
+				else
+					CopyAttributeOutText(cstate, colname);
 			}
 
 			CopySendEndOfRow(cstate);

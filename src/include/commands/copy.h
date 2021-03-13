@@ -20,6 +20,16 @@
 #include "tcop/dest.h"
 
 /*
+ * Represents whether the header must be absent, present or present and match.
+ */
+typedef enum CopyHeader
+{
+	COPY_HEADER_ABSENT,
+	COPY_HEADER_PRESENT,
+	COPY_HEADER_MATCH
+} CopyHeader;
+
+/*
  * A struct to hold COPY options, in a parsed form. All of these are related
  * to formatting, except for 'freeze', which doesn't really belong here, but
  * it's expedient to parse it along with all the other options.
@@ -32,7 +42,7 @@ typedef struct CopyFormatOptions
 	bool		binary;			/* binary format? */
 	bool		freeze;			/* freeze rows on loading? */
 	bool		csv_mode;		/* Comma Separated Value format? */
-	bool		header_line;	/* CSV header line? */
+	CopyHeader	header_line;	/* CSV or text header line? */
 	char	   *null_print;		/* NULL marker string (server encoding!) */
 	int			null_print_len; /* length of same */
 	char	   *null_print_client;	/* same converted to file encoding */

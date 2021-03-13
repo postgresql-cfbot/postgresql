@@ -315,7 +315,66 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 }
 
 /*
- * Process the statement option list for COPY.
+* Extract a CopyHeader value from a DefElem.
+*/
+static CopyHeader
+DefGetCopyHeader(DefElem *def)
+{
+	/*
+	* If no parameter given, assume "true" is meant.
+	*/
+	if (def->arg == NULL)
+		return COPY_HEADER_PRESENT;
+
+	/*
+	* Allow 0, 1, "true", "false", "on", "off" or "match".
+	*/
+	switch (nodeTag(def->arg))
+	{
+		case T_Integer:
+			switch (intVal(def->arg))
+			{
+				case 0:
+					return COPY_HEADER_ABSENT;
+				case 1:
+					return COPY_HEADER_PRESENT;
+				default:
+					/* otherwise, error out below */
+					break;
+			}
+			break;
+		default:
+			{
+				char	*sval = defGetString(def);
+
+				/*
+				* The set of strings accepted here should match up with the
+				* grammar's opt_boolean_or_string production.
+				*/
+				if (pg_strcasecmp(sval, "true") == 0)
+						return COPY_HEADER_PRESENT;
+				if (pg_strcasecmp(sval, "false") == 0)
+						return COPY_HEADER_ABSENT;
+				if (pg_strcasecmp(sval, "on") == 0)
+						return COPY_HEADER_PRESENT;
+				if (pg_strcasecmp(sval, "off") == 0)
+						return COPY_HEADER_ABSENT;
+				if (pg_strcasecmp(sval, "match") == 0)
+						return COPY_HEADER_MATCH;
+
+			}
+			break;
+	}
+
+	ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("%s requires a boolean or \"match\"",
+					def->defname)));
+	return COPY_HEADER_ABSENT;						/* keep compiler quiet */
+}
+
+/*
+* Process the statement option list for COPY.
  *
  * Scan the options list (a list of DefElem) and transpose the information
  * into *opts_out, applying appropriate error checking.
@@ -410,7 +469,7 @@ ProcessCopyOptions(ParseState *pstate,
 						 errmsg("conflicting or redundant options"),
 						 parser_errposition(pstate, defel->location)));
 			header_specified = true;
-			opts_out->header_line = defGetBoolean(defel);
+			opts_out->header_line = DefGetCopyHeader(defel);
 		}
 		else if (strcmp(defel->defname, "quote") == 0)
 		{
@@ -591,10 +650,10 @@ ProcessCopyOptions(ParseState *pstate,
 				 errmsg("COPY delimiter cannot be \"%s\"", opts_out->delim)));
 
 	/* Check header */
-	if (!opts_out->csv_mode && opts_out->header_line)
+	if (opts_out->binary && opts_out->header_line != COPY_HEADER_ABSENT)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("COPY HEADER available only in CSV mode")));
+				 errmsg("COPY HEADER available only in CSV and text mode")));
 
 	/* Check quote */
 	if (!opts_out->csv_mode && opts_out->quote != NULL)

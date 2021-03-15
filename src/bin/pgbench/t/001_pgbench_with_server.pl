@@ -755,6 +755,67 @@ pgbench(
 }
 	});
 
+# Working \startpipeline
+pgbench(
+	'-t 1 -n -M extended',
+	0,
+	[ qr{type: .*/001_pgbench_pipeline}, qr{processed: 1/1} ],
+	[],
+	'pgbench startpipeline command',
+	{
+		'001_pgbench_pipeline' => q{
+-- test startpipeline
+\startpipeline
+} . "select 1;\n" x 10 . q{
+\endpipeline
+}
+	});
+
+# Try \startpipeline twice
+pgbench(
+	'-t 1 -n -M extended',
+	2,
+	[],
+	[qr{already in pipeline mode}],
+	'pgbench startpipeline command',
+	{
+		'001_pgbench_pipeline_2' => q{
+-- startpipeline twice
+\startpipeline
+\startpipeline
+}
+	});
+
+# Try to end a pipeline that hasn't started
+pgbench(
+	'-t 1 -n -M extended',
+	2,
+	[],
+	[qr{not in pipeline mode}],
+	'pgbench startpipeline command',
+	{
+		'001_pgbench_pipeline_3' => q{
+-- pipeline not started
+\endpipeline
+}
+	});
+
+# Try \gset in pipeline mode
+pgbench(
+	'-t 1 -n -M extended',
+	2,
+	[],
+	[qr{gset is not allowed in pipeline mode}],
+	'pgbench startpipeline command',
+	{
+		'001_pgbench_pipeline_gset' => q{
+\startpipeline
+select 1 \gset f
+\endpipeline
+}
+	});
+
+
 # trigger many expression errors
 my @errors = (
 

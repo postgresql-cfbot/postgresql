@@ -226,6 +226,13 @@ typedef struct ControlFileData
 	 */
 	char		mock_authentication_nonce[MOCK_AUTH_NONCE_LEN];
 
+	/*
+	 * This indicates LSN just after the oldest wal_level change to lower than
+	 * wal_level=replica because it causes discontinuity of snapshots. Reset
+	 * by creating a new base backup, using pg_basebackup.
+	 */
+	XLogRecPtr	wal_level_drop;
+
 	/* CRC of all above ... MUST BE LAST! */
 	pg_crc32c	crc;
 } ControlFileData;

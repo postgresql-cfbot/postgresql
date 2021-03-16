@@ -701,7 +701,10 @@ GuessControlValues(void)
 	ControlFile.checkPoint = ControlFile.checkPointCopy.redo;
 	ControlFile.unloggedLSN = FirstNormalUnloggedLSN;
 
-	/* minRecoveryPoint, backupStartPoint and backupEndPoint can be left zero */
+	/*
+	 * minRecoveryPoint, backupStartPoint, backupEndPoint and wal_level_drop
+	 * can be left zero
+	 */
 
 	ControlFile.wal_level = WAL_LEVEL_MINIMAL;
 	ControlFile.wal_log_hints = false;
@@ -901,6 +904,7 @@ RewriteControlFile(void)
 	ControlFile.backupStartPoint = 0;
 	ControlFile.backupEndPoint = 0;
 	ControlFile.backupEndRequired = false;
+	ControlFile.wal_level_drop = 0;
 
 	/*
 	 * Force the defaults for max_* settings. The values don't really matter

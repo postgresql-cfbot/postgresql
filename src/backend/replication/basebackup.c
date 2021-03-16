@@ -739,6 +739,9 @@ perform_base_backup(basebackup_options *opt)
 	/* clean up the resource owner we created */
 	WalSndResourceCleanup(true);
 
+	/* reset wal_level_drop, because the gap of wal_level has been restored */
+	ResetWalLevelDrop();
+
 	pgstat_progress_end_command();
 }
 

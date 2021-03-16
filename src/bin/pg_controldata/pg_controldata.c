@@ -328,5 +328,8 @@ main(int argc, char *argv[])
 		   ControlFile->data_checksum_version);
 	printf(_("Mock authentication nonce:            %s\n"),
 		   mock_auth_nonce_str);
+	printf(_("Oldest location of wal_level change to minimal: %X/%X\n"),
+		   (uint32) (ControlFile->wal_level_drop >> 32),
+		   (uint32) ControlFile->wal_level_drop);
 	return 0;
 }

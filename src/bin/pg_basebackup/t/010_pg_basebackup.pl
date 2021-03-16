@@ -6,7 +6,7 @@ use File::Basename qw(basename dirname);
 use File::Path qw(rmtree);
 use PostgresNode;
 use TestLib;
-use Test::More tests => 109;
+use Test::More tests => 118;
 
 program_help_ok('pg_basebackup');
 program_version_ok('pg_basebackup');
@@ -575,3 +575,65 @@ rmtree("$tempdir/backup_corrupt4");
 
 $node->safe_psql('postgres', "DROP TABLE corrupt1;");
 $node->safe_psql('postgres', "DROP TABLE corrupt2;");
+
+# confirm pg_basebackup works together with the control
+# file's parameter to trace wal_level drop.
+my $another_node = get_new_node('wal_level');
+my $backup_name = 'my_backup';
+
+$another_node->init(has_archiving => 1);
+$another_node->append_conf('postgresql.conf', 'wal_level = replica');
+$another_node->start;
+
+my $data = $another_node->data_dir;
+command_like(
+	[ 'pg_controldata', $data ],
+	qr/Oldest location of wal_level change to minimal:.*0\/0/,
+	'check the initial value is equal to 0/0');
+$another_node->stop;
+
+$another_node->append_conf('postgresql.conf',
+					   'wal_level = logical');
+$another_node->start;
+command_like(
+	[ 'pg_controldata', $data ],
+	qr/Oldest location of wal_level change to minimal:.*0\/0/,
+	'raising the wal_level from raplica to logical does not change initial value');
+$another_node->stop;
+
+$another_node->append_conf('postgresql.conf',q[
+wal_level = minimal
+max_wal_senders = 0
+archive_mode = off
+]);
+$another_node->start;
+$another_node->stop;
+
+my ($stdout, $stderr) = run_command([ 'pg_controldata', $data ]);
+my @control_data = split("\n", $stdout);
+my $wal_level_drop_lsn = undef;
+foreach (@control_data)
+{
+	if ($_  =~ /^Oldest location of wal_level change to minimal:.*\/(.*)/)
+	{
+		$wal_level_drop_lsn = $1;
+		chomp($wal_level_drop_lsn);
+		last;
+	}
+}
+die unless defined $wal_level_drop_lsn;
+die if $wal_level_drop_lsn eq '0';
+
+$another_node->append_conf('postgresql.conf', q[
+wal_level = replica
+max_wal_senders = 10
+]);
+
+$another_node->start;
+$another_node->backup($backup_name);
+$another_node->stop;
+
+command_like(
+	[ 'pg_controldata', $data ],
+	qr/Oldest location of wal_level change to minimal:.*0\/0/,
+	'the parameter has been changed to the initial value');

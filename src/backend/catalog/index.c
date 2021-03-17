@@ -2242,17 +2242,27 @@ index_constraint_create(Relation heapRelation,
  * CONCURRENTLY.
  */
 void
-index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
+index_drop(Oid origindexId, bool concurrent, bool concurrent_lock_mode)
 {
-	Oid			heapId;
-	Relation	userHeapRelation;
-	Relation	userIndexRelation;
+	bool		is_partitioned;
+	/* These are lists to handle the case of partitioned indexes.  In the
+	 * normal case, they're length 1 */
+	List		*indexIds;
+	List		*heapIds = NIL;
+	List		*userIndexRelations = NIL,
+				*userHeapRelations = NIL;
+	List		*heaplocktags = NIL;
+	List		*heaprelids = NIL,
+				*indexrelids = NIL;
+
+	ListCell	*lc, *lc2, *lc3;
+
+	MemoryContext   long_context = AllocSetContextCreate(TopMemoryContext,
+			"DROP INDEX", ALLOCSET_DEFAULT_SIZES);
+	MemoryContext   old_context;
+
 	Relation	indexRelation;
-	HeapTuple	tuple;
-	bool		hasexprs;
-	LockRelId	heaprelid,
-				indexrelid;
-	LOCKTAG		heaplocktag;
+	Relation	pg_depend;
 	LOCKMODE	lockmode;
 
 	/*
@@ -2261,7 +2271,7 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	 * lock (see comments in RemoveRelations), and a non-concurrent DROP is
 	 * more efficient.
 	 */
-	Assert(get_rel_persistence(indexId) != RELPERSISTENCE_TEMP ||
+	Assert(get_rel_persistence(origindexId) != RELPERSISTENCE_TEMP ||
 		   (!concurrent && !concurrent_lock_mode));
 
 	/*
@@ -2282,16 +2292,38 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	 * AccessExclusiveLock on the index below, once we're sure nobody else is
 	 * using it.)
 	 */
-	heapId = IndexGetRelation(indexId, false);
 	lockmode = (concurrent || concurrent_lock_mode) ? ShareUpdateExclusiveLock : AccessExclusiveLock;
-	userHeapRelation = table_open(heapId, lockmode);
-	userIndexRelation = index_open(indexId, lockmode);
 
-	/*
-	 * We might still have open queries using it in our own session, which the
-	 * above locking won't prevent, so test explicitly.
-	 */
-	CheckTableNotInUse(userIndexRelation, "DROP INDEX");
+	old_context = MemoryContextSwitchTo(long_context);
+	is_partitioned = (get_rel_relkind(origindexId) == RELKIND_PARTITIONED_INDEX);
+	if (is_partitioned)
+		/* This includes the index itself */
+		indexIds = find_all_inheritors(origindexId, lockmode, NULL);
+	else
+		indexIds = list_make1_oid(origindexId);
+
+	foreach(lc, indexIds)
+	{
+		Oid	indexId = lfirst_oid(lc);
+		Relation	userHeapRelation;
+		Relation	userIndexRelation;
+		Oid			heapId;
+
+		heapId = IndexGetRelation(indexId, false);
+		heapIds = lappend_oid(heapIds, heapId);
+
+		userHeapRelation = table_open(heapId, lockmode);
+		userHeapRelations = lappend(userHeapRelations, userHeapRelation);
+		userIndexRelation = index_open(indexId, lockmode);
+		userIndexRelations = lappend(userIndexRelations, userIndexRelation);
+
+		/*
+		 * We might still have open queries using it in our own session, which the
+		 * above locking won't prevent, so test explicitly.
+		 */
+		CheckTableNotInUse(userIndexRelation, "DROP INDEX");
+	}
+	MemoryContextSwitchTo(old_context);
 
 	/*
 	 * Drop Index Concurrently is more or less the reverse process of Create
@@ -2344,66 +2376,96 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("DROP INDEX CONCURRENTLY must be first action in transaction")));
 
-		/*
-		 * Mark index invalid by updating its pg_index entry
-		 */
-		index_set_state_flags(indexId, INDEX_DROP_CLEAR_VALID);
+		MemoryContextSwitchTo(long_context);
+		forthree(lc, indexIds, lc2, userHeapRelations, lc3, userIndexRelations)
+		{
+			Oid			indexId = lfirst_oid(lc);
+			Relation 	userHeapRelation = lfirst(lc2);
+			Relation 	userIndexRelation = lfirst(lc3);
 
-		/*
-		 * Invalidate the relcache for the table, so that after this commit
-		 * all sessions will refresh any cached plans that might reference the
-		 * index.
-		 */
-		CacheInvalidateRelcache(userHeapRelation);
+			LOCKTAG		*locktag;
+			LockRelId	*heaprelid, *indexrelid;
 
-		/* save lockrelid and locktag for below, then close but keep locks */
-		heaprelid = userHeapRelation->rd_lockInfo.lockRelId;
-		SET_LOCKTAG_RELATION(heaplocktag, heaprelid.dbId, heaprelid.relId);
-		indexrelid = userIndexRelation->rd_lockInfo.lockRelId;
+			/*
+			 * Mark index invalid by updating its pg_index entry
+			 */
+			index_set_state_flags(indexId, INDEX_DROP_CLEAR_VALID);
 
-		table_close(userHeapRelation, NoLock);
-		index_close(userIndexRelation, NoLock);
+			/*
+			 * Invalidate the relcache for the table, so that after this commit
+			 * all sessions will refresh any cached plans that might reference the
+			 * index.
+			 */
+			CacheInvalidateRelcache(userHeapRelation);
 
-		/*
-		 * We must commit our current transaction so that the indisvalid
-		 * update becomes visible to other transactions; then start another.
-		 * Note that any previously-built data structures are lost in the
-		 * commit.  The only data we keep past here are the relation IDs.
-		 *
-		 * Before committing, get a session-level lock on the table, to ensure
-		 * that neither it nor the index can be dropped before we finish. This
-		 * cannot block, even if someone else is waiting for access, because
-		 * we already have the same lock within our transaction.
-		 */
-		LockRelationIdForSession(&heaprelid, ShareUpdateExclusiveLock);
-		LockRelationIdForSession(&indexrelid, ShareUpdateExclusiveLock);
+			/* save lockrelid and locktag for below, then close but keep locks */
+			heaprelid = palloc(sizeof(*heaprelid));
+			*heaprelid = userHeapRelation->rd_lockInfo.lockRelId;
+
+			locktag = palloc(sizeof(*locktag));
+			SET_LOCKTAG_RELATION(*locktag, heaprelid->dbId, heaprelid->relId);
+			heaplocktags = lappend(heaplocktags, locktag);
+
+			indexrelid = palloc(sizeof(*indexrelid));
+			*indexrelid = userIndexRelation->rd_lockInfo.lockRelId;
+
+			heaprelids = lappend(heaprelids, heaprelid);
+			indexrelids = lappend(indexrelids, indexrelid);
+
+			table_close(userHeapRelation, NoLock);
+			index_close(userIndexRelation, NoLock);
+
+			/*
+			 * We must commit our current transaction so that the indisvalid
+			 * update becomes visible to other transactions; then start another.
+			 *
+			 * Before committing, get a session-level lock on the table, to ensure
+			 * that neither it nor the index can be dropped before we finish. This
+			 * cannot block, even if someone else is waiting for access, because
+			 * we already have the same lock within our transaction.
+			 */
+			LockRelationIdForSession(heaprelid, ShareUpdateExclusiveLock);
+			LockRelationIdForSession(indexrelid, ShareUpdateExclusiveLock);
+		}
+		MemoryContextSwitchTo(old_context);
+
+		list_free(userHeapRelations);
+		list_free(userIndexRelations);
+		userHeapRelations = userIndexRelations = NIL;
 
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 		StartTransactionCommand();
 
-		/*
-		 * Now we must wait until no running transaction could be using the
-		 * index for a query.  Use AccessExclusiveLock here to check for
-		 * running transactions that hold locks of any kind on the table. Note
-		 * we do not need to worry about xacts that open the table for reading
-		 * after this point; they will see the index as invalid when they open
-		 * the relation.
-		 *
-		 * Note: the reason we use actual lock acquisition here, rather than
-		 * just checking the ProcArray and sleeping, is that deadlock is
-		 * possible if one of the transactions in question is blocked trying
-		 * to acquire an exclusive lock on our table.  The lock code will
-		 * detect deadlock and error out properly.
-		 *
-		 * Note: we report progress through WaitForLockers() unconditionally
-		 * here, even though it will only be used when we're called by REINDEX
-		 * CONCURRENTLY and not when called by DROP INDEX CONCURRENTLY.
-		 */
-		WaitForLockers(heaplocktag, AccessExclusiveLock, true);
+		forthree(lc, heaplocktags, lc2, heapIds, lc3, indexIds)
+		{
+			LOCKTAG	*heaplocktag = lfirst(lc);
+			Oid		heapId = lfirst_oid(lc2);
+			Oid		indexId = lfirst_oid(lc3);
 
-		/* Finish invalidation of index and mark it as dead */
-		index_concurrently_set_dead(heapId, indexId);
+			/*
+			 * Now we must wait until no running transaction could be using the
+			 * index for a query.  Use AccessExclusiveLock here to check for
+			 * running transactions that hold locks of any kind on the table. Note
+			 * we do not need to worry about xacts that open the table for reading
+			 * after this point; they will see the index as invalid when they open
+			 * the relation.
+			 *
+			 * Note: the reason we use actual lock acquisition here, rather than
+			 * just checking the ProcArray and sleeping, is that deadlock is
+			 * possible if one of the transactions in question is blocked trying
+			 * to acquire an exclusive lock on our table.  The lock code will
+			 * detect deadlock and error out properly.
+			 *
+			 * Note: we report progress through WaitForLockers() unconditionally
+			 * here, even though it will only be used when we're called by REINDEX
+			 * CONCURRENTLY and not when called by DROP INDEX CONCURRENTLY.
+			 */
+			WaitForLockers(*heaplocktag, AccessExclusiveLock, true);
+
+			/* Finish invalidation of index and mark it as dead */
+			index_concurrently_set_dead(heapId, indexId);
+		}
 
 		/*
 		 * Again, commit the transaction to make the pg_index update visible
@@ -2411,105 +2473,147 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 		 */
 		CommitTransactionCommand();
 		StartTransactionCommand();
+		PushActiveSnapshot(GetTransactionSnapshot());
 
-		/*
-		 * Wait till every transaction that saw the old index state has
-		 * finished.  See above about progress reporting.
-		 */
-		WaitForLockers(heaplocktag, AccessExclusiveLock, true);
+		MemoryContextSwitchTo(long_context);
+		forthree(lc, heaplocktags, lc2, heapIds, lc3, indexIds)
+		{
+			LOCKTAG *heaplocktag = lfirst(lc);
+			Oid		heapId		= lfirst_oid(lc2);
+			Oid		indexId		= lfirst_oid(lc3);
 
-		/*
-		 * Re-open relations to allow us to complete our actions.
-		 *
-		 * At this point, nothing should be accessing the index, but lets
-		 * leave nothing to chance and grab AccessExclusiveLock on the index
-		 * before the physical deletion.
-		 */
-		userHeapRelation = table_open(heapId, ShareUpdateExclusiveLock);
-		userIndexRelation = index_open(indexId, AccessExclusiveLock);
+			Relation userHeapRelation, userIndexRelation;
+
+			/*
+			 * Wait till every transaction that saw the old index state has
+			 * finished.  See above about progress reporting.
+			 */
+			WaitForLockers(*heaplocktag, AccessExclusiveLock, true);
+
+			/*
+			 * Re-open relations to allow us to complete our actions.
+			 *
+			 * At this point, nothing should be accessing the index, but lets
+			 * leave nothing to chance and grab AccessExclusiveLock on the index
+			 * before the physical deletion.
+			 */
+			userHeapRelation = table_open(heapId, ShareUpdateExclusiveLock);
+			userHeapRelations = lappend(userHeapRelations, userHeapRelation);
+			userIndexRelation = index_open(indexId, AccessExclusiveLock);
+			userIndexRelations = lappend(userIndexRelations, userIndexRelation);
+		}
+		MemoryContextSwitchTo(old_context);
 	}
 	else
 	{
 		/* Not concurrent, so just transfer predicate locks and we're good */
-		TransferPredicateLocksToHeapRelation(userIndexRelation);
+		foreach(lc, userIndexRelations)
+		{
+			Relation userIndexRelation = lfirst(lc);
+			TransferPredicateLocksToHeapRelation(userIndexRelation);
+		}
 	}
 
-	/*
-	 * Schedule physical removal of the files (if any)
-	 */
-	if (userIndexRelation->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
-		RelationDropStorage(userIndexRelation);
+	/* Schedule physical removal of the files (if any) */
+	forboth(lc, userIndexRelations, lc2, indexIds)
+	{
+		Relation userIndexRelation = lfirst(lc);
+		Oid		indexId = lfirst_oid(lc2);
 
-	/*
-	 * Close and flush the index's relcache entry, to ensure relcache doesn't
-	 * try to rebuild it while we're deleting catalog entries. We keep the
-	 * lock though.
-	 */
-	index_close(userIndexRelation, NoLock);
+		if (userIndexRelation->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
+			RelationDropStorage(userIndexRelation);
 
-	RelationForgetRelation(indexId);
+		/*
+		 * Close and flush the index's relcache entry, to ensure relcache doesn't
+		 * try to rebuild it while we're deleting catalog entries. We keep the
+		 * lock though.
+		 */
+		index_close(userIndexRelation, NoLock);
 
-	/*
-	 * fix INDEX relation, and check for expressional index
-	 */
+		RelationForgetRelation(indexId);
+	}
+
+	/* fix INDEX relation, and check for expressional index */
 	indexRelation = table_open(IndexRelationId, RowExclusiveLock);
+	foreach(lc, indexIds)
+	{
+		Oid			indexId = lfirst_oid(lc);
+		HeapTuple	tuple;
+		bool		hasexprs;
 
-	tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexId));
-	if (!HeapTupleIsValid(tuple))
-		elog(ERROR, "cache lookup failed for index %u", indexId);
+		tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexId));
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for index %u", indexId);
 
-	hasexprs = !heap_attisnull(tuple, Anum_pg_index_indexprs,
-							   RelationGetDescr(indexRelation));
+		hasexprs = !heap_attisnull(tuple, Anum_pg_index_indexprs,
+								   RelationGetDescr(indexRelation));
 
-	CatalogTupleDelete(indexRelation, &tuple->t_self);
+		CatalogTupleDelete(indexRelation, &tuple->t_self);
 
-	ReleaseSysCache(tuple);
+		ReleaseSysCache(tuple);
+
+		/*
+		 * if it has any expression columns, we might have stored statistics about
+		 * them.
+		 */
+		if (hasexprs)
+			RemoveStatistics(indexId, 0);
+	}
 	table_close(indexRelation, RowExclusiveLock);
 
-	/*
-	 * if it has any expression columns, we might have stored statistics about
-	 * them.
-	 */
-	if (hasexprs)
-		RemoveStatistics(indexId, 0);
+	pg_depend = table_open(DependRelationId, RowExclusiveLock);
+	foreach(lc, indexIds)
+	{
+		Oid indexId = lfirst_oid(lc);
+		/* fix ATTRIBUTE relation */
+		DeleteAttributeTuples(indexId);
+		/* fix RELATION relation */
+		DeleteRelationTuple(indexId);
+		/* fix INHERITS relation */
+		DeleteInheritsTuple(indexId, InvalidOid);
 
-	/*
-	 * fix ATTRIBUTE relation
-	 */
-	DeleteAttributeTuples(indexId);
+		/* The original parent index will have its dependencies dropped by deleteMultiple */
+		if (is_partitioned && concurrent && indexId != origindexId)
+		{
+			ObjectAddress	obj;
+			ObjectAddressSet(obj, RelationRelationId, indexId);
+			deleteOneDepends(&obj, &pg_depend, 0);
+		}
+	}
+	table_close(pg_depend, RowExclusiveLock);
 
-	/*
-	 * fix RELATION relation
-	 */
-	DeleteRelationTuple(indexId);
+	foreach(lc, userHeapRelations)
+	{
+		Relation userHeapRelation = lfirst(lc);
 
-	/*
-	 * fix INHERITS relation
-	 */
-	DeleteInheritsTuple(indexId, InvalidOid);
+		/*
+		 * We are presently too lazy to attempt to compute the new correct value
+		 * of relhasindex (the next VACUUM will fix it if necessary). So there is
+		 * no need to update the pg_class tuple for the owning relation. But we
+		 * must send out a shared-cache-inval notice on the owning relation to
+		 * ensure other backends update their relcache lists of indexes.  (In the
+		 * concurrent case, this is redundant but harmless.)
+		 */
+		CacheInvalidateRelcache(userHeapRelation);
 
-	/*
-	 * We are presently too lazy to attempt to compute the new correct value
-	 * of relhasindex (the next VACUUM will fix it if necessary). So there is
-	 * no need to update the pg_class tuple for the owning relation. But we
-	 * must send out a shared-cache-inval notice on the owning relation to
-	 * ensure other backends update their relcache lists of indexes.  (In the
-	 * concurrent case, this is redundant but harmless.)
-	 */
-	CacheInvalidateRelcache(userHeapRelation);
-
-	/*
-	 * Close owning rel, but keep lock
-	 */
-	table_close(userHeapRelation, NoLock);
+		/*
+		 * Close owning rel, but keep lock
+		 */
+		table_close(userHeapRelation, NoLock);
+	}
 
 	/*
 	 * Release the session locks before we go.
 	 */
 	if (concurrent)
 	{
-		UnlockRelationIdForSession(&heaprelid, ShareUpdateExclusiveLock);
-		UnlockRelationIdForSession(&indexrelid, ShareUpdateExclusiveLock);
+		forboth(lc, heaprelids, lc2, indexrelids)
+		{
+			LockRelId	*heaprelid = lfirst(lc),
+						*indexrelid = lfirst(lc2);
+			UnlockRelationIdForSession(heaprelid, ShareUpdateExclusiveLock);
+			UnlockRelationIdForSession(indexrelid, ShareUpdateExclusiveLock);
+		}
 	}
 }
 

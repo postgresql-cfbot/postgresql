@@ -3464,6 +3464,7 @@ CopyCreateStmtFields(const CreateStmt *from, CreateStmt *newnode)
 	COPY_STRING_FIELD(tablespacename);
 	COPY_STRING_FIELD(accessMethod);
 	COPY_SCALAR_FIELD(if_not_exists);
+	COPY_SCALAR_FIELD(systemVersioning);
 }
 
 static CreateStmt *
@@ -4877,6 +4878,30 @@ _copyForeignKeyCacheInfo(const ForeignKeyCacheInfo *from)
 	return newnode;
 }
 
+static RowTime *
+_copyRowTime(const RowTime * from)
+{
+	RowTime    *newnode = makeNode(RowTime);
+
+	COPY_STRING_FIELD(start_time);
+	COPY_STRING_FIELD(end_time);
+
+	return newnode;
+}
+
+static TemporalClause *
+_copyTemporalClause(const TemporalClause * from)
+{
+	TemporalClause *newnode = makeNode(TemporalClause);
+
+	COPY_SCALAR_FIELD(kind);
+	COPY_NODE_FIELD(from);
+	COPY_NODE_FIELD(to);
+	COPY_NODE_FIELD(relation);
+
+	return newnode;
+}
+
 
 /*
  * copyObjectImpl -- implementation of copyObject(); see nodes/nodes.h
@@ -5779,6 +5804,12 @@ copyObjectImpl(const void *from)
 			break;
 		case T_PartitionCmd:
 			retval = _copyPartitionCmd(from);
+			break;
+		case T_RowTime:
+			retval = _copyRowTime(from);
+			break;
+		case T_TemporalClause:
+			retval = _copyTemporalClause(from);
 			break;
 
 			/*

@@ -4917,6 +4917,104 @@ EXPLAIN SELECT count(*) FROM measurement WHERE logdate &gt;= DATE '2008-01-01';
    </para>
  </sect1>
 
+ <sect1 id="ddl-temporal">
+  <title>Temporal Data</title>
+
+   <indexterm>
+    <primary>temporal data</primary>
+   </indexterm>
+   <indexterm>
+    <primary>system versioning</primary>
+   </indexterm>
+   <indexterm>
+    <primary>SYSTEM_TIME</primary>
+   </indexterm>
+
+   <para>
+    <productname>PostgreSQL</productname> implements a table option
+    for system versioning that records each change permanently,
+    allowing access to the full history of data changes.
+   </para>
+
+   <para>
+    System versioning is optional and can be defined easily for a table:
+<programlisting>
+CREATE TABLE products (
+    product_no integer,
+    name text,
+    price numeric
+) WITH SYSTEM VERSIONING;
+</programlisting>
+    When system versioning is specified two columns are added which
+    record the start timestamp and end timestamp of each row verson.
+    The data type of these columns will be TIMESTAMP WITH TIME ZONE.
+    By default, the column names will be StartTime and EndTime, though
+    you can specify different names if you choose. The StartTime
+    column will be automatically added to the Primary Key of the
+    table.
+   </para>
+   <para>
+    StartTime will be generated always when a new row version is added
+    by INSERT or UPDATE, leaving EndTime set at Infinity. EndTime will
+    be generated always when a row version is UPDATEd or DELETEd.
+    This sequence of commands produces the full history shown in
+    the resulting query:
+<programlisting>
+INSERT INTO products VALUES (100, 'Washing Machine', 300.0);
+INSERT INTO products VALUES (200, 'Extended Warranty', 50.0);
+INSERT INTO products VALUES (300, 'Laptop', 250.0);
+UPDATE products SET price = 75.0 WHERE product_no = 200;
+UPDATE products SET price = 350.0 WHERE product_no = 300;
+UPDATE products SET product_no = 400 WHERE product_no = 100;
+DELETE FROM products WHERE product_no = 300;
+INSERT INTO products VALUES (500, 'Spare Parts', 25.0);
+
+SELECT * FROM products FOR system_time FROM '-infinity' TO 'infinity' ORDER BY product_no, start_timestamp;
+ product_no |       name        | price |           start_timestamp           |            end_timestamp            
+------------+-------------------+-------+-------------------------------------+-------------------------------------
+        100 | Washing Machine   | 300.0 | Mon Jan 11 03:47:36.020361 2021 PST | Mon Jan 11 03:47:36.027029 2021 PST
+        200 | Extended Warranty |  50.0 | Mon Jan 11 03:47:36.022847 2021 PST | Mon Jan 11 03:47:36.02641 2021 PST
+        200 | Extended Warranty |  75.0 | Mon Jan 11 03:47:36.02641 2021 PST  | infinity
+        300 | Laptop            | 250.0 | Mon Jan 11 03:47:36.023316 2021 PST | Mon Jan 11 03:47:36.026779 2021 PST
+        300 | Laptop            | 350.0 | Mon Jan 11 03:47:36.026779 2021 PST | Mon Jan 11 03:47:36.029086 2021 PST
+        400 | Washing Machine   | 300.0 | Mon Jan 11 03:47:36.027029 2021 PST | infinity
+        500 | Spare Parts       |  25.0 | Mon Jan 11 03:47:36.032077 2021 PST | infinity
+(7 rows)
+</programlisting>
+    Note that this is
+    implemented by having an UPDATE become an INSERT of the data from
+    the old row version with EndTime set, plus the actual UPDATE,
+    increasing the number of actual visible rows in the table.
+    DELETE becomes an UPDATE of the old row version with EndTime set.
+    This means that UPDATEs and DELETEs still cause bloat that needs
+    to be removed by VACUUM.
+   </para>
+   <para>
+    Temporal queries are discussed in <xref linkend="temporal-queries"/>.
+   </para>
+   <para>
+    The system versioning period end column will be added to the
+    Primary Key of the table as a way of ensuring that concurrent
+    INSERTs conflict correctly. This alters the way that Foreign
+    Keys work for tables with system versioning.
+   </para>
+   <para>
+    The user may never set the system time column values explicitly
+    on INSERT for generated columns. Currently, UPDATE does allow
+    setting the period start and end dates to DEFAULT values.
+   </para>
+   <para>
+    SELECT * currently returns the period start and end columns, even
+    when added implicitly. 
+   </para>
+   <para>
+    The SQL Standard defines that the timestamps used should be the
+    CURRENT_TIMESTAMP value defined at statement start. This currently
+    leads to anomalies in some cases where the EndTime can be set to
+    a value earlier than the StartTime.
+   </para>
+ </sect1>
+
  <sect1 id="ddl-others">
   <title>Other Database Objects</title>
 

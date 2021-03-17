@@ -32,6 +32,7 @@ test: fk-partitioned-2
 test: eval-plan-qual
 test: eval-plan-qual-trigger
 test: lock-update-delete
+test: lock-update-delete-system-versioned
 test: lock-update-traversal
 test: inherit-temp
 test: insert-conflict-do-nothing

@@ -137,6 +137,9 @@ base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner)
 	 */
 	switch (cur_token)
 	{
+		case FOR:
+			cur_token_length = 3;
+			break;
 		case NOT:
 			cur_token_length = 3;
 			break;
@@ -188,6 +191,10 @@ base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner)
 	/* Replace cur_token if needed, based on lookahead */
 	switch (cur_token)
 	{
+		case FOR:
+			if (next_token == SYSTEM_TIME)
+				cur_token = FOR_LA;
+			break;
 		case NOT:
 			/* Replace NOT by NOT_LA if it's followed by BETWEEN, IN, etc */
 			switch (next_token)

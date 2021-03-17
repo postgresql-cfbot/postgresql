@@ -47,6 +47,7 @@
 #include "rewrite/rewriteManip.h"
 #include "utils/builtins.h"
 #include "utils/rel.h"
+#include "optimizer/plancat.h"
 
 
 /* Hook for plugins to get control at end of parse analysis */
@@ -454,6 +455,11 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 	/* done building the range table and jointree */
 	qry->rtable = pstate->p_rtable;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, qual);
+
+	/*
+	 * Check and add filter clause to filter out historical data.
+	 */
+	add_history_data_filter(qry);
 
 	qry->hasSubLinks = pstate->p_hasSubLinks;
 	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
@@ -1230,6 +1236,15 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 	/* process the FROM clause */
 	transformFromClause(pstate, stmt->fromClause);
 
+	/* Add temporal filter clause to the rest of where clause */
+	if (pstate->p_tempwhere != NULL)
+	{
+		if (stmt->whereClause)
+			stmt->whereClause = makeAndExpr(stmt->whereClause, pstate->p_tempwhere, 0);
+		else
+			stmt->whereClause = pstate->p_tempwhere;
+	}
+
 	/* transform targetlist */
 	qry->targetList = transformTargetList(pstate, stmt->targetList,
 										  EXPR_KIND_SELECT_TARGET);
@@ -1326,6 +1341,11 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 	/* this must be done after collations, for reliable comparison of exprs */
 	if (pstate->p_hasAggs || qry->groupClause || qry->groupingSets || qry->havingQual)
 		parseCheckAggregates(pstate, qry);
+
+	/*
+	 * Check and add filter clause to filter out historical data.
+	 */
+	add_history_data_filter(qry);
 
 	return qry;
 }
@@ -2285,6 +2305,11 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+
+	/*
+	 * Check and add filter clause to filter out historical data.
+	 */
+	add_history_data_filter(qry);
 
 	assign_query_collations(pstate, qry);
 

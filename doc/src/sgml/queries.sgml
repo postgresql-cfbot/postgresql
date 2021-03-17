@@ -2649,4 +2649,92 @@ SELECT * FROM t;
 
  </sect1>
 
+ <sect1 id="temporal-queries">
+  <title>Temporal Queries</title>
+
+   <para>
+    <productname>PostgreSQL</productname> implements an option to
+    to add system versioning onto a user table. Such tables can
+    be accessed normally to see the current contents, but also
+    allow you to access data using both temporal and
+    historical queries.  Queries must specify a period name,
+    which for system versioning must be <quote>SYSTEM_TIME</quote>.
+   </para>
+
+   <para>
+    Historical queries show the changes to rows over time, such as the
+    following query that shows changes to a company's products and pricing:
+<programlisting>
+SELECT * FROM products FOR system_time BETWEEN '-infinity' AND 'infinity' ORDER BY product_no, start_timestamp;
+ product_no |       name        | price |           start_timestamp           |            end_timestamp            
+------------+-------------------+-------+-------------------------------------+-------------------------------------
+        100 | Washing Machine   | 300.0 | Mon Jan 11 03:47:36.020361 2021 PST | Mon Jan 11 08:47:36.027029 2021 PST
+        200 | Extended Warranty |  50.0 | Mon Jan 11 03:47:36.022847 2021 PST | Mon Jan 11 05:47:36.02641 2021 PST
+        200 | Extended Warranty |  75.0 | Mon Jan 11 05:47:36.02641 2021 PST  | infinity
+        300 | Laptop            | 250.0 | Mon Jan 11 03:47:36.023316 2021 PST | Mon Jan 11 06:47:36.026779 2021 PST
+        300 | Laptop            | 350.0 | Mon Jan 11 06:47:36.026779 2021 PST | Mon Jan 11 07:47:36.029086 2021 PST
+        400 | Washing Machine   | 300.0 | Mon Jan 11 08:47:36.027029 2021 PST | infinity
+        500 | Spare Parts       |  25.0 | Mon Jan 11 09:47:36.032077 2021 PST | infinity
+(7 rows)
+</programlisting>
+    This query shows the full history over all time since it includes
+    all changes between a timestamp of '-infinity' to 'infinity'.
+    The user can specify tighter time ranges to filter away unwanted
+    parts of the change history.
+   </para>
+
+   <para>
+    Normal non-temporal queries show the current contents of the
+    system versioned table, just like normal tables:
+<programlisting>
+SELECT product_no, name, price FROM products ORDER BY product_no;
+ product_no |       name        | price 
+------------+-------------------+-------
+        200 | Extended Warranty |  75.0 
+        400 | Washing Machine   | 300.0 
+        500 | Spare Parts       |  25.0 
+(3 rows)
+</programlisting>
+    which is achieved by generating adding WHERE clauses to exclude
+    the historical row versions from the query. This can be seen
+    more clearly using <command>EXPLAIN</command>:
+<programlisting>
+EXPLAIN (COSTS OFF) SELECT * FROM products;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Seq Scan on products
+   Filter: (end_timestamp = 'infinity'::timestamp with time zone)
+(2 rows)
+</programlisting>
+    which shows that the presence of historical row versions will
+    affect the performance of all types of query on tables with
+    system versioning.
+   </para>
+
+   <para>
+    Temporal queries show the table rows at a specific timestamp, e.g.
+<programlisting>
+SELECT product_no, name, price FROM products FOR system_time AS OF 'Mon Jan 11 07:30:00 2021 PST' ORDER BY product_no;
+ product_no |       name        | price 
+------------+-------------------+-------
+        100 | Washing Machine   | 300.0 
+        200 | Extended Warranty |  75.0 
+        300 | Laptop            | 350.0 
+(3 rows)
+</programlisting>
+
+    or
+
+<programlisting>
+SELECT product_no, name, price FROM products FOR system_time AS OF 'Mon Jan 11 09:30:00 2021 PST' ORDER BY product_no;
+ product_no |       name        | price 
+------------+-------------------+-------
+        200 | Extended Warranty |  75.0 
+        400 | Washing Machine   | 300.0 
+(2 rows)
+</programlisting>
+   </para>
+
+ </sect1>
+
 </chapter>

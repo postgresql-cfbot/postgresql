@@ -134,6 +134,20 @@ typedef struct SelectLimit
 	LimitOption limitOption;
 } SelectLimit;
 
+/* Private struct for the result of generated_type production */
+typedef struct GenerateType
+{
+	ConstrType	contype;
+	Node	   *raw_expr;
+} GenerateType;
+
+/* Private struct for the result of OptWith production */
+typedef struct OptionWith
+{
+	List   *options;
+	bool	systemVersioning;
+} OptionWith;
+
 /* ConstraintAttributeSpec yields an integer bitmask of these flags: */
 #define CAS_NOT_DEFERRABLE			0x01
 #define CAS_DEFERRABLE				0x02
@@ -152,7 +166,6 @@ static RawStmt *makeRawStmt(Node *stmt, int stmt_location);
 static void updateRawStmtEnd(RawStmt *rs, int end_location);
 static Node *makeColumnRef(char *colname, List *indirection,
 						   int location, core_yyscan_t yyscanner);
-static Node *makeTypeCast(Node *arg, TypeName *typename, int location);
 static Node *makeStringConst(char *str, int location);
 static Node *makeStringConstCast(char *str, int location, TypeName *typename);
 static Node *makeIntConst(int val, int location);
@@ -177,7 +190,6 @@ static void insertSelectOptions(SelectStmt *stmt,
 static Node *makeSetOp(SetOperation op, bool all, Node *larg, Node *rarg);
 static Node *doNegate(Node *n, int location);
 static void doNegateFloat(Value *v);
-static Node *makeAndExpr(Node *lexpr, Node *rexpr, int location);
 static Node *makeOrExpr(Node *lexpr, Node *rexpr, int location);
 static Node *makeNotExpr(Node *expr, int location);
 static Node *makeAArrayExpr(List *elements, int location);
@@ -250,6 +262,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	PartitionBoundSpec	*partboundspec;
 	RoleSpec			*rolespec;
 	struct SelectLimit	*selectlimit;
+	TemporalClause *temporalClause;
+	struct GenerateType	*GenerateType;
+	struct OptionWith	*OptionWith;
 }
 
 %type <node>	stmt schema_stmt
@@ -384,12 +399,14 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <importqual> import_qualification
 %type <node>	vacuum_relation
 %type <selectlimit> opt_select_limit select_limit limit_clause
+%type <GenerateType> generated_type
+%type <OptionWith> OptWith
 
 %type <list>	parse_toplevel stmtmulti
 				OptTableElementList TableElementList OptInherit definition
 				OptTypedTableElementList TypedTableElementList
 				reloptions opt_reloptions
-				OptWith opt_definition func_args func_args_list
+				opt_definition func_args func_args_list
 				func_args_with_defaults func_args_with_defaults_list
 				aggr_args aggr_args_list
 				func_as createfunc_opt_list alterfunc_opt_list
@@ -508,7 +525,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <range>	relation_expr_opt_alias
 %type <node>	tablesample_clause opt_repeatable_clause
 %type <target>	target_el set_target insert_column_item
-
+%type <temporalClause>	temporal_clause
 %type <str>		generic_option_name
 %type <node>	generic_option_arg
 %type <defelt>	generic_option_elem alter_generic_option_elem
@@ -546,7 +563,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <keyword> col_name_keyword reserved_keyword
 %type <keyword> bare_label_keyword
 
-%type <node>	TableConstraint TableLikeClause
+%type <node>	TableConstraint TableLikeClause optSystemTimeColumn
 %type <ival>	TableLikeOptionList TableLikeOption
 %type <list>	ColQualList
 %type <node>	ColConstraint ColConstraintElem ConstraintAttr
@@ -677,7 +694,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
-	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PLANS POLICY
+	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PERIOD PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
 
@@ -692,7 +709,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	SERIALIZABLE SERVER SESSION SESSION_USER SET SETS SETOF SHARE SHOW
 	SIMILAR SIMPLE SKIP SMALLINT SNAPSHOT SOME SQL_P STABLE STANDALONE_P
 	START STATEMENT STATISTICS STDIN STDOUT STORAGE STORED STRICT_P STRIP_P
-	SUBSCRIPTION SUBSTRING SUPPORT SYMMETRIC SYSID SYSTEM_P
+	SUBSCRIPTION SUBSTRING SUPPORT SYMMETRIC SYSID SYSTEM_P SYSTEM_TIME
 
 	TABLE TABLES TABLESAMPLE TABLESPACE TEMP TEMPLATE TEMPORARY TEXT_P THEN
 	TIES TIME TIMESTAMP TO TRAILING TRANSACTION TRANSFORM
@@ -703,7 +720,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	UNLISTEN UNLOGGED UNTIL UPDATE USER USING
 
 	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
-	VERBOSE VERSION_P VIEW VIEWS VOLATILE
+	VERBOSE VERSION_P VERSIONING VIEW VIEWS VOLATILE
 
 	WHEN WHERE WHITESPACE_P WINDOW WITH WITHIN WITHOUT WORK WRAPPER WRITE
 
@@ -724,7 +741,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
  * as NOT, at least with respect to their left-hand subexpression.
  * NULLS_LA and WITH_LA are needed to make the grammar LALR(1).
  */
-%token		NOT_LA NULLS_LA WITH_LA
+%token		NOT_LA NULLS_LA WITH_LA FOR_LA
 
 /*
  * The grammar likewise thinks these tokens are keywords, but they are never
@@ -751,6 +768,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %nonassoc	'<' '>' '=' LESS_EQUALS GREATER_EQUALS NOT_EQUALS
 %nonassoc	BETWEEN IN_P LIKE ILIKE SIMILAR NOT_LA
 %nonassoc	ESCAPE			/* ESCAPE must be just above LIKE/ILIKE/SIMILAR */
+%nonassoc		SYSTEM_P
+%nonassoc		VERSIONING
+%nonassoc		DAY_P
 /*
  * To support target_el without AS, it used to be necessary to assign IDENT an
  * explicit precedence just less than Op.  While that's not really necessary
@@ -790,6 +810,11 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %left		'(' ')'
 %left		TYPECAST
 %left		'.'
+%left		YEAR_P
+%left		MONTH_P
+%left		HOUR_P
+%left		MINUTE_P
+%left		TO
 /*
  * These might seem to be low-precedence, but actually they are not part
  * of the arithmetic hierarchy at all in their use as JOIN operators.
@@ -2141,6 +2166,14 @@ alter_table_cmd:
 					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
+			| ADD_P  optSystemTimeColumn
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_PeriodColumn;
+					n->def = $2;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
 			/* ALTER TABLE <name> ADD IF NOT EXISTS <coldef> */
 			| ADD_P IF_P NOT EXISTS columnDef
 				{
@@ -2168,7 +2201,15 @@ alter_table_cmd:
 					n->missing_ok = true;
 					$$ = (Node *)n;
 				}
-			/* ALTER TABLE <name> ALTER [COLUMN] <colname> {SET DEFAULT <expr>|DROP DEFAULT} */
+			/* ALTER TABLE <name> ADD SYSTEM VERSIONING */
+			| ADD_P SYSTEM_P VERSIONING
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_AddSystemVersioning;
+					n->def = NULL;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
 			| ALTER opt_column ColId alter_column_default
 				{
 					AlterTableCmd *n = makeNode(AlterTableCmd);
@@ -2307,7 +2348,19 @@ alter_table_cmd:
 					$$ = (Node *)n;
 				}
 			/* ALTER TABLE <name> DROP [COLUMN] IF EXISTS <colname> [RESTRICT|CASCADE] */
-			| DROP opt_column IF_P EXISTS ColId opt_drop_behavior
+			| DROP IF_P EXISTS ColId opt_drop_behavior
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DropColumn;
+					n->name = $4;
+					n->behavior = $5;
+					n->missing_ok = true;
+					$$ = (Node *)n;
+				}
+			/*
+			 * Redundancy here is needed to avoid shift/reduce conflicts.
+			 */
+			| DROP COLUMN IF_P EXISTS ColId opt_drop_behavior
 				{
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 					n->subtype = AT_DropColumn;
@@ -2316,12 +2369,33 @@ alter_table_cmd:
 					n->missing_ok = true;
 					$$ = (Node *)n;
 				}
-			/* ALTER TABLE <name> DROP [COLUMN] <colname> [RESTRICT|CASCADE] */
-			| DROP opt_column ColId opt_drop_behavior
+			/* ALTER TABLE <name> DROP <colname> [RESTRICT|CASCADE] */
+			| DROP ColId opt_drop_behavior
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DropColumn;
+					n->name = $2;
+					n->behavior = $3;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
+			/*
+			 * Redundancy here is needed to avoid shift/reduce conflicts.
+			 */
+			| DROP COLUMN ColId opt_drop_behavior
 				{
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 					n->subtype = AT_DropColumn;
 					n->name = $3;
+					n->behavior = $4;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
+			/* ALTER TABLE <name> DROP SYSTEM VERSIONING [RESTRICT|CASCADE] */
+			|  DROP SYSTEM_P VERSIONING opt_drop_behavior
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DropSystemVersioning;
 					n->behavior = $4;
 					n->missing_ok = false;
 					$$ = (Node *)n;
@@ -3233,12 +3307,13 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					$4->relpersistence = $2;
 					n->relation = $4;
 					n->tableElts = $6;
+					n->systemVersioning = ($11)->systemVersioning;
 					n->inhRelations = $8;
 					n->partspec = $9;
 					n->ofTypename = NULL;
 					n->constraints = NIL;
 					n->accessMethod = $10;
-					n->options = $11;
+					n->options = ($11)->options;
 					n->oncommit = $12;
 					n->tablespacename = $13;
 					n->if_not_exists = false;
@@ -3252,12 +3327,13 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					$7->relpersistence = $2;
 					n->relation = $7;
 					n->tableElts = $9;
+					n->systemVersioning = ($14)->systemVersioning;
 					n->inhRelations = $11;
 					n->partspec = $12;
 					n->ofTypename = NULL;
 					n->constraints = NIL;
 					n->accessMethod = $13;
-					n->options = $14;
+					n->options = ($14)->options;
 					n->oncommit = $15;
 					n->tablespacename = $16;
 					n->if_not_exists = true;
@@ -3271,13 +3347,14 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					$4->relpersistence = $2;
 					n->relation = $4;
 					n->tableElts = $7;
+					n->systemVersioning = ($10)->systemVersioning;
 					n->inhRelations = NIL;
 					n->partspec = $8;
 					n->ofTypename = makeTypeNameFromNameList($6);
 					n->ofTypename->location = @6;
 					n->constraints = NIL;
 					n->accessMethod = $9;
-					n->options = $10;
+					n->options = ($10)->options;
 					n->oncommit = $11;
 					n->tablespacename = $12;
 					n->if_not_exists = false;
@@ -3291,13 +3368,14 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					$7->relpersistence = $2;
 					n->relation = $7;
 					n->tableElts = $10;
+					n->systemVersioning = ($13)->systemVersioning;
 					n->inhRelations = NIL;
 					n->partspec = $11;
 					n->ofTypename = makeTypeNameFromNameList($9);
 					n->ofTypename->location = @9;
 					n->constraints = NIL;
 					n->accessMethod = $12;
-					n->options = $13;
+					n->options = ($13)->options;
 					n->oncommit = $14;
 					n->tablespacename = $15;
 					n->if_not_exists = true;
@@ -3311,13 +3389,14 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					$4->relpersistence = $2;
 					n->relation = $4;
 					n->tableElts = $8;
+					n->systemVersioning = ($12)->systemVersioning;
 					n->inhRelations = list_make1($7);
 					n->partbound = $9;
 					n->partspec = $10;
 					n->ofTypename = NULL;
 					n->constraints = NIL;
 					n->accessMethod = $11;
-					n->options = $12;
+					n->options = ($12)->options;
 					n->oncommit = $13;
 					n->tablespacename = $14;
 					n->if_not_exists = false;
@@ -3331,13 +3410,14 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					$7->relpersistence = $2;
 					n->relation = $7;
 					n->tableElts = $11;
+					n->systemVersioning = ($15)->systemVersioning;
 					n->inhRelations = list_make1($10);
 					n->partbound = $12;
 					n->partspec = $13;
 					n->ofTypename = NULL;
 					n->constraints = NIL;
 					n->accessMethod = $14;
-					n->options = $15;
+					n->options = ($15)->options;
 					n->oncommit = $16;
 					n->tablespacename = $17;
 					n->if_not_exists = true;
@@ -3414,6 +3494,7 @@ TableElement:
 			columnDef							{ $$ = $1; }
 			| TableLikeClause					{ $$ = $1; }
 			| TableConstraint					{ $$ = $1; }
+			| optSystemTimeColumn					{ $$ = $1; }
 		;
 
 TypedTableElement:
@@ -3510,6 +3591,16 @@ ColConstraint:
 				}
 		;
 
+optSystemTimeColumn:
+			PERIOD FOR_LA SYSTEM_TIME '(' name ',' name ')'
+				{
+					RowTime *n = makeNode(RowTime);
+					n->start_time = $5;
+					n->end_time = $7;
+					$$ = (Node *)n;
+				}
+		;
+
 /* DEFAULT NULL is already the default for Postgres.
  * But define it here and carry it forward into the system
  * to make it explicit.
@@ -3592,12 +3683,12 @@ ColConstraintElem:
 					n->location = @1;
 					$$ = (Node *)n;
 				}
-			| GENERATED generated_when AS '(' a_expr ')' STORED
+			| GENERATED generated_when AS generated_type
 				{
 					Constraint *n = makeNode(Constraint);
-					n->contype = CONSTR_GENERATED;
+					n->contype = ($4)->contype;
 					n->generated_when = $2;
-					n->raw_expr = $5;
+					n->raw_expr = ($4)->raw_expr;
 					n->cooked_expr = NULL;
 					n->location = @1;
 
@@ -3615,6 +3706,7 @@ ColConstraintElem:
 
 					$$ = (Node *)n;
 				}
+
 			| REFERENCES qualified_name opt_column_list key_match key_actions
 				{
 					Constraint *n = makeNode(Constraint);
@@ -3635,6 +3727,30 @@ ColConstraintElem:
 generated_when:
 			ALWAYS			{ $$ = ATTRIBUTE_IDENTITY_ALWAYS; }
 			| BY DEFAULT	{ $$ = ATTRIBUTE_IDENTITY_BY_DEFAULT; }
+		;
+
+generated_type:
+			'(' a_expr ')' STORED
+				{
+					GenerateType *n = (GenerateType *) palloc(sizeof(GenerateType));
+					n->contype = CONSTR_GENERATED;
+					n->raw_expr = $2;
+					$$ = n;
+				}
+			| ROW START
+				{
+					GenerateType *n = (GenerateType *) palloc(sizeof(GenerateType));
+					n->contype = CONSTR_ROW_START_TIME;
+					n->raw_expr = NULL;
+					$$ = n;
+				}
+			| ROW END_P
+				{
+					GenerateType *n = (GenerateType *) palloc(sizeof(GenerateType));
+					n->contype = CONSTR_ROW_END_TIME;
+					n->raw_expr = NULL;
+					$$ = n;
+				}
 		;
 
 /*
@@ -4013,9 +4129,34 @@ table_access_method_clause:
 
 /* WITHOUT OIDS is legacy only */
 OptWith:
-			WITH reloptions				{ $$ = $2; }
-			| WITHOUT OIDS				{ $$ = NIL; }
-			| /*EMPTY*/					{ $$ = NIL; }
+			WITH reloptions
+				{
+					OptionWith *n = (OptionWith *) palloc(sizeof(OptionWith));
+					n->options = $2;
+					n->systemVersioning = false;
+					$$ = n;
+				}
+			| WITHOUT OIDS
+				{
+					OptionWith *n = (OptionWith *) palloc(sizeof(OptionWith));
+					n->options = NIL;
+					n->systemVersioning = false;
+					$$ = n;
+				}
+			| WITH SYSTEM_P VERSIONING
+				{
+					OptionWith *n = (OptionWith *) palloc(sizeof(OptionWith));
+					n->options = NIL;
+					n->systemVersioning = true;
+					$$ = n;
+				}
+			| /*EMPTY*/
+				{
+					OptionWith *n = (OptionWith *) palloc(sizeof(OptionWith));
+					n->options = NIL;
+					n->systemVersioning = false;
+					$$ = n;
+				}
 		;
 
 OnCommitOption:  ON COMMIT DROP				{ $$ = ONCOMMIT_DROP; }
@@ -4151,7 +4292,7 @@ create_as_target:
 					$$->rel = $1;
 					$$->colNames = $2;
 					$$->accessMethod = $3;
-					$$->options = $4;
+					$$->options = ($4)->options;
 					$$->onCommit = $5;
 					$$->tableSpaceName = $6;
 					$$->viewQuery = NULL;
@@ -11829,7 +11970,7 @@ having_clause:
 
 for_locking_clause:
 			for_locking_items						{ $$ = $1; }
-			| FOR READ ONLY							{ $$ = NIL; }
+			| FOR READ ONLY                                                 { $$ = NIL; }
 		;
 
 opt_for_locking_clause:
@@ -11908,18 +12049,35 @@ from_list:
 /*
  * table_ref is where an alias clause can be attached.
  */
-table_ref:	relation_expr opt_alias_clause
+table_ref:	relation_expr alias_clause
 				{
 					$1->alias = $2;
 					$$ = (Node *) $1;
 				}
-			| relation_expr opt_alias_clause tablesample_clause
+			| relation_expr %prec UMINUS
+				{
+					$$ = (Node *) $1;
+				}
+			| relation_expr alias_clause tablesample_clause
 				{
 					RangeTableSample *n = (RangeTableSample *) $3;
 					$1->alias = $2;
 					/* relation_expr goes inside the RangeTableSample node */
 					n->relation = (Node *) $1;
 					$$ = (Node *) n;
+				}
+
+			| relation_expr tablesample_clause
+				{
+					RangeTableSample *n = (RangeTableSample *) $2;
+					/* relation_expr goes inside the RangeTableSample node */
+					n->relation = (Node *) $1;
+					$$ = (Node *) n;
+				}
+			| relation_expr temporal_clause
+				{
+					$2->relation = (Node *)$1;
+					$$ = (Node *)$2;
 				}
 			| func_table func_alias_clause
 				{
@@ -12019,7 +12177,54 @@ table_ref:	relation_expr opt_alias_clause
 					$$ = (Node *) $2;
 				}
 		;
+temporal_clause:  FOR_LA SYSTEM_TIME AS OF a_expr
+				{
+					$$ = makeNode(TemporalClause);
+					$$->kind = AS_OF;
+					$$->from = NULL;
+					$$->to = (Node *)makeTypeCast($5, SystemTypeName("timestamptz"), @5);
+				}
+			| FOR_LA SYSTEM_TIME BETWEEN a_expr AND a_expr
+				{
+					$$ = makeNode(TemporalClause);
+					$$->kind = BETWEEN_T;
+					$$->from = (Node *)makeTypeCast($4, SystemTypeName("timestamptz"), @4);
+					$$->to = (Node *)makeTypeCast($6, SystemTypeName("timestamptz"), @6);
+				}
+			| FOR_LA SYSTEM_TIME BETWEEN SYMMETRIC a_expr AND a_expr
+				{
+					MinMaxExpr *g = makeNode(MinMaxExpr);
+					MinMaxExpr *l = makeNode(MinMaxExpr);
+					$$ = makeNode(TemporalClause);
 
+					$$->kind = BETWEEN_SYMMETRIC;
+					l->args = list_make2((Node *)makeTypeCast($5, SystemTypeName("timestamptz"),
+							@2),(Node *)makeTypeCast($7, SystemTypeName("timestamptz"), @7));
+					l->op = IS_LEAST;
+					l->location = @1;
+					$$->from = (Node *)l;
+
+					g->args = list_make2((Node *)makeTypeCast($5, SystemTypeName("timestamptz"),
+						@2),(Node *)makeTypeCast($7, SystemTypeName("timestamptz"), @7));
+					g->op = IS_GREATEST;
+					g->location = @1;
+					$$->to = (Node *)g;
+				}
+			| FOR_LA SYSTEM_TIME BETWEEN ASYMMETRIC a_expr AND a_expr
+				{
+					$$ = makeNode(TemporalClause);
+					$$->kind = BETWEEN_ASYMMETRIC;
+					$$->from = (Node *)makeTypeCast($5, SystemTypeName("timestamptz"), @5);
+					$$->to = (Node *)makeTypeCast($7, SystemTypeName("timestamptz"), @7);
+				}
+			| FOR_LA SYSTEM_TIME FROM a_expr TO a_expr
+				{
+					$$ = makeNode(TemporalClause);
+					$$->kind = FROM_TO;
+					$$->from = (Node *)makeTypeCast($4, SystemTypeName("timestamptz"), @4);
+					$$->to = (Node *)makeTypeCast($6, SystemTypeName("timestamptz"), @6);
+				}
+		;
 
 /*
  * It may seem silly to separate joined_table from table_ref, but there is
@@ -15440,6 +15645,7 @@ unreserved_keyword:
 			| PARTITION
 			| PASSING
 			| PASSWORD
+			| PERIOD
 			| PLANS
 			| POLICY
 			| PRECEDING
@@ -15516,6 +15722,7 @@ unreserved_keyword:
 			| SUPPORT
 			| SYSID
 			| SYSTEM_P
+			| SYSTEM_TIME
 			| TABLES
 			| TABLESPACE
 			| TEMP
@@ -15546,6 +15753,7 @@ unreserved_keyword:
 			| VALUE_P
 			| VARYING
 			| VERSION_P
+			| VERSIONING
 			| VIEW
 			| VIEWS
 			| VOLATILE
@@ -16013,6 +16221,7 @@ bare_label_keyword:
 			| PARTITION
 			| PASSING
 			| PASSWORD
+			| PERIOD
 			| PLACING
 			| PLANS
 			| POLICY
@@ -16103,6 +16312,7 @@ bare_label_keyword:
 			| SYMMETRIC
 			| SYSID
 			| SYSTEM_P
+			| SYSTEM_TIME
 			| TABLE
 			| TABLES
 			| TABLESAMPLE
@@ -16148,6 +16358,7 @@ bare_label_keyword:
 			| VARIADIC
 			| VERBOSE
 			| VERSION_P
+			| VERSIONING
 			| VIEW
 			| VIEWS
 			| VOLATILE
@@ -16262,16 +16473,6 @@ makeColumnRef(char *colname, List *indirection,
 	/* No subscripting, so all indirection gets added to field list */
 	c->fields = lcons(makeString(colname), indirection);
 	return (Node *) c;
-}
-
-static Node *
-makeTypeCast(Node *arg, TypeName *typename, int location)
-{
-	TypeCast *n = makeNode(TypeCast);
-	n->arg = arg;
-	n->typeName = typename;
-	n->location = location;
-	return (Node *) n;
 }
 
 static Node *
@@ -16677,23 +16878,6 @@ doNegateFloat(Value *v)
 		v->val.str = oldval+1;	/* just strip the '-' */
 	else
 		v->val.str = psprintf("-%s", oldval);
-}
-
-static Node *
-makeAndExpr(Node *lexpr, Node *rexpr, int location)
-{
-	/* Flatten "a AND b AND c ..." to a single BoolExpr on sight */
-	if (IsA(lexpr, BoolExpr))
-	{
-		BoolExpr *blexpr = (BoolExpr *) lexpr;
-
-		if (blexpr->boolop == AND_EXPR)
-		{
-			blexpr->args = lappend(blexpr->args, rexpr);
-			return (Node *) blexpr;
-		}
-	}
-	return (Node *) makeBoolExpr(AND_EXPR, list_make2(lexpr, rexpr), location);
 }
 
 static Node *

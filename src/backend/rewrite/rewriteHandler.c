@@ -932,14 +932,24 @@ rewriteTargetListIU(List *targetList,
 								NameStr(att_tup->attname)),
 						 errdetail("Column \"%s\" is an identity column defined as GENERATED ALWAYS.",
 								   NameStr(att_tup->attname))));
-
-			if (att_tup->attgenerated && new_tle && !apply_default)
+#ifdef NOTUSED
+			if (att_tup->attgenerated == ATTRIBUTE_ROW_START_TIME ||
+				att_tup->attgenerated == ATTRIBUTE_ROW_END_TIME)
 				ereport(ERROR,
-						(errcode(ERRCODE_GENERATED_ALWAYS),
-						 errmsg("column \"%s\" can only be updated to DEFAULT",
-								NameStr(att_tup->attname)),
-						 errdetail("Column \"%s\" is a generated column.",
-								   NameStr(att_tup->attname))));
+					(errcode(ERRCODE_GENERATED_ALWAYS),
+					 errmsg("column \"%s\" cannot be updated",
+							NameStr(att_tup->attname)),
+					 errdetail("Column \"%s\" is a system versioning column.",
+							   NameStr(att_tup->attname))));
+			else if (att_tup->attgenerated && new_tle && !apply_default)
+#endif
+			if (att_tup->attgenerated && new_tle && !apply_default)
+				 ereport(ERROR,
+					(errcode(ERRCODE_GENERATED_ALWAYS),
+					 errmsg("column \"%s\" can only be updated to DEFAULT",
+							NameStr(att_tup->attname)),
+					 errdetail("Column \"%s\" is a generated column.",
+							   NameStr(att_tup->attname))));
 		}
 
 		if (att_tup->attgenerated)

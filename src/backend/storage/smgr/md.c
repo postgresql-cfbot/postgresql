@@ -962,6 +962,21 @@ mdimmedsync(SMgrRelation reln, ForkNumber forknum)
 }
 
 /*
+ *	mdsync() -- Schedule a sync at the next checkpoint.
+ *
+ * This is useful in crash recovery, to ensure that data we've read from the
+ * kernel matches what is on disk before a checkpoint.
+ */
+void
+mdsync(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
+{
+	MdfdVec	   *seg;
+
+	seg = _mdfd_getseg(reln, forknum, blocknum, false, EXTENSION_FAIL);
+	register_dirty_segment(reln, forknum, seg);
+}
+
+/*
  * register_dirty_segment() -- Mark a relation segment as needing fsync
  *
  * If there is a local pending-ops table, just make an entry in it for

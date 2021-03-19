@@ -103,6 +103,8 @@ extern BlockNumber smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum);
 extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum,
 						 int nforks, BlockNumber *nblocks);
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
+extern void smgrsync(SMgrRelation reln, ForkNumber forknum,
+					 BlockNumber blocknum);
 extern void AtEOXact_SMgr(void);
 
 #endif							/* SMGR_H */

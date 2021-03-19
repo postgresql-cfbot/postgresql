@@ -401,7 +401,18 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 					LockBuffer(*buf, BUFFER_LOCK_EXCLUSIVE);
 			}
 			if (lsn <= PageGetLSN(BufferGetPage(*buf)))
+			{
+				/*
+				 * The page is from the future.  We must be in crash recovery.
+				 * We don't need to redo the record, but we do need to make
+				 * sure that the image as we have seen it is durably stored on
+				 * disk as part of the next checkpoint, unless that was already
+				 * done by SyncDataDirectory().
+				 */
+				if (recovery_init_sync_method == RECOVERY_INIT_SYNC_METHOD_WAL)
+					RequestBufferSync(*buf);
 				return BLK_DONE;
+			}
 			else
 				return BLK_NEEDS_REDO;
 		}

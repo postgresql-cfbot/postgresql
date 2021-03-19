@@ -1531,6 +1531,26 @@ MarkBufferDirty(Buffer buffer)
 }
 
 /*
+ * Request that the file containing a buffer be fsynced at the next checkpoint.
+ * This is only used in crash recovery, to make it safe to skip applying WAL on
+ * the basis that the page already has a change.  We want to make sure that the
+ * data we read from the kernel matches what's on disk at the next checkpoint.
+ */
+void
+RequestBufferSync(Buffer buffer)
+{
+	SMgrRelation reln;
+	BufferDesc *bufHdr;
+
+	Assert(BufferIsPinned(buffer));
+	Assert(!BufferIsLocal(buffer));
+
+	bufHdr = GetBufferDescriptor(buffer - 1);
+	reln = smgropen(bufHdr->tag.rnode, InvalidBackendId);
+	smgrsync(reln, bufHdr->tag.forkNum, bufHdr->tag.blockNum);
+}
+
+/*
  * ReleaseAndReadBuffer -- combine ReleaseBuffer() and ReadBuffer()
  *
  * Formerly, this saved one cycle of acquiring/releasing the BufMgrLock

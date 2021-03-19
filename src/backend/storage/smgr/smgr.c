@@ -62,6 +62,8 @@ typedef struct f_smgr
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
+	void		(*smgr_sync) (SMgrRelation reln, ForkNumber forknum,
+							  BlockNumber blocknum);
 } f_smgr;
 
 static const f_smgr smgrsw[] = {
@@ -79,6 +81,7 @@ static const f_smgr smgrsw[] = {
 		.smgr_read = mdread,
 		.smgr_write = mdwrite,
 		.smgr_writeback = mdwriteback,
+		.smgr_sync = mdsync,
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
@@ -539,6 +542,18 @@ smgrwriteback(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	smgrsw[reln->smgr_which].smgr_writeback(reln, forknum, blocknum,
 											nblocks);
 }
+
+
+/*
+ *	smgrsync() -- Request that the file containing a block be flushed at the
+ *				  next checkpoint.
+ */
+void
+smgrsync(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
+{
+	smgrsw[reln->smgr_which].smgr_sync(reln, forknum, blocknum);
+}
+
 
 /*
  *	smgrnblocks() -- Calculate the number of blocks in the

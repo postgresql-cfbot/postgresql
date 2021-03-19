@@ -9721,6 +9721,51 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-recovery-init-sync-method" xreflabel="recovery_init_sync_method">
+      <term><varname>recovery_init_sync_method</varname> (<type>enum</type>)
+       <indexterm>
+        <primary><varname>recovery_init_sync_method</varname> configuration parameter</primary>
+       </indexterm>
+      </term>
+      <listitem>
+       <para>
+        When set to <literal>wal</literal>, which is the default,
+        <productname>PostgreSQL</productname> will fsync all WAL files before
+        recovery begins, and rely on WAL replay to make sure all modified
+        data files are handle correctly.
+       </para>
+       <para>
+        When set to <literal>fsync</literal>,
+        <productname>PostgreSQL</productname> will recursively open and fsync
+        all files in the data directory before crash recovery begins.  This
+        is intended to make sure that all WAL and data files are durably stored
+        on disk before replaying changes.  This applies whenever starting a
+        database cluster that did not shut down cleanly, including copies
+        created with <application>pg_basebackup</application>.
+       </para>
+       <para>
+        On Linux, <literal>syncfs</literal> may be used instead, to ask the
+        operating system to flush the whole file system.  This may be a lot
+        faster, because it doesn't need to open each file one by one.  On the
+        other hand, it may be slower if the file system is shared by other
+        applications that modify a lot of files, since those files will also
+        be flushed to disk.  Furthermore, on versions of Linux before 5.8, I/O
+        errors encountered while writing data to disk may not be reported to
+        <productname>PostgreSQL</productname>, and relevant error messages may
+        appear only in kernel logs.
+       </para>
+       <para>
+        The option <literal>none</literal> can be specified to skip this step.
+        This is only safe if all buffered data is known to have been flushed
+        to disk already, for example by a tool such as
+        <application>pg_basebackup</application> without
+        <literal>--no-sync</literal>.  It is not a good idea to
+        leave this option configured permanently in general, as it will
+        affect future crash recovery cycles.
+       </para>
+      </listitem>
+     </varlistentry>
+
     </variablelist>
 
    </sect1>

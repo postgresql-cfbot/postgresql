@@ -72,9 +72,11 @@
 
 #include "postgres.h"
 
+#include <dirent.h>
 #include <sys/file.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #ifndef WIN32
 #include <sys/mman.h>
 #endif
@@ -157,6 +159,9 @@ int			max_safe_fds = FD_MINFREE;	/* default if not changed */
 
 /* Whether it is safe to continue running after fsync() fails. */
 bool		data_sync_retry = false;
+
+/* How SyncDataDirectory() should do its job. */
+int			recovery_init_sync_method = RECOVERY_INIT_SYNC_METHOD_FSYNC;
 
 /* Debugging.... */
 
@@ -331,6 +336,7 @@ static void walkdir(const char *path,
 					void (*action) (const char *fname, bool isdir, int elevel),
 					bool process_symlinks,
 					int elevel);
+
 #ifdef PG_FLUSH_DATA_WORKS
 static void pre_sync_fname(const char *fname, bool isdir, int elevel);
 #endif
@@ -3265,9 +3271,32 @@ looks_like_temp_rel_name(const char *name)
 	return true;
 }
 
+#ifdef HAVE_SYNCFS
+static void
+do_syncfs(const char *path)
+{
+	int		fd;
+
+	fd = OpenTransientFile(path, O_RDONLY);
+	if (fd < 0)
+	{
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not open %s: %m", path)));
+		return;
+	}
+	if (syncfs(fd) < 0)
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not sync filesystem for \"%s\": %m", path)));
+	CloseTransientFile(fd);
+}
+#endif
 
 /*
- * Issue fsync recursively on PGDATA and all its contents.
+ * Issue fsync recursively on PGDATA and all its contents, issue syncfs for all
+ * potential filesystem, or do nothing, depending on the
+ * recovery_init_sync_method setting.
  *
  * We fsync regular files and directories wherever they are, but we
  * follow symlinks only for pg_wal and immediately under pg_tblspc.
@@ -3297,6 +3326,14 @@ SyncDataDirectory(void)
 		return;
 
 	/*
+	 * Likewise if this specific sync step is disabled, or if we're using WAL
+	 * analysis instead.
+	 */
+	if (recovery_init_sync_method == RECOVERY_INIT_SYNC_METHOD_NONE ||
+		recovery_init_sync_method == RECOVERY_INIT_SYNC_METHOD_WAL)
+		return;
+
+	/*
 	 * If pg_wal is a symlink, we'll need to recurse into it separately,
 	 * because the first walkdir below will ignore it.
 	 */
@@ -3318,6 +3355,42 @@ SyncDataDirectory(void)
 	if (pgwin32_is_junction("pg_wal"))
 		xlog_is_symlink = true;
 #endif
+
+#ifdef HAVE_SYNCFS
+	if (recovery_init_sync_method == RECOVERY_INIT_SYNC_METHOD_SYNCFS)
+	{
+		DIR		   *dir;
+		struct dirent *de;
+
+		/*
+		 * On Linux, we don't have to open every single file one by one.  We
+		 * can use syncfs() to sync whole filesystems.  We only expect
+		 * filesystem boundaries to exist where we tolerate symlinks, namely
+		 * pg_wal and the tablespaces, so we call syncfs() for each of those
+		 * directories.
+		 */
+
+		/* Sync the top level pgdata directory. */
+		do_syncfs(".");
+		/* If any tablespaces are configured, sync each of those. */
+		dir = AllocateDir("pg_tblspc");
+		while ((de = ReadDirExtended(dir, "pg_tblspc", LOG)))
+		{
+			char		path[MAXPGPATH];
+
+			if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+				continue;
+
+			snprintf(path, MAXPGPATH, "pg_tblspc/%s", de->d_name);
+			do_syncfs(path);
+		}
+		FreeDir(dir);
+		/* If pg_wal is a symlink, process that too. */
+		if (xlog_is_symlink)
+			do_syncfs("pg_wal");
+		return;
+	}
+#endif		/* !HAVE_SYNCFS */
 
 	/*
 	 * If possible, hint to the kernel that we're soon going to fsync the data
@@ -3414,7 +3487,6 @@ walkdir(const char *path,
 	if (dir)
 		(*action) (path, true, elevel);
 }
-
 
 /*
  * Hint to the OS that it should get ready to fsync() this file.

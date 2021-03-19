@@ -927,7 +927,7 @@ static bool WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 static int	emode_for_corrupt_record(int emode, XLogRecPtr RecPtr);
 static void XLogFileClose(void);
 static void PreallocXlogFiles(XLogRecPtr endptr);
-static void RemoveTempXlogFiles(void);
+static void ScanXlogFilesAfterCrash(void);
 static void RemoveOldXlogFiles(XLogSegNo segno, XLogRecPtr lastredoptr, XLogRecPtr endptr);
 static void RemoveXlogFile(const char *segname, XLogSegNo recycleSegNo,
 						   XLogSegNo *endlogSegNo);
@@ -4030,13 +4030,15 @@ UpdateLastRemovedPtr(char *filename)
 }
 
 /*
- * Remove all temporary log files in pg_wal
+ * Remove all temporary log files in pg_wal, and make sure that all remaining
+ * files are down on disk before we replay anything in them if
+ * recovery_init_sync_method requires that.
  *
  * This is called at the beginning of recovery after a previous crash,
  * at a point where no other processes write fresh WAL data.
  */
 static void
-RemoveTempXlogFiles(void)
+ScanXlogFilesAfterCrash(void)
 {
 	DIR		   *xldir;
 	struct dirent *xlde;
@@ -4048,12 +4050,23 @@ RemoveTempXlogFiles(void)
 	{
 		char		path[MAXPGPATH];
 
-		if (strncmp(xlde->d_name, "xlogtemp.", 9) != 0)
-			continue;
-
 		snprintf(path, MAXPGPATH, XLOGDIR "/%s", xlde->d_name);
-		unlink(path);
-		elog(DEBUG2, "removed temporary WAL segment \"%s\"", path);
+
+		if (strncmp(xlde->d_name, "xlogtemp.", 9) == 0)
+		{
+			unlink(path);
+			elog(DEBUG2, "removed temporary WAL segment \"%s\"", path);
+		}
+		else if (IsXLogFileName(xlde->d_name) &&
+				 recovery_init_sync_method == RECOVERY_INIT_SYNC_METHOD_WAL)
+		{
+			/*
+			 * Make sure that whatever we read from this WAL file is durably on
+			 * disk before replaying in RECOVERY_INIT_SYNC_METHOD_WAL mode.
+			 * Necessary because SyncDataDirectory() won't do that for us.
+			 */
+			fsync_fname(path, false);
+		}
 	}
 	FreeDir(xldir);
 }
@@ -6547,23 +6560,30 @@ StartupXLOG(void)
 	ValidateXLOGDirectoryStructure();
 
 	/*----------
-	 * If we previously crashed, perform a couple of actions:
+	 * If we previously crashed:
 	 *
 	 * - The pg_wal directory may still include some temporary WAL segments
 	 *   used when creating a new segment, so perform some clean up to not
-	 *   bloat this path.  This is done first as there is no point to sync
-	 *   this temporary data.
+	 *   bloat this path, in ScanXlogFilesAfterCrash().
+	 *
+	 * - It's possible that some WAL data had been written but not yet synced.
+	 *   Therefore we have to sync these files before replaying the records
+	 *   they contain.  If recovery_init_wal_sync_method=wal we'll do that
+	 *   in ScanXlogFilesAfterCrash(); otherwise we'll leave it up to
+	 *   SyncDataDirectory().
 	 *
 	 * - There might be data which we had written, intending to fsync it, but
-	 *   which we had not actually fsync'd yet.  Therefore, a power failure in
-	 *   the near future might cause earlier unflushed writes to be lost, even
-	 *   though more recent data written to disk from here on would be
-	 *   persisted.  To avoid that, fsync the entire data directory.
+	 *   which we had not actually fsync'd yet.  If
+	 *   recovery_init_wal_sync_method=wal, then XLogReadBufferForRedo() will
+	 *   compute the set of files that may need fsyncing at the next
+	 *   checkpoint, during recovery.  Otherwise, SyncDataDirectory() will
+	 *   sync the entire pgdata directory up front, to avoid relying on data
+	 *   from the kernel's cache that hasn't reached disk yet.
 	 */
 	if (ControlFile->state != DB_SHUTDOWNED &&
 		ControlFile->state != DB_SHUTDOWNED_IN_RECOVERY)
 	{
-		RemoveTempXlogFiles();
+		ScanXlogFilesAfterCrash();
 		SyncDataDirectory();
 	}
 

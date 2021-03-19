@@ -23,6 +23,7 @@
 #include "catalog/pg_class.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
+#include "executor/execParallel.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -1097,6 +1098,36 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		 */
 		if (root->glob->parallelModeOK && rel->consider_parallel)
 			set_rel_consider_parallel(root, childrel, childRTE);
+
+		/*
+		 * When subplan is subquery, It's possible to do parallel insert if top
+		 * node of subquery is Gather, so we turn on a flag to ignore parallel
+		 * tuple cost in cost_gather if the SELECT is for CTAS.
+		 */
+		if (childrel->rtekind == RTE_SUBQUERY)
+		{
+			/*
+			 * When there is no parent path generating clause(such as limit,
+			 * sort, distinct...), we can turn on the flag for two cases:
+			 * i) query_level is 1
+			 * ii) query_level > 1 then turn on the flag in the parent_root.
+			 * The case ii) is to check append under append:
+			 * Append
+			 *	->Append
+			 *	->Gather
+			 *	->Other plan
+			 */
+			if (root->parse->parallelInsCmdTupleCostOpt &
+				PARALLEL_INSERT_SELECT_QUERY &&
+				(root->query_level == 1 ||
+				 root->parent_root->parse->parallelInsCmdTupleCostOpt &
+				 PARALLEL_INSERT_CAN_IGN_TUP_COST_APPEND) &&
+				!(HAS_PARENT_PATH_GENERATING_CLAUSE(root)))
+			{
+				root->parse->parallelInsCmdTupleCostOpt |=
+									PARALLEL_INSERT_CAN_IGN_TUP_COST_APPEND;
+			}
+		}
 
 		/*
 		 * Compute the child's size.

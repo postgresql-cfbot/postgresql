@@ -23,6 +23,7 @@
 #include "nodes/tidbitmap.h"
 #include "partitioning/partdefs.h"
 #include "storage/condition_variable.h"
+#include "tcop/dest.h"
 #include "utils/hsearch.h"
 #include "utils/queryenvironment.h"
 #include "utils/reltrigger.h"
@@ -2357,6 +2358,8 @@ typedef struct GatherState
 	int			nreaders;		/* number of still-active workers */
 	int			nextreader;		/* next one to try to read from */
 	struct TupleQueueReader **reader;	/* array with nreaders active entries */
+	/* Dest receiver is stored when parallel inserts is allowed in CTAS. */
+	DestReceiver *dest;
 } GatherState;
 
 /* ----------------

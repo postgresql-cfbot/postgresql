@@ -28,6 +28,7 @@
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "executor/execParallel.h"
 #include "executor/executor.h"
 #include "executor/nodeAgg.h"
 #include "foreign/fdwapi.h"
@@ -7353,6 +7354,42 @@ can_partial_agg(PlannerInfo *root)
 }
 
 /*
+ * ignore_parallel_tuple_cost
+ *
+ * Gather node will not receive any tuples from the workers in case each worker
+ * inserts them in parallel. So, we turn on a flag to ignore parallel tuple
+ * cost by the Gather path in cost_gather if the SELECT is for commands in
+ * which parallel insertion is possible and we are generating an upper level
+ * Gather path.
+ */
+static void
+ignore_parallel_tuple_cost(PlannerInfo *root)
+{
+	if (root->query_level != 1 &&
+		(root->parent_root->parse->parallelInsCmdTupleCostOpt &
+		 PARALLEL_INSERT_CAN_IGN_TUP_COST_APPEND))
+	{
+		root->parse->parallelInsCmdTupleCostOpt |=
+												PARALLEL_INSERT_SELECT_QUERY;
+	}
+
+	if (root->parse->parallelInsCmdTupleCostOpt & PARALLEL_INSERT_SELECT_QUERY)
+	{
+		/*
+		 * In each of the HAS_PARENT_PATH_GENERATING_CLAUSE cases, a parent
+		 * path will be generated for the upper Gather path(in
+		 * grouping_planner), in which case we can not let parallel inserts
+		 * happen. So we do not turn on ignore tuple cost flag.
+		 */
+		if (HAS_PARENT_PATH_GENERATING_CLAUSE(root))
+			return;
+
+		root->parse->parallelInsCmdTupleCostOpt |=
+											PARALLEL_INSERT_CAN_IGN_TUP_COST;
+	}
+}
+
+/*
  * apply_scanjoin_target_to_paths
  *
  * Adjust the final scan/join relation, and recursively all of its children,
@@ -7572,7 +7609,16 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	 * one of the generated paths may turn out to be the cheapest one.
 	 */
 	if (rel->consider_parallel && !IS_OTHER_REL(rel))
+	{
+		/*
+		 * Turn on a flag to ignore parallel tuple cost by the Gather path in
+		 * cost_gather if the SELECT is for commands in which parallel
+		 * insertion is possible and we are generating an upper level Gather
+		 * path.
+		 */
+		ignore_parallel_tuple_cost(root);
 		generate_useful_gather_paths(root, rel, false);
+	}
 
 	/*
 	 * Reassess which paths are the cheapest, now that we've potentially added

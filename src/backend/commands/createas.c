@@ -38,6 +38,7 @@
 #include "commands/prepare.h"
 #include "commands/tablecmds.h"
 #include "commands/view.h"
+#include "executor/execParallel.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -50,18 +51,6 @@
 #include "utils/rel.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
-
-typedef struct
-{
-	DestReceiver pub;			/* publicly-known function pointers */
-	IntoClause *into;			/* target relation specification */
-	/* These fields are filled by intorel_startup: */
-	Relation	rel;			/* relation to write to */
-	ObjectAddress reladdr;		/* address of rel, for ExecCreateTableAs */
-	CommandId	output_cid;		/* cmin to insert in output tuples */
-	int			ti_options;		/* table_tuple_insert performance options */
-	BulkInsertState bistate;	/* bulk insert state */
-} DR_intorel;
 
 /* utility functions for CTAS definition creation */
 static ObjectAddress create_ctas_internal(List *attrList, IntoClause *into);
@@ -294,6 +283,11 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 	}
 	else
 	{
+		ParallelInsertCTASInfo parallel_ins_info;
+
+		parallel_ins_info.intoclause = into;
+		parallel_ins_info.objectid = InvalidOid;
+
 		/*
 		 * Parse analysis was done already, but we still have to run the rule
 		 * rewriter.  We do not do AcquireRewriteLocks: we assume the query
@@ -316,6 +310,16 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 		query = linitial_node(Query, rewritten);
 		Assert(query->commandType == CMD_SELECT);
 
+		/*
+		 * Turn on a flag to indicate planner so that it can ignore parallel
+		 * tuple cost while generating Gather path.
+		 */
+		if (IsParallelInsertionAllowed(PARALLEL_INSERT_CMD_CREATE_TABLE_AS,
+									   &parallel_ins_info))
+			query->parallelInsCmdTupleCostOpt |= PARALLEL_INSERT_SELECT_QUERY;
+		else
+			query->parallelInsCmdTupleCostOpt = 0;
+
 		/* plan the query */
 		plan = pg_plan_query(query, pstate->p_sourcetext,
 							 CURSOR_OPT_PARALLEL_OK, params);
@@ -337,6 +341,20 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 
 		/* call ExecutorStart to prepare the plan for execution */
 		ExecutorStart(queryDesc, GetIntoRelEFlags(into));
+
+		/* See if we can perform parallel insertions. */
+		if (IsParallelInsertionAllowed(PARALLEL_INSERT_CMD_CREATE_TABLE_AS,
+									   &parallel_ins_info))
+		{
+			/*
+			 * If the SELECT part of the CTAS is parallelizable, then set the
+			 * parallel insert state. We need plan state to be initialized by
+			 * the executor to decide whether to allow parallel inserts or not.
+			 */
+			SetParallelInsertState(PARALLEL_INSERT_CMD_CREATE_TABLE_AS,
+								   queryDesc,
+								   &query->parallelInsCmdTupleCostOpt);
+		}
 
 		/* run the plan to completion */
 		ExecutorRun(queryDesc, ForwardScanDirection, 0L, true);
@@ -441,6 +459,9 @@ CreateIntoRelDestReceiver(IntoClause *intoClause)
 	self->pub.rDestroy = intorel_destroy;
 	self->pub.mydest = DestIntoRel;
 	self->into = intoClause;
+	self->is_parallel = false;
+	self->is_parallel_worker = false;
+	self->object_id = InvalidOid;
 	/* other private fields will be set during intorel_startup */
 
 	return (DestReceiver *) self;
@@ -460,6 +481,35 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	Relation	intoRelationDesc;
 	ListCell   *lc;
 	int			attnum;
+
+	/*
+	 * All the necessary work such as table creation, sanity checks etc. would
+	 * have been done by the leader. So, parallel workers just need to open the
+	 * table, allocate bulk insert state, mark the command id as used, store it
+	 * in the dest receiver and return.
+	 */
+	if (myState->is_parallel_worker)
+	{
+		/* In the worker */
+		intoRelationDesc = table_open(myState->object_id, AccessExclusiveLock);
+		myState->rel = intoRelationDesc;
+		myState->reladdr = InvalidObjectAddress;
+		myState->ti_options = 0;
+		myState->bistate = GetBulkInsertState();
+
+		/*
+		 * Right after the table is created in the leader, the command id is
+		 * incremented (in create_ctas_internal()). The new command id is
+		 * marked as used in intorel_startup(), then the parallel mode is
+		 * entered. The command id and transaction id are serialized into
+		 * parallel DSM, they are then available to all parallel workers. All
+		 * the workers need to mark the command id as used before insertion.
+		 */
+		SetCurrentCommandIdUsedForWorker();
+		myState->output_cid = GetCurrentCommandId(false);
+
+		return;
+	}
 
 	Assert(into != NULL);		/* else somebody forgot to set it */
 
@@ -562,6 +612,27 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 		myState->bistate = GetBulkInsertState();
 	else
 		myState->bistate = NULL;
+
+	/* If parallel inserts are to be allowed, set few extra information. */
+	if (myState->is_parallel)
+	{
+		myState->object_id = intoRelationAddr.objectId;
+
+		/*
+		 * We don't need to skip contacting FSM while inserting tuples for
+		 * parallel mode, while extending the relations, workers instead of
+		 * blocking on a page while another worker is inserting, can check the
+		 * FSM for another page that can accommodate the tuples. This results
+		 * in major benefit for parallel inserts.
+		 */
+		myState->ti_options = 0;
+
+		/*
+		 * rd_createSubid is marked invalid, otherwise, the table is not
+		 * allowed to be extended by the workers.
+		 */
+		myState->rel->rd_createSubid = InvalidSubTransactionId;
+	}
 
 	/*
 	 * Valid smgr_targblock implies something already wrote to the relation.

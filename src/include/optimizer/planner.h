@@ -21,6 +21,16 @@
 #include "nodes/pathnodes.h"
 #include "nodes/plannodes.h"
 
+#define HAS_PARENT_PATH_GENERATING_CLAUSE(root) \
+										 (root->parse->rowMarks || \
+										  limit_needed(root->parse) || \
+										  root->parse->sortClause ||  \
+										  root->parse->distinctClause ||  \
+										  root->parse->hasWindowFuncs ||  \
+										  root->parse->groupClause ||  \
+										  root->parse->groupingSets ||  \
+										  root->parse->hasAggs ||  \
+										  root->hasHavingQual)
 
 /* Hook for plugins to get control in planner() */
 typedef PlannedStmt *(*planner_hook_type) (Query *parse,

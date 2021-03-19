@@ -18,6 +18,7 @@
 #include "commands/createas.h"
 #include "commands/defrem.h"
 #include "commands/prepare.h"
+#include "executor/execParallel.h"
 #include "executor/nodeHash.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
@@ -382,10 +383,24 @@ ExplainOneQuery(Query *query, int cursorOptions,
 					planduration;
 		BufferUsage bufusage_start,
 					bufusage;
+		ParallelInsertCTASInfo parallel_ins_info;
+
+		parallel_ins_info.intoclause = into;
+		parallel_ins_info.objectid = InvalidOid;
 
 		if (es->buffers)
 			bufusage_start = pgBufferUsage;
 		INSTR_TIME_SET_CURRENT(planstart);
+
+		/*
+		 * Turn on a flag to indicate planner so that it can ignore parallel
+		 * tuple cost while generating Gather path.
+		 */
+		if (IsParallelInsertionAllowed(PARALLEL_INSERT_CMD_CREATE_TABLE_AS,
+									   &parallel_ins_info))
+			query->parallelInsCmdTupleCostOpt |= PARALLEL_INSERT_SELECT_QUERY;
+		else
+			query->parallelInsCmdTupleCostOpt = 0;
 
 		/* plan the query */
 		plan = pg_plan_query(query, queryString, cursorOptions, params);
@@ -402,7 +417,8 @@ ExplainOneQuery(Query *query, int cursorOptions,
 
 		/* run it (if needed) and produce output */
 		ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
-					   &planduration, (es->buffers ? &bufusage : NULL));
+					   &planduration, (es->buffers ? &bufusage : NULL),
+					   &query->parallelInsCmdTupleCostOpt);
 	}
 }
 
@@ -512,7 +528,8 @@ void
 ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
-			   const BufferUsage *bufusage)
+			   const BufferUsage *bufusage,
+			   uint8 *parallel_ins_tuple_cost_opts)
 {
 	DestReceiver *dest;
 	QueryDesc  *queryDesc;
@@ -571,6 +588,27 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	/* call ExecutorStart to prepare the plan for execution */
 	ExecutorStart(queryDesc, eflags);
+
+	if (into)
+	{
+		ParallelInsertCTASInfo parallel_ins_info;
+
+		parallel_ins_info.intoclause = into;
+		parallel_ins_info.objectid = InvalidOid;
+
+		/* See if we can perform parallel insertions. */
+		if (IsParallelInsertionAllowed(PARALLEL_INSERT_CMD_CREATE_TABLE_AS,
+									   &parallel_ins_info))
+		{
+			/*
+			 * If the SELECT part of the CTAS is parallelizable, then set the
+			 * parallel insert state. We need plan state to be initialized by
+			 * the executor to decide whether to allow parallel inserts or not.
+			 */
+			SetParallelInsertState(PARALLEL_INSERT_CMD_CREATE_TABLE_AS,
+								   queryDesc, parallel_ins_tuple_cost_opts);
+		}
+	}
 
 	/* Execute the plan for statistics if asked for */
 	if (es->analyze)
@@ -1796,6 +1834,28 @@ ExplainNode(PlanState *planstate, List *ancestors,
 
 				if (gather->single_copy || es->format != EXPLAIN_FORMAT_TEXT)
 					ExplainPropertyBool("Single Copy", gather->single_copy, es);
+
+				/*
+				 * Show the create table information under Gather node in case
+				 * parallel workers have inserted the rows.
+				 */
+				if (IsA(planstate, GatherState))
+				{
+					GatherState *gstate = (GatherState *) planstate;
+
+					if (GetParallelInsertCmdType(gstate->dest) ==
+						PARALLEL_INSERT_CMD_CREATE_TABLE_AS)
+					{
+						es->indent--;
+						ExplainIndentText(es);
+						appendStringInfoString(es->str, "->  ");
+						appendStringInfoString(es->str, "Create ");
+						appendStringInfo(es->str, "%s\n",
+							((DR_intorel *) gstate->dest)->into->rel->relname);
+						ExplainIndentText(es);
+						es->indent++;
+					}
+				}
 			}
 			break;
 		case T_GatherMerge:

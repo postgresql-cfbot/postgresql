@@ -764,15 +764,33 @@ GetCurrentCommandId(bool used)
 	if (used)
 	{
 		/*
-		 * Forbid setting currentCommandIdUsed in a parallel worker, because
-		 * we have no provision for communicating this back to the leader.  We
-		 * could relax this restriction when currentCommandIdUsed was already
-		 * true at the start of the parallel operation.
+		 * If in a parallel worker, only allow setting currentCommandIdUsed if
+		 * currentCommandIdUsed was already true at the start of the parallel
+		 * operation (by way of SetCurrentCommandIdUsed()), otherwise forbid
+		 * setting currentCommandIdUsed because we have no provision for
+		 * communicating this back to the leader. Once currentCommandIdUsed is
+		 * set, the commandId used by leader and workers can't be changed,
+		 * because CommandCounterIncrement() then prevents any attempted
+		 * increment of the current commandId.
 		 */
-		Assert(!IsParallelWorker());
+		Assert(!(IsParallelWorker() && !currentCommandIdUsed));
 		currentCommandIdUsed = true;
 	}
 	return currentCommandId;
+}
+
+/*
+ * SetCurrentCommandIdUsedForWorker
+ *
+ * For a parallel worker, record that the currentCommandId has been used. This
+ * must only be called at the start of a parallel operation.
+ */
+void
+SetCurrentCommandIdUsedForWorker(void)
+{
+	Assert(IsParallelWorker() && !currentCommandIdUsed && currentCommandId != InvalidCommandId);
+
+	currentCommandIdUsed = true;
 }
 
 /*

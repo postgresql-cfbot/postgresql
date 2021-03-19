@@ -48,6 +48,7 @@ static TupleTableSlot *ExecGather(PlanState *pstate);
 static TupleTableSlot *gather_getnext(GatherState *gatherstate);
 static MinimalTuple gather_readnext(GatherState *gatherstate);
 static void ExecShutdownGatherWorkers(GatherState *node);
+static void ExecParallelInsert(GatherState *node);
 
 
 /* ----------------------------------------------------------------
@@ -132,6 +133,71 @@ ExecInitGather(Gather *node, EState *estate, int eflags)
 }
 
 /* ----------------------------------------------------------------
+ *		ExecParallelInsert(node)
+ *
+ *		Facilitates parallel inserts by parallel workers and/or
+ *		leader for commands such as CREATE TABLE AS.
+ * ----------------------------------------------------------------
+ */
+static void
+ExecParallelInsert(GatherState *node)
+{
+	EState	   *estate = node->ps.state;
+
+	/*
+	 * By now, parallel workers if launched any, would have started their work
+	 * i.e. insertion to target relation. In case the leader is also chosen to
+	 * participate, then finish its share before going to wait for the parallel
+	 * workers to finish.
+	 *
+	 * In case if no workers were launched, allow the leader to insert all
+	 * tuples.
+	 */
+	if (node->need_to_scan_locally || node->nworkers_launched == 0)
+	{
+		TupleTableSlot *outerTupleSlot;
+
+		for(;;)
+		{
+			/* Install our DSA area while executing the plan. */
+			estate->es_query_dsa = node->pei ? node->pei->area : NULL;
+
+			outerTupleSlot = ExecProcNode(node->ps.lefttree);
+
+			estate->es_query_dsa = NULL;
+
+			if(TupIsNull(outerTupleSlot))
+				break;
+
+			(void) node->dest->receiveSlot(outerTupleSlot, node->dest);
+
+			estate->es_processed++;
+		}
+
+		node->need_to_scan_locally = false;
+	}
+
+	if (node->nworkers_launched > 0)
+	{
+		/*
+		 * We wait here for the parallel workers to finish their work and
+		 * accumulate the tuples they inserted and also their buffer/WAL usage.
+		 * We do not destroy the parallel context here, it will be done in
+		 * ExecShutdownGather at the end of the plan. Note that the
+		 * ExecShutdownGatherWorkers call from ExecShutdownGather will be a
+		 * no-op.
+		 */
+		ExecShutdownGatherWorkers(node);
+
+		/*
+		 * Add up the total tuples inserted by all workers, to the tuples
+		 * inserted by the leader(if any). This will be shared to client.
+		 */
+		estate->es_processed += pg_atomic_read_u64(node->pei->processed);
+	}
+}
+
+/* ----------------------------------------------------------------
  *		ExecGather(node)
  *
  *		Scans the relation via multiple workers and returns
@@ -157,6 +223,17 @@ ExecGather(PlanState *pstate)
 	{
 		EState	   *estate = node->ps.state;
 		Gather	   *gather = (Gather *) node->ps.plan;
+		ParallelInsertCmdKind parallel_ins_cmd;
+		bool		perform_parallel_ins = false;
+
+		/*
+		 * Get the parallel insert command type from the dest receiver which
+		 * would have been set in SetParallelInsertState().
+		 */
+		parallel_ins_cmd = GetParallelInsertCmdType(node->dest);
+
+		if (parallel_ins_cmd == PARALLEL_INSERT_CMD_CREATE_TABLE_AS)
+			perform_parallel_ins = true;
 
 		/*
 		 * Sometimes we might have to run without parallelism; but if parallel
@@ -165,6 +242,15 @@ ExecGather(PlanState *pstate)
 		if (gather->num_workers > 0 && estate->es_use_parallel_mode)
 		{
 			ParallelContext *pcxt;
+			void 			*parallel_ins_info = NULL;
+
+			/*
+			 * Take the necessary information to be passed to workers for
+			 * parallel inserts in commands such as CTAS.
+			 */
+			if (perform_parallel_ins)
+				parallel_ins_info = GetParallelInsertCmdInfo(node->dest,
+															 parallel_ins_cmd);
 
 			/* Initialize, or re-initialize, shared state needed by workers. */
 			if (!node->pei)
@@ -172,7 +258,9 @@ ExecGather(PlanState *pstate)
 												 estate,
 												 gather->initParam,
 												 gather->num_workers,
-												 node->tuples_needed);
+												 node->tuples_needed,
+												 parallel_ins_cmd,
+												 parallel_ins_info);
 			else
 				ExecParallelReinitialize(node->ps.lefttree,
 										 node->pei,
@@ -190,13 +278,22 @@ ExecGather(PlanState *pstate)
 			/* Set up tuple queue readers to read the results. */
 			if (pcxt->nworkers_launched > 0)
 			{
-				ExecParallelCreateReaders(node->pei);
-				/* Make a working array showing the active readers */
-				node->nreaders = pcxt->nworkers_launched;
-				node->reader = (TupleQueueReader **)
-					palloc(node->nreaders * sizeof(TupleQueueReader *));
-				memcpy(node->reader, node->pei->reader,
-					   node->nreaders * sizeof(TupleQueueReader *));
+				/*
+				 * Do not create tuple queue readers for commands with parallel
+				 * insertion. Because the gather node will not receive any
+				 * tuples, the workers will insert the tuples into the target
+				 * relation.
+				 */
+				if (!perform_parallel_ins)
+				{
+					ExecParallelCreateReaders(node->pei);
+					/* Make a working array showing the active readers */
+					node->nreaders = pcxt->nworkers_launched;
+					node->reader = (TupleQueueReader **)
+						palloc(node->nreaders * sizeof(TupleQueueReader *));
+					memcpy(node->reader, node->pei->reader,
+						node->nreaders * sizeof(TupleQueueReader *));
+				}
 			}
 			else
 			{
@@ -205,12 +302,24 @@ ExecGather(PlanState *pstate)
 				node->reader = NULL;
 			}
 			node->nextreader = 0;
+
+			/* Free up the parallel insert info, if allocated. */
+			if (parallel_ins_info)
+				pfree(parallel_ins_info);
 		}
 
 		/* Run plan locally if no workers or enabled and not single-copy. */
-		node->need_to_scan_locally = (node->nreaders == 0)
-			|| (!gather->single_copy && parallel_leader_participation);
+		node->need_to_scan_locally = (node->nreaders == 0 &&
+			!perform_parallel_ins) || (!gather->single_copy &&
+			parallel_leader_participation);
 		node->initialized = true;
+
+		/* Perform parallel inserts for commands such as CTAS. */
+		if (perform_parallel_ins)
+		{
+			ExecParallelInsert(node);
+			return NULL;
+		}
 	}
 
 	/*

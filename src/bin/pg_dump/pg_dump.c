@@ -59,6 +59,7 @@
 #include "getopt_long.h"
 #include "libpq/libpq-fs.h"
 #include "parallel.h"
+#include "compress_io.h"
 #include "pg_backup_db.h"
 #include "pg_backup_utils.h"
 #include "pg_dump.h"
@@ -298,6 +299,113 @@ static void setupDumpWorker(Archive *AHX);
 static TableInfo *getRootTableInfo(const TableInfo *tbinfo);
 
 
+/* Parse the string into compression options */
+static void
+parse_compression(const char *optarg, Compress *compress)
+{
+	if (optarg[0] == '0' && optarg[1] == '\0')
+		compress->alg = COMPR_ALG_NONE;
+	else if ((optarg[0] > '0' && optarg[0] <= '9') ||
+		optarg[0] == '-')
+	{
+		compress->alg = COMPR_ALG_LIBZ;
+		compress->level_set = true;
+		compress->level = atoi(optarg);
+		if (optarg[1] != '\0')
+		{
+			pg_log_error("compression level must be in range 0..9");
+			exit_nicely(1);
+		}
+	}
+	else
+	{
+		/* Parse a more flexible string like -Z level=3 -Z alg=zlib -Z checksum=1 */
+		for (;;)
+		{
+			char *eq = strchr(optarg, '=');
+			int len;
+
+			if (eq == NULL)
+			{
+				pg_log_error("compression options must be key=value: %s", optarg);
+				exit_nicely(1);
+			}
+
+			len = eq - optarg;
+			if (strncmp(optarg, "alg", len) == 0)
+			{
+				len = strlen(eq) - len;
+
+				for (int i = 0; compresslibs[i].name != NULL; ++i)
+				{
+					if (strlen(1+eq) != strlen(compresslibs[i].name))
+						continue;
+					if (strncmp(1+eq, compresslibs[i].name, len) != 0)
+						continue;
+					compress->alg = compresslibs[i].alg;
+					break;
+				}
+
+				if (compress->alg == COMPR_ALG_DEFAULT)
+				{
+					pg_log_error("unknown compression algorithm: %s", 1+eq);
+					exit_nicely(1);
+				}
+			}
+			else if (strncmp(optarg, "level", len) == 0)
+			{
+				compress->level = atoi(1+eq);
+				compress->level_set = true;
+			}
+			else if (strncmp(optarg, "zstdlong", len) == 0)
+				compress->zstd.longdistance = atoi(1+eq);
+			else if (strncmp(optarg, "checksum", len) == 0)
+				compress->zstd.checksum = atoi(1+eq);
+			else if (strncmp(optarg, "threads", len) == 0)
+				compress->zstd.threads = atoi(1+eq);
+			else
+			{
+				pg_log_error("unknown compression setting: %s", optarg);
+				exit_nicely(1);
+			}
+
+			optarg = strchr(eq, ' ');
+			if (!optarg++)
+				break;
+		}
+
+		/* XXX: zstd will check its own compression level later */
+		if (compress->alg != COMPR_ALG_ZSTD)
+		{
+			Compress nullopts = {0};
+
+			if (compress->level < 0 || compress->level > 9)
+			{
+				pg_log_error("compression level must be in range 0..9");
+				exit_nicely(1);
+			}
+
+// XXX: needs to set default alg first
+			if (memcmp(&compress->zstd, &nullopts.zstd, sizeof(nullopts.zstd)) != 0)
+			{
+				pg_log_error("compression option not supported with this algorithm");
+				exit_nicely(1);
+			}
+		}
+
+		if (!compress->level_set)
+		{ // XXX
+			const int default_compress_level[] = {
+				0,			/* COMPR_ALG_NONE */
+				Z_DEFAULT_COMPRESSION,	/* COMPR_ALG_ZLIB */
+				0, // #ifdef LIBZSTD ZSTD_CLEVEL_DEFAULT,	/* COMPR_ALG_ZSTD */
+			};
+
+			compress->level = default_compress_level[compress->alg];
+		}
+	}
+}
+
 int
 main(int argc, char **argv)
 {
@@ -320,7 +428,7 @@ main(int argc, char **argv)
 	char	   *use_role = NULL;
 	long		rowsPerInsert;
 	int			numWorkers = 1;
-	int			compressLevel = -1;
+	Compress	compress = { .alg = COMPR_ALG_DEFAULT };
 	int			plainText = 0;
 	ArchiveFormat archiveFormat = archUnknown;
 	ArchiveMode archiveMode;
@@ -533,12 +641,7 @@ main(int argc, char **argv)
 				break;
 
 			case 'Z':			/* Compression Level */
-				compressLevel = atoi(optarg);
-				if (compressLevel < 0 || compressLevel > 9)
-				{
-					pg_log_error("compression level must be in range 0..9");
-					exit_nicely(1);
-				}
+				parse_compression(optarg, &compress);
 				break;
 
 			case 0:
@@ -680,20 +783,41 @@ main(int argc, char **argv)
 		plainText = 1;
 
 	/* Custom and directory formats are compressed by default, others not */
-	if (compressLevel == -1)
+	if (compress.alg == COMPR_ALG_DEFAULT)
 	{
-#ifdef HAVE_LIBZ
 		if (archiveFormat == archCustom || archiveFormat == archDirectory)
-			compressLevel = Z_DEFAULT_COMPRESSION;
-		else
+		{
+#ifdef HAVE_LIBZ
+			compress.alg = COMPR_ALG_LIBZ;
+			compress.level = Z_DEFAULT_COMPRESSION;
 #endif
-			compressLevel = 0;
+
+#ifdef HAVE_LIBZSTD
+			compress.alg = COMPR_ALG_ZSTD; // Set default for testing purposes
+			compress.level = ZSTD_CLEVEL_DEFAULT;
+#endif
+		}
+		else
+		{
+			compress.alg = COMPR_ALG_NONE;
+			compress.level = 0;
+		}
 	}
 
 #ifndef HAVE_LIBZ
-	if (compressLevel != 0)
+	if (compress.alg == COMPR_ALG_LIBZ)
+	{
 		pg_log_warning("requested compression not available in this installation -- archive will be uncompressed");
-	compressLevel = 0;
+		compress.alg = 0;
+	}
+#endif
+
+#ifndef HAVE_LIBZSTD
+	if (compress.alg == COMPR_ALG_ZSTD)
+	{
+		pg_log_warning("requested compression not available in this installation -- archive will be uncompressed");
+		compress.alg = 0;
+	}
 #endif
 
 	/*
@@ -724,7 +848,7 @@ main(int argc, char **argv)
 		fatal("option --index-collation-versions-unknown only works in binary upgrade mode");
 
 	/* Open the output file */
-	fout = CreateArchive(filename, archiveFormat, compressLevel, dosync,
+	fout = CreateArchive(filename, archiveFormat, &compress, dosync,
 						 archiveMode, setupDumpWorker);
 
 	/* Make dump options accessible right away */
@@ -958,10 +1082,7 @@ main(int argc, char **argv)
 	ropt->sequence_data = dopt.sequence_data;
 	ropt->binary_upgrade = dopt.binary_upgrade;
 
-	if (compressLevel == -1)
-		ropt->compression = 0;
-	else
-		ropt->compression = compressLevel;
+	ropt->compression = compress;
 
 	ropt->suppressDumpWarnings = true;	/* We've already shown them */
 

@@ -21,11 +21,9 @@
 #define ZLIB_OUT_SIZE	4096
 #define ZLIB_IN_SIZE	4096
 
-typedef enum
-{
-	COMPR_ALG_NONE,
-	COMPR_ALG_LIBZ
-} CompressionAlgorithm;
+/* Forward declaration */
+struct ArchiveHandle;
+typedef struct _archiveHandle ArchiveHandle;
 
 /* Prototype for callback function to WriteDataToArchive() */
 typedef void (*WriteFunc) (ArchiveHandle *AH, const char *buf, size_t len);
@@ -46,19 +44,27 @@ typedef size_t (*ReadFunc) (ArchiveHandle *AH, char **buf, size_t *buflen);
 /* struct definition appears in compress_io.c */
 typedef struct CompressorState CompressorState;
 
-extern CompressorState *AllocateCompressor(int compression, WriteFunc writeF);
-extern void ReadDataFromArchive(ArchiveHandle *AH, int compression,
+extern CompressorState *AllocateCompressor(Compress *compression, WriteFunc writeF);
+extern void ReadDataFromArchive(ArchiveHandle *AH,
 								ReadFunc readF);
 extern void WriteDataToArchive(ArchiveHandle *AH, CompressorState *cs,
 							   const void *data, size_t dLen);
 extern void EndCompressor(ArchiveHandle *AH, CompressorState *cs);
 
+struct compressLibs {
+	const CompressionAlgorithm alg;
+	const char	*name;			/* Name in -Z alg= */
+	const char	*suffix;		/* file extension */
+	const int	defaultlevel;	/* Default compression level */
+};
+extern const struct compressLibs compresslibs[];
 
 typedef struct cfp cfp;
 
-extern cfp *cfopen(const char *path, const char *mode, int compression);
-extern cfp *cfopen_read(const char *path, const char *mode);
-extern cfp *cfopen_write(const char *path, const char *mode, int compression);
+extern cfp *cfopen(const char *path, const char *mode, Compress *compression);
+extern cfp *cfdopen(int fd, const char *mode, Compress *compression);
+extern cfp *cfopen_read(const char *path, const char *mode, Compress *compression);
+extern cfp *cfopen_write(const char *path, const char *mode, Compress *compression);
 extern int	cfread(void *ptr, int size, cfp *fp);
 extern int	cfwrite(const void *ptr, int size, cfp *fp);
 extern int	cfgetc(cfp *fp);
@@ -66,5 +72,8 @@ extern char *cfgets(cfp *fp, char *buf, int len);
 extern int	cfclose(cfp *fp);
 extern int	cfeof(cfp *fp);
 extern const char *get_cfp_error(cfp *fp);
+
+/* also used by tar */
+extern const char * compress_suffix(Compress *compression);
 
 #endif

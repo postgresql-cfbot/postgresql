@@ -6,8 +6,8 @@
  *	for the TOC, and a separate file for each data entry, named "<oid>.dat".
  *	Large objects (BLOBs) are stored in separate files named "blob_<oid>.dat",
  *	and there's a plain-text TOC file for them called "blobs.toc". If
- *	compression is used, each data file is individually compressed and the
- *	".gz" suffix is added to the filenames. The TOC files are never
+ *	compression is used, each data file is individually compressed with a
+ *	suffix is added to the filenames. The TOC files are never
  *	compressed by pg_dump, however they are accepted with the .gz suffix too,
  *	in case the user has manually compressed them with 'gzip'.
  *
@@ -202,7 +202,7 @@ InitArchiveFmt_Directory(ArchiveHandle *AH)
 
 		setFilePath(AH, fname, "toc.dat");
 
-		tocFH = cfopen_read(fname, PG_BINARY_R);
+		tocFH = cfopen_read(fname, PG_BINARY_R, &AH->compression);
 		if (tocFH == NULL)
 			fatal("could not open input file \"%s\": %m", fname);
 
@@ -327,7 +327,7 @@ _StartData(ArchiveHandle *AH, TocEntry *te)
 
 	setFilePath(AH, fname, tctx->filename);
 
-	ctx->dataFH = cfopen_write(fname, PG_BINARY_W, AH->compression);
+	ctx->dataFH = cfopen_write(fname, PG_BINARY_W, &AH->compression);
 	if (ctx->dataFH == NULL)
 		fatal("could not open output file \"%s\": %m", fname);
 }
@@ -388,13 +388,17 @@ _PrintFileData(ArchiveHandle *AH, char *filename)
 	if (!filename)
 		return;
 
-	cfp = cfopen_read(filename, PG_BINARY_R);
+	cfp = cfopen_read(filename, PG_BINARY_R, &AH->compression);
 
 	if (!cfp)
 		fatal("could not open input file \"%s\": %m", filename);
 
-	buf = pg_malloc(ZLIB_OUT_SIZE);
-	buflen = ZLIB_OUT_SIZE;
+	/*
+	 * zstd prefers a 128kB buffer.  The allocation cannot happen in
+	 * cfread, since the "cfp" is an opaque type.
+	 */
+	buf = pg_malloc(128*1024);
+	buflen = 128*1024;
 
 	while ((cnt = cfread(buf, buflen, cfp)))
 	{
@@ -435,12 +439,13 @@ _LoadBlobs(ArchiveHandle *AH)
 	lclContext *ctx = (lclContext *) AH->formatData;
 	char		fname[MAXPGPATH];
 	char		line[MAXPGPATH];
+	Compress	nocompression = {0};
 
 	StartRestoreBlobs(AH);
 
 	setFilePath(AH, fname, "blobs.toc");
 
-	ctx->blobsTocFH = cfopen_read(fname, PG_BINARY_R);
+	ctx->blobsTocFH = cfopen_read(fname, PG_BINARY_R, &nocompression);
 
 	if (ctx->blobsTocFH == NULL)
 		fatal("could not open large object TOC file \"%s\" for input: %m",
@@ -573,6 +578,7 @@ _CloseArchive(ArchiveHandle *AH)
 	{
 		cfp		   *tocFH;
 		char		fname[MAXPGPATH];
+		Compress	nocompression = {0};
 
 		setFilePath(AH, fname, "toc.dat");
 
@@ -580,7 +586,7 @@ _CloseArchive(ArchiveHandle *AH)
 		ctx->pstate = ParallelBackupStart(AH);
 
 		/* The TOC is always created uncompressed */
-		tocFH = cfopen_write(fname, PG_BINARY_W, 0);
+		tocFH = cfopen_write(fname, PG_BINARY_W, &nocompression);
 		if (tocFH == NULL)
 			fatal("could not open output file \"%s\": %m", fname);
 		ctx->dataFH = tocFH;
@@ -639,11 +645,12 @@ _StartBlobs(ArchiveHandle *AH, TocEntry *te)
 {
 	lclContext *ctx = (lclContext *) AH->formatData;
 	char		fname[MAXPGPATH];
+	Compress	nocompression = {0};
 
 	setFilePath(AH, fname, "blobs.toc");
 
 	/* The blob TOC file is never compressed */
-	ctx->blobsTocFH = cfopen_write(fname, "ab", 0);
+	ctx->blobsTocFH = cfopen_write(fname, "ab", &nocompression);
 	if (ctx->blobsTocFH == NULL)
 		fatal("could not open output file \"%s\": %m", fname);
 }
@@ -661,7 +668,7 @@ _StartBlob(ArchiveHandle *AH, TocEntry *te, Oid oid)
 
 	snprintf(fname, MAXPGPATH, "%s/blob_%u.dat", ctx->directory, oid);
 
-	ctx->dataFH = cfopen_write(fname, PG_BINARY_W, AH->compression);
+	ctx->dataFH = cfopen_write(fname, PG_BINARY_W, &AH->compression);
 
 	if (ctx->dataFH == NULL)
 		fatal("could not open output file \"%s\": %m", fname);
@@ -765,14 +772,20 @@ _PrepParallelRestore(ArchiveHandle *AH)
 		 */
 		setFilePath(AH, fname, tctx->filename);
 
-		if (stat(fname, &st) == 0)
-			te->dataLength = st.st_size;
-		else
+		for (int i = 0; compresslibs[i].name != NULL; ++i)
 		{
-			/* It might be compressed */
-			strlcat(fname, ".gz", sizeof(fname));
-			if (stat(fname, &st) == 0)
-				te->dataLength = st.st_size;
+			char	filename[MAXPGPATH];
+			int	ret;
+
+			snprintf(filename, sizeof(filename), "%s%s", fname,
+					compresslibs[i].suffix);
+
+			ret = stat(fname, &st);
+			if (ret < 0) // && errno == ENOENT)
+				continue;
+
+			te->dataLength = st.st_size;
+			break;
 		}
 
 		/*

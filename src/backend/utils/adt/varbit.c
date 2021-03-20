@@ -36,6 +36,7 @@
 #include "libpq/pqformat.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/supportnodes.h"
+#include "port/pg_bitutils.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/varbit.h"
@@ -1877,4 +1878,31 @@ bitgetbit(PG_FUNCTION_ARGS)
 		PG_RETURN_INT32(1);
 	else
 		PG_RETURN_INT32(0);
+}
+
+/*
+ * bitpopcount
+ *
+ * Returns the number of bits set in a bit string.
+ *
+ */
+Datum
+bitpopcount(PG_FUNCTION_ARGS)
+{
+	/* There's really no chance of an overflow here because
+	 * to get to INT64_MAX set bits, an object would have to be
+	 * an exbibyte long, exceeding what PostgreSQL can currently
+	 * store by a factor of 2^28
+	 */
+	int64		popcount;
+	VarBit		*arg1 = PG_GETARG_VARBIT_P(0);
+	bits8		*p;
+	int			len;
+
+	p = VARBITS(arg1);
+	len = (VARBITLEN(arg1) + BITS_PER_BYTE - 1) / BITS_PER_BYTE;
+
+	popcount = pg_popcount((char *)p, len);
+
+	PG_RETURN_INT64(popcount);
 }

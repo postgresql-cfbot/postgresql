@@ -2227,3 +2227,10 @@ SELECT encode(overlay(E'Th\\000omas'::bytea placing E'\\002\\003'::bytea from 5 
  Th\000o\x02\x03
 (1 row)
 
+SET bytea_output TO hex;
+SELECT count_set_bits(E'\\xdeadbeef'::bytea);
+ count_set_bits 
+----------------
+             24
+(1 row)
+

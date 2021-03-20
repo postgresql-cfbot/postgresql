@@ -4033,6 +4033,23 @@ SELECT format('Testing %3$s, %2$s, %s', 'one', 'two', 'three');
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>count_set_bits</primary>
+        </indexterm>
+        <function>count_set_bits</function> ( <parameter>bytes</parameter> <type>bytea</type> )
+        <returnvalue>bigint</returnvalue>
+       </para>
+       <para>
+        Counts the number of bits set in a binary string.
+       </para>
+       <para>
+        <literal>count_set_bits('\xdeadbeef'::bytea)</literal>
+        <returnvalue>24</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>get_bit</primary>
         </indexterm>
         <function>get_bit</function> ( <parameter>bytes</parameter> <type>bytea</type>,
@@ -4833,6 +4850,23 @@ SELECT format('Testing %3$s, %2$s, %s', 'one', 'two', 'three');
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>count_set_bits</primary>
+        </indexterm>
+        <function>count_set_bits</function> ( <parameter>bits</parameter> <type>bit</type> )
+        <returnvalue>bigint</returnvalue>
+       </para>
+       <para>
+        Counts the bits set in a bit string.
+       </para>
+       <para>
+        <literal>count_set_bits(B'101010101010101010')</literal>
+        <returnvalue>9</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>get_bit</primary>
         </indexterm>
         <function>get_bit</function> ( <parameter>bits</parameter> <type>bit</type>,
@@ -4869,6 +4903,7 @@ SELECT format('Testing %3$s, %2$s, %s', 'one', 'two', 'three');
         <returnvalue>101010001010101010</returnvalue>
        </para></entry>
       </row>
+
      </tbody>
     </tgroup>
    </table>

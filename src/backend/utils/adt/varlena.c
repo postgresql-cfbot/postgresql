@@ -3441,6 +3441,22 @@ bytea_overlay(bytea *t1, bytea *t2, int sp, int sl)
 }
 
 /*
+ * popcount
+ */
+Datum
+byteapopcount(PG_FUNCTION_ARGS)
+{
+	bytea	*t1 = PG_GETARG_BYTEA_PP(0);
+	int		len;
+	int64	result;
+
+	len = VARSIZE_ANY_EXHDR(t1);
+	result = pg_popcount(VARDATA_ANY(t1), len);
+
+	PG_RETURN_INT64(result);
+}
+
+/*
  * byteapos -
  *	  Return the position of the specified substring.
  *	  Implements the SQL POSITION() function.

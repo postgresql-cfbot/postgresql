@@ -39,6 +39,7 @@
 
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/parallel.h"
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
@@ -1951,6 +1952,39 @@ fireASTriggers(ModifyTableState *node)
 }
 
 /*
+ * Process BEFORE EACH STATEMENT triggers, in the leader
+ */
+void
+fireBSTriggersInLeader(ModifyTableState *node)
+{
+	Assert(IsInParallelMode() && !IsParallelWorker());
+
+	if (node->fireBSTriggers)
+	{
+		fireBSTriggers(node);
+		node->fireBSTriggers = false;
+
+		/*
+		 * Disable firing of AFTER STATEMENT triggers by local plan execution
+		 * (ModifyTable processing). These will be fired at the end of Gather
+		 * processing.
+		 */
+		node->fireASTriggers = false;
+	}
+}
+
+/*
+ * Process AFTER EACH STATEMENT triggers, in the leader
+ */
+void
+fireASTriggersInLeader(ModifyTableState *node)
+{
+	Assert(IsInParallelMode() && !IsParallelWorker());
+
+	fireASTriggers(node);
+}
+
+/*
  * Set up the state needed for collecting transition tuples for AFTER
  * triggers.
  */
@@ -2298,7 +2332,11 @@ ExecModifyTable(PlanState *pstate)
 	/*
 	 * We're done, but fire AFTER STATEMENT triggers before exiting.
 	 */
-	fireASTriggers(node);
+	if (node->fireASTriggers)
+	{
+		fireASTriggers(node);
+		node->fireASTriggers = false;
+	}
 
 	node->mt_done = true;
 
@@ -2375,7 +2413,9 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 	/* set up epqstate with dummy subplan data for the moment */
 	EvalPlanQualInit(&mtstate->mt_epqstate, estate, NULL, NIL, node->epqParam);
-	mtstate->fireBSTriggers = true;
+	/* Statement-level triggers must not be fired by parallel workers */
+	mtstate->fireBSTriggers = !IsParallelWorker();
+	mtstate->fireASTriggers = !IsParallelWorker();
 
 	/*
 	 * Build state for collecting transition tuples.  This requires having a

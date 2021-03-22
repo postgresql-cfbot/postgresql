@@ -517,6 +517,20 @@ GetCurrentFullTransactionIdIfAny(void)
 }
 
 /*
+ *	SetCurrentCommandIdUsedForWorker
+ *
+ * For a parallel worker, record that the currentCommandId has been used.
+ * This must only be called at the start of a parallel operation.
+ */
+void
+SetCurrentCommandIdUsedForWorker(void)
+{
+	Assert(IsParallelWorker() && !currentCommandIdUsed && currentCommandId != InvalidCommandId);
+
+	currentCommandIdUsed = true;
+}
+
+/*
  *	MarkCurrentTransactionIdLoggedIfAny
  *
  * Remember that the current xid - if it is assigned - now has been wal logged.
@@ -764,12 +778,16 @@ GetCurrentCommandId(bool used)
 	if (used)
 	{
 		/*
-		 * Forbid setting currentCommandIdUsed in a parallel worker, because
-		 * we have no provision for communicating this back to the leader.  We
-		 * could relax this restriction when currentCommandIdUsed was already
-		 * true at the start of the parallel operation.
+		 * If in a parallel worker, only allow setting currentCommandIdUsed if
+		 * currentCommandIdUsed was already true at the start of the parallel
+		 * operation (by way of SetCurrentCommandIdUsedForWorker()), otherwise
+		 * forbid setting currentCommandIdUsed because we have no provision for
+		 * communicating this back to the leader. Once currentCommandIdUsed is
+		 * set, the commandId used by leader and workers can't be changed,
+		 * because CommandCounterIncrement() then prevents any attempted
+		 * increment of the current commandId.
 		 */
-		Assert(!IsParallelWorker());
+		Assert(!(IsParallelWorker() && !currentCommandIdUsed));
 		currentCommandIdUsed = true;
 	}
 	return currentCommandId;
@@ -1020,11 +1038,24 @@ IsInParallelMode(void)
  * Prepare for entering parallel mode plan execution, based on command-type.
  */
 void
-PrepareParallelModePlanExec(CmdType commandType)
+PrepareParallelModePlanExec(CmdType commandType, bool isParallelModifyLeader)
 {
 	if (IsModifySupportedInParallelMode(commandType))
 	{
 		Assert(!IsInParallelMode());
+
+		if (isParallelModifyLeader)
+		{
+			/*
+			 * Set currentCommandIdUsed to true, to ensure that the current
+			 * CommandId (which will be used by the parallel workers) won't
+			 * change during this parallel operation, as starting new
+			 * commands in parallel-mode is not currently supported.
+			 * See related comments in GetCurrentCommandId and
+			 * CommandCounterIncrement.
+			 */
+			(void) GetCurrentCommandId(true);
+		}
 
 		/*
 		 * Prepare for entering parallel mode by assigning a TransactionId.

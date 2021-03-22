@@ -130,6 +130,9 @@ typedef struct
 static Node *preprocess_expression(PlannerInfo *root, Node *expr, int kind);
 static void preprocess_qual_conditions(PlannerInfo *root, Node *jtnode);
 static void inheritance_planner(PlannerInfo *root);
+static Path *generate_final_rel_path(PlannerInfo *root, RelOptInfo *final_rel,
+						bool inheritance_update, Path *path, int64 offset_est,
+						int64 count_est, bool isParallelModify);
 static void grouping_planner(PlannerInfo *root, bool inheritance_update,
 							 double tuple_fraction);
 static grouping_sets_data *preprocess_grouping_sets(PlannerInfo *root);
@@ -323,10 +326,11 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	 *
 	 * (Note that we do allow CREATE TABLE AS, INSERT INTO...SELECT, SELECT
 	 * INTO, and CREATE MATERIALIZED VIEW to use parallel plans. However, as
-	 * of now, only the leader backend writes into a completely new table. In
-	 * the future, we can extend it to allow workers to write into the table.
-	 * However, to allow parallel updates and deletes, we have to solve other
-	 * problems, especially around combo CIDs.)
+	 * of now, only INSERT INTO...SELECT employs workers to write into the
+	 * table, while for the other cases only the leader backend writes into a
+	 * completely new table. In the future, we can extend it to allow workers
+	 * for more cases. However, to allow parallel updates and deletes, we have
+	 * to solve other problems, especially around combo CIDs.)
 	 *
 	 * For now, we don't try to use parallel mode if we're running inside a
 	 * parallel worker.  We might eventually be able to relax this
@@ -1807,7 +1811,120 @@ inheritance_planner(PlannerInfo *root)
 									 returningLists,
 									 rowMarks,
 									 NULL,
-									 assign_special_exec_param(root)));
+									 assign_special_exec_param(root),
+									 0));
+}
+
+/*
+ * generate_final_rel_path
+ *     Generate a path for the final_rel, with LockRows, Limit, and/or
+ *     ModifyTable steps added if needed.
+ */
+static Path *
+generate_final_rel_path(PlannerInfo *root, RelOptInfo *final_rel,
+						bool inheritance_update, Path *path,
+						int64 offset_est, int64 count_est, bool isParallelModify)
+{
+	Query	*parse = root->parse;
+
+	/*
+	 * If there is a FOR [KEY] UPDATE/SHARE clause, add the LockRows node.
+	 * (Note: we intentionally test parse->rowMarks not root->rowMarks
+	 * here.  If there are only non-locking rowmarks, they should be
+	 * handled by the ModifyTable node instead.  However, root->rowMarks
+	 * is what goes into the LockRows node.)
+	 */
+	if (parse->rowMarks)
+	{
+		path = (Path *) create_lockrows_path(root, final_rel, path,
+											 root->rowMarks,
+											 assign_special_exec_param(root));
+	}
+
+	/*
+	 * If there is a LIMIT/OFFSET clause, add the LIMIT node.
+	 */
+	if (limit_needed(parse))
+	{
+		path = (Path *) create_limit_path(root, final_rel, path,
+										  parse->limitOffset,
+										  parse->limitCount,
+										  parse->limitOption,
+										  offset_est, count_est);
+	}
+
+	/*
+	 * If this is an INSERT/UPDATE/DELETE, and we're not being called from
+	 * inheritance_planner, add the ModifyTable node.
+	 */
+	if (parse->commandType != CMD_SELECT && !inheritance_update)
+	{
+		Index		rootRelation;
+		List		*withCheckOptionLists;
+		List		*returningLists;
+		List		*rowMarks;
+		int			parallelWorkers;
+
+		/*
+		 * If target is a partition root table, we need to mark the
+		 * ModifyTable node appropriately for that.
+		 */
+		if (rt_fetch(parse->resultRelation, parse->rtable)->relkind ==
+			RELKIND_PARTITIONED_TABLE)
+			rootRelation = parse->resultRelation;
+		else
+			rootRelation = 0;
+
+		/*
+		 * Set up the WITH CHECK OPTION and RETURNING lists-of-lists, if
+		 * needed.
+		 */
+		if (parse->withCheckOptions)
+			withCheckOptionLists = list_make1(parse->withCheckOptions);
+		else
+			withCheckOptionLists = NIL;
+
+		if (parse->returningList)
+			returningLists = list_make1(parse->returningList);
+		else
+			returningLists = NIL;
+
+		/*
+		 * If there was a FOR [KEY] UPDATE/SHARE clause, the LockRows node
+		 * will have dealt with fetching non-locked marked rows, else we
+		 * need to have ModifyTable do that.
+		 */
+		if (parse->rowMarks)
+			rowMarks = NIL;
+		else
+			rowMarks = root->rowMarks;
+
+		/*
+		 * For the number of workers to use for a parallel
+		 * INSERT/UPDATE/DELETE, it seems reasonable to use the same number
+		 * of workers as estimated for the underlying query.
+		 */
+		parallelWorkers = isParallelModify ? path->parallel_workers : 0;
+
+		path = (Path *)
+			create_modifytable_path(root, final_rel,
+									parse->commandType,
+									parse->canSetTag,
+									parse->resultRelation,
+									rootRelation,
+									false,
+									list_make1_int(parse->resultRelation),
+									list_make1(path),
+									list_make1(root),
+									withCheckOptionLists,
+									returningLists,
+									rowMarks,
+									parse->onConflict,
+									assign_special_exec_param(root),
+									parallelWorkers);
+	}
+
+	return path;
 }
 
 /*--------------------
@@ -1855,6 +1972,7 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 	RelOptInfo *final_rel;
 	FinalPathExtraData extra;
 	ListCell   *lc;
+	bool		parallel_modify_partial_path_added = false;
 
 	/* Tweak caller-supplied tuple_fraction if have LIMIT/OFFSET */
 	if (parse->limitCount || parse->limitOffset)
@@ -2295,96 +2413,33 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 	{
 		Path	   *path = (Path *) lfirst(lc);
 
-		/*
-		 * If there is a FOR [KEY] UPDATE/SHARE clause, add the LockRows node.
-		 * (Note: we intentionally test parse->rowMarks not root->rowMarks
-		 * here.  If there are only non-locking rowmarks, they should be
-		 * handled by the ModifyTable node instead.  However, root->rowMarks
-		 * is what goes into the LockRows node.)
-		 */
-		if (parse->rowMarks)
-		{
-			path = (Path *) create_lockrows_path(root, final_rel, path,
-												 root->rowMarks,
-												 assign_special_exec_param(root));
-		}
-
-		/*
-		 * If there is a LIMIT/OFFSET clause, add the LIMIT node.
-		 */
-		if (limit_needed(parse))
-		{
-			path = (Path *) create_limit_path(root, final_rel, path,
-											  parse->limitOffset,
-											  parse->limitCount,
-											  parse->limitOption,
-											  offset_est, count_est);
-		}
-
-		/*
-		 * If this is an INSERT/UPDATE/DELETE, and we're not being called from
-		 * inheritance_planner, add the ModifyTable node.
-		 */
-		if (parse->commandType != CMD_SELECT && !inheritance_update)
-		{
-			Index		rootRelation;
-			List	   *withCheckOptionLists;
-			List	   *returningLists;
-			List	   *rowMarks;
-
-			/*
-			 * If target is a partition root table, we need to mark the
-			 * ModifyTable node appropriately for that.
-			 */
-			if (rt_fetch(parse->resultRelation, parse->rtable)->relkind ==
-				RELKIND_PARTITIONED_TABLE)
-				rootRelation = parse->resultRelation;
-			else
-				rootRelation = 0;
-
-			/*
-			 * Set up the WITH CHECK OPTION and RETURNING lists-of-lists, if
-			 * needed.
-			 */
-			if (parse->withCheckOptions)
-				withCheckOptionLists = list_make1(parse->withCheckOptions);
-			else
-				withCheckOptionLists = NIL;
-
-			if (parse->returningList)
-				returningLists = list_make1(parse->returningList);
-			else
-				returningLists = NIL;
-
-			/*
-			 * If there was a FOR [KEY] UPDATE/SHARE clause, the LockRows node
-			 * will have dealt with fetching non-locked marked rows, else we
-			 * need to have ModifyTable do that.
-			 */
-			if (parse->rowMarks)
-				rowMarks = NIL;
-			else
-				rowMarks = root->rowMarks;
-
-			path = (Path *)
-				create_modifytable_path(root, final_rel,
-										parse->commandType,
-										parse->canSetTag,
-										parse->resultRelation,
-										rootRelation,
-										false,
-										list_make1_int(parse->resultRelation),
-										list_make1(path),
-										list_make1(root),
-										withCheckOptionLists,
-										returningLists,
-										rowMarks,
-										parse->onConflict,
-										assign_special_exec_param(root));
-		}
+		path = generate_final_rel_path(root, final_rel, inheritance_update, path,
+										offset_est, count_est, false);
 
 		/* And shove it into final_rel */
 		add_path(final_rel, path);
+	}
+
+	/* Consider a supported parallel table-modification command */
+	if (IsModifySupportedInParallelMode(parse->commandType) &&
+		!inheritance_update &&
+		final_rel->consider_parallel &&
+		parse->rowMarks == NIL)
+	{
+		/*
+		 * Generate partial paths for the final_rel. Insert all surviving
+		 * paths, with Limit, and/or ModifyTable steps added if needed.
+		 */
+		foreach(lc, current_rel->partial_pathlist)
+		{
+			Path	   *path = (Path *) lfirst(lc);
+
+			path = generate_final_rel_path(root, final_rel, inheritance_update, path,
+										offset_est, count_est, true);
+
+			add_partial_path(final_rel, path);
+			parallel_modify_partial_path_added = true;
+		}
 	}
 
 	/*
@@ -2401,6 +2456,18 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 
 			add_partial_path(final_rel, partial_path);
 		}
+	}
+
+	if (parallel_modify_partial_path_added)
+	{
+		/*
+		 * Generate gather paths according to the added partial paths for the
+		 * parallel table-modification command.
+		 * Note that true is passed for the "override_rows" parameter, so that
+		 * the rows from the cheapest partial path (ModifyTablePath) are used,
+		 * not the rel's (possibly estimated) rows.
+		 */
+		generate_useful_gather_paths(root, final_rel, true);
 	}
 
 	extra.limit_needed = limit_needed(parse);
@@ -7572,7 +7639,33 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 	 * one of the generated paths may turn out to be the cheapest one.
 	 */
 	if (rel->consider_parallel && !IS_OTHER_REL(rel))
-		generate_useful_gather_paths(root, rel, false);
+	{
+		if (IsModifySupportedInParallelMode(root->parse->commandType))
+		{
+			Assert(root->glob->parallelModeOK);
+			if (root->glob->maxParallelHazard != PROPARALLEL_SAFE)
+			{
+				/*
+				 * Don't allow a supported parallel table-modification
+				 * command, because it's not safe.
+				 */
+				if (root->glob->maxParallelHazard == PROPARALLEL_RESTRICTED)
+				{
+					/*
+					 * However, do allow any underlying query to be run by
+					 * parallel workers.
+					 */
+					generate_useful_gather_paths(root, rel, false);
+				}
+				rel->partial_pathlist = NIL;
+				rel->consider_parallel = false;
+			}
+		}
+		else
+		{
+			generate_useful_gather_paths(root, rel, false);
+		}
+	}
 
 	/*
 	 * Reassess which paths are the cheapest, now that we've potentially added

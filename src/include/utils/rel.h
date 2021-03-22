@@ -15,6 +15,7 @@
 #define REL_H
 
 #include "access/tupdesc.h"
+#include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_index.h"
@@ -600,15 +601,15 @@ typedef struct PartitionedTableRdOptions
 
 /*
  * RELATION_IS_LOCAL
- *		If a rel is either temp or newly created in the current transaction,
- *		it can be assumed to be accessible only to the current backend.
- *		This is typically used to decide that we can skip acquiring locks.
+ *		If a rel is temp, it can be assumed to be accessible only to the
+ *		current backend. This is typically used to decide that we can
+ *		skip acquiring locks.
  *
  * Beware of multiple eval of argument
  */
 #define RELATION_IS_LOCAL(relation) \
 	((relation)->rd_islocaltemp || \
-	 (relation)->rd_createSubid != InvalidSubTransactionId)
+	 (!IsInParallelMode() && ((relation)->rd_createSubid != InvalidSubTransactionId)))
 
 /*
  * RELATION_IS_OTHER_TEMP

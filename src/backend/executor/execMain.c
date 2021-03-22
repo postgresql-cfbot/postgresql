@@ -148,12 +148,11 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	 * If the transaction is read-only, we need to check if any writes are
 	 * planned to non-temporary tables.  EXPLAIN is considered read-only.
 	 *
-	 * Don't allow writes in parallel mode.  Supporting UPDATE and DELETE
-	 * would require (a) storing the combocid hash in shared memory, rather
-	 * than synchronizing it just once at the start of parallelism, and (b) an
-	 * alternative to heap_update()'s reliance on xmax for mutual exclusion.
-	 * INSERT may have no such troubles, but we forbid it to simplify the
-	 * checks.
+	 * Except for INSERT, don't allow writes in parallel mode.  Supporting
+	 * UPDATE and DELETE would require (a) storing the combocid hash in shared
+	 * memory, rather than synchronizing it just once at the start of
+	 * parallelism, and (b) an alternative to heap_update()'s reliance on xmax
+	 * for mutual exclusion.
 	 *
 	 * We have lower-level defenses in CommandCounterIncrement and elsewhere
 	 * against performing unsafe operations in parallel mode, but this gives a
@@ -776,7 +775,8 @@ ExecCheckXactReadOnly(PlannedStmt *plannedstmt)
 		PreventCommandIfReadOnly(CreateCommandName((Node *) plannedstmt));
 	}
 
-	if (plannedstmt->commandType != CMD_SELECT || plannedstmt->hasModifyingCTE)
+	if ((plannedstmt->commandType != CMD_SELECT &&
+		 !IsModifySupportedInParallelMode(plannedstmt->commandType)) || plannedstmt->hasModifyingCTE)
 		PreventCommandIfParallelMode(CreateCommandName((Node *) plannedstmt));
 }
 
@@ -1513,7 +1513,10 @@ ExecutePlan(EState *estate,
 	estate->es_use_parallel_mode = use_parallel_mode;
 	if (use_parallel_mode)
 	{
-		PrepareParallelModePlanExec(estate->es_plannedstmt->commandType);
+		bool		isParallelModifyLeader = IsA(planstate, GatherState) &&
+												IsA(outerPlanState(planstate), ModifyTableState);
+
+		PrepareParallelModePlanExec(estate->es_plannedstmt->commandType, isParallelModifyLeader);
 		EnterParallelMode();
 	}
 

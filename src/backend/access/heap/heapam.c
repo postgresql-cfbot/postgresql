@@ -52,6 +52,9 @@
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
 #include "catalog/catalog.h"
+#ifdef USE_ASSERT_CHECKING
+#include "commands/trigger.h"
+#endif
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/atomics.h"
@@ -2294,10 +2297,31 @@ heap_prepare_insert(Relation relation, HeapTuple tup, TransactionId xid,
 	 * inserts in general except for the cases where inserts generate a new
 	 * CommandId (eg. inserts into a table having a foreign key column).
 	 */
+#ifdef USE_ASSERT_CHECKING
 	if (IsParallelWorker())
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
-				 errmsg("cannot insert tuples in a parallel worker")));
+	{
+		/*
+		 * Assert that for this relation, no trigger of type RI_TRIGGER_FK
+		 * exists, as it would indicate that the relation has a FK column,
+		 * which would, on insert, result in creation of a new CommandId,
+		 * and this isn't currently supported in a parallel worker.
+		 */
+		TriggerDesc *trigdesc = relation->trigdesc;
+		if (trigdesc != NULL)
+		{
+			int i;
+
+			for (i = 0; i < trigdesc->numtriggers; i++)
+			{
+				int			trigtype;
+				Trigger		*trigger = &trigdesc->triggers[i];
+
+				trigtype = RI_FKey_trigger_type(trigger->tgfoid);
+				Assert(trigtype != RI_TRIGGER_FK);
+			}
+		}
+	}
+#endif
 
 	tup->t_data->t_infomask &= ~(HEAP_XACT_MASK);
 	tup->t_data->t_infomask2 &= ~(HEAP2_XACT_MASK);

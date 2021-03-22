@@ -633,12 +633,13 @@ operation at the same time which would ordinarily be prevented by the
 heavyweight lock mechanism, undefined behavior might result.  In practice, the
 dangers are modest.  The leader and worker share the same transaction,
 snapshot, and combo CID hash, and neither can perform any DDL or, indeed,
-write any data at all.  Thus, for either to read a table locked exclusively by
-the other is safe enough.  Problems would occur if the leader initiated
-parallelism from a point in the code at which it had some backend-private
-state that made table access from another process unsafe, for example after
-calling SetReindexProcessing and before calling ResetReindexProcessing,
-catastrophe could ensue, because the worker won't have that state.
+write any data at all (with the exception of parallel insert).  Thus, for either
+to read a table locked exclusively by the other is safe enough.  Problems would
+occur if the leader initiated parallelism from a point in the code at which it
+had some backend-private state that made table access from another process
+unsafe, for example after calling SetReindexProcessing and before calling
+ResetReindexProcessing, catastrophe could ensue, because the worker won't have
+that state.
 
 To allow parallel inserts and parallel copy, we have ensured that relation
 extension and page locks don't participate in group locking which means such
@@ -652,9 +653,8 @@ happens, so those will also not participate in deadlock.  To allow for other
 parallel writes like parallel update or parallel delete, we'll either need to
 (1) further enhance the deadlock detector to handle those tuple locks in a
 different way than other types; or (2) have parallel workers use some other
-mutual exclusion method for such cases.  Currently, the parallel mode is
-strictly read-only, but now we have the infrastructure to allow parallel
-inserts and parallel copy.
+mutual exclusion method for such cases.  Currently, only parallel insert is
+allowed, but we have the infrastructure to allow parallel copy.
 
 Group locking adds three new members to each PGPROC: lockGroupLeader,
 lockGroupMembers, and lockGroupLink. A PGPROC's lockGroupLeader is NULL for

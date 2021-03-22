@@ -1066,6 +1066,29 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 	plan->lefttree = set_plan_refs(root, plan->lefttree, rtoffset);
 	plan->righttree = set_plan_refs(root, plan->righttree, rtoffset);
 
+	/*
+	 * FIXME: The following code block is a bit of a hack to fix the missing
+	 * targetlist on the Gather node, in the case of an underlying ModifyTable
+	 * node for Parallel INSERT. The current design expects the ModifyTable
+	 * targetlist to be set in set_plan_refs(), but the targetlist is needed
+	 * by the parent Gather node, which is processed first.
+	 * This issue is a consequence of the fact that, prior to Parallel INSERT
+	 * support, ModifyTable node was always a top-level plan node. Now the
+	 * ModifyTable node may be in the subplan of the Gather node, so the
+	 * expected order of node processing and configuration has changed.
+	 * Currently it is not known how to fix this issue in a more elegant way.
+	 */
+	if (nodeTag(plan) == T_Gather)
+	{
+		Plan	   *subplan = plan->lefttree;
+
+		if (IsA(subplan, ModifyTable) &&
+						castNode(ModifyTable, subplan)->returningLists != NIL)
+		{
+			plan->targetlist = subplan->targetlist;
+		}
+	}
+
 	return plan;
 }
 

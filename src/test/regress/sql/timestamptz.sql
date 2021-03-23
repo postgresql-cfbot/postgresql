@@ -193,6 +193,26 @@ SELECT date_trunc('day', timestamp with time zone '2001-02-16 20:38:40+00', 'Aus
 SELECT date_trunc('day', timestamp with time zone '2001-02-16 20:38:40+00', 'GMT') as gmt_trunc;  -- fixed-offset abbreviation
 SELECT date_trunc('day', timestamp with time zone '2001-02-16 20:38:40+00', 'VET') as vet_trunc;  -- variable-offset abbreviation
 
+-- verify date_bin behaves the same as date_trunc for relevant intervals
+SELECT
+  str,
+  interval,
+  date_trunc(str, ts, 'Australia/Sydney') = date_bin(interval::interval, ts, timestamp with time zone '2001-01-01+11') AS equal
+FROM (
+  VALUES
+  ('day', '1 d'),
+  ('hour', '1 h'),
+  ('minute', '1 m'),
+  ('second', '1 s'),
+  ('millisecond', '1 ms'),
+  ('microsecond', '1 us')
+) intervals (str, interval),
+(SELECT timestamptz '2020-02-29 15:44:17.71393+00') ts (ts);
+
+-- disallow intervals with months or years
+SELECT date_bin('5 months'::interval, timestamp with time zone '2020-02-01 01:01:01+00', timestamp with time zone '2001-01-01+00');
+SELECT date_bin('5 years'::interval,  timestamp with time zone '2020-02-01 01:01:01+00', timestamp with time zone '2001-01-01+00');
+
 -- Test casting within a BETWEEN qualifier
 SELECT d1 - timestamp with time zone '1997-01-02' AS diff
   FROM TIMESTAMPTZ_TBL

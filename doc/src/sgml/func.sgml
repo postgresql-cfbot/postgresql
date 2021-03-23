@@ -8725,6 +8725,20 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
 
        <row>
         <entry role="func_table_entry"><para role="func_signature">
+         <function>date_bin</function> ( <type>interval</type>, <type>timestamp</type>, <type>timestamp</type> )
+         <returnvalue>timestamp</returnvalue>
+        </para>
+        <para>
+         Bin input into specified interval aligned with specified origin; see <xref linkend="functions-datetime-trunc"/>
+        </para>
+        <para>
+         <literal>date_bin('15 minutes', timestamp '2001-02-16 20:38:40', timestamp '2001-02-16 20:05:00')</literal>
+         <returnvalue>2001-02-16 20:35:00</returnvalue>
+        </para></entry>
+       </row>
+
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
          <indexterm>
           <primary>date_trunc</primary>
          </indexterm>

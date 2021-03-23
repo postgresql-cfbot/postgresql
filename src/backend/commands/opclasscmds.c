@@ -576,10 +576,7 @@ DefineOpClass(CreateOpClassStmt *stmt)
 	 */
 	if (OidIsValid(storageoid))
 	{
-		/* Just drop the spec if same as column datatype */
-		if (storageoid == typeoid)
-			storageoid = InvalidOid;
-		else if (!amstorage)
+		if ((storageoid != typeoid) && (!amstorage))
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 errmsg("storage type cannot be different from data type for access method \"%s\"",

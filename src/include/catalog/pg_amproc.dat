@@ -1293,7 +1293,8 @@
   amprocrighttype => 'uuid', amprocnum => '3',
   amproc => 'brin_minmax_consistent' },
 { amprocfamily => 'brin/uuid_minmax_ops', amproclefttype => 'uuid',
-  amprocrighttype => 'uuid', amprocnum => '4', amproc => 'brin_minmax_union' },
+  amprocrighttype => 'uuid', amprocnum => '4',
+  amproc => 'brin_minmax_union' },
 
 # inclusion range types
 { amprocfamily => 'brin/range_inclusion_ops', amproclefttype => 'anyrange',

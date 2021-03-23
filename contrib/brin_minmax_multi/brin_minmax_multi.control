@@ -1,0 +1,6 @@
+# brin_minmax_multi extension
+comment = 'support for BRIN minmax-multi indexes'
+default_version = '1.0'
+module_pathname = '$libdir/brin_minmax_multi'
+relocatable = true
+trusted = true

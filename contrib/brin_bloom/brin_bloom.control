@@ -1,0 +1,6 @@
+# brin_bloom extension
+comment = 'support for BRIN bloom indexes'
+default_version = '1.0'
+module_pathname = '$libdir/brin_bloom'
+relocatable = true
+trusted = true

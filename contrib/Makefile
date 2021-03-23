@@ -12,6 +12,8 @@ SUBDIRS = \
 		bloom		\
 		btree_gin	\
 		btree_gist	\
+		brin_bloom	\
+		brin_minmax_multi	\
 		citext		\
 		cube		\
 		dblink		\

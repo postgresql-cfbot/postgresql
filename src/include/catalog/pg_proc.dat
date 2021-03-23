@@ -8221,6 +8221,8 @@
   proname => 'brin_minmax_union', prorettype => 'bool',
   proargtypes => 'internal internal internal', prosrc => 'brin_minmax_union' },
 
+
+
 # BRIN inclusion
 { oid => '4105', descr => 'BRIN inclusion support',
   proname => 'brin_inclusion_opcinfo', prorettype => 'internal',

@@ -62,8 +62,6 @@ static void build_joinrel_partition_info(RelOptInfo *joinrel,
 static bool have_partkey_equi_join(RelOptInfo *joinrel,
 								   RelOptInfo *rel1, RelOptInfo *rel2,
 								   JoinType jointype, List *restrictlist);
-static int	match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel,
-										 bool strict_op);
 static void set_joinrel_partition_key_exprs(RelOptInfo *joinrel,
 											RelOptInfo *outer_rel, RelOptInfo *inner_rel,
 											JoinType jointype);
@@ -1820,7 +1818,7 @@ have_partkey_equi_join(RelOptInfo *joinrel,
  * partition key using a strict operator.  This allows us to consider
  * nullable as well as nonnullable partition keys.
  */
-static int
+int
 match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel, bool strict_op)
 {
 	int			cnt;

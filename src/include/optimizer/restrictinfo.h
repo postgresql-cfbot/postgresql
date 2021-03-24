@@ -35,6 +35,7 @@ extern bool restriction_is_or_clause(RestrictInfo *restrictinfo);
 extern bool restriction_is_securely_promotable(RestrictInfo *restrictinfo,
 											   RelOptInfo *rel);
 extern List *get_actual_clauses(List *restrictinfo_list);
+extern List * extract_rinfo_clauses(List *restrictinfo_list);
 extern List *extract_actual_clauses(List *restrictinfo_list,
 									bool pseudoconstant);
 extern void extract_actual_join_clauses(List *restrictinfo_list,

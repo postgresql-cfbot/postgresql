@@ -423,6 +423,28 @@ get_actual_clauses(List *restrictinfo_list)
 	return result;
 }
 
+
+/*
+ * extract_rinfo_clauses
+ *
+ *	extract the base clauses from restrictinfo_list.
+ */
+List *
+extract_rinfo_clauses(List *restrictinfo_list)
+{
+	List	   *result = NIL;
+	ListCell   *l;
+
+	foreach(l, restrictinfo_list)
+	{
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, l);
+
+		result = lappend(result, rinfo->clause);
+	}
+	return result;
+
+}
+
 /*
  * extract_actual_clauses
  *

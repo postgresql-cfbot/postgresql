@@ -48,7 +48,9 @@
 #include "optimizer/appendinfo.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
+#include "optimizer/restrictinfo.h"
 #include "optimizer/pathnode.h"
+#include "optimizer/paths.h"
 #include "parser/parsetree.h"
 #include "partitioning/partbounds.h"
 #include "partitioning/partprune.h"
@@ -750,9 +752,9 @@ gen_partprune_steps(RelOptInfo *rel, List *clauses, PartClauseTarget target,
  * Callers must ensure that 'rel' is a partitioned table.
  */
 Bitmapset *
-prune_append_rel_partitions(RelOptInfo *rel)
+prune_append_rel_partitions(PlannerInfo *root, RelOptInfo *rel)
 {
-	List	   *clauses = rel->baserestrictinfo;
+	List	   *clauses = extract_rinfo_clauses(rel->baserestrictinfo);
 	List	   *pruning_steps;
 	GeneratePruningStepsContext gcontext;
 	PartitionPruneContext context;
@@ -762,6 +764,19 @@ prune_append_rel_partitions(RelOptInfo *rel)
 	/* If there are no partitions, return the empty set */
 	if (rel->nparts == 0)
 		return NULL;
+
+	/*
+	 * We also store partition RelOptInfo pointers in the parent relation.
+	 * Since we're palloc0'ing, slots corresponding to pruned partitions will
+	 * contain NULL. We have to set part_rels here so that the IS_PARTITIONED_REL
+	 * can be true sooner.  gen_extra_qual_for_pruning depends on it.
+	 */
+	Assert(rel->part_rels == NULL);
+	rel->part_rels = (RelOptInfo **)
+		palloc0(rel->nparts * sizeof(RelOptInfo *));
+
+	if (enable_partition_pruning)
+		clauses = list_concat(clauses, build_implied_pruning_quals(root, rel));
 
 	/*
 	 * If pruning is disabled or if there are no clauses to prune with, return
@@ -3690,4 +3705,280 @@ partkey_datum_from_expr(PartitionPruneContext *context,
 		ectx = context->planstate->ps_ExprContext;
 		*value = ExecEvalExprSwitchContext(exprstate, ectx, isnull);
 	}
+}
+
+
+/*
+ * expr_in_one_side
+ * 	return true if the expr is in one side of the clause.
+ */
+static bool
+expr_in_one_side(Expr *clause, Expr *expr)
+{
+	ListCell	*lc;
+	if (IsA(clause, OpExpr))
+	{
+		OpExpr	*opexpr = (OpExpr *)clause;
+		foreach(lc, opexpr->args)
+		{
+			Expr *lexpr = lfirst(lc);
+			while(IsA(lexpr, RelabelType))
+				lexpr = ((RelabelType *)lexpr)->arg;
+
+			if (equal(lexpr, expr))
+				return true;
+		}
+	}
+	else if (IsA(clause, BoolExpr))
+	{
+		BoolExpr	*bool_expr = (BoolExpr *)clause;
+		switch(bool_expr->boolop)
+		{
+			case OR_EXPR:
+				foreach(lc, bool_expr->args)
+				{
+					if (!expr_in_one_side(lfirst(lc), expr))
+						return false;
+				}
+				return true;
+			case AND_EXPR:
+				foreach(lc, bool_expr->args)
+				{
+					if (expr_in_one_side(lfirst(lc), expr))
+						return false;
+				}
+				return false;
+			case NOT_EXPR:
+				return false;
+		}
+	}
+	else if (IsA(clause, ScalarArrayOpExpr))
+	{
+		ScalarArrayOpExpr *scalar_array_opexpr = (ScalarArrayOpExpr *) clause;
+		Expr	*leftop = linitial(scalar_array_opexpr->args);
+		while (IsA(leftop, RelabelType))
+			leftop = ((RelabelType *)leftop)->arg;
+		return equal(leftop, expr);
+	}
+	return false;
+}
+
+
+/*
+ * build_implied_quals
+ * 	Suppose this_var = other_var, so if this_var appears in rel->baserestrictinfo,
+ * we will build another RestrictInfo with this_var is replaced with other_var
+ * for other_rel.
+ */
+static List *
+build_implied_quals(RelOptInfo *rel,  Var *this_var,  Var *other_var)
+{
+	List	*res = NIL;
+	ListCell	*lc;
+	foreach(lc, rel->baserestrictinfo)
+	{
+		RestrictInfo *rinfo = lfirst(lc);
+		RestrictInfo *rinfo_cpy;
+		Expr *clause;
+
+		if (rinfo->pseudoconstant)
+			continue;
+
+		clause = rinfo->clause;
+		if (!expr_in_one_side(clause, (Expr *)this_var))
+			continue;
+
+		rinfo_cpy = copyObject(rinfo);
+		ChangeVarNodesExtend((Node *)rinfo_cpy->clause, this_var->varno,
+							 other_var->varno, other_var->varattno, 0);
+		res = lappend(res, rinfo_cpy);
+	}
+	return res;
+}
+
+
+/*
+ * build_implied_pruning_qual_from_eclass_join
+ */
+static List*
+build_implied_pruning_qual_from_eclass_join(PlannerInfo *root, RelOptInfo *rel)
+{
+	List	*res = NIL;
+	Bitmapset 	*matching_ecs = get_eclass_indexes_for_relids(root, rel->relids);
+	int i = -1;
+	while ((i = bms_next_member(matching_ecs, i)) >= 0)
+	{
+		EquivalenceClass *cur_ec = (EquivalenceClass *) list_nth(root->eq_classes, i);
+		EquivalenceMember *cur_em;
+		List *other_exprs = NIL;
+		Var	*self_expr = NULL;
+		ListCell	*lc;
+
+		if (cur_ec->ec_has_const || list_length(cur_ec->ec_members) <= 1)
+			continue;
+
+		foreach(lc, cur_ec->ec_members)
+		{
+			int relid;
+			Expr *expr;
+			cur_em = (EquivalenceMember *) lfirst(lc);
+
+			if (cur_em->em_is_child)
+				/* no need to handle */
+				continue;
+
+			if (!bms_is_empty(cur_em->em_nullable_relids))
+			{
+				/*
+				 * XXX: Not sure what em_nullable_relids is, even t1 left join t2
+				 * on t1.a = t2.a, the em_nullable_relids is empty. Just ignore
+				 * it for now for safety.
+				 */
+				continue;
+			}
+
+			if (!bms_get_singleton_member(cur_em->em_relids, &relid))
+			{
+				/* Not clear how to handle, and probably not worth the trouble. */
+				continue;
+			}
+			expr = cur_em->em_expr;
+
+			while (IsA(expr, RelabelType))
+				expr = ((RelabelType *)cur_em->em_expr)->arg;
+
+			if (!IsA(expr, Var))
+				/* See comments in build_implied_pruning_quals */
+				continue;
+
+			if (bms_equal(rel->relids, cur_em->em_relids))
+			{
+				if (match_expr_to_partition_keys(expr, rel, false) == -1)
+					/* Not a partition key, useless for us. */
+					continue;
+
+				self_expr = (Var *)expr;
+			}
+			else
+				other_exprs = lappend(other_exprs, expr);
+		}
+
+		if (!self_expr)
+			return NIL;
+
+		foreach(lc, other_exprs)
+		{
+			Var *other_var = lfirst_node(Var, lc);
+			RelOptInfo *other_rel = root->simple_rel_array[other_var->varno];
+			/* Now we will check if the other_var is used in other_rel->restrictinfo */
+			res = list_concat(res, build_implied_quals(other_rel, other_var, self_expr));
+		}
+	}
+	return res;
+}
+
+
+/*
+ * build_implied_pruning_quals_from_joininfo
+ *
+ * 	Just build pruning_quals if rel.partkey = other_rel.var.  Not including
+ *  other operators except the '='.
+ */
+static List *
+build_implied_pruning_quals_from_joininfo(PlannerInfo *root, RelOptInfo *rel)
+{
+	List	*res = NIL;
+	ListCell	*lc;
+	PartitionScheme part_scheme;
+	Assert(IS_PARTITIONED_REL(rel));
+
+	part_scheme = rel->part_scheme;
+	foreach(lc, rel->joininfo)
+	{
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
+		OpExpr	*opexpr;
+		Expr *leftop, *rightop;
+		Var *part_key_var, *other_var;
+		int part_key_index = -1;
+		Oid	partopfamily, op_lefttype, op_righttype;
+		int op_strategy = InvalidStrategy;
+
+		if(bms_is_subset(rel->relids, rinfo->outer_relids))
+			/*
+			 * We can't build quals for a outer relation from the
+			 * other side's baserestictinfo
+			 */
+			continue;
+
+		if (!IsA(rinfo->clause, OpExpr))
+			/* Unclear how to handle it and probably not common */
+			continue;
+
+		opexpr = (OpExpr *) rinfo->clause;
+
+		leftop = (Expr *) get_leftop(opexpr);
+		while (IsA(leftop, RelabelType))
+			leftop = ((RelabelType *) leftop)->arg;
+		rightop = (Expr *) get_rightop(opexpr);
+		while (IsA(rightop, RelabelType))
+			rightop = ((RelabelType *) rightop)->arg;
+
+		if (!IsA(leftop, Var) || !IsA(rightop, Var))
+			continue;
+
+		if ((part_key_index = match_expr_to_partition_keys(leftop, rel, true)) != -1)
+		{
+			part_key_var = (Var *)leftop;
+			other_var = (Var *) rightop;
+		}
+		else if ((part_key_index = match_expr_to_partition_keys(rightop, rel, true)) != -1)
+		{
+			part_key_var = (Var *)rightop;
+			other_var = (Var *)leftop;
+		}
+		else
+			continue;
+
+		partopfamily = part_scheme->partopfamily[part_key_index];
+
+		get_op_opfamily_properties(opexpr->opno, partopfamily, false,
+								   &op_strategy, &op_lefttype, &op_righttype);
+
+		if (op_strategy != BTEqualStrategyNumber)
+			continue;
+
+		res = list_concat(res,
+			build_implied_quals(root->simple_rel_array[other_var->varno],
+								other_var, part_key_var));
+	}
+	return res;
+}
+
+
+/*
+ * build_implied_pruning_quals
+ *
+ *  build implied pruning quals for a partitioned rel, The general idea is
+ * if p.partkey = t.a and t.a appearing in t's baserestrictinfo, we can
+ * add another similar restrictinfo for p as pruning clauses. To make
+ * the copied and modified RestrictInfo easy to build, we only support
+ * partkey is Var and the other expr is Var as well (if so, we are able to
+ * build it with ChangeVarNodesExtend).
+ */
+List *
+build_implied_pruning_quals(PlannerInfo *root, RelOptInfo *rel)
+{
+	List	*res = NIL;
+
+	if (!IS_PARTITIONED_REL(rel))
+		return res;
+
+	if (rel->has_eclass_joins)
+		res = list_concat(res,
+						  build_implied_pruning_qual_from_eclass_join(root, rel));
+
+	if (rel->joininfo)
+		res = list_concat(res,
+						  build_implied_pruning_quals_from_joininfo(root, rel));
+	return res;
 }

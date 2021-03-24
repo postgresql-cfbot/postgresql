@@ -1258,6 +1258,9 @@ create_append_plan(PlannerInfo *root, AppendPath *best_path, int flags)
 			prunequal = list_concat(prunequal, prmquals);
 		}
 
+		prunequal = list_concat(prunequal,
+								build_implied_pruning_quals(root, best_path->path.parent));
+
 		if (prunequal != NIL)
 			partpruneinfo =
 				make_partition_pruneinfo(root, rel,

@@ -1185,3 +1185,113 @@ explain (costs off) select * from hp_contradict_test where a === 1 and b === 1 a
 drop table hp_contradict_test;
 drop operator class part_test_int4_ops2 using hash;
 drop operator ===(int4, int4);
+
+create table p (a int, b int, c character varying(8)) partition by list(c);
+create table p1  partition of p for values in ('000001');
+create table p2  partition of p for values in ('000002');
+create table p3  partition of p for values in ('000003');
+
+create table q (a int, c character varying(8), b int) partition by list(c);
+create table q1  partition of q for values in ('000001');
+create table q2  partition of q for values in ('000002');
+create table q3  partition of q for values in ('000003');
+
+create table o (a int, c character varying(8), b int) partition by list(c);
+create table o1  partition of o for values in ('000001');
+create table o2 partition of o for values in ('000002');
+create table o3  partition of o for values in ('000003');
+
+analyze p;
+analyze q;
+analyze o;
+
+set plan_cache_mode to force_generic_plan ;
+-- inner join
+prepare s as select * from p, q where (q.c = $1 or q.c = $2) and p.c = q.c;
+explain (costs off) execute s('000001', '000002');
+
+prepare s2 as select * from p inner join q on (q.c = $1 or q.c = $2) and p.c = q.c;
+explain (costs off) execute s2('000001', '000002');
+
+-- left join
+-- q can have the init partititon prune, but p can't since it is the outer join.
+prepare s3 as select * from p left join q on (q.c = $1 or q.c = $2) and p.c = q.c;
+explain (costs off) execute s3('000001', '000002');
+
+-- p can't do the init partition prune since it is the outer join. so p can't as well.
+prepare s4 as select * from p left join q on (p.c = $1 or p.c = $2) and p.c = q.c;
+explain (costs off) execute s4('000001', '000002');
+
+-- left join is reduced to inner join, so both p and q can do the pruning.
+prepare s5 as select * from p left join q on p.c = q.c where (q.c = $1 or q.c = $2);
+explain (costs off) execute s5('000001', '000002');
+
+-- left join can't be reduced to inner join, but p.c is not in ON clause so q can.
+-- and q is right table in left join, so it can as well.
+prepare s6 as select * from p left join q on p.c = q.c where (p.c = $1 or p.c = $2);
+explain (costs off) execute s6('000001', '000002');
+
+-- full outer join.
+-- both p & q can't do the init partition prune.
+prepare s7 as select * from p full join q on p.c = q.c and (p.c = $1 or p.c = $2);
+explain (costs off) execute s7('000001', '000002');
+
+-- can be reduced to p left join q, so both can.
+prepare s8 as select * from p full join q on p.c = q.c where (p.c = $1 or p.c = $2);
+explain (costs off) execute s8('000001', '000002');
+
+deallocate s;
+deallocate s2;
+deallocate s3;
+deallocate s4;
+deallocate s5;
+deallocate s6;
+deallocate s7;
+deallocate s8;
+
+set plan_cache_mode to force_custom_plan;
+-- inner join
+prepare s as select * from p, q where (q.c = $1 or q.c = $2) and p.c = q.c;
+explain (costs off) execute s('000001', '000002');
+
+prepare s2 as select * from p inner join q on (q.c = $1 or q.c = $2) and p.c = q.c;
+explain (costs off) execute s2('000001', '000002');
+
+-- left join
+-- q can have the planning partititon prune, but p can't since it is the outer join.
+prepare s3 as select * from p left join q on (q.c = $1 or q.c = $2) and p.c = q.c;
+explain (costs off) execute s3('000001', '000002');
+
+-- p can't do the planning partition prune since it is the outer join. so p can't as well.
+prepare s4 as select * from p left join q on (p.c = $1 or p.c = $2) and p.c = q.c;
+explain (costs off) execute s4('000001', '000002');
+
+-- left join is reduced to inner join, so both p and q can do the pruning.
+prepare s5 as select * from p left join q on p.c = q.c where (q.c = $1 or q.c = $2);
+explain (costs off) execute s5('000001', '000002');
+
+-- left join can't be reduced to inner join, but p.c is not in ON clause so q can.
+-- and q is right table in left join, so it can as well.
+prepare s6 as select * from p left join q on p.c = q.c where (p.c = $1 or p.c = $2);
+explain (costs off) execute s6('000001', '000002');
+
+-- full outer join.
+-- both p & q can't do the planning partition prune.
+prepare s7 as select * from p full join q on p.c = q.c and (p.c = $1 or p.c = $2);
+explain (costs off) execute s7('000001', '000002');
+
+-- can be reduced to p left join q, so both can.
+prepare s8 as select * from p full join q on p.c = q.c where (p.c = $1 or p.c = $2);
+explain (costs off) execute s8('000001', '000002');
+
+deallocate s;
+deallocate s2;
+deallocate s3;
+deallocate s4;
+deallocate s5;
+deallocate s6;
+deallocate s7;
+deallocate s8;
+
+
+reset plan_cache_mode;

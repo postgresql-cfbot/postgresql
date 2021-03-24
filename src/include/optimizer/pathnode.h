@@ -323,5 +323,7 @@ extern RelOptInfo *build_child_join_rel(PlannerInfo *root,
 										RelOptInfo *outer_rel, RelOptInfo *inner_rel,
 										RelOptInfo *parent_joinrel, List *restrictlist,
 										SpecialJoinInfo *sjinfo, JoinType jointype);
+extern int	match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel,
+										 bool strict_op);
 
 #endif							/* PATHNODE_H */

@@ -386,7 +386,7 @@ static relopt_int intRelOpts[] =
 		{
 			"parallel_workers",
 			"Number of parallel processes that can be used per executor node for this relation.",
-			RELOPT_KIND_HEAP,
+			RELOPT_KIND_HEAP | RELOPT_KIND_PARTITIONED,
 			ShareUpdateExclusiveLock
 		},
 		-1, 0, 1024
@@ -1974,7 +1974,9 @@ partitioned_table_reloptions(Datum reloptions, bool validate)
 {
 	static const relopt_parse_elt tab[] = {
 		{"parallel_insert_enabled", RELOPT_TYPE_BOOL,
-		offsetof(PartitionedTableRdOptions, parallel_insert_enabled)}
+		offsetof(PartitionedTableRdOptions, parallel_insert_enabled)},
+		{"parallel_workers", RELOPT_TYPE_INT,
+		offsetof(PartitionedTableRdOptions, parallel_workers)},
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate,

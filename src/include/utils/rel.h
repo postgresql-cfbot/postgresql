@@ -354,15 +354,6 @@ typedef struct StdRdOptions
 	  (relation)->rd_rel->relkind == RELKIND_MATVIEW) ? \
 	 ((StdRdOptions *) (relation)->rd_options)->user_catalog_table : false)
 
-/*
- * RelationGetParallelWorkers
- *		Returns the relation's parallel_workers reloption setting.
- *		Note multiple eval of argument!
- */
-#define RelationGetParallelWorkers(relation, defaultpw) \
-	((relation)->rd_options ? \
-	 ((StdRdOptions *) (relation)->rd_options)->parallel_workers : (defaultpw))
-
 /* ViewOptions->check_option values */
 typedef enum ViewOptCheckOption
 {
@@ -434,6 +425,7 @@ typedef struct PartitionedTableRdOptions
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	bool		parallel_insert_enabled;	/* enables planner's use of
 											 * parallel insert */
+	int			parallel_workers;	/* max number of parallel workers */
 } PartitionedTableRdOptions;
 
 /*
@@ -447,6 +439,18 @@ typedef struct PartitionedTableRdOptions
 	 ((PartitionedTableRdOptions *) (relation)->rd_options)->parallel_insert_enabled : \
 	 ((StdRdOptions *) (relation)->rd_options)->parallel_insert_enabled) :		\
 	 (defaultpd))
+
+/*
+ * RelationGetParallelWorkers
+ *		Returns the relation's parallel_workers reloption setting.
+ *		Note multiple eval of argument!
+ */
+#define RelationGetParallelWorkers(relation, defaultpw) \
+	((relation)->rd_options ? \
+	 ((relation)->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ? \
+	  ((PartitionedTableRdOptions *) (relation)->rd_options)->parallel_workers : \
+	  ((StdRdOptions *) (relation)->rd_options)->parallel_workers \
+	 ) : (defaultpw))
 
 /*
  * RelationIsValid

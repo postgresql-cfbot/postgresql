@@ -1166,9 +1166,58 @@ SELECT a, sum(b), count(*) FROM pagg_tab_ml GROUP BY a, b, c HAVING avg(b) > 7 O
  29 | 4500 |   500
 (12 rows)
 
--- Parallelism within partitionwise aggregates
+-- Override "parallel_workers" for a partitioned table
 SET min_parallel_table_scan_size TO '8kB';
 SET parallel_setup_cost TO 0;
+SET max_parallel_workers_per_gather TO 8;
+EXPLAIN (COSTS OFF)
+SELECT a FROM pagg_tab_ml WHERE b = 42;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Gather
+   Workers Planned: 4
+   ->  Parallel Append
+         ->  Parallel Seq Scan on pagg_tab_ml_p1 pagg_tab_ml_1
+               Filter: (b = 42)
+         ->  Parallel Seq Scan on pagg_tab_ml_p2_s1 pagg_tab_ml_2
+               Filter: (b = 42)
+         ->  Parallel Seq Scan on pagg_tab_ml_p2_s2 pagg_tab_ml_3
+               Filter: (b = 42)
+(9 rows)
+
+ALTER TABLE pagg_tab_ml SET (parallel_workers = 6);
+EXPLAIN (COSTS OFF)
+SELECT a FROM pagg_tab_ml WHERE b = 42;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Gather
+   Workers Planned: 6
+   ->  Parallel Append
+         ->  Parallel Seq Scan on pagg_tab_ml_p1 pagg_tab_ml_1
+               Filter: (b = 42)
+         ->  Parallel Seq Scan on pagg_tab_ml_p2_s1 pagg_tab_ml_2
+               Filter: (b = 42)
+         ->  Parallel Seq Scan on pagg_tab_ml_p2_s2 pagg_tab_ml_3
+               Filter: (b = 42)
+(9 rows)
+
+ALTER TABLE pagg_tab_ml SET (parallel_workers = 0);
+EXPLAIN (COSTS OFF)
+SELECT a FROM pagg_tab_ml WHERE b = 42;
+                    QUERY PLAN                     
+---------------------------------------------------
+ Append
+   ->  Seq Scan on pagg_tab_ml_p1 pagg_tab_ml_1
+         Filter: (b = 42)
+   ->  Seq Scan on pagg_tab_ml_p2_s1 pagg_tab_ml_2
+         Filter: (b = 42)
+   ->  Seq Scan on pagg_tab_ml_p2_s2 pagg_tab_ml_3
+         Filter: (b = 42)
+(7 rows)
+
+ALTER TABLE pagg_tab_ml RESET (parallel_workers);
+-- Parallelism within partitionwise aggregates
+SET max_parallel_workers_per_gather TO 2;
 -- Full aggregation at level 1 as GROUP BY clause matches with PARTITION KEY
 -- for level 1 only. For subpartitions, GROUP BY clause does not match with
 -- PARTITION KEY, thus we will have a partial aggregation for them.

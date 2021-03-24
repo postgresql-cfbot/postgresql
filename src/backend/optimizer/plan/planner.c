@@ -3953,6 +3953,9 @@ make_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 	grouped_rel->useridiscurrent = input_rel->useridiscurrent;
 	grouped_rel->fdwroutine = input_rel->fdwroutine;
 
+	/* Copy parallel_workers. */
+	grouped_rel->rel_parallel_workers = input_rel->rel_parallel_workers;
+
 	return grouped_rel;
 }
 
@@ -7620,6 +7623,23 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 	Assert(patype != PARTITIONWISE_AGGREGATE_PARTIAL ||
 		   partially_grouped_rel != NULL);
 
+	/*
+	 * Make fully grouped rels appear partitioned like the input rel with
+	 * proprties same as the latter.
+	 */
+	Assert(IS_PARTITIONED_REL(input_rel));
+	if (patype == PARTITIONWISE_AGGREGATE_FULL)
+	{
+		grouped_rel->part_scheme = input_rel->part_scheme;
+		grouped_rel->partexprs = input_rel->partexprs;
+		grouped_rel->nullable_partexprs = input_rel->nullable_partexprs;
+		grouped_rel->boundinfo = input_rel->boundinfo;
+		grouped_rel->nparts = nparts;
+		Assert(grouped_rel->part_rels == NULL);
+		grouped_rel->part_rels =
+			(RelOptInfo **) palloc0(sizeof(RelOptInfo *) * nparts);
+	}
+
 	/* Add paths for partitionwise aggregation/grouping. */
 	for (cnt_parts = 0; cnt_parts < nparts; cnt_parts++)
 	{
@@ -7695,6 +7715,8 @@ create_partitionwise_grouping_paths(PlannerInfo *root,
 			set_cheapest(child_grouped_rel);
 			grouped_live_children = lappend(grouped_live_children,
 											child_grouped_rel);
+			Assert(grouped_rel->part_rels[cnt_parts] == NULL);
+			grouped_rel->part_rels[cnt_parts] = child_grouped_rel;
 		}
 
 		pfree(appinfos);

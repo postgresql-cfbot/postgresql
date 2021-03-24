@@ -97,6 +97,9 @@ static void set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 								Index rti, RangeTblEntry *rte);
 static void set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 									Index rti, RangeTblEntry *rte);
+static int compute_append_parallel_workers(RelOptInfo *rel, List *subpaths,
+										   int num_live_children,
+										   bool parallel_append);
 static void generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 										 List *live_childrels,
 										 List *all_child_pathkeys);
@@ -1268,6 +1271,65 @@ set_append_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	add_paths_to_append_rel(root, rel, live_childrels);
 }
 
+/*
+ * compute_append_parallel_workers
+ * 		Computes the number of workers to assign to scan the subpaths appended
+ * 		by a given Append path
+ */
+static int
+compute_append_parallel_workers(RelOptInfo *rel, List *subpaths,
+								int num_live_children,
+								bool parallel_append)
+{
+	ListCell   *lc;
+	int			parallel_workers = 0;
+
+	/*
+	 * For partitioned rels, first see if there is a root-level setting for
+	 * parallel_workers.  But only consider if a Parallel Append plan is
+	 * to be considered.
+	 */
+	if (IS_PARTITIONED_REL(rel) &&
+		parallel_append &&
+		rel->rel_parallel_workers != -1)
+	{
+		parallel_workers = Min(rel->rel_parallel_workers,
+							   max_parallel_workers_per_gather);
+
+		/* an explicit setting overrides heuristics */
+		return parallel_workers;
+	}
+
+	/* Find the highest number of workers requested for any subpath. */
+	foreach(lc, subpaths)
+	{
+		Path	   *path = lfirst(lc);
+
+		parallel_workers = Max(parallel_workers, path->parallel_workers);
+	}
+	Assert(parallel_workers > 0 || subpaths == NIL);
+
+	/*
+	 * If the use of parallel append is permitted, always request at least
+	 * log2(# of children) workers.  We assume it can be useful to have
+	 * extra workers in this case because they will be spread out across
+	 * the children.  The precise formula is just a guess, but we don't
+	 * want to end up with a radically different answer for a table with N
+	 * partitions vs. an unpartitioned table with the same data, so the
+	 * use of some kind of log-scaling here seems to make some sense.
+	 */
+	if (parallel_append)
+	{
+		parallel_workers = Max(parallel_workers,
+							   fls(num_live_children));
+		parallel_workers = Min(parallel_workers,
+							   max_parallel_workers_per_gather);
+	}
+	Assert(parallel_workers > 0);
+
+	return parallel_workers;
+}
+
 
 /*
  * add_paths_to_append_rel
@@ -1464,50 +1526,28 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	if (partial_subpaths_valid && partial_subpaths != NIL)
 	{
 		AppendPath *appendpath;
-		ListCell   *lc;
-		int			parallel_workers = 0;
+		int			parallel_workers =
+			compute_append_parallel_workers(rel, partial_subpaths,
+											list_length(live_childrels),
+											enable_parallel_append);
 
-		/* Find the highest number of workers requested for any subpath. */
-		foreach(lc, partial_subpaths)
+		if (parallel_workers > 0)
 		{
-			Path	   *path = lfirst(lc);
+			/* Generate a partial append path. */
+			appendpath = create_append_path(root, rel, NIL, partial_subpaths,
+											NIL, NULL, parallel_workers,
+											enable_parallel_append,
+											-1);
 
-			parallel_workers = Max(parallel_workers, path->parallel_workers);
+			/*
+			 * Make sure any subsequent partial paths use the same row count
+			 * estimate.
+			 */
+			partial_rows = appendpath->path.rows;
+
+			/* Add the path */
+			add_partial_path(rel, (Path *) appendpath);
 		}
-		Assert(parallel_workers > 0);
-
-		/*
-		 * If the use of parallel append is permitted, always request at least
-		 * log2(# of children) workers.  We assume it can be useful to have
-		 * extra workers in this case because they will be spread out across
-		 * the children.  The precise formula is just a guess, but we don't
-		 * want to end up with a radically different answer for a table with N
-		 * partitions vs. an unpartitioned table with the same data, so the
-		 * use of some kind of log-scaling here seems to make some sense.
-		 */
-		if (enable_parallel_append)
-		{
-			parallel_workers = Max(parallel_workers,
-								   fls(list_length(live_childrels)));
-			parallel_workers = Min(parallel_workers,
-								   max_parallel_workers_per_gather);
-		}
-		Assert(parallel_workers > 0);
-
-		/* Generate a partial append path. */
-		appendpath = create_append_path(root, rel, NIL, partial_subpaths,
-										NIL, NULL, parallel_workers,
-										enable_parallel_append,
-										-1);
-
-		/*
-		 * Make sure any subsequent partial paths use the same row count
-		 * estimate.
-		 */
-		partial_rows = appendpath->path.rows;
-
-		/* Add the path. */
-		add_partial_path(rel, (Path *) appendpath);
 	}
 
 	/*
@@ -1519,36 +1559,19 @@ add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 	if (pa_subpaths_valid && pa_nonpartial_subpaths != NIL)
 	{
 		AppendPath *appendpath;
-		ListCell   *lc;
-		int			parallel_workers = 0;
+		int			parallel_workers =
+			compute_append_parallel_workers(rel, pa_partial_subpaths,
+											list_length(live_childrels),
+											true);
 
-		/*
-		 * Find the highest number of workers requested for any partial
-		 * subpath.
-		 */
-		foreach(lc, pa_partial_subpaths)
+		if (parallel_workers > 0)
 		{
-			Path	   *path = lfirst(lc);
-
-			parallel_workers = Max(parallel_workers, path->parallel_workers);
+			appendpath = create_append_path(root, rel, pa_nonpartial_subpaths,
+											pa_partial_subpaths,
+											NIL, NULL, parallel_workers, true,
+											partial_rows);
+			add_partial_path(rel, (Path *) appendpath);
 		}
-
-		/*
-		 * Same formula here as above.  It's even more important in this
-		 * instance because the non-partial paths won't contribute anything to
-		 * the planned number of parallel workers.
-		 */
-		parallel_workers = Max(parallel_workers,
-							   fls(list_length(live_childrels)));
-		parallel_workers = Min(parallel_workers,
-							   max_parallel_workers_per_gather);
-		Assert(parallel_workers > 0);
-
-		appendpath = create_append_path(root, rel, pa_nonpartial_subpaths,
-										pa_partial_subpaths,
-										NIL, NULL, parallel_workers, true,
-										partial_rows);
-		add_partial_path(rel, (Path *) appendpath);
 	}
 
 	/*

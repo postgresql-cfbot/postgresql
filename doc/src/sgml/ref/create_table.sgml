@@ -1370,7 +1370,8 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
     equivalent <literal>toast.</literal> parameter is not, the TOAST table
     will use the table's parameter value.
     These parameters, with the exception of
-    <literal>parallel_insert_enabled</literal>, are not supported on partitioned
+    <literal>parallel_insert_enabled</literal> and
+    <literal>parallel_workers</literal>, are not supported on partitioned
     tables, but may be specified for individual leaf partitions.
    </para>
 
@@ -1434,9 +1435,13 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      <para>
       This sets the number of workers that should be used to assist a parallel
       scan of this table.  If not set, the system will determine a value based
-      on the relation size.  The actual number of workers chosen by the planner
-      or by utility statements that use parallel scans may be less, for example
-      due to the setting of <xref linkend="guc-max-worker-processes"/>.
+      on the relation size and the number of scanned partitions.
+      When set on a partitioned table, the specified number of workers will
+      work on distinct partitions, so the number of partitions affected by the
+      parallel operation should be taken into account.
+      The actual number of workers chosen by the planner or by utility
+      statements that use parallel scans may be less, for example due
+      to the setting of <xref linkend="guc-max-worker-processes"/>.
      </para>
     </listitem>
    </varlistentry>

@@ -253,10 +253,23 @@ EXPLAIN (COSTS OFF)
 SELECT a, sum(b), count(*) FROM pagg_tab_ml GROUP BY a, b, c HAVING avg(b) > 7 ORDER BY 1, 2, 3;
 SELECT a, sum(b), count(*) FROM pagg_tab_ml GROUP BY a, b, c HAVING avg(b) > 7 ORDER BY 1, 2, 3;
 
--- Parallelism within partitionwise aggregates
-
+-- Override "parallel_workers" for a partitioned table
 SET min_parallel_table_scan_size TO '8kB';
 SET parallel_setup_cost TO 0;
+SET max_parallel_workers_per_gather TO 8;
+EXPLAIN (COSTS OFF)
+SELECT a FROM pagg_tab_ml WHERE b = 42;
+ALTER TABLE pagg_tab_ml SET (parallel_workers = 6);
+EXPLAIN (COSTS OFF)
+SELECT a FROM pagg_tab_ml WHERE b = 42;
+ALTER TABLE pagg_tab_ml SET (parallel_workers = 0);
+EXPLAIN (COSTS OFF)
+SELECT a FROM pagg_tab_ml WHERE b = 42;
+ALTER TABLE pagg_tab_ml RESET (parallel_workers);
+
+-- Parallelism within partitionwise aggregates
+
+SET max_parallel_workers_per_gather TO 2;
 
 -- Full aggregation at level 1 as GROUP BY clause matches with PARTITION KEY
 -- for level 1 only. For subpartitions, GROUP BY clause does not match with

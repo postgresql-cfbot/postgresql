@@ -34,6 +34,7 @@ a_id
 
 step wx2: DELETE FROM a WHERE i = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx1 wy1 rx2 ry2 c1 wx2 c2
@@ -52,6 +53,7 @@ a_id
 step c1: COMMIT;
 step wx2: DELETE FROM a WHERE i = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx1 wy1 rx2 ry2 wx2 c1 c2
@@ -106,6 +108,7 @@ a_id
 
 step wx2: DELETE FROM a WHERE i = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx1 rx2 wy1 ry2 c1 wx2 c2
@@ -124,6 +127,7 @@ a_id
 step c1: COMMIT;
 step wx2: DELETE FROM a WHERE i = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx1 rx2 wy1 ry2 wx2 c1 c2
@@ -178,6 +182,7 @@ step wy1: INSERT INTO b VALUES (1);
 step c1: COMMIT;
 step wx2: DELETE FROM a WHERE i = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx1 rx2 ry2 wy1 wx2 c1 c2
@@ -268,6 +273,7 @@ step wx2: DELETE FROM a WHERE i = 1;
 step c2: COMMIT;
 step wy1: INSERT INTO b VALUES (1);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: rx2 rx1 wy1 c1 ry2 wx2 c2
@@ -286,6 +292,7 @@ a_id
 
 step wx2: DELETE FROM a WHERE i = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx2 rx1 wy1 ry2 c1 wx2 c2
@@ -304,6 +311,7 @@ a_id
 step c1: COMMIT;
 step wx2: DELETE FROM a WHERE i = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx2 rx1 wy1 ry2 wx2 c1 c2
@@ -358,6 +366,7 @@ step wy1: INSERT INTO b VALUES (1);
 step c1: COMMIT;
 step wx2: DELETE FROM a WHERE i = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx2 rx1 ry2 wy1 wx2 c1 c2
@@ -448,6 +457,7 @@ step wx2: DELETE FROM a WHERE i = 1;
 step c2: COMMIT;
 step wy1: INSERT INTO b VALUES (1);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: rx2 ry2 rx1 wy1 c1 wx2 c2
@@ -466,6 +476,7 @@ step wy1: INSERT INTO b VALUES (1);
 step c1: COMMIT;
 step wx2: DELETE FROM a WHERE i = 1;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: rx2 ry2 rx1 wy1 wx2 c1 c2
@@ -556,6 +567,7 @@ step wx2: DELETE FROM a WHERE i = 1;
 step c2: COMMIT;
 step wy1: INSERT INTO b VALUES (1);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: rx2 ry2 wx2 rx1 wy1 c1 c2
@@ -610,6 +622,7 @@ i
 step c2: COMMIT;
 step wy1: INSERT INTO b VALUES (1);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;
 
 starting permutation: rx2 ry2 wx2 c2 rx1 wy1 c1

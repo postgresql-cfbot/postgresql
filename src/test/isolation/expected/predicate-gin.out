@@ -13,6 +13,7 @@ step wo1: insert into other_tbl values (1);
 step c1: commit;
 step wa2: insert into gin_tbl values (array[1]);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: ro2 ra1 wo1 c1 wa2 c2
@@ -28,6 +29,7 @@ step wo1: insert into other_tbl values (1);
 step c1: commit;
 step wa2: insert into gin_tbl values (array[1]);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: ro2 ra1 wo1 wa2 c1 c2
@@ -73,6 +75,7 @@ step wo1: insert into other_tbl values (1);
 step c1: commit;
 step wb2: insert into gin_tbl values (array[2]);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: ro2 rb1 wo1 c1 wb2 c2
@@ -88,6 +91,7 @@ step wo1: insert into other_tbl values (1);
 step c1: commit;
 step wb2: insert into gin_tbl values (array[2]);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: ro2 rb1 wo1 wb2 c1 c2
@@ -133,6 +137,7 @@ step wo1: insert into other_tbl values (1);
 step c1: commit;
 step wc2: insert into gin_tbl values (array[800]);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: ro2 rc1 wo1 c1 wc2 c2
@@ -148,6 +153,7 @@ step wo1: insert into other_tbl values (1);
 step c1: commit;
 step wc2: insert into gin_tbl values (array[800]);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: ro2 rc1 wo1 wc2 c1 c2
@@ -362,6 +368,7 @@ step wo1: insert into other_tbl values (1);
 step c1: commit;
 step wa2: insert into gin_tbl values (array[1]);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: fu ra1 ro2 wo1 c1 wb2 c2
@@ -378,6 +385,7 @@ step wo1: insert into other_tbl values (1);
 step c1: commit;
 step wb2: insert into gin_tbl values (array[2]);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: ra1 ro2 wo1 c1 fu wa2 c2
@@ -394,6 +402,7 @@ step c1: commit;
 step fu: alter index ginidx set (fastupdate = on);
 step wa2: insert into gin_tbl values (array[1]);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: rd1 ro2 wo1 c1 wd2 c2
@@ -409,6 +418,7 @@ step wo1: insert into other_tbl values (1);
 step c1: commit;
 step wd2: insert into gin_tbl values (array[2000]);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: ro2 rd1 wo1 c1 wd2 c2
@@ -424,6 +434,7 @@ step wo1: insert into other_tbl values (1);
 step c1: commit;
 step wd2: insert into gin_tbl values (array[2000]);
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: ro2 rd1 wo1 wd2 c1 c2

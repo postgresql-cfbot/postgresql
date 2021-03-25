@@ -116,6 +116,7 @@ BEGIN;
 LOCK atest2 IN ACCESS EXCLUSIVE MODE; -- fail
 ERROR:  permission denied for table atest2
 COMMIT;
+ERROR:  current transaction failed, rolling back
 COPY atest2 FROM stdin; -- fail
 ERROR:  permission denied for table atest2
 GRANT ALL ON atest1 TO PUBLIC; -- fail
@@ -821,6 +822,7 @@ BEGIN;
 LOCK atestc;
 ERROR:  permission denied for table atestc
 END;
+ERROR:  current transaction failed, rolling back
 -- privileges on functions, languages
 -- switch to superuser
 \c -
@@ -1453,6 +1455,7 @@ CONTEXT:  SQL function "unwanted_grant" statement 1
 SQL statement "SELECT unwanted_grant()"
 PL/pgSQL function sro_trojan() line 1 at PERFORM
 SQL function "mv_action" statement 1
+ERROR:  current transaction failed, rolling back
 DROP OWNED BY regress_sro_user;
 DROP ROLE regress_sro_user;
 -- Admin options

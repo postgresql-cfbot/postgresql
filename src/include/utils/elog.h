@@ -42,17 +42,18 @@
 								 * WARNING is for unexpected messages. */
 #define WARNING_CLIENT_ONLY	20	/* Warnings to be sent to client as usual, but
 								 * never to the server log. */
-#define ERROR		21			/* user error - abort transaction; return to
+#define USER_ERROR	21
+#define ERROR		22			/* user error - abort transaction; return to
 								 * known state */
 /* Save ERROR value in PGERROR so it can be restored when Win32 includes
  * modify it.  We have to use a constant rather than ERROR because macros
  * are expanded only when referenced outside macros.
  */
 #ifdef WIN32
-#define PGERROR		21
+#define PGERROR		22
 #endif
-#define FATAL		22			/* fatal error - abort process */
-#define PANIC		23			/* take down the other backends with me */
+#define FATAL		23			/* fatal error - abort process */
+#define PANIC		24			/* take down the other backends with me */
 
 
 /* macros for representing SQLSTATE strings compactly */

@@ -9,6 +9,7 @@ bool
 t              
 step wyrx2: DELETE FROM parent WHERE parent_id = 0;
 ERROR:  child row exists
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: wxry1 r2 c1 wyrx2 c2
@@ -20,6 +21,7 @@ t
 step c1: COMMIT;
 step wyrx2: DELETE FROM parent WHERE parent_id = 0;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: wxry1 r2 wyrx2 c1 c2
@@ -53,6 +55,7 @@ step wxry1: INSERT INTO child (parent_id) VALUES (0);
 step c1: COMMIT;
 step wyrx2: DELETE FROM parent WHERE parent_id = 0;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: COMMIT;
 
 starting permutation: r2 wxry1 wyrx2 c1 c2
@@ -108,4 +111,5 @@ step wyrx2: DELETE FROM parent WHERE parent_id = 0;
 step c2: COMMIT;
 step wxry1: INSERT INTO child (parent_id) VALUES (0);
 ERROR:  parent row missing
+s1: ERROR:  current transaction failed, rolling back
 step c1: COMMIT;

@@ -622,6 +622,11 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 							/* report unsuccessful commit in qc */
 							if (qc)
 								SetQueryCompletion(qc, CMDTAG_ROLLBACK, 0);
+							/* report USER_ERROR so that we don't completely exit the context */
+							ereport(USER_ERROR,
+									(errcode(ERRCODE_TRANSACTION_ROLLBACK),
+											errmsg("current transaction failed, "
+												"rolling back")));
 						}
 						break;
 
@@ -631,6 +636,10 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 							/* report unsuccessful commit in qc */
 							if (qc)
 								SetQueryCompletion(qc, CMDTAG_ROLLBACK, 0);
+							ereport(ERROR,
+									(errcode(ERRCODE_TRANSACTION_ROLLBACK),
+											errmsg("current transaction failed, "
+												"rolling back")));
 						}
 						break;
 

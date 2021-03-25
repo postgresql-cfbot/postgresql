@@ -16,6 +16,7 @@ step s2d: DELETE FROM foo WHERE a=1; <waiting ...>
 step s1c: COMMIT;
 step s2d: <... completed>
 error in steps s1c s2d: ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 
 starting permutation: s1b s2b s1u s2u s1c s2c
@@ -26,6 +27,7 @@ step s2u: UPDATE foo SET b='EFG' WHERE a=1; <waiting ...>
 step s1c: COMMIT;
 step s2u: <... completed>
 error in steps s1c s2u: ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 
 starting permutation: s1b s2b s2d s1u s2c s1c
@@ -53,6 +55,7 @@ step s2u2: UPDATE footrg SET b='XYZ' WHERE a=1; <waiting ...>
 step s1c: COMMIT;
 step s2u2: <... completed>
 error in steps s1c s2u2: ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 
 starting permutation: s1b s2b s2u2 s1u2 s2c s1c
@@ -63,6 +66,7 @@ step s1u2: UPDATE footrg SET b='EFG' WHERE a=1; <waiting ...>
 step s2c: COMMIT;
 step s1u2: <... completed>
 error in steps s2c s1u2: ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+s1: ERROR:  current transaction failed, rolling back
 step s1c: COMMIT;
 
 starting permutation: s1b s2b s1u3pc s2i s1c s2c
@@ -73,6 +77,7 @@ step s2i: INSERT INTO bar VALUES(7); <waiting ...>
 step s1c: COMMIT;
 step s2i: <... completed>
 error in steps s1c s2i: ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 
 starting permutation: s1b s2b s1u3pc s2i s1r s2c
@@ -93,6 +98,7 @@ step s2i: INSERT INTO bar VALUES(7); <waiting ...>
 step s1c: COMMIT;
 step s2i: <... completed>
 error in steps s1c s2i: ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 
 starting permutation: s1b s2b s1u3npc s1u3pc s2i s1r s2c
@@ -115,6 +121,7 @@ step s2i: INSERT INTO bar VALUES(7); <waiting ...>
 step s1c: COMMIT;
 step s2i: <... completed>
 error in steps s1c s2i: ERROR:  tuple to be locked was already moved to another partition due to concurrent update
+s2: ERROR:  current transaction failed, rolling back
 step s2c: COMMIT;
 
 starting permutation: s1b s2b s1u3npc s1u3pc s1u3pc s2i s1r s2c

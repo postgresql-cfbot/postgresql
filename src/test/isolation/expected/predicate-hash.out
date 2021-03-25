@@ -79,6 +79,7 @@ step c1: commit;
 step wy2: insert into hash_tbl (id, p)
 			  select g, 20 from generate_series(51, 60) g;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: rxy1 wx1 rxy2 wy2 c1 c2
@@ -130,6 +131,7 @@ step c1: commit;
 step wy2: insert into hash_tbl (id, p)
 			  select g, 20 from generate_series(51, 60) g;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: rxy1 rxy2 wx1 wy2 c1 c2
@@ -215,6 +217,7 @@ step c2: commit;
 step wx1: insert into hash_tbl (id, p)
 			  select g, 30 from generate_series(41, 50) g;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: commit;
 
 starting permutation: rxy2 rxy1 wx1 c1 wy2 c2
@@ -232,6 +235,7 @@ step c1: commit;
 step wy2: insert into hash_tbl (id, p)
 			  select g, 20 from generate_series(51, 60) g;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s2: ERROR:  current transaction failed, rolling back
 step c2: commit;
 
 starting permutation: rxy2 rxy1 wx1 wy2 c1 c2
@@ -317,6 +321,7 @@ step c2: commit;
 step wx1: insert into hash_tbl (id, p)
 			  select g, 30 from generate_series(41, 50) g;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: commit;
 
 starting permutation: rxy2 wy2 rxy1 wx1 c1 c2
@@ -368,6 +373,7 @@ step c2: commit;
 step wx1: insert into hash_tbl (id, p)
 			  select g, 30 from generate_series(41, 50) g;
 ERROR:  could not serialize access due to read/write dependencies among transactions
+s1: ERROR:  current transaction failed, rolling back
 step c1: commit;
 
 starting permutation: rxy3 wx3 rxy4 c1 wy4 c2

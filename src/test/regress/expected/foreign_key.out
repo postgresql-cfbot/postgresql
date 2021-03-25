@@ -1052,6 +1052,7 @@ INSERT INTO fktable VALUES (500, 1000);
 ERROR:  insert or update on table "fktable" violates foreign key constraint "fktable_fk_fkey"
 DETAIL:  Key (fk)=(1000) is not present in table "pktable".
 COMMIT;
+ERROR:  current transaction failed, rolling back
 DROP TABLE fktable, pktable;
 -- tricky behavior: according to SQL99, if a deferred constraint is set
 -- to 'immediate' mode, it should be checked for validity *immediately*,
@@ -1076,6 +1077,7 @@ DETAIL:  Key (fk)=(2000) is not present in table "pktable".
 INSERT INTO pktable VALUES (2000, 3); -- too late
 ERROR:  current transaction is aborted, commands ignored until end of transaction block
 COMMIT;
+ERROR:  current transaction failed, rolling back
 DROP TABLE fktable, pktable;
 -- deferrable, initially deferred
 CREATE TABLE pktable (
@@ -1231,12 +1233,14 @@ UPDATE pktable SET id = 10 WHERE id = 5;
 ERROR:  update or delete on table "pktable" violates foreign key constraint "fktable_fk_fkey" on table "fktable"
 DETAIL:  Key (id)=(5) is still referenced from table "fktable".
 COMMIT;
+ERROR:  current transaction failed, rolling back
 BEGIN;
 -- doesn't match PK, should throw error now
 INSERT INTO fktable VALUES (0, 20);
 ERROR:  insert or update on table "fktable" violates foreign key constraint "fktable_fk_fkey"
 DETAIL:  Key (fk)=(20) is not present in table "pktable".
 COMMIT;
+ERROR:  current transaction failed, rolling back
 -- try additional syntax
 ALTER TABLE fktable ALTER CONSTRAINT fktable_fk_fkey NOT DEFERRABLE;
 -- illegal option
@@ -1489,11 +1493,13 @@ insert into fktable2 values(2);
 alter table fktable2 drop constraint fktable2_f1_fkey;
 ERROR:  cannot ALTER TABLE "fktable2" because it has pending trigger events
 commit;
+ERROR:  current transaction failed, rolling back
 begin;
 delete from pktable2 where f1 = 1;
 alter table fktable2 drop constraint fktable2_f1_fkey;
 ERROR:  cannot ALTER TABLE "pktable2" because it has pending trigger events
 commit;
+ERROR:  current transaction failed, rolling back
 drop table pktable2, fktable2;
 --
 -- Test keys that "look" different but compare as equal
@@ -2440,6 +2446,7 @@ INSERT INTO fkpart8.tbl2 VALUES(1);
 ALTER TABLE fkpart8.tbl2 DROP CONSTRAINT tbl2_f1_fkey;
 ERROR:  cannot ALTER TABLE "tbl2_p1" because it has pending trigger events
 COMMIT;
+ERROR:  current transaction failed, rolling back
 DROP SCHEMA fkpart8 CASCADE;
 NOTICE:  drop cascades to 2 other objects
 DETAIL:  drop cascades to table fkpart8.tbl1

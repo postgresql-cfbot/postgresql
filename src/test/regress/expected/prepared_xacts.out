@@ -137,6 +137,7 @@ ERROR:  could not serialize access due to read/write dependencies among transact
 DETAIL:  Reason code: Canceled on identification as a pivot, during write.
 HINT:  The transaction might succeed if retried.
 PREPARE TRANSACTION 'foo5';
+ERROR:  current transaction failed, rolling back
 SELECT gid FROM pg_prepared_xacts;
  gid  
 ------

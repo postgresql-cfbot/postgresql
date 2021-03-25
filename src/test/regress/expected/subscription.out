@@ -20,6 +20,7 @@ BEGIN;
 CREATE SUBSCRIPTION regress_testsub CONNECTION 'testconn' PUBLICATION testpub WITH (create_slot);
 ERROR:  CREATE SUBSCRIPTION ... WITH (create_slot = true) cannot run inside a transaction block
 COMMIT;
+ERROR:  current transaction failed, rolling back
 -- fail - invalid connection string
 CREATE SUBSCRIPTION regress_testsub CONNECTION 'testconn' PUBLICATION testpub;
 ERROR:  invalid connection string syntax: missing "=" after "testconn" in connection info string
@@ -146,6 +147,7 @@ BEGIN;
 DROP SUBSCRIPTION regress_testsub;
 ERROR:  DROP SUBSCRIPTION cannot run inside a transaction block
 COMMIT;
+ERROR:  current transaction failed, rolling back
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
 -- now it works
 BEGIN;

@@ -103,8 +103,20 @@ index_form_tuple(TupleDesc tupleDescriptor,
 			(att->attstorage == TYPSTORAGE_EXTENDED ||
 			 att->attstorage == TYPSTORAGE_MAIN))
 		{
-			Datum		cvalue = toast_compress_datum(untoasted_values[i],
-													  att->attcompression);
+			Datum	cvalue;
+			char	compression = att->attcompression;
+
+			/*
+			 * If the compression method is not valid then use the default
+			 * compression method. This can happen because, for the expression
+			 * columns, we set the attcompression to the invalid compression
+			 * method, while creating the index so that we can use the current
+			 * default compression method when we actually need to compress.
+			 */
+			if (!CompressionMethodIsValid(compression))
+				compression = GetDefaultToastCompression();
+
+			cvalue = toast_compress_datum(untoasted_values[i], compression);
 
 			if (DatumGetPointer(cvalue) != NULL)
 			{

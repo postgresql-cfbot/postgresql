@@ -30,6 +30,7 @@
 #include "access/relscan.h"
 #include "access/sysattr.h"
 #include "access/tableam.h"
+#include "access/toast_compression.h"
 #include "access/transam.h"
 #include "access/visibilitymap.h"
 #include "access/xact.h"
@@ -378,6 +379,14 @@ ConstructTupleDescriptor(Relation heapRelation,
 			to->attstorage = typeTup->typstorage;
 			to->attalign = typeTup->typalign;
 			to->atttypmod = exprTypmod(indexkey);
+
+			/*
+			 * For the expression column set attcompression to the invalid
+			 * compression.  If the value for this attribute needs to be
+			 * compressed during insertion then it will be compressed using
+			 * default compression.
+			 */
+			to->attcompression = InvalidCompressionMethod;
 
 			ReleaseSysCache(tuple);
 

@@ -1897,6 +1897,7 @@ describeOneTableDetails(const char *schemaname,
 		if (pset.sversion >= 140000 &&
 			!pset.hide_compression &&
 			(tableinfo.relkind == RELKIND_RELATION ||
+			 tableinfo.relkind == RELKIND_INDEX ||
 			 tableinfo.relkind == RELKIND_PARTITIONED_TABLE ||
 			 tableinfo.relkind == RELKIND_MATVIEW))
 		{

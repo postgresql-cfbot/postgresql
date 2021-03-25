@@ -1,0 +1,69 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s2snitch s1b s1s s2detach s1cancel s1insert s1c
+step s2snitch: insert into d4_pid select pg_backend_pid();
+step s1b: begin;
+step s1s: select * from d4_primary;
+a              
+
+1              
+step s2detach: alter table d4_primary detach partition d4_primary1 concurrently; <waiting ...>
+step s1cancel: select pg_cancel_backend(pid) from d4_pid;
+pg_cancel_backend
+
+t              
+step s2detach: <... completed>
+error in steps s1cancel s2detach: ERROR:  canceling statement due to user request
+step s1insert: insert into d4_fk values (1);
+ERROR:  insert or update on table "d4_fk" violates foreign key constraint "d4_fk_a_fkey"
+step s1c: commit;
+
+starting permutation: s2snitch s1brr s1s s2detach s1cancel s1insert s1c
+step s2snitch: insert into d4_pid select pg_backend_pid();
+step s1brr: begin isolation level repeatable read;
+step s1s: select * from d4_primary;
+a              
+
+1              
+step s2detach: alter table d4_primary detach partition d4_primary1 concurrently; <waiting ...>
+step s1cancel: select pg_cancel_backend(pid) from d4_pid;
+pg_cancel_backend
+
+t              
+step s2detach: <... completed>
+error in steps s1cancel s2detach: ERROR:  canceling statement due to user request
+step s1insert: insert into d4_fk values (1);
+ERROR:  insert or update on table "d4_fk" violates foreign key constraint "d4_fk_a_fkey"
+step s1c: commit;
+
+starting permutation: s2snitch s1b s1s s2detach s3insert s1c
+step s2snitch: insert into d4_pid select pg_backend_pid();
+step s1b: begin;
+step s1s: select * from d4_primary;
+a              
+
+1              
+step s2detach: alter table d4_primary detach partition d4_primary1 concurrently; <waiting ...>
+step s3insert: insert into d4_fk values (1);
+ERROR:  insert or update on table "d4_fk" violates foreign key constraint "d4_fk_a_fkey"
+step s1c: commit;
+step s2detach: <... completed>
+
+starting permutation: s2snitch s1b s1s s2detach s3brr s3insert s3commit s1cancel
+step s2snitch: insert into d4_pid select pg_backend_pid();
+step s1b: begin;
+step s1s: select * from d4_primary;
+a              
+
+1              
+step s2detach: alter table d4_primary detach partition d4_primary1 concurrently; <waiting ...>
+step s3brr: begin isolation level repeatable read;
+step s3insert: insert into d4_fk values (1);
+ERROR:  insert or update on table "d4_fk" violates foreign key constraint "d4_fk_a_fkey"
+step s3commit: commit;
+step s1cancel: select pg_cancel_backend(pid) from d4_pid;
+pg_cancel_backend
+
+t              
+step s2detach: <... completed>
+error in steps s1cancel s2detach: ERROR:  canceling statement due to user request

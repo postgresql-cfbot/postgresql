@@ -173,6 +173,7 @@ extern void RestoreReindexState(void *reindexstate);
 
 extern void IndexSetParentIndex(Relation idx, Oid parentOid);
 
+extern Oid	StatisticsGetRelation(Oid statId, bool missing_ok);
 
 /*
  * itemptr_encode - Encode ItemPointer as int64/int8

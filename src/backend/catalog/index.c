@@ -50,6 +50,7 @@
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
@@ -3655,6 +3656,32 @@ IndexGetRelation(Oid indexId, bool missing_ok)
 	Assert(index->indexrelid == indexId);
 
 	result = index->indrelid;
+	ReleaseSysCache(tuple);
+	return result;
+}
+
+/*
+ * StatisticsGetRelation: given a statistics's relation OID, get the OID of
+ * the relation it is an statistics on.  Uses the system cache.
+ */
+Oid
+StatisticsGetRelation(Oid statId, bool missing_ok)
+{
+	HeapTuple	tuple;
+	Form_pg_statistic_ext stx;
+	Oid			result;
+
+	tuple = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statId));
+	if (!HeapTupleIsValid(tuple))
+	{
+		if (missing_ok)
+			return InvalidOid;
+		elog(ERROR, "cache lookup failed for statistics object %u", statId);
+	}
+	stx = (Form_pg_statistic_ext) GETSTRUCT(tuple);
+	Assert(stx->oid == statId);
+
+	result = stx->stxrelid;
 	ReleaseSysCache(tuple);
 	return result;
 }

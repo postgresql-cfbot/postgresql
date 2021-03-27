@@ -3551,6 +3551,34 @@ repeat('Pg', 4) <returnvalue>PgPgPgPg</returnvalue>
        </para></entry>
       </row>
 
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>unistr</primary>
+        </indexterm>
+        <function>unistr</function> ( <parameter>string</parameter> <type>text</type> )
+        <returnvalue>text</returnvalue>
+       </para>
+       <para>
+        Evaluate escaped unicode chars (4 or 6 digits) without prefix or
+         with prefix <literal>u</literal> (4 digits) or with prefix
+        <literal>U</literal> (8 digits) to chars or with prefix
+        <literal>+</literal> (6 digits).
+       </para>
+       <para>
+        <literal>unistr('\0441\043B\043E\043D')</literal>
+        <returnvalue>слон</returnvalue>
+       </para>
+       <para>
+        <literal>unistr('d\0061t\+000061')</literal>
+        <returnvalue>data</returnvalue>
+       </para>
+       <para>
+        <literal>unistr('d\u0061t\U00000061')</literal>
+        <returnvalue>data</returnvalue>
+       </para></entry>
+      </row>
+
      </tbody>
     </tgroup>
    </table>

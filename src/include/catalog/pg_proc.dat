@@ -11555,4 +11555,7 @@
   proname => 'brin_minmax_multi_summary_send', provolatile => 's', prorettype => 'bytea',
   proargtypes => 'pg_brin_minmax_multi_summary', prosrc => 'brin_minmax_multi_summary_send' },
 
+{ oid => '9822', descr => 'unescape Unicode chars in strings',
+  proname => 'unistr', prorettype => 'text', proargtypes => 'text',
+  proisstrict => 't', prosrc => 'unistr' }
 ]

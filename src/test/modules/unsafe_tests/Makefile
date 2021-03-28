@@ -1,6 +1,6 @@
 # src/test/modules/unsafe_tests/Makefile
 
-REGRESS = rolenames alter_system_table
+REGRESS = alter_system_table
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config

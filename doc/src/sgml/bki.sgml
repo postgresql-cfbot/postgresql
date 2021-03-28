@@ -182,7 +182,7 @@
 { oid =&gt; '1', oid_symbol =&gt; 'TemplateDbOid',
   descr =&gt; 'database\'s default template',
   datname =&gt; 'template1', encoding =&gt; 'ENCODING', datcollate =&gt; 'LC_COLLATE',
-  datctype =&gt; 'LC_CTYPE', datistemplate =&gt; 't', datallowconn =&gt; 't',
+  datctype =&gt; 'LC_CTYPE', datistemplate =&gt; 't', datallowconn =&gt; 't', dathaslogontriggers =&gt; 'f',
   datconnlimit =&gt; '-1', datlastsysoid =&gt; '0', datfrozenxid =&gt; '0',
   datminmxid =&gt; '1', dattablespace =&gt; 'pg_default', datacl =&gt; '_null_' },
 

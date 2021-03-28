@@ -42,6 +42,7 @@
 #include "catalog/pg_type.h"
 #include "commands/async.h"
 #include "commands/prepare.h"
+#include "commands/event_trigger.h"
 #include "executor/spi.h"
 #include "jit/jit.h"
 #include "libpq/libpq.h"
@@ -178,6 +179,9 @@ static ProcSignalReason RecoveryConflictReason;
 /* reused buffer to pass to SendRowDescriptionMessage() */
 static MemoryContext row_description_context = NULL;
 static StringInfoData row_description_buf;
+
+/* Hook for plugins to get control at start of session */
+client_connection_hook_type client_connection_hook = EventTriggerOnConnect;
 
 /* ----------------------------------------------------------------
  *		decls for routines only used in this file
@@ -4093,6 +4097,11 @@ PostgresMain(int argc, char *argv[],
 	 */
 	if (!IsUnderPostmaster)
 		PgStartTime = GetCurrentTimestamp();
+
+	if (client_connection_hook)
+	{
+		(*client_connection_hook) ();
+	}
 
 	/*
 	 * POSTGRES main processing loop begins here

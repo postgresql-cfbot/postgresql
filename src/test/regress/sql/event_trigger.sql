@@ -429,3 +429,31 @@ DROP POLICY p2 ON event_trigger_test;
 DROP EVENT TRIGGER start_rls_command;
 DROP EVENT TRIGGER end_rls_command;
 DROP EVENT TRIGGER sql_drop_command;
+
+-- On session start triggers
+create table connects(id serial, who text);
+create function on_login_proc() returns event_trigger as $$
+begin
+  insert into connects (who) values ('I am');
+  raise notice 'You are welcome!';
+end;
+$$ language plpgsql;
+create event trigger on_login_trigger on client_connection execute procedure on_login_proc();
+alter event trigger on_login_trigger enable always;
+\c
+select * from connects;
+\c
+select * from connects;
+
+-- Test handing exeptions in client_connection trigger
+
+drop table connects;
+-- superuser should ignore error
+\c
+-- suppress trigger firing
+\c "dbname=regression options='-c enable_client_connection_trigger=false'"
+
+
+-- Cleanup
+drop event trigger on_login_trigger;
+drop function on_login_proc();

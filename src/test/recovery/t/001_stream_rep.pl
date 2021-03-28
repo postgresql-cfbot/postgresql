@@ -43,6 +43,27 @@ $node_standby_2->start;
 $node_primary->safe_psql('postgres',
 	"CREATE TABLE tab_int AS SELECT generate_series(1,1002) AS a");
 
+$node_primary->safe_psql('postgres', q{
+CREATE ROLE regress_user LOGIN PASSWORD 'pass';
+
+CREATE TABLE connects(id serial, who text);
+
+CREATE FUNCTION on_login_proc() RETURNS EVENT_TRIGGER AS $$
+BEGIN
+  IF NOT pg_is_in_recovery() THEN
+    INSERT INTO connects (who) VALUES (session_user);
+  END IF;
+  IF session_user = 'regress_hacker' THEN
+    RAISE EXCEPTION 'You are not welcome!';
+  END IF;
+  RAISE NOTICE 'You are welcome!';
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE EVENT TRIGGER on_login_trigger ON client_connection EXECUTE FUNCTION on_login_proc();
+ALTER EVENT TRIGGER on_login_trigger ENABLE ALWAYS;
+});
+
 # Wait for standbys to catch up
 $node_primary->wait_for_catchup($node_standby_1, 'replay',
 	$node_primary->lsn('insert'));
@@ -335,6 +356,9 @@ sub replay_check
 }
 
 replay_check();
+
+$node_standby_1->safe_psql('postgres', "SELECT 1", extra_params => [ '-U', 'regress_user', '-w' ]);
+$node_standby_2->safe_psql('postgres', "SELECT 2", extra_params => [ '-U', 'regress_user', '-w' ]);
 
 note "enabling hot_standby_feedback";
 

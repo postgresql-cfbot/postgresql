@@ -28,11 +28,35 @@
      An event trigger fires whenever the event with which it is associated
      occurs in the database in which it is defined. Currently, the only
      supported events are
+     <literal>client_connection</literal>,
      <literal>ddl_command_start</literal>,
      <literal>ddl_command_end</literal>,
      <literal>table_rewrite</literal>
      and <literal>sql_drop</literal>.
      Support for additional events may be added in future releases.
+   </para>
+
+   <para>
+     The <literal>client_connection</literal> event occurs when a client connection
+     to the server is established.
+     There are two mechanisms for dealing with any bugs in a trigger procedure for
+     this event which might prevent successful login to the system:
+     <itemizedlist>
+      <listitem>
+       <para>
+         The configuration parameter <literal>enable_client_connection_trigger</literal>
+         makes it possible to disable firing the <literal>client_connection</literal>
+         trigger when a client connects.
+       </para>
+      </listitem>
+      <listitem>
+       <para>
+         Errors in the <literal>client_connection</literal> trigger procedure are
+         ignored for superuser. An error message is delivered to the client as
+         <literal>NOTICE</literal> in this case.
+       </para>
+      </listitem>
+     </itemizedlist>
    </para>
 
    <para>
@@ -1140,7 +1164,7 @@ typedef struct EventTriggerData
   </sect1>
 
   <sect1 id="event-trigger-example">
-   <title>A Complete Event Trigger Example</title>
+   <title>A C language Event Trigger Example</title>
 
    <para>
     Here is a very simple example of an event trigger function written in C.
@@ -1280,6 +1304,64 @@ $$;
 CREATE EVENT TRIGGER no_rewrite_allowed
                   ON table_rewrite
    EXECUTE FUNCTION no_rewrite();
+</programlisting>
+   </para>
+ </sect1>
+
+  <sect1 id="event-trigger-database-client-connection-example">
+   <title>A Database Client Connection Event Trigger Example</title>
+
+   <para>
+    The event trigger on the <literal>client_connection</literal> event
+    can be useful for client connections logging,
+    for verifying the connection and assigning roles according to current circumstances,
+    or for some session data initialization.
+   </para>
+
+   <para>
+    The following example demonstrates these options.
+<programlisting>
+
+-- create test tables and roles
+CREATE TABLE user_sessions_log (
+	"user" text,
+    "session_start" timestamp with time zone
+);
+CREATE ROLE day_worker;
+CREATE ROLE night_worker;
+
+-- the example trigger function
+CREATE OR REPLACE FUNCTION init_session()
+ RETURNS event_trigger SECURITY DEFINER
+ LANGUAGE plpgsql AS
+$$
+DECLARE
+	hour integer = EXTRACT('hour' FROM current_time);
+BEGIN
+-- 1) Assign some roles
+    IF hour BETWEEN 8 AND 20 THEN           -- at daytime grant the day_worker role
+        EXECUTE 'REVOKE night_worker FROM ' || quote_ident(session_user);
+        EXECUTE 'GRANT    day_worker TO '   || quote_ident(session_user);
+    ELSIF hour BETWEEN 2 AND 4 THEN
+        RAISE EXCEPTION 'Login forbidden';  -- do not allow to connect these hours
+    ELSE                                    -- at other time grant the night_worker role
+        EXECUTE 'REVOKE day_worker FROM ' || quote_ident(session_user);
+        EXECUTE 'GRANT  night_worker TO ' || quote_ident(session_user);
+    END IF;
+
+-- 2) Initialize some user session data
+   CREATE TEMP TABLE session_storage (x float, y integer);
+
+-- 3) Log the connection time
+   INSERT INTO user_sessions_log VALUES (session_user, current_timestamp);
+	
+END;
+$$;
+
+-- trigger definition
+CREATE EVENT TRIGGER init_session
+   ON client_connection
+   EXECUTE FUNCTION init_session();
 </programlisting>
    </para>
  </sect1>

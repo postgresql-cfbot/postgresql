@@ -76,6 +76,7 @@
 #include "access/amapi.h"
 #include "access/htup_details.h"
 #include "access/tsmapi.h"
+#include "catalog/pg_class.h"
 #include "executor/executor.h"
 #include "executor/nodeAgg.h"
 #include "executor/nodeHash.h"
@@ -186,6 +187,20 @@ static void set_rel_width(PlannerInfo *root, RelOptInfo *rel);
 static double relation_byte_size(double tuples, int width);
 static double page_size(double tuples, int width);
 static double get_parallel_divisor(Path *path);
+
+
+static bool is_simple_append(AppendPath *apath, PlannerInfo *root);
+static bool is_exact_equal_partkey(Expr *clause, Expr *partkey,
+								   PartitionScheme part_scheme,
+								   bool external_param_only);
+static bool is_exact_bool_equal_partkey(BoolExpr *boolexpr, Expr *partkey,
+										PartitionScheme part_scheme,
+										bool extern_param_only);
+static bool has_exact_equal_partkey(List *clauses,  Expr *partkey,
+									PartitionScheme part_scheme,
+									bool extern_param_only);
+static double estimate_runtime_prune_ratio(AppendPath *apath,
+											PlannerInfo *root);
 
 
 /*
@@ -1879,7 +1894,7 @@ cost_tuplesort(Cost *startup_cost, Cost *run_cost,
 
 /*
  * cost_incremental_sort
- * 	Determines and returns the cost of sorting a relation incrementally, when
+ *		Determines and returns the cost of sorting a relation incrementally, when
  *  the input path is presorted by a prefix of the pathkeys.
  *
  * 'presorted_keys' is the number of leading pathkeys by which the input path
@@ -2136,13 +2151,16 @@ append_nonpartial_cost(List *subpaths, int numpaths, int parallel_workers)
  *	  Determines and returns the cost of an Append node.
  */
 void
-cost_append(AppendPath *apath)
+cost_append(AppendPath *apath, PlannerInfo *root)
 {
 	ListCell   *l;
+	double	prune_ratio = 1;
 
 	apath->path.startup_cost = 0;
 	apath->path.total_cost = 0;
 	apath->path.rows = 0;
+
+	prune_ratio = estimate_runtime_prune_ratio(apath, root);
 
 	if (apath->subpaths == NIL)
 		return;
@@ -2154,6 +2172,7 @@ cost_append(AppendPath *apath)
 		if (pathkeys == NIL)
 		{
 			Path	   *subpath = (Path *) linitial(apath->subpaths);
+			double		total_startup_cost = 0;
 
 			/*
 			 * For an unordered, non-parallel-aware Append we take the startup
@@ -2168,7 +2187,10 @@ cost_append(AppendPath *apath)
 
 				apath->path.rows += subpath->rows;
 				apath->path.total_cost += subpath->total_cost;
+				total_startup_cost += subpath->startup_cost;
 			}
+			if (prune_ratio < 1)
+				apath->path.startup_cost = total_startup_cost;
 		}
 		else
 		{
@@ -2275,6 +2297,13 @@ cost_append(AppendPath *apath)
 								   apath->first_partial_path,
 								   apath->path.parallel_workers);
 	}
+
+	apath->path.total_cost *= prune_ratio;
+	apath->path.startup_cost *= prune_ratio;
+	apath->path.rows *= prune_ratio;
+
+	if (apath->path.rows < 1)
+		apath->path.rows = 1;
 
 	/*
 	 * Although Append does not do any selection or projection, it's not free;
@@ -5991,4 +6020,319 @@ compute_bitmap_pages(PlannerInfo *root, RelOptInfo *baserel, Path *bitmapqual,
 		*tuple = tuples_fetched;
 
 	return pages_fetched;
+}
+
+
+/*
+ * estimate_runtime_prune_ratio
+ *
+ *	estimate a runtime prune ratio for a AppendPath.
+ */
+static double
+estimate_runtime_prune_ratio(AppendPath *apath, PlannerInfo *root)
+{
+	List  *prunequal;
+	RelOptInfo *rel;
+	Expr *partkey;
+
+	if (!is_simple_append(apath, root))
+		return 1.0;
+
+	rel = apath->path.parent;
+
+	prunequal = extract_actual_clauses(rel->baserestrictinfo, false);
+
+	if (apath->path.param_info)
+		prunequal = list_concat(prunequal, apath->path.param_info->ppi_clauses);
+
+	/* We only support 1 partition key right now, see is_simple_append */
+	partkey = linitial(rel->partexprs[0]);
+
+	/*
+	 * We need to handle 3 cases correctly. a). WHERE partexpr = $1 or partexpr = $2;
+	 * in this case, even it probably hit 2 partitions, but we still count the factor as
+	 * 1 / rel->parts since each partition counts the 2 variables already.  b). WHERE
+	 * p.partexpr = p2.partexpr. The append in Nestloop inner plan just need to handle
+	 * one for sure. c). WHERE (partexpr = $1 or partexpr = $2) AND p.partexpr2 = p2.partexpr.
+	 * The outer plan follows rule a) and inner Nestloop plan follows rule b.
+	 * At last, we just need to handle the factor as 1 / list_length(subpaths) for all
+	 * the cases.
+	 */
+	if (has_exact_equal_partkey(prunequal, partkey, rel->part_scheme, false))
+		return 1.0 / list_length(apath->subpaths);
+
+	return 1.0;
+}
+
+
+double
+calculate_relrows_prune_ratio(RelOptInfo *rel, RangeTblEntry *rte,  int live_children)
+{
+
+	Assert(IS_PARTITIONED_REL(rel));
+	if (rel->part_scheme->partnatts == 1 &&
+		rte->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		List	*quals = rel->baserestrictinfo;
+		Expr	*partkey = linitial(rel->partexprs[0]);
+		if (has_exact_equal_partkey(quals, partkey, rel->part_scheme, true /* extern param only */))
+			return 1.0 / live_children;
+	}
+	return 1.0;
+}
+
+
+/*
+ * has_exact_equal_partkey
+ */
+static bool
+has_exact_equal_partkey(List *clauses,  Expr *partkey,
+						PartitionScheme part_scheme,
+						bool extern_param_only)
+{
+	ListCell	*lc;
+	foreach(lc, clauses)
+	{
+		Expr *clause = lfirst(lc);
+		if (IsA(clause, RestrictInfo))
+			clause = ((RestrictInfo *)clause)->clause;
+
+		if (IsA(clause, BoolExpr))
+		{
+			if (is_exact_bool_equal_partkey((BoolExpr*)clause, partkey,
+												  part_scheme, extern_param_only))
+				return true;
+		}
+
+		if (is_exact_equal_partkey(clause, partkey,
+										 part_scheme, extern_param_only))
+			return true;
+	}
+	return false;
+}
+
+
+/*
+ * is_simple_append
+ *
+ * Just add some limitations for user case to make this patch
+ * easier.
+ */
+static bool
+is_simple_append(AppendPath *apath, PlannerInfo *root)
+{
+	/*
+	 * Append may comes from p, subp, Union, Union all
+	 * or Append two join rel in partition wise case.
+	 */
+
+	RelOptInfo *rel = apath->path.parent;
+	ListCell *lc;
+
+	if (apath->path.parallel_aware)
+		/* We need to adjust both total_cost and startup_cost. If startup_cost
+		 * is not adjust, the (runtime cost = total_cost - startup_cost) might
+		 * less than 0, which will cause some bad result. However how to adjust
+		 * the startup_cost is not clear, so I just not handle this case now.
+		 */
+		return false;
+
+	if (!IS_PARTITIONED_REL(rel))
+		/* May come from Union, UnionAll or partition wise join*/
+		return false;
+
+	if (bms_num_members(rel->relids) > 1)
+		/* For safety */
+		return false;
+
+	if (rel->part_scheme->partnatts != 1)
+		/* Only support 1 for simple */
+		return false;
+
+	/*
+	 * Now it may still a partitoned rel or sub-partitioned rel.
+	 * Currently the subpaths from sub-partitioned rel will be
+	 * merged into parent->subpaths via accumulate_append_subpath
+	 * without considering the cost of the Append, but cares about
+	 * cost of its subpaths. This is not true any more when this
+	 * feature involved.  now I will just adjust the cost of the
+	 * Append without touching accumulate_append_subpath. It should
+	 * be done later. Filter out any sub-partitioned rel for now.
+	 */
+
+	foreach(lc, apath->subpaths)
+	{
+		Path	*path = (Path *) lfirst(lc);
+		RelOptInfo *pathrel = path->parent;
+
+		if (pathrel->reloptkind != RELOPT_OTHER_MEMBER_REL)
+			return false;
+		if (bms_equal(pathrel->relids, apath->path.parent->relids))
+			/* subpath from sub-partitioned rel*/
+			return false;
+	}
+
+	/* At last, I don't bother to handle the transated_vars for now */
+	foreach(lc, apath->subpaths)
+	{
+		Path *subpath = (Path *) lfirst(lc);
+		AppendRelInfo *appinfo = root->append_rel_array[subpath->parent->relid];
+		int i = 0;
+		ListCell *lc2;
+		if (appinfo == NULL)
+		{
+			Assert(false);
+			return false;
+		}
+
+		foreach(lc2, appinfo->translated_vars)
+		{
+			Var *var = (Var *) lfirst(lc2);
+			i++;
+			if (var == NULL)
+				/* dropped column */
+				continue;
+			if (!IsA(var, Var))
+			{
+				Assert(false);
+				return false;
+			}
+			if (var->varattno != i)
+				return false;
+		}
+	}
+	return true;
+}
+
+
+/*
+ * similar with match_clause_to_partition_key.
+ */
+static bool
+is_exact_equal_partkey(Expr *clause, Expr *partkey,
+							 PartitionScheme part_scheme,
+							 bool external_param_only)
+{
+	/* We only support one partkey for now */
+	Oid	 partopfamily = part_scheme->partopfamily[0];
+
+	int op_strategy = InvalidStrategy;
+	Oid opno;
+	Expr	*leftop, *rightop;
+	Oid	op_lefttype, op_righttype;
+
+	if (IsA(clause, OpExpr))
+	{
+		bool found = false;
+		OpExpr *opexpr = (OpExpr *)clause;
+		opno = opexpr->opno;
+		leftop = (Expr *)get_leftop(clause);
+		rightop = (Expr *)get_rightop(clause);
+		while (IsA(leftop, RelabelType))
+			leftop = ((RelabelType *) leftop)->arg;
+
+		while (IsA(rightop, RelabelType))
+			rightop = ((RelabelType *) rightop)->arg;
+
+		if (equal(leftop, partkey))
+		{
+			if (external_param_only)
+			{
+				if (IsA(rightop, Param) && castNode(Param, rightop)->paramkind == PARAM_EXTERN)
+				{
+					found = true;
+				}
+			}
+			else
+				found = true;
+		}
+		else if (equal(rightop, partkey))
+		{
+			if (external_param_only)
+			{
+				if (IsA(leftop, Param) && castNode(Param, leftop)->paramkind == PARAM_EXTERN)
+					found = true;
+			}
+			else
+				found = true;
+		}
+
+		if (!found)
+			return false;
+
+		if (!op_in_opfamily(opno, partopfamily))
+			return false;
+
+		get_op_opfamily_properties(opno, partopfamily,
+								   false, &op_strategy,
+								   &op_lefttype, &op_righttype);
+		/* We only support BTEqualStrategyNumber on purpose, support other types
+		 * not worthy the troubles and probably can't get a good res. */
+		return op_strategy == BTEqualStrategyNumber;
+	}
+	else if (IsA(clause, ScalarArrayOpExpr))
+	{
+		ScalarArrayOpExpr *scalar_array_opexpr = (ScalarArrayOpExpr *) clause;
+		opno = scalar_array_opexpr->opno;
+		if (!op_in_opfamily(opno, partopfamily))
+			return false;
+
+		get_op_opfamily_properties(opno, partopfamily,
+								   false, &op_strategy,
+								   &op_lefttype, &op_righttype);
+		if(op_strategy != BTEqualStrategyNumber)
+			return false;
+		leftop = linitial(scalar_array_opexpr->args);
+		if (!equal(leftop, partkey))
+			return false;
+		if (external_param_only)
+		{
+			Expr *rexpr = lsecond(scalar_array_opexpr->args);
+			if (IsA(rexpr, ArrayCoerceExpr))
+				rexpr = castNode(ArrayCoerceExpr, rexpr)->arg;
+			if (IsA(rexpr, ArrayExpr))
+			{
+				List *elems = castNode(ArrayExpr, rexpr)->elements;
+				if (elems != NIL)
+				{
+					Expr * elem = linitial(elems);
+					if (IsA(elem, Param) && castNode(Param, elem)->paramkind == PARAM_EXTERN)
+						return true;
+				}
+				return false;
+			}
+		}
+		return true;
+	}
+	return false;
+}
+
+static bool
+is_exact_bool_equal_partkey(BoolExpr *boolexpr, Expr *partkey,
+								  PartitionScheme part_scheme,
+								  bool extern_param_only)
+{
+	ListCell	*lc;
+	switch(boolexpr->boolop)
+	{
+		case AND_EXPR:
+			foreach(lc, boolexpr->args)
+			{
+				Expr *expr = (Expr *)lfirst(lc);
+				if (is_exact_equal_partkey(expr, partkey, part_scheme, extern_param_only))
+					return true;
+			}
+		case OR_EXPR:
+			foreach(lc, boolexpr->args)
+			{
+				Expr *expr = (Expr *)lfirst(lc);
+				/* We need to make sure all the expr is a partkey */
+				if (!is_exact_equal_partkey(expr, partkey, part_scheme, extern_param_only))
+					return false;
+			}
+			return true;
+		case NOT_EXPR:
+			return false;
+	}
+	return false;
 }

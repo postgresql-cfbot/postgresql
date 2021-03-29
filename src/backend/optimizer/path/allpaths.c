@@ -948,7 +948,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 					Index rti, RangeTblEntry *rte)
 {
 	int			parentRTindex = rti;
-	bool		has_live_children;
+	int		n_live_children = 0;
 	double		parent_rows;
 	double		parent_size;
 	double	   *parent_attrsizes;
@@ -985,7 +985,6 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	 * Note: if you consider changing this logic, beware that child rels could
 	 * have zero rows and/or width, if they were excluded by constraints.
 	 */
-	has_live_children = false;
 	parent_rows = 0;
 	parent_size = 0;
 	nattrs = rel->max_attr - rel->min_attr + 1;
@@ -1113,7 +1112,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 			continue;
 
 		/* We have at least one live child. */
-		has_live_children = true;
+		n_live_children += 1;
 
 		/*
 		 * If any live child is not parallel-safe, treat the whole appendrel
@@ -1170,7 +1169,7 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		}
 	}
 
-	if (has_live_children)
+	if (n_live_children > 0)
 	{
 		/*
 		 * Save the finished size estimates.
@@ -1182,6 +1181,14 @@ set_append_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		rel->reltarget->width = rint(parent_size / parent_rows);
 		for (i = 0; i < nattrs; i++)
 			rel->attr_widths[i] = rint(parent_attrsizes[i] / parent_rows);
+
+		if (enable_partition_pruning && IS_PARTITIONED_REL(rel))
+		{
+			/* reduce the rows that can be pruned at init partition prune stage */
+			rel->rows *= calculate_relrows_prune_ratio(rel, rte, n_live_children);
+			if (rel->rows < 1)
+				rel->rows = 1;
+		}
 
 		/*
 		 * Set "raw tuples" count equal to "rows" for the appendrel; needed

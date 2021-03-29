@@ -54,9 +54,11 @@
 #include "catalog/pg_trigger_d.h"
 #include "catalog/pg_type_d.h"
 #include "common/connect.h"
+#include "common/string.h"
 #include "dumputils.h"
 #include "fe_utils/string_utils.h"
 #include "getopt_long.h"
+#include "lib/stringinfo.h"
 #include "libpq/libpq-fs.h"
 #include "parallel.h"
 #include "pg_backup_db.h"
@@ -123,17 +125,34 @@ static SimpleOidList tabledata_exclude_oids = {NULL, NULL};
 static SimpleStringList foreign_servers_include_patterns = {NULL, NULL};
 static SimpleOidList foreign_servers_include_oids = {NULL, NULL};
 
+static SimpleStringList optsfilenames_processed = {NULL, NULL};
+
 static const CatalogId nilCatalogId = {0, 0};
 
 /* override for standard extra_float_digits setting */
 static bool have_extra_float_digits = false;
 static int	extra_float_digits;
 
+static const char *filename = NULL;
+static const char *format = "p";
+static bool g_verbose = false;
+static const char *dumpencoding = NULL;
+static const char *dumpsnapshot = NULL;
+static char *use_role = NULL;
+static long rowsPerInsert;
+static int numWorkers = 1;
+static int compressLevel = -1;
+
 /*
  * The default number of rows per INSERT when
  * --inserts is specified without --rows-per-insert
  */
 #define DUMP_DEFAULT_ROWS_PER_INSERT 1
+
+/*
+ * Option's code of "options-file" option
+ */
+#define OPTIONS_FILE_OPTNUM 12
 
 /*
  * Macro for producing quoted, schema-qualified name of a dumpable object.
@@ -297,14 +316,221 @@ static void appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 static char *get_synchronized_snapshot(Archive *fout);
 static void setupDumpWorker(Archive *AHX);
 static TableInfo *getRootTableInfo(const TableInfo *tbinfo);
+static bool read_options_from_file(const char *filename,
+								   DumpOptions *dopt,
+								   const char *optstring,
+								   const struct option *longopts,
+								   const char *progname);
 
+/*
+ * It assigns the values of options to related DumpOption fields or to
+ * some global values. Options file loading is not processed here.
+ */
+static bool
+process_option(int opt,
+			   char *optargstr,
+			   DumpOptions *dopt,
+			   const char *progname)
+{
+	char	   *endptr;
+
+	switch (opt)
+	{
+		case 'a':			/* Dump data only */
+			dopt->dataOnly = true;
+			break;
+
+		case 'b':			/* Dump blobs */
+			dopt->outputBlobs = true;
+			break;
+
+		case 'B':			/* Don't dump blobs */
+			dopt->dontOutputBlobs = true;
+			break;
+
+		case 'c':			/* clean (i.e., drop) schema prior to create */
+			dopt->outputClean = 1;
+			break;
+
+		case 'C':			/* Create DB */
+			dopt->outputCreateDB = 1;
+			break;
+
+		case 'd':			/* database name */
+			dopt->cparams.dbname = pg_strdup(optargstr);
+			break;
+
+		case 'E':			/* Dump encoding */
+			dumpencoding = pg_strdup(optargstr);
+			break;
+
+		case 'f':
+			filename = pg_strdup(optargstr);
+			break;
+
+		case 'F':
+			format = pg_strdup(optargstr);
+			break;
+
+		case 'h':			/* server host */
+			dopt->cparams.pghost = pg_strdup(optargstr);
+			break;
+
+		case 'j':			/* number of dump jobs */
+			numWorkers = atoi(optargstr);
+			break;
+
+		case 'n':			/* include schema(s) */
+			simple_string_list_append(&schema_include_patterns, optargstr);
+			dopt->include_everything = false;
+			break;
+
+		case 'N':			/* exclude schema(s) */
+			simple_string_list_append(&schema_exclude_patterns, optargstr);
+			break;
+
+		case 'O':			/* Don't reconnect to match owner */
+			dopt->outputNoOwner = 1;
+			break;
+
+		case 'p':			/* server port */
+			dopt->cparams.pgport = pg_strdup(optargstr);
+			break;
+
+		case 'R':
+			/* no-op, still accepted for backwards compatibility */
+			break;
+
+		case 's':			/* dump schema only */
+			dopt->schemaOnly = true;
+			break;
+
+		case 'S':			/* Username for superuser in plain text output */
+			dopt->outputSuperuser = pg_strdup(optargstr);
+			break;
+
+		case 't':			/* include table(s) */
+			simple_string_list_append(&table_include_patterns, optargstr);
+			dopt->include_everything = false;
+			break;
+
+		case 'T':			/* exclude table(s) */
+			simple_string_list_append(&table_exclude_patterns, optargstr);
+			break;
+
+		case 'U':
+			dopt->cparams.username = pg_strdup(optargstr);
+			break;
+
+		case 'v':			/* verbose */
+			g_verbose = true;
+			pg_logging_increase_verbosity();
+			break;
+
+		case 'w':
+			dopt->cparams.promptPassword = TRI_NO;
+			break;
+
+		case 'W':
+			dopt->cparams.promptPassword = TRI_YES;
+			break;
+
+		case 'x':			/* skip ACL dump */
+			dopt->aclsSkip = true;
+			break;
+
+		case 'Z':			/* Compression Level */
+			compressLevel = atoi(optargstr);
+			if (compressLevel < 0 || compressLevel > 9)
+			{
+				pg_log_error("compression level must be in range 0..9");
+				return false;
+			}
+			break;
+
+		case 0:
+			/* This covers the long options. */
+			break;
+
+		case 2:				/* lock-wait-timeout */
+			dopt->lockWaitTimeout = pg_strdup(optargstr);
+			break;
+
+		case 3:				/* SET ROLE */
+			use_role = pg_strdup(optargstr);
+			break;
+
+		case 4:				/* exclude table(s) data */
+			simple_string_list_append(&tabledata_exclude_patterns, optargstr);
+			break;
+
+		case 5:				/* section */
+			set_dump_section(optargstr, &dopt->dumpSections);
+			break;
+
+		case 6:				/* snapshot */
+			dumpsnapshot = pg_strdup(optargstr);
+			break;
+
+		case 7:				/* no-sync */
+			dosync = false;
+			break;
+
+		case 8:
+			have_extra_float_digits = true;
+			extra_float_digits = atoi(optargstr);
+			if (extra_float_digits < -15 || extra_float_digits > 3)
+			{
+				pg_log_error("extra_float_digits must be in range -15..3");
+				return false;
+			}
+			break;
+
+		case 9:				/* inserts */
+
+			/*
+			 * dump_inserts also stores --rows-per-insert, careful not to
+			 * overwrite that.
+			 */
+			if (dopt->dump_inserts == 0)
+				dopt->dump_inserts = DUMP_DEFAULT_ROWS_PER_INSERT;
+			break;
+
+		case 10:			/* rows per insert */
+			errno = 0;
+			rowsPerInsert = strtol(optargstr, &endptr, 10);
+
+			if (endptr == optargstr || *endptr != '\0' ||
+				rowsPerInsert <= 0 || rowsPerInsert > INT_MAX ||
+				errno == ERANGE)
+			{
+				pg_log_error("rows-per-insert must be in range %d..%d",
+							 1, INT_MAX);
+				return false;
+			}
+			dopt->dump_inserts = (int) rowsPerInsert;
+			break;
+
+		case 11:			/* include foreign data */
+			simple_string_list_append(&foreign_servers_include_patterns,
+									  optargstr);
+			break;
+
+		case OPTIONS_FILE_OPTNUM:	/* reading options file */
+			break;					/* should not be processed here ever */
+
+		default:
+			fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
+			return false;
+	}
+
+	return true;
+}
 
 int
 main(int argc, char **argv)
 {
 	int			c;
-	const char *filename = NULL;
-	const char *format = "p";
 	TableInfo  *tblinfo;
 	int			numTables;
 	DumpableObject **dobjs;
@@ -312,20 +538,11 @@ main(int argc, char **argv)
 	DumpableObject *boundaryObjs;
 	int			i;
 	int			optindex;
-	char	   *endptr;
 	RestoreOptions *ropt;
 	Archive    *fout;			/* the script file */
-	bool		g_verbose = false;
-	const char *dumpencoding = NULL;
-	const char *dumpsnapshot = NULL;
-	char	   *use_role = NULL;
-	long		rowsPerInsert;
-	int			numWorkers = 1;
-	int			compressLevel = -1;
 	int			plainText = 0;
 	ArchiveFormat archiveFormat = archUnknown;
 	ArchiveMode archiveMode;
-
 	static DumpOptions dopt;
 
 	static struct option long_options[] = {
@@ -391,12 +608,16 @@ main(int argc, char **argv)
 		{"no-unlogged-table-data", no_argument, &dopt.no_unlogged_table_data, 1},
 		{"no-sync", no_argument, NULL, 7},
 		{"on-conflict-do-nothing", no_argument, &dopt.do_nothing, 1},
+		{"options-file", required_argument, NULL, OPTIONS_FILE_OPTNUM},
 		{"rows-per-insert", required_argument, NULL, 10},
 		{"include-foreign-data", required_argument, NULL, 11},
 		{"index-collation-versions-unknown", no_argument, &dopt.coll_unknown, 1},
+		{"include-foreign-data-file", required_argument, NULL, 17},
 
 		{NULL, 0, NULL, 0}
 	};
+
+	const char *short_options = "abBcCd:E:f:F:h:j:n:N:Op:RsS:t:T:U:vwWxZ:";
 
 	pg_logging_init(argv[0]);
 	pg_logging_set_level(PG_LOG_WARNING);
@@ -426,195 +647,31 @@ main(int argc, char **argv)
 
 	InitDumpOptions(&dopt);
 
-	while ((c = getopt_long(argc, argv, "abBcCd:E:f:F:h:j:n:N:Op:RsS:t:T:U:vwWxZ:",
+	/*
+	 * We would to process options-file opts before other options.
+	 * This implements higher priority of options from command line.
+	 * Later processed options wins because overwrite result of
+	 * early processed options.
+	 */
+	while ((c = getopt_long(argc, argv, short_options,
 							long_options, &optindex)) != -1)
 	{
-		switch (c)
+		if (c == OPTIONS_FILE_OPTNUM)
 		{
-			case 'a':			/* Dump data only */
-				dopt.dataOnly = true;
-				break;
-
-			case 'b':			/* Dump blobs */
-				dopt.outputBlobs = true;
-				break;
-
-			case 'B':			/* Don't dump blobs */
-				dopt.dontOutputBlobs = true;
-				break;
-
-			case 'c':			/* clean (i.e., drop) schema prior to create */
-				dopt.outputClean = 1;
-				break;
-
-			case 'C':			/* Create DB */
-				dopt.outputCreateDB = 1;
-				break;
-
-			case 'd':			/* database name */
-				dopt.cparams.dbname = pg_strdup(optarg);
-				break;
-
-			case 'E':			/* Dump encoding */
-				dumpencoding = pg_strdup(optarg);
-				break;
-
-			case 'f':
-				filename = pg_strdup(optarg);
-				break;
-
-			case 'F':
-				format = pg_strdup(optarg);
-				break;
-
-			case 'h':			/* server host */
-				dopt.cparams.pghost = pg_strdup(optarg);
-				break;
-
-			case 'j':			/* number of dump jobs */
-				numWorkers = atoi(optarg);
-				break;
-
-			case 'n':			/* include schema(s) */
-				simple_string_list_append(&schema_include_patterns, optarg);
-				dopt.include_everything = false;
-				break;
-
-			case 'N':			/* exclude schema(s) */
-				simple_string_list_append(&schema_exclude_patterns, optarg);
-				break;
-
-			case 'O':			/* Don't reconnect to match owner */
-				dopt.outputNoOwner = 1;
-				break;
-
-			case 'p':			/* server port */
-				dopt.cparams.pgport = pg_strdup(optarg);
-				break;
-
-			case 'R':
-				/* no-op, still accepted for backwards compatibility */
-				break;
-
-			case 's':			/* dump schema only */
-				dopt.schemaOnly = true;
-				break;
-
-			case 'S':			/* Username for superuser in plain text output */
-				dopt.outputSuperuser = pg_strdup(optarg);
-				break;
-
-			case 't':			/* include table(s) */
-				simple_string_list_append(&table_include_patterns, optarg);
-				dopt.include_everything = false;
-				break;
-
-			case 'T':			/* exclude table(s) */
-				simple_string_list_append(&table_exclude_patterns, optarg);
-				break;
-
-			case 'U':
-				dopt.cparams.username = pg_strdup(optarg);
-				break;
-
-			case 'v':			/* verbose */
-				g_verbose = true;
-				pg_logging_increase_verbosity();
-				break;
-
-			case 'w':
-				dopt.cparams.promptPassword = TRI_NO;
-				break;
-
-			case 'W':
-				dopt.cparams.promptPassword = TRI_YES;
-				break;
-
-			case 'x':			/* skip ACL dump */
-				dopt.aclsSkip = true;
-				break;
-
-			case 'Z':			/* Compression Level */
-				compressLevel = atoi(optarg);
-				if (compressLevel < 0 || compressLevel > 9)
-				{
-					pg_log_error("compression level must be in range 0..9");
-					exit_nicely(1);
-				}
-				break;
-
-			case 0:
-				/* This covers the long options. */
-				break;
-
-			case 2:				/* lock-wait-timeout */
-				dopt.lockWaitTimeout = pg_strdup(optarg);
-				break;
-
-			case 3:				/* SET ROLE */
-				use_role = pg_strdup(optarg);
-				break;
-
-			case 4:				/* exclude table(s) data */
-				simple_string_list_append(&tabledata_exclude_patterns, optarg);
-				break;
-
-			case 5:				/* section */
-				set_dump_section(optarg, &dopt.dumpSections);
-				break;
-
-			case 6:				/* snapshot */
-				dumpsnapshot = pg_strdup(optarg);
-				break;
-
-			case 7:				/* no-sync */
-				dosync = false;
-				break;
-
-			case 8:
-				have_extra_float_digits = true;
-				extra_float_digits = atoi(optarg);
-				if (extra_float_digits < -15 || extra_float_digits > 3)
-				{
-					pg_log_error("extra_float_digits must be in range -15..3");
-					exit_nicely(1);
-				}
-				break;
-
-			case 9:				/* inserts */
-
-				/*
-				 * dump_inserts also stores --rows-per-insert, careful not to
-				 * overwrite that.
-				 */
-				if (dopt.dump_inserts == 0)
-					dopt.dump_inserts = DUMP_DEFAULT_ROWS_PER_INSERT;
-				break;
-
-			case 10:			/* rows per insert */
-				errno = 0;
-				rowsPerInsert = strtol(optarg, &endptr, 10);
-
-				if (endptr == optarg || *endptr != '\0' ||
-					rowsPerInsert <= 0 || rowsPerInsert > INT_MAX ||
-					errno == ERANGE)
-				{
-					pg_log_error("rows-per-insert must be in range %d..%d",
-								 1, INT_MAX);
-					exit_nicely(1);
-				}
-				dopt.dump_inserts = (int) rowsPerInsert;
-				break;
-
-			case 11:			/* include foreign data */
-				simple_string_list_append(&foreign_servers_include_patterns,
-										  optarg);
-				break;
-
-			default:
-				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
+			if (!read_options_from_file(optarg, &dopt, short_options,
+										long_options, progname))
 				exit_nicely(1);
 		}
+	}
+
+	/* reset getopt_long index */
+	optind = 1;
+
+	while ((c = getopt_long(argc, argv, short_options,
+							long_options, &optindex)) != -1)
+	{
+		if (!process_option(c, optarg, &dopt, progname))
+			exit_nicely(1);
 	}
 
 	/*
@@ -1058,6 +1115,7 @@ help(const char *progname)
 	printf(_("  --no-toast-compression       do not dump toast compression methods\n"));
 	printf(_("  --no-unlogged-table-data     do not dump unlogged table data\n"));
 	printf(_("  --on-conflict-do-nothing     add ON CONFLICT DO NOTHING to INSERT commands\n"));
+	printf(_("  --options-file=FILENAME      read options from options file\n"));
 	printf(_("  --quote-all-identifiers      quote all identifiers, even if not key words\n"));
 	printf(_("  --rows-per-insert=NROWS      number of rows per INSERT; implies --inserts\n"));
 	printf(_("  --section=SECTION            dump named section (pre-data, data, or post-data)\n"));
@@ -18866,4 +18924,451 @@ appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 								fout->std_strings);
 	if (!res)
 		pg_log_warning("could not parse reloptions array");
+}
+
+/*
+ * Print error message and close input file
+ */
+static void
+invalid_optfile_format(FILE *fp,
+							char *message,
+							char *optname,
+							int optnamelen,
+							char *line,
+							int lineno)
+{
+	Assert(message);
+
+	if (optnamelen > 0)
+	{
+		Assert(optname);
+		pg_log_error(message, optnamelen, optname, lineno);
+	}
+	else
+		pg_log_error(message, lineno);
+
+	if (line)
+		fprintf(stderr, "LINE %d: %s\n", lineno, line);
+
+	if (fp != stdin)
+		fclose(fp);
+}
+
+/*
+ * Reads an option argument from file. Supports double-quoted
+ * strings. In this case multi-line strings are supported.
+ */
+static bool
+read_optarg(FILE *fp,
+			const char *filename,
+			char *str,
+			StringInfo line,
+			StringInfo optargument,
+			char *optname,
+			int optnamelen,
+			bool islongopt,
+			int *lineno)
+{
+	if (*str == '\0' || *str == '#')
+	{
+		if (islongopt)
+			invalid_optfile_format(fp,
+								   "option '--%.*s' requires an argument at line %d",
+									optname, optnamelen,
+									line->data,
+									*lineno);
+		else
+			invalid_optfile_format(fp,
+								   "option '-%.*s' requires an argument at line %d",
+								   optname, optnamelen,
+								   line->data,
+								   *lineno);
+		return false;
+	}
+
+	resetStringInfo(optargument);
+
+	/* simple case */
+	if (*str != '"')
+	{
+		char	   *start = str;
+
+		/* read first white char */
+		while (*str != '\0' && *str != '#')
+		{
+			if (*str == ' ')
+				break;
+			str++;
+		}
+
+		appendBinaryStringInfo(optargument, start, str - start);
+	}
+	else
+	{
+		appendStringInfoChar(optargument, *str++);
+
+		while (1)
+		{
+			int		c = *str++;
+
+			if (c == '\0')
+			{
+				/* multiline string, read next line */
+				if (!pg_get_line_buf(fp, line))
+				{
+					invalid_optfile_format(fp,
+												"unexpected end of line at line %d",
+												NULL, 0,
+												NULL,
+												*lineno);
+					return false;
+				}
+
+				if (ferror(fp))
+				{
+					pg_log_error("could not read from file \"%s\": %m",
+								 filename);
+					return false;
+				}
+
+				appendStringInfoChar(optargument, '\n');
+
+				str = line->data;
+				(void) pg_strip_crlf(str);
+				*lineno += 1;
+
+				c = *str++;
+			}
+
+			if (c == '\\')
+			{
+				c = *str++;
+
+				if (c == '\0')
+				{
+					invalid_optfile_format(fp,
+												"unexpected end of line at line %d",
+												NULL, 0,
+												NULL,
+												*lineno);
+					return false;
+				}
+
+				switch (c)
+				{
+					case 'n':
+						appendStringInfoChar(optargument, '\n');
+						break;
+
+					case 't':
+						appendStringInfoChar(optargument, '\t');
+						break;
+
+					case '\\':
+						appendStringInfoChar(optargument, '\\');
+						break;
+
+					default:
+						appendStringInfoChar(optargument, '\\');
+						appendStringInfoChar(optargument, c);
+				}
+			}
+			else
+			{
+				appendStringInfoChar(optargument, c);
+
+				if (c == '"')
+				{
+					if (*str == '"')
+						str++;
+					else
+						break;
+				}
+			}
+		}
+	}
+
+	/* check garbage after optarg, but ignore white-space */
+	while (isspace(*str))
+		str++;
+
+	/* at the end there should be EOL or comment symbol */
+	if (*str != '\0' && *str != '#')
+	{
+		invalid_optfile_format(fp,
+							   "unexpected characters after an option's argument at line %d",
+							   NULL, 0,
+							   line->data,
+							   *lineno);
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * Returns true, when long option is defined. Assign code,
+ * and check if option has required argument.
+ */
+static bool
+is_recognized_longopt(const struct option *longopts,
+					  char *optname,
+					  int optnamelen,
+					  int *opt,
+					  bool *has_arg)
+{
+	int		i;
+
+	for (i = 0; longopts[i].name != NULL; i++)
+	{
+		if (strlen(longopts[i].name) == optnamelen &&
+			strncmp(optname, longopts[i].name, optnamelen) == 0)
+		{
+			*has_arg = longopts[i].has_arg == required_argument;
+
+			if (longopts[i].flag == NULL)
+			{
+				*opt = longopts[i].val;
+
+				return true;
+			}
+			else
+			{
+				*longopts[i].flag = longopts[i].val;
+				*opt = 0;
+
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+/*
+ * Returns true, when short option char is defined.
+ */
+static bool
+is_valid_shortopt(const char *optstring,
+				  char optname,
+				  bool *has_arg)
+{
+	while (*optstring != '\0')
+	{
+		if (*optstring != ':' && *optstring == optname)
+		{
+			*has_arg = optstring[1] == ':';
+			return true;
+		}
+
+		optstring++;
+	}
+
+	return false;
+}
+
+/*
+ * Read dumped object specification from file. Returns
+ * true, when processing was ok.
+ */
+static bool
+read_options_from_file(const char *filename,
+					   DumpOptions *dopt,
+					   const char *optstring,
+					   const struct option *longopts,
+					   const char *progname)
+{
+	FILE	   *fp;
+	int			lineno = 0;
+	StringInfoData line;
+	StringInfoData optargument;
+
+	/* Ignore already processed files */
+	if (simple_string_list_member(&optsfilenames_processed,
+								  filename))
+	{
+		pg_log_warning("the options file \"%s\" was processed already, skip this",
+					   filename);
+		return true;
+	}
+
+	simple_string_list_append(&optsfilenames_processed, filename);
+
+	/* use "-" as symbol for stdin */
+	if (strcmp(filename, "-") != 0)
+	{
+		fp = fopen(filename, "r");
+		if (!fp)
+		{
+			pg_log_error("could not open the input file \"%s\": %m",
+				  filename);
+			return false;
+		}
+	}
+	else
+		fp = stdin;
+
+	initStringInfo(&line);
+	initStringInfo(&optargument);
+
+	while (pg_get_line_buf(fp, &line))
+	{
+		char	   *optname;
+		char	   *str = line.data;
+		int			opt;
+		int			optnamelen;
+		bool		has_arg;
+
+		(void) pg_strip_crlf(str);
+
+		lineno += 1;
+
+		/* skip initial spaces */
+		while (isspace(*str))
+			str++;
+
+		/* Ignore empty lines or lines with hash symbol (comment) */
+		if (*str == '\0' || *str == '#')
+			continue;
+
+		if (*str++ != '-')
+		{
+			invalid_optfile_format(fp,
+								   "non option arguments are not allowed in options file at line %d",
+								   NULL, 0,
+								   line.data,
+								   lineno);
+			return false;
+		}
+
+		if (*str == '-')
+		{
+			/* process long option */
+			str++;
+			optname = str++;
+
+			while (!isspace(*str) && *str != '=' && *str != '\0')
+				str++;
+
+			optnamelen = str - optname;
+
+			if (is_recognized_longopt(longopts, optname, optnamelen,
+									  &opt, &has_arg))
+			{
+				/* skip optional spaces */
+				while (isspace(*str))
+					str++;
+
+				if (has_arg)
+				{
+					/* skip optional = */
+					if (*str == '=')
+						str++;
+
+					/* skip optional spaces */
+					while (isspace(*str))
+						str++;
+
+					if (!read_optarg(fp, filename, str, &line, &optargument,
+									 optname, optnamelen, true, &lineno))
+						return false;
+				}
+				else
+				{
+					if (*str != '\0' && *str != '#')
+					{
+						invalid_optfile_format(fp,
+											   "option '--%.*s' doesn't allow an argument at line %d",
+											   optname, optnamelen,
+											   line.data,
+											   lineno);
+						return false;
+					}
+				}
+			}
+			else
+			{
+				invalid_optfile_format(fp,
+									   "unrecognized option '--%.*s' at line %d",
+									   optname, optnamelen,
+									   line.data,
+									   lineno);
+				return false;
+			}
+		}
+		else
+		{
+			/* process short option */
+			optname = str++;
+			opt = *optname;
+
+			optnamelen = 1;
+
+			/* skip optional spaces */
+			while (isspace(*str))
+				str++;
+
+			if (is_valid_shortopt(optstring, opt, &has_arg))
+			{
+				if (has_arg)
+				{
+					if (!read_optarg(fp, filename, str, &line, &optargument,
+									 optname, optnamelen, false, &lineno))
+						return false;
+				}
+				else
+				{
+					if (*str != '\0' && *str != '#')
+					{
+						invalid_optfile_format(fp,
+											   "option '-%.*s' doesn't allow an argument at line %d",
+											   optname, optnamelen,
+											   line.data,
+											   lineno);
+						return false;
+					}
+				}
+			}
+			else
+			{
+				invalid_optfile_format(fp,
+									   "invalid option '-%.*s' at line %d",
+									   optname, optnamelen,
+									   line.data,
+									   lineno);
+				return false;
+			}
+		}
+
+		/* nested options file reading */
+		if (opt == OPTIONS_FILE_OPTNUM)
+		{
+			if (!read_options_from_file(optargument.data, dopt, optstring,
+										longopts, progname))
+			{
+				fclose(fp);
+				return false;
+			}
+		}
+		else if (opt != 0 &&
+				 !process_option(opt, optargument.data, dopt, progname))
+		{
+			fclose(fp);
+			return false;
+		}
+	}
+
+	pfree(line.data);
+	pfree(optargument.data);
+
+	if (ferror(fp))
+	{
+		pg_log_error("could not read from file \"%s\": %m", filename);
+		return false;
+	}
+
+	if (fp != stdin)
+		fclose(fp);
+
+	return true;
 }

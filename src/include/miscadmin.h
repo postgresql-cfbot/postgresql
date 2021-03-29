@@ -254,6 +254,8 @@ extern int	VacuumCostPageDirty;
 extern int	VacuumCostLimit;
 extern double VacuumCostDelay;
 
+#define MAXVACUUMCOSTLIMIT 10000
+
 extern int64 VacuumPageHit;
 extern int64 VacuumPageMiss;
 extern int64 VacuumPageDirty;

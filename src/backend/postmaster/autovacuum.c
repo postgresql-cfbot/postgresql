@@ -1854,7 +1854,7 @@ autovac_balance_cost(void)
 			 * cost_limit to more than the base value.
 			 */
 			worker->wi_cost_limit = Max(Min(limit,
-											worker->wi_cost_limit_base),
+											MAXVACUUMCOSTLIMIT),
 										1);
 		}
 

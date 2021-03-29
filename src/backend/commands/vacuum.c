@@ -2080,6 +2080,9 @@ vacuum_delay_point(void)
 		if (msec > VacuumCostDelay * 4)
 			msec = VacuumCostDelay * 4;
 
+        elog(DEBUG2,"VACUUM Sleep: Delay: %f, CostBalance: %d, CostLimit: %i, msec: %f",
+             VacuumCostDelay,VacuumCostBalance,VacuumCostLimit,msec);
+
 		pgstat_report_wait_start(WAIT_EVENT_VACUUM_DELAY);
 		pg_usleep((long) (msec * 1000));
 		pgstat_report_wait_end();

@@ -2469,7 +2469,7 @@ static struct config_int ConfigureNamesInt[] =
 			NULL
 		},
 		&VacuumCostLimit,
-		200, 1, 10000,
+		200, 1, MAXVACUUMCOSTLIMIT,
 		NULL, NULL, NULL
 	},
 
@@ -2479,7 +2479,7 @@ static struct config_int ConfigureNamesInt[] =
 			NULL
 		},
 		&autovacuum_vac_cost_limit,
-		-1, -1, 10000,
+		-1, -1, MAXVACUUMCOSTLIMIT,
 		NULL, NULL, NULL
 	},
 

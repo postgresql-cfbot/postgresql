@@ -13,6 +13,8 @@
 #include "postgres.h"
 
 #include "access/parallel.h"
+#include "access/fdwxact_resolver.h"
+#include "access/fdwxact_launcher.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -128,6 +130,12 @@ static const struct
 	},
 	{
 		"ApplyWorkerMain", ApplyWorkerMain
+	},
+	{
+		"FdwXactResolverMain", FdwXactResolverMain
+	},
+	{
+		"FdwXactLauncherMain", FdwXactLauncherMain
 	}
 };
 

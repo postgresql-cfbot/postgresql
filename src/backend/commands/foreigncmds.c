@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/fdwxact.h"
 #include "access/htup_details.h"
 #include "access/reloptions.h"
 #include "access/table.h"
@@ -1060,7 +1061,6 @@ AlterForeignServer(AlterForeignServerStmt *stmt)
 	return address;
 }
 
-
 /*
  * Common routine to check permission for user-mapping-related DDL
  * commands.  We allow server owners to operate on any mapping, and
@@ -1307,6 +1307,37 @@ AlterUserMapping(AlterUserMappingStmt *stmt)
 	return address;
 }
 
+/*
+ * Drop the given user mapping
+ */
+void
+RemoveUserMappingById(Oid umid)
+{
+	HeapTuple	tp;
+	Relation	rel;
+
+	rel = table_open(UserMappingRelationId, RowExclusiveLock);
+
+	tp = SearchSysCache1(USERMAPPINGOID, ObjectIdGetDatum(umid));
+
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for user mapping %u", umid);
+
+	/*
+	 * We cannot drop the user mapping if there is a foreign prepared
+	 * transaction with this user mapping.
+	 */
+	if (FdwXactExists(InvalidTransactionId, umid))
+		ereport(ERROR,
+				(errmsg("user mapping %u has unresolved prepared transaction",
+						umid)));
+
+	CatalogTupleDelete(rel, &tp->t_self);
+
+	ReleaseSysCache(tp);
+
+	table_close(rel, RowExclusiveLock);
+}
 
 /*
  * Drop user mapping
@@ -1373,6 +1404,7 @@ RemoveUserMapping(DropUserMappingStmt *stmt)
 	}
 
 	user_mapping_ddl_aclcheck(useId, srv->serverid, srv->servername);
+
 
 	/*
 	 * Do the deletion

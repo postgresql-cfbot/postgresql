@@ -583,6 +583,11 @@ postgres_fdw_handler(PG_FUNCTION_ARGS)
 	/* Support functions for upper relation push-down */
 	routine->GetForeignUpperPaths = postgresGetForeignUpperPaths;
 
+	/* Support functions for foreign transactions */
+	routine->CommitForeignTransaction = postgresCommitForeignTransaction;
+	routine->RollbackForeignTransaction = postgresRollbackForeignTransaction;
+	routine->PrepareForeignTransaction = postgresPrepareForeignTransaction;
+
 	PG_RETURN_POINTER(routine);
 }
 
@@ -2501,6 +2506,7 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 	 * establish new connection if necessary.
 	 */
 	dmstate->conn = GetConnection(user, false);
+	MarkConnectionModified(user);
 
 	/* Update the foreign-join-related fields. */
 	if (fsplan->scan.scanrelid == 0)
@@ -3694,6 +3700,7 @@ create_foreign_modify(EState *estate,
 
 	/* Open connection; report that we'll create a prepared statement. */
 	fmstate->conn = GetConnection(user, true);
+	MarkConnectionModified(user);
 	fmstate->p_name = NULL;		/* prepared statement not made yet */
 
 	/* Set up remote query information. */

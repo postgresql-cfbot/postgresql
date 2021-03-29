@@ -493,6 +493,16 @@ _readSetOperationStmt(void)
 	READ_DONE();
 }
 
+static UniqueKey *
+_readUniqueKey(void)
+{
+	READ_LOCALS(UniqueKey);
+
+	READ_NODE_FIELD(exprs);
+	READ_BOOL_FIELD(multi_nullvals);
+
+	READ_DONE();
+}
 
 /*
  *	Stuff from primnodes.h.
@@ -1862,6 +1872,7 @@ _readIndexScan(void)
 	READ_NODE_FIELD(indexorderbyorig);
 	READ_NODE_FIELD(indexorderbyops);
 	READ_ENUM_FIELD(indexorderdir, ScanDirection);
+	READ_INT_FIELD(indexskipprefixsize);
 
 	READ_DONE();
 }
@@ -1881,6 +1892,7 @@ _readIndexOnlyScan(void)
 	READ_NODE_FIELD(indexorderby);
 	READ_NODE_FIELD(indextlist);
 	READ_ENUM_FIELD(indexorderdir, ScanDirection);
+	READ_INT_FIELD(indexskipprefixsize);
 
 	READ_DONE();
 }
@@ -2717,6 +2729,8 @@ parseNodeString(void)
 		return_value = _readCommonTableExpr();
 	else if (MATCH("SETOPERATIONSTMT", 16))
 		return_value = _readSetOperationStmt();
+	else if (MATCH("UNIQUEKEY", 9))
+		return_value = _readUniqueKey();
 	else if (MATCH("ALIAS", 5))
 		return_value = _readAlias();
 	else if (MATCH("RANGEVAR", 8))

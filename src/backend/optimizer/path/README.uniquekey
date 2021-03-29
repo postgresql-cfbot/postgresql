@@ -1,0 +1,208 @@
+review comments:
+XXX Maybe move this to src/backend/optimizer/README.uniquekey?
+XXX multi_nullvals name seems a bit weird
+XXX no info about  populate_distinctrel_uniquekeys, populate_grouprel_uniquekeys, populate_unionrel_uniquekeys
+-----
+src/backend/optimizer/path/README.uniquekey
+
+UniqueKey
+=========
+
+UniqueKey is a set of exprs for a RelOptInfo, which are known to have unique
+values on all the rows in the relation.  A trivial example is a primary key
+defined on a relation - each attributes of the constraint is a unique key.
+
+We can use this knowledge to perform optimization in a number of places. Some
+of the optimizations are fairly obvious, others are less so:
+
+1. remove DISTINCT node if the clause is unique
+2. remove aggregation if group by clause is unique
+3. remove_useless_joins
+4. reduce_semianti_joins
+5. Index Skip Scan (WIP)
+6. Aggregation Push-Down without 2-phase aggregation if the join can't
+   duplicate the aggregated rows. (WIP)
+
+
+UniqueKey struct
+----------------
+
+A UnqiueKey is represented by the following struct:
+
+    typedef struct UniqueKey
+    {
+        NodeTag	type;
+        List	*exprs;
+        bool	multi_nullvals;
+    } UniqueKey;
+
+exprs is a list of exprs which are know to be unique on current RelOptInfo.
+
+exprs = NIL is a special case, meaning there is only one row in the relation.
+This has has a stronger semantic than others.  Consider for example
+
+    SELECT uk FROM t
+
+where 'uk' is a unique key. This guarantees uniqueness, but there may be mamy
+rows in the relation.  On the other hand, consider this query
+
+    SELECT colx FROM t WHERE uk = const
+
+In this case we know there's only a single matching row (thanks to a condition
+on the unique key), which in turn guarantees uniqueness of the colx value, even
+if there is no constraint on the column itself.
+
+This knowledge is used in innerrel_is_unique, and is handled as a special case
+in add_uniquekey_for_onerow.
+
+
+The multi_nullvals field tracks whether the expressions may contain multiple
+NULL values.  This can happen for example when the unique key is derived from
+a unique index with nullable columns, or because of outer joins (which may add
+NULL values to a known-unique list - see populate_joinrel_uniquekeys).
+
+In this case uniqueness is not guaranteed, but we can still use the information
+in places places where NULL values are harmless - when removing useless joins,
+reducing semijoins, and so on.
+
+
+How is it maintained?
+---------------------
+
+Deducing the unique keys depends on the type of the relation - for each case
+there's a separate "populate" function:
+
+
+populate_baserel_uniquekeys
+---------------------------
+
+There are three cases, all assuming there's a unique index (e.g. on (a,b)):
+
+1. SELECT a, b FROM t                      => UniqueKey (a, b)
+2. SELECT a FROM t WHERE b = 1             => UniqueKey (a)
+3. SELECT .. FROM t WHERE a = 1 AND b = 1; => UniqueKey (NIL)
+
+The last query is the "one row" case, in which case every column is Unique.
+
+
+populate_joinrel_uniquekeys
+---------------------------
+
+For joins, deducing the unique keys may be fairly complex and error-prone.
+We've simplified the rules like this:
+
+1. If the UniqueKey on an input relation can't be duplicated by the join, then
+it will be valid for the join rel. A typical example is a join like this:
+
+    inner_rel.any_col = outer_rel.unique_key
+
+The function used to detect this is innerrel_keeps_unique.
+
+2. Any combination of unique keys on each side of the join is a unique key
+for the join relation.  This can be proved by contradiction - assume we have
+unique key on either side of the join - uk1 and uk2. If the values in uk1 get
+duplicated by the join with uk2 (by matching the row to multiple rows), the
+duplicated rows must have different values in the uk2.
+
+We can also leverage information about the "one row" case:
+
+1. If one of the input relations is known to have a single row, and the join
+can't duplicate the row (e.g. semi/anti join), we can keep the unique keys.
+It may however contain multi_nullvals after an outer join.
+
+XXX Not sure I understand the original logic/wording :-(
+
+2. If either UniqueKey can be duplicated after a join, there can be only one
+row only when both sides are "one row" AND there is no outer join.
+
+XXX Why the restriction on not allowing outer joins?
+
+3. Whenever the one row UniqueKey is not a valid any more, we need to convert
+UniqueKey to normal unique key since we don't store exprs for one-row relation.
+This is done by get_exprs_from_uniquekeys.
+
+The join case needs to be careful about multi_nullvals too:
+
+1. If the original UnqiueKey has multi_nullvals, the final UniqueKey will have
+mulit_nullvals in any case too.
+
+2. If the original unique key doesn't allow multi_nullvals, the unique key for
+the join relation may allow multi_nullvals after an outer join.
+
+
+subqueries
+----------
+
+It's necessary to "translate" unique keys between a subquery and the outer rels,
+which is what convert_subquery_uniquekeys does.  This does almost exactly what
+convert_subquery_pathkeys does for pathkeys.  It keeps only unique keys matching
+Vars in the outer relation.  The relationship between outerrel.Var and
+subquery.exprs is built from outerel->subroot->processed_tlist.
+
+
+set-returning functions
+------------------------
+
+As for the SRF functions, it will break the uniqueness of uniquekey, However it
+is handled in adjust_paths_for_srfs, which happens after the query_planner.  So
+we will maintain the UniqueKey until there and reset it to NIL at that place.
+
+This can't help on distinct/group by elimination cases but probably help in some
+other cases, like reduce_unqiue_semijoins/remove_useless_joins and it is correct.
+
+
+populate_partitionedrel_uniquekeys
+----------------------------------
+
+As for inherit table, we first build the UnqiueKey on childrel as well. But for
+partitioned table we need to maintain two different kinds of UniqueKey:
+
+1) UniqueKey on the parent relation
+
+2) UniqueKey on child
+
+This is needed because a unique key from the partition may not be be unique key
+on the partitioned table.
+
+
+Example:
+
+CREATE TABLE p (a INT NOT NULL, b INT NOT NULL) PARTITION BY LIST (a);
+
+CREATE TABLE p0 partition of p for values in (1);
+CREATE TABLE p1 partition of p for values in (2);
+
+CREATE UNIQUE INDEX p0_b ON p0(b);
+CREATE UNIQUE INDEX p1_b ON p1(b);
+
+SELECT DISTINCT b FROM p;
+
+Now "b" is only unique on partition level, but the two partitions may contain
+duplicate values for the "b" column (with different values in "a"). That means
+the DISTINCT clause can't be removed.
+
+Now consider:
+
+SELECT DISTINCT a, b FROM p WHERE a = 1
+
+In this case, the optimizer eliminates all partitions except for one, so that
+the UniqueKey is valid for the parent relation too.
+
+UniqueKey at a partition level is useful for partition-wise join too.
+
+XXX Explain why is it useful?
+
+A UniqueKey from a partition can be transferred to the parent relation, in two
+cases.  A trivial case is if there's a single child relation (e.g. thanks to
+partition elimination). In that case all unique keys on the child relation are
+automatically valid for the parent relation.  If there are multiple relations,
+the unique key must be defived from an index present in all partitions, and the
+index has to include the partition key.
+
+Example:
+
+CREATE UNIQUE INDEX p_ab ON p(a, b);  -- where a is the partition key.
+
+-- Query
+SELECT a, b FROM p; the (a, b) is a UniqueKey of p.
+

@@ -924,6 +924,15 @@ populate_joinrel_with_paths(PlannerInfo *root, RelOptInfo *rel1,
 
 	/* Apply partitionwise join technique, if possible. */
 	try_partitionwise_join(root, rel1, rel2, joinrel, sjinfo, restrictlist);
+
+	/*
+	 * Determine which of the unique keys from input relations are applicable
+	 * for the join result.
+	 *
+	 * XXX We do this after trying the partitionwise join, because that may allow
+	 * using additional unique keys.
+	 */
+	populate_joinrel_uniquekeys(root, joinrel, rel1, rel2, restrictlist, sjinfo->jointype);
 }
 
 

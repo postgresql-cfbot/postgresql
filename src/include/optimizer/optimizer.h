@@ -23,6 +23,7 @@
 #define OPTIMIZER_H
 
 #include "nodes/parsenodes.h"
+#include "nodes/pathnodes.h"
 
 /* Test if an expression node represents a SRF call.  Beware multiple eval! */
 #define IS_SRF_CALL(node) \
@@ -168,6 +169,7 @@ extern TargetEntry *get_sortgroupref_tle(Index sortref,
 										 List *targetList);
 extern TargetEntry *get_sortgroupclause_tle(SortGroupClause *sgClause,
 											List *targetList);
+extern Var *find_var_for_subquery_tle(RelOptInfo *rel, TargetEntry *tle);
 extern Node *get_sortgroupclause_expr(SortGroupClause *sgClause,
 									  List *targetList);
 extern List *get_sortgrouplist_exprs(List *sgClauses,

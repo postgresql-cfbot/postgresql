@@ -829,6 +829,23 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 		{
 			Node	   *qual = (Node *) lfirst(l);
 
+			/* Set the not null info now
+			 *
+			 * XXX Why now? Why is this the right place to do this? Does it need
+			 * to happen before distribute_qual_to_rels, for example?
+			 *
+			 * XXX Not clear to me why this looks at non-nullable vars? Shouldn't
+			 * we already have the bitmap built from atnums (from get_relation_info)?
+			 */
+			ListCell	*lc;
+			List		*non_nullable_vars = find_nonnullable_vars(qual);
+			foreach(lc, non_nullable_vars)
+			{
+				Var *var = lfirst_node(Var, lc);
+				RelOptInfo *rel = root->simple_rel_array[var->varno];
+				rel->notnullattrs = bms_add_member(rel->notnullattrs,
+												   var->varattno - FirstLowInvalidHeapAttributeNumber);
+			}
 			distribute_qual_to_rels(root, qual,
 									below_outer_join, JOIN_INNER,
 									root->qual_security_level,

@@ -2372,6 +2372,9 @@ grouping_planner(PlannerInfo *root, bool inheritance_update,
 		add_path(final_rel, path);
 	}
 
+	/* XXX comment? can we simply just copy the unique keys to the final relation? */
+	simple_copy_uniquekeys(current_rel, final_rel);
+
 	/*
 	 * Generate partial paths for final_rel, too, if outer query levels might
 	 * be able to make use of them.
@@ -3608,12 +3611,18 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 
 	if (parse->distinctClause &&
 		grouping_is_sortable(parse->distinctClause))
+	{
 		root->distinct_pathkeys =
 			make_pathkeys_for_sortclauses(root,
 										  parse->distinctClause,
 										  tlist);
+		root->query_uniquekeys = build_uniquekeys(root, parse->distinctClause);
+	}
 	else
+	{
 		root->distinct_pathkeys = NIL;
+		root->query_uniquekeys = NIL;
+	}
 
 	root->sort_pathkeys =
 		make_pathkeys_for_sortclauses(root,
@@ -3884,6 +3893,10 @@ create_grouping_paths(PlannerInfo *root,
 	}
 
 	set_cheapest(grouped_rel);
+
+	/* XXX does this apply to grouping sets too? */
+	populate_grouprel_uniquekeys(root, grouped_rel, input_rel);
+
 	return grouped_rel;
 }
 
@@ -4607,6 +4620,9 @@ create_window_paths(PlannerInfo *root,
 	/* Now choose the best path(s) */
 	set_cheapest(window_rel);
 
+	/* XXX comment? */
+	simple_copy_uniquekeys(input_rel, window_rel);
+
 	return window_rel;
 }
 
@@ -4835,6 +4851,14 @@ create_distinct_paths(PlannerInfo *root,
 			}
 		}
 
+		foreach(lc, input_rel->unique_pathlist)
+		{
+			Path	   *path = (Path *) lfirst(lc);
+
+			if (query_has_uniquekeys_for(root, path->uniquekeys, false))
+				add_path(distinct_rel, path);
+		}
+
 		/* For explicit-sort case, always use the more rigorous clause */
 		if (list_length(root->distinct_pathkeys) <
 			list_length(root->sort_pathkeys))
@@ -4920,6 +4944,9 @@ create_distinct_paths(PlannerInfo *root,
 
 	/* Now choose the best path(s) */
 	set_cheapest(distinct_rel);
+
+	/* XXX comment */
+	populate_distinctrel_uniquekeys(root, input_rel, distinct_rel);
 
 	return distinct_rel;
 }
@@ -5180,6 +5207,9 @@ create_ordered_paths(PlannerInfo *root,
 	 * need us to do it.
 	 */
 	Assert(ordered_rel->pathlist != NIL);
+
+	/* XXX comment */
+	simple_copy_uniquekeys(input_rel, ordered_rel);
 
 	return ordered_rel;
 }
@@ -6057,6 +6087,9 @@ adjust_paths_for_srfs(PlannerInfo *root, RelOptInfo *rel,
 	/* If no SRFs appear at this plan level, nothing to do */
 	if (list_length(targets) == 1)
 		return;
+
+	/* UniqueKey is not valid after handling the SRF. */
+	rel->uniquekeys = NIL;
 
 	/*
 	 * Stack SRF-evaluation nodes atop each path for the rel.
@@ -7448,6 +7481,26 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 
 	/* Likewise adjust the targets for any partial paths. */
 	foreach(lc, rel->partial_pathlist)
+	{
+		Path	   *subpath = (Path *) lfirst(lc);
+
+		/* Shouldn't have any parameterized paths anymore */
+		Assert(subpath->param_info == NULL);
+
+		if (tlist_same_exprs)
+			subpath->pathtarget->sortgrouprefs =
+				scanjoin_target->sortgrouprefs;
+		else
+		{
+			Path	   *newpath;
+
+			newpath = (Path *) create_projection_path(root, rel, subpath,
+													  scanjoin_target);
+			lfirst(lc) = newpath;
+		}
+	}
+
+	foreach(lc, rel->unique_pathlist)
 	{
 		Path	   *subpath = (Path *) lfirst(lc);
 

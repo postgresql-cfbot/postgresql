@@ -41,6 +41,7 @@ OBJS = \
 	fe-secure.o \
 	legacy-pqsignal.o \
 	libpq-events.o \
+	libpq-trace.o \
 	pqexpbuffer.o \
 	fe-auth.o
 

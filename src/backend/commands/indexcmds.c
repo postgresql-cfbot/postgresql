@@ -570,7 +570,7 @@ DefineIndex(Oid relationId,
 	 * is more efficient.  Do this before any use of the concurrent option is
 	 * done.
 	 */
-	if (stmt->concurrent && get_rel_persistence(relationId) != RELPERSISTENCE_TEMP)
+	if (stmt->concurrent && !RelpersistenceTsTemp(get_rel_persistence(relationId)))
 		concurrent = true;
 	else
 		concurrent = false;
@@ -2608,7 +2608,7 @@ ReindexIndex(RangeVar *indexRelation, ReindexParams *params, bool isTopLevel)
 	if (relkind == RELKIND_PARTITIONED_INDEX)
 		ReindexPartitions(indOid, params, isTopLevel);
 	else if ((params->options & REINDEXOPT_CONCURRENTLY) != 0 &&
-			 persistence != RELPERSISTENCE_TEMP)
+			 !RelpersistenceTsTemp(persistence))
 		ReindexRelationConcurrently(indOid, params);
 	else
 	{
@@ -2717,7 +2717,7 @@ ReindexTable(RangeVar *relation, ReindexParams *params, bool isTopLevel)
 	if (get_rel_relkind(heapOid) == RELKIND_PARTITIONED_TABLE)
 		ReindexPartitions(heapOid, params, isTopLevel);
 	else if ((params->options & REINDEXOPT_CONCURRENTLY) != 0 &&
-			 get_rel_persistence(heapOid) != RELPERSISTENCE_TEMP)
+			 !RelpersistenceTsTemp(get_rel_persistence(heapOid)))
 	{
 		result = ReindexRelationConcurrently(heapOid, params);
 
@@ -3132,7 +3132,7 @@ ReindexMultipleInternal(List *relids, ReindexParams *params)
 			   relkind != RELKIND_PARTITIONED_TABLE);
 
 		if ((params->options & REINDEXOPT_CONCURRENTLY) != 0 &&
-			relpersistence != RELPERSISTENCE_TEMP)
+			!RelpersistenceTsTemp(relpersistence))
 		{
 			ReindexParams newparams = *params;
 

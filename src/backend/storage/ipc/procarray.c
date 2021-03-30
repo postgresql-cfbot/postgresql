@@ -65,6 +65,7 @@
 #include "utils/builtins.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
+#include "utils/guc.h"
 
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
 
@@ -5070,3 +5071,78 @@ KnownAssignedXidsReset(void)
 
 	LWLockRelease(ProcArrayLock);
 }
+
+/*
+ * search all active backend to get oldest frozenxid
+ * for global temporary table.
+ */
+int
+list_all_backend_gtt_frozenxids(int max_size, int *pids, uint32 *xids, int *n)
+{
+	ProcArrayStruct *arrayP = procArray;
+	TransactionId result = InvalidTransactionId;
+	int			index;
+	uint8			flags = 0;
+	int			i = 0;
+
+	/* return 0 if feature is disabled */
+	if (max_active_gtt <= 0)
+		return InvalidTransactionId;
+
+	if (max_size > 0)
+	{
+		Assert(pids);
+		Assert(xids);
+		Assert(n);
+		*n = 0;
+	}
+
+	/* Disable in standby node */
+	if (RecoveryInProgress())
+		return InvalidTransactionId;
+
+	flags |= PROC_IS_AUTOVACUUM;
+	flags |= PROC_IN_LOGICAL_DECODING;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	if (max_size > 0 && max_size < arrayP->numProcs)
+	{
+		LWLockRelease(ProcArrayLock);
+		elog(ERROR, "list_all_gtt_frozenxids require more array");
+	}
+
+	for (index = 0; index < arrayP->numProcs; index++)
+	{
+		int			pgprocno = arrayP->pgprocnos[index];
+		volatile PGPROC *proc = &allProcs[pgprocno];
+		uint8           statusFlags = ProcGlobal->statusFlags[index];
+
+		if (statusFlags & flags)
+			continue;
+
+		/* Fetch all backend that is belonging to MyDatabaseId */
+		if (proc->databaseId == MyDatabaseId &&
+			TransactionIdIsNormal(proc->backend_gtt_frozenxid))
+		{
+			if (result == InvalidTransactionId)
+				result = proc->backend_gtt_frozenxid;
+			else if (TransactionIdPrecedes(proc->backend_gtt_frozenxid, result))
+				result = proc->backend_gtt_frozenxid;
+
+			/* save backend pid and backend level oldest relfrozenxid */
+			if (max_size > 0)
+			{
+				pids[i] = proc->pid;
+				xids[i] = proc->backend_gtt_frozenxid;
+				i++;
+			}
+		}
+	}
+	LWLockRelease(ProcArrayLock);
+
+	if (max_size > 0)
+		*n = i;
+
+	return result;
+}
+

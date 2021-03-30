@@ -41,6 +41,7 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "commands/async.h"
 #include "commands/prepare.h"
 #include "commands/trigger.h"
@@ -146,6 +147,18 @@ static int	GUC_check_errcode_value;
 char	   *GUC_check_errmsg_string;
 char	   *GUC_check_errdetail_string;
 char	   *GUC_check_errhint_string;
+
+/*
+ * num = 0 means disable global temporary table feature.
+ * table schema are still saved in catalog.
+ *
+ * num > 0 means allows the database to manage multiple active tables at the same time.
+ */
+#define	MIN_NUM_ACTIVE_GTT			0
+#define	DEFAULT_NUM_ACTIVE_GTT			1000
+#define	MAX_NUM_ACTIVE_GTT			1000000
+
+int		max_active_gtt = MIN_NUM_ACTIVE_GTT;
 
 static void do_serialize(char **destptr, Size *maxbytes, const char *fmt,...) pg_attribute_printf(3, 4);
 
@@ -2094,6 +2107,15 @@ static struct config_bool ConfigureNamesBool[] =
 static struct config_int ConfigureNamesInt[] =
 {
 	{
+		{"max_active_global_temporary_table", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("max active global temporary table."),
+			NULL
+		},
+		&max_active_gtt,
+		DEFAULT_NUM_ACTIVE_GTT, MIN_NUM_ACTIVE_GTT, MAX_NUM_ACTIVE_GTT,
+		NULL, NULL, NULL
+	},
+	{
 		{"archive_timeout", PGC_SIGHUP, WAL_ARCHIVING,
 			gettext_noop("Forces a switch to the next WAL file if a "
 						 "new file has not been started within N seconds."),
@@ -2620,6 +2642,16 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&vacuum_defer_cleanup_age,
 		0, 0, 1000000,		/* see ComputeXidHorizons */
+		NULL, NULL, NULL
+	},
+
+	{
+		{"vacuum_gtt_defer_check_age", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("The defer check age of GTT, used to check expired data after vacuum."),
+			NULL
+		},
+		&vacuum_gtt_defer_check_age,
+		10000, 0, 1000000,
 		NULL, NULL, NULL
 	},
 

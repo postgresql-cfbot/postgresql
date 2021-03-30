@@ -773,6 +773,10 @@ ExecCheckXactReadOnly(PlannedStmt *plannedstmt)
 		if (isTempNamespace(get_rel_namespace(rte->relid)))
 			continue;
 
+		/* This is one kind of temp table */
+		if (get_rel_persistence(rte->relid) == RELPERSISTENCE_GLOBAL_TEMP)
+			continue;
+
 		PreventCommandIfReadOnly(CreateCommandName((Node *) plannedstmt));
 	}
 

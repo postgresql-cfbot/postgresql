@@ -67,6 +67,7 @@ static bool dosync = true;
 
 static int	binary_upgrade = 0;
 static int	column_inserts = 0;
+static int	create_only = 0;
 static int	disable_dollar_quoting = 0;
 static int	disable_triggers = 0;
 static int	if_exists = 0;
@@ -126,6 +127,7 @@ main(int argc, char *argv[])
 		{"attribute-inserts", no_argument, &column_inserts, 1},
 		{"binary-upgrade", no_argument, &binary_upgrade, 1},
 		{"column-inserts", no_argument, &column_inserts, 1},
+		{"create-only", no_argument, &create_only, 1},
 		{"disable-dollar-quoting", no_argument, &disable_dollar_quoting, 1},
 		{"disable-triggers", no_argument, &disable_triggers, 1},
 		{"exclude-database", required_argument, NULL, 6},
@@ -637,6 +639,7 @@ help(void)
 	printf(_("  -x, --no-privileges          do not dump privileges (grant/revoke)\n"));
 	printf(_("  --binary-upgrade             for use by upgrade utilities only\n"));
 	printf(_("  --column-inserts             dump data as INSERT commands with column names\n"));
+	printf(_("  --create-only                dump only the commands to create database\n"));
 	printf(_("  --disable-dollar-quoting     disable dollar quoting, use SQL standard quoting\n"));
 	printf(_("  --disable-triggers           disable triggers during data-only restore\n"));
 	printf(_("  --exclude-database=PATTERN   exclude databases whose name matches PATTERN\n"));
@@ -1521,7 +1524,10 @@ dumpDatabases(PGconn *conn)
 			}
 		}
 		else
-			create_opts = "--create";
+			if (create_only)
+				create_opts = "--create-only";
+			else
+				create_opts = "--create";
 
 		if (filename)
 			fclose(OPF);

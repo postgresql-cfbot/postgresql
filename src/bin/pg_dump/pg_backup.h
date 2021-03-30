@@ -173,6 +173,7 @@ typedef struct _dumpOptions
 
 	int			outputClean;
 	int			outputCreateDB;
+	int			outputCreateDBOnly;
 	bool		outputBlobs;
 	bool		dontOutputBlobs;
 	int			outputNoOwner;

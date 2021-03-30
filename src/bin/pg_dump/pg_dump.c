@@ -364,6 +364,7 @@ main(int argc, char **argv)
 		 */
 		{"attribute-inserts", no_argument, &dopt.column_inserts, 1},
 		{"binary-upgrade", no_argument, &dopt.binary_upgrade, 1},
+		{"create-only", no_argument, &dopt.outputCreateDBOnly, 1},
 		{"column-inserts", no_argument, &dopt.column_inserts, 1},
 		{"disable-dollar-quoting", no_argument, &dopt.disable_dollar_quoting, 1},
 		{"disable-triggers", no_argument, &dopt.disable_triggers, 1},
@@ -705,6 +706,9 @@ main(int argc, char **argv)
 	if (!plainText)
 		dopt.outputCreateDB = 1;
 
+	if (dopt.outputCreateDBOnly)
+		dopt.outputCreateDB = 1;
+
 	/*
 	 * On Windows we can only have at most MAXIMUM_WAIT_OBJECTS (= 64 usually)
 	 * parallel jobs because that's the maximum limit for the
@@ -923,9 +927,12 @@ main(int argc, char **argv)
 	if (dopt.outputCreateDB)
 		dumpDatabase(fout);
 
-	/* Now the rearrangeable objects. */
-	for (i = 0; i < numObjs; i++)
-		dumpDumpableObject(fout, dobjs[i]);
+	if (!dopt.outputCreateDBOnly)
+	{
+		/* Now the rearrangeable objects. */
+		for (i = 0; i < numObjs; i++)
+			dumpDumpableObject(fout, dobjs[i]);
+	}
 
 	/*
 	 * Set up options info to ensure we dump what we want.
@@ -1025,6 +1032,7 @@ help(const char *progname)
 	printf(_("  -B, --no-blobs               exclude large objects in dump\n"));
 	printf(_("  -c, --clean                  clean (drop) database objects before recreating\n"));
 	printf(_("  -C, --create                 include commands to create database in dump\n"));
+	printf(_("  --create-only                only dump commands to create database\n"));
 	printf(_("  -E, --encoding=ENCODING      dump the data in encoding ENCODING\n"));
 	printf(_("  -n, --schema=PATTERN         dump the specified schema(s) only\n"));
 	printf(_("  -N, --exclude-schema=PATTERN do NOT dump the specified schema(s)\n"));

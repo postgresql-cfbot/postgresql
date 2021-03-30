@@ -165,6 +165,7 @@ static void print_with_linenumbers(FILE *output, char *lines,
 								   const char *header_keyword);
 static void minimal_error_message(PGresult *res);
 
+static void printCompressionInfo(void);
 static void printSSLInfo(void);
 static void printGSSInfo(void);
 static bool printPsetInfo(const char *param, printQueryOpt *popt);
@@ -625,6 +626,7 @@ exec_command_conninfo(PsqlScanState scan_state, bool active_branch)
 					printf(_("You are connected to database \"%s\" as user \"%s\" on host \"%s\" at port \"%s\".\n"),
 						   db, PQuser(pset.db), host, PQport(pset.db));
 			}
+			printCompressionInfo();
 			printSSLInfo();
 			printGSSInfo();
 		}
@@ -3517,6 +3519,27 @@ connection_warnings(bool in_startup)
 	}
 }
 
+/*
+ * printCompressionInfo
+ *
+ * Print information about used compressor/decompressor
+ */
+static void
+printCompressionInfo(void)
+{
+	char *compressor = PQcompressor(pset.db);
+	char *decompressor = PQdecompressor(pset.db);
+
+	if (compressor != NULL)
+	{
+		printf(_("Compressor %s\n"), compressor);
+	}
+
+	if (decompressor != NULL)
+	{
+		printf(_("Decompressor %s\n"), decompressor);
+	}
+}
 
 /*
  * printSSLInfo

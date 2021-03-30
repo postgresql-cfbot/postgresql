@@ -183,3 +183,6 @@ PQenterPipelineMode       180
 PQexitPipelineMode        181
 PQpipelineSync            182
 PQpipelineStatus          183
+PQcompressor              184
+PQdecompressor            185
+PQreadPending             186

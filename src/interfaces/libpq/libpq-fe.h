@@ -331,6 +331,8 @@ extern char *PQhostaddr(const PGconn *conn);
 extern char *PQport(const PGconn *conn);
 extern char *PQtty(const PGconn *conn);
 extern char *PQoptions(const PGconn *conn);
+extern char *PQcompressor(const PGconn *conn);
+extern char *PQdecompressor(const PGconn *conn);
 extern ConnStatusType PQstatus(const PGconn *conn);
 extern PGTransactionStatusType PQtransactionStatus(const PGconn *conn);
 extern const char *PQparameterStatus(const PGconn *conn,
@@ -478,6 +480,9 @@ extern PGPing PQpingParams(const char *const *keywords,
 
 /* Force the write buffer to be written (or at least try) */
 extern int	PQflush(PGconn *conn);
+
+extern int
+			PQreadPending(PGconn *conn);
 
 /*
  * "Fast path" interface --- not really recommended for application

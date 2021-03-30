@@ -1963,9 +1963,7 @@ PQgetResult(PGconn *conn)
 		 * EOF indication.  We expect therefore that this won't result in any
 		 * undue delay in reporting a previous write failure.)
 		 */
-		if (flushResult ||
-			pqWait(true, false, conn) ||
-			pqReadData(conn) < 0)
+		if (flushResult || pqWait(true, false, conn) || pqReadData(conn) < 0)
 		{
 			/*
 			 * conn->errorMessage has been set by pqWait or pqReadData. We
@@ -3706,6 +3704,12 @@ pqPipelineFlush(PGconn *conn)
 		(conn->outCount >= OUTBUFFER_THRESHOLD))
 		return pqFlush(conn);
 	return 0;
+}
+
+int
+PQreadPending(PGconn *conn)
+{
+	return pqReadPending(conn);
 }
 
 

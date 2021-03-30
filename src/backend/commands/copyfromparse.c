@@ -426,14 +426,14 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 	Assert(!cstate->opts.binary);
 
 	/* on input just throw the header line away */
-	if (cstate->cur_lineno == 0 && cstate->opts.header_line)
+	if (cstate->miinfo.cur_lineno == 0 && cstate->opts.header_line)
 	{
-		cstate->cur_lineno++;
+		cstate->miinfo.cur_lineno++;
 		if (CopyReadLine(cstate))
 			return false;		/* done */
 	}
 
-	cstate->cur_lineno++;
+	cstate->miinfo.cur_lineno++;
 
 	/* Actually read the line into memory here */
 	done = CopyReadLine(cstate);
@@ -574,7 +574,7 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 		int16		fld_count;
 		ListCell   *cur;
 
-		cstate->cur_lineno++;
+		cstate->miinfo.cur_lineno++;
 
 		if (!CopyGetInt16(cstate, &fld_count))
 		{
@@ -877,7 +877,7 @@ CopyReadLineText(CopyFromState cstate)
 			 * at all --- is cur_lineno a physical or logical count?)
 			 */
 			if (in_quote && c == (cstate->eol_type == EOL_NL ? '\n' : '\r'))
-				cstate->cur_lineno++;
+				cstate->miinfo.cur_lineno++;
 		}
 
 		/* Process \r */

@@ -15,6 +15,7 @@
 #define COPYFROM_INTERNAL_H
 
 #include "commands/copy.h"
+#include "executor/nodeModifyTable.h"
 #include "commands/trigger.h"
 
 /*
@@ -91,9 +92,11 @@ typedef struct CopyFromStateData
 
 	/* these are just for error messages, see CopyFromErrorCallback */
 	const char *cur_relname;	/* table name for error messages */
-	uint64		cur_lineno;		/* line number for error messages */
 	const char *cur_attname;	/* current att for error messages */
 	const char *cur_attval;		/* current att value for error messages */
+
+	/* For bulk inserts and for error callback */
+	MultiInsertInfo miinfo;
 
 	/*
 	 * Working state

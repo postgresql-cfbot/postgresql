@@ -1012,7 +1012,7 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 
 	Assert(partRelInfo->ri_BatchSize >= 1);
 
-	partRelInfo->ri_CopyMultiInsertBuffer = NULL;
+	partRelInfo->ri_MultiInsertBuffer = NULL;
 
 	/*
 	 * Keep track of it in the PartitionTupleRouting->partitions array.

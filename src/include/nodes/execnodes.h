@@ -14,6 +14,7 @@
 #ifndef EXECNODES_H
 #define EXECNODES_H
 
+#include "access/heapam.h"
 #include "access/tupconvert.h"
 #include "executor/instrument.h"
 #include "fmgr.h"
@@ -32,6 +33,9 @@
 #include "utils/tuplesort.h"
 #include "utils/tuplestore.h"
 
+/* This would be a circular inclusion */
+// #include "executor/nodeModifyTable.h"
+
 struct PlanState;				/* forward references in this file */
 struct ParallelHashJoinState;
 struct ExecRowMark;
@@ -39,8 +43,8 @@ struct ExprState;
 struct ExprContext;
 struct RangeTblEntry;			/* avoid including parsenodes.h here */
 struct ExprEvalStep;			/* avoid including execExpr.h everywhere */
-struct CopyMultiInsertBuffer;
-
+// struct MultiInsertBuffer;
+// struct MultiInsertInfo;
 
 /* ----------------
  *		ExprState node
@@ -511,8 +515,8 @@ typedef struct ResultRelInfo
 	 */
 	TupleConversionMap *ri_ChildToRootMap;
 
-	/* for use by copyfrom.c when performing multi-inserts */
-	struct CopyMultiInsertBuffer *ri_CopyMultiInsertBuffer;
+	/* for use by copyfrom.c/modifyTable when performing multi-inserts */
+	struct MultiInsertBuffer *ri_MultiInsertBuffer;
 } ResultRelInfo;
 
 /* ----------------
@@ -1178,6 +1182,10 @@ typedef struct ModifyTableState
 	List	  **mt_arowmarks;	/* per-subplan ExecAuxRowMark lists */
 	EPQState	mt_epqstate;	/* for evaluating EvalPlanQual rechecks */
 	bool		fireBSTriggers; /* do we need to fire stmt triggers? */
+	BulkInsertState	bistate;	/* state for bulk insert like INSERT SELECT, when miinfo cannot be used */
+	ResultRelInfo	*prevResultRelInfo; /* last child inserted with bistate */
+	struct MultiInsertInfo	*miinfo;
+	size_t		ntuples;	/* Number of tuples inserted; */
 
 	/*
 	 * Slot for storing tuples in the root partitioned table's rowtype during

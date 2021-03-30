@@ -168,23 +168,28 @@ vacuumLeafPage(spgBulkDeleteState *bds, Relation index, Buffer buffer,
 			}
 
 			/* Form predecessor map, too */
-			if (lt->nextOffset != InvalidOffsetNumber)
+			if (SGLT_GET_OFFSET(lt) != InvalidOffsetNumber)
 			{
 				/* paranoia about corrupted chain links */
-				if (lt->nextOffset < FirstOffsetNumber ||
-					lt->nextOffset > max ||
-					predecessor[lt->nextOffset] != InvalidOffsetNumber)
+				if (SGLT_GET_OFFSET(lt) < FirstOffsetNumber ||
+					SGLT_GET_OFFSET(lt) > max ||
+					predecessor[SGLT_GET_OFFSET(lt)] != InvalidOffsetNumber)
 					elog(ERROR, "inconsistent tuple chain links in page %u of index \"%s\"",
 						 BufferGetBlockNumber(buffer),
 						 RelationGetRelationName(index));
-				predecessor[lt->nextOffset] = i;
+				predecessor[SGLT_GET_OFFSET(lt)] = i;
 			}
 		}
 		else if (lt->tupstate == SPGIST_REDIRECT)
 		{
 			SpGistDeadTuple dt = (SpGistDeadTuple) lt;
 
-			Assert(dt->nextOffset == InvalidOffsetNumber);
+			/*
+			 * Dead tuple nextOffset is allowed to have any values of two
+			 * highest bits in case it is inherited from SpGistLeafTuple where
+			 * these bits have their own meaning.
+			 */
+			Assert(SGLT_GET_OFFSET(dt) == InvalidOffsetNumber);
 			Assert(ItemPointerIsValid(&dt->pointer));
 
 			/*
@@ -201,7 +206,7 @@ vacuumLeafPage(spgBulkDeleteState *bds, Relation index, Buffer buffer,
 		}
 		else
 		{
-			Assert(lt->nextOffset == InvalidOffsetNumber);
+			Assert(SGLT_GET_OFFSET(lt) == InvalidOffsetNumber);
 		}
 	}
 
@@ -250,7 +255,7 @@ vacuumLeafPage(spgBulkDeleteState *bds, Relation index, Buffer buffer,
 		prevLive = deletable[i] ? InvalidOffsetNumber : i;
 
 		/* scan down the chain ... */
-		j = head->nextOffset;
+		j = SGLT_GET_OFFSET(head);
 		while (j != InvalidOffsetNumber)
 		{
 			SpGistLeafTuple lt;
@@ -301,7 +306,7 @@ vacuumLeafPage(spgBulkDeleteState *bds, Relation index, Buffer buffer,
 				interveningDeletable = false;
 			}
 
-			j = lt->nextOffset;
+			j = SGLT_GET_OFFSET(lt);
 		}
 
 		if (prevLive == InvalidOffsetNumber)
@@ -366,7 +371,7 @@ vacuumLeafPage(spgBulkDeleteState *bds, Relation index, Buffer buffer,
 		lt = (SpGistLeafTuple) PageGetItem(page,
 										   PageGetItemId(page, chainSrc[i]));
 		Assert(lt->tupstate == SPGIST_LIVE);
-		lt->nextOffset = chainDest[i];
+		SGLT_SET_OFFSET(lt, chainDest[i]);
 	}
 
 	MarkBufferDirty(buffer);

@@ -3706,6 +3706,14 @@ AclMode
 pg_attribute_aclmask(Oid table_oid, AttrNumber attnum, Oid roleid,
 					 AclMode mask, AclMaskHow how)
 {
+	return pg_attribute_aclmask_ext(table_oid, attnum, roleid,
+									mask, how, NULL);
+}
+
+AclMode
+pg_attribute_aclmask_ext(Oid table_oid, AttrNumber attnum, Oid roleid,
+						 AclMode mask, AclMaskHow how, bool *is_missing)
+{
 	AclMode		result;
 	HeapTuple	classTuple;
 	HeapTuple	attTuple;
@@ -3723,18 +3731,38 @@ pg_attribute_aclmask(Oid table_oid, AttrNumber attnum, Oid roleid,
 							   ObjectIdGetDatum(table_oid),
 							   Int16GetDatum(attnum));
 	if (!HeapTupleIsValid(attTuple))
-		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_COLUMN),
-				 errmsg("attribute %d of relation with OID %u does not exist",
-						attnum, table_oid)));
+	{
+		if (is_missing != NULL)
+		{
+			/* return "no privileges" instead of throwing an error */
+			*is_missing = true;
+			return 0;
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_COLUMN),
+					 errmsg("attribute %d of relation with OID %u does not exist",
+							attnum, table_oid)));
+	}
+
 	attributeForm = (Form_pg_attribute) GETSTRUCT(attTuple);
 
-	/* Throw error on dropped columns, too */
+	/* Check dropped columns, too */
 	if (attributeForm->attisdropped)
-		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_COLUMN),
-				 errmsg("attribute %d of relation with OID %u does not exist",
-						attnum, table_oid)));
+	{
+		if (is_missing != NULL)
+		{
+			/* return "no privileges" instead of throwing an error */
+			*is_missing = true;
+			ReleaseSysCache(attTuple);
+			return 0;
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_COLUMN),
+					 errmsg("attribute %d of relation with OID %u does not exist",
+							attnum, table_oid)));
+	}
 
 	aclDatum = SysCacheGetAttr(ATTNUM, attTuple, Anum_pg_attribute_attacl,
 							   &isNull);
@@ -3791,6 +3819,13 @@ AclMode
 pg_class_aclmask(Oid table_oid, Oid roleid,
 				 AclMode mask, AclMaskHow how)
 {
+	return pg_class_aclmask_ext(table_oid, roleid, mask, how, NULL);
+}
+
+AclMode
+pg_class_aclmask_ext(Oid table_oid, Oid roleid, AclMode mask,
+					 AclMaskHow how, bool *is_missing)
+{
 	AclMode		result;
 	HeapTuple	tuple;
 	Form_pg_class classForm;
@@ -3804,10 +3839,20 @@ pg_class_aclmask(Oid table_oid, Oid roleid,
 	 */
 	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(table_oid));
 	if (!HeapTupleIsValid(tuple))
-		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_TABLE),
-				 errmsg("relation with OID %u does not exist",
-						table_oid)));
+	{
+		if (is_missing != NULL)
+		{
+			/* return "no privileges" instead of throwing an error */
+			*is_missing = true;
+			return 0;
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_TABLE),
+					 errmsg("relation with OID %u does not exist",
+							table_oid)));
+	}
+
 	classForm = (Form_pg_class) GETSTRUCT(tuple);
 
 	/*
@@ -4468,7 +4513,15 @@ AclResult
 pg_attribute_aclcheck(Oid table_oid, AttrNumber attnum,
 					  Oid roleid, AclMode mode)
 {
-	if (pg_attribute_aclmask(table_oid, attnum, roleid, mode, ACLMASK_ANY) != 0)
+	return pg_attribute_aclcheck_ext(table_oid, attnum, roleid, mode, NULL);
+}
+
+AclResult
+pg_attribute_aclcheck_ext(Oid table_oid, AttrNumber attnum,
+					  Oid roleid, AclMode mode, bool *is_missing)
+{
+	if (pg_attribute_aclmask_ext(table_oid, attnum, roleid, mode,
+								 ACLMASK_ANY, is_missing) != 0)
 		return ACLCHECK_OK;
 	else
 		return ACLCHECK_NO_PRIV;
@@ -4581,7 +4634,15 @@ pg_attribute_aclcheck_all(Oid table_oid, Oid roleid, AclMode mode,
 AclResult
 pg_class_aclcheck(Oid table_oid, Oid roleid, AclMode mode)
 {
-	if (pg_class_aclmask(table_oid, roleid, mode, ACLMASK_ANY) != 0)
+	return pg_class_aclcheck_ext(table_oid, roleid, mode, NULL);
+}
+
+AclResult
+pg_class_aclcheck_ext(Oid table_oid, Oid roleid,
+					  AclMode mode, bool *is_missing)
+{
+	if (pg_class_aclmask_ext(table_oid, roleid, mode,
+							 ACLMASK_ANY, is_missing) != 0)
 		return ACLCHECK_OK;
 	else
 		return ACLCHECK_NO_PRIV;

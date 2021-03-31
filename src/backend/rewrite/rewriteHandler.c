@@ -1857,8 +1857,10 @@ ApplyRetrieveRule(Query *parsetree,
 			rte->checkAsUser = InvalidOid;
 			rte->selectedCols = NULL;
 			rte->insertedCols = NULL;
+			rte->returningCols = NULL;
 			rte->updatedCols = NULL;
 			rte->extraUpdatedCols = NULL;
+			rte->scanCols = NULL;
 
 			/*
 			 * For the most part, Vars referencing the view should remain as
@@ -1958,15 +1960,19 @@ ApplyRetrieveRule(Query *parsetree,
 	subrte->checkAsUser = rte->checkAsUser;
 	subrte->selectedCols = rte->selectedCols;
 	subrte->insertedCols = rte->insertedCols;
+	subrte->returningCols = rte->returningCols;
 	subrte->updatedCols = rte->updatedCols;
 	subrte->extraUpdatedCols = rte->extraUpdatedCols;
+	subrte->scanCols = rte->scanCols;
 
 	rte->requiredPerms = 0;		/* no permission check on subquery itself */
 	rte->checkAsUser = InvalidOid;
 	rte->selectedCols = NULL;
 	rte->insertedCols = NULL;
+	rte->returningCols = NULL;
 	rte->updatedCols = NULL;
 	rte->extraUpdatedCols = NULL;
+	rte->scanCols = NULL;
 
 	return parsetree;
 }
@@ -3317,6 +3323,7 @@ rewriteTargetView(Query *parsetree, Relation view)
 	 * base_rte instead of copying it.
 	 */
 	new_rte = base_rte;
+	new_rte->returningCols = bms_copy(view_rte->returningCols);
 	new_rte->rellockmode = RowExclusiveLock;
 
 	parsetree->rtable = lappend(parsetree->rtable, new_rte);
@@ -3669,6 +3676,7 @@ rewriteTargetView(Query *parsetree, Relation view)
 		}
 	}
 
+	new_rte->returningCols = bms_copy(view_rte->returningCols);
 	table_close(base_rel, NoLock);
 
 	return parsetree;

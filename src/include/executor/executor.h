@@ -156,9 +156,6 @@ extern void ResetTupleHashTable(TupleHashTable hashtable);
  */
 extern JunkFilter *ExecInitJunkFilter(List *targetList,
 									  TupleTableSlot *slot);
-extern JunkFilter *ExecInitJunkFilterInsertion(List *targetList,
-											   TupleDesc cleanTupType,
-											   TupleTableSlot *slot);
 extern JunkFilter *ExecInitJunkFilterConversion(List *targetList,
 												TupleDesc cleanTupType,
 												TupleTableSlot *slot);
@@ -270,6 +267,12 @@ extern ProjectionInfo *ExecBuildProjectionInfo(List *targetList,
 											   TupleTableSlot *slot,
 											   PlanState *parent,
 											   TupleDesc inputDesc);
+extern ProjectionInfo *ExecBuildUpdateProjection(List *subTargetList,
+						  List *targetColnos,
+						  TupleDesc relDesc,
+						  ExprContext *econtext,
+						  TupleTableSlot *slot,
+						  PlanState *parent);
 extern ExprState *ExecPrepareExpr(Expr *node, EState *estate);
 extern ExprState *ExecPrepareQual(List *qual, EState *estate);
 extern ExprState *ExecPrepareCheck(List *qual, EState *estate);
@@ -621,5 +624,10 @@ extern void CheckCmdReplicaIdentity(Relation rel, CmdType cmd);
 
 extern void CheckSubscriptionRelkind(char relkind, const char *nspname,
 									 const char *relname);
+
+/* needed by trigger.c */
+extern TupleTableSlot *ExecGetUpdateNewTuple(ResultRelInfo *relinfo,
+						  TupleTableSlot *planSlot,
+						  TupleTableSlot *oldSlot);
 
 #endif							/* EXECUTOR_H  */

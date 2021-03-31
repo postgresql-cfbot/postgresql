@@ -2078,7 +2078,6 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	haschildren = planstate->initPlan ||
 		outerPlanState(planstate) ||
 		innerPlanState(planstate) ||
-		IsA(plan, ModifyTable) ||
 		IsA(plan, Append) ||
 		IsA(plan, MergeAppend) ||
 		IsA(plan, BitmapAnd) ||
@@ -2111,11 +2110,6 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	/* special child plans */
 	switch (nodeTag(plan))
 	{
-		case T_ModifyTable:
-			ExplainMemberNodes(((ModifyTableState *) planstate)->mt_plans,
-							   ((ModifyTableState *) planstate)->mt_nplans,
-							   ancestors, es);
-			break;
 		case T_Append:
 			ExplainMemberNodes(((AppendState *) planstate)->appendplans,
 							   ((AppendState *) planstate)->as_nplans,
@@ -3715,14 +3709,14 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 	}
 
 	/* Should we explicitly label target relations? */
-	labeltargets = (mtstate->mt_nplans > 1 ||
-					(mtstate->mt_nplans == 1 &&
+	labeltargets = (mtstate->mt_nrels > 1 ||
+					(mtstate->mt_nrels == 1 &&
 					 mtstate->resultRelInfo[0].ri_RangeTableIndex != node->nominalRelation));
 
 	if (labeltargets)
 		ExplainOpenGroup("Target Tables", "Target Tables", false, es);
 
-	for (j = 0; j < mtstate->mt_nplans; j++)
+	for (j = 0; j < mtstate->mt_nrels; j++)
 	{
 		ResultRelInfo *resultRelInfo = mtstate->resultRelInfo + j;
 		FdwRoutine *fdwroutine = resultRelInfo->ri_FdwRoutine;
@@ -3817,10 +3811,10 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 			double		insert_path;
 			double		other_path;
 
-			InstrEndLoop(mtstate->mt_plans[0]->instrument);
+			InstrEndLoop(outerPlanState(mtstate)->instrument);
 
 			/* count the number of source rows */
-			total = mtstate->mt_plans[0]->instrument->ntuples;
+			total = outerPlanState(mtstate)->instrument->ntuples;
 			other_path = mtstate->ps.instrument->ntuples2;
 			insert_path = total - other_path;
 
@@ -3836,7 +3830,7 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 }
 
 /*
- * Explain the constituent plans of a ModifyTable, Append, MergeAppend,
+ * Explain the constituent plans of an Append, MergeAppend,
  * BitmapAnd, or BitmapOr node.
  *
  * The ancestors list should already contain the immediate parent of these

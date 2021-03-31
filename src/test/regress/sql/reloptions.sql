@@ -62,7 +62,7 @@ CREATE TABLE reloptions_test(i INT NOT NULL, j text)
 SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
 INSERT INTO reloptions_test VALUES (1, NULL), (NULL, NULL);
 VACUUM reloptions_test;
-SELECT pg_relation_size('reloptions_test') > 0;
+SELECT pg_relation_size('reloptions_test') = 0;
 
 SELECT reloptions FROM pg_class WHERE oid =
 	(SELECT reltoastrelid FROM pg_class

@@ -103,7 +103,7 @@ INSERT INTO reloptions_test VALUES (1, NULL), (NULL, NULL);
 ERROR:  null value in column "i" of relation "reloptions_test" violates not-null constraint
 DETAIL:  Failing row contains (null, null).
 VACUUM reloptions_test;
-SELECT pg_relation_size('reloptions_test') > 0;
+SELECT pg_relation_size('reloptions_test') = 0;
  ?column? 
 ----------
  t

@@ -149,7 +149,7 @@ CREATE TABLE vac_truncate_test(i INT NOT NULL, j text)
 	WITH (vacuum_truncate=true, autovacuum_enabled=false);
 INSERT INTO vac_truncate_test VALUES (1, NULL), (NULL, NULL);
 VACUUM (TRUNCATE FALSE) vac_truncate_test;
-SELECT pg_relation_size('vac_truncate_test') > 0;
+SELECT pg_relation_size('vac_truncate_test') = 0;
 VACUUM vac_truncate_test;
 SELECT pg_relation_size('vac_truncate_test') = 0;
 VACUUM (TRUNCATE FALSE, FULL TRUE) vac_truncate_test;

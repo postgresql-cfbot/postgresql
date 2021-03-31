@@ -15,6 +15,7 @@
 
 #include "access/htup_details.h"
 #include "access/relation.h"
+#include "access/tableam.h"
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
@@ -23,6 +24,7 @@
 #include "commands/tablespace.h"
 #include "miscadmin.h"
 #include "storage/fd.h"
+#include "storage/smgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/numeric.h"
@@ -270,14 +272,28 @@ pg_tablespace_size_name(PG_FUNCTION_ARGS)
  * is no check here or at the call sites for that.
  */
 static int64
-calculate_relation_size(RelFileNode *rfn, BackendId backend, ForkNumber forknum)
+calculate_relation_size(Relation rel, ForkNumber forknum)
 {
 	int64		totalsize = 0;
 	char	   *relationpath;
 	char		pathname[MAXPGPATH];
 	unsigned int segcount = 0;
 
-	relationpath = relpathbackend(*rfn, backend, forknum);
+	/*
+	 * If the relation is related to a table AM, do its sizing directly
+	 * using its interface.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_RELATION ||
+		rel->rd_rel->relkind == RELKIND_TOASTVALUE ||
+		rel->rd_rel->relkind == RELKIND_MATVIEW)
+	{
+		if (rel->rd_smgr && smgrexists(rel->rd_smgr, forknum))
+			return table_relation_size(rel, forknum);
+		else
+			return 0;
+	}
+
+	relationpath = relpathbackend(rel->rd_node, rel->rd_backend, forknum);
 
 	for (segcount = 0;; segcount++)
 	{
@@ -327,7 +343,7 @@ pg_relation_size(PG_FUNCTION_ARGS)
 	if (rel == NULL)
 		PG_RETURN_NULL();
 
-	size = calculate_relation_size(&(rel->rd_node), rel->rd_backend,
+	size = calculate_relation_size(rel,
 								   forkname_to_number(text_to_cstring(forkName)));
 
 	relation_close(rel, AccessShareLock);
@@ -352,8 +368,7 @@ calculate_toast_table_size(Oid toastrelid)
 
 	/* toast heap size, including FSM and VM size */
 	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-		size += calculate_relation_size(&(toastRel->rd_node),
-										toastRel->rd_backend, forkNum);
+		size += calculate_relation_size(toastRel, forkNum);
 
 	/* toast index size, including FSM and VM size */
 	indexlist = RelationGetIndexList(toastRel);
@@ -366,8 +381,7 @@ calculate_toast_table_size(Oid toastrelid)
 		toastIdxRel = relation_open(lfirst_oid(lc),
 									AccessShareLock);
 		for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-			size += calculate_relation_size(&(toastIdxRel->rd_node),
-											toastIdxRel->rd_backend, forkNum);
+			size += calculate_relation_size(toastIdxRel, forkNum);
 
 		relation_close(toastIdxRel, AccessShareLock);
 	}
@@ -395,8 +409,7 @@ calculate_table_size(Relation rel)
 	 * heap size, including FSM and VM
 	 */
 	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-		size += calculate_relation_size(&(rel->rd_node), rel->rd_backend,
-										forkNum);
+		size += calculate_relation_size(rel, forkNum);
 
 	/*
 	 * Size of toast relation
@@ -434,9 +447,7 @@ calculate_indexes_size(Relation rel)
 			idxRel = relation_open(idxOid, AccessShareLock);
 
 			for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-				size += calculate_relation_size(&(idxRel->rd_node),
-												idxRel->rd_backend,
-												forkNum);
+				size += calculate_relation_size(idxRel, forkNum);
 
 			relation_close(idxRel, AccessShareLock);
 		}

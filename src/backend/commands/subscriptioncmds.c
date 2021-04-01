@@ -67,7 +67,8 @@ parse_subscription_options(List *options,
 						   char **synchronous_commit,
 						   bool *refresh,
 						   bool *binary_given, bool *binary,
-						   bool *streaming_given, bool *streaming)
+						   bool *streaming_given, bool *streaming,
+						   bool *twophase_given, bool *twophase)
 {
 	ListCell   *lc;
 	bool		connect_given = false;
@@ -107,6 +108,11 @@ parse_subscription_options(List *options,
 	{
 		*streaming_given = false;
 		*streaming = false;
+	}
+	if (twophase)
+	{
+		*twophase_given = false;
+		*twophase = false;
 	}
 
 	/* Parse options */
@@ -213,6 +219,29 @@ parse_subscription_options(List *options,
 			*streaming_given = true;
 			*streaming = defGetBoolean(defel);
 		}
+		else if (strcmp(defel->defname, "two_phase") == 0)
+		{
+			/*
+			 * Do not allow toggling of two_phase option. Doing so could cause
+			 * missing of transactions and lead to an inconsistent replica.
+			 * See comments atop worker.c
+			 *
+			 * Note: twophase == NULL indicates that this call originated from
+			 * AlterSubscription.
+			 */
+			if (!twophase)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("cannot alter two_phase option")));
+
+			if (*twophase_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+
+			*twophase_given = true;
+			*twophase = defGetBoolean(defel);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -283,6 +312,21 @@ parse_subscription_options(List *options,
 					 errmsg("subscription with %s must also set %s",
 							"slot_name = NONE", "create_slot = false")));
 	}
+
+	/*
+	 * Do additional checking for the disallowed combination of two_phase and
+	 * streaming. While streaming and two_phase can theoretically be
+	 * supported, it needs more analysis to allow them together.
+	 */
+	if (twophase && *twophase_given && *twophase)
+	{
+		if (streaming && *streaming_given && *streaming)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("%s and %s are mutually exclusive options",
+							"two_phase = true", "streaming = true")));
+	}
+
 }
 
 /*
@@ -358,6 +402,8 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	bool		copy_data;
 	bool		streaming;
 	bool		streaming_given;
+	bool		twophase;
+	bool		twophase_given;
 	char	   *synchronous_commit;
 	char	   *conninfo;
 	char	   *slotname;
@@ -382,7 +428,8 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 							   &synchronous_commit,
 							   NULL,	/* no "refresh" */
 							   &binary_given, &binary,
-							   &streaming_given, &streaming);
+							   &streaming_given, &streaming,
+							   &twophase_given, &twophase);
 
 	/*
 	 * Since creating a replication slot is not transactional, rolling back
@@ -450,6 +497,10 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	values[Anum_pg_subscription_subenabled - 1] = BoolGetDatum(enabled);
 	values[Anum_pg_subscription_subbinary - 1] = BoolGetDatum(binary);
 	values[Anum_pg_subscription_substream - 1] = BoolGetDatum(streaming);
+	values[Anum_pg_subscription_subtwophasestate - 1] =
+		CharGetDatum(twophase ?
+					 LOGICALREP_TWOPHASE_STATE_PENDING :
+					 LOGICALREP_TWOPHASE_STATE_DISABLED);
 	values[Anum_pg_subscription_subconninfo - 1] =
 		CStringGetTextDatum(conninfo);
 	if (slotname)
@@ -528,7 +579,16 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 			{
 				Assert(slotname);
 
-				walrcv_create_slot(wrconn, slotname, false,
+				/*
+				 * Even if two_phase is set, don't create the slot with
+				 * two-phase enabled. Will enable it once all the tables are
+				 * synced and ready. This avoids race-conditions like prepared
+				 * transactions being skipped due to changes not being applied
+				 * due to checks in should_apply_changes_for_rel() when
+				 * tablesync for the corresponding tables are in progress. See
+				 * comments atop worker.c.
+				 */
+				walrcv_create_slot(wrconn, slotname, false, false,
 								   CRS_NOEXPORT_SNAPSHOT, NULL);
 				ereport(NOTICE,
 						(errmsg("created replication slot \"%s\" on publisher",
@@ -835,7 +895,8 @@ AlterSubscription(AlterSubscriptionStmt *stmt, bool isTopLevel)
 										   &synchronous_commit,
 										   NULL,	/* no "refresh" */
 										   &binary_given, &binary,
-										   &streaming_given, &streaming);
+										   &streaming_given, &streaming,
+										   NULL, NULL /* no "two_phase" */ );
 
 				if (slotname_given)
 				{
@@ -869,6 +930,12 @@ AlterSubscription(AlterSubscriptionStmt *stmt, bool isTopLevel)
 
 				if (streaming_given)
 				{
+					if ((sub->twophasestate != LOGICALREP_TWOPHASE_STATE_DISABLED) && streaming)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("cannot set %s for two-phase enabled subscription",
+										"streaming = true")));
+
 					values[Anum_pg_subscription_substream - 1] =
 						BoolGetDatum(streaming);
 					replaces[Anum_pg_subscription_substream - 1] = true;
@@ -892,7 +959,8 @@ AlterSubscription(AlterSubscriptionStmt *stmt, bool isTopLevel)
 										   NULL,	/* no "synchronous_commit" */
 										   NULL,	/* no "refresh" */
 										   NULL, NULL,	/* no "binary" */
-										   NULL, NULL); /* no streaming */
+										   NULL, NULL,	/* no "streaming" */
+										   NULL, NULL); /* no "two_phase" */
 				Assert(enabled_given);
 
 				if (!sub->slotname && enabled)
@@ -937,7 +1005,8 @@ AlterSubscription(AlterSubscriptionStmt *stmt, bool isTopLevel)
 										   NULL,	/* no "synchronous_commit" */
 										   &refresh,
 										   NULL, NULL,	/* no "binary" */
-										   NULL, NULL); /* no "streaming" */
+										   NULL, NULL,	/* no "streaming" */
+										   NULL, NULL); /* no "two_phase" */
 				values[Anum_pg_subscription_subpublications - 1] =
 					publicationListToArray(stmt->publication);
 				replaces[Anum_pg_subscription_subpublications - 1] = true;
@@ -952,6 +1021,17 @@ AlterSubscription(AlterSubscriptionStmt *stmt, bool isTopLevel)
 								(errcode(ERRCODE_SYNTAX_ERROR),
 								 errmsg("ALTER SUBSCRIPTION with refresh is not allowed for disabled subscriptions"),
 								 errhint("Use ALTER SUBSCRIPTION ... SET PUBLICATION ... WITH (refresh = false).")));
+
+					/*
+					 * See ALTER_SUBSCRIPTION_REFRESH for details why this is
+					 * not allowed.
+					 */
+					if (sub->twophasestate == LOGICALREP_TWOPHASE_STATE_ENABLED && copy_data)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("ALTER SUBSCRIPTION with refresh and copy_data is not allowed when two_phase is enabled"),
+								 errhint("Use ALTER SUBSCRIPTION ...SET PUBLICATION with refresh = false, or with copy_data = false"
+										 ", or use DROP/CREATE SUBSCRIPTION.")));
 
 					PreventInTransactionBlock(isTopLevel, "ALTER SUBSCRIPTION with refresh");
 
@@ -982,7 +1062,34 @@ AlterSubscription(AlterSubscriptionStmt *stmt, bool isTopLevel)
 										   NULL,	/* no "synchronous_commit" */
 										   NULL,	/* no "refresh" */
 										   NULL, NULL,	/* no "binary" */
-										   NULL, NULL); /* no "streaming" */
+										   NULL, NULL,	/* no "streaming" */
+										   NULL, NULL); /* no "two_phase" */
+
+				/*
+				 * The subscription two_phase commit implementation requires
+				 * that replication has passed the initial table
+				 * synchronization phase before the two_phase becomes properly
+				 * enabled.
+				 *
+				 * But, having reached this two-phase commit "enabled" state
+				 * we must not allow any subsequent table initialization to
+				 * occur. So the ALTER SUBSCRIPTION ... REFRESH is disallowed
+				 * when the the user had requested two_phase = on mode.
+				 *
+				 * The exception to this restriction is when copy_data =
+				 * false, because when copy_data is false the tablesync will
+				 * start already in READY state and will exit directly without
+				 * doing anything which could interfere with the apply
+				 * worker's message handling.
+				 *
+				 * For more details see comments atop worker.c.
+				 */
+				if (sub->twophasestate == LOGICALREP_TWOPHASE_STATE_ENABLED && copy_data)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("ALTER SUBSCRIPTION ... REFRESH with copy_data is not allowed when two_phase is enabled"),
+							 errhint("Use ALTER SUBSCRIPTION ... REFRESH with copy_data = false"
+									 ", or use DROP/CREATE SUBSCRIPTION.")));
 
 				PreventInTransactionBlock(isTopLevel, "ALTER SUBSCRIPTION ... REFRESH");
 

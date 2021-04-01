@@ -7622,6 +7622,18 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>subtwophasestate</structfield> <type>char</type>
+      </para>
+      <para>
+       State code:
+       <literal>d</literal> = two_phase mode was not requested, so is disabled;
+       <literal>p</literal> = two_phase mode was requested, but is pending enablement;
+       <literal>e</literal> = two_phase mode was requested, and is enabled.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>subconninfo</structfield> <type>text</type>
       </para>
       <para>

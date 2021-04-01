@@ -1250,9 +1250,9 @@ stream_commit_cb(...);  &lt;-- commit of the streamed transaction
       <para>
        The logical replication solution that builds distributed two phase commit
        using this feature can deadlock if the prepared transaction has locked
-       [user] catalog tables exclusively. They need to inform users to not have
-       locks on catalog tables (via explicit <command>LOCK</command> command) in
-       such transactions.
+       [user] catalog tables exclusively. To avoid this users must refrain from
+       having locks on catalog tables (via explicit <command>LOCK</command> command)
+       in such transactions.
       </para>
      </listitem>
     </itemizedlist>

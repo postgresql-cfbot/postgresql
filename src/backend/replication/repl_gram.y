@@ -84,6 +84,7 @@ static SQLCmd *make_sqlcmd(void);
 %token K_SLOT
 %token K_RESERVE_WAL
 %token K_TEMPORARY
+%token K_TWO_PHASE
 %token K_EXPORT_SNAPSHOT
 %token K_NOEXPORT_SNAPSHOT
 %token K_USE_SNAPSHOT
@@ -102,6 +103,7 @@ static SQLCmd *make_sqlcmd(void);
 %type <node>	plugin_opt_arg
 %type <str>		opt_slot var_name
 %type <boolval>	opt_temporary
+%type <boolval>	opt_two_phase
 %type <list>	create_slot_opt_list
 %type <defelt>	create_slot_opt
 
@@ -241,16 +243,17 @@ create_replication_slot:
 					cmd->options = $5;
 					$$ = (Node *) cmd;
 				}
-			/* CREATE_REPLICATION_SLOT slot TEMPORARY LOGICAL plugin */
-			| K_CREATE_REPLICATION_SLOT IDENT opt_temporary K_LOGICAL IDENT create_slot_opt_list
+			/* CREATE_REPLICATION_SLOT slot TEMPORARY TWO_PHASE LOGICAL plugin */
+			| K_CREATE_REPLICATION_SLOT IDENT opt_temporary opt_two_phase K_LOGICAL IDENT create_slot_opt_list
 				{
 					CreateReplicationSlotCmd *cmd;
 					cmd = makeNode(CreateReplicationSlotCmd);
 					cmd->kind = REPLICATION_KIND_LOGICAL;
 					cmd->slotname = $2;
 					cmd->temporary = $3;
-					cmd->plugin = $5;
-					cmd->options = $6;
+					cmd->two_phase = $4;
+					cmd->plugin = $6;
+					cmd->options = $7;
 					$$ = (Node *) cmd;
 				}
 			;
@@ -362,6 +365,11 @@ opt_physical:
 
 opt_temporary:
 			K_TEMPORARY						{ $$ = true; }
+			| /* EMPTY */					{ $$ = false; }
+			;
+
+opt_two_phase:
+			K_TWO_PHASE						{ $$ = true; }
 			| /* EMPTY */					{ $$ = false; }
 			;
 

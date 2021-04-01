@@ -68,6 +68,7 @@ GetSubscription(Oid subid, bool missing_ok)
 	sub->enabled = subform->subenabled;
 	sub->binary = subform->subbinary;
 	sub->stream = subform->substream;
+	sub->twophasestate = subform->subtwophasestate;
 
 	/* Get conninfo */
 	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
@@ -449,6 +450,40 @@ RemoveSubscriptionRel(Oid subid, Oid relid)
 	table_close(rel, RowExclusiveLock);
 }
 
+/*
+ * Does the subscription have any relations?
+ *
+ * Use this function only to know true/false, and when you have no need for the
+ * List returned by GetSubscriptionRelations.
+ */
+bool
+HasSubscriptionRelations(Oid subid)
+{
+	Relation	rel;
+	int			nkeys = 0;
+	ScanKeyData skey[2];
+	SysScanDesc scan;
+	bool		has_subrels = false;
+
+	rel = table_open(SubscriptionRelRelationId, AccessShareLock);
+
+	ScanKeyInit(&skey[nkeys++],
+				Anum_pg_subscription_rel_srsubid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(subid));
+
+	scan = systable_beginscan(rel, InvalidOid, false,
+							  NULL, nkeys, skey);
+
+	/* If even a single tuple exists then the subscription has tables. */
+	has_subrels = HeapTupleIsValid(systable_getnext(scan));
+
+	/* Cleanup */
+	systable_endscan(scan);
+	table_close(rel, AccessShareLock);
+
+	return has_subrels;
+}
 
 /*
  * Get all relations for subscription.

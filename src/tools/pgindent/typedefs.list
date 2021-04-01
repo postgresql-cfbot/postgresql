@@ -1346,9 +1346,11 @@ LogicalRepBeginData
 LogicalRepCommitData
 LogicalRepCtxStruct
 LogicalRepPartMapEntry
+LogicalRepPreparedTxnData
 LogicalRepRelId
 LogicalRepRelMapEntry
 LogicalRepRelation
+LogicalRepRollbackPreparedTxnData
 LogicalRepTupleData
 LogicalRepTyp
 LogicalRepWorker

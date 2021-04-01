@@ -85,9 +85,14 @@ typedef struct LogicalDecodingContext
 	bool		streaming;
 
 	/*
-	 * Does the output plugin support two-phase decoding, and is it enabled?
+	 * Does the output plugin support two-phase decoding.
 	 */
 	bool		twophase;
+
+	/*
+	 * Is two-phase option given by output plugin?
+	 */
+	bool		twophase_opt_given;
 
 	/*
 	 * State for writing output.

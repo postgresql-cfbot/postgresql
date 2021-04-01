@@ -62,9 +62,13 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
   </para>
 
   <para>
-   Commands <command>ALTER SUBSCRIPTION ... REFRESH PUBLICATION</command> and
-   <command>ALTER SUBSCRIPTION ... SET PUBLICATION ...</command> with refresh
-   option as true cannot be executed inside a transaction block.
+   Commands <command>ALTER SUBSCRIPTION ... REFRESH PUBLICATION</command>, and
+   <command>ALTER SUBSCRIPTION ... SET PUBLICATION ...</command> with
+   <literal>refresh = true</literal> cannot be executed inside a transaction
+   block. They also cannot be executed with <literal>copy_data = true</literal>
+   when the subscription has <literal>two_phase</literal> commit enabled. See
+   column <literal>subtwophasestate</literal> of
+   <xref linkend="catalog-pg-subscription"/> to know the actual two-phase state.
   </para>
  </refsect1>
 

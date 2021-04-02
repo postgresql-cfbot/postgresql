@@ -53,8 +53,12 @@ RESET ROLE
   </para>
 
   <para>
-   The <literal>NONE</literal> and <literal>RESET</literal> forms reset the current
-   user identifier to be the current session user identifier.
+   <literal>SET ROLE NONE</literal> sets the current user identifier to the
+   session user identifier, as returned by <function>session_user</function>.
+   <literal>RESET ROLE</literal> sets the current user identifier to the
+   connection-time setting, which may be different from the session user
+   identifier if a different role has been set with
+   <link linkend="sql-alterrole"><command>ALTER ROLE</command></link>.
    These forms can be executed by any user.
   </para>
  </refsect1>

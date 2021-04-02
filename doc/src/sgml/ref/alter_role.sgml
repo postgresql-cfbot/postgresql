@@ -40,6 +40,7 @@ ALTER ROLE <replaceable class="parameter">name</replaceable> RENAME TO <replacea
 
 ALTER ROLE { <replaceable class="parameter">role_specification</replaceable> | ALL } [ IN DATABASE <replaceable class="parameter">database_name</replaceable> ] SET <replaceable>configuration_parameter</replaceable> { TO | = } { <replaceable>value</replaceable> | DEFAULT }
 ALTER ROLE { <replaceable class="parameter">role_specification</replaceable> | ALL } [ IN DATABASE <replaceable class="parameter">database_name</replaceable> ] SET <replaceable>configuration_parameter</replaceable> FROM CURRENT
+ALTER ROLE { <replaceable class="parameter">role_specification</replaceable> | ALL } [ IN DATABASE <replaceable class="parameter">database_name</replaceable> ] SET ROLE <replaceable class="parameter">other_role</replaceable>
 ALTER ROLE { <replaceable class="parameter">role_specification</replaceable> | ALL } [ IN DATABASE <replaceable class="parameter">database_name</replaceable> ] RESET <replaceable>configuration_parameter</replaceable>
 ALTER ROLE { <replaceable class="parameter">role_specification</replaceable> | ALL } [ IN DATABASE <replaceable class="parameter">database_name</replaceable> ] RESET ALL
 
@@ -91,7 +92,7 @@ ALTER ROLE { <replaceable class="parameter">role_specification</replaceable> | A
 
   <para>
    The remaining variants change a role's session default for a configuration
-   variable, either for all databases or, when the <literal>IN
+   variable or the role assumed, either for all databases or, when the <literal>IN
    DATABASE</literal> clause is specified, only for sessions in the named
    database.  If <literal>ALL</literal> is specified instead of a role name,
    this changes the setting for all roles.  Using <literal>ALL</literal>
@@ -104,7 +105,7 @@ ALTER ROLE { <replaceable class="parameter">role_specification</replaceable> | A
    starts a new session, the specified value becomes the session
    default, overriding whatever setting is present in
    <filename>postgresql.conf</filename> or has been received from the <command>postgres</command>
-   command line. This only happens at login time; executing
+   command line.  This only happens at login time; executing
    <link linkend="sql-set-role"><command>SET ROLE</command></link> or
    <link linkend="sql-set-session-authorization"><command>SET SESSION AUTHORIZATION</command></link> does not cause new
    configuration values to be set.
@@ -233,6 +234,16 @@ ALTER ROLE { <replaceable class="parameter">role_specification</replaceable> | A
         parameter names and values.
        </para>
       </listitem>
+     </varlistentry>
+
+     <varlistentry>
+       <term><replaceable>other_role</replaceable></term>
+       <listitem>
+         <para>
+           The name of a role that contains the modified role as a member.
+           This identity is automatically assumed when the connection is established.
+         </para>
+       </listitem>
      </varlistentry>
     </variablelist>
  </refsect1>

@@ -205,6 +205,12 @@ static void log_disconnections(int code, Datum arg);
 static void enable_statement_timeout(void);
 static void disable_statement_timeout(void);
 
+/*
+ * Hooks for plugins to get control at end/start of
+ * start_xact_command()/finish_xact_command().
+ */
+XactCommandStart_hook_type start_xact_command_hook = NULL;
+XactCommandFinish_hook_type finish_xact_command_hook = NULL;
 
 /* ----------------------------------------------------------------
  *		routines to obtain user input
@@ -2671,7 +2677,15 @@ start_xact_command(void)
 	 * not desired, the timeout has to be disabled explicitly.
 	 */
 	enable_statement_timeout();
+
+	/*
+	 * Now give loadable modules a chance to execute code before a transaction
+	 * command is processed.
+	 */
+	if (start_xact_command_hook)
+		(*start_xact_command_hook) ();
 }
+
 
 static void
 finish_xact_command(void)
@@ -2681,6 +2695,13 @@ finish_xact_command(void)
 
 	if (xact_started)
 	{
+		/*
+		 * Now give loadable modules a chance to execute code just before a
+		 * transaction command is committed.
+		 */
+		if (finish_xact_command_hook)
+			(*finish_xact_command_hook) ();
+
 		CommitTransactionCommand();
 
 #ifdef MEMORY_CONTEXT_CHECKING

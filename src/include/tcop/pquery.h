@@ -42,4 +42,10 @@ extern uint64 PortalRunFetch(Portal portal,
 							 long count,
 							 DestReceiver *dest);
 
+/* Hook for plugins to get control in start_xact_command() and finish_xact_command() */
+typedef void (*XactCommandStart_hook_type) (void);
+extern PGDLLIMPORT XactCommandStart_hook_type start_xact_command_hook;
+typedef void (*XactCommandFinish_hook_type) (void);
+extern PGDLLIMPORT XactCommandFinish_hook_type finish_xact_command_hook;
+
 #endif							/* PQUERY_H */

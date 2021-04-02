@@ -13,6 +13,7 @@ A_Expr_Kind
 A_Indices
 A_Indirection
 A_Star
+AbortCurrentTransaction_hook_type
 AbsoluteTime
 AccessMethodInfo
 AccessPriv
@@ -2820,6 +2821,8 @@ XPVIV
 XPVMG
 XactCallback
 XactCallbackItem
+XactCommandStart_hook_type
+XactCommandFinish_hook_type
 XactEvent
 XactLockTableWaitInfo
 XidBoundsViolation

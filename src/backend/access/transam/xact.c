@@ -314,6 +314,9 @@ typedef struct SubXactCallbackItem
 static SubXactCallbackItem *SubXact_callbacks = NULL;
 
 
+/* Hook for plugins to get control of at end of AbortCurrentTransaction */
+AbortCurrentTransaction_hook_type abort_current_transaction_hook = NULL;
+
 /* local function prototypes */
 static void AssignTransactionId(TransactionState s);
 static void AbortTransaction(void);
@@ -3356,6 +3359,9 @@ AbortCurrentTransaction(void)
 			AbortCurrentTransaction();
 			break;
 	}
+
+	if (abort_current_transaction_hook)
+		(*abort_current_transaction_hook) ();
 }
 
 /*

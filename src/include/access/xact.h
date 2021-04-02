@@ -467,4 +467,8 @@ extern void EnterParallelMode(void);
 extern void ExitParallelMode(void);
 extern bool IsInParallelMode(void);
 
+/* Hook for plugins to get control in start_xact_command() and finish_xact_command() */
+typedef void (*AbortCurrentTransaction_hook_type) (void);
+extern PGDLLIMPORT AbortCurrentTransaction_hook_type abort_current_transaction_hook;
+
 #endif							/* XACT_H */

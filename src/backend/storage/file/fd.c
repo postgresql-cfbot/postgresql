@@ -99,7 +99,7 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "utils/guc.h"
-#include "utils/resowner_private.h"
+#include "utils/resowner.h"
 
 /* Define PG_FLUSH_DATA_WORKS if we have an implementation for pg_flush_data */
 #if defined(HAVE_SYNC_FILE_RANGE)
@@ -344,6 +344,24 @@ static void unlink_if_exists_fname(const char *fname, bool isdir, int elevel);
 
 static int	fsync_parent_path(const char *fname, int elevel);
 
+
+/* ResourceOwner callbacks to hold virtual file descriptors */
+static void ResOwnerReleaseFile(Datum res);
+static void ResOwnerPrintFileLeakWarning(Datum res);
+
+static ResourceOwnerFuncs file_resowner_funcs =
+{
+	.name = "File",
+	.phase = RESOURCE_RELEASE_AFTER_LOCKS,
+	.ReleaseResource = ResOwnerReleaseFile,
+	.PrintLeakWarning = ResOwnerPrintFileLeakWarning
+};
+
+/* Convenience wrappers over ResourceOwnerRemember/Forget */
+#define ResourceOwnerRememberFile(owner, file) \
+	ResourceOwnerRemember(owner, Int32GetDatum(file), &file_resowner_funcs)
+#define ResourceOwnerForgetFile(owner, file) \
+	ResourceOwnerForget(owner, Int32GetDatum(file), &file_resowner_funcs)
 
 /*
  * pg_fsync --- do fsync with or without writethrough
@@ -1449,7 +1467,7 @@ ReportTemporaryFileUsage(const char *path, off_t size)
 
 /*
  * Called to register a temporary file for automatic close.
- * ResourceOwnerEnlargeFiles(CurrentResourceOwner) must have been called
+ * ResourceOwnerEnlarge(CurrentResourceOwner) must have been called
  * before the file was opened.
  */
 static void
@@ -1631,7 +1649,7 @@ OpenTemporaryFile(bool interXact)
 	 * open it, if we'll be registering it below.
 	 */
 	if (!interXact)
-		ResourceOwnerEnlargeFiles(CurrentResourceOwner);
+		ResourceOwnerEnlarge(CurrentResourceOwner);
 
 	/*
 	 * If some temp tablespace(s) have been given to us, try to use the next
@@ -1761,7 +1779,7 @@ PathNameCreateTemporaryFile(const char *path, bool error_on_failure)
 {
 	File		file;
 
-	ResourceOwnerEnlargeFiles(CurrentResourceOwner);
+	ResourceOwnerEnlarge(CurrentResourceOwner);
 
 	/*
 	 * Open the file.  Note: we don't use O_EXCL, in case there is an orphaned
@@ -1799,7 +1817,7 @@ PathNameOpenTemporaryFile(const char *path, int mode)
 {
 	File		file;
 
-	ResourceOwnerEnlargeFiles(CurrentResourceOwner);
+	ResourceOwnerEnlarge(CurrentResourceOwner);
 
 	file = PathNameOpenFile(path, mode | PG_BINARY);
 
@@ -3778,4 +3796,20 @@ pg_pwritev_with_retry(int fd, const struct iovec *iov, int iovcnt, off_t offset)
 	}
 
 	return sum;
+}
+
+/*
+ * ResourceOwner callbacks
+ */
+static void
+ResOwnerReleaseFile(Datum res)
+{
+	FileClose((File) DatumGetInt32(res));
+}
+
+static void
+ResOwnerPrintFileLeakWarning(Datum res)
+{
+	elog(WARNING, "temporary file leak: File %d still referenced",
+		 DatumGetInt32(res));
 }

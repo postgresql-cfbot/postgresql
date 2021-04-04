@@ -41,6 +41,7 @@
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "commands/async.h"
+#include "commands/defrem.h"
 #include "commands/prepare.h"
 #include "executor/spi.h"
 #include "jit/jit.h"
@@ -1024,6 +1025,7 @@ exec_simple_query(const char *query_string)
 		Portal		portal;
 		DestReceiver *receiver;
 		int16		format;
+		ListCell   *lc;
 
 		/*
 		 * Get the command name for use in status display (it also becomes the
@@ -1183,7 +1185,7 @@ exec_simple_query(const char *query_string)
 		MemoryContextSwitchTo(oldcontext);
 
 		/*
-		 * Run the portal to completion, and then drop it (and the receiver).
+		 * Run the portal to completion, and then drop it.
 		 */
 		(void) PortalRun(portal,
 						 FETCH_ALL,
@@ -1193,9 +1195,33 @@ exec_simple_query(const char *query_string)
 						 receiver,
 						 &qc);
 
-		receiver->rDestroy(receiver);
-
 		PortalDrop(portal, false);
+
+		/*
+		 * Run portals for dynamic result sets.
+		 */
+		foreach (lc, GetReturnableCursors())
+		{
+			Portal portal = lfirst(lc);
+
+			if (dest == DestRemote)
+				SetRemoteDestReceiverParams(receiver, portal);
+
+			PortalRun(portal,
+					  FETCH_ALL,
+					  true,
+					  true,
+					  receiver,
+					  receiver,
+					  NULL);
+
+			PortalDrop(portal, false);
+		}
+
+		/*
+		 * Drop the receiver.
+		 */
+		receiver->rDestroy(receiver);
 
 		if (lnext(parsetree_list, parsetree_item) == NULL)
 		{
@@ -2024,6 +2050,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 	const char *sourceText;
 	const char *prepStmtName;
 	ParamListInfo portalParams;
+	ListCell   *lc;
 	bool		save_log_statement_stats = log_statement_stats;
 	bool		is_xact_command;
 	bool		execute_is_fetch;
@@ -2175,6 +2202,34 @@ exec_execute_message(const char *portal_name, long max_rows)
 						  receiver,
 						  receiver,
 						  &qc);
+
+	/*
+	 * Run portals for dynamic result sets.
+	 */
+	foreach (lc, GetReturnableCursors())
+	{
+		Portal dyn_portal = lfirst(lc);
+
+		if (dest == DestRemote)
+			SetRemoteDestReceiverParams(receiver, dyn_portal);
+
+		PortalSetResultFormat(dyn_portal, 1, &portal->dynamic_format);
+
+		SendRowDescriptionMessage(&row_description_buf,
+								  dyn_portal->tupDesc,
+								  FetchPortalTargetList(dyn_portal),
+								  dyn_portal->formats);
+
+		PortalRun(dyn_portal,
+				  FETCH_ALL,
+				  true,
+				  true,
+				  receiver,
+				  receiver,
+				  NULL);
+
+		PortalDrop(dyn_portal, false);
+	}
 
 	receiver->rDestroy(receiver);
 
@@ -4203,6 +4258,7 @@ PostgresMain(int argc, char *argv[],
 
 		PortalErrorCleanup();
 		SPICleanup();
+		ProcedureCallsCleanup();
 
 		/*
 		 * We can't release replication slots inside AbortTransaction() as we

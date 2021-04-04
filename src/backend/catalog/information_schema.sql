@@ -1593,7 +1593,7 @@ CREATE VIEW routines AS
              CASE WHEN p.proisstrict THEN 'YES' ELSE 'NO' END END AS yes_or_no) AS is_null_call,
            CAST(null AS character_data) AS sql_path,
            CAST('YES' AS yes_or_no) AS schema_level_routine,
-           CAST(0 AS cardinal_number) AS max_dynamic_result_sets,
+           CAST(p.prodynres AS cardinal_number) AS max_dynamic_result_sets,
            CAST(null AS yes_or_no) AS is_user_defined_cast,
            CAST(null AS yes_or_no) AS is_implicitly_invocable,
            CAST(CASE WHEN p.prosecdef THEN 'DEFINER' ELSE 'INVOKER' END AS character_data) AS security_type,

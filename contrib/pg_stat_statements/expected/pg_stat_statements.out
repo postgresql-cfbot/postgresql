@@ -252,6 +252,72 @@ FROM pg_stat_statements ORDER BY query COLLATE "C";
 (7 rows)
 
 --
+-- Track the number of generic plan
+--
+CREATE TABLE pgss_test (i int, j int, k int);
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+SET plan_cache_mode TO force_generic_plan;
+SET pg_stat_statements.track_utility = TRUE;
+PREPARE pgss_p1 AS SELECT i FROM pgss_test WHERE i = $1;
+EXECUTE pgss_p1(1);
+ i 
+---
+(0 rows)
+
+-- EXPLAIN ANALZE should be recorded
+PREPARE pgss_p2 AS SELECT j FROM pgss_test WHERE j = $1;
+EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF) EXECUTE pgss_p2(1);
+                  QUERY PLAN                   
+-----------------------------------------------
+ Seq Scan on pgss_test (actual rows=0 loops=1)
+   Filter: (j = $1)
+(2 rows)
+
+-- Nested Portal
+PREPARE pgss_p3 AS SELECT k FROM pgss_test WHERE k = $1;
+BEGIN;
+DECLARE pgss_c1 CURSOR FOR SELECT name FROM pg_prepared_statements;
+FETCH IN pgss_c1;
+  name   
+---------
+ pgss_p2
+(1 row)
+
+EXECUTE pgss_p3(1);
+ k 
+---
+(0 rows)
+
+FETCH IN pgss_c1;
+  name   
+---------
+ pgss_p1
+(1 row)
+
+COMMIT;
+SELECT calls, generic_calls, query FROM pg_stat_statements;
+ calls | generic_calls |                                  query                                   
+-------+---------------+--------------------------------------------------------------------------
+     1 |             0 | DECLARE pgss_c1 CURSOR FOR SELECT name FROM pg_prepared_statements
+     0 |             0 | SELECT calls, generic_calls, query FROM pg_stat_statements
+     1 |             1 | PREPARE pgss_p1 AS SELECT i FROM pgss_test WHERE i = $1
+     2 |             0 | FETCH IN pgss_c1
+     1 |             0 | BEGIN
+     1 |             0 | SELECT pg_stat_statements_reset()
+     1 |             1 | EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF) EXECUTE pgss_p2(1)
+     1 |             0 | COMMIT
+     1 |             1 | PREPARE pgss_p3 AS SELECT k FROM pgss_test WHERE k = $1
+(9 rows)
+
+SET pg_stat_statements.track_utility = FALSE;
+DEALLOCATE ALL;
+DROP TABLE pgss_test;
+--
 -- pg_stat_statements.track = none
 --
 SET pg_stat_statements.track = 'none';

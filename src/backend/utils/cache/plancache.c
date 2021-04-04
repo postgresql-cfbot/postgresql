@@ -83,6 +83,10 @@
 	((plansource)->raw_parse_tree && \
 	 IsA((plansource)->raw_parse_tree->stmt, TransactionStmt))
 
+/* Set whether the current and previous plan is generic or not */
+bool	is_plan_type_generic = false;
+bool	is_prev_plan_type_generic = false;
+
 /*
  * This is the head of the backend's list of "saved" CachedPlanSources (i.e.,
  * those that are in long-lived storage and are examined for sinval events).
@@ -1219,10 +1223,15 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 		plansource->total_custom_cost += cached_plan_cost(plan, true);
 
 		plansource->num_custom_plans++;
+		is_prev_plan_type_generic = is_plan_type_generic;
+		is_plan_type_generic = false;
+
 	}
 	else
 	{
 		plansource->num_generic_plans++;
+		is_prev_plan_type_generic = is_plan_type_generic;
+		is_plan_type_generic = true;
 	}
 
 	Assert(plan != NULL);

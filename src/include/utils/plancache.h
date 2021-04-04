@@ -34,6 +34,10 @@ typedef enum
 	PLAN_CACHE_MODE_FORCE_CUSTOM_PLAN
 }			PlanCacheMode;
 
+/* Set whether the current and previous plan is generic or not */
+extern PGDLLIMPORT bool	is_plan_type_generic;
+extern PGDLLIMPORT bool	is_prev_plan_type_generic;
+
 /* GUC parameter */
 extern int	plan_cache_mode;
 
@@ -158,6 +162,7 @@ typedef struct CachedPlan
 	int			generation;		/* parent's generation number for this plan */
 	int			refcount;		/* count of live references to this struct */
 	MemoryContext context;		/* context containing this CachedPlan */
+	bool		is_generic;	/* is this plan generic or not? */
 } CachedPlan;
 
 /*

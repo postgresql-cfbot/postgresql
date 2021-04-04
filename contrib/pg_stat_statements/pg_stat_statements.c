@@ -83,6 +83,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
+#include "utils/plancache.h"
 #include "utils/timestamp.h"
 
 PG_MODULE_MAGIC;
@@ -194,6 +195,7 @@ typedef struct Counters
 	int64		wal_records;	/* # of WAL records generated */
 	int64		wal_fpi;		/* # of WAL full page images generated */
 	uint64		wal_bytes;		/* total amount of WAL generated in bytes */
+	int64		generic_calls;	/* # of times generic plans executed */
 } Counters;
 
 /*
@@ -1448,6 +1450,10 @@ pgss_store(const char *query, uint64 queryId,
 			if (e->counters.max_time[kind] < total_time)
 				e->counters.max_time[kind] = total_time;
 		}
+
+		if (kind == PGSS_EXEC && is_plan_type_generic)
+			e->counters.generic_calls += 1;
+
 		e->counters.rows += rows;
 		e->counters.shared_blks_hit += bufusage->shared_blks_hit;
 		e->counters.shared_blks_read += bufusage->shared_blks_read;
@@ -1512,8 +1518,8 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 #define PG_STAT_STATEMENTS_COLS_V1_1	18
 #define PG_STAT_STATEMENTS_COLS_V1_2	19
 #define PG_STAT_STATEMENTS_COLS_V1_3	23
-#define PG_STAT_STATEMENTS_COLS_V1_8	32
-#define PG_STAT_STATEMENTS_COLS			32	/* maximum of above */
+#define PG_STAT_STATEMENTS_COLS_V1_8	33
+#define PG_STAT_STATEMENTS_COLS			33	/* maximum of above */
 
 /*
  * Retrieve statement statistics.
@@ -1865,6 +1871,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 											ObjectIdGetDatum(0),
 											Int32GetDatum(-1));
 			values[i++] = wal_bytes;
+			values[i++] = Int64GetDatumFast(tmp.generic_calls);
 		}
 
 		Assert(i == (api_version == PGSS_V1_0 ? PG_STAT_STATEMENTS_COLS_V1_0 :

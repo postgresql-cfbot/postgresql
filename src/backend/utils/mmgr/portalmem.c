@@ -592,6 +592,9 @@ PortalDrop(Portal portal, bool isTopCommit)
 
 	/* release portal struct (it's in TopPortalContext) */
 	pfree(portal);
+
+	/* Set is_plan_type_generic back to the original value. */
+	is_plan_type_generic = is_prev_plan_type_generic;
 }
 
 /*

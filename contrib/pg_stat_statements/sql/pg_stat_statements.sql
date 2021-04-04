@@ -126,6 +126,39 @@ wal_records = rows as wal_records_as_rows
 FROM pg_stat_statements ORDER BY query COLLATE "C";
 
 --
+-- Track the number of generic plan
+--
+CREATE TABLE pgss_test (i int, j int, k int);
+SELECT pg_stat_statements_reset();
+SET plan_cache_mode TO force_generic_plan;
+SET pg_stat_statements.track_utility = TRUE;
+
+PREPARE pgss_p1 AS SELECT i FROM pgss_test WHERE i = $1;
+EXECUTE pgss_p1(1);
+
+-- EXPLAIN ANALZE should be recorded
+PREPARE pgss_p2 AS SELECT j FROM pgss_test WHERE j = $1;
+EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF) EXECUTE pgss_p2(1);
+
+-- Nested Portal
+PREPARE pgss_p3 AS SELECT k FROM pgss_test WHERE k = $1;
+
+BEGIN;
+DECLARE pgss_c1 CURSOR FOR SELECT name FROM pg_prepared_statements;
+
+FETCH IN pgss_c1;
+EXECUTE pgss_p3(1);
+FETCH IN pgss_c1;
+
+COMMIT;
+
+SELECT calls, generic_calls, query FROM pg_stat_statements;
+
+SET pg_stat_statements.track_utility = FALSE;
+DEALLOCATE ALL;
+DROP TABLE pgss_test;
+
+--
 -- pg_stat_statements.track = none
 --
 SET pg_stat_statements.track = 'none';

@@ -54,6 +54,7 @@ typedef struct XLogRecordBuffer
 static void DecodeXLogOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 static void DecodeHeapOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 static void DecodeHeap2Op(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeHeap3Op(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 static void DecodeXactOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 static void DecodeStandbyOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 static void DecodeLogicalMsgOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
@@ -144,6 +145,10 @@ LogicalDecodingProcessRecord(LogicalDecodingContext *ctx, XLogReaderState *recor
 
 		case RM_STANDBY_ID:
 			DecodeStandbyOp(ctx, &buf);
+			break;
+
+		case RM_HEAP3_ID:
+			DecodeHeap3Op(ctx, &buf);
 			break;
 
 		case RM_HEAP2_ID:
@@ -431,6 +436,37 @@ DecodeStandbyOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 			break;
 		default:
 			elog(ERROR, "unexpected RM_STANDBY_ID record type: %u", info);
+	}
+}
+
+/*
+ * Handle rmgr HEAP3_ID records for DecodeRecordIntoRorderBuffer().
+ */
+static void
+DecodeHeap3Op(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+{
+	uint8		 info = XLogRecGetInfo(buf->record) & XLOG_HEAP_OPMASK;
+	TransactionId xid = XLogRecGetXid(buf->record);
+	SnapBuild	*builder = ctx->snapshot_builder;
+
+	ReorderBufferProcessXid(ctx->reorder, xid, buf->origptr);
+
+	/*
+	 * If we don't have snapshot or we are just fast-forwarding, there is no
+	 * point in decoding data changes.
+	 */
+	if (SnapBuildCurrentState(builder) < SNAPBUILD_FULL_SNAPSHOT ||
+		ctx->fast_forward)
+		return;
+
+	switch (info)
+	{
+		case XLOG_HEAP3_PARTIAL_HOT_UPDATE:
+			if (SnapBuildProcessChange(builder, xid, buf->origptr))
+				DecodeUpdate(ctx, buf);
+			break;
+		default:
+			elog(ERROR, "unexpected RM_HEAP3_ID record type: %u", info);
 	}
 }
 

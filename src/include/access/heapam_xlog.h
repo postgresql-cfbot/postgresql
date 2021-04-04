@@ -60,6 +60,16 @@
 #define XLOG_HEAP2_NEW_CID		0x70
 
 /*
+ * We ran out of opcodes again, so heapam.c now has a third RmgrId.  These
+ * opcodes are associated with RM_HEAP3_ID, but are not logically different from
+ * the ones above associated with RM_HEAP_ID.  XLOG_HEAP_OPMASK applies to
+ * these, too.
+ *
+ * 0x10 through 0x70 are available for use.
+ */
+#define XLOG_HEAP3_PARTIAL_HOT_UPDATE	0x00
+
+/*
  * xl_heap_insert/xl_heap_multi_insert flag values, 8 bits are available.
  */
 /* PD_ALL_VISIBLE was cleared */
@@ -396,6 +406,9 @@ extern void heap2_redo(XLogReaderState *record);
 extern void heap2_desc(StringInfo buf, XLogReaderState *record);
 extern const char *heap2_identify(uint8 info);
 extern void heap_xlog_logical_rewrite(XLogReaderState *r);
+extern void heap3_redo(XLogReaderState *record);
+extern void heap3_desc(StringInfo buf, XLogReaderState *record);
+extern const char *heap3_identify(uint8 info);
 
 extern XLogRecPtr log_heap_cleanup_info(RelFileNode rnode,
 										TransactionId latestRemovedXid);

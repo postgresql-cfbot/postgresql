@@ -1695,16 +1695,21 @@ heap_fetch(Relation relation,
 bool
 heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 					   Snapshot snapshot, HeapTuple heapTuple,
-					   bool *all_dead, bool first_call)
+					   bool *all_dead, bool first_call,
+					   Relation indrel, Bitmapset *interesting_attrs)
 {
 	Page		dp = (Page) BufferGetPage(buffer);
 	TransactionId prev_xmax = InvalidTransactionId;
 	BlockNumber blkno;
 	OffsetNumber offnum;
+	OffsetNumber prev_offnum = InvalidOffsetNumber;
 	bool		at_chain_start;
 	bool		valid;
 	bool		skip;
 	GlobalVisState *vistest = NULL;
+	HeapTuple prev_tup = NULL;
+	Bitmapset *ind_attrs = NULL;
+	bool all_attrs = false;
 
 	/* If this is not the first call, previous call returned a (live!) tuple */
 	if (all_dead)
@@ -1718,6 +1723,21 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 	/* XXX: we should assert that a snapshot is pushed or registered */
 	Assert(TransactionIdIsValid(RecentXmin));
 	Assert(BufferGetBlockNumber(buffer) == blkno);
+
+	if (indrel)
+	{
+		Form_pg_index indexStruct = indrel->rd_index;
+
+		for (int i = 0; i < indexStruct->indnatts; i++)
+		{
+			int ind_attr = indexStruct->indkey.values[i] - FirstLowInvalidHeapAttributeNumber;
+			ind_attrs = bms_add_member(ind_attrs, ind_attr);
+		}
+	}
+	else if (interesting_attrs)
+		ind_attrs = interesting_attrs;
+	else
+		all_attrs = true;
 
 	/* Scan through possible multiple members of HOT-chain */
 	for (;;)
@@ -1755,6 +1775,24 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 		heapTuple->t_len = ItemIdGetLength(lp);
 		heapTuple->t_tableOid = RelationGetRelid(relation);
 		ItemPointerSet(&heapTuple->t_self, blkno, offnum);
+
+		/*
+		 * If this tuple was a PHOT update, make sure that we should keep
+		 * following it based on the index attributes and the modified ones.
+		 */
+		if (OffsetNumberIsValid(prev_offnum) &&
+			HeapTupleIsValid(prev_tup) && HeapTupleIsPartialHeapOnly(heapTuple))
+		{
+			Bitmapset *modified_attrs;
+
+			if (all_attrs)
+				break;
+
+			modified_attrs = HeapDetermineModifiedColumns(relation, bms_copy(ind_attrs),
+																	 prev_tup, heapTuple);
+			if (!bms_is_empty(modified_attrs))
+				break;
+		}
 
 		/*
 		 * Shouldn't see a HEAP_ONLY tuple at chain start.
@@ -1818,13 +1856,15 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 		 * Check to see if HOT chain continues past this tuple; if so fetch
 		 * the next offnum and loop around.
 		 */
-		if (HeapTupleIsHotUpdated(heapTuple))
+		if (HeapTupleIsHotUpdated(heapTuple) || HeapTupleIsPartialHotUpdated(heapTuple))
 		{
 			Assert(ItemPointerGetBlockNumber(&heapTuple->t_data->t_ctid) ==
 				   blkno);
+			prev_offnum = offnum;
 			offnum = ItemPointerGetOffsetNumber(&heapTuple->t_data->t_ctid);
 			at_chain_start = false;
 			prev_xmax = HeapTupleHeaderGetUpdateXid(heapTuple->t_data);
+			prev_tup = heap_copytuple(heapTuple);
 		}
 		else
 			break;				/* end of chain */
@@ -3199,7 +3239,8 @@ simple_heap_delete(Relation relation, ItemPointer tid)
 TM_Result
 heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 			CommandId cid, Snapshot crosscheck, bool wait,
-			TM_FailureData *tmfd, LockTupleMode *lockmode)
+			TM_FailureData *tmfd, LockTupleMode *lockmode,
+			Bitmapset **modified_attrs)
 {
 	TM_Result	result;
 	TransactionId xid = GetCurrentTransactionId();
@@ -3207,7 +3248,6 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	Bitmapset  *key_attrs;
 	Bitmapset  *id_attrs;
 	Bitmapset  *interesting_attrs;
-	Bitmapset  *modified_attrs;
 	ItemId		lp;
 	HeapTupleData oldtup;
 	HeapTuple	heaptup;
@@ -3226,6 +3266,7 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	bool		have_tuple_lock = false;
 	bool		iscombo;
 	bool		use_hot_update = false;
+	bool		use_phot_update = false;
 	bool		hot_attrs_checked = false;
 	bool		key_intact;
 	bool		all_visible_cleared = false;
@@ -3324,7 +3365,7 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	newtup->t_tableOid = RelationGetRelid(relation);
 
 	/* Determine columns modified by the update. */
-	modified_attrs = HeapDetermineModifiedColumns(relation, interesting_attrs,
+	*modified_attrs = HeapDetermineModifiedColumns(relation, interesting_attrs,
 												  &oldtup, newtup);
 
 	/*
@@ -3338,7 +3379,7 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	 * is updates that don't manipulate key columns, not those that
 	 * serendipitously arrive at the same key values.
 	 */
-	if (!bms_overlap(modified_attrs, key_attrs))
+	if (!bms_overlap(*modified_attrs, key_attrs))
 	{
 		*lockmode = LockTupleNoKeyExclusive;
 		mxact_status = MultiXactStatusNoKeyUpdate;
@@ -3594,7 +3635,6 @@ l2:
 		bms_free(hot_attrs);
 		bms_free(key_attrs);
 		bms_free(id_attrs);
-		bms_free(modified_attrs);
 		bms_free(interesting_attrs);
 		return result;
 	}
@@ -3902,8 +3942,25 @@ l2:
 		 * changed. If the page was already full, we may have skipped checking
 		 * for index columns, and also can't do a HOT update.
 		 */
-		if (hot_attrs_checked && !bms_overlap(modified_attrs, hot_attrs))
+		if (hot_attrs_checked && !bms_overlap(*modified_attrs, hot_attrs))
 			use_hot_update = true;
+
+		/*
+		 * PHOT only takes effect if HOT updating will not work AND if we are
+		 * not updating all of the indexed columns. Currently this can not be
+		 * done for catalog tables because the necessary changes haven't been
+		 * made to CatalogIndexInsert().
+		 */
+		if (hot_attrs_checked && !use_hot_update && !IsCatalogRelation(relation))
+		{
+			Bitmapset *updated_indexed_attrs = bms_intersect(*modified_attrs, hot_attrs);
+			bool updating_all_indexed_attrs = bms_equal(hot_attrs, updated_indexed_attrs);
+
+			if (!updating_all_indexed_attrs)
+				use_phot_update = true;
+
+			bms_free(updated_indexed_attrs);
+		}
 	}
 	else
 	{
@@ -3918,7 +3975,7 @@ l2:
 	 * logged.
 	 */
 	old_key_tuple = ExtractReplicaIdentity(relation, &oldtup,
-										   bms_overlap(modified_attrs, id_attrs),
+										   bms_overlap(*modified_attrs, id_attrs),
 										   &old_key_copied);
 
 	/* NO EREPORT(ERROR) from here till changes are logged */
@@ -3938,8 +3995,22 @@ l2:
 	 */
 	PageSetPrunable(page, xid);
 
+	/*
+	 * Clear all (P)HOT bits before we set them for the new tuple.  This must
+	 * happen before setting the (P)HOT bits, as some of the macros used for
+	 * setting these bits assert that others are not set.
+	 */
+	HeapTupleClearHotUpdated(&oldtup);
+	HeapTupleClearHeapOnly(heaptup);
+	HeapTupleClearHeapOnly(newtup);
+	HeapTupleClearPartialHotUpdated(&oldtup);
+	HeapTupleClearPartialHeapOnly(heaptup);
+	HeapTupleClearPartialHeapOnly(newtup);
+
 	if (use_hot_update)
 	{
+		Assert(!use_phot_update);
+
 		/* Mark the old tuple as HOT-updated */
 		HeapTupleSetHotUpdated(&oldtup);
 		/* And mark the new tuple as heap-only */
@@ -3947,12 +4018,17 @@ l2:
 		/* Mark the caller's copy too, in case different from heaptup */
 		HeapTupleSetHeapOnly(newtup);
 	}
-	else
+
+	if (use_phot_update)
 	{
-		/* Make sure tuples are correctly marked as not-HOT */
-		HeapTupleClearHotUpdated(&oldtup);
-		HeapTupleClearHeapOnly(heaptup);
-		HeapTupleClearHeapOnly(newtup);
+		Assert(!use_hot_update);
+
+		/* Mark the old tuple as PHOT-updated */
+		HeapTupleSetPartialHotUpdated(&oldtup);
+		/* And mark the new tuple as partial heap-only */
+		HeapTupleSetPartialHeapOnly(heaptup);
+		/* Mark the caller's copy too, in case different from heaptup */
+		HeapTupleSetPartialHeapOnly(newtup);
 	}
 
 	RelationPutHeapTuple(relation, newbuf, heaptup, false); /* insert new tuple */
@@ -4067,7 +4143,6 @@ l2:
 	bms_free(hot_attrs);
 	bms_free(key_attrs);
 	bms_free(id_attrs);
-	bms_free(modified_attrs);
 	bms_free(interesting_attrs);
 
 	return TM_Ok;
@@ -4193,11 +4268,14 @@ simple_heap_update(Relation relation, ItemPointer otid, HeapTuple tup)
 	TM_Result	result;
 	TM_FailureData tmfd;
 	LockTupleMode lockmode;
+	Bitmapset *modified_attrs; /* unused */
 
 	result = heap_update(relation, otid, tup,
 						 GetCurrentCommandId(true), InvalidSnapshot,
 						 true /* wait for commit */ ,
-						 &tmfd, &lockmode);
+						 &tmfd, &lockmode, &modified_attrs);
+	bms_free(modified_attrs);
+
 	switch (result)
 	{
 		case TM_SelfModified:
@@ -6592,6 +6670,7 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 		frz->t_infomask &= ~HEAP_XMAX_BITS;
 		frz->t_infomask |= HEAP_XMAX_INVALID;
 		frz->t_infomask2 &= ~HEAP_HOT_UPDATED;
+		frz->t_infomask2 &= ~HEAP_PHOT_UPDATED;
 		frz->t_infomask2 &= ~HEAP_KEYS_UPDATED;
 		changed = true;
 	}
@@ -7487,7 +7566,7 @@ heap_index_delete_tuples(Relation rel, TM_IndexDeleteOp *delstate)
 
 			/* Are any tuples from this HOT chain non-vacuumable? */
 			if (heap_hot_search_buffer(&tmp, rel, buf, &SnapshotNonVacuumable,
-									   &heapTuple, NULL, true))
+									   &heapTuple, NULL, true, NULL, NULL))
 				continue;		/* can't delete entry */
 
 			/* Caller will delete, since whole HOT chain is vacuumable */
@@ -8134,6 +8213,7 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	bool		need_tuple_data = RelationIsLogicallyLogged(reln);
 	bool		init;
 	int			bufflags;
+	bool		use_rm_heap3 = false;
 
 	/* Caller should not call me on a non-WAL-logged relation */
 	Assert(RelationNeedsWAL(reln));
@@ -8142,6 +8222,11 @@ log_heap_update(Relation reln, Buffer oldbuf,
 
 	if (HeapTupleIsHeapOnly(newtup))
 		info = XLOG_HEAP_HOT_UPDATE;
+	else if (HeapTupleIsPartialHeapOnly(newtup))
+	{
+		info = XLOG_HEAP3_PARTIAL_HOT_UPDATE;
+		use_rm_heap3 = true;
+	}
 	else
 		info = XLOG_HEAP_UPDATE;
 
@@ -8327,7 +8412,10 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	/* filtering by origin on a row level is much more efficient */
 	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
-	recptr = XLogInsert(RM_HEAP_ID, info);
+	if (use_rm_heap3)
+		recptr = XLogInsert(RM_HEAP3_ID, info);
+	else
+		recptr = XLogInsert(RM_HEAP_ID, info);
 
 	return recptr;
 }
@@ -9190,7 +9278,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
  * Handles UPDATE and HOT_UPDATE
  */
 static void
-heap_xlog_update(XLogReaderState *record, bool hot_update)
+heap_xlog_update(XLogReaderState *record, bool hot_update, bool phot_update)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
 	xl_heap_update *xlrec = (xl_heap_update *) XLogRecGetData(record);
@@ -9227,7 +9315,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	if (XLogRecGetBlockTag(record, 1, NULL, NULL, &oldblk))
 	{
 		/* HOT updates are never done across pages */
-		Assert(!hot_update);
+		Assert(!hot_update && !phot_update);
 	}
 	else
 		oldblk = newblk;
@@ -9281,6 +9369,8 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 		htup->t_infomask2 &= ~HEAP_KEYS_UPDATED;
 		if (hot_update)
 			HeapTupleHeaderSetHotUpdated(htup);
+		else if (phot_update)
+			HeapTupleHeaderSetPartialHotUpdated(htup);
 		else
 			HeapTupleHeaderClearHotUpdated(htup);
 		fix_infomask_from_infobits(xlrec->old_infobits_set, &htup->t_infomask,
@@ -9457,7 +9547,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	 * don't bother to update the FSM in that case, it doesn't need to be
 	 * totally accurate anyway.
 	 */
-	if (newaction == BLK_NEEDS_REDO && !hot_update && freespace < BLCKSZ / 5)
+	if (newaction == BLK_NEEDS_REDO && !(hot_update || phot_update) && freespace < BLCKSZ / 5)
 		XLogRecordPageWithFreeSpace(rnode, newblk, freespace);
 }
 
@@ -9688,7 +9778,7 @@ heap_redo(XLogReaderState *record)
 			heap_xlog_delete(record);
 			break;
 		case XLOG_HEAP_UPDATE:
-			heap_xlog_update(record, false);
+			heap_xlog_update(record, false, false);
 			break;
 		case XLOG_HEAP_TRUNCATE:
 
@@ -9699,7 +9789,7 @@ heap_redo(XLogReaderState *record)
 			 */
 			break;
 		case XLOG_HEAP_HOT_UPDATE:
-			heap_xlog_update(record, true);
+			heap_xlog_update(record, true, false);
 			break;
 		case XLOG_HEAP_CONFIRM:
 			heap_xlog_confirm(record);
@@ -9752,6 +9842,21 @@ heap2_redo(XLogReaderState *record)
 			break;
 		default:
 			elog(PANIC, "heap2_redo: unknown op code %u", info);
+	}
+}
+
+void
+heap3_redo(XLogReaderState *record)
+{
+	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+
+	switch (info & XLOG_HEAP_OPMASK)
+	{
+		case XLOG_HEAP3_PARTIAL_HOT_UPDATE:
+			heap_xlog_update(record, false, true);
+			break;
+		default:
+			elog(PANIC, "heap3_redo: unknown op code %u", info);
 	}
 }
 

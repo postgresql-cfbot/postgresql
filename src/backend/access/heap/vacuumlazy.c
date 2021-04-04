@@ -1408,6 +1408,8 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 					 */
 					if (HeapTupleIsHotUpdated(&tuple) ||
 						HeapTupleIsHeapOnly(&tuple) ||
+						HeapTupleIsPartialHotUpdated(&tuple) ||
+						HeapTupleIsPartialHeapOnly(&tuple) ||
 						params->index_cleanup == VACOPT_TERNARY_DISABLED)
 						nkeep += 1;
 					else

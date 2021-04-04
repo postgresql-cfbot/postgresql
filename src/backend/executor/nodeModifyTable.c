@@ -734,7 +734,9 @@ ExecInsert(ModifyTableState *mtstate,
 			recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 												   slot, estate, false, true,
 												   &specConflict,
-												   arbiterIndexes);
+												   arbiterIndexes,
+												   false,
+												   NULL);
 
 			/* adjust the tuple's state accordingly */
 			table_tuple_complete_speculative(resultRelationDesc, slot,
@@ -773,7 +775,7 @@ ExecInsert(ModifyTableState *mtstate,
 			if (resultRelInfo->ri_NumIndices > 0)
 				recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 													   slot, estate, false,
-													   false, NULL, NIL);
+													   false, NULL, NIL, false, NULL);
 		}
 	}
 
@@ -1485,7 +1487,9 @@ ExecUpdate(ModifyTableState *mtstate,
 	{
 		LockTupleMode lockmode;
 		bool		partition_constraint_failed;
-		bool		update_indexes;
+		bool		update_all_indexes;
+		bool		update_modified_indexes;
+		Bitmapset *modified_attrs;
 
 		/*
 		 * Constraints might reference the tableoid column, so (re-)initialize
@@ -1590,7 +1594,8 @@ lreplace:;
 									estate->es_snapshot,
 									estate->es_crosscheck_snapshot,
 									true /* wait for commit */ ,
-									&tmfd, &lockmode, &update_indexes);
+									&tmfd, &lockmode, &update_all_indexes,
+									&update_modified_indexes, &modified_attrs);
 
 		switch (result)
 		{
@@ -1729,10 +1734,11 @@ lreplace:;
 		}
 
 		/* insert index entries for tuple if necessary */
-		if (resultRelInfo->ri_NumIndices > 0 && update_indexes)
+		if (resultRelInfo->ri_NumIndices > 0 && (update_all_indexes || update_modified_indexes))
 			recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 												   slot, estate, true, false,
-												   NULL, NIL);
+												   NULL, NIL, update_modified_indexes, modified_attrs);
+		bms_free(modified_attrs);
 	}
 
 	if (canSetTag)

@@ -287,7 +287,9 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 					  bool update,
 					  bool noDupErr,
 					  bool *specConflict,
-					  List *arbiterIndexes)
+					  List *arbiterIndexes,
+					  bool update_modified_indexes,
+					  Bitmapset *modified_attrs)
 {
 	ItemPointer tupleid = &slot->tts_tid;
 	List	   *result = NIL;
@@ -342,6 +344,29 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 		/* If the index is marked as read-only, ignore it */
 		if (!indexInfo->ii_ReadyForInserts)
 			continue;
+
+		/*
+		 * If the indexed attributes were not modified and this is a partial-HOT
+		 * update, skip it.
+		 */
+		if (update_modified_indexes)
+		{
+			bool should_update = false;
+			int j;
+
+			for (j = 0; j < indexInfo->ii_NumIndexAttrs; j++)
+			{
+				if (bms_is_member(indexInfo->ii_IndexAttrNumbers[j] - FirstLowInvalidHeapAttributeNumber,
+							modified_attrs))
+				{
+					should_update = true;
+					break;
+				}
+			}
+
+			if (!should_update)
+				continue;
+		}
 
 		/* Check for partial index */
 		if (indexInfo->ii_Predicate != NIL)

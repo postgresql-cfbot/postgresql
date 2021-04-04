@@ -63,7 +63,7 @@ typedef struct
 /* Local functions */
 static int	heap_prune_chain(Buffer buffer,
 							 OffsetNumber rootoffnum,
-							 PruneState *prstate);
+							 PruneState *prstate, bool *phot);
 static void heap_prune_record_prunable(PruneState *prstate, TransactionId xid);
 static void heap_prune_record_redirect(PruneState *prstate,
 									   OffsetNumber offnum, OffsetNumber rdoffnum);
@@ -233,6 +233,7 @@ heap_page_prune(Relation relation, Buffer buffer,
 	OffsetNumber offnum,
 				maxoff;
 	PruneState	prstate;
+	bool phot = false;
 
 	/*
 	 * Our strategy is to scan the page and make lists of items to change,
@@ -280,12 +281,15 @@ heap_page_prune(Relation relation, Buffer buffer,
 			continue;
 
 		/* Process this item or chain of items */
-		ndeleted += heap_prune_chain(buffer, offnum, &prstate);
+		ndeleted += heap_prune_chain(buffer, offnum, &prstate, &phot);
 	}
 
 	/* Clear the offset information once we have processed the given page. */
 	if (off_loc)
 		*off_loc = InvalidOffsetNumber;
+
+	if (phot)
+		return ndeleted;
 
 	/* Any error while applying the changes is critical */
 	START_CRIT_SECTION();
@@ -490,7 +494,7 @@ heap_prune_satisfies_vacuum(PruneState *prstate, HeapTuple tup, Buffer buffer)
  * Returns the number of tuples (to be) deleted from the page.
  */
 static int
-heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
+heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate, bool *phot)
 {
 	int			ndeleted = 0;
 	Page		dp = (Page) BufferGetPage(buffer);
@@ -541,7 +545,8 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 			 * gets there first will mark the tuple unused.
 			 */
 			if (heap_prune_satisfies_vacuum(prstate, &tup, buffer)
-				== HEAPTUPLE_DEAD && !HeapTupleHeaderIsHotUpdated(htup))
+				== HEAPTUPLE_DEAD && !HeapTupleHeaderIsHotUpdated(htup) &&
+				!HeapTupleHeaderIsPartialHotUpdated(htup))
 			{
 				heap_prune_record_unused(prstate, rootoffnum);
 				HeapTupleHeaderAdvanceLatestRemovedXid(htup,
@@ -606,6 +611,12 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 		tup.t_data = htup;
 		tup.t_len = ItemIdGetLength(lp);
 		ItemPointerSet(&(tup.t_self), BufferGetBlockNumber(buffer), offnum);
+
+		if (HeapTupleHeaderIsPartialHeapOnly(htup) || HeapTupleHeaderIsPartialHotUpdated(htup))
+		{
+			*phot = true;
+			break;
+		}
 
 		/*
 		 * Check the tuple XMIN against prior XMAX, if any

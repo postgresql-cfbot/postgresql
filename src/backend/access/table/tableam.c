@@ -219,7 +219,8 @@ bool
 table_index_fetch_tuple_check(Relation rel,
 							  ItemPointer tid,
 							  Snapshot snapshot,
-							  bool *all_dead)
+							  bool *all_dead,
+							  Relation indrel)
 {
 	IndexFetchTableData *scan;
 	TupleTableSlot *slot;
@@ -229,7 +230,7 @@ table_index_fetch_tuple_check(Relation rel,
 	slot = table_slot_create(rel, NULL);
 	scan = table_index_fetch_begin(rel);
 	found = table_index_fetch_tuple(scan, tid, snapshot, slot, &call_again,
-									all_dead);
+									all_dead, indrel);
 	table_index_fetch_end(scan);
 	ExecDropSingleTupleTableSlot(slot);
 
@@ -346,7 +347,9 @@ void
 simple_table_tuple_update(Relation rel, ItemPointer otid,
 						  TupleTableSlot *slot,
 						  Snapshot snapshot,
-						  bool *update_indexes)
+						  bool *update_all_indexes,
+						  bool *update_modified_indexes,
+						  Bitmapset **modified_attrs)
 {
 	TM_Result	result;
 	TM_FailureData tmfd;
@@ -356,7 +359,8 @@ simple_table_tuple_update(Relation rel, ItemPointer otid,
 								GetCurrentCommandId(true),
 								snapshot, InvalidSnapshot,
 								true /* wait for commit */ ,
-								&tmfd, &lockmode, update_indexes);
+								&tmfd, &lockmode, update_all_indexes,
+								update_modified_indexes, modified_attrs);
 
 	switch (result)
 	{

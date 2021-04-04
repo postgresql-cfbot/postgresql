@@ -106,18 +106,21 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	 * it's possible the index entry has also been marked dead, and even
 	 * removed.
 	 */
+	indexRel = index_open(trigdata->tg_trigger->tgconstrindid,
+						  RowExclusiveLock);
 	tmptid = checktid;
 	{
 		IndexFetchTableData *scan = table_index_fetch_begin(trigdata->tg_relation);
 		bool		call_again = false;
 
 		if (!table_index_fetch_tuple(scan, &tmptid, SnapshotSelf, slot,
-									 &call_again, NULL))
+									 &call_again, NULL, indexRel))
 		{
 			/*
 			 * All rows referenced by the index entry are dead, so skip the
 			 * check.
 			 */
+			index_close(indexRel, RowExclusiveLock);
 			ExecDropSingleTupleTableSlot(slot);
 			table_index_fetch_end(scan);
 			return PointerGetDatum(NULL);
@@ -130,8 +133,6 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	 * to update it.  (This protects against possible changes of the index
 	 * schema, not against concurrent updates.)
 	 */
-	indexRel = index_open(trigdata->tg_trigger->tgconstrindid,
-						  RowExclusiveLock);
 	indexInfo = BuildIndexInfo(indexRel);
 
 	/*

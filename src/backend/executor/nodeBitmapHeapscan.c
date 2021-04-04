@@ -37,6 +37,7 @@
 
 #include <math.h>
 
+#include "access/genam.h"
 #include "access/relscan.h"
 #include "access/tableam.h"
 #include "access/transam.h"
@@ -79,7 +80,30 @@ BitmapHeapNext(BitmapHeapScanState *node)
 	TBMIterateResult *tbmres;
 	TupleTableSlot *slot;
 	ParallelBitmapHeapState *pstate = node->pstate;
+	Bitmapset *interesting_attrs = NULL;
 	dsa_area   *dsa = node->ss.ps.state->es_query_dsa;
+
+	/* hack for PHOT */
+	if (outerPlanState(&node->ss.ps))
+	{
+		PlanState *ps = outerPlanState(&node->ss.ps);
+		Plan *plan = ps->plan;
+
+		if (nodeTag(plan) == T_BitmapIndexScan)
+		{
+			BitmapIndexScan *scan = (BitmapIndexScan *) plan;
+			Oid indexid = scan->indexid;
+			Relation indrel = index_open(indexid, AccessShareLock);
+
+			for (int i = 0; i < indrel->rd_index->indnatts; i++)
+			{
+				int ind_attr = indrel->rd_index->indkey.values[i] - FirstLowInvalidHeapAttributeNumber;
+				interesting_attrs = bms_add_member(interesting_attrs, ind_attr);
+			}
+
+			index_close(indrel, AccessShareLock);
+		}
+	}
 
 	/*
 	 * extract necessary information from index scan node
@@ -232,7 +256,7 @@ BitmapHeapNext(BitmapHeapScanState *node)
 				 */
 				node->return_empty_tuples = tbmres->ntuples;
 			}
-			else if (!table_scan_bitmap_next_block(scan, tbmres))
+			else if (!table_scan_bitmap_next_block(scan, tbmres, interesting_attrs))
 			{
 				/* AM doesn't think this block is valid, skip */
 				continue;

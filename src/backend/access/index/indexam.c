@@ -579,7 +579,8 @@ index_fetch_heap(IndexScanDesc scan, TupleTableSlot *slot)
 
 	found = table_index_fetch_tuple(scan->xs_heapfetch, &scan->xs_heaptid,
 									scan->xs_snapshot, slot,
-									&scan->xs_heap_continue, &all_dead);
+									&scan->xs_heap_continue, &all_dead,
+									scan->indexRelation);
 
 	if (found)
 		pgstat_count_heap_fetch(scan->indexRelation);

@@ -51,6 +51,7 @@ typedef enum CopyDest
 {
 	COPY_FILE,					/* to file (or a piped program) */
 	COPY_FRONTEND,				/* to frontend */
+	COPY_CALLBACK				/* to callback function */
 } CopyDest;
 
 /*
@@ -86,6 +87,7 @@ typedef struct CopyToStateData
 	char	   *filename;		/* filename, or NULL for STDOUT */
 	bool		is_program;		/* is 'filename' a program to popen? */
 
+	copy_data_dest_cb data_dest_cb;	/* function for writing data */
 	CopyFormatOptions opts;
 	Node	   *whereClause;	/* WHERE condition (or NULL) */
 
@@ -115,7 +117,6 @@ static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
 /* non-export function prototypes */
 static void EndCopy(CopyToState cstate);
 static void ClosePipeToProgram(CopyToState cstate);
-static void CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot);
 static void CopyAttributeOutText(CopyToState cstate, char *string);
 static void CopyAttributeOutCSV(CopyToState cstate, char *string,
 								bool use_quote, bool single_attr);
@@ -248,6 +249,15 @@ CopySendEndOfRow(CopyToState cstate)
 			/* Dump the accumulated row as one CopyData message */
 			(void) pq_putmessage('d', fe_msgbuf->data, fe_msgbuf->len);
 			break;
+		case COPY_CALLBACK:
+			Assert(!cstate->opts.binary);
+#ifndef WIN32
+			CopySendChar(cstate, '\n');
+#else
+			CopySendString(cstate, "\r\n");
+#endif
+			cstate->data_dest_cb(fe_msgbuf->data, fe_msgbuf->len);
+			break;
 	}
 
 	/* Update the progress */
@@ -345,11 +355,12 @@ BeginCopyTo(ParseState *pstate,
 			Oid queryRelId,
 			const char *filename,
 			bool is_program,
+			copy_data_dest_cb data_dest_cb,
 			List *attnamelist,
 			List *options)
 {
 	CopyToState	cstate;
-	bool		pipe = (filename == NULL);
+	bool		pipe = (filename == NULL) && (data_dest_cb == NULL);
 	TupleDesc	tupDesc;
 	int			num_phys_attrs;
 	MemoryContext oldcontext;
@@ -362,7 +373,13 @@ BeginCopyTo(ParseState *pstate,
 		0
 	};
 
-	if (rel != NULL && rel->rd_rel->relkind != RELKIND_RELATION)
+	/*
+	 * Check whether we support copying data out of the specified relation,
+	 * unless the caller also passed a non-NULL data_dest_cb, in which case,
+	 * the callback will take care of it
+	 */
+	if (rel != NULL && rel->rd_rel->relkind != RELKIND_RELATION &&
+		data_dest_cb == NULL)
 	{
 		if (rel->rd_rel->relkind == RELKIND_VIEW)
 			ereport(ERROR,
@@ -673,6 +690,11 @@ BeginCopyTo(ParseState *pstate,
 		if (whereToSendOutput != DestRemote)
 			cstate->copy_file = stdout;
 	}
+	else if (data_dest_cb)
+	{
+		cstate->copy_dest = COPY_CALLBACK;
+		cstate->data_dest_cb = data_dest_cb;
+	}
 	else
 	{
 		cstate->filename = pstrdup(filename);
@@ -773,20 +795,17 @@ EndCopyTo(CopyToState cstate)
 }
 
 /*
- * Copy from relation or query TO file.
+ * Start COPY TO operation.
+ * Separate from the main routine to prevent duplicate operations in
+ * manual mode, where tuples are copied to the destination one by one, by calling
+ * the CopyOneRowTo() routine.
  */
-uint64
-DoCopyTo(CopyToState cstate)
+void
+CopyToStart(CopyToState cstate)
 {
-	bool		pipe = (cstate->filename == NULL);
-	bool		fe_copy = (pipe && whereToSendOutput == DestRemote);
 	TupleDesc	tupDesc;
 	int			num_phys_attrs;
 	ListCell   *cur;
-	uint64		processed;
-
-	if (fe_copy)
-		SendCopyBegin(cstate);
 
 	if (cstate->rel)
 		tupDesc = RelationGetDescr(cstate->rel);
@@ -876,6 +895,39 @@ DoCopyTo(CopyToState cstate)
 			CopySendEndOfRow(cstate);
 		}
 	}
+}
+
+/*
+ * Finish COPY TO operation.
+ */
+void
+CopyToFinish(CopyToState cstate)
+{
+	if (cstate->opts.binary)
+	{
+		/* Generate trailer for a binary copy */
+		CopySendInt16(cstate, -1);
+		/* Need to flush out the trailer */
+		CopySendEndOfRow(cstate);
+	}
+
+	MemoryContextDelete(cstate->rowcontext);
+}
+
+/*
+ * Copy from relation or query TO file.
+ */
+uint64
+DoCopyTo(CopyToState cstate)
+{
+	bool		pipe = (cstate->filename == NULL) && (cstate->data_dest_cb == NULL);
+	bool		fe_copy = (pipe && whereToSendOutput == DestRemote);
+	uint64		processed;
+
+	if (fe_copy)
+		SendCopyBegin(cstate);
+
+	CopyToStart(cstate);
 
 	if (cstate->rel)
 	{
@@ -914,15 +966,7 @@ DoCopyTo(CopyToState cstate)
 		processed = ((DR_copy *) cstate->queryDesc->dest)->processed;
 	}
 
-	if (cstate->opts.binary)
-	{
-		/* Generate trailer for a binary copy */
-		CopySendInt16(cstate, -1);
-		/* Need to flush out the trailer */
-		CopySendEndOfRow(cstate);
-	}
-
-	MemoryContextDelete(cstate->rowcontext);
+	CopyToFinish(cstate);
 
 	if (fe_copy)
 		SendCopyEnd(cstate);
@@ -933,7 +977,7 @@ DoCopyTo(CopyToState cstate)
 /*
  * Emit one row during DoCopyTo().
  */
-static void
+void
 CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 {
 	bool		need_delim = false;

@@ -127,6 +127,16 @@ typedef TupleTableSlot *(*IterateDirectModify_function) (ForeignScanState *node)
 
 typedef void (*EndDirectModify_function) (ForeignScanState *node);
 
+typedef void (*BeginForeignCopy_function) (EState *estate,
+										   ResultRelInfo *rinfo);
+
+typedef void (*ExecForeignCopy_function) (ResultRelInfo *rinfo,
+										  TupleTableSlot **slots,
+										  int nslots);
+
+typedef void (*EndForeignCopy_function) (EState *estate,
+										 ResultRelInfo *rinfo);
+
 typedef RowMarkType (*GetForeignRowMarkType_function) (RangeTblEntry *rte,
 													   LockClauseStrength strength);
 
@@ -238,6 +248,11 @@ typedef struct FdwRoutine
 	BeginDirectModify_function BeginDirectModify;
 	IterateDirectModify_function IterateDirectModify;
 	EndDirectModify_function EndDirectModify;
+
+	/* Support functions for COPY into foreign tables */
+	BeginForeignCopy_function BeginForeignCopy;
+	ExecForeignCopy_function ExecForeignCopy;
+	EndForeignCopy_function EndForeignCopy;
 
 	/* Functions for SELECT FOR UPDATE/SHARE row locking */
 	GetForeignRowMarkType_function GetForeignRowMarkType;

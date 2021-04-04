@@ -40,16 +40,6 @@ typedef enum EolType
 } EolType;
 
 /*
- * Represents the heap insert method to be used during COPY FROM.
- */
-typedef enum CopyInsertMethod
-{
-	CIM_SINGLE,					/* use table_tuple_insert or fdw routine */
-	CIM_MULTI,					/* always use table_multi_insert */
-	CIM_MULTI_CONDITIONAL		/* use table_multi_insert only if valid */
-} CopyInsertMethod;
-
-/*
  * This struct contains all the state variables used throughout a COPY FROM
  * operation.
  */

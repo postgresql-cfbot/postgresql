@@ -178,6 +178,7 @@ extern void deparseInsertSql(StringInfo buf, RangeTblEntry *rte,
 extern void rebuildInsertSql(StringInfo buf, char *orig_query,
 							 int values_end_len, int num_cols,
 							 int num_rows);
+extern void deparseCopyFromSql(StringInfo buf, Relation rel);
 extern void deparseUpdateSql(StringInfo buf, RangeTblEntry *rte,
 							 Index rtindex, Relation rel,
 							 List *targetAttrs,

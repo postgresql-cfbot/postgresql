@@ -184,6 +184,8 @@ static void appendAggOrderBy(List *orderList, List *targetList,
 static void appendFunctionName(Oid funcid, deparse_expr_cxt *context);
 static Node *deparseSortGroupClause(Index ref, List *tlist, bool force_colno,
 									deparse_expr_cxt *context);
+static List *deparseRelColumnList(StringInfo buf, Relation rel,
+								  bool enclose_in_parens);
 
 /*
  * Helper functions
@@ -1859,6 +1861,23 @@ deparseUpdateSql(StringInfo buf, RangeTblEntry *rte,
 }
 
 /*
+ * Deparse remote COPY FROM statement
+ *
+ * Note that this explicitly specifies the list of COPY's target columns
+ * to account for the fact that the remote table's columns may not match
+ * exactly with the columns declared in the local definition.
+ */
+void
+deparseCopyFromSql(StringInfo buf, Relation rel)
+{
+	appendStringInfoString(buf, "COPY ");
+	deparseRelation(buf, rel);
+	(void) deparseRelColumnList(buf, rel, true);
+
+	appendStringInfoString(buf, " FROM STDIN ");
+}
+
+/*
  * deparse remote UPDATE statement
  *
  * 'buf' is the output buffer to append the statement to
@@ -2120,6 +2139,30 @@ deparseAnalyzeSizeSql(StringInfo buf, Relation rel)
 void
 deparseAnalyzeSql(StringInfo buf, Relation rel, List **retrieved_attrs)
 {
+	appendStringInfoString(buf, "SELECT ");
+	*retrieved_attrs = deparseRelColumnList(buf, rel, false);
+
+	/* Don't generate bad syntax for zero-column relation. */
+	if (list_length(*retrieved_attrs) == 0)
+		appendStringInfoString(buf, "NULL");
+
+	/*
+	 * Construct FROM clause
+	 */
+	appendStringInfoString(buf, " FROM ");
+	deparseRelation(buf, rel);
+}
+
+/*
+ * Construct the list of columns of given foreign relation in the order they
+ * appear in the tuple descriptor of the relation. Ignore any dropped columns.
+ * Use column names on the foreign server instead of local names.
+ *
+ * Optionally enclose the list in parantheses.
+ */
+static List *
+deparseRelColumnList(StringInfo buf, Relation rel, bool enclose_in_parens)
+{
 	Oid			relid = RelationGetRelid(rel);
 	TupleDesc	tupdesc = RelationGetDescr(rel);
 	int			i;
@@ -2127,10 +2170,8 @@ deparseAnalyzeSql(StringInfo buf, Relation rel, List **retrieved_attrs)
 	List	   *options;
 	ListCell   *lc;
 	bool		first = true;
+	List	   *retrieved_attrs = NIL;
 
-	*retrieved_attrs = NIL;
-
-	appendStringInfoString(buf, "SELECT ");
 	for (i = 0; i < tupdesc->natts; i++)
 	{
 		/* Ignore dropped columns. */
@@ -2139,6 +2180,9 @@ deparseAnalyzeSql(StringInfo buf, Relation rel, List **retrieved_attrs)
 
 		if (!first)
 			appendStringInfoString(buf, ", ");
+		else if (enclose_in_parens)
+			appendStringInfoChar(buf, '(');
+
 		first = false;
 
 		/* Use attribute name or column_name option. */
@@ -2158,18 +2202,13 @@ deparseAnalyzeSql(StringInfo buf, Relation rel, List **retrieved_attrs)
 
 		appendStringInfoString(buf, quote_identifier(colname));
 
-		*retrieved_attrs = lappend_int(*retrieved_attrs, i + 1);
+		retrieved_attrs = lappend_int(retrieved_attrs, i + 1);
 	}
 
-	/* Don't generate bad syntax for zero-column relation. */
-	if (first)
-		appendStringInfoString(buf, "NULL");
+	if (enclose_in_parens && list_length(retrieved_attrs) > 0)
+		appendStringInfoChar(buf, ')');
 
-	/*
-	 * Construct FROM clause
-	 */
-	appendStringInfoString(buf, " FROM ");
-	deparseRelation(buf, rel);
+	return retrieved_attrs;
 }
 
 /*

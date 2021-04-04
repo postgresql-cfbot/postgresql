@@ -18,6 +18,7 @@
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "catalog/pg_class.h"
+#include "commands/copy.h"
 #include "commands/defrem.h"
 #include "commands/explain.h"
 #include "commands/vacuum.h"
@@ -209,6 +210,7 @@ typedef struct PgFdwModifyState
 	/* for update row movement if subplan result rel */
 	struct PgFdwModifyState *aux_fmstate;	/* foreign-insert state, if
 											 * created */
+	CopyToState cstate; /* foreign COPY state, if used */
 } PgFdwModifyState;
 
 /*
@@ -383,6 +385,13 @@ static void postgresBeginForeignInsert(ModifyTableState *mtstate,
 									   ResultRelInfo *resultRelInfo);
 static void postgresEndForeignInsert(EState *estate,
 									 ResultRelInfo *resultRelInfo);
+static void postgresBeginForeignCopy(EState *estate,
+									   ResultRelInfo *resultRelInfo);
+static void postgresEndForeignCopy(EState *estate,
+									 ResultRelInfo *resultRelInfo);
+static void postgresExecForeignCopy(ResultRelInfo *resultRelInfo,
+									  TupleTableSlot **slots,
+									  int nslots);
 static int	postgresIsForeignRelUpdatable(Relation rel);
 static bool postgresPlanDirectModify(PlannerInfo *root,
 									 ModifyTable *plan,
@@ -575,6 +584,9 @@ postgres_fdw_handler(PG_FUNCTION_ARGS)
 	routine->EndForeignModify = postgresEndForeignModify;
 	routine->BeginForeignInsert = postgresBeginForeignInsert;
 	routine->EndForeignInsert = postgresEndForeignInsert;
+	routine->BeginForeignCopy = postgresBeginForeignCopy;
+	routine->ExecForeignCopy = postgresExecForeignCopy;
+	routine->EndForeignCopy = postgresEndForeignCopy;
 	routine->IsForeignRelUpdatable = postgresIsForeignRelUpdatable;
 	routine->PlanDirectModify = postgresPlanDirectModify;
 	routine->BeginDirectModify = postgresBeginDirectModify;
@@ -2199,6 +2211,135 @@ postgresEndForeignInsert(EState *estate,
 		fmstate = fmstate->aux_fmstate;
 
 	/* Destroy the execution state */
+	finish_foreign_modify(fmstate);
+}
+
+static PgFdwModifyState *copy_fmstate = NULL;
+
+static void
+pgfdw_copy_dest_cb(void *buf, int len)
+{
+	PGconn *conn = copy_fmstate->conn;
+
+	if (PQputCopyData(conn, (char *) buf, len) <= 0)
+		pgfdw_report_error(ERROR, NULL, conn, false, copy_fmstate->query);
+}
+
+/*
+ * postgresBeginForeignCopy
+ *		Begin a COPY operation on a foreign table
+ */
+static void
+postgresBeginForeignCopy(EState *estate,
+						   ResultRelInfo *resultRelInfo)
+{
+	PgFdwModifyState *fmstate;
+	StringInfoData sql;
+	RangeTblEntry *rte;
+	Relation rel = resultRelInfo->ri_RelationDesc;
+
+	if (resultRelInfo->ri_RangeTableIndex == 0)
+	{
+		ResultRelInfo *rootResultRelInfo = resultRelInfo->ri_RootResultRelInfo;
+
+		Assert(rootResultRelInfo != NULL);
+		rte = exec_rt_fetch(rootResultRelInfo->ri_RangeTableIndex, estate);
+		rte = copyObject(rte);
+		rte->relid = RelationGetRelid(rel);
+		rte->relkind = RELKIND_FOREIGN_TABLE;
+	}
+	else
+		rte = exec_rt_fetch(resultRelInfo->ri_RangeTableIndex, estate);
+
+	initStringInfo(&sql);
+	deparseCopyFromSql(&sql, rel);
+
+	fmstate = create_foreign_modify(estate,
+									rte,
+									resultRelInfo,
+									CMD_INSERT,
+									NULL,
+									sql.data,
+									NIL,
+									-1,
+									false,
+									NIL);
+
+	fmstate->cstate = BeginCopyTo(NULL, rel, NULL,
+								  InvalidOid, NULL, false, pgfdw_copy_dest_cb,
+								  NIL, NIL);
+	CopyToStart(fmstate->cstate);
+	resultRelInfo->ri_FdwState = fmstate;
+}
+
+/*
+ * postgresExecForeignCopy
+ *		Send a number of tuples to the foreign relation.
+ */
+static void
+postgresExecForeignCopy(ResultRelInfo *resultRelInfo,
+						  TupleTableSlot **slots, int nslots)
+{
+	PgFdwModifyState *fmstate = resultRelInfo->ri_FdwState;
+	PGresult *res;
+	PGconn *conn = fmstate->conn;
+	bool OK = false;
+	int i;
+
+	/* Check correct use of CopyIn FDW API. */
+	Assert(fmstate->cstate != NULL);
+
+	res = PQexec(conn, fmstate->query);
+	if (PQresultStatus(res) != PGRES_COPY_IN)
+		pgfdw_report_error(ERROR, res, conn, true, fmstate->query);
+	PQclear(res);
+
+	PG_TRY();
+	{
+		copy_fmstate = fmstate;
+		for (i = 0; i < nslots; i++)
+			CopyOneRowTo(fmstate->cstate, slots[i]);
+
+		OK = true;
+	}
+	PG_FINALLY();
+	{
+		/*
+		 * Finish COPY IN protocol. It is needed to do after successful copy or
+		 * after an error.
+		 */
+		if (PQputCopyEnd(conn, OK ? NULL : "canceled by server") <= 0)
+			pgfdw_report_error(ERROR, NULL, fmstate->conn, false, fmstate->query);
+
+		/* After successfully  sending an EOF signal, check command OK. */
+		res = PQgetResult(conn);
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+			pgfdw_report_error(ERROR, res, fmstate->conn, true, fmstate->query);
+
+		PQclear(res);
+		/* Do this to ensure we have not gotten extra results */
+		if (PQgetResult(conn) != NULL)
+			ereport(ERROR,
+					(errmsg("unexpected extra results during COPY of table: %s",
+							PQerrorMessage(conn))));
+	}
+	PG_END_TRY();
+}
+
+/*
+ * postgresEndForeignCopy
+ *		Finish a COPY operation on a foreign table
+ */
+static void
+postgresEndForeignCopy(EState *estate, ResultRelInfo *resultRelInfo)
+{
+	PgFdwModifyState *fmstate = (PgFdwModifyState *) resultRelInfo->ri_FdwState;
+
+	/* Check correct use of CopyIn FDW API. */
+	Assert(fmstate->cstate != NULL);
+	CopyToFinish(fmstate->cstate);
+	pfree(fmstate->cstate);
+	fmstate->cstate = NULL;
 	finish_foreign_modify(fmstate);
 }
 

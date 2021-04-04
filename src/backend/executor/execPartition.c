@@ -590,6 +590,14 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 					  estate->es_instrument);
 
 	/*
+	 * If a partition's root parent isn't allowed to use it, neither is the
+	 * partition.
+	 */
+	if (rootResultRelInfo->ri_usesMultiInsert)
+		leaf_part_rri->ri_usesMultiInsert =
+			ExecMultiInsertAllowed(leaf_part_rri);
+
+	/*
 	 * Verify result relation is a valid target for an INSERT.  An UPDATE of a
 	 * partition-key becomes a DELETE+INSERT operation, so this check is still
 	 * required when the operation is CMD_UPDATE.
@@ -990,9 +998,16 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 	 * If the partition is a foreign table, let the FDW init itself for
 	 * routing tuples to the partition.
 	 */
-	if (partRelInfo->ri_FdwRoutine != NULL &&
-		partRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
-		partRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate, partRelInfo);
+	if (partRelInfo->ri_FdwRoutine != NULL)
+	{
+		if (partRelInfo->ri_usesMultiInsert)
+		{
+			if (partRelInfo->ri_FdwRoutine->BeginForeignCopy != NULL)
+				partRelInfo->ri_FdwRoutine->BeginForeignCopy(estate, partRelInfo);
+		}
+		else if (partRelInfo->ri_FdwRoutine->BeginForeignInsert != NULL)
+			partRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate, partRelInfo);
+	}
 
 	/*
 	 * Determine if the FDW supports batch insert and determine the batch
@@ -1224,10 +1239,18 @@ ExecCleanupTupleRouting(ModifyTableState *mtstate,
 		ResultRelInfo *resultRelInfo = proute->partitions[i];
 
 		/* Allow any FDWs to shut down */
-		if (resultRelInfo->ri_FdwRoutine != NULL &&
-			resultRelInfo->ri_FdwRoutine->EndForeignInsert != NULL)
-			resultRelInfo->ri_FdwRoutine->EndForeignInsert(mtstate->ps.state,
-														   resultRelInfo);
+		if (resultRelInfo->ri_FdwRoutine != NULL)
+		{
+			if (resultRelInfo->ri_usesMultiInsert)
+			{
+				if (resultRelInfo->ri_FdwRoutine->EndForeignCopy != NULL)
+					resultRelInfo->ri_FdwRoutine->EndForeignCopy(mtstate->ps.state,
+																 resultRelInfo);
+			}
+			else if (resultRelInfo->ri_FdwRoutine->EndForeignInsert != NULL)
+				resultRelInfo->ri_FdwRoutine->EndForeignInsert(mtstate->ps.state,
+															   resultRelInfo);
+		}
 
 		/*
 		 * Check if this result rel is one belonging to the node's subplans,

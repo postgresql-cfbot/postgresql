@@ -304,7 +304,7 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 		CopyToState cstate;
 
 		cstate = BeginCopyTo(pstate, rel, query, relid,
-							 stmt->filename, stmt->is_program,
+							 stmt->filename, stmt->is_program, NULL,
 							 stmt->attlist, stmt->options);
 		*processed = DoCopyTo(cstate);	/* copy from database to file */
 		EndCopyTo(cstate);

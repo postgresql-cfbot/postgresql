@@ -331,6 +331,12 @@
 /* Define to 1 if you have the `m' library (-lm). */
 #undef HAVE_LIBM
 
+/* Define to 1 if you have the `nspr4' library (-lnspr4). */
+#undef HAVE_LIBNSPR4
+
+/* Define to 1 if you have the `nss3' library (-lnss3). */
+#undef HAVE_LIBNSS3
+
 /* Define to 1 if you have the `pam' library (-lpam). */
 #undef HAVE_LIBPAM
 
@@ -342,6 +348,9 @@
 
 /* Define to 1 if you have the `ssl' library (-lssl). */
 #undef HAVE_LIBSSL
+
+/* Define to 1 if you have the `ssl3' library (-lssl3). */
+#undef HAVE_LIBSSL3
 
 /* Define to 1 if you have the `wldap32' library (-lwldap32). */
 #undef HAVE_LIBWLDAP32
@@ -919,6 +928,9 @@
 
 /* Define to select named POSIX semaphores. */
 #undef USE_NAMED_POSIX_SEMAPHORES
+
+/* Define to 1 if you have NSS support, */
+#undef USE_NSS
 
 /* Define to 1 to build with OpenSSL support. (--with-ssl=openssl) */
 #undef USE_OPENSSL

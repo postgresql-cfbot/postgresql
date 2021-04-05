@@ -302,10 +302,13 @@ sub GenerateFiles
 		HAVE_LIBLDAP_R                              => undef,
 		HAVE_LIBLZ4                                 => undef,
 		HAVE_LIBM                                   => undef,
+		HAVE_LIBNSPR4								=> undef,
+		HAVE_LIBNSS3								=> undef,
 		HAVE_LIBPAM                                 => undef,
 		HAVE_LIBREADLINE                            => undef,
 		HAVE_LIBSELINUX                             => undef,
 		HAVE_LIBSSL                                 => undef,
+		HAVE_LIBSSL3								=> undef,
 		HAVE_LIBWLDAP32                             => undef,
 		HAVE_LIBXML2                                => undef,
 		HAVE_LIBXSLT                                => undef,
@@ -495,6 +498,7 @@ sub GenerateFiles
 		USE_LLVM                   => undef,
 		USE_NAMED_POSIX_SEMAPHORES => undef,
 		USE_OPENSSL                => undef,
+		USE_NSS                    => undef,
 		USE_PAM                    => undef,
 		USE_SLICING_BY_8_CRC32C    => undef,
 		USE_SSE42_CRC32C           => undef,
@@ -548,6 +552,13 @@ sub GenerateFiles
 			$define{HAVE_HMAC_CTX_NEW}          = 1;
 			$define{HAVE_OPENSSL_INIT_SSL}      = 1;
 		}
+	}
+	if ($self->{options}->{nss})
+	{
+		$define{USE_NSS} = 1;
+		$define{HAVE_LIBNSPR4} = 1;
+		$define{HAVE_LIBNSS3} = 1;
+		$define{HAVE_LIBSSL3} = 1;
 	}
 
 	$self->GenerateConfigHeader('src/include/pg_config.h',     \%define, 1);
@@ -1005,6 +1016,21 @@ sub AddProject
 				$proj->AddLibrary(
 					$self->{options}->{openssl} . '\lib\libeay32.lib', 0);
 			}
+		}
+	}
+	if ($self->{options}->{nss})
+	{
+		$proj->AddIncludeDir($self->{options}->{nss} . '\..\public\nss');
+		$proj->AddIncludeDir($self->{options}->{nss} . '\include\nspr');
+		foreach my $lib (qw(plds4 plc4 nspr4))
+		{
+			$proj->AddLibrary($self->{options}->{nss} .
+							  '\lib\lib' . "$lib.lib", 0);
+		}
+		foreach my $lib (qw(ssl3 smime3 nss3))
+		{
+			$proj->AddLibrary($self->{options}->{nss} .
+							  '\lib' . "\\$lib.dll.lib", 0);
 		}
 	}
 	if ($self->{options}->{nls})

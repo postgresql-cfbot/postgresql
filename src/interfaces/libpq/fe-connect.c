@@ -341,6 +341,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 15, /* sizeof("prefer-standby") = 15 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+	{"ssldatabase", NULL, NULL, NULL,
+		"CertificateDatabase", "", 64,
+	offsetof(struct pg_conn, ssldatabase)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}

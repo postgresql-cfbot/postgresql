@@ -9,9 +9,11 @@
 
 #include "postgres.h"
 
+#ifdef USE_OPENSSL
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <openssl/asn1.h>
+#endif
 
 #include "access/htup_details.h"
 #include "funcapi.h"
@@ -21,6 +23,7 @@
 
 PG_MODULE_MAGIC;
 
+#ifdef USE_OPENSSL
 static Datum X509_NAME_field_to_text(X509_NAME *name, text *fieldName);
 static Datum ASN1_STRING_to_text(ASN1_STRING *str);
 
@@ -31,6 +34,7 @@ typedef struct
 {
 	TupleDesc	tupdesc;
 } SSLExtensionInfoContext;
+#endif
 
 /*
  * Indicates whether current session uses SSL
@@ -131,6 +135,7 @@ ssl_client_serial(PG_FUNCTION_ARGS)
 }
 
 
+#ifdef USE_OPENSSL
 /*
  * Converts OpenSSL ASN1_STRING structure into text
  *
@@ -282,7 +287,23 @@ ssl_issuer_field(PG_FUNCTION_ARGS)
 	else
 		return result;
 }
+#endif							/* USE_OPENSSL */
 
+#ifdef USE_NSS
+PG_FUNCTION_INFO_V1(ssl_client_dn_field);
+Datum
+ssl_client_dn_field(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_NULL();
+}
+
+PG_FUNCTION_INFO_V1(ssl_issuer_field);
+Datum
+ssl_issuer_field(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_NULL();
+}
+#endif							/* USE_NSS */
 
 /*
  * Returns current client certificate subject as one string
@@ -338,6 +359,7 @@ ssl_issuer_dn(PG_FUNCTION_ARGS)
 }
 
 
+#ifdef USE_OPENSSL
 /*
  * Returns information about available SSL extensions.
  *
@@ -471,3 +493,13 @@ ssl_extension_info(PG_FUNCTION_ARGS)
 	/* All done */
 	SRF_RETURN_DONE(funcctx);
 }
+#endif							/* USE_OPENSSL */
+
+#ifdef USE_NSS
+PG_FUNCTION_INFO_V1(ssl_extension_info);
+Datum
+ssl_extension_info(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_NULL();
+}
+#endif							/* USE_NSS */

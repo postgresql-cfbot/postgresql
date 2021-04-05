@@ -80,6 +80,10 @@ typedef struct
 #endif
 #endif							/* USE_OPENSSL */
 
+#ifdef USE_NSS
+#include "common/nss.h"
+#endif
+
 /*
  * POSTGRES backend dependent Constants.
  */
@@ -383,6 +387,7 @@ struct pg_conn
 	char	   *sslrootcert;	/* root certificate filename */
 	char	   *sslcrl;			/* certificate revocation list filename */
 	char	   *sslcrldir;		/* certificate revocation list directory name */
+	char	   *ssldatabase;	/* NSS certificate/key database */
 	char	   *requirepeer;	/* required peer credentials for local sockets */
 	char	   *gssencmode;		/* GSS mode (require,prefer,disable) */
 	char	   *krbsrvname;		/* Kerberos service name */
@@ -523,6 +528,28 @@ struct pg_conn
 								 * removed as this locking is handled
 								 * internally in OpenSSL >= 1.1.0. */
 #endif							/* USE_OPENSSL */
+
+/*
+ * The NSS/NSPR specific types aren't used to avoid pulling in the required
+ * headers here, as they are causing conflicts with PG definitions.
+ */
+#ifdef USE_NSS
+	NSSInitContext	   *nss_context;	/* NSS connection specific context */
+	PRFileDesc		   *pr_fd;			/* NSPR file descriptor for the connection */
+
+	/*
+	 * Track whether the NSS database has a password set or not. There is no
+	 * API function for retrieving password status of a database, but we need
+	 * to know since some NSS API calls require the password passed in (they
+	 * don't call the callback themselves). To track, we simply flip this to
+	 * true in case NSS invoked the password callback - as that will only
+	 * happen in case there is a password. The reason for tracking this is
+	 * that there are calls which require a password parameter, but doesn't
+	 * use the callbacks provided, so we must call the callback on behalf of
+	 * these.
+	 */
+	bool		has_password;
+#endif							/* USE_NSS */
 #endif							/* USE_SSL */
 
 #ifdef ENABLE_GSS
@@ -784,7 +811,7 @@ extern ssize_t pgtls_write(PGconn *conn, const void *ptr, size_t len);
  * This is not supported with old versions of OpenSSL that don't have
  * the X509_get_signature_nid() function.
  */
-#if defined(USE_OPENSSL) && defined(HAVE_X509_GET_SIGNATURE_NID)
+#if defined(USE_NSS) || (defined(USE_OPENSSL) && defined(HAVE_X509_GET_SIGNATURE_NID))
 #define HAVE_PGTLS_GET_PEER_CERTIFICATE_HASH
 extern char *pgtls_get_peer_certificate_hash(PGconn *conn, size_t *len);
 #endif

@@ -976,14 +976,31 @@ build-postgresql:
        <listitem>
         <para>
          Build with support for <acronym>SSL</acronym> (encrypted)
-         connections. The only <replaceable>LIBRARY</replaceable>
-         supported is <option>openssl</option>. This requires the
-         <productname>OpenSSL</productname> package to be installed.
-         <filename>configure</filename> will check for the required
-         header files and libraries to make sure that your
-         <productname>OpenSSL</productname> installation is sufficient
-         before proceeding. 
+         connections. <replaceable>LIBRARY</replaceable> must be one of:
         </para>
+        <itemizedlist>
+         <listitem>
+          <para>
+           <option>openssl</option> to build with <productname>OpenSSL</productname> support.
+            This requires the <productname>OpenSSL</productname>
+            package to be installed.  <filename>configure</filename> will check
+            for the required header files and libraries to make sure that
+            your <productname>OpenSSL</productname> installation is sufficient
+            before proceeding.
+          </para>
+         </listitem>
+         <listitem>
+          <para>
+           <option>nss</option> to build with <productname>libnss</productname> support.
+            This requires the <productname>NSS</productname> package to be installed. Additionally,
+            <productname>NSS</productname> requires <productname>NSPR</productname>
+            to be installed. <filename>configure</filename> will check for the
+            required header files and libraries to make sure that your
+            <productname>NSS</productname> installation is sufficient before
+            proceeding.
+          </para>
+         </listitem>
+        </itemizedlist>
        </listitem>
       </varlistentry>
 

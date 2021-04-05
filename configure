@@ -654,6 +654,8 @@ UUID_LIBS
 LDAP_LIBS_BE
 LDAP_LIBS_FE
 with_ssl
+NSPR_CONFIG
+NSS_CONFIG
 PTHREAD_CFLAGS
 PTHREAD_LIBS
 PTHREAD_CC
@@ -1577,7 +1579,7 @@ Optional Packages:
   --without-zlib          do not use Zlib
   --with-lz4              build with LZ4 support
   --with-gnu-ld           assume the C compiler uses GNU ld [default=no]
-  --with-ssl=LIB          use LIB for SSL/TLS support (openssl)
+  --with-ssl=LIB          use LIB for SSL/TLS support (openssl, nss)
   --with-openssl          obsolete spelling of --with-ssl=openssl
 
 Some influential environment variables:
@@ -12671,8 +12673,274 @@ done
 
 $as_echo "#define USE_OPENSSL 1" >>confdefs.h
 
+elif test "$with_ssl" = nss ; then
+  # TODO: fallback in case nss-config/nspr-config aren't found.
+  if test -z "$NSS_CONFIG"; then
+  for ac_prog in nss-config
+do
+  # Extract the first word of "$ac_prog", so it can be a program name with args.
+set dummy $ac_prog; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_NSS_CONFIG+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $NSS_CONFIG in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_NSS_CONFIG="$NSS_CONFIG" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_NSS_CONFIG="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+NSS_CONFIG=$ac_cv_path_NSS_CONFIG
+if test -n "$NSS_CONFIG"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $NSS_CONFIG" >&5
+$as_echo "$NSS_CONFIG" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+  test -n "$NSS_CONFIG" && break
+done
+
+else
+  # Report the value of NSS_CONFIG in configure's output in all cases.
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for NSS_CONFIG" >&5
+$as_echo_n "checking for NSS_CONFIG... " >&6; }
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $NSS_CONFIG" >&5
+$as_echo "$NSS_CONFIG" >&6; }
+fi
+
+  if test -z "$NSPR_CONFIG"; then
+  for ac_prog in nspr-config
+do
+  # Extract the first word of "$ac_prog", so it can be a program name with args.
+set dummy $ac_prog; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_NSPR_CONFIG+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $NSPR_CONFIG in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_NSPR_CONFIG="$NSPR_CONFIG" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_NSPR_CONFIG="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  ;;
+esac
+fi
+NSPR_CONFIG=$ac_cv_path_NSPR_CONFIG
+if test -n "$NSPR_CONFIG"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $NSPR_CONFIG" >&5
+$as_echo "$NSPR_CONFIG" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+  test -n "$NSPR_CONFIG" && break
+done
+
+else
+  # Report the value of NSPR_CONFIG in configure's output in all cases.
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for NSPR_CONFIG" >&5
+$as_echo_n "checking for NSPR_CONFIG... " >&6; }
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $NSPR_CONFIG" >&5
+$as_echo "$NSPR_CONFIG" >&6; }
+fi
+
+  if test -n "$NSS_CONFIG"; then
+    NSS_LIBS=`$NSS_CONFIG --libs`
+	NSS_CFLAGS=`$NSS_CONFIG --cflags`
+  fi
+  if test -n "$NSPR_CONFIG"; then
+	NSPR_LIBS=`$NSPR_CONFIG --libs`
+	NSPR_CFLAGS=`$NSPR_CONFIG --cflags`
+  fi
+
+  LDFLAGS="$LDFLAGS $NSS_LIBS $NSPR_LIBS"
+  CFLAGS="$CFLAGS $NSS_CFLAGS $NSPR_CFLAGS"
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for NSS_InitContext in -lnss3" >&5
+$as_echo_n "checking for NSS_InitContext in -lnss3... " >&6; }
+if ${ac_cv_lib_nss3_NSS_InitContext+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lnss3  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char NSS_InitContext ();
+int
+main ()
+{
+return NSS_InitContext ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_nss3_NSS_InitContext=yes
+else
+  ac_cv_lib_nss3_NSS_InitContext=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_nss3_NSS_InitContext" >&5
+$as_echo "$ac_cv_lib_nss3_NSS_InitContext" >&6; }
+if test "x$ac_cv_lib_nss3_NSS_InitContext" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBNSS3 1
+_ACEOF
+
+  LIBS="-lnss3 $LIBS"
+
+else
+  as_fn_error $? "library 'nss3' is required for NSS" "$LINENO" 5
+fi
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for PR_GetDefaultIOMethods in -lnspr4" >&5
+$as_echo_n "checking for PR_GetDefaultIOMethods in -lnspr4... " >&6; }
+if ${ac_cv_lib_nspr4_PR_GetDefaultIOMethods+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lnspr4  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char PR_GetDefaultIOMethods ();
+int
+main ()
+{
+return PR_GetDefaultIOMethods ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_nspr4_PR_GetDefaultIOMethods=yes
+else
+  ac_cv_lib_nspr4_PR_GetDefaultIOMethods=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_nspr4_PR_GetDefaultIOMethods" >&5
+$as_echo "$ac_cv_lib_nspr4_PR_GetDefaultIOMethods" >&6; }
+if test "x$ac_cv_lib_nspr4_PR_GetDefaultIOMethods" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBNSPR4 1
+_ACEOF
+
+  LIBS="-lnspr4 $LIBS"
+
+else
+  as_fn_error $? "library 'nspr4' is required for NSS" "$LINENO" 5
+fi
+
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for SSL_GetImplementedCiphers in -lssl3" >&5
+$as_echo_n "checking for SSL_GetImplementedCiphers in -lssl3... " >&6; }
+if ${ac_cv_lib_ssl3_SSL_GetImplementedCiphers+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lssl3  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char SSL_GetImplementedCiphers ();
+int
+main ()
+{
+return SSL_GetImplementedCiphers ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_ssl3_SSL_GetImplementedCiphers=yes
+else
+  ac_cv_lib_ssl3_SSL_GetImplementedCiphers=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_ssl3_SSL_GetImplementedCiphers" >&5
+$as_echo "$ac_cv_lib_ssl3_SSL_GetImplementedCiphers" >&6; }
+if test "x$ac_cv_lib_ssl3_SSL_GetImplementedCiphers" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBSSL3 1
+_ACEOF
+
+  LIBS="-lssl3 $LIBS"
+
+else
+  as_fn_error $? "library 'ssl3' is required for NSS" "$LINENO" 5
+fi
+
+
+$as_echo "#define USE_NSS 1" >>confdefs.h
+
 elif test "$with_ssl" != no ; then
-  as_fn_error $? "--with-ssl must specify openssl" "$LINENO" 5
+  as_fn_error $? "--with-ssl must specify one of openssl or nss" "$LINENO" 5
 fi
 
 
@@ -13642,6 +13910,23 @@ if test "x$ac_cv_header_openssl_err_h" = xyes; then :
 
 else
   as_fn_error $? "header file <openssl/err.h> is required for OpenSSL" "$LINENO" 5
+fi
+
+
+elif test "$with_ssl" = nss ; then
+  ac_fn_c_check_header_mongrel "$LINENO" "nss/ssl.h" "ac_cv_header_nss_ssl_h" "$ac_includes_default"
+if test "x$ac_cv_header_nss_ssl_h" = xyes; then :
+
+else
+  as_fn_error $? "header file <nss/ssl.h> is required for NSS" "$LINENO" 5
+fi
+
+
+  ac_fn_c_check_header_mongrel "$LINENO" "nss/nss.h" "ac_cv_header_nss_nss_h" "$ac_includes_default"
+if test "x$ac_cv_header_nss_nss_h" = xyes; then :
+
+else
+  as_fn_error $? "header file <nss/nss.h> is required for NSS" "$LINENO" 5
 fi
 
 
@@ -18424,6 +18709,9 @@ $as_echo_n "checking which random number source to use... " >&6; }
 if test x"$with_ssl" = x"openssl" ; then
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: OpenSSL" >&5
 $as_echo "OpenSSL" >&6; }
+elif test x"$with_ssl" = x"nss" ; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: NSS" >&5
+$as_echo "NSS" >&6; }
 elif test x"$PORTNAME" = x"win32" ; then
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: Windows native" >&5
 $as_echo "Windows native" >&6; }
@@ -18453,7 +18741,7 @@ fi
   if test x"$ac_cv_file__dev_urandom" = x"no" ; then
     as_fn_error $? "
 no source of strong random numbers was found
-PostgreSQL can use OpenSSL, native Windows API or /dev/urandom as a source of random numbers." "$LINENO" 5
+PostgreSQL can use OpenSSL, NSS, native Windows API or /dev/urandom as a source of random numbers." "$LINENO" 5
   fi
 fi
 

@@ -650,6 +650,17 @@ extern PQsslKeyPassHook_OpenSSL_type PQgetSSLKeyPassHook_OpenSSL(void);
 extern void PQsetSSLKeyPassHook_OpenSSL(PQsslKeyPassHook_OpenSSL_type hook);
 extern int	PQdefaultSSLKeyPassHook_OpenSSL(char *buf, int size, PGconn *conn);
 
+/* == in fe-secure-nss.c === */
+typedef struct PK11SlotInfoStr PK11SlotInfo;
+typedef int PRIntn;
+typedef PRIntn PRBool;
+
+/* Support for overriding sslpassword handling with a callback */
+typedef char *(*PQsslKeyPassHook_nss_type) (PK11SlotInfo *slot, PRBool retry, void *arg);
+extern PQsslKeyPassHook_nss_type PQgetSSLKeyPassHook_nss(void);
+extern void PQsetSSLKeyPassHook_nss(PQsslKeyPassHook_nss_type hook);
+extern char *PQdefaultSSLKeyPassHook_nss(PK11SlotInfo *slot, PRBool retry, void *arg);
+
 #ifdef __cplusplus
 }
 #endif

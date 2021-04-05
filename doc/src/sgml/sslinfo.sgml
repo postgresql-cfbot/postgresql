@@ -22,7 +22,8 @@
 
  <para>
   This extension won't build at all unless the installation was
-  configured with <literal>--with-ssl=openssl</literal>.
+  configured with SSL support, such as <literal>--with-ssl=openssl</literal>
+  or <literal>--with-ssl=nss</literal>.
  </para>
 
  <sect2>
@@ -208,6 +209,9 @@ emailAddress
      the X.500 and X.509 standards, so you cannot just assign arbitrary
      meaning to them.
     </para>
+    <para>
+     This function is only available when using <productname>OpenSSL</productname>.
+    </para>
     </listitem>
    </varlistentry>
 
@@ -223,6 +227,9 @@ emailAddress
      Same as <function>ssl_client_dn_field</function>, but for the certificate issuer
      rather than the certificate subject.
     </para>
+    <para>
+     This function is only available when using <productname>OpenSSL</productname>.
+    </para>
     </listitem>
    </varlistentry>
 
@@ -237,6 +244,9 @@ emailAddress
     <para>
      Provide information about extensions of client certificate: extension name,
      extension value, and if it is a critical extension.
+    </para>
+    <para>
+     This function is only available when using <productname>OpenSSL</productname>.
     </para>
     </listitem>
    </varlistentry>

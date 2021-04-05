@@ -1230,7 +1230,7 @@ fi
 #
 # There is currently only one supported SSL/TLS library: OpenSSL.
 #
-PGAC_ARG_REQ(with, ssl, [LIB], [use LIB for SSL/TLS support (openssl)])
+PGAC_ARG_REQ(with, ssl, [LIB], [use LIB for SSL/TLS support (openssl, nss)])
 if test x"$with_ssl" = x"" ; then
   with_ssl=no
 fi
@@ -1264,8 +1264,28 @@ if test "$with_ssl" = openssl ; then
   # function was removed.
   AC_CHECK_FUNCS([CRYPTO_lock])
   AC_DEFINE([USE_OPENSSL], 1, [Define to 1 to build with OpenSSL support. (--with-ssl=openssl)])
+elif test "$with_ssl" = nss ; then
+  # TODO: fallback in case nss-config/nspr-config aren't found.
+  PGAC_PATH_PROGS(NSS_CONFIG, nss-config)
+  PGAC_PATH_PROGS(NSPR_CONFIG, nspr-config)
+  if test -n "$NSS_CONFIG"; then
+    NSS_LIBS=`$NSS_CONFIG --libs`
+	NSS_CFLAGS=`$NSS_CONFIG --cflags`
+  fi
+  if test -n "$NSPR_CONFIG"; then
+	NSPR_LIBS=`$NSPR_CONFIG --libs`
+	NSPR_CFLAGS=`$NSPR_CONFIG --cflags`
+  fi
+
+  LDFLAGS="$LDFLAGS $NSS_LIBS $NSPR_LIBS"
+  CFLAGS="$CFLAGS $NSS_CFLAGS $NSPR_CFLAGS"
+
+  AC_CHECK_LIB(nss3, NSS_InitContext, [], [AC_MSG_ERROR([library 'nss3' is required for NSS])])
+  AC_CHECK_LIB(nspr4, PR_GetDefaultIOMethods, [], [AC_MSG_ERROR([library 'nspr4' is required for NSS])])
+  AC_CHECK_LIB(ssl3, SSL_GetImplementedCiphers, [], [AC_MSG_ERROR([library 'ssl3' is required for NSS])])
+  AC_DEFINE([USE_NSS], 1, [Define to 1 if you have NSS support,])
 elif test "$with_ssl" != no ; then
-  AC_MSG_ERROR([--with-ssl must specify openssl])
+  AC_MSG_ERROR([--with-ssl must specify one of openssl or nss])
 fi
 AC_SUBST(with_ssl)
 
@@ -1451,6 +1471,9 @@ fi
 if test "$with_ssl" = openssl ; then
   AC_CHECK_HEADER(openssl/ssl.h, [], [AC_MSG_ERROR([header file <openssl/ssl.h> is required for OpenSSL])])
   AC_CHECK_HEADER(openssl/err.h, [], [AC_MSG_ERROR([header file <openssl/err.h> is required for OpenSSL])])
+elif test "$with_ssl" = nss ; then
+  AC_CHECK_HEADER(nss/ssl.h, [], [AC_MSG_ERROR([header file <nss/ssl.h> is required for NSS])])
+  AC_CHECK_HEADER(nss/nss.h, [], [AC_MSG_ERROR([header file <nss/nss.h> is required for NSS])])
 fi
 
 if test "$with_pam" = yes ; then
@@ -2212,6 +2235,8 @@ fi
 AC_MSG_CHECKING([which random number source to use])
 if test x"$with_ssl" = x"openssl" ; then
   AC_MSG_RESULT([OpenSSL])
+elif test x"$with_ssl" = x"nss" ; then
+  AC_MSG_RESULT([NSS])
 elif test x"$PORTNAME" = x"win32" ; then
   AC_MSG_RESULT([Windows native])
 else
@@ -2221,7 +2246,7 @@ else
   if test x"$ac_cv_file__dev_urandom" = x"no" ; then
     AC_MSG_ERROR([
 no source of strong random numbers was found
-PostgreSQL can use OpenSSL, native Windows API or /dev/urandom as a source of random numbers.])
+PostgreSQL can use OpenSSL, NSS, native Windows API or /dev/urandom as a source of random numbers.])
   fi
 fi
 

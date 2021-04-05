@@ -2802,7 +2802,13 @@ CheckCertAuth(Port *port)
 	int			status_check_usermap = STATUS_ERROR;
 	char	   *peer_username = NULL;
 
+#if defined(USE_OPENSSL)
 	Assert(port->ssl);
+#elif defined(USE_NSS)
+	Assert(port->pr_fd);
+#else
+	Assert(false);
+#endif
 
 	/* select the correct field to compare */
 	switch (port->hba->clientcertname)

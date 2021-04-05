@@ -835,6 +835,12 @@ int callback_fn(char *buf, int size, PGconn *conn);
        <function>longjmp(...)</function>, etc. It must return normally.
       </para>
 
+      <para>
+        <function>PQsetSSLKeyPassHook_OpenSSL</function> has no effect unless
+        the server was compiled with <productname>OpenSSL</productname>
+        support.
+      </para>
+
      </listitem>
     </varlistentry>
 
@@ -849,6 +855,70 @@ int callback_fn(char *buf, int size, PGconn *conn);
 <synopsis>
 PQsslKeyPassHook_OpenSSL_type PQgetSSLKeyPassHook_OpenSSL(void);
 </synopsis>
+      </para>
+
+      <para>
+        <function>PQgetSSLKeyPassHook_OpenSSL</function> has no effect unless
+        the server was compiled with <productname>OpenSSL</productname>
+        support.
+      </para>
+
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-pqsetsslkeypasshook-nss">
+     <term><function>PQsetSSLKeyPassHook_nss</function><indexterm><primary>PQsetSSLKeyPassHook_nss</primary></indexterm></term>
+     <listitem>
+      <para>
+       <function>PQsetSSLKeyPassHook_nss</function> lets an application override
+       <application>libpq</application>'s default handling of password protected
+       objects in the <application>NSS</application> database using
+       <xref linkend="libpq-connect-sslpassword"/> or interactive prompting.
+
+<synopsis>
+void PQsetSSLKeyPassHook_nss(PQsslKeyPassHook_nss_type hook);
+</synopsis>
+
+       The application passes a pointer to a callback function with signature:
+<programlisting>
+char *callback_fn(PK11SlotInfo *slot, PRBool retry, void *arg);
+</programlisting>
+       which <application>libpq</application> will call
+       <emphasis>instead of</emphasis> its default
+       <function>PQdefaultSSLKeyPassHook_nss</function> password handler. The
+       callback should determine the password for the token and return a
+       pointer to it. The returned pointer should be allocated with the NSS
+       <function>PORT_Strdup</function> function. The token for which the
+       password is requested is recorded in the slot anc can be identified by
+       calling <function>PK11_GetTokenName</function>. If no password is
+       known, the callback should return <literal>NULL</literal>. The memory
+       will be owned by <productname>NSS</productname> and should not be
+       freed.
+      </para>
+
+      <para>
+        <function>PQsetSSLKeyPassHook_nss</function> has no effect unless
+        the server was compiled with <productname>NSS</productname> support.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-pqgetsslkeypasshook-nss">
+     <term><function>PQgetSSLKeyPassHook_nss</function><indexterm><primary>PQgetSSLKeyPassHook_nss</primary></indexterm></term>
+     <listitem>
+      <para>
+       <function>PQgetSSLKeyPassHook_nss</function> returns the current
+       <productname>NSS</productname> password hook, or <literal>NULL</literal>
+       if none has been set.
+
+<synopsis>
+PQsslKeyPassHook_nss_type PQgetSSLKeyPassHook_nss(void);
+</synopsis>
+      </para>
+
+      <para>
+        <function>PQgetSSLKeyPassHook_nss</function> has no effect unless the
+        server was compiled with <productname>NSS</productname> support.
       </para>
 
      </listitem>
@@ -1643,23 +1713,25 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
         If set to 1, data sent over SSL connections will be compressed.  If
         set to 0, compression will be disabled.  The default is 0.  This
         parameter is ignored if a connection without SSL is made.
-       </para>
-
-       <para>
         SSL compression is nowadays considered insecure and its use is no
-        longer recommended.  <productname>OpenSSL</productname> 1.1.0 disables
-        compression by default, and many operating system distributions
-        disable it in prior versions as well, so setting this parameter to on
-        will not have any effect if the server does not accept compression.
-        <productname>PostgreSQL</productname> 14 disables compression
-        completely in the backend.
-       </para>
+        longer recommended.
+        <itemizedlist>
+         <listitem>
+          <para>
+           <productname>OpenSSL</productname>: 1.1.0 disables compression by
+           default, and many operating system distributions disable it in prior
+           versions as well, so setting this parameter to on will not have any
+           effect if the server does not accept compression.
+          </para>
+         </listitem>
 
-       <para>
-        If security is not a primary concern, compression can improve
-        throughput if the network is the bottleneck.  Disabling compression
-        can improve response time and throughput if CPU performance is the
-        limiting factor.
+         <listitem>
+          <para>
+           <productname>NSS</productname>: SSL compression is not supported in
+           <productname>NSS</productname>, this parameter has no effect.
+          </para>
+         </listitem>
+        </itemizedlist>
        </para>
       </listitem>
      </varlistentry>
@@ -1668,10 +1740,24 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>sslcert</literal></term>
       <listitem>
        <para>
-        This parameter specifies the file name of the client SSL
-        certificate, replacing the default
-        <filename>~/.postgresql/postgresql.crt</filename>.
-        This parameter is ignored if an SSL connection is not made.
+        This parameter specifies the name or location of the client SSL
+        certificate.  This parameter is ignored if an SSL connection is not
+        made.
+        <itemizedlist>
+         <listitem>
+          <para>
+           <productname>OpenSSL</productname>: can replace the default
+           <filename>~/.postgresql/postgresql.crt</filename>.
+          </para>
+         </listitem>
+
+         <listitem>
+          <para>
+           <productname>NSS</productname>: the nickname of the client SSL
+           certificate.
+          </para>
+         </listitem>
+        </itemizedlist>
        </para>
       </listitem>
      </varlistentry>
@@ -1680,15 +1766,30 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>sslkey</literal></term>
       <listitem>
        <para>
-        This parameter specifies the location for the secret key used for
-        the client certificate. It can either specify a file name that will
-        be used instead of the default
-        <filename>~/.postgresql/postgresql.key</filename>, or it can specify a key
-        obtained from an external <quote>engine</quote> (engines are
-        <productname>OpenSSL</productname> loadable modules).  An external engine
-        specification should consist of a colon-separated engine name and
-        an engine-specific key identifier.  This parameter is ignored if an
-        SSL connection is not made.
+        This parameter specifies the name or location for the secret key used
+        for the client certificate. This parameter is ignored if an SSL
+        connection is not made.
+        <itemizedlist>
+         <listitem>
+          <para>
+           <productname>OpenSSL</productname>: can either specify a file name
+           that will be used instead of the default
+           <filename>~/.postgresql/postgresql.key</filename>, or it can specify
+           a key obtained from an external <quote>engine</quote> (engines are
+           <productname>OpenSSL</productname> loadable modules).  An external
+           engine specification should consist of a colon-separated engine name
+           and an engine-specific key identifier.
+          </para>
+         </listitem>
+
+         <listitem>
+          <para>
+           <productname>NSS</productname>: this parameter has no effect.  Keys
+           should be loaded into the <productname>NSS</productname>
+           database.
+          </para>
+         </listitem>
+        </itemizedlist>
        </para>
       </listitem>
      </varlistentry>
@@ -1699,28 +1800,44 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
        <para>
         This parameter specifies the password for the secret key specified in
         <literal>sslkey</literal>, allowing client certificate private keys
-        to be stored in encrypted form on disk even when interactive passphrase
+        to be stored in encrypted form even when interactive passphrase
         input is not practical.
-       </para>
-       <para>
-        Specifying this parameter with any non-empty value suppresses the
-        <literal>Enter PEM pass phrase:</literal>
-        prompt that <productname>OpenSSL</productname> will emit by default
-        when an encrypted client certificate key is provided to
-        <literal>libpq</literal>.
-       </para>
-       <para>
-        If the key is not encrypted this parameter is ignored. The parameter
-        has no effect on keys specified by <productname>OpenSSL</productname>
-        engines unless the engine uses the <productname>OpenSSL</productname>
-        password callback mechanism for prompts.
-       </para>
-       <para>
-        There is no environment variable equivalent to this option, and no
-        facility for looking it up in <filename>.pgpass</filename>. It can be
-        used in a service file connection definition. Users with
-        more sophisticated uses should consider using openssl engines and
-        tools like PKCS#11 or USB crypto offload devices.
+        <itemizedlist>
+         <listitem>
+          <para>
+           <productname>OpenSSL</productname>: specifying this parameter with
+           any non-empty value suppresses the
+           <literal>Enter PEM pass phrase:</literal> prompt that
+           <productname>OpenSSL</productname> will emit by default when an
+           encrypted client certificate key is provided to
+           <literal>libpq</literal>.
+          </para>
+          <para>
+           If the key is not encrypted this parameter is ignored. The parameter
+           has no effect on keys specified by <productname>OpenSSL</productname>
+           engines unless the engine uses the <productname>OpenSSL</productname>
+           password callback mechanism for prompts.
+          </para>
+          <para>
+           There is no environment variable equivalent to this option, and no
+           facility for looking it up in <filename>.pgpass</filename>. It can be
+           used in a service file connection definition. Users with
+           more sophisticated uses should consider using
+           <productname>OpenSSL</productname> engines and tools like PKCS#11 or
+           USB crypto offload devices.
+          </para>
+         </listitem>
+
+         <listitem>
+          <para>
+           <productname>NSS</productname>: specifying the parameter is required
+           in case any password protected items are referenced in the
+           <productname>NSS</productname> database, or if the database itself
+           is password protected. All attempts to decrypt objects which are
+           password protected in the database will use this password.
+          </para>
+         </listitem>
+        </itemizedlist>
        </para>
       </listitem>
      </varlistentry>
@@ -1729,11 +1846,27 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>sslrootcert</literal></term>
       <listitem>
        <para>
-        This parameter specifies the name of a file containing SSL
-        certificate authority (<acronym>CA</acronym>) certificate(s).
-        If the file exists, the server's certificate will be verified
-        to be signed by one of these authorities.  The default is
-        <filename>~/.postgresql/root.crt</filename>.
+        This parameter specifies the name of SSL certificate authority
+        (<acronym>CA</acronym>) certificate(s).
+        <itemizedlist>
+         <listitem>
+          <para>
+           <productname>OpenSSL</productname>: specifies the name of a file
+           containing SSL certificate authority (<acronym>CA</acronym>)
+           certificate(s).  If the file exists, the server's certificate will
+           be verified to be signed by one of these authorities.  The default is
+           <filename>~/.postgresql/root.crt</filename>.
+          </para>
+         </listitem>
+
+         <listitem>
+          <para>
+           <productname>NSS</productname>: this parameter has no effect.  CA
+           certificates should be loaded into the <productname>NSS</productname>
+           database using the <application>certutil</application> tool.
+          </para>
+         </listitem>
+        </itemizedlist>
        </para>
       </listitem>
      </varlistentry>
@@ -1743,13 +1876,29 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <listitem>
        <para>
         This parameter specifies the file name of the SSL certificate
-        revocation list (CRL).  Certificates listed in this file, if it
-        exists, will be rejected while attempting to authenticate the
-        server's certificate.  If neither
-        <xref linkend='libpq-connect-sslcrl'/> nor
-        <xref linkend='libpq-connect-sslcrldir'/> is set, this setting is
-        taken as
-        <filename>~/.postgresql/root.crl</filename>.
+        revocation list (CRL).  
+
+        <itemizedlist>
+         <listitem>
+          <para>
+           <productname>OpenSSL</productname>: Certificates listed in this file,
+           if it exists, will be rejected while attempting to authenticate the
+           server's certificate.  If neither
+           <xref linkend='libpq-connect-sslcrl'/> nor
+           <xref linkend='libpq-connect-sslcrldir'/> is set, this setting is
+           taken as <filename>~/.postgresql/root.crl</filename>. 
+          </para>
+         </listitem>
+
+         <listitem>
+          <para>
+           <productname>NSS</productname>: This parameter has no effect.  CRL
+           files should be loaded into the <productname>NSS</productname>
+           database using the <application>crlutil</application> tool.
+          </para>
+         </listitem>
+        </itemizedlist>
+
        </para>
       </listitem>
      </varlistentry>
@@ -1762,18 +1911,30 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
         revocation list (CRL).  Certificates listed in the files in this
         directory, if it exists, will be rejected while attempting to
         authenticate the server's certificate.
+
+        <itemizedlist>
+         <listitem>
+          <para>
+           <productname>OpenSSL</productname>: the directory needs to be
+           prepared with the OpenSSL command <literal>openssl rehash</literal>
+           or <literal>c_rehash</literal>.  See its documentation for details.
+          </para>
+          <para>
+           Both <literal>sslcrl</literal> and <literal>sslcrldir</literal> can
+           be specified together.
+          </para>
+         </listitem>
+
+         <listitem>
+          <para>
+           <productname>NSS</productname>: This parameter has no effect.  CRL
+           files should be loaded into the <productname>NSS</productname>
+           database using the <application>crlutil</application> tool.
+          </para>
+         </listitem>
+        </itemizedlist>
        </para>
 
-       <para>
-        The directory needs to be prepared with the OpenSSL command
-        <literal>openssl rehash</literal> or <literal>c_rehash</literal>.  See
-        its documentation for details.
-       </para>
-
-       <para>
-        Both <literal>sslcrl</literal> and <literal>sslcrldir</literal> can be
-        specified together.
-       </para>
       </listitem>
      </varlistentry>
 
@@ -1808,8 +1969,8 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
         for the connection. Valid values are <literal>TLSv1</literal>,
         <literal>TLSv1.1</literal>, <literal>TLSv1.2</literal> and
         <literal>TLSv1.3</literal>. The supported protocols depend on the
-        version of <productname>OpenSSL</productname> used, older versions
-        not supporting the most modern protocol versions. If not specified,
+        version of the SSL library used, older versions may 
+        not support the most modern protocol versions. If not specified,
         the default is <literal>TLSv1.2</literal>, which satisfies industry
         best practices as of this writing.
        </para>
@@ -1824,8 +1985,8 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
         for the connection. Valid values are <literal>TLSv1</literal>,
         <literal>TLSv1.1</literal>, <literal>TLSv1.2</literal> and
         <literal>TLSv1.3</literal>. The supported protocols depend on the
-        version of <productname>OpenSSL</productname> used, older versions
-        not supporting the most modern protocol versions. If not set, this
+        version of the SSL library used, older versions
+        may not support the most modern protocol versions. If not set, this
         parameter is ignored and the connection will use the maximum bound
         defined by the backend, if set. Setting the maximum protocol version
         is mainly useful for testing or if some component has issues working
@@ -2587,6 +2748,8 @@ void *PQsslStruct(const PGconn *conn, const char *struct_name);
       </para>
       <para>
        The struct(s) available depend on the SSL implementation in use.
+      </para>
+      <para>
        For <productname>OpenSSL</productname>, there is one struct,
        available under the name "OpenSSL", and it returns a pointer to the
        <productname>OpenSSL</productname> <literal>SSL</literal> struct.
@@ -2610,9 +2773,15 @@ void *PQsslStruct(const PGconn *conn, const char *struct_name);
 ]]></programlisting>
       </para>
       <para>
-       This structure can be used to verify encryption levels, check server
-       certificates, and more. Refer to the <productname>OpenSSL</productname>
-       documentation for information about this structure.
+       For <productname>NSS</productname>, there is one struct available under
+       the name "NSS", and it returns a pointer to the
+       <productname>NSS</productname> <acronym>SSL</acronym>
+       <literal>PRFileDesc</literal> associated with the connection.
+      </para>
+      <para>
+       These structures can be used to verify encryption levels, check server
+       certificates, and more. Refer to the <acronym>SSL</acronym> library
+       documentation for information about these structures.
       </para>
      </listitem>
     </varlistentry>
@@ -2638,6 +2807,10 @@ void *PQgetssl(const PGconn *conn);
        To check if a connection uses SSL, call
        <xref linkend="libpq-PQsslInUse"/> instead, and for more details about the
        connection, use <xref linkend="libpq-PQsslAttribute"/>.
+      </para>
+      <para>
+       This function returns <literal>NULL</literal> when <acronym>SSL</acronym>
+       librariaes other than <productname>OpenSSL</productname> are used.
       </para>
      </listitem>
     </varlistentry>
@@ -8600,6 +8773,11 @@ void PQinitOpenSSL(int do_ssl, int do_crypto);
        before first opening a database connection.  Also be sure that you
        have done that initialization before opening a database connection.
       </para>
+
+      <para>
+       This function does nothing when using <productname>NSS</productname> as
+       the <acronym>SSL</acronym> library.
+      </para>
      </listitem>
     </varlistentry>
 
@@ -8625,6 +8803,11 @@ void PQinitSSL(int do_ssl);
        was added in <productname>PostgreSQL</productname> 8.4, so <xref linkend="libpq-PQinitSSL"/>
        might be preferable for applications that need to work with older
        versions of <application>libpq</application>.
+      </para>
+
+      <para>
+       This function does nothing when using <productname>NSS</productname> as
+       the <acronym>SSL</acronym> library.
       </para>
      </listitem>
     </varlistentry>

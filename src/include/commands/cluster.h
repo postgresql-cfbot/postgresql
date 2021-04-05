@@ -36,7 +36,7 @@ extern void check_index_is_clusterable(Relation OldHeap, Oid indexOid,
 extern void mark_index_clustered(Relation rel, Oid indexOid, bool is_internal);
 
 extern Oid	make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, char relpersistence,
-						  LOCKMODE lockmode);
+						  Oid relam, LOCKMODE lockmode);
 extern void finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 							 bool is_system_catalog,
 							 bool swap_toast_by_content,

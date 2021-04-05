@@ -1212,8 +1212,10 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 		case RELKIND_VIEW:
 		case RELKIND_COMPOSITE_TYPE:
 		case RELKIND_FOREIGN_TABLE:
-		case RELKIND_PARTITIONED_TABLE:
 			Assert(relation->rd_rel->relam == InvalidOid);
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+			/* Do nothing: it's a catalog settings for partitions to inherit */
 			break;
 	}
 

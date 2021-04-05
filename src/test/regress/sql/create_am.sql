@@ -124,11 +124,9 @@ CREATE SEQUENCE tableam_seq_heap2 USING heap2;
 CREATE MATERIALIZED VIEW tableam_tblmv_heap2 USING heap2 AS SELECT * FROM tableam_tbl_heap2;
 SELECT f1 FROM tableam_tblmv_heap2 ORDER BY f1;
 
--- CREATE TABLE ..  PARTITION BY doesn't not support USING
-CREATE TABLE tableam_parted_heap2 (a text, b int) PARTITION BY list (a) USING heap2;
-
-CREATE TABLE tableam_parted_heap2 (a text, b int) PARTITION BY list (a);
+-- CREATE TABLE ..  PARTITION BY supports USING
 -- new partitions will inherit from the current default, rather the partition root
+CREATE TABLE tableam_parted_heap2 (a text, b int) PARTITION BY list (a) USING heap2;
 SET default_table_access_method = 'heap';
 CREATE TABLE tableam_parted_a_heap2 PARTITION OF tableam_parted_heap2 FOR VALUES IN ('a');
 SET default_table_access_method = 'heap2';
@@ -161,6 +159,12 @@ WHERE pg_depend.refclassid = 'pg_am'::regclass
     AND pg_am.amname = 'heap2'
 ORDER BY classid, objid, objsubid;
 
+-- ALTER TABLE SET ACCESS METHOD
+CREATE TABLE heaptable USING heap AS SELECT a, repeat(a::text,9999) FROM generate_series(1,9) AS a;
+ALTER TABLE heaptable SET ACCESS METHOD heap2;
+explain (analyze, costs off, summary off, timing off) SELECT * FROM heaptable;
+SELECT COUNT(a), COUNT(1) FILTER(WHERE a=1) FROM heaptable;
+DROP TABLE heaptable;
 
 -- Second, create objects in the new AM by changing the default AM
 BEGIN;

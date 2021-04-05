@@ -577,6 +577,7 @@ rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose)
 {
 	Oid			tableOid = RelationGetRelid(OldHeap);
 	Oid			tableSpace = OldHeap->rd_rel->reltablespace;
+	Oid			accessMethod = OldHeap->rd_rel->relam;
 	Oid			OIDNewHeap;
 	char		relpersistence;
 	bool		is_system_catalog;
@@ -598,6 +599,7 @@ rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose)
 	/* Create the transient table that will receive the re-ordered data */
 	OIDNewHeap = make_new_heap(tableOid, tableSpace,
 							   relpersistence,
+							   accessMethod,
 							   AccessExclusiveLock);
 
 	/* Copy the heap data into the new table in the desired order */
@@ -619,15 +621,15 @@ rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose)
  * Create the transient table that will be filled with new data during
  * CLUSTER, ALTER TABLE, and similar operations.  The transient table
  * duplicates the logical structure of the OldHeap, but is placed in
- * NewTableSpace which might be different from OldHeap's.  Also, it's built
- * with the specified persistence, which might differ from the original's.
+ * NewTableSpace/accessMethod/persistence, which might differ from those
+ * of the OldHeap.
  *
  * After this, the caller should load the new heap with transferred/modified
  * data, then call finish_heap_swap to complete the operation.
  */
 Oid
 make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, char relpersistence,
-			  LOCKMODE lockmode)
+			  Oid relam, LOCKMODE lockmode)
 {
 	TupleDesc	OldHeapDesc;
 	char		NewHeapName[NAMEDATALEN];
@@ -686,7 +688,7 @@ make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, char relpersistence,
 										  InvalidOid,
 										  InvalidOid,
 										  OldHeap->rd_rel->relowner,
-										  OldHeap->rd_rel->relam,
+										  relam,
 										  OldHeapDesc,
 										  NIL,
 										  RELKIND_RELATION,
@@ -1036,6 +1038,10 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		relform1->reltablespace = relform2->reltablespace;
 		relform2->reltablespace = swaptemp;
 
+		swaptemp = relform1->relam;
+		relform1->relam = relform2->relam;
+		relform2->relam = swaptemp;
+
 		swptmpchr = relform1->relpersistence;
 		relform1->relpersistence = relform2->relpersistence;
 		relform2->relpersistence = swptmpchr;
@@ -1070,6 +1076,9 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 				 NameStr(relform1->relname));
 		if (relform1->relpersistence != relform2->relpersistence)
 			elog(ERROR, "cannot change persistence of mapped relation \"%s\"",
+				 NameStr(relform1->relname));
+		if (relform1->relam != relform2->relam)
+			elog(ERROR, "cannot change access method of mapped relation \"%s\"",
 				 NameStr(relform1->relname));
 		if (!swap_toast_by_content &&
 			(relform1->reltoastrelid || relform2->reltoastrelid))

@@ -176,11 +176,9 @@ SELECT f1 FROM tableam_tblmv_heap2 ORDER BY f1;
   1
 (1 row)
 
--- CREATE TABLE ..  PARTITION BY doesn't not support USING
-CREATE TABLE tableam_parted_heap2 (a text, b int) PARTITION BY list (a) USING heap2;
-ERROR:  specifying a table access method is not supported on a partitioned table
-CREATE TABLE tableam_parted_heap2 (a text, b int) PARTITION BY list (a);
+-- CREATE TABLE ..  PARTITION BY supports USING
 -- new partitions will inherit from the current default, rather the partition root
+CREATE TABLE tableam_parted_heap2 (a text, b int) PARTITION BY list (a) USING heap2;
 SET default_table_access_method = 'heap';
 CREATE TABLE tableam_parted_a_heap2 PARTITION OF tableam_parted_heap2 FOR VALUES IN ('a');
 SET default_table_access_method = 'heap2';
@@ -205,14 +203,17 @@ WHERE pa.oid = pc.relam
 ORDER BY 3, 1, 2;
  relkind | amname |             relname              
 ---------+--------+----------------------------------
+ r       | heap2  | tableam_parted_a_heap2
  r       | heap2  | tableam_parted_b_heap2
  r       | heap2  | tableam_parted_d_heap2
+ p       | heap2  | tableam_parted_heap2
  r       | heap2  | tableam_tbl_heap2
  r       | heap2  | tableam_tblas_heap2
  m       | heap2  | tableam_tblmv_heap2
+ t       | heap2  | toast for tableam_parted_a_heap2
  t       | heap2  | toast for tableam_parted_b_heap2
  t       | heap2  | toast for tableam_parted_d_heap2
-(7 rows)
+(10 rows)
 
 -- Show dependencies onto AM - there shouldn't be any for toast
 SELECT pg_describe_object(classid,objid,objsubid) AS obj
@@ -226,10 +227,28 @@ ORDER BY classid, objid, objsubid;
  table tableam_tbl_heap2
  table tableam_tblas_heap2
  materialized view tableam_tblmv_heap2
+ table tableam_parted_heap2
+ table tableam_parted_a_heap2
  table tableam_parted_b_heap2
  table tableam_parted_d_heap2
-(5 rows)
+(7 rows)
 
+-- ALTER TABLE SET ACCESS METHOD
+CREATE TABLE heaptable USING heap AS SELECT a, repeat(a::text,9999) FROM generate_series(1,9) AS a;
+ALTER TABLE heaptable SET ACCESS METHOD heap2;
+explain (analyze, costs off, summary off, timing off) SELECT * FROM heaptable;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Seq Scan on heaptable (actual rows=9 loops=1)
+(1 row)
+
+SELECT COUNT(a), COUNT(1) FILTER(WHERE a=1) FROM heaptable;
+ count | count 
+-------+-------
+     9 |     1
+(1 row)
+
+DROP TABLE heaptable;
 -- Second, create objects in the new AM by changing the default AM
 BEGIN;
 SET LOCAL default_table_access_method = 'heap2';
@@ -266,7 +285,7 @@ ORDER BY 3, 1, 2;
  f       |        | tableam_fdw_heapx
  r       | heap2  | tableam_parted_1_heapx
  r       | heap   | tableam_parted_2_heapx
- p       |        | tableam_parted_heapx
+ p       | heap2  | tableam_parted_heapx
  S       |        | tableam_seq_heapx
  r       | heap2  | tableam_tbl_heapx
  r       | heap2  | tableam_tblas_heapx
@@ -295,7 +314,6 @@ ERROR:  cannot drop access method heap2 because other objects depend on it
 DETAIL:  table tableam_tbl_heap2 depends on access method heap2
 table tableam_tblas_heap2 depends on access method heap2
 materialized view tableam_tblmv_heap2 depends on access method heap2
-table tableam_parted_b_heap2 depends on access method heap2
-table tableam_parted_d_heap2 depends on access method heap2
+table tableam_parted_heap2 depends on access method heap2
 HINT:  Use DROP ... CASCADE to drop the dependent objects too.
 -- we intentionally leave the objects created above alive, to verify pg_dump support

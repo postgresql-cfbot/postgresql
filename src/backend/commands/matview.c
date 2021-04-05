@@ -299,6 +299,7 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 	 * will be gone).
 	 */
 	OIDNewHeap = make_new_heap(matviewOid, tableSpace, relpersistence,
+							   matviewRel->rd_rel->relam,
 							   ExclusiveLock);
 	LockRelationOid(OIDNewHeap, AccessExclusiveLock);
 	dest = CreateTransientRelDestReceiver(OIDNewHeap);

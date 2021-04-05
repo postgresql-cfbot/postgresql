@@ -2143,13 +2143,14 @@ psql_completion(const char *text, int start, int end)
 	}
 	/* If we have ALTER TABLE <sth> SET, provide list of attributes and '(' */
 	else if (Matches("ALTER", "TABLE", MatchAny, "SET"))
-		COMPLETE_WITH("(", "LOGGED", "SCHEMA", "TABLESPACE", "UNLOGGED",
-					  "WITH", "WITHOUT");
-
+		COMPLETE_WITH("(", "ACCESS METHOD", "LOGGED", "SCHEMA",
+					   "TABLESPACE", "UNLOGGED", "WITH", "WITHOUT");
 	/*
-	 * If we have ALTER TABLE <sth> SET TABLESPACE provide a list of
-	 * tablespaces
+	 * Complete with list of tablespaces (for SET TABLESPACE) or table AMs (for
+	 * SET ACCESS METHOD).
 	 */
+	else if (Matches("ALTER", "TABLE", MatchAny, "SET", "ACCESS", "METHOD"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_table_access_methods);
 	else if (Matches("ALTER", "TABLE", MatchAny, "SET", "TABLESPACE"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_tablespaces);
 	/* If we have ALTER TABLE <sth> SET WITHOUT provide CLUSTER or OIDS */

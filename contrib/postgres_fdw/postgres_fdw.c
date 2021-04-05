@@ -302,16 +302,10 @@ typedef struct
  */
 typedef struct ConversionLocation
 {
-	Relation	rel;			/* foreign table's relcache entry. */
+	const char *relname;        /* relation name */
 	AttrNumber	cur_attno;		/* attribute number being processed, or 0 */
-
-	/*
-	 * In case of foreign join push down, fdw_scan_tlist is used to identify
-	 * the Var node corresponding to the error location and
-	 * fsstate->ss.ps.state gives access to the RTEs of corresponding relation
-	 * to get the relation name and attribute name.
-	 */
-	ForeignScanState *fsstate;
+	const char *attname;        /* attribute name */
+	bool		is_wholerow;    /* whole-row reference to foreign table? */
 } ConversionLocation;
 
 /* Callback argument for ec_member_matches_foreign */
@@ -516,6 +510,9 @@ static HeapTuple make_tuple_from_result_row(PGresult *res,
 											ForeignScanState *fsstate,
 											MemoryContext temp_context);
 static void conversion_error_callback(void *arg);
+static void set_conversion_error_callback_info(ConversionLocation *errpos,
+											   Relation rel, int cur_attno,
+											   ForeignScanState *fsstate);
 static bool foreign_join_ok(PlannerInfo *root, RelOptInfo *joinrel,
 							JoinType jointype, RelOptInfo *outerrel, RelOptInfo *innerrel,
 							JoinPathExtraData *extra);
@@ -6899,9 +6896,10 @@ make_tuple_from_result_row(PGresult *res,
 	/*
 	 * Set up and install callback to report where conversion error occurs.
 	 */
-	errpos.rel = rel;
 	errpos.cur_attno = 0;
-	errpos.fsstate = fsstate;
+	errpos.attname = NULL;
+	errpos.relname = NULL;
+	errpos.is_wholerow = false;
 	errcallback.callback = conversion_error_callback;
 	errcallback.arg = (void *) &errpos;
 	errcallback.previous = error_context_stack;
@@ -6923,11 +6921,19 @@ make_tuple_from_result_row(PGresult *res,
 			valstr = PQgetvalue(res, row, j);
 
 		/*
+		 * Set error context callback info, so that we could avoid accessing
+		 * the system catalogs while processing the error in
+		 * conversion_error_callback. System catalog accesses are not safe in
+		 * error context callbacks because the transaction might have been
+		 * broken by then.
+		 */
+		set_conversion_error_callback_info(&errpos, rel, i, fsstate);
+
+		/*
 		 * convert value to internal representation
 		 *
 		 * Note: we ignore system columns other than ctid and oid in result
 		 */
-		errpos.cur_attno = i;
 		if (i > 0)
 		{
 			/* ordinary column */
@@ -6950,7 +6956,12 @@ make_tuple_from_result_row(PGresult *res,
 				ctid = (ItemPointer) DatumGetPointer(datum);
 			}
 		}
+
+		/* Reset error context callback info */
 		errpos.cur_attno = 0;
+		errpos.attname = NULL;
+		errpos.relname = NULL;
+		errpos.is_wholerow = false;
 
 		j++;
 	}
@@ -7000,40 +7011,39 @@ make_tuple_from_result_row(PGresult *res,
 }
 
 /*
- * Callback function which is called when error occurs during column value
- * conversion.  Print names of column and relation.
+ * Set the information required by the error context callback function, that is
+ * conversion_error_callback.
  */
 static void
-conversion_error_callback(void *arg)
+set_conversion_error_callback_info(ConversionLocation *errpos, Relation rel,
+								   int cur_attno, ForeignScanState *fsstate)
 {
 	const char *attname = NULL;
 	const char *relname = NULL;
-	bool		is_wholerow = false;
-	ConversionLocation *errpos = (ConversionLocation *) arg;
+	bool is_wholerow = false;
 
-	if (errpos->rel)
+	if (rel)
 	{
-		/* error occurred in a scan against a foreign table */
-		TupleDesc	tupdesc = RelationGetDescr(errpos->rel);
-		Form_pg_attribute attr = TupleDescAttr(tupdesc, errpos->cur_attno - 1);
+		/* Scan against a foreign table */
+		TupleDesc	tupdesc = RelationGetDescr(rel);
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, cur_attno - 1);
 
-		if (errpos->cur_attno > 0 && errpos->cur_attno <= tupdesc->natts)
+		if (cur_attno > 0 && cur_attno <= tupdesc->natts)
 			attname = NameStr(attr->attname);
-		else if (errpos->cur_attno == SelfItemPointerAttributeNumber)
+		else if (cur_attno == SelfItemPointerAttributeNumber)
 			attname = "ctid";
 
-		relname = RelationGetRelationName(errpos->rel);
+		relname = RelationGetRelationName(rel);
 	}
 	else
 	{
-		/* error occurred in a scan against a foreign join */
-		ForeignScanState *fsstate = errpos->fsstate;
+		/* Scan against a foreign join */
 		ForeignScan *fsplan = castNode(ForeignScan, fsstate->ss.ps.plan);
 		EState	   *estate = fsstate->ss.ps.state;
 		TargetEntry *tle;
 
 		tle = list_nth_node(TargetEntry, fsplan->fdw_scan_tlist,
-							errpos->cur_attno - 1);
+							cur_attno - 1);
 
 		/*
 		 * Target list can have Vars and expressions.  For Vars, we can get
@@ -7054,18 +7064,35 @@ conversion_error_callback(void *arg)
 
 			relname = get_rel_name(rte->relid);
 		}
-		else
-			errcontext("processing expression at position %d in select list",
-					   errpos->cur_attno);
 	}
 
-	if (relname)
+	errpos->cur_attno = cur_attno;
+	errpos->attname = attname;
+	errpos->relname = relname;
+	errpos->is_wholerow = is_wholerow;
+}
+
+/*
+ * Callback function which is called when error occurs during column value
+ * conversion.  Print names of column and relation.
+ */
+static void
+conversion_error_callback(void *arg)
+{
+	ConversionLocation *errpos = (ConversionLocation *) arg;
+
+	if (errpos->relname)
 	{
-		if (is_wholerow)
-			errcontext("whole-row reference to foreign table \"%s\"", relname);
-		else if (attname)
-			errcontext("column \"%s\" of foreign table \"%s\"", attname, relname);
+		if (errpos->is_wholerow)
+			errcontext("whole-row reference to foreign table \"%s\"",
+						errpos->relname);
+		else if (errpos->attname)
+			errcontext("column \"%s\" of foreign table \"%s\"",
+						errpos->attname, errpos->relname);
 	}
+	else
+		errcontext("processing expression at position %d in select list",
+					errpos->cur_attno);
 }
 
 /*

@@ -132,8 +132,9 @@ static dlist_head lsn_mapping = DLIST_STATIC_INIT(lsn_mapping);
 typedef struct SlotErrCallbackArg
 {
 	LogicalRepRelMapEntry *rel;
-	int			local_attnum;
 	int			remote_attnum;
+	char		*local_typename;
+	char		*remote_typename;
 } SlotErrCallbackArg;
 
 /*
@@ -430,30 +431,19 @@ static void
 slot_store_error_callback(void *arg)
 {
 	SlotErrCallbackArg *errarg = (SlotErrCallbackArg *) arg;
-	LogicalRepRelMapEntry *rel;
-	char	   *remotetypname;
-	Oid			remotetypoid,
-				localtypoid;
+	LogicalRepRelMapEntry *rel = errarg->rel;
 
 	/* Nothing to do if remote attribute number is not set */
 	if (errarg->remote_attnum < 0)
 		return;
 
-	rel = errarg->rel;
-	remotetypoid = rel->remoterel.atttyps[errarg->remote_attnum];
-
-	/* Fetch remote type name from the LogicalRepTypMap cache */
-	remotetypname = logicalrep_typmap_gettypname(remotetypoid);
-
-	/* Fetch local type OID from the local sys cache */
-	localtypoid = get_atttype(rel->localreloid, errarg->local_attnum + 1);
+	Assert(errarg->local_typename && errarg->remote_typename);
 
 	errcontext("processing remote data for replication target relation \"%s.%s\" column \"%s\", "
 			   "remote type %s, local type %s",
 			   rel->remoterel.nspname, rel->remoterel.relname,
 			   rel->remoterel.attnames[errarg->remote_attnum],
-			   remotetypname,
-			   format_type_be(localtypoid));
+			   errarg->remote_typename, errarg->local_typename);
 }
 
 /*
@@ -474,8 +464,9 @@ slot_store_data(TupleTableSlot *slot, LogicalRepRelMapEntry *rel,
 
 	/* Push callback + info on the error context stack */
 	errarg.rel = rel;
-	errarg.local_attnum = -1;
 	errarg.remote_attnum = -1;
+	errarg.local_typename = NULL;
+	errarg.remote_typename = NULL;
 	errcallback.callback = slot_store_error_callback;
 	errcallback.arg = (void *) &errarg;
 	errcallback.previous = error_context_stack;
@@ -491,11 +482,17 @@ slot_store_data(TupleTableSlot *slot, LogicalRepRelMapEntry *rel,
 		if (!att->attisdropped && remoteattnum >= 0)
 		{
 			StringInfo	colvalue = &tupleData->colvalues[remoteattnum];
+			Oid remotetypid = rel->remoterel.atttyps[remoteattnum];
 
 			Assert(remoteattnum < tupleData->ncols);
 
-			errarg.local_attnum = i;
+			/*
+			 * Set the attribute number and both local and remote type names
+			 * from the local sys cache and LogicalRepTypMap respectively.
+			 */
 			errarg.remote_attnum = remoteattnum;
+			errarg.local_typename = format_type_be(att->atttypid);
+			errarg.remote_typename = logicalrep_typmap_gettypname(remotetypid);
 
 			if (tupleData->colstatus[remoteattnum] == LOGICALREP_COLUMN_TEXT)
 			{
@@ -543,8 +540,9 @@ slot_store_data(TupleTableSlot *slot, LogicalRepRelMapEntry *rel,
 				slot->tts_isnull[i] = true;
 			}
 
-			errarg.local_attnum = -1;
 			errarg.remote_attnum = -1;
+			errarg.local_typename = NULL;
+			errarg.remote_typename = NULL;
 		}
 		else
 		{
@@ -600,8 +598,9 @@ slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
 
 	/* For error reporting, push callback + info on the error context stack */
 	errarg.rel = rel;
-	errarg.local_attnum = -1;
 	errarg.remote_attnum = -1;
+	errarg.local_typename = NULL;
+	errarg.remote_typename = NULL;
 	errcallback.callback = slot_store_error_callback;
 	errcallback.arg = (void *) &errarg;
 	errcallback.previous = error_context_stack;
@@ -622,9 +621,15 @@ slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
 		if (tupleData->colstatus[remoteattnum] != LOGICALREP_COLUMN_UNCHANGED)
 		{
 			StringInfo	colvalue = &tupleData->colvalues[remoteattnum];
+			Oid remotetypid = rel->remoterel.atttyps[remoteattnum];
 
-			errarg.local_attnum = i;
+			/*
+			 * Set the attribute number and both local and remote type names
+			 * from the local sys cache and LogicalRepTypMap respectively.
+			 */
 			errarg.remote_attnum = remoteattnum;
+			errarg.local_typename =	format_type_be(att->atttypid);
+			errarg.remote_typename = logicalrep_typmap_gettypname(remotetypid);
 
 			if (tupleData->colstatus[remoteattnum] == LOGICALREP_COLUMN_TEXT)
 			{
@@ -668,8 +673,9 @@ slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
 				slot->tts_isnull[i] = true;
 			}
 
-			errarg.local_attnum = -1;
 			errarg.remote_attnum = -1;
+			errarg.local_typename = NULL;
+			errarg.remote_typename = NULL;
 		}
 	}
 

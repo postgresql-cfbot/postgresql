@@ -142,6 +142,7 @@ typedef struct _dumpableObject
 typedef struct _namespaceInfo
 {
 	DumpableObject dobj;
+	Oid			nspowner;
 	char	   *rolname;		/* name of owner, or empty string */
 	char	   *nspacl;
 	char	   *rnspacl;

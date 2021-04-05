@@ -591,36 +591,46 @@ if test x"$pgac_cv_gcc_atomic_int64_cas" = x"yes"; then
   AC_DEFINE(HAVE_GCC__ATOMIC_INT64_CAS, 1, [Define to 1 if you have __atomic_compare_exchange_n(int64 *, int64 *, int64).])
 fi])# PGAC_HAVE_GCC__ATOMIC_INT64_CAS
 
-# PGAC_SSE42_CRC32_INTRINSICS
+# PGAC_SSE42_INTRINSICS
 # ---------------------------
 # Check if the compiler supports the x86 CRC instructions added in SSE 4.2,
 # using the _mm_crc32_u8 and _mm_crc32_u32 intrinsic functions. (We don't
 # test the 8-byte variant, _mm_crc32_u64, but it is assumed to be present if
 # the other ones are, on x86-64 platforms)
 #
+# While at it, check for support x86 instructions added in SSSE3 and SSE4.1,
+# in particular _mm_alignr_epi8, _mm_shuffle_epi8, and _mm_testz_si128.
+# We should be able to assume these are understood by the compiler if CRC
+# intrinsics are, but it's better to document our reliance on them here.
+#
+# We don't test for SSE2 intrinsics, as they are assumed to be present on
+# x86-64 platforms, which we can easily check at compile time.
+#
 # An optional compiler flag can be passed as argument (e.g. -msse4.2). If the
-# intrinsics are supported, sets pgac_sse42_crc32_intrinsics, and CFLAGS_SSE42.
-AC_DEFUN([PGAC_SSE42_CRC32_INTRINSICS],
-[define([Ac_cachevar], [AS_TR_SH([pgac_cv_sse42_crc32_intrinsics_$1])])dnl
-AC_CACHE_CHECK([for _mm_crc32_u8 and _mm_crc32_u32 with CFLAGS=$1], [Ac_cachevar],
+# intrinsics are supported, sets pgac_sse42_intrinsics, and CFLAGS_SSE42.
+AC_DEFUN([PGAC_SSE42_INTRINSICS],
+[define([Ac_cachevar], [AS_TR_SH([pgac_cv_sse42_intrinsics_$1])])dnl
+AC_CACHE_CHECK([for for _mm_crc32_u8, _mm_crc32_u32, _mm_alignr_epi8, _mm_shuffle_epi8, and _mm_testz_si128 with CFLAGS=$1], [Ac_cachevar],
 [pgac_save_CFLAGS=$CFLAGS
 CFLAGS="$pgac_save_CFLAGS $1"
 AC_LINK_IFELSE([AC_LANG_PROGRAM([#include <nmmintrin.h>],
   [unsigned int crc = 0;
    crc = _mm_crc32_u8(crc, 0);
    crc = _mm_crc32_u32(crc, 0);
+   __m128i vec = _mm_set1_epi8(crc);
+   vec = _mm_shuffle_epi8(vec,
+         _mm_alignr_epi8(vec, vec, 1));
    /* return computed value, to prevent the above being optimized away */
-   return crc == 0;])],
+   return _mm_testz_si128(vec, vec);])],
   [Ac_cachevar=yes],
   [Ac_cachevar=no])
 CFLAGS="$pgac_save_CFLAGS"])
 if test x"$Ac_cachevar" = x"yes"; then
   CFLAGS_SSE42="$1"
-  pgac_sse42_crc32_intrinsics=yes
+  pgac_sse42_intrinsics=yes
 fi
 undefine([Ac_cachevar])dnl
-])# PGAC_SSE42_CRC32_INTRINSICS
-
+])# PGAC_SSE42_INTRINSICS
 
 # PGAC_ARMV8_CRC32C_INTRINSICS
 # ----------------------------

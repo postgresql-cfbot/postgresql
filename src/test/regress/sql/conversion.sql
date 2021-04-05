@@ -74,6 +74,34 @@ $$;
 --
 -- UTF-8
 --
+CREATE TABLE utf8_verification_inputs (inbytes bytea, description text);
+insert into utf8_verification_inputs  values
+  ('\xaf',		'bare continuation'),
+  ('\xc5',		'missing second byte in 2-byte char'),
+  ('\xc080',	'smallest 2-byte overlong'),
+  ('\xc1bf',	'largest 2-byte overlong'),
+  ('\xc280',	'next 2-byte after overlongs'),
+  ('\xdfbf',	'largest 2-byte'),
+  ('\xe9af',	'missing third byte in 3-byte char'),
+  ('\xe08080',	'smallest 3-byte overlong'),
+  ('\xe09fbf',	'largest 3-byte overlong'),
+  ('\xe0a080',	'next 3-byte after overlong'),
+  ('\xed9fbf',	'last before surrogates'),
+  ('\xeda080',	'smallest surrogate'),
+  ('\xedbfbf',	'largest surrogate'),
+  ('\xee8080',	'next after surrogates'),
+  ('\xefbfbf',	'largest 3-byte'),
+  ('\xf1afbf',	'missing fourth byte in 4-byte char'),
+  ('\xf0808080',	'smallest 4-byte overlong'),
+  ('\xf08fbfbf',	'largest 4-byte overlong'),
+  ('\xf0908080',	'next 4-byte after overlong'),
+  ('\xf48fbfbf',	'largest 4-byte'),
+  ('\xf4908080',	'smallest too large'),
+  ('\xfa9a9a8a8a',	'5 byte');
+
+-- Test UTF-8 verification
+select description, (test_conv(inbytes, 'utf8', 'utf8')).* from utf8_verification_inputs;
+
 CREATE TABLE utf8_inputs (inbytes bytea, description text);
 insert into utf8_inputs  values
   ('\x666f6f',		'valid, pure ASCII'),

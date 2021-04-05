@@ -13,6 +13,7 @@
 #include "c.h"
 
 #include "mb/pg_wchar.h"
+#include "port/pg_utf8.h"
 
 
 /*
@@ -1760,30 +1761,8 @@ pg_utf8_verifychar(const unsigned char *s, int len)
 static int
 pg_utf8_verifystr(const unsigned char *s, int len)
 {
-	const unsigned char *start = s;
-
-	while (len > 0)
-	{
-		int			l;
-
-		/* fast path for ASCII-subset characters */
-		if (!IS_HIGHBIT_SET(*s))
-		{
-			if (*s == '\0')
-				break;
-			l = 1;
-		}
-		else
-		{
-			l = pg_utf8_verifychar(s, len);
-			if (l == -1)
-				break;
-		}
-		s += l;
-		len -= l;
-	}
-
-	return s - start;
+	/* platform-specific implementation in src/port */
+	return UTF8_VERIFYSTR(s, len);
 }
 
 /*

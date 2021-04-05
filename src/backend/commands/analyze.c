@@ -657,11 +657,10 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 		}
 
 		/*
-		 * Now report ANALYZE to the stats collector.
+		 * Now report ANALYZE to the stats facility.
 		 *
-		 * We deliberately don't report to the stats collector when doing
-		 * inherited stats, because the stats collector only tracks per-table
-		 * stats.
+		 * We deliberately don't report when doing inherited stats, because
+		 * the stats collector only tracks per-table stats.
 		 *
 		 * Reset the changes_since_analyze counter only if we analyzed all
 		 * columns; otherwise, there is still work for auto-analyze to do.

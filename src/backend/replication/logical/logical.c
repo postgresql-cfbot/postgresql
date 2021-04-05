@@ -1780,7 +1780,8 @@ UpdateDecodingStats(LogicalDecodingContext *ctx)
 		 (long long) rb->streamCount,
 		 (long long) rb->streamBytes);
 
-	pgstat_report_replslot(NameStr(ctx->slot->data.name),
+	pgstat_report_replslot(ctx->slot - ReplicationSlotCtl->replication_slots,
+						   NameStr(ctx->slot->data.name),
 						   rb->spillTxns, rb->spillCount, rb->spillBytes,
 						   rb->streamTxns, rb->streamCount, rb->streamBytes);
 	rb->spillTxns = 0;

@@ -73,6 +73,7 @@ static void StatementTimeoutHandler(void);
 static void LockTimeoutHandler(void);
 static void IdleInTransactionSessionTimeoutHandler(void);
 static void IdleSessionTimeoutHandler(void);
+static void IdleStatsUpdateTimeoutHandler(void);
 static void ClientCheckTimeoutHandler(void);
 static bool ThereIsAtLeastOneRole(void);
 static void process_startup_options(Port *port, bool am_superuser);
@@ -622,12 +623,21 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 						IdleInTransactionSessionTimeoutHandler);
 		RegisterTimeout(IDLE_SESSION_TIMEOUT, IdleSessionTimeoutHandler);
 		RegisterTimeout(CLIENT_CONNECTION_CHECK_TIMEOUT, ClientCheckTimeoutHandler);
+		RegisterTimeout(IDLE_STATS_UPDATE_TIMEOUT,
+						IdleStatsUpdateTimeoutHandler);
 	}
 
 	/*
 	 * bufmgr needs another initialization call too
 	 */
 	InitBufferPoolBackend();
+
+	/*
+	 * Initialize stats collection --- must happen before first xact. The
+	 * autovac launcher already has done so.
+	 */
+	if (!IsAutoVacuumWorkerProcess() && !IsBackgroundWorker)
+		pgstat_initialize();
 
 	/*
 	 * Initialize local process's access to XLOG.
@@ -661,7 +671,12 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		/* Reset CurrentResourceOwner to nothing for the moment */
 		CurrentResourceOwner = NULL;
 
-		on_shmem_exit(ShutdownXLOG, 0);
+		/*
+		 * Use before_shmem_exit() so that ShutdownXLOG() can rely on DSM
+		 * segments etc to work.
+		 */
+		before_shmem_exit(pgstat_before_server_shutdown, 0);
+		before_shmem_exit(ShutdownXLOG, 0);
 	}
 
 	/*
@@ -676,10 +691,6 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 
 	/* Initialize portal manager */
 	EnablePortalManager();
-
-	/* Initialize stats collection --- must happen before first xact */
-	if (!bootstrap)
-		pgstat_initialize();
 
 	/* Initialize status reporting */
 	if (!bootstrap)
@@ -1244,6 +1255,14 @@ static void
 IdleSessionTimeoutHandler(void)
 {
 	IdleSessionTimeoutPending = true;
+	InterruptPending = true;
+	SetLatch(MyLatch);
+}
+
+static void
+IdleStatsUpdateTimeoutHandler(void)
+{
+	IdleStatsUpdateTimeoutPending = true;
 	InterruptPending = true;
 	SetLatch(MyLatch);
 }

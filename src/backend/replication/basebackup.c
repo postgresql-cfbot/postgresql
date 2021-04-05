@@ -1568,8 +1568,8 @@ is_checksummed_file(const char *fullpath, const char *filename)
  *
  * If 'missing_ok' is true, will not throw an error if the file is not found.
  *
- * If dboid is anything other than InvalidOid then any checksum failures detected
- * will get reported to the stats collector.
+ * If dboid is anything other than InvalidOid then any checksum failures
+ * detected will get reported to the activity stats facility.
  *
  * Returns true if the file was successfully sent, false if 'missing_ok',
  * and the file did not exist.

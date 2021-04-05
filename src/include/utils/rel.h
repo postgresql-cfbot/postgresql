@@ -234,6 +234,7 @@ typedef struct RelationData
 	Oid			rd_toastoid;	/* Real TOAST table's OID, or InvalidOid */
 
 	/* use "struct" here to avoid needing to include pgstat.h: */
+	bool		pgstat_enabled;
 	struct PgStat_TableStatus *pgstat_info; /* statistics collection area */
 } RelationData;
 

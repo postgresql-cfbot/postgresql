@@ -258,7 +258,7 @@ WalWriterMain(void)
 			left_till_hibernate--;
 
 		/* Send WAL statistics to the stats collector */
-		pgstat_send_wal(false);
+		pgstat_report_wal(false);
 
 		/*
 		 * Sleep until we are signaled or WalWriterDelay has elapsed.  If we
@@ -298,11 +298,11 @@ HandleWalWriterInterrupts(void)
 		 * Force to send remaining WAL statistics to the stats collector at
 		 * process exit.
 		 *
-		 * Since pgstat_send_wal is invoked with 'force' is false in main loop
+		 * Since pgstat_report_wal is invoked with 'force' is false in main loop
 		 * to avoid overloading to the stats collector, there may exist unsent
 		 * stats counters for the WAL writer.
 		 */
-		pgstat_send_wal(true);
+		pgstat_report_wal(true);
 
 		proc_exit(0);
 	}

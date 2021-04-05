@@ -700,6 +700,10 @@ ProcedureCreate(const char *procedureName,
 			AtEOXact_GUC(true, save_nestlevel);
 	}
 
+	/* ensure that stats are dropped if transaction commits */
+	if (!is_update)
+		pgstat_create_function(retval);
+
 	return myself;
 }
 

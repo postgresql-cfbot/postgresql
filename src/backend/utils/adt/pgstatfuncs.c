@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
  * pgstatfuncs.c
- *	  Functions for accessing the statistics collector data
+ *	  Functions for accessing the activity statistics data
  *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -34,9 +34,6 @@
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
 
 #define HAS_PGSTAT_PERMISSIONS(role)	 (is_member_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS) || has_privs_of_role(GetUserId(), role))
-
-/* Global bgwriter statistics, from bgwriter.c */
-extern PgStat_MsgBgWriter bgwriterStats;
 
 Datum
 pg_stat_get_numscans(PG_FUNCTION_ARGS)
@@ -1726,69 +1723,71 @@ pg_stat_get_db_sessions_killed(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_bgwriter_timed_checkpoints(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_INT64(pgstat_fetch_global()->timed_checkpoints);
+	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->timed_checkpoints);
 }
 
 Datum
 pg_stat_get_bgwriter_requested_checkpoints(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_INT64(pgstat_fetch_global()->requested_checkpoints);
+	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->requested_checkpoints);
 }
 
 Datum
 pg_stat_get_bgwriter_buf_written_checkpoints(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_INT64(pgstat_fetch_global()->buf_written_checkpoints);
+	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->buf_written_checkpoints);
 }
 
 Datum
 pg_stat_get_bgwriter_buf_written_clean(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_INT64(pgstat_fetch_global()->buf_written_clean);
+	PG_RETURN_INT64(pgstat_fetch_stat_bgwriter()->buf_written_clean);
 }
 
 Datum
 pg_stat_get_bgwriter_maxwritten_clean(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_INT64(pgstat_fetch_global()->maxwritten_clean);
+	PG_RETURN_INT64(pgstat_fetch_stat_bgwriter()->maxwritten_clean);
 }
 
 Datum
 pg_stat_get_checkpoint_write_time(PG_FUNCTION_ARGS)
 {
 	/* time is already in msec, just convert to double for presentation */
-	PG_RETURN_FLOAT8((double) pgstat_fetch_global()->checkpoint_write_time);
+	PG_RETURN_FLOAT8((double)
+					 pgstat_fetch_stat_checkpointer()->checkpoint_write_time);
 }
 
 Datum
 pg_stat_get_checkpoint_sync_time(PG_FUNCTION_ARGS)
 {
 	/* time is already in msec, just convert to double for presentation */
-	PG_RETURN_FLOAT8((double) pgstat_fetch_global()->checkpoint_sync_time);
+	PG_RETURN_FLOAT8((double)
+					 pgstat_fetch_stat_checkpointer()->checkpoint_sync_time);
 }
 
 Datum
 pg_stat_get_bgwriter_stat_reset_time(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_TIMESTAMPTZ(pgstat_fetch_global()->stat_reset_timestamp);
+	PG_RETURN_TIMESTAMPTZ(pgstat_fetch_stat_bgwriter()->stat_reset_timestamp);
 }
 
 Datum
 pg_stat_get_buf_written_backend(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_INT64(pgstat_fetch_global()->buf_written_backend);
+	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->buf_written_backend);
 }
 
 Datum
 pg_stat_get_buf_fsync_backend(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_INT64(pgstat_fetch_global()->buf_fsync_backend);
+	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->buf_fsync_backend);
 }
 
 Datum
 pg_stat_get_buf_alloc(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_INT64(pgstat_fetch_global()->buf_alloc);
+	PG_RETURN_INT64(pgstat_fetch_stat_bgwriter()->buf_alloc);
 }
 
 /*
@@ -1835,11 +1834,11 @@ pg_stat_get_wal(PG_FUNCTION_ARGS)
 	wal_stats = pgstat_fetch_stat_wal();
 
 	/* Fill values and NULLs */
-	values[0] = Int64GetDatum(wal_stats->wal_records);
-	values[1] = Int64GetDatum(wal_stats->wal_fpi);
+	values[0] = Int64GetDatum(wal_stats->wal_usage.wal_records);
+	values[1] = Int64GetDatum(wal_stats->wal_usage.wal_fpi);
 
 	/* Convert to numeric. */
-	snprintf(buf, sizeof buf, UINT64_FORMAT, wal_stats->wal_bytes);
+	snprintf(buf, sizeof buf, UINT64_FORMAT, wal_stats->wal_usage.wal_bytes);
 	values[2] = DirectFunctionCall3(numeric_in,
 									CStringGetDatum(buf),
 									ObjectIdGetDatum(0),
@@ -2127,7 +2126,15 @@ pg_stat_get_xact_function_self_time(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_snapshot_timestamp(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_TIMESTAMPTZ(pgstat_fetch_global()->stats_timestamp);
+	bool		have_snapshot;
+	TimestampTz ts;
+
+	ts = pgstat_get_stat_snapshot_timestamp(&have_snapshot);
+
+	if (!have_snapshot)
+		PG_RETURN_NULL();
+
+	PG_RETURN_TIMESTAMPTZ(ts);
 }
 
 /* Discard the active statistics snapshot */
@@ -2139,6 +2146,14 @@ pg_stat_clear_snapshot(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+/* Force statistics to be reported at the next occasion */
+Datum
+pg_stat_force_next_flush(PG_FUNCTION_ARGS)
+{
+	pgstat_force_next_flush();
+
+	PG_RETURN_VOID();
+}
 
 /* Reset all counters for the current database */
 Datum

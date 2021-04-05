@@ -419,20 +419,20 @@ pgarch_ArchiverCopyLoop(void)
 				pgarch_archiveDone(xlog);
 
 				/*
-				 * Tell the collector about the WAL file that we successfully
-				 * archived
+				 * Tell the activity statistics facility about the WAL file
+				 * that we successfully archived
 				 */
-				pgstat_send_archiver(xlog, false);
+				pgstat_report_archiver(xlog, false);
 
 				break;			/* out of inner retry loop */
 			}
 			else
 			{
 				/*
-				 * Tell the collector about the WAL file that we failed to
-				 * archive
+				 * Tell the activity statistics facility about the WAL file
+				 * that we failed to archive
 				 */
-				pgstat_send_archiver(xlog, true);
+				pgstat_report_archiver(xlog, true);
 
 				if (++failures >= NUM_ARCHIVE_RETRIES)
 				{

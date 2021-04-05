@@ -583,7 +583,7 @@
 # STATISTICS
 #------------------------------------------------------------------------------
 
-# - Query and Index Statistics Collector -
+# - Query and Index Activity Statistics -
 
 #track_activities = on
 #track_counts = on

@@ -230,8 +230,8 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_LOGICAL_LAUNCHER_MAIN:
 			event_name = "LogicalLauncherMain";
 			break;
-		case WAIT_EVENT_PGSTAT_MAIN:
-			event_name = "PgStatMain";
+		case WAIT_EVENT_READING_STATS_FILE:
+			event_name = "ReadingStatsFile";
 			break;
 		case WAIT_EVENT_RECOVERY_WAL_STREAM:
 			event_name = "RecoveryWalStream";

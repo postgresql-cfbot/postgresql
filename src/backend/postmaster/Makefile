@@ -20,7 +20,6 @@ OBJS = \
 	fork_process.o \
 	interrupt.o \
 	pgarch.o \
-	pgstat.o \
 	postmaster.o \
 	startup.o \
 	syslogger.o \

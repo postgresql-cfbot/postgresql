@@ -83,6 +83,17 @@ ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *pars
 		data += xl_relfilenodes->nrels * sizeof(RelFileNode);
 	}
 
+	if (parsed->xinfo & XACT_XINFO_HAS_DROPPED_STATS)
+	{
+		xl_xact_dropped_stats *xl_drops = (xl_xact_dropped_stats *) data;
+
+		parsed->ndroppedstats = xl_drops->ndropped;
+		parsed->droppedstats = xl_drops->dropped_stats;
+
+		data += MinSizeOfXactDroppedStats;
+		data += xl_drops->ndropped * sizeof(PgStat_DroppedStatsItem);
+	}
+
 	if (parsed->xinfo & XACT_XINFO_HAS_INVALS)
 	{
 		xl_xact_invals *xl_invals = (xl_xact_invals *) data;
@@ -178,6 +189,17 @@ ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed)
 		data += xl_relfilenodes->nrels * sizeof(RelFileNode);
 	}
 
+	if (parsed->xinfo & XACT_XINFO_HAS_DROPPED_STATS)
+	{
+		xl_xact_dropped_stats *xl_drops = (xl_xact_dropped_stats *) data;
+
+		parsed->ndroppedstats = xl_drops->ndropped;
+		parsed->droppedstats = xl_drops->dropped_stats;
+
+		data += MinSizeOfXactDroppedStats;
+		data += xl_drops->ndropped * sizeof(PgStat_DroppedStatsItem);
+	}
+
 	if (parsed->xinfo & XACT_XINFO_HAS_TWOPHASE)
 	{
 		xl_xact_twophase *xl_twophase = (xl_xact_twophase *) data;
@@ -243,6 +265,12 @@ ParsePrepareRecord(uint8 info, xl_xact_prepare *xlrec, xl_xact_parsed_prepare *p
 	parsed->abortnodes = (RelFileNode *) bufptr;
 	bufptr += MAXALIGN(xlrec->nabortrels * sizeof(RelFileNode));
 
+	parsed->droppedstats = (PgStat_DroppedStatsItem *) bufptr;
+	bufptr += MAXALIGN(xlrec->ncommitdroppedstats * sizeof(PgStat_DroppedStatsItem));
+
+	parsed->abortdroppedstats = (PgStat_DroppedStatsItem *) bufptr;
+	bufptr += MAXALIGN(xlrec->nabortdroppedstats * sizeof(PgStat_DroppedStatsItem));
+
 	parsed->msgs = (SharedInvalidationMessage *) bufptr;
 	bufptr += MAXALIGN(xlrec->ninvalmsgs * sizeof(SharedInvalidationMessage));
 }
@@ -280,6 +308,25 @@ xact_desc_subxacts(StringInfo buf, int nsubxacts, TransactionId *subxacts)
 }
 
 static void
+xact_desc_dropped_stats(StringInfo buf, const char *label,
+						int ndropped, PgStat_DroppedStatsItem *dropped_stats)
+{
+	int			i;
+
+	if (ndropped > 0)
+	{
+		appendStringInfo(buf, "; %sdropped stats:", label);
+		for (i = 0; i < ndropped; i++)
+		{
+			appendStringInfo(buf, " %u/%u/%u",
+							 dropped_stats[i].kind,
+							 dropped_stats[i].dboid,
+							 dropped_stats[i].objoid);
+		}
+	}
+}
+
+static void
 xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId origin_id)
 {
 	xl_xact_parsed_commit parsed;
@@ -294,6 +341,7 @@ xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId 
 
 	xact_desc_relations(buf, "rels", parsed.nrels, parsed.xnodes);
 	xact_desc_subxacts(buf, parsed.nsubxacts, parsed.subxacts);
+	xact_desc_dropped_stats(buf, "", parsed.ndroppedstats, parsed.droppedstats);
 
 	standby_desc_invalidations(buf, parsed.nmsgs, parsed.msgs, parsed.dbId,
 							   parsed.tsId,
@@ -326,6 +374,7 @@ xact_desc_abort(StringInfo buf, uint8 info, xl_xact_abort *xlrec)
 
 	xact_desc_relations(buf, "rels", parsed.nrels, parsed.xnodes);
 	xact_desc_subxacts(buf, parsed.nsubxacts, parsed.subxacts);
+	xact_desc_dropped_stats(buf, "", parsed.ndroppedstats, parsed.droppedstats);
 }
 
 static void
@@ -341,6 +390,8 @@ xact_desc_prepare(StringInfo buf, uint8 info, xl_xact_prepare *xlrec)
 	xact_desc_relations(buf, "rels(commit)", parsed.nrels, parsed.xnodes);
 	xact_desc_relations(buf, "rels(abort)", parsed.nabortrels,
 						parsed.abortnodes);
+	xact_desc_dropped_stats(buf, "commit ", parsed.ndroppedstats, parsed.droppedstats);
+	xact_desc_dropped_stats(buf, "abort ", parsed.nabortdroppedstats, parsed.abortdroppedstats);
 	xact_desc_subxacts(buf, parsed.nsubxacts, parsed.subxacts);
 
 	standby_desc_invalidations(buf, parsed.nmsgs, parsed.msgs, parsed.dbId,

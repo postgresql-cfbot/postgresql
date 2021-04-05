@@ -342,9 +342,6 @@ static void autovacuum_do_vac_analyze(autovac_table *tab,
 									  BufferAccessStrategy bstrategy);
 static AutoVacOpts *extract_autovac_opts(HeapTuple tup,
 										 TupleDesc pg_class_desc);
-static PgStat_StatTabEntry *get_pgstat_tabentry_relid(Oid relid, bool isshared,
-													  PgStat_StatDBEntry *shared,
-													  PgStat_StatDBEntry *dbentry);
 static void perform_work_item(AutoVacuumWorkItem *workitem);
 static void autovac_report_activity(autovac_table *tab);
 static void autovac_report_workitem(AutoVacuumWorkItem *workitem,
@@ -1684,13 +1681,17 @@ AutoVacWorkerMain(int argc, char *argv[])
 		char		dbname[NAMEDATALEN];
 
 		/*
-		 * Report autovac startup to the stats collector.  We deliberately do
+		 * Report autovac startup to the stats system.  We deliberately do
 		 * this before InitPostgres, so that the last_autovac_time will get
 		 * updated even if the connection attempt fails.  This is to prevent
 		 * autovac from getting "stuck" repeatedly selecting an unopenable
 		 * database, rather than making any progress on stuff it can connect
 		 * to.
+		 *
+		 * For that to work we need to start the stats subsystem earlier than
+		 * normal...
 		 */
+		pgstat_initialize();
 		pgstat_report_autovac(dbid);
 
 		/*
@@ -1961,8 +1962,6 @@ do_autovacuum(void)
 	HASHCTL		ctl;
 	HTAB	   *table_toast_map;
 	ListCell   *volatile cell;
-	PgStat_StatDBEntry *shared;
-	PgStat_StatDBEntry *dbentry;
 	BufferAccessStrategy bstrategy;
 	ScanKeyData key;
 	TupleDesc	pg_class_desc;
@@ -1981,19 +1980,13 @@ do_autovacuum(void)
 										  ALLOCSET_DEFAULT_SIZES);
 	MemoryContextSwitchTo(AutovacMemCxt);
 
-	/*
-	 * may be NULL if we couldn't find an entry (only happens if we are
-	 * forcing a vacuum for anti-wrap purposes).
-	 */
-	dbentry = pgstat_fetch_stat_dbentry(MyDatabaseId);
-
 	/* Start a transaction so our commands have one to play into. */
 	StartTransactionCommand();
 
 	/*
-	 * Clean up any dead statistics collector entries for this DB. We always
-	 * want to do this exactly once per DB-processing cycle, even if we find
-	 * nothing worth vacuuming in the database.
+	 * Clean up any dead statistics entries for this DB. We always want to do
+	 * this exactly once per DB-processing cycle, even if we find nothing
+	 * worth vacuuming in the database.
 	 */
 	pgstat_vacuum_stat();
 
@@ -2033,9 +2026,6 @@ do_autovacuum(void)
 
 	/* StartTransactionCommand changed elsewhere */
 	MemoryContextSwitchTo(AutovacMemCxt);
-
-	/* The database hash where pgstat keeps shared relations */
-	shared = pgstat_fetch_stat_dbentry(InvalidOid);
 
 	classRel = table_open(RelationRelationId, AccessShareLock);
 
@@ -2114,8 +2104,8 @@ do_autovacuum(void)
 
 		/* Fetch reloptions and the pgstat entry for this table */
 		relopts = extract_autovac_opts(tuple, pg_class_desc);
-		tabentry = get_pgstat_tabentry_relid(relid, classForm->relisshared,
-											 shared, dbentry);
+		tabentry = pgstat_fetch_stat_tabentry_extended(classForm->relisshared,
+													   relid);
 
 		/* Check if it needs vacuum or analyze */
 		relation_needs_vacanalyze(relid, relopts, classForm, tabentry,
@@ -2198,8 +2188,8 @@ do_autovacuum(void)
 		}
 
 		/* Fetch the pgstat entry for this table */
-		tabentry = get_pgstat_tabentry_relid(relid, classForm->relisshared,
-											 shared, dbentry);
+		tabentry = pgstat_fetch_stat_tabentry_extended(classForm->relisshared,
+													   relid);
 
 		relation_needs_vacanalyze(relid, relopts, classForm, tabentry,
 								  effective_multixact_freeze_max_age,
@@ -2758,29 +2748,6 @@ extract_autovac_opts(HeapTuple tup, TupleDesc pg_class_desc)
 	return av;
 }
 
-/*
- * get_pgstat_tabentry_relid
- *
- * Fetch the pgstat entry of a table, either local to a database or shared.
- */
-static PgStat_StatTabEntry *
-get_pgstat_tabentry_relid(Oid relid, bool isshared, PgStat_StatDBEntry *shared,
-						  PgStat_StatDBEntry *dbentry)
-{
-	PgStat_StatTabEntry *tabentry = NULL;
-
-	if (isshared)
-	{
-		if (PointerIsValid(shared))
-			tabentry = hash_search(shared->tables, &relid,
-								   HASH_FIND, NULL);
-	}
-	else if (PointerIsValid(dbentry))
-		tabentry = hash_search(dbentry->tables, &relid,
-							   HASH_FIND, NULL);
-
-	return tabentry;
-}
 
 /*
  * table_recheck_autovac
@@ -2985,17 +2952,10 @@ recheck_relation_needs_vacanalyze(Oid relid,
 								  bool *wraparound)
 {
 	PgStat_StatTabEntry *tabentry;
-	PgStat_StatDBEntry *shared = NULL;
-	PgStat_StatDBEntry *dbentry = NULL;
-
-	if (classForm->relisshared)
-		shared = pgstat_fetch_stat_dbentry(InvalidOid);
-	else
-		dbentry = pgstat_fetch_stat_dbentry(MyDatabaseId);
 
 	/* fetch the pgstat table entry */
-	tabentry = get_pgstat_tabentry_relid(relid, classForm->relisshared,
-										 shared, dbentry);
+	tabentry = pgstat_fetch_stat_tabentry_extended(classForm->relisshared,
+												   relid);
 
 	relation_needs_vacanalyze(relid, avopts, classForm, tabentry,
 							  effective_multixact_freeze_max_age,
@@ -3025,7 +2985,7 @@ recheck_relation_needs_vacanalyze(Oid relid,
  *
  * For analyze, the analysis done is that the number of tuples inserted,
  * deleted and updated since the last analyze exceeds a threshold calculated
- * in the same fashion as above.  Note that the collector actually stores
+ * in the same fashion as above.  Note that the stats system stores
  * the number of tuples (both live and dead) that there were as of the last
  * analyze.  This is asymmetric to the VACUUM case.
  *
@@ -3036,7 +2996,7 @@ recheck_relation_needs_vacanalyze(Oid relid,
  * A table whose autovacuum_enabled option is false is
  * automatically skipped (unless we have to vacuum it due to freeze_max_age).
  * Thus autovacuum can be disabled for specific tables. Also, when the stats
- * collector does not have data about a table, it will be skipped.
+ * system does not have data about a table, it will be skipped.
  *
  * A table whose vac_base_thresh value is < 0 takes the base value from the
  * autovacuum_vacuum_threshold GUC variable.  Similarly, a vac_scale_factor

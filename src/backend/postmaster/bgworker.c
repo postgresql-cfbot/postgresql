@@ -843,6 +843,13 @@ StartBackgroundWorker(void)
 #ifndef EXEC_BACKEND
 		InitProcess();
 #endif
+
+		/*
+		 * Initialize before bgworkers get to register their own shutdown
+		 * callbacks. This is needed so that the pgstat shutdown callback gets
+		 * called after the shutdown callbacks in bgworkers.
+		 */
+		pgstat_initialize();
 	}
 
 	/*

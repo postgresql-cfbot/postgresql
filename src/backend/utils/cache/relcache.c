@@ -72,6 +72,7 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
+#include "pgstat.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rowsecurity.h"
 #include "storage/lmgr.h"
@@ -2365,6 +2366,9 @@ RelationDestroyRelation(Relation relation, bool remember_tupdesc)
 	 * just be real sure.)
 	 */
 	RelationCloseSmgr(relation);
+
+	/* break mutual link with stats entry */
+	pgstat_relation_delink(relation);
 
 	/*
 	 * Free all the subsidiary data structures of the relcache entry, then the

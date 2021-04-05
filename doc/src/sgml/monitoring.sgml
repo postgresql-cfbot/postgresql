@@ -4981,7 +4981,8 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
         <returnvalue>timestamp with time zone</returnvalue>
        </para>
        <para>
-        Returns the timestamp of the current statistics snapshot.
+        Returns the timestamp of the current statistics snapshot, or NULL if
+        no statistics snapshot has been taken.
        </para></entry>
       </row>
 

@@ -41,7 +41,7 @@
  * so that the sleep effectively starts over!  It is therefore rather hazardous
  * to use this for long sleeps; a continuing stream of signal events could
  * prevent the sleep from ever terminating.  Better practice for long sleeps
- * is to use WaitLatch() with a timeout.
+ * is to use WaitLatch() or WaitEventSetWait() with a timeout.
  */
 void
 pg_usleep(long microsec)

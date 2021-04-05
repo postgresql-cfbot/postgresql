@@ -10,6 +10,15 @@
  *	  src/backend/postmaster/interrupt.c
  *
  *-------------------------------------------------------------------------
+ *
+ * This file defines bare-bones interrupt handlers for secondary helper
+ * processes run by the postmaster - the walwriter and bgwriter, and
+ * potentially some background workers.
+ *
+ * These handlers are NOT used by normal user backends as they do not support
+ * interruption of normal execution to respond to a signal, query cancellation,
+ * etc. See miscadmin.h for details on interrupt handling used by normal
+ * postgres backends - CHECK_FOR_INTERRUPTS(), ProcessInterrupts(), die(), etc.
  */
 
 #include "postgres.h"
@@ -28,6 +37,9 @@ volatile sig_atomic_t ShutdownRequestPending = false;
 
 /*
  * Simple interrupt handler for main loops of background processes.
+ *
+ * See also CHECK_FOR_INTERRUPTS() and ProcessInterrupts() for the user-backend
+ * variant of this function.
  */
 void
 HandleMainLoopInterrupts(void)
@@ -51,6 +63,8 @@ HandleMainLoopInterrupts(void)
  * Normally, this handler would be used for SIGHUP. The idea is that code
  * which uses it would arrange to check the ConfigReloadPending flag at
  * convenient places inside main loops, or else call HandleMainLoopInterrupts.
+ *
+ * Most backends use this handler.
  */
 void
 SignalHandlerForConfigReload(SIGNAL_ARGS)
@@ -67,6 +81,9 @@ SignalHandlerForConfigReload(SIGNAL_ARGS)
  * Simple signal handler for exiting quickly as if due to a crash.
  *
  * Normally, this would be used for handling SIGQUIT.
+ *
+ * See also quickdie() and die() for the separate signal handling logic
+ * used by normal user backends.
  */
 void
 SignalHandlerForCrashExit(SIGNAL_ARGS)
@@ -99,6 +116,10 @@ SignalHandlerForCrashExit(SIGNAL_ARGS)
  *
  * ShutdownRequestPending should be checked at a convenient place within the
  * main loop, or else the main loop should call HandleMainLoopInterrupts.
+ *
+ * See also die() for the extended version of this handler that's used in
+ * backends that may need to be interrupted while performing long-running
+ * actions.
  */
 void
 SignalHandlerForShutdownRequest(SIGNAL_ARGS)

@@ -35,23 +35,46 @@
 /*****************************************************************************
  *	  System interrupt and critical section handling
  *
- * There are two types of interrupts that a running backend needs to accept
- * without messing up its state: QueryCancel (SIGINT) and ProcDie (SIGTERM).
- * In both cases, we need to be able to clean up the current transaction
- * gracefully, so we can't respond to the interrupt instantaneously ---
- * there's no guarantee that internal data structures would be self-consistent
- * if the code is interrupted at an arbitrary instant.  Instead, the signal
- * handlers set flags that are checked periodically during execution.
+ * There are a few types of interrupts that a running backend needs to accept
+ * without messing up its state. It must handle QueryCancel (SIGINT) and
+ * ProcDie (SIGTERM) as well as a number of ProcSignal requests
+ * (RecoveryConflictInterrupt()) delivered over SIGUSR1 multiplexing.
+ *
+ * In most of these cases we need to be able to clean up the current
+ * transaction gracefully, so we can't respond to the interrupt
+ * instantaneously --- there's no guarantee that internal data structures
+ * would be self-consistent if the code is interrupted at an arbitrary
+ * instant.  Instead, the signal handlers set flags that are checked
+ * periodically during execution.
  *
  * The CHECK_FOR_INTERRUPTS() macro is called at strategically located spots
- * where it is normally safe to accept a cancel or die interrupt.  In some
- * cases, we invoke CHECK_FOR_INTERRUPTS() inside low-level subroutines that
- * might sometimes be called in contexts that do *not* want to allow a cancel
- * or die interrupt.  The HOLD_INTERRUPTS() and RESUME_INTERRUPTS() macros
- * allow code to ensure that no cancel or die interrupt will be accepted,
- * even if CHECK_FOR_INTERRUPTS() gets called in a subroutine.  The interrupt
- * will be held off until CHECK_FOR_INTERRUPTS() is done outside any
- * HOLD_INTERRUPTS() ... RESUME_INTERRUPTS() section.
+ * where it is normally safe to accept a cancel or die interrupt or
+ * ProcSignal request. It's just a wrapper for ProcessInterrupts().
+ * ProcessInterrupts() acts on flags set by both normal signal handlers like
+ * die() and by ProcSignal handlers like RecoveryConflictInterrupt() and is
+ * responsible for actually cancelling queries, terminating the current the
+ * backend, etc.
+ *
+ * Interrupts will only be acted on when PostgreSQL or extension code is in
+ * control so that CHECK_FOR_INTERRUPTS() gets called regularly.  Consequently,
+ * if a backend calls into long-running or blocking external library code or
+ * makes uninterruptible system calls then it may fail to respond to SIGTERM or
+ * other requests in a timely manner. Amongst other issues, this can cause the
+ * backend to fail to exit in response to a postmaster shutdown request and
+ * prevent a clean postmaster shutdown. The administrator may have to SIGKILL
+ * the process to make it exit, which will force crash recovery on next
+ * startup. Avoid making long-running calls into non-postgres code. Instead,
+ * structure your code as a loop over non-blocking calls that invokes
+ * CHECK_FOR_INTERRUPTS() each iteration and uses WaitEventSetWait() if has to
+ * sleep.
+ *
+ * In some cases, we invoke CHECK_FOR_INTERRUPTS() inside low-level
+ * subroutines that might sometimes be called in contexts that do *not* want
+ * to allow a cancel or die interrupt. The HOLD_INTERRUPTS() and
+ * RESUME_INTERRUPTS() macros allow code to ensure that no cancel or die
+ * interrupt will be accepted, even if CHECK_FOR_INTERRUPTS() gets called in
+ * a subroutine.  The interrupt will be held off until CHECK_FOR_INTERRUPTS()
+ * is done outside any HOLD_INTERRUPTS() ...  RESUME_INTERRUPTS() section.
  *
  * There is also a mechanism to prevent query cancel interrupts, while still
  * allowing die interrupts: HOLD_CANCEL_INTERRUPTS() and
@@ -71,8 +94,35 @@
  * mechanism.  A critical section not only holds off cancel/die interrupts,
  * but causes any ereport(ERROR) or ereport(FATAL) to become ereport(PANIC)
  * --- that is, a system-wide reset is forced.  Needless to say, only really
- * *critical* code should be marked as a critical section!	Currently, this
- * mechanism is only used for XLOG-related code.
+ * *critical* code should be marked as a critical section! This
+ * mechanism is mainly used for XLOG-related code.
+ *
+ * See also:
+ *
+ * - signal handler setup:
+ *       pqsignal()
+ * - Signal handling for full featured backends:
+ *       CHECK_FOR_INTERRUPTS()
+ *       ProcessInterrupts()
+ *       die()
+ *       StatementCancelHandler()
+ *       RecoveryConflictInterrupt()
+ * - Generic interrupt handling for simple postmaster children:
+ *       HandleMainLoopInterrupts()
+ *       SignalHandlerFor... routines in interrupt.c
+ * - ProcSignal SIGUSR1 multiplexing:
+ *       SendProcSignal()
+ *       procsignal_sigusr1_handler()
+ *       RecoveryConflictInterrupt()
+ * - Nonstandard signal handlers:
+ *       WalSndSignals() for the walsender
+ *       bgworker_die() and StartBackendWorker() for bgworkers
+ *       ... and any other nonstandard pqsignal() handlers
+ * - Interrupt-aware sleeping and waiting:
+ *       WaitLatch()
+ *       WaitEventSetWait()
+ *       pg_usleep()
+ *
  *
  *****************************************************************************/
 

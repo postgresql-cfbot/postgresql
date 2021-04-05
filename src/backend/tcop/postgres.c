@@ -2882,8 +2882,15 @@ quickdie(SIGNAL_ARGS)
 }
 
 /*
- * Shutdown signal from postmaster: abort transaction and exit
- * at soonest convenient time
+ * Shutdown signal from postmaster: set flags to ask ProcessInterrupts() to
+ * abort the current transaction and exit at the soonest convenient time.
+ *
+ * This handler is used as the SIGTERM handler by most backend types that may
+ * run arbitrary backend code, user queries, etc. Some backends use different
+ * handlers and sometimes different flags.
+ *
+ * See "System interrupt and critical section handling" in miscadmin.h for a
+ * higher level explanation of signal handling.
  */
 void
 die(SIGNAL_ARGS)
@@ -2957,6 +2964,9 @@ FloatExceptionHandler(SIGNAL_ARGS)
  * handling following receipt of SIGUSR1. Designed to be similar to die()
  * and StatementCancelHandler(). Called only by a normal user backend
  * that begins a transaction during recovery.
+ *
+ * This runs in signal handler context (via procsignal_sigusr1_handler) so it
+ * must be quick, non-blocking, re-entrant and limit its stack use.
  */
 void
 RecoveryConflictInterrupt(ProcSignalReason reason)
@@ -3092,6 +3102,18 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
  * If an interrupt condition is pending, and it's safe to service it,
  * then clear the flag and accept the interrupt.  Called only when
  * InterruptPending is true.
+ *
+ * This routine runs outside interrupt handler context whenever control has
+ * returned to normal postgres code that calls CHECK_FOR_INTERRUPTS().  It
+ * handles the flags set by die() and other normal interrupt handlers as well
+ * as ProcSignal flags set by procsignal_sigusr1_handler() SIGUSR1
+ * multiplexing.
+ *
+ * Not all backend types' signal handlers set the flags tested by
+ * ProcessInterrupts().
+ *
+ * See "System interrupt and critical section handling" in in miscadmin.h for
+ * higher level details on signal handling.
  */
 void
 ProcessInterrupts(void)

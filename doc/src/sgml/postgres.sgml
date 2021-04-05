@@ -248,6 +248,7 @@ break is not needed in a wider output rendering.
    </para>
   </partintro>
 
+  &architecture;
   &arch-dev;
   &catalogs;
   &protocol;

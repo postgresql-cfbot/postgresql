@@ -1,0 +1,398 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   version="1.1"
+   width="850px"
+   height="150px"
+   viewBox="0 0 850 150"
+   id="svg4396"
+   sodipodi:docname="mvcc-ink.svg"
+   inkscape:version="0.92.5 (2060ec1f9f, 2020-04-08)">
+  <metadata
+     id="metadata4400">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title>MVCC</dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <sodipodi:namedview
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1"
+     objecttolerance="10"
+     gridtolerance="10"
+     guidetolerance="10"
+     inkscape:pageopacity="0"
+     inkscape:pageshadow="2"
+     inkscape:window-width="1266"
+     inkscape:window-height="788"
+     id="namedview4398"
+     showgrid="false"
+     inkscape:zoom="0.44470588"
+     inkscape:cx="425"
+     inkscape:cy="68.253968"
+     inkscape:window-x="66"
+     inkscape:window-y="27"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg4396" />
+  <title
+     id="title4251">MVCC</title>
+  <!-- common text classes -->
+  <style
+     type="text/css"
+     id="style4253">
+  .text_small   {font-style:normal;
+                 font-weight:normal;
+                 font-size:10px;
+                 font-family:&quot;Open Sans&quot;, sans-serif;
+                 fill:black;
+                }
+  .text_normal  {font-style:normal;
+                 font-weight:normal;
+                 font-size:14px;
+                 font-family:&quot;Open Sans&quot;, sans-serif;
+                 fill:black;
+                }
+  </style>
+  <defs
+     id="defs4264">
+    <marker
+       id="triangle_1"
+       markerWidth="10"
+       markerHeight="10"
+       refX="5"
+       refY="5"
+       orient="auto"
+       stroke="black"
+       fill="none">
+      <path
+         d="M 0,0 L 10,5 L 0,10"
+         id="path4255" />
+    </marker>
+    <g
+       id="tuple">
+      <!-- an rectangle, open at the right side -->
+      <path
+         d="M 80 0 h -80 v 20 h 80 M 29 0 v 20 M 60 0 v 20"
+         stroke="black"
+         id="path4258" />
+      <!-- prolong the rectangle -->
+      <path
+         d="M 80 0 h 15 M 80 20 h 15"
+         stroke="black"
+         stroke-dasharray="2 1"
+         id="path4260" />
+    </g>
+    <!-- an arrow in the form of a quadratic bezier curve -->
+    <path
+       id="arrow"
+       d="M 0 0 Q 20 -15 40 0"
+       stroke="black"
+       marker-end="url(#triangle_1)" />
+  </defs>
+  <!-- start of rendering area -->
+  <!-- enclosing rectangle -->
+  <rect
+     x="1"
+     y="1"
+     rx="5"
+     width="99%"
+     height="99%"
+     stroke="black"
+     fill="none"
+     id="rect4266" />
+  <!-- set default values -->
+  <g
+     fill="none"
+     id="g4394">
+    <!-- start plus first INSERT -->
+    <g
+       transform="translate(20, 40)"
+       id="g4284">
+      <text
+         class="text_small"
+         transform="translate(0, -18)"
+         id="text4272">T
+        <tspan
+   style="font-size:8px"
+   dx="-3"
+   dy="5"
+   id="tspan4268">123</tspan>
+<tspan
+   dx="-2"
+   dy="-5"
+   id="tspan4270">: INSERT</tspan>
+</text>
+      <use
+         xlink:href="#arrow"
+         transform="translate(5, 0)"
+         id="use4274" />
+      <use
+         xlink:href="#tuple"
+         transform="translate(60, 70)"
+         id="use4276" />
+      <text
+         class="text_small"
+         transform="translate(65, 83)"
+         style="fill:blue"
+         id="text4278">123</text>
+      <text
+         class="text_small"
+         transform="translate(95, 83)"
+         style="fill:blue"
+         id="text4280">0</text>
+      <text
+         class="text_small"
+         transform="translate(125, 83)"
+         style="fill:blue"
+         id="text4282">'x'</text>
+    </g>
+    <!-- first UPDATE -->
+    <g
+       transform="translate(185, 40)"
+       id="g4310">
+      <text
+         class="text_small"
+         transform="translate(0, -18)"
+         id="text4290">T
+        <tspan
+   style="font-size:8px"
+   dx="-3"
+   dy="5"
+   id="tspan4286">135</tspan>
+<tspan
+   dx="-2"
+   dy="-5"
+   id="tspan4288">: UPDATE</tspan>
+</text>
+      <use
+         xlink:href="#arrow"
+         transform="translate(5, 0)"
+         id="use4292" />
+      <use
+         xlink:href="#tuple"
+         transform="translate(60, 40)"
+         id="use4294" />
+      <text
+         class="text_small"
+         transform="translate(65, 53)"
+         style="fill:blue"
+         id="text4296">135</text>
+      <text
+         class="text_small"
+         transform="translate(95, 53)"
+         style="fill:blue"
+         id="text4298">0</text>
+      <text
+         class="text_small"
+         transform="translate(125, 53)"
+         style="fill:blue"
+         id="text4300">'y'</text>
+      <use
+         xlink:href="#tuple"
+         transform="translate(60, 70)"
+         id="use4302" />
+      <text
+         class="text_small"
+         transform="translate(65, 83)"
+         id="text4304">123</text>
+      <text
+         class="text_small"
+         transform="translate(95, 83)"
+         style="fill:blue"
+         id="text4306">135</text>
+      <text
+         class="text_small"
+         transform="translate(125, 83)"
+         id="text4308">'x'</text>
+    </g>
+    <!-- next UPDATE -->
+    <g
+       transform="translate(350, 40)"
+       id="g4344">
+      <text
+         class="text_small"
+         transform="translate(0, -18)"
+         id="text4316">T
+        <tspan
+   style="font-size:8px"
+   dx="-3"
+   dy="5"
+   id="tspan4312">142</tspan>
+<tspan
+   dx="-2"
+   dy="-5"
+   id="tspan4314">: UPDATE</tspan>
+</text>
+      <use
+         xlink:href="#arrow"
+         transform="translate(5, 0)"
+         id="use4318" />
+      <use
+         xlink:href="#tuple"
+         transform="translate(60, 10)"
+         id="use4320" />
+      <text
+         class="text_small"
+         transform="translate(65, 23)"
+         style="fill:blue"
+         id="text4322">142</text>
+      <text
+         class="text_small"
+         transform="translate(95, 23)"
+         style="fill:blue"
+         id="text4324">0</text>
+      <text
+         class="text_small"
+         transform="translate(125, 23)"
+         style="fill:blue"
+         id="text4326">'z'</text>
+      <use
+         xlink:href="#tuple"
+         transform="translate(60, 40)"
+         id="use4328" />
+      <text
+         class="text_small"
+         transform="translate(65, 53)"
+         id="text4330">135</text>
+      <text
+         class="text_small"
+         transform="translate(95, 53)"
+         style="fill:blue"
+         id="text4332">142</text>
+      <text
+         class="text_small"
+         transform="translate(125, 53)"
+         id="text4334">'y'</text>
+      <use
+         xlink:href="#tuple"
+         transform="translate(60, 70)"
+         id="use4336" />
+      <text
+         class="text_small"
+         transform="translate(65, 83)"
+         id="text4338">123</text>
+      <text
+         class="text_small"
+         transform="translate(95, 83)"
+         id="text4340">135</text>
+      <text
+         class="text_small"
+         transform="translate(125, 83)"
+         id="text4342">'x'</text>
+    </g>
+    <!-- DELETE -->
+    <g
+       transform="translate(515, 40)"
+       id="g4378">
+      <text
+         class="text_small"
+         transform="translate(0, -18)"
+         id="text4350">T
+        <tspan
+   style="font-size:8px"
+   dx="-3"
+   dy="5"
+   id="tspan4346">821</tspan>
+<tspan
+   dx="-2"
+   dy="-5"
+   id="tspan4348">: DELTE</tspan>
+</text>
+      <use
+         xlink:href="#arrow"
+         transform="translate(5, 0)"
+         id="use4352" />
+      <use
+         xlink:href="#tuple"
+         transform="translate(60, 10)"
+         id="use4354" />
+      <text
+         class="text_small"
+         transform="translate(65, 23)"
+         id="text4356">142</text>
+      <text
+         class="text_small"
+         transform="translate(95, 23)"
+         style="fill:blue"
+         id="text4358">821</text>
+      <text
+         class="text_small"
+         transform="translate(125, 23)"
+         id="text4360">'z'</text>
+      <use
+         xlink:href="#tuple"
+         transform="translate(60, 40)"
+         id="use4362" />
+      <text
+         class="text_small"
+         transform="translate(65, 53)"
+         id="text4364">135</text>
+      <text
+         class="text_small"
+         transform="translate(95, 53)"
+         id="text4366">142</text>
+      <text
+         class="text_small"
+         transform="translate(125, 53)"
+         id="text4368">'y'</text>
+      <use
+         xlink:href="#tuple"
+         transform="translate(60, 70)"
+         id="use4370" />
+      <text
+         class="text_small"
+         transform="translate(65, 83)"
+         id="text4372">123</text>
+      <text
+         class="text_small"
+         transform="translate(95, 83)"
+         id="text4374">135</text>
+      <text
+         class="text_small"
+         transform="translate(125, 83)"
+         id="text4376">'x'</text>
+    </g>
+    <!-- LEGEND -->
+    <g
+       transform="translate(740, 110)"
+       id="g4392">
+      <path
+         d="M 102 -20 h -120 v 60"
+         stroke="black"
+         id="path4380" />
+      <text
+         class="text_normal"
+         transform="translate(0, 0)"
+         id="text4382">Legend</text>
+      <use
+         xlink:href="#tuple"
+         transform="translate(0, 10)"
+         id="use4384" />
+      <text
+         class="text_small"
+         transform="translate(3, 23)"
+         id="text4386">xmin</text>
+      <text
+         class="text_small"
+         transform="translate(32, 23)"
+         id="text4388">xmax</text>
+      <text
+         class="text_small"
+         transform="translate(65, 23)"
+         id="text4390">data</text>
+    </g>
+  </g>
+</svg>

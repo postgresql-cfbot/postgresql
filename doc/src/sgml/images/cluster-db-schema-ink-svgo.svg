@@ -1,0 +1,184 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="900" height="685" viewBox="0 0 900 685">
+  <title>
+    Server (Hardware, Container, or VM)
+  </title>
+  <style>
+    .text_normal,.text_small{font-style:normal;font-weight:400;font-family:&quot;Open Sans&quot;,sans-serif;fill:#000}.text_small{font-size:12px}.text_normal{font-size:14px}
+  </style>
+  <defs>
+    <symbol id="rectangle_special_0">
+      <rect width="225" height="155" rx="10" stroke="blue" fill="none"/>
+    </symbol>
+    <symbol id="rectangle_special_1">
+      <rect width="225" height="155" rx="10" stroke="blue" fill="none"/>
+      <rect x="15" y="40" width="195" height="50" rx="10" stroke="blue" fill="none" stroke-dasharray="4 2"/>
+      <text class="text_normal" x="20" y="60">
+        schema &apos;public&apos;
+      </text>
+      <text class="text_small" x="25" y="80">
+        tables, views, ...
+      </text>
+      <rect x="15" y="105" width="195" height="30" rx="10" stroke="blue" fill="none" stroke-dasharray="4 2"/>
+      <text class="text_small" x="20" y="125">
+        System schemas
+      </text>
+    </symbol>
+    <symbol id="rectangle_special_2">
+      <rect width="245" height="225" rx="10" stroke="blue" fill="none"/>
+      <rect x="15" y="40" width="205" height="50" rx="10" stroke="blue" fill="none" stroke-dasharray="4 2"/>
+      <text class="text_normal" x="20" y="60">
+        schema &apos;public&apos;
+      </text>
+      <text class="text_small" x="25" y="80">
+        tables, views, ...
+      </text>
+      <rect x="15" y="105" width="205" height="30" rx="10" stroke="blue" fill="none" stroke-dasharray="4 2"/>
+      <text class="text_small" x="20" y="125">
+        System schemas
+      </text>
+      <rect x="15" y="150" width="205" height="50" rx="10" stroke="blue" fill="none" stroke-dasharray="4 2"/>
+      <text class="text_normal" x="20" y="170">
+        &apos;my_schema&apos; (optional)
+      </text>
+      <text class="text_small" x="25" y="185">
+        tables, views, ...
+      </text>
+    </symbol>
+    <symbol id="note_0" stroke="black" fill="lightyellow">
+      <title>
+        UML Note
+      </title>
+      <path d="M190 10v70H0V0h180v10h10L180 0"/>
+    </symbol>
+    <symbol id="note_1" stroke="black" fill="lightyellow">
+      <title>
+        UML Note
+      </title>
+      <path d="M450 10v240H0V0h440v10h10L440 0"/>
+    </symbol>
+    <marker id="arrowhead_end" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto">
+      <path d="M0 0l6 3-6 3" stroke="black" fill="none"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" rx="5" width="99%" height="99%" stroke="black" fill="none"/>
+  <text x="270" y="40" font-weight="400" font-size="24" font-family="&quot;Open Sans&quot;,sans-serif">
+    Server (Hardware, Container, or VM)
+  </text>
+  <path stroke="blue" stroke-width="2" fill="none" d="M20 110h790v555H20z"/>
+  <text class="text_normal" x="180" y="25" transform="translate(20 110)">
+    cluster &apos;data&apos; (default, managed by one instance)
+  </text>
+  <path d="M50 110V80h790v555h-30" stroke="blue" stroke-width="2" fill="none"/>
+  <text class="text_normal" x="190" y="-10" transform="translate(45 110)">
+    cluster &apos;cluster_2&apos; (optional, managed by a different instance)
+  </text>
+  <g transform="translate(40 155)">
+    <use xlink:href="#rectangle_special_0"/>
+    <text class="text_normal" x="10" y="25">
+      database &apos;template0&apos;
+    </text>
+    <use xlink:href="#note_0" x="20" y="40"/>
+    <text class="text_small" x="30" y="60">
+      &apos;template0&apos; is a pristine
+    </text>
+    <text class="text_small" x="30" y="75">
+      and unchangeable template.
+    </text>
+    <text class="text_small" x="30" y="90">
+      It is used to generate
+    </text>
+    <text class="text_small" x="30" y="105">
+      database &apos;template1&apos;.
+    </text>
+  </g>
+  <g transform="translate(290 155)">
+    <use xlink:href="#rectangle_special_1"/>
+    <text class="text_normal" x="10" y="25">
+      database &apos;template1&apos;
+    </text>
+  </g>
+  <g transform="translate(540 155)">
+    <use xlink:href="#rectangle_special_2"/>
+    <text class="text_normal" x="10" y="25">
+      database &apos;postgres&apos;
+    </text>
+  </g>
+  <g transform="translate(40 350)">
+    <use xlink:href="#rectangle_special_2"/>
+    <text class="text_normal" x="10" y="25">
+      database &apos;my_db&apos; (optional)
+    </text>
+  </g>
+  <g transform="translate(320 330)">
+    <rect width="180" height="45" rx="10" stroke="blue" fill="none" stroke-dasharray="10 4 4 4"/>
+    <text class="text_normal" x="15" y="27">
+      Global SQL objects
+    </text>
+    <path d="M80 0v-30" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+    <path d="M180 40h50" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+    <path d="M0 40l-45 20" stroke="black" fill="none" marker-end="url(#arrowhead_end)"/>
+  </g>
+  <g transform="translate(335 405)">
+    <use xlink:href="#note_1"/>
+    <text class="text_small" x="10" y="20">
+      1)
+    </text>
+    <text class="text_small" x="30" y="20">
+      By default, clients connect via port &apos;5432&apos; to Cluster &apos;data&apos;,
+    </text>
+    <text class="text_small" x="30" y="35">
+      database &apos;postgres&apos;, schema &apos;public&apos;. Of course, they can
+    </text>
+    <text class="text_small" x="30" y="50">
+      specify other connection properties.
+    </text>
+    <text class="text_small" x="10" y="70">
+      2)
+    </text>
+    <text class="text_small" x="30" y="70">
+      System schemas: pg_catalog, information_schema,
+    </text>
+    <text class="text_small" x="30" y="85">
+      pg_temp, ...
+    </text>
+    <text class="text_small" x="10" y="105">
+      3)
+    </text>
+    <text class="text_small" x="30" y="105">
+      Global SQL objects: Objects which are shared among all
+    </text>
+    <text class="text_small" x="30" y="120">
+      databases within a Cluster.
+    </text>
+    <text class="text_small" x="10" y="140">
+      4)
+    </text>
+    <text class="text_small" x="30" y="140">
+      The command &apos;initdb&apos; creates a new cluster with the three
+    </text>
+    <text class="text_small" x="30" y="155">
+      databases &apos;template0&apos;, &apos;template1&apos;, and &apos;postgres&apos;. The command
+    </text>
+    <text class="text_small" x="30" y="170">
+      &apos;createdb&apos; creates a new database.
+    </text>
+    <text class="text_small" x="10" y="190">
+      5)
+    </text>
+    <text class="text_small" x="30" y="190">
+      If multiple clusters are active on one server at the same time,
+    </text>
+    <text class="text_small" x="30" y="205">
+      each one is managed by an individual instance. Each such instance
+    </text>
+    <text class="text_small" x="30" y="220">
+      uses a different port.
+    </text>
+    <text class="text_small" x="10" y="240">
+      6)
+    </text>
+    <text class="text_small" x="30" y="240">
+      Client application are prohibited from connecting to &apos;template0&apos;.
+    </text>
+  </g>
+</svg>

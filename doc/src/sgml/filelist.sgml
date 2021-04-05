@@ -80,6 +80,7 @@
 %allfiles;
 
 <!-- developer's guide -->
+<!ENTITY architecture  SYSTEM "architecture.sgml">
 <!ENTITY arch-dev   SYSTEM "arch-dev.sgml">
 <!ENTITY bki        SYSTEM "bki.sgml">
 <!ENTITY catalogs   SYSTEM "catalogs.sgml">

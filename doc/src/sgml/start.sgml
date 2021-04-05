@@ -53,7 +53,7 @@
 
 
   <sect1 id="tutorial-arch">
-   <title>Architectural Fundamentals</title>
+   <title>Client/Server Model</title>
 
    <para>
     Before we proceed, you should understand the basic
@@ -68,34 +68,52 @@
     client/server model.  A <productname>PostgreSQL</productname>
     session consists of the following cooperating processes
     (programs):
-
-    <itemizedlist>
-     <listitem>
-      <para>
-       A server process, which manages the database files, accepts
-       connections to the database from client applications, and
-       performs database actions on behalf of the clients.  The
-       database server program is called
-       <filename>postgres</filename>.
-       <indexterm><primary>postgres</primary></indexterm>
-      </para>
-     </listitem>
-
-     <listitem>
-      <para>
-       The user's client (frontend) application that wants to perform
-       database operations.  Client applications can be very diverse
-       in nature:  a client could be a text-oriented tool, a graphical
-       application, a web server that accesses the database to
-       display web pages, or a specialized database maintenance tool.
-       Some client applications are supplied with the
-       <productname>PostgreSQL</productname> distribution; most are
-       developed by users.
-      </para>
-     </listitem>
-
-    </itemizedlist>
    </para>
+
+   <itemizedlist>
+    <listitem>
+     <para>
+      A process at the server site with the name
+      <glossterm linkend="glossary-postmaster">Postmaster</glossterm>.
+      <indexterm><primary>postgres</primary></indexterm>
+      <indexterm><primary>postmaster</primary></indexterm>
+      It accepts connection requests from client applications, starts
+      (<quote>forks</quote>) a new <glossterm linkend="glossary-backend">
+      Backend</glossterm> process for each of them, and passes
+      the connection to it. From that point on, the client and the new
+      Backend process communicate directly without intervention by the original
+      Postmaster process. Thus, the Postmaster process is always running,
+      waiting for new client connections, whereas clients and associated
+      Backend processes come and go. (All of this is of course invisible
+      to the user. We only mention it here for completeness.)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      A group of processes at the server site, the <glossterm
+      linkend="glossary-instance">Instance</glossterm>, to which also
+      the Postmaster process belongs. Their duties are handling of
+      central, common database activities like file access, transaction
+      handling, vacuum, checkpoints, replication, and more. The mentioned
+      Backend processes delegate those actions to the instance.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      The user's client (frontend) application that wants to perform
+      database operations.  Client applications can be very diverse
+      in nature:  a client could be a text-oriented tool, a graphical
+      application, a web server that accesses the database to
+      display web pages, or a specialized database maintenance tool.
+      Some client applications are supplied with the
+      <productname>PostgreSQL</productname> distribution; most are
+      developed by users.
+     </para>
+    </listitem>
+
+   </itemizedlist>
 
    <para>
     As is typical of client/server applications, the client and the
@@ -106,18 +124,6 @@
     file name) on the database server machine.
    </para>
 
-   <para>
-    The <productname>PostgreSQL</productname> server can handle
-    multiple concurrent connections from clients.  To achieve this it
-    starts (<quote>forks</quote>) a new process for each connection.
-    From that point on, the client and the new server process
-    communicate without intervention by the original
-    <filename>postgres</filename> process.  Thus, the
-    supervisor server process is always running, waiting for
-    client connections, whereas client and associated server processes
-    come and go.  (All of this is of course invisible to the user.  We
-    only mention it here for completeness.)
-   </para>
   </sect1>
 
 

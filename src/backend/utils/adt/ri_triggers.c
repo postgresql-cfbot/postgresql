@@ -2709,7 +2709,6 @@ ri_HashPreparedPlan(RI_QueryKey *key, SPIPlanPtr plan)
 	entry->plan = plan;
 }
 
-
 /*
  * ri_KeysEqual -
  *
@@ -2949,4 +2948,31 @@ RI_FKey_trigger_type(Oid tgfoid)
 	}
 
 	return RI_TRIGGER_NONE;
+}
+
+/*
+ * ResetRIPlanCache -
+ *
+ * Delete all plans from our private SPI query plan hashtable.
+ */
+void
+ResetRIPlanCache(void)
+{
+	HASH_SEQ_STATUS seq;
+	RI_QueryHashEntry *entry;
+
+	/* nothing cached */
+	if(!ri_query_cache)
+		return;
+
+	/* walk over cache */
+	hash_seq_init(&seq, ri_query_cache);
+	while((entry = hash_seq_search(&seq)) != NULL)
+	{
+		/* Relase the plancache entry */
+		SPI_freeplan(entry->plan);
+
+		/* Now we can remove the hash table entry */
+		hash_search(ri_query_cache, &entry->key, HASH_REMOVE, NULL);
+	}
 }

@@ -19,13 +19,14 @@
 #include "commands/discard.h"
 #include "commands/prepare.h"
 #include "commands/sequence.h"
+#include "commands/trigger.h"
 #include "utils/guc.h"
 #include "utils/portal.h"
 
 static void DiscardAll(bool isTopLevel);
 
 /*
- * DISCARD { ALL | SEQUENCES | TEMP | PLANS }
+ * DISCARD { ALL | SEQUENCES | TEMP | PLANS | RIPLANS }
  */
 void
 DiscardCommand(DiscardStmt *stmt, bool isTopLevel)
@@ -46,6 +47,10 @@ DiscardCommand(DiscardStmt *stmt, bool isTopLevel)
 
 		case DISCARD_TEMP:
 			ResetTempTableNamespace();
+			break;
+
+		case DISCARD_RIPLANS:
+			ResetRIPlanCache();
 			break;
 
 		default:
@@ -73,6 +78,7 @@ DiscardAll(bool isTopLevel)
 	Async_UnlistenAll();
 	LockReleaseAll(USER_LOCKMETHOD, true);
 	ResetPlanCache();
+	ResetRIPlanCache();
 	ResetTempTableNamespace();
 	ResetSequenceCaches();
 }

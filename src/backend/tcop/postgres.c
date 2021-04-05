@@ -3327,6 +3327,13 @@ ProcessInterrupts(void)
 
 	if (ParallelMessagePending)
 		HandleParallelMessages();
+
+	/* Process printing backtrace */
+	if (PrintBacktracePending)
+	{
+		PrintBacktracePending = false;
+		set_backtrace(NULL, 0);
+	}
 }
 
 

@@ -441,6 +441,21 @@ HandleProcSignalBarrierInterrupt(void)
 }
 
 /*
+ * Handle receipt of an interrupt indicating a print backtrace.
+ *
+ * Note: this is called within a signal handler!  All we can do is set
+ * a flag that will cause the next CHECK_FOR_INTERRUPTS to invoke
+ * set_backtrace function which will log the backtrace.
+ */
+static void
+HandlePrintBacktraceInterrupt(void)
+{
+	InterruptPending = true;
+	PrintBacktracePending = true;
+	/* latch will be set by procsignal_sigusr1_handler */
+}
+
+/*
  * Perform global barrier related interrupt checking.
  *
  * Any backend that participates in ProcSignal signaling must arrange to
@@ -674,6 +689,9 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 
 	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN))
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN);
+
+	if (CheckProcSignal(PROCSIG_PRINT_BACKTRACE))
+		HandlePrintBacktraceInterrupt();
 
 	SetLatch(MyLatch);
 

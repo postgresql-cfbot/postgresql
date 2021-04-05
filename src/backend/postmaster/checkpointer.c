@@ -57,6 +57,7 @@
 #include "storage/shmem.h"
 #include "storage/smgr.h"
 #include "storage/spin.h"
+#include "tcop/tcopprot.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/resowner.h"
@@ -546,6 +547,13 @@ HandleCheckpointerInterrupts(void)
 {
 	if (ProcSignalBarrierPending)
 		ProcessProcSignalBarrier();
+
+	/* Process printing backtrace */
+	if (PrintBacktracePending)
+	{
+		PrintBacktracePending = false;
+		set_backtrace(NULL, 0);
+	}
 
 	if (ConfigReloadPending)
 	{

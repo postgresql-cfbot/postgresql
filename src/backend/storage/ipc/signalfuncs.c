@@ -22,6 +22,7 @@
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "tcop/tcopprot.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 
@@ -40,12 +41,22 @@
  * be emitted. For permission errors, doing that is the responsibility of
  * the caller.
  */
-#define SIGNAL_BACKEND_SUCCESS 0
-#define SIGNAL_BACKEND_ERROR 1
-#define SIGNAL_BACKEND_NOPERMISSION 2
-#define SIGNAL_BACKEND_NOSUPERUSER 3
-static int
-pg_signal_backend(int pid, int sig)
+typedef enum SignalBackendStatus
+{
+	SIGNAL_BACKEND_SUCCESS = 0,
+	SIGNAL_BACKEND_ERROR,
+	SIGNAL_BACKEND_NOPERMISSION,
+	SIGNAL_BACKEND_NOSUPERUSER
+}			SignalBackendStatus;
+
+/*
+ * check_privilege_to_send_singal
+ *
+ * Check if the specified pid is a valid backend process and the user has
+ * permissions to signal to the process.
+ */
+static SignalBackendStatus
+check_privilege_to_send_singal(int pid)
 {
 	PGPROC	   *proc = BackendPidGetProc(pid);
 
@@ -76,6 +87,17 @@ pg_signal_backend(int pid, int sig)
 	if (!has_privs_of_role(GetUserId(), proc->roleId) &&
 		!has_privs_of_role(GetUserId(), ROLE_PG_SIGNAL_BACKEND))
 		return SIGNAL_BACKEND_NOPERMISSION;
+
+	return SIGNAL_BACKEND_SUCCESS;
+}
+
+static SignalBackendStatus
+pg_signal_backend(int pid, int sig)
+{
+	SignalBackendStatus ret = check_privilege_to_send_singal(pid);
+
+	if (ret != SIGNAL_BACKEND_SUCCESS)
+		return ret;
 
 	/*
 	 * Can the process we just validated above end, followed by the pid being
@@ -110,19 +132,23 @@ pg_signal_backend(int pid, int sig)
 Datum
 pg_cancel_backend(PG_FUNCTION_ARGS)
 {
-	int			r = pg_signal_backend(PG_GETARG_INT32(0), SIGINT);
+	SignalBackendStatus r = pg_signal_backend(PG_GETARG_INT32(0), SIGINT);
 
-	if (r == SIGNAL_BACKEND_NOSUPERUSER)
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be a superuser to cancel superuser query")));
+	switch (r)
+	{
+		case SIGNAL_BACKEND_NOSUPERUSER:
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("must be a superuser to cancel superuser query")));
 
-	if (r == SIGNAL_BACKEND_NOPERMISSION)
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be a member of the role whose query is being canceled or member of pg_signal_backend")));
+		case SIGNAL_BACKEND_NOPERMISSION:
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("must be a member of the role whose query is being canceled or member of pg_signal_backend")));
 
-	PG_RETURN_BOOL(r == SIGNAL_BACKEND_SUCCESS);
+		default:
+			PG_RETURN_BOOL(r == SIGNAL_BACKEND_SUCCESS);
+	}
 }
 
 /*
@@ -134,19 +160,23 @@ pg_cancel_backend(PG_FUNCTION_ARGS)
 Datum
 pg_terminate_backend(PG_FUNCTION_ARGS)
 {
-	int			r = pg_signal_backend(PG_GETARG_INT32(0), SIGTERM);
+	SignalBackendStatus r = pg_signal_backend(PG_GETARG_INT32(0), SIGTERM);
 
-	if (r == SIGNAL_BACKEND_NOSUPERUSER)
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be a superuser to terminate superuser process")));
+	switch (r)
+	{
+		case SIGNAL_BACKEND_NOSUPERUSER:
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("must be a superuser to terminate superuser process")));
 
-	if (r == SIGNAL_BACKEND_NOPERMISSION)
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be a member of the role whose process is being terminated or member of pg_signal_backend")));
+		case SIGNAL_BACKEND_NOPERMISSION:
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("must be a member of the role whose process is being terminated or member of pg_signal_backend")));
 
-	PG_RETURN_BOOL(r == SIGNAL_BACKEND_SUCCESS);
+		default:
+			PG_RETURN_BOOL(r == SIGNAL_BACKEND_SUCCESS);
+	}
 }
 
 /*
@@ -214,4 +244,56 @@ pg_rotate_logfile_v2(PG_FUNCTION_ARGS)
 
 	SendPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE);
 	PG_RETURN_BOOL(true);
+}
+
+/*
+ * pg_print_backtrace - print backtrace of backend process.
+ *
+ * Permission checking for this function is managed through the normal
+ * GRANT system.
+ */
+Datum
+pg_print_backtrace(PG_FUNCTION_ARGS)
+{
+#ifdef HAVE_BACKTRACE_SYMBOLS
+	int			pid = PG_GETARG_INT32(0);
+	SignalBackendStatus r = check_privilege_to_send_singal(pid);
+
+	switch (r)
+	{
+		case SIGNAL_BACKEND_NOSUPERUSER:
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("must be a superuser to print backtrace of superuser process")));
+
+		case SIGNAL_BACKEND_NOPERMISSION:
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("must be a member of the role whose backtrace is being logged or member of pg_signal_backend")));
+
+		case SIGNAL_BACKEND_SUCCESS:
+
+			/*
+			 * Send SIGUSR1 to postgres backend whose pid matches pid by
+			 * setting PROCSIG_PRINT_BACKTRACE, the backend process will print
+			 * the backtrace once the signal is received.
+			 */
+			if (!SendProcSignal(pid, PROCSIG_PRINT_BACKTRACE, InvalidBackendId))
+				PG_RETURN_BOOL(true);
+			else
+			{
+				ereport(WARNING,
+						(errmsg("failed to send signal to postmaster: %m")));
+				break;			/* Return false */
+			}
+
+		default:
+			break;				/* Not a supported process, return false */
+	}
+#else
+	ereport(WARNING,
+			(errmsg("backtrace generation is not supported by this installation")));
+#endif
+
+	PG_RETURN_BOOL(false);
 }

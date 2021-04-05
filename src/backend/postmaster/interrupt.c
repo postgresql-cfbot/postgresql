@@ -21,6 +21,7 @@
 #include "storage/ipc.h"
 #include "storage/latch.h"
 #include "storage/procsignal.h"
+#include "tcop/tcopprot.h"
 #include "utils/guc.h"
 
 volatile sig_atomic_t ConfigReloadPending = false;
@@ -39,6 +40,13 @@ HandleMainLoopInterrupts(void)
 	{
 		ConfigReloadPending = false;
 		ProcessConfigFile(PGC_SIGHUP);
+	}
+
+	/* Process printing backtrace */
+	if (PrintBacktracePending)
+	{
+		PrintBacktracePending = false;
+		set_backtrace(NULL, 0);
 	}
 
 	if (ShutdownRequestPending)

@@ -24964,6 +24964,33 @@ SELECT collation for ('foo' COLLATE "de_DE");
         however only superusers can terminate superuser backends.
        </para></entry>
       </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_print_backtrace</primary>
+        </indexterm>
+        <function>pg_print_backtrace</function> ( <parameter>pid</parameter> <type>integer</type> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Prints the backtrace whose backend process has the specified process ID.
+        Backtrace will be printed based on the log configuration set. See
+        <xref linkend="runtime-config-logging"/> for more information. This
+        will help in identifying where exactly the backend process is currently
+        executing. This information will be useful in reporting the hangs and
+        also helps the developers in diagonising the problems. This is
+        allowed if the calling role is a member of the role whose backend
+        backtrace is being printed or the calling role has been granted
+        <literal>pg_signal_backend</literal>, however only superusers can
+        print backtrace of superuser backends. This feature is not supported
+        for postmaster, logging and statistics process. This feature will be
+        available, if the installer was generated on a platform which had
+        backtrace capturing capability. If not available it will return false
+        by throwing the following warning "WARNING:  backtrace generation is
+        not supported by this installation".
+       </para></entry>
+      </row>
      </tbody>
     </tgroup>
    </table>
@@ -24982,6 +25009,56 @@ SELECT collation for ('foo' COLLATE "de_DE");
     <structfield>usename</structfield> column of the
     <structname>pg_stat_activity</structname> view.
    </para>
+
+   <para>
+    <function>pg_print_backtrace</function> can be used to print backtrace of
+    a backend process. For example:
+<programlisting>
+postgres=# select pg_print_backtrace(pg_backend_pid());
+ pg_print_backtrace
+--------------------
+ t
+(1 row)
+
+The backtrace will be logged to the log file if logging is enabled, if logging
+is disabled backtrace will be logged to the console where the postmaster was
+started. For example:
+2021-01-27 11:33:50.247 IST [111735] LOG:  current backtrace:
+        postgres: postgresdba postgres [local] SELECT(set_backtrace+0x38) [0xae06c5]
+        postgres: postgresdba postgres [local] SELECT(ProcessInterrupts+0x788) [0x950c34]
+        postgres: postgresdba postgres [local] SELECT() [0x761e89]
+        postgres: postgresdba postgres [local] SELECT() [0x71bbda]
+        postgres: postgresdba postgres [local] SELECT() [0x71e380]
+        postgres: postgresdba postgres [local] SELECT(standard_ExecutorRun+0x1d6) [0x71c1fe]
+        postgres: postgresdba postgres [local] SELECT(ExecutorRun+0x55) [0x71c026]
+        postgres: postgresdba postgres [local] SELECT() [0x953fc5]
+        postgres: postgresdba postgres [local] SELECT(PortalRun+0x262) [0x953c7e]
+        postgres: postgresdba postgres [local] SELECT() [0x94db78]
+        postgres: postgresdba postgres [local] SELECT(PostgresMain+0x7d7) [0x951e72]
+        postgres: postgresdba postgres [local] SELECT() [0x896b2f]
+        postgres: postgresdba postgres [local] SELECT() [0x8964b5]
+        postgres: postgresdba postgres [local] SELECT() [0x892a79]
+        postgres: postgresdba postgres [local] SELECT(PostmasterMain+0x116b) [0x892350]
+        postgres: postgresdba postgres [local] SELECT() [0x795f72]
+        /lib64/libc.so.6(__libc_start_main+0xf5) [0x7f2107bbd505]
+        postgres: postgresdba postgres [local] SELECT() [0x4842a9]
+
+</programlisting>
+    You can get the file name and line number by using gdb/addr2line in
+    linux platforms, as a prerequisite users must ensure gdb/addr2line is
+    already installed:
+<programlisting>
+1)  "info line *address" from gdb on postgres executable. For example:
+gdb ./postgres
+(gdb) info line *0x71c25d
+Line 378 of "execMain.c" starts at address 0x71c25d <literal>&lt;</literal>standard_ExecutorRun+470<literal>&gt;</literal> and ends at 0x71c263 <literal>&lt;</literal>standard_ExecutorRun+476<literal>&gt;</literal>.
+OR 
+2) Using "addr2line -e postgres address", For example:
+addr2line -e ./postgres 0x71c25d
+/home/postgresdba/src/backend/executor/execMain.c:378
+</programlisting>
+</para>
+
 
   </sect2>
 

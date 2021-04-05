@@ -11559,4 +11559,9 @@
   proname => 'brin_minmax_multi_summary_send', provolatile => 's', prorettype => 'bytea',
   proargtypes => 'pg_brin_minmax_multi_summary', prosrc => 'brin_minmax_multi_summary_send' },
 
+# function to get the backtrace of server process
+{ oid => '6105', descr => 'print backtrace of process',
+  proname => 'pg_print_backtrace', provolatile => 'v', prorettype => 'bool',
+  proargtypes => 'int4', prosrc => 'pg_print_backtrace' },
+
 ]

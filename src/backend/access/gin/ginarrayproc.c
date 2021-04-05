@@ -24,6 +24,7 @@
 #define GinContainsStrategy		2
 #define GinContainedStrategy	3
 #define GinEqualStrategy		4
+#define GinContainsElemStrategy	5
 
 
 /*
@@ -78,8 +79,6 @@ ginarrayextract_2args(PG_FUNCTION_ARGS)
 Datum
 ginqueryarrayextract(PG_FUNCTION_ARGS)
 {
-	/* Make copy of array input to ensure it doesn't disappear while in use */
-	ArrayType  *array = PG_GETARG_ARRAYTYPE_P_COPY(0);
 	int32	   *nkeys = (int32 *) PG_GETARG_POINTER(1);
 	StrategyNumber strategy = PG_GETARG_UINT16(2);
 
@@ -87,21 +86,35 @@ ginqueryarrayextract(PG_FUNCTION_ARGS)
 	/* Pointer	   *extra_data = (Pointer *) PG_GETARG_POINTER(4); */
 	bool	  **nullFlags = (bool **) PG_GETARG_POINTER(5);
 	int32	   *searchMode = (int32 *) PG_GETARG_POINTER(6);
-	int16		elmlen;
-	bool		elmbyval;
-	char		elmalign;
 	Datum	   *elems;
 	bool	   *nulls;
 	int			nelems;
 
-	get_typlenbyvalalign(ARR_ELEMTYPE(array),
-						 &elmlen, &elmbyval, &elmalign);
+	if (strategy == GinContainsElemStrategy)
+	{
+		/* single element is passed, set elems to its pointer */
+		elems = palloc(sizeof(*elems));
+		*elems = PG_GETARG_DATUM(0);
+		nulls = palloc(sizeof(*nulls));
+		*nulls = PG_ARGISNULL(0);
+		nelems = 1;
+	}
+	else
+	{
+		/* Make copy of array input to ensure it doesn't disappear while in use */
+		ArrayType  *array = PG_GETARG_ARRAYTYPE_P_COPY(0);
+		int16		elmlen;
+		bool		elmbyval;
+		char		elmalign;
 
-	deconstruct_array(array,
-					  ARR_ELEMTYPE(array),
-					  elmlen, elmbyval, elmalign,
-					  &elems, &nulls, &nelems);
+		get_typlenbyvalalign(ARR_ELEMTYPE(array),
+							 &elmlen, &elmbyval, &elmalign);
 
+		deconstruct_array(array,
+						  ARR_ELEMTYPE(array),
+						  elmlen, elmbyval, elmalign,
+						  &elems, &nulls, &nelems);
+	}
 	*nkeys = nelems;
 	*nullFlags = nulls;
 
@@ -125,6 +138,9 @@ ginqueryarrayextract(PG_FUNCTION_ARGS)
 				*searchMode = GIN_SEARCH_MODE_DEFAULT;
 			else
 				*searchMode = GIN_SEARCH_MODE_INCLUDE_EMPTY;
+			break;
+		case GinContainsElemStrategy:
+			*searchMode = GIN_SEARCH_MODE_DEFAULT;
 			break;
 		default:
 			elog(ERROR, "ginqueryarrayextract: unknown strategy number: %d",
@@ -172,6 +188,7 @@ ginarrayconsistent(PG_FUNCTION_ARGS)
 			}
 			break;
 		case GinContainsStrategy:
+		case GinContainsElemStrategy:
 			/* result is not lossy */
 			*recheck = false;
 			/* must have all elements in check[] true, and no nulls */
@@ -259,6 +276,7 @@ ginarraytriconsistent(PG_FUNCTION_ARGS)
 			}
 			break;
 		case GinContainsStrategy:
+		case GinContainsElemStrategy:
 			/* must have all elements in check[] true, and no nulls */
 			res = GIN_TRUE;
 			for (i = 0; i < nkeys; i++)

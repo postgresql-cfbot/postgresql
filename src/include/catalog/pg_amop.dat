@@ -1242,6 +1242,9 @@
 { amopfamily => 'gin/array_ops', amoplefttype => 'anyarray',
   amoprighttype => 'anyarray', amopstrategy => '4',
   amopopr => '=(anyarray,anyarray)', amopmethod => 'gin' },
+{ amopfamily => 'gin/array_ops', amoplefttype => 'anyarray',
+  amoprighttype => 'anyelement', amopstrategy => '5',
+  amopopr => '@>>(anyarray,anyelement)', amopmethod => 'gin' },
 
 # btree enum_ops
 { amopfamily => 'btree/enum_ops', amoplefttype => 'anyenum',

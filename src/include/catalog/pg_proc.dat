@@ -8229,6 +8229,12 @@
 { oid => '2749',
   proname => 'arraycontained', prorettype => 'bool',
   proargtypes => 'anyarray anyarray', prosrc => 'arraycontained' },
+{ oid => '6109',
+  proname => 'arrayelemcontained', prorettype => 'bool',
+  proargtypes => 'anyelement anyarray', prosrc => 'arrayelemcontained' },
+{ oid => '6107',
+  proname => 'arraycontainselem', prorettype => 'bool',
+  proargtypes => 'anyarray anyelement', prosrc => 'arraycontainselem' },
 
 # BRIN minmax
 { oid => '3383', descr => 'BRIN minmax support',

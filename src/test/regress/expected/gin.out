@@ -53,6 +53,74 @@ select count(*) from gin_test_tbl where i @> array[1, 999];
      3
 (1 row)
 
+explain (costs off)
+select count(*) from gin_test_tbl where i @>> 1;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on gin_test_tbl
+         Recheck Cond: (i @>> 1)
+         ->  Bitmap Index Scan on gin_test_idx
+               Index Cond: (i @>> 1)
+(5 rows)
+
+explain (costs off)
+select count(*) from gin_test_tbl where i @>> 999;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on gin_test_tbl
+         Recheck Cond: (i @>> 999)
+         ->  Bitmap Index Scan on gin_test_idx
+               Index Cond: (i @>> 999)
+(5 rows)
+
+select count(*) from gin_test_tbl where i @>> 1;
+ count 
+-------
+  2997
+(1 row)
+
+select count(*) from gin_test_tbl where i @>> 999;
+ count 
+-------
+     3
+(1 row)
+
+explain (costs off)
+select count(*) from gin_test_tbl where 1 <<@ i;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on gin_test_tbl
+         Recheck Cond: (1 <<@ i)
+         ->  Bitmap Index Scan on gin_test_idx
+               Index Cond: (i @>> 1)
+(5 rows)
+
+explain (costs off)
+select count(*) from gin_test_tbl where 999 <<@ i;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on gin_test_tbl
+         Recheck Cond: (999 <<@ i)
+         ->  Bitmap Index Scan on gin_test_idx
+               Index Cond: (i @>> 999)
+(5 rows)
+
+select count(*) from gin_test_tbl where 1 <<@ i;
+ count 
+-------
+  2997
+(1 row)
+
+select count(*) from gin_test_tbl where 999 <<@ i;
+ count 
+-------
+     3
+(1 row)
+
 -- Very weak test for gin_fuzzy_search_limit
 set gin_fuzzy_search_limit = 1000;
 explain (costs off)

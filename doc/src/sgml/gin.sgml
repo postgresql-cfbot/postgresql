@@ -84,7 +84,7 @@
     </thead>
     <tbody>
      <row>
-      <entry morerows="3" valign="middle"><literal>array_ops</literal></entry>
+      <entry morerows="5" valign="middle"><literal>array_ops</literal></entry>
       <entry><literal>&amp;&amp; (anyarray,anyarray)</literal></entry>
      </row>
      <row>
@@ -92,6 +92,12 @@
      </row>
      <row>
       <entry><literal>&lt;@ (anyarray,anyarray)</literal></entry>
+     </row>
+     <row>
+      <entry><literal>@&gt;&gt; (anyarray,anyelement)</literal></entry>
+     </row>
+     <row>
+      <entry><literal>&lt;&lt;@ (anyelement,anyarray)</literal></entry>
      </row>
      <row>
       <entry><literal>= (anyarray,anyarray)</literal></entry>

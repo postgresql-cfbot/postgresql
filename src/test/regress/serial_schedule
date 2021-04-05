@@ -142,6 +142,7 @@ test: tid
 test: tidscan
 test: tidrangescan
 test: collate.icu.utf8
+test: element_fk
 test: rules
 test: psql
 test: psql_crosstab

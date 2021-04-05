@@ -40,6 +40,7 @@
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
+#include "catalog/pg_operator.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_trigger.h"
@@ -463,12 +464,12 @@ static ObjectAddress ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *
 											   LOCKMODE lockmode);
 static ObjectAddress addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint,
 											Relation rel, Relation pkrel, Oid indexOid, Oid parentConstr,
-											int numfks, int16 *pkattnum, int16 *fkattnum,
+											int numfks, int16 *pkattnum, int16 *fkattnum, char *fkreftypes,
 											Oid *pfeqoperators, Oid *ppeqoperators, Oid *ffeqoperators,
 											bool old_check_ok);
-static void addFkRecurseReferencing(List **wqueue, Constraint *fkconstraint,
-									Relation rel, Relation pkrel, Oid indexOid, Oid parentConstr,
-									int numfks, int16 *pkattnum, int16 *fkattnum,
+static void addFkRecurseReferencing(List **wqueue, Constraint *fkconstraint, Relation rel,
+									Relation pkrel, Oid indexOid, Oid parentConstr,
+									int numfks, int16 *pkattnum, int16 *fkattnum, char *fkreftypes,
 									Oid *pfeqoperators, Oid *ppeqoperators, Oid *ffeqoperators,
 									bool old_check_ok, LOCKMODE lockmode);
 static void CloneForeignKeyConstraints(List **wqueue, Relation parentRel,
@@ -8673,6 +8674,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	Relation	pkrel;
 	int16		pkattnum[INDEX_MAX_KEYS];
 	int16		fkattnum[INDEX_MAX_KEYS];
+	char		fkreftypes[INDEX_MAX_KEYS];
 	Oid			pktypoid[INDEX_MAX_KEYS];
 	Oid			fktypoid[INDEX_MAX_KEYS];
 	Oid			opclasses[INDEX_MAX_KEYS];
@@ -8680,9 +8682,11 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	Oid			ppeqoperators[INDEX_MAX_KEYS];
 	Oid			ffeqoperators[INDEX_MAX_KEYS];
 	int			i;
+	ListCell   *lc;
 	int			numfks,
 				numpks;
 	Oid			indexOid;
+	bool		has_each_element;
 	bool		old_check_ok;
 	ObjectAddress address;
 	ListCell   *old_pfeqop_item = list_head(fkconstraint->old_conpfeqop);
@@ -8771,6 +8775,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	 */
 	MemSet(pkattnum, 0, sizeof(pkattnum));
 	MemSet(fkattnum, 0, sizeof(fkattnum));
+	MemSet(fkreftypes, 0, sizeof(fkreftypes));
 	MemSet(pktypoid, 0, sizeof(pktypoid));
 	MemSet(fktypoid, 0, sizeof(fktypoid));
 	MemSet(opclasses, 0, sizeof(opclasses));
@@ -8781,6 +8786,54 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	numfks = transformColumnNameList(RelationGetRelid(rel),
 									 fkconstraint->fk_attrs,
 									 fkattnum, fktypoid);
+
+	/*
+	 * Validate the reference semantics codes, too, and convert list to array
+	 * format to pass to CreateConstraintEntry.
+	 */
+	Assert(list_length(fkconstraint->fk_reftypes) == numfks);
+	has_each_element = false;
+	i = 0;
+	foreach(lc, fkconstraint->fk_reftypes)
+	{
+		char		reftype = lfirst_int(lc);
+
+		switch (reftype)
+		{
+			case FKCONSTR_REF_PLAIN:
+				/* OK, nothing to do */
+				break;
+			case FKCONSTR_REF_EACH_ELEMENT:
+				/* At most one FK column can be an array reference */
+				if (has_each_element)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_FOREIGN_KEY),
+							 errmsg("foreign keys support only one array column")));
+
+				has_each_element = true;
+				break;
+			default:
+				elog(ERROR, "invalid fk_reftype: %d", (int) reftype);
+				break;
+		}
+		fkreftypes[i] = reftype;
+		i++;
+	}
+
+	/*
+	* Array foreign keys support only UPDATE/DELETE NO ACTION, UPDATE/DELETE
+	* RESTRICT
+	*/
+	if (has_each_element)
+	{
+		if ((fkconstraint->fk_upd_action != FKCONSTR_ACTION_NOACTION &&
+			 fkconstraint->fk_upd_action != FKCONSTR_ACTION_RESTRICT) ||
+			(fkconstraint->fk_del_action != FKCONSTR_ACTION_NOACTION &&
+			 fkconstraint->fk_del_action != FKCONSTR_ACTION_RESTRICT))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_FOREIGN_KEY),
+					 errmsg("Array Element Foreign Keys support only NO ACTION and RESTRICT actions")));
+	}
 
 	/*
 	 * If the attribute list for the referenced table was omitted, lookup the
@@ -8896,6 +8949,37 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		eqstrategy = BTEqualStrategyNumber;
 
 		/*
+		 * If this is an array foreign key, we must look up the operators for
+		 * the array element type, not the array type itself.
+		 */
+		if (fkreftypes[i] == FKCONSTR_REF_EACH_ELEMENT)
+		{
+			/* We check if the array element type exists and is of valid Oid */
+			fktype = get_base_element_type(fktype);
+			if (!OidIsValid(fktype))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_FOREIGN_KEY),
+						 errmsg("foreign key constraint \"%s\" cannot be implemented",
+								fkconstraint->conname),
+						 errdetail("Key column \"%s\" has type %s which is not an array type.",
+								   strVal(list_nth(fkconstraint->fk_attrs, i)),
+								   format_type_be(fktypoid[i]))));
+
+			/*
+			 * make sure the <<@ operator can work with the specified operand
+			 * types
+			 */
+			if (fktype != pktype)
+				ereport(ERROR,
+				(errcode(ERRCODE_INVALID_FOREIGN_KEY),
+					errmsg("foreign key constraint \"%s\" cannot be implemented",
+						fkconstraint->conname),
+					errdetail("Unssupported relation between %s and %s.",
+							format_type_be(fktypoid[i]),
+							format_type_be(pktype))));
+		}
+
+		/*
 		 * There had better be a primary equality operator for the index.
 		 * We'll use it for PK = PK comparisons.
 		 */
@@ -8926,6 +9010,10 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			pfeqop_right = InvalidOid;
 			ffeqop = InvalidOid;
 		}
+
+		// XXX: Fix logic for selecting operators
+		if (fkreftypes[i] == FKCONSTR_REF_EACH_ELEMENT)
+			ffeqop = ARRAY_EQ_OP;
 
 		if (!(OidIsValid(pfeqop) && OidIsValid(ffeqop)))
 		{
@@ -8994,6 +9082,13 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			 * We may assume that pg_constraint.conkey is not changing.
 			 */
 			old_fktype = attr->atttypid;
+			if (fkreftypes[i] == FKCONSTR_REF_EACH_ELEMENT)
+			{
+				old_fktype = get_base_element_type(old_fktype);
+				/* this shouldn't happen ... */
+				if (!OidIsValid(old_fktype))
+					elog(ERROR, "old foreign key column is not an array");
+			}
 			new_fktype = fktype;
 			old_pathtype = findFkeyCast(pfeqop_right, old_fktype,
 										&old_castfunc);
@@ -9053,6 +9148,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 									 numfks,
 									 pkattnum,
 									 fkattnum,
+									 fkreftypes,
 									 pfeqoperators,
 									 ppeqoperators,
 									 ffeqoperators,
@@ -9065,6 +9161,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 							numfks,
 							pkattnum,
 							fkattnum,
+							fkreftypes,
 							pfeqoperators,
 							ppeqoperators,
 							ffeqoperators,
@@ -9108,7 +9205,7 @@ static ObjectAddress
 addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint, Relation rel,
 					   Relation pkrel, Oid indexOid, Oid parentConstr,
 					   int numfks,
-					   int16 *pkattnum, int16 *fkattnum, Oid *pfeqoperators,
+					   int16 *pkattnum, int16 *fkattnum, char *fkreftypes, Oid *pfeqoperators,
 					   Oid *ppeqoperators, Oid *ffeqoperators, bool old_check_ok)
 {
 	ObjectAddress address;
@@ -9178,6 +9275,7 @@ addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint, Relation rel,
 									  indexOid,
 									  RelationGetRelid(pkrel),
 									  pkattnum,
+									  fkreftypes,
 									  pfeqoperators,
 									  ppeqoperators,
 									  ffeqoperators,
@@ -9263,7 +9361,7 @@ addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint, Relation rel,
 					 indexOid, RelationGetRelationName(partRel));
 			addFkRecurseReferenced(wqueue, fkconstraint, rel, partRel,
 								   partIndexId, constrOid, numfks,
-								   mapped_pkattnum, fkattnum,
+								   mapped_pkattnum, fkattnum, fkreftypes,
 								   pfeqoperators, ppeqoperators, ffeqoperators,
 								   old_check_ok);
 
@@ -9312,7 +9410,7 @@ addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint, Relation rel,
 static void
 addFkRecurseReferencing(List **wqueue, Constraint *fkconstraint, Relation rel,
 						Relation pkrel, Oid indexOid, Oid parentConstr,
-						int numfks, int16 *pkattnum, int16 *fkattnum,
+						int numfks, int16 *pkattnum, int16 *fkattnum, char *fkreftypes,
 						Oid *pfeqoperators, Oid *ppeqoperators, Oid *ffeqoperators,
 						bool old_check_ok, LOCKMODE lockmode)
 {
@@ -9446,6 +9544,7 @@ addFkRecurseReferencing(List **wqueue, Constraint *fkconstraint, Relation rel,
 									  indexOid,
 									  RelationGetRelid(pkrel),
 									  pkattnum,
+									  fkreftypes,
 									  pfeqoperators,
 									  ppeqoperators,
 									  ffeqoperators,
@@ -9481,6 +9580,7 @@ addFkRecurseReferencing(List **wqueue, Constraint *fkconstraint, Relation rel,
 									numfks,
 									pkattnum,
 									mapped_fkattnum,
+									fkreftypes,
 									pfeqoperators,
 									ppeqoperators,
 									ffeqoperators,
@@ -9589,6 +9689,7 @@ CloneFkReferenced(Relation parentRel, Relation partitionRel)
 		Oid			conpfeqop[INDEX_MAX_KEYS];
 		Oid			conppeqop[INDEX_MAX_KEYS];
 		Oid			conffeqop[INDEX_MAX_KEYS];
+		char		confreftype[INDEX_MAX_KEYS];
 		Constraint *fkconstraint;
 
 		tuple = SearchSysCache1(CONSTROID, constrOid);
@@ -9621,8 +9722,8 @@ CloneFkReferenced(Relation parentRel, Relation partitionRel)
 								   confkey,
 								   conpfeqop,
 								   conppeqop,
-								   conffeqop);
-
+								   conffeqop,
+								   confreftype);
 		for (int i = 0; i < numfks; i++)
 			mapped_confkey[i] = attmap->attnums[confkey[i] - 1];
 
@@ -9665,6 +9766,7 @@ CloneFkReferenced(Relation parentRel, Relation partitionRel)
 							   numfks,
 							   mapped_confkey,
 							   conkey,
+							   confreftype,
 							   conpfeqop,
 							   conppeqop,
 							   conffeqop,
@@ -9735,6 +9837,7 @@ CloneFkReferencing(List **wqueue, Relation parentRel, Relation partRel)
 		AttrNumber	conkey[INDEX_MAX_KEYS];
 		AttrNumber	mapped_conkey[INDEX_MAX_KEYS];
 		AttrNumber	confkey[INDEX_MAX_KEYS];
+		char		confreftype[INDEX_MAX_KEYS];
 		Oid			conpfeqop[INDEX_MAX_KEYS];
 		Oid			conppeqop[INDEX_MAX_KEYS];
 		Oid			conffeqop[INDEX_MAX_KEYS];
@@ -9769,7 +9872,8 @@ CloneFkReferencing(List **wqueue, Relation parentRel, Relation partRel)
 									   ShareRowExclusiveLock, NULL);
 
 		DeconstructFkConstraintRow(tuple, &numfks, conkey, confkey,
-								   conpfeqop, conppeqop, conffeqop);
+								   conpfeqop, conppeqop, conffeqop,
+								   confreftype);
 		for (int i = 0; i < numfks; i++)
 			mapped_conkey[i] = attmap->attnums[conkey[i] - 1];
 
@@ -9848,6 +9952,7 @@ CloneFkReferencing(List **wqueue, Relation parentRel, Relation partRel)
 								  indexOid,
 								  constrForm->confrelid,	/* same foreign rel */
 								  confkey,
+								  confreftype,
 								  conpfeqop,
 								  conppeqop,
 								  conffeqop,
@@ -9886,6 +9991,7 @@ CloneFkReferencing(List **wqueue, Relation parentRel, Relation partRel)
 								numfks,
 								confkey,
 								mapped_conkey,
+								confreftype,
 								conpfeqop,
 								conppeqop,
 								conffeqop,

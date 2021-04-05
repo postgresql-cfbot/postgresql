@@ -2834,10 +2834,12 @@ PGresult *PQexecParams(PGconn *conn,
           <term><parameter>resultFormat</parameter></term>
           <listitem>
            <para>
-            Specify zero to obtain results in text format, or one to obtain
-            results in binary format.  (There is not currently a provision
-            to obtain different result columns in different formats,
-            although that is possible in the underlying protocol.)
+            Specify 0 to obtain results in text format, or 1 to obtain results
+            in binary format, or -1 to have the setting of <xref
+            linkend="guc-result-format-auto-binary-types"/> be applied by the
+            server.  (There is not currently a provision to obtain different
+            result columns in different formats, although that is possible in
+            the underlying protocol.)
            </para>
           </listitem>
          </varlistentry>

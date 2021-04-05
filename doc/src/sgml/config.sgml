@@ -8749,6 +8749,46 @@ SET XML OPTION { DOCUMENT | CONTENT };
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-result-format-auto-binary-types" xreflabel="result_format_auto_binary_types">
+      <term><varname>result_format_auto_binary_types</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>result_format_auto_binary_types</varname></primary>
+       <secondary>configuration parameter</secondary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter specifies which data types are to be sent from the
+        server in binary format for rows returned in the extended query
+        protocol when result format code -1 is specified in the <link
+        linkend="protocol-message-Bind">Bind message</link>.  It is intended
+        to be used by client libraries that prefer to handle specific, but not
+        all, data types in binary format.  The typical usage would be that the
+        client library sets this value when it starts a connection.  (A client
+        library that wants to handle <emphasis>all</emphasis> types in binary
+        doesn't need to use this because it can just specify the format code
+        for all types at once in the protocol message.)
+       </para>
+
+       <para>
+        The value is a comma-separated list of type OIDs.  For example, if you
+        want to automatically get values of the types <type>int2</type>,
+        <type>int4</type>, and <type>int8</type> in binary while leaving the
+        rest in text, an appropriate setting would be
+        <literal>21,23,20</literal>.  A non-existing type OIDs are ignored.
+        This allows using the same value for different databases that might
+        have different extensions installed.
+       </para>
+
+       <para>
+        This setting applies only to result rows from the extended query
+        protocol, so it does not affect usage of
+        <application>psql</application> or <application>pg_dump</application>
+        for example.  Also, it does not affect the format of query parameters.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
     </sect2>
      <sect2 id="runtime-config-client-format">

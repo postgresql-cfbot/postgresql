@@ -14,6 +14,7 @@
 #ifndef PRINTTUP_H
 #define PRINTTUP_H
 
+#include "utils/guc.h"
 #include "utils/portal.h"
 
 extern DestReceiver *printtup_create_DR(CommandDest dest);
@@ -26,6 +27,10 @@ extern void SendRowDescriptionMessage(StringInfo buf,
 extern void debugStartup(DestReceiver *self, int operation,
 						 TupleDesc typeinfo);
 extern bool debugtup(TupleTableSlot *slot, DestReceiver *self);
+
+extern char *result_format_auto_binary_types;
+extern bool check_result_format_auto_binary_types(char **newval, void **extra, GucSource source);
+extern void assign_result_format_auto_binary_types(const char *newval, void *extra);
 
 /* XXX these are really in executor/spi.c */
 extern void spi_dest_startup(DestReceiver *self, int operation,

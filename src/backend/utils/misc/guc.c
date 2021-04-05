@@ -34,6 +34,7 @@
 
 #include "access/commit_ts.h"
 #include "access/gin.h"
+#include "access/printtup.h"
 #include "access/rmgr.h"
 #include "access/tableam.h"
 #include "access/toast_compression.h"
@@ -4564,6 +4565,17 @@ static struct config_string ConfigureNamesString[] =
 		&backtrace_functions,
 		"",
 		check_backtrace_functions, assign_backtrace_functions, NULL
+	},
+
+	{
+		{"result_format_auto_binary_types", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Which data types to send in binary for format -1 in the extended query protocol."),
+			NULL,
+			GUC_LIST_INPUT | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&result_format_auto_binary_types,
+		"",
+		check_result_format_auto_binary_types, assign_result_format_auto_binary_types, NULL
 	},
 
 	/* End-of-list marker */

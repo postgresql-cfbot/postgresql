@@ -3587,7 +3587,7 @@ BackendKeyData (B)
 </varlistentry>
 
 
-<varlistentry>
+<varlistentry id="protocol-message-Bind">
 <term>
 Bind (F)
 </term>
@@ -3729,8 +3729,9 @@ Bind (F)
 </term>
 <listitem>
 <para>
-                The result-column format codes.  Each must presently be
-                zero (text) or one (binary).
+                The result-column format codes.  Each must be 0 for text, or 1
+                for binary, or -1 to apply the setting of <xref
+                linkend="guc-result-format-auto-binary-types"/>.
 </para>
 </listitem>
 </varlistentry>

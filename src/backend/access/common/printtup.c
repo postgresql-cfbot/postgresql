@@ -22,6 +22,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
+#include "utils/varlena.h"
 
 
 static void printtup_startup(DestReceiver *self, int operation,
@@ -29,6 +30,13 @@ static void printtup_startup(DestReceiver *self, int operation,
 static bool printtup(TupleTableSlot *slot, DestReceiver *self);
 static void printtup_shutdown(DestReceiver *self);
 static void printtup_destroy(DestReceiver *self);
+
+/* GUC variable */
+char *result_format_auto_binary_types;
+
+/* internal parsed representation */
+static List *result_format_auto_binary_types_internal = NIL;	/* type OID list */
+
 
 /* ----------------------------------------------------------------
  *		printtup / debugtup support
@@ -231,6 +239,9 @@ SendRowDescriptionMessage(StringInfo buf, TupleDesc typeinfo,
 		else
 			format = 0;
 
+		if (format == -1)
+			format = list_member_oid(result_format_auto_binary_types_internal, atttypid) ? 1 : 0;
+
 		pq_writestring(buf, NameStr(att->attname));
 		pq_writeint32(buf, resorigtbl);
 		pq_writeint16(buf, resorigcol);
@@ -270,6 +281,9 @@ printtup_prepare_info(DR_printtup *myState, TupleDesc typeinfo, int numAttrs)
 		PrinttupAttrInfo *thisState = myState->myinfo + i;
 		int16		format = (formats ? formats[i] : 0);
 		Form_pg_attribute attr = TupleDescAttr(typeinfo, i);
+
+		if (format == -1)
+			format = list_member_oid(result_format_auto_binary_types_internal, attr->atttypid) ? 1 : 0;
 
 		thisState->format = format;
 		if (format == 0)
@@ -482,4 +496,84 @@ debugtup(TupleTableSlot *slot, DestReceiver *self)
 	printf("\t----\n");
 
 	return true;
+}
+
+
+/*
+ * Support for result_format_auto_binary_types setting
+ */
+
+bool
+check_result_format_auto_binary_types(char **newval, void **extra, GucSource source)
+{
+	char       *rawstring;
+	List       *elemlist;
+	ListCell   *lc;
+
+	rawstring = pstrdup(*newval);
+	if (!SplitGUCList(rawstring, ',', &elemlist))
+	{
+		GUC_check_errdetail("List syntax is invalid.");
+		pfree(rawstring);
+		list_free(elemlist);
+		return false;
+	}
+
+	foreach(lc, elemlist)
+	{
+		char	   *str = lfirst(lc);
+
+		if (atooid(str) == 0)
+		{
+			GUC_check_errdetail("Invalid list entry: %s", str);
+			pfree(rawstring);
+			list_free(elemlist);
+			return false;
+		}
+	}
+
+	pfree(rawstring);
+	list_free(elemlist);
+
+	return true;
+}
+
+void
+assign_result_format_auto_binary_types(const char *newval, void *extra)
+{
+	char	   *rawstring;
+	List	   *elemlist;
+	ListCell   *lc;
+
+	rawstring = pstrdup(newval);
+	if (!SplitGUCList(rawstring, ',', &elemlist))
+	{
+		pfree(rawstring);
+		list_free(elemlist);
+		return;
+	}
+
+	list_free(result_format_auto_binary_types_internal);
+	result_format_auto_binary_types_internal = NIL;
+
+	foreach(lc, elemlist)
+	{
+		char	   *str = lfirst(lc);
+		Oid			oid;
+		MemoryContext oldcontext;
+
+		if ((oid = atooid(str)) == 0)
+		{
+			pfree(rawstring);
+			list_free(elemlist);
+			return;
+		}
+
+		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+		result_format_auto_binary_types_internal = list_append_unique_oid(result_format_auto_binary_types_internal, oid);
+		MemoryContextSwitchTo(oldcontext);
+	}
+
+	pfree(rawstring);
+	list_free(elemlist);
 }

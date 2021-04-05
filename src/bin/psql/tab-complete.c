@@ -197,18 +197,21 @@ static bool completion_force_quote; /* true to force-quote filenames */
  */
 #define COMPLETE_WITH_QUERY(query) \
 do { \
+	completion_case_sensitive = false; \
 	completion_charp = query; \
 	matches = rl_completion_matches(text, complete_from_query); \
 } while (0)
 
 #define COMPLETE_WITH_VERSIONED_QUERY(query) \
 do { \
+	completion_case_sensitive = false; \
 	completion_vquery = query; \
 	matches = rl_completion_matches(text, complete_from_versioned_query); \
 } while (0)
 
 #define COMPLETE_WITH_SCHEMA_QUERY(query, addon) \
 do { \
+	completion_case_sensitive = false; \
 	completion_squery = &(query); \
 	completion_charp = addon; \
 	matches = rl_completion_matches(text, complete_from_schema_query); \
@@ -216,6 +219,7 @@ do { \
 
 #define COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(query, addon) \
 do { \
+	completion_case_sensitive = false; \
 	completion_squery = query; \
 	completion_vquery = addon; \
 	matches = rl_completion_matches(text, complete_from_versioned_schema_query); \
@@ -1016,7 +1020,7 @@ static const VersionedQuery Query_for_list_of_subscriptions[] = {
 };
 
 /*
- * This is a list of all "things" in Pgsql, which can show up after CREATE or
+ * This is a list of all "things" in pgsql, which can show up after CREATE or
  * DROP; and there is also a query to get a list of them.
  */
 
@@ -1166,6 +1170,7 @@ static char *complete_from_files(const char *text, int state);
 
 static char *pg_strdup_keyword_case(const char *s, const char *ref);
 static char *escape_string(const char *text);
+static char *pg_string_tolower(const char *text);
 static PGresult *exec_query(const char *query);
 
 static char **get_previous_words(int point, char **buffer, int *nwords);
@@ -4401,16 +4406,18 @@ _complete_from_query(const char *simple_query,
 		PQclear(result);
 		result = NULL;
 
-		/* Set up suitably-escaped copies of textual inputs */
-		e_text = escape_string(text);
+		/* Set up suitably-escaped copies of textual inputs,
+		 * then change the textual inputs to lower case.
+		 */
+		e_text = pg_string_tolower(escape_string(text));
 
 		if (completion_info_charp)
-			e_info_charp = escape_string(completion_info_charp);
+			e_info_charp = pg_string_tolower(escape_string(completion_info_charp));
 		else
 			e_info_charp = NULL;
 
 		if (completion_info_charp2)
-			e_info_charp2 = escape_string(completion_info_charp2);
+			e_info_charp2 = pg_string_tolower(escape_string(completion_info_charp2));
 		else
 			e_info_charp2 = NULL;
 
@@ -4445,7 +4452,7 @@ _complete_from_query(const char *simple_query,
 			 */
 			if (strcmp(schema_query->catname,
 					   "pg_catalog.pg_class c") == 0 &&
-				strncmp(text, "pg_", 3) != 0)
+				strncmp(pg_string_tolower(text), "pg_", 3) != 0)
 			{
 				appendPQExpBufferStr(&query_buffer,
 									 " AND c.relnamespace <> (SELECT oid FROM"
@@ -4537,7 +4544,17 @@ _complete_from_query(const char *simple_query,
 		while (list_index < PQntuples(result) &&
 			   (item = PQgetvalue(result, list_index++, 0)))
 			if (pg_strncasecmp(text, item, byte_length) == 0)
-				return pg_strdup(item);
+			{
+				if (byte_length == 0 || completion_case_sensitive)
+					return pg_strdup(item);
+				else
+				/*
+				 * If case insensitive matching was requested initially,
+				 * adjust the case according to setting.
+				 */
+				return pg_strdup_keyword_case(item, text);
+			}
+
 	}
 
 	/* If nothing matches, free the db structure and return null */
@@ -4588,7 +4605,6 @@ complete_from_list(const char *text, int state)
 			if (completion_case_sensitive)
 				return pg_strdup(item);
 			else
-
 				/*
 				 * If case insensitive matching was requested initially,
 				 * adjust the case according to setting.
@@ -4641,7 +4657,6 @@ complete_from_const(const char *text, int state)
 		if (completion_case_sensitive)
 			return pg_strdup(completion_charp);
 		else
-
 			/*
 			 * If case insensitive matching was requested initially, adjust
 			 * the case according to setting.
@@ -4871,6 +4886,24 @@ escape_string(const char *text)
 	PQescapeStringConn(pset.db, result, text, text_length, NULL);
 
 	return result;
+}
+
+
+/*
+ * pg_string_tolower - Fold a string to lower case.
+ */
+static char *
+pg_string_tolower(const char *text)
+{
+	char	   *ret,
+			   *p;
+
+	ret = pg_strdup(text);
+
+	for (p = ret; *p; p++)
+			*p = pg_tolower((unsigned char) *p);
+
+	return ret;
 }
 
 

@@ -142,6 +142,16 @@ check_completion("SEL\t", qr/SELECT /, "complete SEL<tab> to SELECT");
 
 clear_query();
 
+# check basic query command completion for upper character inputs
+check_completion("set BYT\t", qr/set BYTEA_OUTPUT /, "complete set BYT<tab> to set BYTEA_OUTPUT");
+
+clear_query();
+
+# check query command completion for upper character ralation name
+check_completion("update TAB1 SET \t", qr/update TAB1 SET \af/, "complete column name for TAB1");
+
+clear_query();
+
 # check case variation is honored
 check_completion("sel\t", qr/select /, "complete sel<tab> to select");
 

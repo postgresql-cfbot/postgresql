@@ -37,6 +37,7 @@
 #include "catalog/pg_namespace.h"
 #include "commands/cluster.h"
 #include "commands/defrem.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -1937,7 +1938,11 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 			cluster_params.options |= CLUOPT_VERBOSE;
 
 		/* VACUUM FULL is now a variant of CLUSTER; see cluster.c */
+		pgstat_progress_start_command(PROGRESS_COMMAND_CLUSTER, relid);
+		pgstat_progress_update_param(PROGRESS_CLUSTER_COMMAND,
+				PROGRESS_CLUSTER_COMMAND_VACUUM_FULL);
 		cluster_rel(relid, InvalidOid, &cluster_params);
+		pgstat_progress_end_command();
 	}
 	else
 		table_relation_vacuum(rel, params, vac_strategy);

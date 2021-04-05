@@ -95,6 +95,7 @@
 #include "utils/bytea.h"
 #include "utils/float.h"
 #include "utils/guc_tables.h"
+#include "utils/jsonb.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/pg_lsn.h"
@@ -519,6 +520,12 @@ static struct config_enum_entry default_toast_compression_options[] = {
 #ifdef  USE_LZ4
 	{"lz4", TOAST_LZ4_COMPRESSION, false},
 #endif
+	{NULL, 0, false}
+};
+
+const struct config_enum_entry sql_json_type_info[] = {
+	{"json", SQLJSON_TYPE_JSON, false},
+	{"jsonb", SQLJSON_TYPE_JSONB, false},
 	{NULL, 0, false}
 };
 
@@ -4919,6 +4926,18 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&recovery_init_sync_method,
 		RECOVERY_INIT_SYNC_METHOD_FSYNC, recovery_init_sync_method_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"sql_json", PGC_USERSET, COMPAT_OPTIONS_CLIENT,
+			gettext_noop("Sets what PostgreSQL type to use as an implementaion of SQL JSON type."),
+			gettext_noop("When turned on, jsonb type is mapped to SQL JSON type, "
+						 "json type is mapped to JSON TEXT type.")
+		},
+		&sql_json_type,
+		SQLJSON_TYPE_JSON,
+		sql_json_type_info,
 		NULL, NULL, NULL
 	},
 

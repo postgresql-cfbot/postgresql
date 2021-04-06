@@ -209,3 +209,4 @@ test: event_trigger
 test: oidjoins
 test: fast_default
 test: stats
+test: schema_variables

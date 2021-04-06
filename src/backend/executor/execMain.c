@@ -45,10 +45,13 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_publication.h"
+#include "catalog/pg_variable.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
+#include "commands/schema_variable.h"
 #include "executor/execdebug.h"
 #include "executor/nodeSubplan.h"
+#include "executor/svariableReceiver.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
 #include "mb/pg_wchar.h"
@@ -189,9 +192,60 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	estate->es_sourceText = queryDesc->sourceText;
 
 	/*
+	 * Prepare schema variables, if are not prepared in queryDesc
+	 */
+	if (queryDesc->num_schema_variables > 0)
+	{
+		/*
+		 * link shared memory with working copy of schema variable's values
+		 * used in this query. This access is used by parallel query executor's
+		 * workers.
+		 */
+		estate->es_schema_variables = queryDesc->schema_variables;
+		estate->es_num_schema_variables = queryDesc->num_schema_variables;
+	}
+	else if (queryDesc->plannedstmt->schemaVariables)
+	{
+		ListCell   *lc;
+		int			nSchemaVariables;
+		int			i = 0;
+
+		nSchemaVariables = list_length(queryDesc->plannedstmt->schemaVariables);
+
+		/* Create buffer for used schema variables */
+		estate->es_schema_variables = (SchemaVariableValue *)
+			palloc(nSchemaVariables * sizeof(SchemaVariableValue));
+
+		foreach(lc, queryDesc->plannedstmt->schemaVariables)
+		{
+			AclResult	aclresult;
+			Oid			varid = lfirst_oid(lc);
+
+			aclresult = pg_variable_aclcheck(varid, GetUserId(), ACL_READ);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, OBJECT_VARIABLE,
+							   schema_variable_get_name(varid));
+
+			estate->es_schema_variables[i].varid = varid;
+			estate->es_schema_variables[i].value = CopySchemaVariable(varid,
+																	  &estate->es_schema_variables[i].isnull,
+																	  &estate->es_schema_variables[i].typid);
+
+			i++;
+		}
+
+		estate->es_num_schema_variables = nSchemaVariables;
+	}
+
+	/*
 	 * Fill in the query environment, if any, from queryDesc.
 	 */
 	estate->es_queryEnv = queryDesc->queryEnv;
+
+	/*
+	 * Result can be stored in schema variable.
+	 */
+	estate->es_result_variable = queryDesc->plannedstmt->resultVariable;
 
 	/*
 	 * If non-read-only query, set the command ID to mark output tuples with
@@ -199,6 +253,7 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	switch (queryDesc->operation)
 	{
 		case CMD_SELECT:
+		case CMD_SELECT_UTILITY:
 
 			/*
 			 * SELECT FOR [KEY] UPDATE/SHARE and modifying CTEs need to mark
@@ -333,6 +388,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	estate->es_processed = 0;
 
 	sendTuples = (operation == CMD_SELECT ||
+				  OidIsValid(estate->es_result_variable) ||
 				  queryDesc->plannedstmt->hasReturning);
 
 	if (sendTuples)
@@ -812,6 +868,20 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	ExecInitRangeTable(estate, rangeTable);
 
 	estate->es_plannedstmt = plannedstmt;
+
+	/*
+	 * Is possible to write to schema variable?
+	 */
+	if (OidIsValid(estate->es_result_variable))
+	{
+		AclResult	aclresult;
+		Oid			varid = estate->es_result_variable;
+
+		/* Ensure this variable is writeable */
+		aclresult = pg_variable_aclcheck(varid, GetUserId(), ACL_WRITE);
+		if (aclresult != ACLCHECK_OK)
+			aclcheck_error(aclresult, OBJECT_VARIABLE, schema_variable_get_name(varid));
+	}
 
 	/*
 	 * Next, build the ExecRowMark array from the PlanRowMark(s), if any.

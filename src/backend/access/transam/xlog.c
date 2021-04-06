@@ -531,6 +531,16 @@ typedef enum ExclusiveBackupState
  */
 static SessionBackupState sessionBackupState = SESSION_BACKUP_NONE;
 
+/* entries for RecordBoundaryMap, used to mark segments ready for archival */
+typedef struct RecordBoundaryEntry
+{
+	XLogSegNo seg;	/* must be first */
+	XLogRecPtr pos;
+} RecordBoundaryEntry;
+
+/* File for persisting the last notified segment through crashes. */
+#define LAST_NOTIFIED_FILE	(XLOGDIR "/archive_status/last_notified")
+
 /*
  * Shared state data for WAL insertion.
  */
@@ -732,6 +742,12 @@ typedef struct XLogCtlData
 	 */
 	XLogRecPtr	lastFpwDisableRecPtr;
 
+	/*
+	 * The last segment we've marked ready for archival.  Protected by info_lck.
+	 * This value should only be updated while holding ArchNotifyLock.
+	 */
+	XLogSegNo lastNotifiedSeg;
+
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
 
@@ -744,6 +760,12 @@ static WALInsertLockPadded *WALInsertLocks = NULL;
  * We maintain an image of pg_control in shared memory.
  */
 static ControlFileData *ControlFile = NULL;
+
+/*
+ * Record boundary map, used for marking segments as ready for archival.
+ * Protected by ArchNotifyLock.
+ */
+static HTAB *RecordBoundaryMap = NULL;
 
 /*
  * Calculate the amount of space left on the page after 'endptr'. Beware
@@ -976,6 +998,22 @@ static XLogRecPtr XLogBytePosToEndRecPtr(uint64 bytepos);
 static uint64 XLogRecPtrToBytePos(XLogRecPtr ptr);
 static void checkXLogConsistency(XLogReaderState *record);
 
+typedef struct LastNotifiedSegment
+{
+	XLogSegNo	segno;
+	bool		crash_handling;
+} LastNotifiedSegment;
+
+static void RegisterRecordBoundaryEntry(XLogSegNo seg, XLogRecPtr pos);
+static void NotifySegmentsReadyForArchive(void);
+static XLogSegNo GetLastNotifiedSegment(void);
+static void SetLastNotifiedSegment(XLogSegNo seg);
+static XLogSegNo GetLatestRecordBoundarySegment(void);
+static void RemoveRecordBoundariesUpTo(XLogSegNo seg);
+static void InitializeLastNotifiedSegment(void);
+static LastNotifiedSegment ReadLastNotifiedSegmentFile(void);
+static void WriteLastNotifiedSegmentFile(XLogSegNo segno, bool crash_handling);
+
 static void WALInsertLockAcquire(void);
 static void WALInsertLockAcquireExclusive(void);
 static void WALInsertLockRelease(void);
@@ -1022,6 +1060,8 @@ XLogInsertRecord(XLogRecData *rdata,
 							   info == XLOG_SWITCH);
 	XLogRecPtr	StartPos;
 	XLogRecPtr	EndPos;
+	XLogSegNo	StartSeg;
+	XLogSegNo	EndSeg;
 	bool		prevDoPageWrites = doPageWrites;
 
 	/* we assume that all of the record header is in the first chunk */
@@ -1181,6 +1221,31 @@ XLogInsertRecord(XLogRecData *rdata,
 	}
 
 	/*
+	 * Record the record boundary if we crossed the segment boundary.  This is
+	 * used to ensure that segments are not marked ready for archival before the
+	 * entire record has been flushed to disk.
+	 *
+	 * Note that we do not use XLByteToPrevSeg() for determining the ending
+	 * segment.  This is done so that a record that fits perfectly into the end
+	 * of the segment is marked ready for archival as soon as the flushed
+	 * pointer jumps to the next segment.
+	 */
+	XLByteToSeg(StartPos, StartSeg, wal_segment_size);
+	XLByteToSeg(EndPos, EndSeg, wal_segment_size);
+
+	if (StartSeg != EndSeg &&
+		XLogArchivingActive())
+	{
+		RegisterRecordBoundaryEntry(EndSeg, EndPos);
+
+		/*
+		 * There's a chance that the record was already flushed to disk and we
+		 * missed marking segments as ready for archive, so try to do that now.
+		 */
+		NotifySegmentsReadyForArchive();
+	}
+
+	/*
 	 * If this was an XLOG_SWITCH record, flush the record and the empty
 	 * padding space that fills the rest of the segment, and perform
 	 * end-of-segment actions (eg, notifying archiver).
@@ -1275,6 +1340,395 @@ XLogInsertRecord(XLogRecData *rdata,
 	}
 
 	return EndPos;
+}
+
+/*
+ * RegisterRecordBoundaryEntry
+ *
+ * This enters a new entry into the record boundary map, which is used for
+ * determing when it is safe to mark a segment as ready for archival.  An entry
+ * with the given key (the segment number) must not already exist in the map.
+ * Also, the caller is responsible for ensuring that XLByteToSeg() would return
+ * the same segment number for the given record pointer.
+ */
+static void
+RegisterRecordBoundaryEntry(XLogSegNo seg, XLogRecPtr pos)
+{
+	RecordBoundaryEntry *entry;
+	bool found;
+
+	LWLockAcquire(ArchNotifyLock, LW_EXCLUSIVE);
+
+	entry = (RecordBoundaryEntry *) hash_search(RecordBoundaryMap,
+												(void *) &seg, HASH_ENTER,
+												&found);
+	if (found)
+		elog(ERROR, "record boundary entry for segment already exists");
+
+	entry->pos = pos;
+
+	LWLockRelease(ArchNotifyLock);
+}
+
+/*
+ * NotifySegmentsReadyForArchive
+ *
+ * This function marks segments as ready for archival, given that it is safe to
+ * do so.  It is safe to call this function repeatedly, even if nothing has
+ * changed since the last time it was called.
+ */
+static void
+NotifySegmentsReadyForArchive(void)
+{
+	XLogRecPtr	flushed;
+	XLogSegNo	flushed_seg;
+	XLogSegNo	latest_boundary_seg;
+	XLogSegNo	last_notified;
+
+	/*
+	 * We first do a quick sanity check to see if we can bail out without taking
+	 * the ArchNotifyLock at all.  It is expected that this function will run
+	 * frequently and that it will need to do nothing the vast majority of the
+	 * time.
+	 *
+	 * Specifically, we bail out if the shared memory value for the last
+	 * notified segment has not yet been initialized or if we've already marked
+	 * the segment prior to the segment that contains "flushed" as ready for
+	 * archival.  We intentionally use XLByteToSeg() instead of
+	 * XLByteToPrevSeg() so that we don't skip notifying when a record fits
+	 * perfectly into the end of a segment.  ("flushed" should point to the
+	 * first byte of the record _after_ the one that is known to be flushed to
+	 * disk.)
+	 */
+	last_notified = GetLastNotifiedSegment();
+	if (XLogSegNoIsInvalid(last_notified))
+		return;
+
+	flushed = GetFlushRecPtr();
+	XLByteToSeg(flushed, flushed_seg, wal_segment_size);
+	if (last_notified >= flushed_seg - 1)
+		return;
+
+	/*
+	 * At this point, we must acquire ArchNotifyLock before proceeding.  In this
+	 * section, we look for the latest record boundary in RecordBoundaryMap that
+	 * is less than or equal to the current "flushed" pointer, and we notify the
+	 * archiver that all segments up to (but not including) that boundary's
+	 * associated segment are ready for archival.
+	 */
+	LWLockAcquire(ArchNotifyLock, LW_EXCLUSIVE);
+
+	latest_boundary_seg = GetLatestRecordBoundarySegment();
+	if (!XLogSegNoIsInvalid(latest_boundary_seg))
+	{
+		XLogSegNo i;
+
+		/* create the archive_status files and update last_notified */
+		for (i = GetLastNotifiedSegment() + 1; i < latest_boundary_seg; i++)
+		{
+			/*
+			 * We must update the last_notified file _before_ creating the
+			 * archive status file for the segment.  This ensures that we can
+			 * recover in the event of a crash.  RemoveXlogFile()
+			 * recycles/removes segments prior to clearing the archive status
+			 * file, so if after a crash the segment exists but its
+			 * archive status file does not, we know we must create its archive
+			 * status file.
+			 *
+			 * It's also possible that we crash in the process of notifying
+			 * several segments in this loop, but we will not know to create
+			 * archive status files for those after a crash.  Instead, we will
+			 * attempt to notify them again after a later segment becomes
+			 * eligible for archival.
+			 */
+			WriteLastNotifiedSegmentFile(i, true);
+			XLogArchiveNotifySeg(i);
+		}
+
+		/* update shared memory */
+		SetLastNotifiedSegment(latest_boundary_seg - 1);
+
+		/* remove old boundaries from the map */
+		RemoveRecordBoundariesUpTo(latest_boundary_seg);
+	}
+
+	LWLockRelease(ArchNotifyLock);
+}
+
+/*
+ * GetLatestRecordBoundarySegment
+ *
+ * This function finds the latest record boundary in RecordBoundaryMap that is
+ * less than or equal to the current "flushed" pointer and returns its
+ * associated segment number, given that it is greater than the last notified
+ * segment.  Otherwise, InvalidXLogSegNo is returned.
+ *
+ * Caller is expected to be holding ArchNotifyLock.
+ */
+static XLogSegNo
+GetLatestRecordBoundarySegment(void)
+{
+	XLogRecPtr	flushed;
+	XLogSegNo	flushed_seg;
+	XLogSegNo	last_notified;
+
+	flushed = GetFlushRecPtr();
+	XLByteToSeg(flushed, flushed_seg, wal_segment_size);
+	last_notified = GetLastNotifiedSegment();
+
+	for (XLogSegNo i = flushed_seg; i > last_notified; i--)
+	{
+		RecordBoundaryEntry *entry;
+
+		entry = (RecordBoundaryEntry *) hash_search(RecordBoundaryMap,
+													(void *) &i, HASH_FIND,
+													NULL);
+
+		if (entry != NULL && flushed >= entry->pos)
+			return entry->seg;
+	}
+
+	return InvalidXLogSegNo;
+}
+
+/*
+ * RemoveOldRecordBoundaries
+ *
+ * This function removes all entries in the RecordBoundaryMap with segment
+ * numbers up to an including seg.
+ *
+ * Caller is expected to be holding ArchNotifyLock.
+ */
+static void
+RemoveRecordBoundariesUpTo(XLogSegNo seg)
+{
+	RecordBoundaryEntry *entry;
+	HASH_SEQ_STATUS status;
+
+	hash_seq_init(&status, RecordBoundaryMap);
+
+	while ((entry = (RecordBoundaryEntry *) hash_seq_search(&status)) != NULL)
+	{
+		if (entry->seg <= seg)
+			(void) hash_search(RecordBoundaryMap, (void *) &entry->seg,
+							   HASH_REMOVE, NULL);
+	}
+}
+
+/*
+ * GetLastNotifiedSegment
+ *
+ * Retrieves last notified segment from shared memory.
+ */
+XLogSegNo
+GetLastNotifiedSegment(void)
+{
+	XLogSegNo seg;
+
+	SpinLockAcquire(&XLogCtl->info_lck);
+	seg = XLogCtl->lastNotifiedSeg;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	return seg;
+}
+
+/*
+ * SetLastNotifiedSegment
+ *
+ * Sets last notified segment in shared memory.  Callers should hold
+ * ArchNotifyLock exclusively when calling this function.
+ */
+static void
+SetLastNotifiedSegment(XLogSegNo seg)
+{
+	SpinLockAcquire(&XLogCtl->info_lck);
+	XLogCtl->lastNotifiedSeg = seg;
+	SpinLockRelease(&XLogCtl->info_lck);
+}
+
+/*
+ * InitializeLastNotifiedSegment
+ *
+ * If the last_notified file does not exist, no action is taken.
+ *
+ * If archiving is turned off, the server is a standby, or the server is
+ * perfoming point-in-time recovery, the last_notified file is deleted.  (Once
+ * the standby is promoted or recovery completes, a new last_notified file will
+ * be created in XLogWrite().)
+ *
+ * Otherwise, initialize lastNotifiedSeg with the value in the file and make
+ * sure that segment's archive status is created.
+ */
+static void
+InitializeLastNotifiedSegment(void)
+{
+	char				fname[MAXPGPATH];
+	char				path[MAXPGPATH];
+	struct stat			filestats;
+	LastNotifiedSegment	seg;
+	int					rc;
+
+	rc = stat(LAST_NOTIFIED_FILE, &filestats);
+	if (rc != 0 && errno != ENOENT)
+		ereport(PANIC,
+				(errcode_for_file_access(),
+				 errmsg("could not stat file \"%s\": %m",
+						LAST_NOTIFIED_FILE)));
+
+	/*
+	 * If the last_notified file does not exist, there's nothing to do.  If this
+	 * file is supposed to exist, it will be created in the future by
+	 * XLogWrite().
+	 */
+	if (rc != 0)
+		return;
+
+	/*
+	 * If the server is a standby, is performing point-in-time recovery, or
+	 * archiving is turned off, delete the last_notified file and move on.  Once
+	 * the standby is promoted or recovery completes, a new last_notified file
+	 * will be created in XLogWrite().
+	 */
+	if (StandbyModeRequested ||
+		ArchiveRecoveryRequested ||
+		!XLogArchivingActive())
+	{
+		durable_unlink(LAST_NOTIFIED_FILE, PANIC);
+		return;
+	}
+
+	/*
+	 * Retrieve the latest notified segment from the file.
+	 */
+	seg = ReadLastNotifiedSegmentFile();
+	XLogCtl->lastNotifiedSeg = seg.segno;
+
+	/*
+	 * If crash_handling was disabled for the segment (e.g., the value was
+	 * purely for initialization purposes), there is no need to ensure that an
+	 * archive status file was created.
+	 */
+	if (!seg.crash_handling)
+		return;
+
+	/*
+	 * If the segment still exists but there is no corresponding archive status
+	 * file, the server must have crashed between updating last_notified and
+	 * creating the archive status file.  We must create an archive status file
+	 * for the segment now.
+	 */
+	XLogFilePath(path, ThisTimeLineID, seg.segno, wal_segment_size);
+	rc = stat(path, &filestats);
+	if (rc != 0 && errno != ENOENT)
+		ereport(PANIC,
+				(errcode_for_file_access(),
+				 errmsg("could not stat file \"%s\": %m",
+						path)));
+
+	XLogFileName(fname, ThisTimeLineID, seg.segno, wal_segment_size);
+	if (rc == 0 && !XLogArchiveIsReadyOrDone(fname))
+		XLogArchiveNotify(fname);
+}
+
+/*
+ * ReadLastNotifiedSegmentFile
+ *
+ * Reads the segment number from the last_notified file.  The caller is
+ * responsible for ensuring that the file exists.
+ */
+static LastNotifiedSegment
+ReadLastNotifiedSegmentFile(void)
+{
+	LastNotifiedSegment	seg;
+	int					readBytes;
+	int					fd;
+
+	fd = OpenTransientFile(LAST_NOTIFIED_FILE, O_RDONLY | PG_BINARY);
+	if (fd < 0)
+		ereport(PANIC,
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m",
+						LAST_NOTIFIED_FILE)));
+
+	readBytes = read(fd, &seg, sizeof(seg));
+	if (readBytes != sizeof(seg))
+	{
+		if (readBytes < 0)
+			ereport(PANIC,
+					(errcode_for_file_access(),
+					 errmsg("could not read file \"%s\": %m",
+							LAST_NOTIFIED_FILE)));
+		else
+			ereport(PANIC,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg("could not read file \"%s\": read %d of %zu",
+							LAST_NOTIFIED_FILE, readBytes, sizeof(seg))));
+	}
+
+	if (CloseTransientFile(fd) != 0)
+		ereport(PANIC,
+				(errcode_for_file_access(),
+				 errmsg("could not close file \"%s\": %m",
+						LAST_NOTIFIED_FILE)));
+
+	return seg;
+}
+
+/*
+ * WriteLastNotifiedSegmentFile
+ *
+ * Writes the given segment number to the last_notified file.  The caller is
+ * responsible for ensuring that no other backends can perform this at the same
+ * time.
+ */
+static void
+WriteLastNotifiedSegmentFile(XLogSegNo segno, bool crash_handling)
+{
+	LastNotifiedSegment	seg;
+	int					fd;
+	char				path[MAXPGPATH];
+
+	memset(&seg, 0, sizeof(seg));
+	seg.segno = segno;
+	seg.crash_handling = crash_handling;
+
+	snprintf(path, MAXPGPATH, "%s.tmp", LAST_NOTIFIED_FILE);
+
+	/* make sure no old temp file is remaining */
+	if (unlink(path) < 0 && errno != ENOENT)
+		ereport(PANIC,
+				(errcode_for_file_access(),
+				 errmsg("could not remove file \"%s\": %m",
+						path)));
+
+	fd = OpenTransientFile(path,
+							  O_CREAT | O_EXCL | O_WRONLY | PG_BINARY);
+	if (fd < 0)
+		ereport(PANIC,
+				(errcode_for_file_access(),
+				 errmsg("could not create file \"%s\": %m",
+						path)));
+
+	errno = 0;
+	if ((write(fd, &seg, sizeof(seg))) != sizeof(seg))
+	{
+		/* if write didn't set errno, assume problem is no disk space */
+		if (errno == 0)
+			errno = ENOSPC;
+		ereport(PANIC,
+				(errcode_for_file_access(),
+				 errmsg("could not write to file \"%s\": %m",
+						path)));
+	}
+
+	if (CloseTransientFile(fd) != 0)
+		ereport(PANIC,
+				(errcode_for_file_access(),
+				 errmsg("could not close file \"%s\": %m",
+						path)));
+
+	/* fsync, rename to permanent file, fsync file and directory */
+	durable_rename(path, LAST_NOTIFIED_FILE, PANIC);
 }
 
 /*
@@ -2601,11 +3055,11 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			 * later. Doing it here ensures that one and only one backend will
 			 * perform this fsync.
 			 *
-			 * This is also the right place to notify the Archiver that the
-			 * segment is ready to copy to archival storage, and to update the
-			 * timer for archive_timeout, and to signal for a checkpoint if
-			 * too many logfile segments have been used since the last
-			 * checkpoint.
+			 * This is also the right place to update the timer for
+			 * archive_timeout and to signal for a checkpoint if too many
+			 * logfile segments have been used since the last checkpoint.  If
+			 * lastNotifiedSeg hasn't been initialized yet, we need to do that,
+			 * too.
 			 */
 			if (finishing_seg)
 			{
@@ -2616,8 +3070,16 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 
 				LogwrtResult.Flush = LogwrtResult.Write;	/* end of page */
 
-				if (XLogArchivingActive())
-					XLogArchiveNotifySeg(openLogSegNo);
+				if (XLogArchivingActive() &&
+					XLogSegNoIsInvalid(GetLastNotifiedSegment()))
+				{
+					LWLockAcquire(ArchNotifyLock, LW_EXCLUSIVE);
+
+					SetLastNotifiedSegment(openLogSegNo - 1);
+					WriteLastNotifiedSegmentFile(openLogSegNo - 1, false);
+
+					LWLockRelease(ArchNotifyLock);
+				}
 
 				XLogCtl->lastSegSwitchTime = (pg_time_t) time(NULL);
 				XLogCtl->lastSegSwitchLSN = LogwrtResult.Flush;
@@ -2705,6 +3167,9 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			XLogCtl->LogwrtRqst.Flush = LogwrtResult.Flush;
 		SpinLockRelease(&XLogCtl->info_lck);
 	}
+
+	if (XLogArchivingActive())
+		NotifySegmentsReadyForArchive();
 }
 
 /*
@@ -5115,6 +5580,9 @@ XLOGShmemSize(void)
 	/* and the buffers themselves */
 	size = add_size(size, mul_size(XLOG_BLCKSZ, XLOGbuffers));
 
+	/* stuff for marking segments as ready for archival */
+	size = add_size(size, hash_estimate_size(16, sizeof(RecordBoundaryEntry)));
+
 	/*
 	 * Note: we don't count ControlFileData, it comes out of the "slop factor"
 	 * added by CreateSharedMemoryAndSemaphores.  This lets us use this
@@ -5132,6 +5600,7 @@ XLOGShmemInit(void)
 	char	   *allocptr;
 	int			i;
 	ControlFileData *localControlFile;
+	HASHCTL		info;
 
 #ifdef WAL_DEBUG
 
@@ -5230,6 +5699,14 @@ XLOGShmemInit(void)
 	SpinLockInit(&XLogCtl->ulsn_lck);
 	InitSharedLatch(&XLogCtl->recoveryWakeupLatch);
 	ConditionVariableInit(&XLogCtl->recoveryNotPausedCV);
+
+	/* Initialize stuff for marking segments as ready for archival. */
+	XLogCtl->lastNotifiedSeg = InvalidXLogSegNo;
+	memset(&info, 0, sizeof(info));
+	info.keysize = sizeof(XLogSegNo);
+	info.entrysize = sizeof(RecordBoundaryEntry);
+	RecordBoundaryMap = ShmemInitHash("Record Boundary Table", 16, 16, &info,
+									  HASH_ELEM | HASH_BLOBS);
 }
 
 /*
@@ -7015,6 +7492,9 @@ StartupXLOG(void)
 		/* force recovery due to presence of recovery signal file */
 		InRecovery = true;
 	}
+
+	/* If necessary, read the last_notified file. */
+	InitializeLastNotifiedSegment();
 
 	/* REDO */
 	if (InRecovery)

@@ -1074,11 +1074,12 @@ KillExistingArchiveStatus(void)
 
 	while (errno = 0, (xlde = readdir(xldir)) != NULL)
 	{
-		if (strspn(xlde->d_name, "0123456789ABCDEF") == XLOG_FNAME_LEN &&
+		if ((strcmp(xlde->d_name, "last_notified") == 0) ||
+			(strspn(xlde->d_name, "0123456789ABCDEF") == XLOG_FNAME_LEN &&
 			(strcmp(xlde->d_name + XLOG_FNAME_LEN, ".ready") == 0 ||
 			 strcmp(xlde->d_name + XLOG_FNAME_LEN, ".done") == 0 ||
 			 strcmp(xlde->d_name + XLOG_FNAME_LEN, ".partial.ready") == 0 ||
-			 strcmp(xlde->d_name + XLOG_FNAME_LEN, ".partial.done") == 0))
+			 strcmp(xlde->d_name + XLOG_FNAME_LEN, ".partial.done") == 0)))
 		{
 			snprintf(path, sizeof(path), "%s/%s", ARCHSTATDIR, xlde->d_name);
 			if (unlink(path) < 0)

@@ -11583,4 +11583,19 @@
   proname => 'brin_minmax_multi_summary_send', provolatile => 's', prorettype => 'bytea',
   proargtypes => 'pg_brin_minmax_multi_summary', prosrc => 'brin_minmax_multi_summary_send' },
 
+{ oid => '16387', descr => 'wait for LSN until timeout',
+  proname => 'pg_waitlsn', prorettype => 'bool', proargtypes => 'pg_lsn int8',
+  proargnames => '{trg_lsn,delay}',
+  prosrc => 'pg_waitlsn' },
+
+{ oid => '16388', descr => 'wait for LSN for an infinite time',
+  proname => 'pg_waitlsn_infinite', prorettype => 'bool', proargtypes => 'pg_lsn',
+  proargnames => '{trg_lsn}',
+  prosrc => 'pg_waitlsn_infinite' },
+
+{ oid => '16389', descr => 'wait for LSN with no timeout',
+  proname => 'pg_waitlsn_no_wait', prorettype => 'bool', proargtypes => 'pg_lsn',
+  proargnames => '{trg_lsn}',
+  prosrc => 'pg_waitlsn_no_wait' },
+
 ]

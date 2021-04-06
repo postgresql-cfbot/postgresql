@@ -434,8 +434,14 @@ pg_be_scram_exchange(void *opaq, const char *input, int inputlen,
 			result = SASL_EXCHANGE_FAILURE;
 	}
 
-	if (result == SASL_EXCHANGE_FAILURE && state->logdetail && logdetail)
-		*logdetail = state->logdetail;
+	if (result == SASL_EXCHANGE_FAILURE && logdetail)
+	{
+		if (state->logdetail)
+			*logdetail = state->logdetail;
+		else if (!state->doomed)
+			*logdetail = psprintf(_("Password does not match for user \"%s\"."),
+										state->port->user_name);
+	}
 
 	if (*output)
 		*outputlen = strlen(*output);

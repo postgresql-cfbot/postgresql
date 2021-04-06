@@ -712,7 +712,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      <para>
       This form changes the table from unlogged to logged or vice-versa
       (see <xref linkend="sql-createtable-unlogged"/>).  It cannot be applied
-      to a temporary table.
+      to a temporary table.  Changing persistence setting for a partitioned
+      table does not affect existing or future partitions. If required, set the
+      persistence setting for each partition separately. Perhaps this could be
+      improved.
      </para>
     </listitem>
    </varlistentry>

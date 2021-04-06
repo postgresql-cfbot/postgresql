@@ -4457,6 +4457,16 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot change persistence setting twice")));
+			/*
+			 * Changing persistence setting for a partitioned table does not
+			 * affect existing or future partitions. If required, set the
+			 * persistence setting for each partition separately. XXX Perhaps
+			 * this could be improved someday.
+			 */
+			if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+				ereport(WARNING,
+						(errmsg("changing persistence setting for a partitioned table does not affect existing or future partitions"),
+						 errhint("If required, set the persistence setting for each partition separately.")));
 			tab->chgPersistence = ATPrepChangePersistence(rel, true);
 			/* force rewrite if necessary; see comment in ATRewriteTables */
 			if (tab->chgPersistence)
@@ -4472,6 +4482,16 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot change persistence setting twice")));
+			/*
+			 * Changing persistence setting for a partitioned table does not
+			 * affect existing or future partitions. If required, set the
+			 * persistence setting for each partition separately. XXX Perhaps
+			 * this could be improved someday.
+			 */
+			if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+				ereport(WARNING,
+						(errmsg("changing persistence setting for a partitioned table does not affect existing or future partitions"),
+						 errhint("If required, set the persistence setting for each partition separately.")));
 			tab->chgPersistence = ATPrepChangePersistence(rel, false);
 			/* force rewrite if necessary; see comment in ATRewriteTables */
 			if (tab->chgPersistence)

@@ -3472,6 +3472,19 @@ ALTER TABLE logged1 SET UNLOGGED; -- silently do nothing
 DROP TABLE logged3;
 DROP TABLE logged2;
 DROP TABLE logged1;
+-- setting partitioned table's logged/unlogged ness has no effect on existing
+-- or future partitions, so we just emit a warning.
+CREATE TABLE part_logged_parent (key integer PRIMARY KEY, val text)
+	PARTITION BY RANGE (key);
+CREATE TABLE part_logged_child1 PARTITION OF part_logged_parent
+	FOR VALUES FROM (1) TO (10);
+ALTER TABLE part_logged_parent SET UNLOGGED; -- warning is emitted
+WARNING:  changing persistence setting for a partitioned table does not affect existing or future partitions
+HINT:  If required, set the persistence setting for each partition separately.
+ALTER TABLE part_logged_parent SET LOGGED; -- warning is emitted
+WARNING:  changing persistence setting for a partitioned table does not affect existing or future partitions
+HINT:  If required, set the persistence setting for each partition separately.
+DROP TABLE part_logged_parent;
 -- test ADD COLUMN IF NOT EXISTS
 CREATE TABLE test_add_column(c1 integer);
 \d test_add_column

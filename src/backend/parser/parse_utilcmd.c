@@ -97,6 +97,7 @@ typedef struct
 	bool		ispartitioned;	/* true if table is partitioned */
 	PartitionBoundSpec *partbound;	/* transformed FOR VALUES */
 	bool		ofType;			/* true if statement contains OF typename */
+	char		*accessMethod;	/* table access method */
 } CreateStmtContext;
 
 /* State shared by transformCreateSchemaStmt and its subroutines */
@@ -253,6 +254,7 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	cxt.ispartitioned = stmt->partspec != NULL;
 	cxt.partbound = stmt->partbound;
 	cxt.ofType = (stmt->ofTypename != NULL);
+	cxt.accessMethod = NULL;
 
 	Assert(!stmt->ofTypename || !stmt->inhRelations);	/* grammar enforces */
 
@@ -346,6 +348,9 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	 */
 	stmt->tableElts = cxt.columns;
 	stmt->constraints = cxt.ckconstraints;
+
+	if (cxt.accessMethod != NULL)
+		stmt->accessMethod = cxt.accessMethod;
 
 	result = lappend(cxt.blist, stmt);
 	result = list_concat(result, cxt.alist);
@@ -1136,6 +1141,11 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		table_like_clause->relationOid = RelationGetRelid(relation);
 		cxt->likeclauses = lappend(cxt->likeclauses, table_like_clause);
 	}
+
+	/* ACCESS METHOD doesn't apply and isn't copied for partitioned tables */
+	if ((table_like_clause->options & CREATE_TABLE_LIKE_ACCESS_METHOD) != 0 &&
+		!cxt->ispartitioned)
+		cxt->accessMethod = get_am_name(relation->rd_rel->relam);
 
 	/*
 	 * We may copy extended statistics if requested, since the representation

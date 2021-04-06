@@ -233,6 +233,11 @@ GetBackendTypeDesc(BackendType backendType)
 {
 	const char *backendDesc = "unknown process type";
 
+	if (MyProcPid == PostmasterPid)
+		return "postmaster";
+	else if (!IsUnderPostmaster)
+		return "standalone";
+
 	switch (backendType)
 	{
 		case B_INVALID:

@@ -31,6 +31,7 @@
 #include "pgstat.h"
 #include "utils/guc.h"
 #include "utils/ps_status.h"
+#include "utils/probes.h"
 
 extern char **environ;
 bool		update_process_title = true;
@@ -264,6 +265,14 @@ init_ps_display(const char *fixed_part)
 	Assert(fixed_part || MyBackendType);
 	if (!fixed_part)
 		fixed_part = GetBackendTypeDesc(MyBackendType);
+
+	/*
+	 * init_ps_display() is a useful time to report the backend type to
+	 * tracing tools, since otherwise the probe would have to appear in
+	 * many different main loops for different backend types.
+	 */
+	TRACE_POSTGRESQL_BACKEND_TYPE(MyBackendType, fixed_part);
+	TRACE_POSTGRESQL_POSTMASTER_PID(PostmasterPid);
 
 #ifndef PS_USE_NONE
 	/* no ps display for stand-alone backend */

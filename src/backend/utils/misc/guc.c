@@ -100,6 +100,7 @@
 #include "utils/pg_lsn.h"
 #include "utils/plancache.h"
 #include "utils/portal.h"
+#include "utils/probes.h"
 #include "utils/ps_status.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
@@ -12053,6 +12054,8 @@ assign_application_name(const char *newval, void *extra)
 {
 	/* Update the pg_stat_activity view */
 	pgstat_report_appname(newval);
+
+	TRACE_POSTGRESQL_GUC_APPLICATION_NAME_ASSIGNED(newval);
 }
 
 static bool

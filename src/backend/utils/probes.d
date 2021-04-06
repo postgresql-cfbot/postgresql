@@ -17,6 +17,7 @@
 #define LocalTransactionId unsigned int
 #define LWLockMode int
 #define LOCKMODE int
+#define LWLock void
 #define BlockNumber unsigned int
 #define Oid unsigned int
 #define ForkNumber int
@@ -28,14 +29,23 @@ provider postgresql {
 	probe transaction__commit(LocalTransactionId);
 	probe transaction__abort(LocalTransactionId);
 
-	probe lwlock__acquire(const char *, LWLockMode);
-	probe lwlock__release(const char *);
-	probe lwlock__wait__start(const char *, LWLockMode);
-	probe lwlock__wait__done(const char *, LWLockMode);
-	probe lwlock__condacquire(const char *, LWLockMode);
-	probe lwlock__condacquire__fail(const char *, LWLockMode);
-	probe lwlock__acquire__or__wait(const char *, LWLockMode);
-	probe lwlock__acquire__or__wait__fail(const char *, LWLockMode);
+	probe lwlock__acquired(const char *, LWLockMode, LWLock*, int);
+	probe lwlock__acquire__start(const char *, LWLockMode, LWLock*, int);
+	probe lwlock__acquire(const char *, LWLockMode, LWLock*, int);
+	probe lwlock__release(const char *, LWLockMode, LWLock*, int);
+	probe lwlock__wait__start(const char *, LWLockMode, LWLock*, int);
+	probe lwlock__wait__done(const char *, LWLockMode, LWLock*, int);
+	probe lwlock__condacquire__start(const char *, LWLockMode, LWLock*, int);
+	probe lwlock__condacquire(const char *, LWLockMode, LWLock*, int);
+	probe lwlock__condacquire__fail(const char *, LWLockMode, LWLock*, int);
+	probe lwlock__acquire__or__wait__start(const char *, LWLockMode, LWLock*, int);
+	probe lwlock__acquire__or__wait(const char *, LWLockMode, LWLock*, int);
+	probe lwlock__acquire__or__wait__fail(const char *, LWLockMode, LWLock*, int);
+	probe lwlock__waitforvar__start(const char *, LWLock*, int, uint64, uint64, uint64);
+	probe lwlock__waitforvar__done(const char *, LWLock*, int, uint64, uint64, uint64, bool);
+	probe lwlock__updatevar__start(const char *, LWLock*, int, uint64, uint64);
+	probe lwlock__updatevar__done(const char *, LWLock*, int, uint64, uint64);
+
 
 	probe lock__wait__start(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE);
 	probe lock__wait__done(unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, LOCKMODE);
@@ -91,4 +101,9 @@ provider postgresql {
 	probe wal__switch();
 	probe wal__buffer__write__dirty__start();
 	probe wal__buffer__write__dirty__done();
+
+	/* Useful probes for startup and process info, for when tracing a group of processes */
+	probe backend__type(int backend_type, const char * backend_type_description);
+	probe postmaster__pid(int postmaster_pid);
+	probe guc__application__name__assigned(const char *newval);
 };

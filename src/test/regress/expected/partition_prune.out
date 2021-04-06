@@ -1957,6 +1957,8 @@ begin
     loop
         ln := regexp_replace(ln, 'Workers Launched: \d+', 'Workers Launched: N');
         ln := regexp_replace(ln, 'actual rows=\d+ loops=\d+', 'actual rows=N loops=N');
+        ln := regexp_replace(ln, 'Loop: min_rows=\d+ max_rows=\d+ total_rows=\d+',
+				 'Loop: min_rows=N max_rows=N total_rows=N');
         ln := regexp_replace(ln, 'Rows Removed by Filter: \d+', 'Rows Removed by Filter: N');
         ln := regexp_replace(ln, 'Hits: \d+', 'Hits: N');
         ln := regexp_replace(ln, 'Misses: \d+', 'Misses: N');
@@ -2717,6 +2719,72 @@ order by tbl1.col1, tprt.col1;
   505 |  505
  1001 | 1001
 (3 rows)
+
+-- Tests for extra statistics
+explain (analyze, verbose, costs off, summary off, timing off)
+select * from tbl1 inner join tprt on tbl1.col1 > tprt.col1;
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Nested Loop (actual rows=23 loops=1)
+   Output: tbl1.col1, tprt.col1
+   ->  Seq Scan on public.tbl1 (actual rows=5 loops=1)
+         Output: tbl1.col1
+   ->  Append (actual rows=5 loops=5)
+         Loop: min_rows=2 max_rows=6 total_rows=23
+         ->  Index Scan using tprt1_idx on public.tprt_1 (actual rows=2 loops=5)
+               Loop: min_rows=2 max_rows=2 total_rows=10
+               Output: tprt_1.col1
+               Index Cond: (tprt_1.col1 < tbl1.col1)
+         ->  Index Scan using tprt2_idx on public.tprt_2 (actual rows=3 loops=4)
+               Loop: min_rows=2 max_rows=3 total_rows=11
+               Output: tprt_2.col1
+               Index Cond: (tprt_2.col1 < tbl1.col1)
+         ->  Index Scan using tprt3_idx on public.tprt_3 (actual rows=1 loops=2)
+               Loop: min_rows=1 max_rows=1 total_rows=2
+               Output: tprt_3.col1
+               Index Cond: (tprt_3.col1 < tbl1.col1)
+         ->  Index Scan using tprt4_idx on public.tprt_4 (never executed)
+               Output: tprt_4.col1
+               Index Cond: (tprt_4.col1 < tbl1.col1)
+         ->  Index Scan using tprt5_idx on public.tprt_5 (never executed)
+               Output: tprt_5.col1
+               Index Cond: (tprt_5.col1 < tbl1.col1)
+         ->  Index Scan using tprt6_idx on public.tprt_6 (never executed)
+               Output: tprt_6.col1
+               Index Cond: (tprt_6.col1 < tbl1.col1)
+(27 rows)
+
+explain (analyze, verbose, costs off, summary off, timing off)
+select * from tbl1 inner join tprt on tbl1.col1 = tprt.col1;
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Nested Loop (actual rows=3 loops=1)
+   Output: tbl1.col1, tprt.col1
+   ->  Seq Scan on public.tbl1 (actual rows=5 loops=1)
+         Output: tbl1.col1
+   ->  Append (actual rows=1 loops=5)
+         Loop: min_rows=0 max_rows=1 total_rows=3
+         ->  Index Scan using tprt1_idx on public.tprt_1 (never executed)
+               Output: tprt_1.col1
+               Index Cond: (tprt_1.col1 = tbl1.col1)
+         ->  Index Scan using tprt2_idx on public.tprt_2 (actual rows=1 loops=2)
+               Loop: min_rows=1 max_rows=1 total_rows=2
+               Output: tprt_2.col1
+               Index Cond: (tprt_2.col1 = tbl1.col1)
+         ->  Index Scan using tprt3_idx on public.tprt_3 (actual rows=0 loops=3)
+               Loop: min_rows=0 max_rows=1 total_rows=1
+               Output: tprt_3.col1
+               Index Cond: (tprt_3.col1 = tbl1.col1)
+         ->  Index Scan using tprt4_idx on public.tprt_4 (never executed)
+               Output: tprt_4.col1
+               Index Cond: (tprt_4.col1 = tbl1.col1)
+         ->  Index Scan using tprt5_idx on public.tprt_5 (never executed)
+               Output: tprt_5.col1
+               Index Cond: (tprt_5.col1 = tbl1.col1)
+         ->  Index Scan using tprt6_idx on public.tprt_6 (never executed)
+               Output: tprt_6.col1
+               Index Cond: (tprt_6.col1 = tbl1.col1)
+(26 rows)
 
 -- Last partition
 delete from tbl1;

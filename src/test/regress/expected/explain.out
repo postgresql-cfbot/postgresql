@@ -343,10 +343,15 @@ select jsonb_pretty(
                                  "string4"                  +
                              ],                             +
                              "Schema": "public",            +
+                             "Max Rows": 0,                 +
+                             "Max Time": 0.0,               +
+                             "Min Rows": 0,                 +
+                             "Min Time": 0.0,               +
                              "Node Type": "Seq Scan",       +
                              "Plan Rows": 0,                +
                              "Plan Width": 0,               +
                              "Total Cost": 0.0,             +
+                             "Total Rows": 0,               +
                              "Actual Rows": 0,              +
                              "Actual Loops": 0,             +
                              "Startup Cost": 0.0,           +
@@ -386,6 +391,10 @@ select jsonb_pretty(
                          "stringu2",                        +
                          "string4"                          +
                      ],                                     +
+                     "Max Rows": 0,                         +
+                     "Max Time": 0.0,                       +
+                     "Min Rows": 0,                         +
+                     "Min Time": 0.0,                       +
                      "Sort Key": [                          +
                          "tenk1.tenthous"                   +
                      ],                                     +
@@ -393,6 +402,7 @@ select jsonb_pretty(
                      "Plan Rows": 0,                        +
                      "Plan Width": 0,                       +
                      "Total Cost": 0.0,                     +
+                     "Total Rows": 0,                       +
                      "Actual Rows": 0,                      +
                      "Actual Loops": 0,                     +
                      "Startup Cost": 0.0,                   +

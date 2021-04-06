@@ -463,6 +463,8 @@ begin
     loop
         ln := regexp_replace(ln, 'Workers Launched: \d+', 'Workers Launched: N');
         ln := regexp_replace(ln, 'actual rows=\d+ loops=\d+', 'actual rows=N loops=N');
+        ln := regexp_replace(ln, 'Loop: min_rows=\d+ max_rows=\d+ total_rows=\d+',
+				 'Loop: min_rows=N max_rows=N total_rows=N');
         ln := regexp_replace(ln, 'Rows Removed by Filter: \d+', 'Rows Removed by Filter: N');
         ln := regexp_replace(ln, 'Hits: \d+', 'Hits: N');
         ln := regexp_replace(ln, 'Misses: \d+', 'Misses: N');
@@ -656,6 +658,13 @@ order by tbl1.col1, tprt.col1;
 select tbl1.col1, tprt.col1 from tbl1
 inner join tprt on tbl1.col1 = tprt.col1
 order by tbl1.col1, tprt.col1;
+
+-- Tests for extra statistics
+explain (analyze, verbose, costs off, summary off, timing off)
+select * from tbl1 inner join tprt on tbl1.col1 > tprt.col1;
+
+explain (analyze, verbose, costs off, summary off, timing off)
+select * from tbl1 inner join tprt on tbl1.col1 = tprt.col1;
 
 -- Last partition
 delete from tbl1;

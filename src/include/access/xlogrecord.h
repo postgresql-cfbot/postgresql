@@ -114,7 +114,7 @@ typedef struct XLogRecordBlockHeader
  * present is (BLCKSZ - <length of "hole" bytes>).
  *
  * Additionally, when wal_compression is enabled, we will try to compress full
- * page images using the PGLZ compression algorithm, after removing the "hole".
+ * page images, after removing the "hole".
  * This can reduce the WAL volume, but at some extra cost of CPU spent
  * on the compression during WAL logging. In this case, since the "hole"
  * length cannot be calculated by subtracting the number of page image bytes
@@ -147,6 +147,15 @@ typedef struct XLogRecordBlockImageHeader
 #define BKPIMAGE_IS_COMPRESSED		0x02	/* page image is compressed */
 #define BKPIMAGE_APPLY		0x04	/* page image should be restored during
 									 * replay */
+#define BKPIMAGE_COMPRESS_METHOD1	0x08	/* bits to encode compression method */
+#define BKPIMAGE_COMPRESS_METHOD2	0x10	/* 0=pglz; 1=zlib; */
+
+/* How many bits to shift to extract compression */
+#define	BKPIMAGE_COMPRESS_OFFSET_BITS	3
+/* How many bits are for compression */
+#define	BKPIMAGE_COMPRESS_BITS		2
+/* Extract the compression from the bimg_info */
+#define	BKPIMAGE_COMPRESSION(info)	((info >> BKPIMAGE_COMPRESS_OFFSET_BITS) & ((1<<BKPIMAGE_COMPRESS_BITS) - 1))
 
 /*
  * Extra header information used when page image has "hole" and

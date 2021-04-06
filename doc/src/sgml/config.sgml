@@ -3110,6 +3110,24 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-wal-compression-method" xreflabel="wal_compression_method">
+      <term><varname>wal_compressionion_method</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>wal_compression_method</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter selects the compression method used to compress WAL when
+        <varname>wal_compression</varname> is enabled.
+        The supported methods are pglz, zlib, and (if configured when
+        <productname>PostgreSQL</productname> was built) lz4 and zstd.
+        The default value is <literal>pglz</literal>.
+        Only superusers can change this setting.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-wal-init-zero" xreflabel="wal_init_zero">
       <term><varname>wal_init_zero</varname> (<type>boolean</type>)
       <indexterm>

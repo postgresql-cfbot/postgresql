@@ -117,6 +117,7 @@ extern bool EnableHotStandby;
 extern bool fullPageWrites;
 extern bool wal_log_hints;
 extern bool wal_compression;
+extern int	wal_compression_method;
 extern bool wal_init_zero;
 extern bool wal_recycle;
 extern bool *wal_consistency_checking;

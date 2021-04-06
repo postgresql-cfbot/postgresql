@@ -213,6 +213,7 @@
 					#   open_sync
 #full_page_writes = on			# recover from partial page writes
 #wal_compression = off			# enable compression of full-page writes
+#wal_compression_method = pglz		# pglz, zlib, lz4, zstd
 #wal_log_hints = off			# also do full page writes of non-critical updates
 					# (change requires restart)
 #wal_init_zero = on			# zero-fill new WAL files

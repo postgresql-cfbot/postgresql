@@ -99,6 +99,7 @@ bool		EnableHotStandby = false;
 bool		fullPageWrites = true;
 bool		wal_log_hints = false;
 bool		wal_compression = false;
+int			wal_compression_method = WAL_COMPRESSION_ZLIB;
 char	   *wal_consistency_checking_string = NULL;
 bool	   *wal_consistency_checking = NULL;
 bool		wal_init_zero = true;
@@ -177,6 +178,21 @@ const struct config_enum_entry recovery_target_action_options[] = {
 	{"pause", RECOVERY_TARGET_ACTION_PAUSE, false},
 	{"promote", RECOVERY_TARGET_ACTION_PROMOTE, false},
 	{"shutdown", RECOVERY_TARGET_ACTION_SHUTDOWN, false},
+	{NULL, 0, false}
+};
+
+/* Note that due to conditional compilation, offsets within the array are not static */
+const struct config_enum_entry wal_compression_options[] = {
+	{"pglz", WAL_COMPRESSION_PGLZ, false},
+#ifdef  HAVE_LIBZ
+	{"zlib", WAL_COMPRESSION_ZLIB, false},
+#endif
+#ifdef  USE_LZ4
+	{"lz4", WAL_COMPRESSION_LZ4, false},
+#endif
+#ifdef  USE_ZSTD
+	{"zstd", WAL_COMPRESSION_ZSTD, false},
+#endif
 	{NULL, 0, false}
 };
 
@@ -1162,7 +1178,7 @@ XLogInsertRecord(XLogRecData *rdata,
 	 */
 	WALInsertLockRelease();
 
-	MarkCurrentTransactionIdLoggedIfAny();
+	MarkCurrentTransactionIdLoggedIfAny(EndPos);
 
 	END_CRIT_SECTION();
 

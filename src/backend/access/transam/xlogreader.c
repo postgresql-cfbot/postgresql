@@ -33,6 +33,18 @@
 #include "utils/memutils.h"
 #endif
 
+#ifdef HAVE_LIBZ
+#include <zlib.h>
+#endif
+
+#ifdef USE_LZ4
+#include "lz4.h"
+#endif
+
+#ifdef USE_ZSTD
+#include "zstd.h"
+#endif
+
 static void report_invalid_record(XLogReaderState *state, const char *fmt,...)
 			pg_attribute_printf(2, 3);
 static bool allocate_recordbuf(XLogReaderState *state, uint32 reclength);
@@ -1535,6 +1547,32 @@ XLogRecGetBlockData(XLogReaderState *record, uint8 block_id, Size *len)
 	}
 }
 
+/* This is a mapping indexed by wal_compression */
+// XXX: maybe this is better done as a GUC hook to assign the 1) method; and 2) level
+struct walcompression walmethods[] = {
+	{"pglz",	WAL_COMPRESSION_PGLZ},
+	{"zlib",	WAL_COMPRESSION_ZLIB},
+	{"lz4",		WAL_COMPRESSION_LZ4},
+	{"zstd",	WAL_COMPRESSION_ZSTD},
+};
+
+/*
+ * Return a statically allocated string associated with the given compression
+ * method.
+ * This is here to be visible to frontend tools like pg_rewind.
+ */
+const char *
+wal_compression_name(WalCompression compression)
+{
+	/*
+	 * This could index into the guc array, except that it's compiled
+	 * conditionally and unsupported methods are elided.
+	 */
+	if (compression < sizeof(walmethods)/sizeof(*walmethods))
+		return walmethods[compression].name;
+	return "???";
+}
+
 /*
  * Restore a full-page image from a backup block attached to an XLOG record.
  *
@@ -1557,9 +1595,58 @@ RestoreBlockImage(XLogReaderState *record, uint8 block_id, char *page)
 
 	if (bkpb->bimg_info & BKPIMAGE_IS_COMPRESSED)
 	{
+		int compression_method = BKPIMAGE_COMPRESSION(bkpb->bimg_info);
 		/* If a backup block image is compressed, decompress it */
-		if (pglz_decompress(ptr, bkpb->bimg_len, tmp.data,
-							BLCKSZ - bkpb->hole_length, true) < 0)
+		int32 decomp_result = -1;
+		switch (compression_method)
+		{
+		case WAL_COMPRESSION_PGLZ:
+			decomp_result = pglz_decompress(ptr, bkpb->bimg_len, tmp.data,
+							BLCKSZ - bkpb->hole_length, true);
+			break;
+
+#ifdef HAVE_LIBZ
+		case WAL_COMPRESSION_ZLIB:
+		{
+			unsigned long decomp_result_l;
+			decomp_result_l = BLCKSZ - bkpb->hole_length;
+			if (uncompress((Bytef*)tmp.data, &decomp_result_l,
+						(Bytef*)ptr, bkpb->bimg_len) == Z_OK)
+				decomp_result = decomp_result_l;
+			else
+				decomp_result = -1;
+			break;
+		}
+#endif
+
+#ifdef USE_LZ4
+		case WAL_COMPRESSION_LZ4:
+			decomp_result = LZ4_decompress_safe(ptr, tmp.data,
+					bkpb->bimg_len, BLCKSZ-bkpb->hole_length);
+			break;
+#endif
+
+#ifdef USE_ZSTD
+		case WAL_COMPRESSION_ZSTD:
+			decomp_result = ZSTD_decompress(tmp.data, BLCKSZ-bkpb->hole_length,
+					ptr, bkpb->bimg_len);
+			// XXX: ZSTD_getErrorName
+			if (ZSTD_isError(decomp_result))
+				decomp_result = -1;
+			break;
+#endif
+
+		default:
+			report_invalid_record(record, "image at %X/%X is compressed with unsupported codec, block %d (%d/%s)",
+								  (uint32) (record->ReadRecPtr >> 32),
+								  (uint32) record->ReadRecPtr,
+								  block_id,
+								  compression_method,
+								  wal_compression_name(compression_method));
+			return false;
+		}
+
+		if (decomp_result < 0)
 		{
 			report_invalid_record(record, "invalid compressed image at %X/%X, block %d",
 								  LSN_FORMAT_ARGS(record->ReadRecPtr),

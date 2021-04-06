@@ -11,7 +11,7 @@ use Config;
 plan tests => 3;
 
 my $node = get_new_node('primary');
-$node->init(allows_streaming => 1);
+$node->init();
 $node->start;
 
 my ($stdin, $stdout, $stderr) = ('', '', '');

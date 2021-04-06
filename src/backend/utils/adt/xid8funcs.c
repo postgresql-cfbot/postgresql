@@ -357,6 +357,8 @@ bad_format:
 Datum
 pg_current_xact_id(PG_FUNCTION_ARGS)
 {
+	FullTransactionId xid;
+
 	/*
 	 * Must prevent during recovery because if an xid is not assigned we try
 	 * to assign one, which would fail. Programs already rely on this function
@@ -365,7 +367,12 @@ pg_current_xact_id(PG_FUNCTION_ARGS)
 	 */
 	PreventCommandDuringRecovery("pg_current_xact_id()");
 
-	PG_RETURN_FULLTRANSACTIONID(GetTopFullTransactionId());
+	xid = GetTopFullTransactionId();
+
+	/* the XID is going to be published, make sure it is psersistent */
+	EnsureTopTransactionIdLogged();
+
+	PG_RETURN_FULLTRANSACTIONID(xid);
 }
 
 /*
@@ -379,6 +386,9 @@ pg_current_xact_id_if_assigned(PG_FUNCTION_ARGS)
 
 	if (!FullTransactionIdIsValid(topfxid))
 		PG_RETURN_NULL();
+
+	/* the XID is going to be published, make sure it is psersistent */
+	EnsureTopTransactionIdLogged();
 
 	PG_RETURN_FULLTRANSACTIONID(topfxid);
 }

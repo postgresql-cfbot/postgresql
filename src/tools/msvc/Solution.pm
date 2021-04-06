@@ -491,6 +491,7 @@ sub GenerateFiles
 		USE_LIBXML                 => undef,
 		USE_LIBXSLT                => undef,
 		USE_LZ4                    => undef,
+		USE_ZSTD                   => $self->{options}->{zstd} ? 1 : undef,
 		USE_LDAP                   => $self->{options}->{ldap} ? 1 : undef,
 		USE_LLVM                   => undef,
 		USE_NAMED_POSIX_SEMAPHORES => undef,

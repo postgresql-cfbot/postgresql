@@ -776,7 +776,7 @@
   </para>
 
   <para>
-   There are two internal functions to write WAL data to disk:
+   There are two internal functions to write generated WAL data to disk:
    <function>XLogWrite</function> and <function>issue_xlog_fsync</function>.
    When <xref linkend="guc-track-wal-io-timing"/> is enabled, the total
    amounts of time <function>XLogWrite</function> writes and
@@ -802,7 +802,19 @@
    <function>issue_xlog_fsync</function> syncs WAL data to disk are also
    counted as <literal>wal_write</literal> and <literal>wal_sync</literal>
    in <structname>pg_stat_wal</structname>, respectively.
-  </para>
+   To write replicated WAL data to disk by the WAL receiver is almost the same
+   as above except for some points. First, there is a dedicated code path for the
+   WAL receiver to write data although <function>issue_xlog_fsync</function> is
+   the same for syncing data.
+   Second, the WAL receiver writes replicated WAL data per bytes from the local
+   memory although the generated WAL data is written per WAL buffer pages.
+   The counters of <literal>wal_write</literal>, <literal>wal_sync</literal>,
+   <literal>wal_write_time</literal>, and <literal>wal_sync_time</literal> are
+   common statistics for writing/syncing both generated and replicated WAL data.
+   But, you can distinguish them because the generated WAL data is written/synced
+   in the primary server and the replicated WAL data is written/synced in
+   the standby server.
+   </para>
  </sect1>
 
  <sect1 id="wal-internals">

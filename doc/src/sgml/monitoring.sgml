@@ -3498,7 +3498,8 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
       </para>
       <para>
        Number of times WAL buffers were written out to disk via
-       <function>XLogWrite</function> request.
+       <function>XLogWrite</function> request and WAL data were written
+       out to disk by the WAL receiver process.
        See <xref linkend="wal-configuration"/> for more information about
        the internal WAL function <function>XLogWrite</function>.
       </para></entry>
@@ -3526,7 +3527,8 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
       </para>
       <para>
        Total amount of time spent writing WAL buffers to disk via
-       <function>XLogWrite</function> request, in milliseconds
+       <function>XLogWrite</function> request and WAL data to disk
+       by the WAL receiver process, in milliseconds
        (if <xref linkend="guc-track-wal-io-timing"/> is enabled,
        otherwise zero).  This includes the sync time when
        <varname>wal_sync_method</varname> is either

@@ -772,6 +772,9 @@ WalRcvDie(int code, Datum arg)
 	/* Ensure that all WAL records received are flushed to disk */
 	XLogWalRcvFlush(true);
 
+	/* Send WAL statistics to the stats collector before terminating */
+	pgstat_send_wal(true);
+
 	/* Mark ourselves inactive in shared memory */
 	SpinLockAcquire(&walrcv->mutex);
 	Assert(walrcv->walRcvState == WALRCV_STREAMING ||
@@ -911,6 +914,12 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 					XLogArchiveForceDone(xlogfname);
 				else
 					XLogArchiveNotify(xlogfname);
+
+				/*
+				 * Send WAL statistics to the stats collector when finishing
+				 * the current WAL segment file to avoid overloading it.
+				 */
+				pgstat_send_wal(false);
 			}
 			recvFile = -1;
 

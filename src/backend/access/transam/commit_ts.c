@@ -530,7 +530,7 @@ pg_xact_commit_timestamp_origin(PG_FUNCTION_ARGS)
 Size
 CommitTsShmemBuffers(void)
 {
-	return Min(16, Max(4, NBuffers / 1024));
+	return Min(256, Max(4, NBuffers / 512));
 }
 
 /*

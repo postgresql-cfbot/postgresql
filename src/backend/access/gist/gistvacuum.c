@@ -174,6 +174,8 @@ gistvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	vstate.callback_state = callback_state;
 	if (RelationNeedsWAL(rel))
 		vstate.startNSN = GetInsertRecPtr();
+	else if (FileEncryptionEnabled)
+		vstate.startNSN = LSNForEncryption(RelationIsPermanent(rel));
 	else
 		vstate.startNSN = gistGetFakeLSN(rel);
 
@@ -353,6 +355,8 @@ restart:
 		 */
 		if (ntodelete > 0)
 		{
+			XLogRecPtr	recptr;
+
 			START_CRIT_SECTION();
 
 			MarkBufferDirty(buffer);
@@ -361,16 +365,15 @@ restart:
 			GistMarkTuplesDeleted(page);
 
 			if (RelationNeedsWAL(rel))
-			{
-				XLogRecPtr	recptr;
-
 				recptr = gistXLogUpdate(buffer,
 										todelete, ntodelete,
 										NULL, 0, InvalidBuffer);
-				PageSetLSN(page, recptr);
-			}
+			else if (FileEncryptionEnabled)
+				recptr = LSNForEncryption(RelationIsPermanent(rel));
 			else
-				PageSetLSN(page, gistGetFakeLSN(rel));
+				recptr = gistGetFakeLSN(rel);
+
+			PageSetLSN(page, recptr);
 
 			END_CRIT_SECTION();
 
@@ -657,8 +660,11 @@ gistdeletepage(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 
 	if (RelationNeedsWAL(info->index))
 		recptr = gistXLogPageDelete(leafBuffer, txid, parentBuffer, downlink);
+	else if (FileEncryptionEnabled)
+		recptr = LSNForEncryption(RelationIsPermanent(info->index));
 	else
 		recptr = gistGetFakeLSN(info->index);
+
 	PageSetLSN(parentPage, recptr);
 	PageSetLSN(leafPage, recptr);
 

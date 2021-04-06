@@ -657,13 +657,15 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 	{
 		if (!wstate->btws_zeropage)
 			wstate->btws_zeropage = (Page) palloc0(BLCKSZ);
-		/* don't set checksum for all-zero page */
+		/* don't set checksum or encryption for all-zero page */
 		smgrextend(wstate->index->rd_smgr, MAIN_FORKNUM,
 				   wstate->btws_pages_written++,
 				   (char *) wstate->btws_zeropage,
 				   true);
 	}
 
+	PageEncryptInplace(page, MAIN_FORKNUM, RelationIsPermanent(wstate->index),
+					   blkno);
 	PageSetChecksumInplace(page, blkno);
 
 	/*

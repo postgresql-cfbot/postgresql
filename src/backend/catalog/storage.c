@@ -443,8 +443,9 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 
 		smgrread(src, forkNum, blkno, buf.data);
 
-		if (!PageIsVerifiedExtended(page, blkno,
-									PIV_LOG_WARNING | PIV_REPORT_STAT))
+		if (!PageIsVerifiedExtended(page, forkNum,
+									relpersistence == RELPERSISTENCE_PERMANENT,
+									blkno, PIV_LOG_WARNING | PIV_REPORT_STAT))
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
 					 errmsg("invalid page in block %u of relation %s",
@@ -461,6 +462,8 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 		if (use_wal)
 			log_newpage(&dst->smgr_rnode.node, forkNum, blkno, page, false);
 
+		PageEncryptInplace(page, forkNum,
+						   relpersistence == RELPERSISTENCE_PERMANENT, blkno);
 		PageSetChecksumInplace(page, blkno);
 
 		/*

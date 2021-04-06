@@ -17,6 +17,7 @@ SUBDIRS = \
 	initdb \
 	pg_amcheck \
 	pg_archivecleanup \
+	pg_alterckey \
 	pg_basebackup \
 	pg_checksums \
 	pg_config \

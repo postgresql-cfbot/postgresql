@@ -2484,6 +2484,7 @@ ExecReindex(ParseState *pstate, ReindexStmt *stmt, bool isTopLevel)
 	bool		concurrently = false;
 	bool		verbose = false;
 	char	   *tablespacename = NULL;
+	bool		outdated_filter = false;
 
 	/* Parse option list */
 	foreach(lc, stmt->params)
@@ -2496,6 +2497,8 @@ ExecReindex(ParseState *pstate, ReindexStmt *stmt, bool isTopLevel)
 			concurrently = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "tablespace") == 0)
 			tablespacename = defGetString(opt);
+		else if (strcmp(opt->defname, "outdated") == 0)
+			outdated_filter = defGetBoolean(opt);
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -2510,7 +2513,8 @@ ExecReindex(ParseState *pstate, ReindexStmt *stmt, bool isTopLevel)
 
 	params.options =
 		(verbose ? REINDEXOPT_VERBOSE : 0) |
-		(concurrently ? REINDEXOPT_CONCURRENTLY : 0);
+		(concurrently ? REINDEXOPT_CONCURRENTLY : 0) |
+		(outdated_filter ? REINDEXOPT_OUTDATED : 0);
 
 	/*
 	 * Assign the tablespace OID to move indexes to, with InvalidOid to do
@@ -2604,6 +2608,20 @@ ReindexIndex(RangeVar *indexRelation, ReindexParams *params, bool isTopLevel)
 	 */
 	persistence = get_rel_persistence(indOid);
 	relkind = get_rel_relkind(indOid);
+
+	/*
+	 * If the index isn't partitioned, we can detect here if it has any oudated
+	 * dependency.
+	 */
+	if (relkind == RELKIND_INDEX &&
+		(params->options & REINDEXOPT_OUTDATED) != 0 &&
+		!index_has_outdated_dependency(indOid))
+	{
+		ereport(NOTICE,
+				(errmsg("index \"%s\" has no outdated dependency",
+						get_rel_name(indOid))));
+		return;
+	}
 
 	if (relkind == RELKIND_PARTITIONED_INDEX)
 		ReindexPartitions(indOid, params, isTopLevel);
@@ -3049,6 +3067,17 @@ ReindexPartitions(Oid relid, ReindexParams *params, bool isTopLevel)
 		Assert(partkind == RELKIND_INDEX ||
 			   partkind == RELKIND_RELATION);
 
+		/* Ignore indexes that don't depend on outdated dependency if needed */
+		if (partkind == RELKIND_INDEX &&
+			(params->options & REINDEXOPT_OUTDATED) != 0 &&
+			!index_has_outdated_dependency(partoid))
+		{
+			ereport(NOTICE,
+					(errmsg("index \"%s\" has no outdated dependency",
+							get_rel_name(partoid))));
+			continue;
+		}
+
 		/* Save partition OID */
 		old_context = MemoryContextSwitchTo(reindex_context);
 		partitions = lappend_oid(partitions, partoid);
@@ -3307,7 +3336,8 @@ ReindexRelationConcurrently(Oid relationOid, ReindexParams *params)
 									RelationGetRelationName(heapRelation))));
 
 				/* Add all the valid indexes of relation to list */
-				foreach(lc, RelationGetIndexList(heapRelation))
+				foreach(lc, RelationGetIndexListFiltered(heapRelation,
+														 params->options))
 				{
 					Oid			cellOid = lfirst_oid(lc);
 					Relation	indexRelation = index_open(cellOid,
@@ -3359,7 +3389,8 @@ ReindexRelationConcurrently(Oid relationOid, ReindexParams *params)
 
 					MemoryContextSwitchTo(oldcontext);
 
-					foreach(lc2, RelationGetIndexList(toastRelation))
+					foreach(lc2, RelationGetIndexListFiltered(toastRelation,
+															  params->options))
 					{
 						Oid			cellOid = lfirst_oid(lc2);
 						Relation	indexRelation = index_open(cellOid,

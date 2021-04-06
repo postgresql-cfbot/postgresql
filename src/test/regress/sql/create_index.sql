@@ -791,6 +791,24 @@ REINDEX (VERBOSE) TABLE reindex_verbose;
 DROP TABLE reindex_verbose;
 
 --
+-- REINDEX (OUTDATED)
+--
+CREATE TABLE reindex_coll(id integer primary key) PARTITION BY LIST (id);
+CREATE TABLE reindex_coll_1 PARTITION OF reindex_coll FOR VALUES IN (1);
+\set VERBOSITY terse \\ -- suppress machine-dependent details
+-- no suitable index should be found
+REINDEX (VERBOSE, OUTDATED) TABLE reindex_coll;
+REINDEX (VERBOSE, OUTDATED) INDEX reindex_coll_pkey;
+REINDEX (VERBOSE, OUTDATED) TABLE reindex_coll_1;
+REINDEX (VERBOSE, OUTDATED) INDEX reindex_coll_1_pkey;
+REINDEX (VERBOSE, OUTDATED, CONCURRENTLY) TABLE reindex_coll;
+REINDEX (VERBOSE, OUTDATED, CONCURRENTLY) INDEX reindex_coll_pkey;
+REINDEX (VERBOSE, OUTDATED, CONCURRENTLY) TABLE reindex_coll_1;
+REINDEX (VERBOSE, OUTDATED, CONCURRENTLY) INDEX reindex_coll_1_pkey;
+\set VERBOSITY default
+DROP TABLE reindex_coll;
+
+--
 -- REINDEX CONCURRENTLY
 --
 CREATE TABLE concur_reindex_tab (c1 int);

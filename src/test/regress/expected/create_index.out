@@ -2018,6 +2018,33 @@ INFO:  index "reindex_verbose_pkey" was reindexed
 \set VERBOSITY default
 DROP TABLE reindex_verbose;
 --
+-- REINDEX (OUTDATED)
+--
+CREATE TABLE reindex_coll(id integer primary key) PARTITION BY LIST (id);
+CREATE TABLE reindex_coll_1 PARTITION OF reindex_coll FOR VALUES IN (1);
+\set VERBOSITY terse \\ -- suppress machine-dependent details
+-- no suitable index should be found
+REINDEX (VERBOSE, OUTDATED) TABLE reindex_coll;
+NOTICE:  index "reindex_coll_1_pkey" has no outdated dependency
+REINDEX (VERBOSE, OUTDATED) INDEX reindex_coll_pkey;
+NOTICE:  index "reindex_coll_1_pkey" has no outdated dependency
+REINDEX (VERBOSE, OUTDATED) TABLE reindex_coll_1;
+NOTICE:  index "reindex_coll_1_pkey" has no outdated dependency
+NOTICE:  table "reindex_coll_1" has no indexes to reindex
+REINDEX (VERBOSE, OUTDATED) INDEX reindex_coll_1_pkey;
+NOTICE:  index "reindex_coll_1_pkey" has no outdated dependency
+REINDEX (VERBOSE, OUTDATED, CONCURRENTLY) TABLE reindex_coll;
+NOTICE:  index "reindex_coll_1_pkey" has no outdated dependency
+REINDEX (VERBOSE, OUTDATED, CONCURRENTLY) INDEX reindex_coll_pkey;
+NOTICE:  index "reindex_coll_1_pkey" has no outdated dependency
+REINDEX (VERBOSE, OUTDATED, CONCURRENTLY) TABLE reindex_coll_1;
+NOTICE:  index "reindex_coll_1_pkey" has no outdated dependency
+NOTICE:  table "reindex_coll_1" has no indexes that can be reindexed concurrently
+REINDEX (VERBOSE, OUTDATED, CONCURRENTLY) INDEX reindex_coll_1_pkey;
+NOTICE:  index "reindex_coll_1_pkey" has no outdated dependency
+\set VERBOSITY default
+DROP TABLE reindex_coll;
+--
 -- REINDEX CONCURRENTLY
 --
 CREATE TABLE concur_reindex_tab (c1 int);

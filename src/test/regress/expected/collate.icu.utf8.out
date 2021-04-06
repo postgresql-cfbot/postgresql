@@ -2094,9 +2094,11 @@ UPDATE pg_depend SET refobjversion = 'not a version'
 WHERE refclassid = 'pg_collation'::regclass
 AND objid::regclass::text LIKE 'icuidx%'
 AND refobjversion IS NOT NULL;
-REINDEX TABLE collate_test;
-REINDEX TABLE collate_part_0;
+SET client_min_messages to WARNING; -- pg_toast index names aren't stable
+REINDEX (OUTDATED) TABLE collate_test;
+REINDEX (OUTDATED) TABLE collate_part_0;
 REINDEX TABLE collate_part_1;
+RESET client_min_messages;
 SELECT objid::regclass FROM pg_depend WHERE refobjversion = 'not a version';
  objid 
 -------
@@ -2107,9 +2109,11 @@ UPDATE pg_depend SET refobjversion = 'not a version'
 WHERE refclassid = 'pg_collation'::regclass
 AND objid::regclass::text LIKE 'icuidx%'
 AND refobjversion IS NOT NULL;
-REINDEX TABLE CONCURRENTLY collate_test;
+SET client_min_messages to WARNING; -- pg_toast index names aren't stable
+REINDEX (OUTDATED) TABLE CONCURRENTLY collate_test;
 REINDEX TABLE CONCURRENTLY collate_part_0;
-REINDEX INDEX CONCURRENTLY icuidx17_part;
+REINDEX (OUTDATED) INDEX CONCURRENTLY icuidx17_part;
+RESET client_min_messages;
 SELECT objid::regclass FROM pg_depend WHERE refobjversion = 'not a version';
  objid 
 -------

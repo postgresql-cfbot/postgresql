@@ -35,20 +35,23 @@ typedef enum ReindexType
 static SimpleStringList *get_parallel_object_list(PGconn *conn,
 												  ReindexType type,
 												  SimpleStringList *user_list,
+												  bool outdated,
 												  bool echo);
 static void reindex_one_database(ConnParams *cparams, ReindexType type,
 								 SimpleStringList *user_list,
 								 const char *progname,
 								 bool echo, bool verbose, bool concurrently,
-								 int concurrentCons, const char *tablespace);
+								 int concurrentCons, const char *tablespace,
+								 bool outdated);
 static void reindex_all_databases(ConnParams *cparams,
 								  const char *progname, bool echo,
 								  bool quiet, bool verbose, bool concurrently,
-								  int concurrentCons, const char *tablespace);
+								  int concurrentCons, const char *tablespace,
+								  bool outdated);
 static void run_reindex_command(PGconn *conn, ReindexType type,
 								const char *name, bool echo, bool verbose,
 								bool concurrently, bool async,
-								const char *tablespace);
+								const char *tablespace, bool outdated);
 
 static void help(const char *progname);
 
@@ -74,6 +77,7 @@ main(int argc, char *argv[])
 		{"concurrently", no_argument, NULL, 1},
 		{"maintenance-db", required_argument, NULL, 2},
 		{"tablespace", required_argument, NULL, 3},
+		{"outdated", no_argument, NULL, 4},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -95,6 +99,7 @@ main(int argc, char *argv[])
 	bool		quiet = false;
 	bool		verbose = false;
 	bool		concurrently = false;
+	bool		outdated = false;
 	SimpleStringList indexes = {NULL, NULL};
 	SimpleStringList tables = {NULL, NULL};
 	SimpleStringList schemas = {NULL, NULL};
@@ -170,6 +175,9 @@ main(int argc, char *argv[])
 			case 3:
 				tablespace = pg_strdup(optarg);
 				break;
+			case 4:
+				outdated = true;
+				break;
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit(1);
@@ -234,7 +242,8 @@ main(int argc, char *argv[])
 		cparams.dbname = maintenance_db;
 
 		reindex_all_databases(&cparams, progname, echo, quiet, verbose,
-							  concurrently, concurrentCons, tablespace);
+							  concurrently, concurrentCons, tablespace,
+							  outdated);
 	}
 	else if (syscatalog)
 	{
@@ -253,10 +262,15 @@ main(int argc, char *argv[])
 			pg_log_error("cannot reindex specific index(es) and system catalogs at the same time");
 			exit(1);
 		}
-
 		if (concurrentCons > 1)
 		{
 			pg_log_error("cannot use multiple jobs to reindex system catalogs");
+			exit(1);
+		}
+		if (outdated)
+		{
+			pg_log_error("cannot filter indexes having outdated dependencies "
+						 "and reindex system catalogs at the same time");
 			exit(1);
 		}
 
@@ -274,7 +288,7 @@ main(int argc, char *argv[])
 
 		reindex_one_database(&cparams, REINDEX_SYSTEM, NULL,
 							 progname, echo, verbose,
-							 concurrently, 1, tablespace);
+							 concurrently, 1, tablespace, outdated);
 	}
 	else
 	{
@@ -304,17 +318,20 @@ main(int argc, char *argv[])
 		if (schemas.head != NULL)
 			reindex_one_database(&cparams, REINDEX_SCHEMA, &schemas,
 								 progname, echo, verbose,
-								 concurrently, concurrentCons, tablespace);
+								 concurrently, concurrentCons, tablespace,
+								 outdated);
 
 		if (indexes.head != NULL)
 			reindex_one_database(&cparams, REINDEX_INDEX, &indexes,
 								 progname, echo, verbose,
-								 concurrently, 1, tablespace);
+								 concurrently, 1, tablespace,
+								 outdated);
 
 		if (tables.head != NULL)
 			reindex_one_database(&cparams, REINDEX_TABLE, &tables,
 								 progname, echo, verbose,
-								 concurrently, concurrentCons, tablespace);
+								 concurrently, concurrentCons, tablespace,
+								 outdated);
 
 		/*
 		 * reindex database only if neither index nor table nor schema is
@@ -323,7 +340,8 @@ main(int argc, char *argv[])
 		if (indexes.head == NULL && tables.head == NULL && schemas.head == NULL)
 			reindex_one_database(&cparams, REINDEX_DATABASE, NULL,
 								 progname, echo, verbose,
-								 concurrently, concurrentCons, tablespace);
+								 concurrently, concurrentCons, tablespace,
+								 outdated);
 	}
 
 	exit(0);
@@ -334,7 +352,7 @@ reindex_one_database(ConnParams *cparams, ReindexType type,
 					 SimpleStringList *user_list,
 					 const char *progname, bool echo,
 					 bool verbose, bool concurrently, int concurrentCons,
-					 const char *tablespace)
+					 const char *tablespace, bool outdated)
 {
 	PGconn	   *conn;
 	SimpleStringListCell *cell;
@@ -360,6 +378,14 @@ reindex_one_database(ConnParams *cparams, ReindexType type,
 		PQfinish(conn);
 		pg_log_error("cannot use the \"%s\" option on server versions older than PostgreSQL %s",
 					 "tablespace", "14");
+		exit(1);
+	}
+
+	if (outdated && PQserverVersion(conn) < 140000)
+	{
+		PQfinish(conn);
+		pg_log_error("cannot use the \"%s\" option on server versions older than PostgreSQL %s",
+					 "outdated", "14");
 		exit(1);
 	}
 
@@ -399,14 +425,24 @@ reindex_one_database(ConnParams *cparams, ReindexType type,
 				 */
 				if (concurrently)
 					pg_log_warning("cannot reindex system catalogs concurrently, skipping all");
+				else if (outdated)
+				{
+					/*
+					 * The only supported kind of object that can be outdated
+					 * is collation.  No system catalog has any index that can
+					 * depend on an outdated collation, so skip system
+					 * catalogs.
+					 */
+				}
 				else
 					run_reindex_command(conn, REINDEX_SYSTEM, PQdb(conn), echo,
 										verbose, concurrently, false,
-										tablespace);
+										tablespace, outdated);
 
 				/* Build a list of relations from the database */
 				process_list = get_parallel_object_list(conn, process_type,
-														user_list, echo);
+														user_list, outdated,
+														echo);
 				process_type = REINDEX_TABLE;
 
 				/* Bail out if nothing to process */
@@ -419,7 +455,8 @@ reindex_one_database(ConnParams *cparams, ReindexType type,
 
 				/* Build a list of relations from all the schemas */
 				process_list = get_parallel_object_list(conn, process_type,
-														user_list, echo);
+														user_list, outdated,
+														echo);
 				process_type = REINDEX_TABLE;
 
 				/* Bail out if nothing to process */
@@ -485,7 +522,8 @@ reindex_one_database(ConnParams *cparams, ReindexType type,
 
 		ParallelSlotSetHandler(free_slot, TableCommandResultHandler, NULL);
 		run_reindex_command(free_slot->connection, process_type, objname,
-							echo, verbose, concurrently, true, tablespace);
+							echo, verbose, concurrently, true, tablespace,
+							outdated);
 
 		cell = cell->next;
 	} while (cell != NULL);
@@ -510,7 +548,7 @@ finish:
 static void
 run_reindex_command(PGconn *conn, ReindexType type, const char *name,
 					bool echo, bool verbose, bool concurrently, bool async,
-					const char *tablespace)
+					const char *tablespace, bool outdated)
 {
 	const char *paren = "(";
 	const char *comma = ", ";
@@ -534,6 +572,12 @@ run_reindex_command(PGconn *conn, ReindexType type, const char *name,
 	if (tablespace)
 	{
 		appendPQExpBuffer(&sql, "%sTABLESPACE %s", sep, fmtId(tablespace));
+		sep = comma;
+	}
+
+	if (outdated)
+	{
+		appendPQExpBuffer(&sql, "%sOUTDATED", sep);
 		sep = comma;
 	}
 
@@ -642,7 +686,7 @@ run_reindex_command(PGconn *conn, ReindexType type, const char *name,
  */
 static SimpleStringList *
 get_parallel_object_list(PGconn *conn, ReindexType type,
-						 SimpleStringList *user_list, bool echo)
+						 SimpleStringList *user_list, bool outdated, bool echo)
 {
 	PQExpBufferData catalog_query;
 	PQExpBufferData buf;
@@ -661,16 +705,41 @@ get_parallel_object_list(PGconn *conn, ReindexType type,
 	{
 		case REINDEX_DATABASE:
 			Assert(user_list == NULL);
+
 			appendPQExpBufferStr(&catalog_query,
 								 "SELECT c.relname, ns.nspname\n"
 								 " FROM pg_catalog.pg_class c\n"
 								 " JOIN pg_catalog.pg_namespace ns"
-								 " ON c.relnamespace = ns.oid\n"
+								 " ON c.relnamespace = ns.oid\n");
+
+			if (outdated)
+			{
+				appendPQExpBufferStr(&catalog_query,
+									 " JOIN pg_catalog.pg_index i"
+									 " ON c.oid = i.indrelid\n"
+									 " JOIN pg_catalog.pg_class ci"
+									 " ON i.indexrelid = ci.oid\n");
+			}
+
+			appendPQExpBufferStr(&catalog_query,
 								 " WHERE ns.nspname != 'pg_catalog'\n"
 								 "   AND c.relkind IN ("
 								 CppAsString2(RELKIND_RELATION) ", "
-								 CppAsString2(RELKIND_MATVIEW) ")\n"
-								 " ORDER BY c.relpages DESC;");
+								 CppAsString2(RELKIND_MATVIEW) ")\n");
+
+			if (outdated)
+			{
+				appendPQExpBufferStr(&catalog_query,
+									 " GROUP BY c.relname, ns.nspname\n"
+									 " ORDER BY pg_catalog.sum(ci.relpages)"
+									 " FILTER (WHERE pg_catalog.pg_index_has_outdated_dependency(ci.oid)) DESC;");
+			}
+			else
+			{
+				appendPQExpBufferStr(&catalog_query,
+									 " ORDER BY c.relpages DESC;");
+			}
+
 			break;
 
 		case REINDEX_SCHEMA:
@@ -688,7 +757,18 @@ get_parallel_object_list(PGconn *conn, ReindexType type,
 									 "SELECT c.relname, ns.nspname\n"
 									 " FROM pg_catalog.pg_class c\n"
 									 " JOIN pg_catalog.pg_namespace ns"
-									 " ON c.relnamespace = ns.oid\n"
+									 " ON c.relnamespace = ns.oid\n");
+
+				if (outdated)
+				{
+					appendPQExpBufferStr(&catalog_query,
+										 " JOIN pg_catalog.pg_index i"
+										 " ON c.oid = i.indrelid\n"
+										 " JOIN pg_catalog.pg_class ci"
+										 " ON i.indexrelid = ci.oid\n");
+				}
+
+				appendPQExpBufferStr(&catalog_query,
 									 " WHERE c.relkind IN ("
 									 CppAsString2(RELKIND_RELATION) ", "
 									 CppAsString2(RELKIND_MATVIEW) ")\n"
@@ -706,8 +786,20 @@ get_parallel_object_list(PGconn *conn, ReindexType type,
 					appendStringLiteralConn(&catalog_query, nspname, conn);
 				}
 
-				appendPQExpBufferStr(&catalog_query, ")\n"
-									 " ORDER BY c.relpages DESC;");
+				appendPQExpBufferStr(&catalog_query, ")\n");
+
+				if (outdated)
+				{
+					appendPQExpBufferStr(&catalog_query,
+										 " GROUP BY c.relname, ns.nspname\n"
+										 " ORDER BY pg_catalog.sum(ci.relpages)"
+										 " FILTER (WHERE pg_catalog.pg_index_has_outdated_dependency(ci.oid)) DESC;");
+				}
+				else
+				{
+					appendPQExpBufferStr(&catalog_query,
+										 " ORDER BY c.relpages DESC;");
+				}
 			}
 			break;
 
@@ -755,7 +847,7 @@ static void
 reindex_all_databases(ConnParams *cparams,
 					  const char *progname, bool echo, bool quiet, bool verbose,
 					  bool concurrently, int concurrentCons,
-					  const char *tablespace)
+					  const char *tablespace, bool outdated)
 {
 	PGconn	   *conn;
 	PGresult   *result;
@@ -779,7 +871,7 @@ reindex_all_databases(ConnParams *cparams,
 
 		reindex_one_database(cparams, REINDEX_DATABASE, NULL,
 							 progname, echo, verbose, concurrently,
-							 concurrentCons, tablespace);
+							 concurrentCons, tablespace, outdated);
 	}
 
 	PQclear(result);
@@ -798,6 +890,7 @@ help(const char *progname)
 	printf(_("  -e, --echo                   show the commands being sent to the server\n"));
 	printf(_("  -i, --index=INDEX            recreate specific index(es) only\n"));
 	printf(_("  -j, --jobs=NUM               use this many concurrent connections to reindex\n"));
+	printf(_("      --outdated               only process indexes having outdated dependencies\n"));
 	printf(_("  -q, --quiet                  don't write any messages\n"));
 	printf(_("  -s, --system                 reindex system catalogs\n"));
 	printf(_("  -S, --schema=SCHEMA          reindex specific schema(s) only\n"));

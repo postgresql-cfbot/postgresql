@@ -1959,18 +1959,17 @@ static int
 postgresGetForeignModifyBatchSize(ResultRelInfo *resultRelInfo)
 {
 	int	batch_size;
-	PgFdwModifyState *fmstate = resultRelInfo->ri_FdwState ?
-							(PgFdwModifyState *) resultRelInfo->ri_FdwState :
-							NULL;
+	PgFdwModifyState *fmstate = (PgFdwModifyState *) resultRelInfo->ri_FdwState;
 
 	/* should be called only once */
 	Assert(resultRelInfo->ri_BatchSize == 0);
 
 	/*
-	 * Should never get called when the insert is being performed as part of
-	 * a row movement operation.
+	 * Use the auxiliary state if any; see postgresBeginForeignInsert() for
+	 * details on what it represents.
 	 */
-	Assert(fmstate == NULL || fmstate->aux_fmstate == NULL);
+	if (fmstate && fmstate->aux_fmstate != NULL)
+		fmstate = fmstate->aux_fmstate;
 
 	/*
 	 * In EXPLAIN without ANALYZE, ri_fdwstate is NULL, so we have to lookup

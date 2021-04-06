@@ -2158,8 +2158,6 @@ ExecModifyTable(PlanState *pstate)
 	HeapTupleData oldtupdata;
 	HeapTuple	oldtuple;
 	PartitionTupleRouting *proute = node->mt_partition_tuple_routing;
-	List	   *relinfos = NIL;
-	ListCell   *lc;
 
 	CHECK_FOR_INTERRUPTS();
 
@@ -2438,22 +2436,47 @@ ExecModifyTable(PlanState *pstate)
 	}
 
 	/*
-	 * Insert remaining tuples for batch insert.
+	 * Insert any remaining batched tuples.
+	 *
+	 * If the query's main target relation is a partitioned table, any inserts
+	 * would have been performed using tuple routing, so use the appropriate
+	 * set of target relations.  Note that this also covers any inserts
+	 * performed during cross-partition UPDATEs that would have occurred
+	 * through tuple routing.
 	 */
 	if (proute)
-		relinfos = estate->es_tuple_routing_result_relations;
-	else
-		relinfos = estate->es_opened_result_relations;
-
-	foreach(lc, relinfos)
 	{
-		resultRelInfo = lfirst(lc);
-		if (resultRelInfo->ri_NumSlots > 0)
-			ExecBatchInsert(node, resultRelInfo,
-						   resultRelInfo->ri_Slots,
-						   resultRelInfo->ri_PlanSlots,
-						   resultRelInfo->ri_NumSlots,
-						   estate, node->canSetTag);
+		int			i;
+
+		Assert(node->rootResultRelInfo);
+		Assert(node->rootResultRelInfo->ri_RelationDesc->rd_rel->relkind ==
+			   RELKIND_PARTITIONED_TABLE);
+		for (i = 0; i < proute->num_partitions; i++)
+		{
+			resultRelInfo = proute->partitions[i];
+			if (resultRelInfo && resultRelInfo->ri_NumSlots > 0)
+				ExecBatchInsert(node, resultRelInfo,
+								resultRelInfo->ri_Slots,
+								resultRelInfo->ri_PlanSlots,
+								resultRelInfo->ri_NumSlots,
+								estate, node->canSetTag);
+		}
+	}
+	else
+	{
+		ListCell *lc;
+
+		/* Otherwise, use result relations from the range table. */
+		foreach(lc, estate->es_opened_result_relations)
+		{
+			resultRelInfo = lfirst(lc);
+			if (resultRelInfo && resultRelInfo->ri_NumSlots > 0)
+				ExecBatchInsert(node, resultRelInfo,
+								resultRelInfo->ri_Slots,
+								resultRelInfo->ri_PlanSlots,
+								resultRelInfo->ri_NumSlots,
+								estate, node->canSetTag);
+		}
 	}
 
 	/*

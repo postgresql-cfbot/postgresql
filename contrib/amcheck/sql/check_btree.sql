@@ -115,11 +115,38 @@ INSERT INTO toast_bug SELECT repeat('a', 2200);
 -- Should not get false positive report of corruption:
 SELECT bt_index_check('toasty', true);
 
+-- UNIQUE constraint check
+CREATE TABLE bttest_unique(a varchar(50), b varchar(1500), c bytea, d varchar(50));
+CREATE UNIQUE INDEX bttest_unique_idx ON bttest_unique(a,b);
+UPDATE pg_catalog.pg_index SET indisunique = false
+WHERE indrelid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'bttest_unique');
+INSERT INTO bttest_unique
+	SELECT 	i::text::varchar,
+			array_to_string(array(
+				SELECT substr('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', ((random()*(36-1)+1)::integer), 1)
+			FROM generate_series(1,1300)),'')::varchar,
+	i::text::bytea, i::text::varchar
+	FROM generate_series(0,1) AS i, generate_series(0,30) AS x;
+UPDATE pg_catalog.pg_index SET indisunique = true
+WHERE indrelid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'bttest_unique');
+
+DELETE FROM bttest_unique WHERE ctid::text='(0,2)';
+DELETE FROM bttest_unique WHERE ctid::text='(4,2)';
+DELETE FROM bttest_unique WHERE ctid::text='(4,3)';
+DELETE FROM bttest_unique WHERE ctid::text='(9,3)';
+-- Check unique index with no uniqueness check. Should not complain.
+SELECT bt_index_check('bttest_unique_idx', true);
+-- Check unique indes with uniquensee check. Should detect constraint violation cases.
+SELECT bt_index_check('bttest_unique_idx', true, true);
+VACUUM bttest_unique;
+SELECT bt_index_check('bttest_unique_idx', true, true);
+
 -- cleanup
 DROP TABLE bttest_a;
 DROP TABLE bttest_b;
 DROP TABLE bttest_multi;
 DROP TABLE delete_test_table;
 DROP TABLE toast_bug;
+DROP TABLE bttest_unique;
 DROP OWNED BY regress_bttest_role; -- permissions
 DROP ROLE regress_bttest_role;

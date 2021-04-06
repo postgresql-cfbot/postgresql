@@ -177,11 +177,157 @@ SELECT bt_index_check('toasty', true);
  
 (1 row)
 
+-- UNIQUE constraint check
+CREATE TABLE bttest_unique(a varchar(50), b varchar(1500), c bytea, d varchar(50));
+CREATE UNIQUE INDEX bttest_unique_idx ON bttest_unique(a,b);
+UPDATE pg_catalog.pg_index SET indisunique = false
+WHERE indrelid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'bttest_unique');
+INSERT INTO bttest_unique
+	SELECT 	i::text::varchar,
+			array_to_string(array(
+				SELECT substr('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', ((random()*(36-1)+1)::integer), 1)
+			FROM generate_series(1,1300)),'')::varchar,
+	i::text::bytea, i::text::varchar
+	FROM generate_series(0,1) AS i, generate_series(0,30) AS x;
+UPDATE pg_catalog.pg_index SET indisunique = true
+WHERE indrelid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'bttest_unique');
+DELETE FROM bttest_unique WHERE ctid::text='(0,2)';
+DELETE FROM bttest_unique WHERE ctid::text='(4,2)';
+DELETE FROM bttest_unique WHERE ctid::text='(4,3)';
+DELETE FROM bttest_unique WHERE ctid::text='(9,3)';
+-- Check unique index with no uniqueness check. Should not complain.
+SELECT bt_index_check('bttest_unique_idx', true);
+ bt_index_check 
+----------------
+ 
+(1 row)
+
+-- Check unique indes with uniquensee check. Should detect constraint violation cases.
+SELECT bt_index_check('bttest_unique_idx', true, true);
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,2) posting 0 and posting 2 (point to heap tid=(0,1) and tid=(0,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,2) posting 2 and posting 3 (point to heap tid=(0,3) and tid=(0,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,2) posting 3 and posting 4 (point to heap tid=(0,4) and tid=(0,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,2) posting 4 and tid=(1,3) posting 0 (point to heap tid=(0,5) and tid=(0,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,3) posting 0 and posting 1 (point to heap tid=(0,6) and tid=(1,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,3) posting 1 and posting 2 (point to heap tid=(1,1) and tid=(1,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,3) posting 2 and posting 3 (point to heap tid=(1,2) and tid=(1,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,3) posting 3 and posting 4 (point to heap tid=(1,3) and tid=(1,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,3) posting 4 and tid=(1,4) posting 0 (point to heap tid=(1,4) and tid=(1,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,4) posting 0 and posting 1 (point to heap tid=(1,5) and tid=(1,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,4) posting 1 and posting 2 (point to heap tid=(1,6) and tid=(2,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,4) posting 2 and posting 3 (point to heap tid=(2,1) and tid=(2,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,4) posting 3 and posting 4 (point to heap tid=(2,2) and tid=(2,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,4) posting 4 and tid=(1,5) posting 0 (point to heap tid=(2,3) and tid=(2,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,5) posting 0 and posting 1 (point to heap tid=(2,4) and tid=(2,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,5) posting 1 and posting 2 (point to heap tid=(2,5) and tid=(2,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,5) posting 2 and posting 3 (point to heap tid=(2,6) and tid=(3,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,5) posting 3 and posting 4 (point to heap tid=(3,1) and tid=(3,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,5) posting 4 and tid=(1,6) posting 0 (point to heap tid=(3,2) and tid=(3,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,6) posting 0 and posting 1 (point to heap tid=(3,3) and tid=(3,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,6) posting 1 and posting 2 (point to heap tid=(3,4) and tid=(3,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,6) posting 2 and posting 3 (point to heap tid=(3,5) and tid=(3,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,6) posting 3 and posting 4 (point to heap tid=(3,6) and tid=(4,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,6) posting 4 and tid=(2,2) posting 2 (point to heap tid=(4,1) and tid=(4,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(2,2) posting 2 and posting 3 (point to heap tid=(4,4) and tid=(4,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(2,2) posting 3 and posting 4 (point to heap tid=(4,5) and tid=(4,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(2,2) posting 4 and tid=(2,3) (point to heap tid=(4,6) and tid=(5,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,2) posting 0 and posting 1 (point to heap tid=(5,2) and tid=(5,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,2) posting 1 and posting 2 (point to heap tid=(5,3) and tid=(5,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,2) posting 2 and posting 3 (point to heap tid=(5,4) and tid=(5,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,2) posting 3 and posting 4 (point to heap tid=(5,5) and tid=(5,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,2) posting 4 and tid=(4,3) posting 0 (point to heap tid=(5,6) and tid=(6,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,3) posting 0 and posting 1 (point to heap tid=(6,1) and tid=(6,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,3) posting 1 and posting 2 (point to heap tid=(6,2) and tid=(6,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,3) posting 2 and posting 3 (point to heap tid=(6,3) and tid=(6,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,3) posting 3 and posting 4 (point to heap tid=(6,4) and tid=(6,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,3) posting 4 and tid=(4,4) posting 0 (point to heap tid=(6,5) and tid=(6,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,4) posting 0 and posting 1 (point to heap tid=(6,6) and tid=(7,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,4) posting 1 and posting 2 (point to heap tid=(7,1) and tid=(7,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,4) posting 2 and posting 3 (point to heap tid=(7,2) and tid=(7,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,4) posting 3 and posting 4 (point to heap tid=(7,3) and tid=(7,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,4) posting 4 and tid=(4,5) posting 0 (point to heap tid=(7,4) and tid=(7,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,5) posting 0 and posting 1 (point to heap tid=(7,5) and tid=(7,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,5) posting 1 and posting 2 (point to heap tid=(7,6) and tid=(8,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,5) posting 2 and posting 3 (point to heap tid=(8,1) and tid=(8,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,5) posting 3 and posting 4 (point to heap tid=(8,2) and tid=(8,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,5) posting 4 and tid=(4,6) posting 0 (point to heap tid=(8,3) and tid=(8,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,6) posting 0 and posting 1 (point to heap tid=(8,4) and tid=(8,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,6) posting 1 and posting 2 (point to heap tid=(8,5) and tid=(8,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,6) posting 2 and posting 3 (point to heap tid=(8,6) and tid=(9,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,6) posting 3 and posting 4 (point to heap tid=(9,1) and tid=(9,2)).
+WARNING:  index uniqueness may be violated for index "bttest_unique_idx": Index tid=(5,1) doesn't have visible heap tids and key is equal to the tid=(4,6) posting 4 (points to heap tid=(9,2)). Cross-page unique constraint violation can be missed. Vacuum the table and repeat the check.
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(5,2) and tid=(5,3) (point to heap tid=(9,4) and tid=(9,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(5,3) and tid=(5,4) (point to heap tid=(9,5) and tid=(9,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(5,4) and tid=(5,5) (point to heap tid=(9,6) and tid=(10,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(5,5) and tid=(5,6) (point to heap tid=(10,1) and tid=(10,2)).
+ERROR:  index "bttest_unique_idx" is corrupted. There are tuples violating UNIQUE constraint
+DETAIL:  Details are in the previous log messages under WARNING priority
+VACUUM bttest_unique;
+SELECT bt_index_check('bttest_unique_idx', true, true);
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,2) posting 0 and posting 1 (point to heap tid=(0,1) and tid=(0,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,2) posting 1 and posting 2 (point to heap tid=(0,3) and tid=(0,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,2) posting 2 and posting 3 (point to heap tid=(0,4) and tid=(0,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,2) posting 3 and tid=(1,3) posting 0 (point to heap tid=(0,5) and tid=(0,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,3) posting 0 and posting 1 (point to heap tid=(0,6) and tid=(1,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,3) posting 1 and posting 2 (point to heap tid=(1,1) and tid=(1,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,3) posting 2 and posting 3 (point to heap tid=(1,2) and tid=(1,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,3) posting 3 and posting 4 (point to heap tid=(1,3) and tid=(1,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,3) posting 4 and tid=(1,4) posting 0 (point to heap tid=(1,4) and tid=(1,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,4) posting 0 and posting 1 (point to heap tid=(1,5) and tid=(1,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,4) posting 1 and posting 2 (point to heap tid=(1,6) and tid=(2,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,4) posting 2 and posting 3 (point to heap tid=(2,1) and tid=(2,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,4) posting 3 and posting 4 (point to heap tid=(2,2) and tid=(2,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,4) posting 4 and tid=(1,5) posting 0 (point to heap tid=(2,3) and tid=(2,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,5) posting 0 and posting 1 (point to heap tid=(2,4) and tid=(2,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,5) posting 1 and posting 2 (point to heap tid=(2,5) and tid=(2,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,5) posting 2 and posting 3 (point to heap tid=(2,6) and tid=(3,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,5) posting 3 and posting 4 (point to heap tid=(3,1) and tid=(3,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,5) posting 4 and tid=(1,6) posting 0 (point to heap tid=(3,2) and tid=(3,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,6) posting 0 and posting 1 (point to heap tid=(3,3) and tid=(3,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,6) posting 1 and posting 2 (point to heap tid=(3,4) and tid=(3,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,6) posting 2 and posting 3 (point to heap tid=(3,5) and tid=(3,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,6) posting 3 and posting 4 (point to heap tid=(3,6) and tid=(4,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(1,6) posting 4 and tid=(2,2) posting 0 (point to heap tid=(4,1) and tid=(4,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(2,2) posting 0 and posting 1 (point to heap tid=(4,4) and tid=(4,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(2,2) posting 1 and posting 2 (point to heap tid=(4,5) and tid=(4,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(2,2) posting 2 and tid=(2,3) (point to heap tid=(4,6) and tid=(5,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,2) posting 0 and posting 1 (point to heap tid=(5,2) and tid=(5,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,2) posting 1 and posting 2 (point to heap tid=(5,3) and tid=(5,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,2) posting 2 and posting 3 (point to heap tid=(5,4) and tid=(5,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,2) posting 3 and posting 4 (point to heap tid=(5,5) and tid=(5,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,2) posting 4 and tid=(4,3) posting 0 (point to heap tid=(5,6) and tid=(6,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,3) posting 0 and posting 1 (point to heap tid=(6,1) and tid=(6,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,3) posting 1 and posting 2 (point to heap tid=(6,2) and tid=(6,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,3) posting 2 and posting 3 (point to heap tid=(6,3) and tid=(6,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,3) posting 3 and posting 4 (point to heap tid=(6,4) and tid=(6,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,3) posting 4 and tid=(4,4) posting 0 (point to heap tid=(6,5) and tid=(6,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,4) posting 0 and posting 1 (point to heap tid=(6,6) and tid=(7,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,4) posting 1 and posting 2 (point to heap tid=(7,1) and tid=(7,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,4) posting 2 and posting 3 (point to heap tid=(7,2) and tid=(7,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,4) posting 3 and posting 4 (point to heap tid=(7,3) and tid=(7,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,4) posting 4 and tid=(4,5) posting 0 (point to heap tid=(7,4) and tid=(7,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,5) posting 0 and posting 1 (point to heap tid=(7,5) and tid=(7,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,5) posting 1 and posting 2 (point to heap tid=(7,6) and tid=(8,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,5) posting 2 and posting 3 (point to heap tid=(8,1) and tid=(8,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,5) posting 3 and posting 4 (point to heap tid=(8,2) and tid=(8,3)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,5) posting 4 and tid=(4,6) posting 0 (point to heap tid=(8,3) and tid=(8,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,6) posting 0 and posting 1 (point to heap tid=(8,4) and tid=(8,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,6) posting 1 and posting 2 (point to heap tid=(8,5) and tid=(8,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,6) posting 2 and posting 3 (point to heap tid=(8,6) and tid=(9,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,6) posting 3 and posting 4 (point to heap tid=(9,1) and tid=(9,2)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(4,6) posting 4 and tid=(5,1) (point to heap tid=(9,2) and tid=(9,4)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(5,1) and tid=(5,2) (point to heap tid=(9,4) and tid=(9,5)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(5,2) and tid=(5,3) (point to heap tid=(9,5) and tid=(9,6)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(5,3) and tid=(5,4) (point to heap tid=(9,6) and tid=(10,1)).
+WARNING:  index uniqueness is violated for index "bttest_unique_idx": Index tid=(5,4) and tid=(5,5) (point to heap tid=(10,1) and tid=(10,2)).
+ERROR:  index "bttest_unique_idx" is corrupted. There are tuples violating UNIQUE constraint
+DETAIL:  Details are in the previous log messages under WARNING priority
 -- cleanup
 DROP TABLE bttest_a;
 DROP TABLE bttest_b;
 DROP TABLE bttest_multi;
 DROP TABLE delete_test_table;
 DROP TABLE toast_bug;
+DROP TABLE bttest_unique;
 DROP OWNED BY regress_bttest_role; -- permissions
 DROP ROLE regress_bttest_role;

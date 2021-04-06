@@ -2109,6 +2109,15 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"end_of_recovery_checkpoint_wait", PGC_SIGHUP, WAL_CHECKPOINTS,
+			gettext_noop("Whether to wait for the end-of-recovery checkpoint to complete."),
+		},
+		&end_of_recovery_checkpoint_wait,
+		true,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL

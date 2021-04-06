@@ -111,6 +111,7 @@ int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 bool		track_wal_io_timing = false;
+bool		end_of_recovery_checkpoint_wait = true;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -879,9 +880,6 @@ static bool updateMinRecoveryPoint = true;
 bool		reachedConsistency = false;
 
 static bool InRedo = false;
-
-/* Have we launched bgwriter during recovery? */
-static bool bgwriterLaunched = false;
 
 /* For WALInsertLockAcquire/Release functions */
 static int	MyLockNo = 0;
@@ -7264,25 +7262,14 @@ StartupXLOG(void)
 		/* Also ensure XLogReceiptTime has a sane value */
 		XLogReceiptTime = GetCurrentTimestamp();
 
+		PublishStartupProcessInformation();
+
 		/*
 		 * Let postmaster know we've started redo now, so that it can launch
-		 * checkpointer to perform restartpoints.  We don't bother during
-		 * crash recovery as restartpoints can only be performed during
-		 * archive recovery.  And we'd like to keep crash recovery simple, to
-		 * avoid introducing bugs that could affect you when recovering after
-		 * crash.
-		 *
-		 * After this point, we can no longer assume that we're the only
-		 * process in addition to postmaster!  Also, fsync requests are
-		 * subsequently to be handled by the checkpointer, not locally.
+		 * the archiver if necessary.
 		 */
-		if (ArchiveRecoveryRequested && IsUnderPostmaster)
-		{
-			PublishStartupProcessInformation();
-			EnableSyncRequestForwarding();
+		if (IsUnderPostmaster)
 			SendPostmasterSignal(PMSIGNAL_RECOVERY_STARTED);
-			bgwriterLaunched = true;
-		}
 
 		/*
 		 * Allow read-only connections immediately if we're consistent
@@ -7584,6 +7571,29 @@ StartupXLOG(void)
 					(errmsg("redo done at %X/%X system usage: %s",
 							LSN_FORMAT_ARGS(ReadRecPtr),
 							pg_rusage_show(&ru0))));
+			if (!InArchiveRecovery)
+			{
+				if (!INSTR_TIME_IS_ZERO(pgBufferUsage.blk_read_time))
+					ereport(LOG,
+						(errmsg("crash recovery complete: wrote %ld buffers (%.1f%%) (%0.3f ms); "
+								"dirtied %ld buffers; read %ld buffers (%0.3f ms)",
+								pgBufferUsage.shared_blks_written,
+								(double) pgBufferUsage.shared_blks_written * 100 / NBuffers,
+								INSTR_TIME_GET_MILLISEC(pgBufferUsage.blk_write_time),
+								pgBufferUsage.shared_blks_dirtied,
+								pgBufferUsage.shared_blks_read,
+								INSTR_TIME_GET_MILLISEC(pgBufferUsage.blk_read_time)
+								)));
+				else
+					ereport(LOG,
+						(errmsg("crash recovery complete: wrote %ld buffers (%.1f%%); "
+								"dirtied %ld buffers; read %ld buffers",
+								pgBufferUsage.shared_blks_written,
+								(double) pgBufferUsage.shared_blks_written * 100 / NBuffers,
+								pgBufferUsage.shared_blks_dirtied,
+								pgBufferUsage.shared_blks_read
+								)));
+			}
 			xtime = GetLatestXTime();
 			if (xtime)
 				ereport(LOG,
@@ -7861,6 +7871,18 @@ StartupXLOG(void)
 
 	if (InRecovery)
 	{
+		int		checkpoint_flags = CHECKPOINT_IMMEDIATE;
+
+		/*
+		 * Should we wait for the end-of-recovery checkpoint to complete?
+		 * Traditionally we do this, but it may be useful to allow connections
+		 * sooner.
+		 */
+		if (end_of_recovery_checkpoint_wait)
+			checkpoint_flags |= CHECKPOINT_END_OF_RECOVERY | CHECKPOINT_WAIT;
+		else
+			checkpoint_flags |= CHECKPOINT_FORCE;
+
 		/*
 		 * Perform a checkpoint to update all our recovery activity to disk.
 		 *
@@ -7875,7 +7897,7 @@ StartupXLOG(void)
 		 * after we're fully out of recovery mode and already accepting
 		 * queries.
 		 */
-		if (bgwriterLaunched)
+		if (ArchiveRecoveryRequested && IsUnderPostmaster)
 		{
 			if (LocalPromoteIsTriggered)
 			{
@@ -7906,12 +7928,10 @@ StartupXLOG(void)
 			}
 
 			if (!promoted)
-				RequestCheckpoint(CHECKPOINT_END_OF_RECOVERY |
-								  CHECKPOINT_IMMEDIATE |
-								  CHECKPOINT_WAIT);
+				RequestCheckpoint(checkpoint_flags);
 		}
 		else
-			CreateCheckPoint(CHECKPOINT_END_OF_RECOVERY | CHECKPOINT_IMMEDIATE);
+			RequestCheckpoint(checkpoint_flags);
 	}
 
 	if (ArchiveRecoveryRequested)
@@ -12132,7 +12152,7 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 		 * Request a restartpoint if we've replayed too much xlog since the
 		 * last one.
 		 */
-		if (bgwriterLaunched)
+		if (ArchiveRecoveryRequested && IsUnderPostmaster)
 		{
 			if (XLogCheckpointNeeded(readSegNo))
 			{

@@ -3110,6 +3110,25 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-wal-sessioninfo" xreflabel="wal_sessioninfo">
+      <term><varname>wal_sessioninfo</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>wal_sessioninfo</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        When this parameter is <literal>on</literal>, the <productname>PostgreSQL</productname>
+        server will add information about the user's session onto every
+        commit or abort record. This is intended to provide additional information
+        to trace the changes made by specific sessions, allowing more in-depth
+        investigation during security audits or impact assessment of bugs.
+        The default value is <literal>off</literal>.
+        Only superusers can change this setting.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-wal-init-zero" xreflabel="wal_init_zero">
       <term><varname>wal_init_zero</varname> (<type>boolean</type>)
       <indexterm>

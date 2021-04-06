@@ -23,6 +23,7 @@
 #include "mb/pg_wchar.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "utils/jsonb.h"
 #include "utils/lsyscache.h"
 #include "utils/numeric.h"
 #include "utils/syscache.h"
@@ -293,6 +294,14 @@ format_type_extended(Oid type_oid, int32 typemod, bits16 flags)
 				buf = printTypmod("character varying", typemod, typeform->typmodout);
 			else
 				buf = pstrdup("character varying");
+			break;
+
+		case JSONOID:
+			buf = pstrdup(SQLJSON_TYPE_IS_JSONB() ? "pg_catalog.json" : "json");
+			break;
+
+		case JSONBOID:
+			buf = pstrdup(SQLJSON_TYPE_IS_JSONB() ? "json" : "jsonb");
 			break;
 	}
 

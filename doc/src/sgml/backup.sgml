@@ -731,6 +731,8 @@ test ! -f /mnt/server/archivedir/00000001000000A900000065 &amp;&amp; cp pg_wal/0
     short <varname>archive_timeout</varname> &mdash; it will bloat your archive
     storage.  <varname>archive_timeout</varname> settings of a minute or so are
     usually reasonable.
+    This is mitigated by the fact that empty WAL segments will not be archived
+    even if the archive_timeout period has elapsed.
    </para>
 
    <para>

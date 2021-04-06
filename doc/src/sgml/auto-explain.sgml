@@ -280,6 +280,45 @@ LOAD 'auto_explain';
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term>
+     <varname>auto_explain.auto_explain.add_statistics_threshold</varname> (<type>real</type>)
+     <indexterm>
+      <primary><varname>auto_explain.add_statistics_threshold</varname> configuration parameter</primary>
+     </indexterm>
+    </term>
+    <listitem>
+     <para>
+       <varname>auto_explain.add_statistics_threshold</varname> sets the threshold for
+       actual/estimated #rows ratio triggering creation of multicolumn statistic
+       for the related columns. It can be used for adpative query optimization.
+       If there is large gap between real and estimated number of tuples for the
+       concrete plan node, then multicolumn statistic is created for involved
+       attributes. Zero value (default) disables implicit creation of multicolumn statistic.
+       Please notice, this parameter has no effect unless <varname>auto_explain.log_analyze</varname>
+       is enabled and that statistics are created only when the excution time exceeds
+       <varname>auto_explain.log_min_duration</varname>. Also additional statistics are created only if
+       number of rows is over-estimated and not if it is under-estimated.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+     <varname>auto_explain.auto_explain.add_statistics_suggest_only</varname> (<type>boolean</type>)
+     <indexterm>
+      <primary><varname>auto_explain.add_statistics_suggest_only</varname> configuration parameter</primary>
+     </indexterm>
+    </term>
+    <listitem>
+     <para>
+       <varname>auto_explain.add_statistics_suggest_only</varname> disables creation
+       of multicolumn statistic even if <varname>auto_explain.add_statistics_threshold</varname>
+       contains non zero value.Only log message will be reported in case of bad estimation.
+     </para>
+    </listitem>
+   </varlistentry>
   </variablelist>
 
   <para>

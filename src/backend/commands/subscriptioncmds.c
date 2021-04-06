@@ -47,6 +47,8 @@
 #include "utils/syscache.h"
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
+static void check_duplicates_in_publist(List *publist, Datum *datums);
+static List *merge_publications(List *oldpublist, List *newpublist, bool addpub);
 static void ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err);
 
 
@@ -293,8 +295,6 @@ publicationListToArray(List *publist)
 {
 	ArrayType  *arr;
 	Datum	   *datums;
-	int			j = 0;
-	ListCell   *cell;
 	MemoryContext memcxt;
 	MemoryContext oldcxt;
 
@@ -306,28 +306,7 @@ publicationListToArray(List *publist)
 
 	datums = (Datum *) palloc(sizeof(Datum) * list_length(publist));
 
-	foreach(cell, publist)
-	{
-		char	   *name = strVal(lfirst(cell));
-		ListCell   *pcell;
-
-		/* Check for duplicates. */
-		foreach(pcell, publist)
-		{
-			char	   *pname = strVal(lfirst(pcell));
-
-			if (pcell == cell)
-				break;
-
-			if (strcmp(name, pname) == 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("publication name \"%s\" used more than once",
-								pname)));
-		}
-
-		datums[j++] = CStringGetTextDatum(name);
-	}
+	check_duplicates_in_publist(publist, datums);
 
 	MemoryContextSwitchTo(oldcxt);
 
@@ -964,6 +943,53 @@ AlterSubscription(AlterSubscriptionStmt *stmt, bool isTopLevel)
 				break;
 			}
 
+		case ALTER_SUBSCRIPTION_ADD_PUBLICATION:
+		case ALTER_SUBSCRIPTION_DROP_PUBLICATION:
+			{
+				bool	copy_data = false;
+				bool	isadd = stmt->kind == ALTER_SUBSCRIPTION_ADD_PUBLICATION;
+				bool	refresh;
+				List   *publist = NULL;
+
+				publist = merge_publications(sub->publications, stmt->publication, isadd);
+
+				parse_subscription_options(stmt->options,
+										   NULL,	/* no "connect" */
+										   NULL, NULL,	/* no "enabled" */
+										   NULL,	/* no "create_slot" */
+										   NULL, NULL,	/* no "slot_name" */
+										   isadd ? &copy_data : NULL, /* for drop, no "copy_data" */
+										   NULL,	/* no "synchronous_commit" */
+										   &refresh,
+										   NULL, NULL,	/* no "binary" */
+										   NULL, NULL); /* no "streaming" */
+
+				values[Anum_pg_subscription_subpublications - 1] =
+					publicationListToArray(publist);
+				replaces[Anum_pg_subscription_subpublications - 1] = true;
+
+				update_tuple = true;
+
+				/* Refresh if user asked us to. */
+				if (refresh)
+				{
+					if (!sub->enabled)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("ALTER SUBSCRIPTION with refresh is not allowed for disabled subscriptions"),
+								 errhint("Use ALTER SUBSCRIPTION ... SET PUBLICATION ... WITH (refresh = false).")));
+
+					PreventInTransactionBlock(isTopLevel, "ALTER SUBSCRIPTION with refresh");
+
+					/* Only refresh the added/dropped list of publications. */
+					sub->publications = stmt->publication;
+
+					AlterSubscription_refresh(sub, copy_data);
+				}
+
+				break;
+			}
+
 		case ALTER_SUBSCRIPTION_REFRESH:
 			{
 				bool		copy_data;
@@ -1547,4 +1573,92 @@ ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err)
 	/* translator: %s is an SQL ALTER command */
 			 errhint("Use %s to disassociate the subscription from the slot.",
 					 "ALTER SUBSCRIPTION ... SET (slot_name = NONE)")));
+}
+
+/*
+ * Check for duplicates in the given list of publications and error out if
+ * found one.
+ */
+static void
+check_duplicates_in_publist(List *publist, Datum *datums)
+{
+	ListCell	*cell;
+	int	j = 0;
+
+	foreach(cell, publist)
+	{
+		char	*name = strVal(lfirst(cell));
+		ListCell	*pcell;
+
+		foreach(pcell, publist)
+		{
+			char	*pname = strVal(lfirst(pcell));
+
+			if (pcell == cell)
+				break;
+
+			if (strcmp(name, pname) == 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+							errmsg("publication name \"%s\" used more than once",
+								pname)));
+		}
+
+		if (datums)
+			datums[j++] = CStringGetTextDatum(name);
+	}
+}
+
+/*
+ * Merge current subscription's publications and user specified publications
+ * by ADD/DROP PUBLICATIONS.
+ *
+ * If addpub is true, we will add the list of publications into oldpublist.
+ * Otherwise, we will delete the list of publications from oldpublist.
+ */
+static List *
+merge_publications(List *oldpublist, List *newpublist, bool addpub)
+{
+	ListCell	*lc;
+
+	check_duplicates_in_publist(newpublist, NULL);
+
+	foreach(lc, newpublist)
+	{
+		char	*name = strVal(lfirst(lc));
+		ListCell	*cell;
+
+		foreach(cell, oldpublist)
+		{
+			char	*pubname = strVal(lfirst(cell));
+
+			if (strcmp(name, pubname) == 0)
+			{
+				if (addpub)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("publication \"%s\" is already present in the subscription",
+									name)));
+				else
+					oldpublist = list_delete_cell(oldpublist, cell);
+
+				break;
+			}
+		}
+
+		if (addpub && !cell)
+			oldpublist = lappend(oldpublist, makeString(name));
+		else if (!addpub && !cell)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("publication \"%s\" doesn't exist in the subscription",
+							name)));
+	}
+
+	if (!oldpublist)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("subscription must contain at least one publication")));
+
+	return oldpublist;
 }

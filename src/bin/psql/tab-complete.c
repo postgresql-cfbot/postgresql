@@ -1652,7 +1652,8 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER SUBSCRIPTION <name> */
 	else if (Matches("ALTER", "SUBSCRIPTION", MatchAny))
 		COMPLETE_WITH("CONNECTION", "ENABLE", "DISABLE", "OWNER TO",
-					  "RENAME TO", "REFRESH PUBLICATION", "SET");
+					  "RENAME TO", "REFRESH PUBLICATION", "SET",
+					  "ADD PUBLICATION", "DROP PUBLICATION");
 	/* ALTER SUBSCRIPTION <name> REFRESH PUBLICATION */
 	else if (HeadMatches("ALTER", "SUBSCRIPTION", MatchAny) &&
 			 TailMatches("REFRESH", "PUBLICATION"))
@@ -1675,6 +1676,14 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER SUBSCRIPTION <name> SET PUBLICATION <name> */
 	else if (HeadMatches("ALTER", "SUBSCRIPTION", MatchAny) &&
 			 TailMatches("SET", "PUBLICATION", MatchAny))
+		COMPLETE_WITH("WITH (");
+	/* ALTER SUBSCRIPTION <name> ADD PUBLICATION <name> */
+	else if (HeadMatches("ALTER", "SUBSCRIPTION", MatchAny) &&
+			 TailMatches("ADD", "PUBLICATION", MatchAny))
+		COMPLETE_WITH("WITH (");
+	/* ALTER SUBSCRIPTION <name> DROP PUBLICATION <name> */
+	else if (HeadMatches("ALTER", "SUBSCRIPTION", MatchAny) &&
+			 TailMatches("DROP", "PUBLICATION", MatchAny))
 		COMPLETE_WITH("WITH (");
 	/* ALTER SUBSCRIPTION <name> SET PUBLICATION <name> WITH ( */
 	else if (HeadMatches("ALTER", "SUBSCRIPTION", MatchAny) &&

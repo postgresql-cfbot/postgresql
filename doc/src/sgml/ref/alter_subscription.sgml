@@ -23,6 +23,8 @@ PostgreSQL documentation
 <synopsis>
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> CONNECTION '<replaceable>conninfo</replaceable>'
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> SET PUBLICATION <replaceable class="parameter">publication_name</replaceable> [, ...] [ WITH ( <replaceable class="parameter">set_publication_option</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
+ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> ADD PUBLICATION <replaceable class="parameter">publication_name</replaceable> [, ...] [ WITH ( <replaceable class="parameter">add_publication_option</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
+ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> DROP PUBLICATION <replaceable class="parameter">publication_name</replaceable> [, ...] [ WITH ( <replaceable class="parameter">drop_publication_option</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> REFRESH PUBLICATION [ WITH ( <replaceable class="parameter">refresh_option</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> ENABLE
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> DISABLE
@@ -121,6 +123,69 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
 
       Additionally, refresh options as described
       under <literal>REFRESH PUBLICATION</literal> may be specified.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ADD PUBLICATION <replaceable class="parameter">publication_name</replaceable></literal></term>
+    <listitem>
+     <para>
+      Add list of publications to subscription. See
+      <xref linkend="sql-createsubscription"/> for more information.
+      By default this command will also act like <literal>REFRESH
+      PUBLICATION</literal>, except it only affect on added publications.
+     </para>
+
+     <para>
+      <replaceable>add_publication_option</replaceable> specifies additional
+      options for this operation.  The supported options are:
+
+      <variablelist>
+       <varlistentry>
+        <term><literal>refresh</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          When false, the command will not try to refresh table information.
+          <literal>REFRESH PUBLICATION</literal> should then be executed separately.
+          The default is <literal>true</literal>.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+
+      Additionally, refresh options as described
+      under <literal>REFRESH PUBLICATION</literal> may be specified.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DROP PUBLICATION <replaceable class="parameter">publication_name</replaceable></literal></term>
+    <listitem>
+     <para>
+      Drop list of publications from subscription. See
+      <xref linkend="sql-createsubscription"/> for more information.
+      By default this command will also act like <literal>REFRESH
+      PUBLICATION</literal>, except it only affect on dropped publications.
+     </para>
+
+     <para>
+      <replaceable>drop_publication_option</replaceable> specifies additional
+      options for this operation.  The supported options are:
+
+      <variablelist>
+       <varlistentry>
+        <term><literal>refresh</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          When false, the command will not try to refresh table information.
+          <literal>REFRESH PUBLICATION</literal> should then be executed separately.
+          The default is <literal>true</literal>.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
      </para>
     </listitem>
    </varlistentry>

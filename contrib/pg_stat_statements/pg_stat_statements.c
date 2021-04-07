@@ -86,7 +86,7 @@ PG_MODULE_MAGIC;
 #define PGSS_TEXT_FILE	PG_STAT_TMP_DIR "/pgss_query_texts.stat"
 
 /* Magic number identifying the stats file format */
-static const uint32 PGSS_FILE_HEADER = 0x20201218;
+static const uint32 PGSS_FILE_HEADER = 0x20201227;
 
 /* PostgreSQL major version number, changes in which invalidate all entries */
 static const uint32 PGSS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
@@ -110,7 +110,8 @@ typedef enum pgssVersion
 	PGSS_V1_1,
 	PGSS_V1_2,
 	PGSS_V1_3,
-	PGSS_V1_8
+	PGSS_V1_8,
+	PGSS_V1_10
 } pgssVersion;
 
 typedef enum pgssStoreKind
@@ -131,17 +132,13 @@ typedef enum pgssStoreKind
 /*
  * Hashtable key that defines the identity of a hashtable entry.  We separate
  * queries by user and by database even if they are otherwise identical.
- *
- * Right now, this structure contains no padding.  If you add any, make sure
- * to teach pgss_store() to zero the padding bytes.  Otherwise, things will
- * break, because pgss_hash is created using HASH_BLOBS, and thus tag_hash
- * is used to hash this.
  */
 typedef struct pgssHashKey
 {
 	Oid			userid;			/* user OID */
 	Oid			dbid;			/* database OID */
 	uint64		queryid;		/* query identifier */
+	bool		toplevel;		/* query executed at top level */
 } pgssHashKey;
 
 /*
@@ -288,6 +285,7 @@ PG_FUNCTION_INFO_V1(pg_stat_statements_reset_1_7);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_2);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_3);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_8);
+PG_FUNCTION_INFO_V1(pg_stat_statements_1_10);
 PG_FUNCTION_INFO_V1(pg_stat_statements);
 PG_FUNCTION_INFO_V1(pg_stat_statements_info);
 
@@ -1248,9 +1246,11 @@ pgss_store(const char *query, uint64 queryId,
 	}
 
 	/* Set up key for hashtable search */
+	memset(&key, 0, sizeof(pgssHashKey));
 	key.userid = GetUserId();
 	key.dbid = MyDatabaseId;
 	key.queryid = queryId;
+	key.toplevel = (exec_nested_level == 0);
 
 	/* Lookup the hash table entry with shared lock. */
 	LWLockAcquire(pgss->lock, LW_SHARED);
@@ -1430,7 +1430,8 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 #define PG_STAT_STATEMENTS_COLS_V1_2	19
 #define PG_STAT_STATEMENTS_COLS_V1_3	23
 #define PG_STAT_STATEMENTS_COLS_V1_8	32
-#define PG_STAT_STATEMENTS_COLS			32	/* maximum of above */
+#define PG_STAT_STATEMENTS_COLS_V1_10	33
+#define PG_STAT_STATEMENTS_COLS			33	/* maximum of above */
 
 /*
  * Retrieve statement statistics.
@@ -1442,6 +1443,16 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
  * expected API version is identified by embedding it in the C name of the
  * function.  Unfortunately we weren't bright enough to do that for 1.1.
  */
+Datum
+pg_stat_statements_1_10(PG_FUNCTION_ARGS)
+{
+	bool		showtext = PG_GETARG_BOOL(0);
+
+	pg_stat_statements_internal(fcinfo, PGSS_V1_10, showtext);
+
+	return (Datum) 0;
+}
+
 Datum
 pg_stat_statements_1_8(PG_FUNCTION_ARGS)
 {
@@ -1561,6 +1572,10 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 			if (api_version != PGSS_V1_8)
 				elog(ERROR, "incorrect number of output arguments");
 			break;
+		case PG_STAT_STATEMENTS_COLS_V1_10:
+			if (api_version != PGSS_V1_10)
+				elog(ERROR, "incorrect number of output arguments");
+			break;
 		default:
 			elog(ERROR, "incorrect number of output arguments");
 	}
@@ -1652,6 +1667,8 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 
 		values[i++] = ObjectIdGetDatum(entry->key.userid);
 		values[i++] = ObjectIdGetDatum(entry->key.dbid);
+		if (api_version >= PGSS_V1_10)
+			values[i++] = BoolGetDatum(entry->key.toplevel);
 
 		if (is_allowed_role || entry->key.userid == userid)
 		{
@@ -1789,6 +1806,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 					 api_version == PGSS_V1_2 ? PG_STAT_STATEMENTS_COLS_V1_2 :
 					 api_version == PGSS_V1_3 ? PG_STAT_STATEMENTS_COLS_V1_3 :
 					 api_version == PGSS_V1_8 ? PG_STAT_STATEMENTS_COLS_V1_8 :
+					 api_version == PGSS_V1_10 ? PG_STAT_STATEMENTS_COLS_V1_10 :
 					 -1 /* fail if you forget to update this assert */ ));
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
@@ -2461,9 +2479,19 @@ entry_reset(Oid userid, Oid dbid, uint64 queryid)
 	if (userid != 0 && dbid != 0 && queryid != UINT64CONST(0))
 	{
 		/* If all the parameters are available, use the fast path. */
+		memset(&key, 0, sizeof(pgssHashKey));
 		key.userid = userid;
 		key.dbid = dbid;
 		key.queryid = queryid;
+		key.toplevel = false;
+
+		/* Remove the key if exists */
+		entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_REMOVE, NULL);
+		if (entry)				/* found */
+			num_remove++;
+
+		/* Also remove entries for top level statements */
+		key.toplevel = true;
 
 		/* Remove the key if exists */
 		entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_REMOVE, NULL);

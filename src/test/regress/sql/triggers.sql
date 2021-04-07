@@ -2535,3 +2535,101 @@ for each statement execute function trigger_function1();
 delete from convslot_test_parent;
 
 drop table convslot_test_child, convslot_test_parent;
+
+--
+-- build a nested partition scheme for testing
+--
+
+create table grandparent (id int,
+primary key (id))
+partition by range (id);
+
+create table middle
+partition of grandparent
+for values from (1)
+to (10)
+partition by range (id);
+
+create table chi
+partition of middle
+for values from (1)
+to (5);
+
+create table cho
+partition of middle
+for values from (6)
+to (8);
+
+create function f ()
+returns trigger as 
+$$
+begin
+return new;
+end;
+$$
+language plpgsql;
+
+create trigger a
+after insert on grandparent
+for each row
+execute procedure f();
+
+select tgrelid::regclass, tgname, (select tgname from pg_trigger tr where tr.oid = pg_trigger.tgparentid) parent_tgname
+from pg_trigger where tgname in ('a')
+order by tgname, tgrelid::regclass::text;
+
+alter trigger a on grandparent rename to b;
+
+select tgrelid::regclass, tgname, (select tgname from pg_trigger tr where tr.oid = pg_trigger.tgparentid) parent_tgname
+from pg_trigger where tgname in ('a', 'b')
+order by tgname, tgrelid::regclass::text;
+
+alter trigger b on only middle rename to something;
+
+select tgrelid::regclass, tgname, (select tgname from pg_trigger tr where tr.oid = pg_trigger.tgparentid) parent_tgname
+from pg_trigger where tgname in ('something', 'b')
+order by tgname, tgrelid::regclass::text;
+
+alter trigger something on middle rename to some_trigger;
+
+select tgrelid::regclass, tgname, (select tgname from pg_trigger tr where tr.oid = pg_trigger.tgparentid) parent_tgname
+from pg_trigger where tgname in ('some_trigger', 'b', 'something')
+order by tgname, tgrelid::regclass::text;
+
+--
+-- Check that classical inheritance is unphased by renaming triggers
+--
+
+create table inh (id int,
+primary key (id));
+
+alter table middle detach partition chi;
+
+alter table chi inherit inh;
+
+select tgrelid::regclass, tgname, (select tgname from pg_trigger tr where tr.oid = pg_trigger.tgparentid) parent_tgname
+from pg_trigger where tgrelid = 'chi'::regclass
+order by tgname, tgrelid::regclass::text;
+
+create trigger unrelated
+before update of id on inh
+for each row
+execute procedure f();
+
+alter trigger unrelated on inh rename to some_trigger;
+
+alter trigger some_trigger on inh rename to trigger_name;
+
+select tgrelid::regclass, tgname, (select tgname from pg_trigger tr where tr.oid = pg_trigger.tgparentid) parent_tgname
+from pg_trigger where tgname in ('some_trigger', 'unrelated', 'trigger_name')
+order by tgname, tgrelid::regclass::text;
+
+-- cleanup
+
+drop table grandparent;
+
+drop table chi;
+
+drop table inh;
+
+drop function f();

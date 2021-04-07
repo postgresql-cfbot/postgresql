@@ -158,6 +158,10 @@ extern ObjectAddress CreateTrigger(CreateTrigStmt *stmt, const char *queryString
 extern void RemoveTriggerById(Oid trigOid);
 extern Oid	get_trigger_oid(Oid relid, const char *name, bool missing_ok);
 
+extern ObjectAddress renameonlytrig(RenameStmt *stmt, Relation tgrel, Oid relid, Oid tgparent);
+
+extern ObjectAddress renametrigHelper(RenameStmt *stmt, Oid tgoid, Oid relid);
+
 extern ObjectAddress renametrig(RenameStmt *stmt);
 
 extern void EnableDisableTrigger(Relation rel, const char *tgname,

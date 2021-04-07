@@ -24880,9 +24880,9 @@ SELECT collation for ('foo' COLLATE "de_DE");
    </para>
 
    <para>
-    Each of these functions returns <literal>true</literal> if
-    the signal was successfully sent and <literal>false</literal>
-    if sending the signal failed.
+    Except <function>pg_prohibit_wal</function>, each of these functions
+    returns <literal>true</literal> if the signal was successfully sent
+    and <literal>false</literal> if sending the signal failed.
    </para>
 
    <table id="functions-admin-signal-table">
@@ -24986,6 +24986,26 @@ SELECT collation for ('foo' COLLATE "de_DE");
         is a member of the role whose backend is being terminated or the
         calling role has been granted <literal>pg_signal_backend</literal>,
         however only superusers can terminate superuser backends.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_prohibit_wal</primary>
+        </indexterm>
+        <function>pg_prohibit_wal</function> ()
+        <returnvalue>void</returnvalue>
+       </para>
+       <para>
+        Function accepts a boolean argument to alter the WAL read-write state
+        and forces all processes of the <productname>PostgreSQL</productname>
+        server to accept that state change immediately. When
+        <literal>true</literal> passed, system state changed to read-only
+        (WAL prohibited state), if that not already. When
+        <literal>false</literal> passed, system state changed to read-write
+        (WAL permitted state), if that not already. See
+        <xref linkend="wal-prohibited-state"/> for more details.
        </para></entry>
       </row>
      </tbody>

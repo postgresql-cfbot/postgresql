@@ -700,10 +700,13 @@ AutoVacLauncherMain(int argc, char *argv[])
 
 		/*
 		 * There are some conditions that we need to check before trying to
-		 * start a worker.  First, we need to make sure that there is a worker
-		 * slot available.  Second, we need to make sure that no other worker
-		 * failed while starting up.
+		 * start a worker.  First, the system is not read only i.e. wal writes
+		 * permitted.  Second, we need to make sure that there is a worker slot
+		 * available.  Third, we need to make sure that no other worker failed
+		 * while starting up.
 		 */
+		if (!XLogInsertAllowed())
+			continue;
 
 		current_time = GetCurrentTimestamp();
 		LWLockAcquire(AutovacuumLock, LW_SHARED);

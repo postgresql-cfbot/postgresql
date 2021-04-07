@@ -2706,6 +2706,7 @@ WALAvailability
 WALInsertLock
 WALInsertLockPadded
 WALOpenSegment
+WALProhibitData
 WALReadError
 WALSegmentCloseCB
 WALSegmentContext

@@ -14,6 +14,7 @@
 
 #include "access/heapam.h"
 #include "access/visibilitymap.h"
+#include "access/walprohibit.h"
 #include "catalog/pg_am_d.h"
 #include "catalog/pg_proc_d.h"
 #include "miscadmin.h"
@@ -89,6 +90,7 @@ heap_force_common(FunctionCallInfo fcinfo, HeapTupleForceOption heap_force_opt)
 	OffsetNumber curr_start_ptr,
 				next_start_ptr;
 	bool		include_this_tid[MaxHeapTuplesPerPage];
+	bool		needwal;
 
 	if (RecoveryInProgress())
 		ereport(ERROR,
@@ -100,6 +102,7 @@ heap_force_common(FunctionCallInfo fcinfo, HeapTupleForceOption heap_force_opt)
 	sanity_check_tid_array(ta, &ntids);
 
 	rel = relation_open(relid, RowExclusiveLock);
+	needwal = RelationNeedsWAL(rel);
 
 	/* Check target relation. */
 	sanity_check_relation(rel);
@@ -217,6 +220,9 @@ heap_force_common(FunctionCallInfo fcinfo, HeapTupleForceOption heap_force_opt)
 		if (heap_force_opt == HEAP_FORCE_KILL && PageIsAllVisible(page))
 			visibilitymap_pin(rel, blkno, &vmbuf);
 
+		if (needwal)
+			CheckWALPermitted();
+
 		/* No ereport(ERROR) from here until all the changes are logged. */
 		START_CRIT_SECTION();
 
@@ -297,12 +303,12 @@ heap_force_common(FunctionCallInfo fcinfo, HeapTupleForceOption heap_force_opt)
 			MarkBufferDirty(buf);
 
 			/* XLOG stuff */
-			if (RelationNeedsWAL(rel))
+			if (needwal)
 				log_newpage_buffer(buf, true);
 		}
 
 		/* WAL log the VM page if it was modified. */
-		if (did_modify_vm && RelationNeedsWAL(rel))
+		if (did_modify_vm && needwal)
 			log_newpage_buffer(vmbuf, false);
 
 		END_CRIT_SECTION();

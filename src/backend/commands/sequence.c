@@ -20,6 +20,7 @@
 #include "access/relation.h"
 #include "access/table.h"
 #include "access/transam.h"
+#include "access/walprohibit.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
@@ -378,7 +379,12 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
 
 	/* check the comment above nextval_internal()'s equivalent call. */
 	if (RelationNeedsWAL(rel))
+	{
 		GetTopTransactionId();
+
+		/* Cannot have valid XID without WAL permission */
+		AssertWALPermittedHaveXID();
+	}
 
 	START_CRIT_SECTION();
 
@@ -766,7 +772,12 @@ nextval_internal(Oid relid, bool check_permissions)
 	 * (Have to do that here, so we're outside the critical section)
 	 */
 	if (logit && RelationNeedsWAL(seqrel))
+	{
 		GetTopTransactionId();
+
+		/* Cannot have valid XID without WAL permission */
+		AssertWALPermittedHaveXID();
+	}
 
 	/* ready to change the on-disk (or really, in-buffer) tuple */
 	START_CRIT_SECTION();
@@ -977,7 +988,12 @@ do_setval(Oid relid, int64 next, bool iscalled)
 
 	/* check the comment above nextval_internal()'s equivalent call. */
 	if (RelationNeedsWAL(seqrel))
+	{
 		GetTopTransactionId();
+
+		/* Cannot have valid XID without WAL permission */
+		AssertWALPermittedHaveXID();
+	}
 
 	/* ready to change the on-disk (or really, in-buffer) tuple */
 	START_CRIT_SECTION();

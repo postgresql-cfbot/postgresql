@@ -18,6 +18,7 @@
 #include "access/heapam_xlog.h"
 #include "access/htup_details.h"
 #include "access/transam.h"
+#include "access/walprohibit.h"
 #include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "miscadmin.h"
@@ -94,11 +95,11 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
 	Size		minfree;
 
 	/*
-	 * We can't write WAL in recovery mode, so there's no point trying to
+	 * We can't write WAL during read-only mode, so there's no point trying to
 	 * clean the page. The primary will likely issue a cleaning WAL record soon
 	 * anyway, so this is no particular loss.
 	 */
-	if (RecoveryInProgress())
+	if (!XLogInsertAllowed())
 		return;
 
 	/*
@@ -228,6 +229,7 @@ heap_page_prune(Relation relation, Buffer buffer,
 	OffsetNumber offnum,
 				maxoff;
 	PruneState	prstate;
+	bool		needwal;
 
 	/*
 	 * Our strategy is to scan the page and make lists of items to change,
@@ -282,6 +284,10 @@ heap_page_prune(Relation relation, Buffer buffer,
 	if (off_loc)
 		*off_loc = InvalidOffsetNumber;
 
+	needwal = RelationNeedsWAL(relation);
+	if (needwal)
+		CheckWALPermitted();
+
 	/* Any error while applying the changes is critical */
 	START_CRIT_SECTION();
 
@@ -315,7 +321,7 @@ heap_page_prune(Relation relation, Buffer buffer,
 		/*
 		 * Emit a WAL XLOG_HEAP2_PRUNE record showing what we did
 		 */
-		if (RelationNeedsWAL(relation))
+		if (needwal)
 		{
 			xl_heap_prune xlrec;
 			XLogRecPtr	recptr;

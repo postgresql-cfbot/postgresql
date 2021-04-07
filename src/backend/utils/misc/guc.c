@@ -233,6 +233,7 @@ static bool check_recovery_target_lsn(char **newval, void **extra, GucSource sou
 static void assign_recovery_target_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
+static const char *show_wal_prohibited(void);
 
 /* Private functions in guc-file.l that need to be called from guc.c */
 static ConfigVariable *ProcessConfigFileInternal(GucContext context,
@@ -640,6 +641,7 @@ static char *recovery_target_string;
 static char *recovery_target_xid_string;
 static char *recovery_target_name_string;
 static char *recovery_target_lsn_string;
+static bool wal_prohibited;
 
 
 /* should be static, but commands/variable.c needs to get at this */
@@ -2107,6 +2109,18 @@ static struct config_bool ConfigureNamesBool[] =
 		&wal_receiver_create_temp_slot,
 		false,
 		NULL, NULL, NULL
+	},
+
+	{
+		/* Not for general use */
+		{"wal_prohibited", PGC_INTERNAL, WAL,
+			gettext_noop("Shows whether the system is read only."),
+			NULL,
+			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&wal_prohibited,
+		false,
+		NULL, NULL, show_wal_prohibited
 	},
 
 	/* End-of-list marker */
@@ -12453,6 +12467,18 @@ check_default_with_oids(bool *newval, void **extra, GucSource source)
 	}
 
 	return true;
+}
+
+/*
+ * NB: The return string should be the same as the _ShowOption() for boolean
+ * type.
+ */
+static const char *
+show_wal_prohibited(void)
+{
+	if (!XLogInsertAllowed())
+		return "on";
+	return "off";
 }
 
 #include "guc-file.c"

@@ -11543,6 +11543,10 @@
   proname => 'pg_partition_root', prorettype => 'regclass',
   proargtypes => 'regclass', prosrc => 'pg_partition_root' },
 
+{ oid => '4544', descr => 'permit or prohibit wal writes',
+  proname => 'pg_prohibit_wal', prorettype => 'void',
+  proargtypes => 'bool', prosrc => 'pg_prohibit_wal' },
+
 { oid => '4350', descr => 'Unicode normalization',
   proname => 'normalize', prorettype => 'text', proargtypes => 'text text',
   prosrc => 'unicode_normalize_func' },

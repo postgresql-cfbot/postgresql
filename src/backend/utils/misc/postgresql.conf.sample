@@ -235,6 +235,12 @@
 #checkpoint_flush_after = 0		# measured in pages, 0 disables
 #checkpoint_warning = 30s		# 0 disables
 
+# - Prefetching during recovery -
+
+#wal_decode_buffer_size = 512kB		# lookahead window used for prefetching
+#recovery_prefetch = on			# whether to prefetch pages logged with FPW
+#recovery_prefetch_fpw = off		# whether to prefetch pages logged with FPW
+
 # - Archiving -
 
 #archive_mode = off		# enables archiving; off, on, or always

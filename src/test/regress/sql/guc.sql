@@ -296,3 +296,22 @@ reset check_function_bodies;
 set default_with_oids to f;
 -- Should not allow to set it to true.
 set default_with_oids to t;
+
+--
+-- Check that a value for the new configration parameter
+-- wal_prefetch_workers is limited by a value of the parameter
+-- max_worker_processes
+SHOW max_worker_processes;
+
+-- max_worker_processes has default value 8
+-- Check that an attempt to set the parameter wal_prefetch_workers
+-- to a value execeeding this limit results in error
+
+ALTER SYSTEM SET wal_prefetch_workers = 16; -- fails, it is expected behaviour
+
+-- Check that a value lesser than max_worker_processes can be assigned
+-- to the parameter wal_prefetch_workers
+ALTER SYSTEM SET wal_prefetch_workers = 7; -- ok since 7 < max_worker_processes
+
+-- Reset to default
+ALTER SYSTEM RESET wal_prefetch_workers;

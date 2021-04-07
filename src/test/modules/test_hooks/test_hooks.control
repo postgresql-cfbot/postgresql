@@ -1,0 +1,4 @@
+comment = 'Test code for various PostgreSQL hooks'
+default_version = '1.0'
+module_pathname = '$libdir/test_hooks'
+relocatable = true

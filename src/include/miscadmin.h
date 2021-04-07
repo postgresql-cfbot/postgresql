@@ -96,6 +96,9 @@ extern PGDLLIMPORT volatile uint32 CritSectionCount;
 
 /* in tcop/postgres.c */
 extern void ProcessInterrupts(void);
+typedef void (*ProcessInterrupts_hook_type)(void);
+extern ProcessInterrupts_hook_type ProcessInterrupts_hook;
+extern void standard_ProcessInterrupts(void);
 
 #ifndef WIN32
 

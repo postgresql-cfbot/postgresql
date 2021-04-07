@@ -208,6 +208,8 @@ static void log_disconnections(int code, Datum arg);
 static void enable_statement_timeout(void);
 static void disable_statement_timeout(void);
 
+/* Intercept CHECK_FOR_INTERRUPTS() responses */
+ProcessInterrupts_hook_type ProcessInterrupts_hook = NULL;
 
 /* ----------------------------------------------------------------
  *		routines to obtain user input
@@ -3099,7 +3101,25 @@ ProcessInterrupts(void)
 	/* OK to accept any interrupts now? */
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
 		return;
+
 	InterruptPending = false;
+
+	if (ProcessInterrupts_hook)
+		ProcessInterrupts_hook();
+	else
+		standard_ProcessInterrupts();
+}
+
+/*
+ * Implement the default signal handling behaviour for most backend types
+ * including user backends and bgworkers.
+ *
+ * This is where CHECK_FOR_INTERRUPTS() eventually lands up unless intercepted
+ * by ProcessInterrupts_hook.
+ */
+void
+standard_ProcessInterrupts(void)
+{
 
 	if (ProcDiePending)
 	{

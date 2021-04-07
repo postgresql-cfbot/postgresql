@@ -2593,7 +2593,7 @@ CREATE FUNCTION concat_text(text, text) RETURNS text
     </para>
    </sect2>
 
-   <sect2>
+   <sect2 id="xfunc-writing-code" xreflabel="Writing PostgreSQL Extension Code">
     <title>Writing Code</title>
 
     <para>
@@ -2650,7 +2650,8 @@ CREATE FUNCTION concat_text(text, text) RETURNS text
         <function>malloc</function> and <function>free</function>.
         The memory allocated by <function>palloc</function> will be
         freed automatically at the end of each transaction, preventing
-        memory leaks.
+        memory leaks. See <filename>src/backend/utils/mmgr/README</filename>
+        for more details on PostgreSQL's memory management.
        </para>
       </listitem>
 
@@ -2694,6 +2695,163 @@ CREATE FUNCTION concat_text(text, text) RETURNS text
         error messages to this effect.
        </para>
       </listitem>
+
+      <listitem>
+       <para>
+        Use <function>elog()</function> and <function>ereport()</function> for
+        logging output and raising errors instead of any direct stdio calls.
+        Do not attempt to use C++ exceptions or Windows Structured Exception
+        Handling, and never call <function>exit()</function> directly.
+        PostgreSQL uses its own <function>longjmp()</function> based
+        exception system for <literal>ERROR</literal>-level <function>elog()</function>
+        and <function>ereport()</function> calls. These can be handled and forwarded with
+        <literal>PG_TRY()</literal> and <literal>PG_RE_THROW()</literal>:
+<programlisting>
+          PG_TRY();
+          {
+            ...
+          }
+          PG_CATCH();
+          {
+            ....
+            /* Do not attempt to swallow the exception, always rethrow */
+            PG_RE_THROW();
+          }
+          PG_END_TRY();
+</programlisting>
+        See <filename>src/include/utils/elog.h</filename> and
+        <filename>src/backend/utils/error/elog.c</filename> for details.
+       </para>
+      </listitem>
+
+      <listitem id="xfunc-threading">
+       <para>
+        Individual PostgreSQL backends are single-threaded.
+        Never call any PostgreSQL function or access any PostgreSQL-managed data
+        structure from a thread other than the main
+        thread. If at all possible your extension should not start any threads
+        and should only use the main thread. PostgreSQL generally uses subprocesses
+        that coordinate over shared memory instead of threads - see
+        <xref linkend="bgworker"/>.
+       </para>
+      </listitem>
+
+      <listitem id="xfunc-file-and-pipe-io">
+       <para>
+        To execute subprocesses and open files, use the routines provided by
+        the file descriptor manager like <function>BasicOpenFile</function>
+        and <function>OpenPipeStream</function> instead of a direct
+        <function>open()</function>, <function>fopen()</function>,
+        <function>popen()</function> or <function>system()</function>.
+        See <filename>src/include/storage/fd.h</filename>.
+       </para>
+      </listitem>
+
+      <listitem id="xfunc-sleeping-interrupts-blocking"
+                xreflabel="Sleeping, Blocking and Interrupt Handling in Extensions">
+       <para>
+        Extension code should always be structured as a non-blocking
+        loop over any ongoing external activities. Avoid making blocking calls
+        into 3rd party libraries or uninterruptible
+        system calls. Use PostgreSQL's provided wait
+        primitives like <function>WaitEventSetWait</function> where necessary. Any
+        potentially long-running loop should periodically call <function>
+        CHECK_FOR_INTERRUPTS()</function> to give PostgreSQL a chance to interrupt
+        the function in case of a shutdown request, query cancel, etc. This means
+        you should <function>sleep()</function> or <function>usleep()</function>
+        for any nontrivial amount of time - use <function>WaitLatch()</function>
+        or its variants instead. For details on interrupt handling see
+        comments near the definition of the <literal>CHECK_FOR_INTERRUPTS()</literal>
+        macro in <filename>src/include/util/miscadmin.h</filename>.
+       </para>
+      </listitem>
+
+      <listitem id="xfunc-resource-management"
+                xreflabel="Resource Management in Extensions">
+       <para>
+        Use PostgreSQL's resource tracking and registration mechanisms
+        and the associated callbacks instead of relying on flow control
+        based cleanup. Your extension function could be terminated mid-execution
+        by PostgreSQL if any function that it calls makes a
+        <function>CHECK_FOR_INTERRUPTS()</function> check. It may not
+        get the opportunity to take cleanup actions via a
+        <literal>PG_TRY()</literal> ... <literal>PG_CATCH()</literal>
+        block if this happens. So all cleanup of resources not already
+        managed by the PostgreSQL runtime must be handled using appropriate
+        callbacks provided by PostgreSQL. These include, but are not limited to,
+        the callback registration APIs:
+        <itemizedlist>
+         <listitem><para><function>before_shmem_exit()</function></para></listitem>
+         <listitem><para><function>on_shmem_exit()</function></para></listitem>
+         <listitem><para><function>on_proc_exit()</function></para></listitem>
+         <listitem><para><literal>PG_ENSURE_ERROR_CLEANUP()</literal></para></listitem>
+         <listitem><para><function>RegisterXactCallback()</function></para></listitem>
+         <listitem><para><function>RegisterResourceReleaseCallback()</function></para></listitem>
+        </itemizedlist>
+        More information on resource management, cleanup and lifecycle can be
+        found in the PostgreSQL headers and sources.
+       </para>
+      </listitem>
+
+      <listitem id="xfunc-concurrency-synchronization"
+                xreflabel="Concurrency and Synchronization in Extensions">
+       <para>
+        Use the PostgreSQL runtime's concurrency and synchronisation primitives
+        rather than platform-native primitives when coordinating activity
+        between PostgreSQL processes. These include signals and ProcSignal multiplexed
+        signals, heavyweight locks ("normal" database object locks),
+        <link linkend="xfunc-shared-addin">LWLock</link>s,
+        Spinlocks, latches, condition variables, and more. Details on all of these
+        is far outside the scope of this document, and the best reference is
+        the relevant source code.
+       </para>
+      </listitem>
+
+      <listitem id="xfunc-ipc"
+                xreflabel="Inter-Process Communication in Extensions">
+       <para>
+        Sometimes relation-based state management for extensions is not
+        sufficient to meet their needs. In that case the extension may need to
+        use PostgreSQL's shared-memory based inter-process communication
+        features, and should certainly do so instead of inventing its own or
+        trying to use platform level features. An extension may use
+        <link linkend="xfunc-shared-addin">"raw" shared memory requested from
+        the postmaster at startup</link> or higher level features like dynamic
+        shared memory segments (<acronym>DSM</acronym>),
+        dynamic shared areas (<acronym>DSA</acronym>),
+        or shared memory message queues (<acronym>shm_mq</acronym>). Examples
+        of the use of some these features can be found in the
+        <filename>src/test/modules/test_shm_mq/</filename> example extension. Others
+        can be found in various main PostgreSQL backend code.
+       </para>
+      </listitem>
+
+      <listitem id="xfunc-relcache-syscache">
+       <para>
+        Look up system catalogs and table information using the relcache and syscache
+        APIs (<function>SearchSysCache...</function>,
+        <function>relation_open()</function>, etc) rather than attempting to run
+        SQL queries to fetch the information. Ensure that your function holds
+        any necessary locks on the target objects. Take care not to make any calls
+        that could trigger cache invalidations while still accessing any
+        syscache cache entries, as this can cause subtle bugs. See
+        <filename>src/backend/utils/cache/syscache.c</filename>,
+        <filename>src/backend/utils/cache/relcache.c</filename>,
+        <filename>src/backend/access/common/relation.c</filename> and their
+        headers for details.
+       </para>
+      </listitem>
+
+      <listitem>
+       <para>
+        There are many README files in the PostgreSQL source tree that discuss
+        specific development topics in more detail than be covered here. Many
+        subsystems' source files also have detailed comments that explain their
+        correct use. The existing sources are your best reference for more
+        complex tasks.
+       </para>
+      </listitem>
+
      </itemizedlist>
     </para>
    </sect2>

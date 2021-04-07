@@ -24,6 +24,7 @@ PG_FUNCTION_INFO_V1(gbt_int8_consistent);
 PG_FUNCTION_INFO_V1(gbt_int8_distance);
 PG_FUNCTION_INFO_V1(gbt_int8_penalty);
 PG_FUNCTION_INFO_V1(gbt_int8_same);
+PG_FUNCTION_INFO_V1(gbt_int8_sortsupport);
 
 
 static bool
@@ -214,4 +215,77 @@ gbt_int8_same(PG_FUNCTION_ARGS)
 
 	*result = gbt_num_same((void *) b1, (void *) b2, &tinfo, fcinfo->flinfo);
 	PG_RETURN_POINTER(result);
+}
+
+static int
+gbt_int8_sort_build_cmp(Datum a, Datum b, SortSupport ssup)
+{
+	int64KEY   *ia = (int64KEY *) DatumGetPointer(a);
+	int64KEY   *ib = (int64KEY *) DatumGetPointer(b);
+
+	/* for leaf items we expect lower == upper */
+	Assert(ia->lower == ia->upper);
+	Assert(ib->lower == ib->upper);
+
+	if (ia->lower == ib->lower)
+	{
+		return 0;
+	}
+
+	return (ia->lower > ib->lower) ? 1 : -1;
+}
+
+static Datum
+gbt_int8_abbrev_convert(Datum original, SortSupport ssup)
+{
+	int64KEY   *b1 = (int64KEY *) DatumGetPointer(original);
+	int64		z = b1->lower;
+
+#if SIZEOF_DATUM == 8
+	return (Datum) z;
+#else
+	return (Datum) (z >> 32);
+#endif
+}
+
+static int
+gbt_int8_cmp_abbrev(Datum z1, Datum z2, SortSupport ssup)
+{
+	if (z1 > z2)
+		return 1;
+	else if (z1 < z2)
+		return -1;
+	else
+		return 0;
+}
+
+/*
+ * We never consider aborting the abbreviation.
+ */
+static bool
+gbt_int8_abbrev_abort(int memtupcount, SortSupport ssup)
+{
+	return false;
+}
+
+/*
+ * Sort support routine for fast GiST index build by sorting.
+ */
+Datum
+gbt_int8_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	if (ssup->abbreviate)
+	{
+		ssup->comparator = gbt_int8_cmp_abbrev;
+		ssup->abbrev_converter = gbt_int8_abbrev_convert;
+		ssup->abbrev_abort = gbt_int8_abbrev_abort;
+		ssup->abbrev_full_comparator = gbt_int8_sort_build_cmp;
+	}
+	else
+	{
+		ssup->comparator = gbt_int8_sort_build_cmp;
+	}
+	PG_RETURN_VOID();
 }

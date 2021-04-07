@@ -25,6 +25,7 @@ PG_FUNCTION_INFO_V1(gbt_macad_picksplit);
 PG_FUNCTION_INFO_V1(gbt_macad_consistent);
 PG_FUNCTION_INFO_V1(gbt_macad_penalty);
 PG_FUNCTION_INFO_V1(gbt_macad_same);
+PG_FUNCTION_INFO_V1(gbt_macad_sortsupport);
 
 
 static bool
@@ -194,4 +195,74 @@ gbt_macad_same(PG_FUNCTION_ARGS)
 
 	*result = gbt_num_same((void *) b1, (void *) b2, &tinfo, fcinfo->flinfo);
 	PG_RETURN_POINTER(result);
+}
+
+static int
+gbt_macad_sort_build_cmp(Datum a, Datum b, SortSupport ssup)
+{
+	macKEY   *ma = (macKEY *) DatumGetPointer(a);
+	macKEY   *mb = (macKEY *) DatumGetPointer(b);
+	uint64    ia  = mac_2_uint64(&ma->lower);
+	uint64    ib  = mac_2_uint64(&mb->lower);
+
+	/* for leaf items we expect lower == upper */
+
+	if (ia == ib)
+	{
+		return 0;
+	}
+
+	return (ia > ib) ? 1 : -1;
+}
+
+static Datum
+gbt_macad_abbrev_convert(Datum original, SortSupport ssup)
+{
+	macKEY   *b1 = (macKEY *) DatumGetPointer(original);
+	uint64    z  = mac_2_uint64(&b1->lower);
+
+#if SIZEOF_DATUM == 8
+	return (Datum) z;
+#else
+	return (Datum) z>>32;
+#endif
+}
+
+static int
+gbt_macad_cmp_abbrev(Datum z1, Datum z2, SortSupport ssup)
+{
+	if (z1 > z2)
+		return 1;
+	else if (z1 < z2)
+		return -1;
+	else
+		return 0;
+}
+
+static bool
+gbt_macad_abbrev_abort(int memtupcount, SortSupport ssup)
+{
+	return false;
+}
+
+/*
+ * Sort support routine for fast GiST index build by sorting.
+ */
+Datum
+gbt_macad_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	if (ssup->abbreviate)
+	{
+		ssup->comparator = gbt_macad_cmp_abbrev;
+		ssup->abbrev_converter = gbt_macad_abbrev_convert;
+		ssup->abbrev_abort = gbt_macad_abbrev_abort;
+		ssup->abbrev_full_comparator = gbt_macad_sort_build_cmp;
+	}
+	else
+	{
+		ssup->comparator = gbt_macad_sort_build_cmp;
+	}
+	PG_RETURN_VOID();
 }

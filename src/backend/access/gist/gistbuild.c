@@ -257,6 +257,7 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 
 	if (buildstate.buildMode == GIST_SORTED_BUILD)
 	{
+		elog(DEBUG1, "Using sorted GiST build");
 		/*
 		 * Sort all data, build the index from bottom up.
 		 */

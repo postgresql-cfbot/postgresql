@@ -24977,7 +24977,7 @@ SELECT collation for ('foo' COLLATE "de_DE");
         <indexterm>
          <primary>pg_terminate_backend</primary>
         </indexterm>
-        <function>pg_terminate_backend</function> ( <parameter>pid</parameter> <type>integer</type> )
+        <function>pg_terminate_backend</function> ( <parameter>pid</parameter> <type>integer</type>, <parameter>timeout</parameter> <type>bigint</type> <literal>DEFAULT</literal> <literal>0</literal> )
         <returnvalue>boolean</returnvalue>
        </para>
        <para>
@@ -24985,7 +24985,35 @@ SELECT collation for ('foo' COLLATE "de_DE");
         specified process ID.  This is also allowed if the calling role
         is a member of the role whose backend is being terminated or the
         calling role has been granted <literal>pg_signal_backend</literal>,
-        however only superusers can terminate superuser backends.
+        however only superusers can terminate superuser backends. When
+        <parameter>timeout</parameter> is not specified, this function sends
+        SIGTERM to the backend with the given process ID without waiting for
+        its actual termination and returns <literal>true</literal>. Sometimes
+        the backend process may still exist. With <parameter>timeout</parameter>
+        specified in milliseconds, the function ensures that the backend
+        process is actually goes away from the system processes. It keeps
+        checking for the existence of the backend process until the given
+        <parameter>timeout</parameter> occurs and returns <literal>true</literal>
+        if the process doesn't exit. On timeout a warning is emitted and
+        <literal>false</literal> is returned.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_wait_for_backend_termination</primary>
+        </indexterm>
+        <function>pg_wait_for_backend_termination</function> ( <parameter>pid</parameter> <type>integer</type>, <parameter>timeout</parameter> <type>bigint</type> <literal>DEFAULT</literal> <literal>5000</literal> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Checks the existence of backend process with specified process ID. It
+        waits until the given <parameter>timeout</parameter> or the default
+        5000 milliseconds or 5 seconds. <literal>true</literal> is returned
+        when the backend is found to be not existing within the
+        <parameter>timeout</parameter> milliseconds. On timeout, a warning is
+        emitted and <literal>false</literal> is returned.
        </para></entry>
       </row>
      </tbody>

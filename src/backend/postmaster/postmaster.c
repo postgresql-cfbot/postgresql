@@ -911,10 +911,10 @@ PostmasterMain(int argc, char *argv[])
 					 ReservedBackends, MaxConnections);
 		ExitPostmaster(1);
 	}
-	if (XLogArchiveMode > ARCHIVE_MODE_OFF && wal_level == WAL_LEVEL_MINIMAL)
+	if (XLogArchiveMode > ARCHIVE_MODE_OFF && wal_level <= WAL_LEVEL_MINIMAL)
 		ereport(ERROR,
-				(errmsg("WAL archival cannot be enabled when wal_level is \"minimal\"")));
-	if (max_wal_senders > 0 && wal_level == WAL_LEVEL_MINIMAL)
+				(errmsg("WAL archival cannot be enabled when wal_level is \"none\" or \"\"minimal")));
+	if (max_wal_senders > 0 && wal_level <= WAL_LEVEL_MINIMAL)
 		ereport(ERROR,
 				(errmsg("WAL streaming (max_wal_senders > 0) requires wal_level \"replica\" or \"logical\"")));
 

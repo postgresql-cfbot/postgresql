@@ -23,7 +23,7 @@ standard_initdb() {
 	# To increase coverage of non-standard segment size and group access
 	# without increasing test runtime, run these tests with a custom setting.
 	# Also, specify "-A trust" explicitly to suppress initdb's warning.
-	"$1" -N --wal-segsize 1 -g -A trust
+	"$1" -N -A trust
 	if [ -n "$TEMP_CONFIG" -a -r "$TEMP_CONFIG" ]
 	then
 		cat "$TEMP_CONFIG" >> "$PGDATA/postgresql.conf"
@@ -107,6 +107,9 @@ EXTRA_REGRESS_OPTS="$EXTRA_REGRESS_OPTS --outputdir=$outputdir"
 export EXTRA_REGRESS_OPTS
 mkdir "$outputdir"
 
+mkdir "$outputdir"/sql
+mkdir "$outputdir"/expected
+
 logdir=`pwd`/log
 rm -rf "$logdir"
 mkdir "$logdir"
@@ -176,18 +179,97 @@ if "$MAKE" -C "$oldsrc" installcheck-parallel; then
 		esac
 		fix_sql="$fix_sql
 				 DROP FUNCTION IF EXISTS
-					public.oldstyle_length(integer, text);	-- last in 9.6
+					public.oldstyle_length(integer, text);"	# last in 9.6 -- commit 5ded4bd21
+		fix_sql="$fix_sql
 				 DROP FUNCTION IF EXISTS
-					public.putenv(text);	-- last in v13
-				 DROP OPERATOR IF EXISTS	-- last in v13
-					public.#@# (pg_catalog.int8, NONE),
-					public.#%# (pg_catalog.int8, NONE),
-					public.!=- (pg_catalog.int8, NONE),
+					public.putenv(text);"	# last in v13
+		# last in v13 commit 76f412ab3
+		# public.!=- This one is only needed for v11+ ??
+		# Note, until v10, operators could only be dropped one at a time
+		fix_sql="$fix_sql
+				 DROP OPERATOR IF EXISTS
+					public.#@# (pg_catalog.int8, NONE);"
+		fix_sql="$fix_sql
+				 DROP OPERATOR IF EXISTS
+					public.#%# (pg_catalog.int8, NONE);"
+		fix_sql="$fix_sql
+				 DROP OPERATOR IF EXISTS
+					public.!=- (pg_catalog.int8, NONE);"
+		fix_sql="$fix_sql
+				 DROP OPERATOR IF EXISTS
 					public.#@%# (pg_catalog.int8, NONE);"
+
+		# commit 068503c76511cdb0080bab689662a20e86b9c845
+		case $oldpgversion in
+			10????)
+				fix_sql="$fix_sql
+					DROP TRANSFORM FOR integer LANGUAGE sql CASCADE;"
+				;;
+		esac
+
+		# commit db3af9feb19f39827e916145f88fa5eca3130cb2
+		case $oldpgversion in
+			10????)
+				fix_sql="$fix_sql
+					DROP FUNCTION boxarea(box);"
+				fix_sql="$fix_sql
+					DROP FUNCTION funny_dup17();"
+				;;
+		esac
+
+		# commit cda6a8d01d391eab45c4b3e0043a1b2b31072f5f
+		case $oldpgversion in
+			10????)
+				fix_sql="$fix_sql
+					DROP TABLE abstime_tbl;"
+				fix_sql="$fix_sql
+					DROP TABLE reltime_tbl;"
+				fix_sql="$fix_sql
+					DROP TABLE tinterval_tbl;"
+				;;
+		esac
+
+		# Various things removed for v14
+		case $oldpgversion in
+			906??|10????|11????|12????|13????)
+				fix_sql="$fix_sql
+					DROP AGGREGATE first_el_agg_any(anyelement);"
+				;;
+		esac
+		case $oldpgversion in
+			90[56]??|10????|11????|12????|13????)
+				# commit 9e38c2bb5 and 97f73a978
+				# fix_sql="$fix_sql DROP AGGREGATE array_larger_accum(anyarray);"
+				fix_sql="$fix_sql
+					DROP AGGREGATE array_cat_accum(anyarray);"
+
+				# commit 76f412ab3
+				#fix_sql="$fix_sql DROP OPERATOR @#@(bigint,NONE);"
+				fix_sql="$fix_sql
+					DROP OPERATOR @#@(NONE,bigint);"
+				;;
+		esac
+
+		# commit 578b22971: OIDS removed in v12
+		case $oldpgversion in
+			804??|9????|10????|11????)
+				fix_sql="$fix_sql
+					ALTER TABLE public.tenk1 SET WITHOUT OIDS;"
+				fix_sql="$fix_sql
+					ALTER TABLE public.tenk1 SET WITHOUT OIDS;"
+				#fix_sql="$fix_sql ALTER TABLE public.stud_emp SET WITHOUT OIDS;" # inherited
+				fix_sql="$fix_sql
+					ALTER TABLE public.emp SET WITHOUT OIDS;"
+				fix_sql="$fix_sql
+					ALTER TABLE public.tt7 SET WITHOUT OIDS;"
+				;;
+		esac
+
 		psql -X -d regression -c "$fix_sql;" || psql_fix_sql_status=$?
 	fi
 
-	pg_dumpall --no-sync -f "$temp_root"/dump1.sql || pg_dumpall1_status=$?
+	echo "fix_sql: $oldpgversion: $fix_sql" >&2
+	pg_dumpall --extra-float-digits=0 --no-sync -f "$temp_root"/dump1.sql || pg_dumpall1_status=$?
 
 	if [ "$newsrc" != "$oldsrc" ]; then
 		# update references to old source tree's regress.so etc
@@ -233,23 +315,29 @@ pg_upgrade $PG_UPGRADE_OPTS -d "${PGDATA}.old" -D "$PGDATA" -b "$oldbindir" -p "
 # Windows hosts don't support Unix-y permissions.
 case $testhost in
 	MINGW*) ;;
-	*)	if [ `find "$PGDATA" -type f ! -perm 640 | wc -l` -ne 0 ]; then
+	*)
+		x=`find "$PGDATA" -type f -perm /127 -ls`
+		if [ -n "$x" ]; then
 			echo "files in PGDATA with permission != 640";
+			echo "$x" |head
 			exit 1;
 		fi ;;
 esac
 
 case $testhost in
 	MINGW*) ;;
-	*)	if [ `find "$PGDATA" -type d ! -perm 750 | wc -l` -ne 0 ]; then
+	*)
+		x=`find "$PGDATA" -type d -perm /027 -ls`
+		if [ "$x" ]; then
 			echo "directories in PGDATA with permission != 750";
+			echo "$x" |head
 			exit 1;
 		fi ;;
 esac
 
 pg_ctl start -l "$logdir/postmaster2.log" -o "$POSTMASTER_OPTS" -w
 
-pg_dumpall --no-sync -f "$temp_root"/dump2.sql || pg_dumpall2_status=$?
+pg_dumpall --extra-float-digits=0 --no-sync -f "$temp_root"/dump2.sql || pg_dumpall2_status=$?
 pg_ctl -m fast stop
 
 if [ -n "$pg_dumpall2_status" ]; then

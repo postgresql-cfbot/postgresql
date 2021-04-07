@@ -495,3 +495,41 @@ WHERE pronargs != 2
 SELECT p1.rngtypid, p1.rngsubtype, p1.rngmultitypid
 FROM pg_range p1
 WHERE p1.rngmultitypid IS NULL OR p1.rngmultitypid = 0;
+
+-- Create a table with different data types, to exercise binary compatibility
+-- during pg_upgrade test
+
+CREATE TABLE manytypes AS SELECT
+'(11,12)'::point, '(1,1),(2,2)'::line,
+'((11,11),(12,12))'::lseg, '((11,11),(13,13))'::box,
+'((11,12),(13,13),(14,14))'::path AS openedpath, '[(11,12),(13,13),(14,14)]'::path AS closedpath,
+'((11,12),(13,13),(14,14))'::polygon, '1,1,1'::circle,
+'today'::date, 'now'::time, 'now'::timestamp, 'now'::timetz, 'now'::timestamptz, '12 seconds'::interval,
+'{"reason":"because"}'::json, '{"when":"now"}'::jsonb, '$.a[*] ? (@ > 2)'::jsonpath,
+'127.0.0.1'::inet, '127.0.0.0/8'::cidr, '00:01:03:86:1c:ba'::macaddr8, '00:01:03:86:1c:ba'::macaddr,
+2::int2, 4::int4, 8::int8, 4::float4, '8'::float8, pi()::numeric,
+'c'::bpchar, 'abc'::varchar, 'name'::name, 'txt'::text, true::bool,
+E'\\xDEADBEEF'::bytea, B'10001'::bit, B'10001'::varbit AS varbit, '12.34'::money,
+'abc'::refcursor,
+'1 2'::int2vector, '1 2'::oidvector, format('%s=UC/%s', USER, USER)::aclitem,
+'a fat cat sat on a mat and ate a fat rat'::tsvector, 'fat & rat'::tsquery,
+'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid, '11'::xid8,
+'pg_class'::regclass, 'regtype'::regtype type,
+'pg_class'::regclass::oid, '(1,1)'::tid, '2'::xid, '3'::cid,
+'10:20:10,14,15'::txid_snapshot, '10:20:10,14,15'::pg_snapshot,
+1::information_schema.cardinal_number,
+'l'::information_schema.character_data,
+'n'::information_schema.sql_identifier,
+'now'::information_schema.time_stamp,
+'YES'::information_schema.yes_or_no;
+
+-- And now a test on the previous test, checking that all core types are
+-- included in this table (or some other non-catalog table processed by pg_upgrade).
+SELECT typname, typtype, typelem, typarray, typarray FROM pg_type t
+WHERE typnamespace IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace)
+AND typtype IN ('b', 'e', 'd')
+-- reg* cannot be pg_upgraded
+AND NOT typname~'_|^char$|^reg'
+-- XML might be disabled at compile-time
+AND oid != ALL(ARRAY['gtsvector', 'xml']::regtype[])
+AND NOT EXISTS (SELECT * FROM pg_attribute a WHERE a.atttypid=t.oid AND a.attnum>0 AND a.attrelid='manytypes'::regclass);

@@ -73,6 +73,7 @@ typedef enum
 	PGC_SU_BACKEND,
 	PGC_BACKEND,
 	PGC_SUSET,
+	PGC_ADMINSET,
 	PGC_USERSET
 } GucContext;
 

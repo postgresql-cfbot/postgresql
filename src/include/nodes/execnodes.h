@@ -425,11 +425,15 @@ typedef struct ResultRelInfo
 	 */
 	AttrNumber	ri_RowIdAttNo;
 
-	/* Projection to generate new tuple in an INSERT/UPDATE */
+	/*
+	 * Projection to generate new tuple in an INSERT/UPDATE and slot to hold
+	 * it. For UPDATE, oldTupleSlot holds the old tuple being updated.
+	 *
+	 * NB: These fields are not to be touched unless you are either
+	 * ExecGetNewInsertTuple() or ExecGetNewUpdateTuple().
+	 */
 	ProjectionInfo *ri_projectNew;
-	/* Slot to hold that tuple */
 	TupleTableSlot *ri_newTupleSlot;
-	/* Slot to hold the old tuple being updated */
 	TupleTableSlot *ri_oldTupleSlot;
 	/* Have the projection and the slots above been initialized? */
 	bool		ri_projectNewInfoValid;

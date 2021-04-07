@@ -985,11 +985,14 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 
 	/*
 	 * Force a checkpoint to make sure the checkpointer has received the
-	 * message sent by ForgetDatabaseSyncRequests. On Windows, this also
-	 * ensures that background procs don't hold any open files, which would
-	 * cause rmdir() to fail.
+	 * message sent by ForgetDatabaseSyncRequests.
 	 */
 	RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT);
+
+#if defined(WIN32) || defined(USE_ASSERT_CHECKING)
+	/* Close all fds in other Windows processes. */
+	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
+#endif
 
 	/*
 	 * Remove all tablespace subdirs belonging to the database.
@@ -1238,6 +1241,11 @@ movedb(const char *dbname, const char *tblspcname)
 	 */
 	RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT
 					  | CHECKPOINT_FLUSH_ALL);
+
+#if defined(WIN32) || defined(USE_ASSERT_CHECKING)
+	/* Close all fds in other Windows processes. */
+	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
+#endif
 
 	/*
 	 * Now drop all buffers holding data of the target database; they should
@@ -2250,6 +2258,11 @@ dbase_redo(XLogReaderState *record)
 
 		/* Clean out the xlog relcache too */
 		XLogDropDatabase(xlrec->db_id);
+
+#if defined(WIN32) || defined(USE_ASSERT_CHECKING)
+		/* Close all fds in other Windows processes. */
+		WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_SMGRRELEASE));
+#endif
 
 		for (i = 0; i < xlrec->ntablespaces; i++)
 		{

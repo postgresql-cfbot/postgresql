@@ -16,6 +16,14 @@
 
 #include "nodes/pathnodes.h"
 
+/* Hook for plugins to get control over expand_inherited_rtentry() */
+typedef void (*expand_inherited_rtentry_hook_type)(PlannerInfo *root,
+												   RelOptInfo *rel,
+												   RangeTblEntry *rte,
+												   Index rti);
+
+extern PGDLLIMPORT expand_inherited_rtentry_hook_type expand_inherited_rtentry_hook;
+
 
 extern void expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 									 RangeTblEntry *rte, Index rti);

@@ -15,10 +15,10 @@
 #define PROCARRAY_H
 
 #include "storage/lock.h"
+#include "storage/proc.h"
 #include "storage/standby.h"
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
-
 
 extern Size ProcArrayShmemSize(void);
 extern void CreateSharedProcArray(void);
@@ -59,8 +59,10 @@ extern TransactionId GetOldestActiveTransactionId(void);
 extern TransactionId GetOldestSafeDecodingTransactionId(bool catalogOnly);
 extern void GetReplicationHorizons(TransactionId *slot_xmin, TransactionId *catalog_xmin);
 
-extern VirtualTransactionId *GetVirtualXIDsDelayingChkpt(int *nvxids);
-extern bool HaveVirtualXIDsDelayingChkpt(VirtualTransactionId *vxids, int nvxids);
+extern VirtualTransactionId *GetVirtualXIDsDelayingChkpt(int *nvxids,
+														 DelayChkptType type);
+extern bool HaveVirtualXIDsDelayingChkpt(VirtualTransactionId *vxids,
+										 int nvxids, DelayChkptType type);
 
 extern PGPROC *BackendPidGetProc(int pid);
 extern PGPROC *BackendPidGetProcWithLock(int pid);

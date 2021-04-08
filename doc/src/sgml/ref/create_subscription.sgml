@@ -239,6 +239,18 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
          </para>
         </listitem>
        </varlistentry>
+
+       <varlistentry>
+        <term><literal>validate_publication</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies whether the subscriber must verify if the specified
+          publications are present in the publisher. By default, the subscriber
+          will not check if the publications are present in the publisher.
+         </para>
+        </listitem>
+       </varlistentry>
+
       </variablelist></para>
     </listitem>
    </varlistentry>

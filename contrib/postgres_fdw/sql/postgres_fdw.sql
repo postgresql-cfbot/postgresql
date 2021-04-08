@@ -1136,6 +1136,15 @@ SELECT sum(c2), array_agg(c8) FROM ft1 GROUP BY c8; -- ERROR
 ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 TYPE user_enum;
 
 -- ===================================================================
+-- conversion for const matching local type
+-- ===================================================================
+SELECT * FROM ft1 WHERE c8 = 'foo' LIMIT 1;
+ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 TYPE text;
+SELECT * FROM ft1 WHERE c8 = 'foo' LIMIT 1;
+SELECT * FROM ft1 WHERE c8 LIKE 'foo' LIMIT 1; -- ERROR
+ALTER FOREIGN TABLE ft1 ALTER COLUMN c8 TYPE user_enum;
+
+-- ===================================================================
 -- subtransaction
 --  + local/remote error doesn't break cursor
 -- ===================================================================

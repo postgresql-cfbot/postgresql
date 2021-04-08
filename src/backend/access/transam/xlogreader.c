@@ -118,6 +118,7 @@ XLogReaderAllocate(int wal_segment_size, const char *waldir,
 		pfree(state);
 		return NULL;
 	}
+	state->EndOfWAL = false;
 	state->errormsg_buf[0] = '\0';
 
 	/*
@@ -288,6 +289,7 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 	/* reset error state */
 	*errormsg = NULL;
 	state->errormsg_buf[0] = '\0';
+	state->EndOfWAL = false;
 
 	ResetDecoder(state);
 
@@ -689,6 +691,15 @@ ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 					  XLogRecPtr PrevRecPtr, XLogRecord *record,
 					  bool randAccess)
 {
+	if (record->xl_tot_len == 0)
+	{
+		/* This is strictly not an invalid state, so phrase it as so. */
+		report_invalid_record(state,
+							  "record length is 0 at %X/%X",
+							  (uint32) (RecPtr >> 32), (uint32) RecPtr);
+		state->EndOfWAL = true;
+		return false;
+	}
 	if (record->xl_tot_len < SizeOfXLogRecord)
 	{
 		report_invalid_record(state,

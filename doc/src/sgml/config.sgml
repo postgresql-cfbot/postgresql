@@ -9983,6 +9983,20 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-catalog-version" xreflabel="catalog_version">
+      <term><varname>catalog_version</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>catalog_version</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Reports the catalog version of the server. It is determined by the
+        value of <literal>CATALOG_VERSION_NO</literal> when building the server.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-data-checksums" xreflabel="data_checksums">
       <term><varname>data_checksums</varname> (<type>boolean</type>)
       <indexterm>

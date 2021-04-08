@@ -16,7 +16,13 @@
 #include "access/xlogdefs.h"
 #include "storage/lwlock.h"
 #include "storage/sync.h"
+#include "utils/hsearch.h"
 
+/*
+ * To avoid overflowing internal arithmetic and the size_t data type, the
+ * number of buffers should not exceed this number.
+ */
+#define SLRU_MAX_ALLOWED_BUFFERS ((1024 * 1024 * 1024) / BLCKSZ)
 
 /*
  * Define SLRU segment size.  A page is the same BLCKSZ as is used everywhere
@@ -56,6 +62,9 @@ typedef struct SlruSharedData
 
 	/* Number of buffers managed by this SLRU structure */
 	int			num_slots;
+
+	/* Where to start buffer replacement search. */
+	int			search_slotno;
 
 	/*
 	 * Arrays holding info for each buffer slot.  Page number is undefined
@@ -110,6 +119,7 @@ typedef SlruSharedData *SlruShared;
 typedef struct SlruCtlData
 {
 	SlruShared	shared;
+	HTAB	   *mapping_table;
 
 	/*
 	 * Which sync handler function to use when handing sync requests over to

@@ -390,6 +390,12 @@ explain (costs off, verbose)
 explain (costs off)
   select * from tenk1 a where two in
     (select two from tenk1 b where stringu1 like '%AAAA' limit 3);
+-- ...unless it's LATERAL
+savepoint settings;
+set parallel_tuple_cost=0;
+explain (costs off) select t.unique1 from tenk1 t
+join lateral (select t.unique1 from tenk1 offset 0) l on true;
+rollback to savepoint settings;
 
 -- to increase the parallel query test coverage
 SAVEPOINT settings;

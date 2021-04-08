@@ -605,10 +605,11 @@ PSQLexec(const char *query)
  * e.g., because of the interrupt, -1 on error.
  */
 int
-PSQLexecWatch(const char *query, const printQueryOpt *opt)
+PSQLexecWatch(const char *query, const printQueryOpt *opt, FILE *printQueryFout)
 {
 	double		elapsed_msec = 0;
 	int			res;
+	FILE	   *restoreQueryFout = NULL;
 
 	if (!pset.db)
 	{
@@ -616,11 +617,20 @@ PSQLexecWatch(const char *query, const printQueryOpt *opt)
 		return 0;
 	}
 
+	if (printQueryFout)
+	{
+		restoreQueryFout = pset.queryFout;
+		pset.queryFout = printQueryFout;
+	}
+
 	SetCancelConn(pset.db);
 	res = SendQueryAndProcessResults(query, &elapsed_msec, true);
 	ResetCancelConn();
 
 	fflush(pset.queryFout);
+
+	if (restoreQueryFout)
+		pset.queryFout = restoreQueryFout;
 
 	/* Possible microtiming output */
 	if (pset.timing)

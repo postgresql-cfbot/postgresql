@@ -110,6 +110,11 @@ log_locus_callback(const char **filename, uint64 *lineno)
 	}
 }
 
+static void
+empty_signal_handler(SIGNAL_ARGS)
+{
+}
+
 /*
  *
  * main
@@ -302,6 +307,15 @@ main(int argc, char *argv[])
 	}
 
 	psql_setup_cancel_handler();
+
+	/*
+	 * do_watch() needs signal handlers installed (otherwise sigwait() will
+	 * filter them out on some platforms), but doesn't need them to do
+	 * anything, and they shouldn't ever run (unless perhaps a stray SIGALRM
+	 * arrives due to a race when do_watch() cancels an itimer).
+	 */
+	pqsignal(SIGCHLD, empty_signal_handler);
+	pqsignal(SIGALRM, empty_signal_handler);
 
 	PQsetNoticeProcessor(pset.db, NoticeProcessor, NULL);
 

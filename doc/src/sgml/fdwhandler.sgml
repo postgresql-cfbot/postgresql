@@ -1065,6 +1065,50 @@ EndDirectModify(ForeignScanState *node);
 
    </sect2>
 
+   <sect2 id="fdw-callbacks-truncate">
+    <title>FDW Routines for Truncate</title>
+<programlisting>
+void
+ExecForeignTruncate(List *rels, List *rels_extra,
+                    DropBehavior behavior, bool restart_seqs);
+</programlisting>
+    <para>
+     Truncate a set of foreign tables defined by
+     <literal>rels</literal> belonging to the same foreign server.
+     This optional function is called during execution of
+     <command>TRUNCATE</command> for each foreign server involved
+     in one <command>TRUNCATE</command> command (note that invocations
+     are not per foreign table).
+
+     <literal>rels_extra</literal> delivers extra information about
+     the context where the foreign tables are truncated. It is a list of integers and has same length with
+     <literal>rels</literal>. <literal>TRUNCATE_REL_CONTEXT_NORMAL</literal> means that
+     the foreign table is specified WITHOUT <literal>ONLY</literal> clause, and <literal>TRUNCATE_REL_CONTEXT_ONLY</literal> means
+     specified WITH <literal>ONLY</literal> clause. <literal>TRUNCATE_REL_CONTEXT_CASCADING</literal> 
+     value means that foreign tables are not specified in the <command>TRUNCATE</command>, 
+     but truncated due to dependency (for example, partition table).
+    </para>
+
+    <para>
+     If the <function>ExecForeignTruncate</function> pointer is set to
+     <literal>NULL</literal>, attempts to truncate the foreign table will
+     fail with an error message.
+    </para>
+    
+    <para>
+     <literal>behavior</literal> defines how foreign tables should
+     be truncated, using as possible values <literal>DROP_RESTRICT</literal>
+     and <literal>DROP_CASCADE</literal> (to map with the equivalents of
+     <command>TRUNCATE</command>).
+    </para>
+    
+    <para>
+     <literal>restart_seqs</literal> is set to <literal>true</literal>
+     if <literal>RESTART IDENTITY</literal> was supplied in the
+     <command>TRUNCATE</command>.
+    </para>
+   </sect2>
+
    <sect2 id="fdw-callbacks-row-locking">
     <title>FDW Routines for Row Locking</title>
 

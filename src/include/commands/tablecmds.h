@@ -55,9 +55,16 @@ extern void AlterRelationNamespaceInternal(Relation classRel, Oid relOid,
 
 extern void CheckTableNotInUse(Relation rel, const char *stmt);
 
+#define TRUNCATE_REL_CONTEXT_NORMAL       0x01
+#define TRUNCATE_REL_CONTEXT_ONLY         0x02
+#define TRUNCATE_REL_CONTEXT_CASCADING     0x04
 extern void ExecuteTruncate(TruncateStmt *stmt);
-extern void ExecuteTruncateGuts(List *explicit_rels, List *relids, List *relids_logged,
-								DropBehavior behavior, bool restart_seqs);
+extern void ExecuteTruncateGuts(List *explicit_rels,
+								List *relids,
+								List *relids_extra,
+								List *relids_logged,
+								DropBehavior behavior,
+								bool restart_seqs);
 
 extern void SetRelationHasSubclass(Oid relationId, bool relhassubclass);
 

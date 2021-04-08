@@ -94,7 +94,8 @@ connection_target: opt_database_name opt_server opt_port
 
 			if (strncmp($1, "unix", strlen("unix")) == 0 &&
 				strncmp($3 + strlen("//"), "localhost", strlen("localhost")) != 0 &&
-				strncmp($3 + strlen("//"), "127.0.0.1", strlen("127.0.0.1")) != 0)
+				strncmp($3 + strlen("//"), "127.0.0.1", strlen("127.0.0.1")) != 0 &&
+				strncmp($3 + strlen("//"), "[::1]", strlen("[::1]")) != 0)
 				mmerror(PARSE_ERROR, ET_ERROR, "Unix-domain sockets only work on \"localhost\" but not on \"%s\"", $3 + strlen("//"));
 
 			$$ = make3_str(make3_str(mm_strdup("\""), $1, mm_strdup(":")), $3, make3_str(make3_str($4, mm_strdup("/"), $6), $7, mm_strdup("\"")));
@@ -145,7 +146,8 @@ opt_server: server			{ $$ = $1; }
 
 server_name: ColId					{ $$ = $1; }
 		| ColId '.' server_name		{ $$ = make3_str($1, mm_strdup("."), $3); }
-		| IP						{ $$ = make_name(); }
+		| IPV4						{ $$ = make_name(); }
+		| ENCLOSEDIPV6				{ $$ = make_name(); }
 		;
 
 opt_port: ':' Iconst		{ $$ = make2_str(mm_strdup(":"), $2); }

@@ -158,5 +158,32 @@ main(void)
 #line 73 "test5.pgc"
 
 
+	/* use IPv6 */
+	{ ECPGconnect(__LINE__, 0, "unix:postgresql://[::1]/ecpg2_regression" , NULL, NULL , "main", 0); }
+#line 76 "test5.pgc"
+
+	{ ECPGdisconnect(__LINE__, "main");}
+#line 77 "test5.pgc"
+
+
+	{ ECPGconnect(__LINE__, 0, "unix:postgresql://[::1]/ecpg2_regression" , NULL, NULL , "main", 0); }
+#line 79 "test5.pgc"
+
+	{ ECPGdisconnect(__LINE__, "main");}
+#line 80 "test5.pgc"
+
+
+	{ ECPGconnect(__LINE__, 0, "unix:postgresql://[::1/ecpg2_regression" , NULL, NULL , "main", 0); }
+#line 82 "test5.pgc"
+
+
+	{ ECPGconnect(__LINE__, 0, "unix:postgresql://[]/ecpg2_regression" , NULL, NULL , "main", 0); }
+#line 84 "test5.pgc"
+
+
+	{ ECPGconnect(__LINE__, 0, "unix:postgresql://[::1]&ecpg2_regression" , NULL, NULL , "main", 0); }
+#line 86 "test5.pgc"
+
+
 	return 0;
 }

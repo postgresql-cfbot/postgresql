@@ -88,3 +88,17 @@
 [NO_PID]: sqlca: code: 0, state: 00000
 [NO_PID]: raising sqlcode -220 on line 73: connection "nonexistent" does not exist on line 73
 [NO_PID]: sqlca: code: -220, state: 08003
+[NO_PID]: ECPGconnect: opening database ecpg2_regression on <DEFAULT> port <DEFAULT>  
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ecpg_finish: connection main closed
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ECPGconnect: opening database ecpg2_regression on <DEFAULT> port <DEFAULT>  
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: ecpg_finish: connection main closed
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: end of string reached when looking for matching "]" in IPv6 host address: "unix:postgresql://[::1/ecpg2_regression"
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: IPv6 host address may not be empty: "unix:postgresql://[]/ecpg2_regression"
+[NO_PID]: sqlca: code: 0, state: 00000
+[NO_PID]: unexpected character "&" at position 24 (expected ":", "/" or "?"): "unix:postgresql://[::1]&ecpg2_regression"
+[NO_PID]: sqlca: code: 0, state: 00000

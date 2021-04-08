@@ -18,6 +18,7 @@
 #include "access/hash.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
+#include "access/table.h"
 #include "bootstrap/bootstrap.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
@@ -2060,6 +2061,20 @@ get_rel_persistence(Oid relid)
 	ReleaseSysCache(tp);
 
 	return result;
+}
+
+bool
+get_rel_logical_catalog(Oid relid)
+{
+	bool	res;
+	Relation rel;
+
+	/* assume previously locked */
+	rel = table_open(relid, NoLock);
+	res = RelationIsAccessibleInLogicalDecoding(rel);
+	table_close(rel, NoLock);
+
+	return res;
 }
 
 

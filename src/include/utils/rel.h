@@ -26,6 +26,7 @@
 #include "storage/relfilenode.h"
 #include "utils/relcache.h"
 #include "utils/reltrigger.h"
+#include "catalog/catalog.h"
 
 
 /*
@@ -345,6 +346,9 @@ typedef struct StdRdOptions
  * RelationIsUsedAsCatalogTable
  *		Returns whether the relation should be treated as a catalog table
  *		from the pov of logical decoding.  Note multiple eval of argument!
+ *		This definition should not invoke anything that performs catalog
+ *		access; otherwise it may cause infinite recursion. Check the comments
+ *		in RelationIsAccessibleInLogicalDecoding() for details.
  */
 #define RelationIsUsedAsCatalogTable(relation)	\
 	((relation)->rd_options && \
@@ -622,6 +626,11 @@ typedef struct ViewOptions
  * RelationIsAccessibleInLogicalDecoding
  *		True if we need to log enough information to have access via
  *		decoding snapshot.
+ *		This definition should not invoke anything that performs catalog
+ *		access. Otherwise, e.g. logging a WAL entry for catalog relation may
+ *		invoke this function, which will in turn do catalog access, which may
+ *		in turn cause another similar WAL entry to be logged, leading to
+ *		infinite recursion.
  */
 #define RelationIsAccessibleInLogicalDecoding(relation) \
 	(XLogLogicalInfoActive() && \

@@ -1829,14 +1829,26 @@ pgstat_report_replslot(const char *slotname, PgStat_Counter spilltxns,
  * ----------
  */
 void
-pgstat_report_replslot_drop(const char *slotname)
+pgstat_report_replslot_drop(const char *slotname, Oid dbOid, ProcSignalReason reason)
 {
-	PgStat_MsgReplSlot msg;
+	if (reason == PROCSIG_NO_SIGNAL)
+	{
+		PgStat_MsgReplSlot msg;
 
-	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_REPLSLOT);
-	strlcpy(msg.m_slotname, slotname, NAMEDATALEN);
-	msg.m_drop = true;
-	pgstat_send(&msg, sizeof(PgStat_MsgReplSlot));
+		pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_REPLSLOT);
+		strlcpy(msg.m_slotname, slotname, NAMEDATALEN);
+		msg.m_drop = true;
+		pgstat_send(&msg, sizeof(PgStat_MsgReplSlot));
+	}
+	else
+	{
+		PgStat_MsgRecoveryConflict msg;
+
+		pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RECOVERYCONFLICT);
+		msg.m_databaseid = dbOid;
+		msg.m_reason = reason;
+		pgstat_send(&msg, sizeof(msg));
+	}
 }
 
 /* ----------
@@ -3464,6 +3476,7 @@ reset_dbentry_counters(PgStat_StatDBEntry *dbentry)
 	dbentry->n_conflict_tablespace = 0;
 	dbentry->n_conflict_lock = 0;
 	dbentry->n_conflict_snapshot = 0;
+	dbentry->n_conflict_logicalslot = 0;
 	dbentry->n_conflict_bufferpin = 0;
 	dbentry->n_conflict_startup_deadlock = 0;
 	dbentry->n_temp_files = 0;
@@ -5379,6 +5392,9 @@ pgstat_recv_recoveryconflict(PgStat_MsgRecoveryConflict *msg, int len)
 			break;
 		case PROCSIG_RECOVERY_CONFLICT_SNAPSHOT:
 			dbentry->n_conflict_snapshot++;
+			break;
+		case PROCSIG_RECOVERY_CONFLICT_LOGICALSLOT:
+			dbentry->n_conflict_logicalslot++;
 			break;
 		case PROCSIG_RECOVERY_CONFLICT_BUFFERPIN:
 			dbentry->n_conflict_bufferpin++;

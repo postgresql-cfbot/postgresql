@@ -19,6 +19,7 @@
 #include "utils/hsearch.h"
 #include "utils/relcache.h"
 #include "utils/wait_event.h" /* for backward compatibility */
+#include "storage/procsignal.h"
 
 
 /* ----------
@@ -740,6 +741,7 @@ typedef struct PgStat_StatDBEntry
 	PgStat_Counter n_conflict_tablespace;
 	PgStat_Counter n_conflict_lock;
 	PgStat_Counter n_conflict_snapshot;
+	PgStat_Counter n_conflict_logicalslot;
 	PgStat_Counter n_conflict_bufferpin;
 	PgStat_Counter n_conflict_startup_deadlock;
 	PgStat_Counter n_temp_files;
@@ -1007,7 +1009,7 @@ extern void pgstat_report_replslot(const char *slotname, PgStat_Counter spilltxn
 								   PgStat_Counter spillcount, PgStat_Counter spillbytes,
 								   PgStat_Counter streamtxns, PgStat_Counter streamcount,
 								   PgStat_Counter streambytes);
-extern void pgstat_report_replslot_drop(const char *slotname);
+extern void pgstat_report_replslot_drop(const char *slotname, Oid dbOid, ProcSignalReason reason);
 
 extern void pgstat_initialize(void);
 

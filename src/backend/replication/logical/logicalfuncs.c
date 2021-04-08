@@ -223,7 +223,7 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 	if (!RecoveryInProgress())
 		end_of_wal = GetFlushRecPtr();
 	else
-		end_of_wal = GetXLogReplayRecPtr(&ThisTimeLineID);
+		end_of_wal = GetXLogReplayRecPtr(&ThisTimeLineID, false);
 
 	(void) ReplicationSlotAcquire(NameStr(*name), SAB_Error);
 

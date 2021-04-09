@@ -25,6 +25,7 @@
  * GUC support
  */
 const struct config_enum_entry wal_level_options[] = {
+	{"none", WAL_LEVEL_NONE, false},
 	{"minimal", WAL_LEVEL_MINIMAL, false},
 	{"replica", WAL_LEVEL_REPLICA, false},
 	{"archive", WAL_LEVEL_REPLICA, true},	/* deprecated */

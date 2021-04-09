@@ -587,7 +587,7 @@ gistXLogAssignLSN(void)
 	 * follow the restriction.
 	 */
 	XLogBeginInsert();
-	XLogSetRecordFlags(XLOG_MARK_UNIMPORTANT);
+	XLogSetRecordFlags(XLOG_MARK_UNIMPORTANT | XLOG_MARK_ESSENTIAL);
 	XLogRegisterData((char *) &dummy, sizeof(dummy));
 	return XLogInsert(RM_GIST_ID, XLOG_GIST_ASSIGN_LSN);
 }

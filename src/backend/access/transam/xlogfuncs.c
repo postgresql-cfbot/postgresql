@@ -268,6 +268,11 @@ pg_switch_wal(PG_FUNCTION_ARGS)
 {
 	XLogRecPtr	switchpoint;
 
+	if (wal_level == WAL_LEVEL_NONE)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("cannot execute pg_switch_wal when WAL logging is turned off")));
+
 	if (RecoveryInProgress())
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),

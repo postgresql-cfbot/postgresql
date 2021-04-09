@@ -163,7 +163,8 @@ extern int	XLogArchiveMode;
 /* WAL levels */
 typedef enum WalLevel
 {
-	WAL_LEVEL_MINIMAL = 0,
+	WAL_LEVEL_NONE = 0,
+	WAL_LEVEL_MINIMAL,
 	WAL_LEVEL_REPLICA,
 	WAL_LEVEL_LOGICAL
 } WalLevel;
@@ -248,7 +249,8 @@ extern bool XLOG_DEBUG;
 #define XLOG_INCLUDE_ORIGIN		0x01	/* include the replication origin */
 #define XLOG_MARK_UNIMPORTANT	0x02	/* record not important for durability */
 #define XLOG_INCLUDE_XID		0x04	/* include XID of top-level xact */
-
+#define XLOG_MARK_ESSENTIAL		0x08	/* necessary even when WAL logging is
+										 * disabled */
 
 /* Checkpoint statistics */
 typedef struct CheckpointStatsData

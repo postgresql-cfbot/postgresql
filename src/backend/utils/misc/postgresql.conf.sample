@@ -197,8 +197,10 @@
 
 # - Settings -
 
-#wal_level = replica			# minimal, replica, or logical
-					# (change requires restart)
+#wal_level = replica			# none, minimal, replica, or logical
+					# (change requires restart.
+					# choosing wal_level=none
+					# can cause unrecoverable data corruption)
 #fsync = on				# flush data to disk for crash safety
 					# (turning this off can cause
 					# unrecoverable data corruption)

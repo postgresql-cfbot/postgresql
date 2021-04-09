@@ -1115,7 +1115,7 @@ EndPrepare(GlobalTransaction gxact)
 	for (record = records.head; record != NULL; record = record->next)
 		XLogRegisterData(record->data, record->len);
 
-	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
+	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN | XLOG_MARK_ESSENTIAL);
 
 	gxact->prepare_end_lsn = XLogInsert(RM_XACT_ID, XLOG_XACT_PREPARE);
 

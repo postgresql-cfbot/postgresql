@@ -66,7 +66,7 @@ typedef uint16 RepOriginId;
 
 /*
  *	Because O_DIRECT bypasses the kernel buffers, and because we never
- *	read those buffers except during crash recovery or if wal_level != minimal,
+ *	read those buffers except during crash recovery or if wal_level <= minimal,
  *	it is a win to use it in all cases where we sync on each write().  We could
  *	allow O_DIRECT with fsync(), but it is unclear if fsync() could process
  *	writes not buffered in the kernel.  Also, O_DIRECT is never enough to force

@@ -506,23 +506,6 @@ convert_sourcefiles_in(const char *source_subdir, const char *dest_dir, const ch
 
 	snprintf(testtablespace, MAXPGPATH, "%s/testtablespace", outputdir);
 
-	/*
-	 * Clean out the test tablespace dir, or create it if it doesn't exist. On
-	 * Windows, doing this cleanup here makes possible to run the regression
-	 * tests as a Windows administrative user account with the restricted
-	 * token obtained when starting pg_regress.
-	 */
-	if (directory_exists(testtablespace))
-	{
-		if (!rmtree(testtablespace, true))
-		{
-			fprintf(stderr, _("\n%s: could not remove test tablespace \"%s\"\n"),
-					progname, testtablespace);
-			exit(2);
-		}
-	}
-	make_directory(testtablespace);
-
 	/* finally loop on each file and do the replacement */
 	for (name = names; *name; name++)
 	{

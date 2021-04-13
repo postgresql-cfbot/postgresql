@@ -1,3 +1,10 @@
+-- Create the tablespace path.
+CREATE FUNCTION mkdir(text)
+  RETURNS void AS '@libdir@/regress@DLSUFFIX@', 'regress_mkdir'
+  LANGUAGE C STRICT;
+SELECT mkdir('@testtablespace@');
+DROP FUNCTION mkdir(text);
+
 -- create a tablespace using WITH clause
 CREATE TABLESPACE regress_tblspacewith LOCATION '@testtablespace@' WITH (some_nonexistent_parameter = true); -- fail
 CREATE TABLESPACE regress_tblspacewith LOCATION '@testtablespace@' WITH (random_page_cost = 3.0); -- ok

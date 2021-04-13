@@ -18,6 +18,7 @@
 
 #include <math.h>
 #include <signal.h>
+#include <sys/stat.h>
 
 #include "access/detoast.h"
 #include "access/htup_details.h"
@@ -80,6 +81,43 @@ static void regress_lseg_construct(LSEG *lseg, Point *pt1, Point *pt2);
 
 PG_MODULE_MAGIC;
 
+static bool
+directory_exists(const char *dir)
+{
+	struct stat st;
+
+	if (stat(dir, &st) != 0)
+		return false;
+	if (S_ISDIR(st.st_mode))
+		return true;
+	return false;
+}
+
+/*
+ * Create a new directory for the tests, to be used for tablespaces.
+ * If this directory exists, clean up its contents and create it again
+ * from scratch.
+ */
+PG_FUNCTION_INFO_V1(regress_mkdir);
+
+Datum
+regress_mkdir(PG_FUNCTION_ARGS)
+{
+	char *dir = text_to_cstring(PG_GETARG_TEXT_PP(0));
+
+	if (!superuser())
+		elog(ERROR, "must be superuser to create paths");
+
+	if (directory_exists(dir))
+	{
+		if (!rmtree(dir, true))
+			elog(ERROR, "could not remove path \"%s\"\n", dir);
+	}
+	if (mkdir(dir, S_IRWXU | S_IRWXG | S_IRWXO) < 0)
+		elog(ERROR, "could not create directory \"%s\": %m", dir);
+
+	PG_RETURN_VOID();
+}
 
 /* return the point where two paths intersect, or NULL if no intersection. */
 PG_FUNCTION_INFO_V1(interpt_pp);

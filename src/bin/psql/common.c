@@ -1117,7 +1117,6 @@ SendQueryAndProcessResults(const char *query, double *pelapsed_msec, bool is_wat
 		INSTR_TIME_SET_CURRENT(before);
 
 	success = PQsendQuery(pset.db, query);
-	ResetCancelConn();
 
 	if (!success)
 	{
@@ -1382,6 +1381,7 @@ SendQuery(const char *query)
 	{
 		/* Default fetch-it-all-and-print mode */
 		int res = SendQueryAndProcessResults(query, &elapsed_msec, false);
+		ResetCancelConn();
 		OK = (res >= 0);
 		results = NULL;
 	}

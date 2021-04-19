@@ -52,3 +52,9 @@ $$ SELECT ('foo'::text || $1::text)::casttesttype; $$;
 
 CREATE CAST (int4 AS casttesttype) WITH FUNCTION int4_casttesttype(int4) AS IMPLICIT;
 SELECT 1234::int4::casttesttype; -- Should work now
+
+
+-- Test coerce a non-collatable type with collation
+CREATE VIEW cast_with_collation(c1) AS (SELECT ('1' COLLATE "C")::INT FROM generate_series(1, 10));
+select count(*) from cast_with_collation;
+DROP VIEW cast_with_collation;

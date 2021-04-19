@@ -72,3 +72,12 @@ SELECT 1234::int4::casttesttype; -- Should work now
  foo1234
 (1 row)
 
+-- Test coerce a non-collatable type with collation
+CREATE VIEW cast_with_collation(c1) AS (SELECT ('1' COLLATE "C")::INT FROM generate_series(1, 10));
+select count(*) from cast_with_collation;
+ count 
+-------
+    10
+(1 row)
+
+DROP VIEW cast_with_collation;

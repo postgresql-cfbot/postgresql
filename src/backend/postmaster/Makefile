@@ -24,6 +24,7 @@ OBJS = \
 	postmaster.o \
 	startup.o \
 	syslogger.o \
-	walwriter.o
+	walwriter.o \
+	proxy.o
 
 include $(top_srcdir)/src/backend/common.mk

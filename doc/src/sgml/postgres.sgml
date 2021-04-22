@@ -166,6 +166,7 @@ break is not needed in a wider output rendering.
   &maintenance;
   &backup;
   &high-availability;
+  &connpool;
   &monitoring;
   &diskusage;
   &wal;

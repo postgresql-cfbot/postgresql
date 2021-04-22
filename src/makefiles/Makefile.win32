@@ -16,6 +16,7 @@ DLSUFFIX = .dll
 ifneq (,$(findstring backend,$(subdir)))
 ifeq (,$(findstring conversion_procs,$(subdir)))
 ifeq (,$(findstring libpqwalreceiver,$(subdir)))
+ifeq (,$(findstring libpqconn,$(subdir)))
 ifeq (,$(findstring replication/pgoutput,$(subdir)))
 ifeq (,$(findstring snowball,$(subdir)))
 override CPPFLAGS+= -DBUILDING_DLL

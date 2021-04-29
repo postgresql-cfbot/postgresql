@@ -467,6 +467,10 @@ begin
         ln := regexp_replace(ln, 'Hits: \d+', 'Hits: N');
         ln := regexp_replace(ln, 'Misses: \d+', 'Misses: N');
         ln := regexp_replace(ln, 'Memory Usage: \d+', 'Memory Usage: N');
+        ln := regexp_replace(ln, 'Loop min_time: \d+  max_time: \d+  min_rows: \d+  max_rows: \d+  total_rows: \d+',
+                                 'Loop min_time: N  max_time: N  min_rows: N  max_rows: N  total_rows: N');
+        ln := regexp_replace(ln, 'Loop min_rows: \d+  max_rows: \d+  total_rows: \d+',
+                                 'Loop min_rows: N  max_rows: N  total_rows: N');
         return next ln;
     end loop;
 end;
@@ -656,6 +660,13 @@ order by tbl1.col1, tprt.col1;
 select tbl1.col1, tprt.col1 from tbl1
 inner join tprt on tbl1.col1 = tprt.col1
 order by tbl1.col1, tprt.col1;
+
+-- Tests for extra statistics
+explain (analyze, verbose, costs off, summary off, timing off)
+select * from tbl1 inner join tprt on tbl1.col1 > tprt.col1;
+
+explain (analyze, verbose, costs off, summary off, timing off)
+select * from tbl1 inner join tprt on tbl1.col1 = tprt.col1;
 
 -- Last partition
 delete from tbl1;

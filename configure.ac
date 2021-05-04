@@ -929,6 +929,10 @@ fi
 if test x"$with_oauth" = x"curl"; then
   AC_DEFINE([USE_OAUTH], 1, [Define to 1 to build with OAuth 2.0 support. (--with-oauth)])
   AC_DEFINE([USE_OAUTH_CURL], 1, [Define to 1 to use libcurl for OAuth support.])
+  # OAuth requires python for testing
+  if test "$with_python" != yes; then
+    AC_MSG_WARN([*** OAuth support tests requires --with-python to run])
+  fi
 elif test x"$with_oauth" != x"no"; then
   AC_MSG_ERROR([--with-oauth must specify curl])
 fi

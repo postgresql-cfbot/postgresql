@@ -8444,6 +8444,11 @@ $as_echo "#define USE_OAUTH 1" >>confdefs.h
 
 $as_echo "#define USE_OAUTH_CURL 1" >>confdefs.h
 
+  # OAuth requires python for testing
+  if test "$with_python" != yes; then
+    { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: *** OAuth support tests requires --with-python to run" >&5
+$as_echo "$as_me: WARNING: *** OAuth support tests requires --with-python to run" >&2;}
+  fi
 elif test x"$with_oauth" != x"no"; then
   as_fn_error $? "--with-oauth must specify curl" "$LINENO" 5
 fi

@@ -115,11 +115,12 @@ ALTER ROLE { <replaceable class="parameter">role_specification</replaceable> | A
 
   <para>
    Superusers can change anyone's session defaults. Roles having
-   <literal>CREATEROLE</literal> privilege can change defaults for non-superuser
-   roles. Ordinary roles can only set defaults for themselves.
-   Certain configuration variables cannot be set this way, or can only be
-   set if a superuser issues the command.  Only superusers can change a setting
-   for all roles in all databases.
+   <literal>CREATEROLE</literal> privilege or which are a member of the
+   <literal>pg_change_role_settings</literal> predefined role can change
+   defaults for non-superuser roles. Ordinary roles can only set defaults for
+   themselves.  Certain configuration variables cannot be set this way, or can
+   only be set if a superuser issues the command.  Only superusers can change a
+   setting for all roles in all databases.
   </para>
  </refsect1>
 

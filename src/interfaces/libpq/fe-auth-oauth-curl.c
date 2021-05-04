@@ -145,7 +145,7 @@ free_token(struct token *tok)
 /* States for the overall async machine. */
 typedef enum
 {
-	OAUTH_STEP_INIT,
+	OAUTH_STEP_INIT = 0,
 	OAUTH_STEP_DISCOVERY,
 	OAUTH_STEP_DEVICE_AUTHORIZATION,
 	OAUTH_STEP_TOKEN_REQUEST,
@@ -1945,6 +1945,9 @@ handle_token_response(struct async_ctx *actx, char **token)
 	if (!finish_token_request(actx, &tok))
 		goto token_cleanup;
 
+	/* A successful token request gives either a token or an in-band error. */
+	Assert(tok.access_token || tok.err.error);
+
 	if (tok.access_token)
 	{
 		/* Construct our Bearer token. */
@@ -1973,13 +1976,6 @@ handle_token_response(struct async_ctx *actx, char **token)
 	 * anything else and we bail.
 	 */
 	err = &tok.err;
-	if (!err->error)
-	{
-		/* TODO test */
-		actx_error(actx, "unknown error");
-		goto token_cleanup;
-	}
-
 	if (strcmp(err->error, "authorization_pending") != 0 &&
 		strcmp(err->error, "slow_down") != 0)
 	{

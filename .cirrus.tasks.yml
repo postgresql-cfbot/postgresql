@@ -164,7 +164,7 @@ task:
     chown root:postgres /tmp/cores
     sysctl kern.corefile='/tmp/cores/%N.%P.core'
   setup_additional_packages_script: |
-    #pkg install -y ...
+    pkg install -y curl
 
   # NB: Intentionally build without -Dllvm. The freebsd image size is already
   # large enough to make VM startup slow, and even without llvm freebsd
@@ -176,6 +176,7 @@ task:
         -Dcassert=true -Dinjection_points=true \
         -Duuid=bsd -Dtcl_version=tcl86 -Ddtrace=auto \
         -DPG_TEST_EXTRA="$PG_TEST_EXTRA" \
+        -Doauth=curl \
         -Dextra_lib_dirs=/usr/local/lib -Dextra_include_dirs=/usr/local/include/ \
         build
     EOF
@@ -224,6 +225,7 @@ LINUX_CONFIGURE_FEATURES: &LINUX_CONFIGURE_FEATURES >-
   --with-libxslt
   --with-llvm
   --with-lz4
+  --with-oauth=curl
   --with-pam
   --with-perl
   --with-python
@@ -236,6 +238,7 @@ LINUX_CONFIGURE_FEATURES: &LINUX_CONFIGURE_FEATURES >-
 
 LINUX_MESON_FEATURES: &LINUX_MESON_FEATURES >-
   -Dllvm=enabled
+  -Doauth=curl
   -Duuid=e2fs
 
 
@@ -313,8 +316,10 @@ task:
     EOF
 
   setup_additional_packages_script: |
-    #apt-get update
-    #DEBIAN_FRONTEND=noninteractive apt-get -y install ...
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get -y install \
+      libcurl4-openssl-dev \
+      libcurl4-openssl-dev:i386 \
 
   matrix:
     - name: Linux - Debian Bookworm - Autoconf
@@ -691,8 +696,8 @@ task:
     folder: $CCACHE_DIR
 
   setup_additional_packages_script: |
-    #apt-get update
-    #DEBIAN_FRONTEND=noninteractive apt-get -y install ...
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get -y install libcurl4-openssl-dev
 
   ###
   # Test that code can be built with gcc/clang without warnings

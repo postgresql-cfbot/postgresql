@@ -1201,6 +1201,19 @@ include_dir 'conf.d'
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="guc-oauth-validator-library" xreflabel="oauth_validator_library">
+      <term><varname>oauth_validator_library</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>oauth_validator_library</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+	    TODO
+       </para>
+      </listitem>
+     </varlistentry>
      </variablelist>
      </sect2>
 

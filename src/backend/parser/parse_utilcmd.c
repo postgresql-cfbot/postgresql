@@ -176,7 +176,6 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	Oid			namespaceid;
 	Oid			existing_relid;
 	ParseCallbackState pcbstate;
-	bool		is_foreign_table = IsA(stmt, CreateForeignTableStmt);
 
 	/*
 	 * We must not scribble on the passed-in CreateStmt, so copy it.  (This is
@@ -227,16 +226,8 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 
 	/* Set up CreateStmtContext */
 	cxt.pstate = pstate;
-	if (IsA(stmt, CreateForeignTableStmt))
-	{
-		cxt.stmtType = "CREATE FOREIGN TABLE";
-		cxt.isforeign = true;
-	}
-	else
-	{
-		cxt.stmtType = "CREATE TABLE";
-		cxt.isforeign = false;
-	}
+	cxt.isforeign = IsA(stmt, CreateForeignTableStmt);
+	cxt.stmtType = cxt.isforeign ? "CREATE FOREIGN TABLE" : "CREATE TABLE";
 	cxt.relation = stmt->relation;
 	cxt.rel = NULL;
 	cxt.inhRelations = stmt->inhRelations;
@@ -333,8 +324,11 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 
 	/*
 	 * Postprocess check constraints.
+	 *
+	 * For regular tables all constraints can be marked valid immediately,
+	 * because the table must be empty.  Not so for foreign tables.
 	 */
-	transformCheckConstraints(&cxt, !is_foreign_table ? true : false);
+	transformCheckConstraints(&cxt, !cxt.isforeign);
 
 	/*
 	 * Postprocess extended statistics.

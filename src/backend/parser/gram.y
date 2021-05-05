@@ -425,6 +425,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				relation_expr_list dostmt_opt_list
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
+				optCompressionParameters
 				vacuum_relation_list opt_vacuum_relation_list
 				drop_option_list
 
@@ -609,7 +610,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
 
-%type <str>	optColumnCompression
+%type <node>	optColumnCompression
+%type <str>		compressionClause
 
 /*
  * Non-keyword token types.  These are hard-wired into the "flex" lexer.
@@ -2351,7 +2353,7 @@ alter_table_cmd:
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 					n->subtype = AT_SetCompression;
 					n->name = $3;
-					n->def = (Node *) makeString($5);
+					n->def = $5;
 					$$ = (Node *)n;
 				}
 			/* ALTER TABLE <name> DROP [COLUMN] IF EXISTS <colname> [RESTRICT|CASCADE] */
@@ -3474,7 +3476,7 @@ columnDef:	ColId Typename optColumnCompression create_generic_options ColQualLis
 					ColumnDef *n = makeNode(ColumnDef);
 					n->colname = $1;
 					n->typeName = $2;
-					n->compression = $3;
+					n->compression = (ColumnCompression *) $3;
 					n->inhcount = 0;
 					n->is_local = true;
 					n->is_not_null = false;
@@ -3529,13 +3531,25 @@ columnOptions:	ColId ColQualList
 				}
 		;
 
+compressionClause:
+			COMPRESSION name { $$ = pstrdup($2); }
+		;
+
+optCompressionParameters:
+			WITH '(' generic_option_list ')' { $$ = $3; }
+			| /*EMPTY*/	{ $$ = NULL; }
+		;
+
 optColumnCompression:
-					COMPRESSION name
-					{
-						$$ = $2;
-					}
-					| /*EMPTY*/	{ $$ = NULL; }
-				;
+			compressionClause optCompressionParameters
+				{
+					ColumnCompression *n = makeNode(ColumnCompression);
+					n->cmname = $1;
+					n->options = (List *) $2;
+					$$ = (Node *) n;
+				}
+			| /*EMPTY*/	{ $$ = NULL; }
+		;
 
 ColQualList:
 			ColQualList ColConstraint				{ $$ = lappend($1, $2); }

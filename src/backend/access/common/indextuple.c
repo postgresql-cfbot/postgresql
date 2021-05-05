@@ -21,6 +21,7 @@
 #include "access/htup_details.h"
 #include "access/itup.h"
 #include "access/toast_internals.h"
+#include "commands/defrem.h"
 
 /*
  * This enables de-toasting of index entries.  Needed until VACUUM is
@@ -104,6 +105,7 @@ index_form_tuple(TupleDesc tupleDescriptor,
 			 att->attstorage == TYPSTORAGE_MAIN))
 		{
 			Datum	cvalue;
+			List   *acoption = NULL;
 			char	compression = att->attcompression;
 
 			/*
@@ -114,8 +116,10 @@ index_form_tuple(TupleDesc tupleDescriptor,
 			 */
 			if (!CompressionMethodIsValid(compression))
 				compression = GetDefaultToastCompression();
+			else
+				acoption = GetAttributeCompressionOptions(att);
 
-			cvalue = toast_compress_datum(untoasted_values[i], compression);
+			cvalue = toast_compress_datum(untoasted_values[i], compression, acoption);
 
 			if (DatumGetPointer(cvalue) != NULL)
 			{

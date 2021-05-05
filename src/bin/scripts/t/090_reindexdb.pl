@@ -3,7 +3,7 @@ use warnings;
 
 use PostgresNode;
 use TestLib;
-use Test::More tests => 58;
+use Test::More tests => 70;
 
 program_help_ok('reindexdb');
 program_version_ok('reindexdb');
@@ -174,6 +174,9 @@ $node->command_fails(
 $node->command_fails(
 	[ 'reindexdb', '-j', '2', '-i', 'i1', 'postgres' ],
 	'parallel reindexdb cannot process indexes');
+$node->command_fails(
+	[ 'reindexdb', '-s', '--outdated' ],
+	'cannot reindex system catalog and filter indexes having outdated dependencies');
 $node->issues_sql_like(
 	[ 'reindexdb', '-j', '2', 'postgres' ],
 	qr/statement:\ REINDEX SYSTEM postgres;
@@ -196,3 +199,32 @@ $node->command_checks_all(
 		qr/^reindexdb: warning: cannot reindex system catalogs concurrently, skipping all/s
 	],
 	'parallel reindexdb for system with --concurrently skips catalogs');
+
+# Temporarily downgrade client-min-message to get the no-op report
+$ENV{PGOPTIONS} = '--client-min-messages=NOTICE';
+$node->command_checks_all(
+	[ 'reindexdb',  '--outdated', '-v', '-t', 's1.t1', 'postgres' ],
+	0,
+	[qr/^$/],
+	[qr/table "t1" has no indexes to reindex/],
+	'verbose reindexdb for outdated dependencies on a specific table reports no-op tables');
+
+$node->command_checks_all(
+	[ 'reindexdb',  '--outdated', '-v', '-d', 'postgres' ],
+	0,
+	[qr/^$/],
+	[qr/index "t2_id_idx" has no outdated dependency/],
+	'verbose reindexdb for outdated dependencies database wide reports all ignored indexes');
+$node->command_checks_all(
+	[ 'reindexdb',  '--outdated', '-v', '-j', '2', '-d', 'postgres' ],
+	0,
+	[qr/^$/],
+	[qr/table "t1" has no indexes to reindex/],
+	'parallel verbose reindexdb for outdated dependencies database wide reports no-op tables');
+
+# Switch back to WARNING client-min-message
+$ENV{PGOPTIONS} = '--client-min-messages=WARNING';
+$node->issues_sql_like(
+	[ 'reindexdb', '--outdated', '-t', 's1.t1', 'postgres' ],
+	qr/.*statement: REINDEX \(OUTDATED\) TABLE s1\.t1;/,
+	'reindexdb for outdated dependencies specify the OUTDATED keyword');

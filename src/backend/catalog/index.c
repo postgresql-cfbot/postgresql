@@ -101,6 +101,12 @@ typedef struct
 	Oid			pendingReindexedIndexes[FLEXIBLE_ARRAY_MEMBER];
 } SerializedReindexState;
 
+typedef struct
+{
+	Oid relid;	/* targetr index oid */
+	bool outdated;	/* depends on at least on deprecated collation? */
+} IndexHasOutdatedColl;
+
 /* non-export function prototypes */
 static bool relationHasPrimaryKey(Relation rel);
 static TupleDesc ConstructTupleDescriptor(Relation heapRelation,
@@ -1360,6 +1366,99 @@ index_check_collation_versions(Oid relid)
 	visitDependenciesOf(&object, &do_collation_version_check, &context);
 
 	list_free(context.warned_colls);
+}
+
+/*
+ * Detect if an index depends on at least one outdated collation.
+ * This is a callback for visitDependenciesOf().
+ */
+static bool
+do_check_index_has_outdated_collation(const ObjectAddress *otherObject,
+										const char *version,
+										char **new_version,
+										void *data)
+{
+	IndexHasOutdatedColl *context = data;
+	char *current_version;
+
+	/* We only care about dependencies on collations. */
+	if (otherObject->classId != CollationRelationId)
+		return false;
+
+	/* Fast exit if we already found a outdated collation version. */
+	if (context->outdated)
+		return false;
+
+	/* Ask the provider for the current version.  Give up if unsupported. */
+	current_version = get_collation_version_for_oid(otherObject->objectId,
+													false);
+	if (!current_version)
+		return false;
+
+	if (!version || strcmp(version, current_version) != 0)
+		context->outdated = true;
+
+	return false;
+}
+
+/*
+ * SQL wrapper around index_has_outdated_dependency.
+ */
+Datum
+pg_index_has_outdated_dependency(PG_FUNCTION_ARGS)
+{
+	Oid			indexOid = PG_GETARG_OID(0);
+	Relation	rel;
+	bool		res;
+
+	rel = try_index_open(indexOid, AccessShareLock);
+
+	if (rel == NULL)
+		PG_RETURN_NULL();
+
+	res = index_has_outdated_dependency(indexOid);
+
+	relation_close(rel, AccessShareLock);
+
+	PG_RETURN_BOOL(res);
+}
+
+/*
+ * Check whether the given index has a dependency with an outdated
+ * collation version.
+ * Caller must hold a suitable lock and make sure that the given Oid belongs to
+ * an index.
+ */
+bool
+index_has_outdated_collation(Oid indexOid)
+{
+	ObjectAddress object;
+	IndexHasOutdatedColl context;
+
+	object.classId = RelationRelationId;
+	object.objectId = indexOid;
+	object.objectSubId = 0;
+
+	context.relid = indexOid;
+	context.outdated = false;
+
+	visitDependenciesOf(&object, &do_check_index_has_outdated_collation,
+						&context);
+
+	return context.outdated;
+}
+
+/*
+ * Check whether the given index has a dependency with an outdated
+ * refobjversion.
+ * Caller must hold a suitable lock and make sure that the given Oid belongs to
+ * an index.
+ * For now, only dependency on collations are supported.
+ */
+bool
+index_has_outdated_dependency(Oid indexOid)
+{
+	return index_has_outdated_collation(indexOid);
 }
 
 /*
@@ -4002,7 +4101,7 @@ reindex_relation(Oid relid, int flags, ReindexParams *params)
 	 * relcache to get this with a sequential scan if ignoring system
 	 * indexes.)
 	 */
-	indexIds = RelationGetIndexList(rel);
+	indexIds = RelationGetIndexListFiltered(rel, params->options);
 
 	if (flags & REINDEX_REL_SUPPRESS_INDEX_USE)
 	{

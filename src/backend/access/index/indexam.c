@@ -146,6 +146,65 @@ index_open(Oid relationId, LOCKMODE lockmode)
 }
 
 /* ----------------
+ *		try_index_open - open an index relation by relation OID
+ *
+ *		Same as index_open, except return NULL instead of failing
+ *		if the index does not exist.
+ * ----------------
+ */
+Relation
+try_index_open(Oid relationId, LOCKMODE lockmode)
+{
+	Relation	r;
+
+	Assert(lockmode >= NoLock && lockmode < MAX_LOCKMODES);
+
+	/* Get the lock first */
+	if (lockmode != NoLock)
+		LockRelationOid(relationId, lockmode);
+
+	/*
+	 * Now that we have the lock, probe to see if the relation really exists
+	 * or not.
+	 */
+	if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relationId)))
+	{
+		/* Release useless lock */
+		if (lockmode != NoLock)
+			UnlockRelationOid(relationId, lockmode);
+
+		return NULL;
+	}
+
+	/* Should be safe to do a relcache load */
+	r = RelationIdGetRelation(relationId);
+
+	if (!RelationIsValid(r))
+		elog(ERROR, "could not open relation with OID %u", relationId);
+
+	/* If we didn't get the lock ourselves, assert that caller holds one */
+	Assert(lockmode != NoLock ||
+		   CheckRelationLockedByMe(r, AccessShareLock, true));
+
+	if (r->rd_rel->relkind != RELKIND_INDEX &&
+		r->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("\"%s\" is not an index",
+						RelationGetRelationName(r))));
+	}
+
+	/* Make note that we've accessed a temporary relation */
+	if (RelationUsesLocalBuffers(r))
+		MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPNAMESPACE;
+
+	pgstat_initstats(r);
+
+	return r;
+}
+
+/* ----------------
  *		index_close - close an index relation
  *
  *		If lockmode is not "NoLock", we then release the specified lock.

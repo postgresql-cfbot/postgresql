@@ -4328,6 +4328,143 @@ arraycontained(PG_FUNCTION_ARGS)
 }
 
 
+/*
+ * array_contains_elem : checks an array for a specific element
+ * adapted from array_contain_compare() for containment of a single element
+ */
+static bool
+array_contains_elem(AnyArrayType *array, Datum elem, Oid elemtype,
+					Oid collation,	void **fn_extra)
+{
+	LOCAL_FCINFO(locfcinfo, 2);
+	Oid 		arrtype = AARR_ELEMTYPE(array);
+	TypeCacheEntry *typentry;
+	int 		nelems;
+	int			typlen;
+	bool		typbyval;
+	char		typalign;
+	int			i;
+	array_iter 	it;
+
+	if (arrtype != elemtype)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATATYPE_MISMATCH),
+				 errmsg("cannot compare arrays elements with element of different type")));
+
+	/*
+	 * We arrange to look up the equality function only once per series of
+	 * calls, assuming the element type doesn't change underneath us.  The
+	 * typcache is used so that we have no memory leakage when being used as
+	 * an index support function.
+	 */
+	typentry = (TypeCacheEntry *) *fn_extra;
+	if (typentry == NULL ||
+		typentry->type_id != arrtype)
+	{
+		typentry = lookup_type_cache(arrtype,
+									 TYPECACHE_EQ_OPR_FINFO);
+		if (!OidIsValid(typentry->eq_opr_finfo.fn_oid))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_FUNCTION),
+					 errmsg("could not identify an equality operator for type %s",
+							format_type_be(arrtype))));
+		*fn_extra = (void *) typentry;
+	}
+	typlen = typentry->typlen;
+	typbyval = typentry->typbyval;
+	typalign = typentry->typalign;
+
+	/*
+	 * Apply the comparison operator for the passed element against each
+	 * element in the array
+	 */
+	InitFunctionCallInfoData(*locfcinfo, &typentry->eq_opr_finfo, 2,
+							 collation, NULL, NULL);
+
+	/* Loop over source data */
+	nelems = ArrayGetNItems(AARR_NDIM(array), AARR_DIMS(array));
+	array_iter_setup(&it, array);
+
+	for (i = 0; i < nelems; i++)
+	{
+		Datum elt;
+		bool isnull;
+		bool oprresult;
+
+		/* Get element, checking for NULL */
+		elt = array_iter_next(&it, &isnull, i, typlen, typbyval, typalign);
+
+		/*
+		 * We assume that the comparison operator is strict, so a NULL can't
+		 * match anything. refer to the comment in array_contain_compare()
+		 */
+		if (isnull)
+			continue;
+
+		/*
+		 * Apply the operator to the element pair; treat NULL as false
+		 */
+		locfcinfo->args[0].value = elt;
+		locfcinfo->args[0].isnull = false;
+		locfcinfo->args[1].value = elem;
+		locfcinfo->args[1].isnull = false;
+		locfcinfo->isnull = false;
+		oprresult = DatumGetBool(FunctionCallInvoke(locfcinfo));
+		if (!locfcinfo->isnull && oprresult)
+			return true;
+	}
+
+	return false;
+}
+
+Datum
+arraycontainselem(PG_FUNCTION_ARGS)
+{
+	AnyArrayType *array = PG_GETARG_ANY_ARRAY_P(0);
+	Datum elem = PG_GETARG_DATUM(1);
+	Oid	elemtype = get_fn_expr_argtype(fcinfo->flinfo, 1);
+	Oid collation = PG_GET_COLLATION();
+	bool result;
+
+	/*
+	 * we don't need to check if the elem is null or if the elem datatype and
+	 * array datatype match since this is handled within internal calls already
+	 * (a property of polymorphic functions)
+	 */
+
+	result = array_contains_elem(array, elem, elemtype, collation,
+								 &fcinfo->flinfo->fn_extra);
+
+	/* Avoid leaking memory when handed toasted input */
+	AARR_FREE_IF_COPY(array, 0);
+
+	PG_RETURN_BOOL(result);
+}
+
+Datum
+arrayelemcontained(PG_FUNCTION_ARGS)
+{
+	AnyArrayType *array = PG_GETARG_ANY_ARRAY_P(1);
+	Datum elem = PG_GETARG_DATUM(0);
+	Oid	elemtype = get_fn_expr_argtype(fcinfo->flinfo, 0);
+	Oid collation = PG_GET_COLLATION();
+	bool result;
+
+	/*
+	 * we don't need to check if the elem is null or if the elem datatype and
+	 * array datatype match since this is handled within internal calls already
+	 * (a property of polymorphic functions)
+	 */
+
+	result = array_contains_elem(array, elem, elemtype, collation,
+								 &fcinfo->flinfo->fn_extra);
+
+	/* Avoid leaking memory when handed toasted input */
+	AARR_FREE_IF_COPY(array, 1);
+
+	PG_RETURN_BOOL(result);
+}
+
 /*-----------------------------------------------------------------------------
  * Array iteration functions
  *		These functions are used to iterate efficiently through arrays

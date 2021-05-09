@@ -121,8 +121,18 @@ CATALOG(pg_constraint,2606,ConstraintRelationId)
 	int16		confkey[1];
 
 	/*
+	 * If a foreign key, the reference semantics for each column.
+	 * 'p' to signify plain foreign key
+	 * 'e' to signify each element foreign key array
+	 */
+	char		confreftype[1];
+
+	/*
 	 * If a foreign key, the OIDs of the PK = FK equality operators for each
 	 * column of the constraint
+	 *
+	 * Note: for Array Element Foreign Keys, all these operators are for the
+	 * array's element type.
 	 */
 	Oid			conpfeqop[1] BKI_LOOKUP(pg_operator);
 
@@ -219,6 +229,7 @@ extern Oid	CreateConstraintEntry(const char *constraintName,
 								  Oid indexRelId,
 								  Oid foreignRelId,
 								  const int16 *foreignKey,
+								  const char *foreignRefType,
 								  const Oid *pfEqOp,
 								  const Oid *ppEqOp,
 								  const Oid *ffEqOp,
@@ -259,7 +270,8 @@ extern Bitmapset *get_primary_key_attnos(Oid relid, bool deferrableOk,
 										 Oid *constraintOid);
 extern void DeconstructFkConstraintRow(HeapTuple tuple, int *numfks,
 									   AttrNumber *conkey, AttrNumber *confkey,
-									   Oid *pf_eq_oprs, Oid *pp_eq_oprs, Oid *ff_eq_oprs);
+									   Oid *pf_eq_oprs, Oid *pp_eq_oprs, Oid *ff_eq_oprs,
+									   char *fk_reftypes);
 
 extern bool check_functional_grouping(Oid relid,
 									  Index varno, Index varlevelsup,

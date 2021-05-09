@@ -62,6 +62,7 @@ CreateConstraintEntry(const char *constraintName,
 					  Oid indexRelId,
 					  Oid foreignRelId,
 					  const int16 *foreignKey,
+					  const char *foreignRefType,
 					  const Oid *pfEqOp,
 					  const Oid *ppEqOp,
 					  const Oid *ffEqOp,
@@ -84,6 +85,7 @@ CreateConstraintEntry(const char *constraintName,
 	Datum		values[Natts_pg_constraint];
 	ArrayType  *conkeyArray;
 	ArrayType  *confkeyArray;
+	ArrayType  *confreftypeArray;
 	ArrayType  *conpfeqopArray;
 	ArrayType  *conppeqopArray;
 	ArrayType  *conffeqopArray;
@@ -123,7 +125,11 @@ CreateConstraintEntry(const char *constraintName,
 		for (i = 0; i < foreignNKeys; i++)
 			fkdatums[i] = Int16GetDatum(foreignKey[i]);
 		confkeyArray = construct_array(fkdatums, foreignNKeys,
-									   INT2OID, 2, true, TYPALIGN_SHORT);
+									   INT2OID, sizeof(int16), true, TYPALIGN_SHORT);
+		for (i = 0; i < foreignNKeys; i++)
+			fkdatums[i] = CharGetDatum(foreignRefType[i]);
+		confreftypeArray = construct_array(fkdatums, foreignNKeys,
+										   CHAROID, sizeof(char), true, TYPALIGN_CHAR);
 		for (i = 0; i < foreignNKeys; i++)
 			fkdatums[i] = ObjectIdGetDatum(pfEqOp[i]);
 		conpfeqopArray = construct_array(fkdatums, foreignNKeys,
@@ -140,6 +146,7 @@ CreateConstraintEntry(const char *constraintName,
 	else
 	{
 		confkeyArray = NULL;
+		confreftypeArray = NULL;
 		conpfeqopArray = NULL;
 		conppeqopArray = NULL;
 		conffeqopArray = NULL;
@@ -195,6 +202,11 @@ CreateConstraintEntry(const char *constraintName,
 		values[Anum_pg_constraint_confkey - 1] = PointerGetDatum(confkeyArray);
 	else
 		nulls[Anum_pg_constraint_confkey - 1] = true;
+
+	if (confreftypeArray)
+		values[Anum_pg_constraint_confreftype - 1] = PointerGetDatum(confreftypeArray);
+	else
+		nulls[Anum_pg_constraint_confreftype - 1] = true;
 
 	if (conpfeqopArray)
 		values[Anum_pg_constraint_conpfeqop - 1] = PointerGetDatum(conpfeqopArray);
@@ -1163,7 +1175,8 @@ get_primary_key_attnos(Oid relid, bool deferrableOk, Oid *constraintOid)
 void
 DeconstructFkConstraintRow(HeapTuple tuple, int *numfks,
 						   AttrNumber *conkey, AttrNumber *confkey,
-						   Oid *pf_eq_oprs, Oid *pp_eq_oprs, Oid *ff_eq_oprs)
+						   Oid *pf_eq_oprs, Oid *pp_eq_oprs, Oid *ff_eq_oprs,
+						   char *fk_reftypes)
 {
 	Oid			constrId;
 	Datum		adatum;
@@ -1207,6 +1220,25 @@ DeconstructFkConstraintRow(HeapTuple tuple, int *numfks,
 	memcpy(confkey, ARR_DATA_PTR(arr), numkeys * sizeof(int16));
 	if ((Pointer) arr != DatumGetPointer(adatum))
 		pfree(arr);				/* free de-toasted copy, if any */
+
+	if (fk_reftypes)
+	{
+		adatum = SysCacheGetAttr(CONSTROID, tuple,
+								 Anum_pg_constraint_confreftype, &isNull);
+		if (isNull)
+			elog(ERROR, "null confreftype for constraint %u", constrId);
+		arr = DatumGetArrayTypeP(adatum);	/* ensure not toasted */
+		if (ARR_NDIM(arr) != 1 ||
+			ARR_ELEMTYPE(arr) != CHAROID)
+			elog(ERROR, "confreftype is not a 1-D char array");
+		if (ARR_HASNULL(arr))
+			elog(ERROR, "confreftype contains nulls");
+		if (ARR_DIMS(arr)[0] != numkeys)
+			elog(ERROR, "confreftype length does not equal the number of foreign keys");
+		memcpy(fk_reftypes, ARR_DATA_PTR(arr), numkeys * sizeof(char));
+		if ((Pointer) arr != DatumGetPointer(adatum))
+			pfree(arr);				/* free de-toasted copy, if any */
+	}
 
 	if (pf_eq_oprs)
 	{

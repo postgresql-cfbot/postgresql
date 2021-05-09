@@ -2761,7 +2761,7 @@
   oprresult => 'bool', oprcode => 'circle_overabove', oprrest => 'positionsel',
   oprjoin => 'positionjoinsel' },
 
-# overlap/contains/contained for arrays
+# overlap/contains/contained/elemcontained/containselem for arrays
 { oid => '2750', oid_symbol => 'OID_ARRAY_OVERLAP_OP', descr => 'overlaps',
   oprname => '&&', oprleft => 'anyarray', oprright => 'anyarray',
   oprresult => 'bool', oprcom => '&&(anyarray,anyarray)',
@@ -2777,6 +2777,18 @@
   oprname => '<@', oprleft => 'anyarray', oprright => 'anyarray',
   oprresult => 'bool', oprcom => '@>(anyarray,anyarray)',
   oprcode => 'arraycontained', oprrest => 'arraycontsel',
+  oprjoin => 'arraycontjoinsel' },
+{ oid => '6108', oid_symbol => 'OID_ARRAY_ELEMCONTAINED_OP',
+  descr => 'elem is contained by',
+  oprname => '<<@', oprleft => 'anyelement', oprright => 'anyarray',
+  oprresult => 'bool', oprcom => '@>>(anyarray,anyelement)',
+  oprcode => 'arrayelemcontained', oprrest => 'arraycontsel',
+  oprjoin => 'arraycontjoinsel' },
+{ oid => '6105', oid_symbol => 'OID_ARRAY_CONTAINSELEM_OP',
+  descr => 'contains elem',
+  oprname => '@>>', oprleft => 'anyarray', oprright => 'anyelement',
+  oprresult => 'bool', oprcom => '<<@(anyelement,anyarray)',
+  oprcode => 'arraycontainselem', oprrest => 'arraycontsel',
   oprjoin => 'arraycontjoinsel' },
 
 # capturing operators to preserve pre-8.3 behavior of text concatenation

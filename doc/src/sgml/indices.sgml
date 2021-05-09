@@ -326,7 +326,7 @@ SELECT * FROM places ORDER BY location <-> point '(101,456)' LIMIT 10;
    for arrays, which supports indexed queries using these operators:
 
 <synopsis>
-&lt;@ &nbsp; @&gt; &nbsp; = &nbsp; &amp;&amp;
+&lt;@ &nbsp; @&gt; &nbsp; &lt;&lt;@ &nbsp; @&gt;&gt; &nbsp; = &nbsp; &amp;&amp;
 </synopsis>
 
    (See <xref linkend="functions-array"/> for the meaning of

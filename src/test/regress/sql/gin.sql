@@ -41,6 +41,22 @@ select count(*) from gin_test_tbl where i @> array[1, 999];
 
 select count(*) from gin_test_tbl where i @> array[1, 999];
 
+explain (costs off)
+select count(*) from gin_test_tbl where i @>> 1;
+explain (costs off)
+select count(*) from gin_test_tbl where i @>> 999;
+
+select count(*) from gin_test_tbl where i @>> 1;
+select count(*) from gin_test_tbl where i @>> 999;
+
+explain (costs off)
+select count(*) from gin_test_tbl where 1 <<@ i;
+explain (costs off)
+select count(*) from gin_test_tbl where 999 <<@ i;
+
+select count(*) from gin_test_tbl where 1 <<@ i;
+select count(*) from gin_test_tbl where 999 <<@ i;
+
 -- Very weak test for gin_fuzzy_search_limit
 set gin_fuzzy_search_limit = 1000;
 

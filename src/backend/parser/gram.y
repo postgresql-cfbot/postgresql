@@ -141,6 +141,19 @@ typedef struct GroupClause
 	List   *list;
 } GroupClause;
 
+/*
+ * Private struct for the result of foreign_key_column_elem production contains
+ * reftype that denotes type of foreign key; can be one of the following:
+ *
+ * FKCONSTR_REF_PLAIN 			plain foreign keys
+ * FKCONSTR_REF_EACH_ELEMENT	foreign key arrays
+ */
+typedef struct FKColElem
+{
+	Node	   *name;			/* name of the column (a String) */
+	char		reftype;		/* FKCONSTR_REF_xxx code */
+} FKColElem;
+
 /* ConstraintAttributeSpec yields an integer bitmask of these flags: */
 #define CAS_NOT_DEFERRABLE			0x01
 #define CAS_DEFERRABLE				0x02
@@ -198,6 +211,7 @@ static RangeVar *makeRangeVarFromAnyName(List *names, int position, core_yyscan_
 static void SplitColQualList(List *qualList,
 							 List **constraintList, CollateClause **collClause,
 							 core_yyscan_t yyscanner);
+static void SplitFKColElems(List *fkcolelems, List **names, List **reftypes);
 static void processCASbits(int cas_bits, int location, const char *constrType,
 			   bool *deferrable, bool *initdeferred, bool *not_valid,
 			   bool *no_inherit, core_yyscan_t yyscanner);
@@ -249,6 +263,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	A_Indices			*aind;
 	ResTarget			*target;
 	struct PrivTarget	*privtarget;
+	struct FKColElem	*fkcolelem;
 	AccessPriv			*accesspriv;
 	struct ImportQual	*importqual;
 	InsertStmt			*istmt;
@@ -385,6 +400,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <accesspriv> privilege
 %type <list>	privileges privilege_list
 %type <privtarget> privilege_target
+%type <fkcolelem> foreign_key_column_elem
 %type <objwithargs> function_with_argtypes aggregate_with_argtypes operator_with_argtypes procedure_with_argtypes function_with_argtypes_common
 %type <list>	function_with_argtypes_list aggregate_with_argtypes_list operator_with_argtypes_list procedure_with_argtypes_list
 %type <ival>	defacl_privilege_target
@@ -422,7 +438,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				execute_param_clause using_clause returning_clause
 				opt_enum_val_list enum_val_list table_func_column_list
 				create_generic_options alter_generic_options
-				relation_expr_list dostmt_opt_list
+				relation_expr_list dostmt_opt_list foreign_key_column_list
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
 				vacuum_relation_list opt_vacuum_relation_list
@@ -657,7 +673,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
 	DOUBLE_P DROP
 
-	EACH ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVENT EXCEPT
+	EACH ELEMENT ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVENT EXCEPT
 	EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN EXPRESSION
 	EXTENSION EXTERNAL EXTRACT
 
@@ -3671,8 +3687,10 @@ ColConstraintElem:
 					n->contype = CONSTR_FOREIGN;
 					n->location = @1;
 					n->pktable			= $2;
+					/* fk_attrs will be filled in by parse analysis */
 					n->fk_attrs			= NIL;
 					n->pk_attrs			= $3;
+					n->fk_reftypes		= list_make1_int(FKCONSTR_REF_PLAIN);
 					n->fk_matchtype		= $4;
 					n->fk_upd_action	= (char) ($5 >> 8);
 					n->fk_del_action	= (char) ($5 & 0xFF);
@@ -3875,14 +3893,15 @@ ConstraintElem:
 								   NULL, yyscanner);
 					$$ = (Node *)n;
 				}
-			| FOREIGN KEY '(' columnList ')' REFERENCES qualified_name
-				opt_column_list key_match key_actions ConstraintAttributeSpec
+			| FOREIGN KEY '(' foreign_key_column_list ')' REFERENCES
+				qualified_name opt_column_list key_match key_actions
+				ConstraintAttributeSpec
 				{
 					Constraint *n = makeNode(Constraint);
 					n->contype = CONSTR_FOREIGN;
 					n->location = @1;
+					SplitFKColElems($4, &n->fk_attrs, &n->fk_reftypes);
 					n->pktable			= $7;
-					n->fk_attrs			= $4;
 					n->pk_attrs			= $8;
 					n->fk_matchtype		= $9;
 					n->fk_upd_action	= (char) ($10 >> 8);
@@ -3913,6 +3932,30 @@ columnList:
 columnElem: ColId
 				{
 					$$ = (Node *) makeString($1);
+				}
+		;
+
+foreign_key_column_list:
+			foreign_key_column_elem
+				{ $$ = list_make1($1); }
+			| foreign_key_column_list ',' foreign_key_column_elem
+				{ $$ = lappend($1, $3); }
+		;
+
+foreign_key_column_elem:
+			ColId
+				{
+					FKColElem *n = (FKColElem *) palloc(sizeof(FKColElem));
+					n->name = (Node *) makeString($1);
+					n->reftype = FKCONSTR_REF_PLAIN;
+					$$ = n;
+				}
+			| EACH ELEMENT OF ColId
+				{
+					FKColElem *n = (FKColElem *) palloc(sizeof(FKColElem));
+					n->name = (Node *) makeString($4);
+					n->reftype = FKCONSTR_REF_EACH_ELEMENT;
+					$$ = n;
 				}
 		;
 
@@ -15566,6 +15609,7 @@ unreserved_keyword:
 			| DOUBLE_P
 			| DROP
 			| EACH
+			| ELEMENT
 			| ENABLE_P
 			| ENCODING
 			| ENCRYPTED
@@ -16107,6 +16151,7 @@ bare_label_keyword:
 			| DOUBLE_P
 			| DROP
 			| EACH
+			| ELEMENT
 			| ELSE
 			| ENABLE_P
 			| ENCODING
@@ -17126,6 +17171,24 @@ SplitColQualList(List *qualList,
 		qualList = foreach_delete_current(qualList, cell);
 	}
 	*constraintList = qualList;
+}
+
+/* Split a list of FKColElem structs into separate name and reftype lists */
+static void
+SplitFKColElems(List *fkcolelems, List **names, List **reftypes)
+{
+	ListCell   *lc;
+
+	*names = NIL;
+	*reftypes = NIL;
+
+	foreach(lc, fkcolelems)
+	{
+		FKColElem *fkcolelem = (FKColElem *) lfirst(lc);
+
+		*names = lappend(*names, fkcolelem->name);
+		*reftypes = lappend_int(*reftypes, fkcolelem->reftype);
+	}
 }
 
 /*

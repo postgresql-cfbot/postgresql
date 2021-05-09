@@ -17679,6 +17679,34 @@ SELECT NULLIF(value, '(none)') ...
 
       <row>
        <entry role="func_table_entry"><para role="func_signature">
+        <type>anyarray</type> <literal>@&gt;&gt;</literal> <type>anyelement</type>
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Does the array contain the specified element?
+       </para>
+       <para>
+        <literal>ARRAY[1,4,3] @&gt;&gt; 3</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <type>anyelement</type> <literal>&lt;&lt;@</literal> <type>anyarray</type>
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Is the specified element contained in the array?
+       </para>
+       <para>
+        <literal>2 &lt;&lt;@ ARRAY[1,7,4,2,6]</literal>
+        <returnvalue>t</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
         <type>anyarray</type> <literal>&amp;&amp;</literal> <type>anyarray</type>
         <returnvalue>boolean</returnvalue>
        </para>

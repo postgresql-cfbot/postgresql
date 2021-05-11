@@ -9,7 +9,15 @@
 
 #include "postgres.h"
 
-#ifdef LOWER_NODE
+/*
+ * Below we ignore the fact that LOWER_NODE is defined when compiling with
+ * MSVC.  The reason for this is that earlier versions of the MSVC build
+ * scripts failed to define LOWER_NODE.  More recent version of the MSVC
+ * build scripts parse makefiles which results in LOWER_NODE now being
+ * defined.  We check for _MSC_VER here so as not to break pg_upgrade when
+ * upgrading from versions MSVC versions where LOWER_NODE was not defined.
+ */
+#if defined(LOWER_NODE) && !defined(_MSC_VER)
 #include <ctype.h>
 #define TOLOWER(x)	tolower((unsigned char) (x))
 #else

@@ -30,7 +30,7 @@ sub _new
 		references            => [],
 		libraries             => [],
 		suffixlib             => [],
-		includes              => '',
+		includes              => [],
 		prefixincludes        => '',
 		defines               => ';',
 		solution              => $solution,
@@ -45,9 +45,22 @@ sub _new
 
 sub AddFile
 {
-	my ($self, $filename) = @_;
+	my ($self, $filename, $alwaysAddOriginal) = @_;
 
+	FindAndAddAdditionalFiles($self, $filename);
+	# Add the original file regardless to the return value of
+	# FindAndAddAdditionalFiles
 	$self->{files}->{$filename} = 1;
+	return;
+}
+
+sub AddFileConditional
+{
+	my ($self, $filename) = @_;
+	if (FindAndAddAdditionalFiles($self, $filename) != 1)
+	{
+		$self->{files}->{$filename} = 1;
+	}
 	return;
 }
 
@@ -58,9 +71,37 @@ sub AddFiles
 
 	while (my $f = shift)
 	{
-		$self->{files}->{ $dir . "/" . $f } = 1;
+		AddFile($self, $dir . "/" . $f, 1);
 	}
 	return;
+}
+
+# Handle makefile rules for when file to be added to the project
+# does not exist.  Returns 1 when the original file add should be
+# skipped.
+sub FindAndAddAdditionalFiles
+{
+	my $self = shift;
+	my $fname = shift;
+	$fname =~ /(.*)(\.[^.]+)$/;
+	my $filenoext = $1;
+	my $fileext = $2;
+
+	# For .c files, check if either a .l or .y file of the same name
+	# exists and add that too.
+	if ($fileext eq ".c")
+	{
+		for my $ext (".l", ".y")
+		{
+			my $file = $filenoext . $ext;
+			if (-e $file)
+			{
+				AddFileConditional($self, $file);
+				return 1;
+			}
+		}
+	}
+	return 0;
 }
 
 sub ReplaceFile
@@ -77,14 +118,14 @@ sub ReplaceFile
 			if ($file eq $filename)
 			{
 				delete $self->{files}{$file};
-				$self->{files}{$newname} = 1;
+				AddFile($self, $newname);
 				return;
 			}
 		}
 		elsif ($file =~ m/($re)/)
 		{
 			delete $self->{files}{$file};
-			$self->{files}{"$newname/$filename"} = 1;
+			AddFile($self, "$newname/$filename");
 			return;
 		}
 	}
@@ -124,7 +165,10 @@ sub AddReference
 
 	while (my $ref = shift)
 	{
-		push @{ $self->{references} }, $ref;
+		if (! grep { $_ eq $ref} @{ $self->{references} })
+		{
+			push @{ $self->{references} }, $ref;
+		}
 		$self->AddLibrary(
 			"__CFGNAME__/" . $ref->{name} . "/" . $ref->{name} . ".lib");
 	}
@@ -141,7 +185,11 @@ sub AddLibrary
 		$lib = '&quot;' . $lib . "&quot;";
 	}
 
-	push @{ $self->{libraries} }, $lib;
+	if (! grep { $_ eq $lib} @{ $self->{libraries} })
+	{
+		push @{ $self->{libraries} }, $lib;
+	}
+
 	if ($dbgsuffix)
 	{
 		push @{ $self->{suffixlib} }, $lib;
@@ -151,13 +199,15 @@ sub AddLibrary
 
 sub AddIncludeDir
 {
-	my ($self, $inc) = @_;
+	my ($self, $incstr) = @_;
 
-	if ($self->{includes} ne '')
+	foreach my $inc (split(/;/, $incstr))
 	{
-		$self->{includes} .= ';';
+		if (! grep { $_ eq $inc} @{ $self->{includes} })
+		{
+			push @{ $self->{includes} }, $inc;
+		}
 	}
-	$self->{includes} .= $inc;
 	return;
 }
 
@@ -259,11 +309,11 @@ sub AddDir
 			if ($f =~ /^\$\(top_builddir\)\/(.*)/)
 			{
 				$f = $1;
-				$self->{files}->{$f} = 1;
+				AddFile($self, $f);
 			}
 			else
 			{
-				$self->{files}->{"$reldir/$f"} = 1;
+				AddFile($self, "$reldir/$f");
 			}
 		}
 		$mf =~ s{OBJS[^=]*=\s*(.*)$}{}m;

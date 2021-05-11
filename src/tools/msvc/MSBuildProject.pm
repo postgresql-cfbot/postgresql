@@ -313,11 +313,12 @@ sub WriteItemDefinitionGroup
 	my $targetmachine =
 	  $self->{platform} eq 'Win32' ? 'MachineX86' : 'MachineX64';
 
-	my $includes = $self->{includes};
-	unless ($includes eq '' or $includes =~ /;$/)
+	my $includes = "";
+	foreach my $inc (@{ $self->{includes} })
 	{
-		$includes .= ';';
+		$includes .= $inc . ";";
 	}
+
 	print $f <<EOF;
   <ItemDefinitionGroup Condition="'\$(Configuration)|\$(Platform)'=='$cfgname|$self->{platform}'">
     <ClCompile>

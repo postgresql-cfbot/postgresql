@@ -20,7 +20,7 @@ env:
   MTEST_ARGS: --print-errorlogs --no-rebuild -C build
   PGCTLTIMEOUT: 120 # avoids spurious failures during parallel tests
   TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/src/tools/ci/pg_ci_base.conf
-  PG_TEST_EXTRA: kerberos ldap ssl libpq_encryption load_balance
+  PG_TEST_EXTRA: kerberos ldap ssl libpq_encryption load_balance python
 
 
 # What files to preserve in case tests fail
@@ -320,6 +320,7 @@ task:
     DEBIAN_FRONTEND=noninteractive apt-get -y install \
       libcurl4-openssl-dev \
       libcurl4-openssl-dev:i386 \
+      python3-venv \
 
   matrix:
     - name: Linux - Debian Bookworm - Autoconf
@@ -375,6 +376,8 @@ task:
 
       # Also build & test in a 32bit build - it's gotten rare to test that
       # locally.
+      # XXX 32-bit Python tests are currently disabled, as the system's 64-bit
+      # Python modules can't link against libpq.
       configure_32_script: |
         su postgres <<-EOF
           export CC='ccache gcc -m32'
@@ -385,7 +388,7 @@ task:
             -Dllvm=disabled \
             --pkg-config-path /usr/lib/i386-linux-gnu/pkgconfig/ \
             -DPERL=perl5.36-i386-linux-gnu \
-            -DPG_TEST_EXTRA="$PG_TEST_EXTRA" \
+            -DPG_TEST_EXTRA="${PG_TEST_EXTRA//"python"}" \
             build-32
         EOF
 

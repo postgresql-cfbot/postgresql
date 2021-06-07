@@ -18,6 +18,7 @@
 #include "access/genam.h"
 #include "access/heapam.h"
 #include "access/heapam_xlog.h"
+#include "access/heaptoast.h"
 #include "access/multixact.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
@@ -176,6 +177,7 @@ typedef struct AlteredTableInfo
 	List	   *afterStmts;		/* List of utility command parsetrees */
 	bool		verify_new_notnull; /* T if we should recheck NOT NULL */
 	int			rewrite;		/* Reason for forced rewrite, if any */
+	Oid			newAccessMethod;	/* new table access method; 0 means no change */
 	Oid			newTableSpace;	/* new tablespace; 0 means no change */
 	bool		chgPersistence; /* T if SET LOGGED/UNLOGGED is used */
 	char		newrelpersistence;	/* if above is true */
@@ -542,6 +544,8 @@ static void ATExecDropCluster(Relation rel, LOCKMODE lockmode);
 static bool ATPrepChangePersistence(Relation rel, bool toLogged);
 static void ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel,
 								const char *tablespacename, LOCKMODE lockmode);
+static void ATPrepSetAccessMethod(AlteredTableInfo *tab, Relation rel, const char *amname, LOCKMODE lockmode);
+static void ATExecSetAccessMethodNoStorage(Relation rel, Oid newAccessMethod);
 static void ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode);
 static void ATExecSetTableSpaceNoStorage(Relation rel, Oid newTableSpace);
 static void ATExecSetRelOptions(Relation rel, List *defList,
@@ -645,7 +649,6 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	Oid			ofTypeId;
 	ObjectAddress address;
 	LOCKMODE	parentLockmode;
-	const char *accessMethod = NULL;
 	Oid			accessMethodId = InvalidOid;
 
 	/*
@@ -907,23 +910,23 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 * a type of relation that needs one, use the default.
 	 */
 	if (stmt->accessMethod != NULL)
+		accessMethodId = get_table_am_oid(stmt->accessMethod, false);
+	else if (stmt->partbound && relkind == RELKIND_RELATION)
 	{
-		accessMethod = stmt->accessMethod;
-
-		if (partitioned)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("specifying a table access method is not supported on a partitioned table")));
-
+		/*
+		 * For partitioned tables, when no access method is specified, we
+		 * default to the parent table's AM.
+		 */
+		Assert(list_length(inheritOids) == 1);
+		accessMethodId = get_rel_relam(linitial_oid(inheritOids));
+		if (!OidIsValid(accessMethodId))
+			accessMethodId = get_table_am_oid(default_table_access_method, false);
 	}
 	else if (relkind == RELKIND_RELATION ||
 			 relkind == RELKIND_TOASTVALUE ||
+			 relkind == RELKIND_PARTITIONED_TABLE ||
 			 relkind == RELKIND_MATVIEW)
-		accessMethod = default_table_access_method;
-
-	/* look up the access method, verify it is for a table */
-	if (accessMethod != NULL)
-		accessMethodId = get_table_am_oid(accessMethod, false);
+		accessMethodId = get_table_am_oid(default_table_access_method, false);
 
 	/*
 	 * Create the relation.  Inherited defaults and constraints are passed in
@@ -4096,6 +4099,7 @@ AlterTableGetLockLevel(List *cmds)
 				 */
 			case AT_AddColumn:	/* may rewrite heap, in some cases and visible
 								 * to SELECT */
+			case AT_SetAccessMethod:	/* must rewrite heap */
 			case AT_SetTableSpace:	/* must rewrite heap */
 			case AT_AlterColumnType:	/* must rewrite heap */
 				cmd_lockmode = AccessExclusiveLock;
@@ -4623,6 +4627,13 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			ATSimplePermissions(rel, ATT_TABLE | ATT_FOREIGN_TABLE);
 			pass = AT_PASS_DROP;
 			break;
+		case AT_SetAccessMethod:	/* SET ACCESS METHOD */
+			ATSimplePermissions(rel, ATT_TABLE);
+			/* This command never recurses */
+			tab->rewrite |= AT_REWRITE_ACCESS_METHOD;
+			ATPrepSetAccessMethod(tab, rel, cmd->name, lockmode);
+			pass = AT_PASS_MISC;	/* doesn't actually matter */
+			break;
 		case AT_SetTableSpace:	/* SET TABLESPACE */
 			ATSimplePermissions(rel, ATT_TABLE | ATT_MATVIEW | ATT_INDEX |
 								ATT_PARTITIONED_INDEX);
@@ -4998,6 +5009,11 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 		case AT_DropOids:		/* SET WITHOUT OIDS */
 			/* nothing to do here, oid columns don't exist anymore */
 			break;
+		case AT_SetAccessMethod:	/* SET ACCESS METHOD */
+			if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+				ATExecSetAccessMethodNoStorage(rel, tab->newAccessMethod);
+			/* Handled specially in Phase 3 */
+			break;
 		case AT_SetTableSpace:	/* SET TABLESPACE */
 
 			/*
@@ -5325,7 +5341,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 
 		/*
 		 * We only need to rewrite the table if at least one column needs to
-		 * be recomputed, or we are changing its persistence.
+		 * be recomputed, or we are changing its persistence or access method.
 		 *
 		 * There are two reasons for requiring a rewrite when changing
 		 * persistence: on one hand, we need to ensure that the buffers
@@ -5339,6 +5355,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			/* Build a temporary relation and copy data */
 			Relation	OldHeap;
 			Oid			OIDNewHeap;
+			Oid			NewAccessMethod;
 			Oid			NewTableSpace;
 			char		persistence;
 
@@ -5374,10 +5391,15 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			 * Select destination tablespace (same as original unless user
 			 * requested a change)
 			 */
-			if (tab->newTableSpace)
+			if (OidIsValid(tab->newTableSpace))
 				NewTableSpace = tab->newTableSpace;
 			else
 				NewTableSpace = OldHeap->rd_rel->reltablespace;
+
+			if (OidIsValid(tab->newAccessMethod))
+				NewAccessMethod = tab->newAccessMethod;
+			else
+				NewAccessMethod = OldHeap->rd_rel->relam;
 
 			/*
 			 * Select persistence of transient table (same as original unless
@@ -5419,7 +5441,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			 * unlogged anyway.
 			 */
 			OIDNewHeap = make_new_heap(tab->relid, NewTableSpace, persistence,
-									   lockmode);
+									   NewAccessMethod, lockmode);
 
 			/*
 			 * Copy the heap data into the new table with the desired
@@ -5743,11 +5765,28 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 				slot_getallattrs(oldslot);
 				ExecClearTuple(newslot);
 
-				/* copy attributes */
-				memcpy(newslot->tts_values, oldslot->tts_values,
-					   sizeof(Datum) * oldslot->tts_nvalid);
-				memcpy(newslot->tts_isnull, oldslot->tts_isnull,
-					   sizeof(bool) * oldslot->tts_nvalid);
+				/* Need to detoast tuples when changing AM XXX: should check if one AM is heap and one isn't? */
+				if (newrel->rd_rel->relam != oldrel->rd_rel->relam)
+				{
+					HeapTuple htup = toast_build_flattened_tuple(oldTupDesc,
+							oldslot->tts_values,
+							oldslot->tts_isnull);
+
+					/*
+					 * Copy the value/null array to the new slot and materialize it,
+					 * before clearing the tuple from the old slot.
+					 */
+					heap_deform_tuple(htup, newslot->tts_tupleDescriptor,
+							newslot->tts_values, newslot->tts_isnull);
+					ExecStoreVirtualTuple(newslot);
+					ExecClearTuple(oldslot);
+				} else {
+					/* copy attributes */
+					memcpy(newslot->tts_values, oldslot->tts_values,
+						   sizeof(Datum) * oldslot->tts_nvalid);
+					memcpy(newslot->tts_isnull, oldslot->tts_isnull,
+						   sizeof(bool) * oldslot->tts_nvalid);
+				}
 
 				/* Set dropped attributes to null in new tuple */
 				foreach(lc, dropped_attrs)
@@ -5782,7 +5821,8 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 									   &newslot->tts_isnull[ex->attnum - 1]);
 				}
 
-				ExecStoreVirtualTuple(newslot);
+				if (newrel->rd_rel->relam == oldrel->rd_rel->relam)
+					ExecStoreVirtualTuple(newslot);
 
 				/*
 				 * Now, evaluate any expressions whose inputs come from the
@@ -13521,6 +13561,26 @@ ATExecDropCluster(Relation rel, LOCKMODE lockmode)
 }
 
 /*
+ * ALTER TABLE SET ACCESS METHOD
+ */
+static void
+ATPrepSetAccessMethod(AlteredTableInfo *tab, Relation rel, const char *amname, LOCKMODE lockmode)
+{
+	Oid			amoid;
+
+	/* Check that the AM exists */
+	amoid = get_table_am_oid(amname, false);
+
+	/* Save info for Phase 3 to do the real work */
+	if (OidIsValid(tab->newAccessMethod))
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("cannot have multiple SET ACCESS METHOD subcommands")));
+
+	tab->newAccessMethod = amoid;
+}
+
+/*
  * ALTER TABLE SET TABLESPACE
  */
 static void
@@ -13841,6 +13901,58 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 
 	/* Clean up */
 	list_free(reltoastidxids);
+}
+
+/*
+ * Special handling of ALTER TABLE SET ACCESS METHOD for relations with no
+ * storage that have an interest in preserving AM.
+ *
+ * Since these have no storage the tablespace can be updated with a simple
+ * metadata only operation to update the tablespace.
+ */
+static void
+ATExecSetAccessMethodNoStorage(Relation rel, Oid newAccessMethod)
+{
+	Relation	pg_class;
+	Oid			relid;
+	Oid			oldrelam;
+	HeapTuple	tuple;
+
+	/*
+	 * Shouldn't be called on relations having storage; these are processed in
+	 * phase 3.
+	 */
+	Assert(!RELKIND_HAS_STORAGE(rel->rd_rel->relkind));
+
+	relid = RelationGetRelid(rel);
+
+	/* Pull the record for this relation and update it */
+	pg_class = table_open(RelationRelationId, RowExclusiveLock);
+
+	tuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relid));
+
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation %u", relid);
+
+	oldrelam = ((Form_pg_class) GETSTRUCT(tuple))->relam;
+	((Form_pg_class) GETSTRUCT(tuple))->relam = newAccessMethod;
+	CatalogTupleUpdate(pg_class, &tuple->t_self, tuple);
+
+	/*
+	 * Record dependency on AM.  This is only required for relations
+	 * that have no physical storage.
+	 */
+	changeDependencyFor(RelationRelationId, RelationGetRelid(rel),
+			AccessMethodRelationId, oldrelam,
+			newAccessMethod);
+
+	InvokeObjectPostAlterHook(RelationRelationId, RelationGetRelid(rel), 0);
+
+	heap_freetuple(tuple);
+	table_close(pg_class, RowExclusiveLock);
+
+	/* Make sure the relam change is visible */
+	CommandCounterIncrement();
 }
 
 /*

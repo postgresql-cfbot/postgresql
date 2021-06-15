@@ -3171,6 +3171,7 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 
 					if ((st->con = doConnect()) == NULL)
 					{
+						/* as the bench is already running, we do not abort */
 						pg_log_error("client %d aborted while establishing connection", st->id);
 						st->state = CSTATE_ABORTED;
 						break;
@@ -3536,8 +3537,12 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 
 				if (is_connect)
 				{
+					pg_time_usec_t start = now;
+
+					pg_time_now_lazy(&start);
 					finishCon(st);
-					now = 0;
+					now = pg_time_now();
+					thread->conn_duration += now - start;
 				}
 
 				if ((st->cnt >= nxacts && duration <= 0) || timer_exceeded)
@@ -3561,6 +3566,7 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				 */
 			case CSTATE_ABORTED:
 			case CSTATE_FINISHED:
+				/* per-thread last disconnection time is not measured */
 				finishCon(st);
 				return;
 		}
@@ -4405,7 +4411,10 @@ runInitSteps(const char *initialize_steps)
 	initPQExpBuffer(&stats);
 
 	if ((con = doConnect()) == NULL)
+	{
+		pg_log_fatal("connection for initialization failed");
 		exit(1);
+	}
 
 	setup_cancel_handler(NULL);
 	SetCancelConn(con);
@@ -6332,7 +6341,10 @@ main(int argc, char **argv)
 	/* opening connection... */
 	con = doConnect();
 	if (con == NULL)
+	{
+		pg_log_fatal("setup connection failed");
 		exit(1);
+	}
 
 	pg_log_debug("pghost: %s pgport: %s nclients: %d %s: %d dbName: %s",
 				 PQhost(con), PQport(con), nclients,
@@ -6548,7 +6560,7 @@ threadRun(void *arg)
 		if (thread->logfile == NULL)
 		{
 			pg_log_fatal("could not open logfile \"%s\": %m", logpath);
-			goto done;
+			exit(1);
 		}
 	}
 
@@ -6561,6 +6573,7 @@ threadRun(void *arg)
 
 	thread_start = pg_time_now();
 	thread->started_time = thread_start;
+	thread->conn_duration = 0;
 	last_report = thread_start;
 	next_report = last_report + (int64) 1000000 * progress;
 
@@ -6572,26 +6585,13 @@ threadRun(void *arg)
 		{
 			if ((state[i].con = doConnect()) == NULL)
 			{
-				/*
-				 * On connection failure, we meet the barrier here in place of
-				 * GO before proceeding to the "done" path which will cleanup,
-				 * so as to avoid locking the process.
-				 *
-				 * It is unclear whether it is worth doing anything rather
-				 * than coldly exiting with an error message.
-				 */
-				THREAD_BARRIER_WAIT(&barrier);
-				goto done;
+				/* coldly abort on connection failure */
+				pg_log_fatal("cannot create connection for thread %d client %d",
+							 thread->tid, i);
+				exit(1);
 			}
 		}
-
-		/* compute connection delay */
-		thread->conn_duration = pg_time_now() - thread->started_time;
-	}
-	else
-	{
-		/* no connection delay to record */
-		thread->conn_duration = 0;
+		/* connection delay is measured globally between the barriers */
 	}
 
 	/* GO */

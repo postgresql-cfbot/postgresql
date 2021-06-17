@@ -229,6 +229,19 @@ typedef struct TM_IndexDeleteOp
 	TM_IndexStatus *status;
 } TM_IndexDeleteOp;
 
+/*
+ * ItemPointers returned by a table access method should obey these
+ * limits. Some other parts of the system make assumtions about the range of
+ * offsets that they will encounter (see: ginpostinglist.c, tidbitmap.c).
+ *
+ * NB: if these limits are lifted in the future, non-heap table access methods
+ * may break or require a REINDEX.
+ */
+#define TABLE_ITEMPTR_MIN_BLOCKNO 0
+#define TABLE_ITEMPTR_MAX_BLOCKNO MaxBlockNumber
+#define TABLE_ITEMPTR_MIN_OFFSET 1
+#define TABLE_ITEMPTR_MAX_OFFSET MaxHeapTuplesPerPage
+
 /* "options" flag bits for table_tuple_insert */
 /* TABLE_INSERT_SKIP_WAL was 0x0001; RelationNeedsWAL() now governs */
 #define TABLE_INSERT_SKIP_FSM		0x0002

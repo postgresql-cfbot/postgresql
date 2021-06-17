@@ -1023,6 +1023,7 @@ typedef struct RangeTblEntry
 	char		relkind;		/* relation kind (see pg_class.relkind) */
 	int			rellockmode;	/* lock level that query requires on the rel */
 	struct TableSampleClause *tablesample;	/* sampling info, or NULL */
+	bool		relisivm;
 
 	/*
 	 * Fields valid for a subquery RTE (else NULL):
@@ -2180,6 +2181,7 @@ typedef struct CreateStmt
 	char	   *tablespacename; /* table space to use, or NULL */
 	char	   *accessMethod;	/* table access method */
 	bool		if_not_exists;	/* just do nothing if it already exists? */
+	bool		ivm;			/* incremental view maintenance is used by materialized view */
 } CreateStmt;
 
 /* ----------

@@ -1241,7 +1241,10 @@ GetMultiXactIdMembers(MultiXactId multi, MultiXactMember **members,
 	debug_elog3(DEBUG2, "GetMembers: asked for %u", multi);
 
 	if (!MultiXactIdIsValid(multi) || from_pgupgrade)
+	{
+		*members = NULL;
 		return -1;
+	}
 
 	/* See if the MultiXactId is in the local cache */
 	length = mXactCacheGetById(multi, members);

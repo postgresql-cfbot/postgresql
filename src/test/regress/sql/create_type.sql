@@ -51,7 +51,7 @@ CREATE FUNCTION int42_in(cstring)
 CREATE FUNCTION int42_out(int42)
    RETURNS cstring
    AS 'int4out'
-   LANGUAGE internal STRICT IMMUTABLE;
+   LANGUAGE internal STRICT IMMUTABLE PARALLEL SAFE;
 CREATE FUNCTION text_w_default_in(cstring)
    RETURNS text_w_default
    AS 'textin'
@@ -59,7 +59,7 @@ CREATE FUNCTION text_w_default_in(cstring)
 CREATE FUNCTION text_w_default_out(text_w_default)
    RETURNS cstring
    AS 'textout'
-   LANGUAGE internal STRICT IMMUTABLE;
+   LANGUAGE internal STRICT IMMUTABLE PARALLEL SAFE;
 
 CREATE TYPE int42 (
    internallength = 4,

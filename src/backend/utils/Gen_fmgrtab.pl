@@ -72,15 +72,16 @@ foreach my $row (@{ $catalog_data{pg_proc} })
 
 	push @fmgr,
 	  {
-		oid    => $bki_values{oid},
-		name   => $bki_values{proname},
-		lang   => $bki_values{prolang},
-		kind   => $bki_values{prokind},
-		strict => $bki_values{proisstrict},
-		retset => $bki_values{proretset},
-		nargs  => $bki_values{pronargs},
-		args   => $bki_values{proargtypes},
-		prosrc => $bki_values{prosrc},
+		oid      => $bki_values{oid},
+		name     => $bki_values{proname},
+		lang     => $bki_values{prolang},
+		kind     => $bki_values{prokind},
+		strict   => $bki_values{proisstrict},
+		parallel => $bki_values{proparallel},
+		retset   => $bki_values{proretset},
+		nargs    => $bki_values{pronargs},
+		args     => $bki_values{proargtypes},
+		prosrc   => $bki_values{prosrc},
 	  };
 
 	# Count so that we can detect overloaded pronames.
@@ -208,9 +209,13 @@ foreach my $s (sort { $a->{oid} <=> $b->{oid} } @fmgr)
 
 # Create the fmgr_builtins table, collect data for fmgr_builtin_oid_index
 print $tfh "\nconst FmgrBuiltin fmgr_builtins[] = {\n";
-my %bmap;
-$bmap{'t'} = 'true';
-$bmap{'f'} = 'false';
+my %bmap_strict;
+$bmap_strict{'t'} = 1 << 0;
+$bmap_strict{'f'} = 0;
+my %bmap_retset;
+$bmap_retset{'t'} = 1 << 1;
+$bmap_retset{'f'} = 0;
+
 my @fmgr_builtin_oid_index;
 my $last_builtin_oid = 0;
 my $fmgr_count       = 0;
@@ -220,9 +225,11 @@ foreach my $s (sort { $a->{oid} <=> $b->{oid} } @fmgr)
 	# We do not need entries for aggregate functions
 	next if $s->{kind} eq 'a';
 
+	my $bitflag = $bmap_strict{$s->{strict}} | $bmap_retset{$s->{retset}};
 	print $tfh ",\n" if ($fmgr_count > 0);
 	print $tfh
-	  "  { $s->{oid}, $s->{nargs}, $bmap{$s->{strict}}, $bmap{$s->{retset}}, \"$s->{prosrc}\", $s->{prosrc} }";
+#	  "  { $s->{oid}, $s->{nargs}, $bmap{$s->{strict}}, $bmap{$s->{retset}}, \"$s->{prosrc}\", $s->{prosrc} }";
+	  "  { $s->{oid}, $s->{nargs}, $bitflag, \'$s->{parallel}\', \"$s->{prosrc}\", $s->{prosrc} }";
 
 	$fmgr_builtin_oid_index[ $s->{oid} ] = $fmgr_count++;
 	$last_builtin_oid = $s->{oid};

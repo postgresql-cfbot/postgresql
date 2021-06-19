@@ -978,6 +978,7 @@ rollback;
 BEGIN;
 CREATE FUNCTION balkifnull(int8, int4)
 RETURNS int8
+PARALLEL SAFE
 STRICT
 LANGUAGE plpgsql AS $$
 BEGIN

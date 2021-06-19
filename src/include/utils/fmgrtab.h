@@ -26,11 +26,15 @@ typedef struct
 {
 	Oid			foid;			/* OID of the function */
 	short		nargs;			/* 0..FUNC_MAX_ARGS, or -1 if variable count */
-	bool		strict;			/* T if function is "strict" */
-	bool		retset;			/* T if function returns a set */
+	char		bitflag;		/* 1 << 0 if function is "strict"
+								 * 1 << 1 if function returns a set */
+	char		parallel;
 	const char *funcName;		/* C name of the function */
 	PGFunction	func;			/* pointer to compiled function */
 } FmgrBuiltin;
+
+#define GETSTRICT(fbp) ((fbp->bitflag & (1 << 0)) ? true : false)
+#define GETRETSET(fbp) ((fbp->bitflag & (1 << 1)) ? true : false)
 
 extern const FmgrBuiltin fmgr_builtins[];
 

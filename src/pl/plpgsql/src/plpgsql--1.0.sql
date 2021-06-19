@@ -1,7 +1,7 @@
 /* src/pl/plpgsql/src/plpgsql--1.0.sql */
 
 CREATE FUNCTION plpgsql_call_handler() RETURNS language_handler
-  LANGUAGE c AS 'MODULE_PATHNAME';
+  LANGUAGE c PARALLEL SAFE AS 'MODULE_PATHNAME';
 
 CREATE FUNCTION plpgsql_inline_handler(internal) RETURNS void
   STRICT LANGUAGE c AS 'MODULE_PATHNAME';

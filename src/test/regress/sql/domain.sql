@@ -724,7 +724,7 @@ drop domain di;
 --
 
 create function sql_is_distinct_from(anyelement, anyelement)
-returns boolean language sql
+returns boolean language sql parallel safe
 as 'select $1 is distinct from $2 limit 1';
 
 create domain inotnull int

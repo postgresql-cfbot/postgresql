@@ -16,6 +16,8 @@
 #include "postgres.h"
 
 #include "access/detoast.h"
+#include "access/parallel.h"
+#include "access/xact.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
@@ -56,6 +58,7 @@ static HTAB *CFuncHash = NULL;
 
 static void fmgr_info_cxt_security(Oid functionId, FmgrInfo *finfo, MemoryContext mcxt,
 								   bool ignore_security);
+static void fmgr_check_parallel_safety(char parallel_safety, Oid functionId);
 static void fmgr_info_C_lang(Oid functionId, FmgrInfo *finfo, HeapTuple procedureTuple);
 static void fmgr_info_other_lang(Oid functionId, FmgrInfo *finfo, HeapTuple procedureTuple);
 static CFuncHashTabEntry *lookup_C_func(HeapTuple procedureTuple);
@@ -165,12 +168,15 @@ fmgr_info_cxt_security(Oid functionId, FmgrInfo *finfo, MemoryContext mcxt,
 
 	if ((fbp = fmgr_isbuiltin(functionId)) != NULL)
 	{
+		/* Check parallel safety for built-in functions */
+		fmgr_check_parallel_safety(fbp->parallel, functionId);
+
 		/*
 		 * Fast path for builtin functions: don't bother consulting pg_proc
 		 */
 		finfo->fn_nargs = fbp->nargs;
-		finfo->fn_strict = fbp->strict;
-		finfo->fn_retset = fbp->retset;
+		finfo->fn_strict = GETSTRICT(fbp);
+		finfo->fn_retset = GETRETSET(fbp);
 		finfo->fn_stats = TRACK_FUNC_ALL;	/* ie, never track */
 		finfo->fn_addr = fbp->func;
 		finfo->fn_oid = functionId;
@@ -182,6 +188,9 @@ fmgr_info_cxt_security(Oid functionId, FmgrInfo *finfo, MemoryContext mcxt,
 	if (!HeapTupleIsValid(procedureTuple))
 		elog(ERROR, "cache lookup failed for function %u", functionId);
 	procedureStruct = (Form_pg_proc) GETSTRUCT(procedureTuple);
+
+	/* Check parallel safety for other functions */
+	fmgr_check_parallel_safety(procedureStruct->proparallel, functionId);
 
 	finfo->fn_nargs = procedureStruct->pronargs;
 	finfo->fn_strict = procedureStruct->proisstrict;
@@ -263,6 +272,20 @@ fmgr_info_cxt_security(Oid functionId, FmgrInfo *finfo, MemoryContext mcxt,
 	finfo->fn_oid = functionId;
 	ReleaseSysCache(procedureTuple);
 }
+
+static void
+fmgr_check_parallel_safety(char parallel_safety, Oid functionId)
+{
+	if (IsInParallelMode() &&
+	   ((IsParallelWorker() &&
+		parallel_safety == PROPARALLEL_RESTRICTED) ||
+		parallel_safety == PROPARALLEL_UNSAFE))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
+				 errmsg("parallel-safety execution violation of function \"%s\" (%c)",
+						get_func_name(functionId), parallel_safety)));
+}
+
 
 /*
  * Return module and C function name providing implementation of functionId.

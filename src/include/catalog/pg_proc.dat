@@ -8480,6 +8480,14 @@
 { oid => '2892', descr => 'release all advisory locks',
   proname => 'pg_advisory_unlock_all', provolatile => 'v', proparallel => 'r',
   prorettype => 'void', proargtypes => '', prosrc => 'pg_advisory_unlock_all' },
+{ oid => '6123', descr => 'obtain shared advisory lock for testing purpose',
+  proname => 'pg_advisory_test_xact_lock_shared', provolatile => 'v',
+  prorettype => 'void', proargtypes => 'int8',
+  prosrc => 'pg_advisory_xact_lock_shared_int8' },
+{ oid => '6124', descr => 'obtain exclusive advisory lock for testing purpose',
+  proname => 'pg_advisory_test_xact_lock', provolatile => 'v',
+  prorettype => 'void', proargtypes => 'int8',
+  prosrc => 'pg_advisory_xact_lock_int8' },
 
 # XML support
 { oid => '2893', descr => 'I/O',

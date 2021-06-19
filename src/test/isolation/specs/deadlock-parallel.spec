@@ -37,10 +37,10 @@
 setup
 {
   create function lock_share(int,int) returns int language sql as
-  'select pg_advisory_xact_lock_shared($1); select 1;' parallel safe;
+  'select pg_advisory_test_xact_lock_shared($1); select 1;' parallel safe;
 
   create function lock_excl(int,int) returns int language sql as
-  'select pg_advisory_xact_lock($1); select 1;' parallel safe;
+  'select pg_advisory_test_xact_lock($1); select 1;' parallel safe;
 
   create table bigt as select x from generate_series(1, 10000) x;
   analyze bigt;

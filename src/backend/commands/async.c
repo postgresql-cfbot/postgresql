@@ -1023,6 +1023,12 @@ AtCommit_Notify(void)
 		}
 	}
 
+	/*
+	 * Remove all listenChannels directly, if we need to cleanup
+	 */
+	if (amRegisteredListener && transaction_cleanup)
+		Exec_UnlistenAllCommit();
+
 	/* If no longer listening to anything, get out of listener array */
 	if (amRegisteredListener && listenChannels == NIL)
 		asyncQueueUnregister();

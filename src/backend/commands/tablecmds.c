@@ -12323,6 +12323,7 @@ validateForeignKeyConstraint(char *conname,
 		trigdata.tg_trigtuple = ExecFetchSlotHeapTuple(slot, false, NULL);
 		trigdata.tg_trigslot = slot;
 		trigdata.tg_trigger = &trig;
+		trigdata.tg_temporal = NULL;
 
 		fcinfo->context = (Node *) &trigdata;
 

@@ -1629,7 +1629,7 @@ get_func_name(Oid funcid)
  *		Returns the pg_namespace OID associated with a given function.
  */
 Oid
-get_func_namespace(Oid funcid)
+get_func_namespace(Oid funcid, bool missing_ok)
 {
 	HeapTuple	tp;
 
@@ -1643,6 +1643,8 @@ get_func_namespace(Oid funcid)
 		ReleaseSysCache(tp);
 		return result;
 	}
+	else if (!missing_ok)
+		elog(ERROR, "cache lookup failed for function %u", funcid);
 	else
 		return InvalidOid;
 }
@@ -2183,6 +2185,59 @@ get_typisdefined(Oid typid)
 		result = typtup->typisdefined;
 		ReleaseSysCache(tp);
 		return result;
+	}
+	else
+		return false;
+}
+
+/*
+ * get_typname
+ *
+ *	  Returns the name of a given type
+ *
+ * Returns a palloc'd copy of the string, or NULL if no such type.
+ */
+char *
+get_typname(Oid typid)
+{
+	HeapTuple   tp;
+
+	tp = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_type typtup = (Form_pg_type) GETSTRUCT(tp);
+		char	   *result;
+
+		result = pstrdup(NameStr(typtup->typname));
+		ReleaseSysCache(tp);
+		return result;
+	}
+	else
+		return NULL;
+}
+
+/*
+ * get_typname_and_namespace
+ *
+ *	  Returns the name and namespace of a given type
+ *
+ * Returns true if one found, or false if not.
+ */
+bool
+get_typname_and_namespace(Oid typid, char **typname, char **typnamespace)
+{
+	HeapTuple	tp;
+
+	tp = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_type typtup = (Form_pg_type) GETSTRUCT(tp);
+
+		*typname = pstrdup(NameStr(typtup->typname));
+		*typnamespace = get_namespace_name(typtup->typnamespace);
+		ReleaseSysCache(tp);
+		/* *typnamespace is NULL if it wasn't found: */
+		return *typnamespace;
 	}
 	else
 		return false;

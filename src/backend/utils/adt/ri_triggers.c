@@ -228,6 +228,7 @@ static bool ri_PerformCheck(const RI_ConstraintInfo *riinfo,
 							RI_QueryKey *qkey, SPIPlanPtr qplan,
 							Relation fk_rel, Relation pk_rel,
 							TupleTableSlot *oldslot, TupleTableSlot *newslot,
+							int forPortionOfParam, Datum forPortionOf,
 							bool detectNewRows, int expect_OK);
 static void ri_ExtractValues(Relation rel, TupleTableSlot *slot,
 							 const RI_ConstraintInfo *riinfo, bool rel_is_pk,
@@ -236,6 +237,11 @@ static void ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 							   Relation pk_rel, Relation fk_rel,
 							   TupleTableSlot *violatorslot, TupleDesc tupdesc,
 							   int queryno, bool partgone) pg_attribute_noreturn();
+static bool fpo_targets_pk_range(const ForPortionOfState *tg_temporal,
+								 const RI_ConstraintInfo *riinfo);
+static Datum restrict_cascading_range(const ForPortionOfState *tg_temporal,
+									  const RI_ConstraintInfo *riinfo,
+									  TupleTableSlot *oldslot);
 
 
 /*
@@ -449,6 +455,7 @@ RI_FKey_check(TriggerData *trigdata)
 	ri_PerformCheck(riinfo, &qkey, qplan,
 					fk_rel, pk_rel,
 					NULL, newslot,
+					-1, (Datum) 0,
 					pk_rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE,
 					SPI_OK_SELECT);
 
@@ -613,6 +620,7 @@ ri_Check_Pk_Match(Relation pk_rel, Relation fk_rel,
 	result = ri_PerformCheck(riinfo, &qkey, qplan,
 							 fk_rel, pk_rel,
 							 oldslot, NULL,
+							 -1, (Datum) 0,
 							 true,	/* treat like update */
 							 SPI_OK_SELECT);
 
@@ -712,6 +720,8 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 	TupleTableSlot *oldslot;
 	RI_QueryKey qkey;
 	SPIPlanPtr	qplan;
+	int			targetRangeParam = -1;
+	Datum		targetRange = (Datum) 0;
 
 	riinfo = ri_FetchConstraintInfo(trigdata->tg_trigger,
 									trigdata->tg_relation, true);
@@ -801,9 +811,16 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 	/*
 	 * We have a plan now. Run it to check for existing references.
 	 */
+	if (trigdata->tg_temporal)
+	{
+		targetRangeParam = riinfo->nkeys - 1;
+		targetRange = restrict_cascading_range(trigdata->tg_temporal, riinfo, oldslot);
+	}
+
 	ri_PerformCheck(riinfo, &qkey, qplan,
 					fk_rel, pk_rel,
 					oldslot, NULL,
+					targetRangeParam, targetRange,
 					true,		/* must detect new rows */
 					SPI_OK_SELECT);
 
@@ -909,6 +926,7 @@ RI_FKey_cascade_del(PG_FUNCTION_ARGS)
 	ri_PerformCheck(riinfo, &qkey, qplan,
 					fk_rel, pk_rel,
 					oldslot, NULL,
+					-1, (Datum) 0,
 					true,		/* must detect new rows */
 					SPI_OK_DELETE);
 
@@ -1029,6 +1047,7 @@ RI_FKey_cascade_upd(PG_FUNCTION_ARGS)
 	ri_PerformCheck(riinfo, &qkey, qplan,
 					fk_rel, pk_rel,
 					oldslot, newslot,
+					-1, (Datum) 0,
 					true,		/* must detect new rows */
 					SPI_OK_UPDATE);
 
@@ -1260,6 +1279,7 @@ ri_set(TriggerData *trigdata, bool is_set_null, int tgkind)
 	ri_PerformCheck(riinfo, &qkey, qplan,
 					fk_rel, pk_rel,
 					oldslot, NULL,
+					-1, (Datum) 0,
 					true,		/* must detect new rows */
 					SPI_OK_UPDATE);
 
@@ -2405,6 +2425,7 @@ ri_PerformCheck(const RI_ConstraintInfo *riinfo,
 				RI_QueryKey *qkey, SPIPlanPtr qplan,
 				Relation fk_rel, Relation pk_rel,
 				TupleTableSlot *oldslot, TupleTableSlot *newslot,
+				int forPortionOfParam, Datum forPortionOf,
 				bool detectNewRows, int expect_OK)
 {
 	Relation	query_rel,
@@ -2459,6 +2480,12 @@ ri_PerformCheck(const RI_ConstraintInfo *riinfo,
 	{
 		ri_ExtractValues(source_rel, oldslot, riinfo, source_is_pk,
 						 vals, nulls);
+	}
+	/* Add one more query param if we are using FOR PORTION OF */
+	if (forPortionOf)
+	{
+		vals[forPortionOfParam] = forPortionOf;
+		nulls[forPortionOfParam] = ' ';
 	}
 
 	/*
@@ -3135,4 +3162,51 @@ RI_FKey_trigger_type(Oid tgfoid)
 	}
 
 	return RI_TRIGGER_NONE;
+}
+
+/*
+ * fpo_targets_pk_range
+ *
+ * Returns true iff the primary key referenced by riinfo includes the range
+ * column targeted by the FOR PORTION OF clause (according to tg_temporal).
+ */
+static bool
+fpo_targets_pk_range(const ForPortionOfState *tg_temporal, const RI_ConstraintInfo *riinfo)
+{
+	if (tg_temporal == NULL)
+		return false;
+
+	return riinfo->pk_attnums[riinfo->nkeys - 1] == tg_temporal->fp_rangeAttno;
+}
+
+/*
+ * restrict_cascading_range -
+ *
+ * Returns a Datum of RangeTypeP holding the appropriate timespan
+ * to target child records when we CASCADE/SET NULL/SET DEFAULT.
+ *
+ * In a normal UPDATE/DELETE this should be the parent's own valid time,
+ * but if there was a FOR PORTION OF clause, then we should use that to
+ * trim down the parent's span further.
+ */
+static Datum
+restrict_cascading_range(const ForPortionOfState *tg_temporal, const RI_ConstraintInfo *riinfo, TupleTableSlot *oldslot)
+{
+	Datum	pkRecordRange;
+	bool	isnull;
+
+	pkRecordRange = slot_getattr(oldslot, riinfo->pk_attnums[riinfo->nkeys - 1], &isnull);
+	if (isnull)
+		elog(ERROR, "application time should not be null");
+
+	if (fpo_targets_pk_range(tg_temporal, riinfo))
+	{
+		RangeType *r1 = DatumGetRangeTypeP(pkRecordRange);
+		RangeType *r2 = DatumGetRangeTypeP(tg_temporal->fp_targetRange);
+		Oid rngtypid = RangeTypeGetOid(r1);
+		TypeCacheEntry *typcache = lookup_type_cache(rngtypid, TYPECACHE_RANGE_INFO);
+		return RangeTypePGetDatum(range_intersect_internal(typcache, r1, r2));
+	}
+	else
+		return pkRecordRange;
 }

@@ -201,7 +201,7 @@ gistvalidate(Oid opclassoid)
 		}
 
 		/* GiST supports ORDER BY operators */
-		if (oprform->amoppurpose != AMOP_SEARCH)
+		if (oprform->amoppurpose == AMOP_ORDER)
 		{
 			/* ... but must have matching distance proc */
 			if (!OidIsValid(get_opfamily_proc(opfamilyoid,
@@ -228,23 +228,37 @@ gistvalidate(Oid opclassoid)
 				result = false;
 			}
 		}
-		else
+		else if (oprform->amoppurpose == AMOP_SEARCH)
 		{
 			/* Search operators must always return bool */
 			op_rettype = BOOLOID;
 		}
-
-		/* Check operator signature */
-		if (!check_amop_signature(oprform->amopopr, op_rettype,
-								  oprform->amoplefttype,
-								  oprform->amoprighttype))
+		else
 		{
+			/* Nothing else it could be */
 			ereport(INFO,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-					 errmsg("operator family \"%s\" of access method %s contains operator %s with wrong signature",
-							opfamilyname, "gist",
-							format_operator(oprform->amopopr))));
+					 errmsg("operator family \"%s\" of access method %s contains unknown purpose %c for operator %s",
+						 opfamilyname, "gist", oprform->amoppurpose,
+						 format_operator(oprform->amopopr))));
+			op_rettype = InvalidOid;
 			result = false;
+		}
+
+		/* Check operator signature */
+		if (OidIsValid(op_rettype))
+		{
+			if (!check_amop_signature(oprform->amopopr, op_rettype,
+									  oprform->amoplefttype,
+									  oprform->amoprighttype))
+			{
+				ereport(INFO,
+						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						 errmsg("operator family \"%s\" of access method %s contains operator %s with wrong signature",
+								opfamilyname, "gist",
+								format_operator(oprform->amopopr))));
+				result = false;
+			}
 		}
 	}
 

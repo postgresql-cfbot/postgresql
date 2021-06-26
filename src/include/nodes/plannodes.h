@@ -244,6 +244,7 @@ typedef struct ModifyTable
 	List	   *rowMarks;		/* PlanRowMarks (non-locking only) */
 	int			epqParam;		/* ID of Param for EvalPlanQual re-eval */
 	OnConflictAction onConflictAction;	/* ON CONFLICT action */
+	Node	   *forPortionOf;	/* FOR PORTION OF clause for UPDATE/DELETE */
 	List	   *arbiterIndexes; /* List of ON CONFLICT arbiter index OIDs  */
 	List	   *onConflictSet;	/* INSERT ON CONFLICT DO UPDATE targetlist */
 	List	   *onConflictCols; /* target column numbers for onConflictSet */

@@ -22,7 +22,9 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 [ WITH [ RECURSIVE ] <replaceable class="parameter">with_query</replaceable> [, ...] ]
-UPDATE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ [ AS ] <replaceable class="parameter">alias</replaceable> ]
+UPDATE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
+    [ FOR PORTION OF <replaceable class="parameter">range_or_period_name</replaceable> <replaceable class="parameter">for_portion_of_target</replaceable> ]
+    [ [ AS ] <replaceable class="parameter">alias</replaceable> ]
     SET { <replaceable class="parameter">column_name</replaceable> = { <replaceable class="parameter">expression</replaceable> | DEFAULT } |
           ( <replaceable class="parameter">column_name</replaceable> [, ...] ) = [ ROW ] ( { <replaceable class="parameter">expression</replaceable> | DEFAULT } [, ...] ) |
           ( <replaceable class="parameter">column_name</replaceable> [, ...] ) = ( <replaceable class="parameter">sub-SELECT</replaceable> )
@@ -49,6 +51,41 @@ UPDATE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ 
    additional tables in the <literal>FROM</literal> clause. Which
    technique is more appropriate depends on the specific
    circumstances.
+  </para>
+
+  <para>
+   If the table has a range or multirange column,
+   you may supply a <literal>FOR PORTION OF</literal> clause, and your update will
+   only affect rows that overlap the given interval. Furthermore, if a row's span
+   extends outside the <literal>FOR PORTION OF</literal> bounds, then your update
+   will only change the span within those bounds. In effect you are updating any
+   moment targeted by <literal>FOR PORTION OF</literal> and no moments outside.
+  </para>
+
+  <para>
+   Specifically, when <productname>PostgreSQL</productname> updates the existing row,
+   it will also change the range or start/end column(s) so that their interval
+   no longer extends beyond the targeted <literal>FOR PORTION OF</literal> bounds.
+   Then <productname>PostgreSQL</productname> will <literal>INSERT</literal>
+   new rows whose range or start/end column(s) receive the remaining span outside
+   the targeted bounds, containing the un-updated values in other columns.
+   There will be zero to two inserted records,
+   depending on whether the original span extended before the targeted
+   <literal>FROM</literal>, after the targeted <literal>TO</literal>, both, or neither.
+  </para>
+
+  <para>
+   These secondary inserts fire <literal>INSERT</literal> triggers. First
+   <literal>BEFORE UPDATE</literal> triggers first, then
+   <literal>BEFORE INSERT</literal>, then <literal>AFTER INSERT</literal>,
+   then <literal>AFTER UPDATE</literal>.
+  </para>
+
+  <para>
+   These secondary inserts do not require <literal>INSERT</literal> privilege on the table.
+   This is because conceptually no new information has been added. The inserted rows only preserve
+   existing data about the untargeted time period. Note this may result in users firing <literal>INSERT</literal>
+   triggers who don't have insert privileges, so be careful about <literal>SECURITY DEFINER</literal> trigger functions!
   </para>
 
   <para>
@@ -110,6 +147,57 @@ UPDATE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ 
       example, given <literal>UPDATE foo AS f</literal>, the remainder of the
       <command>UPDATE</command> statement must refer to this table as
       <literal>f</literal> not <literal>foo</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">range_or_period_name</replaceable></term>
+    <listitem>
+     <para>
+      The range column or period to use when performing a temporal update.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">for_portion_of_target</replaceable></term>
+    <listitem>
+     <para>
+      The interval to update. If you are targeting a range column or <literal>PERIOD</literal>,
+      you may give this in the form <literal>FROM</literal>
+      <replaceable class="parameter">start_time</replaceable> <literal>TO</literal>
+      <replaceable class="parameter">end_time</replaceable>.
+      Otherwise you must use
+      <literal>(</literal><replaceable class="parameter">expression</replaceable><literal>)</literal>
+      where the expression yields a value for the same type as
+      <replaceable class="parameter">range_or_period_name</replaceable>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">start_time</replaceable></term>
+    <listitem>
+     <para>
+      The earliest time (inclusive) to change in a temporal update.
+      This must be a value matching the base type of the range or period from
+      <replaceable class="parameter">range_or_period_name</replaceable>. A
+      <literal>NULL</literal> here indicates an update whose beginning is
+      unbounded (as with range types).
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">end_time</replaceable></term>
+    <listitem>
+     <para>
+      The latest time (exclusive) to change in a temporal update.
+      This must be a value matching the base type of the range or period from
+      <replaceable class="parameter">range_or_period_name</replaceable>. A
+      <literal>NULL</literal> here indicates an update whose end is unbounded
+      (as with range types).
      </para>
     </listitem>
    </varlistentry>

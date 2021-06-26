@@ -449,7 +449,7 @@ unaccent_dict(PG_FUNCTION_ARGS)
 		 * Use the "unaccent" dictionary that is in the same schema that this
 		 * function is in.
 		 */
-		Oid			procnspid = get_func_namespace(fcinfo->flinfo->fn_oid);
+		Oid			procnspid = get_func_namespace(fcinfo->flinfo->fn_oid, true);
 		const char *dictname = "unaccent";
 
 		dictOid = GetSysCacheOid2(TSDICTNAMENSP, Anum_pg_ts_dict_oid,

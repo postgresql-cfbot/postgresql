@@ -833,7 +833,7 @@
        <structfield>amoppurpose</structfield> <type>char</type>
       </para>
       <para>
-       Operator purpose, either <literal>s</literal> for search or
+       Operator purpose, either <literal>s</literal> for search, or
        <literal>o</literal> for ordering
       </para></entry>
      </row>
@@ -865,7 +865,7 @@
       </para>
       <para>
        The B-tree operator family this entry sorts according to, if an
-       ordering operator; zero if a search operator or portion operator
+       ordering operator; zero if a search operator
       </para></entry>
      </row>
     </tbody>

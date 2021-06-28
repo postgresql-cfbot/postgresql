@@ -4165,7 +4165,11 @@ initGenerateDataClientSide(PGconn *con)
 	/*
 	 * accounts is big enough to be worth using COPY and tracking runtime
 	 */
-	res = PQexec(con, "copy pgbench_accounts from stdin");
+	resetPQExpBuffer(&sql);
+	appendPQExpBufferStr(&sql, "copy pgbench_accounts from stdin");
+	if (partitions == 0)
+		appendPQExpBufferStr(&sql, " with (freeze)");
+	res = PQexec(con, sql.data);
 	if (PQresultStatus(res) != PGRES_COPY_IN)
 	{
 		pg_log_fatal("unexpected copy in result: %s", PQerrorMessage(con));

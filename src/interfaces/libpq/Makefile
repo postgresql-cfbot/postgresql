@@ -96,12 +96,18 @@ SHLIB_EXPORTS = exports.txt
 
 PKG_CONFIG_REQUIRES_PRIVATE = libssl libcrypto
 
-all: all-lib
+all: all-lib check-libpq-refs
 
 # Shared library stuff
 include $(top_srcdir)/src/Makefile.shlib
 backend_src = $(top_srcdir)/src/backend
 
+# Check for functions that libpq must not call.
+# (If nm doesn't exist or doesn't work on shlibs, this test will silently
+# do nothing, which is fine.)
+.PHONY: check-libpq-refs
+check-libpq-refs: $(shlib)
+	@! nm -A -g -u $< 2>/dev/null | grep -e abort -e exit
 
 # Make dependencies on pg_config_paths.h visible in all builds.
 fe-connect.o: fe-connect.c $(top_builddir)/src/port/pg_config_paths.h

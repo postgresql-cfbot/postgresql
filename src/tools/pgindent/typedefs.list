@@ -2920,6 +2920,7 @@ XLogRecordBlockCompressHeader
 XLogRecordBlockHeader
 XLogRecordBlockImageHeader
 XLogRecordBuffer
+XLogRecoveryCtlData
 XLogRedoAction
 XLogSegNo
 XLogSource

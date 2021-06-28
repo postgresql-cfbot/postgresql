@@ -33,8 +33,24 @@
 #include "storage/proc.h"
 #include "utils/memutils.h"
 
+#ifdef USE_LZ4
+#include <lz4.h>
+#define	LZ4_MAX_BLCKSZ		LZ4_COMPRESSBOUND(BLCKSZ)
+#else
+#define LZ4_MAX_BLCKSZ		0
+#endif
+
+#ifdef USE_ZSTD
+#include <zstd.h>
+#define ZSTD_MAX_BLCKSZ		ZSTD_COMPRESSBOUND(BLCKSZ)
+#else
+#define ZSTD_MAX_BLCKSZ		0
+#endif
+
 /* Buffer size required to store a compressed version of backup block image */
-#define PGLZ_MAX_BLCKSZ PGLZ_MAX_OUTPUT(BLCKSZ)
+#define PGLZ_MAX_BLCKSZ		PGLZ_MAX_OUTPUT(BLCKSZ)
+
+#define COMPRESS_BUFSIZE	Max(Max(PGLZ_MAX_BLCKSZ, LZ4_MAX_BLCKSZ), ZSTD_MAX_BLCKSZ)
 
 /*
  * For each block reference registered with XLogRegisterBuffer, we fill in
@@ -58,7 +74,7 @@ typedef struct
 								 * backup block data in XLogRecordAssemble() */
 
 	/* buffer to store a compressed version of backup block image */
-	char		compressed_page[PGLZ_MAX_BLCKSZ];
+	char		compressed_page[COMPRESS_BUFSIZE];
 } registered_buffer;
 
 static registered_buffer *registered_buffers;
@@ -628,7 +644,7 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			/*
 			 * Try to compress a block image if wal_compression is enabled
 			 */
-			if (wal_compression)
+			if (wal_compression != WAL_COMPRESSION_NONE)
 			{
 				is_compressed =
 					XLogCompressBackupBlock(page, bimg.hole_offset,
@@ -665,8 +681,35 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 
 			if (is_compressed)
 			{
+				/* The current compression is stored in the WAL record */
 				bimg.length = compressed_len;
-				bimg.bimg_info |= BKPIMAGE_IS_COMPRESSED;
+
+				/* Append the compression method used */
+				switch (wal_compression)
+				{
+					case WAL_COMPRESSION_PGLZ:
+						bimg.bimg_info |= BKPIMAGE_COMPRESS_PGLZ;
+						break;
+
+					case WAL_COMPRESSION_LZ4:
+#ifdef USE_LZ4
+						bimg.bimg_info |= BKPIMAGE_COMPRESS_LZ4;
+#else
+						elog(ERROR, "LZ4 is not supported by this build");
+#endif
+						break;
+
+					case WAL_COMPRESSION_ZSTD:
+#ifdef USE_ZSTD
+						bimg.bimg_info |= BKPIMAGE_COMPRESS_ZSTD;
+#else
+						elog(ERROR, "ZSTD is not supported by this build");
+#endif
+						break;
+
+					default:
+						elog(ERROR, "unsupported WAL compression method specified");
+				}
 
 				rdt_datas_last->data = regbuf->compressed_page;
 				rdt_datas_last->len = compressed_len;
@@ -853,12 +896,39 @@ XLogCompressBackupBlock(char *page, uint16 hole_offset, uint16 hole_length,
 	else
 		source = page;
 
+	switch (wal_compression)
+	{
+		case WAL_COMPRESSION_PGLZ:
+			len = pglz_compress(source, orig_len, dest, PGLZ_strategy_default);
+			break;
+
+#ifdef USE_LZ4
+		case WAL_COMPRESSION_LZ4:
+			len = LZ4_compress_fast(source, dest, orig_len,
+									COMPRESS_BUFSIZE, 1);
+			if (len <= 0)
+				len = -1;	/* failure */
+			break;
+#endif
+
+#ifdef USE_ZSTD
+		case WAL_COMPRESSION_ZSTD:
+			len = ZSTD_compress(dest, COMPRESS_BUFSIZE, source, orig_len,
+								ZSTD_CLEVEL_DEFAULT);
+			if (ZSTD_isError(len))
+				len = -1;
+			break;
+#endif
+
+		default:
+			elog(ERROR, "unsupported WAL compression method specified");
+	}
+
 	/*
-	 * We recheck the actual size even if pglz_compress() reports success and
+	 * We recheck the actual size even if compression reports success and
 	 * see if the number of bytes saved by compression is larger than the
 	 * length of extra data needed for the compressed version of block image.
 	 */
-	len = pglz_compress(source, orig_len, dest, PGLZ_strategy_default);
 	if (len >= 0 &&
 		len + extra_bytes < orig_len)
 	{

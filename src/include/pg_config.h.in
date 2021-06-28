@@ -355,6 +355,9 @@
 /* Define to 1 if you have the `z' library (-lz). */
 #undef HAVE_LIBZ
 
+/* Define to 1 if you have the `zstd' library (-lzstd). */
+#undef HAVE_LIBZSTD
+
 /* Define to 1 if you have the `link' function. */
 #undef HAVE_LINK
 
@@ -722,6 +725,9 @@
 /* Define to 1 if the assembler supports X86_64's POPCNTQ instruction. */
 #undef HAVE_X86_64_POPCNTQ
 
+/* Define to 1 if you have the <zstd.h> header file. */
+#undef HAVE_ZSTD_H
+
 /* Define to 1 if the system has the type `_Bool'. */
 #undef HAVE__BOOL
 
@@ -952,6 +958,9 @@
 
 /* Define to select Win32-style shared memory. */
 #undef USE_WIN32_SHARED_MEMORY
+
+/* Define to 1 to build with zstd support. (--with-zstd) */
+#undef USE_ZSTD
 
 /* Define to 1 if `wcstombs_l' requires <xlocale.h>. */
 #undef WCSTOMBS_L_IN_XLOCALE

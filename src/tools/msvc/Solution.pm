@@ -494,6 +494,8 @@ sub GenerateFiles
 		USE_LIBXML                 => undef,
 		USE_LIBXSLT                => undef,
 		USE_LZ4                    => undef,
+		# XXX; support for zstd is still required here.
+		USE_ZSTD                   => $self->{options}->{zstd} ? 1 : undef,
 		USE_LDAP                   => $self->{options}->{ldap} ? 1 : undef,
 		USE_LLVM                   => undef,
 		USE_NAMED_POSIX_SEMAPHORES => undef,

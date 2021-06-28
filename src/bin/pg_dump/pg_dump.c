@@ -44,6 +44,7 @@
 #include "catalog/pg_aggregate_d.h"
 #include "catalog/pg_am_d.h"
 #include "catalog/pg_attribute_d.h"
+#include "catalog/pg_authid_d.h"
 #include "catalog/pg_cast_d.h"
 #include "catalog/pg_class_d.h"
 #include "catalog/pg_default_acl_d.h"
@@ -168,9 +169,15 @@ static NamespaceInfo *findNamespace(Oid nsoid);
 static void dumpTableData(Archive *fout, const TableDataInfo *tdinfo);
 static void refreshMatViewData(Archive *fout, const TableDataInfo *tdinfo);
 static void guessConstraintInheritance(TableInfo *tblinfo, int numTables);
-static void dumpComment(Archive *fout, const char *type, const char *name,
-						const char *namespace, const char *owner,
-						CatalogId catalogId, int subid, DumpId dumpId);
+static void dumpCommentExtended(Archive *fout, const char *type,
+								const char *name, const char *namespace,
+								const char *owner, CatalogId catalogId,
+								int subid, DumpId dumpId,
+								const char *initdb_comment);
+static inline void dumpComment(Archive *fout, const char *type,
+							   const char *name, const char *namespace,
+							   const char *owner, CatalogId catalogId,
+							   int subid, DumpId dumpId);
 static int	findComments(Archive *fout, Oid classoid, Oid objoid,
 						 CommentItem **items);
 static int	collectComments(Archive *fout, CommentItem **items);
@@ -1599,6 +1606,13 @@ static void
 selectDumpableNamespace(NamespaceInfo *nsinfo, Archive *fout)
 {
 	/*
+	 * DUMP_COMPONENT_DEFINITION typically implies a CREATE SCHEMA statement
+	 * and (for --clean) a DROP SCHEMA statement.  (In the absence of
+	 * DUMP_COMPONENT_DEFINITION, this value is irrelevant.)
+	 */
+	nsinfo->create = true;
+
+	/*
 	 * If specific tables are being dumped, do not dump any complete
 	 * namespaces. If specific namespaces are being dumped, dump just those
 	 * namespaces. Otherwise, dump all non-system namespaces.
@@ -1630,13 +1644,15 @@ selectDumpableNamespace(NamespaceInfo *nsinfo, Archive *fout)
 	{
 		/*
 		 * The public schema is a strange beast that sits in a sort of
-		 * no-mans-land between being a system object and a user object.  We
-		 * don't want to dump creation or comment commands for it, because
-		 * that complicates matters for non-superuser use of pg_dump.  But we
-		 * should dump any ACL changes that have occurred for it, and of
-		 * course we should dump contained objects.
+		 * no-mans-land between being a system object and a user object.
+		 * CREATE SCHEMA would fail, so its DUMP_COMPONENT_DEFINITION is just
+		 * a comment and an indication of ownership.  If the owner is the
+		 * default, that DUMP_COMPONENT_DEFINITION is superfluous.
 		 */
-		nsinfo->dobj.dump = DUMP_COMPONENT_ACL;
+		nsinfo->create = false;
+		nsinfo->dobj.dump = DUMP_COMPONENT_ALL;
+		if (nsinfo->nspowner == BOOTSTRAP_SUPERUSERID)
+			nsinfo->dobj.dump &= ~DUMP_COMPONENT_DEFINITION;
 		nsinfo->dobj.dump_contains = DUMP_COMPONENT_ALL;
 	}
 	else
@@ -3428,8 +3444,8 @@ getBlobs(Archive *fout)
 		PQExpBuffer init_racl_subquery = createPQExpBuffer();
 
 		buildACLQueries(acl_subquery, racl_subquery, init_acl_subquery,
-						init_racl_subquery, "l.lomacl", "l.lomowner", "'L'",
-						dopt->binary_upgrade);
+						init_racl_subquery, "l.lomacl", "l.lomowner",
+						"pip.initprivs", "'L'", dopt->binary_upgrade);
 
 		appendPQExpBuffer(blobQry,
 						  "SELECT l.oid, (%s l.lomowner) AS rolname, "
@@ -4830,6 +4846,7 @@ getNamespaces(Archive *fout, int *numNamespaces)
 	int			i_tableoid;
 	int			i_oid;
 	int			i_nspname;
+	int			i_nspowner;
 	int			i_rolname;
 	int			i_nspacl;
 	int			i_rnspacl;
@@ -4849,11 +4866,27 @@ getNamespaces(Archive *fout, int *numNamespaces)
 		PQExpBuffer init_acl_subquery = createPQExpBuffer();
 		PQExpBuffer init_racl_subquery = createPQExpBuffer();
 
+		/*
+		 * Bypass pg_init_privs.initprivs for the public schema.  Dropping and
+		 * recreating the schema detaches it from its pg_init_privs row, but
+		 * an empty destination database starts with this ACL nonetheless.
+		 * Also, we support dump/reload of public schema ownership changes.
+		 * ALTER SCHEMA OWNER filters nspacl through aclnewowner(), but
+		 * initprivs continues to reflect the initial owner (the bootstrap
+		 * superuser).  Hence, synthesize the value that nspacl will have
+		 * after the restore's ALTER SCHEMA OWNER.
+		 */
 		buildACLQueries(acl_subquery, racl_subquery, init_acl_subquery,
-						init_racl_subquery, "n.nspacl", "n.nspowner", "'n'",
-						dopt->binary_upgrade);
+						init_racl_subquery, "n.nspacl", "n.nspowner",
+						"CASE WHEN n.nspname = 'public' THEN array["
+						"  format('%s=UC/%s', "
+						"         n.nspowner::regrole, n.nspowner::regrole),"
+						"  format('=UC/%s', n.nspowner::regrole)]::aclitem[] "
+						"ELSE pip.initprivs END",
+						"'n'", dopt->binary_upgrade);
 
 		appendPQExpBuffer(query, "SELECT n.tableoid, n.oid, n.nspname, "
+						  "n.nspowner, "
 						  "(%s nspowner) AS rolname, "
 						  "%s as nspacl, "
 						  "%s as rnspacl, "
@@ -4878,7 +4911,7 @@ getNamespaces(Archive *fout, int *numNamespaces)
 		destroyPQExpBuffer(init_racl_subquery);
 	}
 	else
-		appendPQExpBuffer(query, "SELECT tableoid, oid, nspname, "
+		appendPQExpBuffer(query, "SELECT tableoid, oid, nspname, nspowner, "
 						  "(%s nspowner) AS rolname, "
 						  "nspacl, NULL as rnspacl, "
 						  "NULL AS initnspacl, NULL as initrnspacl "
@@ -4894,6 +4927,7 @@ getNamespaces(Archive *fout, int *numNamespaces)
 	i_tableoid = PQfnumber(res, "tableoid");
 	i_oid = PQfnumber(res, "oid");
 	i_nspname = PQfnumber(res, "nspname");
+	i_nspowner = PQfnumber(res, "nspowner");
 	i_rolname = PQfnumber(res, "rolname");
 	i_nspacl = PQfnumber(res, "nspacl");
 	i_rnspacl = PQfnumber(res, "rnspacl");
@@ -4907,6 +4941,7 @@ getNamespaces(Archive *fout, int *numNamespaces)
 		nsinfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
 		AssignDumpId(&nsinfo[i].dobj);
 		nsinfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_nspname));
+		nsinfo[i].nspowner = atooid(PQgetvalue(res, i, i_nspowner));
 		nsinfo[i].rolname = pg_strdup(PQgetvalue(res, i, i_rolname));
 		nsinfo[i].nspacl = pg_strdup(PQgetvalue(res, i, i_nspacl));
 		nsinfo[i].rnspacl = pg_strdup(PQgetvalue(res, i, i_rnspacl));
@@ -5098,8 +5133,8 @@ getTypes(Archive *fout, int *numTypes)
 		PQExpBuffer initracl_subquery = createPQExpBuffer();
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
-						initracl_subquery, "t.typacl", "t.typowner", "'T'",
-						dopt->binary_upgrade);
+						initracl_subquery, "t.typacl", "t.typowner",
+						"pip.initprivs", "'T'", dopt->binary_upgrade);
 
 		appendPQExpBuffer(query, "SELECT t.tableoid, t.oid, t.typname, "
 						  "t.typnamespace, "
@@ -5800,8 +5835,8 @@ getAggregates(Archive *fout, int *numAggs)
 		const char *agg_check;
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
-						initracl_subquery, "p.proacl", "p.proowner", "'f'",
-						dopt->binary_upgrade);
+						initracl_subquery, "p.proacl", "p.proowner",
+						"pip.initprivs", "'f'", dopt->binary_upgrade);
 
 		agg_check = (fout->remoteVersion >= 110000 ? "p.prokind = 'a'"
 					 : "p.proisagg");
@@ -6013,8 +6048,8 @@ getFuncs(Archive *fout, int *numFuncs)
 		const char *not_agg_check;
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
-						initracl_subquery, "p.proacl", "p.proowner", "'f'",
-						dopt->binary_upgrade);
+						initracl_subquery, "p.proacl", "p.proowner",
+						"pip.initprivs", "'f'", dopt->binary_upgrade);
 
 		not_agg_check = (fout->remoteVersion >= 110000 ? "p.prokind <> 'a'"
 						 : "NOT p.proisagg");
@@ -6310,13 +6345,14 @@ getTables(Archive *fout, int *numTables)
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
 						initracl_subquery, "c.relacl", "c.relowner",
+						"pip.initprivs",
 						"CASE WHEN c.relkind = " CppAsString2(RELKIND_SEQUENCE)
 						" THEN 's' ELSE 'r' END::\"char\"",
 						dopt->binary_upgrade);
 
 		buildACLQueries(attacl_subquery, attracl_subquery, attinitacl_subquery,
-						attinitracl_subquery, "at.attacl", "c.relowner", "'c'",
-						dopt->binary_upgrade);
+						attinitracl_subquery, "at.attacl", "c.relowner",
+						"pip.initprivs", "'c'", dopt->binary_upgrade);
 
 		appendPQExpBuffer(query,
 						  "SELECT c.tableoid, c.oid, c.relname, "
@@ -8241,8 +8277,8 @@ getProcLangs(Archive *fout, int *numProcLangs)
 		PQExpBuffer initracl_subquery = createPQExpBuffer();
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
-						initracl_subquery, "l.lanacl", "l.lanowner", "'l'",
-						dopt->binary_upgrade);
+						initracl_subquery, "l.lanacl", "l.lanowner",
+						"pip.initprivs", "'l'", dopt->binary_upgrade);
 
 		/* pg_language has a laninline column */
 		appendPQExpBuffer(query, "SELECT l.tableoid, l.oid, "
@@ -9432,8 +9468,8 @@ getForeignDataWrappers(Archive *fout, int *numForeignDataWrappers)
 		PQExpBuffer initracl_subquery = createPQExpBuffer();
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
-						initracl_subquery, "f.fdwacl", "f.fdwowner", "'F'",
-						dopt->binary_upgrade);
+						initracl_subquery, "f.fdwacl", "f.fdwowner",
+						"pip.initprivs", "'F'", dopt->binary_upgrade);
 
 		appendPQExpBuffer(query, "SELECT f.tableoid, f.oid, f.fdwname, "
 						  "(%s f.fdwowner) AS rolname, "
@@ -9599,8 +9635,8 @@ getForeignServers(Archive *fout, int *numForeignServers)
 		PQExpBuffer initracl_subquery = createPQExpBuffer();
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
-						initracl_subquery, "f.srvacl", "f.srvowner", "'S'",
-						dopt->binary_upgrade);
+						initracl_subquery, "f.srvacl", "f.srvowner",
+						"pip.initprivs", "'S'", dopt->binary_upgrade);
 
 		appendPQExpBuffer(query, "SELECT f.tableoid, f.oid, f.srvname, "
 						  "(%s f.srvowner) AS rolname, "
@@ -9746,6 +9782,7 @@ getDefaultACLs(Archive *fout, int *numDefaultACLs)
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
 						initracl_subquery, "defaclacl", "defaclrole",
+						"pip.initprivs",
 						"CASE WHEN defaclobjtype = 'S' THEN 's' ELSE defaclobjtype END::\"char\"",
 						dopt->binary_upgrade);
 
@@ -9839,7 +9876,7 @@ getDefaultACLs(Archive *fout, int *numDefaultACLs)
 }
 
 /*
- * dumpComment --
+ * dumpCommentExtended --
  *
  * This routine is used to dump any comments associated with the
  * object handed to this routine. The routine takes the object type
@@ -9862,9 +9899,11 @@ getDefaultACLs(Archive *fout, int *numDefaultACLs)
  * calling ArchiveEntry() for the specified object.
  */
 static void
-dumpComment(Archive *fout, const char *type, const char *name,
-			const char *namespace, const char *owner,
-			CatalogId catalogId, int subid, DumpId dumpId)
+dumpCommentExtended(Archive *fout, const char *type,
+					const char *name, const char *namespace,
+					const char *owner, CatalogId catalogId,
+					int subid, DumpId dumpId,
+					const char *initdb_comment)
 {
 	DumpOptions *dopt = fout->dopt;
 	CommentItem *comments;
@@ -9900,6 +9939,25 @@ dumpComment(Archive *fout, const char *type, const char *name,
 		ncomments--;
 	}
 
+	if (initdb_comment != NULL)
+	{
+		static CommentItem empty_comment = {.descr = ""};
+
+		/*
+		 * initdb creates this object with a comment.  Skip dumping the
+		 * initdb-provided comment, which would complicate matters for
+		 * non-superuser use of pg_dump.  When the DBA has removed initdb's
+		 * comment, replicate that.
+		 */
+		if (ncomments == 0)
+		{
+			comments = &empty_comment;
+			ncomments = 1;
+		}
+		else if (strcmp(comments->descr, initdb_comment) == 0)
+			ncomments = 0;
+	}
+
 	/* If a comment exists, build COMMENT ON statement */
 	if (ncomments > 0)
 	{
@@ -9933,6 +9991,21 @@ dumpComment(Archive *fout, const char *type, const char *name,
 		destroyPQExpBuffer(query);
 		destroyPQExpBuffer(tag);
 	}
+}
+
+/*
+ * dumpComment --
+ *
+ * Typical simplification of the above function.
+ */
+static inline void
+dumpComment(Archive *fout, const char *type,
+			const char *name, const char *namespace,
+			const char *owner, CatalogId catalogId,
+			int subid, DumpId dumpId)
+{
+	dumpCommentExtended(fout, type, name, namespace, owner,
+						catalogId, subid, dumpId, NULL);
 }
 
 /*
@@ -10363,9 +10436,19 @@ dumpNamespace(Archive *fout, const NamespaceInfo *nspinfo)
 
 	qnspname = pg_strdup(fmtId(nspinfo->dobj.name));
 
-	appendPQExpBuffer(delq, "DROP SCHEMA %s;\n", qnspname);
-
-	appendPQExpBuffer(q, "CREATE SCHEMA %s;\n", qnspname);
+	if (nspinfo->create)
+	{
+		appendPQExpBuffer(delq, "DROP SCHEMA %s;\n", qnspname);
+		appendPQExpBuffer(q, "CREATE SCHEMA %s;\n", qnspname);
+	}
+	else
+	{
+		/* see selectDumpableNamespace() */
+		appendPQExpBufferStr(delq,
+							 "-- *not* dropping schema, since initdb creates it\n");
+		appendPQExpBufferStr(q,
+							 "-- *not* creating schema, since initdb creates it\n");
+	}
 
 	if (dopt->binary_upgrade)
 		binary_upgrade_extension_member(q, &nspinfo->dobj,
@@ -10382,9 +10465,18 @@ dumpNamespace(Archive *fout, const NamespaceInfo *nspinfo)
 
 	/* Dump Schema Comments and Security Labels */
 	if (nspinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
-		dumpComment(fout, "SCHEMA", qnspname,
-					NULL, nspinfo->rolname,
-					nspinfo->dobj.catId, 0, nspinfo->dobj.dumpId);
+	{
+		const char *initdb_comment = NULL;
+
+		if (!nspinfo->create && strcmp(qnspname, "public") == 0)
+			initdb_comment = (fout->remoteVersion >= 80300 ?
+							  "standard public schema" :
+							  "Standard public schema");
+		dumpCommentExtended(fout, "SCHEMA", qnspname,
+							NULL, nspinfo->rolname,
+							nspinfo->dobj.catId, 0, nspinfo->dobj.dumpId,
+							initdb_comment);
+	}
 
 	if (nspinfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
 		dumpSecLabel(fout, "SCHEMA", qnspname,
@@ -15556,8 +15648,8 @@ dumpTable(Archive *fout, const TableInfo *tbinfo)
 			PQExpBuffer initracl_subquery = createPQExpBuffer();
 
 			buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
-							initracl_subquery, "at.attacl", "c.relowner", "'c'",
-							dopt->binary_upgrade);
+							initracl_subquery, "at.attacl", "c.relowner",
+							"pip.initprivs", "'c'", dopt->binary_upgrade);
 
 			appendPQExpBuffer(query,
 							  "SELECT at.attname, "

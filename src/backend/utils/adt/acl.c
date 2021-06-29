@@ -39,6 +39,7 @@
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/sortscalar.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
 
@@ -1490,7 +1491,7 @@ aclmembers(const Acl *acl, Oid **roleids)
 	}
 
 	/* Sort the array */
-	qsort(list, j, sizeof(Oid), oid_cmp);
+	qsort_oid(list, j);
 
 	/*
 	 * We could repalloc the array down to minimum size, but it's hardly worth
@@ -1499,7 +1500,7 @@ aclmembers(const Acl *acl, Oid **roleids)
 	*roleids = list;
 
 	/* Remove duplicates from the array */
-	return qunique(list, j, sizeof(Oid), oid_cmp);
+	return unique_oid(list, j);
 }
 
 

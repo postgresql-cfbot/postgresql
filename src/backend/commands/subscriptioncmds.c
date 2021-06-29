@@ -44,6 +44,7 @@
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/sortscalar.h"
 #include "utils/syscache.h"
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
@@ -590,8 +591,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 
 			subrel_local_oids[off++] = relstate->relid;
 		}
-		qsort(subrel_local_oids, list_length(subrel_states),
-			  sizeof(Oid), oid_cmp);
+		qsort_oid(subrel_local_oids, list_length(subrel_states));
 
 		/*
 		 * Rels that we want to remove from subscription and drop any slots
@@ -622,8 +622,8 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 
 			pubrel_local_oids[off++] = relid;
 
-			if (!bsearch(&relid, subrel_local_oids,
-						 list_length(subrel_states), sizeof(Oid), oid_cmp))
+			if (!bsearch_oid(&relid, subrel_local_oids,
+							 list_length(subrel_states)))
 			{
 				AddSubscriptionRelState(sub->oid, relid,
 										copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY,
@@ -638,16 +638,15 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 		 * Next remove state for tables we should not care about anymore using
 		 * the data we collected above
 		 */
-		qsort(pubrel_local_oids, list_length(pubrel_names),
-			  sizeof(Oid), oid_cmp);
+		qsort_oid(pubrel_local_oids, list_length(pubrel_names));
 
 		remove_rel_len = 0;
 		for (off = 0; off < list_length(subrel_states); off++)
 		{
 			Oid			relid = subrel_local_oids[off];
 
-			if (!bsearch(&relid, pubrel_local_oids,
-						 list_length(pubrel_names), sizeof(Oid), oid_cmp))
+			if (!bsearch_oid(&relid, pubrel_local_oids,
+							 list_length(pubrel_names)))
 			{
 				char		state;
 				XLogRecPtr	statelsn;

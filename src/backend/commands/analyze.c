@@ -99,7 +99,6 @@ static VacAttrStats *examine_attribute(Relation onerel, int attnum,
 static int	acquire_sample_rows(Relation onerel, int elevel,
 								HeapTuple *rows, int targrows,
 								double *totalrows, double *totaldeadrows);
-static int	compare_rows(const void *a, const void *b);
 static int	acquire_inherited_sample_rows(Relation onerel, int elevel,
 										  HeapTuple *rows, int targrows,
 										  double *totalrows, double *totaldeadrows);
@@ -1112,6 +1111,14 @@ examine_attribute(Relation onerel, int attnum, Node *index_expr)
 	return stats;
 }
 
+#define ST_SORT sort_heaptuples_by_tid
+#define ST_ELEMENT_TYPE HeapTuple
+#define ST_COMPARE(a, b) (itemptr_encode(&((*a)->t_self)) - itemptr_encode(&((*b)->t_self)))
+#define ST_COMPARE_RET_TYPE int64
+#define ST_SCOPE static
+#define ST_DEFINE
+#include "lib/sort_template.h"
+
 /*
  * acquire_sample_rows -- acquire a random sample of rows from the table
  *
@@ -1323,7 +1330,7 @@ acquire_sample_rows(Relation onerel, int elevel,
 	 * tuples are already sorted.
 	 */
 	if (numrows == targrows)
-		qsort((void *) rows, numrows, sizeof(HeapTuple), compare_rows);
+		sort_heaptuples_by_tid(rows, numrows);
 
 	/*
 	 * Estimate total numbers of live and dead rows in relation, extrapolating
@@ -1357,31 +1364,6 @@ acquire_sample_rows(Relation onerel, int elevel,
 
 	return numrows;
 }
-
-/*
- * qsort comparator for sorting rows[] array
- */
-static int
-compare_rows(const void *a, const void *b)
-{
-	HeapTuple	ha = *(const HeapTuple *) a;
-	HeapTuple	hb = *(const HeapTuple *) b;
-	BlockNumber ba = ItemPointerGetBlockNumber(&ha->t_self);
-	OffsetNumber oa = ItemPointerGetOffsetNumber(&ha->t_self);
-	BlockNumber bb = ItemPointerGetBlockNumber(&hb->t_self);
-	OffsetNumber ob = ItemPointerGetOffsetNumber(&hb->t_self);
-
-	if (ba < bb)
-		return -1;
-	if (ba > bb)
-		return 1;
-	if (oa < ob)
-		return -1;
-	if (oa > ob)
-		return 1;
-	return 0;
-}
-
 
 /*
  * acquire_inherited_sample_rows -- acquire sample rows from inheritance tree

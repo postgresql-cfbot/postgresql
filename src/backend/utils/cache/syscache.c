@@ -73,9 +73,9 @@
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
-#include "lib/qunique.h"
 #include "utils/catcache.h"
 #include "utils/rel.h"
+#include "utils/sortscalar.h"
 #include "utils/syscache.h"
 
 /*---------------------------------------------------------------------------
@@ -1006,8 +1006,6 @@ static int	SysCacheRelationOidSize;
 static Oid	SysCacheSupportingRelOid[SysCacheSize * 2];
 static int	SysCacheSupportingRelOidSize;
 
-static int	oid_compare(const void *a, const void *b);
-
 
 /*
  * InitCatalogCache - initialize the caches
@@ -1055,17 +1053,13 @@ InitCatalogCache(void)
 	Assert(SysCacheSupportingRelOidSize <= lengthof(SysCacheSupportingRelOid));
 
 	/* Sort and de-dup OID arrays, so we can use binary search. */
-	pg_qsort(SysCacheRelationOid, SysCacheRelationOidSize,
-			 sizeof(Oid), oid_compare);
+	qsort_oid(SysCacheRelationOid, SysCacheRelationOidSize);
 	SysCacheRelationOidSize =
-		qunique(SysCacheRelationOid, SysCacheRelationOidSize, sizeof(Oid),
-				oid_compare);
+		unique_oid(SysCacheRelationOid, SysCacheRelationOidSize);
 
-	pg_qsort(SysCacheSupportingRelOid, SysCacheSupportingRelOidSize,
-			 sizeof(Oid), oid_compare);
+	qsort_oid(SysCacheSupportingRelOid, SysCacheSupportingRelOidSize);
 	SysCacheSupportingRelOidSize =
-		qunique(SysCacheSupportingRelOid, SysCacheSupportingRelOidSize,
-				sizeof(Oid), oid_compare);
+		unique_oid(SysCacheSupportingRelOid, SysCacheSupportingRelOidSize);
 
 	CacheInitialized = true;
 }
@@ -1506,22 +1500,9 @@ RelationInvalidatesSnapshotsOnly(Oid relid)
 bool
 RelationHasSysCache(Oid relid)
 {
-	int			low = 0,
-				high = SysCacheRelationOidSize - 1;
-
-	while (low <= high)
-	{
-		int			middle = low + (high - low) / 2;
-
-		if (SysCacheRelationOid[middle] == relid)
-			return true;
-		if (SysCacheRelationOid[middle] < relid)
-			low = middle + 1;
-		else
-			high = middle - 1;
-	}
-
-	return false;
+	return bsearch_oid(&relid,
+					   SysCacheRelationOid,
+					   SysCacheRelationOidSize);
 }
 
 /*
@@ -1531,35 +1512,7 @@ RelationHasSysCache(Oid relid)
 bool
 RelationSupportsSysCache(Oid relid)
 {
-	int			low = 0,
-				high = SysCacheSupportingRelOidSize - 1;
-
-	while (low <= high)
-	{
-		int			middle = low + (high - low) / 2;
-
-		if (SysCacheSupportingRelOid[middle] == relid)
-			return true;
-		if (SysCacheSupportingRelOid[middle] < relid)
-			low = middle + 1;
-		else
-			high = middle - 1;
-	}
-
-	return false;
-}
-
-
-/*
- * OID comparator for pg_qsort
- */
-static int
-oid_compare(const void *a, const void *b)
-{
-	Oid			oa = *((const Oid *) a);
-	Oid			ob = *((const Oid *) b);
-
-	if (oa == ob)
-		return 0;
-	return (oa > ob) ? 1 : -1;
+	return bsearch_oid(&relid,
+					   SysCacheSupportingRelOid,
+					   SysCacheSupportingRelOidSize);
 }

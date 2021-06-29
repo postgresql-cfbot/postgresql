@@ -22,7 +22,6 @@
 #include "access/relscan.h"
 #include "catalog/catalog.h"
 #include "commands/progress.h"
-#include "lib/qunique.h"
 #include "miscadmin.h"
 #include "utils/array.h"
 #include "utils/datum.h"
@@ -35,7 +34,6 @@ typedef struct BTSortArrayContext
 {
 	FmgrInfo	flinfo;
 	Oid			collation;
-	bool		reverse;
 } BTSortArrayContext;
 
 static Datum _bt_find_extreme_element(IndexScanDesc scan, ScanKey skey,
@@ -44,7 +42,6 @@ static Datum _bt_find_extreme_element(IndexScanDesc scan, ScanKey skey,
 static int	_bt_sort_array_elements(IndexScanDesc scan, ScanKey skey,
 									bool reverse,
 									Datum *elems, int nelems);
-static int	_bt_compare_array_elements(const void *a, const void *b, void *arg);
 static bool _bt_compare_scankey_args(IndexScanDesc scan, ScanKey op,
 									 ScanKey leftarg, ScanKey rightarg,
 									 bool *result);
@@ -429,6 +426,33 @@ _bt_find_extreme_element(IndexScanDesc scan, ScanKey skey,
 	return result;
 }
 
+/* Define a specialized sort function for _bt_sort_array_elements. */
+#define ST_SORT qsort_bt_array_elements
+#define ST_UNIQUE unique_bt_array_elements
+#define ST_ELEMENT_TYPE Datum
+#define ST_COMPARE(a, b, cxt) \
+	DatumGetInt32(FunctionCall2Coll(&cxt->flinfo, cxt->collation, *a, *b))
+#define ST_COMPARE_ARG_TYPE BTSortArrayContext
+#define ST_SCOPE static
+#define ST_DEFINE
+#include "lib/sort_template.h"
+
+/*
+ * Define a reverse sort function for _bt_sort_array_elements.  Note use of
+ * int64 comparator expression, so that we can safely invert even INT_MIN with
+ * simple substraction from zero.
+ */
+#define ST_SORT qsort_bt_array_elements_reverse
+#define ST_UNIQUE unique_bt_array_elements_reverse
+#define ST_ELEMENT_TYPE Datum
+#define ST_COMPARE(a, b, cxt) \
+	(0 - (DatumGetInt32(FunctionCall2Coll(&cxt->flinfo, cxt->collation, *a, *b))))
+#define ST_COMPARE_RET_TYPE int64
+#define ST_COMPARE_ARG_TYPE BTSortArrayContext
+#define ST_SCOPE static
+#define ST_DEFINE
+#include "lib/sort_template.h"
+
 /*
  * _bt_sort_array_elements() -- sort and de-dup array elements
  *
@@ -477,35 +501,19 @@ _bt_sort_array_elements(IndexScanDesc scan, ScanKey skey,
 			 BTORDER_PROC, elemtype, elemtype,
 			 rel->rd_opfamily[skey->sk_attno - 1]);
 
-	/* Sort the array elements */
+	/* Sort the array elements and remove duplicates */
 	fmgr_info(cmp_proc, &cxt.flinfo);
 	cxt.collation = skey->sk_collation;
-	cxt.reverse = reverse;
-	qsort_arg((void *) elems, nelems, sizeof(Datum),
-			  _bt_compare_array_elements, (void *) &cxt);
-
-	/* Now scan the sorted elements and remove duplicates */
-	return qunique_arg(elems, nelems, sizeof(Datum),
-					   _bt_compare_array_elements, &cxt);
-}
-
-/*
- * qsort_arg comparator for sorting array elements
- */
-static int
-_bt_compare_array_elements(const void *a, const void *b, void *arg)
-{
-	Datum		da = *((const Datum *) a);
-	Datum		db = *((const Datum *) b);
-	BTSortArrayContext *cxt = (BTSortArrayContext *) arg;
-	int32		compare;
-
-	compare = DatumGetInt32(FunctionCall2Coll(&cxt->flinfo,
-											  cxt->collation,
-											  da, db));
-	if (cxt->reverse)
-		INVERT_COMPARE_RESULT(compare);
-	return compare;
+	if (reverse)
+	{
+		qsort_bt_array_elements_reverse(elems, nelems, &cxt);
+		return unique_bt_array_elements_reverse(elems, nelems, &cxt);
+	}
+	else
+	{
+		qsort_bt_array_elements(elems, nelems, &cxt);
+		return unique_bt_array_elements(elems, nelems, &cxt);
+	}
 }
 
 /*

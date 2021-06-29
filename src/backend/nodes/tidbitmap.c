@@ -234,9 +234,6 @@ static PagetableEntry *tbm_get_pageentry(TIDBitmap *tbm, BlockNumber pageno);
 static bool tbm_page_is_lossy(const TIDBitmap *tbm, BlockNumber pageno);
 static void tbm_mark_page_lossy(TIDBitmap *tbm, BlockNumber pageno);
 static void tbm_lossify(TIDBitmap *tbm);
-static int	tbm_comparator(const void *left, const void *right);
-static int	tbm_shared_comparator(const void *left, const void *right,
-								  void *arg);
 
 /* define hashtable mapping block numbers to PagetableEntry's */
 #define SH_USE_NONDEFAULT_ALLOCATOR
@@ -671,6 +668,29 @@ tbm_is_empty(const TIDBitmap *tbm)
 	return (tbm->nentries == 0);
 }
 
+/* An inline sort function to sort PagetableEntry pointers by block. */
+#define ST_SORT qsort_pagetable
+#define ST_ELEMENT_TYPE PagetableEntry *
+#define ST_COMPARE(a, b) (((int64) (*(a))->blockno) - (((int64) (*(b))->blockno)))
+#define ST_COMPARE_RET_TYPE int64
+#define ST_SCOPE static
+#define ST_DEFINE
+#include "lib/sort_template.h"
+
+/*
+ * As above, but this will get index into PagetableEntry array.  Therefore,
+ * it needs to get actual PagetableEntry using the index before comparing the
+ * blockno.
+ */
+#define ST_SORT qsort_pagetable_shared
+#define ST_ELEMENT_TYPE int
+#define ST_COMPARE(a, b, base) ((int64) (base)[*(a)].blockno - ((int64) (base)[*(b)].blockno))
+#define ST_COMPARE_ARG_TYPE PagetableEntry
+#define ST_COMPARE_RET_TYPE int64
+#define ST_SCOPE static
+#define ST_DEFINE
+#include "lib/sort_template.h"
+
 /*
  * tbm_begin_iterate - prepare to iterate through a TIDBitmap
  *
@@ -740,11 +760,9 @@ tbm_begin_iterate(TIDBitmap *tbm)
 		Assert(npages == tbm->npages);
 		Assert(nchunks == tbm->nchunks);
 		if (npages > 1)
-			qsort(tbm->spages, npages, sizeof(PagetableEntry *),
-				  tbm_comparator);
+			qsort_pagetable(tbm->spages, npages);
 		if (nchunks > 1)
-			qsort(tbm->schunks, nchunks, sizeof(PagetableEntry *),
-				  tbm_comparator);
+			qsort_pagetable(tbm->schunks, nchunks);
 	}
 
 	tbm->iterating = TBM_ITERATING_PRIVATE;
@@ -853,11 +871,9 @@ tbm_prepare_shared_iterate(TIDBitmap *tbm)
 		if (ptbase != NULL)
 			pg_atomic_init_u32(&ptbase->refcount, 0);
 		if (npages > 1)
-			qsort_arg((void *) (ptpages->index), npages, sizeof(int),
-					  tbm_shared_comparator, (void *) ptbase->ptentry);
+			qsort_pagetable_shared(ptpages->index, npages, ptbase->ptentry);
 		if (nchunks > 1)
-			qsort_arg((void *) (ptchunks->index), nchunks, sizeof(int),
-					  tbm_shared_comparator, (void *) ptbase->ptentry);
+			qsort_pagetable_shared(ptchunks->index, nchunks, ptbase->ptentry);
 	}
 
 	/*
@@ -1414,41 +1430,6 @@ tbm_lossify(TIDBitmap *tbm)
 	 */
 	if (tbm->nentries > tbm->maxentries / 2)
 		tbm->maxentries = Min(tbm->nentries, (INT_MAX - 1) / 2) * 2;
-}
-
-/*
- * qsort comparator to handle PagetableEntry pointers.
- */
-static int
-tbm_comparator(const void *left, const void *right)
-{
-	BlockNumber l = (*((PagetableEntry *const *) left))->blockno;
-	BlockNumber r = (*((PagetableEntry *const *) right))->blockno;
-
-	if (l < r)
-		return -1;
-	else if (l > r)
-		return 1;
-	return 0;
-}
-
-/*
- * As above, but this will get index into PagetableEntry array.  Therefore,
- * it needs to get actual PagetableEntry using the index before comparing the
- * blockno.
- */
-static int
-tbm_shared_comparator(const void *left, const void *right, void *arg)
-{
-	PagetableEntry *base = (PagetableEntry *) arg;
-	PagetableEntry *lpage = &base[*(int *) left];
-	PagetableEntry *rpage = &base[*(int *) right];
-
-	if (lpage->blockno < rpage->blockno)
-		return -1;
-	else if (lpage->blockno > rpage->blockno)
-		return 1;
-	return 0;
 }
 
 /*

@@ -33,6 +33,7 @@
 #include "storage/bufmgr.h"
 #include "utils/array.h"
 #include "utils/rel.h"
+#include "utils/sortitemptr.h"
 
 
 #define IsCTIDVar(node)  \
@@ -51,7 +52,6 @@ typedef struct TidExpr
 
 static void TidExprListCreate(TidScanState *tidstate);
 static void TidListEval(TidScanState *tidstate);
-static int	itemptr_comparator(const void *a, const void *b);
 static TupleTableSlot *TidNext(TidScanState *node);
 
 
@@ -263,39 +263,13 @@ TidListEval(TidScanState *tidstate)
 		/* CurrentOfExpr could never appear OR'd with something else */
 		Assert(!tidstate->tss_isCurrentOf);
 
-		qsort((void *) tidList, numTids, sizeof(ItemPointerData),
-			  itemptr_comparator);
-		numTids = qunique(tidList, numTids, sizeof(ItemPointerData),
-						  itemptr_comparator);
+		qsort_itemptr(tidList, numTids);
+		numTids = unique_itemptr(tidList, numTids);
 	}
 
 	tidstate->tss_TidList = tidList;
 	tidstate->tss_NumTids = numTids;
 	tidstate->tss_TidPtr = -1;
-}
-
-/*
- * qsort comparator for ItemPointerData items
- */
-static int
-itemptr_comparator(const void *a, const void *b)
-{
-	const ItemPointerData *ipa = (const ItemPointerData *) a;
-	const ItemPointerData *ipb = (const ItemPointerData *) b;
-	BlockNumber ba = ItemPointerGetBlockNumber(ipa);
-	BlockNumber bb = ItemPointerGetBlockNumber(ipb);
-	OffsetNumber oa = ItemPointerGetOffsetNumber(ipa);
-	OffsetNumber ob = ItemPointerGetOffsetNumber(ipb);
-
-	if (ba < bb)
-		return -1;
-	if (ba > bb)
-		return 1;
-	if (oa < ob)
-		return -1;
-	if (oa > ob)
-		return 1;
-	return 0;
 }
 
 /* ----------------------------------------------------------------

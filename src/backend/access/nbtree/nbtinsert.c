@@ -19,11 +19,11 @@
 #include "access/nbtxlog.h"
 #include "access/transam.h"
 #include "access/xloginsert.h"
-#include "lib/qunique.h"
 #include "miscadmin.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
 #include "storage/smgr.h"
+#include "utils/sortscalar.h"
 
 /* Minimum tree height for application of fastpath optimization */
 #define BTREE_FASTPATH_MIN_LEVEL	2
@@ -70,7 +70,6 @@ static void _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 static BlockNumber *_bt_deadblocks(Page page, OffsetNumber *deletable,
 								   int ndeletable, IndexTuple newitem,
 								   int *nblocks);
-static inline int _bt_blk_cmp(const void *arg1, const void *arg2);
 
 /*
  *	_bt_doinsert() -- Handle insertion of a single index tuple in the tree.
@@ -2814,8 +2813,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 		if (!BTreeTupleIsPosting(itup))
 		{
 			tidblock = ItemPointerGetBlockNumber(&itup->t_tid);
-			match = bsearch(&tidblock, deadblocks, ndeadblocks,
-							sizeof(BlockNumber), _bt_blk_cmp);
+			match = bsearch_blocknum(&tidblock, deadblocks, ndeadblocks);
 
 			if (!match)
 			{
@@ -2845,8 +2843,7 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 				ItemPointer tid = BTreeTupleGetPostingN(itup, p);
 
 				tidblock = ItemPointerGetBlockNumber(tid);
-				match = bsearch(&tidblock, deadblocks, ndeadblocks,
-								sizeof(BlockNumber), _bt_blk_cmp);
+				match = bsearch_blocknum(&tidblock, deadblocks, ndeadblocks);
 
 				if (!match)
 				{
@@ -2966,25 +2963,8 @@ _bt_deadblocks(Page page, OffsetNumber *deletable, int ndeletable,
 		}
 	}
 
-	qsort(tidblocks, ntids, sizeof(BlockNumber), _bt_blk_cmp);
-	*nblocks = qunique(tidblocks, ntids, sizeof(BlockNumber), _bt_blk_cmp);
+	qsort_blocknum(tidblocks, ntids);
+	*nblocks = unique_blocknum(tidblocks, ntids);
 
 	return tidblocks;
-}
-
-/*
- * _bt_blk_cmp() -- qsort comparison function for _bt_simpledel_pass
- */
-static inline int
-_bt_blk_cmp(const void *arg1, const void *arg2)
-{
-	BlockNumber b1 = *((BlockNumber *) arg1);
-	BlockNumber b2 = *((BlockNumber *) arg2);
-
-	if (b1 < b2)
-		return -1;
-	else if (b1 > b2)
-		return 1;
-
-	return 0;
 }

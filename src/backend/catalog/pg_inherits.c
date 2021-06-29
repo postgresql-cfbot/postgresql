@@ -30,6 +30,7 @@
 #include "utils/fmgroids.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
+#include "utils/sortscalar.h"
 #include "utils/syscache.h"
 
 /*
@@ -199,7 +200,7 @@ find_inheritance_children_extended(Oid parentrelId, bool omit_detached,
 	 * lock children in the same order to avoid needless deadlocks.
 	 */
 	if (numoids > 1)
-		qsort(oidarr, numoids, sizeof(Oid), oid_cmp);
+		qsort_oid(oidarr, numoids);
 
 	/*
 	 * Acquire locks and build the result list.

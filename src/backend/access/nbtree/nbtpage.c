@@ -1468,24 +1468,16 @@ _bt_delitems_update(BTVacuumPosting *updatable, int nupdatable,
 }
 
 /*
- * Comparator used by _bt_delitems_delete_check() to restore deltids array
- * back to its original leaf-page-wise sort order
+ * Sort used by _bt_delitems_delete_check() to restore deltids array back to
+ * its original leaf-page-wise sort order.  We can safely use a branchless
+ * int-based comparator expression because id is an int16.
  */
-static int
-_bt_delitems_cmp(const void *a, const void *b)
-{
-	TM_IndexDelete *indexdelete1 = (TM_IndexDelete *) a;
-	TM_IndexDelete *indexdelete2 = (TM_IndexDelete *) b;
-
-	if (indexdelete1->id > indexdelete2->id)
-		return 1;
-	if (indexdelete1->id < indexdelete2->id)
-		return -1;
-
-	Assert(false);
-
-	return 0;
-}
+#define ST_SORT qsort_delitems
+#define ST_ELEMENT_TYPE TM_IndexDelete
+#define ST_COMPARE(a, b) ((int) (a)->id - (int) (b)->id)
+#define ST_SCOPE static
+#define ST_DEFINE
+#include "lib/sort_template.h"
 
 /*
  * Try to delete item(s) from a btree leaf page during single-page cleanup.
@@ -1555,8 +1547,7 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 	 * no entries at all (with bottom-up deletion caller), in which case there
 	 * is nothing left to do.
 	 */
-	qsort(delstate->deltids, delstate->ndeltids, sizeof(TM_IndexDelete),
-		  _bt_delitems_cmp);
+	qsort_delitems(delstate->deltids, delstate->ndeltids);
 	if (delstate->ndeltids == 0)
 	{
 		Assert(delstate->bottomup);

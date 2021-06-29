@@ -3,7 +3,8 @@
  * sort_template.h
  *
  *	  A template for a sort algorithm that supports varying degrees of
- *	  specialization.
+ *	  specialization.  Also related algorithms for binary search and
+ *	  unique, on sorted arrays.
  *
  * Copyright (c) 2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1992-1994, Regents of the University of California
@@ -13,7 +14,9 @@
  *	  To generate functions specialized for a type, the following parameter
  *	  macros should be #define'd before this file is included.
  *
- *	  - ST_SORT - the name of a sort function to be generated
+ *	  - ST_SORT - if defined the name of a sort function
+ *	  - ST_UNIQUE - if defined the name of a unique function
+ *	  - ST_SEARCH - if defined the name of a search function
  *	  - ST_ELEMENT_TYPE - type of the referenced elements
  *	  - ST_DECLARE - if defined the functions and types are declared
  *	  - ST_DEFINE - if defined the functions and types are defined
@@ -39,6 +42,18 @@
  *	  argument.
  *
  *	  - ST_COMPARE_ARG_TYPE - type of extra argument
+ *
+ *	  To say that the comparator returns a type other than int, use:
+ *
+ * 	  - ST_COMPARE_RET_TYPE - an integer type
+ *
+ *	  Experimental tuning options:
+ *
+ *	  - ST_SORT_NO_PRESORT_CHECK - do not test for initial sortedness
+ *	  - ST_SORT_IS_UNIQUE - remove code that deals with duplicates
+ *	  - ST_SORT_SMALL_THRESHOLD - below this size we do insertion sort (7)
+ *	  - ST_SORT_MEDIUM_THRESHOLD - above this size we partition with med3 (7)
+ *	  - ST_SORT_LARGE_THRESHOLD - above this size we partition with med9 (40)
  *
  *	  The prototype of the generated sort function is:
  *
@@ -172,6 +187,17 @@
 #define ST_SORT_INVOKE_ARG
 #endif
 
+/* Default values for experimental tunables. */
+#ifndef ST_SORT_SMALL_THRESHOLD
+#define ST_SORT_SMALL_THRESHOLD 7
+#endif
+#ifndef ST_SORT_MEDIUM_THRESHOLD
+#define ST_SORT_MEDIUM_THRESHOLD 7
+#endif
+#ifndef ST_SORT_LARGE_THRESHOLD
+#define ST_SORT_LARGE_THRESHOLD 40
+#endif
+
 #ifdef ST_DECLARE
 
 #ifdef ST_COMPARE_RUNTIME_POINTER
@@ -179,13 +205,33 @@ typedef int (*ST_COMPARATOR_TYPE_NAME) (const ST_ELEMENT_TYPE *,
 										const ST_ELEMENT_TYPE * ST_SORT_PROTO_ARG);
 #endif
 
+#ifdef ST_SORT
 /* Declare the sort function.  Note optional arguments at end. */
 ST_SCOPE void ST_SORT(ST_ELEMENT_TYPE * first, size_t n
 					  ST_SORT_PROTO_ELEMENT_SIZE
 					  ST_SORT_PROTO_COMPARE
 					  ST_SORT_PROTO_ARG);
+#endif							/* ST_SORT */
 
-#endif
+#ifdef ST_SEARCH
+/* Declare the search function. */
+ST_SCOPE	ST_ELEMENT_TYPE *ST_SEARCH(ST_ELEMENT_TYPE * value,
+									   ST_ELEMENT_TYPE * array,
+									   size_t n
+									   ST_SORT_PROTO_ELEMENT_SIZE
+									   ST_SORT_PROTO_COMPARE
+									   ST_SORT_PROTO_ARG);
+#endif							/* ST_SEARCH */
+
+#ifdef ST_UNIQUE
+ST_SCOPE size_t ST_UNIQUE(ST_ELEMENT_TYPE * array,
+						  size_t n
+						  ST_SORT_PROTO_ELEMENT_SIZE
+						  ST_SORT_PROTO_COMPARE
+						  ST_SORT_PROTO_ARG);
+#endif							/* ST_UNIQUE */
+
+#endif							/* ST_DECLARE */
 
 #ifdef ST_DEFINE
 
@@ -201,16 +247,20 @@ ST_SCOPE void ST_SORT(ST_ELEMENT_TYPE * first, size_t n
 #define DO_CHECK_FOR_INTERRUPTS()
 #endif
 
+#ifndef ST_COMPARE_RET_TYPE
+#define ST_COMPARE_RET_TYPE int
+#endif
+
 /*
  * Create wrapper macros that know how to invoke compare, med3 and sort with
  * the right arguments.
  */
 #ifdef ST_COMPARE_RUNTIME_POINTER
-#define DO_COMPARE(a_, b_) ST_COMPARE((a_), (b_) ST_SORT_INVOKE_ARG)
+#define DO_COMPARE(a_, b_) ((ST_COMPARE_RET_TYPE) (ST_COMPARE((a_), (b_) ST_SORT_INVOKE_ARG)))
 #elif defined(ST_COMPARE_ARG_TYPE)
-#define DO_COMPARE(a_, b_) ST_COMPARE((a_), (b_), arg)
+#define DO_COMPARE(a_, b_) ((ST_COMPARE_RET_TYPE) (ST_COMPARE((a_), (b_), arg)))
 #else
-#define DO_COMPARE(a_, b_) ST_COMPARE((a_), (b_))
+#define DO_COMPARE(a_, b_) ((ST_COMPARE_RET_TYPE) (ST_COMPARE((a_), (b_))))
 #endif
 #define DO_MED3(a_, b_, c_)												\
 	ST_MED3((a_), (b_), (c_)											\
@@ -238,6 +288,8 @@ ST_SCOPE void ST_SORT(ST_ELEMENT_TYPE * first, size_t n
 #define DO_SWAPN(a_, b_, n_) ST_SWAPN((a_), (b_), (n_))
 #define DO_SWAP(a_, b_) DO_SWAPN((a_), (b_), element_size)
 #endif
+
+#ifdef ST_SORT
 
 /*
  * Find the median of three values.  Currently, performance seems to be best
@@ -281,23 +333,26 @@ ST_SORT(ST_ELEMENT_TYPE * data, size_t n
 		ST_SORT_PROTO_COMPARE
 		ST_SORT_PROTO_ARG)
 {
-	ST_POINTER_TYPE *a = (ST_POINTER_TYPE *) data,
-			   *pa,
-			   *pb,
-			   *pc,
-			   *pd,
-			   *pl,
-			   *pm,
-			   *pn;
+	ST_POINTER_TYPE *a = (ST_POINTER_TYPE *) data;
+	ST_POINTER_TYPE *pa;
+	ST_POINTER_TYPE *pb;
+	ST_POINTER_TYPE *pc;
+	ST_POINTER_TYPE *pd;
+	ST_POINTER_TYPE *pl;
+	ST_POINTER_TYPE *pm;
+	ST_POINTER_TYPE *pn;
 	size_t		d1,
 				d2;
-	int			r,
-				presorted;
+#ifndef ST_SORT_NO_PRESORT_CHECK
+	int			presorted;
+#endif
+	ST_COMPARE_RET_TYPE r;
 
 loop:
 	DO_CHECK_FOR_INTERRUPTS();
-	if (n < 7)
+	if (n < ST_SORT_SMALL_THRESHOLD)
 	{
+		/* Use insertion sort for very small input. */
 		for (pm = a + ST_POINTER_STEP; pm < a + n * ST_POINTER_STEP;
 			 pm += ST_POINTER_STEP)
 			for (pl = pm; pl > a && DO_COMPARE(pl - ST_POINTER_STEP, pl) > 0;
@@ -305,6 +360,7 @@ loop:
 				DO_SWAP(pl, pl - ST_POINTER_STEP);
 		return;
 	}
+#ifndef ST_SORT_NO_PRESORT_CHECK
 	presorted = 1;
 	for (pm = a + ST_POINTER_STEP; pm < a + n * ST_POINTER_STEP;
 		 pm += ST_POINTER_STEP)
@@ -318,13 +374,17 @@ loop:
 	}
 	if (presorted)
 		return;
+#endif
+	/* Partition with middle element for small input. */
 	pm = a + (n / 2) * ST_POINTER_STEP;
-	if (n > 7)
+	if (n > ST_SORT_MEDIUM_THRESHOLD)
 	{
+		/* Partition with median of three for medium input. */
 		pl = a;
 		pn = a + (n - 1) * ST_POINTER_STEP;
-		if (n > 40)
+		if (n > ST_SORT_LARGE_THRESHOLD)
 		{
+			/* Partition with median of nine for large input. */
 			size_t		d = (n / 8) * ST_POINTER_STEP;
 
 			pl = DO_MED3(pl, pl + d, pl + 2 * d);
@@ -340,21 +400,25 @@ loop:
 	{
 		while (pb <= pc && (r = DO_COMPARE(pb, a)) <= 0)
 		{
+#ifndef ST_SORT_IS_UNIQUE
 			if (r == 0)
 			{
 				DO_SWAP(pa, pb);
 				pa += ST_POINTER_STEP;
 			}
+#endif
 			pb += ST_POINTER_STEP;
 			DO_CHECK_FOR_INTERRUPTS();
 		}
 		while (pb <= pc && (r = DO_COMPARE(pc, a)) >= 0)
 		{
+#ifndef ST_SORT_IS_UNIQUE
 			if (r == 0)
 			{
 				DO_SWAP(pc, pd);
 				pd -= ST_POINTER_STEP;
 			}
+#endif
 			pc -= ST_POINTER_STEP;
 			DO_CHECK_FOR_INTERRUPTS();
 		}
@@ -399,7 +463,75 @@ loop:
 		}
 	}
 }
-#endif
+
+#endif							/* ST_SORT */
+
+#ifdef ST_SEARCH
+
+/*
+ * Find an element in the array of sorted values that is equal to a given
+ * value, in a sorted array.  Return NULL if there is none.
+ */
+ST_SCOPE	ST_ELEMENT_TYPE *
+ST_SEARCH(ST_ELEMENT_TYPE * value,
+		  ST_ELEMENT_TYPE * array,
+		  size_t n
+		  ST_SORT_PROTO_ELEMENT_SIZE
+		  ST_SORT_PROTO_COMPARE
+		  ST_SORT_PROTO_ARG)
+{
+	ssize_t		left = 0,
+				right = n - 1;
+
+	while (left <= right)
+	{
+		size_t		mid = left + (right - left) / 2;
+		ST_ELEMENT_TYPE * element = &array[mid];
+		ST_COMPARE_RET_TYPE cmp = DO_COMPARE(element, value);
+
+		if (cmp < 0)
+			left = mid + 1;
+		else if (cmp > 0)
+			right = mid - 1;
+		else
+			return element;
+	}
+
+	return NULL;
+}
+
+#endif							/* ST_SEARCH */
+
+#ifdef ST_UNIQUE
+
+/*
+ * Remove duplicates from a sorted array.  Return the new size.
+ */
+ST_SCOPE size_t
+ST_UNIQUE(ST_ELEMENT_TYPE * array,
+		  size_t n
+		  ST_SORT_PROTO_ELEMENT_SIZE
+		  ST_SORT_PROTO_COMPARE
+		  ST_SORT_PROTO_ARG)
+{
+	size_t		i,
+				j;
+
+	if (n <= 1)
+		return n;
+
+	for (i = 1, j = 0; i < n; ++i)
+	{
+		if (DO_COMPARE(&array[i], &array[j]) != 0 && ++j != i)
+			array[j] = array[i];
+	}
+
+	return j + 1;
+}
+
+#endif							/* ST_UNIQUE */
+
+#endif							/* ST_DEFINE */
 
 #undef DO_CHECK_FOR_INTERRUPTS
 #undef DO_COMPARE
@@ -407,9 +539,11 @@ loop:
 #undef DO_SORT
 #undef DO_SWAP
 #undef DO_SWAPN
+#undef ST_CHECK_FOR_INTERRUPTS
 #undef ST_COMPARATOR_TYPE_NAME
 #undef ST_COMPARE
 #undef ST_COMPARE_ARG_TYPE
+#undef ST_COMPARE_RET_TYPE
 #undef ST_COMPARE_RUNTIME_POINTER
 #undef ST_ELEMENT_TYPE
 #undef ST_ELEMENT_TYPE_VOID
@@ -420,12 +554,19 @@ loop:
 #undef ST_POINTER_STEP
 #undef ST_POINTER_TYPE
 #undef ST_SCOPE
+#undef ST_SEARCH
 #undef ST_SORT
 #undef ST_SORT_INVOKE_ARG
 #undef ST_SORT_INVOKE_COMPARE
 #undef ST_SORT_INVOKE_ELEMENT_SIZE
+#undef ST_SORT_IS_UNIQUE
+#undef ST_SORT_LARGE_THRESHOLD
+#undef ST_SORT_MEDIUM_THRESHOLD
+#undef ST_SORT_NO_PRESORT_CHECK
 #undef ST_SORT_PROTO_ARG
 #undef ST_SORT_PROTO_COMPARE
 #undef ST_SORT_PROTO_ELEMENT_SIZE
+#undef ST_SORT_SMALL_THRESHOLD
 #undef ST_SWAP
 #undef ST_SWAPN
+#undef ST_UNIQUE

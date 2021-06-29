@@ -17,6 +17,8 @@ override CPPFLAGS := -I. -I$(srcdir) $(CPPFLAGS)
 OBJS = \
 	logtape.o \
 	sharedtuplestore.o \
+	sortitemptr.o \
+	sortscalar.o \
 	sortsupport.o \
 	tuplesort.o \
 	tuplestore.o

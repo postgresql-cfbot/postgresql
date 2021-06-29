@@ -30,6 +30,7 @@
 #include "utils/fmgroids.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
+#include "utils/sortscalar.h"
 #include "utils/syscache.h"
 
 /* Potentially set by pg_upgrade_support functions */
@@ -108,7 +109,7 @@ EnumValuesCreate(Oid enumTypeOid, List *vals)
 	}
 
 	/* sort them, just in case OID counter wrapped from high to low */
-	qsort(oids, num_elems, sizeof(Oid), oid_cmp);
+	qsort_oid(oids, num_elems);
 
 	/* and make the entries */
 	memset(nulls, false, sizeof(nulls));

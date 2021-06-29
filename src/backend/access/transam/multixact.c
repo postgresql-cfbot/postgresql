@@ -344,7 +344,6 @@ static void RecordNewMultiXact(MultiXactId multi, MultiXactOffset offset,
 static MultiXactId GetNewMultiXactId(int nmembers, MultiXactOffset *offset);
 
 /* MultiXact cache management */
-static int	mxactMemberComparator(const void *arg1, const void *arg2);
 static MultiXactId mXactCacheGetBySet(int nmembers, MultiXactMember *members);
 static int	mXactCacheGetById(MultiXactId multi, MultiXactMember **members);
 static void mXactCachePut(MultiXactId multi, int nmembers,
@@ -1457,28 +1456,18 @@ retry:
 }
 
 /*
- * mxactMemberComparator
- *		qsort comparison function for MultiXactMember
- *
  * We can't use wraparound comparison for XIDs because that does not respect
- * the triangle inequality!  Any old sort order will do.
+ * the triangle inequality!  Any old sort order will do.  Primary sort on
+ * xid, secondary sort on status, by packing values into an int64.
  */
-static int
-mxactMemberComparator(const void *arg1, const void *arg2)
-{
-	MultiXactMember member1 = *(const MultiXactMember *) arg1;
-	MultiXactMember member2 = *(const MultiXactMember *) arg2;
-
-	if (member1.xid > member2.xid)
-		return 1;
-	if (member1.xid < member2.xid)
-		return -1;
-	if (member1.status > member2.status)
-		return 1;
-	if (member1.status < member2.status)
-		return -1;
-	return 0;
-}
+#define ST_SORT qsort_mxact_members
+#define ST_ELEMENT_TYPE MultiXactMember
+#define MK_VAL(x) ((((int64) (x)->xid) << 8) | (int64) (x)->status)
+#define ST_COMPARE(a, b) (MK_VAL(a) - MK_VAL(b))
+#define ST_COMPARE_RET_TYPE int64
+#define ST_SCOPE static
+#define ST_DEFINE
+#include "lib/sort_template.h"
 
 /*
  * mXactCacheGetBySet
@@ -1502,7 +1491,7 @@ mXactCacheGetBySet(int nmembers, MultiXactMember *members)
 				mxid_to_string(InvalidMultiXactId, nmembers, members));
 
 	/* sort the array so comparison is easy */
-	qsort(members, nmembers, sizeof(MultiXactMember), mxactMemberComparator);
+	qsort_mxact_members(members, nmembers);
 
 	dlist_foreach(iter, &MXactCache)
 	{
@@ -1608,7 +1597,7 @@ mXactCachePut(MultiXactId multi, int nmembers, MultiXactMember *members)
 	memcpy(entry->members, members, nmembers * sizeof(MultiXactMember));
 
 	/* mXactCacheGetBySet assumes the entries are sorted, so sort them */
-	qsort(entry->members, nmembers, sizeof(MultiXactMember), mxactMemberComparator);
+	qsort_mxact_members(entry->members, nmembers);
 
 	dlist_push_head(&MXactCache, &entry->node);
 	if (MXactCacheMembers++ >= MAX_CACHE_ENTRIES)

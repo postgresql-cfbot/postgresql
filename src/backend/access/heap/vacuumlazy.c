@@ -79,6 +79,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_rusage.h"
+#include "utils/sortitemptr.h"
 #include "utils/timestamp.h"
 
 
@@ -449,7 +450,6 @@ static void lazy_space_alloc(LVRelState *vacrel, int nworkers,
 							 BlockNumber relblocks);
 static void lazy_space_free(LVRelState *vacrel);
 static bool lazy_tid_reaped(ItemPointer itemptr, void *state);
-static int	vac_cmp_itemptr(const void *left, const void *right);
 static bool heap_page_is_all_visible(LVRelState *vacrel, Buffer buf,
 									 TransactionId *visibility_cutoff_xid, bool *all_frozen);
 static int	compute_parallel_vacuum_workers(LVRelState *vacrel,
@@ -3571,43 +3571,11 @@ lazy_tid_reaped(ItemPointer itemptr, void *state)
 	if (item < litem || item > ritem)
 		return false;
 
-	res = (ItemPointer) bsearch((void *) itemptr,
-								(void *) dead_tuples->itemptrs,
-								dead_tuples->num_tuples,
-								sizeof(ItemPointerData),
-								vac_cmp_itemptr);
+	res = bsearch_itemptr(itemptr,
+						  dead_tuples->itemptrs,
+						  dead_tuples->num_tuples);
 
 	return (res != NULL);
-}
-
-/*
- * Comparator routines for use with qsort() and bsearch().
- */
-static int
-vac_cmp_itemptr(const void *left, const void *right)
-{
-	BlockNumber lblk,
-				rblk;
-	OffsetNumber loff,
-				roff;
-
-	lblk = ItemPointerGetBlockNumber((ItemPointer) left);
-	rblk = ItemPointerGetBlockNumber((ItemPointer) right);
-
-	if (lblk < rblk)
-		return -1;
-	if (lblk > rblk)
-		return 1;
-
-	loff = ItemPointerGetOffsetNumber((ItemPointer) left);
-	roff = ItemPointerGetOffsetNumber((ItemPointer) right);
-
-	if (loff < roff)
-		return -1;
-	if (loff > roff)
-		return 1;
-
-	return 0;
 }
 
 /*

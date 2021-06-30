@@ -324,6 +324,9 @@ end_heap_rewrite(RewriteState state)
 						state->rs_buffer,
 						true);
 
+		PageEncryptInplace(state->rs_buffer, MAIN_FORKNUM,
+						   RelationIsPermanent(state->rs_new_rel),
+						   state->rs_blockno);
 		PageSetChecksumInplace(state->rs_buffer, state->rs_blockno);
 
 		RelationOpenSmgr(state->rs_new_rel);
@@ -697,6 +700,10 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 			 */
 			RelationOpenSmgr(state->rs_new_rel);
 
+			/* XXX Do we need to encrypt a copy of the page here? */
+			PageEncryptInplace(page, MAIN_FORKNUM,
+							   RelationIsPermanent(state->rs_old_rel),
+							   state->rs_blockno);
 			PageSetChecksumInplace(page, state->rs_blockno);
 
 			smgrextend(state->rs_new_rel->rd_smgr, MAIN_FORKNUM,

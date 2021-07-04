@@ -27,6 +27,8 @@ typedef enum NodeTag
 {
 	T_Invalid = 0,
 
+#include "nodes/nodetags.h"
+#ifdef OBSOLETE
 	/*
 	 * TAGS FOR EXECUTOR NODES (execnodes.h)
 	 */
@@ -284,7 +286,6 @@ typedef enum NodeTag
 	/*
 	 * TAGS FOR MEMORY NODES (memnodes.h)
 	 */
-	T_MemoryContext,
 	T_AllocSetContext,
 	T_SlabContext,
 	T_GenerationContext,
@@ -528,7 +529,13 @@ typedef enum NodeTag
 	T_SupportRequestCost,		/* in nodes/supportnodes.h */
 	T_SupportRequestRows,		/* in nodes/supportnodes.h */
 	T_SupportRequestIndexCondition	/* in nodes/supportnodes.h */
+#endif /*OBSOLETE*/
 } NodeTag;
+
+/*
+ * used in node definitions to set extra information for gen_node_stuff.pl
+ */
+#define pg_node_attr(x)
 
 /*
  * The first field of a node of any type is guaranteed to be the NodeTag.

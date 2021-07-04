@@ -63,7 +63,7 @@ typedef enum OnCommitAction
 typedef struct RangeVar
 {
 	NodeTag		type;
-	char	   *catalogname;	/* the catalog (database) name, or NULL */
+	char	   *catalogname pg_node_attr(readwrite_ignore);	/* the catalog (database) name, or NULL */
 	char	   *schemaname;		/* the schema name, or NULL */
 	char	   *relname;		/* the relation/sequence name */
 	bool		inh;			/* expand rel by inheritance? recursively act
@@ -196,8 +196,8 @@ typedef struct Var
 	Index		varlevelsup;	/* for subquery variables referencing outer
 								 * relations; 0 in a normal var, >0 means N
 								 * levels up */
-	Index		varnosyn;		/* syntactic relation index (0 if unknown) */
-	AttrNumber	varattnosyn;	/* syntactic attribute number */
+	Index		varnosyn pg_node_attr(equal_ignore);		/* syntactic relation index (0 if unknown) */
+	AttrNumber	varattnosyn pg_node_attr(equal_ignore);	/* syntactic attribute number */
 	int			location;		/* token location, or -1 if unknown */
 } Var;
 
@@ -324,7 +324,7 @@ typedef struct Aggref
 	Oid			aggtype;		/* type Oid of result of the aggregate */
 	Oid			aggcollid;		/* OID of collation of result */
 	Oid			inputcollid;	/* OID of collation that function should use */
-	Oid			aggtranstype;	/* type Oid of aggregate's transition value */
+	Oid			aggtranstype pg_node_attr(equal_ignore);	/* type Oid of aggregate's transition value */
 	List	   *aggargtypes;	/* type Oids of direct and aggregated args */
 	List	   *aggdirectargs;	/* direct arguments, if an ordered-set agg */
 	List	   *args;			/* aggregated arguments and sort expressions */
@@ -371,8 +371,8 @@ typedef struct GroupingFunc
 	Expr		xpr;
 	List	   *args;			/* arguments, not evaluated but kept for
 								 * benefit of EXPLAIN etc. */
-	List	   *refs;			/* ressortgrouprefs of arguments */
-	List	   *cols;			/* actual column positions set by planner */
+	List	   *refs pg_node_attr(equal_ignore);			/* ressortgrouprefs of arguments */
+	List	   *cols pg_node_attr(equal_ignore);			/* actual column positions set by planner */
 	Index		agglevelsup;	/* same as Aggref.agglevelsup */
 	int			location;		/* token location */
 } GroupingFunc;
@@ -540,7 +540,7 @@ typedef struct OpExpr
 {
 	Expr		xpr;
 	Oid			opno;			/* PG_OPERATOR OID of the operator */
-	Oid			opfuncid;		/* PG_PROC OID of underlying function */
+	Oid			opfuncid pg_node_attr(equal_ignore_if_zero);		/* PG_PROC OID of underlying function */
 	Oid			opresulttype;	/* PG_TYPE OID of result value */
 	bool		opretset;		/* true if operator returns set */
 	Oid			opcollid;		/* OID of collation of result */
@@ -589,8 +589,8 @@ typedef struct ScalarArrayOpExpr
 {
 	Expr		xpr;
 	Oid			opno;			/* PG_OPERATOR OID of the operator */
-	Oid			opfuncid;		/* PG_PROC OID of comparison function */
-	Oid			hashfuncid;		/* PG_PROC OID of hash func or InvalidOid */
+	Oid			opfuncid pg_node_attr(equal_ignore_if_zero);		/* PG_PROC OID of comparison function */
+	Oid			hashfuncid pg_node_attr(equal_ignore_if_zero);		/* PG_PROC OID of hash func or InvalidOid */
 	bool		useOr;			/* true for ANY, false for ALL */
 	Oid			inputcollid;	/* OID of collation that operator should use */
 	List	   *args;			/* the scalar and array operands */
@@ -1205,7 +1205,7 @@ typedef enum XmlExprOp
 	IS_DOCUMENT					/* xmlval IS DOCUMENT */
 } XmlExprOp;
 
-typedef enum
+typedef enum XmlOptionType
 {
 	XMLOPTION_DOCUMENT,
 	XMLOPTION_CONTENT

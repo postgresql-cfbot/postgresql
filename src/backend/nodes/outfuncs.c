@@ -124,6 +124,8 @@ static void outChar(StringInfo str, char c);
 			appendStringInfo(str, " %u", node->fldname[i]); \
 	} while(0)
 
+#define WRITE_INDEX_ARRAY(fldname, len) WRITE_OID_ARRAY(fldname, len)
+
 #define WRITE_INT_ARRAY(fldname, len) \
 	do { \
 		appendStringInfoString(str, " :" CppAsString(fldname) " "); \
@@ -288,6 +290,9 @@ outDatum(StringInfo str, Datum value, int typlen, bool typbyval)
 }
 
 
+#include "outfuncs.inc1.c"
+
+#ifdef OBSOLETE
 /*
  *	Stuff from plannodes.h
  */
@@ -1126,6 +1131,7 @@ _outVar(StringInfo str, const Var *node)
 	WRITE_INT_FIELD(varattnosyn);
 	WRITE_LOCATION_FIELD(location);
 }
+#endif /*OBSOLETE*/
 
 static void
 _outConst(StringInfo str, const Const *node)
@@ -1147,6 +1153,7 @@ _outConst(StringInfo str, const Const *node)
 		outDatum(str, node->constvalue, node->constlen, node->constbyval);
 }
 
+#ifdef OBSOLETE
 static void
 _outParam(StringInfo str, const Param *node)
 {
@@ -1316,6 +1323,7 @@ _outScalarArrayOpExpr(StringInfo str, const ScalarArrayOpExpr *node)
 	WRITE_NODE_FIELD(args);
 	WRITE_LOCATION_FIELD(location);
 }
+#endif /*OBSOLETE*/
 
 static void
 _outBoolExpr(StringInfo str, const BoolExpr *node)
@@ -1344,6 +1352,7 @@ _outBoolExpr(StringInfo str, const BoolExpr *node)
 	WRITE_LOCATION_FIELD(location);
 }
 
+#ifdef OBSOLETE
 static void
 _outSubLink(StringInfo str, const SubLink *node)
 {
@@ -2668,6 +2677,7 @@ _outPlannerParamItem(StringInfo str, const PlannerParamItem *node)
 	WRITE_NODE_FIELD(item);
 	WRITE_INT_FIELD(paramId);
 }
+#endif /*OBSOLETE*/
 
 /*****************************************************************************
  *
@@ -2690,6 +2700,7 @@ _outExtensibleNode(StringInfo str, const ExtensibleNode *node)
 	methods->nodeOut(str, node);
 }
 
+#ifdef OBSOLETE
 /*****************************************************************************
  *
  *	Stuff from parsenodes.h.
@@ -3022,6 +3033,7 @@ _outStatsElem(StringInfo str, const StatsElem *node)
 	WRITE_STRING_FIELD(name);
 	WRITE_NODE_FIELD(expr);
 }
+#endif /*OBSOLETE*/
 
 static void
 _outQuery(StringInfo str, const Query *node)
@@ -3094,6 +3106,7 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_INT_FIELD(stmt_len);
 }
 
+#ifdef OBSOLETE
 static void
 _outWithCheckOption(StringInfo str, const WithCheckOption *node)
 {
@@ -3232,6 +3245,7 @@ _outSetOperationStmt(StringInfo str, const SetOperationStmt *node)
 	WRITE_NODE_FIELD(colCollations);
 	WRITE_NODE_FIELD(groupClauses);
 }
+#endif /*OBSOLETE*/
 
 static void
 _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
@@ -3312,6 +3326,7 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 	WRITE_NODE_FIELD(securityQuals);
 }
 
+#ifdef OBSOLETE
 static void
 _outRangeTblFunction(StringInfo str, const RangeTblFunction *node)
 {
@@ -3335,9 +3350,10 @@ _outTableSampleClause(StringInfo str, const TableSampleClause *node)
 	WRITE_NODE_FIELD(args);
 	WRITE_NODE_FIELD(repeatable);
 }
+#endif /*OBSOLETE*/
 
 static void
-_outAExpr(StringInfo str, const A_Expr *node)
+_outA_Expr(StringInfo str, const A_Expr *node)
 {
 	WRITE_NODE_TYPE("AEXPR");
 
@@ -3412,12 +3428,12 @@ _outAExpr(StringInfo str, const A_Expr *node)
 }
 
 static void
-_outValue(StringInfo str, const Value *value)
+_outValue(StringInfo str, const Value *node)
 {
-	switch (value->type)
+	switch (node->type)
 	{
 		case T_Integer:
-			appendStringInfo(str, "%d", value->val.ival);
+			appendStringInfo(str, "%d", node->val.ival);
 			break;
 		case T_Float:
 
@@ -3425,7 +3441,7 @@ _outValue(StringInfo str, const Value *value)
 			 * We assume the value is a valid numeric literal and so does not
 			 * need quoting.
 			 */
-			appendStringInfoString(str, value->val.str);
+			appendStringInfoString(str, node->val.str);
 			break;
 		case T_String:
 
@@ -3434,24 +3450,25 @@ _outValue(StringInfo str, const Value *value)
 			 * but we don't want it to do anything with an empty string.
 			 */
 			appendStringInfoChar(str, '"');
-			if (value->val.str[0] != '\0')
-				outToken(str, value->val.str);
+			if (node->val.str[0] != '\0')
+				outToken(str, node->val.str);
 			appendStringInfoChar(str, '"');
 			break;
 		case T_BitString:
 			/* internal representation already has leading 'b' */
-			appendStringInfoString(str, value->val.str);
+			appendStringInfoString(str, node->val.str);
 			break;
 		case T_Null:
 			/* this is seen only within A_Const, not in transformed trees */
 			appendStringInfoString(str, "NULL");
 			break;
 		default:
-			elog(ERROR, "unrecognized node type: %d", (int) value->type);
+			elog(ERROR, "unrecognized node type: %d", (int) node->type);
 			break;
 	}
 }
 
+#ifdef OBSOLETE
 static void
 _outColumnRef(StringInfo str, const ColumnRef *node)
 {
@@ -3483,9 +3500,10 @@ _outRawStmt(StringInfo str, const RawStmt *node)
 	WRITE_LOCATION_FIELD(stmt_location);
 	WRITE_INT_FIELD(stmt_len);
 }
+#endif /*OBSOLETE*/
 
 static void
-_outAConst(StringInfo str, const A_Const *node)
+_outA_Const(StringInfo str, const A_Const *node)
 {
 	WRITE_NODE_TYPE("A_CONST");
 
@@ -3494,6 +3512,7 @@ _outAConst(StringInfo str, const A_Const *node)
 	WRITE_LOCATION_FIELD(location);
 }
 
+#ifdef OBSOLETE
 static void
 _outA_Star(StringInfo str, const A_Star *node)
 {
@@ -3638,6 +3657,7 @@ _outRangeTableFuncCol(StringInfo str, const RangeTableFuncCol *node)
 	WRITE_NODE_FIELD(coldefexpr);
 	WRITE_LOCATION_FIELD(location);
 }
+#endif /*OBSOLETE*/
 
 static void
 _outConstraint(StringInfo str, const Constraint *node)
@@ -3758,6 +3778,7 @@ _outConstraint(StringInfo str, const Constraint *node)
 	}
 }
 
+#ifdef OBSOLETE
 static void
 _outForeignKeyCacheInfo(StringInfo str, const ForeignKeyCacheInfo *node)
 {
@@ -3818,6 +3839,7 @@ _outPartitionRangeDatum(StringInfo str, const PartitionRangeDatum *node)
 	WRITE_NODE_FIELD(value);
 	WRITE_LOCATION_FIELD(location);
 }
+#endif /*OBSOLETE*/
 
 /*
  * outNode -
@@ -3846,6 +3868,8 @@ outNode(StringInfo str, const void *obj)
 		appendStringInfoChar(str, '{');
 		switch (nodeTag(obj))
 		{
+#include "outfuncs.inc2.c"
+#ifdef OBSOLETE
 			case T_PlannedStmt:
 				_outPlannedStmt(str, obj);
 				break;
@@ -4429,7 +4453,7 @@ outNode(StringInfo str, const void *obj)
 				_outTableSampleClause(str, obj);
 				break;
 			case T_A_Expr:
-				_outAExpr(str, obj);
+				_outA_Expr(str, obj);
 				break;
 			case T_ColumnRef:
 				_outColumnRef(str, obj);
@@ -4441,7 +4465,7 @@ outNode(StringInfo str, const void *obj)
 				_outRawStmt(str, obj);
 				break;
 			case T_A_Const:
-				_outAConst(str, obj);
+				_outA_Const(str, obj);
 				break;
 			case T_A_Star:
 				_outA_Star(str, obj);
@@ -4518,6 +4542,7 @@ outNode(StringInfo str, const void *obj)
 			case T_PartitionRangeDatum:
 				_outPartitionRangeDatum(str, obj);
 				break;
+#endif /*OBSOLETE*/
 
 			default:
 

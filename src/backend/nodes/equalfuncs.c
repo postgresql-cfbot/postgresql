@@ -10,9 +10,6 @@
  * because the circular linkages between RelOptInfo and Path nodes can't
  * be handled easily in a simple depth-first traversal.
  *
- * Currently, in fact, equal() doesn't know how to compare Plan trees
- * either.  This might need to be fixed someday.
- *
  * NOTE: it is intentional that parse location fields (in nodes that have
  * one) are not compared.  This is because we want, for example, a variable
  * "x" to be considered equal() to another reference to "x" in the query.
@@ -33,6 +30,7 @@
 #include "nodes/extensible.h"
 #include "nodes/pathnodes.h"
 #include "utils/datum.h"
+#include "utils/rel.h"
 
 
 /*
@@ -90,6 +88,9 @@
 	((void) 0)
 
 
+#include "equalfuncs.inc1.c"
+
+#ifdef OBSOLETE
 /*
  *	Stuff from primnodes.h
  */
@@ -178,6 +179,7 @@ _equalVar(const Var *a, const Var *b)
 
 	return true;
 }
+#endif /*OBSOLETE*/
 
 static bool
 _equalConst(const Const *a, const Const *b)
@@ -200,6 +202,7 @@ _equalConst(const Const *a, const Const *b)
 						a->constbyval, a->constlen);
 }
 
+#ifdef OBSOLETE
 static bool
 _equalParam(const Param *a, const Param *b)
 {
@@ -933,6 +936,7 @@ _equalPlaceHolderInfo(const PlaceHolderInfo *a, const PlaceHolderInfo *b)
 
 	return true;
 }
+#endif /*OBSOLETE*/
 
 /*
  * Stuff from extensible.h
@@ -954,6 +958,7 @@ _equalExtensibleNode(const ExtensibleNode *a, const ExtensibleNode *b)
 	return true;
 }
 
+#ifdef OBSOLETE
 /*
  * Stuff from parsenodes.h
  */
@@ -2371,7 +2376,7 @@ _equalAlterPolicyStmt(const AlterPolicyStmt *a, const AlterPolicyStmt *b)
 }
 
 static bool
-_equalAExpr(const A_Expr *a, const A_Expr *b)
+_equalA_Expr(const A_Expr *a, const A_Expr *b)
 {
 	COMPARE_SCALAR_FIELD(kind);
 	COMPARE_NODE_FIELD(name);
@@ -2399,9 +2404,10 @@ _equalParamRef(const ParamRef *a, const ParamRef *b)
 
 	return true;
 }
+#endif /*OBSOLETE*/
 
 static bool
-_equalAConst(const A_Const *a, const A_Const *b)
+_equalA_Const(const A_Const *a, const A_Const *b)
 {
 	if (!equal(&a->val, &b->val))	/* hack for in-line Value field */
 		return false;
@@ -2410,6 +2416,7 @@ _equalAConst(const A_Const *a, const A_Const *b)
 	return true;
 }
 
+#ifdef OBSOLETE
 static bool
 _equalFuncCall(const FuncCall *a, const FuncCall *b)
 {
@@ -2429,13 +2436,13 @@ _equalFuncCall(const FuncCall *a, const FuncCall *b)
 }
 
 static bool
-_equalAStar(const A_Star *a, const A_Star *b)
+_equalA_Star(const A_Star *a, const A_Star *b)
 {
 	return true;
 }
 
 static bool
-_equalAIndices(const A_Indices *a, const A_Indices *b)
+_equalA_Indices(const A_Indices *a, const A_Indices *b)
 {
 	COMPARE_SCALAR_FIELD(is_slice);
 	COMPARE_NODE_FIELD(lidx);
@@ -3018,6 +3025,7 @@ _equalPartitionCmd(const PartitionCmd *a, const PartitionCmd *b)
 
 	return true;
 }
+#endif /*OBSOLETE*/
 
 /*
  * Stuff from pg_list.h
@@ -3137,6 +3145,8 @@ equal(const void *a, const void *b)
 
 	switch (nodeTag(a))
 	{
+#include "equalfuncs.inc2.c"
+#ifdef OBSOLETE
 			/*
 			 * PRIMITIVE NODES
 			 */
@@ -3315,6 +3325,7 @@ equal(const void *a, const void *b)
 		case T_PlaceHolderInfo:
 			retval = _equalPlaceHolderInfo(a, b);
 			break;
+#endif /*OBSOLETE*/
 
 		case T_List:
 		case T_IntList:
@@ -3330,6 +3341,7 @@ equal(const void *a, const void *b)
 			retval = _equalValue(a, b);
 			break;
 
+#ifdef OBSOLETE
 			/*
 			 * EXTENSIBLE NODES
 			 */
@@ -3704,7 +3716,7 @@ equal(const void *a, const void *b)
 			retval = _equalDropSubscriptionStmt(a, b);
 			break;
 		case T_A_Expr:
-			retval = _equalAExpr(a, b);
+			retval = _equalA_Expr(a, b);
 			break;
 		case T_ColumnRef:
 			retval = _equalColumnRef(a, b);
@@ -3713,16 +3725,16 @@ equal(const void *a, const void *b)
 			retval = _equalParamRef(a, b);
 			break;
 		case T_A_Const:
-			retval = _equalAConst(a, b);
+			retval = _equalA_Const(a, b);
 			break;
 		case T_FuncCall:
 			retval = _equalFuncCall(a, b);
 			break;
 		case T_A_Star:
-			retval = _equalAStar(a, b);
+			retval = _equalA_Star(a, b);
 			break;
 		case T_A_Indices:
-			retval = _equalAIndices(a, b);
+			retval = _equalA_Indices(a, b);
 			break;
 		case T_A_Indirection:
 			retval = _equalA_Indirection(a, b);
@@ -3856,6 +3868,7 @@ equal(const void *a, const void *b)
 		case T_PartitionCmd:
 			retval = _equalPartitionCmd(a, b);
 			break;
+#endif /*OBSOLETE*/
 
 		default:
 			elog(ERROR, "unrecognized node type: %d",

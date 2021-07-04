@@ -73,8 +73,9 @@ typedef struct CustomPath
     the row-count estimate, start and total cost, and sort ordering provided
     by this path.  <structfield>flags</structfield> is a bit mask, which should include
     <literal>CUSTOMPATH_SUPPORT_BACKWARD_SCAN</literal> if the custom path can support
-    a backward scan and <literal>CUSTOMPATH_SUPPORT_MARK_RESTORE</literal> if it
-    can support mark and restore.  Both capabilities are optional.
+    a backward scan, <literal>CUSTOMPATH_SUPPORT_MARK_RESTORE</literal> if it
+    can support mark and restore, and <literal>CUSTOMPATH_SUPPORT_PROJECTION</literal>
+    if it can support projections.  All capabilities are optional.
     An optional <structfield>custom_paths</structfield> is a list of <structname>Path</structname>
     nodes used by this custom-path node; these will be transformed into
     <structname>Plan</structname> nodes by planner.

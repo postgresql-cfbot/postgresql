@@ -7063,6 +7063,8 @@ is_projection_capable_path(Path *path)
 			 * get relaxed later.
 			 */
 			return false;
+		case T_CustomScan:
+			return castNode(CustomPath, path)->flags & CUSTOMPATH_SUPPORT_PROJECTION;
 		default:
 			break;
 	}
@@ -7101,6 +7103,8 @@ is_projection_capable_plan(Plan *plan)
 			 * get relaxed later.
 			 */
 			return false;
+		case T_CustomScan:
+			return castNode(CustomScan, plan)->flags & CUSTOMPATH_SUPPORT_PROJECTION;
 		default:
 			break;
 	}

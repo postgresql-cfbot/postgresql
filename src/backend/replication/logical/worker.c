@@ -62,6 +62,7 @@
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "catalog/catalog.h"
+#include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
@@ -147,6 +148,21 @@ typedef struct ApplyExecutionData
 	PartitionTupleRouting *proute;	/* partition routing info */
 } ApplyExecutionData;
 
+typedef struct ApplyErrCallbackArg
+{
+	LogicalRepMsgType action;	/* 0 if invalid */
+	LogicalRepRelMapEntry *rel;
+	TransactionId	remote_xid;
+	TimestampTz	committs;
+} ApplyErrCallbackArg;
+static ApplyErrCallbackArg apply_error_callback_arg =
+{
+	.action = 0,
+	.rel = NULL,
+	.remote_xid = InvalidTransactionId,
+	.committs = 0,
+};
+
 /*
  * Stream xid hash entry. Whenever we see a new xid we create this entry in the
  * xidhash and along with it create the streaming file and store the fileset handle.
@@ -179,6 +195,19 @@ static XLogRecPtr remote_final_lsn = InvalidXLogRecPtr;
 static bool in_streamed_transaction = false;
 
 static TransactionId stream_xid = InvalidTransactionId;
+
+/*
+ * True if we're skipping changes of the specified transaction in
+ * MySubscription->skip_xid.  Please note that We don’t skip receiving those
+ * changes. We decide whether or not to skip applying the changes when starting
+ * to apply.  That is, for streamed transactions, we receive the streamed changes
+ * anyway and then cleanup streamed files when applying the stream-commit or
+ * stream-abort message.  When stopping the skipping behavior, we reset the skip
+ * XID (subskipxid) in the pg_subscription and associate origin status to the
+ * transaction that resets the skip XID so that we can start streaming from the
+ * next transaction.
+ */
+static bool skipping_changes = false;
 
 /*
  * Hash table for storing the streaming xid information along with shared file
@@ -235,8 +264,7 @@ static void maybe_reread_subscription(void);
 /* prototype needed because of stream_commit */
 static void apply_dispatch(StringInfo s);
 
-static void apply_handle_commit_internal(StringInfo s,
-										 LogicalRepCommitData *commit_data);
+static void apply_handle_commit_internal(LogicalRepCommitData *commit_data);
 static void apply_handle_insert_internal(ApplyExecutionData *edata,
 										 ResultRelInfo *relinfo,
 										 TupleTableSlot *remoteslot);
@@ -255,6 +283,15 @@ static void apply_handle_tuple_routing(ApplyExecutionData *edata,
 									   TupleTableSlot *remoteslot,
 									   LogicalRepTupleData *newtup,
 									   CmdType operation);
+static void apply_streamed_changes(TransactionId xid,
+								   LogicalRepCommitData *commit_data);
+
+static bool start_skipping_changes(TransactionId xid);
+static bool stop_skipping_changes(bool reset_xid,
+								  LogicalRepCommitData *commit_data);
+
+static void apply_error_callback(void *arg);
+static void reset_apply_error_context_info(void);
 
 /*
  * Should this worker apply changes for given relation.
@@ -748,10 +785,14 @@ apply_handle_begin(StringInfo s)
 	LogicalRepBeginData begin_data;
 
 	logicalrep_read_begin(s, &begin_data);
+	apply_error_callback_arg.remote_xid = begin_data.xid;
+	apply_error_callback_arg.committs = begin_data.committime;
 
 	remote_final_lsn = begin_data.final_lsn;
 
-	in_remote_transaction = true;
+	/* Start skipping all changes of this transaction if necessary */
+	if (!start_skipping_changes(begin_data.xid))
+		in_remote_transaction = true;
 
 	pgstat_report_activity(STATE_RUNNING, NULL);
 }
@@ -775,12 +816,18 @@ apply_handle_commit(StringInfo s)
 								 LSN_FORMAT_ARGS(commit_data.commit_lsn),
 								 LSN_FORMAT_ARGS(remote_final_lsn))));
 
-	apply_handle_commit_internal(s, &commit_data);
+	/*
+	 * Stop the skipping transaction if enabled. Otherwise, commit the
+	 * changes that are just applied.
+	 */
+	if (!stop_skipping_changes(true, &commit_data))
+		apply_handle_commit_internal(&commit_data);
 
 	/* Process any tables that are being synchronized in parallel. */
 	process_syncing_tables(commit_data.end_lsn);
 
 	pgstat_report_activity(STATE_IDLE, NULL);
+	reset_apply_error_context_info();
 }
 
 /*
@@ -793,9 +840,10 @@ apply_handle_origin(StringInfo s)
 {
 	/*
 	 * ORIGIN message can only come inside streaming transaction or inside
-	 * remote transaction and before any actual writes.
+	 * remote transaction and before any actual writes unless we're skipping
+	 * changes of the transaction.
 	 */
-	if (!in_streamed_transaction &&
+	if (!in_streamed_transaction && !skipping_changes &&
 		(!in_remote_transaction ||
 		 (IsTransactionState() && !am_tablesync_worker())))
 		ereport(ERROR,
@@ -817,6 +865,9 @@ apply_handle_stream_start(StringInfo s)
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg_internal("duplicate STREAM START message")));
 
+	/* extract XID of the top-level transaction */
+	stream_xid = logicalrep_read_stream_start(s, &first_segment);
+
 	/*
 	 * Start a transaction on stream start, this transaction will be committed
 	 * on the stream stop unless it is a tablesync worker in which case it
@@ -825,12 +876,10 @@ apply_handle_stream_start(StringInfo s)
 	 * streaming data and subxact info.
 	 */
 	begin_replication_step();
+	apply_error_callback_arg.remote_xid = stream_xid;
 
 	/* notify handle methods we're processing a remote transaction */
 	in_streamed_transaction = true;
-
-	/* extract XID of the top-level transaction */
-	stream_xid = logicalrep_read_stream_start(s, &first_segment);
 
 	if (!TransactionIdIsValid(stream_xid))
 		ereport(ERROR,
@@ -893,6 +942,7 @@ apply_handle_stream_stop(StringInfo s)
 	MemoryContextReset(LogicalStreamingContext);
 
 	pgstat_report_activity(STATE_IDLE, NULL);
+	reset_apply_error_context_info();
 }
 
 /*
@@ -916,7 +966,10 @@ apply_handle_stream_abort(StringInfo s)
 	 * just delete the files with serialized info.
 	 */
 	if (xid == subxid)
+	{
+		apply_error_callback_arg.remote_xid = xid;
 		stream_cleanup_files(MyLogicalRepWorker->subid, xid);
+	}
 	else
 	{
 		/*
@@ -941,6 +994,7 @@ apply_handle_stream_abort(StringInfo s)
 		char		path[MAXPGPATH];
 		StreamXidHash *ent;
 
+		apply_error_callback_arg.remote_xid = subxid;
 		subidx = -1;
 		begin_replication_step();
 		subxact_info_read(MyLogicalRepWorker->subid, xid);
@@ -965,6 +1019,7 @@ apply_handle_stream_abort(StringInfo s)
 			cleanup_subxact_info();
 			end_replication_step();
 			CommitTransactionCommand();
+			reset_apply_error_context_info();
 			return;
 		}
 
@@ -996,6 +1051,11 @@ apply_handle_stream_abort(StringInfo s)
 		end_replication_step();
 		CommitTransactionCommand();
 	}
+
+	/* Stop the skipping transaction if enabled */
+	stop_skipping_changes(true, NULL);
+
+	reset_apply_error_context_info();
 }
 
 /*
@@ -1005,14 +1065,7 @@ static void
 apply_handle_stream_commit(StringInfo s)
 {
 	TransactionId xid;
-	StringInfoData s2;
-	int			nchanges;
-	char		path[MAXPGPATH];
-	char	   *buffer = NULL;
 	LogicalRepCommitData commit_data;
-	StreamXidHash *ent;
-	MemoryContext oldcxt;
-	BufFile    *fd;
 
 	if (in_streamed_transaction)
 		ereport(ERROR,
@@ -1020,8 +1073,44 @@ apply_handle_stream_commit(StringInfo s)
 				 errmsg_internal("STREAM COMMIT message without STREAM STOP")));
 
 	xid = logicalrep_read_stream_commit(s, &commit_data);
+	apply_error_callback_arg.remote_xid = xid;
+	apply_error_callback_arg.committs = commit_data.committime;
+
+	remote_final_lsn = commit_data.commit_lsn;
 
 	elog(DEBUG1, "received commit for streamed transaction %u", xid);
+
+	/*
+	 * Stop skipping transaction information if enabled. Otherwise, apply
+	 * all streamed changes and commit the transaction.
+	 */
+	if (!stop_skipping_changes(true, &commit_data))
+		apply_streamed_changes(xid, &commit_data);
+
+	/* unlink the files with serialized changes and subxact info */
+	stream_cleanup_files(MyLogicalRepWorker->subid, xid);
+
+	/* Process any tables that are being synchronized in parallel. */
+	process_syncing_tables(commit_data.end_lsn);
+
+	pgstat_report_activity(STATE_IDLE, NULL);
+
+	reset_apply_error_context_info();
+}
+
+/*
+ * Apply all streamed changes with the xid.
+ */
+static void
+apply_streamed_changes(TransactionId xid, LogicalRepCommitData *commit_data)
+{
+	StringInfoData s2;
+	int			nchanges;
+	char		path[MAXPGPATH];
+	char	   *buffer = NULL;
+	StreamXidHash *ent;
+	MemoryContext oldcxt;
+	BufFile    *fd;
 
 	/* Make sure we have an open transaction */
 	begin_replication_step();
@@ -1053,8 +1142,6 @@ apply_handle_stream_commit(StringInfo s)
 	initStringInfo(&s2);
 
 	MemoryContextSwitchTo(oldcxt);
-
-	remote_final_lsn = commit_data.commit_lsn;
 
 	/*
 	 * Make sure the handle apply_dispatch methods are aware we're in a remote
@@ -1133,22 +1220,15 @@ apply_handle_stream_commit(StringInfo s)
 	elog(DEBUG1, "replayed %d (all) changes from file \"%s\"",
 		 nchanges, path);
 
-	apply_handle_commit_internal(s, &commit_data);
-
-	/* unlink the files with serialized changes and subxact info */
-	stream_cleanup_files(MyLogicalRepWorker->subid, xid);
-
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(commit_data.end_lsn);
-
-	pgstat_report_activity(STATE_IDLE, NULL);
+	/* commit the streamed transaction */
+	apply_handle_commit_internal(commit_data);
 }
 
 /*
  * Helper function for apply_handle_commit and apply_handle_stream_commit.
  */
 static void
-apply_handle_commit_internal(StringInfo s, LogicalRepCommitData *commit_data)
+apply_handle_commit_internal(LogicalRepCommitData *commit_data)
 {
 	if (IsTransactionState())
 	{
@@ -1260,6 +1340,8 @@ apply_handle_insert(StringInfo s)
 		end_replication_step();
 		return;
 	}
+
+	apply_error_callback_arg.rel = rel;
 
 	/* Initialize the executor state. */
 	edata = create_edata_for_relation(rel);
@@ -1381,6 +1463,8 @@ apply_handle_update(StringInfo s)
 		end_replication_step();
 		return;
 	}
+
+	apply_error_callback_arg.rel = rel;
 
 	/* Check if we can do the update. */
 	check_relation_updatable(rel);
@@ -1537,6 +1621,8 @@ apply_handle_delete(StringInfo s)
 		end_replication_step();
 		return;
 	}
+
+	apply_error_callback_arg.rel = rel;
 
 	/* Check if we can do the delete. */
 	check_relation_updatable(rel);
@@ -1997,44 +2083,62 @@ static void
 apply_dispatch(StringInfo s)
 {
 	LogicalRepMsgType action = pq_getmsgbyte(s);
+	ErrorContextCallback errcallback;
+
+	/*
+	 * Skip all data-modification changes if we're skipping changes of this
+	 * transaction.
+	 */
+	if (skipping_changes &&
+		(action == LOGICAL_REP_MSG_INSERT ||
+		 action == LOGICAL_REP_MSG_UPDATE ||
+		 action == LOGICAL_REP_MSG_DELETE ||
+		 action == LOGICAL_REP_MSG_TRUNCATE))
+		return;
+
+	/* Push apply error context callback */
+	apply_error_callback_arg.action = action;
+	errcallback.callback  = apply_error_callback;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
 
 	switch (action)
 	{
 		case LOGICAL_REP_MSG_BEGIN:
 			apply_handle_begin(s);
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_COMMIT:
 			apply_handle_commit(s);
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_INSERT:
 			apply_handle_insert(s);
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_UPDATE:
 			apply_handle_update(s);
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_DELETE:
 			apply_handle_delete(s);
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_TRUNCATE:
 			apply_handle_truncate(s);
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_RELATION:
 			apply_handle_relation(s);
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_TYPE:
 			apply_handle_type(s);
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_ORIGIN:
 			apply_handle_origin(s);
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_MESSAGE:
 
@@ -2043,29 +2147,32 @@ apply_dispatch(StringInfo s)
 			 * Although, it could be used by other applications that use this
 			 * output plugin.
 			 */
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_STREAM_START:
 			apply_handle_stream_start(s);
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_STREAM_END:
 			apply_handle_stream_stop(s);
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_STREAM_ABORT:
 			apply_handle_stream_abort(s);
-			return;
+			break;
 
 		case LOGICAL_REP_MSG_STREAM_COMMIT:
 			apply_handle_stream_commit(s);
-			return;
+			break;
+
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("invalid logical replication message type \"%c\"", action)));
 	}
 
-	ereport(ERROR,
-			(errcode(ERRCODE_PROTOCOL_VIOLATION),
-			 errmsg_internal("invalid logical replication message type \"%c\"",
-							 action)));
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
 }
 
 /*
@@ -2287,7 +2394,8 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 		/* confirm all writes so far */
 		send_feedback(last_received, false, false);
 
-		if (!in_remote_transaction && !in_streamed_transaction)
+		if (!in_remote_transaction && !in_streamed_transaction &&
+			!skipping_changes)
 		{
 			/*
 			 * If we didn't get any transactions for a while there might be
@@ -3219,7 +3327,30 @@ ApplyWorkerMain(Datum main_arg)
 	walrcv_startstreaming(LogRepWorkerWalRcvConn, &options);
 
 	/* Run the main loop. */
-	LogicalRepApplyLoop(origin_startpos);
+	PG_TRY();
+	{
+		LogicalRepApplyLoop(origin_startpos);
+	}
+	PG_CATCH();
+	{
+		if (apply_error_callback_arg.action != -1)
+		{
+			Oid relid;
+
+			if (apply_error_callback_arg.rel)
+				relid = apply_error_callback_arg.rel->localreloid;
+			else
+				relid = InvalidOid;
+
+			pgstat_report_logicalrep_error(MySubscription->oid,
+										   apply_error_callback_arg.action,
+										   apply_error_callback_arg.remote_xid,
+										   relid);
+		}
+
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
 
 	proc_exit(0);
 }
@@ -3231,4 +3362,140 @@ bool
 IsLogicalWorker(void)
 {
 	return MyLogicalRepWorker != NULL;
+}
+
+/*
+ * Start skipping changes of the given transaction. Return true if we
+ * enabled the skipping behavior.
+ */
+static bool
+start_skipping_changes(TransactionId xid)
+{
+	Assert(!in_remote_transaction);
+	Assert(!in_streamed_transaction);
+
+	if (!TransactionIdIsValid(MySubscription->skipxid) ||
+		MySubscription->skipxid != xid)
+		return false;
+
+	skipping_changes = true;
+	ereport(LOG,
+			errmsg("start skipping logical replication transaction with xid %u",
+				   xid));
+
+	return true;
+}
+
+/*
+ * Stop skipping changes and reset the skip XID. Return true if we were
+ * skipping changes and have stopped it.
+ *
+ * reset_xid is true if the caller wants to reset the skip XID (subskipxid)
+ * after disabling the skipping behavior.  Also, if *commit_data is non-NULL,
+ * we set origin state to the transaction commit that resets the skip XID so
+ * that we can start streaming from the transaction next to the one that we
+ * just skipped.
+ */
+static bool
+stop_skipping_changes(bool reset_xid, LogicalRepCommitData *commit_data)
+{
+	Relation	rel;
+	HeapTuple	tup;
+	bool		nulls[Natts_pg_subscription];
+	bool		replaces[Natts_pg_subscription];
+	Datum		values[Natts_pg_subscription];
+
+	if (!skipping_changes)
+		return false;
+
+	Assert(TransactionIdIsValid(MySubscription->skipxid));
+	Assert(!in_remote_transaction);
+	Assert(!in_streamed_transaction);
+
+	/* Stop skipping changes */
+	skipping_changes = false;
+
+	ereport(LOG,
+			errmsg("done skipping logical replication transaction with xid %u",
+				   MySubscription->skipxid));
+
+	if (!reset_xid)
+		return true;
+
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+	memset(replaces, false, sizeof(replaces));
+
+	/* Update the system catalog to reset the skip XID */
+	StartTransactionCommand();
+	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
+
+	/* Fetch the existing tuple. */
+	tup = SearchSysCacheCopy1(SUBSCRIPTIONOID,
+							  TransactionIdGetDatum(MySubscription->oid));
+
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "subscription \"%s\" does not exist", MySubscription->name);
+
+	/* Set subskipxid to null */
+	nulls[Anum_pg_subscription_subskipxid - 1] = true;
+	replaces[Anum_pg_subscription_subskipxid - 1] = true;
+
+	tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
+							replaces);
+	CatalogTupleUpdate(rel, &tup->t_self, tup);
+
+	heap_freetuple(tup);
+	table_close(rel, RowExclusiveLock);
+
+	if (commit_data)
+	{
+		/*
+		 * Update origin state so we can restart streaming from correct
+		 * position in case of crash.
+		 */
+		replorigin_session_origin_lsn = commit_data->end_lsn;
+		replorigin_session_origin_timestamp = commit_data->committime;
+	}
+
+	CommitTransactionCommand();
+
+	/* Clear the error information in the stats collector too */
+	pgstat_report_logicalrep_error_clear(MySubscription->oid);
+
+	return true;
+}
+
+static void
+apply_error_callback(void *arg)
+{
+	StringInfoData buf;
+
+	initStringInfo(&buf);
+	appendStringInfo(&buf, _("during apply of \"%s\""),
+					 logicalrep_action(apply_error_callback_arg.action));
+
+
+	if (apply_error_callback_arg.rel)
+		appendStringInfo(&buf, _(" for relation \"%s.%s\""),
+						 apply_error_callback_arg.rel->remoterel.nspname,
+						 apply_error_callback_arg.rel->remoterel.relname);
+
+	if (TransactionIdIsNormal(apply_error_callback_arg.remote_xid))
+		appendStringInfo(&buf, _(" in transaction with xid %u committs %s"),
+						 apply_error_callback_arg.remote_xid,
+						 apply_error_callback_arg.committs == 0
+						 ? "(unset)"
+						 : timestamptz_to_str(apply_error_callback_arg.committs));
+
+	errcontext("%s", buf.data);
+}
+
+static void
+reset_apply_error_context_info(void)
+{
+	apply_error_callback_arg.action = -1;
+	apply_error_callback_arg.rel = NULL;
+	apply_error_callback_arg.remote_xid = InvalidTransactionId;
+	apply_error_callback_arg.committs = 0;
 }

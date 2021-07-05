@@ -9772,6 +9772,23 @@ AlterSubscriptionStmt:
 											(Node *)makeInteger(false), @1));
 					$$ = (Node *)n;
 				}
+			| ALTER SUBSCRIPTION name SET SKIP TRANSACTION Iconst
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->kind = ALTER_SUBSCRIPTION_SET_SKIP_XID;
+					n->subname = $3;
+					n->skip_xid = $7;
+					$$ = (Node *)n;
+				}
+			| ALTER SUBSCRIPTION name RESET SKIP TRANSACTION
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->kind = ALTER_SUBSCRIPTION_RESET_SKIP_XID;
+					n->subname = $3;
+					$$ = (Node *)n;
+				}
 		;
 
 /*****************************************************************************

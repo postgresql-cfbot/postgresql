@@ -1879,6 +1879,13 @@ pg_stat_gssapi| SELECT s.pid,
     s.gss_enc AS encrypted
    FROM pg_stat_get_activity(NULL::integer) s(datid, pid, usesysid, application_name, state, query, wait_event_type, wait_event, xact_start, query_start, backend_start, state_change, client_addr, client_hostname, client_port, backend_xid, backend_xmin, backend_type, ssl, sslversion, sslcipher, sslbits, ssl_client_dn, ssl_client_serial, ssl_issuer_dn, gss_auth, gss_princ, gss_enc, leader_pid, query_id)
   WHERE (s.client_port IS NOT NULL);
+pg_stat_logical_replication_error| SELECT s.subname,
+    e.relid,
+    e.action,
+    e.xid,
+    e.last_failure
+   FROM pg_subscription s,
+    LATERAL pg_stat_get_logical_replication_error(s.oid) e(subid, relid, action, xid, last_failure);
 pg_stat_progress_analyze| SELECT s.pid,
     s.datid,
     d.datname,

@@ -24,6 +24,7 @@
 #include "pgstat.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/postmaster.h"
+#include "replication/logicalproto.h"
 #include "replication/slot.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
@@ -2376,6 +2377,62 @@ pg_stat_get_replication_slot(PG_FUNCTION_ARGS)
 		nulls[9] = true;
 	else
 		values[9] = TimestampTzGetDatum(slotent->stat_reset_timestamp);
+
+	/* Returns the record as Datum */
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}
+
+/*
+ * Get the logical replication error for the given subscription.
+ */
+Datum
+pg_stat_get_logical_replication_error(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_LOGICAL_REPLICATION_ERROR_COLS 5
+	Oid			subid = PG_GETARG_OID(0);
+	TupleDesc	tupdesc;
+	Datum		values[PG_STAT_GET_LOGICAL_REPLICATION_ERROR_COLS];
+	bool		nulls[PG_STAT_GET_LOGICAL_REPLICATION_ERROR_COLS];
+	PgStat_LogicalRepErrEntry *errent;
+
+	/* Initialise values and NULL flags arrays */
+	MemSet(values, 0, sizeof(values));
+	MemSet(nulls, 0, sizeof(nulls));
+
+	/* Initialise attributes information in the tuple descriptor */
+	tupdesc = CreateTemplateTupleDesc(PG_STAT_GET_LOGICAL_REPLICATION_ERROR_COLS);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "subid",
+					   OIDOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "relid",
+					   OIDOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "action",
+					   TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "xid",
+					   XIDOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "last_failure",
+					   TIMESTAMPTZOID, -1, 0);
+	BlessTupleDesc(tupdesc);
+
+	errent = pgstat_fetch_logicalrep_error(subid);
+
+	values[0] = ObjectIdGetDatum(subid);
+
+	if (!errent)
+	{
+		MemSet(nulls, true, sizeof(nulls));
+		nulls[0] = false;
+	}
+	else
+	{
+		if (OidIsValid(errent->relid))
+			values[1] = ObjectIdGetDatum(errent->relid);
+		else
+			nulls[1] = true;
+
+		values[2] = CStringGetTextDatum(logicalrep_action(errent->action));
+		values[3] = TransactionIdGetDatum(errent->xid);
+		values[4] = TimestampTzGetDatum(errent->last_failure);
+	}
 
 	/* Returns the record as Datum */
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));

@@ -3664,7 +3664,9 @@ typedef enum AlterSubscriptionType
 	ALTER_SUBSCRIPTION_ADD_PUBLICATION,
 	ALTER_SUBSCRIPTION_DROP_PUBLICATION,
 	ALTER_SUBSCRIPTION_REFRESH,
-	ALTER_SUBSCRIPTION_ENABLED
+	ALTER_SUBSCRIPTION_ENABLED,
+	ALTER_SUBSCRIPTION_SET_SKIP_XID,
+	ALTER_SUBSCRIPTION_RESET_SKIP_XID,
 } AlterSubscriptionType;
 
 typedef struct AlterSubscriptionStmt
@@ -3675,6 +3677,7 @@ typedef struct AlterSubscriptionStmt
 	char	   *conninfo;		/* Connection string to publisher */
 	List	   *publication;	/* One or more publication to subscribe to */
 	List	   *options;		/* List of DefElem nodes */
+	TransactionId	skip_xid;	/* XID to skip */
 } AlterSubscriptionStmt;
 
 typedef struct DropSubscriptionStmt

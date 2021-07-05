@@ -14,6 +14,7 @@
 #include "datatype/timestamp.h"
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
+#include "replication/logicalproto.h"
 #include "utils/backend_progress.h" /* for backward compatibility */
 #include "utils/backend_status.h"	/* for backward compatibility */
 #include "utils/hsearch.h"
@@ -66,6 +67,7 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_RESETSINGLECOUNTER,
 	PGSTAT_MTYPE_RESETSLRUCOUNTER,
 	PGSTAT_MTYPE_RESETREPLSLOTCOUNTER,
+	PGSTAT_MTYPE_LOGICALREPERROR,
 	PGSTAT_MTYPE_AUTOVAC_START,
 	PGSTAT_MTYPE_VACUUM,
 	PGSTAT_MTYPE_ANALYZE,
@@ -539,6 +541,21 @@ typedef struct PgStat_MsgReplSlot
 	PgStat_Counter m_total_bytes;
 } PgStat_MsgReplSlot;
 
+/* ----------
+ * PgStat_MsgLogicalRepErr	Sent by a apply worker to to update the error
+ *							of logical replication transaction.
+ * ----------
+ */
+typedef struct PgStat_MsgLogicalRepErr
+{
+	PgStat_MsgHdr m_hdr;
+	Oid		m_subid;
+	bool	m_clear;
+	Oid		m_relid;
+	LogicalRepMsgType	m_action;
+	TransactionId		m_xid;
+	TimestampTz			m_last_failure;
+} PgStat_MsgLogicalRepErr;
 
 /* ----------
  * PgStat_MsgRecoveryConflict	Sent by the backend upon recovery conflict
@@ -710,6 +727,7 @@ typedef union PgStat_Msg
 	PgStat_MsgChecksumFailure msg_checksumfailure;
 	PgStat_MsgReplSlot msg_replslot;
 	PgStat_MsgConn msg_conn;
+	PgStat_MsgLogicalRepErr msg_logicalreperr;
 } PgStat_Msg;
 
 
@@ -908,6 +926,15 @@ typedef struct PgStat_StatReplSlotEntry
 	TimestampTz stat_reset_timestamp;
 } PgStat_StatReplSlotEntry;
 
+typedef struct PgStat_LogicalRepErrEntry
+{
+	Oid	subid;
+	Oid		relid;
+	LogicalRepMsgType	action;
+	TransactionId		xid;
+	TimestampTz			last_failure;
+} PgStat_LogicalRepErrEntry;
+
 
 /*
  * Working state needed to accumulate per-function-call timing statistics.
@@ -1011,6 +1038,9 @@ extern void pgstat_report_checksum_failure(void);
 extern void pgstat_report_replslot(const PgStat_StatReplSlotEntry *repSlotStat);
 extern void pgstat_report_replslot_create(const char *slotname);
 extern void pgstat_report_replslot_drop(const char *slotname);
+extern void pgstat_report_logicalrep_error(Oid subid, LogicalRepMsgType action,
+										   TransactionId xid, Oid relid);
+extern void pgstat_report_logicalrep_error_clear(Oid subid);
 
 extern void pgstat_initialize(void);
 
@@ -1106,6 +1136,7 @@ extern PgStat_GlobalStats *pgstat_fetch_global(void);
 extern PgStat_WalStats *pgstat_fetch_stat_wal(void);
 extern PgStat_SLRUStats *pgstat_fetch_slru(void);
 extern PgStat_StatReplSlotEntry *pgstat_fetch_replslot(NameData slotname);
+extern PgStat_LogicalRepErrEntry *pgstat_fetch_logicalrep_error(Oid subid);
 
 extern void pgstat_count_slru_page_zeroed(int slru_idx);
 extern void pgstat_count_slru_page_hit(int slru_idx);

@@ -429,6 +429,7 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	values[Anum_pg_subscription_subenabled - 1] = BoolGetDatum(enabled);
 	values[Anum_pg_subscription_subbinary - 1] = BoolGetDatum(binary);
 	values[Anum_pg_subscription_substream - 1] = BoolGetDatum(streaming);
+	nulls[Anum_pg_subscription_subskipxid - 1] = true;
 	values[Anum_pg_subscription_subconninfo - 1] =
 		CStringGetTextDatum(conninfo);
 	if (slotname)
@@ -1017,6 +1018,26 @@ AlterSubscription(AlterSubscriptionStmt *stmt, bool isTopLevel)
 
 				AlterSubscription_refresh(sub, copy_data);
 
+				break;
+			}
+
+		case ALTER_SUBSCRIPTION_SET_SKIP_XID:
+			{
+				if (sub->skipxid != stmt->skip_xid)
+				{
+					values[Anum_pg_subscription_subskipxid - 1] =
+						TransactionIdGetDatum(stmt->skip_xid);
+					replaces[Anum_pg_subscription_subskipxid - 1] = true;
+					update_tuple = true;
+				}
+
+				break;
+			}
+		case ALTER_SUBSCRIPTION_RESET_SKIP_XID:
+			{
+				nulls[Anum_pg_subscription_subskipxid - 1] = true;
+				replaces[Anum_pg_subscription_subskipxid - 1] = true;
+				update_tuple = true;
 				break;
 			}
 

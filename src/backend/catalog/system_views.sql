@@ -1257,3 +1257,13 @@ REVOKE ALL ON pg_subscription FROM public;
 GRANT SELECT (oid, subdbid, subname, subowner, subenabled, subbinary,
               substream, subslotname, subsynccommit, subpublications)
     ON pg_subscription TO public;
+
+CREATE VIEW pg_stat_logical_replication_error AS
+    SELECT
+            s.subname,
+	    e.relid,
+	    e.action,
+	    e.xid,
+	    e.last_failure
+    FROM pg_subscription as s,
+        LATERAL pg_stat_get_logical_replication_error(oid) as e;

@@ -375,7 +375,18 @@ sub system_or_bail
 {
 	if (system_log(@_) != 0)
 	{
-		BAIL_OUT("system $_[0] failed");
+		if ($? == -1)
+		{
+			BAIL_OUT("system $_[0] failed: $!\n");
+		}
+		elsif ($? & 127)
+		{
+			BAIL_OUT(sprintf("system $_[0] died with signal %d\n", $? & 127));
+		}
+		else
+		{
+			BAIL_OUT(sprintf("system $_[0] exited with value %d\n", $? >> 8));
+		}
 	}
 	return;
 }

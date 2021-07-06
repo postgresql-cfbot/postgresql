@@ -1175,6 +1175,14 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	Assert(subroot->placeholder_list == NIL);
 
 	/*
+	 * We no longer need the RTE's copy of the subquery's query tree.  Getting
+	 * rid of it saves nothing in particular so far as this level of query is
+	 * concerned; but if this query level is in turn pulled up into a parent,
+	 * we'd waste cycles copying the now-unused query tree.
+	 */
+	rte->subquery = NULL;
+
+	/*
 	 * Miscellaneous housekeeping.
 	 *
 	 * Although replace_rte_variables() faithfully updated parse->hasSubLinks

@@ -17,8 +17,11 @@
 #include "access/parallel.h"
 #include "commands/explain.h"
 #include "executor/instrument.h"
+#include "nodes/nodeFuncs.h"
+#include "parser/parsetree.h"
 #include "jit/jit.h"
 #include "utils/guc.h"
+#include "utils/lsyscache.h"
 
 PG_MODULE_MAGIC;
 
@@ -35,6 +38,7 @@ static int	auto_explain_log_format = EXPLAIN_FORMAT_TEXT;
 static int	auto_explain_log_level = LOG;
 static bool auto_explain_log_nested_statements = false;
 static double auto_explain_sample_rate = 1;
+static int auto_explain_log_seqscan = -1;	/* tuples */
 
 static const struct config_enum_entry format_options[] = {
 	{"text", EXPLAIN_FORMAT_TEXT, false},
@@ -65,7 +69,7 @@ static int	nesting_level = 0;
 static bool current_query_sampled = false;
 
 #define auto_explain_enabled() \
-	(auto_explain_log_min_duration >= 0 && \
+	((auto_explain_log_min_duration >= 0 || auto_explain_log_seqscan != -1) && \
 	 (nesting_level == 0 || auto_explain_log_nested_statements) && \
 	 current_query_sampled)
 
@@ -101,6 +105,18 @@ _PG_init(void)
 							-1, INT_MAX,
 							PGC_SUSET,
 							GUC_UNIT_MS,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("auto_explain.log_seqscan",
+							"Sets the minimum tuples produced by sequantial scans which plans will be logged",
+							"Zero prints all plans that contains seqscan node. -1 turns this feature off.",
+							&auto_explain_log_seqscan,
+							-1,
+							-1, INT_MAX,
+							PGC_SUSET,
+							0,
 							NULL,
 							NULL,
 							NULL);
@@ -274,7 +290,9 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	 */
 	if (nesting_level == 0)
 	{
-		if (auto_explain_log_min_duration >= 0 && !IsParallelWorker())
+		if ((auto_explain_log_min_duration >= 0 ||
+			 auto_explain_log_seqscan != -1) &&
+			 !IsParallelWorker())
 			current_query_sampled = (random() < auto_explain_sample_rate *
 									 ((double) MAX_RANDOM_VALUE + 1));
 		else
@@ -295,6 +313,10 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			if (auto_explain_log_wal)
 				queryDesc->instrument_options |= INSTRUMENT_WAL;
 		}
+
+		/* We need to know number of processed rows per node */
+		if (auto_explain_log_seqscan != -1 && (eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0)
+			queryDesc->instrument_options |= INSTRUMENT_ROWS;
 	}
 
 	if (prev_ExecutorStart)
@@ -364,15 +386,43 @@ explain_ExecutorFinish(QueryDesc *queryDesc)
 }
 
 /*
+ * Colllect relations where log_seqscan limit was exceeded
+ */
+static bool
+DetectSeqScanOverLimit(PlanState *planstate, Bitmapset **rels)
+{
+	Plan	   *plan = planstate->plan;
+
+	if (planstate->instrument)
+		InstrEndLoop(planstate->instrument);
+
+	if (IsA(plan, SeqScan))
+	{
+		if (planstate->instrument &&
+			planstate->instrument->ntuples >= auto_explain_log_seqscan)
+		{
+			*rels = bms_add_member(*rels, ((Scan *) plan)->scanrelid);
+		}
+	}
+
+	return planstate_tree_walker(planstate, DetectSeqScanOverLimit, rels);
+}
+
+/*
  * ExecutorEnd hook: log results if needed
  */
 static void
 explain_ExecutorEnd(QueryDesc *queryDesc)
 {
-	if (queryDesc->totaltime && auto_explain_enabled())
+	if (auto_explain_enabled() &&
+		(queryDesc->totaltime || auto_explain_log_seqscan != -1))
 	{
 		MemoryContext oldcxt;
 		double		msec;
+		Bitmapset  *rels = NULL;
+		StringInfoData relnames;
+
+		relnames.data = NULL;
 
 		/*
 		 * Make sure we operate in the per-query context, so any cruft will be
@@ -386,13 +436,37 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 		 */
 		InstrEndLoop(queryDesc->totaltime);
 
+		if (auto_explain_log_seqscan != -1)
+		{
+			DetectSeqScanOverLimit(queryDesc->planstate, &rels);
+
+			if (rels)
+			{
+				int		relid = -1;
+
+				initStringInfo(&relnames);
+
+				while ((relid = bms_next_member(rels, relid)) >= 0)
+				{
+					RangeTblEntry *rte;
+
+					if (*relnames.data != '\0')
+						appendStringInfoString(&relnames, ",");
+
+					rte = rt_fetch(relid, queryDesc->plannedstmt->rtable);
+					appendStringInfoString(&relnames, get_rel_name(rte->relid));
+				}
+			}
+		}
+
 		/* Log plan if duration is exceeded. */
 		msec = queryDesc->totaltime->total * 1000.0;
-		if (msec >= auto_explain_log_min_duration)
+		if ((auto_explain_log_min_duration != -1 &&
+			 msec >= auto_explain_log_min_duration) || rels)
 		{
 			ExplainState *es = NewExplainState();
 
-			es->analyze = (queryDesc->instrument_options && auto_explain_log_analyze);
+			es->analyze = (queryDesc->instrument_options && (auto_explain_log_analyze || auto_explain_log_seqscan != -1));
 			es->verbose = auto_explain_log_verbose;
 			es->buffers = (es->analyze && auto_explain_log_buffers);
 			es->wal = (es->analyze && auto_explain_log_wal);
@@ -427,10 +501,18 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 			 * reported.  This isn't ideal but trying to do it here would
 			 * often result in duplication.
 			 */
-			ereport(auto_explain_log_level,
-					(errmsg("duration: %.3f ms  plan:\n%s",
-							msec, es->str->data),
-					 errhidestmt(true)));
+			if (!relnames.data)
+				ereport(auto_explain_log_level,
+						(errmsg("duration: %.3f ms  plan:\n%s",
+								msec, es->str->data),
+						 errhidestmt(true)));
+			else
+			{
+				ereport(auto_explain_log_level,
+						(errmsg("duration: %.3f ms, over limit seqscans: %s, plan:\n%s",
+								msec, relnames.data, es->str->data),
+						 errhidestmt(true)));
+			}
 		}
 
 		MemoryContextSwitchTo(oldcxt);

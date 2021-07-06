@@ -476,6 +476,12 @@ pgstat_get_wait_timeout(WaitEventTimeout w)
 		case WAIT_EVENT_PG_SLEEP:
 			event_name = "PgSleep";
 			break;
+		case WAIT_EVENT_POST_AUTH_DELAY:
+			event_name = "PostAuthDelay";
+			break;
+		case WAIT_EVENT_PRE_AUTH_DELAY:
+			event_name = "PreAuthDelay";
+			break;
 		case WAIT_EVENT_RECOVERY_APPLY_DELAY:
 			event_name = "RecoveryApplyDelay";
 			break;

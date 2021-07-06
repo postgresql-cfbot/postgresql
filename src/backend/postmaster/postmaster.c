@@ -4332,7 +4332,16 @@ BackendInitialize(Port *port)
 	 * is not honored until after authentication.)
 	 */
 	if (PreAuthDelay > 0)
-		pg_usleep(PreAuthDelay * 1000000L);
+	{
+		/*
+		 * Do not use WL_LATCH_SET during backend initialization because the
+		 * MyLatch may point to shared latch later.
+		 */
+		(void) WaitLatch(MyLatch,
+						 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 PreAuthDelay * 1000L,
+						 WAIT_EVENT_PRE_AUTH_DELAY);
+	}
 
 	/* This flag will remain set until InitPostgres finishes authentication */
 	ClientAuthInProgress = true;	/* limit visibility of log messages */

@@ -763,7 +763,16 @@ StartBackgroundWorker(void)
 
 	/* Apply PostAuthDelay */
 	if (PostAuthDelay > 0)
-		pg_usleep(PostAuthDelay * 1000000L);
+	{
+		/*
+		 * PostAuthDelay will not get applied, if WL_LATCH_SET is used. This
+		 * is because the latch could have been set initially.
+		 */
+		(void) WaitLatch(MyLatch,
+						 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 PostAuthDelay * 1000L,
+						 WAIT_EVENT_POST_AUTH_DELAY);
+	}
 
 	/*
 	 * Set up signal handlers.

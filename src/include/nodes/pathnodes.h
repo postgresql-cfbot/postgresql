@@ -686,6 +686,12 @@ typedef struct RelOptInfo
 	/* default result targetlist for Paths scanning this relation */
 	struct PathTarget *reltarget;	/* list of Vars/Exprs, cost, width */
 
+	Bitmapset	**notnull_attrs; /* The attno which is not null after evalating
+								  * all the quals on this relation, for baserel,
+								  * the len would always 1. and for others the array
+								  * index is relid from relids.
+								  */
+
 	/* materialization information */
 	List	   *pathlist;		/* Path structures */
 	List	   *ppilist;		/* ParamPathInfos used in pathlist */

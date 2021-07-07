@@ -16,6 +16,7 @@
 
 #include <limits.h>
 
+#include "access/sysattr.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/appendinfo.h"
@@ -258,6 +259,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	rel->all_partrels = NULL;
 	rel->partexprs = NULL;
 	rel->nullable_partexprs = NULL;
+	rel->notnull_attrs = palloc0(sizeof(Bitmapset *) * 1);
 
 	/*
 	 * Pass assorted information down the inheritance hierarchy.
@@ -556,6 +558,81 @@ add_join_rel(PlannerInfo *root, RelOptInfo *joinrel)
 	}
 }
 
+static void
+copy_notnull_attrs_to_joinrel(RelOptInfo *joinrel, RelOptInfo *rel)
+{
+	int relid;
+	if (bms_get_singleton_member(rel->relids, &relid))
+		joinrel->notnull_attrs[relid] = bms_copy(rel->notnull_attrs[0]);
+	else
+	{
+		relid = -1;
+		while ((relid = bms_next_member(rel->relids, relid)) >= 0)
+			joinrel->notnull_attrs[relid] = bms_copy(rel->notnull_attrs[relid]);
+	}
+}
+
+/*
+ *
+ */
+static void
+set_joinrel_notnull_attrs(RelOptInfo *joinrel,
+						  RelOptInfo *outer_rel,
+						  RelOptInfo *inner_rel,
+						  List *restrictlist,
+						  SpecialJoinInfo *sjinfo)
+{
+	if (sjinfo->jointype == JOIN_FULL)
+		/* Both sides are nullable. */
+		return;
+	/* If it is not FULL join, the outer side is not changed. */
+	copy_notnull_attrs_to_joinrel(joinrel, outer_rel);
+	switch(sjinfo->jointype)
+	{
+		case JOIN_ANTI:
+		case JOIN_SEMI:
+		case JOIN_INNER:
+			copy_notnull_attrs_to_joinrel(joinrel, inner_rel);
+			{
+				ListCell	*lc;
+				List *clauses = extract_actual_clauses(restrictlist, false);
+				foreach(lc, find_nonnullable_vars((Node *) clauses))
+				{
+					Var *var = lfirst_node(Var, lc);
+					if (!bms_is_member(var->varno, joinrel->relids))
+					{
+						/* lateral join */
+						continue;
+					}
+					joinrel->notnull_attrs[var->varno] = bms_add_member(
+						joinrel->notnull_attrs[var->varno],
+						var->varattno - FirstLowInvalidHeapAttributeNumber);
+				}
+			}
+			break;
+		case JOIN_LEFT:
+			break;
+		default:
+			elog(ERROR, "Unexpected join type %d", sjinfo->jointype);
+	}
+	/* Debug Only, will be removed at last. */
+	if (false)
+	{
+		int relid = -1;
+		int eLevel = INFO;
+		elog(eLevel, "Dump notnull for JoinRel(%s)", bmsToString(joinrel->relids));
+		while((relid = bms_next_member(joinrel->relids, relid)) >= 0)
+		{
+			Bitmapset *notnullattrs = joinrel->notnull_attrs[relid];
+			if (notnullattrs != NULL)
+				elog(eLevel, "FirstLowInvalidHeapAttributeNumber = %d, RELID = (%d), notnull_attrs: %s",
+					 FirstLowInvalidHeapAttributeNumber,
+					 relid,
+					 bmsToString(notnullattrs));
+		}
+	}
+
+}
 /*
  * build_join_rel
  *	  Returns relation entry corresponding to the union of two given rels,
@@ -672,6 +749,7 @@ build_join_rel(PlannerInfo *root,
 	joinrel->all_partrels = NULL;
 	joinrel->partexprs = NULL;
 	joinrel->nullable_partexprs = NULL;
+	joinrel->notnull_attrs = palloc0(sizeof(Bitmapset *) * (bms_max_member(joinrel->relids) + 1));
 
 	/* Compute information relevant to the foreign relations. */
 	set_foreign_rel_properties(joinrel, outer_rel, inner_rel);
@@ -762,6 +840,8 @@ build_join_rel(PlannerInfo *root,
 		root->join_rel_level[root->join_cur_level] =
 			lappend(root->join_rel_level[root->join_cur_level], joinrel);
 	}
+
+	set_joinrel_notnull_attrs(joinrel, outer_rel, inner_rel, restrictlist, sjinfo);
 
 	return joinrel;
 }

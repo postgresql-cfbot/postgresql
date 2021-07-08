@@ -748,6 +748,13 @@ INSERT INTO test33 VALUES (2, 'DEF');
 SELECT (SELECT count(*) FROM test33_0) <> (SELECT count(*) FROM test33_1);
 
 
+-- Test that ALTER COLLATION REFRESH VERSION correctly complains for
+-- wrong object.  We use ALTER TABLE, not ALTER INDEX since we are
+-- exercising ATWrongRelkindError here.
+CREATE VIEW failview AS SELECT 1 AS a;
+ALTER TABLE failview ALTER COLLATION a REFRESH VERSION; -- ERROR
+DROP VIEW failview;
+
 -- cleanup
 RESET search_path;
 SET client_min_messages TO warning;

@@ -77,6 +77,9 @@ CREATE OR REPLACE VIEW viewtest AS
 CREATE OR REPLACE VIEW viewtest AS
 	SELECT a, b, 0 AS c FROM viewtest_tbl;
 
+-- check that the command correctly complains for the object of a wrong type
+CREATE OR REPLACE VIEW view_base_table AS SELECT 1 AS a;
+
 DROP VIEW viewtest;
 DROP TABLE viewtest_tbl;
 

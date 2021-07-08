@@ -72,6 +72,9 @@ ERROR:  cannot change data type of view column "b" from integer to numeric
 -- should work
 CREATE OR REPLACE VIEW viewtest AS
 	SELECT a, b, 0 AS c FROM viewtest_tbl;
+-- check that the command correctly complains for the object of a wrong type
+CREATE OR REPLACE VIEW view_base_table AS SELECT 1 AS a;
+ERROR:  "view_base_table" is not a view
 DROP VIEW viewtest;
 DROP TABLE viewtest_tbl;
 -- tests for temporary views

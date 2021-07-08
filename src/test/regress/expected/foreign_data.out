@@ -879,8 +879,10 @@ ERROR:  column "no_column" of relation "ft1" does not exist
 ALTER FOREIGN TABLE ft1 DROP COLUMN IF EXISTS no_column;
 NOTICE:  column "no_column" of relation "ft1" does not exist, skipping
 ALTER FOREIGN TABLE ft1 DROP COLUMN c9;
+ALTER FOREIGN TABLE ft1 SET TABLESPACE ts;                      -- ERROR (wrong object type)
+ERROR:  "ft1" is not a table, materialized view, index, or partitioned index
 ALTER FOREIGN TABLE ft1 SET SCHEMA foreign_schema;
-ALTER FOREIGN TABLE ft1 SET TABLESPACE ts;                      -- ERROR
+ALTER FOREIGN TABLE ft1 SET TABLESPACE ts;                      -- ERROR (not found)
 ERROR:  relation "ft1" does not exist
 ALTER FOREIGN TABLE foreign_schema.ft1 RENAME c1 TO foreign_column_1;
 ALTER FOREIGN TABLE foreign_schema.ft1 RENAME TO foreign_table_1;

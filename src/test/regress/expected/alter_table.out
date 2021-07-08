@@ -6,6 +6,7 @@ SET client_min_messages TO 'warning';
 DROP ROLE IF EXISTS regress_alter_table_user1;
 RESET client_min_messages;
 CREATE USER regress_alter_table_user1;
+CREATE VIEW at_v1 AS SELECT 1 as a;
 --
 -- add attribute
 --
@@ -120,6 +121,9 @@ ALTER INDEX attmp_idx ALTER COLUMN 4 SET STATISTICS 1000;
 ERROR:  column number 4 of relation "attmp_idx" does not exist
 ALTER INDEX attmp_idx ALTER COLUMN 2 SET STATISTICS -1;
 DROP TABLE attmp;
+-- test that the command correctly complains for the object of a wrong type
+ALTER TABLE at_v1 ALTER COLUMN a SET STATISTICS 0; -- ERROR
+ERROR:  "at_v1" is not a table, materialized view, index, partitioned index, or foreign table
 --
 -- rename - check on both non-temp and temp tables
 --
@@ -1188,6 +1192,11 @@ select * from def_test;
 alter table def_test alter column c1 set default 'wrong_datatype';
 ERROR:  invalid input syntax for type integer: "wrong_datatype"
 alter table def_test alter column c2 set default 20;
+-- set defaults to an incorrect object: this should fail
+create materialized view def_tmp_mv as select 1 as a;
+alter table def_tmp_mv alter a set default 0;
+ERROR:  "def_tmp_mv" is not a table, view, or foreign table
+drop materialized view def_tmp_mv;
 -- set defaults on a non-existent column: this should fail
 alter table def_test alter column c3 set default 30;
 ERROR:  column "c3" of relation "def_test" does not exist
@@ -2079,6 +2088,9 @@ Indexes:
     "at_part_2_a_idx" btree (a)
     "at_part_2_b_idx" btree (b)
 
+-- check if the command correctly complains for the object of a wrong type 
+alter table at_partitioned_a_idx set (dummy = 1); -- ERROR
+ERROR:  "at_partitioned_a_idx" is not a table, view, materialized view, or index
 drop table at_partitioned;
 -- Alter column type when no table rewrite is required
 -- Also check that comments are preserved
@@ -2215,6 +2227,9 @@ Indexes:
  a      | text    | yes  | a          | external | 
 btree, for table "public.test_storage"
 
+-- test that SET STORAGE correctly complains for the object of a wrong type
+alter table at_v1 alter column a set storage plain; -- ERROR
+ERROR:  "at_v1" is not a table, materialized view, or foreign table
 -- ALTER COLUMN TYPE with a check constraint and a child table (bug #13779)
 CREATE TABLE test_inh_check (a float check (a > 10.2), b float);
 CREATE TABLE test_inh_check_child() INHERITS(test_inh_check);
@@ -2687,6 +2702,9 @@ select * from my_locks order by 1;
 (2 rows)
 
 commit;
+-- test that the command corectly complains for the object of a wrong type
+alter table at_v1 alter column a set (dummy = 1);
+ERROR:  "at_v1" is not a table, materialized view, index, or foreign table
 begin; alter table alterlock alter column f2 set storage extended;
 select * from my_locks order by 1;
   relname  |    max_lockmode     
@@ -4114,6 +4132,9 @@ ALTER TABLE hash_parted ATTACH PARTITION fail_part FOR VALUES WITH (MODULUS 3, R
 ERROR:  every hash partition modulus must be a factor of the next larger modulus
 DETAIL:  The new modulus 3 is not a factor of 4, the modulus of existing partition "hpart_1".
 DROP TABLE fail_part;
+-- check that attach partition correctly complains for the object of a wrong type
+ALTER TABLE at_v1 ATTACH PARTITION dummy default; -- ERROR
+ERROR:  "at_v1" is not a table or partitioned index
 --
 -- DETACH PARTITION
 --
@@ -4403,6 +4424,11 @@ alter table at_test_sql_partop attach partition at_test_sql_partop_1 for values 
 drop table at_test_sql_partop;
 drop operator class at_test_sql_partop using btree;
 drop function at_test_sql_partop;
+-- check that the command correctly complains for the object of a wrong type
+create table attmp();
+alter table attmp options (dummy '1');
+ERROR:  "attmp" is not a foreign table
+drop table attmp;
 /* Test case for bug #16242 */
 -- We create a parent and child where the child has missing
 -- non-null attribute values, and arrange to pass them through

@@ -9,6 +9,8 @@ RESET client_min_messages;
 
 CREATE USER regress_alter_table_user1;
 
+CREATE VIEW at_v1 AS SELECT 1 as a;
+
 --
 -- add attribute
 --
@@ -158,6 +160,8 @@ ALTER INDEX attmp_idx ALTER COLUMN 2 SET STATISTICS -1;
 
 DROP TABLE attmp;
 
+-- test that the command correctly complains for the object of a wrong type
+ALTER TABLE at_v1 ALTER COLUMN a SET STATISTICS 0; -- ERROR
 
 --
 -- rename - check on both non-temp and temp tables
@@ -916,6 +920,11 @@ select * from def_test;
 alter table def_test alter column c1 set default 'wrong_datatype';
 alter table def_test alter column c2 set default 20;
 
+-- set defaults to an incorrect object: this should fail
+create materialized view def_tmp_mv as select 1 as a;
+alter table def_tmp_mv alter a set default 0;
+drop materialized view def_tmp_mv;
+
 -- set defaults on a non-existent column: this should fail
 alter table def_test alter column c3 set default 30;
 
@@ -1409,6 +1418,10 @@ alter table at_partitioned attach partition at_part_2 for values from (1000) to 
 alter table at_partitioned alter column b type numeric using b::numeric;
 \d at_part_1
 \d at_part_2
+
+-- check if the command correctly complains for the object of a wrong type 
+alter table at_partitioned_a_idx set (dummy = 1); -- ERROR
+
 drop table at_partitioned;
 
 -- Alter column type when no table rewrite is required
@@ -1499,6 +1512,9 @@ create index test_storage_idx on test_storage (b, a);
 alter table test_storage alter column a set storage external;
 \d+ test_storage
 \d+ test_storage_idx
+
+-- test that SET STORAGE correctly complains for the object of a wrong type
+alter table at_v1 alter column a set storage plain; -- ERROR
 
 -- ALTER COLUMN TYPE with a check constraint and a child table (bug #13779)
 CREATE TABLE test_inh_check (a float check (a > 10.2), b float);
@@ -1720,6 +1736,9 @@ rollback;
 begin; alter table alterlock set (autovacuum_enabled = off, fillfactor = 80);
 select * from my_locks order by 1;
 commit;
+
+-- test that the command corectly complains for the object of a wrong type
+alter table at_v1 alter column a set (dummy = 1);
 
 begin; alter table alterlock alter column f2 set storage extended;
 select * from my_locks order by 1;
@@ -2640,6 +2659,9 @@ ALTER TABLE hash_parted ATTACH PARTITION fail_part FOR VALUES WITH (MODULUS 8, R
 ALTER TABLE hash_parted ATTACH PARTITION fail_part FOR VALUES WITH (MODULUS 3, REMAINDER 2);
 DROP TABLE fail_part;
 
+-- check that attach partition correctly complains for the object of a wrong type
+ALTER TABLE at_v1 ATTACH PARTITION dummy default; -- ERROR
+
 --
 -- DETACH PARTITION
 --
@@ -2877,6 +2899,11 @@ drop table at_test_sql_partop;
 drop operator class at_test_sql_partop using btree;
 drop function at_test_sql_partop;
 
+
+-- check that the command correctly complains for the object of a wrong type
+create table attmp();
+alter table attmp options (dummy '1');
+drop table attmp;
 
 /* Test case for bug #16242 */
 

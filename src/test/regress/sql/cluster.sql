@@ -263,7 +263,12 @@ EXPLAIN (COSTS OFF) SELECT * FROM clstr_expression WHERE -a = -3 ORDER BY -a, b;
 SELECT * FROM clstr_expression WHERE -a = -3 ORDER BY -a, b;
 COMMIT;
 
+-- check that the command correctly complains for the object of a wrong type
+CREATE VIEW  clstr_tst_view AS SELECT 1;
+ALTER TABLE clstr_tst_view CLUSTER ON x; -- ERROR
+
 -- clean up
+DROP VIEW  clstr_tst_view;
 DROP TABLE clustertest;
 DROP TABLE clstr_1;
 DROP TABLE clstr_2;

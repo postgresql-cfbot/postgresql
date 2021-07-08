@@ -92,13 +92,14 @@ static void ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, 
  *
  * Since not all options can be specified in both commands, this function
  * will report an error if mutually exclusive options are specified.
- *
- * Caller is expected to have cleared 'opts'.
  */
 static void
 parse_subscription_options(List *stmt_options, bits32 supported_opts, SubOpts *opts)
 {
 	ListCell   *lc;
+
+	/* Start out with cleared opts. */
+	memset(opts, 0, sizeof(SubOpts));
 
 	/* caller must expect some option */
 	Assert(supported_opts != 0);
@@ -251,7 +252,6 @@ parse_subscription_options(List *stmt_options, bits32 supported_opts, SubOpts *o
 	{
 		/* Check for incompatible options from the user. */
 		if (opts->enabled &&
-			IsSet(supported_opts, SUBOPT_ENABLED) &&
 			IsSet(opts->specified_opts, SUBOPT_ENABLED))
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -260,7 +260,6 @@ parse_subscription_options(List *stmt_options, bits32 supported_opts, SubOpts *o
 							"connect = false", "enabled = true")));
 
 		if (opts->create_slot &&
-			IsSet(supported_opts, SUBOPT_CREATE_SLOT) &&
 			IsSet(opts->specified_opts, SUBOPT_CREATE_SLOT))
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -268,7 +267,6 @@ parse_subscription_options(List *stmt_options, bits32 supported_opts, SubOpts *o
 							"connect = false", "create_slot = true")));
 
 		if (opts->copy_data &&
-			IsSet(supported_opts, SUBOPT_COPY_DATA) &&
 			IsSet(opts->specified_opts, SUBOPT_COPY_DATA))
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -286,11 +284,9 @@ parse_subscription_options(List *stmt_options, bits32 supported_opts, SubOpts *o
 	 * was used.
 	 */
 	if (!opts->slot_name &&
-		IsSet(supported_opts, SUBOPT_SLOT_NAME) &&
 		IsSet(opts->specified_opts, SUBOPT_SLOT_NAME))
 	{
 		if (opts->enabled &&
-			IsSet(supported_opts, SUBOPT_ENABLED) &&
 			IsSet(opts->specified_opts, SUBOPT_ENABLED))
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -299,7 +295,6 @@ parse_subscription_options(List *stmt_options, bits32 supported_opts, SubOpts *o
 							"slot_name = NONE", "enabled = true")));
 
 		if (opts->create_slot &&
-			IsSet(supported_opts, SUBOPT_CREATE_SLOT) &&
 			IsSet(opts->specified_opts, SUBOPT_CREATE_SLOT))
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -307,18 +302,14 @@ parse_subscription_options(List *stmt_options, bits32 supported_opts, SubOpts *o
 					 errmsg("%s and %s are mutually exclusive options",
 							"slot_name = NONE", "create_slot = true")));
 
-		if (opts->enabled &&
-			IsSet(supported_opts, SUBOPT_ENABLED) &&
-			!IsSet(opts->specified_opts, SUBOPT_ENABLED))
+		if (opts->enabled)
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 			/*- translator: both %s are strings of the form "option = value" */
 					 errmsg("subscription with %s must also set %s",
 							"slot_name = NONE", "enabled = false")));
 
-		if (opts->create_slot &&
-			IsSet(supported_opts, SUBOPT_CREATE_SLOT) &&
-			!IsSet(opts->specified_opts, SUBOPT_CREATE_SLOT))
+		if (opts->create_slot)
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 			/*- translator: both %s are strings of the form "option = value" */

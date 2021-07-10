@@ -18,6 +18,14 @@
 #include "storage/block.h"
 #include "storage/relfilenode.h"
 
+/* GUCs. */
+extern int smgr_shared_relations;
+extern int smgr_pool_sweep_times;
+
+/* Definition private to smgr.c. */
+struct SMgrSharedRelation;
+typedef struct SMgrSharedRelation SMgrSharedRelation;
+
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
  * cached file handles.  An SMgrRelation is created (if not already present)
@@ -44,14 +52,11 @@ typedef struct SMgrRelationData
 	/* pointer to owning pointer, or NULL if none */
 	struct SMgrRelationData **smgr_owner;
 
-	/*
-	 * The following fields are reset to InvalidBlockNumber upon a cache flush
-	 * event, and hold the last known size for each fork.  This information is
-	 * currently only reliable during recovery, since there is no cache
-	 * invalidation for fork extension.
-	 */
+	/* pointer to shared object, valid if non-NULL and generation matches */
+	SMgrSharedRelation *smgr_shared;
+	uint64		smgr_shared_generation;
+
 	BlockNumber smgr_targblock; /* current insertion target block */
-	BlockNumber smgr_cached_nblocks[MAX_FORKNUM + 1];	/* last known size */
 
 	/* additional public fields may someday exist here */
 
@@ -77,6 +82,9 @@ typedef SMgrRelationData *SMgrRelation;
 #define SmgrIsTemp(smgr) \
 	RelFileNodeBackendIsTemp((smgr)->smgr_rnode)
 
+extern size_t smgr_shmem_size(void);
+extern void smgr_shmem_init(void);
+
 extern void smgrinit(void);
 extern SMgrRelation smgropen(RelFileNode rnode, BackendId backend);
 extern bool smgrexists(SMgrRelation reln, ForkNumber forknum);
@@ -99,10 +107,10 @@ extern void smgrwrite(SMgrRelation reln, ForkNumber forknum,
 extern void smgrwriteback(SMgrRelation reln, ForkNumber forknum,
 						  BlockNumber blocknum, BlockNumber nblocks);
 extern BlockNumber smgrnblocks(SMgrRelation reln, ForkNumber forknum);
-extern BlockNumber smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum);
 extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum,
 						 int nforks, BlockNumber *nblocks);
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
+extern void smgrdropdb(Oid database);
 extern void AtEOXact_SMgr(void);
 
 #endif							/* SMGR_H */

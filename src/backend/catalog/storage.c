@@ -290,8 +290,6 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	 * Make sure smgr_targblock etc aren't pointing somewhere past new end
 	 */
 	rel->rd_smgr->smgr_targblock = InvalidBlockNumber;
-	for (int i = 0; i <= MAX_FORKNUM; ++i)
-		rel->rd_smgr->smgr_cached_nblocks[i] = InvalidBlockNumber;
 
 	/* Prepare for truncation of MAIN fork of the relation */
 	forks[nforks] = MAIN_FORKNUM;

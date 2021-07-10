@@ -1359,6 +1359,16 @@ mdsyncfiletag(const FileTag *ftag, char *path)
 		need_to_close = true;
 	}
 
+	/*
+	 * XXX: We could have an interface smgrbeginclean() that would return true
+	 * if it has managed to set SR_SYNC and clean SR_JUST_DIRTIED, and then if
+	 * so, after our sync runs we could call smgrfinishclean() with our
+	 * success/failure report, which would clear SR_DIRTY if SR_JUST_DIRTIED
+	 * hasn't been set in the meantime.  But... how can we know if *this*
+	 * segment is one that represents an extension?  SR_DIRTY is just
+	 * interested in syncing extended blocks.
+	 */
+
 	/* Sync the file. */
 	result = FileSync(file, WAIT_EVENT_DATA_FILE_SYNC);
 	save_errno = errno;

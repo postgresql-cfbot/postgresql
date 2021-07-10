@@ -121,6 +121,7 @@ CreateSharedMemoryAndSemaphores(void)
 		size = add_size(size, hash_estimate_size(SHMEM_INDEX_SIZE,
 												 sizeof(ShmemIndexEnt)));
 		size = add_size(size, dsm_estimate_size());
+		size = add_size(size, smgr_shmem_size());
 		size = add_size(size, BufferShmemSize());
 		size = add_size(size, LockShmemSize());
 		size = add_size(size, PredicateLockShmemSize());
@@ -212,6 +213,8 @@ CreateSharedMemoryAndSemaphores(void)
 	InitShmemIndex();
 
 	dsm_shmem_init();
+
+	smgr_shmem_init();
 
 	/*
 	 * Set up xlog, clog, and buffers

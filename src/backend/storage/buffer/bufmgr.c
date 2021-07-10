@@ -3095,30 +3095,11 @@ DropRelFileNodeBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 	 * that we don't leave any buffer for the relation being dropped as
 	 * otherwise the background writer or checkpointer can lead to a PANIC
 	 * error while flushing buffers corresponding to files that don't exist.
-	 *
-	 * To know the exact size, we rely on the size cached for each fork by us
-	 * during recovery which limits the optimization to recovery and on
-	 * standbys but we can easily extend it once we have shared cache for
-	 * relation size.
-	 *
-	 * In recovery, we cache the value returned by the first lseek(SEEK_END)
-	 * and the future writes keeps the cached value up-to-date. See
-	 * smgrextend. It is possible that the value of the first lseek is smaller
-	 * than the actual number of existing blocks in the file due to buggy
-	 * Linux kernels that might not have accounted for the recent write. But
-	 * that should be fine because there must not be any buffers after that
-	 * file size.
 	 */
 	for (i = 0; i < nforks; i++)
 	{
 		/* Get the number of blocks for a relation's fork */
-		nForkBlock[i] = smgrnblocks_cached(smgr_reln, forkNum[i]);
-
-		if (nForkBlock[i] == InvalidBlockNumber)
-		{
-			nBlocksToInvalidate = InvalidBlockNumber;
-			break;
-		}
+		nForkBlock[i] = smgrnblocks(smgr_reln, forkNum[i]);
 
 		/* calculate the number of blocks to be invalidated */
 		nBlocksToInvalidate += (nForkBlock[i] - firstDelBlock[i]);
@@ -3128,8 +3109,7 @@ DropRelFileNodeBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 	 * We apply the optimization iff the total number of blocks to invalidate
 	 * is below the BUF_DROP_FULL_SCAN_THRESHOLD.
 	 */
-	if (BlockNumberIsValid(nBlocksToInvalidate) &&
-		nBlocksToInvalidate < BUF_DROP_FULL_SCAN_THRESHOLD)
+	if (nBlocksToInvalidate < BUF_DROP_FULL_SCAN_THRESHOLD)
 	{
 		for (j = 0; j < nforks; j++)
 			FindAndDropRelFileNodeBuffers(rnode.node, forkNum[j],
@@ -3197,7 +3177,6 @@ DropRelFileNodesAllBuffers(SMgrRelation *smgr_reln, int nnodes)
 	BlockNumber (*block)[MAX_FORKNUM + 1];
 	uint64		nBlocksToInvalidate = 0;
 	RelFileNode *nodes;
-	bool		cached = true;
 	bool		use_bsearch;
 
 	if (nnodes == 0)
@@ -3238,21 +3217,18 @@ DropRelFileNodesAllBuffers(SMgrRelation *smgr_reln, int nnodes)
 	 * We can avoid scanning the entire buffer pool if we know the exact size
 	 * of each of the given relation forks. See DropRelFileNodeBuffers.
 	 */
-	for (i = 0; i < n && cached; i++)
+	for (i = 0; i < n; i++)
 	{
 		for (j = 0; j <= MAX_FORKNUM; j++)
 		{
-			/* Get the number of blocks for a relation's fork. */
-			block[i][j] = smgrnblocks_cached(rels[i], j);
-
-			/* We need to only consider the relation forks that exists. */
-			if (block[i][j] == InvalidBlockNumber)
+			if (!smgrexists(rels[i], j))
 			{
-				if (!smgrexists(rels[i], j))
-					continue;
-				cached = false;
-				break;
+				block[i][j] = InvalidBlockNumber;
+				continue;
 			}
+
+			/* Get the number of blocks for a relation's fork. */
+			block[i][j] = smgrnblocks(rels[i], j);
 
 			/* calculate the total number of blocks to be invalidated */
 			nBlocksToInvalidate += block[i][j];
@@ -3263,7 +3239,7 @@ DropRelFileNodesAllBuffers(SMgrRelation *smgr_reln, int nnodes)
 	 * We apply the optimization iff the total number of blocks to invalidate
 	 * is below the BUF_DROP_FULL_SCAN_THRESHOLD.
 	 */
-	if (cached && nBlocksToInvalidate < BUF_DROP_FULL_SCAN_THRESHOLD)
+	if (nBlocksToInvalidate < BUF_DROP_FULL_SCAN_THRESHOLD)
 	{
 		for (i = 0; i < n; i++)
 		{

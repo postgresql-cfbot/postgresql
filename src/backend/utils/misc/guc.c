@@ -86,6 +86,7 @@
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
 #include "storage/proc.h"
+#include "storage/smgr.h"
 #include "storage/standby.h"
 #include "tcop/tcopprot.h"
 #include "tsearch/ts_cache.h"
@@ -2525,6 +2526,16 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"smgr_shared_relations", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared relation objects in memory at one time."),
+			NULL
+		},
+		&smgr_shared_relations,
+		1000, 64, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 	/*
 	 * See also CheckRequiredParameterValues() if this parameter changes
 	 */
@@ -2670,6 +2681,16 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&vacuum_multixact_failsafe_age,
 		1600000000, 0, 2100000000,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"smgr_pool_sweep_times", PGC_SIGHUP, UNGROUPED,
+			gettext_noop("Sets the times for smgr pool to clock sweep"),
+			NULL
+		},
+		&smgr_pool_sweep_times,
+		32, 16, INT_MAX,
 		NULL, NULL, NULL
 	},
 

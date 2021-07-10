@@ -19,13 +19,70 @@
 
 #include "access/xlog.h"
 #include "lib/ilist.h"
+#include "pgstat.h"
+#include "port/atomics.h"
+#include "port/pg_bitutils.h"
 #include "storage/bufmgr.h"
+#include "storage/condition_variable.h"
+#include "storage/shmem.h"
 #include "storage/ipc.h"
+#include "storage/lwlock.h"
 #include "storage/md.h"
 #include "storage/smgr.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 
+/*
+ * An entry in the hash table that allows us to look up objects in the
+ * SMgrSharedRelation pool by rnode (+ backend).
+ */
+typedef struct SMgrSharedRelationMapping
+{
+	RelFileNodeBackend rnode;
+	int				index;
+} SMgrSharedRelationMapping;
+
+/*
+ * An object in shared memory tracks the size of the forks of a relation.
+ */
+struct SMgrSharedRelation
+{
+	RelFileNodeBackend rnode;
+	BlockNumber		nblocks[MAX_FORKNUM + 1];
+	pg_atomic_uint32 flags;
+	pg_atomic_uint64 generation;		/* mapping change */
+	int64 usecount;     /* used for clock sweep */
+};
+
+/* For now, we borrow the buffer managers array of locks.  XXX fixme */
+#define SR_PARTITIONS NUM_BUFFER_PARTITIONS
+#define SR_PARTITION_LOCK(hash) (&MainLWLockArray[BUFFER_MAPPING_LWLOCK_OFFSET].lock)
+
+/* Flags. */
+#define SR_LOCKED					0x01
+#define SR_VALID					0x02
+
+/* Each forknum gets its own dirty, syncing and just dirtied bits. */
+#define SR_DIRTY(forknum)			(0x04 << ((forknum) + (MAX_FORKNUM + 1) * 0))
+#define SR_SYNCING(forknum)			(0x04 << ((forknum) + (MAX_FORKNUM + 1) * 1))
+#define SR_JUST_DIRTIED(forknum)	(0x04 << ((forknum) + (MAX_FORKNUM + 1) * 2))
+
+/* Masks to test if any forknum is currently dirty or syncing. */
+#define SR_SYNCING_MASK				(((SR_SYNCING(MAX_FORKNUM + 1) - 1) ^ (SR_SYNCING(0) - 1)))
+#define SR_DIRTY_MASK				(((SR_DIRTY(MAX_FORKNUM + 1) - 1) ^ (SR_DIRTY(0) - 1)))
+
+/* Extract the lowest dirty forknum from flags (there must be at least one). */
+#define SR_GET_ONE_DIRTY(mask)		pg_rightmost_one_pos32((((mask) >> 2) & (SR_DIRTY_MASK >> 2)))
+
+typedef struct SMgrSharedRelationPool
+{
+	ConditionVariable sync_flags_cleared;
+	pg_atomic_uint32 next;
+	SMgrSharedRelation objects[FLEXIBLE_ARRAY_MEMBER];
+} SMgrSharedRelationPool;
+
+static SMgrSharedRelationPool *sr_pool;
+static HTAB *sr_mapping_table;
 
 /*
  * This struct of function pointers defines the API between smgr.c and
@@ -98,6 +155,515 @@ static dlist_head unowned_relns;
 /* local function prototypes */
 static void smgrshutdown(int code, Datum arg);
 
+/* GUCs. */
+int smgr_shared_relations = 10000;
+int smgr_pool_sweep_times = 32;
+
+/*
+ * Try to get the size of a relation's fork without locking.
+ */
+static BlockNumber
+smgrnblocks_fast(SMgrRelation reln, ForkNumber forknum)
+{
+	SMgrSharedRelation *sr = reln->smgr_shared;
+	BlockNumber result;
+
+	if (sr)
+	{
+		pg_read_barrier();
+
+		/* We can load int-sized values atomically without special measures. */
+		Assert(sizeof(sr->nblocks[forknum]) == sizeof(uint32));
+		result = sr->nblocks[forknum];
+
+		/*
+		 * With a read barrier between the loads, we can check that the object
+		 * still refers to the same rnode before trusting the answer.
+		 */
+		pg_read_barrier();
+
+		if (pg_atomic_read_u64(&sr->generation) == reln->smgr_shared_generation)
+		{
+			/* no necessary to use a atomic operation, usecount can be imprecisely */
+			sr->usecount++;
+			return result;
+		}
+
+		/*
+		 * The generation doesn't match, the shared relation must have been
+		 * evicted since we got a pointer to it.  We'll need to do more work.
+		 */
+	}
+
+	return InvalidBlockNumber;
+}
+
+/*
+ * Try to get the size of a relation's fork by looking it up in the mapping
+ * table with a shared lock.  This will succeed if the SMgrRelation already
+ * exists.
+ */
+static BlockNumber
+smgrnblocks_shared(SMgrRelation reln, ForkNumber forknum)
+{
+	SMgrSharedRelationMapping *mapping;
+	SMgrSharedRelation *sr;
+	uint32	hash;
+	LWLock *mapping_lock;
+	BlockNumber result = InvalidBlockNumber;
+
+	hash = get_hash_value(sr_mapping_table, &reln->smgr_rnode);
+	mapping_lock = SR_PARTITION_LOCK(hash);
+
+	LWLockAcquire(mapping_lock, LW_SHARED);
+	mapping = hash_search_with_hash_value(sr_mapping_table,
+										  &reln->smgr_rnode,
+										  hash,
+										  HASH_FIND,
+										  NULL);
+	if (mapping)
+	{
+		sr = &sr_pool->objects[mapping->index];
+		result = sr->nblocks[forknum];
+
+		/* no necessary to use a atomic operation, usecount can be imprecisely */
+		sr->usecount++;
+
+		/* We can take the fast path until this SR is eventually evicted. */
+		reln->smgr_shared = sr;
+		reln->smgr_shared_generation = pg_atomic_read_u64(&sr->generation);
+	}
+	LWLockRelease(mapping_lock);
+
+	return result;
+}
+
+/*
+ * Lock a SMgrSharedRelation.  The lock is a spinlock that should be held for
+ * only a few instructions.  The return value is the current set of flags,
+ * which may be modified and then passed to smgr_unlock_sr() to be atomically
+ * when the lock is released.
+ */
+static uint32
+smgr_lock_sr(SMgrSharedRelation *sr)
+{
+	SpinDelayStatus spin_delay_status;
+
+	init_local_spin_delay(&spin_delay_status);
+
+	for (;;)
+	{
+		uint32	old_flags = pg_atomic_read_u32(&sr->flags);
+		uint32	flags;
+
+		if (!(old_flags & SR_LOCKED))
+		{
+			flags = old_flags | SR_LOCKED;
+			if (pg_atomic_compare_exchange_u32(&sr->flags, &old_flags, flags))
+				return flags;
+		}
+
+		perform_spin_delay(&spin_delay_status);
+	}
+	return 0; /* unreachable */
+}
+
+/*
+ * Unlock a SMgrSharedRelation, atomically updating its flags at the same
+ * time.
+ */
+static void
+smgr_unlock_sr(SMgrSharedRelation *sr, uint32 flags)
+{
+	pg_write_barrier();
+	pg_atomic_write_u32(&sr->flags, flags & ~SR_LOCKED);
+}
+
+/* LRU: sweep to find a sr to use. Just lock the sr when it returns */
+static SMgrSharedRelation *
+smgr_pool_sweep(void)
+{
+	SMgrSharedRelation *sr;
+	uint32 index;
+	uint32 flags;
+	int sr_used_count = 0;
+
+	for (;;)
+	{
+		/* Lock the next one in clock-hand order. */
+		index = pg_atomic_fetch_add_u32(&sr_pool->next, 1) % smgr_shared_relations;
+		sr = &sr_pool->objects[index];
+		flags = smgr_lock_sr(sr);
+		if (--(sr->usecount) <= 0)
+		{
+			elog(DEBUG5, "find block cache in sweep cache, use it");
+			return sr;
+		}
+		if (++sr_used_count >= smgr_shared_relations * smgr_pool_sweep_times)
+		{
+			elog(LOG, "all the block caches are used frequently, use a random one");
+			sr = &sr_pool->objects[random() % smgr_shared_relations];
+			return sr;
+		}
+		smgr_unlock_sr(sr, flags);
+	}
+}
+
+/*
+ * Allocate a new invalid SMgrSharedRelation, and return it locked.
+ *
+ * The replacement algorithm is a simple FIFO design with no second chance for
+ * now.
+ */
+static SMgrSharedRelation *
+smgr_alloc_sr(void)
+{
+	SMgrSharedRelationMapping *mapping;
+	SMgrSharedRelation *sr;
+	uint32 index;
+	LWLock *mapping_lock;
+	uint32 flags;
+	RelFileNodeBackend rnode;
+	uint32 hash;
+
+ retry:
+	sr = smgr_pool_sweep();
+	flags = pg_atomic_read_u32(&sr->flags);
+	/* If it's unused, can return it, still locked, immediately. */
+	if (!(flags & SR_VALID))
+		return sr;
+
+	/*
+	 * Copy the rnode and unlock.  We'll briefly acquire both mapping and SR
+	 * locks, but we need to do it in that order, so we'll unlock the SR
+	 * first.
+	 */
+	index = sr - sr_pool->objects;
+	rnode = sr->rnode;
+	smgr_unlock_sr(sr, flags);
+
+	hash = get_hash_value(sr_mapping_table, &rnode);
+	mapping_lock = SR_PARTITION_LOCK(hash);
+
+	LWLockAcquire(mapping_lock, LW_EXCLUSIVE);
+	mapping = hash_search_with_hash_value(sr_mapping_table,
+										  &rnode,
+										  hash,
+										  HASH_FIND,
+										  NULL);
+	if (!mapping || mapping->index != index)
+	{
+		/* Too slow, it's gone or now points somewhere else.  Go around. */
+		LWLockRelease(mapping_lock);
+		goto retry;
+	}
+
+	/* We will lock the SR for just a few instructions. */
+	flags = smgr_lock_sr(sr);
+	Assert(flags & SR_VALID);
+
+	/*
+	 * If another backend is currently syncing any fork, we aren't allowed to
+	 * evict it, and waiting for it would be pointless because that other
+	 * backend already plans to allocate it.  So go around.
+	 */
+	if (flags & SR_SYNCING_MASK)
+	{
+		smgr_unlock_sr(sr, flags);
+		LWLockRelease(mapping_lock);
+		goto retry;
+	}
+
+	/*
+	 * We will sync every fork that is dirty, and then we'll try to
+	 * evict it.
+	 */
+	while (flags & SR_DIRTY_MASK)
+	{
+		SMgrRelation reln;
+		ForkNumber forknum = SR_GET_ONE_DIRTY(flags);
+
+		/* Set the sync bit, clear the just-dirtied bit and unlock. */
+		flags |= SR_SYNCING(forknum);
+		flags &= ~SR_JUST_DIRTIED(forknum);
+		smgr_unlock_sr(sr, flags);
+		LWLockRelease(mapping_lock);
+
+		/*
+		 * Perform the I/O, with no locks held.
+		 * XXX It sucks that we fsync every segment, not just the ones that need it...
+		 */
+		reln = smgropen(rnode.node, rnode.backend);
+		smgrimmedsync(reln, forknum);
+
+		/*
+		 * Reacquire the locks.  The object can't have been evicted,
+		 * because we set a sync bit.
+		 */
+		LWLockAcquire(mapping_lock, LW_EXCLUSIVE);
+		flags = smgr_lock_sr(sr);
+		Assert(flags & SR_SYNCING(forknum));
+		flags &= ~SR_SYNCING(forknum);
+		if (flags & SR_JUST_DIRTIED(forknum))
+		{
+			/*
+			 * Someone else dirtied it while we were syncing, so we can't mark
+			 * it clean.  Let's give up on this SR and go around again.
+			 */
+			smgr_unlock_sr(sr, flags);
+			LWLockRelease(mapping_lock);
+			goto retry;
+		}
+
+		/* This fork is clean! */
+		flags &= ~SR_DIRTY(forknum);
+	}
+
+	/*
+	 * If we made it this far, there are no dirty forks, so we're now allowed
+	 * to evict the SR from the pool and the mapping table.  Make sure that
+	 * smgrnblocks_fast() sees that its pointer is now invalid by bumping the
+	 * generation.
+	 */
+	flags &= ~SR_VALID;
+	pg_atomic_write_u64(&sr->generation,
+						pg_atomic_read_u64(&sr->generation) + 1);
+	pg_write_barrier();
+	smgr_unlock_sr(sr, flags);
+
+	/*
+	 * If any callers to smgr_sr_drop() or smgr_sr_drop_db() had the misfortune
+	 * to have to wait for us to finish syncing, we can now wake them up.
+	 */
+	ConditionVariableBroadcast(&sr_pool->sync_flags_cleared);
+
+	/* Remove from the mapping table. */
+	hash_search_with_hash_value(sr_mapping_table,
+								&rnode,
+								hash,
+								HASH_REMOVE,
+								NULL);
+	LWLockRelease(mapping_lock);
+
+	/*
+	 * XXX: We unlock while doing HASH_REMOVE on principle.  Maybe it'd be OK
+	 * to hold it now that the clock hand is far away and there is no way
+	 * anyone can look up this SR through buffer mapping table.
+	 */
+	flags = smgr_lock_sr(sr);
+	if (flags & SR_VALID)
+	{
+		/* Oops, someone else got it. */
+		smgr_unlock_sr(sr, flags);
+		goto retry;
+	}
+
+	return sr;
+}
+
+/*
+ * Set the number of blocks in a relation, in shared memory, and optionally
+ * also mark the relation as "dirty" (meaning the it must be fsync'd before it
+ * can be evicted).
+ */
+static void
+smgrnblocks_update(SMgrRelation reln,
+				   ForkNumber forknum,
+				   BlockNumber nblocks,
+				   bool mark_dirty)
+{
+	SMgrSharedRelationMapping *mapping;
+	SMgrSharedRelation *sr = NULL;
+	uint32		hash;
+	LWLock *mapping_lock;
+	uint32 flags;
+
+	hash = get_hash_value(sr_mapping_table, &reln->smgr_rnode);
+	mapping_lock = SR_PARTITION_LOCK(hash);
+
+ retry:
+	LWLockAcquire(mapping_lock, LW_SHARED);
+	mapping = hash_search_with_hash_value(sr_mapping_table,
+										  &reln->smgr_rnode,
+										  hash,
+										  HASH_FIND,
+										  NULL);
+	if (mapping)
+	{
+		sr = &sr_pool->objects[mapping->index];
+		flags = smgr_lock_sr(sr);
+		if (mark_dirty)
+		{
+			/*
+			 * Extend and truncate clobber the value, and there are no races
+			 * to worry about because they can have higher level exclusive
+			 * locking on the relation.
+			 */
+			sr->nblocks[forknum] = nblocks;
+
+			/*
+			 * Mark it dirty, and if it's currently being sync'd, make sure it
+			 * stays dirty after that completes.
+			 */
+			flags |= SR_DIRTY(forknum);
+			if (flags & SR_SYNCING(forknum))
+				flags |= SR_JUST_DIRTIED(forknum);
+		}
+		else if (!(flags & SR_DIRTY(forknum)))
+		{
+			/*
+			 * We won't clobber a dirty value with a non-dirty update, to
+			 * avoid races against concurrent extend/truncate, but we can
+			 * install a new clean value.
+			 */
+			sr->nblocks[forknum] = nblocks;
+		}
+		if (sr->usecount < smgr_pool_sweep_times)
+			sr->usecount++;
+		smgr_unlock_sr(sr, flags);
+	}
+	LWLockRelease(mapping_lock);
+
+	/* If we didn't find it, then we'll need to allocate one. */
+	if (!sr)
+	{
+		bool found;
+
+		sr = smgr_alloc_sr();
+
+		/* Upgrade to exclusive lock so we can create a mapping. */
+		LWLockAcquire(mapping_lock, LW_EXCLUSIVE);
+		mapping = hash_search_with_hash_value(sr_mapping_table,
+											  &reln->smgr_rnode,
+											  hash,
+											  HASH_ENTER,
+											  &found);
+		if (!found)
+		{
+			/* Success!  Initialize. */
+			mapping->index = sr - sr_pool->objects;
+			sr->usecount = 1;
+			smgr_unlock_sr(sr, SR_VALID);
+			sr->rnode = reln->smgr_rnode;
+			pg_atomic_write_u64(&sr->generation,
+								pg_atomic_read_u64(&sr->generation) + 1);
+			for (int i = 0; i <= MAX_FORKNUM; ++i)
+				sr->nblocks[i] = InvalidBlockNumber;
+			LWLockRelease(mapping_lock);
+		}
+		else
+		{
+			/* Someone beat us to it.  Go around again. */
+			smgr_unlock_sr(sr, 0);		/* = not valid */
+			LWLockRelease(mapping_lock);
+			goto retry;
+		}
+	}
+}
+
+static void
+smgr_drop_sr(RelFileNodeBackend *rnode)
+{
+	SMgrSharedRelationMapping *mapping;
+	SMgrSharedRelation *sr;
+	uint32	hash;
+	LWLock *mapping_lock;
+	uint32 flags;
+
+	hash = get_hash_value(sr_mapping_table, rnode);
+	mapping_lock = SR_PARTITION_LOCK(hash);
+
+retry:
+	LWLockAcquire(mapping_lock, LW_EXCLUSIVE);
+	mapping = hash_search_with_hash_value(sr_mapping_table,
+										  rnode,
+										  hash,
+										  HASH_FIND,
+										  NULL);
+	if (mapping)
+	{
+		sr = &sr_pool->objects[mapping->index];
+
+		flags = smgr_lock_sr(sr);
+		Assert(flags & SR_VALID);
+
+		if (flags & SR_SYNCING_MASK)
+		{
+			/*
+			 * Oops, someone's syncing one of its forks; nothing to do but
+			 * wait until that's finished.
+			 */
+			smgr_unlock_sr(sr, flags);
+			LWLockRelease(mapping_lock);
+			ConditionVariableSleep(&sr_pool->sync_flags_cleared,
+								   WAIT_EVENT_SMGR_DROP_SYNC);
+			goto retry;
+		}
+		ConditionVariableCancelSleep();
+
+		/* Make sure smgrnblocks_fast() knows it's invalidated. */
+		pg_atomic_write_u64(&sr->generation,
+							pg_atomic_read_u64(&sr->generation) + 1);
+		pg_write_barrier();
+
+		/* Mark it invalid and drop the mapping. */
+		sr->usecount = 0;
+		smgr_unlock_sr(sr, ~SR_VALID);
+		hash_search_with_hash_value(sr_mapping_table,
+									rnode,
+									hash,
+									HASH_REMOVE,
+									NULL);
+	}
+	LWLockRelease(mapping_lock);
+}
+
+size_t
+smgr_shmem_size(void)
+{
+	size_t size = 0;
+
+	size = add_size(size,
+					sizeof(offsetof(SMgrSharedRelationPool, objects) +
+						   sizeof(SMgrSharedRelation) * smgr_shared_relations));
+	size = add_size(size,
+					hash_estimate_size(smgr_shared_relations,
+									   sizeof(SMgrSharedRelationMapping)));
+
+	return size;
+}
+
+void
+smgr_shmem_init(void)
+{
+	HASHCTL		info;
+	bool found;
+
+	info.keysize = sizeof(RelFileNodeBackend);
+	info.entrysize = sizeof(SMgrSharedRelationMapping);
+	info.num_partitions = SR_PARTITIONS;
+	sr_mapping_table = ShmemInitHash("SMgrSharedRelation Mapping Table",
+									 smgr_shared_relations,
+									 smgr_shared_relations,
+									 &info,
+									 HASH_ELEM | HASH_BLOBS | HASH_PARTITION);
+
+	sr_pool = ShmemInitStruct("SMgrSharedRelation Pool",
+							  offsetof(SMgrSharedRelationPool, objects) +
+							  sizeof(SMgrSharedRelation) * smgr_shared_relations,
+							  &found);
+	if (!found)
+	{
+		ConditionVariableInit(&sr_pool->sync_flags_cleared);
+		pg_atomic_init_u32(&sr_pool->next, 0);
+		for (uint32 i = 0; i < smgr_shared_relations; ++i)
+		{
+			pg_atomic_init_u32(&sr_pool->objects[i].flags, 0);
+			pg_atomic_init_u64(&sr_pool->objects[i].generation, 0);
+			sr_pool->objects[i].usecount = 0;
+		}
+	}
+}
 
 /*
  *	smgrinit(), smgrshutdown() -- Initialize or shut down storage
@@ -174,8 +740,8 @@ smgropen(RelFileNode rnode, BackendId backend)
 		/* hash_search already filled in the lookup key */
 		reln->smgr_owner = NULL;
 		reln->smgr_targblock = InvalidBlockNumber;
-		for (int i = 0; i <= MAX_FORKNUM; ++i)
-			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
+		reln->smgr_shared = NULL;
+		reln->smgr_shared_generation = 0;
 		reln->smgr_which = 0;	/* we only have md.c at present */
 
 		/* implementation-specific initialization */
@@ -246,6 +812,9 @@ smgrclearowner(SMgrRelation *owner, SMgrRelation reln)
 bool
 smgrexists(SMgrRelation reln, ForkNumber forknum)
 {
+	if (smgrnblocks_fast(reln, forknum) != InvalidBlockNumber)
+		return true;
+
 	return smgrsw[reln->smgr_which].smgr_exists(reln, forknum);
 }
 
@@ -429,6 +998,9 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	for (i = 0; i < nrels; i++)
 		CacheInvalidateSmgr(rnodes[i]);
 
+	for (i = 0; i < nrels; i++)
+		smgr_drop_sr(&rels[i]->smgr_rnode);
+
 	/*
 	 * Delete the physical file(s).
 	 *
@@ -464,16 +1036,7 @@ smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 {
 	smgrsw[reln->smgr_which].smgr_extend(reln, forknum, blocknum,
 										 buffer, skipFsync);
-
-	/*
-	 * Normally we expect this to increase nblocks by one, but if the cached
-	 * value isn't as expected, just invalidate it so the next call asks the
-	 * kernel.
-	 */
-	if (reln->smgr_cached_nblocks[forknum] == blocknum)
-		reln->smgr_cached_nblocks[forknum] = blocknum + 1;
-	else
-		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
+	smgrnblocks_update(reln, forknum, blocknum + 1, true);
 }
 
 /*
@@ -549,36 +1112,23 @@ smgrnblocks(SMgrRelation reln, ForkNumber forknum)
 {
 	BlockNumber result;
 
-	/* Check and return if we get the cached value for the number of blocks. */
-	result = smgrnblocks_cached(reln, forknum);
+	/* Can we get the answer from shared memory without locking? */
+	result = smgrnblocks_fast(reln, forknum);
 	if (result != InvalidBlockNumber)
 		return result;
 
+	/* Can we get the answer from shared memory with only a share lock? */
+	result = smgrnblocks_shared(reln, forknum);
+	if (result != InvalidBlockNumber)
+		return result;
+
+	/* Ask the kernel. */
 	result = smgrsw[reln->smgr_which].smgr_nblocks(reln, forknum);
 
-	reln->smgr_cached_nblocks[forknum] = result;
+	/* Update the value in shared memory for faster service next time. */
+	smgrnblocks_update(reln, forknum, result, false);
 
 	return result;
-}
-
-/*
- *	smgrnblocks_cached() -- Get the cached number of blocks in the supplied
- *							relation.
- *
- * Returns an InvalidBlockNumber when not in recovery and when the relation
- * fork size is not cached.
- */
-BlockNumber
-smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum)
-{
-	/*
-	 * For now, we only use cached values in recovery due to lack of a shared
-	 * invalidation mechanism for changes in file size.
-	 */
-	if (InRecovery && reln->smgr_cached_nblocks[forknum] != InvalidBlockNumber)
-		return reln->smgr_cached_nblocks[forknum];
-
-	return InvalidBlockNumber;
 }
 
 /*
@@ -617,19 +1167,8 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 	/* Do the truncation */
 	for (i = 0; i < nforks; i++)
 	{
-		/* Make the cached size is invalid if we encounter an error. */
-		reln->smgr_cached_nblocks[forknum[i]] = InvalidBlockNumber;
-
 		smgrsw[reln->smgr_which].smgr_truncate(reln, forknum[i], nblocks[i]);
-
-		/*
-		 * We might as well update the local smgr_cached_nblocks values. The
-		 * smgr cache inval message that this function sent will cause other
-		 * backends to invalidate their copies of smgr_fsm_nblocks and
-		 * smgr_vm_nblocks, and these ones too at the next command boundary.
-		 * But these ensure they aren't outright wrong until then.
-		 */
-		reln->smgr_cached_nblocks[forknum[i]] = nblocks[i];
+		smgrnblocks_update(reln, forknum[i], nblocks[i], true);
 	}
 }
 
@@ -660,6 +1199,34 @@ void
 smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 {
 	smgrsw[reln->smgr_which].smgr_immedsync(reln, forknum);
+}
+
+/*
+ * When a database is dropped, we have to find and throw away all its
+ * SMgrSharedRelation objects.
+ */
+void
+smgrdropdb(Oid database)
+{
+	for (int i = 0; i < smgr_shared_relations; ++i)
+	{
+		SMgrSharedRelation *sr = &sr_pool->objects[i];
+		RelFileNodeBackend rnode;
+		uint32 flags;
+
+		/* Hold the spinlock only while we copy out the rnode of matches. */
+		flags = smgr_lock_sr(sr);
+		if ((flags & SR_VALID) && sr->rnode.node.dbNode == database)
+		{
+			rnode = sr->rnode;
+			smgr_unlock_sr(sr, flags);
+
+			/* Drop, if it's still valid. */
+			smgr_drop_sr(&rnode);
+		}
+		else
+			smgr_unlock_sr(sr, flags);
+	}
 }
 
 /*

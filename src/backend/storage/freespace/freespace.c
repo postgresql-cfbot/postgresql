@@ -531,29 +531,18 @@ static Buffer
 fsm_readbuf(Relation rel, FSMAddress addr, bool extend)
 {
 	BlockNumber blkno = fsm_logical_to_physical(addr);
+	BlockNumber nblocks;
 	Buffer		buf;
 
 	RelationOpenSmgr(rel);
 
-	/*
-	 * If we haven't cached the size of the FSM yet, check it first.  Also
-	 * recheck if the requested block seems to be past end, since our cached
-	 * value might be stale.  (We send smgr inval messages on truncation, but
-	 * not on extension.)
-	 */
-	if (rel->rd_smgr->smgr_cached_nblocks[FSM_FORKNUM] == InvalidBlockNumber ||
-		blkno >= rel->rd_smgr->smgr_cached_nblocks[FSM_FORKNUM])
-	{
-		/* Invalidate the cache so smgrnblocks asks the kernel. */
-		rel->rd_smgr->smgr_cached_nblocks[FSM_FORKNUM] = InvalidBlockNumber;
-		if (smgrexists(rel->rd_smgr, FSM_FORKNUM))
-			smgrnblocks(rel->rd_smgr, FSM_FORKNUM);
-		else
-			rel->rd_smgr->smgr_cached_nblocks[FSM_FORKNUM] = 0;
-	}
+	if (smgrexists(rel->rd_smgr, FSM_FORKNUM))
+		nblocks = smgrnblocks(rel->rd_smgr, FSM_FORKNUM);
+	else
+		nblocks = 0;
 
 	/* Handle requests beyond EOF */
-	if (blkno >= rel->rd_smgr->smgr_cached_nblocks[FSM_FORKNUM])
+	if (blkno >= nblocks)
 	{
 		if (extend)
 			fsm_extend(rel, blkno + 1);
@@ -621,18 +610,10 @@ fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 	/* Might have to re-open if a cache flush happened */
 	RelationOpenSmgr(rel);
 
-	/*
-	 * Create the FSM file first if it doesn't exist.  If
-	 * smgr_cached_nblocks[FSM_FORKNUM] is positive then it must exist, no
-	 * need for an smgrexists call.
-	 */
-	if ((rel->rd_smgr->smgr_cached_nblocks[FSM_FORKNUM] == 0 ||
-		 rel->rd_smgr->smgr_cached_nblocks[FSM_FORKNUM] == InvalidBlockNumber) &&
-		!smgrexists(rel->rd_smgr, FSM_FORKNUM))
+	/* Create the FSM file first if it doesn't exist. */
+	if (!smgrexists(rel->rd_smgr, FSM_FORKNUM))
 		smgrcreate(rel->rd_smgr, FSM_FORKNUM, false);
 
-	/* Invalidate cache so that smgrnblocks() asks the kernel. */
-	rel->rd_smgr->smgr_cached_nblocks[FSM_FORKNUM] = InvalidBlockNumber;
 	fsm_nblocks_now = smgrnblocks(rel->rd_smgr, FSM_FORKNUM);
 
 	while (fsm_nblocks_now < fsm_nblocks)

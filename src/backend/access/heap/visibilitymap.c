@@ -547,6 +547,7 @@ static Buffer
 vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
 {
 	Buffer		buf;
+	BlockNumber nblocks;
 
 	/*
 	 * We might not have opened the relation at the smgr level yet, or we
@@ -557,20 +558,12 @@ vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
 	 */
 	RelationOpenSmgr(rel);
 
-	/*
-	 * If we haven't cached the size of the visibility map fork yet, check it
-	 * first.
-	 */
-	if (rel->rd_smgr->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] == InvalidBlockNumber)
-	{
-		if (smgrexists(rel->rd_smgr, VISIBILITYMAP_FORKNUM))
-			smgrnblocks(rel->rd_smgr, VISIBILITYMAP_FORKNUM);
-		else
-			rel->rd_smgr->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] = 0;
-	}
+	if (!smgrexists(rel->rd_smgr, VISIBILITYMAP_FORKNUM))
+		smgrcreate(rel->rd_smgr, VISIBILITYMAP_FORKNUM, false);
+	nblocks = smgrnblocks(rel->rd_smgr, VISIBILITYMAP_FORKNUM);
 
 	/* Handle requests beyond EOF */
-	if (blkno >= rel->rd_smgr->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM])
+	if (blkno >= nblocks)
 	{
 		if (extend)
 			vm_extend(rel, blkno + 1);
@@ -636,17 +629,10 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 	/* Might have to re-open if a cache flush happened */
 	RelationOpenSmgr(rel);
 
-	/*
-	 * Create the file first if it doesn't exist.  If smgr_vm_nblocks is
-	 * positive then it must exist, no need for an smgrexists call.
-	 */
-	if ((rel->rd_smgr->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] == 0 ||
-		 rel->rd_smgr->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] == InvalidBlockNumber) &&
-		!smgrexists(rel->rd_smgr, VISIBILITYMAP_FORKNUM))
+	/* * Create the file first if it doesn't exist. */
+	if (!smgrexists(rel->rd_smgr, VISIBILITYMAP_FORKNUM))
 		smgrcreate(rel->rd_smgr, VISIBILITYMAP_FORKNUM, false);
 
-	/* Invalidate cache so that smgrnblocks() asks the kernel. */
-	rel->rd_smgr->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] = InvalidBlockNumber;
 	vm_nblocks_now = smgrnblocks(rel->rd_smgr, VISIBILITYMAP_FORKNUM);
 
 	/* Now extend the file */

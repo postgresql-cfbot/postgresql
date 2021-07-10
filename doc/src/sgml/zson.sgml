@@ -1,0 +1,149 @@
+<!-- doc/src/sgml/zson.sgml -->
+
+<sect1 id="zson" xreflabel="zson">
+ <title>ZSON</title>
+
+ <indexterm zone="zson">
+  <primary>zson</primary>
+ </indexterm>
+
+ <para>
+  <filename>ZSON</filename> is an extension for transparent JSONB compression.
+  Compression is based on a shared dictionary of strings most frequently used
+  in specific JSONB documents (not only keys, but also values, array elements,
+  etc).
+
+  In some cases, ZSON can save half of the disk space and give about 10%
+  more TPS. Memory is saved as well. Everything depends on the data and
+  workload, though. Don't trust third-party benchmarks, re-check everything on
+  given data, configuration, hardware and workload.
+ </para>
+
+ <sect2>
+  <title>Usage</title>
+
+  <para>
+   First ZSON should be trained on common data using
+   <filename>zson_learn</filename> procedure:
+  </para>
+
+  <synopsis>
+   zson_learn(
+     tables_and_columns text[][],
+     max_examples int default 10000,
+     min_length int default 2,
+     max_length int default 128,
+     min_count int default 2
+   )
+  </synopsis>
+
+  <para>
+   Example:
+  </para>
+
+  <synopsis>
+   SELECT zson_learn('{{"table1", "col1"}, {"table2", "col2"}}');
+  </synopsis>
+
+  <para>
+   You can create a temporary table and write some common JSONB documents into
+   it manually or use the existing tables. The idea is to provide a subset of
+   real data. Let's say some document type is twice as frequent as another
+   document type. ZSON expects that there will be twice as many documents of
+   the first type as those of the second one in a learning set.
+  </para>
+
+  <para>
+   The resulting dictionary can be examined using this query:
+  </para>
+
+  <synopsis>
+   SELECT * FROM zson_dict;
+  </synopsis>
+
+  <para>
+   Now ZSON type can be used as a complete and transparent replacement of
+   JSONB type:
+  </para>
+
+  <synopsis>
+   CREATE TABLE zson_example(x zson);
+   INSERT INTO zson_example VALUES ('{"aaa": 123}');
+   SELECT x -> 'aaa' FROM zson_example;
+  </synopsis>
+ </sect2>
+
+ <sect2>
+  <title>Migrating to a new dictionary</title>
+  <para>
+   When schema of JSONB documents evolves, ZSON can be re-learned:
+  </para>
+
+  <synopsis>
+   SELECT zson_learn('{{"table1", "col1"}, {"table2", "col2"}}');
+  </synopsis>
+
+  <para>
+   This time a second dictionary will be created. Dictionaries are cached in
+   memory, so it will take about a minute before ZSON realizes that there is
+   a new dictionary. After that, old documents will be decompressed using the
+   old dictionary while new documents will be compressed and decompressed
+   using the new dictionary.
+  </para>
+
+  <para>
+   To find out which dictionary is used for a given ZSON document use
+   <filename>zson_info</filename> procedure:
+  </para>
+
+  <synopsis>
+   SELECT zson_info(x) FROM test_compress WHERE id = 1;
+  </synopsis>
+
+  <para>
+   When all ZSON documents are migrated to the new dictionary, the old one can
+   be safely removed:
+  </para>
+
+  <synopsis>
+   DELETE FROM zson_dict WHERE dict_id = 0;
+  </synopsis> 
+
+  <para>
+   In general, it's safer to keep old dictionaries just in case. Gaining a few
+   kilobytes of disk space is not worth the risk of losing data.
+  </para> 
+ </sect2>
+
+ <sect2>
+  <title>When it's a time to re-learn?</title>
+
+  <para>
+   It's hard to recommend a general approach. A good heuristic could be:
+  </para>
+
+  <synopsis>
+   SELECT pg_table_size('tt') / (select count(*) from tt)
+  </synopsis>
+
+  <para>
+   ... i.e. average document size. When it suddenly starts to grow it's time
+   to re-learn. However, developers usually know when they change the schema
+   significantly. It's also easy to re-check whether the current schema
+   differs a lot from the original one using <filename>zson_dict</filename>
+   table.
+  </para>
+ </sect2>
+
+ <sect2>
+  <title>Authors</title>
+
+  <para>
+   ZSON was originally created in 2016 by Postgres Professional team:
+   researched and implemented by Aleksander Alekseev
+   <email>afiskon@gmail.com</email>; ideas, code review and testing by
+   Alexander Korotkov and Teodor Sigaev.
+  </para>
+ </sect2>
+
+</sect1>

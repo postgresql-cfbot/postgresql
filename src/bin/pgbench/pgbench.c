@@ -344,6 +344,12 @@ typedef struct StatsData
 } StatsData;
 
 /*
+ * For displaying Unix epoch timestamps, as some time functions may have
+ * another reference.
+ */
+pg_time_usec_t epoch_shift;
+
+/*
  * Struct to keep random state.
  */
 typedef struct RandomState
@@ -3771,7 +3777,11 @@ executeMetaCommand(CState *st, pg_time_usec_t *now)
 /*
  * Print log entry after completing one transaction.
  *
- * We print Unix-epoch timestamps in the log, so that entries can be
+ * The function behavior changes depending on sample_rate (a fraction of
+ * transaction is reported) and agg_interval (transactions are aggregated
+ * and reported once every agg_interval seconds).
+ *
+ * We use Unix-epoch timestamps in the log, so that entries can be
  * correlated against other logs.  On some platforms this could be obtained
  * from the caller, but rather than get entangled with that, we just eat
  * the cost of an extra syscall in all cases.
@@ -3781,7 +3791,7 @@ doLog(TState *thread, CState *st,
 	  StatsData *agg, bool skipped, double latency, double lag)
 {
 	FILE	   *logfile = thread->logfile;
-	pg_time_usec_t now = pg_time_now();
+	pg_time_usec_t now = pg_time_now() + epoch_shift;
 
 	Assert(use_log);
 
@@ -3796,17 +3806,19 @@ doLog(TState *thread, CState *st,
 	/* should we aggregate the results or not? */
 	if (agg_interval > 0)
 	{
+		pg_time_usec_t next;
+
 		/*
 		 * Loop until we reach the interval of the current moment, and print
 		 * any empty intervals in between (this may happen with very low tps,
 		 * e.g. --rate=0.1).
 		 */
 
-		while (agg->start_time + agg_interval <= now)
+		while ((next = agg->start_time + agg_interval * INT64CONST(1000000)) <= now)
 		{
 			/* print aggregated report to logfile */
 			fprintf(logfile, INT64_FORMAT " " INT64_FORMAT " %.0f %.0f %.0f %.0f",
-					agg->start_time,
+					agg->start_time / 1000000,	/* seconds since Unix epoch */
 					agg->cnt,
 					agg->latency.sum,
 					agg->latency.sum2,
@@ -3825,7 +3837,7 @@ doLog(TState *thread, CState *st,
 			fputc('\n', logfile);
 
 			/* reset data and move to next interval */
-			initStats(agg, agg->start_time + agg_interval);
+			initStats(agg, next);
 		}
 
 		/* accumulate the current transaction */
@@ -5458,7 +5470,8 @@ printProgressReport(TState *threads, int64 test_start, pg_time_usec_t now,
 
 	if (progress_timestamp)
 	{
-		snprintf(tbuf, sizeof(tbuf), "%.3f s", PG_TIME_GET_DOUBLE(now));
+		snprintf(tbuf, sizeof(tbuf), "%.3f s",
+				 PG_TIME_GET_DOUBLE(now + epoch_shift));
 	}
 	else
 	{
@@ -5808,6 +5821,15 @@ main(int argc, char **argv)
 	char	   *env;
 
 	int			exit_code = 0;
+	struct timeval tv;
+
+	/*
+	 * Record difference between Unix epoch and high resolution timer's epoch.
+	 * We'll use this for logging and aggregation with Unix epoch-based
+	 * buckets.
+	 */
+	gettimeofday(&tv, NULL);
+	epoch_shift = tv.tv_sec * INT64CONST(1000000) + tv.tv_usec - pg_time_now();
 
 	pg_logging_init(argv[0]);
 	progname = get_progname(argv[0]);
@@ -6637,7 +6659,14 @@ threadRun(void *arg)
 	thread->bench_start = start;
 	thread->throttle_trigger = start;
 
-	initStats(&aggs, start);
+	/*
+	 * The log format currently has Unix epoch timestamps with whole numbers
+	 * of seconds.  Round the first aggregate's start time down to the nearest
+	 * Unix epoch second (the very first aggregate might really have started a
+	 * fraction of a second later, but later aggregates are measured from the
+	 * whole number time that is actually logged).
+	 */
+	initStats(&aggs, (start + epoch_shift) / 1000000 * 1000000);
 	last = aggs;
 
 	/* loop till all clients have terminated */

@@ -48,6 +48,7 @@ f_star|f
 fast_emp4000|t
 float4_tbl|f
 float8_tbl|f
+for_portion_of_test|t
 func_index_heap|t
 hash_f8_heap|t
 hash_i4_heap|t
@@ -136,6 +137,7 @@ pg_opclass|t
 pg_operator|t
 pg_opfamily|t
 pg_partitioned_table|t
+pg_period|t
 pg_policy|t
 pg_proc|t
 pg_publication|t
@@ -165,6 +167,8 @@ pg_type|t
 pg_user_mapping|t
 point_tbl|t
 polygon_tbl|t
+pt|f
+pt2|f
 quad_box_tbl|t
 quad_box_tbl_ord_seq1|f
 quad_box_tbl_ord_seq2|f
@@ -173,6 +177,7 @@ quad_poly_tbl|t
 radix_text_tbl|t
 ramp|f
 real_city|f
+referencing_period_test|t
 reservations|f
 road|t
 shighway|t
@@ -215,6 +220,8 @@ trigger_parted_p1|t
 trigger_parted_p1_1|t
 varchar_tbl|f
 view_base_table|t
+without_overlaps_test|t
+without_overlaps_uq_test|t
 -- restore normal output mode
 \a\t
 --

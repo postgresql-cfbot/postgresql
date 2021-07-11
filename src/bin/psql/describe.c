@@ -2520,6 +2520,40 @@ describeOneTableDetails(const char *schemaname,
 		PGresult   *result = NULL;
 		int			tuples = 0;
 
+		/* print periods */
+		if (pset.sversion >= 150000)
+		{
+			printfPQExpBuffer(&buf,
+							  "SELECT quote_ident(p.pername), quote_ident(s.attname) AS startatt, quote_ident(e.attname) AS endatt\n"
+							  "FROM pg_period AS p\n"
+							  "JOIN pg_attribute AS s ON (s.attrelid, s.attnum) = (p.perrelid, p.perstart)\n"
+							  "JOIN pg_attribute AS e ON (e.attrelid, e.attnum) = (p.perrelid, p.perend)\n"
+							  "WHERE p.perrelid = '%s'\n"
+							  "ORDER BY 1;",
+							  oid);
+			result = PSQLexec(buf.data);
+			if (!result)
+				goto error_return;
+			else
+				tuples = PQntuples(result);
+
+			if (tuples > 0)
+			{
+				printTableAddFooter(&cont, _("Periods:"));
+				for (i = 0; i < tuples; i++)
+				{
+					/* untranslated constraint name and def */
+					printfPQExpBuffer(&buf, "    %s (%s, %s)",
+									  PQgetvalue(result, i, 0),
+									  PQgetvalue(result, i, 1),
+									  PQgetvalue(result, i, 2));
+
+					printTableAddFooter(&cont, buf.data);
+				}
+			}
+			PQclear(result);
+		}
+
 		/* print indexes */
 		if (tableinfo.hasindex)
 		{
@@ -2591,6 +2625,8 @@ describeOneTableDetails(const char *schemaname,
 						}
 
 						/* Everything after "USING" is echoed verbatim */
+						// TODO: Show WITHOUT OVERLAPS info here?
+						// It is not really part of the *index*.
 						indexdef = PQgetvalue(result, i, 5);
 						usingpos = strstr(indexdef, " USING ");
 						if (usingpos)

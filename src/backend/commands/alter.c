@@ -640,6 +640,7 @@ AlterObjectNamespace_oid(Oid classId, Oid objid, Oid nspOid,
 
 		case OCLASS_CAST:
 		case OCLASS_CONSTRAINT:
+		case OCLASS_PERIOD:
 		case OCLASS_DEFAULT:
 		case OCLASS_LANGUAGE:
 		case OCLASS_LARGEOBJECT:

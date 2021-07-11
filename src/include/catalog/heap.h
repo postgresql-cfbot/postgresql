@@ -120,6 +120,10 @@ extern Oid	StoreAttrDefault(Relation rel, AttrNumber attnum,
 							 Node *expr, bool is_internal,
 							 bool add_column_mode);
 
+extern Oid StorePeriod(Relation rel, const char *period,
+					   AttrNumber startnum, AttrNumber endnum,
+					   Oid rngtypid, Oid conoid);
+
 extern Node *cookDefault(ParseState *pstate,
 						 Node *raw_default,
 						 Oid atttypid,

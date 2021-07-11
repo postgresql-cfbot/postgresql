@@ -59,6 +59,7 @@ typedef enum
 	DO_TRIGGER,
 	DO_CONSTRAINT,
 	DO_FK_CONSTRAINT,			/* see note for ConstraintInfo */
+	DO_PERIOD,
 	DO_PROCLANG,
 	DO_CAST,
 	DO_TABLE_DATA,
@@ -280,12 +281,14 @@ typedef struct _tableInfo
 	bool		rowsec;			/* is row security enabled? */
 	bool		forcerowsec;	/* is row security forced? */
 	bool		hasoids;		/* does it have OIDs? */
+	bool		hasperiods;		/* does it have any periods? */
 	uint32		frozenxid;		/* table's relfrozenxid */
 	uint32		minmxid;		/* table's relminmxid */
 	Oid			toast_oid;		/* toast table's OID, or 0 if none */
 	uint32		toast_frozenxid;	/* toast table's relfrozenxid, if any */
 	uint32		toast_minmxid;	/* toast table's relminmxid */
 	int			ncheck;			/* # of CHECK expressions */
+	int			nperiod;		/* # of PERIOD definitions */
 	char	   *reloftype;		/* underlying type for typed table */
 	Oid			foreign_server; /* foreign server oid, if applicable */
 	/* these two are set only if table is a sequence owned by a column: */
@@ -325,6 +328,7 @@ typedef struct _tableInfo
 	bool	   *inhNotNull;		/* true if NOT NULL is inherited */
 	struct _attrDefInfo **attrdefs; /* DEFAULT expressions */
 	struct _constraintInfo *checkexprs; /* CHECK constraints */
+	struct _periodInfo *periods;	/* PERIOD definitions */
 	char	   *partkeydef;		/* partition key definition */
 	char	   *partbound;		/* partition bound definition */
 	bool		needs_override; /* has GENERATED ALWAYS AS IDENTITY */
@@ -462,7 +466,19 @@ typedef struct _constraintInfo
 	bool		condeferred;	/* true if constraint is INITIALLY DEFERRED */
 	bool		conislocal;		/* true if constraint has local definition */
 	bool		separate;		/* true if must dump as separate item */
+	bool		withoutoverlaps;	/* true if the last elem is WITHOUT OVERLAPS */
 } ConstraintInfo;
+
+typedef struct _periodInfo
+{
+	DumpableObject dobj;
+	TableInfo  *pertable;
+	char	   *perstart;		/* the name of the start column */
+	char	   *perend;			/* the name of the end column */
+	char	   *opcnamespace;	/* the name of the operator class schema */
+	char	   *opcname;		/* the name of the operator class */
+	char	   *conname;		/* the name of the CHECK constraint */
+} PeriodInfo;
 
 typedef struct _procLangInfo
 {

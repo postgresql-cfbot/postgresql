@@ -23,6 +23,7 @@
 #include "storage/ipc.h"
 #include "storage/md.h"
 #include "storage/smgr.h"
+#include "storage/undofile.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 
@@ -52,7 +53,7 @@ typedef struct f_smgr
 								BlockNumber blocknum, char *buffer, bool skipFsync);
 	bool		(*smgr_prefetch) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber blocknum);
-	void		(*smgr_read) (SMgrRelation reln, ForkNumber forknum,
+	bool		(*smgr_read) (SMgrRelation reln, ForkNumber forknum,
 							  BlockNumber blocknum, char *buffer);
 	void		(*smgr_write) (SMgrRelation reln, ForkNumber forknum,
 							   BlockNumber blocknum, char *buffer, bool skipFsync);
@@ -82,6 +83,24 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
+	},
+	/* undo logs */
+	{
+		.smgr_init = undofile_init,
+		.smgr_shutdown = undofile_shutdown,
+		.smgr_open = undofile_open,
+		.smgr_close = undofile_close,
+		.smgr_create = undofile_create,
+		.smgr_exists = undofile_exists,
+		.smgr_unlink = undofile_unlink,
+		.smgr_extend = undofile_extend,
+		.smgr_prefetch = undofile_prefetch,
+		.smgr_read = undofile_read,
+		.smgr_write = undofile_write,
+		.smgr_writeback = undofile_writeback,
+		.smgr_nblocks = undofile_nblocks,
+		.smgr_truncate = undofile_truncate,
+		.smgr_immedsync = undofile_immedsync,
 	}
 };
 
@@ -143,7 +162,7 @@ smgrshutdown(int code, Datum arg)
  *		This does not attempt to actually open the underlying file.
  */
 SMgrRelation
-smgropen(RelFileNode rnode, BackendId backend)
+smgropen(SmgrId smgrid, RelFileNode rnode, BackendId backend)
 {
 	RelFileNodeBackend brnode;
 	SMgrRelation reln;
@@ -176,7 +195,8 @@ smgropen(RelFileNode rnode, BackendId backend)
 		reln->smgr_targblock = InvalidBlockNumber;
 		for (int i = 0; i <= MAX_FORKNUM; ++i)
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
-		reln->smgr_which = 0;	/* we only have md.c at present */
+		reln->smgr_which = smgrid;
+		reln->private_data = NULL;
 
 		/* implementation-specific initialization */
 		smgrsw[reln->smgr_which].smgr_open(reln);
@@ -496,12 +516,13 @@ smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
  *		This routine is called from the buffer manager in order to
  *		instantiate pages in the shared buffer cache.  All storage managers
  *		return pages in the format that POSTGRES expects.
+ *		Returns true on success, and false if the block has been discarded.
  */
-void
+bool
 smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		 char *buffer)
 {
-	smgrsw[reln->smgr_which].smgr_read(reln, forknum, blocknum, buffer);
+	return smgrsw[reln->smgr_which].smgr_read(reln, forknum, blocknum, buffer);
 }
 
 /*

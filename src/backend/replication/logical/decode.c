@@ -179,6 +179,9 @@ LogicalDecodingProcessRecord(LogicalDecodingContext *ctx, XLogReaderState *recor
 		case RM_COMMIT_TS_ID:
 		case RM_REPLORIGIN_ID:
 		case RM_GENERIC_ID:
+		case RM_UNDOLOG_ID:
+		case RM_FOO_ID:
+		case RM_UNDOXACTTEST_ID:
 			/* just deal with xid, and done */
 			ReorderBufferProcessXid(ctx->reorder, XLogRecGetXid(record),
 									buf.origptr);
@@ -920,7 +923,7 @@ DecodeInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 		return;
 
 	/* only interested in our database */
-	XLogRecGetBlockTag(r, 0, &target_node, NULL, NULL);
+	XLogRecGetBlockTag(r, 0, NULL, &target_node, NULL, NULL);
 	if (target_node.dbNode != ctx->slot->data.database)
 		return;
 
@@ -970,7 +973,7 @@ DecodeUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	xlrec = (xl_heap_update *) XLogRecGetData(r);
 
 	/* only interested in our database */
-	XLogRecGetBlockTag(r, 0, &target_node, NULL, NULL);
+	XLogRecGetBlockTag(r, 0, NULL, &target_node, NULL, NULL);
 	if (target_node.dbNode != ctx->slot->data.database)
 		return;
 
@@ -1036,7 +1039,7 @@ DecodeDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	xlrec = (xl_heap_delete *) XLogRecGetData(r);
 
 	/* only interested in our database */
-	XLogRecGetBlockTag(r, 0, &target_node, NULL, NULL);
+	XLogRecGetBlockTag(r, 0, NULL, &target_node, NULL, NULL);
 	if (target_node.dbNode != ctx->slot->data.database)
 		return;
 
@@ -1138,7 +1141,7 @@ DecodeMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 		return;
 
 	/* only interested in our database */
-	XLogRecGetBlockTag(r, 0, &rnode, NULL, NULL);
+	XLogRecGetBlockTag(r, 0, NULL, &rnode, NULL, NULL);
 	if (rnode.dbNode != ctx->slot->data.database)
 		return;
 
@@ -1231,7 +1234,7 @@ DecodeSpecConfirm(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	RelFileNode target_node;
 
 	/* only interested in our database */
-	XLogRecGetBlockTag(r, 0, &target_node, NULL, NULL);
+	XLogRecGetBlockTag(r, 0, NULL, &target_node, NULL, NULL);
 	if (target_node.dbNode != ctx->slot->data.database)
 		return;
 

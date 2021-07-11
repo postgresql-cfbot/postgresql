@@ -349,8 +349,23 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
 	TransactionId xidStopLimit;
 	TransactionId xidWrapLimit;
 	TransactionId curXid;
+	FullTransactionId oldestFullXidHavingUndo;
+	TransactionId oldestXidHavingUndo;
 
 	Assert(TransactionIdIsNormal(oldest_datfrozenxid));
+
+	/*
+	 * To determine the last safe xid that can be allocated, we need to
+	 * consider oldestXidHavingUndo because this is a oldest xid whose undo is
+	 * not yet discarded so this is still a valid xid in system.
+	 */
+	oldestFullXidHavingUndo.value =
+		pg_atomic_read_u64(&ProcGlobal->oldestFullXidHavingUndo);
+	oldestXidHavingUndo = XidFromFullTransactionId(oldestFullXidHavingUndo);
+	if (TransactionIdIsValid(oldestXidHavingUndo))
+		oldest_datfrozenxid = TransactionIdPrecedes(oldest_datfrozenxid,
+													oldestXidHavingUndo) ?
+			oldest_datfrozenxid : oldestXidHavingUndo;
 
 	/*
 	 * The place where we actually get into deep trouble is halfway around

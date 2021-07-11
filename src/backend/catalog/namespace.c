@@ -4289,8 +4289,14 @@ RemoveTempRelationsCallback(int code, Datum arg)
 {
 	if (OidIsValid(myTempNamespace))	/* should always be true */
 	{
-		/* Need to ensure we have a usable transaction. */
-		AbortOutOfAnyTransaction();
+		/*
+		 * Need to ensure we have a usable transaction.
+		 *
+		 * Since we're going to start a new transaction, we should be able to
+		 * undo of the current one.
+		 */
+		AbortOutOfAnyTransaction(true);
+
 		StartTransactionCommand();
 
 		RemoveTempRelations(myTempNamespace);

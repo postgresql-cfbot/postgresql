@@ -55,6 +55,7 @@
  * Note: BM_TAG_VALID essentially means that there is a buffer hashtable
  * entry associated with the buffer's tag.
  */
+#define BM_DISCARDED			(1U << 21)	/* discarded */
 #define BM_LOCKED				(1U << 22)	/* buffer header is locked */
 #define BM_DIRTY				(1U << 23)	/* data needs writing */
 #define BM_VALID				(1U << 24)	/* data is valid */
@@ -87,16 +88,20 @@
  *
  * Note: if there's any pad bytes in the struct, INIT_BUFFERTAG will have
  * to be fixed to zero them, since this struct is used as a hash key.
+ * Conceptually the SmgrId should go first, but we put it next to the
+ * ForkNumber so that it packs better with typical alignment rules.
  */
 typedef struct buftag
 {
 	RelFileNode rnode;			/* physical relation identifier */
-	ForkNumber	forkNum;
+	int16		smgrid;			/* SmgrId */
+	int16		forkNum;		/* ForkNumber */
 	BlockNumber blockNum;		/* blknum relative to begin of reln */
 } BufferTag;
 
 #define CLEAR_BUFFERTAG(a) \
 ( \
+	(a).smgrid = SMGR_INVALID, \
 	(a).rnode.spcNode = InvalidOid, \
 	(a).rnode.dbNode = InvalidOid, \
 	(a).rnode.relNode = InvalidOid, \
@@ -104,8 +109,9 @@ typedef struct buftag
 	(a).blockNum = InvalidBlockNumber \
 )
 
-#define INIT_BUFFERTAG(a,xx_rnode,xx_forkNum,xx_blockNum) \
+#define INIT_BUFFERTAG(a,xx_smgrid,xx_rnode,xx_forkNum,xx_blockNum) \
 ( \
+	(a).smgrid = (xx_smgrid), \
 	(a).rnode = (xx_rnode), \
 	(a).forkNum = (xx_forkNum), \
 	(a).blockNum = (xx_blockNum) \
@@ -113,6 +119,7 @@ typedef struct buftag
 
 #define BUFFERTAGS_EQUAL(a,b) \
 ( \
+	(a).smgrid == (b).smgrid && \
 	RelFileNodeEquals((a).rnode, (b).rnode) && \
 	(a).blockNum == (b).blockNum && \
 	(a).forkNum == (b).forkNum \
@@ -291,6 +298,7 @@ extern BufferDesc *LocalBufferDescriptors;
  */
 typedef struct CkptSortItem
 {
+	SmgrId		smgrid;
 	Oid			tsId;
 	Oid			relNode;
 	ForkNumber	forkNum;

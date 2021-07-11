@@ -32,9 +32,11 @@ WHERE p1.prolang = 0 OR p1.prorettype = 0 OR
        prokind NOT IN ('f', 'a', 'w', 'p') OR
        provolatile NOT IN ('i', 's', 'v') OR
        proparallel NOT IN ('s', 'r', 'u');
- oid | proname 
------+---------
-(0 rows)
+ oid  |         proname         
+------+-------------------------
+ 8892 | pg_get_undo_log_chunks
+ 8893 | pg_get_undo_log_records
+(2 rows)
 
 -- prosrc should never be null; it can be empty only if prosqlbody isn't null
 SELECT p1.oid, p1.proname

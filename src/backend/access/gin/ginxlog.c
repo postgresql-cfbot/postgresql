@@ -95,11 +95,12 @@ ginRedoInsertEntry(Buffer buffer, bool isLeaf, BlockNumber rightblkno, void *rda
 
 	if (PageAddItem(page, (Item) itup, IndexTupleSize(itup), offset, false, false) == InvalidOffsetNumber)
 	{
+		SmgrId		smgrid;
 		RelFileNode node;
 		ForkNumber	forknum;
 		BlockNumber blknum;
 
-		BufferGetTag(buffer, &node, &forknum, &blknum);
+		BufferGetTag(buffer, &smgrid, &node, &forknum, &blknum);
 		elog(ERROR, "failed to add item to index page in %u/%u/%u",
 			 node.spcNode, node.dbNode, node.relNode);
 	}

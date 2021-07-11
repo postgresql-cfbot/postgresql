@@ -39,6 +39,7 @@
 #endif
 
 #include "access/xlogrecord.h"
+#include "storage/smgr.h"
 
 /* WALOpenSegment represents a WAL segment being read. */
 typedef struct WALOpenSegment
@@ -121,6 +122,7 @@ typedef struct
 	bool		in_use;
 
 	/* Identify the block this refers to */
+	SmgrId		smgrid;
 	RelFileNode rnode;
 	ForkNumber	forknum;
 	BlockNumber blkno;
@@ -324,7 +326,7 @@ extern FullTransactionId XLogRecGetFullXid(XLogReaderState *record);
 extern bool RestoreBlockImage(XLogReaderState *record, uint8 block_id, char *page);
 extern char *XLogRecGetBlockData(XLogReaderState *record, uint8 block_id, Size *len);
 extern bool XLogRecGetBlockTag(XLogReaderState *record, uint8 block_id,
-							   RelFileNode *rnode, ForkNumber *forknum,
-							   BlockNumber *blknum);
+							   SmgrId *smgrid, RelFileNode *rnode,
+							   ForkNumber *forknum, BlockNumber *blknum);
 
 #endif							/* XLOGREADER_H */

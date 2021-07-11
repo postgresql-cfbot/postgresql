@@ -1,0 +1,111 @@
+<!--
+doc/src/sgml/ref/pg_undodump.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="pgundodump">
+ <indexterm zone="pgundodump">
+  <primary>pg_undodump</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle><application>pg_undodump</application></refentrytitle>
+  <manvolnum>1</manvolnum>
+  <refmiscinfo>Application</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>pg_undodump</refname>
+  <refpurpose>display a human-readable rendering of the undo log of
+  a <productname>PostgreSQL</productname> database cluster</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+  <cmdsynopsis>
+    <command>pg_undodump</command>
+   <arg rep="repeat" choice="opt"><option>option</option></arg>
+   <group choice="plain">
+    <group choice="opt">
+     <arg choice="plain"><option>--pgdata</option></arg>
+     <arg choice="plain"><option>-D</option></arg>
+    </group>
+    <replaceable class="parameter"> datadir</replaceable>
+   </group>
+  </cmdsynopsis>
+ </refsynopsisdiv>
+
+ <refsect1 id="app-pgundodump">
+  <title>Description</title>
+  <para>
+   <command>pg_undodump</command> displays the undo log and is mainly useful
+   for debugging or educational purposes.
+  </para>
+
+  <para>
+   This utility can only be run by the user who initialized the cluster
+   because it requires read access to the data directory.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Options</title>
+
+   <para>
+    The following command-line options control the location and format of the
+    output:
+
+    <variablelist>
+
+     <varlistentry>
+      <term><option>-c</option></term>
+      <term><option>--chunks</option></term>
+      <listitem>
+       <para>
+        Output detailed information about undo log chunks.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-m</option></term>
+      <term><option>--metadata</option></term>
+      <listitem>
+       <para>
+        Output detailed information about undo log slot metadata.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-r</option></term>
+      <term><option>--records</option></term>
+      <listitem>
+       <para>
+        Output detailed information about individual undo records.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+
+   <para>
+    The <option>-m</option> option cannot be used if
+    either <option>-c</option> or <option>-r</option> is used. Also, only one
+    of the <option>-c</option> and <option>-r</option> options can be used at
+    a time.
+   </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Notes</title>
+  <para>
+    The undo log contents (chunks, records) is not visible
+    by <application>pg_undodump</application> until the containing shared
+    buffers are flushed to disk. Once a new record is written, the data gets
+    flushed at latest during the next checkpoint. The undo log metadata is not
+    visible until the undo log slots are flushed to disk - this is handled by
+    checkpoint.
+  </para>
+ </refsect1>
+
+</refentry>

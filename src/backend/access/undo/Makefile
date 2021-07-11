@@ -1,0 +1,25 @@
+#-------------------------------------------------------------------------
+#
+# Makefile--
+#    Makefile for access/undo
+#
+# IDENTIFICATION
+#    src/backend/access/undo/Makefile
+#
+#-------------------------------------------------------------------------
+
+subdir = src/backend/access/undo
+top_builddir = ../../../..
+include $(top_builddir)/src/Makefile.global
+
+OBJS = \
+	discardworker.o \
+	undo.o \
+	undolog.o \
+	undopage.o \
+	undoread.o \
+	undorecordset.o \
+	undorecordset_xlog.o \
+	xactundo.o
+
+include $(top_srcdir)/src/backend/common.mk

@@ -25,6 +25,7 @@
 #include "access/session.h"
 #include "access/sysattr.h"
 #include "access/tableam.h"
+#include "access/undo.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/catalog.h"
@@ -1071,6 +1072,9 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 	/* Initialize this backend's session state. */
 	InitializeSession();
 
+	/* Initialize this backend's undo state. */
+	InitializeUndo();
+
 	/* report this backend in the PgBackendStatus array */
 	if (!bootstrap)
 		pgstat_bestart();
@@ -1186,8 +1190,17 @@ process_settings(Oid databaseid, Oid roleid)
 static void
 ShutdownPostgres(int code, Datum arg)
 {
-	/* Make sure we've killed any active transaction */
-	AbortOutOfAnyTransaction();
+	bool		perform_undo;
+
+	/*
+	 * Make sure we've killed any active transaction.
+	 *
+	 * Undo should be tried if this is not server crash, otherwise we should
+	 * not try to access shared buffers. On the other hand, crash recovery
+	 * takes care of applying undo of the failed transactions.
+	 */
+	perform_undo = code == 0 || code == 1;
+	AbortOutOfAnyTransaction(perform_undo);
 
 	/*
 	 * User locks are not released by transaction end, so be sure to release

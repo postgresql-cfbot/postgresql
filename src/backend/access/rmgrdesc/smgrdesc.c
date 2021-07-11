@@ -15,7 +15,7 @@
 #include "postgres.h"
 
 #include "catalog/storage_xlog.h"
-
+#include "catalog/storage_undo.h"
 
 void
 smgr_desc(StringInfo buf, XLogReaderState *record)
@@ -27,6 +27,22 @@ smgr_desc(StringInfo buf, XLogReaderState *record)
 	{
 		xl_smgr_create *xlrec = (xl_smgr_create *) rec;
 		char	   *path = relpathperm(xlrec->rnode, xlrec->forkNum);
+
+		appendStringInfoString(buf, path);
+		pfree(path);
+	}
+	else if (info == XLOG_SMGR_PRECREATE)
+	{
+		xl_smgr_precreate *xlrec = (xl_smgr_precreate *) rec;
+		char	   *path = relpathperm(xlrec->rnode, 0);
+
+		appendStringInfoString(buf, path);
+		pfree(path);
+	}
+	else if (info == XLOG_SMGR_DROP)
+	{
+		xl_smgr_drop *xlrec = (xl_smgr_drop *) rec;
+		char	   *path = relpathperm(xlrec->rnode, 0);
 
 		appendStringInfoString(buf, path);
 		pfree(path);
@@ -49,8 +65,14 @@ smgr_identify(uint8 info)
 
 	switch (info & ~XLR_INFO_MASK)
 	{
+		case XLOG_SMGR_PRECREATE:
+			id = "PRECREATE";
+			break;
 		case XLOG_SMGR_CREATE:
 			id = "CREATE";
+			break;
+		case XLOG_SMGR_DROP:
+			id = "DROP";
 			break;
 		case XLOG_SMGR_TRUNCATE:
 			id = "TRUNCATE";
@@ -58,4 +80,22 @@ smgr_identify(uint8 info)
 	}
 
 	return id;
+}
+
+void
+smgr_undo_desc(StringInfo buf, const WrittenUndoNode *record)
+{
+	xu_smgr_create *undo_rec;
+	RelFileNode *rnode;
+
+	Assert(record->n.rmid == RM_SMGR_ID);
+	Assert(record->n.type == UNDO_SMGR_CREATE);
+
+	undo_rec = (xu_smgr_create *) record->n.data;
+	rnode = &undo_rec->rnode;
+
+	appendStringInfo(buf, "CREATE dbid=%u, tsid=%u, relfile=%u",
+					 rnode->dbNode,
+					 rnode->spcNode,
+					 rnode->relNode);
 }

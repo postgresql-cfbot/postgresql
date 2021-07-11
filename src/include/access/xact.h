@@ -15,6 +15,7 @@
 #define XACT_H
 
 #include "access/transam.h"
+#include "access/undodefs.h"
 #include "access/xlogreader.h"
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
@@ -313,6 +314,8 @@ typedef struct xl_xact_prepare
 	uint16		gidlen;			/* length of the GID - GID follows the header */
 	XLogRecPtr	origin_lsn;		/* lsn of this record at origin node */
 	TimestampTz origin_timestamp;	/* time of prepare at origin node */
+	UndoRecPtr	urs_begin;		/* undo record set beginning */
+	UndoRecPtr	urs_end;		/* undo record set end */
 } xl_xact_prepare;
 
 /*
@@ -423,7 +426,7 @@ extern void EndParallelWorkerTransaction(void);
 extern bool IsTransactionBlock(void);
 extern bool IsTransactionOrTransactionBlock(void);
 extern char TransactionBlockStatusCode(void);
-extern void AbortOutOfAnyTransaction(void);
+extern void AbortOutOfAnyTransaction(bool perform_undo);
 extern void PreventInTransactionBlock(bool isTopLevel, const char *stmtType);
 extern void RequireTransactionBlock(bool isTopLevel, const char *stmtType);
 extern void WarnNoTransactionBlock(bool isTopLevel, const char *stmtType);
@@ -447,7 +450,7 @@ extern XLogRecPtr XactLogCommitRecord(TimestampTz commit_time,
 									  TransactionId twophase_xid,
 									  const char *twophase_gid);
 
-extern XLogRecPtr XactLogAbortRecord(TimestampTz abort_time,
+extern XLogRecPtr XactLogAbortRecord(int nestingLevel, TimestampTz abort_time,
 									 int nsubxacts, TransactionId *subxacts,
 									 int nrels, RelFileNode *rels,
 									 int xactflags, TransactionId twophase_xid,

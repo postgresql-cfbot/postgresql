@@ -628,7 +628,7 @@ mdwriteback(SMgrRelation reln, ForkNumber forknum,
 /*
  *	mdread() -- Read the specified block from a relation.
  */
-void
+bool
 mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	   char *buffer)
 {
@@ -684,6 +684,8 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 							blocknum, FilePathName(v->mdfd_vfd),
 							nbytes, BLCKSZ)));
 	}
+
+	return true;
 }
 
 /*
@@ -767,7 +769,7 @@ mdnblocks(SMgrRelation reln, ForkNumber forknum)
 
 	mdopenfork(reln, forknum, EXTENSION_FAIL);
 
-	/* mdopen has opened the first segment */
+	/* mdopenfork has opened the first segment */
 	Assert(reln->md_num_open_segs[forknum] > 0);
 
 	/*
@@ -1054,7 +1056,7 @@ DropRelationFiles(RelFileNode *delrels, int ndelrels, bool isRedo)
 	srels = palloc(sizeof(SMgrRelation) * ndelrels);
 	for (i = 0; i < ndelrels; i++)
 	{
-		SMgrRelation srel = smgropen(delrels[i], InvalidBackendId);
+		SMgrRelation srel = smgropen(SMGR_MD, delrels[i], InvalidBackendId);
 
 		if (isRedo)
 		{
@@ -1332,7 +1334,7 @@ _mdnblocks(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 int
 mdsyncfiletag(const FileTag *ftag, char *path)
 {
-	SMgrRelation reln = smgropen(ftag->rnode, InvalidBackendId);
+	SMgrRelation reln = smgropen(SMGR_MD, ftag->rnode, InvalidBackendId);
 	File		file;
 	bool		need_to_close;
 	int			result,

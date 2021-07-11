@@ -51,7 +51,7 @@ hash_xlog_init_meta_page(XLogReaderState *record)
 	 * special handling for init forks as create index operations don't log a
 	 * full page image of the metapage.
 	 */
-	XLogRecGetBlockTag(record, 0, NULL, &forknum, NULL);
+	XLogRecGetBlockTag(record, 0, NULL, NULL, &forknum, NULL);
 	if (forknum == INIT_FORKNUM)
 		FlushOneBuffer(metabuf);
 
@@ -89,7 +89,7 @@ hash_xlog_init_bitmap_page(XLogReaderState *record)
 	 * special handling for init forks as create index operations don't log a
 	 * full page image of the metapage.
 	 */
-	XLogRecGetBlockTag(record, 0, NULL, &forknum, NULL);
+	XLogRecGetBlockTag(record, 0, NULL, NULL, &forknum, NULL);
 	if (forknum == INIT_FORKNUM)
 		FlushOneBuffer(bitmapbuf);
 	UnlockReleaseBuffer(bitmapbuf);
@@ -113,7 +113,7 @@ hash_xlog_init_bitmap_page(XLogReaderState *record)
 		PageSetLSN(page, lsn);
 		MarkBufferDirty(metabuf);
 
-		XLogRecGetBlockTag(record, 1, NULL, &forknum, NULL);
+		XLogRecGetBlockTag(record, 1, NULL, NULL, &forknum, NULL);
 		if (forknum == INIT_FORKNUM)
 			FlushOneBuffer(metabuf);
 	}
@@ -190,8 +190,8 @@ hash_xlog_add_ovfl_page(XLogReaderState *record)
 	Size		datalen PG_USED_FOR_ASSERTS_ONLY;
 	bool		new_bmpage = false;
 
-	XLogRecGetBlockTag(record, 0, NULL, NULL, &rightblk);
-	XLogRecGetBlockTag(record, 1, NULL, NULL, &leftblk);
+	XLogRecGetBlockTag(record, 0, NULL, NULL, NULL, &rightblk);
+	XLogRecGetBlockTag(record, 1, NULL, NULL, NULL, &leftblk);
 
 	ovflbuf = XLogInitBufferForRedo(record, 0);
 	Assert(BufferIsValid(ovflbuf));
@@ -1001,7 +1001,7 @@ hash_xlog_vacuum_one_page(XLogReaderState *record)
 	{
 		RelFileNode rnode;
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, NULL);
+		XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, NULL);
 		ResolveRecoveryConflictWithSnapshot(xldata->latestRemovedXid, rnode);
 	}
 

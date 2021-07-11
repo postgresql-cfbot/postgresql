@@ -56,7 +56,8 @@ typedef struct
 {
 	bool		in_use;			/* is this slot in use? */
 	uint8		flags;			/* REGBUF_* flags */
-	RelFileNode rnode;			/* identifies the relation and block */
+	SmgrId		smgrid;			/* identifies the SGMR, relation and block */
+	RelFileNode rnode;
 	ForkNumber	forkno;
 	BlockNumber block;
 	Page		page;			/* page content */
@@ -246,7 +247,8 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
 
 	regbuf = &registered_buffers[block_id];
 
-	BufferGetTag(buffer, &regbuf->rnode, &regbuf->forkno, &regbuf->block);
+	BufferGetTag(buffer, &regbuf->smgrid, &regbuf->rnode, &regbuf->forkno,
+				 &regbuf->block);
 	regbuf->page = BufferGetPage(buffer);
 	regbuf->flags = flags;
 	regbuf->rdata_tail = (XLogRecData *) &regbuf->rdata_head;
@@ -267,7 +269,8 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
 			if (i == block_id || !regbuf_old->in_use)
 				continue;
 
-			Assert(!RelFileNodeEquals(regbuf_old->rnode, regbuf->rnode) ||
+			Assert(regbuf_old->smgrid != regbuf->smgrid ||
+				   !RelFileNodeEquals(regbuf_old->rnode, regbuf->rnode) ||
 				   regbuf_old->forkno != regbuf->forkno ||
 				   regbuf_old->block != regbuf->block);
 		}
@@ -282,8 +285,9 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
  * shared buffer pool (i.e. when you don't have a Buffer for it).
  */
 void
-XLogRegisterBlock(uint8 block_id, RelFileNode *rnode, ForkNumber forknum,
-				  BlockNumber blknum, Page page, uint8 flags)
+XLogRegisterBlock(uint8 block_id, SmgrId smgrid, RelFileNode *rnode,
+				  ForkNumber forknum, BlockNumber blknum, Page page,
+				  uint8 flags)
 {
 	registered_buffer *regbuf;
 
@@ -299,6 +303,7 @@ XLogRegisterBlock(uint8 block_id, RelFileNode *rnode, ForkNumber forknum,
 
 	regbuf = &registered_buffers[block_id];
 
+	regbuf->smgrid = smgrid;
 	regbuf->rnode = *rnode;
 	regbuf->forkno = forknum;
 	regbuf->block = blknum;
@@ -322,7 +327,8 @@ XLogRegisterBlock(uint8 block_id, RelFileNode *rnode, ForkNumber forknum,
 			if (i == block_id || !regbuf_old->in_use)
 				continue;
 
-			Assert(!RelFileNodeEquals(regbuf_old->rnode, regbuf->rnode) ||
+			Assert(regbuf_old->smgrid != regbuf->smgrid ||
+				   !RelFileNodeEquals(regbuf_old->rnode, regbuf->rnode) ||
 				   regbuf_old->forkno != regbuf->forkno ||
 				   regbuf_old->block != regbuf->block);
 		}
@@ -746,7 +752,13 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			rdt_datas_last = regbuf->rdata_tail;
 		}
 
-		if (prev_regbuf && RelFileNodeEquals(regbuf->rnode, prev_regbuf->rnode))
+		/*
+		 * For undo buffers we need to store SmgrId in order to distinguish
+		 * the buffer from the regular database buffers.
+		 */
+		if (prev_regbuf && regbuf->smgrid == prev_regbuf->smgrid &&
+			RelFileNodeEquals(regbuf->rnode, prev_regbuf->rnode) &&
+			(regbuf->flags & REGBUF_UNDO) == 0)
 		{
 			samerel = true;
 			bkpb.fork_flags |= BKPBLOCK_SAME_REL;
@@ -771,6 +783,8 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 		}
 		if (!samerel)
 		{
+			memcpy(scratch, &regbuf->smgrid, sizeof(SmgrId));
+			scratch += sizeof(SmgrId);
 			memcpy(scratch, &regbuf->rnode, sizeof(RelFileNode));
 			scratch += sizeof(RelFileNode);
 		}
@@ -998,6 +1012,7 @@ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
 		int			flags;
 		PGAlignedBlock copied_buffer;
 		char	   *origdata = (char *) BufferGetBlock(buffer);
+		SmgrId		smgrid;
 		RelFileNode rnode;
 		ForkNumber	forkno;
 		BlockNumber blkno;
@@ -1026,8 +1041,8 @@ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
 		if (buffer_std)
 			flags |= REGBUF_STANDARD;
 
-		BufferGetTag(buffer, &rnode, &forkno, &blkno);
-		XLogRegisterBlock(0, &rnode, forkno, blkno, copied_buffer.data, flags);
+		BufferGetTag(buffer, &smgrid, &rnode, &forkno, &blkno);
+		XLogRegisterBlock(0, smgrid, &rnode, forkno, blkno, copied_buffer.data, flags);
 
 		recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI_FOR_HINT);
 	}
@@ -1048,8 +1063,8 @@ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
  * the unused space to be left out from the WAL record, making it smaller.
  */
 XLogRecPtr
-log_newpage(RelFileNode *rnode, ForkNumber forkNum, BlockNumber blkno,
-			Page page, bool page_std)
+log_newpage(SmgrId smgrid, RelFileNode *rnode, ForkNumber forkNum,
+			BlockNumber blkno, Page page, bool page_std)
 {
 	int			flags;
 	XLogRecPtr	recptr;
@@ -1059,7 +1074,7 @@ log_newpage(RelFileNode *rnode, ForkNumber forkNum, BlockNumber blkno,
 		flags |= REGBUF_STANDARD;
 
 	XLogBeginInsert();
-	XLogRegisterBlock(0, rnode, forkNum, blkno, page, flags);
+	XLogRegisterBlock(0, smgrid, rnode, forkNum, blkno, page, flags);
 	recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI);
 
 	/*
@@ -1110,7 +1125,8 @@ log_newpages(RelFileNode *rnode, ForkNumber forkNum, int num_pages,
 		nbatch = 0;
 		while (nbatch < XLR_MAX_BLOCK_ID && i < num_pages)
 		{
-			XLogRegisterBlock(nbatch, rnode, forkNum, blknos[i], pages[i], flags);
+			XLogRegisterBlock(nbatch, SMGR_MD, rnode, forkNum,
+							  blknos[i], pages[i], flags);
 			i++;
 			nbatch++;
 		}
@@ -1145,6 +1161,7 @@ XLogRecPtr
 log_newpage_buffer(Buffer buffer, bool page_std)
 {
 	Page		page = BufferGetPage(buffer);
+	SmgrId		smgrid;
 	RelFileNode rnode;
 	ForkNumber	forkNum;
 	BlockNumber blkno;
@@ -1152,9 +1169,9 @@ log_newpage_buffer(Buffer buffer, bool page_std)
 	/* Shared buffers should be modified in a critical section. */
 	Assert(CritSectionCount > 0);
 
-	BufferGetTag(buffer, &rnode, &forkNum, &blkno);
+	BufferGetTag(buffer, &smgrid, &rnode, &forkNum, &blkno);
 
-	return log_newpage(&rnode, forkNum, blkno, page, page_std);
+	return log_newpage(smgrid, &rnode, forkNum, blkno, page, page_std);
 }
 
 /*

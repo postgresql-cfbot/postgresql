@@ -858,7 +858,8 @@ variable_is_guc_list_quote(const char *name)
 		pg_strcasecmp(name, "session_preload_libraries") == 0 ||
 		pg_strcasecmp(name, "shared_preload_libraries") == 0 ||
 		pg_strcasecmp(name, "temp_tablespaces") == 0 ||
-		pg_strcasecmp(name, "unix_socket_directories") == 0)
+		pg_strcasecmp(name, "unix_socket_directories") == 0 ||
+		pg_strcasecmp(name, "undo_tablespaces") == 0)
 		return true;
 	else
 		return false;

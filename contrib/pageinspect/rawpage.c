@@ -17,6 +17,8 @@
 
 #include "access/htup_details.h"
 #include "access/relation.h"
+#include "access/undolog.h"
+#include "access/undopage.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_type.h"
 #include "funcapi.h"
@@ -82,6 +84,61 @@ get_raw_page(PG_FUNCTION_ARGS)
 				 errhint("Run the updated pageinspect.sql script.")));
 
 	raw_page = get_raw_page_internal(relname, MAIN_FORKNUM, blkno);
+
+	PG_RETURN_BYTEA_P(raw_page);
+}
+
+/*
+ * get_undo_raw_page
+ *
+ * Returns a copy of an undo log page from shared buffers as a bytea
+ */
+PG_FUNCTION_INFO_V1(get_undo_raw_page);
+
+Datum
+get_undo_raw_page(PG_FUNCTION_ARGS)
+{
+	UndoLogNumber logno = PG_GETARG_INT32(0);
+	uint32		blkno = PG_GETARG_UINT32(1);
+	RelFileNode rnode;
+	UndoRecPtr	urp;
+	Buffer		buf;
+	char	   *raw_page_data;
+	bytea	   *raw_page;
+
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 (errmsg("must be superuser to use raw page functions"))));
+
+	if ((blkno * BLCKSZ) >= UndoLogMaxSize)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("blkno %u is beyond the maximum undo log size",
+						blkno)));
+	urp = MakeUndoRecPtr(logno, blkno * BLCKSZ);
+	UndoRecPtrAssignRelFileNode(rnode, urp);
+
+	buf = ReadBufferWithoutRelcache(SMGR_MD,
+									rnode,
+									MAIN_FORKNUM,
+									blkno,
+									RBM_NORMAL,
+									NULL,
+									RELPERSISTENCE_PERMANENT);
+	if (!BufferIsValid(buf))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 (errmsg("block %u of log %u not found", blkno, logno),
+				  errhint("the related part of the log was probably discarded"))));
+
+	LockBuffer(buf, BUFFER_LOCK_SHARE);
+	raw_page = (bytea *) palloc(BLCKSZ + VARHDRSZ);
+	SET_VARSIZE(raw_page, BLCKSZ + VARHDRSZ);
+	raw_page_data = VARDATA(raw_page);
+	memcpy(raw_page_data, BufferGetPage(buf), BLCKSZ);
+	LockBuffer(buf, BUFFER_LOCK_UNLOCK);
+	ReleaseBuffer(buf);
 
 	PG_RETURN_BYTEA_P(raw_page);
 }
@@ -302,6 +359,77 @@ page_header(PG_FUNCTION_ARGS)
 	values[6] = UInt16GetDatum(PageGetPageSize(page));
 	values[7] = UInt16GetDatum(PageGetPageLayoutVersion(page));
 	values[8] = TransactionIdGetDatum(page->pd_prune_xid);
+
+	/* Build and return the tuple. */
+
+	memset(nulls, 0, sizeof(nulls));
+
+	tuple = heap_form_tuple(tupdesc, values, nulls);
+	result = HeapTupleGetDatum(tuple);
+
+	PG_RETURN_DATUM(result);
+}
+
+/*
+ * undo_page_header
+ *
+ * Allows inspection of page header fields of a raw undo page
+ */
+
+PG_FUNCTION_INFO_V1(undo_page_header);
+
+Datum
+undo_page_header(PG_FUNCTION_ARGS)
+{
+	bytea	   *raw_page = PG_GETARG_BYTEA_P(0);
+	int			raw_page_size;
+
+	TupleDesc	tupdesc;
+
+	Datum		result;
+	HeapTuple	tuple;
+	Datum		values[9];
+	bool		nulls[9];
+
+	UndoPageHeader page;
+
+	char		cont_chunk_str[18];
+
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 (errmsg("must be superuser to use raw page functions"))));
+
+	raw_page_size = VARSIZE(raw_page) - VARHDRSZ;
+
+	/*
+	 * Check that enough data was supplied, so that we don't try to access
+	 * fields outside the supplied buffer.
+	 */
+	if (raw_page_size < SizeOfUndoPageHeaderData)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("input page too small (%d bytes)", raw_page_size)));
+
+	page = (UndoPageHeader) VARDATA(raw_page);
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	/* Extract information from the page header */
+
+	values[0] = LSNGetDatum(PageGetLSN(page));
+	values[1] = UInt16GetDatum(page->ud_checksum);
+	values[2] = UInt16GetDatum(page->ud_insertion_point);
+	values[3] = UInt16GetDatum(page->ud_first_record);
+	values[4] = UInt16GetDatum(page->ud_first_chunk);
+	sprintf(cont_chunk_str,
+			"%06X.%010zX",
+			(UndoLogNumber) UndoRecPtrGetLogNo(page->ud_continue_chunk),
+			UndoRecPtrGetOffset(page->ud_continue_chunk));
+	values[5] = CStringGetTextDatum(cont_chunk_str);
+	values[6] = UInt16GetDatum(page->ud_continue_chunk_type);
 
 	/* Build and return the tuple. */
 

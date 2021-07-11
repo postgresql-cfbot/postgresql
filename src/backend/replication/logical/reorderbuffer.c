@@ -5084,6 +5084,7 @@ ResolveCminCmaxDuringDecoding(HTAB *tuplecid_data,
 	ReorderBufferTupleCidEnt *ent;
 	ForkNumber	forkno;
 	BlockNumber blockno;
+	SmgrId		smgrid;
 	bool		updated_mapping = false;
 
 	/*
@@ -5106,7 +5107,7 @@ ResolveCminCmaxDuringDecoding(HTAB *tuplecid_data,
 	 * get relfilenode from the buffer, no convenient way to access it other
 	 * than that.
 	 */
-	BufferGetTag(buffer, &key.relnode, &forkno, &blockno);
+	BufferGetTag(buffer, &smgrid, &key.relnode, &forkno, &blockno);
 
 	/* tuples can only be in the main fork */
 	Assert(forkno == MAIN_FORKNUM);

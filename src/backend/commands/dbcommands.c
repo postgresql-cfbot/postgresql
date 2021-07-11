@@ -28,7 +28,10 @@
 #include "access/htup_details.h"
 #include "access/multixact.h"
 #include "access/tableam.h"
+#include "access/undolog.h"
+#include "access/undorecordset.h"
 #include "access/xact.h"
+#include "access/xactundo.h"
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
 #include "catalog/catalog.h"
@@ -42,6 +45,7 @@
 #include "catalog/pg_tablespace.h"
 #include "commands/comment.h"
 #include "commands/dbcommands.h"
+#include "commands/dbcommands_undo.h"
 #include "commands/dbcommands_xlog.h"
 #include "commands/defrem.h"
 #include "commands/seclabel.h"
@@ -67,20 +71,12 @@
 
 typedef struct
 {
-	Oid			src_dboid;		/* source (template) DB */
-	Oid			dest_dboid;		/* DB we are trying to create */
-} createdb_failure_params;
-
-typedef struct
-{
 	Oid			dest_dboid;		/* DB we are trying to move */
 	Oid			dest_tsoid;		/* tablespace we are trying to move to */
 } movedb_failure_params;
 
 /* non-export function prototypes */
-static void createdb_failure_callback(int code, Datum arg);
 static void movedb(const char *dbname, const char *tblspcname);
-static void movedb_failure_callback(int code, Datum arg);
 static bool get_db_info(const char *name, LOCKMODE lockmode,
 						Oid *dbIdP, Oid *ownerIdP,
 						int *encodingP, bool *dbIsTemplateP, bool *dbAllowConnP,
@@ -89,8 +85,10 @@ static bool get_db_info(const char *name, LOCKMODE lockmode,
 						Oid *dbTablespace, char **dbCollate, char **dbCtype);
 static bool have_createdb_privilege(void);
 static void remove_dbtablespaces(Oid db_id);
+static bool remove_dbtablespace(Oid db_id, Oid tbspid);
 static bool check_db_file_conflict(Oid db_id);
 static int	errdetail_busy_db(int notherbackends, int npreparedxacts);
+static void log_undo_db_create(Oid db_id, Oid tablespace_id);
 
 
 /*
@@ -142,7 +140,6 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	int			dbconnlimit = -1;
 	int			notherbackends;
 	int			npreparedxacts;
-	createdb_failure_params fparms;
 
 	/* Extract options from the statement node tree */
 	foreach(option, stmt->options)
@@ -606,125 +603,114 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 					  | CHECKPOINT_FLUSH_ALL);
 
 	/*
-	 * Once we start copying subdirectories, we need to be able to clean 'em
-	 * up if we fail.  Use an ENSURE block to make sure this happens.  (This
-	 * is not a 100% solution, because of the possibility of failure during
-	 * transaction commit after we leave this routine, but it should handle
-	 * most scenarios.)
+	 * Iterate through all tablespaces of the template database, and copy each
+	 * one to the new database.
 	 */
-	fparms.src_dboid = src_dboid;
-	fparms.dest_dboid = dboid;
-	PG_ENSURE_ERROR_CLEANUP(createdb_failure_callback,
-							PointerGetDatum(&fparms));
+	rel = table_open(TableSpaceRelationId, AccessShareLock);
+	scan = table_beginscan_catalog(rel, 0, NULL);
+	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
-		/*
-		 * Iterate through all tablespaces of the template database, and copy
-		 * each one to the new database.
-		 */
-		rel = table_open(TableSpaceRelationId, AccessShareLock);
-		scan = table_beginscan_catalog(rel, 0, NULL);
-		while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+		Form_pg_tablespace spaceform = (Form_pg_tablespace) GETSTRUCT(tuple);
+		Oid			srctablespace = spaceform->oid;
+		Oid			dsttablespace;
+		char	   *srcpath;
+		char	   *dstpath;
+		struct stat st;
+
+		/* No need to copy global tablespace */
+		if (srctablespace == GLOBALTABLESPACE_OID)
+			continue;
+
+		srcpath = GetDatabasePath(src_dboid, srctablespace);
+
+		if (stat(srcpath, &st) < 0 || !S_ISDIR(st.st_mode) ||
+			directory_is_empty(srcpath))
 		{
-			Form_pg_tablespace spaceform = (Form_pg_tablespace) GETSTRUCT(tuple);
-			Oid			srctablespace = spaceform->oid;
-			Oid			dsttablespace;
-			char	   *srcpath;
-			char	   *dstpath;
-			struct stat st;
-
-			/* No need to copy global tablespace */
-			if (srctablespace == GLOBALTABLESPACE_OID)
-				continue;
-
-			srcpath = GetDatabasePath(src_dboid, srctablespace);
-
-			if (stat(srcpath, &st) < 0 || !S_ISDIR(st.st_mode) ||
-				directory_is_empty(srcpath))
-			{
-				/* Assume we can ignore it */
-				pfree(srcpath);
-				continue;
-			}
-
-			if (srctablespace == src_deftablespace)
-				dsttablespace = dst_deftablespace;
-			else
-				dsttablespace = srctablespace;
-
-			dstpath = GetDatabasePath(dboid, dsttablespace);
-
-			/*
-			 * Copy this subdirectory to the new location
-			 *
-			 * We don't need to copy subdirectories
-			 */
-			copydir(srcpath, dstpath, false);
-
-			/* Record the filesystem change in XLOG */
-			{
-				xl_dbase_create_rec xlrec;
-
-				xlrec.db_id = dboid;
-				xlrec.tablespace_id = dsttablespace;
-				xlrec.src_db_id = src_dboid;
-				xlrec.src_tablespace_id = srctablespace;
-
-				XLogBeginInsert();
-				XLogRegisterData((char *) &xlrec, sizeof(xl_dbase_create_rec));
-
-				(void) XLogInsert(RM_DBASE_ID,
-								  XLOG_DBASE_CREATE | XLR_SPECIAL_REL_UPDATE);
-			}
+			/* Assume we can ignore it */
+			pfree(srcpath);
+			continue;
 		}
-		table_endscan(scan);
-		table_close(rel, AccessShareLock);
+
+		if (srctablespace == src_deftablespace)
+			dsttablespace = dst_deftablespace;
+		else
+			dsttablespace = srctablespace;
+
+		dstpath = GetDatabasePath(dboid, dsttablespace);
+
+		/* Make sure that the files are removed if the creation fails. */
+		log_undo_db_create(dboid, dsttablespace);
 
 		/*
-		 * We force a checkpoint before committing.  This effectively means
-		 * that committed XLOG_DBASE_CREATE operations will never need to be
-		 * replayed (at least not in ordinary crash recovery; we still have to
-		 * make the XLOG entry for the benefit of PITR operations). This
-		 * avoids two nasty scenarios:
+		 * Copy this subdirectory to the new location
 		 *
-		 * #1: When PITR is off, we don't XLOG the contents of newly created
-		 * indexes; therefore the drop-and-recreate-whole-directory behavior
-		 * of DBASE_CREATE replay would lose such indexes.
-		 *
-		 * #2: Since we have to recopy the source database during DBASE_CREATE
-		 * replay, we run the risk of copying changes in it that were
-		 * committed after the original CREATE DATABASE command but before the
-		 * system crash that led to the replay.  This is at least unexpected
-		 * and at worst could lead to inconsistencies, eg duplicate table
-		 * names.
-		 *
-		 * (Both of these were real bugs in releases 8.0 through 8.0.3.)
-		 *
-		 * In PITR replay, the first of these isn't an issue, and the second
-		 * is only a risk if the CREATE DATABASE and subsequent template
-		 * database change both occur while a base backup is being taken.
-		 * There doesn't seem to be much we can do about that except document
-		 * it as a limitation.
-		 *
-		 * Perhaps if we ever implement CREATE DATABASE in a less cheesy way,
-		 * we can avoid this.
+		 * We don't need to copy subdirectories
 		 */
-		RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT);
+		copydir(srcpath, dstpath, false);
 
-		/*
-		 * Close pg_database, but keep lock till commit.
-		 */
-		table_close(pg_database_rel, NoLock);
+		/* Record the filesystem change in XLOG */
+		{
+			xl_dbase_create_rec xlrec;
 
-		/*
-		 * Force synchronous commit, thus minimizing the window between
-		 * creation of the database files and committal of the transaction. If
-		 * we crash before committing, we'll have a DB that's taking up disk
-		 * space but is not in pg_database, which is not good.
-		 */
-		ForceSyncCommit();
+			xlrec.db_id = dboid;
+			xlrec.tablespace_id = dsttablespace;
+			xlrec.src_db_id = src_dboid;
+			xlrec.src_tablespace_id = srctablespace;
+
+			XLogBeginInsert();
+			XLogRegisterData((char *) &xlrec, sizeof(xl_dbase_create_rec));
+
+			(void) XLogInsert(RM_DBASE_ID,
+							  XLOG_DBASE_CREATE | XLR_SPECIAL_REL_UPDATE);
+		}
 	}
-	PG_END_ENSURE_ERROR_CLEANUP(createdb_failure_callback,
-								PointerGetDatum(&fparms));
+	table_endscan(scan);
+	table_close(rel, AccessShareLock);
+
+	/*
+	 * We force a checkpoint before committing.  This effectively means that
+	 * committed XLOG_DBASE_CREATE operations will never need to be replayed
+	 * (at least not in ordinary crash recovery; we still have to make the
+	 * XLOG entry for the benefit of PITR operations). This avoids two nasty
+	 * scenarios:
+	 *
+	 * #1: When PITR is off, we don't XLOG the contents of newly created
+	 * indexes; therefore the drop-and-recreate-whole-directory behavior of
+	 * DBASE_CREATE replay would lose such indexes.
+	 *
+	 * #2: Since we have to recopy the source database during DBASE_CREATE
+	 * replay, we run the risk of copying changes in it that were committed
+	 * after the original CREATE DATABASE command but before the system crash
+	 * that led to the replay.  This is at least unexpected and at worst could
+	 * lead to inconsistencies, eg duplicate table names.
+	 *
+	 * (Both of these were real bugs in releases 8.0 through 8.0.3.)
+	 *
+	 * In PITR replay, the first of these isn't an issue, and the second is
+	 * only a risk if the CREATE DATABASE and subsequent template database
+	 * change both occur while a base backup is being taken. There doesn't
+	 * seem to be much we can do about that except document it as a
+	 * limitation.
+	 *
+	 * Perhaps if we ever implement CREATE DATABASE in a less cheesy way, we
+	 * can avoid this.
+	 */
+	RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT);
+
+	/*
+	 * Close pg_database, but keep lock till commit.
+	 */
+	table_close(pg_database_rel, NoLock);
+
+	/*
+	 * Force synchronous commit, thus minimizing the window between creation
+	 * of the database files and committal of the transaction. If we crash
+	 * before committing, we'll have a DB that's taking up disk space but is
+	 * not in pg_database, which is not good.
+	 *
+	 * TODO Consider if the undo log makes this unnecessary.
+	 */
+	ForceSyncCommit();
 
 	return dboid;
 }
@@ -786,23 +772,6 @@ check_encoding_locale_matches(int encoding, const char *collate, const char *cty
 						collate),
 				 errdetail("The chosen LC_COLLATE setting requires encoding \"%s\".",
 						   pg_encoding_to_char(collate_encoding))));
-}
-
-/* Error cleanup callback for createdb */
-static void
-createdb_failure_callback(int code, Datum arg)
-{
-	createdb_failure_params *fparms = (createdb_failure_params *) DatumGetPointer(arg);
-
-	/*
-	 * Release lock on source database before doing recursive remove. This is
-	 * not essential but it seems desirable to release the lock as soon as
-	 * possible.
-	 */
-	UnlockSharedObject(DatabaseRelationId, fparms->src_dboid, 0, ShareLock);
-
-	/* Throw away any successfully copied subdirectories */
-	remove_dbtablespaces(fparms->dest_dboid);
 }
 
 
@@ -1133,7 +1102,6 @@ movedb(const char *dbname, const char *tblspcname)
 	char	   *dst_dbpath;
 	DIR		   *dstdir;
 	struct dirent *xlde;
-	movedb_failure_params fparms;
 
 	/*
 	 * Look up the target database's OID, and get exclusive lock on it. We
@@ -1290,94 +1258,83 @@ movedb(const char *dbname, const char *tblspcname)
 				 dst_dbpath);
 	}
 
+	/* Make sure that the files are removed if the copying fails. */
+	log_undo_db_create(db_id, dst_tblspcoid);
+
 	/*
-	 * Use an ENSURE block to make sure we remove the debris if the copy fails
-	 * (eg, due to out-of-disk-space).  This is not a 100% solution, because
-	 * of the possibility of failure during transaction commit, but it should
-	 * handle most scenarios.
+	 * Copy files from the old tablespace to the new one
 	 */
-	fparms.dest_dboid = db_id;
-	fparms.dest_tsoid = dst_tblspcoid;
-	PG_ENSURE_ERROR_CLEANUP(movedb_failure_callback,
-							PointerGetDatum(&fparms));
+	copydir(src_dbpath, dst_dbpath, false);
+
+	/*
+	 * Record the filesystem change in XLOG
+	 */
 	{
-		/*
-		 * Copy files from the old tablespace to the new one
-		 */
-		copydir(src_dbpath, dst_dbpath, false);
+		xl_dbase_create_rec xlrec;
 
-		/*
-		 * Record the filesystem change in XLOG
-		 */
-		{
-			xl_dbase_create_rec xlrec;
+		xlrec.db_id = db_id;
+		xlrec.tablespace_id = dst_tblspcoid;
+		xlrec.src_db_id = db_id;
+		xlrec.src_tablespace_id = src_tblspcoid;
 
-			xlrec.db_id = db_id;
-			xlrec.tablespace_id = dst_tblspcoid;
-			xlrec.src_db_id = db_id;
-			xlrec.src_tablespace_id = src_tblspcoid;
+		XLogBeginInsert();
+		XLogRegisterData((char *) &xlrec, sizeof(xl_dbase_create_rec));
 
-			XLogBeginInsert();
-			XLogRegisterData((char *) &xlrec, sizeof(xl_dbase_create_rec));
-
-			(void) XLogInsert(RM_DBASE_ID,
-							  XLOG_DBASE_CREATE | XLR_SPECIAL_REL_UPDATE);
-		}
-
-		/*
-		 * Update the database's pg_database tuple
-		 */
-		ScanKeyInit(&scankey,
-					Anum_pg_database_datname,
-					BTEqualStrategyNumber, F_NAMEEQ,
-					CStringGetDatum(dbname));
-		sysscan = systable_beginscan(pgdbrel, DatabaseNameIndexId, true,
-									 NULL, 1, &scankey);
-		oldtuple = systable_getnext(sysscan);
-		if (!HeapTupleIsValid(oldtuple))	/* shouldn't happen... */
-			ereport(ERROR,
-					(errcode(ERRCODE_UNDEFINED_DATABASE),
-					 errmsg("database \"%s\" does not exist", dbname)));
-
-		MemSet(new_record, 0, sizeof(new_record));
-		MemSet(new_record_nulls, false, sizeof(new_record_nulls));
-		MemSet(new_record_repl, false, sizeof(new_record_repl));
-
-		new_record[Anum_pg_database_dattablespace - 1] = ObjectIdGetDatum(dst_tblspcoid);
-		new_record_repl[Anum_pg_database_dattablespace - 1] = true;
-
-		newtuple = heap_modify_tuple(oldtuple, RelationGetDescr(pgdbrel),
-									 new_record,
-									 new_record_nulls, new_record_repl);
-		CatalogTupleUpdate(pgdbrel, &oldtuple->t_self, newtuple);
-
-		InvokeObjectPostAlterHook(DatabaseRelationId, db_id, 0);
-
-		systable_endscan(sysscan);
-
-		/*
-		 * Force another checkpoint here.  As in CREATE DATABASE, this is to
-		 * ensure that we don't have to replay a committed XLOG_DBASE_CREATE
-		 * operation, which would cause us to lose any unlogged operations
-		 * done in the new DB tablespace before the next checkpoint.
-		 */
-		RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT);
-
-		/*
-		 * Force synchronous commit, thus minimizing the window between
-		 * copying the database files and committal of the transaction. If we
-		 * crash before committing, we'll leave an orphaned set of files on
-		 * disk, which is not fatal but not good either.
-		 */
-		ForceSyncCommit();
-
-		/*
-		 * Close pg_database, but keep lock till commit.
-		 */
-		table_close(pgdbrel, NoLock);
+		(void) XLogInsert(RM_DBASE_ID,
+						  XLOG_DBASE_CREATE | XLR_SPECIAL_REL_UPDATE);
 	}
-	PG_END_ENSURE_ERROR_CLEANUP(movedb_failure_callback,
-								PointerGetDatum(&fparms));
+
+	/*
+	 * Update the database's pg_database tuple
+	 */
+	ScanKeyInit(&scankey,
+				Anum_pg_database_datname,
+				BTEqualStrategyNumber, F_NAMEEQ,
+				CStringGetDatum(dbname));
+	sysscan = systable_beginscan(pgdbrel, DatabaseNameIndexId, true,
+								 NULL, 1, &scankey);
+	oldtuple = systable_getnext(sysscan);
+	if (!HeapTupleIsValid(oldtuple))	/* shouldn't happen... */
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_DATABASE),
+				 errmsg("database \"%s\" does not exist", dbname)));
+
+	MemSet(new_record, 0, sizeof(new_record));
+	MemSet(new_record_nulls, false, sizeof(new_record_nulls));
+	MemSet(new_record_repl, false, sizeof(new_record_repl));
+
+	new_record[Anum_pg_database_dattablespace - 1] = ObjectIdGetDatum(dst_tblspcoid);
+	new_record_repl[Anum_pg_database_dattablespace - 1] = true;
+
+	newtuple = heap_modify_tuple(oldtuple, RelationGetDescr(pgdbrel),
+								 new_record,
+								 new_record_nulls, new_record_repl);
+	CatalogTupleUpdate(pgdbrel, &oldtuple->t_self, newtuple);
+
+	InvokeObjectPostAlterHook(DatabaseRelationId, db_id, 0);
+
+	systable_endscan(sysscan);
+
+	/*
+	 * Force another checkpoint here.  As in CREATE DATABASE, this is to
+	 * ensure that we don't have to replay a committed XLOG_DBASE_CREATE
+	 * operation, which would cause us to lose any unlogged operations done in
+	 * the new DB tablespace before the next checkpoint.
+	 */
+	RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT);
+
+	/*
+	 * Force synchronous commit, thus minimizing the window between copying
+	 * the database files and committal of the transaction. If we crash before
+	 * committing, we'll leave an orphaned set of files on disk, which is not
+	 * fatal but not good either.
+	 */
+	ForceSyncCommit();
+
+	/*
+	 * Close pg_database, but keep lock till commit.
+	 */
+	table_close(pgdbrel, NoLock);
 
 	/*
 	 * Commit the transaction so that the pg_database update is committed. If
@@ -1424,19 +1381,6 @@ movedb(const char *dbname, const char *tblspcname)
 	/* Now it's safe to release the database lock */
 	UnlockSharedObjectForSession(DatabaseRelationId, db_id, 0,
 								 AccessExclusiveLock);
-}
-
-/* Error cleanup callback for movedb */
-static void
-movedb_failure_callback(int code, Datum arg)
-{
-	movedb_failure_params *fparms = (movedb_failure_params *) DatumGetPointer(arg);
-	char	   *dstpath;
-
-	/* Get rid of anything we managed to copy to the target directory */
-	dstpath = GetDatabasePath(fparms->dest_dboid, fparms->dest_tsoid);
-
-	(void) rmtree(dstpath, true);
 }
 
 /*
@@ -1959,29 +1903,15 @@ remove_dbtablespaces(Oid db_id)
 	{
 		Form_pg_tablespace spcform = (Form_pg_tablespace) GETSTRUCT(tuple);
 		Oid			dsttablespace = spcform->oid;
-		char	   *dstpath;
-		struct stat st;
 
 		/* Don't mess with the global tablespace */
 		if (dsttablespace == GLOBALTABLESPACE_OID)
 			continue;
 
-		dstpath = GetDatabasePath(db_id, dsttablespace);
-
-		if (lstat(dstpath, &st) < 0 || !S_ISDIR(st.st_mode))
-		{
-			/* Assume we can ignore it */
-			pfree(dstpath);
+		if (!remove_dbtablespace(db_id, dsttablespace))
 			continue;
-		}
-
-		if (!rmtree(dstpath, true))
-			ereport(WARNING,
-					(errmsg("some useless files may be left behind in old database directory \"%s\"",
-							dstpath)));
 
 		ltblspc = lappend_oid(ltblspc, dsttablespace);
-		pfree(dstpath);
 	}
 
 	ntblspc = list_length(ltblspc);
@@ -2018,6 +1948,35 @@ remove_dbtablespaces(Oid db_id)
 	table_endscan(scan);
 	table_close(rel, AccessShareLock);
 }
+
+/*
+ * Remove a single tablespace.
+ *
+ * Return false if there is no such directory.
+ */
+static bool
+remove_dbtablespace(Oid db_id, Oid tbspid)
+{
+	char	   *path = GetDatabasePath(db_id, tbspid);
+	struct stat st;
+
+	if (lstat(path, &st) < 0 || !S_ISDIR(st.st_mode))
+	{
+		/* Assume we can ignore it */
+		pfree(path);
+		return false;
+	}
+
+	if (!rmtree(path, true))
+		ereport(WARNING,
+				(errmsg("some useless files may be left behind in old database directory \"%s\"",
+						path)));
+
+	pfree(path);
+
+	return true;
+}
+
 
 /*
  * Check for existing files that conflict with a proposed new DB OID;
@@ -2170,15 +2129,63 @@ get_database_name(Oid dbid)
 }
 
 /*
+ * Insert both WAL and UNDO records that will ensure removal of files in case
+ * of rollback or crash.
+ */
+static void
+log_undo_db_create(Oid db_id, Oid tablespace_id)
+{
+	XactUndoContext undo_context;
+	XLogRecPtr	lsn;
+	xu_dbase_create undo_rec;
+	xl_dbase_precreate_rec xlrec;
+	UndoRecData rdata;
+
+	undo_rec.db_id = db_id;
+	undo_rec.tablespace_id = tablespace_id;
+
+	rdata.data = (char *) &undo_rec;
+	rdata.len = sizeof(undo_rec);
+	rdata.next = NULL;
+
+	PrepareXactUndoData(&undo_context, RELPERSISTENCE_PERMANENT,
+						GetUndoDataSize(&rdata));
+	SerializeUndoData(&undo_context.data, RM_DBASE_ID, UNDO_DBASE_CREATE,
+					  &rdata);
+
+	START_CRIT_SECTION();
+
+	XLogBeginInsert();
+
+	/* Insert the UNDO record. */
+	InsertXactUndoData(&undo_context, 0);
+
+	/* Insert XLOG_DBASE_PRECREATE record to WAL. */
+	xlrec.db_id = db_id;
+	xlrec.tablespace_id = tablespace_id;
+
+	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+	lsn = XLogInsert(RM_DBASE_ID, XLOG_DBASE_PRECREATE);
+	SetXactUndoPageLSNs(&undo_context, lsn);
+
+	/*
+	 * Make sure that we do not miss reconstruction of the undo log during
+	 * recovery if the server crashes right after creation of the files.
+	 */
+	XLogFlush(lsn);
+
+	END_CRIT_SECTION();
+
+	CleanupXactUndoInsertion(&undo_context);
+}
+
+/*
  * DATABASE resource manager's routines
  */
 void
 dbase_redo(XLogReaderState *record)
 {
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
-
-	/* Backup blocks are not used in dbase records */
-	Assert(!XLogRecHasAnyBlockRefs(record));
 
 	if (info == XLOG_DBASE_CREATE)
 	{
@@ -2216,6 +2223,17 @@ dbase_redo(XLogReaderState *record)
 		 * We don't need to copy subdirectories
 		 */
 		copydir(src_path, dst_path, false);
+	}
+	else if (info == XLOG_DBASE_PRECREATE)
+	{
+		xl_dbase_precreate_rec *xlrec = (xl_dbase_precreate_rec *) XLogRecGetData(record);
+		xu_dbase_create undo_rec;
+
+		undo_rec.db_id = xlrec->db_id;
+		undo_rec.tablespace_id = xlrec->tablespace_id;
+
+		XactUndoReplay(record, RM_DBASE_ID, UNDO_DBASE_CREATE, &undo_rec,
+					   sizeof(undo_rec));
 	}
 	else if (info == XLOG_DBASE_DROP)
 	{
@@ -2275,6 +2293,43 @@ dbase_redo(XLogReaderState *record)
 			UnlockSharedObjectForSession(DatabaseRelationId, xlrec->db_id, 0, AccessExclusiveLock);
 		}
 	}
+	else if (info == XLOG_DBASE_DROP_DIR)
+	{
+		xl_dbase_drop_dir_rec *xlrec = (xl_dbase_drop_dir_rec *) XLogRecGetData(record);
+
+		remove_dbtablespace(xlrec->db_id, xlrec->tablespace_id);
+	}
 	else
 		elog(PANIC, "dbase_redo: unknown op code %u", info);
+}
+
+void
+dbase_undo(const WrittenUndoNode *record)
+{
+	xu_dbase_create *undo_rec;
+	xl_dbase_drop_dir_rec xlrec;
+
+	Assert(record->n.rmid == RM_DBASE_ID);
+	/* Currently we only have a single type of DBASE undo record. */
+	Assert(record->n.type == UNDO_DBASE_CREATE);
+
+	/* Access the undo record. */
+	undo_rec = (xu_dbase_create *) record->n.data;
+
+	/*
+	 * XXX Consider if critical section is needed anywhere below. Probably
+	 * not, as failure to execute undo should result in PANIC anyway.
+	 */
+
+	remove_dbtablespace(undo_rec->db_id, undo_rec->tablespace_id);
+
+	XLogBeginInsert();
+
+	/*
+	 * Write a WAL record so that the deletion is replayed on standby.
+	 */
+	xlrec.db_id = undo_rec->db_id;
+	xlrec.tablespace_id = undo_rec->tablespace_id;
+	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+	XLogInsert(RM_SMGR_ID, XLOG_DBASE_DROP_DIR);
 }

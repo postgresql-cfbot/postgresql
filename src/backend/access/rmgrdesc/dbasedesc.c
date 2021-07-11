@@ -14,9 +14,9 @@
  */
 #include "postgres.h"
 
+#include "commands/dbcommands_undo.h"
 #include "commands/dbcommands_xlog.h"
 #include "lib/stringinfo.h"
-
 
 void
 dbase_desc(StringInfo buf, XLogReaderState *record)
@@ -42,6 +42,18 @@ dbase_desc(StringInfo buf, XLogReaderState *record)
 			appendStringInfo(buf, " %u/%u",
 							 xlrec->tablespace_ids[i], xlrec->db_id);
 	}
+	else if (info == XLOG_DBASE_PRECREATE)
+	{
+		xl_dbase_precreate_rec *xlrec = (xl_dbase_precreate_rec *) rec;
+
+		appendStringInfo(buf, " %u/%u", xlrec->tablespace_id, xlrec->db_id);
+	}
+	else if (info == XLOG_DBASE_DROP_DIR)
+	{
+		xl_dbase_drop_dir_rec *xlrec = (xl_dbase_drop_dir_rec *) rec;
+
+		appendStringInfo(buf, " %u/%u", xlrec->tablespace_id, xlrec->db_id);
+	}
 }
 
 const char *
@@ -57,7 +69,27 @@ dbase_identify(uint8 info)
 		case XLOG_DBASE_DROP:
 			id = "DROP";
 			break;
+		case XLOG_DBASE_PRECREATE:
+			id = "PRECREATE";
+			break;
+		case XLOG_DBASE_DROP_DIR:
+			id = "DROP_DIR";
+			break;
 	}
 
 	return id;
+}
+
+void
+dbase_undo_desc(StringInfo buf, const WrittenUndoNode *record)
+{
+	xu_dbase_create *undo_rec;
+
+	Assert(record->n.rmid == RM_DBASE_ID);
+	Assert(record->n.type == UNDO_DBASE_CREATE);
+
+	undo_rec = (xu_dbase_create *) record->n.data;
+
+	appendStringInfo(buf, "CREATE dbid=%u, tsid=%u",
+					 undo_rec->db_id, undo_rec->tablespace_id);
 }

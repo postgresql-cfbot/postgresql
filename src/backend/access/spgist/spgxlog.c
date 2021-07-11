@@ -151,7 +151,7 @@ spgRedoAddLeaf(XLogReaderState *record)
 			SpGistInnerTuple tuple;
 			BlockNumber blknoLeaf;
 
-			XLogRecGetBlockTag(record, 0, NULL, NULL, &blknoLeaf);
+			XLogRecGetBlockTag(record, 0, NULL, NULL, NULL, &blknoLeaf);
 
 			page = BufferGetPage(buffer);
 
@@ -184,7 +184,7 @@ spgRedoMoveLeafs(XLogReaderState *record)
 	XLogRedoAction action;
 	BlockNumber blknoDst;
 
-	XLogRecGetBlockTag(record, 1, NULL, NULL, &blknoDst);
+	XLogRecGetBlockTag(record, 1, NULL, NULL, NULL, &blknoDst);
 
 	fillFakeState(&state, xldata->stateSrc);
 
@@ -328,8 +328,8 @@ spgRedoAddNode(XLogReaderState *record)
 		BlockNumber blkno;
 		BlockNumber blknoNew;
 
-		XLogRecGetBlockTag(record, 0, NULL, NULL, &blkno);
-		XLogRecGetBlockTag(record, 1, NULL, NULL, &blknoNew);
+		XLogRecGetBlockTag(record, 0, NULL, NULL, NULL, &blkno);
+		XLogRecGetBlockTag(record, 1, NULL, NULL, NULL, &blknoNew);
 
 		/*
 		 * In normal operation we would have all three pages (source, dest,
@@ -549,7 +549,7 @@ spgRedoPickSplit(XLogReaderState *record)
 	BlockNumber blknoInner;
 	XLogRedoAction action;
 
-	XLogRecGetBlockTag(record, 2, NULL, NULL, &blknoInner);
+	XLogRecGetBlockTag(record, 2, NULL, NULL, NULL, &blknoInner);
 
 	fillFakeState(&state, xldata->stateSrc);
 
@@ -879,7 +879,7 @@ spgRedoVacuumRedirect(XLogReaderState *record)
 		{
 			RelFileNode node;
 
-			XLogRecGetBlockTag(record, 0, &node, NULL, NULL);
+			XLogRecGetBlockTag(record, 0, NULL, &node, NULL, NULL);
 			ResolveRecoveryConflictWithSnapshot(xldata->newestRedirectXid,
 												node);
 		}

@@ -266,9 +266,9 @@ btree_xlog_split(bool newitemonleft, XLogReaderState *record)
 	BlockNumber rightpagenumber;
 	BlockNumber spagenumber;
 
-	XLogRecGetBlockTag(record, 0, NULL, NULL, &origpagenumber);
-	XLogRecGetBlockTag(record, 1, NULL, NULL, &rightpagenumber);
-	if (!XLogRecGetBlockTag(record, 2, NULL, NULL, &spagenumber))
+	XLogRecGetBlockTag(record, 0, NULL, NULL, NULL, &origpagenumber);
+	XLogRecGetBlockTag(record, 1, NULL, NULL, NULL, &rightpagenumber);
+	if (!XLogRecGetBlockTag(record, 2, NULL, NULL, NULL, &spagenumber))
 		spagenumber = P_NONE;
 
 	/*
@@ -667,7 +667,7 @@ btree_xlog_delete(XLogReaderState *record)
 	{
 		RelFileNode rnode;
 
-		XLogRecGetBlockTag(record, 0, &rnode, NULL, NULL);
+		XLogRecGetBlockTag(record, 0, NULL, &rnode, NULL, NULL);
 
 		ResolveRecoveryConflictWithSnapshot(xlrec->latestRemovedXid, rnode);
 	}

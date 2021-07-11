@@ -1,0 +1,8 @@
+This is a set of tests for the src/backend/access/undo/undoread.c module. It
+tries to hit various corner cases while writing UNDO records that span
+multiple UNDO log segments, UNDO record sets that span multiple chunks, etc.
+
+Since the UNDO log files are rather big (1 TB by default), the test would be
+too expensive if we wanted to involve several logs per transaction. Therefore,
+these tests assume that UNDO_DEBUG macro was defined during build (see
+pg_config_manual.h), making the logs small enough.

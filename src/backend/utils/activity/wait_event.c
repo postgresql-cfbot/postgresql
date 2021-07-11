@@ -248,6 +248,9 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_WAL_WRITER_MAIN:
 			event_name = "WalWriterMain";
 			break;
+		case WAIT_EVENT_DISCARD_WORKER_MAIN:
+			event_name = "DiscardWorkerMain";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 
@@ -680,6 +683,27 @@ pgstat_get_wait_io(WaitEventIO w)
 			break;
 		case WAIT_EVENT_TWOPHASE_FILE_WRITE:
 			event_name = "TwophaseFileWrite";
+			break;
+		case WAIT_EVENT_UNDO_CHECKPOINT_READ:
+			event_name = "UndoCheckpointRead";
+			break;
+		case WAIT_EVENT_UNDO_CHECKPOINT_WRITE:
+			event_name = "UndoCheckpointWrite";
+			break;
+		case WAIT_EVENT_UNDO_CHECKPOINT_SYNC:
+			event_name = "UndoCheckpointSync";
+			break;
+		case WAIT_EVENT_UNDO_FILE_READ:
+			event_name = "UndoFileRead";
+			break;
+		case WAIT_EVENT_UNDO_FILE_WRITE:
+			event_name = "UndoFileWrite";
+			break;
+		case WAIT_EVENT_UNDO_FILE_FLUSH:
+			event_name = "UndoFileFlush";
+			break;
+		case WAIT_EVENT_UNDO_FILE_SYNC:
+			event_name = "UndoFileSync";
 			break;
 		case WAIT_EVENT_WALSENDER_TIMELINE_HISTORY_READ:
 			event_name = "WALSenderTimelineHistoryRead";

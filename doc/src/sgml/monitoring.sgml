@@ -410,6 +410,28 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        See <xref linkend='copy-progress-reporting'/>.
       </entry>
      </row>
+
+     <row>
+      <entry><structname>pg_stat_undo_logs</structname><indexterm><primary>pg_stat_undo_logs</primary></indexterm></entry>
+      <entry>One row for each undo log, showing usage information about the
+       undo log. See <xref linkend="pg-stat-undo-logs-view"/> for details.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structname>pg_stat_undo_chunks</structname><indexterm><primary>pg_stat_undo_chunks</primary></indexterm></entry>
+      <entry>One row for each undo log chunk, showing pointer, size and
+       header. See <xref linkend="pg-stat-undo-chunks-view"/> for details.
+      </entry>
+     </row>
+
+     <row>
+      <entry><structname>pg_stat_undo_records</structname><indexterm><primary>pg_stat_undo_records</primary></indexterm></entry>
+      <entry>One row for each undo log record, showing pointer, size and
+       description.See <xref linkend="pg-stat-undo-records-view"/> for
+       details.
+      </entry>
+     </row>
     </tbody>
    </tgroup>
   </table>
@@ -1495,6 +1517,30 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry>Waiting for a write of a two phase state file.</entry>
      </row>
      <row>
+      <entry><literal>UndoCheckpointRead</literal></entry>
+      <entry>Waiting for a read from an undo checkpoint file.</entry>
+     </row>
+     <row>
+      <entry><literal>UndoCheckpointSync</literal></entry>
+      <entry>Waiting for changes to an undo checkpoint file to reach stable storage.</entry>
+     </row>
+     <row>
+      <entry><literal>UndoCheckpointWrite</literal></entry>
+      <entry>Waiting for a write to an undo checkpoint file.</entry>
+     </row>
+      <row>
+      <entry><literal>UndoFileRead</literal></entry>
+      <entry>Waiting for a read from an undo data file.</entry>
+     </row>
+     <row>
+      <entry><literal>UndoFileSync</literal></entry>
+      <entry>Waiting for changes to an undo data file to reach stable storage.</entry>
+     </row>
+     <row>
+      <entry><literal>UndoFileWrite</literal></entry>
+      <entry>Waiting for a write to an undo data file.</entry>
+     </row>
+     <row>
       <entry><literal>WALBootstrapSync</literal></entry>
       <entry>Waiting for WAL to reach durable storage during
        bootstrapping.</entry>
@@ -2278,6 +2324,192 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
    per WAL sender process, showing statistics about replication to that
    sender's connected standby server.  Only directly connected standbys are
    listed; no information is available about downstream standby servers.
+  </para>
+
+  <table id="pg-stat-undo-logs-view" xreflabel="pg_stat_undo_logs">
+   <title><structname>pg_stat_undo_logs</structname> View</title>
+
+   <tgroup cols="3">
+    <thead>
+    <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><structfield>logno</structfield></entry>
+     <entry><type>oid</type></entry>
+     <entry>Identifier of this undo log</entry>
+    </row>
+    <row>
+     <entry><structfield>category</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Persistence level of data stored in this undo log; one of
+      <literal>permanent</literal>, <literal>unlogged</literal> or
+      <literal>temporary</literal>, or the special value
+      <literal>shared</literal> for multi-transactional data.</entry>
+    </row>
+    <row>
+     <entry><structfield>tablespace</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Tablespace that holds physical storage of this undo log.</entry>
+    </row>
+    <row>
+     <entry><structfield>begin</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Location of the first byte of physical storage in this undo
+      log.</entry>
+    </row>
+    <row>
+     <entry><structfield>discard</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Location of the oldest data in this undo log.</entry>
+    </row>
+    <row>
+     <entry><structfield>insert</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Location where the next data will be written in this undo
+      log.</entry>
+    </row>
+    <row>
+     <entry><structfield>end</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Location one byte past the end of the allocated physical storage
+      backing this undo log.</entry>
+    </row>
+    <row>
+     <entry><structfield>xid</structfield></entry>
+     <entry><type>xid</type></entry>
+     <entry>Transaction currently attached to this undo log
+      for writing.</entry>
+    </row>
+    <row>
+     <entry><structfield>pid</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Process ID of the backend currently attached to this undo log
+      for writing, or NULL if none.</entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The <structname>pg_stat_undo_logs</structname> view will have one row for
+   each undo log that has been allocated.
+   Each backend that has written undo data is associated with one or more undo
+   log, and is the only backend that is allowed to write data to those undo
+   logs.  Backends can be associated with up to three undo logs at a time,
+   because different undo logs are used for the undo data associated with
+   permanent, unlogged and temporary relations.
+  </para>
+
+  <table id="pg-stat-undo-chunks-view" xreflabel="pg_stat_undo_chunks">
+   <title><structname>pg_stat_undo_chunks</structname> View</title>
+
+   <tgroup cols="3">
+    <thead>
+    <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+     <entry><structfield>logno</structfield></entry>
+     <entry><type>integer</type></entry>
+     <entry>Identifier of the containing undo log</entry>
+    </row>
+    <row>
+     <entry><structfield>start</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Start pointer of this chunk.</entry>
+    </row>
+    <row>
+     <entry><structfield>prev</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Pointer to the previous chunk of the same undo record set or
+     NULL if this is the first chunk of the set.</entry>
+    </row>
+    <row>
+     <entry><structfield>size</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>Size of the chunk.</entry>
+    </row>
+    <row>
+     <entry><structfield>discarded</structfield></entry>
+     <entry><type>boolean</type></entry>
+     <entry><literal>true</literal> if the chunk is considered
+     discared, <literal>false</literal> if it might still contain useful
+     data.</entry>
+    </row>
+    <row>
+     <entry><structfield>type</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Type of the chunk.</entry>
+    </row>
+    <row>
+     <entry><structfield>type_header</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Type specific header.</entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The <structname>pg_stat_undo_chunks</structname> view will have one row for
+   each undo log record set chunk that has been created and not discarded
+   yet. Each undo log contains one or more chunks, but a chunk cannot span log
+   boundary. Therefore, if the containing undo record set reached the log
+   boundary, a new chunk is created for it in another log.
+  </para>
+
+  <table id="pg-stat-undo-records-view" xreflabel="pg_stat_undo_records">
+   <title><structname>pg_stat_undo_records</structname> View</title>
+
+   <tgroup cols="3">
+    <thead>
+    <row>
+      <entry>Column</entry>
+      <entry>Type</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+   <tbody>
+    <row>
+      <entry><structfield>start</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Start pointer of this record.</entry>
+    </row>
+    <row>
+     <entry><structfield>size</structfield></entry>
+     <entry><type>bigint</type></entry>
+     <entry>Size of the record.</entry>
+    </row>
+    <row>
+     <entry><structfield>rmid</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Resource manager identifier.</entry>
+    </row>
+    <row>
+     <entry><structfield>desc</structfield></entry>
+     <entry><type>text</type></entry>
+     <entry>Description of the record.</entry>
+    </row>
+   </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The <structname>pg_stat_undo_records</structname> view will have one row
+   for each undo log record. Each record must fit into an existing undo log
+   record set chunks.
   </para>
 
   <table id="pg-stat-replication-view" xreflabel="pg_stat_replication">

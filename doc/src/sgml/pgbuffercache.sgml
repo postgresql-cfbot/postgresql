@@ -62,6 +62,15 @@
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>smgrid</structfield> <type>integer</type>
+        </para>
+        <para>
+         Block storage manager ID.  0 for regular relation data.
+        </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>relfilenode</structfield> <type>oid</type>
        (references <link linkend="catalog-pg-class"><structname>pg_class</structname></link>.<structfield>relfilenode</structfield>)
       </para>

@@ -1591,9 +1591,10 @@ sendFile(const char *readfilename, const char *tarfilename,
 	char	   *page;
 	size_t		pad;
 	PageHeader	phdr;
-	int			segmentno = 0;
+	BlockNumber first_blkno = 0;
 	char	   *segmentpath;
 	bool		verify_checksum = false;
+
 	pg_checksum_context checksum_ctx;
 
 	if (pg_checksum_init(&checksum_ctx, manifest->checksum_type) < 0)
@@ -1634,12 +1635,19 @@ sendFile(const char *readfilename, const char *tarfilename,
 			segmentpath = strstr(filename, ".");
 			if (segmentpath != NULL)
 			{
-				segmentno = atoi(segmentpath + 1);
-				if (segmentno == 0)
+				char	   *end;
+
+				if (strstr(readfilename, "undo"))
+					first_blkno = strtol(segmentpath + 1, &end, 16) / BLCKSZ;
+				else
+					first_blkno = strtol(segmentpath + 1, &end, 10) * RELSEG_SIZE;
+				if (*end != '\0')
 					ereport(ERROR,
-							(errmsg("invalid segment number %d in file \"%s\"",
-									segmentno, filename)));
+							(errmsg("invalid segment number in file \"%s\"",
+									filename)));
 			}
+			else
+				first_blkno = 0;
 		}
 	}
 
@@ -1698,7 +1706,7 @@ sendFile(const char *readfilename, const char *tarfilename,
 				 */
 				if (!PageIsNew(page) && PageGetLSN(page) < startptr)
 				{
-					checksum = pg_checksum_page((char *) page, blkno + segmentno * RELSEG_SIZE);
+					checksum = pg_checksum_page((char *) page, blkno + first_blkno);
 					phdr = (PageHeader) page;
 					if (phdr->pd_checksum != checksum)
 					{

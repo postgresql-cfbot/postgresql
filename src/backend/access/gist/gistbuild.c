@@ -456,7 +456,8 @@ gist_indexsortbuild(GISTBuildState *state)
 	smgrwrite(state->indexrel->rd_smgr, MAIN_FORKNUM, GIST_ROOT_BLKNO,
 			  pagestate->page, true);
 	if (RelationNeedsWAL(state->indexrel))
-		log_newpage(&state->indexrel->rd_node, MAIN_FORKNUM, GIST_ROOT_BLKNO,
+		log_newpage(SMGR_MD,
+					&state->indexrel->rd_node, MAIN_FORKNUM, GIST_ROOT_BLKNO,
 					pagestate->page, true);
 
 	pfree(pagestate->page);

@@ -31,6 +31,9 @@
 #include "access/timeline.h"
 #include "access/transam.h"
 #include "access/twophase.h"
+#include "access/undo.h"
+#include "access/undolog.h"
+#include "access/undorecordset.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "access/xlogarchive.h"
@@ -1428,6 +1431,7 @@ checkXLogConsistency(XLogReaderState *record)
 	ForkNumber	forknum;
 	BlockNumber blkno;
 	int			block_id;
+	SmgrId		smgrid;
 
 	/* Records with no backup blocks have no need for consistency checks. */
 	if (!XLogRecHasAnyBlockRefs(record))
@@ -1440,7 +1444,8 @@ checkXLogConsistency(XLogReaderState *record)
 		Buffer		buf;
 		Page		page;
 
-		if (!XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blkno))
+		if (!XLogRecGetBlockTag(record, block_id, &smgrid, &rnode, &forknum,
+								&blkno))
 		{
 			/*
 			 * WAL record doesn't contain a block reference with the given id.
@@ -1465,7 +1470,7 @@ checkXLogConsistency(XLogReaderState *record)
 		 * Read the contents from the current buffer and store it in a
 		 * temporary page.
 		 */
-		buf = XLogReadBufferExtended(rnode, forknum, blkno,
+		buf = XLogReadBufferExtended(smgrid, rnode, forknum, blkno,
 									 RBM_NORMAL_NO_LOG);
 		if (!BufferIsValid(buf))
 			continue;
@@ -5329,6 +5334,7 @@ BootStrapXLOG(void)
 	checkPoint.newestCommitTsXid = InvalidTransactionId;
 	checkPoint.time = (pg_time_t) time(NULL);
 	checkPoint.oldestActiveXid = InvalidTransactionId;
+	checkPoint.oldestFullXidHavingUndo = 0;
 
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
@@ -6923,6 +6929,9 @@ StartupXLOG(void)
 			(errmsg_internal("commit timestamp Xid oldest/newest: %u/%u",
 							 checkPoint.oldestCommitTsXid,
 							 checkPoint.newestCommitTsXid)));
+	ereport(DEBUG1,
+			(errmsg_internal("oldest xid with epoch having undo: " UINT64_FORMAT,
+							 checkPoint.oldestFullXidHavingUndo)));
 	if (!TransactionIdIsNormal(XidFromFullTransactionId(checkPoint.nextXid)))
 		ereport(PANIC,
 				(errmsg("invalid next transaction ID")));
@@ -6938,6 +6947,10 @@ StartupXLOG(void)
 	SetCommitTsLimit(checkPoint.oldestCommitTsXid,
 					 checkPoint.newestCommitTsXid);
 	XLogCtl->ckptFullXid = checkPoint.nextXid;
+
+	/* Read oldest xid having undo from checkpoint and set in proc global. */
+	pg_atomic_write_u64(&ProcGlobal->oldestFullXidHavingUndo,
+						checkPoint.oldestFullXidHavingUndo);
 
 	/*
 	 * Initialize replication slots, before there's a chance to remove
@@ -7046,6 +7059,12 @@ StartupXLOG(void)
 		/* force recovery due to presence of recovery signal file */
 		InRecovery = true;
 	}
+
+	/*
+	 * Recover undo log meta data corresponding to this checkpoint.  We must
+	 * do this after setting the correct value of InRecovery.
+	 */
+	StartupUndo(ControlFile->checkPointCopy.redo);
 
 	/* REDO */
 	if (InRecovery)
@@ -7659,6 +7678,20 @@ StartupXLOG(void)
 		ResetUnloggedRelations(UNLOGGED_RELATION_INIT);
 
 	/*
+	 * If we have reset any unlogged relations, then there must be no
+	 * remaining references pointing to unlogged undo logs, so reset those
+	 * too.
+	 */
+	if (InRecovery)
+		ResetUndoLogs(RELPERSISTENCE_UNLOGGED);
+
+	/*
+	 * We always blow away temporary undo logs, because there can be no
+	 * remaining references to them after a restart.
+	 */
+	ResetUndoLogs(RELPERSISTENCE_TEMP);
+
+	/*
 	 * We don't need the latch anymore. It's not strictly necessary to disown
 	 * it, but let's do it for the sake of tidiness.
 	 */
@@ -8096,6 +8129,19 @@ StartupXLOG(void)
 	 * commit timestamp.
 	 */
 	CompleteCommitTsInitialization();
+
+	/*
+	 * Now that WAL inserts are enabled, we can also probe all undo logs to
+	 * find out if there are any UndoRecordSet chunks that were left open by
+	 * an earlier crash, and tidy up.
+	 */
+	CloseDanglingUndoRecordSets();
+
+	/*
+	 * The undo logs are consistent now, so check all undo record sets and
+	 * apply those belonging to aborted (or not finished) transactions.
+	 */
+	ApplyPendingUndo();
 
 	/*
 	 * All done with end-of-recovery actions.
@@ -9136,6 +9182,9 @@ CreateCheckPoint(int flags)
 		checkPoint.nextOid += ShmemVariableCache->oidCount;
 	LWLockRelease(OidGenLock);
 
+	checkPoint.oldestFullXidHavingUndo =
+		pg_atomic_read_u64(&ProcGlobal->oldestFullXidHavingUndo);
+
 	MultiXactGetCheckptMulti(shutdown,
 							 &checkPoint.nextMulti,
 							 &checkPoint.nextMultiOffset,
@@ -9404,6 +9453,7 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_START(flags);
 	CheckpointStats.ckpt_write_t = GetCurrentTimestamp();
 	CheckPointCLOG();
+	CheckPointUndo(checkPointRedo, ControlFile->checkPointCopy.redo);
 	CheckPointCommitTs();
 	CheckPointSUBTRANS();
 	CheckPointMultiXact();
@@ -10166,6 +10216,10 @@ xlog_redo(XLogReaderState *record)
 		MultiXactAdvanceOldest(checkPoint.oldestMulti,
 							   checkPoint.oldestMultiDB);
 
+
+		pg_atomic_write_u64(&ProcGlobal->oldestFullXidHavingUndo,
+							checkPoint.oldestFullXidHavingUndo);
+
 		/*
 		 * No need to set oldestClogXid here as well; it'll be set when we
 		 * redo an xl_clog_truncate if it changed since initialization.
@@ -10224,6 +10278,8 @@ xlog_redo(XLogReaderState *record)
 		/* ControlFile->checkPointCopy always tracks the latest ckpt XID */
 		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 		ControlFile->checkPointCopy.nextXid = checkPoint.nextXid;
+		ControlFile->checkPointCopy.oldestFullXidHavingUndo =
+			checkPoint.oldestFullXidHavingUndo;
 		LWLockRelease(ControlFileLock);
 
 		/* Update shared-memory copy of checkpoint XID/epoch */
@@ -10269,6 +10325,9 @@ xlog_redo(XLogReaderState *record)
 		/* Handle multixact */
 		MultiXactAdvanceNextMXact(checkPoint.nextMulti,
 								  checkPoint.nextMultiOffset);
+
+		pg_atomic_write_u64(&ProcGlobal->oldestFullXidHavingUndo,
+							checkPoint.oldestFullXidHavingUndo);
 
 		/*
 		 * NB: This may perform multixact truncation when replaying WAL
@@ -10493,7 +10552,7 @@ xlog_block_info(StringInfo buf, XLogReaderState *record)
 		if (!XLogRecHasBlockRef(record, block_id))
 			continue;
 
-		XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blk);
+		XLogRecGetBlockTag(record, block_id, NULL, &rnode, &forknum, &blk);
 		if (forknum != MAIN_FORKNUM)
 			appendStringInfo(buf, "; blkref #%u: rel %u/%u/%u, fork %u, blk %u",
 							 block_id,

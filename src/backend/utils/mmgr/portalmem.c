@@ -672,7 +672,7 @@ HoldPortal(Portal portal)
  * code to be run), false if not.
  */
 bool
-PreCommit_Portals(bool isPrepare)
+PreCommit_Portals(bool isPrepare, bool is_undo)
 {
 	bool		result = false;
 	HASH_SEQ_STATUS status;
@@ -751,7 +751,7 @@ PreCommit_Portals(bool isPrepare)
 		else
 		{
 			/* Zap all non-holdable portals */
-			PortalDrop(portal, true);
+			PortalDrop(portal, !is_undo);
 
 			/* Report we changed state */
 			result = true;

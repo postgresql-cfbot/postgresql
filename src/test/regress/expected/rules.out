@@ -2129,6 +2129,33 @@ pg_stat_sys_tables| SELECT pg_stat_all_tables.relid,
     pg_stat_all_tables.autoanalyze_count
    FROM pg_stat_all_tables
   WHERE ((pg_stat_all_tables.schemaname = ANY (ARRAY['pg_catalog'::name, 'information_schema'::name])) OR (pg_stat_all_tables.schemaname ~ '^pg_toast'::text));
+pg_stat_undo_chunks| SELECT c.logno,
+    c.start,
+    c.prev,
+    c.size,
+    c.discarded,
+    c.type,
+    c.type_header
+   FROM pg_stat_get_undo_logs() l(logno, category, tablespace, begin, discard, insert, "end", xid, pid),
+    LATERAL pg_get_undo_log_chunks(l.discard, l.insert) c(logno, start, prev, size, discarded, type, type_header)
+  ORDER BY c.logno;
+pg_stat_undo_logs| SELECT pg_stat_get_undo_logs.logno,
+    pg_stat_get_undo_logs.category,
+    pg_stat_get_undo_logs.tablespace,
+    pg_stat_get_undo_logs.begin,
+    pg_stat_get_undo_logs.discard,
+    pg_stat_get_undo_logs.insert,
+    pg_stat_get_undo_logs."end",
+    pg_stat_get_undo_logs.xid,
+    pg_stat_get_undo_logs.pid
+   FROM pg_stat_get_undo_logs() pg_stat_get_undo_logs(logno, category, tablespace, begin, discard, insert, "end", xid, pid);
+pg_stat_undo_records| SELECT r.start,
+    r.size,
+    r.rmid,
+    r."desc"
+   FROM pg_stat_get_undo_logs() l(logno, category, tablespace, begin, discard, insert, "end", xid, pid),
+    LATERAL pg_get_undo_log_records(l.discard, l.insert) r(start, size, rmid, "desc")
+  ORDER BY r.start;
 pg_stat_user_functions| SELECT p.oid AS funcid,
     n.nspname AS schemaname,
     p.proname AS funcname,

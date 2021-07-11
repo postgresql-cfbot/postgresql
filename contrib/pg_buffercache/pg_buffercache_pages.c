@@ -15,8 +15,8 @@
 #include "storage/bufmgr.h"
 
 
-#define NUM_BUFFERCACHE_PAGES_MIN_ELEM	8
-#define NUM_BUFFERCACHE_PAGES_ELEM	9
+#define NUM_BUFFERCACHE_PAGES_MIN_ELEM	10
+#define NUM_BUFFERCACHE_PAGES_ELEM	10
 
 PG_MODULE_MAGIC;
 
@@ -25,6 +25,7 @@ PG_MODULE_MAGIC;
  */
 typedef struct
 {
+	SmgrId		smgrid;
 	uint32		bufferid;
 	Oid			relfilenode;
 	Oid			reltablespace;
@@ -102,24 +103,24 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 		tupledesc = CreateTemplateTupleDesc(expected_tupledesc->natts);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 1, "bufferid",
 						   INT4OID, -1, 0);
-		TupleDescInitEntry(tupledesc, (AttrNumber) 2, "relfilenode",
-						   OIDOID, -1, 0);
-		TupleDescInitEntry(tupledesc, (AttrNumber) 3, "reltablespace",
-						   OIDOID, -1, 0);
-		TupleDescInitEntry(tupledesc, (AttrNumber) 4, "reldatabase",
-						   OIDOID, -1, 0);
-		TupleDescInitEntry(tupledesc, (AttrNumber) 5, "relforknumber",
+		TupleDescInitEntry(tupledesc, (AttrNumber) 2, "smgrid",
 						   INT2OID, -1, 0);
-		TupleDescInitEntry(tupledesc, (AttrNumber) 6, "relblocknumber",
+		TupleDescInitEntry(tupledesc, (AttrNumber) 3, "relfilenode",
+						   OIDOID, -1, 0);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 4, "reltablespace",
+						   OIDOID, -1, 0);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 5, "reldatabase",
+						   OIDOID, -1, 0);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 6, "relforknumber",
+						   INT2OID, -1, 0);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 7, "relblocknumber",
 						   INT8OID, -1, 0);
-		TupleDescInitEntry(tupledesc, (AttrNumber) 7, "isdirty",
+		TupleDescInitEntry(tupledesc, (AttrNumber) 8, "isdirty",
 						   BOOLOID, -1, 0);
-		TupleDescInitEntry(tupledesc, (AttrNumber) 8, "usage_count",
+		TupleDescInitEntry(tupledesc, (AttrNumber) 9, "usage_count",
 						   INT2OID, -1, 0);
-
-		if (expected_tupledesc->natts == NUM_BUFFERCACHE_PAGES_ELEM)
-			TupleDescInitEntry(tupledesc, (AttrNumber) 9, "pinning_backends",
-							   INT4OID, -1, 0);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 10, "pinning_backends",
+						   INT4OID, -1, 0);
 
 		fctx->tupdesc = BlessTupleDesc(tupledesc);
 
@@ -153,6 +154,7 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 			buf_state = LockBufHdr(bufHdr);
 
 			fctx->record[i].bufferid = BufferDescriptorGetBuffer(bufHdr);
+			fctx->record[i].smgrid = bufHdr->tag.smgrid;
 			fctx->record[i].relfilenode = bufHdr->tag.rnode.relNode;
 			fctx->record[i].reltablespace = bufHdr->tag.rnode.spcNode;
 			fctx->record[i].reldatabase = bufHdr->tag.rnode.dbNode;
@@ -204,28 +206,29 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 			nulls[5] = true;
 			nulls[6] = true;
 			nulls[7] = true;
-			/* unused for v1.0 callers, but the array is always long enough */
 			nulls[8] = true;
+			nulls[9] = true;
 		}
 		else
 		{
-			values[1] = ObjectIdGetDatum(fctx->record[i].relfilenode);
+			values[1] = Int16GetDatum(fctx->record[i].smgrid);
 			nulls[1] = false;
-			values[2] = ObjectIdGetDatum(fctx->record[i].reltablespace);
+			values[2] = ObjectIdGetDatum(fctx->record[i].relfilenode);
 			nulls[2] = false;
-			values[3] = ObjectIdGetDatum(fctx->record[i].reldatabase);
+			values[3] = ObjectIdGetDatum(fctx->record[i].reltablespace);
 			nulls[3] = false;
-			values[4] = ObjectIdGetDatum(fctx->record[i].forknum);
+			values[4] = ObjectIdGetDatum(fctx->record[i].reldatabase);
 			nulls[4] = false;
-			values[5] = Int64GetDatum((int64) fctx->record[i].blocknum);
+			values[5] = ObjectIdGetDatum(fctx->record[i].forknum);
 			nulls[5] = false;
-			values[6] = BoolGetDatum(fctx->record[i].isdirty);
+			values[6] = Int64GetDatum((int64) fctx->record[i].blocknum);
 			nulls[6] = false;
-			values[7] = Int16GetDatum(fctx->record[i].usagecount);
+			values[7] = BoolGetDatum(fctx->record[i].isdirty);
 			nulls[7] = false;
-			/* unused for v1.0 callers, but the array is always long enough */
-			values[8] = Int32GetDatum(fctx->record[i].pinning_backends);
+			values[8] = Int16GetDatum(fctx->record[i].usagecount);
 			nulls[8] = false;
+			values[9] = Int32GetDatum(fctx->record[i].pinning_backends);
+			nulls[9] = false;
 		}
 
 		/* Build and return the tuple. */

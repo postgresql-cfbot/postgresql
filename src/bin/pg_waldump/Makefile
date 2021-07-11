@@ -13,6 +13,7 @@ OBJS = \
 	compat.o \
 	pg_waldump.o \
 	rmgrdesc.o \
+	undorecordset_xlog.o \
 	xlogreader.o
 
 override CPPFLAGS := -DFRONTEND $(CPPFLAGS)
@@ -29,6 +30,9 @@ pg_waldump: $(OBJS) | submake-libpgport
 xlogreader.c: % : $(top_srcdir)/src/backend/access/transam/%
 	rm -f $@ && $(LN_S) $< .
 
+undorecordset_xlog.c: % : $(top_srcdir)/src/backend/access/undo/%
+	rm -f $@ && $(LN_S) $< .
+
 $(RMGRDESCSOURCES): % : $(top_srcdir)/src/backend/access/rmgrdesc/%
 	rm -f $@ && $(LN_S) $< .
 
@@ -42,7 +46,8 @@ uninstall:
 	rm -f '$(DESTDIR)$(bindir)/pg_waldump$(X)'
 
 clean distclean maintainer-clean:
-	rm -f pg_waldump$(X) $(OBJS) $(RMGRDESCSOURCES) xlogreader.c
+	rm -f pg_waldump$(X) $(OBJS) $(RMGRDESCSOURCES) xlogreader.c \
+		undorecordset_xlog.c
 	rm -rf tmp_check
 
 check:

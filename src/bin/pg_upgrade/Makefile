@@ -22,6 +22,7 @@ OBJS = \
 	relfilenode.o \
 	server.o \
 	tablespace.o \
+	undo.o \
 	util.o \
 	version.o
 

@@ -82,11 +82,14 @@
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/twophase_rmgr.h"
+#include "access/undorecordset.h"
+#include "access/xactundo.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "access/xlogreader.h"
 #include "access/xlogutils.h"
+#include "catalog/pg_class.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
 #include "funcapi.h"
@@ -695,6 +698,35 @@ GetPreparedTransactionList(GlobalTransaction *gxacts)
 	return num;
 }
 
+/*
+ * Check if given transaction is prepared one. Currently this is called after
+ * RecoverPreparedTransactions() and before any backend / background worker
+ * could connect, so the transaction data should be consistent.
+ */
+bool
+TransactionIdIsPrepared(TransactionId xid)
+{
+	GlobalTransaction array;
+	int			num,
+				i;
+	bool		found = false;
+
+	num = GetPreparedTransactionList(&array);
+	if (num == 0)
+		return false;
+
+	for (i = 0; i < num; i++)
+	{
+		if (array[0].xid == xid)
+		{
+			found = true;
+			break;
+		}
+	}
+
+	pfree(array);
+	return found;
+}
 
 /* Working status for pg_prepared_xact */
 typedef struct
@@ -904,7 +936,7 @@ TwoPhaseGetDummyProc(TransactionId xid, bool lock_held)
 /*
  * Header for a 2PC state file
  */
-#define TWOPHASE_MAGIC	0x57F94534	/* format identifier */
+#define TWOPHASE_MAGIC	0x57F94535	/* format identifier */
 
 typedef xl_xact_prepare TwoPhaseFileHeader;
 
@@ -1017,6 +1049,9 @@ StartPrepare(GlobalTransaction gxact)
 														  &hdr.initfileinval);
 	hdr.gidlen = strlen(gxact->gid) + 1;	/* Include '\0' */
 
+	GetCurrentUndoRange(&hdr.urs_begin, &hdr.urs_end,
+						UNDOPERSISTENCE_PERMANENT);
+
 	save_state_data(&hdr, sizeof(TwoPhaseFileHeader));
 	save_state_data(gxact->gid, hdr.gidlen);
 
@@ -1093,6 +1128,15 @@ EndPrepare(GlobalTransaction gxact)
 				 errmsg("two-phase state file maximum length exceeded")));
 
 	/*
+	 * Prepare to mark any active UndoRecordSets closed as part of the
+	 * XLOG_XACT_PREPARE record we're about to write.
+	 *
+	 * XXX. It seems like this might require that we adjust the argument we're
+	 * about to pass to XLogEnsureRecordSpace upward.
+	 */
+	UndoPrepareToMarkClosedForXactLevel(1);
+
+	/*
 	 * Now writing 2PC state data to WAL. We let the WAL's CRC protection
 	 * cover us, so no need to calculate a separate CRC.
 	 *
@@ -1115,9 +1159,19 @@ EndPrepare(GlobalTransaction gxact)
 	for (record = records.head; record != NULL; record = record->next)
 		XLogRegisterData(record->data, record->len);
 
+	UndoMarkClosedForXactLevel(1);
+	UndoXLogRegisterBuffersForXactLevel(1, 0);
+
 	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
 	gxact->prepare_end_lsn = XLogInsert(RM_XACT_ID, XLOG_XACT_PREPARE);
+
+	/*
+	 * Set the page LSNs for any undo pages we just updated. Also release the
+	 * buffer locks and destroy the underlying UndoRecordSet objects.
+	 */
+	UndoPageSetLSNForXactLevel(1, gxact->prepare_end_lsn);
+	UndoDestroyForXactLevel(1);
 
 	if (replorigin)
 	{
@@ -1543,6 +1597,30 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 		ProcessRecords(bufptr, xid, twophase_postabort_callbacks);
 
 	PredicateLockTwoPhaseFinish(xid, isCommit);
+
+	/* Execute undo records if there are some. */
+	/* TODO Do we need to care of unlogged tables? */
+	if (!isCommit && hdr->urs_begin != InvalidUndoRecPtr)
+	{
+		Assert(hdr->urs_end != InvalidUndoRecPtr);
+
+		/*
+		 * The TRANS_UNDO state is not used here because the ROLBACK PREPARED
+		 * command runs in another transaction than the transaction being
+		 * rolled back.
+		 */
+		PerformUndoActionsRange(hdr->urs_begin, hdr->urs_end,
+								RELPERSISTENCE_PERMANENT, 1);
+
+		/*
+		 * Mark the URS applied. If this fails due to crash,
+		 * ApplyPendingUndo() will do it during restart.
+		 */
+		UndoSetFlag(hdr->urs_begin,
+					SizeOfUndoRecordSetChunkHeader +
+					offsetof(XactUndoRecordSetHeader, applied),
+					RELPERSISTENCE_PERMANENT);
+	}
 
 	/* Clear shared memory state */
 	RemoveGXact(gxact);
@@ -2312,8 +2390,14 @@ RecordTransactionAbortPrepared(TransactionId xid,
 	 * Emit the XLOG commit record. Note that we mark 2PC aborts as
 	 * potentially having AccessExclusiveLocks since we don't know whether or
 	 * not they do.
+	 *
+	 * Pass -1 as the nestingLevel to XactLogAbortRecord so that it doesn't
+	 * try to perform any undo-related operations. Any UndoRecordSet
+	 * associated with the transaction should have already been closed when
+	 * the transaction was prepared, and any UndoRecordSet we have open now is
+	 * irrelevant to the prepared transaction.
 	 */
-	recptr = XactLogAbortRecord(GetCurrentTimestamp(),
+	recptr = XactLogAbortRecord(-1, GetCurrentTimestamp(),
 								nchildren, children,
 								nrels, rels,
 								MyXactFlags | XACT_FLAGS_ACQUIREDACCESSEXCLUSIVELOCK,

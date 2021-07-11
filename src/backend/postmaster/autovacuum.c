@@ -2559,8 +2559,11 @@ do_autovacuum(void)
 						   tab->at_datname, tab->at_nspname, tab->at_relname);
 			EmitErrorReport();
 
-			/* this resets ProcGlobal->statusFlags[i] too */
-			AbortOutOfAnyTransaction();
+			/*
+			 * This resets ProcGlobal->statusFlags[i] too. No undo should be
+			 * produced by this transaction.
+			 */
+			AbortOutOfAnyTransaction(false);
 			FlushErrorState();
 			MemoryContextResetAndDeleteChildren(PortalContext);
 
@@ -2752,8 +2755,11 @@ perform_work_item(AutoVacuumWorkItem *workitem)
 				   cur_datname, cur_nspname, cur_relname);
 		EmitErrorReport();
 
-		/* this resets ProcGlobal->statusFlags[i] too */
-		AbortOutOfAnyTransaction();
+		/*
+		 * This resets ProcGlobal->statusFlags[i] too. No undo should be
+		 * produced by this transaction.
+		 */
+		AbortOutOfAnyTransaction(false);
 		FlushErrorState();
 		MemoryContextResetAndDeleteChildren(PortalContext);
 

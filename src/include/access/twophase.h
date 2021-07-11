@@ -40,6 +40,7 @@ extern BackendId TwoPhaseGetDummyBackendId(TransactionId xid, bool lock_held);
 extern GlobalTransaction MarkAsPreparing(TransactionId xid, const char *gid,
 										 TimestampTz prepared_at,
 										 Oid owner, Oid databaseid);
+extern bool TransactionIdIsPrepared(TransactionId xid);
 
 extern void StartPrepare(GlobalTransaction gxact);
 extern void EndPrepare(GlobalTransaction gxact);

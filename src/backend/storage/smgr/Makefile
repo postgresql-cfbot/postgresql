@@ -14,6 +14,7 @@ include $(top_builddir)/src/Makefile.global
 
 OBJS = \
 	md.o \
-	smgr.o
+	smgr.o \
+	undofile.o
 
 include $(top_srcdir)/src/backend/common.mk

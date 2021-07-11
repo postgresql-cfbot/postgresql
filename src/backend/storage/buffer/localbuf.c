@@ -68,7 +68,8 @@ PrefetchLocalBuffer(SMgrRelation smgr, ForkNumber forkNum,
 	BufferTag	newTag;			/* identity of requested block */
 	LocalBufferLookupEnt *hresult;
 
-	INIT_BUFFERTAG(newTag, smgr->smgr_rnode.node, forkNum, blockNum);
+	INIT_BUFFERTAG(newTag, smgr->smgr_which,
+				   smgr->smgr_rnode.node, forkNum, blockNum);
 
 	/* Initialize local buffers if first request in this session */
 	if (LocalBufHash == NULL)
@@ -117,7 +118,8 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	bool		found;
 	uint32		buf_state;
 
-	INIT_BUFFERTAG(newTag, smgr->smgr_rnode.node, forkNum, blockNum);
+	INIT_BUFFERTAG(newTag, smgr->smgr_which,
+				   smgr->smgr_rnode.node, forkNum, blockNum);
 
 	/* Initialize local buffers if first request in this session */
 	if (LocalBufHash == NULL)
@@ -215,7 +217,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
 
 		/* Find smgr relation for buffer */
-		oreln = smgropen(bufHdr->tag.rnode, MyBackendId);
+		oreln = smgropen(bufHdr->tag.smgrid, bufHdr->tag.rnode, MyBackendId);
 
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
@@ -276,6 +278,50 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 
 	*foundPtr = false;
 	return bufHdr;
+}
+
+/*
+ * DiscardLocalBuffer - drop a buffer from local buffers
+ *
+ * This is similar to bufmgr.c's DiscardBuffer, except that we do not need
+ * to do any locking since this is all local.  As with that function, this
+ * must be used very carefully, since we'll cheerfully throw away dirty
+ * buffers without any attempt to write them.
+ */
+void
+DiscardLocalBuffer(RelFileNode rnode, ForkNumber forkNum, BlockNumber blockNum)
+{
+	SMgrRelation smgr = smgropen(SMGR_UNDO, rnode, BackendIdForTempRelations());
+	BufferTag	tag;			/* identity of target block */
+	LocalBufferLookupEnt *hresult;
+	BufferDesc *bufHdr;
+	uint32		buf_state;
+
+	/*
+	 * If somehow this is the first request in the session, there's nothing to
+	 * do.  (This probably shouldn't happen, though.)
+	 */
+	if (LocalBufHash == NULL)
+		return;
+
+	/* create a tag so we can lookup the buffer */
+	INIT_BUFFERTAG(tag, smgr->smgr_which, smgr->smgr_rnode.node, forkNum,
+				   blockNum);
+
+	/* see if the block is in the local buffer pool */
+	hresult = (LocalBufferLookupEnt *)
+		hash_search(LocalBufHash, (void *) &tag, HASH_REMOVE, NULL);
+
+	/* didn't find it, so nothing to do */
+	if (!hresult)
+		return;
+
+	/* mark buffer invalid */
+	bufHdr = GetLocalBufferDescriptor(hresult->id);
+	CLEAR_BUFFERTAG(bufHdr->tag);
+	buf_state = pg_atomic_read_u32(&bufHdr->state);
+	buf_state &= ~(BM_VALID | BM_TAG_VALID | BM_DIRTY);
+	pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
 }
 
 /*

@@ -215,6 +215,7 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY pgVerifyBackup     SYSTEM "pg_verifybackup.sgml">
 <!ENTITY pgtestfsync        SYSTEM "pgtestfsync.sgml">
 <!ENTITY pgtesttiming       SYSTEM "pgtesttiming.sgml">
+<!ENTITY pgundodump         SYSTEM "pg_undodump.sgml">
 <!ENTITY pgupgrade          SYSTEM "pgupgrade.sgml">
 <!ENTITY pgwaldump          SYSTEM "pg_waldump.sgml">
 <!ENTITY postgres           SYSTEM "postgres-ref.sgml">

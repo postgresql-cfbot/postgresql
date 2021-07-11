@@ -75,6 +75,7 @@ OBJS_COMMON = \
 	scram-common.o \
 	string.o \
 	stringinfo.o \
+	undo_parser.o \
 	unicode_norm.o \
 	username.o \
 	wait_error.o \

@@ -1,0 +1,6 @@
+/pg_undodump
+
+# Source files copied from src/backend/access/rmgrdesc/
+/dbasedesc.c
+/smgrdesc.c
+/undoxacttestdesc.c

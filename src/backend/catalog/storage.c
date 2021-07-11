@@ -20,12 +20,16 @@
 #include "postgres.h"
 
 #include "access/parallel.h"
+#include "access/undolog.h"
+#include "access/undorecordset.h"
 #include "access/visibilitymap.h"
 #include "access/xact.h"
+#include "access/xactundo.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
 #include "catalog/storage.h"
+#include "catalog/storage_undo.h"
 #include "catalog/storage_xlog.h"
 #include "miscadmin.h"
 #include "storage/freespace.h"
@@ -72,7 +76,11 @@ typedef struct PendingRelSync
 	bool		is_truncated;	/* Has the file experienced truncation? */
 } PendingRelSync;
 
+
 static PendingRelDelete *pendingDeletes = NULL; /* head of linked list */
+
+static void log_undo_smgr_create(xu_smgr_create * undo_rec);
+
 HTAB	   *pendingSyncHash = NULL;
 
 
@@ -117,7 +125,6 @@ AddPendingSync(const RelFileNode *rnode)
 SMgrRelation
 RelationCreateStorage(RelFileNode rnode, char relpersistence)
 {
-	PendingRelDelete *pending;
 	SMgrRelation srel;
 	BackendId	backend;
 	bool		needs_wal;
@@ -143,21 +150,29 @@ RelationCreateStorage(RelFileNode rnode, char relpersistence)
 			return NULL;		/* placate compiler */
 	}
 
-	srel = smgropen(rnode, backend);
-	smgrcreate(srel, MAIN_FORKNUM, false);
+	/*
+	 * Before we create any files on disk, create an undo record that will
+	 * undo that on rollback.  Also log that in the WAL with a flush, so that
+	 * there is no recovery scenario where we've created files on disk but we
+	 * don't have undo records (or the ability to recreate them) so we can
+	 * unlink the files.
+	 *
+	 * There's no reason to write undo in bootstrap mode.
+	 */
+	if (!IsBootstrapProcessingMode())
+	{
+		xu_smgr_create undo_rec;
 
+		undo_rec.rnode = rnode;
+		undo_rec.relpersistence = relpersistence;
+
+		log_undo_smgr_create(&undo_rec);
+	}
+
+	srel = smgropen(SMGR_MD, rnode, backend);
+	smgrcreate(srel, MAIN_FORKNUM, false);
 	if (needs_wal)
 		log_smgrcreate(&srel->smgr_rnode.node, MAIN_FORKNUM);
-
-	/* Add the relation to the list of stuff to delete at abort */
-	pending = (PendingRelDelete *)
-		MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelDelete));
-	pending->relnode = rnode;
-	pending->backend = backend;
-	pending->atCommit = false;	/* delete if abort */
-	pending->nestLevel = GetCurrentTransactionNestLevel();
-	pending->next = pendingDeletes;
-	pendingDeletes = pending;
 
 	if (relpersistence == RELPERSISTENCE_PERMANENT && !XLogIsNeeded())
 	{
@@ -166,6 +181,53 @@ RelationCreateStorage(RelFileNode rnode, char relpersistence)
 	}
 
 	return srel;
+}
+
+/*
+ * Insert both WAL and UNDO records that will ensure removal of files in case
+ * of rollback.
+ */
+static void
+log_undo_smgr_create(xu_smgr_create * undo_rec)
+{
+	XactUndoContext undo_context;
+	UndoRecData rdata;
+	XLogRecPtr	lsn;
+	xl_smgr_precreate xlrec;
+
+	rdata.data = (char *) undo_rec;
+	rdata.len = sizeof(xu_smgr_create);
+	rdata.next = NULL;
+
+	PrepareXactUndoData(&undo_context, undo_rec->relpersistence,
+						GetUndoDataSize(&rdata));
+	SerializeUndoData(&undo_context.data, RM_SMGR_ID, UNDO_SMGR_CREATE,
+					  &rdata);
+
+	START_CRIT_SECTION();
+
+	XLogBeginInsert();
+
+	/* Insert the UNDO record. */
+	InsertXactUndoData(&undo_context, 0);
+
+	/* Insert XLOG_SMGR_PRECREATE record to WAL. */
+	xlrec.rnode = undo_rec->rnode;
+	xlrec.relpersistence = undo_rec->relpersistence;
+
+	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+	lsn = XLogInsert(RM_SMGR_ID, XLOG_SMGR_PRECREATE);
+	SetXactUndoPageLSNs(&undo_context, lsn);
+
+	/*
+	 * Make sure that we do not miss reconstruction of the undo log during
+	 * recovery if the server crashes right after creation of the relnode.
+	 */
+	XLogFlush(lsn);
+
+	END_CRIT_SECTION();
+
+	CleanupXactUndoInsertion(&undo_context);
 }
 
 /*
@@ -459,7 +521,8 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 		 * space.
 		 */
 		if (use_wal)
-			log_newpage(&dst->smgr_rnode.node, forkNum, blkno, page, false);
+			log_newpage(SMGR_MD, &dst->smgr_rnode.node, forkNum, blkno, page,
+						false);
 
 		PageSetChecksumInplace(page, blkno);
 
@@ -624,7 +687,7 @@ smgrDoPendingDeletes(bool isCommit)
 			{
 				SMgrRelation srel;
 
-				srel = smgropen(pending->relnode, pending->backend);
+				srel = smgropen(SMGR_MD, pending->relnode, pending->backend);
 
 				/* allocate the initial array, or extend it, if needed */
 				if (maxrels == 0)
@@ -705,7 +768,7 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
 		BlockNumber total_blocks = 0;
 		SMgrRelation srel;
 
-		srel = smgropen(pendingsync->rnode, InvalidBackendId);
+		srel = smgropen(SMGR_MD, pendingsync->rnode, InvalidBackendId);
 
 		/*
 		 * We emit newpage WAL records for smaller relations.
@@ -906,16 +969,33 @@ smgr_redo(XLogReaderState *record)
 	XLogRecPtr	lsn = record->EndRecPtr;
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
 
-	/* Backup blocks are not used in smgr records */
-	Assert(!XLogRecHasAnyBlockRefs(record));
-
 	if (info == XLOG_SMGR_CREATE)
 	{
 		xl_smgr_create *xlrec = (xl_smgr_create *) XLogRecGetData(record);
 		SMgrRelation reln;
 
-		reln = smgropen(xlrec->rnode, InvalidBackendId);
+		reln = smgropen(SMGR_MD, xlrec->rnode, InvalidBackendId);
 		smgrcreate(reln, xlrec->forkNum, true);
+	}
+	else if (info == XLOG_SMGR_PRECREATE)
+	{
+		xl_smgr_precreate *xlrec = (xl_smgr_precreate *) XLogRecGetData(record);
+		xu_smgr_create undo_rec;
+
+		undo_rec.rnode = xlrec->rnode;
+		undo_rec.relpersistence = xlrec->relpersistence;
+
+		XactUndoReplay(record, RM_SMGR_ID, UNDO_SMGR_CREATE, &undo_rec,
+					   sizeof(undo_rec));
+	}
+	else if (info == XLOG_SMGR_DROP)
+	{
+		xl_smgr_drop *xlrec = (xl_smgr_drop *) XLogRecGetData(record);
+		SMgrRelation reln;
+
+		reln = smgropen(SMGR_MD, xlrec->rnode, InvalidBackendId);
+		smgrdounlinkall(&reln, 1, true);
+		smgrclose(reln);
 	}
 	else if (info == XLOG_SMGR_TRUNCATE)
 	{
@@ -927,7 +1007,7 @@ smgr_redo(XLogReaderState *record)
 		int			nforks = 0;
 		bool		need_fsm_vacuum = false;
 
-		reln = smgropen(xlrec->rnode, InvalidBackendId);
+		reln = smgropen(SMGR_MD, xlrec->rnode, InvalidBackendId);
 
 		/*
 		 * Forcibly create relation if it doesn't exist (which suggests that
@@ -1007,4 +1087,34 @@ smgr_redo(XLogReaderState *record)
 	}
 	else
 		elog(PANIC, "smgr_redo: unknown op code %u", info);
+}
+
+void
+smgr_undo(const WrittenUndoNode *record)
+{
+	xu_smgr_create *undo_rec;
+	SMgrRelation srel;
+	xl_smgr_drop xlrec;
+
+	Assert(record->n.rmid == RM_SMGR_ID);
+	/* Currently we only have a single type of SMGR undo record. */
+	Assert(record->n.type == UNDO_SMGR_CREATE);
+
+	/* Access the undo record. */
+	undo_rec = (xu_smgr_create *) record->n.data;
+
+	/*
+	 * XXX Consider if critical section is needed anywhere below. Probably
+	 * not, as failure to execute undo should result in PANIC anyway.
+	 */
+
+	srel = smgropen(SMGR_MD, undo_rec->rnode, InvalidBackendId);
+	smgrdounlinkall(&srel, 1, false);
+	smgrclose(srel);
+
+	XLogBeginInsert();
+
+	xlrec.rnode = undo_rec->rnode;
+	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+	XLogInsert(RM_SMGR_ID, XLOG_SMGR_DROP);
 }

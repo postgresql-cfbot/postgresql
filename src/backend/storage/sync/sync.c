@@ -31,6 +31,7 @@
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/md.h"
+#include "storage/undofile.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
@@ -118,7 +119,12 @@ static const SyncOps syncsw[] = {
 	/* pg_multixact/members */
 	[SYNC_HANDLER_MULTIXACT_MEMBER] = {
 		.sync_syncfiletag = multixactmemberssyncfiletag
-	}
+	},
+	/* undo log segment files */
+	[SYNC_HANDLER_UNDO] = {
+		.sync_syncfiletag = undofile_syncfiletag,
+		.sync_filetagmatches = undofile_filetagmatches
+	},
 };
 
 /*

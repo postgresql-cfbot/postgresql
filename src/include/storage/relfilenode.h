@@ -27,8 +27,9 @@
  * spcNode identifies the tablespace of the relation.  It corresponds to
  * pg_tablespace.oid.
  *
- * dbNode identifies the database of the relation.  It is zero for
- * "shared" relations (those common to all databases of a cluster).
+ * dbNode identifies the database of the relation.  It is zero for "shared"
+ * relations (those common to all databases of a cluster) or for undo log
+ * files (SmgrId has to distinguish the file in such a case).
  * Nonzero dbNode values correspond to pg_database.oid.
  *
  * relNode identifies the specific relation.  relNode corresponds to

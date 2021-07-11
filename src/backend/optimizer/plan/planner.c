@@ -293,23 +293,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	 * PlannerInfo.
 	 */
 	glob = makeNode(PlannerGlobal);
-
 	glob->boundParams = boundParams;
-	glob->subplans = NIL;
-	glob->subroots = NIL;
-	glob->rewindPlanIDs = NULL;
-	glob->finalrtable = NIL;
-	glob->finalrowmarks = NIL;
-	glob->resultRelations = NIL;
-	glob->appendRelations = NIL;
-	glob->relationOids = NIL;
-	glob->invalItems = NIL;
-	glob->paramExecTypes = NIL;
-	glob->lastPHId = 0;
-	glob->lastRowMarkId = 0;
-	glob->lastPlanNodeId = 0;
-	glob->transientPlan = false;
-	glob->dependsOnRole = false;
 
 	/*
 	 * Assess whether it's feasible to use parallel mode for this query. We
@@ -605,36 +589,15 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	root->glob = glob;
 	root->query_level = parent_root ? parent_root->query_level + 1 : 1;
 	root->parent_root = parent_root;
-	root->plan_params = NIL;
-	root->outer_params = NULL;
 	root->planner_cxt = CurrentMemoryContext;
-	root->init_plans = NIL;
-	root->cte_plan_ids = NIL;
-	root->multiexpr_params = NIL;
-	root->eq_classes = NIL;
-	root->ec_merging_done = false;
 	root->all_result_relids =
 		parse->resultRelation ? bms_make_singleton(parse->resultRelation) : NULL;
 	root->leaf_result_relids = NULL;	/* we'll find out leaf-ness later */
-	root->append_rel_list = NIL;
-	root->row_identity_vars = NIL;
-	root->rowMarks = NIL;
-	memset(root->upper_rels, 0, sizeof(root->upper_rels));
-	memset(root->upper_targets, 0, sizeof(root->upper_targets));
-	root->processed_tlist = NIL;
-	root->update_colnos = NIL;
-	root->grouping_map = NULL;
-	root->minmax_aggs = NIL;
-	root->qual_security_level = 0;
-	root->hasPseudoConstantQuals = false;
-	root->hasAlternativeSubPlans = false;
 	root->hasRecursion = hasRecursion;
 	if (hasRecursion)
 		root->wt_param_id = assign_special_exec_param(root);
 	else
 		root->wt_param_id = -1;
-	root->non_recursive_path = NULL;
-	root->partColsUpdated = false;
 
 	/*
 	 * If there is a WITH list, process each WITH query and either convert it
@@ -1914,11 +1877,6 @@ preprocess_grouping_sets(PlannerInfo *root)
 	grouping_sets_data *gd = palloc0(sizeof(grouping_sets_data));
 
 	parse->groupingSets = expand_grouping_sets(parse->groupingSets, parse->groupDistinct, -1);
-
-	gd->any_hashable = false;
-	gd->unhashable_refs = NULL;
-	gd->unsortable_refs = NULL;
-	gd->unsortable_sets = NIL;
 
 	if (parse->groupClause)
 	{
@@ -3813,12 +3771,9 @@ consider_groupingsets_paths(PlannerInfo *root,
 		{
 			RollupData *rollup = makeNode(RollupData);
 
-			rollup->groupClause = NIL;
 			rollup->gsets_data = empty_sets_data;
 			rollup->gsets = empty_sets;
 			rollup->numGroups = list_length(empty_sets);
-			rollup->hashable = false;
-			rollup->is_hashed = false;
 			new_rollups = lappend(new_rollups, rollup);
 			strat = AGG_MIXED;
 		}
@@ -5688,8 +5643,6 @@ expression_planner_with_deps(Expr *expr,
 	/* Make up dummy planner state so we can use setrefs machinery */
 	MemSet(&glob, 0, sizeof(glob));
 	glob.type = T_PlannerGlobal;
-	glob.relationOids = NIL;
-	glob.invalItems = NIL;
 
 	MemSet(&root, 0, sizeof(root));
 	root.type = T_PlannerInfo;

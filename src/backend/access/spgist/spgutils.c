@@ -44,27 +44,15 @@ spghandler(PG_FUNCTION_ARGS)
 {
 	IndexAmRoutine *amroutine = makeNode(IndexAmRoutine);
 
-	amroutine->amstrategies = 0;
 	amroutine->amsupport = SPGISTNProc;
 	amroutine->amoptsprocnum = SPGIST_OPTIONS_PROC;
-	amroutine->amcanorder = false;
 	amroutine->amcanorderbyop = true;
-	amroutine->amcanbackward = false;
-	amroutine->amcanunique = false;
-	amroutine->amcanmulticol = false;
 	amroutine->amoptionalkey = true;
-	amroutine->amsearcharray = false;
 	amroutine->amsearchnulls = true;
 	amroutine->amstorage = true;
-	amroutine->amclusterable = false;
-	amroutine->ampredlocks = false;
-	amroutine->amcanparallel = false;
 	amroutine->amcaninclude = true;
-	amroutine->amusemaintenanceworkmem = false;
 	amroutine->amparallelvacuumoptions =
 		VACUUM_OPTION_PARALLEL_BULKDEL | VACUUM_OPTION_PARALLEL_COND_CLEANUP;
-	amroutine->amkeytype = InvalidOid;
-
 	amroutine->ambuild = spgbuild;
 	amroutine->ambuildempty = spgbuildempty;
 	amroutine->aminsert = spginsert;
@@ -82,11 +70,6 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amgettuple = spggettuple;
 	amroutine->amgetbitmap = spggetbitmap;
 	amroutine->amendscan = spgendscan;
-	amroutine->ammarkpos = NULL;
-	amroutine->amrestrpos = NULL;
-	amroutine->amestimateparallelscan = NULL;
-	amroutine->aminitparallelscan = NULL;
-	amroutine->amparallelrescan = NULL;
 
 	PG_RETURN_POINTER(amroutine);
 }

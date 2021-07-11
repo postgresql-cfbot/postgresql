@@ -285,21 +285,9 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid,
 	indexInfo->ii_NumIndexKeyAttrs = 2;
 	indexInfo->ii_IndexAttrNumbers[0] = 1;
 	indexInfo->ii_IndexAttrNumbers[1] = 2;
-	indexInfo->ii_Expressions = NIL;
-	indexInfo->ii_ExpressionsState = NIL;
-	indexInfo->ii_Predicate = NIL;
-	indexInfo->ii_PredicateState = NULL;
-	indexInfo->ii_ExclusionOps = NULL;
-	indexInfo->ii_ExclusionProcs = NULL;
-	indexInfo->ii_ExclusionStrats = NULL;
-	indexInfo->ii_OpclassOptions = NULL;
 	indexInfo->ii_Unique = true;
 	indexInfo->ii_ReadyForInserts = true;
-	indexInfo->ii_Concurrent = false;
-	indexInfo->ii_BrokenHotChain = false;
-	indexInfo->ii_ParallelWorkers = 0;
 	indexInfo->ii_Am = BTREE_AM_OID;
-	indexInfo->ii_AmCache = NULL;
 	indexInfo->ii_Context = CurrentMemoryContext;
 
 	collationObjectId[0] = InvalidOid;

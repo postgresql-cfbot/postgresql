@@ -161,7 +161,6 @@ ExecInitSampleScan(SampleScan *node, EState *estate, int eflags)
 	 */
 	tsm = GetTsmRoutine(tsc->tsmhandler);
 	scanstate->tsmroutine = tsm;
-	scanstate->tsm_state = NULL;
 
 	if (tsm->InitSampleScan)
 		tsm->InitSampleScan(scanstate, eflags);

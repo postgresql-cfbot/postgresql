@@ -911,29 +911,8 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	subroot->glob = root->glob;
 	subroot->query_level = root->query_level;
 	subroot->parent_root = root->parent_root;
-	subroot->plan_params = NIL;
-	subroot->outer_params = NULL;
 	subroot->planner_cxt = CurrentMemoryContext;
-	subroot->init_plans = NIL;
-	subroot->cte_plan_ids = NIL;
-	subroot->multiexpr_params = NIL;
-	subroot->eq_classes = NIL;
-	subroot->ec_merging_done = false;
-	subroot->all_result_relids = NULL;
-	subroot->leaf_result_relids = NULL;
-	subroot->append_rel_list = NIL;
-	subroot->row_identity_vars = NIL;
-	subroot->rowMarks = NIL;
-	memset(subroot->upper_rels, 0, sizeof(subroot->upper_rels));
-	memset(subroot->upper_targets, 0, sizeof(subroot->upper_targets));
-	subroot->processed_tlist = NIL;
-	subroot->update_colnos = NIL;
-	subroot->grouping_map = NULL;
-	subroot->minmax_aggs = NIL;
-	subroot->qual_security_level = 0;
-	subroot->hasRecursion = false;
 	subroot->wt_param_id = -1;
-	subroot->non_recursive_path = NULL;
 
 	/* No CTEs to worry about */
 	Assert(subquery->cteList == NIL);

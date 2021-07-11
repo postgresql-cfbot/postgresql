@@ -2255,8 +2255,6 @@ transformXmlExpr(ParseState *pstate, XmlExpr *x)
 	newx->op = x->op;
 	if (x->name)
 		newx->name = map_sql_identifier_to_xml_name(x->name, false, false);
-	else
-		newx->name = NULL;
 	newx->xmloption = x->xmloption;
 	newx->type = XMLOID;		/* this just marks the node as transformed */
 	newx->typmod = -1;

@@ -3281,24 +3281,9 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 	aggstate->ss.ps.state = estate;
 	aggstate->ss.ps.ExecProcNode = ExecAgg;
 
-	aggstate->aggs = NIL;
-	aggstate->numaggs = 0;
-	aggstate->numtrans = 0;
 	aggstate->aggstrategy = node->aggstrategy;
 	aggstate->aggsplit = node->aggsplit;
-	aggstate->maxsets = 0;
 	aggstate->projected_set = -1;
-	aggstate->current_set = 0;
-	aggstate->peragg = NULL;
-	aggstate->pertrans = NULL;
-	aggstate->curperagg = NULL;
-	aggstate->curpertrans = NULL;
-	aggstate->input_done = false;
-	aggstate->agg_done = false;
-	aggstate->pergroups = NULL;
-	aggstate->grp_firstTuple = NULL;
-	aggstate->sort_in = NULL;
-	aggstate->sort_out = NULL;
 
 	/*
 	 * phases[0] always exists, but is dummy in sorted/plain mode

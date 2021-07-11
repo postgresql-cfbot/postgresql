@@ -2007,18 +2007,12 @@ index_constraint_create(Relation heapRelation,
 		trigger->trigname = (constraintType == CONSTRAINT_PRIMARY) ?
 			"PK_ConstraintTrigger" :
 			"Unique_ConstraintTrigger";
-		trigger->relation = NULL;
 		trigger->funcname = SystemFuncName("unique_key_recheck");
-		trigger->args = NIL;
 		trigger->row = true;
 		trigger->timing = TRIGGER_TYPE_AFTER;
 		trigger->events = TRIGGER_TYPE_INSERT | TRIGGER_TYPE_UPDATE;
-		trigger->columns = NIL;
-		trigger->whenClause = NULL;
-		trigger->transitionRels = NIL;
 		trigger->deferrable = true;
 		trigger->initdeferred = initdeferred;
-		trigger->constrrel = NULL;
 
 		(void) CreateTrigger(trigger, NULL, RelationGetRelid(heapRelation),
 							 InvalidOid, conOid, indexRelationId, InvalidOid,

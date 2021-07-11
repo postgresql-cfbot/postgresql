@@ -725,23 +725,6 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	scanstate->ss.ps.state = estate;
 	scanstate->ss.ps.ExecProcNode = ExecBitmapHeapScan;
 
-	scanstate->tbm = NULL;
-	scanstate->tbmiterator = NULL;
-	scanstate->tbmres = NULL;
-	scanstate->return_empty_tuples = 0;
-	scanstate->vmbuffer = InvalidBuffer;
-	scanstate->pvmbuffer = InvalidBuffer;
-	scanstate->exact_pages = 0;
-	scanstate->lossy_pages = 0;
-	scanstate->prefetch_iterator = NULL;
-	scanstate->prefetch_pages = 0;
-	scanstate->prefetch_target = 0;
-	scanstate->pscan_len = 0;
-	scanstate->initialized = false;
-	scanstate->shared_tbmiterator = NULL;
-	scanstate->shared_prefetch_iterator = NULL;
-	scanstate->pstate = NULL;
-
 	/*
 	 * We can potentially skip fetching heap pages if we do not need any
 	 * columns of the table, either for checking non-indexable quals or for

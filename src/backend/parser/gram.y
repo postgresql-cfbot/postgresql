@@ -2134,7 +2134,6 @@ partition_cmd:
 
 					n->subtype = AT_DetachPartition;
 					cmd->name = $3;
-					cmd->bound = NULL;
 					cmd->concurrent = $4;
 					n->def = (Node *) cmd;
 
@@ -2163,8 +2162,6 @@ index_partition_cmd:
 
 					n->subtype = AT_AttachPartition;
 					cmd->name = $3;
-					cmd->bound = NULL;
-					cmd->concurrent = false;
 					n->def = (Node *) cmd;
 
 					$$ = (Node *) n;
@@ -2473,7 +2470,6 @@ alter_table_cmd:
 				{
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 					n->subtype = AT_DropCluster;
-					n->name = NULL;
 					$$ = (Node *)n;
 				}
 			/* ALTER TABLE <name> SET LOGGED */
@@ -2707,7 +2703,6 @@ opt_collate_clause:
 			COLLATE any_name
 				{
 					CollateClause *n = makeNode(CollateClause);
-					n->arg = NULL;
 					n->collname = $2;
 					n->location = @1;
 					$$ = (Node *) n;
@@ -2725,21 +2720,18 @@ replica_identity:
 				{
 					ReplicaIdentityStmt *n = makeNode(ReplicaIdentityStmt);
 					n->identity_type = REPLICA_IDENTITY_NOTHING;
-					n->name = NULL;
 					$$ = (Node *) n;
 				}
 			| FULL
 				{
 					ReplicaIdentityStmt *n = makeNode(ReplicaIdentityStmt);
 					n->identity_type = REPLICA_IDENTITY_FULL;
-					n->name = NULL;
 					$$ = (Node *) n;
 				}
 			| DEFAULT
 				{
 					ReplicaIdentityStmt *n = makeNode(ReplicaIdentityStmt);
 					n->identity_type = REPLICA_IDENTITY_DEFAULT;
-					n->name = NULL;
 					$$ = (Node *) n;
 				}
 			| USING INDEX name
@@ -2996,7 +2988,6 @@ alter_type_cmd:
 					/* We only use these fields of the ColumnDef node */
 					def->typeName = $6;
 					def->collClause = (CollateClause *) $7;
-					def->raw_default = NULL;
 					def->location = @3;
 					$$ = (Node *)n;
 				}
@@ -3276,13 +3267,10 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					n->tableElts = $6;
 					n->inhRelations = $8;
 					n->partspec = $9;
-					n->ofTypename = NULL;
-					n->constraints = NIL;
 					n->accessMethod = $10;
 					n->options = $11;
 					n->oncommit = $12;
 					n->tablespacename = $13;
-					n->if_not_exists = false;
 					$$ = (Node *)n;
 				}
 		| CREATE OptTemp TABLE IF_P NOT EXISTS qualified_name '('
@@ -3295,8 +3283,6 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					n->tableElts = $9;
 					n->inhRelations = $11;
 					n->partspec = $12;
-					n->ofTypename = NULL;
-					n->constraints = NIL;
 					n->accessMethod = $13;
 					n->options = $14;
 					n->oncommit = $15;
@@ -3355,13 +3341,10 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					n->inhRelations = list_make1($7);
 					n->partbound = $9;
 					n->partspec = $10;
-					n->ofTypename = NULL;
-					n->constraints = NIL;
 					n->accessMethod = $11;
 					n->options = $12;
 					n->oncommit = $13;
 					n->tablespacename = $14;
-					n->if_not_exists = false;
 					$$ = (Node *)n;
 				}
 		| CREATE OptTemp TABLE IF_P NOT EXISTS qualified_name PARTITION OF
@@ -3375,8 +3358,6 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
 					n->inhRelations = list_make1($10);
 					n->partbound = $12;
 					n->partspec = $13;
-					n->ofTypename = NULL;
-					n->constraints = NIL;
 					n->accessMethod = $14;
 					n->options = $15;
 					n->oncommit = $16;
@@ -3468,14 +3449,7 @@ columnDef:	ColId Typename opt_column_compression create_generic_options ColQualL
 					n->colname = $1;
 					n->typeName = $2;
 					n->compression = $3;
-					n->inhcount = 0;
 					n->is_local = true;
-					n->is_not_null = false;
-					n->is_from_type = false;
-					n->storage = 0;
-					n->raw_default = NULL;
-					n->cooked_default = NULL;
-					n->collOid = InvalidOid;
 					n->fdwoptions = $4;
 					SplitColQualList($5, &n->constraints, &n->collClause,
 									 yyscanner);
@@ -3488,15 +3462,7 @@ columnOptions:	ColId ColQualList
 				{
 					ColumnDef *n = makeNode(ColumnDef);
 					n->colname = $1;
-					n->typeName = NULL;
-					n->inhcount = 0;
 					n->is_local = true;
-					n->is_not_null = false;
-					n->is_from_type = false;
-					n->storage = 0;
-					n->raw_default = NULL;
-					n->cooked_default = NULL;
-					n->collOid = InvalidOid;
 					SplitColQualList($2, &n->constraints, &n->collClause,
 									 yyscanner);
 					n->location = @1;
@@ -3506,15 +3472,7 @@ columnOptions:	ColId ColQualList
 				{
 					ColumnDef *n = makeNode(ColumnDef);
 					n->colname = $1;
-					n->typeName = NULL;
-					n->inhcount = 0;
 					n->is_local = true;
-					n->is_not_null = false;
-					n->is_from_type = false;
-					n->storage = 0;
-					n->raw_default = NULL;
-					n->cooked_default = NULL;
-					n->collOid = InvalidOid;
 					SplitColQualList($4, &n->constraints, &n->collClause,
 									 yyscanner);
 					n->location = @1;
@@ -3555,7 +3513,6 @@ ColConstraint:
 					 * again in SplitColQualList.
 					 */
 					CollateClause *n = makeNode(CollateClause);
-					n->arg = NULL;
 					n->collname = $2;
 					n->location = @1;
 					$$ = (Node *) n;
@@ -3597,9 +3554,7 @@ ColConstraintElem:
 					Constraint *n = makeNode(Constraint);
 					n->contype = CONSTR_UNIQUE;
 					n->location = @1;
-					n->keys = NULL;
 					n->options = $2;
-					n->indexname = NULL;
 					n->indexspace = $3;
 					$$ = (Node *)n;
 				}
@@ -3608,9 +3563,7 @@ ColConstraintElem:
 					Constraint *n = makeNode(Constraint);
 					n->contype = CONSTR_PRIMARY;
 					n->location = @1;
-					n->keys = NULL;
 					n->options = $3;
-					n->indexname = NULL;
 					n->indexspace = $4;
 					$$ = (Node *)n;
 				}
@@ -3621,8 +3574,6 @@ ColConstraintElem:
 					n->location = @1;
 					n->is_no_inherit = $5;
 					n->raw_expr = $3;
-					n->cooked_expr = NULL;
-					n->skip_validation = false;
 					n->initially_valid = true;
 					$$ = (Node *)n;
 				}
@@ -3632,7 +3583,6 @@ ColConstraintElem:
 					n->contype = CONSTR_DEFAULT;
 					n->location = @1;
 					n->raw_expr = $2;
-					n->cooked_expr = NULL;
 					$$ = (Node *)n;
 				}
 			| GENERATED generated_when AS IDENTITY_P OptParenthesizedSeqOptList
@@ -3673,12 +3623,10 @@ ColConstraintElem:
 					n->contype = CONSTR_FOREIGN;
 					n->location = @1;
 					n->pktable			= $2;
-					n->fk_attrs			= NIL;
 					n->pk_attrs			= $3;
 					n->fk_matchtype		= $4;
 					n->fk_upd_action	= (char) ($5 >> 8);
 					n->fk_del_action	= (char) ($5 & 0xFF);
-					n->skip_validation  = false;
 					n->initially_valid  = true;
 					$$ = (Node *)n;
 				}
@@ -3789,7 +3737,6 @@ ConstraintElem:
 					n->contype = CONSTR_CHECK;
 					n->location = @1;
 					n->raw_expr = $3;
-					n->cooked_expr = NULL;
 					processCASbits($5, @5, "CHECK",
 								   NULL, NULL, &n->skip_validation,
 								   &n->is_no_inherit, yyscanner);
@@ -3805,7 +3752,6 @@ ConstraintElem:
 					n->keys = $3;
 					n->including = $5;
 					n->options = $6;
-					n->indexname = NULL;
 					n->indexspace = $7;
 					processCASbits($8, @8, "UNIQUE",
 								   &n->deferrable, &n->initdeferred, NULL,
@@ -3817,11 +3763,7 @@ ConstraintElem:
 					Constraint *n = makeNode(Constraint);
 					n->contype = CONSTR_UNIQUE;
 					n->location = @1;
-					n->keys = NIL;
-					n->including = NIL;
-					n->options = NIL;
 					n->indexname = $2;
-					n->indexspace = NULL;
 					processCASbits($3, @3, "UNIQUE",
 								   &n->deferrable, &n->initdeferred, NULL,
 								   NULL, yyscanner);
@@ -3836,7 +3778,6 @@ ConstraintElem:
 					n->keys = $4;
 					n->including = $6;
 					n->options = $7;
-					n->indexname = NULL;
 					n->indexspace = $8;
 					processCASbits($9, @9, "PRIMARY KEY",
 								   &n->deferrable, &n->initdeferred, NULL,
@@ -3848,11 +3789,7 @@ ConstraintElem:
 					Constraint *n = makeNode(Constraint);
 					n->contype = CONSTR_PRIMARY;
 					n->location = @1;
-					n->keys = NIL;
-					n->including = NIL;
-					n->options = NIL;
 					n->indexname = $3;
-					n->indexspace = NULL;
 					processCASbits($4, @4, "PRIMARY KEY",
 								   &n->deferrable, &n->initdeferred, NULL,
 								   NULL, yyscanner);
@@ -3869,7 +3806,6 @@ ConstraintElem:
 					n->exclusions		= $4;
 					n->including		= $6;
 					n->options			= $7;
-					n->indexname		= NULL;
 					n->indexspace		= $8;
 					n->where_clause		= $9;
 					processCASbits($10, @10, "EXCLUDE",
@@ -4029,7 +3965,6 @@ part_elem: ColId opt_collate opt_class
 					PartitionElem *n = makeNode(PartitionElem);
 
 					n->name = $1;
-					n->expr = NULL;
 					n->collation = $2;
 					n->opclass = $3;
 					n->location = @1;
@@ -4039,7 +3974,6 @@ part_elem: ColId opt_collate opt_class
 				{
 					PartitionElem *n = makeNode(PartitionElem);
 
-					n->name = NULL;
 					n->expr = $1;
 					n->collation = $2;
 					n->opclass = $3;
@@ -4050,7 +3984,6 @@ part_elem: ColId opt_collate opt_class
 				{
 					PartitionElem *n = makeNode(PartitionElem);
 
-					n->name = NULL;
 					n->expr = $2;
 					n->collation = $4;
 					n->opclass = $5;
@@ -4111,8 +4044,6 @@ CreateStatsStmt:
 					n->stat_types = $4;
 					n->exprs = $6;
 					n->relations = $8;
-					n->stxcomment = NULL;
-					n->if_not_exists = false;
 					$$ = (Node *)n;
 				}
 			| CREATE STATISTICS IF_P NOT EXISTS any_name
@@ -4123,7 +4054,6 @@ CreateStatsStmt:
 					n->stat_types = $7;
 					n->exprs = $9;
 					n->relations = $11;
-					n->stxcomment = NULL;
 					n->if_not_exists = true;
 					$$ = (Node *)n;
 				}
@@ -5023,12 +4953,6 @@ CreateForeignTableStmt:
 					n->base.relation = $4;
 					n->base.tableElts = $6;
 					n->base.inhRelations = $8;
-					n->base.ofTypename = NULL;
-					n->base.constraints = NIL;
-					n->base.options = NIL;
-					n->base.oncommit = ONCOMMIT_NOOP;
-					n->base.tablespacename = NULL;
-					n->base.if_not_exists = false;
 					/* FDW-specific data */
 					n->servername = $10;
 					n->options = $11;
@@ -5043,11 +4967,6 @@ CreateForeignTableStmt:
 					n->base.relation = $7;
 					n->base.tableElts = $9;
 					n->base.inhRelations = $11;
-					n->base.ofTypename = NULL;
-					n->base.constraints = NIL;
-					n->base.options = NIL;
-					n->base.oncommit = ONCOMMIT_NOOP;
-					n->base.tablespacename = NULL;
 					n->base.if_not_exists = true;
 					/* FDW-specific data */
 					n->servername = $13;
@@ -5064,12 +4983,6 @@ CreateForeignTableStmt:
 					n->base.inhRelations = list_make1($7);
 					n->base.tableElts = $8;
 					n->base.partbound = $9;
-					n->base.ofTypename = NULL;
-					n->base.constraints = NIL;
-					n->base.options = NIL;
-					n->base.oncommit = ONCOMMIT_NOOP;
-					n->base.tablespacename = NULL;
-					n->base.if_not_exists = false;
 					/* FDW-specific data */
 					n->servername = $11;
 					n->options = $12;
@@ -5085,11 +4998,6 @@ CreateForeignTableStmt:
 					n->base.inhRelations = list_make1($10);
 					n->base.tableElts = $11;
 					n->base.partbound = $12;
-					n->base.ofTypename = NULL;
-					n->base.constraints = NIL;
-					n->base.options = NIL;
-					n->base.oncommit = ONCOMMIT_NOOP;
-					n->base.tablespacename = NULL;
 					n->base.if_not_exists = true;
 					/* FDW-specific data */
 					n->servername = $14;
@@ -5351,7 +5259,6 @@ CreateTrigStmt:
 				{
 					CreateTrigStmt *n = makeNode(CreateTrigStmt);
 					n->replace = $2;
-					n->isconstraint = false;
 					n->trigname = $4;
 					n->relation = $8;
 					n->funcname = $14;
@@ -5362,9 +5269,6 @@ CreateTrigStmt:
 					n->columns = (List *) lsecond($6);
 					n->whenClause = $11;
 					n->transitionRels = $9;
-					n->deferrable = false;
-					n->initdeferred = false;
-					n->constrrel = NULL;
 					$$ = (Node *)n;
 				}
 		  | CREATE opt_or_replace CONSTRAINT TRIGGER name AFTER TriggerEvents ON
@@ -5388,7 +5292,6 @@ CreateTrigStmt:
 					n->events = intVal(linitial($7));
 					n->columns = (List *) lsecond($7);
 					n->whenClause = $15;
-					n->transitionRels = NIL;
 					processCASbits($11, @11, "TRIGGER",
 								   &n->deferrable, &n->initdeferred, NULL,
 								   NULL, yyscanner);
@@ -5593,7 +5496,6 @@ CreateEventTrigStmt:
 					CreateEventTrigStmt *n = makeNode(CreateEventTrigStmt);
 					n->trigname = $4;
 					n->eventname = $6;
-					n->whenclause = NULL;
 					n->funcname = $9;
 					$$ = (Node *)n;
 				}
@@ -5702,7 +5604,6 @@ DefineStmt:
 					n->kind = OBJECT_OPERATOR;
 					n->oldstyle = false;
 					n->defnames = $3;
-					n->args = NIL;
 					n->definition = $4;
 					$$ = (Node *)n;
 				}
@@ -5712,7 +5613,6 @@ DefineStmt:
 					n->kind = OBJECT_TYPE;
 					n->oldstyle = false;
 					n->defnames = $3;
-					n->args = NIL;
 					n->definition = $4;
 					$$ = (Node *)n;
 				}
@@ -5723,7 +5623,6 @@ DefineStmt:
 					n->kind = OBJECT_TYPE;
 					n->oldstyle = false;
 					n->defnames = $3;
-					n->args = NIL;
 					n->definition = NIL;
 					$$ = (Node *)n;
 				}
@@ -5754,7 +5653,6 @@ DefineStmt:
 				{
 					DefineStmt *n = makeNode(DefineStmt);
 					n->kind = OBJECT_TSPARSER;
-					n->args = NIL;
 					n->defnames = $5;
 					n->definition = $6;
 					$$ = (Node *)n;
@@ -5763,7 +5661,6 @@ DefineStmt:
 				{
 					DefineStmt *n = makeNode(DefineStmt);
 					n->kind = OBJECT_TSDICTIONARY;
-					n->args = NIL;
 					n->defnames = $5;
 					n->definition = $6;
 					$$ = (Node *)n;
@@ -5772,7 +5669,6 @@ DefineStmt:
 				{
 					DefineStmt *n = makeNode(DefineStmt);
 					n->kind = OBJECT_TSTEMPLATE;
-					n->args = NIL;
 					n->defnames = $5;
 					n->definition = $6;
 					$$ = (Node *)n;
@@ -5781,7 +5677,6 @@ DefineStmt:
 				{
 					DefineStmt *n = makeNode(DefineStmt);
 					n->kind = OBJECT_TSCONFIGURATION;
-					n->args = NIL;
 					n->defnames = $5;
 					n->definition = $6;
 					$$ = (Node *)n;
@@ -5790,7 +5685,6 @@ DefineStmt:
 				{
 					DefineStmt *n = makeNode(DefineStmt);
 					n->kind = OBJECT_COLLATION;
-					n->args = NIL;
 					n->defnames = $3;
 					n->definition = $4;
 					$$ = (Node *)n;
@@ -5799,7 +5693,6 @@ DefineStmt:
 				{
 					DefineStmt *n = makeNode(DefineStmt);
 					n->kind = OBJECT_COLLATION;
-					n->args = NIL;
 					n->defnames = $6;
 					n->definition = $7;
 					n->if_not_exists = true;
@@ -5809,7 +5702,6 @@ DefineStmt:
 				{
 					DefineStmt *n = makeNode(DefineStmt);
 					n->kind = OBJECT_COLLATION;
-					n->args = NIL;
 					n->defnames = $3;
 					n->definition = list_make1(makeDefElem("from", (Node *) $5, @5));
 					$$ = (Node *)n;
@@ -5818,7 +5710,6 @@ DefineStmt:
 				{
 					DefineStmt *n = makeNode(DefineStmt);
 					n->kind = OBJECT_COLLATION;
-					n->args = NIL;
 					n->defnames = $6;
 					n->definition = list_make1(makeDefElem("from", (Node *) $8, @8));
 					n->if_not_exists = true;
@@ -5892,9 +5783,7 @@ AlterEnumStmt:
 			{
 				AlterEnumStmt *n = makeNode(AlterEnumStmt);
 				n->typeName = $3;
-				n->oldVal = NULL;
 				n->newVal = $7;
-				n->newValNeighbor = NULL;
 				n->newValIsAfter = true;
 				n->skipIfNewValExists = $6;
 				$$ = (Node *) n;
@@ -5903,10 +5792,8 @@ AlterEnumStmt:
 			{
 				AlterEnumStmt *n = makeNode(AlterEnumStmt);
 				n->typeName = $3;
-				n->oldVal = NULL;
 				n->newVal = $7;
 				n->newValNeighbor = $9;
-				n->newValIsAfter = false;
 				n->skipIfNewValExists = $6;
 				$$ = (Node *) n;
 			}
@@ -5914,7 +5801,6 @@ AlterEnumStmt:
 			{
 				AlterEnumStmt *n = makeNode(AlterEnumStmt);
 				n->typeName = $3;
-				n->oldVal = NULL;
 				n->newVal = $7;
 				n->newValNeighbor = $9;
 				n->newValIsAfter = true;
@@ -5927,9 +5813,6 @@ AlterEnumStmt:
 				n->typeName = $3;
 				n->oldVal = $6;
 				n->newVal = $8;
-				n->newValNeighbor = NULL;
-				n->newValIsAfter = false;
-				n->skipIfNewValExists = false;
 				$$ = (Node *) n;
 			}
 		 ;
@@ -7253,7 +7136,6 @@ DefACLAction:
 					n->privileges = $2;
 					n->targtype = ACL_TARGET_DEFAULTS;
 					n->objtype = $4;
-					n->objects = NIL;
 					n->grantees = $6;
 					n->grant_option = $7;
 					$$ = (Node*)n;
@@ -7267,7 +7149,6 @@ DefACLAction:
 					n->privileges = $2;
 					n->targtype = ACL_TARGET_DEFAULTS;
 					n->objtype = $4;
-					n->objects = NIL;
 					n->grantees = $6;
 					n->behavior = $7;
 					$$ = (Node *)n;
@@ -7281,7 +7162,6 @@ DefACLAction:
 					n->privileges = $5;
 					n->targtype = ACL_TARGET_DEFAULTS;
 					n->objtype = $7;
-					n->objects = NIL;
 					n->grantees = $9;
 					n->behavior = $10;
 					$$ = (Node *)n;
@@ -7321,19 +7201,6 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_index_name
 					n->options = $13;
 					n->tableSpace = $14;
 					n->whereClause = $15;
-					n->excludeOpNames = NIL;
-					n->idxcomment = NULL;
-					n->indexOid = InvalidOid;
-					n->oldNode = InvalidOid;
-					n->oldCreateSubid = InvalidSubTransactionId;
-					n->oldFirstRelfilenodeSubid = InvalidSubTransactionId;
-					n->primary = false;
-					n->isconstraint = false;
-					n->deferrable = false;
-					n->initdeferred = false;
-					n->transformed = false;
-					n->if_not_exists = false;
-					n->reset_default_tblspc = false;
 					$$ = (Node *)n;
 				}
 			| CREATE opt_unique INDEX opt_concurrently IF_P NOT EXISTS name
@@ -7351,19 +7218,7 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_index_name
 					n->options = $16;
 					n->tableSpace = $17;
 					n->whereClause = $18;
-					n->excludeOpNames = NIL;
-					n->idxcomment = NULL;
-					n->indexOid = InvalidOid;
-					n->oldNode = InvalidOid;
-					n->oldCreateSubid = InvalidSubTransactionId;
-					n->oldFirstRelfilenodeSubid = InvalidSubTransactionId;
-					n->primary = false;
-					n->isconstraint = false;
-					n->deferrable = false;
-					n->initdeferred = false;
-					n->transformed = false;
 					n->if_not_exists = true;
-					n->reset_default_tblspc = false;
 					$$ = (Node *)n;
 				}
 		;
@@ -7397,21 +7252,14 @@ index_elem_options:
 	opt_collate opt_class opt_asc_desc opt_nulls_order
 		{
 			$$ = makeNode(IndexElem);
-			$$->name = NULL;
-			$$->expr = NULL;
-			$$->indexcolname = NULL;
 			$$->collation = $1;
 			$$->opclass = $2;
-			$$->opclassopts = NIL;
 			$$->ordering = $3;
 			$$->nulls_ordering = $4;
 		}
 	| opt_collate any_name reloptions opt_asc_desc opt_nulls_order
 		{
 			$$ = makeNode(IndexElem);
-			$$->name = NULL;
-			$$->expr = NULL;
-			$$->indexcolname = NULL;
 			$$->collation = $1;
 			$$->opclass = $2;
 			$$->opclassopts = $3;
@@ -7516,7 +7364,6 @@ CreateFunctionStmt:
 					n->replace = $2;
 					n->funcname = $4;
 					n->parameters = $5;
-					n->returnType = NULL;
 					n->options = $6;
 					n->sql_body = $7;
 					$$ = (Node *)n;
@@ -7529,7 +7376,6 @@ CreateFunctionStmt:
 					n->replace = $2;
 					n->funcname = $4;
 					n->parameters = $5;
-					n->returnType = NULL;
 					n->options = $6;
 					n->sql_body = $7;
 					$$ = (Node *)n;
@@ -7626,7 +7472,6 @@ func_arg:
 					n->name = $2;
 					n->argType = $3;
 					n->mode = $1;
-					n->defexpr = NULL;
 					$$ = n;
 				}
 			| param_name arg_class func_type
@@ -7635,7 +7480,6 @@ func_arg:
 					n->name = $1;
 					n->argType = $3;
 					n->mode = $2;
-					n->defexpr = NULL;
 					$$ = n;
 				}
 			| param_name func_type
@@ -7644,22 +7488,18 @@ func_arg:
 					n->name = $1;
 					n->argType = $2;
 					n->mode = FUNC_PARAM_DEFAULT;
-					n->defexpr = NULL;
 					$$ = n;
 				}
 			| arg_class func_type
 				{
 					FunctionParameter *n = makeNode(FunctionParameter);
-					n->name = NULL;
 					n->argType = $2;
 					n->mode = $1;
-					n->defexpr = NULL;
 					$$ = n;
 				}
 			| func_type
 				{
 					FunctionParameter *n = makeNode(FunctionParameter);
-					n->name = NULL;
 					n->argType = $1;
 					n->mode = FUNC_PARAM_DEFAULT;
 					n->defexpr = NULL;
@@ -7995,7 +7835,6 @@ table_func_column:	param_name func_type
 					n->name = $1;
 					n->argType = $2;
 					n->mode = FUNC_PARAM_TABLE;
-					n->defexpr = NULL;
 					$$ = n;
 				}
 		;
@@ -8379,8 +8218,6 @@ ReindexStmt:
 					ReindexStmt *n = makeNode(ReindexStmt);
 					n->kind = $2;
 					n->relation = $4;
-					n->name = NULL;
-					n->params = NIL;
 					if ($3)
 						n->params = lappend(n->params,
 								makeDefElem("concurrently", NULL, @3));
@@ -8391,8 +8228,6 @@ ReindexStmt:
 					ReindexStmt *n = makeNode(ReindexStmt);
 					n->kind = $2;
 					n->name = $4;
-					n->relation = NULL;
-					n->params = NIL;
 					if ($3)
 						n->params = lappend(n->params,
 								makeDefElem("concurrently", NULL, @3));
@@ -8403,7 +8238,6 @@ ReindexStmt:
 					ReindexStmt *n = makeNode(ReindexStmt);
 					n->kind = $5;
 					n->relation = $7;
-					n->name = NULL;
 					n->params = $3;
 					if ($6)
 						n->params = lappend(n->params,
@@ -8415,7 +8249,6 @@ ReindexStmt:
 					ReindexStmt *n = makeNode(ReindexStmt);
 					n->kind = $5;
 					n->name = $7;
-					n->relation = NULL;
 					n->params = $3;
 					if ($6)
 						n->params = lappend(n->params,
@@ -8472,7 +8305,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_AGGREGATE;
 					n->object = (Node *) $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER COLLATION any_name RENAME TO name
@@ -8481,7 +8313,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_COLLATION;
 					n->object = (Node *) $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER CONVERSION_P any_name RENAME TO name
@@ -8490,7 +8321,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_CONVERSION;
 					n->object = (Node *) $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER DATABASE name RENAME TO name
@@ -8499,7 +8329,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_DATABASE;
 					n->subname = $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER DOMAIN_P any_name RENAME TO name
@@ -8508,7 +8337,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_DOMAIN;
 					n->object = (Node *) $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER DOMAIN_P any_name RENAME CONSTRAINT name TO name
@@ -8526,7 +8354,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_FDW;
 					n->object = (Node *) makeString($5);
 					n->newname = $8;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER FUNCTION function_with_argtypes RENAME TO name
@@ -8535,7 +8362,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_FUNCTION;
 					n->object = (Node *) $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER GROUP_P RoleId RENAME TO RoleId
@@ -8544,7 +8370,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_ROLE;
 					n->subname = $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER opt_procedural LANGUAGE name RENAME TO name
@@ -8553,7 +8378,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_LANGUAGE;
 					n->object = (Node *) makeString($4);
 					n->newname = $7;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER OPERATOR CLASS any_name USING name RENAME TO name
@@ -8562,7 +8386,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_OPCLASS;
 					n->object = (Node *) lcons(makeString($6), $4);
 					n->newname = $9;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER OPERATOR FAMILY any_name USING name RENAME TO name
@@ -8571,7 +8394,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_OPFAMILY;
 					n->object = (Node *) lcons(makeString($6), $4);
 					n->newname = $9;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER POLICY name ON qualified_name RENAME TO name
@@ -8581,7 +8403,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->relation = $5;
 					n->subname = $3;
 					n->newname = $8;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER POLICY IF_P EXISTS name ON qualified_name RENAME TO name
@@ -8600,7 +8421,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_PROCEDURE;
 					n->object = (Node *) $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER PUBLICATION name RENAME TO name
@@ -8609,7 +8429,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_PUBLICATION;
 					n->object = (Node *) makeString($3);
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER ROUTINE function_with_argtypes RENAME TO name
@@ -8618,7 +8437,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_ROUTINE;
 					n->object = (Node *) $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER SCHEMA name RENAME TO name
@@ -8627,7 +8445,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_SCHEMA;
 					n->subname = $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER SERVER name RENAME TO name
@@ -8636,7 +8453,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_FOREIGN_SERVER;
 					n->object = (Node *) makeString($3);
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER SUBSCRIPTION name RENAME TO name
@@ -8645,7 +8461,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_SUBSCRIPTION;
 					n->object = (Node *) makeString($3);
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLE relation_expr RENAME TO name
@@ -8653,9 +8468,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_TABLE;
 					n->relation = $3;
-					n->subname = NULL;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLE IF_P EXISTS relation_expr RENAME TO name
@@ -8663,7 +8476,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_TABLE;
 					n->relation = $5;
-					n->subname = NULL;
 					n->newname = $8;
 					n->missing_ok = true;
 					$$ = (Node *)n;
@@ -8673,9 +8485,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_SEQUENCE;
 					n->relation = $3;
-					n->subname = NULL;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER SEQUENCE IF_P EXISTS qualified_name RENAME TO name
@@ -8683,7 +8493,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_SEQUENCE;
 					n->relation = $5;
-					n->subname = NULL;
 					n->newname = $8;
 					n->missing_ok = true;
 					$$ = (Node *)n;
@@ -8693,9 +8502,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_VIEW;
 					n->relation = $3;
-					n->subname = NULL;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER VIEW IF_P EXISTS qualified_name RENAME TO name
@@ -8703,7 +8510,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_VIEW;
 					n->relation = $5;
-					n->subname = NULL;
 					n->newname = $8;
 					n->missing_ok = true;
 					$$ = (Node *)n;
@@ -8713,9 +8519,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_MATVIEW;
 					n->relation = $4;
-					n->subname = NULL;
 					n->newname = $7;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER MATERIALIZED VIEW IF_P EXISTS qualified_name RENAME TO name
@@ -8723,7 +8527,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_MATVIEW;
 					n->relation = $6;
-					n->subname = NULL;
 					n->newname = $9;
 					n->missing_ok = true;
 					$$ = (Node *)n;
@@ -8733,9 +8536,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_INDEX;
 					n->relation = $3;
-					n->subname = NULL;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER INDEX IF_P EXISTS qualified_name RENAME TO name
@@ -8743,7 +8544,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_INDEX;
 					n->relation = $5;
-					n->subname = NULL;
 					n->newname = $8;
 					n->missing_ok = true;
 					$$ = (Node *)n;
@@ -8753,9 +8553,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_FOREIGN_TABLE;
 					n->relation = $4;
-					n->subname = NULL;
 					n->newname = $7;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER FOREIGN TABLE IF_P EXISTS relation_expr RENAME TO name
@@ -8763,7 +8561,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 					n->renameType = OBJECT_FOREIGN_TABLE;
 					n->relation = $6;
-					n->subname = NULL;
 					n->newname = $9;
 					n->missing_ok = true;
 					$$ = (Node *)n;
@@ -8776,7 +8573,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->relation = $3;
 					n->subname = $6;
 					n->newname = $8;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLE IF_P EXISTS relation_expr RENAME opt_column name TO name
@@ -8820,7 +8616,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->relation = $4;
 					n->subname = $7;
 					n->newname = $9;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER MATERIALIZED VIEW IF_P EXISTS qualified_name RENAME opt_column name TO name
@@ -8841,7 +8636,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->relation = $3;
 					n->subname = $6;
 					n->newname = $8;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLE IF_P EXISTS relation_expr RENAME CONSTRAINT name TO name
@@ -8862,7 +8656,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->relation = $4;
 					n->subname = $7;
 					n->newname = $9;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER FOREIGN TABLE IF_P EXISTS relation_expr RENAME opt_column name TO name
@@ -8883,7 +8676,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->relation = $5;
 					n->subname = $3;
 					n->newname = $8;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TRIGGER name ON qualified_name RENAME TO name
@@ -8893,7 +8685,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->relation = $5;
 					n->subname = $3;
 					n->newname = $8;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER EVENT TRIGGER name RENAME TO name
@@ -8910,7 +8701,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_ROLE;
 					n->subname = $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER USER RoleId RENAME TO RoleId
@@ -8919,7 +8709,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_ROLE;
 					n->subname = $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLESPACE name RENAME TO name
@@ -8928,7 +8717,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_TABLESPACE;
 					n->subname = $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER STATISTICS any_name RENAME TO name
@@ -8937,7 +8725,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_STATISTIC_EXT;
 					n->object = (Node *) $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TEXT_P SEARCH PARSER any_name RENAME TO name
@@ -8946,7 +8733,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_TSPARSER;
 					n->object = (Node *) $5;
 					n->newname = $8;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TEXT_P SEARCH DICTIONARY any_name RENAME TO name
@@ -8955,7 +8741,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_TSDICTIONARY;
 					n->object = (Node *) $5;
 					n->newname = $8;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TEXT_P SEARCH TEMPLATE any_name RENAME TO name
@@ -8964,7 +8749,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_TSTEMPLATE;
 					n->object = (Node *) $5;
 					n->newname = $8;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TEXT_P SEARCH CONFIGURATION any_name RENAME TO name
@@ -8973,7 +8757,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_TSCONFIGURATION;
 					n->object = (Node *) $5;
 					n->newname = $8;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TYPE_P any_name RENAME TO name
@@ -8982,7 +8765,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->renameType = OBJECT_TYPE;
 					n->object = (Node *) $3;
 					n->newname = $6;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 			| ALTER TYPE_P any_name RENAME ATTRIBUTE name TO name opt_drop_behavior
@@ -8994,7 +8776,6 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $6;
 					n->newname = $8;
 					n->behavior = $9;
-					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
 		;
@@ -11062,8 +10843,6 @@ opt_on_conflict:
 					$$ = makeNode(OnConflictClause);
 					$$->action = ONCONFLICT_NOTHING;
 					$$->infer = $3;
-					$$->targetList = NIL;
-					$$->whereClause = NULL;
 					$$->location = @1;
 				}
 			| /*EMPTY*/
@@ -11078,15 +10857,12 @@ opt_conf_expr:
 					$$ = makeNode(InferClause);
 					$$->indexElems = $2;
 					$$->whereClause = $4;
-					$$->conname = NULL;
 					$$->location = @1;
 				}
 			|
 			ON CONSTRAINT name
 				{
 					$$ = makeNode(InferClause);
-					$$->indexElems = NIL;
-					$$->whereClause = NULL;
 					$$->conname = $3;
 					$$->location = @1;
 				}
@@ -11479,8 +11255,6 @@ simple_select:
 					cr->fields = list_make1(makeNode(A_Star));
 					cr->location = -1;
 
-					rt->name = NULL;
-					rt->indirection = NIL;
 					rt->val = (Node *)cr;
 					rt->location = -1;
 
@@ -11623,12 +11397,6 @@ into_clause:
 				{
 					$$ = makeNode(IntoClause);
 					$$->rel = $2;
-					$$->colNames = NIL;
-					$$->options = NIL;
-					$$->onCommit = ONCOMMIT_NOOP;
-					$$->tableSpaceName = NULL;
-					$$->viewQuery = NULL;
-					$$->skipData = false;
 				}
 			| /*EMPTY*/
 				{ $$ = NULL; }
@@ -12581,16 +12349,8 @@ TableFuncElement:	ColId Typename opt_collate_clause
 					ColumnDef *n = makeNode(ColumnDef);
 					n->colname = $1;
 					n->typeName = $2;
-					n->inhcount = 0;
 					n->is_local = true;
-					n->is_not_null = false;
-					n->is_from_type = false;
-					n->storage = 0;
-					n->raw_default = NULL;
-					n->cooked_default = NULL;
 					n->collClause = (CollateClause *) $3;
-					n->collOid = InvalidOid;
-					n->constraints = NIL;
 					n->location = @1;
 					$$ = (Node *)n;
 				}
@@ -12633,11 +12393,7 @@ xmltable_column_el:
 					RangeTableFuncCol	   *fc = makeNode(RangeTableFuncCol);
 
 					fc->colname = $1;
-					fc->for_ordinality = false;
 					fc->typeName = $2;
-					fc->is_not_null = false;
-					fc->colexpr = NULL;
-					fc->coldefexpr = NULL;
 					fc->location = @1;
 
 					$$ = (Node *) fc;
@@ -12650,10 +12406,6 @@ xmltable_column_el:
 
 					fc->colname = $1;
 					fc->typeName = $2;
-					fc->for_ordinality = false;
-					fc->is_not_null = false;
-					fc->colexpr = NULL;
-					fc->coldefexpr = NULL;
 					fc->location = @1;
 
 					foreach(option, $3)
@@ -12742,7 +12494,6 @@ xml_namespace_el:
 				{
 					$$ = makeNode(ResTarget);
 					$$->name = $3;
-					$$->indirection = NIL;
 					$$->val = $1;
 					$$->location = @1;
 				}
@@ -12750,7 +12501,6 @@ xml_namespace_el:
 				{
 					$$ = makeNode(ResTarget);
 					$$->name = NULL;
-					$$->indirection = NIL;
 					$$->val = $2;
 					$$->location = @1;
 				}
@@ -13797,9 +13547,6 @@ c_expr:		columnref								{ $$ = $1; }
 				{
 					SubLink *n = makeNode(SubLink);
 					n->subLinkType = EXPR_SUBLINK;
-					n->subLinkId = 0;
-					n->testexpr = NULL;
-					n->operName = NIL;
 					n->subselect = $1;
 					n->location = @1;
 					$$ = (Node *)n;
@@ -13819,9 +13566,6 @@ c_expr:		columnref								{ $$ = $1; }
 					SubLink *n = makeNode(SubLink);
 					A_Indirection *a = makeNode(A_Indirection);
 					n->subLinkType = EXPR_SUBLINK;
-					n->subLinkId = 0;
-					n->testexpr = NULL;
-					n->operName = NIL;
 					n->subselect = $1;
 					n->location = @1;
 					a->arg = (Node *)n;
@@ -13832,9 +13576,6 @@ c_expr:		columnref								{ $$ = $1; }
 				{
 					SubLink *n = makeNode(SubLink);
 					n->subLinkType = EXISTS_SUBLINK;
-					n->subLinkId = 0;
-					n->testexpr = NULL;
-					n->operName = NIL;
 					n->subselect = $2;
 					n->location = @1;
 					$$ = (Node *)n;
@@ -13843,9 +13584,6 @@ c_expr:		columnref								{ $$ = $1; }
 				{
 					SubLink *n = makeNode(SubLink);
 					n->subLinkType = ARRAY_SUBLINK;
-					n->subLinkId = 0;
-					n->testexpr = NULL;
-					n->operName = NIL;
 					n->subselect = $2;
 					n->location = @1;
 					$$ = (Node *)n;
@@ -14336,7 +14074,6 @@ xml_attribute_el: a_expr AS ColLabel
 				{
 					$$ = makeNode(ResTarget);
 					$$->name = $3;
-					$$->indirection = NIL;
 					$$->val = (Node *) $1;
 					$$->location = @1;
 				}
@@ -14344,7 +14081,6 @@ xml_attribute_el: a_expr AS ColLabel
 				{
 					$$ = makeNode(ResTarget);
 					$$->name = NULL;
-					$$->indirection = NIL;
 					$$->val = (Node *) $1;
 					$$->location = @1;
 				}
@@ -14428,12 +14164,7 @@ over_clause: OVER window_specification
 				{
 					WindowDef *n = makeNode(WindowDef);
 					n->name = $2;
-					n->refname = NULL;
-					n->partitionClause = NIL;
-					n->orderClause = NIL;
 					n->frameOptions = FRAMEOPTION_DEFAULTS;
-					n->startOffset = NULL;
-					n->endOffset = NULL;
 					n->location = @2;
 					$$ = n;
 				}
@@ -14445,7 +14176,6 @@ window_specification: '(' opt_existing_window_name opt_partition_clause
 						opt_sort_clause opt_frame_clause ')'
 				{
 					WindowDef *n = makeNode(WindowDef);
-					n->name = NULL;
 					n->refname = $2;
 					n->partitionClause = $3;
 					n->orderClause = $4;
@@ -14506,8 +14236,6 @@ opt_frame_clause:
 				{
 					WindowDef *n = makeNode(WindowDef);
 					n->frameOptions = FRAMEOPTION_DEFAULTS;
-					n->startOffset = NULL;
-					n->endOffset = NULL;
 					$$ = n;
 				}
 		;
@@ -14578,24 +14306,18 @@ frame_bound:
 				{
 					WindowDef *n = makeNode(WindowDef);
 					n->frameOptions = FRAMEOPTION_START_UNBOUNDED_PRECEDING;
-					n->startOffset = NULL;
-					n->endOffset = NULL;
 					$$ = n;
 				}
 			| UNBOUNDED FOLLOWING
 				{
 					WindowDef *n = makeNode(WindowDef);
 					n->frameOptions = FRAMEOPTION_START_UNBOUNDED_FOLLOWING;
-					n->startOffset = NULL;
-					n->endOffset = NULL;
 					$$ = n;
 				}
 			| CURRENT_P ROW
 				{
 					WindowDef *n = makeNode(WindowDef);
 					n->frameOptions = FRAMEOPTION_START_CURRENT_ROW;
-					n->startOffset = NULL;
-					n->endOffset = NULL;
 					$$ = n;
 				}
 			| a_expr PRECEDING
@@ -15022,7 +14744,6 @@ target_el:	a_expr AS ColLabel
 				{
 					$$ = makeNode(ResTarget);
 					$$->name = $3;
-					$$->indirection = NIL;
 					$$->val = (Node *)$1;
 					$$->location = @1;
 				}
@@ -15030,7 +14751,6 @@ target_el:	a_expr AS ColLabel
 				{
 					$$ = makeNode(ResTarget);
 					$$->name = $2;
-					$$->indirection = NIL;
 					$$->val = (Node *)$1;
 					$$->location = @1;
 				}
@@ -15038,7 +14758,6 @@ target_el:	a_expr AS ColLabel
 				{
 					$$ = makeNode(ResTarget);
 					$$->name = NULL;
-					$$->indirection = NIL;
 					$$->val = (Node *)$1;
 					$$->location = @1;
 				}
@@ -15050,7 +14769,6 @@ target_el:	a_expr AS ColLabel
 
 					$$ = makeNode(ResTarget);
 					$$->name = NULL;
-					$$->indirection = NIL;
 					$$->val = (Node *)n;
 					$$->location = @1;
 				}
@@ -17222,8 +16940,6 @@ makeRecursiveViewSelect(char *relname, List *aliases, Node *query)
 	{
 		ResTarget *rt = makeNode(ResTarget);
 
-		rt->name = NULL;
-		rt->indirection = NIL;
 		rt->val = makeColumnRef(strVal(lfirst(lc)), NIL, -1, 0);
 		rt->location = -1;
 

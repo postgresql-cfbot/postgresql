@@ -449,9 +449,6 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 										 ACL_DELETE);
 	nsitem = pstate->p_target_nsitem;
 
-	/* there's no DISTINCT in DELETE */
-	qry->distinctClause = NIL;
-
 	/* subqueries in USING cannot access the result relation */
 	nsitem->p_lateral_only = true;
 	nsitem->p_lateral_ok = false;

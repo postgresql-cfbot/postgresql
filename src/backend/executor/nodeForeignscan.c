@@ -220,7 +220,6 @@ ExecInitForeignScan(ForeignScan *node, EState *estate, int eflags)
 	 * Initialize FDW-related state.
 	 */
 	scanstate->fdwroutine = fdwroutine;
-	scanstate->fdw_state = NULL;
 
 	/*
 	 * For the FDW's convenience, look up the modification target relation's.

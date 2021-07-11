@@ -994,8 +994,6 @@ transformRangeTableSample(ParseState *pstate, RangeTableSample *rts)
 		assign_expr_collations(pstate, arg);
 		tablesample->repeatable = (Expr *) arg;
 	}
-	else
-		tablesample->repeatable = NULL;
 
 	return tablesample;
 }

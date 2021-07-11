@@ -60,27 +60,18 @@ gisthandler(PG_FUNCTION_ARGS)
 {
 	IndexAmRoutine *amroutine = makeNode(IndexAmRoutine);
 
-	amroutine->amstrategies = 0;
 	amroutine->amsupport = GISTNProcs;
 	amroutine->amoptsprocnum = GIST_OPTIONS_PROC;
-	amroutine->amcanorder = false;
 	amroutine->amcanorderbyop = true;
-	amroutine->amcanbackward = false;
-	amroutine->amcanunique = false;
 	amroutine->amcanmulticol = true;
 	amroutine->amoptionalkey = true;
-	amroutine->amsearcharray = false;
 	amroutine->amsearchnulls = true;
 	amroutine->amstorage = true;
 	amroutine->amclusterable = true;
 	amroutine->ampredlocks = true;
-	amroutine->amcanparallel = false;
 	amroutine->amcaninclude = true;
-	amroutine->amusemaintenanceworkmem = false;
 	amroutine->amparallelvacuumoptions =
 		VACUUM_OPTION_PARALLEL_BULKDEL | VACUUM_OPTION_PARALLEL_COND_CLEANUP;
-	amroutine->amkeytype = InvalidOid;
-
 	amroutine->ambuild = gistbuild;
 	amroutine->ambuildempty = gistbuildempty;
 	amroutine->aminsert = gistinsert;
@@ -98,11 +89,6 @@ gisthandler(PG_FUNCTION_ARGS)
 	amroutine->amgettuple = gistgettuple;
 	amroutine->amgetbitmap = gistgetbitmap;
 	amroutine->amendscan = gistendscan;
-	amroutine->ammarkpos = NULL;
-	amroutine->amrestrpos = NULL;
-	amroutine->amestimateparallelscan = NULL;
-	amroutine->aminitparallelscan = NULL;
-	amroutine->amparallelrescan = NULL;
 
 	PG_RETURN_POINTER(amroutine);
 }

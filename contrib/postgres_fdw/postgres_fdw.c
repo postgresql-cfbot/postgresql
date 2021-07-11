@@ -664,8 +664,6 @@ postgresGetForeignRelSize(PlannerInfo *root,
 
 		fpinfo->user = GetUserMapping(userid, fpinfo->server->serverid);
 	}
-	else
-		fpinfo->user = NULL;
 
 	/*
 	 * Identify which baserestrictinfo clauses can be sent to the remote
@@ -682,7 +680,6 @@ postgresGetForeignRelSize(PlannerInfo *root,
 	 * sent to the remote and thus we wouldn't really need to retrieve the
 	 * columns used in them.  Doesn't seem worth detecting that case though.)
 	 */
-	fpinfo->attrs_used = NULL;
 	pull_varattnos((Node *) baserel->reltarget->exprs, baserel->relid,
 				   &fpinfo->attrs_used);
 	foreach(lc, fpinfo->local_conds)
@@ -771,10 +768,6 @@ postgresGetForeignRelSize(PlannerInfo *root,
 	 */
 	fpinfo->relation_name = psprintf("%u", baserel->relid);
 
-	/* No outer and inner relations. */
-	fpinfo->make_outerrel_subquery = false;
-	fpinfo->make_innerrel_subquery = false;
-	fpinfo->lower_subquery_rels = NULL;
 	/* Set the relation index. */
 	fpinfo->relation_index = baserel->relid;
 }

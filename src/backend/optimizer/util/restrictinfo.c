@@ -134,8 +134,6 @@ make_restrictinfo_internal(PlannerInfo *root,
 	 */
 	if (security_level > 0)
 		restrictinfo->leakproof = !contain_leaked_vars((Node *) clause);
-	else
-		restrictinfo->leakproof = false;	/* really, "don't know" */
 
 	/*
 	 * Mark volatility as unknown.  The contain_volatile_functions function
@@ -174,10 +172,7 @@ make_restrictinfo_internal(PlannerInfo *root,
 	}
 	else
 	{
-		/* Not a binary opclause, so mark left/right relid sets as empty */
-		restrictinfo->left_relids = NULL;
-		restrictinfo->right_relids = NULL;
-		/* and get the total relid set the hard way */
+		/* Not a binary opclause, so get the total relid set the hard way */
 		restrictinfo->clause_relids = pull_varnos(root, (Node *) clause);
 	}
 
@@ -194,23 +189,10 @@ make_restrictinfo_internal(PlannerInfo *root,
 	 * that happens only if it appears in the right context (top level of a
 	 * joinclause list).
 	 */
-	restrictinfo->parent_ec = NULL;
 
 	restrictinfo->eval_cost.startup = -1;
 	restrictinfo->norm_selec = -1;
 	restrictinfo->outer_selec = -1;
-
-	restrictinfo->mergeopfamilies = NIL;
-
-	restrictinfo->left_ec = NULL;
-	restrictinfo->right_ec = NULL;
-	restrictinfo->left_em = NULL;
-	restrictinfo->right_em = NULL;
-	restrictinfo->scansel_cache = NIL;
-
-	restrictinfo->outer_is_left = false;
-
-	restrictinfo->hashjoinoperator = InvalidOid;
 
 	restrictinfo->left_bucketsize = -1;
 	restrictinfo->right_bucketsize = -1;

@@ -194,32 +194,8 @@ CreateCachedPlan(RawStmt *raw_parse_tree,
 	plansource->query_string = pstrdup(query_string);
 	MemoryContextSetIdentifier(source_context, plansource->query_string);
 	plansource->commandTag = commandTag;
-	plansource->param_types = NULL;
-	plansource->num_params = 0;
-	plansource->parserSetup = NULL;
-	plansource->parserSetupArg = NULL;
-	plansource->cursor_options = 0;
-	plansource->fixed_result = false;
-	plansource->resultDesc = NULL;
 	plansource->context = source_context;
-	plansource->query_list = NIL;
-	plansource->relationOids = NIL;
-	plansource->invalItems = NIL;
-	plansource->search_path = NULL;
-	plansource->query_context = NULL;
-	plansource->rewriteRoleId = InvalidOid;
-	plansource->rewriteRowSecurity = false;
-	plansource->dependsOnRLS = false;
-	plansource->gplan = NULL;
-	plansource->is_oneshot = false;
-	plansource->is_complete = false;
-	plansource->is_saved = false;
-	plansource->is_valid = false;
-	plansource->generation = 0;
 	plansource->generic_cost = -1;
-	plansource->total_custom_cost = 0;
-	plansource->num_generic_plans = 0;
-	plansource->num_custom_plans = 0;
 
 	MemoryContextSwitchTo(oldcxt);
 
@@ -262,32 +238,9 @@ CreateOneShotCachedPlan(RawStmt *raw_parse_tree,
 	plansource->raw_parse_tree = raw_parse_tree;
 	plansource->query_string = query_string;
 	plansource->commandTag = commandTag;
-	plansource->param_types = NULL;
-	plansource->num_params = 0;
-	plansource->parserSetup = NULL;
-	plansource->parserSetupArg = NULL;
-	plansource->cursor_options = 0;
-	plansource->fixed_result = false;
-	plansource->resultDesc = NULL;
 	plansource->context = CurrentMemoryContext;
-	plansource->query_list = NIL;
-	plansource->relationOids = NIL;
-	plansource->invalItems = NIL;
-	plansource->search_path = NULL;
-	plansource->query_context = NULL;
-	plansource->rewriteRoleId = InvalidOid;
-	plansource->rewriteRowSecurity = false;
-	plansource->dependsOnRLS = false;
-	plansource->gplan = NULL;
 	plansource->is_oneshot = true;
-	plansource->is_complete = false;
-	plansource->is_saved = false;
-	plansource->is_valid = false;
-	plansource->generation = 0;
 	plansource->generic_cost = -1;
-	plansource->total_custom_cost = 0;
-	plansource->num_generic_plans = 0;
-	plansource->num_custom_plans = 0;
 
 	return plansource;
 }

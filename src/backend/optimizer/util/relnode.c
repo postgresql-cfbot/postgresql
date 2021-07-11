@@ -208,56 +208,15 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	rel = makeNode(RelOptInfo);
 	rel->reloptkind = parent ? RELOPT_OTHER_MEMBER_REL : RELOPT_BASEREL;
 	rel->relids = bms_make_singleton(relid);
-	rel->rows = 0;
 	/* cheap startup cost is interesting iff not all tuples to be retrieved */
 	rel->consider_startup = (root->tuple_fraction > 0);
-	rel->consider_param_startup = false;	/* might get changed later */
-	rel->consider_parallel = false; /* might get changed later */
 	rel->reltarget = create_empty_pathtarget();
-	rel->pathlist = NIL;
-	rel->ppilist = NIL;
-	rel->partial_pathlist = NIL;
-	rel->cheapest_startup_path = NULL;
-	rel->cheapest_total_path = NULL;
-	rel->cheapest_unique_path = NULL;
-	rel->cheapest_parameterized_paths = NIL;
 	rel->relid = relid;
 	rel->rtekind = rte->rtekind;
-	/* min_attr, max_attr, attr_needed, attr_widths are set below */
-	rel->lateral_vars = NIL;
-	rel->indexlist = NIL;
-	rel->statlist = NIL;
-	rel->pages = 0;
-	rel->tuples = 0;
-	rel->allvisfrac = 0;
-	rel->eclass_indexes = NULL;
-	rel->subroot = NULL;
-	rel->subplan_params = NIL;
 	rel->rel_parallel_workers = -1; /* set up in get_relation_info */
-	rel->amflags = 0;
-	rel->serverid = InvalidOid;
 	rel->userid = rte->checkAsUser;
-	rel->useridiscurrent = false;
-	rel->fdwroutine = NULL;
-	rel->fdw_private = NULL;
-	rel->unique_for_rels = NIL;
-	rel->non_unique_for_rels = NIL;
-	rel->baserestrictinfo = NIL;
-	rel->baserestrictcost.startup = 0;
-	rel->baserestrictcost.per_tuple = 0;
 	rel->baserestrict_min_security = UINT_MAX;
-	rel->joininfo = NIL;
-	rel->has_eclass_joins = false;
-	rel->consider_partitionwise_join = false;	/* might get changed later */
-	rel->part_scheme = NULL;
 	rel->nparts = -1;
-	rel->boundinfo = NULL;
-	rel->partbounds_merged = false;
-	rel->partition_qual = NIL;
-	rel->part_rels = NULL;
-	rel->all_partrels = NULL;
-	rel->partexprs = NULL;
-	rel->nullable_partexprs = NULL;
 
 	/*
 	 * Pass assorted information down the inheritance hierarchy.
@@ -290,13 +249,6 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 		rel->direct_lateral_relids = parent->direct_lateral_relids;
 		rel->lateral_relids = parent->lateral_relids;
 		rel->lateral_referencers = parent->lateral_referencers;
-	}
-	else
-	{
-		rel->top_parent_relids = NULL;
-		rel->direct_lateral_relids = NULL;
-		rel->lateral_relids = NULL;
-		rel->lateral_referencers = NULL;
 	}
 
 	/* Check type of rtable entry */
@@ -611,19 +563,9 @@ build_join_rel(PlannerInfo *root,
 	joinrel = makeNode(RelOptInfo);
 	joinrel->reloptkind = RELOPT_JOINREL;
 	joinrel->relids = bms_copy(joinrelids);
-	joinrel->rows = 0;
 	/* cheap startup cost is interesting iff not all tuples to be retrieved */
 	joinrel->consider_startup = (root->tuple_fraction > 0);
-	joinrel->consider_param_startup = false;
-	joinrel->consider_parallel = false;
 	joinrel->reltarget = create_empty_pathtarget();
-	joinrel->pathlist = NIL;
-	joinrel->ppilist = NIL;
-	joinrel->partial_pathlist = NIL;
-	joinrel->cheapest_startup_path = NULL;
-	joinrel->cheapest_total_path = NULL;
-	joinrel->cheapest_unique_path = NULL;
-	joinrel->cheapest_parameterized_paths = NIL;
 	/* init direct_lateral_relids from children; we'll finish it up below */
 	joinrel->direct_lateral_relids =
 		bms_union(outer_rel->direct_lateral_relids,
@@ -632,46 +574,9 @@ build_join_rel(PlannerInfo *root,
 														outer_rel, inner_rel);
 	joinrel->relid = 0;			/* indicates not a baserel */
 	joinrel->rtekind = RTE_JOIN;
-	joinrel->min_attr = 0;
-	joinrel->max_attr = 0;
-	joinrel->attr_needed = NULL;
-	joinrel->attr_widths = NULL;
-	joinrel->lateral_vars = NIL;
-	joinrel->lateral_referencers = NULL;
-	joinrel->indexlist = NIL;
-	joinrel->statlist = NIL;
-	joinrel->pages = 0;
-	joinrel->tuples = 0;
-	joinrel->allvisfrac = 0;
-	joinrel->eclass_indexes = NULL;
-	joinrel->subroot = NULL;
-	joinrel->subplan_params = NIL;
 	joinrel->rel_parallel_workers = -1;
-	joinrel->amflags = 0;
-	joinrel->serverid = InvalidOid;
-	joinrel->userid = InvalidOid;
-	joinrel->useridiscurrent = false;
-	joinrel->fdwroutine = NULL;
-	joinrel->fdw_private = NULL;
-	joinrel->unique_for_rels = NIL;
-	joinrel->non_unique_for_rels = NIL;
-	joinrel->baserestrictinfo = NIL;
-	joinrel->baserestrictcost.startup = 0;
-	joinrel->baserestrictcost.per_tuple = 0;
 	joinrel->baserestrict_min_security = UINT_MAX;
-	joinrel->joininfo = NIL;
-	joinrel->has_eclass_joins = false;
-	joinrel->consider_partitionwise_join = false;	/* might get changed later */
-	joinrel->top_parent_relids = NULL;
-	joinrel->part_scheme = NULL;
 	joinrel->nparts = -1;
-	joinrel->boundinfo = NULL;
-	joinrel->partbounds_merged = false;
-	joinrel->partition_qual = NIL;
-	joinrel->part_rels = NULL;
-	joinrel->all_partrels = NULL;
-	joinrel->partexprs = NULL;
-	joinrel->nullable_partexprs = NULL;
 
 	/* Compute information relevant to the foreign relations. */
 	set_foreign_rel_properties(joinrel, outer_rel, inner_rel);
@@ -798,58 +703,12 @@ build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 
 	joinrel->reloptkind = RELOPT_OTHER_JOINREL;
 	joinrel->relids = bms_union(outer_rel->relids, inner_rel->relids);
-	joinrel->rows = 0;
 	/* cheap startup cost is interesting iff not all tuples to be retrieved */
 	joinrel->consider_startup = (root->tuple_fraction > 0);
-	joinrel->consider_param_startup = false;
-	joinrel->consider_parallel = false;
 	joinrel->reltarget = create_empty_pathtarget();
-	joinrel->pathlist = NIL;
-	joinrel->ppilist = NIL;
-	joinrel->partial_pathlist = NIL;
-	joinrel->cheapest_startup_path = NULL;
-	joinrel->cheapest_total_path = NULL;
-	joinrel->cheapest_unique_path = NULL;
-	joinrel->cheapest_parameterized_paths = NIL;
-	joinrel->direct_lateral_relids = NULL;
-	joinrel->lateral_relids = NULL;
 	joinrel->relid = 0;			/* indicates not a baserel */
 	joinrel->rtekind = RTE_JOIN;
-	joinrel->min_attr = 0;
-	joinrel->max_attr = 0;
-	joinrel->attr_needed = NULL;
-	joinrel->attr_widths = NULL;
-	joinrel->lateral_vars = NIL;
-	joinrel->lateral_referencers = NULL;
-	joinrel->indexlist = NIL;
-	joinrel->pages = 0;
-	joinrel->tuples = 0;
-	joinrel->allvisfrac = 0;
-	joinrel->eclass_indexes = NULL;
-	joinrel->subroot = NULL;
-	joinrel->subplan_params = NIL;
-	joinrel->amflags = 0;
-	joinrel->serverid = InvalidOid;
-	joinrel->userid = InvalidOid;
-	joinrel->useridiscurrent = false;
-	joinrel->fdwroutine = NULL;
-	joinrel->fdw_private = NULL;
-	joinrel->baserestrictinfo = NIL;
-	joinrel->baserestrictcost.startup = 0;
-	joinrel->baserestrictcost.per_tuple = 0;
-	joinrel->joininfo = NIL;
-	joinrel->has_eclass_joins = false;
-	joinrel->consider_partitionwise_join = false;	/* might get changed later */
-	joinrel->top_parent_relids = NULL;
-	joinrel->part_scheme = NULL;
 	joinrel->nparts = -1;
-	joinrel->boundinfo = NULL;
-	joinrel->partbounds_merged = false;
-	joinrel->partition_qual = NIL;
-	joinrel->part_rels = NULL;
-	joinrel->all_partrels = NULL;
-	joinrel->partexprs = NULL;
-	joinrel->nullable_partexprs = NULL;
 
 	joinrel->top_parent_relids = bms_union(outer_rel->top_parent_relids,
 										   inner_rel->top_parent_relids);
@@ -1231,14 +1090,7 @@ fetch_upper_rel(PlannerInfo *root, UpperRelationKind kind, Relids relids)
 
 	/* cheap startup cost is interesting iff not all tuples to be retrieved */
 	upperrel->consider_startup = (root->tuple_fraction > 0);
-	upperrel->consider_param_startup = false;
-	upperrel->consider_parallel = false;	/* might get changed later */
 	upperrel->reltarget = create_empty_pathtarget();
-	upperrel->pathlist = NIL;
-	upperrel->cheapest_startup_path = NULL;
-	upperrel->cheapest_total_path = NULL;
-	upperrel->cheapest_unique_path = NULL;
-	upperrel->cheapest_parameterized_paths = NIL;
 
 	root->upper_rels[kind] = lappend(root->upper_rels[kind], upperrel);
 

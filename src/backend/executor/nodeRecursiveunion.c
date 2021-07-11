@@ -180,14 +180,7 @@ ExecInitRecursiveUnion(RecursiveUnion *node, EState *estate, int eflags)
 	rustate->ps.state = estate;
 	rustate->ps.ExecProcNode = ExecRecursiveUnion;
 
-	rustate->eqfuncoids = NULL;
-	rustate->hashfunctions = NULL;
-	rustate->hashtable = NULL;
-	rustate->tempContext = NULL;
-	rustate->tableContext = NULL;
-
 	/* initialize processing state */
-	rustate->recursing = false;
 	rustate->intermediate_empty = true;
 	rustate->working_table = tuplestore_begin_heap(false, false, work_mem);
 	rustate->intermediate_table = tuplestore_begin_heap(false, false, work_mem);

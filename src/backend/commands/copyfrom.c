@@ -664,7 +664,6 @@ CopyFrom(CopyFromState cstate)
 	 * foreign-table result relation(s).
 	 */
 	mtstate = makeNode(ModifyTableState);
-	mtstate->ps.plan = NULL;
 	mtstate->ps.state = estate;
 	mtstate->operation = CMD_INSERT;
 	mtstate->mt_nrels = 1;
@@ -1347,9 +1346,6 @@ BeginCopyFrom(ParseState *pstate,
 	/* Initialize state variables */
 	cstate->eol_type = EOL_UNKNOWN;
 	cstate->cur_relname = RelationGetRelationName(cstate->rel);
-	cstate->cur_lineno = 0;
-	cstate->cur_attname = NULL;
-	cstate->cur_attval = NULL;
 
 	/*
 	 * Allocate buffers for the input pipeline.

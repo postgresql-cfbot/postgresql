@@ -423,12 +423,10 @@ makeRangeVar(char *schemaname, char *relname, int location)
 {
 	RangeVar   *r = makeNode(RangeVar);
 
-	r->catalogname = NULL;
 	r->schemaname = schemaname;
 	r->relname = relname;
 	r->inh = true;
 	r->relpersistence = RELPERSISTENCE_PERMANENT;
-	r->alias = NULL;
 	r->location = location;
 
 	return r;
@@ -493,17 +491,8 @@ makeColumnDef(const char *colname, Oid typeOid, int32 typmod, Oid collOid)
 
 	n->colname = pstrdup(colname);
 	n->typeName = makeTypeNameFromOid(typeOid, typmod);
-	n->inhcount = 0;
 	n->is_local = true;
-	n->is_not_null = false;
-	n->is_from_type = false;
-	n->storage = 0;
-	n->raw_default = NULL;
-	n->cooked_default = NULL;
-	n->collClause = NULL;
 	n->collOid = collOid;
-	n->constraints = NIL;
-	n->fdwoptions = NIL;
 	n->location = -1;
 
 	return n;
@@ -547,7 +536,6 @@ makeDefElem(char *name, Node *arg, int location)
 {
 	DefElem    *res = makeNode(DefElem);
 
-	res->defnamespace = NULL;
 	res->defname = name;
 	res->arg = arg;
 	res->defaction = DEFELEM_UNSPEC;
@@ -588,13 +576,6 @@ makeFuncCall(List *name, List *args, CoercionForm funcformat, int location)
 
 	n->funcname = name;
 	n->args = args;
-	n->agg_order = NIL;
-	n->agg_filter = NULL;
-	n->over = NULL;
-	n->agg_within_group = false;
-	n->agg_star = false;
-	n->agg_distinct = false;
-	n->func_variadic = false;
 	n->funcformat = funcformat;
 	n->location = location;
 	return n;
@@ -752,35 +733,10 @@ makeIndexInfo(int numattrs, int numkeyattrs, Oid amoid, List *expressions,
 	n->ii_Unique = unique;
 	n->ii_ReadyForInserts = isready;
 	n->ii_Concurrent = concurrent;
-
-	/* expressions */
 	n->ii_Expressions = expressions;
-	n->ii_ExpressionsState = NIL;
-
-	/* predicates  */
 	n->ii_Predicate = predicates;
-	n->ii_PredicateState = NULL;
-
-	/* exclusion constraints */
-	n->ii_ExclusionOps = NULL;
-	n->ii_ExclusionProcs = NULL;
-	n->ii_ExclusionStrats = NULL;
-
-	/* opclass options */
-	n->ii_OpclassOptions = NULL;
-
-	/* speculative inserts */
-	n->ii_UniqueOps = NULL;
-	n->ii_UniqueProcs = NULL;
-	n->ii_UniqueStrats = NULL;
-
-	/* initialize index-build state to default */
-	n->ii_BrokenHotChain = false;
-	n->ii_ParallelWorkers = 0;
-
 	/* set up for possible use by index AM */
 	n->ii_Am = amoid;
-	n->ii_AmCache = NULL;
 	n->ii_Context = CurrentMemoryContext;
 
 	return n;

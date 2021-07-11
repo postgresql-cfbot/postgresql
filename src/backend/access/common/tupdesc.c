@@ -846,17 +846,7 @@ BuildDescForRelation(List *schema)
 		TupleConstr *constr = (TupleConstr *) palloc0(sizeof(TupleConstr));
 
 		constr->has_not_null = true;
-		constr->has_generated_stored = false;
-		constr->defval = NULL;
-		constr->missing = NULL;
-		constr->num_defval = 0;
-		constr->check = NULL;
-		constr->num_check = 0;
 		desc->constr = constr;
-	}
-	else
-	{
-		desc->constr = NULL;
 	}
 
 	return desc;

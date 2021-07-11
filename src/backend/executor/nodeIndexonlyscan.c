@@ -571,13 +571,6 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 	indexstate->ioss_RelationDesc = index_open(node->indexid, lockmode);
 
 	/*
-	 * Initialize index-specific scan state
-	 */
-	indexstate->ioss_RuntimeKeysReady = false;
-	indexstate->ioss_RuntimeKeys = NULL;
-	indexstate->ioss_NumRuntimeKeys = 0;
-
-	/*
 	 * build the index scan keys from the index qualification
 	 */
 	ExecIndexBuildScanKeys((PlanState *) indexstate,
@@ -618,10 +611,6 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 		ExecAssignExprContext(estate, &indexstate->ss.ps);
 		indexstate->ioss_RuntimeContext = indexstate->ss.ps.ps_ExprContext;
 		indexstate->ss.ps.ps_ExprContext = stdecontext;
-	}
-	else
-	{
-		indexstate->ioss_RuntimeContext = NULL;
 	}
 
 	/*

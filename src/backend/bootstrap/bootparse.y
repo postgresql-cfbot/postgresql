@@ -278,26 +278,7 @@ Boot_DeclareIndexStmt:
 					stmt->idxname = $3;
 					stmt->relation = makeRangeVar(NULL, $6, -1);
 					stmt->accessMethod = $8;
-					stmt->tableSpace = NULL;
 					stmt->indexParams = $10;
-					stmt->indexIncludingParams = NIL;
-					stmt->options = NIL;
-					stmt->whereClause = NULL;
-					stmt->excludeOpNames = NIL;
-					stmt->idxcomment = NULL;
-					stmt->indexOid = InvalidOid;
-					stmt->oldNode = InvalidOid;
-					stmt->oldCreateSubid = InvalidSubTransactionId;
-					stmt->oldFirstRelfilenodeSubid = InvalidSubTransactionId;
-					stmt->unique = false;
-					stmt->primary = false;
-					stmt->isconstraint = false;
-					stmt->deferrable = false;
-					stmt->initdeferred = false;
-					stmt->transformed = false;
-					stmt->concurrent = false;
-					stmt->if_not_exists = false;
-					stmt->reset_default_tblspc = false;
 
 					/* locks and races need not concern us in bootstrap mode */
 					relationId = RangeVarGetRelid(stmt->relation, NoLock,
@@ -330,26 +311,8 @@ Boot_DeclareUniqueIndexStmt:
 					stmt->idxname = $4;
 					stmt->relation = makeRangeVar(NULL, $7, -1);
 					stmt->accessMethod = $9;
-					stmt->tableSpace = NULL;
 					stmt->indexParams = $11;
-					stmt->indexIncludingParams = NIL;
-					stmt->options = NIL;
-					stmt->whereClause = NULL;
-					stmt->excludeOpNames = NIL;
-					stmt->idxcomment = NULL;
-					stmt->indexOid = InvalidOid;
-					stmt->oldNode = InvalidOid;
-					stmt->oldCreateSubid = InvalidSubTransactionId;
-					stmt->oldFirstRelfilenodeSubid = InvalidSubTransactionId;
 					stmt->unique = true;
-					stmt->primary = false;
-					stmt->isconstraint = false;
-					stmt->deferrable = false;
-					stmt->initdeferred = false;
-					stmt->transformed = false;
-					stmt->concurrent = false;
-					stmt->if_not_exists = false;
-					stmt->reset_default_tblspc = false;
 
 					/* locks and races need not concern us in bootstrap mode */
 					relationId = RangeVarGetRelid(stmt->relation, NoLock,
@@ -401,9 +364,6 @@ boot_index_param:
 				{
 					IndexElem *n = makeNode(IndexElem);
 					n->name = $1;
-					n->expr = NULL;
-					n->indexcolname = NULL;
-					n->collation = NIL;
 					n->opclass = list_make1(makeString($2));
 					n->ordering = SORTBY_DEFAULT;
 					n->nulls_ordering = SORTBY_NULLS_DEFAULT;

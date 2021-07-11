@@ -101,13 +101,9 @@ create_ctas_internal(List *attrList, IntoClause *into)
 	 */
 	create->relation = into->rel;
 	create->tableElts = attrList;
-	create->inhRelations = NIL;
-	create->ofTypename = NULL;
-	create->constraints = NIL;
 	create->options = into->options;
 	create->oncommit = into->onCommit;
 	create->tablespacename = into->tableSpaceName;
-	create->if_not_exists = false;
 	create->accessMethod = into->accessMethod;
 
 	/*

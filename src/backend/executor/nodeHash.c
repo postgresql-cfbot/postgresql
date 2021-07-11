@@ -365,7 +365,6 @@ ExecInitHash(Hash *node, EState *estate, int eflags)
 	hashstate->ps.plan = (Plan *) node;
 	hashstate->ps.state = estate;
 	hashstate->ps.ExecProcNode = ExecHash;
-	hashstate->hashtable = NULL;
 	hashstate->hashkeys = NIL;	/* will be set by parent HashJoin */
 
 	/*

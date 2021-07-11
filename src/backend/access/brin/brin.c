@@ -91,49 +91,26 @@ brinhandler(PG_FUNCTION_ARGS)
 {
 	IndexAmRoutine *amroutine = makeNode(IndexAmRoutine);
 
-	amroutine->amstrategies = 0;
 	amroutine->amsupport = BRIN_LAST_OPTIONAL_PROCNUM;
 	amroutine->amoptsprocnum = BRIN_PROCNUM_OPTIONS;
-	amroutine->amcanorder = false;
-	amroutine->amcanorderbyop = false;
-	amroutine->amcanbackward = false;
-	amroutine->amcanunique = false;
 	amroutine->amcanmulticol = true;
 	amroutine->amoptionalkey = true;
-	amroutine->amsearcharray = false;
 	amroutine->amsearchnulls = true;
 	amroutine->amstorage = true;
-	amroutine->amclusterable = false;
-	amroutine->ampredlocks = false;
-	amroutine->amcanparallel = false;
-	amroutine->amcaninclude = false;
-	amroutine->amusemaintenanceworkmem = false;
 	amroutine->amparallelvacuumoptions =
 		VACUUM_OPTION_PARALLEL_CLEANUP;
-	amroutine->amkeytype = InvalidOid;
-
 	amroutine->ambuild = brinbuild;
 	amroutine->ambuildempty = brinbuildempty;
 	amroutine->aminsert = brininsert;
 	amroutine->ambulkdelete = brinbulkdelete;
 	amroutine->amvacuumcleanup = brinvacuumcleanup;
-	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = brincostestimate;
 	amroutine->amoptions = brinoptions;
-	amroutine->amproperty = NULL;
-	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = brinvalidate;
-	amroutine->amadjustmembers = NULL;
 	amroutine->ambeginscan = brinbeginscan;
 	amroutine->amrescan = brinrescan;
-	amroutine->amgettuple = NULL;
 	amroutine->amgetbitmap = bringetbitmap;
 	amroutine->amendscan = brinendscan;
-	amroutine->ammarkpos = NULL;
-	amroutine->amrestrpos = NULL;
-	amroutine->amestimateparallelscan = NULL;
-	amroutine->aminitparallelscan = NULL;
-	amroutine->amparallelrescan = NULL;
 
 	PG_RETURN_POINTER(amroutine);
 }

@@ -433,8 +433,6 @@ BeginCopyTo(ParseState *pstate,
 		PlannedStmt *plan;
 		DestReceiver *dest;
 
-		cstate->rel = NULL;
-
 		/*
 		 * Run parse analysis and rewrite.  Note this also acquires sufficient
 		 * locks on the source table(s).

@@ -110,46 +110,22 @@ blhandler(PG_FUNCTION_ARGS)
 	amroutine->amstrategies = BLOOM_NSTRATEGIES;
 	amroutine->amsupport = BLOOM_NPROC;
 	amroutine->amoptsprocnum = BLOOM_OPTIONS_PROC;
-	amroutine->amcanorder = false;
-	amroutine->amcanorderbyop = false;
-	amroutine->amcanbackward = false;
-	amroutine->amcanunique = false;
 	amroutine->amcanmulticol = true;
 	amroutine->amoptionalkey = true;
-	amroutine->amsearcharray = false;
-	amroutine->amsearchnulls = false;
-	amroutine->amstorage = false;
-	amroutine->amclusterable = false;
-	amroutine->ampredlocks = false;
-	amroutine->amcanparallel = false;
-	amroutine->amcaninclude = false;
-	amroutine->amusemaintenanceworkmem = false;
 	amroutine->amparallelvacuumoptions =
 		VACUUM_OPTION_PARALLEL_BULKDEL | VACUUM_OPTION_PARALLEL_CLEANUP;
-	amroutine->amkeytype = InvalidOid;
-
 	amroutine->ambuild = blbuild;
 	amroutine->ambuildempty = blbuildempty;
 	amroutine->aminsert = blinsert;
 	amroutine->ambulkdelete = blbulkdelete;
 	amroutine->amvacuumcleanup = blvacuumcleanup;
-	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = blcostestimate;
 	amroutine->amoptions = bloptions;
-	amroutine->amproperty = NULL;
-	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = blvalidate;
-	amroutine->amadjustmembers = NULL;
 	amroutine->ambeginscan = blbeginscan;
 	amroutine->amrescan = blrescan;
-	amroutine->amgettuple = NULL;
 	amroutine->amgetbitmap = blgetbitmap;
 	amroutine->amendscan = blendscan;
-	amroutine->ammarkpos = NULL;
-	amroutine->amrestrpos = NULL;
-	amroutine->amestimateparallelscan = NULL;
-	amroutine->aminitparallelscan = NULL;
-	amroutine->amparallelrescan = NULL;
 
 	PG_RETURN_POINTER(amroutine);
 }

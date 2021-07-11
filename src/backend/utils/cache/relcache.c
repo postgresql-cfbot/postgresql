@@ -397,9 +397,6 @@ AllocateRelationDesc(Form_pg_class relp)
 	 */
 	relation = (Relation) palloc0(sizeof(RelationData));
 
-	/* make sure relation is marked as having no open file yet */
-	relation->rd_smgr = NULL;
-
 	/*
 	 * Copy the relation tuple form
 	 *
@@ -1076,12 +1073,6 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	 * Normal relations are not nailed into the cache.  Since we don't flush
 	 * new relations, it won't be new.  It could be temp though.
 	 */
-	relation->rd_refcnt = 0;
-	relation->rd_isnailed = false;
-	relation->rd_createSubid = InvalidSubTransactionId;
-	relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
-	relation->rd_firstRelfilenodeSubid = InvalidSubTransactionId;
-	relation->rd_droppedSubid = InvalidSubTransactionId;
 	switch (relation->rd_rel->relpersistence)
 	{
 		case RELPERSISTENCE_UNLOGGED:
@@ -1132,37 +1123,12 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	 */
 	if (relation->rd_rel->relhasrules)
 		RelationBuildRuleLock(relation);
-	else
-	{
-		relation->rd_rules = NULL;
-		relation->rd_rulescxt = NULL;
-	}
 
 	if (relation->rd_rel->relhastriggers)
 		RelationBuildTriggers(relation);
-	else
-		relation->trigdesc = NULL;
 
 	if (relation->rd_rel->relrowsecurity)
 		RelationBuildRowSecurity(relation);
-	else
-		relation->rd_rsdesc = NULL;
-
-	/* foreign key data is not loaded till asked for */
-	relation->rd_fkeylist = NIL;
-	relation->rd_fkeyvalid = false;
-
-	/* partitioning data is not loaded till asked for */
-	relation->rd_partkey = NULL;
-	relation->rd_partkeycxt = NULL;
-	relation->rd_partdesc = NULL;
-	relation->rd_partdesc_nodetached = NULL;
-	relation->rd_partdesc_nodetached_xmin = InvalidTransactionId;
-	relation->rd_pdcxt = NULL;
-	relation->rd_pddcxt = NULL;
-	relation->rd_partcheck = NIL;
-	relation->rd_partcheckvalid = false;
-	relation->rd_partcheckcxt = NULL;
 
 	/*
 	 * initialize access method information
@@ -1204,9 +1170,6 @@ RelationBuildDesc(Oid targetRelId, bool insertIt)
 	 * initialize physical addressing information for the relation
 	 */
 	RelationInitPhysicalAddr(relation);
-
-	/* make sure relation is marked as having no open file yet */
-	relation->rd_smgr = NULL;
 
 	/*
 	 * now we can free the memory allocated for pg_class_tuple
@@ -1818,9 +1781,6 @@ formrdesc(const char *relationName, Oid relationReltype,
 	 */
 	relation = (Relation) palloc0(sizeof(RelationData));
 
-	/* make sure relation is marked as having no open file yet */
-	relation->rd_smgr = NULL;
-
 	/*
 	 * initialize reference count: 1 because it is nailed in cache
 	 */
@@ -1868,9 +1828,7 @@ formrdesc(const char *relationName, Oid relationReltype,
 	relation->rd_rel->relispopulated = true;
 
 	relation->rd_rel->relreplident = REPLICA_IDENTITY_NOTHING;
-	relation->rd_rel->relpages = 0;
 	relation->rd_rel->reltuples = -1;
-	relation->rd_rel->relallvisible = 0;
 	relation->rd_rel->relkind = RELKIND_RELATION;
 	relation->rd_rel->relnatts = (int16) natts;
 	relation->rd_rel->relam = HEAP_TABLE_AM_OID;
@@ -3418,9 +3376,6 @@ RelationBuildLocalRelation(const char *relname,
 	 * allocate a new relation descriptor and fill in basic state fields.
 	 */
 	rel = (Relation) palloc0(sizeof(RelationData));
-
-	/* make sure relation is marked as having no open file yet */
-	rel->rd_smgr = NULL;
 
 	/* mark it nailed if appropriate */
 	rel->rd_isnailed = nailit;

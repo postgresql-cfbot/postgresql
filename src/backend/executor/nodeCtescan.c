@@ -208,8 +208,6 @@ ExecInitCteScan(CteScan *node, EState *estate, int eflags)
 	scanstate->ss.ps.state = estate;
 	scanstate->ss.ps.ExecProcNode = ExecCteScan;
 	scanstate->eflags = eflags;
-	scanstate->cte_table = NULL;
-	scanstate->eof_cte = false;
 
 	/*
 	 * Find the already-initialized plan for the CTE query.

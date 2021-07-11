@@ -969,13 +969,6 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 	indexstate->iss_RelationDesc = index_open(node->indexid, lockmode);
 
 	/*
-	 * Initialize index-specific scan state
-	 */
-	indexstate->iss_RuntimeKeysReady = false;
-	indexstate->iss_RuntimeKeys = NULL;
-	indexstate->iss_NumRuntimeKeys = 0;
-
-	/*
 	 * build the index scan keys from the index qualification
 	 */
 	ExecIndexBuildScanKeys((PlanState *) indexstate,
@@ -1073,10 +1066,6 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 		ExecAssignExprContext(estate, &indexstate->ss.ps);
 		indexstate->iss_RuntimeContext = indexstate->ss.ps.ps_ExprContext;
 		indexstate->ss.ps.ps_ExprContext = stdecontext;
-	}
-	else
-	{
-		indexstate->iss_RuntimeContext = NULL;
 	}
 
 	/*

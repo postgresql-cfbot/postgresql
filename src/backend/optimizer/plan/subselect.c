@@ -335,16 +335,10 @@ build_subplan(PlannerInfo *root, Plan *plan, PlannerInfo *subroot,
 	 */
 	splan = makeNode(SubPlan);
 	splan->subLinkType = subLinkType;
-	splan->testexpr = NULL;
-	splan->paramIds = NIL;
 	get_first_col_type(plan, &splan->firstColType, &splan->firstColTypmod,
 					   &splan->firstColCollation);
-	splan->useHashTable = false;
 	splan->unknownEqFalse = unknownEqFalse;
 	splan->parallel_safe = plan->parallel_safe;
-	splan->setParam = NIL;
-	splan->parParam = NIL;
-	splan->args = NIL;
 
 	/*
 	 * Make parParam and args lists of param IDs and expressions that current
@@ -1008,12 +1002,8 @@ SS_process_ctes(PlannerInfo *root)
 		 */
 		splan = makeNode(SubPlan);
 		splan->subLinkType = CTE_SUBLINK;
-		splan->testexpr = NULL;
-		splan->paramIds = NIL;
 		get_first_col_type(plan, &splan->firstColType, &splan->firstColTypmod,
 						   &splan->firstColCollation);
-		splan->useHashTable = false;
-		splan->unknownEqFalse = false;
 
 		/*
 		 * CTE scans are not considered for parallelism (cf
@@ -1021,9 +1011,6 @@ SS_process_ctes(PlannerInfo *root)
 		 * parallel-safe.
 		 */
 		splan->parallel_safe = false;
-		splan->setParam = NIL;
-		splan->parParam = NIL;
-		splan->args = NIL;
 
 		/*
 		 * The node can't have any inputs (since it's an initplan), so the

@@ -813,26 +813,6 @@ ExecInitSubPlan(SubPlan *subplan, PlanState *parent)
 	sstate->args = ExecInitExprList(subplan->args, parent);
 
 	/*
-	 * initialize my state
-	 */
-	sstate->curTuple = NULL;
-	sstate->curArray = PointerGetDatum(NULL);
-	sstate->projLeft = NULL;
-	sstate->projRight = NULL;
-	sstate->hashtable = NULL;
-	sstate->hashnulls = NULL;
-	sstate->hashtablecxt = NULL;
-	sstate->hashtempcxt = NULL;
-	sstate->innerecontext = NULL;
-	sstate->keyColIdx = NULL;
-	sstate->tab_eq_funcoids = NULL;
-	sstate->tab_hash_funcs = NULL;
-	sstate->tab_eq_funcs = NULL;
-	sstate->tab_collations = NULL;
-	sstate->lhs_hash_funcs = NULL;
-	sstate->cur_eq_funcs = NULL;
-
-	/*
 	 * If this is an initplan or MULTIEXPR subplan, it has output parameters
 	 * that the parent plan will use, so mark those parameters as needing
 	 * evaluation.  We don't actually run the subplan until we first need one

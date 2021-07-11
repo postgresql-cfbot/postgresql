@@ -1447,16 +1447,9 @@ addRangeTableEntry(ParseState *pstate,
 	 * The initial default on access checks is always check-for-READ-access,
 	 * which is the right thing for all except target tables.
 	 */
-	rte->lateral = false;
 	rte->inh = inh;
 	rte->inFromCl = inFromCl;
-
 	rte->requiredPerms = ACL_SELECT;
-	rte->checkAsUser = InvalidOid;	/* not set-uid by default, either */
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -1535,16 +1528,9 @@ addRangeTableEntryForRelation(ParseState *pstate,
 	 * The initial default on access checks is always check-for-READ-access,
 	 * which is the right thing for all except target tables.
 	 */
-	rte->lateral = false;
 	rte->inh = inh;
 	rte->inFromCl = inFromCl;
-
 	rte->requiredPerms = ACL_SELECT;
-	rte->checkAsUser = InvalidOid;	/* not set-uid by default, either */
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -1633,15 +1619,7 @@ addRangeTableEntryForSubquery(ParseState *pstate,
 	 * Subqueries are never checked for access rights.
 	 */
 	rte->lateral = lateral;
-	rte->inh = false;			/* never true for subqueries */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -1692,9 +1670,6 @@ addRangeTableEntryForFunction(ParseState *pstate,
 	Assert(pstate != NULL);
 
 	rte->rtekind = RTE_FUNCTION;
-	rte->relid = InvalidOid;
-	rte->subquery = NULL;
-	rte->functions = NIL;		/* we'll fill this list below */
 	rte->funcordinality = rangefunc->ordinality;
 	rte->alias = alias;
 
@@ -1727,11 +1702,6 @@ addRangeTableEntryForFunction(ParseState *pstate,
 
 		/* Initialize RangeTblFunction node */
 		rtfunc->funcexpr = funcexpr;
-		rtfunc->funccolnames = NIL;
-		rtfunc->funccoltypes = NIL;
-		rtfunc->funccoltypmods = NIL;
-		rtfunc->funccolcollations = NIL;
-		rtfunc->funcparams = NULL;	/* not set until planning */
 
 		/*
 		 * Now determine if the function returns a simple or composite type.
@@ -1939,15 +1909,7 @@ addRangeTableEntryForFunction(ParseState *pstate,
 	 * permissions mechanism).
 	 */
 	rte->lateral = lateral;
-	rte->inh = false;			/* never true for functions */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -1985,8 +1947,6 @@ addRangeTableEntryForTableFunc(ParseState *pstate,
 	Assert(pstate != NULL);
 
 	rte->rtekind = RTE_TABLEFUNC;
-	rte->relid = InvalidOid;
-	rte->subquery = NULL;
 	rte->tablefunc = tf;
 	rte->coltypes = tf->coltypes;
 	rte->coltypmods = tf->coltypmods;
@@ -2010,15 +1970,7 @@ addRangeTableEntryForTableFunc(ParseState *pstate,
 	 * RTE permissions mechanism).
 	 */
 	rte->lateral = lateral;
-	rte->inh = false;			/* never true for tablefunc RTEs */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -2061,8 +2013,6 @@ addRangeTableEntryForValues(ParseState *pstate,
 	Assert(pstate != NULL);
 
 	rte->rtekind = RTE_VALUES;
-	rte->relid = InvalidOid;
-	rte->subquery = NULL;
 	rte->values_lists = exprs;
 	rte->coltypes = coltypes;
 	rte->coltypmods = coltypmods;
@@ -2097,15 +2047,7 @@ addRangeTableEntryForValues(ParseState *pstate,
 	 * Subqueries are never checked for access rights.
 	 */
 	rte->lateral = lateral;
-	rte->inh = false;			/* never true for values RTEs */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -2162,8 +2104,6 @@ addRangeTableEntryForJoin(ParseState *pstate,
 						MaxAttrNumber)));
 
 	rte->rtekind = RTE_JOIN;
-	rte->relid = InvalidOid;
-	rte->subquery = NULL;
 	rte->jointype = jointype;
 	rte->joinmergedcols = nummergedcols;
 	rte->joinaliasvars = aliasvars;
@@ -2187,16 +2127,7 @@ addRangeTableEntryForJoin(ParseState *pstate,
 	 *
 	 * Joins are never checked for access rights.
 	 */
-	rte->lateral = false;
-	rte->inh = false;			/* never true for joins */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -2335,18 +2266,9 @@ addRangeTableEntryForCTE(ParseState *pstate,
 	/*
 	 * Set flags and access permissions.
 	 *
-	 * Subqueries are never checked for access rights.
+	 * CTEs are never checked for access rights.
 	 */
-	rte->lateral = false;
-	rte->inh = false;			/* never true for subqueries */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -2463,13 +2385,7 @@ addRangeTableEntryForENR(ParseState *pstate,
 	 *
 	 * ENRs are never checked for access rights.
 	 */
-	rte->lateral = false;
-	rte->inh = false;			/* never true for ENRs */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its

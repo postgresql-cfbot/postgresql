@@ -165,21 +165,12 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 	/*
 	 * Create relation (and fill value[] and null[] for the tuple)
 	 */
-	stmt->tableElts = NIL;
 	for (i = SEQ_COL_FIRSTCOL; i <= SEQ_COL_LASTCOL; i++)
 	{
 		ColumnDef  *coldef = makeNode(ColumnDef);
 
-		coldef->inhcount = 0;
 		coldef->is_local = true;
 		coldef->is_not_null = true;
-		coldef->is_from_type = false;
-		coldef->storage = 0;
-		coldef->raw_default = NULL;
-		coldef->cooked_default = NULL;
-		coldef->collClause = NULL;
-		coldef->collOid = InvalidOid;
-		coldef->constraints = NIL;
 		coldef->location = -1;
 
 		null[i - 1] = false;
@@ -206,11 +197,6 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 	}
 
 	stmt->relation = seq->sequence;
-	stmt->inhRelations = NIL;
-	stmt->constraints = NIL;
-	stmt->options = NIL;
-	stmt->oncommit = ONCOMMIT_NOOP;
-	stmt->tablespacename = NULL;
 	stmt->if_not_exists = seq->if_not_exists;
 
 	address = DefineRelation(stmt, RELKIND_SEQUENCE, seq->ownerId, NULL, NULL);

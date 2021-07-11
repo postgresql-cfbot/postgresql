@@ -619,7 +619,6 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 		constraint->contype = CONSTR_DEFAULT;
 		constraint->location = -1;
 		constraint->raw_expr = (Node *) funccallnode;
-		constraint->cooked_expr = NULL;
 		column->constraints = lappend(column->constraints, constraint);
 
 		constraint = makeNode(Constraint);
@@ -1033,16 +1032,9 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		def->colname = pstrdup(attributeName);
 		def->typeName = makeTypeNameFromOid(attribute->atttypid,
 											attribute->atttypmod);
-		def->inhcount = 0;
 		def->is_local = true;
 		def->is_not_null = attribute->attnotnull;
-		def->is_from_type = false;
-		def->storage = 0;
-		def->raw_default = NULL;
-		def->cooked_default = NULL;
-		def->collClause = NULL;
 		def->collOid = attribute->attcollation;
-		def->constraints = NIL;
 		def->location = -1;
 
 		/*
@@ -1342,7 +1334,6 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 			n->conname = pstrdup(ccname);
 			n->location = -1;
 			n->is_no_inherit = ccnoinherit;
-			n->raw_expr = NULL;
 			n->cooked_expr = nodeToString(ccbin_node);
 
 			/* We can skip validation, since the new table should be empty. */
@@ -1473,16 +1464,9 @@ transformOfType(CreateStmtContext *cxt, TypeName *ofTypename)
 		n = makeNode(ColumnDef);
 		n->colname = pstrdup(NameStr(attr->attname));
 		n->typeName = makeTypeNameFromOid(attr->atttypid, attr->atttypmod);
-		n->inhcount = 0;
 		n->is_local = true;
-		n->is_not_null = false;
 		n->is_from_type = true;
-		n->storage = 0;
-		n->raw_default = NULL;
-		n->cooked_default = NULL;
-		n->collClause = NULL;
 		n->collOid = attr->attcollation;
-		n->constraints = NIL;
 		n->location = -1;
 		cxt->columns = lappend(cxt->columns, n);
 	}
@@ -1574,20 +1558,9 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 	index->accessMethod = pstrdup(NameStr(amrec->amname));
 	if (OidIsValid(idxrelrec->reltablespace))
 		index->tableSpace = get_tablespace_name(idxrelrec->reltablespace);
-	else
-		index->tableSpace = NULL;
-	index->excludeOpNames = NIL;
-	index->idxcomment = NULL;
-	index->indexOid = InvalidOid;
-	index->oldNode = InvalidOid;
-	index->oldCreateSubid = InvalidSubTransactionId;
-	index->oldFirstRelfilenodeSubid = InvalidSubTransactionId;
 	index->unique = idxrec->indisunique;
 	index->primary = idxrec->indisprimary;
 	index->transformed = true;	/* don't need transformIndexStmt */
-	index->concurrent = false;
-	index->if_not_exists = false;
-	index->reset_default_tblspc = false;
 
 	/*
 	 * We don't try to preserve the name of the source index; instead, just
@@ -1717,7 +1690,6 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 			keycoltype = get_atttype(indrelid, attnum);
 
 			iparam->name = attname;
-			iparam->expr = NULL;
 		}
 		else
 		{
@@ -1744,7 +1716,6 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 						 errdetail("Index \"%s\" contains a whole-row table reference.",
 								   RelationGetRelationName(source_idx))));
 
-			iparam->name = NULL;
 			iparam->expr = indexkey;
 
 			keycoltype = exprType(indexkey);
@@ -1807,7 +1778,6 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 			attname = get_attname(indrelid, attnum, false);
 
 			iparam->name = attname;
-			iparam->expr = NULL;
 		}
 		else
 			ereport(ERROR,
@@ -1966,13 +1936,10 @@ generateClonedExtStatsStmt(RangeVar *heapRel, Oid heapRelid,
 
 	/* finally, build the output node */
 	stats = makeNode(CreateStatsStmt);
-	stats->defnames = NULL;
 	stats->stat_types = stat_types;
 	stats->exprs = def_names;
 	stats->relations = list_make1(heapRel);
-	stats->stxcomment = NULL;
 	stats->transformed = true;	/* don't need transformStatsStmt again */
-	stats->if_not_exists = false;
 
 	/* Clean up */
 	ReleaseSysCache(ht_stats);
@@ -2194,17 +2161,6 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 	index->options = constraint->options;
 	index->tableSpace = constraint->indexspace;
 	index->whereClause = constraint->where_clause;
-	index->indexParams = NIL;
-	index->indexIncludingParams = NIL;
-	index->excludeOpNames = NIL;
-	index->idxcomment = NULL;
-	index->indexOid = InvalidOid;
-	index->oldNode = InvalidOid;
-	index->oldCreateSubid = InvalidSubTransactionId;
-	index->oldFirstRelfilenodeSubid = InvalidSubTransactionId;
-	index->transformed = false;
-	index->concurrent = false;
-	index->if_not_exists = false;
 	index->reset_default_tblspc = constraint->reset_default_tblspc;
 
 	/*
@@ -2540,11 +2496,6 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 			/* OK, add it to the index definition */
 			iparam = makeNode(IndexElem);
 			iparam->name = pstrdup(key);
-			iparam->expr = NULL;
-			iparam->indexcolname = NULL;
-			iparam->collation = NIL;
-			iparam->opclass = NIL;
-			iparam->opclassopts = NIL;
 			iparam->ordering = SORTBY_DEFAULT;
 			iparam->nulls_ordering = SORTBY_NULLS_DEFAULT;
 			index->indexParams = lappend(index->indexParams, iparam);
@@ -2654,11 +2605,6 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 		/* OK, add it to the index definition */
 		iparam = makeNode(IndexElem);
 		iparam->name = pstrdup(key);
-		iparam->expr = NULL;
-		iparam->indexcolname = NULL;
-		iparam->collation = NIL;
-		iparam->opclass = NIL;
-		iparam->opclassopts = NIL;
 		index->indexIncludingParams = lappend(index->indexIncludingParams, iparam);
 	}
 
@@ -2782,7 +2728,6 @@ transformFKConstraints(CreateStmtContext *cxt,
 			AlterTableCmd *altercmd = makeNode(AlterTableCmd);
 
 			altercmd->subtype = AT_AddConstraint;
-			altercmd->name = NULL;
 			altercmd->def = (Node *) constraint;
 			alterstmt->cmds = lappend(alterstmt->cmds, altercmd);
 		}

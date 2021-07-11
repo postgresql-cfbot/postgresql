@@ -2619,16 +2619,10 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				def->typeName = makeTypeNameFromOid(attribute->atttypid,
 													attribute->atttypmod);
 				def->inhcount = 1;
-				def->is_local = false;
 				def->is_not_null = attribute->attnotnull;
-				def->is_from_type = false;
 				def->storage = attribute->attstorage;
-				def->raw_default = NULL;
-				def->cooked_default = NULL;
 				def->generated = attribute->attgenerated;
-				def->collClause = NULL;
 				def->collOid = attribute->attcollation;
-				def->constraints = NIL;
 				def->location = -1;
 				if (CompressionMethodIsValid(attribute->attcompression))
 					def->compression =
@@ -11185,7 +11179,6 @@ CreateFKCheckTrigger(Oid myRelOid, Oid refRelOid, Constraint *fkconstraint,
 	fk_trigger->replace = false;
 	fk_trigger->isconstraint = true;
 	fk_trigger->trigname = "RI_ConstraintTrigger_c";
-	fk_trigger->relation = NULL;
 
 	/* Either ON INSERT or ON UPDATE */
 	if (on_insert)
@@ -11199,15 +11192,10 @@ CreateFKCheckTrigger(Oid myRelOid, Oid refRelOid, Constraint *fkconstraint,
 		fk_trigger->events = TRIGGER_TYPE_UPDATE;
 	}
 
-	fk_trigger->args = NIL;
 	fk_trigger->row = true;
 	fk_trigger->timing = TRIGGER_TYPE_AFTER;
-	fk_trigger->columns = NIL;
-	fk_trigger->whenClause = NULL;
-	fk_trigger->transitionRels = NIL;
 	fk_trigger->deferrable = fkconstraint->deferrable;
 	fk_trigger->initdeferred = fkconstraint->initdeferred;
-	fk_trigger->constrrel = NULL;
 
 	(void) CreateTrigger(fk_trigger, NULL, myRelOid, refRelOid, constraintOid,
 						 indexOid, InvalidOid, InvalidOid, NULL, true, false);
@@ -11235,15 +11223,9 @@ createForeignKeyActionTriggers(Relation rel, Oid refRelOid, Constraint *fkconstr
 	fk_trigger->replace = false;
 	fk_trigger->isconstraint = true;
 	fk_trigger->trigname = "RI_ConstraintTrigger_a";
-	fk_trigger->relation = NULL;
-	fk_trigger->args = NIL;
 	fk_trigger->row = true;
 	fk_trigger->timing = TRIGGER_TYPE_AFTER;
 	fk_trigger->events = TRIGGER_TYPE_DELETE;
-	fk_trigger->columns = NIL;
-	fk_trigger->whenClause = NULL;
-	fk_trigger->transitionRels = NIL;
-	fk_trigger->constrrel = NULL;
 	switch (fkconstraint->fk_del_action)
 	{
 		case FKCONSTR_ACTION_NOACTION:
@@ -11252,23 +11234,15 @@ createForeignKeyActionTriggers(Relation rel, Oid refRelOid, Constraint *fkconstr
 			fk_trigger->funcname = SystemFuncName("RI_FKey_noaction_del");
 			break;
 		case FKCONSTR_ACTION_RESTRICT:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
 			fk_trigger->funcname = SystemFuncName("RI_FKey_restrict_del");
 			break;
 		case FKCONSTR_ACTION_CASCADE:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
 			fk_trigger->funcname = SystemFuncName("RI_FKey_cascade_del");
 			break;
 		case FKCONSTR_ACTION_SETNULL:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
 			fk_trigger->funcname = SystemFuncName("RI_FKey_setnull_del");
 			break;
 		case FKCONSTR_ACTION_SETDEFAULT:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
 			fk_trigger->funcname = SystemFuncName("RI_FKey_setdefault_del");
 			break;
 		default:
@@ -11292,15 +11266,9 @@ createForeignKeyActionTriggers(Relation rel, Oid refRelOid, Constraint *fkconstr
 	fk_trigger->replace = false;
 	fk_trigger->isconstraint = true;
 	fk_trigger->trigname = "RI_ConstraintTrigger_a";
-	fk_trigger->relation = NULL;
-	fk_trigger->args = NIL;
 	fk_trigger->row = true;
 	fk_trigger->timing = TRIGGER_TYPE_AFTER;
 	fk_trigger->events = TRIGGER_TYPE_UPDATE;
-	fk_trigger->columns = NIL;
-	fk_trigger->whenClause = NULL;
-	fk_trigger->transitionRels = NIL;
-	fk_trigger->constrrel = NULL;
 	switch (fkconstraint->fk_upd_action)
 	{
 		case FKCONSTR_ACTION_NOACTION:
@@ -11309,23 +11277,15 @@ createForeignKeyActionTriggers(Relation rel, Oid refRelOid, Constraint *fkconstr
 			fk_trigger->funcname = SystemFuncName("RI_FKey_noaction_upd");
 			break;
 		case FKCONSTR_ACTION_RESTRICT:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
 			fk_trigger->funcname = SystemFuncName("RI_FKey_restrict_upd");
 			break;
 		case FKCONSTR_ACTION_CASCADE:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
 			fk_trigger->funcname = SystemFuncName("RI_FKey_cascade_upd");
 			break;
 		case FKCONSTR_ACTION_SETNULL:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
 			fk_trigger->funcname = SystemFuncName("RI_FKey_setnull_upd");
 			break;
 		case FKCONSTR_ACTION_SETDEFAULT:
-			fk_trigger->deferrable = false;
-			fk_trigger->initdeferred = false;
 			fk_trigger->funcname = SystemFuncName("RI_FKey_setdefault_upd");
 			break;
 		default:
@@ -17724,7 +17684,6 @@ CloneRowTriggersToPartition(Relation parent, Relation partition)
 		trigStmt->replace = false;
 		trigStmt->isconstraint = OidIsValid(trigForm->tgconstraint);
 		trigStmt->trigname = NameStr(trigForm->tgname);
-		trigStmt->relation = NULL;
 		trigStmt->funcname = NULL;	/* passed separately */
 		trigStmt->args = trigargs;
 		trigStmt->row = true;

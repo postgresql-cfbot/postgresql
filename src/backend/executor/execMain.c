@@ -1200,9 +1200,6 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	resultRelInfo->type = T_ResultRelInfo;
 	resultRelInfo->ri_RangeTableIndex = resultRelationIndex;
 	resultRelInfo->ri_RelationDesc = resultRelationDesc;
-	resultRelInfo->ri_NumIndices = 0;
-	resultRelInfo->ri_IndexRelationDescs = NULL;
-	resultRelInfo->ri_IndexRelationInfo = NULL;
 	/* make a copy so as not to depend on relcache info not changing... */
 	resultRelInfo->ri_TrigDesc = CopyTriggerDesc(resultRelationDesc->trigdesc);
 	if (resultRelInfo->ri_TrigDesc)
@@ -1216,33 +1213,10 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 		if (instrument_options)
 			resultRelInfo->ri_TrigInstrument = InstrAlloc(n, instrument_options, false);
 	}
-	else
-	{
-		resultRelInfo->ri_TrigFunctions = NULL;
-		resultRelInfo->ri_TrigWhenExprs = NULL;
-		resultRelInfo->ri_TrigInstrument = NULL;
-	}
 	if (resultRelationDesc->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
 		resultRelInfo->ri_FdwRoutine = GetFdwRoutineForRelation(resultRelationDesc, true);
-	else
-		resultRelInfo->ri_FdwRoutine = NULL;
 
-	/* The following fields are set later if needed */
-	resultRelInfo->ri_RowIdAttNo = 0;
-	resultRelInfo->ri_projectNew = NULL;
-	resultRelInfo->ri_newTupleSlot = NULL;
-	resultRelInfo->ri_oldTupleSlot = NULL;
-	resultRelInfo->ri_projectNewInfoValid = false;
-	resultRelInfo->ri_FdwState = NULL;
-	resultRelInfo->ri_usesFdwDirectModify = false;
-	resultRelInfo->ri_ConstraintExprs = NULL;
-	resultRelInfo->ri_GeneratedExprs = NULL;
-	resultRelInfo->ri_projectReturning = NULL;
-	resultRelInfo->ri_onConflictArbiterIndexes = NIL;
-	resultRelInfo->ri_onConflict = NULL;
-	resultRelInfo->ri_ReturningSlot = NULL;
-	resultRelInfo->ri_TrigOldSlot = NULL;
-	resultRelInfo->ri_TrigNewSlot = NULL;
+	/* Other fields are set later if needed */
 
 	/*
 	 * Only ExecInitPartitionInfo() and ExecInitPartitionDispatchInfo() pass
@@ -1254,9 +1228,6 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	resultRelInfo->ri_RootToPartitionMap = NULL;	/* set by
 													 * ExecInitRoutingInfo */
 	resultRelInfo->ri_PartitionTupleSlot = NULL;	/* ditto */
-	resultRelInfo->ri_ChildToRootMap = NULL;
-	resultRelInfo->ri_ChildToRootMapValid = false;
-	resultRelInfo->ri_CopyMultiInsertBuffer = NULL;
 }
 
 /*

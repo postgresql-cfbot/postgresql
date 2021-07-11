@@ -2529,18 +2529,8 @@ DefineCompositeType(RangeVar *typevar, List *coldeflist)
 	Oid			typeNamespace;
 	ObjectAddress address;
 
-	/*
-	 * now set the parameters for keys/inheritance etc. All of these are
-	 * uninteresting for composite types...
-	 */
 	createStmt->relation = typevar;
 	createStmt->tableElts = coldeflist;
-	createStmt->inhRelations = NIL;
-	createStmt->constraints = NIL;
-	createStmt->options = NIL;
-	createStmt->oncommit = ONCOMMIT_NOOP;
-	createStmt->tablespacename = NULL;
-	createStmt->if_not_exists = false;
 
 	/*
 	 * Check for collision with an existing type name. If there is one and

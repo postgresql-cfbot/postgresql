@@ -52,7 +52,6 @@ DefineVirtualRelation(RangeVar *relation, List *tlist, bool replace,
 {
 	Oid			viewOid;
 	LOCKMODE	lockmode;
-	CreateStmt *createStmt = makeNode(CreateStmt);
 	List	   *attrList;
 	ListCell   *t;
 
@@ -214,20 +213,12 @@ DefineVirtualRelation(RangeVar *relation, List *tlist, bool replace,
 	}
 	else
 	{
+		CreateStmt *createStmt = makeNode(CreateStmt);
 		ObjectAddress address;
 
-		/*
-		 * Set the parameters for keys/inheritance etc. All of these are
-		 * uninteresting for views...
-		 */
 		createStmt->relation = relation;
 		createStmt->tableElts = attrList;
-		createStmt->inhRelations = NIL;
-		createStmt->constraints = NIL;
 		createStmt->options = options;
-		createStmt->oncommit = ONCOMMIT_NOOP;
-		createStmt->tablespacename = NULL;
-		createStmt->if_not_exists = false;
 
 		/*
 		 * Create the relation (this will error out if there's an existing

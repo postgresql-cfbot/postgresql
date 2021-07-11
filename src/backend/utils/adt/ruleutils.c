@@ -1040,9 +1040,6 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 		/* Build two-element rtable */
 		memset(&dpns, 0, sizeof(dpns));
 		dpns.rtable = list_make2(oldrte, newrte);
-		dpns.subplans = NIL;
-		dpns.ctes = NIL;
-		dpns.appendrels = NULL;
 		set_rtable_names(&dpns, NIL, NULL);
 		set_simple_column_names(&dpns);
 
@@ -3603,7 +3600,6 @@ deparse_context_for_plan_tree(PlannedStmt *pstmt, List *rtable_names)
 	dpns->rtable = pstmt->rtable;
 	dpns->rtable_names = rtable_names;
 	dpns->subplans = pstmt->subplans;
-	dpns->ctes = NIL;
 	if (pstmt->appendRelations)
 	{
 		/* Set up the array, indexed by child relid */
@@ -3622,8 +3618,6 @@ deparse_context_for_plan_tree(PlannedStmt *pstmt, List *rtable_names)
 			dpns->appendrels[crelid] = appinfo;
 		}
 	}
-	else
-		dpns->appendrels = NULL;	/* don't need it */
 
 	/*
 	 * Set up column name aliases.  We will get rather bogus results for join
@@ -3691,9 +3685,6 @@ select_rtable_names_for_explain(List *rtable, Bitmapset *rels_used)
 
 	memset(&dpns, 0, sizeof(dpns));
 	dpns.rtable = rtable;
-	dpns.subplans = NIL;
-	dpns.ctes = NIL;
-	dpns.appendrels = NULL;
 	set_rtable_names(&dpns, NIL, rels_used);
 	/* We needn't bother computing column aliases yet */
 

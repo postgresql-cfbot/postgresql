@@ -49,6 +49,10 @@ static void pgoutput_message(LogicalDecodingContext *ctx,
 							 ReorderBufferTXN *txn, XLogRecPtr message_lsn,
 							 bool transactional, const char *prefix,
 							 Size sz, const char *message);
+static void pgoutput_sequence(LogicalDecodingContext *ctx,
+							  ReorderBufferTXN *txn, XLogRecPtr sequence_lsn,
+							  Relation rel, bool transactional, bool created,
+							  int64 last_value, int64 log_cnt, bool is_called);
 static bool pgoutput_origin_filter(LogicalDecodingContext *ctx,
 								   RepOriginId origin_id);
 static void pgoutput_stream_start(struct LogicalDecodingContext *ctx,
@@ -144,6 +148,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->change_cb = pgoutput_change;
 	cb->truncate_cb = pgoutput_truncate;
 	cb->message_cb = pgoutput_message;
+	cb->sequence_cb = pgoutput_sequence;
 	cb->commit_cb = pgoutput_commit_txn;
 	cb->filter_by_origin_cb = pgoutput_origin_filter;
 	cb->shutdown_cb = pgoutput_shutdown;
@@ -166,11 +171,13 @@ parse_output_parameters(List *options, PGOutputData *data)
 	bool		publication_names_given = false;
 	bool		binary_option_given = false;
 	bool		messages_option_given = false;
+	bool		sequences_option_given = false;
 	bool		streaming_given = false;
 
 	data->binary = false;
 	data->streaming = false;
 	data->messages = false;
+	data->sequences = true;
 
 	foreach(lc, options)
 	{
@@ -235,6 +242,16 @@ parse_output_parameters(List *options, PGOutputData *data)
 			messages_option_given = true;
 
 			data->messages = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "sequences") == 0)
+		{
+			if (sequences_option_given)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("conflicting or redundant options")));
+			sequences_option_given = true;
+
+			data->sequences = defGetBoolean(defel);
 		}
 		else if (strcmp(defel->defname, "streaming") == 0)
 		{
@@ -756,6 +773,47 @@ pgoutput_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	OutputPluginWrite(ctx, true);
 }
 
+static void
+pgoutput_sequence(LogicalDecodingContext *ctx,
+				  ReorderBufferTXN *txn, XLogRecPtr sequence_lsn,
+				  Relation rel, bool transactional, bool created,
+				  int64 last_value, int64 log_cnt, bool is_called)
+{
+	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
+	TransactionId xid = InvalidTransactionId;
+	RelationSyncEntry *relentry;
+
+	if (!data->sequences)
+		return;
+
+	if (!is_publishable_relation(rel))
+		return;
+
+	/* XXX handle (in_streaming) here */
+
+	relentry = get_rel_sync_entry(data, RelationGetRelid(rel));
+
+	/*
+	 * First check the sequence filter.
+	 *
+	 * We handle just REORDER_BUFFER_CHANGE_SEQUENCE here.
+	 */
+	if (!relentry->pubactions.pubsequence)
+		return;
+
+	OutputPluginPrepareWrite(ctx, true);
+	logicalrep_write_sequence(ctx->out,
+							  rel,
+							  xid,
+							  sequence_lsn,
+							  transactional,
+							  created,
+							  last_value,
+							  log_cnt,
+							  is_called);
+	OutputPluginWrite(ctx, true);
+}
+
 /*
  * Currently we always forward.
  */
@@ -1029,7 +1087,8 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 		entry->streamed_txns = NIL;
 		entry->replicate_valid = false;
 		entry->pubactions.pubinsert = entry->pubactions.pubupdate =
-			entry->pubactions.pubdelete = entry->pubactions.pubtruncate = false;
+			entry->pubactions.pubdelete = entry->pubactions.pubtruncate =
+			entry->pubactions.pubsequence = false;
 		entry->publish_as_relid = InvalidOid;
 		entry->map = NULL;		/* will be set by maybe_send_schema() if
 								 * needed */
@@ -1041,6 +1100,7 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 		List	   *pubids = GetRelationPublications(relid);
 		ListCell   *lc;
 		Oid			publish_as_relid = relid;
+		bool		is_sequence = (get_rel_relkind(relid) == RELKIND_SEQUENCE);
 
 		/* Reload publications if needed before use. */
 		if (!publications_valid)
@@ -1064,11 +1124,22 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 			Publication *pub = lfirst(lc);
 			bool		publish = false;
 
-			if (pub->alltables)
+			if (pub->alltables && (!is_sequence))
 			{
 				publish = true;
 				if (pub->pubviaroot && am_partition)
 					publish_as_relid = llast_oid(get_partition_ancestors(relid));
+			}
+			else if (pub->allsequences && is_sequence)
+			{
+				publish = true;
+			}
+
+			/* if a sequence, just cross-check the list of publications */
+			if (!publish && is_sequence)
+			{
+				if (list_member_oid(pubids, pub->oid))
+					publish = true;
 			}
 
 			if (!publish)
@@ -1120,10 +1191,12 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 				entry->pubactions.pubupdate |= pub->pubactions.pubupdate;
 				entry->pubactions.pubdelete |= pub->pubactions.pubdelete;
 				entry->pubactions.pubtruncate |= pub->pubactions.pubtruncate;
+				entry->pubactions.pubsequence |= pub->pubactions.pubsequence;
 			}
 
 			if (entry->pubactions.pubinsert && entry->pubactions.pubupdate &&
-				entry->pubactions.pubdelete && entry->pubactions.pubtruncate)
+				entry->pubactions.pubdelete && entry->pubactions.pubtruncate &&
+				entry->pubactions.pubsequence)
 				break;
 		}
 
@@ -1268,5 +1341,6 @@ rel_sync_cache_publication_cb(Datum arg, int cacheid, uint32 hashvalue)
 		entry->pubactions.pubupdate = false;
 		entry->pubactions.pubdelete = false;
 		entry->pubactions.pubtruncate = false;
+		entry->pubactions.pubsequence = false;
 	}
 }

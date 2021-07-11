@@ -158,8 +158,8 @@ DROP TABLE testpub_parted1;
 DROP PUBLICATION testpub_forparted, testpub_forparted1;
 -- fail - view
 CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_view;
-ERROR:  "testpub_view" is not a table
-DETAIL:  Only tables can be added to publications.
+ERROR:  "testpub_view" is not a table or sequence
+DETAIL:  Only tables and sequences can be added to publications.
 SET client_min_messages = 'ERROR';
 CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_tbl1, pub_test.testpub_nopk;
 RESET client_min_messages;
@@ -180,8 +180,8 @@ Tables:
 
 -- fail - view
 ALTER PUBLICATION testpub_default ADD TABLE testpub_view;
-ERROR:  "testpub_view" is not a table
-DETAIL:  Only tables can be added to publications.
+ERROR:  "testpub_view" is not a table or sequence
+DETAIL:  Only tables and sequences can be added to publications.
 ALTER PUBLICATION testpub_default ADD TABLE testpub_tbl1;
 ALTER PUBLICATION testpub_default SET TABLE testpub_tbl1;
 ALTER PUBLICATION testpub_default ADD TABLE pub_test.testpub_nopk;

@@ -17,6 +17,10 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifdef HAVE_LIBLZ4
+#include <lz4frame.h>
+#endif
 #ifdef HAVE_LIBZ
 #include <zlib.h>
 #endif
@@ -30,6 +34,9 @@
 /* Size of zlib buffer for .tar.gz */
 #define ZLIB_OUT_SIZE 4096
 
+/* Size of lz4 input chunk for .lz4 */
+#define LZ4_IN_SIZE  4096
+
 /*-------------------------------------------------------------------------
  * WalDirectoryMethod - write wal to a directory looking like pg_wal
  *-------------------------------------------------------------------------
@@ -40,9 +47,10 @@
  */
 typedef struct DirectoryMethodData
 {
-	char	   *basedir;
-	int			compression;
-	bool		sync;
+	char				   *basedir;
+	WalCompressionMethod	compression_method;
+	int						compression;
+	bool					sync;
 } DirectoryMethodData;
 static DirectoryMethodData *dir_data = NULL;
 
@@ -58,6 +66,11 @@ typedef struct DirectoryMethodFile
 	char	   *temp_suffix;
 #ifdef HAVE_LIBZ
 	gzFile		gzfp;
+#endif
+#ifdef HAVE_LIBLZ4
+	LZ4F_compressionContext_t ctx;
+	size_t		lz4bufsize;
+	void	   *lz4buf;
 #endif
 } DirectoryMethodFile;
 
@@ -77,10 +90,16 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 #ifdef HAVE_LIBZ
 	gzFile		gzfp = NULL;
 #endif
+#ifdef HAVE_LIBLZ4
+	LZ4F_compressionContext_t ctx = NULL;
+	size_t		lz4bufsize = 0;
+	void	   *lz4buf = NULL;
+#endif
 
 	snprintf(tmppath, sizeof(tmppath), "%s/%s%s%s",
 			 dir_data->basedir, pathname,
-			 dir_data->compression > 0 ? ".gz" : "",
+			 dir_data->compression_method == COMPRESSION_ZLIB ? ".gz" :
+			 dir_data->compression_method == COMPRESSION_LZ4  ? ".lz4": "",
 			 temp_suffix ? temp_suffix : "");
 
 	/*
@@ -94,7 +113,7 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 		return NULL;
 
 #ifdef HAVE_LIBZ
-	if (dir_data->compression > 0)
+	if (dir_data->compression_method == COMPRESSION_ZLIB)
 	{
 		gzfp = gzdopen(fd, "wb");
 		if (gzfp == NULL)
@@ -111,9 +130,61 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 		}
 	}
 #endif
+#ifdef HAVE_LIBLZ4
+	if (dir_data->compression_method == COMPRESSION_LZ4)
+	{
+		LZ4F_preferences_t lz4preferences = { 0 };
+		size_t		ctx_out;
+		size_t		header_size;
+
+		/*
+		 * Set all the preferences to default but do note contentSize. It will
+		 * be needed in FindStreamingStart.
+		 */
+		memset(&lz4preferences, 0, sizeof(LZ4F_frameInfo_t));
+		lz4preferences.frameInfo.contentSize = (unsigned long long)WalSegSz;
+		ctx_out = LZ4F_createCompressionContext(&ctx, LZ4F_VERSION);
+		lz4bufsize = LZ4F_compressBound(LZ4_IN_SIZE, &lz4preferences);
+		if (LZ4F_isError(ctx_out))
+		{
+			close(fd);
+			return NULL;
+		}
+
+		lz4buf = pg_malloc0(lz4bufsize);
+
+		/*
+		 * XXX: this is crap... lz4preferences now does show the uncompressed
+		 * size via lz4 --list <filename> but the compression goes down the
+		 * window... also it is not very helpfull to have it at the startm, does
+		 * it?
+		 */
+		/* add the header */
+		header_size = LZ4F_compressBegin(ctx, lz4buf, lz4bufsize, &lz4preferences);
+		if (LZ4F_isError(header_size))
+		{
+			close(fd);
+			return NULL;
+		}
+
+		errno = 0;
+		if (write(fd, lz4buf, header_size) != header_size)
+		{
+			int			save_errno = errno;
+
+			close(fd);
+
+			/*
+			 * If write didn't set errno, assume problem is no disk space.
+			 */
+			errno = save_errno ? save_errno : ENOSPC;
+			return NULL;
+		}
+	}
+#endif
 
 	/* Do pre-padding on non-compressed files */
-	if (pad_to_size && dir_data->compression == 0)
+	if (pad_to_size && dir_data->compression_method == COMPRESSION_NONE)
 	{
 		PGAlignedXLogBlock zerobuf;
 		int			bytes;
@@ -158,7 +229,7 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 			fsync_parent_path(tmppath) != 0)
 		{
 #ifdef HAVE_LIBZ
-			if (dir_data->compression > 0)
+			if (dir_data->compression_method == COMPRESSION_ZLIB)
 				gzclose(gzfp);
 			else
 #endif
@@ -169,9 +240,18 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 
 	f = pg_malloc0(sizeof(DirectoryMethodFile));
 #ifdef HAVE_LIBZ
-	if (dir_data->compression > 0)
+	if (dir_data->compression_method == COMPRESSION_ZLIB)
 		f->gzfp = gzfp;
 #endif
+#ifdef HAVE_LIBLZ4
+	if (dir_data->compression_method == COMPRESSION_LZ4)
+	{
+		f->ctx = ctx;
+		f->lz4buf = lz4buf;
+		f->lz4bufsize = lz4bufsize;
+	}
+#endif
+
 	f->fd = fd;
 	f->currpos = 0;
 	f->pathname = pg_strdup(pathname);
@@ -191,8 +271,45 @@ dir_write(Walfile f, const void *buf, size_t count)
 	Assert(f != NULL);
 
 #ifdef HAVE_LIBZ
-	if (dir_data->compression > 0)
+	if (dir_data->compression_method == COMPRESSION_ZLIB)
 		r = (ssize_t) gzwrite(df->gzfp, buf, count);
+	else
+#endif
+#ifdef HAVE_LIBLZ4
+	if (dir_data->compression_method == COMPRESSION_LZ4)
+	{
+		size_t		chunk;
+		size_t		remaining;
+		const void *inbuf = buf;
+
+		remaining = count;
+		while (remaining > 0)
+		{
+			size_t compressed;
+
+			if (remaining > LZ4_IN_SIZE)
+				chunk = LZ4_IN_SIZE;
+			else
+				chunk = remaining;
+
+			remaining -= chunk;
+			compressed = LZ4F_compressUpdate(df->ctx,
+											 df->lz4buf, df->lz4bufsize,
+											 inbuf, chunk,
+											 NULL);
+
+			if (LZ4F_isError(compressed))
+				return -1;
+
+			if (write(df->fd, df->lz4buf, compressed) != compressed)
+				return -1;
+
+			inbuf = ((char *)inbuf) + chunk;
+		}
+
+		/* XXX: This is what our caller expects, but it is not nice at all */
+		r = (ssize_t)count;
+	}
 	else
 #endif
 		r = write(df->fd, buf, count);
@@ -221,8 +338,29 @@ dir_close(Walfile f, WalCloseMethod method)
 	Assert(f != NULL);
 
 #ifdef HAVE_LIBZ
-	if (dir_data->compression > 0)
+	if (dir_data->compression_method == COMPRESSION_ZLIB)
 		r = gzclose(df->gzfp);
+	else
+#endif
+#ifdef HAVE_LIBLZ4
+	if (dir_data->compression_method == COMPRESSION_LZ4)
+	{
+		/* Flush any internal buffers */
+		size_t compressed = LZ4F_compressEnd(df->ctx,
+											df->lz4buf, df->lz4bufsize,
+											NULL);
+		if (LZ4F_isError(compressed))
+		{
+			return -1;
+		}
+
+		if (write(df->fd, df->lz4buf, compressed) != compressed)
+		{
+			return -1;
+		}
+
+		r = close(df->fd);
+	}
 	else
 #endif
 		r = close(df->fd);
@@ -238,11 +376,13 @@ dir_close(Walfile f, WalCloseMethod method)
 			 */
 			snprintf(tmppath, sizeof(tmppath), "%s/%s%s%s",
 					 dir_data->basedir, df->pathname,
-					 dir_data->compression > 0 ? ".gz" : "",
+					 dir_data->compression_method == COMPRESSION_ZLIB ? ".gz" :
+					 dir_data->compression_method == COMPRESSION_LZ4  ? ".lz4": "",
 					 df->temp_suffix);
 			snprintf(tmppath2, sizeof(tmppath2), "%s/%s%s",
 					 dir_data->basedir, df->pathname,
-					 dir_data->compression > 0 ? ".gz" : "");
+					 dir_data->compression_method == COMPRESSION_ZLIB ? ".gz" :
+					 dir_data->compression_method == COMPRESSION_LZ4  ? ".lz4": "");
 			r = durable_rename(tmppath, tmppath2);
 		}
 		else if (method == CLOSE_UNLINK)
@@ -250,7 +390,8 @@ dir_close(Walfile f, WalCloseMethod method)
 			/* Unlink the file once it's closed */
 			snprintf(tmppath, sizeof(tmppath), "%s/%s%s%s",
 					 dir_data->basedir, df->pathname,
-					 dir_data->compression > 0 ? ".gz" : "",
+					 dir_data->compression_method == COMPRESSION_ZLIB ? ".gz" :
+					 dir_data->compression_method == COMPRESSION_LZ4  ? ".lz4": "",
 					 df->temp_suffix ? df->temp_suffix : "");
 			r = unlink(tmppath);
 		}
@@ -269,6 +410,12 @@ dir_close(Walfile f, WalCloseMethod method)
 			}
 		}
 	}
+
+#ifdef HAVE_LIBLZ4
+	pg_free(df->lz4buf);
+	/* supports free on NULL */
+	LZ4F_freeCompressionContext(df->ctx);
+#endif
 
 	pg_free(df->pathname);
 	pg_free(df->fullpath);
@@ -346,7 +493,9 @@ dir_finish(void)
 
 
 WalWriteMethod *
-CreateWalDirectoryMethod(const char *basedir, int compression, bool sync)
+CreateWalDirectoryMethod(const char *basedir,
+						WalCompressionMethod compression_method,
+						int compression, bool sync)
 {
 	WalWriteMethod *method;
 
@@ -362,6 +511,7 @@ CreateWalDirectoryMethod(const char *basedir, int compression, bool sync)
 	method->getlasterror = dir_getlasterror;
 
 	dir_data = pg_malloc0(sizeof(DirectoryMethodData));
+	dir_data->compression_method = compression_method;
 	dir_data->compression = compression;
 	dir_data->basedir = pg_strdup(basedir);
 	dir_data->sync = sync;
@@ -983,8 +1133,16 @@ tar_finish(void)
 	return true;
 }
 
+/*
+ * The argument compression_method is currently ignored. It is in place for
+ * symmetry with CreateWalDirectoryMethod which uses it for distinguishing
+ * between the different compression methods. CreateWalTarMethod and its family
+ * of functions handle only zlib compression.
+ */
 WalWriteMethod *
-CreateWalTarMethod(const char *tarbase, int compression, bool sync)
+CreateWalTarMethod(const char *tarbase,
+				   WalCompressionMethod compression_method,
+				   int compression, bool sync)
 {
 	WalWriteMethod *method;
 	const char *suffix = (compression != 0) ? ".tar.gz" : ".tar";

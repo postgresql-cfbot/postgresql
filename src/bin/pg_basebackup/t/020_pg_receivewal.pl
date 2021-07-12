@@ -5,7 +5,7 @@ use strict;
 use warnings;
 use TestLib;
 use PostgresNode;
-use Test::More tests => 19;
+use Test::More tests => 23;
 
 program_help_ok('pg_receivewal');
 program_version_ok('pg_receivewal');
@@ -33,6 +33,13 @@ $primary->command_fails(
 $primary->command_fails(
 	[ 'pg_receivewal', '-D', $stream_dir, '--synchronous', '--no-sync' ],
 	'failure if --synchronous specified with --no-sync');
+$primary->command_fails(
+	[
+	  'pg_receivewal', '-D', $stream_dir, '--compression-method', 'lz4',
+	  '--compress', '1'
+	],
+	'failure if --compression-method=lz4 specified with --compress');
+
 
 # Slot creation and drop
 my $slot_name = 'test';
@@ -65,6 +72,43 @@ $primary->command_ok(
 		'--endpos',      $nextlsn, '--synchronous', '--no-loop'
 	],
 	'streaming some WAL with --synchronous');
+
+# Check lz4 compression if available
+SKIP:
+{
+	my $lz4 = $ENV{LZ4};
+
+	skip "postgres was not build with LZ4 support", 3
+		if (!check_pg_config("#define HAVE_LIBLZ4 1"));
+
+	# Generate some WAL.
+	$primary->psql('postgres', 'SELECT pg_switch_wal();');
+	$nextlsn =
+	  $primary->safe_psql('postgres', 'SELECT pg_current_wal_insert_lsn();');
+	chomp($nextlsn);
+	$primary->psql('postgres',
+		'INSERT INTO test_table VALUES (generate_series(100,200));');
+	$primary->psql('postgres', 'SELECT pg_switch_wal();');
+
+	# Stream up to the given position
+	$primary->command_ok(
+		[
+			'pg_receivewal', '-D',     $stream_dir,     '--verbose',
+			'--endpos',      $nextlsn, '--compression-method=lz4'
+		],
+		'streaming some WAL with --compression-method=lz4');
+
+	# Verify that the stored file is compressed
+	my @lz4_wals = glob "$stream_dir/*.lz4";
+	is(scalar(@lz4_wals), 1, 'one lz4 compressed WAL was created');
+
+	# Verify that the stored file is readable if program lz4 is available
+	skip "program lz4 is not found in your system", 1
+	  if (!defined $lz4 || $lz4 eq '');
+
+	my $can_decode = system_log($lz4, '-t', $lz4_wals[0]);
+	is($can_decode, 0, "program lz4 can decode compressed WAL");
+}
 
 # Permissions on WAL files should be default
 SKIP:

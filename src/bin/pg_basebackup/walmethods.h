@@ -19,6 +19,13 @@ typedef enum
 	CLOSE_NO_RENAME
 } WalCloseMethod;
 
+typedef enum
+{
+	COMPRESSION_LZ4,
+	COMPRESSION_ZLIB,
+	COMPRESSION_NONE
+} WalCompressionMethod;
+
 /*
  * A WalWriteMethod structure represents the different methods used
  * to write the streaming WAL as it's received.
@@ -86,8 +93,11 @@ struct WalWriteMethod
  *						   not all those required for pg_receivewal)
  */
 WalWriteMethod *CreateWalDirectoryMethod(const char *basedir,
+										 WalCompressionMethod compression_method,
 										 int compression, bool sync);
-WalWriteMethod *CreateWalTarMethod(const char *tarbase, int compression, bool sync);
+WalWriteMethod *CreateWalTarMethod(const char *tarbase,
+								  WalCompressionMethod compression_method,
+								  int compression, bool sync);
 
 /* Cleanup routines for previously-created methods */
 void		FreeWalDirectoryMethod(void);

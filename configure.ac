@@ -1053,6 +1053,8 @@ case $MKDIR_P in
   *install-sh*) MKDIR_P='\${SHELL} \${top_srcdir}/config/install-sh -c -d';;
 esac
 
+PGAC_PATH_PROGS(LZ4, lz4)
+
 PGAC_PATH_BISON
 PGAC_PATH_FLEX
 

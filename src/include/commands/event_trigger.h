@@ -21,6 +21,8 @@
 #include "tcop/deparse_utility.h"
 #include "utils/aclchk_internal.h"
 
+extern bool enable_client_connection_trigger; /* GUC */
+
 typedef struct EventTriggerData
 {
 	NodeTag		type;
@@ -53,6 +55,7 @@ extern void EventTriggerDDLCommandStart(Node *parsetree);
 extern void EventTriggerDDLCommandEnd(Node *parsetree);
 extern void EventTriggerSQLDrop(Node *parsetree);
 extern void EventTriggerTableRewrite(Node *parsetree, Oid tableOid, int reason);
+extern void EventTriggerOnConnect(void);
 
 extern bool EventTriggerBeginCompleteQuery(void);
 extern void EventTriggerEndCompleteQuery(void);

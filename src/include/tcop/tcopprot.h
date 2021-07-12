@@ -31,6 +31,11 @@ extern int	max_stack_depth;
 extern int	PostAuthDelay;
 extern int	client_connection_check_interval;
 
+/* Hook for plugins to get control at start and end of session */
+typedef void (*client_connection_hook_type) (void);
+
+extern PGDLLIMPORT client_connection_hook_type client_connection_hook;
+
 /* GUC-configurable parameters */
 
 typedef enum

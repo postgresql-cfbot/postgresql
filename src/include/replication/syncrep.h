@@ -80,6 +80,7 @@ extern char *syncrep_parse_error_msg;
 
 /* user-settable parameters for synchronous replication */
 extern char *SyncRepStandbyNames;
+extern bool synchronous_replication_interrupt;
 
 /* called by user backend */
 extern void SyncRepWaitForLSN(XLogRecPtr lsn, bool commit);

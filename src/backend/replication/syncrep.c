@@ -88,6 +88,7 @@
 
 /* User-settable parameters for sync rep */
 char	   *SyncRepStandbyNames;
+bool		synchronous_replication_interrupt = true;;
 
 #define SyncStandbysDefined() \
 	(SyncRepStandbyNames != NULL && SyncRepStandbyNames[0] != '\0')
@@ -150,6 +151,8 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 	char	   *new_status = NULL;
 	const char *old_status;
 	int			mode;
+	bool		termination_warning_emitted = false;
+	bool		cancel_warning_emitted = false;
 
 	/*
 	 * This should be called while holding interrupts during a transaction
@@ -263,13 +266,24 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		 */
 		if (ProcDiePending)
 		{
-			ereport(WARNING,
-					(errcode(ERRCODE_ADMIN_SHUTDOWN),
-					 errmsg("canceling the wait for synchronous replication and terminating connection due to administrator command"),
-					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
-			whereToSendOutput = DestNone;
-			SyncRepCancelWait();
-			break;
+			if (synchronous_replication_interrupt) {
+				ereport(WARNING,
+						(errcode(ERRCODE_ADMIN_SHUTDOWN),
+						 errmsg("canceling the wait for synchronous replication and terminating connection due to administrator command"),
+						 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
+				whereToSendOutput = DestNone;
+				SyncRepCancelWait();
+				break;
+			}
+			else if (!termination_warning_emitted)
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_ADMIN_SHUTDOWN),
+						 errmsg("received request to terminate connection while waiting for synchronous replication"),
+						 errdetail("The transaction has already committed locally, but might not have been replicated to the standby."),
+						 errhint("Set synchronous_standby_names='' and reload the configuration to allow termination to proceed.")));
+				termination_warning_emitted = true;
+			}
 		}
 
 		/*
@@ -280,12 +294,24 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		 */
 		if (QueryCancelPending)
 		{
-			QueryCancelPending = false;
-			ereport(WARNING,
-					(errmsg("canceling wait for synchronous replication due to user request"),
-					 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
-			SyncRepCancelWait();
-			break;
+			if (synchronous_replication_interrupt)
+			{
+				QueryCancelPending = false;
+				ereport(WARNING,
+						(errmsg("canceling wait for synchronous replication due to user request"),
+						 errdetail("The transaction has already committed locally, but might not have been replicated to the standby.")));
+				SyncRepCancelWait();
+				break;
+			}
+			else if (!cancel_warning_emitted)
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_ADMIN_SHUTDOWN),
+						 errmsg("received cancellation request while waiting for synchronous replication"),
+						 errdetail("The transaction has already committed locally, but might not have been replicated to the standby."),
+						 errhint("Set synchronous_standby_names='' and reload the configuration to allow the client to proceed.")));
+				cancel_warning_emitted = true;
+			}
 		}
 
 		/*

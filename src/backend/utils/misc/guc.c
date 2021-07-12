@@ -1311,6 +1311,16 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"synchronous_replication_interrupt", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Enable interrupt while waiting for synchronous replication."),
+			NULL
+		},
+		&synchronous_replication_interrupt,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"wal_log_hints", PGC_POSTMASTER, WAL_SETTINGS,
 			gettext_noop("Writes full pages to WAL when first modified after a checkpoint, even for a non-critical modification."),
 			NULL

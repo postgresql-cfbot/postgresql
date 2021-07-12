@@ -3008,12 +3008,13 @@ void
 AssertPendingSyncs_RelationCache(void)
 {
 	HASH_SEQ_STATUS status;
-	LOCALLOCK  *locallock;
+	LOCALLOCK **locallocks;
 	Relation   *rels;
 	int			maxrels;
 	int			nrels;
 	RelIdCacheEnt *idhentry;
 	int			i;
+	uint32		nlocallocks;
 
 	/*
 	 * Open every relation that this transaction has locked.  If, for some
@@ -3026,9 +3027,10 @@ AssertPendingSyncs_RelationCache(void)
 	maxrels = 1;
 	rels = palloc(maxrels * sizeof(*rels));
 	nrels = 0;
-	hash_seq_init(&status, GetLockMethodLocalHash());
-	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
+	locallocks = GetLockMethodLocalLocks(&nlocallocks);
+	for (i = 0; i < nlocallocks; i++)
 	{
+		LOCALLOCK  *locallock = locallocks[i];
 		Oid			relid;
 		Relation	r;
 
@@ -3048,6 +3050,7 @@ AssertPendingSyncs_RelationCache(void)
 		}
 		rels[nrels++] = r;
 	}
+	pfree(locallocks);
 
 	hash_seq_init(&status, RelationIdCache);
 	while ((idhentry = (RelIdCacheEnt *) hash_seq_search(&status)) != NULL)

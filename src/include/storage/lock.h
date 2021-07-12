@@ -561,7 +561,7 @@ extern void LockReleaseCurrentOwner(LOCALLOCK **locallocks, int nlocks);
 extern void LockReassignCurrentOwner(LOCALLOCK **locallocks, int nlocks);
 extern bool LockHeldByMe(const LOCKTAG *locktag, LOCKMODE lockmode);
 #ifdef USE_ASSERT_CHECKING
-extern HTAB *GetLockMethodLocalHash(void);
+extern LOCALLOCK **GetLockMethodLocalLocks(uint32 *size);
 #endif
 extern bool LockHasWaiters(const LOCKTAG *locktag,
 						   LOCKMODE lockmode, bool sessionLock);

@@ -731,6 +731,7 @@ Check constraints:
     "ft1_c3_check" CHECK (c3 >= '01-01-1994'::date AND c3 <= '01-31-1994'::date)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
+Parallel DML: unsafe
 
 \det+
                                  List of foreign tables
@@ -853,6 +854,7 @@ Check constraints:
     "ft1_c3_check" CHECK (c3 >= '01-01-1994'::date AND c3 <= '01-31-1994'::date)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
+Parallel DML: unsafe
 
 -- can't change the column type if it's used elsewhere
 CREATE TABLE use_ft1_column_type (x ft1);
@@ -1392,6 +1394,7 @@ CREATE FOREIGN TABLE ft2 () INHERITS (fd_pt1)
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
 Child tables: ft2
+Parallel DML: unsafe
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1403,6 +1406,7 @@ Child tables: ft2
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
+Parallel DML: unsafe
 
 DROP FOREIGN TABLE ft2;
 \d+ fd_pt1
@@ -1412,6 +1416,7 @@ DROP FOREIGN TABLE ft2;
  c1     | integer |           | not null |         | plain    |              | 
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
+Parallel DML: unsafe
 
 CREATE FOREIGN TABLE ft2 (
 	c1 integer NOT NULL,
@@ -1427,6 +1432,7 @@ CREATE FOREIGN TABLE ft2 (
  c3     | date    |           |          |         |             | plain    |              | 
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
+Parallel DML: unsafe
 
 ALTER FOREIGN TABLE ft2 INHERIT fd_pt1;
 \d+ fd_pt1
@@ -1437,6 +1443,7 @@ ALTER FOREIGN TABLE ft2 INHERIT fd_pt1;
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
 Child tables: ft2
+Parallel DML: unsafe
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1448,6 +1455,7 @@ Child tables: ft2
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
+Parallel DML: unsafe
 
 CREATE TABLE ct3() INHERITS(ft2);
 CREATE FOREIGN TABLE ft3 (
@@ -1471,6 +1479,7 @@ FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
 Child tables: ct3,
               ft3
+Parallel DML: unsafe
 
 \d+ ct3
                                     Table "public.ct3"
@@ -1480,6 +1489,7 @@ Child tables: ct3,
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
 Inherits: ft2
+Parallel DML: unsafe
 
 \d+ ft3
                                        Foreign table "public.ft3"
@@ -1490,6 +1500,7 @@ Inherits: ft2
  c3     | date    |           |          |         |             | plain    |              | 
 Server: s0
 Inherits: ft2
+Parallel DML: unsafe
 
 -- add attributes recursively
 ALTER TABLE fd_pt1 ADD COLUMN c4 integer;
@@ -1510,6 +1521,7 @@ ALTER TABLE fd_pt1 ADD COLUMN c8 integer;
  c7     | integer |           | not null |         | plain    |              | 
  c8     | integer |           |          |         | plain    |              | 
 Child tables: ft2
+Parallel DML: unsafe
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1528,6 +1540,7 @@ FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
 Child tables: ct3,
               ft3
+Parallel DML: unsafe
 
 \d+ ct3
                                     Table "public.ct3"
@@ -1542,6 +1555,7 @@ Child tables: ct3,
  c7     | integer |           | not null |         | plain    |              | 
  c8     | integer |           |          |         | plain    |              | 
 Inherits: ft2
+Parallel DML: unsafe
 
 \d+ ft3
                                        Foreign table "public.ft3"
@@ -1557,6 +1571,7 @@ Inherits: ft2
  c8     | integer |           |          |         |             | plain    |              | 
 Server: s0
 Inherits: ft2
+Parallel DML: unsafe
 
 -- alter attributes recursively
 ALTER TABLE fd_pt1 ALTER COLUMN c4 SET DEFAULT 0;
@@ -1584,6 +1599,7 @@ ALTER TABLE fd_pt1 ALTER COLUMN c8 SET STORAGE EXTERNAL;
  c7     | integer |           |          |         | plain    |              | 
  c8     | text    |           |          |         | external |              | 
 Child tables: ft2
+Parallel DML: unsafe
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1602,6 +1618,7 @@ FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
 Child tables: ct3,
               ft3
+Parallel DML: unsafe
 
 -- drop attributes recursively
 ALTER TABLE fd_pt1 DROP COLUMN c4;
@@ -1617,6 +1634,7 @@ ALTER TABLE fd_pt1 DROP COLUMN c8;
  c2     | text    |           |          |         | extended |              | 
  c3     | date    |           |          |         | plain    |              | 
 Child tables: ft2
+Parallel DML: unsafe
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1630,6 +1648,7 @@ FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
 Child tables: ct3,
               ft3
+Parallel DML: unsafe
 
 -- add constraints recursively
 ALTER TABLE fd_pt1 ADD CONSTRAINT fd_pt1chk1 CHECK (c1 > 0) NO INHERIT;
@@ -1657,6 +1676,7 @@ Check constraints:
     "fd_pt1chk1" CHECK (c1 > 0) NO INHERIT
     "fd_pt1chk2" CHECK (c2 <> ''::text)
 Child tables: ft2
+Parallel DML: unsafe
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1672,6 +1692,7 @@ FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
 Child tables: ct3,
               ft3
+Parallel DML: unsafe
 
 DROP FOREIGN TABLE ft2; -- ERROR
 ERROR:  cannot drop foreign table ft2 because other objects depend on it
@@ -1704,6 +1725,7 @@ Check constraints:
     "fd_pt1chk1" CHECK (c1 > 0) NO INHERIT
     "fd_pt1chk2" CHECK (c2 <> ''::text)
 Child tables: ft2
+Parallel DML: unsafe
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1717,6 +1739,7 @@ Check constraints:
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
+Parallel DML: unsafe
 
 -- drop constraints recursively
 ALTER TABLE fd_pt1 DROP CONSTRAINT fd_pt1chk1 CASCADE;
@@ -1734,6 +1757,7 @@ ALTER TABLE fd_pt1 ADD CONSTRAINT fd_pt1chk3 CHECK (c2 <> '') NOT VALID;
 Check constraints:
     "fd_pt1chk3" CHECK (c2 <> ''::text) NOT VALID
 Child tables: ft2
+Parallel DML: unsafe
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1748,6 +1772,7 @@ Check constraints:
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
+Parallel DML: unsafe
 
 -- VALIDATE CONSTRAINT need do nothing on foreign tables
 ALTER TABLE fd_pt1 VALIDATE CONSTRAINT fd_pt1chk3;
@@ -1761,6 +1786,7 @@ ALTER TABLE fd_pt1 VALIDATE CONSTRAINT fd_pt1chk3;
 Check constraints:
     "fd_pt1chk3" CHECK (c2 <> ''::text)
 Child tables: ft2
+Parallel DML: unsafe
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1775,6 +1801,7 @@ Check constraints:
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
+Parallel DML: unsafe
 
 -- changes name of an attribute recursively
 ALTER TABLE fd_pt1 RENAME COLUMN c1 TO f1;
@@ -1792,6 +1819,7 @@ ALTER TABLE fd_pt1 RENAME CONSTRAINT fd_pt1chk3 TO f2_check;
 Check constraints:
     "f2_check" CHECK (f2 <> ''::text)
 Child tables: ft2
+Parallel DML: unsafe
 
 \d+ ft2
                                        Foreign table "public.ft2"
@@ -1806,6 +1834,7 @@ Check constraints:
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
 Inherits: fd_pt1
+Parallel DML: unsafe
 
 -- TRUNCATE doesn't work on foreign tables, either directly or recursively
 TRUNCATE ft2;  -- ERROR
@@ -1855,6 +1884,7 @@ CREATE FOREIGN TABLE fd_pt2_1 PARTITION OF fd_pt2 FOR VALUES IN (1)
  c3     | date    |           |          |         | plain    |              | 
 Partition key: LIST (c1)
 Partitions: fd_pt2_1 FOR VALUES IN (1)
+Parallel DML: unsafe
 
 \d+ fd_pt2_1
                                      Foreign table "public.fd_pt2_1"
@@ -1867,6 +1897,7 @@ Partition of: fd_pt2 FOR VALUES IN (1)
 Partition constraint: ((c1 IS NOT NULL) AND (c1 = 1))
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
+Parallel DML: unsafe
 
 -- partition cannot have additional columns
 DROP FOREIGN TABLE fd_pt2_1;
@@ -1886,6 +1917,7 @@ CREATE FOREIGN TABLE fd_pt2_1 (
  c4     | character(1) |           |          |         |             | extended |              | 
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
+Parallel DML: unsafe
 
 ALTER TABLE fd_pt2 ATTACH PARTITION fd_pt2_1 FOR VALUES IN (1);       -- ERROR
 ERROR:  table "fd_pt2_1" contains column "c4" not found in parent "fd_pt2"
@@ -1900,6 +1932,7 @@ DROP FOREIGN TABLE fd_pt2_1;
  c3     | date    |           |          |         | plain    |              | 
 Partition key: LIST (c1)
 Number of partitions: 0
+Parallel DML: unsafe
 
 CREATE FOREIGN TABLE fd_pt2_1 (
 	c1 integer NOT NULL,
@@ -1915,6 +1948,7 @@ CREATE FOREIGN TABLE fd_pt2_1 (
  c3     | date    |           |          |         |             | plain    |              | 
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
+Parallel DML: unsafe
 
 -- no attach partition validation occurs for foreign tables
 ALTER TABLE fd_pt2 ATTACH PARTITION fd_pt2_1 FOR VALUES IN (1);
@@ -1927,6 +1961,7 @@ ALTER TABLE fd_pt2 ATTACH PARTITION fd_pt2_1 FOR VALUES IN (1);
  c3     | date    |           |          |         | plain    |              | 
 Partition key: LIST (c1)
 Partitions: fd_pt2_1 FOR VALUES IN (1)
+Parallel DML: unsafe
 
 \d+ fd_pt2_1
                                      Foreign table "public.fd_pt2_1"
@@ -1939,6 +1974,7 @@ Partition of: fd_pt2 FOR VALUES IN (1)
 Partition constraint: ((c1 IS NOT NULL) AND (c1 = 1))
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
+Parallel DML: unsafe
 
 -- cannot add column to a partition
 ALTER TABLE fd_pt2_1 ADD c4 char;
@@ -1955,6 +1991,7 @@ ALTER TABLE fd_pt2_1 ADD CONSTRAINT p21chk CHECK (c2 <> '');
  c3     | date    |           |          |         | plain    |              | 
 Partition key: LIST (c1)
 Partitions: fd_pt2_1 FOR VALUES IN (1)
+Parallel DML: unsafe
 
 \d+ fd_pt2_1
                                      Foreign table "public.fd_pt2_1"
@@ -1969,6 +2006,7 @@ Check constraints:
     "p21chk" CHECK (c2 <> ''::text)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
+Parallel DML: unsafe
 
 -- cannot drop inherited NOT NULL constraint from a partition
 ALTER TABLE fd_pt2_1 ALTER c1 DROP NOT NULL;
@@ -1985,6 +2023,7 @@ ALTER TABLE fd_pt2 ALTER c2 SET NOT NULL;
  c3     | date    |           |          |         | plain    |              | 
 Partition key: LIST (c1)
 Number of partitions: 0
+Parallel DML: unsafe
 
 \d+ fd_pt2_1
                                      Foreign table "public.fd_pt2_1"
@@ -1997,6 +2036,7 @@ Check constraints:
     "p21chk" CHECK (c2 <> ''::text)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
+Parallel DML: unsafe
 
 ALTER TABLE fd_pt2 ATTACH PARTITION fd_pt2_1 FOR VALUES IN (1);       -- ERROR
 ERROR:  column "c2" in child table must be marked NOT NULL
@@ -2015,6 +2055,7 @@ Partition key: LIST (c1)
 Check constraints:
     "fd_pt2chk1" CHECK (c1 > 0)
 Number of partitions: 0
+Parallel DML: unsafe
 
 \d+ fd_pt2_1
                                      Foreign table "public.fd_pt2_1"
@@ -2027,6 +2068,7 @@ Check constraints:
     "p21chk" CHECK (c2 <> ''::text)
 Server: s0
 FDW options: (delimiter ',', quote '"', "be quoted" 'value')
+Parallel DML: unsafe
 
 ALTER TABLE fd_pt2 ATTACH PARTITION fd_pt2_1 FOR VALUES IN (1);       -- ERROR
 ERROR:  child table is missing constraint "fd_pt2chk1"

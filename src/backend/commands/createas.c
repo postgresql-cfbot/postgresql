@@ -107,6 +107,7 @@ create_ctas_internal(List *attrList, IntoClause *into)
 	create->options = into->options;
 	create->oncommit = into->onCommit;
 	create->tablespacename = into->tableSpaceName;
+	create->paralleldmlsafety = into->paralleldmlsafety;
 	create->if_not_exists = false;
 	create->accessMethod = into->accessMethod;
 

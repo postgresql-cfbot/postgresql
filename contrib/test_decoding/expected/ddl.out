@@ -446,6 +446,7 @@ WITH (user_catalog_table = true)
  options  | text[]  |           |          |                                                  | extended |              | 
 Indexes:
     "replication_metadata_pkey" PRIMARY KEY, btree (id)
+Parallel DML: unsafe
 Options: user_catalog_table=true
 
 INSERT INTO replication_metadata(relation, options)
@@ -460,6 +461,7 @@ ALTER TABLE replication_metadata RESET (user_catalog_table);
  options  | text[]  |           |          |                                                  | extended |              | 
 Indexes:
     "replication_metadata_pkey" PRIMARY KEY, btree (id)
+Parallel DML: unsafe
 
 INSERT INTO replication_metadata(relation, options)
 VALUES ('bar', ARRAY['a', 'b']);
@@ -473,6 +475,7 @@ ALTER TABLE replication_metadata SET (user_catalog_table = true);
  options  | text[]  |           |          |                                                  | extended |              | 
 Indexes:
     "replication_metadata_pkey" PRIMARY KEY, btree (id)
+Parallel DML: unsafe
 Options: user_catalog_table=true
 
 INSERT INTO replication_metadata(relation, options)
@@ -492,6 +495,7 @@ ALTER TABLE replication_metadata SET (user_catalog_table = false);
  rewritemeornot | integer |           |          |                                                  | plain    |              | 
 Indexes:
     "replication_metadata_pkey" PRIMARY KEY, btree (id)
+Parallel DML: unsafe
 Options: user_catalog_table=false
 
 INSERT INTO replication_metadata(relation, options)

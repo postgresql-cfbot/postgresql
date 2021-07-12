@@ -23,6 +23,8 @@
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "catalog/catalog.h"
+#include "catalog/namespace.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_type.h"
 #include "catalog/system_fk_info.h"
@@ -31,6 +33,7 @@
 #include "common/keywords.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "optimizer/clauses.h"
 #include "parser/scansup.h"
 #include "pgstat.h"
 #include "postmaster/syslogger.h"
@@ -43,6 +46,7 @@
 #include "utils/lsyscache.h"
 #include "utils/ruleutils.h"
 #include "utils/timestamp.h"
+#include "utils/varlena.h"
 
 /*
  * Common subroutine for num_nulls() and num_nonnulls().
@@ -603,6 +607,96 @@ pg_collation_for(PG_FUNCTION_ARGS)
 	if (!collid)
 		PG_RETURN_NULL();
 	PG_RETURN_TEXT_P(cstring_to_text(generate_collation_name(collid)));
+}
+
+/*
+ * Find the worst parallel-hazard level in the given relation
+ *
+ * Returns the worst parallel hazard level (the earliest in this list:
+ * PROPARALLEL_UNSAFE, PROPARALLEL_RESTRICTED, PROPARALLEL_SAFE) that can
+ * be found in the given relation.
+ */
+Datum
+pg_get_table_max_parallel_dml_hazard(PG_FUNCTION_ARGS)
+{
+	char		max_parallel_hazard;
+	Oid			relOid = PG_GETARG_OID(0);
+
+	(void) target_rel_parallel_hazard(relOid, false,
+									  PROPARALLEL_UNSAFE,
+									  &max_parallel_hazard);
+
+	PG_RETURN_CHAR(max_parallel_hazard);
+}
+
+/*
+ * Determine whether the target relation is safe to execute parallel modification.
+ *
+ * Return all the PARALLEL RESTRICTED/UNSAFE objects.
+ */
+Datum
+pg_get_table_parallel_dml_safety(PG_FUNCTION_ARGS)
+{
+#define PG_GET_PARALLEL_SAFETY_COLS	3
+	List	   *objects;
+	ListCell   *object;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+	ReturnSetInfo *rsinfo;
+	char		max_parallel_hazard;
+	Oid			relOid = PG_GETARG_OID(0);
+
+	rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not allowed in this context")));
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+
+	MemoryContextSwitchTo(oldcontext);
+
+	objects = target_rel_parallel_hazard(relOid, true,
+										 PROPARALLEL_UNSAFE,
+										 &max_parallel_hazard);
+	foreach(object, objects)
+	{
+		Datum		values[PG_GET_PARALLEL_SAFETY_COLS];
+		bool		nulls[PG_GET_PARALLEL_SAFETY_COLS];
+		safety_object *sobject = (safety_object *) lfirst(object);
+
+		memset(nulls, 0, sizeof(nulls));
+
+		values[0] = sobject->objid;
+		values[1] = sobject->classid;
+		values[2] = sobject->proparallel;
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	/* clean up and return the tuplestore */
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
 }
 
 

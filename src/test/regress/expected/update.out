@@ -753,6 +753,7 @@ create table part_def partition of range_parted default;
  e      | character varying |           |          |         | extended |              | 
 Partition of: range_parted DEFAULT
 Partition constraint: (NOT ((a IS NOT NULL) AND (b IS NOT NULL) AND (((a = 'a'::text) AND (b >= '1'::bigint) AND (b < '10'::bigint)) OR ((a = 'a'::text) AND (b >= '10'::bigint) AND (b < '20'::bigint)) OR ((a = 'b'::text) AND (b >= '1'::bigint) AND (b < '10'::bigint)) OR ((a = 'b'::text) AND (b >= '10'::bigint) AND (b < '20'::bigint)) OR ((a = 'b'::text) AND (b >= '20'::bigint) AND (b < '30'::bigint)))))
+Parallel DML: unsafe
 
 insert into range_parted values ('c', 9);
 -- ok

@@ -27,6 +27,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
     [ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
     [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
     [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
+    [ PARALLEL DML { UNSAFE | RESTRICTED | SAFE } ]
     AS <replaceable>query</replaceable>
     [ WITH [ NO ] DATA ]
 </synopsis>
@@ -219,6 +220,28 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
       If not specified,
       <xref linkend="guc-default-tablespace"/> is consulted, or
       <xref linkend="guc-temp-tablespaces"/> if the table is temporary.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>PARALLEL DML { UNSAFE | RESTRICTED | SAFE } </literal></term>
+    <listitem>
+     <para>
+      <literal>PARALLEL DML UNSAFE</literal> indicates that the data in table
+      can't be modified in parallel mode. This is the default.
+      <literal>PARALLEL DML RESTRICTED</literal> indicates that the data in
+      table can be modified in parallel mode, but the modification is
+      restricted to parallel group leader. <literal>PARALLEL DML SAFE</literal>
+      indicates that the table is safe to be modified in parallel mode without
+      restriction. But note that <productname>PostgreSQL</productname>
+      does not support data modification in parallel worker for now.
+     </para>
+
+     <para>
+      Tables should be labeled parallel dml unsafe/restricted if any parallel
+      unsafe/restricted function could be executed when modifying the data in
+      table (e.g., functions in trigger/index expression/constraints ...).
      </para>
     </listitem>
    </varlistentry>

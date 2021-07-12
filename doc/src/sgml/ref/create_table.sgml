@@ -33,6 +33,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
 [ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
 [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
+[ PARALLEL DML { UNSAFE | RESTRICTED | SAFE } ]
 
 CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable class="parameter">table_name</replaceable>
     OF <replaceable class="parameter">type_name</replaceable> [ (
@@ -45,6 +46,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
 [ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
 [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
+[ PARALLEL DML { UNSAFE | RESTRICTED | SAFE } ]
 
 CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable class="parameter">table_name</replaceable>
     PARTITION OF <replaceable class="parameter">parent_table</replaceable> [ (
@@ -57,6 +59,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
 [ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
 [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
+[ PARALLEL DML { UNSAFE | RESTRICTED | SAFE } ]
 
 <phrase>where <replaceable class="parameter">column_constraint</replaceable> is:</phrase>
 
@@ -1332,6 +1335,41 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       the tablespace specified overrides <literal>default_tablespace</literal>
       as the default tablespace to use for any newly created partitions when no
       other tablespace is explicitly specified.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createtable-paralleldmlsafety">
+    <term><literal>PARALLEL DML { UNSAFE | RESTRICTED | SAFE } </literal></term>
+    <listitem>
+     <para>
+      <literal>PARALLEL DML UNSAFE</literal> indicates that the data in the table
+      can't be modified in parallel mode, and this forces a serial execution plan
+      for DML statements operating on the table. This is the default.
+      <literal>PARALLEL DML RESTRICTED</literal> indicates that the data in the
+      table can be modified in parallel mode, but the modification is
+      restricted to the parallel group leader.
+      <literal>PARALLEL DML SAFE</literal> indicates that the data in the table
+      can be modified in parallel mode without restriction. Note that
+      <productname>PostgreSQL</productname> currently does not support data
+      modification by parallel workers.
+     </para>
+
+     <para>
+      Tables should be labeled parallel dml unsafe/restricted if any parallel
+      unsafe/restricted function could be executed when modifying the data in
+      the table
+      (e.g., functions in triggers/index expressions/constraints etc.).
+     </para>
+
+     <para>
+      To assist in correctly labeling the parallel DML safety level of a table,
+      PostgreSQL provides some utility functions that may be used during
+      application development. Refer to
+      <link linkend="functions-info-object-table">
+      <function>pg_get_table_parallel_dml_safety()</function></link> and
+      <link linkend="functions-info-object-table">
+      <function>pg_get_table_max_parallel_dml_hazard()</function></link> for more information.
      </para>
     </listitem>
    </varlistentry>

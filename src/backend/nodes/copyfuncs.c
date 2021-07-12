@@ -3534,6 +3534,7 @@ CopyCreateStmtFields(const CreateStmt *from, CreateStmt *newnode)
 	COPY_SCALAR_FIELD(oncommit);
 	COPY_STRING_FIELD(tablespacename);
 	COPY_STRING_FIELD(accessMethod);
+	COPY_STRING_FIELD(paralleldmlsafety);
 	COPY_SCALAR_FIELD(if_not_exists);
 }
 

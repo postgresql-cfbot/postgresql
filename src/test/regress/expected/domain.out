@@ -276,6 +276,7 @@ Rules:
     silly AS
     ON DELETE TO dcomptable DO INSTEAD  UPDATE dcomptable SET d1.r = (dcomptable.d1).r - 1::double precision, d1.i = (dcomptable.d1).i + 1::double precision
   WHERE (dcomptable.d1).i > 0::double precision
+Parallel DML: unsafe
 
 drop table dcomptable;
 drop type comptype cascade;
@@ -413,6 +414,7 @@ Rules:
     silly AS
     ON DELETE TO dcomptable DO INSTEAD  UPDATE dcomptable SET d1[1].r = dcomptable.d1[1].r - 1::double precision, d1[1].i = dcomptable.d1[1].i + 1::double precision
   WHERE dcomptable.d1[1].i > 0::double precision
+Parallel DML: unsafe
 
 drop table dcomptable;
 drop type comptype cascade;

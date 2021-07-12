@@ -16,14 +16,6 @@
 
 #include <signal.h>
 
-#ifdef HAVE_SYS_PRCTL_H
-#include "sys/prctl.h"
-#endif
-
-#ifdef HAVE_SYS_PROCCTL_H
-#include "sys/procctl.h"
-#endif
-
 /*
  * Reasons for signaling the postmaster.  We can cope with simultaneous
  * signals for different reasons.  If the same reason is signaled multiple
@@ -83,8 +75,7 @@ extern void PostmasterDeathSignalInit(void);
  * the parent dies.  Checking the flag first makes PostmasterIsAlive() a lot
  * cheaper in usual case that the postmaster is alive.
  */
-#if (defined(HAVE_SYS_PRCTL_H) && defined(PR_SET_PDEATHSIG)) || \
-	(defined(HAVE_SYS_PROCCTL_H) && defined(PROC_PDEATHSIG_CTL))
+#if defined(SIGIO)
 #define USE_POSTMASTER_DEATH_SIGNAL
 #endif
 

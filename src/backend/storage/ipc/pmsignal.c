@@ -14,6 +14,7 @@
  */
 #include "postgres.h"
 
+#include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
 
@@ -92,23 +93,6 @@ postmaster_death_handler(int signo)
 {
 	postmaster_possibly_dead = true;
 }
-
-/*
- * The available signals depend on the OS.  SIGUSR1 and SIGUSR2 are already
- * used for other things, so choose another one.
- *
- * Currently, we assume that we can always find a signal to use.  That
- * seems like a reasonable assumption for all platforms that are modern
- * enough to have a parent-death signaling mechanism.
- */
-#if defined(SIGINFO)
-#define POSTMASTER_DEATH_SIGNAL SIGINFO
-#elif defined(SIGPWR)
-#define POSTMASTER_DEATH_SIGNAL SIGPWR
-#else
-#error "cannot find a signal to use for postmaster death"
-#endif
-
 #endif							/* USE_POSTMASTER_DEATH_SIGNAL */
 
 /*
@@ -405,21 +389,16 @@ void
 PostmasterDeathSignalInit(void)
 {
 #ifdef USE_POSTMASTER_DEATH_SIGNAL
-	int			signum = POSTMASTER_DEATH_SIGNAL;
-
 	/* Register our signal handler. */
-	pqsignal(signum, postmaster_death_handler);
+	pqsignal(SIGIO, postmaster_death_handler);
 
-	/* Request a signal on parent exit. */
-#if defined(PR_SET_PDEATHSIG)
-	if (prctl(PR_SET_PDEATHSIG, signum) < 0)
-		elog(ERROR, "could not request parent death signal: %m");
-#elif defined(PROC_PDEATHSIG_CTL)
-	if (procctl(P_PID, 0, PROC_PDEATHSIG_CTL, &signum) < 0)
-		elog(ERROR, "could not request parent death signal: %m");
-#else
-#error "USE_POSTMASTER_DEATH_SIGNAL set, but there is no mechanism to request the signal"
-#endif
+	/* Ask for SIGIO if the pipe becomes readable, indicating it was closed. */
+	if (fcntl(postmaster_alive_fds[POSTMASTER_FD_WATCH],
+			  F_SETOWN, MyProcPid) < 0)
+		elog(ERROR, "could not own postmaster pipe: %m");
+	if (fcntl(postmaster_alive_fds[POSTMASTER_FD_WATCH],
+			  F_SETFL, O_ASYNC | O_NONBLOCK) < 0)
+		elog(ERROR, "could not enable SIGIO on postmaster pipe: %m");
 
 	/*
 	 * Just in case the parent was gone already and we missed it, we'd better

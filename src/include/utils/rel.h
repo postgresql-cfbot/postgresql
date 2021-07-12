@@ -24,6 +24,7 @@
 #include "rewrite/prs2lock.h"
 #include "storage/block.h"
 #include "storage/relfilenode.h"
+#include "storage/smgr.h"
 #include "utils/relcache.h"
 #include "utils/reltrigger.h"
 
@@ -528,14 +529,22 @@ typedef struct ViewOptions
 	 ((relation)->rd_rel->relfilenode == InvalidOid))
 
 /*
- * RelationOpenSmgr
- *		Open the relation at the smgr level, if not already done.
+ * RelationGetSmgr
+ * 		Returns smgr file handle for a relation. Open the relation at the smgr
+ * 		level, if not already done.
+ *
+ * Note: Recommended using this function to access rd_smgr file handler in each
+ * use instead of accessing rd_smgr directly or storing pointer locally and
+ * using it, to ensure that the target relation is open at the smgr level before
+ * performing further smgr operations.
  */
-#define RelationOpenSmgr(relation) \
-	do { \
-		if ((relation)->rd_smgr == NULL) \
-			smgrsetowner(&((relation)->rd_smgr), smgropen((relation)->rd_node, (relation)->rd_backend)); \
-	} while (0)
+static inline struct SMgrRelationData *
+RelationGetSmgr(Relation rel)
+{
+	if (unlikely(rel->rd_smgr == NULL))
+		smgrsetowner(&(rel->rd_smgr), smgropen(rel->rd_node, rel->rd_backend));
+	return rel->rd_smgr;
+}
 
 /*
  * RelationCloseSmgr
@@ -568,8 +577,7 @@ typedef struct ViewOptions
  */
 #define RelationSetTargetBlock(relation, targblock) \
 	do { \
-		RelationOpenSmgr(relation); \
-		(relation)->rd_smgr->smgr_targblock = (targblock); \
+		(RelationGetSmgr(relation))->smgr_targblock = (targblock); \
 	} while (0)
 
 /*

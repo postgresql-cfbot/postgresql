@@ -282,16 +282,17 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	ForkNumber	forks[MAX_FORKNUM];
 	BlockNumber blocks[MAX_FORKNUM];
 	int			nforks = 0;
+	SMgrRelation reln;
 
 	/* Open it at the smgr level if not already done */
-	RelationOpenSmgr(rel);
+	reln = RelationGetSmgr(rel);
 
 	/*
 	 * Make sure smgr_targblock etc aren't pointing somewhere past new end
 	 */
-	rel->rd_smgr->smgr_targblock = InvalidBlockNumber;
+	reln->smgr_targblock = InvalidBlockNumber;
 	for (int i = 0; i <= MAX_FORKNUM; ++i)
-		rel->rd_smgr->smgr_cached_nblocks[i] = InvalidBlockNumber;
+		reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
 
 	/* Prepare for truncation of MAIN fork of the relation */
 	forks[nforks] = MAIN_FORKNUM;
@@ -299,7 +300,7 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	nforks++;
 
 	/* Prepare for truncation of the FSM if it exists */
-	fsm = smgrexists(rel->rd_smgr, FSM_FORKNUM);
+	fsm = smgrexists(reln, FSM_FORKNUM);
 	if (fsm)
 	{
 		blocks[nforks] = FreeSpaceMapPrepareTruncateRel(rel, nblocks);
@@ -312,7 +313,7 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	}
 
 	/* Prepare for truncation of the visibility map too if it exists */
-	vm = smgrexists(rel->rd_smgr, VISIBILITYMAP_FORKNUM);
+	vm = smgrexists(reln, VISIBILITYMAP_FORKNUM);
 	if (vm)
 	{
 		blocks[nforks] = visibilitymap_prepare_truncate(rel, nblocks);
@@ -364,7 +365,7 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	}
 
 	/* Do the real work to truncate relation forks */
-	smgrtruncate(rel->rd_smgr, forks, nforks, blocks);
+	smgrtruncate(reln, forks, nforks, blocks);
 
 	/*
 	 * Update upper-level FSM pages to account for the truncation. This is
@@ -389,9 +390,9 @@ RelationPreTruncate(Relation rel)
 
 	if (!pendingSyncHash)
 		return;
-	RelationOpenSmgr(rel);
 
-	pending = hash_search(pendingSyncHash, &(rel->rd_smgr->smgr_rnode.node),
+	pending = hash_search(pendingSyncHash,
+						  &(RelationGetSmgr(rel)->smgr_rnode.node),
 						  HASH_FIND, NULL);
 	if (pending)
 		pending->is_truncated = true;

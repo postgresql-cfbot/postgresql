@@ -385,20 +385,21 @@ pg_truncate_visibility_map(PG_FUNCTION_ARGS)
 	Relation	rel;
 	ForkNumber	fork;
 	BlockNumber block;
+	SMgrRelation reln;
 
 	rel = relation_open(relid, AccessExclusiveLock);
 
 	/* Only some relkinds have a visibility map */
 	check_relation_relkind(rel);
 
-	RelationOpenSmgr(rel);
-	rel->rd_smgr->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] = InvalidBlockNumber;
+	reln = RelationGetSmgr(rel);
+	reln->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] = InvalidBlockNumber;
 
 	block = visibilitymap_prepare_truncate(rel, 0);
 	if (BlockNumberIsValid(block))
 	{
 		fork = VISIBILITYMAP_FORKNUM;
-		smgrtruncate(rel->rd_smgr, &fork, 1, &block);
+		smgrtruncate(reln, &fork, 1, &block);
 	}
 
 	if (RelationNeedsWAL(rel))

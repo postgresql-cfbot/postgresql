@@ -96,6 +96,57 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
       following parameters are supported:
 
       <variablelist>
+
+       <varlistentry>
+        <term><literal>binary</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies whether the subscription will request the publisher to
+          send the data in binary format (as opposed to text).
+          The default is <literal>false</literal>.
+          Even when this option is enabled, only data types that have
+          binary send and receive functions will be transferred in binary.
+         </para>
+
+         <para>
+          When doing cross-version replication, it could happen that the
+          publisher has a binary send function for some data type, but the
+          subscriber lacks a binary receive function for the type.  In
+          such a case, data transfer will fail, and
+          the <literal>binary</literal> option cannot be used.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><literal>connect</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies whether the <command>CREATE SUBSCRIPTION</command>
+          should connect to the publisher at all.  Setting this to
+          <literal>false</literal> will change default values of
+          <literal>enabled</literal>, <literal>create_slot</literal> and
+          <literal>copy_data</literal> to <literal>false</literal>.
+         </para>
+
+         <para>
+          It is not allowed to combine <literal>connect</literal> set to
+          <literal>false</literal> and <literal>enabled</literal>,
+          <literal>create_slot</literal>, or <literal>copy_data</literal>
+          set to <literal>true</literal>.
+         </para>
+
+         <para>
+          Since no connection is made when this option is set
+          to <literal>false</literal>, the tables are not subscribed, and so
+          after you enable the subscription nothing will be replicated.
+          It is required to run
+          <literal>ALTER SUBSCRIPTION ... REFRESH PUBLICATION</literal> in order
+          for tables to be subscribed.
+         </para>
+        </listitem>
+       </varlistentry>
+
        <varlistentry>
         <term><literal>copy_data</literal> (<type>boolean</type>)</term>
         <listitem>
@@ -148,6 +199,18 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
        </varlistentry>
 
        <varlistentry>
+        <term><literal>streaming</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies whether streaming of in-progress transactions should
+          be enabled for this subscription.  By default, all transactions
+          are fully decoded on the publisher, and only then sent to the
+          subscriber as a whole.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
         <term><literal>synchronous_commit</literal> (<type>enum</type>)</term>
         <listitem>
          <para>
@@ -179,66 +242,6 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
-       <varlistentry>
-        <term><literal>binary</literal> (<type>boolean</type>)</term>
-        <listitem>
-         <para>
-          Specifies whether the subscription will request the publisher to
-          send the data in binary format (as opposed to text).
-          The default is <literal>false</literal>.
-          Even when this option is enabled, only data types that have
-          binary send and receive functions will be transferred in binary.
-         </para>
-
-         <para>
-          When doing cross-version replication, it could happen that the
-          publisher has a binary send function for some data type, but the
-          subscriber lacks a binary receive function for the type.  In
-          such a case, data transfer will fail, and
-          the <literal>binary</literal> option cannot be used.
-         </para>
-        </listitem>
-       </varlistentry>
-
-       <varlistentry>
-        <term><literal>connect</literal> (<type>boolean</type>)</term>
-        <listitem>
-         <para>
-          Specifies whether the <command>CREATE SUBSCRIPTION</command>
-          should connect to the publisher at all.  Setting this to
-          <literal>false</literal> will change default values of
-          <literal>enabled</literal>, <literal>create_slot</literal> and
-          <literal>copy_data</literal> to <literal>false</literal>.
-         </para>
-
-         <para>
-          It is not allowed to combine <literal>connect</literal> set to
-          <literal>false</literal> and <literal>enabled</literal>,
-          <literal>create_slot</literal>, or <literal>copy_data</literal>
-          set to <literal>true</literal>.
-         </para>
-
-         <para>
-          Since no connection is made when this option is set
-          to <literal>false</literal>, the tables are not subscribed, and so
-          after you enable the subscription nothing will be replicated.
-          It is required to run
-          <literal>ALTER SUBSCRIPTION ... REFRESH PUBLICATION</literal> in order
-          for tables to be subscribed.
-         </para>
-        </listitem>
-       </varlistentry>
-       <varlistentry>
-        <term><literal>streaming</literal> (<type>boolean</type>)</term>
-        <listitem>
-         <para>
-          Specifies whether streaming of in-progress transactions should
-          be enabled for this subscription.  By default, all transactions
-          are fully decoded on the publisher, and only then sent to the
-          subscriber as a whole.
-         </para>
-        </listitem>
-       </varlistentry>
       </variablelist></para>
     </listitem>
    </varlistentry>

@@ -2823,32 +2823,32 @@ SELECT count(*) FROM ft1;
 PREPARE TRANSACTION 'fdw_tpc';
 ROLLBACK;
 
+-- Let's ensure to close all the existing cached connections so that they don't
+-- make the following tests unstable.
+SELECT 1 FROM postgres_fdw_disconnect_all();
+
+-- If debug_invalidate_system_caches_always is active, it results in dropping
+-- remote connections after every transaction, making it impossible to test
+-- connection retry use case meaningfully. And also, the new functions
+-- introduced for cached connections management will be unstable with the flag
+-- on. So turn it off for these tests.
+SET debug_invalidate_system_caches_always = 0;
+
 -- ===================================================================
 -- reestablish new connection
 -- ===================================================================
-
 -- Change application_name of remote connection to special one
 -- so that we can easily terminate the connection later.
 ALTER SERVER loopback OPTIONS (application_name 'fdw_retry_check');
-
--- If debug_invalidate_system_caches_always is active, it results in
--- dropping remote connections after every transaction, making it
--- impossible to test termination meaningfully.  So turn that off
--- for this test.
-SET debug_invalidate_system_caches_always = 0;
-
 -- Make sure we have a remote connection.
 SELECT 1 FROM ft1 LIMIT 1;
-
 -- Terminate the remote connection and wait for the termination to complete.
 SELECT pg_terminate_backend(pid, 180000) FROM pg_stat_activity
 	WHERE application_name = 'fdw_retry_check';
-
 -- This query should detect the broken connection when starting new remote
 -- transaction, reestablish new connection, and then succeed.
 BEGIN;
 SELECT 1 FROM ft1 LIMIT 1;
-
 -- If we detect the broken connection when starting a new remote
 -- subtransaction, we should fail instead of establishing a new connection.
 -- Terminate the remote connection and wait for the termination to complete.
@@ -2861,15 +2861,11 @@ SELECT 1 FROM ft1 LIMIT 1;    -- should fail
 \set VERBOSITY default
 COMMIT;
 
-RESET debug_invalidate_system_caches_always;
-
 -- =============================================================================
 -- test connection invalidation cases and postgres_fdw_get_connections function
 -- =============================================================================
--- Let's ensure to close all the existing cached connections.
-SELECT 1 FROM postgres_fdw_disconnect_all();
 -- No cached connections, so no records should be output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
 -- This test case is for closing the connection in pgfdw_xact_callback
 BEGIN;
 -- Connection xact depth becomes 1 i.e. the connection is in midst of the xact.
@@ -2877,7 +2873,7 @@ SELECT 1 FROM ft1 LIMIT 1;
 SELECT 1 FROM ft7 LIMIT 1;
 -- List all the existing cached connections. loopback and loopback3 should be
 -- output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
 -- Connections are not closed at the end of the alter and drop statements.
 -- That's because the connections are in midst of this xact,
 -- they are just marked as invalid in pgfdw_inval_callback.
@@ -2891,7 +2887,7 @@ SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
 COMMIT;
 -- All cached connections were closed while committing above xact, so no
 -- records should be output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
 
 -- =======================================================================
 -- test postgres_fdw_disconnect and postgres_fdw_disconnect_all functions
@@ -2903,13 +2899,13 @@ SELECT 1 FROM ft1 LIMIT 1;
 SELECT 1 FROM ft6 LIMIT 1;
 -- List all the existing cached connections. loopback and loopback2 should be
 -- output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
 -- Issue a warning and return false as loopback connection is still in use and
 -- can not be closed.
 SELECT postgres_fdw_disconnect('loopback');
 -- List all the existing cached connections. loopback and loopback2 should be
 -- output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
 -- Return false as connections are still in use, warnings are issued.
 -- But disable warnings temporarily because the order of them is not stable.
 SET client_min_messages = 'ERROR';
@@ -2917,16 +2913,18 @@ SELECT postgres_fdw_disconnect_all();
 RESET client_min_messages;
 COMMIT;
 -- Ensure that loopback2 connection is closed.
-SELECT 1 FROM postgres_fdw_disconnect('loopback2');
-SELECT server_name FROM postgres_fdw_get_connections() WHERE server_name = 'loopback2';
+SELECT postgres_fdw_disconnect('loopback2');
+SELECT * FROM postgres_fdw_get_connections() WHERE server_name = 'loopback2';
 -- Return false as loopback2 connection is closed already.
 SELECT postgres_fdw_disconnect('loopback2');
 -- Return an error as there is no foreign server with given name.
 SELECT postgres_fdw_disconnect('unknownserver');
 -- Let's ensure to close all the existing cached connections.
-SELECT 1 FROM postgres_fdw_disconnect_all();
+SELECT postgres_fdw_disconnect_all();
 -- No cached connections, so no records should be output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
+-- No cached connections, so false should be output.
+SELECT postgres_fdw_disconnect_all();
 
 -- =============================================================================
 -- test case for having multiple cached connections for a foreign server
@@ -2941,19 +2939,17 @@ BEGIN;
 SET ROLE regress_multi_conn_user1;
 SELECT 1 FROM ft1 LIMIT 1;
 RESET ROLE;
-
 -- Will cache loopback connection with user mapping for regress_multi_conn_user2
 SET ROLE regress_multi_conn_user2;
 SELECT 1 FROM ft1 LIMIT 1;
 RESET ROLE;
-
 -- Should output two connections for loopback server
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
 COMMIT;
 -- Let's ensure to close all the existing cached connections.
-SELECT 1 FROM postgres_fdw_disconnect_all();
+SELECT postgres_fdw_disconnect_all();
 -- No cached connections, so no records should be output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
 
 -- Clean up
 DROP USER MAPPING FOR regress_multi_conn_user1 SERVER loopback;
@@ -2971,8 +2967,10 @@ ALTER SERVER loopback OPTIONS (keep_connections 'off');
 -- as keep_connections was set to off.
 SELECT 1 FROM ft1 LIMIT 1;
 -- No cached connections, so no records should be output.
-SELECT server_name FROM postgres_fdw_get_connections() ORDER BY 1;
+SELECT * FROM postgres_fdw_get_connections() ORDER BY 1;
 ALTER SERVER loopback OPTIONS (SET keep_connections 'on');
+
+RESET debug_invalidate_system_caches_always;
 
 -- ===================================================================
 -- batch insert

@@ -7587,9 +7587,7 @@ ATExecSetIdentity(Relation rel, const char *colName, Node *def, LOCKMODE lockmod
 		if (strcmp(defel->defname, "generated") == 0)
 		{
 			if (generatedEl)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+				errorConflictingDefElem(defel, NULL);
 			generatedEl = defel;
 		}
 		else

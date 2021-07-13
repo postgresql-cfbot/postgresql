@@ -875,9 +875,7 @@ parseCreateReplSlotOptions(CreateReplicationSlotCmd *cmd,
 		if (strcmp(defel->defname, "export_snapshot") == 0)
 		{
 			if (snapshot_action_given || cmd->kind != REPLICATION_KIND_LOGICAL)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+				errorConflictingDefElem(defel, NULL);
 
 			snapshot_action_given = true;
 			*snapshot_action = defGetBoolean(defel) ? CRS_EXPORT_SNAPSHOT :
@@ -886,9 +884,7 @@ parseCreateReplSlotOptions(CreateReplicationSlotCmd *cmd,
 		else if (strcmp(defel->defname, "use_snapshot") == 0)
 		{
 			if (snapshot_action_given || cmd->kind != REPLICATION_KIND_LOGICAL)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+				errorConflictingDefElem(defel, NULL);
 
 			snapshot_action_given = true;
 			*snapshot_action = CRS_USE_SNAPSHOT;
@@ -896,9 +892,7 @@ parseCreateReplSlotOptions(CreateReplicationSlotCmd *cmd,
 		else if (strcmp(defel->defname, "reserve_wal") == 0)
 		{
 			if (reserve_wal_given || cmd->kind != REPLICATION_KIND_PHYSICAL)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+				errorConflictingDefElem(defel, NULL);
 
 			reserve_wal_given = true;
 			*reserve_wal = true;
@@ -906,9 +900,8 @@ parseCreateReplSlotOptions(CreateReplicationSlotCmd *cmd,
 		else if (strcmp(defel->defname, "two_phase") == 0)
 		{
 			if (two_phase_given || cmd->kind != REPLICATION_KIND_LOGICAL)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+				errorConflictingDefElem(defel, NULL);
+
 			two_phase_given = true;
 			*two_phase = true;
 		}

@@ -184,9 +184,7 @@ parse_output_parameters(List *options, PGOutputData *data)
 			int64		parsed;
 
 			if (protocol_version_given)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+				errorConflictingDefElem(defel, NULL);
 			protocol_version_given = true;
 
 			if (!scanint8(strVal(defel->arg), true, &parsed))
@@ -205,9 +203,7 @@ parse_output_parameters(List *options, PGOutputData *data)
 		else if (strcmp(defel->defname, "publication_names") == 0)
 		{
 			if (publication_names_given)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+				errorConflictingDefElem(defel, NULL);
 			publication_names_given = true;
 
 			if (!SplitIdentifierString(strVal(defel->arg), ',',
@@ -219,9 +215,7 @@ parse_output_parameters(List *options, PGOutputData *data)
 		else if (strcmp(defel->defname, "binary") == 0)
 		{
 			if (binary_option_given)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+				errorConflictingDefElem(defel, NULL);
 			binary_option_given = true;
 
 			data->binary = defGetBoolean(defel);
@@ -229,9 +223,7 @@ parse_output_parameters(List *options, PGOutputData *data)
 		else if (strcmp(defel->defname, "messages") == 0)
 		{
 			if (messages_option_given)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+				errorConflictingDefElem(defel, NULL);
 			messages_option_given = true;
 
 			data->messages = defGetBoolean(defel);
@@ -239,9 +231,7 @@ parse_output_parameters(List *options, PGOutputData *data)
 		else if (strcmp(defel->defname, "streaming") == 0)
 		{
 			if (streaming_given)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("conflicting or redundant options")));
+				errorConflictingDefElem(defel, NULL);
 			streaming_given = true;
 
 			data->streaming = defGetBoolean(defel);

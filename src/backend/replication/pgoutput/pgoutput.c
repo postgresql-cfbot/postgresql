@@ -15,12 +15,14 @@
 #include "access/tupconvert.h"
 #include "catalog/partition.h"
 #include "catalog/pg_publication.h"
+#include "catalog/pg_publication_rel_d.h"
 #include "commands/defrem.h"
 #include "fmgr.h"
 #include "replication/logical.h"
 #include "replication/logicalproto.h"
 #include "replication/origin.h"
 #include "replication/pgoutput.h"
+#include "utils/builtins.h"
 #include "utils/int8.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
@@ -70,6 +72,7 @@ static void publication_invalidation_cb(Datum arg, int cacheid,
 										uint32 hashvalue);
 static void send_relation_and_attrs(Relation relation, TransactionId xid,
 									LogicalDecodingContext *ctx);
+static Bitmapset* get_table_columnset(Oid relid, List *columns, Bitmapset *att_list);
 
 /*
  * Entry in the map used to remember which relation schemas we sent.
@@ -115,6 +118,7 @@ typedef struct RelationSyncEntry
 	 * having identical TupleDesc.
 	 */
 	TupleConversionMap *map;
+	Bitmapset *att_list;
 } RelationSyncEntry;
 
 /* Map used to remember which relation schemas we sent. */
@@ -590,10 +594,9 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 					if (relentry->map)
 						tuple = execute_attr_map_tuple(tuple, relentry->map);
 				}
-
 				OutputPluginPrepareWrite(ctx, true);
 				logicalrep_write_insert(ctx->out, xid, relation, tuple,
-										data->binary);
+										data->binary, relentry->att_list);
 				OutputPluginWrite(ctx, true);
 				break;
 			}
@@ -619,10 +622,9 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 														  relentry->map);
 					}
 				}
-
 				OutputPluginPrepareWrite(ctx, true);
 				logicalrep_write_update(ctx->out, xid, relation, oldtuple,
-										newtuple, data->binary);
+										newtuple, data->binary, relentry->att_list);
 				OutputPluginWrite(ctx, true);
 				break;
 			}
@@ -1031,8 +1033,8 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 		entry->pubactions.pubinsert = entry->pubactions.pubupdate =
 			entry->pubactions.pubdelete = entry->pubactions.pubtruncate = false;
 		entry->publish_as_relid = InvalidOid;
-		entry->map = NULL;		/* will be set by maybe_send_schema() if
-								 * needed */
+		entry->att_list = NULL;
+		entry->map = NULL;	/* will be set by maybe_send_schema() if needed */
 	}
 
 	/* Validate the entry */
@@ -1116,15 +1118,38 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 			if (publish &&
 				(relkind != RELKIND_PARTITIONED_TABLE || pub->pubviaroot))
 			{
+				int                             nelems, i;
+				bool isnull;
+				Datum *elems;
+				HeapTuple pub_rel_tuple;
+				Datum pub_rel_cols;
+				List *columns = NIL;
+
+				pub_rel_tuple = SearchSysCache2(PUBLICATIONRELMAP, ObjectIdGetDatum(publish_as_relid),
+							ObjectIdGetDatum(pub->oid));
+				if (HeapTupleIsValid(pub_rel_tuple))
+				{
+					pub_rel_cols = SysCacheGetAttr(PUBLICATIONRELMAP, pub_rel_tuple, Anum_pg_publication_rel_prattrs, &isnull);
+					if (!isnull)
+					{
+						oldctx = MemoryContextSwitchTo(CacheMemoryContext);
+						deconstruct_array(DatumGetArrayTypePCopy(pub_rel_cols),
+									TEXTOID, -1, false, 'i',
+								&elems, NULL, &nelems);
+						for (i = 0; i < nelems; i++)
+							columns = lappend(columns, TextDatumGetCString(elems[i]));
+						entry->att_list = get_table_columnset(publish_as_relid, columns, entry->att_list);
+						MemoryContextSwitchTo(oldctx);
+					}
+					ReleaseSysCache(pub_rel_tuple);
+				}
 				entry->pubactions.pubinsert |= pub->pubactions.pubinsert;
 				entry->pubactions.pubupdate |= pub->pubactions.pubupdate;
 				entry->pubactions.pubdelete |= pub->pubactions.pubdelete;
 				entry->pubactions.pubtruncate |= pub->pubactions.pubtruncate;
+
 			}
 
-			if (entry->pubactions.pubinsert && entry->pubactions.pubupdate &&
-				entry->pubactions.pubdelete && entry->pubactions.pubtruncate)
-				break;
 		}
 
 		list_free(pubids);
@@ -1134,6 +1159,23 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 	}
 
 	return entry;
+}
+
+static Bitmapset*
+get_table_columnset(Oid relid, List *columns, Bitmapset *att_list)
+{
+	ListCell *cell;
+	foreach(cell, columns)
+	{
+		const char *attname = lfirst(cell);
+		int attnum = get_attnum(relid, attname);
+
+		if (!bms_is_member(attnum - FirstLowInvalidHeapAttributeNumber, att_list))
+			att_list = bms_add_member(att_list,
+					attnum - FirstLowInvalidHeapAttributeNumber);
+
+	}
+	return att_list;
 }
 
 /*
@@ -1220,6 +1262,8 @@ rel_sync_cache_relation_cb(Datum arg, Oid relid)
 		entry->schema_sent = false;
 		list_free(entry->streamed_txns);
 		entry->streamed_txns = NIL;
+		bms_free(entry->att_list);
+		entry->att_list = NULL;
 		if (entry->map)
 		{
 			/*

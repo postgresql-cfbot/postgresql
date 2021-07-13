@@ -394,7 +394,8 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 
 			foreach(newlc, rels)
 			{
-				Relation	newrel = (Relation) lfirst(newlc);
+				PublicationRelationInfo	*newpubrel = (PublicationRelationInfo *) lfirst(newlc);
+				Relation newrel = newpubrel->relation;
 
 				if (RelationGetRelid(newrel) == oldrelid)
 				{
@@ -407,8 +408,19 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 			{
 				Relation	oldrel = table_open(oldrelid,
 												ShareUpdateExclusiveLock);
-
-				delrels = lappend(delrels, oldrel);
+				/*
+				 * Copy relation info into PublicationRelationInfo as
+				 * PublicationDropTables accepts a list of PublicationRelationInfo
+				 */
+				PublicationRelationInfo *pubrel = palloc(sizeof(PublicationRelationInfo));
+				pubrel->relation = oldrel;
+				pubrel->relid = oldrelid;
+				/*
+				 * Dummy initialization as won't need this info to delete a table
+				 * from publication
+				 */
+				pubrel->columns = NIL;
+				delrels = lappend(delrels, pubrel);
 			}
 		}
 
@@ -515,10 +527,12 @@ OpenTableList(List *tables)
 	 */
 	foreach(lc, tables)
 	{
-		RangeVar   *rv = castNode(RangeVar, lfirst(lc));
+		PublicationTable *t = lfirst(lc);
+		RangeVar   *rv = castNode(RangeVar, t->relation);
 		bool		recurse = rv->inh;
 		Relation	rel;
 		Oid			myrelid;
+		PublicationRelationInfo	*pub_rel;
 
 		/* Allow query cancel in case this takes a long time */
 		CHECK_FOR_INTERRUPTS();
@@ -539,7 +553,11 @@ OpenTableList(List *tables)
 			continue;
 		}
 
-		rels = lappend(rels, rel);
+		pub_rel = palloc(sizeof(PublicationRelationInfo));
+		pub_rel->relation = rel;
+		pub_rel->relid = myrelid;
+		pub_rel->columns = t->columns;
+		rels = lappend(rels, pub_rel);
 		relids = lappend_oid(relids, myrelid);
 
 		/*
@@ -572,7 +590,11 @@ OpenTableList(List *tables)
 
 				/* find_all_inheritors already got lock */
 				rel = table_open(childrelid, NoLock);
-				rels = lappend(rels, rel);
+				pub_rel = palloc(sizeof(PublicationRelationInfo));
+				pub_rel->relation = rel;
+				pub_rel->relid = childrelid;
+				pub_rel->columns = t->columns;
+				rels = lappend(rels, pub_rel);
 				relids = lappend_oid(relids, childrelid);
 			}
 		}
@@ -593,9 +615,9 @@ CloseTableList(List *rels)
 
 	foreach(lc, rels)
 	{
-		Relation	rel = (Relation) lfirst(lc);
+		PublicationRelationInfo *pub_rel = (PublicationRelationInfo *)lfirst(lc);
 
-		table_close(rel, NoLock);
+		table_close(pub_rel->relation, NoLock);
 	}
 }
 
@@ -612,7 +634,8 @@ PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
 
 	foreach(lc, rels)
 	{
-		Relation	rel = (Relation) lfirst(lc);
+		PublicationRelationInfo *pub_rel = (PublicationRelationInfo *)lfirst(lc);
+		Relation	rel = pub_rel->relation;
 		ObjectAddress obj;
 
 		/* Must be owner of the table or superuser. */
@@ -620,7 +643,7 @@ PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
 			aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(rel->rd_rel->relkind),
 						   RelationGetRelationName(rel));
 
-		obj = publication_add_relation(pubid, rel, if_not_exists);
+		obj = publication_add_relation(pubid, pub_rel, if_not_exists);
 		if (stmt)
 		{
 			EventTriggerCollectSimpleCommand(obj, InvalidObjectAddress,
@@ -644,7 +667,8 @@ PublicationDropTables(Oid pubid, List *rels, bool missing_ok)
 
 	foreach(lc, rels)
 	{
-		Relation	rel = (Relation) lfirst(lc);
+		PublicationRelationInfo	*pubrel = (PublicationRelationInfo *) lfirst(lc);
+		Relation rel = pubrel->relation;
 		Oid			relid = RelationGetRelid(rel);
 
 		prid = GetSysCacheOid2(PUBLICATIONRELMAP, Anum_pg_publication_rel_oid,

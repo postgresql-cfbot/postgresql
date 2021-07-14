@@ -258,11 +258,7 @@ union all
 select 'drop table gexec_test', 'select ''2000-01-01''::date as party_over'
 \gexec
 select 1 as ones
- ones 
-------
-    1
-(1 row)
-
+ERROR:  DECLARE CURSOR can only be used in transaction blocks
 select x.y, x.y*2 as double from generate_series(1,4) as x(y)
  y | double 
 ---+--------

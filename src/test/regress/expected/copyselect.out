@@ -138,6 +138,11 @@ create table test3 (c int);
 select 0\; copy test3 from stdin\; copy test3 from stdin\; select 1; -- 1
  ?column? 
 ----------
+        0
+(1 row)
+
+ ?column? 
+----------
         1
 (1 row)
 

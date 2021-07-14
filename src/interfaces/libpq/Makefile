@@ -56,6 +56,11 @@ OBJS += \
 	fe-secure-openssl.o
 endif
 
+ifeq ($(with_ssl), nss)
+OBJS += \
+	fe-secure-nss.o
+endif
+
 ifeq ($(with_gssapi),yes)
 OBJS += \
 	fe-gssapi-common.o \

@@ -9,7 +9,7 @@ use Test::More;
 
 if ($ENV{with_ldap} eq 'yes')
 {
-	plan tests => 28;
+	plan tests => 40;
 }
 else
 {

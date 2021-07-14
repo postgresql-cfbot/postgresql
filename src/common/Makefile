@@ -86,12 +86,20 @@ OBJS_COMMON += \
 	cryptohash_openssl.o \
 	hmac_openssl.o
 else
+ifeq ($(with_ssl),nss)
+OBJS_COMMON += \
+	hmac.o \
+	cipher_nss.o \
+	protocol_nss.o \
+	cryptohash_nss.o
+else
 OBJS_COMMON += \
 	cryptohash.o \
 	hmac.o \
 	md5.o \
 	sha1.o \
 	sha2.o
+endif
 endif
 
 # A few files are currently only built for frontend, not server

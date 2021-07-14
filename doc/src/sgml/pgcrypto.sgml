@@ -45,8 +45,9 @@ digest(data bytea, type text) returns bytea
     <literal>sha224</literal>, <literal>sha256</literal>,
     <literal>sha384</literal> and <literal>sha512</literal>.
     If <filename>pgcrypto</filename> was built with
-    <productname>OpenSSL</productname>, more algorithms are available, as
-    detailed in <xref linkend="pgcrypto-with-without-openssl"/>.
+    <productname>OpenSSL</productname> or <productname>NSS</productname>,
+    more algorithms are available, as
+    detailed in <xref linkend="pgcrypto-with-without-openssl-nss"/>.
    </para>
 
    <para>
@@ -764,7 +765,7 @@ pgp_sym_encrypt(data, psw, 'compress-algo=1, cipher-algo=aes256')
     Which cipher algorithm to use.
    </para>
 <literallayout>
-Values: bf, aes128, aes192, aes256 (OpenSSL-only: <literal>3des</literal>, <literal>cast5</literal>)
+Values: bf, aes128, aes192, aes256 (OpenSSL-only: <literal>3des</literal>, <literal>cast5</literal>; NSS-only: <literal>3des</literal>)
 Default: aes128
 Applies to: pgp_sym_encrypt, pgp_pub_encrypt
 </literallayout>
@@ -1153,8 +1154,8 @@ gen_random_uuid() returns uuid
    <para>
     <filename>pgcrypto</filename> configures itself according to the findings of the
     main PostgreSQL <literal>configure</literal> script.  The options that
-    affect it are <literal>--with-zlib</literal> and
-    <literal>--with-ssl=openssl</literal>.
+    affect it are <literal>--with-zlib</literal>,
+    <literal>--with-ssl=openssl</literal> and <literal>--with-ssl=nss</literal>.
    </para>
 
    <para>
@@ -1169,14 +1170,16 @@ gen_random_uuid() returns uuid
     BIGNUM functions.
    </para>
 
-   <table id="pgcrypto-with-without-openssl">
-    <title>Summary of Functionality with and without OpenSSL</title>
-    <tgroup cols="3">
+   <table id="pgcrypto-with-without-openssl-nss">
+    <title>Summary of Functionality with and without external cryptographic
+      library</title>
+    <tgroup cols="4">
      <thead>
       <row>
        <entry>Functionality</entry>
        <entry>Built-in</entry>
        <entry>With OpenSSL</entry>
+       <entry>With NSS</entry>
       </row>
      </thead>
      <tbody>
@@ -1184,9 +1187,11 @@ gen_random_uuid() returns uuid
        <entry>MD5</entry>
        <entry>yes</entry>
        <entry>yes</entry>
+       <entry>yes</entry>
       </row>
       <row>
        <entry>SHA1</entry>
+       <entry>yes</entry>
        <entry>yes</entry>
        <entry>yes</entry>
       </row>
@@ -1194,29 +1199,41 @@ gen_random_uuid() returns uuid
        <entry>SHA224/256/384/512</entry>
        <entry>yes</entry>
        <entry>yes</entry>
+       <entry>yes</entry>
       </row>
       <row>
        <entry>Other digest algorithms</entry>
        <entry>no</entry>
+       <entry>yes (Note 1)</entry>
        <entry>yes (Note 1)</entry>
       </row>
       <row>
        <entry>Blowfish</entry>
        <entry>yes</entry>
        <entry>yes</entry>
+       <entry>yes (Note 2)</entry>
       </row>
       <row>
        <entry>AES</entry>
        <entry>yes</entry>
        <entry>yes</entry>
-      </row>
-      <row>
-       <entry>DES/3DES/CAST5</entry>
-       <entry>no</entry>
        <entry>yes</entry>
       </row>
       <row>
+       <entry>DES/3DES</entry>
+       <entry>no</entry>
+       <entry>yes</entry>
+       <entry>yes</entry>
+      </row>
+      <row>
+       <entry>CAST5</entry>
+       <entry>no</entry>
+       <entry>yes</entry>
+       <entry>no</entry>
+      </row>
+      <row>
        <entry>Raw encryption</entry>
+       <entry>yes</entry>
        <entry>yes</entry>
        <entry>yes</entry>
       </row>
@@ -1224,9 +1241,11 @@ gen_random_uuid() returns uuid
        <entry>PGP Symmetric encryption</entry>
        <entry>yes</entry>
        <entry>yes</entry>
+       <entry>yes</entry>
       </row>
       <row>
        <entry>PGP Public-Key encryption</entry>
+       <entry>yes</entry>
        <entry>yes</entry>
        <entry>yes</entry>
       </row>
@@ -1241,10 +1260,16 @@ gen_random_uuid() returns uuid
    <orderedlist>
     <listitem>
      <para>
-      Any digest algorithm <productname>OpenSSL</productname> supports
-      is automatically picked up.
-      This is not possible with ciphers, which need to be supported
+      Any digest algorithm included with the library that
+      <productname>PostgreSQL</productname> is compiled with is automatically
+      picked up. This is not possible with ciphers, which need to be supported
       explicitly.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Blowfish is not supported by <productname>NSS</productname>, the
+      built-in implementation is used as a fallback.
      </para>
     </listitem>
    </orderedlist>

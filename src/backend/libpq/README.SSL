@@ -80,3 +80,31 @@ are unacceptable.
 The downside to EDH is that it makes it impossible to use ssldump(1)
 if there's a problem establishing an SSL session.  In this case you'll
 need to temporarily disable EDH (see initialize_dh()).
+
+
+Supporting a new TLS backend
+============================
+
+TLS support in PostgreSQL is implemented with an API which abstracts any
+knowledge about the library used from core server backend and frontend code.
+Adding support for a new TLS library can be done almost without changing any
+core PostgreSQL code. The modules which needs to be implemented are briefly
+described below.
+
+Each supported TLS library is implemented in its own file for the libpq
+frontend and backend. The API is defined in be-secure.c and fe-secure.c
+respectively. Each library can add relevant connection structures to the
+Port and PGConn objects.
+
+pg_cryptohash is an internal API for invoking cryptographic hash algorithms
+on data. Each supported TLS library implements the API defined in the header
+common/cryptohash.h, with the implementation used decided at build-time.
+
+pg_strong_random provide the backend with a source of cryptographically secure
+random numbers.
+
+contrib/sslinfo provide similar information to pg_stat_ssl, with a few library
+specific extensions.
+
+contrib/pgcrypto provide a larger selection of digest and hash algorithms
+when compiled against a TLS library.

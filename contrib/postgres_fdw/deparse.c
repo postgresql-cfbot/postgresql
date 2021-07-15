@@ -158,6 +158,7 @@ static void deparseScalarArrayOpExpr(ScalarArrayOpExpr *node,
 static void deparseRelabelType(RelabelType *node, deparse_expr_cxt *context);
 static void deparseBoolExpr(BoolExpr *node, deparse_expr_cxt *context);
 static void deparseNullTest(NullTest *node, deparse_expr_cxt *context);
+static void deparseBooleanTest(BooleanTest *node, deparse_expr_cxt *context);
 static void deparseArrayExpr(ArrayExpr *node, deparse_expr_cxt *context);
 static void printRemoteParam(int paramindex, Oid paramtype, int32 paramtypmod,
 							 deparse_expr_cxt *context);
@@ -635,6 +636,22 @@ foreign_expr_walker(Node *node,
 				 * Recurse to input subexpressions.
 				 */
 				if (!foreign_expr_walker((Node *) nt->arg,
+										 glob_cxt, &inner_cxt))
+					return false;
+
+				/* Output is always boolean and so noncollatable. */
+				collation = InvalidOid;
+				state = FDW_COLLATE_NONE;
+			}
+			break;
+		case T_BooleanTest:
+			{
+				BooleanTest   *bt = (BooleanTest *) node;
+
+				/*
+				 * Recurse to input subexpressions.
+				 */
+				if (!foreign_expr_walker((Node *) bt->arg,
 										 glob_cxt, &inner_cxt))
 					return false;
 
@@ -2456,6 +2473,9 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
 		case T_NullTest:
 			deparseNullTest((NullTest *) node, context);
 			break;
+		case T_BooleanTest:
+			deparseBooleanTest((BooleanTest *) node, context);
+			break;
 		case T_ArrayExpr:
 			deparseArrayExpr((ArrayExpr *) node, context);
 			break;
@@ -3004,6 +3024,53 @@ deparseNullTest(NullTest *node, deparse_expr_cxt *context)
 			appendStringInfoString(buf, " IS NOT DISTINCT FROM NULL)");
 		else
 			appendStringInfoString(buf, " IS DISTINCT FROM NULL)");
+	}
+}
+
+/*
+ * Deparse IS [NOT] TRUE/FALSE/UNKNOWN expression.
+ */
+static void
+deparseBooleanTest(BooleanTest *node, deparse_expr_cxt *context)
+{
+	StringInfo	buf = context->buf;
+
+	switch (node->booltesttype)
+	{
+		case IS_TRUE:
+			appendStringInfoChar(buf, '(');
+			deparseExpr(node->arg, context);
+			appendStringInfoString(buf, ")");
+			break;
+		case IS_NOT_TRUE:
+			appendStringInfoString(buf, "(NOT ");
+			deparseExpr(node->arg, context);
+			appendStringInfoString(buf, " OR ");
+			deparseExpr(node->arg, context);
+			appendStringInfoString(buf, " IS NULL)");
+			break;
+		case IS_FALSE:
+			appendStringInfoString(buf, "(NOT ");
+			deparseExpr(node->arg, context);
+			appendStringInfoString(buf, ")");
+			break;
+		case IS_NOT_FALSE:
+			appendStringInfoChar(buf, '(');
+			deparseExpr(node->arg, context);
+			appendStringInfoString(buf, " OR ");
+			deparseExpr(node->arg, context);
+			appendStringInfoString(buf, " IS NULL)");
+			break;
+		case IS_UNKNOWN:
+			appendStringInfoChar(buf, '(');
+			deparseExpr(node->arg, context);
+			appendStringInfoString(buf, " IS NULL)");
+			break;
+		case IS_NOT_UNKNOWN:
+			appendStringInfoChar(buf, '(');
+			deparseExpr(node->arg, context);
+			appendStringInfoString(buf, " IS NOT NULL)");
+			break;
 	}
 }
 

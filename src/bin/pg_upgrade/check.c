@@ -16,6 +16,7 @@
 
 static void check_new_cluster_is_empty(void);
 static void check_databases_are_compatible(void);
+static void check_for_changed_signatures(void);
 static void check_locale_and_encoding(DbInfo *olddb, DbInfo *newdb);
 static bool equivalent_locale(int category, const char *loca, const char *locb);
 static void check_is_install_user(ClusterInfo *cluster);
@@ -163,6 +164,8 @@ check_and_dump_old_cluster(bool live_check)
 	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 804)
 		new_9_0_populate_pg_largeobject_metadata(&old_cluster, true);
 
+	get_non_default_acl_infos(&old_cluster);
+
 	/*
 	 * While not a check option, we do this now because this is the only time
 	 * the old server is running.
@@ -182,6 +185,7 @@ check_new_cluster(void)
 
 	check_new_cluster_is_empty();
 	check_databases_are_compatible();
+	check_for_changed_signatures();
 
 	check_loadable_libraries();
 
@@ -338,6 +342,249 @@ check_cluster_compatibility(bool live_check)
 	if (live_check && old_cluster.port == new_cluster.port)
 		pg_fatal("When checking a live server, "
 				 "the old and new port numbers must be different.\n");
+}
+
+/*
+ * check_for_changed_signatures()
+ *
+ * Check that the old cluster doesn't have non-default ACLs for system
+ * objects, which have different signatures in the new cluster,
+ * because they can cause failure during pg_restore stage of
+ * the upgrade process.
+ *
+ * If such objects exist generate fix_system_objects_ACL.sql script
+ * to adjust ACLs before upgrade.
+ *
+ * Currently supported object types are
+ * - table, view, sequence
+ * - table column, view column
+ * - procedure, function, aggregate
+ * - type, domain.
+ */
+static void
+check_for_changed_signatures(void)
+{
+	PGconn	   *conn;
+	char		subquery[QUERY_ALLOC];
+	PGresult   *res;
+	int			ntups;
+	int			i_obj_ident;
+	int			dbnum;
+	bool		need_check = false;
+	FILE	   *script = NULL;
+	bool		found_changed = false;
+	char		output_path[MAXPGPATH];
+
+	if (GET_MAJOR_VERSION(old_cluster.major_version) < 906)
+		return;
+
+	prep_status("Checking for system objects with non-default ACL");
+
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
+		if (old_cluster.dbarr.dbs[dbnum].non_def_acl_arr.nacls > 0)
+		{
+			need_check = true;
+			break;
+		}
+
+	/*
+	 * The old cluster doesn't have system objects with non-default ACL,
+	 * so exit quickly.
+	 */
+	if (!need_check)
+	{
+		check_ok();
+		return;
+	}
+
+	snprintf(output_path, sizeof(output_path), "fix_system_objects_ACL.sql");
+
+	conn = connectToServer(&new_cluster, "template1");
+
+
+	/* Gather the list of system objects' identities in a new cluster */
+
+	snprintf(subquery, sizeof(subquery),
+		/* Get system relations */
+		"SELECT 'pg_class'::regclass classid, oid objid, 0 objsubid "
+		"FROM pg_catalog.pg_class "
+		"WHERE relnamespace = 'pg_catalog'::regnamespace "
+		"UNION ALL "
+		/* Get system table columns, view columns */
+		"SELECT 'pg_class'::regclass, att.attrelid, att.attnum "
+		"FROM pg_catalog.pg_class rel "
+		"INNER JOIN pg_catalog.pg_attribute att ON  rel.oid = att.attrelid "
+		"WHERE rel.relnamespace = 'pg_catalog'::regnamespace "
+		"UNION ALL "
+		/* Get system functions and procedures */
+		"SELECT 'pg_proc'::regclass, oid, 0 "
+		"FROM pg_catalog.pg_proc "
+		"WHERE pronamespace = 'pg_catalog'::regnamespace "
+		"UNION ALL "
+		/* Get system types and domains */
+		"SELECT 'pg_type'::regclass, oid, 0 "
+		"FROM pg_catalog.pg_type "
+		"WHERE typnamespace = 'pg_catalog'::regnamespace "
+		);
+
+	res = executeQueryOrDie(conn,
+		"SELECT ident.type, ident.identity "
+		"FROM (%s) obj, "
+		"LATERAL pg_catalog.pg_identify_object("
+		"    obj.classid, obj.objid, obj.objsubid) ident "
+		/*
+		 * Don't rely on database collation, since we use strcmp
+		 * comparison to find non-default ACLs.
+		 */
+		"ORDER BY ident.identity COLLATE \"C\";", subquery);
+
+	ntups = PQntuples(res);
+
+	i_obj_ident = PQfnumber(res, "identity");
+
+	/* For every database check system objects with non-default ACL. */
+	for (dbnum = 0; dbnum < old_cluster.dbarr.ndbs; dbnum++)
+	{
+		DbInfo	   *dbinfo = &old_cluster.dbarr.dbs[dbnum];
+		bool		db_used = false;
+		int			aclnum = 0,
+					objnum = 0;
+
+		/*
+		 *
+		 * AclInfo array is sorted by obj_ident. This allows us to compare
+		 * AclInfo entries with the query result above efficiently.
+		 */
+		for (aclnum = 0; aclnum < dbinfo->non_def_acl_arr.nacls; aclnum++)
+		{
+			AclInfo	   *aclinfo = &dbinfo->non_def_acl_arr.aclinfos[aclnum];
+			bool		report = false;
+
+			while (objnum < ntups)
+			{
+				int			ret;
+
+				ret = strcmp(aclinfo->obj_ident,
+							 PQgetvalue(res, objnum, i_obj_ident));
+
+				/*
+				 * The new cluster doesn't have an object with same identity,
+				 * exit the loop, report below and check next object.
+				 */
+				if (ret < 0)
+				{
+					report = true;
+					break;
+				}
+				/*
+				 * The new cluster has an object with same identity, just exit
+				 * the loop.
+				 */
+				else if (ret == 0)
+				{
+					objnum++;
+					break;
+				}
+				else
+					objnum++;
+			}
+
+			/* Generate GRANT/REVOKE statemets for the found objects */
+			if (report)
+			{
+				PQExpBufferData acl_buf;
+
+				found_changed = true;
+				if (script == NULL &&
+					(script = fopen_priv(output_path, "w")) == NULL)
+					pg_fatal("could not open file \"%s\": %m\n", output_path);
+
+				/* append connect database command */
+				if (!db_used)
+				{
+					PQExpBufferData conn_buf;
+
+					initPQExpBuffer(&conn_buf);
+					appendPsqlMetaConnect(&conn_buf, dbinfo->db_name);
+					fputs(conn_buf.data, script);
+					termPQExpBuffer(&conn_buf);
+
+					db_used = true;
+				}
+
+
+				initPQExpBuffer(&acl_buf);
+				/*
+				 * To handle both GRANT AND REVOKE ACLs we generate two
+				 * statements, which will clean object's ACL. Since the
+				 * object do not exist in the new cluster, this action
+				 * causes no harm.
+				 */
+				appendPQExpBuffer(&acl_buf, " GRANT ALL ");
+				if (strstr(aclinfo->obj_type, "column"))
+					appendPQExpBuffer(&acl_buf, " (%s) ",
+									  fmtId(aclinfo->obj_name));
+				appendPQExpBuffer(&acl_buf, " ON");
+				if (!aclinfo->is_relation)
+					appendPQExpBuffer(&acl_buf, " %s ", aclinfo->obj_type);
+
+				if (strstr(aclinfo->obj_type, "column") != NULL)
+				{
+					appendPQExpBuffer(&acl_buf, " %s.",
+									  fmtId(aclinfo->obj_namespace));
+					appendPQExpBuffer(&acl_buf, "%s ",
+									  fmtId(aclinfo->obj_parent_name));
+				}
+				else
+					appendPQExpBuffer(&acl_buf, " %s ",
+									  aclinfo->obj_ident);
+				appendPQExpBuffer(&acl_buf, " TO %s ;\n",
+								  aclinfo->role_names);
+
+				appendPQExpBuffer(&acl_buf, " REVOKE ALL ");
+				if (strstr(aclinfo->obj_type, "column"))
+					appendPQExpBuffer(&acl_buf, " (%s) ",
+									  fmtId(aclinfo->obj_name));
+				appendPQExpBuffer(&acl_buf, " ON");
+				if (!aclinfo->is_relation)
+					appendPQExpBuffer(&acl_buf, " %s ", aclinfo->obj_type);
+				if (strstr(aclinfo->obj_type, "column") != NULL)
+				{
+					appendPQExpBuffer(&acl_buf, " %s.",
+									  fmtId(aclinfo->obj_namespace));
+					appendPQExpBuffer(&acl_buf, "%s ",
+									  fmtId(aclinfo->obj_parent_name));
+				}
+				else
+					appendPQExpBuffer(&acl_buf, " %s ",
+									  aclinfo->obj_ident);
+				appendPQExpBuffer(&acl_buf, " FROM %s ;\n",
+								  aclinfo->role_names);
+
+				fputs(acl_buf.data, script);
+				termPQExpBuffer(&acl_buf);
+			}
+		}
+	}
+
+	PQclear(res);
+	PQfinish(conn);
+
+	if (script)
+		fclose(script);
+
+	if (found_changed)
+	{
+		pg_log(PG_REPORT, "fatal\n");
+		pg_fatal("Your installation contains non-default privileges for system objects\n"
+				 "for which the API has changed.  To perform the upgrade, reset these\n"
+				 "privileges to default.  The file\n"
+				 "    %s\n"
+				 "when executed by psql will revoke non-default privileges for those objects.\n\n",
+				 output_path);
+	}
+	else
+		check_ok();
 }
 
 

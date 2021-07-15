@@ -22,6 +22,7 @@
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_event_trigger.h"
@@ -206,13 +207,14 @@ AlterObjectRename_internal(Relation rel, Oid objectId, const char *new_name)
 		namespaceId = InvalidOid;
 
 	/* Permission checks ... superusers can always do it */
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 	{
 		/* Fail if object does not have an explicit owner */
 		if (Anum_owner <= 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("must be superuser to rename %s",
+					 errmsg("must be superuser or pg_database_security to rename %s",
 							getObjectDescriptionOids(classId, objectId))));
 
 		/* Otherwise, must be owner of the existing object */
@@ -731,7 +733,8 @@ AlterObjectNamespace_internal(Relation rel, Oid objid, Oid nspOid)
 	CheckSetNamespace(oldNspOid, nspOid);
 
 	/* Permission checks ... superusers can always do it */
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 	{
 		Datum		owner;
 		Oid			ownerId;
@@ -741,7 +744,7 @@ AlterObjectNamespace_internal(Relation rel, Oid objid, Oid nspOid)
 		if (Anum_owner <= 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("must be superuser to set schema of %s",
+					 errmsg("must be superuser or pg_database_security to set schema of %s",
 							getObjectDescriptionOids(classId, objid))));
 
 		/* Otherwise, must be owner of the existing object */
@@ -972,7 +975,8 @@ AlterObjectOwner_internal(Relation rel, Oid objectId, Oid new_ownerId)
 		bool	   *replaces;
 
 		/* Superusers can bypass permission checks */
-		if (!superuser())
+		if (!superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		{
 			/* must be owner */
 			if (!has_privs_of_role(GetUserId(), old_ownerId))

@@ -18,6 +18,7 @@
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_proc.h"
@@ -62,10 +63,11 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 	/*
 	 * Check permission
 	 */
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to create custom procedural language")));
+				 errmsg("must be superuser or pg_database_security to create custom procedural language")));
 
 	/*
 	 * Lookup the PL handler function and check that it is of the expected

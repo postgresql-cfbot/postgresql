@@ -20,11 +20,13 @@
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
 #include "miscadmin.h"
 #include "parser/parse_func.h"
+#include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -54,12 +56,13 @@ CreateAccessMethod(CreateAmStmt *stmt)
 	rel = table_open(AccessMethodRelationId, RowExclusiveLock);
 
 	/* Must be super user */
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to create access method \"%s\"",
 						stmt->amname),
-				 errhint("Must be superuser to create an access method.")));
+				 errhint("Must be superuser or pg_database_security to create an access method.")));
 
 	/* Check if name is used */
 	amoid = GetSysCacheOid1(AMNAME, Anum_pg_am_oid,

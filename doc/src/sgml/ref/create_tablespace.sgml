@@ -38,9 +38,10 @@ CREATE TABLESPACE <replaceable class="parameter">tablespace_name</replaceable>
   </para>
 
   <para>
-   A tablespace allows superusers to define an alternative location on
-   the file system where the data files containing database objects
-   (such as tables and indexes) can reside.
+   A tablespace allows superusers and members of role
+   <literal>pg_host_security</literal> to define an alternative location on the
+   file system where the data files containing database objects (such as tables
+   and indexes) can reside.
   </para>
 
   <para>

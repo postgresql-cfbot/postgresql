@@ -43,7 +43,7 @@ ERROR:  subscription "regress_testsub" already exists
 -- fail - must be superuser
 SET SESSION AUTHORIZATION 'regress_subscription_user2';
 CREATE SUBSCRIPTION regress_testsub2 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION foo WITH (connect = false);
-ERROR:  must be superuser to create subscriptions
+ERROR:  must be superuser or a member of the pg_logical_replication role to create subscriptions
 SET SESSION AUTHORIZATION 'regress_subscription_user';
 -- fail - invalid option combinations
 CREATE SUBSCRIPTION regress_testsub2 CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, copy_data = true);
@@ -137,7 +137,7 @@ ALTER SUBSCRIPTION regress_testsub_foo RENAME TO regress_testsub;
 -- fail - new owner must be superuser
 ALTER SUBSCRIPTION regress_testsub OWNER TO regress_subscription_user2;
 ERROR:  permission denied to change owner of subscription "regress_testsub"
-HINT:  The owner of a subscription must be a superuser.
+HINT:  The owner of a subscription must be a superuser or a member of the pg_logical_replication role.
 ALTER ROLE regress_subscription_user2 SUPERUSER;
 -- now it works
 ALTER SUBSCRIPTION regress_testsub OWNER TO regress_subscription_user2;

@@ -63,6 +63,7 @@ _PG_init(void)
 							0,
 							0, INT_MAX / 1000,
 							PGC_SIGHUP,
+							GUC_NETWORK_SECURITY,
 							GUC_UNIT_MS,
 							NULL,
 							NULL,

@@ -17,6 +17,9 @@ DROP ROLE IF EXISTS regress_priv_user4;
 DROP ROLE IF EXISTS regress_priv_user5;
 DROP ROLE IF EXISTS regress_priv_user6;
 DROP ROLE IF EXISTS regress_priv_user7;
+DROP ROLE IF EXISTS regress_priv_user8;
+DROP ROLE IF EXISTS regress_priv_user9;
+DROP ROLE IF EXISTS regress_priv_user10;
 
 SELECT lo_unlink(oid) FROM pg_largeobject_metadata WHERE oid >= 1000 AND oid < 3000 ORDER BY oid;
 
@@ -32,6 +35,9 @@ CREATE USER regress_priv_user5;
 CREATE USER regress_priv_user5;	-- duplicate
 CREATE USER regress_priv_user6;
 CREATE USER regress_priv_user7;
+CREATE USER regress_priv_user8;
+CREATE USER regress_priv_user9;
+CREATE USER regress_priv_user10;
 
 GRANT pg_read_all_data TO regress_priv_user6;
 GRANT pg_write_all_data TO regress_priv_user7;
@@ -1092,6 +1098,126 @@ TABLE information_schema.enabled_roles;
 INSERT INTO datdba_only DEFAULT VALUES;
 ROLLBACK;
 
+-- test pg_host_security authority to create event triggers
+GRANT pg_host_security TO regress_priv_user8;
+SET SESSION AUTHORIZATION regress_priv_user8;
+CREATE FUNCTION user8_event_trigger() RETURNS event_trigger AS $$
+BEGIN
+    RAISE DEBUG 'user8_event_trigger: % %', tg_event, tg_tag;
+END
+$$ LANGUAGE PLPGSQL;
+CREATE EVENT TRIGGER user8_event_trigger_start ON ddl_command_start
+   EXECUTE PROCEDURE user8_event_trigger();
+CREATE EVENT TRIGGER user8_event_trigger_end ON ddl_command_end
+   EXECUTE FUNCTION user8_event_trigger();
+COMMENT ON EVENT TRIGGER user8_event_trigger_start IS 'test comment';
+ALTER EVENT TRIGGER user8_event_trigger_end RENAME TO user8_event_trigger_finish;
+DROP EVENT TRIGGER user8_event_trigger_start;
+DROP EVENT TRIGGER user8_event_trigger_finish;
+DROP FUNCTION user8_event_trigger;
+RESET SESSION AUTHORIZATION;
+
+-- test pg_network_security authority to create foreign servers
+-- and foreign data wrappers
+GRANT pg_network_security TO regress_priv_user9;
+SET SESSION AUTHORIZATION regress_priv_user9;
+CREATE FOREIGN DATA WRAPPER user9_fdw VALIDATOR postgresql_fdw_validator;
+COMMENT ON FOREIGN DATA WRAPPER user9_fdw IS 'test comment';
+CREATE SERVER user9_server FOREIGN DATA WRAPPER user9_fdw;
+COMMENT ON SERVER user9_server IS 'test comment';
+DROP SERVER user9_server;
+DROP FOREIGN DATA WRAPPER user9_fdw;
+RESET SESSION AUTHORIZATION;
+
+-- test pg_database_security authority over numerous database objects
+GRANT pg_database_security TO regress_priv_user10;
+SET SESSION AUTHORIZATION regress_priv_user10;
+CREATE ACCESS METHOD user10_am TYPE INDEX HANDLER gisthandler;
+CREATE CAST (text AS json) WITHOUT FUNCTION;
+CREATE DATABASE user10_db;
+GRANT ALL ON DATABASE user10_db TO regress_priv_user10;
+CREATE FUNCTION user10_event_trigger_func() RETURNS event_trigger AS $$
+BEGIN
+    RAISE DEBUG 'user10_event_trigger: % %', tg_event, tg_tag;
+END
+$$ LANGUAGE PLPGSQL;
+CREATE EVENT TRIGGER user10_event_trigger ON ddl_command_start -- no
+   EXECUTE PROCEDURE user10_event_trigger_func();
+CREATE FOREIGN DATA WRAPPER user10_fdw VALIDATOR postgresql_fdw_validator; -- no
+CREATE FUNCTION user10_secdef_func(boolean) RETURNS text
+  AS 'select $1::text;'
+  LANGUAGE sql SECURITY DEFINER;
+CREATE INDEX user10_index ON pg_catalog.pg_class(oid); -- no
+CREATE LANGUAGE user10_lang HANDLER plpgsql_call_handler;
+CREATE OPERATOR CLASS user10_ops
+    FOR TYPE box USING gist AS
+    OPERATOR 1  <<,
+    OPERATOR 2  &<,
+    OPERATOR 3  &&,
+    OPERATOR 4  &>,
+    OPERATOR 5  >>,
+    OPERATOR 6  ~=,
+    OPERATOR 7  @>,
+    OPERATOR 8  <@,
+    OPERATOR 9  &<|,
+    OPERATOR 10 <<|,
+    OPERATOR 11 |>>,
+    OPERATOR 12 |&>,
+    FUNCTION 1  gist_box_consistent(internal, box, smallint, oid, internal),
+    FUNCTION 2  gist_box_union(internal, internal),
+    FUNCTION 5  gist_box_penalty(internal, internal, internal),
+    FUNCTION 6  gist_box_picksplit(internal, internal),
+    FUNCTION 7  gist_box_same(box, box, internal);
+CREATE TABLE user10_tbl (id integer, str text);
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION user10_publication FOR TABLE user10_tbl;
+RESET client_min_messages;
+CREATE RULE user10_rule_ins AS ON INSERT TO pg_catalog.pg_class -- no
+  DO INSTEAD DELETE FROM pg_catalog.pg_am;
+CREATE SCHEMA user10_schema;
+SET client_min_messages = 'ERROR';
+CREATE SUBSCRIPTION user10_subscription CONNECTION 'dbname=nosuchdb' PUBLICATION nosuchpub WITH (connect = false, enabled = false, slot_name = NONE, create_slot = false); -- no
+RESET client_min_messages;
+CREATE STATISTICS user10_stats ON id, str FROM user10_tbl;
+CREATE TEXT SEARCH CONFIGURATION user10_tsconfig (COPY=english);
+CREATE TEXT SEARCH DICTIONARY user10_tsdict (Template=ispell, DictFile=ispell_sample, AffFile=ispell_sample);
+CREATE TEXT SEARCH PARSER user10_tsparser
+    (start = prsd_start, gettoken = prsd_nexttoken, end = prsd_end, lextypes = prsd_lextype);
+CREATE TEXT SEARCH TEMPLATE user10_tstemplate (lexize=dsimple_lexize);
+CREATE TRANSFORM FOR bigint LANGUAGE SQL (
+    FROM SQL WITH FUNCTION prsd_lextype(internal),
+    TO SQL WITH FUNCTION int8recv(internal));
+CREATE FUNCTION user10_trigger_func() RETURNS trigger AS $$
+BEGIN
+    RAISE DEBUG 'user10_trigger';
+END
+$$ LANGUAGE PLPGSQL;
+CREATE TRIGGER user10_trigger
+    BEFORE INSERT OR UPDATE ON user10_tbl
+    FOR EACH ROW
+    EXECUTE PROCEDURE user10_trigger_func();
+CREATE TYPE user10_type;
+CREATE VIEW user10_view AS SELECT * FROM user10_tbl;
+DROP ACCESS METHOD user10_am;
+DROP CAST (text AS json);
+REVOKE ALL ON DATABASE user10_db FROM regress_priv_user10;
+DROP DATABASE user10_db;
+DROP FUNCTION user10_event_trigger_func();
+DROP FUNCTION user10_secdef_func(boolean);
+DROP LANGUAGE user10_lang;
+DROP OPERATOR CLASS user10_ops USING gist;
+DROP OPERATOR FAMILY user10_ops USING gist;
+DROP PUBLICATION user10_publication;
+DROP SCHEMA user10_schema;
+DROP STATISTICS user10_stats;
+DROP TEXT SEARCH CONFIGURATION user10_tsconfig;
+DROP TEXT SEARCH DICTIONARY user10_tsdict;
+DROP TRIGGER user10_trigger ON user10_tbl;
+DROP FUNCTION user10_trigger_func();
+DROP TYPE user10_type;
+DROP VIEW user10_view;
+DROP TABLE user10_tbl;
+
 -- test default ACLs
 \c -
 
@@ -1391,7 +1517,10 @@ DROP USER regress_priv_user4;
 DROP USER regress_priv_user5;
 DROP USER regress_priv_user6;
 DROP USER regress_priv_user7;
-DROP USER regress_priv_user8; -- does not exist
+DROP USER regress_priv_user8;
+DROP USER regress_priv_user9;
+DROP USER regress_priv_user10;
+DROP USER regress_priv_user11; -- does not exist
 
 
 -- permissions with LOCK TABLE

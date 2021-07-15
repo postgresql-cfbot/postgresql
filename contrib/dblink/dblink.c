@@ -39,6 +39,7 @@
 #include "access/reloptions.h"
 #include "access/table.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_foreign_data_wrapper.h"
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_type.h"
@@ -352,7 +353,7 @@ dblink_connect(PG_FUNCTION_ARGS)
 				 errdetail_internal("%s", msg)));
 	}
 
-	/* check password actually used if not superuser */
+	/* check password actually used if not superuser nor pg_network_security */
 	dblink_security_check(conn, rconn);
 
 	/* attempt to set client encoding to match server encoding, if needed */
@@ -2666,7 +2667,8 @@ deleteConnection(const char *name)
 static void
 dblink_security_check(PGconn *conn, remoteConn *rconn)
 {
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_NETWORK_SECURITY))
 	{
 		if (!PQconnectionUsedPassword(conn))
 		{
@@ -2678,7 +2680,7 @@ dblink_security_check(PGconn *conn, remoteConn *rconn)
 			ereport(ERROR,
 					(errcode(ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED),
 					 errmsg("password is required"),
-					 errdetail("Non-superuser cannot connect if the server does not request a password."),
+					 errdetail("Non-superuser other than pg_network_security cannot connect if the server does not request a password."),
 					 errhint("Target server's authentication method must be changed.")));
 		}
 	}
@@ -2693,7 +2695,8 @@ dblink_security_check(PGconn *conn, remoteConn *rconn)
 static void
 dblink_connstr_check(const char *connstr)
 {
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_NETWORK_SECURITY))
 	{
 		PQconninfoOption *options;
 		PQconninfoOption *option;
@@ -2720,7 +2723,7 @@ dblink_connstr_check(const char *connstr)
 			ereport(ERROR,
 					(errcode(ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED),
 					 errmsg("password is required"),
-					 errdetail("Non-superusers must provide a password in the connection string.")));
+					 errdetail("Non-superusers other than pg_network_security must provide a password in the connection string.")));
 	}
 }
 

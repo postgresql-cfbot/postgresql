@@ -763,7 +763,9 @@ check_encoding_locale_matches(int encoding, const char *collate, const char *cty
 #ifdef WIN32
 		  encoding == PG_UTF8 ||
 #endif
-		  (encoding == PG_SQL_ASCII && superuser())))
+		  (encoding == PG_SQL_ASCII &&
+		   (superuser() ||
+			has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY)))))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("encoding \"%s\" does not match locale \"%s\"",
@@ -778,7 +780,9 @@ check_encoding_locale_matches(int encoding, const char *collate, const char *cty
 #ifdef WIN32
 		  encoding == PG_UTF8 ||
 #endif
-		  (encoding == PG_SQL_ASCII && superuser())))
+		  (encoding == PG_SQL_ASCII &&
+		   (superuser() ||
+			has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY)))))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("encoding \"%s\" does not match locale \"%s\"",
@@ -1923,7 +1927,8 @@ have_createdb_privilege(void)
 	HeapTuple	utup;
 
 	/* Superusers can always do everything */
-	if (superuser())
+	if (superuser() ||
+		has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	utup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(GetUserId()));

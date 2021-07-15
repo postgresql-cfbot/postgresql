@@ -24,6 +24,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/objectaddress.h"
 #include "catalog/partition.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
@@ -165,11 +166,15 @@ CreatePublication(CreatePublicationStmt *stmt)
 		aclcheck_error(aclresult, OBJECT_DATABASE,
 					   get_database_name(MyDatabaseId));
 
-	/* FOR ALL TABLES requires superuser */
-	if (stmt->for_all_tables && !superuser())
+	/*
+	 * FOR ALL TABLES requires superuser or membership in the
+	 * pg_logical_replication role
+	 */
+	if (stmt->for_all_tables && !superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_LOGICAL_REPLICATION))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to create FOR ALL TABLES publication")));
+				 errmsg("must be superuser or a member of the pg_logical_replication role to create FOR ALL TABLES publication")));
 
 	rel = table_open(PublicationRelationId, RowExclusiveLock);
 
@@ -454,7 +459,8 @@ AlterPublication(AlterPublicationStmt *stmt)
 	pubform = (Form_pg_publication) GETSTRUCT(tup);
 
 	/* must be owner */
-	if (!pg_publication_ownercheck(pubform->oid, GetUserId()))
+	if (!pg_publication_ownercheck(pubform->oid, GetUserId()) &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_LOGICAL_REPLICATION))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_PUBLICATION,
 					   stmt->pubname);
 
@@ -615,8 +621,12 @@ PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
 		Relation	rel = (Relation) lfirst(lc);
 		ObjectAddress obj;
 
-		/* Must be owner of the table or superuser. */
-		if (!pg_class_ownercheck(RelationGetRelid(rel), GetUserId()))
+		/*
+		 * Must be owner of the table or superuser or a member of the
+		 * pg_logical_replication role.
+		 */
+		if (!pg_class_ownercheck(RelationGetRelid(rel), GetUserId()) &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_LOGICAL_REPLICATION))
 			aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(rel->rd_rel->relkind),
 						   RelationGetRelationName(rel));
 
@@ -679,7 +689,8 @@ AlterPublicationOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 	if (form->pubowner == newOwnerId)
 		return;
 
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_LOGICAL_REPLICATION))
 	{
 		AclResult	aclresult;
 
@@ -702,7 +713,7 @@ AlterPublicationOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to change owner of publication \"%s\"",
 							NameStr(form->pubname)),
-					 errhint("The owner of a FOR ALL TABLES publication must be a superuser.")));
+					 errhint("The owner of a FOR ALL TABLES publication must be a superuser or a member of the pg_logical_replication role.")));
 	}
 
 	form->pubowner = newOwnerId;

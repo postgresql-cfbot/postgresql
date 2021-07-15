@@ -12,7 +12,7 @@ ERROR:  permission denied to create extension "plperl"
 HINT:  Must have CREATE privilege on current database to create this extension.
 CREATE EXTENSION plperlu;  -- fail
 ERROR:  permission denied to create extension "plperlu"
-HINT:  Must be superuser to create this extension.
+HINT:  Must be superuser or a member of the pg_host_security role to create this extension.
 RESET ROLE;
 DO $$
 begin
@@ -24,7 +24,7 @@ SET ROLE regress_user1;
 CREATE EXTENSION plperl;
 CREATE EXTENSION plperlu;  -- fail
 ERROR:  permission denied to create extension "plperlu"
-HINT:  Must be superuser to create this extension.
+HINT:  Must be superuser or a member of the pg_host_security role to create this extension.
 CREATE FUNCTION foo1() returns int language plperl as '1;';
 SELECT foo1();
  foo1 

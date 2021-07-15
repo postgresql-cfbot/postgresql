@@ -211,10 +211,11 @@ DefineType(ParseState *pstate, List *names, List *parameters)
 	 *
 	 * XXX re-enable NOT_USED code sections below if you remove this test.
 	 */
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to create a base type")));
+				 errmsg("must be superuser or pg_database_security to create a base type")));
 
 	/* Convert list of names to a name and namespace */
 	typeNamespace = QualifiedNameGetCreationNamespace(names, &typeName);
@@ -3756,7 +3757,8 @@ AlterTypeOwner(List *names, Oid newOwnerId, ObjectType objecttype)
 	if (typTup->typowner != newOwnerId)
 	{
 		/* Superusers can always do it */
-		if (!superuser())
+		if (!superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		{
 			/* Otherwise, must be owner of the existing object */
 			if (!pg_type_ownercheck(typTup->oid, GetUserId()))
@@ -4288,7 +4290,8 @@ AlterType(AlterTypeStmt *stmt)
 	 */
 	if (requireSuper)
 	{
-		if (!superuser())
+		if (!superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("must be superuser to alter a type")));

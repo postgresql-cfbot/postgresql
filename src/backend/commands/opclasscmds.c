@@ -30,6 +30,7 @@
 #include "catalog/pg_am.h"
 #include "catalog/pg_amop.h"
 #include "catalog/pg_amproc.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
@@ -405,10 +406,11 @@ DefineOpClass(CreateOpClassStmt *stmt)
 	 *
 	 * XXX re-enable NOT_USED code sections below if you remove this test.
 	 */
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to create an operator class")));
+				 errmsg("must be superuser or pg_database_security to create an operator class")));
 
 	/* Look up the datatype */
 	typeoid = typenameTypeId(NULL, stmt->datatype);
@@ -786,10 +788,11 @@ DefineOpFamily(CreateOpFamilyStmt *stmt)
 	 * Currently, we require superuser privileges to create an opfamily. See
 	 * comments in DefineOpClass.
 	 */
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to create an operator family")));
+				 errmsg("must be superuser or pg_database_security to create an operator family")));
 
 	/* Insert pg_opfamily catalog entry */
 	return CreateOpFamily(stmt->amname, opfname, namespaceoid, amoid);
@@ -846,10 +849,11 @@ AlterOpFamily(AlterOpFamilyStmt *stmt)
 	 *
 	 * XXX re-enable NOT_USED code sections below if you remove this test.
 	 */
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to alter an operator family")));
+				 errmsg("must be superuser or pg_database_security to alter an operator family")));
 
 	/*
 	 * ADD and DROP cases need separate code from here on down.

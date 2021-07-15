@@ -26,6 +26,7 @@
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
 #include "catalog/partition.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_proc.h"
@@ -1577,7 +1578,8 @@ EnableDisableTrigger(Relation rel, const char *tgname,
 			/* system trigger ... ok to process? */
 			if (skip_system)
 				continue;
-			if (!superuser())
+			if (!superuser() &&
+				!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 						 errmsg("permission denied: \"%s\" is a system trigger",

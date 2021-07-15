@@ -52,12 +52,12 @@ LOAD '<replaceable class="parameter">filename</replaceable>'
   </indexterm>
 
   <para>
-   Non-superusers can only apply <command>LOAD</command> to library files
-   located in <filename>$libdir/plugins/</filename> &mdash; the specified
-   <replaceable class="parameter">filename</replaceable> must begin
-   with exactly that string.  (It is the database administrator's
-   responsibility to ensure that only <quote>safe</quote> libraries
-   are installed there.)
+   Non-superusers not members of role <literal>pg_host_security</literal> can
+   only apply <command>LOAD</command> to library files located in
+   <filename>$libdir/plugins/</filename> &mdash; the specified <replaceable
+   class="parameter">filename</replaceable> must begin with exactly that
+   string.  (It is the database administrator's responsibility to ensure that
+   only <quote>safe</quote> libraries are installed there.)
   </para>
  </refsect1>
 

@@ -23,6 +23,7 @@
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/objectaddress.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
@@ -443,10 +444,11 @@ CreateSubscription(CreateSubscriptionStmt *stmt, bool isTopLevel)
 	if (opts.create_slot)
 		PreventInTransactionBlock(isTopLevel, "CREATE SUBSCRIPTION ... WITH (create_slot = true)");
 
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_LOGICAL_REPLICATION))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to create subscriptions")));
+				 errmsg("must be superuser or a member of the pg_logical_replication role to create subscriptions")));
 
 	/*
 	 * If built with appropriate switch, whine when regression-testing
@@ -884,7 +886,8 @@ AlterSubscription(AlterSubscriptionStmt *stmt, bool isTopLevel)
 	subid = form->oid;
 
 	/* must be owner */
-	if (!pg_subscription_ownercheck(subid, GetUserId()))
+	if (!pg_subscription_ownercheck(subid, GetUserId()) &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_LOGICAL_REPLICATION))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_SUBSCRIPTION,
 					   stmt->subname);
 
@@ -1198,7 +1201,8 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	subid = form->oid;
 
 	/* must be owner */
-	if (!pg_subscription_ownercheck(subid, GetUserId()))
+	if (!pg_subscription_ownercheck(subid, GetUserId()) &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_LOGICAL_REPLICATION))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_SUBSCRIPTION,
 					   stmt->subname);
 
@@ -1483,17 +1487,23 @@ AlterSubscriptionOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 	if (form->subowner == newOwnerId)
 		return;
 
-	if (!pg_subscription_ownercheck(form->oid, GetUserId()))
+	if (!pg_subscription_ownercheck(form->oid, GetUserId()) &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_LOGICAL_REPLICATION))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_SUBSCRIPTION,
 					   NameStr(form->subname));
 
-	/* New owner must be a superuser */
-	if (!superuser_arg(newOwnerId))
+	/*
+	 * New owner must be a superuser or a member of the pg_logical_replication
+	 * role
+	 */
+	if (!superuser_arg(newOwnerId) &&
+		!has_privs_of_role(newOwnerId, ROLE_PG_LOGICAL_REPLICATION))
+
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to change owner of subscription \"%s\"",
 						NameStr(form->subname)),
-				 errhint("The owner of a subscription must be a superuser.")));
+				 errhint("The owner of a subscription must be a superuser or a member of the pg_logical_replication role.")));
 
 	form->subowner = newOwnerId;
 	CatalogTupleUpdate(rel, &tup->t_self, tup);

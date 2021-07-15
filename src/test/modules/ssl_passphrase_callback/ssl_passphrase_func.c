@@ -44,6 +44,7 @@ _PG_init(void)
 							   &ssl_passphrase,
 							   NULL,
 							   PGC_SIGHUP,
+							   GUC_ALL_PRIVILEGES,
 							   0,	/* no flags required */
 							   NULL,
 							   NULL,

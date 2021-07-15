@@ -406,7 +406,7 @@ _PG_init(void)
 							 NULL,
 							 &plperl_use_strict,
 							 false,
-							 PGC_USERSET, 0,
+							 PGC_USERSET, GUC_ALL_PRIVILEGES, 0,
 							 NULL, NULL, NULL);
 
 	/*
@@ -420,7 +420,7 @@ _PG_init(void)
 							   NULL,
 							   &plperl_on_init,
 							   NULL,
-							   PGC_SIGHUP, 0,
+							   PGC_SIGHUP, GUC_ALL_PRIVILEGES, 0,
 							   NULL, NULL, NULL);
 
 	/*
@@ -442,7 +442,7 @@ _PG_init(void)
 							   NULL,
 							   &plperl_on_plperl_init,
 							   NULL,
-							   PGC_SUSET, 0,
+							   PGC_SUSET, GUC_ALL_PRIVILEGES, 0,
 							   NULL, NULL, NULL);
 
 	DefineCustomStringVariable("plperl.on_plperlu_init",
@@ -450,7 +450,7 @@ _PG_init(void)
 							   NULL,
 							   &plperl_on_plperlu_init,
 							   NULL,
-							   PGC_SUSET, 0,
+							   PGC_SUSET, GUC_ALL_PRIVILEGES, 0,
 							   NULL, NULL, NULL);
 
 	EmitWarningsOnPlaceholders("plperl");

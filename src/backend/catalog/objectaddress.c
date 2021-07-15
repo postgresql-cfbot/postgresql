@@ -2564,7 +2564,8 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 		case OBJECT_TSTEMPLATE:
 		case OBJECT_ACCESS_METHOD:
 			/* We treat these object types as being owned by superusers */
-			if (!superuser_arg(roleid))
+			if (!superuser_arg(roleid) &&
+				!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 						 errmsg("must be superuser")));

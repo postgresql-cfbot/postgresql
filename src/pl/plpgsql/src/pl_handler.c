@@ -158,7 +158,7 @@ _PG_init(void)
 							 &plpgsql_variable_conflict,
 							 PLPGSQL_RESOLVE_ERROR,
 							 variable_conflict_options,
-							 PGC_SUSET, 0,
+							 PGC_SUSET, GUC_ALL_PRIVILEGES, 0,
 							 NULL, NULL, NULL);
 
 	DefineCustomBoolVariable("plpgsql.print_strict_params",
@@ -166,7 +166,7 @@ _PG_init(void)
 							 NULL,
 							 &plpgsql_print_strict_params,
 							 false,
-							 PGC_USERSET, 0,
+							 PGC_USERSET, GUC_ALL_PRIVILEGES, 0,
 							 NULL, NULL, NULL);
 
 	DefineCustomBoolVariable("plpgsql.check_asserts",
@@ -174,7 +174,7 @@ _PG_init(void)
 							 NULL,
 							 &plpgsql_check_asserts,
 							 true,
-							 PGC_USERSET, 0,
+							 PGC_USERSET, GUC_ALL_PRIVILEGES, 0,
 							 NULL, NULL, NULL);
 
 	DefineCustomStringVariable("plpgsql.extra_warnings",
@@ -182,7 +182,7 @@ _PG_init(void)
 							   NULL,
 							   &plpgsql_extra_warnings_string,
 							   "none",
-							   PGC_USERSET, GUC_LIST_INPUT,
+							   PGC_USERSET, GUC_ALL_PRIVILEGES, GUC_LIST_INPUT,
 							   plpgsql_extra_checks_check_hook,
 							   plpgsql_extra_warnings_assign_hook,
 							   NULL);
@@ -192,7 +192,7 @@ _PG_init(void)
 							   NULL,
 							   &plpgsql_extra_errors_string,
 							   "none",
-							   PGC_USERSET, GUC_LIST_INPUT,
+							   PGC_USERSET, GUC_ALL_PRIVILEGES, GUC_LIST_INPUT,
 							   plpgsql_extra_checks_check_hook,
 							   plpgsql_extra_errors_assign_hook,
 							   NULL);

@@ -25,6 +25,7 @@
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_ts_config.h"
@@ -188,10 +189,11 @@ DefineTSParser(List *names, List *parameters)
 	Oid			namespaceoid;
 	ObjectAddress address;
 
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to create text search parsers")));
+				 errmsg("must be superuser or pg_database_security to create text search parsers")));
 
 	prsRel = table_open(TSParserRelationId, RowExclusiveLock);
 
@@ -695,10 +697,11 @@ DefineTSTemplate(List *names, List *parameters)
 	char	   *tmplname;
 	ObjectAddress address;
 
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to create text search templates")));
+				 errmsg("must be superuser or pg_database_security to create text search templates")));
 
 	/* Convert list of names to a name and namespace */
 	namespaceoid = QualifiedNameGetCreationNamespace(names, &tmplname);

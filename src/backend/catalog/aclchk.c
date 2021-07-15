@@ -3882,9 +3882,11 @@ pg_class_aclmask_ext(Oid table_oid, Oid roleid, AclMode mask,
 		mask &= ~(ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_USAGE);
 
 	/*
-	 * Otherwise, superusers bypass all permission-checking.
+	 * Otherwise, superusers and members of the pg_database_security role bypass all
+	 * permission-checking.
 	 */
-	if (superuser_arg(roleid))
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 	{
 		ReleaseSysCache(tuple);
 		return mask;
@@ -3963,8 +3965,12 @@ pg_database_aclmask(Oid db_oid, Oid roleid,
 	Acl		   *acl;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return mask;
 
 	/*
@@ -4017,8 +4023,12 @@ pg_proc_aclmask(Oid proc_oid, Oid roleid,
 	Acl		   *acl;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return mask;
 
 	/*
@@ -4071,8 +4081,12 @@ pg_language_aclmask(Oid lang_oid, Oid roleid,
 	Acl		   *acl;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return mask;
 
 	/*
@@ -4138,8 +4152,12 @@ pg_largeobject_aclmask_snapshot(Oid lobj_oid, Oid roleid,
 	Acl		   *acl;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return mask;
 
 	/*
@@ -4207,8 +4225,12 @@ pg_namespace_aclmask(Oid nsp_oid, Oid roleid,
 	Acl		   *acl;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return mask;
 
 	/*
@@ -4299,8 +4321,12 @@ pg_tablespace_aclmask(Oid spc_oid, Oid roleid,
 	Acl		   *acl;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_host_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_HOST_SECURITY))
 		return mask;
 
 	/*
@@ -4358,8 +4384,9 @@ pg_foreign_data_wrapper_aclmask(Oid fdw_oid, Oid roleid,
 
 	Form_pg_foreign_data_wrapper fdwForm;
 
-	/* Bypass permission checks for superusers */
-	if (superuser_arg(roleid))
+	/* Bypass permission checks for superusers and pg_network_security */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_NETWORK_SECURITY))
 		return mask;
 
 	/*
@@ -4420,8 +4447,12 @@ pg_foreign_server_aclmask(Oid srv_oid, Oid roleid,
 
 	Form_pg_foreign_server srvForm;
 
-	/* Bypass permission checks for superusers */
-	if (superuser_arg(roleid))
+	/*
+	 * Bypass permission checks for superusers and members of the
+	 * pg_network_security role
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_NETWORK_SECURITY))
 		return mask;
 
 	/*
@@ -4480,8 +4511,12 @@ pg_type_aclmask(Oid type_oid, Oid roleid, AclMode mask, AclMaskHow how)
 
 	Form_pg_type typeForm;
 
-	/* Bypass permission checks for superusers */
-	if (superuser_arg(roleid))
+	/*
+	 * Bypass permission checks for superusers and members of the
+	 * pg_database_security role
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return mask;
 
 	/*
@@ -4825,8 +4860,12 @@ pg_class_ownercheck(Oid class_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(class_oid));
@@ -4851,8 +4890,12 @@ pg_type_ownercheck(Oid type_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(type_oid));
@@ -4877,8 +4920,12 @@ pg_oper_ownercheck(Oid oper_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(OPEROID, ObjectIdGetDatum(oper_oid));
@@ -4903,8 +4950,12 @@ pg_proc_ownercheck(Oid proc_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(proc_oid));
@@ -4929,8 +4980,12 @@ pg_language_ownercheck(Oid lan_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(LANGOID, ObjectIdGetDatum(lan_oid));
@@ -4961,8 +5016,12 @@ pg_largeobject_ownercheck(Oid lobj_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	/* There's no syscache for pg_largeobject_metadata */
@@ -5001,8 +5060,12 @@ pg_namespace_ownercheck(Oid nsp_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(NAMESPACEOID, ObjectIdGetDatum(nsp_oid));
@@ -5027,8 +5090,12 @@ pg_tablespace_ownercheck(Oid spc_oid, Oid roleid)
 	HeapTuple	spctuple;
 	Oid			spcowner;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_host_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_HOST_SECURITY))
 		return true;
 
 	/* Search syscache for pg_tablespace */
@@ -5054,8 +5121,12 @@ pg_opclass_ownercheck(Oid opc_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(CLAOID, ObjectIdGetDatum(opc_oid));
@@ -5081,8 +5152,12 @@ pg_opfamily_ownercheck(Oid opf_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(OPFAMILYOID, ObjectIdGetDatum(opf_oid));
@@ -5108,8 +5183,12 @@ pg_ts_dict_ownercheck(Oid dict_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(TSDICTOID, ObjectIdGetDatum(dict_oid));
@@ -5135,8 +5214,12 @@ pg_ts_config_ownercheck(Oid cfg_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(TSCONFIGOID, ObjectIdGetDatum(cfg_oid));
@@ -5162,8 +5245,12 @@ pg_foreign_data_wrapper_ownercheck(Oid srv_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_network_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_NETWORK_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(FOREIGNDATAWRAPPEROID, ObjectIdGetDatum(srv_oid));
@@ -5189,8 +5276,12 @@ pg_foreign_server_ownercheck(Oid srv_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_network_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_NETWORK_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(FOREIGNSERVEROID, ObjectIdGetDatum(srv_oid));
@@ -5217,7 +5308,8 @@ pg_event_trigger_ownercheck(Oid et_oid, Oid roleid)
 	Oid			ownerId;
 
 	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(GetUserId(), ROLE_PG_HOST_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(EVENTTRIGGEROID, ObjectIdGetDatum(et_oid));
@@ -5243,8 +5335,12 @@ pg_database_ownercheck(Oid db_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			dba;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(db_oid));
@@ -5269,8 +5365,12 @@ pg_collation_ownercheck(Oid coll_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(COLLOID, ObjectIdGetDatum(coll_oid));
@@ -5295,8 +5395,12 @@ pg_conversion_ownercheck(Oid conv_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(CONVOID, ObjectIdGetDatum(conv_oid));
@@ -5363,8 +5467,12 @@ pg_publication_ownercheck(Oid pub_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_network_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(GetUserId(), ROLE_PG_NETWORK_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(PUBLICATIONOID, ObjectIdGetDatum(pub_oid));
@@ -5389,8 +5497,12 @@ pg_subscription_ownercheck(Oid sub_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_network_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(GetUserId(), ROLE_PG_NETWORK_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(SUBSCRIPTIONOID, ObjectIdGetDatum(sub_oid));
@@ -5415,8 +5527,12 @@ pg_statistics_object_ownercheck(Oid stat_oid, Oid roleid)
 	HeapTuple	tuple;
 	Oid			ownerId;
 
-	/* Superusers bypass all permission checking. */
-	if (superuser_arg(roleid))
+	/*
+	 * Superusers and members of the pg_database_security role bypass all
+	 * permission checking.
+	 */
+	if (superuser_arg(roleid) ||
+		has_privs_of_role(roleid, ROLE_PG_DATABASE_SECURITY))
 		return true;
 
 	tuple = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(stat_oid));

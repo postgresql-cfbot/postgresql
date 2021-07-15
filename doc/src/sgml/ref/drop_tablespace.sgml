@@ -33,14 +33,14 @@ DROP TABLESPACE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
   </para>
 
   <para>
-   A tablespace can only be dropped by its owner or a superuser.
-   The tablespace must be empty of all database objects before it can be
-   dropped. It is possible that objects in other databases might still reside
-   in the tablespace even if no objects in the current database are using
-   the tablespace.  Also, if the tablespace is listed in the <xref
-   linkend="guc-temp-tablespaces"/> setting of any active session, the
-   <command>DROP</command> might fail due to temporary files residing in the
-   tablespace.
+   A tablespace can only be dropped by its owner, a member of role
+   <literal>pg_host_security</literal>, or a superuser.  The tablespace must be
+   empty of all database objects before it can be dropped. It is possible that
+   objects in other databases might still reside in the tablespace even if no
+   objects in the current database are using the tablespace.  Also, if the
+   tablespace is listed in the <xref linkend="guc-temp-tablespaces"/> setting
+   of any active session, the <command>DROP</command> might fail due to
+   temporary files residing in the tablespace.
   </para>
  </refsect1>
 

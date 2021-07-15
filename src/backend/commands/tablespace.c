@@ -63,6 +63,7 @@
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_tablespace.h"
 #include "commands/comment.h"
@@ -242,13 +243,14 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	Oid			ownerId;
 	Datum		newOptions;
 
-	/* Must be super user */
-	if (!superuser())
+	/* Must be super user or a member of the pg_host_security role */
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_HOST_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to create tablespace \"%s\"",
 						stmt->tablespacename),
-				 errhint("Must be superuser to create a tablespace.")));
+				 errhint("Must be superuser or a member of the pg_host_security role to create a tablespace.")));
 
 	/* However, the eventual owner of the tablespace need not be */
 	if (stmt->owner)

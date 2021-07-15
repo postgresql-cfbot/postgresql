@@ -887,7 +887,7 @@ SET SESSION AUTHORIZATION regress_dblink_user;
 -- should fail
 SELECT dblink_connect('myconn', 'fdtest');
 ERROR:  password is required
-DETAIL:  Non-superusers must provide a password in the connection string.
+DETAIL:  Non-superusers other than pg_network_security must provide a password in the connection string.
 -- should succeed
 SELECT dblink_connect_u('myconn', 'fdtest');
  dblink_connect_u 

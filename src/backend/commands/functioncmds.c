@@ -41,6 +41,7 @@
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_namespace.h"
@@ -712,10 +713,11 @@ interpret_func_support(DefElem *defel)
 	 * you be superuser to specify a support function, so privilege on the
 	 * support function is moot.
 	 */
-	if (!superuser())
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to specify a support function")));
+				 errmsg("must be superuser or pg_database_security to specify a support function")));
 
 	return procOid;
 }
@@ -1143,7 +1145,8 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	else
 	{
 		/* if untrusted language, must be superuser */
-		if (!superuser())
+		if (!superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 			aclcheck_error(ACLCHECK_NO_PRIV, OBJECT_LANGUAGE,
 						   NameStr(languageStruct->lanname));
 	}
@@ -1157,10 +1160,11 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	 * leakproof functions can see tuples which have not yet been filtered out
 	 * by security barrier views or row-level security policies.
 	 */
-	if (isLeakProof && !superuser())
+	if (isLeakProof && !superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("only superuser can define a leakproof function")));
+				 errmsg("only superuser or pg_database_security can define a leakproof function")));
 
 	if (transformDefElem)
 	{
@@ -1441,10 +1445,11 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 	if (leakproof_item)
 	{
 		procForm->proleakproof = intVal(leakproof_item->arg);
-		if (procForm->proleakproof && !superuser())
+		if (procForm->proleakproof && !superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("only superuser can define a leakproof function")));
+					 errmsg("only superuser or pg_database_security can define a leakproof function")));
 	}
 	if (cost_item)
 	{
@@ -1685,10 +1690,11 @@ CreateCast(CreateCastStmt *stmt)
 		 * Must be superuser to create binary-compatible casts, since
 		 * erroneous casts can easily crash the backend.
 		 */
-		if (!superuser())
+		if (!superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("must be superuser to create a cast WITHOUT FUNCTION")));
+					 errmsg("must be superuser or pg_database_security to create a cast WITHOUT FUNCTION")));
 
 		/*
 		 * Also, insist that the types match as to size, alignment, and
@@ -2148,7 +2154,8 @@ ExecuteDoStmt(DoStmt *stmt, bool atomic)
 	else
 	{
 		/* if untrusted language, must be superuser */
-		if (!superuser())
+		if (!superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 			aclcheck_error(ACLCHECK_NO_PRIV, OBJECT_LANGUAGE,
 						   NameStr(languageStruct->lanname));
 	}

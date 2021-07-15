@@ -581,6 +581,24 @@ DROP ROLE doomed_role;
        <entry>Allow executing programs on the database server as the user the database runs as with
        COPY and other functions which allow executing a server-side program.</entry>
       </row>
+      <row>
+       <entry>pg_logical_replication</entry>
+       <entry>Create or drop replication slots and logical replication
+       subscriptions and publications, and connect to the server in logical
+       replication mode.</entry>
+      </row>
+      <row>
+       <entry>pg_host_security</entry>
+       <entry>Allow loading extensions, and creating, altering, and dropping
+       event triggers and tablespaces.
+       </entry>
+      </row>
+      <row>
+       <entry>pg_network_security</entry>
+       <entry>Allow creating, altering and dropping foreign servers and foreign
+       data wrappers and connecting to foreign servers without a password.
+       </entry>
+      </row>
      </tbody>
     </tgroup>
    </table>
@@ -622,6 +640,13 @@ DROP ROLE doomed_role;
   the server file system, they bypass all database-level permission checks when accessing files
   directly and they could be used to gain superuser-level access, therefore
   great care should be taken when granting these roles to users.
+  </para>
+
+  <para> The <literal>pg_logical_replication</literal> role is intended to
+  allow administrators to enable trusted, but non-superuser, roles which are
+  able to configure logical replication and to replicate data from a
+  publication while still being subject to privilege checks on the target
+  tables into which data is replicated.
   </para>
 
   <para>

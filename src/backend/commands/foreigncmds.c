@@ -21,6 +21,7 @@
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_authid_d.h"
 #include "catalog/pg_foreign_data_wrapper.h"
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_foreign_table.h"
@@ -214,21 +215,29 @@ AlterForeignDataWrapperOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerI
 
 	form = (Form_pg_foreign_data_wrapper) GETSTRUCT(tup);
 
-	/* Must be a superuser to change a FDW owner */
-	if (!superuser())
+	/*
+	 * Must be a superuser or a member of the pg_network_security role to
+	 * change a FDW owner
+	 */
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_NETWORK_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to change owner of foreign-data wrapper \"%s\"",
 						NameStr(form->fdwname)),
-				 errhint("Must be superuser to change owner of a foreign-data wrapper.")));
+				 errhint("Must be superuser or member of pg_network_security role to change owner of a foreign-data wrapper.")));
 
-	/* New owner must also be a superuser */
-	if (!superuser_arg(newOwnerId))
+	/*
+	 * New owner must also be a superuser or a member of the
+	 * pg_network_security role
+	 */
+	if (!superuser_arg(newOwnerId) &&
+		!has_privs_of_role(newOwnerId, ROLE_PG_NETWORK_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to change owner of foreign-data wrapper \"%s\"",
 						NameStr(form->fdwname)),
-				 errhint("The owner of a foreign-data wrapper must be a superuser.")));
+				 errhint("The owner of a foreign-data wrapper must be a superuser or member of pg_network_security role.")));
 
 	if (form->fdwowner != newOwnerId)
 	{
@@ -357,8 +366,9 @@ AlterForeignServerOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 
 			srvId = form->oid;
 
-			/* Must be owner */
-			if (!pg_foreign_server_ownercheck(srvId, GetUserId()))
+			/* Must be owner or a member of the pg_network_security role */
+			if (!pg_foreign_server_ownercheck(srvId, GetUserId()) &&
+				!has_privs_of_role(GetUserId(), ROLE_PG_NETWORK_SECURITY))
 				aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_FOREIGN_SERVER,
 							   NameStr(form->srvname));
 
@@ -577,13 +587,14 @@ CreateForeignDataWrapper(CreateFdwStmt *stmt)
 
 	rel = table_open(ForeignDataWrapperRelationId, RowExclusiveLock);
 
-	/* Must be super user */
-	if (!superuser())
+	/* Must be super user or a member of the pg_network_security role */
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_NETWORK_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to create foreign-data wrapper \"%s\"",
 						stmt->fdwname),
-				 errhint("Must be superuser to create a foreign-data wrapper.")));
+				 errhint("Must be superuser or member of pg_network_security to create a foreign-data wrapper.")));
 
 	/* For now the owner cannot be specified on create. Use effective user ID. */
 	ownerId = GetUserId();
@@ -694,13 +705,14 @@ AlterForeignDataWrapper(AlterFdwStmt *stmt)
 
 	rel = table_open(ForeignDataWrapperRelationId, RowExclusiveLock);
 
-	/* Must be super user */
-	if (!superuser())
+	/* Must be super user or a member of the pg_network_security role */
+	if (!superuser() &&
+		!has_privs_of_role(GetUserId(), ROLE_PG_NETWORK_SECURITY))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to alter foreign-data wrapper \"%s\"",
 						stmt->fdwname),
-				 errhint("Must be superuser to alter a foreign-data wrapper.")));
+				 errhint("Must be superuser or member of pg_network_security to alter a foreign-data wrapper.")));
 
 	tp = SearchSysCacheCopy1(FOREIGNDATAWRAPPERNAME,
 							 CStringGetDatum(stmt->fdwname));

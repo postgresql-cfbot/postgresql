@@ -86,6 +86,7 @@ _PG_init(void)
 							0,
 							0, INT_MAX,
 							PGC_USERSET,
+							GUC_ALL_PRIVILEGES,
 							0,
 							NULL,
 							NULL,

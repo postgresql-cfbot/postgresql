@@ -143,6 +143,7 @@ struct config_generic
 	enum config_group group;	/* to help organize variables by function */
 	const char *short_desc;		/* short desc. of this variable's purpose */
 	const char *long_desc;		/* long desc. of this variable's purpose */
+	int			privileges;		/* privileges bits, see guc.h */
 	int			flags;			/* flag bits, see guc.h */
 	/* variable fields, initialized at runtime: */
 	enum config_type vartype;	/* type of variable (set only at startup) */

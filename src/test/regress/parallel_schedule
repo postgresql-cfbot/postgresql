@@ -86,7 +86,7 @@ test: brin_bloom brin_multi
 # ----------
 # Another group of parallel tests
 # ----------
-test: create_table_like alter_generic alter_operator misc async dbsize misc_functions sysviews tsrf tid tidscan tidrangescan collate.icu.utf8 incremental_sort
+test: create_table_like alter_generic alter_operator misc async dbsize misc_functions sysviews tsrf tid tidscan tidrangescan collate.icu.utf8 incremental_sort guc_priv_admin guc_priv_host_admin guc_priv_logical_replication_user guc_priv_network_admin guc_priv_sandbox_admin
 
 # rules cannot run concurrently with any test that creates
 # a view or rule in the public schema

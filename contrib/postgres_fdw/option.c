@@ -13,12 +13,14 @@
 #include "postgres.h"
 
 #include "access/reloptions.h"
+#include "catalog/pg_authid_d.h"
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
 #include "commands/extension.h"
 #include "postgres_fdw.h"
+#include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/varlena.h"
@@ -177,21 +179,23 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 			 * a choice since we can't see the old mapping when validating an
 			 * alter.
 			 */
-			if (!superuser() && !pw_required)
+			if (!superuser() && !pw_required &&
+				!has_privs_of_role(GetUserId(), ROLE_PG_NETWORK_SECURITY))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-						 errmsg("password_required=false is superuser-only"),
-						 errhint("User mappings with the password_required option set to false may only be created or modified by the superuser")));
+						 errmsg("password_required=false requires superuser or pg_network_security privilege"),
+						 errhint("User mappings with the password_required option set to false may only be created or modified by the superuser or pg_network_security")));
 		}
 		else if (strcmp(def->defname, "sslcert") == 0 ||
 				 strcmp(def->defname, "sslkey") == 0)
 		{
 			/* similarly for sslcert / sslkey on user mapping */
-			if (catalog == UserMappingRelationId && !superuser())
+			if (catalog == UserMappingRelationId && !superuser() &&
+				!has_privs_of_role(GetUserId(), ROLE_PG_NETWORK_SECURITY))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-						 errmsg("sslcert and sslkey are superuser-only"),
-						 errhint("User mappings with the sslcert or sslkey options set may only be created or modified by the superuser")));
+						 errmsg("sslcert and sslkey require superuser or pg_network_security privilege"),
+						 errhint("User mappings with the sslcert or sslkey options set may only be created or modified by the superuser or pg_network_security")));
 		}
 	}
 

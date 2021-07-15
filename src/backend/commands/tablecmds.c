@@ -33,6 +33,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/partition.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_depend.h"
@@ -13321,7 +13322,8 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 		if (!recursing)
 		{
 			/* Superusers can always do it */
-			if (!superuser())
+			if (!superuser() &&
+				!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 			{
 				Oid			namespaceOid = tuple_class->relnamespace;
 				AclResult	aclresult;

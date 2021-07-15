@@ -24,6 +24,7 @@
 #include "catalog/catalog.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/toasting.h"
 #include "commands/alter.h"
@@ -825,7 +826,8 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 
 				closeAllVfds(); /* probably not necessary... */
 				/* Allowed names are restricted if you're not superuser */
-				load_file(stmt->filename, !superuser());
+				load_file(stmt->filename, !superuser() &&
+						  !has_privs_of_role(GetUserId(), ROLE_PG_HOST_SECURITY));
 			}
 			break;
 

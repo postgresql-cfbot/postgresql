@@ -21,6 +21,7 @@
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_proc.h"
@@ -694,9 +695,16 @@ ProcedureCreate(const char *procedureName,
 			set_items = (ArrayType *) DatumGetPointer(proconfig);
 			if (set_items)		/* Need a new GUC nesting level */
 			{
+				GucContext	gc;
+
 				save_nestlevel = NewGUCNestLevel();
+				if (superuser() ||
+					has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
+					gc = PGC_SUSET;
+				else
+					gc = PGC_USERSET;
 				ProcessGUCArray(set_items,
-								(superuser() ? PGC_SUSET : PGC_USERSET),
+								gc,
 								PGC_S_SESSION,
 								GUC_ACTION_SAVE);
 			}

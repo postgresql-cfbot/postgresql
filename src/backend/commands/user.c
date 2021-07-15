@@ -295,17 +295,19 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	}
 	else if (isreplication)
 	{
-		if (!superuser())
+		if (!superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("must be superuser to create replication users")));
+					 errmsg("must be superuser or member of role pg_database_security to create replication users")));
 	}
 	else if (bypassrls)
 	{
-		if (!superuser())
+		if (!superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("must be superuser to create bypassrls users")));
+					 errmsg("must be superuser or member of role pg_database_security to create bypassrls users")));
 	}
 	else
 	{
@@ -709,10 +711,10 @@ AlterRole(AlterRoleStmt *stmt)
 	roleid = authform->oid;
 
 	/*
-	 * To mess with a superuser or replication role in any way you gotta be
-	 * superuser.  We also insist on superuser to change the BYPASSRLS
-	 * property.  Otherwise, if you don't have createrole, you're only allowed
-	 * to change your own password.
+	 * To mess with a superuser in any way you gotta be superuser.  We also
+	 * insist on superuser or pg_database_security to change the REPLICATION
+	 * and BYPASSRLS properties.  Otherwise, if you don't have createrole,
+	 * you're only allowed to change your own password.
 	 */
 	if (authform->rolsuper || issuper >= 0)
 	{
@@ -723,17 +725,19 @@ AlterRole(AlterRoleStmt *stmt)
 	}
 	else if (authform->rolreplication || isreplication >= 0)
 	{
-		if (!superuser())
+		if (!superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("must be superuser to alter replication roles or change replication attribute")));
 	}
 	else if (bypassrls >= 0)
 	{
-		if (!superuser())
+		if (!superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("must be superuser to change bypassrls attribute")));
+					 errmsg("must be superuser or member of role pg_database_security to change bypassrls attribute")));
 	}
 	else if (!have_createrole_privilege())
 	{
@@ -976,11 +980,12 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 
 	if (!stmt->role && !stmt->database)
 	{
-		/* Must be superuser to alter settings globally. */
-		if (!superuser())
+		/* Must be superuser or pg_database_security to alter settings globally. */
+		if (!superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("must be superuser to alter settings globally")));
+					 errmsg("must be superuser or member of role pg_database_security to alter settings globally")));
 	}
 
 	AlterSetting(databaseid, roleid, stmt->setstmt);
@@ -1254,10 +1259,11 @@ RenameRole(const char *oldname, const char *newname)
 	 */
 	if (((Form_pg_authid) GETSTRUCT(oldtuple))->rolsuper)
 	{
-		if (!superuser())
+		if (!superuser() &&
+			!has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("must be superuser to rename superusers")));
+					 errmsg("must be superuser or member of role pg_database_security to rename superusers")));
 	}
 	else
 	{

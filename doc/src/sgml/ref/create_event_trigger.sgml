@@ -116,7 +116,8 @@ CREATE EVENT TRIGGER <replaceable class="parameter">name</replaceable>
   <title>Notes</title>
 
   <para>
-   Only superusers can create event triggers.
+   Only superusers and members of role <literal>pg_host_security</literal> can
+   create event triggers.
   </para>
 
   <para>

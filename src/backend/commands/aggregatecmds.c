@@ -25,6 +25,7 @@
 #include "access/htup_details.h"
 #include "catalog/dependency.h"
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "commands/alter.h"
@@ -342,7 +343,9 @@ DefineAggregate(ParseState *pstate,
 	if (transTypeType == TYPTYPE_PSEUDO &&
 		!IsPolymorphicType(transTypeId))
 	{
-		if (transTypeId == INTERNALOID && superuser())
+		if (transTypeId == INTERNALOID &&
+			(superuser() ||
+			 has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY)))
 			 /* okay */ ;
 		else
 			ereport(ERROR,
@@ -383,7 +386,9 @@ DefineAggregate(ParseState *pstate,
 		if (mtransTypeType == TYPTYPE_PSEUDO &&
 			!IsPolymorphicType(mtransTypeId))
 		{
-			if (mtransTypeId == INTERNALOID && superuser())
+			if (mtransTypeId == INTERNALOID &&
+				(superuser() ||
+				 has_privs_of_role(GetUserId(), ROLE_PG_DATABASE_SECURITY)))
 				 /* okay */ ;
 			else
 				ereport(ERROR,

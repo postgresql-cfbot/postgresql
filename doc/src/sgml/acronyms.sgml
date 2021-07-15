@@ -416,7 +416,7 @@
      <para>
       <ulink
       url="https://en.wikipedia.org/wiki/Man-in-the-middle_attack">
-      Man-in-the-middle attack</ulink>
+      Man-in-the-middle</ulink> attack
      </para>
     </listitem>
    </varlistentry>
@@ -606,7 +606,7 @@
     <listitem>
      <para>
       <ulink
-      url="https://en.wikipedia.org/wiki/Server_Name_Indication">
+       url="https://en.wikipedia.org/wiki/Server_Name_Indication">
        Server Name Indication</ulink>,
       <ulink url="https://tools.ietf.org/html/rfc6066#section-3">RFC 6066</ulink>
      </para>

@@ -2004,14 +2004,14 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
 
   <para>
    To prevent spoofing on TCP connections, either use
-   SSL certificates and make sure that clients check the server's certificate,
+   <acronym>SSL/TLS</acronym> certificates and make sure that clients check the server's certificate,
    or use GSSAPI encryption (or both, if they're on separate connections).
   </para>
 
   <para>
-   To prevent spoofing with SSL, the server
+   To prevent spoofing with <acronym>SSL/TLS</acronym>, the server
    must be configured to accept only <literal>hostssl</literal> connections (<xref
-   linkend="auth-pg-hba-conf"/>) and have SSL key and certificate files
+   linkend="auth-pg-hba-conf"/>) and have <acronym>SSL/TLS</acronym> key and certificate files
    (<xref linkend="ssl-tcp"/>). The TCP client must connect using
    <literal>sslmode=verify-ca</literal> or
    <literal>verify-full</literal> and have the appropriate root certificate
@@ -2115,13 +2115,13 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
 
     <listitem>
      <para>
-      SSL connections encrypt all data sent across the network: the
+      <acronym>SSL/TLS</acronym> connections encrypt all data sent across the network: the
       password, the queries, and the data returned. The
       <filename>pg_hba.conf</filename> file allows administrators to specify
       which hosts can use non-encrypted connections (<literal>host</literal>)
-      and which require SSL-encrypted connections
+      and which require <acronym>SSL/TLS</acronym>-encrypted connections
       (<literal>hostssl</literal>). Also, clients can specify that they
-      connect to servers only via SSL.
+      connect to servers only via <acronym>SSL/TLS</acronym>.
      </para>
 
      <para>
@@ -2144,11 +2144,11 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   </varlistentry>
 
   <varlistentry>
-   <term>SSL Host Authentication</term>
+   <term>SSL/TLS Host Authentication</term>
 
    <listitem>
     <para>
-     It is possible for both the client and server to provide SSL
+     It is possible for both the client and server to provide <acronym>SSL/TLS</acronym>
      certificates to each other. It takes some extra configuration
      on each side, but this provides stronger verification of identity
      than the mere use of passwords. It prevents a computer from
@@ -2181,39 +2181,51 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
  </sect1>
 
  <sect1 id="ssl-tcp">
-  <title>Secure TCP/IP Connections with SSL</title>
+  <title>Secure TCP/IP Connections with SSL/TLS</title>
 
   <indexterm zone="ssl-tcp">
    <primary>SSL</primary>
+   <secondary>TLS</secondary>
   </indexterm>
 
   <para>
    <productname>PostgreSQL</productname> has native support for using
-   <acronym>SSL</acronym> connections to encrypt client/server communications
+   <acronym>SSL/TLS</acronym> connections to encrypt client/server communications
    for increased security. This requires that
    <productname>OpenSSL</productname> is installed on both client and
    server systems and that support in <productname>PostgreSQL</productname> is
    enabled at build time (see <xref linkend="installation"/>).
   </para>
 
+  <para>
+   The terms <acronym>SSL</acronym> and <acronym>TLS</acronym> are often used
+   interchangeably to mean a secure encrypted connection using a
+   <acronym>TLS</acronym> protocol. <acronym>SSL</acronym> protocols are the
+   precursors to <acronym>TLS</acronym> protocols, and the term
+   <acronym>SSL</acronym> is still used for encrypted connections even though
+   <acronym>SSL</acronym> protocols are no longer supported. 
+   <acronym>SSL/TLS</acronym> is used to refer to an
+   encrypted connection using a supported <acronym>TLS</acronym> protocol.
+  </para>
+
   <sect2 id="ssl-setup">
    <title>Basic Setup</title>
 
   <para>
-   With <acronym>SSL</acronym> support compiled in, the
+   With <acronym>SSL/TLS</acronym> support compiled in, the
    <productname>PostgreSQL</productname> server can be started with
-   <acronym>SSL</acronym> enabled by setting the parameter
+   support for encrypted connections enabled by setting the parameter
    <xref linkend="guc-ssl"/> to <literal>on</literal> in
    <filename>postgresql.conf</filename>.  The server will listen for both normal
-   and <acronym>SSL</acronym> connections on the same TCP port, and will negotiate
-   with any connecting client on whether to use <acronym>SSL</acronym>.  By
+   and <acronym>TLS</acronym> connections on the same TCP port, and will negotiate
+   with any connecting client on whether to use <acronym>TLS</acronym>.  By
    default, this is at the client's option; see <xref
    linkend="auth-pg-hba-conf"/> about how to set up the server to require
    use of <acronym>SSL</acronym> for some or all connections.
   </para>
 
   <para>
-   To start in <acronym>SSL</acronym> mode, files containing the server certificate
+   To start in <acronym>SSL/TLS</acronym> mode, files containing the server certificate
    and private key must exist.  By default, these files are expected to be
    named <filename>server.crt</filename> and <filename>server.key</filename>, respectively, in
    the server's data directory, but other names and locations can be specified
@@ -2316,7 +2328,7 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
    authentication option <literal>clientcert=verify-ca</literal> or
    <literal>clientcert=verify-full</literal> to the appropriate
    <literal>hostssl</literal> line(s) in <filename>pg_hba.conf</filename>.
-   A certificate will then be requested from the client during SSL
+   A certificate will then be requested from the client during <acronym>SSL/TLS</acronym>
    connection startup.  (See <xref linkend="libpq-ssl"/> for a description
    of how to set up certificates on the client.)
   </para>
@@ -2359,7 +2371,7 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
    The first approach makes use of the <literal>cert</literal> authentication
    method for <literal>hostssl</literal> entries in <filename>pg_hba.conf</filename>,
    such that the certificate itself is used for authentication while also
-   providing ssl connection security. See <xref linkend="auth-cert"/> for details.
+   providing <acronym>SSL/TLS</acronym> connection security. See <xref linkend="auth-cert"/> for details.
    (It is not necessary to specify any <literal>clientcert</literal> options
    explicitly when using the <literal>cert</literal> authentication method.)
    In this case, the <literal>cn</literal> (Common Name) provided in
@@ -2378,16 +2390,16 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
   </sect2>
 
   <sect2 id="ssl-server-files">
-   <title>SSL Server File Usage</title>
+   <title>SSL/TLS Server File Usage</title>
 
    <para>
     <xref linkend="ssl-file-usage"/> summarizes the files that are
-    relevant to the SSL setup on the server.  (The shown file names are default
+    relevant to the <acronym>SSL/TLS</acronym> setup on the server.  (The shown file names are default
     names.  The locally configured names could be different.)
    </para>
 
   <table id="ssl-file-usage">
-   <title>SSL Server File Usage</title>
+   <title>SSL/TLS Server File Usage</title>
    <tgroup cols="3">
     <thead>
      <row>
@@ -2439,10 +2451,10 @@ pg_dumpall -p 5432 | psql -d postgres -p 5433
    <para>
     If an error in these files is detected at server start, the server will
     refuse to start.  But if an error is detected during a configuration
-    reload, the files are ignored and the old SSL configuration continues to
+    reload, the files are ignored and the old <acronym>SSL/TLS</acronym> configuration continues to
     be used.  On <systemitem class="osname">Windows</systemitem> systems, if an error in
     these files is detected at backend start, that backend will be unable to
-    establish an SSL connection.  In all these cases, the error condition is
+    establish an <acronym>SSL/TLS</acronym> connection.  In all these cases, the error condition is
     reported in the server log.
    </para>
   </sect2>
@@ -2614,7 +2626,7 @@ openssl x509 -req -in server.csr -text -days 365 \
    It is possible to use <application>SSH</application> to encrypt the network
    connection between clients and a
    <productname>PostgreSQL</productname> server. Done properly, this
-   provides an adequately secure network connection, even for non-SSL-capable
+   provides an adequately secure network connection, even for non-<acronym>SSL/TLS</acronym>-capable
    clients.
   </para>
 
@@ -2650,7 +2662,7 @@ psql -h localhost -p 63333 postgres
    connecting to the <literal>localhost</literal> bind address, and it
    will use whatever authentication procedure was configured for
    connections by that user to that bind address.  Note that the server will not
-   think the connection is SSL-encrypted, since in fact it is not
+   think the connection is <acronym>SSL/TLS</acronym>-encrypted, since in fact it is not
    encrypted between the
    <application>SSH</application> server and the
    <productname>PostgreSQL</productname> server.  This should not pose any

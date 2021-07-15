@@ -423,7 +423,7 @@ PostgresPollingStatusType PQconnectPoll(PGconn *conn);
          <term><symbol>CONNECTION_SSL_STARTUP</symbol></term>
          <listitem>
           <para>
-           Negotiating SSL encryption.
+           Negotiating <acronym>SSL/TLS</acronym> encryption.
           </para>
          </listitem>
         </varlistentry>
@@ -1103,7 +1103,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
         application to avoid a host name look-up, which might be important
         in applications with time constraints. However, a host name is
         required for GSSAPI or SSPI authentication
-        methods, as well as for <literal>verify-full</literal> SSL
+        methods, as well as for <literal>verify-full</literal> <acronym>SSL/TLS</acronym>
         certificate verification.  The following rules are used:
         <itemizedlist>
          <listitem>
@@ -1231,12 +1231,12 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
         choose channel binding if available, and <literal>disable</literal>
         prevents the use of channel binding. The default
         is <literal>prefer</literal> if
-        <productname>PostgreSQL</productname> is compiled with SSL support;
+        <productname>PostgreSQL</productname> is compiled with <acronym>SSL/TLS</acronym> support;
         otherwise the default is <literal>disable</literal>.
       </para>
       <para>
         Channel binding is a method for the server to authenticate itself to
-        the client. It is only supported over SSL connections
+        the client. It is only supported over <acronym>SSL/TLS</acronym> connections
         with <productname>PostgreSQL</productname> 11 or later servers using
         the <literal>SCRAM</literal> authentication method.
       </para>
@@ -1517,7 +1517,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <listitem>
        <para>
         This option determines whether or with what priority a secure
-        <acronym>SSL</acronym> TCP/IP connection will be negotiated with the
+        <acronym>SSL/TLS</acronym> TCP/IP connection will be negotiated with the
         server. There are six modes:
 
         <variablelist>
@@ -1525,7 +1525,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
           <term><literal>disable</literal></term>
           <listitem>
            <para>
-            only try a non-<acronym>SSL</acronym> connection
+            only try a non-<acronym>SSL/TLS</acronym> connection
            </para>
           </listitem>
          </varlistentry>
@@ -1534,8 +1534,8 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
           <term><literal>allow</literal></term>
           <listitem>
            <para>
-            first try a non-<acronym>SSL</acronym> connection; if that
-            fails, try an <acronym>SSL</acronym> connection
+            first try a non-<acronym>SSL/TLS</acronym> connection; if that
+            fails, try an <acronym>SSL/TLS</acronym> connection
            </para>
           </listitem>
          </varlistentry>
@@ -1544,8 +1544,8 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
           <term><literal>prefer</literal> (default)</term>
           <listitem>
            <para>
-            first try an <acronym>SSL</acronym> connection; if that fails,
-            try a non-<acronym>SSL</acronym> connection
+            first try an <acronym>SSL/TLS</acronym> connection; if that fails,
+            try a non-<acronym>SSL/TLS</acronym> connection
            </para>
           </listitem>
          </varlistentry>
@@ -1554,7 +1554,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
           <term><literal>require</literal></term>
           <listitem>
            <para>
-            only try an <acronym>SSL</acronym> connection. If a root CA
+            only try an <acronym>SSL/TLS</acronym> connection. If a root CA
             file is present, verify the certificate in the same way as
             if <literal>verify-ca</literal> was specified
            </para>
@@ -1565,7 +1565,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
           <term><literal>verify-ca</literal></term>
           <listitem>
            <para>
-            only try an <acronym>SSL</acronym> connection, and verify that
+            only try an <acronym>SSL/TLS</acronym> connection, and verify that
             the server certificate is issued by a trusted
             certificate authority (<acronym>CA</acronym>)
            </para>
@@ -1576,7 +1576,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
           <term><literal>verify-full</literal></term>
           <listitem>
            <para>
-            only try an <acronym>SSL</acronym> connection, verify that the
+            only try an <acronym>SSL/TLS</acronym> connection, verify that the
             server certificate is issued by a
             trusted <acronym>CA</acronym> and that the requested server host name
             matches that in the certificate
@@ -1592,21 +1592,21 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
        <para>
         <literal>sslmode</literal> is ignored for Unix domain socket
         communication.
-        If <productname>PostgreSQL</productname> is compiled without SSL support,
+        If <productname>PostgreSQL</productname> is compiled without <acronym>SSL/TLS</acronym> support,
         using options <literal>require</literal>, <literal>verify-ca</literal>, or
         <literal>verify-full</literal> will cause an error, while
         options <literal>allow</literal> and <literal>prefer</literal> will be
         accepted but <application>libpq</application> will not actually attempt
-        an <acronym>SSL</acronym>
+        an <acronym>SSL/TLS</acronym>
         connection.<indexterm><primary>SSL</primary><secondary
         sortas="libpq">with libpq</secondary></indexterm>
        </para>
 
        <para>
         Note that if <acronym>GSSAPI</acronym> encryption is possible,
-        that will be used in preference to <acronym>SSL</acronym>
+        that will be used in preference to <acronym>SSL/TLS</acronym>
         encryption, regardless of the value of <literal>sslmode</literal>.
-        To force use of <acronym>SSL</acronym> encryption in an
+        To force use of <acronym>SSL/TLS</acronym> encryption in an
         environment that has working <acronym>GSSAPI</acronym>
         infrastructure (such as a Kerberos server), also
         set <literal>gssencmode</literal> to <literal>disable</literal>.
@@ -1623,15 +1623,15 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
        </para>
 
        <para>
-        If set to 1, an <acronym>SSL</acronym> connection to the server
+        If set to 1, an <acronym>SSL/TLS</acronym> connection to the server
         is required (this is equivalent to <literal>sslmode</literal>
         <literal>require</literal>).  <application>libpq</application> will then refuse
         to connect if the server does not accept an
-        <acronym>SSL</acronym> connection.  If set to 0 (default),
+        <acronym>SSL/TLS</acronym> connection.  If set to 0 (default),
         <application>libpq</application> will negotiate the connection type with
         the server (equivalent to <literal>sslmode</literal>
         <literal>prefer</literal>).  This option is only available if
-        <productname>PostgreSQL</productname> is compiled with SSL support.
+        <productname>PostgreSQL</productname> is compiled with <acronym>SSL/TLS</acronym> support.
        </para>
       </listitem>
      </varlistentry>
@@ -1640,13 +1640,13 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>sslcompression</literal></term>
       <listitem>
        <para>
-        If set to 1, data sent over SSL connections will be compressed.  If
+        If set to 1, data sent over <acronym>SSL/TLS</acronym> connections will be compressed.  If
         set to 0, compression will be disabled.  The default is 0.  This
-        parameter is ignored if a connection without SSL is made.
+        parameter is ignored if a connection without <acronym>SSL/TLS</acronym> is made.
        </para>
 
        <para>
-        SSL compression is nowadays considered insecure and its use is no
+        <acronym>SSL/TLS</acronym> compression is nowadays considered insecure and its use is no
         longer recommended.  <productname>OpenSSL</productname> 1.1.0 disables
         compression by default, and many operating system distributions
         disable it in prior versions as well, so setting this parameter to on
@@ -1668,10 +1668,10 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>sslcert</literal></term>
       <listitem>
        <para>
-        This parameter specifies the file name of the client SSL
+        This parameter specifies the file name of the client <acronym>SSL/TLS</acronym>
         certificate, replacing the default
         <filename>~/.postgresql/postgresql.crt</filename>.
-        This parameter is ignored if an SSL connection is not made.
+        This parameter is ignored if an <acronym>SSL/TLS</acronym> connection is not made.
        </para>
       </listitem>
      </varlistentry>
@@ -1688,7 +1688,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
         <productname>OpenSSL</productname> loadable modules).  An external engine
         specification should consist of a colon-separated engine name and
         an engine-specific key identifier.  This parameter is ignored if an
-        SSL connection is not made.
+        <acronym>SSL/TLS</acronym> connection is not made.
        </para>
       </listitem>
      </varlistentry>
@@ -1729,7 +1729,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>sslrootcert</literal></term>
       <listitem>
        <para>
-        This parameter specifies the name of a file containing SSL
+        This parameter specifies the name of a file containing <acronym>SSL/TLS</acronym>
         certificate authority (<acronym>CA</acronym>) certificate(s).
         If the file exists, the server's certificate will be verified
         to be signed by one of these authorities.  The default is
@@ -1742,8 +1742,8 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>sslcrl</literal></term>
       <listitem>
        <para>
-        This parameter specifies the file name of the SSL certificate
-        revocation list (CRL).  Certificates listed in this file, if it
+        This parameter specifies the file name of the <acronym>SSL/TLS</acronym> certificate
+        revocation list (<acronym>CRL</acronym>).  Certificates listed in this file, if it
         exists, will be rejected while attempting to authenticate the
         server's certificate.  If neither
         <xref linkend='libpq-connect-sslcrl'/> nor
@@ -1758,8 +1758,8 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>sslcrldir</literal></term>
       <listitem>
        <para>
-        This parameter specifies the directory name of the SSL certificate
-        revocation list (CRL).  Certificates listed in the files in this
+        This parameter specifies the directory name of the <acronym>SSL/TLS</acronym> certificate
+        revocation list (<acronym>CRL</acronym>).  Certificates listed in the files in this
         directory, if it exists, will be rejected while attempting to
         authenticate the server's certificate.
        </para>
@@ -1782,18 +1782,19 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>sslsni</literal><indexterm><primary>Server Name Indication</primary></indexterm></term>
       <listitem>
        <para>
-        By default, libpq sets the TLS extension <quote>Server Name
-        Indication</quote> (<acronym>SNI</acronym>) on SSL-enabled connections.
-        By setting this parameter to 0, this is turned off.
+        By default, libpq sets the <acronym>TLS</acronym> extension <quote>Server Name
+        Indication</quote> (<acronym>SNI</acronym>) on <acronym>SSL/TLS</acronym>-enabled connections.
+        By setting this parameter to <literal>0</literal>, this
+        is turned off.
        </para>
 
        <para>
-        The Server Name Indication can be used by SSL-aware proxies to route
-        connections without having to decrypt the SSL stream.  (Note that this
+        The Server Name Indication can be used by <acronym>SSL/TLS</acronym>-aware proxies to route
+        connections without having to decrypt the <acronym>TLS</acronym> stream.  (Note that this
         requires a proxy that is aware of the PostgreSQL protocol handshake,
-        not just any SSL proxy.)  However, <acronym>SNI</acronym> makes the
-        destination host name appear in cleartext in the network traffic, so
-        it might be undesirable in some cases.
+        not just any <acronym>SSL/TLS</acronym> proxy.)  However, <acronym>SNI</acronym> makes the destination host name
+        appear in cleartext in the network traffic, so it might be undesirable
+        in some cases.
        </para>
       </listitem>
      </varlistentry>
@@ -1809,7 +1810,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
         connection that the server process is running under the specified
         user name; if it is not, the connection is aborted with an error.
         This parameter can be used to provide server authentication similar
-        to that available with SSL certificates on TCP/IP connections.
+        to that available with <acronym>SSL/TLS</acronym> certificates on TCP/IP connections.
         (Note that if the Unix-domain socket is in
         <filename>/tmp</filename> or another publicly writable location,
         any user could start a server listening there.  Use this parameter
@@ -1825,7 +1826,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>ssl_min_protocol_version</literal></term>
       <listitem>
        <para>
-        This parameter specifies the minimum SSL/TLS protocol version to allow
+        This parameter specifies the minimum <acronym>TLS</acronym> protocol version to allow
         for the connection. Valid values are <literal>TLSv1</literal>,
         <literal>TLSv1.1</literal>, <literal>TLSv1.2</literal> and
         <literal>TLSv1.3</literal>. The supported protocols depend on the
@@ -1841,7 +1842,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>ssl_max_protocol_version</literal></term>
       <listitem>
        <para>
-        This parameter specifies the maximum SSL/TLS protocol version to allow
+        This parameter specifies the maximum <acronym>TLS</acronym> protocol version to allow
         for the connection. Valid values are <literal>TLSv1</literal>,
         <literal>TLSv1.1</literal>, <literal>TLSv1.2</literal> and
         <literal>TLSv1.3</literal>. The supported protocols depend on the
@@ -2493,7 +2494,7 @@ int PQconnectionUsedPassword(const PGconn *conn);
   </para>
 
   <para>
-    The following functions return information related to SSL. This information
+    The following functions return information related to <acronym>SSL/TLS</acronym>. This information
     usually doesn't change after a connection is established.
 
     <variablelist>
@@ -2501,7 +2502,7 @@ int PQconnectionUsedPassword(const PGconn *conn);
      <term><function>PQsslInUse</function><indexterm><primary>PQsslInUse</primary></indexterm></term>
      <listitem>
       <para>
-        Returns true (1) if the connection uses SSL, false (0) if not.
+        Returns true (1) if the connection uses <acronym>SSL/TLS</acronym>, false (0) if not.
 
 <synopsis>
 int PQsslInUse(const PGconn *conn);
@@ -2515,7 +2516,7 @@ int PQsslInUse(const PGconn *conn);
      <term><function>PQsslAttribute</function><indexterm><primary>PQsslAttribute</primary></indexterm></term>
      <listitem>
       <para>
-        Returns SSL-related information about the connection.
+        Returns <acronym>SSL/TLS</acronym>-related information about the connection.
 
 <synopsis>
 const char *PQsslAttribute(const PGconn *conn, const char *attribute_name);
@@ -2523,7 +2524,7 @@ const char *PQsslAttribute(const PGconn *conn, const char *attribute_name);
       </para>
 
       <para>
-       The list of available attributes varies depending on the SSL library
+       The list of available attributes varies depending on the <acronym>SSL/TLS</acronym> library
        being used, and the type of connection. If an attribute is not
        available, returns NULL.
       </para>
@@ -2535,7 +2536,7 @@ const char *PQsslAttribute(const PGconn *conn, const char *attribute_name);
          <term><literal>library</literal></term>
           <listitem>
            <para>
-            Name of the SSL implementation in use. (Currently, only
+            Name of the <acronym>SSL/TLS</acronym> implementation in use. (Currently, only
             <literal>"OpenSSL"</literal> is implemented)
            </para>
           </listitem>
@@ -2544,9 +2545,9 @@ const char *PQsslAttribute(const PGconn *conn, const char *attribute_name);
          <term><literal>protocol</literal></term>
           <listitem>
            <para>
-             SSL/TLS version in use. Common values
-             are <literal>"TLSv1"</literal>, <literal>"TLSv1.1"</literal>
-             and <literal>"TLSv1.2"</literal>, but an implementation may
+             <acronym>TLS</acronym> protocol version in use. Common values
+             are <literal>"TLSv1.2"</literal>, <literal>"TLSv1.1"</literal>
+             and <literal>"TLSv1.3"</literal>, but an implementation may
              return other strings if some other protocol is used.
            </para>
           </listitem>
@@ -2565,7 +2566,7 @@ const char *PQsslAttribute(const PGconn *conn, const char *attribute_name);
            <para>
             A short name of the ciphersuite used, e.g.,
             <literal>"DHE-RSA-DES-CBC3-SHA"</literal>. The names are specific
-            to each SSL implementation.
+            to each <acronym>SSL/TLS</acronym> implementation.
            </para>
           </listitem>
          </varlistentry>
@@ -2573,7 +2574,7 @@ const char *PQsslAttribute(const PGconn *conn, const char *attribute_name);
          <term><literal>compression</literal></term>
           <listitem>
            <para>
-            If SSL compression is in use, returns the name of the compression
+            If <acronym>SSL/TLS</acronym> compression is in use, returns the name of the compression
             algorithm, or "on" if compression is used but the algorithm is
             not known. If compression is not in use, returns "off".
            </para>
@@ -2588,7 +2589,7 @@ const char *PQsslAttribute(const PGconn *conn, const char *attribute_name);
      <term><function>PQsslAttributeNames</function><indexterm><primary>PQsslAttributeNames</primary></indexterm></term>
      <listitem>
       <para>
-       Return an array of SSL attribute names available. The array is terminated by a NULL pointer.
+       Return an array of <acronym>SSL/TLS</acronym> attribute names available. The array is terminated by a NULL pointer.
 <synopsis>
 const char * const * PQsslAttributeNames(const PGconn *conn);
 </synopsis>
@@ -2600,14 +2601,14 @@ const char * const * PQsslAttributeNames(const PGconn *conn);
      <term><function>PQsslStruct</function><indexterm><primary>PQsslStruct</primary></indexterm></term>
      <listitem>
       <para>
-       Return a pointer to an SSL-implementation-specific object describing
+       Return a pointer to an <acronym>SSL/TLS</acronym>-implementation-specific object describing
        the connection.
 <synopsis>
 void *PQsslStruct(const PGconn *conn, const char *struct_name);
 </synopsis>
       </para>
       <para>
-       The struct(s) available depend on the SSL implementation in use.
+       The struct(s) available depend on the <acronym>SSL/TLS</acronym> implementation in use.
        For <productname>OpenSSL</productname>, there is one struct,
        available under the name "OpenSSL", and it returns a pointer to the
        <productname>OpenSSL</productname> <literal>SSL</literal> struct.
@@ -2643,8 +2644,8 @@ void *PQsslStruct(const PGconn *conn, const char *struct_name);
      <listitem>
       <para>
        <indexterm><primary>SSL</primary><secondary sortas="libpq">in libpq</secondary></indexterm>
-       Returns the SSL structure used in the connection, or null
-       if SSL is not in use.
+       Returns the <literal>SSL</literal> structure used in the connection, or null
+       if <acronym>SSL/TLS</acronym> is not in use.
 
 <synopsis>
 void *PQgetssl(const PGconn *conn);
@@ -2655,8 +2656,8 @@ void *PQgetssl(const PGconn *conn);
        This function is equivalent to <literal>PQsslStruct(conn, "OpenSSL")</literal>. It should
        not be used in new applications, because the returned struct is
        specific to <productname>OpenSSL</productname> and will not be
-       available if another <acronym>SSL</acronym> implementation is used.
-       To check if a connection uses SSL, call
+       available if another <acronym>SSL/TLS</acronym> implementation is used.
+       To check if a connection uses <acronym>SSL/TLS</acronym>, call
        <xref linkend="libpq-PQsslInUse"/> instead, and for more details about the
        connection, use <xref linkend="libpq-PQsslAttribute"/>.
       </para>
@@ -8270,17 +8271,18 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
 
 
  <sect1 id="libpq-ssl">
-  <title>SSL Support</title>
+  <title>SSL/TLS Support</title>
 
   <indexterm zone="libpq-ssl">
    <primary>SSL</primary>
+   <secondary>TLS</secondary>
   </indexterm>
 
   <para>
-   <productname>PostgreSQL</productname> has native support for using <acronym>SSL</acronym>
+   <productname>PostgreSQL</productname> has native support for using <acronym>SSL/TLS</acronym>
    connections to encrypt client/server communications for increased
    security. See <xref linkend="ssl-tcp"/> for details about the server-side
-   <acronym>SSL</acronym> functionality.
+   <acronym>SSL/TLS</acronym> functionality.
   </para>
 
   <para>
@@ -8329,7 +8331,7 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
    If <literal>sslmode</literal> is set to <literal>verify-full</literal>,
    libpq will <emphasis>also</emphasis> verify that the server host
    name matches the name stored in the server certificate. The
-   SSL connection will fail if the server certificate cannot be
+   <acronym>SSL/TLS</acronym> connection will fail if the server certificate cannot be
    verified. <literal>verify-full</literal> is recommended in most
    security-sensitive environments.
   </para>
@@ -8445,7 +8447,7 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
 
   <para>
    The different values for the <literal>sslmode</literal> parameter provide different
-   levels of protection. SSL can provide
+   levels of protection. <acronym>SSL/TLS</acronym> can provide
    protection against three types of attacks:
 
    <variablelist>
@@ -8454,7 +8456,7 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
      <listitem>
       <para>If a third party can examine the network traffic between the
        client and the server, it can read both connection information (including
-       the user name and password) and the data that is passed. <acronym>SSL</acronym>
+       the user name and password) and the data that is passed. <acronym>SSL/TLS</acronym>
        uses encryption to prevent this.
       </para>
      </listitem>
@@ -8470,7 +8472,7 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
        making it impossible to detect this attack. Common vectors to do this
        include DNS poisoning and address hijacking, whereby the client is directed
        to a different server than intended. There are also several other
-       attack methods that can accomplish this. <acronym>SSL</acronym> uses certificate
+       attack methods that can accomplish this. <acronym>SSL/TLS</acronym> uses certificate
        verification to prevent this, by authenticating the server to the client.
       </para>
      </listitem>
@@ -8481,7 +8483,7 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
      <listitem>
       <para>If a third party can pretend to be an authorized client, it can
        simply access data it should not have access to. Typically this can
-       happen through insecure password management. <acronym>SSL</acronym> uses
+       happen through insecure password management. <acronym>SSL/TLS</acronym> uses
        client certificates to prevent this, by making sure that only holders
        of valid certificates can access the server.
       </para>
@@ -8491,7 +8493,7 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
   </para>
 
   <para>
-   For a connection to be known SSL-secured, SSL usage must be configured
+   For a connection to be known <acronym>SSL/TLS</acronym>-secured, <acronym>SSL/TLS</acronym> usage must be configured
    on <emphasis>both the client and the server</emphasis> before the connection
    is made. If it is only configured on the server, the client may end up
    sending sensitive information (e.g., passwords) before
@@ -8511,7 +8513,7 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
   </para>
 
   <para>
-   All <acronym>SSL</acronym> options carry overhead in the form of encryption and
+   All <acronym>SSL/TLS</acronym> options carry overhead in the form of encryption and
    key-exchange, so there is a trade-off that has to be made between performance
    and security. <xref linkend="libpq-ssl-sslmode-statements"/>
    illustrates the risks the different <literal>sslmode</literal> values
@@ -8519,7 +8521,7 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
   </para>
 
   <table id="libpq-ssl-sslmode-statements">
-   <title>SSL Mode Descriptions</title>
+   <title>SSL/TLS Mode Descriptions</title>
    <tgroup cols="4">
     <colspec colname="col1" colwidth="1*"/>
     <colspec colname="col2" colwidth="1*"/>
@@ -8614,15 +8616,15 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
  </sect2>
 
  <sect2 id="libpq-ssl-fileusage">
-  <title>SSL Client File Usage</title>
+  <title>SSL/TLS Client File Usage</title>
 
   <para>
    <xref linkend="libpq-ssl-file-usage"/> summarizes the files that are
-   relevant to the SSL setup on the client.
+   relevant to the <acronym>SSL/TLS</acronym> setup on the client.
   </para>
 
   <table id="libpq-ssl-file-usage">
-   <title>Libpq/Client SSL File Usage</title>
+   <title>Libpq/Client SSL/TLS File Usage</title>
    <tgroup cols="3">
     <thead>
      <row>
@@ -8666,12 +8668,12 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
  </sect2>
 
  <sect2 id="libpq-ssl-initialize">
-  <title>SSL Library Initialization</title>
+  <title>SSL/TLS Library Initialization</title>
 
   <para>
    If your application initializes <literal>libssl</literal> and/or
    <literal>libcrypto</literal> libraries and <application>libpq</application>
-   is built with <acronym>SSL</acronym> support, you should call
+   is built with <acronym>SSL/TLS</acronym> support, you should call
    <xref linkend="libpq-PQinitOpenSSL"/> to tell <application>libpq</application>
    that the <literal>libssl</literal> and/or <literal>libcrypto</literal> libraries
    have been initialized by your application, so that
@@ -8697,7 +8699,7 @@ void PQinitOpenSSL(int do_ssl, int do_crypto);
        opening a database connection.  When <parameter>do_crypto</parameter> is
        non-zero, the <literal>libcrypto</literal> library will be initialized.  By
        default (if <xref linkend="libpq-PQinitOpenSSL"/> is not called), both libraries
-       are initialized.  When SSL support is not compiled in, this function is
+       are initialized.  When <acronym>SSL/TLS</acronym> support is not compiled in, this function is
        present but does nothing.
       </para>
 

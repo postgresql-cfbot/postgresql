@@ -39,6 +39,9 @@ extern List *select_rtable_names_for_explain(List *rtable,
 											 Bitmapset *rels_used);
 extern char *generate_collation_name(Oid collid);
 extern char *generate_opclass_name(Oid opclass);
+void		get_query_def(Query *query, StringInfo buf, List *parentnamespace,
+						  TupleDesc resultDesc,
+						  int prettyFlags, int wrapColumn, int startIndent);
 extern char *get_range_partbound_string(List *bound_datums);
 
 extern char *pg_get_statisticsobjdef_string(Oid statextid);

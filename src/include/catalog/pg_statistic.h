@@ -152,6 +152,9 @@ DECLARE_FOREIGN_KEY((starelid, staattnum), pg_attribute, (attrelid, attnum));
  * data "kind" will appear in any particular slot.  Instead, search the
  * stakind fields to see if the desired data is available.  (The standard
  * function get_attstatsslot() may be used for this.)
+ *
+ * Note: The pg_stats view needs to be modified whenever a new slot kind is
+ * added to core.
  */
 
 /*

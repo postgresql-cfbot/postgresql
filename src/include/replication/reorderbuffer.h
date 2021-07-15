@@ -682,4 +682,6 @@ void		ReorderBufferSetRestartPoint(ReorderBuffer *, XLogRecPtr ptr);
 
 void		StartupReorderBuffer(void);
 
+extern bool TransactionIdInArray(TransactionId xid, TransactionId *xip, Size num);
+
 #endif

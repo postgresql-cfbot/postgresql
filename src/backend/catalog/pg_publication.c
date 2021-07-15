@@ -33,6 +33,9 @@
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "parser/parse_clause.h"
+#include "parser/parse_collate.h"
+#include "parser/parse_relation.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
@@ -141,20 +144,26 @@ pg_relation_is_publishable(PG_FUNCTION_ARGS)
  * Insert new publication / relation mapping.
  */
 ObjectAddress
-publication_add_relation(Oid pubid, Relation targetrel,
+publication_add_relation(Oid pubid, PublicationRelationInfo *pri,
 						 bool if_not_exists)
 {
 	Relation	rel;
 	HeapTuple	tup;
 	Datum		values[Natts_pg_publication_rel];
 	bool		nulls[Natts_pg_publication_rel];
-	Oid			relid = RelationGetRelid(targetrel);
+	Relation	targetrel = pri->relation;
+	Oid			relid;
 	Oid			prrelid;
 	Publication *pub = GetPublication(pubid);
 	ObjectAddress myself,
 				referenced;
+	ParseState *pstate;
+	ParseNamespaceItem *nsitem;
+	Node	   *whereclause = NULL;
 
 	rel = table_open(PublicationRelRelationId, RowExclusiveLock);
+
+	relid = RelationGetRelid(targetrel);
 
 	/*
 	 * Check for duplicates. Note that this does not really prevent
@@ -177,6 +186,26 @@ publication_add_relation(Oid pubid, Relation targetrel,
 
 	check_publication_add_relation(targetrel);
 
+	if (pri->whereClause != NULL)
+	{
+		/* Set up a pstate to parse with */
+		pstate = make_parsestate(NULL);
+		pstate->p_sourcetext = nodeToString(pri->whereClause);
+
+		nsitem = addRangeTableEntryForRelation(pstate, targetrel,
+											   AccessShareLock,
+											   NULL, false, false);
+		addNSItemToQuery(pstate, nsitem, false, true, true);
+
+		whereclause = transformWhereClause(pstate,
+										   copyObject(pri->whereClause),
+										   EXPR_KIND_PUBLICATION_WHERE,
+										   "PUBLICATION");
+
+		/* Fix up collation information */
+		assign_expr_collations(pstate, whereclause);
+	}
+
 	/* Form a tuple. */
 	memset(values, 0, sizeof(values));
 	memset(nulls, false, sizeof(nulls));
@@ -188,6 +217,12 @@ publication_add_relation(Oid pubid, Relation targetrel,
 		ObjectIdGetDatum(pubid);
 	values[Anum_pg_publication_rel_prrelid - 1] =
 		ObjectIdGetDatum(relid);
+
+	/* Add qualifications, if available */
+	if (whereclause)
+		values[Anum_pg_publication_rel_prqual - 1] = CStringGetTextDatum(nodeToString(whereclause));
+	else
+		nulls[Anum_pg_publication_rel_prqual - 1] = true;
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -204,6 +239,14 @@ publication_add_relation(Oid pubid, Relation targetrel,
 	/* Add dependency on the relation */
 	ObjectAddressSet(referenced, RelationRelationId, relid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+
+	/* Add dependency on the objects mentioned in the qualifications */
+	if (whereclause)
+	{
+		recordDependencyOnExpr(&myself, whereclause, pstate->p_rtable, DEPENDENCY_NORMAL);
+
+		free_parsestate(pstate);
+	}
 
 	/* Close the table. */
 	table_close(rel, RowExclusiveLock);

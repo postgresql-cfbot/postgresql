@@ -6329,8 +6329,15 @@ describePublications(const char *pattern)
 		if (!puballtables)
 		{
 			printfPQExpBuffer(&buf,
-							  "SELECT n.nspname, c.relname\n"
-							  "FROM pg_catalog.pg_class c,\n"
+							  "SELECT n.nspname, c.relname");
+			if (pset.sversion >= 150000)
+				appendPQExpBuffer(&buf,
+								  ", pg_get_expr(pr.prqual, c.oid)");
+			else
+				appendPQExpBuffer(&buf,
+								  ", NULL");
+			appendPQExpBuffer(&buf,
+							  "\nFROM pg_catalog.pg_class c,\n"
 							  "     pg_catalog.pg_namespace n,\n"
 							  "     pg_catalog.pg_publication_rel pr\n"
 							  "WHERE c.relnamespace = n.oid\n"
@@ -6358,6 +6365,10 @@ describePublications(const char *pattern)
 				printfPQExpBuffer(&buf, "    \"%s.%s\"",
 								  PQgetvalue(tabres, j, 0),
 								  PQgetvalue(tabres, j, 1));
+
+				if (!PQgetisnull(tabres, j, 2))
+					appendPQExpBuffer(&buf, " WHERE (%s)",
+									  PQgetvalue(tabres, j, 2));
 
 				printTableAddFooter(&cont, buf.data);
 			}

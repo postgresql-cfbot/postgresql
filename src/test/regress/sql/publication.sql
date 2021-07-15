@@ -93,6 +93,38 @@ ALTER PUBLICATION testpub_forparted SET (publish_via_partition_root = true);
 DROP TABLE testpub_parted1;
 DROP PUBLICATION testpub_forparted, testpub_forparted1;
 
+CREATE TABLE testpub_rf_tbl1 (a integer, b text);
+CREATE TABLE testpub_rf_tbl2 (c text, d integer);
+CREATE TABLE testpub_rf_tbl3 (e integer);
+CREATE TABLE testpub_rf_tbl4 (g text);
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub5 FOR TABLE testpub_rf_tbl1, testpub_rf_tbl2 WHERE (c <> 'test' AND d < 5);
+RESET client_min_messages;
+\dRp+ testpub5
+ALTER PUBLICATION testpub5 ADD TABLE testpub_rf_tbl3 WHERE (e > 1000 AND e < 2000);
+\dRp+ testpub5
+ALTER PUBLICATION testpub5 DROP TABLE testpub_rf_tbl2;
+\dRp+ testpub5
+-- remove testpub_rf_tbl1 and add testpub_rf_tbl3 again (another WHERE expression)
+ALTER PUBLICATION testpub5 SET TABLE testpub_rf_tbl3 WHERE (e > 300 AND e < 500);
+\dRp+ testpub5
+-- fail - functions disallowed
+ALTER PUBLICATION testpub5 ADD TABLE testpub_rf_tbl4 WHERE (length(g) < 6);
+-- fail - user-defined operators disallowed
+CREATE FUNCTION testpub_rf_func(integer, integer) RETURNS boolean AS $$ SELECT hashint4($1) > $2 $$ LANGUAGE SQL;
+CREATE OPERATOR =#> (PROCEDURE = testpub_rf_func, LEFTARG = integer, RIGHTARG = integer);
+CREATE PUBLICATION testpub6 FOR TABLE testpub_rf_tbl3 WHERE (e =#> 27);
+-- fail - WHERE not allowed in DROP
+ALTER PUBLICATION testpub5 DROP TABLE testpub_rf_tbl3 WHERE (e < 27);
+
+DROP TABLE testpub_rf_tbl1;
+DROP TABLE testpub_rf_tbl2;
+DROP TABLE testpub_rf_tbl3;
+DROP TABLE testpub_rf_tbl4;
+DROP PUBLICATION testpub5;
+DROP OPERATOR =#>(integer, integer);
+DROP FUNCTION testpub_rf_func(integer, integer);
+
 -- fail - view
 CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_view;
 SET client_min_messages = 'ERROR';

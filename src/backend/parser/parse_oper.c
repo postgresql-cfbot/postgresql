@@ -718,6 +718,13 @@ make_op(ParseState *pstate, List *opname, Node *ltree, Node *rtree,
 											opform->oprright)),
 				 parser_errposition(pstate, location)));
 
+	/* Check it's not a custom operator for publication WHERE expressions */
+	if (pstate->p_expr_kind == EXPR_KIND_PUBLICATION_WHERE && opform->oid >= FirstNormalObjectId)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("user-defined operators are not allowed in publication WHERE expressions"),
+				 parser_errposition(pstate, location)));
+
 	/* Do typecasting and build the expression tree */
 	if (ltree == NULL)
 	{

@@ -1352,7 +1352,9 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 		fkrte->selectedCols = bms_add_member(fkrte->selectedCols, attno);
 	}
 
-	if (!ExecCheckRTPerms(list_make2(fkrte, pkrte), false))
+	if (!ExecCheckRTPerms(list_make2(fkrte, pkrte),
+						  bms_add_member(bms_make_singleton(1), 2),
+						  false))
 		return false;
 
 	/*

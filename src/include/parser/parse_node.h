@@ -180,6 +180,8 @@ struct ParseState
 	ParseState *parentParseState;	/* stack link */
 	const char *p_sourcetext;	/* source text, or NULL if not available */
 	List	   *p_rtable;		/* range table so far */
+	Bitmapset  *p_check_perm_rels;	/* range table indexes of relations to
+									 * check the permissions of */
 	List	   *p_joinexprs;	/* JoinExprs for RTE_JOIN p_rtable entries */
 	List	   *p_joinlist;		/* join items so far (will become FromExpr
 								 * node's fromlist) */

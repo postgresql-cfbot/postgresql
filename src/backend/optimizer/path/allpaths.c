@@ -1716,6 +1716,7 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 		List	   *pathkeys = (List *) lfirst(lcp);
 		List	   *startup_subpaths = NIL;
 		List	   *total_subpaths = NIL;
+		List	   *fractional_subpaths = NIL;
 		bool		startup_neq_total = false;
 		ListCell   *lcr;
 		bool		match_partition_order;
@@ -1745,7 +1746,8 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 		{
 			RelOptInfo *childrel = (RelOptInfo *) lfirst(lcr);
 			Path	   *cheapest_startup,
-					   *cheapest_total;
+					   *cheapest_total,
+					   *cheapest_fractional = NULL;
 
 			/* Locate the right paths, if they are available. */
 			cheapest_startup =
@@ -1762,6 +1764,21 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 											   false);
 
 			/*
+			 * XXX strange that get_cheapest_fractional_path_for_pathkeys
+			 * does not have require_parallel_safe.
+			 */
+			if (root->tuple_fraction > 0)
+			{
+				double	path_fraction = 1.0 / root->tuple_fraction;
+
+				cheapest_fractional =
+					get_cheapest_fractional_path_for_pathkeys(childrel->pathlist,
+															  pathkeys,
+															  NULL,
+															  path_fraction);
+			}
+
+			/*
 			 * If we can't find any paths with the right order just use the
 			 * cheapest-total path; we'll have to sort it later.
 			 */
@@ -1772,6 +1789,18 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 				/* Assert we do have an unparameterized path for this child */
 				Assert(cheapest_total->param_info == NULL);
 			}
+
+			/*
+			 * XXX Do we need to do something about cheapest_fractional?
+			 * It could be NULL if there are no properly sorted paths,
+			 * but then maybe just doing the sort is good enough.
+			 *
+			 * XXX Well, maybe we should not just grab cheapest_total_path
+			 * here, because we might use incremental sort on a path that
+			 * is not fully sorted.
+			 */
+			if ((root->tuple_fraction > 0) && !cheapest_fractional)
+				cheapest_fractional = cheapest_total;
 
 			/*
 			 * Notice whether we actually have different paths for the
@@ -1799,6 +1828,12 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 
 				startup_subpaths = lappend(startup_subpaths, cheapest_startup);
 				total_subpaths = lappend(total_subpaths, cheapest_total);
+
+				if (cheapest_fractional)
+				{
+					cheapest_fractional = get_singleton_append_subpath(cheapest_fractional);
+					fractional_subpaths = lappend(fractional_subpaths, cheapest_fractional);
+				}
 			}
 			else if (match_partition_order_desc)
 			{
@@ -1812,6 +1847,12 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 
 				startup_subpaths = lcons(cheapest_startup, startup_subpaths);
 				total_subpaths = lcons(cheapest_total, total_subpaths);
+
+				if (cheapest_fractional)
+				{
+					cheapest_fractional = get_singleton_append_subpath(cheapest_fractional);
+					fractional_subpaths = lcons(cheapest_fractional, fractional_subpaths);
+				}
 			}
 			else
 			{
@@ -1823,6 +1864,10 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 										  &startup_subpaths, NULL);
 				accumulate_append_subpath(cheapest_total,
 										  &total_subpaths, NULL);
+
+				if (cheapest_fractional)
+					accumulate_append_subpath(cheapest_fractional,
+											  &fractional_subpaths, NULL);
 			}
 		}
 
@@ -1849,6 +1894,18 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 														  0,
 														  false,
 														  -1));
+
+			/* XXX maybe we should have startup_new_fractional? */
+			if (fractional_subpaths)
+				add_path(rel, (Path *) create_append_path(root,
+														  rel,
+														  fractional_subpaths,
+														  NIL,
+														  pathkeys,
+														  NULL,
+														  0,
+														  false,
+														  -1));
 		}
 		else
 		{
@@ -1862,6 +1919,14 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 				add_path(rel, (Path *) create_merge_append_path(root,
 																rel,
 																total_subpaths,
+																pathkeys,
+																NULL));
+
+			/* XXX maybe we should have startup_new_fractional? */
+			if (fractional_subpaths)
+				add_path(rel, (Path *) create_merge_append_path(root,
+																rel,
+																fractional_subpaths,
 																pathkeys,
 																NULL));
 		}

@@ -39,6 +39,7 @@ volatile sig_atomic_t LogMemoryContextPending = false;
 volatile uint32 InterruptHoldoffCount = 0;
 volatile uint32 QueryCancelHoldoffCount = 0;
 volatile uint32 CritSectionCount = 0;
+volatile sig_atomic_t PrintBacktracePending = false;
 
 int			MyProcPid;
 pg_time_t	MyStartTime;

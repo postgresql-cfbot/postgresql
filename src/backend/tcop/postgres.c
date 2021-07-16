@@ -3366,6 +3366,15 @@ ProcessInterrupts(void)
 
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
+
+	/* Process printing backtrace */
+	if (PrintBacktracePending)
+	{
+		PrintBacktracePending = false;
+		ereport(LOG,
+			(errmsg("logging backtrace of PID %d", MyProcPid)));
+		set_backtrace(NULL, 0);
+	}
 }
 
 

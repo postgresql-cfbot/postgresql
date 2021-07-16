@@ -23,6 +23,7 @@
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "tcop/tcopprot.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 
@@ -297,4 +298,49 @@ pg_rotate_logfile_v2(PG_FUNCTION_ARGS)
 
 	SendPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE);
 	PG_RETURN_BOOL(true);
+}
+
+/*
+ * pg_print_backtrace - print backtrace of backend process.
+ *
+ * Only superusers can print backtrace.
+ */
+Datum
+pg_print_backtrace(PG_FUNCTION_ARGS)
+{
+#ifdef HAVE_BACKTRACE_SYMBOLS
+	int			pid = PG_GETARG_INT32(0);
+	PGPROC	   *proc;
+
+	/* Only superusers can print back trace. */
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("must be a superuser to print backtrace")));
+
+	/* BackendPidGetProc returns NULL if the pid isn't valid. */
+	proc = BackendPidGetProc(pid);
+	if (proc == NULL)
+	{
+		ereport(WARNING,
+				(errmsg("PID %d is not a PostgreSQL server process", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	/*
+	 * Send SIGUSR1 to postgres backend whose pid matches pid by
+	 * setting PROCSIG_PRINT_BACKTRACE, the backend process will print
+	 * the backtrace once the signal is received.
+	 */
+	if (!SendProcSignal(pid, PROCSIG_PRINT_BACKTRACE, InvalidBackendId))
+		PG_RETURN_BOOL(true);
+	else
+		ereport(WARNING,
+				(errmsg("could not send signal to process %d: %m", pid))); /* return false below */
+#else
+	ereport(WARNING,
+			(errmsg("backtrace generation is not supported by this installation")));
+#endif
+
+	PG_RETURN_BOOL(false);
 }

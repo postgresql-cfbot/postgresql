@@ -1932,33 +1932,24 @@ pq_settcpusertimeout(int timeout, Port *port)
 bool
 pq_check_connection(void)
 {
-#if defined(POLLRDHUP)
+	WaitEvent events[3];
+	int		rc;
+
 	/*
-	 * POLLRDHUP is a Linux extension to poll(2) to detect sockets closed by
-	 * the other end.  We don't have a portable way to do that without
-	 * actually trying to read or write data on other systems.  We don't want
-	 * to read because that would be confused by pipelined queries and COPY
-	 * data. Perhaps in future we'll try to write a heartbeat message instead.
+	 * Temporarily ignore the latch, while we check if the socket has been
+	 * closed by the other end (if that is possible on this OS).
 	 */
-	struct pollfd pollfd;
-	int			rc;
+	ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetLatchPos, WL_LATCH_SET, NULL);
+	ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, WL_SOCKET_CLOSED, NULL);
+	rc = WaitEventSetWait(FeBeWaitSet, 0, events, lengthof(events), 0);
+	ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetLatchPos, WL_LATCH_SET, MyLatch);
 
-	pollfd.fd = MyProcPort->sock;
-	pollfd.events = POLLOUT | POLLIN | POLLRDHUP;
-	pollfd.revents = 0;
-
-	rc = poll(&pollfd, 1, 0);
-
-	if (rc < 0)
+	for (int i = 0; i < rc; ++i)
 	{
-		ereport(COMMERROR,
-				(errcode_for_socket_access(),
-				 errmsg("could not poll socket: %m")));
-		return false;
+		if (events[i].pos == FeBeWaitSetSocketPos &&
+			events[i].events & WL_SOCKET_CLOSED)
+			return false;
 	}
-	else if (rc == 1 && (pollfd.revents & (POLLHUP | POLLRDHUP)))
-		return false;
-#endif
 
 	return true;
 }

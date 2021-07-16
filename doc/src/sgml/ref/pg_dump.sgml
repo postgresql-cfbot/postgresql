@@ -739,6 +739,16 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--drop-cascade</option></term>
+      <listitem>
+       <para>
+        Use <literal>CASCADE</literal> to drop database objects.
+        This option is not valid unless <option>--clean</option> is also specified.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--enable-row-security</option></term>
       <listitem>
        <para>

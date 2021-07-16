@@ -119,7 +119,8 @@ typedef enum
 	XACT_EVENT_PREPARE,
 	XACT_EVENT_PRE_COMMIT,
 	XACT_EVENT_PARALLEL_PRE_COMMIT,
-	XACT_EVENT_PRE_PREPARE
+	XACT_EVENT_PRE_PREPARE,
+	XACT_EVENT_COMMAND_START
 } XactEvent;
 
 typedef void (*XactCallback) (XactEvent event, void *arg);
@@ -466,5 +467,7 @@ extern void ParsePrepareRecord(uint8 info, xl_xact_prepare *xlrec, xl_xact_parse
 extern void EnterParallelMode(void);
 extern void ExitParallelMode(void);
 extern bool IsInParallelMode(void);
+
+extern void CallXactStartCommand(void);
 
 #endif							/* XACT_H */

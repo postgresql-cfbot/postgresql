@@ -990,6 +990,13 @@ exec_simple_query(const char *query_string)
 	start_xact_command();
 
 	/*
+	 * Instruct registered callbacks on xact that a new command is to be
+	 * executed. It allows to execute user-defined code before any new
+	 * statement is executed.
+	 */
+	CallXactStartCommand();
+
+	/*
 	 * Zap any pre-existing unnamed statement.  (While not strictly necessary,
 	 * it seems best to define simple-Query mode as if it used the unnamed
 	 * statement and portal; this ensures we recover any storage used by prior
@@ -1081,6 +1088,13 @@ exec_simple_query(const char *query_string)
 
 		/* Make sure we are in a transaction command */
 		start_xact_command();
+
+		/*
+		 * Instruct registered callbacks on xact that a new command is to be
+		 * executed. It allows to execute user-defined code before any new
+		 * statement is executed.
+		 */
+		CallXactStartCommand();
 
 		/*
 		 * If using an implicit transaction block, and we're not already in a
@@ -1360,6 +1374,13 @@ exec_parse_message(const char *query_string,	/* string to execute */
 	 * necessary.
 	 */
 	start_xact_command();
+
+	/*
+	 * Instruct registered callbacks on xact that a new command is to be
+	 * executed. It allows to execute user-defined code before any new
+	 * statement is executed.
+	 */
+	CallXactStartCommand();
 
 	/*
 	 * Switch to appropriate context for constructing parsetrees.
@@ -2708,6 +2729,7 @@ start_xact_command(void)
 		!get_timeout_active(CLIENT_CONNECTION_CHECK_TIMEOUT))
 		enable_timeout_after(CLIENT_CONNECTION_CHECK_TIMEOUT,
 							 client_connection_check_interval);
+
 }
 
 static void

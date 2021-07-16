@@ -6399,7 +6399,8 @@ This section describes the detailed format of each logical replication message.
 These messages are returned either by the replication slot SQL interface or are
 sent by a walsender. In case of a walsender they are encapsulated inside the replication
 protocol WAL messages as described in <xref linkend="protocol-replication"/>
-and generally obey same message flow as physical replication.
+and generally obey same message flow as physical replication. The base data types
+used are described in <xref linkend="protocol-message-types"/>.
 </para>
 
 <variablelist>
@@ -6428,7 +6429,7 @@ Begin
 </term>
 <listitem>
 <para>
-                The final LSN of the transaction.
+                The final LSN (XLogRecPtr) of the transaction.
 </para>
 </listitem>
 </varlistentry>
@@ -6438,8 +6439,8 @@ Begin
 </term>
 <listitem>
 <para>
-                Commit timestamp of the transaction. The value is in number
-                of microseconds since PostgreSQL epoch (2000-01-01).
+                Commit timestamp (TimestampTz) of the transaction. The value is
+                in number of microseconds since PostgreSQL epoch (2000-01-01).
 </para>
 </listitem>
 </varlistentry>
@@ -6449,7 +6450,7 @@ Begin
 </term>
 <listitem>
 <para>
-                Xid of the transaction.
+                Xid (TransactionId) of the transaction.
 </para>
 </listitem>
 </varlistentry>
@@ -6483,8 +6484,9 @@ Message
 </term>
 <listitem>
 <para>
-                Xid of the transaction (only present for streamed transactions).
-                This field is available since protocol version 2.
+                Xid (TransactionId) of the transaction (only present for
+                streamed transactions).  This field is available since protocol
+                version 2.
 </para>
 </listitem>
 </varlistentry>
@@ -6494,8 +6496,8 @@ Message
 </term>
 <listitem>
 <para>
-                Flags; Either 0 for no flags or 1 if the logical decoding
-                message is transactional.
+                Flags (uint8); Either 0 for no flags or 1 if the logical
+                decoding message is transactional.
 </para>
 </listitem>
 </varlistentry>
@@ -6505,7 +6507,7 @@ Message
 </term>
 <listitem>
 <para>
-                The LSN of the logical decoding message.
+                The LSN (XLogRecPtr) of the logical decoding message.
 </para>
 </listitem>
 </varlistentry>
@@ -6567,11 +6569,11 @@ Commit
 </varlistentry>
 <varlistentry>
 <term>
-        Int8
+        Int8(0)
 </term>
 <listitem>
 <para>
-                Flags; currently unused (must be 0).
+                Flags (uint8); currently unused.
 </para>
 </listitem>
 </varlistentry>
@@ -6581,7 +6583,7 @@ Commit
 </term>
 <listitem>
 <para>
-                The LSN of the commit.
+                The LSN (XLogRecPtr) of the commit.
 </para>
 </listitem>
 </varlistentry>
@@ -6591,7 +6593,7 @@ Commit
 </term>
 <listitem>
 <para>
-                The end LSN of the transaction.
+                The end LSN (XLogRecPtr) of the transaction.
 </para>
 </listitem>
 </varlistentry>
@@ -6601,8 +6603,8 @@ Commit
 </term>
 <listitem>
 <para>
-                Commit timestamp of the transaction. The value is in number
-                of microseconds since PostgreSQL epoch (2000-01-01).
+                Commit timestamp (TimestampTz) of the transaction. The value is
+                in number of microseconds since PostgreSQL epoch (2000-01-01).
 </para>
 </listitem>
 </varlistentry>
@@ -6636,7 +6638,7 @@ Origin
 </term>
 <listitem>
 <para>
-                The LSN of the commit on the origin server.
+                The LSN (XLogRecPtr) of the commit on the origin server.
 </para>
 </listitem>
 </varlistentry>
@@ -6685,8 +6687,9 @@ Relation
 </term>
 <listitem>
 <para>
-               Xid of the transaction (only present for streamed transactions).
-               This field is available since protocol version 2.
+               Xid (TransactionId) of the transaction (only present for
+               streamed transactions).  This field is available since
+               protocol version 2.
 </para>
 </listitem>
 </varlistentry>
@@ -6696,7 +6699,7 @@ Relation
 </term>
 <listitem>
 <para>
-                ID of the relation.
+                ID (Oid) of the relation.
 </para>
 </listitem>
 </varlistentry>
@@ -6752,8 +6755,8 @@ Relation
 </term>
 <listitem>
 <para>
-                Flags for the column. Currently can be either 0 for no flags
-                or 1 which marks the column as part of the key.
+                Flags (uint8) for the column. Currently can be either 0 for no
+                flags or 1 which marks the column as part of the key.
 </para>
 </listitem>
 </varlistentry>
@@ -6773,7 +6776,7 @@ Relation
 </term>
 <listitem>
 <para>
-                ID of the column's data type.
+                ID (Oid) of the column's data type.
 </para>
 </listitem>
 </varlistentry>
@@ -6817,8 +6820,9 @@ Type
 </term>
 <listitem>
 <para>
-               Xid of the transaction (only present for streamed transactions).
-               This field is available since protocol version 2.
+               Xid (TransactionId) of the transaction (only present for
+               streamed transactions).  This field is available since protocol
+               version 2.
 </para>
 </listitem>
 </varlistentry>
@@ -6828,7 +6832,7 @@ Type
 </term>
 <listitem>
 <para>
-                ID of the data type.
+                ID (Oid) of the data type.
 </para>
 </listitem>
 </varlistentry>
@@ -6882,8 +6886,9 @@ Insert
 </term>
 <listitem>
 <para>
-                Xid of the transaction (only present for streamed transactions).
-                This field is available since protocol version 2.
+                Xid (TransactionId) of the transaction (only present for
+                streamed transactions).  This field is available since protocol
+                version 2.
 </para>
 </listitem>
 </varlistentry>
@@ -6893,7 +6898,7 @@ Insert
 </term>
 <listitem>
 <para>
-                ID of the relation corresponding to the ID in the relation
+                ID (Oid) of the relation corresponding to the ID in the relation
                 message.
 </para>
 </listitem>
@@ -6949,8 +6954,9 @@ Update
 </term>
 <listitem>
 <para>
-               Xid of the transaction (only present for streamed transactions).
-               This field is available since protocol version 2.
+               Xid (TransactionId) of the transaction (only present for
+               streamed transactions).  This field is available since protocol
+               version 2.
 </para>
 </listitem>
 </varlistentry>
@@ -6960,7 +6966,7 @@ Update
 </term>
 <listitem>
 <para>
-                ID of the relation corresponding to the ID in the relation
+                ID (Oid) of the relation corresponding to the ID in the relation
                 message.
 </para>
 </listitem>
@@ -7063,8 +7069,9 @@ Delete
 </term>
 <listitem>
 <para>
-               Xid of the transaction (only present for streamed transactions).
-               This field is available since protocol version 2.
+               Xid (TransactionId) of the transaction (only present for
+               streamed transactions).  This field is available since protocol
+               version 2.
 </para>
 </listitem>
 </varlistentry>
@@ -7074,7 +7081,7 @@ Delete
 </term>
 <listitem>
 <para>
-                ID of the relation corresponding to the ID in the relation
+                ID (Oid) of the relation corresponding to the ID in the relation
                 message.
 </para>
 </listitem>
@@ -7152,8 +7159,9 @@ Truncate
 </term>
 <listitem>
 <para>
-               Xid of the transaction (only present for streamed transactions).
-               This field is available since protocol version 2.
+               Xid (TransactionId) of the transaction (only present for
+               streamed transactions).  This field is available since protocol
+               version 2.
 </para>
 </listitem>
 </varlistentry>
@@ -7184,7 +7192,7 @@ Truncate
 </term>
 <listitem>
 <para>
-                ID of the relation corresponding to the ID in the relation
+                ID (Oid) of the relation corresponding to the ID in the relation
                 message.  This field is repeated for each relation.
 </para>
 </listitem>
@@ -7230,7 +7238,7 @@ Stream Start
 </term>
 <listitem>
 <para>
-                Xid of the transaction.
+                Xid (TransactionId) of the transaction.
 </para>
 </listitem>
 </varlistentry>
@@ -7299,27 +7307,17 @@ Stream Commit
 </term>
 <listitem>
 <para>
-                Xid of the transaction.
+                Xid (TransactionId) of the transaction.
 </para>
 </listitem>
 </varlistentry>
 <varlistentry>
 <term>
-        Int8
+        Int8(0)
 </term>
 <listitem>
 <para>
-                Flags; currently unused (must be 0).
-</para>
-</listitem>
-</varlistentry>
-<varlistentry>
-<term>
-        Int64
-</term>
-<listitem>
-<para>
-                The LSN of the commit.
+                Flags (uint8); currently unused.
 </para>
 </listitem>
 </varlistentry>
@@ -7329,7 +7327,7 @@ Stream Commit
 </term>
 <listitem>
 <para>
-                The end LSN of the transaction.
+                The LSN (XLogRecPtr) of the commit.
 </para>
 </listitem>
 </varlistentry>
@@ -7339,8 +7337,19 @@ Stream Commit
 </term>
 <listitem>
 <para>
-                Commit timestamp of the transaction. The value is in number
-                of microseconds since PostgreSQL epoch (2000-01-01).
+                The end LSN (XLogRecPtr) of the transaction.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int64
+</term>
+<listitem>
+<para>
+                Commit timestamp (TimestampTz) of the transaction. The value
+                is in number of microseconds since PostgreSQL epoch
+                (2000-01-01).
 </para>
 </listitem>
 </varlistentry>
@@ -7374,7 +7383,7 @@ Stream Abort
 </term>
 <listitem>
 <para>
-                Xid of the transaction.
+                Xid (TransactionId) of the transaction.
 </para>
 </listitem>
 </varlistentry>
@@ -7384,8 +7393,8 @@ Stream Abort
 </term>
 <listitem>
 <para>
-                Xid of the subtransaction (will be same as xid of the transaction for top-level
-                transactions).
+                Xid (TransactionId) of the subtransaction (will be same as xid
+                of the transaction for top-level transactions).
 </para>
 </listitem>
 </varlistentry>

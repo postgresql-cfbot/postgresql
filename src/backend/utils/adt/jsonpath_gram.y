@@ -56,6 +56,8 @@ static JsonPathParseItem *makeAny(int first, int last);
 static JsonPathParseItem *makeItemLikeRegex(JsonPathParseItem *expr,
 											JsonPathString *pattern,
 											JsonPathString *flags);
+static JsonPathParseItem *makeItemSequence(List *elems);
+static JsonPathParseItem *makeItemObject(List *fields);
 
 /*
  * Bison doesn't allocate anything that needs to live across parser calls,
@@ -88,7 +90,7 @@ static JsonPathParseItem *makeItemLikeRegex(JsonPathParseItem *expr,
 	int					integer;
 }
 
-%token	<str>		TO_P NULL_P TRUE_P FALSE_P IS_P UNKNOWN_P EXISTS_P
+%token	<str>		TO_P NULL_P TRUE_P FALSE_P IS_P UNKNOWN_P EXISTS_P PG_P
 %token	<str>		IDENT_P STRING_P NUMERIC_P INT_P VARIABLE_P
 %token	<str>		OR_P AND_P NOT_P
 %token	<str>		LESS_P LESSEQUAL_P EQUAL_P NOTEQUAL_P GREATEREQUAL_P GREATER_P
@@ -101,15 +103,16 @@ static JsonPathParseItem *makeItemLikeRegex(JsonPathParseItem *expr,
 %type	<value>		scalar_value path_primary expr array_accessor
 					any_path accessor_op key predicate delimited_predicate
 					index_elem starts_with_initial expr_or_predicate
-					datetime_template opt_datetime_template
+					datetime_template opt_datetime_template expr_seq expr_or_seq
+					object_field
 
-%type	<elems>		accessor_expr
+%type	<elems>		accessor_expr expr_list object_field_list
 
 %type	<indexs>	index_list
 
 %type	<optype>	comp_op method
 
-%type	<boolean>	mode
+%type	<boolean>	mode pg_opt
 
 %type	<str>		key_name
 
@@ -127,10 +130,11 @@ static JsonPathParseItem *makeItemLikeRegex(JsonPathParseItem *expr,
 %%
 
 result:
-	mode expr_or_predicate			{
+	pg_opt mode expr_or_seq	{
 										*result = palloc(sizeof(JsonPathParseResult));
-										(*result)->expr = $2;
-										(*result)->lax = $1;
+										(*result)->expr = $3;
+										(*result)->lax = $2;
+										(*result)->ext = $1;
 									}
 	| /* EMPTY */					{ *result = NULL; }
 	;
@@ -138,6 +142,25 @@ result:
 expr_or_predicate:
 	expr							{ $$ = $1; }
 	| predicate						{ $$ = $1; }
+	;
+
+pg_opt:
+	PG_P							{ $$ = true; }
+	| /* EMPTY */					{ $$ = false; }
+	;
+
+expr_or_seq:
+	expr_or_predicate				{ $$ = $1; }
+	| expr_seq						{ $$ = $1; }
+	;
+
+expr_seq:
+	expr_list						{ $$ = makeItemSequence($1); }
+	;
+
+expr_list:
+	expr_or_predicate ',' expr_or_predicate	{ $$ = list_make2($1, $3); }
+	| expr_list ',' expr_or_predicate		{ $$ = lappend($1, $3); }
 	;
 
 mode:
@@ -195,6 +218,21 @@ path_primary:
 	| '$'							{ $$ = makeItemType(jpiRoot); }
 	| '@'							{ $$ = makeItemType(jpiCurrent); }
 	| LAST_P						{ $$ = makeItemType(jpiLast); }
+	| '(' expr_seq ')'				{ $$ = $2; }
+	| '[' ']'						{ $$ = makeItemUnary(jpiArray, NULL); }
+	| '[' expr_or_seq ']'			{ $$ = makeItemUnary(jpiArray, $2); }
+	| '{' object_field_list '}'		{ $$ = makeItemObject($2); }
+	;
+
+object_field_list:
+	/* EMPTY */								{ $$ = NIL; }
+	| object_field							{ $$ = list_make1($1); }
+	| object_field_list ',' object_field	{ $$ = lappend($1, $3); }
+	;
+
+object_field:
+	key_name ':' expr_or_predicate
+		{ $$ = makeItemBinary(jpiObjectField, makeItemString(&$1), $3); }
 	;
 
 accessor_expr:
@@ -292,6 +330,7 @@ key_name:
 	| WITH_P
 	| LIKE_REGEX_P
 	| FLAG_P
+	| PG_P
 	;
 
 method:
@@ -539,6 +578,26 @@ makeItemLikeRegex(JsonPathParseItem *expr, JsonPathString *pattern,
 	(void) RE_compile_and_cache(cstring_to_text_with_len(pattern->val,
 														 pattern->len),
 								cflags, DEFAULT_COLLATION_OID);
+
+	return v;
+}
+
+static JsonPathParseItem *
+makeItemSequence(List *elems)
+{
+	JsonPathParseItem  *v = makeItemType(jpiSequence);
+
+	v->value.sequence.elems = elems;
+
+	return v;
+}
+
+static JsonPathParseItem *
+makeItemObject(List *fields)
+{
+	JsonPathParseItem *v = makeItemType(jpiObject);
+
+	v->value.object.fields = fields;
 
 	return v;
 }

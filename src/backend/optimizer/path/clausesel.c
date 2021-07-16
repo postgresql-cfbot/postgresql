@@ -25,6 +25,8 @@
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
+#include "statistics/statistics.h"
+#include "catalog/pg_statistic_ext.h"
 
 /*
  * Data structure for accumulating info about possible range-query
@@ -54,6 +56,47 @@ static Selectivity clauselist_selectivity_or(PlannerInfo *root,
 /****************************************************************************
  *		ROUTINES TO COMPUTE SELECTIVITIES
  ****************************************************************************/
+
+/*
+ * Find functional dependency between attributes using multicolumn statistic.
+ * relid:   index of relation to which all considered attributes belong
+ * var:     variable which dependencies are inspected
+ * attnums: set of considered attributes included specified variables
+ * This function return degree of strongest dependency between some subset of this attributes
+ * and specified variable or 0.0 if on dependency is found.
+ */
+double
+find_var_dependency(PlannerInfo *root, Index relid, Var *var, Bitmapset *attnums)
+{
+	RelOptInfo* rel = find_base_rel(root, relid);
+	if (rel->rtekind == RTE_RELATION && rel->statlist != NIL)
+	{
+		StatisticExtInfo *stat = choose_best_statistics(rel->statlist, STATS_EXT_DEPENDENCIES,
+														&attnums, 1);
+		if (stat != NULL)
+		{
+			MVDependencies *dependencies = statext_dependencies_load(stat->statOid);
+			MVDependency *strongest = NULL;
+			int i;
+			for (i = 0; i < dependencies->ndeps; i++)
+			{
+				MVDependency *dependency = dependencies->deps[i];
+				int n_dep_vars = dependency->nattributes - 1;
+				/* Dependency implies attribute */
+				if (var->varattno == dependency->attributes[n_dep_vars])
+				{
+					while (--n_dep_vars >= 0
+						   && bms_is_member(dependency->attributes[n_dep_vars], attnums));
+					if (n_dep_vars < 0 && (!strongest || strongest->degree < dependency->degree))
+						strongest = dependency;
+				}
+			}
+			if (strongest)
+				return strongest->degree;
+		}
+	}
+	return 0.0;
+}
 
 /*
  * clauselist_selectivity -
@@ -129,6 +172,9 @@ clauselist_selectivity_ext(PlannerInfo *root,
 	RangeQueryClause *rqlist = NULL;
 	ListCell   *l;
 	int			listidx;
+	Bitmapset  *clauses_attnums = NULL;
+	int			n_clauses_attnums = 0;
+	int         innerRelid = varRelid;
 
 	/*
 	 * If there's exactly one clause, just go directly to
@@ -138,6 +184,9 @@ clauselist_selectivity_ext(PlannerInfo *root,
 		return clause_selectivity_ext(root, (Node *) linitial(clauses),
 									  varRelid, jointype, sjinfo,
 									  use_extended_stats);
+
+	if (innerRelid == 0 && sjinfo)
+		bms_get_singleton_member(sjinfo->min_righthand, &innerRelid);
 
 	/*
 	 * Determine if these clauses reference a single relation.  If so, and if
@@ -171,7 +220,6 @@ clauselist_selectivity_ext(PlannerInfo *root,
 		Node	   *clause = (Node *) lfirst(l);
 		RestrictInfo *rinfo;
 		Selectivity s2;
-
 		listidx++;
 
 		/*
@@ -204,6 +252,7 @@ clauselist_selectivity_ext(PlannerInfo *root,
 		else
 			rinfo = NULL;
 
+
 		/*
 		 * See if it looks like a restriction clause with a pseudoconstant on
 		 * one side.  (Anything more complicated than that might not behave in
@@ -215,6 +264,42 @@ clauselist_selectivity_ext(PlannerInfo *root,
 			OpExpr	   *expr = (OpExpr *) clause;
 			bool		varonleft = true;
 			bool		ok;
+			int         oprrest = get_oprrest(expr->opno);
+
+			/* Try to take in account functional dependencies between attributes */
+			if (oprrest == F_EQSEL && rinfo != NULL && innerRelid != 0)
+			{
+				Var* var = (Var*)linitial(expr->args);
+				if (!IsA(var, Var) || var->varno != innerRelid)
+				{
+					var = (Var*)lsecond(expr->args);
+				}
+				if (IsA(var, Var) && var->varattno >= 0 && var->varno == innerRelid)
+				{
+					clauses_attnums = bms_add_member(clauses_attnums, var->varattno);
+					if (n_clauses_attnums++ != 0)
+					{
+						double dep = find_var_dependency(root, innerRelid, var, clauses_attnums);
+						if (dep != 0.0)
+						{
+							/*
+							 * Replace s2 with the conditional probability s2 given s1, computed
+							 * using the formula P(b|a) = P(a,b) / P(a), which simplifies to
+							 *
+							 * P(b|a) = f * Min(P(a), P(b)) / P(a) + (1-f) * P(b)
+							 *
+							 * where P(a) = s1, the selectivity of the implying attributes, and
+							 * P(b) = s2, the selectivity of the implied attribute.
+							 */
+							if (s1 <= s2)
+								s1 *= dep + (1 - dep) * s2;
+							else
+								s1 *= dep * s2 / s1 + (1 - dep) * s2;
+							continue;
+						}
+					}
+				}
+			}
 
 			if (rinfo)
 			{
@@ -240,7 +325,7 @@ clauselist_selectivity_ext(PlannerInfo *root,
 				 * selectivity in generically.  But if it's the right oprrest,
 				 * add the clause to rqlist for later processing.
 				 */
-				switch (get_oprrest(expr->opno))
+				switch (oprrest)
 				{
 					case F_SCALARLTSEL:
 					case F_SCALARLESEL:

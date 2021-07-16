@@ -1239,21 +1239,24 @@ _bt_load(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 			else if (itup != NULL)
 			{
 				int32		compare = 0;
+				IAttrIterStateData iter1;
+				IAttrIterStateData iter2;
+
+				index_attiterinit(itup, 1, tupdes, &iter1);
+				index_attiterinit(itup2, 1, tupdes, &iter2);
 
 				for (i = 1; i <= keysz; i++)
 				{
 					SortSupport entry;
 					Datum		attrDatum1,
 								attrDatum2;
-					bool		isNull1,
-								isNull2;
 
 					entry = sortKeys + i - 1;
-					attrDatum1 = index_getattr(itup, i, tupdes, &isNull1);
-					attrDatum2 = index_getattr(itup2, i, tupdes, &isNull2);
+					attrDatum1 = index_attiternext(itup, i, tupdes, &iter1);
+					attrDatum2 = index_attiternext(itup2, i, tupdes, &iter2);
 
-					compare = ApplySortComparator(attrDatum1, isNull1,
-												  attrDatum2, isNull2,
+					compare = ApplySortComparator(attrDatum1, iter1.isNull,
+												  attrDatum2, iter2.isNull,
 												  entry);
 					if (compare > 0)
 					{

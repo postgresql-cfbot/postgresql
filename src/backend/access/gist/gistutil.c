@@ -296,15 +296,18 @@ gistDeCompressAtt(GISTSTATE *giststate, Relation r, IndexTuple tuple, Page p,
 				  OffsetNumber o, GISTENTRY *attdata, bool *isnull)
 {
 	int			i;
+	IAttrIterStateData iter;
+	index_attiterinit(tuple, 1, giststate->leafTupdesc, &iter);
 
 	for (i = 0; i < IndexRelationGetNumberOfKeyAttributes(r); i++)
 	{
 		Datum		datum;
 
-		datum = index_getattr(tuple, i + 1, giststate->leafTupdesc, &isnull[i]);
+		datum = index_attiternext(tuple, i + 1, giststate->leafTupdesc, &iter);
+		isnull[i] = iter.isNull;
 		gistdentryinit(giststate, i, &attdata[i],
 					   datum, r, p, o,
-					   false, isnull[i]);
+					   false, iter.isNull);
 	}
 }
 
@@ -439,6 +442,9 @@ gistchoose(Relation r, Page p, IndexTuple it,	/* it has compressed entry */
 		IndexTuple	itup = (IndexTuple) PageGetItem(p, PageGetItemId(p, i));
 		bool		zero_penalty;
 		int			j;
+		IAttrIterStateData iter;
+
+		index_attiterinit(itup, 1, giststate->leafTupdesc, &iter);
 
 		zero_penalty = true;
 
@@ -447,14 +453,13 @@ gistchoose(Relation r, Page p, IndexTuple it,	/* it has compressed entry */
 		{
 			Datum		datum;
 			float		usize;
-			bool		IsNull;
 
 			/* Compute penalty for this column. */
-			datum = index_getattr(itup, j + 1, giststate->leafTupdesc,
-								  &IsNull);
+			datum = index_attiternext(itup, j + 1, giststate->leafTupdesc,
+								  &iter);
 			gistdentryinit(giststate, j, &entry, datum, r, p, i,
-						   false, IsNull);
-			usize = gistpenalty(giststate, j, &entry, IsNull,
+						   false, iter.isNull);
+			usize = gistpenalty(giststate, j, &entry, iter.isNull,
 								&identry[j], isnull[j]);
 			if (usize > 0)
 				zero_penalty = false;
@@ -668,13 +673,17 @@ gistFetchTuple(GISTSTATE *giststate, Relation r, IndexTuple tuple)
 	MemoryContext oldcxt = MemoryContextSwitchTo(giststate->tempCxt);
 	Datum		fetchatt[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
+	IAttrIterStateData iter;
 	int			i;
+
+	index_attiterinit(tuple, 1, giststate->leafTupdesc, &iter);
 
 	for (i = 0; i < IndexRelationGetNumberOfKeyAttributes(r); i++)
 	{
 		Datum		datum;
 
-		datum = index_getattr(tuple, i + 1, giststate->leafTupdesc, &isnull[i]);
+		datum = index_attiternext(tuple, i + 1, giststate->leafTupdesc, &iter);
+		isnull[i] = iter.isNull;
 
 		if (giststate->fetchFn[i].fn_oid != InvalidOid)
 		{
@@ -707,12 +716,13 @@ gistFetchTuple(GISTSTATE *giststate, Relation r, IndexTuple tuple)
 	}
 
 	/*
-	 * Get each included attribute.
+	 * Get each INCLUDEd attribute.
 	 */
 	for (; i < r->rd_att->natts; i++)
 	{
-		fetchatt[i] = index_getattr(tuple, i + 1, giststate->leafTupdesc,
-									&isnull[i]);
+		fetchatt[i] = index_attiternext(tuple, i + 1, giststate->leafTupdesc,
+										&iter);
+		isnull[i] = iter.isNull;
 	}
 	MemoryContextSwitchTo(oldcxt);
 

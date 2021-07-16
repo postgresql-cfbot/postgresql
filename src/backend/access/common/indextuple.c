@@ -425,6 +425,155 @@ nocache_index_getattr(IndexTuple tup,
 }
 
 /*
+ * Initiate an index attribute iterator to attribute attnum, 
+ * and return the corresponding datum.
+ *
+ * This is nearly the same as index_deform_tuple, except that this
+ * returns the internal state up to attnum, instead of populating the
+ * datum- and isnull-arrays
+ */
+void
+nocache_index_attiterinit(IndexTuple tup, AttrNumber attnum, TupleDesc tupleDesc, IAttrIterState iter)
+{
+	bool		hasnulls = IndexTupleHasNulls(tup);
+	int			curatt;
+	char	   *tp;				/* ptr to tuple data */
+	int			off;			/* offset in tuple data */
+	bits8	   *bp;				/* ptr to null bitmap in tuple */
+	bool		slow = false;	/* can we use/set attcacheoff? */
+	bool		null = false;
+
+	/* Assert to protect callers */
+	Assert(tupleDesc->natts <= INDEX_MAX_KEYS);
+	Assert(attnum <= tupleDesc->natts);
+	Assert(attnum > 0);
+
+	/* XXX "knows" t_bits are just after fixed tuple header! */
+	bp = (bits8 *) ((char *) tup + sizeof(IndexTupleData));
+
+	tp = (char *) tup + IndexInfoFindDataOffset(tup->t_info);
+	off = 0;
+
+	for (curatt = 0; curatt < attnum; curatt++)
+	{
+		Form_pg_attribute thisatt = TupleDescAttr(tupleDesc, curatt);
+
+		if (hasnulls && att_isnull(curatt, bp))
+		{
+			null = true;
+			slow = true;		/* can't use attcacheoff anymore */
+			continue;
+		}
+
+		null = false;
+
+		if (!slow && thisatt->attcacheoff >= 0)
+			off = thisatt->attcacheoff;
+		else if (thisatt->attlen == -1)
+		{
+			/*
+			 * We can only cache the offset for a varlena attribute if the
+			 * offset is already suitably aligned, so that there would be no
+			 * pad bytes in any case: then the offset will be valid for either
+			 * an aligned or unaligned value.
+			 */
+			if (!slow &&
+				off == att_align_nominal(off, thisatt->attalign))
+				thisatt->attcacheoff = off;
+			else
+			{
+				off = att_align_pointer(off, thisatt->attalign, -1,
+										tp + off);
+				slow = true;
+			}
+		}
+		else
+		{
+			/* not varlena, so safe to use att_align_nominal */
+			off = att_align_nominal(off, thisatt->attalign);
+
+			if (!slow)
+				thisatt->attcacheoff = off;
+		}
+
+		off = att_addlength_pointer(off, thisatt->attlen, tp + off);
+
+		if (thisatt->attlen <= 0)
+			slow = true;		/* can't use attcacheoff anymore */
+	}
+
+	iter->isNull = null;
+	iter->offset = off;
+	iter->slow = slow;
+}
+
+Datum
+nocache_index_attiternext(IndexTuple tup, AttrNumber attnum, TupleDesc tupleDesc, IAttrIterState iter)
+{
+	bool		hasnulls = IndexTupleHasNulls(tup);
+	char	   *tp;				/* ptr to tuple data */
+	bits8	   *bp;				/* ptr to null bitmap in tuple */
+	Datum		datum;
+
+	Assert(tupleDesc->natts <= INDEX_MAX_KEYS);
+	Assert(attnum <= tupleDesc->natts);
+	Assert(attnum > 0);
+
+	bp = (bits8 *) ((char *) tup + sizeof(IndexTupleData));
+
+	tp = (char *) tup + IndexInfoFindDataOffset(tup->t_info);
+	Form_pg_attribute thisatt = TupleDescAttr(tupleDesc, attnum - 1);
+
+	if (hasnulls && att_isnull(attnum - 1, bp))
+	{
+		iter->isNull = true;
+		iter->slow = true;		/* can't use attcacheoff anymore */
+		return (Datum) 0;
+	}
+
+	iter->isNull = false;
+
+	if (!iter->slow && thisatt->attcacheoff >= 0)
+		iter->offset = thisatt->attcacheoff;
+	else if (thisatt->attlen == -1)
+	{
+		/*
+		 * We can only cache the offset for a varlena attribute if the
+		 * offset is already suitably aligned, so that there would be no
+		 * pad bytes in any case: then the offset will be valid for either
+		 * an aligned or unaligned value.
+		 */
+		if (!iter->slow &&
+			iter->offset == att_align_nominal(iter->offset, thisatt->attalign))
+			thisatt->attcacheoff = iter->offset;
+		else
+		{
+			iter->offset = att_align_pointer(iter->offset, thisatt->attalign, -1,
+											 tp + iter->offset);
+			iter->slow = true;
+		}
+	}
+	else
+	{
+		/* not varlena, so safe to use att_align_nominal */
+		iter->offset = att_align_nominal(iter->offset, thisatt->attalign);
+
+		if (!iter->slow)
+			thisatt->attcacheoff = iter->offset;
+	}
+
+	datum = fetchatt(thisatt, tp + iter->offset);
+
+	iter->offset = att_addlength_pointer(iter->offset, thisatt->attlen, tp + iter->offset);
+
+	if (thisatt->attlen <= 0)
+		iter->slow = true;		/* can't use attcacheoff anymore */
+
+	return datum;
+}
+
+
+/*
  * Convert an index tuple into Datum/isnull arrays.
  *
  * The caller must allocate sufficient storage for the output arrays.

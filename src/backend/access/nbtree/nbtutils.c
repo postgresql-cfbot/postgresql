@@ -96,6 +96,7 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 	int16	   *indoption;
 	int			tupnatts;
 	int			i;
+	IAttrIterStateData iter;
 
 	itupdesc = RelationGetDescr(rel);
 	indnkeyatts = IndexRelationGetNumberOfKeyAttributes(rel);
@@ -126,11 +127,13 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 	key->scantid = key->heapkeyspace && itup ?
 		BTreeTupleGetHeapTID(itup) : NULL;
 	skey = key->scankeys;
+
+	index_attiterinit(itup, 1, itupdesc, &iter);
+
 	for (i = 0; i < indnkeyatts; i++)
 	{
 		FmgrInfo   *procinfo;
 		Datum		arg;
-		bool		null;
 		int			flags;
 
 		/*
@@ -145,13 +148,13 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 		 * should never be used.
 		 */
 		if (i < tupnatts)
-			arg = index_getattr(itup, i + 1, itupdesc, &null);
+			arg = index_attiternext(itup, i + 1, itupdesc, &iter);
 		else
 		{
 			arg = (Datum) 0;
-			null = true;
+			iter.isNull = true;
 		}
-		flags = (null ? SK_ISNULL : 0) | (indoption[i] << SK_BT_INDOPTION_SHIFT);
+		flags = (iter.isNull ? SK_ISNULL : 0) | (indoption[i] << SK_BT_INDOPTION_SHIFT);
 		ScanKeyEntryInitializeWithInfo(&skey[i],
 									   flags,
 									   (AttrNumber) (i + 1),
@@ -161,7 +164,7 @@ _bt_mkscankey(Relation rel, IndexTuple itup)
 									   procinfo,
 									   arg);
 		/* Record if any key attribute is NULL (or truncated) */
-		if (null)
+		if (iter.isNull)
 			key->anynullkeys = true;
 	}
 
@@ -1360,6 +1363,9 @@ _bt_checkkeys(IndexScanDesc scan, IndexTuple tuple, int tupnatts,
 	int			keysz;
 	int			ikey;
 	ScanKey		key;
+	IAttrIterStateData iter;
+	Datum		datum;
+	int			curattnum;
 
 	Assert(BTreeTupleGetNAtts(tuple, scan->indexRelation) == tupnatts);
 
@@ -1369,10 +1375,12 @@ _bt_checkkeys(IndexScanDesc scan, IndexTuple tuple, int tupnatts,
 	so = (BTScanOpaque) scan->opaque;
 	keysz = so->numberOfKeys;
 
+	index_attiterinit(tuple, 1, tupdesc, &iter);
+	curattnum = 0;
+	datum = (Datum) 0;
+
 	for (key = so->keyData, ikey = 0; ikey < keysz; key++, ikey++)
 	{
-		Datum		datum;
-		bool		isNull;
 		Datum		test;
 
 		if (key->sk_attno > tupnatts)
@@ -1397,23 +1405,31 @@ _bt_checkkeys(IndexScanDesc scan, IndexTuple tuple, int tupnatts,
 			return false;
 		}
 
-		datum = index_getattr(tuple,
-							  key->sk_attno,
-							  tupdesc,
-							  &isNull);
+		/*
+		 * Attributes are received in sorded order, so we iterate until we
+		 * have the correct attribute. We will not see preceding attribute
+		 * again.
+		 * 
+		 * Note that we can see the same attribute many times; in which
+		 * case we will skip the index_attiternext call.
+		 */
+		for(; key->sk_attno > curattnum; curattnum++)
+		{
+			datum = index_attiternext(tuple, curattnum + 1, tupdesc, &iter);
+		}
 
 		if (key->sk_flags & SK_ISNULL)
 		{
 			/* Handle IS NULL/NOT NULL tests */
 			if (key->sk_flags & SK_SEARCHNULL)
 			{
-				if (isNull)
+				if (iter.isNull)
 					continue;	/* tuple satisfies this qual */
 			}
 			else
 			{
 				Assert(key->sk_flags & SK_SEARCHNOTNULL);
-				if (!isNull)
+				if (!iter.isNull)
 					continue;	/* tuple satisfies this qual */
 			}
 
@@ -1435,7 +1451,7 @@ _bt_checkkeys(IndexScanDesc scan, IndexTuple tuple, int tupnatts,
 			return false;
 		}
 
-		if (isNull)
+		if (iter.isNull)
 		{
 			if (key->sk_flags & SK_BT_NULLS_FIRST)
 			{
@@ -2349,6 +2365,8 @@ _bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 	TupleDesc	itupdesc = RelationGetDescr(rel);
 	int			keepnatts;
 	ScanKey		scankey;
+	IAttrIterStateData iter1;
+	IAttrIterStateData iter2;
 
 	/*
 	 * _bt_compare() treats truncated key attributes as having the value minus
@@ -2360,20 +2378,22 @@ _bt_keep_natts(Relation rel, IndexTuple lastleft, IndexTuple firstright,
 
 	scankey = itup_key->scankeys;
 	keepnatts = 1;
+
+	index_attiterinit(lastleft, 1, itupdesc, &iter1);
+	index_attiterinit(firstright, 1, itupdesc, &iter2);
+
 	for (int attnum = 1; attnum <= nkeyatts; attnum++, scankey++)
 	{
 		Datum		datum1,
 					datum2;
-		bool		isNull1,
-					isNull2;
 
-		datum1 = index_getattr(lastleft, attnum, itupdesc, &isNull1);
-		datum2 = index_getattr(firstright, attnum, itupdesc, &isNull2);
+		datum1 = index_attiternext(lastleft, attnum, itupdesc, &iter1);
+		datum2 = index_attiternext(firstright, attnum, itupdesc, &iter2);
 
-		if (isNull1 != isNull2)
+		if (iter1.isNull != iter2.isNull)
 			break;
 
-		if (!isNull1 &&
+		if (!iter1.isNull &&
 			DatumGetInt32(FunctionCall2Coll(&scankey->sk_func,
 											scankey->sk_collation,
 											datum1,
@@ -2421,24 +2441,27 @@ _bt_keep_natts_fast(Relation rel, IndexTuple lastleft, IndexTuple firstright)
 	TupleDesc	itupdesc = RelationGetDescr(rel);
 	int			keysz = IndexRelationGetNumberOfKeyAttributes(rel);
 	int			keepnatts;
+	IAttrIterStateData iter1;
+	IAttrIterStateData iter2;
+	
+	index_attiterinit(lastleft, 1, itupdesc, &iter1);
+	index_attiterinit(firstright, 1, itupdesc, &iter2);
 
 	keepnatts = 1;
 	for (int attnum = 1; attnum <= keysz; attnum++)
 	{
 		Datum		datum1,
 					datum2;
-		bool		isNull1,
-					isNull2;
 		Form_pg_attribute att;
 
-		datum1 = index_getattr(lastleft, attnum, itupdesc, &isNull1);
-		datum2 = index_getattr(firstright, attnum, itupdesc, &isNull2);
+		datum1 = index_attiternext(lastleft, attnum, itupdesc, &iter1);
+		datum2 = index_attiternext(firstright, attnum, itupdesc, &iter2);
 		att = TupleDescAttr(itupdesc, attnum - 1);
 
-		if (isNull1 != isNull2)
+		if (iter1.isNull != iter2.isNull)
 			break;
 
-		if (!isNull1 &&
+		if (!iter1.isNull &&
 			!datum_image_eq(datum1, datum2, att->attbyval, att->attlen))
 			break;
 

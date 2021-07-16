@@ -47,6 +47,9 @@ typedef uint64 XLogRecPtr;
  */
 typedef uint64 XLogSegNo;
 
+#define InvalidXLogSegNo	0xFFFFFFFFFFFFFFFF
+#define XLogSegNoIsInvalid(s)	((s) == InvalidXLogSegNo)
+
 /*
  * TimeLineID (TLI) - identifies different database histories to prevent
  * confusion after restoring a prior state of a database installation.

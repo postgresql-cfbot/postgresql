@@ -123,6 +123,7 @@ typedef enum ObjectClass
 	OCLASS_POLICY,				/* pg_policy */
 	OCLASS_PUBLICATION,			/* pg_publication */
 	OCLASS_PUBLICATION_REL,		/* pg_publication_rel */
+	OCLASS_PUBLICATION_SCHEMA,	/* pg_publication_schema */
 	OCLASS_SUBSCRIPTION,		/* pg_subscription */
 	OCLASS_TRANSFORM			/* pg_transform */
 } ObjectClass;

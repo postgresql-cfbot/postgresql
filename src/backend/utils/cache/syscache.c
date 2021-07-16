@@ -51,6 +51,7 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
+#include "catalog/pg_publication_schema.h"
 #include "catalog/pg_range.h"
 #include "catalog/pg_replication_origin.h"
 #include "catalog/pg_rewrite.h"
@@ -645,6 +646,28 @@ static const struct cachedesc cacheinfo[] = {
 		{
 			Anum_pg_publication_rel_prrelid,
 			Anum_pg_publication_rel_prpubid,
+			0,
+			0
+		},
+		64
+	},
+	{PublicationSchemaRelationId,	/* PUBLICATIONSCHEMA */
+		PublicationSchemaObjectIndexId,
+		1,
+		{
+			Anum_pg_publication_schema_oid,
+			0,
+			0,
+			0
+		},
+		64
+	},
+	{PublicationSchemaRelationId,	/* PUBLICATIONSCHEMAMAP */
+		PublicationSchemaPsnspcidPspubidIndexId,
+		2,
+		{
+			Anum_pg_publication_schema_psnspcid,
+			Anum_pg_publication_schema_pspubid,
 			0,
 			0
 		},

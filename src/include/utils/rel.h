@@ -19,6 +19,7 @@
 #include "catalog/pg_class.h"
 #include "catalog/pg_index.h"
 #include "catalog/pg_publication.h"
+#include "catalog/objectaddress.h"
 #include "nodes/bitmapset.h"
 #include "partitioning/partdefs.h"
 #include "rewrite/prs2lock.h"

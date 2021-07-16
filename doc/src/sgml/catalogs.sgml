@@ -246,6 +246,11 @@
      </row>
 
      <row>
+      <entry><link linkend="catalog-pg-publication-schema"><structname>pg_publication_schema</structname></link></entry>
+      <entry>schema to publication mapping</entry>
+     </row>
+
+     <row>
       <entry><link linkend="catalog-pg-range"><structname>pg_range</structname></link></entry>
       <entry>information about range types</entry>
      </row>
@@ -6169,6 +6174,28 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        publication instead of its own.
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>pubtype</structfield> <type>char</type>
+      </para>
+      <para>
+       Publication type:
+       <literal>a</literal> = <literal>FOR ALL TABLES</literal> publication type,
+       <literal>t</literal> = <literal>FOR TABLE</literal> publication type,
+       <literal>s</literal> = <literal>FOR SCHEMA</literal> publication type,
+       <literal>e</literal> = Empty publication type.
+       If a publication is created without specifying any of
+       <literal>FOR ALL TABLES</literal>, <literal>FOR TABLE</literal> or
+       <literal>FOR SCHEMA</literal> option, then the publication will be
+       created as an empty publication type. When a table or schema is added to
+       the publication using <link linkend="sql-alterpublication">
+       <command>ALTER PUBLICATION</command></link> then the publication type
+       will be changed to <literal>t</literal> or <literal>s</literal>
+       respectively. The publication type cannot be changed in other cases.
+      </para></entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>
@@ -6229,6 +6256,67 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       </para>
       <para>
        Reference to relation
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
+
+ <sect1 id="catalog-pg-publication-schema">
+  <title><structname>pg_publication_schema</structname></title>
+
+  <indexterm zone="catalog-pg-publication-schema">
+   <primary>pg_publication_schema</primary>
+  </indexterm>
+
+  <para>
+   The catalog <structname>pg_publication_schema</structname> contains the
+   mapping between schemas and publications in the database.  This is a
+   many-to-many mapping.  
+  </para>
+
+  <table>
+   <title><structname>pg_publication_schema</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>oid</structfield> <type>oid</type>
+      </para>
+      <para>
+       Row identifier
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>pspubid</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-publication"><structname>pg_publication</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       Reference to publication
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>psnspcid</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-namespace"><structname>pg_namespace</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       Reference to schema
       </para></entry>
      </row>
     </tbody>
@@ -11276,9 +11364,9 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
    information about the mapping between publications and the tables they
    contain.  Unlike the underlying catalog
    <link linkend="catalog-pg-publication-rel"><structname>pg_publication_rel</structname></link>,
-   this view expands
-   publications defined as <literal>FOR ALL TABLES</literal>, so for such
-   publications there will be a row for each eligible table.
+   this view expands publications defined as <literal>FOR ALL TABLES</literal>
+   and <literal>FOR SCHEMA</literal>, so for such publications there will be a
+   row for each eligible table.
   </para>
 
   <table>

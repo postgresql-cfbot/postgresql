@@ -36,6 +36,7 @@
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
+#include "utils/lsyscache.h"
 
 static BTMetaPageData *_bt_getmeta(Relation rel, Buffer metabuf);
 static void _bt_log_reuse_page(Relation rel, BlockNumber blkno,
@@ -43,7 +44,8 @@ static void _bt_log_reuse_page(Relation rel, BlockNumber blkno,
 static void _bt_delitems_delete(Relation rel, Buffer buf,
 								TransactionId latestRemovedXid,
 								OffsetNumber *deletable, int ndeletable,
-								BTVacuumPosting *updatable, int nupdatable);
+								BTVacuumPosting *updatable, int nupdatable,
+								Relation heapRel);
 static char *_bt_delitems_update(BTVacuumPosting *updatable, int nupdatable,
 								 OffsetNumber *updatedoffsets,
 								 Size *updatedbuflen, bool needswal);
@@ -836,6 +838,7 @@ _bt_log_reuse_page(Relation rel, BlockNumber blkno, FullTransactionId safexid)
 	 */
 
 	/* XLOG stuff */
+	xlrec_reuse.onCatalogTable = get_rel_logical_catalog(rel->rd_index->indrelid);
 	xlrec_reuse.node = rel->rd_node;
 	xlrec_reuse.block = blkno;
 	xlrec_reuse.latestRemovedFullXid = safexid;
@@ -1296,7 +1299,8 @@ _bt_delitems_vacuum(Relation rel, Buffer buf,
 static void
 _bt_delitems_delete(Relation rel, Buffer buf, TransactionId latestRemovedXid,
 					OffsetNumber *deletable, int ndeletable,
-					BTVacuumPosting *updatable, int nupdatable)
+					BTVacuumPosting *updatable, int nupdatable,
+					Relation heapRel)
 {
 	Page		page = BufferGetPage(buf);
 	BTPageOpaque opaque;
@@ -1358,6 +1362,8 @@ _bt_delitems_delete(Relation rel, Buffer buf, TransactionId latestRemovedXid,
 		XLogRecPtr	recptr;
 		xl_btree_delete xlrec_delete;
 
+		xlrec_delete.onCatalogTable =
+			RelationIsAccessibleInLogicalDecoding(heapRel);
 		xlrec_delete.latestRemovedXid = latestRemovedXid;
 		xlrec_delete.ndeleted = ndeletable;
 		xlrec_delete.nupdated = nupdatable;
@@ -1685,7 +1691,7 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 
 	/* Physically delete tuples (or TIDs) using deletable (or updatable) */
 	_bt_delitems_delete(rel, buf, latestRemovedXid, deletable, ndeletable,
-						updatable, nupdatable);
+						updatable, nupdatable, heapRel);
 
 	/* be tidy */
 	for (int i = 0; i < nupdatable; i++)

@@ -850,7 +850,7 @@ read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 		if (!RecoveryInProgress())
 			read_upto = GetFlushRecPtr();
 		else
-			read_upto = GetXLogReplayRecPtr(&ThisTimeLineID);
+			read_upto = GetXLogReplayRecPtr(&ThisTimeLineID, false);
 		tli = ThisTimeLineID;
 
 		/*

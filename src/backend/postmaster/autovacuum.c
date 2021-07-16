@@ -2611,6 +2611,7 @@ deleted:
 	for (i = 0; i < NUM_WORKITEMS; i++)
 	{
 		AutoVacuumWorkItem *workitem = &AutoVacuumShmem->av_workItems[i];
+		AutoVacuumWorkItem my_workitem;
 
 		if (!workitem->avw_used)
 			continue;
@@ -2619,11 +2620,14 @@ deleted:
 		if (workitem->avw_database != MyDatabaseId)
 			continue;
 
+		my_workitem = *workitem;
+		workitem->avw_used = false;
+
 		/* claim this one, and release lock while performing it */
 		workitem->avw_active = true;
 		LWLockRelease(AutovacuumLock);
 
-		perform_work_item(workitem);
+		perform_work_item(&my_workitem);
 
 		/*
 		 * Check for config changes before acquiring lock for further jobs.

@@ -1909,6 +1909,8 @@ generateClonedExtStatsStmt(RangeVar *heapRel, Oid heapRelid,
 			stat_types = lappend(stat_types, makeString("dependencies"));
 		else if (enabled[i] == STATS_EXT_MCV)
 			stat_types = lappend(stat_types, makeString("mcv"));
+		else if (enabled[i] == STATS_EXT_SAMPLE)
+			stat_types = lappend(stat_types, makeString("sample"));
 		else if (enabled[i] == STATS_EXT_EXPRESSIONS)
 			/* expression stats are not exposed to users */
 			continue;

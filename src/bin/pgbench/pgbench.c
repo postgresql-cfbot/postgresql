@@ -58,6 +58,7 @@
 #endif
 
 #include "common/int.h"
+#include "common/pg_prng.h"
 #include "common/logging.h"
 #include "common/string.h"
 #include "common/username.h"
@@ -349,16 +350,8 @@ typedef struct StatsData
  */
 pg_time_usec_t epoch_shift;
 
-/*
- * Struct to keep random state.
- */
-typedef struct RandomState
-{
-	unsigned short xseed[3];
-} RandomState;
-
 /* Various random sequences are initialized from this one. */
-static RandomState base_random_sequence;
+static pg_prng_state	base_random_sequence;
 
 /* Synchronization barrier for start and connection */
 static THREAD_BARRIER_T barrier;
@@ -460,7 +453,7 @@ typedef struct
 	 * Separate randomness for each client. This is used for random functions
 	 * PGBENCH_RANDOM_* during the execution of the script.
 	 */
-	RandomState cs_func_rs;
+	pg_prng_state	 cs_func_rs;
 
 	int			use_file;		/* index in sql_script for this client */
 	int			command;		/* command number in script */
@@ -497,9 +490,9 @@ typedef struct
 	 * random state to make all of them independent of each other and
 	 * therefore deterministic at the thread level.
 	 */
-	RandomState ts_choose_rs;	/* random state for selecting a script */
-	RandomState ts_throttle_rs; /* random state for transaction throttling */
-	RandomState ts_sample_rs;	/* random state for log sampling */
+	pg_prng_state	ts_choose_rs;	/* random state for selecting a script */
+	pg_prng_state	ts_throttle_rs; /* random state for transaction throttling */
+	pg_prng_state	ts_sample_rs;	/* random state for log sampling */
 
 	int64		throttle_trigger;	/* previous/next throttling (us) */
 	FILE	   *logfile;		/* where to log, or NULL */
@@ -897,42 +890,28 @@ strtodouble(const char *str, bool errorOK, double *dv)
 }
 
 /*
- * Initialize a random state struct.
+ * Initialize a prng state struct.
  *
  * We derive the seed from base_random_sequence, which must be set up already.
  */
 static void
-initRandomState(RandomState *random_state)
+initRandomState(pg_prng_state *state)
 {
-	random_state->xseed[0] = (unsigned short)
-		(pg_jrand48(base_random_sequence.xseed) & 0xFFFF);
-	random_state->xseed[1] = (unsigned short)
-		(pg_jrand48(base_random_sequence.xseed) & 0xFFFF);
-	random_state->xseed[2] = (unsigned short)
-		(pg_jrand48(base_random_sequence.xseed) & 0xFFFF);
+	pg_prng_seed(state, pg_prng_u64(&base_random_sequence));
 }
 
+
 /*
- * Random number generator: uniform distribution from min to max inclusive.
+ * PRNG: uniform distribution from min to max inclusive.
  *
  * Although the limits are expressed as int64, you can't generate the full
  * int64 range in one call, because the difference of the limits mustn't
- * overflow int64.  In practice it's unwise to ask for more than an int32
- * range, because of the limited precision of pg_erand48().
+ * overflow int64. This is not checked.
  */
 static int64
-getrand(RandomState *random_state, int64 min, int64 max)
+getrand(pg_prng_state *state, int64 min, int64 max)
 {
-	/*
-	 * Odd coding is so that min and max have approximately the same chance of
-	 * being selected as do numbers between them.
-	 *
-	 * pg_erand48() is thread-safe and concurrent, which is why we use it
-	 * rather than random(), which in glibc is non-reentrant, and therefore
-	 * protected by a mutex, and therefore a bottleneck on machines with many
-	 * CPUs.
-	 */
-	return min + (int64) ((max - min + 1) * pg_erand48(random_state->xseed));
+	return min + (int64) pg_prng_u64_range(state, 0, max - min);
 }
 
 /*
@@ -941,8 +920,7 @@ getrand(RandomState *random_state, int64 min, int64 max)
  * value is exp(-parameter).
  */
 static int64
-getExponentialRand(RandomState *random_state, int64 min, int64 max,
-				   double parameter)
+getExponentialRand(pg_prng_state *state, int64 min, int64 max, double parameter)
 {
 	double		cut,
 				uniform,
@@ -952,7 +930,7 @@ getExponentialRand(RandomState *random_state, int64 min, int64 max,
 	Assert(parameter > 0.0);
 	cut = exp(-parameter);
 	/* erand in [0, 1), uniform in (0, 1] */
-	uniform = 1.0 - pg_erand48(random_state->xseed);
+	uniform = 1.0 - pg_prng_f64(state);
 
 	/*
 	 * inner expression in (cut, 1] (if parameter > 0), rand in [0, 1)
@@ -965,8 +943,7 @@ getExponentialRand(RandomState *random_state, int64 min, int64 max,
 
 /* random number generator: gaussian distribution from min to max inclusive */
 static int64
-getGaussianRand(RandomState *random_state, int64 min, int64 max,
-				double parameter)
+getGaussianRand(pg_prng_state *state, int64 min, int64 max, double parameter)
 {
 	double		stdev;
 	double		rand;
@@ -989,13 +966,13 @@ getGaussianRand(RandomState *random_state, int64 min, int64 max,
 	do
 	{
 		/*
-		 * pg_erand48 generates [0,1), but for the basic version of the
+		 * pg_prng_f64 generates [0,1), but for the basic version of the
 		 * Box-Muller transform the two uniformly distributed random numbers
 		 * are expected in (0, 1] (see
 		 * https://en.wikipedia.org/wiki/Box-Muller_transform)
 		 */
-		double		rand1 = 1.0 - pg_erand48(random_state->xseed);
-		double		rand2 = 1.0 - pg_erand48(random_state->xseed);
+		double		rand1 = 1.0 - pg_prng_f64(state);
+		double		rand2 = 1.0 - pg_prng_f64(state);
 
 		/* Box-Muller basic form transform */
 		double		var_sqrt = sqrt(-2.0 * log(rand1));
@@ -1025,7 +1002,7 @@ getGaussianRand(RandomState *random_state, int64 min, int64 max,
  * not be one.
  */
 static int64
-getPoissonRand(RandomState *random_state, double center)
+getPoissonRand(pg_prng_state *state, double center)
 {
 	/*
 	 * Use inverse transform sampling to generate a value > 0, such that the
@@ -1033,8 +1010,8 @@ getPoissonRand(RandomState *random_state, double center)
 	 */
 	double		uniform;
 
-	/* erand in [0, 1), uniform in (0, 1] */
-	uniform = 1.0 - pg_erand48(random_state->xseed);
+	/* pseudo-random value in [0, 1), uniform in (0, 1] */
+	uniform = 1.0 - pg_prng_f64(state);
 
 	return (int64) (-log(uniform) * center + 0.5);
 }
@@ -1047,7 +1024,7 @@ getPoissonRand(RandomState *random_state, double center)
  * This works for s > 1.0, but may perform badly for s very close to 1.0.
  */
 static int64
-computeIterativeZipfian(RandomState *random_state, int64 n, double s)
+computeIterativeZipfian(pg_prng_state *state, int64 n, double s)
 {
 	double		b = pow(2.0, s - 1.0);
 	double		x,
@@ -1062,8 +1039,8 @@ computeIterativeZipfian(RandomState *random_state, int64 n, double s)
 	while (true)
 	{
 		/* random variates */
-		u = pg_erand48(random_state->xseed);
-		v = pg_erand48(random_state->xseed);
+		u = pg_prng_f64(state);
+		v = pg_prng_f64(state);
 
 		x = floor(pow(u, -1.0 / (s - 1.0)));
 
@@ -1077,14 +1054,14 @@ computeIterativeZipfian(RandomState *random_state, int64 n, double s)
 
 /* random number generator: zipfian distribution from min to max inclusive */
 static int64
-getZipfianRand(RandomState *random_state, int64 min, int64 max, double s)
+getZipfianRand(pg_prng_state *state, int64 min, int64 max, double s)
 {
 	int64		n = max - min + 1;
 
 	/* abort if parameter is invalid */
 	Assert(MIN_ZIPFIAN_PARAM <= s && s <= MAX_ZIPFIAN_PARAM);
 
-	return min - 1 + computeIterativeZipfian(random_state, n, s);
+	return min - 1 + computeIterativeZipfian(state, n, s);
 }
 
 /*
@@ -1141,7 +1118,7 @@ getHashMurmur2(int64 val, uint64 seed)
  * For small sizes, this generates each of the (size!) possible permutations
  * of integers in the range [0, size) with roughly equal probability.  Once
  * the size is larger than 20, the number of possible permutations exceeds the
- * number of distinct states of the internal pseudorandom number generators,
+ * number of distinct states of the internal pseudorandom number generator,
  * and so not all possible permutations can be generated, but the permutations
  * chosen should continue to give the appearance of being random.
  *
@@ -1151,25 +1128,19 @@ getHashMurmur2(int64 val, uint64 seed)
 static int64
 permute(const int64 val, const int64 isize, const int64 seed)
 {
-	RandomState random_state1;
-	RandomState random_state2;
-	uint64		size;
-	uint64		v;
-	int			masklen;
-	uint64		mask;
-	int			i;
+	/* using a high-end PRNG is probably overkill */
+	pg_prng_state	state;
+	uint64			size;
+	uint64			v;
+	int				masklen;
+	uint64			mask;
+	int				i;
 
 	if (isize < 2)
 		return 0;				/* nothing to permute */
 
-	/* Initialize a pair of random states using the seed */
-	random_state1.xseed[0] = seed & 0xFFFF;
-	random_state1.xseed[1] = (seed >> 16) & 0xFFFF;
-	random_state1.xseed[2] = (seed >> 32) & 0xFFFF;
-
-	random_state2.xseed[0] = (((uint64) seed) >> 48) & 0xFFFF;
-	random_state2.xseed[1] = seed & 0xFFFF;
-	random_state2.xseed[2] = (seed >> 16) & 0xFFFF;
+	/* Initialize prng state using the seed */
+	pg_prng_seed(&state, (uint64) seed);
 
 	/* Computations are performed on unsigned values */
 	size = (uint64) isize;
@@ -1215,8 +1186,8 @@ permute(const int64 val, const int64 isize, const int64 seed)
 					t;
 
 		/* Random multiply (by an odd number), XOR and rotate of lower half */
-		m = (uint64) getrand(&random_state1, 0, mask) | 1;
-		r = (uint64) getrand(&random_state2, 0, mask);
+		m = (pg_prng_u64(&state) & mask) | 1;
+		r = pg_prng_u64(&state) & mask;
 		if (v <= mask)
 		{
 			v = ((v * m) ^ r) & mask;
@@ -1224,8 +1195,8 @@ permute(const int64 val, const int64 isize, const int64 seed)
 		}
 
 		/* Random multiply (by an odd number), XOR and rotate of upper half */
-		m = (uint64) getrand(&random_state1, 0, mask) | 1;
-		r = (uint64) getrand(&random_state2, 0, mask);
+		m = (pg_prng_u64(&state) & mask) | 1;
+		r = pg_prng_u64(&state) & mask;
 		t = size - 1 - v;
 		if (t <= mask)
 		{
@@ -1235,7 +1206,7 @@ permute(const int64 val, const int64 isize, const int64 seed)
 		}
 
 		/* Random offset */
-		r = (uint64) getrand(&random_state2, 0, size - 1);
+		r = pg_prng_u64(&state) % (size - 1);
 		v = (v + r) % size;
 	}
 
@@ -3797,7 +3768,7 @@ doLog(TState *thread, CState *st,
 	 * to the random sample.
 	 */
 	if (sample_rate != 0.0 &&
-		pg_erand48(thread->ts_sample_rs.xseed) > sample_rate)
+		pg_prng_f64(&thread->ts_sample_rs) > sample_rate)
 		return;
 
 	/* should we aggregate the results or not? */
@@ -5724,12 +5695,11 @@ set_random_seed(const char *seed)
 
 	if (seed != NULL)
 		pg_log_info("setting random seed to %llu", (unsigned long long) iseed);
+
 	random_seed = iseed;
 
 	/* Fill base_random_sequence with low-order bits of seed */
-	base_random_sequence.xseed[0] = iseed & 0xFFFF;
-	base_random_sequence.xseed[1] = (iseed >> 16) & 0xFFFF;
-	base_random_sequence.xseed[2] = (iseed >> 32) & 0xFFFF;
+	pg_prng_seed(&base_random_sequence, (uint64_t) iseed);
 
 	return true;
 }
@@ -6423,9 +6393,7 @@ main(int argc, char **argv)
 	/* set default seed for hash functions */
 	if (lookupVariable(&state[0], "default_seed") == NULL)
 	{
-		uint64		seed =
-		((uint64) pg_jrand48(base_random_sequence.xseed) & 0xFFFFFFFF) |
-		(((uint64) pg_jrand48(base_random_sequence.xseed) & 0xFFFFFFFF) << 32);
+		uint64		seed = pg_prng_u64(&base_random_sequence);
 
 		for (i = 0; i < nclients; i++)
 			if (!putVariableInt(&state[i], "startup", "default_seed", (int64) seed))

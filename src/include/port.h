@@ -356,11 +356,6 @@ extern int	gettimeofday(struct timeval *tp, struct timezone *tzp);
 #define pgoff_t off_t
 #endif
 
-extern double pg_erand48(unsigned short xseed[3]);
-extern long pg_lrand48(void);
-extern long pg_jrand48(unsigned short xseed[3]);
-extern void pg_srand48(long seed);
-
 #ifndef HAVE_FLS
 extern int	fls(int mask);
 #endif

@@ -133,7 +133,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
        </varlistentry>
       </variablelist>
 
-      Additionally, refresh options as described
+      Additionally, <replaceable>refresh_option</replaceable> as described
       under <literal>REFRESH PUBLICATION</literal> may be specified,
       except in the case of <literal>DROP PUBLICATION</literal>.
      </para>

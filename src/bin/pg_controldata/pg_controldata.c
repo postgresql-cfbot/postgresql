@@ -99,6 +99,7 @@ main(int argc, char *argv[])
 	time_t		time_tmp;
 	char		pgctime_str[128];
 	char		ckpttime_str[128];
+	char		last_recovery_time_str[128];
 	char		mock_auth_nonce_str[MOCK_AUTH_NONCE_LEN * 2 + 1];
 	const char *strftime_fmt = "%c";
 	const char *progname;
@@ -202,6 +203,9 @@ main(int argc, char *argv[])
 	time_tmp = (time_t) ControlFile->checkPointCopy.time;
 	strftime(ckpttime_str, sizeof(ckpttime_str), strftime_fmt,
 			 localtime(&time_tmp));
+	time_tmp = (time_t) ControlFile->lastRecoveryTime;
+	strftime(last_recovery_time_str, sizeof(last_recovery_time_str), strftime_fmt,
+			 localtime(&time_tmp));
 
 	/*
 	 * Calculate name of the WAL file containing the latest checkpoint's REDO
@@ -272,6 +276,12 @@ main(int argc, char *argv[])
 		   ControlFile->checkPointCopy.newestCommitTsXid);
 	printf(_("Time of latest checkpoint:            %s\n"),
 		   ckpttime_str);
+	printf(_("Last recovery LSN:                    %X/%X\n"),
+		   LSN_FORMAT_ARGS(ControlFile->lastRecoveryLSN));
+	printf(_("Last recovery time:                   %s\n"),
+		   last_recovery_time_str);
+	printf(_("Recovery count:                       %llu\n"),
+		   (unsigned long long) ControlFile->recoveryCount);
 	printf(_("Fake LSN counter for unlogged rels:   %X/%X\n"),
 		   LSN_FORMAT_ARGS(ControlFile->unloggedLSN));
 	printf(_("Minimum recovery ending location:     %X/%X\n"),

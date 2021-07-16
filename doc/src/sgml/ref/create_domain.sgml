@@ -38,7 +38,7 @@ CREATE DOMAIN <replaceable class="parameter">name</replaceable> [ AS ] <replacea
 
   <para>
    <command>CREATE DOMAIN</command> creates a new domain.  A domain is
-   essentially a data type with optional constraints (restrictions on
+   a data type with optional constraints (restrictions on
    the allowed set of values).
    The user who defines a domain becomes its owner.
   </para>
@@ -47,8 +47,8 @@ CREATE DOMAIN <replaceable class="parameter">name</replaceable> [ AS ] <replacea
    If a schema name is given (for example, <literal>CREATE DOMAIN
    myschema.mydomain ...</literal>) then the domain is created in the
    specified schema.  Otherwise it is created in the current schema.
-   The domain name must be unique among the types and domains existing
-   in its schema.
+   The domain name must be unique among all types (not just domains)
+   existing in its schema.
   </para>
 
   <para>
@@ -281,6 +281,7 @@ CREATE TABLE us_snail_addy (
   <simplelist type="inline">
    <member><xref linkend="sql-alterdomain"/></member>
    <member><xref linkend="sql-dropdomain"/></member>
+   <member><xref linkend="sql-droptype"/></member>
   </simplelist>
  </refsect1>
 

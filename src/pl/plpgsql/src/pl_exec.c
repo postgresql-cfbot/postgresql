@@ -2402,6 +2402,14 @@ exec_stmt_getdiag(PLpgSQL_execstate *estate, PLpgSQL_stmt_getdiag *stmt)
 									 estate->cur_error->hint);
 				break;
 
+			case PLPGSQL_GETDIAG_PARSE_SQL_STATEMENT:
+				exec_assign_c_string(estate, var, estate->cur_error->internalquery);
+				break;
+
+			case PLPGSQL_GETDIAG_PARSE_SQL_STATEMENT_POSITION:
+				exec_assign_value(estate, var, UInt64GetDatum(estate->cur_error->internalpos), false, INT8OID, -1);
+				break;
+
 			case PLPGSQL_GETDIAG_RETURNED_SQLSTATE:
 				exec_assign_c_string(estate, var,
 									 unpack_sql_state(estate->cur_error->sqlerrcode));

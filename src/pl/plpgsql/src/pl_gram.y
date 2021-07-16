@@ -321,6 +321,8 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %token <keyword>	K_PG_CONTEXT
 %token <keyword>	K_PG_DATATYPE_NAME
 %token <keyword>	K_PG_EXCEPTION_CONTEXT
+%token <keyword>	K_PG_PARSE_SQL_STATEMENT
+%token <keyword>	K_PG_PARSE_SQL_STATEMENT_POSITION
 %token <keyword>	K_PG_EXCEPTION_DETAIL
 %token <keyword>	K_PG_EXCEPTION_HINT
 %token <keyword>	K_PRINT_STRICT_PARAMS
@@ -1047,6 +1049,8 @@ stmt_getdiag	: K_GET getdiag_area_opt K_DIAGNOSTICS getdiag_list ';'
 								case PLPGSQL_GETDIAG_ERROR_CONTEXT:
 								case PLPGSQL_GETDIAG_ERROR_DETAIL:
 								case PLPGSQL_GETDIAG_ERROR_HINT:
+								case PLPGSQL_GETDIAG_PARSE_SQL_STATEMENT:
+								case PLPGSQL_GETDIAG_PARSE_SQL_STATEMENT_POSITION:
 								case PLPGSQL_GETDIAG_RETURNED_SQLSTATE:
 								case PLPGSQL_GETDIAG_COLUMN_NAME:
 								case PLPGSQL_GETDIAG_CONSTRAINT_NAME:
@@ -1130,6 +1134,10 @@ getdiag_item :
 						else if (tok_is_keyword(tok, &yylval,
 												K_PG_EXCEPTION_CONTEXT, "pg_exception_context"))
 							$$ = PLPGSQL_GETDIAG_ERROR_CONTEXT;
+						else if (tok_is_keyword(tok, &yylval, K_PG_PARSE_SQL_STATEMENT, "pg_parse_sql_statement"))
+							$$ = PLPGSQL_GETDIAG_PARSE_SQL_STATEMENT;
+						else if (tok_is_keyword(tok, &yylval, K_PG_PARSE_SQL_STATEMENT_POSITION, "pg_parse_sql_statement_position"))
+							$$ = PLPGSQL_GETDIAG_PARSE_SQL_STATEMENT_POSITION;
 						else if (tok_is_keyword(tok, &yylval,
 												K_COLUMN_NAME, "column_name"))
 							$$ = PLPGSQL_GETDIAG_COLUMN_NAME;

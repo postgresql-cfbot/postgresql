@@ -4645,3 +4645,44 @@ BEGIN
   GET DIAGNOSTICS x = ROW_COUNT;
   RETURN;
 END; $$ LANGUAGE plpgsql;
+
+--
+-- PG_PARSE_SQL_STATEMENT, PG_PARSE_SQL_STATEMENT_POSITION
+-- should return parse exception details, if sql's parse operation fail
+--
+DO
+$$
+DECLARE
+v_sql TEXT:='SELECT 1 JOIN SELECT 2';
+v_err_sql_stmt TEXT;
+v_err_sql_pos INT;
+BEGIN
+EXECUTE v_sql;
+EXCEPTION
+WHEN OTHERS THEN
+GET STACKED DIAGNOSTICS v_err_sql_stmt = PG_PARSE_SQL_STATEMENT,
+v_err_sql_pos = PG_PARSE_SQL_STATEMENT_POSITION;
+RAISE NOTICE 'exception sql %', v_err_sql_stmt;
+RAISE NOTICE 'exception sql position %', v_err_sql_pos;
+END;
+$$;
+
+--
+-- PG_PARSE_SQL_STATEMENT, PG_PARSE_SQL_STATEMENT_POSITION
+-- should return empty results, if sql's parse operation success
+--
+DO
+$$
+DECLARE
+v_err_sql_pos INT;
+v_err_sql_stmt TEXT;
+BEGIN
+PERFORM 1/0;
+EXCEPTION
+WHEN OTHERS THEN
+GET STACKED DIAGNOSTICS v_err_sql_stmt = PG_PARSE_SQL_STATEMENT,
+v_err_sql_pos = PG_PARSE_SQL_STATEMENT_POSITION;
+RAISE NOTICE 'exception sql %', v_err_sql_stmt;
+RAISE NOTICE 'exception sql position %', v_err_sql_pos;
+END;
+$$;

@@ -3945,11 +3945,6 @@ numeric_power(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
 				 errmsg("zero raised to a negative power is undefined")));
 
-	if (sign1 < 0 && !numeric_is_integral(num2))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
-				 errmsg("a negative number raised to a non-integer power yields a complex result")));
-
 	/*
 	 * Initialize things
 	 */
@@ -9762,12 +9757,18 @@ exp_var(const NumericVar *arg, NumericVar *result, int rscale)
 	 */
 	val = numericvar_to_double_no_overflow(&x);
 
-	/* Guard against overflow */
+	/* Guard against overflow/underflow */
 	/* If you change this limit, see also power_var()'s limit */
 	if (Abs(val) >= NUMERIC_MAX_RESULT_SCALE * 3)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("value overflows numeric format")));
+	{
+		if (val > 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("value overflows numeric format")));
+		zero_var(result);
+		result->dscale = rscale;
+		return;
+	}
 
 	/* decimal weight = log10(e^x) = x * log10(e) */
 	dweight = (int) (val * 0.434294481903252);
@@ -10125,6 +10126,8 @@ log_var(const NumericVar *base, const NumericVar *num, NumericVar *result)
 static void
 power_var(const NumericVar *base, const NumericVar *exp, NumericVar *result)
 {
+	int			res_sign;
+	NumericVar	abs_base;
 	NumericVar	ln_base;
 	NumericVar	ln_num;
 	int			ln_dweight;
@@ -10168,8 +10171,36 @@ power_var(const NumericVar *base, const NumericVar *exp, NumericVar *result)
 		return;
 	}
 
+	init_var(&abs_base);
 	init_var(&ln_base);
 	init_var(&ln_num);
+
+	/*
+	 * If base is negative, insist that exp be an integer.  The result is then
+	 * positive if exp is even and negative if exp is odd.
+	 */
+	if (base->sign == NUMERIC_NEG)
+	{
+		/* check that exp is an integer */
+		if (exp->ndigits > 0 && exp->ndigits > exp->weight + 1)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
+					 errmsg("a negative number raised to a non-integer power yields a complex result")));
+
+		/* test if exp is odd or even */
+		if (exp->ndigits > 0 && exp->ndigits == exp->weight + 1 &&
+			(exp->digits[exp->ndigits - 1] & 1))
+			res_sign = NUMERIC_NEG;
+		else
+			res_sign = NUMERIC_POS;
+
+		/* then work with abs(base) below */
+		set_var_from_var(base, &abs_base);
+		abs_base.sign = NUMERIC_POS;
+		base = &abs_base;
+	}
+	else
+		res_sign = NUMERIC_POS;
 
 	/*----------
 	 * Decide on the scale for the ln() calculation.  For this we need an
@@ -10201,24 +10232,30 @@ power_var(const NumericVar *base, const NumericVar *exp, NumericVar *result)
 
 	val = numericvar_to_double_no_overflow(&ln_num);
 
-	/* initial overflow test with fuzz factor */
+	/* initial overflow/underflow test with fuzz factor */
 	if (Abs(val) > NUMERIC_MAX_RESULT_SCALE * 3.01)
-		ereport(ERROR,
-				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("value overflows numeric format")));
+	{
+		if (val > 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("value overflows numeric format")));
+		zero_var(result);
+		result->dscale = NUMERIC_MAX_DISPLAY_SCALE;
+		return;
+	}
 
 	val *= 0.434294481903252;	/* approximate decimal result weight */
 
-	/* choose the result scale */
+	/* choose the result scale and the scale for the real calculation */
 	rscale = NUMERIC_MIN_SIG_DIGITS - (int) val;
 	rscale = Max(rscale, base->dscale);
 	rscale = Max(rscale, exp->dscale);
 	rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
-	rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
 
-	/* set the scale for the real exp * ln(base) calculation */
 	local_rscale = rscale + (int) val - ln_dweight + 8;
 	local_rscale = Max(local_rscale, NUMERIC_MIN_DISPLAY_SCALE);
+
+	rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
 
 	/* and do the real calculation */
 
@@ -10228,8 +10265,12 @@ power_var(const NumericVar *base, const NumericVar *exp, NumericVar *result)
 
 	exp_var(&ln_num, result, rscale);
 
+	if (res_sign == NUMERIC_NEG && result->ndigits > 0)
+		result->sign = NUMERIC_NEG;
+
 	free_var(&ln_num);
 	free_var(&ln_base);
+	free_var(&abs_base);
 }
 
 /*

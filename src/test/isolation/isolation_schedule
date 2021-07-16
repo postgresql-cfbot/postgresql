@@ -17,6 +17,8 @@ test: partial-index
 test: two-ids
 test: multiple-row-versions
 test: index-only-scan
+test: index-only-scan-2
+test: index-only-scan-3
 test: predicate-lock-hot-tuple
 test: update-conflict-out
 test: deadlock-simple

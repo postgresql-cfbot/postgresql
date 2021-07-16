@@ -283,7 +283,8 @@ ExecInitBitmapIndexScan(BitmapIndexScan *node, EState *estate, int eflags)
 						   &indexstate->biss_RuntimeKeys,
 						   &indexstate->biss_NumRuntimeKeys,
 						   &indexstate->biss_ArrayKeys,
-						   &indexstate->biss_NumArrayKeys);
+						   &indexstate->biss_NumArrayKeys,
+						   NULL);
 
 	/*
 	 * If we have runtime keys or array keys, we need an ExprContext to

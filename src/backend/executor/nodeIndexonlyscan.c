@@ -103,6 +103,13 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		node->ioss_ScanDesc->xs_want_itup = true;
 		node->ioss_VMBuffer = InvalidBuffer;
 
+		/* Set up the single row SSI optimization, if possible. */
+		if (node->ioss_SingleRow)
+		{
+			InitPredicateLockBuffer(&scandesc->xs_deferred_predlocks);
+			scandesc->xs_defer_predlocks = true;
+		}
+
 		/*
 		 * If no run-time keys to calculate or they are ready, go ahead and
 		 * pass the scankeys to the index AM.
@@ -243,15 +250,33 @@ IndexOnlyNext(IndexOnlyScanState *node)
 
 		/*
 		 * If we didn't access the heap, then we'll need to take a predicate
-		 * lock explicitly, as if we had.  For now we do that at page level.
+		 * lock explicitly, as if we had.  We don't have the inserter's xid,
+		 * but that's only used by PredicateLockTID to check if it matches the
+		 * caller's top level xid, and it can't possibly have been inserted by
+		 * us or the page wouldn't be all visible.
 		 */
 		if (!tuple_from_heap)
-			PredicateLockPage(scandesc->heapRelation,
-							  ItemPointerGetBlockNumber(tid),
-							  estate->es_snapshot);
+			PredicateLockTID(scandesc->heapRelation,
+							 tid,
+							 estate->es_snapshot,
+							 InvalidTransactionId);
+
+		/*
+		 * Single row SSI optimization: found a match, so we can throw away
+		 * predicate locks on on the index.
+		 */
+		if (node->ioss_SingleRow)
+			ClearPredicateLockBuffer(&scandesc->xs_deferred_predlocks);
 
 		return slot;
 	}
+
+	/*
+	 * Single row SSI optimization: no match found, so we need the index locks
+	 * to "lock the gap".
+	 */
+	if (node->ioss_SingleRow)
+		FlushPredicateLockBuffer(&scandesc->xs_deferred_predlocks);
 
 	/*
 	 * if we get here it means the index scan failed so we are at the end of
@@ -589,7 +614,8 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 						   &indexstate->ioss_RuntimeKeys,
 						   &indexstate->ioss_NumRuntimeKeys,
 						   NULL,	/* no ArrayKeys */
-						   NULL);
+						   NULL,
+						   &indexstate->ioss_SingleRow);
 
 	/*
 	 * any ORDER BY exprs have to be turned into scankeys in the same way
@@ -603,6 +629,7 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 						   &indexstate->ioss_RuntimeKeys,
 						   &indexstate->ioss_NumRuntimeKeys,
 						   NULL,	/* no ArrayKeys */
+						   NULL,
 						   NULL);
 
 	/*

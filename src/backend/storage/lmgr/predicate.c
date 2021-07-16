@@ -1277,6 +1277,8 @@ InitPredicateLocks(void)
 		PredXact->OldCommittedSxact->xmin = InvalidTransactionId;
 		PredXact->OldCommittedSxact->flags = SXACT_FLAG_COMMITTED;
 		PredXact->OldCommittedSxact->pid = 0;
+		for (int i = 0; i < lengthof(PredXact->split_counters); ++i)
+			pg_atomic_init_u64(&PredXact->split_counters[i], 0);
 	}
 	/* This never changes, so let's keep a local copy. */
 	OldCommittedSxact = PredXact->OldCommittedSxact;
@@ -3170,6 +3172,11 @@ PredicateLockPageSplit(Relation relation, BlockNumber oldblkno,
 	PREDICATELOCKTARGETTAG oldtargettag;
 	PREDICATELOCKTARGETTAG newtargettag;
 	bool		success;
+	uint32		split_counter;
+
+	/* Make sure that deferred predicate locks are promoted to relation. */
+	split_counter = oldblkno % lengthof(PredXact->split_counters);
+	pg_atomic_fetch_add_u64(&PredXact->split_counters[split_counter], 1);
 
 	/*
 	 * Bail out quickly if there are no serializable transactions running.
@@ -5200,4 +5207,81 @@ AttachSerializableXact(SerializableXactHandle handle)
 	MySerializableXact = (SERIALIZABLEXACT *) handle;
 	if (MySerializableXact != InvalidSerializableXact)
 		CreateLocalPredicateLockHash();
+}
+
+/*
+ * Initialize a buffer of predicate lock requests.
+ */
+void
+InitPredicateLockBuffer(PredicateLockBuffer *buffer)
+{
+	buffer->size = 0;
+}
+
+/*
+ * Acquire all buffered predicate locks.
+ */
+void
+FlushPredicateLockBuffer(PredicateLockBuffer *buffer)
+{
+	for (int i = 0; i < buffer->size; ++i)
+	{
+		PredicateLockRequest *request = &buffer->requests[i];
+		uint32 split_counter;
+
+		PredicateLockPage(request->relation,
+						  request->blocknum,
+						  request->snapshot);
+
+		/*
+		 * Check if there's been a split.  If so, we don't have enough
+		 * information to follow the split, so we'll promote the SIREAD lock to
+		 * whole-relation level.  This should be unlikely.
+		 */
+		split_counter = request->blocknum % lengthof(PredXact->split_counters);
+		if (request->page_split_count !=
+			pg_atomic_read_u64(&PredXact->split_counters[split_counter]))
+			PredicateLockRelation(request->relation,
+								  request->snapshot);
+	}
+	buffer->size = 0;
+}
+
+/*
+ * Forget buffered predicate locks, we don't need them after all.
+ */
+void
+ClearPredicateLockBuffer(PredicateLockBuffer *buffer)
+{
+	buffer->size = 0;
+}
+
+/*
+ * Remember to acquire a page-level predicate lock.
+ */
+void
+SchedulePredicateLockPage(PredicateLockBuffer *buffer,
+						  Relation relation,
+						  BlockNumber blkno,
+						  Snapshot snapshot)
+{
+	PredicateLockRequest *request;
+	uint32			split_counter;
+
+	if (buffer->size == lengthof(buffer->requests))
+		FlushPredicateLockBuffer(buffer);
+
+	request = &buffer->requests[buffer->size++];
+	request->relation = relation;
+	request->blocknum = blkno;
+	request->snapshot = snapshot;
+
+	/*
+	 * Record the page split counter while the caller holds the page content
+	 * lock.  This way we can detect page splits that occur between now and the
+	 * time that we acquire the SIREAD lock, if we eventually flush.
+	 */
+	split_counter = blkno % lengthof(PredXact->split_counters);
+	request->page_split_count =
+		pg_atomic_read_u64(&PredXact->split_counters[split_counter]);
 }

@@ -35,6 +35,7 @@ typedef enum
 	PROCSIG_WALSND_INIT_STOPPING,	/* ask walsenders to prepare for shutdown  */
 	PROCSIG_BARRIER,			/* global barrier interrupt  */
 	PROCSIG_LOG_MEMORY_CONTEXT, /* ask backend to log the memory contexts */
+	PROCSIG_LOG_CURRENT_PLAN, /* ask backend to log plan of the current query */
 
 	/* Recovery conflict reasons */
 	PROCSIG_RECOVERY_CONFLICT_DATABASE,
@@ -66,6 +67,8 @@ extern void ProcSignalShmemInit(void);
 extern void ProcSignalInit(int pss_idx);
 extern int	SendProcSignal(pid_t pid, ProcSignalReason reason,
 						   BackendId backendId);
+extern bool	SendProcSignalForLogInfo(pid_t pid,
+						   ProcSignalReason reason);
 
 extern uint64 EmitProcSignalBarrier(ProcSignalBarrierType type);
 extern void WaitForProcSignalBarrier(uint64 generation);

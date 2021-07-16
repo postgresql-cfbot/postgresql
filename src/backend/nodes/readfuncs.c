@@ -254,6 +254,7 @@ _readQuery(void)
 	READ_BOOL_FIELD(canSetTag);
 	READ_NODE_FIELD(utilityStmt);
 	READ_INT_FIELD(resultRelation);
+	READ_OID_FIELD(resultVariable);
 	READ_BOOL_FIELD(hasAggs);
 	READ_BOOL_FIELD(hasWindowFuncs);
 	READ_BOOL_FIELD(hasTargetSRFs);
@@ -264,6 +265,7 @@ _readQuery(void)
 	READ_BOOL_FIELD(hasForUpdate);
 	READ_BOOL_FIELD(hasRowSecurity);
 	READ_BOOL_FIELD(isReturn);
+	READ_BOOL_FIELD(hasSchemaVariables);
 	READ_NODE_FIELD(cteList);
 	READ_NODE_FIELD(rtable);
 	READ_NODE_FIELD(jointree);
@@ -628,6 +630,7 @@ _readParam(void)
 	READ_OID_FIELD(paramtype);
 	READ_INT_FIELD(paramtypmod);
 	READ_OID_FIELD(paramcollid);
+	READ_OID_FIELD(paramvarid);
 	READ_LOCATION_FIELD(location);
 
 	READ_DONE();
@@ -1599,6 +1602,7 @@ _readPlannedStmt(void)
 	READ_NODE_FIELD(invalItems);
 	READ_NODE_FIELD(paramExecTypes);
 	READ_NODE_FIELD(utilityStmt);
+	READ_NODE_FIELD(schemaVariables);
 	READ_LOCATION_FIELD(stmt_location);
 	READ_INT_FIELD(stmt_len);
 

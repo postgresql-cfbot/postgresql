@@ -75,6 +75,7 @@
    &alterType;
    &alterUser;
    &alterUserMapping;
+   &alterVariable;
    &alterView;
    &analyze;
    &begin;
@@ -127,6 +128,7 @@
    &createType;
    &createUser;
    &createUserMapping;
+   &createVariable;
    &createView;
    &deallocate;
    &declare;
@@ -175,6 +177,7 @@
    &dropType;
    &dropUser;
    &dropUserMapping;
+   &dropVariable;
    &dropView;
    &end;
    &execute;
@@ -183,6 +186,7 @@
    &grant;
    &importForeignSchema;
    &insert;
+   &let;
    &listen;
    &load;
    &lock;

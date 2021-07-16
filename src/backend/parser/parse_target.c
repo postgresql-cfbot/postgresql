@@ -89,7 +89,9 @@ transformTargetEntry(ParseState *pstate,
 		 * through unmodified.  (transformExpr will throw the appropriate
 		 * error if we're disallowing it.)
 		 */
-		if (exprKind == EXPR_KIND_UPDATE_SOURCE && IsA(node, SetToDefault))
+		if ((exprKind == EXPR_KIND_UPDATE_SOURCE ||
+			 exprKind == EXPR_KIND_LET_TARGET)
+			&& IsA(node, SetToDefault))
 			expr = node;
 		else
 			expr = transformExpr(pstate, node, exprKind);

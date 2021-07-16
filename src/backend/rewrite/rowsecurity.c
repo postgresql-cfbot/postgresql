@@ -213,10 +213,10 @@ get_row_security_policies(Query *root, RangeTblEntry *rte, int rt_index,
 	}
 
 	/*
-	 * For SELECT, UPDATE and DELETE, add security quals to enforce the USING
-	 * policies.  These security quals control access to existing table rows.
-	 * Restrictive policies are combined together using AND, and permissive
-	 * policies are combined together using OR.
+	 * For SELECT, LET, UPDATE and DELETE, add security quals to enforce the
+	 * USING policies.  These security quals control access to existing table
+	 * rows. Restrictive policies are combined together using AND, and
+	 * permissive policies are combined together using OR.
 	 */
 
 	get_policies_for_relation(rel, commandType, user_id, &permissive_policies,

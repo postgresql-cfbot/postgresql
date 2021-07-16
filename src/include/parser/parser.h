@@ -33,6 +33,9 @@
  * RAW_PARSE_PLPGSQL_ASSIGNn: parse a PL/pgSQL assignment statement,
  * and return a one-element List containing a RawStmt node.  "n"
  * gives the number of dotted names comprising the target ColumnRef.
+ *
+ * RAW_PARSE_PLPGSQL_LET: parse a LET statement, and return a
+ * one-element List containing a RawStmt node.
  */
 typedef enum
 {
@@ -41,7 +44,8 @@ typedef enum
 	RAW_PARSE_PLPGSQL_EXPR,
 	RAW_PARSE_PLPGSQL_ASSIGN1,
 	RAW_PARSE_PLPGSQL_ASSIGN2,
-	RAW_PARSE_PLPGSQL_ASSIGN3
+	RAW_PARSE_PLPGSQL_ASSIGN3,
+	RAW_PARSE_PLPGSQL_LET
 } RawParseMode;
 
 /* Values for the backslash_quote GUC */

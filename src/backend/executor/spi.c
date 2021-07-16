@@ -2120,7 +2120,7 @@ _SPI_prepare_plan(const char *src, SPIPlanPtr plan)
 	/*
 	 * Parse the request string into a list of raw parse trees.
 	 */
-	raw_parsetree_list = raw_parser(src, plan->parse_mode);
+	raw_parsetree_list = raw_parser(src, plan->parse_mode, 0);
 
 	/*
 	 * Do parse analysis and rule rewrite for each raw parsetree, storing the
@@ -2228,7 +2228,7 @@ _SPI_prepare_oneshot_plan(const char *src, SPIPlanPtr plan)
 	/*
 	 * Parse the request string into a list of raw parse trees.
 	 */
-	raw_parsetree_list = raw_parser(src, plan->parse_mode);
+	raw_parsetree_list = raw_parser(src, plan->parse_mode, 0);
 
 	/*
 	 * Construct plancache entries, but don't do parse analysis yet.

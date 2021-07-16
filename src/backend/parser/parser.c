@@ -37,17 +37,25 @@ static char *str_udeescape(const char *str, char escape,
  *
  * Returns a list of raw (un-analyzed) parse trees.  The contents of the
  * list have the form required by the specified RawParseMode.
+ *
+ * For all mode different from MODE_SINGLE_QUERY, caller should provide a 0
+ * offset as the whole input string should be parsed.  Otherwise, caller should
+ * provide the wanted offset in the input string, or -1 if no offset is
+ * required.
  */
 List *
-raw_parser(const char *str, RawParseMode mode)
+raw_parser(const char *str, RawParseMode mode, int offset)
 {
 	core_yyscan_t yyscanner;
 	base_yy_extra_type yyextra;
 	int			yyresult;
 
+	Assert((mode != RAW_PARSE_SINGLE_QUERY && offset == 0) ||
+			(mode == RAW_PARSE_SINGLE_QUERY && offset != 0));
+
 	/* initialize the flex scanner */
 	yyscanner = scanner_init(str, &yyextra.core_yy_extra,
-							 &ScanKeywords, ScanKeywordTokens);
+							 &ScanKeywords, ScanKeywordTokens, offset);
 
 	/* base_yylex() only needs us to initialize the lookahead token, if any */
 	if (mode == RAW_PARSE_DEFAULT)
@@ -61,7 +69,8 @@ raw_parser(const char *str, RawParseMode mode)
 			MODE_PLPGSQL_EXPR,	/* RAW_PARSE_PLPGSQL_EXPR */
 			MODE_PLPGSQL_ASSIGN1,	/* RAW_PARSE_PLPGSQL_ASSIGN1 */
 			MODE_PLPGSQL_ASSIGN2,	/* RAW_PARSE_PLPGSQL_ASSIGN2 */
-			MODE_PLPGSQL_ASSIGN3	/* RAW_PARSE_PLPGSQL_ASSIGN3 */
+			MODE_PLPGSQL_ASSIGN3,	/* RAW_PARSE_PLPGSQL_ASSIGN3 */
+			MODE_SINGLE_QUERY		/* RAW_PARSE_SINGLE_QUERY */
 		};
 
 		yyextra.have_lookahead = true;

@@ -1,0 +1,7 @@
+# Generated subdirectories
+/log/
+/results/
+/tmp_check/
+sqlol_gram.c
+sqlol_gram.h
+sqlol_scan.c

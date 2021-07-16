@@ -17,6 +17,7 @@
 #include "nodes/params.h"
 #include "nodes/parsenodes.h"
 #include "nodes/plannodes.h"
+#include "parser/parser.h"
 #include "storage/procsignal.h"
 #include "utils/guc.h"
 #include "utils/queryenvironment.h"
@@ -42,6 +43,11 @@ typedef enum
 } LogStmtLevel;
 
 extern PGDLLIMPORT int log_statement;
+
+/* Hook for plugins to get control in pg_parse_query() */
+typedef List *(*parser_hook_type) (const char *str, RawParseMode mode,
+								   int offset, bool *error);
+extern PGDLLIMPORT parser_hook_type parser_hook;
 
 extern List *pg_parse_query(const char *query_string);
 extern List *pg_rewrite_query(Query *query);

@@ -49,6 +49,14 @@
 static void
 check_publication_add_relation(Relation targetrel)
 {
+	/* FOREIGN table cannot be part of publication. */
+	if (RelationGetForm(targetrel)->relkind == RELKIND_FOREIGN_TABLE)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("\"%s\" is a foreign table",
+						RelationGetRelationName(targetrel)),
+				 errdetail("Foreign tables cannot be added to publications.")));
+
 	/* Must be a regular or partitioned table */
 	if (RelationGetForm(targetrel)->relkind != RELKIND_RELATION &&
 		RelationGetForm(targetrel)->relkind != RELKIND_PARTITIONED_TABLE)
@@ -67,12 +75,18 @@ check_publication_add_relation(Relation targetrel)
 				 errdetail("System tables cannot be added to publications.")));
 
 	/* UNLOGGED and TEMP relations cannot be part of publication. */
-	if (!RelationIsPermanent(targetrel))
+	if (RelationUsesLocalBuffers(targetrel))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("table \"%s\" cannot be replicated",
+				 errmsg("\"%s\" is a temporary table",
 						RelationGetRelationName(targetrel)),
-				 errdetail("Temporary and unlogged relations cannot be replicated.")));
+				 errdetail("Temporary tables cannot be added to publications.")));
+	else if (targetrel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("\"%s\" is an unlogged table",
+						RelationGetRelationName(targetrel)),
+				 errdetail("Unlogged tables cannot be added to publications.")));
 }
 
 /*

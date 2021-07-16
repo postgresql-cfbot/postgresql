@@ -162,6 +162,22 @@ DROP PUBLICATION testpub_forparted, testpub_forparted1;
 CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_view;
 ERROR:  "testpub_view" is not a table
 DETAIL:  Only tables can be added to publications.
+CREATE TEMPORARY TABLE testpub_temptbl(a int);
+-- fail - temporary table
+CREATE PUBLICATION testpub_fortemptbl FOR TABLE testpub_temptbl;
+ERROR:  "testpub_temptbl" is a temporary table
+DETAIL:  Temporary tables cannot be added to publications.
+DROP TABLE testpub_temptbl;
+CREATE UNLOGGED TABLE testpub_unloggedtbl(a int);
+-- fail - unlogged table
+CREATE PUBLICATION testpub_forunloggedtbl FOR TABLE testpub_unloggedtbl;
+ERROR:  "testpub_unloggedtbl" is an unlogged table
+DETAIL:  Unlogged tables cannot be added to publications.
+DROP TABLE testpub_unloggedtbl;
+-- fail - system table
+CREATE PUBLICATION testpub_forsystemtbl FOR TABLE pg_publication;
+ERROR:  "pg_publication" is a system table
+DETAIL:  System tables cannot be added to publications.
 SET client_min_messages = 'ERROR';
 CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_tbl1, pub_test.testpub_nopk;
 RESET client_min_messages;

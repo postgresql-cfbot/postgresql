@@ -1315,6 +1315,17 @@ SELCT 1/0;<!-- this typo is intentional -->
     channel name.
    </para>
 
+   <para>
+    When the parameter <varname>listen_transaction_id</varname> is enabled, at
+    the begining of a transaction (not a subtransaction) the backend sends a
+    NotificationResponse message containing the transaction ID on the <literal>
+    _my_transaction_id<literal> channel. This may be useful for the frontend to
+    use after a crash-recovery, to inspect the state of their transaction from
+    before the crash; see <function>pg_xact_status()</function>. Unlike other
+    NotificationResponse messaegs, the process ID in this message is the same as
+    that of the current backend.
+   </para>
+
    <note>
     <para>
      At present, NotificationResponse can only be sent outside a

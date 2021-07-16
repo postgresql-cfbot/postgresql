@@ -161,13 +161,19 @@ xid8in(PG_FUNCTION_ARGS)
 	PG_RETURN_FULLTRANSACTIONID(FullTransactionIdFromU64(pg_strtouint64(str, NULL, 0)));
 }
 
+char *
+FullTransactionIdToStr(FullTransactionId fxid)
+{
+	char	   *result = (char *) palloc(21);
+	snprintf(result, 21, UINT64_FORMAT, U64FromFullTransactionId(fxid));
+	return result;
+}
+
 Datum
 xid8out(PG_FUNCTION_ARGS)
 {
 	FullTransactionId fxid = PG_GETARG_FULLTRANSACTIONID(0);
-	char	   *result = (char *) palloc(21);
-
-	snprintf(result, 21, UINT64_FORMAT, U64FromFullTransactionId(fxid));
+	char	   *result = FullTransactionIdToStr(fxid);
 	PG_RETURN_CSTRING(result);
 }
 

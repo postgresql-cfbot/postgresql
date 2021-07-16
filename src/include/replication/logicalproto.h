@@ -67,7 +67,8 @@ typedef enum LogicalRepMsgType
 	LOGICAL_REP_MSG_STREAM_START = 'S',
 	LOGICAL_REP_MSG_STREAM_END = 'E',
 	LOGICAL_REP_MSG_STREAM_COMMIT = 'c',
-	LOGICAL_REP_MSG_STREAM_ABORT = 'A'
+	LOGICAL_REP_MSG_STREAM_ABORT = 'A',
+	LOGICAL_REP_MSG_STREAM_PREPARE = 'p'
 } LogicalRepMsgType;
 
 /*
@@ -124,6 +125,7 @@ typedef struct LogicalRepBeginData
 	TransactionId xid;
 } LogicalRepBeginData;
 
+/* Commit (and abort) information */
 typedef struct LogicalRepCommitData
 {
 	XLogRecPtr	commit_lsn;
@@ -242,5 +244,11 @@ extern void logicalrep_write_stream_abort(StringInfo out, TransactionId xid,
 										  TransactionId subxid);
 extern void logicalrep_read_stream_abort(StringInfo in, TransactionId *xid,
 										 TransactionId *subxid);
+
+extern void logicalrep_write_stream_prepare(StringInfo out, ReorderBufferTXN *txn,
+											XLogRecPtr prepare_lsn);
+extern TransactionId logicalrep_read_stream_prepare(StringInfo in,
+													LogicalRepPreparedTxnData *prepare_data);
+
 
 #endif							/* LOGICAL_PROTO_H */

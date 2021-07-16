@@ -318,6 +318,66 @@ logicalrep_read_rollback_prepared(StringInfo in,
 }
 
 /*
+ * Write STREAM PREPARE to the output stream.
+ */
+void
+logicalrep_write_stream_prepare(StringInfo out,
+								ReorderBufferTXN *txn,
+								XLogRecPtr prepare_lsn)
+{
+	uint8		flags = 0;
+
+	pq_sendbyte(out, LOGICAL_REP_MSG_STREAM_PREPARE);
+
+	/*
+	 * This should only ever happen for two-phase commit transactions, in
+	 * which case we expect to have a valid GID.
+	 */
+	Assert(txn->gid != NULL);
+
+	Assert(rbtxn_prepared(txn));
+	Assert(TransactionIdIsValid(txn->xid));
+
+	/* send the flags field */
+	pq_sendbyte(out, flags);
+
+	/* send fields */
+	pq_sendint64(out, prepare_lsn);
+	pq_sendint64(out, txn->end_lsn);
+	pq_sendint64(out, txn->xact_time.prepare_time);
+	pq_sendint32(out, txn->xid);
+
+	/* send gid */
+	pq_sendstring(out, txn->gid);
+}
+
+/*
+ * Read STREAM PREPARE from the output stream.
+ */
+TransactionId
+logicalrep_read_stream_prepare(StringInfo in, LogicalRepPreparedTxnData *prepare_data)
+{
+	uint8		flags;
+
+	/* read flags */
+	flags = pq_getmsgbyte(in);
+
+	if (flags != 0)
+		elog(ERROR, "unrecognized flags %u in stream prepare message", flags);
+
+	/* read fields */
+	prepare_data->prepare_lsn = pq_getmsgint64(in);
+	prepare_data->end_lsn = pq_getmsgint64(in);
+	prepare_data->prepare_time = pq_getmsgint64(in);
+	prepare_data->xid = pq_getmsgint(in, 4);
+
+	/* read gid (copy it into a pre-allocated buffer) */
+	strcpy(prepare_data->gid, pq_getmsgstring(in));
+
+	return prepare_data->xid;
+}
+
+/*
  * Write ORIGIN to the output stream.
  */
 void

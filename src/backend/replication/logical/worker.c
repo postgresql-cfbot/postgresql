@@ -332,7 +332,7 @@ static void apply_handle_tuple_routing(ApplyExecutionData *edata,
 
 /* Compute GID for two_phase transactions */
 static void TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, int szgid);
-
+static int apply_spooled_messages(TransactionId xid, XLogRecPtr lsn);
 
 /*
  * Should this worker apply changes for given relation.
@@ -1041,6 +1041,90 @@ apply_handle_rollback_prepared(StringInfo s)
 }
 
 /*
+ * Handle STREAM PREPARE.
+ *
+ * Logic is in two parts:
+ * 1. Replay all the spooled operations
+ * 2. Mark the transaction as prepared
+ */
+static void
+apply_handle_stream_prepare(StringInfo s)
+{
+	int			nchanges = 0;
+	LogicalRepPreparedTxnData prepare_data;
+	TransactionId xid;
+	char		gid[GIDSIZE];
+
+	if (in_streamed_transaction)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg_internal("STREAM PREPARE message without STREAM STOP")));
+
+	/* Tablesync should never receive prepare. */
+	if (am_tablesync_worker())
+		ereport(ERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg_internal("tablesync worker received a STREAM PREPARE message")));
+
+	xid = logicalrep_read_stream_prepare(s, &prepare_data);
+	elog(DEBUG1, "received prepare for streamed transaction %u", xid);
+
+	/*
+	 * Compute unique GID for two_phase transactions. We don't use GID of
+	 * prepared transaction sent by server as that can lead to deadlock when
+	 * we have multiple subscriptions from same node point to publications on
+	 * the same node. See comments atop worker.c
+	 */
+	TwoPhaseTransactionGid(MySubscription->oid, prepare_data.xid,
+						   gid, sizeof(gid));
+
+	/*
+	 * 1. Replay all the spooled operations - Similar code as for
+	 * apply_handle_stream_commit (i.e. non two-phase stream commit)
+	 */
+
+	nchanges = apply_spooled_messages(xid, prepare_data.prepare_lsn);
+
+	/*
+	 * 2. Mark the transaction as prepared. - Similar code as for
+	 * apply_handle_prepare (i.e. two-phase non-streamed prepare)
+	 */
+
+	/*
+	 * BeginTransactionBlock is necessary to balance the EndTransactionBlock
+	 * called within the PrepareTransactionBlock below.
+	 */
+	BeginTransactionBlock();
+	CommitTransactionCommand(); /* Completes the preceding Begin command. */
+
+	/*
+	 * Update origin state so we can restart streaming from correct position
+	 * in case of crash.
+	 */
+	replorigin_session_origin_lsn = prepare_data.end_lsn;
+	replorigin_session_origin_timestamp = prepare_data.prepare_time;
+
+	PrepareTransactionBlock(gid);
+	CommitTransactionCommand();
+
+	pgstat_report_stat(false);
+
+	store_flush_position(prepare_data.end_lsn);
+
+	elog(DEBUG1, "apply_handle_stream_prepare: replayed %d (all) changes.", nchanges);
+
+	in_remote_transaction = false;
+
+	/* unlink the files with serialized changes and subxact info */
+	stream_cleanup_files(MyLogicalRepWorker->subid, xid);
+
+	/* Process any tables that are being synchronized in parallel. */
+	process_syncing_tables(prepare_data.end_lsn);
+
+	pgstat_report_activity(STATE_IDLE, NULL);
+}
+
+/*
  * Handle ORIGIN message.
  *
  * TODO, support tracking of multiple origins
@@ -1256,29 +1340,19 @@ apply_handle_stream_abort(StringInfo s)
 }
 
 /*
- * Handle STREAM COMMIT message.
+ * Common spoolfile processing.
+ * Returns how many changes were applied.
  */
-static void
-apply_handle_stream_commit(StringInfo s)
+static int
+apply_spooled_messages(TransactionId xid, XLogRecPtr lsn)
 {
-	TransactionId xid;
 	StringInfoData s2;
 	int			nchanges;
 	char		path[MAXPGPATH];
 	char	   *buffer = NULL;
-	LogicalRepCommitData commit_data;
 	StreamXidHash *ent;
 	MemoryContext oldcxt;
 	BufFile    *fd;
-
-	if (in_streamed_transaction)
-		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg_internal("STREAM COMMIT message without STREAM STOP")));
-
-	xid = logicalrep_read_stream_commit(s, &commit_data);
-
-	elog(DEBUG1, "received commit for streamed transaction %u", xid);
 
 	/* Make sure we have an open transaction */
 	begin_replication_step();
@@ -1290,7 +1364,7 @@ apply_handle_stream_commit(StringInfo s)
 	 */
 	oldcxt = MemoryContextSwitchTo(TopTransactionContext);
 
-	/* open the spool file for the committed transaction */
+	/* Open the spool file for the committed/prepared transaction */
 	changes_filename(path, MyLogicalRepWorker->subid, xid);
 	elog(DEBUG1, "replaying changes from file \"%s\"", path);
 
@@ -1311,7 +1385,7 @@ apply_handle_stream_commit(StringInfo s)
 
 	MemoryContextSwitchTo(oldcxt);
 
-	remote_final_lsn = commit_data.commit_lsn;
+	remote_final_lsn = lsn;
 
 	/*
 	 * Make sure the handle apply_dispatch methods are aware we're in a remote
@@ -1389,6 +1463,32 @@ apply_handle_stream_commit(StringInfo s)
 
 	elog(DEBUG1, "replayed %d (all) changes from file \"%s\"",
 		 nchanges, path);
+
+	return nchanges;
+}
+
+/*
+ * Handle STREAM COMMIT message.
+ */
+static void
+apply_handle_stream_commit(StringInfo s)
+{
+	TransactionId xid;
+	LogicalRepCommitData commit_data;
+	int			nchanges = 0;
+
+	if (in_streamed_transaction)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg_internal("STREAM COMMIT message without STREAM STOP")));
+
+	xid = logicalrep_read_stream_commit(s, &commit_data);
+
+	elog(DEBUG1, "received commit for streamed transaction %u", xid);
+
+	nchanges = apply_spooled_messages(xid, commit_data.commit_lsn);
+
+	elog(DEBUG1, "apply_handle_stream_commit: replayed %d (all) changes.", nchanges);
 
 	apply_handle_commit_internal(s, &commit_data);
 
@@ -2332,6 +2432,10 @@ apply_dispatch(StringInfo s)
 
 		case LOGICAL_REP_MSG_ROLLBACK_PREPARED:
 			apply_handle_rollback_prepared(s);
+			return;
+
+		case LOGICAL_REP_MSG_STREAM_PREPARE:
+			apply_handle_stream_prepare(s);
 			return;
 	}
 

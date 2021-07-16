@@ -326,6 +326,16 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	RelationPreTruncate(rel);
 
 	/*
+	 * If the file truncation fails but the concurrent checkpoint completes
+	 * just before that, the next crash recovery can fail due to WAL records
+	 * inconsistent with the untruncated pages. To avoid that situation we
+	 * delay the checkpoint completion until we confirm the truncation to be
+	 * successful.
+	 */
+	Assert(MyProc->delayChkpt == DELAY_CHKPT_NONE);
+	MyProc->delayChkpt = DELAY_CHKPT_COMPLETE;
+
+	/*
 	 * We WAL-log the truncation before actually truncating, which means
 	 * trouble if the truncation fails. If we then crash, the WAL replay
 	 * likely isn't going to succeed in the truncation either, and cause a
@@ -373,6 +383,8 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	 */
 	if (need_fsm_vacuum)
 		FreeSpaceMapVacuumRange(rel, nblocks, InvalidBlockNumber);
+
+	MyProc->delayChkpt = DELAY_CHKPT_NONE;
 }
 
 /*

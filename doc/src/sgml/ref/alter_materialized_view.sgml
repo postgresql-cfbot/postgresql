@@ -26,7 +26,7 @@ ALTER MATERIALIZED VIEW [ IF EXISTS ] <replaceable class="parameter">name</repla
 ALTER MATERIALIZED VIEW <replaceable class="parameter">name</replaceable>
     [ NO ] DEPENDS ON EXTENSION <replaceable class="parameter">extension_name</replaceable>
 ALTER MATERIALIZED VIEW [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
-    RENAME [ COLUMN ] <replaceable class="parameter">column_name</replaceable> TO <replaceable class="parameter">new_column_name</replaceable>
+    RENAME [ COLUMN ] [ IF EXISTS ] <replaceable class="parameter">column_name</replaceable> TO <replaceable class="parameter">new_column_name</replaceable>
 ALTER MATERIALIZED VIEW [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     RENAME TO <replaceable class="parameter">new_name</replaceable>
 ALTER MATERIALIZED VIEW [ IF EXISTS ] <replaceable class="parameter">name</replaceable>

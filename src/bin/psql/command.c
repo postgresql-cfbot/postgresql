@@ -75,7 +75,7 @@ static backslashResult exec_command_d(PsqlScanState scan_state, bool active_bran
 									  const char *cmd);
 static bool exec_command_dfo(PsqlScanState scan_state, const char *cmd,
 							 const char *pattern,
-							 bool show_verbose, bool show_system);
+							 int verbose, bool show_system);
 static backslashResult exec_command_edit(PsqlScanState scan_state, bool active_branch,
 										 PQExpBuffer query_buf, PQExpBuffer previous_buf);
 static backslashResult exec_command_ef_ev(PsqlScanState scan_state, bool active_branch,
@@ -362,7 +362,8 @@ exec_command(const char *cmd,
 	else if (strcmp(cmd, "if") == 0)
 		status = exec_command_if(scan_state, cstack, query_buf);
 	else if (strcmp(cmd, "l") == 0 || strcmp(cmd, "list") == 0 ||
-			 strcmp(cmd, "l+") == 0 || strcmp(cmd, "list+") == 0)
+			 strcmp(cmd, "l+") == 0 || strcmp(cmd, "l++") == 0 ||
+			 strcmp(cmd, "list+") == 0 || strcmp(cmd, "list++") == 0)
 		status = exec_command_list(scan_state, active_branch, cmd);
 	else if (strncmp(cmd, "lo_", 3) == 0)
 		status = exec_command_lo(scan_state, active_branch, cmd);
@@ -707,14 +708,16 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 	if (active_branch)
 	{
 		char	   *pattern;
-		bool		show_verbose,
-					show_system;
+		int			verbose = 0;
+		bool		show_system;
 
 		/* We don't do SQLID reduction on the pattern yet */
 		pattern = psql_scan_slash_option(scan_state,
 										 OT_NORMAL, NULL, true);
 
-		show_verbose = strchr(cmd, '+') ? true : false;
+		for (const char *t = cmd; *t != '\0'; ++t)
+			verbose += *t == '+' ? 1 : 0;
+
 		show_system = strchr(cmd, 'S') ? true : false;
 
 		switch (cmd[1])
@@ -723,10 +726,10 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 			case '+':
 			case 'S':
 				if (pattern)
-					success = describeTableDetails(pattern, show_verbose, show_system);
+					success = describeTableDetails(pattern, verbose, show_system);
 				else
 					/* standard listing of interesting things */
-					success = listTables("tvmsE", NULL, show_verbose, show_system);
+					success = listTables("tvmsE", NULL, verbose, show_system);
 				break;
 			case 'A':
 				{
@@ -739,19 +742,19 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 					{
 						case '\0':
 						case '+':
-							success = describeAccessMethods(pattern, show_verbose);
+							success = describeAccessMethods(pattern, verbose);
 							break;
 						case 'c':
-							success = listOperatorClasses(pattern, pattern2, show_verbose);
+							success = listOperatorClasses(pattern, pattern2, verbose);
 							break;
 						case 'f':
-							success = listOperatorFamilies(pattern, pattern2, show_verbose);
+							success = listOperatorFamilies(pattern, pattern2, verbose);
 							break;
 						case 'o':
-							success = listOpFamilyOperators(pattern, pattern2, show_verbose);
+							success = listOpFamilyOperators(pattern, pattern2, verbose);
 							break;
 						case 'p':
-							success = listOpFamilyFunctions(pattern, pattern2, show_verbose);
+							success = listOpFamilyFunctions(pattern, pattern2, verbose);
 							break;
 						default:
 							status = PSQL_CMD_UNKNOWN;
@@ -763,16 +766,16 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				}
 				break;
 			case 'a':
-				success = describeAggregates(pattern, show_verbose, show_system);
+				success = describeAggregates(pattern, verbose, show_system);
 				break;
 			case 'b':
-				success = describeTablespaces(pattern, show_verbose);
+				success = describeTablespaces(pattern, verbose);
 				break;
 			case 'c':
-				success = listConversions(pattern, show_verbose, show_system);
+				success = listConversions(pattern, verbose, show_system);
 				break;
 			case 'C':
-				success = listCasts(pattern, show_verbose);
+				success = listCasts(pattern, verbose);
 				break;
 			case 'd':
 				if (strncmp(cmd, "ddp", 3) == 0)
@@ -781,7 +784,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 					success = objectDescription(pattern, show_system);
 				break;
 			case 'D':
-				success = listDomains(pattern, show_verbose, show_system);
+				success = listDomains(pattern, verbose, show_system);
 				break;
 			case 'f':			/* function subsystem */
 				switch (cmd[2])
@@ -795,7 +798,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 					case 't':
 					case 'w':
 						success = exec_command_dfo(scan_state, cmd, pattern,
-												   show_verbose, show_system);
+												   verbose, show_system);
 						break;
 					default:
 						status = PSQL_CMD_UNKNOWN;
@@ -804,23 +807,23 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				break;
 			case 'g':
 				/* no longer distinct from \du */
-				success = describeRoles(pattern, show_verbose, show_system);
+				success = describeRoles(pattern, verbose, show_system);
 				break;
 			case 'l':
 				success = do_lo_list();
 				break;
 			case 'L':
-				success = listLanguages(pattern, show_verbose, show_system);
+				success = listLanguages(pattern, verbose, show_system);
 				break;
 			case 'n':
-				success = listSchemas(pattern, show_verbose, show_system);
+				success = listSchemas(pattern, verbose, show_system);
 				break;
 			case 'o':
 				success = exec_command_dfo(scan_state, cmd, pattern,
-										   show_verbose, show_system);
+										   verbose, show_system);
 				break;
 			case 'O':
-				success = listCollations(pattern, show_verbose, show_system);
+				success = listCollations(pattern, verbose, show_system);
 				break;
 			case 'p':
 				success = permissionsList(pattern);
@@ -834,7 +837,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 						case 't':
 						case 'i':
 						case 'n':
-							success = listPartitionedTables(&cmd[2], pattern, show_verbose);
+							success = listPartitionedTables(&cmd[2], pattern, verbose);
 							break;
 						default:
 							status = PSQL_CMD_UNKNOWN;
@@ -843,7 +846,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				}
 				break;
 			case 'T':
-				success = describeTypes(pattern, show_verbose, show_system);
+				success = describeTypes(pattern, verbose, show_system);
 				break;
 			case 't':
 			case 'v':
@@ -851,7 +854,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 			case 'i':
 			case 's':
 			case 'E':
-				success = listTables(&cmd[1], pattern, show_verbose, show_system);
+				success = listTables(&cmd[1], pattern, verbose, show_system);
 				break;
 			case 'r':
 				if (cmd[2] == 'd' && cmd[3] == 's')
@@ -873,36 +876,36 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				switch (cmd[2])
 				{
 					case 'p':
-						if (show_verbose)
+						if (verbose > 0)
 							success = describePublications(pattern);
 						else
 							success = listPublications(pattern);
 						break;
 					case 's':
-						success = describeSubscriptions(pattern, show_verbose);
+						success = describeSubscriptions(pattern, verbose);
 						break;
 					default:
 						status = PSQL_CMD_UNKNOWN;
 				}
 				break;
 			case 'u':
-				success = describeRoles(pattern, show_verbose, show_system);
+				success = describeRoles(pattern, verbose, show_system);
 				break;
 			case 'F':			/* text search subsystem */
 				switch (cmd[2])
 				{
 					case '\0':
 					case '+':
-						success = listTSConfigs(pattern, show_verbose);
+						success = listTSConfigs(pattern, verbose);
 						break;
 					case 'p':
-						success = listTSParsers(pattern, show_verbose);
+						success = listTSParsers(pattern, verbose);
 						break;
 					case 'd':
-						success = listTSDictionaries(pattern, show_verbose);
+						success = listTSDictionaries(pattern, verbose);
 						break;
 					case 't':
-						success = listTSTemplates(pattern, show_verbose);
+						success = listTSTemplates(pattern, verbose);
 						break;
 					default:
 						status = PSQL_CMD_UNKNOWN;
@@ -913,16 +916,16 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				switch (cmd[2])
 				{
 					case 's':
-						success = listForeignServers(pattern, show_verbose);
+						success = listForeignServers(pattern, verbose);
 						break;
 					case 'u':
-						success = listUserMappings(pattern, show_verbose);
+						success = listUserMappings(pattern, verbose);
 						break;
 					case 'w':
-						success = listForeignDataWrappers(pattern, show_verbose);
+						success = listForeignDataWrappers(pattern, verbose);
 						break;
 					case 't':
-						success = listForeignTables(pattern, show_verbose);
+						success = listForeignTables(pattern, verbose);
 						break;
 					default:
 						status = PSQL_CMD_UNKNOWN;
@@ -930,7 +933,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				}
 				break;
 			case 'x':			/* Extensions */
-				if (show_verbose)
+				if (verbose > 0)
 					success = listExtensionContents(pattern);
 				else
 					success = listExtensions(pattern);
@@ -939,7 +942,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				success = listExtendedStats(pattern);
 				break;
 			case 'y':			/* Event Triggers */
-				success = listEventTriggers(pattern, show_verbose);
+				success = listEventTriggers(pattern, verbose);
 				break;
 			default:
 				status = PSQL_CMD_UNKNOWN;
@@ -961,7 +964,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 static bool
 exec_command_dfo(PsqlScanState scan_state, const char *cmd,
 				 const char *pattern,
-				 bool show_verbose, bool show_system)
+				 int verbose, bool show_system)
 {
 	bool		success;
 	char	   *arg_patterns[FUNC_MAX_ARGS];
@@ -984,11 +987,11 @@ exec_command_dfo(PsqlScanState scan_state, const char *cmd,
 	if (cmd[1] == 'f')
 		success = describeFunctions(&cmd[2], pattern,
 									arg_patterns, num_arg_patterns,
-									show_verbose, show_system);
+									verbose, show_system);
 	else
 		success = describeOperators(pattern,
 									arg_patterns, num_arg_patterns,
-									show_verbose, show_system);
+									verbose, show_system);
 
 	while (--num_arg_patterns >= 0)
 		free(arg_patterns[num_arg_patterns]);
@@ -1870,14 +1873,15 @@ exec_command_list(PsqlScanState scan_state, bool active_branch, const char *cmd)
 	if (active_branch)
 	{
 		char	   *pattern;
-		bool		show_verbose;
+		int		verbose = 0;
 
 		pattern = psql_scan_slash_option(scan_state,
 										 OT_NORMAL, NULL, true);
 
-		show_verbose = strchr(cmd, '+') ? true : false;
+		for (const char *t = cmd; *t != '\0'; ++t)
+			verbose += *t == '+' ? 1 : 0;
 
-		success = listAllDbs(pattern, show_verbose);
+		success = listAllDbs(pattern, verbose);
 
 		if (pattern)
 			free(pattern);

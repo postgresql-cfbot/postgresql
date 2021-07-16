@@ -67,7 +67,8 @@ typedef enum
 	KILL_COMMAND,
 	REGISTER_COMMAND,
 	UNREGISTER_COMMAND,
-	RUN_AS_SERVICE_COMMAND
+	RUN_AS_SERVICE_COMMAND,
+	OUTPUT_SHARED_MEMORY_COMMAND
 } CtlCommand;
 
 #define DEFAULT_WAIT	60
@@ -897,6 +898,9 @@ do_start(void)
 #endif
 
 	pm_pid = start_postmaster();
+
+	if (ctl_command == OUTPUT_SHARED_MEMORY_COMMAND)
+		return;
 
 	if (do_wait)
 	{
@@ -2469,6 +2473,20 @@ main(int argc, char **argv)
 			else if (strcmp(argv[optind], "runservice") == 0)
 				ctl_command = RUN_AS_SERVICE_COMMAND;
 #endif
+			else if (strcmp(argv[optind], "output_shared_memory") == 0)
+			{
+				ctl_command = OUTPUT_SHARED_MEMORY_COMMAND;
+
+				if (!post_opts)
+					post_opts = pstrdup("-M");
+				else
+				{
+					char *old_post_opts = post_opts;
+
+					post_opts = psprintf("%s %s", old_post_opts, "-M");
+					free(old_post_opts);
+				}
+			}
 			else
 			{
 				write_stderr(_("%s: unrecognized operation mode \"%s\"\n"), progname, argv[optind]);
@@ -2572,6 +2590,9 @@ main(int argc, char **argv)
 			pgwin32_doRunAsService();
 			break;
 #endif
+		case OUTPUT_SHARED_MEMORY_COMMAND:
+			do_start();
+			break;
 		default:
 			break;
 	}

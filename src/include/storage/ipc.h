@@ -77,6 +77,6 @@ extern void check_on_shmem_exit_lists_are_empty(void);
 /* ipci.c */
 extern PGDLLIMPORT shmem_startup_hook_type shmem_startup_hook;
 
-extern void CreateSharedMemoryAndSemaphores(void);
+extern Size CreateSharedMemoryAndSemaphores(bool size_only);
 
 #endif							/* IPC_H */

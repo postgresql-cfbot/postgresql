@@ -91,8 +91,8 @@ RequestAddinShmemSpace(Size size)
  * check IsUnderPostmaster, rather than EXEC_BACKEND, to detect this case.
  * This is a bit code-wasteful and could be cleaned up.)
  */
-void
-CreateSharedMemoryAndSemaphores(void)
+Size
+CreateSharedMemoryAndSemaphores(bool size_only)
 {
 	PGShmemHeader *shim = NULL;
 
@@ -160,6 +160,9 @@ CreateSharedMemoryAndSemaphores(void)
 
 		/* might as well round it off to a multiple of a typical page size */
 		size = add_size(size, 8192 - (size % 8192));
+
+		if (size_only)
+			return size;
 
 		elog(DEBUG3, "invoking IpcMemoryCreate(size=%zu)", size);
 
@@ -288,4 +291,6 @@ CreateSharedMemoryAndSemaphores(void)
 	 */
 	if (shmem_startup_hook)
 		shmem_startup_hook();
+
+	return 0;
 }

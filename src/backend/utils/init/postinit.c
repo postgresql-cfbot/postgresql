@@ -437,7 +437,7 @@ InitCommunication(void)
 		 * We're running a postgres bootstrap process or a standalone backend,
 		 * so we need to set up shmem.
 		 */
-		CreateSharedMemoryAndSemaphores();
+		(void) CreateSharedMemoryAndSemaphores(false);
 	}
 }
 

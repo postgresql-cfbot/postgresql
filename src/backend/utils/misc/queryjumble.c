@@ -42,6 +42,9 @@
 /* GUC parameters */
 int			compute_query_id = COMPUTE_QUERY_ID_AUTO;
 
+/* */
+int			const_merge_threshold = 5;
+
 /* True when compute_query_id is ON, or AUTO and a module requests them */
 bool		query_id_enabled = false;
 
@@ -52,7 +55,8 @@ static void JumbleQueryInternal(JumbleState *jstate, Query *query);
 static void JumbleRangeTable(JumbleState *jstate, List *rtable);
 static void JumbleRowMarks(JumbleState *jstate, List *rowMarks);
 static void JumbleExpr(JumbleState *jstate, Node *node);
-static void RecordConstLocation(JumbleState *jstate, int location);
+static bool JumbleExprList(JumbleState *jstate, Node *node);
+static void RecordConstLocation(JumbleState *jstate, int location, bool merged);
 
 /*
  * Given a possibly multi-statement source string, confine our attention to the
@@ -119,7 +123,7 @@ JumbleQuery(Query *query, const char *querytext)
 		jstate->jumble_len = 0;
 		jstate->clocations_buf_size = 32;
 		jstate->clocations = (LocationLen *)
-			palloc(jstate->clocations_buf_size * sizeof(LocationLen));
+			palloc0(jstate->clocations_buf_size * sizeof(LocationLen));
 		jstate->clocations_count = 0;
 		jstate->highest_extern_param_id = 0;
 
@@ -297,7 +301,7 @@ JumbleRangeTable(JumbleState *jstate, List *rtable)
 				JumbleExpr(jstate, (Node *) rte->tablefunc);
 				break;
 			case RTE_VALUES:
-				JumbleExpr(jstate, (Node *) rte->values_lists);
+				JumbleExprList(jstate, (Node *) rte->values_lists);
 				break;
 			case RTE_CTE:
 
@@ -339,6 +343,261 @@ JumbleRowMarks(JumbleState *jstate, List *rowMarks)
 			APP_JUMB(rowmark->waitPolicy);
 		}
 	}
+}
+
+/*
+ * find_const_walker
+ *	  Locate all the Const nodes in an expression tree.
+ *
+ * Caller must provide an empty list where constants will be collected.
+ */
+static bool
+find_const_walker(Node *node, List **constants)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Const))
+	{
+		*constants = lappend(*constants, (Const *) node);
+		return false;
+	}
+
+	return expression_tree_walker(node, find_const_walker, (void *) constants);
+}
+
+static bool
+JumbleExprList(JumbleState *jstate, Node *node)
+{
+	ListCell   *temp;
+	Node	   *firstExpr = NULL;
+	bool		merged = false;
+	bool		allConst = true;
+	int 		currentExprIdx;
+	int 		lastExprLength = 0;
+
+	if (node == NULL)
+		return merged;
+
+	/* Guard against stack overflow due to overly complex expressions */
+	check_stack_depth();
+
+	Assert(IsA(node, List));
+	firstExpr = eval_const_expressions(NULL, (Node *) lfirst(list_head((List *) node)));
+
+	/*
+	 * We always emit the node's NodeTag, then any additional fields that are
+	 * considered significant, and then we recurse to any child nodes.
+	 */
+	APP_JUMB(node->type);
+
+	/*
+	 * If the first expression is a constant or a list of constants, try to
+	 * merge the following if they're constants as well. Otherwise do
+	 * JumbleExpr as usual.
+	 */
+	switch (nodeTag(firstExpr))
+	{
+		case T_List:
+			currentExprIdx = 0;
+
+			foreach(temp, (List *) node)
+			{
+				List 		*expr = (List *) lfirst(temp);
+				ListCell 	*lc;
+
+				foreach(lc, expr)
+				{
+					Node * subExpr = eval_const_expressions(NULL, (Node *) lfirst(lc));
+
+					if (!IsA(subExpr, Const))
+					{
+						allConst = false;
+						break;
+					}
+				}
+
+				if (allConst && currentExprIdx >= const_merge_threshold - 1)
+				{
+					merged = true;
+
+					/*
+					 * This hash is going to accumulate the following merged
+					 * statements
+					 */
+					if (currentExprIdx == const_merge_threshold - 1)
+					{
+						JumbleExpr(jstate, (Node *) expr);
+
+						/*
+						 * An expr consisting of constants is already found,
+						 * JumbleExpr must record it. Mark all the constants as
+						 * merged, they will be the first merged but still
+						 * present in the statement query.
+						 */
+						Assert(jstate->clocations_count > lastExprLength - 1);
+						for (int i = 1; i < lastExprLength + 1; i++)
+						{
+							LocationLen *loc;
+							loc = &jstate->clocations[jstate->clocations_count - i];
+							loc->merged = true;
+						}
+						currentExprIdx++;
+					}
+					else
+						foreach(lc, expr)
+						{
+							/*
+							 * eval_const_expressions does not provide real
+							 * Const with valid const location, which we need
+							 * for generate_normalized_query. Extract such real
+							 * constants manually. We need only the last one,
+							 * to find out where the current expression
+							 * actually ends. */
+							Const *lastConst;
+							List *constants = NIL;
+							find_const_walker((Node *) lfirst(lc), &constants);
+							lastConst = (Const *) llast(constants);
+							RecordConstLocation(jstate, lastConst->location, true);
+						}
+
+					continue;
+				}
+
+				JumbleExpr(jstate, (Node *) expr);
+				currentExprIdx++;
+				lastExprLength = expr->length;
+			}
+			break;
+
+		case T_Const:
+			currentExprIdx = 0;
+
+			foreach(temp, (List *) node)
+			{
+				Node *expr = (Node *) lfirst(temp);
+				Node *evalExpr = eval_const_expressions(NULL, expr);
+
+				if (IsA(evalExpr, Const) && currentExprIdx >= const_merge_threshold - 1)
+				{
+					merged = true;
+
+					/*
+					 * This hash is going to accumulate the following merged
+					 * statements
+					 */
+					if (currentExprIdx == const_merge_threshold - 1)
+					{
+						JumbleExpr(jstate, expr);
+
+						/*
+						 * A const expr is already found, so JumbleExpr must
+						 * record it. Mark it as merged, it will be the first
+						 * merged but still present in the statement query.
+						 */
+						Assert(jstate->clocations_count > lastExprLength - 1);
+						for (int i = 1; i < lastExprLength + 1; i++)
+						{
+							LocationLen *loc;
+							loc = &jstate->clocations[jstate->clocations_count - i];
+							loc->merged = true;
+						}
+						currentExprIdx++;
+					}
+					else
+					{
+						/*
+						 * eval_const_expressions does not provide real
+						 * Const with valid const location, which we need
+						 * for generate_normalized_query. Extract such real
+						 * constants manually. Take into account that even with
+						 * a single expression it could potentially contains
+						 * many constants, we need only the last one, to find
+						 * out where the current expression actually ends.
+						 */
+						Const *lastConst;
+						List *constants = NIL;
+						find_const_walker(expr, &constants);
+						lastConst = (Const *) llast(constants);
+
+						RecordConstLocation(jstate, lastConst->location, true);
+					}
+
+					continue;
+				}
+
+				JumbleExpr(jstate, expr);
+				currentExprIdx++;
+
+				if (currentExprIdx == const_merge_threshold -1)
+				{
+					// The next expression will be eligible for merging check.
+					// For it to happen correctly remember the number of
+					// constants in the previous expression.
+					List *constants = NIL;
+					find_const_walker(expr, &constants);
+					lastExprLength = constants->length;
+				}
+			}
+			break;
+
+		case T_Param:
+			currentExprIdx = 0;
+
+			foreach(temp, (List *) node)
+			{
+				Node *expr = (Node *) lfirst(temp);
+				Param *p = (Param *) expr;
+
+				if (!equal(expr, firstExpr) && IsA(expr, Param) &&
+					currentExprIdx >= const_merge_threshold - 1)
+				{
+
+					merged = true;
+
+					/*
+					 * This hash is going to accumulate the following merged
+					 * statements
+					 */
+					if (currentExprIdx == const_merge_threshold - 1)
+					{
+						JumbleExpr(jstate, expr);
+
+						/*
+						 * A const expr is already found, so JumbleExpr must
+						 * record it. Mark it as merged, it will be the first
+						 * merged but still present in the statement query.
+						 */
+						Assert(jstate->clocations_count > 0);
+						jstate->clocations[jstate->clocations_count - 1].merged = true;
+						currentExprIdx++;
+					}
+					else
+						RecordConstLocation(jstate, p->location, true);
+
+					continue;
+				}
+
+				JumbleExpr(jstate, expr);
+
+				/*
+				 * To allow merging of parameters as well in
+				 * generate_normalized_query, remember it as a constant.
+				 */
+				RecordConstLocation(jstate, p->location, false);
+				currentExprIdx++;
+			}
+			break;
+
+		default:
+			foreach(temp, (List *) node)
+			{
+				JumbleExpr(jstate, (Node *) lfirst(temp));
+			}
+			break;
+	}
+
+	return merged;
 }
 
 /*
@@ -390,7 +649,7 @@ JumbleExpr(JumbleState *jstate, Node *node)
 				/* We jumble only the constant's type, not its value */
 				APP_JUMB(c->consttype);
 				/* Also, record its parse location for query normalization */
-				RecordConstLocation(jstate, c->location);
+				RecordConstLocation(jstate, c->location, false);
 			}
 			break;
 		case T_Param:
@@ -579,7 +838,7 @@ JumbleExpr(JumbleState *jstate, Node *node)
 			}
 			break;
 		case T_ArrayExpr:
-			JumbleExpr(jstate, (Node *) ((ArrayExpr *) node)->elements);
+			JumbleExprList(jstate, (Node *) ((ArrayExpr *) node)->elements);
 			break;
 		case T_RowExpr:
 			JumbleExpr(jstate, (Node *) ((RowExpr *) node)->args);
@@ -832,11 +1091,11 @@ JumbleExpr(JumbleState *jstate, Node *node)
 }
 
 /*
- * Record location of constant within query string of query tree
+ * Record location of constant or a parameter within query string of query tree
  * that is currently being walked.
  */
 static void
-RecordConstLocation(JumbleState *jstate, int location)
+RecordConstLocation(JumbleState *jstate, int location, bool merged)
 {
 	/* -1 indicates unknown or undefined location */
 	if (location >= 0)
@@ -851,6 +1110,7 @@ RecordConstLocation(JumbleState *jstate, int location)
 						 sizeof(LocationLen));
 		}
 		jstate->clocations[jstate->clocations_count].location = location;
+		jstate->clocations[jstate->clocations_count].merged = merged;
 		/* initialize lengths to -1 to simplify third-party module usage */
 		jstate->clocations[jstate->clocations_count].length = -1;
 		jstate->clocations_count++;

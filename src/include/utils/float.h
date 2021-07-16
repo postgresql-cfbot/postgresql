@@ -353,4 +353,26 @@ float8_max(const float8 val1, const float8 val2)
 	return float8_gt(val1, val2) ? val1 : val2;
 }
 
+/*
+ * These two functions return NaN if either input is NaN, else the smaller
+ * of the two inputs.  This does NOT follow our usual sort rule, but it is
+ * convenient in some places.  (Note that float4_max and float8_max act this
+ * way anyway, so no similar variant is needed for them.)
+ */
+static inline float4
+float4_min_nan(const float4 val1, const float4 val2)
+{
+	return (isnan(val1) ? val1 :
+			(isnan(val2) ? val2 :
+			 (val1 < val2 ? val1 : val2)));
+}
+
+static inline float8
+float8_min_nan(const float8 val1, const float8 val2)
+{
+	return (isnan(val1) ? val1 :
+			(isnan(val2) ? val2 :
+			 (val1 < val2 ? val1 : val2)));
+}
+
 #endif							/* FLOAT_H */

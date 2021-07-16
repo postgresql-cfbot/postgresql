@@ -714,6 +714,7 @@ clause_selectivity_ext(PlannerInfo *root,
 	Selectivity s1 = 0.5;		/* default for any unhandled clause type */
 	RestrictInfo *rinfo = NULL;
 	bool		cacheable = false;
+	Node	   *src = clause;
 
 	if (clause == NULL)			/* can this still happen? */
 		return s1;
@@ -871,11 +872,46 @@ clause_selectivity_ext(PlannerInfo *root,
 		}
 		else
 		{
-			/* Estimate selectivity for a restriction clause. */
-			s1 = restriction_selectivity(root, opno,
-										 opclause->args,
-										 opclause->inputcollid,
-										 varRelid);
+			/*
+			 * It might be (Expr op Expr), which goes here thanks to the
+			 * optimization at the beginning of clauselist_selectivity.
+			 * So try applying extended stats first, then fall back to
+			 * restriction_selectivity.
+			 *
+			 * XXX Kinda does the same thing as clauselist_selectivity, but
+			 * for a single clause. Maybe we could call that, but need to
+			 * be careful not to cause infinite loop.
+			 */
+			bool	estimated = false;
+
+			if (use_extended_stats)
+			{
+				Bitmapset *estimatedclauses = NULL;
+				List *clauses = list_make1(src);
+				RelOptInfo *rel = find_single_rel_for_clauses(root, clauses);
+
+				if (rel && rel->rtekind == RTE_RELATION && rel->statlist != NIL)
+				{
+					/*
+					 * Estimate as many clauses as possible using extended statistics.
+					 *
+					 * 'estimatedclauses' is populated with the 0-based list position
+					 * index of clauses estimated here, and that should be ignored below.
+					 */
+					s1 = statext_clauselist_selectivity(root, clauses, varRelid,
+														jointype, sjinfo, rel,
+														&estimatedclauses, false);
+
+					estimated = (bms_num_members(estimatedclauses) == 1);
+				}
+			}
+
+			/* Estimate selectivity for a restriction clause (fallback). */
+			if (!estimated)
+				s1 = restriction_selectivity(root, opno,
+											 opclause->args,
+											 opclause->inputcollid,
+											 varRelid);
 		}
 
 		/*

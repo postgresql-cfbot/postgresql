@@ -1352,14 +1352,15 @@ statext_is_compatible_clause_internal(PlannerInfo *root, Node *clause,
 	{
 		RangeTblEntry *rte = root->simple_rte_array[relid];
 		OpExpr	   *expr = (OpExpr *) clause;
-		Node	   *clause_expr;
+		Node	   *clause_expr,
+				   *clause_expr2;
 
 		/* Only expressions with two arguments are considered compatible. */
 		if (list_length(expr->args) != 2)
 			return false;
 
 		/* Check if the expression has the right shape */
-		if (!examine_opclause_args(expr->args, &clause_expr, NULL, NULL))
+		if (!examine_opclause_args(expr->args, &clause_expr, &clause_expr2, NULL, NULL))
 			return false;
 
 		/*
@@ -1399,13 +1400,44 @@ statext_is_compatible_clause_internal(PlannerInfo *root, Node *clause,
 			!get_func_leakproof(get_opcode(expr->opno)))
 			return false;
 
+		/* clause_expr is always valid */
+		Assert(clause_expr);
+
 		/* Check (Var op Const) or (Const op Var) clauses by recursing. */
 		if (IsA(clause_expr, Var))
-			return statext_is_compatible_clause_internal(root, clause_expr,
-														 relid, attnums, exprs);
+		{
+			if (!statext_is_compatible_clause_internal(root, clause_expr,
+													   relid, attnums, exprs))
+				return false;
+		}
+		else
+		{
+			/* Otherwise we have (Expr op Const) or (Const op Expr) or (Expr op Expr). */
+			*exprs = lappend(*exprs, clause_expr);
+		}
 
-		/* Otherwise we have (Expr op Const) or (Const op Expr). */
-		*exprs = lappend(*exprs, clause_expr);
+		/* without second expression, it has to be Expr op Const, so we're done */
+		if (!clause_expr2)
+			return true;
+
+		/*
+		 * Do the same thing as for the first expression.
+		 *
+		 * XXX Need to be careful later about matching both expressions at
+		 * the same time.
+		 */
+		if (IsA(clause_expr2, Var))
+		{
+			if (!statext_is_compatible_clause_internal(root, clause_expr2,
+													   relid, attnums, exprs))
+				return false;
+		}
+		else
+		{
+			/* Otherwise we have (Expr op Const) or (Const op Expr). */
+			*exprs = lappend(*exprs, clause_expr2);
+		}
+
 		return true;
 	}
 
@@ -1421,7 +1453,7 @@ statext_is_compatible_clause_internal(PlannerInfo *root, Node *clause,
 			return false;
 
 		/* Check if the expression has the right shape (one Var, one Const) */
-		if (!examine_opclause_args(expr->args, &clause_expr, NULL, NULL))
+		if (!examine_opclause_args(expr->args, &clause_expr, NULL, NULL, NULL))
 			return false;
 
 		/*
@@ -2010,19 +2042,20 @@ statext_clauselist_selectivity(PlannerInfo *root, List *clauses, int varRelid,
  *		Split an operator expression's arguments into Expr and Const parts.
  *
  * Attempts to match the arguments to either (Expr op Const) or (Const op
- * Expr), possibly with a RelabelType on top. When the expression matches this
- * form, returns true, otherwise returns false.
+ * Expr) or (Expr op Expr), possibly with a RelabelType on top. When the
+ * expression matches this form, returns true, otherwise returns false.
  *
  * Optionally returns pointers to the extracted Expr/Const nodes, when passed
  * non-null pointers (exprp, cstp and expronleftp). The expronleftp flag
  * specifies on which side of the operator we found the expression node.
  */
 bool
-examine_opclause_args(List *args, Node **exprp, Const **cstp,
+examine_opclause_args(List *args, Node **expr1p, Node **expr2p, Const **cstp,
 					  bool *expronleftp)
 {
-	Node	   *expr;
-	Const	   *cst;
+	Node	   *expr1 = NULL;
+	Node	   *expr2 = NULL;
+	Const	   *cst = NULL;
 	bool		expronleft;
 	Node	   *leftop,
 			   *rightop;
@@ -2042,22 +2075,36 @@ examine_opclause_args(List *args, Node **exprp, Const **cstp,
 
 	if (IsA(rightop, Const))
 	{
-		expr = (Node *) leftop;
+		expr1 = (Node *) leftop;
 		cst = (Const *) rightop;
 		expronleft = true;
 	}
 	else if (IsA(leftop, Const))
 	{
-		expr = (Node *) rightop;
+		expr1 = (Node *) rightop;
 		cst = (Const *) leftop;
 		expronleft = false;
 	}
 	else
-		return false;
+	{
+		expr1 = (Node *) leftop;
+		expr2 = (Node *) rightop;
+		expronleft = false;
+
+		/*
+		 * FIXME Both variables have to be for the same relation (otherwise
+		 * it's a join clause, and we don't deal with those yet. Need to
+		 * call pull_varnos on both sides or something like that.
+		 */
+		
+	}
 
 	/* return pointers to the extracted parts if requested */
-	if (exprp)
-		*exprp = expr;
+	if (expr1p)
+		*expr1p = expr1;
+
+	if (expr2p)
+		*expr2p = expr2;
 
 	if (cstp)
 		*cstp = cst;

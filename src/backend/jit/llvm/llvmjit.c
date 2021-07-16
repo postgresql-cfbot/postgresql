@@ -241,6 +241,8 @@ llvm_mutable_module(LLVMJitContext *context)
 		context->module = LLVMModuleCreateWithName("pg");
 		LLVMSetTarget(context->module, llvm_triple);
 		LLVMSetDataLayout(context->module, llvm_layout);
+
+		context->base.instr.created_modules++;
 	}
 
 	return context->module;
@@ -578,12 +580,7 @@ llvm_optimize_module(LLVMJitContext *context, LLVMModuleRef module)
 	LLVMPassManagerBuilderSetOptLevel(llvm_pmb, compile_optlevel);
 	llvm_fpm = LLVMCreateFunctionPassManagerForModule(module);
 
-	if (context->base.flags & PGJIT_OPT3)
-	{
-		/* TODO: Unscientifically determined threshold */
-		LLVMPassManagerBuilderUseInlinerWithThreshold(llvm_pmb, 512);
-	}
-	else
+	if (!(context->base.flags & PGJIT_OPT3))
 	{
 		/* we rely on mem2reg heavily, so emit even in the O0 case */
 		LLVMAddPromoteMemoryToRegisterPass(llvm_fpm);
@@ -611,11 +608,9 @@ llvm_optimize_module(LLVMJitContext *context, LLVMModuleRef module)
 	LLVMPassManagerBuilderPopulateModulePassManager(llvm_pmb,
 													llvm_mpm);
 	/* always use always-inliner pass */
-	if (!(context->base.flags & PGJIT_OPT3))
-		LLVMAddAlwaysInlinerPass(llvm_mpm);
-	/* if doing inlining, but no expensive optimization, add inlining pass */
-	if (context->base.flags & PGJIT_INLINE
-		&& !(context->base.flags & PGJIT_OPT3))
+	LLVMAddAlwaysInlinerPass(llvm_mpm);
+	/* if doing inlining, add inlining pass */
+	if (context->base.flags & PGJIT_INLINE)
 		LLVMAddFunctionInliningPass(llvm_mpm);
 	LLVMRunPassManager(llvm_mpm, context->module);
 	LLVMDisposePassManager(llvm_mpm);

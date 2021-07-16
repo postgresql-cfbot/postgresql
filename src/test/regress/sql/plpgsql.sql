@@ -1933,6 +1933,143 @@ $$ language plpgsql;
 select refcursor_test2(20000, 20000) as "Should be false",
        refcursor_test2(20, 20) as "Should be true";
 
+-- Check ability to consume from REFCURSOR in SELECT
+explain (verbose, costs off) select * from rows_in(return_unnamed_refcursor()) as (a int);
+select * from rows_in(return_unnamed_refcursor()) as (a int);
+explain (verbose, costs off) select * from rows_in(return_unnamed_refcursor()) as (a int) where a >= 50;
+select * from rows_in(return_unnamed_refcursor()) as (a int) where a >= 50;
+explain (verbose, costs off) select * from rows_in(return_unnamed_refcursor()) as (a int) order by a desc;
+select * from rows_in(return_unnamed_refcursor()) as (a int) order by a desc;
+
+-- Check multiple scan of REFCURSOR
+explain (verbose, costs off) select * from (select 1 nr union all select 2) as scan, rows_in(return_unnamed_refcursor()) as (a int) order by nr;
+select * from (select 1 nr union all select 2) as scan, rows_in(return_unnamed_refcursor()) as (a int) order by nr;
+
+-- Check multiple reference to single REFCURSOR
+explain (verbose, costs off)
+	select * from
+		rows_in(return_unnamed_refcursor()) as a(n int),
+		rows_in(return_unnamed_refcursor()) as b(n int)
+		order by a.n, b.n;
+select * from
+	rows_in(return_unnamed_refcursor()) as a(n int),
+	rows_in(return_unnamed_refcursor()) as b(n int)
+	order by a.n, b.n;
+explain (verbose, costs off)
+	select r.cur::text, a.n, b.n from
+		(select return_unnamed_refcursor() cur) r,
+		rows_in (r.cur) as a(n int),
+		rows_in (r.cur) as b(n int)
+		order by r.cur::text, a.n, b.n;
+select r.cur::text, a.n, b.n from
+	(select return_unnamed_refcursor() cur) r,
+	rows_in (r.cur) as a(n int),
+	rows_in (r.cur) as b(n int)
+	order by r.cur::text, a.n, b.n;
+
+-- Check use of REFCURSOR in WITH
+with rcq as (
+	select * from rows_in(return_unnamed_refcursor()) as (a int)
+)
+select * from rcq where a <= 50;
+
+-- Check attempt to UPDATE/DELETE REFCURSOR fails
+update rows_in(return_unnamed_refcursor()) set a = 2;
+delete from rows_in(return_unnamed_refcursor());
+
+-- Check type consistency
+select * from rows_in(return_unnamed_refcursor()) as (a int, b int);
+select * from rows_in(return_unnamed_refcursor()) as (a text);
+select * from rows_in(return_unnamed_refcursor()) as (a jsonb);
+
+-- Check consumption from REFCURSOR inside plpgsql FUNCTION
+create function refcursor_test3(input refcursor) returns refcursor as $$
+declare
+    rc refcursor;
+begin
+    open rc for select a, a+1 as a_plus_1 from rows_in(input) as (a int);
+    return rc;
+end
+$$ language plpgsql;
+explain (verbose, costs off) select * from rows_in(refcursor_test3(return_unnamed_refcursor())) as (a int, ap1 int) where a >= 50;
+select * from rows_in(refcursor_test3(return_unnamed_refcursor())) as (a int, ap1 int) where a >= 50;
+
+drop function refcursor_test3;
+
+-- Check consumption from REFCURSOR defined with USING
+create function refcursor_test4(minimum int) returns refcursor as $$
+declare
+    rc refcursor;
+begin
+	OPEN rc FOR EXECUTE 'select a from rc_test where a >= $1'
+		USING (minimum);
+    return rc;
+end
+$$ language plpgsql;
+explain (verbose, costs off)
+	select * from rows_in(refcursor_test4(50)) as (a int);
+select * from rows_in(refcursor_test4(50)) as (a int);
+
+drop function refcursor_test4;
+
+-- Check consumption from REFCURSOR defined in immediate mode
+begin;
+declare c cursor for
+	select 1 as i, 'one' v
+	union all
+	select 2, 'two';
+select * from rows_in('c'::refcursor) as (i int, v text);
+rollback;
+
+-- Check consumption from REFCURSOR directly in target list (tSRF)
+-- (This isn't particularly useful, but it should work.)
+begin;
+declare c cursor for
+	select 1 as i, 'one' v
+	union all
+	select 2, 'two';
+select rows_in('c'::refcursor);
+rollback;
+begin;
+declare c cursor for
+	select 1 as i, 'one' v
+	union all
+	select 2, 'two';
+select rows_in('c'::refcursor), * from rows_in('c'::refcursor) as (i int, v text);
+rollback;
+
+-- Check use of ROWS_IN with row_to_json both in the target list
+-- and in the FROM.
+begin;
+declare c cursor for
+	with recursive t as (
+		select 1 i
+		union all
+		select i + 1
+			from t
+			where i + 1 <= 10
+	)
+	select i, 'number ' || i t from t;
+select row_to_json(rows_in('c'::refcursor));
+rollback;
+begin;
+declare c cursor for
+	with recursive t as (
+		select 1 i
+		union all
+		select i + 1
+			from t
+			where i + 1 <= 1000
+	)
+	select i, 'number ' || i t from t;
+select j.r,
+		(j.r->'i')::int i, (j.r->'t')::text t
+	from (select row_to_json(rows_in('c'::refcursor))::jsonb as r) j
+	where
+		(j.r->'i')::int >= 50
+		and (j.r->'i')::int <= 60;
+rollback;
+
 --
 -- tests for cursors with named parameter arguments
 --

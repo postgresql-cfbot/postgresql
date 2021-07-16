@@ -22,7 +22,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 [ WITH [ RECURSIVE ] <replaceable class="parameter">with_query</replaceable> [, ...] ]
-DELETE FROM [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ [ AS ] <replaceable class="parameter">alias</replaceable> ]
+DELETE [ CASCADE ] FROM [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ [ AS ] <replaceable class="parameter">alias</replaceable> ]
     [ USING <replaceable class="parameter">from_item</replaceable> [, ...] ]
     [ WHERE <replaceable class="parameter">condition</replaceable> | WHERE CURRENT OF <replaceable class="parameter">cursor_name</replaceable> ]
     [ RETURNING * | <replaceable class="parameter">output_expression</replaceable> [ [ AS ] <replaceable class="parameter">output_name</replaceable> ] [, ...] ]
@@ -64,11 +64,20 @@ DELETE FROM [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ *
   </para>
 
   <para>
+   You can provide the optional <literal>CASCADE</literal> keyword, which causes
+   <command>DELETE</command> to treat existing <literal>RESTRICT</literal> or
+   <literal>NO ACTION</literal> constraints as if they were defined
+   as <literal>CASCADE</literal> constraints.
+  </para>
+
+  <para>
    You must have the <literal>DELETE</literal> privilege on the table
    to delete from it, as well as the <literal>SELECT</literal>
    privilege for any table in the <literal>USING</literal> clause or
    whose values are read in the <replaceable
-   class="parameter">condition</replaceable>.
+   class="parameter">condition</replaceable>.  If the <literal>CASCADE</literal>
+   option is provided, you must also have the same privileges on any tables affected
+   by the corresponding foreign key constraints.
   </para>
  </refsect1>
 
@@ -266,6 +275,13 @@ DELETE FROM tasks WHERE status = 'DONE' RETURNING *;
 <programlisting>
 DELETE FROM tasks WHERE CURRENT OF c_tasks;
 </programlisting></para>
+
+   <para>
+    Delete a specific row of <structname>authors</structname> as well as any
+    related records in the <structname>books</structname>, regardless of constraint type:
+<programlisting>
+DELETE CASCADE FROM authors WHERE author_name = 'Herman Melville';
+</programlisting></para>
  </refsect1>
 
  <refsect1>
@@ -274,6 +290,7 @@ DELETE FROM tasks WHERE CURRENT OF c_tasks;
   <para>
    This command conforms to the <acronym>SQL</acronym> standard, except
    that the <literal>USING</literal> and <literal>RETURNING</literal> clauses
+   and the <literal>CASCADE</literal> behavior
    are <productname>PostgreSQL</productname> extensions, as is the ability
    to use <literal>WITH</literal> with <command>DELETE</command>.
   </para>

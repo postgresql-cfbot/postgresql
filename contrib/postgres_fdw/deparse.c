@@ -186,6 +186,8 @@ static void appendFunctionName(Oid funcid, deparse_expr_cxt *context);
 static Node *deparseSortGroupClause(Index ref, List *tlist, bool force_colno,
 									deparse_expr_cxt *context);
 
+static void deparseCaseExpr(CaseExpr *node, deparse_expr_cxt *context);
+
 /*
  * Helper functions
  */
@@ -507,6 +509,54 @@ foreign_expr_walker(Node *node,
 					state = FDW_COLLATE_NONE;
 				else
 					state = FDW_COLLATE_UNSAFE;
+			}
+			break;
+		case T_CaseTestExpr:
+			{
+				CaseTestExpr *c = (CaseTestExpr *) node;
+
+				/*
+				 * Collation rule is same as for function nodes.
+				 */
+				collation = c->collation;
+				if (collation == InvalidOid)
+					state = FDW_COLLATE_NONE;
+				else if (inner_cxt.state == FDW_COLLATE_SAFE &&
+						 collation == inner_cxt.collation)
+					state = FDW_COLLATE_SAFE;
+				else if (collation == DEFAULT_COLLATION_OID)
+					state = FDW_COLLATE_NONE;
+				else
+					state = FDW_COLLATE_UNSAFE;
+			}
+			break;
+		case T_CaseExpr:
+			{
+				ListCell   *lc;
+ 
+				/* Recurse to case clause subexpressions. */
+				foreach(lc, ((CaseExpr *) node)->args)
+				{
+					if (!foreign_expr_walker((Node *) lfirst(lc),
+											 glob_cxt, &inner_cxt))
+						return false;
+				}
+			}
+			break;
+		case T_CaseWhen:
+			{
+				CaseWhen   *whenExpr = (CaseWhen *) node;
+ 
+				/* Recurse to case clause expression. */
+				if (!foreign_expr_walker((Node *) whenExpr->expr,
+										 glob_cxt, &inner_cxt))
+					return false;
+				/* Recurse to result expression. */
+				if (!foreign_expr_walker((Node *) whenExpr->result,
+										 glob_cxt, &inner_cxt))
+					return false;
+				/* Don't apply exprType() to the case when expr. */
+				check_type = false;
 			}
 			break;
 		case T_OpExpr:
@@ -2462,6 +2512,9 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
 		case T_Aggref:
 			deparseAggref((Aggref *) node, context);
 			break;
+		case T_CaseExpr:
+			deparseCaseExpr((CaseExpr *) node, context);
+			break;
 		default:
 			elog(ERROR, "unsupported expression type for deparse: %d",
 				 (int) nodeTag(node));
@@ -3177,6 +3230,52 @@ appendAggOrderBy(List *orderList, List *targetList, deparse_expr_cxt *context)
 		else
 			appendStringInfoString(buf, " NULLS LAST");
 	}
+}
+
+/*
+ * Deparse CASE expression
+ */
+static void
+deparseCaseExpr(CaseExpr *node, deparse_expr_cxt *context)
+{
+	StringInfo      buf = context->buf;
+	ListCell   *lc = NULL;
+ 
+	appendStringInfoString(buf, "(CASE");
+ 
+	/* If this is a CASE arg WHEN clause process arg first */
+	if (node->arg != NULL)
+	{
+		appendStringInfoString(buf, " ");
+		deparseExpr(node->arg, context);
+	}
+ 
+	/* Add each condition/result of the CASE clause */
+	foreach(lc, node->args)
+	{
+		CaseWhen   *whenclause = (CaseWhen *) lfirst(lc);
+ 
+		/* WHEN */
+		appendStringInfoString(buf, " WHEN ");
+		if (node->arg == NULL)  /* CASE WHEN */
+			deparseExpr(whenclause->expr, context);
+		else                    /* CASE arg WHEN */
+			deparseExpr(lsecond(((OpExpr *) whenclause->expr)->args), context);
+ 
+		/* THEN */
+		appendStringInfoString(buf, " THEN ");
+		deparseExpr(whenclause->result, context);
+	}
+ 
+	/* add ELSE if needed */
+	if (node->defresult != NULL)
+	{
+		appendStringInfoString(buf, " ELSE ");
+		deparseExpr(node->defresult, context);
+	}
+ 
+	/* append END */
+	appendStringInfoString(buf, " END)");
 }
 
 /*

@@ -5561,6 +5561,150 @@ UPDATE ft2 d SET c2 = CASE WHEN random() >= 0 THEN d.c2 ELSE 0 END
 
 UPDATE ft2 d SET c2 = CASE WHEN random() >= 0 THEN d.c2 ELSE 0 END
   FROM ft2 AS t WHERE d.c1 = t.c1 AND d.c1 > 1000;
+-- Test CASE pushdown
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE ft2 d SET c2 = CASE WHEN c2 > 0 THEN c2 ELSE 0 END
+WHERE c1 > 1000;
+                                                   QUERY PLAN                                                   
+----------------------------------------------------------------------------------------------------------------
+ Update on public.ft2 d
+   ->  Foreign Update on public.ft2 d
+         Remote SQL: UPDATE "S 1"."T 1" SET c2 = (CASE WHEN (c2 > 0) THEN c2 ELSE 0 END) WHERE (("C 1" > 1000))
+(3 rows)
+
+UPDATE ft2 d SET c2 = CASE WHEN c2 > 0 THEN c2 ELSE 0 END
+WHERE c1 > 1000;
+-- CASE in WHERE clause
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT c1,c2,c3 FROM ft2 WHERE CASE WHEN c2 > 600 THEN c2 END > 500 ORDER BY c1;
+                                                                       QUERY PLAN                                                                        
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft2
+   Output: c1, c2, c3
+   Remote SQL: SELECT "C 1", c2, c3 FROM "S 1"."T 1" WHERE (((CASE WHEN (c2 > 600) THEN c2 ELSE NULL::integer END) > 500)) ORDER BY "C 1" ASC NULLS LAST
+(3 rows)
+
+SELECT c1,c2,c3 FROM ft2 WHERE CASE WHEN c2 > 600 THEN c2 END > 500 ORDER BY c1;
+  c1  | c2  |         c3         
+------+-----+--------------------
+ 1009 | 609 | 0000900009_update9
+ 1019 | 609 | 0001900019_update9
+(2 rows)
+
+-- Nested CASE
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT c1,c2,c3 FROM ft2 WHERE CASE CASE WHEN c2 > 0 THEN c2 END WHEN 100 THEN 601 WHEN c2 THEN c2 ELSE 0 END > 600 ORDER BY c1;
+                                                                                                QUERY PLAN                                                                                                 
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft2
+   Output: c1, c2, c3
+   Remote SQL: SELECT "C 1", c2, c3 FROM "S 1"."T 1" WHERE (((CASE (CASE WHEN (c2 > 0) THEN c2 ELSE NULL::integer END) WHEN 100 THEN 601 WHEN c2 THEN c2 ELSE 0 END) > 600)) ORDER BY "C 1" ASC NULLS LAST
+(3 rows)
+
+SELECT c1,c2,c3 FROM ft2 WHERE CASE CASE WHEN c2 > 0 THEN c2 END WHEN 100 THEN 601 WHEN c2 THEN c2 ELSE 0 END > 600 ORDER BY c1;
+  c1  | c2  |         c3         
+------+-----+--------------------
+ 1009 | 609 | 0000900009_update9
+ 1010 | 100 | 0001000010
+ 1019 | 609 | 0001900019_update9
+ 1020 | 100 | 0002000020
+(4 rows)
+
+-- Aggregate function with CASE clause, both must be pushed down
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT sum(CASE WHEN mod(c1, 4) = 0 THEN 1 ELSE 2 END) FROM ft1;
+                                          QUERY PLAN                                          
+----------------------------------------------------------------------------------------------
+ Foreign Scan
+   Output: (sum(CASE WHEN (mod(c1, 4) = 0) THEN 1 ELSE 2 END))
+   Relations: Aggregate on (public.ft1)
+   Remote SQL: SELECT sum((CASE WHEN (mod("C 1", 4) = 0) THEN 1 ELSE 2 END)) FROM "S 1"."T 1"
+(4 rows)
+
+-- Same but with out ELSE clause
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT sum(CASE WHEN mod(c1, 4) = 0 THEN 1 END) FROM ft1;
+                                                QUERY PLAN                                                
+----------------------------------------------------------------------------------------------------------
+ Foreign Scan
+   Output: (sum(CASE WHEN (mod(c1, 4) = 0) THEN 1 ELSE NULL::integer END))
+   Relations: Aggregate on (public.ft1)
+   Remote SQL: SELECT sum((CASE WHEN (mod("C 1", 4) = 0) THEN 1 ELSE NULL::integer END)) FROM "S 1"."T 1"
+(4 rows)
+
+-- Different CASE form using a function in the condition
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM ft1 WHERE c1 > (CASE WHEN mod(c1, 4) = 0 THEN 1 ELSE 100 END);
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote SQL: SELECT "C 1", c2, c3, c4, c5, c6, c7, c8 FROM "S 1"."T 1" WHERE (("C 1" > (CASE WHEN (mod("C 1", 4) = 0) THEN 1 ELSE 100 END)))
+(3 rows)
+
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM ft1 WHERE c1 > (CASE mod(c1, 4) WHEN 0 THEN 1 WHEN 2 THEN 50 ELSE 100 END);
+                                                                        QUERY PLAN                                                                        
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote SQL: SELECT "C 1", c2, c3, c4, c5, c6, c7, c8 FROM "S 1"."T 1" WHERE (("C 1" > (CASE mod("C 1", 4) WHEN 0 THEN 1 WHEN 2 THEN 50 ELSE 100 END)))
+(3 rows)
+
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM ft1 WHERE c1 > (CASE WHEN mod(c1, 4) = 0 THEN 1 WHEN mod(c1, 6) = 0 THEN 50 ELSE 100 END);
+                                                                                   QUERY PLAN                                                                                   
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote SQL: SELECT "C 1", c2, c3, c4, c5, c6, c7, c8 FROM "S 1"."T 1" WHERE (("C 1" > (CASE WHEN (mod("C 1", 4) = 0) THEN 1 WHEN (mod("C 1", 6) = 0) THEN 50 ELSE 100 END)))
+(3 rows)
+
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM ft1 WHERE substr(c3, 6) = (CASE WHEN mod(c1, 4) = 0 THEN '_trig_update' ELSE '_update' END);
+                                                                                      QUERY PLAN                                                                                      
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote SQL: SELECT "C 1", c2, c3, c4, c5, c6, c7, c8 FROM "S 1"."T 1" WHERE ((substr(c3, 6) = (CASE WHEN (mod("C 1", 4) = 0) THEN '_trig_update'::text ELSE '_update'::text END)))
+(3 rows)
+
+-- CASE involved in a prepared statement
+PREPARE pre_case_select AS SELECT * FROM ft1 WHERE substr(c3, 6) = (CASE WHEN mod(c1, 4) = 0 THEN $1 ELSE $2 END);
+EXPLAIN (VERBOSE, COSTS OFF) EXECUTE pre_case_select('_trig_update', '_update');
+                                                                                      QUERY PLAN                                                                                      
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote SQL: SELECT "C 1", c2, c3, c4, c5, c6, c7, c8 FROM "S 1"."T 1" WHERE ((substr(c3, 6) = (CASE WHEN (mod("C 1", 4) = 0) THEN '_trig_update'::text ELSE '_update'::text END)))
+(3 rows)
+
+DEALLOCATE pre_case_select;
+-- Test that CASE pushdown is not happening
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE ft2 d SET c2 = CASE WHEN random() >= 0 THEN c2 ELSE 0 END
+WHERE c1 > 1000;
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ Update on public.ft2 d
+   Remote SQL: UPDATE "S 1"."T 1" SET c2 = $2 WHERE ctid = $1
+   ->  Foreign Scan on public.ft2 d
+         Output: CASE WHEN (random() >= '0'::double precision) THEN c2 ELSE 0 END, ctid, d.*
+         Remote SQL: SELECT "C 1", c2, c3, c4, c5, c6, c7, c8, ctid FROM "S 1"."T 1" WHERE (("C 1" > 1000)) FOR UPDATE
+(5 rows)
+
+UPDATE ft2 d SET c2 = CASE WHEN c2 > 0 THEN c2 ELSE 0 END
+WHERE c1 > 1000;
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM ft1 WHERE substr(c3, 6) COLLATE "C" = (CASE WHEN mod(c1, 4) = 0 THEN '_trig_update' COLLATE "C" ELSE '_update' COLLATE "C" END) COLLATE "C";
+                                                                    QUERY PLAN                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Filter: ((substr(ft1.c3, 6))::text = CASE WHEN (mod(ft1.c1, 4) = 0) THEN '_trig_update'::text COLLATE "C" ELSE '_update'::text COLLATE "C" END)
+   Remote SQL: SELECT "C 1", c2, c3, c4, c5, c6, c7, c8 FROM "S 1"."T 1"
+(4 rows)
+
 -- Test UPDATE/DELETE with WHERE or JOIN/ON conditions containing
 -- user-defined operators/functions
 ALTER SERVER loopback OPTIONS (DROP extensions);

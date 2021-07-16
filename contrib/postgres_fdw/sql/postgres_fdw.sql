@@ -1265,6 +1265,57 @@ UPDATE ft2 d SET c2 = CASE WHEN random() >= 0 THEN d.c2 ELSE 0 END
 UPDATE ft2 d SET c2 = CASE WHEN random() >= 0 THEN d.c2 ELSE 0 END
   FROM ft2 AS t WHERE d.c1 = t.c1 AND d.c1 > 1000;
 
+-- Test CASE pushdown
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE ft2 d SET c2 = CASE WHEN c2 > 0 THEN c2 ELSE 0 END
+WHERE c1 > 1000;
+
+UPDATE ft2 d SET c2 = CASE WHEN c2 > 0 THEN c2 ELSE 0 END
+WHERE c1 > 1000;
+
+-- CASE in WHERE clause
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT c1,c2,c3 FROM ft2 WHERE CASE WHEN c2 > 600 THEN c2 END > 500 ORDER BY c1;
+
+SELECT c1,c2,c3 FROM ft2 WHERE CASE WHEN c2 > 600 THEN c2 END > 500 ORDER BY c1;
+
+-- Nested CASE
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT c1,c2,c3 FROM ft2 WHERE CASE CASE WHEN c2 > 0 THEN c2 END WHEN 100 THEN 601 WHEN c2 THEN c2 ELSE 0 END > 600 ORDER BY c1;
+
+SELECT c1,c2,c3 FROM ft2 WHERE CASE CASE WHEN c2 > 0 THEN c2 END WHEN 100 THEN 601 WHEN c2 THEN c2 ELSE 0 END > 600 ORDER BY c1;
+
+-- Aggregate function with CASE clause, both must be pushed down
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT sum(CASE WHEN mod(c1, 4) = 0 THEN 1 ELSE 2 END) FROM ft1;
+-- Same but with out ELSE clause
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT sum(CASE WHEN mod(c1, 4) = 0 THEN 1 END) FROM ft1;
+-- Different CASE form using a function in the condition
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM ft1 WHERE c1 > (CASE WHEN mod(c1, 4) = 0 THEN 1 ELSE 100 END);
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM ft1 WHERE c1 > (CASE mod(c1, 4) WHEN 0 THEN 1 WHEN 2 THEN 50 ELSE 100 END);
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM ft1 WHERE c1 > (CASE WHEN mod(c1, 4) = 0 THEN 1 WHEN mod(c1, 6) = 0 THEN 50 ELSE 100 END);
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM ft1 WHERE substr(c3, 6) = (CASE WHEN mod(c1, 4) = 0 THEN '_trig_update' ELSE '_update' END);
+-- CASE involved in a prepared statement
+PREPARE pre_case_select AS SELECT * FROM ft1 WHERE substr(c3, 6) = (CASE WHEN mod(c1, 4) = 0 THEN $1 ELSE $2 END);
+EXPLAIN (VERBOSE, COSTS OFF) EXECUTE pre_case_select('_trig_update', '_update');
+DEALLOCATE pre_case_select;
+
+-- Test that CASE pushdown is not happening
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE ft2 d SET c2 = CASE WHEN random() >= 0 THEN c2 ELSE 0 END
+WHERE c1 > 1000;
+
+UPDATE ft2 d SET c2 = CASE WHEN c2 > 0 THEN c2 ELSE 0 END
+WHERE c1 > 1000;
+
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM ft1 WHERE substr(c3, 6) COLLATE "C" = (CASE WHEN mod(c1, 4) = 0 THEN '_trig_update' COLLATE "C" ELSE '_update' COLLATE "C" END) COLLATE "C";
+
 -- Test UPDATE/DELETE with WHERE or JOIN/ON conditions containing
 -- user-defined operators/functions
 ALTER SERVER loopback OPTIONS (DROP extensions);

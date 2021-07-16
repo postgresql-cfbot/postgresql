@@ -2852,9 +2852,11 @@ postgresExplainForeignScan(ForeignScanState *node, ExplainState *es)
 				relname = get_rel_name(rte->relid);
 				if (es->verbose)
 				{
+					Oid         namespaceOid;
 					char	   *namespace;
 
-					namespace = get_namespace_name(get_rel_namespace(rte->relid));
+					namespaceOid = get_rel_namespace(rte->relid);
+					namespace = get_namespace_name_or_temp(namespaceOid);
 					appendStringInfo(relations, "%s.%s",
 									 quote_identifier(namespace),
 									 quote_identifier(relname));

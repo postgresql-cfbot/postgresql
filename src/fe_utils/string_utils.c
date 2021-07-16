@@ -913,6 +913,14 @@ processSQLNamePattern(PGconn *conn, PQExpBuffer buf, const char *pattern,
 		{
 			WHEREAND();
 			appendPQExpBuffer(buf, "%s OPERATOR(pg_catalog.~) ", schemavar);
+
+			/*
+			 * Internal temporary schema name could be different, strip out "$"
+			 * from pattern to relax the match.
+			 */
+			if (strcmp(schemabuf.data, "^(pg_temp)$") == 0 ||
+				strcmp(schemabuf.data, "^(pg_toast_temp)$") == 0)
+				schemabuf.data[schemabuf.len-1] = '\0';
 			appendStringLiteralConn(buf, schemabuf.data, conn);
 			if (PQserverVersion(conn) >= 120000)
 				appendPQExpBufferStr(buf, " COLLATE pg_catalog.default");

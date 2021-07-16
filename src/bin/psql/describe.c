@@ -1584,6 +1584,15 @@ describeTableDetails(const char *pattern, bool verbose, bool showSystem)
 		nspname = PQgetvalue(res, i, 1);
 		relname = PQgetvalue(res, i, 2);
 
+		/* Replace internal temp schema name */
+		if (pset.sversion >= 140000)
+		{
+			if (strncmp(nspname, "pg_temp_", 8) == 0)
+				nspname = "pg_temp";
+			else if (strncmp(nspname, "pg_toast_temp_", 14) == 0)
+				nspname = "pg_toast_temp";
+		}
+
 		if (!describeOneTableDetails(nspname, relname, oid, verbose))
 		{
 			PQclear(res);
@@ -2395,6 +2404,10 @@ describeOneTableDetails(const char *schemaname,
 		{
 			char	   *schemaname = PQgetvalue(result, 0, 0);
 			char	   *relname = PQgetvalue(result, 0, 1);
+
+			/* Replace internal temporary schema name */
+			if (strncmp(schemaname, "pg_temp_", 8) == 0)
+				schemaname = "pg_temp";
 
 			printfPQExpBuffer(&tmpbuf, _("Owning table: \"%s.%s\""),
 							  schemaname, relname);

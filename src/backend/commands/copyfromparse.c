@@ -171,7 +171,35 @@ ReceiveCopyBegin(CopyFromState cstate)
 	StringInfoData buf;
 	int			natts = list_length(cstate->attnumlist);
 	int16		format = (cstate->opts.binary ? 1 : 0);
+	int			mtype;
 	int			i;
+
+	cstate->copy_src = COPY_FRONTEND;
+	cstate->fe_msgbuf = makeStringInfo();
+
+	HOLD_CANCEL_INTERRUPTS();
+	pq_startmsgread();
+	mtype = pq_getbyte();
+
+	if (mtype == EOF)
+		ereport(ERROR,
+				(errcode(ERRCODE_CONNECTION_FAILURE),
+				 errmsg("unexpected EOF on client connection with an open transaction")));
+
+	/* expecting a Sync */
+	if (mtype != 'S')
+		ereport(ERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("unexpected message type 0x%02X before COPY FROM STDIN; expected Sync",
+						mtype)));
+
+	/* Now collect the message body */
+	if (pq_getmessage(cstate->fe_msgbuf, PQ_SMALL_MESSAGE_LIMIT))
+		ereport(ERROR,
+				(errcode(ERRCODE_CONNECTION_FAILURE),
+				 errmsg("unexpected EOF on client connection with an open transaction")));
+
+	RESUME_CANCEL_INTERRUPTS();
 
 	pq_beginmessage(&buf, 'G');
 	pq_sendbyte(&buf, format);	/* overall format */
@@ -179,8 +207,7 @@ ReceiveCopyBegin(CopyFromState cstate)
 	for (i = 0; i < natts; i++)
 		pq_sendint16(&buf, format); /* per-column formats */
 	pq_endmessage(&buf);
-	cstate->copy_src = COPY_FRONTEND;
-	cstate->fe_msgbuf = makeStringInfo();
+
 	/* We *must* flush here to ensure FE knows it can send. */
 	pq_flush();
 }

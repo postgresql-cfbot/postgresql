@@ -41,6 +41,7 @@
 #include "access/twophase.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
+#include "access/xlogrestore.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
 #include "catalog/storage.h"
@@ -234,6 +235,8 @@ static bool check_recovery_target_lsn(char **newval, void **extra, GucSource sou
 static void assign_recovery_target_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
+static bool check_wal_prefetch_workers(int *newval, void **extra,
+									   GucSource source);
 
 /* Private functions in guc-file.l that need to be called from guc.c */
 static ConfigVariable *ProcessConfigFileInternal(GucContext context,
@@ -3546,12 +3549,37 @@ static struct config_int ConfigureNamesInt[] =
 		check_client_connection_check_interval, NULL, NULL
 	},
 
+	{
+		{"wal_max_prefetch_amount",
+			PGC_POSTMASTER,
+			WAL_ARCHIVE_RECOVERY,
+			gettext_noop("Set a max number of WAL files to keep up prefetched "
+						 "from archive"),
+			NULL
+		},
+		&wal_max_prefetch_amount,
+		DEFAULT_WAL_MAX_PREFETCH_AMOUNT, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"wal_prefetch_workers",
+			PGC_POSTMASTER,
+			WAL_ARCHIVE_RECOVERY,
+			gettext_noop("Set a number of background workers to run for "
+						 "prefetching WAL files from archive"),
+			NULL
+		},
+		&wal_prefetch_workers,
+		DEFAULT_TOTAL_PREFETCH_WORKERS, 0, MAX_BACKENDS,
+		check_wal_prefetch_workers, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL
 	}
 };
-
 
 static struct config_real ConfigureNamesReal[] =
 {
@@ -12034,6 +12062,20 @@ check_max_worker_processes(int *newval, void **extra, GucSource source)
 	if (MaxConnections + autovacuum_max_workers + 1 +
 		*newval + max_wal_senders > MAX_BACKENDS)
 		return false;
+	return true;
+}
+
+static bool
+check_wal_prefetch_workers(int *newval, void **extra, GucSource source)
+{
+	if (*newval > max_worker_processes)
+	{
+		GUC_check_errdetail("A value of wal_prefetch_workers can't exceed "
+							"a value of max_worker_processes=%d",
+							max_worker_processes);
+		return false;
+	}
+
 	return true;
 }
 

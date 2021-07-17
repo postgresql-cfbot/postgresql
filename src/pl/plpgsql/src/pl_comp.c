@@ -378,6 +378,10 @@ do_compile(FunctionCallInfo fcinfo,
 	 */
 	plpgsql_ns_init();
 	plpgsql_ns_push(NameStr(procStruct->proname), PLPGSQL_LABEL_BLOCK);
+
+	/* save top ns for possibility to alter top label */
+	function->root_ns = plpgsql_ns_top();
+
 	plpgsql_DumpExecTree = false;
 	plpgsql_start_datums();
 

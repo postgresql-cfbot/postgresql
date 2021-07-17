@@ -101,6 +101,7 @@ plpgsql_ns_additem(PLpgSQL_nsitem_type itemtype, int itemno, const char *name)
 	nse->itemtype = itemtype;
 	nse->itemno = itemno;
 	nse->prev = ns_top;
+	nse->alias = NULL;
 	strcpy(nse->name, name);
 	ns_top = nse;
 }
@@ -141,7 +142,7 @@ plpgsql_ns_lookup(PLpgSQL_nsitem *ns_cur, bool localmode,
 			 nsitem->itemtype != PLPGSQL_NSTYPE_LABEL;
 			 nsitem = nsitem->prev)
 		{
-			if (strcmp(nsitem->name, name1) == 0)
+			if (strcmp(nsitem->alias ? nsitem->alias : nsitem->name, name1) == 0)
 			{
 				if (name2 == NULL ||
 					nsitem->itemtype != PLPGSQL_NSTYPE_VAR)
@@ -155,13 +156,13 @@ plpgsql_ns_lookup(PLpgSQL_nsitem *ns_cur, bool localmode,
 
 		/* Check this level for qualified match to variable name */
 		if (name2 != NULL &&
-			strcmp(nsitem->name, name1) == 0)
+			strcmp(nsitem->alias ? nsitem->alias : nsitem->name, name1) == 0)
 		{
 			for (nsitem = ns_cur;
 				 nsitem->itemtype != PLPGSQL_NSTYPE_LABEL;
 				 nsitem = nsitem->prev)
 			{
-				if (strcmp(nsitem->name, name2) == 0)
+				if (strcmp(nsitem->alias ? nsitem->alias : nsitem->name, name2) == 0)
 				{
 					if (name3 == NULL ||
 						nsitem->itemtype != PLPGSQL_NSTYPE_VAR)
@@ -197,7 +198,7 @@ plpgsql_ns_lookup_label(PLpgSQL_nsitem *ns_cur, const char *name)
 	while (ns_cur != NULL)
 	{
 		if (ns_cur->itemtype == PLPGSQL_NSTYPE_LABEL &&
-			strcmp(ns_cur->name, name) == 0)
+			strcmp(ns_cur->alias ? ns_cur->alias : ns_cur->name, name) == 0)
 			return ns_cur;
 		ns_cur = ns_cur->prev;
 	}

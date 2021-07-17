@@ -4645,3 +4645,38 @@ BEGIN
   GET DIAGNOSTICS x = ROW_COUNT;
   RETURN;
 END; $$ LANGUAGE plpgsql;
+
+--
+-- Check root namespace renaming (routine_label option)
+--
+CREATE OR REPLACE FUNCTION test_root_namespace_rename(arg1 int)
+RETURNS void AS $$
+#ROUTINE_LABEL argsns
+BEGIN
+  RAISE NOTICE '% %', arg1, argsns.arg1;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT test_root_namespace_rename(10);
+
+CREATE OR REPLACE FUNCTION test_root_namespace_rename(arg1 int)
+RETURNS void AS $$
+#ROUTINE_LABEL argsns
+BEGIN
+  -- should to fail, original name is overwritten
+  RAISE NOTICE '% %', arg1, test_root_namespace_rename.arg1;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT test_root_namespace_rename(10);
+
+-- should fail, syntax error - redundant option
+CREATE OR REPLACE FUNCTION test_root_namespace_rename(arg1 int)
+RETURNS void AS $$
+#ROUTINE_LABEL argsns
+#ROUTINE_LABEL argsns
+BEGIN
+  -- should to fail, original name is overwritten
+  RAISE NOTICE '% %', arg1, test_root_namespace_rename.arg1;
+END;
+$$ LANGUAGE plpgsql;

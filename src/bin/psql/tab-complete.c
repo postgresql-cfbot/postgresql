@@ -758,6 +758,13 @@ static const SchemaQuery Query_for_list_of_collations = {
 "   FROM pg_catalog.pg_roles "\
 "  WHERE substring(pg_catalog.quote_ident(rolname),1,%d)='%s'"
 
+#define Query_for_list_of_schema_roles \
+" SELECT pg_catalog.quote_ident(rolname) "\
+"   FROM pg_catalog.pg_roles "\
+"  WHERE substring(pg_catalog.quote_ident(rolname),1,%d)='%s'"\
+" UNION ALL SELECT 'CURRENT_USER'"\
+" UNION ALL SELECT 'SESSION_USER'"
+
 #define Query_for_list_of_grant_roles \
 " SELECT pg_catalog.quote_ident(rolname) "\
 "   FROM pg_catalog.pg_roles "\
@@ -2667,6 +2674,19 @@ psql_completion(const char *text, int start, int end)
 	/* Complete "AS ON <sth> TO" with a table name */
 	else if (TailMatches("AS", "ON", "SELECT|UPDATE|INSERT|DELETE", "TO"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
+
+/* CREATE SCHEMA [ <name> ] [ AUTHORIZATION ] */
+	else if (Matches("CREATE", "SCHEMA"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_schemas
+							" UNION ALL SELECT 'AUTHORIZATION'");
+	else if (Matches("CREATE", "SCHEMA", "AUTHORIZATION"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_schema_roles);
+	else if (Matches("CREATE", "SCHEMA", MatchAny, "AUTHORIZATION"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_schema_roles);
+	else if (Matches("CREATE", "SCHEMA", MatchAny, "AUTHORIZATION", MatchAny))
+		COMPLETE_WITH("CREATE", "GRANT");
+	else if (Matches("CREATE", "SCHEMA", MatchAny))
+		COMPLETE_WITH("AUTHORIZATION", "CREATE", "GRANT");
 
 /* CREATE SEQUENCE --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	else if (TailMatches("CREATE", "SEQUENCE", MatchAny) ||

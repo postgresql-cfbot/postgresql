@@ -277,10 +277,9 @@
     A trigger definition can also specify a Boolean <literal>WHEN</literal>
     condition, which will be tested to see whether the trigger should
     be fired.  In row-level triggers the <literal>WHEN</literal> condition can
-    examine the old and/or new values of columns of the row.  (Statement-level
-    triggers can also have <literal>WHEN</literal> conditions, although the feature
-    is not so useful for them.)  In a <literal>BEFORE</literal> trigger, the
-    <literal>WHEN</literal>
+    examine the old and/or new values of columns of the row, whereas statement-level
+    triggers can examine old and/or new relations that contain the relevant rows.
+    In a <literal>BEFORE</literal> trigger, the <literal>WHEN</literal>
     condition is evaluated just before the function is or would be executed,
     so using <literal>WHEN</literal> is not materially different from testing the
     same condition at the beginning of the trigger function.  However, in

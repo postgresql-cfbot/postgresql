@@ -34,6 +34,7 @@
 #include "pgstat.h"
 #include "storage/ipc.h"
 #include "storage/predicate.h"
+#include "storage/procarray.h"
 #include "storage/sinval.h"
 #include "storage/spin.h"
 #include "tcop/tcopprot.h"
@@ -44,6 +45,7 @@
 #include "utils/relmapper.h"
 #include "utils/snapmgr.h"
 #include "utils/typcache.h"
+
 
 /*
  * We don't want to waste a lot of memory on an error queue which, most of
@@ -1261,6 +1263,7 @@ ParallelWorkerMain(Datum main_arg)
 	char	   *uncommittedenumsspace;
 	StringInfoData msgbuf;
 	char	   *session_dsm_handle_space;
+	Snapshot	asnap;
 
 	/* Set flag to indicate that we're initializing a parallel worker. */
 	InitializingParallelWorker = true;
@@ -1415,7 +1418,15 @@ ParallelWorkerMain(Datum main_arg)
 
 	/* Restore active snapshot. */
 	asnapspace = shm_toc_lookup(toc, PARALLEL_KEY_ACTIVE_SNAPSHOT, false);
-	PushActiveSnapshot(RestoreSnapshot(asnapspace));
+	asnap = RestoreSnapshot(asnapspace)
+	PushActiveSnapshot(asnap);
+
+	/*
+	 * We may have different xmins in active and transaction snapshots in
+	 * parallel workers. So, use minimum for TransactionXmin.
+	 */
+	if (TransactionIdFollows(TransactionXmin, asnap->xmin))
+		ProcArrayInstallRestoredXmin(p->xmin, fps->parallel_leader_pgproc);
 
 	/*
 	 * We've changed which tuples we can see, and must therefore invalidate

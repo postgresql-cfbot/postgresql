@@ -251,6 +251,17 @@ struct NumericData
 	 | ((n)->choice.n_short.n_header & NUMERIC_SHORT_WEIGHT_MASK)) \
 	: ((n)->choice.n_long.n_weight))
 
+/*
+ * Pack the numeric precision and scale in the typmod value.  The upper 16
+ * bits are used for the precision, and the lower 16 bits for the scale.  Note
+ * that the scale may be negative, so use sign extension when unpacking it.
+ */
+
+#define MAKE_TYPMOD(p, s) ((((p) << 16) | ((s) & 0xffff)) + VARHDRSZ)
+
+#define TYPMOD_PRECISION(t) ((((t) - VARHDRSZ) >> 16) & 0xffff)
+#define TYPMOD_SCALE(t) ((int32) ((int16) (((t) - VARHDRSZ) & 0xffff)))
+
 /* ----------
  * NumericVar is the format we use for arithmetic.  The digit-array part
  * is the same as the NumericData storage format, but the header is more
@@ -830,7 +841,7 @@ numeric_maximum_size(int32 typmod)
 		return -1;
 
 	/* precision (ie, max # of digits) is in upper bits of typmod */
-	precision = ((typmod - VARHDRSZ) >> 16) & 0xffff;
+	precision = TYPMOD_PRECISION(typmod);
 
 	/*
 	 * This formula computes the maximum number of NumericDigits we could need
@@ -1084,10 +1095,10 @@ numeric_support(PG_FUNCTION_ARGS)
 			Node	   *source = (Node *) linitial(expr->args);
 			int32		old_typmod = exprTypmod(source);
 			int32		new_typmod = DatumGetInt32(((Const *) typmod)->constvalue);
-			int32		old_scale = (old_typmod - VARHDRSZ) & 0xffff;
-			int32		new_scale = (new_typmod - VARHDRSZ) & 0xffff;
-			int32		old_precision = (old_typmod - VARHDRSZ) >> 16 & 0xffff;
-			int32		new_precision = (new_typmod - VARHDRSZ) >> 16 & 0xffff;
+			int32		old_scale = TYPMOD_SCALE(old_typmod);
+			int32		new_scale = TYPMOD_SCALE(new_typmod);
+			int32		old_precision = TYPMOD_PRECISION(old_typmod);
+			int32		new_precision = TYPMOD_PRECISION(new_typmod);
 
 			/*
 			 * If new_typmod < VARHDRSZ, the destination is unconstrained;
@@ -1119,11 +1130,11 @@ numeric		(PG_FUNCTION_ARGS)
 	Numeric		num = PG_GETARG_NUMERIC(0);
 	int32		typmod = PG_GETARG_INT32(1);
 	Numeric		new;
-	int32		tmp_typmod;
 	int			precision;
 	int			scale;
 	int			ddigits;
 	int			maxdigits;
+	int			dscale;
 	NumericVar	var;
 
 	/*
@@ -1146,10 +1157,12 @@ numeric		(PG_FUNCTION_ARGS)
 	/*
 	 * Get the precision and scale out of the typmod value
 	 */
-	tmp_typmod = typmod - VARHDRSZ;
-	precision = (tmp_typmod >> 16) & 0xffff;
-	scale = tmp_typmod & 0xffff;
+	precision = TYPMOD_PRECISION(typmod);
+	scale = TYPMOD_SCALE(typmod);
 	maxdigits = precision - scale;
+
+	/* The target display scale is non-negative */
+	dscale = Max(scale, 0);
 
 	/*
 	 * If the number is certainly in bounds and due to the target scale no
@@ -1160,17 +1173,17 @@ numeric		(PG_FUNCTION_ARGS)
 	 */
 	ddigits = (NUMERIC_WEIGHT(num) + 1) * DEC_DIGITS;
 	if (ddigits <= maxdigits && scale >= NUMERIC_DSCALE(num)
-		&& (NUMERIC_CAN_BE_SHORT(scale, NUMERIC_WEIGHT(num))
+		&& (NUMERIC_CAN_BE_SHORT(dscale, NUMERIC_WEIGHT(num))
 			|| !NUMERIC_IS_SHORT(num)))
 	{
 		new = duplicate_numeric(num);
 		if (NUMERIC_IS_SHORT(num))
 			new->choice.n_short.n_header =
 				(num->choice.n_short.n_header & ~NUMERIC_SHORT_DSCALE_MASK)
-				| (scale << NUMERIC_SHORT_DSCALE_SHIFT);
+				| (dscale << NUMERIC_SHORT_DSCALE_SHIFT);
 		else
 			new->choice.n_long.n_sign_dscale = NUMERIC_SIGN(new) |
-				((uint16) scale & NUMERIC_DSCALE_MASK);
+				((uint16) dscale & NUMERIC_DSCALE_MASK);
 		PG_RETURN_NUMERIC(new);
 	}
 
@@ -1206,12 +1219,12 @@ numerictypmodin(PG_FUNCTION_ARGS)
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("NUMERIC precision %d must be between 1 and %d",
 							tl[0], NUMERIC_MAX_PRECISION)));
-		if (tl[1] < 0 || tl[1] > tl[0])
+		if (tl[1] < NUMERIC_MIN_SCALE || tl[1] > NUMERIC_MAX_SCALE)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("NUMERIC scale %d must be between 0 and precision %d",
-							tl[1], tl[0])));
-		typmod = ((tl[0] << 16) | tl[1]) + VARHDRSZ;
+					 errmsg("NUMERIC scale %d must be between %d and %d",
+							tl[1], NUMERIC_MIN_SCALE, NUMERIC_MAX_SCALE)));
+		typmod = MAKE_TYPMOD(tl[0], tl[1]);
 	}
 	else if (n == 1)
 	{
@@ -1221,7 +1234,7 @@ numerictypmodin(PG_FUNCTION_ARGS)
 					 errmsg("NUMERIC precision %d must be between 1 and %d",
 							tl[0], NUMERIC_MAX_PRECISION)));
 		/* scale defaults to zero */
-		typmod = (tl[0] << 16) + VARHDRSZ;
+		typmod = MAKE_TYPMOD(tl[0], 0);
 	}
 	else
 	{
@@ -1242,8 +1255,8 @@ numerictypmodout(PG_FUNCTION_ARGS)
 
 	if (typmod >= 0)
 		snprintf(res, 64, "(%d,%d)",
-				 ((typmod - VARHDRSZ) >> 16) & 0xffff,
-				 (typmod - VARHDRSZ) & 0xffff);
+				 TYPMOD_PRECISION(typmod),
+				 TYPMOD_SCALE(typmod));
 	else
 		*res = '\0';
 
@@ -7432,13 +7445,16 @@ apply_typmod(NumericVar *var, int32 typmod)
 	if (typmod < (int32) (VARHDRSZ))
 		return;
 
-	typmod -= VARHDRSZ;
-	precision = (typmod >> 16) & 0xffff;
-	scale = typmod & 0xffff;
+	precision = TYPMOD_PRECISION(typmod);
+	scale = TYPMOD_SCALE(typmod);
 	maxdigits = precision - scale;
 
 	/* Round to target scale (and set var->dscale) */
 	round_var(var, scale);
+
+	/* but don't allow var->dscale to be negative */
+	if (var->dscale < 0)
+		var->dscale = 0;
 
 	/*
 	 * Check for overflow - note we can't do this before rounding, because
@@ -7517,9 +7533,8 @@ apply_typmod_special(Numeric num, int32 typmod)
 	if (typmod < (int32) (VARHDRSZ))
 		return;
 
-	typmod -= VARHDRSZ;
-	precision = (typmod >> 16) & 0xffff;
-	scale = typmod & 0xffff;
+	precision = TYPMOD_PRECISION(typmod);
+	scale = TYPMOD_SCALE(typmod);
 
 	ereport(ERROR,
 			(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),

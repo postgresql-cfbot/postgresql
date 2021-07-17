@@ -545,8 +545,8 @@
 <programlisting>
 NUMERIC(<replaceable>precision</replaceable>, <replaceable>scale</replaceable>)
 </programlisting>
-     The precision must be positive, the scale zero or positive.
-     Alternatively:
+     The precision must be positive, the scale may be positive or negative
+     (see below).  Alternatively:
 <programlisting>
 NUMERIC(<replaceable>precision</replaceable>)
 </programlisting>
@@ -578,10 +578,40 @@ NUMERIC
     <para>
      If the scale of a value to be stored is greater than the declared
      scale of the column, the system will round the value to the specified
-     number of fractional digits.  Then, if the number of digits to the
-     left of the decimal point exceeds the declared precision minus the
-     declared scale, an error is raised.
+     number of fractional digits.  If the declared scale of the column is
+     negative, the value will be rounded to the left of the decimal point.
+     If, after rounding, the number of digits to the left of the decimal point
+     exceeds the declared precision minus the declared scale, an error is
+     raised.  Similarly, if the declared scale exceeds the declared precision
+     and the number of zero digits to the right of the decimal point is less
+     than the declared scale minus the declared precision, an error is raised.
+     For example, a column declared as
+<programlisting>
+NUMERIC(3, 1)
+</programlisting>
+     will round values to 1 decimal place and be able to store values between
+     -99.9 and 99.9, inclusive.  A column declared as
+<programlisting>
+NUMERIC(2, -3)
+</programlisting>
+     will round values to the nearest thousand and be able to store values
+     between -99000 and 99000, inclusive.  A column declared as
+<programlisting>
+NUMERIC(3, 5)
+</programlisting>
+     will round values to 5 decimal places and be able to store values between
+     -0.00999 and 0.00999, inclusive.
     </para>
+
+    <note>
+     <para>
+      The scale in a <type>NUMERIC</type> type declaration may be any value in
+      the range -1000 to 1000.  (The <acronym>SQL</acronym> standard requires
+      the scale to be in the range 0 to <replaceable>precision</replaceable>.
+      Using values outside this range may not be portable to other database
+      systems.)
+     </para>
+    </note>
 
     <para>
      Numeric values are physically stored without any extra leading or

@@ -487,22 +487,6 @@ sizebitvec(BITVECP sign, int siglen)
 }
 
 static int
-hemdistsign(BITVECP a, BITVECP b, int siglen)
-{
-	int			i,
-				diff,
-				dist = 0;
-
-	LOOPBYTE(siglen)
-	{
-		diff = (unsigned char) (a[i] ^ b[i]);
-		/* Using the popcount functions here isn't likely to win */
-		dist += pg_number_of_ones[diff];
-	}
-	return dist;
-}
-
-static int
 hemdist(SignTSVector *a, SignTSVector *b)
 {
 	int			siglena = GETSIGLEN(a);
@@ -520,7 +504,7 @@ hemdist(SignTSVector *a, SignTSVector *b)
 
 	Assert(siglena == siglenb);
 
-	return hemdistsign(GETSIGN(a), GETSIGN(b), siglena);
+	return pg_xorcount(GETSIGN(a), GETSIGN(b), siglena);
 }
 
 Datum
@@ -551,7 +535,7 @@ gtsvector_penalty(PG_FUNCTION_ARGS)
 				(float) (siglenbit + 1);
 		}
 		else
-			*penalty = hemdistsign(sign, orig, siglen);
+			*penalty = pg_xorcount(sign, orig, siglen);
 
 		pfree(sign);
 	}
@@ -611,7 +595,7 @@ hemdistcache(CACHESIGN *a, CACHESIGN *b, int siglen)
 	else if (b->allistrue)
 		return SIGLENBIT(siglen) - sizebitvec(a->sign, siglen);
 
-	return hemdistsign(a->sign, b->sign, siglen);
+	return pg_xorcount(a->sign, b->sign, siglen);
 }
 
 Datum
@@ -732,7 +716,7 @@ gtsvector_picksplit(PG_FUNCTION_ARGS)
 							   siglen);
 		}
 		else
-			size_alpha = hemdistsign(cache[j].sign, GETSIGN(datum_l), siglen);
+			size_alpha = pg_xorcount(cache[j].sign, GETSIGN(datum_l), siglen);
 
 		if (ISALLTRUE(datum_r) || cache[j].allistrue)
 		{
@@ -746,7 +730,7 @@ gtsvector_picksplit(PG_FUNCTION_ARGS)
 							   siglen);
 		}
 		else
-			size_beta = hemdistsign(cache[j].sign, GETSIGN(datum_r), siglen);
+			size_beta = pg_xorcount(cache[j].sign, GETSIGN(datum_r), siglen);
 
 		if (size_alpha < size_beta + WISH_F(v->spl_nleft, v->spl_nright, 0.1))
 		{

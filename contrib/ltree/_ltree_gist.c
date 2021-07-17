@@ -181,22 +181,6 @@ sizebitvec(BITVECP sign, int siglen)
 }
 
 static int
-hemdistsign(BITVECP a, BITVECP b, int siglen)
-{
-	int			i,
-				diff,
-				dist = 0;
-
-	ALOOPBYTE(siglen)
-	{
-		diff = (unsigned char) (a[i] ^ b[i]);
-		/* Using the popcount functions here isn't likely to win */
-		dist += pg_number_of_ones[diff];
-	}
-	return dist;
-}
-
-static int
 hemdist(ltree_gist *a, ltree_gist *b, int siglen)
 {
 	if (LTG_ISALLTRUE(a))
@@ -209,7 +193,8 @@ hemdist(ltree_gist *a, ltree_gist *b, int siglen)
 	else if (LTG_ISALLTRUE(b))
 		return ASIGLENBIT(siglen) - sizebitvec(LTG_SIGN(a), siglen);
 
-	return hemdistsign(LTG_SIGN(a), LTG_SIGN(b), siglen);
+	return pg_xorcount((const char *) LTG_SIGN(a), (const char *) LTG_SIGN(b),
+					   siglen);
 }
 
 

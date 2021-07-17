@@ -8,6 +8,7 @@
 #include "access/stratnum.h"
 #include "catalog/pg_type.h"
 #include "hstore.h"
+#include "port/pg_bitutils.h"
 #include "utils/pg_crc.h"
 
 /* gist_hstore_ops opclass options */
@@ -257,20 +258,6 @@ sizebitvec(BITVECP sign, int siglen)
 }
 
 static int
-hemdistsign(BITVECP a, BITVECP b, int siglen)
-{
-	int			i,
-				dist = 0;
-
-	LOOPBIT(siglen)
-	{
-		if (GETBIT(a, i) != GETBIT(b, i))
-			dist++;
-	}
-	return dist;
-}
-
-static int
 hemdist(GISTTYPE *a, GISTTYPE *b, int siglen)
 {
 	if (ISALLTRUE(a))
@@ -283,7 +270,7 @@ hemdist(GISTTYPE *a, GISTTYPE *b, int siglen)
 	else if (ISALLTRUE(b))
 		return SIGLENBIT(siglen) - sizebitvec(GETSIGN(a), siglen);
 
-	return hemdistsign(GETSIGN(a), GETSIGN(b), siglen);
+	return pg_xorcount(GETSIGN(a), GETSIGN(b), siglen);
 }
 
 static int32

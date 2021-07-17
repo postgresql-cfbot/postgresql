@@ -47,7 +47,9 @@
     the <command>UPDATE</command> statement.  Triggers can also fire
     for <command>TRUNCATE</command> statements.  If a trigger event occurs,
     the trigger's function is called at the appropriate time to handle the
-    event.
+    event.  All triggers are executed as part of the same transaction as
+    the statement that triggered them, so if either the statement or the
+    trigger causes an error, the effects of both will be rolled back.
    </para>
 
    <para>
@@ -115,6 +117,9 @@
     <literal>BEFORE</literal> triggers fire immediately before a particular row is
     operated on, while row-level <literal>AFTER</literal> triggers fire at the end of
     the statement (but before any statement-level <literal>AFTER</literal> triggers).
+    The execution of <literal>AFTER</literal> triggers can also be deferred to the
+    end of the transaction if they were defined as
+    <firstterm>constraint triggers</firstterm>.
     These types of triggers may only be defined on tables and
     foreign tables, not views.
     <literal>INSTEAD OF</literal> triggers may only be

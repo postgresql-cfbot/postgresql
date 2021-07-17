@@ -13,13 +13,15 @@
 #include "filemap.h"
 
 extern void open_target_file(const char *path, bool trunc);
+#ifdef HAVE_COPY_FILE_RANGE
+extern void copy_target_range(int srcfd, off_t begin, size_t size);
+#endif
 extern void write_target_range(char *buf, off_t begin, size_t size);
 extern void close_target_file(void);
 extern void remove_target_file(const char *path, bool missing_ok);
 extern void truncate_target_file(const char *path, off_t newsize);
 extern void create_target(file_entry_t *t);
 extern void remove_target(file_entry_t *t);
-extern void sync_target_dir(void);
 
 extern char *slurpFile(const char *datadir, const char *path, size_t *filesize);
 

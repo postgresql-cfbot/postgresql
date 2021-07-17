@@ -235,6 +235,7 @@ sub GenerateFiles
 		HAVE_COMPUTED_GOTO         => undef,
 		HAVE_COPYFILE              => undef,
 		HAVE_COPYFILE_H            => undef,
+		HAVE_COPY_FILE_RANGE       => undef,
 		HAVE_CRTDEFS_H             => undef,
 		HAVE_CRYPTO_LOCK           => undef,
 		HAVE_DECL_FDATASYNC        => 0,

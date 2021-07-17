@@ -20,6 +20,7 @@
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
 #include "common/file_perm.h"
+#include "common/file_utils.h"
 #include "common/restricted_token.h"
 #include "common/string.h"
 #include "fe_utils/recovery_gen.h"
@@ -32,6 +33,7 @@
 
 static void usage(const char *progname);
 
+static void perform_sync(filemap_t *filemap);
 static void perform_rewind(filemap_t *filemap, rewind_source *source,
 						   XLogRecPtr chkptrec,
 						   TimeLineID chkpttli,
@@ -461,14 +463,14 @@ main(int argc, char **argv)
 	 */
 	perform_rewind(filemap, source, chkptrec, chkpttli, chkptredo);
 
-	if (showprogress)
-		pg_log_info("syncing target data directory");
-	sync_target_dir();
-
 	/* Also update the standby configuration, if requested. */
 	if (writerecoveryconf && !dry_run)
 		WriteRecoveryConfig(conn, datadir_target,
 							GenerateRecoveryConfig(conn, NULL));
+
+	if (showprogress)
+		pg_log_info("syncing target data directory");
+	perform_sync(filemap);
 
 	/* don't need the source connection anymore */
 	source->destroy(source);
@@ -482,6 +484,112 @@ main(int argc, char **argv)
 
 	return 0;
 }
+
+/*
+ * Fsync the modified files and directories on the target.
+ *
+ * The target should be cleanly shutdown before rewinding so we do not need
+ * to fsync the whole pg data directory, instead, we just flush those modified
+ * files/directories.
+ */
+static void
+perform_sync(filemap_t *filemap)
+{
+	char		parentpath[MAXPGPATH];
+
+	if (!do_sync || dry_run)
+		return;
+
+	if (chdir(datadir_target) < 0)
+	{
+		pg_log_error("could not change directory to \"%s\": %m", datadir_target);
+		exit(1);
+	}
+
+#ifdef PG_FLUSH_DATA_WORKS
+	/* Hint the OS to flush data. */
+	for (int i = 0; i < filemap->nentries; i++)
+	{
+		file_entry_t *entry = filemap->entries[i];
+
+		if (entry->target_pages_to_overwrite.bitmapsize > 0)
+			pre_sync_fname(entry->path, false);
+
+		switch (entry->action)
+		{
+			case FILE_ACTION_COPY:
+			case FILE_ACTION_TRUNCATE:
+			case FILE_ACTION_COPY_TAIL:
+				pre_sync_fname(entry->path, false);
+				break;
+
+			case FILE_ACTION_CREATE:
+				pre_sync_fname(entry->path,
+							entry->source_type == FILE_TYPE_DIRECTORY);
+				/* FALLTHROUGH */
+			case FILE_ACTION_REMOVE:
+				/*
+				 * Fsync the parent directory if we either create or delete
+				 * files/directories in the parent directory. The parent
+				 * directory might be missing as expected, but we ignore that
+				 * error.
+				 */
+				strlcpy(parentpath, entry->path, MAXPGPATH);
+				get_parent_directory(parentpath);
+				if (strlen(parentpath) == 0)
+					strlcpy(parentpath, ".", MAXPGPATH);
+				pre_sync_fname(parentpath, true);
+				break;
+
+			default:
+				break;
+		}
+	}
+#endif
+
+	/* Do the fsync()s finally */
+	for (int i = 0; i < filemap->nentries; i++)
+	{
+		file_entry_t *entry = filemap->entries[i];
+
+		if (entry->target_pages_to_overwrite.bitmapsize > 0)
+			fsync_fname(entry->path, false);
+
+		switch (entry->action)
+		{
+			case FILE_ACTION_COPY:
+			case FILE_ACTION_TRUNCATE:
+			case FILE_ACTION_COPY_TAIL:
+				fsync_fname(entry->path, false);
+				break;
+
+			case FILE_ACTION_CREATE:
+				fsync_fname(entry->path,
+							entry->source_type == FILE_TYPE_DIRECTORY);
+				/* FALLTHROUGH */
+			case FILE_ACTION_REMOVE:
+				/*
+				 * Fsync the parent directory if we either create or delete
+				 * files/directories in the parent directory. The parent
+				 * directory might be missing as expected, but we ignore that
+				 * error.
+				 */
+				fsync_parent_path(entry->path);
+				break;
+
+			default:
+				break;
+		}
+	}
+
+	fsync_fname("global/pg_control", false);
+	fsync_fname("backup_label", false);
+	if (access("recovery.conf", F_OK) == 0)
+		fsync_fname("recovery.conf", false);
+	if (access("postgresql.auto.conf", F_OK) == 0)
+		fsync_fname("postgresql.auto.conf", false);
+}
+
 
 /*
  * Perform the rewind.

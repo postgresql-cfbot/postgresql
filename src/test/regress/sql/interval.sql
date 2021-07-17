@@ -59,6 +59,13 @@ SELECT r1.*, r2.*
    WHERE r1.f1 > r2.f1
    ORDER BY r1.f1, r2.f1;
 
+SELECT abs (f1), abs (-f1), @ f1, @ -f1 FROM interval_tbl;
+WITH t AS (
+   SELECT '1 month -30 days'::interval AS i
+)
+SELECT i = -i, i = '0'::interval, abs (i), abs (-i)
+   FROM t;
+
 -- Test intervals that are large enough to overflow 64 bits in comparisons
 CREATE TEMP TABLE INTERVAL_TBL_OF (f1 interval);
 INSERT INTO INTERVAL_TBL_OF (f1) VALUES

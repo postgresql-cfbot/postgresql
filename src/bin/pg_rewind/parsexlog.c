@@ -23,6 +23,7 @@
 #include "fe_utils/archive.h"
 #include "filemap.h"
 #include "pg_rewind.h"
+#include "utils/relmapper.h"
 
 /*
  * RmgrNames is an array of resource manager names, to make error messages
@@ -389,6 +390,10 @@ extractPageInfo(XLogReaderState *record)
 		 * exist in the target data dir, and copy them in toto from the source
 		 * system. No need to do anything special here.
 		 */
+	}
+	else if (rmid == RM_RELMAP_ID && info == XLOG_RELMAP_CREATE)
+	{
+		/* ignore */
 	}
 	else if (rmid == RM_SMGR_ID && rminfo == XLOG_SMGR_CREATE)
 	{

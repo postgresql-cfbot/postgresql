@@ -23,6 +23,7 @@
  */
 
 #define XLOG_RELMAP_UPDATE		0x00
+#define XLOG_RELMAP_CREATE		0x10
 
 typedef struct xl_relmap_update
 {
@@ -38,6 +39,8 @@ typedef struct xl_relmap_update
 extern Oid	RelationMapOidToFilenode(Oid relationId, bool shared);
 
 extern Oid	RelationMapFilenodeToOid(Oid relationId, bool shared);
+
+extern Oid DatabaseRelationOidToFilenode(char *dbpath, Oid relationId);
 
 extern void RelationMapUpdateMap(Oid relationId, Oid fileNode, bool shared,
 								 bool immediate);
@@ -62,7 +65,8 @@ extern void RelationMapInitializePhase3(void);
 extern Size EstimateRelationMapSpace(void);
 extern void SerializeRelationMap(Size maxSize, char *startAddress);
 extern void RestoreRelationMap(char *startAddress);
-
+extern void CreateAndCopyRelMap(Oid dbid, Oid tsid, char *srcdbpath,
+								char *dstdbpath);
 extern void relmap_redo(XLogReaderState *record);
 extern void relmap_desc(StringInfo buf, XLogReaderState *record);
 extern const char *relmap_identify(uint8 info);

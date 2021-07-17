@@ -28,8 +28,7 @@ dbase_desc(StringInfo buf, XLogReaderState *record)
 	{
 		xl_dbase_create_rec *xlrec = (xl_dbase_create_rec *) rec;
 
-		appendStringInfo(buf, "copy dir %u/%u to %u/%u",
-						 xlrec->src_tablespace_id, xlrec->src_db_id,
+		appendStringInfo(buf, "create dir %u/%u",
 						 xlrec->tablespace_id, xlrec->db_id);
 	}
 	else if (info == XLOG_DBASE_DROP)

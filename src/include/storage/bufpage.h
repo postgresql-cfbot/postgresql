@@ -399,6 +399,8 @@ do { \
 #define PageClearPrunable(page) \
 	(((PageHeader) (page))->pd_prune_xid = InvalidTransactionId)
 
+#define GlobalTempRelationPageIsNotInitialized(rel, page) \
+	((rel)->rd_rel->relpersistence == RELPERSISTENCE_GLOBAL_TEMP && PageIsNew(page))
 
 /* ----------------------------------------------------------------
  *		extern declarations

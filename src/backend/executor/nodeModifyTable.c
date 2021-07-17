@@ -38,6 +38,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
+#include "catalog/storage_gtt.h"
 #include "commands/trigger.h"
 #include "executor/execPartition.h"
 #include "executor/executor.h"
@@ -632,6 +633,9 @@ ExecInsert(ModifyTableState *mtstate,
 	if (resultRelationDesc->rd_rel->relhasindex &&
 		resultRelInfo->ri_IndexRelationDescs == NULL)
 		ExecOpenIndices(resultRelInfo, onconflict != ONCONFLICT_NONE);
+
+	/* Init storage for global temporary table in current backend */
+	init_gtt_storage(CMD_INSERT, resultRelInfo);
 
 	/*
 	 * BEFORE ROW INSERT Triggers.
@@ -2809,6 +2813,7 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 		resultRelInfo++;
 		i++;
 	}
+
 
 	/*
 	 * Now we may initialize the subplan.

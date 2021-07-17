@@ -54,6 +54,7 @@
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "commands/event_trigger.h"
 #include "commands/progress.h"
 #include "commands/tablecmds.h"
@@ -732,6 +733,29 @@ index_create(Relation heapRelation,
 	char		relkind;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
+	bool		skip_create_storage = false;
+
+	/* For global temporary table only */
+	if (RELATION_IS_GLOBAL_TEMP(heapRelation))
+	{
+		/* No support create index on global temporary table with concurrent mode yet */
+		if (concurrent)
+			ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("cannot reindex global temporary tables concurrently")));
+
+		/*
+		 * For the case that some backend is applied relcache message to create
+		 * an index on a global temporary table, if this table in the current
+		 * backend are not initialized, the creation of index storage on the
+		 * table are also skipped.
+		 */
+		if (!gtt_storage_attached(RelationGetRelid(heapRelation)))
+		{
+			skip_create_storage = true;
+			flags |= INDEX_CREATE_SKIP_BUILD;
+		}
+	}
 
 	/* constraint flags can only be set when a constraint is requested */
 	Assert((constr_flags == 0) ||
@@ -939,7 +963,8 @@ index_create(Relation heapRelation,
 								mapped_relation,
 								allow_system_table_mods,
 								&relfrozenxid,
-								&relminmxid);
+								&relminmxid,
+								skip_create_storage);
 
 	Assert(relfrozenxid == InvalidTransactionId);
 	Assert(relminmxid == InvalidMultiXactId);
@@ -2107,7 +2132,7 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	 * lock (see comments in RemoveRelations), and a non-concurrent DROP is
 	 * more efficient.
 	 */
-	Assert(get_rel_persistence(indexId) != RELPERSISTENCE_TEMP ||
+	Assert(!RelpersistenceTsTemp(get_rel_persistence(indexId)) ||
 		   (!concurrent && !concurrent_lock_mode));
 
 	/*
@@ -2138,6 +2163,20 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	 * above locking won't prevent, so test explicitly.
 	 */
 	CheckTableNotInUse(userIndexRelation, "DROP INDEX");
+
+	/*
+	 * Allow to drop index on global temporary table when only current
+	 * backend use it.
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(userHeapRelation) &&
+		is_other_backend_use_gtt(RelationGetRelid(userHeapRelation)))
+	{
+		ereport(ERROR,
+			(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
+			 errmsg("cannot drop index %s or global temporary table %s",
+					RelationGetRelationName(userIndexRelation), RelationGetRelationName(userHeapRelation)),
+			 errhint("Because the index is created on the global temporary table and other backend attached it.")));
+	}
 
 	/*
 	 * Drop Index Concurrently is more or less the reverse process of Create
@@ -2747,6 +2786,7 @@ index_update_stats(Relation rel,
 	HeapTuple	tuple;
 	Form_pg_class rd_rel;
 	bool		dirty;
+	bool		is_gtt = RELATION_IS_GLOBAL_TEMP(rel);
 
 	/*
 	 * We always update the pg_class row using a non-transactional,
@@ -2841,20 +2881,37 @@ index_update_stats(Relation rel,
 		else					/* don't bother for indexes */
 			relallvisible = 0;
 
-		if (rd_rel->relpages != (int32) relpages)
+		/* For global temporary table */
+		if (is_gtt)
 		{
-			rd_rel->relpages = (int32) relpages;
-			dirty = true;
+			/* Update GTT'statistics into local relcache */
+			rel->rd_rel->relpages = (int32) relpages;
+			rel->rd_rel->reltuples = (float4) reltuples;
+			rel->rd_rel->relallvisible = (int32) relallvisible;
+
+			/* Update GTT'statistics into local hashtable */
+			up_gtt_relstats(RelationGetRelid(rel), relpages, reltuples, relallvisible,
+							InvalidTransactionId, InvalidMultiXactId);
 		}
-		if (rd_rel->reltuples != (float4) reltuples)
+		else
 		{
-			rd_rel->reltuples = (float4) reltuples;
-			dirty = true;
-		}
-		if (rd_rel->relallvisible != (int32) relallvisible)
-		{
-			rd_rel->relallvisible = (int32) relallvisible;
-			dirty = true;
+			if (rd_rel->relpages != (int32) relpages)
+			{
+				rd_rel->relpages = (int32) relpages;
+				dirty = true;
+			}
+
+			if (rd_rel->reltuples != (float4) reltuples)
+			{
+				rd_rel->reltuples = (float4) reltuples;
+				dirty = true;
+			}
+
+			if (rd_rel->relallvisible != (int32) relallvisible)
+			{
+				rd_rel->relallvisible = (int32) relallvisible;
+				dirty = true;
+			}
 		}
 	}
 
@@ -2965,6 +3022,26 @@ index_build(Relation heapRelation,
 		};
 
 		pgstat_progress_update_multi_param(6, progress_index, progress_vals);
+	}
+
+	/* For build index on global temporary table */
+	if (RELATION_IS_GLOBAL_TEMP(indexRelation))
+	{
+		/*
+		 * If the storage for the index in this session is not initialized,
+		 * it needs to be created.
+		 */
+		if (!gtt_storage_attached(RelationGetRelid(indexRelation)))
+		{
+			/* Before create init storage, fix the local Relcache first */
+			force_enable_gtt_index(indexRelation);
+
+			Assert(gtt_storage_attached(RelationGetRelid(heapRelation)));
+
+			/* Init storage for index */
+			RelationCreateStorage(indexRelation->rd_node, RELPERSISTENCE_GLOBAL_TEMP, indexRelation);
+
+		}
 	}
 
 	/*
@@ -3520,6 +3597,20 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 	/* if relation is missing, leave */
 	if (!OidIsValid(heapId))
 		return;
+
+	/*
+	 * For reindex on global temporary table, If the storage for the index
+	 * in current backend is not initialized, nothing is done.
+	 */
+	if (persistence == RELPERSISTENCE_GLOBAL_TEMP &&
+		!gtt_storage_attached(indexId))
+	{
+		/* Suppress use of the target index while rebuilding it */
+		SetReindexProcessing(heapId, indexId);
+		/* Re-allow use of target index */
+		ResetReindexProcessing();
+		return;
+	}
 
 	if ((params->options & REINDEXOPT_MISSING_OK) != 0)
 		heapRelation = try_table_open(heapId, ShareLock);

@@ -30,6 +30,7 @@
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/namespace.h"
+#include "catalog/storage_gtt.h"
 #include "commands/copy.h"
 #include "commands/copyfrom_internal.h"
 #include "commands/progress.h"
@@ -658,6 +659,9 @@ CopyFrom(CopyFromState cstate)
 	CheckValidResultRel(resultRelInfo, CMD_INSERT);
 
 	ExecOpenIndices(resultRelInfo, false);
+
+	/* Check and init global temporary table storage in current backend */
+	init_gtt_storage(CMD_INSERT, resultRelInfo);
 
 	/*
 	 * Set up a ModifyTableState so we can let FDW(s) init themselves for

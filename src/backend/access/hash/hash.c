@@ -151,7 +151,7 @@ hashbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	 * metapage, nor the first bitmap page.
 	 */
 	sort_threshold = (maintenance_work_mem * 1024L) / BLCKSZ;
-	if (index->rd_rel->relpersistence != RELPERSISTENCE_TEMP)
+	if (!RELATION_IS_TEMP(index))
 		sort_threshold = Min(sort_threshold, NBuffers);
 	else
 		sort_threshold = Min(sort_threshold, NLocBuffer);

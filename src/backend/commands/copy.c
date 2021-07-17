@@ -290,7 +290,7 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 		Assert(rel);
 
 		/* check read-only transaction and parallel mode */
-		if (XactReadOnly && !rel->rd_islocaltemp)
+		if (XactReadOnly && !RELATION_IS_TEMP_ON_CURRENT_SESSION(rel))
 			PreventCommandIfReadOnly("COPY FROM");
 
 		cstate = BeginCopyFrom(pstate, rel, whereClause,

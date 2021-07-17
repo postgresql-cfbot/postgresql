@@ -4211,6 +4211,15 @@ AlterTableGetLockLevel(List *cmds)
 							 */
 							cmd_lockmode = AccessExclusiveLock;
 							break;
+
+						case CONSTR_CHECK:
+
+							/*
+							 * We prevent other writers from accessing table.
+							 */
+							cmd_lockmode = ShareRowExclusiveLock;
+							break;
+
 						case CONSTR_FOREIGN:
 
 							/*

@@ -123,6 +123,20 @@ ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *pars
 
 		data += sizeof(xl_xact_origin);
 	}
+
+	if (parsed->xinfo & XACT_XINFO_HAS_SESSIONINFO)
+	{
+		xl_xact_sessioninfo xl_sessioninfo;
+
+		/* no alignment is guaranteed, so copy onto stack */
+		memcpy(&xl_sessioninfo, data, sizeof(xl_sessioninfo));
+
+		parsed->session_start_time = xl_sessioninfo.session_start_time;
+		parsed->session_pid = xl_sessioninfo.session_pid;
+		parsed->userid = xl_sessioninfo.userid;
+
+		data += sizeof(xl_xact_sessioninfo);
+	}
 }
 
 void
@@ -206,6 +220,20 @@ ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed)
 		parsed->origin_timestamp = xl_origin.origin_timestamp;
 
 		data += sizeof(xl_xact_origin);
+	}
+
+	if (parsed->xinfo & XACT_XINFO_HAS_SESSIONINFO)
+	{
+		xl_xact_sessioninfo xl_sessioninfo;
+
+		/* no alignment is guaranteed, so copy onto stack */
+		memcpy(&xl_sessioninfo, data, sizeof(xl_sessioninfo));
+
+		parsed->session_start_time = xl_sessioninfo.session_start_time;
+		parsed->session_pid = xl_sessioninfo.session_pid;
+		parsed->userid = xl_sessioninfo.userid;
+
+		data += sizeof(xl_xact_sessioninfo);
 	}
 }
 
@@ -309,6 +337,14 @@ xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId 
 						 LSN_FORMAT_ARGS(parsed.origin_lsn),
 						 timestamptz_to_str(parsed.origin_timestamp));
 	}
+
+	if (parsed.xinfo & XACT_XINFO_HAS_SESSIONINFO)
+	{
+		appendStringInfo(buf, "; session: pid %u, start at %s userid %u",
+						 parsed.session_pid,
+						 timestamptz_to_str(parsed.session_start_time),
+						 parsed.userid);
+	}
 }
 
 static void
@@ -326,6 +362,14 @@ xact_desc_abort(StringInfo buf, uint8 info, xl_xact_abort *xlrec)
 
 	xact_desc_relations(buf, "rels", parsed.nrels, parsed.xnodes);
 	xact_desc_subxacts(buf, parsed.nsubxacts, parsed.subxacts);
+
+	if (parsed.xinfo & XACT_XINFO_HAS_SESSIONINFO)
+	{
+		appendStringInfo(buf, "; session: pid %u, start at %s userid %u",
+						 parsed.session_pid,
+						 timestamptz_to_str(parsed.session_start_time),
+						 parsed.userid);
+	}
 }
 
 static void

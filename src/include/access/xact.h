@@ -172,6 +172,7 @@ typedef void (*SubXactCallback) (SubXactEvent event, SubTransactionId mySubid,
 #define XACT_XINFO_HAS_ORIGIN			(1U << 5)
 #define XACT_XINFO_HAS_AE_LOCKS			(1U << 6)
 #define XACT_XINFO_HAS_GID				(1U << 7)
+#define XACT_XINFO_HAS_SESSIONINFO		(1U << 8)
 
 /*
  * Also stored in xinfo, these indicating a variety of additional actions that
@@ -267,6 +268,13 @@ typedef struct xl_xact_origin
 	TimestampTz origin_timestamp;
 } xl_xact_origin;
 
+typedef struct xl_xact_sessioninfo
+{
+	TimestampTz	session_start_time;
+	int			session_pid;
+	Oid			userid;
+} xl_xact_sessioninfo;
+
 typedef struct xl_xact_commit
 {
 	TimestampTz xact_time;		/* time of commit */
@@ -279,6 +287,7 @@ typedef struct xl_xact_commit
 	/* xl_xact_twophase follows if XINFO_HAS_TWOPHASE */
 	/* twophase_gid follows if XINFO_HAS_GID. As a null-terminated string. */
 	/* xl_xact_origin follows if XINFO_HAS_ORIGIN, stored unaligned! */
+	/* xl_xact_sessioninfo follows if XINFO_HAS_SESSIONINFO */
 } xl_xact_commit;
 #define MinSizeOfXactCommit (offsetof(xl_xact_commit, xact_time) + sizeof(TimestampTz))
 
@@ -294,6 +303,7 @@ typedef struct xl_xact_abort
 	/* xl_xact_twophase follows if XINFO_HAS_TWOPHASE */
 	/* twophase_gid follows if XINFO_HAS_GID. As a null-terminated string. */
 	/* xl_xact_origin follows if XINFO_HAS_ORIGIN, stored unaligned! */
+	/* xl_xact_sessioninfo follows if XINFO_HAS_SESSIONINFO */
 } xl_xact_abort;
 #define MinSizeOfXactAbort sizeof(xl_xact_abort)
 
@@ -344,6 +354,10 @@ typedef struct xl_xact_parsed_commit
 
 	XLogRecPtr	origin_lsn;
 	TimestampTz origin_timestamp;
+
+	TimestampTz	session_start_time;
+	int			session_pid;
+	Oid			userid;
 } xl_xact_parsed_commit;
 
 typedef xl_xact_parsed_commit xl_xact_parsed_prepare;
@@ -367,6 +381,10 @@ typedef struct xl_xact_parsed_abort
 
 	XLogRecPtr	origin_lsn;
 	TimestampTz origin_timestamp;
+
+	TimestampTz	session_start_time;
+	int			session_pid;
+	Oid			userid;
 } xl_xact_parsed_abort;
 
 

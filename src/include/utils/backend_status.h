@@ -145,13 +145,16 @@ typedef struct PgBackendStatus
 	char	   *st_appname;
 
 	/*
-	 * Current command string; MUST be null-terminated. Note that this string
-	 * possibly is truncated in the middle of a multi-byte character. As
-	 * activity strings are stored more frequently than read, that allows to
-	 * move the cost of correct truncation to the display side. Use
-	 * pgstat_clip_activity() to truncate correctly.
+	 * Current command string and authenticated ID string; MUST be
+	 * null-terminated.  Note that those strings possibly are truncated in
+	 * the middle of a multi-byte character.  As activity strings are
+	 * stored more frequently than read, that allows to move the cost of
+	 * correct truncation to the display side.  Authenticated ID strings
+	 * are stored once at backend startup but the cost is minimal.
+	 * Use pgstat_clip_string() to truncate both of them correctly.
 	 */
 	char	   *st_activity_raw;
+	char	   *st_authn_id;
 
 	/*
 	 * Command progress reporting.  Any command which wishes can advertise
@@ -267,6 +270,7 @@ typedef struct LocalPgBackendStatus
  */
 extern PGDLLIMPORT bool pgstat_track_activities;
 extern PGDLLIMPORT int pgstat_track_activity_query_size;
+extern PGDLLIMPORT int pgstat_track_connection_authn_size;
 
 
 /* ----------
@@ -315,7 +319,7 @@ extern uint64 pgstat_get_my_query_id(void);
 extern int	pgstat_fetch_stat_numbackends(void);
 extern PgBackendStatus *pgstat_fetch_stat_beentry(int beid);
 extern LocalPgBackendStatus *pgstat_fetch_stat_local_beentry(int beid);
-extern char *pgstat_clip_activity(const char *raw_activity);
+extern char *pgstat_clip_string(const char *raw_activity, int max_size);
 
 
 #endif							/* BACKEND_STATUS_H */

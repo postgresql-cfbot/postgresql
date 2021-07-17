@@ -20,7 +20,7 @@ if ($ENV{with_ssl} ne 'openssl')
 }
 else
 {
-	plan tests => 110;
+	plan tests => 111;
 }
 
 #### Some configuration
@@ -449,10 +449,13 @@ $node->connect_ok(
 # same thing but using explicit CN
 $dn_connstr = "$common_connstr dbname=certdb_cn";
 
+# The full DN should still be used as the authenticated identity, within the
+# backend logs and pg_stat_connection.
 $node->connect_ok(
 	"$dn_connstr user=ssltestuser sslcert=ssl/client-dn.crt sslkey=ssl/client-dn_tmp.key",
 	"certificate authorization succeeds with CN mapping",
-	# the full DN should still be used as the authenticated identity
+	sql => 'SELECT authenticated_id FROM pg_stat_connection WHERE pid = pg_backend_pid()',
+	expected_stdout => qr/CN=ssltestuser-dn,OU=Testing,OU=Engineering,O=PGDG/,
 	log_like => [
 		qr/connection authenticated: identity="CN=ssltestuser-dn,OU=Testing,OU=Engineering,O=PGDG" method=cert/
 	],);

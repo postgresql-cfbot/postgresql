@@ -9,7 +9,7 @@ use Test::More;
 
 if ($ENV{with_ldap} eq 'yes')
 {
-	plan tests => 28;
+	plan tests => 29;
 }
 else
 {
@@ -202,6 +202,8 @@ $ENV{"PGPASSWORD"} = 'secret1';
 test_access(
 	$node, 'test1', 0,
 	'simple bind authentication succeeds',
+	sql => 'SELECT authenticated_id FROM pg_stat_connection WHERE pid = pg_backend_pid()',
+	expected_stdout => qr/uid=test1,dc=example,dc=net/,
 	log_like => [
 		qr/connection authenticated: identity="uid=test1,dc=example,dc=net" method=ldap/
 	],);

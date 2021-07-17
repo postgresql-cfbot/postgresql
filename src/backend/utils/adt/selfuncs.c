@@ -6369,65 +6369,82 @@ genericcostestimate(PlannerInfo *root,
 	double		num_scans;
 	double		qual_op_cost;
 	double		qual_arg_cost;
-	List	   *selectivityQuals;
-	ListCell   *l;
 
-	/*
-	 * If the index is partial, AND the index predicate with the explicitly
-	 * given indexquals to produce a more accurate idea of the index
-	 * selectivity.
-	 */
-	selectivityQuals = add_predicate_to_index_quals(index, indexQuals);
-
-	/*
-	 * Check for ScalarArrayOpExpr index quals, and estimate the number of
-	 * index scans that will be performed.
-	 */
-	num_sa_scans = 1;
-	foreach(l, indexQuals)
-	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(l);
-
-		if (IsA(rinfo->clause, ScalarArrayOpExpr))
-		{
-			ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) rinfo->clause;
-			int			alength = estimate_array_length(lsecond(saop->args));
-
-			if (alength > 1)
-				num_sa_scans *= alength;
-		}
-	}
-
-	/* Estimate the fraction of main-table tuples that will be visited */
-	indexSelectivity = clauselist_selectivity(root, selectivityQuals,
-											  index->rel->relid,
-											  JOIN_INNER,
-											  NULL);
-
-	/*
-	 * If caller didn't give us an estimate, estimate the number of index
-	 * tuples that will be visited.  We do it in this rather peculiar-looking
-	 * way in order to get the right answer for partial indexes.
-	 */
 	numIndexTuples = costs->numIndexTuples;
-	if (numIndexTuples <= 0.0)
+	num_sa_scans = 1;
+
+	if (numIndexTuples >= 0.0)
 	{
-		numIndexTuples = indexSelectivity * index->rel->tuples;
+		List		*selectivityQuals;
+		ListCell	*l;
 
 		/*
-		 * The above calculation counts all the tuples visited across all
-		 * scans induced by ScalarArrayOpExpr nodes.  We want to consider the
-		 * average per-indexscan number, so adjust.  This is a handy place to
-		 * round to integer, too.  (If caller supplied tuple estimate, it's
-		 * responsible for handling these considerations.)
+		 * If the index is partial, AND the index predicate with the explicitly
+		 * given indexquals to produce a more accurate idea of the index
+		 * selectivity.
 		 */
-		numIndexTuples = rint(numIndexTuples / num_sa_scans);
+		selectivityQuals = add_predicate_to_index_quals(index, indexQuals);
+
+		/*
+		 * Check for ScalarArrayOpExpr index quals, and estimate the number of
+		 * index scans that will be performed.
+		 */
+		foreach(l, indexQuals)
+		{
+			RestrictInfo *rinfo = (RestrictInfo *) lfirst(l);
+
+			if (IsA(rinfo->clause, ScalarArrayOpExpr))
+			{
+				ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) rinfo->clause;
+				int			alength = estimate_array_length(lsecond(saop->args));
+
+				if (alength > 1)
+					num_sa_scans *= alength;
+			}
+		}
+
+		/* Estimate the fraction of main-table tuples that will be visited */
+		indexSelectivity = clauselist_selectivity(root, selectivityQuals,
+												  index->rel->relid,
+												  JOIN_INNER,
+												  NULL);
+
+		/*
+		 * If caller didn't give us an estimate, estimate the number of index
+		 * tuples that will be visited.  We do it in this rather peculiar-looking
+		 * way in order to get the right answer for partial indexes.
+		 */
+		if (numIndexTuples == 0.0)
+		{
+			numIndexTuples = indexSelectivity * index->rel->tuples;
+
+			/*
+			 * The above calculation counts all the tuples visited across all
+			 * scans induced by ScalarArrayOpExpr nodes.  We want to consider the
+			 * average per-indexscan number, so adjust.  This is a handy place to
+			 * round to integer, too.  (If caller supplied tuple estimate, it's
+			 * responsible for handling these considerations.)
+			 */
+			numIndexTuples = rint(numIndexTuples / num_sa_scans);
+		}
+	}
+	else
+	{
+		Assert(numIndexTuples == -1.0);
+
+		/*
+		 * Unique one row scan can select no more than one row. It needs to
+		 * manually set the selectivity of the index. The value of numIndexTuples
+		 * will be corrected later.
+		 */
+		indexSelectivity = 1.0 / index->rel->tuples;
 	}
 
 	/*
 	 * We can bound the number of tuples by the index size in any case. Also,
 	 * always estimate at least one tuple is touched, even when
 	 * indexSelectivity estimate is tiny.
+	 * Also, one row single scan case need to fix the numIndexTuples value here.
 	 */
 	if (numIndexTuples > index->tuples)
 		numIndexTuples = index->tuples;
@@ -6710,16 +6727,17 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 
 	/*
 	 * If index is unique and we found an '=' clause for each column, we can
-	 * just assume numIndexTuples = 1 and skip the expensive
-	 * clauselist_selectivity calculations.  However, a ScalarArrayOp or
-	 * NullTest invalidates that theory, even though it sets eqQualHere.
+	 * skip the expensive clauselist_selectivity calculations and assume
+	 * numIndexTuples = -1.0 in order to tell the generic cost estimator to skip
+	 * such expensive calculations too. However, a ScalarArrayOp or NullTest
+	 * invalidates that theory, even though it sets eqQualHere.
 	 */
 	if (index->unique &&
 		indexcol == index->nkeycolumns - 1 &&
 		eqQualHere &&
 		!found_saop &&
 		!found_is_null_op)
-		numIndexTuples = 1.0;
+		numIndexTuples = -1.0;
 	else
 	{
 		List	   *selectivityQuals;

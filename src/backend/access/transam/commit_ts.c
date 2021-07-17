@@ -507,13 +507,17 @@ pg_xact_commit_timestamp_origin(PG_FUNCTION_ARGS)
 /*
  * Number of shared CommitTS buffers.
  *
- * We use a very similar logic as for the number of CLOG buffers; see comments
- * in CLOGShmemBuffers.
+ * By default, we'll use 1MB of for every 1GB of shared buffers, up to the
+ * maximum value that slru.c will allow, but always at least 4 buffers.
  */
 Size
 CommitTsShmemBuffers(void)
 {
-	return Min(16, Max(4, NBuffers / 1024));
+	/* Use configured value if provided. */
+	if (commit_ts_buffers > 0)
+		return Max(4, commit_ts_buffers);
+	return Min(track_commit_timestamp ? SLRU_MAX_ALLOWED_BUFFERS : 16,
+			   Max(4, NBuffers / 1024));
 }
 
 /*

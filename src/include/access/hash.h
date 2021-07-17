@@ -59,6 +59,7 @@ typedef uint32 Bucket;
 #define LH_BUCKET_BEING_SPLIT	(1 << 5)
 #define LH_BUCKET_NEEDS_SPLIT_CLEANUP	(1 << 6)
 #define LH_PAGE_HAS_DEAD_TUPLES (1 << 7)
+#define LH_LP_SAFE_ON_STANDBY	(1 << 8)
 
 #define LH_PAGE_TYPE \
 	(LH_OVERFLOW_PAGE | LH_BUCKET_PAGE | LH_BITMAP_PAGE | LH_META_PAGE)
@@ -89,6 +90,7 @@ typedef HashPageOpaqueData *HashPageOpaque;
 #define H_BUCKET_BEING_SPLIT(opaque)	(((opaque)->hasho_flag & LH_BUCKET_BEING_SPLIT) != 0)
 #define H_BUCKET_BEING_POPULATED(opaque)	(((opaque)->hasho_flag & LH_BUCKET_BEING_POPULATED) != 0)
 #define H_HAS_DEAD_TUPLES(opaque)		(((opaque)->hasho_flag & LH_PAGE_HAS_DEAD_TUPLES) != 0)
+#define H_LP_SAFE_ON_STANDBY(opaque)	(((opaque)->hasho_flag & LH_LP_SAFE_ON_STANDBY) != 0)
 
 /*
  * The page ID is for the convenience of pg_filedump and similar utilities,

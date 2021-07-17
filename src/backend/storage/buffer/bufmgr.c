@@ -3971,6 +3971,59 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 }
 
 /*
+ * IsIndexLpDeadAllowed
+ *
+ * Checks is it allowed to set LP_DEAD hint bit for the tuple in index.
+ */
+IndexLpDeadAllowedResult
+IsIndexLpDeadAllowed(TupleDeadnessData *deadness,
+					 XLogRecPtr *minLsn)
+{
+	*minLsn = InvalidXLogRecPtr;
+	if (!deadness->all_dead)
+		return INDEX_LP_DEAD_NOT_OK;
+	/* It is always allowed on primary if *all_dead. */
+	if (!RecoveryInProgress())
+		return INDEX_LP_DEAD_OK;
+
+	if (TransactionIdIsValid(deadness->latest_removed_xid)) {
+		/*
+		 * If latest_removed_xid is known - make sure its commit record
+		 * less than minRecoveryPoint to avoid MVCC failure after crash recovery.
+		 */
+		XLogRecPtr commitLSN
+				= TransactionIdGetCommitLSN(deadness->latest_removed_xid);
+
+		if (XLogNeedsFlush(commitLSN))
+		{
+			/* LSN not flushed - allow iff index LSN is greater. */
+			*minLsn = commitLSN;
+			return INDEX_LP_DEAD_OK_MIN_LSN;
+		}
+		else return INDEX_LP_DEAD_OK;
+	} else {
+		/*
+		 * Looks like it is tuple cleared by heap_page_prune_execute,
+		 * we must be sure if LSN of XLOG_HEAP2_CLEAN (or any subsequent
+		 * updates) less than minRecoveryPoint to avoid MVCC failure
+		 * after crash recovery.
+		 *
+		 * Another possible case is transaction rollback or tuple updated
+		 * by inserting transaction. Such tuple never will be seen, so it
+		 * is safe to set LP_DEAD. It is related to the logic of
+		 * HeapTupleHeaderAdvanceLatestRemovedXid.
+		 */
+		if (XLogNeedsFlush(deadness->page_lsn))
+		{
+			/* LSN not flushed - allow iff index LSN is greater. */
+			*minLsn = deadness->page_lsn;
+			return INDEX_LP_DEAD_OK_MIN_LSN;
+		}
+		else return INDEX_LP_DEAD_OK;
+	}
+}
+
+/*
  * Release buffer content locks for shared buffers.
  *
  * Used to clean up after errors.

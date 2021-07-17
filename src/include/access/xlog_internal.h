@@ -292,6 +292,9 @@ typedef enum
  * rm_mask takes as input a page modified by the resource manager and masks
  * out bits that shouldn't be flagged by wal_consistency_checking.
  *
+ * rm_fpi_mask takes FPI buffer and applies access specific non-logged changes,
+ * for example - marks LP_DEAD bits on index page as non-safe for standby.
+ *
  * RmgrTable[] is indexed by RmgrId values (see rmgrlist.h).
  */
 typedef struct RmgrData
@@ -303,6 +306,7 @@ typedef struct RmgrData
 	void		(*rm_startup) (void);
 	void		(*rm_cleanup) (void);
 	void		(*rm_mask) (char *pagedata, BlockNumber blkno);
+	void		(*rm_fpi_mask) (char *pagedata, BlockNumber blkno);
 } RmgrData;
 
 extern const RmgrData RmgrTable[];

@@ -1698,9 +1698,11 @@ heap_fetch(Relation relation,
  * the tuple here, in addition to updating *tid.  If no match is found, the
  * contents of this buffer on return are undefined.
  *
- * If all_dead is not NULL, we check non-visible tuples to see if they are
- * globally dead; *all_dead is set true if all members of the HOT chain
- * are vacuumable, false if not.
+ * If deadness is not NULL, we check non-visible tuples to see if they
+ * are globally dead; *all_dead is set true if all members of the HOT chain
+ * are vacuumable, false if not. Also, *latest_removed_xid is set to the
+ * latest removed xid in a HOT chain, if known. *page_lsn is set to current page
+ * LSN value.
  *
  * Unlike heap_fetch, the caller must already have pin and (at least) share
  * lock on the buffer; it is still pinned/locked at exit.  Also unlike
@@ -1709,7 +1711,7 @@ heap_fetch(Relation relation,
 bool
 heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 					   Snapshot snapshot, HeapTuple heapTuple,
-					   bool *all_dead, bool first_call)
+					   TupleDeadnessData *deadness, bool first_call)
 {
 	Page		dp = (Page) BufferGetPage(buffer);
 	TransactionId prev_xmax = InvalidTransactionId;
@@ -1721,8 +1723,12 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 	GlobalVisState *vistest = NULL;
 
 	/* If this is not the first call, previous call returned a (live!) tuple */
-	if (all_dead)
-		*all_dead = first_call;
+	if (deadness)
+	{
+		deadness->all_dead = first_call;
+		deadness->latest_removed_xid = InvalidTransactionId;
+		deadness->page_lsn = PageGetLSN(dp);
+	}
 
 	blkno = ItemPointerGetBlockNumber(tid);
 	offnum = ItemPointerGetOffsetNumber(tid);
@@ -1755,6 +1761,13 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 				at_chain_start = false;
 				continue;
 			}
+			/*
+			 * Even if all items are dead we are not sure about latest_removed_xid
+			 * value. In theory, some newer items of the chain could be vacuumed
+			 * while older are not (pure paranoia, probably).
+			 */
+			if (deadness)
+				deadness->latest_removed_xid = InvalidTransactionId;
 			/* else must be end of chain */
 			break;
 		}
@@ -1804,8 +1817,11 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 				ItemPointerSetOffsetNumber(tid, offnum);
 				PredicateLockTID(relation, &heapTuple->t_self, snapshot,
 								 HeapTupleHeaderGetXmin(heapTuple->t_data));
-				if (all_dead)
-					*all_dead = false;
+				if (deadness)
+				{
+					deadness->all_dead = false;
+					deadness->latest_removed_xid = InvalidTransactionId;
+				}
 				return true;
 			}
 		}
@@ -1819,13 +1835,19 @@ heap_hot_search_buffer(ItemPointer tid, Relation relation, Buffer buffer,
 		 * Note: if you change the criterion here for what is "dead", fix the
 		 * planner's get_actual_variable_range() function to match.
 		 */
-		if (all_dead && *all_dead)
+		if (deadness && deadness->all_dead)
 		{
 			if (!vistest)
 				vistest = GlobalVisTestFor(relation);
 
 			if (!HeapTupleIsSurelyDead(heapTuple, vistest))
-				*all_dead = false;
+			{
+				deadness->all_dead = false;
+				deadness->latest_removed_xid = InvalidTransactionId;
+			}
+			else
+				HeapTupleHeaderAdvanceLatestRemovedXid(heapTuple->t_data,
+											&deadness->latest_removed_xid);
 		}
 
 		/*

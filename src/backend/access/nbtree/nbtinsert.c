@@ -15,6 +15,7 @@
 
 #include "postgres.h"
 
+#include "access/bufmask.h"
 #include "access/nbtree.h"
 #include "access/nbtxlog.h"
 #include "access/transam.h"
@@ -502,7 +503,11 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 			if (inposting || !ItemIdIsDead(curitemid))
 			{
 				ItemPointerData htid;
-				bool		all_dead = false;
+				TupleDeadnessData deadness;
+
+				deadness.all_dead = false;
+				deadness.latest_removed_xid = InvalidTransactionId;
+				deadness.page_lsn = InvalidXLogRecPtr;
 
 				if (!inposting)
 				{
@@ -556,7 +561,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 */
 				else if (table_index_fetch_tuple_check(heapRel, &htid,
 													   &SnapshotDirty,
-													   &all_dead))
+													   &deadness))
 				{
 					TransactionId xwait;
 
@@ -670,8 +675,8 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 													RelationGetRelationName(rel))));
 					}
 				}
-				else if (all_dead && (!inposting ||
-									  (prevalldead &&
+				else if (deadness.all_dead && (!inposting ||
+											   (prevalldead &&
 									   curposti == BTreeTupleGetNPosting(curitup) - 1)))
 				{
 					/*
@@ -679,6 +684,13 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					 * all posting list TIDs) is dead to everyone, so mark the
 					 * index entry killed.
 					 */
+					Assert(!RecoveryInProgress());
+					if (P_LP_SAFE_ON_STANDBY(opaque))
+					{
+						/* Seems like server was promoted some time ago,
+						 * clear the flag just for accuracy. */
+						opaque->btpo_flags &= ~BTP_LP_SAFE_ON_STANDBY;
+					}
 					ItemIdMarkDead(curitemid);
 					opaque->btpo_flags |= BTP_HAS_GARBAGE;
 
@@ -696,7 +708,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 * Remember if posting list tuple has even a single HOT chain
 				 * whose members are not all dead
 				 */
-				if (!all_dead && inposting)
+				if (!deadness.all_dead && inposting)
 					prevalldead = false;
 			}
 		}

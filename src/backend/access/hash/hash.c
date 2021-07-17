@@ -295,8 +295,10 @@ hashgettuple(IndexScanDesc scan, ScanDirection dir)
 	{
 		/*
 		 * Check to see if we should kill the previously-fetched tuple.
+		 * If the tuple is marked as dead but with min LSN - treat it as alive.
 		 */
-		if (scan->kill_prior_tuple)
+		if (scan->kill_prior_tuple &&
+				XLogRecPtrIsInvalid(scan->kill_prior_tuple_min_lsn))
 		{
 			/*
 			 * Yes, so remember it for later. (We'll deal with all such tuples

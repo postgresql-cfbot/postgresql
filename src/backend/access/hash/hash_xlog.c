@@ -1102,6 +1102,22 @@ hash_redo(XLogReaderState *record)
 }
 
 /*
+ * Mask a hash page that LP_DEAD bits are not safe for the standby.
+ */
+void
+hash_fpi_mask(char *pagedata, BlockNumber blkno)
+{
+	Page		page = (Page) pagedata;
+	HashPageOpaque opaque = (HashPageOpaque) PageGetSpecialPointer(page);
+	int			pagetype = opaque->hasho_flag & LH_PAGE_TYPE;
+
+	if (pagetype == LH_BUCKET_PAGE || pagetype == LH_OVERFLOW_PAGE)
+	{
+		opaque->hasho_flag &= ~LH_LP_SAFE_ON_STANDBY;
+	}
+}
+
+/*
  * Mask a hash page before performing consistency checks on it.
  */
 void
@@ -1111,6 +1127,7 @@ hash_mask(char *pagedata, BlockNumber blkno)
 	HashPageOpaque opaque;
 	int			pagetype;
 
+	hash_fpi_mask(pagedata, blkno);
 	mask_page_lsn_and_checksum(page);
 
 	mask_page_hint_bits(page);

@@ -423,7 +423,7 @@ typedef struct TableAmRoutine
 	 * needs to be set to true by index_fetch_tuple, signaling to the caller
 	 * that index_fetch_tuple should be called again for the same tid.
 	 *
-	 * *all_dead, if all_dead is not NULL, should be set to true by
+	 * *deadness, if value is not NULL, should be filled by
 	 * index_fetch_tuple iff it is guaranteed that no backend needs to see
 	 * that tuple. Index AMs can use that to avoid returning that tid in
 	 * future searches.
@@ -432,7 +432,8 @@ typedef struct TableAmRoutine
 									  ItemPointer tid,
 									  Snapshot snapshot,
 									  TupleTableSlot *slot,
-									  bool *call_again, bool *all_dead);
+									  bool *call_again,
+									  TupleDeadnessData *deadness);
 
 
 	/* ------------------------------------------------------------------------
@@ -1194,7 +1195,7 @@ table_index_fetch_end(struct IndexFetchTableData *scan)
  * will be set to true, signaling that table_index_fetch_tuple() should be called
  * again for the same tid.
  *
- * *all_dead, if all_dead is not NULL, will be set to true by
+ * *deadness, if value is not NULL, will be filled by
  * table_index_fetch_tuple() iff it is guaranteed that no backend needs to see
  * that tuple. Index AMs can use that to avoid returning that tid in future
  * searches.
@@ -1211,7 +1212,8 @@ table_index_fetch_tuple(struct IndexFetchTableData *scan,
 						ItemPointer tid,
 						Snapshot snapshot,
 						TupleTableSlot *slot,
-						bool *call_again, bool *all_dead)
+						bool *call_again,
+						TupleDeadnessData *deadness)
 {
 	/*
 	 * We don't expect direct calls to table_index_fetch_tuple with valid
@@ -1223,7 +1225,7 @@ table_index_fetch_tuple(struct IndexFetchTableData *scan,
 
 	return scan->rel->rd_tableam->index_fetch_tuple(scan, tid, snapshot,
 													slot, call_again,
-													all_dead);
+													deadness);
 }
 
 /*
@@ -1235,7 +1237,7 @@ table_index_fetch_tuple(struct IndexFetchTableData *scan,
 extern bool table_index_fetch_tuple_check(Relation rel,
 										  ItemPointer tid,
 										  Snapshot snapshot,
-										  bool *all_dead);
+										  TupleDeadnessData *deadness);
 
 
 /* ------------------------------------------------------------------------

@@ -202,12 +202,58 @@ CREATE TABLE clustertest (f1 int PRIMARY KEY);
 CLUSTER clustertest USING clustertest_pkey;
 CLUSTER clustertest;
 
--- Check that partitioned tables cannot be clustered
+-- Check that partitioned tables can be clustered
 CREATE TABLE clstrpart (a int) PARTITION BY RANGE (a);
+CREATE TABLE clstrpart1 PARTITION OF clstrpart FOR VALUES FROM (1)TO(10) PARTITION BY RANGE (a);
+CREATE TABLE clstrpart11 PARTITION OF clstrpart1 FOR VALUES FROM (1)TO(10);
+CREATE TABLE clstrpart12 PARTITION OF clstrpart1 FOR VALUES FROM (10)TO(20) PARTITION BY RANGE(a);
+CREATE TABLE clstrpart2 PARTITION OF clstrpart FOR VALUES FROM (20)TO(30);
+CREATE TABLE clstrpart3 PARTITION OF clstrpart DEFAULT PARTITION BY RANGE(a);
+CREATE TABLE clstrpart33 PARTITION OF clstrpart3 DEFAULT;
+ALTER TABLE clstrpart SET WITHOUT CLUSTER;
+CREATE INDEX clstrpart_only_idx ON ONLY clstrpart (a);
+CLUSTER clstrpart USING clstrpart_only_idx; -- fails
+DROP INDEX clstrpart_only_idx;
 CREATE INDEX clstrpart_idx ON clstrpart (a);
-ALTER TABLE clstrpart CLUSTER ON clstrpart_idx;
+-- Check that clustering sets new relfilenodes:
+CREATE TEMP TABLE old_cluster_info AS SELECT relname, level, relfilenode, relkind FROM pg_partition_tree('clstrpart'::regclass) AS tree JOIN pg_class c ON c.oid=tree.relid ;
 CLUSTER clstrpart USING clstrpart_idx;
-DROP TABLE clstrpart;
+CREATE TEMP TABLE new_cluster_info AS SELECT relname, level, relfilenode, relkind FROM pg_partition_tree('clstrpart'::regclass) AS tree JOIN pg_class c ON c.oid=tree.relid ;
+SELECT relname, old.level, old.relkind, old.relfilenode = new.relfilenode FROM old_cluster_info AS old JOIN new_cluster_info AS new USING (relname) ORDER BY relname COLLATE "C";
+-- Check that clustering sets new indisclustered:
+SELECT relname, relkind, indisclustered FROM pg_partition_tree('clstrpart_idx'::regclass) AS tree JOIN pg_index i ON i.indexrelid=tree.relid JOIN pg_class c ON c.oid=indexrelid ORDER BY relname COLLATE "C";
+CLUSTER clstrpart1 USING clstrpart1_a_idx; -- partition which is itself partitioned
+CLUSTER clstrpart12 USING clstrpart12_a_idx; -- partition which is itself partitioned, no childs
+CLUSTER clstrpart2 USING clstrpart2_a_idx; -- leaf
+\d clstrpart
+-- Test that it recurses to grandchildren:
+\d clstrpart33
+ALTER TABLE clstrpart SET WITHOUT CLUSTER;
+\d clstrpart33
+ALTER TABLE clstrpart CLUSTER ON clstrpart_idx;
+\d clstrpart33
+-- Check that only one child is marked clustered after marking clustered on a different parent
+CREATE INDEX clstrpart1_idx_2 ON clstrpart1(a);
+ALTER TABLE clstrpart CLUSTER ON clstrpart_idx;
+ALTER TABLE clstrpart1 CLUSTER ON clstrpart1_idx_2;
+\d clstrpart1
+-- Check that the parent index is marked not clustered after clustering a partition on a different index:
+ALTER TABLE clstrpart CLUSTER ON clstrpart_idx;
+CLUSTER clstrpart1 USING clstrpart1_idx_2;
+\d clstrpart
+-- Check that the parent index is marked not clustered after setting a partition not clustered:
+ALTER TABLE clstrpart CLUSTER ON clstrpart_idx;
+ALTER TABLE clstrpart1 SET WITHOUT CLUSTER;
+\d clstrpart
+-- Check that attaching an unclustered index marks the parent unclustered:
+ALTER TABLE clstrpart CLUSTER ON clstrpart_idx;
+CREATE TABLE clstrpart5 (LIKE clstrpart INCLUDING INDEXES);
+ALTER TABLE clstrpart ATTACH PARTITION clstrpart5 FOR VALUES FROM (40)TO(50);
+\d clstrpart
+-- Check that new children inherit clustered mark
+ALTER TABLE clstrpart CLUSTER ON clstrpart_idx;
+CREATE TABLE clstrpart4 PARTITION OF clstrpart FOR VALUES FROM (30)TO(40);
+\d clstrpart4
 
 -- Test CLUSTER with external tuplesorting
 

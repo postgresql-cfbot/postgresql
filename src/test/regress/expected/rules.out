@@ -1944,7 +1944,9 @@ pg_stat_progress_cluster| SELECT s.pid,
     s.param5 AS heap_tuples_written,
     s.param6 AS heap_blks_total,
     s.param7 AS heap_blks_scanned,
-    s.param8 AS index_rebuild_count
+    s.param8 AS index_rebuild_count,
+    s.param18 AS partitions_total,
+    s.param19 AS partitions_done
    FROM (pg_stat_get_progress_info('CLUSTER'::text) s(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16, param17, param18, param19, param20)
      LEFT JOIN pg_database d ON ((s.datid = d.oid)));
 pg_stat_progress_copy| SELECT s.pid,

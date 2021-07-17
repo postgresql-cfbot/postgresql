@@ -485,6 +485,12 @@ copy_xact_xlog_xid(void)
 			  old_cluster.controldata.chkpnt_nxtxid,
 			  new_cluster.pgdata);
 	check_ok();
+	prep_status("Setting oldest XID for new cluster");
+	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+			  "\"%s/pg_resetwal\" -f -u %u \"%s\"",
+			  new_cluster.bindir, old_cluster.controldata.chkpnt_oldstxid,
+			  new_cluster.pgdata);
+	check_ok();
 
 	/*
 	 * If the old server is before the MULTIXACT_FORMATCHANGE_CAT_VER change

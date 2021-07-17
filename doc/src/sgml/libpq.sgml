@@ -1260,6 +1260,39 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-connect-compression" xreflabel="compression">
+      <term><literal>compression</literal></term>
+      <listitem>
+      <para>
+        Request compression of libpq traffic. The client sends a request with
+        a list of compression algorithms. Compression can be requested by a client
+        by including the <literal>"compression"</literal> option in its connection string.
+        This can either be a boolean value to enable or disable compression
+        (<literal>"true"</literal>/<literal>"false"</literal>,
+        <literal>"on"</literal>/<literal>"off"</literal>,
+        <literal>"yes"</literal>/<literal>"no"</literal>,
+        <literal>"1"</literal>/<literal>"0"</literal>),
+        <literal>"any"</literal>,
+        or an explicit list of comma-separated compression algorithms
+        which can optionally include compression level (<literal>"zlib,zstd:5"</literal>).
+        If compression is enabled but an algorithm is not explicitly specified,
+        the client library sends its full list of
+        supported algorithms and the server chooses a preferred algorithm.
+
+        If the server accepts one of the algorithms, it replies with an acknowledgment
+        and all future libpq messages between client and server  will be compressed.
+        If the server rejects the compression request, it is up to the client whether
+        to continue without compression or to report an error.
+        Support for compression algorithms must be enabled when the server is compiled.
+        Currently, two libraries are supported: zlib (default) and zstd (if Postgres was
+        configured with --with-zstd option). In both cases, streaming mode is used.
+        By default, compression is not requested by the client.
+        Please note that using compression together with SSL may expose extra vulnerabilities:
+        <ulink url="https://en.wikipedia.org/wiki/CRIME">CRIME</ulink>
+      </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-connect-client-encoding" xreflabel="client_encoding">
       <term><literal>client_encoding</literal></term>
       <listitem>

@@ -348,6 +348,8 @@ typedef struct PROC_HDR
 	pg_atomic_uint32 clogGroupFirst;
 	/* WALWriter process's latch */
 	Latch	   *walwriterLatch;
+	/* WAL Allocator process's latch */
+	Latch	   *walAllocatorLatch;
 	/* Checkpointer process's latch */
 	Latch	   *checkpointerLatch;
 	/* Current shared estimate of appropriate spins_per_delay value */
@@ -370,11 +372,12 @@ extern PGPROC *PreparedXactProcs;
  * We set aside some extra PGPROC structures for auxiliary processes,
  * ie things that aren't full-fledged backends but need shmem access.
  *
- * Background writer, checkpointer, WAL writer and archiver run during normal
- * operation.  Startup process and WAL receiver also consume 2 slots, but WAL
- * writer is launched only after startup has exited, so we only need 5 slots.
+ * Background writer, checkpointer, WAL writer, archiver, and WAL allocator run
+ * during normal operation.  Startup process and WAL receiver also consume 2
+ * slots, but WAL writer is launched only after startup has exited, so we only
+ * need 6 slots.
  */
-#define NUM_AUXILIARY_PROCS		5
+#define NUM_AUXILIARY_PROCS		6
 
 /* configurable options */
 extern PGDLLIMPORT int DeadlockTimeout;

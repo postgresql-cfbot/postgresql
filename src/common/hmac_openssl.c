@@ -29,7 +29,6 @@
 #ifndef FRONTEND
 #include "utils/memutils.h"
 #include "utils/resowner.h"
-#include "utils/resowner_private.h"
 #endif
 
 /*
@@ -63,6 +62,27 @@ struct pg_hmac_ctx
 #endif
 };
 
+/* ResourceOwner callbacks to hold HMAC contexts */
+#ifndef FRONTEND
+static void ResOwnerReleaseHMAC(Datum res);
+static void ResOwnerPrintHMACLeakWarning(Datum res);
+
+static ResourceOwnerFuncs hmac_resowner_funcs =
+{
+	/* relcache references */
+	.name = "OpenSSL HMAC context",
+	.phase = RESOURCE_RELEASE_BEFORE_LOCKS,
+	.ReleaseResource = ResOwnerReleaseHMAC,
+	.PrintLeakWarning = ResOwnerPrintHMACLeakWarning,
+};
+
+/* Convenience wrappers over ResourceOwnerRemember/Forget */
+#define ResourceOwnerRememberHMAC(owner, ctx) \
+	ResourceOwnerRemember(owner, PointerGetDatum(ctx), &hmac_resowner_funcs)
+#define ResourceOwnerForgetHMAC(owner, ctx) \
+	ResourceOwnerForget(owner, PointerGetDatum(ctx), &hmac_resowner_funcs)
+#endif
+
 /*
  * pg_hmac_create
  *
@@ -86,7 +106,7 @@ pg_hmac_create(pg_cryptohash_type type)
 	 */
 #ifdef HAVE_HMAC_CTX_NEW
 #ifndef FRONTEND
-	ResourceOwnerEnlargeHMAC(CurrentResourceOwner);
+	ResourceOwnerEnlarge(CurrentResourceOwner);
 #endif
 	ctx->hmacctx = HMAC_CTX_new();
 #else
@@ -108,7 +128,7 @@ pg_hmac_create(pg_cryptohash_type type)
 #ifdef HAVE_HMAC_CTX_NEW
 #ifndef FRONTEND
 	ctx->resowner = CurrentResourceOwner;
-	ResourceOwnerRememberHMAC(CurrentResourceOwner, PointerGetDatum(ctx));
+	ResourceOwnerRememberHMAC(CurrentResourceOwner, ctx);
 #endif
 #else
 	memset(ctx->hmacctx, 0, sizeof(HMAC_CTX));
@@ -244,7 +264,7 @@ pg_hmac_free(pg_hmac_ctx *ctx)
 #ifdef HAVE_HMAC_CTX_FREE
 	HMAC_CTX_free(ctx->hmacctx);
 #ifndef FRONTEND
-	ResourceOwnerForgetHMAC(ctx->resowner, PointerGetDatum(ctx));
+	ResourceOwnerForgetHMAC(ctx->resowner, ctx);
 #endif
 #else
 	explicit_bzero(ctx->hmacctx, sizeof(HMAC_CTX));
@@ -254,3 +274,22 @@ pg_hmac_free(pg_hmac_ctx *ctx)
 	explicit_bzero(ctx, sizeof(pg_hmac_ctx));
 	FREE(ctx);
 }
+
+
+/*
+ * ResourceOwner callbacks
+ */
+#ifndef FRONTEND
+static void
+ResOwnerReleaseHMAC(Datum res)
+{
+	pg_hmac_free((pg_hmac_ctx *) DatumGetPointer(res));
+}
+
+static void
+ResOwnerPrintHMACLeakWarning(Datum res)
+{
+	elog(WARNING, "HMAC context reference leak: context %p still referenced",
+		 DatumGetPointer(res));
+}
+#endif

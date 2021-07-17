@@ -233,4 +233,6 @@ extern bool CachedPlanIsSimplyValid(CachedPlanSource *plansource,
 extern CachedExpression *GetCachedExpression(Node *expr);
 extern void FreeCachedExpression(CachedExpression *cexpr);
 
+extern ResourceOwnerFuncs planref_resowner_funcs;
+
 #endif							/* PLANCACHE_H */

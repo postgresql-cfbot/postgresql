@@ -60,13 +60,18 @@ subtransaction or portal.  Therefore, the "release" operation on a child
 ResourceOwner transfers lock ownership to the parent instead of actually
 releasing the lock, if isCommit is true.
 
-Currently, ResourceOwners contain direct support for recording ownership of
-buffer pins, lmgr locks, and catcache, relcache, plancache, tupdesc, and
-snapshot references.  Other objects can be associated with a ResourceOwner by
-recording the address of the owning ResourceOwner in such an object.  There is
-an API for other modules to get control during ResourceOwner release, so that
-they can scan their own data structures to find the objects that need to be
-deleted.
+ResourceOwner can record ownership of many different kinds of resources.
+As of this writing, it's used internally for buffer pins, lmgr locks, and
+catcache, relcache, plancache, tupdesc, snapshot, DSM and JIT context
+references. ResourceOwner treats all resources the same, and extensions
+can define new kinds of resources by filling in a ResourceOwnerFuncs
+struct with a suitable callback functions.
+
+There is also an API for other modules to get control during ResourceOwner
+release, so that they can scan their own data structures to find the objects
+that need to be deleted. This used to be the only way to register new kinds
+of objects with a resource owner; nowadays it easier to write custom
+ResourceOwnerFuncs callbacks.
 
 Whenever we are inside a transaction, the global variable
 CurrentResourceOwner shows which resource owner should be assigned

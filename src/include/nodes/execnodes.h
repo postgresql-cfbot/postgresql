@@ -1948,6 +1948,7 @@ typedef struct NestLoopState
  */
 /* private in nodeMergejoin.c: */
 typedef struct MergeJoinClauseData *MergeJoinClause;
+typedef struct RangeJoinData *RangeData;
 
 typedef struct MergeJoinState
 {
@@ -1969,6 +1970,8 @@ typedef struct MergeJoinState
 	TupleTableSlot *mj_NullInnerTupleSlot;
 	ExprContext *mj_OuterEContext;
 	ExprContext *mj_InnerEContext;
+	RangeData	 mj_RangeData;
+	bool		 mj_RangeJoin;
 } MergeJoinState;
 
 /* ----------------

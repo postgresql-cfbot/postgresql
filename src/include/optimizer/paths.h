@@ -231,17 +231,27 @@ extern List *make_pathkeys_for_sortclauses(PlannerInfo *root,
 										   List *tlist);
 extern void initialize_mergeclause_eclasses(PlannerInfo *root,
 											RestrictInfo *restrictinfo);
+extern void initialize_rangeclause_eclasses(PlannerInfo *root,
+											RestrictInfo *restrictinfo);
 extern void update_mergeclause_eclasses(PlannerInfo *root,
 										RestrictInfo *restrictinfo);
 extern List *find_mergeclauses_for_outer_pathkeys(PlannerInfo *root,
 												  List *pathkeys,
 												  List *restrictinfos);
+extern List *find_rangeclauses_for_outer_pathkeys(PlannerInfo *root,
+												  List *pathkeys,
+												  List *mergeclauses,
+												  List *rangeclauses);
 extern List *select_outer_pathkeys_for_merge(PlannerInfo *root,
 											 List *mergeclauses,
 											 RelOptInfo *joinrel);
+extern List *select_outer_pathkeys_for_range(PlannerInfo *root,
+											 List *rangeclauses);
 extern List *make_inner_pathkeys_for_merge(PlannerInfo *root,
 										   List *mergeclauses,
 										   List *outer_pathkeys);
+extern PathKey *make_inner_pathkey_for_range(PlannerInfo *root,
+											 List *rangeclause);
 extern List *trim_mergeclauses_for_inner_pathkeys(PlannerInfo *root,
 												  List *mergeclauses,
 												  List *pathkeys);

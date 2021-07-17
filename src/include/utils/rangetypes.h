@@ -95,6 +95,8 @@ typedef struct
  */
 
 extern bool range_contains_elem_internal(TypeCacheEntry *typcache, const RangeType *r, Datum val);
+extern bool elem_before_range_internal(TypeCacheEntry *typcache, Datum val, const RangeType *r);
+extern bool elem_after_range_internal(TypeCacheEntry *typcache, Datum val, const RangeType *r);
 
 /* internal versions of the above */
 extern bool range_eq_internal(TypeCacheEntry *typcache, const RangeType *r1,

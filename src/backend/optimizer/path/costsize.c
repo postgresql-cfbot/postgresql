@@ -3419,6 +3419,7 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 	double		inner_path_rows = inner_path->rows;
 	List	   *mergeclauses = path->path_mergeclauses;
 	List	   *innersortkeys = path->innersortkeys;
+	List	   *allclauses;
 	Cost		startup_cost = workspace->startup_cost;
 	Cost		run_cost = workspace->run_cost;
 	Cost		inner_run_cost = workspace->inner_run_cost;
@@ -3435,9 +3436,12 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 				rescannedtuples;
 	double		rescanratio;
 
-	/* Protect some assumptions below that rowcounts aren't zero */
-	if (inner_path_rows <= 0)
-		inner_path_rows = 1;
+	allclauses = list_concat(list_copy(mergeclauses), path->path_rangeclause);
+
+
+    /* Protect some assumptions below that rowcounts aren't zero */
+    if (inner_path_rows <= 0)
+        inner_path_rows = 1;
 
 	/* Mark the path with the correct row estimate */
 	if (path->jpath.path.param_info)
@@ -3466,7 +3470,7 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 	 * Compute cost of the mergequals and qpquals (other restriction clauses)
 	 * separately.
 	 */
-	cost_qual_eval(&merge_qual_cost, mergeclauses, root);
+	cost_qual_eval(&merge_qual_cost, allclauses, root);
 	cost_qual_eval(&qp_qual_cost, path->jpath.joinrestrictinfo, root);
 	qp_qual_cost.startup -= merge_qual_cost.startup;
 	qp_qual_cost.per_tuple -= merge_qual_cost.per_tuple;
@@ -3490,7 +3494,7 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 	 * Get approx # tuples passing the mergequals.  We use approx_tuple_count
 	 * here because we need an estimate done with JOIN_INNER semantics.
 	 */
-	mergejointuples = approx_tuple_count(root, &path->jpath, mergeclauses);
+	mergejointuples = approx_tuple_count(root, &path->jpath, allclauses);
 
 	/*
 	 * When there are equal merge keys in the outer relation, the mergejoin

@@ -1276,7 +1276,7 @@ InitPredicateLocks(void)
 		PredXact->OldCommittedSxact->finishedBefore = InvalidTransactionId;
 		PredXact->OldCommittedSxact->xmin = InvalidTransactionId;
 		PredXact->OldCommittedSxact->flags = SXACT_FLAG_COMMITTED;
-		PredXact->OldCommittedSxact->pid = 0;
+		PredXact->OldCommittedSxact->pgprocno = INVALID_PGPROCNO;
 	}
 	/* This never changes, so let's keep a local copy. */
 	OldCommittedSxact = PredXact->OldCommittedSxact;
@@ -1635,8 +1635,12 @@ GetSafeSnapshotBlockingPids(int blocked_pid, int *output, int output_size)
 	/* Find blocked_pid's SERIALIZABLEXACT by linear search. */
 	for (sxact = FirstPredXact(); sxact != NULL; sxact = NextPredXact(sxact))
 	{
-		if (sxact->pid == blocked_pid)
-			break;
+		if (sxact->pgprocno != INVALID_PGPROCNO)
+		{
+			PGPROC *proc = GetPGProcByNumber(sxact->pgprocno);
+			if (proc->pid == blocked_pid)
+				break;
+		}
 	}
 
 	/* Did we find it, and is it currently waiting in GetSafeSnapshot? */
@@ -1652,7 +1656,8 @@ GetSafeSnapshotBlockingPids(int blocked_pid, int *output, int output_size)
 
 		while (possibleUnsafeConflict != NULL && num_written < output_size)
 		{
-			output[num_written++] = possibleUnsafeConflict->sxactOut->pid;
+			PGPROC *outputProc = GetPGProcByNumber(possibleUnsafeConflict->sxactOut->pgprocno);
+			output[num_written++] = outputProc->pid;
 			possibleUnsafeConflict = (RWConflict)
 				SHMQueueNext(&sxact->possibleUnsafeConflicts,
 							 &possibleUnsafeConflict->inLink,
@@ -1875,7 +1880,7 @@ GetSerializableTransactionSnapshotInt(Snapshot snapshot,
 	sxact->topXid = GetTopTransactionIdIfAny();
 	sxact->finishedBefore = InvalidTransactionId;
 	sxact->xmin = snapshot->xmin;
-	sxact->pid = MyProcPid;
+	sxact->pgprocno = MyProc->pgprocno;
 	SHMQueueInit(&(sxact->predicateLocks));
 	SHMQueueElemInit(&(sxact->finishedLink));
 	sxact->flags = 0;
@@ -3441,7 +3446,7 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 		   || !SxactIsRolledBack(MySerializableXact));
 
 	/* may not be serializable during COMMIT/ROLLBACK PREPARED */
-	Assert(MySerializableXact->pid == 0 || IsolationIsSerializable());
+	Assert(MySerializableXact->pgprocno == INVALID_PGPROCNO || IsolationIsSerializable());
 
 	/* We'd better not already be on the cleanup list. */
 	Assert(!SxactIsOnFinishedList(MySerializableXact));
@@ -3669,7 +3674,7 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 			 */
 			if (SxactIsDeferrableWaiting(roXact) &&
 				(SxactIsROUnsafe(roXact) || SxactIsROSafe(roXact)))
-				ProcSendSignal(roXact->pid);
+				ProcSendSignal(roXact->pgprocno);
 
 			possibleUnsafeConflict = nextConflict;
 		}
@@ -5005,7 +5010,7 @@ PostPrepare_PredicateLocks(TransactionId xid)
 
 	Assert(SxactIsPrepared(MySerializableXact));
 
-	MySerializableXact->pid = 0;
+	MySerializableXact->pgprocno = INVALID_PGPROCNO;
 
 	hash_destroy(LocalPredicateLockHash);
 	LocalPredicateLockHash = NULL;
@@ -5080,7 +5085,7 @@ predicatelock_twophase_recover(TransactionId xid, uint16 info,
 		/* vxid for a prepared xact is InvalidBackendId/xid; no pid */
 		sxact->vxid.backendId = InvalidBackendId;
 		sxact->vxid.localTransactionId = (LocalTransactionId) xid;
-		sxact->pid = 0;
+		sxact->pgprocno = INVALID_PGPROCNO;
 
 		/* a prepared xact hasn't committed yet */
 		sxact->prepareSeqNo = RecoverySerCommitSeqNo;

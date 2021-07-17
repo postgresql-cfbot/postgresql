@@ -7309,7 +7309,6 @@ StartupXLOG(void)
 		 */
 		if (ArchiveRecoveryRequested && IsUnderPostmaster)
 		{
-			PublishStartupProcessInformation();
 			EnableSyncRequestForwarding();
 			SendPostmasterSignal(PMSIGNAL_RECOVERY_STARTED);
 			bgwriterLaunched = true;

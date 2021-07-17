@@ -18,6 +18,7 @@
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/predicate_internals.h"
+#include "storage/proc.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 
@@ -400,8 +401,11 @@ pg_lock_status(PG_FUNCTION_ARGS)
 		/* lock holder */
 		values[10] = VXIDGetDatum(xact->vxid.backendId,
 								  xact->vxid.localTransactionId);
-		if (xact->pid != 0)
-			values[11] = Int32GetDatum(xact->pid);
+		if (xact->pgprocno != INVALID_PGPROCNO)
+		{
+			PGPROC *proc = GetPGProcByNumber(xact->pgprocno);
+			values[11] = Int32GetDatum(proc->pid);
+		}
 		else
 			nulls[11] = true;
 

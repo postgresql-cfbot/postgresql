@@ -68,6 +68,8 @@
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
+extern char *FullTransactionIdToStr(FullTransactionId fxid);
+
 /*
  *	User-tweakable parameters
  */
@@ -106,6 +108,7 @@ bool		bsysscan = false;
  *
  * XactTopFullTransactionId stores the XID of our toplevel transaction, which
  * will be the same as TopTransactionStateData.fullTransactionId in an
+ * ordinary backend; but in a parallel backend, which does not have the entire
  * ordinary backend; but in a parallel backend, which does not have the entire
  * transaction state, it will instead be copied from the backend that started
  * the parallel operation.
@@ -713,6 +716,21 @@ AssignTransactionId(TransactionState s)
 			/* mark top, not current xact as having been logged */
 			TopTransactionStateData.didLogXid = true;
 		}
+	}
+
+	// NOTIFY FrontEnd, if it wants to know the top transaction's ID.
+	if (!isSubXact && listen_transaction_id)
+	{
+		char *xidStr;
+
+		Assert(s->parent == NULL);
+
+		// Should we Assert(!IsParallelWorker()) here?
+
+		xidStr = FullTransactionIdToStr(s->fullTransactionId);
+
+		NotifyMyFrontEnd("_my_transaction_id", xidStr, MyProcPid);
+		pfree(xidStr);
 	}
 }
 

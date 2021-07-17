@@ -118,6 +118,7 @@ static regexp_matches_ctx *setup_regexp_matches(text *orig_str, text *pattern,
 												bool ignore_degenerate,
 												bool fetching_unmatched);
 static ArrayType *build_regexp_match_result(regexp_matches_ctx *matchctx);
+static Datum build_regexp_positions_result(regexp_matches_ctx *matchctx, TupleDesc tupdesc);
 static Datum build_regexp_split_result(regexp_matches_ctx *splitctx);
 
 
@@ -1056,11 +1057,78 @@ regexp_matches(PG_FUNCTION_ARGS)
 	SRF_RETURN_DONE(funcctx);
 }
 
+/*
+ * regexp_positions()
+ *		Return a setof record of positions where a pattern matches within a string.
+ */
+Datum
+regexp_positions(PG_FUNCTION_ARGS)
+{
+	FuncCallContext *funcctx;
+	regexp_matches_ctx *matchctx;
+
+	if (SRF_IS_FIRSTCALL())
+	{
+		text	   *pattern = PG_GETARG_TEXT_PP(1);
+		text	   *flags = PG_GETARG_TEXT_PP_IF_EXISTS(2);
+		pg_re_flags re_flags;
+		MemoryContext oldcontext;
+		TupleDesc	tupdesc;
+
+		funcctx = SRF_FIRSTCALL_INIT();
+		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		tupdesc = CreateTemplateTupleDesc(2);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "starts",
+						   INT4ARRAYOID, -1, 0);
+		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "lengths",
+						   INT4ARRAYOID, -1, 0);
+		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
+
+		/* Determine options */
+		parse_re_flags(&re_flags, flags);
+
+		/* be sure to copy the input string into the multi-call ctx */
+		matchctx = setup_regexp_matches(PG_GETARG_TEXT_P_COPY(0), pattern,
+										&re_flags,
+										PG_GET_COLLATION(),
+										true, false, false);
+
+		/* Pre-create workspace that build_regexp_positions_result needs */
+		matchctx->elems = (Datum *) palloc(sizeof(Datum) * matchctx->npatterns * 2);
+		matchctx->nulls = (bool *) palloc(sizeof(bool) * matchctx->npatterns);
+
+		MemoryContextSwitchTo(oldcontext);
+		funcctx->user_fctx = (void *) matchctx;
+	}
+
+	funcctx = SRF_PERCALL_SETUP();
+	matchctx = (regexp_matches_ctx *) funcctx->user_fctx;
+
+	if (matchctx->next_match < matchctx->nmatches)
+	{
+		Datum tuple;
+
+		tuple = build_regexp_positions_result(matchctx, funcctx->tuple_desc);
+		matchctx->next_match++;
+		SRF_RETURN_NEXT(funcctx, tuple);
+	}
+
+	SRF_RETURN_DONE(funcctx);
+}
+
 /* This is separate to keep the opr_sanity regression test from complaining */
 Datum
 regexp_matches_no_flags(PG_FUNCTION_ARGS)
 {
 	return regexp_matches(fcinfo);
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_positions_no_flags(PG_FUNCTION_ARGS)
+{
+	return regexp_positions(fcinfo);
 }
 
 /*
@@ -1330,6 +1398,59 @@ build_regexp_match_result(regexp_matches_ctx *matchctx)
 	/* XXX: this hardcodes assumptions about the text type */
 	return construct_md_array(elems, nulls, 1, dims, lbs,
 							  TEXTOID, -1, false, TYPALIGN_INT);
+}
+
+/*
+ * build_regexp_positions_result - build output array for current match
+ */
+static Datum
+build_regexp_positions_result(regexp_matches_ctx *matchctx, TupleDesc	tupdesc)
+{
+	Datum	   *elems = matchctx->elems;
+	bool	   *nulls = matchctx->nulls;
+	int			dims[1];
+	int			lbs[1];
+	int			loc;
+	int			i;
+	ArrayType  *so_ary;
+	ArrayType  *eo_ary;
+	Datum		values[2];
+	bool		tuple_nulls[2] = {false, false};
+	HeapTuple	tuple;
+
+	/* Extract matching positions from the original string */
+	loc = matchctx->next_match * matchctx->npatterns * 2;
+	for (i = 0; i < matchctx->npatterns; i++)
+	{
+		int			so = matchctx->match_locs[loc++];
+		int			eo = matchctx->match_locs[loc++];
+
+		if (so < 0 || eo < 0)
+		{
+			elems[i] = (Datum) 0;
+			elems[i + matchctx->npatterns] = (Datum) 0;
+			nulls[i] = true;
+		}
+		else
+		{
+			elems[i] = Int32GetDatum(so + 1);
+			elems[i + matchctx->npatterns] = Int32GetDatum(eo - so);
+			nulls[i] = false;
+		}
+	}
+
+	/* And form two arrays */
+	dims[0] = matchctx->npatterns;
+	lbs[0] = 1;
+	so_ary = construct_md_array(elems, nulls, 1, dims, lbs,
+							  INT4OID, 4, true, TYPALIGN_INT);
+	eo_ary = construct_md_array(elems + matchctx->npatterns, nulls, 1, dims, lbs,
+							  INT4OID, 4, true, TYPALIGN_INT);
+	values[0] = PointerGetDatum(so_ary);
+	values[1] = PointerGetDatum(eo_ary);
+	tuple = heap_form_tuple(tupdesc, values, tuple_nulls);
+	return HeapTupleGetDatum(tuple);
+
 }
 
 /*

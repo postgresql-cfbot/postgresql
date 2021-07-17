@@ -198,12 +198,14 @@ SELECT regexp_replace('AAA aaa', 'A+', 'Z', 'z');
 
 -- return all matches from regexp
 SELECT regexp_matches('foobarbequebaz', $re$(bar)(beque)$re$);
+SELECT regexp_positions('foobarbequebaz', $re$(bar)(beque)$re$);
 
 -- test case insensitive
 SELECT regexp_matches('foObARbEqUEbAz', $re$(bar)(beque)$re$, 'i');
 
 -- global option - more than one match
 SELECT regexp_matches('foobarbequebazilbarfbonk', $re$(b[^b]+)(b[^b]+)$re$, 'g');
+SELECT regexp_positions('foobarbequebazilbarfbonk', $re$(b[^b]+)(b[^b]+)$re$, 'g');
 
 -- empty capture group (matched empty string)
 SELECT regexp_matches('foobarbequebaz', $re$(bar)(.*)(beque)$re$);

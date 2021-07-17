@@ -30,6 +30,7 @@
 
 #include "access/hash.h"
 #include "access/hash_xlog.h"
+#include "access/walprohibit.h"
 #include "miscadmin.h"
 #include "port/pg_bitutils.h"
 #include "storage/lmgr.h"
@@ -816,6 +817,8 @@ restart_expand:
 		goto fail;
 	}
 
+	AssertWALPermittedHaveXID();
+
 	/*
 	 * Since we are scribbling on the pages in the shared buffers, establish a
 	 * critical section.  Any failure in this next code leaves us with a big
@@ -1172,6 +1175,8 @@ _hash_splitbucket(Relation rel,
 
 				if (PageGetFreeSpaceForMultipleTuples(npage, nitups + 1) < (all_tups_size + itemsz))
 				{
+					AssertWALPermittedHaveXID();
+
 					/*
 					 * Change the shared buffer state in critical section,
 					 * otherwise any error could make it unrecoverable.
@@ -1223,6 +1228,8 @@ _hash_splitbucket(Relation rel,
 		/* Exit loop if no more overflow pages in old bucket */
 		if (!BlockNumberIsValid(oblkno))
 		{
+			AssertWALPermittedHaveXID();
+
 			/*
 			 * Change the shared buffer state in critical section, otherwise
 			 * any error could make it unrecoverable.
@@ -1268,6 +1275,8 @@ _hash_splitbucket(Relation rel,
 	LockBuffer(bucket_nbuf, BUFFER_LOCK_EXCLUSIVE);
 	npage = BufferGetPage(bucket_nbuf);
 	nopaque = (HashPageOpaque) PageGetSpecialPointer(npage);
+
+	AssertWALPermittedHaveXID();
 
 	START_CRIT_SECTION();
 

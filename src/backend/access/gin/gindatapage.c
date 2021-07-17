@@ -16,6 +16,7 @@
 
 #include "access/gin_private.h"
 #include "access/ginxlog.h"
+#include "access/walprohibit.h"
 #include "access/xloginsert.h"
 #include "lib/ilist.h"
 #include "miscadmin.h"
@@ -811,6 +812,7 @@ ginVacuumPostingTreeLeaf(Relation indexrel, Buffer buffer, GinVacuumState *gvs)
 	if (removedsomething)
 	{
 		bool		modified;
+		bool		needwal;
 
 		/*
 		 * Make sure we have a palloc'd copy of all segments, after the first
@@ -835,8 +837,12 @@ ginVacuumPostingTreeLeaf(Relation indexrel, Buffer buffer, GinVacuumState *gvs)
 			}
 		}
 
-		if (RelationNeedsWAL(indexrel))
+		needwal = RelationNeedsWAL(indexrel);
+		if (needwal)
+		{
+			CheckWALPermitted();
 			computeLeafRecompressWALData(leaf);
+		}
 
 		/* Apply changes to page */
 		START_CRIT_SECTION();
@@ -845,7 +851,7 @@ ginVacuumPostingTreeLeaf(Relation indexrel, Buffer buffer, GinVacuumState *gvs)
 
 		MarkBufferDirty(buffer);
 
-		if (RelationNeedsWAL(indexrel))
+		if (needwal)
 		{
 			XLogRecPtr	recptr;
 
@@ -1777,6 +1783,7 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 	int			nrootitems;
 	int			rootsize;
 	bool		is_build = (buildStats != NULL);
+	bool		needwal;
 
 	/* Construct the new root page in memory first. */
 	tmppage = (Page) palloc(BLCKSZ);
@@ -1825,12 +1832,17 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 	 */
 	PredicateLockPageSplit(index, BufferGetBlockNumber(entrybuffer), blkno);
 
+	needwal = RelationNeedsWAL(index) && !is_build;
+
+	if (needwal)
+		CheckWALPermitted();
+
 	START_CRIT_SECTION();
 
 	PageRestoreTempPage(tmppage, page);
 	MarkBufferDirty(buffer);
 
-	if (RelationNeedsWAL(index) && !is_build)
+	if (needwal)
 	{
 		XLogRecPtr	recptr;
 		ginxlogCreatePostingTree data;

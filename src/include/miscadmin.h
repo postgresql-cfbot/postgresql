@@ -106,6 +106,30 @@ extern PGDLLIMPORT volatile uint32 CritSectionCount;
 /* in tcop/postgres.c */
 extern void ProcessInterrupts(void);
 
+#ifdef USE_ASSERT_CHECKING
+typedef enum
+{
+	WALPROHIBIT_UNCHECKED,
+	WALPROHIBIT_CHECKED,
+	WALPROHIBIT_CHECKED_AND_USED
+} WALProhibitCheckState;
+
+/* in access/walprohibit.c */
+extern WALProhibitCheckState walprohibit_checked_state;
+
+/*
+ * Reset walpermit_checked flag when no longer in the critical section.
+ * Otherwise, marked checked and used.
+ */
+#define RESET_WALPROHIBIT_CHECKED_STATE() \
+do { \
+	walprohibit_checked_state = (CritSectionCount == 0) ? \
+	WALPROHIBIT_UNCHECKED : WALPROHIBIT_CHECKED_AND_USED; \
+} while(0)
+#else
+#define RESET_WALPROHIBIT_CHECKED_STATE() ((void) 0)
+#endif
+
 /* Test whether an interrupt is pending */
 #ifndef WIN32
 #define INTERRUPTS_PENDING_CONDITION() \
@@ -121,6 +145,7 @@ extern void ProcessInterrupts(void);
 do { \
 	if (INTERRUPTS_PENDING_CONDITION()) \
 		ProcessInterrupts(); \
+	RESET_WALPROHIBIT_CHECKED_STATE(); \
 } while(0)
 
 /* Is ProcessInterrupts() guaranteed to clear InterruptPending? */
@@ -150,6 +175,7 @@ do { \
 do { \
 	Assert(CritSectionCount > 0); \
 	CritSectionCount--; \
+	RESET_WALPROHIBIT_CHECKED_STATE(); \
 } while(0)
 
 

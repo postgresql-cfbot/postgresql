@@ -20,6 +20,7 @@
 
 #include "access/gin_private.h"
 #include "access/ginxlog.h"
+#include "access/walprohibit.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "catalog/pg_am.h"
@@ -67,6 +68,8 @@ writeListPage(Relation index, Buffer buffer,
 				off;
 	PGAlignedBlock workspace;
 	char	   *ptr;
+
+	AssertWALPermittedHaveXID();
 
 	START_CRIT_SECTION();
 
@@ -548,6 +551,7 @@ shiftList(Relation index, Buffer metabuffer, BlockNumber newHead,
 	Page		metapage;
 	GinMetaPageData *metadata;
 	BlockNumber blknoToDelete;
+	bool		needwal = RelationNeedsWAL(index);
 
 	metapage = BufferGetPage(metabuffer);
 	metadata = GinPageGetMeta(metapage);
@@ -586,8 +590,11 @@ shiftList(Relation index, Buffer metabuffer, BlockNumber newHead,
 		 * prepare the XLogInsert machinery for that before entering the
 		 * critical section.
 		 */
-		if (RelationNeedsWAL(index))
+		if (needwal)
+		{
+			CheckWALPermitted();
 			XLogEnsureRecordSpace(data.ndeleted, 0);
+		}
 
 		START_CRIT_SECTION();
 
@@ -625,7 +632,7 @@ shiftList(Relation index, Buffer metabuffer, BlockNumber newHead,
 			MarkBufferDirty(buffers[i]);
 		}
 
-		if (RelationNeedsWAL(index))
+		if (needwal)
 		{
 			XLogRecPtr	recptr;
 

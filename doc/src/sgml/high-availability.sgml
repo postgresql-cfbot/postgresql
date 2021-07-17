@@ -2339,4 +2339,38 @@ HINT:  You can then restart the server after making the necessary configuration 
 
  </sect1>
 
+ <sect1 id="wal-prohibited-state">
+  <title>WAL Prohibited State</title>
+
+  <indexterm zone="high-availability">
+   <primary>WAL Prohibited State</primary>
+  </indexterm>
+
+   <para>
+    WAL prohibited is a read-only system state. Any permitted user can call
+    <function>pg_prohibit_wal</function> function to forces the system into
+    a WAL prohibited mode where insert write ahead log will be prohibited until
+    the same function executed to change that state to read-write. Like Hot
+    Standby, connections to the server are allowed to run read-only queries
+    in WAL prohibited state. If the system is in WAL prohibited state then GUC
+    <literal>wal_prohibited</literal> value will be <literal>on</literal>.
+    Otherwise, it will be <literal>off</literal>.  When the user requests WAL
+    prohibited state, at that moment if any existing session is already running
+    a transaction, and that transaction has already been performed or planning
+    to perform wal write operations then the session running that transaction
+    will be terminated. This is useful for HA setup where the master server
+    needs to stop accepting WAL writes immediately and kick out any
+    transaction expecting WAL writes at the end, in case of network down on
+    master or replication connections failures.
+   </para>
+
+   <para>
+    Shutting down the WAL prohibited system will skip the shutdown checkpoint,
+    and at the restart, it will go into crash recovery mode and stay in that
+    state until the system changed to read-write.  At starting WAL prohibited
+    server if it finds <filename>standby.signal</filename> or
+    <filename>recovery.signal</filename> file then system implicitly get out of
+    WAL prohibited state.
+   </para>
+ </sect1>
 </chapter>

@@ -19,6 +19,7 @@
 #include "access/spgist_private.h"
 #include "access/spgxlog.h"
 #include "access/transam.h"
+#include "access/walprohibit.h"
 #include "access/xloginsert.h"
 #include "catalog/storage_xlog.h"
 #include "commands/vacuum.h"
@@ -139,6 +140,7 @@ vacuumLeafPage(spgBulkDeleteState *bds, Relation index, Buffer buffer,
 	int			nDeletable;
 	OffsetNumber i,
 				max = PageGetMaxOffsetNumber(page);
+	bool		needwal;
 
 	memset(predecessor, 0, sizeof(predecessor));
 	memset(deletable, 0, sizeof(deletable));
@@ -323,6 +325,10 @@ vacuumLeafPage(spgBulkDeleteState *bds, Relation index, Buffer buffer,
 	if (nDeletable != xlrec.nDead + xlrec.nPlaceholder + xlrec.nMove)
 		elog(ERROR, "inconsistent counts of deletable tuples");
 
+	needwal = RelationNeedsWAL(index);
+	if (needwal)
+		CheckWALPermitted();
+
 	/* Do the updates */
 	START_CRIT_SECTION();
 
@@ -371,7 +377,7 @@ vacuumLeafPage(spgBulkDeleteState *bds, Relation index, Buffer buffer,
 
 	MarkBufferDirty(buffer);
 
-	if (RelationNeedsWAL(index))
+	if (needwal)
 	{
 		XLogRecPtr	recptr;
 
@@ -411,6 +417,7 @@ vacuumLeafRoot(spgBulkDeleteState *bds, Relation index, Buffer buffer)
 	OffsetNumber toDelete[MaxIndexTuplesPerPage];
 	OffsetNumber i,
 				max = PageGetMaxOffsetNumber(page);
+	bool		needwal;
 
 	xlrec.nDelete = 0;
 
@@ -447,6 +454,10 @@ vacuumLeafRoot(spgBulkDeleteState *bds, Relation index, Buffer buffer)
 	if (xlrec.nDelete == 0)
 		return;					/* nothing more to do */
 
+	needwal = RelationNeedsWAL(index);
+	if (needwal)
+		CheckWALPermitted();
+
 	/* Do the update */
 	START_CRIT_SECTION();
 
@@ -455,7 +466,7 @@ vacuumLeafRoot(spgBulkDeleteState *bds, Relation index, Buffer buffer)
 
 	MarkBufferDirty(buffer);
 
-	if (RelationNeedsWAL(index))
+	if (needwal)
 	{
 		XLogRecPtr	recptr;
 
@@ -502,12 +513,17 @@ vacuumRedirectAndPlaceholder(Relation index, Buffer buffer)
 	OffsetNumber itemnos[MaxIndexTuplesPerPage];
 	spgxlogVacuumRedirect xlrec;
 	GlobalVisState *vistest;
+	bool		needwal;
 
 	xlrec.nToPlaceholder = 0;
 	xlrec.newestRedirectXid = InvalidTransactionId;
 
 	/* XXX: providing heap relation would allow more pruning */
 	vistest = GlobalVisTestFor(NULL);
+
+	needwal = RelationNeedsWAL(index);
+	if (needwal)
+		CheckWALPermitted();
 
 	START_CRIT_SECTION();
 
@@ -584,7 +600,7 @@ vacuumRedirectAndPlaceholder(Relation index, Buffer buffer)
 	if (hasUpdate)
 		MarkBufferDirty(buffer);
 
-	if (hasUpdate && RelationNeedsWAL(index))
+	if (hasUpdate && needwal)
 	{
 		XLogRecPtr	recptr;
 

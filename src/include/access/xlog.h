@@ -15,6 +15,7 @@
 #include "access/xlogdefs.h"
 #include "access/xloginsert.h"
 #include "access/xlogreader.h"
+#include "catalog/pg_control.h"
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
@@ -175,6 +176,14 @@ typedef enum WalCompression
 	WAL_COMPRESSION_LZ4
 } WalCompression;
 
+/* State of work that enables wal writes */
+typedef enum XLogAcceptWritesState
+{
+	XLOG_ACCEPT_WRITES_PENDING = 0,	/* initial state, not started */
+	XLOG_ACCEPT_WRITES_SKIPPED,		/* skipped wal writes */
+	XLOG_ACCEPT_WRITES_DONE			/* wal writes are enabled */
+} XLogAcceptWritesState;
+
 /* Recovery states */
 typedef enum RecoveryState
 {
@@ -323,6 +332,7 @@ extern RecoveryState GetRecoveryState(void);
 extern bool HotStandbyActive(void);
 extern bool HotStandbyActiveInReplay(void);
 extern bool XLogInsertAllowed(void);
+extern void ResetLocalXLogInsertAllowed(void);
 extern void GetXLogReceiptTime(TimestampTz *rtime, bool *fromStream);
 extern XLogRecPtr GetXLogReplayRecPtr(TimeLineID *replayTLI);
 extern XLogRecPtr GetXLogInsertRecPtr(void);
@@ -331,6 +341,7 @@ extern RecoveryPauseState GetRecoveryPauseState(void);
 extern void SetRecoveryPause(bool recoveryPause);
 extern TimestampTz GetLatestXTime(void);
 extern TimestampTz GetCurrentChunkReplayStartTime(void);
+extern XLogAcceptWritesState GetXLogWriteAllowedState(void);
 
 extern void UpdateControlFile(void);
 extern uint64 GetSystemIdentifier(void);
@@ -342,6 +353,11 @@ extern void XLOGShmemInit(void);
 extern void BootStrapXLOG(void);
 extern void LocalProcessControlFile(bool reset);
 extern void StartupXLOG(void);
+extern void PerformPendingStartupOperations(void);
+extern bool XLogAcceptWrites(bool needChkpt, XLogReaderState *xlogreader,
+							 XLogRecPtr EndOfLog, TimeLineID EndOfLogTLI);
+extern void SetControlFileDBState(DBState state);
+extern void SetControlFileWALProhibitFlag(bool wal_prohibited);
 extern void ShutdownXLOG(int code, Datum arg);
 extern void InitXLOGAccess(void);
 extern void CreateCheckPoint(int flags);

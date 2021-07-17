@@ -19,6 +19,10 @@ include $(top_builddir)/src/Makefile.global
 REGRESS_SHLIB=$(abs_top_builddir)/src/test/regress/regress$(DLSUFFIX)
 export REGRESS_SHLIB
 
+# These are created by pg_regress.
+# So we need rules to clean them.
+pg_regress_clean_files += sql/ expected/
+
 check:
 	$(prove_check)
 
@@ -26,4 +30,4 @@ installcheck:
 	$(prove_installcheck)
 
 clean distclean maintainer-clean:
-	rm -rf tmp_check
+	rm -rf $(pg_regress_clean_files)

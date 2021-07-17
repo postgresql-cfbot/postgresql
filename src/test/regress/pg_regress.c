@@ -83,6 +83,7 @@ static int	max_connections = 0;
 static int	max_concurrent_tests = 0;
 static char *encoding = NULL;
 static _stringlist *schedulelist = NULL;
+static _stringlist *skip_tests = NULL;
 static _stringlist *extra_tests = NULL;
 static char *temp_instance = NULL;
 static _stringlist *temp_configs = NULL;
@@ -201,6 +202,22 @@ split_to_stringlist(const char *s, const char *delim, _stringlist **listhead)
 		token = strtok(NULL, delim);
 	}
 	free(sc);
+}
+
+/*
+ * Test if a string is in a list.
+ */
+static bool
+string_in_stringlist(const char *s, _stringlist *list)
+{
+	while (list)
+	{
+		if (strcmp(list->str, s) == 0)
+			return true;
+		list = list->next;
+	}
+
+	return false;
 }
 
 /*
@@ -1696,7 +1713,11 @@ run_schedule(const char *schedule, test_start_function startfunc,
 		if (scbuf[0] == '\0' || scbuf[0] == '#')
 			continue;
 		if (strncmp(scbuf, "test: ", 6) == 0)
+		{
 			test = scbuf + 6;
+			if (string_in_stringlist(test, skip_tests))
+				continue;
+		}
 		else if (strncmp(scbuf, "ignore: ", 8) == 0)
 		{
 			c = scbuf + 8;
@@ -1894,6 +1915,7 @@ run_schedule(const char *schedule, test_start_function startfunc,
 	}
 
 	free_stringlist(&ignorelist);
+	free_stringlist(&skip_tests);
 
 	fclose(scf);
 }
@@ -2100,6 +2122,7 @@ help(void)
 	printf(_("      --outputdir=DIR           place output files in DIR (default \".\")\n"));
 	printf(_("      --schedule=FILE           use test ordering schedule from FILE\n"));
 	printf(_("                                (can be used multiple times to concatenate)\n"));
+	printf(_("      --skip-tests=LIST         comma-separated list of tests to skip\n"));
 	printf(_("      --temp-instance=DIR       create a temporary instance in DIR\n"));
 	printf(_("      --use-existing            use an existing installation\n"));
 	printf(_("  -V, --version                 output version information, then exit\n"));
@@ -2152,6 +2175,7 @@ regression_main(int argc, char *argv[],
 		{"config-auth", required_argument, NULL, 24},
 		{"max-concurrent-tests", required_argument, NULL, 25},
 		{"make-testtablespace-dir", no_argument, NULL, 26},
+		{"skip-tests", required_argument, NULL, 27},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -2284,6 +2308,9 @@ regression_main(int argc, char *argv[],
 				break;
 			case 26:
 				make_testtablespace_dir = true;
+				break;
+			case 27:
+				split_to_stringlist(optarg, ",", &skip_tests);
 				break;
 			default:
 				/* getopt_long already emitted a complaint */

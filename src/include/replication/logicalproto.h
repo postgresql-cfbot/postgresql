@@ -148,8 +148,10 @@ typedef struct LogicalRepPreparedTxnData
  */
 typedef struct LogicalRepCommitPreparedTxnData
 {
+	XLogRecPtr	prepare_end_lsn;
 	XLogRecPtr	commit_lsn;
-	XLogRecPtr	end_lsn;
+	XLogRecPtr	commit_end_lsn;
+	TimestampTz prepare_time;
 	TimestampTz commit_time;
 	TransactionId xid;
 	char		gid[GIDSIZE];
@@ -188,7 +190,9 @@ extern void logicalrep_write_prepare(StringInfo out, ReorderBufferTXN *txn,
 extern void logicalrep_read_prepare(StringInfo in,
 									LogicalRepPreparedTxnData *prepare_data);
 extern void logicalrep_write_commit_prepared(StringInfo out, ReorderBufferTXN *txn,
-											 XLogRecPtr commit_lsn);
+											 XLogRecPtr commit_lsn,
+											 XLogRecPtr prepare_end_lsn,
+											 TimestampTz prepare_time);
 extern void logicalrep_read_commit_prepared(StringInfo in,
 											LogicalRepCommitPreparedTxnData *prepare_data);
 extern void logicalrep_write_rollback_prepared(StringInfo out, ReorderBufferTXN *txn,

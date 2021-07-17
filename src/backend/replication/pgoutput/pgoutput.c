@@ -56,7 +56,9 @@ static void pgoutput_begin_prepare_txn(LogicalDecodingContext *ctx,
 static void pgoutput_prepare_txn(LogicalDecodingContext *ctx,
 								 ReorderBufferTXN *txn, XLogRecPtr prepare_lsn);
 static void pgoutput_commit_prepared_txn(LogicalDecodingContext *ctx,
-										 ReorderBufferTXN *txn, XLogRecPtr commit_lsn);
+										 ReorderBufferTXN *txn, XLogRecPtr commit_lsn,
+										 XLogRecPtr prepare_end_lsn,
+										 TimestampTz prepare_time);
 static void pgoutput_rollback_prepared_txn(LogicalDecodingContext *ctx,
 										   ReorderBufferTXN *txn,
 										   XLogRecPtr prepare_end_lsn,
@@ -129,6 +131,11 @@ typedef struct RelationSyncEntry
 	 */
 	TupleConversionMap *map;
 } RelationSyncEntry;
+
+typedef struct PGOutputTxnData
+{
+	bool sent_begin_txn;    /* flag indicating whether begin has been sent */
+} PGOutputTxnData;
 
 /* Map used to remember which relation schemas we sent. */
 static HTAB *RelationSyncCache = NULL;
@@ -410,10 +417,32 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 static void
 pgoutput_begin_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
 {
-	bool		send_replication_origin = txn->origin_id != InvalidRepOriginId;
+	PGOutputTxnData    *data = MemoryContextAllocZero(ctx->context,
+														sizeof(PGOutputTxnData));
 
+	/*
+	 * Don't send BEGIN message here. Instead, postpone it until the first
+	 * change. In logical replication, a common scenario is to replicate a set
+	 * of tables (instead of all tables) and transactions whose changes were on
+	 * table(s) that are not published will produce empty transactions. These
+	 * empty transactions will send BEGIN and COMMIT messages to subscribers,
+	 * using bandwidth on something with little/no use for logical replication.
+	 */
+	data->sent_begin_txn = false;
+	txn->output_plugin_private = data;
+}
+
+
+static void
+pgoutput_begin(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
+{
+	bool		send_replication_origin = txn->origin_id != InvalidRepOriginId;
+	PGOutputTxnData	*data = (PGOutputTxnData *) txn->output_plugin_private;
+
+	Assert(data);
 	OutputPluginPrepareWrite(ctx, !send_replication_origin);
 	logicalrep_write_begin(ctx->out, txn);
+	data->sent_begin_txn = true;
 
 	send_repl_origin(ctx, txn->origin_id, txn->origin_lsn,
 					 send_replication_origin);
@@ -428,7 +457,21 @@ static void
 pgoutput_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 					XLogRecPtr commit_lsn)
 {
+	PGOutputTxnData	*data = (PGOutputTxnData *) txn->output_plugin_private;
+	bool            skip;
+
+	Assert(data);
+	skip = !data->sent_begin_txn;
+	pfree(data);
+	txn->output_plugin_private = NULL;
 	OutputPluginUpdateProgress(ctx);
+
+	/* skip COMMIT message if nothing was sent */
+	if (skip)
+	{
+		elog(DEBUG1, "Skipping replication of an empty transaction");
+		return;
+	}
 
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_commit(ctx->out, txn, commit_lsn);
@@ -441,10 +484,28 @@ pgoutput_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 static void
 pgoutput_begin_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
 {
-	bool		send_replication_origin = txn->origin_id != InvalidRepOriginId;
+	/*
+	 * Don't send BEGIN PREPARE message here. Instead, postpone it until the first
+	 * change. In logical replication, a common scenario is to replicate a set
+	 * of tables (instead of all tables) and transactions whose changes were on
+	 * table(s) that are not published will produce empty transactions. These
+	 * empty transactions will send BEGIN PREPARE and COMMIT PREPARED messages
+	 * to subscribers, using bandwidth on something with little/no use
+	 * for logical replication.
+	 */
+	pgoutput_begin_txn(ctx, txn);
+}
 
+static void
+pgoutput_begin_prepare(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
+{
+	bool		send_replication_origin = txn->origin_id != InvalidRepOriginId;
+	PGOutputTxnData    *data = (PGOutputTxnData *) txn->output_plugin_private;
+
+	Assert(data);
 	OutputPluginPrepareWrite(ctx, !send_replication_origin);
 	logicalrep_write_begin_prepare(ctx->out, txn);
+	data->sent_begin_txn = true;
 
 	send_repl_origin(ctx, txn->origin_id, txn->origin_lsn,
 					 send_replication_origin);
@@ -459,7 +520,17 @@ static void
 pgoutput_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 					 XLogRecPtr prepare_lsn)
 {
+	PGOutputTxnData    *data = (PGOutputTxnData *) txn->output_plugin_private;
+
+	Assert(data);
 	OutputPluginUpdateProgress(ctx);
+
+	/* skip PREPARE message if nothing was sent */
+	if (!data->sent_begin_txn)
+	{
+		elog(DEBUG1, "Skipping replication of an empty prepared transaction");
+		return;
+	}
 
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_prepare(ctx->out, txn, prepare_lsn);
@@ -471,12 +542,33 @@ pgoutput_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
  */
 static void
 pgoutput_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-							 XLogRecPtr commit_lsn)
+							 XLogRecPtr commit_lsn, XLogRecPtr prepare_end_lsn,
+							 TimestampTz prepare_time)
 {
+	PGOutputTxnData    *data = (PGOutputTxnData *) txn->output_plugin_private;
+
 	OutputPluginUpdateProgress(ctx);
 
+	/*
+	 * skip sending COMMIT PREPARED message if prepared transaction
+	 * has not been sent.
+	 */
+	if (data)
+	{
+		bool skip = !data->sent_begin_txn;
+		pfree(data);
+		txn->output_plugin_private = NULL;
+		if (skip)
+		{
+			elog(DEBUG1,
+				 "Skipping replication of COMMIT PREPARED of an empty transaction");
+			return;
+		}
+	}
+
 	OutputPluginPrepareWrite(ctx, true);
-	logicalrep_write_commit_prepared(ctx->out, txn, commit_lsn);
+	logicalrep_write_commit_prepared(ctx->out, txn, commit_lsn, prepare_end_lsn,
+									 prepare_time);
 	OutputPluginWrite(ctx, true);
 }
 
@@ -489,8 +581,26 @@ pgoutput_rollback_prepared_txn(LogicalDecodingContext *ctx,
 							   XLogRecPtr prepare_end_lsn,
 							   TimestampTz prepare_time)
 {
+	PGOutputTxnData    *data = (PGOutputTxnData *) txn->output_plugin_private;
+
 	OutputPluginUpdateProgress(ctx);
 
+	/*
+	 * skip sending ROLLBACK PREPARED message if prepared transaction
+	 * has not been sent.
+	 */
+	if (data)
+	{
+		bool skip = !data->sent_begin_txn;
+		pfree(data);
+		txn->output_plugin_private = NULL;
+		if (skip)
+		{
+			elog(DEBUG1,
+				 "Skipping replication of ROLLBACK of an empty transaction");
+			return;
+		}
+	}
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_rollback_prepared(ctx->out, txn, prepare_end_lsn,
 									   prepare_time);
@@ -639,10 +749,15 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				Relation relation, ReorderBufferChange *change)
 {
 	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
+	PGOutputTxnData *txndata = (PGOutputTxnData *) txn->output_plugin_private;
 	MemoryContext old;
 	RelationSyncEntry *relentry;
 	TransactionId xid = InvalidTransactionId;
 	Relation	ancestor = NULL;
+
+	/* If not streaming, should have setup txndata as part of BEGIN/BEGIN PREPARE */
+	if (!in_streaming)
+		Assert(txndata);
 
 	if (!is_publishable_relation(relation))
 		return;
@@ -675,6 +790,15 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			break;
 		default:
 			Assert(false);
+	}
+
+	/* output BEGIN if we haven't yet */
+	if (!in_streaming && !txndata->sent_begin_txn)
+	{
+		if (rbtxn_prepared(txn))
+			pgoutput_begin_prepare(ctx, txn);
+		else
+			pgoutput_begin(ctx, txn);
 	}
 
 	/* Avoid leaking memory by using and resetting our own context */
@@ -779,12 +903,17 @@ pgoutput_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				  int nrelations, Relation relations[], ReorderBufferChange *change)
 {
 	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
+	PGOutputTxnData *txndata = (PGOutputTxnData *) txn->output_plugin_private;
 	MemoryContext old;
 	RelationSyncEntry *relentry;
 	int			i;
 	int			nrelids;
 	Oid		   *relids;
 	TransactionId xid = InvalidTransactionId;
+
+	/* If not streaming, should have setup txndata as part of BEGIN/BEGIN PREPARE */
+	if (!in_streaming)
+		Assert(txndata);
 
 	/* Remember the xid for the change in streaming mode. See pgoutput_change. */
 	if (in_streaming)
@@ -822,6 +951,15 @@ pgoutput_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 	if (nrelids > 0)
 	{
+		/* output BEGIN if we haven't yet */
+		if (!in_streaming && !txndata->sent_begin_txn)
+		{
+			if (rbtxn_prepared(txn))
+				pgoutput_begin_prepare(ctx, txn);
+			else
+				pgoutput_begin(ctx, txn);
+		}
+
 		OutputPluginPrepareWrite(ctx, true);
 		logicalrep_write_truncate(ctx->out,
 								  xid,
@@ -842,6 +980,7 @@ pgoutput_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				 const char *message)
 {
 	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
+	PGOutputTxnData *txndata;
 	TransactionId xid = InvalidTransactionId;
 
 	if (!data->messages)
@@ -853,6 +992,22 @@ pgoutput_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	 */
 	if (in_streaming)
 		xid = txn->xid;
+
+	/*
+	 * Output BEGIN if we haven't yet.
+	 * Avoid for streaming and non-transactional messages
+	 */
+	if (!in_streaming && transactional)
+	{
+		txndata = (PGOutputTxnData *) txn->output_plugin_private;
+		if (!txndata->sent_begin_txn)
+		{
+			if (rbtxn_prepared(txn))
+				pgoutput_begin_prepare(ctx, txn);
+			else
+				pgoutput_begin(ctx, txn);
+		}
+	}
 
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_message(ctx->out,

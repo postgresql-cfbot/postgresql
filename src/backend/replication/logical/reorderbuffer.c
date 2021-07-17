@@ -2794,7 +2794,7 @@ ReorderBufferFinishPrepared(ReorderBuffer *rb, TransactionId xid,
 	txn->origin_lsn = origin_lsn;
 
 	if (is_commit)
-		rb->commit_prepared(rb, txn, commit_lsn);
+		rb->commit_prepared(rb, txn, commit_lsn, prepare_end_lsn, prepare_time);
 	else
 		rb->rollback_prepared(rb, txn, prepare_end_lsn, prepare_time);
 

@@ -442,7 +442,9 @@ typedef void (*ReorderBufferPrepareCB) (ReorderBuffer *rb,
 /* commit prepared callback signature */
 typedef void (*ReorderBufferCommitPreparedCB) (ReorderBuffer *rb,
 											   ReorderBufferTXN *txn,
-											   XLogRecPtr commit_lsn);
+											   XLogRecPtr commit_lsn,
+											   XLogRecPtr prepare_end_lsn,
+											   TimestampTz prepare_time);
 
 /* rollback  prepared callback signature */
 typedef void (*ReorderBufferRollbackPreparedCB) (ReorderBuffer *rb,

@@ -2170,7 +2170,17 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 					 * plugin has asked for them.
 					 */
 					if (relation->rd_rel->relrewrite && !rb->output_rewrites)
+					{
+						/* Clear reassembled toast chunks if we're sure
+						 * they're not required anymore. The creator of the
+						 * tuple tells us.
+						 */
+						if (!IsToastRelation(relation) &&
+							change->data.tp.clear_toast_afterwards)
+							ReorderBufferToastReset(rb, txn);
+
 						goto change_done;
+					}
 
 					/*
 					 * For now ignore sequence changes entirely. Most of the
@@ -4610,6 +4620,11 @@ ReorderBufferToastReplace(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	if (txn->toast_hash == NULL)
 		return;
 
+	toast_rel = RelationIdGetRelation(relation->rd_rel->reltoastrelid);
+	if (!RelationIsValid(toast_rel))
+		elog(ERROR, "could not open relation with OID %u",
+			 relation->rd_rel->reltoastrelid);
+
 	/*
 	 * We're going to modify the size of the change, so to make sure the
 	 * accounting is correct we'll make it look like we're removing the change
@@ -4623,11 +4638,6 @@ ReorderBufferToastReplace(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	Assert(change->data.tp.newtuple);
 
 	desc = RelationGetDescr(relation);
-
-	toast_rel = RelationIdGetRelation(relation->rd_rel->reltoastrelid);
-	if (!RelationIsValid(toast_rel))
-		elog(ERROR, "could not open relation with OID %u",
-			 relation->rd_rel->reltoastrelid);
 
 	toast_desc = RelationGetDescr(toast_rel);
 

@@ -3545,8 +3545,12 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 
 				if (is_connect)
 				{
+					pg_time_usec_t start = now;
+
+					pg_time_now_lazy(&start);
 					finishCon(st);
-					now = 0;
+					now = pg_time_now();
+					thread->conn_duration += now - start;
 				}
 
 				if ((st->cnt >= nxacts && duration <= 0) || timer_exceeded)
@@ -3570,6 +3574,7 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				 */
 			case CSTATE_ABORTED:
 			case CSTATE_FINISHED:
+				/* per-thread last disconnection time is not measured */
 				finishCon(st);
 				return;
 		}
@@ -6615,6 +6620,7 @@ threadRun(void *arg)
 
 	thread_start = pg_time_now();
 	thread->started_time = thread_start;
+	thread->conn_duration = 0;
 	last_report = thread_start;
 	next_report = last_report + (int64) 1000000 * progress;
 
@@ -6638,14 +6644,7 @@ threadRun(void *arg)
 				goto done;
 			}
 		}
-
-		/* compute connection delay */
-		thread->conn_duration = pg_time_now() - thread->started_time;
-	}
-	else
-	{
-		/* no connection delay to record */
-		thread->conn_duration = 0;
+		/* connection delay is measured globally between the barriers */
 	}
 
 	/* GO */

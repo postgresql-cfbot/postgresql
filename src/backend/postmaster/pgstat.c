@@ -358,6 +358,7 @@ static void pgstat_recv_checksum_failure(PgStat_MsgChecksumFailure *msg, int len
 static void pgstat_recv_connstat(PgStat_MsgConn *msg, int len);
 static void pgstat_recv_replslot(PgStat_MsgReplSlot *msg, int len);
 static void pgstat_recv_tempfile(PgStat_MsgTempFile *msg, int len);
+static void pgstat_recv_refresh_matview(PgStat_MsgRefreshMatview *msg, int len);
 
 /* ------------------------------------------------------------
  * Public functions called from postmaster follow
@@ -1862,6 +1863,28 @@ pgstat_report_replslot_drop(const char *slotname)
 	msg.m_drop = true;
 	pgstat_send(&msg, sizeof(PgStat_MsgReplSlot));
 }
+
+/* ---------
+ * pgstat_report_refresh_matview() -
+ *
+ *	Tell the collector about the matview we just refreshed.
+ * ---------
+ */
+void
+pgstat_report_refresh_matview(Oid tableoid)
+{
+	PgStat_MsgRefreshMatview msg;
+
+	if (pgStatSock == PGINVALID_SOCKET || !pgstat_track_counts)
+		return;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_REFRESHEDMATVIEW);
+	msg.m_databaseid = MyDatabaseId;
+	msg.m_tableoid = tableoid;
+	msg.refreshmatview_time = GetCurrentTimestamp();
+	pgstat_send(&msg, sizeof(msg));
+}
+
 
 /* ----------
  * pgstat_ping() -
@@ -3424,6 +3447,10 @@ PgstatCollectorMain(int argc, char *argv[])
 					pgstat_recv_connstat(&msg.msg_conn, len);
 					break;
 
+				case PGSTAT_MTYPE_REFRESHEDMATVIEW:
+					pgstat_recv_refresh_matview(&msg.msg_refreshmatview, len);
+					break;
+
 				default:
 					break;
 			}
@@ -3600,6 +3627,8 @@ pgstat_get_tab_entry(PgStat_StatDBEntry *dbentry, Oid tableoid, bool create)
 		result->analyze_count = 0;
 		result->autovac_analyze_timestamp = 0;
 		result->autovac_analyze_count = 0;
+		result->matview_refresh_timestamp = 0;
+		result->matview_refresh_count = 0;
 	}
 
 	return result;
@@ -4883,6 +4912,8 @@ pgstat_recv_tabstat(PgStat_MsgTabstat *msg, int len)
 			tabentry->analyze_count = 0;
 			tabentry->autovac_analyze_timestamp = 0;
 			tabentry->autovac_analyze_count = 0;
+			tabentry->matview_refresh_timestamp = 0;
+			tabentry->matview_refresh_count = 0;
 		}
 		else
 		{
@@ -5649,6 +5680,28 @@ pgstat_recv_funcpurge(PgStat_MsgFuncpurge *msg, int len)
 						   HASH_REMOVE, NULL);
 	}
 }
+
+/* ----------
+ * pgstat_recv_refresh_matview() -
+ *
+ *	Process a REFRESH MATERIALIZED VIEW message.
+ * ----------
+ */
+static void
+pgstat_recv_refresh_matview(PgStat_MsgRefreshMatview *msg, int len)
+{
+	PgStat_StatDBEntry *dbentry;
+	PgStat_StatTabEntry *tabentry;
+
+	/*
+	 * Store the data in the table's hashtable entry.
+	 */
+	dbentry = pgstat_get_db_entry(msg->m_databaseid, true);
+	tabentry = pgstat_get_tab_entry(dbentry, msg->m_tableoid, true);
+	tabentry->matview_refresh_timestamp = msg->refreshmatview_time;
+	tabentry->matview_refresh_count++;
+}
+
 
 /* ----------
  * pgstat_write_statsfile_needed() -

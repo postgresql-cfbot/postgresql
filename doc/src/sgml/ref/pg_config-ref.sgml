@@ -269,6 +269,15 @@ PostgreSQL documentation
     </varlistentry>
 
     <varlistentry>
+     <term><option>--catversion</option></term>
+     <listitem>
+      <para>
+       Print the version number of <productname>PostgreSQL</productname>'s catalog.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
      <term><option>--version</option></term>
      <listitem>
       <para>

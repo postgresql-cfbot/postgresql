@@ -1602,7 +1602,7 @@ mcv_match_expression(Node *expr, Bitmapset *keys, List *exprs, Oid *collid)
  * & and |, which should be faster than min/max. The bitmaps are fairly
  * small, though (thanks to the cap on the MCV list size).
  */
-static bool *
+bool *
 mcv_get_match_bitmap(PlannerInfo *root, List *clauses,
 					 Bitmapset *keys, List *exprs,
 					 MCVList *mcvlist, bool is_or)

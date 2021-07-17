@@ -158,6 +158,23 @@ clauselist_selectivity_ext(PlannerInfo *root,
 	}
 
 	/*
+	 * Try applying extended statistics to joins. There's not much we can
+	 * do to detect when this makes sense, but we can check that there are
+	 * join clauses, and that at least some of the rels have stats.
+	 *
+	 * XXX Isn't this mutualy exclusive with the preceding block which
+	 * calculates estimates for a single relation?
+	 */
+	if (use_extended_stats &&
+		statext_try_join_estimates(root, clauses, varRelid, jointype, sjinfo,
+						 estimatedclauses))
+	{
+		s1 *= statext_clauselist_join_selectivity(root, clauses, varRelid,
+												  jointype, sjinfo,
+												  &estimatedclauses);
+	}
+
+	/*
 	 * Apply normal selectivity estimates for remaining clauses. We'll be
 	 * careful to skip any clauses which were already estimated above.
 	 *

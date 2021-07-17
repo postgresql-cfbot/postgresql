@@ -1740,6 +1740,48 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
     </listitem>
    </varlistentry>
 
+   <varlistentry id="reloption-autovacuum-analyze-attach-partition" xreflabel="autovacuum_analyze_attach_partition">
+    <term><literal>autovacuum_analyze_attach_partition</literal> (<type>boolean</type>)
+    <indexterm>
+     <primary><varname>autovacuum_analyze_attach_partition</varname> storage parameter</primary>
+    </indexterm>
+    </term>
+    <listitem>
+     <para>
+      Per-table value
+      for <xref linkend="guc-autovacuum-analyze-attach-partition"/> parameter.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="reloption-autovacuum-analyze-detach-partition" xreflabel="autovacuum_analyze_detach_partition">
+    <term><literal>autovacuum_analyze_detach_partition</literal> (<type>boolean</type>)
+    <indexterm>
+     <primary><varname>autovacuum_analyze_detach_partition</varname> storage parameter</primary>
+    </indexterm>
+    </term>
+    <listitem>
+     <para>
+      Per-table value
+      for <xref linkend="guc-autovacuum-analyze-detach-partition"/> parameter.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="reloption-autovacuum-analyze-drop-partition" xreflabel="autovacuum_analyze_drop_partition">
+    <term><literal>autovacuum_analyze_drop_partition</literal> (<type>boolean</type>)
+    <indexterm>
+     <primary><varname>autovacuum_analyze_drop_partition</varname> storage parameter</primary>
+    </indexterm>
+    </term>
+    <listitem>
+     <para>
+      Per-table value
+      for <xref linkend="guc-autovacuum-analyze-drop-partition"/> parameter.
+     </para>
+    </listitem>
+   </varlistentry>
+
    <varlistentry id="reloption-log-autovacuum-min-duration" xreflabel="log_autovacuum_min_duration">
     <term><literal>log_autovacuum_min_duration</literal>, <literal>toast.log_autovacuum_min_duration</literal> (<type>integer</type>)
     <indexterm>

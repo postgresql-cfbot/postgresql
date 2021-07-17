@@ -708,7 +708,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 		onerel->rd_rel->relkind == RELKIND_RELATION &&
 		onerel->rd_rel->relpersistence == RELPERSISTENCE_PERMANENT)
 	{
-		pgstat_report_anl_ancestors(RelationGetRelid(onerel));
+		pgstat_report_anl_ancestors(RelationGetRelid(onerel), false, false, false);
 	}
 
 	/*

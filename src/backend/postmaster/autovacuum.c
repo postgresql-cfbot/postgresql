@@ -128,6 +128,10 @@ int			autovacuum_multixact_freeze_max_age;
 double		autovacuum_vac_cost_delay;
 int			autovacuum_vac_cost_limit;
 
+bool		autovacuum_anl_attach_partition = false;
+bool		autovacuum_anl_detach_partition = false;
+bool		autovacuum_anl_drop_partition = false;
+
 int			Log_autovacuum_min_duration = -1;
 
 /* how long to keep pgstat data in the launcher, in milliseconds */
@@ -2100,7 +2104,7 @@ do_autovacuum(void)
 			tabentry->changes_since_analyze -
 			tabentry->changes_since_analyze_reported > 0)
 		{
-			pgstat_report_anl_ancestors(relid);
+			pgstat_report_anl_ancestors(relid, false, false, false);
 			updated = true;
 		}
 	}

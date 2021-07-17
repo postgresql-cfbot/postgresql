@@ -88,17 +88,41 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 		if (strcmp(defel->defname, "from") == 0)
 			defelp = &fromEl;
 		else if (strcmp(defel->defname, "locale") == 0)
+		{
+			if (localeEl)
+				errorConflictingDefElem(defel, pstate);
 			defelp = &localeEl;
+		}
 		else if (strcmp(defel->defname, "lc_collate") == 0)
+		{
+			if (lccollateEl)
+				errorConflictingDefElem(defel, pstate);
 			defelp = &lccollateEl;
+		}
 		else if (strcmp(defel->defname, "lc_ctype") == 0)
+		{
+			if (lcctypeEl)
+				errorConflictingDefElem(defel, pstate);
 			defelp = &lcctypeEl;
+		}
 		else if (strcmp(defel->defname, "provider") == 0)
+		{
+			if (providerEl)
+				errorConflictingDefElem(defel, pstate);
 			defelp = &providerEl;
+		}
 		else if (strcmp(defel->defname, "deterministic") == 0)
+		{
+			if (deterministicEl)
+				errorConflictingDefElem(defel, pstate);
 			defelp = &deterministicEl;
+		}
 		else if (strcmp(defel->defname, "version") == 0)
+		{
+			if (versionEl)
+				errorConflictingDefElem(defel, pstate);
 			defelp = &versionEl;
+		}
 		else
 		{
 			ereport(ERROR,
@@ -112,11 +136,17 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 		*defelp = defel;
 	}
 
-	if ((localeEl && (lccollateEl || lcctypeEl))
-		|| (fromEl && list_length(parameters) != 1))
+	if (localeEl && (lccollateEl || lcctypeEl))
 		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("conflicting or redundant options")));
+				errcode(ERRCODE_SYNTAX_ERROR),
+				errmsg("conflicting or redundant options"),
+				errdetail("LOCALE cannot be specified together with LC_COLLATE or LC_CTYPE."));
+
+	if (fromEl && list_length(parameters) != 1)
+		ereport(ERROR,
+				errcode(ERRCODE_SYNTAX_ERROR),
+				errmsg("conflicting or redundant options"),
+				errdetail("FROM cannot be specified together with any other options."));
 
 	if (fromEl)
 	{

@@ -13,7 +13,39 @@
 #include "c.h"
 
 #include "mb/pg_wchar.h"
+#include "port/pg_bswap.h"
 
+
+/* Verify a chunk of bytes for valid ASCII including a zero-byte check. */
+static inline int
+check_ascii(const uint64 chunk)
+{
+	uint64		highbits_set,
+				highbit_carry;
+
+	/* Check if any bytes in this chunk have the high bit set. */
+	highbits_set = chunk & UINT64CONST(0x8080808080808080);
+	if (highbits_set)
+		return 0;
+
+	/*
+	 * Check if there are any zero bytes in this chunk.
+	 *
+	 * First, add 0x7f to each byte. This sets the high bit in each byte,
+	 * unless it was a zero. We already checked that none of the bytes had the
+	 * high bit set previously, so the max value each byte can have after the
+	 * addition is 0x7f + 0x7f = 0xfe, and we don't need to worry about
+	 * carrying over to the next byte.
+	 */
+	highbit_carry = chunk + UINT64CONST(0x7f7f7f7f7f7f7f7f);
+
+	/* Then check that the high bit is set in each byte. */
+	highbit_carry &= UINT64CONST(0x8080808080808080);
+	if (highbit_carry == UINT64CONST(0x8080808080808080))
+		return sizeof(chunk);
+	else
+		return 0;
+}
 
 /*
  * Operations on multi-byte encodings are driven by a table of helper
@@ -1757,32 +1789,128 @@ pg_utf8_verifychar(const unsigned char *s, int len)
 	return l;
 }
 
+/*
+ * Subroutine of pg_utf8_verifystr() to check on char. Returns the length of the
+ * character at the start of the chunk in bytes, or 0 on invalid input or premature
+ * end of input.
+ */
+static inline int
+pg_utf8_verify_one(const uint64 chunk_orig)
+{
+	int			l;
+	const uint64 chunk = (pg_hton64(chunk_orig));
+
+	/* high bit not set */
+	if ((chunk & 0x8000000000000000) == 0)
+	{
+		/* check first byte for zero */
+		if (chunk < 0x0100000000000000)
+			return 0;
+
+		l = 1;
+	}
+	/* 2-byte lead with one continuation byte */
+	else if ((chunk & 0xE0C0000000000000) == 0xC080000000000000)
+	{
+		/* check 2-byte overlong: 1100.000x.10xx.xxxx */
+		if (chunk < 0xC200000000000000)
+			return 0;
+
+		l = 2;
+	}
+	/* 3-byte lead with two continuation bytes */
+	else if ((chunk & 0xF0C0C00000000000) == 0xE080800000000000)
+	{
+		/* check 3-byte overlong: 1110.0000 100x.xxxx 10xx.xxxx */
+		if (chunk < 0xE0A0000000000000)
+			return 0;
+
+		/* check surrogate: 1110.1101 101x.xxxx 10xx.xxxx */
+		if (chunk > 0xED9FBFFFffffffff && chunk < 0xEE00000000000000)
+			return 0;
+
+		l = 3;
+	}
+	/* 4-byte lead with three continuation bytes */
+	else if ((chunk & 0xF8C0C0C000000000) == 0xF080808000000000)
+	{
+		/*
+		 * check 4-byte overlong: 1111.0000 1000.xxxx 10xx.xxxx 10xx.xxxx
+		 */
+		if (chunk < 0xF090000000000000)
+			return 0;
+
+		/* check too large: 1111.0100 1001.xxxx 10xx.xxxx 10xx.xxxx */
+		if (chunk > 0xF48FBFBFffffffff)
+			return 0;
+
+		l = 4;
+	}
+	else
+		/* invalid byte */
+		return 0;
+
+	return l;
+}
+
 static int
 pg_utf8_verifystr(const unsigned char *s, int len)
 {
 	const unsigned char *start = s;
+	uint64		chunk;
 
-	while (len > 0)
+	/*
+	 * Fast path when we have at least 8 bytes left in the string.
+	 */
+	while (len >= 8)
 	{
 		int			l;
 
-		/* fast path for ASCII-subset characters */
-		if (!IS_HIGHBIT_SET(*s))
+		memcpy(&chunk, s, sizeof(chunk));
+
+		/*  Do a quick check if the first byte is both non-zero and doesn't have the high bit set */
+		if ((signed char) (*s) > 0)
 		{
-			if (*s == '\0')
-				break;
-			l = 1;
+			/* fast path for ASCII-subset characters */
+			l = check_ascii(chunk);
+			if (l)
+			{
+				s += l;
+				len -= l;
+			}
+			else
+			{
+				s++;
+				len--;
+			}
+			continue;
 		}
-		else
-		{
-			l = pg_utf8_verifychar(s, len);
-			if (l == -1)
-				break;
-		}
+
+		/*
+		 * Found non-ASCII or zero above, so verify a single character.
+		 */
+		l = pg_utf8_verify_one(chunk);
+		if (l == 0)
+			goto end;
+
 		s += l;
 		len -= l;
 	}
 
+	/* Slow path to handle the last 7 bytes in the string */
+	while (len > 0)
+	{
+		int			l;
+
+		l = pg_utf8_verifychar(s, len);
+		if (l == -1)
+			goto end;
+
+		s += l;
+		len -= l;
+	}
+
+end:
 	return s - start;
 }
 

@@ -49,6 +49,12 @@ typedef struct AggStatePerTransData
 	bool		aggshared;
 
 	/*
+	 * True for DISTINCT aggregates and ORDER BY aggregates that are not
+	 * Aggref->aggpresorted
+	 */
+	bool		aggsortrequired;
+
+	/*
 	 * Number of aggregated input columns.  This includes ORDER BY expressions
 	 * in both the plain-agg and ordered-set cases.  Ordered-set direct args
 	 * are not counted, though.

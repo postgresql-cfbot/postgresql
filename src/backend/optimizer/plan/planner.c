@@ -24,6 +24,7 @@
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "access/xact.h"
+#include "catalog/pg_aggregate.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_proc.h"
@@ -3056,6 +3057,162 @@ reorder_grouping_sets(List *groupingsets, List *sortclause)
 }
 
 /*
+ * get_ordered_agg_pathkeys
+ *		Find and return the best set of Pathkeys for the given PlannerInfo's
+ *		ORDER BY aggregate functions.
+ *
+ * We define "best" as the pathkeys that suit the most number of aggregate
+ * functions.  We find these by looking at the first ORDER BY aggregate and
+ * taking the pathkeys for that before searching for other aggregates that
+ * require the same or a more strict variation of the same pathkeys.  We then
+ * repeat that process for any remaining aggregates with different pathkeys
+ * and if we find another set of pathkeys that suits a larger number of
+ * aggregates then we return instead.
+ *
+ * When the best pathkeys are found we also mark each Aggref that can use
+ * those pathkeys as aggpresorted = true.
+ */
+static List *
+get_ordered_agg_pathkeys(PlannerInfo *root)
+{
+	ListCell   *lc;
+	List	   *bestpathkeys = NIL;
+	Bitmapset  *bestaggs = NULL;
+	Bitmapset  *remainingaggs = NULL;
+	int			i;
+
+	/*
+	 * Make a first pass over all AggInfos to determine the best set of
+	 * pathkeys for the first AggInfo.  At the same time, we collect up the
+	 * indexes of any remaining aggregates that do have an ORDER BY but have
+	 * other non-suitable pathkeys.
+	 */
+	foreach(lc, root->agginfos)
+	{
+		AggInfo    *agginfo = (AggInfo *) lfirst(lc);
+		Aggref	   *aggref = linitial_node(Aggref, agginfo->aggrefs);
+
+		if (AGGKIND_IS_ORDERED_SET(aggref->aggkind))
+			continue;
+
+		/* DISTINCT aggregates not yet supported by the planner */
+		if (aggref->aggdistinct != NIL)
+			continue;
+
+		/* skip any unordered aggs */
+		if (aggref->aggorder == NIL)
+			continue;
+
+		/*
+		 * Find the pathkeys with the most sorted derivative of the first
+		 * Aggref.  For example, if we determine the pathkeys for the first
+		 * Aggref to be {a}, and we find another with {a,b}, then we use
+		 * {a,b}.  Any Aggref that can't use these pathkeys is recorded in
+		 * remainingaggs.  These will be processed later.
+		 */
+		if (bestpathkeys == NIL)
+		{
+			bestpathkeys = make_pathkeys_for_sortclauses(root,
+														 aggref->aggorder,
+														 aggref->args);
+			bestaggs = bms_add_member(bestaggs, foreach_current_index(lc));
+		}
+		else
+		{
+			List	   *pathkeys = make_pathkeys_for_sortclauses(root,
+																 aggref->aggorder,
+																 aggref->args);
+
+			if (pathkeys_contained_in(bestpathkeys, pathkeys))
+			{
+				bestpathkeys = pathkeys;
+				bestaggs = bms_add_member(bestaggs, foreach_current_index(lc));
+			}
+			else
+			{
+				/* remember any AggInfos that might need another look */
+				remainingaggs = bms_add_member(remainingaggs,
+											   foreach_current_index(lc));
+			}
+		}
+	}
+
+	/*
+	 * Now process any remaining aggregates to see if we can find a set of
+	 * pathkeys that includes a larger number of aggregates than the set we
+	 * just found above.  We abort this search when there are not enough
+	 * aggregates remaining to beat the number previously found.  When it's a
+	 * tie we always prefer the existing set.
+	 */
+	while (bms_num_members(remainingaggs) > bms_num_members(bestaggs))
+	{
+		Bitmapset  *aggindexes = NULL;
+		List	   *currpathkeys = NIL;
+
+		/* check all the remaining aggregates */
+		i = -1;
+		while ((i = bms_next_member(remainingaggs, i)) >= 0)
+		{
+			AggInfo    *agginfo = list_nth(root->agginfos, i);
+			Aggref	   *aggref = linitial_node(Aggref, agginfo->aggrefs);
+
+			if (currpathkeys == NIL)
+			{
+				currpathkeys = make_pathkeys_for_sortclauses(root,
+															 aggref->aggorder,
+															 aggref->args);
+				aggindexes = bms_add_member(aggindexes, i);
+			}
+			else
+			{
+				List	   *pathkeys = make_pathkeys_for_sortclauses(root,
+																	 aggref->aggorder,
+																	 aggref->args);
+
+				if (pathkeys_contained_in(currpathkeys, pathkeys))
+				{
+					currpathkeys = pathkeys;
+					aggindexes = bms_add_member(aggindexes, i);
+				}
+			}
+		}
+
+		/* remove the ones we've just processed */
+		remainingaggs = bms_del_members(remainingaggs, aggindexes);
+
+		/*
+		 * If this pass included more aggregates than the previous best then
+		 * use these ones as the best set.
+		 */
+		if (bms_num_members(aggindexes) > bms_num_members(bestaggs))
+		{
+			bestaggs = aggindexes;
+			bestpathkeys = currpathkeys;
+		}
+	}
+
+	/*
+	 * Now that we've found the best set of aggregates we can set the
+	 * presorted flag to indicate to the executor that it needn't bother
+	 * performing a sort for these Aggrefs.
+	 */
+	i = -1;
+	while ((i = bms_next_member(bestaggs, i)) >= 0)
+	{
+		AggInfo    *agginfo = list_nth(root->agginfos, i);
+
+		foreach(lc, agginfo->aggrefs)
+		{
+			Aggref	   *aggref = lfirst_node(Aggref, lc);
+
+			aggref->aggpresorted = true;
+		}
+	}
+
+	return bestpathkeys;
+}
+
+/*
  * Compute query_pathkeys and other pathkeys during plan generation
  */
 static void
@@ -3079,6 +3236,19 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 										  tlist);
 	else
 		root->group_pathkeys = NIL;
+
+	/*
+	 * For aggregates with an ORDER BY clause, when there's no GROUP BY or
+	 * there's a sortable GROUP BY we request additional GROUP BY pathkeys to
+	 * try to provide pre-sorted input for the ORDER BY aggregates.  We don't
+	 * do this when there are any grouping sets as they can require multiple
+	 * different sort orders.  We must let nodeAgg.c handle the sorting in
+	 * that case.
+	 */
+	if (parse->groupingSets == NIL && root->numOrderedAggs > 0 &&
+		(qp_extra->groupClause == NIL || root->group_pathkeys))
+		root->group_pathkeys = list_concat(root->group_pathkeys,
+										   get_ordered_agg_pathkeys(root));
 
 	/* We consider only the first (bottom) window in pathkeys logic */
 	if (activeWindows != NIL)

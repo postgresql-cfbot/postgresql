@@ -409,7 +409,13 @@ struct			[sS][tT][rR][uU][cC][tT]
 
 exec_sql		{exec}{space}*{sql}{space}*
 ipdigit			({digit}|{digit}{digit}|{digit}{digit}{digit})
-ip				{ipdigit}\.{ipdigit}\.{ipdigit}\.{ipdigit}
+ipv4				{ipdigit}\.{ipdigit}\.{ipdigit}\.{ipdigit}
+
+/* for ipv6 */
+hexadecimal		[0-9A-Fa-f]
+onegroup		{hexadecimal}{1,4}
+ipv6			({onegroup}:){7,7}{onegroup}|({onegroup}:){1,7}:|({onegroup}:){1,6}:{onegroup}|({onegroup}:){1,5}(:{onegroup}){1,2}|({onegroup}:){1,4}(:{onegroup}){1,3}|({onegroup}:){1,3}(:{onegroup}){1,4}|({onegroup}:){1,2}(:{onegroup}){1,5}|{onegroup}:((:{onegroup}){1,6})|:((:{onegroup}){1,7}|:)|fe80:(:{hexadecimal}{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|({onegroup}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])
+enclosedipv6		"\["{ipv6}"\]"
 
 /* we might want to parse all cpp include files */
 cppinclude		{space}*#{include}{space}*
@@ -916,9 +922,13 @@ cppline			{space}*#([^i][A-Za-z]*|{if}|{ifdef}|{ifndef}|{import})((\/\*[^*/]*\*+
 					return PARAM;
 				}
 
-{ip}			{
+{ipv4}			{
 					base_yylval.str = mm_strdup(yytext);
-					return IP;
+					return IPV4;
+				}
+{enclosedipv6}	{
+					base_yylval.str = mm_strdup(yytext);
+					return ENCLOSEDIPV6;
 				}
 }  /* <SQL> */
 

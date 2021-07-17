@@ -72,5 +72,18 @@ exec sql end declare section;
 	/* not connected */
 	exec sql disconnect nonexistent;
 
+	/* use IPv6 */
+	exec sql connect to 'unix:postgresql://[::1]/ecpg2_regression' as main;
+	exec sql disconnect main;
+
+	exec sql connect to unix:postgresql://[::1]/ecpg2_regression as main;
+	exec sql disconnect main;
+
+	exec sql connect to 'unix:postgresql://[::1/ecpg2_regression' as main;
+
+	exec sql connect to 'unix:postgresql://[]/ecpg2_regression' as main;
+
+	exec sql connect to 'unix:postgresql://[::1]&ecpg2_regression' as main;
+
 	return 0;
 }

@@ -164,6 +164,15 @@ EXEC SQL CONNECT TO <replaceable>target</replaceable> <optional>AS <replaceable>
   </para>
 
   <para>
+   Same as libpq, the host part can be specified an IPv6 address.
+   To specify an IPv6 address, enclose it in square brackets:
+  </para>
+
+<programlisting>
+EXEC SQL CONNECT TO 'tcp:postgresql://[2001:db8::1234]/database'
+</programlisting>
+
+  <para>
    There are also different ways to specify the user name:
 
    <itemizedlist>

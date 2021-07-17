@@ -255,6 +255,199 @@ SELECT regexp_split_to_array('thE QUick bROWn FOx jUMPs ovEr The lazy dOG', 'e',
 SELECT foo, length(foo) FROM regexp_split_to_table('thE QUick bROWn FOx jUMPs ovEr The lazy dOG', 'e', 'g') AS foo;
 SELECT regexp_split_to_array('thE QUick bROWn FOx jUMPs ovEr The lazy dOG', 'e', 'g');
 
+-- regexp_like tests
+SELECT regexp_like('a'||CHR(10)||'d', 'a.d');
+SELECT regexp_like('a'||CHR(10)||'d', 'a.d', 'm');
+SELECT regexp_like('a'||CHR(10)||'d', 'a.d', 'n');
+SELECT regexp_like('Steven', '^Ste(v|ph)en$');
+SELECT regexp_like('foo' || chr(10) || 'bar' || chr(10) || 'bequq' || chr(10) || 'baz', '^bar');
+SELECT regexp_like('foo' || chr(10) || 'bar' || chr(10) || 'bequq' || chr(10) || 'baz', 'bar');
+SELECT regexp_like('foo' || chr(10) || 'bar' || chr(10) || 'bequq' || chr(10) || 'baz', '^bar', 'm');
+SELECT regexp_like('foo' || chr(10) || 'bar' || chr(10) || 'bequq' || chr(10) || 'baz', '^bar', 'n');
+SELECT regexp_like('GREEN', '([aeiou])\1');
+SELECT regexp_like('GREEN', '([aeiou])\1', 'i');
+SELECT regexp_like('ORANGE' || chr(10) || 'GREEN', '([aeiou])\1', 'i');
+SELECT regexp_like('ORANGE' || chr(10) || 'GREEN', '^..([aeiou])\1', 'i');
+SELECT regexp_like('ORANGE' || chr(10) || 'GREEN', '([aeiou])\1', 'in');
+SELECT regexp_like('ORANGE' || chr(10) || 'GREEN', '^..([aeiou])\1', 'in');
+SELECT regexp_like('ORANGE' || chr(10) || 'GREEN', '^..([aeiou])\1', 'im');
+SELECT REGEXP_LIKE('abc', 'a b c');
+SELECT REGEXP_LIKE('abc', 'a b c','x');
+
+--  count all matches for regexp
+SELECT regexp_count('123123123123123', '(12)3');
+-- count all matches with start position
+SELECT regexp_count('123123123123', '123', 0);
+SELECT regexp_count('123123123123', '123', 1);
+SELECT regexp_count('123123123123', '123', 3);
+SELECT regexp_count('123123123123', '123', -3);
+-- count all matches in NULL string with a start position
+SELECT regexp_count(NULL, '123', 3);
+-- count all matches with a start position greater than string length
+SELECT regexp_count('123', '123', 10);
+-- count all matches from different regexp
+SELECT regexp_count('ABC123', '[A-Z]'), regexp_count('A1B2C3', '[A-Z]');
+SELECT regexp_count('ABC123', '[A-Z][0-9]'), regexp_count('A1B2C3', '[A-Z][0-9]');
+SELECT regexp_count('ABC123', '[A-Z][0-9]{2}'), regexp_count('A1B2C3', '[A-Z][0-9]{2}');
+SELECT regexp_count('ABC123', '([A-Z][0-9]){2}'), regexp_count('A1B2C3', '([A-Z][0-9]){2}');
+SELECT regexp_count('ABC123A5', '^[A-Z][0-9]'), regexp_count('A1B2C3', '^[A-Z][0-9]');
+SELECT regexp_count('ABC123', '[A-Z][0-9]{2}'), regexp_count('A1B2C34', '[A-Z][0-9]{2}');
+-- count matches with newline case insensivity
+SELECT regexp_count('a'||CHR(10)||'d', 'a.d');
+SELECT regexp_count('a'||CHR(10)||'d', 'a.d', 1, 's');
+-- count matches with newline case sensivity
+SELECT regexp_count('a'||CHR(10)||'d', 'a.d', 1, 'n');
+-- count not multiline matches
+SELECT regexp_count('a'||CHR(10)||'d', '^d$');
+-- count multiline matches
+SELECT regexp_count('a'||CHR(10)||'d', '^d$', 1, 'm');
+SELECT regexp_count('Hello'||CHR(10)||'world!', '^world!$', 1, 'm'); -- 1
+-- Count the number of occurrences of the substring an in the string.
+SELECT regexp_count('a man, a plan, a canal: Panama', 'an');
+-- Find the number of occurrences of the substring an in the string starting with the fifth character.
+SELECT regexp_count('a man, a plan, a canal: Panama', 'an',5);
+-- Find the number of occurrences of a substring containing a lower-case character
+-- followed by an. In the first example, do not use a modifier. In the second example,
+-- use the i modifier to force the regular expression to ignore case.
+SELECT regexp_count('a man, a plan, a canal: Panama', '[a-z]an');
+SELECT regexp_count('a man, a plan, a canal: Panama', '[a-z]an', 1, 'i');
+
+DROP TABLE IF EXISTS regexp_temp;
+CREATE TABLE regexp_temp(fullname varchar(20), email varchar(20));
+INSERT INTO regexp_temp (fullname, email) VALUES ('John Doe', 'johndoe@example.com');
+INSERT INTO regexp_temp (fullname, email) VALUES ('Jane Doe', 'janedoe');
+-- count matches case sensitive
+SELECT fullname, regexp_count(fullname, 'e', 1, 'c') FROM regexp_temp;
+SELECT fullname, regexp_count(fullname, 'D', 1, 'c') FROM regexp_temp;
+SELECT fullname, regexp_count(fullname, 'd', 1, 'c') FROM regexp_temp;
+-- count matches case insensitive
+SELECT fullname, regexp_count(fullname, 'E', 1, 'i') FROM regexp_temp;
+SELECT fullname, regexp_count(fullname, 'do', 1, 'i') FROM regexp_temp;
+
+-- return the start position of the 6th occurence starting at beginning of the string
+SELECT regexp_instr('number of your street, zipcode thetown, FR', '[^ ]+', 1, 6);
+-- return the start position of the 5th occurence starting after the first word
+SELECT regexp_instr('number of your street, zipcode thetown, FR', '[^ ]+', 7, 5, 0);
+-- return the ending position of the 5th occurence starting after the first word
+SELECT regexp_instr('number of your street, zipcode thetown, FR', '[^ ]+', 7, 5, 0);
+-- return the ending position of the 2nd occurence starting after the first word
+SELECT regexp_instr('number of your street, zipcode thetown, FR', '[T|Z|S][[:alpha:]]{5}', 7, 2, 1, 'i');
+-- return the starting position corresponding to the different capture group
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 0, 'i', 0);
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 0, 'i', 1);
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 0, 'i', 2);
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 0, 'i', 3);
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 0, 'i', 4);
+-- return the starting position corresponding to a non existant capture group
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 0, 'i', 5);
+-- Same but with the ending position
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 1, 'i', 0);
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 1, 'i', 1);
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 1, 'i', 2);
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 1, 'i', 3);
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 1, 'i', 4);
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 1, 'i', 5);
+-- start position of a valid email
+SELECT email, regexp_instr(email, '\w+@\w+(\.\w+)+') "valid_email" FROM regexp_temp;
+-- ending position of a valid email
+SELECT email, regexp_instr(email, '\w+@\w+(\.\w+)+', 1, 1, 1) "valid_email" FROM regexp_temp;
+-- start position of first capture group in the email (the dot part)
+SELECT email, regexp_instr(email, '\w+@\w+(\.\w+)+', 1, 1, 0, 'i', 1) FROM regexp_temp;
+-- ending position of first capture group in the email (the dot part)
+SELECT email, regexp_instr(email, '\w+@\w+(\.\w+)+', 1, 1, 1, 'i', 1) FROM regexp_temp;
+-- test negative values
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', -1, 1, 1, 'i', 1);
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, -1, 1, 'i', 1);
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, -1, 'i', 1);
+SELECT regexp_instr('1234567890', '(123)(4(56)(78))', 1, 1, 1, 'i', -1);
+
+-- Find the first occurrence of a sequence of letters starting with the letter e
+-- and ending with the letter y in the phrase "easy come, easy go."
+SELECT regexp_instr('easy come, easy go','e\w*y');
+-- Find the first sequence of letters starting with the letter e and ending with
+-- the letter y in the string "easy come, easy go" starting at the second character
+SELECT regexp_instr('easy come, easy go','e\w*y',2);
+-- Find the second sequence of letters starting with the letter e and ending with
+-- the letter y in the string "easy come, easy go" starting at the first character.
+SELECT regexp_instr('easy come, easy go','e\w*y',1,2);
+-- Find the position of the first character after the first whitespace in the string "easy come, easy go."
+SELECT regexp_instr('easy come, easy go','\s',1,1,1);
+-- Find the position of the start of the third word in a string by capturing each
+-- word as a subexpression, and returning the third subexpression's start position.
+SELECT regexp_instr('one two three','(\w+)\s+(\w+)\s+(\w+)', 1,1,0,'',3);
+
+-- return the substring matching the regexp
+SELECT regexp_substr('number of your street, zipcode town, FR', ',[^,]+');
+-- return the substring matching the regexp
+SELECT regexp_substr('number of your street, zipcode town, FR', ',[^,]+', 24);
+-- return the substring matching the regexp at the first occurrence
+SELECT regexp_substr('number of your street, zipcode town, FR', ',[^,]+', 1, 1);
+-- return the substring matching the regexp at the second occurrence
+SELECT regexp_substr('number of your street, zipcode town, FR', ',[^,]+', 1, 2);
+-- case sensitivity substring search
+SELECT regexp_substr('number of your street, zipcode town, FR', ',\s+[Zf][^,]+', 1, 1);
+SELECT regexp_substr('number of your street, zipcode town, FR', ',\s+[Zf][^,]+', 1, 1, 'i');
+-- case sensitivity substring search with no capture group
+SELECT regexp_substr('number of your street, zipcode town, FR', ',\s+[Zf][^,]+', 1, 1, 'i', 0);
+-- case sensitivity substring search with non existing capture group
+SELECT regexp_substr('number of your street, zipcode town, FR', ',\s+[Zf][^,]+', 1, 1, 'i', 0);
+-- return the substring matching the regexp at different occurrence and capture group
+SELECT regexp_substr('1234567890 1234567890', '(123)(4(56)(78))', 1, 1, 'i', 4);
+SELECT regexp_substr('1234567890 1234557890', '(123)(4(5[56])(78))', 1, 2, 'i', 3);
+SELECT regexp_substr('1234567890 1234567890', '(123)(4(56)(78))', 1, 1, 'i', 0);
+-- test negative values
+SELECT regexp_substr('1234567890 1234567890', '(123)(4(56)(78))', -1, 1, 'i', 4);
+SELECT regexp_substr('1234567890 1234567890', '(123)(4(56)(78))', 1, -1, 'i', 4);
+SELECT regexp_substr('1234567890 1234567890', '(123)(4(56)(78))', 1, 1, 'i', -4);
+-- Select the first substring of letters that end with "thy."
+SELECT regexp_substr('healthy, wealthy, and wise','\w+thy');
+-- Select the first substring of letters that ends with "thy" starting at the second character in the string.
+SELECT regexp_substr('healthy, wealthy, and wise','\w+thy',2);
+-- Return the contents of the third captured subexpression, which captures the third word in the string.
+SELECT regexp_substr('one two three', '(\w+)\s+(\w+)\s+(\w+)', 1, 1, '', 3);
+
+DROP TABLE IF EXISTS regexp_temp;
+
+-- Regression tests for extended regexp_replace() function with start position and occurrence
+SELECT regexp_replace('512.123.4567', '([[:digit:]]{3})\.([[:digit:]]{3})\.([[:digit:]]{4})', '(\1) \2-\3', 1);
+SELECT regexp_replace('512.123.4567 612.123.4567', '([[:digit:]]{3})\.([[:digit:]]{3})\.([[:digit:]]{4})', '(\1) \2-\3', 1, 0);
+SELECT regexp_replace('number   your     street,'||CHR(10)||'    zipcode  town, FR', '( ){2,}', ' ', 1, 0);
+SELECT regexp_replace('number   your     street,    zipcode  town, FR', '( ){2,}', ' ', 9);
+SELECT regexp_replace('number   your     street,    zipcode  town, FR', '( ){2,}', ' ', 9, 0);
+SELECT regexp_replace('number   your     street,    zipcode  town, FR', '( ){2,}', ' ', 9, 2);
+SELECT regexp_replace('number   your     street,    zipcode  town, FR', '( ){2,}', ' ', 9, 2, 'm');
+SELECT regexp_replace('number   your     street,    zipcode  town, FR', '([EURT]){2,}', '[\1]', 9, 1, 'i');
+SELECT regexp_replace('number   your     street,    zipcode  town, FR', '([EURT]){2,}', '[\1]', 9, 2, 'i');
+SELECT regexp_replace ('A PostgreSQL function', 'A|e|i|o|u', 'X', 1, 2);
+SELECT regexp_replace ('A PostgreSQL function', 'a|e|i|o|u', 'X', 1, 0, 'i');
+SELECT regexp_replace ('A PostgreSQL function', 'a|e|i|o|u', 'X', 1, 1, 'i');
+SELECT regexp_replace ('A PostgreSQL function', 'a|e|i|o|u', 'X', 1, 2, 'i');
+SELECT regexp_replace ('A PostgreSQL function', 'a|e|i|o|u', 'X', 1, 3, 'i');
+SELECT regexp_replace ('A PostgreSQL function', 'a|e|i|o|u', 'X', 1, 9, 'i');
+SELECT regexp_replace ('A PostgreSQL function', 'A|e|i|o|u', 'X', 1, 9);
+-- Invalid parameter values
+SELECT regexp_replace ('A PostgreSQL function', 'a|e|i|o|u', 'X', -1, 0, 'i');
+SELECT regexp_replace ('A PostgreSQL function', 'a|e|i|o|u', 'X', 1, -1, 'i');
+-- Modifier 'g' should not be taken in account, we have an occurrence to replace
+SELECT regexp_replace ('A PostgreSQL function', 'a|e|i|o|u', 'X', 1, 1, 'g');
+-- Find groups of "word characters" (letters, numbers and underscore) ending with
+-- "thy" in the string "healthy, wealthy, and wise" and replace them with nothing.
+SELECT regexp_replace('healthy, wealthy, and wise','\w+thy', '', 'g');
+SELECT regexp_replace('healthy, wealthy, and wise','\w+thy', '', 1, 0);
+SELECT regexp_replace('healthy, wealthy, and wise','\w+thy', '', 1, 0, 'g');
+-- Find groups of word characters ending with "thy" and replace with "something."
+SELECT regexp_replace('healthy, wealthy, and wise','\w+thy', 'something', 'g');
+-- Find groups of word characters ending with "thy" and replace with the string
+-- "something" starting at the third character in the string.
+SELECT regexp_replace('healthy, wealthy, and wise','\w+thy', 'something', 3, 0);
+-- Replace the second group of word characters ending with "thy" with "something."
+SELECT regexp_replace('healthy, wealthy, and wise','\w+thy', 'something', 1, 2);
+-- Find groups of word characters ending with "thy" capturing the letters before
+-- the "thy", and replace with the captured letters plus the letters "ish." 
+SELECT regexp_replace('healthy, wealthy, and wise','(\w+)thy', '\1ish', 'g');
+SELECT regexp_replace('healthy, wealthy, and wise','(\w+)thy', '\1ish', 1, 0);
+
+
 -- change NULL-display back
 \pset null ''
 

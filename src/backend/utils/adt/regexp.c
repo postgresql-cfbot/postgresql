@@ -120,6 +120,7 @@ static regexp_matches_ctx *setup_regexp_matches(text *orig_str, text *pattern,
 static ArrayType *build_regexp_match_result(regexp_matches_ctx *matchctx);
 static Datum build_regexp_split_result(regexp_matches_ctx *splitctx);
 
+static text *enclose_with_parenthesis(text *str);
 
 /*
  * RE_compile_and_cache - compile a RE, caching if possible
@@ -554,7 +555,6 @@ texticregexne(PG_FUNCTION_ARGS)
 										   PG_GET_COLLATION(),
 										   0, NULL));
 }
-
 
 /*
  * textregexsubstr()
@@ -1061,6 +1061,508 @@ Datum
 regexp_matches_no_flags(PG_FUNCTION_ARGS)
 {
 	return regexp_matches(fcinfo);
+}
+
+/*
+ * regexp_like()
+ *		Return the true if a pattern match within a string.
+ */
+Datum
+regexp_like(PG_FUNCTION_ARGS)
+{
+	text	   *str = PG_GETARG_TEXT_PP(0);
+	text	   *pattern = PG_GETARG_TEXT_PP(1);
+	text	   *flags = PG_GETARG_TEXT_PP_IF_EXISTS(2);
+
+	pg_re_flags re_flags;
+	regexp_matches_ctx *matchctx;
+
+	/* Determine options */
+	parse_re_flags(&re_flags, flags);
+
+	matchctx = setup_regexp_matches(str, pattern, &re_flags,
+									PG_GET_COLLATION(), true, false, false);
+
+	if (matchctx->nmatches > 0)
+		PG_RETURN_BOOL(true);
+
+	PG_RETURN_BOOL(false);
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_like_no_flags(PG_FUNCTION_ARGS)
+{
+	return regexp_like(fcinfo);
+}
+
+/*
+ * regexp_count()
+ *		Return the number of matches of a pattern within a string.
+ */
+Datum
+regexp_count(PG_FUNCTION_ARGS)
+{
+	text	   *orig_str = NULL;
+	text	   *pattern = PG_GETARG_TEXT_PP(1);
+	int	   start = 1;
+	text	   *flags = PG_GETARG_TEXT_PP_IF_EXISTS(3);
+
+	pg_re_flags re_flags;
+	regexp_matches_ctx *matchctx;
+
+	if (PG_NARGS() > 2)
+		start = PG_GETARG_INT32(2);
+
+	if (start < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for parameter \"%s\": %d", "start_position", start)));
+
+	/* regexp_count(string, pattern, start[, flags]) */
+	if (start > 1)
+		orig_str = DatumGetTextPP(DirectFunctionCall2(text_substr_no_len,
+									   PG_GETARG_DATUM(0),
+									   Int32GetDatum(start)
+									   ));
+	else
+		orig_str = PG_GETARG_TEXT_PP(0);
+
+	/* Determine options */
+	parse_re_flags(&re_flags, flags);
+
+	/* this function require flag 'g' */
+	re_flags.glob = true;
+
+	matchctx = setup_regexp_matches(orig_str, pattern, &re_flags,
+									PG_GET_COLLATION(), true, false, false);
+
+	PG_RETURN_INT32(matchctx->nmatches);
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_count_no_start(PG_FUNCTION_ARGS)
+{
+	return regexp_count(fcinfo);
+}
+
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_count_no_flags(PG_FUNCTION_ARGS)
+{
+	return regexp_count(fcinfo);
+}
+
+/*
+ * textregexreplace_extended()
+ *		Return a string matched by a regular expression, with replacement.
+ *		Extends textregexreplace by allowing a start position and the
+ *		choice of the occurrence to replace (0 means all occurrences).
+ */
+Datum
+textregexreplace_extended(PG_FUNCTION_ARGS)
+{
+	text	   *s = NULL;
+	text	   *p = PG_GETARG_TEXT_PP(1);
+	text       *pattern = enclose_with_parenthesis(PG_GETARG_TEXT_PP(1));
+	text	   *r = PG_GETARG_TEXT_PP(2);
+	int        start = 1;
+	int        occurrence = 1;
+	int        pos = 0;
+	text	   *flags = PG_GETARG_TEXT_PP_IF_EXISTS(5);
+	StringInfoData str;
+	regex_t    *re;
+	pg_re_flags re_flags;
+	regexp_matches_ctx *matchctx;
+	text	   *after = NULL;
+
+	/* start position */
+	if (PG_NARGS() > 3)
+		start = PG_GETARG_INT32(3);
+	if (start < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for parameter \"%s\": %d", "start_position", start)));
+	if (start > 1)
+		s = DatumGetTextPP(DirectFunctionCall2(text_substr_no_len,
+									   PG_GETARG_DATUM(0),
+									   Int32GetDatum(start)
+									   ));
+	else
+		s = PG_GETARG_TEXT_PP(0);
+
+	/* occurrence to replace */
+	if (PG_NARGS() > 4)
+		occurrence = PG_GETARG_INT32(4);
+
+	if (occurrence < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for parameter \"%s\": %d", "occurrence", occurrence)));
+
+	/* Determine options */
+	parse_re_flags(&re_flags, flags);
+	re_flags.glob = true;
+
+	/* lookup for pattern */
+	matchctx = setup_regexp_matches(s, pattern, &re_flags,
+									PG_GET_COLLATION(), true,
+									false, re_flags.glob);
+
+	/* If no match is found, then the function returns the original string */
+	if (matchctx->nmatches == 0)
+		PG_RETURN_DATUM(PG_GETARG_DATUM(0));
+
+	/* Get the position of the occurence to replace */
+	if (PG_NARGS() > 4 && occurrence > 0)
+	{
+		/* When occurrence exceed matches return the original string */
+		if (occurrence > matchctx->nmatches)
+			PG_RETURN_DATUM(PG_GETARG_DATUM(0));
+
+		pos = (occurrence*matchctx->npatterns*2)-(matchctx->npatterns*2);
+		pos = matchctx->match_locs[pos]+start;
+	}
+	else
+		pos = start;
+
+	/* Normal case without explicit VARIADIC marker */
+	initStringInfo(&str);
+
+	/* Get the string before the occurrence starting */
+	if (pos > 1)
+	{
+		text  *before = DatumGetTextPP(DirectFunctionCall3(text_substr,
+										   PG_GETARG_DATUM(0),
+										   Int32GetDatum(1),
+										   Int32GetDatum(pos - 1)));
+		appendStringInfoString(&str, TextDatumGetCString(before));
+	}
+
+	/* all occurences must be replaced? */
+	if (occurrence == 0)
+		re_flags.glob = true;
+	else
+		re_flags.glob = false;
+
+	/* Compile the regular expression */
+	re = RE_compile_and_cache(p, re_flags.cflags, PG_GET_COLLATION());
+
+	/* Get the substring starting at the right occurrence position */
+	after = DatumGetTextPP(DirectFunctionCall2(text_substr_no_len,
+								   PG_GETARG_DATUM(0),
+								   Int32GetDatum(pos)
+								   ));
+
+	appendStringInfoString(&str, TextDatumGetCString(replace_text_regexp(
+										after,
+										(void *) re,
+										r, 
+										re_flags.glob)));
+
+	PG_RETURN_TEXT_P(CStringGetTextDatum(str.data));
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+textregexreplace_extended_no_occurrence(PG_FUNCTION_ARGS)
+{
+	return textregexreplace_extended(fcinfo);
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+textregexreplace_extended_no_flags(PG_FUNCTION_ARGS)
+{
+	return textregexreplace_extended(fcinfo);
+}
+
+/*
+ * Return text string between parenthesis
+ */
+static text *
+enclose_with_parenthesis(text *str)
+{
+	int        len = VARSIZE_ANY_EXHDR(str);
+	text       *result;
+	char       *ptr;
+
+	result = palloc(len + VARHDRSZ + 2);
+	SET_VARSIZE(result, len + VARHDRSZ + 2);
+	ptr = VARDATA(result);
+	memcpy(ptr, "(", 1);
+	memcpy(ptr+1, VARDATA_ANY(str), len);
+	memcpy(ptr+len+1, ")", 1);
+
+	return result;
+}
+
+/*
+ * regexp_instr()
+ *		Return the position within the string where the match was located
+ */
+Datum
+regexp_instr(PG_FUNCTION_ARGS)
+{
+	text	   *orig_str = NULL;
+	text	   *pattern = NULL;
+	text	   *flags = PG_GETARG_TEXT_PP_IF_EXISTS(5);
+	int        start = 1;
+	int        occurrence = 1;
+	int        return_opt = 0;
+	int        subexpr = 0;
+	int        pos;
+
+	pg_re_flags re_flags;
+	regexp_matches_ctx *matchctx;
+
+	/* regexp_instr(string, pattern, start) */
+	if (PG_NARGS() > 2)
+		start = PG_GETARG_INT32(2);
+
+	if (start < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for parameter \"%s\": %d", "start_position", start)));
+
+	if (start > 1)
+		orig_str = DatumGetTextPP(DirectFunctionCall2(text_substr_no_len,
+									   PG_GETARG_DATUM(0),
+									   Int32GetDatum(start)
+									   ));
+	else
+		/* regexp_instr(string, pattern) */
+		orig_str = PG_GETARG_TEXT_PP(0);
+
+	if (orig_str == NULL)
+		PG_RETURN_NULL();
+
+	/* regexp_instr(string, pattern, start, occurrence) */
+	if (PG_NARGS() > 3)
+		occurrence = PG_GETARG_INT32(3);
+
+	if (occurrence <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for parameter \"%s\": %d", "occurrence", occurrence)));
+
+	/* regexp_instr(string, pattern, start, occurrence, return_opt) */
+	if (PG_NARGS() > 4)
+		return_opt = PG_GETARG_INT32(4);
+
+	if (return_opt != 0 && return_opt != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for parameter \"%s\": %d", "return_option", return_opt)));
+
+	/* regexp_instr(string, pattern, start, occurrence, return_opt, flags, subexpr) */
+	if (PG_NARGS() > 6)
+		subexpr = PG_GETARG_INT32(6);
+	if (subexpr < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for parameter \"%s\": %d", "group", subexpr)));
+
+	/*
+	 * If subexpr is zero (default), then the position of the entire
+	 * substring that matches the pattern is returned. Otherwise we
+	 * will exactly register the subexpressions given in the pattern.
+	 * Enclose pattern between parenthesis to register the position
+	 * of the entire substring.
+	 */
+	pattern = enclose_with_parenthesis(PG_GETARG_TEXT_PP(1));
+
+	/* Determine options */
+	parse_re_flags(&re_flags, flags);
+	/* this function require flag 'g' */
+	re_flags.glob = true;
+
+	matchctx = setup_regexp_matches(orig_str, pattern, &re_flags,
+									PG_GET_COLLATION(), true, false, false);
+
+	/* If no match is found, then the function returns 0 */
+	if (matchctx->nmatches == 0)
+		PG_RETURN_INT32(0);
+
+	/* When occurrence exceed matches return 0 */
+	if (occurrence > matchctx->nmatches)
+		PG_RETURN_INT32(0);
+
+	/* When subexpr exceed number of subexpression return 0 */
+	if (subexpr > matchctx->npatterns - 1)
+		PG_RETURN_INT32(0);
+
+	/*
+	 * Returns the position of the first character of the occurrence
+	 * or for subexpression in this occurrence.
+	 */
+	pos = (occurrence*matchctx->npatterns*2)-((matchctx->npatterns-subexpr)*2);
+	if (return_opt == 1)
+		pos += 1;
+
+	PG_RETURN_INT32(matchctx->match_locs[pos]+start);
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_instr_no_start(PG_FUNCTION_ARGS)
+{
+	return regexp_instr(fcinfo);
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_instr_no_occurrence(PG_FUNCTION_ARGS)
+{
+	return regexp_instr(fcinfo);
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_instr_no_return_opt(PG_FUNCTION_ARGS)
+{
+	return regexp_instr(fcinfo);
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_instr_no_flags(PG_FUNCTION_ARGS)
+{
+	return regexp_instr(fcinfo);
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_instr_no_subexpr(PG_FUNCTION_ARGS)
+{
+	return regexp_instr(fcinfo);
+}
+
+/*
+ * regexp_substr()
+ *		Return the substring within the string that match a regular
+ *		expression pattern
+ */
+Datum
+regexp_substr(PG_FUNCTION_ARGS)
+{
+	text	   *orig_str = NULL;
+	text	   *pattern = NULL;
+	text	   *flags = PG_GETARG_TEXT_PP_IF_EXISTS(4);
+	int        start = 1;
+	int        occurrence = 1;
+	int        subexpr = 0;
+	int        so, eo, pos;
+
+	pg_re_flags re_flags;
+	regexp_matches_ctx *matchctx;
+
+	if (PG_NARGS() > 2)
+		start = PG_GETARG_INT32(2);
+
+	if (start < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for parameter \"%s\": %d", "start_position", start)));
+
+	/* regexp_substr(string, pattern, start) */
+	if (start > 1)
+		orig_str = DatumGetTextPP(DirectFunctionCall2(text_substr_no_len,
+									   PG_GETARG_DATUM(0),
+									   Int32GetDatum(start)
+									   ));
+	else
+		/* regexp_substr(string, pattern) */
+		orig_str = PG_GETARG_TEXT_PP(0);
+
+	if (orig_str == NULL)
+		PG_RETURN_NULL();
+
+	/* regexp_substr(string, pattern, start, occurrence) */
+	if (PG_NARGS() > 3)
+		occurrence = PG_GETARG_INT32(3);
+
+	if (occurrence <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for parameter \"%s\": %d", "occurrence", occurrence)));
+
+	/* regexp_substr(string, pattern, start, occurrence, flags, subexpr) */
+	if (PG_NARGS() > 5)
+		subexpr = PG_GETARG_INT32(5);
+	if (subexpr < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for parameter \"%s\": %d", "group", subexpr)));
+
+	/*
+	 * If subexpr is zero (default), then the position of the entire
+	 * substring that matches the pattern is returned. Otherwise we
+	 * will exactly register the subexpressions given in the pattern.
+	 * Enclose pattern between parenthesis to register the position
+	 * of the entire substring.
+	 */
+	pattern = enclose_with_parenthesis(PG_GETARG_TEXT_PP(1));
+
+	/* Determine options */
+	parse_re_flags(&re_flags, flags);
+	/* this function require flag 'g' */
+	re_flags.glob = true;
+
+	matchctx = setup_regexp_matches(orig_str, pattern, &re_flags,
+									PG_GET_COLLATION(), true, false, false);
+
+	/* If no match is found, then the function returns NULL */
+	if (matchctx->nmatches == 0)
+		PG_RETURN_NULL();
+
+	/* When occurrence exceed matches return NULL */
+	if (occurrence > matchctx->nmatches)
+		PG_RETURN_NULL();
+
+	/* When subexpr exceed number of subexpression return NULL */
+	if (subexpr > matchctx->npatterns - 1)
+		PG_RETURN_NULL();
+
+	/* Returns the substring corresponding to the occurrence. */
+	pos = (occurrence*matchctx->npatterns*2)-((matchctx->npatterns-subexpr)*2);
+	so = matchctx->match_locs[pos]+1;
+	eo = matchctx->match_locs[pos+1]+1;
+
+	 PG_RETURN_DATUM(DirectFunctionCall3(text_substr,
+									   PointerGetDatum(matchctx->orig_str),
+									   Int32GetDatum(so),
+									   Int32GetDatum(eo - so)));
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_substr_no_start(PG_FUNCTION_ARGS)
+{
+	return regexp_substr(fcinfo);
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_substr_no_occurrence(PG_FUNCTION_ARGS)
+{
+	return regexp_substr(fcinfo);
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_substr_no_flags(PG_FUNCTION_ARGS)
+{
+	return regexp_substr(fcinfo);
+}
+
+/* This is separate to keep the opr_sanity regression test from complaining */
+Datum
+regexp_substr_no_subexpr(PG_FUNCTION_ARGS)
+{
+	return regexp_substr(fcinfo);
 }
 
 /*

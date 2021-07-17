@@ -1345,7 +1345,6 @@ get_trigger_oid(Oid relid, const char *trigname, bool missing_ok)
 
 	tgscan = systable_beginscan(tgrel, TriggerRelidNameIndexId, true,
 								NULL, 2, skey);
-
 	tup = systable_getnext(tgscan);
 
 	if (!HeapTupleIsValid(tup))
@@ -1405,10 +1404,11 @@ RangeVarCallbackForRenameTrigger(const RangeVar *rv, Oid relid, Oid oldrelid,
 }
 
 /*
- *		renametrig		- changes the name of a trigger on a relation
+ *		renameonlytrig		- changes the name of a trigger on a relation
  *
  *		trigger name is changed in trigger catalog.
  *		No record of the previous name is kept.
+ *		This function assumes that the row is already locked.
  *
  *		get proper relrelation from relation catalog (if not arg)
  *		scan trigger catalog
@@ -1418,28 +1418,21 @@ RangeVarCallbackForRenameTrigger(const RangeVar *rv, Oid relid, Oid oldrelid,
  *		update row in catalog
  */
 ObjectAddress
-renametrig(RenameStmt *stmt)
+renameonlytrig(RenameStmt *stmt, Relation tgrel, Oid relid, Oid tgparent)
 {
 	Oid			tgoid;
 	Relation	targetrel;
-	Relation	tgrel;
 	HeapTuple	tuple;
 	SysScanDesc tgscan;
 	ScanKeyData key[2];
-	Oid			relid;
 	ObjectAddress address;
+	int			matched;
+	int			stmtTgnameMatches;
 
-	/*
-	 * Look up name, check permissions, and acquire lock (which we will NOT
-	 * release until end of transaction).
-	 */
-	relid = RangeVarGetRelidExtended(stmt->relation, AccessExclusiveLock,
-									 0,
-									 RangeVarCallbackForRenameTrigger,
-									 NULL);
 
 	/* Have lock already, so just need to build relcache entry. */
 	targetrel = relation_open(relid, NoLock);
+
 
 	/*
 	 * Scan pg_trigger twice for existing triggers on relation.  We do this in
@@ -1447,12 +1440,6 @@ renametrig(RenameStmt *stmt)
 	 * on tgrelid/tgname would complain anyway) and to ensure a trigger does
 	 * exist with oldname.
 	 *
-	 * NOTE that this is cool only because we have AccessExclusiveLock on the
-	 * relation, so the trigger set won't be changing underneath us.
-	 */
-	tgrel = table_open(TriggerRelationId, RowExclusiveLock);
-
-	/*
 	 * First pass -- look for name conflict
 	 */
 	ScanKeyInit(&key[0],
@@ -1473,33 +1460,49 @@ renametrig(RenameStmt *stmt)
 	systable_endscan(tgscan);
 
 	/*
-	 * Second pass -- look for trigger existing with oldname and update
+	 * Second pass -- look for trigger existing and update if pgparent is
+	 * matching
 	 */
 	ScanKeyInit(&key[0],
 				Anum_pg_trigger_tgrelid,
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(relid));
-	ScanKeyInit(&key[1],
-				Anum_pg_trigger_tgname,
-				BTEqualStrategyNumber, F_NAMEEQ,
-				PointerGetDatum(stmt->subname));
+
 	tgscan = systable_beginscan(tgrel, TriggerRelidNameIndexId, true,
-								NULL, 2, key);
-	if (HeapTupleIsValid(tuple = systable_getnext(tgscan)))
+								NULL, 1, key);
+	matched = 0;
+	while (HeapTupleIsValid(tuple = systable_getnext(tgscan)))
 	{
 		Form_pg_trigger trigform;
+
+		trigform = (Form_pg_trigger) GETSTRUCT(tuple);
+
+        stmtTgnameMatches = strcmp(stmt->subname, NameStr(trigform->tgname));
+		/*
+		 * Skip triggers that not relevant. Relevant is the parent trigger as
+		 * well as parts of the current distributed trigger.
+		 */
+		if (tgparent == 0 && stmtTgnameMatches
+            || tgparent && trigform->tgparentid != tgparent)
+			continue;
+
+		if (stmtTgnameMatches)
+		{
+			ereport(NOTICE,
+					(errmsg("trigger \"%s\" for table \"%s\" was not named \"%s\", renaming anyways",
+							NameStr(trigform->tgname), RelationGetRelationName(targetrel), stmt->subname)));
+		}
 
 		/*
 		 * Update pg_trigger tuple with new tgname.
 		 */
 		tuple = heap_copytuple(tuple);	/* need a modifiable copy */
 		trigform = (Form_pg_trigger) GETSTRUCT(tuple);
-		tgoid = trigform->oid;
-
 		namestrcpy(&trigform->tgname,
 				   stmt->newname);
-
 		CatalogTupleUpdate(tgrel, &tuple->t_self, tuple);
+
+		tgoid = trigform->oid;
 
 		InvokeObjectPostAlterHook(TriggerRelationId,
 								  tgoid, 0);
@@ -1510,29 +1513,122 @@ renametrig(RenameStmt *stmt)
 		 * entries.  (Ideally this should happen automatically...)
 		 */
 		CacheInvalidateRelcache(targetrel);
+		matched++;
 	}
-	else
+
+	systable_endscan(tgscan);
+
+	/*
+	 * There always should be exactly one matching trigger on the child
+	 * partition. If there isn't fail with an error.
+	 */
+	if (!matched)
 	{
 		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_OBJECT),
-				 errmsg("trigger \"%s\" for table \"%s\" does not exist",
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("trigger \"%s\" for child table \"%s\" does not exist",
+						stmt->subname, RelationGetRelationName(targetrel))));
+	}
+	if (matched > 1)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("multiple triggers match \"%s\" for table \"%s\", this might indicate a data corruption",
 						stmt->subname, RelationGetRelationName(targetrel))));
 	}
 
 	ObjectAddressSet(address, TriggerRelationId, tgoid);
 
-	systable_endscan(tgscan);
-
-	table_close(tgrel, RowExclusiveLock);
 
 	/*
 	 * Close rel, but keep exclusive lock!
 	 */
+	relation_close(tgrel, NoLock);
 	relation_close(targetrel, NoLock);
 
 	return address;
 }
 
+/*
+ *		renametrigHelper		- changes the name of a trigger on a possibly partitioned relation recursively
+ *
+ *		  alter name of parent trigger using renameonlytrig
+ *		  recursive over children and change their names in the same manner
+ *
+ */
+ObjectAddress
+renametrigHelper(RenameStmt *stmt, Oid tgoid, Oid relid)
+{
+
+	Relation	tgrel;
+	ObjectAddress tgaddress;
+	HeapTuple	tuple;
+	char		relkind;
+
+	/*
+	 * NOTE that this is cool only because we have AccessExclusiveLock on the
+	 * relations, so neither the trigger set nor the table itself will be
+	 * changing underneath us.
+	 */
+	tgrel = table_open(TriggerRelationId, RowExclusiveLock);
+
+	/*
+	 * The last call of renametrig or renametrigHelper already locked this
+	 * relation.
+	 */
+	tgaddress = renameonlytrig(stmt, tgrel, relid, tgoid);
+
+	/*
+	 * In case we have a partioned table, we traverse them and rename every
+	 * dependend trigger, unless ON ONLY was specified.
+	 */
+	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	relkind = ((Form_pg_class) GETSTRUCT(tuple))->relkind;
+	ReleaseSysCache(tuple);		/* We are still holding the
+								 * AccessExclusiveLock on the table of the trigger. */
+	if (stmt->relation->inh && relkind == RELKIND_PARTITIONED_TABLE && has_subclass(relid))
+	{
+		ListCell   *child;
+		List	   *children;
+
+		/*
+		* Make sure it stays a child. We assume that there are no parts of
+		* the trigger in detached partitions, since they should have been
+		* deleted in that case.
+		*/
+		children = find_inheritance_children(relid, AccessExclusiveLock);
+
+		/*
+		 * find_inheritance_children doesn't work recursively. we check every
+		 * layer individually to ensure that the trigger of the child is
+		 * matching in case it's a partitioned table itself.
+		 */
+		foreach(child, children)
+		{
+			Oid			childrelid = lfirst_oid(child);
+
+			if (childrelid == relid)
+				continue;
+			renametrigHelper(stmt, tgaddress.objectId, childrelid);
+		}
+	}
+	return tgaddress;
+}
+
+ObjectAddress
+renametrig(RenameStmt *stmt)
+{
+	/*
+	 * Look up name, check permissions, and acquire lock (which we will NOT
+	 * release until end of transaction).
+	 */
+	return renametrigHelper(stmt, 0,
+							RangeVarGetRelidExtended(stmt->relation, AccessExclusiveLock,
+													 0,
+													 RangeVarCallbackForRenameTrigger,
+													 NULL));
+
+}
 
 /*
  * EnableDisableTrigger()

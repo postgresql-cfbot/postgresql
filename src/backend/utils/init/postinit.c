@@ -849,7 +849,16 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 
 		/* Apply PostAuthDelay as soon as we've read all options */
 		if (PostAuthDelay > 0)
-			pg_usleep(PostAuthDelay * 1000000L);
+		{
+			/*
+			 * PostAuthDelay will not get applied, if WL_LATCH_SET is used.
+			 * This is because the latch could have been set initially.
+			 */
+			(void) WaitLatch(MyLatch,
+							 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+							 PostAuthDelay * 1000L,
+							 WAIT_EVENT_POST_AUTH_DELAY);
+		}
 
 		/* initialize client encoding */
 		InitializeClientEncoding();
@@ -1055,7 +1064,16 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 
 	/* Apply PostAuthDelay as soon as we've read all options */
 	if (PostAuthDelay > 0)
-		pg_usleep(PostAuthDelay * 1000000L);
+	{
+		/*
+		 * PostAuthDelay will not get applied, if WL_LATCH_SET is used. This
+		 * is because the latch could have been set initially.
+		 */
+		(void) WaitLatch(MyLatch,
+						 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 PostAuthDelay * 1000L,
+						 WAIT_EVENT_POST_AUTH_DELAY);
+	}
 
 	/*
 	 * Initialize various default states that can't be set up until we've

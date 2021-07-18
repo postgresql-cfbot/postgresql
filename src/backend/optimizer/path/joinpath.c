@@ -335,6 +335,15 @@ add_paths_to_joinrel(PlannerInfo *root,
 	if (set_join_pathlist_hook)
 		set_join_pathlist_hook(root, joinrel, outerrel, innerrel,
 							   jointype, &extra);
+
+	/*
+	 * 7. If outer relation is delivered from partition-tables, consider
+	 * distributing inner relation to every partition-leaf prior to
+	 * append these leafs.
+	 */
+	try_asymmetric_partitionwise_join(root, joinrel,
+									  outerrel, innerrel,
+									  jointype, &extra);
 }
 
 /*

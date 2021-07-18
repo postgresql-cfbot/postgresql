@@ -85,6 +85,13 @@ IndexNext(IndexScanState *node)
 	ScanDirection direction;
 	IndexScanDesc scandesc;
 	TupleTableSlot *slot;
+	IndexScan *indexscan = (IndexScan *) node->ss.ps.plan;
+
+	/*
+	 * tells if the current position was reached via skipping. In this case
+	 * there is no nead for the index_getnext_tid
+	 */
+	bool skipped = false;
 
 	/*
 	 * extract necessary information from index scan node
@@ -92,7 +99,7 @@ IndexNext(IndexScanState *node)
 	estate = node->ss.ps.state;
 	direction = estate->es_direction;
 	/* flip direction if this is an overall backward scan */
-	if (ScanDirectionIsBackward(((IndexScan *) node->ss.ps.plan)->indexorderdir))
+	if (ScanDirectionIsBackward(indexscan->indexorderdir))
 	{
 		if (ScanDirectionIsForward(direction))
 			direction = BackwardScanDirection;
@@ -117,6 +124,12 @@ IndexNext(IndexScanState *node)
 
 		node->iss_ScanDesc = scandesc;
 
+		/* Index skip scan assumes xs_want_itup, so set it to true */
+		if (indexscan->indexskipprefixsize > 0)
+			node->iss_ScanDesc->xs_want_itup = true;
+		else
+			node->iss_ScanDesc->xs_want_itup = false;
+
 		/*
 		 * If no run-time keys to calculate or they are ready, go ahead and
 		 * pass the scankeys to the index AM.
@@ -128,11 +141,47 @@ IndexNext(IndexScanState *node)
 	}
 
 	/*
+	 * Check if we need to skip to the next key prefix, because we've been
+	 * asked to implement DISTINCT.
+	 *
+	 * When fetching a cursor in the direction opposite to a general scan
+	 * direction, the result must be what normal fetching should have
+	 * returned, but in reversed order. In other words, return the last or
+	 * first scanned tuple in a DISTINCT set, depending on a cursor direction.
+	 * Due to that we skip also when the first tuple wasn't emitted yet, but
+	 * the directions are opposite.
+	 */
+	if (node->iss_SkipPrefixSize > 0 &&
+		(node->iss_FirstTupleEmitted ||
+		 ScanDirectionsAreOpposite(direction, indexscan->indexorderdir)))
+	{
+		if (!index_skip(scandesc, direction, indexscan->indexorderdir,
+					   !node->iss_FirstTupleEmitted, node->iss_SkipPrefixSize))
+		{
+			/*
+			 * Reached end of index. At this point currPos is invalidated, and
+			 * we need to reset iss_FirstTupleEmitted, since otherwise after
+			 * going backwards, reaching the end of index, and going forward
+			 * again we apply skip again. It would be incorrect and lead to an
+			 * extra skipped item.
+			 */
+			node->iss_FirstTupleEmitted = false;
+			return ExecClearTuple(slot);
+		}
+		else
+		{
+			skipped = true;
+			index_fetch_heap(scandesc, slot);
+		}
+	}
+
+	/*
 	 * ok, now that we have what we need, fetch the next tuple.
 	 */
-	while (index_getnext_slot(scandesc, direction, slot))
+	while (skipped || index_getnext_slot(scandesc, direction, slot))
 	{
 		CHECK_FOR_INTERRUPTS();
+		skipped = false;
 
 		/*
 		 * If the index was lossy, we have to recheck the index quals using
@@ -149,6 +198,7 @@ IndexNext(IndexScanState *node)
 			}
 		}
 
+		node->iss_FirstTupleEmitted = true;
 		return slot;
 	}
 
@@ -910,6 +960,8 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 	indexstate->ss.ps.plan = (Plan *) node;
 	indexstate->ss.ps.state = estate;
 	indexstate->ss.ps.ExecProcNode = ExecIndexScan;
+	indexstate->iss_SkipPrefixSize = node->indexskipprefixsize;
+	indexstate->iss_FirstTupleEmitted = false;
 
 	/*
 	 * Miscellaneous initialization

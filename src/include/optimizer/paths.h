@@ -212,8 +212,11 @@ extern Path *get_cheapest_fractional_path_for_pathkeys(List *paths,
 													   Relids required_outer,
 													   double fraction);
 extern Path *get_cheapest_parallel_safe_total_inner(List *paths);
+extern int find_index_prefix_for_pathkey(List *index_pathkeys,
+										 List *pathkey_positions,
+										 PathKey *target_pathkey);
 extern List *build_index_pathkeys(PlannerInfo *root, IndexOptInfo *index,
-								  ScanDirection scandir);
+								  ScanDirection scandir, List **positions);
 extern List *build_partition_pathkeys(PlannerInfo *root, RelOptInfo *partrel,
 									  ScanDirection scandir, bool *partialkeys);
 extern List *build_expression_pathkey(PlannerInfo *root, Expr *expr,
@@ -229,6 +232,9 @@ extern List *build_join_pathkeys(PlannerInfo *root,
 extern List *make_pathkeys_for_sortclauses(PlannerInfo *root,
 										   List *sortclauses,
 										   List *tlist);
+extern List *make_pathkeys_for_uniquekeys(PlannerInfo *root,
+										  List *sortclauses,
+										  List *tlist);
 extern void initialize_mergeclause_eclasses(PlannerInfo *root,
 											RestrictInfo *restrictinfo);
 extern void update_mergeclause_eclasses(PlannerInfo *root,
@@ -254,5 +260,11 @@ extern PathKey *make_canonical_pathkey(PlannerInfo *root,
 									   int strategy, bool nulls_first);
 extern void add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 									List *live_childrels);
+
+extern bool query_has_uniquekeys_for(PlannerInfo *root,
+									 List *exprs,
+									 bool allow_multinulls);
+
+extern List *build_uniquekeys(PlannerInfo *root, List *sortclauses);
 
 #endif							/* PATHS_H */

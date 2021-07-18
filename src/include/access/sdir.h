@@ -55,4 +55,11 @@ typedef enum ScanDirection
 #define ScanDirectionIsForward(direction) \
 	((bool) ((direction) == ForwardScanDirection))
 
+/*
+ * ScanDirectionsAreOpposite
+ *		True iff scan directions are backward/forward or forward/backward.
+ */
+#define ScanDirectionsAreOpposite(dirA, dirB) \
+	((bool) (dirA != NoMovementScanDirection && dirA == -dirB))
+
 #endif							/* SDIR_H */

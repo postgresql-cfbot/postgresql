@@ -38,7 +38,7 @@
 struct PlannerInfo;				/* avoid including pathnodes.h here */
 struct IndexOptInfo;
 struct SpecialJoinInfo;
-
+struct WindowClause;
 
 /*
  * The Simplify request allows the support function to perform plan-time
@@ -238,5 +238,89 @@ typedef struct SupportRequestIndexCondition
 	bool		lossy;			/* set to false if index condition is an exact
 								 * equivalent of the function call */
 } SupportRequestIndexCondition;
+
+/* ----------
+ * To allow more efficient execution of our monotonically increasing window
+ * functions, we support calling the window function's prosupport function
+ * passing along this struct whenever the planner sees an OpExpr qual directly
+ * reference a windowing function in a subquery.  When the planner encounters
+ * this, we populate this struct and pass it along to the windowing function's
+ * prosupport function so that it can evaluate if the OpExpr can be used to
+ * allow execution of the WindowAgg node to end early.
+ *
+ * This allows queries such as the following one to end execution once "rn"
+ * reaches 3.
+ *
+ * SELECT * FROM (
+ *		SELECT
+ *				col,
+ *				row_number() over (order by col) rn FROM tab
+ * ) t
+ * WHERE rn < 3;
+ *
+ * The prosupport function must properly determine all cases where such an
+ * optimization is possible and leave 'runopexpr' set to NULL in cases where
+ * the optimization is not possible.  It's not possible to stop execution
+ * early if the above example had a PARTITION BY clause as "rn" would drop
+ * back to 1 in each new partition.
+ *
+ * We have a few built-in windowing functions which return a monotonically
+ * increasing value. This optimization is ideal for those.
+ *
+ * It's also possible to use this for windowing functions that have a
+ * monotonically decreasing value.  An example of this would be COUNT(*) with
+ * the frame option UNBOUNDED FOLLOWING, the return value could only ever stay
+ * the same or decrease.  In this case, it would be possible to stop execution
+ * early if there was some qual that expressed the count must be above a given
+ * value.
+ *
+ * Inputs:
+ *	'opexpr' is the qual which the planner would like evaluated.
+ *
+ *	'window_func' is the pointer to the window function being called.
+ *
+ *	'window_clause' pointer to the WindowClause data.  Support functions can
+ *	use this to check frame bounds and partition by clauses, etc.
+ *
+ *	'wfunc_left' indicates which way around the OpExpr is.  True indicates
+ *	that the LHS of the opexpr is the window Var.  False indicates it's on the
+ *	RHS.
+ *
+ * Outputs:
+ *	'runopexpr' the OpExpr that the planner should evaluate during execution.
+ *	This will be evaluated after at the end of the WindowAgg call during
+ *	execution.  If the expression evaluates to NULL or False then the
+ *	WindowAgg will return NULL to indicate there are no more tuples.  Support
+ *	functions may set this to the input 'opexpr' when that expression is
+ *	suitable, or they may craft their own suitable expression.  This output
+ *	argument defaults to NULL. If the 'opexpr' is not suitable then this
+ *	output must remain NULL.
+ *
+ *	'keep_original' indicates to the planner if it should also keep the
+ *	opexpr as a filter on the parent query.  This defaults to True, which is
+ *	the safest option if you're unsure.  Only set it to false if the
+ *	'runopexpr' will correctly filter all of the records that 'opexpr' would.
+ * ----------
+ */
+typedef struct WindowFunctionRunCondition
+{
+	NodeTag		type;
+
+	/* Input fields: */
+	OpExpr		   *opexpr;				/* Input OpExpr to check */
+	WindowFunc	   *window_func;	/* Pointer to the window function data */
+	struct WindowClause   *window_clause;	/* Pointer to the window clause
+											 * data */
+	bool			wfunc_left;		/* True if window func is on left of opexpr */
+
+	/* Output fields: */
+	OpExpr		   *runopexpr;		/* Output OpExpr to use or NULL if input
+									 * does not support a run condition. */
+	bool			keep_original;	/* True if the planner should still use
+									 * the original qual in the base quals of
+									 * the parent query or false if it's safe
+									 * to ignore it due to the run condition
+									 * replacing it */
+} WindowFunctionRunCondition;
 
 #endif							/* SUPPORTNODES_H */

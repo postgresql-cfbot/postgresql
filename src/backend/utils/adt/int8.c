@@ -25,6 +25,7 @@
 #include "optimizer/optimizer.h"
 #include "utils/builtins.h"
 #include "utils/int8.h"
+#include "utils/lsyscache.h"
 
 
 typedef struct
@@ -877,6 +878,7 @@ int8dec(PG_FUNCTION_ARGS)
 }
 
 
+
 /*
  * These functions are exactly like int8inc/int8dec but are used for
  * aggregates that count only non-null values.  Since the functions are
@@ -902,6 +904,125 @@ Datum
 int8dec_any(PG_FUNCTION_ARGS)
 {
 	return int8dec(fcinfo);
+}
+
+/*
+ * int8inc_support
+ *		prosupport function for int8inc() and int8inc_any()
+ */
+Datum
+int8inc_support(PG_FUNCTION_ARGS)
+{
+	Node	   *rawreq = (Node *) PG_GETARG_POINTER(0);
+
+	if (IsA(rawreq, WindowFunctionRunCondition))
+	{
+		WindowFunctionRunCondition *req = (WindowFunctionRunCondition *)rawreq;
+
+		OpExpr	   *opexpr = req->opexpr;
+		Oid			opno = opexpr->opno;
+		List	   *opfamilies;
+		ListCell   *lc;
+		int			frameOptions;
+
+		/* Early abort of execution is not possible if there's a PARTITION BY */
+		if (req->window_clause->partitionClause != NULL)
+			PG_RETURN_POINTER(NULL);
+
+		frameOptions = req->window_clause->frameOptions;
+
+		/*
+		 * With FRAMEOPTION_START_UNBOUNDED_PRECEDING we know the count can
+		 * only go up, so we can support run conditions that only want values
+		 * < or <= to a given constant.  With
+		 * FRAMEOPTION_END_UNBOUNDED_FOLLOWING, the row count could only
+		 * possibly decrease, so we can support a run condition that uses > or
+		 * >=.  If we have neither of these two, then bail.
+		 */
+		if ((frameOptions &	(FRAMEOPTION_START_UNBOUNDED_PRECEDING |
+							 FRAMEOPTION_END_UNBOUNDED_FOLLOWING)) == 0)
+			PG_RETURN_POINTER(NULL);
+
+		opfamilies = get_op_btree_interpretation(opno);
+
+		foreach(lc, opfamilies)
+		{
+			OpBtreeInterpretation *oi = (OpBtreeInterpretation *)lfirst(lc);
+
+			if (req->wfunc_left)
+			{
+				/* Handle < / <= */
+				if (oi->strategy == BTLessStrategyNumber ||
+					oi->strategy == BTLessEqualStrategyNumber)
+				{
+					/*
+					 * If the frame is bound to the top of the window then the
+					 * count cannot go down.
+					 */
+					if ((frameOptions &	(FRAMEOPTION_START_UNBOUNDED_PRECEDING)))
+					{
+						req->keep_original = false;
+						req->runopexpr = req->opexpr;
+					}
+					break;
+				}
+				/* Handle > / >= */
+				else if (oi->strategy == BTGreaterStrategyNumber ||
+						 oi->strategy == BTGreaterEqualStrategyNumber)
+				{
+					/*
+					 * If the frame is bound to the bottom of the window then
+					 * the count cannot go up.
+					 */
+					if ((frameOptions &	(FRAMEOPTION_END_UNBOUNDED_FOLLOWING)))
+					{
+						req->keep_original = false;
+						req->runopexpr = req->opexpr;
+					}
+					break;
+				}
+			}
+			else
+			{
+				/* Handle > / >= */
+				if (oi->strategy == BTGreaterStrategyNumber ||
+					oi->strategy == BTGreaterEqualStrategyNumber)
+				{
+					/*
+					 * If the frame is bound to the top of the window then the
+					 * count cannot go down.
+					 */
+					if ((frameOptions &	(FRAMEOPTION_START_UNBOUNDED_PRECEDING)))
+					{
+						req->keep_original = false;
+						req->runopexpr = req->opexpr;
+					}
+					break;
+				}
+				/* Handle < / <= */
+				else if (oi->strategy == BTLessStrategyNumber ||
+						 oi->strategy == BTLessEqualStrategyNumber)
+				{
+					/*
+					 * If the frame is bound to the bottom of the window then
+					 * the count cannot go up.
+					 */
+					if ((frameOptions &	(FRAMEOPTION_END_UNBOUNDED_FOLLOWING)))
+					{
+						req->keep_original = false;
+						req->runopexpr = req->opexpr;
+					}
+					break;
+				}
+			}
+		}
+
+		list_free(opfamilies);
+
+		PG_RETURN_POINTER(req);
+	}
+
+	PG_RETURN_POINTER(NULL);
 }
 
 

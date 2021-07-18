@@ -27,6 +27,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/supportnodes.h"
 #ifdef OPTIMIZER_DEBUG
 #include "nodes/print.h"
 #endif
@@ -2091,6 +2092,169 @@ has_multiple_baserels(PlannerInfo *root)
 }
 
 /*
+ * find_window_run_conditions
+ *		Call wfunc's prosupport function to ask if 'opexpr' might help to
+ *		allow the executor to stop processing WindowAgg nodes early.
+ *
+ * For example row_number() over (order by ...) always produces a value one
+ * higher than the previous.  If someone has a window function such as that
+ * in a subquery and just wants, say all rows with a row number less than or
+ * equal to 10, then we may as well stop processing the windowagg the row
+ * number reaches 11.  Here we look for opexprs that might help us to abort
+ * doing needless extra processing in WindowAgg nodes.
+ *
+ * To do this we make use of the window function's prosupport function. We
+ * pass along the 'opexpr' to ask if there is a suitable OpExpr that we can
+ * use to help stop WindowAggs processing early.
+ *
+ * '*keep_original' is set to true if the caller should also use 'opexpr' for
+ * its original purpose.  This is set to false if the caller can assume that
+ * the runcondition will handle all of the required filtering.
+ *
+ * Returns true if a runcondition qual was found and added to the
+ * wclause->runcondition list.  Returns false if no clause was found.
+ */
+static bool
+find_window_run_conditions(Query *subquery, RangeTblEntry *rte, Index rti,
+						   AttrNumber attno, WindowClause *wclause,
+						   WindowFunc *wfunc, OpExpr *opexpr, bool wfunc_left,
+						   bool *keep_original)
+{
+	Oid			prosupport;
+	WindowFunctionRunCondition req;
+	WindowFunctionRunCondition *res;
+
+	*keep_original = true;
+
+	prosupport = get_func_support(wfunc->winfnoid);
+
+	/* Check if there's a support function that can validate 'opexpr' */
+	if (!OidIsValid(prosupport))
+	{
+		*keep_original = true;
+		return false;
+	}
+
+	req.type = T_WindowFunctionRunCondition;
+	req.opexpr = opexpr;
+	req.window_func = wfunc;
+	req.window_clause = wclause;
+	req.wfunc_left = wfunc_left;
+	req.runopexpr = NULL;			/* default */
+	req.keep_original = true;		/* default */
+
+	res = (WindowFunctionRunCondition *)
+		DatumGetPointer(OidFunctionCall1(prosupport,
+			PointerGetDatum(&req)));
+
+	/* return the the run condition, if there is one */
+	if (res && res->runopexpr != NULL)
+	{
+		Expr *origexpr;
+		OpExpr *rexpr = res->runopexpr;
+
+		wclause->runcondition = lappend(wclause->runcondition, rexpr);
+		*keep_original = res->keep_original;
+
+		/*
+		 * We must also create a version of the qual that we can display in
+		 * EXPLAIN.
+		 */
+		if (wfunc_left)
+			origexpr = make_opclause(rexpr->opno, rexpr->opresulttype,
+									 rexpr->opretset, (Expr *) wfunc,
+									 (Expr *) lsecond(rexpr->args),
+									 rexpr->opcollid, rexpr->inputcollid);
+		else
+			origexpr = make_opclause(rexpr->opno, rexpr->opresulttype,
+									 rexpr->opretset,
+									 (Expr *) lsecond(rexpr->args),
+									 (Expr *) wfunc, rexpr->opcollid,
+									 rexpr->inputcollid);
+
+		wclause->runconditionorig = lappend(wclause->runconditionorig, origexpr);
+		return true;
+	}
+
+	/* prosupport function didn't support our request */
+	return false;
+}
+
+/*
+ * check_and_push_window_quals
+ *		Check if 'rinfo' is a qual that can be pushed into a WindowFunc as a
+ *		'runcondition' qual.  These, when present cause the window function
+ *		evaluation to stop when the condition becomes false.
+ *
+ * Returns true if the caller still must keep the original qual or false if
+ * the caller can safely ignore the original qual because the window function
+ * will use the runcondition to stop at the right time.
+ */
+static bool
+check_and_push_window_quals(Query *subquery, RangeTblEntry *rte, Index rti,
+							Node *clause)
+{
+	OpExpr	   *opexpr = (OpExpr *) clause;
+	bool		keep_original = true;
+	Var		   *var1;
+	Var		   *var2;
+
+	if (!IsA(opexpr, OpExpr))
+		return true;
+
+	if (list_length(opexpr->args) != 2)
+		return true;
+
+	/*
+	 * Check for plain Vars which reference window functions in the subquery.
+	 * If we find any, we'll ask find_window_run_conditions() if there are
+	 * any useful conditions that might allow us to stop windowagg execution
+	 * early.
+	 */
+
+	/* Check the left side of the OpExpr */
+	var1 = linitial(opexpr->args);
+	if (IsA(var1, Var) && var1->varattno > 0)
+	{
+		TargetEntry *tle = list_nth(subquery->targetList, var1->varattno - 1);
+		WindowFunc *wfunc = (WindowFunc *) tle->expr;
+		if (IsA(wfunc, WindowFunc))
+		{
+			WindowClause *wclause = (WindowClause *)
+												list_nth(subquery->windowClause,
+														 wfunc->winref - 1);
+
+			if (find_window_run_conditions(subquery, rte, rti, tle->resno,
+										   wclause, wfunc, opexpr, true,
+										   &keep_original))
+				return keep_original;
+		}
+	}
+
+	/* and check the right side */
+	var2 = lsecond(opexpr->args);
+	if (IsA(var2, Var) && var2->varattno > 0)
+	{
+		TargetEntry *tle = list_nth(subquery->targetList, var2->varattno - 1);
+		WindowFunc *wfunc = (WindowFunc *) tle->expr;
+
+		if (IsA(wfunc, WindowFunc))
+		{
+			WindowClause *wclause = (WindowClause *)
+												list_nth(subquery->windowClause,
+														 wfunc->winref - 1);
+
+			if (find_window_run_conditions(subquery, rte, rti, tle->resno,
+										   wclause, wfunc, opexpr, false,
+										   &keep_original))
+				return keep_original;
+		}
+	}
+
+	return true;
+}
+
+/*
  * set_subquery_pathlist
  *		Generate SubqueryScan access paths for a subquery RTE
  *
@@ -2178,19 +2342,30 @@ set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		foreach(l, rel->baserestrictinfo)
 		{
 			RestrictInfo *rinfo = (RestrictInfo *) lfirst(l);
+			Node	   *clause = (Node *)rinfo->clause;
 
 			if (!rinfo->pseudoconstant &&
 				qual_is_pushdown_safe(subquery, rti, rinfo, &safetyInfo))
 			{
-				Node	   *clause = (Node *) rinfo->clause;
-
 				/* Push it down */
 				subquery_push_qual(subquery, rte, rti, clause);
 			}
 			else
 			{
-				/* Keep it in the upper query */
-				upperrestrictlist = lappend(upperrestrictlist, rinfo);
+				/*
+				 * Since we can't push the qual down into the subquery, check
+				 * if it happens to reference a windowing function.  If so
+				 * then it might be useful to allow the window evaluation to
+				 * stop early.
+				 */
+				if (check_and_push_window_quals(subquery, rte, rti, clause))
+				{
+					/*
+					 * It's not a suitable window run condition qual or it is,
+					 * but the original must also be kept in the upper query.
+					 */
+					upperrestrictlist = lappend(upperrestrictlist, rinfo);
+				}
 			}
 		}
 		rel->baserestrictinfo = upperrestrictlist;

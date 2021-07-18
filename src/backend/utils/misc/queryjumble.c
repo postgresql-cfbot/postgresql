@@ -434,7 +434,7 @@ JumbleExpr(JumbleState *jstate, Node *node)
 				APP_JUMB(expr->winref);
 				JumbleExpr(jstate, (Node *) expr->args);
 				JumbleExpr(jstate, (Node *) expr->aggfilter);
-			}
+		}
 			break;
 		case T_SubscriptingRef:
 			{

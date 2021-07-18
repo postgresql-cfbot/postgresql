@@ -890,6 +890,9 @@ typedef struct WindowAgg
 	int			frameOptions;	/* frame_clause options, see WindowDef */
 	Node	   *startOffset;	/* expression for starting bound, if any */
 	Node	   *endOffset;		/* expression for ending bound, if any */
+	List	   *runcondition;	/* Conditions that must remain true in order
+								 * for execution to continue */
+	List	   *runconditionorig;	/* runcondition for display in EXPLAIN */
 	/* these fields are used with RANGE offset PRECEDING/FOLLOWING: */
 	Oid			startInRangeFunc;	/* in_range function for startOffset */
 	Oid			endInRangeFunc; /* in_range function for endOffset */

@@ -1281,6 +1281,19 @@ init_params(ParseState *pstate, List *options, bool for_identity,
 		}
 		else if (strcmp(defel->defname, "restart") == 0)
 		{
+			/*
+			 * Restarting a sequence while defining it doesn't make any sense
+			 * and it may override the START value. Allowing both START and
+			 * RESTART option for CREATE SEQUENCE may cause confusion to user.
+			 * Hence, we throw error for CREATE SEQUENCE if RESTART option is
+			 * specified. However, it can be used with ALTER SEQUENCE.
+			 */
+			if (isInit)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("RESTART option is not allowed while creating sequence"),
+						 parser_errposition(pstate, defel->location)));
+
 			if (restart_value)
 				errorConflictingDefElem(defel, pstate);
 			restart_value = defel;

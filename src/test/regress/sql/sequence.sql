@@ -10,6 +10,7 @@ CREATE SEQUENCE sequence_testx INCREMENT BY 1 MAXVALUE -20;
 CREATE SEQUENCE sequence_testx INCREMENT BY -1 START 10;
 CREATE SEQUENCE sequence_testx INCREMENT BY 1 START -10;
 CREATE SEQUENCE sequence_testx CACHE 0;
+CREATE SEQUENCE sequence_testx RESTART 5;
 
 -- OWNED BY errors
 CREATE SEQUENCE sequence_testx OWNED BY nobody;  -- nonsense word

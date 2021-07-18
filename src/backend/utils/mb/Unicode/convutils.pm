@@ -169,34 +169,29 @@ sub print_from_utf8_combined_map
 {
 	my ($out, $charset, $table, $verbose) = @_;
 
-	my $last_comment = "";
-
 	printf $out "\n/* Combined character map */\n";
 	printf $out
-	  "static const pg_utf_to_local_combined ULmap${charset}_combined[ %d ] = {",
+	  "static const pg_utf_to_local_combined ULmap${charset}_combined[%d] = {\n",
 	  scalar(@$table);
-	my $first = 1;
 	foreach my $i (sort { $a->{utf8} <=> $b->{utf8} } @$table)
 	{
-		print($out ",") if (!$first);
-		$first = 0;
-		print $out "\t/* $last_comment */"
-		  if ($verbose && $last_comment ne "");
+		my $comment;
 
-		printf $out "\n  {0x%08x, 0x%08x, 0x%04x}",
+		printf $out "\t{0x%08x, 0x%08x, 0x%04x},",
 		  $i->{utf8}, $i->{utf8_second}, $i->{code};
 		if ($verbose >= 2)
 		{
-			$last_comment =
+			$comment =
 			  sprintf("%s:%d %s", $i->{f}, $i->{l}, $i->{comment});
 		}
 		elsif ($verbose >= 1)
 		{
-			$last_comment = $i->{comment};
+			$comment = $i->{comment};
 		}
+		print $out "\t/* $comment */" if $comment;
+		print $out "\n";
 	}
-	print $out "\t/* $last_comment */" if ($verbose && $last_comment ne "");
-	print $out "\n};\n";
+	print $out "};\n";
 	return;
 }
 
@@ -204,36 +199,32 @@ sub print_to_utf8_combined_map
 {
 	my ($out, $charset, $table, $verbose) = @_;
 
-	my $last_comment = "";
-
 	printf $out "\n/* Combined character map */\n";
 	printf $out
-	  "static const pg_local_to_utf_combined LUmap${charset}_combined[ %d ] = {",
+	  "static const pg_local_to_utf_combined LUmap${charset}_combined[%d] = {\n",
 	  scalar(@$table);
 
 	my $first = 1;
 	foreach my $i (sort { $a->{code} <=> $b->{code} } @$table)
 	{
-		print($out ",") if (!$first);
-		$first = 0;
-		print $out "\t/* $last_comment */"
-		  if ($verbose && $last_comment ne "");
+		my $comment;
 
-		printf $out "\n  {0x%04x, 0x%08x, 0x%08x}",
+		printf $out "\t{0x%04x, 0x%08x, 0x%08x},",
 		  $i->{code}, $i->{utf8}, $i->{utf8_second};
 
 		if ($verbose >= 2)
 		{
-			$last_comment =
+			$comment =
 			  sprintf("%s:%d %s", $i->{f}, $i->{l}, $i->{comment});
 		}
 		elsif ($verbose >= 1)
 		{
-			$last_comment = $i->{comment};
+			$comment = $i->{comment};
 		}
+		print $out "\t/* $comment */" if $comment;
+		print $out "\n";
 	}
-	print $out "\t/* $last_comment */" if ($verbose && $last_comment ne "");
-	print $out "\n};\n";
+	print $out "};\n";
 	return;
 }
 
@@ -549,46 +540,46 @@ sub print_radix_table
 	printf $out "{\n";
 	if ($datatype eq "uint16")
 	{
-		print $out "  ${tblname}_table,\n";
-		print $out "  NULL, /* 32-bit table not used */\n";
+		print $out "\t${tblname}_table,\n";
+		print $out "\tNULL, /* 32-bit table not used */\n";
 	}
 	if ($datatype eq "uint32")
 	{
-		print $out "  NULL, /* 16-bit table not used */\n";
-		print $out "  ${tblname}_table,\n";
+		print $out "\tNULL, /* 16-bit table not used */\n";
+		print $out "\t${tblname}_table,\n";
 	}
 	printf $out "\n";
-	printf $out "  0x%04x, /* offset of table for 1-byte inputs */\n",
+	printf $out "\t0x%04x, /* offset of table for 1-byte inputs */\n",
 	  $b1root;
-	printf $out "  0x%02x, /* b1_lower */\n", $b1_lower;
-	printf $out "  0x%02x, /* b1_upper */\n", $b1_upper;
+	printf $out "\t0x%02x, /* b1_lower */\n", $b1_lower;
+	printf $out "\t0x%02x, /* b1_upper */\n", $b1_upper;
 	printf $out "\n";
-	printf $out "  0x%04x, /* offset of table for 2-byte inputs */\n",
+	printf $out "\t0x%04x, /* offset of table for 2-byte inputs */\n",
 	  $b2root;
-	printf $out "  0x%02x, /* b2_1_lower */\n", $b2_1_lower;
-	printf $out "  0x%02x, /* b2_1_upper */\n", $b2_1_upper;
-	printf $out "  0x%02x, /* b2_2_lower */\n", $b2_2_lower;
-	printf $out "  0x%02x, /* b2_2_upper */\n", $b2_2_upper;
+	printf $out "\t0x%02x, /* b2_1_lower */\n", $b2_1_lower;
+	printf $out "\t0x%02x, /* b2_1_upper */\n", $b2_1_upper;
+	printf $out "\t0x%02x, /* b2_2_lower */\n", $b2_2_lower;
+	printf $out "\t0x%02x, /* b2_2_upper */\n", $b2_2_upper;
 	printf $out "\n";
-	printf $out "  0x%04x, /* offset of table for 3-byte inputs */\n",
+	printf $out "\t0x%04x, /* offset of table for 3-byte inputs */\n",
 	  $b3root;
-	printf $out "  0x%02x, /* b3_1_lower */\n", $b3_1_lower;
-	printf $out "  0x%02x, /* b3_1_upper */\n", $b3_1_upper;
-	printf $out "  0x%02x, /* b3_2_lower */\n", $b3_2_lower;
-	printf $out "  0x%02x, /* b3_2_upper */\n", $b3_2_upper;
-	printf $out "  0x%02x, /* b3_3_lower */\n", $b3_3_lower;
-	printf $out "  0x%02x, /* b3_3_upper */\n", $b3_3_upper;
+	printf $out "\t0x%02x, /* b3_1_lower */\n", $b3_1_lower;
+	printf $out "\t0x%02x, /* b3_1_upper */\n", $b3_1_upper;
+	printf $out "\t0x%02x, /* b3_2_lower */\n", $b3_2_lower;
+	printf $out "\t0x%02x, /* b3_2_upper */\n", $b3_2_upper;
+	printf $out "\t0x%02x, /* b3_3_lower */\n", $b3_3_lower;
+	printf $out "\t0x%02x, /* b3_3_upper */\n", $b3_3_upper;
 	printf $out "\n";
-	printf $out "  0x%04x, /* offset of table for 3-byte inputs */\n",
+	printf $out "\t0x%04x, /* offset of table for 3-byte inputs */\n",
 	  $b4root;
-	printf $out "  0x%02x, /* b4_1_lower */\n", $b4_1_lower;
-	printf $out "  0x%02x, /* b4_1_upper */\n", $b4_1_upper;
-	printf $out "  0x%02x, /* b4_2_lower */\n", $b4_2_lower;
-	printf $out "  0x%02x, /* b4_2_upper */\n", $b4_2_upper;
-	printf $out "  0x%02x, /* b4_3_lower */\n", $b4_3_lower;
-	printf $out "  0x%02x, /* b4_3_upper */\n", $b4_3_upper;
-	printf $out "  0x%02x, /* b4_4_lower */\n", $b4_4_lower;
-	printf $out "  0x%02x  /* b4_4_upper */\n", $b4_4_upper;
+	printf $out "\t0x%02x, /* b4_1_lower */\n", $b4_1_lower;
+	printf $out "\t0x%02x, /* b4_1_upper */\n", $b4_1_upper;
+	printf $out "\t0x%02x, /* b4_2_lower */\n", $b4_2_lower;
+	printf $out "\t0x%02x, /* b4_2_upper */\n", $b4_2_upper;
+	printf $out "\t0x%02x, /* b4_3_lower */\n", $b4_3_lower;
+	printf $out "\t0x%02x, /* b4_3_upper */\n", $b4_3_upper;
+	printf $out "\t0x%02x, /* b4_4_lower */\n", $b4_4_lower;
+	printf $out "\t0x%02x  /* b4_4_upper */\n", $b4_4_upper;
 	print $out "};\n";
 	print $out "\n";
 	print $out "static const $datatype ${tblname}_table[$tblsize] =\n";
@@ -598,7 +589,7 @@ sub print_radix_table
 	foreach my $seg (@segments)
 	{
 		printf $out "\n";
-		printf $out "  /*** %s - offset 0x%05x ***/\n", $seg->{header}, $off;
+		printf $out "\t/*** %s - offset 0x%05x ***/\n", $seg->{header}, $off;
 		printf $out "\n";
 
 		for (my $i = $seg->{min_idx}; $i <= $seg->{max_idx};)
@@ -606,7 +597,7 @@ sub print_radix_table
 
 			# Print the next line's worth of values.
 			# XXX pad to begin at a nice boundary
-			printf $out "  /* %02x */ ", $i;
+			printf $out "\t/* %02x */", $i;
 			for (my $j = 0;
 				$j < $vals_per_line && $i <= $seg->{max_idx}; $j++)
 			{
@@ -626,7 +617,7 @@ sub print_radix_table
 		if ($seg->{overlaid_trail_zeros})
 		{
 			printf $out
-			  "    /* $seg->{overlaid_trail_zeros} trailing zero values shared with next segment */\n";
+			  "\t/* $seg->{overlaid_trail_zeros} trailing zero values shared with next segment */\n";
 		}
 	}
 

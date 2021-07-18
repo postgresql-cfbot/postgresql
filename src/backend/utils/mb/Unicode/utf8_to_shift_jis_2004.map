@@ -7656,7 +7656,7 @@ static const uint16 shift_jis_2004_from_unicode_tree_table[39196] =
 };
 
 /* Combined character map */
-static const pg_utf_to_local_combined ULmapSHIFT_JIS_2004_combined[ 25 ] = {
+static const pg_utf_to_local_combined ULmapSHIFT_JIS_2004_combined[25] = {
   {0x0000c3a6, 0x0000cc80, 0x8663},	/* U+00E6+0300	 	[2000] */
   {0x0000c994, 0x0000cc80, 0x8667},	/* U+0254+0300	 	[2000] */
   {0x0000c994, 0x0000cc81, 0x8668},	/* U+0254+0301	 	[2000] */
@@ -7681,5 +7681,5 @@ static const pg_utf_to_local_combined ULmapSHIFT_JIS_2004_combined[ 25 ] = {
   {0x00e382bb, 0x00e3829a, 0x839c},	/* U+30BB+309A	 	[2000] */
   {0x00e38384, 0x00e3829a, 0x839d},	/* U+30C4+309A	 	[2000] */
   {0x00e38388, 0x00e3829a, 0x839e},	/* U+30C8+309A	 	[2000] */
-  {0x00e387b7, 0x00e3829a, 0x83f6}	/* U+31F7+309A	 	[2000] */
+  {0x00e387b7, 0x00e3829a, 0x83f6},	/* U+31F7+309A	 	[2000] */
 };

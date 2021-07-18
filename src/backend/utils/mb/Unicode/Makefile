@@ -72,7 +72,9 @@ GENERICTEXTS = $(ISO8859TEXTS) $(WINTEXTS) \
 
 all: $(MAPS)
 
-$(GENERICMAPS): UCS_to_most.pl $(GENERICTEXTS)
+$(wordlist 2, $(words $(GENERICMAPS)), $(GENERICMAPS)): $(firstword $(GENERICMAPS)) ;
+
+$(firstword $(GENERICMAPS)): UCS_to_most.pl $(GENERICTEXTS)
 	$(PERL) -I $(srcdir) $<
 
 johab_to_utf8.map utf8_to_johab.map: UCS_to_JOHAB.pl JOHAB.TXT

@@ -80,6 +80,22 @@ extern int	max_safe_fds;
 #endif
 
 /*
+ * O_DIRECT is not standard, but almost every Unix has it and we simulate it
+ * for Windows in port.h/open.c.  We simulate it with fcntl(F_NOCACHE) on macOS
+ * in fd.c, but we'll use PG_O_DIRECT for that, because it doesn't seem like a
+ * good idea to define our own arbitrary O_DIRECT macro on a Unix system -- it
+ * might confuse other code that reaches open() directly.
+ */
+#if defined(O_DIRECT)
+#define		PG_O_DIRECT O_DIRECT
+#elif defined(F_NOCACHE)
+#define		PG_O_DIRECT 0x80000000
+#define		PG_O_DIRECT_USE_F_NOCACHE
+#else
+#define		PG_O_DIRECT 0
+#endif
+
+/*
  * prototypes for functions in fd.c
  */
 

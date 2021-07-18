@@ -828,6 +828,16 @@ BETTER: unrecognized node type: 42
    </para>
   </formalpara>
 
+  <formalpara>
+    <title>non-negative</title>
+   <para>
+    Do not use <quote>non-negative</quote> word in error messages as it looks
+    ambiguous. Instead, use <quote>foo must be an integer value greater than
+    zero</quote> or <quote>foo must be an integer value greater than or equal
+    to zero</quote> if option <quote>foo</quote> expects an integer value.
+   </para>
+  </formalpara>
+
   </simplesect>
 
   <simplesect>

@@ -170,7 +170,7 @@ CreateParallelContext(const char *library_name, const char *function_name,
 	/* It is unsafe to create a parallel context if not in parallel mode. */
 	Assert(IsInParallelMode());
 
-	/* Number of workers should be non-negative. */
+	/* Number of parallel workers should be greater than zero. */
 	Assert(nworkers >= 0);
 
 	/* We might be running in a short-lived memory context. */

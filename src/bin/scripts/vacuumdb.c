@@ -203,7 +203,7 @@ main(int argc, char *argv[])
 				vacopts.parallel_workers = atoi(optarg);
 				if (vacopts.parallel_workers < 0)
 				{
-					pg_log_error("parallel workers for vacuum must be greater than or equal to zero");
+					pg_log_error("parallel workers for vacuum must be an integer value greater than or equal to zero");
 					exit(1);
 				}
 				break;

@@ -2528,6 +2528,15 @@ GetSnapshotData(Snapshot snapshot)
 								   oldestfxid);
 		/* accurate value known */
 		GlobalVisTempRels.maybe_needed = GlobalVisTempRels.definitely_needed;
+
+		/* Do basic sanity check on these XIDs */
+		Assert(FullTransactionIdPrecedesOrEquals(GlobalVisSharedRels.maybe_needed,
+												 GlobalVisSharedRels.definitely_needed));
+		Assert(FullTransactionIdPrecedesOrEquals(GlobalVisCatalogRels.maybe_needed,
+												 GlobalVisCatalogRels.definitely_needed));
+		Assert(FullTransactionIdPrecedesOrEquals(GlobalVisDataRels.maybe_needed,
+												 GlobalVisDataRels.definitely_needed));
+		/* not much point in checking GlobalVisTempRels, given the above */
 	}
 
 	RecentXmin = xmin;
@@ -4051,6 +4060,8 @@ GlobalVisTestFor(Relation rel)
 
 	Assert(FullTransactionIdIsValid(state->definitely_needed) &&
 		   FullTransactionIdIsValid(state->maybe_needed));
+	Assert(FullTransactionIdPrecedesOrEquals(state->maybe_needed,
+											 state->definitely_needed));
 
 	return state;
 }
@@ -4115,6 +4126,15 @@ GlobalVisUpdateApply(ComputeXidHorizonsResult *horizons)
 		FullTransactionIdNewer(GlobalVisDataRels.maybe_needed,
 							   GlobalVisDataRels.definitely_needed);
 	GlobalVisTempRels.definitely_needed = GlobalVisTempRels.maybe_needed;
+
+	/* Do basic sanity check on these XIDs */
+	Assert(FullTransactionIdPrecedesOrEquals(GlobalVisSharedRels.maybe_needed,
+											 GlobalVisSharedRels.definitely_needed));
+	Assert(FullTransactionIdPrecedesOrEquals(GlobalVisCatalogRels.maybe_needed,
+											 GlobalVisCatalogRels.definitely_needed));
+	Assert(FullTransactionIdPrecedesOrEquals(GlobalVisDataRels.maybe_needed,
+											 GlobalVisDataRels.definitely_needed));
+	/* not much point in checking GlobalVisTempRels, given the above */
 
 	ComputeXidHorizonsResultLastXmin = RecentXmin;
 }

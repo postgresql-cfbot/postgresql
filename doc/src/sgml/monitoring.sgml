@@ -2229,6 +2229,16 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        a sibling function.</entry>
      </row>
      <row>
+      <entry><literal>PostAuthDelay</literal></entry>
+      <entry>Waiting on connection startup after authentication to allow
+      attaching a debugger to the process.</entry>
+     </row>
+     <row>
+      <entry><literal>PreAuthDelay</literal></entry>
+      <entry>Waiting on connection startup before authentication to allow
+      attaching a debugger to the process.</entry>
+     </row>
+     <row>
       <entry><literal>RecoveryApplyDelay</literal></entry>
       <entry>Waiting to apply WAL during recovery because of a delay
        setting.</entry>

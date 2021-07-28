@@ -446,8 +446,18 @@ AutoVacLauncherMain(int argc, char *argv[])
 	ereport(DEBUG1,
 			(errmsg_internal("autovacuum launcher started")));
 
+	/* Apply PostAuthDelay */
 	if (PostAuthDelay)
-		pg_usleep(PostAuthDelay * 1000000L);
+	{
+		/*
+		 * If WL_LATCH_SET is used, PostAuthDelay may not be applied, since
+		 * MyLatch might already be set.
+		 */
+		(void) WaitLatch(MyLatch,
+						 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						 PostAuthDelay * 1000L,
+						 WAIT_EVENT_POST_AUTH_DELAY);
+	}
 
 	SetProcessingMode(InitProcessing);
 
@@ -1706,8 +1716,18 @@ AutoVacWorkerMain(int argc, char *argv[])
 		ereport(DEBUG1,
 				(errmsg_internal("autovacuum: processing database \"%s\"", dbname)));
 
+		/* Apply PostAuthDelay */
 		if (PostAuthDelay)
-			pg_usleep(PostAuthDelay * 1000000L);
+		{
+			/*
+			 * If WL_LATCH_SET is used, PostAuthDelay may not be applied,
+			 * since MyLatch might already be set.
+			 */
+			(void) WaitLatch(MyLatch,
+							 WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+							 PostAuthDelay * 1000L,
+							 WAIT_EVENT_POST_AUTH_DELAY);
+		}
 
 		/* And do an appropriate amount of work */
 		recentXid = ReadNextTransactionId();

@@ -1464,6 +1464,8 @@ addRangeTableEntry(ParseState *pstate,
 	 * appropriate.
 	 */
 	pstate->p_rtable = lappend(pstate->p_rtable, rte);
+	pstate->p_check_perm_rels = bms_add_member(pstate->p_check_perm_rels,
+										   list_length(pstate->p_rtable));
 
 	/*
 	 * Build a ParseNamespaceItem, but don't add it to the pstate's namespace
@@ -1552,6 +1554,8 @@ addRangeTableEntryForRelation(ParseState *pstate,
 	 * appropriate.
 	 */
 	pstate->p_rtable = lappend(pstate->p_rtable, rte);
+	pstate->p_check_perm_rels = bms_add_member(pstate->p_check_perm_rels,
+										   list_length(pstate->p_rtable));
 
 	/*
 	 * Build a ParseNamespaceItem, but don't add it to the pstate's namespace
@@ -1649,6 +1653,7 @@ addRangeTableEntryForSubquery(ParseState *pstate,
 	 * appropriate.
 	 */
 	pstate->p_rtable = lappend(pstate->p_rtable, rte);
+	/* No need to add this RTE's index to pstate->p_check_perm_rels. */
 
 	/*
 	 * Build a ParseNamespaceItem, but don't add it to the pstate's namespace
@@ -1955,6 +1960,7 @@ addRangeTableEntryForFunction(ParseState *pstate,
 	 * appropriate.
 	 */
 	pstate->p_rtable = lappend(pstate->p_rtable, rte);
+	/* No need to add this RTE's index to pstate->p_check_perm_rels. */
 
 	/*
 	 * Build a ParseNamespaceItem, but don't add it to the pstate's namespace
@@ -2026,6 +2032,7 @@ addRangeTableEntryForTableFunc(ParseState *pstate,
 	 * appropriate.
 	 */
 	pstate->p_rtable = lappend(pstate->p_rtable, rte);
+	/* No need to add this RTE's index to pstate->p_check_perm_rels. */
 
 	/*
 	 * Build a ParseNamespaceItem, but don't add it to the pstate's namespace
@@ -2113,6 +2120,7 @@ addRangeTableEntryForValues(ParseState *pstate,
 	 * appropriate.
 	 */
 	pstate->p_rtable = lappend(pstate->p_rtable, rte);
+	/* No need to add this RTE's index to pstate->p_check_perm_rels. */
 
 	/*
 	 * Build a ParseNamespaceItem, but don't add it to the pstate's namespace
@@ -2204,6 +2212,7 @@ addRangeTableEntryForJoin(ParseState *pstate,
 	 * appropriate.
 	 */
 	pstate->p_rtable = lappend(pstate->p_rtable, rte);
+	/* No need to add this RTE's index to pstate->p_check_perm_rels. */
 
 	/*
 	 * Build a ParseNamespaceItem, but don't add it to the pstate's namespace
@@ -2354,6 +2363,7 @@ addRangeTableEntryForCTE(ParseState *pstate,
 	 * appropriate.
 	 */
 	pstate->p_rtable = lappend(pstate->p_rtable, rte);
+	/* No need to add this RTE's index to pstate->p_check_perm_rels. */
 
 	/*
 	 * Build a ParseNamespaceItem, but don't add it to the pstate's namespace
@@ -2477,6 +2487,7 @@ addRangeTableEntryForENR(ParseState *pstate,
 	 * appropriate.
 	 */
 	pstate->p_rtable = lappend(pstate->p_rtable, rte);
+	/* No need to add this RTE's index to pstate->p_check_perm_rels. */
 
 	/*
 	 * Build a ParseNamespaceItem, but don't add it to the pstate's namespace

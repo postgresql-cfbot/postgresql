@@ -461,6 +461,8 @@ OffsetVarNodes(Node *node, int offset, int sublevels_up)
 
 				rc->rti += offset;
 			}
+
+			qry->checkPermRels = offset_relid_set(qry->checkPermRels, offset);
 		}
 		query_tree_walker(qry, OffsetVarNodes_walker,
 						  (void *) &context, 0);

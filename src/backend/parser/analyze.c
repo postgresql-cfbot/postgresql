@@ -475,6 +475,7 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 
 	/* done building the range table and jointree */
 	qry->rtable = pstate->p_rtable;
+	qry->checkPermRels= pstate->p_check_perm_rels;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, qual);
 
 	qry->hasSubLinks = pstate->p_hasSubLinks;
@@ -895,6 +896,7 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 
 	/* done building the range table and jointree */
 	qry->rtable = pstate->p_rtable;
+	qry->checkPermRels= pstate->p_check_perm_rels;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
@@ -1348,6 +1350,7 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 		resolveTargetListUnknowns(pstate, qry->targetList);
 
 	qry->rtable = pstate->p_rtable;
+	qry->checkPermRels= pstate->p_check_perm_rels;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, qual);
 
 	qry->hasSubLinks = pstate->p_hasSubLinks;
@@ -1582,6 +1585,7 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 									  linitial(stmt->lockingClause))->strength))));
 
 	qry->rtable = pstate->p_rtable;
+	qry->checkPermRels= pstate->p_check_perm_rels;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
 
 	qry->hasSubLinks = pstate->p_hasSubLinks;
@@ -1828,6 +1832,7 @@ transformSetOperationStmt(ParseState *pstate, SelectStmt *stmt)
 	qry->limitOption = stmt->limitOption;
 
 	qry->rtable = pstate->p_rtable;
+	qry->checkPermRels= pstate->p_check_perm_rels;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
 
 	qry->hasSubLinks = pstate->p_hasSubLinks;
@@ -2286,6 +2291,7 @@ transformReturnStmt(ParseState *pstate, ReturnStmt *stmt)
 	if (pstate->p_resolve_unknowns)
 		resolveTargetListUnknowns(pstate, qry->targetList);
 	qry->rtable = pstate->p_rtable;
+	qry->checkPermRels= pstate->p_check_perm_rels;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
 	qry->hasSubLinks = pstate->p_hasSubLinks;
 	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
@@ -2352,6 +2358,7 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 	qry->targetList = transformUpdateTargetList(pstate, stmt->targetList);
 
 	qry->rtable = pstate->p_rtable;
+	qry->checkPermRels= pstate->p_check_perm_rels;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, qual);
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
@@ -2711,6 +2718,7 @@ transformPLAssignStmt(ParseState *pstate, PLAssignStmt *stmt)
 												   &qry->targetList);
 
 	qry->rtable = pstate->p_rtable;
+	qry->checkPermRels= pstate->p_check_perm_rels;
 	qry->jointree = makeFromExpr(pstate->p_joinlist, qual);
 
 	qry->hasSubLinks = pstate->p_hasSubLinks;

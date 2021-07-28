@@ -360,6 +360,8 @@ add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing)
 
 			if (rel != NULL)
 			{
+				int		rtoff = list_length(glob->finalrtable);
+
 				Assert(rel->relid == rti);	/* sanity check on array */
 
 				/*
@@ -387,6 +389,16 @@ add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing)
 						 IS_DUMMY_REL(fetch_upper_rel(rel->subroot,
 													  UPPERREL_FINAL, NULL)))
 					add_rtes_to_flat_rtable(rel->subroot, true);
+
+				/*
+				 * Pull up the checkPermRels set of subqueries that themselves
+				 * were not.
+				 */
+				Assert(rte->subquery != NULL);
+				root->parse->checkPermRels =
+					bms_union(root->parse->checkPermRels,
+							  offset_relid_set(rte->subquery->checkPermRels,
+											   rtoff));
 			}
 		}
 		rti++;

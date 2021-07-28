@@ -1131,6 +1131,8 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	 */
 	parse->rtable = list_concat(parse->rtable, subquery->rtable);
 
+	parse->checkPermRels = bms_union(parse->checkPermRels, subquery->checkPermRels);
+
 	/*
 	 * Pull up any FOR UPDATE/SHARE markers, too.  (OffsetVarNodes already
 	 * adjusted the marker rtindexes, so just concat the lists.)

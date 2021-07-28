@@ -266,6 +266,7 @@ _readQuery(void)
 	READ_BOOL_FIELD(isReturn);
 	READ_NODE_FIELD(cteList);
 	READ_NODE_FIELD(rtable);
+	READ_BITMAPSET_FIELD(checkPermRels);
 	READ_NODE_FIELD(jointree);
 	READ_NODE_FIELD(targetList);
 	READ_ENUM_FIELD(override, OverridingKind);
@@ -1590,6 +1591,7 @@ _readPlannedStmt(void)
 	READ_INT_FIELD(jitFlags);
 	READ_NODE_FIELD(planTree);
 	READ_NODE_FIELD(rtable);
+	READ_BITMAPSET_FIELD(checkPermRels);
 	READ_NODE_FIELD(resultRelations);
 	READ_NODE_FIELD(appendRelations);
 	READ_NODE_FIELD(subplans);

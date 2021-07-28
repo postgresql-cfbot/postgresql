@@ -196,7 +196,8 @@ extern void standard_ExecutorFinish(QueryDesc *queryDesc);
 extern void ExecutorEnd(QueryDesc *queryDesc);
 extern void standard_ExecutorEnd(QueryDesc *queryDesc);
 extern void ExecutorRewind(QueryDesc *queryDesc);
-extern bool ExecCheckRTPerms(List *rangeTable, bool ereport_on_violation);
+extern bool ExecCheckRTPerms(List *rangeTable, Bitmapset *checkPermRels,
+				 bool ereport_on_violation);
 extern void CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation);
 extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 							  Relation resultRelationDesc,

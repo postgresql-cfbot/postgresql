@@ -65,6 +65,9 @@ typedef struct PlannedStmt
 
 	List	   *rtable;			/* list of RangeTblEntry nodes */
 
+	Bitmapset  *checkPermRels;	/* range table indexes of relations to check
+								 * the permissions of */
+
 	/* rtable indexes of target relations for INSERT/UPDATE/DELETE */
 	List	   *resultRelations;	/* integer list of RT indexes, or NIL */
 

@@ -420,6 +420,8 @@ rewriteRuleAction(Query *parsetree,
 	 */
 	sub_action->rtable = list_concat(copyObject(parsetree->rtable),
 									 sub_action->rtable);
+	sub_action->checkPermRels = bms_union(parsetree->checkPermRels,
+									   sub_action->checkPermRels);
 
 	/*
 	 * There could have been some SubLinks in parsetree's rtable, in which
@@ -1720,6 +1722,9 @@ ApplyRetrieveRule(Query *parsetree,
 			rte = rt_fetch(rt_index, parsetree->rtable);
 			newrte = copyObject(rte);
 			parsetree->rtable = lappend(parsetree->rtable, newrte);
+			parsetree->checkPermRels =
+				bms_add_member(parsetree->checkPermRels,
+							   list_length(parsetree->rtable));
 			parsetree->resultRelation = list_length(parsetree->rtable);
 
 			/*
@@ -1841,6 +1846,11 @@ ApplyRetrieveRule(Query *parsetree,
 	rte->insertedCols = NULL;
 	rte->updatedCols = NULL;
 	rte->extraUpdatedCols = NULL;
+
+	/* Update checkPermRels set in the respective Query nodes. */
+	parsetree->checkPermRels = bms_del_member(parsetree->checkPermRels, rt_index);
+	rule_action->checkPermRels = bms_add_member(rule_action->checkPermRels,
+											 PRS2_OLD_VARNO);
 
 	return parsetree;
 }
@@ -3195,6 +3205,8 @@ rewriteTargetView(Query *parsetree, Relation view)
 
 	parsetree->rtable = lappend(parsetree->rtable, new_rte);
 	new_rt_index = list_length(parsetree->rtable);
+	parsetree->checkPermRels = bms_add_member(parsetree->checkPermRels,
+										   new_rt_index);
 
 	/*
 	 * INSERTs never inherit.  For UPDATE/DELETE, we use the view query's

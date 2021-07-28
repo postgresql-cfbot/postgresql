@@ -553,7 +553,7 @@ ExecutorRewind(QueryDesc *queryDesc)
 
 /*
  * ExecCheckRTPerms
- *		Check access permissions for all relations listed in a range table.
+ *		Check access permissions for the specified relations in a range table.
  *
  * Returns true if permissions are adequate.  Otherwise, throws an appropriate
  * error if ereport_on_violation is true, or simply returns false otherwise.
@@ -565,14 +565,16 @@ ExecutorRewind(QueryDesc *queryDesc)
  * See rewrite/rowsecurity.c.
  */
 bool
-ExecCheckRTPerms(List *rangeTable, bool ereport_on_violation)
+ExecCheckRTPerms(List *rangeTable, Bitmapset *checkPermRels,
+				 bool ereport_on_violation)
 {
-	ListCell   *l;
+	int			rti;
 	bool		result = true;
 
-	foreach(l, rangeTable)
+	rti = -1;
+	while ((rti = bms_next_member(checkPermRels, rti)) > 0)
 	{
-		RangeTblEntry *rte = (RangeTblEntry *) lfirst(l);
+		RangeTblEntry *rte = (RangeTblEntry *) list_nth(rangeTable, rti - 1);
 
 		result = ExecCheckRTEPerms(rte);
 		if (!result)
@@ -815,7 +817,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	/*
 	 * Do permissions checks
 	 */
-	ExecCheckRTPerms(rangeTable, true);
+	ExecCheckRTPerms(rangeTable, plannedstmt->checkPermRels, true);
 
 	/*
 	 * initialize the node's execution state

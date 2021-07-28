@@ -308,6 +308,7 @@ _outPlannedStmt(StringInfo str, const PlannedStmt *node)
 	WRITE_INT_FIELD(jitFlags);
 	WRITE_NODE_FIELD(planTree);
 	WRITE_NODE_FIELD(rtable);
+	WRITE_BITMAPSET_FIELD(checkPermRels);
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_NODE_FIELD(appendRelations);
 	WRITE_NODE_FIELD(subplans);
@@ -3072,6 +3073,7 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_BOOL_FIELD(isReturn);
 	WRITE_NODE_FIELD(cteList);
 	WRITE_NODE_FIELD(rtable);
+	WRITE_BITMAPSET_FIELD(checkPermRels);
 	WRITE_NODE_FIELD(jointree);
 	WRITE_NODE_FIELD(targetList);
 	WRITE_ENUM_FIELD(override, OverridingKind);

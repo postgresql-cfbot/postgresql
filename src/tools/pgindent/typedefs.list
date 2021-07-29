@@ -2846,6 +2846,7 @@ WaitEventIPC
 WaitEventSet
 WaitEventTimeout
 WaitPMResult
+WaitState
 WalCloseMethod
 WalCompression
 WalLevel

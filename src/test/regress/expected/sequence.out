@@ -308,6 +308,23 @@ DROP SEQUENCE t1_f1_seq;
 ERROR:  sequence "t1_f1_seq" does not exist
 -- Now OK:
 DROP SEQUENCE myseq2;
+-- Interactions between START and RESTART at creation
+CREATE SEQUENCE test_seq2 START 150 RESTART 200;
+SELECT nextval('test_seq2'); -- 200, per RESTART
+ nextval 
+---------
+     200
+(1 row)
+
+DROP SEQUENCE test_seq2;
+CREATE SEQUENCE test_seq2 START 50 RESTART;
+SELECT nextval('test_seq2'); -- 50, per new START value
+ nextval 
+---------
+      50
+(1 row)
+
+DROP SEQUENCE test_seq2;
 --
 -- Alter sequence
 --

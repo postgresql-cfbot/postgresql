@@ -167,6 +167,14 @@ DROP SEQUENCE t1_f1_seq;
 -- Now OK:
 DROP SEQUENCE myseq2;
 
+-- Interactions between START and RESTART at creation
+CREATE SEQUENCE test_seq2 START 150 RESTART 200;
+SELECT nextval('test_seq2'); -- 200, per RESTART
+DROP SEQUENCE test_seq2;
+CREATE SEQUENCE test_seq2 START 50 RESTART;
+SELECT nextval('test_seq2'); -- 50, per new START value
+DROP SEQUENCE test_seq2;
+
 --
 -- Alter sequence
 --

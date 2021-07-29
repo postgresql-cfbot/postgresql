@@ -25,7 +25,9 @@ CREATE [ TEMPORARY | TEMP ] SEQUENCE [ IF NOT EXISTS ] <replaceable class="param
     [ AS <replaceable class="parameter">data_type</replaceable> ]
     [ INCREMENT [ BY ] <replaceable class="parameter">increment</replaceable> ]
     [ MINVALUE <replaceable class="parameter">minvalue</replaceable> | NO MINVALUE ] [ MAXVALUE <replaceable class="parameter">maxvalue</replaceable> | NO MAXVALUE ]
-    [ START [ WITH ] <replaceable class="parameter">start</replaceable> ] [ CACHE <replaceable class="parameter">cache</replaceable> ] [ [ NO ] CYCLE ]
+    [ START [ WITH ] <replaceable class="parameter">start</replaceable> ]
+    [ RESTART [ [ WITH ] <replaceable class="parameter">restart</replaceable> ] ]
+    [ CACHE <replaceable class="parameter">cache</replaceable> ] [ [ NO ] CYCLE ]
     [ OWNED BY { <replaceable class="parameter">table_name</replaceable>.<replaceable class="parameter">column_name</replaceable> | NONE } ]
 </synopsis>
  </refsynopsisdiv>
@@ -181,6 +183,22 @@ SELECT * FROM <replaceable>name</replaceable>;
       <replaceable class="parameter">minvalue</replaceable> for
       ascending sequences and <replaceable
       class="parameter">maxvalue</replaceable> for descending ones.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">restart</replaceable></term>
+    <listitem>
+     <para>
+      The optional clause <literal>RESTART [ WITH <replaceable
+      class="parameter">restart</replaceable> ]</literal> changes the
+      start value of the sequence. When specified alongside
+      <literal>START</literal>, the value specified with
+      <literal>RESTART WITH</literal> takes priority.  If
+      <literal>RESTART</literal> is specified without a value, the
+      start value of the sequence is the one defined by
+      <literal>START</literal>.  
      </para>
     </listitem>
    </varlistentry>

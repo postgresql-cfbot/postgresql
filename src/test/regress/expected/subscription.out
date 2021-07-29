@@ -286,6 +286,28 @@ ERROR:  unrecognized subscription parameter: "two_phase"
 ALTER SUBSCRIPTION regress_testsub SET (streaming = true);
 ERROR:  cannot set streaming = true for two-phase enabled subscription
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
+-- it works
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 3);
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = '4294967295');
+ALTER SUBSCRIPTION regress_testsub RESET (skip_xid, synchronous_commit, binary, streaming);
+ALTER SUBSCRIPTION regress_testsub RESET (skip_xid);
+-- fail - invalid XID
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 1.1);
+ERROR:  invalid transaction id
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 0);
+ERROR:  invalid transaction id
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 1);
+ERROR:  invalid transaction id
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 2);
+ERROR:  invalid transaction id
+-- fail - unsupported parameters
+ALTER SUBSCRIPTION regress_testsub RESET (connect);
+ERROR:  unrecognized subscription parameter: "connect"
+ALTER SUBSCRIPTION regress_testsub RESET (enabled);
+ERROR:  unrecognized subscription parameter: "enabled"
+-- fail - RESET must not include values
+ALTER SUBSCRIPTION regress_testsub RESET (synchronous_commit = off);
+ERROR:  RESET must not include values for parameters
 \dRs+
                                                                      List of subscriptions
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two phase commit | Synchronous commit |          Conninfo           

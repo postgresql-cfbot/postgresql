@@ -22,6 +22,7 @@
 #include "catalog/genbki.h"
 #include "catalog/pg_subscription_rel_d.h"
 #include "nodes/pg_list.h"
+#include "utils/hsearch.h"
 
 /* ----------------
  *		pg_subscription_rel definition. cpp turns this into
@@ -89,6 +90,6 @@ extern void RemoveSubscriptionRel(Oid subid, Oid relid);
 
 extern bool HasSubscriptionRelations(Oid subid);
 extern List *GetSubscriptionRelations(Oid subid);
-extern List *GetSubscriptionNotReadyRelations(Oid subid);
+extern HTAB *GetSubscriptionNotReadyRelations(Oid subid);
 
 #endif							/* PG_SUBSCRIPTION_REL_H */

@@ -41,6 +41,8 @@
 #include "catalog/partition.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_subscription.h"
+#include "catalog/pg_subscription_rel.h"
 #include "common/ip.h"
 #include "executor/instrument.h"
 #include "libpq/libpq.h"
@@ -106,6 +108,7 @@
 #define PGSTAT_TAB_HASH_SIZE	512
 #define PGSTAT_FUNCTION_HASH_SIZE	512
 #define PGSTAT_REPLSLOT_HASH_SIZE	32
+#define PGSTAT_SUBSCRIPTION_ERR_HASH_SIZE	32
 
 
 /* ----------
@@ -279,6 +282,7 @@ static PgStat_GlobalStats globalStats;
 static PgStat_WalStats walStats;
 static PgStat_SLRUStats slruStats[SLRU_NUM_ELEMENTS];
 static HTAB *replSlotStatHash = NULL;
+static HTAB *subscriptionErrHash = NULL;
 
 /*
  * List of OIDs of databases we need to write out.  If an entry is InvalidOid,
@@ -320,6 +324,12 @@ static bool pgstat_db_requested(Oid databaseid);
 static PgStat_StatReplSlotEntry *pgstat_get_replslot_entry(NameData name, bool create_it);
 static void pgstat_reset_replslot(PgStat_StatReplSlotEntry *slotstats, TimestampTz ts);
 
+static PgStat_StatSubErrEntry *pgstat_get_subscription_error_entry(Oid subid,
+																   bool create);
+static PgStat_StatSubRelErrEntry *pgstat_get_subscription_rel_error_entry(Oid subid,
+																		  Oid subrelid,
+																		  bool create);
+
 static void pgstat_send_tabstat(PgStat_MsgTabstat *tsmsg);
 static void pgstat_send_funcstats(void);
 static void pgstat_send_slru(void);
@@ -358,6 +368,10 @@ static void pgstat_recv_checksum_failure(PgStat_MsgChecksumFailure *msg, int len
 static void pgstat_recv_connstat(PgStat_MsgConn *msg, int len);
 static void pgstat_recv_replslot(PgStat_MsgReplSlot *msg, int len);
 static void pgstat_recv_tempfile(PgStat_MsgTempFile *msg, int len);
+static void pgstat_recv_subscription_error(PgStat_MsgSubscriptionErr *msg, int len);
+static void pgstat_recv_subscription_error_purge(PgStat_MsgSubscriptionErrPurge *msg,
+												 int len);
+static void pgstat_recv_subscription_purge(PgStat_MsgSubscriptionPurge *msg, int len);
 
 /* ------------------------------------------------------------
  * Public functions called from postmaster follow
@@ -1135,6 +1149,133 @@ pgstat_vacuum_stat(void)
 	}
 
 	/*
+	 * Search for all the dead subscriptions and error entries in stats
+	 * hashtable and tell the stats collector to drop them.
+	 */
+	if (subscriptionErrHash)
+	{
+		PgStat_MsgSubscriptionPurge submsg;
+		PgStat_StatSubErrEntry *suberrent;
+		HTAB	   *htab;
+
+		htab = pgstat_collect_oids(SubscriptionRelationId, Anum_pg_subscription_oid);
+
+		submsg.m_nentries = 0;
+
+		hash_seq_init(&hstat, subscriptionErrHash);
+		while ((suberrent = (PgStat_StatSubErrEntry *) hash_seq_search(&hstat)) != NULL)
+		{
+			PgStat_MsgSubscriptionErrPurge errmsg;
+			PgStat_StatSubRelErrEntry *relerrent;
+			HASH_SEQ_STATUS hstat_rel;
+			HTAB	   *rstates;
+
+			CHECK_FOR_INTERRUPTS();
+
+			if (hash_search(htab, (void *) &(suberrent->subid), HASH_FIND, NULL) == NULL)
+			{
+				/* This subscription is dead, add subid to the message */
+				submsg.m_subids[submsg.m_nentries++] = suberrent->subid;
+
+				/*
+				 * If the message is full, send it out and reinitialize to
+				 * empty
+				 */
+				if (submsg.m_nentries >= PGSTAT_NUM_SUBSCRIPTIONPURGE)
+				{
+					len = offsetof(PgStat_MsgSubscriptionPurge, m_subids[0])
+						+ submsg.m_nentries * sizeof(Oid);
+
+					pgstat_setheader(&submsg.m_hdr, PGSTAT_MTYPE_SUBSCRIPTIONPURGE);
+					pgstat_send(&submsg, len);
+					submsg.m_nentries = 0;
+				}
+
+				continue;
+			}
+
+			/*
+			 * Nothing to do here if the subscription exists but has no error
+			 * entries.
+			 */
+			if (suberrent->suberrors == NULL)
+				continue;
+
+			/*
+			 * The subscription has error entries. We search errors of the
+			 * table sync workers who are already in sync state.  Those errors
+			 * should be removed.
+			 *
+			 * Note that the lifetime of error entries of the apply worker and
+			 * the table sync worker are different.  The former lives until
+			 * the subscription is dropped whereas the latter lives the table
+			 * synchronization is completed.
+			 */
+			rstates = GetSubscriptionNotReadyRelations(suberrent->subid);
+
+			errmsg.m_nentries = 0;
+			errmsg.m_subid = suberrent->subid;
+
+			hash_seq_init(&hstat_rel, suberrent->suberrors);
+			while ((relerrent = (PgStat_StatSubRelErrEntry *) hash_seq_search(&hstat_rel)) != NULL)
+			{
+				CHECK_FOR_INTERRUPTS();
+
+				/* Skip the apply worker's error */
+				if (!OidIsValid(relerrent->subrelid))
+					continue;
+
+				/*
+				 * Add the relid to the message if the table synchronization
+				 * for this relation already complete or the table is no
+				 * longer subscribed.
+				 */
+				if (hash_search(rstates, (void *) &(relerrent->subrelid), HASH_FIND, NULL) == NULL)
+					errmsg.m_relids[errmsg.m_nentries++] = relerrent->subrelid;
+
+				/*
+				 * If the message is full, send it out and reinitialize to
+				 * empty
+				 */
+				if (errmsg.m_nentries >= PGSTAT_NUM_SUBSCRIPTIONERRPURGE)
+				{
+					len = offsetof(PgStat_MsgSubscriptionErrPurge, m_relids[0])
+						+ errmsg.m_nentries * sizeof(Oid);
+
+					pgstat_setheader(&errmsg.m_hdr, PGSTAT_MTYPE_SUBSCRIPTIONERRPURGE);
+					pgstat_send(&errmsg, len);
+					errmsg.m_nentries = 0;
+				}
+			}
+
+			/* Send the rest of dead error entries */
+			if (errmsg.m_nentries > 0)
+			{
+				len = offsetof(PgStat_MsgSubscriptionErrPurge, m_relids[0])
+					+ errmsg.m_nentries * sizeof(Oid);
+
+				pgstat_setheader(&errmsg.m_hdr, PGSTAT_MTYPE_SUBSCRIPTIONERRPURGE);
+				pgstat_send(&errmsg, len);
+				errmsg.m_nentries = 0;
+			}
+
+			hash_destroy(rstates);
+		}
+
+		/* Send the rest of dead subscriptions */
+		if (submsg.m_nentries > 0)
+		{
+			len = offsetof(PgStat_MsgSubscriptionPurge, m_subids[0])
+				+ submsg.m_nentries * sizeof(Oid);
+
+			pgstat_setheader(&submsg.m_hdr, PGSTAT_MTYPE_SUBSCRIPTIONPURGE);
+			pgstat_send(&submsg, len);
+		}
+
+		hash_destroy(htab);
+	}
+
+	/*
 	 * Lookup our own database entry; if not found, nothing more to do.
 	 */
 	dbentry = (PgStat_StatDBEntry *) hash_search(pgStatDBHash,
@@ -1544,6 +1685,46 @@ pgstat_reset_replslot_counter(const char *name)
 }
 
 /* ----------
+ * pgstat_reset_subscription_error() -
+ *
+ *	Tell the collector about reset the error of subscription.
+ * ----------
+ */
+void
+pgstat_reset_subscription_error(Oid subid, Oid subrelid)
+{
+	PgStat_MsgSubscriptionErr msg;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_SUBSCRIPTIONERR);
+	msg.m_subid = subid;
+	msg.m_subrelid = subrelid;
+	msg.m_reset = true;
+	msg.m_clear = true;
+
+	pgstat_send(&msg, offsetof(PgStat_MsgSubscriptionErr, m_reset) + sizeof(bool));
+}
+
+/* ----------
+ * pgstat_clear_subscription_error() -
+ *
+ *	Tell the collector about clear the error of subscription.
+ * ----------
+ */
+void
+pgstat_clear_subscription_error(Oid subid, Oid subrelid)
+{
+	PgStat_MsgSubscriptionErr msg;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_SUBSCRIPTIONERR);
+	msg.m_subid = subid;
+	msg.m_subrelid = subrelid;
+	msg.m_reset = false;
+	msg.m_clear = true;
+
+	pgstat_send(&msg, offsetof(PgStat_MsgSubscriptionErr, m_reset) + sizeof(bool));
+}
+
+/* ----------
  * pgstat_report_autovac() -
  *
  *	Called from autovacuum.c to report startup of an autovacuum process.
@@ -1861,6 +2042,38 @@ pgstat_report_replslot_drop(const char *slotname)
 	msg.m_create = false;
 	msg.m_drop = true;
 	pgstat_send(&msg, sizeof(PgStat_MsgReplSlot));
+}
+
+/* ----------
+ * pgstat_report_subscription_error() -
+ *
+ *	Tell the collector about error of subscription.
+ * ----------
+ */
+void
+pgstat_report_subscription_error(Oid subid, Oid subrelid, Oid relid,
+								 LogicalRepMsgType command, TransactionId xid,
+								 const char *errmsg)
+{
+	PgStat_MsgSubscriptionErr msg;
+	int			len;
+
+	len = offsetof(PgStat_MsgSubscriptionErr, m_errmsg[0]) + strlen(errmsg);
+	Assert(len < PGSTAT_MAX_MSG_SIZE);
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_SUBSCRIPTIONERR);
+	msg.m_subid = subid;
+	msg.m_subrelid = subrelid;
+	msg.m_databaseid = MyDatabaseId;
+	msg.m_relid = relid;
+	msg.m_reset = false;
+	msg.m_clear = false;
+	msg.m_command = command;
+	msg.m_xid = xid;
+	msg.m_last_failure = GetCurrentTimestamp();
+	strlcpy(msg.m_errmsg, errmsg, PGSTAT_SUBSCRIPTIONERR_MSGLEN);
+
+	pgstat_send(&msg, len);
 }
 
 /* ----------
@@ -2896,6 +3109,38 @@ pgstat_fetch_replslot(NameData slotname)
 }
 
 /*
+ * ---------
+ * pgstat_fetch_subscription_error() -
+ *
+ *	Support function for the SQL-callable pgstat* functions. Returns
+ *	a pointer to the subscription errors struct.
+ * ---------
+ */
+PgStat_StatSubErrEntry *
+pgstat_fetch_subscription_error(Oid subid)
+{
+	backend_read_statsfile();
+
+	return pgstat_get_subscription_error_entry(subid, false);
+}
+
+/*
+ * ---------
+ * pgstat_fetch_subscription_rel_error() -
+ *
+ *	Support function for the SQL-callable pgstat* functions. Returns
+ *	a pointer to the subscription error struct.
+ * ---------
+ */
+PgStat_StatSubRelErrEntry *
+pgstat_fetch_subscription_rel_error(Oid subid, Oid relid)
+{
+	backend_read_statsfile();
+
+	return pgstat_get_subscription_rel_error_entry(subid, relid, false);
+}
+
+/*
  * Shut down a single backend's statistics reporting at process exit.
  *
  * Flush any remaining statistics counts out to the collector.
@@ -3424,6 +3669,19 @@ PgstatCollectorMain(int argc, char *argv[])
 					pgstat_recv_connstat(&msg.msg_conn, len);
 					break;
 
+				case PGSTAT_MTYPE_SUBSCRIPTIONERR:
+					pgstat_recv_subscription_error(&msg.msg_subscriptionerr, len);
+					break;
+
+				case PGSTAT_MTYPE_SUBSCRIPTIONERRPURGE:
+					pgstat_recv_subscription_error_purge(&msg.msg_subscriptionerrpurge,
+														 len);
+					break;
+
+				case PGSTAT_MTYPE_SUBSCRIPTIONPURGE:
+					pgstat_recv_subscription_purge(&msg.msg_subscriptionpurge, len);
+					break;
+
 				default:
 					break;
 			}
@@ -3722,6 +3980,50 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 			fputc('R', fpout);
 			rc = fwrite(slotent, sizeof(PgStat_StatReplSlotEntry), 1, fpout);
 			(void) rc;			/* we'll check for error with ferror */
+		}
+	}
+
+	/*
+	 * Write subscription error structs
+	 */
+	if (subscriptionErrHash)
+	{
+		PgStat_StatSubErrEntry *suberrent;
+
+		hash_seq_init(&hstat, subscriptionErrHash);
+		while ((suberrent = (PgStat_StatSubErrEntry *) hash_seq_search(&hstat)) != NULL)
+		{
+			PgStat_StatSubRelErrEntry *relerrent;
+			HASH_SEQ_STATUS relhstat;
+			long		nrels = hash_get_num_entries(suberrent->suberrors);
+
+			/* Skip this subscription if not have any errors */
+			if (suberrent->suberrors == NULL)
+				continue;
+
+			fputc('S', fpout);
+			rc = fwrite(suberrent, sizeof(PgStat_StatSubErrEntry), 1, fpout);
+			(void) rc;			/* we'll check for error with ferror */
+
+			/* The number of errors follows */
+			rc = fwrite(&nrels, sizeof(long), 1, fpout);
+			(void) rc;			/* we'll check for error with ferror */
+
+			/* Then, the error entries follow */
+			hash_seq_init(&relhstat, suberrent->suberrors);
+			while ((relerrent = (PgStat_StatSubRelErrEntry *) hash_seq_search(&relhstat)) != NULL)
+			{
+				/*
+				 * XXX we write the whole PgStat_StatSubRelErrEntry entry that
+				 * contains the fixed-legnth error message string which is
+				 * PGSTAT_SUBSCRIPTIONERR_MSGLEN in length, making the stats
+				 * file bloat.  We don't expect we have many error entries but
+				 * if the expectation became false we should write the string
+				 * and its length instead.
+				 */
+				rc = fwrite(relerrent, sizeof(PgStat_StatSubRelErrEntry), 1, fpout);
+				(void) rc;		/* we'll check for error with ferror */
+			}
 		}
 	}
 
@@ -4184,6 +4486,99 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 					break;
 				}
 
+				/*
+				 * 'S'	A PgStat_StatSubErrEntry struct followed by the number
+				 * of errors and PgStat_StatSubRelErrEntry structs, describing
+				 * subscription errors.
+				 */
+			case 'S':
+				{
+					PgStat_StatSubErrEntry suberrbuf;
+					PgStat_StatSubErrEntry *suberrent;
+					long		nerrors;
+
+					/* Read the subscription entry */
+					if (fread(&suberrbuf, 1, sizeof(PgStat_StatSubErrEntry), fpin) !=
+						sizeof(PgStat_StatSubErrEntry))
+					{
+						ereport(pgStatRunningInCollector ? LOG : WARNING,
+								(errmsg("corrupted statistics file \"%s\"",
+										statfile)));
+						goto done;
+					}
+
+					/* Create hash table if we don't have it already. */
+					if (subscriptionErrHash == NULL)
+					{
+						HASHCTL		hash_ctl;
+
+						hash_ctl.keysize = sizeof(Oid);
+						hash_ctl.entrysize = sizeof(PgStat_StatSubErrEntry);
+						hash_ctl.hcxt = pgStatLocalContext;
+						subscriptionErrHash = hash_create("Subscription error hash",
+														  PGSTAT_SUBSCRIPTION_ERR_HASH_SIZE,
+														  &hash_ctl,
+														  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+					}
+
+					/* Enter the subscription error entry */
+					suberrent =
+						(PgStat_StatSubErrEntry *) hash_search(subscriptionErrHash,
+															   (void *) &(suberrbuf.subid),
+															   HASH_ENTER, NULL);
+					suberrent->suberrors = NULL;
+
+					/* Read the number of errors in the subscription */
+					if (fread(&nerrors, 1, sizeof(long), fpin) != sizeof(long))
+					{
+						ereport(pgStatRunningInCollector ? LOG : WARNING,
+								(errmsg("corrupted statistics file \"%s\"",
+										statfile)));
+						goto done;
+					}
+
+					for (int i = 0; i < nerrors; i++)
+					{
+						PgStat_StatSubRelErrEntry *subrelent;
+						PgStat_StatSubRelErrEntry subrelbuf;
+
+						if (fread(&subrelbuf, 1, sizeof(PgStat_StatSubRelErrEntry), fpin) !=
+							sizeof(PgStat_StatSubRelErrEntry))
+						{
+							ereport(pgStatRunningInCollector ? LOG : WARNING,
+									(errmsg("corrupted statistics file \"%s\"",
+											statfile)));
+							goto done;
+						}
+
+						if (suberrent->suberrors == NULL)
+						{
+							HASHCTL		hash_ctl;
+
+							hash_ctl.keysize = sizeof(Oid);
+							hash_ctl.entrysize = sizeof(PgStat_StatSubRelErrEntry);
+							hash_ctl.hcxt = pgStatLocalContext;
+							suberrent->suberrors = hash_create("Subscription relation error hash",
+															   PGSTAT_SUBSCRIPTION_ERR_HASH_SIZE,
+															   &hash_ctl,
+															   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+						}
+
+						/*
+						 * Enter the error information to the subscription
+						 * hash
+						 */
+						subrelent =
+							(PgStat_StatSubRelErrEntry *) hash_search(suberrent->suberrors,
+																	  (void *) &(subrelbuf.subrelid),
+																	  HASH_ENTER, NULL);
+
+						memcpy(subrelent, &subrelbuf, sizeof(PgStat_StatSubRelErrEntry));
+					}
+
+					break;
+				}
+
 			case 'E':
 				goto done;
 
@@ -4526,6 +4921,50 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 				}
 				break;
 
+				/*
+				 * 'S'	A PgStat_StatSubErrEntry struct followed by the number
+				 * of errors and PgStat_StatSubRelErrEntry structs describing
+				 * a subscription errors.
+				 */
+			case 'S':
+				{
+					PgStat_StatSubErrEntry mySubErrs;
+					PgStat_StatSubRelErrEntry subrelbuf;
+					long		nrels;
+
+					if (fread(&mySubErrs, 1, sizeof(PgStat_StatSubErrEntry), fpin)
+						!= sizeof(PgStat_StatSubErrEntry))
+					{
+						ereport(pgStatRunningInCollector ? LOG : WARNING,
+								(errmsg("corrupted statistics file \"%s\"",
+										statfile)));
+						FreeFile(fpin);
+						return false;
+					}
+
+					if (fread(&nrels, 1, sizeof(long), fpin) != sizeof(long))
+					{
+						ereport(pgStatRunningInCollector ? LOG : WARNING,
+								(errmsg("corrupted statistics file \"%s\"",
+										statfile)));
+						goto done;
+					}
+
+					for (int i = 0; i < nrels; i++)
+					{
+						if (fread(&subrelbuf, 1, sizeof(PgStat_StatSubRelErrEntry), fpin) !=
+							sizeof(PgStat_StatSubRelErrEntry))
+						{
+							ereport(pgStatRunningInCollector ? LOG : WARNING,
+									(errmsg("corrupted statistics file \"%s\"",
+											statfile)));
+							goto done;
+						}
+					}
+				}
+
+				break;
+
 			case 'E':
 				goto done;
 
@@ -4716,6 +5155,7 @@ pgstat_clear_snapshot(void)
 	pgStatLocalContext = NULL;
 	pgStatDBHash = NULL;
 	replSlotStatHash = NULL;
+	subscriptionErrHash = NULL;
 
 	/*
 	 * Historically the backend_status.c facilities lived in this file, and
@@ -5651,6 +6091,133 @@ pgstat_recv_funcpurge(PgStat_MsgFuncpurge *msg, int len)
 }
 
 /* ----------
+ * pgstat_recv_subscription_error() -
+ *
+ *	Process a SUBSCRIPTIONERR message.
+ * ----------
+ */
+static void
+pgstat_recv_subscription_error(PgStat_MsgSubscriptionErr *msg, int len)
+{
+	PgStat_StatSubRelErrEntry *relerrent;
+	bool create = !(msg->m_reset || msg->m_clear);
+
+	/* Get subscription error */
+	relerrent = pgstat_get_subscription_rel_error_entry(msg->m_subid,
+														msg->m_subrelid,
+														create);
+
+	if (msg->m_reset || msg->m_clear)
+	{
+		Assert(!(msg->m_reset && msg->m_clear));
+
+		if (relerrent)
+			return;
+
+		/* reset fields */
+		relerrent->relid = InvalidOid;
+		relerrent->command = 0;
+		relerrent->xid = InvalidTransactionId;
+		relerrent->failure_count = 0;
+		relerrent->last_failure = 0;
+		relerrent->errmsg[0] = '\0';
+
+		/*
+		 * If the reset is requested, reset more fields and set the reset
+		 * timestamp.
+		 */
+		if (msg->m_reset)
+		{
+			relerrent->failure_count = 0;
+			relerrent->stat_reset_timestamp = GetCurrentTimestamp();
+		}
+	}
+	else
+	{
+		Assert(relerrent);
+
+		/* update the error entry */
+		relerrent->databaseid = msg->m_databaseid;
+		relerrent->relid = msg->m_relid;
+		relerrent->command = msg->m_command;
+		relerrent->xid = msg->m_xid;
+		relerrent->failure_count++;
+		relerrent->last_failure = msg->m_last_failure;
+		strlcpy(relerrent->errmsg, msg->m_errmsg, PGSTAT_SUBSCRIPTIONERR_MSGLEN);
+	}
+}
+
+/* ----------
+ * pgstat_recv_subscription_purge() -
+ *
+ *	Process a SUBSCRIPTIONPURGE message.
+ * ----------
+ */
+static void
+pgstat_recv_subscription_purge(PgStat_MsgSubscriptionPurge *msg, int len)
+{
+	if (subscriptionErrHash == NULL)
+		return;
+
+	for (int i = 0; i < msg->m_nentries; i++)
+	{
+		PgStat_StatSubErrEntry *suberrent;
+
+		suberrent = hash_search(subscriptionErrHash, (void *) &(msg->m_subids[i]),
+								HASH_FIND, NULL);
+
+		/*
+		 * Nothing to do if the subscription entry is not found.  This could
+		 * happen when the subscription is dropped and the message for
+		 * dropping subscription entry arrived before the message for
+		 * reporting the error.
+		 */
+		if (suberrent == NULL)
+			continue;
+
+		/* Cleanup the hash table for errors */
+		if (suberrent->suberrors != NULL)
+			hash_destroy(suberrent->suberrors);
+
+		(void) hash_search(subscriptionErrHash, (void *) &(msg->m_subids[i]),
+						   HASH_REMOVE, NULL);
+	}
+}
+
+/* ----------
+ * pgstat_recv_subscription_error_purge() -
+ *
+ *	Process a SUBSCRIPTIONERRPURGE message.
+ * ----------
+ */
+static void
+pgstat_recv_subscription_error_purge(PgStat_MsgSubscriptionErrPurge *msg, int len)
+{
+	if (subscriptionErrHash == NULL)
+		return;
+
+	for (int i = 0; i < msg->m_nentries; i++)
+	{
+		PgStat_StatSubErrEntry *suberrent;
+
+		suberrent = hash_search(subscriptionErrHash, (void *) &(msg->m_subid),
+								HASH_FIND, NULL);
+
+		/*
+		 * Nothing to do if the subscription entry is not found.  This could
+		 * happen when the subscription with msg->m_subid is removed and the
+		 * corresponding entry is also removed before receiving the error
+		 * purge message.
+		 */
+		if (suberrent == NULL)
+			continue;
+
+		(void) hash_search(suberrent->suberrors, (void *) &(msg->m_relids[i]),
+						   HASH_REMOVE, NULL);
+	}
+}
+
+/* ----------
  * pgstat_write_statsfile_needed() -
  *
  *	Do we need to write out any stats files?
@@ -5745,6 +6312,111 @@ pgstat_get_replslot_entry(NameData name, bool create)
 	}
 
 	return slotent;
+}
+
+/* ----------
+ * pgstat_get_subscription_error_entry
+ *
+ * Return the entry of subscription errors entry with the subscription OID.
+ * Return NULL if not found and the caller didn't request to create it.
+ *
+ * create tells whether to create the new subscription entry if it is not
+ * found.
+ * ----------
+ */
+static PgStat_StatSubErrEntry *
+pgstat_get_subscription_error_entry(Oid subid, bool create)
+{
+	PgStat_StatSubErrEntry *suberrent;
+	HASHACTION	action = (create ? HASH_ENTER : HASH_FIND);
+	bool		found;
+
+	if (subscriptionErrHash == NULL)
+	{
+		HASHCTL		hash_ctl;
+
+		if (!create)
+			return NULL;
+
+		hash_ctl.keysize = sizeof(Oid);
+		hash_ctl.entrysize = sizeof(PgStat_StatSubErrEntry);
+		subscriptionErrHash = hash_create("Subscription error hash",
+										  PGSTAT_SUBSCRIPTION_ERR_HASH_SIZE,
+										  &hash_ctl,
+										  HASH_ELEM | HASH_BLOBS);
+	}
+
+	suberrent = (PgStat_StatSubErrEntry *) hash_search(subscriptionErrHash,
+													   (void *) &subid,
+													   action, &found);
+
+	/* initialize fields */
+	if (create && !found)
+		suberrent->suberrors = NULL;
+
+	return suberrent;
+}
+
+/* ----------
+ * pgstat_get_subscription_rel_error_entry
+ *
+ * Return the entry of subscription relation error entry with the subscription
+ * OID and relcation OID.  Return NULL if not found and the caller didn't
+ * request to create it.
+ *
+ * create tells whether to create the new subscription relation entry if it is
+ * not found.
+ * ----------
+ */
+static PgStat_StatSubRelErrEntry *
+pgstat_get_subscription_rel_error_entry(Oid subid, Oid subrelid, bool create)
+{
+	PgStat_StatSubErrEntry *suberrent;
+	PgStat_StatSubRelErrEntry *relerrent;
+	HASHACTION	action = (create ? HASH_ENTER : HASH_FIND);
+	bool		found;
+
+	suberrent = pgstat_get_subscription_error_entry(subid, create);
+
+	if (suberrent == NULL)
+	{
+		Assert(!create);
+		return NULL;
+	}
+
+	if (suberrent->suberrors == NULL)
+	{
+		HASHCTL		hash_ctl;
+
+		if (!create)
+			return NULL;
+
+		hash_ctl.keysize = sizeof(Oid);
+		hash_ctl.entrysize = sizeof(PgStat_StatSubRelErrEntry);
+		suberrent->suberrors = hash_create("Subscription relation error hash",
+										   PGSTAT_SUBSCRIPTION_ERR_HASH_SIZE,
+										   &hash_ctl,
+										   HASH_ELEM | HASH_BLOBS);
+	}
+
+	relerrent = (PgStat_StatSubRelErrEntry *) hash_search(suberrent->suberrors,
+														  (void *) &subrelid,
+														  action, &found);
+
+	/* initialize fields */
+	if (create && !found)
+	{
+		relerrent->databaseid = InvalidOid;
+		relerrent->relid = InvalidOid;
+		relerrent->command = 0;
+		relerrent->xid = InvalidTransactionId;
+		relerrent->failure_count = 0;
+		relerrent->last_failure = 0;
+		relerrent->errmsg[0] = '\0';
+		relerrent->stat_reset_timestamp = 0;
+	}
+
+	return relerrent;
 }
 
 /* ----------

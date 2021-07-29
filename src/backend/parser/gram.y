@@ -9707,7 +9707,16 @@ AlterSubscriptionStmt:
 				{
 					AlterSubscriptionStmt *n =
 						makeNode(AlterSubscriptionStmt);
-					n->kind = ALTER_SUBSCRIPTION_OPTIONS;
+					n->kind = ALTER_SUBSCRIPTION_SET_OPTIONS;
+					n->subname = $3;
+					n->options = $5;
+					$$ = (Node *)n;
+				}
+			| ALTER SUBSCRIPTION name RESET definition
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+					n->kind = ALTER_SUBSCRIPTION_RESET_OPTIONS;
 					n->subname = $3;
 					n->options = $5;
 					$$ = (Node *)n;

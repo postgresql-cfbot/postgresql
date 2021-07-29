@@ -14,6 +14,7 @@
 #include "datatype/timestamp.h"
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
+#include "replication/logicalproto.h"
 #include "utils/backend_progress.h" /* for backward compatibility */
 #include "utils/backend_status.h"	/* for backward compatibility */
 #include "utils/hsearch.h"
@@ -66,6 +67,9 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_RESETSINGLECOUNTER,
 	PGSTAT_MTYPE_RESETSLRUCOUNTER,
 	PGSTAT_MTYPE_RESETREPLSLOTCOUNTER,
+	PGSTAT_MTYPE_SUBSCRIPTIONERR,
+	PGSTAT_MTYPE_SUBSCRIPTIONERRPURGE,
+	PGSTAT_MTYPE_SUBSCRIPTIONPURGE,
 	PGSTAT_MTYPE_AUTOVAC_START,
 	PGSTAT_MTYPE_VACUUM,
 	PGSTAT_MTYPE_ANALYZE,
@@ -539,6 +543,69 @@ typedef struct PgStat_MsgReplSlot
 	PgStat_Counter m_total_bytes;
 } PgStat_MsgReplSlot;
 
+/* ----------
+ * PgStat_MsgSubscriptionErr	Sent by the apply worker or the table sync worker to
+ *								update/reset/clear the error happening during logical
+ *								replication.
+ * ----------
+ */
+#define PGSTAT_SUBSCRIPTIONERR_MSGLEN 256
+typedef struct PgStat_MsgSubscriptionErr
+{
+	PgStat_MsgHdr m_hdr;
+
+	/*
+	 * m_subid and m_subrelid are used to determine the subscription and the
+	 * reporter of this error.  m_subrelid is InvalidOid if reported by the
+	 * apply worker, otherwise by the table sync worker.  In table sync worker
+	 * case, m_subrelid must be the same as m_relid.
+	 */
+	Oid			m_subid;
+	Oid			m_subrelid;
+
+	/* The clear messages use below fields */
+	bool		m_reset;		/* clear all fields and set reset_stats
+								 * timestamp */
+	bool		m_clear;		/* clear all fields except for total_failure */
+
+	/* The error report message uses below fields */
+	Oid			m_databaseid;
+	Oid			m_relid;
+	LogicalRepMsgType m_command;
+	TransactionId m_xid;
+	TimestampTz m_last_failure;
+	char		m_errmsg[PGSTAT_SUBSCRIPTIONERR_MSGLEN];
+} PgStat_MsgSubscriptionErr;
+
+/* ----------
+ * PgStat_MsgSubscriptionErrPurge	Sent by the autovacuum purge the subscription
+ *									errors.
+ * ----------
+ */
+#define PGSTAT_NUM_SUBSCRIPTIONERRPURGE  \
+	((PGSTAT_MSG_PAYLOAD - sizeof(Oid) - sizeof(int)) / sizeof(Oid))
+
+typedef struct PgStat_MsgSubscriptionErrPurge
+{
+	PgStat_MsgHdr m_hdr;
+	Oid			m_subid;
+	int			m_nentries;
+	Oid			m_relids[PGSTAT_NUM_SUBSCRIPTIONERRPURGE];
+} PgStat_MsgSubscriptionErrPurge;
+
+/* ----------
+ * PgStat_MsgSubscriptionPurge	Sent by the autovacuum purge the subscriptions.
+ * ----------
+ */
+#define PGSTAT_NUM_SUBSCRIPTIONPURGE  \
+	((PGSTAT_MSG_PAYLOAD - sizeof(int)) / sizeof(Oid))
+
+typedef struct PgStat_MsgSubscriptionPurge
+{
+	PgStat_MsgHdr m_hdr;
+	int			m_nentries;
+	Oid			m_subids[PGSTAT_NUM_SUBSCRIPTIONPURGE];
+} PgStat_MsgSubscriptionPurge;
 
 /* ----------
  * PgStat_MsgRecoveryConflict	Sent by the backend upon recovery conflict
@@ -710,6 +777,9 @@ typedef union PgStat_Msg
 	PgStat_MsgChecksumFailure msg_checksumfailure;
 	PgStat_MsgReplSlot msg_replslot;
 	PgStat_MsgConn msg_conn;
+	PgStat_MsgSubscriptionErr msg_subscriptionerr;
+	PgStat_MsgSubscriptionErrPurge msg_subscriptionerrpurge;
+	PgStat_MsgSubscriptionPurge msg_subscriptionpurge;
 } PgStat_Msg;
 
 
@@ -908,6 +978,42 @@ typedef struct PgStat_StatReplSlotEntry
 	TimestampTz stat_reset_timestamp;
 } PgStat_StatReplSlotEntry;
 
+/*
+ * Subscription error statistics kept in the stats collector.
+ *
+ * PgStat_StatSubErrEntry holds all errors associated with the subscription,
+ * reported by the apply worker and the table sync workers. This entry is
+ * created when the first error message with the subscription is reported
+ * and is dropped along with its errors when the subscription is dropped.
+ *
+ * PgStat_StatSubRelErrEntry represents a error happened during logical
+ * replication, reported by the apply worker (subrelid is InvalidOid) or by the
+ * table sync worker (subrelid is a valid OID). The error reported by the apply
+ * worker is dropped when the subscription is dropped whereas the error reported
+ * by the table sync worker is dropped when the table synchronization process
+ * completed.
+ */
+typedef struct PgStat_StatSubErrEntry
+{
+	Oid			subid;			/* hash table key */
+	HTAB	   *suberrors;
+} PgStat_StatSubErrEntry;
+
+typedef struct PgStat_StatSubRelErrEntry
+{
+	Oid			subrelid;		/* InvalidOid if the apply worker, otherwise
+								 * the table sync worker. hash table key. */
+	Oid			databaseid;
+	Oid			relid;			/* OID of relation related to the error. Must
+								 * be the same as subrelid in the table sync
+								 * case. */
+	LogicalRepMsgType command;
+	TransactionId xid;
+	PgStat_Counter failure_count;
+	TimestampTz last_failure;
+	char		errmsg[PGSTAT_SUBSCRIPTIONERR_MSGLEN];
+	TimestampTz stat_reset_timestamp;
+} PgStat_StatSubRelErrEntry;
 
 /*
  * Working state needed to accumulate per-function-call timing statistics.
@@ -995,6 +1101,8 @@ extern void pgstat_reset_shared_counters(const char *);
 extern void pgstat_reset_single_counter(Oid objectid, PgStat_Single_Reset_Type type);
 extern void pgstat_reset_slru_counter(const char *);
 extern void pgstat_reset_replslot_counter(const char *name);
+extern void pgstat_reset_subscription_error(Oid subid, Oid subrelid);
+extern void pgstat_clear_subscription_error(Oid subid, Oid subrelid);
 
 extern void pgstat_report_autovac(Oid dboid);
 extern void pgstat_report_vacuum(Oid tableoid, bool shared,
@@ -1011,6 +1119,9 @@ extern void pgstat_report_checksum_failure(void);
 extern void pgstat_report_replslot(const PgStat_StatReplSlotEntry *repSlotStat);
 extern void pgstat_report_replslot_create(const char *slotname);
 extern void pgstat_report_replslot_drop(const char *slotname);
+extern void pgstat_report_subscription_error(Oid subid, Oid subrelid, Oid relid,
+											 LogicalRepMsgType command,
+											 TransactionId xid, const char *errmsg);
 
 extern void pgstat_initialize(void);
 
@@ -1106,6 +1217,9 @@ extern PgStat_GlobalStats *pgstat_fetch_global(void);
 extern PgStat_WalStats *pgstat_fetch_stat_wal(void);
 extern PgStat_SLRUStats *pgstat_fetch_slru(void);
 extern PgStat_StatReplSlotEntry *pgstat_fetch_replslot(NameData slotname);
+extern PgStat_StatSubErrEntry *pgstat_fetch_subscription_error(Oid subid);
+extern PgStat_StatSubRelErrEntry *pgstat_fetch_subscription_rel_error(Oid subid,
+																	  Oid relid);
 
 extern void pgstat_count_slru_page_zeroed(int slru_idx);
 extern void pgstat_count_slru_page_hit(int slru_idx);

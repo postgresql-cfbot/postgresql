@@ -1175,8 +1175,8 @@ FetchTableStates(bool *started_tx)
 	if (!table_states_valid)
 	{
 		MemoryContext oldctx;
-		List	   *rstates;
-		ListCell   *lc;
+		HTAB	   *rstates;
+		HASH_SEQ_STATUS hstat;
 		SubscriptionRelState *rstate;
 
 		/* Clean the old lists. */
@@ -1194,13 +1194,17 @@ FetchTableStates(bool *started_tx)
 
 		/* Allocate the tracking info in a permanent memory context. */
 		oldctx = MemoryContextSwitchTo(CacheMemoryContext);
-		foreach(lc, rstates)
+		hash_seq_init(&hstat, rstates);
+		while ((rstate = (SubscriptionRelState *) hash_seq_search(&hstat)) != NULL)
 		{
-			rstate = palloc(sizeof(SubscriptionRelState));
-			memcpy(rstate, lfirst(lc), sizeof(SubscriptionRelState));
-			table_states_not_ready = lappend(table_states_not_ready, rstate);
+			SubscriptionRelState *r = palloc(sizeof(SubscriptionRelState));
+
+			memcpy(r, rstate, sizeof(SubscriptionRelState));
+			table_states_not_ready = lappend(table_states_not_ready, r);
 		}
 		MemoryContextSwitchTo(oldctx);
+
+		hash_destroy(rstates);
 
 		/*
 		 * Does the subscription have tables?

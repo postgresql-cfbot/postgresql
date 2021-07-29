@@ -2094,6 +2094,28 @@ pg_stat_subscription| SELECT su.oid AS subid,
     st.latest_end_time
    FROM (pg_subscription su
      LEFT JOIN pg_stat_get_subscription(NULL::oid) st(subid, relid, pid, received_lsn, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time) ON ((st.subid = su.oid)));
+pg_stat_subscription_errors| SELECT d.datname,
+    sr.subid,
+    s.subname,
+    e.relid,
+    e.command,
+    e.xid,
+    e.failure_source,
+    e.failure_count,
+    e.last_failure,
+    e.last_failure_message,
+    e.stats_reset
+   FROM ( SELECT pg_subscription.oid AS subid,
+            NULL::oid AS relid
+           FROM pg_subscription
+        UNION ALL
+         SELECT pg_subscription_rel.srsubid AS subid,
+            pg_subscription_rel.srrelid AS relid
+           FROM pg_subscription_rel
+          WHERE (pg_subscription_rel.srsubstate <> 'r'::"char")) sr,
+    ((LATERAL pg_stat_get_subscription_error(sr.subid, sr.relid) e(datid, subid, relid, command, xid, failure_source, failure_count, last_failure, last_failure_message, stats_reset)
+     JOIN pg_database d ON ((e.datid = d.oid)))
+     JOIN pg_subscription s ON ((e.subid = s.oid)));
 pg_stat_sys_indexes| SELECT pg_stat_all_indexes.relid,
     pg_stat_all_indexes.indexrelid,
     pg_stat_all_indexes.schemaname,

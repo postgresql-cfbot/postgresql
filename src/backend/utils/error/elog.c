@@ -1441,6 +1441,22 @@ getinternalerrposition(void)
 	return edata->internalpos;
 }
 
+/*
+ * geterrmessage --- return the currently set error message
+ *
+ * This is only intended for use in error callback subroutines, since there
+ * is no other place outside elog.c where the concept is meaningful.
+ */
+const char *
+geterrmessage(void)
+{
+	ErrorData  *edata = &errordata[errordata_stack_depth];
+
+	/* we don't bother incrementing recursion_depth */
+	CHECK_STACK_DEPTH();
+
+	return (const char *) edata->message;
+}
 
 /*
  * Functions to allow construction of error message strings separately from

@@ -15,5 +15,7 @@
 extern void ApplyWorkerMain(Datum main_arg);
 
 extern bool IsLogicalWorker(void);
+extern void set_logicalrep_error_context_rel(Relation rel);
+extern void reset_logicalrep_error_context_rel(void);
 
 #endif							/* LOGICALWORKER_H */

@@ -104,6 +104,16 @@ GetSubscription(Oid subid, bool missing_ok)
 	Assert(!isnull);
 	sub->publications = textarray_to_stringlist(DatumGetArrayTypeP(datum));
 
+	/* Get skip XID */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
+							tup,
+							Anum_pg_subscription_subskipxid,
+							&isnull);
+	if (!isnull)
+		sub->skipxid = DatumGetTransactionId(datum);
+	else
+		sub->skipxid = InvalidTransactionId;
+
 	ReleaseSysCache(tup);
 
 	return sub;
@@ -541,17 +551,26 @@ GetSubscriptionRelations(Oid subid)
 /*
  * Get all relations for subscription that are not in a ready state.
  *
- * Returned list is palloc'ed in current memory context.
+ * Returned HTAB is created in current memory context.
  */
-List *
+HTAB *
 GetSubscriptionNotReadyRelations(Oid subid)
 {
-	List	   *res = NIL;
+	HTAB	   *htab;
+	HASHCTL		hash_ctl;
 	Relation	rel;
 	HeapTuple	tup;
 	int			nkeys = 0;
 	ScanKeyData skey[2];
 	SysScanDesc scan;
+
+	hash_ctl.keysize = sizeof(Oid);
+	hash_ctl.entrysize = sizeof(SubscriptionRelState);
+	hash_ctl.hcxt = CurrentMemoryContext;
+	htab = hash_create("not ready relations in subscription",
+					   64,
+					   &hash_ctl,
+					   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 
 	rel = table_open(SubscriptionRelRelationId, AccessShareLock);
 
@@ -577,8 +596,8 @@ GetSubscriptionNotReadyRelations(Oid subid)
 
 		subrel = (Form_pg_subscription_rel) GETSTRUCT(tup);
 
-		relstate = (SubscriptionRelState *) palloc(sizeof(SubscriptionRelState));
-		relstate->relid = subrel->srrelid;
+		relstate = (SubscriptionRelState *) hash_search(htab, (void *) &subrel->srrelid,
+														HASH_ENTER, NULL);
 		relstate->state = subrel->srsubstate;
 		d = SysCacheGetAttr(SUBSCRIPTIONRELMAP, tup,
 							Anum_pg_subscription_rel_srsublsn, &isnull);
@@ -586,13 +605,11 @@ GetSubscriptionNotReadyRelations(Oid subid)
 			relstate->lsn = InvalidXLogRecPtr;
 		else
 			relstate->lsn = DatumGetLSN(d);
-
-		res = lappend(res, relstate);
 	}
 
 	/* Cleanup */
 	systable_endscan(scan);
 	table_close(rel, AccessShareLock);
 
-	return res;
+	return htab;
 }

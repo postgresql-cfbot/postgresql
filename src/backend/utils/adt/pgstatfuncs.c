@@ -24,6 +24,8 @@
 #include "pgstat.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/postmaster.h"
+#include "replication/logicalproto.h"
+#include "replication/logicalworker.h"
 #include "replication/slot.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
@@ -2240,6 +2242,23 @@ pg_stat_reset_replication_slot(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+/* Reset a subscription error stats */
+Datum
+pg_stat_reset_subscription_error(PG_FUNCTION_ARGS)
+{
+	Oid			subid = PG_GETARG_OID(0);
+	Oid			relid;
+
+	if (PG_ARGISNULL(1))
+		relid = InvalidOid;		/* reset apply worker error stats */
+	else
+		relid = PG_GETARG_OID(1);	/* reset table sync worker error stats */
+
+	pgstat_reset_subscription_error(subid, relid);
+
+	PG_RETURN_VOID();
+}
+
 Datum
 pg_stat_get_archiver(PG_FUNCTION_ARGS)
 {
@@ -2376,6 +2395,107 @@ pg_stat_get_replication_slot(PG_FUNCTION_ARGS)
 		nulls[9] = true;
 	else
 		values[9] = TimestampTzGetDatum(slotent->stat_reset_timestamp);
+
+	/* Returns the record as Datum */
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}
+
+/*
+ * Get the subscription error for the given subscription (and relation).
+ */
+Datum
+pg_stat_get_subscription_error(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_SUBSCRIPTION_ERROR_COLS 10
+	Oid			subid = PG_GETARG_OID(0);
+	Oid			relid;
+	TupleDesc	tupdesc;
+	Datum		values[PG_STAT_GET_SUBSCRIPTION_ERROR_COLS];
+	bool		nulls[PG_STAT_GET_SUBSCRIPTION_ERROR_COLS];
+	PgStat_StatSubRelErrEntry *relerrent;
+
+	/* Initialise values and NULL flags arrays */
+	MemSet(values, 0, sizeof(values));
+	MemSet(nulls, 0, sizeof(nulls));
+
+	/* Initialise attributes information in the tuple descriptor */
+	tupdesc = CreateTemplateTupleDesc(PG_STAT_GET_SUBSCRIPTION_ERROR_COLS);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "datid",
+					   OIDOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "subid",
+					   OIDOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "relid",
+					   OIDOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "command",
+					   TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "xid",
+					   XIDOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 6, "failure_source",
+					   TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "failure_count",
+					   INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 8, "last_failure",
+					   TIMESTAMPTZOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 9, "last_failure_message",
+					   TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 10, "stats_reset",
+					   TIMESTAMPTZOID, -1, 0);
+	BlessTupleDesc(tupdesc);
+
+	if (PG_ARGISNULL(1))
+		relid = InvalidOid;
+	else
+		relid = PG_GETARG_OID(1);
+
+	/* Get subscription errors */
+	relerrent = pgstat_fetch_subscription_rel_error(subid, relid);
+
+	/* Return NULL if the subscription doesn't have any errors */
+	if (relerrent == NULL)
+		PG_RETURN_NULL();
+
+	values[0] = ObjectIdGetDatum(relerrent->databaseid);
+	values[1] = ObjectIdGetDatum(subid);
+
+	if (OidIsValid(relerrent->relid))
+		values[2] = ObjectIdGetDatum(relerrent->relid);
+	else
+		nulls[2] = true;
+
+	if (relerrent->command == 0)
+		nulls[3] = true;
+	else
+	{
+		/* should be apply worker */
+		Assert(!OidIsValid(relerrent->subrelid));
+
+		values[3] = CStringGetTextDatum(logicalrep_message_type(relerrent->command));
+	}
+
+	if (TransactionIdIsValid(relerrent->xid))
+		values[4] = TransactionIdGetDatum(relerrent->xid);
+	else
+		nulls[4] = true;
+
+	if (OidIsValid(relerrent->subrelid))
+		values[5] = CStringGetTextDatum("tablesync");
+	else
+		values[5] = CStringGetTextDatum("apply");
+
+
+	values[6] = Int64GetDatum(relerrent->failure_count);
+
+	if (relerrent->last_failure == 0)
+		nulls[7] = true;
+	else
+		values[7] = TimestampTzGetDatum(relerrent->last_failure);
+
+	values[8] = CStringGetTextDatum(relerrent->errmsg);
+
+	if (relerrent->stat_reset_timestamp == 0)
+		nulls[9] = true;
+	else
+		values[9] = TimestampTzGetDatum(relerrent->stat_reset_timestamp);
 
 	/* Returns the record as Datum */
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));

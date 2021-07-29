@@ -333,19 +333,62 @@
   <para>
    A conflict will produce an error and will stop the replication; it must be
    resolved manually by the user.  Details about the conflict can be found in
-   the subscriber's server log.
+   <link linkend="monitoring-pg-stat-subscription-errors"/> as well as the
+   subscriber's server log.
   </para>
 
   <para>
    The resolution can be done either by changing data on the subscriber so
    that it does not conflict with the incoming change or by skipping the
-   transaction that conflicts with the existing data.  The transaction can be
-   skipped by calling the <link linkend="pg-replication-origin-advance">
+   transaction that conflicts with the existing data.  When a conflict produce
+   an error, it is shown in <structname>pg_stat_subscription_errors</structname>
+   view as follows:
+  </para>
+
+  <programlisting>
+postgres=# SELECT * FROM pg_stat_subscription_errors;
+-[ RECORD 1 ]--------+-----------------------------------------------------------
+datname              | postgres
+subid                | 16395
+subname              | test_sub
+relid                | 16385
+command              | INSERT
+xid                  | 716
+failure_source       | apply
+failure_count        | 50
+last_failure         | 2021-07-21 21:16:02.781779+00
+last_failure_message | duplicate key value violates unique constraint "test_pkey"
+stats_reset          |
+</programlisting>
+
+  <para>
+   and it is also shown in subscriber's server log as follows:
+  </para>
+
+<screen>
+ERROR:  duplicate key value violates unique constraint "test_pkey"
+DETAIL:  Key (id)=(1) already exists.
+CONTEXT:  during apply of "INSERT" for relation "public.test" in transaction with xid 716 committs 2021-07-15 21:54:58.802874+00
+</screen>
+
+  <para>
+   The transaction ID that contains the change violating the constraint can be
+   found from those outputs (transaction ID 740 in the above case).  The transaction
+   can be skipped by setting <replaceable>skip_xid</replaceable> to the subscription
+   by <command>ALTER SUBSCRIPTION ... SET</command>.  Alternatively, the transaction
+   can also be skipped by calling the <link linkend="pg-replication-origin-advance">
    <function>pg_replication_origin_advance()</function></link> function with
    a <parameter>node_name</parameter> corresponding to the subscription name,
    and a position.  The current position of origins can be seen in the
    <link linkend="view-pg-replication-origin-status">
    <structname>pg_replication_origin_status</structname></link> system view.
+  </para>
+
+  <para>
+   In either way, those should be used as a last resort. They skip the whole
+   transaction including changes that may not violate any constraint and easily
+   make subscriber inconsistent if a user specifies the wrong transaction ID or
+   the position of origin.
   </para>
  </sect1>
 

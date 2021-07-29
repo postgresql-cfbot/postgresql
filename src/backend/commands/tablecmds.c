@@ -78,6 +78,7 @@
 #include "partitioning/partbounds.h"
 #include "partitioning/partdesc.h"
 #include "pgstat.h"
+#include "replication/logicalworker.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rewriteHandler.h"
 #include "rewrite/rewriteManip.h"
@@ -1899,6 +1900,9 @@ ExecuteTruncateGuts(List *explicit_rels,
 			continue;
 		}
 
+		/* Set logical replication error callback info if necessary */
+		set_logicalrep_error_context_rel(rel);
+
 		/*
 		 * Build the lists of foreign tables belonging to each foreign server
 		 * and pass each list to the foreign data wrapper's callback function,
@@ -2005,6 +2009,9 @@ ExecuteTruncateGuts(List *explicit_rels,
 
 		pgstat_count_truncate(rel);
 	}
+
+	/* Reset logical replication error callback info */
+	reset_logicalrep_error_context_rel();
 
 	/* Now go through the hash table, and truncate foreign tables */
 	if (ft_htab)

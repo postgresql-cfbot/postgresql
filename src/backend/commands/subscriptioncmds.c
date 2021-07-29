@@ -60,6 +60,7 @@
 #define SUBOPT_BINARY				0x00000080
 #define SUBOPT_STREAMING			0x00000100
 #define SUBOPT_TWOPHASE_COMMIT		0x00000200
+#define SUBOPT_SKIP_XID				0x00000400
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -81,12 +82,13 @@ typedef struct SubOpts
 	bool		binary;
 	bool		streaming;
 	bool		twophase;
+	TransactionId skip_xid;
 } SubOpts;
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
 static void check_duplicates_in_publist(List *publist, Datum *datums);
 static List *merge_publications(List *oldpublist, List *newpublist, bool addpub, const char *subname);
-static void ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err);
+static void ReportSlotConnectionError(HTAB *rstates, Oid subid, char *slotname, char *err);
 
 
 /*
@@ -99,7 +101,8 @@ static void ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, 
  */
 static void
 parse_subscription_options(ParseState *pstate, List *stmt_options,
-						   bits32 supported_opts, SubOpts *opts)
+						   bits32 supported_opts, SubOpts *opts,
+						   bool is_reset)
 {
 	ListCell   *lc;
 
@@ -128,11 +131,22 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->streaming = false;
 	if (IsSet(supported_opts, SUBOPT_TWOPHASE_COMMIT))
 		opts->twophase = false;
+	if (IsSet(supported_opts, SUBOPT_SKIP_XID))
+		opts->skip_xid = InvalidTransactionId;
 
 	/* Parse options */
 	foreach(lc, stmt_options)
 	{
 		DefElem    *defel = (DefElem *) lfirst(lc);
+
+		if (is_reset)
+		{
+			if (defel->arg != NULL)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("RESET must not include values for parameters")));
+
+		}
 
 		if (IsSet(supported_opts, SUBOPT_CONNECT) &&
 			strcmp(defel->defname, "connect") == 0)
@@ -141,7 +155,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				errorConflictingDefElem(defel, pstate);
 
 			opts->specified_opts |= SUBOPT_CONNECT;
-			opts->connect = defGetBoolean(defel);
+			if (!is_reset)
+				opts->connect = defGetBoolean(defel);
 		}
 		else if (IsSet(supported_opts, SUBOPT_ENABLED) &&
 				 strcmp(defel->defname, "enabled") == 0)
@@ -150,7 +165,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				errorConflictingDefElem(defel, pstate);
 
 			opts->specified_opts |= SUBOPT_ENABLED;
-			opts->enabled = defGetBoolean(defel);
+			if (!is_reset)
+				opts->enabled = defGetBoolean(defel);
 		}
 		else if (IsSet(supported_opts, SUBOPT_CREATE_SLOT) &&
 				 strcmp(defel->defname, "create_slot") == 0)
@@ -159,7 +175,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				errorConflictingDefElem(defel, pstate);
 
 			opts->specified_opts |= SUBOPT_CREATE_SLOT;
-			opts->create_slot = defGetBoolean(defel);
+			if (!is_reset)
+				opts->create_slot = defGetBoolean(defel);
 		}
 		else if (IsSet(supported_opts, SUBOPT_SLOT_NAME) &&
 				 strcmp(defel->defname, "slot_name") == 0)
@@ -168,7 +185,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				errorConflictingDefElem(defel, pstate);
 
 			opts->specified_opts |= SUBOPT_SLOT_NAME;
-			opts->slot_name = defGetString(defel);
+			if (!is_reset)
+				opts->slot_name = defGetString(defel);
 
 			/* Setting slot_name = NONE is treated as no slot name. */
 			if (strcmp(opts->slot_name, "none") == 0)
@@ -183,7 +201,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				errorConflictingDefElem(defel, pstate);
 
 			opts->specified_opts |= SUBOPT_COPY_DATA;
-			opts->copy_data = defGetBoolean(defel);
+			if (!is_reset)
+				opts->copy_data = defGetBoolean(defel);
 		}
 		else if (IsSet(supported_opts, SUBOPT_SYNCHRONOUS_COMMIT) &&
 				 strcmp(defel->defname, "synchronous_commit") == 0)
@@ -192,12 +211,18 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				errorConflictingDefElem(defel, pstate);
 
 			opts->specified_opts |= SUBOPT_SYNCHRONOUS_COMMIT;
-			opts->synchronous_commit = defGetString(defel);
+			if (!is_reset)
+			{
+				opts->synchronous_commit = defGetString(defel);
 
-			/* Test if the given value is valid for synchronous_commit GUC. */
-			(void) set_config_option("synchronous_commit", opts->synchronous_commit,
-									 PGC_BACKEND, PGC_S_TEST, GUC_ACTION_SET,
-									 false, 0, false);
+				/*
+				 * Test if the given value is valid for synchronous_commit
+				 * GUC.
+				 */
+				(void) set_config_option("synchronous_commit", opts->synchronous_commit,
+										 PGC_BACKEND, PGC_S_TEST, GUC_ACTION_SET,
+										 false, 0, false);
+			}
 		}
 		else if (IsSet(supported_opts, SUBOPT_REFRESH) &&
 				 strcmp(defel->defname, "refresh") == 0)
@@ -206,7 +231,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				errorConflictingDefElem(defel, pstate);
 
 			opts->specified_opts |= SUBOPT_REFRESH;
-			opts->refresh = defGetBoolean(defel);
+			if (!is_reset)
+				opts->refresh = defGetBoolean(defel);
 		}
 		else if (IsSet(supported_opts, SUBOPT_BINARY) &&
 				 strcmp(defel->defname, "binary") == 0)
@@ -215,7 +241,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				errorConflictingDefElem(defel, pstate);
 
 			opts->specified_opts |= SUBOPT_BINARY;
-			opts->binary = defGetBoolean(defel);
+			if (!is_reset)
+				opts->binary = defGetBoolean(defel);
 		}
 		else if (IsSet(supported_opts, SUBOPT_STREAMING) &&
 				 strcmp(defel->defname, "streaming") == 0)
@@ -224,7 +251,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				errorConflictingDefElem(defel, pstate);
 
 			opts->specified_opts |= SUBOPT_STREAMING;
-			opts->streaming = defGetBoolean(defel);
+			if (!is_reset)
+				opts->streaming = defGetBoolean(defel);
 		}
 		else if (strcmp(defel->defname, "two_phase") == 0)
 		{
@@ -245,7 +273,31 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				errorConflictingDefElem(defel, pstate);
 
 			opts->specified_opts |= SUBOPT_TWOPHASE_COMMIT;
-			opts->twophase = defGetBoolean(defel);
+			if (!is_reset)
+				opts->twophase = defGetBoolean(defel);
+		}
+		else if (strcmp(defel->defname, "skip_xid") == 0)
+		{
+			if (IsSet(opts->specified_opts, SUBOPT_SKIP_XID))
+				errorConflictingDefElem(defel, pstate);
+
+			if (!is_reset)
+			{
+				char	   *xid_str = defGetString(defel);
+				TransactionId xid;
+
+				/* Parse the argument as TransactionId */
+				xid = DatumGetTransactionId(DirectFunctionCall1(xidin,
+																CStringGetDatum(xid_str)));
+
+				if (!TransactionIdIsNormal(xid))
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("invalid transaction id")));
+				opts->skip_xid = xid;
+			}
+
+			opts->specified_opts |= SUBOPT_SKIP_XID;
 		}
 		else
 			ereport(ERROR,
@@ -416,7 +468,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_SLOT_NAME | SUBOPT_COPY_DATA |
 					  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 					  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT);
-	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
+	parse_subscription_options(pstate, stmt->options, supported_opts, &opts,
+							   false);
 
 	/*
 	 * Since creating a replication slot is not transactional, rolling back
@@ -489,6 +542,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 		CharGetDatum(opts.twophase ?
 					 LOGICALREP_TWOPHASE_STATE_PENDING :
 					 LOGICALREP_TWOPHASE_STATE_DISABLED);
+	nulls[Anum_pg_subscription_subskipxid - 1] = true;
 	values[Anum_pg_subscription_subconninfo - 1] =
 		CStringGetTextDatum(conninfo);
 	if (opts.slot_name)
@@ -885,14 +939,14 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 	switch (stmt->kind)
 	{
-		case ALTER_SUBSCRIPTION_OPTIONS:
+		case ALTER_SUBSCRIPTION_SET_OPTIONS:
 			{
 				supported_opts = (SUBOPT_SLOT_NAME |
 								  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
-								  SUBOPT_STREAMING);
+								  SUBOPT_STREAMING | SUBOPT_SKIP_XID);
 
 				parse_subscription_options(pstate, stmt->options,
-										   supported_opts, &opts);
+										   supported_opts, &opts, false);
 
 				if (IsSet(opts.specified_opts, SUBOPT_SLOT_NAME))
 				{
@@ -944,14 +998,60 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					replaces[Anum_pg_subscription_substream - 1] = true;
 				}
 
+				if (IsSet(opts.specified_opts, SUBOPT_SKIP_XID))
+				{
+					values[Anum_pg_subscription_subskipxid - 1] =
+						TransactionIdGetDatum(opts.skip_xid);
+					replaces[Anum_pg_subscription_subskipxid - 1] = true;
+				}
+
 				update_tuple = true;
 				break;
 			}
 
+		case ALTER_SUBSCRIPTION_RESET_OPTIONS:
+			{
+				supported_opts = (SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_STREAMING |
+								  SUBOPT_BINARY | SUBOPT_SKIP_XID);
+
+				parse_subscription_options(pstate, stmt->options,
+										   supported_opts, &opts, true);
+
+				if (IsSet(opts.specified_opts, SUBOPT_SYNCHRONOUS_COMMIT))
+				{
+					values[Anum_pg_subscription_subsynccommit - 1] =
+						CStringGetTextDatum("off");
+					replaces[Anum_pg_subscription_subsynccommit - 1] = true;
+				}
+
+				if (IsSet(opts.specified_opts, SUBOPT_STREAMING))
+				{
+					values[Anum_pg_subscription_substream - 1] =
+						BoolGetDatum(false);
+					replaces[Anum_pg_subscription_substream - 1] = true;
+				}
+
+				if (IsSet(opts.specified_opts, SUBOPT_BINARY))
+				{
+					values[Anum_pg_subscription_subbinary - 1] =
+						BoolGetDatum(false);
+					replaces[Anum_pg_subscription_subbinary - 1] = true;
+				}
+
+				if (IsSet(opts.specified_opts, SUBOPT_SKIP_XID))
+				{
+					nulls[Anum_pg_subscription_subskipxid - 1] =
+						replaces[Anum_pg_subscription_subskipxid - 1] = true;
+				}
+
+				update_tuple = true;
+				break;
+			}
 		case ALTER_SUBSCRIPTION_ENABLED:
 			{
 				parse_subscription_options(pstate, stmt->options,
-										   SUBOPT_ENABLED, &opts);
+										   SUBOPT_ENABLED, &opts, false);
+
 				Assert(IsSet(opts.specified_opts, SUBOPT_ENABLED));
 
 				if (!sub->slotname && opts.enabled)
@@ -986,7 +1086,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 			{
 				supported_opts = SUBOPT_COPY_DATA | SUBOPT_REFRESH;
 				parse_subscription_options(pstate, stmt->options,
-										   supported_opts, &opts);
+										   supported_opts, &opts, false);
 
 				values[Anum_pg_subscription_subpublications - 1] =
 					publicationListToArray(stmt->publication);
@@ -1036,7 +1136,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					supported_opts |= SUBOPT_COPY_DATA;
 
 				parse_subscription_options(pstate, stmt->options,
-										   supported_opts, &opts);
+										   supported_opts, &opts, false);
 
 				publist = merge_publications(sub->publications, stmt->publication, isadd, stmt->subname);
 				values[Anum_pg_subscription_subpublications - 1] =
@@ -1084,7 +1184,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 							 errmsg("ALTER SUBSCRIPTION ... REFRESH is not allowed for disabled subscriptions")));
 
 				parse_subscription_options(pstate, stmt->options,
-										   SUBOPT_COPY_DATA, &opts);
+										   SUBOPT_COPY_DATA, &opts, false);
 
 				/*
 				 * The subscription option "two_phase" requires that
@@ -1163,7 +1263,9 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	char	   *err = NULL;
 	WalReceiverConn *wrconn;
 	Form_pg_subscription form;
-	List	   *rstates;
+	HTAB	   *rstates;
+	HASH_SEQ_STATUS hstat;
+	SubscriptionRelState *rstate;
 
 	/*
 	 * Lock pg_subscription with AccessExclusiveLock to ensure that the
@@ -1286,9 +1388,9 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	 * exclusive lock on the subscription.
 	 */
 	rstates = GetSubscriptionNotReadyRelations(subid);
-	foreach(lc, rstates)
+	hash_seq_init(&hstat, rstates);
+	while ((rstate = (SubscriptionRelState *) hash_seq_search(&hstat)) != NULL)
 	{
-		SubscriptionRelState *rstate = (SubscriptionRelState *) lfirst(lc);
 		Oid			relid = rstate->relid;
 
 		/* Only cleanup resources of tablesync workers */
@@ -1321,8 +1423,9 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	 * If there is no slot associated with the subscription, we can finish
 	 * here.
 	 */
-	if (!slotname && rstates == NIL)
+	if (!slotname && hash_get_num_entries(rstates) == 0)
 	{
+		hash_destroy(rstates);
 		table_close(rel, NoLock);
 		return;
 	}
@@ -1346,7 +1449,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 		if (!slotname)
 		{
 			/* be tidy */
-			list_free(rstates);
+			hash_destroy(rstates);
 			table_close(rel, NoLock);
 			return;
 		}
@@ -1358,9 +1461,9 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 
 	PG_TRY();
 	{
-		foreach(lc, rstates)
+		hash_seq_init(&hstat, rstates);
+		while ((rstate = (SubscriptionRelState *) hash_seq_search(&hstat)) != NULL)
 		{
-			SubscriptionRelState *rstate = (SubscriptionRelState *) lfirst(lc);
 			Oid			relid = rstate->relid;
 
 			/* Only cleanup resources of tablesync workers */
@@ -1389,7 +1492,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 			}
 		}
 
-		list_free(rstates);
+		hash_destroy(rstates);
 
 		/*
 		 * If there is a slot associated with the subscription, then drop the
@@ -1641,13 +1744,14 @@ fetch_table_list(WalReceiverConn *wrconn, List *publications)
  * them manually, if required.
  */
 static void
-ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err)
+ReportSlotConnectionError(HTAB *rstates, Oid subid, char *slotname, char *err)
 {
-	ListCell   *lc;
+	HASH_SEQ_STATUS hstat;
+	SubscriptionRelState *rstate;
 
-	foreach(lc, rstates)
+	hash_seq_init(&hstat, rstates);
+	while ((rstate = (SubscriptionRelState *) hash_seq_search(&hstat)) != NULL)
 	{
-		SubscriptionRelState *rstate = (SubscriptionRelState *) lfirst(lc);
 		Oid			relid = rstate->relid;
 
 		/* Only cleanup resources of tablesync workers */

@@ -220,6 +220,25 @@ ALTER SUBSCRIPTION regress_testsub SET (streaming = true);
 
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
 
+-- it works
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 3);
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = '4294967295');
+ALTER SUBSCRIPTION regress_testsub RESET (skip_xid, synchronous_commit, binary, streaming);
+ALTER SUBSCRIPTION regress_testsub RESET (skip_xid);
+
+-- fail - invalid XID
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 1.1);
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 0);
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 1);
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 2);
+
+-- fail - unsupported parameters
+ALTER SUBSCRIPTION regress_testsub RESET (connect);
+ALTER SUBSCRIPTION regress_testsub RESET (enabled);
+
+-- fail - RESET must not include values
+ALTER SUBSCRIPTION regress_testsub RESET (synchronous_commit = off);
+
 \dRs+
 
 DROP SUBSCRIPTION regress_testsub;

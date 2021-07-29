@@ -1257,3 +1257,30 @@ REVOKE ALL ON pg_subscription FROM public;
 GRANT SELECT (oid, subdbid, subname, subowner, subenabled, subbinary,
               substream, subtwophasestate, subslotname, subsynccommit, subpublications)
     ON pg_subscription TO public;
+
+CREATE VIEW pg_stat_subscription_errors AS
+    SELECT
+	d.datname,
+	sr.subid,
+	s.subname,
+	e.relid,
+	e.command,
+	e.xid,
+	e.failure_source,
+	e.failure_count,
+	e.last_failure,
+	e.last_failure_message,
+	e.stats_reset
+    FROM (SELECT
+              oid as subid,
+              NULL as relid
+          FROM pg_subscription
+          UNION ALL
+          SELECT
+              srsubid as subid,
+              srrelid as relid
+          FROM pg_subscription_rel
+          WHERE srsubstate <> 'r') sr,
+	  LATERAL pg_stat_get_subscription_error(sr.subid, sr.relid) e
+	  JOIN pg_database d ON (e.datid = d.oid)
+	  JOIN pg_subscription s ON (e.subid = s.oid);

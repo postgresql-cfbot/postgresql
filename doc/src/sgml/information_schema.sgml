@@ -912,8 +912,8 @@
 
   <para>
    The view <literal>check_constraints</literal> contains all check
-   constraints, either defined on a table or on a domain, that are
-   owned by a currently enabled role.  (The owner of the table or
+   constraints, either defined on a table or on a <glossterm linkend="glossary-domain-sql">domain</glossterm>,
+   that are owned by a currently enabled role.  (The owner of the table or
    domain is the owner of the constraint.)
   </para>
 
@@ -1199,7 +1199,8 @@
 
   <para>
    The view <literal>column_domain_usage</literal> identifies all
-   columns (of a table or a view) that make use of some domain defined
+   columns (of a table or a view) that make use of some
+   <glossterm linkend="glossary-domain-sql">domain</glossterm> defined
    in the current database and owned by a currently enabled role.
   </para>
 
@@ -2307,7 +2308,8 @@
    data type descriptors that the current user has access to, by way
    of being the owner of the described object or having some privilege
    for it.  A data type descriptor is generated whenever a data type
-   is used in the definition of a table column, a domain, or a
+   is used in the definition of a table column, a
+   <glossterm linkend="glossary-domain-sql">domain</glossterm>, or a
    function (as parameter or return type) and stores some information
    about how the data type is used in that instance (for example, the
    declared maximum length, if applicable).  Each data type
@@ -2393,7 +2395,8 @@
 
   <para>
    The view <literal>domain_constraints</literal> contains all constraints
-   belonging to domains defined in the current database.  Only those domains
+   belonging to <glossterm linkend="glossary-domain-sql">domains</glossterm>
+   defined in the current database.  Only those domains
    are shown that the current user has access to (by way of being the owner or
    having some privilege).
   </para>
@@ -2445,7 +2448,8 @@
        <structfield>domain_catalog</structfield> <type>sql_identifier</type>
       </para>
       <para>
-       Name of the database that contains the domain (always the current database)
+       Name of the database that contains the <glossterm linkend="glossary-domain-sql">domain</glossterm>
+       (always the current database)
       </para></entry>
      </row>
 
@@ -2493,7 +2497,8 @@
   <title><literal>domain_udt_usage</literal></title>
 
   <para>
-   The view <literal>domain_udt_usage</literal> identifies all domains
+   The view <literal>domain_udt_usage</literal> identifies all
+   <glossterm linkend="glossary-domain-sql">domains</glossterm>
    that are based on data types owned by a currently enabled role.
    Note that in <productname>PostgreSQL</productname>, built-in data
    types behave like user-defined types, so they are included here as
@@ -2577,7 +2582,8 @@
   <title><literal>domains</literal></title>
 
   <para>
-   The view <literal>domains</literal> contains all domains defined in the
+   The view <literal>domains</literal> contains all
+   <glossterm linkend="glossary-domain-sql">domains</glossterm> defined in the
    current database.  Only those domains are shown that the current user has
    access to (by way of being the owner or having some privilege).
   </para>

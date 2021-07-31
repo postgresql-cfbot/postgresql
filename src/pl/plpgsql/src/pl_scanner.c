@@ -587,7 +587,7 @@ plpgsql_scanner_init(const char *str)
 {
 	/* Start up the core scanner */
 	yyscanner = scanner_init(str, &core_yy,
-							 &ReservedPLKeywords, ReservedPLKeywordTokens);
+							 &ReservedPLKeywords, ReservedPLKeywordTokens, 0);
 
 	/*
 	 * scanorig points to the original string, which unlike the scanner's

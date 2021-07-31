@@ -746,7 +746,7 @@ typeStringToTypeName(const char *str)
 	ptserrcontext.previous = error_context_stack;
 	error_context_stack = &ptserrcontext;
 
-	raw_parsetree_list = raw_parser(str, RAW_PARSE_TYPE_NAME);
+	raw_parsetree_list = raw_parser(str, RAW_PARSE_TYPE_NAME, 0);
 
 	error_context_stack = ptserrcontext.previous;
 

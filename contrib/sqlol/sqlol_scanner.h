@@ -1,37 +1,33 @@
 /*-------------------------------------------------------------------------
  *
- * scanner.h
+ * sqlol_scanner.h
  *		API for the core scanner (flex machine)
- *
- * The core scanner is also used by PL/pgSQL, so we provide a public API
- * for it.  However, the rest of the backend is only expected to use the
- * higher-level API provided by parser.h.
  *
  *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- * src/include/parser/scanner.h
+ * contrib/sqlol/sqlol_scanner.h
  *
  *-------------------------------------------------------------------------
  */
 
-#ifndef SCANNER_H
-#define SCANNER_H
+#ifndef SQLOL_SCANNER_H
+#define SQLOL_SCANNER_H
 
-#include "common/keywords.h"
+#include "sqlol_keywords.h"
 
 /*
  * The scanner returns extra data about scanned tokens in this union type.
  * Note that this is a subset of the fields used in YYSTYPE of the bison
  * parsers built atop the scanner.
  */
-typedef union core_YYSTYPE
+typedef union sqlol_YYSTYPE
 {
 	int			ival;			/* for integer literals */
 	char	   *str;			/* for identifiers and non-integer literals */
 	const char *keyword;		/* canonical spelling of keywords */
-} core_YYSTYPE;
+} sqlol_YYSTYPE;
 
 /*
  * We track token locations in terms of byte offsets from the start of the
@@ -63,7 +59,7 @@ typedef union core_YYSTYPE
  * yy_extra struct may be larger and have this as its first component, thus
  * allowing the calling parser to keep some fields of its own in YY_EXTRA.
  */
-typedef struct core_yy_extra_type
+typedef struct sqlol_yy_extra_type
 {
 	/*
 	 * The string the scanner is physically scanning.  We keep this mainly so
@@ -75,18 +71,8 @@ typedef struct core_yy_extra_type
 	/*
 	 * The keyword list to use, and the associated grammar token codes.
 	 */
-	const ScanKeywordList *keywordlist;
-	const uint16 *keyword_tokens;
-
-	/*
-	 * Scanner settings to use.  These are initialized from the corresponding
-	 * GUC variables by scanner_init().  Callers can modify them after
-	 * scanner_init() if they don't want the scanner's behavior to follow the
-	 * prevailing GUC settings.
-	 */
-	int			backslash_quote;
-	bool		escape_string_warning;
-	bool		standard_conforming_strings;
+	const sqlol_ScanKeyword *keywords;
+	int		num_keywords;
 
 	/*
 	 * literalbuf is used to accumulate literal values when multiple rules are
@@ -103,52 +89,31 @@ typedef struct core_yy_extra_type
 	 * Random assorted scanner state.
 	 */
 	int			state_before_str_stop;	/* start cond. before end quote */
-	int			xcdepth;		/* depth of nesting in slash-star comments */
-	char	   *dolqstart;		/* current $foo$ quote start string */
 	YYLTYPE		save_yylloc;	/* one-element stack for PUSH_YYLLOC() */
 
-	/* first part of UTF16 surrogate pair for Unicode escapes */
-	int32		utf16_first_part;
-
 	/* state variables for literal-lexing warnings */
-	bool		warn_on_first_escape;
 	bool		saw_non_ascii;
-
-	/* state variable for returning an EOF token in single query mode */
-	bool		return_eof;
-} core_yy_extra_type;
+} sqlol_yy_extra_type;
 
 /*
  * The type of yyscanner is opaque outside scan.l.
  */
-typedef void *core_yyscan_t;
-
-/* Support for scanner_errposition_callback function */
-typedef struct ScannerCallbackState
-{
-	core_yyscan_t yyscanner;
-	int			location;
-	ErrorContextCallback errcallback;
-} ScannerCallbackState;
+typedef void *sqlol_yyscan_t;
 
 
 /* Constant data exported from parser/scan.l */
-extern PGDLLIMPORT const uint16 ScanKeywordTokens[];
+extern PGDLLIMPORT const uint16 sqlol_ScanKeywordTokens[];
 
 /* Entry points in parser/scan.l */
-extern core_yyscan_t scanner_init(const char *str,
-								  core_yy_extra_type *yyext,
-								  const ScanKeywordList *keywordlist,
-								  const uint16 *keyword_tokens,
+extern sqlol_yyscan_t sqlol_scanner_init(const char *str,
+								  sqlol_yy_extra_type *yyext,
+								  const sqlol_ScanKeyword *keywords,
+								  int num_keywords,
 								  int offset);
-extern void scanner_finish(core_yyscan_t yyscanner);
-extern int	core_yylex(core_YYSTYPE *lvalp, YYLTYPE *llocp,
-					   core_yyscan_t yyscanner);
-extern int	scanner_errposition(int location, core_yyscan_t yyscanner);
-extern void setup_scanner_errposition_callback(ScannerCallbackState *scbstate,
-											   core_yyscan_t yyscanner,
-											   int location);
-extern void cancel_scanner_errposition_callback(ScannerCallbackState *scbstate);
-extern void scanner_yyerror(const char *message, core_yyscan_t yyscanner) pg_attribute_noreturn();
+extern void sqlol_scanner_finish(sqlol_yyscan_t yyscanner);
+extern int	sqlol_yylex(sqlol_YYSTYPE *lvalp, YYLTYPE *llocp,
+					   sqlol_yyscan_t yyscanner);
+extern int	sqlol_scanner_errposition(int location, sqlol_yyscan_t yyscanner);
+extern void sqlol_scanner_yyerror(const char *message, sqlol_yyscan_t yyscanner);
 
-#endif							/* SCANNER_H */
+#endif							/* SQLOL_SCANNER_H */

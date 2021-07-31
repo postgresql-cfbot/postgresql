@@ -73,6 +73,8 @@
 					# (change requires restart)
 #bonjour_name = ''			# defaults to the computer name
 					# (change requires restart)
+#enable_client_connection_trigger = on	# enables firing the client_connection
+					# trigger when a client connects
 
 # - TCP settings -
 # see "man tcp" for details

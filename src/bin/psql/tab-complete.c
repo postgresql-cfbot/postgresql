@@ -1014,7 +1014,7 @@ static const VersionedQuery Query_for_list_of_subscriptions[] = {
 };
 
 /*
- * This is a list of all "things" in Pgsql, which can show up after CREATE or
+ * This is a list of all "things" in pgsql, which can show up after CREATE or
  * DROP; and there is also a query to get a list of them.
  */
 
@@ -1164,6 +1164,7 @@ static char *complete_from_files(const char *text, int state);
 
 static char *pg_strdup_keyword_case(const char *s, const char *ref);
 static char *escape_string(const char *text);
+static char *pg_string_tolower(const char *text);
 static PGresult *exec_query(const char *query);
 
 static char **get_previous_words(int point, char **buffer, int *nwords);
@@ -1414,6 +1415,31 @@ ends_with(const char *s, char c)
 	size_t		length = strlen(s);
 
 	return (length > 0 && s[length - 1] == c);
+}
+
+/*
+ * Check whether an input text only contain alphabet letters,
+ * dot, underscore, digits, backward slash and double quotes.
+ */
+static bool
+valid_input_text(const char *text)
+{
+	const unsigned char *ptr = (const unsigned char *) text;
+
+	/* Mustn't be zero-length */
+	if (*ptr == '\0')
+		return false;
+
+	while (*ptr)
+	{
+		if (strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZ" "abcdefghijklmnopqrstuvwxyz"
+				   "._0123456789\\\"", *ptr) != NULL)
+			ptr++;
+		else
+			return false;
+	}
+
+	return true;
 }
 
 /*
@@ -4398,6 +4424,7 @@ _complete_from_query(const char *simple_query,
 		char	   *e_text;
 		char	   *e_info_charp;
 		char	   *e_info_charp2;
+		char	   *le_str;
 		const char *pstr = text;
 		int			char_length = 0;
 
@@ -4421,13 +4448,39 @@ _complete_from_query(const char *simple_query,
 		/* Set up suitably-escaped copies of textual inputs */
 		e_text = escape_string(text);
 
+		/* Change the textual inputs to lower case if the input text
+		 * only contain alphabet letters, dot, underscore, digits,
+		 * backward slash and double quotes.
+		 */
+		if(valid_input_text(e_text))
+		{
+			le_str = pg_string_tolower(e_text);
+			free(e_text);
+			e_text = le_str;
+		}
 		if (completion_info_charp)
+		{
 			e_info_charp = escape_string(completion_info_charp);
+			if(valid_input_text(e_info_charp))
+			{
+				le_str = pg_string_tolower(e_info_charp);
+				free(e_info_charp);
+				e_info_charp = le_str;
+			}
+		}
 		else
 			e_info_charp = NULL;
 
 		if (completion_info_charp2)
+		{
 			e_info_charp2 = escape_string(completion_info_charp2);
+			if(valid_input_text(e_info_charp2))
+			{
+				le_str = pg_string_tolower(e_info_charp2);
+				free(e_info_charp2);
+				e_info_charp2 = le_str;
+			}
+		}
 		else
 			e_info_charp2 = NULL;
 
@@ -4462,7 +4515,7 @@ _complete_from_query(const char *simple_query,
 			 */
 			if (strcmp(schema_query->catname,
 					   "pg_catalog.pg_class c") == 0 &&
-				strncmp(text, "pg_", 3) != 0)
+				pg_strncasecmp(text, "pg_", 3) != 0)
 			{
 				appendPQExpBufferStr(&query_buffer,
 									 " AND c.relnamespace <> (SELECT oid FROM"
@@ -4888,6 +4941,33 @@ escape_string(const char *text)
 	PQescapeStringConn(pset.db, result, text, text_length, NULL);
 
 	return result;
+}
+
+
+/*
+ * pg_string_tolower - Fold a string to lower case if the string is not quoted.
+ */
+static char *
+pg_string_tolower(const char *text)
+{
+	char	*ret,
+			*p;
+	bool	notquoted = true;
+	int		count = 0;
+
+	ret = pg_strdup(text);
+
+	for (p = ret; *p; p++)
+	{
+		if (p[0] == '"')
+		{
+			count++;
+			notquoted = false;
+		}
+		if (notquoted && (count % 2 == 0))
+			*p = pg_tolower((unsigned char) *p);
+	}
+	return ret;
 }
 
 

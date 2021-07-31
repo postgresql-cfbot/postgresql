@@ -28,6 +28,7 @@
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/snapmgr.h"
 
 
 static bool isObjectPinned(const ObjectAddress *object);
@@ -65,6 +66,12 @@ recordMultipleDependencies(const ObjectAddress *depender,
 				max_slots,
 				slot_init_count,
 				slot_stored_count;
+	Relation    catalog;
+	HeapTuple   tuple;
+	Oid         oidIndexId;
+	SysScanDesc scan;
+	ScanKeyData skey;
+	Snapshot dirtySnapshot;
 
 	if (nreferenced <= 0)
 		return;					/* nothing to do */
@@ -78,6 +85,68 @@ recordMultipleDependencies(const ObjectAddress *depender,
 	 */
 	if (IsBootstrapProcessingMode())
 		return;
+
+	catalog = table_open(referenced->classId, AccessShareLock);
+	oidIndexId = get_object_oid_index(referenced->classId);
+
+	Assert(OidIsValid(oidIndexId));
+
+	/*
+	 * We use a dirty snapshot so that we see all potential dependencies,
+	 * committed or not. Without doing this we would miss objects created
+	 * during in-flight transactions.
+	 */
+	UseDirtyCatalogSnapshot = true;
+
+	dirtySnapshot = GetCatalogSnapshot(RelationGetRelid(catalog));
+
+	ScanKeyInit(&skey,
+				get_object_attnum_oid(referenced->classId),
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(referenced->objectId));
+
+	scan = systable_beginscan(catalog, oidIndexId, true,
+							  dirtySnapshot, 1, &skey);
+
+	tuple = systable_getnext(scan);
+
+	/*
+	 * dirtySnapshot->xmax is set to the tuple's xmax
+	 * if that is another transaction that's still in
+	 * progress; or to InvalidTransactionId if the
+	 * tuple's xmax is committed good, committed dead,
+	 * or my own xact. See snapshot.h comments.
+	 */
+	if (HeapTupleIsValid(tuple) && TransactionIdIsValid(dirtySnapshot->xmax))
+	{
+		char *dependerDesc;
+		char *referencedDesc;
+		StringInfoData detail;
+
+		initStringInfo(&detail);
+
+		/* We need a dirty snapshot to get its description. */
+		UseDirtyCatalogSnapshot = true;
+		dependerDesc = getObjectDescription(depender, false);
+
+		referencedDesc = getObjectDescription(referenced, false);
+
+
+		appendStringInfo(&detail, _("%s depends on %s (dependency not yet committed)"),
+									dependerDesc,
+									referencedDesc);
+
+		ereport(ERROR,
+				(errcode(ERRCODE_DEPENDENT_OBJECTS_UNCOMMITTED_DEPENDENCY),
+				errmsg("cannot create %s because it depends of other objects uncommitted dependencies",
+				dependerDesc)),
+				errdetail("%s", detail.data),
+				errdetail_log("%s", detail.data),
+				errhint("%s", "CREATE won't work as long as there is uncommitted dependencies."));
+	}
+
+	systable_endscan(scan);
+	table_close(catalog, AccessShareLock);
 
 	dependDesc = table_open(DependRelationId, RowExclusiveLock);
 

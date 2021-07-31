@@ -17,7 +17,6 @@
 #include "storage/sync.h"
 #include "utils/guc.h"
 
-
 extern PGDLLIMPORT bool track_commit_timestamp;
 
 extern bool check_track_commit_timestamp(bool *newval, void **extra,

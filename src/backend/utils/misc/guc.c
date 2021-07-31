@@ -3340,7 +3340,8 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_KB
 		},
 		&autovacuum_work_mem,
-		-1, -1, MAX_KILOBYTES,
+		/* see compute_max_dead_tuples if you need to change the max value */
+		-1, -1, 1024 * 1024,
 		check_autovacuum_work_mem, NULL, NULL
 	},
 

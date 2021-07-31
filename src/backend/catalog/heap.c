@@ -74,6 +74,7 @@
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
+#include "pgstat.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
 #include "storage/smgr.h"
@@ -2024,6 +2025,11 @@ heap_drop_with_catalog(Oid relid)
 	 * safe.)
 	 */
 	RelationForgetRelation(relid);
+
+	/*
+	 * update changes_since_analyze of its ancestors for auto ANALYZE
+	 */
+	pgstat_report_anl_ancestors(relid, false, false, true);
 
 	/*
 	 * remove inheritance information

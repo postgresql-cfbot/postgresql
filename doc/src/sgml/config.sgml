@@ -8034,6 +8034,66 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-autovacuum-analyze-attach-partition" xreflabel="autovacuum_analyze_attach_partition">
+      <term><varname>autovacuum_analyze_attach_partition</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>autovacuum_analyze_attach_partition</varname></primary>
+       <secondary>configuration parameter</secondary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls whether <command>ATTACH PARTITION</command> commands are counted
+        as the changed tuples for partitioned tables.  The default value is on.
+        If on, the number of tuples of the attached partition is counted in its
+        ancestors' changed tuples.
+        This parameter can only be set in the <filename>postgresql.conf</filename>
+        file or on the server command line; but this can be
+        disabled for individual tables by changing table storage parameters.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-autovacuum-analyze-detach-partition" xreflabel="autovacuum_analyze_detach_partition">
+      <term><varname>autovacuum_analyze_detach_partition</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>autovacuum_analyze_detach_partition</varname></primary>
+       <secondary>configuration parameter</secondary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls whether <command>DETACH PARTITION</command> commands are counted
+        as the changed tuples for partitioned tables.  The default value is on.
+        If on, the number of tuples of the detached partition is counted in its
+        ancestors' changed tuples.
+        This parameter can only be set in the <filename>postgresql.conf</filename>
+        file or on the server command line; but this can be
+        disabled for individual tables by changing table storage parameters.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-autovacuum-analyze-drop-partition" xreflabel="autovacuum_analyze_drop_partition">
+      <term><varname>autovacuum_analyze_drop_partition</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>autovacuum_analyze_drop_partition</varname></primary>
+       <secondary>configuration parameter</secondary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls whether <command>DROP TABLE</command> commands executed on partitions
+        are counted as the changed tuples for partitioned tables.  The default value is
+        on.  If on, the number of tuples of the dropped partition is counted in its
+        ancestors' changed tuples.
+        This parameter can only be set in the <filename>postgresql.conf</filename>
+        file or on the server command line; but this can be
+        disabled for individual tables by changing table storage parameters.
+       </para>
+      </listitem>
+     </varlistentry>
+
     </variablelist>
    </sect1>
 

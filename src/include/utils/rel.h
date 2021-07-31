@@ -305,6 +305,9 @@ typedef struct AutoVacOpts
 	float8		vacuum_scale_factor;
 	float8		vacuum_ins_scale_factor;
 	float8		analyze_scale_factor;
+	bool		analyze_attach_partition;
+	bool		analyze_detach_partition;
+	bool		analyze_drop_partition;
 } AutoVacOpts;
 
 /* StdRdOptions->vacuum_index_cleanup values */

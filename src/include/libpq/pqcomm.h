@@ -137,6 +137,9 @@ typedef uint32 PacketLen;
 
 extern bool Db_user_namespace;
 
+/* List of allowed compression algorithms */
+extern char *libpq_compress_algorithms;
+
 /*
  * In protocol 3.0 and later, the startup packet length is not fixed, but
  * we set an arbitrary limit on it anyway.  This is just to prevent simple

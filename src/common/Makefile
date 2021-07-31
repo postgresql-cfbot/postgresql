@@ -78,7 +78,9 @@ OBJS_COMMON = \
 	unicode_norm.o \
 	username.o \
 	wait_error.o \
-	wchar.o
+	wchar.o \
+	z_stream.o \
+	zpq_stream.o
 
 ifeq ($(with_ssl),openssl)
 OBJS_COMMON += \

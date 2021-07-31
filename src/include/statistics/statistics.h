@@ -120,10 +120,21 @@ extern Selectivity statext_clauselist_selectivity(PlannerInfo *root,
 												  Bitmapset **estimatedclauses,
 												  bool is_or);
 extern bool has_stats_of_kind(List *stats, char requiredkind);
+extern StatisticExtInfo *find_matching_mcv(PlannerInfo *root, RelOptInfo *rel,
+										   Bitmapset *attnums, List *exprs);
 extern StatisticExtInfo *choose_best_statistics(List *stats, char requiredkind,
 												Bitmapset **clause_attnums,
 												List **clause_exprs,
 												int nclauses);
 extern HeapTuple statext_expressions_load(Oid stxoid, int idx);
+
+extern bool statext_try_join_estimates(PlannerInfo *root, List *clauses, int varRelid,
+									   JoinType jointype, SpecialJoinInfo *sjinfo,
+									   Bitmapset *estimatedclauses);
+
+extern Selectivity statext_clauselist_join_selectivity(PlannerInfo *root, List *clauses,
+													   int varRelid,
+													   JoinType jointype, SpecialJoinInfo *sjinfo,
+													   Bitmapset **estimatedclauses);
 
 #endif							/* STATISTICS_H */

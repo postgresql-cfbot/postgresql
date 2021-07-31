@@ -63,6 +63,7 @@
 #include "access/xlog.h"
 #include "catalog/index.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "commands/dbcommands.h"
 #include "commands/progress.h"
 #include "commands/vacuum.h"
@@ -509,6 +510,14 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	TransactionId OldestXmin;
 	TransactionId FreezeLimit;
 	MultiXactId MultiXactCutoff;
+
+	/*
+	 * not every AM requires these to be valid, but regular heap does.
+	 * Transaction information for the global temp table will be stored
+	 * in the local hash table, not the catalog.
+	 */
+	Assert(RELATION_IS_GLOBAL_TEMP(rel) ^ TransactionIdIsNormal(rel->rd_rel->relfrozenxid));
+	Assert(RELATION_IS_GLOBAL_TEMP(rel) ^ MultiXactIdIsValid(rel->rd_rel->relminmxid));
 
 	/* measure elapsed time iff autovacuum logging requires it */
 	if (IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0)

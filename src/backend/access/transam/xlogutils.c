@@ -483,8 +483,8 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 	if (blkno < lastblock)
 	{
 		/* page exists in file */
-		buffer = ReadBufferWithoutRelcache(rnode, forknum, blkno,
-										   mode, NULL);
+		buffer = ReadBufferWithoutRelcache(rnode, forknum, blkno, mode, NULL,
+										   RELPERSISTENCE_PERMANENT);
 	}
 	else
 	{
@@ -508,8 +508,8 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 					LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 				ReleaseBuffer(buffer);
 			}
-			buffer = ReadBufferWithoutRelcache(rnode, forknum,
-											   P_NEW, mode, NULL);
+			buffer = ReadBufferWithoutRelcache(rnode, forknum, P_NEW, mode,
+											   NULL, RELPERSISTENCE_PERMANENT);
 		}
 		while (BufferGetBlockNumber(buffer) < blkno);
 		/* Handle the corner case that P_NEW returns non-consecutive pages */
@@ -518,8 +518,8 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 			if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
 				LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 			ReleaseBuffer(buffer);
-			buffer = ReadBufferWithoutRelcache(rnode, forknum, blkno,
-											   mode, NULL);
+			buffer = ReadBufferWithoutRelcache(rnode, forknum, blkno, mode,
+											   NULL, RELPERSISTENCE_PERMANENT);
 		}
 	}
 

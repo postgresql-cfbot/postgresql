@@ -29,6 +29,13 @@ relmap_desc(StringInfo buf, XLogReaderState *record)
 		appendStringInfo(buf, "database %u tablespace %u size %u",
 						 xlrec->dbid, xlrec->tsid, xlrec->nbytes);
 	}
+	if (info == XLOG_RELMAP_CREATE)
+	{
+		xl_relmap_update *xlrec = (xl_relmap_update *) rec;
+
+		appendStringInfo(buf, "database %u tablespace %u size %u",
+						 xlrec->dbid, xlrec->tsid, xlrec->nbytes);
+	}
 }
 
 const char *
@@ -40,6 +47,9 @@ relmap_identify(uint8 info)
 	{
 		case XLOG_RELMAP_UPDATE:
 			id = "UPDATE";
+			break;
+		case XLOG_RELMAP_CREATE:
+			id = "CREATE";
 			break;
 	}
 

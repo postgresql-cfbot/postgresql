@@ -2727,6 +2727,10 @@ perform_work_item(AutoVacuumWorkItem *workitem)
 									ObjectIdGetDatum(workitem->avw_relation),
 									Int64GetDatum((int64) workitem->avw_blockNumber));
 				break;
+			case AVW_GINCleanPendingList:
+				DirectFunctionCall1(gin_clean_pending_list,
+									ObjectIdGetDatum(workitem->avw_relation));
+				break;
 			default:
 				elog(WARNING, "unrecognized work item found: type %d",
 					 workitem->avw_type);
@@ -3349,6 +3353,10 @@ autovac_report_workitem(AutoVacuumWorkItem *workitem,
 		case AVW_BRINSummarizeRange:
 			snprintf(activity, MAX_AUTOVAC_ACTIV_LEN,
 					 "autovacuum: BRIN summarize");
+			break;
+		case AVW_GINCleanPendingList:
+			snprintf(activity, MAX_AUTOVAC_ACTIV_LEN,
+					 "autovacuum: GIN pending list cleanup");
 			break;
 	}
 

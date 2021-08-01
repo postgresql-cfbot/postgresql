@@ -740,6 +740,9 @@ LIBOBJS = @LIBOBJS@
 # files needed for the chosen CRC-32C implementation
 PG_CRC32C_OBJS = @PG_CRC32C_OBJS@
 
+# files needed for the chosen UTF-8 validation implementation
+PG_UTF8_OBJS = @PG_UTF8_OBJS@
+
 LIBS := -lpgcommon -lpgport $(LIBS)
 
 # to make ws2_32.lib the last library

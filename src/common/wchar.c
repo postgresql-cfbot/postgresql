@@ -13,6 +13,7 @@
 #include "c.h"
 
 #include "mb/pg_wchar.h"
+#include "port/pg_utf8.h"
 
 
 /*
@@ -1761,7 +1762,44 @@ static int
 pg_utf8_verifystr(const unsigned char *s, int len)
 {
 	const unsigned char *start = s;
+	int			non_error_bytes = 0;
 
+	/*
+	 * For longer strings, dispatch to an optimized implementation.
+	 *
+	 * The threshold is somewhat arbitrary. WIP: test different thresholds?
+	 * XXX: Some regression tests in conversion.sql need to pad their inputs
+	 * by a multiple of this number in order to test the fast path, so if you
+	 * change this, make sure that's still the case!
+	 */
+	if (len >= 32)
+	{
+		/* platform-specific implementation in src/port */
+		non_error_bytes = UTF8_VERIFYSTR_FAST(s, len);
+		s += non_error_bytes;
+		len -= non_error_bytes;
+
+		/*
+		 * Since the fast path is optimized for the valid case, it's possible
+		 * it returned in the middle of a multibyte sequence, since that
+		 * wouldn't have raised an error. Before checking the remaining bytes,
+		 * walk backwards to find the last byte that could have been the start
+		 * of a valid sequence.
+		 */
+		while (s > start)
+		{
+			s--;
+			len++;
+
+			if (!IS_HIGHBIT_SET(*s) ||
+				IS_UTF8_2B_LEAD(*s) ||
+				IS_UTF8_3B_LEAD(*s) ||
+				IS_UTF8_4B_LEAD(*s))
+				break;
+		}
+	}
+
+	/* check remaining bytes */
 	while (len > 0)
 	{
 		int			l;

@@ -120,10 +120,14 @@ sub mkvcbuild
 		push(@pgportfiles, 'pg_crc32c_sse42_choose.c');
 		push(@pgportfiles, 'pg_crc32c_sse42.c');
 		push(@pgportfiles, 'pg_crc32c_sb8.c');
+		push(@pgportfiles, 'pg_utf8_sse42_choose.c');
+		push(@pgportfiles, 'pg_utf8_sse42.c');
+		push(@pgportfiles, 'pg_utf8_fallback.c');
 	}
 	else
 	{
 		push(@pgportfiles, 'pg_crc32c_sb8.c');
+		push(@pgportfiles, 'pg_utf8_fallback.c');
 	}
 
 	our @pgcommonallfiles = qw(

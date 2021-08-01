@@ -41,6 +41,7 @@
 #include "access/twophase.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
+#include "catalog/catversion.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
 #include "catalog/storage.h"
@@ -654,6 +655,7 @@ static char *locale_ctype;
 static char *server_encoding_string;
 static char *server_version_string;
 static int	server_version_num;
+static int	catalog_version_no;
 static char *timezone_string;
 static char *log_timezone_string;
 static char *timezone_abbreviations_string;
@@ -3454,6 +3456,18 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&server_version_num,
 		PG_VERSION_NUM, PG_VERSION_NUM, PG_VERSION_NUM,
+		NULL, NULL, NULL
+	},
+
+	{
+		/* Can't be set in postgresql.conf */
+		{"catalog_version", PGC_INTERNAL, PRESET_OPTIONS,
+			gettext_noop("Shows the catalog version number."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&catalog_version_no,
+		CATALOG_VERSION_NO, CATALOG_VERSION_NO, CATALOG_VERSION_NO,
 		NULL, NULL, NULL
 	},
 

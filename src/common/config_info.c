@@ -20,6 +20,7 @@
 #include "postgres_fe.h"
 #endif
 
+#include "catalog/catversion.h"
 #include "common/config_info.h"
 
 
@@ -38,7 +39,7 @@ get_configdata(const char *my_exec_path, size_t *configdata_len)
 	int			i = 0;
 
 	/* Adjust this to match the number of items filled below */
-	*configdata_len = 23;
+	*configdata_len = 24;
 	configdata = (ConfigData *) palloc(*configdata_len * sizeof(ConfigData));
 
 	configdata[i].name = pstrdup("BINDIR");
@@ -189,6 +190,10 @@ get_configdata(const char *my_exec_path, size_t *configdata_len)
 #else
 	configdata[i].setting = pstrdup(_("not recorded"));
 #endif
+	i++;
+
+	configdata[i].name = pstrdup("CATALOG_VERSION");
+	configdata[i].setting = pstrdup(psprintf("%d", CATALOG_VERSION_NO));
 	i++;
 
 	configdata[i].name = pstrdup("VERSION");

@@ -17,10 +17,13 @@
 extern bool EnableSSL;
 extern int	ReservedBackends;
 extern PGDLLIMPORT int PostPortNumber;
+extern PGDLLIMPORT int ProxyPortNumber;
 extern int	Unix_socket_permissions;
 extern char *Unix_socket_group;
 extern char *Unix_socket_directories;
 extern char *ListenAddresses;
+extern char *TrustedProxyServersString;
+extern struct sockaddr_storage *TrustedProxyServers;
 extern bool ClientAuthInProgress;
 extern int	PreAuthDelay;
 extern int	AuthenticationTimeout;

@@ -59,6 +59,8 @@ even if it is a very bad thing for the user.
 New WAL records cannot be written during recovery, so hint bits set during
 recovery must not dirty the page if the buffer is not already dirty, when
 checksums are enabled.  Systems in Hot-Standby mode may benefit from hint bits
-being set, but with checksums enabled, a page cannot be dirtied after setting a
-hint bit (due to the torn page risk). So, it must wait for full-page images
-containing the hint bit updates to arrive from the primary.
+being set, but with checksums enabled, a page cannot be dirtied because setting
+a hint bit (due to the torn page risk). So, it must wait for full-page images
+containing the hint bit updates to arrive from the primary. But if the page is
+already dirty or dirtied later by WAL replay - hint bits may be flushed on
+standby. Also, as result, checksums on primary and standby could differ.

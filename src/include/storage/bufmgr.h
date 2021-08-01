@@ -46,6 +46,13 @@ typedef enum
 								 * replay; otherwise same as RBM_NORMAL */
 } ReadBufferMode;
 
+typedef enum
+{
+	INDEX_LP_DEAD_OK,			/* Index tuple could be marked as LP_DEAD */
+	INDEX_LP_DEAD_NOT_OK,		/* Not allowed to mark index tuple as dead */
+	INDEX_LP_DEAD_OK_MIN_LSN	/* Allowed if index page LSN is greater */
+} IndexLpDeadAllowedResult;
+
 /*
  * Type returned by PrefetchBuffer().
  */
@@ -60,6 +67,8 @@ struct WritebackContext;
 
 /* forward declared, to avoid including smgr.h here */
 struct SMgrRelationData;
+
+struct TupleDeadnessData;
 
 /* in globals.c ... this duplicates miscadmin.h */
 extern PGDLLIMPORT int NBuffers;
@@ -224,6 +233,8 @@ extern void BufferGetTag(Buffer buffer, RelFileNode *rnode,
 						 ForkNumber *forknum, BlockNumber *blknum);
 
 extern void MarkBufferDirtyHint(Buffer buffer, bool buffer_std);
+extern IndexLpDeadAllowedResult IsIndexLpDeadAllowed(struct TupleDeadnessData *deadness,
+													 XLogRecPtr *minLsn);
 
 extern void UnlockBuffers(void);
 extern void LockBuffer(Buffer buffer, int mode);

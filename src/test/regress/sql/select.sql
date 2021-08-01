@@ -234,6 +234,19 @@ select unique1, unique2 from onek2
 select unique1, unique2 from onek2
   where (unique2 = 11 and stringu1 < 'B') or unique1 = 0;
 
+CREATE TEMP TABLE a (id int PRIMARY KEY, name text NOT NULL);
+explain (costs off)
+SELECT * FROM a WHERE id IS NULL;
+
+explain (costs off)
+SELECT * FROM a WHERE id IS NOT NULL;
+
+explain (costs off)
+SELECT * FROM a WHERE name IS NOT NULL;
+
+explain (costs off)
+SELECT * FROM a WHERE name IS NULL;
+
 --
 -- Test some corner cases that have been known to confuse the planner
 --

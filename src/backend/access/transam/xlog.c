@@ -265,6 +265,7 @@ char	   *recoveryEndCommand = NULL;
 char	   *archiveCleanupCommand = NULL;
 RecoveryTargetType recoveryTarget = RECOVERY_TARGET_UNSET;
 bool		recoveryTargetInclusive = true;
+bool		recoveryTargetUseOriginTime = false;
 int			recoveryTargetAction = RECOVERY_TARGET_ACTION_PAUSE;
 TransactionId recoveryTargetXid;
 char	   *recovery_target_time_string;
@@ -5709,25 +5710,81 @@ static bool
 getRecordTimestamp(XLogReaderState *record, TimestampTz *recordXtime)
 {
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
-	uint8		xact_info = info & XLOG_XACT_OPMASK;
 	uint8		rmid = XLogRecGetRmid(record);
 
-	if (rmid == RM_XLOG_ID && info == XLOG_RESTORE_POINT)
+	if (rmid == RM_XLOG_ID)
 	{
-		*recordXtime = ((xl_restore_point *) XLogRecGetData(record))->rp_time;
-		return true;
+		if (info == XLOG_RESTORE_POINT)
+		{
+			*recordXtime = ((xl_restore_point *) XLogRecGetData(record))->rp_time;
+			return true;
+		}
+		if (info == XLOG_CHECKPOINT_ONLINE ||
+			info == XLOG_CHECKPOINT_SHUTDOWN)
+		{
+			*recordXtime = time_t_to_timestamptz(((CheckPoint *) XLogRecGetData(record))->time);
+			return true;
+		}
+		if (info == XLOG_END_OF_RECOVERY)
+		{
+			*recordXtime = ((xl_end_of_recovery *) XLogRecGetData(record))->end_time;
+			return true;
+		}
 	}
-	if (rmid == RM_XACT_ID && (xact_info == XLOG_XACT_COMMIT ||
-							   xact_info == XLOG_XACT_COMMIT_PREPARED))
+	if (rmid == RM_XACT_ID)
 	{
-		*recordXtime = ((xl_xact_commit *) XLogRecGetData(record))->xact_time;
-		return true;
-	}
-	if (rmid == RM_XACT_ID && (xact_info == XLOG_XACT_ABORT ||
-							   xact_info == XLOG_XACT_ABORT_PREPARED))
-	{
-		*recordXtime = ((xl_xact_abort *) XLogRecGetData(record))->xact_time;
-		return true;
+		uint8		xact_info = info & XLOG_XACT_OPMASK;
+
+		if (xact_info == XLOG_XACT_COMMIT ||
+			xact_info == XLOG_XACT_COMMIT_PREPARED)
+		{
+			if (recoveryTargetUseOriginTime)
+			{
+				xl_xact_commit *xlrec = (xl_xact_commit *) XLogRecGetData(record);
+				xl_xact_parsed_commit parsed;
+
+				ParseCommitRecord(XLogRecGetInfo(record),
+								  xlrec,
+								  &parsed);
+				*recordXtime = parsed.origin_timestamp;
+			}
+			else
+				*recordXtime = ((xl_xact_commit *) XLogRecGetData(record))->xact_time;
+			return true;
+		}
+		if (xact_info == XLOG_XACT_ABORT ||
+			xact_info == XLOG_XACT_ABORT_PREPARED)
+		{
+			if (recoveryTargetUseOriginTime)
+			{
+				xl_xact_abort *xlrec = (xl_xact_abort *) XLogRecGetData(record);
+				xl_xact_parsed_abort parsed;
+
+				ParseAbortRecord(XLogRecGetInfo(record),
+								  xlrec,
+								  &parsed);
+				*recordXtime = parsed.origin_timestamp;
+			}
+			else
+				*recordXtime = ((xl_xact_abort *) XLogRecGetData(record))->xact_time;
+			return true;
+		}
+		if (xact_info == XLOG_XACT_PREPARE)
+		{
+			if (recoveryTargetUseOriginTime)
+			{
+				xl_xact_prepare *xlrec = (xl_xact_prepare *) XLogRecGetData(record);
+				xl_xact_parsed_prepare parsed;
+
+				ParsePrepareRecord(XLogRecGetInfo(record),
+								  xlrec,
+								  &parsed);
+				*recordXtime = parsed.origin_timestamp;
+			}
+			else
+				*recordXtime = ((xl_xact_prepare *) XLogRecGetData(record))->prepared_at;
+			return true;
+		}
 	}
 	return false;
 }

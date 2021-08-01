@@ -2315,6 +2315,15 @@ _equalAlterPublicationStmt(const AlterPublicationStmt *a,
 }
 
 static bool
+_equalPublicationTable(const PublicationTable *a, const PublicationTable *b)
+{
+	COMPARE_NODE_FIELD(relation);
+	COMPARE_NODE_FIELD(whereClause);
+
+	return true;
+}
+
+static bool
 _equalCreateSubscriptionStmt(const CreateSubscriptionStmt *a,
 							 const CreateSubscriptionStmt *b)
 {
@@ -3699,6 +3708,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_AlterPublicationStmt:
 			retval = _equalAlterPublicationStmt(a, b);
+			break;
+		case T_PublicationTable:
+			retval = _equalPublicationTable(a, b);
 			break;
 		case T_CreateSubscriptionStmt:
 			retval = _equalCreateSubscriptionStmt(a, b);

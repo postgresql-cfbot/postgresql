@@ -384,31 +384,24 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 		List	   *delrels = NIL;
 		ListCell   *oldlc;
 
-		/* Calculate which relations to drop. */
+		/*
+		 * Remove all publication-table mappings.  We could possibly remove (i)
+		 * tables that are not found in the new table list and (ii) tables that
+		 * are being re-added with a different qual expression. For (ii),
+		 * simply updating the existing tuple is not enough, because of qual
+		 * expression dependencies.
+		 */
 		foreach(oldlc, oldrelids)
 		{
 			Oid			oldrelid = lfirst_oid(oldlc);
-			ListCell   *newlc;
-			bool		found = false;
+			PublicationRelationInfo *oldrel;
 
-			foreach(newlc, rels)
-			{
-				Relation	newrel = (Relation) lfirst(newlc);
-
-				if (RelationGetRelid(newrel) == oldrelid)
-				{
-					found = true;
-					break;
-				}
-			}
-
-			if (!found)
-			{
-				Relation	oldrel = table_open(oldrelid,
-												ShareUpdateExclusiveLock);
-
-				delrels = lappend(delrels, oldrel);
-			}
+			oldrel = palloc(sizeof(PublicationRelationInfo));
+			oldrel->relid = oldrelid;
+			oldrel->whereClause = NULL;
+			oldrel->relation = table_open(oldrel->relid,
+										  ShareUpdateExclusiveLock);
+			delrels = lappend(delrels, oldrel);
 		}
 
 		/* And drop them. */
@@ -498,7 +491,8 @@ RemovePublicationRelById(Oid proid)
 }
 
 /*
- * Open relations specified by a RangeVar list.
+ * Open relations specified by a RangeVar list (PublicationTable or Relation).
+ *
  * The returned tables are locked in ShareUpdateExclusiveLock mode in order to
  * add them to a publication.
  */
@@ -508,16 +502,41 @@ OpenTableList(List *tables)
 	List	   *relids = NIL;
 	List	   *rels = NIL;
 	ListCell   *lc;
+	PublicationRelationInfo *pri;
 
 	/*
 	 * Open, share-lock, and check all the explicitly-specified relations
 	 */
 	foreach(lc, tables)
 	{
-		RangeVar   *rv = lfirst_node(RangeVar, lc);
-		bool		recurse = rv->inh;
+		PublicationTable *t = NULL;
+		RangeVar   *rv;
+		bool		recurse;
 		Relation	rel;
 		Oid			myrelid;
+		bool		whereclause;
+
+		/*
+		 * ALTER PUBLICATION ... ADD TABLE provides a PublicationTable List
+		 * (Relation, Where clause). ALTER PUBLICATION ... DROP TABLE provides
+		 * a Relation List. Check the List element to be used.
+		 */
+		if (IsA(lfirst(lc), PublicationTable))
+			whereclause = true;
+		else
+			whereclause = false;
+
+		if (whereclause)
+		{
+			t = lfirst(lc);
+			rv = castNode(RangeVar, t->relation);
+		}
+		else
+		{
+			rv = lfirst_node(RangeVar, lc);
+		}
+
+		recurse = rv->inh;
 
 		/* Allow query cancel in case this takes a long time */
 		CHECK_FOR_INTERRUPTS();
@@ -537,8 +556,14 @@ OpenTableList(List *tables)
 			table_close(rel, ShareUpdateExclusiveLock);
 			continue;
 		}
-
-		rels = lappend(rels, rel);
+		pri = palloc(sizeof(PublicationRelationInfo));
+		pri->relid = myrelid;
+		pri->relation = rel;
+		if (whereclause)
+			pri->whereClause = t->whereClause;
+		else
+			pri->whereClause = NULL;
+		rels = lappend(rels, pri);
 		relids = lappend_oid(relids, myrelid);
 
 		/*
@@ -571,7 +596,15 @@ OpenTableList(List *tables)
 
 				/* find_all_inheritors already got lock */
 				rel = table_open(childrelid, NoLock);
-				rels = lappend(rels, rel);
+				pri = palloc(sizeof(PublicationRelationInfo));
+				pri->relid = childrelid;
+				pri->relation = rel;
+				/* child inherits WHERE clause from parent */
+				if (whereclause)
+					pri->whereClause = t->whereClause;
+				else
+					pri->whereClause = NULL;
+				rels = lappend(rels, pri);
 				relids = lappend_oid(relids, childrelid);
 			}
 		}
@@ -592,10 +625,12 @@ CloseTableList(List *rels)
 
 	foreach(lc, rels)
 	{
-		Relation	rel = (Relation) lfirst(lc);
+		PublicationRelationInfo *pri = (PublicationRelationInfo *) lfirst(lc);
 
-		table_close(rel, NoLock);
+		table_close(pri->relation, NoLock);
 	}
+
+	list_free_deep(rels);
 }
 
 /*
@@ -611,15 +646,15 @@ PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
 
 	foreach(lc, rels)
 	{
-		Relation	rel = (Relation) lfirst(lc);
+		PublicationRelationInfo *pri = (PublicationRelationInfo *) lfirst(lc);
 		ObjectAddress obj;
 
 		/* Must be owner of the table or superuser. */
-		if (!pg_class_ownercheck(RelationGetRelid(rel), GetUserId()))
-			aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(rel->rd_rel->relkind),
-						   RelationGetRelationName(rel));
+		if (!pg_class_ownercheck(pri->relid, GetUserId()))
+			aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(pri->relation->rd_rel->relkind),
+						   RelationGetRelationName(pri->relation));
 
-		obj = publication_add_relation(pubid, rel, if_not_exists);
+		obj = publication_add_relation(pubid, pri, if_not_exists);
 		if (stmt)
 		{
 			EventTriggerCollectSimpleCommand(obj, InvalidObjectAddress,
@@ -643,11 +678,10 @@ PublicationDropTables(Oid pubid, List *rels, bool missing_ok)
 
 	foreach(lc, rels)
 	{
-		Relation	rel = (Relation) lfirst(lc);
-		Oid			relid = RelationGetRelid(rel);
+		PublicationRelationInfo *pri = (PublicationRelationInfo *) lfirst(lc);
 
 		prid = GetSysCacheOid2(PUBLICATIONRELMAP, Anum_pg_publication_rel_oid,
-							   ObjectIdGetDatum(relid),
+							   ObjectIdGetDatum(pri->relid),
 							   ObjectIdGetDatum(pubid));
 		if (!OidIsValid(prid))
 		{
@@ -657,7 +691,7 @@ PublicationDropTables(Oid pubid, List *rels, bool missing_ok)
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_OBJECT),
 					 errmsg("relation \"%s\" is not part of the publication",
-							RelationGetRelationName(rel))));
+							RelationGetRelationName(pri->relation))));
 		}
 
 		ObjectAddressSet(obj, PublicationRelRelationId, prid);

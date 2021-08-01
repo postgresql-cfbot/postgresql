@@ -4840,6 +4840,17 @@ _copyAlterPublicationStmt(const AlterPublicationStmt *from)
 	return newnode;
 }
 
+static PublicationTable *
+_copyPublicationTable(const PublicationTable *from)
+{
+	PublicationTable *newnode = makeNode(PublicationTable);
+
+	COPY_NODE_FIELD(relation);
+	COPY_NODE_FIELD(whereClause);
+
+	return newnode;
+}
+
 static CreateSubscriptionStmt *
 _copyCreateSubscriptionStmt(const CreateSubscriptionStmt *from)
 {
@@ -5703,6 +5714,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_AlterPublicationStmt:
 			retval = _copyAlterPublicationStmt(from);
+			break;
+		case T_PublicationTable:
+			retval = _copyPublicationTable(from);
 			break;
 		case T_CreateSubscriptionStmt:
 			retval = _copyCreateSubscriptionStmt(from);

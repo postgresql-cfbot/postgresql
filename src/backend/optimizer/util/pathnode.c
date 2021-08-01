@@ -2502,6 +2502,7 @@ create_mergejoin_path(PlannerInfo *root,
 					  List *pathkeys,
 					  Relids required_outer,
 					  List *mergeclauses,
+					  List *rangeclause,
 					  List *outersortkeys,
 					  List *innersortkeys)
 {
@@ -2530,6 +2531,7 @@ create_mergejoin_path(PlannerInfo *root,
 	pathnode->jpath.innerjoinpath = inner_path;
 	pathnode->jpath.joinrestrictinfo = restrict_clauses;
 	pathnode->path_mergeclauses = mergeclauses;
+	pathnode->path_rangeclause = rangeclause;
 	pathnode->outersortkeys = outersortkeys;
 	pathnode->innersortkeys = innersortkeys;
 	/* pathnode->skip_mark_restore will be set by final_cost_mergejoin */
@@ -4132,6 +4134,7 @@ do { \
 				REPARAMETERIZE_CHILD_PATH(jpath->innerjoinpath);
 				ADJUST_CHILD_ATTRS(jpath->joinrestrictinfo);
 				ADJUST_CHILD_ATTRS(mpath->path_mergeclauses);
+				ADJUST_CHILD_ATTRS(mpath->path_rangeclause);
 				new_path = (Path *) mpath;
 			}
 			break;

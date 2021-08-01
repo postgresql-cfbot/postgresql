@@ -19,6 +19,7 @@
 
 #include "access/stratnum.h"
 #include "catalog/pg_opfamily.h"
+#include "catalog/pg_operator.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/plannodes.h"
@@ -1215,6 +1216,60 @@ initialize_mergeclause_eclasses(PlannerInfo *root, RestrictInfo *restrictinfo)
 }
 
 /*
+ * initialize_rangeclause_eclasses
+ */
+void
+initialize_rangeclause_eclasses(PlannerInfo *root,
+								RestrictInfo *restrictinfo)
+{
+	Expr   *clause = restrictinfo->clause;
+	Oid		lefttype,
+			righttype,
+			opno;
+
+	/* Should be a rangeclause ... */
+	Assert(restrictinfo->rangeleftopfamilies != NIL &&
+			restrictinfo->rangerightopfamilies != NIL);
+	/* ... with links not yet set */
+	Assert(restrictinfo->left_ec == NULL);
+	Assert(restrictinfo->right_ec == NULL);
+
+	opno = ((OpExpr *) clause)->opno;
+
+	/* Need the declared input types of the operator */
+	op_input_types(opno, &lefttype, &righttype);
+
+	if(opno == OID_RANGE_CONTAINS_ELEM_OP)
+		righttype = exprType(get_rightop(clause));
+
+	else if(opno == OID_RANGE_ELEM_CONTAINED_OP)
+		lefttype = exprType(get_leftop(clause));
+
+
+	/* Find or create a matching EquivalenceClass for each side */
+	restrictinfo->left_ec =
+		get_eclass_for_sort_expr(root,
+				 	 	 	 	 (Expr *) get_leftop(clause),
+								 restrictinfo->nullable_relids,
+								 restrictinfo->rangeleftopfamilies,
+								 lefttype,
+								 ((OpExpr *) clause)->inputcollid,
+								 0,
+								 NULL,
+								 true);
+	restrictinfo->right_ec =
+		get_eclass_for_sort_expr(root,
+								 (Expr *) get_rightop(clause),
+								 restrictinfo->nullable_relids,
+								 restrictinfo->rangerightopfamilies,
+								 righttype,
+								 ((OpExpr *) clause)->inputcollid,
+								 0,
+								 NULL,
+								 true);
+}
+
+/*
  * update_mergeclause_eclasses
  *		Make the cached EquivalenceClass links valid in a mergeclause
  *		restrictinfo.
@@ -1345,6 +1400,64 @@ find_mergeclauses_for_outer_pathkeys(PlannerInfo *root,
 	}
 
 	return mergeclauses;
+}
+
+/*
+ * find_rangeclauses_for_outer_pathkeys
+ */
+List *
+find_rangeclauses_for_outer_pathkeys(PlannerInfo *root,
+									List *pathkeys,
+									List *mergeclauses,
+									List *rangeclauses)
+{
+	ListCell   *i;
+	RestrictInfo *mergeclause = NULL;
+	List *result_list = NIL;
+
+	if(mergeclauses)
+		mergeclause = llast(mergeclauses);
+
+	foreach(i, pathkeys)
+	{
+		PathKey    *pathkey = (PathKey *) lfirst(i);
+		EquivalenceClass *pathkey_ec = pathkey->pk_eclass;
+		ListCell   *j;
+
+		if(mergeclause != NULL)
+		{
+			if(mergeclause->outer_is_left)
+			{
+				if(mergeclause->left_ec != pathkey_ec)
+					continue;
+			}
+			else if(mergeclause->right_ec != pathkey_ec)
+				continue;
+		}
+
+		foreach(j, rangeclauses)
+		{
+			List				*rangeclause = (List *) lfirst(j);
+			RestrictInfo 		*rinfo = (RestrictInfo *) linitial(rangeclause);
+			EquivalenceClass 	*clause_ec;
+
+			clause_ec = rinfo->outer_is_left ?
+				rinfo->left_ec : rinfo->right_ec;
+
+			if (clause_ec == pathkey_ec)
+				result_list = lappend(result_list, rangeclause);
+		}
+
+		/*
+		 * Was it the last possible pathkey?
+		 */
+		if(mergeclause == NULL)
+			break;
+		else
+			mergeclause = NULL;
+
+  }
+  return result_list;
 }
 
 /*
@@ -1523,6 +1636,37 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 }
 
 /*
+ * select_outer_pathkeys_for_range
+ */
+List *
+select_outer_pathkeys_for_range(PlannerInfo *root,
+								List *rangeclauses)
+{
+	EquivalenceClass	*ec;
+	PathKey 			*pathkey;
+	List 				*pathkeys = NIL;
+	ListCell			*lc;
+
+	foreach(lc, rangeclauses){
+		List *rangeclause = lfirst(lc);
+		RestrictInfo *rinfo = linitial(rangeclause);
+
+		if (rinfo->outer_is_left)
+			ec = rinfo->left_ec;
+		else
+			ec = rinfo->right_ec;
+
+		pathkey = make_canonical_pathkey(root,
+										 ec,
+										 linitial_oid(ec->ec_opfamilies),
+										 BTLessStrategyNumber,
+										 false);
+		pathkeys = lappend(pathkeys, pathkey);
+	}
+	return pathkeys;
+}
+
+/*
  * make_inner_pathkeys_for_merge
  *	  Builds a pathkey list representing the explicit sort order that
  *	  must be applied to an inner path to make it usable with the
@@ -1619,6 +1763,35 @@ make_inner_pathkeys_for_merge(PlannerInfo *root,
 	}
 
 	return pathkeys;
+}
+
+/*
+ * make_inner_pathkey_for_range
+ */
+PathKey *
+make_inner_pathkey_for_range(PlannerInfo *root,
+							 List *rangeclause)
+{
+	EquivalenceClass *ec;
+	PathKey 	 *pathkey;
+	RestrictInfo *rinfo;
+
+	if(rangeclause == NIL)
+		return NULL;
+
+	rinfo = linitial(rangeclause);
+
+	if (rinfo->outer_is_left)
+		ec = rinfo->right_ec;
+	else
+		ec = rinfo->left_ec;
+
+	pathkey = make_canonical_pathkey(root,
+									 ec,
+									 linitial_oid(ec->ec_opfamilies),
+									 BTLessStrategyNumber,
+									 false);
+	return pathkey;
 }
 
 /*

@@ -3152,6 +3152,48 @@ repeat('Pg', 4) <returnvalue>PgPgPgPg</returnvalue>
       </row>
 
       <row>
+        <entry role="func_table_entry"><para role="func_signature">
+         <indexterm>
+          <primary>regexp_positions</primary>
+         </indexterm>
+         <function>regexp_positions</function> ( <parameter>string</parameter> <type>text</type>, <parameter>pattern</parameter> <type>text</type> [, <parameter>flags</parameter> <type>text</type> ] )
+        <returnvalue>setof record</returnvalue>
+        ( <parameter>starts</parameter> <type>integer[]</type>,
+        <parameter>lengths</parameter> <type>integer[]</type> )
+        </para>
+        <para>
+         Returns start positions and lengths of captured substring(s) resulting from matching a POSIX regular
+         expression to the <parameter>string</parameter>; see
+         <xref linkend="functions-posix-regexp"/>.
+        </para>
+        <para>
+         <literal>regexp_positions('foobarbequebaz', 'ba.', 'g')</literal>
+         <returnvalue></returnvalue>
+ <programlisting>
+  ({4},{3})
+  ({12},{3})
+ </programlisting>
+        </para></entry>
+       </row>
+       <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>regexp_replace</primary>
+        </indexterm>
+        <function>regexp_replace</function> ( <parameter>string</parameter> <type>text</type>, <parameter>pattern</parameter> <type>text</type>, <parameter>replacement</parameter> <type>text</type> [, <parameter>flags</parameter> <type>text</type> ] )
+        <returnvalue>text</returnvalue>
+       </para>
+       <para>
+        Replaces substring(s) matching a POSIX regular expression; see
+        <xref linkend="functions-posix-regexp"/>.
+       </para>
+       <para>
+        <literal>regexp_replace('Thomas', '.[mN]a.', 'M')</literal>
+        <returnvalue>ThM</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
          <primary>regexp_replace</primary>

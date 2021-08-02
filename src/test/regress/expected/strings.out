@@ -601,6 +601,12 @@ SELECT regexp_matches('foobarbequebaz', $re$(bar)(beque)$re$);
  {bar,beque}
 (1 row)
 
+SELECT regexp_positions('foobarbequebaz', $re$(bar)(beque)$re$);
+ regexp_positions  
+-------------------
+ ("{4,7}","{3,5}")
+(1 row)
+
 -- test case insensitive
 SELECT regexp_matches('foObARbEqUEbAz', $re$(bar)(beque)$re$, 'i');
  regexp_matches 
@@ -614,6 +620,13 @@ SELECT regexp_matches('foobarbequebazilbarfbonk', $re$(b[^b]+)(b[^b]+)$re$, 'g')
 ----------------
  {bar,beque}
  {bazil,barf}
+(2 rows)
+
+SELECT regexp_positions('foobarbequebazilbarfbonk', $re$(b[^b]+)(b[^b]+)$re$, 'g');
+  regexp_positions   
+---------------------
+ ("{4,7}","{3,5}")
+ ("{12,17}","{5,4}")
 (2 rows)
 
 -- empty capture group (matched empty string)

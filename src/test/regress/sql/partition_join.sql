@@ -536,6 +536,139 @@ EXPLAIN (COSTS OFF)
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
 
+--
+-- For asymmetric partition-wise join
+--
+CREATE TABLE prt5 (hkey int, a int, b int) PARTITION BY HASH(hkey);
+CREATE TABLE prt5_p0 PARTITION OF prt5
+                     FOR VALUES WITH (modulus 3, remainder 0);
+CREATE TABLE prt5_p1 PARTITION OF prt5
+                     FOR VALUES WITH (modulus 3, remainder 1);
+CREATE TABLE prt5_p2 PARTITION OF prt5
+                     FOR VALUES WITH (modulus 3, remainder 2);
+CREATE TABLE prt6 (aid int, alabel text) PARTITION BY HASH(aid);
+CREATE TABLE prt6_p0 PARTITION OF prt6
+                     FOR VALUES WITH (modulus 2, remainder 0);
+CREATE TABLE prt6_p1 PARTITION OF prt6
+                     FOR VALUES WITH (modulus 2, remainder 1);
+CREATE TABLE t5_1 (aid int, alabel text);
+CREATE TABLE t5_2 (bid int, blabel text);
+
+INSERT INTO prt5 (SELECT x, (x % 1000)::int,
+                            ((x+1) % 1000)::int
+                    FROM generate_series(1,1000000) x);
+INSERT INTO t5_1 (SELECT x, md5(x::text) FROM generate_series(-200, 800) x);
+INSERT INTO t5_2 (SELECT x, md5(x::text) FROM generate_series(-200, 800) x);
+INSERT INTO prt6 (SELECT * FROM t5_1);
+
+VACUUM ANALYZE prt5,prt6,t5_1,t5_2;
+
+SET max_parallel_workers_per_gather = 0;
+
+-- Trivial asymmetric JOIN of partitioned table with a relation
+EXPLAIN (COSTS OFF)
+SELECT *
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%abc%';
+
+-- The same, but appended with UNION ALL
+EXPLAIN (COSTS OFF)
+SELECT * FROM (
+	(SELECT * FROM prt5_p0)
+	UNION ALL
+	(SELECT * FROM prt5_p1)
+	UNION ALL
+	(SELECT * FROM prt5_p2)
+	) AS sq1
+JOIN t5_1 ON a = aid AND alabel like '%abc%';
+
+-- Don't allow asymmetric JOIN of two partitioned tables.
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM prt5 JOIN prt6 ON a = aid AND alabel like '%abc%';
+SELECT count(*) FROM prt5 JOIN prt6 ON a = aid AND alabel like '%abc%';
+
+-- Check asymmetric JOIN with Subquery
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM prt5 JOIN (
+	SELECT * FROM prt6 LIMIT 1000
+) AS sq1 ON a = aid AND alabel like '%abc%';
+SELECT count(*) FROM prt5 JOIN (SELECT * FROM prt6 LIMIT 1000) AS sq1
+	ON a = aid AND alabel like '%abc%';
+
+-- Asymmetric JOIN of two plane tables and one partitioned
+EXPLAIN (COSTS OFF)
+SELECT count(*)
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%ab%'
+            JOIN t5_2 ON b = bid AND blabel like '%cd%';
+SELECT count(*)
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%ab%'
+            JOIN t5_2 ON b = bid AND blabel like '%cd%';
+
+-- unable to extract non-partitioned right relation
+EXPLAIN (COSTS OFF)
+SELECT * FROM prt5 RIGHT JOIN t5_1 ON a = aid AND alabel like '%abc%';
+-- left side can be extracted, but no cost benefit
+EXPLAIN (COSTS OFF)
+SELECT * FROM prt5 LEFT JOIN t5_1 ON a = aid AND alabel like '%abc%';
+
+-- validation of the results with/without asymmetric partition-wise join
+SELECT * INTO pg_temp.result01a
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%abc%';
+
+SELECT * INTO pg_temp.result02a
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%ab%'
+            JOIN t5_2 ON b = bid AND blabel like '%cd%';
+
+SET enable_partitionwise_join = off;
+
+SELECT * INTO pg_temp.result01b
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%abc%';
+
+SELECT * INTO pg_temp.result02b
+  FROM prt5 JOIN t5_1 ON a = aid AND alabel like '%ab%'
+            JOIN t5_2 ON b = bid AND blabel like '%cd%';
+
+SELECT * FROM pg_temp.result01a EXCEPT SELECT * FROM pg_temp.result01b;
+SELECT * FROM pg_temp.result02a EXCEPT SELECT * FROM pg_temp.result02b;
+
+RESET max_parallel_workers_per_gather;
+SET enable_partitionwise_join = true;
+
+-- Parameterized path examples.
+CREATE TABLE prta (id integer, payload text) PARTITION BY HASH (id);
+CREATE TABLE prta1 PARTITION OF prta FOR VALUES WITH (modulus 2, remainder 0);
+CREATE TABLE prta2 PARTITION OF prta FOR VALUES WITH (modulus 2, remainder 1);
+CREATE UNIQUE INDEX ON prta1 (id);
+CREATE UNIQUE INDEX ON prta2 (id);
+INSERT INTO prta (id, payload)
+	(SELECT *, ('abc' || id)::text AS payload
+		FROM generate_series(1,1) AS id);
+
+CREATE TABLE prtb (id integer, payload text) PARTITION BY HASH (id);
+CREATE TABLE prtb1 PARTITION OF prtb FOR VALUES WITH (modulus 2, remainder 0);
+CREATE TABLE prtb2 PARTITION OF prtb FOR VALUES WITH (modulus 2, remainder 1);
+CREATE UNIQUE INDEX ON prtb1 (id);
+CREATE UNIQUE INDEX ON prtb2 (id);
+INSERT INTO prtb (id, payload)
+    (SELECT *, ('def' || id)::text AS payload
+		FROM generate_series(1,1000) AS id);
+
+CREATE TABLE e (id integer, payload text) PARTITION BY HASH (id);
+CREATE TABLE e1 PARTITION OF e FOR VALUES WITH (modulus 2, remainder 0);
+CREATE TABLE e2 PARTITION OF e FOR VALUES WITH (modulus 2, remainder 1);
+INSERT INTO e (id, payload)
+	(SELECT *, ('ghi' || id)::text AS payload
+		FROM generate_series(1,1000) AS id);
+CREATE UNIQUE INDEX ON e1 (id);
+CREATE UNIQUE INDEX ON e2 (id);
+
+ANALYZE prta,prtb,e;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM prta,prtb WHERE prta.id=prtb.id;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM prta,prtb,e WHERE prta.id=prtb.id AND prta.id=e.id;
+
 -- semi join
 EXPLAIN (COSTS OFF)
 SELECT t1.* FROM prt1_adv t1 WHERE EXISTS (SELECT 1 FROM prt2_adv t2 WHERE t1.a = t2.b) AND t1.b = 0 ORDER BY t1.a;

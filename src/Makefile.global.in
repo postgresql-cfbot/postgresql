@@ -32,8 +32,11 @@ all:
 # started to update the file.
 .DELETE_ON_ERROR:
 
-# Never delete any intermediate files automatically.
+# Never delete any intermediate files automatically unless the Makefile
+# explicitly asks for it.
+ifneq ($(clean_intermediates),yes)
 .SECONDARY:
+endif
 
 # PostgreSQL version number
 VERSION = @PACKAGE_VERSION@

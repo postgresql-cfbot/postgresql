@@ -11,174 +11,216 @@
 
 subdir = src/test/ssl
 top_builddir = ../../..
+
+clean_intermediates := yes
 include $(top_builddir)/src/Makefile.global
 
 export with_ssl
 
-CERTIFICATES := server_ca server-cn-and-alt-names \
+#
+# To add a new server or client certificate, add a new <name>.config file in
+# this directory, then add <name> to either SERVERS or CLIENTS below. A
+# key/certificate pair will be generated for you, signed by the appropriate CA.
+#
+SERVERS := server-cn-and-alt-names \
 	server-cn-only server-single-alt-name server-multiple-alt-names \
-	server-no-names server-revoked server-ss \
-	client_ca client client-dn client-revoked \
-	root_ca
+	server-no-names server-revoked
+CLIENTS := client client-dn client-revoked
 
-SSLFILES := $(CERTIFICATES:%=ssl/%.key) $(CERTIFICATES:%=ssl/%.crt) \
-	ssl/server-password.key \
-	ssl/client.crl ssl/server.crl ssl/root.crl \
+#
+# To add a new non-standard key, add it to SPECIAL_KEYS and then add a recipe
+# for creating it to the "Special-case keys" section below.
+#
+SPECIAL_KEYS := ssl/server-password.key \
+	ssl/client-der.key ssl/client-encrypted-pem.key ssl/client-encrypted-der.key
+
+#
+# These files are just concatenations of other files. You can add new ones to
+# COMBINATIONS here, then declare the constituent files as dependencies in the
+# "Combined files" section below.
+#
+COMBINATIONS := \
 	ssl/both-cas-1.crt ssl/both-cas-2.crt \
 	ssl/root+server_ca.crt ssl/root+server.crl \
 	ssl/root+client_ca.crt ssl/root+client.crl \
-	ssl/client+client_ca.crt ssl/client-der.key \
-	ssl/client-encrypted-pem.key ssl/client-encrypted-der.key
+	ssl/client+client_ca.crt
 
+CERTIFICATES := root_ca server_ca client_ca $(SERVERS) $(CLIENTS)
+STANDARD_CERTS := $(CERTIFICATES:%=ssl/%.crt)
+STANDARD_KEYS := $(CERTIFICATES:%=ssl/%.key)
+CRLS := ssl/root.crl ssl/client.crl ssl/server.crl
+
+SSLFILES := $(STANDARD_CERTS) $(STANDARD_KEYS) $(SPECIAL_KEYS) $(COMBINATIONS) $(CRLS)
 SSLDIRS := ssl/client-crldir ssl/server-crldir \
 	ssl/root+client-crldir ssl/root+server-crldir
 
 # This target re-generates all the key and certificate files. Usually we just
 # use the ones that are committed to the tree without rebuilding them.
 #
-# This target will fail unless preceded by sslfiles-clean.
-#
+.PHONY: sslfiles
 sslfiles: $(SSLFILES) $(SSLDIRS)
 
-# OpenSSL requires a directory to put all generated certificates in. We don't
-# use this for anything, but we need a location.
-ssl/new_certs_dir:
-	mkdir ssl/new_certs_dir
+#
+# Special-case certificates
+#
 
-# Rule for creating private/public key pairs.
-ssl/%.key:
-	openssl genrsa -out $@ 2048
-	chmod 0600 $@
+# Root CA is self-signed.
+ssl/root_ca.crt: ssl/root_ca.key root_ca.config
+	openssl req -new -x509 -config root_ca.config -days 10000 -key $< -out $@
 
-# Root CA certificate
-ssl/root_ca.crt: ssl/root_ca.key cas.config
-	touch ssl/root_ca-certindex
-	openssl req -new -out ssl/root_ca.crt -x509 -config cas.config -config root_ca.config -key ssl/root_ca.key -days 10000 -extensions v3_ca
-	echo "01" > ssl/root_ca.srl
-
-# Client and server CAs
-ssl/%_ca.crt: ssl/%_ca.key %_ca.config ssl/root_ca.crt ssl/new_certs_dir
-	touch ssl/$*_ca-certindex
-	echo "unique_subject=no" > ssl/$*_ca-certindex.attr
-	openssl req -new -out ssl/temp_ca.crt -config cas.config -config $*_ca.config -key ssl/$*_ca.key
-# Sign the certificate with the root CA
-	openssl ca -name root_ca -batch -config cas.config -in ssl/temp_ca.crt -out ssl/temp_ca_signed.crt -extensions v3_ca
-	openssl x509 -in ssl/temp_ca_signed.crt -out ssl/$*_ca.crt # to keep just the PEM cert
-	rm ssl/temp_ca.crt ssl/temp_ca_signed.crt
-	echo "01" > ssl/$*_ca.srl
-
-# Server certificates, signed by server CA:
-ssl/server-%.crt: ssl/server-%.key ssl/server_ca.crt server-%.config
-	openssl req -new -key ssl/server-$*.key -out ssl/server-$*.csr -config server-$*.config
-	openssl ca -name server_ca -batch -config cas.config -in ssl/server-$*.csr -out ssl/temp.crt  -extensions v3_req -extfile server-$*.config
-	openssl x509 -in ssl/temp.crt -out ssl/server-$*.crt # to keep just the PEM cert
-	rm ssl/server-$*.csr
-
-# Self-signed version of server-cn-only.crt
-ssl/server-ss.crt: ssl/server-cn-only.key ssl/server-cn-only.crt server-cn-only.config
-	openssl req -new -key ssl/server-cn-only.key -out ssl/server-ss.csr -config server-cn-only.config
-	openssl x509 -req -days 10000 -in ssl/server-ss.csr -signkey ssl/server-cn-only.key -out ssl/server-ss.crt  -extensions v3_req -extfile server-cn-only.config
-	rm ssl/server-ss.csr
+#
+# Special-case keys
+#
+# All targets here are contained in $(SPECIAL_KEYS).
+#
 
 # Password-protected version of server-cn-only.key
 ssl/server-password.key: ssl/server-cn-only.key
 	openssl rsa -aes256 -in $< -out $@ -passout 'pass:secret1'
 
-# Client certificate, signed by the client CA:
-ssl/client.crt: ssl/client.key ssl/client_ca.crt
-	openssl req -new -key ssl/client.key -out ssl/client.csr -config client.config
-	openssl ca -name client_ca -batch -out ssl/temp.crt -config cas.config -infiles ssl/client.csr
-	openssl x509 -in ssl/temp.crt -out ssl/client.crt # to keep just the PEM cert
-	rm ssl/client.csr ssl/temp.crt
-
-# Client certificate with multi-part DN, signed by the client CA:
-ssl/client-dn.crt: ssl/client-dn.key ssl/client_ca.crt
-	openssl req -new -key ssl/client-dn.key -out ssl/client-dn.csr -config client-dn.config
-	openssl ca -name client_ca -batch -out ssl/temp.crt -config cas.config -infiles ssl/client-dn.csr
-	openssl x509 -in ssl/temp.crt -out ssl/client-dn.crt # to keep just the PEM cert
-	rm ssl/client-dn.csr ssl/temp.crt
-
-# Another client certificate, signed by the client CA. This one is revoked.
-ssl/client-revoked.crt: ssl/client-revoked.key ssl/client_ca.crt client.config
-	openssl req -new -key ssl/client-revoked.key -out ssl/client-revoked.csr -config client.config
-	openssl ca -name client_ca -batch -out ssl/temp.crt -config cas.config -infiles ssl/client-revoked.csr
-	openssl x509 -in ssl/temp.crt -out ssl/client-revoked.crt # to keep just the PEM cert
-	rm ssl/client-revoked.csr ssl/temp.crt
-
-# Convert the key to DER, to test our behaviour there too
+# DER-encoded version of client.key
 ssl/client-der.key: ssl/client.key
-	openssl rsa -in ssl/client.key -outform DER -out ssl/client-der.key
+	openssl rsa -in $< -outform DER -out $@
 
-# Convert the existing key to encrypted PEM (X.509 text) and DER (X.509 ASN.1) formats
+# Convert client.key to encrypted PEM (X.509 text) and DER (X.509 ASN.1) formats
 # to test libpq's support for the sslpassword= option.
-ssl/client-encrypted-pem.key: ssl/client.key
-	openssl rsa -in ssl/client.key -outform PEM -aes128 -passout 'pass:dUmmyP^#+' -out ssl/client-encrypted-pem.key
+ssl/client-encrypted-pem.key: outform := PEM
+ssl/client-encrypted-der.key: outform := DER
+ssl/client-encrypted-pem.key ssl/client-encrypted-der.key: ssl/client.key
+	openssl rsa -in $< -outform $(outform) -aes128 -passout 'pass:dUmmyP^#+' -out $@
 
-ssl/client-encrypted-der.key: ssl/client.key
-	openssl rsa -in ssl/client.key -outform DER -aes128 -passout 'pass:dUmmyP^#+' -out ssl/client-encrypted-der.key
+#
+# Combined files
+#
+# All targets in $(COMBINATIONS) share a single recipe; just declare the
+# necessary dependencies and they'll be smashed together.
+#
 
-# Root certificate files that contains both CA certificates, for testing
+# Root certificate file that contains both CA certificates, for testing
 # that multiple certificates can be used.
 ssl/both-cas-1.crt: ssl/root_ca.crt ssl/client_ca.crt ssl/server_ca.crt
-	cat $^ > $@
 
 # The same, but the certs are in different order
 ssl/both-cas-2.crt: ssl/root_ca.crt ssl/server_ca.crt ssl/client_ca.crt
-	cat $^ > $@
 
 # A root certificate file for the client, to validate server certs.
 ssl/root+server_ca.crt: ssl/root_ca.crt ssl/server_ca.crt
-	cat $^ > $@
 
 # and for the server, to validate client certs
 ssl/root+client_ca.crt: ssl/root_ca.crt ssl/client_ca.crt
-	cat $^ > $@
 
+# and for the client, to present to the server
 ssl/client+client_ca.crt: ssl/client.crt ssl/client_ca.crt
-	cat $^ > $@
-
-#### CRLs
-
-ssl/client.crl: ssl/client-revoked.crt
-	openssl ca -config cas.config -name client_ca -revoke ssl/client-revoked.crt
-	openssl ca -config cas.config -name client_ca -gencrl -out ssl/client.crl
-
-ssl/server.crl: ssl/server-revoked.crt
-	openssl ca -config cas.config -name server_ca -revoke ssl/server-revoked.crt
-	openssl ca -config cas.config -name server_ca -gencrl -out ssl/server.crl
-
-ssl/root.crl: ssl/root_ca.crt
-	openssl ca -config cas.config -name root_ca -gencrl -out ssl/root.crl
 
 # If a CRL is used, OpenSSL requires a CRL file for *all* the CAs in the
 # chain, even if some of them are empty.
 ssl/root+server.crl: ssl/root.crl ssl/server.crl
-	cat $^ > $@
 ssl/root+client.crl: ssl/root.crl ssl/client.crl
+
+$(COMBINATIONS):
 	cat $^ > $@
+
+#
+# Standard keys
+#
+
+$(STANDARD_KEYS):
+	openssl genrsa -out $@ 2048
+	chmod 0600 $@
+
+#
+# Standard certificates
+#
+
+CA_CERTS     := ssl/server_ca.crt ssl/client_ca.crt
+SERVER_CERTS := $(SERVERS:%=ssl/%.crt)
+CLIENT_CERTS := $(CLIENTS:%=ssl/%.crt)
+
+# See the "CA State" section below.
+root_ca_state_files := ssl/root_ca-certindex ssl/root_ca-certindex.attr ssl/root_ca.srl
+server_ca_state_files := ssl/server_ca-certindex ssl/server_ca-certindex.attr ssl/server_ca.srl
+client_ca_state_files := ssl/client_ca-certindex ssl/client_ca-certindex.attr ssl/client_ca.srl
+
+# These are the workhorse recipes. `openssl ca` can't be safely run from
+# parallel processes, so we must mark the entire Makefile .NOTPARALLEL.
+.NOTPARALLEL:
+$(CA_CERTS): ssl/%.crt: ssl/%.csr %.config cas.config ssl/root_ca.crt | ssl/new_certs_dir $(root_ca_state_files)
+	openssl ca -batch -config cas.config -name root_ca   -notext -in $< -out $@
+
+$(SERVER_CERTS): ssl/%.crt: ssl/%.csr %.config cas.config ssl/server_ca.crt | ssl/new_certs_dir $(server_ca_state_files)
+	openssl ca -batch -config cas.config -name server_ca -notext -in $< -out $@
+
+$(CLIENT_CERTS): ssl/%.crt: ssl/%.csr %.config cas.config ssl/client_ca.crt | ssl/new_certs_dir $(client_ca_state_files)
+	openssl ca -batch -config cas.config -name client_ca -notext -in $< -out $@
+
+# The CSRs don't need to persist after a build.
+.INTERMEDIATE: $(CERTIFICATES:%=ssl/%.csr)
+ssl/%.csr: ssl/%.key %.config
+	openssl req -new -key $< -out $@ -config $*.config
+
+#
+# CA State
+#
+# All of these are intended to be order-only dependencies; additionally, the
+# pattern recipes are marked as explicit intermediates. The goal is for Make to
+# create the state files once for each CA, allow them to accumulate whatever
+# state is needed, and then automatically remove them at the end of the run.
+#
+
+.INTERMEDIATE: $(root_ca_state_files) $(server_ca_state_files) $(client_ca_state_files)
+
+# OpenSSL requires a directory to put all generated certificates in. We don't
+# use this for anything, but we need a location.
+ssl/new_certs_dir:
+	mkdir $@
+
+ssl/%-certindex:
+	touch $@
+
+ssl/%-certindex.attr:
+	echo "unique_subject=no" > $@
+
+# The first serial number for each CA is based on the current timestamp, to
+# avoid collisions across Make runs.
+ssl/%.srl:
+	date +%Y%m%d%H%M%S00 > $@
+
+#
+# CRLs
+#
+
+ssl/root.crl: ssl/root_ca.crt | $(root_ca_state_files)
+	openssl ca -config cas.config -name root_ca   -gencrl -out $@
+
+ssl/server.crl: ssl/server-revoked.crt ssl/server_ca.crt | $(server_ca_state_files)
+	openssl ca -config cas.config -name server_ca -revoke $<
+	openssl ca -config cas.config -name server_ca -gencrl -out $@
+
+ssl/client.crl: ssl/client-revoked.crt ssl/client_ca.crt | $(client_ca_state_files)
+	openssl ca -config cas.config -name client_ca -revoke $<
+	openssl ca -config cas.config -name client_ca -gencrl -out $@
+
+#
+# CRL hash directories
+#
 
 ssl/root+server-crldir: ssl/server.crl ssl/root.crl
-	mkdir ssl/root+server-crldir
-	cp ssl/server.crl ssl/root+server-crldir/`openssl crl -hash -noout -in ssl/server.crl`.r0
-	cp ssl/root.crl ssl/root+server-crldir/`openssl crl -hash -noout -in ssl/root.crl`.r0
-
 ssl/root+client-crldir: ssl/client.crl ssl/root.crl
-	mkdir ssl/root+client-crldir
-	cp ssl/client.crl ssl/root+client-crldir/`openssl crl -hash -noout -in ssl/client.crl`.r0
-	cp ssl/root.crl ssl/root+client-crldir/`openssl crl -hash -noout -in ssl/root.crl`.r0
-
 ssl/server-crldir: ssl/server.crl
-	mkdir ssl/server-crldir
-	cp ssl/server.crl ssl/server-crldir/`openssl crl -hash -noout -in ssl/server.crl`.r0
-
 ssl/client-crldir: ssl/client.crl
-	mkdir ssl/client-crldir
-	cp ssl/client.crl ssl/client-crldir/`openssl crl -hash -noout -in ssl/client.crl`.r0
+
+crlhashfile = $(shell openssl crl -hash -noout -in $(1)).r0
+
+ssl/%-crldir:
+	mkdir -p $@
+	rm -f $@/*.r0
+	$(foreach crl,$^,cp $(crl) $@/$(call crlhashfile,$(crl)) &&) true
+	touch $@
 
 .PHONY: sslfiles-clean
 sslfiles-clean:
-	rm -f $(SSLFILES) ssl/client_ca.srl ssl/server_ca.srl ssl/client_ca-certindex* ssl/server_ca-certindex* ssl/root_ca-certindex* ssl/root_ca.srl ssl/temp_ca.crt ssl/temp_ca_signed.crt
-	rm -rf $(SSLDIRS)
+	rm -f $(SSLFILES) ssl/*.old ssl/*.csr ssl/*.srl ssl/*-certindex*
+	rm -rf $(SSLDIRS) ssl/new_certs_dir
 
 clean distclean maintainer-clean:
 	rm -rf tmp_check
